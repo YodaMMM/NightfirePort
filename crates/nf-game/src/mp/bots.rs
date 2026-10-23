@@ -564,7 +564,7 @@ pub fn bot_global_dispatch(
 ///   then every receiver mode byte except 9/10 (which keep the incoming override) and 0x1E (MP
 ///   same-team check) lands `param_3 = 0x9E` [M 0x1437a0:307-326]. ENTER plays anim 0x24 with
 ///   the body look, timer C, and falls back to `+0x5A2` [M 0x16ACD0 — the state body; the port
-///   delivers the transition, the body presentation is the main agent's].
+///   delivers the transition, the body presentation is the draw side's].
 /// - **`NDrone2_DSTATE_SeenSurrenderedDrone` 0x16ADE0** (state 0x9F) — alert 0x13, the surrender
 ///   shout (`Surrender_Anim` 0x1626a0:74): shouting range, receiver prop 0x4F, and every receiver
 ///   mode byte except 9/10/0x12/0x13 (those four attack instead, when no override came in) and 0x1E
@@ -2975,7 +2975,7 @@ impl BotBrain {
                     // no avoidance — on 07000023 it pushed a bot from the pit floor into the
                     // pit ramp's side below node #95, over 1.5 under the node root, so its
                     // reached test (2D 0.8 + |dy| 1.5) could never pass [L the demolition
-                    // playtest, mp_bot_objectives_live].
+                    // run, mp_bot_objectives_live].
                     self.follow_route(ctx, net);
                     way = self.route.target;
                 }
@@ -3563,7 +3563,7 @@ impl BotBrain {
         // cleared the latch, so the next 0xD2/move enter was a fresh `DroneWeap_Fire` whose
         // `NextBulletTime` pushed the bullet deadline out again — with weapon 6's 60-tick
         // minimum and the 1-in-3 exit roll the deadline always receded and the bot never
-        // fired (the playtest's "0xD4 strafe, latch set, never fires" wedge).
+        // fired (the "0xD4 strafe, latch set, never fires" wedge).
     }
 
     /// `DroneWeap_NextBulletTime` 0x179d40 (the port's lift): the interval from the weapon

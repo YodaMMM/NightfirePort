@@ -1,5 +1,5 @@
-//! The kill pieces through the real level data (playtest 1017-1139 "shouldn't it break and
-//! shatter into smaller pieces?"). A shot vase spawns the game's debris — one object per
+//! The kill pieces through the real level data (a breakable shatters into smaller
+//! pieces). A shot vase spawns the game's debris — one object per
 //! stride-3 collision record of every leaf box [M Debris_Create_Loop 0x1ed548 + disasm
 //! 0x1ed638], dressed by EffectInfo[hit material & 0x3f] [D ACTION.ELF 0x3037c0] with the
 //! game's launch numbers (velocity = spread·0.5 · record plane normal · REC_FRAME_RATE, the

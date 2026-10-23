@@ -314,9 +314,8 @@ impl Grenade {
         // The satchel's speed is 0.0667 u/tick [L ee_start_05.bin weapon_data 0x3b +0x20], so its
         // whole 1-2 m approach runs in the 0x101 sphere form: the game PARKS the satchel the
         // moment a face comes within 0.25 u — grazing the wall top, hugging the wall, or a
-        // close-range throw all stick where the old port's 0.067 u ray sailed past (the playtest's
-        // "even standing directly at a wall and throwing it at it, it still bounced": no ray
-        // crossing, no stick, the satchel flies on). Scoped to the +0x100 sticky family this arm
+        // close-range throw all stick where the old port's 0.067 u ray sailed past (a throw straight
+        // at a wall from point-blank still bounced: no ray crossing, no stick, the satchel flies on). Scoped to the +0x100 sticky family this arm
         // serves (0x37/0x3a/0x3b — the hat 0x45 keeps its verified path); the bouncing family
         // (0x34…) keeps the old move-length ray — the game gives it the same two forms [S backlog:
         // a 1.0 u look-ahead would shift every pinned frag bounce point].
@@ -414,7 +413,7 @@ impl Grenade {
                 // contact the grenade is already SEPARATING from (the 1 u look-ahead ray's hit while
                 // climbing) parks and counts but leaves the velocity/speed alone — the port's
                 // unconditional reflect flipped such a contact back INTO the surface and re-collided
-                // every tick (the playtests' "rapidly contacting the ground"). The cap [M 0x12d578-
+                // every tick (rapid ground contacts). The cap [M 0x12d578-
                 // 0x12d57c — `sltiu $v1, $v1, 0x14; beqz → 0x12d6a0`]: the 20th bounce does NOT
                 // reflect or scale — but the gate's ELSE arm (0x12d6a0-0x12d6bc) aligns the matrix
                 // to the velocity and zeroes BU+0xF8 (`sw $zero, 0xf8($s0)`) with NO dot gate, so
@@ -447,8 +446,8 @@ impl Grenade {
                         // (`Vec_NormaliseLen` stores the length back, disasm 0x12f020-0x12f030)
                         // keeps a zero-speed bullet's move at zero — a rested grenade never
                         // re-collides. fix-grenade-throw: the port's velocity kept re-accumulating
-                        // gravity at rest, so the grenade re-collided EVERY tick (the user's "rapid
-                        // sound as if it's rapidly contacting the ground").
+                        // gravity at rest, so the grenade re-collided EVERY tick (a rapid
+                        // contact sound).
                         let speed = (self.velocity[0] * self.velocity[0] + self.velocity[1] * self.velocity[1] + self.velocity[2] * self.velocity[2]).sqrt();
                         if speed < BOUNCE_MIN_SPEED {
                             self.velocity = [0.0; 3];
@@ -794,8 +793,8 @@ mod tests {
     /// 0x1e92d8 + `Dist2Tri_PointGeom` 0x1dfac8; the satchel's 0.0667 u/tick throw [L ee_start_05.bin
     /// weapon_data 0x3b +0x20] never leaves that form until gravity builds |v| past 0.125]: a
     /// satchel flying PARALLEL to a face within 0.25 u of it sticks on the first tick — there is
-    /// no ray crossing to wait for. The old port ran a move-length ray and flew on (the playtest's
-    /// "it still bounced": the throw passes just over/along the wall and nothing catches it).
+    /// no ray crossing to wait for. The old port ran a move-length ray and flew on (it still
+    /// bounced: the throw passes just over/along the wall and nothing catches it).
     #[test]
     fn satchel_flying_along_a_wall_within_the_probe_radius_sticks_at_once() {
         let w = wall_world();

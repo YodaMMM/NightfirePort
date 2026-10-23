@@ -1,4 +1,4 @@
-//! door-guard-pairing (task 737, the uncited-audit runner-up) on 07000007 — the only story level
+//! door-guard-pairing on 07000007 — the only story level
 //! that places door guards [D census below]: 6 guards whose mode resolves to 0x16 and whose start
 //! state is CivilianDoorGuard 0x31 (`DroneTypeSettings` row 22: start 0x31 [L the table dump;
 //! docs/fields/dronetype-tables.md]). The port had the const with no arms (WORKLOG 3969).
@@ -287,7 +287,7 @@ fn zone_bands_drive_the_challenge_and_the_mission_fail() {
         // (No "no challenge" assertion: `NearArmedPerson` needs the reaction-acked sight +0x228 & 4
         // [M 0x1787c8:37], so for the reaction window the guard's case 3 falls through to
         // `DoorGuardHandler` [M 0x160648:39 → :58] and the zone-2 challenge may start before the
-        // armed switch — the old instant-los stand-in never let it. Fixed with 833, batch 1021e.)
+        // armed switch — the old instant-los stand-in never let it.)
     }
     // The challenge: stand UNARMED Bond there (fists, weapon 1 — outside the armed set). No aim
     // is set toward the guard — the game's zone read has no aim input [M 0x1416d8:16-73].

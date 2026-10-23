@@ -1,6 +1,5 @@
 //! The two smoke-grenade guards on 07000001 (placement param 11 = 0x13 → 3× smoke 0x36, and 0x11 → 1× smoke —
-//! decoded by `NDrone2_DefaultInit` 0x14b300 into `+0xBCC`/`+0xBCE`) never throw in play (user playtest,
-//! fix-drone2 bug 1). The headless repro (this file's first version, shown failing: "no guard reached
+//! decoded by `NDrone2_DefaultInit` 0x14b300 into `+0xBCC`/`+0xBCE`) never throw in play. The headless repro (this file's first version, shown failing: "no guard reached
 //! GRENADE_THROW; last states [0x2c, 0x1]") and the decompile say that is the **game's own behaviour**:
 //!
 //! - Guard A skin 0x05000036 at (−30.058, 10.308, 13.443), channel 0x26: DTYPE 2 (param 15) with normal

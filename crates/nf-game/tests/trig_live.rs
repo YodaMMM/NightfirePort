@@ -1,5 +1,5 @@
 //! The port's trig (`trig.rs`) against the game's own `ATAN2_APPROX` (0x1e4528), `PS2Sinf` (0x120700) and
-//! `Vec_AngleDifference` (0x1e2b78), run in the R5900 interpreter over the user's ACTION.ELF. Opt-in: `NF_ISO`.
+//! `Vec_AngleDifference` (0x1e2b78), run in the R5900 interpreter over the disc's ACTION.ELF. Opt-in: `NF_ISO`.
 
 use nf_formats::ee::Machine;
 use nf_formats::iso9660::IsoImage;

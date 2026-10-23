@@ -165,7 +165,7 @@ fn kick_node_pair_enters_kick_object_and_unpauses_the_scripted_prop() {
     assert_eq!(g.log.iter().filter(|(_, s)| *s == state::KICK_OBJECT).count(), 1);
 }
 
-/// 0700000c (the user's "bugged as hell" level): its kick pair lives on the separate "DoorOpen"
+/// 0700000c: its kick pair lives on the separate "DoorOpen"
 /// nav path (n2 → n1 → n0, both kick-flagged). The disc data settles what the game does with it:
 /// `NDrone_InitKickNodes` (0x139ce0) binds only a class-0x1b object whose script is 0x0600_05bb —
 /// the census (this file's probe, and the level's script list) shows 0700000c has NO such

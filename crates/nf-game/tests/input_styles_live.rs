@@ -1,5 +1,5 @@
 //! fix-input G-005: the style × action table in `nf_game::input` against the game's own
-//! `psiInput_MapInputs` (ACTION.ELF 0x10cd80), run in the R5900 interpreter over the user's ELF.
+//! `psiInput_MapInputs` (ACTION.ELF 0x10cd80), run in the R5900 interpreter over the disc's ELF.
 //! For every style 0..7 and a grid of synthetic pad states (every button bit, stick extremes, the
 //! conditional-source buttons, the stick-menu thresholds), the 40 action floats must match bit-exact.
 //! Sister: StickCompensation2 (0x17f798) and MapAnalogStick (0x17f958) against the port's curves.

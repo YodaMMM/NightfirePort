@@ -329,7 +329,7 @@ impl KeyCodes {
 ///   closed without a match → state 0 (re-armable). The per-frame `MenuManager_Enable(1, slot)`
 ///   keep-alive is the manager-pool housekeeping the port folds into `open` staying true.
 ///
-/// The view draws (main agent): the keypad page's 24 controls as laid out in the level def —
+/// The view draws: the keypad page's 24 controls as laid out in the level def —
 /// the digit grid, and the display label 0x10000075 bound to [`Self::display`]; when
 /// `code_shown` the hint line shows the code (`Lock_Update` case 3 binds the sprintf'd
 /// "%d%d%d%d" through Txt_BindLabel 0x2000014 + Text_AddMsg 0xb4 [M 0x1ae3d8:249-258]).

@@ -377,8 +377,8 @@ pub fn script_pose_together(scripts: &HashMap<u32, Script>, seqs: &HashMap<u32, 
     // cut-scenes ride cross-rig: 07000004's ninja (skin 0x0500001e, skeleton byte 8) plays 0x06000507
     // whose only window is 0x0400047a (record byte 0; both skeletons 73 bones, mask 0x1/0/0) [D
     // 07000004.bin kind-7/5, 07F00004.bin kind-4] — the strict `s.skeleton == skin.skeleton` filter
-    // found no base window and the cut-scene's ninja actor never posed (the user's "ninja boss is
-    // missing from last cutscene", playtest 1017). The gameplay path has posed the same pairing since
+    // found no base window and the cut-scene's ninja actor never posed (the boss was missing from
+    // the last cut-scene). The gameplay path has posed the same pairing since
     // its own fix (see `script_pose`'s comment). A guarded window covers the skin skeleton's FULL walk
     // or nothing (a short track — a face track past the flags rule — still never poses bones).
     let full_need: usize = (0..skel.bones as usize).map(|b| if skel.has_translation(b) { 6 } else { 3 }).sum();

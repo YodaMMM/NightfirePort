@@ -242,7 +242,7 @@ mod tests {
     }
 
     /// Sister of the laser cut: a dropped-kind hit (gunfire 0x0008) never reaches `mark_hit`,
-    /// so the wire survives — the user's "you have to burn it with the laser".
+    /// so the wire survives — only the laser burns it.
     #[test]
     fn gunfire_never_kills_a_wire() {
         let mut b = box_with([137, 0, 0, 0]);

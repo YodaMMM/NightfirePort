@@ -219,7 +219,7 @@ impl Mission {
             // ([D] ACTION.ELF .data: all 24 rows' 55 records carry +0x14 = 0, mission 07000009's
             // rows 8/9/10 @ 0x2a3f78/0x2a3fc0/0x2a4008 included), so the monitor's case-0 arm
             // (`record.level <= GameState._12_4_` [M 0x1827d8:41-54]) announces the earlier
-            // parts' objectives at the fresh boot: [L] the main agent's PCSX2 fresh load of
+            // parts' objectives at the fresh boot: [L] a PCSX2 fresh load of
             // 0700000b (tools/trace/goto_level.py, warm reset 0) shows "Get to the lobby…"
             // (0x04000017), "Take main elevator…" (0x04000018) and "Install Q-Worm on office
             // computer systems" (0x04000019 — part 1's record) announcing over the first ~520
@@ -362,8 +362,8 @@ impl Mission {
                 // The 0x40000042 menu is up and the mission waits for the view's Restart/Quit —
                 // the game's case 5 is a bare `break` [M 0x182c60:83-84]. The port used to fall to
                 // the catch-all and re-arm internal 1, re-running the whole death/fail sequence
-                // (and queueing another restart) every tick after the answer — the user's "replay
-                // loop where it kept replaying at the start of the mission over and over again".
+                // (and queueing another restart) every tick after the answer — a replay
+                // loop at the start of the mission.
             }
             _ => self.internal = 1, // [M 0x182c60:131-133]
         }
@@ -502,7 +502,7 @@ mod tests {
     /// fabricator, which the disc disproves — every objective record ships STATE 0 ([D] ACTION.ELF
     /// `.data`, all 24 rows' 55 records), `Mission_Init`'s mode-1/4 arms never write a prior-part
     /// record ([M 0x182270:92-95, 120-121]), and the monitor's case 0 then announces the priors at
-    /// the fresh boot ([M 0x1827d8:41-54]; [L] the main agent's PCSX2 fresh 0700000b load shows
+    /// the fresh boot ([M 0x1827d8:41-54]; [L] a PCSX2 fresh 0700000b load shows
     /// part-0/1 records announcing). The warm-arrival shape the fabricator approximated is the
     /// snapshot's restore ([L ee_start_0700000a.bin @ 0x2a3f78: 07000009's records sit 2/3/4 at
     /// 0700000a's start]), pinned below through `snapshot`/`restore` [M LS_MakeMission/LS_LoadMission

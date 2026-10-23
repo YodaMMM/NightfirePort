@@ -1,4 +1,4 @@
-//! mp-hud-16 — the in-match MP HUD data with the port's 16 participants (task 700v8 widened the
+//! mp-hud-16 — the in-match MP HUD data with the port's 16 participants (the port widened the
 //! match to 16 slots [S mp-16-slots]; the game's own layout is 4 humans + 4 bots [M `MP_Start`
 //! 0x183a50:116-160]). Numbers and ids only, headless, no ISO. Each test carries a sister
 //! assertion that fails if the data model regressed (rows dropped past 8, the viewer cut from the

@@ -1253,7 +1253,7 @@ pub struct Drone {
     pub bounded: bool,
     /// `+0x54C`: the turn a finished turning danim leaves (`DroneAnim_OnEndAnim` 0x13e2c0: info flags 0x100 → π,
     /// 0x80 → π/2, 0x200 → −π/2), applied to the yaw and the desired yaw by `DroneAnim_SnapRotate` (0x13e198) after
-    /// (task 854: `Drone_Control` 0x139268 also calls `DroneAnim_SnapRotate2` 0x13e230 — an 8-byte
+    /// (`Drone_Control` 0x139268 also calls `DroneAnim_SnapRotate2` 0x13e230 — an 8-byte
     /// EMPTY body [M 0013e230 decompile], i.e. a second no-op snap entry — nothing to port).
     /// the next control update.
     pub snap: f32,
@@ -1449,11 +1449,11 @@ pub struct Drone {
     /// A switch channel to raise after the drone's update (`SetDeathChannel`).
     pub raise: Option<u8>,
     /// `DCVars+0x2B0`: the hostage's captor link (`NDrone2_SetupHostageKiller` 0x144030 — the
-    /// (task 854: the execution-scene setup downstream of this link — `NDrone2_SetupHostageExecute`
+    /// (the execution-scene setup downstream of this link — `NDrone2_SetupHostageExecute`
     /// 0x14a808, from `NDrone2_DSTATE_HostageKillerAttack` 0x15c940 [M caller grep] — copies the
     /// hostage's and captor's positions into each other's AI+0x670 move-target slot and sets the
     /// mutual facing yaw `+0x694` via `ATAN2_APPROX` [M 0014a808 decompile]. NOT YET PORTED: the
-    /// port has no HostageKillerAttack state — listed as remaining work in the task 854 report.)
+    /// port has no HostageKillerAttack state.)
     /// nearest armed guard; the save fires when it dies [M `NDrone2_DSTATE_Hostage` 0x15cb78:24-36]).
     /// The port stores the captor's `Drones::list` index.
     pub captor: Option<usize>,
@@ -1555,7 +1555,7 @@ pub struct Drone {
     /// drain reads `Vec_SqDist3D(hitter+0x30, hitter+0x40)` — the movement pass copies +0x30 →
     /// +0x40 per object AFTER its anim/root-motion processing in the same walk [M 0x1336f8:212],
     /// so a root-motion-carried step reads 0 (no drain) while the AI steering step shows in
-    /// +0x30−+0x40. [D task 750p + the port's instrumented run: pane 130 survives g0's scripted
+    /// +0x30−+0x40. [D the port's instrumented run: pane 130 survives g0's scripted
     /// walk-by (the port's replay demonstrably crosses the sheet at 0xB+23) yet the breach squad's
     /// charge shatters it at 0xB+911.] Reset at the head of `Drones::tick_inner`, set in
     /// `root_motion`.
@@ -1568,7 +1568,7 @@ pub struct Drone {
     /// `NDrone2_DefaultInit` 0x14b300's tail (result → DIVars+0x10 [M 0x14b300; docs/atlas/drone.md:51]).
     /// The port stores the glow on the owning Drone itself, so `owner` is the drone's list index
     /// (the game's ext[0] = the owner object pointer). `crate::body_glow` holds the gfx hashes and
-    /// flags the draw code needs; the sprite rendering is the main agent's draw work.
+    /// flags the draw code needs; the sprite rendering lives in the draw layer.
     pub body_glow: Option<crate::body_glow::BodyGlow>,
     /// The HostageKiller's hostage link — the killer side of `NDrone2_SetupHostageKiller` 0x144030's
     /// drone+0x2b0 pairing (the hostage's `captor` is the other half). The port binds it once in the
@@ -1836,7 +1836,7 @@ impl Drone {
             recoil_weapon: weapon == 0x1c || weapon == 0x1d,
             // glass-breach-guards-4 (own line — merge lesson 4).
             scripted_move: false,
-            // +0x174 — the shared target registry slot, allocated on first sight (task 845).
+            // +0x174 — the shared target registry slot, allocated on first sight.
             target_id: 0xff,
             // BodyGlow_Create 0x1ac158 — every guard spawn glows on the shipped path (the
             // switch_NO_DRONES gate is 0 in every shipped level [M 0x1ac158:9]).
@@ -1915,7 +1915,7 @@ impl Drone {
     /// Takes `&mut self`: the 07000007 cases WRITE properties [M 0x14c938:37-39/67-69] — dtype 10/0xb
     /// (the party guests) get prop 0x1f = 0 (deaf to sound alerts, `HandleSoundAlerts` 0x148a30:45) and
     /// prop 0x54 = 1 (the protected guest), dtype 0xd gets 0x1f = 0; the port dropped these writes and the
-    /// guests heard every punch (playtest item 3: the crowd went hostile and gun-posed).
+    /// guests heard every punch (the crowd went hostile and gun-posed).
     fn dtype_of(&mut self, d: &Data, ty: u8, block: u8) -> u8 {
         if block == 0 && self.prop(d, 0x10) { return 0x10; }
         let lvl7 = d.level == 0x0700_0007;
@@ -1967,7 +1967,7 @@ impl Drone {
         // `NDrone2_IsCivilian` (0x14aae0) in team form: team 3 = the civilian dtypes.
         self.team = match self.dtype { 10 | 11 | 0xd | 0xe => 3, 0xc => 2, _ => 1 };
         let row = |m: u8| d.props.types.get(m as usize);
-        // `NDrone2_initDTYPE_*` dispatch (task 854): the per-DTYPE init row. `NDrone2_initDTYPE_BotInit`
+        // `NDrone2_initDTYPE_*` dispatch: the per-DTYPE init row. `NDrone2_initDTYPE_BotInit`
         // 0x1291e8 — the DTYPE 0xc3 (MP bot) init — is an 8-byte EMPTY body [M 001291e8 decompile],
         // reached through the {id, fn} table at 0x29B050 (0x29B054 → 0x1291e8); so its port job is
         // exactly nothing, which this name-keyed dispatch preserves for every other init too.
@@ -2018,7 +2018,7 @@ impl Drone {
         // [M NDrone2_FindOpponent 0x1424e0:101] a team-2 (ally) drone's opponent is never the
         // player — the game's alert fold would hand her a DRONE opponent from FindOpponent's
         // object walk, and the port has no drone opponents, so the fold is dropped for team 2:
-        // she keeps her base start state (the playtest's "Zoe shooting at Bond at the gondola"
+        // she keeps her base start state (otherwise Zoe shoots at Bond at the gondola
         // — the 07000008 ally's alert reached 1.0 on the guards' gunfire and the fold put her
         // into the player-hunting ATTACK).
         if self.alert >= 1.0 && self.team != 2 {
@@ -2281,7 +2281,7 @@ impl Drone {
     /// `DroneFunc_AnyoneNear` 0x14a718:26 passes its own radius argument). The port's route-follow
     /// closure cannot reach the drone list (the borrow split — the same constraint the
     /// door-guard pairing documents), so the list tier stays unwired here; the PLAYER tier is
-    /// the arm the route walks actually hit in the shipped levels' playtests.
+    /// the arm the route walks actually hit in the shipped levels.
     fn ppos_near(pp: V3, p: V3) -> bool {
         let dx = pp[0] - p[0]; let dz = pp[2] - p[2];
         dx * dx + dz * dz < 0.3025 && (pp[1] - p[1]).abs() < 2.0
@@ -2545,9 +2545,9 @@ impl Drone {
         self.yaw_offset = 0.0; // the survey of all 231 `DroneAnim_CallAnim` sites: 229 pass 0, and the
         // only non-zero sites are `DroneAnim_LocationDeathAnim` 0x13c780:26/:43 (yaw-offset 1);
         // `SetCombatMoveAnim`'s own three calls pass 0 [M 0x13cfb0:41/:70/:398]. The effect of the
-        // 1 is a dropped store in the decompile (the MIPS disasm is unavailable in this sandbox) —
-        // the port's DEATH/DEATH_SHOT path leaves it unmodelled; ask the main agent to gdbwatch
-        // the arg-6 store inside `CallAnim` 0x13ab58 when a location death fires. The port's
+        // 1 is a dropped store in the decompile —
+        // the port's DEATH/DEATH_SHOT path leaves it unmodelled (open: the arg-6 store inside
+        // `CallAnim` 0x13ab58 when a location death fires). The port's
         // ±π/2/π strafe `yaw_offset` is set AFTER the call on the strafe path (the port's own
         // facing model), so zeroing here matches every surveyed site but the two.
         let mut state = state;
@@ -2579,7 +2579,7 @@ impl Drone {
     }
 
     /// `DroneAnim_CallHandler` (0x13add0), every frame after the anim tick: once a danim of the requested state started
-    /// (task 854: the game's call path is `DroneAnim_SetAnimCall` 0x13def8 — save `+0x588` into
+    /// (the game's call path is `DroneAnim_SetAnimCall` 0x13def8 — save `+0x588` into
     /// `+0x4C0` then `DroneAnim_SetDAnimInternal` [M 0013def8 decompile] — the port's `call` state
     /// below is the same job; the saved word has no port reader).
     /// (`+0x57B`) and no blend is waited for (`+0x578`), the call completes when that danim's class is 1, 2 or 9;
@@ -2642,7 +2642,7 @@ impl Drone {
         let early = self.anim.early_end && self.anim.once && self.anim.time < len;
         if early {
             // `CheckForAnimComplete` (0x13dae8): `+0x57A` set and `+0x579` cleared by event 7 → `SetEndAnim` now.
-            // (task 854: the other `+0x579` writer is `DroneAnim_AnimEndCallback` 0x13e3e8 —
+            // (the other `+0x579` writer is `DroneAnim_AnimEndCallback` 0x13e3e8 —
             // `AI+0x579 = 0`, registered as the head-tracking anim's ON-STOP callback by
             // `DroneAnim_SetHTAnim` 0x13b1c8:140 via `AnimScriptCallOnStop(script, 0x13e3e8)`
             // [M 0013b1c8 decompile]. The port's HT-anim end fold here covers that clear.)
@@ -2979,7 +2979,7 @@ impl Drone {
             // stagger; on msg 9 the allow is raised in `on_explosion` (the DSTATE's own group arm).
             // Recover 0x88 itself (0x173658) carries no case 8/9 — no arm here, the message drops.
             RUN_AWAY_FROM_OBJECT | HIDE_FROM_SCARY_OBJECT => (RECOVER_FROM_SCARY_OBJECT, false),
-            // The mission states (fix-party-mission, playtest: bullets on party guests did nothing):
+            // The mission states (without them, bullets on party guests did nothing):
             // PartyGirl 0x160140 case 8 → HandleImpact(0x12, 0); Civilian 0x15d118 case 8 → (0x12, 0);
             // CivilianHiding 0x15d520 case 8 → (0x12, 0); CivilianScared 0x15d3a0 case 8 → (+0x118, 0);
             // CivilianMission 0x15d860 case 8 → (0x56, 0); CivilianPatrol 0x15d610 case 8 → (0x56, 0);
@@ -3394,7 +3394,7 @@ impl Drone {
         // 0x145f28:45-56: on 07000007 a punch on an UNARMED drone (ObjectIsArmed 0x178768 on the drone's
         // own class byte — DoModeSettingsOLD 0x14cfa0:159-163 zeroes it for the party modes 9/10/0x13) is
         // an instant mission fail (reason 5 → "Cover Lost" ch 99 [M 0x13e560]); the port's fail plumbing
-        // drains `fail_reason` next to `raise` (fix-actors). Punching a guard = the playtest's automatic fail.
+        // drains `fail_reason` next to `raise`. Punching a guard = an automatic fail.
         if d.level == 0x0700_0007 && !self.obj_armed() {
             self.fail_reason = Some(crate::ally::mission_fail_reason(5));
         }
@@ -4214,7 +4214,7 @@ impl Drone {
                 let gone = self.drawn_grace == 0 || {
                     if self.alpha > 0.0 { self.alpha = (self.alpha - if s == FADE_FAST { 8.0 } else { 0.6 }).max(0.0); false } else { true }
                 };
-                // task 854: `gone` here is the game's object deletion — `control_delete_object`
+                // `gone` here is the game's object deletion — `control_delete_object`
                 // 0x133178:16-17 dispatches `control_funcs[class*0xC+8]`, and for the drone classes
                 // that is `Drone_Delete` 0x136ce8 [M 0x26F8B0/0x26F964 entries, symtab `control_funcs`
                 // 0x26F890]: BodyGlow delete, the target-registry claim cleared (the 0xB0-stride
@@ -4575,7 +4575,7 @@ impl Drone {
                 // anim-posed position on the neck while only its rotation turns. The full-matrix
                 // product below used to rotate the translation row about the object origin, so at
                 // the saturated track angles (yaw ±1.1, pitch ±1.0, e.g. a guest at ~1 unit) the
-                // head detached onto the shoulders/back (the 07000007 playtest's sideways heads).
+                // head detached onto the shoulders/back (sideways heads on 07000007).
                 let mut rot = world[5];
                 rot[3] = [0.0, 0.0, 0.0, 1.0];
                 let m = nf_formats::anim::mul(&rot, &mp);
@@ -4591,7 +4591,7 @@ impl Drone {
     /// them: from the FRESH anim pose's head axes (the palette `psiBuildMatrixPalette` 0x111498
     /// hands HeadTrack carries no stored rotation — it is rebuilt from the anim every tick), so
     /// easing the stored angle toward these never double-counts the anim's own head pose (the
-    /// playtest's "head tips UP well past the camera"). The projection this replaces is
+    /// head tipping UP well past the camera). The projection this replaces is
     /// `Plane_PutPntOnPlane` 0x1e3698 [M] — the game projects the target (and a head+axis point)
     /// onto the head's (side, forward) planes before the acos blocks (0x1bf618:208-211, 256-259);
     /// the port inlines the same component removal along the unit normal. Yaw: the angle from the head's forward to
@@ -5103,8 +5103,7 @@ impl Drone {
     /// lands 0..3 — in BOTH branches: the jump tables 0x2f6410 (fresh) / 0x2f6450 (the group-2 → 1
     /// fallback [M 0x153168:67-70]) target 0x153290 `li $v0,1` for codes 0-3 and 0x153330/0x153328
     /// `move $v0,0` for every other code (the decompile's "case 4..9,0xc" label sharing is a Ghidra
-    /// artifact) [M-dis]. Merge batch-1016c swapped drone-press-alarm's route-probe stand-in for this
-    /// selection (docs/reports/drone-press-alarm.md, docs/reports/ai-network-route.md).
+    /// artifact) [M-dis]. This selection replaced an earlier route-probe stand-in.
     fn find_run_to_point(&mut self, d: &Data) -> bool {
         let Some(group) = crate::aipoint::run_to_point_group(self.prop(d, 0x56), self.prop(d, 0x4e), self.team) else { return false };
         let owner = d.props.get(0x11, &self.props) as i32; // Drone+0x144 = placement parameter 0x11 [M DefaultInit 0x14b300:472]
@@ -5380,7 +5379,7 @@ impl Drone {
         // predicate: a dead drone keeps gravity and collision (the abseil corpse must land for
         // AbseilDeath's feet probe [M 0x169b28 case 3]; the death-drift 0x156008 is the astronaut's
         // own move). The port's `bounded` stands for & 0x20; gravity always runs when bounded — the
-        // old `corpse` short-circuit here froze shot abseilers on the rope (the playtest bug).
+        // old `corpse` short-circuit here froze shot abseilers on the rope.
         let on_surface = self.feet_on_point(world);
         self.on_surface = on_surface.is_some();
         if let Some(floor) = on_surface {
@@ -5603,7 +5602,7 @@ impl Drone {
             // `NDrone2_DSTATE_UnderCoverAim` 0x16a2d0 (state 0x95) — entered by UnderCoverIdle's
             // `uVar5 = 0x95` pick when the cover node is OK [M 0x169e58:145-151].
             (UNDER_COVER_AIM, msg::ENTER) => {
-                // task 854: the game's `NDrone2_DSTATE_UnderCoverAim` 0x16a2d0 also calls
+                // The game's `NDrone2_DSTATE_UnderCoverAim` 0x16a2d0 also calls
                 // `DroneFunc_UnderCoverAimTalk` 0x13fb98 — DEAD in both modes [M 0013fb98:7-9:
                 // the SP gate returns at once (`MPSettings+0x184 == 0`); SpeechSFX refuses in MP;
                 // docs/port-map/unreached.md] — nothing to port here.
@@ -7693,7 +7692,7 @@ impl Drone {
             // 0x2e/0x2f → PartyGirlInit 0x1728c0 / PartyGirl 0x160140, 0x30 → CivilianGuard 0x1603a8, 0x10..0x14 →
             // CivilianInit 0x172730 / Civilian 0x15d118 / CivilianScared 0x15d3a0 / CivilianHiding 0x15d520 /
             // CivilianPatrol 0x15d610, 0x1c → HostageIdle 0x15ce60. Before this block the port had NO handler for
-            // any of them: the playtest's guests, driver, hostage-side NPCs and civilians stood frozen (turning only).
+            // any of them: the guests, driver, hostage-side NPCs and civilians stood frozen (turning only).
             // TruckDriverInit (0x160bd0) ENTER (case 1): prop 0x1d → AssignAIPath(8) in BOTH branches;
             // `+0x694 = obj+0x54` (the sit target, not ported); a start script (`+0x554`) plays FROM HERE
             // — SetScript(`+0x554`, 0x24, 0x11a, 0x1e, 0, 5, 0), `+0x554 = 0`, `+0x4F8` bits 0x20/0x80
@@ -7713,8 +7712,7 @@ impl Drone {
                     // i.e. the PreTransCallback clamp floor (0x13b490:64-66) — the sit's consumed
                     // root lands ≤ 0.22 there (the +0x60 addend unread, the report's residual). The
                     // port's floor snap + down-ray read this hip (0x140660), so the sit sits ON the
-                    // crate seat instead of floating a standing hip above it — the playtest's
-                    // "he's sitting in the air".
+                    // crate seat instead of floating a standing hip above it (sitting in the air).
                     self.hip_anim = 0.2;
                     self.play_script(d, script, 0x24, 0x11a, 0, msg::ANIM_DONE);
                     return true;
@@ -7740,7 +7738,7 @@ impl Drone {
             // msg 0x14 (SOUND, DroneFunc_HandleSoundAlerts' dispatch) has NO arm (default → unhandled):
             // the driver never reacts to heard gunfire. The port's SOUND half sent him into the guard
             // heard-noise chain (0xa2-0xa5) whose ATTACK arm drew him a weapon (+0x66 → weapon 6, anim set 4)
-            // — the playtest's "shoot the driver, he flies back like a guard with the guard death sound".
+            // — a shot driver flew back like a guard with the guard death sound.
             (TRUCK_DRIVER_INIT, msg::ALARM) => { self.hip_anim = 1.0; self.set_state(TRUCK_DRIVER_INIT_ALERT); true } // 0x11/0x12/0x13/0x16/0x1e → 0x33
             (TRUCK_DRIVER_INIT, msg::BULLET) => self.on_bullet_resume(d, rng, frame, TRUCK_DRIVER_INIT_ALERT, false), // HandleImpact(0x33, 0)
             // TruckDriverInitAlert (0x160d98): anim done → CivilianScared (0x12); bullets/noise HandleImpact(0, …).
@@ -7760,7 +7758,7 @@ impl Drone {
             // fix-06-driver: TruckDriverIdle 0x160ed0 routes msgs 0x11/0x12/0x15/0x16/0x1e to EnemyAlerts
             // [M 0x160ed0:95-103] — msg 0x14 (SOUND) has no arm (default → 0, unhandled): gunfire sounds
             // never move him. The port's SOUND half ran the guard heard-noise chain (0xa3 → DrawWeapon 0x66,
-            // anim set 12 → 4) — the playtest's guard-death symptom. The scare path is NearArmedBond (case 3).
+            // anim set 12 → 4) — the guard-death symptom. The scare path is NearArmedBond (case 3).
             (TRUCK_DRIVER_IDLE, msg::ALARM) => { if let Some(n) = self.enemy_alerts(d, s) { self.set_state(n); } true }
             (TRUCK_DRIVER_IDLE, msg::FORCED_ATTACK) => { self.set_state(ATTACK); true }
             // TruckDriverMission (0x161030): ENTER clears the sit ready bits and plays the walk
@@ -8075,7 +8073,7 @@ impl Drone {
             // `Drone_AlertStatusSet(2)` [M 0x15cb78 case 1 — the old port's status-0 read missed the
             // case-1 arm; status 2 = the 0x2f5cc8 table row 0.66 [D ee_start_07000001.bin @ 0x2f5cc8]]
             // and the kneel call `CallAnim(0, 0x21, …)` [M case 1 — the port plays the COWER 0x19
-            // stand-in; the visible anim needs the main agent's render before it changes]; the captor
+            // stand-in; the visible anim needs a render check before it changes]; the captor
             // link (+0x2B0) is bound by `NDrone2_SetupHostageKiller` 0x144030 — the port binds it at
             // the `Drones` tick (the nearest armed, alive guard; the `captor_pool` snapshot). UPDATE
             // lives there too: captor gone or its health ≤ 0 → HostageSaved [M 0x15cb78:24-36].
@@ -8507,7 +8505,7 @@ impl Drone {
             // `NDrone2_CreateNinjaEyes` 0x149600 spawns (kind 0x40, hash 0x2000132, at bones 0x54/0x60 —
             // 0x60/0x61 on skin 0x0500001e) when the ninja type is set (`NDrone2_ControlDTYPE_Ninja`
             // 0x14b0f8:6, and `NDrone2_PreDroneControl` 0x148db0:126 behind the +0x18 flag) [M] — a
-            // visual-only spawn the port's draw layer does not build (the main agent renders; nothing in
+            // visual-only spawn the port's draw layer does not build (nothing in
             // the AI reads the eyes datum on the ported paths [M 0x16b990 reads it for the cheat arm only]).
             (0xa6, msg::ENTER) => { self.set_state(crate::kiko::NINJA_ATTACK); true }
             // NinjaAttack 0xa7 (0x16bb50): ENTER — vision on, +0x4F8 |= 0x80000000, alert 1.0, then
@@ -8934,7 +8932,7 @@ impl Drone {
             }
             // DeleteMe 0xb4 (0x173f00): the soft removal (NDrone2_Enable(0) + obj+0xfe |= 1).
             (crate::kiko::DELETE_ME, msg::ENTER) => {
-                // task 854: this is `Drone_FellOutMap` 0x13a878's SP body [M 0013a878 decompile —
+                // This is `Drone_FellOutMap` 0x13a878's SP body [M 0013a878 decompile —
                 // `NDrone2_Enable(0)` + `obj+0xFE |= 1`; the MP arm is `BOT_fellOutMap`]: the game
                 // reaches it from `control_handle_cel_change` 0x133288 when the object's cel says
                 // out-of-map; the port's DeleteMe arm is the same Enable(0)+flag fold, and the
@@ -9142,8 +9140,8 @@ impl Drone {
         // [M NDrone2_FindOpponent 0x1424e0:101] the opponent-vs-player set is gated on
         // `+0x44 != 2`: a team-2 (ally) drone NEVER takes the player as its opponent — its
         // opponents come from FindOpponent's object walk (the enemy drones). The port's LOS is
-        // player-only, so the sight→ATTACK entry must refuse team 2 (the playtest's "Zoe shooting
-        // at Bond at the gondola" — the 07000008 ally entered combat against Bond through here).
+        // player-only, so the sight→ATTACK entry must refuse team 2 (otherwise Zoe shoots
+        // at Bond at the gondola — the 07000008 ally entered combat against Bond through here).
         if self.team == 2 || self.team == 3 {
             if std::env::var_os("NF_AILOG").is_some() {
                 eprintln!("[ailog] guard {} look_for_opponent: team {} — no player opponent", self.index, self.team);
@@ -9668,7 +9666,7 @@ impl Drone {
 
     /// `DroneWeap_CanThrowGrenade` (0x17a798): the drone has grenades (`+0xBCC` / `+0xBCE` ≠ 0), `Rand(2) == 0` (50 %),
     /// an opponent exists, `8.0 ≤ dist ≤ 20.0`, and the throw anim (0x49) is in the drone's anim set.
-    /// `NF_AILOG` logs every evaluation's inputs (the user's fix-drone2 ask).
+    /// `NF_AILOG` logs every evaluation's inputs.
     pub fn can_throw_grenade(&self, d: &Data, rng: &mut Rng) -> bool {
         let log = std::env::var_os("NF_AILOG").is_some();
         if self.grenade_weapon == 0 || self.grenade_count <= 0 {
@@ -9968,10 +9966,10 @@ impl Drone {
         // `if (lVar9 != 0)` (FireWeapon 0x17925c-0x1792b0): they run only when the kind-0x40
         // muzzle-flash sprite object (`control_create_object(0x40, …)` 0x179248) is created. The
         // port's sim creates no render sprite, so the branch's draws never fire here — consuming
-        // them unconditionally shifted the shared stream (the HELD merge's cover-test 90-vs-37 and
+        // them unconditionally shifted the shared stream (a cover test's 90-vs-37 and
         // the matrix's re-rolled rates; the live-calibrated `ai_live::guard_takes_cover_like_the_game`
         // pins the per-shot stream at roll + Light_Create's Rand(param_11) + the spread draws).
-        // The main agent's live check (the report) settles the object-create side with gdbwatch.
+        // Open: the object-create side is not yet confirmed live.
         let aim = [p.target[0] + off[0] - muzzle[0], p.target[1] + off[1] - muzzle[1], p.target[2] + off[2] - muzzle[2]];
         let flags68 = u32::from_le_bytes(w[0x68..0x6c].try_into().unwrap());
         let dir = crate::bullet::spread(aim, f32_at(0x24), flags68, rng);
@@ -9984,8 +9982,8 @@ impl Drone {
         // (FireWeapon 0x179490-0x17949c, skipped only for the silent 0x5ef) is AUDIO-side —
         // `Sound_Play3D`'s pitch jitter. The port's audio layer (nf-audio) is render-side and
         // does not feed the sim's RNG; consuming it here shifted every later sim draw off the
-        // live-calibrated stream (the HELD merge's two failures). The main agent's live check
-        // (the report) settles whether the game's sim stream really carries it.
+        // live-calibrated stream (two test failures). Open: whether the game's sim stream
+        // really carries it is not yet confirmed live.
         Some(crate::bullet::Bullet { pos: muzzle, dir, speed: f32_at(0x20), travelled: 0.0, range: f32_at(0x1c), damage, owner, state: 0,
             weapon: self.weapon as u16, flyby: d.weapons.flyby(self.weapon as usize), bounces: 0 })
     }
@@ -10048,7 +10046,7 @@ impl Drone {
     }
 
     /// `NDrone2_GetHeadPos` (0x149aa8) at fixed +0.6 — the game's `DroneAnim_CurrentMoveState`
-    /// (task 854: this is also `NDrone2_GetHeadPosOld` 0x141150's job — the `DroneVision_ProcessDroneSight`
+    /// (this is also `NDrone2_GetHeadPosOld` 0x141150's job — the `DroneVision_ProcessDroneSight`
     /// 0x176a28 variant: bone 0x80000005 world-trans on level 0x700001b, else obj pos + 0.2/0.6 by
     /// move state with states 4/0x1a failing [M 00141150 decompile]; the fixed +0.6 fold below is
     /// the standing case the port pins).
@@ -10236,8 +10234,8 @@ pub fn hazard_link_flag(weapon_type: u16, stuck: bool) -> Option<(f32, u16)> {
 
 /// The per-viewer shake amount `Camera_Shake` 0x1bc430:12-26 writes [M]: with range = 2·radius
 /// and d ≤ range, `min((int)(range·(1 − (d/range)²)), 10)`; 0 outside. Explode_Create 0x17cc28
-/// only calls it from radius ≥ 0.5. standins-drone-922.
-#[allow(dead_code)] // not wired: task 969 (held for the feel test)
+/// only calls it from radius ≥ 0.5.
+#[allow(dead_code)] // not wired yet
 pub fn camera_shake_amount(radius: f32, dist: f32) -> f32 {
     let range = radius * 2.0;
     if dist > range { return 0.0; }
@@ -10362,7 +10360,7 @@ pub fn in_view(eye: V3, pos: V3, slack: f32, sides: &[V3; 4]) -> bool {
 /// bit-0x8 queries]): the renderer draws through the pass-flagged surfaces (the 0c museum's glass
 /// displays, the foliage), and the old flat-segment rays marked those guards undrawn —
 /// `NDrone2_DoAnimation` (0x149f88 [M]) then slides them at the danim's speed (0.02 for walk 392)
-/// with no gait, ON SCREEN: the playtests' "the walking animation is kind of fucked" (1012-1723/2105).
+/// with no gait, ON SCREEN — a visibly broken walk.
 /// Opaque occluders (the 05 castle behind the switch-trace patroller [L work/switch_trace.tsv]) block
 /// both segment kinds, so the live-pinned slide of that guard is untouched. The SPawner's "player can
 /// see the spot" gate is a different reader — `drone_position_visible` below; guards-0c-b decoupled
@@ -10541,8 +10539,8 @@ pub struct Drones {
     /// radius reaches 0.5 [M 0x17cc28-0x17cc44]. The port keeps the old [S] set (max radius) and
     /// decay (×0.9 − 0.05): the game's `Camera_Shake` 0x1bc430 per-viewer `min((int)(2r·(1−(d/2r)²)),
     /// 10)` store and `Camera_Update` 0x1bb6d8:35-43's vector draw + `shake −= Rand_FRand(shake·0.25)`
-    /// are task 969 (held for the user's feel test; the int-into-float store and the RNG draws need
-    /// the disassembly). The view reads it for the offset. fix-explosions.
+    /// are not ported yet (the int-into-float store and the RNG draws need
+    /// the disassembly). The view reads it for the offset.
     pub shake: f32,
     pub health: crate::bullet::PlayerHealth,
     /// Every hit on Bond: (tick, shooting drone, health lost).
@@ -10667,7 +10665,7 @@ pub struct Drones {
     /// disables the viewers' HUD (`Camera_Enable(i, 0, 0, 0)` for 0..7) and `Script_KillStream`
     /// 0x1d9860 restores it (`Camera_PopStates`). While it is 0, `Text_UpdateMsg` 0x1b11d8:16-18
     /// returns without ticking the message timers — the objective/mission banners WAIT until the
-    /// cut-scene ends (playtest item 5: they used to run over the cut-scenes). The pane state
+    /// cut-scene ends (they used to run over the cut-scenes). The pane state
     /// machines (0x19c310 case 0) poll the same gate, so a banner arriving mid-NIS stays closed too.
     pub hud_frozen: bool,
     /// The script camera's letterbox borders (`Script_CameraStart` 0x1d9140's two border sprites of
@@ -10684,7 +10682,7 @@ pub struct Drones {
     pub view_fade: Option<ViewFade>,
     /// The running fade is on the cut-scene viewer (`Camera_SetFade(.., 0)`): it belongs to the script camera's
     /// view and ends with it — the gameplay view the camera hands back to never had it (the Kimiko scene's
-    /// near-end fade left the screen black after the hand-back, playtest 1015-0046).
+    /// near-end fade left the screen black after the hand-back).
     pub view_fade_script: bool,
     /// The script camera ran last tick (the hand-back edge for `view_fade_script`).
     pub script_cam_prev: bool,
@@ -10709,7 +10707,7 @@ pub struct Drones {
     pub player_pos: V3,
     /// `DAT_0029aa86` — the interrogate latch: 0 while the party is calm, 1 once an interrogation began
     /// (`DroneVision_BeginInterogate` 0x1782a8; `EndInterogate` 0x1782c8 never clears it on 07000007).
-    /// Gates `DroneFunc_DoForcedAttack` 0x148c60's forced attacks on 07000007 (playtest item 3: one punch
+    /// Gates `DroneFunc_DoForcedAttack` 0x148c60's forced attacks on 07000007 (without it one punch
     /// turned every guest hostile). The interrogate state itself is not ported yet, so only the gate is.
     pub party_loud: bool,
     /// Auto-aim: the last target (`BL+0x114`) and the crosshair offset as (yaw, pitch) radians (`BL+0x120` / `+0x124`,
@@ -10758,7 +10756,7 @@ pub struct Drones {
     /// `MPSettings+0x180` (Ghidra `_384_4_`, decimal 384): the MP master flag. `Mission_Update`
     /// returns while it is set [M 0x182c60:16-18] — an MP match runs `MP_Update` only, never the
     /// single-player objective machine (no objectives = "complete" → the SP outro + results ran
-    /// in an online arena match; the user's two-window check 2026-10-18). Set by the MP load.
+    /// in an online arena match). Set by the MP load.
     pub mp_master: u32,
     fill_rng: Rng,
     /// Pickups in the world, Bond's inventory and what he took (tick, what) — docs/systems/pickups.md.
@@ -11191,7 +11189,7 @@ pub struct ExitHold {
 
 impl Drones {
     pub fn new(mut list: Vec<Drone>, rng: Rng) -> Drones {
-        // (task 854: `Drone_LevelReset` 0x13a5a8 — from `ResetMap_GameInit` 0x1d5080 [M caller grep] —
+        // (`Drone_LevelReset` 0x13a5a8 — from `ResetMap_GameInit` 0x1d5080 [M caller grep] —
         // zeroes NPCGlobals (0x1D10 bytes incl. the target registry), sets `NPCGlobals = 1`, the
         // 600-frame `DAT_00298F58`, 0.5 into `DAT_0029AA80` and 3 into `DAT_00298F5C`, then
         // `Drone_SM_Init` [M 0013a5a8 decompile]; this constructor + `target_registry`'s fresh state
@@ -11210,8 +11208,8 @@ impl Drones {
             spawn_counter: 0, audio: Default::default(), script_sounds: Vec::new(), map_sounds: Default::default(), music: Default::default(), attack_gate: Default::default(), alarm_music: [0; 3], voice_last: Vec::new(), patrol_cooldown: 0, saw_opp_this_frame: false, saw_opp_last_frame: false, searchlights: Default::default(), doors: Default::default(), fuseboxes: Vec::new(), sss: Default::default(), bullet_paths: Vec::new(), sl_shots: Vec::new(), props: Default::default(), break_kills: Vec::new(), breaks: Default::default(), monitors: Default::default(), mission: crate::mission::Mission::new(), mission_carry: None, mission_inited: false, mission_events: Vec::new(), useobjs: Default::default(), ai_points: Vec::new(), bullet_path_weapons: Vec::new(), copters: Vec::new(), locks: Vec::new(), grapple_points: Vec::new(), prev_event2: 0,
             // fix-06-alarm (fields on their own lines — merge lesson 4).
             sound_triggers: Default::default(),
-            // task 845: the shared target registry (NPCGlobals DAT_00299110).
-            // task 854 (unported-guard-ai-other-1): the sight-bark latches and the talk globals.
+            // The shared target registry (NPCGlobals DAT_00299110).
+            // The sight-bark latches and the talk globals.
             // `Drone_LevelReset` 0x13a5a8 (from `ResetMap_GameInit` 0x1d5080) is the game's level-set
             // reset of this state: NPCGlobals zeroed, `NPCGlobals = 1` (the system on), the 600-frame
             // `DAT_00298F58` (the DEAD timer_c payload) and `Drone_SM_Init` — the port's construction
@@ -11370,7 +11368,7 @@ impl Drones {
     /// the entry fade (`Script_FadeStart` 0x1db3d0:10 arms the SCRIPT fade there); `Game_Draw`
     /// draws `psiFadeView` per viewer from that viewer's own fade bytes [M 0x1e6f50:186-212].
     /// So while a script camera owns the view the entry fade never draws — the PS2 shows
-    /// 07000002's opening cut-scene at full brightness [L, the main agent's GDB-build capture].
+    /// 07000002's opening cut-scene at full brightness [L, GDB-build capture].
     /// The RAW state still advances per Game_Run tick (`Camera_UpdateAll` 0x1bbd68 runs
     /// unconditionally in Game_Run 0x1c9790:43; [L] FRAME_RATE_MUL = 1.0, ee_snapshot
     /// 0x0030d0d8) — `tick` keeps the decrement. Camera_PushStates/PopStates save only the
@@ -11576,7 +11574,7 @@ impl Drones {
         // play+update+stop → state 1), whose entity streams are the box's VISIBLE MESH (the object
         // itself has obj+0xD8 = 0 and never draws [M 001b0448:33-35, docs/models/misc.md]). The port's
         // fusebox stand-in had no SP, so 07000008's GuardRoom fusebox — the only in-play opener of
-        // the doorway bolt ch 137 — was invisible (playtest item 7's "pillar"). The synthetic player
+        // the doorway bolt ch 137 — was invisible. The synthetic player
         // primes on the first tick; its entities render and join set_dynamic. SP_Create's mask word
         // is param_6 = 0 [M 001dc7e0]; the port's prime() skips mask-0 SPs (the port-check §9
         // disabled-byte stand-in), so the player carries mask 1 — the load beat is what matters.
@@ -11792,7 +11790,7 @@ impl Drones {
             self.scripts.spawn_copter_sp(c.placement, c.scripts, c.matrix, c.gate, &self.channels);
         }
         // Spawners: their group's drones become templates, absent until spawned (`DroneSpawner_Init`).
-        // (task 854: this block is `NDrone2_SetupGroups` 0x149ca0's job [M 00149ca0 decompile —
+        // (this block is `NDrone2_SetupGroups` 0x149ca0's job [M 00149ca0 decompile —
         // `NDrone2_AddToGroup` 0x1412e0 links each drone with a group id into the per-group list
         // {0x298E20 heads, 0x298F18 counts}, then `DroneSpawner_Init` per occupied slot]; the port
         // keys the same grouping off the placement parameter — `group` on the templates below.
@@ -11870,7 +11868,7 @@ fn segment_hits_sphere(a: V3, b: V3, c: V3, r: f32) -> bool {
         // 0x10e is a LOOPED id ([L ACTION.ELF SFXOutputData @0x2c94a0, entry 0x10e: looped 1, inner
         // 5 / outer 30]) — the EE pool only frees a looped node on `Sound_Stop`, so the old
         // fire-and-forget play left a looping whoosh at the muzzle per shot, stacking per rocket
-        // (playtest 1015-1738: "it doesn't stop, and it can stack up"). The game stops it in
+        // (it never stopped and stacked up). The game stops it in
         // `Bullet_Delete` [M 0x12e660:13-16] / `Bullet_update` case 3 [M 0x12ed68]. The play sits
         // outside the pellet loop; every disc 0x0e record (0x2c/0x2d/0x2e/0x2f/0x30/0x31/0x6d [L
         // ee_start_05.bin weapon_data +0x90 sweep]) is single-pellet, so one whoosh per shot is the
@@ -11897,8 +11895,7 @@ fn segment_hits_sphere(a: V3, b: V3, c: V3, r: f32) -> bool {
             // control integrates the move — ×4.04 is the measured flight scale on the measured
             // twins (0x2c/0x2d; the Scorpion's 0x2e/0x2f join them below — scorpion-rocket-speed);
             // the other 0x200 records keep fire-modes3's pins (the Torpedo
-            // 0x30's 0.025, the Korsakov 0x43's 0.375). The port's 0.0625 was 5.4× too slow (the
-            // playtest: "The rockets are way too slow"). Live check: gdbwatch BU+0xF8 through a
+            // 0x30's 0.025, the Korsakov 0x43's 0.375). The port's 0.0625 was 5.4× too slow. Live check: gdbwatch BU+0xF8 through a
             // 0x2c ride to confirm the guided scale (predicted 0.2525).
             // scorpion-rocket-speed [L ee_start_05.bin / ee_snapshot.bin weapon_data @0x2bf150 +
             // w·0x10C, identical in all four snapshots]: the AT-600 Scorpion's twins ride the SAME
@@ -11909,8 +11906,8 @@ fn segment_hits_sphere(a: V3, b: V3, c: V3, r: f32) -> bool {
             // 0x12e7b0:157,380-474], Bullet_homing steers the DIRECTION only and never writes
             // BU+0xF8 [M 0x12f358:126-166], and the guided cam is init-time only [M 0x12c5a0:234-254].
             // So the measured ×4.04 scale is theirs too: predicted flight 0x2e = 0.2525,
-            // 0x2f = 0.336667 u/tick (= the measured 0x2d's — its flags are identical). Playtest
-            // 1016-1355 (MP): "Scorpion rockets are way too slow" — the port flew them init-only
+            // 0x2f = 0.336667 u/tick (= the measured 0x2d's — its flags are identical). The
+            // port used to fly them init-only, far too slow
             // (0.0625 / 0.0833). Live check: gdbwatch BU+0xF8 through a 0x2e/0x2f flight.
             // rocket-ramp: the ×4.04 stand-in above is gone — the measured 0.33666 is the END of
             // `Bullet_DoTrails`' quarter-speed ramp (0.0833 + 38 × 0.00667 [M 0x12d890:134-138]), which
@@ -11926,16 +11923,16 @@ fn segment_hits_sphere(a: V3, b: V3, c: V3, r: f32) -> bool {
                     self.swoosh_create(from, from, i16::from_le_bytes([w[0x76], w[0x77]]), 0x0200_0918, 1)
                 } else { None }
             };
-            // bullet-range-210 CORRECTION of the 831 note below: the flight death range IS the
+            // bullet-range-210: the flight death range IS the
             // record's +0x1C — [M Bullet_update 0x12e7b0 case 1 (state 1 via the state jump table
             // at 0x2f4300) kills the round when weapon+0x1C < BU+0xF4 (0x12e95c-0x12e984); the
             // step clamps to the +0x1C boundary at 0x12f014-0x12f02c and the next tick kills].
             // `BU+0xFC` is the fuse/arm clock: Bullet_init 0x12c5a0:103 writes 210.0 (overrides
             // 0x3b/0x69/0x37 [:255-283], the 300.0 +0x70&0x10000 arm :216-222) and Bullet_update
             // counts it down ONLY for +0x70 & 0x80000 records (0x12ee08) and id 0x45 (0x12efa4 —
-            // the arm 831 cited; 1.0/tick from 0x30D0D8) — never as a flying round's death cap.
-            // The watch 0x4E/0x4F keeps 210.0 [S unverified: task 831's port choice, kept because
-            // the merged laser tests ride it; the disc rule is +0x1C = 4.0/8.0 [D weapon_data
+            // 1.0/tick from 0x30D0D8) — never as a flying round's death cap.
+            // The watch 0x4E/0x4F keeps 210.0 [S unverified: a port choice, kept because
+            // the laser tests ride it; the disc rule is +0x1C = 4.0/8.0 [D weapon_data
             // 0x2bf150] and the game's beam then advances 4.0/tick through the per-tick refire —
             // live check: gdbwatch a held watch's BU+0xF4 (predicted 4.0/segment, +0xFC unused)].
             let base_id = u16::from_le_bytes([w[0x02], w[0x03]]);
@@ -11964,7 +11961,7 @@ fn segment_hits_sphere(a: V3, b: V3, c: V3, r: f32) -> bool {
         // world position (`AnimGetBoneWorldTrans(shooter, datum)`'s VECTOR out — the view-model gun,
         // on the record's +0xE0 offset [L ee_start_05 @0x2bf150, e.g. the SG5's (0.028, 0.203,
         // −0.244)]), not at the eye — at the eye the shell draws at distance ≈ 0 and fills the frame
-        // (the playtest's "casings flying across my screen, like super large"). The caller hands the
+        // (huge casings flying across the screen). The caller hands the
         // posed gun matrix (`Sim::gun_matrix`, the port's Player_PositionGun 0x1a3b40); without it
         // the old aim-basis stand-in at `from` runs (the muzzle — guards and direct callers).
         let yaw = dir[0].atan2(dir[2]);
@@ -12015,16 +12012,16 @@ fn segment_hits_sphere(a: V3, b: V3, c: V3, r: f32) -> bool {
                     self.swoosh_create(from, from, i16::from_le_bytes([w[0x76], w[0x77]]), 0x0200_0918, 1)
                 } else { None }
             };
-            // bullet-range-210 CORRECTION of the 831 note below: the flight death range IS the
+            // bullet-range-210: the flight death range IS the
             // record's +0x1C — [M Bullet_update 0x12e7b0 case 1 (state 1 via the state jump table
             // at 0x2f4300) kills the round when weapon+0x1C < BU+0xF4 (0x12e95c-0x12e984); the
             // step clamps to the +0x1C boundary at 0x12f014-0x12f02c and the next tick kills].
             // `BU+0xFC` is the fuse/arm clock: Bullet_init 0x12c5a0:103 writes 210.0 (overrides
             // 0x3b/0x69/0x37 [:255-283], the 300.0 +0x70&0x10000 arm :216-222) and Bullet_update
             // counts it down ONLY for +0x70 & 0x80000 records (0x12ee08) and id 0x45 (0x12efa4 —
-            // the arm 831 cited; 1.0/tick from 0x30D0D8) — never as a flying round's death cap.
-            // The watch 0x4E/0x4F keeps 210.0 [S unverified: task 831's port choice, kept because
-            // the merged laser tests ride it; the disc rule is +0x1C = 4.0/8.0 [D weapon_data
+            // 1.0/tick from 0x30D0D8) — never as a flying round's death cap.
+            // The watch 0x4E/0x4F keeps 210.0 [S unverified: a port choice, kept because
+            // the laser tests ride it; the disc rule is +0x1C = 4.0/8.0 [D weapon_data
             // 0x2bf150] and the game's beam then advances 4.0/tick through the per-tick refire —
             // live check: gdbwatch a held watch's BU+0xF4 (predicted 4.0/segment, +0xFC unused)].
             let base_id = u16::from_le_bytes([w[0x02], w[0x03]]);
@@ -12097,7 +12094,7 @@ fn segment_hits_sphere(a: V3, b: V3, c: V3, r: f32) -> bool {
         // (`NDrone2_ExplosiveImpact` → `HitDamage`, the raw falloff amount, part −1): the port used
         // to apply `ddmg · damage_taken` here and send msg 8 — the +0x14C multiply is the bullet
         // paths' (armour ×0.25 made frags 4× weak) and the msg-8 route kept the guard standing
-        // (the playtest's "grenades stagger nobody"). A guard whose state has no case 9 (Attack/
+        // (grenades staggered nobody). A guard whose state has no case 9 (Attack/
         // Combat/WaitSwitch…) drops the message and takes nothing — the game's own routing
         // [M 0x1469b8 case 9 + 0x15b830].
         for (di, ddmg) in hits.drones {
@@ -12144,13 +12141,12 @@ fn segment_hits_sphere(a: V3, b: V3, c: V3, r: f32) -> bool {
         // 0x12ce1c-0x12ce2c f12 = weapon_data+0x08; 0x12d0ec-0x12d0f0 f12 = 0x3f800000; 0x17cbd0
         // stores param_1 into SCRIPTINFO+0x94; Script_GetInterp 0x1da158:117 multiplies the key
         // scales by it]. fix-grenade-throw: the port used radius·0.0667 (obj+0xE8 — a
-        // collision-sphere field, read by nothing visual) — 15× too small: the user's "The explosion
-        // is very small and not accurate to the game." fix-blast-scripts2: the caller's f12 arrives
+        // collision-sphere field, read by nothing visual) — 15× too small. fix-blast-scripts2: the caller's f12 arrives
         // as the `scale` arg instead of being derived from the radius.
         self.scripts.spawn_once_scaled(usize::MAX, script, bm, scale);
-        // `Camera_Shake(pos, radius)` only from radius 0.5 [M 0x17cc28]. fix-922: the exact
-        // Camera_Shake/Camera_Update port (camera_shake_amount) is held for the user's feel test and
-        // the open store/RNG questions (task 969) — the old shape stays.
+        // `Camera_Shake(pos, radius)` only from radius 0.5 [M 0x17cc28]. The exact
+        // Camera_Shake/Camera_Update port (camera_shake_amount) is not wired yet (open store/RNG
+        // questions) — the old shape stays.
         if radius >= 0.5 { self.shake = self.shake.max(radius); }
         self.explosions.push((pos, radius, damage, owner, weapon_type));
     }
@@ -12469,8 +12465,8 @@ fn segment_hits_sphere(a: V3, b: V3, c: V3, r: f32) -> bool {
             // colour/size rule exists in code].
             // No RNG draws (the game's swoosh path consumes none of the shared generator [M];
             // determinism). The puff's colour 0x30d0ff90 / sizes 0.3→0.6 / life 6.0 are the port's
-            // visual stand-in for the ribbon the renderer doesn't draw yet — the main agent's render
-            // check owns the look (compare against texture 0x20005cd on disc [D]).
+            // visual stand-in for the ribbon the renderer doesn't draw yet — the look needs a render
+            // check (compare against texture 0x20005cd on disc [D]).
             let flags6c_b = d.weapons.records.get(b.weapon as usize).map_or(0u32, |r| u32::from_le_bytes(r[0x6c..0x70].try_into().unwrap()));
             let swoosh_05cd = d.weapons.records.get(b.weapon as usize).is_some_and(|r| {
                 matches!(u16::from_le_bytes([r[0x02], r[0x03]]), 0x33 | 0x6a | 0x6e)
@@ -12635,7 +12631,7 @@ fn segment_hits_sphere(a: V3, b: V3, c: V3, r: f32) -> bool {
                 // approximation (the game's two origin-centred standing spheres are what the boxes
                 // refine; the damage tests pin them); a
                 // DOWNED guard's boxes lie along the ground and leave the aimed-at-origin ray
-                // uncovered (the playtest's re-tase did nothing), so the game's own sphere is the
+                // uncovered (a re-tase did nothing), so the game's own sphere is the
                 // contact here. The port's origins rest on the floor when down (the anim root
                 // settles), so the centre is pos + 0.3 up — the lift term drops out.
                 let fb = fb.or_else(|| {
@@ -12895,15 +12891,15 @@ fn segment_hits_sphere(a: V3, b: V3, c: V3, r: f32) -> bool {
                 // 0x10 → `Effect_Laser` 0x1cef38 — the burn puff, NO decal, NO impact sound (its
                 // sound arm gates on effect flags 0x40, set only by weapon_data+0x70 & 2 — clear
                 // on the Laser's +0x70 = 0x800 [L]) and NO ricochet (+0x70 & 0x10 clear). The old
-                // path played the wall-impact sound + decal every held tick — the user's "rapid
-                // fire of bullet impacts".
+                // path played the wall-impact sound + decal every held tick — rapid-fire
+                // bullet impacts.
                 // fix-wallhug-prompt: the sound rides the SAME gate as the effects [M
                 // Bullet_CollisionHandler 0x12ce80:187-190 — effect flags |= 0x61 only with
                 // weapon_data+0x70 & 2, and `Effect_Bullet` 0x1ce8a8:86-90 plays the
                 // `EffectInfo+0x14` impact sound only on flags 0x40]. The Q-Claw bolt carries
                 // +0x70 = 0x40 — the grapple bit, no effects bit [L ee_start_05.bin 0x2bf150 +
-                // 0x50/0x51·0x10C] — so its world hit (the hook latch) is SILENT: the user's
-                // "hook latched, pulled me in, but I also heard a bullet impact". The old
+                // 0x50/0x51·0x10C] — so its world hit (the hook latch) is SILENT (no bullet-impact
+                // sound on the hook latch). The old
                 // unconditional sound also voiced the stunner (0x800) and the gadgets.
                 let flags70 = d.weapons.records.get(weapon as usize)
                     .map_or(0u32, |r| u32::from_le_bytes(r[0x70..0x74].try_into().unwrap()));
@@ -12982,8 +12978,7 @@ fn segment_hits_sphere(a: V3, b: V3, c: V3, r: f32) -> bool {
         // BL+0x944 = 0xf]). The retain below IS the delete (fix-gas-rng4 moved it here from
         // `update_player_bullets`): the bullets still flagged dead at this point are the removed
         // ones — a pierce/ricochet revived its bullet above (dead = false, handle kept, the game's
-        // Bullet_Delete never ran for it); the pre-fix leak never stopped the looped whoosh at all
-        // (playtest 1015-1738).
+        // Bullet_Delete never ran for it); the pre-fix leak never stopped the looped whoosh at all.
         // rocket-swoosh: `Bullet_DoTrails` 0x12d890:202-236 for the flying `+0x6C & 0x10000` rounds —
         // every `weapon+0x74` ticks from the spawn frame a new segment chains on (`Swoosh_Create(rocket,
         // the old segment's head, weapon+0x76, 0x2000481, 1)`, stored as the current one); on the other
@@ -13089,7 +13084,7 @@ fn segment_hits_sphere(a: V3, b: V3, c: V3, r: f32) -> bool {
     /// §1.3–1.4 — is NOT ported: entries whose script IS loaded stay silent here [M 0x141b00:15-17]. Entries
     /// whose script is absent from the level take the hashtable-miss arm (facialAnimId := 0, permanent) and
     /// play DIRECT below — 945 modeled it [M 0x141b00:18-28; the presence source: `Data.scripts` [D census]].)
-    // task 854: the game's SpeechSFX play path also touches the anim-script machinery that the
+    // The game's SpeechSFX play path also touches the anim-script machinery that the
     // port folds into the animator/voice bookkeeping: `AnimScriptNew` 0x1C1398 (a fresh script for
     // the facial track), `AnimFacialAppend` 0x1C6490 (append the facial events),
     // `AnimScriptPeekSfx` 0x1C6CA8 (the pending-SFX peek the play loop uses) and
@@ -13578,7 +13573,7 @@ fn segment_hits_sphere(a: V3, b: V3, c: V3, r: f32) -> bool {
                 // unused). `UpdateMusicalEvents` clears `NisPlaying` and arms `NisQuitten = 5`
                 // [M 0x114e70]; the IOP's `SFXUpdate` step 3 then FadeAndKills every sound that
                 // started while the NIS played — the mid-line dialogue dies inside the skip's fade
-                // window (playtest 1014-1725: "the dialogue still kept going") [M sound.md §6].
+                // window [M sound.md §6].
                 // NIS event 8: `Drone_CoderCreate` 0x13a108 — the coder/gadget drone spawn. The
                 // event's params land in the throwaway level_tag CoderCreate builds on its stack
                 // (memset 0xb0 @0x13a150-0x13a15c, then slot 0 = p0 @0x13a160 `sw s0,44(sp)`,
@@ -13710,7 +13705,7 @@ fn segment_hits_sphere(a: V3, b: V3, c: V3, r: f32) -> bool {
         // (0x1e6780) draws each pickup object's OWN glist at its OWN matrix — the game never reorders
         // a live pickup under a drawn instance. The old `self.pickups.retain(|p| !p.gone)` shifted
         // every later slot by one on the first take, so meshes were drawn at other pickups' and
-        // drops' matrices (the user's "007 model at the armour spot" / "wrong model at the drop").
+        // drops' matrices (a 007 model at the armour spot, the wrong model at a drop).
         // Every consumer already filters `gone`/`hidden`.
     }
 
@@ -14045,7 +14040,7 @@ fn segment_hits_sphere(a: V3, b: V3, c: V3, r: f32) -> bool {
         // and the present guards (the alive stand-in for the ext+0x4f8 flag/health filters —
         // the port's drone records don't carry those bits; flagged in the report). The
         // per-candidate LOS (`Collide_LineOfSight` 0x17f9c8:271-278) is caller-supplied and
-        // the port has no collide ray for turrets yet: supplied true, reported as a gap.
+        // the port has no collide ray for turrets yet: supplied true (a known gap).
         {
             let mut cands: Vec<crate::gt::TrackCand> = Vec::new();
             if self.health.health > 0.0 {
@@ -14115,7 +14110,7 @@ fn segment_hits_sphere(a: V3, b: V3, c: V3, r: f32) -> bool {
                     // 7, 0x48403080, 1) — the port's gas has the searchlight-shape init only;
                     // recorded as the draw/sfx gap in the report.
                     crate::gt::GTEvent::Smoke { .. } | crate::gt::GTEvent::DestroyedBurst { .. } => {}
-                    // Music_Event(2,1) [M case 4] — the music system is the main agent's draw.
+                    // Music_Event(2,1) [M case 4] — the music system is view-side.
                     crate::gt::GTEvent::CombatSting => { self.music.event(2, 1); }
                     // The rest are the draw-side events (pickup drop, MP wreck explode, the
                     // sweep aim, the registered-object hide) — data for the renderer, listed
@@ -14423,7 +14418,7 @@ fn segment_hits_sphere(a: V3, b: V3, c: V3, r: f32) -> bool {
                 // arms (0x148338:108-113 etc.) plus Ready2Fire's aim-class + muzzle-tolerance
                 // gates (0x178c48), which the port mirrors (face_and_aim/ready_to_fire).
 
-                // (task 854: the game's sight/LOS queries the port's collision world stands in for —
+                // (the game's sight/LOS queries the port's collision world stands in for —
                 // reached from `NDrone2_CanSeeObject`/`DroneVision_*` [M calltree from 0x13F688]:
                 // `RecurseBoxesSph` 0x1EDAE0 / `RecurseBoxesBox` 0x1EDC48 (the box-tree walk —
                 // the port's per-cell buckets), `ASH_RecurseBoxesBox` 0x10AE50 / `ASH_Intersect_RayBox`
@@ -15187,7 +15182,7 @@ fn segment_hits_sphere(a: V3, b: V3, c: V3, r: f32) -> bool {
                     self.movie_request = Some(self.triggers[index].movie_code);
                 }
                 // NF_LEVELLOG=1: once per second, log each LOAD_LEVEL trigger's gate channel, whether the gate
-                // is on, and whether the trigger has fired. Lets the user see why the level doesn't end —
+                // is on, and whether the trigger has fired. Shows why the level doesn't end —
                 // e.g. ch 0x1D is off because the EndLevel script never ran.
                 if std::env::var("NF_LEVELLOG").is_ok_and(|v| v == "1")
                     && self.triggers[index].kind == crate::triggers::kind::LOAD_LEVEL
@@ -15714,7 +15709,7 @@ fn segment_hits_sphere(a: V3, b: V3, c: V3, r: f32) -> bool {
             // `DroneVision_ProcessDroneSight` 0x176a28:224 counts a drone with the vision flag
             // (`+0x4F8 & 0x10000`), an opponent record and sight into 0x298fa0; the port's fields.
             if dr.vision_on && dr.los { self.saw_opp_this_frame = true; }
-            // task 854: the sight-bark latches (`DroneVision_ProcessDroneSight` 0x176a28) — NewSight
+            // The sight-bark latches (`DroneVision_ProcessDroneSight` 0x176a28) — NewSight
             // when a drone has held sight 60+ frames with the 0x298FA8 latch clear (sets fa8, clears
             // fa9); LostSight when unsighted 120+ frames, the fa9 latch clear, nobody saw the
             // opponent last frame (sets fa9, clears fa8) [M speech.md §2.3; the port's `seen_ticks` /
@@ -15748,7 +15743,7 @@ fn segment_hits_sphere(a: V3, b: V3, c: V3, r: f32) -> bool {
             self.link_flags = std::mem::take(&mut dr.link_flags);
             self.cover_rt = std::mem::take(&mut dr.cover_rt);
             // NDrone2_Steer: exponential turn toward the desired yaw, 0.1 per tick, with the anim's yaw offset added
-            // (task 854: `Drone_Control` 0x139268 ends with `NDrone2_PostDroneControl` 0x14aff8 [M
+            // (`Drone_Control` 0x139268 ends with `NDrone2_PostDroneControl` 0x14aff8 [M
             // 0014aff8 decompile] — `+0x4F8 & 0x100` set → `obj+0xFA |= 0x20`, and with health
             // `+0xAC <= 0` and `0x200` clear, `+0x4F8 |= 0x400` (the dead-drone flag
             // `PowerstationTalk`'s 0x600 gate reads) — the port's `present`/`corpse` fields are the
@@ -15760,11 +15755,11 @@ fn segment_hits_sphere(a: V3, b: V3, c: V3, r: f32) -> bool {
             // the weapon gate — `AnimDatumGetWeaponInfo < 0` returns). The port aims only in the game's aim/fire
             // states with a weapon in hand, and clamps the target to ±0.9 (0x3f666666) on BOTH sides — the game sets
             // its give-up flag 0x4000 beyond either bound (0x1c0368), the old port clamped only the negative side,
-            // which let the torso wind all the way around (the playtest's "spine flipped" patrol look).
+            // which let the torso wind all the way around (a flipped-spine patrol look).
             let want = if dr.anim.class == 2 && dr.aims_torso() { angle_difference(dr.yaw, dr.yaw_to_opp).clamp(-0.9, 0.9) } else { 0.0 };
             dr.aim_yaw = rotate_to_bearing(dr.aim_yaw, want, 0.2, crate::trig::PI);
             // Head tracking and the aim pitch (fix-ai-remainder; G-026). `NDrone2_DoTracking` 0x1479d8:
-            // (task 854: the target SELECTION the game runs first is `NDrone2_DoHeadTrackingBehaviour`
+            // (the target SELECTION the game runs first is `NDrone2_DoHeadTrackingBehaviour`
             // 0x147578 [M 00147578 decompile, from `NDrone2_DoTracking` 0x1479d8]: the `+0x228 & 8`
             // sight-record path tracking `+0x170`, the `+0x35C == 2` 50.0/16.0 range split, the
             // `+0x4F8 & 0x4000000` / `+0x586 ∈ {0,0xD}` off-switch, the `+0x44` behaviour arms with
@@ -16377,8 +16372,8 @@ fn segment_hits_sphere(a: V3, b: V3, c: V3, r: f32) -> bool {
             // 0x20000. The hat's record does — +0x6C = 0x20C08, the only 0x20000 carrier among the
             // thrown projectiles [L ee_start_05.bin @0x2c398c + the record sweep]. The port's
             // grenade path had no homing: the hat flew dead straight and the thrown hat missed
-            // every guard the aim ray didn't already cover — the user's "should be a one-shot
-            // kill but it acts like a grenade". Same shape as the port's bullet homing (drone.rs
+            // every guard the aim ray didn't already cover, acting like a grenade instead of a
+            // one-shot kill. Same shape as the port's bullet homing (drone.rs
             // `Bullet_homing` block): keep the target while it stays seekable, else acquire the
             // nearest seekable guard within 1000 units inside the 0.66-dot cone of the velocity
             // direction with a clear line of sight [M 0x12f358:64-104 — `Bullet_heatseekable`
@@ -16516,7 +16511,7 @@ fn segment_hits_sphere(a: V3, b: V3, c: V3, r: f32) -> bool {
                             // own increment; the port's `bounces` is already post-increment here, so
                             // the gate reads bounces − 1. fix-grenade-throw: the port played a sound
                             // on EVERY impact — the rested grenade's per-tick micro-collisions made it
-                            // rapid (the user's playtest).
+                            // rapid.
                             let flags70b = d.weapons.records.get(g.weapon_type as usize)
                                 .map(|r| u32::from_le_bytes(r[0x70..0x74].try_into().unwrap()))
                                 .unwrap_or(0);
@@ -16621,8 +16616,8 @@ fn segment_hits_sphere(a: V3, b: V3, c: V3, r: f32) -> bool {
                                 if let Some(t) = d.sfx { let h = t.get(0x14); self.audio.play3d(h.id, pos, None); }
                                 // `Occlude_Create(pos, rearm, 1)` [M 0x12e114-0x12e1b4]: the cloud visual —
                                 // mesh 0x2000273, the re-arm tick countdown (Occlude_Update 0x17eba0).
-                                // fix-grenade-throw: the port played the pop but spawned no cloud — the
-                                // user's "Smoke grenade didn't work." fix-grenade-types: the 0x69 cloud is
+                                // fix-grenade-throw: the port played the pop but spawned no cloud.
+                                // fix-grenade-types: the 0x69 cloud is
                                 // 3600, not 1200 (the lifetime is the re-armed fuse, not a constant).
                                 self.smoke_clouds.push(crate::grenade::SmokeCloud { pos, mesh: 0x0200_0273, ticks: rearm as i16 });
                             }
@@ -16793,7 +16788,7 @@ fn segment_hits_sphere(a: V3, b: V3, c: V3, r: f32) -> bool {
         // was set to FRAME_RATE·f·10 = 600·f ticks [M 0x196040 + 0x12e0b8]). The old self-fraction
         // decay (−f/6 per tick) erased the whiteout in ~6 ticks — invisible.
         self.health.flashbang = (self.health.flashbang - 1.0).max(0.0);
-        self.shake = (self.shake * 0.9 - 0.05).max(0.0); // [S] the old shape; the exact decay is task 969
+        self.shake = (self.shake * 0.9 - 0.05).max(0.0); // [S] the old shape; the exact decay is not ported yet
         // The SimpleScripts (`SS_Update` 0x1a9948's state machine — grates-02). The `SS_Operate`
         // 0x1a9df8 contacts, from the collision pass's registered dynamic set: the player's
         // capsule box (bit 0) and this tick's player-bullet flight (bit 1) against each SS part's
@@ -17264,7 +17259,7 @@ mod tests {
             // fix-cover-remainder: the scary-object flee family (own line — merge lesson 4).
             scared: false, flee_return: 0, flee_deadline: None, explosive_msg: None,
             scripted_move: false,
-            // +0x174 — the shared target registry slot (task 845).
+            // +0x174 — the shared target registry slot.
             target_id: 0xff,
         };
         dr

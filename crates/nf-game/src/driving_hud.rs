@@ -1,5 +1,5 @@
 //! The driving missions' HUD data model (DRIVING.ELF), headless — the per-frame snapshot of
-//! the numbers the game's driving HUD shows, as the game sets them. **The main agent draws
+//! the numbers the game's driving HUD shows, as the game sets them. **The draw side draws
 //! it; nothing here renders.**
 //!
 //! Evidence base (all [M] unless noted — DRIVING.ELF decompile under `work/decomp/DRIVING.ELF/`,
@@ -11,7 +11,7 @@
 //!   0x1c1ec0:80-81 is the only reader of manager+0x28 and forwards the HUD view through
 //!   `FUN_001c1b18` 0x1c1b18:118-144, which calls `FUN_001a4520`, copies a **0xa8-byte
 //!   (21-u32) element block** and passes the label-table pointer **&DAT_0037d790** [M]. The
-//!   element walk's per-element positions/sheet ids are not decoded yet (report live checks).
+//!   element walk's per-element positions/sheet ids are not decoded yet (open live checks).
 //! - **Vehicle numbers** (the sim side, wired below): speed = |velocity| [M `FUN_0018aa88`
 //!   0x18aa88:26-29, recomputed per tick in the tyre pass 0x190f88:394]; the gear byte
 //!   actor+0x2d8 [M], the previous gear +0x2d9 [M], the shift inhibit +0x2d7 [M 0x18cef8:410-413];
@@ -36,8 +36,8 @@
 //!   ESetVisualDamage record is `{vtable 0x370558, p1..p5}` [M 00159638_FUN_00159638.c].
 //!   The timer/beacon/objective *state* structs (what the HUD finally reads) are not
 //!   decompiled yet — the snapshot models them at the command level (the setters below are
-//!   the commands; the fields are what the commands would leave behind [S]). Live checks in
-//!   the report ask the main agent to pin them.
+//!   the commands; the fields are what the commands would leave behind [S]); live checks
+//!   are still open.
 //! - **Vehicle health**: `EPowerUpHealth`/`ESetVisualDamage` exist [D names 0x372300/0x372790];
 //!   the PBondCar ctor `FUN_001862c0` decompiles register-mangled, no health field provable
 //!   yet [M-negative]. `DriveHud::health` is `None` until the damage state is ported.
@@ -49,7 +49,7 @@
 use crate::driving::Car;
 
 // ---------------------------------------------------------------------------
-// The per-frame vehicle readout — wired to `driving::Car` (task 506's physics)
+// The per-frame vehicle readout — wired to `driving::Car`'s physics
 // ---------------------------------------------------------------------------
 
 /// The vehicle numbers the driving HUD shows each frame, exactly as the port's `Car` holds
@@ -197,8 +197,8 @@ pub struct WeaponReadout {
 // ---------------------------------------------------------------------------
 
 /// The driving HUD's per-frame snapshot: the values + label/texture ids + positions the game
-/// sets, in one struct the main agent can draw from. The vehicle group is wired to
-/// `driving::Car` (506's physics) with `observe`; the mission groups are the command-level
+/// sets, in one struct the draw side can draw from. The vehicle group is wired to
+/// `driving::Car`'s physics with `observe`; the mission groups are the command-level
 /// state the mission-script task will drive. No drawing, no RNG, no wall-clock.
 #[derive(Debug, Clone, PartialEq)]
 pub struct DriveHud {

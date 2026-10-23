@@ -96,7 +96,7 @@ impl MapSounds {
 /// placement's param count [D 07000006's four triggers all carry 8 params → disabled].
 /// 07000006 placement 702 is the courtyard alarm siren: ON ch 55 (the searchlights' alarm write
 /// [M Searchlight_Update 0x1cb900:142-144]), id 329 (0x149: LOOPED, inner 400/outer 500 [D
-/// SfxTable]), 2-D, OFF ch 177 — the klaxon the user never heard (playtest 1013-1825). The other
+/// SfxTable]), 2-D, OFF ch 177 — the klaxon that never sounded. The other
 /// three (ch 47 → 219, ch 57 → 241, ch 103 → 331, all one-shot non-looped) are the same object type.
 #[derive(Clone, Debug)]
 pub struct SoundTrigger {

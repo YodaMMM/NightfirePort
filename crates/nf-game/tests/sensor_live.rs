@@ -1,4 +1,4 @@
-//! The 0700000b sensors (sensor-volumes, task 749): playtest gap "sensor volumes (0x28)" —
+//! The 0700000b sensors (sensor-volumes, 0x28) —
 //! `docs/systems/script-census.md` top-10 item 4. 0700000b carries two main-map sensors
 //! [D placement 164: pos (−10.38, 49.64, 11.16), cone 15°, range 5, out ch 0x28 (40), disable
 //! ch 0x3c; placement 172: pos (9.25, 49.64, 11.16), cone 15°, range 5, out ch 0x27 (39)] —

@@ -538,7 +538,7 @@ mod tests {
 
     /// The 09 lift-exit's music arm [M 0x1b2318:109 `Music_Event(3,1)` → 0x113558:9-33]: event 3
     /// jumps the level's end marker INSTANTLY, queues `SFXFadeDown(0)` and holds the end-wait —
-    /// the "music fades" the playtest misses (the port previously had no updater for 09, so the
+    /// the music fade (the port previously had no updater for 09, so the
     /// event died on the board). The combat-set scan: MusicLastJump outside the set → end_calm.
     /// Sister: with MusicLastJump INSIDE the set the same event picks end_combat instead — the
     /// scan is the only difference, so a wrong marker (or a non-instant jump, or a missing

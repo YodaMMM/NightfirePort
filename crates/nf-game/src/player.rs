@@ -497,7 +497,7 @@ impl Bond {
         }
     }
 
-    /// The death-anim pick the main agent's death branch calls: `Player_ChangeSubState`
+    /// The death-anim pick the death branch calls: `Player_ChangeSubState`
     /// 0x190630 case 0xd/0xe [M :68-73] — `WldGravity.y == 0.0` (the exact float test, the
     /// zero-g write is `Vec_Zero`) plays 0x60008e0 (the space death), else 0x6000151 (the
     /// ground death). `Player_HandleDeath` 0x190bb0:15 shares the same test.
@@ -572,7 +572,7 @@ impl Bond {
     /// — the underwater path jumps past the gravity straight into this switch [M disasm
     /// 0x194f4c-0x194f70]. The swim pair rode the LOW arm pre-fix (the same misread 750a made for
     /// the swim grab pick): its lowest point sat cc + 0.10 under the root against the game's cc, so
-    /// the pond-bed push-out parked the swimmer ~0.1 high (the 02-pond playtest: 3.60/3.70 settles
+    /// the pond-bed push-out parked the swimmer ~0.1 high (the 02 pond: 3.60/3.70 settles
     /// against the PS2's 3.48/3.17 [L]; docs/systems/swim.md). The grab pick's own swim arm is the
     /// default one [M ladder.rs::capsule_hits_default] — the pair now agrees with it.
     fn capsule(&self) -> (V3, V3) {
@@ -701,8 +701,8 @@ impl Bond {
     fn ladder_grab(&mut self, ctx: &LadderCtx) {
         // The game's guards [M 0x196118:16-17]: substate must not be 1 (climb) or 2 (grapple) — swim
         // (3), crouch (4) and walk (0) all grab; plus the regrab lockout (+0x951) and health. The old
-        // `!= SS_WALK` gate silently killed the swim-grab call swim_tick already made (the user's "I
-        // can't latch onto it and climb it" at the 02 pond hut ladder).
+        // `!= SS_WALK` gate silently killed the swim-grab call swim_tick already made (the 02 pond
+        // hut ladder could not be grabbed from the water).
         if matches!(self.substate, SS_CLIMB | SS_GRAPPLE) || self.regrab != 0 { return; }
         // The pick shape follows the substate's HITTEST arm. The switch indexes on substate−1 [M
         // disasm 0x19506c-0x195098: `lhu 0xf6($s3)`, `addiu −1`, the jump table — so 0x194df0's
@@ -900,8 +900,8 @@ impl Bond {
         // B = pos + up·(+0x7CC − cc). The 750a softlock: the climb ran the fat 0.55 stance capsule
         // and WEDGED in the undergarden shaft above 07000002's deep ladder (−50.35, 5.50 [D]) —
         // head_bump every tick ate the up-push [M Player_Climb 0x196310:69-71] and Bond hung on the
-        // ladder forever, unable to climb out (the user's "ladder on 02 underwater … softlocks the
-        // game").
+        // ladder forever, unable to climb out (a softlock on 02's underwater
+        // ladder).
         let a_off = 0.55f32;
         let b_off = 0.275 - self.cc;
         let a = [self.pos[0], self.pos[1] + a_off, self.pos[2]];
@@ -928,11 +928,10 @@ impl Bond {
         // clear is not pinned (the decompile's `*(u16*)(BLData+0x7d8) = 0` store resolves to
         // HITTEST+0x98, base+0xcc raw — `sh $s3, 0x70c($a0)` @0x194ff4 — not the +0x9c bit).
         // As built (0c3) the arm fired on positive-floor levels wherever an up-facing contact
-        // met the band's miss and moved EVERY body (the held-merge failures: mp_world_sync's
+        // met the band's miss and moved EVERY body (failures in mp_world_sync's
         // sub-pen plate walk, escort_follow's stairwell, the four-human digest). The 0c hatch
         // set — including the real walked route — is green WITHOUT the arm, so the grounded
-        // rule stays master's until the main agent pins the game's bit (the report's live
-        // checks). See world.rs
+        // rule stays as is until a live check pins the game's bit. See world.rs
         // `capsule_pick_contact_scoped` and the report's live checks.
         let pick = world.capsule_pick_contact_scoped(self.cel, a, b, CLIMB_RADIUS, self.pick_ref[1]);
         let _ = pick;
@@ -1237,7 +1236,7 @@ impl Bond {
     /// AppendBlend pair 0x600046c/e [M Player_Creep 0x1969d0:172-219]) — the port parses no Bond
     /// body-anim data (the wire tracks are the only player anim archive it reads [M wire.rs]), so
     /// the port moves him along the axis at a constant 0.02/tick (1.2 u/s) with the input. The feel
-    /// difference (the game's anim-curve speed vs the constant) is the main agent's feel check;
+    /// difference (the game's anim-curve speed vs the constant) is an open feel check;
     /// the extension path is the drones' `root_motion` machinery.
     /// Every tick: the xz snaps to the closest axis point + fwd(yaw)·0.275 [M 0x1969d0:99-125], the
     /// yaw = wall.yaw + π; the 2D distances to the two ends pick the near end (iVar10) and the exits:
@@ -1520,7 +1519,7 @@ impl Bond {
             // Player_Move dead-zone (the walk's `target≈0 → v=0` snap is 0x191dd0's; ZeroG has
             // none). The smoothers are BL+0x20/+0x28 — walk's own `local` slots — and +0x24, and
             // nothing clears them on the way in or out [M ChangeSubState 0x190630]: releasing the
-            // thrust decays at 0.96^n — the drift inertia the playtest missed.
+            // thrust decays at 0.96^n — the drift inertia.
             let ease = |last: f32, target: f32| -> f32 {
                 let mut v = last + (target - last) * 0.04;
                 if (target - last) * (target - v) < 0.0 { v = target; }
@@ -2044,7 +2043,7 @@ pub fn init_level_loadout(
     // carry the viewer's legacy default (P2K 7/41, `Gun::new(2,7,41)` + the sim's built-in owned
     // flags), so case 0x7000006/8's `p2k_owned` read TRUE on a cold load and the request became the
     // uninitialized saved weapon 0 — the draw machine holstered into weapon 0 and Bond stood unarmed
-    // (nf-view 07000006 --frame 30: "switch request 0", the user's no-weapon report). Clear first on
+    // (nf-view 07000006 --frame 30: "switch request 0", no weapon). Clear first on
     // a cold load; cases 5/7 and the default re-clear or replace anyway, so only 6/8 change.
     if save.is_none() { init_ammo_weapons(inv, w, loaded); }
     // `Player_RamLoad` (0x1957a8): the saved health/armour/weapon/inventory/channels.
@@ -2145,7 +2144,7 @@ pub fn init_level_loadout(
         0x0700_0009 => { fresh_09(inv); req = up(0x43) as u8; }
         // [M 0x1a7ef8 cases 0x700000a/0x700000b]: `Player_RamLoad` keeps the carry and re-selects the
         // saved weapon; when the handgun record is unowned the 0x0700009 loadout re-runs (the island's
-        // Q-Worm arrives here — the user's "no Q-Worm" symptom had no grant at all).
+        // Q-Worm arrives here — without it there was no grant at all).
         0x0700_000a | 0x0700_000b => {
             req = saved_weapon;
             if !p2k_owned(inv) { fresh_09(inv); req = up(0x43) as u8; }
@@ -2353,8 +2352,8 @@ mod tests {
 
     /// fix-swim: the grab gate [M `Player_CollLadder` 0x196118:16-17] excludes ONLY substates 1
     /// (climb) and 2 (grapple) — swim (3) and crouch (4) grab. Pre-fix the port's `substate !=
-    /// SS_WALK` gate made swim_tick's grab call dead code (the user's "I can't latch onto it and
-    /// climb it" at the 02 pond hut ladder). No NF_ISO needed: a hand-built ladder context.
+    /// SS_WALK` gate made swim_tick's grab call dead code (the 02 pond hut ladder could not be
+    /// grabbed from the water). No NF_ISO needed: a hand-built ladder context.
     #[test]
     fn the_ladder_grab_gate_excludes_only_climb_and_grapple() {
         let world = CollisionWorld::from_triangles(Vec::new());
@@ -2381,7 +2380,7 @@ mod tests {
     /// [M `build_LinkToRoom` 0x1c9680 → build_FindCel → control_link_object_to_cel]]. A ladder
     /// whose cell is NOT in the pick capsule's straddle set is never admitted — even with the
     /// capsule dead on the rungs (the old unscoped pick grabbed through the cel wall, the
-    /// 07000008 playtest's through-the-wall zipline arm). Sister: the same shape with the
+    /// 07000008 through-the-wall zipline arm). Sister: the same shape with the
     /// ladder's OWN cell in the set grabs, and an EMPTY set (no cel graph — unit tests, MP
     /// remotes) scopes nothing.
     #[test]

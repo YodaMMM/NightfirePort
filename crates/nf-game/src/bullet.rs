@@ -21,7 +21,7 @@ pub struct Bullet {
     /// fuse/arm clock `Bullet_init` 0x12c5a0:103 writes (210.0, per-id overrides :255-283) and
     /// `Bullet_update` counts down only for `+0x70 & 0x80000` records (0x12ee08) and id 0x45
     /// (0x12efa4, 1.0/tick). The one deliberate deviation: the Laser watch 0x4E/0x4F keeps 210.0
-    /// at its spawn sites [S unverified — task 831's port choice; the disc +0x1C is 4.0/8.0].
+    /// at its spawn sites [S unverified — a port choice; the disc +0x1C is 4.0/8.0].
     pub range: f32,
     /// Damage after `Drone_ModBulletDamage` (applied when it hits Bond).
     pub damage: f32,

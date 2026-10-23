@@ -36,7 +36,7 @@
 //!   hash 0x200055a, obj+0xff = 1, obj+0xf0 |= 0x2400, linked + no-views, stored ext[1..=15].
 //!
 //! The port carries the record (owner, the two gfx hashes, the child count, the flags) on the
-//! guard spawn path; the sprite rendering itself is the main agent's draw work (no drawing
+//! guard spawn path; the sprite rendering itself is draw-side work (no drawing
 //! here). Fields the draw code needs: `MAIN_GFX` / `CHILD_GFX`, `FLAGS_MAIN` / `FLAGS_CHILD`,
 //! `RADIUS` (obj+0xe8 = 6.0), `EXT_LINK_U16` (ext+0x40 = 0x100).
 
@@ -94,7 +94,7 @@ pub fn delete(children: &mut [bool; 15]) -> bool {
 }
 
 /// The per-frame state `BodyGlow_Update` 0x1ac2c8 computes for the draw code (the port carries
-/// the data; the sprite rendering itself is the main agent's draw work).
+/// the data; the sprite rendering itself is draw-side work).
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct GlowUpdate {
     /// The alpha byte written to obj+0x106 on the main object and every child [M 0x1ac2c8:

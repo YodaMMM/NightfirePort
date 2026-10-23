@@ -1,5 +1,5 @@
 //! The port's `Rng` against the game's own `Rand_FRand` (0x1e3780) and `Rand_Rand` (0x1e3738), run in the R5900
-//! interpreter over the user's ACTION.ELF from the same `SEED_X` / `SEED_Y` (0x30d0a0 / 0x30d0a4). Opt-in: `NF_ISO`.
+//! interpreter over the disc's ACTION.ELF from the same `SEED_X` / `SEED_Y` (0x30d0a0 / 0x30d0a4). Opt-in: `NF_ISO`.
 
 use nf_formats::ee::Machine;
 use nf_formats::iso9660::IsoImage;

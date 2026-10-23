@@ -340,7 +340,7 @@ impl Pickup {
         // A resting pickup whose model centre y ≈ 0 (live: the 07000001 guard drops of weapon 0xe rest with their
         // centre ON the floor [L drop-stand-height probe 2026-10-22: centre 5.3452 vs the floor ray 5.3452096])
         // ends the ray ON the floor triangle; the port's `segment` counts t = 1.0 as a hit, which refused every
-        // such drop forever (the "some drops never pick up" playtest symptom). The game takes floor-resting drops
+        // such drop forever (some drops never picked up). The game takes floor-resting drops
         // [L 01-raptor.trace 6.0 s], so its take ray returns clear on the endpoint contact. The settled filter
         // chain (drop-stand-height, 2026-10-22): `Pickup_Update` 0x18e148:210-214 calls `Collide_LineOfSight`
         // (0x1edf50 = `Collide_RayIntersect(...)==0`, one call) from the player's world-sphere centre to
@@ -583,7 +583,7 @@ impl Inventory {
             kind::BOND_BONUS => {
                 // Type 6: the game's `Pickup_Handler` case 6 calls `PlrStat_LogBondBonus` and shows a
                 // message — no weapon or ammo. D-004: the gold-medal gate (`Pickup_Create` line 93) is
-                // skipped. The pickup is consumed [M 0x18e650:234-236]. fix-objects: reported as
+                // skipped. The pickup is consumed [M 0x18e650:234-236]. fix-objects: returned as
                 // `Bonus` so the caller plays the take-time sound 0x14C instead of staying silent.
                 Some(Taken::Bonus)
             }

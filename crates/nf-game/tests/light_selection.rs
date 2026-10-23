@@ -97,7 +97,7 @@ fn the_vu1_shading_formula_matches_the_microcode() {
 }
 
 /// A character next to Bond's muzzle light is brighter that frame; the sister asserts the same
-/// vertex without the light is not. This is the render-independent form of the user's symptom
+/// vertex without the light is not. This is the render-independent form of the rule
 /// (lights fall on characters).
 #[test]
 fn a_character_next_to_the_muzzle_light_gets_brighter_that_frame() {

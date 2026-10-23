@@ -1,5 +1,4 @@
-//! profile-options-2: the codename options' save round-trips, re-landed from task 610 onto
-//! master's field set. Every option field round-trips through the game's own block format (the
+//! profile-options-2: the codename options' save round-trips. Every option field round-trips through the game's own block format (the
 //! bit widths of `LS_MakePlrSettings` 0x1cd418 / `LS_MakeMPSettings` 0x1ce508 / 
 //! `LS_MakeGlobalSettings` 0x1cd9d0 / `LS_MakeCheats` 0x1ce260 [M]) with the CRC trailer intact.
 //! No ISO needed: this pins the persisted model, not a level. The pages' evidence table is

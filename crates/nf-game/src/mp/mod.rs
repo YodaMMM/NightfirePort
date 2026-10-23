@@ -88,7 +88,7 @@ pub const MP_SKINS: [u32; 29] = [
 ];
 
 /// The port's MP slot count: 16 participants, any human/bot mix [S
-/// mp-16-slots — the user's extension of the game's 8 records (humans 0..3 +
+/// mp-16-slots — a port extension of the game's 8 records (humans 0..3 +
 /// bots 4..7 [M MP_Start 0x183a50]; every per-slot rule stays the game's,
 /// only the counts grow). Humans occupy slots 0..human_count-1, the bots
 /// follow [S].

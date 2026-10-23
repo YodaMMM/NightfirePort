@@ -2,7 +2,7 @@
 //!
 //! Called every tick as the last statement of `Player_CollisionHandler` 0x1949a8:204 [M]. The
 //! function is the wrist-watch's attach/detach driver for the first-person view model; the
-//! attach/detach half is bone/render work (the main agent's draw). The DATA the draw code needs —
+//! attach/detach half is bone/render work (draw side). The DATA the draw code needs —
 //! the mission-clock base per level and the hand angles — lives here:
 //!
 //! - The clock reads `t = DAT_002bcc50 + level_base` [M 0x1a69d0:89]: the mission elapsed timer

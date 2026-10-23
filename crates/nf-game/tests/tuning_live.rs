@@ -1,5 +1,5 @@
 //! The port's `read_tuning_vars` against the game's own `ReadTuningVars` (0x1d3a80), run in the R5900 interpreter over
-//! the user's ACTION.ELF with `GameState+12` (0x2a3768 + 12) set to each level id 0x07000000..=0x0700004F.
+//! the disc's ACTION.ELF with `GameState+12` (0x2a3768 + 12) set to each level id 0x07000000..=0x0700004F.
 //! Opt-in: `NF_ISO`.
 
 use nf_formats::ee::Machine;

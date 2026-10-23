@@ -130,7 +130,7 @@ pub fn pick_decryptor_lock(
 /// `head`/`dir` are THE CROSSHAIR RAY the caller fires bullets down (the game's shot ray runs from
 /// `Player_GetHeadPos` through `Player_GetAimingPoint` [M Player_WeaponInitBullet 0x1a4bf0:152-159],
 /// and the beam draws from the muzzle to that ray's re-cast hit [M 0x1a4298:107-132]) — the old
-/// `bond.look()` ray was the user's "the laser isn't accurate" on the 0700000c display vent.
+/// `bond.look()` ray made the laser inaccurate on the 0700000c display vent.
 /// Returns the beam's endpoints (the hand end is the caller's; here the head) and the hit point
 /// for the renderer.
 pub fn laser_tick(head: V3, dir: V3, world: &crate::world::CollisionWorld) -> (V3, V3) {

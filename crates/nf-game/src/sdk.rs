@@ -13,7 +13,7 @@
 //!   0x189730, `Mission_MonitorObjectives` 0x1827d8 [M]). REACHED every frame with text on
 //!   screen. The port's equivalent is Rust's `format!` at those sites (hud, MP score lines,
 //!   mission banners) — bit-exact integer formatting is not needed: the formatted strings feed
-//!   the draw side's textures, which the main agent renders.
+//!   the draw side's textures.
 //! - `std` 0x239f30: newlib's standard-streams initializer, called from `__sinit` 0x239fa0 at
 //!   libc bring-up (3 jal sites 0x239fd8/0x239fec/0x23a000 [M]) — REACHED at boot. The port's
 //!   stdout/stderr need no initialization.
@@ -55,7 +55,7 @@
 //!
 //! | stub | caller [M jal census] | port equivalent |
 //! |---|---|---|
-//! | `SetGsCrt` 0x23bc50 | `sceGsResetGraph` 0x225430:30,41 (decomp; the video-mode set at boot) | the window/surface the main agent's shell opens |
+//! | `SetGsCrt` 0x23bc50 | `sceGsResetGraph` 0x225430:30,41 (decomp; the video-mode set at boot) | the window/surface the viewer's shell opens |
 //! | `AddIntcHandler` 0x23bc90 | `main` 0x109080 ×2 (0x10911c/0x109134 — the VBlank/interrupt hooks) | the fixed 60 Hz tick loop (no interrupts) |
 //! | `RemoveIntcHandler` 0x23bca0 | `psiLaunchDriving` 0x120af0 ×2 + `sceGsResetGraph` 0x225430 | level transitions re-wire nothing on the port |
 //! | `AddDmacHandler` 0x23bcb0 | `sceSifInitCmd` 0x23d628 (0x23d7b0 — the SIF DMA bring-up) | the host file reads |
@@ -70,7 +70,7 @@
 //! the boot-flow docs); the stubs themselves stay here.
 
 /// The one float format string on the disc's .rodata [D census — the test below re-scans the
-/// user's ISO] — the debug-coords HUD line, gated on `switch_SHOW_COORDS` [M 0x19b9c8:265-268].
+/// disc image] — the debug-coords HUD line, gated on `switch_SHOW_COORDS` [M 0x19b9c8:265-268].
 pub const ONLY_FLOAT_FORMAT: &str = "%.2f %.2f %.2f\nFPS %d\n";
 
 #[cfg(test)]

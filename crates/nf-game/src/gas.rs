@@ -40,7 +40,7 @@ pub const SMOKE_QUAD: u32 = 0x0200_0039;
 /// Every mesh hash the pool's own `Gas_Init` sites can carry, beyond the `EffectInfo` rows' gas
 /// entries (those the renderer collects from `SurfaceSounds::effects` itself). flesh-hit-effects:
 /// the renderer's draw-slot list must cover these or the puff sits in the pool with nothing to
-/// draw it through — the user's "no red puffs" was the blood puff 0x0200_08bc with no slot:
+/// draw it through — the missing red puffs were the blood puff 0x0200_08bc with no slot:
 /// - `SMOKE_QUAD` — the `Gas_Init` default (muzzle, searchlight, laser burn, flashbang, exhaust,
 ///   ripples) [M 0x1aacc8:81];
 /// - `0x0200_001f` — the projectile trail smoke [M `Bullet_trail_effect_smoke` 0x12cba8 disasm

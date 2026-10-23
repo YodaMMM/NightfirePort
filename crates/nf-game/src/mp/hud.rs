@@ -1,5 +1,5 @@
 //! The MP HUD's data model — what the in-match HUD reads, as a per-frame snapshot with getters.
-//! Port-only delivery shape (the main agent draws): the game's HUD reads these values straight
+//! Port-only delivery shape (the draw side reads it): the game's HUD reads these values straight
 //! out of the MP globals each frame (`HUD_Update` 0x19a088 dispatches the per-pane updates over
 //! the `MPPaneList` fn pointers [M 0x199b70:42, 0x199e88:36]); the port's snapshot folds the same
 //! reads into one struct per frame. No rendering here — `nf_view::hud::radar_project` consumes
