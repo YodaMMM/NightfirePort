@@ -310,8 +310,7 @@ pub fn resample_gauss(data: &[i16], pos: f64) -> i16 {
 }
 
 /// The port's overall output level, applied to everything that reaches the speakers (the game mixer here and the
-/// movie player's stream, nf-view movie.rs) after the game's own volume math (the user, 2026-10-19: "need to lower
-/// the volume by 75%"). A port choice, not the game's: the PS2's levels stay as they are inside the mix.
+/// movie player's stream, nf-view movie.rs) after the game's own volume math (−75%). A port choice, not the game's: the PS2's levels stay as they are inside the mix.
 pub const OUTPUT_GAIN: f32 = 0.25;
 
 /// `NF_SILENT` is set (any value): open no audio device. The test runner (tools/test/suite.py) sets it.
@@ -319,7 +318,7 @@ pub fn silent() -> bool { std::env::var_os("NF_SILENT").is_some() }
 
 impl Output {
     /// Opens the default output device. `None` when there is none (the game runs silent), or when
-    /// `NF_SILENT` is set: the test runner sets it so no test ever plays through the user's speakers
+    /// `NF_SILENT` is set: the test runner sets it so no test ever plays through the speakers
     /// (the weapon-sound tests once fired bursts of shots at full volume through them).
     pub fn open() -> Option<Output> {
         if silent() { return None; }
