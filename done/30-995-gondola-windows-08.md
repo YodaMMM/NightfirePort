@@ -28,3 +28,8 @@ claimed-by: sandbox2 at 2026-10-23T14:22Z
 ---
 ## Report (done, 2026-10-23T16:38Z)
 
+
+---
+## Report from the worker (done, 2026-10-23T16:38Z)
+
+Closed by the driver: the report is on `s/995-gondola-windows-08` (docs/reports/995-gondola-windows-08.md); the worker didn't run finish.sh.
