@@ -306,6 +306,90 @@ fn the_zero_g_entry_floats_bond_off_the_deck() {
     let _ = min_x;
 }
 
+/// The sealed-shaft wall, decided (level-1b-drake-3): the face that stops the float at x ≈ 4.98
+/// IS the game's own boundary, and the game's body collides with it — the port's capsule stop is
+/// the game's behaviour, not a port artefact.
+///
+/// [D probe1b_wall] the face is plc #128 OBJECT_Boundary_1 (kind 0x8019, cel 0x8000, glist 0x0):
+/// a two-triangle pair at x 4.433 spanning y −16.56..+16.74, z −20.40..+20.40 (both stored
+/// normals face EAST, +x), surface byte 0x40 — present in the level archive at the slit band,
+/// at the mouths' height (y 9.45) and everywhere between.
+///
+/// [M] the game's rules stop the player body on it: the surface byte's 0x40 sets HITDATA+0x51
+/// bit 1 on every hit (Collide_Intersect 0x1ebaa8 disasm 0x1ebf78-0x1ebf80) and that bit drops
+/// hits only for the HITTEST+0x98 bit-0x8 bullet queries (0x1ebff0-0x1ec010) — the player body
+/// rides Collide_CylinderIntersect 0x1ecc00:61's kind 0x800, which carries no bit 0x8;
+/// Intersect_CylGeom 0x109da0's per-triangle loop rejects no face by side (the head-on cull
+/// :302-322 only skips faces within ~2.6° of horizontal), and Player_ZeroG 0x192ab0 composes
+/// only thrust/rotation — the shared movement applies the same body collision. The z ±8.82
+/// mouths do not reopen the route: the iris doors (SP#141/#142's meshes, x 5.23 [D]) sit EAST
+/// of the boundary, and the boundary spans the doors' whole y band — open doors dead-end at it.
+#[test]
+fn the_boundary_wall_stops_the_float_and_passes_bullets() {
+    let iso = iso();
+    let scene = nf_view::load(&iso, "0700001b.bin", false).unwrap();
+    let sim = scene.sim.as_ref().unwrap();
+    // The body ray east→west hits the 4.433 plane across the slit band and at the mouths'
+    // height, with the boundary's surface byte [D mat 0x40].
+    for (y, z) in [(-2.4f32, 0.0), (0.0, -4.0), (2.5, 0.0), (9.45, 8.82), (9.45, -8.82)] {
+        let (t, n, mat, _) = sim.world
+            .segment_surface_flags([5.5, y, z], [3.5, y, z], true)
+            .unwrap_or_else(|| panic!("the boundary ray (y {y}, z {z}) must hit [D plc #128 at x 4.433]"));
+        let x = 5.5 - t * 2.0;
+        assert!((x - 4.433).abs() < 0.01, "hit at x {x:.3} = the boundary plane 4.433 [D plc #128], got t {t}");
+        assert!((n[0] - 1.0).abs() < 0.01, "the stored normal faces east [D], got ({:.2},{:.2},{:.2})", n[0], n[1], n[2]);
+        assert_eq!(mat & 0x3f, 0, "the boundary's surface index is 0 [D mat 0x40]");
+        assert!(mat & 0x40 != 0, "the boundary carries the 0x40 surface flag [D]");
+    }
+    // Sisters (the game's ray rules): the bullet query passes (the 0x40 drop [M 0x1ebff0]) and
+    // the west→east ray passes (the stored normals face east; the ray test skips n·dir ≥ 0
+    // [M 0x10a8c8:168]).
+    for (y, z) in [(0.0f32, 0.0), (9.45, 8.82), (9.45, -8.82)] {
+        // The bullet is never stopped AT the boundary: the 0x40 drop [M 0x1ebff0-0x1ec010]
+        // releases the hit and the ray runs on (west of the boundary the 0x19 grills at x ≈ 3.8
+        // [D] can catch it — that is not the boundary).
+        if let Some(t) = sim.world.segment_bullet([5.5, y, z], [3.5, y, z]) {
+            let x = 5.5 - t * 2.0;
+            assert!(x < 4.4, "the bullet passes the boundary westward (the 0x40 drop [M 0x1ebff0-0x1ec010]) \
+                at y {y} z {z} — stopped at x {x:.3} instead");
+        }
+        assert!(sim.world.segment([3.5, y, z], [5.5, y, z]).is_none(),
+            "the west→east ray passes the east-facing boundary [M 0x10a8c8:168] at y {y} z {z}");
+    }
+    drop(sim);
+    // The float, real thrust only: enter at the slit mouth (the documented ch-75 stand-in for
+    // the disc's own SP#211 pulse — the chain test above drives the chain itself), lift clear
+    // of the deck band, then thrust west. The boundary stops the capsule at
+    // 4.433 + 0.55 (the body radius) ≈ 4.98 — min x must land in that window, never past it.
+    let mut w = Walker::new(nf_view::load(&iso, "0700001b.bin", false).unwrap());
+    w.wait_enabled(3000, "the shuttle arrival");
+    // [S] unverified — the same ground-substate premise as the entry test (the p3 == 2 spawn
+    // enters substate 8 [M 0x1910f8 :160-165]; this test pins the WALL, not the substate).
+    w.scene.sim.as_mut().unwrap().bond.substate = SS_WALK;
+    for wp in [[20.0f32, -1.9, 1.0], [17.0, -1.9, -1.0], [13.0, -1.9, -1.0], [10.0, -1.9, -1.0]] {
+        let _ = w.try_walk_to(walker::Wp::new(wp[0], wp[1], wp[2]).r(1.2), "the deck west");
+    }
+    let _ = w.try_walk_to(walker::Wp::new(8.6, -1.9, -0.6).r(1.2), "the slit mouth");
+    {
+        let sim = w.scene.sim.as_mut().unwrap();
+        sim.drones.channels.set(0x4b, 1, sim.drones.frame);
+    }
+    w.tick(Input::default(), false);
+    assert_eq!(w.scene.sim.as_ref().unwrap().bond.substate, SS_ZEROG_9,
+        "the ch-75 rise enters the float [M 0x216388:10-17]");
+    let mut min_x = f32::MAX;
+    for t in 0..1100u32 {
+        let input = if t < 220 { Input { lift: 1.0, ..Default::default() } }
+                    else { Input { forward: 1.0, ..Default::default() } };
+        w.tick(input, false);
+        let sim = w.scene.sim.as_ref().unwrap();
+        min_x = min_x.min(sim.bond.pos[0]);
+    }
+    assert!(min_x > 4.85 && min_x < 5.15,
+        "the float thrusts west and the boundary stops the capsule at 4.433 + 0.55 ≈ 4.98 \
+         [D plc #128; M the kind-0x800 body, no bit-0x8 drop; M CylGeom two-sided], got min x {min_x:.3}");
+}
+
 /// The spawn pin (green): with ch 0x0a driven from the WALKED deck route, spawner #187 produces
 /// Drake instantly, enabled, at his placement (−7.32, −1.42, 0.06) — the 720a "Drake does not
 /// spawn in the port" gap is refuted (their Bond had fallen into the pit; the spawner answers
