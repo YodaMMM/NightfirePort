@@ -933,6 +933,14 @@ pub struct Drone {
     pub pending_grenade: bool,
     /// Frames of the shots fired (for flashes; the viewer drains it).
     pub shots: Vec<u32>,
+    /// Port-internal instrumentation, parallel to `shots`: the RAW accuracy roll of each fired
+    /// shot (`DroneWeap_DoBulletAccuracy` 0x179740's `FRand(100) < pct`, before the sight gate
+    /// and the TooClose forced hit [M 0x179740:100-110 / 0x179914-0x17992c]). Lets tests pin the
+    /// game's hit-chance model without the bullet-flight geometry (a rolled miss still flies a
+    /// wobble-offset bullet that can land). Aligned with `shots` only for the plain bullet
+    /// weapons (the mounted-minigun deploy branch returns before the roll and `shots` still
+    /// grows — 952's tests only use plain weapons).
+    pub shot_rolls: Vec<bool>,
     /// Root translation at the previous tick (root motion).
     pub root_prev: Option<V3>,
     /// `+0x2A` Bond's crosshair on this drone (until the given frame) and `+0x17` another drone within 3 units.
@@ -1719,6 +1727,8 @@ impl Drone {
             firing: false, burst_done: false, burst: 0, next_shot: 0, last_shot: 0, clip, clip_max: clip,
             grenade_weapon, grenade_count, pending_grenade: false,
             shots: Vec::new(), log: Vec::new(), knocked_out: false, disabled_logged: false, dispatched_logged: false, start_script, root_prev: None, aimed_at: false, aimed_until: 0, bunched: false, wobble: rng.rand(10000), lost_sight: true, damage_mul: 1.0, alert_bits: 0, light: 1.0, attack_frame: 0, alerted_by_drone: false, watching: false,
+            // 952: the raw accuracy roll per shot, parallel to `shots` (own line — merge lesson 4).
+            shot_rolls: Vec::new(),
             // drone-abseil-elevator: the +0x23 rope fields (own lines — merge lesson 4). `move_ok`
             // (+0x24) is set for every drone at DefaultInit 0x14b300:771; the rest start at the
             // game's fresh-allocation values.
@@ -9919,6 +9929,10 @@ impl Drone {
         pct *= level_accuracy(d.level, d.difficulty);
         if close { pct *= 2.0 }
         let mut hit = rng.frand(100.0) < pct;
+        // The raw roll, exposed for the tests (see `shot_rolls`): the model quantity is the
+        // roll itself, not the bullet's landing — a rolled miss still flies the wobble-offset
+        // bullet and can clip Bond's bounds.
+        self.shot_rolls.push(hit);
         if !close { hit &= self.seen_ticks >= 120 && !self.lost_sight; }
         if self.dist < 3.0 { hit = true; }
         self.lost_sight = false;
@@ -17132,6 +17146,8 @@ mod tests {
             anim: Animator { danim: 0, script: None, time: 0, state: 0, class: 0, call: None, reached: false, call_from: 0, blend_wait: 0, ftime: 0.0, speed: 1.0, variant: 0, once: false, held: false, follow_on: 0, outgoing: Vec::new(), started: false, early_end: false, len_cap: None },
             firing: false, burst_done: false, burst: 0, next_shot: 0, last_shot: 0, clip: 0, clip_max: 0,
             grenade_weapon: 0x35, grenade_count: 0, pending_grenade: false, shots: Vec::new(),
+            // 952: the raw accuracy roll per shot, parallel to `shots` (own line — merge lesson 4).
+            shot_rolls: Vec::new(),
             surrender_logged: false, hit_log: 0, detected_logged: false,
             hip_anim: 1.0,
             log: Vec::new(), knocked_out: false, disabled_logged: false, dispatched_logged: false, start_script: 0, root_prev: None, aimed_at: false, aimed_until: 0, bunched: false, wobble: 0, lost_sight: false,

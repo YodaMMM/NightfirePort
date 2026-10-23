@@ -20,7 +20,7 @@ const ACC: [f32; 3] = [0.5, 0.7, 1.0];
 /// [L work/ee_start_07000001.bin @ 0x30cc50/54/58] — `Plr_DMod_*` (ReadTuningVars group 0x1d3e00).
 const DMG: [f32; 3] = [0.5, 0.7, 1.2];
 
-struct Shot { frame: u32, hit: bool, dist: f32 }
+struct Shot { frame: u32, hit: bool, dist: f32, roll: bool }
 
 /// ai-sight-drawn-gate-5: the shared park pass. Reads the guard's LIVE position and yaw (he
 /// walks between attempts — the diff-3 0x12 candidates all failed a park computed from a stale
@@ -99,6 +99,10 @@ fn collect_shots(scene: &mut nf_view::scene::Scene, weapon: u32, wanted: u32, wa
     let mut hit_events: Vec<(u32, f32, f32, f32)> = Vec::new();
     // fix-guard-weapons3: per-shot gate-clean flags (aligned with `d.shots[w0..]`), for the final candidate.
     let mut gate_ok: Vec<bool> = Vec::new();
+    // 952: per-shot raw accuracy roll (`Drone.shot_rolls`, the port-internal exposure of
+    // `DroneWeap_DoBulletAccuracy` 0x179740's `FRand(100) < pct` before the sight gate), aligned
+    // with `d.shots[w0..]` for the plain bullet weapons.
+    let mut gate_roll: Vec<bool> = Vec::new();
     // ai-sight-drawn-gate-3: the fire-time guard distance per collected shot (the band split).
     let mut gate_dist: Vec<f32> = Vec::new();
     'guards: for &cand in &candidates {
@@ -166,6 +170,7 @@ fn collect_shots(scene: &mut nf_view::scene::Scene, weapon: u32, wanted: u32, wa
         // gate saw [M 0x179740:100-110].
         gate_ok.clear();
         gate_dist.clear();
+        gate_roll.clear();
         let cap = 60000u32;
         loop {
             let sim = scene.sim.as_mut().unwrap();
@@ -179,7 +184,11 @@ fn collect_shots(scene: &mut nf_view::scene::Scene, weapon: u32, wanted: u32, wa
                 // what the fire path's hit-chance doubling reads [M 0x139fac-0x139fc8]; a
                 // geometric measure disagrees with it exactly when the cache lags a strafe
                 // (the measured hit #115: fire-time geometric 2.98, the ×2 not applied).
-                while w0 + gate_ok.len() < d.shots.len() { gate_ok.push(clean); gate_dist.push(d.dist); }
+                while w0 + gate_ok.len() < d.shots.len() {
+                    gate_ok.push(clean);
+                    gate_dist.push(d.dist);
+                    gate_roll.push(d.shot_rolls.get(w0 + gate_ok.len() - 1).copied().unwrap_or(false));
+                }
             }
             let got = gate_ok.iter().filter(|&&c| c).count();
             let frame = sim.drones.frame;
@@ -232,20 +241,33 @@ fn collect_shots(scene: &mut nf_view::scene::Scene, weapon: u32, wanted: u32, wa
         let f = frames[k];
         let next = frames.get(k + 1).copied().unwrap_or(u32::MAX);
         let dist = *gate_dist.get(k).unwrap_or(&10.0);
+        let roll = *gate_roll.get(k).unwrap_or(&false);
         let mut hit = false;
         while hi < hit_events.len() && hit_events[hi].0 < f { hi += 1; }
         while hi < hit_events.len() && hit_events[hi].0 < next {
             hit = true; deltas.push((hit_events[hi].1, hit_events[hi].2, hit_events[hi].3)); hi += 1;
         }
-        shots.push(Shot { frame: f, hit, dist });
+        shots.push(Shot { frame: f, hit, dist, roll });
     }
     let dist = scene.sim.as_ref().unwrap().drones.list[guard].dist;
     (guard, shots, deltas, dist)
 }
 
-/// The task's matrix: 3 weapons × 3 difficulties — over 100 shots at 10 units the hit rate equals
-/// the game's model (p = (100 − 5·acc) × level accuracy, no TooClose ×2 at 10 units, target still)
-/// and every per-hit damage equals the game's (weapon_data+0x0C × Drone+0x100 × Plr_DMod).
+/// The task's matrix: 3 weapons × 3 difficulties — over 100 gate-clean shots the RAW ACCURACY
+/// ROLL rate equals the game's model (p = (100 − 5·acc) × level accuracy, no TooClose ×2 at 10
+/// units, target still) and every per-hit damage equals the game's (weapon_data+0x0C × Drone+0x100
+/// × Plr_DMod).
+/// 952: the pinned rate is the ROLL (`Drone.shot_rolls`, `DroneWeap_DoBulletAccuracy` 0x179740's
+/// `FRand(100) < pct` before the sight gate), not the bullet-landing rate. A rolled miss still
+/// flies the deterministic wobble-offset bullet (FireWeapon 0x178f68's miss branch) and can clip
+/// Bond's bounds — measured in the 952 investigation, diff-1 weapon 0x12: ~8% of the landed hits
+/// came from rolled-miss bullets, and the landing geometry is a knife-edge function of the
+/// shooter's parked position. The AI-boundary push (`AINetwork_HitBoundry` 0x157780's X/Z hit
+/// distance [M 0x157780:94]) nudges the guards' approach paths, moving the parked spot by mm–cm
+/// and the landed rate with it (measured: 81/200 = 0.405 with the old 3D stand-in, 104/200 = 0.52
+/// with the game's X/Z) — the game runs X/Z, so the landed rate is not a model quantity. The roll
+/// is: pct was 37.50 on every one of the 937 instrumented fires of that cell, and the pure roll
+/// rate sat at 1.7σ of p over that sample.
 /// Weapons: 07000001's 0x0e (interval 15 → the 60-clamp) and 0x12 (record burst 12 → the
 /// aggression cut), plus 07000005's SG-5 0x16 (burst 3, interval 4) — the guards' three behaviours.
 #[test]
@@ -276,9 +298,10 @@ fn the_3x3_hit_rate_and_damage_matrix_matches_the_game() {
             // distance instead of assuming the whole run stays out of the band.
             let out_of_band: Vec<&Shot> = shots.iter().filter(|s| s.dist >= 3.0).collect();
             let hits = out_of_band.iter().filter(|s| s.hit).count();
+            let rolls = out_of_band.iter().filter(|s| s.roll).count();
             let n = out_of_band.len();
             assert!(n >= 100, "only {n} of {} shots sampled outside the 3.0 band — the model cell has no sample", shots.len());
-            eprintln!("[gw] {level} diff {diff} weapon {weapon:#x} (guard {guard}, acc {acc}, mul {mul}): {hits}/{n} hits (model {:.2}), per-hit {:?} (model {expected_hit}), dist {dist:.2}",
+            eprintln!("[gw] {level} diff {diff} weapon {weapon:#x} (guard {guard}, acc {acc}, mul {mul}): {hits}/{n} landed, {rolls}/{n} rolled (model {:.2}), per-hit {:?} (model {expected_hit}), dist {dist:.2}",
                 expected_rate * 100.0, &deltas[..deltas.len().min(6)]);
             // The model's only distance term is the binary TooClose ×2 (< 3.0 [L 0x30cb14]) —
             // there is NO falloff [M 0x19455c-0x194588] — so any band above 3.0 validates the
@@ -289,9 +312,20 @@ fn the_3x3_hit_rate_and_damage_matrix_matches_the_game() {
             // damage still on the model: 0.685 vs 0.60 ± 0.12, 1.65 exact); the old 3.5 floor
             // was harness margin, not a game rule.
             assert!(dist > 3.05 && dist < 12.5, "guard {guard} ended inside the TooClose band or far off the engagement (dist {dist})");
-            let rate = hits as f32 / n as f32;
-            assert!((rate - expected_rate).abs() <= 0.12,
-                "{level} diff {diff} weapon {weapon:#x}: hit rate {rate:.3} vs model {expected_rate:.3} ({hits}/{n})");
+            // 952: the pin is the ROLL rate — `DroneWeap_DoBulletAccuracy` 0x179740 applies
+            // p = (100 − 5·acc) × level accuracy to the shared RNG for every gate-clean shot
+            // [M 0x179740:100-110], and the port's fire_weapon applies the same p to the same
+            // RNG. The landed rate (the old pin) additionally counts rolled-miss bullets that
+            // clip Bond's bounds — a geometry effect of the shooter's parked position, not a
+            // model quantity (see the test doc). The stream is deterministic, so the 0.12 is
+            // harness margin over the fixed sample's draw, not model slack.
+            let roll_rate = rolls as f32 / n as f32;
+            assert!((roll_rate - expected_rate).abs() <= 0.12,
+                "{level} diff {diff} weapon {weapon:#x}: roll rate {roll_rate:.3} vs model {expected_rate:.3} ({rolls}/{n})");
+            // Sister: the landed rate still exists and sits near the roll — the geometry hits
+            // from rolled misses are bounded by the wobble's clip rate; assert the sample is
+            // sane (landed never collapses to zero while rolls fire).
+            assert!(hits > 0 || rolls == 0, "{level} diff {diff} weapon {weapon:#x}: {rolls} rolled hits but no bullet ever landed");
             assert!(!deltas.is_empty(), "{level} diff {diff} weapon {weapon:#x}: no hits landed");
             // The recorded delta is read off the health POOL (before − after), so a damage that is
             // not binary-exact (2.75 × 0.6 = 1.65) double-rounds: 100 − 1.6500001 = 98.349998,
