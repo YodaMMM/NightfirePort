@@ -5500,6 +5500,30 @@ impl Drone {
         let on_surface = self.feet_on_point(world);
         self.on_surface = on_surface.is_some();
         if let Some(floor) = on_surface {
+            // The ride (994): `Drone_FeetOnPoint` 0x140660:134-153 calls `Control_InheritVelocity`
+            // 0x133e88 for EVERY standing drone whose ground object is not one of the static type
+            // bytes {2, 3, 5, 0x11, 0x12, 0x1a} [M 0x140660:140-149] — the rider moves and turns
+            // with the platform's per-tick delta (its obj+0x30 − obj+0x40 translation, plus the
+            // rotation arm about the platform's origin). The port's `ground_motion` returns the
+            // motion only when the FIRST hit along the feet ray is on the DYNAMIC set (the script
+            // objects + the doors) — i.e. exactly when the drone's standing floor itself is the
+            // moving object; the static types never appear there — so the gate matches the game's
+            // type filter. The application mirrors the player's riding fold (`Player_FeetOnPoint`
+            // 0x194188 → 0x133e88, the scene.rs tick-top block): rotate the xz offset around the
+            // pivot by the platform's heading change, add the translation. The scripts pass
+            // already moved the carriage this tick (Drones::tick updates the scripts before the
+            // drone loop), so the delta is this tick's own move — no lag.
+            let hip = self.hip();
+            let from = [self.pos[0], self.pos[1], self.pos[2]];
+            let to = [self.pos[0], self.pos[1] - (hip + 0.6), self.pos[2]];
+            if let Some(g) = world.ground_motion(from, to) {
+                let p = self.pos;
+                let (sn, cs) = g.turn.sin_cos();
+                let (x, z) = (p[0] + g.delta[0] - g.pivot[0], p[2] + g.delta[2] - g.pivot[2]);
+                self.pos = [g.pivot[0] + x * cs + z * sn, p[1] + g.delta[1], g.pivot[2] - x * sn + z * cs];
+                self.yaw += g.turn;
+                self.desired_yaw += g.turn;
+            }
             // Zero the velocity (the game sets `anim+0x60 & 8`), then the tail's settle gated through the
             // second probe: `correction < 0.5 − hip` (see the doc above — [M 0x140968 @0x140c44-60 +
             // 0x140e30-48, the probe 0x140e90]).
