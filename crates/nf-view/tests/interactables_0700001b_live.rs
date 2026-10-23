@@ -194,19 +194,33 @@ fn missile_console_shots_latch_and_the_launch_fails_on_ch_99() {
 }
 
 /// Drake (drone #186, skin 0x050000ba [D §4]) dies to Bond's own fire after the fight gate,
-/// and his defeat NIS ends the mission. The route to the arena is walkreal's (blocked at the
-/// hub crossing); the test teleports to the arena floor — the
-/// documented spot — and operates the fight through the REAL fire path (the walker's shoot).
-/// The fight gate ch 0x0a (NIS 0x060008f0 t104 [D]; SP#126's second script [D]) is driven the
-/// documented way. The defeat NIS (SP#198 → 0x06000a20 [D]) plays OUT (no skip): its t600
-/// event writes ch 0x0b and its t720 event writes ch 100 [D decode; M Script_EventHandler
-/// 0x1d94c0 case 0x11] — ch 100 is the mission end → 0x0730001b [M 0x182c60:114-116].
-/// Sister: the unfought gate leaves Drake unspawned and the mission running.
+/// and his defeat NIS ends the mission. The gate is driven while Bond is still on the spawn
+/// platform — the game's own order: the gate chain's head (0x060008f0 t104 writes ch 10 [D],
+/// behind SP #211, [D]) runs while the player is elsewhere, and `DroneSpawner_SpawnDrone`
+/// 0x137cb0:30 refuses a template whose spot is nearer than the spawner's min_dist (10.0 [D
+/// placement #187 param 8 → the default]) to the player — Bond walked onto the arena floor
+/// (0.5 u from the template spot) before the gate and Drake never spawned, in the port AND by
+/// the same screen in the game [M]. The route to the arena is walkreal's (blocked at the hub
+/// crossing); the test teleports to the arena basin — the documented spot — and the last steps
+/// plus the whole fight run through the REAL input (the walker's walk + shoot). The defeat NIS
+/// (SP#198 → 0x06000a20 [D]) plays OUT (no skip): its t600 event writes ch 0x0b and its t720
+/// event writes ch 100 [D decode; M Script_EventHandler 0x1d94c0 case 0x11] — ch 100 is the
+/// mission end → 0x0730001b [M 0x182c60:114-116]. Sister: the unfought gate leaves Drake
+/// unspawned and the mission running.
 #[test]
-#[ignore = "the reached blocker: spawner #187 (gate ch 10 [D]) does not spawn Drake in the port even with Bond walked onto the arena floor (the walk arrives at (-5.81,-1.90,0.14)) and ch 0x0a driven — the same defeat chain walkreal_0700001b_live pins behind the hub crossing; un-ignore when the spawner lands"]
+#[ignore = "the reached blocker, narrowed 2026-10-23: the spawner now spawns Drake the game's way (the gate driven while Bond is far — the min_dist screen [M 0x137cb0:30] refuses the on-spot drive the old order used) and the walker's fire kills him, but the death channel 0x0e does not rise through the walker-driven kill — the SAME kill through raw step_bond (probe1b_blockers::probe_drake_death) spawns him enabled, dies at t81 into AstronautDeath 0xbf and raises ch 0x0e; the walker path (w.shoot: exposed_aim box-centre aims + the reload/strafe inputs) leaves ch 0x0e off and the NIS chain dead. Un-ignore when the kill's channel raise survives the walker path"]
 fn drake_defeat_by_real_fire_ends_the_mission() {
-    let mut w = load();
-    // Sister: no gate, no Drake, mission running.
+    // The arrival NIS is CUT here (the probe1b_blockers::probe_drake_death shape — the same
+    // substate force the load() helper documents): the full arrival's script tail breaks the
+    // defeat chain (the kill raises nothing) — pinned in the report as the next blocker.
+    let mut w = Walker::new(nf_view::load(&iso(), "0700001b.bin", false).unwrap());
+    {
+        let sim = w.scene.sim.as_mut().unwrap();
+        sim.disabled = false;
+        sim.bond.substate = nf_game::player::SS_WALK;
+    }
+    w.wait(3000);
+    w.skip_cutscenes = false;
     {
         let sim = w.scene.sim.as_ref().unwrap();
         assert!(!sim.drones.list.iter().any(|d| d.present && !d.corpse && d.skin & 0xffff == 0xba),
@@ -214,11 +228,12 @@ fn drake_defeat_by_real_fire_ends_the_mission() {
         assert!(sim.drones.mission.status() <= 1,
             "sister: the mission runs (status {}) [M 0x182c60]", sim.drones.mission.status());
     }
-    // The arena floor (walkreal's route end): teleport into the arena basin to reach it (the
-    // walkreal-c hub-crossing blocker), then the last steps are the REAL walk, then the gate.
-    w.scene.sim.as_mut().unwrap().bond.pos = [-4.0, -1.9, 0.2];
-    w.scene.sim.as_mut().unwrap().bond.vel = [0.0; 3];
-    w.walk_to(walker::Wp::new(-7.0, -1.5, 0.1).r(1.2), "the arena floor");
+    // The fight gate: driven while Bond is far from the template spot (the game's own order —
+    // the min_dist screen [M 0x137cb0:30] refuses a spot within 10.0 of the player, and the
+    // arena floor is 0.5 u from Drake's template spot (−7.32,−1.42,0.06) [D §4]). From here the
+    // scripts play OUT (no skip): SP#198 ("ScriptPlayer_Pause", out 0x0e [D]) is part of the
+    // defeat chain and a walker skip-request would drop its start write.
+    w.skip_cutscenes = false;
     let frame = w.scene.sim.as_ref().unwrap().drones.frame;
     w.scene.sim.as_mut().unwrap().drones.channels.set(0x0a, 1, frame);
     let drake = {
@@ -231,14 +246,20 @@ fn drake_defeat_by_real_fire_ends_the_mission() {
                 break;
             }
         }
-        let i = found.expect("the gate spawns Drake (spawner #187, trigger 10 [D])");
+        let i = found.expect("the gate spawns Drake while Bond is far (spawner #187, trigger 10 [D]; the min_dist screen cleared [M 0x137cb0:30])");
         assert!(w.scene.sim.as_ref().unwrap().drones.list[i].enabled,
             "the gate enables Drake (his wait-switch param 3 = 10 [D])");
         i
     };
+    // The arena floor (walkreal's route end): teleport into the arena basin to reach it (the
+    // walkreal-c hub-crossing blocker), settle on the floor, then the REAL fire (the walker's
+    // shoot — the same kill the probe1b_blockers::probe_drake_death run verified: spawn → bullets
+    // → AstronautDeath 0xbf → ch 0x0e).
+    w.scene.sim.as_mut().unwrap().bond.pos = [-4.0, -1.9, 0.2];
+    w.scene.sim.as_mut().unwrap().bond.vel = [0.0; 3];
+    w.wait(30);
     assert!(w.shoot(drake, "Drake"), "Drake dies to Bond's fire");
     // The defeat NIS plays out and ends the mission.
-    w.skip_cutscenes = false;
     let mut ended = false;
     for _ in 0..2400u32 {
         w.tick(Default::default(), false);
@@ -257,8 +278,18 @@ fn drake_defeat_by_real_fire_ends_the_mission() {
 /// The hub guard (drone #0, skin 0x0500008f [D §4]) stands at (2.86, 0.39, 0.00) present and
 /// enabled from load — Bond kills it with his own fire (the real path). Sister: it lives
 /// while unfired at.
+///
+/// The stand is the arena basin (the documented teleport + the real last walk — walkreal-c's
+/// hub-crossing blocker): from the arena floor the guard's hit volumes are body-clear (the
+/// probe's 16/16 boxes from (−6.0, −0.3, 0.0)); the hub DECK flanks the walker first tried all
+/// sit east of the pit's grill wall (x ≈ 3.88-4.4 [D scans, s/level-1b-drake-fight a4372516]),
+/// which is body-solid but bullet-pass — every deck flank's body segment is blocked while the
+/// bullet segment is clear, and the deck spots themselves have no floor (the walker's flank
+/// dumps: floor_below None at (6.37,6.02,1.87)). The flight stops on pass-flagged nodes [L ai_live
+/// guard_takes_cover_like_the_game UnderCoverAim 37], so only a body-clear ground flank lands
+/// the shot — the game's own geometry, ported; the harness just has to stand where the game's
+/// player stands.
 #[test]
-#[ignore = "the reached blocker: the walker cannot bring the guard's segments into view from the hub floor — 'no exposed part' across 6 flanks (the last at (12.41,3.76,2.40), dist 8.0, health 10 untouched after 10800 ticks); the guard hovers over the pit at (2.86,1.03,-0.01) [D §4] — likely a zero-G-encounter target (the SP#41 chain crosses the pit); un-ignore when the pit route or the zero-G set pieces land"]
 fn the_hub_guard_dies_to_fire() {
     let mut w = load();
     {
@@ -266,6 +297,11 @@ fn the_hub_guard_dies_to_fire() {
         let g = &sim.drones.list[0];
         assert!(g.present && g.enabled && !g.corpse, "sister: the centrepiece guard lives at load [D §4]");
     }
+    // The arena-basin stand (the documented teleport — the walkreal-c hub crossing), then the
+    // real last walk to the floor spot the guard's volumes are clear from.
+    w.scene.sim.as_mut().unwrap().bond.pos = [-4.0, -1.9, 0.2];
+    w.scene.sim.as_mut().unwrap().bond.vel = [0.0; 3];
+    w.walk_to(walker::Wp::new(-7.0, -1.5, 0.1).r(1.2), "the arena floor");
     assert!(w.shoot(0, "the hub guard"), "the guard dies to Bond's fire");
     assert!(w.scene.sim.as_ref().unwrap().drones.list[0].corpse, "the guard is a corpse after the kill");
 }
@@ -291,10 +327,13 @@ fn the_hub_destroyable_shatters_under_fire() {
 }
 
 /// The Bond bonuses (7 kind-6 pickups [D the census]) collect on the walk-over:
-/// `Pickup_Handler` 0x18e650's take hides the pickup (state 2, the +0x2C respawn path).
-/// Sister: resting before the walk.
+/// `Pickup_Handler` 0x18e650's take. These placements carry respawn 0 [D PL#; the port's parse:
+/// pickup.respawn = 0], and the take tail's respawn split [M 0x18e650:340-344] DELETES a
+/// respawn-0 pickup (`obj+0xFE |= 1`) instead of the respawn>0 hide (`obj+0xF0 |= 0x10`,
+/// PICKUPINFO+0x20 = 2) — so the walked-over bonus is asserted through `gone` (the pre-fix
+/// test asserted only state 2 / hidden and never saw the take that the [M] tail performs — the
+/// TEST was wrong, fixed 2026-10-23 with this address). Sister: resting before the walk.
 #[test]
-#[ignore = "the reached blocker: the walk-over does not collect — Bond walks onto the bonus at (9.63,9.38,0.01) from 0.6 away through the real input and the pickup's take never fires (400 ticks); the kind's take path is proven on other levels (pickup tests); un-ignore when the 1b deck pick lands"]
 fn the_bonus_pickup_collects_on_the_walk_over() {
     let mut w = load();
     let (x, y, z) = {
@@ -319,10 +358,40 @@ fn the_bonus_pickup_collects_on_the_walk_over() {
         w.scene.sim.as_mut().unwrap().bond.yaw = yaw;
         w.tick(nf_game::player::Input { forward: 1.0, ..Default::default() }, false);
         let sim = w.scene.sim.as_ref().unwrap();
-        took |= sim.drones.pickups[1].state == 2 || sim.drones.pickups[1].hidden;
+        // The take tail's split [M 0x18e650:340-344]: respawn 0 → deleted (obj+0xFE |= 1, the
+        // port's `gone`); respawn > 0 → hidden with PICKUPINFO+0x20 = 2 (the port's `hidden` +
+        // `state == 2`). Both are takes.
+        took |= sim.drones.pickups[1].gone || sim.drones.pickups[1].hidden || sim.drones.pickups[1].state == 2;
         if took { break; }
     }
     assert!(took, "the bonus collects on the walk-over [M Pickup_Handler 0x18e650]");
+}
+
+/// The spawner's own player-distance screen [M DroneSpawner_SpawnDrone 0x137cb0:30 — a template
+/// whose spot is nearer than the spawner's min_dist (placement #187 param 8 = 0 → the game's
+/// 10.0 default [M 0x1378d0: `0x41200000`]) is skipped while the player stands inside it]:
+/// with Bond WALKED onto the arena floor 1.5 u from Drake's template spot (−7.32,−1.42,0.06
+/// [D §4]) the gate ch 0x0a spawns NOTHING in 900 ticks — the sister that keeps the main test's
+/// gate-first order honest (the game's own chain runs the gate while the player is elsewhere).
+#[test]
+fn the_spawner_refuses_a_template_on_top_of_bond() {
+    let mut w = load();
+    w.scene.sim.as_mut().unwrap().bond.pos = [-5.81, -1.90, 0.14];
+    w.scene.sim.as_mut().unwrap().bond.vel = [0.0; 3];
+    w.wait(30);
+    let frame = w.scene.sim.as_ref().unwrap().drones.frame;
+    w.scene.sim.as_mut().unwrap().drones.channels.set(0x0a, 1, frame);
+    let mut spawned = false;
+    for _ in 0..900u32 {
+        w.tick(Default::default(), false);
+        if w.scene.sim.as_ref().unwrap().drones.list.iter().any(|d| d.present && !d.corpse && d.skin & 0xffff == 0xba) {
+            spawned = true;
+            break;
+        }
+    }
+    assert!(!spawned, "sister: the min_dist screen refuses Drake's spot 1.5 u from Bond [M 0x137cb0:30]");
+    assert!(!w.scene.sim.as_ref().unwrap().drones.channels.on(0x0e),
+        "and the fight never opens (no death channel) [D param 12 = 14]");
 }
 
 /// The spawn hint marker (0x33 placement, at (22.86, −2.12, 3.82) [D the census]) fires its
