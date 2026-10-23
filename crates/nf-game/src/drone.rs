@@ -257,6 +257,12 @@ pub mod state {
     pub const CIVILIAN_HIDING: u8 = 0x13;
     pub const CIVILIAN_PATROL: u8 = 0x14;
     pub const CIVILIAN_MISSION: u8 = 0x16;
+    /// `NDrone2_DSTATE_CivilianMissionWait` (0x15dbb0) — `NDrone2_StateFuncs[0x17]` [L 0x29b300:
+    /// entry 0x17 → 0x15dbb0, ee_snapshot read 2026-10-22]: the mission civilian's pause state.
+    /// Entered from CivilianMission on the wait message (msg 0x22 [M 0x15d860 case 0x22]); stands
+    /// idle (alert < 0.66) or plays the look-around 0x21, holds 2 s of timer C, extends while Bond
+    /// stands near in the view cone and resumes 0x16 when he does not [M 0x15dbb0].
+    pub const CIVILIAN_MISSION_WAIT: u8 = 0x17;
     /// `NDrone2_DSTATE_CivilianChallenge` 0x162558 — state 0x3E of `NDrone2_StateFuncs` (EE
     /// 0x29b300 [L]): the unarmed guard's challenge — the 0x3E point anim chains to RunToAlarm
     /// 0x89. 0x3E is already listed as a state id in FLASH_HANDLING below, so the id space agrees.
@@ -441,6 +447,15 @@ pub mod msg {
     /// The stun-grenade broadcast (`Bullet_DoTrails` 0x12d890's `+0x70 & 0x2000` flash arm →
     /// `Drone_MessageObjVicinity(20.0, 0x18, …)` 0x12e0c0 [M]; `DroneFunc_HandleImpact` case 0x18).
     pub const FLASH: u8 = 0x18;
+    /// The mission-civilian wait request [M 0x15d860 case 0x22 → `SetState(0x17)`; 0x15dbb0 case
+    /// 0x22 re-arms the wait]. The decompile holds NO literal sender: every `Drone_SM_SendMsgSelf`
+    /// / `Drone_SM_SendMsg` / `Drone_SM_BroadcastMsg` / `Drone_Message` call site in ACTION.ELF was
+    /// disassembled (2026-10-16, s/civilian-mission-wait) and none passes 0x22 — the id arrives
+    /// data-driven (level side: 07000005's drone placements carry wait channel 0x22 and trigger
+    /// 305 / mux 25 raise that channel [D docs/systems/triggers.md], the same number the DSTATE
+    /// switch sees). The port's wait test drives this through `Drone::send` — the state machine is
+    /// the real input path. (state::LEAD_BOND_COMBAT is also 0x22 — the STATE id space, unrelated.)
+    pub const WAIT_PAUSE: u8 = 0x22;
     /// The tranquilizer-dart hit (`NDrone2_DealWithObjHit` 0x13fff0:269-306 → msg 0x19 with the
     /// HITDATA): the Korsakov K5's bullets 0x43/0x44 route here instead of msg 8 — the sleep dart
     /// (tranq-gun). The carrying states forward it to `DroneFunc_HandleImpact` case 0x19 → the
@@ -932,6 +947,14 @@ pub struct Drone {
     pub pending_grenade: bool,
     /// Frames of the shots fired (for flashes; the viewer drains it).
     pub shots: Vec<u32>,
+    /// Port-internal instrumentation, parallel to `shots`: the RAW accuracy roll of each fired
+    /// shot (`DroneWeap_DoBulletAccuracy` 0x179740's `FRand(100) < pct`, before the sight gate
+    /// and the TooClose forced hit [M 0x179740:100-110 / 0x179914-0x17992c]). Lets tests pin the
+    /// game's hit-chance model without the bullet-flight geometry (a rolled miss still flies a
+    /// wobble-offset bullet that can land). Aligned with `shots` only for the plain bullet
+    /// weapons (the mounted-minigun deploy branch returns before the roll and `shots` still
+    /// grows — 952's tests only use plain weapons).
+    pub shot_rolls: Vec<bool>,
     /// Root translation at the previous tick (root motion).
     pub root_prev: Option<V3>,
     /// `+0x2A` Bond's crosshair on this drone (until the given frame) and `+0x17` another drone within 3 units.
@@ -1580,6 +1603,15 @@ pub struct Drone {
     /// `Drone_SM_SendMsg(msg, delay, from, to)` [M 0x13a630 callers] outbox: (target drone, msg, delay
     /// ticks), moved into `Drones::delayed_msgs` by the tick and delivered when due.
     pub msg_out: Vec<(usize, u8, u32)>,
+    /// The monitor's SAME-TICK sends: (target drone, msg). The game's `Drone_Message`
+    /// 0x13a678 → `Drone_SM_SendMsgSelf` 0x175a38 with delay 0 routes through
+    /// `Drone_SM_RouteMsg` 0x172128's dispatch-NOW branch (the pending queue only takes
+    /// messages whose due frame is in the future) — the target's DSTATE handler runs during
+    /// the sender's own update [M 0x172128:62-66]. The port delivers these post-walk, before
+    /// the speech pass, so the target's voice starts the same tick and the killer monitor's
+    /// next busy test sees it (`msg_out`'s next-head delivery lagged ~2 ticks and the step-2
+    /// gate read the hostage's `+0x4D0 == 0` — the captor double-fired every cycle).
+    pub msg_now: Vec<(usize, u8)>,
     /// `Drone+0x1e` — the gun-through-wall flag: `DroneVision_SeekOpponentLOS` 0x175cb8:77-79 refreshes
     /// it on every sight tick while aiming (`DroneVision_GunThroughWall` 0x178520), and the combat
     /// fire requests are gated on `+0x3b = !+0x1e` (see `gun_through_wall`).
@@ -1726,6 +1758,8 @@ impl Drone {
             firing: false, burst_done: false, burst: 0, next_shot: 0, last_shot: 0, clip, clip_max: clip,
             grenade_weapon, grenade_count, pending_grenade: false,
             shots: Vec::new(), log: Vec::new(), knocked_out: false, disabled_logged: false, dispatched_logged: false, start_script, root_prev: None, aimed_at: false, aimed_until: 0, bunched: false, wobble: rng.rand(10000), lost_sight: true, damage_mul: 1.0, alert_bits: 0, light: 1.0, attack_frame: 0, alerted_by_drone: false, watching: false,
+            // 952: the raw accuracy roll per shot, parallel to `shots` (own line — merge lesson 4).
+            shot_rolls: Vec::new(),
             // drone-abseil-elevator: the +0x23 rope fields (own lines — merge lesson 4). `move_ok`
             // (+0x24) is set for every drone at DefaultInit 0x14b300:771; the rest start at the
             // game's fresh-allocation values.
@@ -1750,7 +1784,7 @@ impl Drone {
             cover: None, cover_side: 0, cover_type: 0, cover_leave: 0, cover_point: pos, goal: None, cover_claimed: false, has_cover: false, cover_tries: 0,
             cover_rt: Vec::new(), others: Vec::new(), peers: Vec::new(), return_state: 0, second_channel: param(6) as u8, second_tag: param(8),
             captor: None, hostage_searched: false,
-            hostage_target: None, killer_searched: false, msg_out: Vec::new(),
+            hostage_target: None, killer_searched: false, msg_out: Vec::new(), msg_now: Vec::new(),
             loudness: 0.0, sound_share: 0.0, heard_frame: 0, heard_peak: 0.0, sound_pos: pos, noise_level: 0, investigating: false, turned: false, resume_state: 0, home: pos,
             // `drone_stats[type]+8` is 0 for these guards → 10 (captains, difficulty ≥ 2 only, are not modelled).
             health: 10.0, max_health: 10.0, damage_taken: 1.0, damageable: !matches!(skin, 0x0500_003b | 0x0500_003c | 0x0500_0053), kind: setup.kind,
@@ -2976,7 +3010,9 @@ impl Drone {
             // TruckDriverIdle 0x160ed0 case 8 → (0x12, 0); TruckDriverMission 0x161030 case 8 →
             // (0x12, 0).
             PARTY_GIRL | CIVILIAN | CIVILIAN_HIDING | TRUCK_DRIVER_IDLE | TRUCK_DRIVER_MISSION => (CIVILIAN_SCARED, false),
-            CIVILIAN_MISSION | CIVILIAN_PATROL | CIVILIAN_DOOR_GUARD => (ATTACK, false),
+            // CivilianMissionWait 0x15dbb0 case 8 → HandleImpact(0x56, 0) — the same resume its
+            // siblings carry [M; case 6 identical].
+            CIVILIAN_MISSION | CIVILIAN_MISSION_WAIT | CIVILIAN_PATROL | CIVILIAN_DOOR_GUARD => (ATTACK, false),
             // CivilianChallenge 0x162558 cases 6/8 → HandleImpact(0x89, 0); 7/9/0x17/0x18/0x19 →
             // (0x89, 1) [M 0x162558:44-60].
             CIVILIAN_CHALLENGE => (crate::kiko::RUN_TO_ALARM, false),
@@ -3276,7 +3312,7 @@ impl Drone {
             TRUCK_DRIVER_INIT => (TRUCK_DRIVER_INIT_ALERT, false), // 0x160bd0 case 6: HandleImpact(0x33, 0)
             TRUCK_DRIVER_INIT_ALERT => (0, false),
             TRUCK_DRIVER_IDLE | TRUCK_DRIVER_MISSION | PARTY_GIRL | CIVILIAN | CIVILIAN_SCARED | CIVILIAN_HIDING => (CIVILIAN_SCARED, false),
-            CIVILIAN_MISSION | CIVILIAN_GUARD | CIVILIAN_PATROL | CIVILIAN_DOOR_GUARD => (ATTACK, false), // 0x15d860 case 6 tail: HandleImpact(0x56, 0)
+            CIVILIAN_MISSION | CIVILIAN_MISSION_WAIT | CIVILIAN_GUARD | CIVILIAN_PATROL | CIVILIAN_DOOR_GUARD => (ATTACK, false), // 0x15d860 case 6 tail: HandleImpact(0x56, 0); 0x15dbb0 case 6 the same
             CIVILIAN_CHALLENGE => (crate::kiko::RUN_TO_ALARM, false), // 0x162558 case 6: HandleImpact(0x89, 0)
             HOSTAGE_IDLE => (0, false),
             _ => return self.on_impact(d, rng, frame, s, true),
@@ -4058,11 +4094,15 @@ impl Drone {
     /// steps back to 1 [M :58-73]. Captor and hostage alternate lines, each gated on the other's
     /// voice. Port mapping: the self-sends ride `self_msg` (`Drone_SM_SendMsgSelf`'s port model —
     /// the game's `Drone_Message` 0x13a678 ends in `Drone_SM_SendMsgSelf` for any target), the
-    /// hostage send rides `msg_out` → `Drones::delayed_msgs`; the hostage's tick-head voice state
+    /// hostage send rides `msg_now` (see below); the hostage's tick-head voice state
     /// arrives in `hostage_voice` (`Drones::tick`'s `voice_pool` — the walk's borrow can't reach
     /// the hostage), and its finished-line clear is flagged (`hostage_voice_clear`) for the
     /// post-walk pass — `speech()`'s non-forced gate would otherwise refuse every later hostage
-    /// reply while the finished voice lingers.
+    /// reply while the finished voice lingers. The hostage send rides `msg_now` — the game's
+    /// delay-0 dispatch runs the target's handler during the sender's update [M 0x172128], so
+    /// the port delivers post-walk (same tick, before the speech pass); `msg_out`'s queue
+    /// delivered it ~2 ticks late and the step-2 busy test then read a not-yet-started line
+    /// as `+0x4D0 == 0`, double-firing the captor every cycle.
     fn monitor_talk_to_mission_obj(&mut self) {
         match self.talk_step {
             // `Drone_Message(own obj, 0x1a, 0, 0)` [M 0x144340:19-21].
@@ -4072,7 +4112,7 @@ impl Drone {
             // head-delivered 0x1A has not reached the speech pass yet.
             1 => {
                 if self.voice_busy() || !self.talks.is_empty() { return; }
-                if let Some(hi) = self.hostage_target { self.msg_out.push((hi, msg::MISSION_TALK, 0)); }
+                if let Some(hi) = self.hostage_target { self.msg_now.push((hi, msg::MISSION_TALK)); }
                 self.talk_step = 2;
             }
             // The hostage's `+0x4D0` busy test [M 0x144340:47-56], then back to the captor
@@ -6509,7 +6549,7 @@ impl Drone {
             if matches!(s, state::TASER | state::STUNNED | state::STUNNED_RECOVER) { return true; }
             let hear = if m == msg::SCREAM { self.prop(d, 0x27) } else { self.prop(d, 0x28) };
             if !hear { return true; }
-            let civilian = matches!(s, PARTY_GIRL | CIVILIAN | CIVILIAN_MISSION | CIVILIAN_PATROL | CIVILIAN_DOOR_GUARD | TRUCK_DRIVER_IDLE | CIVILIAN_SCARED | CIVILIAN_HIDING);
+            let civilian = matches!(s, PARTY_GIRL | CIVILIAN | CIVILIAN_MISSION | CIVILIAN_MISSION_WAIT | CIVILIAN_PATROL | CIVILIAN_DOOR_GUARD | TRUCK_DRIVER_IDLE | CIVILIAN_SCARED | CIVILIAN_HIDING);
             if civilian {
                 if !matches!(s, CIVILIAN_SCARED | CIVILIAN_HIDING) { self.set_state(CIVILIAN_SCARED); }
             } else if let Some(n) = self.enemy_alerts(d, s) { self.set_state(n); }
@@ -8024,9 +8064,56 @@ impl Drone {
                 }
                 true
             }
+            // CivilianMission 0x15d860 case 0x22: the wait request parks the walker in
+            // CivilianMissionWait 0x17 — except the voice-0x13 skins (KikoMission, which the same
+            // carve-out guards on ENTER) stay [M 0x15d860:130-136].
+            (CIVILIAN_MISSION, msg::WAIT_PAUSE) => {
+                if self.voice_type == 0x13 { true } else { self.set_state(CIVILIAN_MISSION_WAIT); true }
+            }
             (CIVILIAN_MISSION, msg::BULLET) => self.on_bullet_resume(d, rng, frame, CIVILIAN_SCARED, false),
             (CIVILIAN_MISSION, msg::SOUND | msg::ALARM) => { if let Some(n) = self.enemy_alerts(d, s) { self.set_state(n); } true }
             (CIVILIAN_MISSION, msg::FORCED_ATTACK) => { self.set_state(ATTACK); true }
+            // CivilianMissionWait (0x15dbb0, `NDrone2_StateFuncs[0x17]` [L 0x29b300]). ENTER: the ready
+            // flags, stand idle at alert < 0.66 else the look-around 0x21, timer C armed 2 s
+            // (+0xCC4 = GameState + FRAME_RATE_INT·2), the +0xCD8 wait latch cleared to 0xff [M
+            // 0x15dbb0:20-35; the +0x4F8 0x2000 "may notice" bit has no port model, matching the
+            // sibling ENTERs; +0xCDC = 0 has no reader, no port model].
+            (CIVILIAN_MISSION_WAIT, msg::ENTER) => {
+                self.vision_on = true;
+                if self.alert < 0.66 { self.set_stand_idle(d, rng, frame, true); }
+                else { self.call_anim(d, anim_state::ALERT_IDLE, 0, 0); }
+                self.timer_c = Some(frame + 120); // FRAME_RATE_INT · 2 [M 0x15dbb0:29]
+                self.wait_channel = 0xff; // +0xCD8 = 0xff (no wait channel) [M 0x15dbb0:33]
+                true
+            }
+            // UPDATE (case 3): no armed person near → BondTalk and hold the wait (the game's BondTalk
+            // 0x1446b0 is unported like the other civilian talk — fix-drone4's note); an armed person
+            // → the own-sighting flag, then the voice-0x10 team switch + Attack 0x56 (with +0x44 = 1)
+            // or CivilianScared 0x12. The prop-0x33 armed-intruder alert chain (0x15dbb0:45-62) is
+            // unmodelled, matching the sibling CivilianMission UPDATE [M 0x1787c8 dead arg].
+            (CIVILIAN_MISSION_WAIT, msg::UPDATE) => {
+                if !self.near_armed_person(d) { return true; } // [M 0x15dbb0:39-44 — BondTalk + stay]
+                self.sighted = true; // +0x4F8 |= 0x8000000 [M 0x15dbb0:45]
+                if self.voice_type == 0x10 { self.team = 1; self.set_state(ATTACK); } // +0x44 = 1 [M 0x15dbb0:63-67]
+                else { self.set_state(CIVILIAN_SCARED); }
+                true
+            }
+            // TIMER_C (case 0xc — PreDroneControl 0x148db0:97-111 sends it when the armed +0xCC0/+0xCC4
+            // wait clock expires): Bond inside the 0.525 rad view cone AND within 3.0 (2D) re-arms the
+            // 2 s wait; anything else resumes CivilianMission 0x16 [M 0x15dbb0:87-111; BondWithinAngle
+            // 0x154f98 — the same |yaw diff| ≤ cone ∧ dist2D < radius conjunction the port's bond_band
+            // models for the escort].
+            (CIVILIAN_MISSION_WAIT, msg::TIMER_C) => {
+                if self.bond_band(3.0, 0.525) { self.timer_c = Some(frame + 120); true }
+                else { self.set_state(CIVILIAN_MISSION); true }
+            }
+            // A second wait request while waiting re-arms the 2 s clock (+0xCC4, +0xCC8 = 0, +0xCC0 = 1)
+            // [M 0x15dbb0:136-141]. The explosive msg 0x21 never reaches the switch: the port's
+            // pre-dispatch handles it with the ATTACK resume the state's case 0x21 asks for
+            // [M 0x15dbb0:132-135 → ConsiderExplosive(…, 0x56)].
+            (CIVILIAN_MISSION_WAIT, msg::WAIT_PAUSE) => { self.timer_c = Some(frame + 120); true }
+            (CIVILIAN_MISSION_WAIT, msg::SOUND | msg::ALARM) => { if let Some(n) = self.enemy_alerts(d, s) { self.set_state(n); } true }
+            (CIVILIAN_MISSION_WAIT, msg::FORCED_ATTACK) => { self.set_state(ATTACK); true }
             // CivilianPatrol (0x15d610): walk the patrol path (`CallAnim(0x37)`); armed person within 6 (0x40c00000)
             // → CivilianScared (the voice-0x10 team switch and the female scream 0x48 are not ported).
             (CIVILIAN_PATROL, msg::ENTER) => {
@@ -10002,6 +10089,10 @@ impl Drone {
         pct *= level_accuracy(d.level, d.difficulty);
         if close { pct *= 2.0 }
         let mut hit = rng.frand(100.0) < pct;
+        // The raw roll, exposed for the tests (see `shot_rolls`): the model quantity is the
+        // roll itself, not the bullet's landing — a rolled miss still flies the wobble-offset
+        // bullet and can clip Bond's bounds.
+        self.shot_rolls.push(hit);
         if !close { hit &= self.seen_ticks >= 120 && !self.lost_sight; }
         if self.dist < 3.0 { hit = true; }
         self.lost_sight = false;
@@ -14333,7 +14424,7 @@ fn segment_hits_sphere(a: V3, b: V3, c: V3, r: f32) -> bool {
                 let dx = dr.pos[0] - player.pos[0]; let dy = dr.pos[1] - player.pos[1]; let dz = dr.pos[2] - player.pos[2];
                 dr.dist_to_player = [(dx * dx + dy * dy + dz * dz).sqrt(), 100000.0, 100000.0, 100000.0]; }
         }
-        self.update_player_bullets(d, player.pos);
+        { let _p = crate::prof::scope("phase: bullets"); self.update_player_bullets(d, player.pos); }
         // The locks' idle arm (`Lock_Update` 0x1ae3d8 case 0 kind 1's tail): the +1/tick refill of
         // the burn bytes once the 2-tick grace runs out [M :107-121] — the partial burn heals. The
         // game runs `Lock_Update` per tick in the control pass; the contact side already ran above
@@ -14343,6 +14434,7 @@ fn segment_hits_sphere(a: V3, b: V3, c: V3, r: f32) -> bool {
         // The use objects' per-tick halves (`PCQWorm_Update` 0x1aee20's bullet install +
         // `Switch_Update` 0x1adea8's value/auto-return; map-tower, crate::useobj). The bullet
         // segments are this tick's paths — the game reads the class-5 contact list the same pass.
+        let _pwo = crate::prof::scope("phase: world objects");
         let (paths, weapons) = self.bullet_paths();
         let shots: Vec<(V3, V3, u16)> = paths.iter().zip(weapons).map(|(&(a, b), &w)| (a, b, w)).collect();
         self.useobjs.tick(&shots, &mut self.channels, frame, &mut self.scripts);
@@ -14384,6 +14476,7 @@ fn segment_hits_sphere(a: V3, b: V3, c: V3, r: f32) -> bool {
             &mut self.worldobjs, &mut self.channels, wo_viewer, d.weapons, &mut self.rng, &mut self.bullets, frame,
             &mut self.music,
         );
+        drop(_pwo);
         // `Monitor_Update` 0x1afcc8: the viewing monitors latch the watched sensor's
         // monitor-view channel and set its +0x60 unhide; the exit cooldown drains.
         self.monitors.tick(&mut self.sensors, &mut self.channels, frame);
@@ -15106,10 +15199,11 @@ fn segment_hits_sphere(a: V3, b: V3, c: V3, r: f32) -> bool {
         self.doors.begin_pass();
         // Pickups are created at run time, so they head the control list: `Pickup_Update` before the placed objects.
         // mp-world-sync: online the take walk sees every body (`update_pickups_net`).
+        { let _p = crate::prof::scope("phase: pickups");
         match self.net_bodies.take() {
             Some(bodies) => { self.update_pickups_net(d, &bodies, frame); self.net_bodies = Some(bodies); }
             None => self.update_pickups(d, player, frame),
-        }
+        } }
         // The actor list `Door_Update`'s proximity test (`dist² < (r1+r2)²·2` over classes
         // 2/3/0x12, skipping `obj+0xF0 & 0x10` candidates [M 0x136678-0x136684]) sees: the player
         // first (`glb_players`, the activator of every auto-activation) with radius 0.4, then every
@@ -16118,7 +16212,8 @@ fn segment_hits_sphere(a: V3, b: V3, c: V3, r: f32) -> bool {
                 }
             });
         }
-        { let _p = crate::prof::scope("drones: set_dynamic"); d.world.set_dynamic(&script_parts(self, d)); }
+        { let parts = { let _p = crate::prof::scope("drones: set_dynamic parts"); script_parts(self, d) };
+          let _p = crate::prof::scope("drones: set_dynamic"); d.world.set_dynamic(&parts); }
         // The killer monitor's step-2 clear of the hostage's finished `+0x4D0` [M 0x144340:53]:
         // flagged during the walk (the borrow can't reach the hostage) and applied here, before
         // the speech pass — `speech()`'s non-forced gate refuses a line while any voice is
@@ -16130,6 +16225,22 @@ fn segment_hits_sphere(a: V3, b: V3, c: V3, r: f32) -> bool {
             }
         }
         for hi in hostage_clears { if let Some(h) = self.list.get_mut(hi) { h.voice = None; } }
+        // The killer monitor's same-tick sends (`Drone::msg_now`): the game's `Drone_Message`
+        // 0x13a678 with delay 0 routes through `Drone_SM_RouteMsg` 0x172128's dispatch-NOW branch
+        // (only future-due messages enter the pending queue), so the target's DSTATE handler runs
+        // during the sender's own update. The port delivers post-walk — the same tick, before the
+        // speech pass — and starts the target's line here, so the monitor's next busy test sees
+        // the started `+0x4D0` and the captor/hostage alternation stays tight (the old
+        // `msg_out`-queue delivery lagged ~2 ticks and the step-2 gate read the not-yet-started
+        // line as 0 — the captor double-fired every cycle).
+        let mut now_msgs: Vec<(usize, u8)> = Vec::new();
+        for dr in self.list.iter_mut() { now_msgs.extend(dr.msg_now.drain(..)); }
+        for (t, m) in now_msgs {
+            if self.list.get(t).is_some_and(|x| x.present) {
+                let talks = { let h = self.list.get_mut(t).unwrap(); h.send(d, &mut self.rng, frame, m); std::mem::take(&mut h.talks) };
+                if !talks.is_empty() { self.speech(d, t, talks, frame); }
+            }
+        }
         // The drones' speech requests, in update order (no random draws in `SpeechSFX` / `PlaySFX`).
         for (index, talks) in talk_queue { self.speech(d, index, talks, frame); }
         // The drones' door-open sounds (`NDrone2_OpenDoor`'s `Door_Activate` events).
@@ -16854,7 +16965,7 @@ fn segment_hits_sphere(a: V3, b: V3, c: V3, r: f32) -> bool {
         self.channels = ch;
         // The sound triggers (`SoundTrigger_Update` 0x1b2790 — the object walk's per-frame pass;
         // fix-06-alarm): the alarm siren starts the same frame its ON channel is up.
-        self.sound_triggers.tick(&mut self.audio, &self.channels);
+        { let _p = crate::prof::scope("phase: sound batch"); self.sound_triggers.tick(&mut self.audio, &self.channels); }
         // `Mission_Update` moved to the top of the tick (fix-objective-banner): the game's Game_Run
         // order — see the block before `fx.tick` above.
         // fix-progress: the tally folds — the per-drone `PlrStat_Log*` outboxes, `Trigger_Calc`'s
@@ -17215,6 +17326,8 @@ mod tests {
             anim: Animator { danim: 0, script: None, time: 0, state: 0, class: 0, call: None, reached: false, call_from: 0, blend_wait: 0, ftime: 0.0, speed: 1.0, variant: 0, once: false, held: false, follow_on: 0, outgoing: Vec::new(), started: false, early_end: false, len_cap: None },
             firing: false, burst_done: false, burst: 0, next_shot: 0, last_shot: 0, clip: 0, clip_max: 0,
             grenade_weapon: 0x35, grenade_count: 0, pending_grenade: false, shots: Vec::new(),
+            // 952: the raw accuracy roll per shot, parallel to `shots` (own line — merge lesson 4).
+            shot_rolls: Vec::new(),
             surrender_logged: false, hit_log: 0, detected_logged: false,
             hip_anim: 1.0,
             log: Vec::new(), knocked_out: false, disabled_logged: false, dispatched_logged: false, start_script: 0, root_prev: None, aimed_at: false, aimed_until: 0, bunched: false, wobble: 0, lost_sight: false,
@@ -17226,7 +17339,7 @@ mod tests {
             cover: None, cover_side: 0, cover_type: 0, cover_leave: 0, cover_point: pos, goal: None, cover_claimed: false, has_cover: false, cover_tries: 0,
             cover_rt: Vec::new(), others: Vec::new(), peers: Vec::new(), return_state: 0, second_channel: 0, second_tag: 0,
             captor: None, hostage_searched: false,
-            hostage_target: None, killer_searched: false, msg_out: Vec::new(),
+            hostage_target: None, killer_searched: false, msg_out: Vec::new(), msg_now: Vec::new(),
             loudness: 0.0, sound_share: 0.0, heard_frame: 0, heard_peak: 0.0, sound_pos: pos, noise_level: 0, investigating: false, turned: false, resume_state: 0, home: pos,
             health: 10.0, max_health: 10.0, damage_taken: 1.0, damageable: true, kind: 0,
             last_damage: 0.0, silent_kill: false, big_hit: false, flinch_at: None, hit: None, impact_resume: 0, hits_taken: 0, attack_entry_talks: 0,

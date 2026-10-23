@@ -98,7 +98,7 @@ fn the_roundtrip_restores_the_progress() {
     progress.stats[0].shots_fired = 10;
     progress.stats[0].shots_hit_enemy = 6;
     fe.mission = 1;
-    fe.mission_ended(Outcome::Complete, Stats { shots_fired: 30, shots_hit: 20, accuracy_pct: 66, time_s: 100 });
+    fe.mission_ended(Outcome::Complete, Stats { shots_fired: 30, shots_hit: 20, accuracy_pct: 66, time_s: 100, ..Default::default() });
     fe.requested_level = None; // the headless leg skips the outro wrap
     fe.reopen_queued_page(); // the load tail's MenuManager_Create [M 0x1d6360:160-163] — the complete arm queues the page [M 0x182c60:72]
     assert!(fe.results_enter(&mut progress, 0x0700_0005, 6, 2, None), "the fields built [M 0x208e78:77]");
@@ -125,7 +125,7 @@ fn the_roundtrip_restores_the_progress() {
     progress.stats[0].shots_fired = 20;
     progress.stats[0].shots_hit_enemy = 12;
     fe.mission = 4;
-    fe.mission_ended(Outcome::Complete, Stats { shots_fired: 44, shots_hit: 30, accuracy_pct: 68, time_s: 190 });
+    fe.mission_ended(Outcome::Complete, Stats { shots_fired: 44, shots_hit: 30, accuracy_pct: 68, time_s: 190, ..Default::default() });
     fe.requested_level = None;
     fe.reopen_queued_page(); // the load tail's MenuManager_Create [M 0x1d6360:160-163]
     assert!(fe.results_enter(&mut progress, 0x0700_0001, 6, 2, None), "the fields built");

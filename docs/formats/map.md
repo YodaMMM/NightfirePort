@@ -60,7 +60,12 @@ Block ids on our disc (*measured* counts / total bytes over 2,230 maps) and thei
   17.7 vs linear 55.3, smoother in 11,990/12,033; low-first 10.95 vs high-first 12.65).
 - Pixels: `width × height × frames` indices (halved for 4 bpp), frames stacked. 25,079 textures match exactly; two
   have extra bytes and one (0700000d.bin entry 703, texture 18) is short: 512 bytes for a 2,048-byte header
-  (UNKNOWNS U-017). The game deduplicates by CRC-32 of the pixel bytes.
+  (UNKNOWNS U-017; the only short block of the story archives — 0700000d's own map 49, 186 headers [D probe]).
+  The game deduplicates by CRC-32 of the pixel bytes and keeps every header's slot: `psiCreateMapTextures`
+  0x11d200's runtime array is 1:1 with the headers, no holes, and a short texture's pixels are the memcpy
+  overread into the following map bytes [M 0x11d200] — the port's parser now does the same
+  (missing-models-census; dropping them compacted the array, drifted every later binding and stranded batches
+  on the 1×1 white fallback).
 - Export convention (port's choice): 8-bit alpha = `round(a × 255 / 128)`.
 - **Cross-check** (`tools/crosscheck/nfre_textures.py`, nightfire-re's own block handlers and depalettizer):
   **27,130 / 27,130 frames pixel-exact** (24,696 single-frame + 2,434 animation frames); the short texture is
