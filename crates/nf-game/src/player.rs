@@ -274,6 +274,12 @@ pub struct Input {
     /// Player_SSCrouch 0x1924c0:84-105]. fix-909c: inverted from `crouch_toggle` so the derived
     /// `Default` (every headless/test/replay/shot input) is the game's Toggle, not Hold.
     pub crouch_hold: bool,
+    /// The goggles key's newly-pressed edge (action 13, mask 4) [M `HUD_MonitorNightSight`
+    /// 0x19e9d8:74 `Input_Action(p, 0xd, 4)`]. With the goggles latch (BL+0x961) clear the
+    /// press requests the goggles weapon (`+0x63 = 0x5d`); once the latch is set it cycles the
+    /// goggle mode 0 → 1 (night) → 2 (x-ray) → 0 — unless the aim bit (+0x60 bit 0) is up.
+    /// Keyboard: N. Local view state, not net-encoded (the `stabilise` precedent).
+    pub goggles_action: bool,
 }
 
 #[derive(Clone, Debug)]

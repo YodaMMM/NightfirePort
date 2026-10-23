@@ -236,12 +236,19 @@ pub struct MonitorOutput {
     pub item_class_override: Option<u8>,
     pub night_pane_on: bool,
     pub xray_pane_on: bool,
+    /// The goggles-equipped arm fired this tick (mode forced to 1, latch set, night pane
+    /// enabled — the game returns right after [M 0x19e9d8:49-72]). The caller applies the
+    /// arm path's `item+0x63 = item+0x64` restore (the auto-stow of the goggles item) here.
+    pub armed: bool,
 }
 
 /// The per-tick inputs (each mirrors the decompile's guard/branch reads).
 #[derive(Clone, Copy, Debug, Default, PartialEq)]
 pub struct MonitorInputs {
-    /// `BL+0x94a` — the HUD is active.
+    /// `BL+0x94a` — the player-update countdown byte (`Player_Init` 0x1910f8:150 plants 1,
+    /// `Player_Enable` 0x195498:51 plants 2, `Player_Disable` 0x195f70:16 plants 0,
+    /// `Player_Update` 0x193600:79-88 runs only while it is 1 and ticks >1 down). NOT the
+    /// goggles-carried flag — the disc grants the goggles nowhere (see docs/systems/goggles.md).
     pub hud_active: bool,
     /// `player+0xf4` — the on-foot viewer state (must be 1) [M 0x19e9d8:25].
     pub viewer_state: u16,
@@ -253,7 +260,11 @@ pub struct MonitorInputs {
     pub gadget_sub: i16,
     /// The held weapon is the goggles (class `']'` = 0x5d) [M :49].
     pub goggles_equipped: bool,
-    /// The zoom pane's `+0xf4` (BL+0x7e8 chain) — the goggles path refuses while up [M :51].
+    /// `BL+0x7e8` → `+0xf4`: the first-person view model's current anim id (non-0 while a
+    /// draw/holster/fire anim plays — `Player_WeaponSelect` 0x1a2cc0 writes 8/3/1 there;
+    /// `Player_InitWeapon` 0x1a7ef8:64 stores the view model at BL+0x7e8). The goggles arm
+    /// refuses while any view-model anim is up [M 0x19e9d8:51-53]. (The old comment called
+    /// this the zoom pane — wrong reader: Player_WeaponSelect is the writer.)
     pub zoom_pane_on: bool,
     /// `Input_Action(player, 0xd, 4)` — the select action this tick [M :69].
     pub toggle_action: bool,
@@ -286,6 +297,7 @@ impl MonitorNightSight {
             self.was_goggles = true;
             out.mode = 1;
             out.night_pane_on = true;
+            out.armed = true;
             return Some(out);
         }
         if i.toggle_action && !i.weapon_bit0 {

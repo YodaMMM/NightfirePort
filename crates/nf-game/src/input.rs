@@ -369,6 +369,9 @@ impl PadDriver {
         input.stabilise = a[14] != 0.0;
         input.fire = a[9] != 0.0;
         input.aiming = a[19] != 0.0;
+        // The goggles key: action 13, press edge [M HUD_MonitorNightSight 0x19e9d8:74
+        // `Input_Action(p, 0xd, 4)`] — the same newly-pressed idiom as jump/crouch above.
+        input.goggles_action = a[13] != 0.0 && newly & self.mask_of(pad, 13) != 0;
         // Player_Zoom 0x1a1a70: action 6 while aim mode is on.
         input.zoom = input.aiming && a[6] != 0.0;
         if input.aiming {
