@@ -21,7 +21,7 @@ pub struct Backend {
 }
 
 impl Backend {
-    /// Opens the pad device and reads the game's curve table + tuning from the user's ACTION.ELF.
+    /// Opens the pad device and reads the game's curve table + tuning from the disc's ACTION.ELF.
     ///
     /// The PS2 counterpart is `system_input_init` 0x10c418 (796 B, main 0x109080 boot path):
     /// `sceMtapInit` + `sceMtapPortOpen(0/1)`, `scePadInit(0)`, then 8 × `scePadPortOpen`

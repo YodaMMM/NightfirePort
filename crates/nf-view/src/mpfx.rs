@@ -302,7 +302,7 @@ impl Sim {
                         surfaces: self.surfaces.as_ref(), voices: self.voices.as_deref(), difficulty,
                         ai_points: &[],
                     };
-                    // The remote body's gun, not its eye (the main agent's two-window render, 2026-10-20: the smoke
+                    // The remote body's gun, not its eye (a two-window render: the smoke
                     // and the casing started at the shooter's head while the flash was out at arm's length). The
                     // drawn muzzle datum lives on the render side, so the sim takes the same spot from the shot
                     // ray: forward along the aim, to the gun side and down to hand height [S, matched by eye to the
@@ -313,7 +313,7 @@ impl Sim {
                     // The muzzle smoke: `Player_MuzzleFlash` 0x1a4298's `Gas_Init(0.05, 0.1, …,
                     // 0x2000039, 7, 0x48403080, life 128)` with its `Rand_FRand(2π)` draw, under the
                     // same +0x68 & 0x2000 no-smoke gate as SP [M; the game's own MP mode skips the
-                    // puff (MPSettings+0x180) — the port matches SP instead, the user's ask [S]].
+                    // puff (MPSettings+0x180) — the port matches SP instead, a port choice [S]].
                     if rec_u32(&rec, 0xdc) != 0 && rec_u32(&rec, 0x48) != 0 && rec_u32(&rec, 0x68) & 0x2000 == 0 {
                         let _angle = rng.frand(6.2831854820251465);
                         self.drones.gas.init_ex(nf_game::gas::SMOKE_QUAD, muzzle, 0.0, [0.0; 3], 0.05, 0.1, 7, [0x48, 0x40, 0x30, 0x80], 1, 128.0);

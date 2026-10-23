@@ -98,7 +98,7 @@ pub fn run() -> Result<()> {
         ui.crash = Some(c);
     }
     // The self-update (update.rs): leftovers of the last swap go, then a release build checks for a newer one in the
-    // background; PLAY waits while an update downloads and installs (the user's choice: automatic on launch).
+    // background; PLAY waits while an update downloads and installs (automatic on launch).
     // Right after an update the previous launcher may still be exiting (its `.old` file still locked): retry briefly.
     if let Some(dir) = update::install_dir() {
         // v0.1.0 shipped the game as a second exe; the game is now this program (`--game`).
@@ -577,13 +577,13 @@ mod tests {
         let Some(iso) = std::env::var_os("NF_ISO") else { eprintln!("skip: NF_ISO not set"); return };
         let dir = std::env::temp_dir().join(format!("nf-launcher-real-{}", std::process::id()));
         let cfg = dir.join("launcher.toml");
-        let d = Disc::check(Path::new(&iso)).expect("the user's disc passes");
+        let d = Disc::check(Path::new(&iso)).expect("the disc passes");
         if d.bytes != 2_439_315_456 {
             // The test pins the RETAIL disc's acceptance (its own asserts below: the
-            // 2_439_315_456-byte image). The slim sandbox image (1_061_754_880 bytes) parses
+            // 2_439_315_456-byte image). The slim test image (1_061_754_880 bytes) parses
             // fine (serial SLUS-20579) but is not that disc — the same environmental class as
             // the disc_golden tests on the slim ISO. Skip, don't fail.
-            eprintln!("skip: NF_ISO is the {}-byte sandbox image, not the retail disc this test pins", d.bytes);
+            eprintln!("skip: NF_ISO is the {}-byte slim image, not the retail disc this test pins", d.bytes);
             return;
         }
         assert_eq!(d.info.serial, "SLUS-20579");

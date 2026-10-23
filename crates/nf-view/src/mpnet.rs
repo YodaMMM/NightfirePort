@@ -1,7 +1,7 @@
 //! The ONE session layer's app surface (net-consolidate 2026-10-16).
 //!
-//! Two workers built two UDP sessions (051 `nf-net` and 053 `nf_game::net`);
-//! this consolidation keeps 051's crate — the stronger protocol: a contiguous
+//! There were two UDP sessions (`nf-net` and `nf_game::net`);
+//! this consolidation keeps the `nf-net` crate — the stronger protocol: a contiguous
 //! ack + 32-tick bitmap so the full unacked window rides every packet (an
 //! isolated loss can never lose a tick), a configurable input delay 2..=4
 //! carried in WELCOME, hash exchanges with the previous hash piggybacking on

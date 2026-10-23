@@ -1,4 +1,4 @@
-//! Census (task 289 fix-script-objects): every script Entity command (op 7,
+//! Census: every script Entity command (op 7,
 //! `Script_EntityStart` 0x1d8d78 → `Script_CreateEntity` 0x1d8968) on the disc — which object
 //! kinds the scripts create, in which level archives, with which glist hashes and params. The
 //! port priority rides on this: kinds are ported in order of how many levels use them.

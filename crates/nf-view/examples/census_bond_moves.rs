@@ -1,4 +1,4 @@
-//! Census (task 750 bonus-007) v2: find EVERYTHING on the disc that touches switch channels
+//! Census v2: find EVERYTHING on the disc that touches switch channels
 //! 0x65..=0x6E (the bond-move channels `Trigger_Calc` 0x1b1900:12-20 polls). Scans:
 //!   1. every placement param (index, value) with value in range, any type;
 //!   2. every script Entity command param with value in range;

@@ -571,7 +571,7 @@ impl GameFlow {
 /// semaphores 0..0xFF, flushes the caches and jumps to the new `e_entry` — BASE.ELF (the boot
 /// loader, ≡ SLUS_205.79) then re-dispatches to DRIVING.ELF from the 0x100000 block [M decomp
 /// + DRIVING.ELF's own ACTION/DRIVING/BASE strings at 0x3c5ea8..]. The port stays one process:
-/// `launching_driving()` below is the state, the draw is the main agent's.
+/// `launching_driving()` below is the state, the draw is the draw side's.
 pub fn is_driving_level(level: u32) -> bool { level >> 24 == 0x09 }
 
 /// The campaign rows' names for port-only messages (the game's own names are Txt labels; these
@@ -1278,7 +1278,7 @@ pub const OPT_CENSUS: &[(u32, OptCensus)] = &[
     (0x1000_0136, OptCensus::Wired),   // sim.subtitle_track.enabled [M Sound_DoSubtitle 0x1dde58:21]
     (0x1000_019a, OptCensus::NoPortReader("Split screen: Camera_CreateCameras 0x1bb2b8 lays out the 2-player viewports; the port has one camera and one window")),
     (0x1000_0198, OptCensus::NoPortReader("Speaker mode: SFXSetMode 0x117078 configures the IOP output path; nf-audio has no mono/surround downmix (the OS mixer owns it)")),
-    (0x1000_0223, OptCensus::Wired),   // the menu draw aspect (aspect_for); the 3D projection gate is the main agent's draw side
+    (0x1000_0223, OptCensus::Wired),   // the menu draw aspect (aspect_for); the 3D projection gate is the draw side's
     // Codename Controls — P_CNCONTROLS_Handler 0x213cd0 / C_RBCONTROL_Handler 0x217908
     (0x1000_0025, OptCensus::NoPortReader("Controller style: psiInput_MapInputs 0x10cd80:61 switches the pad→action mapping per style; the gamepad backend ships one fixed mapping")),
     (0x1000_00c9, OptCensus::Wired),   // the host negates the look delta [M Input_Update 0x17ee88:50-52]
@@ -2239,7 +2239,7 @@ impl Default for CardFlow {
 }
 
 /// The front end: which page is up, the cursor, and the flow machine it drives.
-/// Playtest convenience (the user, 2026-10-16: "unlock all the levels"): the window sets this at start
+/// Port convenience (every level unlocked): the window sets this at start
 /// (on by default, `--locked` keeps the game's progression) and every `FrontEnd` it creates — the boot,
 /// the pause, the quit, the MP debriefing — opens every mission. Tests never set it [S port choice].
 pub static UNLOCK_ALL: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
@@ -2409,7 +2409,7 @@ pub struct FrontEnd {
     /// P_CNMENU 0x213288:38-40, not ported].
     pub cn_exit: Option<u32>,
     /// The cheat entry's ✓ ran the special-codename check — Menu_SpecialCodenameCheck 0x200238
-    /// (52 names at 0x308578, strcmp, unlock masks into sp_level+0x10) is not ported (reported);
+    /// (52 names at 0x308578, strcmp, unlock masks into sp_level+0x10) is not ported;
     /// the port records that the check ran and creates nothing [M C_KEYBOARD 0x213a98:67-73].
     pub cn_cheat_checked: bool,
     /// The page's PROFILE-name mode — cn_open(from != 0x4000001d) runs the validator/create
@@ -2475,7 +2475,7 @@ pub struct FrontEnd {
     pub mp_scenario_row: usize,
     /// menu-mouse-parity: the wheel row the pointer last hovered (the wheel pages' mouse_move).
     /// The wheel re-centres on a hover, which moves the rows under a stationary pointer — the
-    /// click reads this to confirm the row the user aimed at. Cleared on every action, page
+    /// click reads this to confirm the row the player aimed at. Cleared on every action, page
     /// change and hover-off-rows.
     wheel_hover: Option<usize>,
     /// The map wheel's cursor [M C_SBMPMAP 0x217538's selection over mp_level].
@@ -2549,7 +2549,7 @@ pub struct FrontEnd {
     pub mp_debriefing: Option<nf_game::mp::debrief::MpDebriefing>,
     /// credits-data: the credits roll's state (crate::credits::CreditsRoll — the handler's own
     /// statics frame_518/name_520/index_519/fading_517/page_from_523/music_vol_524) [M
-    /// P_CREDITS_Handler 0x2152b0]. The main agent draws `self.credits.visible()`.
+    /// P_CREDITS_Handler 0x2152b0]. The draw side draws `self.credits.visible()`.
     pub credits: crate::credits::CreditsRoll,
     /// credits-data: the page the credits were opened from, as a Page when it is a ported one
     /// (AV Options; the win page 0x40000053 is not ported and stays None) [M page_from_523].
@@ -2665,8 +2665,7 @@ pub struct FrontEnd {
     /// [M P_ENDMISSION_Handler 0x216618:19-21 — row 0 = `ResetMap_LevelToLoad(GameState._12_4_,
     /// 1, 1)` AND `Player_RamLoad`]: the host must serve the ENTRY checkpoint (the restart arm,
     /// whose channels predate the fail), not the dying sim's live capture — the carried fail
-    /// channel re-failed the mission the tick it came back, the 07000007 replay loop (playtest
-    /// 1012-1723). The host consumes it with the level request.
+    /// channel re-failed the mission the tick it came back, the 07000007 replay loop. The host consumes it with the level request.
     pub requested_restart: bool,
     // fe-audit (each new field on its own line [WORKLOG lesson 4]).
     /// The page that opened the MP summary — its Back is the manager's 0x5f pop [M P_MPCONFIRM
@@ -2738,7 +2737,7 @@ pub struct FrontEnd {
     /// calltree_census.rs]). Each mirrors its handler's 0x4b read into the game's global:
     /// `hud_state` [M C_CHCHHUD 0x215f48], the coords global [M C_CHCHCOORDS 0x216100], the
     /// debug global [M C_CHCHDEBUG 0x216098] and `debug_scanmode` [M C_CHCHFLY 0x215c70]. The
-    /// drawing the states drive stays the main agent's.
+    /// drawing the states drive stays on the draw side.
     pub cheat_hud: bool,
     /// See `cheat_hud`.
     pub cheat_coords: bool,
@@ -2752,7 +2751,7 @@ pub struct FrontEnd {
     /// WEAP 0x100000e7, HEALTH 0x100000e8, DUMMY 0x100000bd, ALLOWFREEZE 0x100000c7,
     /// DRAWALL 0x10000101, LOCKUP 0x10000169, BRIGHT 0x100001f7, UNLOCK 0x10000216,
     /// CONTROLS 0x1000021d. All ship on page 0x40000007 of every per-level def [D
-    /// calltree_census.rs]; the drawing/application wiring stays the main agent's.
+    /// calltree_census.rs]; the drawing/application wiring stays on the draw side.
     pub cheat_misc: [bool; 9],
 }
 
@@ -3155,8 +3154,7 @@ impl FrontEnd {
     fn open_pair_sfx(&mut self) {
         if self.menu_movie { return; }
         // The 0x4c arm removes the pair before restarting it [M 0x20a408:17-22] — without the
-        // remove every restart stacked another looping item (the playtest's "a lot of different
-        // music songs playing").
+        // remove every restart stacked another looping item (several songs at once).
         self.remove_pair();
         self.sfx_out.push(MenuSfx { sound: MENU_SOUND_PAGE_OPEN, id: SFX_MENU_OPEN_MOVE });
         self.sfx_out.push(MenuSfx { sound: MENU_SOUND_PAGE_OPEN, id: SFX_MENU_OPEN_SELECT });
@@ -3165,7 +3163,7 @@ impl FrontEnd {
         // (0x1d7/0x470 by the resident front-end bank [M 0x1dceb8 case 0x7000048]) applied at the
         // NEXT REDRAW, not at the next input: the sfx channel drains only in `menu_after`, so a
         // restart queued by `tick` (the intro/attract ends, a skipped intro) stayed silent until
-        // the user touched a key. `movie_finished` IS the game's restart arm gated by the music
+        // a key was pressed. `movie_finished` IS the game's restart arm gated by the music
         // state's own `menu_movie` mirror (`jingles_up`), so the two channels never stack: the
         // sfx batch's leading removes kill whichever instance sounds first [M the 0x4c order].
         self.music.movie_finished();
@@ -3581,7 +3579,7 @@ impl FrontEnd {
         }
     }
 
-    // ── PC mouse support (the user, 2026-10-15: "mouse support for menu navigation") ──
+    // ── PC mouse support for menu navigation ──
     // Every page keeps the keyboard's actions; the mouse maps onto them: hovering a list row selects it, a left click
     // on the selected row (or anywhere on single-action pages) is Confirm, a click on a wheel's neighbour row scrolls
     // the wheel to it, the ◀ ▶ columns of a value row are Left / Right, right click is Back and the wheel scrolls
@@ -4345,8 +4343,8 @@ impl FrontEnd {
         // — and the MenuManager_Create runs at the LOAD's tail [M 0x1d6360:160-163], after the
         // outro: the state-6 gate holds until `psiMovieFinished` [M 0x1c98c8 case 6], phase 2
         // resolves the 0x7300xx code to the map [M 0x1d3560; 0x1d6360:173-177]. The port used to
-        // `enter_page(Results)` here — the reward screen showed before the ending cut-scene
-        // (playtest 2026-10-18). `reopen_queued_page` (the load tail's stand-in) opens it.
+        // `enter_page(Results)` here — the reward screen showed before the ending cut-scene.
+        // `reopen_queued_page` (the load tail's stand-in) opens it.
         self.flow.page = PAGE_RESULTS;
         self.results_queued = true;
         // Case 6's `LevelToEndTo`: the outro code 0x073000xx for the levels with an outro
@@ -4941,7 +4939,7 @@ impl FrontEnd {
         self.cn_box = None;
         if !self.cn_profile_mode {
             // cheat_mode: Menu_SpecialCodenameCheck 0x200238 (52 strcmp names from 0x308578,
-            // unlock masks into sp_level+0x10, Menu_SetBonus) — not ported (reported). The
+            // unlock masks into sp_level+0x10, Menu_SetBonus) — not ported. The
             // game creates nothing on a miss [M C_KEYBOARD 0x213a98:67-73] and neither do we.
             self.cn_cheat_checked = true;
             return true;
@@ -5315,7 +5313,7 @@ impl FrontEnd {
         // The M_* widget runtime this page/action model re-expresses (misc-6 citations; the game's
         // pages drive NEW_CONTROL-built M_* widgets through a message pump, the port folds each
         // page's widgets into its own rows/state — the data/state/flow is here, the drawing is
-        // the main agent's):
+        // on the draw side):
         // - `Manager_HandleMessage` 0x21df10 (28 B — a pure forward to `Handler_HandleMessage`
         //   0x2029e0) sits at the end of `Manager_SendMessage` 0x21c858's dispatch; the port's
         //   terminal per-action handler is THIS fn.
@@ -5354,7 +5352,7 @@ impl FrontEnd {
         }
         // The MP start checks' refusal is the game's option box too (Menu_CreateOptionBox with the
         // error label [M C_SBMPOPTIONS 0x20e818:50-130]); it was never drawn, so Continue just did
-        // nothing (playtest 1015-2231 "cant get into a match").
+        // nothing.
         if self.notice.is_some() || self.net_notice.is_some() || self.mp_error != 0 {
             if matches!(a, Action::Confirm | Action::Back) {
                 self.notice = None;
@@ -5729,7 +5727,7 @@ impl FrontEnd {
             Page::Codename => match a {
                 Action::Up | Action::Down => { self.cursor = (self.cursor + 1) % self.rows(); return true; }
                 Action::Confirm => {
-                    // Row 0 "New Codename" opens the game's name-entry page (not ported; reported).
+                    // Row 0 "New Codename" opens the game's name-entry page (not ported).
                     // Row 1 "Play without saving" pops the confirm box [M C_SBNFCN 0x20b390:19-21 —
                     // selecting index 1 pops Menu_CreateOptionBox(0x10000bb, 9, 1, 1)], ✕ continues,
                     // △ cancels.
@@ -5821,7 +5819,7 @@ impl FrontEnd {
                     self.mission = self.cursor.min(CAMPAIGN.len() - 1);
                     let level = CAMPAIGN[self.mission].3;   // +0x0c [M 0x20b8d8:21]
                     // The port has no DRIVING.ELF: entering GameFlow state 9 left the flow stuck there
-                    // for good (playtest 1015-2231 "can't start any sp levels" — Paris Prelude, the
+                    // for good (no SP level could start — Paris Prelude, the
                     // only row a fresh profile opens, is a driving mission). The row says so instead,
                     // and `unlocked_row` lets the next on-foot row open through it [S port choice].
                     if is_driving_level(level) {
@@ -5858,7 +5856,7 @@ impl FrontEnd {
                 // the page msg 0x4c from 0x4000001c/36/38 sends msg 0x2e param 0 to the scroll
                 // 0x1000010c, which rejects out-of-range indices and redraws (Scroll_SendMessage
                 // 0x221810:98-106); without the reset the port entered with the missions cursor
-                // and the wheel showed Weapons on screen — the playtest's "the port adds Weapons"].
+                // and the wheel showed an extra Weapons row on screen].
                 // The open pushes the list {page, cursor} — the dossier's opener rides the same
                 // 0x44 push rule as every forward hop [M 0x21c858 case 0x44]; G-048(1): the game
                 // rides Menu_ChangePageCloseIris here [M C_SBNFMAP 0x20b8d8:48 — □ → 0x4000002b],
@@ -6050,7 +6048,7 @@ impl FrontEnd {
                 // page [D census]: Menu_CreateOptionBox fills its row text via
                 // `List_SendMessage` 0x2196e8 arm 0x10 (:27-41) and calls `List_Update`
                 // 0x21a598 directly (:68) — the port's `ListState` + this modal stand in for
-                // that flow (the draw side is the main agent's).
+                // that flow.
                 if self.pause_hint.is_some() {
                     match a {
                         Action::Confirm | Action::Back => { self.pause_hint = None; return true; }
@@ -6285,7 +6283,7 @@ impl FrontEnd {
                     Action::Up if self.cursor > 0 => { self.cursor -= 1; return true; }
                     Action::Down if self.cursor + 1 < 2 => { self.cursor += 1; return true; }
                     // The port row is a typed field (digits + Backspace through mp_net_type /
-                    // mp_net_backspace): the playtest's "why does the port count down" — the old
+                    // mp_net_backspace): the port number used to count down — the old
                     // ◀ ▶ stepping (and the mouse's value columns) knocked it down on every click.
                     Action::Confirm if self.cursor == 1 => { return self.mp_host_begin(); }
                     Action::Confirm => {}   // the port row's ✕ does nothing
@@ -6527,7 +6525,7 @@ impl FrontEnd {
                     Action::Down if self.mp_options_row + 1 < MP_OPTIONS_ROWS.len() => { self.mp_options_row += 1; return true; }
                     // Back to the setup page re-runs its 0x4c: the prompt from the scenario's team
                     // bit [M P_MPSETUP 0x20d7a8] — the stale state left a free-for-all on the team
-                    // prompt after backing out (playtest 1015-2231).
+                    // prompt after backing out.
                     Action::Back => { self.enter_mp_setup(); return true; }
                     Action::Confirm => {
                         let row = self.mp_options_row.min(MP_OPTIONS_ROWS.len() - 1);
@@ -7202,8 +7200,7 @@ impl FrontEnd {
     /// states at mp_stuff+0x360 zero and the defaults re-seat: the skins 0/1/2/3
     /// (DAT_002dee70/80/90/a0) and the teams MI6/Phoenix/MI6/Phoenix (DAT_002dee6c/7c/8c/9c)].
     /// A re-entered join page is always a FRESH join — the stale ready panel a back-out left
-    /// must not survive it (playtest 1015-2231's walk: back out of a half-done setup to Main,
-    /// forward again).
+    /// must not survive it (back out of a half-done setup to Main, forward again).
     fn enter_mp_join(&mut self) {
         self.mp_join = std::array::from_fn(|slot| MpJoinAgent {
             state: 0,
@@ -7656,8 +7653,7 @@ impl FrontEnd {
     }
 
     /// The online name: the player's single-player save codename — the one picked this session,
-    /// else the most recently saved profile on disk (the user: "use the name attached to their SP
-    /// save"); None with no save at all (the host then names the slot "Player N") [S].
+    /// else the most recently saved profile on disk; None with no save at all (the host then names the slot "Player N") [S].
     pub fn mp_save_name(&self) -> Option<String> {
         if let Some(n) = self.active_profile.as_ref().filter(|n| !n.trim().is_empty()) { return Some(n.clone()); }
         // The disk scan is the game's (the app arms it at startup): tests never read the
@@ -7742,8 +7738,8 @@ impl FrontEnd {
         // Every form the join box accepts — IP:PORT, the 16-symbol join code, and the 4-character
         // lobby code the public list and friends share — is `parse_join_target`'s, the same parse
         // the session's dial runs. The old gate here (IP:PORT or the long code only) refused every
-        // 4-character code before it reached the lookup (user report 2026-10-21: the code and the
-        // listed lobby's Enter "do nothing").
+        // 4-character code before it reached the lookup (the code and the
+        // listed lobby's Enter did nothing).
         if !mp_net_addr_ok(&addr) && nf_net::p2p::parse_join_target(&addr).is_err() {
             self.mp_net_error = Some(MpNetError::BadAddress);
             return false;
@@ -8526,7 +8522,7 @@ pub fn menu_overlay(fe: &FrontEnd, font: &nf_formats::hud::Font, hfont: &nf_form
         // page's four panels (the same page geometry as MpJoin, page 0x40000019's panels TEX 0x03000199), agent 1's
         // prompt (70,132), its 128×64 picture (117,150) and the pick with the arrows (70,215); the other agents' panels
         // stay empty (the game hides an unjoined agent's controls [M P_MPSETUP 0x20d7a8:73-78]). Until 2026-10-19 this
-        // page drew nothing — the user's "no screen appears after selecting a map".
+        // page drew nothing — no screen after selecting a map.
         Page::MpSetup => {
             page_header(&mut h, hfont, &bind(0x29e));
             let panels = fe.mp_setup_panels(lang);
@@ -8624,7 +8620,7 @@ pub fn menu_overlay(fe: &FrontEnd, font: &nf_formats::hud::Font, hfont: &nf_form
             hint_bar(&mut h, font, "~A Start Game  ~B Back", 50.0, 419.0, cream);
             logo_stamp(&mut h);
         }
-        // mp-lobby-one-screen: the one screen (the main agent's draw over the model's getters
+        // mp-lobby-one-screen: the one screen (the draw over the model's getters
         // [S docs/systems/net-online-lobby.md §6]): the settings column on the panel's left, the
         // players on its right, the internet line + join code in the band under the panel. The
         // look is the couch MP pages' (the header face, the 0x030000b3 panel, cream rows, the
@@ -8632,7 +8628,7 @@ pub fn menu_overlay(fe: &FrontEnd, font: &nf_formats::hud::Font, hfont: &nf_form
         Page::MpOnlineLobby => {
             page_header(&mut h, hfont, "Online Lobby");
             // Dark plates behind the two columns (the couch pages' ring panel art sat behind the
-            // text and swallowed it — the main agent's render, 2026-10-18).
+            // text and swallowed it).
             let plate = |h: &mut Hud, x: f32, y: f32, w: f32, hh: f32| {
                 let c = [0.02, 0.02, 0.03, 0.62];
                 let (a, b) = (h.ndc(Anchor::Centre, mx(x), my(y)), h.ndc(Anchor::Centre, mx(x + w), my(y + hh)));
@@ -8653,11 +8649,11 @@ pub fn menu_overlay(fe: &FrontEnd, font: &nf_formats::hud::Font, hfont: &nf_form
                 let nth = names[..k].iter().filter(|x| *x == n).count() + 1;
                 format!("{n} {nth}")
             }).collect();
-            // The lobby keeps its text a constant size on screen (the user: "the ui expands with
-            // resolution so it's a scroll bar when smaller" — the 16-player lobbies): `k` is the
+            // The lobby keeps its text a constant size on screen (a small window scrolls instead —
+            // the 16-player lobbies): `k` is the
             // page units per 720p unit, so a taller window fits more rows; a list that overflows its
             // column scrolls with the focus and draws a scroll bar [S].
-            // Floor 0.8 (the user, 2026-10-19, on a 1440p window: "this looks awful" — at k 0.5 the rows were packed
+            // Floor 0.8 (on a 1440p window at k 0.5 the rows were packed
             // tighter than the text): below it the lists scroll instead of shrinking.
             let k = (720.0 / fe.view_h.max(1.0)).clamp(0.8, 1.25);
             let scroll_bar = |h: &mut Hud, x: f32, y: f32, hh: f32, first: usize, vis: usize, total: usize| {
@@ -8682,7 +8678,7 @@ pub fn menu_overlay(fe: &FrontEnd, font: &nf_formats::hud::Font, hfont: &nf_form
                 let value = if r.value_id != 0 { bind(r.value_id) } else { r.value_text.clone() };
                 let col = if r.focused { bright } else if !r.enabled || !r.editable { dim } else { cream };
                 // Name and value on ONE baseline (the value used to be centred in its own box, which drifted off the
-                // name's line as k shrank — the overlapping rows in the user's screenshot).
+                // name's line as k shrank — overlapping rows).
                 let base = my(y + 11.0 * k);
                 left_text(&mut h, font, &name, mx(66.0), base, col, true, 0.85 * k);
                 if !value.is_empty() {
@@ -8692,7 +8688,7 @@ pub fn menu_overlay(fe: &FrontEnd, font: &nf_formats::hud::Font, hfont: &nf_form
             }
             scroll_bar(&mut h, 346.0, col_top - 4.0, col_h, first, vis, rows.len());
             // The focused setting's own one-line description, as the couch pages show it (`opt_desc` by the couch
-            // page's control id) — the user, 2026-10-19: "no fucking clue what enviromods mean".
+            // page's control id) — names like "enviromods" need their description.
             if let Some(r) = rows.get(focus) {
                 use crate::mp_lobby::MpLobbyRowId as R;
                 let m = &fe.mp_one;
@@ -8751,11 +8747,11 @@ pub fn menu_overlay(fe: &FrontEnd, font: &nf_formats::hud::Font, hfont: &nf_form
                 if fe.mp_lobby_start_enabled() { "Everyone is ready - Start the match" } else { "Waiting for every player to be ready" }
             } else { "The host starts the match" };
             left_text(&mut h, font, start_line, mx(366.0), my(250.0), if fe.mp_lobby_start_enabled() { bright } else { dim }, true, 0.8);
-            // The chosen map's picture (the user: "map image needs to be shown on lobby screen"):
+            // The chosen map's picture:
             // the Select Map wheel's own preview texture [the MP_MAP_ROWS preview ids], disc-masked
             // like that page's emblem, under the players column.
-            // mp-lobby-settings: the character preview beside it (the user: "let each player pick
-            // their own character from their row with a visible preview") — the Bot Choose wheel's
+            // mp-lobby-settings: the character preview beside it (each player picks
+            // their own character from their row) — the Bot Choose wheel's
             // own portrait [MP_CHARACTERS +0x00, the same textures], for the focused player row
             // (else this machine's own row), or the focused bot row's character [S layout].
             if let Some(row) = MP_MAP_ROWS.iter().find(|r| r.3 == fe.mp_one.level) {
@@ -8895,7 +8891,7 @@ pub fn menu_overlay(fe: &FrontEnd, font: &nf_formats::hud::Font, hfont: &nf_form
             let legal = bind(0x375);
             if !legal.is_empty() {
                 // The legal text wraps inside its plate (50,332,540×108) and each line is centred in it
-                // [L the main agent's PCSX2 captures 2026-10-13; the port's raw 92-column run went off
+                // [L PCSX2 captures; the port's raw 92-column run went off
                 // the right edge]. Wrap to the plate's pixel width, centre at the plate's centre x=320.
                 // PCSX2 m00 (2026-10-15): lines up to ~482 units, middles from y 345 at pitch 18, full cream with shadow.
                 for (i, line) in wrap_px(&legal, font, mx(490.0)).iter().take(6).enumerate() {
@@ -8969,7 +8965,7 @@ pub fn menu_overlay(fe: &FrontEnd, font: &nf_formats::hud::Font, hfont: &nf_form
             // ee_snapshot: +0x00 = 0x030000a5/a6/a7].
             emblem(&mut h, [0x0300_00a5, 0x0300_00a6, 0x0300_00a7][fe.cursor.min(2)], 0x0300_00bf);
             wheel(&mut h, fe, font, lang, |_fe, row| bind(DIFFICULTIES[row.min(2)]), cream);
-            // The description wraps inside its plate (50,301,540×113) [L the main agent's captures:
+            // The description wraps inside its plate (50,301,540×113) [L PCSX2 captures:
             // the port's single line ran off the right edge].
             desc_block(&mut h, font, &bind(DIFFICULTY_DESCS[fe.cursor.min(2)]), bright);
             hint_bar(&mut h, font, &hint(0x218, "~A Select  ~V Scroll  ~B Back"), 50.0, 419.0, cream);
@@ -9260,7 +9256,7 @@ pub fn menu_overlay(fe: &FrontEnd, font: &nf_formats::hud::Font, hfont: &nf_form
         // the style spinner + the Y-Axis toggle (opt_list renders them from CN_CONTROLS_ROWS with
         // the live opts — the style row's value is bind(CN_CONTROLS_STYLES[v])). The pad diagram
         // (the 0x10000061 line art, tex 50331714 [L]) and the per-style display jumps are the
-        // main agent's draw pass.
+        // draw pass's.
         Page::CnControls => {
             page_header(&mut h, hfont, &bind(0x1f3));
             cn_controls_rows(&mut h, fe, font, lang);
@@ -9271,7 +9267,7 @@ pub fn menu_overlay(fe: &FrontEnd, font: &nf_formats::hud::Font, hfont: &nf_form
             // The Screen Adjust page's own controls [L page 0x40000047 walk 2026-10-15]: the
             // fullscreen reference picture TEX 0x3000074 (the msg-0x24 control (0,0,640,480)); the
             // two slider bars — vertical (304,176,32,128) d1 0, horizontal (256,224,128,32) d1 1,
-            // both named 0x100001eb; the hint bar (50,419) LBL 0x67b. The main agent compares this
+            // both named 0x100001eb; the hint bar (50,419) LBL 0x67b. To compare
             // against PCSX2 — the bars here are the page data's plates with the focused one bright.
             quad640(&mut h, 0x0300_0074, 0.0, 0.0, MW, MH, [0.0, 0.0, 512.0, 512.0], gs(0x7f7f7f, 0xff));
             let (bar_v, bar_h) = (gs(0x73330f, 0xc0), gs(0x73330f, 0xc0));
@@ -9282,8 +9278,7 @@ pub fn menu_overlay(fe: &FrontEnd, font: &nf_formats::hud::Font, hfont: &nf_form
         }
         Page::Pause => pause_page(&mut h, fe, font, lang, textures, cream, bright, dim),
         Page::Results => results_page(&mut h, fe, font, lang, textures, cream, bright, dim),
-        // nfstats-model: the Mission Stats page's DATA (no art — the main agent draws the page
-        // against PCSX2). The rows from `stats_enter` in the game's order, the header quartet
+        // nfstats-model: the Mission Stats page's DATA (no art yet). The rows from `stats_enter` in the game's order, the header quartet
         // bound from STATS_HEADER; cells at the pause SCORE tab's column x's (the port's only
         // measured Category/Current/Target table [L PCSX2 07000005 pause]).
         Page::Stats => {
@@ -9302,12 +9297,12 @@ pub fn menu_overlay(fe: &FrontEnd, font: &nf_formats::hud::Font, hfont: &nf_form
                 put(&mut h, k + 1, &name, &r.current, &r.target, &r.total, bright);
             }
         }
-        // credits-data: the main agent draws the roll from fe.credits.visible() (the game's
+        // credits-data: the draw side draws the roll from fe.credits.visible() (the game's
         // own line list + y positions) — nothing here yet.
         Page::Credits => {}
         // The intro run draws only the plate (above); P_PARISENUM's card box is not drawn [S].
         Page::Intro | Page::ParisEnum | Page::EstHero => {}
-        // unlock-popups: the main agent draws these from the model — NFBONUS from fe.bonus
+        // unlock-popups: the draw side draws these from the model — NFBONUS from fe.bonus
         // (the tier lines + the composed text; the page's own layout is header Txt 0x2c5, hint
         // 0x2d0, texture control 0x100001cf at (89,112,171×256), text list 0x100001d0 at
         // (268,94,284×292) [L the menu-def dump]), WINGAME is the movie page only, CHEATMEDAL
@@ -9318,7 +9313,7 @@ pub fn menu_overlay(fe: &FrontEnd, font: &nf_formats::hud::Font, hfont: &nf_form
         // TEX 0x03000134 (uv 0,0 173×257 from msg 0x2d); the text list 0x100001d0 (268,94,284×292)
         // — the composed tier text [M :22-41]; the focus box 0x10000165 (62,372,61×59, b=1); the
         // hint (50,419) LBL 0x2d0; the stamp 0x10000224 at the forced (539,393) like the results
-        // page; the logo. Draw-handoffs row 2: PCSX2 look owed (the user saw no animation).
+        // page; the logo. Open: the animation is not drawn yet.
         Page::NfBonus => {
             page_header(&mut h, hfont, &bind(0x2c5));
             let pic = fe.bonus.as_ref().and_then(|b| b.texture).unwrap_or(0x0300_0134);
@@ -9475,8 +9470,7 @@ fn pause_page(h: &mut Hud, fe: &FrontEnd, font: &nf_formats::hud::Font, lang: Op
                 h.ndc_solid(-1, v, [0.06, 0.02, 0.02, 0.5]);
             }
             // PC port: the tab lists the port's keyboard + mouse bindings (the keys lib.rs reads) under the game's own
-            // action labels, instead of the PlayStation pad styles (the user, 2026-10-15: "the controller layout is
-            // for Playstation controllers. But this is a PC port"). The game's style spinner and Y-Axis row have no
+            // action labels, instead of the PlayStation pad styles (a PC port). The game's style spinner and Y-Axis row have no
             // keyboard meaning and are not drawn.
             let left_label = |h: &mut Hud, s: &str, x: f32, yc: f32, c: [f32; 4]| h.text(Anchor::Centre, font, -2, s, mx(x), my(yc + 6.0), false, c, false);
             left_label(h, "Keyboard & Mouse", 104.0, 169.0, bright);
@@ -9496,7 +9490,7 @@ fn pause_page(h: &mut Hud, fe: &FrontEnd, font: &nf_formats::hud::Font, lang: Op
         // indented Opponents trio, Accuracy Rating, Health Remaining, Time, 007 Bonus. Current =
         // the port's tracked stats (time, accuracy) + bonus-007's live progress counters (Bond
         // Moves, Dispatched, Subdued, Surrendered, 007 Bonus — host-synced `pause_stats`);
-        // shots/accuracy/time still fill 0 (reported). Targets = SCORE_TARGETS for the campaign row.
+        // shots/accuracy/time still fill 0. Targets = SCORE_TARGETS for the campaign row.
         3 => {
             // The d1=8 list (98,147,445×190): two right-aligned value columns [M 0x204408:447-498 — msg 0x59 (1,2) and
             // (2,2) right-align columns 1 and 2]. PCSX2 07000005 (2026-10-15): the Current column ends at x 421, the
@@ -9569,8 +9563,8 @@ fn pause_page(h: &mut Hud, fe: &FrontEnd, font: &nf_formats::hud::Font, lang: Op
                 let c = if i == fe.cursor { bright } else { dim };
                 label(h, font, &lbl(id, fb), 153.0, 209.0 - 8.0 + i as f32 * 33.5, 334.0, 16.0, c, false, 1.0);
             }
-            // fix-pause-menu2: the yellow arrow cursor left of the selected row [L the main agent's
-            // PCSX2 captures 2026-10-13 — the game's list cursor; the port had none]. Drawn as a
+            // fix-pause-menu2: the yellow arrow cursor left of the selected row [L
+            // PCSX2 captures — the game's list cursor; the port had none]. Drawn as a
             // small yellow triangle at the list's cursor column (the port's stand-in sprite; the
             // disc's own cursor texture was not identified — live check).
             if !confirming { pause_cursor(h, 153.0 + 9.0, 209.0 + fe.cursor.min(2) as f32 * 33.5, gs(YELLOW, 0xff)); }
@@ -9595,7 +9589,7 @@ fn pause_page(h: &mut Hud, fe: &FrontEnd, font: &nf_formats::hud::Font, lang: Op
     // The hint bar (45,341,550×18) — the TAB's own label [M C_GCPAUSE_Handler 0x204408 swaps the
     // hint per tab on entry: MISSION 0x201 (:275), OBJECTIVES 0x202 (:239), CONTROLS 0x204 (:501),
     // SCORE 0x205 (:288); the confirm swaps it to 0x1000323 [M :160/175/198]]. The fallbacks are
-    // the captures' footers [L the main agent's PCSX2 captures 2026-10-13].
+    // the captures' footers [L PCSX2 captures].
     let hint_id = if fe.confirming_restart || fe.confirming_quit { 0x100_0323 } else {
         [0x201u32, 0x202, 0x204, 0x205][tab]
     };
@@ -9997,7 +9991,7 @@ fn panel(h: &mut Hud) {
 /// [M the emblem controls on pages 0x40000025/0x40000023/0x4000001c/0x4000002b; the ring's f1 layer
 /// (0x1c) is below the preview's (0x1d/0x1e) and lower layers draw on top [M hud.rs finish]]. The
 /// preview is clipped to the ring's circle — the game masks it (the port's square preview poked out
-/// of the ring as a visible box [L the main agent's 2026-10-13 render]).
+/// of the ring as a visible box [L render compare]).
 fn emblem(h: &mut Hud, preview: u32, ring: u32) {
     emblem_col(h, preview, ring, gs(0x7f7f7f, 0xff), gs(0x7f7f7f, 0xff));
 }
@@ -10314,7 +10308,7 @@ fn hint_row_s(h: &mut Hud, font: &nf_formats::hud::Font, text: &str, x640: f32, 
 
 /// A textured quad in the menu's 640 × 480 space. Anchor::Centre keeps every quad inside the centred
 /// 4:3 picture: the game draws the 640×480 menu space as a centred 4:3 image with black bars at the
-/// sides [L the main agent's PCSX2 captures 2026-10-13; the port's Anchor::Stretch quads filled the
+/// sides [L PCSX2 captures; the port's Anchor::Stretch quads filled the
 /// whole 16:9 window]. At a 4:3 window Centre ≡ Stretch, so 4:3 renders are unchanged.
 #[allow(clippy::too_many_arguments)]
 fn quad640(h: &mut Hud, tex: u32, x: f32, y: f32, w: f32, hh: f32, uv: [f32; 4], c: [f32; 4]) {
@@ -10328,7 +10322,7 @@ fn quad_uv(h: &mut Hud, tex: u32, x: f32, y: f32, w: f32, hh: f32, uv: [f32; 4],
 }
 
 /// A flat coloured plate (the menu backdrop / the confirm box), inside the centred 4:3 band — see
-/// `quad640` [L the main agent's captures].
+/// `quad640` [L PCSX2 captures].
 /// A 640-space framed box: a translucent black fill and a thin dark border (the b0=1 frame controls, PCSX2 07000048
 /// Records 2026-10-13).
 fn frame640(h: &mut Hud, x: f32, y: f32, w: f32, hh: f32) {

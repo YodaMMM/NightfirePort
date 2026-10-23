@@ -1,4 +1,4 @@
-//! Scratch probe (task 289): dump 07000007's script 0x0600007A (the urn SP) — streams, commands.
+//! Scratch probe: dump 07000007's script 0x0600007A (the urn SP) — streams, commands.
 use nf_formats::nis::Cmd;
 
 fn main() {

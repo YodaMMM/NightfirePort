@@ -4,7 +4,7 @@
 //! A release build carries its version (`NF_RELEASE_VERSION`, baked in by the release build — `tools/release`); a dev
 //! build carries none and never updates. On start the launcher asks GitHub for the repository's latest release
 //! (`releases/latest`); when its tag is newer it downloads the release's `NightfirePort.exe` and the `.sha256` beside
-//! it (the user, 2026-10-19: a release is just the exe — no zip), checks the digest ([`nf_formats::sha256`] — a
+//! it (a release is just the exe — no zip), checks the digest ([`nf_formats::sha256`] — a
 //! corruption/truncation check; both files come over HTTPS from the same release) and swaps the exe in. Windows lets
 //! a running program be renamed but not overwritten, so the running exe is first renamed to `<name>.old` (deleted on
 //! the next start), then the new one is started and this one exits. Any failure (offline, GitHub down, no write

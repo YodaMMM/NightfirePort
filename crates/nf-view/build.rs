@@ -1,4 +1,4 @@
-// Bakes the third-party licence notices into the exe (a release is just the exe — the user, 2026-10-19). The release
+// Bakes the third-party licence notices into the exe (a release is just the exe). The release
 // build (tools/release/make-release.ps1) writes them with notices.py and points NF_NOTICES_FILE at the file; a dev
 // build gets a one-line placeholder.
 fn main() {
@@ -13,8 +13,8 @@ fn main() {
     };
     std::fs::write(out, text).unwrap();
 
-    // The DLL-hijack guard (the user, 2026-10-19: NightfirePort.exe run from Downloads loaded a game mod's
-    // `dxgi.dll` sitting beside it, which popped "UGameViewportClient::DrawTransition signature failed" boxes).
+    // The DLL-hijack guard: an exe run from a folder holding other DLLs must not load them (a game mod's
+    // `dxgi.dll` sitting beside NightfirePort.exe once loaded and popped its own error boxes).
     // Windows looks in the exe's own folder first for every DLL that isn't a KnownDLL, and these are linked at load
     // time, before `main` can say otherwise. Delay-load them: their first use comes after `main` has restricted the
     // search to System32 (`bin/NightfirePort.rs`, SetDefaultDllDirectories).
@@ -23,7 +23,7 @@ fn main() {
             println!("cargo:rustc-link-arg-bin=NightfirePort=/DELAYLOAD:{dll}");
         }
         println!("cargo:rustc-link-arg-bin=NightfirePort=delayimp.lib");
-        // The exe's icon (the user, 2026-10-19: "also no icon for the exe"): an original gun-barrel mark drawn here
+        // The exe's icon: an original gun-barrel mark drawn here
         // (no game art ships), written as a .res the MSVC linker takes directly — no rc.exe, no extra crate.
         let res = std::path::Path::new(&std::env::var("OUT_DIR").unwrap()).join("nightfireport_icon.res");
         std::fs::write(&res, icon::res()).unwrap();

@@ -7,8 +7,8 @@
 use std::path::{Path, PathBuf};
 use std::process::{Child, Command, Stdio};
 
-/// The game is the launcher's own program run with `--game` (one `NightfirePort.exe`, the user's choice 2026-10-19:
-/// "why are there 2 of them?"); `src/bin/NightfirePort.rs` hands `--game` to the game's `run`.
+/// The game is the launcher's own program run with `--game` (one `NightfirePort.exe`, not two);
+/// `src/bin/NightfirePort.rs` hands `--game` to the game's `run`.
 pub fn game_exe() -> Result<PathBuf, String> {
     std::env::current_exe().map_err(|e| format!("can't locate the launcher: {e}"))
 }

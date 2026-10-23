@@ -182,7 +182,7 @@ impl MenuMusic {
     /// 0x204408:150 (both the restart and the quit arm), P_ENDMISSION 0x216618:28, P_MPCONFIRM
     /// 0x20ec00:155]: `SFXFadeDown(1)` — the level's music fades over 2 s while the load
     /// proceeds. `Menu_RunMiniMission` 0x1ffb90 fades the same way (mini missions are not
-    /// ported — reported).
+    /// ported).
     pub fn quit_fade(&mut self) { self.queue.push(MusicCmd::FadeDownMusic); }
 
     /// The AV options' music slider, 0..20 steps, `SFXMusicSetVolume(value * 5)` [M 0x214818
@@ -235,8 +235,8 @@ impl Default for MenuMusic {
 /// 0x470) does NOT: the music channel (`MusicCmd::StartJingle`) is its single owner and starts only the
 /// loaded front-end bank's one jingle [M Sound_Ready 0x1dceb8:91-96 — bank 0xc carries 0x1d7, bank 0x38
 /// 0x470; the game never has both resident]. The port's driver searches EVERY resident slot (spares
-/// included), so sending the pair through as well stacked the same song twice plus the other one — the
-/// user's "the menu music is playing multiple songs" (playtests 1015, 1016).
+/// included), so sending the pair through as well stacked the same song twice plus the other one (several
+/// menu songs at once).
 pub fn menu_sfx_reaches_driver(id: u32) -> bool {
     !matches!(id, crate::menu::SFX_MENU_OPEN_MOVE | crate::menu::SFX_MENU_OPEN_SELECT)
 }

@@ -134,7 +134,7 @@ pub fn script_overlay(fade: Option<nf_game::drone::ViewFade>, letterbox: bool, s
             // CreateTotalScreenSprite 0x1181b0's job [M]: psiFadeView 0x10b9c8 (← Game_Draw
             // 0x1e6f50:206,354) packs the fade colour (r,g,b,a — alpha in the RGBAQ top byte) into one
             // fullscreen SPRITE packet (Q=1.0, z-test off) per viewer. This quad is black; the game
-            // fades to the viewer's own r,g,b — a render-parity check for the main agent
+            // fades to the viewer's own r,g,b — open render-parity check
             // (docs/systems/psi-render-plumbing.md).
             h.quad(Anchor::Stretch, 0, SCOPE_STRIP_TEX, 0, 0.0, 0.0, SW, SH, [0.0; 4], (false, false), [0.0, 0.0, 0.0, f.alpha.min(1.0)]);
         }
@@ -218,7 +218,7 @@ impl Hud<'_> {
     /// Y tile (0x80) — the mirror repeat that builds one frame out of a quarter design. The zoom
     /// overlays' textures are quarters [D 07000005.bin / 07000016.bin: the viewfinder 0x03000055 is
     /// 128×64, the OICW circle 0x03000141 is 64×64, the scope 0x03000034 is 256×256], so without the
-    /// mirroring the sprite's UV extents wrap the texture — an unmirrored 2×2 repeat (the user's grid).
+    /// mirroring the sprite's UV extents wrap the texture — an unmirrored 2×2 repeat (a grid).
     /// Without 0x400: one quad. `flags` is the SpriteInfo flags word (blend/flip bits included).
     #[allow(clippy::too_many_arguments)]
     fn tiled_quad(&mut self, anchor: Anchor, layer: i32, tex: u32, x: f32, y: f32, w: f32, h: f32, uv: [f32; 4], flags: u16, c: [f32; 4]) {
@@ -313,8 +313,8 @@ impl Hud<'_> {
                 let gw = g.w as f32 * scale;
                 let gh = g.h as f32 * scale;
                 // The glyph's own offset from the line (p.y − y, native units) scales with the text — it was left at
-                // native size, so below scale 1 the letters jumped up and down within a word (the user, 2026-10-19:
-                // "all of the rows arent uniform with their text"; the scoreboard's "Pla yer", "Ga lore").
+                // native size, so below scale 1 the letters jumped up and down within a word (the
+                // scoreboard's "Pla yer", "Ga lore").
                 let gy = y + (p.y - y) * scale;
                 self.quad(anchor, layer, tex, 0, gx, gy + dx, gw, gh, [g.u as f32, g.v as f32, g.w as f32, g.h as f32], (false, false), col);
             }
@@ -358,7 +358,7 @@ impl Hud<'_> {
 
 /// What the ammo strip draws for a clip count: the drawn height is `strip_clip(clip, clip_size) · hpr`
 /// (hud.rs, `HUD_UpdateAmmoPane` 0x19a7f0's pane layout). A clip can exceed its size only through the dev
-/// tools (infinite ammo / no reload), and the strip must clamp to the clip size — the user's stacked/garbled
+/// tools (infinite ammo / no reload), and the strip must clamp to the clip size — stacked/garbled
 /// icons on the right of the screen were the strip drawing `clip · hpr` tall, past the pane's empty-column
 /// sprite (`clip_size · hpr`). The game itself can't reach this state: pickups and reloads both cap the clip
 /// at its size [M pickup.rs `Inventory::give` / the reload paths] — the clamp is the HUD standing safe.
@@ -509,7 +509,7 @@ pub fn overlay(scene: &crate::scene::Scene, aspect: f32) -> HudFrame {
     // `BL+0x95E` running (a weapon switch): the game clears the ammo text (sprite +0x20 = 0 — the
     // `sh $zero,0x20(s6)` DELAY-SLOT store at 0x19aa9c that the decompiler drops) and takes the rounds
     // strip off-screen (layer +0x38 = 0xFF); only the weapon name shows [M HUD_UpdateAmmoPane 0x19a7f0:
-    // 176-189, :248-273, :276-300]. The user's PCSX2 play agrees: name alone on a switch, then ammo + fire mode.
+    // 176-189, :248-273, :276-300]. PCSX2 play agrees: name alone on a switch, then ammo + fire mode.
     let switching = s.hud.weapon_label_timer > 0;
     // fix-ammo-pane [M 0x19a7f0:283-299]: the name sprite's label id reads weapon_data[drone+0x63]+0x38 —
     // the REQUESTED weapon — so the pending draw announces the weapon being drawn to, not the old one.
@@ -558,7 +558,7 @@ pub fn overlay(scene: &crate::scene::Scene, aspect: f32) -> HudFrame {
         let k = if max_n > 87.0 { 16.0 } else { 1.0 };
         let (x, bottom) = (AMMO_AT.0 - bw * k, AMMO_AT.1);
         // fix-dev T3: the dev tools can push the clip past its size (infinite ammo / no reload) — the strip
-        // must draw at most the clip size, or it overflows the pane (the user's stacked/garbled icons).
+        // must draw at most the clip size, or it overflows the pane (stacked/garbled icons).
         let clip = strip_clip(clip_n, max_n);
         let (rounds, empty) = (&t.ammo[5], &t.ammo[6]);
         h.quad(Anchor::Right, rounds.layer as i32, 0x0300_0128, 0, x, bottom - clip * hpr, bw * k, clip * hpr, [bu, (max_n - clip) * hpr + bv, bw, clip * hpr], (false, false), gs(rounds.colour >> 8, rounds.colour & 0xff));
@@ -591,7 +591,7 @@ pub fn overlay(scene: &crate::scene::Scene, aspect: f32) -> HudFrame {
     {
         let (bw, bh, bx, by) = (256.0f32, 26.0f32, 128.0f32, 364.0f32);
         // Centre-anchored like its text: on a widescreen window a Left anchor left the bar off to the left of the
-        // centred text (user playtest).
+        // centred text.
         let bar = |h: &mut Hud, w: f32| {
             let x = bx + (bw - w) / 2.0;
             let c = gs(0x7f7f7f, 0x8d);
@@ -626,7 +626,7 @@ pub fn overlay(scene: &crate::scene::Scene, aspect: f32) -> HudFrame {
     // time·17); the bar closes 16 px per tick around its centre (the CREATE's slide 0x10 [L
     // 0x319810+0x14]).
     //
-    // The bar's Y (fix-context-hints2, the user's y≈100/448 playtest): the CREATE tag's own rect is
+    // The bar's Y (fix-context-hints2, y≈100/448): the CREATE tag's own rect is
     // x=128, y=113 [L ee_start_05.bin 0x319810], and `HUD_CreateDefault` adds the pane x/y to every
     // sprite's runtime position at create [M 0x199b70:45-52 — `sh … 0x24(spr)` with the pane x].
     // The status update rewrites only the bar sprites' X (case 1/4 re-pin x = templateX +
@@ -684,7 +684,7 @@ pub fn overlay(scene: &crate::scene::Scene, aspect: f32) -> HudFrame {
     // `Font_DrawText` 0x1eee48 flag 2 → x −= width/2; the status label sits at template (128, 20),
     // the body at (128, 40) [L 0x319608 entries 5/0 + CREATE 0x319710 x=128]) — i.e. centred on the
     // bar's own centre. The port used to draw both rows left-aligned from x=128, which left the
-    // "Fail: …" notice hugging the bar's left edge (the user's off-centre fail message). Colour
+    // "Fail: …" notice hugging the bar's left edge (an off-centre fail message). Colour
     // 0x7D6D59, layer 29; the status label rebinds per display: 0x2000051 "NEW OBJECTIVE" while the
     // message is not "OBJECTIVE COMPLETE", else 0x2000053 [M 0x19c310:127-144]. Alpha = time·17 over
     // the last 15 ticks; the banner closes 16 px per tick around its centre (the pane's slide 0x10
@@ -719,7 +719,7 @@ pub fn overlay(scene: &crate::scene::Scene, aspect: f32) -> HudFrame {
             // row — case 2 forces the body sprite's colour to 0 after binding the status label and
             // case 3 keeps it 0 in both its phases [M 0x19c310 case 2 + case 3's `*(iVar8+0x10)=0`
             // stores] — the status label alone carries "OBJECTIVE COMPLETE" (the port used to draw
-            // the body row too: the user's two stacked OBJECTIVE COMPLETE banners).
+            // the body row too: two stacked OBJECTIVE COMPLETE banners).
             if !complete {
                 // `Text_AddMsg` 0x1b0c30 wraps the message text with `Font_WordWrapString` at
                 // TextMsgFormats[2]'s maxWidth = 480 [L 0x2bf108+0x14 = 0x1e0] — the box's own width
@@ -765,7 +765,7 @@ pub fn overlay(scene: &crate::scene::Scene, aspect: f32) -> HudFrame {
             // `fe 03` = justify flag 2 = CENTRE [L 0x30cdb8/0x30cce0; M Font_ParseFormat 0x1ee3e0
             // case 4 byte 3 → flag 2, Font_DrawText 0x1eee48 `flags & 2 → x -= width·0.5`] — the
             // port passed its right-justify flag instead, which shifted both rows left by half
-            // their width (the user's "Mission Fail / Cover Lost" text sitting left of the box's
+            // their width (the "Mission Fail / Cover Lost" text sat left of the box's
             // centre).
             let (_, tw) = t.font.layout(&msg.text, 0.0, 0.0);
             h.text(Anchor::Centre, &t.font, 29, &msg.text, SW / 2.0 - tw / 2.0, 42.0 + by, false, gs(0x7d6d59, a), true);
@@ -908,7 +908,7 @@ pub fn overlay(scene: &crate::scene::Scene, aspect: f32) -> HudFrame {
             // (0,0,511,511), flags 0x0600 — the scope quarter texture 0x03000034 (256×256 [D
             // 07000005.bin]) mirror-tiled 2×2 by View_DrawSprites 0x1e5290 into one oval. Sprites 1/2:
             // the subtractive side strips (0/479, 33 wide). Geometry unchanged from the port's verified
-            // draw (the main agent's 0700000c match); now through the game's tiler.
+            // draw (the 0700000c match); now through the game's tiler.
             ZoomOverlay::Sight => {
                 let scope_col = gs(0x7f7f7f, 0xff);
                 h.tiled_quad(Anchor::Centre, 39, SCOPE_TEX, 32.0, 0.0, 448.0, 448.0, [0.0, 0.0, 511.0, 511.0], 0x0600, scope_col);
@@ -919,7 +919,7 @@ pub fn overlay(scene: &crate::scene::Scene, aspect: f32) -> HudFrame {
             // Sprite 1 (0,0) 512×448, uv (0,0,255,127), flags 0x0600 [L]: the frame quarter texture
             // 0x03000055 (128×64 [D 07000005.bin]) mirror-tiled 2×2 — ONE full-screen frame (rounded
             // corners at the screen corners, scale marks both sides, the mid brackets, the centre
-            // circle). Drawn whole, it wrapped: the user's 2×2 grid. Sprites 2-7: the mid-height
+            // circle). Drawn whole, it wrapped into a 2×2 grid. Sprites 2-7: the mid-height
             // brackets 0x03000056 (sprite 3 h-flipped by flag 0x40) and 0x03000057. Sprite 0 is the
             // photo flash (shown only during `HUD_UpdateCameraPane` 0x1a12d8's post-shot countdown —
             // hidden at rest; not drawn). Sprite 8 is the centre circle: 0x03000090 at (256, 224), layer 34,
@@ -938,7 +938,7 @@ pub fn overlay(scene: &crate::scene::Scene, aspect: f32) -> HudFrame {
                 let (tw90, th90) = h.tex_dims(0x0300_0090);
                 h.quad(Anchor::Centre, 34, 0x0300_0090, 1, 256.0 - tw90 / 2.0, 224.0 - th90 / 2.0, tw90, th90, [0.0, 0.0, tw90, th90], (false, false), c);
                 // The target brackets (`HUD_UpdateCameraPane` 0x1a12d8) — one "DroneScan" sprite per
-                // drawn, living, non-WaitSwitch drone, drawn through walls (the user's report). The
+                // drawn, living, non-WaitSwitch drone, drawn through walls. The
                 // game's sprite is one frame deep (Debris_Update 0x1aac00 deletes it); the pane
                 // re-creates them every tick, so a per-frame draw list is the same picture.
                 // Drawn as the world mesh itself (scene.rs Effect kind 6, `camera_scan_roots`): the HUD-quad
@@ -957,7 +957,7 @@ pub fn overlay(scene: &crate::scene::Scene, aspect: f32) -> HudFrame {
             // the subtractive cyan full-screen tint (flags 0x0200, one quad). Sprite 1 (192,160)
             // 128×128, uv (1,1,127,127), flags 0x0500 [L]: the reticle quarter texture 0x03000141
             // (64×64 [D 07000016.bin]) mirror-tiled 2×2 into ONE circle — drawn whole it wrapped into
-            // the user's grid. Sprites 2–6 are text sprites (the zoom readout) — the port has no
+            // a grid. Sprites 2–6 are text sprites (the zoom readout) — the port has no
             // reader for their text yet (the live check).
             ZoomOverlay::Oicw => {
                 h.quad(Anchor::Centre, 40, SCOPE_STRIP_TEX, 2, 0.0, 0.0, SW, SH, [0.0, 0.0, 31.0, 31.0], (false, false), gs(0x00ffff, 0xff));
@@ -1269,7 +1269,7 @@ fn radar_team_color_rgb(team: u32) -> u32 {
 // (`View_AddObjects` 0x1e62d8's sort-list-2 route, which stamps `obj+0xFC = 2`). The object is
 // class 0x10 (`Debris_Update` 0x1aac00): its glist life +0x30 was zeroed at create, so it deletes
 // itself after one update — a one-frame bracket the pane re-creates every tick. No LOS test
-// anywhere in the chain: the brackets draw through walls (the user's report). The port projects
+// anywhere in the chain: the brackets draw through walls. The port projects
 // the drone roots with `View_3DPoint2Screen` 0x1e7708's math on the gameplay camera (the render's
 // own per-tick build, lib.rs: the eye, yaw, pitch·π/2, GAME_FOV/zoom — 60° vertical at zoom 1) and
 // sizes the box from the quad's 2×2 world extent, matching `Camera::view_proj`'s projection
