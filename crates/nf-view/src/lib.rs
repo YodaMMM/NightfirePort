@@ -5106,7 +5106,13 @@ impl App {
                         }
                         if !self.noclip {
                             let h = sim.bond.head();
-                            self.cam = Camera { pos: Vec3::new(h[0], h[1], h[2]), yaw: sim.bond.yaw, pitch: sim.bond.pitch * std::f32::consts::FRAC_PI_2, fov: GAME_FOV / sim.zoom };
+                            // camera-shake-exact [M Camera_Update 0x1bb6d8:36-37 + Mat_World2ViewMat
+                            // 0x1e3280]: the shake translates viewer+0x150 — the world matrix's
+                            // translation — in WORLD axes (each uniform [−shake/60, 0)); the port's
+                            // eye + this tick's offset is the +0x150 the view is built from. No
+                            // rotation change. docs/systems/camera-shake.md. 969.
+                            let so = sim.drones.shake_off;
+                            self.cam = Camera { pos: Vec3::new(h[0] + so[0], h[1] + so[1], h[2] + so[2]), yaw: sim.bond.yaw, pitch: sim.bond.pitch * std::f32::consts::FRAC_PI_2, fov: GAME_FOV / sim.zoom };
                             // mp-local-look (user report 2026-10-21: online aim "very sluggish …
                             // moving the mouse was delayed to what the screen showed"): the lockstep
                             // runs this player's turn/look `input_delay` ticks late (3 at least, up to

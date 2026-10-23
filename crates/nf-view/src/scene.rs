@@ -2214,6 +2214,10 @@ impl Sim {
         // mayhew-end-transition: the exit hold freezes the free-camera path too (the game's whole
         // sim is paused [M 0x1c98c8:44-47]; docs/systems/exit-hold.md).
         if self.drones.tick_exit_hold() { return; }
+        // camera-shake-exact: the free-camera harness's eye this tick (see step_bond's note —
+        // the +0x150 port; the harness's viewer is the dev camera). 969.
+        let o = self.drones.shake_off;
+        self.drones.viewer_pos = [camera[0] + o[0], camera[1] + o[1], camera[2] + o[2]];
         let floor = self.world.floor_below(camera, 4.0).unwrap_or(camera[1] - 1.6);
         self.first_person = false;
         let ground = [camera[0], floor + 0.4, camera[2]];
@@ -2251,6 +2255,13 @@ impl Sim {
     }
 
     pub fn step_bond(&mut self, mut input: nf_game::player::Input, trigger: bool, reload: bool, use_key: bool) {
+        // camera-shake-exact: `viewer_tag+0x150` — the eye the shake measures. Written BEFORE
+        // the tick's movement so it is the eye as of last tick's end + last tick's offset
+        // (the game's +0x150 between Camera_Updates: `Player_PositionCamera` 0x18f5d8:275
+        // rewrites it, then `Camera_Update` 0x1bb6d8:36-37 adds the offset). 969.
+        let h = self.bond.head();
+        let o = self.drones.shake_off;
+        self.drones.viewer_pos = [h[0] + o[0], h[1] + o[1], h[2] + o[2]];
         // The game's frame clock — `UpdateT0Count` 0x109468, called from `VBlankInt` 0x124088:76
         // (`PS2DrawFrameTime`), `psiPreDraw`/`psiPostDraw` (`PS2DrawCodeTime`), `psiPreGame_Run` /
         // `psiPostGame_Run` (`PS2GameCodeTime`) and the SFX/DMA probes — accumulates timer-0 deltas

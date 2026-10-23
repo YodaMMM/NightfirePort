@@ -10143,15 +10143,42 @@ pub fn hazard_link_flag(weapon_type: u16, stuck: bool) -> Option<(f32, u16)> {
     }
 }
 
-/// The per-viewer shake amount `Camera_Shake` 0x1bc430:12-26 writes [M]: with range = 2·radius
-/// and d ≤ range, `min((int)(range·(1 − (d/range)²)), 10)`; 0 outside. Explode_Create 0x17cc28
-/// only calls it from radius ≥ 0.5. standins-drone-922.
-#[allow(dead_code)] // not wired: task 969 (held for the feel test)
-pub fn camera_shake_amount(radius: f32, dist: f32) -> f32 {
-    let range = radius * 2.0;
-    if dist > range { return 0.0; }
-    let inten = range * (1.0 - (dist / range) * (dist / range));
-    if inten <= 0.0 { 0.0 } else { (inten as i32).min(10) as f32 }
+/// The per-viewer shake amount `Camera_Shake` 0x1bc430 writes [M]: with range = 2·radius
+/// (add.s $f20,$f12,$f12 @0x1bc440) and d = Vec_Dist3D(pos, viewer+0x150) (jal 0x1e2e48 with
+/// $a1 = viewer+0x150 @0x1bc490-94), `Some(min(range·(1 − (d/range)²), 10.0))` when the game
+/// STORES, `None` when it does not. THE STORE IS A FLOAT: @0x1bc4d0 word 0x46150029 = the EE
+/// FPU's `min.s $f0,$f0,$f21` ($f21 = 10.0f, `lui $at,0x4120; mtc1` @0x1bc474-78), then
+/// `swc1 $f0,0x200($v0)` @0x1bc4d4 — and `Camera_Update` 0x1bb6d8:26 reads viewer+0x200 with
+/// `lwc1` as a FLOAT. The decompile's `(int)` casts are Ghidra's EE-SLEIGH expansion of min.s
+/// into INT_MULT/INT_OR p-code (capstone cannot decode funct 0x29 in any mode; identified via
+/// `AINetwork_DoAStarPath`'s min-chain @0x157340-0x157350, whose C shows the same
+/// multiply-by-boolean idiom over fd=f0 fs=f0 ft=f1/f2/f3; MAX.S = funct 0x28 @0x157360).
+/// So: no integer truncation (radius 3, d 1.5 → 5.625, not 5), no denormal — the PS2's shake
+/// is visible. `None` cases [M]: d > range (`c.olt.s $f20,$f0; bc1t` @0x1bc49c-a4 skips the
+/// store) and intensity ≤ 0 (`c.olt.s $f22,$f0; bc1f` @0x1bc4bc-c4) — the field keeps its old
+/// value; a hit store OVERWRITES (no compare-against-old — the last blast in a tick wins).
+/// Explode_Create 0x17cc28 only calls it from radius ≥ 0.5. docs/systems/camera-shake.md.
+/// standins-drone-922; the exact form is task 969 (the old `(int)` shape misread the SLEIGH
+/// expansion as arithmetic).
+pub fn camera_shake_amount(radius: f32, dist: f32) -> Option<f32> {
+    use nf_formats::ps2float;
+    let range = ps2float::add(radius, radius);
+    if dist > range { return None; }
+    let q = ps2float::div(dist, range);
+    let inten = ps2float::mul(range, ps2float::sub(1.0, ps2float::mul(q, q)));
+    // `!(inten > 0.0)`, not `inten <= 0.0` — NaN must skip too (the game's gate is
+    // `c.olt.s $f22(0),$f0; bc1f` @0x1bc4bc-c4: ordered-less-than is FALSE on NaN → the
+    // store is skipped; a radius-0/d-0 call would otherwise walk 0/0 → NaN into the cap).
+    if !(inten > 0.0) { return None; }
+    Some(if inten < 10.0 { inten } else { 10.0 })
+}
+
+/// `Vec_Dist3D` 0x1e2e48 [M]: `(x² + y²) + z²` in that add order (add.s $f0,$f0,$f1
+/// @0x1e2e74, add.s $f0,$f0,$f2 @0x1e2e78) then `sqrt.s` @0x1e2e7c — scalar IEEE, so the
+/// plain f32 ops are bit-exact.
+pub fn vec_dist3d(a: V3, b: V3) -> f32 {
+    let (dx, dy, dz) = (a[0] - b[0], a[1] - b[1], a[2] - b[2]);
+    ((dx * dx + dy * dy) + dz * dz).sqrt()
 }
 
 pub fn flash_amount(head: V3, blast: V3, px: f32, pz: f32, yaw: f32, has_los: bool) -> f32 {
@@ -10447,12 +10474,23 @@ pub struct Drones {
     /// with radius f13 = +0x08. Tuple: (pos, radius, damage, owner, weapon_type, script, scale).
     pub pending_blasts: Vec<(V3, f32, f32, usize, u16, u32, f32)>,
     /// The camera-shake amount: `Explode_Create` 0x17cbd0 calls `Camera_Shake(pos, radius)` when the
-    /// radius reaches 0.5 [M 0x17cc28-0x17cc44]. The port keeps the old [S] set (max radius) and
-    /// decay (×0.9 − 0.05): the game's `Camera_Shake` 0x1bc430 per-viewer `min((int)(2r·(1−(d/2r)²)),
-    /// 10)` store and `Camera_Update` 0x1bb6d8:35-43's vector draw + `shake −= Rand_FRand(shake·0.25)`
-    /// are task 969 (held for the user's feel test; the int-into-float store and the RNG draws need
-    /// the disassembly). The view reads it for the offset. fix-explosions.
+    /// radius reaches 0.5 [M 0x17cc28-0x17cc44]. The exact game shape (the min.s float store
+    /// 0x1bc4d0-d4 + `Camera_Update` 0x1bb6d8:35-43's 4 draws) is `camera_shake_amount` +
+    /// `camera_shake_tick`; docs/systems/camera-shake.md. fix-explosions; exact form task 969.
     pub shake: f32,
+    /// `viewer_tag+0x150` (the ONE-viewer port of glb_viewer[0]): the eye the shake measures —
+    /// `Camera_Shake` 0x1bc430 takes d to viewer+0x150 and `Camera_Update` 0x1bb6d8:36-37 adds
+    /// this tick's offset to it. The Sim writes it at the top of `step_bond`/`step` (the eye as
+    /// of last tick's end + last tick's offset — the game's +0x150 between Camera_Updates;
+    /// `Player_PositionCamera` 0x18f5d8:275 rewrites +0x150 every frame so the offset never
+    /// accumulates). Own line — merge lesson 4.
+    pub viewer_pos: V3,
+    /// This tick's camera-shake offset, the viewer+0x150 delta: the three
+    /// `Rand_FRand_MVar2_Vec` draws of `Camera_Update` 0x1bb6d8:36-37 (world X, Y, Z, each
+    /// uniform [−shake/60, 0) [M 0x1e00d0]), zeroed when shake == 0. The draw side adds it to
+    /// Bond's eye (`Mat_World2ViewMat` 0x1e3280 builds the view from +0x150); the Sim feeds it
+    /// back into `viewer_pos` next tick. Written by `camera_shake_tick`. Own line — lesson 4.
+    pub shake_off: V3,
     pub health: crate::bullet::PlayerHealth,
     /// Every hit on Bond: (tick, shooting drone, health lost).
     pub player_hits: Vec<(u32, usize, f32)>,
@@ -11223,6 +11261,10 @@ impl Drones {
             net_bodies: None,
             net_takes: Vec::new(),
             net_use_triggers: Vec::new(),
+            // camera-shake-exact (task 969): the viewer+0x150 port and this tick's offset
+            // (fields on their own lines — merge lesson 4).
+            viewer_pos: [0.0; 3],
+            shake_off: [0.0; 3],
             // doublecross-transitions: the entry fade arms on every level load (the game arms it
             // in `Player_Init` on every `Player_Start` [M 0x1910f8:45, 0x1d6360:152]) — own line
             // (merge lesson 4).
@@ -11242,6 +11284,41 @@ impl Drones {
         if h.fade_frames == 0 { self.exit_hold = None; }
         true
     }
+
+    /// `Camera_Update` 0x1bb6d8:35-43 — the per-frame shake block, once per Game_Run tick per
+    /// active viewer (`Camera_UpdateAll` 0x1bbd68; the port's single viewer runs it at the
+    /// drones tick's tail). While shake > 0 [M]:
+    /// 1-3. `Rand_FRand_MVar2_Vec(shake·REC_FRAME_RATE, shake·REC_FRAME_RATE, viewer+0x150)`
+    ///     0x1e00d0 — THREE pair-draws of the shared stream, one per axis in X, Y, Z order,
+    ///     each `axis += shake·RRF·u − shake·RRF` (`mul.s $f0,$f12,$f1` @0x1e0170,
+    ///     `sub.s $f0,$f0,$f13` @0x1e0188) = uniform [−shake/60, 0) on the WORLD axis
+    ///     (REC_FRAME_RATE = 1/60 [M grenade.rs:148]);
+    /// 4. `shake -= Rand_FRand(shake·0.25)` (@:38-40 — the arg re-reads the pre-decay +0x200),
+    ///     floored at 0 (@:41-43). Uniform (0.75·shake, shake] — expected ×0.875/tick; the
+    ///     decay never reaches exactly 0 (the floor only guards the float edge), so the port
+    ///     replays the same arithmetic to keep the shared stream's cadence.
+    /// Writes `shake_off` (zeroed when shake == 0 — the game adds nothing to +0x150 that
+    /// frame). The set side is `camera_shake_amount` (docs/systems/camera-shake.md). 969.
+    pub fn camera_shake_tick(&mut self) {
+        use nf_formats::ps2float;
+        self.shake_off = [0.0; 3];
+        let shake = self.shake;
+        if shake > 0.0 {
+            let a = ps2float::mul(shake, crate::grenade::REC_FRAME_RATE);
+            let (dx, dy, dz, dec) = {
+                let rng = &mut self.rng;
+                (rng.frand(a), rng.frand(a), rng.frand(a), rng.frand(ps2float::mul(shake, 0.25)))
+            };
+            self.shake_off = [
+                ps2float::sub(dx, a),
+                ps2float::sub(dy, a),
+                ps2float::sub(dz, a),
+            ];
+            let ns = ps2float::sub(shake, dec);
+            self.shake = if ns < 0.0 { 0.0 } else { ns };
+        }
+    }
+
 
     /// The draw code's fade read: `(frames_left, total)` while the exit fade runs — the black
     /// overlay's alpha is `1 − left/total` (linear, the rate `Camera_SetFade` stored
@@ -12049,10 +12126,15 @@ fn segment_hits_sphere(a: V3, b: V3, c: V3, r: f32) -> bool {
         // is very small and not accurate to the game." fix-blast-scripts2: the caller's f12 arrives
         // as the `scale` arg instead of being derived from the radius.
         self.scripts.spawn_once_scaled(usize::MAX, script, bm, scale);
-        // `Camera_Shake(pos, radius)` only from radius 0.5 [M 0x17cc28]. fix-922: the exact
-        // Camera_Shake/Camera_Update port (camera_shake_amount) is held for the user's feel test and
-        // the open store/RNG questions (task 969) — the old shape stays.
-        if radius >= 0.5 { self.shake = self.shake.max(radius); }
+        // `Camera_Shake(pos, radius)` only from radius 0.5 [M 0x17cc28-0x17cc44 — `bc1f` over
+        // the radius<0.5 arm, the call @0x17cc40 with f12 = the radius]. The exact set [M
+        // 0x1bc430]: d = |pos − viewer+0x150| (the port's `viewer_pos`), shake = min(2r·(1−
+        // (d/2r)²), 10) — a FLOAT store (min.s + swc1 @0x1bc4d0-d4, no integer truncation),
+        // stored only when d ≤ 2r and the value > 0, and OVERWRITING any earlier amount (the
+        // last blast of the tick wins). 969.
+        if radius >= 0.5 {
+            if let Some(v) = camera_shake_amount(radius, vec_dist3d(pos, self.viewer_pos)) { self.shake = v; }
+        }
         self.explosions.push((pos, radius, damage, owner, weapon_type));
     }
 
@@ -16465,7 +16547,10 @@ fn segment_hits_sphere(a: V3, b: V3, c: V3, r: f32) -> bool {
                             if let Some(t) = d.sfx { let h = t.get(0x16); self.audio.play3d(h.id, pos, None); }
                             self.lights.create(10.0, 5.0, pos, [0xff, 0xff, 0xff], 0, 10, 1, 0, &mut self.rng);
                             self.gas.init(pos, 0.0, [0.0; 3], 0.5, 1.68, 0xb, [0x00, 0x80, 0x80, 0x80], 30.0);
-                            self.shake = self.shake.max(2.0);
+                            // `Camera_Shake(2.0, gas pos)` [M 0x12d890:291 — the constant
+                            // 0x40000000 = 2.0f, iVar8 = the gas position]. The exact set through
+                            // the shared min.s formula (the centre value 4.0, under the cap).
+                            if let Some(v) = camera_shake_amount(2.0, vec_dist3d(pos, self.viewer_pos)) { self.shake = v; }
                             if owner == usize::MAX {
                                 // The broadcast [M 0x12d890 flash arm 0x12e0c0 → `Drone_MessageObjVicinity`
                                 // 0x13a438]: msg 0x18 to every class-2 object within 20.0 (`0x41a00000`;
@@ -16674,7 +16759,12 @@ fn segment_hits_sphere(a: V3, b: V3, c: V3, r: f32) -> bool {
         // was set to FRAME_RATE·f·10 = 600·f ticks [M 0x196040 + 0x12e0b8]). The old self-fraction
         // decay (−f/6 per tick) erased the whiteout in ~6 ticks — invisible.
         self.health.flashbang = (self.health.flashbang - 1.0).max(0.0);
-        self.shake = (self.shake * 0.9 - 0.05).max(0.0); // [S] the old shape; the exact decay is task 969
+        // `Camera_Update` 0x1bb6d8:35-43, once per Game_Run tick (Camera_UpdateAll 0x1bbd68;
+        // the port's single viewer rides the drones tick's tail, where the old [S] ×0.9−0.05
+        // decay sat): while shake > 0 — the three `Rand_FRand_MVar2_Vec` offset draws (X, Y, Z
+        // order) then the one decay draw. `camera_shake_tick` (below) is the block; the RNG
+        // cadence is 4 draws/tick while shaking, 0 when shake == 0. 969.
+        self.camera_shake_tick();
         // The SimpleScripts (`SS_Update` 0x1a9948's state machine — grates-02). The `SS_Operate`
         // 0x1a9df8 contacts, from the collision pass's registered dynamic set: the player's
         // capsule box (bit 0) and this tick's player-bullet flight (bit 1) against each SS part's
@@ -17040,17 +17130,100 @@ mod tests {
 
     /// A drone with only the collision-relevant fields set (pos, velocity, bounded, free_root, corpse), for the
     /// gravity / down-ray tests. The hip height is the default 1.0 (`Drone::hip`).
-    // standins-drone-922: the Camera_Shake set formula [M 0x1bc430:12-26] — range = 2·radius,
-    // intensity = range·(1 − (d/range)²), int-truncated, capped at 10, 0 outside the range.
+    // standins-drone-922: the Camera_Shake set formula [M 0x1bc430] — range = 2·radius,
+    // intensity = range·(1 − (d/range)²), capped at 10. FIXED for 969: the store is a FLOAT
+    // (min.s @0x1bc4d0 + swc1 @0x1bc4d4 — the decompile's (int) casts are the EE-SLEIGH
+    // expansion artifact), and the skips leave the field unchanged → Option. The old
+    // `(inten as i32)` assertions here pinned the truncation the disassembly disproves
+    // (d 1.5 was "5", the game stores 5.625); the test is corrected per [M 0x1bc4d0-d4].
     #[test]
     fn the_shake_amount_follows_camera_shake() {
-        assert_eq!(camera_shake_amount(8.0, 0.0), 10.0, "2·8 = 16 at the centre → capped 10");
-        assert_eq!(camera_shake_amount(3.0, 0.0), 6.0, "2·3 = 6, under the cap");
-        assert_eq!(camera_shake_amount(3.0, 1.5), 5.0, "6·(1−0.0625) = 5.625 → (int) 5");
-        assert_eq!(camera_shake_amount(3.0, 6.0), 0.0, "d = 2r → intensity 0");
-        assert_eq!(camera_shake_amount(3.0, 6.5), 0.0, "d > 2r → outside, 0");
-        assert_eq!(camera_shake_amount(1.0, 0.0), 2.0, "2·1 = 2 — the 0.5 floor's smallest real shake");
+        use nf_formats::ps2float;
+        assert_eq!(camera_shake_amount(8.0, 0.0), Some(10.0), "2·8 = 16 at the centre → capped 10 [M min.s with $f21 = 10.0f]");
+        assert_eq!(camera_shake_amount(3.0, 0.0), Some(6.0), "2·3 = 6, under the cap");
+        // 6·(1 − (1.5/6)²) = 5.625 — NO integer truncation [M 0x1bc4d0 min.s, 0x1bc4d4 swc1].
+        assert_eq!(camera_shake_amount(3.0, 1.5), Some(5.625), "the float store keeps the fraction");
+        // The exact f32 pipeline (ps2float mul/sub/div = the game's single-precision ops):
+        let q = ps2float::div(5.0, 6.0);
+        assert_eq!(
+            camera_shake_amount(3.0, 5.0),
+            Some(ps2float::mul(6.0, ps2float::sub(1.0, ps2float::mul(q, q)))),
+            "6·(1 − (5/6)²) = 1.8333335 as the f32 chain lands it [M 0x1bc4ac-b8]"
+        );
+        assert_eq!(camera_shake_amount(3.0, 6.0), None, "d = 2r → intensity 0, the 0<inten gate @0x1bc4bc-c4 skips the store");
+        assert_eq!(camera_shake_amount(3.0, 6.5), None, "d > 2r → the range gate @0x1bc49c-a4 skips the store");
+        assert_eq!(camera_shake_amount(1.0, 0.0), Some(2.0), "2·1 = 2 — the 0.5 floor's smallest real shake");
     }
+
+    /// `Camera_Update` 0x1bb6d8:35-43 through `camera_shake_tick`: the draw ORDER is pinned —
+    /// three `Rand_FRand_MVar2_Vec` pair-draws (X, Y, Z), then the `Rand_FRand(shake·0.25)`
+    /// decay draw — against an independent reference Rng walked with the same sequence
+    /// [M 0x1e00d0's axis order + 0x1bb6d8:36-40]. Per axis the offset is uniform
+    /// [−shake/60, 0) [M the sub.s $f0,$f0,$f13 @0x1e0188 with param_1 = param_2].
+    #[test]
+    fn camera_shake_tick_draws_three_offsets_then_the_decay() {
+        use nf_formats::ps2float;
+        let mut d = Drones::new(Vec::new(), Rng::new(0xC0FFEE));
+        d.shake = 10.0;
+        d.camera_shake_tick();
+        // The reference stream: the same seed, the same four draws in the game's order.
+        let mut r = Rng::new(0xC0FFEE);
+        let a = ps2float::mul(10.0, crate::grenade::REC_FRAME_RATE);
+        let exp_off = [
+            ps2float::sub(r.frand(a), a),
+            ps2float::sub(r.frand(a), a),
+            ps2float::sub(r.frand(a), a),
+        ];
+        let exp_shake = ps2float::sub(10.0, r.frand(ps2float::mul(10.0, 0.25)));
+        assert_eq!(d.shake_off, exp_off, "X, Y, Z in that draw order, each frand(a) − a");
+        assert_eq!(d.shake, exp_shake.max(0.0), "shake −= Rand_FRand(shake·0.25), floored");
+        assert_eq!(d.rng.draws, 4, "three offset draws + one decay draw");
+        // The one-sided window: every axis offset in [−a, 0).
+        for k in 0..3 {
+            assert!(d.shake_off[k] <= 0.0 && d.shake_off[k] >= -a, "axis {k} offset {:e} outside [−a, 0)", d.shake_off[k]);
+        }
+        assert!(d.shake > 0.75 * 10.0 && d.shake <= 10.0, "the decay draw is uniform [0, shake·0.25)");
+        // The next tick draws 4 more on the same stream (geometric decay, never exactly 0).
+        let before = (d.shake, d.rng.draws);
+        d.camera_shake_tick();
+        assert_eq!(d.rng.draws, before.1 + 4);
+        assert!(d.shake < before.0 && d.shake > 0.0, "monotone decay, still > 0");
+    }
+
+    /// Sister: shake == 0 draws NOTHING (Camera_Update's `if (0.0 < fVar3)` @0x1bb6d8:35) and
+    /// the offset stays zeroed.
+    #[test]
+    fn camera_shake_tick_with_no_shake_draws_nothing() {
+        let mut d = Drones::new(Vec::new(), Rng::new(7));
+        d.shake_off = [0.5, 0.5, 0.5]; // stale — the block zeroes it when shake == 0
+        d.camera_shake_tick();
+        assert_eq!((d.shake, d.shake_off, d.rng.draws), (0.0, [0.0; 3], 0));
+    }
+
+    /// The set semantics the blast site implements (`spawn_blast`'s `Explode_Create` port,
+    /// 0x17cbd0 → 0x1bc430): d measures the viewer EYE (the +0x150 port), a hit store
+    /// overwrites, a skip (outside the range) leaves the old amount. The full real-path
+    /// blast → tick run is the play test in nf-view (camera_shake_play_live).
+    #[test]
+    fn the_blast_set_overwrites_and_measures_the_viewer_eye() {
+        use nf_formats::ps2float;
+        let mut d = Drones::new(Vec::new(), Rng::new(9));
+        d.shake = 3.0; // a stale amount a smaller later blast must replace
+        // radius 2 at d 5 (range 4 < 5): NO store — the old amount survives.
+        d.viewer_pos = [10.0, 2.0, 15.0];
+        let r2 = vec_dist3d([10.0, 2.0, 10.0], d.viewer_pos);
+        assert_eq!(r2, 5.0);
+        if let Some(v) = camera_shake_amount(2.0, vec_dist3d([10.0, 2.0, 10.0], d.viewer_pos)) { d.shake = v; }
+        assert_eq!(d.shake, 3.0, "outside the range the field keeps its value [M 0x1bc49c-a4]");
+        // radius 3 at d 1.5 (range 6 ≥ 1.5): the float store overwrites.
+        d.viewer_pos = [10.0, 3.5, 10.0];
+        if let Some(v) = camera_shake_amount(3.0, vec_dist3d([10.0, 2.0, 10.0], d.viewer_pos)) { d.shake = v; }
+        assert_eq!(d.shake, 5.625, "the second blast's float amount replaced the stale 3.0");
+        // The sub-f32-exact chain through ps2float equals the direct formula's bits.
+        let q = ps2float::div(1.5, 6.0);
+        assert_eq!(d.shake, ps2float::mul(6.0, ps2float::sub(1.0, ps2float::mul(q, q))));
+    }
+
 
     pub(crate) fn drone_at(pos: V3) -> Drone {
         let dr = Drone {
