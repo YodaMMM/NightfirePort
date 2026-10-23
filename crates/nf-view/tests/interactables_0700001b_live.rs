@@ -117,7 +117,7 @@ fn shoot_console_screen(w: &mut Walker, hash: u32, ch: u32, label: &str) -> bool
 /// from Mission_Update internal 1 [M 0x182c60:22; the caller sweep], dead since ch 99. The old
 /// pins here (all eight state 4, ch 9, deploy[0] = 2, the 0x200005a label) were the
 /// pre-timeline stand-in's outcome, not the game's — fixed against the decode + decompile
-/// (the batch-1022y failure this task re-does). Sister: without the ch-19 drive every missile
+///. Sister: without the ch-19 drive every missile
 /// sits in state 0 [M the gate return 0x1aa1c8-1e4] and no console or fail channel ever fires.
 #[test]
 fn missile_console_shots_latch_and_the_launch_fails_on_ch_99() {

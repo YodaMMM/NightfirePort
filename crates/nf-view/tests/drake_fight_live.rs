@@ -148,7 +148,7 @@ fn the_missile_launch_sequence_reaches_each_phase_and_disarms() {
 /// t1200 = armed+2999 [M 0x1aa360-3c4 + D END 1200], inside the 300-tick fail window (only the
 /// player pauses [M 0x182c60:124]), with FailLabel at the init sentinel 0 [M 0x182270:27].
 /// The old test pinned `fail_label == 0x0200_005a` here and was WRONG — fixed against the
-/// decompile (the batch-1022y failure this task re-does).
+/// decompile.
 #[test]
 fn the_missile_launch_fails_the_mission_on_ch_99() {
     let iso = iso();

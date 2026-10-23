@@ -1,5 +1,5 @@
-//! decryptor-hold-real-path (988): the reported scenario on the real input path. On 07000012
-//! Bond stands at the reported spot — `--bond 7.0,0.5,2.4,3.1416,0` (the red keypad locks beside
+//! decryptor-hold-real-path (988): the scenario on the real input path. On 07000012
+//! Bond stands at the spot — `--bond 7.0,0.5,2.4,3.1416,0` (the red keypad locks beside
 //! the door, disc placements m38 #919/#957 [D census: "Lock - KeypadLocked" @(7.01,1.58,0.19) and
 //! @(6.74,1.58,0.18), params 0:0x0 kind, 5:0xa out]) — the Decryptor given and equipped through the
 //! real equip/switch paths, then the fire input HELD through `step_bond` for the game's scan
@@ -35,7 +35,7 @@ use nf_view::scene::Sim;
 
 fn iso() -> String { std::env::var("NF_ISO").expect("NF_ISO") }
 
-/// The reported spot: `--bond 7.0,0.5,2.4,3.1416,0` on 07000012 (facing the keypad wall).
+/// The spot: `--bond 7.0,0.5,2.4,3.1416,0` on 07000012 (facing the keypad wall).
 const BOND_SPOT: [f32; 3] = [7.0, 0.5, 2.4];
 const BOND_YAW: f32 = 3.1416;
 const BOND_PITCH: f32 = 0.0;

@@ -1800,7 +1800,7 @@ mod tests {
         assert!((tb - 3.0 / 8.0).abs() < 1e-6, "bullet: the node flag and the 0x40 byte drop, the 0x80 card is the first report (got t={tb})");
         let (_, n, m) = w.segment_surface_bullet(from, to).unwrap();
         assert_eq!(m, 0x80, "bullet surface: the first report is the 0x80 card");
-        assert!(n[0] < 0.0, "the reported normal faces the ray");
+        assert!(n[0] < 0.0, "the normal faces the ray");
         // Sister: remove the 0x80 card — the bullet trace reports the WALL behind the foliage.
         let w2 = CollisionWorld::from_triangles_flags(vec![face(1.0, 0x00, true), face(2.0, 0x40, false), face(5.0, 0x0a, false)]);
         let t2 = w2.segment_bullet(from, to).unwrap();

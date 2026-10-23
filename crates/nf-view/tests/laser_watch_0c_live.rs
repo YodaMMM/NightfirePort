@@ -1,8 +1,8 @@
-//! 991-laser-watch-0c: the laser watch on 0700000c behaves like the PS2 from the reported repro
+//! 991-laser-watch-0c: the laser watch on 0700000c behaves like the PS2 from the repro
 //! spot. Evidence base:
 //! - The repro: `--bond 7.61,15.71,-113.39,5.783,-0.363` — Bond stands on the inner balcony (the
 //!   floor below the spot is 14.606 [D coll-floor]; `stand_at` rests him at floor + 1.1 = 15.706,
-//!   the reported 15.71), yaw 5.783, pitch −0.363 (the `--bond` view: the camera pitch is
+//!   the 15.71), yaw 5.783, pitch −0.363 (the `--bond` view: the camera pitch is
 //!   `bond.pitch × π/2` [M nf-view lib.rs — the `--bond` parser stores the raw word]).
 //! - The target [D placements-all dump, 0700000c.bin]: the ray's only contact is placement #139
 //!   `hingelock1` (7.0916, 15.7046, −112.3706), a kind-0x2E Lock_Create object, record param 0 = 1
@@ -43,7 +43,7 @@ fn load() -> nf_view::scene::Scene {
     scene
 }
 
-/// The repro view, held: Bond on the balcony floor at the reported spot looking at the grate's
+/// The repro view, held: Bond on the balcony floor at the spot looking at the grate's
 /// lower-left hinge — no aim helper, the raw `--bond` yaw/pitch.
 const REPRO_POS: [f32; 3] = [7.61, 15.71, -113.39];
 const REPRO_YAW: f32 = 5.783;
@@ -65,7 +65,7 @@ fn hinge(sim: &nf_view::scene::Sim, out: u16) -> [f32; 3] {
 }
 
 /// The repro, end to end through the real input path: equip the Laser (0x4E) with the switch
-/// input, hold the fire on the grate's lower-left hinge from the reported spot and view, and the
+/// input, hold the fire on the grate's lower-left hinge from the spot and view, and the
 /// game's outcome happens in the game's time — the 84-contact burn completes (ch 14 rises at the
 /// 84th contact tick [M 0x1ae3d8:82-101, :194-195]), the contact is the RAY's lock alone (the
 /// sister hinges stay 0xff [M Collide_PickObj 0x1eae80's per-object pick]), ch 18 stays OFF (one
@@ -80,7 +80,7 @@ fn the_repro_spot_burns_the_grate_hinge_in_the_games_time() {
     sim.bond = nf_game::player::Bond::stand_at(&sim.world, REPRO_POS, REPRO_YAW);
     sim.bond.pitch = REPRO_PITCH;
     // The floor under the repro spot is the balcony (14.606 [D coll-floor]); stand_at rests Bond
-    // at floor + 1.1 — the reported 15.71 root.
+    // at floor + 1.1 — the 15.71 root.
     assert!((sim.bond.pos[1] - 15.71).abs() < 0.05, "Bond rests on the balcony root 15.71, got {}", sim.bond.pos[1]);
     // Equip the watch laser through the REAL switch input (the draw runs its anim; the fire gate
     // holds shots until it settles [M Player_WeaponFiring 0x1a5460's switching gate]).

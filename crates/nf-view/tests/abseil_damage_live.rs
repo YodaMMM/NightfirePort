@@ -36,21 +36,21 @@ fn aim_at(sim: &mut nf_view::scene::Sim, target: [f32; 3]) {
 
 const LEVEL: &str = "07000011.bin";
 
-/// The reported repro geometry [L render: `--bond 22.40,24.01,-1.39`, a roping
+/// The repro geometry [L render: `--bond 22.40,24.01,-1.39`, a roping
 /// guard]: Bond stands at the repro spot, the flight plate's channel 0x13 wakes the abseiler
 /// [D docs/levels/07000011.md], he runs Init → Slide, and Bond's real trigger rounds — aimed at
 /// the guard's live chest every volley from the wake on — hit and kill him while he ropes: the
 /// death routes to AbseilDeath 0x92 [M 0x1461c8:44-52], the rope releases [M 0x169b28:28], and
 /// the corpse lands (the feet probe → danim 10, DEAD 0x47 [M 0x169b28 case 3]).
 #[test]
-fn real_rounds_kill_the_roping_guard_through_the_reported_repro() {
+fn real_rounds_kill_the_roping_guard_through_the_repro() {
     let Ok(iso) = std::env::var("NF_ISO") else { eprintln!("skip: NF_ISO not set"); return };
     let mut scene = nf_view::load(&iso, LEVEL, false).expect("load 07000011");
     let sim = scene.sim.as_mut().unwrap();
     let idx: Vec<usize> = sim.drones.list.iter().enumerate().filter(|(_, d)| d.mode == 0x1c).map(|(i, _)| i).collect();
     assert_eq!(idx.len(), 1, "one abseiler at difficulty 1 [D + M 0x136be0:49]");
     let i = idx[0];
-    // Bond at the reported repro position BEFORE the wake, so the slide tracks him down [M
+    // Bond at the repro position BEFORE the wake, so the slide tracks him down [M
     // 0x169730:52-63 — the rope point tracks the opponent's Y, the hang 3.0 above him].
     sim.bond.pos = [22.40, 24.01, -1.39];
     for _ in 0..3 { sim.step_bond(Input::default(), false, false, false); }
