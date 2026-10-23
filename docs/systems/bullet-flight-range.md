@@ -63,14 +63,15 @@ death range is the record's own `+0x1C`):
 - `crates/nf-game/src/bullet.rs` — `Bullet.range` is `weapon_data+0x1C` and `Bullet::update`
   already implements the game's check-then-clamp-then-die exactly (the pre-existing model). The
   unit test `p2k_round_stops_at_plus_1c_while_a_1200_record_passes_150` pins the boundary clamp
-  and the death.
+  and the death; laser-watch-0c's `the_watch_round_dies_at_plus_1c_after_the_first_segment` pins
+  the watch's 4.0/8.0 boundary + the dead-by-next-tick law.
 - `crates/nf-game/src/drone.rs` — every spawn site feeds `+0x1C`: `fire_player`, `fire_remote_cosmetic`,
   the guards' `fire_weapon` (:9898), the melee `close_combat_impact` (:2761), the gun-imp mount
-  (:13202), the GT turret (:14007), and `worldobj.rs`'s Shooter — all already game-exact. The
-  one deviation: the Laser watch 0x4E/0x4F keeps 210.0 at `fire_player`/`fire_remote_cosmetic`
-  **[S unverified]** — an earlier port choice, kept because the laser tests ride it; the
-  game rule is +0x1C = 4.0/8.0 with the per-tick refire tiling the beam (see the correction in
-  docs/systems/laser-watch-contact.md).
+  (:13202), the GT turret (:14007), and `worldobj.rs`'s Shooter — all already game-exact.
+  laser-watch-0c: the last deviation is gone — the Laser watch 0x4E/0x4F also flies its record's
+  `+0x1C` = 4.0/8.0 [L weapon_data 0x2bf150] (the 831-era 210.0 stand-in removed; the beam's burn
+  reach is the state-0 segment's [0, +0x1C] from the muzzle per held tick — 0c's hinge #139 at
+  1.34 units [D] and 08's bolts ~3.1 [D] sit inside it).
 - The MP paths (`mp/botweap.rs`, `mp/combat.rs`) already read `+0x1C` — unchanged.
 
 ## Tests
