@@ -337,17 +337,35 @@ impl Pickup {
         // the reordering is the game's own order, not an approximation. Same result: the LOS only decided
         // when the distance gate passes.
         if d2 >= r * r { return false; }
-        // A resting pickup whose model centre y ≈ 0 (live: the 07000001 guard drop of weapon 0xe rests with its centre ON the
-        // floor [L, fix_player2_live take-test log]) ends the ray ON the floor triangle; the port's
-        // `segment` counts t = 1.0 as a hit, which refused every such drop forever (the "some drops never
-        // pick up" playtest symptom). The game takes floor-resting drops, so its `Collide_LineOfSight`
-        // (0x1edf50 → `Collide_RayIntersect` 0x1ec690) does not fail on the endpoint contact — the port
-        // treats a hit at the ray's end (t ≈ 1) as clear. *Unverified*: RayIntersect's exact t range (the
-        // wrapper decompile is one call; WORKLOG fix-player2 records it).
+        // A resting pickup whose model centre y ≈ 0 (live: the 07000001 guard drops of weapon 0xe rest with their
+        // centre ON the floor [L drop-stand-height probe 2026-10-22: centre 5.3452 vs the floor ray 5.3452096])
+        // ends the ray ON the floor triangle; the port's `segment` counts t = 1.0 as a hit, which refused every
+        // such drop forever (the "some drops never pick up" playtest symptom). The game takes floor-resting drops
+        // [L 01-raptor.trace 6.0 s], so its take ray returns clear on the endpoint contact. The settled filter
+        // chain (drop-stand-height, 2026-10-22): `Pickup_Update` 0x18e148:210-214 calls `Collide_LineOfSight`
+        // (0x1edf50 = `Collide_RayIntersect(...)==0`, one call) from the player's world-sphere centre to
+        // **the pickup's own obj passed as the exclude** — `Collide_PickObj` 0x1eae80:15-19 skips the HITTEST's
+        // two exclude objects, so the ray's own endpoint (inside the pickup's world sphere, dist 0 < r) never
+        // blocks. The floor contact: the ray ends at the resting centre, which the fall puts |centre.y| above the
+        // floor hit [M 0x18e148's rest] — for the Raptor |centre.y| ≈ 5e-7 [L probe], a sub-quantum contact the
+        // game's VU0 fixed-point triangle test (the 2^-14 = 6.1e-5 quantum, Intersect_PointGeom 0x1e92d8's
+        // decompile) absorbs onto the plane. The port's float rest carries no quantization, so its endpoint can
+        // sit a float-noise sliver INSIDE the plane (a batch-1022l run measured one >1e-4 deep — the take refused;
+        // this tree's sweep of ~50 stands around two drops found none, worst t: no hit at all). The end band is
+        // therefore the port's float-noise slack at 1e-3 (a millimetre — 10x the observed batch case, 16x the
+        // game's quantum, far below any real cover's thickness): a hit within it is the resting floor, not cover.
         // fix-safe08b: the ray is the game's flags-0x721 query — cel-scoped (`Collide_StraddleCels`
         // 0x1eac98 from the player's cel, obj+0x20), the 0x1000 cage skipped (bit 0x20) and the
-        // surface classes 0xd/0xe skipped (`Collide_Intersect` 0x1ebaa8's tail, bit 0x1).
-        let los = world.segment_take_scoped(cel, body, c).map_or(true, |t| t >= 1.0 - 1e-4);
+        // surface classes 0xd/0xe skipped (`Collide_Intersect` 0x1ebaa8's tail, bit 0x1; the class test
+        // is `(surface & 0x3f) - 0xd < 2` [M-dis Intersect_PointGeom 0x1e92d8 @0x1e9890]).
+        // What never blocks, per the same chain: the DROPPED GUN's and the CORPSE's own shapes —
+        // `Pickup_Create` 0x18dda0:137 gives the pickup obj bits `glist+0x44 & ~0x200 | 0x840`, the corpse
+        // gets bit 0x20 (`NDrone2_SetAsDead` 0x14a2f0), and `Collide_PickObj` 0x1eae80:56-64 skips bit 0x20
+        // for EVERY query and bit 0x40 (pickups) when the query flags carry 0x8 — the ground ray
+        // `build_PointOnFloor` 0x1c95a8:52 runs 0x70c (bit 0x8 set). So Bond never stands on a drop or a
+        // corpse in the game, and the port registers neither — `Bond::stand_at` at floor + 1.1 is the game's
+        // own standing height everywhere a drop rests.
+        let los = world.segment_take_scoped(cel, body, c).map_or(true, |t| t >= 1.0 - 1e-3);
         // `NF_PICKUPLOG=1`: every take test — Bond's position, the pickup centre, the distance against
         // radius + 1.1, the LOS ray, and the state (fix-player2's drop diagnostics).
         if std::env::var_os("NF_PICKUPLOG").is_some() {
@@ -780,6 +798,35 @@ mod tests {
         assert!((24..=27).contains(&ticks), "{ticks}");
         assert!(p.touches(&floor, None, [0.5, 0.0, 1.5], [0.5, 1.0, 1.5]));
         assert!(!p.touches(&floor, None, [0.5, 0.0, 3.0], [0.5, 1.0, 3.0]), "1.1 + radius away");
+    }
+
+    /// The take ray's end band absorbs the rest noise: a drop whose resting centre sits a float-noise
+    /// sliver INSIDE the floor plane still takes. The game's own rest puts the sphere centre |centre y|
+    /// above the floor hit [M 0x18e148's fall rest] and its VU0 fixed-point triangle test absorbs a
+    /// sub-quantum (2^-14) contact onto the plane; the port's float rest can land the centre deeper
+    /// (batch-1022l measured one >1e-4 deep — the old 1e-4 band refused it). Sister (can fail): the
+    /// same geometry 5e-3 inside the plane — beyond the band, a genuine short hit, refused.
+    #[test]
+    fn the_take_end_band_absorbs_the_rest_noise() {
+        let floor = CollisionWorld::from_triangles(vec![
+            [[-5.0, 0.0, -5.0], [5.0, 0.0, 5.0], [5.0, 0.0, -5.0]], [[-5.0, 0.0, -5.0], [-5.0, 0.0, 5.0], [5.0, 0.0, 5.0]],
+        ]);
+        // A pickup whose model centre y is 0 (the Raptor's own glist: [L probe bounds centre
+        // (0.0002, −0.0000, 0.0000)]) rests with its sphere centre exactly ON the floor; sunk 5e-4 the
+        // take ray (body ~1 unit above) crosses the plane just short of its end (1 − t ≈ 5e-4 over a
+        // ~1-unit span).
+        let mut p = Pickup::create(&[[1.0, 0.0, 0.0, 0.0], [0.0, 1.0, 0.0, 0.0], [0.0, 0.0, 1.0, 0.0], [0.5, 1.2, 0.5, 1.0]], 2, 5, kind::WEAPON, 0, Model { centre: [0.0, 0.0, 0.0], radius: 0.5 });
+        let mut ticks = 0;
+        while p.state == 0 && ticks < 600 { p.fall(&floor); ticks += 1; }
+        assert_eq!(p.state, 1);
+        assert!(p.centre()[1].abs() < 1e-5, "the sphere centre rests on the floor: {:?}", p.centre());
+        p.m[3][1] -= 5e-4; // the float-noise rest: the centre sinks 0.5 mm into the floor
+        let c = p.centre();
+        assert!(c[1] < 0.0 && c[1] > -1e-3, "the centre sits a noise sliver inside the plane: {:?}", c);
+        assert!(p.touches(&floor, None, [0.5, 0.0, 1.5], [0.5, 1.0, 1.5]), "the resting floor's own contact is not cover");
+        // Sister: 5e-3 inside the plane is a real short hit (1 − t ≈ 5e-3 > the band) — refused.
+        p.m[3][1] -= 5e-3;
+        assert!(!p.touches(&floor, None, [0.5, 0.0, 1.5], [0.5, 1.0, 1.5]), "a hit genuinely short of the end still blocks");
     }
 
     /// The ammo path's id is the COMPOSITION `upgrade_ammo_id(upgrade_weapon(raw))` [M 0x18e650:142-144
