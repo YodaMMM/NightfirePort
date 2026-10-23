@@ -19,7 +19,12 @@ pub struct CreepWall {
     /// [M 0x196758:80-86 + 0x1969d0:99-100: `Vec_Spherical_2_Cartesian(len, yaw + 1.5707964, 0)`].
     pub yaw: f32,
     /// The axis half-length (`obj+0x8c`). `CreepWall_Create` sets no +0x8c itself — it arrives from
-    /// `control_create_object`'s placement transform; the port takes the placement scale's x [S].
+    /// `control_create_object`. The port reads the object's OWN bound half-span along the crawl
+    /// axis (local x — both 07000005 creepwall objects carry the long axis there [D the parsed
+    /// object bounds: "Wall Hug Short" x −3.62..+7.52, "Wall Hug Window" x −5.32..+5.32; the
+    /// placement scale is (1,1,1) and cannot be the source]). The 07000005 crawl band's floor dip
+    /// (z 67-70 down to y 7-8 [D the 1-unit floor map]) is only crossable when the crawl spans
+    /// the prompts' z 60-70.6 — the bound span does exactly that.
     pub half_len: f32,
     /// The switch channel held while Bond crawls: the 4th param word's low half (level+0x38 →
     /// the object's BLData u16[3], read as `*(short *)(params + 6)` [M 0x196fc8:19-22 +
@@ -78,12 +83,20 @@ pub fn all(level: &nf_formats::level::Level) -> Vec<CreepWall> {
     for m in level.maps.iter() {
         for p in &m.placements {
             if p.flags & 0xff != 0x3f { continue; }
+            // The object's own bound half-span along the crawl axis (local x) [D — see the field
+            // doc]. The placement may reference the object by hashcode or by map index.
+            let obj = if p.by_hash() {
+                level.by_hash.get(&p.hashcode).and_then(|&(mp, oi)| level.maps.get(mp).and_then(|mm| mm.objects.get(oi)))
+            } else {
+                m.objects.get(p.index as usize)
+            };
+            let bound = obj.map(|o| ((o.max[0] - o.min[0]) * 0.5).abs());
             let scale = p.scale();
             out.push(CreepWall {
                 placement: u32::from(p.index),
                 pos: p.translation,
                 yaw: p.rotation[1],
-                half_len: scale[0].abs().max(1.0),
+                half_len: bound.filter(|b| *b > 0.0).unwrap_or_else(|| scale[0].abs().max(1.0)),
                 ch: param(p, 3) as u16,
             });
         }
