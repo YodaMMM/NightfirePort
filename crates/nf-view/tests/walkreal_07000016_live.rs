@@ -244,18 +244,43 @@ fn walk_arrival_to_the_chasers_spawn() {
 /// The finale tail: the mission completes ONLY through the KikoDeathButton #693 [D hash
 /// 020008c1]: the chaser's defeat raises nothing (param 12 = 0 [D]; the init-forced 0x90
 /// stand-in was removed in kiko-16-defeat), so this walk's kill-then-watch shape pins the REAL
-/// rule — ch 0x90 and ch 100 stay cold and the mission does not complete. PARKED on U-051
-/// (docs/UNKNOWNS.md): the ch-0xf3-gated HurtPoly-ShuttleLaunch #309 (type 2, 1000 damage [D
-/// params 0:2 1:0x3e8 2:0xf3]) goes live while this walk's Bond stands on the silo-pit floor
-/// (−23.2 — he crosses the ch-0x81 slab on the y-0.25 bridge, the launch chain plays out, and the
-/// pit floor is where both this walk and fix_finale_live's parked Bond end up), and the volume's
-/// 1000 damage kills him before the chaser's defeat — the walk observes the mission FAIL exit
-/// request instead of the kill. Open [L]: where the GAME's Bond stands when ch 243 rises, and when
-/// ch 243 rises — a fresh-boot PCSX2 watch of switch_channels[243] (0x26fc90+243) and Bond's
-/// position through the launch cinema settles whether the port's cinema-Bond placement or the
-/// volume's live window is wrong.
+/// rule — ch 0x90 and ch 100 stay cold and the mission does not complete. PARKED on the pit
+/// window (level-16-jetpack-escape-2, sharpened from U-051): the launch chain re-enables Bond on
+/// the silo-pit floor (3.57, −23.18, −179.55 [D pack cinema stream 8's single t747 key + M
+/// Player_Enable 0x195498's teleport]; the probe observed him grounded there) and the pit window
+/// has NO disc-visible escape with real input:
+/// - **The pulse.** The launch script 0x0600090a's stream 6 writes ch 243=1 at stream tick 1611
+///   and =0 at 2170 — ABSOLUTE stream ticks, not cumulative (the Wait command blocks until the
+///   clock reaches the value [M nis.rs:446-451 — `if s.clock < s.wait { return }`]; the port's
+///   probe: the script starts at ch 185 = cinema t748, so ch 243 lands ~2355 sim ticks after the
+///   chain head, and pit-floor Bond is dead the very next tick). HurtPoly-ShuttleLaunch #309
+///   (gate 0xf3, type 2, 1000 damage [D params]) is SIX STATIC SLABS tiling the whole pit
+///   footprint (x −30.7..35.3, y −24.08..−21.32, z −197.3..−133.8 [D tri dump: 6 y-bands × 36
+///   tris]; its placement carries NO path data — extra[7] = 0 → no framelist, key count 0 [M
+///   Hurt_Create 0x17e870:26-30], so the volume never animates out of the way) — the gated start
+///   law reads the raw channel byte [M 0x17e5d0:98], so ch 243=1 makes every pit-floor stand
+///   lethal. A SECOND pulse rides stream 9 at 6810..7320 [D] — the U-051 window was half the
+///   story.
+/// - **The escapes are all POST-pulse.** The pit door's ch 240 rises at 2180 [D stream 7] — ten
+///   ticks after the drop; the shuttle-bay lift (SP #347, script 0x060009e9, start ch 80) is
+///   summoned by the launch script's stream 21 at 2240 [D] and its platform then descends
+///   y 1.61 → −21.22 over 549 ticks [D keys] — the only ride out of the trench, a minute too
+///   late for pulse 1.
+/// - **No shipped flight.** The launch script carries no Bond-actor stream [D full dump]; the
+///   level's pickups are armour/ammo/007-tokens/grenades [D census] — no jetpack item [M
+///   Pickup_Handler 0x18e650 kinds 0..6]; the substate dispatch has no jetpack case (0..0x10 =
+///   walk/climb/grapple/move/crouch/ScanMode-fly/wire/creep/zero-g/cam-wait/zipline [M
+///   Player_Update 0x193600:171-261]) and substate 5's only shipped writers are the cheats-menu
+///   control C_CHCHFLY 0x215c70 and the dev action-39 toggle [M 0x193600 disasm] — no script
+///   event (0..0x13 [M Script_EventHandler 0x1d94c0]) and no player-start mode (2→zero-g 8,
+///   1→move 3, 3→crouch 4 [M Player_Init 0x1910f8:156-181]) reaches it.
+/// Open [L] (fresh boot, NOT a save-state resume): watch `switch_channels[243]` (0x26fc90 +
+/// 243·4) and Bond's obj+0x30 through the pack cinema hand-back. Expected if the port is
+/// faithful: Bond re-enables at (3.57, −22.76, −179.55) and ch 243 rises ~863 ticks later — the
+/// shipped survival mechanism is then none of script/item/vehicle/state and needs the main
+/// agent's trace (gdbwatch on obj+0x30 through ticks 748..1611: what MOVES the game's Bond out).
 #[test]
-#[ignore = "U-051 ANSWERED (docs/systems/hurt-volumes.md): the volume window is 0x0600090a stream 6 ticks 1611..2170 [D] and the game's Bond escapes on the pack flight — the port has no jetpack substate, so pit-floor Bond dies; the re-seat stand-in is documented in fix_finale_live. The tail now pins the REAL defeat rule (the kill raises nothing; the button is the writer, kiko-16-defeat)"]
+#[ignore = "the pit window has no disc-visible real-input escape: the launch script's stream-6 pulse (ch 243=1 @1611, =0 @2170, absolute stream ticks [D]) makes the six-slab pit volume lethal while every escape is post-pulse (door ch 240 @2180, lift ch 80 @2240 [D]), no Bond-actor stream or jetpack item exists, and substate 5's only shipped writers are the cheat paths [M] — the previous attempt's port-only F key is rejected and was never on master. Live checks in the doc comment settle the game's own survival (gdbwatch obj+0x30 through 748..1611)"]
 fn walk_the_chasers_defeat_completes_the_mission() {
     let iso = iso();
     let mut w = Walker::new(nf_view::load_with_carry(&iso, "07000016.bin", false, Some(&carry(&[0x47, 0x48, 0x4a, 0x54, 0xce, 0x4b]))).unwrap());
