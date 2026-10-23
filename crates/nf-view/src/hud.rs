@@ -988,7 +988,8 @@ fn view_h() -> f32 { f32::from_bits(VIEW_H_BITS.load(std::sync::atomic::Ordering
 /// radar (`hud_radar_live` pins that an SP scene has neither).
 pub const MP_TEXTURES: [u32; 15] = [
     0x0300_0088, RADAR_TEX,
-    // The score pane's icons [L MPScoreInfo @0x2be888 + the update's re-textures M 0x19f0a0/0x19ed10].
+    // The score pane's icons [D MPScoreInfo @0x2be888 — first word 7f7f7fff, the sprite records'
+    // tex ids at record+0x24 — plus the update's re-textures M 0x19f0a0/0x19ed10].
     0x0300_0180, 0x0300_0182, 0x0300_0185, 0x0300_0186, 0x0300_0187, 0x0300_0188, 0x0300_0189, 0x0300_018a, 0x0300_018b, 0x0300_018c,
     // The MP health pane's backing / bar / armour strip [L MPHealthSprInfo @0x2be6b8].
     0x0300_0170, 0x0300_0171, 0x0300_0172,

@@ -7371,7 +7371,7 @@ impl FrontEnd {
         let bots = self.mp_bot_count() as u32;
         let mut s = nf_game::mp::MpSettings::deathmatch(self.mp_level);
         s.scenario = self.mp_scenario;
-        s.gametype_mask = self.mp_scenario;       // [M the same word — see the atlas correction]
+        s.gametype_mask = self.mp_scenario;       // [M the same word — MP_Init 0x183438:41-42 reads the scenario word itself as the gametype: team bit 29, assassin bit 30]
         s.level_code = self.mp_level;
         s.frag_limit = self.mp_frag_limit;
         s.time_limit = time;

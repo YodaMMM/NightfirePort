@@ -544,7 +544,8 @@ impl MpScorePane {
         } else {
             (player, 0x0000_00ff)
         };
-        // The objective icons 1/2/6 [M 0x19f0a0:71-180; positions M 0x19ed10:58-96 + L].
+        // The objective icons 1/2/6 [M 0x19f0a0:71-180; the create's arms M 0x19ed10:50-77; the
+        // absolute rect is the port's modelling — S unverified, live check pending].
         let me = snap.viewer_slot;
         let icon = |sprite: usize, tex: u32, x: f32, y: f32, rgba: u32| MpPaneIcon { sprite, tex, x, y, rgba, layer: 0x1e, additive: false };
         match sc {
@@ -562,7 +563,8 @@ impl MpScorePane {
             }
             scenario::UPLINK => {
                 // All three shown, tinted by `MP_getUplinkStatus(0..2)` [M :134-180]; the create
-                // re-textures them 0x03000185 and lines them up at x 16/32/48, y 352 [M 0x19ed10:76-96].
+                // re-textures them 0x03000185 and lines them up by +0x10 steps [M 0x19ed10:56-70
+                // — the 0x60000008 arm; the absolute rect is the port's modelling, S unverified].
                 for (k, sprite) in [1usize, 2, 6].iter().enumerate() {
                     let owner = snap.uplinks.iter().find(|u| u.index == k).map_or(2, |u| u.owner);
                     let rgba = match owner { 0 => 0xd22d_35ff, 1 => 0x2d61_d2ff, _ => 0x7f7f_7fff };
@@ -572,9 +574,10 @@ impl MpScorePane {
             scenario::BLUEPRINT => {
                 // mp-never-mentioned (`MP_HasEsponage` 0x18b468): the carrier's pane dims
                 // sprite 1 to layer 0x1e and re-textures it 0x300018a [M 0x19f0a0:75-82]; the
-                // template colour stays [L MPScoreInfo]. The create's else-arm (everything but
-                // 0x400/0x60000008) moved sprites 1/2 down 0x18 — the same rect CTF's flag
-                // icon shows at [M 0x19ed10:113-117].
+                // template colour stays [D MPScoreInfo 0x2be888 = 7f7f7fff]. The create's
+                // else-arm (everything but 0x400/0x60000008) moved sprites 1/2 down 0x18 and no
+                // x [M 0x19ed10:72-76]; the absolute rect (16, 376) is the port's modelling
+                // [S unverified — see docs/reports/audit-unproven-1022.md].
                 if snap.viewer_carries_blueprint {
                     icons.push(icon(1, 0x0300_018a, 16.0, 376.0, 0x7f7f_7fff));
                 }
@@ -583,8 +586,8 @@ impl MpScorePane {
                 // mp-never-mentioned (`MP_ObjTeamHasGEObj` 0x18b4a0): each held item re-textures
                 // sprite 1/2 to 0x300018b/0x300018c, layer 0x1e [M 0x19f0a0:115-127]. Both icons
                 // take the same rect — the create's else-arm shifts sprites 1/2 by the same
-                // −0x18 and moves no x, so a team holding both items stacks them [M; the
-                // report's live check covers the overlap].
+                // −0x18 and moves no x, so a team holding both items stacks them [M 0x19ed10:72-76;
+                // the report's live check covers the overlap and the absolute rect].
                 for k in 0..2 {
                     if snap.viewer_team_ge[k] {
                         let tex = if k == 0 { 0x0300_018b } else { 0x0300_018c };

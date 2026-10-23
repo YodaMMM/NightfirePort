@@ -278,7 +278,7 @@ fn quick_game_starts_the_games_fixed_match() {
     let s = fe.mp_match_settings.as_ref().expect("the match config lands for the host");
     // The match's fields, each cited [M quick-game.md §2-§4].
     assert_eq!(s.scenario, 1, "+0x1A4 = 1 [M 0x20c740]");
-    assert_eq!(s.gametype_mask, 1, "the same word [M the atlas correction]");
+    assert_eq!(s.gametype_mask, 1, "the same word — the game's gametype dispatch reads the scenario word itself: team = bit 29, assassin = bit 30 [M MP_Init 0x183438:41-42]");
     assert_eq!(s.level_code, MP_MAP_ROWS[0].3, "the port's row-0 sample [S quick-game.md §3]");
     assert!(MP_MAP_ROWS[..7].iter().all(|r| r.3 != 0x0700_004b), "rows 0..6 never Ravine [M the %7]");
     assert_eq!(s.frag_limit, 10, "+0x19C [M 0x20c738]");
@@ -361,7 +361,7 @@ fn custom_game_keeps_its_chosen_scenario() {
     assert!(fe.action(Action::Confirm), "the custom game's confirm starts it");
     let s = fe.mp_match_settings.as_ref().expect("the custom match config lands");
     assert_eq!(s.scenario, 0x2000_0002, "the custom scenario reaches the match [M +0x1A4]");
-    assert_eq!(s.gametype_mask, 0x2000_0002, "the same word [M the atlas correction]");
+    assert_eq!(s.gametype_mask, 0x2000_0002, "the same word — bit 29 set makes it a team game [M MP_Init 0x183438:41-42]");
     assert_eq!(s.team_game, 1, "bit 29 set [M MP_Init 0x183438:41]");
     assert_ne!(s.scenario, 1, "the quick start's Deathmatch did not leak into the custom game");
 }

@@ -63,7 +63,8 @@ fn esponage_getter_follows_the_carrier() {
 }
 
 /// The pane arm `MP_HasEsponage` feeds (`HUD_MPUpdatePane` 0x19f0a0:75-82): the carrier's
-/// sprite 1 re-textures to 0x300018a at the create's else-arm rect [M 0x19ed10:113-117].
+/// sprite 1 re-textures to 0x300018a at layer 0x1e [M :80-81]; the create's else-arm
+/// (everything but 0x400/0x60000008) moves sprites 1/2 down 0x18 and no x [M 0x19ed10:72-76].
 /// Sister: the non-carrier viewer's pane has no 0x300018a icon at all.
 #[test]
 fn esponage_pane_icon_shows_for_the_carrier_only() {
@@ -79,9 +80,15 @@ fn esponage_pane_icon_shows_for_the_carrier_only() {
     let p1 = pane(&m, 1);
     let bp: Vec<_> = p1.icons.iter().filter(|i| i.tex == 0x0300_018a).collect();
     assert_eq!(bp.len(), 1, "the carrier's pane shows the blueprint glyph [M 0x19f0a0:80-81]");
-    assert_eq!((bp[0].sprite, bp[0].x, bp[0].y), (1, 16.0, 376.0), "sprite 1 at the −0x18 rect [M 0x19ed10:113-115]");
+    assert_eq!(bp[0].sprite, 1, "sprite 1 re-textures [M 0x19f0a0:80]");
     assert_eq!(bp[0].layer, 0x1e, "layer 0x1e [M 0x19f0a0:80]");
-    assert_eq!(bp[0].rgba, 0x7f7f_7fff, "the template colour stands [L MPScoreInfo 0x2be888]");
+    assert_eq!(bp[0].rgba, 0x7f7f_7fff, "the template colour stands [D ACTION.ELF 0x2be888 = 7f 7f 7f ff]");
+    // [S] unverified, out of pass/fail: the icon's absolute rect (16, 376). The game's chain is
+    // the pane origin + the MPScoreInfo record (sprite x/y at record+0xc/+0xe [M Sprite_Create2
+    // 0x1de3d8]) + the create's −0x18 else-arm [M 0x19ed10:72-76], but the disc record 1 reads
+    // (0, 448) and the origin path (HUD_ValidateXY 0x19a250) did not resolve to (16, 392) here.
+    // The live check in docs/reports/audit-unproven-1022.md settles the on-screen rect.
+    let _ = (bp[0].x, bp[0].y);
     let p0 = pane(&m, 0);
     assert!(
         p0.icons.iter().all(|i| i.tex != 0x0300_018a),
@@ -117,9 +124,9 @@ fn obj_team_has_ge_obj_follows_the_carriers_team() {
 }
 
 /// The pane arms `MP_ObjTeamHasGEObj` feed (0x19f0a0:115-127): item 0 → sprite 1 → 0x300018b,
-/// item 1 → sprite 2 → 0x300018c, both at the shared else-arm rect (the shipped layout stacks
-/// them when one team holds both — the create moves sprites 1/2 by the same −0x18, no x
-/// [M 0x19ed10:113-117]). Sister: nothing carried → no icons.
+/// item 1 → sprite 2 → 0x300018c [M :119/:124], both at the shared else-arm rect (the shipped
+/// layout stacks them when one team holds both — the create moves sprites 1/2 by the same
+/// −0x18, no x [M 0x19ed10:72-76]). Sister: nothing carried → no icons.
 #[test]
 fn goldeneye_pane_icons_track_the_team_items() {
     let mut rng = Rng::new(7);
@@ -138,10 +145,13 @@ fn goldeneye_pane_icons_track_the_team_items() {
     m.touch_ge_item(1, 0); // team 0 holds both — the stacked-rect case
     let p = pane(&m, 0);
     let ge: Vec<_> = p.icons.iter().filter(|i| i.tex == 0x0300_018b || i.tex == 0x0300_018c).collect();
-    assert_eq!(ge.len(), 2, "both held items draw [M :116-126]");
-    assert_eq!((ge[0].sprite, ge[0].tex), (1, 0x0300_018b), "item 0 rides sprite 1 [M :116-119]");
-    assert_eq!((ge[1].sprite, ge[1].tex), (2, 0x0300_018c), "item 1 rides sprite 2 [M :120-126]");
-    assert_eq!((ge[0].x, ge[0].y, ge[1].x, ge[1].y), (16.0, 376.0, 16.0, 376.0), "the shipped stacked rect [M 0x19ed10:113-117]");
+    assert_eq!(ge.len(), 2, "both held items draw [M 0x19f0a0:115-126]");
+    assert_eq!((ge[0].sprite, ge[0].tex), (1, 0x0300_018b), "item 0 rides sprite 1 [M 0x19f0a0:119]");
+    assert_eq!((ge[1].sprite, ge[1].tex), (2, 0x0300_018c), "item 1 rides sprite 2 [M 0x19f0a0:124]");
+    assert_eq!((ge[0].x, ge[0].y), (ge[1].x, ge[1].y), "the create's else-arm moves sprites 1/2 by the same −0x18 and no x, so one team holding both stacks them [M 0x19ed10:72-76]");
+    // [S] unverified, out of pass/fail: the absolute stacked rect (16, 376) — the same open
+    // origin-path link as esponage_pane_icon_shows_for_the_carrier_only (live check pending).
+    let _ = (ge[0].x, ge[0].y, ge[1].x, ge[1].y);
     let p1 = pane(&m, 1);
     assert!(
         p1.icons.iter().all(|i| i.tex != 0x0300_018b && i.tex != 0x0300_018c),

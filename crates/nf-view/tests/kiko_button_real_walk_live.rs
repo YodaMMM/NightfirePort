@@ -25,7 +25,7 @@
 //!   script write in 07000016.bin + 07800016.bin was decoded — none touches ch 141 [D census];
 //!   Init_SwitchChannels 0x134310 runs only from the level-load path [M its single jal 0x1d5208].
 //!   The press path is E → Player_Activate 0x1a5170's class-0 arm → SP_Activate 0x1dc338 (the
-//!   facing dot) → Switch_Activate 0x1b02a8, whose gate line [M 0x1b02a8:22] refuses the toggle
+//!   facing dot) → Switch_Activate 0x1b02a8, whose gate line [M 0x1b02a8:21] refuses the toggle
 //!   while ch 0x8d is on. So the walked press is INHIBITED, and that is what the main assert pins.
 //!   Sister: the same E from the documented gate-off reach (a fresh load teleported to the button
 //!   room, #616 never crossed — the interactables shape) fires ch 0x90 → mux #618 → ch 100 →
@@ -146,7 +146,7 @@ fn the_07000016_real_walk_reaches_the_kiko_death_button_and_the_gate_arms_on_the
         // THE GATE: the mid-corridor crossing latched ch 0x8d [D #616 flags-0xEA TouchOnce, mask 8;
         // M the dispatcher update + 0x1b1900 disasm]. It is ON for the rest of the level.
         assert!(sim.drones.channels.on(0x8d),
-            "the mid-corridor touch #616 latched the gate on the walked route [D; M 0x1b02a8:22]");
+            "the mid-corridor touch #616 latched the gate on the walked route [D; M 0x1b02a8:21]");
     }
 
     // The launch chain plays out (no skip): the cinema re-enables Bond on the pit floor [D
