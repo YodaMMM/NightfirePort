@@ -176,7 +176,12 @@ impl Breaks {
                 lo,
                 hi,
                 kind,
-                health: f32::from_bits(param(1)),
+                // `Break_Create` 0x12c230 CONVERTS param 1 int→float [M 0x12c2b4-0x12c2bc
+                // `mtc1 $v0, $f0; cvt.s.w $f0, $f0; swc1 $f0, 4($s1)` — the negative arm
+                // 0x12c2c8-0x12c2dc reconstructs the same value via ((v>>1)|v&1)·2.0]: 0700000a's
+                // #379 param 1 = 9 [D] → health 9.0, not the bits-reinterpreted 1.26e-44 the old
+                // `f32::from_bits` produced (which died on the first contact of any damage).
+                health: (param(1) as i32) as f32,
                 filter: if p2 == 0 { 0 } else { !(p2 as u16) },
                 dead: false,
                 matrix: object_matrix(p.rotation, p.translation),
@@ -190,6 +195,30 @@ impl Breaks {
         // Same rule as crate::props::seg_box: the bullet segment's AABB against the bounds grown
         // by 0.1 (the contact registers on the sphere touching the glist bounds).
         Self::seg_box_grow(a, b, lo, hi, 0.1)
+    }
+
+    /// The entry fraction of the segment through the same 0.1-grown bounds box (the slab test on
+    /// the grown box `seg_box` overlaps), for the game's nearest-solid rule: the collide list is
+    /// sorted by the hit distance [M Collide_Update 0x1ea398:120-158 QuickSort on HITDATA+0xc] and
+    /// the first solid node takes the contact and kills the round [M 0x1ea398:216-229 +
+    /// Bullet_CollisionHandler 0x12ce80 disasm 0x12cff0-4].
+    pub fn seg_box_t(a: V3, b: V3, lo: V3, hi: V3) -> Option<f32> {
+        let mut t0 = 0.0f32;
+        let mut t1 = 1.0f32;
+        for k in 0..3 {
+            let (lo, hi) = (lo[k] - 0.1, hi[k] + 0.1);
+            let d = b[k] - a[k];
+            if d.abs() < 1.0e-9 {
+                if a[k] < lo || a[k] > hi { return None; }
+            } else {
+                let (mut ta, mut tb) = ((lo - a[k]) / d, (hi - a[k]) / d);
+                if ta > tb { std::mem::swap(&mut ta, &mut tb); }
+                t0 = t0.max(ta);
+                t1 = t1.min(tb);
+                if t0 > t1 { return None; }
+            }
+        }
+        Some(t0)
     }
 
     fn seg_box_grow(a: V3, b: V3, lo: V3, hi: V3, g: f32) -> bool {

@@ -118,14 +118,27 @@ fn armour_pickup_taken_by_walking_over_it() {
 }
 
 /// The vending-machine glass (#379, 0x20 Break_Create at (6.12, 1.22, 16.35) [D]) shatters under
-/// the held fire: a bullet crossing the break's bounds kills it (`Break_Kill` 0x12b970 sets
-/// obj+0xFE bit 0 [M breakable.rs]). Sister: the far glass #378 stays alive.
+/// the held fire — and the count is the decompile's arithmetic, pinned end to end:
+/// - health = `Break_Create`'s (float)(int)param 1 = 9.0 [M 0x12c2b4-0x12c2bc `cvt.s.w`; D param 1 = 9];
+/// - the contact damage is the round's per-tick HITTEST+0x90 = weapon_data+0x0C [M Bullet_update
+///   0x12e7b0 disasm 0x12f05c-0x12f060; the copy to the victim's obj+0xD0 node+8 at Collide_Update
+///   0x1ea398 disasm 0x1ea690-98] = 0.1f for the held K5 dart 0x43 [L ee_snapshot weapon_data
+///   0x2bf150 + 0x43·0x10C + 0x0C];
+/// - ONE contact per dart: the collide list is sorted nearest-first and stops at the first solid
+///   node, and the round dies on it [M Collide_Update 0x1ea398:216-229 + Bullet_CollisionHandler
+///   0x12ce80 disasm 0x12cff0-4].
+/// The K5 dart phase pins the 0.1f contact (one dart = one contact, health 9.0 → 8.9f); the kill
+/// count rides the P2K (0x02, damage 3.5f [L weapon_data w2 +0x0C], the level's 7+41 rounds
+/// [D inventory] — the K5's 5+10 darts cannot reach 9.0f): 9.0f − 3.5f is exact in f32, so the
+/// kill lands on contact 3 — the op-for-op mirror of Break_Update's subtraction [M 0x12bfd8:37]
+/// and its `< 0` kill [M :49].
+/// Sister: the far glass #378 keeps health 9.0 and stays alive.
 #[test]
 fn vending_glass_breaks_under_fire() {
     let mut w = load();
-    let dead_of = |w: &Walker, placement: usize| {
+    let br_of = |w: &Walker, placement: usize| {
         w.scene.sim.as_ref().unwrap().drones.breaks.list.iter()
-            .find(|b| b.placement == placement).map(|b| b.dead).expect("the vending glass break")
+            .find(|b| b.placement == placement).map(|b| (b.health, b.dead)).expect("the vending glass break")
     };
     // Walk to the lobby vending machine (right of the spawn, through the real path; the AI graph
     // carries the loop, the direct line pins on the lobby's north wall).
@@ -134,15 +147,64 @@ fn vending_glass_breaks_under_fire() {
     w.walk_to(Wp::new(-3.9, 0.0, 15.5).r(1.2), "lobby south");
     assert!(w.follow_nav_route([4.6, 0.4, 15.2], "the lobby by the vending machine"), "no nav route");
     w.walk_to(Wp::new(4.2, 0.4, 16.35).r(0.9), "face the vending machine");
-    assert!(!dead_of(&w, 379), "the glass stands before the shot");
-    let landed = shoot_at(&mut w, glass, 4.5, 900, "the vending glass", &|sim| {
-        sim.drones.breaks.list.iter().find(|b| b.placement == 379).map_or(false, |b| b.dead)
+    let (h0, dead0) = br_of(&w, 379);
+    assert!((h0 - 9.0).abs() < 1.0e-6 && !dead0,
+        "Break_Create's health is (float)(int)param 1 = 9.0 [M 0x12c2b4-0x12c2bc; D param 1 = 9], got {h0}");
+    // One dart, one 0.1f contact: fire until a dart actually leaves (shot_tick), then wait out
+    // its flight and pin the drop. (The K5 carries 5+10 darts [D inventory] — enough for this
+    // pin, not for a 91-dart kill; the kill count rides the P2K phase below.)
+    let contact = 9.0f32 - 0.1f32;
+    let mut fired = false;
+    for _ in 0..600 {
+        shoot_at(&mut w, glass, 4.5, 1, "the vending glass", &|_| false);
+        if w.scene.sim.as_ref().unwrap().shot_tick { fired = true; break; }
+    }
+    assert!(fired, "the K5 never fired at the glass");
+    w.wait(120);
+    let (h1, dead1) = br_of(&w, 379);
+    assert!(h1 == contact && !dead1,
+        "one dart scores ONE contact of weapon+0x0C = 0.1f [M 0x12f05c-60 + 0x1ea690-98 + the \
+         one-solid-hit stop 0x1ea398:216-229], got {h1} (want {contact}) dead {dead1}");
+    // The kill count: cycle to the P2K (0x02, damage 3.5 [L weapon_data w2 +0x0C], 7+41 rounds
+    // [D inventory]) through the real weapon wheel. 3.5f is exact in f32, so the count from the
+    // dart-dented 8.9f mirrors Break_Update's arithmetic [M 0x12bfd8:37 (the f32 sub), :49 (< 0)]:
+    // 5.4f, 1.9f, kill on the 3rd.
+    let mut expect_health = h1;
+    let mut expect_contacts = 0u32;
+    while expect_health >= 0.0 {
+        expect_health -= 3.5f32;
+        expect_contacts += 1;
+    }
+    assert_eq!(expect_contacts, 3, "8.9f − 3.5f per contact kills on the 3rd [M]");
+    let mut switched = false;
+    for _ in 0..12 {
+        w.tick(nf_game::player::Input { weapon_cycle: 1, ..Default::default() }, false);
+        for _ in 0..60 { w.tick(nf_game::player::Input::default(), false); }
+        if w.scene.sim.as_ref().unwrap().gun.weapon == 0x02 { switched = true; break; }
+    }
+    assert!(switched, "the P2K never came up on the wheel (real switch path)");
+    let mut samples: Vec<f32> = vec![h1];
+    let samples_cell = std::cell::RefCell::new(&mut samples);
+    let landed = shoot_at(&mut w, glass, 4.5, 3000, "the vending glass", &|sim| {
+        let br = sim.drones.breaks.list.iter().find(|b| b.placement == 379).unwrap();
+        let mut s = samples_cell.borrow_mut();
+        if s.last() != Some(&br.health) { s.push(br.health); }
+        br.dead
     });
     assert!(landed, "the glass never broke under the real fire (gun {:#x})",
         w.scene.sim.as_ref().unwrap().gun.weapon);
-    assert!(dead_of(&w, 379), "Break_Kill's dead bit set [M 0x12b970]");
+    let (hk, deadk) = br_of(&w, 379);
+    assert!(deadk && hk < 0.0, "Break_Kill's dead bit set [M 0x12b970]");
+    // The observed contacts = the f32 arithmetic's count (each landed round scores exactly one
+    // 3.5f contact; missed rounds change nothing; samples[0] is the dart-dented seed).
+    assert_eq!(samples.len() as u32, expect_contacts + 1,
+        "the contact sequence is the decompile's f32 accumulation [M 0x12bfd8:37,49], got {} samples: {:?}",
+        samples.len(), samples);
+    assert!((samples[expect_contacts as usize - 1] - (expect_health + 3.5f32)).abs() < 1.0e-6,
+        "the last alive contact leaves 1.9f, got {}", samples[expect_contacts as usize - 1]);
     // Sister: the other vending machine (−33.0, 1.22, −18.08) is untouched.
-    assert!(!dead_of(&w, 378), "the far glass stands");
+    let (hs, deads) = br_of(&w, 378);
+    assert!(!deads && (hs - 9.0).abs() < 1.0e-6, "the far glass stands at health 9.0");
 }
 
 /// Walking through the laser web fires the beam's out channel: #607 (out ch 0x1F, mask 8, lock
