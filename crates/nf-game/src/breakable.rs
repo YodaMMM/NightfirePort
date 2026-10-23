@@ -55,7 +55,7 @@ pub struct Break {
     pub hi: V3,
     /// tag+0x00 — placement param 0's low byte [M 0x12c230:21 `*puVar1 = *(param_4 + 0x2c)`].
     pub kind: u8,
-    /// tag+0x04 — placement param 1's bits as f32 [M 0x12c230:23-29].
+    /// tag+0x04 — (f32)(i32) placement param 1 [M 0x12c230 disasm 0x12c2a8-0x12c2e0 cvt.s.w].
     pub health: f32,
     /// tag+0x08 — param 2 == 0 ? 0 : !(param 2) as u16 [M 0x12c230:31-39].
     pub filter: u16,
@@ -176,7 +176,14 @@ impl Breaks {
                 lo,
                 hi,
                 kind,
-                health: f32::from_bits(param(1)),
+                // `Break_Create` 0x12c230 disasm 0x12c2a8-0x12c2e0: `lw 0x30($s2)` → `mtc1` →
+                // `cvt.s.w` → `swc1 4($s1)` (the negative branch is the same cvt through the
+                // unsigned-double trick) — the health is (f32)(i32) param 1, NOT the bit
+                // pattern: 07000009's pillarglass #123 authored 6 [D placement params] is 6.0.
+                health: (param(1) as i32) as f32,
+                // `Break_Create` 0x12c230 disasm 0x12c2e4-0x12c2f8: param 2 == 0 → 0, else
+                // `lhu` + `nor` (~param2) → `sh 8($s1)` — the datum word `Break_Update` ORs
+                // 0x106 into [M 0x12c028-0x12c030].
                 filter: if p2 == 0 { 0 } else { !(p2 as u16) },
                 dead: false,
                 matrix: object_matrix(p.rotation, p.translation),
@@ -203,13 +210,28 @@ impl Breaks {
     }
 
     /// The bullet flight this tick against the breakables ([M Break_Update 0x12bfd8:44-48 — the
-    /// class-5 contact subtracts its damage; the filter word is an exclude mask, inert on
-    /// 07000001 where every param 2 is 0 [D]]). Returns the kills for presentation; each kill
-    /// spawns its pieces (crate::shatter).
-    pub fn bullet_hit(&mut self, a: V3, b: V3, weapon: u16, damage: f32, rng: &mut Rng) -> Vec<BreakEffect> {
+    /// class-5 contact subtracts its damage]). `weapon_mask` is the bullet's weapon-DEFINITION
+    /// word at `weapon_definition+0x10` (`lhu 0x10($a0)` in `Collide_FilterBullets` [M
+    /// 0x1ece94]; the caller reads `weapons.records[weapon][0x10..0x12]`), not the weapon id.
+    ///
+    /// The filter [M `Collide_FilterBullets` 0x1ece30, called from `Break_Update` 0x12bfd8:15
+    /// with mask = tag+0x08 | 0x106 (disasm 0x12c028-0x12c030)]: a class-5 contact whose word
+    /// ANDs the mask non-zero is marked t = 1e8 (0x4cbebc20, disasm 0x1ecea4) and the rebuild
+    /// hands every t == 1e8 node to `LList_Add` — OUT of the contact list (disasm 0x1ecee8
+    /// `c.2.s f0,f20` / 0x1ecef0 `bc1f` keep / 0x1ecef8 `jal LList_Add` drop); only the
+    /// zero-AND contacts remain for `Break_Update`'s damage walk. So a word with bits 0x02 /
+    /// 0x04 / 0x100 (the laser 0x0002, the watch 0x0100 [L ee_start_05.bin weapon_data
+    /// +0x10: 0x4e/0x4f = 0x0002, 0x54 = 0x0100]) never damages even a no-filter pane, while
+    /// the guns' 0x0008 (0x2/0x43/… [L same dump]) does; a pane's own param 2 shrinks the
+    /// passing set further (07000009's securityroom_glass param 2 = 0x30 → mask 0xffef:
+    /// nothing with ammo-word bits passes [D #344]).
+    /// Returns the kills for presentation; each kill spawns its pieces (crate::shatter).
+    pub fn bullet_hit(&mut self, a: V3, b: V3, weapon_mask: u16, damage: f32, rng: &mut Rng) -> Vec<BreakEffect> {
         let mut hits = Vec::new();
         for (i, br) in self.list.iter_mut().enumerate().filter(|(_, b)| !b.dead) {
-            if br.filter != 0 && br.filter & (1u16 << (weapon & 15)) != 0 { continue; }
+            // The filter's drop polarity [M 0x1ece30:24-33 + 0x1ecee4-0x1ecef8]: non-zero AND
+            // = the contact never reaches the damage walk.
+            if weapon_mask & (br.filter | 0x106) != 0 { continue; }
             if Self::seg_box(a, b, br.lo, br.hi) {
                 br.health -= damage;
                 if br.health < 0.0 {
@@ -355,6 +377,12 @@ mod tests {
     use super::*;
     use crate::shatter::EFFECT_INFO;
 
+    /// The bullet_hit weapon argument is the weapon-DEFINITION word at +0x10 (the game loads it
+    /// `lhu 0x10($a0)` [M 0x1ece94]); the disc's gun records carry 0x0008 [L ee_start_05.bin
+    /// weapon_data @0x2bf150 + w·0x10c: 0x2 (the P2K) = 0x0008], the laser 0x0002, the watch
+    /// 0x0100.
+    const GUN: u16 = 0x0008;
+
     /// One breakable with one collision record — a triangle across the test bullet's path
     /// [(5,8) in XY, at z = −2.5] facing the shooter (−Z). Kills play the sound and spawn one
     /// debris piece (EffectInfo[0x10] — model 0x0200012d [D 0x3037c0+0x10·0x88]).
@@ -383,7 +411,7 @@ mod tests {
         // The 07000001 vases carry params [(2,0)] only — kind 0, health 0.0 [D placements dump].
         let mut b = one(0, 0.0);
         let mut rng = Rng::new(1);
-        let kills = b.bullet_hit([5.0, 8.0, -4.0], [5.0, 8.0, -2.0], 0x1e, 25.0, &mut rng);
+        let kills = b.bullet_hit([5.0, 8.0, -4.0], [5.0, 8.0, -2.0], GUN, 25.0, &mut rng);
         assert!(b.list[0].dead, "health 0 - damage < 0 → Break_Kill [M 0x12bfd8:44-50]");
         assert_eq!(kills.len(), 1);
         assert_eq!(kills[0].sound, 0x5F3, "non-glass → 0x5F3 (the 41% 0x5F2 variant is unported, [S])");
@@ -398,12 +426,12 @@ mod tests {
         // radioroom_glass/comroom_glass carry params [(0,2),(1,0),(2,0)] — kind 2 [D placements].
         let mut b = one(2, 0.0);
         let mut rng = Rng::new(1);
-        let kills = b.bullet_hit([5.0, 8.0, -4.0], [5.0, 8.0, -2.0], 0x1e, 25.0, &mut rng);
+        let kills = b.bullet_hit([5.0, 8.0, -4.0], [5.0, 8.0, -2.0], GUN, 25.0, &mut rng);
         assert_eq!(kills[0].sound, 0x2E, "glass → sound 0x2E [M 0x12b970: uVar5 = 0x2e]");
         // Sister: a shot wide of the box never touches the health and spawns nothing.
         let mut b = one(2, 0.0);
         let mut rng = Rng::new(1);
-        let kills = b.bullet_hit([50.0, 8.0, -4.0], [50.0, 8.0, -2.0], 0x1e, 25.0, &mut rng);
+        let kills = b.bullet_hit([50.0, 8.0, -4.0], [50.0, 8.0, -2.0], GUN, 25.0, &mut rng);
         assert!(kills.is_empty() && !b.list[0].dead, "a miss never damages the breakable");
         assert!(b.shatter.debris.is_empty() && b.shatter.shards.is_empty(), "an unshot breakable spawns nothing");
     }
@@ -414,11 +442,51 @@ mod tests {
         let mut b = one(0, 50.0);
         let mut rng = Rng::new(1);
         for i in 0..5 {
-            let kills = b.bullet_hit([5.0, 8.0, -4.0], [5.0, 8.0, -2.0], 0x1e, 10.0, &mut rng);
+            let kills = b.bullet_hit([5.0, 8.0, -4.0], [5.0, 8.0, -2.0], GUN, 10.0, &mut rng);
             assert!(kills.is_empty() && !b.list[0].dead, "hit {}: {} left", i, 50 - 10 * (i + 1));
         }
-        let kills = b.bullet_hit([5.0, 8.0, -4.0], [5.0, 8.0, -2.0], 0x1e, 10.0, &mut rng);
+        let kills = b.bullet_hit([5.0, 8.0, -4.0], [5.0, 8.0, -2.0], GUN, 10.0, &mut rng);
         assert_eq!(kills.len(), 1, "the 6th crosses below zero");
+    }
+
+    #[test]
+    fn the_laser_and_watch_words_never_reach_a_no_filter_pane() {
+        // `Collide_FilterBullets` [M 0x1ece30:24-33 + 0x1ecee4-0x1ecef8]: a class-5 contact
+        // whose weapon word ANDs `filter | 0x106` non-zero is dropped from the list — on a
+        // no-filter pane the base 0x106 (bits 0x2/0x4/0x100) rejects the laser's 0x0002 and
+        // the watch's 0x0100 [L ee_start_05.bin weapon_data +0x10: 0x4e/0x4f = 0x0002,
+        // 0x54 = 0x0100], while the guns' 0x0008 passes.
+        let seg = ([5.0, 8.0, -4.0], [5.0, 8.0, -2.0]);
+        for (name, word) in [("laser", 0x0002u16), ("watch", 0x0100u16)] {
+            let mut b = one(2, 50.0);
+            let mut rng = Rng::new(1);
+            let kills = b.bullet_hit(seg.0, seg.1, word, 25.0, &mut rng);
+            assert!(kills.is_empty() && !b.list[0].dead && (b.list[0].health - 50.0).abs() < 1e-6,
+                "the {name} word {word:#06x} never damages the pane");
+            assert!(b.shatter.debris.is_empty() && b.shatter.shards.is_empty(), "{name}: no pieces");
+        }
+        let mut b = one(2, 0.0);
+        let mut rng = Rng::new(1);
+        let kills = b.bullet_hit(seg.0, seg.1, GUN, 25.0, &mut rng);
+        assert_eq!(kills.len(), 1, "the gun word 0x0008 passes the 0x106 base mask");
+    }
+
+    #[test]
+    fn the_security_room_filter_word_rejects_gunfire_but_takes_a_zero_word() {
+        // 07000009's securityroom_glass #344 carries param 2 = 0x30 [D placement params] →
+        // `Break_Create` stores ~0x30 = 0xffcf [M 0x12c2e4-0x12c2f8] and `Break_Update` ORs
+        // 0x106 → mask 0xffef [M 0x12c028-0x12c030]: a gun's 0x0008 ANDs non-zero → dropped;
+        // only a zero word (the grenades' [L ee_start_05.bin: 0x2c..0x31 = 0x0000]) passes.
+        let mut b = one(2, 50.0);
+        b.list[0].filter = !0x30u16;
+        let mut rng = Rng::new(1);
+        let kills = b.bullet_hit([5.0, 8.0, -4.0], [5.0, 8.0, -2.0], GUN, 25.0, &mut rng);
+        assert!(kills.is_empty() && !b.list[0].dead, "gunfire is filtered out of the security glass");
+        let mut b = one(2, 0.0);
+        b.list[0].filter = !0x30u16;
+        let mut rng = Rng::new(1);
+        let kills = b.bullet_hit([5.0, 8.0, -4.0], [5.0, 8.0, -2.0], 0x0000, 25.0, &mut rng);
+        assert_eq!(kills.len(), 1, "a zero word (the explosive class) passes 0xffef");
     }
 
     #[test]
@@ -464,7 +532,7 @@ mod tests {
         let mut b = one(0, 0.0);
         b.list[0].src.records.clear();
         let mut rng = Rng::new(1);
-        let kills = b.bullet_hit([5.0, 8.0, -4.0], [5.0, 8.0, -2.0], 0x1e, 25.0, &mut rng);
+        let kills = b.bullet_hit([5.0, 8.0, -4.0], [5.0, 8.0, -2.0], GUN, 25.0, &mut rng);
         assert!(b.list[0].dead, "the dead bit is still set [M 0x12b970:60]");
         assert!(kills.is_empty(), "no effect (no sound) [M 0x12b970:61-63]");
         assert!(b.shatter.debris.is_empty() && b.shatter.shards.is_empty(), "no pieces");
@@ -479,7 +547,7 @@ mod tests {
         let mut b = one(0, 0.0);
         let mut rng = Rng::new(0x5eed);
         let draws_before = rng.draws;
-        b.bullet_hit([5.0, 8.0, -4.0], [5.0, 8.0, -2.0], 0x1e, 25.0, &mut rng);
+        b.bullet_hit([5.0, 8.0, -4.0], [5.0, 8.0, -2.0], GUN, 25.0, &mut rng);
         let d = &b.shatter.debris[0];
         let info = EFFECT_INFO[0x10];
         let speed = info.spread * 0.5 * crate::grenade::REC_FRAME_RATE;
@@ -520,7 +588,7 @@ mod tests {
         b.list[0].src.glass = vec![mk(-2.5), mk(-2.4), mk(-2.3)];
         let mut rng = Rng::new(0x5eed);
         let draws_before = rng.draws;
-        let kills = b.bullet_hit([5.0, 8.0, -4.0], [5.0, 8.0, -2.0], 0x1e, 25.0, &mut rng);
+        let kills = b.bullet_hit([5.0, 8.0, -4.0], [5.0, 8.0, -2.0], GUN, 25.0, &mut rng);
         assert_eq!(kills.len(), 1);
         assert_eq!(b.shatter.shards.len(), 3, "one leaf shard per small source triangle [M 0x12b270]");
         for s in &b.shatter.shards {
@@ -554,7 +622,7 @@ mod tests {
             material: 1,
         }];
         let mut rng = Rng::new(3);
-        b.bullet_hit([5.0, 8.0, -4.0], [5.0, 8.0, -2.0], 0x1e, 25.0, &mut rng);
+        b.bullet_hit([5.0, 8.0, -4.0], [5.0, 8.0, -2.0], GUN, 25.0, &mut rng);
         assert!(b.shatter.shards.len() >= 2, "the split recursed until every piece was a leaf");
         // Every shard's verts stay within the source triangle's span (the bisection conserves;
         // the recomposition carries ~1e-7 of float dust).
@@ -573,7 +641,7 @@ mod tests {
         // at life < 1 [M Debris_Update 0x1aac00:21-56].
         let mut b = one(0, 0.0);
         let mut rng = Rng::new(5);
-        b.bullet_hit([5.0, 8.0, -4.0], [5.0, 8.0, -2.0], 0x1e, 25.0, &mut rng);
+        b.bullet_hit([5.0, 8.0, -4.0], [5.0, 8.0, -2.0], GUN, 25.0, &mut rng);
         let life0 = b.shatter.debris[0].life;
         let pos0 = b.shatter.debris[0].pos;
         let vel0 = b.shatter.debris[0].vel;

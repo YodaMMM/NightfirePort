@@ -16,6 +16,12 @@ use nf_game::drone::Rng;
 const REC_FRAME_RATE: f32 = 1.0 / 60.0;
 use nf_game::shatter::EFFECT_INFO;
 
+/// The `bullet_hit` weapon argument is the weapon-DEFINITION word at +0x10 (`lhu 0x10($a0)`
+/// [M 0x1ece94]): the disc's gun records carry 0x0008 [L ee_start_05.bin weapon_data
+/// @0x2bf150 + w·0x10c: the P2K 0x2 = 0x0008], which passes `Break_Update`'s base 0x106 mask
+/// [M 0x12c028-0x12c030 + 0x1ece30:24-33].
+const GUN_WORD: u16 = 0x0008;
+
 fn level(id: u32) -> Option<Level> {
     let path = std::env::var_os("NF_ISO")?;
     let iso = IsoImage::open(&path).unwrap();
@@ -57,7 +63,7 @@ fn a_shot_vase_spawns_the_games_debris_count_and_launch_numbers() {
     let a = [(lo[0] + hi[0]) / 2.0, (lo[1] + hi[1]) / 2.0, hi[2] + 2.0];
     let b = [(lo[0] + hi[0]) / 2.0, (lo[1] + hi[1]) / 2.0, lo[2] - 2.0];
     let mut rng = Rng::new(0x5eed);
-    let kills = br.bullet_hit(a, b, 0x1e, 25.0, &mut rng);
+    let kills = br.bullet_hit(a, b, GUN_WORD, 25.0, &mut rng);
     assert_eq!(kills.len(), 1, "health 0.0 [D placements] — the first bullet kills");
     assert_eq!(br.shatter.debris.len(), count,
         "one debris object per stride-3 record [M 0x1ed548; count recomputed from the disc data]");
@@ -90,7 +96,7 @@ fn a_shot_vase_spawns_the_games_debris_count_and_launch_numbers() {
     let b = [(lo[0] + hi[0]) / 2.0, (lo[1] + hi[1]) / 2.0, lo[2] - 2.0];
     let mut rng = Rng::new(0x5eed);
     let before = rng.draws;
-    br2.bullet_hit(a, b, 0x1e, 25.0, &mut rng);
+    br2.bullet_hit(a, b, GUN_WORD, 25.0, &mut rng);
     let n = br2.shatter.debris.len();
     assert_eq!(rng.draws - before, 8 * n as u64, "eight draws per debris object [M 0x1aaa00:30-50]");
 }
@@ -111,7 +117,7 @@ fn a_shot_window_spawns_a_shard_per_source_triangle_and_a_miss_spawns_none() {
     let a = [(lo[0] + hi[0]) / 2.0, (lo[1] + hi[1]) / 2.0, hi[2] + 2.0];
     let b = [(lo[0] + hi[0]) / 2.0, (lo[1] + hi[1]) / 2.0, lo[2] - 2.0];
     let mut rng = Rng::new(0x5eed);
-    let kills = br.bullet_hit(a, b, 0x1e, 25.0, &mut rng);
+    let kills = br.bullet_hit(a, b, GUN_WORD, 25.0, &mut rng);
     assert_eq!(kills.len(), 1);
     assert_eq!(kills[0].sound, 0x2E, "glass → 0x2E [M 0x12b970:65]");
     assert!(br.shatter.shards.len() >= src_count,
@@ -140,7 +146,7 @@ fn a_shot_window_spawns_a_shard_per_source_triangle_and_a_miss_spawns_none() {
     // Sister: a missed shot spawns nothing.
     let mut br = Breaks::create(&level);
     let mut rng = Rng::new(0x5eed);
-    let kills = br.bullet_hit([1.0e5, 1.0e5, 1.0e5], [1.0e5, 1.0e5, 2.0e5], 0x1e, 25.0, &mut rng);
+    let kills = br.bullet_hit([1.0e5, 1.0e5, 1.0e5], [1.0e5, 1.0e5, 2.0e5], GUN_WORD, 25.0, &mut rng);
     assert!(kills.is_empty());
     assert!(br.shatter.shards.is_empty() && br.shatter.debris.is_empty(),
         "an unshot/missed breakable spawns nothing");

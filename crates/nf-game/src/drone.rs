@@ -12651,8 +12651,16 @@ fn segment_hits_sphere(a: V3, b: V3, c: V3, r: f32) -> bool {
             // mp-world-sync (agent 9): online the breakables and destroyables take every slot's
             // shot in the Sim's shared world pass (`Sim::step_net_world`), on every machine —
             // this machine's own bullet must not break them here alone.
+            // The weapon argument is the weapon-DEFINITION word at +0x10 (the game loads it
+            // `lhu 0x10($a0)` inside `Collide_FilterBullets` [M 0x1ece94]) — `Break_Update`'s
+            // filter `Collide_FilterBullets(list, tag+0x08 | 0x106)` [M 0x12c028-0x12c030]
+            // drops every class-5 contact whose word ANDs the mask non-zero [M 0x1ece30:24-33
+            // + 0x1ecee4-0x1ecef8]. Disc words [L ee_start_05.bin weapon_data @0x2bf150 +
+            // w·0x10c]: guns 0x0008 (0x2/0x43/… — they pass a no-filter pane), the Laser
+            // 0x0002, the watch/Decryptor 0x0100 (both dropped — lasers never break glass).
+            let break_weapon_word = d.weapons.records.get(b.weapon as usize).map_or(0u16, |r| u16::from_le_bytes([r[0x10], r[0x11]]));
             let net_world = self.net_bodies.is_some();
-            for k in if net_world { Vec::new() } else { self.breaks.bullet_hit(b.pos, end, b.weapon, b.damage, &mut self.rng) } {
+            for k in if net_world { Vec::new() } else { self.breaks.bullet_hit(b.pos, end, break_weapon_word, b.damage, &mut self.rng) } {
                 self.break_kills.push((k.placement, k.kind, k.sound));
                 // Break_Kill 0x12b970:75 plays the kill sound inline with the kill —
                 // `Sound_Play3D(100.0, …, id, obj+0x80, …)` — the port presents it here: the

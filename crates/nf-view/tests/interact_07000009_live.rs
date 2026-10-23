@@ -78,29 +78,45 @@ fn without_the_press_the_alarm_stays_off() {
     assert_eq!(sim.drones.level_exit, None, "the level runs on");
 }
 
-/// KIND Breakable (the lobby roof glass): the pillarglass #123 (kind-0x20 param 0 = 2 = glass
-/// [D #123 params (0:2, 1:6)]; Break_Create 0x12c230's tag+0x00 = 2) hangs at (8.02, −361.69,
-/// 36.74) over the lobby floor. The real fire path (the equipped gun, the bullets, the
-/// bullet_hit pass) breaks it: `Break_Kill` 0x12b970 marks it dead and reports the glass kill
-/// (sound 0x2E) [M]. Sister: aiming without firing leaves it alive.
+/// KIND Breakable (the lobby roof glass): the pillarglass #123 (kind-0x20 param 0 = 2 = glass,
+/// param 1 = 6 → health (f32)(i32)6 = 6.0 [D #123 params (0:2, 1:6); M Break_Create 0x12c230
+/// disasm 0x12c2a8-0x12c2e0 — the cvt.s.w, no filter param]) is a 0.2-thick glass pillar slab
+/// over the lobby floor: x 7.92..8.12, y −369.25..−354.12 (up), z 36.10..37.38 [D the break
+/// bounds; placement @(8.02, −361.69, 36.74)]. The game's bullet route: `Break_Update`
+/// 0x12bfd8:15 filters the pane's contact list with `Collide_FilterBullets(list, tag+0x08 |
+/// 0x106)` [M disasm 0x12c028-0x12c030] — a class-5 contact whose weapon-DEFINITION word
+/// (+0x10) ANDs the mask non-zero is pulled out of the list (marked t = 1e8 → `LList_Add`)
+/// [M 0x1ece30:24-33 + 0x1ecee4-0x1ecef8], so only zero-AND words damage it. The disc's gun
+/// records carry 0x0008 (the P2K 0x2 [L ee_start_05.bin weapon_data @0x2bf150 + w·0x10c]) —
+/// 0x0008 & 0x106 == 0, a gun round passes and reaches the pane from the floor beside it;
+/// the laser 0x0002 / watch 0x0100 words never do (unit-tested in breakable.rs). The real
+/// fire path (the equipped gun, the bullets, the bullet_hit pass) breaks it: `Break_Kill`
+/// 0x12b970 marks it dead and reports the glass kill (sound 0x2E) [M]. Sister: aiming
+/// without firing leaves it alive.
 #[test]
 fn shooting_the_lobby_roof_glass_breaks_it() {
     let Some(iso) = iso() else { eprintln!("NF_ISO not set — skipping"); return };
     let mut scene = load_09(&iso);
-    settle_near(&mut scene, [8.0, -369.0, 36.7]);
-    // The real loadout: cycle the weapons until one is armed (the walkreal's own draw loop).
-    for _ in 0..12 {
-        let (c, s) = { let sim = scene.sim.as_ref().unwrap(); (sim.gun.clip, sim.gun.spare) };
-        if c + s > 0 { break; }
-        { let sim = scene.sim.as_mut().unwrap();
-          sim.step_bond(Input { weapon_cycle: 1, ..Default::default() }, false, false, false); }
-        for _ in 0..60 { scene.sim.as_mut().unwrap().step_bond(Input::default(), false, false, false); }
-    }
+    // The lobby floor BESIDE the pillar (the slab x 8.023 thin, z 36.10..37.38 [D the break
+    // bounds] — standing spots are off the footprint). The stance sits 0.5 EAST of the slab:
+    // the game's own muzzle offset (the bullet starts at the midpoint of the eye and the view
+    // model's datum 0 [M Player_WeaponInitBullet 0x1a4bf0:226-245], ~0.15 right = west here)
+    // then cannot reach the neighbouring perpendicular pane #116 (z 35.96, x 6.59..7.86 + the
+    // 0.1 grow) that clips a corner shot from the x-8.02 line, and the angled round still
+    // crosses #123's slab for its whole flight.
+    settle_near(&mut scene, [8.5, -369.0, 34.5]);
+    // The real loadout: cycle to a LETHAL GUN (the walkreal's own draw loop — the level opens
+    // on the K5 sleep darts, whose word is also 0x0008 but whose hits stun drones; the P2K is
+    // the first lethal gun in Bond's owned set [D the 09 loadout]).
+    assert!(cycle_to_lethal(&mut scene), "a lethal gun is in Bond's 09 owned set (the P2K 0x2)");
     { let sim = scene.sim.as_ref().unwrap();
-      assert!(sim.gun.clip + sim.gun.spare > 0, "an armed weapon is available on 09"); }
-    // The pane is a vertical slab: x ≈ 8.023 (zero-thickness), y −369.25..−354.12, z 36.10..37.38
-    // [D the break bounds] — aim at its standing-height body, not the placement origin.
-    let target = [8.023f32, -366.0, 36.74];
+      let wd = sim.weapons.records.get(sim.gun.weapon as usize)
+          .map_or(0u16, |r| u16::from_le_bytes([r[0x10], r[0x11]]));
+      eprintln!("[glass] armed weapon {:#x} word {wd:#06x}", sim.gun.weapon);
+      assert!(wd & 0x106 == 0, "the armed gun's word passes the game's base mask [M 0x1ece94]"); }
+    // Aim at the pillar's body 1.9 north of the stance (inside the slab's z span, standing
+    // height): the round's line crosses the slab [D the break bounds].
+    let target = [8.02f32, -366.0, 36.4];
     let mut killed = false;
     for t in 0..2400u32 {
         {
@@ -116,23 +132,23 @@ fn shooting_the_lobby_roof_glass_breaks_it() {
     }
     let sim = scene.sim.as_ref().unwrap();
     let b = sim.drones.breaks.list.iter().find(|b| b.placement == 123).expect("glass #123 exists [D]");
-    eprintln!("[glass] #123 dead {} kills {:?}", b.dead, sim.drones.break_kills);
+    eprintln!("[glass] #123 dead {} health {:.3} kills {:?}", b.dead, b.health, sim.drones.break_kills);
     assert!(b.dead, "the roof glass breaks under the real fire [M Break_Kill 0x12b970]");
     assert!(killed, "the death was observed in-loop");
     assert!(sim.drones.break_kills.iter().any(|&(p, k, s)| p == 123 && k == 2 && s == 0x2E),
         "the kill effect is the glass one: kind 2, sound 0x2E [M 0x12b970 kind-2 arm]");
 }
 
-/// Sister: the same aim with the trigger never pressed — the glass lives.
+/// Sister: the same stance and aim with the trigger never pressed — the glass lives.
 #[test]
 fn the_aim_alone_leaves_the_glass_intact() {
     let Some(iso) = iso() else { eprintln!("NF_ISO not set — skipping"); return };
     let mut scene = load_09(&iso);
-    settle_near(&mut scene, [8.0, -369.0, 36.7]);
+    settle_near(&mut scene, [8.5, -369.0, 34.5]);
     for _ in 0..120 {
         let sim = scene.sim.as_mut().unwrap();
         let head = sim.bond.head();
-        let dir = [8.023 - head[0], -366.0 - head[1], 36.74 - head[2]];
+        let dir = [8.02 - head[0], -366.0 - head[1], 36.4 - head[2]];
         let l = (dir[0] * dir[0] + dir[1] * dir[1] + dir[2] * dir[2]).sqrt().max(1e-4);
         sim.bond.yaw = dir[0].atan2(dir[2]);
         sim.bond.pitch = (dir[1] / l).asin() / std::f32::consts::FRAC_PI_2;
@@ -142,6 +158,47 @@ fn the_aim_alone_leaves_the_glass_intact() {
     let b = sim.drones.breaks.list.iter().find(|b| b.placement == 123).unwrap();
     assert!(!b.dead, "aiming does not break the glass");
     assert!(sim.drones.break_kills.is_empty(), "no kill effects without the fire");
+}
+
+/// The filter's own level-real pin: the securityroom_glass #87 (kind 0x20 params [0:2, 1:1,
+/// 2:0x30] [D placement]) carries param 2 = 0x30 → `Break_Create` stores ~0x30 = 0xffcf [M
+/// 0x12c2e4-0x12c2f8] and `Break_Update`'s mask 0xffcf | 0x106 = 0xffef [M 0x12c028-0x12c030]
+/// — a gun's word 0x0008 ANDs it non-zero, so `Collide_FilterBullets` pulls the contact [M
+/// 0x1ece30:24-33 + 0x1ecee4-0x1ecef8] and the round never damages the pane: the same real
+/// fire path that shatters #123 leaves #87 whole. (Its health (f32)(i32)1 = 1.0 [M
+/// 0x12c2a8-0x12c2e0] would die to the first passing round.) Sister of the roof-glass shot.
+#[test]
+fn the_security_room_glass_refuses_the_same_gun() {
+    let Some(iso) = iso() else { eprintln!("NF_ISO not set — skipping"); return };
+    let mut scene = load_09(&iso);
+    // The lobby floor EAST of the security glass (the pane x −18.40..−10.63, z 27.51..35.29
+    // [D the break bounds]): a straight west shot into its east face. Facing west, the game's
+    // own muzzle offset (right = east) pushes the round AWAY from the pane edges.
+    settle_near(&mut scene, [-9.8, -369.0, 31.4]);
+    assert!(cycle_to_lethal(&mut scene), "a lethal gun is in Bond's 09 owned set (the P2K 0x2)");
+    let target = [-10.8f32, -366.8, 31.4];
+    let mut shots = 0u32;
+    for t in 0..900u32 {
+        {
+            let sim = scene.sim.as_mut().unwrap();
+            if sim.drones.breaks.list.iter().any(|b| b.placement == 87 && b.dead) { break; }
+            let head = sim.bond.head();
+            let dir = [target[0] - head[0], target[1] - head[1], target[2] - head[2]];
+            let l = (dir[0] * dir[0] + dir[1] * dir[1] + dir[2] * dir[2]).sqrt().max(1e-4);
+            sim.bond.yaw = dir[0].atan2(dir[2]);
+            sim.bond.pitch = (dir[1] / l).asin() / std::f32::consts::FRAC_PI_2;
+            let fired = t % 16 == 0;
+            if fired { shots += 1; }
+            sim.step_bond(Input::default(), fired, false, false);
+        }
+    }
+    let sim = scene.sim.as_ref().unwrap();
+    let b = sim.drones.breaks.list.iter().find(|b| b.placement == 87).expect("security glass #87 exists [D]");
+    eprintln!("[glass] #87 dead {} health {:.3} after {shots} trigger ticks, kills {:?}",
+        b.dead, b.health, sim.drones.break_kills);
+    assert!(shots > 10, "the fire loop pulled the trigger ({shots} ticks — the harness fired)");
+    assert!(!b.dead, "the gun word 0x0008 is filtered out of the 0x30-filter pane [M 0x1ece30]");
+    assert!(!sim.drones.break_kills.iter().any(|&(p, _, _)| p == 87), "no kill effect for #87");
 }
 
 /// KIND Door: the far stairwell door #155 (0xdb, param 2 = 0 → E-openable [D #155]) opens on
