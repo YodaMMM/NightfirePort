@@ -3084,6 +3084,10 @@ impl Drone {
             // InterogateAssistWait 0x161860 cases 6-9/0x17-0x19 → (0x56, 1) [M].
             INTEROGATE => (ATTACK, false),
             INTEROGATE_ASSIST_WAIT => (ATTACK, true),
+            // EnemyMission 0x15e1e8: the same pair — cases 6/8 → HandleImpact(0x56, 0), the
+            // 7/9/0x17/0x18/0x19 group (0x56, 1) [M 0x15e1e8:84-96,120]; the group's allow is
+            // raised in `on_explosion` below.
+            state::ENEMY_MISSION => (ATTACK, false),
             _ => return None,
         })
     }
@@ -3230,6 +3234,8 @@ impl Drone {
             // HostageKiller(Attack)'s 7/9/0x17/0x18/0x19 group arm passes allow = 1 [M
             // 0x15c728:47-62, 0x15c940:66-85] — the blast staggers the executioner too.
             | HOSTAGE_KILLER | HOSTAGE_KILLER_ATTACK
+            // EnemyMission's 7/9/0x17/0x18/0x19 group is (0x56, 1) like Idle's [M 0x15e1e8:87-95].
+            | state::ENEMY_MISSION
             // escort-lead-substates (835): the ally family's group arm (resume, 1).
             | ALLY_LEAD_INIT | ALLY_LEAD | PLAYER_IN_WAY | LEAD_HIDE | ALLY_LEAD_WAIT | LEAD_MISSION_WAIT | LEAD_BOND_COMBAT
             | ALLY_LEAD_DONE | FOLLOW_INIT | FOLLOW | FOLLOW_WAIT | FOLLOW_DONE | GO_TO_GOAL_ALLY);
@@ -6286,7 +6292,8 @@ impl Drone {
                 | DRONE_STUCK | OPEN_DOOR | KICK_OBJECT | ACTION_ANIM | STAND_FIDDLE | RUN_AWAY_FROM_OBJECT
                 | HIDE_FROM_SCARY_OBJECT | RUN_FOR_COVER | UNDER_COVER_INIT | UNDER_COVER_IDLE | UNDER_COVER_AIM
                 | UNDER_COVER_FIRE | UNDER_COVER_SNIPER_FIRE | UNDER_COVER_SNIPER_RELOAD | UNDER_COVER_RETURN
-                | UNDER_COVER_LEAVE_NOW | HEARD_NOISE_AWARE | HEARD_NOISE_SUSPECT | HEARD_NOISE_ALERT | ALT_ATTACK) {
+                | UNDER_COVER_LEAVE_NOW | HEARD_NOISE_AWARE | HEARD_NOISE_SUSPECT | HEARD_NOISE_ALERT | ALT_ATTACK
+                | state::ENEMY_MISSION) {
             return false;
         }
         // `PlrStat_LogShotHitEnemy(0)` — UNCONDITIONAL here (no team gate; the msg-8 route's gate
@@ -6848,9 +6855,16 @@ impl Drone {
             (IDLE | ALERT | PATROL, msg::ENTER) => {
                 self.vision_on = true;
                 self.watching = true;
-                // Idle / Alert: prop 0x1D → a mission path (`AssignAIPath(8)` → EnemyMission 0x1B, not ported; none in
-                // 07000005), else the property is cleared.
-                if s != PATROL && self.prop(d, 0x1d) && !self.assign_path(d, 8) { d.props.set(0x1d, &mut self.props, 0); }
+                // Idle / Alert: prop 0x1D → a mission path (`AssignAIPath(8)`): with pending route
+                // nodes (+0x9f2 != 0 after the assign) the ENTER SetStates 0x1b EnemyMission — Idle
+                // regardless of the alertness, Alert the same [M 0x15bf18:32-56, 0x15c248:21-29;
+                // +0x9f2 is filled by InitAIPath 0x153720 — the port's `assign_path` bool]. Without
+                // a route the property clears [M 0x15bf18:38, 0x15c248:29] and the arms below run
+                // (Idle: the stand-idle under 0.66 / Alert; Alert: the 0x21 look + the 0x46 timeout).
+                if s != PATROL && self.prop(d, 0x1d) {
+                    if self.assign_path(d, 8) { self.set_state(ENEMY_MISSION); return true; }
+                    d.props.set(0x1d, &mut self.props, 0);
+                }
                 match s {
                     IDLE if self.alert >= 0.66 => self.set_state(ALERT),
                     IDLE => {
@@ -6921,8 +6935,9 @@ impl Drone {
             // time, then Attack (`+0x4F8` |= 0x4000000 | 0x40000000 [M :113-114] — the alarm-pending bit feeds
             // FirstAttack's FirstAlertState consult). The assist-wait state routes msg 0x1e through the same
             // EnemyAlerts [M 0x161860 case 0x1e] — its ALARM lands here (the INTEROGATE/ASSIST_WAIT arm below keeps
-            // the other alert kinds).
-            (IDLE | ALERT | PATROL | ALERT_TO_POSITION | SEARCH_AREA | HEARD_NOISE_AWARE | HEARD_NOISE_SUSPECT | HEARD_NOISE_ALERT | INTEROGATE_ASSIST_WAIT, msg::ALARM) => {
+            // the other alert kinds); EnemyMission's case 0x1e is the same EnemyAlerts arm [M 0x15e1e8:102-112].
+            (IDLE | ALERT | PATROL | ALERT_TO_POSITION | SEARCH_AREA | HEARD_NOISE_AWARE | HEARD_NOISE_SUSPECT | HEARD_NOISE_ALERT | INTEROGATE_ASSIST_WAIT
+                | ENEMY_MISSION, msg::ALARM) => {
                 if !self.investigating { self.resume_state = s; self.home = self.feet(); }
                 self.alert_pending |= 0x4000_0000;
                 self.set_state(ATTACK);
@@ -8228,6 +8243,112 @@ impl Drone {
             (CIVILIAN_MISSION_WAIT, msg::WAIT_PAUSE) => { self.timer_c = Some(frame + 120); true }
             (CIVILIAN_MISSION_WAIT, msg::SOUND | msg::ALARM) => { if let Some(n) = self.enemy_alerts(d, s) { self.set_state(n); } true }
             (CIVILIAN_MISSION_WAIT, msg::FORCED_ATTACK) => { self.set_state(ATTACK); true }
+            // EnemyMission 0x1b (`NDrone2_DSTATE_EnemyMission` 0x15e1e8, `NDrone2_StateFuncs[0x1b]`
+            // [L 0x29b300 + symtab]): the ENEMY side of the prop-0x1D mission walks — the Idle/Alert
+            // ENTER arm above lands here with a kind-8 route. The disc users [D the kind-8 census:
+            // the placement's behaviour word carries prop 0x1d, a kind-8 path node within the
+            // assign's 0.3 2D bind, and the type maps to start-by-mode 4/6 (no civilian init)]:
+            // 07000001 dtype-2 "Mayhew Route" node 31 (0.129), 07000006 dtype-1
+            // "SnowTalkDronePath - (Dr_13)" (0.013), 0700000d dtype-1 "Mission_G6" node 2 (0.254),
+            // 07000012 dtype-3 "MissionPath_Drones enter Office 7" ×2 (0.027/0.069), 07000014
+            // dtype-8 "MissionPath" ×3 (0.023-0.043), 07000016 dtype-2 "Kiko Walk" (0.152). ENTER:
+            // the voice-0x13 (+0xD8) skins bail to KikoMission 0x19 [M :20-23 — the CivMission
+            // 0x15d860 carve-out's sibling]; the rest re-arm 0x10000|0x2000 and start the walk —
+            // the run-anim 0x35 at alert ≥ 0.66 else the walk 0x37 [M :23-31].
+            (ENEMY_MISSION, msg::ENTER) => {
+                if self.voice_type == 0x13 { self.set_state(crate::kiko::KIKO_MISSION); return true; }
+                self.vision_on = true;
+                self.watching = true;
+                if self.alert >= 0.66 { self.call_anim(d, anim_state::ALERT_WALK, 0, 0) } else { self.call_anim(d, anim_state::WALK, 0, 0) }
+                true
+            }
+            (ENEMY_MISSION, msg::UPDATE) => {
+                // Case 3 [M 0x15e1e8:37-41]: the sight scan first — a pick is stored at SMInfo+0x1c
+                // and SetStated.
+                if let Some(n) = self.look_for_opponent(d) { self.set_state(n); return true; }
+                // `NDrone2_UpdateMissionRoute` 0x154a80 = `NDrone2_FollowRoute` 0x155be0 (the move
+                // target +0x670, cel +0x680, radius 0.3, dist +0x660, the angles +0x690 [M
+                // 0x155be0:47-70]) over `AINetwork_FollowRoute` 0x15b110's code; the door/kick/action
+                // node dispatch (`LinkCreep_Handler` 0x15a2c8) rides the same call [M 0x15b110:21] —
+                // the port's `route_reached_special`.
+                let feet = self.feet();
+                let mut code = crate::nav::follow::NO_PATH;
+                if self.route.is_some() {
+                    let ppos = self.player_pos;
+                    let (c, reached) = { let r = self.route.as_mut().unwrap(); r.follow(d.nav, feet, &|p| Drone::ppos_near(ppos, p)) };
+                    {
+                        let r = self.route.as_ref().unwrap();
+                        let next = reached.and_then(|n| r.nodes.iter().position(|&x| x == n)).and_then(|i| r.nodes.get(i + 1)).copied();
+                        let target = r.target;
+                        let route_path = r.path;
+                        drop(r);
+                        self.route_reached_special(d, route_path, reached, next);
+                        if c != crate::nav::follow::ARRIVED { self.desired_yaw = atan2_approx(target[0] - self.pos[0], target[2] - self.pos[2]); }
+                    }
+                    code = c;
+                }
+                if code != crate::nav::follow::ARRIVED {
+                    // Not arrived [M 0x15e1e8:42-61]: the game splits on the route creep byte
+                    // +0x974 ∈ {9, 0xc} (the port's BLOCKED code); codes 0/2 (and the empty-route 7)
+                    // keep the ENTER walk with NO anim request.
+                    if code == crate::nav::follow::BLOCKED {
+                        if self.alert >= 0.66 {
+                            // [M 0x15e1e8:49-57]: +0x3b = (+0x228 >> 2) & 1, then +0x3b = (+0x1e == 0)
+                            // when the bit is set (the port's firing/gun_through_wall);
+                            // `SetAngleToObj(0, +0x170 opponent)` → +0x694 [M 0x154d58:44-45]; anim 10
+                            // = the aim stand.
+                            self.firing = self.los;
+                            if self.los { self.firing = !self.gun_through_wall; }
+                            self.desired_yaw = self.yaw_to_opp;
+                            self.call_anim(d, anim_state::AIM_STAND, 0, 0);
+                        } else {
+                            self.set_stand_idle(d, rng, frame, false); // [M 0x15e1e8:60 SetStandIdleAnim(1) — the game arg skips a live stand window (0x13ca68:19-21), the port's force=false]
+                        }
+                    }
+                    return true;
+                }
+                // Arrived (code 3) [M 0x15e1e8:63-65]: the prop clears, `AINetwork_InvalidateRoute`
+                // (+0x9f2 = 0) — the port drops the whole route slot.
+                d.props.set(0x1d, &mut self.props, 0);
+                self.route = None;
+                // [M 0x15e1e8:66-82]: +0x5A4 (alt_state) set with the second channel (+0x135) clear
+                // and not level 0x7000006 → `NDrone2_ChangeToAttackMode` 0x14a648:7-36 — the flush
+                // (+0xC6 → +0xC5; the mode-2 → 0x19 + stationary arm returns 0x56; +0xC6/+0x5A4
+                // cleared; the +0xC48 == 100 behaviour-block switch and +0x28/+0x29 have no port
+                // model, like the ATTACK ENTER's fold) — and SetState to its return. Everything else
+                // (no alt state, a channel set, level 0x7000006) → 4 IDLE.
+                if self.alt_state != 0 && self.second_channel == 0 && d.level != 0x0700_0006 {
+                    if self.alt_mode != 0 { self.mode = self.alt_mode; }
+                    let st = if self.mode == 2 { self.mode = 0x19; self.stationary = true; ATTACK } else { self.alt_state };
+                    self.alt_mode = 0;
+                    self.alt_state = 0;
+                    self.set_state(st);
+                    return true;
+                }
+                self.set_state(IDLE);
+                true
+            }
+            // The impact family [M 0x15e1e8:84-96 + 120]: `HandleImpact(…, 0x56, allow)` — msgs 6/8
+            // allow 0, 7/9/0x17/0x18/0x19 allow 1 (the Idle 0x15bf18:97-112 split). The LIVE route is
+            // the shared dispatch (`impact_args` → (0x56, 0), the `on_explosion` group's allow 1, the
+            // `on_dart_impact` whitelist — all carry ENEMY_MISSION now); these rows mirror the
+            // per-state documentation idiom the INVESTIGATE rows set.
+            (ENEMY_MISSION, msg::BULLET | msg::PUNCH) => self.on_bullet_resume(d, rng, frame, ATTACK, false),
+            (ENEMY_MISSION, msg::TASE | msg::EXPLOSION | msg::FLASH | msg::SMOKE | msg::STUN_DART) => self.on_bullet_resume(d, rng, frame, ATTACK, true),
+            // The alert family [M 0x15e1e8:97-112]: 0x11/0x12/0x14/0x15/0x16/0x1e →
+            // `DroneVision_EnemyAlerts`, a pick SetStates (0x11/0x12 ride the shared SHOUT/SCREAM
+            // row above; 0x1e the shared ALARM row above; 0x15/0x16 have no decompiled sender — the
+            // msg census).
+            (ENEMY_MISSION, msg::SOUND) => { if let Some(n) = self.enemy_alerts(d, s) { self.set_state(n); } true }
+            // [M 0x15e1e8:113-115] `DroneFunc_DoForcedAttack` — the shared arm's body.
+            (ENEMY_MISSION, msg::FORCED_ATTACK) => {
+                if self.alerted_by_drone && !self.first_attack_done {
+                    self.alerted_by_drone = false;
+                    self.alert_pending |= 0x2000_0000;
+                    self.set_state(ATTACK);
+                }
+                true
+            }
             // CivilianPatrol (0x15d610): walk the patrol path (`CallAnim(0x37)`); armed person within 6 (0x40c00000)
             // → CivilianScared (the voice-0x10 team switch and the female scream 0x48 are not ported).
             (CIVILIAN_PATROL, msg::ENTER) => {
