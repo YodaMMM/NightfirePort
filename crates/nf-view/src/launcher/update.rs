@@ -2,8 +2,9 @@
 //! updates install automatically on launch).
 //!
 //! A release build carries its version (`NF_RELEASE_VERSION`, baked in by the release build — `tools/release`); a dev
-//! build carries none and never updates. On start the launcher asks GitHub for the repository's latest release
-//! (`releases/latest`); when its tag is newer it downloads the release's `NightfirePort.exe` and the `.sha256` beside
+//! build carries none and never updates. On start the launcher asks GitHub for the repository's release list
+//! (`releases`, prereleases included — `releases/latest` skips them; it stays as the fallback) and takes the newest
+//! version; when its tag is newer it downloads the release's `NightfirePort.exe` and the `.sha256` beside
 //! it (a release is just the exe — no zip), checks the digest ([`nf_formats::sha256`] — a
 //! corruption/truncation check; both files come over HTTPS from the same release) and swaps the exe in. Windows lets
 //! a running program be renamed but not overwritten, so the running exe is first renamed to `<name>.old` (deleted on
@@ -92,6 +93,34 @@ pub fn parse_latest(json: &str) -> Option<Release> {
     Some(Release { tag, version, exe_url, sha_url })
 }
 
+/// The top-level objects of a JSON array, as slices (string-aware brace counting).
+fn json_array_objects(json: &str) -> Vec<&str> {
+    let (mut out, mut depth, mut start, mut in_str, mut esc) = (Vec::new(), 0i32, None, false, false);
+    for (i, c) in json.char_indices() {
+        if in_str {
+            if esc { esc = false } else if c == '\\' { esc = true } else if c == '"' { in_str = false }
+            continue;
+        }
+        match c {
+            '"' => in_str = true,
+            '{' => { if depth == 0 { start = Some(i); } depth += 1; }
+            '}' => { depth -= 1; if depth == 0 { if let Some(st) = start.take() { out.push(&json[st..=i]); } } }
+            _ => {}
+        }
+    }
+    out
+}
+
+/// Reads the `releases` list answer: the newest release (by version, prereleases included) that
+/// carries the Windows exe and its `.sha256`. `releases/latest` skips prereleases, so a launcher that
+/// only asked for it would never see a release published as a prerelease.
+pub fn parse_newest(json: &str) -> Option<Release> {
+    json_array_objects(json).into_iter()
+        .filter(|o| !o.contains("\"draft\":true") && !o.contains("\"draft\": true"))
+        .filter_map(parse_latest)
+        .max_by(|a, b| a.version.cmp(&b.version))
+}
+
 /// The first 64-hex-digit word of a `.sha256` file (`<hex>  <name>` or just the hex).
 pub fn parse_sha_file(text: &str) -> Option<String> {
     let w = text.split_whitespace().next()?.to_ascii_lowercase();
@@ -131,13 +160,23 @@ fn work_dir() -> PathBuf { std::env::temp_dir().join("NightfirePort-update") }
 /// Asks for the latest release; Some when it is newer than this build. Dev builds never look.
 pub fn check() -> Result<Option<Release>, String> {
     let Some(cur) = current_version().and_then(parse_version) else { return Ok(None) };
-    let url = std::env::var("NF_UPDATE_API").unwrap_or_else(|_| format!("https://api.github.com/repos/{REPO}/releases/latest"));
+    // The release LIST (prereleases included), newest by version; `releases/latest` as the fallback.
+    // `NF_UPDATE_API` may answer either shape (a list or one release).
+    let url = std::env::var("NF_UPDATE_API").unwrap_or_else(|_| format!("https://api.github.com/repos/{REPO}/releases?per_page=20"));
     let dir = work_dir();
     std::fs::create_dir_all(&dir).map_err(|e| format!("temp folder: {e}"))?;
     let json_path = dir.join("latest.json");
-    fetch(&url, &json_path, 15)?;
-    let json = std::fs::read_to_string(&json_path).map_err(|e| format!("release info: {e}"))?;
-    let rel = parse_latest(&json).ok_or("the latest release has no Windows download")?;
+    let listed = fetch(&url, &json_path, 15).ok()
+        .and_then(|_| std::fs::read_to_string(&json_path).ok())
+        .and_then(|j| if j.trim_start().starts_with('[') { parse_newest(&j) } else { parse_latest(&j) });
+    let rel = match listed {
+        Some(r) => r,
+        None => {
+            fetch(&format!("https://api.github.com/repos/{REPO}/releases/latest"), &json_path, 15)?;
+            let json = std::fs::read_to_string(&json_path).map_err(|e| format!("release info: {e}"))?;
+            parse_latest(&json).ok_or("the latest release has no Windows download")?
+        }
+    };
     Ok((rel.version > cur).then_some(rel))
 }
 
@@ -258,6 +297,26 @@ mod tests {
                   {"name":"NightfirePort.exe.sha256","browser_download_url":"https:\/\/github.com\/YodaMMM\/NightfirePort\/releases\/download\/v0.1.12\/NightfirePort.exe.sha256"},
                   {"name":"NightfirePort.exe","browser_download_url":"https://github.com/YodaMMM/NightfirePort/releases/download/v0.1.12/NightfirePort.exe"},
                   {"name":"NightfirePort-v0.1.12-windows.zip","browser_download_url":"https://github.com/YodaMMM/NightfirePort/releases/download/v0.1.12/NightfirePort-v0.1.12-windows.zip"}]}"#;
+
+    /// One release object of the `releases` list (tag, prerelease/draft flags, a body with braces and quotes).
+    fn listed(tag: &str, pre: bool, draft: bool) -> String {
+        format!(r#"{{"tag_name":"{tag}","name":"Nightfire Rust {tag} alpha","draft":{draft},"prerelease":{pre},"body":"Single player\n- a {{brace}} and a \"quote\"",
+            "assets":[{{"name":"NightfirePort.exe","browser_download_url":"https://github.com/YodaMMM/NightfirePort/releases/download/{tag}/NightfirePort.exe"}},
+                      {{"name":"NightfirePort.exe.sha256","browser_download_url":"https://github.com/YodaMMM/NightfirePort/releases/download/{tag}/NightfirePort.exe.sha256"}}]}}"#)
+    }
+
+    #[test]
+    fn the_list_picks_the_newest_release_prereleases_included() {
+        // The list order is not trusted: the newest VERSION wins, a prerelease counts, a draft does not.
+        let json = format!("[{},{},{},{}]", listed("v0.1.19", false, false), listed("v0.1.21", false, true), listed("v0.1.20", true, false), listed("v0.1.18", true, false));
+        let r = parse_newest(&json).expect("parses");
+        assert_eq!(r.tag, "v0.1.20");
+        assert!(r.exe_url.ends_with("/v0.1.20/NightfirePort.exe") && r.sha_url.ends_with("/v0.1.20/NightfirePort.exe.sha256"), "{} {}", r.exe_url, r.sha_url);
+        // Sister: the same list without the prerelease answers the full release (the split is per object).
+        let json = format!("[{},{}]", listed("v0.1.18", true, false), listed("v0.1.19", false, false));
+        assert_eq!(parse_newest(&json).map(|r| r.tag).as_deref(), Some("v0.1.19"));
+        assert!(parse_newest("[]").is_none());
+    }
 
     #[test]
     fn reads_the_latest_release() {
