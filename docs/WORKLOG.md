@@ -121,3 +121,12 @@ The glide/corner/main-walk item did not fit the window. Ran: the five + walkreal
 fix_truck + keyboard_0a + hatch_crouch + drop_stand + level_carry + fix_world_gravity =
 31 passed, 0 failed (excl. bathhouse), 5 ignored; the full sweep did NOT fit. probe:
 probe_hatch7_regress.rs committed.
+
+### level-0a-office-hatch-8 (in progress)
+Branch s/level-0a-office-hatch-8 from origin/s/level-0a-office-hatch-7 (not merged). This round:
+the fifth regression `bathhouse_shout_mixer_live` (the bunker trio shout reaches the mixer
+silent l=0.40999818 r=0 at tick 1) — root-cause the 3-D sound volume/pan path [M Sound_Play3D →
+SFX attenuation] vs the boot rest delta (game 1.0891 [L ee_start_0700000a] vs master ~1.0973),
+fix the cause, never widen the settle or special-case the test; then the 0a hall glide, corner,
+office walk (walkreal_0700000a_live); full suite on the final tree. Setup redone (sandbox reset:
+no repo, no work/, no toolchain).
