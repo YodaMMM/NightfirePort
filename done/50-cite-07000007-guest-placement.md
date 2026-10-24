@@ -24,3 +24,8 @@ say so in the report. Never weaken a decompile-backed test to make code pass.
 
 ---
 claimed-by: sandbox4 at 2026-10-24T12:15Z
+
+---
+## Report (done, 2026-10-24T12:48Z)
+
+Closed by the driver: the report is on `s/cite-07000007-guest-placement` (docs/reports/cite-07000007-guest-placement.md); the worker didn't run finish.sh.
