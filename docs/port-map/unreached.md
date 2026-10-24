@@ -723,3 +723,14 @@ tty/exit/syscall-table evidence live in docs/systems/ps2-sdk-glue.md):
   0x1092a8..0x109414]); the TLB map tables (kernelTLB 0x2e7eb0 / defaultTLB 0x2e7f80) are
   boot/exit state the port's Rust runtime owns [M scan chains].
 
+
+## Corrections 2026-10-24 (ai-dmode-inits)
+
+- The coder-event hashes in "NDrone2_init_DMODE rows 1-22" above are superseded: the disc's only
+  `Cmd::Event` kind 8 lives in 07000001 entry **`0600005B`** (not 0x0600003B) with params
+  **[0x0500001B, 0x060000A6, 16, 1]** (not 0x0500005B/0x06000106) [D census; full derivation in
+  docs/systems/ai-dmode-inits.md, "Addendum 2026-10-24"]. The row-0 conclusion is unchanged.
+- Rows 23-30 and 33 of the same table are now name/address-dumped too (23 CivilianGuard 0x14e158,
+  24 Interogator 0x14e238, 25 CivDoorGuard 0x14e258, 26 TruckDriver 0x14e348, 27 CastleChatGuard1
+  0x14e370, 28 CastleChatGuard2 0x14e3a0, 29 SniperAlert 0x14e3e0, 30 PartyGirlLooker 0x14e490,
+  33 Bot 0x14e568; 31/32/34 fn = NULL) [D table 0x29ad40] — same dispatch proof, same verdict.
