@@ -11,7 +11,7 @@
 //! 0x020006B2/B3 (keys constant (−4.62,−375.52,25.91) [D]). Each cab starts each sub three
 //! times (`Script_SubScriptStart` 0x1db050 ops on streams 13-18 [D]), so the sim holds SIX
 //! indicator plates and SIX button plates — three per shaft, the two shafts at x ≈ +1.25 and
-//! −2.77 [D the composed positions]. The game draws them all at boot [L the driver's fresh-boot
+//! −2.77 [D the composed positions]. The game draws them all at boot [L a fresh-boot
 //! PCSX2 frame at --bond -3.45,-375.98,20.61,-6.124,-0.083 shows "L" above each lift door].
 //!
 //! The port's defect (fixed here): the draw slots are per-(script,stream,hash) with the copy
