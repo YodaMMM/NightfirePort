@@ -1740,33 +1740,65 @@ impl Scripts {
     /// to nothing (the `Script_HideObj` cascade, the view's own read) — the game's collide pass
     /// tests the hidden parts too [S unverified], but Bond cannot reach them before the gate.
     pub fn copter_part_targets(&self, placement: usize, w: &dyn World) -> ([Option<([f32; 3], f32)>; 9], u16) {
+        let (poses, present) = self.copter_part_poses(placement, w);
         let mut out: [Option<([f32; 3], f32)>; 9] = [None; 9];
+        for (i, p) in poses.into_iter().enumerate() {
+            out[i] = p.map(|v| (v.center, v.radius));
+        }
+        (out, present)
+    }
+
+    /// The copter's 9 part slots with their full poses (`Copter_Register` 0x17e530:6 — the SP
+    /// callback writes each created script entity into `rec+0x30 + index·4`, 9 slots): what the
+    /// fire calls read off the part objects. Slot i = the SP player's current script's stream i —
+    /// the same stream the game's entity-creation callback fires for — with
+    /// - the stream's world matrix (the pod's `Mat_GetDir` facing, row 2 [M 0x17d9f0:78]),
+    /// - its translation (obj+0x30, obj+0xC0 in step — the sensor module's own equivalence),
+    /// - the world sphere (obj+0x80): the glist centre through that matrix and the cel-glist
+    ///   radius `*(obj+0xD8)+0x38` [M 0x17d828:76, 0x17d9f0:82; the held_hit_targets shape, an
+    ///   anim object carries its skin's glist; no glist → the translation + 0.1],
+    /// - and a presence mask (bit i = slot i registered, the game's non-zero `rec+0x30+4i`).
+    /// A hidden SP resolves to nothing (the `Script_HideObj` cascade, the view's own read) —
+    /// the game's collide pass tests the hidden parts too [S unverified], but Bond cannot reach
+    /// them before the gate.
+    pub fn copter_part_poses(&self, placement: usize, w: &dyn World) -> ([Option<crate::copter::PartPose>; 9], u16) {
+        let mut out: [Option<crate::copter::PartPose>; 9] = Default::default();
         let mut present = 0u16;
         let Some(p) = self.players.iter().find(|p| p.placement == placement && !p.deleted) else { return (out, present) };
         if p.hidden { return (out, present); }
         let Some(s) = p.info[p.cur].as_ref() else { return (out, present) };
         for i in 0..s.streams.len().min(9) {
             if !matches!(s.streams[i].kind, 1 | 2) { continue; }
+            // (matrix, glist centre local, glist radius)
             let vol = match (s.streams[i].obj, self.objects.list.get(s.streams[i].obj.unwrap_or(usize::MAX)).and_then(|o| o.as_ref())) {
                 (Some(o), Some(Obj::Entity { hash, matrix, .. })) => {
                     let (c, r) = w.glist_sphere(*hash).unwrap_or(([0.0; 3], 0.1));
-                    Some(([matrix[0][0] * c[0] + matrix[1][0] * c[1] + matrix[2][0] * c[2] + matrix[3][0],
-                          matrix[0][1] * c[0] + matrix[1][1] * c[1] + matrix[2][1] * c[2] + matrix[3][1],
-                          matrix[0][2] * c[0] + matrix[1][2] * c[1] + matrix[2][2] * c[2] + matrix[3][2]], r))
+                    Some((*matrix, c, r))
                 }
                 (Some(_), Some(Obj::Anim { skin, .. })) => {
                     let Some(m) = s.stream_matrix(i, &self.objects, w) else { continue };
                     let (c, r) = w.glist_sphere(*skin).unwrap_or(([0.0; 3], 0.1));
-                    Some(([m[0][0] * c[0] + m[1][0] * c[1] + m[2][0] * c[2] + m[3][0],
-                          m[0][1] * c[0] + m[1][1] * c[1] + m[2][1] * c[2] + m[3][1],
-                          m[0][2] * c[0] + m[1][2] * c[1] + m[2][2] * c[2] + m[3][2]], r))
+                    Some((m, c, r))
                 }
                 _ => {
                     let Some(m) = s.stream_matrix(i, &self.objects, w) else { continue };
-                    Some(([m[3][0], m[3][1], m[3][2]], 0.1))
+                    Some((m, [0.0; 3], 0.1))
                 }
             };
-            if let Some(v) = vol { out[i] = Some(v); present |= 1 << i; }
+            if let Some((m, c, r)) = vol {
+                let center = [
+                    m[0][0] * c[0] + m[1][0] * c[1] + m[2][0] * c[2] + m[3][0],
+                    m[0][1] * c[0] + m[1][1] * c[1] + m[2][1] * c[2] + m[3][1],
+                    m[0][2] * c[0] + m[1][2] * c[1] + m[2][2] * c[2] + m[3][2],
+                ];
+                out[i] = Some(crate::copter::PartPose {
+                    pos: [m[3][0], m[3][1], m[3][2]],
+                    center,
+                    radius: r,
+                    matrix: m,
+                });
+                present |= 1 << i;
+            }
         }
         (out, present)
     }

@@ -15718,14 +15718,49 @@ fn segment_hits_sphere(a: V3, b: V3, c: V3, r: f32) -> bool {
         // there [M Copter_Update 0x17dbb8:360-363].
         let explode_level = matches!(d.level, 0x0700_000b | 0x0700_0012);
         let paths = self.copter_paths.clone();
+        // The spot check's per-tick inputs: the game reads glb_players (+0x30 the distance point,
+        // +0x80 the world sphere — cone target and LOS endpoint, [M 0x17dbb8:149-155, :172]) and
+        // `DiffMod` [M 0x17d340:76-90].
+        let spot = crate::copter::SpotCtx {
+            world: d.world,
+            player_pos: player.pos,
+            player_sph: player.sph,
+            player_radius: crate::sensor::TARGET_RADIUS,
+            player_present: true,
+            diff_mod: crate::copter::diff_mod(self.difficulty),
+            frame,
+            level: d.level,
+        };
         for c in &mut self.copters {
             // copter-hitdata-damage: the slot-3 emitter's position (the gas branch's gate
-            // `rec+0x3c != 0` + its obj+0x80) refreshes from the SP part targets each tick.
-            let (targets, _) = self.scripts.copter_part_targets(c.placement, d);
-            c.slot3_pos = targets[3].map(|(p, _)| p);
-            let (unhide, posed) = c.update(&paths, &mut self.channels, &mut self.gas, frame, explode_level, &mut self.rng);
+            // `rec+0x3c != 0` + its obj+0x80) refreshes from the SP part targets each tick; the
+            // same walk gives the fire calls their part poses (gun A slot 5, gun B 6, pods 7/8).
+            let (poses, _) = self.scripts.copter_part_poses(c.placement, d);
+            c.slot3_pos = poses[3].map(|p| p.center);
+            let (unhide, posed, music_combat, shots) = c.update(
+                &paths, &mut self.channels, &mut self.gas, frame, explode_level, &mut self.rng, &spot, &poses,
+            );
             if unhide { self.scripts.unhide_sp(c.placement); }
             if posed { self.scripts.pose_copter_sp(c.placement, c.matrix); }
+            // Music_Event(2,1) [M 0x17dbb8:189] — the music system is view-side.
+            if music_combat { self.music.event(2, 1); }
+            // The tick's `Bullet_init` requests [M 0x17d828:90-92 / 0x17d9f0:95-97]: the shared
+            // Bullet off the weapon record's fields — the turret-spawn pattern (owner −1: the
+            // hit-time drone reads skip a NULL shooter, [M gt.rs's Bullet_init note]).
+            for s in shots {
+                if let Some(w) = d.weapons.records.get(s.weapon as usize) {
+                    let f32_at = |o: usize| f32::from_le_bytes(w[o..o + 4].try_into().unwrap());
+                    let mut b = crate::bullet::Bullet {
+                        pos: s.muzzle, dir: s.dir, speed: f32_at(0x20), travelled: 0.0, range: f32_at(0x1c),
+                        damage: f32_at(0x0c), owner: usize::MAX, state: 0,
+                        weapon: s.weapon, flyby: d.weapons.flyby(s.weapon as usize), bounces: 0,
+                        ..crate::bullet::Bullet::TAIL
+                    };
+                    b.init_fuse(w);
+                    self.bullets.push(b);
+                }
+                if let Some(id) = s.sound { self.audio.play3d(id, s.muzzle, None); }
+            }
             // obj+0xFE bit 0 (`landed`: the +0x74 == 100 route end [M Copter_Move 0x17d628:63-65],
             // state 5's arrival and state 6 [M Copter_Update 0x17dbb8:255-275]) is the object
             // loop's delete flag [M control_movement_object_handler 0x1336f8:77-87 →

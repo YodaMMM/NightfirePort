@@ -60,7 +60,7 @@ const TRIP_TIME: f32 = 2.0;
 /// +0xE8|) [M 0x133070; docs/fields/glist.md], and the player's is **1.0576** — the fresh-boot
 /// EE read recorded in docs/fields/obj-tag-player.md's +0x80 row (sphere (104.826, 24.837,
 /// 108.582) r 1.0576 ≈ the capsule) [L]. The old stand-in 0.4 was the port's generic body read.
-const TARGET_RADIUS: f32 = 1.0576;
+pub const TARGET_RADIUS: f32 = 1.0576;
 
 fn sub(a: V3, b: V3) -> V3 { [a[0] - b[0], a[1] - b[1], a[2] - b[2]] }
 fn dot3(a: V3, b: V3) -> f32 { a[0] * b[0] + a[1] * b[1] + a[2] * b[2] }

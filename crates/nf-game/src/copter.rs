@@ -26,13 +26,31 @@
 //!   - case 0 (the first post-gate tick): walk `CopterPaths` for the record's own group
 //!     (`+0x12 == my path's +0x12`): kind 2 → `rec+0x58` (the arrival path), every other match
 //!     counts into `rec+0x78`; then state 1 [M :115-137].
-//!   - case 1 (fly): `Copter_Move`, then the spot check (the 240/DiffMod timer, the 1000-unit
-//!     cone/LOS test, `attackmode_159 = Rand_Rand(10)`, all behind `rec+0x74 != 100` — the
-//!     Mayhew latch, [M :138-187]) — NOT ported (no cone/LOS wiring here yet): the port's
-//!     copters stay in state 1 and never draw RNG.
-//!   - case 2 (attack): `Music_Event(2,1)`, the missile/gun pick, the bail timers [M :188-243] —
-//!     unreachable while the spot check is not ported; `Copter_FireGun`'s cadence stays ported
-//!     as `fire_gun_tick`.
+//!   - case 1 (fly): `Copter_Move`, then the spot check behind `rec+0x74 != 100` [M :140-187]:
+//!     the +0xF6 timer counts every case-1 tick; once it passes `FRAME_RATE_INT·4 / DiffMod`
+//!     (240/DiffMod — `FRAME_RATE_INT` = 60 in play, the port's fixed rate) the spot test runs
+//!     every tick until it passes: the player inside 1000 units (`Vec_SqDist3D(player+0x30,
+//!     obj+0xC0) ≤ 1e6` [M :149-151]), inside the view cone (`Intersect_ConeSphere(COPT_COS,
+//!     COPT_SIN, obj+0xC0, Mat_GetDir(obj+0x90), player+0x80)` [M :152-155 — COPT_COS =
+//!     `PS2Sinf(3π/4)`, COPT_SIN = `PS2Sinf(π/4)` ≈ 0.7071, a 45° half-angle cone, `___static_
+//!     initialization_and_destruction_0` 0x17e468:7-8]) and on line of sight
+//!     (`Collide_LineOfSight(obj+0xC0 + dir·4, player+0x80, …, 0x2e)` [M :156-172]). A pass
+//!     zeroes the timer, goes to state 2, zeroes rec+0x6c and draws `attackmode_159 =
+//!     Rand_Rand(10)` [M :179-184].
+//!   - case 2 (attack): `Music_Event(2,1)` every tick [M :189], `Copter_Move`, the +0xF6
+//!     increment, then the shot: `attackmode_159 & 1` picks `Copter_FireGun` (odd) or
+//!     `Copter_FireMissile` (even) [M :191-198]. `Copter_FireMissile` 0x17d9f0 draws
+//!     `Rand_Rand(0x86e6)` EVERY call [M :47] — the low bit picks pod slot 8 (rec+0x50, even)
+//!     or slot 7 (rec+0x4c, odd) [M :49-54] — then, on a tick where `GameState+0x34 %
+//!     (FRAME_RATE_INT·DiffMod) == 0` [M :58-64] and the pod is registered, on 0x07000008 a
+//!     further `Rand_Rand(8/DiffMod) == 0` aims the missile straight at the player (else the
+//!     pod's `Mat_GetDir` facing) and `Bullet_init`s weapon 0x62 from `pod+0x80 + dir·(glist
+//!     radius·1.5)` [M :65-97]. `Copter_FireGun` 0x17d828 keeps its 6-tick cadence (the port's
+//!     `fire_gun_tick`). The exits [M :199-242]: no player or the timer past
+//!     `FRAME_RATE_INT·5·DiffMod` (300·DiffMod) resets the timer; else with rec+0x6c ≤ 100 the
+//!     spot test re-runs — a pass STAYS in state 2 (the damage tail runs below), a fail resets
+//!     the timer; rec+0x6c > 100 resets it too. Every non-staying exit lands in state 1 with
+//!     rec+0x6c zeroed [M :241-242] — the fly/attack pass cycle.
 //!   - case 4 (crash/arrive): `Copter_Move`; while it returns 0 the state stays; when it returns
 //!     1 the record adopts `rec+0x58` with t = 0, writes the arrival channel `+0x72` and goes to
 //!     state 5 [M :244-254].
@@ -191,6 +209,12 @@ pub struct Copter {
     /// `*(int*)(rec+0x3c)` and its +0x80]. None = the slot unregistered (`rec+0x3c == 0`,
     /// the branch's own gate). The caller refreshes it from the SP part targets each tick.
     pub slot3_pos: Option<V3>,
+    /// The game's `attackmode_159` static — the state-2 entry draw `Rand_Rand(10)` [M 0x17dbb8
+    /// :184] and its `& 1` gun/missile pick [M :191]. The game keeps ONE static shared by every
+    /// copter; each level's attacking set is a single copter (05's patrols never leave state 1 —
+    /// +0x74 = 100 keeps the spot check off, [D the placement params] — and 08/0b/12 carry one
+    /// record each, [D the route dumps]), so the per-record field is observationally the same.
+    pub attackmode: u16,
 }
 
 /// One bullet contact on a part object, the port's HITDATA entry (`Coll_AddHitToList` node: +4
@@ -229,6 +253,29 @@ pub const PART_BITS: [(u16, f32); 9] = [
     (0x0000, 0.0),
 ];
 
+/// `Mat_GetDir` 0x1e3398: the direction is the matrix's row 2 (bytes 0x20..0x2c) [M].
+fn dir_of(m: &Mat4) -> V3 { [m[2][0], m[2][1], m[2][2]] }
+
+/// `Intersect_ConeSphere` 0x1ee100 verbatim: 1 = the sphere (centre, radius) meets the
+/// half-angle cone (cos, sin) from `apex` along `dir`. The apex inside the sphere returns 1
+/// without the cone test [M :36-37, :54]; the centre inside the axial wedge returns 1 [M :47's
+/// else]; otherwise the surface test `t = cos·proj + sin·√(|d² − proj²|)`, hit when
+/// `t ≥ 0 && t² − d² + r² ≥ 0` [M :49-52].
+fn cone_sphere(cos: f32, sin: f32, apex: V3, dir: V3, center: V3, radius: f32) -> bool {
+    let d = [center[0] - apex[0], center[1] - apex[1], center[2] - apex[2]];
+    let d2 = d[0] * d[0] + d[1] * d[1] + d[2] * d[2];
+    if radius * radius >= d2 {
+        return true; // [M :37 — the outer `if (r² < d²)` never runs]
+    }
+    let proj = d[0] * dir[0] + d[1] * dir[1] + d[2] * dir[2];
+    if proj * proj < d2 * cos * cos || proj <= 0.0 {
+        let t = cos * proj + sin * (d2 - proj * proj).abs().sqrt();
+        t >= 0.0 && t * t - d2 + radius * radius >= 0.0 // [M :49-52]
+    } else {
+        true // [M :47 — the centre inside the wedge returns 1]
+    }
+}
+
 /// The per-difficulty health multiplier (`Copter_Create` 0x17d340:76-93): 2 -> 1.5, 3 -> 2.0,
 /// 4 -> 4.0, everything else (d1) -> 1.0 [M].
 pub fn copter_hp_mult(difficulty: u32) -> f32 {
@@ -238,6 +285,69 @@ pub fn copter_hp_mult(difficulty: u32) -> f32 {
         4 => 4.0,
         _ => 1.0,
     }
+}
+
+/// `DiffMod` — the same table `Copter_Create` 0x17d340:76-90 loads beside the hp (the hp IS
+/// `DiffMod · 299`, [M :94]): d2 1.5, d3 2.0, d4 4.0, d1 (else) 1.0. The case machine reads it
+/// for the spot-check period (240/DiffMod), the attack bail (300·DiffMod) and the missile fire
+/// gate (60·DiffMod) [M 0x17dbb8:142, 0x17dbb8:200, 0x17d9f0:58-64].
+pub fn diff_mod(difficulty: u32) -> f32 { copter_hp_mult(difficulty) }
+
+/// The spot cone's `COPT_COS`/`COPT_SIN` [M 0x17e468:7-8 — `PS2Sinf(0x4016cbe4)`,
+/// `PS2Sinf(0x3f490fdb)`]: 3π/4 and π/4, both sin ≈ 0.7071 — a 45° half-angle view cone.
+pub const COPT_COS: f32 = 0.707_106_77;
+pub const COPT_SIN: f32 = 0.707_106_77;
+
+/// One registered part slot's pose (`Copter_Register` 0x17e530 fills `rec+0x30 + 4i` with SP
+/// stream entity i): what `Copter_FireGun`/`Copter_FireMissile` read off the part objects.
+#[derive(Clone, Copy, Debug, Default)]
+pub struct PartPose {
+    /// The part obj's position — obj+0x30, with obj+0xC0 in step (the sensor module's own
+    /// equivalence, [M 0x1af010; the port keeps one translation per stream pose]).
+    pub pos: V3,
+    /// The part's world sphere centre (obj+0x80, `Control_BuildWorldSph`) — the missile's muzzle
+    /// base [M 0x17d9f0:83].
+    pub center: V3,
+    /// The cel-glist sphere radius (`*(obj+0xD8)+0x38`) — the gun's muzzle offset, the missile's
+    /// ×1.5 [M 0x17d828:76, 0x17d9f0:82].
+    pub radius: f32,
+    /// The part's world matrix — `Mat_GetDir` reads its row 2 (the pod's facing) [M 0x17d9f0:78].
+    pub matrix: Mat4,
+}
+
+/// The spot test's inputs, resolved by the caller once per tick.
+pub struct SpotCtx<'a> {
+    /// The shared collision world — the spot check's `Collide_LineOfSight` [M 0x17dbb8:170-172].
+    pub world: &'a crate::world::CollisionWorld,
+    /// `glb_players+0x30` — the spot test's distance point [M :149].
+    pub player_pos: V3,
+    /// The player's world-sphere centre (obj+0x80) — the cone's target and the LOS endpoint
+    /// [M :154-155, :172; L obj-tag-player.md].
+    pub player_sph: V3,
+    /// The world-sphere radius (obj+0x8C) [L obj-tag-player.md — 1.0576, the sensor's radius].
+    pub player_radius: f32,
+    /// `glb_players != 0` [M :144, :199].
+    pub player_present: bool,
+    /// `DiffMod` [M 0x17d340:76-90].
+    pub diff_mod: f32,
+    /// `GameState+0x34` — the tick counter the missile fire gate mods [M 0x17d9f0:58-64].
+    pub frame: u32,
+    /// `GameState+0x12` — the level id (0x07000008's missile arm [M 0x17d9f0:65]).
+    pub level: u32,
+}
+
+/// One `Bullet_init` the case machine raised this tick — the caller spawns the shared `Bullet`.
+#[derive(Clone, Copy, Debug)]
+pub struct CopterShot {
+    /// The muzzle [M 0x17d828:75-84 (gun) / 0x17d9f0:87-94 (missile)].
+    pub muzzle: V3,
+    pub dir: V3,
+    /// The weapon record: the gun 0x61 / the missile 0x62 on 0x07000008, else 0x71 / 0x6d
+    /// [M 0x17d828:86-89, 0x17d9f0:81-86].
+    pub weapon: u16,
+    /// The gun's `Sound_Play3D(100, −1, −1, 0x5df, muzzle, 0, 0, 0)` [M 0x17d828:85]; the
+    /// missile's spawn is silent.
+    pub sound: Option<u32>,
 }
 
 impl Copter {
@@ -278,6 +388,7 @@ impl Copter {
                 attack_acc: 0.0, // [M 0x17d340:93 — +0x6c zeroed at create (memset + the +0x64 store)
                 part_hits: Vec::new(),
                 slot3_pos: None,
+                attackmode: 0, // [M 0x17d340 — the static starts 0 (the C initializer)]
             });
         }
         out
@@ -333,11 +444,14 @@ impl Copter {
         (false, posed)
     }
 
-    /// `Copter_Update` 0x17dbb8 — one tick. Returns `(unhide, posed)`:
+    /// `Copter_Update` 0x17dbb8 — one tick. Returns `(unhide, posed, music_combat, shots)`:
     /// - `unhide` — the gate's first ON tick: the caller runs `SP_HideObj(sp, 0)`
     ///   (`Scripts::unhide_sp`) — the game does it right here in the head, then zeroes +0x70 [M head];
     /// - `posed` — `SP_SetPosRot(sp, obj+0x90)` ran: the caller puts `self.matrix` on the SP
-    ///   player [M Copter_Move :115].
+    ///   player [M Copter_Move :115];
+    /// - `music_combat` — a case-2 tick raised `Music_Event(2,1)` [M :189]; the caller folds it;
+    /// - `shots` — the tick's `Bullet_init` requests (the gun 0x17d828 / the missile 0x17d9f0);
+    ///   the caller spawns the shared `Bullet`s and plays the gun sound.
     pub fn update(
         &mut self,
         paths: &[CopterPath],
@@ -346,13 +460,15 @@ impl Copter {
         frame: u32,
         explode_level: bool,
         rng: &mut crate::drone::Rng,
-    ) -> (bool, bool) {
+        ctx: &SpotCtx,
+        parts: &[Option<PartPose>; 9],
+    ) -> (bool, bool, bool, Vec<CopterShot>) {
         // The gate: a non-zero gate channel that is off stops everything [M 0x17dbb8 head]; on the
         // first ON tick the head unhides the SP and zeroes the field — the copter then updates
         // unconditionally, even if the channel turns off mid-flight [M `+0x70 = 0`].
         let mut unhide = false;
         if self.gate != 0 {
-            if !ch.on(self.gate as u32) { return (false, false); }
+            if !ch.on(self.gate as u32) { return (false, false, false, Vec::new()); }
             self.gate = 0;
             unhide = true;
         }
@@ -364,6 +480,8 @@ impl Copter {
         // The parts[6] recharge (gun B's +0xF4 → its +0xF0 bit 0x10) [M :104-113] — the port
         // keeps no part objects; not modelled.
         let mut posed = false;
+        let mut music_combat = false;
+        let mut shots: Vec<CopterShot> = Vec::new();
         match self.state {
             0 => {
                 // Case 0 [M :115-137]: the CopterPaths scan for the record's own group.
@@ -380,18 +498,95 @@ impl Copter {
                 // Case 0 falls into the damage tail below (states 0-3 are death-eligible).
             }
             1 => {
-                // Case 1 [M :138-187]: Copter_Move, then the spot check (not ported — no cone/LOS
-                // wiring; the copter stays in state 1 and draws no RNG). The Mayhew latch keeps
-                // +0x74 != 100 copters out of the spot test entirely [M :140].
+                // Case 1 [M :138-187]: Copter_Move, then the spot check behind `rec+0x74 != 100`
+                // (the Mayhew latch keeps the +0x74 == 100 patrols out entirely [M :140]): the
+                // +0xF6 timer counts EVERY case-1 tick [M :141-143]; from
+                // FRAME_RATE_INT·4/DiffMod on the cone+LOS test runs every tick until it passes.
                 let (_, p) = self.move_tick(paths, rng);
                 posed = p;
+                if self.arrival != 100 {
+                    self.timer = self.timer.wrapping_add(1); // [M :141-143]
+                    if (240.0 / ctx.diff_mod) <= self.timer as f32
+                        && ctx.player_present
+                        && self.spot_visible(ctx)
+                    {
+                        self.timer = 0; // [M :181]
+                        self.state = 2; // [M :182]
+                        self.attack_acc = 0.0; // [M :183 — rec+0x6c]
+                        self.attackmode = rng.rand(10) as u16; // [M :184 — Rand_Rand(10)]
+                    }
+                }
             }
             2 => {
-                // Case 2 [M :188-243] (Music_Event, the missile/gun pick, the bail timers) is
-                // unreachable while the spot check is not ported; fly the move anyway if a poke
-                // puts the copter here.
+                // Case 2 [M :188-243]: Music_Event(2,1) every tick (the caller folds the flag),
+                // the move, the timer, the shot, then the exits.
+                music_combat = true; // [M :189]
                 let (_, p) = self.move_tick(paths, rng);
                 posed = p;
+                self.timer = self.timer.wrapping_add(1); // [M :192]
+                if self.attackmode & 1 == 0 {
+                    // Copter_FireMissile 0x17d9f0 [M :193-194]. The pod draw runs EVERY call
+                    // [M :47]; the low bit picks slot 8 (rec+0x50, even) / slot 7 (rec+0x4c, odd)
+                    // [M :49-54]; a missing pod returns after the draw [M :55-57]; then the
+                    // 60·DiffMod fire gate [M :58-64]; on 0x07000008 the homing draw [M :65-76].
+                    let pod_pick = rng.rand(0x86e6); // [M 0x17d9f0:47 — Rand_Rand(0x86e6)]
+                    let slot = if pod_pick & 1 == 0 { 8 } else { 7 }; // [M :49-54]
+                    if let Some(pod) = parts[slot] {
+                        let gate = (60.0 * ctx.diff_mod) as u32; // [M :58 — fptoui(FRAME_RATE·DiffMod)]
+                        if gate != 0 && ctx.frame % gate == 0 {
+                            let dir = if ctx.level == 0x0700_0008
+                                && rng.rand((8.0 / ctx.diff_mod) as u32) == 0
+                            {
+                                // [M :68-75 — dir = normalise(player+0x30 − pod+0xC0)]
+                                let d = [
+                                    ctx.player_pos[0] - pod.pos[0],
+                                    ctx.player_pos[1] - pod.pos[1],
+                                    ctx.player_pos[2] - pod.pos[2],
+                                ];
+                                let l = (d[0] * d[0] + d[1] * d[1] + d[2] * d[2]).sqrt();
+                                if l > 0.0 { [d[0] / l, d[1] / l, d[2] / l] } else { [0.0; 3] }
+                            } else {
+                                dir_of(&pod.matrix) // [M :78 — Mat_GetDir(pod+0x90)]
+                            };
+                            // [M :81-94 — muzzle = pod+0x80 + dir·(glist radius·1.5)]
+                            shots.push(CopterShot {
+                                muzzle: [
+                                    pod.center[0] + dir[0] * pod.radius * 1.5,
+                                    pod.center[1] + dir[1] * pod.radius * 1.5,
+                                    pod.center[2] + dir[2] * pod.radius * 1.5,
+                                ],
+                                dir,
+                                weapon: if ctx.level == 0x0700_0008 { 0x62 } else { 0x6d }, // [M :81-86]
+                                sound: None,
+                            });
+                        }
+                    }
+                } else if let Some(gun) = parts[5] {
+                    // Copter_FireGun 0x17d828 [M :196-197] — the 6-tick cadence and the muzzle
+                    // live in fire_gun_tick; gun A is slot 5 (rec+0x44), gun B slot 6 (rec+0x48).
+                    if let Some((muzzle, dir, weapon)) = self.fire_gun_tick(
+                        parts[6].is_some(),
+                        gun.pos,
+                        gun.radius,
+                        ctx.player_pos,
+                        ctx.level == 0x0700_0008,
+                    ) {
+                        shots.push(CopterShot { muzzle, dir, weapon: weapon as u16, sound: Some(0x5df) }); // [M :85]
+                    }
+                }
+                // The exits [M :199-242]: no player or the timer past FRAME_RATE_INT·5·DiffMod →
+                // reset [M :200-202]; else with rec+0x6c ≤ 100 the spot test re-runs — a pass
+                // STAYS in state 2 (the damage tail runs below, [M :236 → LAB_0017e180]), a fail
+                // resets the timer [M :237]; rec+0x6c > 100 resets it too [M :238-239]. Every
+                // non-staying exit lands in state 1 with rec+0x6c zeroed [M :241-242].
+                let bail = !ctx.player_present
+                    || (60.0 * 5.0) * ctx.diff_mod < self.timer as f32; // [M :200]
+                let stay = !bail && self.attack_acc <= 100.0 && self.spot_visible(ctx); // [M :205-236]
+                if !stay {
+                    self.timer = 0; // [M :202 / :239 — LAB_0017e008]
+                    self.state = 1; // [M :241]
+                    self.attack_acc = 0.0; // [M :242]
+                }
             }
             4 => {
                 // Case 4 [M :244-254]: finish the current path, then adopt the arrival path with
@@ -412,15 +607,15 @@ impl Copter {
                 if r {
                     if self.out != 0 { ch.set(self.out as u32, 1, frame); }
                     self.landed = true;
-                    return (unhide, p);
+                    return (unhide, p, music_combat, shots);
                 }
-                return (unhide, p);
+                return (unhide, p, music_combat, shots);
             }
             6 => {
                 // Case 6 [M :265-275]: the channel, the explosion (not ported), the flag.
                 if self.out != 0 { ch.set(self.out as u32, 1, frame); }
                 self.landed = true;
-                return (unhide, false);
+                return (unhide, false, music_combat, shots);
             }
             _ => {}
         }
@@ -474,7 +669,28 @@ impl Copter {
             self.state = if explode_level { 6 } else { 4 };
             if self.out != 0 { ch.set(self.out as u32, 1, frame); }
         }
-        (unhide, posed)
+        (unhide, posed, music_combat, shots)
+    }
+
+    /// The spot test's visible half [M 0x17dbb8:152-172]: the view cone
+    /// (`Intersect_ConeSphere(COPT_COS, COPT_SIN, obj+0xC0, Mat_GetDir(obj+0x90), player+0x80)`)
+    /// and `Collide_LineOfSight(obj+0xC0 + dir·4, player+0x80, …, 0x2e)`. The caller owns the
+    /// player-presence and 1000-unit distance gates [M :144-151].
+    fn spot_visible(&self, ctx: &SpotCtx) -> bool {
+        let pos = self.pos();
+        let dir = dir_of(&self.matrix); // Mat_GetDir [M :152]
+        if !cone_sphere(COPT_COS, COPT_SIN, pos, dir, ctx.player_sph, ctx.player_radius) {
+            return false; // [M :153-155]
+        }
+        // [M :156-169 — the probe pos + dir·4.0 (uStack_d0 = 0x40800000)]
+        let probe = [
+            pos[0] + dir[0] * 4.0,
+            pos[1] + dir[1] * 4.0,
+            pos[2] + dir[2] * 4.0,
+        ];
+        // [M :170-172 — build_FindCel + Collide_LineOfSight(probe, player+0x80, cel, obj,
+        // player, 0x2e); the port's shared walk is the documented equivalent]
+        ctx.world.line_of_sight(probe, ctx.player_sph, crate::world::LOS_COPTER_SPOT)
     }
 
     /// The copter's world position (the matrix row 3) — the viewer's draw/cull helpers.
@@ -580,6 +796,22 @@ mod tests {
             part_hits: Vec::new(),
             slot3_pos: None,
             shot_hit_enemy: false,
+            attackmode: 0,
+        }
+    }
+
+    /// A spot context for the machine tests: an empty world (every LOS clear), the player at
+    /// `player_pos` (the sphere centre on it), d1 (DiffMod 1.0), 0x07000008.
+    fn spot_ctx(world: &crate::world::CollisionWorld, player_pos: V3) -> SpotCtx<'_> {
+        SpotCtx {
+            world,
+            player_pos,
+            player_sph: player_pos,
+            player_radius: crate::sensor::TARGET_RADIUS,
+            player_present: true,
+            diff_mod: 1.0,
+            frame: 0,
+            level: 0x0700_0008,
         }
     }
 
@@ -605,6 +837,11 @@ mod tests {
         let mut gas = crate::gas::GasPool::default();
         let mut c = copter();
         let mut rng = crate::drone::Rng::default();
+        let world = crate::world::CollisionWorld::from_triangles_flags(Vec::new());
+        // The player far outside the 1000-unit spot gate: the spot check stays idle, the
+        // machine's other rules run unchanged.
+        let ctx = spot_ctx(&world, [1.0e6; 3]);
+
         assert!(c.move_tick(&[], &mut rng).0, "+0x54 == 0 → 1");
         let paths = vec![path(1, 0, 0, 0, 0, Some(keys4()))];
         c.path = Some(0);
@@ -617,6 +854,11 @@ mod tests {
         let mut gas = crate::gas::GasPool::default();
         let mut c = copter();
         let mut rng = crate::drone::Rng::default();
+        let world = crate::world::CollisionWorld::from_triangles_flags(Vec::new());
+        // The player far outside the 1000-unit spot gate: the spot check stays idle, the
+        // machine's other rules run unchanged.
+        let ctx = spot_ctx(&world, [1.0e6; 3]);
+
         let paths = vec![path(1, 0, 0, 3, 0, Some(keys4()))];
         c.path = Some(0);
         assert!(!c.move_tick(&paths, &mut rng).0, "still flying → 0");
@@ -633,6 +875,11 @@ mod tests {
         let mut gas = crate::gas::GasPool::default();
         let mut c = copter();
         let mut rng = crate::drone::Rng::default();
+        let world = crate::world::CollisionWorld::from_triangles_flags(Vec::new());
+        // The player far outside the 1000-unit spot gate: the spot check stays idle, the
+        // machine's other rules run unchanged.
+        let ctx = spot_ctx(&world, [1.0e6; 3]);
+
         let keys = keys4();
         // group 1: path 0 (pick 0, count 3), path 1 (pick 1), the arrival path kind 2 (pick 9).
         let paths = vec![
@@ -710,7 +957,12 @@ mod tests {
         ];
         let mut ch = Channels::default();
         let mut rng = crate::drone::Rng::default();
-        c.update(&paths, &mut ch, &mut gas, 0, false, &mut rng);
+        let world = crate::world::CollisionWorld::from_triangles_flags(Vec::new());
+        // The player far outside the 1000-unit spot gate: the spot check stays idle, the
+        // machine's other rules run unchanged.
+        let ctx = spot_ctx(&world, [1.0e6; 3]);
+
+        c.update(&paths, &mut ch, &mut gas, 0, false, &mut rng, &ctx, &[None; 9]);
         assert_eq!(c.state, 1, "case 0 → 1");
         assert_eq!(c.arrival_path, Some(3), "the kind-2 group member → rec+0x58");
         assert_eq!(c.group_paths, 2, "the kind-0 group members counted into rec+0x78");
@@ -731,12 +983,17 @@ mod tests {
         ];
         let mut ch = Channels::default();
         let mut rng = crate::drone::Rng::default();
+        let world = crate::world::CollisionWorld::from_triangles_flags(Vec::new());
+        // The player far outside the 1000-unit spot gate: the spot check stays idle, the
+        // machine's other rules run unchanged.
+        let ctx = spot_ctx(&world, [1.0e6; 3]);
+
         // The gate off: nothing runs.
-        let (unhide, posed) = c.update(&paths, &mut ch, &mut gas, 1, false, &mut rng);
+        let (unhide, posed, _, _) = c.update(&paths, &mut ch, &mut gas, 1, false, &mut rng, &ctx, &[None; 9]);
         assert!(!unhide && !posed, "gated off → nothing");
         assert_eq!(c.state, 0, "still state 0 behind the gate");
         ch.set(5, 1, 0);
-        let (unhide, _) = c.update(&paths, &mut ch, &mut gas, 2, false, &mut rng);
+        let (unhide, _, _, _) = c.update(&paths, &mut ch, &mut gas, 2, false, &mut rng, &ctx, &[None; 9]);
         assert!(unhide, "the gate's first ON tick unhides [M head]");
         assert_eq!(c.gate, 0, "+0x70 zeroed [M head]");
         assert_eq!(c.state, 1, "case 0 ran this tick");
@@ -747,7 +1004,7 @@ mod tests {
         c.t = 3.5; // past count 1
         let mut fired = false;
         for f in 3..10 {
-            let (_, _) = c.update(&paths, &mut ch, &mut gas, f, false, &mut rng);
+            let (_, _, _, _) = c.update(&paths, &mut ch, &mut gas, f, false, &mut rng, &ctx, &[None; 9]);
             if ch.on(0x4b) { fired = true; break; }
         }
         assert!(fired, "case 4's transition writes rec+0x72 [M :249-252]");
@@ -768,10 +1025,15 @@ mod tests {
         let paths = vec![path(7, 0, 0, 1, 0, Some(keys.clone()))];
         let mut ch = Channels::default();
         let mut rng = crate::drone::Rng::default();
+        let world = crate::world::CollisionWorld::from_triangles_flags(Vec::new());
+        // The player far outside the 1000-unit spot gate: the spot check stays idle, the
+        // machine's other rules run unchanged.
+        let ctx = spot_ctx(&world, [1.0e6; 3]);
+
         // State 5, the path just ended: the channel re-writes and obj+0xFE sets, every tick.
         c.state = 5;
         c.t = 3.5;
-        let (_, _) = c.update(&paths, &mut ch, &mut gas, 1, false, &mut rng);
+        let (_, _, _, _) = c.update(&paths, &mut ch, &mut gas, 1, false, &mut rng, &ctx, &[None; 9]);
         assert!(c.landed, "obj+0xFE bit 1 [M LAB_0017e16c]");
         assert!(ch.on(0x4b), "the channel re-write [M :260-263]");
         // The death: state 1 with hp < damage → 4 (07000005-like), 6 on 0b/12.
@@ -779,14 +1041,14 @@ mod tests {
         d.path = Some(0);
         d.hp = 299.0;
         d.damage = 300.0;
-        let (_, _) = d.update(&paths, &mut ch, &mut gas, 2, false, &mut rng);
+        let (_, _, _, _) = d.update(&paths, &mut ch, &mut gas, 2, false, &mut rng, &ctx, &[None; 9]);
         assert_eq!(d.state, 4, "hp < damage outside states 4/5 → 4 [M disasm 0x17e3b8-0x17e3c0]");
         assert!(ch.on(0x4b), "the death writes the arrival channel [M disasm 0x17e3bc]");
         let mut e = copter();
         e.path = Some(0);
         e.hp = 299.0;
         e.damage = 300.0;
-        let (_, _) = e.update(&paths, &mut ch, &mut gas, 3, true, &mut rng);
+        let (_, _, _, _) = e.update(&paths, &mut ch, &mut gas, 3, true, &mut rng, &ctx, &[None; 9]);
         assert_eq!(e.state, 6, "0x0700000b/0x07000012 explode instead [M :360-363]");
         // States 4/5 are exempt (sltiu(state-4, 2) skips, disasm 0x17e398-0x17e39c).
         let mut g = copter();
@@ -794,7 +1056,7 @@ mod tests {
         g.state = 4;
         g.hp = 299.0;
         g.damage = 300.0;
-        let (_, _) = g.update(&paths, &mut ch, &mut gas, 4, false, &mut rng);
+        let (_, _, _, _) = g.update(&paths, &mut ch, &mut gas, 4, false, &mut rng, &ctx, &[None; 9]);
         assert_eq!(g.state, 4, "state 4 is exempt from the death");
     }
 
@@ -808,9 +1070,14 @@ mod tests {
         let paths = Vec::new();
         let mut ch = Channels::default();
         let mut rng = crate::drone::Rng::default();
-        c.update(&paths, &mut ch, &mut gas, 1, false, &mut rng);
+        let world = crate::world::CollisionWorld::from_triangles_flags(Vec::new());
+        // The player far outside the 1000-unit spot gate: the spot check stays idle, the
+        // machine's other rules run unchanged.
+        let ctx = spot_ctx(&world, [1.0e6; 3]);
+
+        c.update(&paths, &mut ch, &mut gas, 1, false, &mut rng, &ctx, &[None; 9]);
         assert!(!ch.on(0x33), "1 tick left: no pulse yet");
-        c.update(&paths, &mut ch, &mut gas, 2, false, &mut rng);
+        c.update(&paths, &mut ch, &mut gas, 2, false, &mut rng, &ctx, &[None; 9]);
         assert!(ch.on(0x33), "the countdown hit 0 → ch +0x74 [M :99-103]");
         assert_eq!(c.countdown, 0);
     }
@@ -919,6 +1186,11 @@ mod tests {
         let mut c = copter();
         let mut ch = Channels::default();
         let mut rng = crate::drone::Rng::default();
+        let world = crate::world::CollisionWorld::from_triangles_flags(Vec::new());
+        // The player far outside the 1000-unit spot gate: the spot check stays idle, the
+        // machine's other rules run unchanged.
+        let ctx = spot_ctx(&world, [1.0e6; 3]);
+
         // Slots 0/1/2 (scales 2/3/1), damage 10 each, the pistol's class 0x8 [L weapon_data
         // 0x2bf150+0x10 census]. Damage must stay below half hp so the gas branch draws nothing.
         c.part_hits = vec![
@@ -926,7 +1198,7 @@ mod tests {
             PartHit { slot: 1, damage: 10.0, class: 0x8 },
             PartHit { slot: 2, damage: 10.0, class: 0x8 },
         ];
-        c.update(&[], &mut ch, &mut gas, 0, false, &mut rng);
+        c.update(&[], &mut ch, &mut gas, 0, false, &mut rng, &ctx, &[None; 9]);
         assert!((c.damage - 60.0).abs() < 1e-4, "10·2 + 10·3 + 10·1 = 60, got {}", c.damage);
         assert!((c.attack_acc - 60.0).abs() < 1e-4, "the same sum lands in rec+0x6c [M :307]");
         assert!(c.shot_hit_enemy, "a counted player shot sets the PlrStat roll [M :314-316]");
@@ -937,13 +1209,13 @@ mod tests {
             PartHit { slot: 4, damage: 1.0, class: 0x10 },
             PartHit { slot: 4, damage: 1.0, class: 0x8 },
         ];
-        c.update(&[], &mut ch, &mut gas, 0, false, &mut rng);
+        c.update(&[], &mut ch, &mut gas, 0, false, &mut rng, &ctx, &[None; 9]);
         assert!((c.damage - 100.0).abs() < 1e-4, "the 0x10 hit is dropped, the 0x8 hit ×100, got {}", c.damage);
         // Sister: a zero-damage contact (the game stores the hit before the damage write) counts
         // nothing and the walk stays silent on the empty slots.
         let mut c = copter();
         c.part_hits = vec![PartHit { slot: 5, damage: 0.0, class: 0x8 }, PartHit { slot: 3, damage: 4.0, class: 0x8 }];
-        c.update(&[], &mut ch, &mut gas, 0, false, &mut rng);
+        c.update(&[], &mut ch, &mut gas, 0, false, &mut rng, &ctx, &[None; 9]);
         assert!((c.damage - 8.0).abs() < 1e-4, "slot 3 ×2 counts, the 0-damage and scale-0 slots do not, got {}", c.damage);
         assert!(c.shot_hit_enemy, "the counted 4.0 slot-3 hit sets the roll (the 0-damage contact alone would not)");
     }
@@ -961,8 +1233,13 @@ mod tests {
         c.part_hits = (0..150).map(|_| PartHit { slot: 0, damage: 1.0, class: 0x8 }).collect();
         let mut ch = Channels::default();
         let mut rng = crate::drone::Rng::default();
+        let world = crate::world::CollisionWorld::from_triangles_flags(Vec::new());
+        // The player far outside the 1000-unit spot gate: the spot check stays idle, the
+        // machine's other rules run unchanged.
+        let ctx = spot_ctx(&world, [1.0e6; 3]);
+
         // slot3_pos stays None: the gas branch's `rec+0x3c == 0` gate must consume no RNG [M :326].
-        c.update(&[], &mut ch, &mut gas, 0, false, &mut rng);
+        c.update(&[], &mut ch, &mut gas, 0, false, &mut rng, &ctx, &[None; 9]);
         assert!(c.hp < c.damage, "150·2 = 300 > 299");
         assert_eq!(c.state, 4, "hp < damage off the exempt states → 4 [M :358-359]");
         assert!(ch.on(0x4b), "the death writes rec+0x72 [M disasm 0x17e3bc-0x17e3c8]");
@@ -973,9 +1250,214 @@ mod tests {
         c.part_hits = (0..149).map(|_| PartHit { slot: 0, damage: 1.0, class: 0x8 }).collect();
         let mut ch = Channels::default();
         let mut rng = crate::drone::Rng::default();
-        c.update(&[], &mut ch, &mut gas, 0, false, &mut rng);
+        let world = crate::world::CollisionWorld::from_triangles_flags(Vec::new());
+        // The player far outside the 1000-unit spot gate: the spot check stays idle, the
+        // machine's other rules run unchanged.
+        let ctx = spot_ctx(&world, [1.0e6; 3]);
+
+        c.update(&[], &mut ch, &mut gas, 0, false, &mut rng, &ctx, &[None; 9]);
         assert!((c.damage - 298.0).abs() < 1e-4);
         assert_eq!(c.state, 1, "298 < 299: still flying");
         assert!(!ch.on(0x4b), "no arrival below hp");
+    }
+
+    // The machine's facing: a copter matrix whose row 2 (Mat_GetDir's direction) points +z.
+    fn facing_z() -> Mat4 {
+        [
+            [1.0, 0.0, 0.0, 0.0],
+            [0.0, 1.0, 0.0, 0.0],
+            [0.0, 0.0, 1.0, 0.0],
+            [0.0, 0.0, 0.0, 1.0],
+        ]
+    }
+
+    // [M 0x17dbb8:140-187] the spot check: the timer counts case-1 ticks; at 240/DiffMod the
+    // in-cone, in-range, on-sight player flips state 1 → 2 with the Rand_Rand(10) draw.
+    #[test]
+    fn the_spot_check_opens_the_attack_at_240() {
+        let mut gas = crate::gas::GasPool::default();
+        let mut c = copter();
+        c.matrix = facing_z();
+        let paths = Vec::new();
+        let mut ch = Channels::default();
+        let mut rng = crate::drone::Rng::default();
+        let world = crate::world::CollisionWorld::from_triangles_flags(Vec::new());
+        // 100 units along the facing, inside the 1000-unit gate and the 45° cone, LOS clear.
+        let ctx = spot_ctx(&world, [0.0, 0.0, 100.0]);
+        for _ in 0..240 {
+            let (_, _, music, shots) = c.update(&paths, &mut ch, &mut gas, 1, false, &mut rng, &ctx, &[None; 9]);
+            assert!(!music && shots.is_empty());
+            assert_eq!(c.state, 1, "the spot runs only from case-1 tick 240 (case 0 counts none)");
+        }
+        let draws = rng.draws;
+        let (_, _, music, _) = c.update(&paths, &mut ch, &mut gas, 1, false, &mut rng, &ctx, &[None; 9]);
+        assert_eq!(c.state, 2, "tick 240 passes the spot → state 2 [M :179-184]");
+        assert!(!music, "Music_Event is case 2's own beat, the entry tick already ran it");
+        assert_eq!(rng.draws, draws + 1, "the entry draws attackmode = Rand_Rand(10) [M :184]");
+        assert_eq!(c.timer, 0);
+        assert!((c.attack_acc - 0.0).abs() < 1e-6);
+    }
+
+    // [M 0x17dbb8:152-155] the cone gates the spot: a player behind the copter never flips it.
+    #[test]
+    fn the_cone_gates_the_spot() {
+        let mut gas = crate::gas::GasPool::default();
+        let mut c = copter();
+        c.matrix = facing_z();
+        let paths = Vec::new();
+        let mut ch = Channels::default();
+        let mut rng = crate::drone::Rng::default();
+        let world = crate::world::CollisionWorld::from_triangles_flags(Vec::new());
+        // Behind the facing (−z), 100 units: in range, outside the 45° half-angle cone.
+        let ctx = spot_ctx(&world, [0.0, 0.0, -100.0]);
+        for _ in 0..400 {
+            c.update(&paths, &mut ch, &mut gas, 1, false, &mut rng, &ctx, &[None; 9]);
+        }
+        assert_eq!(c.state, 1, "out-of-cone → the spot never passes [M :153-155]");
+        assert_eq!(rng.draws, 0, "no RNG while the spot fails");
+        // Sister: the apex inside the player's sphere auto-hits the cone [M 0x1ee100:36-37].
+        let mut c2 = copter();
+        c2.matrix = facing_z();
+        let ctx2 = spot_ctx(&world, [0.0, 0.0, 0.5]);
+        for _ in 0..241 {
+            c2.update(&paths, &mut ch, &mut gas, 1, false, &mut rng, &ctx2, &[None; 9]);
+        }
+        assert_eq!(c2.state, 2, "the apex inside the sphere → the cone auto-hits");
+    }
+
+    // [M 0x17dbb8:188-242] the attack pass: Music_Event every tick, the gun's 6-tick cadence,
+    // the visible player keeps it in state 2, the 300·DiffMod timer bails to state 1.
+    #[test]
+    fn the_attack_pass_fires_and_bails_on_the_timer() {
+        let mut gas = crate::gas::GasPool::default();
+        let mut c = copter();
+        c.matrix = facing_z();
+        c.state = 2;
+        c.attackmode = 1; // odd → Copter_FireGun [M :191-197]
+        c.timer = 0;
+        let paths = Vec::new();
+        let mut ch = Channels::default();
+        let mut rng = crate::drone::Rng::default();
+        let world = crate::world::CollisionWorld::from_triangles_flags(Vec::new());
+        let ctx = spot_ctx(&world, [0.0, 0.0, 100.0]);
+        // Gun A (slot 5) registered 2 units behind the muzzle math; gun B absent.
+        let mut parts = [None; 9];
+        parts[5] = Some(PartPose {
+            pos: [0.0, 0.0, 0.0],
+            center: [0.0, 0.0, 0.0],
+            radius: 2.0,
+            matrix: facing_z(),
+        });
+        let mut fired_at = Vec::new();
+        for tick in 0..300u32 {
+            let (_, _, music, shots) = c.update(&paths, &mut ch, &mut gas, tick, false, &mut rng, &ctx, &parts);
+            assert!(music, "Music_Event(2,1) every case-2 tick [M :189]");
+            if !shots.is_empty() {
+                fired_at.push(tick);
+                assert_eq!(shots[0].weapon, 0x61, "07000008's gun record [M 0x17d828:86-89]");
+                assert_eq!(shots[0].sound, Some(0x5df), "the gun's Sound_Play3D [M 0x17d828:85]");
+            }
+            assert_eq!(c.state, 2, "visible stays in state 2 [M :236]");
+        }
+        assert_eq!(fired_at[0], 5, "fire_gun_tick's old>4 cadence: the 6th case-2 tick");
+        assert_eq!(fired_at.len(), 50, "every 6th of the 300 pass ticks re-arms and fires");
+        // Tick 301: 300·DiffMod < timer → the bail.
+        let (_, _, _, _) = c.update(&paths, &mut ch, &mut gas, 300, false, &mut rng, &ctx, &[None; 9]);
+        assert_eq!(c.state, 1, "the timer past 300·DiffMod bails [M :200-202, :241]");
+        assert_eq!(c.timer, 0, "the bail resets the timer [M :202]");
+        assert!((c.attack_acc - 0.0).abs() < 1e-6, "and rec+0x6c [M :242]");
+    }
+
+    // [M 0x17d9f0] the missile arm: the 0x86e6 draw every call, the 60·DiffMod fire gate, the
+    // 0x62 record on 07000008, the muzzle radius·1.5 off pod+0x80.
+    #[test]
+    fn the_missile_draws_and_gates_like_the_decompile() {
+        let mut gas = crate::gas::GasPool::default();
+        let mut c = copter();
+        c.matrix = facing_z();
+        c.state = 2;
+        c.attackmode = 0; // even → Copter_FireMissile [M :191-194]
+        let paths = Vec::new();
+        let mut ch = Channels::default();
+        let mut rng = crate::drone::Rng::default();
+        let world = crate::world::CollisionWorld::from_triangles_flags(Vec::new());
+        let ctx = spot_ctx(&world, [0.0, 0.0, 100.0]);
+        // Both pod slots registered identically: whichever the 0x86e6 bit picks, one spawns.
+        let mut parts = [None; 9];
+        let pod = PartPose { pos: [0.0, 0.0, 0.0], center: [0.0, 0.0, 0.0], radius: 2.0, matrix: facing_z() };
+        parts[7] = Some(pod);
+        parts[8] = Some(pod);
+        // Frame 1: the 60·DiffMod gate fails → only the 0x86e6 draw, no shot.
+        let mut ctx = ctx;
+        ctx.frame = 1;
+        let draws = rng.draws;
+        let (_, _, _, shots) = c.update(&paths, &mut ch, &mut gas, 1, false, &mut rng, &ctx, &parts);
+        assert!(shots.is_empty(), "frame 1 % 60 != 0 → no fire [M 0x17d9f0:58-64]");
+        assert_eq!(rng.draws, draws + 1, "the pod draw runs EVERY call [M 0x17d9f0:47]");
+        // Frame 60: the gate passes → the homing draw + the 0x62 shot.
+        ctx.frame = 60;
+        let draws = rng.draws;
+        let (_, _, _, shots) = c.update(&paths, &mut ch, &mut gas, 60, false, &mut rng, &ctx, &parts);
+        assert_eq!(shots.len(), 1, "the gate tick fires the pod [M :65-97]");
+        assert_eq!(shots[0].weapon, 0x62, "07000008's missile record [M :84-86]");
+        assert_eq!(rng.draws, draws + 2, "the pod draw + the homing draw Rand_Rand(8/DiffMod) [M :47, :66-67]");
+        let m = shots[0].muzzle;
+        let len = (m[0] * m[0] + m[1] * m[1] + m[2] * m[2]).sqrt();
+        assert!((len - 3.0).abs() < 1e-4, "muzzle = pod+0x80 + dir·(radius·1.5) = 3 units out");
+        // A missing pod: the draw still runs, no shot.
+        ctx.frame = 120;
+        let draws = rng.draws;
+        let (_, _, _, shots) = c.update(&paths, &mut ch, &mut gas, 120, false, &mut rng, &ctx, &[None; 9]);
+        assert!(shots.is_empty(), "no pod → no Bullet_init [M :55-57]");
+        assert_eq!(rng.draws, draws + 1, "the pod draw precedes the null check [M :47-57]");
+    }
+
+    // [M 0x17dbb8:205, :238-242] rec+0x6c > 100 bails the pass even with the player visible.
+    #[test]
+    fn attack_acc_over_100_bails_the_pass() {
+        let mut gas = crate::gas::GasPool::default();
+        let mut c = copter();
+        c.matrix = facing_z();
+        c.state = 2;
+        c.attackmode = 1;
+        c.attack_acc = 101.0;
+        let paths = Vec::new();
+        let mut ch = Channels::default();
+        let mut rng = crate::drone::Rng::default();
+        let world = crate::world::CollisionWorld::from_triangles_flags(Vec::new());
+        let ctx = spot_ctx(&world, [0.0, 0.0, 100.0]);
+        let (_, _, music, _) = c.update(&paths, &mut ch, &mut gas, 1, false, &mut rng, &ctx, &[None; 9]);
+        assert!(music);
+        assert_eq!(c.state, 1, "rec+0x6c > 100 → the bail despite the sight [M :238-242]");
+        assert!((c.attack_acc - 0.0).abs() < 1e-6);
+        // Sister: exactly 100 stays [M :205 — `<= 100.0`].
+        let mut c2 = copter();
+        c2.matrix = facing_z();
+        c2.state = 2;
+        c2.attackmode = 1;
+        c2.attack_acc = 100.0;
+        c2.update(&paths, &mut ch, &mut gas, 2, false, &mut rng, &ctx, &[None; 9]);
+        assert_eq!(c2.state, 2, "rec+0x6c == 100 keeps the pass [M :205]");
+    }
+
+    // [M 0x17dbb8:140] the Mayhew latch: a +0x74 == 100 record never counts the timer, never
+    // draws, never attacks.
+    #[test]
+    fn the_mayhew_latch_never_spots() {
+        let mut gas = crate::gas::GasPool::default();
+        let mut c = copter();
+        c.matrix = facing_z();
+        c.arrival = 100;
+        let paths = Vec::new();
+        let mut ch = Channels::default();
+        let mut rng = crate::drone::Rng::default();
+        let world = crate::world::CollisionWorld::from_triangles_flags(Vec::new());
+        let ctx = spot_ctx(&world, [0.0, 0.0, 100.0]);
+        for _ in 0..500 {
+            c.update(&paths, &mut ch, &mut gas, 1, false, &mut rng, &ctx, &[None; 9]);
+        }
+        assert_eq!(c.state, 1, "+0x74 == 100 keeps the copter in state 1 [M :140]");
+        assert_eq!(c.timer, 0, "the timer never counts behind the latch");
+        assert_eq!(rng.draws, 0, "and draws nothing");
     }
 }

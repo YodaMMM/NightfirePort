@@ -43,7 +43,11 @@ pub struct GroundMotion { pub delta: V3, pub turn: f32, pub pivot: V3 }
 pub const LOS_GUARD_VISION: u32 = 0xa27; // DroneVision_CanSeeObjectFrom 0x176f18:69/95 and its family (CanSeePosition 0x178438:70, LineOfSightToObject 0x178390:22, DroneCanSeeDrone 0x1760b0:80, NDrone2_CheckUnsurrender 0x14a168:30, HandleExplosives 0x1435f0:40, MessageObjVicinity 0x13a438:31 — the 0x500 arg is dead, class-5 blast takes the plain-0xa27 else branch)
 pub const LOS_PLAYER_HEADROOM: u32 = 0xd; // Player_SSCrouch 0x1924c0:100-101 / Player_HandleJump 0x1916b0:161-162 mask 9 | 4
 pub const LOS_PROBE_8: u32 = 0xc; // mask 8 | 4 — Player_SSGrapple 0x192860:86-88, Searchlight_Update 0x1cb900:338-340, Sensor_SetBeam 0x1af398:73-75, Bullet_homing 0x12f358:92-93
-pub const LOS_SENSOR: u32 = 0xe; // Sensor_InCone 0x1af4f0:84-86 / Check_AutoAim 0x1a73f8:164-165 / Bullet_DoTrails flash 0x12d890:343-345 mask 0xa | 4
+pub const LOS_SENSOR: u32 = 0xe;
+/// The extraction copter's spot check [M Copter_Update 0x17dbb8:172 — the call's last argument
+/// 0x2e = 0x2a | 4: the glass 0x2, node 0x8 and missile-cage 0x20 drops] (`line_of_sight` keeps
+/// the static-world walk while `LOS_MASKS_ON` is off — the shared gate above).
+pub const LOS_COPTER_SPOT: u32 = 0x2e; // Sensor_InCone 0x1af4f0:84-86 / Check_AutoAim 0x1a73f8:164-165 / Bullet_DoTrails flash 0x12d890:343-345 mask 0xa | 4
 /// The per-caller masks are not applied yet [S]: with them on, guard cover, turret shots and
 /// several real-path walks broke; `line_of_sight` keeps the static-world segment test until then.
 pub const LOS_MASKS_ON: bool = false;
