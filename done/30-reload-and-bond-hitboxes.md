@@ -23,3 +23,8 @@ say so in the report. Never weaken a decompile-backed test to make code pass.
 
 ---
 claimed-by: sandbox4 at 2026-10-24T10:18Z
+
+---
+## Report (done, 2026-10-24T11:30Z)
+
+Closed by the driver: the report is on `s/reload-and-bond-hitboxes` (docs/reports/reload-and-bond-hitboxes.md); the worker didn't run finish.sh.
