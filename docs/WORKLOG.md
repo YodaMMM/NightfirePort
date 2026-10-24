@@ -79,3 +79,18 @@ walkreal 01-0d 15/0/2, walkreal 11-4a+0a 19/0/7, walk_*+level_carry+fix_world_gr
 fix_start_loadouts+mp_respawn_ammo 40/0/0, nf-game/nf-view/nf-formats/nf-audio units+
 crouch/ladder/mp cores 44/0/4 — 118 passed, 0 failed, 13 ignored, no regressions. probes:
 probe_05_park.rs, probe_05_floors.rs committed as the evidence.
+
+Task: level-0a-office-hatch-7 — the spawn settle without its five master-tree regressions
+(fire_modes3 torpedo, interact_09 standing-short, fix_08 seam, bathhouse mixer, the crouch
+option), then the 0a hall glide + corner + main walk. Branch start from
+origin/s/level-0a-office-hatch-6 (not merged): hatch-6 made the settle LEVEL-START ONLY and
+fixed the 05 truck ride, but never ran the five now-red binaries (spawn-sensitive chunks only).
+
+Plan: (1) reproduce the five on this tree; (2) per test: first-tick timing wrong (fix the test
+with evidence) vs the hold swallowing something the game's player does do (narrow the hold [M]);
+never widen the hold; the gate stays [S]; (3) the hall glide/corner/main-walk: dump the doorway
+base + corner triangles, log per-tick capsule contacts and pushes, compare with the slope-blind
+push [M Intersect_CylGeom 0x109da0, Player_CollisionHandler 0x1949a8 disasm 0x194c60-0x194c70]
+and the feet band [M 0x194188]; (4) full suite on the final tree (merged with origin/master),
+none of the five failing. Suite runner starts in the first minutes; checkpoints every 20-30 min
+(sandbox dies 18:47 UTC, last work 18:27 UTC).
