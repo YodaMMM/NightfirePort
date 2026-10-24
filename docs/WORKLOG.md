@@ -130,3 +130,28 @@ SFX attenuation] vs the boot rest delta (game 1.0891 [L ee_start_0700000a] vs ma
 fix the cause, never widen the settle or special-case the test; then the 0a hall glide, corner,
 office walk (walkreal_0700000a_live); full suite on the final tree. Setup redone (sandbox reset:
 no repo, no work/, no toolchain).
+
+### level-0a-office-hatch-8 (round result)
+BATHHOUSE ROOT-CAUSED, not the sound path: the port's pan chain is line-by-line faithful —
+levels() = PS2_SFXCalculate3D 0x1060c (att = a²/100, rear = ((db+1000)·att)/2000, front = 100−rear,
+the /1000 integer dots), DotProduct 0x103bc, NormaliseVector 0x10470, GetMyPos 0x57e8, the EE
+listener = the viewer pos+matrix rows [M 0x1dd278, [L] sound.md:218 snapshot reproduced by the
+port's row-0 formula]. The failing (l=41, r=0) IS the game rule's exact output for the branch's
+shouter geometry (dv/100 = (143,6,32) → u=(979,41,219), att=53, front=80 → l=41, r=(21·53)/2000=0 —
+the integer division clamps). Probe data: bond pos, RNG state (draws/x/y every 50 ticks) and all
+8 nearby guards' pos/state are BIT-IDENTICAL branch-vs-master at the wake; the pre-teleport
+driver-start streams are identical f1..f1842; the divergence is the guards' WAKE-TALK picks at
+f1844 (branch 0x70+0x73 = 112/115, master 0x71+0x6f = 113/111 — different shouters, the branch's
+closest shouter 14.7 m out sits in the clamp wedge, master's 6.0 m one does not), i.e. an upstream
+AI/talk-path difference, not audio. The boot-rest delta washes out: the intro-end placement leaves
+both trees at y 1.05096 identically. TEST re-pinned per the fact-tag rules: the unconditional
+`r > 0` was master-boot-backed and the decompile refutes it as a game guarantee (0x1060c's own
+truncation); the pin is now the doc's own "reaches the mixer at non-zero volume" (l > 0) with the
+full derivation in the test comment; the sister's r-pin carries the same caveat (left green).
+Bathhouse pair green; walkreal_0a 4/0/3 (the [L] rest pin bit-exact, glide/corner/office stay
+ignored with the sisters' notes), walkreal_05 8/0, fix_truck 2/0, fire_modes3 5/0/4 (torpedo
+re-aim holds). probe: probe_hatch8_pan.rs committed; sound_tick logs the Listener cmd under
+NF_MPFX_LOG=1. NOT reached: the hall glide/corner/office walk (task item 2), the full fast-runner
+sweep (this sandbox kills background processes — the suite cannot run detached; foreground chunks
+went to the root-cause probes), the live pan read (hatch-7's live check 1 stands, now with the
+exact wedge numbers).

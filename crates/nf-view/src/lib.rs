@@ -1944,7 +1944,11 @@ pub fn sound_tick(s: &mut nf_audio::sfx::Sound, sim: &mut scene::Sim) {
         if let Some((reverb, underwater)) = env_send { drv.set_environment(reverb, underwater); }
         for c in cmds {
             match c {
-                nf_game::sound::Cmd::Listener { pos, norm, dir, .. } => { drv.set_listener(pos, dir, norm); }
+                nf_game::sound::Cmd::Listener { pos, norm, dir, .. } => {
+                    // The pan probe (level-0a-office-hatch-8): the listener the sound is mixed against.
+                    if mpfx_log { eprintln!("[snd] f{frame} listener {pos:?} norm {norm:?} dir {dir:?}"); }
+                    drv.set_listener(pos, dir, norm);
+                }
                 nf_game::sound::Cmd::Start { handle, id, pos, radii } => {
                     // mp-remote-fx's log: every driver start with its position (NF_MPFX_LOG).
                     if mpfx_log {
