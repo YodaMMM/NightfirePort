@@ -75,31 +75,53 @@ struct Voice {
 /// The SPU reverb: the SPU2 effect area running the game's mode-4 (STUDIO_3) preset through the
 /// reverb equations ([`reverb::ReverbCore`]; PCSX2 `V_Core::DoReverb`). The per-voice wet sends
 /// (VMIXEL/VMIXER) enter at full scale; the EVOL depth scales the wet return into the mix [M
-/// sound.md §5.5; reverb.rs module comment]. The core is ticked once per output frame (PCSX2's
-/// `spu2Mix` calls `DoReverb` once per sample, `spu2sys.cpp` TimeUpdate) and returns wet on BOTH
-/// channels every frame — the resampling (39-tap down/up FIRs, `ReverbResample.cpp`) lives inside
-/// the core, so no per-frame hold is needed.
+/// sound.md §5.5; reverb.rs module comment]. The core runs at the SPU's own 48 kHz (PCSX2's
+/// `spu2Mix` calls `DoReverb` once per SPU sample, `spu2sys.cpp` TimeUpdate): one core tick is one
+/// 48 kHz sample, so its delay offsets are in 48 kHz samples. The output device may run at another
+/// rate (44.1 or 96 kHz), so the core is ticked by a 48 kHz phase accumulator and its wet output is
+/// linearly interpolated between ticks — ticking it once per DEVICE frame ran every delay at the
+/// wrong length (half at 96 kHz), a fast comb/flutter on reverb-routed voices.
 struct Reverb {
     /// The reverb delay RAM and equations, at the game's registers.
     core: reverb::ReverbCore,
     /// The current `EVOL` send depth (0..1), scaling the wet return [M].
     depth: f32,
+    /// SPU ticks per device frame (`SPU_RATE / device rate`).
+    step: f64,
+    /// The fraction of an SPU tick elapsed since the last core tick.
+    phase: f64,
+    /// The core's last two wet outputs (the interpolation ends).
+    prev: [f32; 2],
+    cur: [f32; 2],
 }
 
 impl Reverb {
     fn new(rate: u32) -> Reverb {
-        let _ = rate;
         Reverb {
             core: reverb::ReverbCore::new(reverb::ReverbRegs::from_mode(reverb::GAME_EFFECT_MODE), reverb::game_area(0)),
             depth: 0.0,
+            step: SPU_RATE / rate.max(1) as f64,
+            phase: 0.0,
+            prev: [0.0; 2],
+            cur: [0.0; 2],
         }
     }
     /// Process one stereo frame: `send` is the dry signal of a reverb-routed voice; returns the wet
     /// output on both channels (PCSX2 `DoReverb` → `ReverbUpsample`: both sides every tick).
     fn process(&mut self, send: [f32; 2]) -> [f32; 2] {
         let to_i16 = |x: f32| (x * 32_767.0).clamp(-32_768.0, 32_767.0) as i16;
-        let wet = self.core.tick([to_i16(send[0]), to_i16(send[1])]);
-        [wet[0] as f32 / 32_768.0 * self.depth, wet[1] as f32 / 32_768.0 * self.depth]
+        // Run the core for every 48 kHz tick this device frame spans (the send is held across them).
+        self.phase += self.step;
+        while self.phase >= 1.0 {
+            self.phase -= 1.0;
+            let wet = self.core.tick([to_i16(send[0]), to_i16(send[1])]);
+            self.prev = self.cur;
+            self.cur = [wet[0] as f32 / 32_768.0, wet[1] as f32 / 32_768.0];
+        }
+        // Between core ticks: the straight line from the previous tick's wet to the latest one.
+        let t = (1.0 - self.phase / self.step.max(1.0)).clamp(0.0, 1.0) as f32;
+        let w = |k: usize| (self.prev[k] + (self.cur[k] - self.prev[k]) * t) * self.depth;
+        [w(0), w(1)]
     }
 }
 
@@ -469,6 +491,31 @@ mod tests {
     /// send never writes the right rings directly), so it needs the cross-feed delay (~4.3k frames)
     /// to wake up (~7.7k frames: the reverb address advances once per left/right pair, PCSX2
     /// `RevbGetIndexer` `Cycles >> 1`): warm up 10 000 frames, then judge 10 000.
+    /// The reverb's timing is the SPU's 48 kHz whatever the device rate: an impulse's first wet
+    /// return lands at the same time in milliseconds on a 48 kHz and a 96 kHz device (the core's
+    /// delay offsets are 48 kHz samples [reverb.rs]); ticking the core per device frame put it at
+    /// half the time on 96 kHz. Sister: a 44.1 kHz device lands at the same time too.
+    #[test]
+    fn the_reverb_echo_time_does_not_depend_on_the_device_rate() {
+        let first_echo_ms = |rate: u32| {
+            let mut rev = Reverb::new(rate);
+            rev.depth = 1.0;
+            let n = rate as usize; // one second
+            for i in 0..n {
+                let s = if i < (rate as usize / 1000).max(1) { 0.5 } else { 0.0 };
+                let w = rev.process([s, s]);
+                if i > (rate as usize / 1000) * 2 && (w[0].abs() > 1e-3 || w[1].abs() > 1e-3) {
+                    return i as f64 * 1000.0 / rate as f64;
+                }
+            }
+            f64::NAN
+        };
+        let (a, b, c) = (first_echo_ms(48_000), first_echo_ms(96_000), first_echo_ms(44_100));
+        assert!(a.is_finite() && a > 1.0, "a wet return arrives at 48 kHz ({a} ms)");
+        assert!((a - b).abs() < 1.0, "96 kHz echo at {b:.2} ms vs 48 kHz {a:.2} ms");
+        assert!((a - c).abs() < 1.0, "44.1 kHz echo at {c:.2} ms vs 48 kHz {a:.2} ms");
+    }
+
     #[test]
     fn the_reverb_returns_wet_on_both_sides_every_frame() {
         let mut rev = Reverb::new(48_000);
