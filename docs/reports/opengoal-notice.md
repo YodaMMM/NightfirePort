@@ -56,11 +56,45 @@ evidence tags are needed beyond the file provenance above.
 ## Tests run
 
 - `cargo test --offline --release -j1 -p nf-view --lib -- launcher::update --test-threads=1`:
-  (result appended below after the run).
-- Full suite via the fast runner `tools/test/suite.py` on the final tree (total line appended
-  below).
+  **6 passed, 0 failed** — including the new
+  `every_root_third_party_licence_rides_in_the_notices` and the 5 pre-existing update tests.
+- `cargo test --offline --release -j1 -p nf-formats --lib -- vag --test-threads=1`: **5 passed,
+  0 failed** (the touched `vag.rs` comment compiles; the decoder behaviour untouched).
+- Full suite via the fast runner `tools/test/suite.py` (clean tree, `cargo clean` first after the
+  disk filled; 774 test binaries, "build ok: 774 test binaries in 1106 s"). **Still executing at
+  the 15:34 UTC work-stop deadline on this 2-core sandbox — no total line yet; the partial result
+  stands in for it** (`tail` of suite.out at 15:33 UTC):
+
+  ```
+  FAILED disc_golden::bigf_header_fields_behave_as_documented
+  FAILED disc_golden::bigf_tables_match_the_golden_manifest
+  FAILED disc_golden::directory_tree_matches_the_golden_manifest
+  FAILED identity_disc::the_real_disc_passes_the_identity_check
+  CRASH mp_stress_explosives_live (exit -9)
+  CRASH mp_online_failures (exit -9)
+  FAILED fix_0c_pylon_live::the_0c_pylon_is_on_screen_at_the_user_spot
+  FAILED stdio_pipe_closed_live::a_closed_stderr_pipe_does_not_crash_the_game
+  FAILED probe_pylon_render::probe_render_pylon_only
+  ```
+
+  All nine are environmental, none reachable from this branch's changes:
+  - the 3 `disc_golden` failures are the slim-ISO allowance the driver states;
+  - `identity_disc` panics on `sectors 518435 != 1191072` — the slim on-foot image is a stripped
+    build (volume/serial/vmode/version all match), the retail-only sector/SHA-1 assertion cannot
+    hold on it; the identity code and test are untouched here;
+  - the two `CRASH ... (exit -9)` lines are the runner's wall-clock kill on stress/MP binaries
+    (600 s limit, 2 cores, no GPU);
+  - `fix_0c_pylon_live`, `probe_pylon_render` are on-screen render probes (no GPU in this
+    sandbox — the merge lesson: visual work needs the main agent's render);
+  - `stdio_pipe_closed_live` drives the real game binary headless.
+  The branch changes four things — a licence text file, an `include_str!` + section list in
+  `update.rs`, one line pair in `tools/release/notices.py`, and doc/comment text — none of which
+  is in any of those binaries' code paths.
 
 ## What's left
+
+- The suite total line: the runner was still executing when this report was written; if it
+  lands, the next message can append it below. The nine partial failures are itemised above.
 
 - Nothing known. The release `THIRD_PARTY_NOTICES.txt` gets the OpenGOAL mention through
   `notices.py`; the exe carries the full text through `notices_text()`. If a future task adds
