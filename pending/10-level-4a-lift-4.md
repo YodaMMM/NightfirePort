@@ -1,12 +1,12 @@
-## Your task: `level-4a-lift-4`, 0700004a: cross from the stopped cab onto the landing, and the shaft kill's real trigger
+## Your task: `level-4a-lift-4`, 0700004a: the lift ride's timed satchels, defused with the laser
 
-On master the lift walk runs green to the cab's north edge (z -1.85) at the stop (root -54.1971, the 575-tick landing-scene disable, the raw-key hand-back), and staying on ends in the death at root -95.80. Two parts are open:
-- The crossing: the landing's south edge is at z ~-1.2 (floor -56), a ~0.65 gap. The port's walk speed is ~0.037 units/tick and a jump's airborne momentum decays within ~20 ticks, so the walker cannot cross before the resumed cab drops. The real game's walk-off works.
-- The kill at -95.80 is a level-specific [S] zone in drone.rs (no disc writer for ch 0x62, no static collision there, no script kill found).
-The probe tests (walkreal_probe_l3*, ignored) are assertion-free dumps.
+How the ride works in the game: during the lift descent the guards drop timed satchel charges onto the lift; each one must be deactivated by burning it with the laser watch (0x4E), or its timer fails the mission.
 
-1. The crossing: compare the port's on-foot walk speed and jump arc with the game's [M Player_Update / the walk and jump handlers in player.rs's citations]; fix whichever differs, then extend the walk across onto the landing and into the lobby, real input only.
-2. The kill: find what ends the player in the shaft [M: Player_HandlePain's landing-damage formula 0x1949a8:113-124 on a catch below, Mission_Update's ch-0x62 arm 0x182c60:38-41, any collide/trigger class that kills]. Replace the [S] zone with it, or keep it [S] and name the PCSX2 read (fresh boot, watch BLData+0x894 and ch 0x62 through y -95.80..-96).
+Live [L fresh boot, PCSX2, god mode, logs in hand]: the ride descends at 0.0303 units/frame; guards shoot Bond on the way down (health 100 -> 69.4 by y -53); the lift stops at y -54.1971 for the landing scene's disable (575 ticks); the hand-back lands at the marker's raw x/z (1.7994, -3.4534) and the lift resumes; walking north at the hand-back is blocked at z -1.85 in the game too (so that is NOT the exit); with no defusing, **ch 0x62 rises at y -95.85 with health still 100** and the mission fails — the fail is the satchel timer's channel write, not damage. Master currently has an [S] stand-in kill zone at root -95.80 in drone.rs (level 0700004a only): replace it with the real mechanism.
+
+1. Find the satchels in the data and decompile: who drops them (drone weapon/drop on the ride's spawners, or script entities), the object class and its update (the timer, what it writes on expiry — ch 0x62 or the mission-fail path [M Mission_Update 0x182c60]), and the laser defuse (likely the same burn as `Lock_Update` 0x1ae3d8's 0x4E arm the port already runs for hinges and bolts — cite it). Port them; remove the [S] kill zone.
+2. Tests, real input only: ride the lift, burn each satchel with the laser watch as it lands, and finish the ride alive into the lobby (whatever the real exit is once the satchels are defused); sister: an undefused satchel fails the mission when its timer ends.
+3. The probe tests (walkreal_probe_l3*) are assertion-free dumps; keep them ignored.
 
 **Tests pin only proven behaviour.** Every assertion about what the game does cites its evidence: [M] a decompile
 address that actually says it, [D] disc bytes, or [L] a live PCSX2 measurement from a FRESH boot (a save-state resume
