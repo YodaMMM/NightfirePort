@@ -206,3 +206,23 @@ tree (the_vent_grill_blocks_the_west_duct_per_the_game — green; walk_the_infil
 delta_exit — ignored with the leg-1a rewrite note). Ran: nf-game lib 547, nf-view lib 96,
 sleeper_push_live 1, walkreal_07000001_live 3, walkreal_07000014_live 2 passed + 1 ignored, all
 green on the fixed tree. LEFT: the Q-Claw climb leg at the mouths, legs 2+ of the big walk.
+
+## level-14-qclaw-climb (2026-10-25)
+
+RIDES RESTORED [M]: the trench whitelist (solid kinds = {0x20,0x22,0x29,0xe1}) rested on an
+incomplete read of Script_CreateEntity 0x1d8968 — the fallthrough's hashtable_set_object_to_
+entity_gfx 0x1ca6d8 lands in Control_SetGList :39 (the SAME t_hashtable lookup the creator
+arms' hashtable_hashcode_to_celglist 0x1ca798 makes), Script_EntityStart 0x1d8d78:113-115 links
+the fresh object into the cel chain for ANY kind, and Script_Interp 0x1d9a08:94's obj+0xfa bit
+0x20 drives the per-tick rebuild+relink (control_movement_object_handler 0x1336f8:147-236 →
+control_handle_cel_change 0x133288:62/:135-158) before Collide_Update. script_parts' Entity arm
+back to the all-but-five rule (the triggers 0xea/0xeb, pickup 0xF0, emitter 0xF2, AI volume
+0xF5 stay in the port's own systems). ALL 15 listed ride/carry tests green again (paternoster,
+gondola x3, zoe, 0700004a lift ride + satchel x2 + floor plates/hint, wire2 x3, 07000016, kiko,
+campaign_flow) + nf-game lib 547. EAST ROUTE re-ignored with the refutation: the lid slabs
+(0x02000750 kind 0x31, created at stream t1 by the mode-64 lid SPs' create-only script
+0x06000A3B [D probe14_lid — no animation, event 0xC at t63]) stand solid over the slot as the
+[M] chain predicts; the game's drop needs the OPENED lid and the open mechanism (the consumer
+of SCRIPTINFO+0xaa8 bit 0x10) is the open point. Q-Claw climb leg + the big walk's leg-1a
+rewrite: untouched, next round. Ran: nf-view ride/walk batches (15 previously-red all green),
+nf-game --lib 547, campaign_flow_live 514 s green.

@@ -15943,20 +15943,25 @@ fn segment_hits_sphere(a: V3, b: V3, c: V3, r: f32) -> bool {
                 let id = |k: usize| (oi as u64) << 6 | k as u64;
                 match o {
                     Some(crate::nis::Obj::Anim { skin, script, frame, .. }) => parts.extend(d.discrete_parts(*skin, *script, *frame).into_iter().enumerate().map(|(k, (h, m))| (id(k), h, m))),
-                    // The game's script Entity collides ONLY through the creator arms that link the object
-                    // into a cel (`build_LinkToRoom` 0x1c9680 → `control_link_object_to_cel`; the movement
-                    // capsule's object pass walks the visited cels' object chains — `Collide_Pick`
-                    // 0x1eb320 LAB_001eb8e8 walks `cel+8`). Of `Script_CreateEntity` 0x1d8968's arms exactly
-                    // these link: 0x20 Break_Create 0x12c230, 0x22 Ladder_Create 0x1966c0:22, 0x29
-                    // Switch_Create 0x1adcc0:38, 0xe1 Destroy_Create 0x12c318. Every other kind — the
-                    // triggers 0xea/0xeb, the pickup 0xf0, the emitter 0xf2, the AI volume 0xf5, and the
-                    // FALLTHROUGH for everything else (LAB_001d8a68: bare `control_create_object(0,0,0,0)`
-                    // + `hashtable_set_object_to_entity_gfx` gfx attach + `control_unlink_object`
-                    // 0x1d8d54 — kind 0x19 ladder art, kind 0x31 props, …) — never reaches a cel and is
-                    // never tested by the game's collide pass. The old blacklist posed the fallthrough
-                    // entities' glist shapes solid (07000014's drop-slot ghost: the lid script's kind-0x19
-                    // entity 0x02000751 rested Bond at y 2.97 on art the game does not collide).
-                    Some(crate::nis::Obj::Entity { hash, kind, matrix, .. }) if matches!(kind, 0x20 | 0x22 | 0x29 | 0xe1) => parts.push((id(0), *hash, *matrix)),
+                    // Every script Entity kind collides at its posed matrix: the creator arms AND the
+                    // fallthrough attach the SAME collision glist (`Script_CreateEntity` 0x1d8968's
+                    // fallthrough runs `hashtable_set_object_to_entity_gfx` 0x1ca6d8, which lands in
+                    // `Control_SetGList` :39 — the identical t_hashtable lookup the creator arms'
+                    // `hashtable_hashcode_to_celglist` 0x1ca798 makes), `Script_EntityStart` 0x1d8d78
+                    // links the fresh object into the cel chain (:113-115, any kind, obj+0x20 == 0),
+                    // and every MOVED entity is rebuilt + relinked per tick before `Collide_Update`
+                    // (`Script_Interp` 0x1d9a08:94 sets obj+0xfa bit 0x20; `control_movement_object_handler`
+                    // 0x1336f8:147-236 → `control_handle_cel_change` 0x133288 rebuilds + relinks; the
+                    // glist rides the object through `Collide_PickObj`). The five interactive kinds are
+                    // the exception — the port carries them in its own systems instead: the triggers
+                    // 0xea/0xeb become `crate::triggers::Trigger` volumes (below), the pickup 0xF0's
+                    // glist blocked its own take ray (fix-safe08; the game control-unlinks the created
+                    // pickup 0x1d8d54), the emitter 0xF2 arm control-unlinks explicitly
+                    // (0x1d8968:163-166), the AI volume 0xF5 is a drone volume. The old blacklist posed
+                    // exactly these five out; the s/level-14-trench-landing whitelist (only the four
+                    // celglist-creator kinds) un-posed the ride platforms (the paternoster cab
+                    // 0x2000367, the 0700004a lift entity obj_type 31, the gondola) and broke the rides.
+                    Some(crate::nis::Obj::Entity { hash, kind, matrix, .. }) if !matches!(kind, 0xea | 0xeb | 0xf5 | 0xf2 | 0xf0) => parts.push((id(0), *hash, *matrix)),
                     _ => {}
                 }
             }
