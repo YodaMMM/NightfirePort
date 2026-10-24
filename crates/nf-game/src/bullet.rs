@@ -373,7 +373,7 @@ mod tests {
         let vol = PlayerVolume { feet: [1e4, 0.0, 1e4], height: 0.1, radius: 0.1 };
         // The P2K: range 50.0 (the disc's +0x1C), speed 5.0 (+0x20 [D census rec 2]).
         let mut p2k = Bullet { pos: [0.0, 1.0, 0.0], dir: [0.0, 0.0, 1.0], speed: 5.0, travelled: 0.0, range: 50.0,
-            damage: 0.0, owner: 0, state: 0, weapon: 0x02, flyby: false, bounces: 0 };
+            damage: 0.0, owner: 0, state: 0, weapon: 0x02, flyby: false, bounces: 0, ..Bullet::TAIL };
         let mut rng = crate::drone::Rng::new(3);
         for _ in 0..40 { if p2k.update(&world, &vol, [1e4, 0.0, 1e4], &mut rng).is_some() { break } }
         assert_eq!(p2k.state, 2, "the P2K round dies past its +0x1C = 50 [M 0x12e95c]");
@@ -382,7 +382,7 @@ mod tests {
         assert!(p2k.travelled > 50.0, "BU+0xF4 keeps the overshoot past the boundary [M 0x12f010]");
         // The sniper-family record flies 1200: alive and past 150 after the same 40 ticks.
         let mut sn = Bullet { pos: [0.0, 1.0, 0.0], dir: [0.0, 0.0, 1.0], speed: 5.0, travelled: 0.0, range: 1200.0,
-            damage: 0.0, owner: 0, state: 0, weapon: 0x1e, flyby: false, bounces: 0 };
+            damage: 0.0, owner: 0, state: 0, weapon: 0x1e, flyby: false, bounces: 0, ..Bullet::TAIL };
         let mut rng2 = crate::drone::Rng::new(3);
         for _ in 0..40 { if sn.update(&world, &vol, [1e4, 0.0, 1e4], &mut rng2).is_some() { break } }
         assert_eq!(sn.state, 1, "the 1200 record's round is still flying");
@@ -390,7 +390,7 @@ mod tests {
         // The clamp is exact: a 1.0-speed round with range 50 lands its FINAL position within one
         // step of 50.0 [M 0x12f020-0x12f02c clamps the step to the boundary].
         let mut slow = Bullet { pos: [0.0, 1.0, 0.0], dir: [0.0, 0.0, 1.0], speed: 1.0, travelled: 0.0, range: 50.0,
-            damage: 0.0, owner: 0, state: 0, weapon: 0x02, flyby: false, bounces: 0 };
+            damage: 0.0, owner: 0, state: 0, weapon: 0x02, flyby: false, bounces: 0, ..Bullet::TAIL };
         let mut rng3 = crate::drone::Rng::new(3);
         for _ in 0..80 { if slow.update(&world, &vol, [1e4, 0.0, 1e4], &mut rng3).is_some() { break } }
         assert!((slow.pos[2] - 50.0).abs() < 1.01, "the clamped boundary: {} vs 50.0", slow.pos[2]);
@@ -411,7 +411,7 @@ mod tests {
         let vol = PlayerVolume { feet: [1e4, 0.0, 1e4], height: 0.1, radius: 0.1 };
         // 0x4E: range 4.0, speed 33.33 [L weapon_data 0x2bf150 + 0x4E·0x10C: +0x1C, +0x20].
         let mut w = Bullet { pos: [0.0, 1.0, 0.0], dir: [0.0, 0.0, 1.0], speed: 33.33, travelled: 0.0, range: 4.0,
-            damage: 0.0, owner: 0, state: 0, weapon: 0x4e, flyby: false, bounces: 0 };
+            damage: 0.0, owner: 0, state: 0, weapon: 0x4e, flyby: false, bounces: 0, ..Bullet::TAIL };
         let mut rng = crate::drone::Rng::new(3);
         // The first (state-0) tick: the step clamps onto the +0x1C boundary.
         w.update(&world, &vol, [1e4, 0.0, 1e4], &mut rng);
@@ -422,7 +422,7 @@ mod tests {
         assert_eq!(w.state, 2, "the watch round dies at the +0x1C = 4.0 death [M 0x12e95c-0x12e984]");
         // 0x4F's 8.0: the same law, the boundary at 8.0.
         let mut w2 = Bullet { pos: [0.0, 1.0, 0.0], dir: [0.0, 0.0, 1.0], speed: 33.33, travelled: 0.0, range: 8.0,
-            damage: 0.0, owner: 0, state: 0, weapon: 0x4f, flyby: false, bounces: 0 };
+            damage: 0.0, owner: 0, state: 0, weapon: 0x4f, flyby: false, bounces: 0, ..Bullet::TAIL };
         let mut rng2 = crate::drone::Rng::new(3);
         w2.update(&world, &vol, [1e4, 0.0, 1e4], &mut rng2);
         assert!((w2.pos[2] - 8.0).abs() < 1e-3, "the 0x4F boundary is 8.0 [L +0x1C], got {}", w2.pos[2]);
@@ -474,7 +474,7 @@ mod tests {
         let vol = PlayerVolume { feet: [100.0, 0.0, 100.0], height: 1.8, radius: 0.25 };
         // Viewer at the origin; bullet flies along +z, 2 units to the side (within 3).
         let mut b = Bullet { pos: [0.0, 1.0, -50.0], dir: [0.0, 0.0, 1.0], speed: 15.0, travelled: 0.0, range: 200.0,
-            damage: 0.0, owner: 1, state: 0, weapon: 0x06, flyby: true, bounces: 0 };
+            damage: 0.0, owner: 1, state: 0, weapon: 0x06, flyby: true, bounces: 0, ..Bullet::TAIL };
         let mut rng = crate::drone::Rng::new(0);
         // The bullet flies many ticks past the viewer; the 1-in-5 roll should eventually fire.
         let mut fired = false;
@@ -484,7 +484,7 @@ mod tests {
         assert!(fired, "a fly-by bullet within 3 units should fire on the 1-in-5 roll within 60 ticks");
         // Sister: a bullet without the fly-by flag never fires.
         let mut b2 = Bullet { pos: [0.0, 1.0, -50.0], dir: [0.0, 0.0, 1.0], speed: 15.0, travelled: 0.0, range: 200.0,
-            damage: 0.0, owner: 1, state: 0, weapon: 0x06, flyby: false, bounces: 0 };
+            damage: 0.0, owner: 1, state: 0, weapon: 0x06, flyby: false, bounces: 0, ..Bullet::TAIL };
         let mut rng2 = crate::drone::Rng::new(0);
         let mut fired2 = false;
         for _ in 0..60 {
@@ -493,7 +493,7 @@ mod tests {
         assert!(!fired2, "no fly-by flag → no FlyBy event");
         // Sister: a bullet 10 units away (SqDist 100 > 9) never fires even with the flag.
         let mut b3 = Bullet { pos: [10.0, 1.0, -50.0], dir: [0.0, 0.0, 1.0], speed: 15.0, travelled: 0.0, range: 200.0,
-            damage: 0.0, owner: 1, state: 0, weapon: 0x06, flyby: true, bounces: 0 };
+            damage: 0.0, owner: 1, state: 0, weapon: 0x06, flyby: true, bounces: 0, ..Bullet::TAIL };
         let mut rng3 = crate::drone::Rng::new(0);
         let mut fired3 = false;
         for _ in 0..60 {
