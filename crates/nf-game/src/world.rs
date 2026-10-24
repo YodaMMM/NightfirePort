@@ -47,6 +47,11 @@ pub const LOS_SENSOR: u32 = 0xe; // Sensor_InCone 0x1af4f0:84-86 / Check_AutoAim
 /// The per-caller masks are not applied yet [S]: with them on, guard cover, turret shots and
 /// several real-path walks broke; `line_of_sight` keeps the static-world segment test until then.
 pub const LOS_MASKS_ON: bool = false;
+
+/// The `set_dynamic` part id bit of the breakable panes' collision parts (drone.rs's
+/// `0x400_0000_0000 | breaks index`). The ray queries skip these parts (see `for_ray_tris`);
+/// the capsule queries and the effect walks read them.
+pub const PANE_PART: u64 = 0x400_0000_0000;
 /// The normalized-spine head-on cull below is not applied yet [S]: with it on, real-path door,
 /// pickup, turret and gondola walks on 06/08/09/16 broke.
 pub const HEAD_ON_CULL_ON: bool = false;
@@ -661,12 +666,17 @@ impl CollisionWorld {
             let Some(t) = self.shapes.get(&h) else { continue };
             let n = geo.objects.len();
             let mats = self.shape_mats.get(&h);
+            // The breakable panes' parts carry the node pass flag: the RAY sets drop them (see
+            // PANE_PART's room-scope note) exactly as the bit-0x8 bullet queries drop every
+            // pass-flagged node [M Collide_Intersect 0x1ebff0]. The capsule queries and the
+            // effect/impact walks read the triangles regardless.
+            let pane_part = id & PANE_PART != 0;
             // Partial reuse: an unchanged (id, hash, matrix) part memcpy's its previous world-space
             // block (the same floats the transform re-derives) — on the animating levels the
             // resting doors/static SS objects were paying a full re-transform every tick
             // (sim-tick-cost's `drones: set_dynamic` 0.4–0.6 ms on 07000008/16/1b). The `pass`
-            // bytes ride along (the dynamic build always pushes node_pass = false, the same
-            // value a re-transform would store).
+            // bytes ride along (the dynamic build pushes node_pass = false except the pane parts,
+            // the same value a re-transform would store).
             let reused = d.last_objects.get(n).copied().is_some_and(|(pid, ph, pm)| pid == id && ph == h && pm == m)
                 && n < d.geo.objects.len();
             if reused {
@@ -674,10 +684,10 @@ impl CollisionWorld {
                 let (start, end) = (po.tris.start, po.tris.end);
                 geo.tris.extend_from_slice(&d.geo.tris[start..end]);
                 geo.mats.extend_from_slice(&d.geo.mats[start..end]);
-                geo.pass.extend(std::iter::repeat(false).take(end - start));
+                geo.pass.extend(std::iter::repeat(pane_part).take(end - start));
                 geo.objects.push(Object { lo: po.lo, hi: po.hi, tris: geo.tris.len() - (end - start)..geo.tris.len() });
             } else {
-                geo.push(t.iter().enumerate().map(|(k, t)| (t.map(|p| transform(&m, p)), mats.and_then(|v| v.get(k).copied()).unwrap_or(0))));
+                geo.push_flags(t.iter().enumerate().map(|(k, t)| (t.map(|p| transform(&m, p)), mats.and_then(|v| v.get(k).copied()).unwrap_or(0))), pane_part);
             }
             if geo.objects.len() > n { movers.push((id, d.last.get(&id).copied().unwrap_or(m), m)); last_objects.push((id, h, m)); }
         }
@@ -1315,33 +1325,23 @@ impl CollisionWorld {
 
     fn segment_in_sets_drop_pass(&self, from: V3, to: V3, with_missile: bool, drop_pass: bool) -> Option<f32> {
         let d = sub(to, from);
-        let (mut best, mut lo, mut hi) = (None::<f32>, [0f32; 3], [0f32; 3]);
-        for k in 0..3 { lo[k] = from[k].min(to[k]); hi[k] = from[k].max(to[k]); }
-        let _ = (lo, hi);
-        let dynamic = self.dynamic.read().unwrap();
-        let sets: Vec<&Geo> = if with_missile { vec![&self.stat, &self.missile, &dynamic.geo] } else { vec![&self.stat, &dynamic.geo] };
-        for g in sets {
-            for o in along(g, from, to) {
-                for k in o.tris.clone() {
-                    if drop_pass && g.bullet_pass(k) { continue; } // the pass-flagged hits the bit-0x8 queries drop [M 0x1ebff0]
-                    let t = &g.tris[k];
-                    let (e1, e2) = (sub(t[1], t[0]), sub(t[2], t[0]));
-                    if dot(cross(e1, e2), d) >= 0.0 { continue; } // back face [M 0x10a8c8:168]
-                    let p = cross(d, e2);
-                    let det = dot(e1, p);
-                    if det.abs() < 1e-12 { continue; }
-                    let inv = 1.0 / det;
-                    let s = sub(from, t[0]);
-                    let u = dot(s, p) * inv;
-                    if !(0.0..=1.0).contains(&u) { continue; }
-                    let q = cross(s, e1);
-                    let v = dot(d, q) * inv;
-                    if v < 0.0 || u + v > 1.0 { continue; }
-                    let tt = dot(e2, q) * inv;
-                    if (0.0..=1.0).contains(&tt) && best.is_none_or(|b| tt < b) { best = Some(tt); }
-                }
-            }
-        }
+        let mut best = None::<f32>;
+        self.for_ray_tris(from, to, with_missile, drop_pass, |t, _| {
+            let (e1, e2) = (sub(t[1], t[0]), sub(t[2], t[0]));
+            if dot(cross(e1, e2), d) >= 0.0 { return; } // back face [M 0x10a8c8:168]
+            let p = cross(d, e2);
+            let det = dot(e1, p);
+            if det.abs() < 1e-12 { return; }
+            let inv = 1.0 / det;
+            let s = sub(from, t[0]);
+            let u = dot(s, p) * inv;
+            if !(0.0..=1.0).contains(&u) { return; }
+            let q = cross(s, e1);
+            let v = dot(d, q) * inv;
+            if v < 0.0 || u + v > 1.0 { return; }
+            let tt = dot(e2, q) * inv;
+            if (0.0..=1.0).contains(&tt) && best.is_none_or(|b| tt < b) { best = Some(tt); }
+        });
         best
     }
 
@@ -1353,31 +1353,64 @@ impl CollisionWorld {
     /// prefix up to the first hit [S port optimisation].
     fn segment_blocked(&self, from: V3, to: V3, with_missile: bool, drop_pass: bool) -> bool {
         let d = sub(to, from);
-        let dynamic = self.dynamic.read().unwrap();
-        let sets: [Option<&Geo>; 3] = [Some(&self.stat), with_missile.then_some(&self.missile), Some(&dynamic.geo)];
-        for g in sets.into_iter().flatten() {
-            for o in along(g, from, to) {
+        let mut blocked = false;
+        self.for_ray_tris(from, to, with_missile, drop_pass, |t, _| {
+            if blocked { return; }
+            let (e1, e2) = (sub(t[1], t[0]), sub(t[2], t[0]));
+            if dot(cross(e1, e2), d) >= 0.0 { return; } // back face [M 0x10a8c8:168]
+            let p = cross(d, e2);
+            let det = dot(e1, p);
+            if det.abs() < 1e-12 { return; }
+            let inv = 1.0 / det;
+            let s = sub(from, t[0]);
+            let u = dot(s, p) * inv;
+            if !(0.0..=1.0).contains(&u) { return; }
+            let q = cross(s, e1);
+            let v = dot(d, q) * inv;
+            if v < 0.0 || u + v > 1.0 { return; }
+            let tt = dot(e2, q) * inv;
+            if (0.0..=1.0).contains(&tt) { blocked = true; }
+        });
+        blocked
+    }
+
+    /// Every triangle the RAY queries test, in set order. The pane parts (`PANE_PART` ids) are
+    /// NOT walked: the game's ray queries walk ONE cel's linked objects (`Collide_LineOfSight`
+    /// 0x1edf50's single `cel_tag*` argument into `Collide_RayIntersect` 0x1ec690, whose
+    /// `Collide_Pick` object stage — `Collide_PickObj` 0x1eae80 — tests the objects of THAT
+    /// walk), so a pane object in another room never tests against a cross-room ray. The port
+    /// has no per-room object graph, and the pinned behaviours all show the game's rays passing
+    /// the panes: the 07000001 start guards' sight ack lands during the scripted walk with the
+    /// drive's glass (placements 130/136) square across the ray [L 01-doors.trace], the drawn
+    /// gate keeps them drawn, the escort's cover run crosses the sheet. The panes stay solid to
+    /// the CAPSULE queries (the movement pass) and to the bullet world's own breaks contact
+    /// (`update_player_bullets`' bounds walk — the game's class-5 contact + `Break_Update`);
+    /// their triangles also carry the node pass flag for the bit-0x8 drop in `segment_bullet`
+    /// (the pane's own mesh never stops the world-stop comparison).
+    fn for_ray_tris(&self, from: V3, to: V3, with_missile: bool, drop_pass: bool, mut f: impl FnMut(&[V3; 3], u8)) {
+        for o in along(&self.stat, from, to) {
+            for k in o.tris.clone() {
+                if drop_pass && self.stat.bullet_pass(k) { continue; }
+                f(&self.stat.tris[k], self.stat.mats[k]);
+            }
+        }
+        if with_missile {
+            for o in along(&self.missile, from, to) {
                 for k in o.tris.clone() {
-                    if drop_pass && g.bullet_pass(k) { continue; }
-                    let t = &g.tris[k];
-                    let (e1, e2) = (sub(t[1], t[0]), sub(t[2], t[0]));
-                    if dot(cross(e1, e2), d) >= 0.0 { continue; } // back face [M 0x10a8c8:168]
-                    let p = cross(d, e2);
-                    let det = dot(e1, p);
-                    if det.abs() < 1e-12 { continue; }
-                    let inv = 1.0 / det;
-                    let s = sub(from, t[0]);
-                    let u = dot(s, p) * inv;
-                    if !(0.0..=1.0).contains(&u) { continue; }
-                    let q = cross(s, e1);
-                    let v = dot(d, q) * inv;
-                    if v < 0.0 || u + v > 1.0 { continue; }
-                    let tt = dot(e2, q) * inv;
-                    if (0.0..=1.0).contains(&tt) { return true; }
+                    if drop_pass && self.missile.bullet_pass(k) { continue; }
+                    f(&self.missile.tris[k], self.missile.mats[k]);
                 }
             }
         }
-        false
+        let d = self.dynamic.read().unwrap();
+        for (o, (id, _, _)) in d.geo.objects.iter().zip(&d.movers) {
+            if id & PANE_PART != 0 { continue; }
+            if !seg_box(from, sub(to, from), o.lo, o.hi) { continue; }
+            for k in o.tris.clone() {
+                if drop_pass && d.geo.bullet_pass(k) { continue; }
+                f(&d.geo.tris[k], d.geo.mats[k]);
+            }
+        }
     }
 
     /// `segment(from, to).is_none()`, early-out (see `segment_blocked`).

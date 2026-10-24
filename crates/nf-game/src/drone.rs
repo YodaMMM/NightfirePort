@@ -10986,8 +10986,11 @@ pub fn close_threshold(level: u32) -> f32 {
 
 /// All drones of a level plus the round-robin line-of-sight cursor.
 /// Whether a breakable contact must come before the static world's first bullet stop (see the
-/// breaks arm of `update_player_bullets`).
-const BREAK_WORLD_STOP: bool = false;
+/// breaks arm of `update_player_bullets`). ON: the live breakables' meshes ride the dynamic set
+/// as PANE_PART parts the ray sets skip (`for_ray_tris`, world.rs), so `segment_bullet`'s first
+/// stop is the real scenery behind the breakable — never the breakable's own mesh — and the
+/// bounds contact (grown 0.1) always fires at or before it.
+const BREAK_WORLD_STOP: bool = true;
 
 pub struct Drones {
     pub list: Vec<Drone>,
@@ -13080,19 +13083,28 @@ fn segment_hits_sphere(a: V3, b: V3, c: V3, r: f32) -> bool {
                     // the scenery takes the round instead [M 0x1ea398:216-229]. The application
                     // (the hit + the AI message) stays in the match below.
                     if !best.as_ref().is_none_or(|(_, _, bt)| t < *bt) { contact = None; }
-                    // The world stop is not applied yet [S]: the breakables' own meshes still sit in
-                    // the static world, so `segment_bullet` reports the pane or vase itself (or the
-                    // surface it rests on) before its bounds — a 07000007 vase at point-blank range
-                    // stopped every round at t 0.01. It returns once the live breakables leave the
-                    // static set (the pane collision work).
+                    // The world stop (BREAK_WORLD_STOP): the contact survives when it fires at or
+                    // before the world's first bullet stop. The live breakables' meshes ride the
+                    // dynamic set as PANE_PART parts the ray sets skip (world.rs `for_ray_tris`),
+                    // so `segment_bullet`'s first stop is the scenery BEHIND the breakable — the
+                    // breakable's own mesh never beats its bounds contact, and the old
+                    // point-blank pathology (a 07000007 vase's mesh stopping the world at t 0.01
+                    // before its bounds at 0.058) is gone with the ride.
                     else if BREAK_WORLD_STOP && !tstop.is_none_or(|ts| t <= ts) { contact = None; }
                 }
-                if let Some((_, i)) = contact {
+                if let Some((t, i)) = contact {
                     // The round dies on the first solid object hit — the glass absorbs it
                     // [M 0x12cff0-4]; nothing behind it scores or stops it this tick.
                     b.dead = true;
                     let br = &mut self.breaks.list[i];
                     br.health -= contact_dmg;
+                    // The contact registers its world impact AT the sheet (the game's
+                    // Effect_Create on the glass contact [M Bullet_CollisionHandler 0x12ce80
+                    // 0x12d0a0..0x12d0d0 — the HITDATA position, for pass and stop alike]) —
+                    // the accuracy scenery hit rides the same world-hit fold (fix-progress).
+                    let ct = [b.pos[0] + (end[0] - b.pos[0]) * t, b.pos[1] + (end[1] - b.pos[1]) * t, b.pos[2] + (end[2] - b.pos[2]) * t];
+                    self.player_impacts.push(PlayerImpact::World(ct));
+                    self.progress.log_shot_hit_scenery(self.mission.status());
                     if br.health < 0.0 {
                         if let Some(k) = self.breaks.kill(i, b.pos, end, &mut self.rng) {
                             self.break_kills.push((k.placement, k.kind, k.sound));
@@ -15803,13 +15815,19 @@ fn segment_hits_sphere(a: V3, b: V3, c: V3, r: f32) -> bool {
             // BEFORE Break_Kill takes the collision away (the contact list is the collide pass's
             // product, Break_Update walks it same tick), so the tick's deferred HITDATA re-trace
             // still sees the sheet.
-            // NOT ridden yet [S]: with these parts in the set, real-path walks, guard sight and
-            // dropped items on 01/09/0a/0b/14 stop at shapes where no pane stands in the game
-            // (the shape-key/matrix pairing is unresolved), so the panes stay out of the
-            // collision world until that pairing is proven.
-            let _pane_parts = drones.breaks.list.iter().enumerate()
+            // RIDDEN (dead-pane-collision-2): the parts join the set below. The pairing is proven
+            // by crates/nf-game/tests/pane_shape_census.rs — on 01/07/08/09/0a every pane part's
+            // world AABB lands exactly on its placement bounds (`d=(0.00,0.00,0.00)`, no
+            // dup_static double, no world-space triangle data). The parts carry the PANE_PART id
+            // bit: the RAY sets skip them (world.rs `for_ray_tris` — the game's ray walks are
+            // per-cel object walks a cross-room pane never joins) while the CAPSULE queries and
+            // the effect walks keep them solid, and `update_player_bullets` engages the pane
+            // through the bounds contact (the game's class-5 contact + Break_Update).
+            let pane_parts: Vec<(u64, u32, nf_formats::anim::Mat4)> = drones.breaks.list.iter().enumerate()
                 .filter(|(_, b)| (!b.dead || b.dead_frame == drones.frame) && b.shape_key != 0)
-                .map(|(k, b)| (0x400_0000_0000 | k as u64, b.shape_key, b.matrix));
+                .map(|(k, b)| (crate::world::PANE_PART | k as u64, b.shape_key, b.matrix))
+                .collect();
+            if !pane_parts.is_empty() { parts.extend(pane_parts); }
             parts
         };
         // Script triggers (`Trigger_TouchOnce` / `Trigger_Touch` made by `Script_CreateEntity`): one per live entity,

@@ -89,7 +89,6 @@ fn load_08(iso: &str) -> nf_view::scene::Scene {
 /// second round through the same spot reaches the far side. [M Break_Kill 0x12b970:60; M
 /// Break_Update 0x12bfd8:44-48]
 #[test]
-#[ignore = "the pane collision ride is off until its shape/matrix pairing is proven (drone.rs, the 0x400_0000_0000 parts)"]
 fn the_shot_out_pane_stops_blocking_a_round() {
     let Some(iso) = iso() else { return };
     unsafe { std::env::set_var("NF_SILENT", "1"); }
@@ -126,7 +125,6 @@ fn the_shot_out_pane_stops_blocking_a_round() {
 /// player's contact join is unproven, see the report's live checks); shot out, the same walk
 /// crosses the plane off the sill.
 #[test]
-#[ignore = "the pane collision ride is off until its shape/matrix pairing is proven (drone.rs, the 0x400_0000_0000 parts)"]
 fn the_intact_pane_stops_bond_and_the_dead_one_lets_him_cross() {
     let Some(iso) = iso() else { return };
     unsafe { std::env::set_var("NF_SILENT", "1"); }
