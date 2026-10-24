@@ -29,3 +29,8 @@ claimed-by: sandbox6 at 2026-10-24T15:48Z
 ---
 ## Report (done, 2026-10-24T16:45Z)
 
+
+---
+## Report from the worker (done, 2026-10-24T16:45Z)
+
+Closed by the driver: the report is on `s/level-05-west-lane-8` (docs/reports/level-05-west-lane-8.md); the worker didn't run finish.sh.
