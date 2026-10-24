@@ -120,15 +120,20 @@ fn census(iso_path: &str, name: &str) -> Row {
     // -- the real load --
     let scene = nf_view::load(iso_path, name, false).unwrap_or_else(|e| panic!("{name}: load failed: {e}"));
 
-    // The load-time session merge (g-021, lib.rs `wanted` + `session_container`) covers drone
-    // placements (0x0f param 0) and 0xd9 ScriptPlayer placements' DIRECT `Cmd::Anim` skins. A script
-    // skin no 0xd9 placement reaches is NOT merged — 07000001's 0x05000037 ask sits in script
-    // 0x0600005b stream 7 [D probe: 01's 0xd9 scripts are 0x06000016/86/87; 0x0600005b is not
-    // reachable from them], so the sim still lacks it post-load. Diagnostic (not a pin: the lane is
-    // an OPEN gap — closing it is a loader change needing render checks).
+    // The load-time session merge (g-021, lib.rs `wanted` + `session_container`) must cover every
+    // script skin: the game's loader `Script_Load`s EVERY kind-7 entry of a session container into
+    // the runtime table [M LoaderProcess 0x1d4880 case 7], a stream's `Anim` op resolves its skin
+    // through the session hashtable (`Script_AnimStart` 0x1d8f40 -> `AnimObjectNew` 0x1be910's
+    // `hashtable_getitem`; the table holds the front-end container plus every earlier mission
+    // archive's skins, first-wins, nothing frees [M AnimLoadFile 0x1bdf40, G-021]) — so a skin the
+    // level's own scripts reference and an earlier story archive carries resolves in the game, and
+    // the port's load must have merged it. (07000001's 0x05000037 ask — script 0x0600005b stream 7,
+    // an orphaned briefing script with no placement/sub/entity/event reference anywhere on the disc
+    // [D the session-skin probe scans; docs/systems/glass-breach.md] — resolves from 07000005/06,
+    // which the session loads before 01 [M mission::LEVELS order].)
     if let Some(sim) = scene.sim.as_ref() {
         let unmerged: Vec<String> = anim_miss_hashes.iter().filter(|sh| !sim.skins.contains_key(sh)).map(|sh| format!("{sh:#010x}")).collect();
-        if !unmerged.is_empty() { eprintln!("census {name}: raw-missing script skins NOT merged at load: {}", unmerged.join(" ")); }
+        assert!(unmerged.is_empty(), "{name}: script skins a session container carries must be merged at load; missing {}", unmerged.join(" "));
     }
 
     // -- materials with no texture (the white fallback condition) --
@@ -227,11 +232,10 @@ fn on_foot_levels_census() {
         // The RAW-archive pin (disc content): 07000001's script Anim (0x0600005b stream 7) asks for
         // skin 0x05000037, which its own archive lacks and 07000005/06 carry [D census carrier scan].
         // The game's skin table holds every earlier mission archive's skins (nothing frees them
-        // [M 0x1ca5b0/0x1ca520, G-021]), so the game resolves it. The port's session-skins merge
-        // (lib.rs g-021) covers drone placements and 0xd9 placements' direct Anim skins only — this
-        // lane stays open (see the census() diagnostic), still the one known remaining gap.
+        // [M 0x1ca5b0/0x1ca520, G-021]), so the game resolves it — and the port's session-skins merge
+        // (lib.rs g-021, the loader-side script walk) merges it at load (the raw-missing pin above).
         if r.name == "07000001.bin" {
-            assert_eq!(r.skinless_script, 1, "07000001: the raw archive lacks exactly one script skin (0x05000037, script 0x0600005b stream 7) — the game resolves it from the 05/06 session skins; the port merge lane for it is still open");
+            assert_eq!(r.skinless_script, 1, "07000001: the raw archive lacks exactly one script skin (0x05000037, script 0x0600005b stream 7) — the game resolves it from the 05/06 session skins; the port's load-time merge covers it (the sim-side pin)");
         } else {
             assert_eq!(r.skinless_script, 0, "{}: no script object may request a skin the tables lack", r.name);
         }
@@ -240,6 +244,30 @@ fn on_foot_levels_census() {
     // texture again (the pre-fix tree's exact symptom); nf-formats'
     // `short_texture_stays_at_its_index_with_the_overread_bytes` asserts the kept-texture
     // behaviour itself and fails if the drop returns.
+}
+
+/// Sister (session-skin-0600005b): on a level whose scripts' skins its own archive carries, the
+/// load-time session merge adds NOTHING — the loaded skin table equals the raw archive's.
+/// 07000005 and 07000007 need nothing: the census's script walk finds no raw-missing skin
+/// (skinless_script 0) and no drone gap (skinless_drones 0), so no session container may join the
+/// load [M the g-021 gate: the merge runs only for a `wanted` skin the session's earlier containers
+/// carry; the game's hashtable likewise only ever holds what its own load chain registered].
+#[test]
+fn the_session_merge_adds_nothing_where_no_skin_is_missing() {
+    let Some(iso_path) = iso() else { eprintln!("NF_ISO not set — skipping"); return };
+    for name in ["07000005.bin", "07000007.bin"] {
+        let img = IsoImage::open(&iso_path).expect("open iso");
+        let (entries, bin) = nf_formats::disc::files_bin_entries(&img).expect("FILES.BIN");
+        let fe = entries.iter().find(|e| e.name.eq_ignore_ascii_case(name))
+            .unwrap_or_else(|| panic!("{name}: not in FILES.BIN"));
+        let data = img.read_bytes(bin.lba as u64 * 2048 + fe.offset as u64, fe.size as u64).expect("read level");
+        let raw = Level::parse(&data).unwrap_or_else(|e| panic!("{name}: parse failed: {e}"));
+        let raw_skins: std::collections::BTreeSet<u32> = raw.skins.keys().copied().collect();
+        let scene = nf_view::load(&iso_path, name, false).unwrap_or_else(|e| panic!("{name}: load failed: {e}"));
+        let sim = scene.sim.as_ref().unwrap_or_else(|| panic!("{name}: no sim"));
+        let loaded: std::collections::BTreeSet<u32> = sim.skins.keys().copied().collect();
+        assert_eq!(loaded, raw_skins, "{name}: the session merge must add nothing where no script skin is missing");
+    }
 }
 
 /// Diagnostic: the fallback materials' texture keys on one level (NF_CENSUS_LEVEL=0700000d).

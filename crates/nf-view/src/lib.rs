@@ -950,15 +950,36 @@ fn load_impl(iso_path: &str, archive: &str, all: bool, save: Option<&nf_game::pl
                 }
             }
         }
-        // The cut-scene actors: every ScriptPlayer placement's script's `Anim` skins.
-        if let Some(m) = mm {
-            for p in level.maps[m].placements.iter().filter(|p| p.flags & 0xff == 0xd9) {
-                let Some(&v) = p.params.iter().find(|(k, _)| *k == 0).map(|(_, v)| v) else { continue };
-                let Some(nis) = level.nis.get(&v) else { continue };
+        // The script-actor skins: every `Anim` skin of every script the game's loader holds in the
+        // runtime table for this archive. `LoaderProcess` 0x1d4880 case 7 `Script_Load`s EVERY
+        // kind-7 entry of a container (the port's `level.nis` set), a played script's SubScript
+        // targets join the runtime the same way (`Script_SubScriptStart` 0x1db050 -> `Script_Load`
+        // + `Script_Play`), and a stream's `Anim` op resolves its skin through the session
+        // hashtable (`Script_AnimStart` 0x1d8f40 -> `AnimObjectNew` 0x1be910's `hashtable_getitem`,
+        // G-021). The walk is the census's script walk (missing_models_census_live): the CURRENT
+        // archive's scripts only — no scan of the foreign containers' own scripts. 07000001's
+        // briefing 0x0600005b (stream 7 `Anim` skin 0x05000037) sits in its archive with no
+        // placement / sub-script / entity / event reference anywhere on the disc and no code-table
+        // slot ([D the session-skin probe scans; docs/systems/glass-breach.md "orphaned"]) — the
+        // game still has the skin available because 07000005/06 ran earlier in the session
+        // (`AnimLoadFile` 0x1bdf40 first-wins, nothing frees [M G-021]; the mission order
+        // 05, 06, 07, 08, 01 [M mission::LEVELS; L ee_start snapshots]).
+        if let Some(_m) = mm {
+            let mut seen: std::collections::HashSet<u32> = level.nis.keys().copied().collect();
+            let mut queue: Vec<u32> = seen.iter().copied().collect();
+            queue.sort_unstable();
+            while let Some(h) = queue.pop() {
+                let Some(nis) = level.nis.get(&h) else { continue };
                 for st in nis.streams.iter() {
                     for cmd in st.decode() {
-                        if let nf_formats::nis::Cmd::Anim { skin, .. } = cmd {
-                            if skin != 0 && !level.skins.contains_key(&skin) && !wanted.contains(&skin) { wanted.push(skin); }
+                        match cmd {
+                            nf_formats::nis::Cmd::Anim { skin, .. } => {
+                                if skin != 0 && !level.skins.contains_key(&skin) && !wanted.contains(&skin) { wanted.push(skin); }
+                            }
+                            nf_formats::nis::Cmd::SubScript { hash: sub, .. } => {
+                                if sub != 0 && seen.insert(sub) { queue.push(sub); }
+                            }
+                            _ => {}
                         }
                     }
                 }
