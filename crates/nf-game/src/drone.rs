@@ -1728,7 +1728,14 @@ pub fn quat_quat_to_mat(q: [f32; 4]) -> nf_formats::anim::Mat4 {
 impl Drone {
     /// From a placement (parameters by index) after `NDrone2_DefaultInit` / `DoModeSettingsNEW`.
     pub fn new(d: &Data, pos: V3, yaw: f32, param: impl Fn(u32) -> u32, rng: &mut Rng) -> Drone {
-        let skin = param(0);
+        // The 07000014 skin rewrite [M 0x14b300:82-95]: with GameState+12 == 0x07000014 a param-0
+        // skin 0x050000b1 is rewritten to 0x0500008c BEFORE the `Drone+0xe0` store — the kind
+        // switch, the captain block and the `AnimObjectNew` handoff ([M 0x14b300:563-565] reads
+        // +0xe0) all see 0x0500008c, and the placement never asks the skin table for 0x050000b1
+        // (carried only by 07000016 entry 139 @0x8594a0 / 07000015 entry 102 @0x609e60 [D], which
+        // the story loads after 14 — nothing else registers skins [M AnimLoadFile 0x1bdf40 has
+        // the single AnimProcessSkinData call and the single LoaderProcess 0x1d4880 case-3 caller]).
+        let skin = match param(0) { 0x0500_00b1 if d.level == 0x0700_0014 => 0x0500_008c, v => v };
         let setup = nf_formats::drone::drone_setup(skin, param(9), d.level);
         let (start_danim, anim_set) = nf_formats::drone::start_danim(setup, 0);
         let (normal, alert_words) = nf_formats::drone::behaviour_words(&param);
@@ -10949,11 +10956,15 @@ pub fn captain_skin_of_kind(kind: u16) -> Option<u32> {
 }
 
 /// The skin `NDrone2_DefaultInit` 0x14b300:563-565 hands `AnimObjectNew`: the placement param 0
-/// after the captain swap — a captain by difficulty (property 9 on 1, 5 on 2, 8 on 3, reading the
-/// placement's behaviour words) of a swapped kind. Pure: the inputs are the placement's params +
-/// the property tables + the difficulty, so the draw side can ask for it without creating the
-/// drone (`Drone::new` draws the sight f0/fc frands — a pre-create probe would shift the RNG).
+/// after the 07000014 rewrite (:82-95: 0x050000b1 → 0x0500008c on GameState+12 == 0x07000014,
+/// before the kind switch) and the captain swap — a captain by difficulty (property 9 on 1, 5 on
+/// 2, 8 on 3, reading the placement's behaviour words) of a swapped kind. Pure: the inputs are the
+/// placement's params + the property tables + the difficulty, so the draw side can ask for it
+/// without creating the drone (`Drone::new` draws the sight f0/fc frands — a pre-create probe
+/// would shift the RNG).
 pub fn captain_skin(skin: u32, param: &impl Fn(u32) -> u32, props: &nf_formats::drone::PropertyTables, level: u32, difficulty: u32) -> Option<u32> {
+    // The rewrite [M 0x14b300:82-95] — idempotent (0x0500008c is not re-rewritten).
+    let skin = if level == 0x0700_0014 && skin == 0x0500_00b1 { 0x0500_008c } else { skin };
     let by_difficulty = match difficulty {
         1 => props.get(9, &nf_formats::drone::behaviour_words(&param).0) != 0,
         2 => props.get(5, &nf_formats::drone::behaviour_words(&param).0) != 0,

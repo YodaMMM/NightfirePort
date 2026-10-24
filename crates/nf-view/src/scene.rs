@@ -6780,15 +6780,17 @@ pub fn build(level: &Level, cels_only: bool, skeletons: &HashMap<u8, Skeleton>, 
                 && p.params.iter().find(|(j, _)| *j == 2).map_or(false, |&(_, v)| v > difficulty)
         };
         char_instances.retain(|(_, i)| !gated(&i.placement));
-        // drone-skins-g021: the drone's object is built from the hash `NDrone2_DefaultInit`
-        // 0x14b300:563-565 hands `AnimObjectNew` — the placement param 0 as the captain swap
-        // (:536-555) left it in +0xe0 (the sim's `dr.skin`). `character_instances` keyed the
-        // raw param, so a placement whose raw skin no session container carries (07000014's
-        // 0x050000b1 — carried only by 07000015/16 [D], which the story loads after 14) drew
-        // nothing even for a captain, whose swapped skin (kind 6 → 0x05000093, kind 7 →
-        // 0x050000b2) the game resolves from the level's own archive. The non-captains stay
-        // skinless exactly like the game's `AnimObjectNew` 0x1be910:44-46 miss. Raw-present
-        // placements keep their pre-existing draw path untouched.
+        // drone-skins-g021 (corrected by cite-14-skinless-drones): the drone's object is built from
+        // the hash `NDrone2_DefaultInit` 0x14b300:563-565 hands `AnimObjectNew` — Drone+0xe0 after
+        // the 07000014 param-0 rewrite (:82-95: 0x050000b1 → 0x0500008c on GameState+12 ==
+        // 0x07000014, BEFORE the kind switch) and the captain swap (:536-555; the sim's `dr.skin`
+        // mirrors both). `character_instances` keyed the raw param, so a placement whose final
+        // +0xe0 hash differs from it needs the rebuild here: 07000014's 0x050000b1 placements
+        // (the skin is carried only by 07000015/16 [D], which the story loads after 14 — the raw
+        // request would draw nothing) and the captains (kind 6 → 0x05000093, kind 7 → 0x050000b2,
+        // both in the own archive). A final hash the table lacks draws nothing — the game's
+        // `AnimObjectNew` 0x1be910:44-46 miss. Raw-present placements keep their pre-existing
+        // draw path untouched.
         let mut drone_skins: HashMap<[u32; 3], u32> = HashMap::new();
         if let (Some(d), Some(m)) = (drones, level.main_map()) {
             // `captain_skin` is pure (params + property tables + difficulty): the drones do not
@@ -6799,25 +6801,33 @@ pub fn build(level: &Level, cels_only: bool, skeletons: &HashMap<u8, Skeleton>, 
                     let param = |k: u32| p.params.iter().find(|(j, _)| *j == k).map(|&(_, v)| v).unwrap_or(0);
                     let raw = param(0);
                     if raw >> 24 != 5 { continue; }
-                    let Some(swapped) = nf_game::drone::captain_skin(raw, &param, props, d.level_id, difficulty) else { continue; };
-                    if swapped == raw { continue; }
-                    // The game builds the captain's object from the swapped record: the draw
-                    // resolves the swapped hash (`NDrone2_DefaultInit` 0x14b300:563-565), so the
-                    // raw skin's meshes give way to the swapped skin's. When the raw skin is not
-                    // in the table (07000014's 0x050000b1 — carried only by 07000015/16 [D],
-                    // which the story loads after 14) `character_instances` built no instance at
-                    // all and the swapped skin's mains are ADDED; a swapped skin the table lacks
-                    // (the game's `AnimObjectNew` 0x1be910:44-46 miss) draws nothing.
+                    // The 07000014 rewrite [M 0x14b300:82-95]: with GameState+12 == 0x07000014 the
+                    // param-0 skin 0x050000b1 is rewritten to 0x0500008c in Drone+0xe0 BEFORE any
+                    // read — the kind switch, the captain block and the `AnimObjectNew` request
+                    // ([M 0x14b300:563-565]) all see the rewritten value, captain or not. The raw
+                    // 0x050000b1 never reaches the skin table (carried only by 07000016 entry 139
+                    // @0x8594a0 / 07000015 entry 102 @0x609e60 [D], which the story loads after 14);
+                    // 0x0500008c is in 07000014's own archive [D], so the placement resolves.
+                    let request = if raw == 0x0500_00b1 && d.level_id == 0x0700_0014 { 0x0500_008c } else { raw };
+                    let swapped = nf_game::drone::captain_skin(request, &param, props, d.level_id, difficulty);
+                    let final_skin = swapped.unwrap_or(request);
+                    if final_skin == raw { continue; } // the ordinary path's instances are already keyed param0
+                    // The game builds the object from the final +0xe0 hash (`NDrone2_DefaultInit`
+                    // 0x14b300:563-565 — the rewritten param or the captain swap), so the draw
+                    // resolves the final hash and the raw skin's meshes give way to it. When the
+                    // raw skin is not in the table (07000014's 0x050000b1 placements) no instance
+                    // was built at all and the final skin's mains are ADDED; a final skin the
+                    // table lacks (the game's `AnimObjectNew` 0x1be910:44-46 miss) draws nothing.
                     let bits = p.translation.map(f32::to_bits);
                     char_instances.retain(|(_, i)| i.placement.translation.map(f32::to_bits) != bits);
-                    if let Some(sk) = level.skins.get(&swapped) {
+                    if let Some(sk) = level.skins.get(&final_skin) {
                         for h in sk.main.iter().flatten() {
                             if let Some(&(map, object)) = level.by_hash.get(h) {
                                 char_instances.push((Some(pi), Instance { map, object, matrix: nf_formats::placement::object_matrix(p.rotation, p.translation), placement: p.clone() }));
                             }
                         }
                     }
-                    drone_skins.insert(bits, swapped);
+                    drone_skins.insert(bits, final_skin);
                 }
             }
         }
@@ -7036,8 +7046,9 @@ pub fn build(level: &Level, cels_only: bool, skeletons: &HashMap<u8, Skeleton>, 
             let raw_hash = inst.placement.params.iter().find(|(i, _)| *i == 0).map(|&(_, v)| v).unwrap_or(0);
             // drone-skins-g021: the captain-swapped drone draws its swapped skin (`+0xe0`,
             // `NDrone2_DefaultInit` 0x14b300:563-565) — `drone_skins` only carries the
-            // raw-missing 0x0f placements (see the extension above); everything else keeps
-            // the raw param.
+            // 0x0f placements whose final +0xe0 hash differs from the raw param (the
+            // rewritten 0x050000b1 and the captain swaps, see the extension above);
+            // everything else keeps the raw param.
             let skin_hash = drone_skins.get(&inst.placement.translation.map(f32::to_bits)).copied().unwrap_or(raw_hash);
             let Some(skin) = level.skins.get(&skin_hash) else { continue };
             let Some(skeleton) = skeletons.get(&skin.skeleton) else { continue };

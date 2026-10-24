@@ -933,18 +933,24 @@ fn load_impl(iso_path: &str, archive: &str, all: bool, save: Option<&nf_game::pl
     //    hashtable get: on GameState+0xc == 0x0700000c → 0x05000087 (0700000c's own skin), on
     //    0x07000014 → 0x05000093 (07000014's own). The port mirrors it at load: the placement hash
     //    0x05000090 resolves to the substitute skin's data — exactly the object the game builds.
-    // 2. 07000014's 0x050000b1 (11 placements) has NO substitution (the disassembly covers only
-    //    0x05000090) — the game's skin table accumulates every archive loaded in the session
-    //    (`AnimLoadFile` 0x1bdf40 registers per map; nothing frees between levels — 0x1d8248 is
-    //    `Script_Load`, the old mislabel), and 0x050000b1
-    //    lives in 07000015/16's archives [D]. `CommonAnimFile` (the LoaderLoad type-4 name source,
-    //    the variable at 0x30d860 [M 0x1d4a00 case 0: `param_2 = CommonAnimFile` — the only
-    //    reference in ACTION.ELF, no writer]) is 0 at every level-start snapshot [L
+    // 2. 07000014's 0x050000b1 (11 placements) has NO substitution in `AnimObjectNew` (the
+    //    disassembly covers only 0x05000090) — but the RENDER request is never the raw hash:
+    //    `NDrone2_DefaultInit` REWRITES the param-0 0x050000b1 to 0x0500008c in Drone+0xe0 on
+    //    GameState+12 == 0x07000014, before the kind switch, the captain block and the
+    //    `AnimObjectNew` handoff [M 0x14b300:82-95, :563-565] (found by cite-14-skinless-drones;
+    //    the earlier reading here concluded the placements draw skinless). 0x0500008c is in
+    //    07000014's own archive [D]; the raw 0x050000b1 lives in 07000015/16's archives [D] and
+    //    never registers on a fresh story run (the skin table accumulates every archive loaded in
+    //    the session — `AnimLoadFile` 0x1bdf40 registers per map; nothing frees between levels —
+    //    0x1d8248 is `Script_Load`, the old mislabel). `CommonAnimFile` (the LoaderLoad type-4
+    //    name source, the variable at 0x30d860 [M 0x1d4a00 case 0: `param_2 = CommonAnimFile` —
+    //    the only reference in ACTION.ELF, no writer]) is 0 at every level-start snapshot [L
     //    ee_start_05.bin / ee_start_07000001.bin / ee_start_0700000a.bin @0x30d860], so the common
-    //    file is not the source here. The port merges the holding archive: its maps (the skin's
-    //    meshes are glist objects of that archive), object hashcodes (first wins), skins and
-    //    skeletons — and its 07F sequences ONLY for skeletons the level has no sequences for (a NEW
-    //    bucket; the per-skeleton lists are order-sensitive gameplay data — the WORKLOG's warning).
+    //    file is not the source here either. The port still merges the holding archive for skins a
+    //    placement DOES request: its maps (the skin's meshes are glist objects of that archive),
+    //    object hashcodes (first wins), skins and skeletons — and its 07F sequences ONLY for
+    //    skeletons the level has no sequences for (a NEW bucket; the per-skeleton lists are
+    //    order-sensitive gameplay data — the WORKLOG's warning).
     {
         let mm = level.main_map();
         // The substitution [M 0x1be910]: 0x05000090 → the level's own variant, before anything
@@ -997,14 +1003,17 @@ fn load_impl(iso_path: &str, archive: &str, all: bool, save: Option<&nf_game::pl
             // `Script_FreeFromHashTable` 0x1daec0's single scripts. A fresh story session
             // before level L therefore holds the front-end container (boot, 0x07000048) plus
             // every earlier story level's container (mission::LEVELS order). A container the
-            // session has not loaded is NOT a source: 07000014's 0x050000b1 is carried only by
-            // 07000015/16's archives [D scan of all 99 containers — the only carriers], which
-            // the story loads AFTER 14, so the game's `hashtable_getitem` misses and
-            // `AnimObjectNew` 0x1be910:44-46 returns 0 — `NDrone2_DefaultInit` 0x14b300:563-565
-            // discards the return and the placement draws no character (skinless). The
-            // captains are the exception: 0x14b300:536-555 swaps a kind-6 captain's skin to
-            // 0x05000093 (kind 7 → 0x050000b2, …) before the request, which 14's own archive
-            // carries — the sim's `captain_setup` models that swap.
+            // session has not loaded is NOT a source: 07000014's raw 0x050000b1 is carried only
+            // by 07000015/16's archives [D scan of all 99 containers — the only carriers:
+            // 07000016 entry 139 @0x8594a0 len 0x860, 07000015 entry 102 @0x609e60 len 0x860],
+            // which the story loads AFTER 14, so the table never registers it. The placements
+            // still resolve: `NDrone2_DefaultInit` REWRITES the param-0 0x050000b1 to the
+            // own-archive 0x0500008c in Drone+0xe0 before any read [M 0x14b300:82-95, :563-565;
+            // cite-14-skinless-drones], and the captains swap on top of that (0x14b300:536-555:
+            // kind 6 → 0x05000093, kind 7 → 0x050000b2 — the sim's `captain_setup`). A skin a
+            // placement DOES request with no session carrier (07000001's script lane) just
+            // misses — `AnimObjectNew` 0x1be910:44-46 returns 0, `NDrone2_DefaultInit`
+            // 0x14b300:563-565 discards the return and the placement draws no character.
             static SKIN_ARCHIVES: std::sync::OnceLock<HashMap<u32, Vec<String>>> = std::sync::OnceLock::new();
             let index = SKIN_ARCHIVES.get_or_init(|| {
                 let mut map: HashMap<u32, Vec<String>> = HashMap::new();
@@ -1048,7 +1057,7 @@ fn load_impl(iso_path: &str, archive: &str, all: bool, save: Option<&nf_game::pl
             for want in wanted.iter() {
                 let Some(carriers) = index.get(want) else { eprintln!("g-021: skin {want:08x} is on no archive of the disc"); continue };
                 let Some(archive_name) = carriers.iter().find(|n| session_container(n)) else {
-                    eprintln!("g-021: skin {want:08x} is carried only by {} — no container the session has loaded; the game's hashtable_getitem 0x1ca5b0 misses and the placement draws no character (AnimObjectNew 0x1be910:44-46)",
+                    eprintln!("g-021: skin {want:08x} is carried only by {} — no container the session has loaded; the table never registers it. On 07000014 the 0x050000b1 placements still resolve through the Drone+0xe0 rewrite [M 0x14b300:82-95, :563-565]; a skin a placement DOES request with no session carrier just misses (AnimObjectNew 0x1be910:44-46) and draws no character",
                         carriers.join("/"));
                     continue;
                 };
