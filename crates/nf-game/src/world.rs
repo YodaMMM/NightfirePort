@@ -44,6 +44,7 @@ pub const LOS_GUARD_VISION: u32 = 0xa27; // DroneVision_CanSeeObjectFrom 0x176f1
 pub const LOS_PLAYER_HEADROOM: u32 = 0xd; // Player_SSCrouch 0x1924c0:100-101 / Player_HandleJump 0x1916b0:161-162 mask 9 | 4
 pub const LOS_PROBE_8: u32 = 0xc; // mask 8 | 4 — Player_SSGrapple 0x192860:86-88, Searchlight_Update 0x1cb900:338-340, Sensor_SetBeam 0x1af398:73-75, Bullet_homing 0x12f358:92-93
 pub const LOS_SENSOR: u32 = 0xe; // Sensor_InCone 0x1af4f0:84-86 / Check_AutoAim 0x1a73f8:164-165 / Bullet_DoTrails flash 0x12d890:343-345 mask 0xa | 4
+pub const LOS_TURRET_TRACK: u32 = 0x72f; // GT_Track 0x17f9c8:258 — the target scan's per-candidate `Collide_LineOfSight(from, cand+0x80, level, obj, cand, 0x72f)` filter (already includes the wrapper's | 4)
 /// The per-caller masks are not applied yet [S]: with them on, guard cover, turret shots and
 /// several real-path walks broke; `line_of_sight` keeps the static-world segment test until then.
 pub const LOS_MASKS_ON: bool = false;

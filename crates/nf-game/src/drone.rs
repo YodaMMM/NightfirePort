@@ -14783,9 +14783,15 @@ fn segment_hits_sphere(a: V3, b: V3, c: V3, r: f32) -> bool {
         // Candidates: Bond (alive, the game's health/targetable checks [M 0x17f9c8:99-110])
         // and the present guards (the alive stand-in for the ext+0x4f8 flag/health filters —
         // the port's drone records don't carry those bits). The
-        // per-candidate LOS (`Collide_LineOfSight` 0x17f9c8:271-278) is caller-supplied and
-        // the port has no collide ray for turrets yet: supplied true (a known gap).
+        // per-candidate LOS (`Collide_LineOfSight` 0x17f9c8:271-278) runs below through
+        // `d.world.line_of_sight` with GT_Track's 0x72f filter (static segment until
+        // LOS_MASKS_ON flips).
         {
+            // Bond's candidate (alive, the game's health/targetable checks [M 0x17f9c8:99-110]);
+            // the guards ride along as positions only — a facing-0 turret may track them
+            // [M 0x17f9c8:101,119]. The per-turret LOS fill (below) applies `Collide_LineOfSight`
+            // 0x1edf50 with GT_Track's own 0x72f filter [M 0x17f9c8:258] through the static
+            // world — a candidate behind geometry is not trackable.
             let mut cands: Vec<crate::gt::TrackCand> = Vec::new();
             if self.health.health > 0.0 {
                 cands.push(crate::gt::TrackCand { obj: u32::MAX, pos: player.pos, copter: false, los_ok: true });
@@ -14799,6 +14805,15 @@ fn segment_hits_sphere(a: V3, b: V3, c: V3, r: f32) -> bool {
             let mut gt_events: Vec<(usize, crate::gt::GTEvent)> = Vec::new();
             for (ti, t) in self.gt_turrets.iter_mut().enumerate() {
                 if t.delete_flag { continue; }
+                // The per-candidate LOS walk [M 0x17f9c8:271-278 — one
+                // `Collide_LineOfSight(from, cand+0x80, level, obj, cand, 0x72f)` per scanned
+                // target]. The from-point is the turret's position (obj+0x30; the decompile
+                // reads `*(ext+0xb0)+0x30`, the mounted script's subject transform, which for
+                // these turret rigs is the turret body [S unverified stand-in]). The masked
+                // drop semantics stay behind LOS_MASKS_ON like every other caller.
+                for c in cands.iter_mut() {
+                    c.los_ok = d.world.line_of_sight(t.pos, c.pos, crate::world::LOS_TURRET_TRACK);
+                }
                 // GT_Update's top ticks BOTH scripts then reads their +0x9c [M 0x180498:111-112,
                 // 232-233]. The port's script players tick later in the control walk (they are
                 // walk members, placement order) — the read here is the walk's last state: the
@@ -14856,6 +14871,9 @@ fn segment_hits_sphere(a: V3, b: V3, c: V3, r: f32) -> bool {
                     // The wreck smoke puff [M case 6]: Gas_Init(0.05, 0.25, glist 0x2000039,
                     // 7, 0x48403080, 1) — the port's gas has the searchlight-shape init only
                     // (a known draw/sfx gap).
+                    // draw hand-off: the smoke/burst events carry the wreck presentation for
+                    // the renderer (glist 0x2000039 puff + the destroy burst), see
+                    // docs/systems/cameras-turrets.md §5.
                     crate::gt::GTEvent::Smoke { .. } | crate::gt::GTEvent::DestroyedBurst { .. } => {}
                     // Music_Event(2,1) [M case 4] — the music system is view-side.
                     crate::gt::GTEvent::CombatSting => { self.music.event(2, 1); }

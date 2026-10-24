@@ -23,6 +23,9 @@
 //! (`SENSOR+0x60`, written by `Monitor_Update` 0x1afcc8 — the monitor console type 0x30 is
 //! unported), and every sound (the 0x4AA hum, the 0x4DD servo, the 0x4A9 beeps — `Sound_Play3D`
 //! enters no RNG draw but nothing in the sim consumes them; ss.rs skips the same way).
+// draw hand-off: the lens (0x2000360-class hashes, param 0) + mount (param 7, e.g. 0x2000652)
+// proxy meshes and the SetBeam sight line are renderer work — the sweep pose is this struct's
+// `matrix`/`quat`; see docs/systems/cameras-turrets.md §5.
 
 use crate::door::{interp, parse_keys, quat_matrix, Key, Mat4};
 use crate::trig::sinf;
