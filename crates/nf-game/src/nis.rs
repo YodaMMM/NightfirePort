@@ -977,9 +977,17 @@ impl Script {
                 // at a parent-chain end" per the case-1 tail-Concat structure [M 0x1d9a08:106-133] — it
                 // REVERTED: 07000014's fusebox wire and 07000008's safe entities key LOCAL offsets and are
                 // render-verified with the base applied, so the game composes the base for unparented
-                // streams too (the decompile loses the step). #289's marker stays the
-                // open question (base-composed −107.66 = void on its column; raw −54.13 = the freeze pose;
-                // the game's mode-1 SphereIntersect rescue is the live check).)
+                // streams too (the decompile loses the step).)
+                // level-4a-lift-4: the HASH-0 KIND-0x19 marker class skips the base — the live run pins
+                // the landing scene 0x060006cf's stream s25 (Entity hash 00000000, parent None, obj_type
+                // 0x19, key (1.79945, −54.12811, −3.45340) at t575 [D walkreal_probe_l3]) re-enabling Bond
+                // at the KEY's own x/z (1.7994, −3.4534) [L fresh boot]; the composed pose (SP #289's base
+                // (0,−53.534,−3.377) [D placement] added) lands at (1.799, −107.662, −6.830) — a void on
+                // every map's collision [D all-map scan]. The carried entities keep the compose (07000014's
+                // fusebox wire, 07000008's safe, the pickups' glist hashes [D]); the hash-0 kind-0x31
+                // class does NOT skip (07000001's pack script 0x06000087 s11 — hash 0, kind 0x31, and the
+                // exit_aim walk depends on its composed spot [D probe_entities_l4 dump; the blanket
+                // hash-0 rule broke exit_aim_01_live and was narrowed to the marker class]).
                 let mut p = s.parent;
                 let mut n = 0;
                 while p >= 0 && (p as usize) < self.streams.len() && n < self.streams.len() {
@@ -987,7 +995,8 @@ impl Script {
                     p = self.streams[p as usize].parent;
                     n += 1;
                 }
-                m = mul(&m, &self.matrix);
+                let hash0 = matches!(&objs.list.get(o), Some(Some(Obj::Entity { hash: 0, kind: 0x19, .. })));
+                if !hash0 { m = mul(&m, &self.matrix); }
                 if let Some(Some(Obj::Entity { matrix, alpha: a, .. })) = objs.list.get_mut(o) { *matrix = m; *a = alpha; }
             }
             4 => {

@@ -2848,6 +2848,7 @@ impl Drone {
             pos: self.pos, dir: [s, 0.0, c], speed: f32_at(0x20), travelled: 0.0, range: f32_at(0x1c),
             damage: f32_at(0x0c), owner, state: 0, weapon: record as u16,
             flyby: d.weapons.flyby(record), bounces: 0,
+            ..crate::bullet::Bullet::TAIL
         })
     }
 
@@ -9393,10 +9394,16 @@ impl Drone {
                 }
                 self.firing = self.los;
                 if self.mode == 0x1c {
-                    if !self.ever_seen {
-                        // `+0x170 == 0`: no opponent object — the port's stand-in is `ever_seen`
-                        // (the vision pass assigns the opponent; the game's pointer is written by
-                        // `Drone_ProcessOpponents`). Hang at once.
+                    // `+0x170 == 0` [M 0x169730:46-51]: the opponent POINTER gone. In SP
+                    // `NDrone2_FindOpponent` 0x1424e0:100-120 (run every tick [M ControlSTANDARD
+                    // 0x1490f0:167]) points +0x170 at Bond's object unconditionally — no sight
+                    // test — and zeroes it only when `PlrStat_OkToUpdate` fails or the player is
+                    // dead, so the arm fires when the PLAYER IS DEAD, not when unseen (the port's
+                    // `bond_alive` fold, standins-drone-922 — the same fold the INTEROGATE/combat
+                    // re-eval arms carry). The old `ever_seen` stand-in sent a never-seen guard
+                    // to Hang AT THE ROPE TOP, where the stairwell's flights shadow him from every
+                    // landing below — the unkillable-roper repro.
+                    if !self.bond_alive {
                         self.set_state(state::ABSEIL_HANG);
                         return true;
                     }
@@ -9427,7 +9434,10 @@ impl Drone {
                 // The velocity decay ×(1.0 − FRAME_RATE_DIV·0.02) = 0.98 [M 0x169940:33; EE mul.s].
                 for v in &mut self.velocity { *v *= 0.98; }
                 self.firing = self.los;
-                if self.ever_seen {
+                // The opponent gate is the +0x170 pointer [M 0x169940:42-47] — the SP fold is
+                // `bond_alive` (NDrone2_FindOpponent 0x1424e0:100-120 re-points it at Bond every
+                // tick; see the Slide arm above), not the sight latch.
+                if self.bond_alive {
                     if self.player_pos[1] < self.rope[1] { self.rope[1] = self.player_pos[1]; }
                     if self.player_pos[1] + 3.0 + (self.hang_rand as f32) < self.pos[1] { self.set_state(state::ABSEIL_SLIDE); return true; }
                 }
@@ -10423,8 +10433,10 @@ impl Drone {
         // does not feed the sim's RNG; consuming it here shifted every later sim draw off the
         // live-calibrated stream (two test failures). Open: whether the game's sim stream
         // really carries it is not yet confirmed live.
-        Some(crate::bullet::Bullet { pos: muzzle, dir, speed: f32_at(0x20), travelled: 0.0, range: f32_at(0x1c), damage, owner, state: 0,
-            weapon: self.weapon as u16, flyby: d.weapons.flyby(self.weapon as usize), bounces: 0 })
+        let mut b = crate::bullet::Bullet { pos: muzzle, dir, speed: f32_at(0x20), travelled: 0.0, range: f32_at(0x1c), damage, owner, state: 0,
+            weapon: self.weapon as u16, flyby: d.weapons.flyby(self.weapon as usize), bounces: 0, ..crate::bullet::Bullet::TAIL };
+        b.init_fuse(w);
+        Some(b)
     }
 
     // ---- per tick -----------------------------------------------------------------------------------------------
@@ -10506,6 +10518,38 @@ fn seg_point_dist2(a: V3, b: V3, p: V3) -> f32 {
     let t = if l2 > 0.0 { ((ap[0] * ab[0] + ap[1] * ab[1] + ap[2] * ab[2]) / l2).clamp(0.0, 1.0) } else { 0.0 };
     let q = [a[0] + ab[0] * t - p[0], a[1] + ab[1] * t - p[1], a[2] + ab[2] * t - p[2]];
     q[0] * q[0] + q[1] * q[1] + q[2] * q[2]
+}
+
+/// level-4a-lift-4: `Bullet_DoTrails`' fuse tick [M 0x12d890 disasm 0x12dcc4-0x12dd5c] — the
+/// per-tick work every `+0x70 & 0x200` round runs (flying or landed): family not 0x37/0x59/0x5b
+/// → `BU+0xFC −= FRAME_RATE_MUL` (1.0 [L ee_start_05.bin @0x30d0d8]); at `fuse < 0` the round
+/// dies (`obj+0xF4 = 2`, `obj+0xFE |= 1` [M 0x12dd44-0x12dd58]) with
+/// `Explode_Create(weapon+0x08 radius, weapon+0x0C damage, script 0x6000052, f12 scale =
+/// radius)` [M 0x12df3c region — the `+0x70 & 0x2000` flash arm and the `& 0x20000` smoke arm
+/// are both clear on the satchel's 0x300 [L ee_start_05.bin], so the plain blast runs]. The
+/// burned-out charge never reaches the decrement (the game re-randomizes its fuse every tick
+/// [M 0x12e3cc-0x12e40c]; the port's `defused` latch — see `Bullet::defused`).
+fn tick_charge_fuse(
+    weapons: &nf_formats::weapon::WeaponData,
+    b: &mut crate::bullet::Bullet,
+    out: &mut Vec<(V3, f32, f32, usize, u16, u32, f32)>,
+) {
+    if !b.fuse_ticks || b.defused { return; }
+    // The decrement [M 0x12d890 0x12dcc4-0x12dd2c]: families 0x59/0x5b never decrement; 0x37
+    // decrements unless its fuse holds the 7777.0 sentinel; every family then takes the < 0 test.
+    let fam = b.family(weapons);
+    // The other `+0x70 & 0x200` families (the grenades 0x2a/0x34-0x37/0x59/0x5b/0x68/0x69 [L the
+    // weapon table]) are thrown into the grenade pool, whose own fuse runs in grenade.rs; ticking them
+    // here as well would double their clock and blast them without their gas/smoke arms.
+    if fam != 0x3b { return; }
+    if !(matches!(fam, 0x59 | 0x5b) || (fam == 0x37 && b.fuse == 7777.0)) { b.fuse -= 1.0; }
+    if b.fuse < 0.0 {
+        b.state = 2; // [M 0x12dd44-0x12dd58]
+        if let Some(w) = weapons.records.get(b.weapon as usize) {
+            let f = |o: usize| f32::from_le_bytes(w[o..o + 4].try_into().unwrap());
+            out.push((b.pos, f(0x08), f(0x0c), usize::MAX, b.weapon, 0x0600_0052, f(0x08)));
+        }
+    }
 }
 
 /// A swoosh ribbon segment (`Swoosh_Create` 0x18d8e8 / `Swoosh_Update` 0x18d200, object class 0x41): the
@@ -13204,6 +13248,31 @@ fn segment_hits_sphere(a: V3, b: V3, c: V3, r: f32) -> bool {
                     }
                 }
             }
+            // level-4a-lift-4: the landed satchel charge burns under the watch's beam too
+            // [M Bullet_DoTrails 0x12d890 0x12e2f0-0x12e390]: the charge's contact list
+            // (obj+0xD0) holds this tick's class-5 hitters; a 0x4E round takes 1/tick
+            // (FRAME_RATE_MUL) off `BU+0x102`, the 0x4F takes 10 (`FRAME_RATE_MUL * 10.0`).
+            // At ≤ 0 the game re-randomizes the charge's fuse every tick [M 0x12e3cc-0x12e40c]
+            // — it never explodes; the port latches `defused` (see `Bullet::defused`). One
+            // contact per laser round per tick, the same shape as the lock walk above. The
+            // burn sparks are `Emitter_Create(0xc00000a, hit point, …)` [M 0x12e37c] —
+            // draw-side; the port's emitter set has no charge-spark shape (not ported).
+            // The contact sphere: the game's picker runs the charge's world sphere
+            // (Control_BuildWorldSph 0x133070 over its glist) against the round's segment;
+            // the port stands the round's own world-radius floor on top (the bullet obj's
+            // 0.1 sphere floored at 0.25 [M 0x12e7b0 disasm 0x12f0c8-0x12f134]) — a 0.5
+            // sphere [S the charge's exact glist bounds are not pinned].
+            if matches!(b.weapon, 0x4e | 0x4f) {
+                let amount: i16 = if b.weapon == 0x4e { 1 } else { 10 }; // [M 0x12e2f0-0x12e348]
+                for s in self.bullets.iter_mut() {
+                    if !s.landed || s.defused { continue; }
+                    if s.family(&d.weapons) != 0x3b { continue; }
+                    if Self::segment_hits_sphere(b.pos, end, s.pos, 0.5) {
+                        s.burn -= amount;
+                        if s.burn <= 0 { s.defused = true; }
+                    }
+                }
+            }
             self.bullet_path_weapons.push(b.weapon);
             // fix-foliage-bullets: the flight trace stays the plain first-hit ray. The game's
             // pass machinery lives in the Collide_Update walk (0x1ea398:216-229) and the
@@ -13660,7 +13729,12 @@ fn segment_hits_sphere(a: V3, b: V3, c: V3, r: f32) -> bool {
             let dyaw = angle_difference(yaw, dv[0].atan2(dv[2]));
             if dyaw.abs() >= h { continue; }
             let dpitch = angle_difference(pitch, (dv[1] / dist).clamp(-1.0, 1.0).asin());
-            if dpitch.abs() >= v || !d.world.line_of_sight(head, p, crate::world::LOS_SENSOR) { continue; }
+            // The game's sensor LOS passes the stairwell's 0x40-material well panes [M
+            // Check_AutoAim 0x1a73f8:164-165 calls Collide_LineOfSight with mask 0xa;
+            // Collide_Intersect 0x1ebaa8:305-309/317-319 drop surface-0x40/0x80 hits under its
+            // 0x8 bit] — the plain segment test blocked the lock from every landing behind the
+            // pane, so the auto-aim never took the roping guard it visibly faces.
+            if dpitch.abs() >= v || !d.world.line_of_sight_masked(head, p, crate::world::LOS_SENSOR) { continue; }
             best = dist;
             found = Some((i, dyaw, dpitch));
         }
@@ -14768,12 +14842,15 @@ fn segment_hits_sphere(a: V3, b: V3, c: V3, r: f32) -> bool {
                         self.audio.play3d(sound, muzzle, None);
                         if let Some(w) = d.weapons.records.get(crate::gt::TURRET_WEAPON_RECORD) {
                             let f32_at = |o: usize| f32::from_le_bytes(w[o..o + 4].try_into().unwrap());
-                            self.bullets.push(crate::bullet::Bullet {
+                            let mut b = crate::bullet::Bullet {
                                 pos: muzzle, dir, speed: f32_at(0x20), travelled: 0.0, range: f32_at(0x1c),
                                 damage: f32_at(0x0c), owner: usize::MAX, state: 0,
                                 weapon: crate::gt::TURRET_WEAPON_RECORD as u16,
                                 flyby: d.weapons.flyby(crate::gt::TURRET_WEAPON_RECORD), bounces: 0,
-                            });
+                                ..crate::bullet::Bullet::TAIL
+                            };
+                            b.init_fuse(w);
+                            self.bullets.push(b);
                         }
                     }
                     // The wreck smoke puff [M case 6]: Gas_Init(0.05, 0.25, glist 0x2000039,
@@ -16980,9 +17057,43 @@ fn segment_hits_sphere(a: V3, b: V3, c: V3, r: f32) -> bool {
         for b in &mut self.bullets {
             let (from, dir) = (b.pos, b.dir);
             let alive_in = b.state < 2;
+            // level-4a-lift-4: the landed satchel charge (state 3 [M Bullet_CollisionHandler
+            // 0x12ce80 @0x12d1fc — a `+0x70 & 0x100` record's world hit with no struck object]).
+            // Bullet_update case 3 zeroes the speed and runs DoTrails only [M 0x12ee00-0x12efdc]:
+            // no flight, no collision — the port's equivalent is the mover ride (the game's own
+            // Control_InheritVelocity call at 0x12edd8; the port inherits the MOVER it rests on,
+            // the same per-tick delta `Player_FeetOnPoint` 0x194188 gives Bond — [L] the live
+            // run's charge rides the descending cab) then the fuse tick, then `continue`.
+            if b.landed {
+                if let Some(gm) = d.world.ground_motion(
+                    [b.pos[0], b.pos[1] + 0.2, b.pos[2]],
+                    [b.pos[0], b.pos[1] - 0.6, b.pos[2]],
+                ) {
+                    b.pos = [b.pos[0] + gm.delta[0], b.pos[1] + gm.delta[1], b.pos[2] + gm.delta[2]];
+                }
+                // Bullet_DoTrails' fuse tick [M 0x12d890 0x12dcc4-0x12dd5c] — the landed
+                // charge's ONLY per-tick work (Bullet_update case 3 runs DoTrails and stops).
+                tick_charge_fuse(&d.weapons, b, &mut self.pending_blasts);
+                continue;
+            }
             if let Some(ev) = b.update(d.world, &vol, viewer, &mut self.rng) {
                 match ev {
                     crate::bullet::BulletEvent::World(p) => {
+                        // The satchel charge LANDS instead of dying [M Bullet_CollisionHandler
+                        // 0x12ce80 @0x12d1fc]: family +0x02 == 0x3b, the `+0x70 & 0x100` arm,
+                        // no struck object → obj+0xF4 = 3 (landed), the rest clank
+                        // `Sound_Play3D(0x4a7)`, the pose aligns to the hit normal (draw-side,
+                        // not ported). The charge keeps its fuse and its burn counter.
+                        if b.family(&d.weapons) == 0x3b {
+                            b.state = 1; // the retain keeps state < 2; `landed` is the state-3 marker
+                            b.landed = true;
+                            b.pos = p;
+                            b.dir = [0.0, 0.0, 0.0]; // Bullet_update case 3 zeroes the direction [M 0x12edec]
+                            self.audio.play3d(0x4a7, p, None);
+                            // The landing tick's DoTrails runs too [M: the handler sets state 3,
+                            // Bullet_update's tail then calls DoTrails].
+                            tick_charge_fuse(&d.weapons, b, &mut self.pending_blasts);
+                        } else {
                         let end = [p[0] + dir[0] * 0.1, p[1] + dir[1] * 0.1, p[2] + dir[2] * 0.1];
                         if let (Some(s), Some((_, n, m))) = (d.surfaces, d.world.segment_surface(from, end, false)) {
                             // fix-wallhug-prompt [M Bullet_CollisionHandler 0x12ce80:187-190 +
@@ -17044,8 +17155,18 @@ fn segment_hits_sphere(a: V3, b: V3, c: V3, r: f32) -> bool {
                                 b.pos = [cur[0] + dir[0] * 0.01, cur[1] + dir[1] * 0.01, cur[2] + dir[2] * 0.01];
                             }
                         }
+                        }
                     }
                     crate::bullet::BulletEvent::Player { damage, at } => {
+                        // The satchel charge bounces off Bond without hurting him [M
+                        // Bullet_CollisionHandler 0x12ce80 @0x12d150: the hit-object walk's
+                        // class-2/3 arm sets obj+0xF4 = 1 (flying again); the explode-on-body
+                        // gate `Bullet_handle_object_destruction` needs `+0x68 & 0x4000`, which
+                        // the satchel's 0x00010080 record lacks [L ee_start_05.bin]. DoTrails'
+                        // fuse tick still runs (the tail below).
+                        if b.family(&d.weapons) == 0x3b {
+                            b.state = 1;
+                        } else {
                         let before = self.health.health;
                         // `Drone_ModPlayerHitDamage` 0x13a940 → `Drone_ModBulletDamage` 0x139f50 runs at
                         // HIT time on the raw `weapon_data+0x0C` (HITDATA+8, carried in the bullet):
@@ -17105,6 +17226,7 @@ fn segment_hits_sphere(a: V3, b: V3, c: V3, r: f32) -> bool {
                             }
                         }
                         self.player_hits.push((frame, b.owner, before - self.health.health));
+                        }
                     }
                     // `Bullet_DoTrails` fly-by: `Sound_Play3D(0x1dc, closest_point, 100, -1, -1, …, custom 0)` [M].
                     crate::bullet::BulletEvent::FlyBy(p) => { self.audio.play3d(0x1dc, p, None); self.sounds.push(Sound { id: 0x1dc, pos: p, inner: 0.0, outer: 0.0, weight: 0.0 }); }
@@ -17122,6 +17244,14 @@ fn segment_hits_sphere(a: V3, b: V3, c: V3, r: f32) -> bool {
             if alive_in {
                 let bid = d.weapons.records.get(b.weapon as usize).map_or(0u16, |r| u16::from_le_bytes([r[0x02], r[0x03]]));
                 self.bullet_contacts_now.push(crate::triggers::BulletContact { a: from, b: b.pos, id: bid });
+            }
+            // Bullet_DoTrails' fuse tick for a round that FLEW this tick [M 0x12d890
+            // 0x12dcc4-0x12dd5c — DoTrails runs at Bullet_update's tail 0x12efd8, after the
+            // move/collide]. The blast lands in the same pending queue the grenade fuse arm
+            // uses, so the game's Explode_Create order holds. Landed charges ticked in their
+            // own arms above (the loop head / the landing arm); dead rounds have no DoTrails.
+            if !b.landed && b.state < 2 {
+                tick_charge_fuse(&d.weapons, b, &mut self.pending_blasts);
             }
         }
         self.bullets.retain(|b| b.state < 2);

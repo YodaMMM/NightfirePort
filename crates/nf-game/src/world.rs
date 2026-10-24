@@ -1606,6 +1606,20 @@ impl CollisionWorld {
     /// Each caller passes the mask its game call site passes — see the `LOS_*` constants.
     pub fn line_of_sight(&self, a: V3, b: V3, mask: u32) -> bool {
         if !LOS_MASKS_ON { let _ = mask; return self.segment_clear(a, b); }
+        self.line_of_sight_masked(a, b, mask)
+    }
+
+    /// The masked `Collide_LineOfSight` 0x1edf50 body, applied unconditionally — the per-caller
+    /// drop semantics of `Collide_Intersect` 0x1ebaa8:300-319 (and `Collide_Pick` 0x1eb320:140-152):
+    /// mask 0x800 drops hits whose per-triangle surface byte has bit 0x40; mask 0x1 drops surface
+    /// classes 0xd/0xe; mask 0x2 drops class 0x10 (glass); **mask 0x8 drops every hit whose
+    /// HITDATA+0x51 bit 1 is set — the bit the NODE's 0x40 cel flag (:143-145) ORs in and the
+    /// surface byte's 0x40/0x80 bits OR in (:305-309)** — so a 0xa-mask sensor ray (Check_AutoAim
+    /// 0x1a73f8:164-165) passes the stairwell's 0x40-material well panes that a plain segment
+    /// test blocks; mask 0x20 skips the 0x1000-flagged nodes (the port's missile cage).
+    /// (`line_of_sight` keeps the global `LOS_MASKS_ON` gate — the masked semantics stay
+    /// opt-in until the parked per-caller flip is safe.)
+    pub fn line_of_sight_masked(&self, a: V3, b: V3, mask: u32) -> bool {
         let d = sub(b, a);
         let dynamic = self.dynamic.read().unwrap();
         let skip_cage = mask & 0x20 != 0;
@@ -1617,7 +1631,7 @@ impl CollisionWorld {
                 for k in o.tris.clone() {
                     let m = g.mats[k];
                     let low = m & 0x3f;
-                    if drop_node && g.pass[k] { continue; }
+                    if drop_node && (g.pass[k] || m & 0x40 != 0 || m & 0x80 != 0) { continue; }
                     if drop_surface && m & 0x40 != 0 { continue; }
                     if drop_de && (low == 0xd || low == 0xe) { continue; }
                     if drop_10 && low == 0x10 { continue; }

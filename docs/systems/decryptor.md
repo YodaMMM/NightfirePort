@@ -103,3 +103,11 @@ runs entirely in `Lock_Update` while the weapon is out and firing.
   state/range gate, then +1/+3 per tick while held; no fire → −4 decay.
 - The unlock writes the lock's out channel (the port's one-tick fold of `Lock_Unlock` → case 1,
   as the laser burn already does).
+- The gate's target is the NEAREST lock the ray meets, whatever its state; an open or non-decryptor
+  one refuses (the game tests the +0x880 target [M 0x1a5460:557-566]). Each door carries a keypad on
+  both faces 0.26 apart (0700000a #646/#729, 07000012 #656/#694 [D]); skipping the open near one
+  let a held fire start a second scan on the far face through the wall.
+- The screen: `Sim::pda_display` / `pda_tick` keep the display buffer and the FRAME_RATE idle
+  countdown; the view model's datums 0..3 carry every `PdaDigits` mesh (0x2000a09..0x2000a12, read
+  from ACTION.ELF 0x2bedb8) and `frame_state` shows the one the display names. The code digits and
+  re-rolls are the game's shared-RNG draws; the port shows them from a hash (cosmetic deviation).
