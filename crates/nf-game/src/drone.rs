@@ -10590,6 +10590,7 @@ fn tick_charge_fuse(
     weapons: &nf_formats::weapon::WeaponData,
     b: &mut crate::bullet::Bullet,
     out: &mut Vec<(V3, f32, f32, usize, u16, u32, f32)>,
+    beeps: &mut Vec<V3>,
 ) {
     if !b.fuse_ticks || b.defused { return; }
     // The decrement [M 0x12d890 0x12dcc4-0x12dd2c]: families 0x59/0x5b never decrement; 0x37
@@ -10605,6 +10606,25 @@ fn tick_charge_fuse(
         if let Some(w) = weapons.records.get(b.weapon as usize) {
             let f = |o: usize| f32::from_le_bytes(w[o..o + 4].try_into().unwrap());
             out.push((b.pos, f(0x08), f(0x0c), usize::MAX, b.weapon, 0x0600_0052, f(0x08)));
+        }
+    }
+    // The 0x3b tail [M Bullet_DoTrails 0x12d890:418-444, 485-553]: the two countdown digits are
+    // (re)created EVERY tick in every state < 2 from `sec = fuse·0.016666668` (the tens/units
+    // of the whole seconds, :421-422), and the per-digit beep 0x447 fires on the quarter-second
+    // change (`qs = fuse·0.06666667 != BU+0x100`, :435-441) at the rate gate
+    // `(qs & 3) == 0 || ((qs & 1) == 0 && sec < 10) || sec < 5` — 1/s, 2/s under 10 s, 4/s under 5 s
+    // (:442 Sound_Play3D(100.0, −1.0, −1.0, 0x447, obj+0x30)). The port raises the beep to the
+    // sim's pending queue (the flush plays it — the grenade beep's own plumbing).
+    if b.state < 2 {
+        let qs = (b.fuse * 0.066_666_67) as i16;
+        let sec = (b.fuse * 0.016_666_668) as i32;
+        let s = sec.max(0);
+        b.digits = Some(((s / 10) as u8, (s % 10) as u8));
+        if qs != b.last_qs {
+            b.last_qs = qs;
+            if (qs & 3) == 0 || ((qs & 1) == 0 && sec < 10) || sec < 5 {
+                beeps.push(b.pos);
+            }
         }
     }
 }
@@ -11081,6 +11101,9 @@ pub struct Drones {
     /// 0x100000/0x200000 arms pass f12 = 1.0 [M 0x12d0ec-0x12d0f0 `lui $at, 0x3f80; mtc1 $at, $f12`]
     /// with radius f13 = +0x08. Tuple: (pos, radius, damage, owner, weapon_type, script, scale).
     pub pending_blasts: Vec<(V3, f32, f32, usize, u16, u32, f32)>,
+    /// The satchel countdown beeps raised this tick (pos) — Bullet_DoTrails' 0x447 arm
+    /// [M 0x12d890:435-443], flushed to audio + `sounds` after the bullets pass.
+    pub pending_beeps: Vec<V3>,
     /// The camera-shake amount: `Explode_Create` 0x17cbd0 calls `Camera_Shake(pos, radius)` when the
     /// radius reaches 0.5 [M 0x17cc28-0x17cc44]. The port keeps the old [S] set (max radius) and
     /// decay (×0.9 − 0.05): the game's `Camera_Shake` 0x1bc430 per-viewer `min((int)(2r·(1−(d/2r)²)),
@@ -11828,6 +11851,7 @@ impl Drones {
             // fix-restart-target: the fail-menu Restart's warm arm + the current level (GameState+0xC).
             level_exit_restart: false,
             pending_blasts: Vec::new(),
+            pending_beeps: Vec::new(),
             fusebox_hurts: 0,
             level_current: 0,
             // fix-safe08: (script hash, stream) → the reserved pickup slot the renderer built for the
@@ -14930,6 +14954,15 @@ fn segment_hits_sphere(a: V3, b: V3, c: V3, r: f32) -> bool {
                 };
                 let mut out = Vec::new();
                 t.update(&ctx, &mut self.rng, &mut out);
+                // The wreck smoke runs INSIDE the case-6 tick [M GT_Update 0x180498:440-451]:
+                // emitting it here (before the next turret's update) keeps the six shared draws
+                // at the game's position in the stream — the deferred event loop would run them
+                // after every other turret's rolls.
+                if let Some(pos) =
+                    out.iter().find_map(|e| match e { crate::gt::GTEvent::Smoke { pos } => Some(*pos), _ => None })
+                {
+                    self.gas.init_gt_smoke(&mut self.rng, pos);
+                }
                 // The rewind writes land at once: zero both mounted players' delays so the
                 // looping deploy/fold anims replay from their parks [M 0x180498:223-227,
                 // 256-261 — the game's own +0x9c = 0 writes].
@@ -14966,12 +14999,16 @@ fn segment_hits_sphere(a: V3, b: V3, c: V3, r: f32) -> bool {
                         }
                     }
                     // The wreck smoke puff [M case 6]: Gas_Init(0.05, 0.25, glist 0x2000039,
-                    // 7, 0x48403080, 1) — the port's gas has the searchlight-shape init only
-                    // (a known draw/sfx gap).
-                    // draw hand-off: the smoke/burst events carry the wreck presentation for
-                    // the renderer (glist 0x2000039 puff + the destroy burst), see
-                    // docs/systems/cameras-turrets.md §5.
-                    crate::gt::GTEvent::Smoke { .. } | crate::gt::GTEvent::DestroyedBurst { .. } => {}
+                    // 7, 0x48403080, 1) — played INLINE above (the RNG order), so this arm
+                    // never sees it. The destroy burst stays here: `Emitter_Create(10.0, 0,
+                    // -2.0, barrel+0xC0, up)` [M 0x180498:249-257] has no located emitter-def
+                    // mapping yet — the port presents it as a one-shot gas puff at the barrel
+                    // // [S] unverified (shape/life are the port's stand-in; the event itself is
+                    // pinned by gt.rs's death-gate test).
+                    crate::gt::GTEvent::Smoke { .. } => {}
+                    crate::gt::GTEvent::DestroyedBurst { pos } => {
+                        self.gas.init_ex(crate::gas::SMOKE_QUAD, pos, 0.0, [0.0, 0.5, 0.0], 0.3, 1.5, 4, [0xff, 0xff, 0xff, 0xff], 1, 20.0);
+                    }
                     // Music_Event(2,1) [M case 4] — the music system is view-side.
                     crate::gt::GTEvent::CombatSting => { self.music.event(2, 1); }
                     // The rest are the draw-side events (pickup drop, MP wreck explode, the
@@ -17199,7 +17236,7 @@ fn segment_hits_sphere(a: V3, b: V3, c: V3, r: f32) -> bool {
                 }
                 // Bullet_DoTrails' fuse tick [M 0x12d890 0x12dcc4-0x12dd5c] — the landed
                 // charge's ONLY per-tick work (Bullet_update case 3 runs DoTrails and stops).
-                tick_charge_fuse(&d.weapons, b, &mut self.pending_blasts);
+                tick_charge_fuse(&d.weapons, b, &mut self.pending_blasts, &mut self.pending_beeps);
                 continue;
             }
             if let Some(ev) = b.update(d.world, &vol, viewer, &mut self.rng) {
@@ -17214,11 +17251,16 @@ fn segment_hits_sphere(a: V3, b: V3, c: V3, r: f32) -> bool {
                             b.state = 1; // the retain keeps state < 2; `landed` is the state-3 marker
                             b.landed = true;
                             b.pos = p;
+                            // The stick normal for the renderer: the game's landed pose aligns the
+                            // mesh to the hit normal [M 0x12ce80:256-266]; the port captures it at
+                            // the landing (the same retraced segment the sibling impact arm uses).
+                            let end = [p[0] + dir[0] * 0.1, p[1] + dir[1] * 0.1, p[2] + dir[2] * 0.1];
+                            b.stick_normal = d.world.segment_surface(from, end, false).map(|(_, n, _)| n);
                             b.dir = [0.0, 0.0, 0.0]; // Bullet_update case 3 zeroes the direction [M 0x12edec]
                             self.audio.play3d(0x4a7, p, None);
                             // The landing tick's DoTrails runs too [M: the handler sets state 3,
                             // Bullet_update's tail then calls DoTrails].
-                            tick_charge_fuse(&d.weapons, b, &mut self.pending_blasts);
+                            tick_charge_fuse(&d.weapons, b, &mut self.pending_blasts, &mut self.pending_beeps);
                         } else {
                         let end = [p[0] + dir[0] * 0.1, p[1] + dir[1] * 0.1, p[2] + dir[2] * 0.1];
                         if let (Some(s), Some((_, n, m))) = (d.surfaces, d.world.segment_surface(from, end, false)) {
@@ -17377,10 +17419,17 @@ fn segment_hits_sphere(a: V3, b: V3, c: V3, r: f32) -> bool {
             // uses, so the game's Explode_Create order holds. Landed charges ticked in their
             // own arms above (the loop head / the landing arm); dead rounds have no DoTrails.
             if !b.landed && b.state < 2 {
-                tick_charge_fuse(&d.weapons, b, &mut self.pending_blasts);
+                tick_charge_fuse(&d.weapons, b, &mut self.pending_blasts, &mut self.pending_beeps);
             }
         }
         self.bullets.retain(|b| b.state < 2);
+        // The satchel countdown beeps [M Bullet_DoTrails 0x12d890:441-443]: Sound 0x447 at the
+        // charge, (100.0, −1.0) — the same play+Sound pair the grenade beep's arm runs
+        // (the grenade's 96.0 inner is its own site's value; this one follows the decomp).
+        for p in self.pending_beeps.drain(..) {
+            if let Some(t) = d.sfx { let h = t.get(0x447); self.audio.play3d(h.id, p, None); }
+            self.sounds.push(Sound { id: 0x447, pos: p, inner: 100.0, outer: -1.0, weight: 0.0 });
+        }
         // fix-gas-rng4: the player bullets' impact draws at the game's collide pass — after the
         // guards' update-pass rolls (the guard bullets' own impacts above already sit here). The
         // flush replays `Bullet_CollisionHandler` 0x12ce80's HITDATA walk per deferred flight

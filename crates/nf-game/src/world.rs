@@ -1663,6 +1663,50 @@ impl CollisionWorld {
         self.segment(from, to).map(|t| from[1] + (to[1] - from[1]) * t)
     }
 
+    /// The distance-returning `line_of_sight`: the same masked walk with the same drop filters
+    /// (`Collide_RayIntersect` 0x1ec690 with the caller's mask on HITTEST+0x98, the drops in
+    /// `Collide_Intersect` 0x1ebaa8:300-319), returning the closest hit's FRACTION of `a → b`
+    /// (`Some` = blocked at that fraction, `None` = clear). `Sensor_SetBeam` 0x1af398:77-79
+    /// stores the first hit's distance (HITDATA+0xC) into the lens object's obj+0xE8 — the beam
+    /// stretch — for the same mask-8 ray the bool gate walks (LOS_PROBE_8, world.rs top).
+    pub fn line_of_sight_hit(&self, a: V3, b: V3, mask: u32) -> Option<f32> {
+        let d = sub(b, a);
+        let dynamic = self.dynamic.read().unwrap();
+        let skip_cage = mask & 0x20 != 0;
+        let (drop_node, drop_surface, drop_de, drop_10) =
+            (mask & 0x8 != 0, mask & 0x800 != 0, mask & 0x1 != 0, mask & 0x2 != 0);
+        let sets: [Option<&Geo>; 3] = [Some(&self.stat), (!skip_cage).then_some(&self.missile), Some(&dynamic.geo)];
+        let mut best = None::<f32>;
+        for g in sets.into_iter().flatten() {
+            for o in along(g, a, b) {
+                for k in o.tris.clone() {
+                    let m = g.mats[k];
+                    let low = m & 0x3f;
+                    if drop_node && (g.pass[k] || m & 0x40 != 0 || m & 0x80 != 0) { continue; }
+                    if drop_surface && m & 0x40 != 0 { continue; }
+                    if drop_de && (low == 0xd || low == 0xe) { continue; }
+                    if drop_10 && low == 0x10 { continue; }
+                    let t = &g.tris[k];
+                    let (e1, e2) = (sub(t[1], t[0]), sub(t[2], t[0]));
+                    if dot(cross(e1, e2), d) >= 0.0 { continue; } // back face [M 0x10a8c8:168]
+                    let p = cross(d, e2);
+                    let det = dot(e1, p);
+                    if det.abs() < 1e-12 { continue; }
+                    let inv = 1.0 / det;
+                    let s = sub(a, t[0]);
+                    let u = dot(s, p) * inv;
+                    if !(0.0..=1.0).contains(&u) { continue; }
+                    let q = cross(s, e1);
+                    let v = dot(d, q) * inv;
+                    if v < 0.0 || u + v > 1.0 { continue; }
+                    let tt = dot(e2, q) * inv;
+                    if (0.0..=1.0).contains(&tt) && best.is_none_or(|bb| tt < bb) { best = Some(tt); }
+                }
+            }
+        }
+        best
+    }
+
     /// walls-990 debug: the static objects whose bounds contain `p` (expanded 0.05), as
     /// `(min, max)` pairs — a probe hit's owner candidates, printed by the stairwell-walls test
     /// to name the invisible wall the guards stop against. Static set only (the moving set's
