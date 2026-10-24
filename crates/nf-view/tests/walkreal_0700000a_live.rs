@@ -224,7 +224,7 @@ fn walk_leg_watched(w: &mut Walker, to: [f32; 3], arrive: f32, label: &str) -> b
 }
 
 #[test]
-#[ignore = "the route rides the game's own ai lanes, the west crossing passes, and the floor bridge is fixed (Level::instances folds the non-main map37 mesh pieces in [D disc tris; L the sweep reads ~0]) — but the ring's south legs still trip the mission fail: the alarm guard's 60-tick reaction window fires during any leg that wedges or dallies in his cone reach (the N-S x −8.5 lane attempt died the same way at +5336 ticks). The mouth's guard slot is 0.5 wide (the jamb corner (−10.60, −18.66) [L the bridge-edge sister]) and cannot take the player's 1.1 capsule, so the mouth crossing needs either the guard-timing solution (walk the legs steadily, no wedges) or the route's south-leg geometry re-derived at the player's radius. The bridge-edge sister pins the band at a genuine ledge edge."]
+#[ignore = "the spawn settle is in (the sisters' notes) and this round's run walked the ring to 'east past the alarm-panel corridor' (+98 ticks) before wedging at 'the ai lane to the N-S corridor': Bond (−11.25, 1.14, −14.60) ungrounded, the segment to (−8.60, −14.20) hit at 0.21 [the run's STUCK dump] — the same south-leg wall the -2/-4 rounds met; the mouth's guard slot is 0.5 wide (the jamb corner (−10.60, −18.66) [L the bridge-edge sister]) and cannot take the player's 1.1 capsule, so the mouth crossing still needs either the guard-timing solution (walk the legs steadily, no wedges) or the route's south-leg geometry re-derived at the player's radius. The bridge-edge sister pins the band at a genuine ledge edge."]
 fn walk_office_floor_qworm_keyboard_hatch() {
     let mut w = load_carry(None);
     {
@@ -457,37 +457,48 @@ fn walk_office_floor_qworm_keyboard_hatch() {
 /// the game's own spawn height vs the port's. The game stands Bond at
 /// build_PointOnFloor's down-ray + 1.1 [M Player_StandAtNewPosition 0x190d88 disasm 0x190ee0-
 /// 0x190f18: `build_FindCel` from pos + 0.1f, then the ray (0,−1,0)·3.0 through
-/// `Collide_RayIntersect` [M build_PointOnFloor 0x1c95a8 disasm 0x1c95b0-0x1c9644], then
-/// `y += 1.1f` (0x3f8ccccd)]. The fresh-boot snapshot reads the game's root at 1.0891 [L
-/// ee_start_0700000a.bin 0x18694e0: (−3.9319, 1.0891, 10.3978)] ⇒ the game's spawn ray found the
-/// floor at −0.0109 under the cab interior. The port's `Bond::stand_at` (player.rs:506) runs the
-/// same +1.1 rule over `world.floor_below` — but the port's floor under the cab interior reads
-/// 0.0000 [D port world: Room-M_lifts obj458's tris cover the cab interior at y≈0; no −0.0109
-/// surface exists in the port's static or dynamic sets at the spawn], so the port spawns at
-/// 1.1000 — 0.0109 high, the exact offset that later separates the hall glides (the game settles
-/// 1.1147 after the x≈−8 doorway base climb; the port glides its 1.1000 spawn height; the 0.0256
-/// climb minus the 0.0109 spawn = the measured 0.0147 gap). This test pins the game's number and
-/// stays ignored until the port's spawn ray sees what the game's cel-scoped ray sees.
+/// `Collide_RayIntersect` [M build_PointOnFloor 0x1c95a8 disasm 0x1c95b0-0x1c9644, the hit point
+/// written back into the placement vector], then `y += 1.1f` (0x3f8ccccd)] — the placement reads
+/// 1.1000 in BOTH the game and the port ([L fresh boot: the breakpointed spawn ray from
+/// (−3.9319, 0.1, 10.3978) hits y 0.0000 in the spawn cel, surface 0x15; the port's floor_below
+/// reads the same 0-plane within 2e-5]). The snapshot's 1.0891 [L ee_start_0700000a.bin
+/// 0x1b78640+0x34 = 0x3f8b67fe] is the AFTER-spawn settle: the boot holds the placed root for
+/// four ticks while the fall velocity accumulates (`vel += WldGravity·REC_FRAME_RATE` each [M
+/// 0x194df0:107]; WldGravity 0x2d8894 = −9.8f, REC_FRAME_RATE 0x30d0dc = 1/60), then integrates
+/// ONCE — 1.0891111 reproduces bit-exactly as 1.1f + f32(4·(−9.8f·(1/60))·(1/60)) — and the feet
+/// band [M Player_FeetOnPoint 0x194188:106 `hit − 0.1 ≤ cc`] catches the dropped root inside its
+/// window (dy 1.0891 ≤ cc 1.0347 + 0.1). The port models the hold in `Bond::settle_hold`
+/// (player.rs, level-0a-office-hatch-5); which game gate holds the four boot ticks is the live
+/// check in the report (the handler phase cannot be running — its grounded tail zeroes the
+/// accumulating velocity). This test waits the settle out and pins the game's rest.
 #[test]
-#[ignore = "the port spawns at 1.1000 (its floor_below reads 0.0000 under the cab interior) while the game's snapshot reads 1.0891 [L ee_start_0700000a.bin 0x18694e0] = −0.0109 + 1.1 [M 0x190d88:0x190ee0-0x190f18] — the port's world lacks the −0.0109 surface the game's cel-scoped spawn ray finds (the cab's own floor/shaft piece); un-ignore when stand_at's floor matches"]
 fn the_spawn_height_matches_the_game_snapshot() {
     let mut w = load_carry(None);
     let p = w.scene.sim.as_ref().unwrap().bond.pos;
     assert!((p[0] + 3.9319).abs() < 0.01 && (p[2] - 10.3978).abs() < 0.01, "the start #0 xz [D placement map37 plc 0]");
-    // The game's root at t0 [L ee_start_0700000a.bin 0x18694e0] = 1.0891 within half a cm.
+    // The settle: four held ticks (root 1.1000) then the one-tick drop to the game's rest [L].
+    for _ in 0..10 { w.wait(1); }
+    let p = w.scene.sim.as_ref().unwrap().bond.pos;
+    // The game's rest root [L ee_start_0700000a.bin 0x1b78640+0x34] = 1.0891 within half a cm.
     assert!((p[1] - 1.0891).abs() <= 0.005,
-        "the spawn root must read the game's 1.0891 [L] (= the spawn floor −0.0109 + 1.1 [M 0x190d88]), got {p:?}");
+        "the spawn root must read the game's 1.0891 [L] (the 4-tick arrival settle [M 0x194df0:107] + the band rest [M 0x194188:106]), got {p:?}");
+    assert!(w.scene.sim.as_ref().unwrap().bond.grounded, "the band holds the settled root [M 0x194188:106]");
 }
 
 /// the west-hall glide height. The game walks out of the cab at its spawn
 /// height 1.0891 [L], brushes the 0.1622-tall wall base at x −8.304 (z 14.3..16.3 [D port world tris,
 /// the same geometry the port's world carries]), climbs (peak 1.18 [L fresh boot]) and
-/// settles to a steady 1.1147 along the west hall to (−11.39, 16.29) [L fresh boot]. The port's real-path
-/// walk holds its spawn height 1.1000 flat the whole way (scratch probe: no y change > 0.004 from
-/// the cab mouth to (−10.79, 16.26)) — its glide clears the base without touching it. 1.1147 − 1.1000
-/// = 0.0147 = the 0.0256 climb settle minus the 0.0109 spawn gap, which closes the ledger.
+/// settles to a steady 1.1147 along the west hall to (−11.39, 16.29) [L fresh boot]. The spawn
+/// settle is ported (the_spawn_height_matches_the_game_snapshot — the port now glides the settled
+/// 1.0891, the scratch run 1.0905/1.0941 on the doorway lines). What remains is the base climb's
+/// settle itself: the game brushes the doorway's jamb base (the tris (−8.604..−8.304, y 0..0.19)
+/// at z 16.278 [D port world tris]), peaks 1.18 and settles +0.0256 [L]; the port's capsule (bottom
+/// riding dy − cc = 0.054 above the floor) pushes off the base's south face (+0.0036 measured) but
+/// does not reproduce the edge-climb settle, and a dead-on r-0.4 approach WEDGES (the walker's
+/// stuck panic) — the climb needs the game's per-tick push/step shape through the doorway (the
+/// live check in the report).
 #[test]
-#[ignore = "the port's hall glide reads its spawn height 1.1000; the game holds 1.1147 [L fresh boot] after the doorway base climb — needs the spawn floor fix (the_spawn_height_matches_the_game_snapshot) plus the port's walk to take the same doorway line"]
+#[ignore = "the port glides the settled 1.0891 (the spawn settle is in) but does not reproduce the doorway base climb's +0.0256 band settle [L 1.1147 fresh boot]; the port's capsule pushes off the base face (−8.604..−8.304, z 16.278 [D tris]) for +0.0036 only and the dead-on approach wedges — needs the game's climb shape (the live check)"]
 fn the_west_hall_glide_height_matches_the_game() {
     let mut w = load_carry(None);
     // Wait out the SS door sweep (the same guard the main walk runs).
@@ -500,7 +511,13 @@ fn the_west_hall_glide_height_matches_the_game() {
     }
     w.walk_to(Wp::new(-3.9, 0.0, 13.2), "out of the lift");
     w.walk_to(Wp::new(-3.9, 0.0, 15.5).r(1.2), "lobby south");
-    w.walk_to(Wp::new(-10.0, 0.4, 16.0).r(0.8), "the west hall");
+    // The game's doorway line [L fresh boot: its walk brushed the doorway's wall base at
+    // x −8.304 and ended the glide at (−11.39, 16.29)] — the base pieces sit at z ≈ 16.28
+    // (the jamb tris (−8.604..−8.304, y 0..0.19) at z 16.278 [D port world tris]); the older
+    // straight (−10, 16.0) leg crossed x −8.3 at z ≈ 15.86, SOUTH of the base, and the port's
+    // capsule (bottom riding dy − cc = 0.054 above the floor) cleared it without a touch.
+    w.walk_to(Wp::new(-8.45, 0.4, 16.29).r(0.4), "the doorway base line");
+    w.walk_to(Wp::new(-10.0, 0.4, 16.29).r(0.8), "the west hall");
     // Read the glide y in the hall's steady window (x −9.5..−11.39 on the walked line).
     let p = w.scene.sim.as_ref().unwrap().bond.pos;
     assert!(p[0] < -9.0, "walked into the west hall, at {p:?}");
@@ -515,9 +532,11 @@ fn the_west_hall_glide_height_matches_the_game() {
 /// frames, y 1.127 then 1.120 — no dither, no wedge [L fresh boot]. The port's same leg
 /// wedges: its y dithers across the band edge 1.1347 (the -2 session's 1.1336↔1.2019; this
 /// session's repro 1.1297 → 1.1957 at (−17.87, 4.87)) because the below-B edge lifts (+0.0165/tick
-/// [L the -2 per-tick probe]) unhooks the band at its entry height.
+/// [L the -2 per-tick probe]) unhooks the band at its entry height. The spawn settle is now ported
+/// (1.0891 rest) but the hall glide's +0.0256 climb settle is not (the glide sister's note), so the
+/// corner still enters 0.02 under the game's 1.1147 line.
 #[test]
-#[ignore = "the port wedges at the corner (y dithers 1.13↔1.20 across the band edge 1.1347); the game walks through at y 1.127→1.120 [L fresh boot] — needs the hall glide at the game's 1.1147 (0.02 under the edge) and the corner push landing re-derived (the -2 report's open item: Player_CollisionHandler 0x1949a8:136-140)"]
+#[ignore = "the port wedges at the corner (y dithers across the band edge 1.1347); the game walks through at y 1.127→1.120 [L fresh boot] — needs the hall glide's base-climb settle (the_west_hall_glide_height_matches_the_game's note, the live check) and the corner push landing re-derived (the -2 report's open item: Player_CollisionHandler 0x1949a8:136-140)"]
 fn the_corner_crosses_like_the_game() {
     let mut w = load_carry(None);
     for _ in 0..150 {
