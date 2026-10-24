@@ -1367,6 +1367,13 @@ fn load_impl(iso_path: &str, archive: &str, all: bool, save: Option<&nf_game::pl
                 // `Player_Init(0, pos, rot, params)` creates the player object at the entry; the port
                 // stands him on the floor below (the level start convention, `Bond::stand_at`).
                 sim.bond = nf_game::player::Bond::stand_at(&sim.world, s.pos, s.yaw);
+                // The spawn arrival settle — the LEVEL-START path only (`arm_spawn_settle` doc):
+                // the boot holds the placed root four ticks then drops it into the band [L
+                // ee_start_0700000a root 1.0891111 bit-exact]; the gate is [S] unverified. The
+                // mid-game `Player_Enable` 0x195498 does NOT go through `Player_StandAtNewPosition`
+                // (the matrix origin direct [M :57-68]) and must not carry the hold — the 05 truck
+                // hand-off's crouch press is the first post-enable tick.
+                sim.bond.arm_spawn_settle();
                 // `Player_Init` 0x1910f8:152-172 [M]: the default WldGravity write (0, −9.8, 0),
                 // then p3 == 2 → `Vec_Zero(&WldGravity)` (the spacewalk starts; disasm 0x19151c-
                 // 0x191550 the default, 0x191618 the zero). fix-world-gravity.

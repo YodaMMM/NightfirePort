@@ -438,7 +438,10 @@ pub struct Bond {
     /// — and the feet band [M 0x194188:106] catches the dropped root at the game's 1.0891 rest.
     /// Which gate holds the boot's first four ticks (the handler phase clearly does not run: the
     /// grounded tail would zero the accumulating velocity) is not readable from the decompile —
-    /// the live check in the report pins it; the port models the observable.
+    /// `// [S] unverified`: the port models the observable, armed ONLY at the level-load spawn
+    /// (`arm_spawn_settle`), never at the mid-game `Player_Enable` 0x195498 (which does not go
+    /// through `Player_StandAtNewPosition` at all — the matrix origin direct [M :57-68] — the
+    /// 05 truck hand-off's crouch press is the first post-enable tick and must not be swallowed).
     pub settle_hold: u8,
     /// Port bookkeeping for the game's persistent orientation: `obj+0x90` is built from the walk
     /// yaw/pitch on entering the substates (ChangeSubState 8/9 touches no rotation [M 0x190630]) and
@@ -512,14 +515,29 @@ impl Bond {
         if self.world_gravity[1] == 0.0 { 0x6000_8e0 } else { 0x6000_151 }
     }
 
-    /// On the floor below `p` (within 10 units), as a level start places him. Arms the spawn
-    /// arrival settle (the `settle_hold` field doc — the game's `Player_StandAtNewPosition`
-    /// placement is what the boot holds): four held ticks, then the one-tick drop into the band.
+    /// On the floor below `p` (within 10 units), as a level start places him.
+    ///
+    /// The spawn arrival settle is NOT armed here: the game's `Player_Enable` 0x195498 does not go
+    /// through `Player_StandAtNewPosition` at all (it copies the matrix translation into obj+0x30
+    /// DIRECTLY — no floor ray, no +1.1 — and zeroes the velocities [M 0x195498:57-68, 81-86]), so
+    /// every mid-game re-enable (the 05 truck hand-off's crouch press rides on the first
+    /// post-enable tick) must behave like master's placement, or the hold swallows that tick's
+    /// input. The settle arms ONLY at the level-load spawn (scene.rs, the `Player_Init`
+    /// 0x1910f8:156-181 path), where the ee_start evidence lives. Call `Bond::arm_spawn_settle`
+    /// there.
     pub fn stand_at(world: &CollisionWorld, p: V3, yaw: f32) -> Bond {
         let y = world.floor_below([p[0], p[1] + 1.0, p[2]], 10.0).map_or(p[1], |f| f + 1.1);
-        let mut b = Bond::new([p[0], y, p[2]], yaw);
-        b.settle_hold = 4;
-        b
+        Bond::new([p[0], y, p[2]], yaw)
+    }
+
+    /// Arms the spawn arrival settle — LEVEL LOAD ONLY (see `stand_at`'s doc): the boot's
+    /// `Player_Init` 0x1910f8 → `Player_StandAtNewPosition` 0x190d88 placement is what the game
+    /// holds for its first ticks [L ee_start_0700000a root 1.0891111 = 1.1 +
+    /// f32(4·(−9.8/60)·(1/60))]. Which game gate holds the boot's first four ticks is not
+    /// readable from the decompile — `// [S] unverified` (the observable model, out of pass/fail
+    /// as to the gate; the ROOT it produces is the [L] bit-exact pin).
+    pub fn arm_spawn_settle(&mut self) {
+        self.settle_hold = 4;
     }
 
     /// `Player_GetHeadPos`: the eye.
@@ -2722,6 +2740,7 @@ mod tests {
         let mut b = Bond::stand_at(&w, [0.0, 0.0, 0.0], 0.0);
         // The spawn arrival settle runs first (the `settle_hold` doc): the boot holds the placed
         // root four ticks, then drops it into the band — the jump test measures from the REST.
+        b.arm_spawn_settle();
         for _ in 0..8 { b.tick(&w, &Input::default()); }
         let y0 = b.pos[1];
         b.tick(&w, &Input { jump: true, ..Default::default() });
