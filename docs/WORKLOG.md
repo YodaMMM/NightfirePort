@@ -178,3 +178,19 @@ composition — and carries him down; at y −95.80 his health drops 100→0 and
 Make the port match all of that (stop height + window, the stay-on re-attach, the kill), fix
 the hand-back composition, rewrite the walk to step off during the stop window (real input
 only), un-ignore it; sister: staying on the lift ends in the death.
+- (00:45 UTC) The live chain DECODED and ported: the substate key [M Player_Update 0x193600:78-86
+  (0x94a: 0 frozen / 1 active / >1 counts down) + Player_Disable 0x195f70:16 (0) + Player_Enable
+  0x195498:51 (2→1)] — the live "substate 0 window" IS the landing scene's disable (575 ticks
+  [D len]); the hand-back = the RAW marker key [L x/z] — the hash-0 marker class skips the
+  SP-base compose (nis.rs case 1; SP #289's (0,−53.534,−3.377) compose refuted by the live z
+  −3.4534); fix_landing_matrix_live re-pinned to the raw key (the test was wrong, not the code);
+  the shaft kill at root −95.80 [L] through the real death flow (health 0 → crate::death →
+  ch 0x62 [M 0x190bb0:32] → Mission_Update's ch-0x62 arm [M 0x182c60:35-42]); the mechanism
+  [S] (no disc writer for 0x62 [D l3b], the kill column empty [L l3c]). The sister
+  (staying_on_the_lift_ends_in_the_shaft_death_like_the_game) GREEN; the walk re-written and
+  UN-IGNORED (the ride → the stop −54.1971 → the window 575 → the raw-key hand-back → the
+  edge walk-off; the gap crossing = the named live check: the port's walk 0.037/tick + the
+  20-tick airborne momentum decay cannot cross the 0.65 landing gap before the resumed cab
+  drops below it). Probes l3/l3b/l3c/l3d committed. fix_finale_live/walk_0700004a/interact
+  re-run green. The suite NOT run in the window (the first background start died on the
+  nohup env; the restart would not have finished) — the touched crates' targeted tests ran.
