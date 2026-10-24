@@ -94,3 +94,30 @@ push [M Intersect_CylGeom 0x109da0, Player_CollisionHandler 0x1949a8 disasm 0x19
 and the feet band [M 0x194188]; (4) full suite on the final tree (merged with origin/master),
 none of the five failing. Suite runner starts in the first minutes; checkpoints every 20-30 min
 (sandbox dies 18:47 UTC, last work 18:27 UTC).
+
+Task: level-0a-office-hatch-7 — the five master-tree regressions of the spawn settle. Branch
+start from origin/s/level-0a-office-hatch-6 (not merged), merged origin/master (915b4923); all
+five reproduced on the merged tree (each passes with the arm line disabled). ROOT CAUSE (4 of 5):
+hatch-6's held tick RETURNED out of physics_tick — skipping the crouch/jump/look reads AND the
+capsule push. The crouch option test's tick-1 press was swallowed; the 01 seam test's teleport
+lands inside the hold window (the direct load starts ENABLED — probe: waited 0 disabled false)
+and read the capsule pressed into the seam wall; the 09 armour tester parked short had its step
+overlap unresolved through the hold and the release tick's push EJECTED it into the pickup's
+take radius (probe: static 3 ticks, then +0.365/+0.254/+0.254 out, taken at tick 11). FIX: the
+hold NARROWED — the held tick keeps the unconditional gravity add [M 0x194df0:107], skips the
+vel→pos integration ([L] the root holds) and holds off the three grounded-tail zeroing sites,
+but RUNS move/look/crouch/jump and the push resolution [M 0x1949a8:136-140]; the [S] gate stays
+unverified, not widened. The [L] rest pin still passes bit-exact (walkreal_0a 4/0/3), the 05
+truck ride stays green (walkreal_05 6/0/2, fix_truck 2/0). FIFTH (torpedo): NOT the hold — the
+old aim clamped pitch to -1.0 (per-tick -0.5) firing into the courtyard floor; the round dies on
+the floor between read ticks 2-3 with the full catalog (probe), and the game's own [L ee_start_05]
+rest 24.9633 sits BELOW every port root — the down-shot dies within the read window at all of
+them. TEST FIXED with the evidence: aim_down(2, -0.25) = pitch -0.5; all pinned bits unchanged.
+BATHHOUSE (the fifth, still red): fails bit-identically before and after the narrowing
+(id 115, l=0.40999818, r=0, tick 1) — the divergence is the boot REST (1.0891 [L] vs master's
+~1.0973) shifting the camera/listener geometry across a marginal right-channel clamp; the game
+boots at the LOWER rest, so the live pan read decides (report live check 1). Test untouched.
+The glide/corner/main-walk item did not fit the window. Ran: the five + walkreal 05/0a +
+fix_truck + keyboard_0a + hatch_crouch + drop_stand + level_carry + fix_world_gravity =
+31 passed, 0 failed (excl. bathhouse), 5 ignored; the full sweep did NOT fit. probe:
+probe_hatch7_regress.rs committed.
