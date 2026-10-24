@@ -4242,6 +4242,20 @@ impl App {
     /// passes its wall clock, the headless harness 1/60). The draw half (`draw_frame`)
     /// runs after it; the window event loop calls both, in this order.
     fn frame(&mut self, dt: f32) {
+        // pad-menus (results-stats-key): the pad drives the front end's arms — the game reads its
+        // style-independent menu actions (0x1a-0x22) off the pad edges every frame and the widgets
+        // send their messages on those edges [M psiInput_MapInputs 0x10cd80:377-424 +
+        // Button_Update 0x1ef948:74-91; the mapping cites in menu::pad_menu_action], so the port
+        // feeds the same edges through the keyboard's Action path. No pad (or the feature off):
+        // nothing. `poll_menu` runs every frame while the backend exists so no edge leaks across
+        // the menus/gameplay boundary; the action is consumed only when the front end owns input.
+        #[cfg(feature = "gamepad")]
+        if let Some(pad) = self.pad.as_mut() {
+            let a = pad.poll_menu();
+            if self.fe.is_some() {
+                if let Some(a) = a { self.menu_input(a); }
+            }
+        }
                 // fix-movie-playback: the movie glue runs before the load path so a phase-2
                 // resolve lands in the same frame the state 6 popped.
                 self.menu_script_tick();
