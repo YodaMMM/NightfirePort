@@ -7449,15 +7449,34 @@ pub fn build(level: &Level, cels_only: bool, skeletons: &HashMap<u8, Skeleton>, 
                 .chain(copter_scripts)
                 .chain([0x0600_0052u32, 0x0600_0027, 0x0600_004f, 0x0600_07c4]).collect();
             let mut queued: std::collections::HashSet<u32> = hashes.iter().copied().collect();
+            // lift-indicators-09: a SUB-script's entities need one draw slot per LIVE copy — every placed
+            // SP running a parent script starts the sub once per `Script_SubScriptStart` op [M 0x1db050],
+            // so 07000009's two cab SPs (0x060007D/0x060007E) start 0x0600064E/0x0600064F three times each
+            // and the sim holds six indicator plates / six button plates. The old count (placed SPs whose
+            // OWN scripts contain the hash) read 1 for every sub hash, and `Sim::script_entity_k` serves
+            // only the newest match — one cab's plates drew, the other cab's never did. Accumulated in the
+            // sub walk (parents may pop after their subs), read in the Entity arm below.
+            let mut sub_copies: std::collections::HashMap<u32, usize> = std::collections::HashMap::new();
+            let mut order: Vec<u32> = Vec::new();
             while let Some(h) = hashes.pop() {
+                order.push(h);
                 let Some(nis) = level.nis.get(&h) else { continue };
+                let running = players.iter().filter(|p| p.scripts.contains(&h)).count().clamp(1, 16);
                 for st in nis.streams.iter() {
                     for cmd in st.decode() {
                         if let nf_formats::nis::Cmd::SubScript { hash: sub, .. } = cmd {
-                            if sub != 0 && queued.insert(sub) { hashes.push(sub); }
+                            if sub != 0 {
+                                *sub_copies.entry(sub).or_insert(0) += running;
+                                if queued.insert(sub) { hashes.push(sub); }
+                            }
                         }
                     }
                 }
+            }
+            // The slots are created after the WHOLE walk so every sub hash's copy count is final
+            // (a parent may pop after its sub); `order` preserves the original pop order, so the
+            // attachment indices match the pre-fix build.
+            for &h in &order {
                 let Some(nis) = level.nis.get(&h) else { continue };
                 for (si, st) in nis.streams.iter().enumerate() {
                     for cmd in st.decode() {
@@ -7520,7 +7539,9 @@ pub fn build(level: &Level, cels_only: bool, skeletons: &HashMap<u8, Skeleton>, 
                                 // copy of the stream's entities (07000014's three vent lids are nine SPs on
                                 // 0x06000A3B — one slot drew only the newest lid; the hatch under the spawn
                                 // stayed invisible while it opened).
-                                let copies = players.iter().filter(|p| p.scripts.contains(&h)).count().clamp(1, 16);
+                                let copies = sub_copies.get(&h).copied()
+                                    .unwrap_or_else(|| players.iter().filter(|p| p.scripts.contains(&h)).count())
+                                    .clamp(1, 16);
                                 let inst = Instance { map, object, matrix: ident, placement: placement.clone() };
                                 for k in 0..copies {
                                     add_instance(level, &inst, Layer::Character, Some((0, Some(attachments.len() as u32))), &mut groups, None, None, None, None, [1.0; 3], &room_cels, u32::MAX, u32::MAX);
