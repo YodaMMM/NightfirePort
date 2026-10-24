@@ -188,3 +188,13 @@ NF_CAPS_GATE (the candidate gate, default OFF — refuted in detail), probe_hatc
 Tests stay ignored (not green under any defended configuration). Ran: nf-game 88 binaries 0
 FAILED; walkreal_0700000a_live non-ignored 4 passed 3 ignored; the fast suite mid-run at report
 time (baseline 4 known-fails + OOM-style CRASHes while my builds ran concurrent).
+
+### level-0a-office-hatch-10 (branch start, 20:45 UTC)
+Continues hatch-9's open point: settle what HITTEST+0x50 (BL+0x790) holds [M — its boot write,
+every writer, what the DeltaP adds accumulate], port the overlap gate with that exact reference,
+pin glide 1.0891 -> peak 1.18 -> settle 1.1147 and corner 1.127 -> 1.120 (±0.01) [L]; then
+un-ignore the_west_hall_glide_height_matches_the_game, the_corner_crosses_like_the_game,
+walk_office_floor_qworm_keyboard_hatch as they go green and drop the NF_CAPS_GATE env switch
+once the gate is default. Branched from origin/s/level-0a-office-hatch-9 (its NF_CAPS_LOG/
+NF_CAPS_GATE code and ignored tests are this task's base), merged origin/master (suite runner,
+sleeper-push work).
