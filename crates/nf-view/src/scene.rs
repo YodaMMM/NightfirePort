@@ -2502,6 +2502,9 @@ impl Sim {
                 }
                 None => {}
             }
+            // `Control_NextLOD` on the unlock (Lock_Unlock 0x1b0650:23 / case 1's framelist end): the
+            // keypad's model becomes its LOD variant and keeps it (see `Lock::lod_next`).
+            if l.unlocked || l.burned { l.lod_next = true; }
         }
         self.smoke.retain(|s| !s.dead());
         let (trigger, reload) = if self.disabled { input = Default::default(); (false, false) } else { (trigger, reload) };
@@ -6033,6 +6036,9 @@ pub struct Scene {
     /// How many ladder (0x22) placements got a World-layer instance (fix-ladder2's draw sweep).
     /// The game draws each ladder exactly once through the dynamic-object path [M View_DrawObjList
     /// 0x1e69a0 → View_DrawObjectGlist 0x1e6780]; 0 means the ladders are invisible.
+    /// The 0x2E locks' placement matrices (`Lock::create` order): where the keypads' posed slots
+    /// draw the placed object or its LOD variant.
+    pub lock_matrices: Vec<Mat4>,
     pub ladders_drawn: usize,
     /// How many grapple-point (0x3A) placements got a World-layer instance (fix-grapple-hook's
     /// draw sweep). The game draws each point's pulley mesh exactly once through the dynamic-object
@@ -7972,6 +7978,10 @@ pub fn build(level: &Level, cels_only: bool, skeletons: &HashMap<u8, Skeleton>, 
                 if obj.flags & 0x10 != 0 && FLAGS_COPYING.contains(&kind) { continue; }
                 if !obj.gfx.leaves.iter().any(|l| !l.batches.is_empty()) || obj.flags & 0x400 != 0 { continue; }
                 if let Some(h) = &nf_hide { if h.split(',').any(|n| !n.is_empty() && obj.name.contains(n)) { continue; } }
+                // A lock whose object has a LOD variant (the keypads: "Lock - KeypadLocked" →
+                // "Lock - KeypadUnlocked" [D block 0x27]) rides the posed slot space below, so the
+                // unlock's `Control_NextLOD` can swap it.
+                if kind == 0x2e && level.maps[map].lod_target(object).is_some() { *misc_drawn.entry(kind).or_default() += 1; continue; }
                 // The 0x800 dim, the same rule the main static loop applies (View_SetupRenderModes_Tweak 0x1e5888).
                 let mult = if obj.flags & 0x800 != 0 {
                     let mx = nf_formats::placement::object_matrix(p.rotation, p.translation);
@@ -8016,6 +8026,7 @@ pub fn build(level: &Level, cels_only: bool, skeletons: &HashMap<u8, Skeleton>, 
         // Character-layer vertices posed by the simulation every tick — the mount and head rotating, the beam
         // cone along the aim, the spot on its ray hit, the corona a camera billboard (docs/systems/world-objects.md).
         crate::phase_mark("b5f coronas/wires/ladders/misc", t); t = std::time::Instant::now();
+        let mut lock_matrices: Vec<Mat4> = Vec::new();
         if let Some(m) = level.main_map() {
             for (pi, pl) in nf_game::searchlight::part_placements(&level.maps[m].placements).into_iter().enumerate() {
                 let p = &level.maps[m].placements[pl];
@@ -8075,6 +8086,25 @@ pub fn build(level: &Level, cels_only: bool, skeletons: &HashMap<u8, Skeleton>, 
                 if let Ok(h) = std::env::var("NF_HIDE") { if h.split(',').any(|n| !n.is_empty() && level.maps[map].objects[object].name.contains(n)) { continue; } }
                 let inst = Instance { map, object, matrix: nf_formats::placement::object_matrix(p.rotation, p.translation), placement: p.clone() };
                 add_instance(level, &inst, Layer::Character, None, &mut groups, None, None, Some(slot as u16), None, [1.0; 3], &room_cels, u32::MAX, u32::MAX);
+            }
+            // The locks with a LOD variant (`Lock::create`'s order — every 0x2E placement), after the
+            // breakables: two slots per lock, the placed object at `2·li` and its LOD variant at
+            // `2·li + 1`, both at the placement matrix [M Lock_Create 0x1ae1f8: obj+0xD8 = the glist;
+            // `Control_NextLOD` 0x1349b0 swaps obj+0xD8 to glist+0x40]. `frame_state` shows the variant
+            // once the sim's `lod_next` is set. (In --all the generic loop draws the lock statically.)
+            let lock_base = n_doors + n_ss + bi;
+            for (li, p) in level.maps[m].placements.iter().filter(|p| p.flags & 0xff == 0x2e).enumerate() {
+                let mx = nf_formats::placement::object_matrix(p.rotation, p.translation);
+                lock_matrices.push(mx);
+                if !cels_only { continue; }
+                let target = if p.by_hash() { level.by_hash.get(&p.hashcode).copied() }
+                    else if (p.index as usize) < level.maps[m].objects.len() { Some((m, p.index as usize)) } else { None };
+                let Some((map, object)) = target else { continue };
+                let Some(next) = level.maps[map].lod_target(object) else { continue };
+                for (k, o) in [object, next].into_iter().enumerate() {
+                    let inst = Instance { map, object: o, matrix: mx, placement: p.clone() };
+                    add_instance(level, &inst, Layer::Character, None, &mut groups, None, None, Some((lock_base + 2 * li + k) as u16), None, [1.0; 3], &room_cels, u32::MAX, u32::MAX);
+                }
             }
             // Level-placed pickups (`Pickup_Create` 0x18dda0): `View_DrawObjectGlist` 0x1e6780 draws
             // `obj+0xD8` at `obj+0x90` — the same object carries the glist the renderer draws [M], so the
@@ -8546,7 +8576,7 @@ pub fn build(level: &Level, cels_only: bool, skeletons: &HashMap<u8, Skeleton>, 
                 }
             }
         }
-        Scene { shard_tex, cels: room_cels, cel_graph, streams: None, music_files: None, music_tables: None, sound_bank: None, sound_spares: Vec::new(), snow_texture, vertices, indices, materials, textures, hud_textures, woman: None, hud, script_billboards, view_models, mp_bodies, mp_body_weapons, mp_char_bodies, mp_anim_sets, fog, bounds, start, stats, characters, char_vertex_start, char_verts, sequences, attachments, sim, colliders, models_0x800, npc_pool, ladders_drawn, grapple_hooks_drawn, misc_drawn }
+        Scene { shard_tex, cels: room_cels, cel_graph, streams: None, music_files: None, music_tables: None, sound_bank: None, sound_spares: Vec::new(), snow_texture, vertices, indices, materials, textures, hud_textures, woman: None, hud, script_billboards, view_models, mp_bodies, mp_body_weapons, mp_char_bodies, mp_anim_sets, fog, bounds, start, stats, characters, char_vertex_start, char_verts, sequences, attachments, sim, colliders, models_0x800, npc_pool, ladders_drawn, grapple_hooks_drawn, misc_drawn, lock_matrices }
     }
 
     /// Sequence index and frame a character shows after `ticks` 60 Hz updates: its start script (`choice = None`) or the
@@ -9356,6 +9386,15 @@ pub fn build(level: &Level, cels_only: bool, skeletons: &HashMap<u8, Skeleton>, 
     /// 0x1e62d8:33 excludes from the draw list, and `Drone_EnableAll(0)` [M 0x1383e8] applies it to
     /// every present drone when a cut-scene fires event 5; a spawner-held-back reinforcement stays
     /// hidden unless R asks for the reinforcements.
+    /// A lock's posed slot (door slot `k`, past the doors, SSs and breakables): `2·li` is the placed
+    /// object, `2·li + 1` its LOD variant; the one `obj+0xD8` points at draws at the placement
+    /// matrix, the other is `None` (collapsed). `Control_NextLOD` 0x1349b0 is the swap (`Lock::lod_next`).
+    fn lock_slot(&self, s: &Sim, k: usize) -> Option<Mat4> {
+        let j = k.checked_sub(s.drones.doors.list.len() + s.drones.sss.list.len() + s.drones.breaks.list.len())?;
+        let l = s.drones.locks.get(j / 2)?;
+        (l.lod_next == (j % 2 == 1)).then(|| self.lock_matrices.get(j / 2).copied()).flatten()
+    }
+
     pub fn char_hidden(&self, ci: usize, opts: ViewOpts) -> bool {
         let Some(s) = self.sim.as_ref() else { return false };
         // A first-person view model that is not the held weapon's is never drawn: only the held
@@ -9495,8 +9534,10 @@ pub fn build(level: &Level, cels_only: bool, skeletons: &HashMap<u8, Skeleton>, 
                 if let Some(q) = s.drones.sss.list.get(dr as usize - s.drones.doors.list.len()) { return transform(&q.matrix, v.pos); }
                 // Past the SSs: the breakables (`Breaks::create` order) — gone once `Break_Kill` 0x12b970 ran.
                 let bi = dr as usize - s.drones.doors.list.len() - s.drones.sss.list.len();
-                let Some(b) = s.drones.breaks.list.get(bi).filter(|b| !b.dead) else { return [0.0, -10000.0, 0.0]; };
-                return transform(&b.matrix, v.pos);
+                if let Some(b) = s.drones.breaks.list.get(bi) { if b.dead { return [0.0, -10000.0, 0.0]; } return transform(&b.matrix, v.pos); }
+                // Past the breakables: the locks' placed object / LOD variant pairs.
+                let Some(m) = self.lock_slot(s, dr as usize) else { return [0.0, -10000.0, 0.0]; };
+                return transform(&m, v.pos);
             }
             if let Some(a) = v.attachment { return transform(&attach[a as usize], v.pos); }
             let c = &self.characters[v.character as usize];
@@ -9786,7 +9827,10 @@ pub fn build(level: &Level, cels_only: bool, skeletons: &HashMap<u8, Skeleton>, 
                     None => match s.drones.sss.list.get(k - s.drones.doors.list.len()) {
                         Some(q) => q.matrix,
                         // `Break_Kill` 0x12b970: obj+0xFE bit 0 → the delete pass removes the object [M].
-                        None => brk(k).filter(|b| !b.dead).map_or(FAR, |b| b.matrix),
+                        None => match brk(k) {
+                            Some(b) => if b.dead { FAR } else { b.matrix },
+                            None => self.lock_slot(s, k).unwrap_or(FAR),
+                        },
                     },
                 };
             }
