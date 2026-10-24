@@ -8501,6 +8501,9 @@ pub fn build(level: &Level, cels_only: bool, skeletons: &HashMap<u8, Skeleton>, 
             // end and MP, the call returns at once — the port's spawn does the same job by doing nothing
             // (docs/systems/anim-debug-and-queries.md, docs/port-map/unreached.md §863).
             let bond = nf_game::player::Bond::stand_at(&world, p0, yaw0);
+            // The spawn arrival settle is NOT armed on this structural fallback: the level start
+            // re-places the bond in lib.rs (the `Player_Init` 0x1910f8 path) and arms it there
+            // (`arm_spawn_settle` doc — the [L] evidence is the boot's level-start placement).
             let mut drones = nf_game::drone::Drones::new(list, rng);
             drones.lights = lights;
             // The selected difficulty BEFORE the creates: every create-time gate reads it

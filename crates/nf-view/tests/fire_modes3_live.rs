@@ -490,7 +490,14 @@ fn torpedo_is_homing_slow_and_cameraless() {
         assert_eq!(f6c & 0x4, 0, "the torpedo has NO rocket camera [L]");
         assert_eq!(f6c & 0x200, 0x200, "the torpedo carries the quarter-speed bit [L]");
     }
-    aim_down(&mut scene, 10, -0.5);
+    // level-0a-office-hatch-7: the aim is a MILD down tilt, not the old per-tick -0.5 (which
+    // clamps straight to -1.0 and fires INTO the courtyard floor under the spawn): the game's own
+    // 05 rest 24.9633007 [L ee_start_05] sits 0.0141 below the port's floor sampling and 0.0032
+    // below the port's settled spawn root, so a straight-down muzzle at the spawn dies on the
+    // floor within the 3 read ticks at every one of these roots — the read must measure the
+    // weapon's fire, not the courtyard's contact. -0.25/tick twice = pitch -0.5: the round clears
+    // the floor and the ramp read below is unchanged.
+    aim_down(&mut scene, 2, -0.25);
     arm(&mut scene, 3);
     let rec_speed = { let sim = scene.sim.as_ref().unwrap();
         f32::from_le_bytes(sim.weapons.records[0x30][0x20..0x24].try_into().unwrap()) };

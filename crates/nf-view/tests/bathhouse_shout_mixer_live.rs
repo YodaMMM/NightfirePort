@@ -101,7 +101,18 @@ fn the_bunker_trio_shout_reaches_the_mixer_with_the_ambients_live() {
         }
     }
     let (id, f, l, r) = shout.expect("a bunker guard's attack shout keyed on and its stream Play reached the mixer");
-    assert!(l > 0.0 && r > 0.0, "shout id {id} reached the mixer silent (l={l}, r={r}) at tick {f}");
+    // The both-channels pin was master-boot-backed, not game-backed: the game's own pan rule
+    // (`PS2_SFXCalculate3D` 0x1060c) legitimately produces a clamped right channel —
+    // r = (((dot(-Norm,u)+1000)·att)/2000)·front/100 in INTEGER math, and a source within the
+    // clamp wedge of exactly screen-left truncates to r = 0 (e.g. dv/100 = (143, 6, 32) from the
+    // teleported plate to guard 13: u = (979, 41, 219), att = 53, front = 80 → l = 41, r =
+    // (21·53)/2000 = 0 — the game's own arithmetic, verified line-by-line against the port's
+    // levels() [M 0x1060c + 0x103bc DotProduct + 0x10470 NormaliseVector + 0x57e8 GetMyPos]).
+    // Which channel balance the GAME mixes on this route is a live question (report "Live
+    // checks" 1) — the decompile-backed pin is the doc's own "reaches the mixer at non-zero
+    // volume": the shout is AUDIBLE (l > 0). Levelled per the fact-tag rules; restore an
+    // r-pin only on a live read that backs it.
+    assert!(l > 0.0, "shout id {id} reached the mixer silent (l={l}, r={r}) at tick {f}");
     // Sister: the ambients keep their voices where the game keeps them — through the shout the
     // budget never steals them (their 4-8 voices sit far below the game's 15-voice budget) [M 0x4220].
     let (ids, _) = tick(&mut scene, &mut snd);
