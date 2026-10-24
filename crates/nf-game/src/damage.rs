@@ -1,6 +1,7 @@
 //! Bullets against drones: the hit boxes (`AnimGetCollData` 0x1c4ac8), the ray test (`Collide_Jointy` 0x1ec180) and the
 //! damage (`NDrone2_HitDamage` 0x145558). Spec: docs/systems/drone-damage.md.
 
+use crate::drone::Data;
 use crate::world::V3;
 use nf_formats::anim::{self, Mat4};
 use nf_formats::hitbox::CollisionBone;
@@ -67,6 +68,71 @@ pub fn ray_box(start: V3, ray: V3, b: &HitBox) -> Option<f32> {
 /// `Collide_Jointy` for a ray: the first box in list order the segment hits (not the nearest), with its t.
 pub fn first_box_hit(start: V3, ray: V3, boxes: &[HitBox]) -> Option<(i16, f32)> {
     boxes.iter().find_map(|b| ray_box(start, ray, b).map(|t| (b.part, t)))
+}
+
+/// Bond's skin record hash (`AnimObj+0x94 → +0` [L ee_start_05.bin @ AnimObject 0x16cb8a0:
+/// 0x5000007]; scale (1.0, 1.0, 1.0) [L same]). Not the astronaut 0x5000078, so
+/// `CollisionBones::for_skin` picks `HumanCollisionBones`.
+pub const BOND_SKIN: u32 = 0x0500_0007;
+
+/// Bond's standing idle pose, root-local frame [L]: the AnimObject+0xB8 palette of the 07000001 /
+/// 07000005 / 0700000a level-start EE snapshots with the object matrix (obj+0x90) undone — the
+/// three levels agree to ±0.011 on every axis (the idle sway; all three are the idle's first
+/// phase). Each row: (bone, local translation, local rotation rows). The rotation is the palette
+/// matrix's 3×3 with the object matrix right-multiplied out; the rebuild is
+/// `world_rows = rows · Ryaw`, `world_trans = pos + t · Ryaw` (row-vector convention, the game's
+/// `psiBuildMatrixPalette` 0x111498 composes the local pose with obj+0x90 the same way).
+/// The anim-driven palette (walking, crouching) is not modelled — this is the idle stance.
+#[rustfmt::skip]
+pub(crate) const BOND_IDLE_POSE: [(i16, [f32; 3], [[f32; 3]; 3]); 20] = [
+    ( 0, [0.0000, 0.0109, 0.0000], [[0.7277, -0.0418, 0.6847], [0.1719, 0.9774, -0.1230], [-0.6641, 0.2072, 0.7184]]),
+    ( 1, [-0.0153, 0.0683, 0.0197], [[0.7267, 0.0363, 0.6860], [-0.1763, 0.9750, 0.1351], [-0.6639, -0.2191, 0.7150]]),
+    ( 4, [-0.0900, 0.5049, 0.1191], [[0.8618, 0.1477, 0.4853], [-0.3143, 0.9063, 0.2824], [-0.3981, -0.3959, 0.8275]]),
+    ( 5, [-0.1239, 0.5449, 0.1671], [[0.9338, 0.2650, 0.2406], [-0.3129, 0.9308, 0.1892], [-0.1738, -0.2519, 0.9520]]),
+    (19, [0.0615, 0.3772, 0.2472], [[-0.0012, -0.2600, 0.9656], [0.6518, 0.7321, 0.1980], [-0.7584, 0.6296, 0.1685]]),
+    (20, [0.0758, 0.2789, 0.5224], [[-0.6074, 0.3519, 0.7122], [0.6737, 0.7032, 0.2272], [-0.4208, 0.6178, -0.6642]]),
+    (21, [-0.1123, 0.3838, 0.7060], [[-0.8306, 0.4493, 0.3290], [-0.4447, -0.8908, 0.0940], [0.3353, -0.0683, 0.9396]]),
+    (23, [-0.2304, 0.4311, 0.7701], [[0.0830, 0.9957, 0.0402], [-0.9380, 0.0644, 0.3406], [0.3366, -0.0660, 0.9393]]),
+    (31, [-0.2504, 0.3748, -0.0176], [[0.6330, 0.3029, -0.7125], [-0.3775, 0.9242, 0.0575], [0.6759, 0.2326, 0.6993]]),
+    (32, [-0.4514, 0.2607, 0.1769], [[-0.8627, -0.3721, -0.3424], [-0.4043, 0.9143, 0.0249], [0.3038, 0.1599, -0.9392]]),
+    (35, [-0.1961, 0.3576, 0.2428], [[0.0141, 0.0041, -0.9999], [-0.9975, 0.0694, -0.0138], [0.0694, 0.9976, 0.0051]]),
+    (39, [-0.2181, 0.3812, 0.3792], [[-0.3646, 0.0301, -0.9307], [-0.9286, 0.0627, 0.3659], [0.0694, 0.9976, 0.0051]]),
+    (49, [-0.1599, -0.0928, -0.0344], [[0.3020, -0.2935, 0.9070], [0.4764, 0.8706, 0.1231], [-0.8257, 0.3949, 0.4027]]),
+    (50, [-0.3769, -0.4662, -0.0938], [[0.2848, -0.2926, 0.9128], [-0.2035, 0.9121, 0.3559], [-0.9367, -0.2872, 0.2002]]),
+    (51, [-0.2153, -0.9009, -0.2974], [[0.2077, 0.0005, 0.9782], [-0.0002, 1.0000, -0.0005], [-0.9782, -0.0001, 0.2077]]),
+    (52, [-0.3396, -0.9670, -0.2931], [[0.2077, 0.0006, 0.9782], [-0.0002, 1.0000, -0.0005], [-0.9782, -0.0001, 0.2077]]),
+    (53, [0.0379, -0.1041, 0.1517], [[0.9783, 0.1212, 0.1682], [0.0336, 0.7078, -0.7056], [-0.2046, 0.6959, 0.6884]]),
+    (54, [0.0397, -0.4038, 0.4664], [[0.9840, 0.1086, 0.1415], [-0.1132, 0.9933, 0.0251], [-0.1378, -0.0407, 0.9896]]),
+    (55, [0.1249, -0.8976, 0.3924], [[0.9930, -0.0389, 0.1117], [0.0361, 0.9990, 0.0272], [-0.1127, -0.0230, 0.9934]]),
+    (56, [0.1278, -0.9710, 0.5125], [[0.9935, -0.0125, 0.1129], [0.0121, 0.9999, 0.0040], [-0.1129, -0.0026, 0.9936]]),
+];
+
+/// Bond's 16 body boxes (`AnimGetCollData` 0x1c4ac8 over `HumanCollisionBones` 0x2c6be8 [D]) at the
+/// [L] standing idle pose, riding Bond's yaw: the game's guard-round test is `Collide_Intersect`
+/// 0x1ebaa8:101-105's `Collide_Jointy` gate (the player obj carries glist and obj+0xFA bit 3 —
+/// both live [L ee_start_05.bin obj 0x16cefe0: glist 0x17381d0, +0xFA = 0x8]) with kind 0x201, so
+/// every round tests these boxes — the old upright cylinder was the documented deviation.
+/// Unchanged from the game: the box order (list order wins, `Collide_Jointy` 0x1ec180 returns on
+/// the first box hit), the part ids (bone a), the half extents × the skin scale, the box matrix =
+/// the other bone's rotation, entry 0's centre rule (the bone plus (0, bone.y − other.y, 0)).
+/// Not modelled: the palette's walk/crouch animation (the boxes hold the idle stance at any yaw).
+pub fn bond_boxes(d: &Data<'_>, yaw: f32, pos: V3) -> Vec<HitBox> {
+    let Some(skin) = d.skins.get(&BOND_SKIN) else { return Vec::new() };
+    let table = d.hitboxes.for_skin(BOND_SKIN);
+    let om = nf_formats::placement::object_matrix([0.0, yaw, 0.0], pos);
+    // The yaw matrix's 3×3 (row-vector rows; object_matrix's rows 0..2, the translation is row 3).
+    let ry = [[om[0][0], om[0][1], om[0][2]], [om[1][0], om[1][1], om[1][2]], [om[2][0], om[2][1], om[2][2]]];
+    let mut palette = vec![[[0.0, 0.0, 0.0, 0.0]; 4]; 60];
+    for (bone, t, r) in BOND_IDLE_POSE {
+        let mut m = [[0.0f32; 4]; 4];
+        for i in 0..3 {
+            for j in 0..3 { m[i][j] = r[i][0] * ry[0][j] + r[i][1] * ry[1][j] + r[i][2] * ry[2][j]; }
+        }
+        let tv = [0, 1, 2].map(|j| pos[j] + t[0] * ry[0][j] + t[1] * ry[1][j] + t[2] * ry[2][j]);
+        m[3] = [tv[0], tv[1], tv[2], 1.0];
+        palette[bone as usize] = m;
+    }
+    boxes(table, &palette, skin)
 }
 
 /// What `NDrone2_HitDamage` needs from the drone.

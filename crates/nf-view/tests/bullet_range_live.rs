@@ -92,14 +92,13 @@ fn the_sniper_record_rounds_fly_far_past_the_p2k_boundary() {
     let Some(iso) = iso() else { eprintln!("NF_ISO not set — skipping"); return };
     let mut scene = nf_view::load(&iso, "07000005.bin", false).expect("load 07000005");
     let sim = scene.sim.as_ref().unwrap();
-    let vol = nf_game::bullet::PlayerVolume { feet: [1e4, 0.0, 1e4], height: 0.1, radius: 0.1 };
     let x0 = 211.8f32;
     let mut b = nf_game::bullet::Bullet { pos: [x0, 25.0, 90.8], dir: [-1.0, 0.0, 0.0], speed: 13.2, travelled: 0.0,
         range: 1200.0, damage: 0.0, owner: 0, state: 0, weapon: 0x1e, flyby: false, bounces: 0, ..nf_game::bullet::Bullet::TAIL };
     let mut rng = nf_game::drone::Rng::new(5);
     let mut hit = None;
     for _ in 0..40 {
-        if let Some(nf_game::bullet::BulletEvent::World(p)) = b.update(&sim.world, &vol, [1e4, 0.0, 1e4], &mut rng) {
+        if let Some(nf_game::bullet::BulletEvent::World(p)) = b.update(&sim.world, &[], [1e4, 0.0, 1e4], &mut rng) {
             hit = Some(p);
             break;
         }

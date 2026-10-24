@@ -117,15 +117,21 @@ impl Bullet {
 #[derive(Clone, Debug, PartialEq)]
 pub enum BulletEvent {
     World(V3),
-    Player { damage: f32, at: V3 },
+    /// `part` = HITDATA+0x52, the winning box's bone id (`Collide_Jointy` 0x1ec180:126 — list
+    /// order, first box hit). SP damage carries no per-part scale (`Player_HandlePain` 0x1902c8's
+    /// part multipliers are the MP block only); the id is carried for the tests and the effects.
+    Player { damage: f32, at: V3, part: i16 },
     /// `Bullet_DoTrails` fly-by (sound id 0x1dc): a bullet whizzed past the viewer. Played at the closest point on
     /// the bullet's line to the camera, only for weapons with `+0x6C & 0x40000`, in single player, when the bullet's
     /// owner is not the player, within 3 units, on a 1-in-5 `Rand_Rand(5)` roll [M `Bullet_DoTrails`@0x12d890].
     FlyBy(V3),
 }
 
-/// Bond's hit volume: an upright cylinder from his feet to above his eye (*deviation*: the game tests 16 boxes on
-/// his skeleton, `HumanCollisionBones` 0x2c6be8 via `Collide_Jointy`; the viewer's Bond has no skeleton).
+/// A cylinder stand-in for a body volume. The guard-bullet tick now tests Bond's real 16 boxes
+/// (`damage::bond_boxes` — `HumanCollisionBones` 0x2c6be8 [D] via `Collide_Jointy` 0x1ec180 kind
+/// 0x201 [M]); this type remains for the game paths that really do use a coarse volume (the
+/// crosshair Check_Target's bounding test [M 0x1a7810], the MP combat and the viewer's occlusion
+/// stand-ins).
 #[derive(Clone, Copy, Debug)]
 pub struct PlayerVolume { pub feet: V3, pub height: f32, pub radius: f32 }
 
@@ -170,8 +176,12 @@ pub fn segment_cylinder(a: V3, b: V3, v: &PlayerVolume) -> Option<f32> {
 impl Bullet {
     /// One tick (`Bullet_update` + collision): the hit test covers the segment from the current position along the
     /// direction for max(step, 1) units; the nearest of world and Bond wins; ranged-out bullets die.
+    /// `boxes`: Bond's body boxes (`damage::bond_boxes`) — the game's guard rounds hit-test them
+    /// through `Collide_Jointy`'s kind-0x201 arm (first box in list order wins, HITDATA+0xc = the
+    /// radius·t the port's nearest-of replaces; the radius is common to every candidate box of the
+    /// one target so the ordering is unchanged).
     /// `viewer`: the camera eye (`glb_viewer + 0xc0`), for the `Bullet_DoTrails` fly-by test [M].
-    pub fn update(&mut self, world: &CollisionWorld, player: &PlayerVolume, viewer: V3, rng: &mut crate::drone::Rng) -> Option<BulletEvent> {
+    pub fn update(&mut self, world: &CollisionWorld, boxes: &[crate::damage::HitBox], viewer: V3, rng: &mut crate::drone::Rng) -> Option<BulletEvent> {
         if self.state >= 2 { return None; }
         if self.travelled > self.range { self.state = 2; return None; }
         let mut step = if self.state == 0 { (rng.frand(0.5) + 0.5) * self.speed } else { self.speed };
@@ -187,12 +197,13 @@ impl Bullet {
         // the game runs with the bit-0x8 DROP is the homing LOS (`Bullet_homing` 0x12f358:92,
         // flags 8) — the port's `segment_bullet` there.
         let tw = world.segment(self.pos, end);
-        let tp = segment_cylinder(self.pos, end, player);
+        let ray = [end[0] - self.pos[0], end[1] - self.pos[1], end[2] - self.pos[2]];
+        let tp = crate::damage::first_box_hit(self.pos, ray, boxes);
         let at = |t: f32| [self.pos[0] + (end[0] - self.pos[0]) * t, self.pos[1] + (end[1] - self.pos[1]) * t, self.pos[2] + (end[2] - self.pos[2]) * t];
         // CompHitData 0x1d33c0 [M] — QuickSort comparator id 2 (Collide_Update 0x1ea398 / Collide_RayIntersect 0x1ec690 / Collide_SphereIntersect 0x1ec940 / Collide_CylinderIntersect 0x1ecc00 / Collide_FilterBullets 0x1ece30 sort their hit lists by the f32 at HITDATA+0xc, ascending); the port keeps no hit list — the nearest-of comparison below replaces the sort.
         let ev = match (tw, tp) {
-            (Some(w), Some(p)) if p < w => Some(BulletEvent::Player { damage: self.damage, at: at(p) }),
-            (_, Some(p)) if tw.is_none() => Some(BulletEvent::Player { damage: self.damage, at: at(p) }),
+            (Some(w), Some((part, p))) if p < w => Some(BulletEvent::Player { damage: self.damage, at: at(p), part }),
+            (_, Some((part, p))) if tw.is_none() => Some(BulletEvent::Player { damage: self.damage, at: at(p), part }),
             (Some(w), _) => Some(BulletEvent::World(at(w))),
             _ => None,
         };
@@ -370,12 +381,11 @@ mod tests {
     #[test]
     fn p2k_round_stops_at_plus_1c_while_a_1200_record_passes_150() {
         let world = CollisionWorld::empty();
-        let vol = PlayerVolume { feet: [1e4, 0.0, 1e4], height: 0.1, radius: 0.1 };
         // The P2K: range 50.0 (the disc's +0x1C), speed 5.0 (+0x20 [D census rec 2]).
         let mut p2k = Bullet { pos: [0.0, 1.0, 0.0], dir: [0.0, 0.0, 1.0], speed: 5.0, travelled: 0.0, range: 50.0,
             damage: 0.0, owner: 0, state: 0, weapon: 0x02, flyby: false, bounces: 0, ..Bullet::TAIL };
         let mut rng = crate::drone::Rng::new(3);
-        for _ in 0..40 { if p2k.update(&world, &vol, [1e4, 0.0, 1e4], &mut rng).is_some() { break } }
+        for _ in 0..40 { if p2k.update(&world, &[], [1e4, 0.0, 1e4], &mut rng).is_some() { break } }
         assert_eq!(p2k.state, 2, "the P2K round dies past its +0x1C = 50 [M 0x12e95c]");
         let along = p2k.pos[2];
         assert!((45.0..=50.5).contains(&along), "the final position sits at the clamped +0x1C boundary, got {along}");
@@ -384,7 +394,7 @@ mod tests {
         let mut sn = Bullet { pos: [0.0, 1.0, 0.0], dir: [0.0, 0.0, 1.0], speed: 5.0, travelled: 0.0, range: 1200.0,
             damage: 0.0, owner: 0, state: 0, weapon: 0x1e, flyby: false, bounces: 0, ..Bullet::TAIL };
         let mut rng2 = crate::drone::Rng::new(3);
-        for _ in 0..40 { if sn.update(&world, &vol, [1e4, 0.0, 1e4], &mut rng2).is_some() { break } }
+        for _ in 0..40 { if sn.update(&world, &[], [1e4, 0.0, 1e4], &mut rng2).is_some() { break } }
         assert_eq!(sn.state, 1, "the 1200 record's round is still flying");
         assert!(sn.pos[2] >= 150.0, "it passes 150 (got {}), the range the 831 note expected the P2K to fly", sn.pos[2]);
         // The clamp is exact: a 1.0-speed round with range 50 lands its FINAL position within one
@@ -392,7 +402,7 @@ mod tests {
         let mut slow = Bullet { pos: [0.0, 1.0, 0.0], dir: [0.0, 0.0, 1.0], speed: 1.0, travelled: 0.0, range: 50.0,
             damage: 0.0, owner: 0, state: 0, weapon: 0x02, flyby: false, bounces: 0, ..Bullet::TAIL };
         let mut rng3 = crate::drone::Rng::new(3);
-        for _ in 0..80 { if slow.update(&world, &vol, [1e4, 0.0, 1e4], &mut rng3).is_some() { break } }
+        for _ in 0..80 { if slow.update(&world, &[], [1e4, 0.0, 1e4], &mut rng3).is_some() { break } }
         assert!((slow.pos[2] - 50.0).abs() < 1.01, "the clamped boundary: {} vs 50.0", slow.pos[2]);
     }
 
@@ -408,23 +418,22 @@ mod tests {
     #[test]
     fn the_watch_round_dies_at_plus_1c_after_the_first_segment() {
         let world = CollisionWorld::empty();
-        let vol = PlayerVolume { feet: [1e4, 0.0, 1e4], height: 0.1, radius: 0.1 };
         // 0x4E: range 4.0, speed 33.33 [L weapon_data 0x2bf150 + 0x4E·0x10C: +0x1C, +0x20].
         let mut w = Bullet { pos: [0.0, 1.0, 0.0], dir: [0.0, 0.0, 1.0], speed: 33.33, travelled: 0.0, range: 4.0,
             damage: 0.0, owner: 0, state: 0, weapon: 0x4e, flyby: false, bounces: 0, ..Bullet::TAIL };
         let mut rng = crate::drone::Rng::new(3);
         // The first (state-0) tick: the step clamps onto the +0x1C boundary.
-        w.update(&world, &vol, [1e4, 0.0, 1e4], &mut rng);
+        w.update(&world, &[], [1e4, 0.0, 1e4], &mut rng);
         assert!((w.pos[2] - 4.0).abs() < 1e-3, "the state-0 segment lands ON the 4.0 boundary [M 0x12f014-0x12f02c], got {}", w.pos[2]);
         assert!(w.travelled > 4.0, "BU+0xF4 keeps the overshoot [M 0x12f010], got {}", w.travelled);
         // The next tick's head check kills the round: no further segment.
-        w.update(&world, &vol, [1e4, 0.0, 1e4], &mut rng);
+        w.update(&world, &[], [1e4, 0.0, 1e4], &mut rng);
         assert_eq!(w.state, 2, "the watch round dies at the +0x1C = 4.0 death [M 0x12e95c-0x12e984]");
         // 0x4F's 8.0: the same law, the boundary at 8.0.
         let mut w2 = Bullet { pos: [0.0, 1.0, 0.0], dir: [0.0, 0.0, 1.0], speed: 33.33, travelled: 0.0, range: 8.0,
             damage: 0.0, owner: 0, state: 0, weapon: 0x4f, flyby: false, bounces: 0, ..Bullet::TAIL };
         let mut rng2 = crate::drone::Rng::new(3);
-        w2.update(&world, &vol, [1e4, 0.0, 1e4], &mut rng2);
+        w2.update(&world, &[], [1e4, 0.0, 1e4], &mut rng2);
         assert!((w2.pos[2] - 8.0).abs() < 1e-3, "the 0x4F boundary is 8.0 [L +0x1C], got {}", w2.pos[2]);
     }
 
@@ -471,7 +480,6 @@ mod tests {
     fn flyby_plays_within_three_units_on_one_in_five() {
         let world = CollisionWorld::empty();
         // A clean world (no collision) so the bullet flies past.
-        let vol = PlayerVolume { feet: [100.0, 0.0, 100.0], height: 1.8, radius: 0.25 };
         // Viewer at the origin; bullet flies along +z, 2 units to the side (within 3).
         let mut b = Bullet { pos: [0.0, 1.0, -50.0], dir: [0.0, 0.0, 1.0], speed: 15.0, travelled: 0.0, range: 200.0,
             damage: 0.0, owner: 1, state: 0, weapon: 0x06, flyby: true, bounces: 0, ..Bullet::TAIL };
@@ -479,7 +487,7 @@ mod tests {
         // The bullet flies many ticks past the viewer; the 1-in-5 roll should eventually fire.
         let mut fired = false;
         for _ in 0..60 {
-            if let Some(BulletEvent::FlyBy(_)) = b.update(&world, &vol, [0.0; 3], &mut rng) { fired = true; break; }
+            if let Some(BulletEvent::FlyBy(_)) = b.update(&world, &[], [0.0; 3], &mut rng) { fired = true; break; }
         }
         assert!(fired, "a fly-by bullet within 3 units should fire on the 1-in-5 roll within 60 ticks");
         // Sister: a bullet without the fly-by flag never fires.
@@ -488,7 +496,7 @@ mod tests {
         let mut rng2 = crate::drone::Rng::new(0);
         let mut fired2 = false;
         for _ in 0..60 {
-            if let Some(BulletEvent::FlyBy(_)) = b2.update(&world, &vol, [0.0; 3], &mut rng2) { fired2 = true; break; }
+            if let Some(BulletEvent::FlyBy(_)) = b2.update(&world, &[], [0.0; 3], &mut rng2) { fired2 = true; break; }
         }
         assert!(!fired2, "no fly-by flag → no FlyBy event");
         // Sister: a bullet 10 units away (SqDist 100 > 9) never fires even with the flag.
@@ -497,7 +505,7 @@ mod tests {
         let mut rng3 = crate::drone::Rng::new(0);
         let mut fired3 = false;
         for _ in 0..60 {
-            if let Some(BulletEvent::FlyBy(_)) = b3.update(&world, &vol, [0.0; 3], &mut rng3) { fired3 = true; break; }
+            if let Some(BulletEvent::FlyBy(_)) = b3.update(&world, &[], [0.0; 3], &mut rng3) { fired3 = true; break; }
         }
         assert!(!fired3, "beyond 3 units → no fly-by");
     }
