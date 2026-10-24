@@ -41,3 +41,17 @@ modes with the placement census comment.
   tree. Merged origin/master (78b02cfd batch) → final tree bb394a09; suite restarted clean
   (prior run was a mixed tree). Baseline known-fails on the slim ISO: identity_disc + 3
   disc_golden (same set as the older /home/z/suite.log).
+- (20:42 UTC) Final hours' verification passes: Defaults' 40 prop ids confirmed at INSTRUCTION
+  level (first 24 in disassembly order 1,6,7,10,0xc,0x48,0xf,0x11,0x13,0x18,0x1d,0x4c,0x21,0x29,
+  0x2e,0x37,0x41,0x42,0x4f,0x51,0x5a,0x24,0x3c,0x1f — exact match to the port's list) and
+  BOT_init's 0xb0 DIVars memset confirmed [M 0x1249e8:95]. New finding integrated: the coder
+  drone's +0x5A2 = 4 (CoderCreate constant) is TRANSIENT — PostLoad_Init → DefaultInit runs
+  DoTypeSettingsOLD unconditionally (Drone_Create sets DIVars word 0 = obj, 0x136be0), whose
+  by-mode arm overwrites it to 6 InitPatrol via Defaults' prop 0x24 [M 0x14d2e8:0x14d3bc]; the
+  port's start_state computes the same 6 (now pinned in dmode_row0_near_player_live), and the
+  movie test's pre-enable IDLE pin is behaviourally equivalent (start script → PlayScript first)
+  — its doc comment now carries the full chain instead of citing the transient 4. Suite on the
+  final tree: at the 20:42 cutoff 556/784 binaries = 2586 passed / 7 failed / 130 ignored; all
+  failures pre-existing (identity_disc + 3 disc_golden slim-ISO set; 3 pylon failures identical
+  to the previous session's baseline; 3 exit -9 limit-kill CRASHes, of which the previous run had
+  21). Report written to docs/reports/ai-dmode-inits.md; finishing (push, finish.sh, ntfy).

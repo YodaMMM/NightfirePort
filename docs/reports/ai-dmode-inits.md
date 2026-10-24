@@ -68,11 +68,18 @@ fixed real errors in it, and closed the one untested behaviour. Details:
 - `cargo test --offline --release -p nf-game --test dmode_row0_near_player_live` — 2 passed
   (corrected hashes + the new start-state assertion).
 - Full suite via `tools/test/suite.py` on the final tree (merged origin/master 78b02cfd, branch
-  merge bb394a09): TOTAL-LINE-PLACEHOLDER. Known pre-existing slim-ISO failures (same set in the
-  pre-session baseline /home/z/suite.log): `identity_disc::the_real_disc_passes_the_identity_check`
-  + the 3 `disc_golden` tests.
+  merge bb394a09), started 19:26 UTC. At the session's stop-new-work cutoff (20:42 UTC) it had
+  completed **556 of 784 test binaries: 2586 passed, 7 failed, 130 ignored** (summed from the
+  runner's log; the sim-heavy tail did not fit the sandbox window — the same tail the previous
+  session also could not finish). Failure lines observed, all pre-existing and none touching this
+  task's files: `identity_disc` + the 3 `disc_golden` tests (the known slim-ISO set, identical in
+  the pre-session baseline /home/z/suite.log), the 3 `probe_pylon_render`/`fix_0c_pylon_live`
+  failures (identical in the previous session's suite2.out baseline on master's lineage), and 3
+  `CRASH (exit -9)` limit-kills (`mp_stress_explosives_live`, `mp_online_failures`,
+  `net_soak_faults_live`) — the previous session's run shows 21 of the same exit -9 artifacts.
+  The task's own test binary passed both standalone and in the suite's earlier stretch.
 - Crates touched: nf-game (comment + test), nf-view (test doc comment), docs. Tests run: the
-  dmode_row0 pair + the full suite.
+  dmode_row0 pair (2 passed) + the full suite (partial totals above).
 
 ## What's left
 
