@@ -3,7 +3,7 @@
 //! The existing `abseil_damage_live` pins real-round damage at the difficulty-1 rope guard
 //! (p258, switch channel 0x13) from the (22.40, 24.01, −1.39) repro spot with the aim written
 //! straight into `bond.yaw/pitch` — it passes, so it never carried the symptom. This file widens
-//! the search along every axis the task names, real input only, and pins the two divergences it
+//! the search along every axis below, real input only, and pins the two divergences it
 //! found:
 //!
 //! 1. **The never-descending roper** (`the_roping_guard_descends_to_his_opponent_without_needing_sight`):
@@ -299,7 +299,7 @@ fn the_difficulty_2_abseiler_takes_the_rounds_the_same_way() {
 
 // ---- The widened-search probes (kept for the next session; not CI) --------------------------------
 
-/// The full widened matrix the task asked for: every abseil placement × difficulty 1/2/3 × the
+/// The full widened matrix: every abseil placement × difficulty 1/2/3 × the
 /// stairwell landings × auto-aim on/off, logging per config where the rounds end and whether the
 /// guard's health drops. Run with
 /// `NF_ISO=… cargo test -p nf-view --test abseil_damage_matrix -- --ignored --nocapture probe_all`
