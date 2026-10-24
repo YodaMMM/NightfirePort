@@ -26,7 +26,7 @@ create the character AI, not cameras — see §2.
 
 ## 2. "Drone templates that are cameras or turrets" — there are none [M]
 
-The task brief expected camera/turret templates among `Drone_Create` 0x136be0 / the NDrone2
+One might expect camera/turret templates among `Drone_Create` 0x136be0 / the NDrone2
 classes. The decompile says otherwise: `Drone_Create` 0x136be0 copies the placement's 0x84
 bytes of character data into a `DCVars` AI record (`NDrone2_CreateObj`), and every DMODE
 initializer (`NDrone2_init_DMODE_*`, 0x14d528..0x14e568 — Defaults, Normal, Guard, Retreater,
@@ -123,7 +123,7 @@ the port's five creators produce exactly the [D] placement counts above, per lev
   0x2000039, 7, 0x48403080, 1)` [M 0x180498 case 6], and the registered barrel object's
   ext+0xd4/d8 spin angle for the renderer.
 
-## 6. Live checks for the main agent (optional confirmation)
+## 6. Live checks (optional confirmation)
 
 1. `gdbwatch` on `Collide_LineOfSight` 0x1edf50 during 0700000a with ch 18 raised and Bond
    behind the bridge structure in gun #636's cone: expect the call with filter 0x72f to
