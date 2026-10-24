@@ -6474,6 +6474,8 @@ fn casing_matrix(c: &nf_game::casing::Casing) -> Mat4 {
 /// re-uploads lights [M View_DrawObjList 0x1e69a0:75-98] — so the gun takes NO point lights. The renderer
 /// zeroes them for these draws; `node` is otherwise read only for World cel culling.
 pub const VIEW_MODEL_NODE: u32 = u32::MAX - 1;
+/// Posed slots per gun emplacement: the base object, then one per `gunimp::TURRET_ARTS` gun child.
+const GUNIMP_SLOTS: usize = 1 + nf_game::gunimp::TURRET_ARTS.len();
 
 /// Tracer slots (bullets drawn at once).
 const TRACER_SLOTS: usize = 32;
@@ -8038,6 +8040,9 @@ pub fn build(level: &Level, cels_only: bool, skeletons: &HashMap<u8, Skeleton>, 
                 // "Lock - KeypadUnlocked" [D block 0x27]) rides the posed slot space below, so the
                 // unlock's `Control_NextLOD` can swap it.
                 if kind == 0x2e && level.maps[map].lod_target(object).is_some() { *misc_drawn.entry(kind).or_default() += 1; continue; }
+                // A gun emplacement (0x34) turns with its mount: its base and gun child ride the posed
+                // slot space below (`GunImp_Update` 0x1320d8:162-173 re-poses both every tick).
+                if kind == 0x34 { *misc_drawn.entry(kind).or_default() += 1; continue; }
                 // The 0x800 dim, the same rule the main static loop applies (View_SetupRenderModes_Tweak 0x1e5888).
                 let mult = if obj.flags & 0x800 != 0 {
                     let mx = nf_formats::placement::object_matrix(p.rotation, p.translation);
@@ -8160,6 +8165,32 @@ pub fn build(level: &Level, cels_only: bool, skeletons: &HashMap<u8, Skeleton>, 
                 for (k, o) in [object, next].into_iter().enumerate() {
                     let inst = Instance { map, object: o, matrix: mx, placement: p.clone() };
                     add_instance(level, &inst, Layer::Character, None, &mut groups, None, None, Some((lock_base + 2 * li + k) as u16), None, [1.0; 3], &room_cels, u32::MAX, u32::MAX);
+                }
+            }
+            // The gun emplacements (0x34, `Props::create`'s order — every 0x34 placement), after the
+            // locks: GUNIMP_SLOTS per mount — the placement's base object, then one slot per
+            // `TURRET_ARTS` gun child (`GunImp_Create` 0x131f20:85-89 builds the child from
+            // `TurretGuns[ext+0x9d].art`; the MP weapon set picks the entry later in this build, so
+            // every art gets a slot and `frame_state` shows the mount's own). Base at `base_matrix`,
+            // gun at `barrel_matrix` [M GunImp_Update 0x1320d8:162-173].
+            let n_locks = level.maps[m].placements.iter().filter(|p| p.flags & 0xff == 0x2e).count();
+            let gun_base = lock_base + 2 * n_locks;
+            if cels_only {
+                for (gi, p) in level.maps[m].placements.iter().filter(|p| p.flags & 0xff == 0x34).enumerate() {
+                    let slot0 = gun_base + GUNIMP_SLOTS * gi;
+                    let mx = nf_formats::placement::object_matrix(p.rotation, p.translation);
+                    let target = if p.by_hash() { level.by_hash.get(&p.hashcode).copied() }
+                        else if (p.index as usize) < level.maps[m].objects.len() { Some((m, p.index as usize)) } else { None };
+                    let has_gfx = |(cm, co): (usize, usize)| level.maps[cm].objects[co].gfx.leaves.iter().any(|l| !l.batches.is_empty());
+                    if let Some((map, object)) = target.filter(|&t| has_gfx(t)) {
+                        let inst = Instance { map, object, matrix: mx, placement: p.clone() };
+                        add_instance(level, &inst, Layer::Character, None, &mut groups, None, None, Some(slot0 as u16), None, [1.0; 3], &room_cels, u32::MAX, u32::MAX);
+                    }
+                    for (a, art) in nf_game::gunimp::TURRET_ARTS.iter().enumerate() {
+                        let Some((map, object)) = level.by_hash.get(art).copied().filter(|&t| has_gfx(t)) else { continue };
+                        let inst = Instance { map, object, matrix: mx, placement: p.clone() };
+                        add_instance(level, &inst, Layer::Character, None, &mut groups, None, None, Some((slot0 + 1 + a) as u16), None, [1.0; 3], &room_cels, u32::MAX, u32::MAX);
+                    }
                 }
             }
             // Level-placed pickups (`Pickup_Create` 0x18dda0): `View_DrawObjectGlist` 0x1e6780 draws
@@ -9458,7 +9489,17 @@ pub fn build(level: &Level, cels_only: bool, skeletons: &HashMap<u8, Skeleton>, 
     /// matrix, the other is `None` (collapsed). `Control_NextLOD` 0x1349b0 is the swap (`Lock::lod_next`).
     fn lock_slot(&self, s: &Sim, k: usize) -> Option<Mat4> {
         let j = k.checked_sub(s.drones.doors.list.len() + s.drones.sss.list.len() + s.drones.breaks.list.len())?;
-        let l = s.drones.locks.get(j / 2)?;
+        let Some(l) = s.drones.locks.get(j / 2) else {
+            // Past the locks: the gun emplacements, GUNIMP_SLOTS each — slot 0 the base at
+            // `base_matrix`, slot 1 + a the `TURRET_ARTS[a]` gun child at `barrel_matrix`, shown only
+            // when it is this mount's art [M GunImp_Update 0x1320d8:162-173].
+            let g = j.checked_sub(2 * s.drones.locks.len())?;
+            let gi = s.drones.props.gunimps.get(g / GUNIMP_SLOTS)?;
+            return match g % GUNIMP_SLOTS {
+                0 => Some(gi.base_matrix()),
+                p => (gi.art_slot() == Some(p - 1)).then(|| gi.barrel_matrix()),
+            };
+        };
         (l.lod_next == (j % 2 == 1)).then(|| self.lock_matrices.get(j / 2).copied()).flatten()
     }
 
