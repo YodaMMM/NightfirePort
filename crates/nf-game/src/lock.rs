@@ -102,6 +102,12 @@ pub struct Lock {
     pub scan_solved: u8,
     /// The game's lock state word is 5 (scanning) while a scan runs [M 0x1ae3d8:188].
     pub scanning: bool,
+    /// `Control_NextLOD` 0x1349b0 has run: `obj+0xD8` is the glist's LOD variant (the keypad's
+    /// "Lock - KeypadUnlocked" [D block 0x27]). The player unlock swaps at once [M Lock_Unlock
+    /// 0x1b0650:23] and case 1 swaps again when the open framelist ends [M 0x1ae3d8 case 1]; the
+    /// chain ends at the variant (its +0x40 is null), so a re-lock's NextLOD [M 0x1b0750] is a no-op
+    /// and the variant stays. The draw shows the variant from the first unlock on.
+    pub lod_next: bool,
 }
 
 impl Lock {
@@ -131,6 +137,7 @@ impl Lock {
                 scan_progress: 0,
                 scan_solved: 0,
                 scanning: false,
+                lod_next: false,
             });
         }
         out
@@ -414,7 +421,7 @@ mod tests {
         Lock {
             placement: 0, pos: [0.0; 3], radius: 1.0, out, key_channels: [0xffff; 2],
             burn: 0, burned: false, unlock_on_operative: false, unlocked: false,
-            kind, code, scan_progress: 0, scan_solved: 0, scanning: false,
+            kind, code, scan_progress: 0, scan_solved: 0, scanning: false, lod_next: false,
             burn_a: 0xff, burn_b: 0xff, grace: 0,
         }
     }

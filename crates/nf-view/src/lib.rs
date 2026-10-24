@@ -6427,6 +6427,11 @@ pub fn run() -> Result<()> {
                 if let Some((ct, cc)) = std::env::var("NF_CH_AT").ok().and_then(|v| v.split_once(':').and_then(|(a, b)| Some((a.parse::<u32>().ok()?, b.parse::<u32>().ok()?)))) {
                     if ct == t { let f = sim.drones.frame; sim.drones.channels.set(cc, 1, f); }
                 }
+                // Render aid (keypad LOD swap): `NF_UNLOCK_AT=t:out` unlocks the locks with that out
+                // channel on tick t (the state `Lock_Unlock` 0x1b0650 leaves), to render the swapped model.
+                if let Some((ut, uo)) = std::env::var("NF_UNLOCK_AT").ok().and_then(|v| v.split_once(':').and_then(|(a, b)| Some((a.parse::<u32>().ok()?, b.parse::<u16>().ok()?)))) {
+                    if ut == t { for l in sim.drones.locks.iter_mut().filter(|l| l.out == uo) { l.unlocked = true; } }
+                }
                 // Render aid (health-pane-fade): `NF_PANE_FADE=1` turns the pane-fade option on
                 // (`decay_gate`, PlayerSetting+0xB) from tick 1, so BL+0x8BC decays and the pane fades.
                 if t == 1 && std::env::var_os("NF_PANE_FADE").is_some() { sim.drones.decay_gate = true; }
