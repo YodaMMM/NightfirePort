@@ -20,8 +20,9 @@ fn iso() -> Option<String> { std::env::var("NF_ISO").ok() }
 // The baseline is re-pinned only for deliberate scene-content changes. Those so far: the per-character
 // light pick (the game picks lights per object [M View_DrawObjList 0x1e69a0:73-81]); the swoosh ribbon
 // pools and 32 projectile slots per projectile mesh; the switch-script lasers' ON art (07000014); the
-// captains' swapped skins (`NDrone2_DefaultInit` 0x14b300:563-565) and the dropped 0x050000b1 session
-// merge on 07000014 (the game's hashtable misses it, AnimObjectNew 0x1be910:44-46); the 0x20
+// captains' swapped skins and the 0x050000b1 placements' rewritten request skin
+// (`NDrone2_DefaultInit` 0x14b300:563-565 + the :82-95 rewrite — 0x050000b1 → 0x0500008c;
+// the raw skin stays unregistered, AnimLoadFile 0x1bdf40); the 0x20
 // breakables in the posed slot space (`Break_Kill` 0x12b970); the rain-mesh slots on DropType-1
 // SNOW_gen levels (`DrawDrops` 0x18cb90, mesh 0x02000290); the watch-hand attachments; the
 // suppressor swap piece (bone 43, state 8) without the duplicate +0x7C view-entity extra; and one
@@ -37,7 +38,11 @@ const BASELINE: &[(&str, &str)] = &[
     // The keypads' LOD pair in the posed slots (Lock_Unlock 0x1b0650 / case 1 `Control_NextLOD`: three
     // KeypadLocked + KeypadUnlocked) and the decryptor screen's PdaDigits on datums 0..3 (10 digits x 4
     // datums x the 0x56/0x57 view models = +80 attachments) [M Player_WeaponFiring 0x1a5460:155-194].
-    ("07000014.bin", "62083f4393927514 7106502 14762802 6453 6953569 93 13491 173 41 37 32"),
+    // cite-14-skinless-drones re-pin: 07000014's five non-captain 0x050000b1 placements now draw
+    // their characters through the Drone+0xe0 rewrite (0x050000b1 → 0x0500008c before the
+    // AnimObjectNew request [M 0x14b300:82-95, :563-565]) — +5 characters, +30005 vertices,
+    // +59235 indices, +105 materials, +50005 char_verts, +15 attachments over the old pin.
+    ("07000014.bin", "11023d599b9c96e4 7136507 14822037 6558 6983574 98 13506 173 41 37 32"),
     ("07000001.bin", "c3615aff5574ccb2 4396283 9211737 3489 4322981 76 9839 101 11 20 6"),
 ];
 
