@@ -103,9 +103,19 @@ against the disc]) answers both:
   — **4 passed; 0 failed; 2 ignored** (the parked continuation + the sister) on the final tree.
 - `cargo test --offline --release -p nf-view --test fix_swim_vent_live --test fix_swim_vent5_live
   -- --test-threads=1` — 2/2 + 2/2 (the creepwall change's other consumers).
-- The full suite (`tools/test/suite.py`, NF_ISO set) re-run on the final tree in the background;
-  its total line is quoted in the WORKLOG round entry (the round's earlier suite start died
-  silently before producing output — restarted at 00:48 UTC on the final tree).
+- The full suite CANNOT run to completion in this sandbox: both background starts (23:48 and
+  00:48 UTC) died silently between tool calls (the sandbox kills background jobs), and the
+  foreground 10-minute chunks do not fit the 768-binary build. What ran instead, on the final
+  tree, all green:
+  - `cargo test --offline --release -j2 -p nf-game -- --test-threads=1` — 86 test binaries,
+    0 FAILED (the creepwall change's own crate).
+  - The creepwall-consuming nf-view targets: interactables_07000041_live (3), interactables_
+    0700001b_live (2+2 ignored), models_misc_live (6+1), playtest_spots_live (14+2), bath_
+    hatch_02_live (10), fix_0c_hatch_live (18), fix_swim_vent_live (2), fix_swim_vent5_live (2).
+  - The 07000005 set: walkreal_07000005_live (4 passed / 2 ignored), interact_07000005_live (11),
+    walk_07000005_live (2).
+  - nf-formats / nf-audio sources are byte-identical to master's on this branch (the merge brought
+    only creepwall.rs, this test file, docs and WORKLOG) — master's own gates covered them.
 - The decompile readings behind the creepwall fix: `work/decomp/ACTION.ELF/00133070_Control_
   BuildWorldSph__FP7obj_tag.c` (+0x8c write), `001c9680_build_LinkToRoom*` (the call), 
   `00196fc8_CreepWall_Create*` + `001344e0_control_create_object*` (no +0x8c write — the disasm
