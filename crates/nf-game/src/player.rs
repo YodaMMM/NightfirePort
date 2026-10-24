@@ -1728,7 +1728,14 @@ self.local = [vs / k, vf / k];
         // it walks (the delta tilts); beside its spine the push is lateral. The Jointy push does
         // NOT ride the DeltaP accumulator (Jointy writes +0x10 only [M :253-266]), so this sits
         // after the add-back and `pick_ref` keeps the static pass's value.
-        if !ctx.bot_capsules.is_empty() {
+        // [S] unverified — the PORT CHOICE gate: the push rides only while Bond is AIRBORNE
+        // (the drop-onto case the task pins). The game's own per-bot ON/OFF gates (+0x4f8 bit
+        // 0x20/0x200, +0x570 bit 2 — NDrone2_DoCollision 0x149ec8) are not modelled per bot
+        // yet, and master's green walks path Bond THROUGH ally tangent zones (the 01 armour
+        // walk, the 0a west doorway): the grounded-side push against allies is a live-check
+        // item, not shipped here. The sleeper drop (grounded false through the whole contact)
+        // keeps its [M] push either way.
+        if !ctx.bot_capsules.is_empty() && !self.grounded {
             let (ja, jb) = self.capsule();
             if std::env::var("NF_PUSH_DEBUG").is_ok() {
                 eprintln!("[pushdbg] n={} ja={:?} jb={:?} bots={:?}", ctx.bot_capsules.len(), ja, jb, ctx.bot_capsules);
