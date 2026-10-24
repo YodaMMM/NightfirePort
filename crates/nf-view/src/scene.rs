@@ -588,6 +588,12 @@ pub struct Sim {
     /// The decryptor scan record TWO ticks old — the game's contact view for this tick (see
     /// `decryptor_scanned`). Field on its own line [WORKLOG lesson 4].
     pub decryptor_scanned_lag: Option<(usize, bool)>,
+    /// The decryptor screen's four display chars (`DAT_002a37dd[0..3]`: '*', a digit, or 0 = cleared)
+    /// and the view entity's idle countdown (`+0xf6`, reset to FRAME_RATE each scanning tick) [M
+    /// Player_WeaponFiring 0x1a5460:155-194]; `pda_lock` is the lock the display follows.
+    pub pda_display: [u8; 4],
+    pub pda_hold: u16,
+    pub pda_lock: Option<usize>,
     /// The laser watch's held-meter charge, 0–100 — the port stands the value in (`Sim::laser_charge`)
     /// because the game's writer of the pane's source is unlocated: the state-0xb pane reads a
     /// 0–100 u16 at the tracked object's instance+0x110 (and an f32 at +0x104)
@@ -2506,6 +2512,7 @@ impl Sim {
             // keypad's model becomes its LOD variant and keeps it (see `Lock::lod_next`).
             if l.unlocked || l.burned { l.lod_next = true; }
         }
+        self.pda_tick();
         self.smoke.retain(|s| !s.dead());
         let (trigger, reload) = if self.disabled { input = Default::default(); (false, false) } else { (trigger, reload) };
         // fix-death-restart: a dead Bond gets no input — `Player_Update` 0x193600 runs only the anim
@@ -5553,11 +5560,38 @@ impl Sim {
     /// "no" mark on a non-enemy target (`Check_Target` 0x1a7810:181-182). fix-player2.
     pub fn crosshair_state(&self) -> u8 { self.cross_state }
 
-    /// The decryptor's scan state for the draw code (the watch face, `Player_WeaponFiring`
-    /// 0x1a5460:155-194): the scanning lock's index, progress (`obj+0xf6`, the +1/+3 accumulator)
-    /// and solved digit count (`DAT_002a37e3`) — `None` when no scan runs. The unsolved digits'
-    /// randomization is the game's `Rand_Rand(10)` cosmetic [M 0x1ae3d8:351-363] — the port does
-    /// not draw it (no RNG draws added).
+    /// One tick of the decryptor screen (`Player_WeaponFiring` 0x1a5460:155-194 reading the display
+    /// buffer `Lock_Update` 0x1ae3d8 fills [M :179-189, :346-369]): a scan start shows "****"; the
+    /// solved digits show the code; the next unsolved one re-rolls on every odd progress value; while
+    /// a scan runs the idle countdown re-arms to FRAME_RATE (60), and when it runs out the four datums
+    /// clear. *Deviation (cosmetic)*: the code digits (`Locks_Init` 0x1b0548, `'0' + rand % 9`) and
+    /// the re-rolls (`Rand_Rand(10)`) come from the game's shared RNG stream, whose state is play
+    /// history; the port shows the same rule with a hash of (code index, position, progress) and
+    /// draws nothing from the sim's RNG (the decode never compares digits [M]).
+    fn pda_tick(&mut self) {
+        let hash = |a: u32, b: u32, c: u32| { let mut h = a.wrapping_mul(0x9e37_79b9) ^ b.wrapping_mul(0x85eb_ca6b) ^ c.wrapping_mul(0xc2b2_ae35); h ^= h >> 15; h = h.wrapping_mul(0x2c1b_3c6d); h ^ (h >> 12) };
+        if let Some(li) = self.drones.locks.iter().position(|l| l.scanning) { self.pda_lock = Some(li); }
+        let scan = self.pda_lock.and_then(|li| self.drones.locks.get(li))
+            .map(|l| (l.scanning, (l.scan_solved as usize).min(4), l.scan_progress, l.code as u32));
+        match scan {
+            Some((scanning, solved, progress, code)) if scanning || (solved == 4 && self.pda_hold > 0) => {
+                for i in 0..4 {
+                    self.pda_display[i] = if i < solved { b'0' + (hash(code, i as u32, 0) % 9) as u8 }
+                        else if scanning && i == solved && progress > 0 { b'0' + (hash(code, i as u32, progress | 1) % 10) as u8 }
+                        else { b'*' };
+                }
+                if scanning { self.pda_hold = 60; } else { self.pda_hold -= 1; }
+            }
+            _ => {
+                self.pda_hold = self.pda_hold.saturating_sub(1);
+                if self.pda_hold == 0 { self.pda_display = [0; 4]; }
+            }
+        }
+    }
+
+    /// The decryptor's scan state (`Player_WeaponFiring` 0x1a5460:155-194): the scanning lock's
+    /// index, progress (`obj+0xf6`, the +1/+3 accumulator) and solved digit count (`DAT_002a37e3`) —
+    /// `None` when no scan runs. The screen itself is `pda_display` (see `pda_tick`).
     pub fn decryptor_scan(&self) -> Option<(usize, u32, u8)> {
         self.drones.locks.iter().position(|l| l.scanning)
             .map(|i| (i, self.drones.locks[i].scan_progress, self.drones.locks[i].scan_solved))
@@ -5848,6 +5882,10 @@ pub struct Attachment {
     /// at the datum's position (`Mat_SetTrans(matrix row 3)`), ang = fmod(t·rate, 2π) with t = the
     /// mission's elapsed centiseconds + the level's clock base [M :89-137; nf_game::watch].
     pub watch_hand: Option<u8>,
+    /// `Some((datum, digit))`: the decryptor screen's digit mesh `PdaDigits[digit]` on view-model
+    /// datum 0..3 — shown while the sim's `pda_display[3 − datum]` reads that digit
+    /// (`Player_WeaponFiring` 0x1a5460:155-194 [M]).
+    pub pda_digit: Option<(u8, u8)>,
 }
 
 /// Viewer switches that change what the game state would be.
@@ -7050,10 +7088,10 @@ pub fn build(level: &Level, cels_only: bool, skeletons: &HashMap<u8, Skeleton>, 
             let character = characters.len() as u32 - 1;
             add_instance(level, &winst, Layer::Character, Some((character, Some(attachments.len() as u32))), &mut groups, None, None, None, None, [1.0; 3], &room_cels, u32::MAX, u32::MAX);
             let local = anim::quat_trans_to_mat(dt.q, dt.t);
-            attachments.push(Attachment { character, bone: dt.bone as usize, local, flash: None, tracer: None, dropped: false, aims_light: None, projectile: None, script: None, gas: None, effect: None, silencer: false, quiver_bolt: None, swap_piece: false, watch_hand: None });
+            attachments.push(Attachment { character, bone: dt.bone as usize, local, flash: None, tracer: None, dropped: false, aims_light: None, projectile: None, script: None, gas: None, effect: None, silencer: false, quiver_bolt: None, swap_piece: false, watch_hand: None, pda_digit: None });
             // The same gun as a pickup once the drone drops it.
             add_instance(level, &winst, Layer::Character, Some((character, Some(attachments.len() as u32))), &mut groups, None, None, None, None, [1.0; 3], &room_cels, u32::MAX, u32::MAX);
-            attachments.push(Attachment { character, bone: 0, local, flash: None, tracer: None, dropped: true, aims_light: None, projectile: None, script: None, gas: None, effect: None, silencer: false, quiver_bolt: None, swap_piece: false, watch_hand: None });
+            attachments.push(Attachment { character, bone: 0, local, flash: None, tracer: None, dropped: true, aims_light: None, projectile: None, script: None, gas: None, effect: None, silencer: false, quiver_bolt: None, swap_piece: false, watch_hand: None, pda_digit: None });
             // Its muzzle flash: `DroneWeap_FireWeapon` asks `AnimGetBoneWorldTrans(obj, datum id, 1, …)`, which looks up
             // the datum whose id is id + 1 — the muzzle (07000005: 8 → 9 at x −0.77, 16 → 17 at x −1.18).
             if let Some((fmesh, rgb)) = wd.muzzle_flash(weapon as u8) {
@@ -7061,7 +7099,7 @@ pub fn build(level: &Level, cels_only: bool, skeletons: &HashMap<u8, Skeleton>, 
                 if let (Some(&(fmap, fobject)), Some(md)) = (level.by_hash.get(&fmesh), muzzle) {
                     let finst = Instance { map: fmap, object: fobject, ..winst };
                     add_instance(level, &finst, Layer::Effect, Some((character, Some(attachments.len() as u32))), &mut groups, None, None, None, None, [1.0; 3], &room_cels, u32::MAX, u32::MAX);
-                    attachments.push(Attachment { character, bone: md.bone as usize, local: anim::quat_trans_to_mat(md.q, md.t), flash: Some(rgb), tracer: None, dropped: false, aims_light: None, projectile: None, script: None, gas: None, effect: None, silencer: false, quiver_bolt: None, swap_piece: false, watch_hand: None });
+                    attachments.push(Attachment { character, bone: md.bone as usize, local: anim::quat_trans_to_mat(md.q, md.t), flash: Some(rgb), tracer: None, dropped: false, aims_light: None, projectile: None, script: None, gas: None, effect: None, silencer: false, quiver_bolt: None, swap_piece: false, watch_hand: None, pda_digit: None });
                 }
             }
         }
@@ -7177,14 +7215,14 @@ pub fn build(level: &Level, cels_only: bool, skeletons: &HashMap<u8, Skeleton>, 
                     let Some(&(pmap, pobject)) = part.and_then(|h| level.by_hash.get(&h)) else { continue };
                     let pinst = Instance { map: pmap, object: pobject, matrix: ident, placement: placement.clone() };
                     add_instance(level, &pinst, Layer::Character, Some((ci, Some(attachments.len() as u32))), &mut groups, None, None, None, None, [1.0; 3], &room_cels, u32::MAX, VIEW_MODEL_NODE);
-                    attachments.push(Attachment { character: ci, bone: bone as usize, local: ident, flash: None, tracer: None, dropped: false, aims_light: None, projectile: None, script: None, gas: None, effect: None, silencer: false, quiver_bolt: None, swap_piece, watch_hand: None });
+                    attachments.push(Attachment { character: ci, bone: bone as usize, local: ident, flash: None, tracer: None, dropped: false, aims_light: None, projectile: None, script: None, gas: None, effect: None, silencer: false, quiver_bolt: None, swap_piece, watch_hand: None, pda_digit: None });
                 }
                 // The muzzle flash (`Player_MuzzleFlash`): mesh `weapon+0x48` on datum 0, colour (+0x56, +0x55, +0x54).
                 let flash = u32::from_le_bytes(r[0x48..0x4c].try_into().unwrap());
                 if let (Some(&(fmap, fobject)), Some(dt)) = (level.by_hash.get(&flash), skin.datums.iter().find(|d| d.id == 0 && d.bone >= 0)) {
                     let finst = Instance { map: fmap, object: fobject, matrix: ident, placement: placement.clone() };
                     add_instance(level, &finst, Layer::Effect, Some((ci, Some(attachments.len() as u32))), &mut groups, None, None, None, None, [1.0; 3], &room_cels, u32::MAX, VIEW_MODEL_NODE);
-                    attachments.push(Attachment { character: ci, bone: dt.bone as usize, local: anim::quat_trans_to_mat(dt.q, dt.t), flash: Some([r[0x56], r[0x55], r[0x54]]), tracer: None, dropped: false, aims_light: None, projectile: None, script: None, gas: None, effect: None, silencer: false, quiver_bolt: None, swap_piece: false, watch_hand: None });
+                    attachments.push(Attachment { character: ci, bone: dt.bone as usize, local: anim::quat_trans_to_mat(dt.q, dt.t), flash: Some([r[0x56], r[0x55], r[0x54]]), tracer: None, dropped: false, aims_light: None, projectile: None, script: None, gas: None, effect: None, silencer: false, quiver_bolt: None, swap_piece: false, watch_hand: None, pda_digit: None });
                 }
                 // fix-gadgets-live: the AIMS-20's four side lights [M Player_WeaponFiring 0x1a5460:256-360 —
                 // for the records whose class halfword (+0x02) is 0x1a/0x1b, `AnimDatumSetEntity(animobj,
@@ -7204,7 +7242,7 @@ pub fn build(level: &Level, cels_only: bool, skeletons: &HashMap<u8, Skeleton>, 
                             let Some(dt) = skin.datums.iter().find(|d| d.id == id as u32 && d.bone >= 0) else { continue };
                             let linst = Instance { map: lmap, object: lobject, matrix: ident, placement: placement.clone() };
                             add_instance(level, &linst, Layer::Effect, Some((ci, Some(attachments.len() as u32))), &mut groups, None, None, None, None, [1.0; 3], &room_cels, u32::MAX, VIEW_MODEL_NODE);
-                            attachments.push(Attachment { character: ci, bone: dt.bone as usize, local: anim::quat_trans_to_mat(dt.q, dt.t), flash: None, tracer: None, dropped: false, aims_light: Some(id), projectile: None, script: None, gas: None, effect: None, silencer: false, quiver_bolt: None, swap_piece: false, watch_hand: None });
+                            attachments.push(Attachment { character: ci, bone: dt.bone as usize, local: anim::quat_trans_to_mat(dt.q, dt.t), flash: None, tracer: None, dropped: false, aims_light: Some(id), projectile: None, script: None, gas: None, effect: None, silencer: false, quiver_bolt: None, swap_piece: false, watch_hand: None, pda_digit: None });
                         }
                     }
                 }
@@ -7226,7 +7264,7 @@ pub fn build(level: &Level, cels_only: bool, skeletons: &HashMap<u8, Skeleton>, 
                     if let (Some(&(emap, eobject)), Some(dt)) = (level.by_hash.get(&ventity), skin.datums.iter().find(|d| d.id == 0 && d.bone >= 0)) {
                         let einst = Instance { map: emap, object: eobject, matrix: ident, placement: placement.clone() };
                         add_instance(level, &einst, Layer::Character, Some((ci, Some(attachments.len() as u32))), &mut groups, None, None, None, None, [1.0; 3], &room_cels, u32::MAX, VIEW_MODEL_NODE);
-                        attachments.push(Attachment { character: ci, bone: dt.bone as usize, local: anim::quat_trans_to_mat(dt.q, dt.t), flash: None, tracer: None, dropped: false, aims_light: None, projectile: None, script: None, gas: None, effect: None, silencer: true, quiver_bolt: None, swap_piece: false, watch_hand: None });
+                        attachments.push(Attachment { character: ci, bone: dt.bone as usize, local: anim::quat_trans_to_mat(dt.q, dt.t), flash: None, tracer: None, dropped: false, aims_light: None, projectile: None, script: None, gas: None, effect: None, silencer: true, quiver_bolt: None, swap_piece: false, watch_hand: None, pda_digit: None });
                     }
                 }
                 // delta-repeater: the Delta Repeater's loaded bolts (the model
@@ -7250,7 +7288,7 @@ pub fn build(level: &Level, cels_only: bool, skeletons: &HashMap<u8, Skeleton>, 
                             let Some(dt) = skin.datums.iter().find(|d| d.id == id as u32 && d.bone >= 0) else { continue };
                             let binst = Instance { map: bmap, object: bobject, matrix: ident, placement: placement.clone() };
                             add_instance(level, &binst, Layer::Character, Some((ci, Some(attachments.len() as u32))), &mut groups, None, None, None, None, [1.0; 3], &room_cels, u32::MAX, u32::MAX);
-                            attachments.push(Attachment { character: ci, bone: dt.bone as usize, local: anim::quat_trans_to_mat(dt.q, dt.t), flash: None, tracer: None, dropped: false, aims_light: None, projectile: None, script: None, gas: None, effect: None, silencer: false, quiver_bolt: Some(id), swap_piece: false, watch_hand: None });
+                            attachments.push(Attachment { character: ci, bone: dt.bone as usize, local: anim::quat_trans_to_mat(dt.q, dt.t), flash: None, tracer: None, dropped: false, aims_light: None, projectile: None, script: None, gas: None, effect: None, silencer: false, quiver_bolt: Some(id), swap_piece: false, watch_hand: None, pda_digit: None });
                         }
                     }
                 }
@@ -7262,7 +7300,25 @@ pub fn build(level: &Level, cels_only: bool, skeletons: &HashMap<u8, Skeleton>, 
                             let Some(&(hmap, hobject)) = level.by_hash.get(&mesh) else { continue };
                             let hinst = Instance { map: hmap, object: hobject, matrix: ident, placement: placement.clone() };
                             add_instance(level, &hinst, Layer::Character, Some((ci, Some(attachments.len() as u32))), &mut groups, None, None, None, None, [1.0; 3], &room_cels, u32::MAX, VIEW_MODEL_NODE);
-                            attachments.push(Attachment { character: ci, bone: dt.bone as usize, local: anim::quat_trans_to_mat(dt.q, dt.t), flash: None, tracer: None, dropped: false, aims_light: None, projectile: None, script: None, gas: None, effect: None, silencer: false, quiver_bolt: None, swap_piece: false, watch_hand: Some(k as u8) });
+                            attachments.push(Attachment { character: ci, bone: dt.bone as usize, local: anim::quat_trans_to_mat(dt.q, dt.t), flash: None, tracer: None, dropped: false, aims_light: None, projectile: None, script: None, gas: None, effect: None, silencer: false, quiver_bolt: None, swap_piece: false, watch_hand: Some(k as u8), pda_digit: None });
+                        }
+                    }
+                }
+                // The decryptor's screen digits (`Player_WeaponFiring` 0x1a5460:155-194 [M]): for the
+                // 0x56/0x57 records the game sets entity `PdaDigits[c − '0']` on the view model's datum
+                // 3−i for each display char c (entity 0 for '*', and all four cleared once idle). The
+                // port attaches every digit mesh to each of the four datums; `frame_state` shows the
+                // one the sim's `pda_display` names.
+                if nf_game::gadget::is_decryptor(wid) {
+                    if let Some(pda) = drones.and_then(|d| d.hud.as_ref()).map(|h| h.pda_digits) {
+                        for id in 0u8..4 {
+                            let Some(dt) = skin.datums.iter().find(|d| d.id == id as u32 && d.bone >= 0) else { continue };
+                            for (digit, mesh) in pda.into_iter().enumerate() {
+                                let Some(&(dmap, dobject)) = level.by_hash.get(&mesh) else { continue };
+                                let dinst = Instance { map: dmap, object: dobject, matrix: ident, placement: placement.clone() };
+                                add_instance(level, &dinst, Layer::Character, Some((ci, Some(attachments.len() as u32))), &mut groups, None, None, None, None, [1.0; 3], &room_cels, u32::MAX, VIEW_MODEL_NODE);
+                                attachments.push(Attachment { character: ci, bone: dt.bone as usize, local: anim::quat_trans_to_mat(dt.q, dt.t), flash: None, tracer: None, dropped: false, aims_light: None, projectile: None, script: None, gas: None, effect: None, silencer: false, quiver_bolt: None, swap_piece: false, watch_hand: None, pda_digit: Some((id, digit as u8)) });
+                            }
                         }
                     }
                 }
@@ -7296,7 +7352,7 @@ pub fn build(level: &Level, cels_only: bool, skeletons: &HashMap<u8, Skeleton>, 
                     let Some(&(map, object)) = part.and_then(|ph| level.by_hash.get(&ph)) else { continue };
                     let pinst = Instance { map, object, matrix: ident, placement: placement.clone() };
                     add_instance(level, &pinst, Layer::Character, Some((ci, Some(attachments.len() as u32))), &mut groups, None, None, None, None, [1.0; 3], &room_cels, u32::MAX, u32::MAX);
-                    attachments.push(Attachment { character: ci, bone: bone as usize, local: ident, flash: None, tracer: None, dropped: false, aims_light: None, projectile: None, script: None, gas: None, effect: None, silencer: false, quiver_bolt: None, swap_piece: false, watch_hand: None });
+                    attachments.push(Attachment { character: ci, bone: bone as usize, local: ident, flash: None, tracer: None, dropped: false, aims_light: None, projectile: None, script: None, gas: None, effect: None, silencer: false, quiver_bolt: None, swap_piece: false, watch_hand: None, pda_digit: None });
                 }
                 char_placements.push(None);
                 characters.push(Character { matrix: ident, skin: skin.clone(), skeleton: skeleton.clone(), slot_bones, start: None, role: drone::SpawnRole::Placed, floor: None, script: None, morph_targets: morph });
@@ -7313,7 +7369,7 @@ pub fn build(level: &Level, cels_only: bool, skeletons: &HashMap<u8, Skeleton>, 
                         let winst = Instance { map, object, matrix: ident, placement: placement.clone() };
                         add_instance(level, &winst, Layer::Character, Some((ci, Some(attachments.len() as u32))), &mut groups, None, None, None, None, [1.0; 3], &room_cels, u32::MAX, u32::MAX);
                         mp_body_weapons.insert(attachments.len() as u32, (slot, w));
-                        attachments.push(Attachment { character: ci, bone: dt.bone as usize, local: anim::quat_trans_to_mat(dt.q, dt.t), flash: None, tracer: None, dropped: false, aims_light: None, projectile: None, script: None, gas: None, effect: None, silencer: false, quiver_bolt: None, swap_piece: false, watch_hand: None });
+                        attachments.push(Attachment { character: ci, bone: dt.bone as usize, local: anim::quat_trans_to_mat(dt.q, dt.t), flash: None, tracer: None, dropped: false, aims_light: None, projectile: None, script: None, gas: None, effect: None, silencer: false, quiver_bolt: None, swap_piece: false, watch_hand: None, pda_digit: None });
                         // mp-remote-fx: its muzzle flash — the guards' `DroneWeap_FireWeapon` flash (mesh
                         // weapon_data+0x4C on the datum id + 1, the muzzle [M]); shown 2 ticks per shot of
                         // the slot (`Sim::mp_fx.last_shot`). The PS2's human players draw theirs on the
@@ -7335,7 +7391,7 @@ pub fn build(level: &Level, cels_only: bool, skeletons: &HashMap<u8, Skeleton>, 
                                 let finst = Instance { map: fmap, object: fobject, matrix: ident, placement: placement.clone() };
                                 add_instance(level, &finst, Layer::Effect, Some((ci, Some(attachments.len() as u32))), &mut groups, None, None, None, None, [1.0; 3], &room_cels, u32::MAX, u32::MAX);
                                 mp_body_weapons.insert(attachments.len() as u32, (slot, w));
-                                attachments.push(Attachment { character: ci, bone: md.bone as usize, local: anim::quat_trans_to_mat(md.q, md.t), flash: Some(rgb), tracer: None, dropped: false, aims_light: None, projectile: None, script: None, gas: None, effect: None, silencer: false, quiver_bolt: None, swap_piece: false, watch_hand: None });
+                                attachments.push(Attachment { character: ci, bone: md.bone as usize, local: anim::quat_trans_to_mat(md.q, md.t), flash: Some(rgb), tracer: None, dropped: false, aims_light: None, projectile: None, script: None, gas: None, effect: None, silencer: false, quiver_bolt: None, swap_piece: false, watch_hand: None, pda_digit: None });
                             }
                         }
                     }
@@ -7423,7 +7479,7 @@ pub fn build(level: &Level, cels_only: bool, skeletons: &HashMap<u8, Skeleton>, 
                                     let Some(&(map, object)) = part.and_then(|ph| level.by_hash.get(&ph)) else { continue };
                                     let pinst = Instance { map, object, matrix: ident, placement: placement.clone() };
                                     add_instance(level, &pinst, Layer::Character, Some((ci, Some(attachments.len() as u32))), &mut groups, None, None, None, None, [1.0; 3], &room_cels, u32::MAX, u32::MAX);
-                                    attachments.push(Attachment { character: ci, bone: bone as usize, local: ident, flash: None, tracer: None, dropped: false, aims_light: None, projectile: None, script: None, gas: None, effect: None, silencer: false, quiver_bolt: None, swap_piece: false, watch_hand: None });
+                                    attachments.push(Attachment { character: ci, bone: bone as usize, local: ident, flash: None, tracer: None, dropped: false, aims_light: None, projectile: None, script: None, gas: None, effect: None, silencer: false, quiver_bolt: None, swap_piece: false, watch_hand: None, pda_digit: None });
                                 }
                                 char_placements.push(None);
                                 characters.push(Character { matrix: ident, skin: skin.clone(), skeleton: skeleton.clone(), slot_bones, start: None, role: drone::SpawnRole::Placed, floor: None, script: Some((h, si as u8)), morph_targets: morph_of_object.clone() });
@@ -7448,7 +7504,7 @@ pub fn build(level: &Level, cels_only: bool, skeletons: &HashMap<u8, Skeleton>, 
                                                 let winst = Instance { map: wmap, object: wobject, matrix: ident, placement: placement.clone() };
                                                 add_instance(level, &winst, Layer::Character, Some((ci, Some(attachments.len() as u32))), &mut groups, None, None, None, None, [1.0; 3], &room_cels, u32::MAX, u32::MAX);
                                                 let local = anim::quat_trans_to_mat(dt.q, dt.t);
-                                                attachments.push(Attachment { character: ci, bone: dt.bone as usize, local, flash: None, tracer: None, dropped: false, aims_light: None, projectile: None, script: None, gas: None, effect: None, silencer: false, quiver_bolt: None, swap_piece: false, watch_hand: None });
+                                                attachments.push(Attachment { character: ci, bone: dt.bone as usize, local, flash: None, tracer: None, dropped: false, aims_light: None, projectile: None, script: None, gas: None, effect: None, silencer: false, quiver_bolt: None, swap_piece: false, watch_hand: None, pda_digit: None });
                                             } else { weapons_missing += 1; }
                                         } else { weapons_missing += 1; }
                                     }
@@ -7468,7 +7524,7 @@ pub fn build(level: &Level, cels_only: bool, skeletons: &HashMap<u8, Skeleton>, 
                                 let inst = Instance { map, object, matrix: ident, placement: placement.clone() };
                                 for k in 0..copies {
                                     add_instance(level, &inst, Layer::Character, Some((0, Some(attachments.len() as u32))), &mut groups, None, None, None, None, [1.0; 3], &room_cels, u32::MAX, u32::MAX);
-                                    attachments.push(Attachment { character: 0, bone: 0, local: ident, flash: None, tracer: None, dropped: false, aims_light: None, projectile: None, script: Some((h, si as u8, hash, k as u8)), gas: None, effect: None, silencer: false, quiver_bolt: None, swap_piece: false, watch_hand: None });
+                                    attachments.push(Attachment { character: 0, bone: 0, local: ident, flash: None, tracer: None, dropped: false, aims_light: None, projectile: None, script: Some((h, si as u8, hash, k as u8)), gas: None, effect: None, silencer: false, quiver_bolt: None, swap_piece: false, watch_hand: None, pda_digit: None });
                                     script_objects += 1;
                                 }
                             }
@@ -7489,16 +7545,16 @@ pub fn build(level: &Level, cels_only: bool, skeletons: &HashMap<u8, Skeleton>, 
             let before = pool_snapshot(&groups);
             add_instance(level, &tinst, Layer::Effect, Some((0, Some(attachments.len() as u32))), &mut groups, None, None, None, None, [1.0; 3], &room_cels, u32::MAX, u32::MAX);
             let rec = pool_record(&groups, &before);
-            attachments.push(Attachment { character: 0, bone: 0, local: tinst.matrix, flash: None, tracer: Some(0), dropped: false, aims_light: None, projectile: None, script: None, gas: None, effect: None, silencer: false, quiver_bolt: None, swap_piece: false, watch_hand: None });
+            attachments.push(Attachment { character: 0, bone: 0, local: tinst.matrix, flash: None, tracer: Some(0), dropped: false, aims_light: None, projectile: None, script: None, gas: None, effect: None, silencer: false, quiver_bolt: None, swap_piece: false, watch_hand: None, pda_digit: None });
             for slot in 1..TRACER_SLOTS {
                 pool_replay(&mut groups, &rec, Some(attachments.len() as u32));
-                attachments.push(Attachment { character: 0, bone: 0, local: tinst.matrix, flash: None, tracer: Some(slot), dropped: false, aims_light: None, projectile: None, script: None, gas: None, effect: None, silencer: false, quiver_bolt: None, swap_piece: false, watch_hand: None });
+                attachments.push(Attachment { character: 0, bone: 0, local: tinst.matrix, flash: None, tracer: Some(slot), dropped: false, aims_light: None, projectile: None, script: None, gas: None, effect: None, silencer: false, quiver_bolt: None, swap_piece: false, watch_hand: None, pda_digit: None });
             }
             // mp-remote-fx: the other players' / bots' trails (`Sim::mp_tracer`), MP only.
             if mp.is_some() {
                 for k in 0..crate::mpfx::MP_TRACER_SLOTS {
                     pool_replay(&mut groups, &rec, Some(attachments.len() as u32));
-                    attachments.push(Attachment { character: 0, bone: 0, local: tinst.matrix, flash: None, tracer: Some(MP_TRACER_BASE + k), dropped: false, aims_light: None, projectile: None, script: None, gas: None, effect: None, silencer: false, quiver_bolt: None, swap_piece: false, watch_hand: None });
+                    attachments.push(Attachment { character: 0, bone: 0, local: tinst.matrix, flash: None, tracer: Some(MP_TRACER_BASE + k), dropped: false, aims_light: None, projectile: None, script: None, gas: None, effect: None, silencer: false, quiver_bolt: None, swap_piece: false, watch_hand: None, pda_digit: None });
                 }
             }
             // fix-gadgets-live: the gadget BEAM draws the game's own sprites (the old trail
@@ -7524,7 +7580,7 @@ pub fn build(level: &Level, cels_only: bool, skeletons: &HashMap<u8, Skeleton>, 
                     if let Some(&(bmap, bobj)) = level.by_hash.get(&hash) {
                         let binst = Instance { map: bmap, object: bobj, matrix: anim::quat_trans_to_mat([0.0, 0.0, 0.0, 1.0], [0.0; 3]), placement: level.maps[level.main_map().unwrap_or(0)].placements.first().cloned().unwrap_or_default() };
                         add_instance(level, &binst, Layer::Effect, Some((0, Some(attachments.len() as u32))), &mut groups, None, None, None, None, [1.0; 3], &room_cels, u32::MAX, u32::MAX);
-                        attachments.push(Attachment { character: 0, bone: 0, local: binst.matrix, flash: None, tracer: Some(slot), dropped: false, aims_light: None, projectile: None, script: None, gas: None, effect: None, silencer: false, quiver_bolt: None, swap_piece: false, watch_hand: None });
+                        attachments.push(Attachment { character: 0, bone: 0, local: binst.matrix, flash: None, tracer: Some(slot), dropped: false, aims_light: None, projectile: None, script: None, gas: None, effect: None, silencer: false, quiver_bolt: None, swap_piece: false, watch_hand: None, pda_digit: None });
                     }
                 }
             }
@@ -7564,10 +7620,10 @@ pub fn build(level: &Level, cels_only: bool, skeletons: &HashMap<u8, Skeleton>, 
             let before = pool_snapshot(&groups);
             add_instance(level, &pinst, Layer::Effect, Some((0, Some(attachments.len() as u32))), &mut groups, None, None, None, None, [1.0; 3], &room_cels, u32::MAX, u32::MAX);
             let rec = pool_record(&groups, &before);
-            attachments.push(Attachment { character: 0, bone: 0, local: pident, flash: None, tracer: None, dropped: false, aims_light: None, projectile: Some((0, mesh)), script: None, gas: None, effect: None, silencer: false, quiver_bolt: None, swap_piece: false, watch_hand: None });
+            attachments.push(Attachment { character: 0, bone: 0, local: pident, flash: None, tracer: None, dropped: false, aims_light: None, projectile: Some((0, mesh)), script: None, gas: None, effect: None, silencer: false, quiver_bolt: None, swap_piece: false, watch_hand: None, pda_digit: None });
             for slot in 1..proj_slots {
                 pool_replay(&mut groups, &rec, Some(attachments.len() as u32));
-                attachments.push(Attachment { character: 0, bone: 0, local: pident, flash: None, tracer: None, dropped: false, aims_light: None, projectile: Some((slot as u16, mesh)), script: None, gas: None, effect: None, silencer: false, quiver_bolt: None, swap_piece: false, watch_hand: None });
+                attachments.push(Attachment { character: 0, bone: 0, local: pident, flash: None, tracer: None, dropped: false, aims_light: None, projectile: Some((slot as u16, mesh)), script: None, gas: None, effect: None, silencer: false, quiver_bolt: None, swap_piece: false, watch_hand: None, pda_digit: None });
             }
         }
         // rocket-swoosh: the ribbon segments (`Swoosh_Create` 0x18d8e8 sets the object's gfx from the hash —
@@ -7581,10 +7637,10 @@ pub fn build(level: &Level, cels_only: bool, skeletons: &HashMap<u8, Skeleton>, 
                 let before = pool_snapshot(&groups);
                 add_instance(level, &sinst, Layer::Effect, Some((0, Some(attachments.len() as u32))), &mut groups, None, None, None, None, [1.0; 3], &room_cels, u32::MAX, u32::MAX);
                 let rec = pool_record(&groups, &before);
-                attachments.push(Attachment { character: 0, bone: 0, local: pident, flash: None, tracer: None, dropped: false, aims_light: None, projectile: Some((SWOOSH_SLOT_BASE, mesh)), script: None, gas: None, effect: None, silencer: false, quiver_bolt: None, swap_piece: false, watch_hand: None });
+                attachments.push(Attachment { character: 0, bone: 0, local: pident, flash: None, tracer: None, dropped: false, aims_light: None, projectile: Some((SWOOSH_SLOT_BASE, mesh)), script: None, gas: None, effect: None, silencer: false, quiver_bolt: None, swap_piece: false, watch_hand: None, pda_digit: None });
                 for k in 1..SWOOSH_SLOTS {
                     pool_replay(&mut groups, &rec, Some(attachments.len() as u32));
-                    attachments.push(Attachment { character: 0, bone: 0, local: pident, flash: None, tracer: None, dropped: false, aims_light: None, projectile: Some((SWOOSH_SLOT_BASE + k as u16, mesh)), script: None, gas: None, effect: None, silencer: false, quiver_bolt: None, swap_piece: false, watch_hand: None });
+                    attachments.push(Attachment { character: 0, bone: 0, local: pident, flash: None, tracer: None, dropped: false, aims_light: None, projectile: Some((SWOOSH_SLOT_BASE + k as u16, mesh)), script: None, gas: None, effect: None, silencer: false, quiver_bolt: None, swap_piece: false, watch_hand: None, pda_digit: None });
                 }
             }
         }
@@ -7637,10 +7693,10 @@ pub fn build(level: &Level, cels_only: bool, skeletons: &HashMap<u8, Skeleton>, 
                         let before = pool_snapshot(&groups);
                         add_instance(level, &ginst, Layer::Effect, Some((0, Some(attachments.len() as u32))), &mut groups, None, None, None, None, [1.0; 3], &room_cels, u32::MAX, u32::MAX);
                         let rec = pool_record(&groups, &before);
-                        attachments.push(Attachment { character: 0, bone: 0, local: gident, flash: None, tracer: None, dropped: false, aims_light: None, projectile: None, script: None, gas: Some((0, mesh)), effect: None, silencer: false, quiver_bolt: None, swap_piece: false, watch_hand: None });
+                        attachments.push(Attachment { character: 0, bone: 0, local: gident, flash: None, tracer: None, dropped: false, aims_light: None, projectile: None, script: None, gas: Some((0, mesh)), effect: None, silencer: false, quiver_bolt: None, swap_piece: false, watch_hand: None, pda_digit: None });
                         for slot in 1..GAS_DRAW_SLOTS {
                             pool_replay(&mut groups, &rec, Some(attachments.len() as u32));
-                            attachments.push(Attachment { character: 0, bone: 0, local: gident, flash: None, tracer: None, dropped: false, aims_light: None, projectile: None, script: None, gas: Some((slot as u16, mesh)), effect: None, silencer: false, quiver_bolt: None, swap_piece: false, watch_hand: None });
+                            attachments.push(Attachment { character: 0, bone: 0, local: gident, flash: None, tracer: None, dropped: false, aims_light: None, projectile: None, script: None, gas: Some((slot as u16, mesh)), effect: None, silencer: false, quiver_bolt: None, swap_piece: false, watch_hand: None, pda_digit: None });
                         }
                     }
                 }
@@ -7665,10 +7721,10 @@ pub fn build(level: &Level, cels_only: bool, skeletons: &HashMap<u8, Skeleton>, 
                         let before = pool_snapshot(&groups);
                         add_instance(level, &inst, Layer::Effect, Some((0, Some(attachments.len() as u32))), &mut groups, None, None, None, None, [1.0; 3], &room_cels, u32::MAX, u32::MAX);
                         let rec = pool_record(&groups, &before);
-                        attachments.push(Attachment { character: 0, bone: 0, local: inst.matrix, flash: None, tracer: None, dropped: false, aims_light: None, projectile: None, script: None, gas: None, effect: Some((kind, 0, mesh)), silencer: false, quiver_bolt: None, swap_piece: false, watch_hand: None });
+                        attachments.push(Attachment { character: 0, bone: 0, local: inst.matrix, flash: None, tracer: None, dropped: false, aims_light: None, projectile: None, script: None, gas: None, effect: Some((kind, 0, mesh)), silencer: false, quiver_bolt: None, swap_piece: false, watch_hand: None, pda_digit: None });
                         for slot in 1..slots {
                             pool_replay(&mut groups, &rec, Some(attachments.len() as u32));
-                            attachments.push(Attachment { character: 0, bone: 0, local: inst.matrix, flash: None, tracer: None, dropped: false, aims_light: None, projectile: None, script: None, gas: None, effect: Some((kind, slot, mesh)), silencer: false, quiver_bolt: None, swap_piece: false, watch_hand: None });
+                            attachments.push(Attachment { character: 0, bone: 0, local: inst.matrix, flash: None, tracer: None, dropped: false, aims_light: None, projectile: None, script: None, gas: None, effect: Some((kind, slot, mesh)), silencer: false, quiver_bolt: None, swap_piece: false, watch_hand: None, pda_digit: None });
                         }
                     }
                 }
@@ -7686,7 +7742,7 @@ pub fn build(level: &Level, cels_only: bool, skeletons: &HashMap<u8, Skeleton>, 
                 for slot in 0..4 {
                     let cinst = Instance { map: m, object: o, matrix: ident, placement: cplacement.clone() };
                     add_instance(level, &cinst, Layer::Effect, Some((0, Some(attachments.len() as u32))), &mut groups, None, None, None, None, [1.0; 3], &room_cels, u32::MAX, u32::MAX);
-                    attachments.push(Attachment { character: 0, bone: 0, local: cinst.matrix, flash: None, tracer: None, dropped: false, aims_light: None, projectile: None, script: None, gas: None, effect: Some((3, slot, 0x0200_0273)), silencer: false, quiver_bolt: None, swap_piece: false, watch_hand: None });
+                    attachments.push(Attachment { character: 0, bone: 0, local: cinst.matrix, flash: None, tracer: None, dropped: false, aims_light: None, projectile: None, script: None, gas: None, effect: Some((3, slot, 0x0200_0273)), silencer: false, quiver_bolt: None, swap_piece: false, watch_hand: None, pda_digit: None });
                 }
             }
         }
@@ -7699,7 +7755,7 @@ pub fn build(level: &Level, cels_only: bool, skeletons: &HashMap<u8, Skeleton>, 
                 for slot in 0..DRONE_SCAN_SLOTS {
                     let sinst = Instance { map: m, object: o, matrix: ident, placement: splacement.clone() };
                     add_instance(level, &sinst, Layer::Effect, Some((0, Some(attachments.len() as u32))), &mut groups, None, None, None, None, [1.0; 3], &room_cels, u32::MAX, u32::MAX);
-                    attachments.push(Attachment { character: 0, bone: 0, local: sinst.matrix, flash: None, tracer: None, dropped: false, aims_light: None, projectile: None, script: None, gas: None, effect: Some((6, slot, DRONE_SCAN)), silencer: false, quiver_bolt: None, swap_piece: false, watch_hand: None });
+                    attachments.push(Attachment { character: 0, bone: 0, local: sinst.matrix, flash: None, tracer: None, dropped: false, aims_light: None, projectile: None, script: None, gas: None, effect: Some((6, slot, DRONE_SCAN)), silencer: false, quiver_bolt: None, swap_piece: false, watch_hand: None, pda_digit: None });
                 }
             }
         }
@@ -7721,7 +7777,7 @@ pub fn build(level: &Level, cels_only: bool, skeletons: &HashMap<u8, Skeleton>, 
                 for slot in 0..RAIN_SLOTS {
                     let rinst = Instance { map: m, object: o, matrix: ident, placement: rplacement.clone() };
                     add_instance(level, &rinst, Layer::Effect, Some((0, Some(attachments.len() as u32))), &mut groups, None, None, None, None, [1.0; 3], &room_cels, u32::MAX, u32::MAX);
-                    attachments.push(Attachment { character: 0, bone: 0, local: rinst.matrix, flash: None, tracer: None, dropped: false, aims_light: None, projectile: None, script: None, gas: None, effect: Some((kind, slot, mesh)), silencer: false, quiver_bolt: None, swap_piece: false, watch_hand: None });
+                    attachments.push(Attachment { character: 0, bone: 0, local: rinst.matrix, flash: None, tracer: None, dropped: false, aims_light: None, projectile: None, script: None, gas: None, effect: Some((kind, slot, mesh)), silencer: false, quiver_bolt: None, swap_piece: false, watch_hand: None, pda_digit: None });
                 }
             }
         }
@@ -7740,7 +7796,7 @@ pub fn build(level: &Level, cels_only: bool, skeletons: &HashMap<u8, Skeleton>, 
                     for slot in 0..2 {
                         let dinst = Instance { map: dm, object: dobj, matrix: dident, placement: dplacement.clone() };
                         add_instance(level, &dinst, Layer::Effect, Some((0, Some(attachments.len() as u32))), &mut groups, None, None, None, None, [1.0; 3], &room_cels, u32::MAX, u32::MAX);
-                        attachments.push(Attachment { character: 0, bone: 0, local: dinst.matrix, flash: None, tracer: None, dropped: false, aims_light: None, projectile: None, script: None, gas: None, effect: Some((kind, slot, mesh)), silencer: false, quiver_bolt: None, swap_piece: false, watch_hand: None });
+                        attachments.push(Attachment { character: 0, bone: 0, local: dinst.matrix, flash: None, tracer: None, dropped: false, aims_light: None, projectile: None, script: None, gas: None, effect: Some((kind, slot, mesh)), silencer: false, quiver_bolt: None, swap_piece: false, watch_hand: None, pda_digit: None });
                     }
                 }
             }
@@ -8509,6 +8565,9 @@ pub fn build(level: &Level, cels_only: bool, skeletons: &HashMap<u8, Skeleton>, 
                 wire_cels, cel_graph: cel_graph.clone(), icon_cels, laser_beam: None, stunner_target: None, decryptor_target: None, decryptor_scanned: None, laser_charge: 100.0, missile_cam: None,
                 // The decryptor contact pipe's second register (fields on their own lines, lesson 4).
                 decryptor_scanned_lag: None,
+                pda_display: [0; 4],
+                pda_hold: 0,
+                pda_lock: None,
                 hints, hint_cels, hint_fired, icon_msg_timers,
                 view_alert: false,
                 prev_aiming: false,
@@ -9238,6 +9297,14 @@ pub fn build(level: &Level, cels_only: bool, skeletons: &HashMap<u8, Skeleton>, 
             // Unarmed (dropped, or surrendered: `ChangeWeapon(1)`): no gun. *Deviation*: a drawn sidearm (weapon 6) still
             // shows the original weapon's mesh.
             if drone_of(a.character as usize).is_some_and(|(s, di)| s.drones.list[di].weapon <= 1) { return collapse(&datum); }
+            if let Some((id, digit)) = a.pda_digit {
+                // The decryptor screen: datum `id` shows `PdaDigits[digit]` while the display char
+                // 3−id is that digit, on the held decryptor's own view model [M 0x1a5460:155-194].
+                let Some(s) = self.sim.as_ref() else { return collapse(&datum) };
+                if self.view_models.get(&s.gun.weapon) != Some(&(a.character as usize)) { return collapse(&datum); }
+                if s.pda_display[3 - id as usize] != b'0' + digit { return collapse(&datum); }
+                return datum;
+            }
             if let Some(slot) = a.quiver_bolt {
                 // delta-repeater: the Delta Repeater's bolt count, re-evaluated per frame exactly where
                 // `Player_WeaponFiring` 0x1a5460:331-381 re-issues the datum entities each tick [M]:

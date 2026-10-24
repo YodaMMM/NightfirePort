@@ -226,3 +226,42 @@ fn decryptor_14_held_fire_opens_its_keypad_lock_through_the_same_real_path() {
     assert!(fire_samples.iter().any(|v| *v > 0.0) && fire_samples.windows(2).any(|w| w[0] != w[1]),
         "the scan anim must advance and loop while held (samples {fire_samples:?})");
 }
+
+/// The decryptor's screen while held on Night Shift's keypad (0700000a, out 0x31 — the
+/// #646/#729 pair, one keypad on each side of the door, 0.26 apart [D]): `Player_WeaponFiring`
+/// 0x1a5460:155-194 draws the display buffer `Lock_Update` fills [M 0x1ae3d8:179-189, 346-369] —
+/// "****" at the scan start, the solved digits, the next one re-rolling; when the scan ends the
+/// FRAME_RATE countdown clears the four datums. And the gate's target is the NEAREST lock the ray
+/// meets [M 0x1a5460:557-566 on +0x880]: once the near keypad is open it refuses, so the held
+/// fire does not start a scan on the far-side keypad behind it.
+#[test]
+fn the_screen_shows_the_scan_and_one_door_takes_one_scan() {
+    let scene = nf_view::load_with_carry_weapons_difficulty(&iso(), "0700000a.bin", false, None, &[0x56], 3)
+        .expect("load 0700000a with the Decryptor");
+    let mut scene = scene;
+    let sim = scene.sim.as_mut().unwrap();
+    let li = sim.drones.locks.iter().position(|l| l.kind == 0 && l.out == 49).expect("the out-49 keypad");
+    let lp = sim.drones.locks[li].pos;
+    let spot = [lp[0] + 1.6, lp[1] - 1.0, lp[2]];
+    sim.bond = nf_game::player::Bond::new(spot, (lp[0] - spot[0]).atan2(lp[2] - spot[2]));
+    equip_decryptor(sim);
+    for _ in 0..60 { real_tick(sim, lp, false, true); if aimed_lock(sim).is_some() { break; } }
+    let mut seen_partial = false;
+    let mut unlocked_at = None;
+    for t in 0..560u32 {
+        real_tick(sim, lp, true, false);
+        let d = sim.pda_display;
+        if sim.drones.locks[li].scanning && d[0].is_ascii_digit() && d[3] == b'*' { seen_partial = true; }
+        if unlocked_at.is_none() && sim.drones.locks[li].unlocked {
+            unlocked_at = Some(t);
+            assert!(d.iter().all(|c| c.is_ascii_digit()), "the unlock tick shows the whole code: {:?}", String::from_utf8_lossy(&d));
+        }
+        // Sister: no other lock may start a scan while the fire stays held on the open keypad.
+        if unlocked_at.is_some() {
+            assert!(!sim.drones.locks.iter().any(|l| l.scanning), "a second scan started at t{t} behind the open keypad");
+        }
+    }
+    let u = unlocked_at.expect("the held decryptor opens the keypad");
+    assert!(seen_partial, "mid-scan the screen shows solved/re-rolling digits with '*' after them");
+    assert_eq!(sim.pda_display, [0; 4], "the screen clears once the countdown ({} ticks after t{u}) runs out", 60);
+}

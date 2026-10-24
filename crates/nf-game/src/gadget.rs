@@ -94,8 +94,6 @@ pub fn pick_decryptor_lock(
     let mut best: Option<(f32, usize)> = None;
     let dbg = std::env::var_os("NF_DECPICK_DEBUG").is_some();
     for (i, lock) in locks.iter().enumerate() {
-        if lock.burned || lock.unlocked { continue; }
-        if lock.kind != 0 && lock.kind != 2 { continue; } // the gate's kind test [M 0x1a5460:562]
         let ap = [lock.pos[0] - eye[0], lock.pos[1] - eye[1], lock.pos[2] - eye[2]];
         let t = (ap[0] * dir[0] + ap[1] * dir[1] + ap[2] * dir[2]) / ab2;
         if t < 0.0 || t * ab2.sqrt() > RAY_LEN { if dbg { eprintln!("decpick {i}: REJ ray t={t}"); } continue; }
@@ -114,7 +112,13 @@ pub fn pick_decryptor_lock(
         if dist > range { continue; }
         if best.is_none_or(|(bt, _)| t < bt) { best = Some((t, i)); }
     }
-    best.map(|(_, i)| i)
+    // The target is the NEAREST lock the ray meets, whatever its state; the gate then refuses an
+    // open one or a non-decryptor kind [M 0x1a5460:557-566 tests the +0x880 target's type, kind 0/2
+    // and state 0/5]. An unlocked keypad therefore blocks the one mounted behind it on the far side
+    // of the door (0700000a #646/#729, 0.26 apart) — skipping it let a held fire start a second scan.
+    let (_, i) = best?;
+    let lock = &locks[i];
+    (!lock.burned && !lock.unlocked && (lock.kind == 0 || lock.kind == 2)).then_some(i)
 }
 
 
