@@ -2987,8 +2987,7 @@ impl Drone {
     /// port's `segment_masked` [M, world.rs]. Concrete (mats 0-21 without 0x40) still blocks.
     fn move_by(&mut self, d: &Data, step: [f32; 2]) {
         let to = [self.pos[0] + step[0], self.pos[1], self.pos[2] + step[1]];
-        let probe = |y: f32| d.world.line_of_sight([self.pos[0], y, self.pos[2]], [to[0] + step[0].signum() * 0.4 * (step[0].abs() > 1e-6) as i32 as f32, y, to[2] + step[1].signum() * 0.4 * (step[1].abs() > 1e-6) as i32 as f32], crate::world::LOS_PROBE_8);
-        if probe(self.pos[1]) && probe(self.pos[1] + 0.5) {
+        if self.probe_move(d, step) {
             self.pos = to;
             self.blocked_reach = 0.0;
         } else {
@@ -2998,6 +2997,23 @@ impl Drone {
             // measure of the absorbed movement [S breakable.rs drone_step].
             self.blocked_reach = (step[0] * step[0] + step[1] * step[1]).sqrt();
         }
+    }
+
+    /// `move_by`'s rejection test as a dry run (stuck-guard-combat-sweep): the combat-move CHOICE
+    /// (choose_combat_move's pair gates, the strafe UPDATE's blocked exit) must consult the SAME
+    /// spatial test the mover applies, or a guard against an obstacle re-picks the blocked step
+    /// forever — the sweep's frozen STEP_AIM wall on 07000005 (8 guards in 0x73/0x74 inching
+    /// < 0.1 per 3 s while the step anim re-fires). The game cannot diverge this way: its choice
+    /// probe (`NDrone2_CanStepLeft` 0x14f640 family) and its mover share the one
+    /// `NDrone2_MoveTest` + `AINetwork_GetBoundsPushVectorForSphere` 0x157bd0 machinery [M]. The
+    /// port's two stand-ins (can_move's knee/chest rays vs move_by's feet/knee rays + 0.4
+    /// overshoot) disagreed exactly on floor lips and low kerbs — feet-height clear at +0.5/+1.4,
+    /// blocked at +0.0/+0.5. [S unverified as to which ray set is the game's; the consistency is
+    /// the port's own requirement.]
+    fn probe_move(&self, d: &Data, step: [f32; 2]) -> bool {
+        let to = [self.pos[0] + step[0], self.pos[1], self.pos[2] + step[1]];
+        let probe = |y: f32| d.world.line_of_sight([self.pos[0], y, self.pos[2]], [to[0] + step[0].signum() * 0.4 * (step[0].abs() > 1e-6) as i32 as f32, y, to[2] + step[1].signum() * 0.4 * (step[1].abs() > 1e-6) as i32 as f32], crate::world::LOS_PROBE_8);
+        probe(self.pos[1]) && probe(self.pos[1] + 0.5)
     }
 
     // ---- damage and death (docs/systems/drone-damage.md) ---------------------------------------------------------
@@ -7709,7 +7725,11 @@ impl Drone {
                 self.desired_yaw = self.yaw_to_opp;
                 let left = matches!(s, STRAFE_AIM_LEFT | STRAFE_DODGE_LEFT);
                 let dodge = matches!(s, STRAFE_DODGE_LEFT | STRAFE_DODGE_RIGHT);
-                if self.anim.class == 2 && (!self.can_move(d, if left { 1.0 } else { -1.0 } * if dodge { 3.6 } else { 1.8 }, 0.0) || self.unseen_ticks > 15) {
+                // The blocked exit consults the mover's test (probe_move) — the same consistency
+                // rule as the choice's pair gates (stuck-guard-combat-sweep).
+                let x = if left { 1.0 } else { -1.0 } * if dodge { 3.6 } else { 1.8 };
+                let (sn, cs) = (crate::trig::sinf(self.yaw), crate::trig::cosf(self.yaw));
+                if self.anim.class == 2 && (!self.probe_move(d, [x * cs, -x * sn]) || self.unseen_ticks > 15) {
                     self.set_state(AIM_STAND);
                 } else if !dodge && self.burst_done { self.fire(d, rng, frame, true) }
                 true
@@ -9751,7 +9771,12 @@ impl Drone {
             let order = if rng.rand(2) != 0 { [(l, dist), (r, -dist)] } else { [(r, -dist), (l, dist)] };
             order.iter().find(|(_, x)| {
                 let (side_bit, anim) = if *x > 0.0 { (8, l_anim) } else { (0x10, r_anim) };
-                me.no_bunching & side_bit == 0 && me.can_do(d, anim) && me.can_move(d, *x, 0.0)
+                // The choice consults the MOVER's test (probe_move), not the knee/chest stand-in:
+                // a step the mover will reject must not be picked (the frozen STEP_AIM wall,
+                // stuck-guard-combat-sweep). The world step of local (x, 0) is [x·c, −x·s]
+                // (can_move's own transform).
+                let (s, c) = (crate::trig::sinf(me.yaw), crate::trig::cosf(me.yaw));
+                me.no_bunching & side_bit == 0 && me.can_do(d, anim) && me.probe_move(d, [x * c, -x * s])
             }).map(|(s, _)| *s).unwrap_or(0)
         };
         let result = loop {
@@ -9818,7 +9843,8 @@ impl Drone {
             // their Can* verdicts, so only the dodge arm gates on them here.
             let probe = |me: &Self, x: f32| {
                 let (side_bit, anim) = if x > 0.0 { (8, anim_state::DODGE_LEFT) } else { (0x10, anim_state::STRAFE_RIGHT_ALT) };
-                me.no_bunching & side_bit == 0 && me.can_do(d, anim) && me.can_move(d, x, 0.0)
+                let (s, c) = (crate::trig::sinf(me.yaw), crate::trig::cosf(me.yaw));
+                me.no_bunching & side_bit == 0 && me.can_do(d, anim) && me.probe_move(d, [x * c, -x * s])
             };
             let m = if rng.rand(2) == 0 {
                 if probe(self, -3.6) { STRAFE_DODGE_RIGHT }
