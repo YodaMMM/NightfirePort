@@ -30,7 +30,11 @@ fn load_09(iso: &str) -> nf_view::scene::Scene {
 /// Settle Bond at a spot (a teleport TO the observation point; everything after is real input).
 fn settle_near(scene: &mut nf_view::scene::Scene, spot: [f32; 3]) {
     let sim = scene.sim.as_mut().unwrap();
-    let floor = sim.world.segment(spot, [spot[0], spot[1] - 30.0, spot[2]]).map(|t| spot[1] - 30.0 * t);
+    // Cast 0.05 above the spot (the game places objects ON the surface + normal offset [M
+    // Collide_PlaceObject 0x1ecfb8 tail]; the armour-spot y −368.9 sits 0.37 UNDER the walkable
+    // floor top −368.53 [D probe] and the old start-from-spot cast landed Bond beneath it; 0.5
+    // covers that gap).
+    let floor = sim.world.segment([spot[0], spot[1] + 0.5, spot[2]], [spot[0], spot[1] - 30.0, spot[2]]).map(|t| spot[1] + 0.5 - 30.0 * t);
     if let Some(f) = floor { sim.bond.pos = [spot[0], f + 0.1, spot[2]]; } else { sim.bond.pos = spot; }
     for _ in 0..60 { sim.step_bond(Input::default(), false, false, false); }
 }

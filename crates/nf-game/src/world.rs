@@ -44,13 +44,6 @@ pub const LOS_GUARD_VISION: u32 = 0xa27; // DroneVision_CanSeeObjectFrom 0x176f1
 pub const LOS_PLAYER_HEADROOM: u32 = 0xd; // Player_SSCrouch 0x1924c0:100-101 / Player_HandleJump 0x1916b0:161-162 mask 9 | 4
 pub const LOS_PROBE_8: u32 = 0xc; // mask 8 | 4 — Player_SSGrapple 0x192860:86-88, Searchlight_Update 0x1cb900:338-340, Sensor_SetBeam 0x1af398:73-75, Bullet_homing 0x12f358:92-93
 pub const LOS_SENSOR: u32 = 0xe; // Sensor_InCone 0x1af4f0:84-86 / Check_AutoAim 0x1a73f8:164-165 / Bullet_DoTrails flash 0x12d890:343-345 mask 0xa | 4
-/// The per-caller masks are not applied yet [S]: with them on, guard cover, turret shots and
-/// several real-path walks broke; `line_of_sight` keeps the static-world segment test until then.
-pub const LOS_MASKS_ON: bool = true;
-/// The normalized-spine head-on cull below is not applied yet [S]: with it on, real-path door,
-/// pickup, turret and gondola walks on 06/08/09/16 broke.
-pub const HEAD_ON_CULL_ON: bool = true;
-
 #[derive(Default)]
 struct Geo {
     tris: Vec<[V3; 3]>,
@@ -335,8 +328,6 @@ fn capsule_tri_contact(t: &[V3; 3], mat: u8, a: &mut V3, b: &mut V3, r: f32, gro
     // through from below; the same face crossed in the BOTTOM half (f > 0.5) is solid. Faces the
     // old |n·y| > 0.7 + top-end-side rule culled in the 0.70-0.763 band (≈45-77° slopes above the
     // capsule) are TESTED here, exactly as the game tests them.
-    // The previous one-sided rule stays in force until the game's cull is on (HEAD_ON_CULL_ON).
-    if !HEAD_ON_CULL_ON && n[1].abs() > 0.7 && dot(n, sub(*a, t[0])) < 0.0 { return false; }
     let ab = sub(*b, *a);
     let denom = dot(n, ab);
     let mut f = 0.0f32;
@@ -345,7 +336,7 @@ fn capsule_tri_contact(t: &[V3; 3], mat: u8, a: &mut V3, b: &mut V3, r: f32, gro
         let ab_len = dot(ab, ab).sqrt();
         if ab_len > 1e-6 {
             let nd = denom / ab_len;
-            if HEAD_ON_CULL_ON && ((nd > 0.999 && f > 0.5) || (nd < -0.999 && f < 0.5)) { return false; }
+            if (nd > 0.999 && f > 0.5) || (nd < -0.999 && f < 0.5) { return false; }
         }
     }
     let mut p = if denom.abs() > 0.0002 {
@@ -1605,7 +1596,6 @@ impl CollisionWorld {
     /// the wrapper's own `| 4` [M disasm 0x176fec/0x1770b0 — docs/systems/drone-armed-peer.md].
     /// Each caller passes the mask its game call site passes — see the `LOS_*` constants.
     pub fn line_of_sight(&self, a: V3, b: V3, mask: u32) -> bool {
-        if !LOS_MASKS_ON { let _ = mask; return self.segment_clear(a, b); }
         self.line_of_sight_masked(a, b, mask)
     }
 
@@ -1617,9 +1607,16 @@ impl CollisionWorld {
     /// surface byte's 0x40/0x80 bits OR in (:305-309)** — so a 0xa-mask sensor ray (Check_AutoAim
     /// 0x1a73f8:164-165) passes the stairwell's 0x40-material well panes that a plain segment
     /// test blocks; mask 0x20 skips the 0x1000-flagged nodes (the port's missile cage).
-    /// (`line_of_sight` keeps the global `LOS_MASKS_ON` gate — the masked semantics stay
-    /// opt-in until the parked per-caller flip is safe.)
     pub fn line_of_sight_masked(&self, a: V3, b: V3, mask: u32) -> bool {
+        let d = sub(b, a);
+        let dynamic = self.dynamic.read().unwrap();
+        let skip_cage = mask & 0x20 != 0;
+        let (drop_node, drop_surface, drop_de, drop_10) =
+            (mask & 0x8 != 0, mask & 0x800 != 0, mask & 0x1 != 0, mask & 0x2 != 0);
+        Self::masked_scan(self, a, b, mask)
+    }
+
+    fn masked_scan(&self, a: V3, b: V3, mask: u32) -> bool {
         let d = sub(b, a);
         let dynamic = self.dynamic.read().unwrap();
         let skip_cage = mask & 0x20 != 0;
