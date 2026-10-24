@@ -271,7 +271,6 @@ fn collect_shots(scene: &mut nf_view::scene::Scene, weapon: u32, wanted: u32, wa
 /// Weapons: 07000001's 0x0e (interval 15 → the 60-clamp) and 0x12 (record burst 12 → the
 /// aggression cut), plus 07000005's SG-5 0x16 (burst 3, interval 4) — the guards' three behaviours.
 #[test]
-#[ignore = "the diff-2 guard falls through a floor crack on 07000001 at (-4.703, -5.968): the feet ray finds no triangle there though the bounds cover it; un-ignore once the crack is fixed"]
 fn the_3x3_hit_rate_and_damage_matrix_matches_the_game() {
     // [L work/ee_start_07000001.bin @ 0x30caf0/54/58 and 0x30cc50/54/58] — the accuracy and
     // Plr_DMod statics as ReadTuningVars leaves them for 0x7000001.

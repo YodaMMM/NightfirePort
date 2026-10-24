@@ -5433,7 +5433,7 @@ impl Drone {
     /// `Drone_FeetOnPoint` (0x140660): a down-ray from `pos` to `pos + up·−(hip+0.6)` with collision mask 0xC (walkable +
     /// solid). When the hit's y is within 0.2 below the feet (`pos.y − hip`), the drone is on the surface: sets
     /// `on_surface` and returns the floor height (the game sets `anim+0x60 & 8`). `None` when the ray misses (in air).
-    fn feet_on_point(&self, world: &CollisionWorld) -> Option<f32> {
+    pub fn feet_on_point(&self, world: &CollisionWorld) -> Option<f32> {
         let hip = self.hip();
         let from = [self.pos[0], self.pos[1], self.pos[2]];
         let to = [self.pos[0], self.pos[1] - (hip + 0.6), self.pos[2]];
@@ -5441,6 +5441,39 @@ impl Drone {
         let floor = from[1] + (to[1] - from[1]) * hit;
         let feet_y = self.pos[1] - hip;
         if floor >= feet_y - 0.2 { Some(floor) } else { None }
+    }
+
+    /// The ray-miss arm of `Drone_FeetOnPoint` (0x140660): ground on the movement hittest's pick-contact bit.
+    /// The game's ray is a 1-unit line and 07000001's floor has a 2.3 mm T-junction crack at (−4.703, −5.968)
+    /// (objects' floor tris end at z −5.96695 / −5.96923 there — `tris_near` dump, floor-crack-01 report), so a
+    /// guard parked on the crack misses the ray every tick. The game still grounds him:
+    /// - `Drone_FeetOnPoint` 0x140660 reads `*(short*)(hittest+0x9c)` when its ray brought no hit and sets
+    ///   `anim+0x60 & 8` (grounded) when that word is nonzero — no hit data is copied, no y is re-adjusted;
+    /// - the hittest IS the movement query's: `NDrone2_DefaultInit` 0x14b300:34 wires `obj+0xd4 = dcv+0x3d0`,
+    ///   `Collide_Update` 0x1ea398:83 clears `+0x9c` then picks with it, and `Collide_Intersect` 0x1ebaa8's tail
+    ///   ORs `+0x9c` per real contact (the cylinder path's bit = an up-facing contact, push·axis > 0
+    ///   [M Intersect_CylGeom 0x10a72c-34 — the port's `capsule_pick_contact` dot2 model]);
+    /// - the movement capsule's shape: radius 0.4 (0.55 when `dcv+0xd8 == 0xc` — unmodelled [S]), top
+    ///   `pos + up·r`, bottom `pos + up·(r − hip)` [M NDrone2_Collision 0x140e90:73-93]. The bottom sphere
+    ///   reaches the feet, so a guard over the crack penetrates the floors on both sides of the slit and the
+    ///   up-pushes set the bit his feet ray can't earn.
+    /// Port shape [S]: the probe runs only when the ray missed (the game runs it every tick through
+    /// `Collide_Update`; the port's drones follow nav paths with no per-tick capsule push, so the
+    /// ray-hit ticks have no consumer for the bit), with a fresh-probe pick reference (`-inf`): the
+    /// per-contact rule is the game's, the lifetime `+0x50` accumulator gate is the player's
+    /// persistent-hittest reading (player.rs "0c3") and is not pinned for drones. The grounded y is
+    /// held, not snapped — the game holds it through the capsule push the port does not model, and
+    /// `Drone_FeetOnPoint` copies no hit data on this arm.
+    fn feet_pick_bit(&self, world: &CollisionWorld) -> Option<f32> {
+        let hip = self.hip();
+        let r = 0.4;
+        let top = [self.pos[0], self.pos[1] + r, self.pos[2]];
+        let bottom = [self.pos[0], self.pos[1] + (r - hip), self.pos[2]];
+        if world.capsule_pick_contact(top, bottom, r, f32::NEG_INFINITY) {
+            Some(self.pos[1] - hip)
+        } else {
+            None
+        }
     }
 
     /// `Drone_CollisionHandler` (0x140968): the per-tick collision + gravity driver. Clears the in-air flag, runs the
@@ -5504,7 +5537,7 @@ impl Drone {
         // AbseilDeath's feet probe [M 0x169b28 case 3]; the death-drift 0x156008 is the astronaut's
         // own move). The port's `bounded` stands for & 0x20; gravity always runs when bounded — the
         // old `corpse` short-circuit here froze shot abseilers on the rope.
-        let on_surface = self.feet_on_point(world);
+        let on_surface = self.feet_on_point(world).or_else(|| self.feet_pick_bit(world));
         self.on_surface = on_surface.is_some();
         if let Some(floor) = on_surface {
             // The ride (994): `Drone_FeetOnPoint` 0x140660:134-153 calls `Control_InheritVelocity`
@@ -18327,6 +18360,35 @@ mod tests {
         let mut dr2 = drone_at([0.0, 0.5, 0.0]); // feet at −0.5, floor at −1.5 → gap 1.0 > 0.2
         dr2.collision_handler(&w2);
         assert!(dr2.in_air && !dr2.on_surface, "in the air");
+    }
+
+    /// floor-crack-01: 07000001's floor has a ~2.3 mm T-junction crack at (−4.703, −5.968) — the
+    /// objects' floor tris end at z −5.96695 (north, `tri [-5.99994, 5.3392725, -5.9673367] …
+    /// [-4.0932, …]`) and z −5.96923 (south strip `[-4.734817, 5.3434916, -5.969211] …
+    /// [-2.5934594, …, -5.9701877]`), object 1's slab ends at z −5.9691 west of x −4.7352 — a
+    /// guard parked on the slit missed the 1-unit feet ray every tick and fell forever. The game
+    /// grounds him on the movement hittest's pick bit (see `feet_pick_bit`'s doc). Opt-in: NF_ISO.
+    #[test]
+    fn the_07000001_crack_feet_probe_finds_the_floor() {
+        let Some(path) = std::env::var_os("NF_ISO") else { return };
+        let iso = nf_formats::iso9660::IsoImage::open(&path).unwrap();
+        let (entries, bin) = nf_formats::disc::files_bin_entries(&iso).unwrap();
+        let fe = entries.iter().find(|e| e.name.eq_ignore_ascii_case("07000001.bin")).unwrap();
+        let data = iso.read_bytes(bin.lba as u64 * 2048 + fe.offset as u64, fe.size as u64).unwrap();
+        let level = nf_formats::level::Level::parse(&data).unwrap();
+        let world = CollisionWorld::build(&level, &level.instances(true).0);
+
+        // The crack is real: no triangle under the point; 0.1 north/south find the two floors.
+        assert_eq!(world.floor_below([-4.703, 7.3, -5.968], 40.0), None, "no triangle under the crack");
+        assert!(world.floor_below([-4.703, 7.3, -5.868], 40.0).is_some(), "0.1 north: the north floor");
+        assert!(world.floor_below([-4.703, 7.3, -6.068], 40.0).is_some(), "0.1 south: the south strip");
+
+        // The parked guard (feet 5.34): the game's ray misses [M 0x140660's ray = pos − up·(hip+0.6)],
+        // the movement capsule's pick bit grounds [M 0x140660 reads hittest+0x9c; 0x1ea398:83 clears it
+        // and picks; 0x1ebaa8's tail ORs it per real contact; 0x140e90:73-93 the capsule shape].
+        let dr = drone_at([-4.703, 6.34, -5.968]);
+        assert_eq!(dr.feet_on_point(&world), None, "the 1-unit ray misses the crack");
+        assert!(dr.feet_pick_bit(&world).is_some(), "the pick bit (the capsule over the floors both sides) grounds him");
     }
 }
 
