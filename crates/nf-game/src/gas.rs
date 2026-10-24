@@ -151,6 +151,18 @@ impl GasPool {
         let _ = yaw; // the rot-z euler: stored to obj+0x50/0x60 in the game; the port's billboard draw reads only the spin
     }
 
+    /// The GT turret's wreck smoke — `GT_Update` 0x180498 case 6 (DESTROYED), every 10th game
+    /// frame while the wreck timer runs [M decompile L440-451: the `(int)GameState % 10 == 0`
+    /// branch calls `Gas_Init(0.05, 0.25, cel, obj+0x30, rot-euler, 0, glist 0x2000039, 7,
+    /// 0x48403080, 1)`]. The same 6-draw kind-7 shape as the searchlight site (the caller's
+    /// `Rand_FRand(π)` at decompile L446 feeds the rot-z euler, then Gas_Init's own spin/sign/wind
+    /// draws), the same fixed args and the sibling kind-7 life 128 (the decompile-dropped 11th
+    /// arg; both other kind-7 sites read 0x80 — searchlight [M 0x1cbce0], player muzzle
+    /// [M 0x1a43f8/0x1a442c]).
+    pub fn init_gt_smoke(&mut self, rng: &mut crate::drone::Rng, pos: V3) {
+        self.init_searchlight_smoke(rng, pos);
+    }
+
     /// The projectile smoke-trail site (`Bullet_trail_effect_smoke` 0x12cba8 fast arm, called from
     /// `Bullet_DoTrails` 0x12d890 when the weapon record's `+0x6C` carries bit 0x2 [M decomp
     /// :144-146]), every 4th game tick (`(GameState tick + obj[0xec]) & 3 == 0` [M disasm

@@ -185,6 +185,12 @@ pub struct Sensor {
     pub last_hit: bool,
     /// `SENSOR+0x60` — set while a monitor views this sensor (the unhide) [M 0x1afcc8].
     pub unhidden: bool,
+    /// The lens proxy's obj+0xE8 — the beam stretch [M]. `Sensor_Create` 0x1af010:103 seeds it
+    /// with the range; `Sensor_SetBeam` 0x1af398 rewrites it every tick: range by default (:72),
+    /// then the `Collide_RayIntersect` first-hit distance (HITDATA+0xC, :78) when the mask-8 ray
+    /// hits. The game draws the lens glist with the object's own scale (the +0xFA bit-0x1
+    /// OnlyScaleZ the create ORs in, 0x1af010:102 — the stretch rides the mesh's length axis).
+    pub beam_len: f32,
 }
 
 impl Sensor {
@@ -203,7 +209,9 @@ impl Sensor {
 
     /// `Sensor_InCone` 0x1af4f0 against the player [M; detection is player-only — disasm
     /// 0x1af644/0x1af97c/0x1afae0 pass `glb_players[0]` and nothing else ever reaches here].
-    fn in_cone(&self, world: &CollisionWorld, player: &crate::drone::Player) -> bool {
+    /// Also runs this tick's `Sensor_SetBeam` (InCone calls it first, 0x1af4f0:54) — the lens
+    /// obj+0xE8 refresh below.
+    fn in_cone(&mut self, world: &CollisionWorld, player: &crate::drone::Player) -> bool {
         let target_sph = player.sph;
         // `Sensor_SetBeam` 0x1af398's shortcut [M 0x1af398:57-81]: with the lens gfx object
         // (SENSOR+0x4C = param 0 [M Sensor_Create 0x1af010:97-103]) the beam ray pos → pos +
@@ -214,10 +222,15 @@ impl Sensor {
         // wall-first → no detect either way, clear-and-touching → detect either way. The residual
         // coarseness — the game ray-tests the player's collision model, the port the ≈-capsule
         // world sphere r 1.0576 [L obj-tag-player.md +0x80] — is the documented equivalent.
+        // The distance variant also carries SetBeam's lens obj+0xE8 write [M 0x1af398:72-78]:
+        // range when the ray is clear, the first hit's distance when it is not.
         if self.lens != 0 {
             let dir = dir_of(&self.matrix);
             let end = [self.pos[0] + dir[0] * self.range, self.pos[1] + dir[1] * self.range, self.pos[2] + dir[2] * self.range];
-            if world.line_of_sight(self.pos, end, crate::world::LOS_PROBE_8) && segment_hits_sphere(self.pos, end, target_sph, TARGET_RADIUS) {
+            let hit_t = world.line_of_sight_hit(self.pos, end, crate::world::LOS_PROBE_8);
+            // SetBeam's lens obj+0xE8 [M 0x1af398:72-78]: range when clear, the hit distance when not.
+            self.beam_len = hit_t.map_or(self.range, |t| t * self.range);
+            if hit_t.is_none() && segment_hits_sphere(self.pos, end, target_sph, TARGET_RADIUS) {
                 return true;
             }
         }
@@ -328,6 +341,8 @@ impl Sensor {
                     Some(tq) => {
                         self.quat = slerp(self.quat, tq, RETURN_RATE);
                         self.matrix = quat_matrix(self.quat, self.pos);
+                        // SetBeam runs in the return state too [M 0x1af618:238] — the beam stays live.
+                        self.beam_len = self.beam_ray(world);
                         if quat_is_equal(self.quat, tq, RETURN_EPS) { self.state = 0; }
                     }
                     // No keys: state 2 runs `Spline_Interp` UNCONDITIONALLY [M 0x1af618:232-234];
@@ -353,6 +368,17 @@ impl Sensor {
 
     /// The placement index (the order-chain sort key comes from it).
     pub fn pos(&self) -> V3 { self.pos }
+
+    /// This tick's `Sensor_SetBeam` lens stretch [M 0x1af398:57-79]: the mask-8 ray pos →
+    /// pos + dir·range; clear → obj+0xE8 = the range (:62,72), hit → the first hit's distance
+    /// (HITDATA+0xC, :78). `Sensor_InCone` runs it every tick in the sweep/track states
+    /// (0x1af4f0:54) and `Sensor_Update` runs it again in the return state (0x1af618:238) —
+    /// the only state 3 exit is the disable (no SetBeam, the lens display mask cleared 0x1af618:248-250).
+    pub fn beam_ray(&self, world: &CollisionWorld) -> f32 {
+        let dir = dir_of(&self.matrix);
+        let end = [self.pos[0] + dir[0] * self.range, self.pos[1] + dir[1] * self.range, self.pos[2] + dir[2] * self.range];
+        world.line_of_sight_hit(self.pos, end, crate::world::LOS_PROBE_8).map_or(self.range, |t| t * self.range)
+    }
 }
 
 /// The closest-approach segment/sphere test (the same shape as drone.rs's `segment_hits_sphere`).
@@ -412,6 +438,7 @@ impl Sensors {
                 monitor_ch: param(8) as u16,
                 state: 0,
                 detect: 0.0,
+                beam_len: param(2) as i32 as f32,
                 beep: 0.0,
                 seen: 0,
                 last_hit: false,
