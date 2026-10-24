@@ -71,13 +71,15 @@ Branch `s/stuck-guard-combat-sweep` (from `origin/master` 26543436).
 
 ## Verification (what I ran)
 
-- The full suite (`tools/test/suite.py`, 776 test binaries): **running on this tree at report
-  time** — build ok in 916 s; its final total line is in `suite.out` at the repo root. Two
-  reds observed mid-run, both pre-existing this morning (the 08:31 suite.log on the prior
-  branch): `stdio_pipe_closed_live::a_closed_stderr_pipe_does_not_crash_the_game` FAILED
-  (panics at stdio_pipe_closed_live.rs:28), and `net_desync_report_live` CRASH (exit -9 =
-  SIGKILL, almost certainly OOM while my parallel verification binaries ran beside the suite).
-  Neither touches nf-game AI.
+- The full suite (`tools/test/suite.py`, 776 test binaries): build ok in 916 s, run started
+  ~11:22 UTC. The session window closed before the run's total line (my parallel verification
+  binaries ran beside it and slowed it well past its usual ~31 min). Reds observed mid-run,
+  all pre-existing this morning (the 08:31 suite.log on the prior branch):
+  `stdio_pipe_closed_live::a_closed_stderr_pipe_does_not_crash_the_game` FAILED (panics at
+  stdio_pipe_closed_live.rs:28), `probe_pylon_render::probe_render_pylon_only` FAILED, and
+  `net_desync_report_live` CRASH (exit -9 = SIGKILL — it passed in 14 s this morning; the kill
+  is almost certainly OOM from my parallel runs, not the code). **The next session should run
+  the full suite once on this final tree and report the total line.**
 - On the fixed tree, directly: `stuck_guards_sweep` (nf-game) ok 16.8 s; `guard_move_checks_live`
   ok 4.1 s; `walkreal_07000005_live` 6 passed / 2 ignored; `guard_stuck_sweep_live` (the extended
   sweep) 0 hits across all 17 on-foot SP levels over 60 s each; `stuck_guard_combat_05_live`
