@@ -30,3 +30,16 @@ port it [M]; then the hall glide line, the corner push landing, and the un-ignor
   walk_to_the_gatehouse_and_ride_the_truck misses the ch-0x70 plate with the settle in (the ride
   route needs re-calibration); nf-game lib 546 green, the 0a family green (walkreal 4/0, keyboard
   1/0, walk 3/0), walkreal_07000009 3/0. probes: probe_0a_settle.rs committed as the evidence.
+
+Task: level-0a-office-hatch-6 — the spawn settle without the 05 truck-ride regression, then the
+0a hall. Branch start from origin/s/level-0a-office-hatch-5 (not merged): the settle is
+bit-exact at 0700000a but moves every level's spawn by −0.0109 and
+walkreal_07000005_live::walk_to_the_gatehouse_and_ride_the_truck misses the ch-0x70 plate.
+
+Plan: (1) run the truck ride on both trees, log the root and the ch-0x70 plate box at the park
+tick, name which side he misses by; fix so both hold — the ride route re-derived at the settled
+height, or the settle is wrong somewhere [M]. (2) find the boot gate that holds the placed root
+for the first ticks (after Player_StandAtNewPosition 0x190d88, the first Player_Update 0x193600
+calls, GS_PausePlayer, the fade-in) [M]; if unfound, keep the observable model with the hold
+`// [S] unverified`. (3) the hall glide (game 1.1147 after the doorway-base climb at x −8.304)
+and the corner at (−17.87, 4.87); un-ignore the sisters and the main walk as they go green.
