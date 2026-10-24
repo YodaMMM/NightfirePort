@@ -272,28 +272,47 @@ fn the_vent_grill_blocks_the_west_duct_per_the_game() {
     }
 }
 
-/// The real east route (level-14-vent-grate): from the vent start the crawl leaves through the
-/// EAST duct mouth — past lid SP #328 (45.28, 2.37, 63.66) [D] — and descends south to the
-/// stairwell slot approach (45.23, 1.07, 56.27 [D probe14_eastduct re-run 2026-10-22, both stance
-/// probes converging there]). The west grill plane z=58.86 is closed
+/// The real east route (level-14-east-duct, REWRITTEN): the vent room's east side is SEALED in the
+/// level's own collision — the AirConditioningRoom's east wall face at x≈41.534 runs z 62.2..67.2
+/// at full crawl height (two skins: tris 7418/7419/7422/7424/7599-7602/7713-7727 [D probe14_mouth4
+/// part E]; owner plc #16 "AirConditioningRoom" kind 0xc047, glist 0x0) — and the game KEEPS it:
+/// the placement carries 0x8000 so parsemap builds the runtime cel for the whole object [M
+/// parsemap_block_map_data_static 0x1d1998:92] and Collide_Pick skips a node only on glist bit 0x20
+/// (:140) or bit 0x1000 with the query's bit 0x20 (:145-151) [M Collide_Pick 0x1eb320] — neither
+/// is this cel's 0x0. The old "east duct mouth / lintel at crawl-head height" reading was wrong:
+/// nothing is scheduled to open that wall. The game's own walkability graph says the route leaves
+/// SOUTH: the room floor ends at z≈63.7 past lid SP #266 (40.80, 2.37, 63.66 [D]) and the nav web
+/// threads a −0.6-floor corridor at z≈62.9 running east-west x 37.4..49.1 [D block 0x05, map 54
+/// path 2 nodes 4-8] directly under the room, with the stairwell shaft (x 45-46, ceiling 5.06 [D])
+/// at its east end. So: crawl south over the lip, drop to the corridor, east to the shaft, then
+/// south down the stairwell to the slot approach (45.23, 1.07, 56.27 [D probe14_eastduct re-run
+/// 2026-10-22, both stance probes converging there]). The west grill plane z=58.86 stays closed
 /// (the_vent_grill_blocks_the_west_duct_per_the_game).
 #[test]
-#[ignore = "level-14-vent-grate: the REAL-input east crawl wedges at the duct mouth - both lanes (z=63.7 and z=65.4) stop at x=40.98 with head_bump=true (crouched, grounded; the mouth's lintel is at crawl-head height in the port's world). The probe14_eastduct scans only TELEPORT past the mouth, so nothing yet proves the spawn-side approach is open. Needed: a tri-owner dump of x 40.9..41.6, y 3.1..3.9, z 63.0..66.0 (whose object owns the lintel - a bit-0x1 label/lid art the revert restored, or the structural wall?) and a fresh-boot [L] of the game's Bond taking this mouth. NOT a regression: the pre-revert world never reached this wall honestly (the grill skip changed the same world)."]
+#[ignore = "level-14-east-duct: the south-lip route is the new reading (the east wall is the game's own sealed collision, [M] 0x1d1998 + 0x1eb320; the nav corridor [D] runs under the room) — the legs below are being taken tick by tick; the drop and the corridor east are the verified part so far, the shaft climb and the slot approach are the open work."]
 fn the_east_duct_route_reaches_the_stairwell_slot() {
     let iso = iso();
     let mut w = Walker::new(nf_view::load(&iso, "07000014.bin", false).unwrap());
     w.wait_enabled(3000, "the intro");
     w.wait(120);
     set_crouch(&mut w, true);
-    // East straight off the spawn along the z=65.4 lane — the probe14_eastduct scans' lane
-    // (their south-crawl starts (45.28, 3.05, 65.51) [D]).
-    w.walk_to(Wp::new(44.9, 2.4, 65.4).r(0.9), "east along the duct lane past lid #328");
+    // Leg A: crawl south off the room floor's south lip (z≈63.7 past lid #266) and drop to the
+    // −0.6 corridor the nav web threads [D map 54 path 2 nodes 4-8].
+    w.walk_to(Wp::new(40.8, 2.4, 63.4).r(0.4), "the crawl south to the room's south lip");
+    w.walk_to(Wp::new(40.8, -0.6, 62.8).r(0.5), "the drop south into the −0.6 corridor");
     {
         let p = w.scene.sim.as_ref().unwrap().bond.pos;
-        assert!(p[0] > 43.5, "the crawl reached the east duct lane [D the mouth past lid #328], got {p:?}");
+        assert!(p[1] < 0.4 && p[2] < 64.6,
+            "the drop landed in the −0.6 corridor under the room [D nav nodes 4-8], got {p:?}");
     }
-    // South down the east duct's descent to the slot approach.
-    w.walk_to(Wp::new(45.2, 1.1, 56.6).r(0.9), "south down the east duct to the slot");
+    // Leg B: the corridor east to the shaft's west side (x≈45; the nav nodes 5/8 thread z≈62.9).
+    w.walk_to(Wp::new(44.7, -0.6, 63.2).r(0.5), "the corridor east to the shaft");
+    {
+        let p = w.scene.sim.as_ref().unwrap().bond.pos;
+        assert!(p[0] > 43.5, "the corridor reached the shaft's west side [D nav node 5 (43.05, 0.4, 62.86)], got {p:?}");
+    }
+    // Leg C: south down the stairwell to the slot approach [D probe14_eastduct].
+    w.walk_to(Wp::new(45.2, 1.1, 56.6).r(0.9), "south down the stairwell to the slot");
     {
         let p = w.scene.sim.as_ref().unwrap().bond.pos;
         assert!(p[0] > 44.0 && p[2] < 57.2 && p[1] < 1.6,
