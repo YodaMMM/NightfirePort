@@ -83,6 +83,10 @@ struct Item {
     paused: bool,
     /// `KeyOnFrameDelay` (SFXItem+0x2B4): the precache countdown; `HasSampleEnded` reports false while ≥ 1 [M §3.2].
     key_on_delay: i32,
+    /// The key-ons a precache set up but did not send: `StartSample` skips the KeyOn while
+    /// `KeyOnFrameDelay != 0` [M sound.md §3.2 SFXPreCache@39f4]; the real start's takeover keys
+    /// them on (`SampleKeyOn` [M §3.2 step 3]).
+    held: Vec<Cmd>,
     /// The global pause (`SFXPause` op 9 — the second user of SFXItem+0x290): set on every item live
     /// at the pause (`ES_PauseSfx` 0x1648), skipped by `SFXUpdate`, cleared by the unpause [M §8].
     /// Its own flag next to `paused` (the NIS pause): the port recomputes that one every update,
@@ -268,7 +272,10 @@ impl Driver {
         // audible voice just keeps playing) and a second precache of the same id is refused [M].
         if let Some(k) = self.items.iter().position(|it| it.id == id && it.key_on_delay > 0 && !it.delete) {
             if kd != 0 { return 1; }
+            // The takeover keys the set-up voice on now, from the start of the line
+            // (`SampleKeyOn(VoiceHandle[0], …)` [M §3.2 step 3]).
             self.items[k].key_on_delay = 0;
+            out.extend(std::mem::take(&mut self.items[k].held));
             return 0;
         }
         if kd != 0 && !(fx.count == 1 && fx.subs[0].file < 0) { return 1; }
@@ -279,7 +286,7 @@ impl Driver {
             id, counter: 0, vh: [None; 10], base_volume: [0; 10], pitch: [0; 10], pan: [0; 10], cue_pos: 0, csw: [0; 50], cued: Vec::new(),
             inner: if inner == -1 { fx.inner } else { inner }, outer: if outer == -1 { fx.outer } else { outer }, fx: Arc::new(fx), slot,
             updated: 0, real_pos: p, pos: p, handle, delete: false, fade_kill: false, fade_kill_vol: 100,
-            paused: false, key_on_delay: kd,
+            paused: false, key_on_delay: kd, held: Vec::new(),
             gpaused: false,
             sample_hash: 0,
             started_when_nis: self.nis_playing,
@@ -428,11 +435,16 @@ impl Driver {
         let (l, r, b) = self.levels(i, ch);
         // `ReverbSend` (SFXParameters+0x00): non-zero at key-on sets the voice's reverb-send bit (VMIXEL/VMIXER) [M].
         let reverb = fx.reverb_send != 0;
-        out.push(Cmd::Play { voice: front, pcm: pcm.clone(), pitch: pitch.max(0) as u32, left: l, right: r, delay: 0.0, reverb });
+        // A precached item (`KeyOnFrameDelay != 0`) is set up but not keyed on [M §3.2]: its key-ons
+        // wait on the item for the real start.
+        let hold = self.items[i].key_on_delay > 0;
+        let front_cmd = Cmd::Play { voice: front, pcm: pcm.clone(), pitch: pitch.max(0) as u32, left: l, right: r, delay: 0.0, reverb };
+        if hold { self.items[i].held.push(front_cmd) } else { out.push(front_cmd) }
         if let Some(rv) = rear {
             self.voices[rv as usize] = Some(Voice { front: rv, rear: None, looping: looped, playing: true, pitch: pitch.max(0) as u32, stream: streamed });
             // Mode ≠ 0: the rear voices are keyed on after `DelayThread(500)` (µs); mode 0 keys them with the front.
-            out.push(Cmd::Play { voice: rv, pcm, pitch: pitch.max(0) as u32, left: b, right: if self.mode == 0 { b } else { -b }, delay: if self.mode == 0 { 0.0 } else { 0.0005 }, reverb });
+            let rear_cmd = Cmd::Play { voice: rv, pcm, pitch: pitch.max(0) as u32, left: b, right: if self.mode == 0 { b } else { -b }, delay: if self.mode == 0 { 0.0 } else { 0.0005 }, reverb };
+            if hold { self.items[i].held.push(rear_cmd) } else { out.push(rear_cmd) }
         }
         true
     }
@@ -666,10 +678,12 @@ impl Driver {
                     Self::pause_item_voices(&self.voices, it, out);
                 }
                 it.paused = want;
-                // The precache countdown (`KeyOnFrameDelay`): counts down once per frame [M §3.2]. (*Deviation*: the
-                // game deletes the silent pre-setup at 0 — the port keyed the voice on at once, so expiry just
-                // closes the precache window.)
-                if it.key_on_delay > 0 { it.key_on_delay -= 1; }
+                // The precache countdown (`KeyOnFrameDelay`): counts down once per frame; a silent pre-setup
+                // that reaches 0 without a real start is deleted [M §3.2].
+                if it.key_on_delay > 0 {
+                    it.key_on_delay -= 1;
+                    if it.key_on_delay == 0 && !it.held.is_empty() { it.held.clear(); it.delete = true; }
+                }
                 if it.paused { i += 1; continue; }
                 if it.fade_kill { it.fade_kill_vol -= 5; if it.fade_kill_vol < 0 { it.fade_kill_vol = 0; it.delete = true; } }
                 it.updated += 1;
