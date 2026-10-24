@@ -139,7 +139,7 @@ fn walk_to_the_gatehouse_and_ride_the_truck() {
 /// - The old test's anchors ("ledge west 1/2/3", "the cable mouth") predate these heights and
 ///   the lane they assumed does not exist at the walked heights — the anchors were the TEST's
 ///   guess, now replaced by the measured lane above.
-/// - ROUTE CORRECTION (level-05-west-lane-3): the disc's collision census (the connectivity walk
+/// - ROUTE CORRECTION: the disc's collision census (the connectivity walk
 ///   over the port's world of the disc's own data, up-steps ≤ 0.55 [M Player_Collision 0x194df0
 ///   case 0: the capsule's r-0.55 bottom sphere], walls respected) shows the y-28 landing is an
 ///   ISLAND — 19-38 cells (x 57..63, z 85..91) with no walk edge to the courtyard, the roofs, or
@@ -191,7 +191,7 @@ fn walk_the_tower_top_and_the_walk_off_fall() {
     eprintln!("[05] tower-top + walk-off done in {} ticks", w.total_ticks);
 }
 
-/// The west lane, level-05-west-lane-3 — the WALKED legs, un-ignored. The route is the
+/// The west lane — the WALKED legs, un-ignored. The route is the
 /// west-lane-2 castle-wall map, settled against the disc's collision [D every waypoint below is
 /// walked through the port's collision of the disc's own data; the port's collision matches the
 /// disc per west-lane-2's ray probes]:
@@ -245,7 +245,7 @@ fn walk_the_west_ledge_and_cross_the_cable() {
     for st in &w.report.stuck_events { eprintln!("[05w] stuck: {st}"); }
 }
 
-/// The shared cable-route walk (level-05-west-lane-4): the cold start → the courtyard strip →
+/// The shared cable-route walk: the cold start → the courtyard strip →
 /// the castle lane → the tower top → THE SOUTH SLOPE (the round-4 discovery that replaces the
 /// parapet hunt) → the west-of-parapet ledge → the crawl shelf → the wall-hug crawl #299 → the
 /// wide ledge → the walkway slab → the cable ledge → the notch's north edge.
@@ -394,7 +394,7 @@ pub fn walk_to_the_slab_east_end(w: &mut Walker) {
     }
 }
 
-/// The crawl legs, UN-IGNORED (level-05-west-lane-4): the whole west lane through the south
+/// The crawl legs, UN-IGNORED: the whole west lane through the south
 /// slope, the crawl shelf, the wall-hug crawl #299 (the real Use press, the entry + the north
 /// exit across the waist) and the ledge up onto the walkway slab's east end. The route and the
 /// two round-3/4 blocker answers are documented on `walk_to_the_slab_east_end`. The legs west
@@ -411,7 +411,7 @@ fn the_crawl_legs_the_south_slope_shelf_and_slab_east_end() {
     for st in &w.report.stuck_events { eprintln!("[05c] stuck: {st}"); }
 }
 
-/// The cable legs, UN-IGNORED (level-05-west-lane-5): the whole west lane through the crawl
+/// The cable legs, UN-IGNORED: the whole west lane through the crawl
 /// #299, the slab strip and the slab band's diagonal down to its west end (x −9.5). The route
 /// and the blocker answers are documented on `walk_to_the_slab_east_end`. The legs beyond (the
 /// gap crossing → the cable ledge → the notch grab → the ride → the south ledge) stay parked on
@@ -427,7 +427,7 @@ fn the_cable_legs_the_crawl_notch_and_ride() {
     for st in &w.report.stuck_events { eprintln!("[05c] stuck: {st}"); }
 }
 
-/// The PARKED continuation (level-05-west-lane-5): the gap crossing → the cable ledge → the
+/// The PARKED continuation: the gap crossing → the cable ledge → the
 /// notch JUMP-grab at icon #310 ((−23.80, 32.74, 12.33) [D]) → the hand-over-hand ride → the
 /// south ledge → the window-ledge crawl #35 → the exit. What this round settled and what blocks:
 /// - WALKED GREEN (now on `the_cable_legs_the_crawl_notch_and_ride`): the slab strip (z 54.3-55.7
@@ -449,7 +449,7 @@ fn the_cable_legs_the_crawl_notch_and_ride() {
 /// - Then the notch grab (the round-3 legs, git 96cebefd1), the ride, the south ledge, the
 ///   window-ledge crawl #35 ((−34.10, 37.28, −31.65) [D]) and the exit door #112 remain.
 #[test]
-#[ignore = "level-05-west-lane-5: the band gap x −16..−9.5 at z 45.5-48 — the walked crossing drops to a y-29.6 roof that dead-ends at 22.6 [L]; the game's link from the diagonal's west end to the (−24..−23, 45-47) step is unfound (live read or a finer one-way-surface probe), then the notch grab, the ride and the south legs (git 96cebefd1)"]
+#[ignore = "the band gap x −16..−9.5 at z 45.5-48 — the walked crossing drops to a y-29.6 roof that dead-ends at 22.6 [L]; the game's link from the diagonal's west end to the (−24..−23, 45-47) step is unfound (live read or a finer one-way-surface probe), then the notch grab, the ride and the south legs (git 96cebefd1)"]
 fn the_cable_legs_the_gap_the_notch_and_the_ride_parked() {
     let iso = iso();
     let mut w = Walker::new(nf_view::load(&iso, "07000005.bin", false).expect("load 07000005"));
@@ -473,7 +473,7 @@ fn the_cable_legs_the_gap_the_notch_and_the_ride_parked() {
 /// reach does not grab any wire [M Player_HandleJump 0x1916b0:126-147 — the ctx scan only runs
 /// with the icon armed].
 #[test]
-#[ignore = "level-05-west-lane-4: the notch's north edge is behind the slab crossing (see the_cable_legs_the_crawl_notch_and_ride's reason); re-route through the slab once that leg walks"]
+#[ignore = "the notch's north edge is behind the slab crossing (see the_cable_legs_the_crawl_notch_and_ride's reason); re-route through the slab once that leg walks"]
 fn the_notch_holds_the_walk_and_the_grab_needs_its_zone() {
     let iso = iso();
     let mut w = Walker::new(nf_view::load(&iso, "07000005.bin", false).expect("load 07000005"));
