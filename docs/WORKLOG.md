@@ -19,3 +19,15 @@ the scene.rs use-pick call and every camera-as-head caller; switch to head pos; 
 - (22:57 UTC) Sandbox kept repo/work/ISO from a previous session: skipped downloads, branched
   s/level-09-use-pick-head from origin/master at 7dbc9cb1, pushing this checkpoint. Suite start
   next.
+
+- (23:10 UTC) Evidence traced end to end: run()'s `camera` param is step_bond's
+  `self.bond.head()` binding (scene.rs 3228→3256, no shadowing), so the doors/trigger/monitor
+  arms were ALREADY head-based at runtime — the "render camera" story (garage-lift-calls
+  comment, the test's ignore note) misread the arg name. The ignored test's premise dies on
+  three gates: [M 0x1b2318:38-40] type-1 Trigger_Activate needs mask&4 and #67's disc mask is
+  8 [D params (0,50),(1,8)]; [M 0x1a9ea8] SS_Activate needs mask&4 and the lift doors' SS mask
+  is param 2 = 1 [D]; the Load Point's own pick plate is z 10.232..10.283 [D #63 collision],
+  ~1.6 beyond the pressed-in sphere z 11.85..13.85. Code: head passed explicitly for every arm
+  (scene.rs 4840/4853), false camera comments corrected (scene.rs, drone.rs). Test rewritten
+  to the proven negative with the full citation block; 15/15 green on interact_07000009.
+  Checkpoint pushed. Next: the wider interact_*/walkreal_* set, full suite, report.
