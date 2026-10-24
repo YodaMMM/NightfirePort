@@ -368,25 +368,30 @@ fn every_weapon_on_07000005_draws_fires_and_reloads_with_sounds() {
 /// The same foreign-weapon repro on an indoor level (07000001, bank hash 1 → slot 10): the AR's fire
 /// sound 0x40d is missing from that bank too, and must start from the owning spare bank.
 ///
-/// IGNORED for now (100a/100c dependency, tried and documented): on 07000001 the AR draws fine
-/// (`until_drawn` completes in 31 ticks: weapon 0x1a, clip 30, idle script 0x060007b8) but the fire
-/// input never fires a round — `gun.clip` stays 30 across 30 held-fire ticks, so the op-1 fire sound
-/// never requests. The same equip+fire on 07000005 fires immediately. Not a sound-bank issue (the
-/// draw/holster 0x282/0x283 resolve from slot 10 here); the foreign weapon's fire path on this level
-/// is 100c's fire-behaviour work (or 100a's script merge — the fire script 0x060007b6 may not be in
-/// this level's merged set). Re-enable when the fire path lands.
-#[ignore = "the foreign AR does not fire on 07000001 yet (100a/100c): draw works, held fire spawns no round — see comment"]
+/// The old IGNORE (100a/100c, "the fire script may not be merged") was wrong on both counts: the
+/// dev merge already carries every 0x1a view script onto this level (idle 0x060007b8, fire
+/// 0x060007b6, draw 0x060007be — all seven resolve in the merged set), and the fire path works.
+/// The real blocker was the level's own opening script: its event-4 disable (the cut-scene
+/// `Player_Disable`, `BLData+0x94a` [M 0x1949a8:24]; the port's `disabled` gate kills the pad
+/// input for the whole tick) holds Bond from tick 0 until the script's enable lands 2121 ticks
+/// in — the old 120-tick wait fired INSIDE the cut-scene, where the game itself takes no input.
+/// The wait below is the player's own: idle ticks through the intro until the game releases him.
 #[test]
 fn a_foreign_weapon_fires_with_sounds_on_the_indoor_level_07000001() {
     let Some(mut scene) = load("07000001.bin") else { eprintln!("NF_ISO not set — skipping"); return };
     let (own, banks) = disc_banks(0x0700_0001);
     let mut sound = nf_view::build_sound(&mut scene).expect("the level has a bank");
     let mut seen = HashMap::new();
-    // Wait out the intro scene's first moments, then give the AR.
-    for _ in 0..120 {
+    // Wait out the opening cut-scene with idle input (the real path — the game's enable event
+    // ends it; the cap only bounds a broken enable).
+    let mut waited = 0usize;
+    for t in 0..4000 {
         scene.sim.as_mut().unwrap().step_bond(Input::default(), false, false, false);
         tick(&mut sound, &mut scene, &mut seen);
+        if !scene.sim.as_ref().unwrap().disabled { waited = t; break; }
     }
+    assert!(waited > 0, "07000001 must start with Bond held by the intro's disable (the disc script's event 4)");
+    assert!(waited < 4000, "the intro never released Bond (the script's enable never landed)");
     if !equip(&mut scene, 0x1a) { panic!("the AR (0x1a) could not be given on 07000001 (dev merge gap — 100a)"); }
     until_drawn(&mut scene, &mut sound, &mut seen, 0x1a, 240);
     for _ in 0..30 {
@@ -402,21 +407,60 @@ fn a_foreign_weapon_fires_with_sounds_on_the_indoor_level_07000001() {
     }
 }
 
+/// Sister to the indoor fire test: the intro's hold is real. 07000001's opening script disables
+/// Bond at load (the disc script's event-4 `PlayerDisable` [M the script-request handler; the
+/// game's cut-scene disable `BLData+0x94a`, 0x1949a8:24 — the port's `disabled` gate zeroes the
+/// pad input for the tick]) and a held fire window DURING the hold spawns no round and starts no
+/// voice, while the script still plays. Fails if the port stops honouring the disable (Bond
+/// enabled at tick 0) or the enable (the hold never ends).
+#[test]
+fn the_indoor_intro_holds_the_trigger_until_the_script_releases_bond() {
+    let Some(mut scene) = load("07000001.bin") else { eprintln!("NF_ISO not set — skipping"); return };
+    // The disable is the script's event 4 — it lands on the first script tick, not at load.
+    scene.sim.as_mut().unwrap().step_bond(Input::default(), false, false, false);
+    assert!(scene.sim.as_ref().unwrap().disabled, "Bond must be disabled from the intro's first script tick (event-4 PlayerDisable)");
+    let mut sound = nf_view::build_sound(&mut scene).expect("the level has a bank");
+    let mut seen = HashMap::new();
+    // A held fire window inside the cut-scene: the input is dead — no round, no voice, and the
+    // view never enters the fire state.
+    for _ in 0..120 {
+        scene.sim.as_mut().unwrap().step_bond(Input { fire: true, ..Input::default() }, true, false, false);
+        tick(&mut sound, &mut scene, &mut seen);
+        let sim = scene.sim.as_ref().unwrap();
+        assert!(sim.disabled, "the disable must hold through the cut-scene");
+        assert!(!sim.gun.fire_state, "the fire state must never key during the disable");
+    }
+    assert!(!seen.contains_key(&0x40d), "no AR fire voice during the intro's disable");
+    // The release: the script's enable lands and Bond is his own again.
+    let mut released = false;
+    for _ in 0..4000 {
+        scene.sim.as_mut().unwrap().step_bond(Input::default(), false, false, false);
+        tick(&mut sound, &mut scene, &mut seen);
+        if !scene.sim.as_ref().unwrap().disabled { released = true; break; }
+    }
+    assert!(released, "the intro never released Bond (the enable event never landed)");
+}
+
 /// The Laser (0x4e) on 07000005: its loop (script sound 0x12 — SHF loop-flagged sample row [D bank 4])
 /// keys on when the fire button goes down and is stopped by the script's op-4.3 (`Sound_StopAllWithId`
-/// [M 0x1c1b38:388]) when the button comes back up. Sister: a one-shot reap never touches the loop —
-/// only the scripted stop frees it.
+/// [M 0x1c1b38:388]) when the button comes back up.
 ///
-/// IGNORED for now: the Laser (0x4e) has no first-person model in the dev merge yet ("24 weapon-model
-/// hashes still missing" — 100a's asset gap), so `equip_weapon` refuses and the real-path test cannot
-/// run. The loop id 0x12 IS in 07000005's bank (SHF loop row 18 [D]) and the op-4.3 stop is already
-/// ported (fix-gadgets2, scene.rs). Re-enable with the assets.
-#[ignore = "the Laser 0x4e has no first-person model in the dev merge yet (100a's asset gap)"]
+/// The old IGNORE ("no first-person model in the dev merge") was stale: the merge carries the
+/// Laser's fp skin 0x0500004b (from 07000043) and all six of its view scripts (idle 0x060004ea,
+/// fire 0x060004e9/0x060004e8, draw 0x060004ee, holster 0x060004e7, idle-alert 0x060006e7) onto
+/// this level. The real blocker was the give model: 0x4e is ALREADY OWNED at the 07000005 start
+/// (level_start owns it with a 500-round clip), the game's owned arm refuses a re-give
+/// (`Player_EquipWeapon` 0x1a8a58: carried at the ammo_data cap or a zero take → refused [M]), and
+/// the dev give still draws it — the panel's documented affordance ("already owned — the take
+/// added rounds for …" / "already owned, drawing it", panel.rs `apply`). The give below is that
+/// two-step: the take (which must refuse), then the switch request.
 #[test]
 fn the_laser_loop_starts_on_press_and_stops_on_release() {
     let Some(mut scene) = load("07000005.bin") else { eprintln!("NF_ISO not set — skipping"); return };
     let (own, banks) = disc_banks(0x0700_0005);
-    if !equip(&mut scene, 0x4e) { panic!("the Laser (0x4e) could not be given on 07000005"); }
+    // The take must refuse (already owned — the game's owned arm); the dev give still draws.
+    assert!(!equip(&mut scene, 0x4e), "the Laser's take must refuse: 0x4e is already owned (the game's owned arm)");
+    scene.sim.as_mut().unwrap().gun.switch_request = 0x4e;
     let mut sound = nf_view::build_sound(&mut scene).expect("the level has a bank");
     let mut seen = HashMap::new();
     until_drawn(&mut scene, &mut sound, &mut seen, 0x4e, 240);
@@ -440,4 +484,27 @@ fn the_laser_loop_starts_on_press_and_stops_on_release() {
         if sound.driver.item_slot(0x12).is_none() { gone_at = Some(t); break; }
     }
     assert!(gone_at.is_some(), "the Laser's loop 0x12 kept playing after release (the op-4.3 stop leaked)");
+}
+
+/// Sister to the Laser loop test: the hold is UNINTERRUPTED, and the one-shot reap never touches
+/// it. Every tick's harness pass reports all voices ended to the driver (the headless stand-in
+/// for the SPU's end reports) — a looped sample never ends on that path [M sound.md §6], so the
+/// loop must be alive after every one of the 120 held ticks. Fails if the loop is ever keyed as a
+/// one-shot (it dies at the first end-report pass) or the hold drops it.
+#[test]
+fn the_laser_loop_survives_every_one_shot_reap_while_held() {
+    let Some(mut scene) = load("07000005.bin") else { eprintln!("NF_ISO not set — skipping"); return };
+    let (_own, _banks) = disc_banks(0x0700_0005);
+    assert!(!equip(&mut scene, 0x4e), "the Laser's take must refuse (already owned)");
+    scene.sim.as_mut().unwrap().gun.switch_request = 0x4e;
+    let mut sound = nf_view::build_sound(&mut scene).expect("the level has a bank");
+    let mut seen = HashMap::new();
+    until_drawn(&mut scene, &mut sound, &mut seen, 0x4e, 240);
+    let mut alive = 0usize;
+    for _ in 0..120 {
+        scene.sim.as_mut().unwrap().step_bond(Input { fire: true, ..Input::default() }, true, false, false);
+        tick(&mut sound, &mut scene, &mut seen);
+        if sound.driver.item_slot(0x12).is_some() { alive += 1; }
+    }
+    assert_eq!(alive, 120, "the Laser's loop must ride out every held tick (a one-shot keying dies at the first end-report pass)");
 }
