@@ -11485,6 +11485,12 @@ pub struct Drones {
     /// The previous level's mission globals (map-tower2): restored at the `Mission_Init` latch, after
     /// init, the way the game's `.data` globals sit under it [M 0x182270:68-129].
     pub mission_carry: Option<crate::mission::MissionSave>,
+    /// The mission tally the load's `RamSave` carried — `Player_RamSave` 0x195670:10-11's
+    /// `PlrMissionStats[0]` (0x38) + `BondMoments` (0x14) [M]. Seeded by the load, consumed by
+    /// the `Mission_Init` latch AFTER its part-0 wipe (the game's order: `Mission_Init` zeroes on
+    /// a base-map load, `Player_InitWeapon`'s `Player_RamLoad` 0x1957a8:15-16 puts the snapshot
+    /// back; 987-mission-stats-carry).
+    pub tally_carry: Option<crate::player::TallySave>,
     /// The photograph targets and breakable doors (crate::props; placements 0xFD / 0xE1 —
     /// `CamSubject_Create` 0x1bc5d8, `Destroy_Create` 0x12c318), created in `attach_level`.
     pub props: crate::props::Props,
@@ -11877,6 +11883,8 @@ impl Drones {
             // doublecross-transitions: the entry fade arms on every level load (the game arms it
             // in `Player_Init` on every `Player_Start` [M 0x1910f8:45, 0x1d6360:152]).
             spawn_fade: Some((45, 45)),
+            // 987-mission-stats-carry: no tally on the load until the RamSave seeds it.
+            tally_carry: None,
     };
         drones
     }
@@ -14991,6 +14999,17 @@ fn segment_hits_sphere(a: V3, b: V3, c: V3, r: f32) -> bool {
             // place and the carried snapshot puts the previous parts' states back [M 0x182270:68-129;
             // the payload shape is LS_MakeMission/LS_LoadMission 0x1cd720/0x1cd880; map-tower2].
             if let Some(s) = self.mission_carry.take() { self.mission.restore(&s); }
+            // `Player_RamLoad` 0x1957a8:15-16's tally restore (987-mission-stats-carry): the warm
+            // load puts the exit snapshot back AFTER the part-0 wipe above — the game's order
+            // (ResetMap_GameInit's `Mission_Init` zeroes on the base map, `Player_InitWeapon`'s
+            // `Player_RamLoad` restores later in the load [M 0x1d5080:53 → 0x1a7ef8 arms →
+            // 0x1957a8:15-16]), so a restart-level on the base map ends at the entry tally
+            // [M P_ENDMISSION_Handler 0x216618:19-21]. `now` = `Player_Init` 0x1910f8:187's
+            // `PlarStat_LogTimerUnpause` re-stamp on the port's frame clock.
+            if let Some(t) = self.tally_carry.take() {
+                let now = crate::progress::PlrMissionStats::now_100ths(frame);
+                self.progress.restore_tally(&t, now);
+            }
             self.mission_inited = true;
         }
         // `Mission_Update` reads the DEATH CHANNEL, not health [M 0x182c60:21 `switch_channels[0x62]`]

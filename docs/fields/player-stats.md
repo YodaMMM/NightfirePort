@@ -3,11 +3,10 @@
 Proof levels: see [README.md](README.md). Evidence: [M] the decompile (file:line or `mipsdis`
 addresses — note this ELF encodes `mul rd,rs,rt` as SPECIAL funct 0x18 with rd = destination, which
 `mipsdis` prints as `mult`; Ghidra is correct); [L] `work/ee_start_05.bin` (the snapshot is ~8 s into
-mission 0x07000001 — after `Mission_Init`). Port status up front: **the whole scoring system is unported**
-— the port keeps per-drone stand-ins for the enemy counters (`crates/nf-game/src/drone.rs:650-654,1727-1737`,
-documented as replacing `PlrStat_LogEnemy*`; `pickup.rs:90,375` notes LogBondBonus without implementing it;
-`mission.rs:162-163` "the port's PlrStat counters live on the drones themselves"). No crate contains
-ScoringTable, PlrMissionStats, RewardsTable, the bonus bitmask, GetScore or the medal logic.
+mission 0x07000001 — after `Mission_Init`). Port status: **the whole scoring layer is ported** in
+`crates/nf-game/src/progress.rs` — `PlrMissionStats` (the 8×56 block), `BondMoments`, the
+`ScoringTable` runtime, `GetScore` and the level-change tally carry (`RamSave::tally`, 987-mission-stats-carry);
+the tally/scoring lives on `Drones::progress` (progress.rs:415-417, mission.rs:204-206).
 
 ## The globals
 
@@ -83,11 +82,14 @@ row 0 Bond moments, 1 dispatched, 2 disabled, 3 surrendered, 4 undetected (count
 
 ## The score formula (`PlrStat_GetScore` 0x1984b0)
 
-1. Find the entry for `Mission_BaseMapHCode()`; NULL if absent. Set the +0x38 flag (the 0x09-group test).
-2. Flag ≠ 0 (the 0x07 maps): copy the rows from `NewScoresRef` (9×3 s32: value/count/target, ×100 for
-   row 7); abort if NULL. Flag == 0 (the 0x09 maps): the rows come from PlrMissionStats[0] as the table
-   above; row 5.value = count × hits / shots; row 6.value = (u32)health; Mission_Status() == 3 (failed)
-   → row 6.value = 0.
+1. Find the entry for `Mission_BaseMapHCode()`; NULL if absent. Set the +0x38 flag (0 for
+   `hash&0xFF000000 == 0x09`, else 1) [M 0x1984b0:38-43].
+2. Flag == 0 (the 0x09 maps): copy the rows from `NewScoresRef` (9×3 s32: value/count/target, ×100 for
+   row 7); abort if NULL [M 0x1984b0:44-65]. Flag != 0 (the 0x07 maps, incl. 0x07000005): the rows come
+   from PlrMissionStats[0] as the table above, refilled on EVERY call — row0.value = +0x20, row1 = +0x0C,
+   row2 = +0x10, row3 = +0x14, row4 = +0x00, row5 from +0x04/+0x08, row6 = (u32)+0x1C (Mission_Status()==3
+   → 0), row7 = +0x30, row8 = +0x24 [M 0x1984b0:66-84]. (An earlier revision of this doc had the two
+   branches swapped — the disasm's flag store order settles it; corrected 2026-10-24, 987-mission-stats-carry.)
 3. Per row (skip count == 0): **normal rows (0,1,2,3,5,6)**: raw = target × min(count,value) / count;
    ratio = clamp(round(min/count × 100) × 0.01, 0..1). **Row 4 (undetected)**: count < value (detections
    over par) → raw = max(0, 1 − (value−count)·entry.penalty) × target (penalty 0.03 when +0x14 == 0);
@@ -98,8 +100,10 @@ row 0 Bond moments, 1 dispatched, 2 disabled, 3 surrendered, 4 undetected (count
 5. param 0: DoneBetter = (base+bonus ≥ best) when non-zero; last = base+bonus; best = max(best, last).
 6. **If `Mission_Status() != 6` everything from step 3 except entry.best is zeroed** — scores only stick
    on the results path (6 = MISSION_COMPLETE per Mission_Update 0x182c60:86; 2/3 are the failure paths;
-   Mission_Init sets 1). The pause stats screen calls GetScore(0) and shows the counts live [S: verify the
-   Menu_AddRow arg meaning before porting the display].
+   Mission_Init sets 1). The pause stats screen calls GetScore(**1**) — `C_GCPAUSE_Handler` 0x204408:413
+   — the param that skips the best/last update [M 0x1984b0:301-317], and shows the counts live because
+   step 2 refills the rows from PlrMissionStats[0] on every call. (An earlier revision said GetScore(0);
+   corrected 2026-10-24, 987-mission-stats-carry.)
 
 **Gold medal**: `PlrStats_HasGoldMedal` 0x199a40 = `Menu_HasMedal(BaseMapHCode(), 3, 0)` — the RewardsTable
 entry's kind-3 bit in `bonus[0]`; bits set at mission end by `Menu_SetLevelBonus` (P_NFRESULTS
