@@ -43,3 +43,39 @@ for the first ticks (after Player_StandAtNewPosition 0x190d88, the first Player_
 calls, GS_PausePlayer, the fade-in) [M]; if unfound, keep the observable model with the hold
 `// [S] unverified`. (3) the hall glide (game 1.1147 after the doorway-base climb at x −8.304)
 and the corner at (−17.87, 4.87); un-ignore the sisters and the main walk as they go green.
+
+Task: level-0a-office-hatch-6 — (05:41 UTC) THE 05 TRUCK-RIDE REGRESSION FIXED. The settle was
+arming at EVERY `Bond::stand_at`, including the mid-game `Player_Enable` hand-off. The game's
+`Player_Enable` 0x195498 does NOT go through `Player_StandAtNewPosition` at all: it copies the
+matrix translation into obj+0x30 DIRECTLY (no floor ray, no +1.1) [M 0x195498:57-68] and zeroes
+the velocities [M :81-86]. The port's enable→stand_at+settle held Bond for four ticks with the
+truck's script running, and the hand-off's FIRST post-enable tick (the crouch press the walkreal
+ride sends on the disable→enable edge) was swallowed by the hold's early return — Bond rode
+STANDING and parked at 38.37661 (the standing sister's exact park height), the touch capsule
+bottom 38.3766+0.15−0.55 = 37.9766 vs the ch-0x70 plate y 37.7418: a 0.2348 VERTICAL miss
+(inside the plate XZ (28.804..30.866, 48.378..52.185) [D the plate quad through the port's
+script load, probe_05_park]). Fix: the settle is LEVEL-START ONLY — `Bond::arm_spawn_settle`
+called at lib.rs's `Player_Init` 0x1910f8 load spawn (the [L ee_start_0700000a] path);
+`stand_at` itself, the `Player_Enable` path, the MP respawns and the build's structural
+fallback keep master behaviour. The enable `at` matrix origin measured at the hand-off:
+(92.25, 19.42, 103.58) vs the port's floor+1.1 (20.289) — a direct-origin placement would embed
+Bond in the truck body, so the port's enable keeps the floor+1.1 stand-in (documented in
+`stand_at`'s doc). The hold gate (why the boot's first four ticks hold) remains UNFOUND in the
+decompile — Player_Init writes WldGravity (0,−9.8,0) right before the placement
+[M 0x1910f8:146-156], GS_PausePlayer 0x17d280 is an MPGame pause-flag store only — the
+observable model stays, marked `// [S] unverified`, out of pass/fail as to the gate.
+walkreal_07000005_live 5/0 (the truck ride GREEN again), walkreal_0700000a_live 4/0 (the settle
+rest still pinned), fix_truck_live 2/0. The 05 boot's own ee_start root 24.9633007 sits
+1.0858860 above the port's floor_below at the spawn xz (the courtyard is SLOPED, plane
+23.8774147 there) — NEITHER the 1.1 placement (24.9774) NOR the 1.0891 settle (24.9665)
+matches; the game's own 05 rest is 0.0141 below the port's floor sampling — a pre-existing
+floor-sampling divergence (present on master too), noted for the main agent's live checks.
+01's boot rest reads 1.0892906 above its flat floor (5.3394027) — the settle height within the
+band's f32 rounding (0a's floor is exactly 0.0, 01's isn't). The glide/corner sisters re-ran
+UNCHANGED (the port still wedges at the doorway base (−9.15,1.09,15.92) and dithers ungrounded
+at the corner (−17.87,1.17,4.87) — the climb/push shape named in the -2 report; no new
+decompile evidence this round). Suites (chunks, foreground — the sandbox kills background jobs):
+walkreal 01-0d 15/0/2, walkreal 11-4a+0a 19/0/7, walk_*+level_carry+fix_world_gravity+
+fix_start_loadouts+mp_respawn_ammo 40/0/0, nf-game/nf-view/nf-formats/nf-audio units+
+crouch/ladder/mp cores 44/0/4 — 118 passed, 0 failed, 13 ignored, no regressions. probes:
+probe_05_park.rs, probe_05_floors.rs committed as the evidence.
