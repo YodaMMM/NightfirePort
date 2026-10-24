@@ -29,8 +29,10 @@ fn iso() -> Option<String> { std::env::var("NF_ISO").ok() }
 // draw slot per ScriptPlayer running a script; the 0700000c walkway soldiers now drawn; and no
 // characters for drone placements above the load's difficulty (`Drone_Create` 0x136be0 makes none;
 // 07000014 drops 18 such instances).
+// batch-1024a: the security cameras' body + mount posed slots (`Sensor_Create` 0x1af010 / `Sensor_SetBeam`
+// 0x1af398 — 01 ×1, 02, 14 ×14), 14's b1 drones on skin 0x0500008c (`NDrone2_DefaultInit` 0x14b300:82-95).
 const BASELINE: &[(&str, &str)] = &[
-    ("07000002.bin", "37773b0bd1266a44 4483929 9371895 5352 4346635 81 9825 205 28 25 8"),
+    ("07000002.bin", "ad314b1c899994a8 4484117 9372399 5353 4346823 81 9825 205 28 25 8"),
     ("07000005.bin", "57ab143029eee3f2 4387197 9170895 3614 4302856 73 9759 106 19 16 6"), // the two copter SPs + their script draw slots
     // lift-indicators-09 re-pin: one draw slot per `Script_SubScriptStart` op per running SP
     // [M 0x1db050] — 0700000c's multi-SP sub chains add 6 slots (+248 vertices, +576 indices,
@@ -46,8 +48,8 @@ const BASELINE: &[(&str, &str)] = &[
     // their characters through the Drone+0xe0 rewrite (0x050000b1 → 0x0500008c before the
     // AnimObjectNew request [M 0x14b300:82-95, :563-565]) — +5 characters, +30005 vertices,
     // +59235 indices, +105 materials, +50005 char_verts, +15 attachments over the old pin.
-    ("07000014.bin", "11023d599b9c96e4 7136507 14822037 6558 6983574 98 13506 173 41 37 32"),
-    ("07000001.bin", "c3615aff5574ccb2 4396283 9211737 3489 4322981 76 9839 101 11 20 6"),
+    ("07000014.bin", "436a870a25a87e98 7140469 14831151 6564 6987536 98 13506 173 41 37 32"),
+    ("07000001.bin", "3efd2cdd3e5616ab 4396377 9211989 3491 4323075 76 9839 101 11 20 6"),
 ];
 
 #[test]
