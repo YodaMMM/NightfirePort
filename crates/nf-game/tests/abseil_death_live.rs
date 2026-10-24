@@ -104,6 +104,10 @@ impl Fixture {
 fn bond_at(p: [f32; 3]) -> Player { Player { yaw: 0.0, pos: p, target: [p[0], p[1] + 0.5, p[2]], eye: [p[0], p[1] + 1.0, p[2]], aim: [-1.0, 0.0, 0.0], sph: p, capsule: ([p[0], p[1] + 1.086, p[2]], p), hanging: false, cel: None } }
 
 const LEVEL: &str = "07000011.bin";
+/// Where a player shoots the rope guards from: the stairwell's west landing. The guard's opponent is
+/// Bond every tick, seen or not [M NDrone2_FindOpponent 0x1424e0:100-120], so the Slide runs until he
+/// hangs 3.0 above Bond [M 0x169730:57-58] — a far-away Bond would keep him sliding.
+const WEST_LANDING: [f32; 3] = [14.80, 31.40, -2.60];
 const LEVEL_ID: u32 = 0x0700_0011;
 
 /// The 07000011 rope guard: fire its switch channel 0x13 [D param 3], let the chain reach the
@@ -116,16 +120,16 @@ fn a_guard_killed_on_the_rope_leaves_it_and_lands_below() {
     let Some(fx) = Fixture::load(LEVEL, LEVEL_ID) else { eprintln!("skip: NF_ISO not set"); return };
     let d = fx.data();
     let mut sim = fx.sim();
-    for _ in 0..3 { sim.tick(&d, &bond_at([0.0, -1000.0, 0.0])); }
+    for _ in 0..3 { sim.tick(&d, &bond_at(WEST_LANDING)); }
     let Some(ai) = sim.list.iter().position(|x| x.present && x.mode == 0x1c) else { panic!("no 0x06000892 rope guard [D]") };
     // Release the WAIT_SWITCH gate [D param 3 → ch 0x13] and let Init → Slide → Hang run.
     sim.set_channel(0x13);
     let mut hung = None;
-    for t in 1..=120u32 {
-        sim.tick(&d, &bond_at([0.0, -1000.0, 0.0]));
+    for t in 1..=700u32 {
+        sim.tick(&d, &bond_at(WEST_LANDING));
         if sim.list[ai].state == state::ABSEIL_HANG { hung = Some(t); break; }
     }
-    assert!(hung.is_some(), "the rope chain reaches the Hang (720's chain, timer ≤ Rand_Rand(60))");
+    assert!(hung.is_some(), "the rope chain reaches the Hang above Bond (Init → Slide → Hang at the 3.0 gate [M 0x169730:57-58])");
     assert!(sim.list[ai].air, "on the rope (+0x23) [M]");
     let rope_y = sim.list[ai].pos[1];
     // The killing bullet: a 5000-damage HITDATA through the real msg-8 path [M 0x1461c8].
@@ -140,7 +144,7 @@ fn a_guard_killed_on_the_rope_leaves_it_and_lands_below() {
     // 0x140968's gravity arm] puts a ~10-unit drop inside ~2 s.
     let mut landed = None;
     for t in 1..=240u32 {
-        sim.tick(&d, &bond_at([0.0, -1000.0, 0.0]));
+        sim.tick(&d, &bond_at(WEST_LANDING));
         if sim.list[ai].abseil_land_latch { landed = Some(t); break; }
     }
     let t = landed.expect("the corpse lands (the feet probe → danim 10, +0xcdc = 1)");
@@ -154,7 +158,7 @@ fn a_guard_killed_on_the_rope_leaves_it_and_lands_below() {
     // 0xbf class 9 [D Drone_AnimInfo 0x273200] — so Dead starts with 0xbf playing.
     let mut dead = false;
     for _ in 0..600u32 {
-        sim.tick(&d, &bond_at([0.0, -1000.0, 0.0]));
+        sim.tick(&d, &bond_at(WEST_LANDING));
         if sim.list[ai].state == state::DEAD { dead = true; break; }
     }
     assert!(dead, "Dead 0x47 follows the landing anim");
@@ -169,10 +173,10 @@ fn a_surviving_bullet_hurts_the_rope_guard_without_dropping_him() {
     let Some(fx) = Fixture::load(LEVEL, LEVEL_ID) else { eprintln!("skip: NF_ISO not set"); return };
     let d = fx.data();
     let mut sim = fx.sim();
-    for _ in 0..3 { sim.tick(&d, &bond_at([0.0, -1000.0, 0.0])); }
+    for _ in 0..3 { sim.tick(&d, &bond_at(WEST_LANDING)); }
     let Some(ai) = sim.list.iter().position(|x| x.present && x.mode == 0x1c) else { panic!("no rope guard [D]") };
     sim.set_channel(0x13);
-    for _ in 0..120 { sim.tick(&d, &bond_at([0.0, -1000.0, 0.0])); }
+    for _ in 0..700 { sim.tick(&d, &bond_at(WEST_LANDING)); if sim.list[ai].state == state::ABSEIL_HANG { break; } }
     assert_eq!(sim.list[ai].state, state::ABSEIL_HANG, "hung (test 1's chain)");
     let h0 = sim.list[ai].health;
     sim.list[ai].hit = Some(Hit { part: 4, ray: [0.0; 3], point: [0.0; 3], damage: 1.0, weapon: 2 });
@@ -190,10 +194,10 @@ fn an_explosive_kill_releases_the_rope_guard_the_same_way() {
     let Some(fx) = Fixture::load(LEVEL, LEVEL_ID) else { eprintln!("skip: NF_ISO not set"); return };
     let d = fx.data();
     let mut sim = fx.sim();
-    for _ in 0..3 { sim.tick(&d, &bond_at([0.0, -1000.0, 0.0])); }
+    for _ in 0..3 { sim.tick(&d, &bond_at(WEST_LANDING)); }
     let Some(ai) = sim.list.iter().position(|x| x.present && x.mode == 0x1c) else { panic!("no rope guard [D]") };
     sim.set_channel(0x13);
-    for _ in 0..120 { sim.tick(&d, &bond_at([0.0, -1000.0, 0.0])); }
+    for _ in 0..700 { sim.tick(&d, &bond_at(WEST_LANDING)); if sim.list[ai].state == state::ABSEIL_HANG { break; } }
     assert_eq!(sim.list[ai].state, state::ABSEIL_HANG);
     sim.list[ai].last_damage = 5000.0;
     sim.list[ai].blast = Some(sim.list[ai].pos);
@@ -202,7 +206,7 @@ fn an_explosive_kill_releases_the_rope_guard_the_same_way() {
     assert!(!sim.list[ai].air, "released [M 0x169b28:28]");
     let mut landed = None;
     for t in 1..=240u32 {
-        sim.tick(&d, &bond_at([0.0, -1000.0, 0.0]));
+        sim.tick(&d, &bond_at(WEST_LANDING));
         if sim.list[ai].state == state::DEAD { landed = Some(t); break; }
     }
     assert!(landed.is_some(), "the blasted corpse lands too");
