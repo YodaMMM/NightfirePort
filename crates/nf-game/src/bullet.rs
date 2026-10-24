@@ -37,6 +37,80 @@ pub struct Bullet {
     pub flyby: bool,
     /// fix-impacts: the ricochet count (`Bullet_CollisionHandler` 0x12d798, killed at 3). Own line (lesson 4).
     pub bounces: u8,
+    /// `BU+0xFC`: the fuse clock (`Bullet_init` 0x12c5a0:103 writes 210.0 for every round;
+    /// :192-198 the `+0x70 & 0x10000` records get 300.0; :199-228 the satchel family
+    /// `weapon+0x02 == 0x3b` gets `((kind − 0x3b)·5 + 5)·60` ticks — kind 0x6c → 900.0 — and
+    /// its burn counter 100). Ticked in `Bullet_DoTrails` [M 0x12d890 disasm 0x12dcc4-0x12dd5c],
+    /// NOT in `Bullet_update` (whose own fuse arms are the kind-0x3a designator 0x12ee08 and the
+    /// kind-0x45 smoke 0x12efa4 only — the comment above already says so).
+    pub fuse: f32,
+    /// `weapon_data+0x70 & 0x200`: the record's fuse TICKS [M Bullet_DoTrails 0x12d890
+    /// 0x12dcc4-0x12dd5c — every tick the round exists, flying (state 1, DoTrails at
+    /// Bullet_update's tail 0x12efd8) or landed (state 3, DoTrails at 0x12efdc); family not
+    /// 0x37/0x59/0x5b → `BU+0xFC −= FRAME_RATE_MUL` (1.0 [L ee_start_05.bin @0x30d0d8]); at
+    /// `fuse < 0` → `obj+0xF4 = 2`, `obj+0xFE |= 1` (the delete, 0x12dd44-0x12dd58) and
+    /// `Explode_Create(weapon+0x08 radius, weapon+0x0C damage, script 0x6000052, f12 scale =
+    /// radius)` [M 0x12df3c region — the `+0x70 & 0x2000` gas arm and the `& 0x20000` smoke arm
+    /// are both clear on the satchel's 0x300 [L ee_start_05.bin], so the plain blast runs].
+    pub fuse_ticks: bool,
+    /// `BU+0x102` (i16): the laser burn counter, init 100 for the 0x3b family [M Bullet_init
+    /// 0x12c5a0:211 `*(undefined2 *)((int)pfVar3 + 0x102) = 100`]. `Bullet_DoTrails`' contact
+    /// walk (0x12e2f0-0x12e390): each class-5 hitter whose weapon is the Laser watch 0x4E takes
+    /// FRAME_RATE_MUL (1) off, its upgrade 0x4F takes 10 (the `FRAME_RATE_MUL * 10.0` arm).
+    pub burn: i16,
+    /// The burned-out charge. The game's burn-out arm re-randomizes the fuse EVERY tick to
+    /// `60 + Rand_Rand(0x1518)` while the counter stays ≤ 0 [M 0x12e3cc-0x12e40c — the fuse never
+    /// decrements again, the charge never explodes]. The port LATCHES instead of redrawing the
+    /// shared bit-exact RNG per tick [*deviation*: the observable — no blast ever — is identical;
+    /// the game's per-tick `Rand_Rand(5400)` would shift every later draw for every witness].
+    pub defused: bool,
+    /// `obj+0xF4 = 3`: the landed state [M Bullet_CollisionHandler 0x12ce80 @0x12d1fc — a world
+    /// hit for a `+0x70 & 0x100` record with no struck object → state 3, the rest clank
+    /// `Sound_Play3D(0x4a7)`; `Bullet_update` case 3 zeroes the speed and runs DoTrails only].
+    /// A landed charge rides the mover it rests on (`Control_InheritVelocity` — the game calls it
+    /// for every landed round at 0x12edd8; the port applies the mover's own per-tick delta the
+    /// way `Player_FeetOnPoint` 0x194188 does for Bond [L the live run: the charge rides the
+    /// descending cab — Bond at (1.799, −73.418, −3.453) with the charge on the cab roof]).
+    pub landed: bool,
+}
+
+impl Bullet {
+    /// The tail defaults every construction site shares (the game's `Bullet_init` head:
+    /// fuse 210.0 [M 0x12c5a0:103], no ticking, no burn, not landed). Fields on their own
+    /// lines (lesson 4).
+    pub const TAIL: Bullet = Bullet {
+        pos: [0.0; 3], dir: [0.0; 3], speed: 0.0, travelled: 0.0, range: 0.0, damage: 0.0,
+        owner: 0, state: 0, weapon: 0, flyby: false, bounces: 0,
+        fuse: 210.0, fuse_ticks: false, burn: 0, defused: false, landed: false,
+    };
+
+    /// `Bullet_init` 0x12c5a0's fuse block (the tail of the initializer, after the velocity
+    /// setup): the base 210.0 [:103], the `+0x70 & 0x10000` → 300.0 arm [:192-198], the
+    /// `weapon+0x02 == 0x3b` family arm [:199-211 — `((kind − 0x3b)·5 + 5)·0x3c` ticks, kind
+    /// 0x6c → 900.0, the burn counter 100], and the DoTrails tick gate (`+0x70 & 0x200`
+    /// [M 0x12d890 0x12dcc4]). `w` is the round's 0x10c-byte weapon record.
+    pub fn init_fuse(&mut self, w: &[u8]) {
+        let flags70 = u32::from_le_bytes(w[0x70..0x74].try_into().unwrap());
+        self.fuse = 210.0; // [M 0x12c5a0:103]
+        if flags70 & 0x1_0000 != 0 {
+            self.fuse = 300.0; // [M 0x12c5a0:192-198]
+        }
+        let family = u16::from_le_bytes([w[2], w[3]]);
+        let kind = u16::from_le_bytes([w[0], w[1]]);
+        if family == 0x3b {
+            // [M 0x12c5a0:199-211] `(((uint)*puVar4 - (uint)puVar4[1]) * 5 + 5) * 0x3c` —
+            // kind 0x3b → 300, 0x3c → 600, 0x3d → 900 … 0x40 → 1800; kind 0x6c → 900.0.
+            self.fuse = if kind == 0x6c { 900.0 } else { (((kind - 0x3b) as u32 * 5 + 5) * 0x3c) as f32 };
+            self.burn = 100; // [M 0x12c5a0:211]
+        }
+        self.fuse_ticks = flags70 & 0x200 != 0; // [M Bullet_DoTrails 0x12dcc4]
+    }
+
+    /// The round's `weapon_data+0x02` family halfword (the satchel check's own read,
+    /// `lhu v1, 2(v0)` over `BU+0x44`'s record [M Bullet_DoTrails 0x12e200]).
+    pub fn family(&self, weapons: &nf_formats::weapon::WeaponData) -> u16 {
+        weapons.records.get(self.weapon as usize).map_or(0, |r| u16::from_le_bytes([r[2], r[3]]))
+    }
 }
 
 /// What a bullet did this tick.

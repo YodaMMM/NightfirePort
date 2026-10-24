@@ -81,10 +81,12 @@ impl Shooter {
             self.dir
         };
         // `Bullet_init` 0x12c5a0: the spread sphere (weapon +0x24, flags +0x68) around the direction,
-        // then the record's damage/range/speed (+0x0C/+0x1C/+0x20).
+        // then the record's damage/range/speed (+0x0C/+0x1C/+0x20). The fuse block runs too — the
+        // satchel rounds (family +0x02 == 0x3b) carry `((kind − 0x3b)·5 + 5)·60` ticks and the 100
+        // burn counter [M 0x12c5a0:199-211].
         let flags68 = u32::from_le_bytes(w[0x68..0x6c].try_into().unwrap());
         let dir = crate::bullet::spread(dir, f(0x24), flags68, rng);
-        out.push(crate::bullet::Bullet {
+        let mut b = crate::bullet::Bullet {
             pos: self.pos,
             dir,
             speed: f(0x20),
@@ -96,7 +98,10 @@ impl Shooter {
             weapon: self.weapon,
             flyby: flags68 & 0x40_0000 != 0,
             bounces: 0,
-        });
+            ..crate::bullet::Bullet::TAIL
+        };
+        b.init_fuse(w);
+        out.push(b);
     }
 }
 
