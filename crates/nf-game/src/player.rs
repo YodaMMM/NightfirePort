@@ -290,6 +290,14 @@ pub struct Input {
     pub goggles_action: bool,
 }
 
+/// level-0a-office-hatch-10 experiment switch: `NF_WALK_GHOST=1` drops the walk capsule's
+/// DISPLACEMENT while keeping its contact signals (the dead-tail hypothesis — see the walk
+/// integration block). Off by default; measured before anything lands.
+fn walk_ghost() -> bool {
+    static ON: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
+    *ON.get_or_init(|| std::env::var("NF_WALK_GHOST").is_ok())
+}
+
 #[derive(Clone, Debug)]
 pub struct Bond {
     /// `obj+0x30`.
@@ -1693,6 +1701,15 @@ self.local = [vs / k, vf / k];
         // rounds [L]); the port's walk/NPC paths still depend on the unguarded through-push
         // (escort_follow_07000001_live regressed with it on) — a known port divergence.
         let (mut push, mut walkable) = world.capsule_push_scoped(self.cel, a, b, RADIUS, swimming);
+        // level-0a-office-hatch-10 EXPERIMENT (`NF_WALK_GHOST=1`): the game's walk push tail is
+        // dead [M Intersect_CylGeom 0x109da0:447 — the guard is |q − HITTEST+0x50| < radius with
+        // +0x50 the lifetime DeltaP accumulator [M Collide_Intersect 0x1ebaa8:353-373]; [L
+        // ee_snapshot] its live value drifts ~15 m from the owner, and [L ee_start_*] it boots
+        // (0,0,0) — so no walk contact passes the guard and no push lands]. The port keeps the
+        // CONTACT here (walkable feeds grounded) but drops the DISPLACEMENT: Bond walks the game's
+        // lines on the feet band alone [M Player_FeetOnPoint 0x194188:106]. Default OFF —
+        // measured against the full walkreal battery before it lands.
+        if walk_ghost() { push = [0.0; 3]; }
         // The floor ray: from = obj+0x30, to = capsuleB + up·(−(cc+0.6)) [M Player_FeetOnPoint
         // 0x194188:89-98 loads HITTEST+0x30 = BLData+0x770 — the B arm Player_Collision 0x194df0
         // stores at :405-408 — adds the matrix up scaled −(cc+0.6) (:92, one negation of the f32
@@ -1718,7 +1735,7 @@ self.local = [vs / k, vf / k];
         let mut pick = world.capsule_pick_contact_scoped(self.cel, a, b, RADIUS, self.pick_ref[1]);
         if floor.is_none() {
             let (fp, fw) = world.capsule_push(a, b, RADIUS, swimming);
-            push = fp;
+            push = if walk_ghost() { [0.0; 3] } else { fp };
             walkable = fw;
             pick = world.capsule_pick_contact(a, b, RADIUS, self.pick_ref[1]);
             floor = world.segment_hit(self.pos, to);
