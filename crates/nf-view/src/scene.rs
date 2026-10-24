@@ -6077,6 +6077,9 @@ pub struct Scene {
     /// The 0x2E locks' placement matrices (`Lock::create` order): where the keypads' posed slots
     /// draw the placed object or its LOD variant.
     pub lock_matrices: Vec<Mat4>,
+    /// The 0x34 placements the build gave posed slots (the camera slots follow them; the sim's
+    /// gunimp list may be emptied by the MP Gun Emplacements setting, the slot layout is not).
+    pub gunimp_placements: usize,
     pub ladders_drawn: usize,
     /// How many grapple-point (0x3A) placements got a World-layer instance (fix-grapple-hook's
     /// draw sweep). The game draws each point's pulley mesh exactly once through the dynamic-object
@@ -6474,6 +6477,8 @@ fn casing_matrix(c: &nf_game::casing::Casing) -> Mat4 {
 /// re-uploads lights [M View_DrawObjList 0x1e69a0:75-98] — so the gun takes NO point lights. The renderer
 /// zeroes them for these draws; `node` is otherwise read only for World cel culling.
 pub const VIEW_MODEL_NODE: u32 = u32::MAX - 1;
+/// Posed slots per gun emplacement: the base object, then one per `gunimp::TURRET_ARTS` gun child.
+const GUNIMP_SLOTS: usize = 1 + nf_game::gunimp::TURRET_ARTS.len();
 
 /// Tracer slots (bullets drawn at once).
 const TRACER_SLOTS: usize = 32;
@@ -6780,15 +6785,17 @@ pub fn build(level: &Level, cels_only: bool, skeletons: &HashMap<u8, Skeleton>, 
                 && p.params.iter().find(|(j, _)| *j == 2).map_or(false, |&(_, v)| v > difficulty)
         };
         char_instances.retain(|(_, i)| !gated(&i.placement));
-        // drone-skins-g021: the drone's object is built from the hash `NDrone2_DefaultInit`
-        // 0x14b300:563-565 hands `AnimObjectNew` — the placement param 0 as the captain swap
-        // (:536-555) left it in +0xe0 (the sim's `dr.skin`). `character_instances` keyed the
-        // raw param, so a placement whose raw skin no session container carries (07000014's
-        // 0x050000b1 — carried only by 07000015/16 [D], which the story loads after 14) drew
-        // nothing even for a captain, whose swapped skin (kind 6 → 0x05000093, kind 7 →
-        // 0x050000b2) the game resolves from the level's own archive. The non-captains stay
-        // skinless exactly like the game's `AnimObjectNew` 0x1be910:44-46 miss. Raw-present
-        // placements keep their pre-existing draw path untouched.
+        // drone-skins-g021 (corrected by cite-14-skinless-drones): the drone's object is built from
+        // the hash `NDrone2_DefaultInit` 0x14b300:563-565 hands `AnimObjectNew` — Drone+0xe0 after
+        // the 07000014 param-0 rewrite (:82-95: 0x050000b1 → 0x0500008c on GameState+12 ==
+        // 0x07000014, BEFORE the kind switch) and the captain swap (:536-555; the sim's `dr.skin`
+        // mirrors both). `character_instances` keyed the raw param, so a placement whose final
+        // +0xe0 hash differs from it needs the rebuild here: 07000014's 0x050000b1 placements
+        // (the skin is carried only by 07000015/16 [D], which the story loads after 14 — the raw
+        // request would draw nothing) and the captains (kind 6 → 0x05000093, kind 7 → 0x050000b2,
+        // both in the own archive). A final hash the table lacks draws nothing — the game's
+        // `AnimObjectNew` 0x1be910:44-46 miss. Raw-present placements keep their pre-existing
+        // draw path untouched.
         let mut drone_skins: HashMap<[u32; 3], u32> = HashMap::new();
         if let (Some(d), Some(m)) = (drones, level.main_map()) {
             // `captain_skin` is pure (params + property tables + difficulty): the drones do not
@@ -6799,25 +6806,33 @@ pub fn build(level: &Level, cels_only: bool, skeletons: &HashMap<u8, Skeleton>, 
                     let param = |k: u32| p.params.iter().find(|(j, _)| *j == k).map(|&(_, v)| v).unwrap_or(0);
                     let raw = param(0);
                     if raw >> 24 != 5 { continue; }
-                    let Some(swapped) = nf_game::drone::captain_skin(raw, &param, props, d.level_id, difficulty) else { continue; };
-                    if swapped == raw { continue; }
-                    // The game builds the captain's object from the swapped record: the draw
-                    // resolves the swapped hash (`NDrone2_DefaultInit` 0x14b300:563-565), so the
-                    // raw skin's meshes give way to the swapped skin's. When the raw skin is not
-                    // in the table (07000014's 0x050000b1 — carried only by 07000015/16 [D],
-                    // which the story loads after 14) `character_instances` built no instance at
-                    // all and the swapped skin's mains are ADDED; a swapped skin the table lacks
-                    // (the game's `AnimObjectNew` 0x1be910:44-46 miss) draws nothing.
+                    // The 07000014 rewrite [M 0x14b300:82-95]: with GameState+12 == 0x07000014 the
+                    // param-0 skin 0x050000b1 is rewritten to 0x0500008c in Drone+0xe0 BEFORE any
+                    // read — the kind switch, the captain block and the `AnimObjectNew` request
+                    // ([M 0x14b300:563-565]) all see the rewritten value, captain or not. The raw
+                    // 0x050000b1 never reaches the skin table (carried only by 07000016 entry 139
+                    // @0x8594a0 / 07000015 entry 102 @0x609e60 [D], which the story loads after 14);
+                    // 0x0500008c is in 07000014's own archive [D], so the placement resolves.
+                    let request = if raw == 0x0500_00b1 && d.level_id == 0x0700_0014 { 0x0500_008c } else { raw };
+                    let swapped = nf_game::drone::captain_skin(request, &param, props, d.level_id, difficulty);
+                    let final_skin = swapped.unwrap_or(request);
+                    if final_skin == raw { continue; } // the ordinary path's instances are already keyed param0
+                    // The game builds the object from the final +0xe0 hash (`NDrone2_DefaultInit`
+                    // 0x14b300:563-565 — the rewritten param or the captain swap), so the draw
+                    // resolves the final hash and the raw skin's meshes give way to it. When the
+                    // raw skin is not in the table (07000014's 0x050000b1 placements) no instance
+                    // was built at all and the final skin's mains are ADDED; a final skin the
+                    // table lacks (the game's `AnimObjectNew` 0x1be910:44-46 miss) draws nothing.
                     let bits = p.translation.map(f32::to_bits);
                     char_instances.retain(|(_, i)| i.placement.translation.map(f32::to_bits) != bits);
-                    if let Some(sk) = level.skins.get(&swapped) {
+                    if let Some(sk) = level.skins.get(&final_skin) {
                         for h in sk.main.iter().flatten() {
                             if let Some(&(map, object)) = level.by_hash.get(h) {
                                 char_instances.push((Some(pi), Instance { map, object, matrix: nf_formats::placement::object_matrix(p.rotation, p.translation), placement: p.clone() }));
                             }
                         }
                     }
-                    drone_skins.insert(bits, swapped);
+                    drone_skins.insert(bits, final_skin);
                 }
             }
         }
@@ -7036,8 +7051,9 @@ pub fn build(level: &Level, cels_only: bool, skeletons: &HashMap<u8, Skeleton>, 
             let raw_hash = inst.placement.params.iter().find(|(i, _)| *i == 0).map(|&(_, v)| v).unwrap_or(0);
             // drone-skins-g021: the captain-swapped drone draws its swapped skin (`+0xe0`,
             // `NDrone2_DefaultInit` 0x14b300:563-565) — `drone_skins` only carries the
-            // raw-missing 0x0f placements (see the extension above); everything else keeps
-            // the raw param.
+            // 0x0f placements whose final +0xe0 hash differs from the raw param (the
+            // rewritten 0x050000b1 and the captain swaps, see the extension above);
+            // everything else keeps the raw param.
             let skin_hash = drone_skins.get(&inst.placement.translation.map(f32::to_bits)).copied().unwrap_or(raw_hash);
             let Some(skin) = level.skins.get(&skin_hash) else { continue };
             let Some(skeleton) = skeletons.get(&skin.skeleton) else { continue };
@@ -7449,15 +7465,34 @@ pub fn build(level: &Level, cels_only: bool, skeletons: &HashMap<u8, Skeleton>, 
                 .chain(copter_scripts)
                 .chain([0x0600_0052u32, 0x0600_0027, 0x0600_004f, 0x0600_07c4]).collect();
             let mut queued: std::collections::HashSet<u32> = hashes.iter().copied().collect();
+            // lift-indicators-09: a SUB-script's entities need one draw slot per LIVE copy — every placed
+            // SP running a parent script starts the sub once per `Script_SubScriptStart` op [M 0x1db050],
+            // so 07000009's two cab SPs (0x060007D/0x060007E) start 0x0600064E/0x0600064F three times each
+            // and the sim holds six indicator plates / six button plates. The old count (placed SPs whose
+            // OWN scripts contain the hash) read 1 for every sub hash, and `Sim::script_entity_k` serves
+            // only the newest match — one cab's plates drew, the other cab's never did. Accumulated in the
+            // sub walk (parents may pop after their subs), read in the Entity arm below.
+            let mut sub_copies: std::collections::HashMap<u32, usize> = std::collections::HashMap::new();
+            let mut order: Vec<u32> = Vec::new();
             while let Some(h) = hashes.pop() {
+                order.push(h);
                 let Some(nis) = level.nis.get(&h) else { continue };
+                let running = players.iter().filter(|p| p.scripts.contains(&h)).count().clamp(1, 16);
                 for st in nis.streams.iter() {
                     for cmd in st.decode() {
                         if let nf_formats::nis::Cmd::SubScript { hash: sub, .. } = cmd {
-                            if sub != 0 && queued.insert(sub) { hashes.push(sub); }
+                            if sub != 0 {
+                                *sub_copies.entry(sub).or_insert(0) += running;
+                                if queued.insert(sub) { hashes.push(sub); }
+                            }
                         }
                     }
                 }
+            }
+            // The slots are created after the WHOLE walk so every sub hash's copy count is final
+            // (a parent may pop after its sub); `order` preserves the original pop order, so the
+            // attachment indices match the pre-fix build.
+            for &h in &order {
                 let Some(nis) = level.nis.get(&h) else { continue };
                 for (si, st) in nis.streams.iter().enumerate() {
                     for cmd in st.decode() {
@@ -7520,7 +7555,9 @@ pub fn build(level: &Level, cels_only: bool, skeletons: &HashMap<u8, Skeleton>, 
                                 // copy of the stream's entities (07000014's three vent lids are nine SPs on
                                 // 0x06000A3B — one slot drew only the newest lid; the hatch under the spawn
                                 // stayed invisible while it opened).
-                                let copies = players.iter().filter(|p| p.scripts.contains(&h)).count().clamp(1, 16);
+                                let copies = sub_copies.get(&h).copied()
+                                    .unwrap_or_else(|| players.iter().filter(|p| p.scripts.contains(&h)).count())
+                                    .clamp(1, 16);
                                 let inst = Instance { map, object, matrix: ident, placement: placement.clone() };
                                 for k in 0..copies {
                                     add_instance(level, &inst, Layer::Character, Some((0, Some(attachments.len() as u32))), &mut groups, None, None, None, None, [1.0; 3], &room_cels, u32::MAX, u32::MAX);
@@ -8038,6 +8075,9 @@ pub fn build(level: &Level, cels_only: bool, skeletons: &HashMap<u8, Skeleton>, 
                 // "Lock - KeypadUnlocked" [D block 0x27]) rides the posed slot space below, so the
                 // unlock's `Control_NextLOD` can swap it.
                 if kind == 0x2e && level.maps[map].lod_target(object).is_some() { *misc_drawn.entry(kind).or_default() += 1; continue; }
+                // A gun emplacement (0x34) turns with its mount: its base and gun child ride the posed
+                // slot space below (`GunImp_Update` 0x1320d8:162-173 re-poses both every tick).
+                if kind == 0x34 { *misc_drawn.entry(kind).or_default() += 1; continue; }
                 // The 0x800 dim, the same rule the main static loop applies (View_SetupRenderModes_Tweak 0x1e5888).
                 let mult = if obj.flags & 0x800 != 0 {
                     let mx = nf_formats::placement::object_matrix(p.rotation, p.translation);
@@ -8083,6 +8123,7 @@ pub fn build(level: &Level, cels_only: bool, skeletons: &HashMap<u8, Skeleton>, 
         // cone along the aim, the spot on its ray hit, the corona a camera billboard (docs/systems/world-objects.md).
         crate::phase_mark("b5f coronas/wires/ladders/misc", t); t = std::time::Instant::now();
         let mut lock_matrices: Vec<Mat4> = Vec::new();
+        let mut gunimp_placements = 0usize;
         if let Some(m) = level.main_map() {
             for (pi, pl) in nf_game::searchlight::part_placements(&level.maps[m].placements).into_iter().enumerate() {
                 let p = &level.maps[m].placements[pl];
@@ -8160,6 +8201,54 @@ pub fn build(level: &Level, cels_only: bool, skeletons: &HashMap<u8, Skeleton>, 
                 for (k, o) in [object, next].into_iter().enumerate() {
                     let inst = Instance { map, object: o, matrix: mx, placement: p.clone() };
                     add_instance(level, &inst, Layer::Character, None, &mut groups, None, None, Some((lock_base + 2 * li + k) as u16), None, [1.0; 3], &room_cels, u32::MAX, u32::MAX);
+                }
+            }
+            // The gun emplacements (0x34, `Props::create`'s order — every 0x34 placement), after the
+            // locks: GUNIMP_SLOTS per mount — the placement's base object, then one slot per
+            // `TURRET_ARTS` gun child (`GunImp_Create` 0x131f20:85-89 builds the child from
+            // `TurretGuns[ext+0x9d].art`; the MP weapon set picks the entry later in this build, so
+            // every art gets a slot and `frame_state` shows the mount's own). Base at `base_matrix`,
+            // gun at `barrel_matrix` [M GunImp_Update 0x1320d8:162-173].
+            let n_locks = level.maps[m].placements.iter().filter(|p| p.flags & 0xff == 0x2e).count();
+            let gun_base = lock_base + 2 * n_locks;
+            if cels_only {
+                for (gi, p) in level.maps[m].placements.iter().filter(|p| p.flags & 0xff == 0x34).enumerate() {
+                    let slot0 = gun_base + GUNIMP_SLOTS * gi;
+                    let mx = nf_formats::placement::object_matrix(p.rotation, p.translation);
+                    let target = if p.by_hash() { level.by_hash.get(&p.hashcode).copied() }
+                        else if (p.index as usize) < level.maps[m].objects.len() { Some((m, p.index as usize)) } else { None };
+                    let has_gfx = |(cm, co): (usize, usize)| level.maps[cm].objects[co].gfx.leaves.iter().any(|l| !l.batches.is_empty());
+                    if let Some((map, object)) = target.filter(|&t| has_gfx(t)) {
+                        let inst = Instance { map, object, matrix: mx, placement: p.clone() };
+                        add_instance(level, &inst, Layer::Character, None, &mut groups, None, None, Some(slot0 as u16), None, [1.0; 3], &room_cels, u32::MAX, u32::MAX);
+                    }
+                    for (a, art) in nf_game::gunimp::TURRET_ARTS.iter().enumerate() {
+                        let Some((map, object)) = level.by_hash.get(art).copied().filter(|&t| has_gfx(t)) else { continue };
+                        let inst = Instance { map, object, matrix: mx, placement: p.clone() };
+                        add_instance(level, &inst, Layer::Character, None, &mut groups, None, None, Some((slot0 + 1 + a) as u16), None, [1.0; 3], &room_cels, u32::MAX, u32::MAX);
+                    }
+                }
+            }
+            gunimp_placements = level.maps[m].placements.iter().filter(|p| p.flags & 0xff == 0x34).count();
+            // The security cameras (0x28, `Sensors::create`'s order and spawn gate), after the gun
+            // emplacements: two slots each — the camera body (the placement's own glist, `Sensor_Create`
+            // 0x1af010 stores it at obj+0xD8) at the swept/tracked pose `obj+0x90`, and the mount proxy
+            // (param 7) re-aligned upright to the pose's direction by `Sensor_SetBeam` 0x1af398:50-54
+            // every tick [M]. The lens proxy (param 0) is the sight beam stretched to its hit length
+            // (obj+0xE8) — still a draw hand-off.
+            let cam_base = gun_base + GUNIMP_SLOTS * gunimp_placements;
+            if cels_only {
+                for (si, p) in level.maps[m].placements.iter().filter(|p| p.flags & 0xff == 0x28 && p.flags & 0xa000 == 0).enumerate() {
+                    let mx = nf_formats::placement::object_matrix(p.rotation, p.translation);
+                    let has_gfx = |(cm, co): (usize, usize)| level.maps[cm].objects[co].gfx.leaves.iter().any(|l| !l.batches.is_empty());
+                    let body = if p.by_hash() { level.by_hash.get(&p.hashcode).copied() }
+                        else if (p.index as usize) < level.maps[m].objects.len() { Some((m, p.index as usize)) } else { None };
+                    let mount = p.params.iter().find(|(k, _)| *k == 7).map(|&(_, v)| v).filter(|&h| h != 0).and_then(|h| level.by_hash.get(&h).copied());
+                    for (k, t) in [body, mount].into_iter().enumerate() {
+                        let Some((map, object)) = t.filter(|&t| has_gfx(t)) else { continue };
+                        let inst = Instance { map, object, matrix: mx, placement: p.clone() };
+                        add_instance(level, &inst, Layer::Character, None, &mut groups, None, None, Some((cam_base + 2 * si + k) as u16), None, [1.0; 3], &room_cels, u32::MAX, u32::MAX);
+                    }
                 }
             }
             // Level-placed pickups (`Pickup_Create` 0x18dda0): `View_DrawObjectGlist` 0x1e6780 draws
@@ -8638,7 +8727,7 @@ pub fn build(level: &Level, cels_only: bool, skeletons: &HashMap<u8, Skeleton>, 
                 }
             }
         }
-        Scene { shard_tex, cels: room_cels, cel_graph, streams: None, music_files: None, music_tables: None, sound_bank: None, sound_spares: Vec::new(), snow_texture, vertices, indices, materials, textures, hud_textures, woman: None, hud, script_billboards, view_models, mp_bodies, mp_body_weapons, mp_char_bodies, mp_anim_sets, fog, bounds, start, stats, characters, char_vertex_start, char_verts, sequences, attachments, sim, colliders, models_0x800, npc_pool, ladders_drawn, grapple_hooks_drawn, misc_drawn, lock_matrices }
+        Scene { shard_tex, cels: room_cels, cel_graph, streams: None, music_files: None, music_tables: None, sound_bank: None, sound_spares: Vec::new(), snow_texture, vertices, indices, materials, textures, hud_textures, woman: None, hud, script_billboards, view_models, mp_bodies, mp_body_weapons, mp_char_bodies, mp_anim_sets, fog, bounds, start, stats, characters, char_vertex_start, char_verts, sequences, attachments, sim, colliders, models_0x800, npc_pool, ladders_drawn, grapple_hooks_drawn, misc_drawn, lock_matrices, gunimp_placements }
     }
 
     /// Sequence index and frame a character shows after `ticks` 60 Hz updates: its start script (`choice = None`) or the
@@ -9461,7 +9550,24 @@ pub fn build(level: &Level, cels_only: bool, skeletons: &HashMap<u8, Skeleton>, 
     /// matrix, the other is `None` (collapsed). `Control_NextLOD` 0x1349b0 is the swap (`Lock::lod_next`).
     fn lock_slot(&self, s: &Sim, k: usize) -> Option<Mat4> {
         let j = k.checked_sub(s.drones.doors.list.len() + s.drones.sss.list.len() + s.drones.breaks.list.len())?;
-        let l = s.drones.locks.get(j / 2)?;
+        let Some(l) = s.drones.locks.get(j / 2) else {
+            // Past the locks: the gun emplacements, GUNIMP_SLOTS each — slot 0 the base at
+            // `base_matrix`, slot 1 + a the `TURRET_ARTS[a]` gun child at `barrel_matrix`, shown only
+            // when it is this mount's art [M GunImp_Update 0x1320d8:162-173].
+            let g = j.checked_sub(2 * s.drones.locks.len())?;
+            if g < GUNIMP_SLOTS * self.gunimp_placements {
+                let gi = s.drones.props.gunimps.get(g / GUNIMP_SLOTS)?;
+                return match g % GUNIMP_SLOTS {
+                    0 => Some(gi.base_matrix()),
+                    p => (gi.art_slot() == Some(p - 1)).then(|| gi.barrel_matrix()),
+                };
+            }
+            // Past the emplacements: the security cameras, two slots each — the body at the sweep
+            // pose, the mount upright along the pose's direction [M Sensor_SetBeam 0x1af398:50-54].
+            let c = g - GUNIMP_SLOTS * self.gunimp_placements;
+            let sn = s.drones.sensors.list.get(c / 2)?;
+            return Some(if c % 2 == 0 { sn.matrix } else { sn.mount_matrix() });
+        };
         (l.lod_next == (j % 2 == 1)).then(|| self.lock_matrices.get(j / 2).copied()).flatten()
     }
 

@@ -18,8 +18,9 @@
 //!   table lacks, or whose object does not resolve: Pickup creation returns None and the pickup
 //!   is silently dropped [M 0x1d04f0 case 0xf0 → Pickup_Create].
 //!
-//! Zero is the goal for every column; a non-zero pinned number needs the game's own evidence
-//! (e.g. 07000014's 0x050000b1 skinless drones are the shipped game's misses too — G-021).
+//! Zero is the goal for every column; a non-zero pinned number needs the game's own evidence.
+//! (The old note here — "07000014's 0x050000b1 skinless drones are the shipped game's misses too
+//! — G-021" — missed the Drone+0xe0 rewrite [M 0x14b300:82-95]; 07000014's column is 0.)
 //! Numbers/ids only; ISO-gated. Re-landed by missing-models-census-2: the CREATED list corrected to
 //! Script_CreateEntity 0x1d8968's dispatch (raw 0x3e has no arm), the 07000001 skin pin re-analysed
 //! against master's g-021 merge (docs/systems/missing-models-census.md).
@@ -219,9 +220,18 @@ fn on_foot_levels_census() {
         assert_eq!(r.entity_miss, 0, "{}: every created script entity resolves its mesh", r.name);
         assert_eq!(r.pickup_miss, 0, "{}: every 0xf0 placement resolves its pickup model", r.name);
         match r.name.as_str() {
-            // G-021: the game itself renders these skinless — 0x05000090/0x050000b1 ride archives
-            // the fresh session has not loaded when 14 boots; the census counts the sim's drones.
-            "07000014.bin" => assert_eq!(r.skinless_drones, 5, "07000014: the 0x050000b1 non-captain drones are the shipped game's own skinless renders [D drone-skins-g021]"),
+            // cite-14-skinless-drones: the param-0 skin 0x050000b1 is REWRITTEN to 0x0500008c in
+            // Drone+0xe0 on GameState+12 == 0x07000014 before the kind switch, the captain block
+            // and the AnimObjectNew request [M 0x14b300:82-95, :563-565]; 07000014's own archive
+            // carries 0x0500008c [D]. The raw 0x050000b1 rides only 07000015/16 [D census:
+            // 07000016 entry 139 @0x8594a0 len 0x860, 07000015 entry 102 @0x609e60 len 0x860 — no
+            // other container and none on the 14 load path], which the story loads after 14
+            // [M mission::LEVELS], and nothing else registers skins [M AnimLoadFile 0x1bdf40's
+            // single AnimProcessSkinData call, single LoaderProcess 0x1d4880 case-3 caller]. So
+            // every created drone resolves — the earlier pin (skinless == 5, "the shipped game's
+            // own skinless renders [D drone-skins-g021]") contradicted the decompile's rewrite
+            // and is fixed here with the address.
+            "07000014.bin" => assert_eq!(r.skinless_drones, 0, "07000014: every drone resolves — the 0x050000b1 param-0 skin is rewritten to the own-archive 0x0500008c in Drone+0xe0 before the AnimObjectNew request [M 0x14b300:82-95, :563-565]"),
             _ => assert_eq!(r.skinless_drones, 0, "{}: every drone resolves its skin", r.name),
         }
         // The RAW-archive pin (disc content): 07000001's script Anim (0x0600005b stream 7) asks for

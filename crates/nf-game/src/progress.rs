@@ -497,6 +497,23 @@ impl Progress {
         self.bond_moments = [0; 10];
     }
 
+    /// `Player_RamLoad` 0x1957a8:15-16's tally copies (the warm arm): slot 0's record and the
+    /// BondMoments flags go back exactly as `Player_RamSave` 0x195670:10-11 saved them at the
+    /// exit — this is what carries the pause SCORE counters across a mission's level change
+    /// [M; `Mission_Init` 0x182270:65 wipes them only on a base-map load]. The `now` argument is
+    /// `Player_Init` 0x1910f8:187's `PlarStat_LogTimerUnpause` 0x199550 re-stamp (+0x2C := the
+    /// clock, +0x34 := 0), which the game runs after every load's RamLoad: the carried +0x2C
+    /// stamp is the OLD level's time, and `PlarStat_LogUpdateElapsedTime` 0x1995a0 accumulates
+    /// `+0x30 += now − +0x2C` — without the re-stamp the port's scene-local frame clock would
+    /// wrap the subtraction. The port applies this at the `Mission_Init` latch (after the
+    /// part-0 wipe), the load-order point the game's `Player_InitWeapon` → `Player_RamLoad`
+    /// occupies.
+    pub fn restore_tally(&mut self, t: &crate::player::TallySave, now: u32) {
+        self.stats[0] = t.stats;
+        self.bond_moments = t.bond_moments;
+        self.stats[0].log_timer_unpause(now);
+    }
+
     fn stats_mut(&mut self) -> &mut PlrMissionStats { &mut self.stats[0] }
     /// The slot-0 record — the SP player's tally (the Log functions' slot; the results screen and
     /// the Mission Stats page read this through the port's rows). bonus-007 makes it public: the

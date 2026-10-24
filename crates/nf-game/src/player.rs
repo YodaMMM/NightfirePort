@@ -1812,9 +1812,25 @@ fn dist3_sq(a: V3, b: V3) -> f32 {
 
 // ── Level carry-over and spawn (fix-level2) ────────────────────────────────────────────────────────
 
+/// The mission-tally slice of the game's `RamSave` staging buffer: the pair of copies
+/// `Player_RamSave` 0x195670:10-11 makes — `RamSave+0x000 ← PlrMissionStats[0]` (0x38 bytes, the
+/// SP slot-0 record) and `RamSave+0xA04 ← BondMoments` (0x14) [M]. `Player_RamLoad` 0x1957a8:15-16
+/// mirrors both back, inside the same `IsWarmReset != 0` gate as the rest of the body [M]. This is
+/// why the pause SCORE tab's counters survive The Exchange's 07000005 → 07000006 hop in the game:
+/// the exit trigger saves the tally, the warm load restores it, and `Mission_Init` only wipes it
+/// when the loaded map IS the mission's base map [M 0x182270:59-66].
+#[derive(Clone, Copy, Debug, Default, PartialEq)]
+pub struct TallySave {
+    /// The slot-0 `PlrMissionStats` record (0x2bcc20, 0x38 bytes) [M 0x195670:10].
+    pub stats: crate::progress::PlrMissionStats,
+    /// `BondMoments` 0x2bcde0 (0x14, the ten 0x65..0x6E done flags) [M 0x195670:11].
+    pub bond_moments: [i16; 10],
+}
+
 /// `Player_RamSave` (0x195670) → the global `RamSave` (0x2b9440, 0xD50 bytes) [M]. The port carries the
-/// fields the port models; the game also saves `PlrMissionStats` (0x38), `SSysItems` (0x28) and
-/// `BondMoments` (0x14) — none of which the port has (WORKLOG fix-level2).
+/// fields the port models; the game also saves `SSysItems` (0x28) — still unmodeled as a block (the
+/// inventory fields cover the modeled part). `PlrMissionStats` (0x38) and `BondMoments` (0x14) ride
+/// `tally` since 987-mission-stats-carry [M 0x195670:10-11].
 #[derive(Clone, Debug, Default)]
 pub struct RamSave {
     /// `RamSave+0x5FC ← BLData+0x894` [M 0x195670:16].
@@ -1844,6 +1860,10 @@ pub struct RamSave {
     /// re-creates `Mission` per load, so the carry rides the RamSave (the payload shape is
     /// `LS_MakeMission`/`LS_LoadMission` 0x1cd720/0x1cd880; map-tower2).
     pub mission: Option<crate::mission::MissionSave>,
+    /// The mission tally — `Player_RamSave` 0x195670:10-11's `PlrMissionStats[0]` (0x38) +
+    /// `BondMoments` (0x14) copies [M]. `None` = a capture that predates the tally (or the test
+    /// helpers' plain `capture`): `restore` leaves the fresh record alone, the cold-load shape.
+    pub tally: Option<TallySave>,
 }
 
 /// `ContinueHealthBoostEasy` / `ContinueHealthBoostMedium` / `ContinueHealthBoostHard`
@@ -1874,7 +1894,16 @@ impl RamSave {
             channels: ch.v.clone(),
             ch_time: ch.time.clone(),
             mission: None,
+            tally: None,
         }
+    }
+
+    /// Attaches the mission tally — the game's `Player_RamSave` copies it unconditionally on every
+    /// save [M 0x195670:10-11]. The port keeps it a builder step so the plain `capture` signature
+    /// (and its many test call sites) stays; the game-path captures attach it.
+    pub fn with_tally(mut self, p: &crate::progress::Progress) -> RamSave {
+        self.tally = Some(TallySave { stats: p.stats[0], bond_moments: p.bond_moments });
+        self
     }
 
     /// Attaches the mission globals snapshot — the game persists them in `.data` across a level load

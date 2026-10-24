@@ -44,6 +44,7 @@ pub const LOS_GUARD_VISION: u32 = 0xa27; // DroneVision_CanSeeObjectFrom 0x176f1
 pub const LOS_PLAYER_HEADROOM: u32 = 0xd; // Player_SSCrouch 0x1924c0:100-101 / Player_HandleJump 0x1916b0:161-162 mask 9 | 4
 pub const LOS_PROBE_8: u32 = 0xc; // mask 8 | 4 — Player_SSGrapple 0x192860:86-88, Searchlight_Update 0x1cb900:338-340, Sensor_SetBeam 0x1af398:73-75, Bullet_homing 0x12f358:92-93
 pub const LOS_SENSOR: u32 = 0xe; // Sensor_InCone 0x1af4f0:84-86 / Check_AutoAim 0x1a73f8:164-165 / Bullet_DoTrails flash 0x12d890:343-345 mask 0xa | 4
+pub const LOS_TURRET_TRACK: u32 = 0x72f; // GT_Track 0x17f9c8:258 — the target scan's per-candidate `Collide_LineOfSight(from, cand+0x80, level, obj, cand, 0x72f)` filter (already includes the wrapper's | 4)
 /// The per-caller masks are not applied yet [S]: with them on, guard cover, turret shots and
 /// several real-path walks broke; `line_of_sight` keeps the static-world segment test until then.
 pub const LOS_MASKS_ON: bool = false;
@@ -538,6 +539,17 @@ impl CollisionWorld {
 
     /// Whether the world carries a cel scope (`build_scoped` with a graph).
     pub fn has_scope(&self) -> bool { self.scope.is_some() }
+
+    /// Debug introspection (level-15-ladder-3): the scope graph's cell boxes and room flags, so a
+    /// test can ask which cel boxes contain a point without reaching into the private `ScopeData`.
+    pub fn debug_scope_cells(&self) -> Vec<([f32; 3], [f32; 3], bool)> {
+        match &self.scope {
+            Some(sc) => sc.graph.cells.iter().enumerate()
+                .map(|(i, (lo, hi))| (*lo, *hi, sc.graph.room.get(i).copied().unwrap_or(false)))
+                .collect(),
+            None => Vec::new(),
+        }
+    }
 
     /// Debug introspection (fix-08-collision): for every cell's scope bucket plus the `always`
     /// remainder, how many chunked runs whose bounds meet `lo..hi` it holds. Probes the per-cel
@@ -1606,6 +1618,20 @@ impl CollisionWorld {
     /// Each caller passes the mask its game call site passes — see the `LOS_*` constants.
     pub fn line_of_sight(&self, a: V3, b: V3, mask: u32) -> bool {
         if !LOS_MASKS_ON { let _ = mask; return self.segment_clear(a, b); }
+        self.line_of_sight_masked(a, b, mask)
+    }
+
+    /// The masked `Collide_LineOfSight` 0x1edf50 body, applied unconditionally — the per-caller
+    /// drop semantics of `Collide_Intersect` 0x1ebaa8:300-319 (and `Collide_Pick` 0x1eb320:140-152):
+    /// mask 0x800 drops hits whose per-triangle surface byte has bit 0x40; mask 0x1 drops surface
+    /// classes 0xd/0xe; mask 0x2 drops class 0x10 (glass); **mask 0x8 drops every hit whose
+    /// HITDATA+0x51 bit 1 is set — the bit the NODE's 0x40 cel flag (:143-145) ORs in and the
+    /// surface byte's 0x40/0x80 bits OR in (:305-309)** — so a 0xa-mask sensor ray (Check_AutoAim
+    /// 0x1a73f8:164-165) passes the stairwell's 0x40-material well panes that a plain segment
+    /// test blocks; mask 0x20 skips the 0x1000-flagged nodes (the port's missile cage).
+    /// (`line_of_sight` keeps the global `LOS_MASKS_ON` gate — the masked semantics stay
+    /// opt-in until the parked per-caller flip is safe.)
+    pub fn line_of_sight_masked(&self, a: V3, b: V3, mask: u32) -> bool {
         let d = sub(b, a);
         let dynamic = self.dynamic.read().unwrap();
         let skip_cage = mask & 0x20 != 0;
@@ -1617,7 +1643,7 @@ impl CollisionWorld {
                 for k in o.tris.clone() {
                     let m = g.mats[k];
                     let low = m & 0x3f;
-                    if drop_node && g.pass[k] { continue; }
+                    if drop_node && (g.pass[k] || m & 0x40 != 0 || m & 0x80 != 0) { continue; }
                     if drop_surface && m & 0x40 != 0 { continue; }
                     if drop_de && (low == 0xd || low == 0xe) { continue; }
                     if drop_10 && low == 0x10 { continue; }

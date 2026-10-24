@@ -43,10 +43,14 @@ no arm in `Script_CreateEntity` 0x1d8968, so the game creates nothing for them. 
 dispatch's raw types; those all resolve (entity_miss = 0 on every level with the corrected list).
 
 **Pinned non-zero numbers (game behaviour, not port defects).**
-- 07000014 `skinless_drones` = 5: the 0x050000b1 non-captain drones — the skin rides only 07000015/16, which
-  the fresh session has not loaded when 14 boots. The shipped game renders them skinless too ([D
-  drone-skins-g021 scan of all 99 archives]; `drone_skins_all_levels_live` pins the same drones as
-  `b1_drones − b1_captains`).
+- 07000014 `skinless_drones` = 0 (re-pinned by cite-14-skinless-drones; the older pin said 5): the
+  0x050000b1 non-captain drones are NOT skinless in the shipped game — `NDrone2_DefaultInit`
+  0x14b300:82-95 rewrites the param-0 0x050000b1 to 0x0500008c in Drone+0xe0 before the
+  `AnimObjectNew` request (:563-565), and 07000014's own archive carries 0x0500008c [D]. The raw skin
+  indeed rides only 07000015/16 ([D census: 07000016 entry 139 @0x8594a0 len 0x860, 07000015 entry 102
+  @0x609e60 len 0x860 — no other container, none on the 14 load path], the fresh session has not loaded
+  them when 14 boots), which is why the rewrite is the game's only path. `drone_skins_all_levels_live`
+  pins the b1 drones' effective skins (0x0500008c / a kind-7 captain's 0x050000b2).
 - 07000001 `skinless_script` = 1, RAW ARCHIVE (the one known remaining gap): script 0x0600005b stream 7 asks
   for skin 0x05000037, which 07000005 and 07000006 carry ([Disc probe: census carrier scan]). The game's
   session table keeps every earlier mission archive's skins (nothing frees them [M 0x1bdf40/0x1ca520, G-021]),
