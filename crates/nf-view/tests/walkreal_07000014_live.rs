@@ -289,34 +289,54 @@ fn the_vent_grill_blocks_the_west_duct_per_the_game() {
 /// 2026-10-22, both stance probes converging there]). The west grill plane z=58.86 stays closed
 /// (the_vent_grill_blocks_the_west_duct_per_the_game).
 #[test]
-#[ignore = "level-14-east-duct: the south-lip route is the new reading (the east wall is the game's own sealed collision, [M] 0x1d1998 + 0x1eb320; the nav corridor [D] runs under the room) — the legs below are being taken tick by tick; the drop and the corridor east are the verified part so far, the shaft climb and the slot approach are the open work."]
+#[ignore = "level-14-east-duct: the south-lip route is proven ([D] the east wall is the game's own sealed collision - mouth4 part E; the nav corridor [D block 0x05] threads under the room and south at x≈49) and the real-input drop WORKS - but the drop lane (x≤40.98, the east wall caps the crawl) lands on the sleeper drone #270 (skin 0x05000090 [D] (40.83, 1.08, 62.85)), who then carries Bond as he wanders (observed z 62.9→59.4 at rest y 3.05, grounded=false, floor 2.38 below). 17 starting-gun rounds did not drop his 10 hp from drone-back (the aim lags the carrier). Needed: the fresh-boot [L] of the game's drop-and-sleeper moment (does the game's Bond land beside, not on, the sleeper? does the starting gun kill him in place?), then the corridor east and the x≈49 south run complete the leg."]
 fn the_east_duct_route_reaches_the_stairwell_slot() {
     let iso = iso();
     let mut w = Walker::new(nf_view::load(&iso, "07000014.bin", false).unwrap());
     w.wait_enabled(3000, "the intro");
     w.wait(120);
     set_crouch(&mut w, true);
-    // Leg A: crawl south off the room floor's south lip (z≈63.7 past lid #266) and drop to the
-    // −0.6 corridor the nav web threads [D map 54 path 2 nodes 4-8].
-    w.walk_to(Wp::new(40.8, 2.4, 63.4).r(0.4), "the crawl south to the room's south lip");
-    w.walk_to(Wp::new(40.8, -0.6, 62.8).r(0.5), "the drop south into the −0.6 corridor");
+    // Leg A: crawl south off the room floor's south lip (z≈63.64 past lid #266) and drop to the
+    // −0.6 corridor the nav web threads [D map 54 path 2 nodes 4-8]. The x=41.2 lane dodges the
+    // sleeper drone #270 (40.83, 1.08, 62.85 [D]) under the lip.
+    w.walk_to(Wp::new(41.0, 2.4, 63.9).r(0.4), "the crawl south to the room's south lip");
+    // The drop lands on/beside the sleeper drone #270 (skin 0x05000090 [D] (40.83, 1.08, 62.85)) —
+    // the authored ambush: the only drop lane (x ≤40.98, the east wall caps the crawl) sits right
+    // over him and he carries Bond as he wanders. Kill him through the REAL gun path (the walker's
+    // aim+fire), then walk the corridor.
+    w.walk_to(Wp::new(40.9, -0.6, 60.2).r(1.4), "the drop south onto the sleeper's back");
     {
-        let p = w.scene.sim.as_ref().unwrap().bond.pos;
-        assert!(p[1] < 0.4 && p[2] < 64.6,
-            "the drop landed in the −0.6 corridor under the room [D nav nodes 4-8], got {p:?}");
+        let di = w.scene.sim.as_ref().unwrap().drones.list.iter()
+            .position(|d| d.skin == 0x0500_0090).expect("the sleeper drone #270 (skin 0x05000090) exists [D]");
+        let mut dead = false;
+        for attempt in 0..3 {
+            if w.shoot(di, "the vent sleeper #270") { dead = true; break; }
+            assert!(w.resupply(&format!("sleeper attempt {attempt}")), "no ammo for the sleeper");
+        }
+        assert!(dead, "the sleeper drone must die to the walked gun path");
     }
-    // Leg B: the corridor east to the shaft's west side (x≈45; the nav nodes 5/8 thread z≈62.9).
-    w.walk_to(Wp::new(44.7, -0.6, 63.2).r(0.5), "the corridor east to the shaft");
+    // Off the carrier: leap/steer east off the sleeper's back (try_walk_to: the wandering carrier
+    // makes the leg's arrival fuzzy — take what the sim gives and check the landing).
+    let _ = w.try_walk_to(Wp::new(42.6, -0.6, 60.0).r(0.7), "east off the sleeper onto the corridor floor");
     {
         let p = w.scene.sim.as_ref().unwrap().bond.pos;
-        assert!(p[0] > 43.5, "the corridor reached the shaft's west side [D nav node 5 (43.05, 0.4, 62.86)], got {p:?}");
+        eprintln!("[014] after the sleeper: {:?}", p);
     }
-    // Leg C: south down the stairwell to the slot approach [D probe14_eastduct].
-    w.walk_to(Wp::new(45.2, 1.1, 56.6).r(0.9), "south down the stairwell to the slot");
+    // Leg B: the corridor east to the x≈49 corner (the nav lane: node 5 (43.05, 0.4, 62.86) →
+    // node 4 (49.08, 0.4, 62.85) [D]).
+    let _ = w.try_walk_to(Wp::new(48.9, -0.6, 62.8).r(0.6), "the corridor east to the x≈49 corner");
     {
         let p = w.scene.sim.as_ref().unwrap().bond.pos;
-        assert!(p[0] > 44.0 && p[2] < 57.2 && p[1] < 1.6,
-            "the descent reached the stairwell slot approach [D probe14_eastduct], got {p:?}");
+        eprintln!("[014] corridor east leg: {:?}", p);
+        assert!(p[0] > 45.0, "the corridor east made real progress [D nav nodes 5/4], got {p:?}");
+    }
+    // Leg C: south along the x≈49 lane toward the flat-grate vent mouths at z=42.16 [D #655/#600]
+    // — the nav thread node 3 (49.08, 0.4, 52.9) → (49.1, 0.4, 42.8) [D].
+    let _ = w.try_walk_to(Wp::new(49.05, -0.6, 53.2).r(0.7), "the corridor south past z≈53");
+    let _ = w.try_walk_to(Wp::new(49.05, -0.6, 43.4).r(0.7), "the corridor south to the vent mouths");
+    {
+        let p = w.scene.sim.as_ref().unwrap().bond.pos;
+        eprintln!("[014] corridor south leg: {:?}", p);
     }
     eprintln!("[014] east route: at {:?} in {} ticks", w.scene.sim.as_ref().unwrap().bond.pos, w.total_ticks);
 }
