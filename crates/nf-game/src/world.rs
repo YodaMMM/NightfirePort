@@ -46,10 +46,10 @@ pub const LOS_PROBE_8: u32 = 0xc; // mask 8 | 4 — Player_SSGrapple 0x192860:86
 pub const LOS_SENSOR: u32 = 0xe; // Sensor_InCone 0x1af4f0:84-86 / Check_AutoAim 0x1a73f8:164-165 / Bullet_DoTrails flash 0x12d890:343-345 mask 0xa | 4
 /// The per-caller masks are not applied yet [S]: with them on, guard cover, turret shots and
 /// several real-path walks broke; `line_of_sight` keeps the static-world segment test until then.
-pub const LOS_MASKS_ON: bool = false;
+pub const LOS_MASKS_ON: bool = true;
 /// The normalized-spine head-on cull below is not applied yet [S]: with it on, real-path door,
 /// pickup, turret and gondola walks on 06/08/09/16 broke.
-pub const HEAD_ON_CULL_ON: bool = false;
+pub const HEAD_ON_CULL_ON: bool = true;
 
 #[derive(Default)]
 struct Geo {
@@ -1914,7 +1914,6 @@ mod tests {
     /// side-keyed on the top end's position: a ~43° slope face (n·y = 0.73) above the capsule was
     /// skipped outright; the game's |n·d̂| = 0.73 < 0.999 does not cull it — the capsule pushes.
     #[test]
-    #[ignore = "HEAD_ON_CULL_ON is off until the cull keeps the real-path walks green"]
     fn head_on_cull_uses_the_raw_spine_dot_and_the_crossing_half() {
         // Up-facing floor at y = 0 (wound so cross(e1,e2) = +y), 20×20.
         let floor = vec![
@@ -1952,7 +1951,6 @@ mod tests {
     /// TESTED and pushes; a FLAT floor crossed in the spine's TOP half (f < 0.5) IS culled — the
     /// game's jump-through, which the old top-end-side rule refused (a above the plane → push).
     #[test]
-    #[ignore = "HEAD_ON_CULL_ON is off until the cull keeps the real-path walks green"]
     fn walk_spine_culls_only_near_flat_faces() {
         // Flat floor crossed at f = 0.4 of the walk spine: culled — pass-through from below.
         let floor = vec![
@@ -1983,16 +1981,24 @@ mod tests {
     /// the 0x1000 cage... (0xa27 DOES carry bit 0x20 — the cage is skipped); the crouch/jump
     /// headroom 0xd (9|4) drops node-flagged cels and the classes but NOT surface-0x40.
     #[test]
-    #[ignore = "LOS_MASKS_ON is off until the masks keep guard cover and the 08 escort green"]
     fn line_of_sight_applies_the_callers_game_mask() {
         let face = |m: u8| [[2.0, 0.0, -1.0], [2.0, 2.0, 1.0], [2.0, 2.0, -1.0]];
         // A surface-0x40 card between the endpoints: guard vision (0x800) sees through it,
-        // the crouch headroom (no 0x800 bit) does not.
+        // and so does the headroom mask (its bit 0x8 drops the ORed-in pass bit — see below).
         let w = CollisionWorld::from_triangles_flags(vec![(face(0x04), 0x44, false)]);
         assert!(w.line_of_sight([0.0, 1.0, 0.0], [4.0, 1.0, 0.0], LOS_GUARD_VISION),
             "guard vision drops the surface-0x40 card [M 0x1ebaa8:300-302]");
-        assert!(!w.line_of_sight([0.0, 1.0, 0.0], [4.0, 1.0, 0.0], LOS_PLAYER_HEADROOM),
-            "the headroom mask (9|4) has no 0x800 bit — the surface-0x40 card blocks");
+        // TEST FIXED against the decompile (was: "the headroom mask has no 0x800 bit — the card
+        // blocks"): the surface byte's 0x40 ORs into HITDATA+0x51 bit 1 [M 0x1ebaa8:305-309],
+        // and mask bit 0x8 drops every hit carrying that bit [M 0x1ebaa8:317-319] — the headroom
+        // mask 0xd (9|4) DOES carry bit 0x8, so it passes the surface-0x40 card too. 0x800 and
+        // 0x8 differ only on the node-flagged cel flag (which 0x800 does not drop).
+        assert!(w.line_of_sight([0.0, 1.0, 0.0], [4.0, 1.0, 0.0], LOS_PLAYER_HEADROOM),
+            "the headroom mask's bit 0x8 drops the surface-0x40 card [M 0x1ebaa8:305-309/:317-319]");
+        // The true contrast: a mask with NEITHER 0x800 NOR 0x8 (the plain wrapper bit 0x4) —
+        // nothing drops the card, it blocks.
+        assert!(!w.line_of_sight([0.0, 1.0, 0.0], [4.0, 1.0, 0.0], 0x4),
+            "no 0x800 and no 0x8 bit — the surface-0x40 card blocks [M 0x1ebaa8:300-319]");
         // A NODE-flagged card (the placement glist bit 0x40): the headroom mask's bit 0x8 drops
         // it; guard vision (0xa27 has NO bit 0x8) does NOT — the card blocks.
         let w = CollisionWorld::from_triangles_flags(vec![(face(0x04), 0x04, true)]);
