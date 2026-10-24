@@ -61,6 +61,10 @@ fn caps_log() -> bool {
     *ON.get_or_init(|| std::env::var("NF_CAPS_LOG").is_ok())
 }
 
+/// Scratch gate switch (level-0a-office-hatch-9): `NF_CAPS_GATE=1` turns the `dot(q − B, n) > 0`
+/// push-tail gate on (see the contact fn). Off by default — measured before it lands.
+static CAPS_GATE: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
+
 #[derive(Default)]
 struct Geo {
     tris: Vec<[V3; 3]>,
@@ -384,6 +388,16 @@ fn capsule_tri_contact(t: &[V3; 3], mat: u8, a: &mut V3, b: &mut V3, r: f32, gro
     let v = sub(p, q);
     let dist = dot(v, v).sqrt();
     if dist >= r { return false; }
+    // Scratch gate (level-0a-office-hatch-9, NF_CAPS_GATE=1): the game's push tail requires
+    // `0 < dot(q − ref, n)` [M Intersect_CylGeom 0x109da0:431 — v = hitpoint − HITTEST+0x50,
+    // the dot against the face plane, the whole push inside the `>0` arm]. With ref = the
+    // spine's bottom end B, an axis overlapping a wall plane (the 0.55-wide doorway slot: the
+    // spine 0.011 past the z=16.279 plane) has dot(q − B, n) < 0 and pushes NOT at all — the
+    // game's player walks the 16.29 line through the slot [L fresh boot] while the ungated port
+    // takes a +0.539 shove out of the passage. The below-B edge contacts keep q in front
+    // (the climb) — tested live.
+    let gate_on = CAPS_GATE.get_or_init(|| std::env::var("NF_CAPS_GATE").is_ok());
+    if *gate_on && n[1] <= 0.7 && dot(sub(q, *b), n) <= 0.0 { return false; }
     let dir = if dist > 1e-6 { [v[0] / dist, v[1] / dist, v[2] / dist] } else if dot(n, sub(*a, q)) >= 0.0 { n } else { [-n[0], -n[1], -n[2]] };
     let push = [dir[0] * (r - dist), dir[1] * (r - dist), dir[2] * (r - dist)];
     if caps_log() {

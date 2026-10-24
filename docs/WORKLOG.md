@@ -164,3 +164,27 @@ the doorway base triangles (x -8.5..-8.0) and corner triangles, log the port's p
 contacts/pushes, diff against the game rules ([M] Intersect_CylGeom 0x109da0, Player_CollisionHandler
 0x1949a8 disasm 0x194c60-0x194c70, Player_FeetOnPoint 0x194188, head-on cull 0x109da0:302-322),
 fix the differing step, un-ignore tests as they go green.
+
+### level-0a-office-hatch-9 (round result, 20:25 UTC)
+The two wedges are NOT the port's per-tick push/band/cull set: the slope-blind push (pos +=
+BL+0x750 [M 0x1949a8:136-140, disasm 0x194c60-70]) is ported, the feet band is [L]-bit-exact
+(the_spawn pin), and the head-on cull only touches |n-axis|>0.999 faces — both wedging walls are
+vertical. NEW measured divergence: **the game's push does not fire when the capsule axis
+OVERLAPS a wall plane.** [L fresh boot] the game glides the doorway line z 16.29 with its
+capsule 0.011 inside the z=16.279 wall plane (no north shove; glide 1.0891 -> peak 1.18 ->
+settle 1.1147); the port's ungated contact fires +0.539/tick there (NF_CAPS_LOG trace) and
+launches Bond onto the slot's north wall (pinned z 16.8288) or the walker into the jamb pocket
+(the glide test's STUCK at (-9.15,1.09,15.92), 27k contacts on the x=-8.604/-8.660 faces).
+Candidate gate `dot(q - B, n) > 0` [M-shaped on Intersect_CylGeom 0x109da0:422-431's
+`0 < dot(hit - HITTEST+0x50, plane)`]: un-wedges the corner (crosses in 27 ticks, game ~25 [L])
+but misses the exit-y pin both ways (1.0655 sunk / 1.2142 lifted vs 1.120) and floats the glide
+walk — the +0x50 reference identity is the blocker (never written per tick in the decomp;
+Collide_Update 0x1ea398:50 zeroes only +0x10; +0x50 moves by DeltaP only [M 0x1ebaa8:353-373]).
+Tri dumps [D]: doorway box = the x=-8.304 wall band (y 0..2.2, n=(1,0,0)), the z=16.279 base
+plane (x -8.604..-8.304, n=(0,0,1)), the y=0 floor lip; corner box = the step block
+(x -17.498..-17.361, y 0.734..0.838, n=(-0.99,0,0.09)/(-0.93,0,0.36)) + the y=0 floor. Diagnostics
+landed: NF_CAPS_LOG (the per-contact push/cull log in capsule_tri_contact), dump_tris_in,
+NF_CAPS_GATE (the candidate gate, default OFF — refuted in detail), probe_hatch9_doorway.
+Tests stay ignored (not green under any defended configuration). Ran: nf-game 88 binaries 0
+FAILED; walkreal_0700000a_live non-ignored 4 passed 3 ignored; the fast suite mid-run at report
+time (baseline 4 known-fails + OOM-style CRASHes while my builds ran concurrent).
