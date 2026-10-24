@@ -121,7 +121,7 @@ fn guard_style_bullets_and_sight_stop_on_the_shell() {
     let sim = scene.sim.as_ref().unwrap();
     let vol = nf_game::bullet::PlayerVolume { feet: [1e4, 0.0, 1e4], height: 0.1, radius: 0.1 };
     // A guard's rifle round: no fly-by, range past the tree.
-    let mut b = nf_game::bullet::Bullet { pos: eye, dir, speed: 8.0, travelled: 0.0, range: 120.0, damage: 1.0, owner: 1, state: 0, weapon: 0x16, flyby: false, bounces: 0 };
+    let mut b = nf_game::bullet::Bullet { pos: eye, dir, speed: 8.0, travelled: 0.0, range: 120.0, damage: 1.0, owner: 1, state: 0, weapon: 0x16, flyby: false, bounces: 0, ..nf_game::bullet::Bullet::TAIL };
     let mut rng = nf_game::drone::Rng::new(7);
     let mut died_at: Option<[f32; 3]> = None;
     for _ in 0..60 {
