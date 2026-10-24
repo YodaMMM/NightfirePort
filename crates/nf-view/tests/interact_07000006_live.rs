@@ -34,7 +34,13 @@ fn load_06(iso: &str, extra: &[u32]) -> nf_view::scene::Scene {
 
 fn settle_near(scene: &mut nf_view::scene::Scene, spot: [f32; 3]) {
     let sim = scene.sim.as_mut().unwrap();
-    let floor = sim.world.segment(spot, [spot[0], spot[1] - 30.0, spot[2]]).map(|t| spot[1] - 30.0 * t);
+    // The cast starts 0.05 above the spot: the game places objects ON the hit surface plus a
+    // normal offset [M Collide_PlaceObject 0x1ecfb8's tail: pos = hit+0x40 + normal·arg], never
+    // half-buried, and a start exactly at a surface y can sit a hair UNDER the walkable top
+    // (door #47's pos.y 40.000378 vs its top 40.008 [D probe]) — from under it the one-sided
+    // test finds nothing and the old fallback buried Bond into the door, which the game's
+    // head-on cull [M 0x109da0:321-322] treats as jump-through-from-below.
+    let floor = sim.world.segment([spot[0], spot[1] + 0.05, spot[2]], [spot[0], spot[1] - 30.0, spot[2]]).map(|t| spot[1] + 0.05 - 30.0 * t);
     if let Some(f) = floor { sim.bond.pos = [spot[0], f + 0.1, spot[2]]; } else { sim.bond.pos = spot; }
     for _ in 0..60 { sim.step_bond(Input::default(), false, false, false); }
 }
