@@ -29,7 +29,7 @@ use nf_game::player::Input;
 
 fn iso() -> Option<String> { std::env::var("NF_ISO").ok() }
 
-/// The repro spot (the task's command line): the terrace over the courtyard, level 07000004.
+/// The repro spot: the terrace over the courtyard, level 07000004.
 const SPOT: ([f32; 3], f32, f32) = ([-6.12, 5.44, 36.24], -0.402, -0.005);
 
 /// Walks the level from the repro spot and returns (scene, first live script-camera tick, the
