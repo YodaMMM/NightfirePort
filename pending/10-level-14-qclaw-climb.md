@@ -1,9 +1,11 @@
-## Your task: `level-14-qclaw-climb`, 07000014: the Q-Claw climb at the vent mouths, then the infiltration walk
+## Your task: `level-14-qclaw-climb`, 07000014: the trench landing without breaking the rides, then the Q-Claw climb and the infiltration walk
 
-Master walks the real east duct route green (`walkreal_07000014_live::the_east_duct_route_reaches_the_stairwell_slot`). Read `docs/reports/level-14-trench-landing.md` on `origin/s/level-14-trench-landing` (merged; the report is not on master). Next on the route: the vent mouths at z 42.16 with the grapple points #626/#657 at (45.30 / 40.78, 4.79, 42.86).
+Start from `origin/s/level-14-trench-landing` (NOT merged; read its `docs/reports/level-14-trench-landing.md`). It makes the real east duct route walk green, but its `crates/nf-game/src/drone.rs` change turns the platform rides red on master's tree — each passes on master and fails with the branch:
+`lifts_ride_live::the_paternoster_carries_bond_from_load`, the three `gondola_windows_live` tests, `zoe_gondola_realpath_live::zoe_rides_the_carriage_and_never_targets_bond`, `interact_0700004a_live` (the floor plates and the hint marker as the lift descends), both `walkreal_0700004a_satchel_live` tests, `walkreal_0700004a_live::ride_the_lift_from_the_spawn_and_walk_into_the_lobby`, `fix_wire2_live::the_fusebox_scenario_starts_crouched_inside_the_vent`, `walkreal_07000016_live` (2), `kiko_button_real_walk_live`, and `campaign_flow_live` (2).
 
-1. The climb leg with real input: aim the Q-Claw at the grapple point, fire, reel [M the grapple path the port already has, `Grapple_Create` 0x198298 / the wire ride], E-open the mask-4 lid, out onto the mezzanine.
-2. Rewrite leg 1a of `walk_the_infiltration_to_the_delta_exit` onto this east route; run its legs 2+ unchanged and un-ignore it when it walks to the delta exit. Fix any port divergence found on the way [M].
+1. Find what the branch's drone.rs change does to riding/carried bodies (lifts, gondola, paternoster, the wire), fix it so every test above is green again while the east route stays green [M]. Merge `origin/master` first (master has moved: the camera beam, the satchel draw).
+2. Then the climb leg: aim the Q-Claw at grapple #626/#657 (45.30 / 40.78, 4.79, 42.86), fire, reel, E-open the mask-4 lid, out onto the mezzanine; rewrite leg 1a of `walk_the_infiltration_to_the_delta_exit` onto the east route and un-ignore it when it walks.
+3. The full suite on the final tree: no test red that is green on master.
 
 **Tests pin only proven behaviour.** Every assertion about what the game does cites its evidence: [M] a decompile
 address that actually says it, [D] disc bytes, or [L] a live PCSX2 measurement from a FRESH boot (a save-state resume
