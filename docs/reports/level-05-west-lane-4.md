@@ -66,10 +66,13 @@ against the disc]) answers both:
 
 - **The slab crossing** (the parked `the_cable_legs_the_crawl_notch_and_ride`, re-attached from
   the slab east end). Two blockers, both measured this round:
-  - [D] The slab's east tip is fragmented in the disc collision: z 52 is void at x ≤ 23.75;
-    (24.0, 54) reads 25.9 between the 33.8 step at (24.0, 52) and the 33.3 strip at (24.0, 55);
-    the walkable strip runs z 54-55 at x 2-14 (the 1-unit gap map). The game's link from the east
-    steps (x 24-25.75, z 49-52) to the strip needs a 0.25-unit map of x 14..26, z 44..56.
+  - [D] (CORRECTED after the round's post-report probe — the first wording said the east tip
+    was "fragmented"; that was a z-64 row misread as z-54.) The truth from the 0.25 stacks: the
+    strip z 54-55 is SOLID slab (33.1-33.8) from x 16 to 24 — (24.0, 52) 33.79, (24.0, 54) 33.32,
+    (23.5, 54) 33.66, (22/20/16, 54.5) 33.67; the only void is x ≤ 23.75 at z 52 (the slab's
+    east edge there starts at x 24.0). The game's link is therefore the z 54-55 strip; the round's
+    push wedged at (23.62, 53.93) because it hugged the WRONG band (z 47.5-51.5, steering south
+    away from the strip) — round 5 should hug z 54.3-55.2 westward from the east end.
   - [L] Master's one-contact-per-round rework (f56c1829c) drops the ground flag under the
     walker's turn+forward input on the slab top: the walked legs hover ungrounded 1.34 over the
     floor — (25.42, 49.55) and (19.15, 54.55) wedges with floor_below 33.34 — while the SAME
