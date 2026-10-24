@@ -24,3 +24,8 @@ say so in the report. Never weaken a decompile-backed test to make code pass.
 
 ---
 claimed-by: sandbox4 at 2026-10-24T04:36Z
+
+---
+## Report (done, 2026-10-24T04:43Z)
+
+Closed by the driver: the report is on `s/combat-sight-loss-exit` (docs/reports/combat-sight-loss-exit.md); the worker didn't run finish.sh.
