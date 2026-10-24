@@ -31,7 +31,11 @@ fn iso() -> Option<String> { std::env::var("NF_ISO").ok() }
 const BASELINE: &[(&str, &str)] = &[
     ("07000002.bin", "37773b0bd1266a44 4483929 9371895 5352 4346635 81 9825 205 28 25 8"),
     ("07000005.bin", "57ab143029eee3f2 4387197 9170895 3614 4302856 73 9759 106 19 16 6"), // the two copter SPs + their script draw slots
-    ("0700000c.bin", "8649f22da9950e97 4871902 10241460 8182 4681078 96 11011 170 22 40 15"),
+    // lift-indicators-09 re-pin: one draw slot per `Script_SubScriptStart` op per running SP
+    // [M 0x1db050] — 0700000c's multi-SP sub chains add 6 slots (+248 vertices, +576 indices,
+    // +1 attachment); 07000014's vent-lid SPs are placed SPs (unchanged), the rest have no
+    // multi-SP sub chains.
+    ("0700000c.bin", "22bb59aa786e1035 4872150 10242036 8182 4681326 96 11012 170 22 40 15"),
     // script-entity-copies: one draw slot per ScriptPlayer running a script — 14's nine
     // SPs on the vent-lid script 0x06000A3B (+ its other shared scripts) add 20 attachments, +1600 vertices.
     // The keypads' LOD pair in the posed slots (Lock_Unlock 0x1b0650 / case 1 `Control_NextLOD`: three
