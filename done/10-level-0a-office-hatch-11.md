@@ -24,3 +24,8 @@ say so in the report. Never weaken a decompile-backed test to make code pass.
 
 ---
 claimed-by: sandbox4 at 2026-10-24T21:55Z
+
+---
+## Report (done, 2026-10-24T22:26Z)
+
+Closed by the driver: the report is on `s/level-0a-office-hatch-11` (docs/reports/level-0a-office-hatch-11.md); the worker didn't run finish.sh.
