@@ -48,8 +48,16 @@ pub const LOS_TURRET_TRACK: u32 = 0x72f; // GT_Track 0x17f9c8:258 — the target
 /// The per-caller masks are not applied yet [S]: with them on, guard cover, turret shots and
 /// several real-path walks broke; `line_of_sight` keeps the static-world segment test until then.
 pub const LOS_MASKS_ON: bool = false;
-/// The normalized-spine head-on cull below is not applied yet [S]: with it on, real-path door,
-/// pickup, turret and gondola walks on 06/08/09/16 broke.
+/// The normalized-spine head-on cull [M Intersect_CylGeom 0x109da0:302-322]. level-0a-office-hatch-9
+/// measured the arms' orientation: the game skips the horizontal face BELOW the spine (the
+/// corner walk's y-0.19 floor-band lifter — the port dithered 1.13→1.21 on it while the game
+/// crosses 1.127→1.120 [L fresh boot]) and keeps the one above/behind (the stair-step climb).
+/// With f the A-from crossing fraction, a below-spine plane clamps to f=1 and an above-spine
+/// one to f=0, so the skip arms are (up-face ∧ f>0.5) ∨ (down-face ∧ f<0.5) — the previous
+/// arms had the f halves swapped. Still OFF: with the corrected arms the corner walk's
+/// wedge MOVES (the try_walk_to line stalls at (−18.05, 5.22), 6000 ticks) — the global flip
+/// needs the full real-path battery this window cannot run; the arms finding is pinned here
+/// and in the report.
 pub const HEAD_ON_CULL_ON: bool = false;
 
 /// Scratch diagnostics gate (level-0a-office-hatch-9): `NF_CAPS_LOG=1` makes
@@ -63,6 +71,21 @@ fn caps_log() -> bool {
 
 /// Scratch gate switch (level-0a-office-hatch-9): `NF_CAPS_GATE=1` turns the `dot(q − B, n) > 0`
 /// push-tail gate on (see the contact fn). Off by default — measured before it lands.
+///
+/// level-0a-office-hatch-10 settled the game's reference (HITTEST+0x50 = BL+0x790) and it is NOT
+/// the spine bottom: boot (0,0,0) via the object-alloc memset [M control_create_object 0x1344e0:17;
+/// L ee_start_0700000a and ee_start_05 both read exactly zero at BL+0x790 while +0x760/+0x770 hold
+/// the seeded A/B], the only writer is the per-landed-hit `+= world DeltaP` [M Collide_Intersect
+/// 0x1ebaa8:353-373 — no other access exists: an exhaustive ACTION.ELF scan of every
+/// immediate-offset instruction (sw/swc1/lw/lwc1/sqc2 0x3E-0x3F/lqc2 0x37/addiu) touching
+/// 0x790/0x788/0x798 finds only menu-stack spills at 0x2012c4-8], and the live mid-play value is a
+/// drift vector ≈ (1.21, 9.08, −14.45), ~15 m from its owner [L ee_snapshot.bin: BL 0x16cf0f0,
+/// Bond at (104.71, 24.97, 107.05)]. The decoded tail `dot(q − HITTEST+0x50, n) > 0` +
+/// `|q − HITTEST+0x50| < radius` [M Intersect_CylGeom 0x109da0:420-457] therefore fires only
+/// against triangles within `radius` of that drifted point — near-never on a walked line. The
+/// ref=bottom gate below is NOT the game's shape (it ports a value the field never holds) and its
+/// hatch-9 pins missed both ways; the port keeps it env-gated OFF until the game's real wall-stop
+/// source is identified (the tail cannot be it — see docs/reports/level-0a-office-hatch-10.md).
 static CAPS_GATE: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
 
 #[derive(Default)]
@@ -359,7 +382,7 @@ fn capsule_tri_contact(t: &[V3; 3], mat: u8, a: &mut V3, b: &mut V3, r: f32, gro
         let ab_len = dot(ab, ab).sqrt();
         if ab_len > 1e-6 {
             let nd = denom / ab_len;
-            if HEAD_ON_CULL_ON && ((nd > 0.999 && f > 0.5) || (nd < -0.999 && f < 0.5)) {
+            if HEAD_ON_CULL_ON && ((nd > 0.999 && f < 0.5) || (nd < -0.999 && f > 0.5)) {
                 if caps_log() {
                     eprintln!("[cap] CULL cent=({:.3},{:.3},{:.3}) n=({:.3},{:.3},{:.3}) nd={nd:.4} f={f:.3} a=({:.3},{:.3},{:.3})",
                         (t[0][0]+t[1][0]+t[2][0])/3.0, (t[0][1]+t[1][1]+t[2][1])/3.0, (t[0][2]+t[1][2]+t[2][2])/3.0, n[0], n[1], n[2], a[0], a[1], a[2]);
@@ -390,12 +413,14 @@ fn capsule_tri_contact(t: &[V3; 3], mat: u8, a: &mut V3, b: &mut V3, r: f32, gro
     if dist >= r { return false; }
     // Scratch gate (level-0a-office-hatch-9, NF_CAPS_GATE=1): the game's push tail requires
     // `0 < dot(q − ref, n)` [M Intersect_CylGeom 0x109da0:431 — v = hitpoint − HITTEST+0x50,
-    // the dot against the face plane, the whole push inside the `>0` arm]. With ref = the
-    // spine's bottom end B, an axis overlapping a wall plane (the 0.55-wide doorway slot: the
-    // spine 0.011 past the z=16.279 plane) has dot(q − B, n) < 0 and pushes NOT at all — the
-    // game's player walks the 16.29 line through the slot [L fresh boot] while the ungated port
-    // takes a +0.539 shove out of the passage. The below-B edge contacts keep q in front
-    // (the climb) — tested live.
+    // the dot against the face plane, the whole push inside the `>0` arm] AND `|q − ref| < radius`
+    // [M 0x109da0:447], the push dir/mag `(q − ref)/|q − ref|·(radius − |q − ref|)`. hatch-10
+    // settled HITTEST+0x50 as the lifetime push accumulator [L ee_snapshot: drift ≈15 m from the
+    // owner] — NOT the spine bottom probed here; with the true ref the tail near-never fires on a
+    // walked line, so the game's z 16.29 glide needs no gate (nothing pushes there at all) and the
+    // port's wall-stop must come from a mechanism not yet identified. This ref=bottom probe stays
+    // OFF: with it the corner crossed but the exit-y missed both ways (1.0655 / 1.2142 vs the
+    // game's 1.120 [L fresh boot]) and the glide walk floated ungrounded (hatch-9's measurements).
     let gate_on = CAPS_GATE.get_or_init(|| std::env::var("NF_CAPS_GATE").is_ok());
     if *gate_on && n[1] <= 0.7 && dot(sub(q, *b), n) <= 0.0 { return false; }
     let dir = if dist > 1e-6 { [v[0] / dist, v[1] / dist, v[2] / dist] } else if dot(n, sub(*a, q)) >= 0.0 { n } else { [-n[0], -n[1], -n[2]] };
