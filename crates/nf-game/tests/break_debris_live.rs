@@ -1,6 +1,6 @@
 //! The kill pieces through the real level data (a breakable shatters into smaller
 //! pieces). A shot vase spawns the game's debris — one object per
-//! stride-3 collision record of every leaf box [M Debris_Create_Loop 0x0008d548 + disasm
+//! stride-3 collision record of every leaf box [M Debris_Create_Loop 0x1ed548 + disasm
 //! 0x0008d638], dressed by EffectInfo[hit material & 0x3f] [D ACTION.ELF 0x3037c0] with the
 //! game's launch numbers (velocity = spread·0.5 · record plane normal · REC_FRAME_RATE, the
 //! hit-velocity term zeroed by Break_Kill [M 0x12b970:140, Debris_Create 0x1aaa00:38-49]); a
@@ -15,6 +15,12 @@ use nf_game::drone::Rng;
 /// `REC_FRAME_RATE` [L grenade.rs:148 = 1/60 in the lib].
 const REC_FRAME_RATE: f32 = 1.0 / 60.0;
 use nf_game::shatter::EFFECT_INFO;
+
+/// The `bullet_hit` weapon argument is the weapon-DEFINITION word at +0x10 (`lhu 0x10($a0)`
+/// [M 0x1ece94]): the disc's gun records carry 0x0008 [L ee_start_05.bin weapon_data
+/// @0x2bf150 + w·0x10c: the P2K 0x2 = 0x0008], which passes `Break_Update`'s base 0x106 mask
+/// [M 0x12c028-0x12c030 + 0x1ece30:24-33].
+const GUN_WORD: u16 = 0x0008;
 
 fn level(id: u32) -> Option<Level> {
     let path = std::env::var_os("NF_ISO")?;
@@ -55,15 +61,15 @@ fn a_shot_vase_spawns_the_games_debris_count_and_launch_numbers() {
     assert!(count >= 1, "the vase's leaves carry records");
     // One bullet through the bounds centre kills it. The weapon argument is the
     // weapon-definition word (`weapon_definition+0x10`, what Collide_FilterBullets compares
-    // [M 0x12bfd8:15 + 0x0008ce30:24-33]) — a gun's 0x0008 passes the base 0x106 mask [L dump];
+    // [M 0x12bfd8:15 + 0x1ece30:24-33]) — a gun's 0x0008 passes the base 0x106 mask [L dump];
     // the old 0x0008 here was a weapon ID, and 0x0008 & 0x106 != 0 drops the shot.
     let a = [(lo[0] + hi[0]) / 2.0, (lo[1] + hi[1]) / 2.0, hi[2] + 2.0];
     let b = [(lo[0] + hi[0]) / 2.0, (lo[1] + hi[1]) / 2.0, lo[2] - 2.0];
     let mut rng = Rng::new(0x5eed);
-    let kills = br.bullet_hit(a, b, 0x0008, 25.0, &mut rng);
+    let kills = br.bullet_hit(a, b, GUN_WORD, 25.0, &mut rng);
     assert_eq!(kills.len(), 1, "health 0.0 [D placements] — the first bullet kills");
     assert_eq!(br.shatter.debris.len(), count,
-        "one debris object per stride-3 record [M 0x0008d548; count recomputed from the disc data]");
+        "one debris object per stride-3 record [M 0x1ed548; count recomputed from the disc data]");
     assert!(br.shatter.shards.is_empty(), "kind 0 takes the debris arm, not the shatter [M 0x12b970:78]");
     // The launch numbers of every piece [M Debris_Create 0x1aaa00:30-50]. The row follows the
     // hit's material; rows share models (0x0200012d at 15 AND 16), so the speed may match any
@@ -81,7 +87,7 @@ fn a_shot_vase_spawns_the_games_debris_count_and_launch_numbers() {
         assert_eq!(d.fade, 0xff, "obj+0x106 = 0xff at create [M 0x1aaa00:31]");
         assert!(d.spin.iter().all(|s| s.abs() <= row.spin / 2.0 + 1.0e-4),
             "piece {k}: spin within ±EffectInfo+0x7c/2 [M 0x1dfef0]");
-        // The centre sits on the object (the leaf verts + obj position [M 0x0008d548:126-131]).
+        // The centre sits on the object (the leaf verts + obj position [M 0x1ed548:126-131]).
         assert!(d.pos.iter().zip(centre).all(|(p, c)| (p - c).abs() <= 3.0),
             "piece {k} at {:?} near the object centre {center:?}", d.pos, center = centre);
     }
@@ -94,7 +100,7 @@ fn a_shot_vase_spawns_the_games_debris_count_and_launch_numbers() {
     let b = [(lo[0] + hi[0]) / 2.0, (lo[1] + hi[1]) / 2.0, lo[2] - 2.0];
     let mut rng = Rng::new(0x5eed);
     let before = rng.draws;
-    br2.bullet_hit(a, b, 0x0008, 25.0, &mut rng);
+    br2.bullet_hit(a, b, GUN_WORD, 25.0, &mut rng);
     let n = br2.shatter.debris.len();
     assert_eq!(rng.draws - before, 1 + 8 * n as u64, "the Rand_Rand(100) sound roll + eight draws per debris object [M 0x12b970:66 the roll precedes the debris loop + 0x1aaa00:30-50]");
 }
@@ -115,7 +121,7 @@ fn a_shot_window_spawns_a_shard_per_source_triangle_and_a_miss_spawns_none() {
     let a = [(lo[0] + hi[0]) / 2.0, (lo[1] + hi[1]) / 2.0, hi[2] + 2.0];
     let b = [(lo[0] + hi[0]) / 2.0, (lo[1] + hi[1]) / 2.0, lo[2] - 2.0];
     let mut rng = Rng::new(0x5eed);
-    let kills = br.bullet_hit(a, b, 0x0008, 25.0, &mut rng);
+    let kills = br.bullet_hit(a, b, GUN_WORD, 25.0, &mut rng);
     assert_eq!(kills.len(), 1);
     assert_eq!(kills[0].sound, 0x2E, "glass → 0x2E [M 0x12b970:65]");
     assert!(br.shatter.shards.len() >= src_count,
@@ -144,7 +150,7 @@ fn a_shot_window_spawns_a_shard_per_source_triangle_and_a_miss_spawns_none() {
     // Sister: a missed shot spawns nothing.
     let mut br = Breaks::create(&level);
     let mut rng = Rng::new(0x5eed);
-    let kills = br.bullet_hit([1.0e5, 1.0e5, 1.0e5], [1.0e5, 1.0e5, 2.0e5], 0x0008, 25.0, &mut rng);
+    let kills = br.bullet_hit([1.0e5, 1.0e5, 1.0e5], [1.0e5, 1.0e5, 2.0e5], GUN_WORD, 25.0, &mut rng);
     assert!(kills.is_empty());
     assert!(br.shatter.shards.is_empty() && br.shatter.debris.is_empty(),
         "an unshot/missed breakable spawns nothing");

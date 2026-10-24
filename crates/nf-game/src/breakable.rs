@@ -79,7 +79,7 @@ pub struct Break {
     pub hi: V3,
     /// tag+0x00 — placement param 0's low byte [M 0x12c230:21 `*puVar1 = *(param_4 + 0x2c)`].
     pub kind: u8,
-    /// tag+0x04 — placement param 1's bits as f32 [M 0x12c230:23-29].
+    /// tag+0x04 — (f32)(i32) placement param 1 [M 0x12c230 disasm 0x12c2a8-0x12c2e0 cvt.s.w].
     pub health: f32,
     /// tag+0x08 — param 2 == 0 ? 0 : !(param 2) as u16 [M 0x12c230:31-39].
     pub filter: u16,
@@ -237,8 +237,11 @@ impl Breaks {
                 // tag+0x04 = (f32)(i32) param 1 — the SIGNED INT→FLOAT conversion [M 0x12c230
                 // disasm 0x12c2a8-0x12c2c4: `lw 0x30($s3)` → `mtc1` → `cvt.s.w` → `swc1 4($s1)`;
                 // the old f32::from_bits read the bits raw (param 1 = 1 was 1e-45, the gondola's
-                // authored health 1 is 1.0)].
+                // authored health 1 is 1.0)]. 0700000a's #379 param 1 = 9 [D] → health 9.0.
                 health: (param(1) as i32) as f32,
+                // `Break_Create` 0x12c230 disasm 0x12c2e4-0x12c2f8: param 2 == 0 → 0, else
+                // `lhu` + `nor` (~param2) → `sh 8($s1)` — the datum word `Break_Update` ORs
+                // 0x106 into [M 0x12c028-0x12c030].
                 filter: if p2 == 0 { 0 } else { !(p2 as u16) },
                 dead: false,
                 matrix: object_matrix(p.rotation, p.translation),
@@ -255,6 +258,51 @@ impl Breaks {
         // The bullet segment must actually cross the pane's bounds (grown 0.1 — the
         // sphere-touch stand-in), not merely overlap them with its AABB.
         Self::seg_box_grow(a, b, lo, hi, 0.1)
+    }
+
+    /// The entry fraction of the segment through the same 0.1-grown bounds box (the slab test on
+    /// the grown box `seg_box` overlaps), for the game's nearest-solid rule: the collide list is
+    /// sorted by the hit distance [M Collide_Update 0x1ea398:120-158 QuickSort on HITDATA+0xc] and
+    /// the first solid node takes the contact and kills the round [M 0x1ea398:216-229 +
+    /// Bullet_CollisionHandler 0x12ce80 disasm 0x12cff0-4].
+    pub fn seg_box_t(a: V3, b: V3, lo: V3, hi: V3) -> Option<f32> {
+        // Degenerate bounds (the script-keyed regions parse to a point — the port has no glist
+        // shape for them): the game's pick shape for such an object is its world sphere [M
+        // Collide_PickObj 0x1eae80 — the closest point on the query line vs the object's
+        // +0x80/+0x8c sphere], but the port cannot know the real region's extent here. The old
+        // segment-AABB overlap stands for these until the shape lands — the port's own coarse
+        // stand-in, documented [S] (a long step's AABB covers the point's neighbourhood even when
+        // the ray misses; the real region shape is an open live check).
+        if lo == hi {
+            let mut over = true;
+            for k in 0..3 {
+                let (mn, mx) = (a[k].min(b[k]), a[k].max(b[k]));
+                if mx < lo[k] - 0.1 || mn > hi[k] + 0.1 { over = false; break; }
+            }
+            if !over { return None; }
+            let ab = [b[0] - a[0], b[1] - a[1], b[2] - a[2]];
+            let ab2 = ab[0] * ab[0] + ab[1] * ab[1] + ab[2] * ab[2];
+            let ap = [lo[0] - a[0], lo[1] - a[1], lo[2] - a[2]];
+            let t = if ab2 > 1.0e-9 { (ap[0] * ab[0] + ap[1] * ab[1] + ap[2] * ab[2]) / ab2 } else { 0.0 }
+                .clamp(0.0, 1.0);
+            return Some(t);
+        }
+        let mut t0 = 0.0f32;
+        let mut t1 = 1.0f32;
+        for k in 0..3 {
+            let (lo, hi) = (lo[k] - 0.1, hi[k] + 0.1);
+            let d = b[k] - a[k];
+            if d.abs() < 1.0e-9 {
+                if a[k] < lo || a[k] > hi { return None; }
+            } else {
+                let (mut ta, mut tb) = ((lo - a[k]) / d, (hi - a[k]) / d);
+                if ta > tb { std::mem::swap(&mut ta, &mut tb); }
+                t0 = t0.max(ta);
+                t1 = t1.min(tb);
+                if t0 > t1 { return None; }
+            }
+        }
+        Some(t0)
     }
 
     fn seg_box_grow(a: V3, b: V3, lo: V3, hi: V3, g: f32) -> bool {
@@ -286,18 +334,27 @@ impl Breaks {
     }
 
     /// The bullet flight this tick against the breakables ([M Break_Update 0x12bfd8:44-48 — the
-    /// class-5 contact subtracts its damage]). `weapon_mask` is the bullet's weapon-definition
-    /// word at `weapon_definition+0x10` (the caller reads `weapons.records[weapon][0x10..0x12]`,
-    /// like the game): `Collide_FilterBullets(list, filter | 0x106)` drops a hitter whose word
-    /// ANDs the mask non-zero [M 0x12bfd8:15 + 0x1ece30:24-33] — the base 0x106 rejects the
-    /// laser (0x0002) and watch (0x0100) classes even on a no-filter pane, guns (0x0008) pass
-    /// [L dump]. Returns the kills for presentation; each kill spawns its pieces (crate::shatter).
+    /// class-5 contact subtracts its damage]). `weapon_mask` is the bullet's weapon-DEFINITION
+    /// word at `weapon_definition+0x10` (`lhu 0x10($a0)` in `Collide_FilterBullets` [M
+    /// 0x1ece94]; the caller reads `weapons.records[weapon][0x10..0x12]`), not the weapon id.
+    ///
+    /// The filter [M `Collide_FilterBullets` 0x1ece30, called from `Break_Update` 0x12bfd8:15
+    /// with mask = tag+0x08 | 0x106 (disasm 0x12c028-0x12c030)]: a class-5 contact whose word
+    /// ANDs the mask non-zero is marked t = 1e8 (0x4cbebc20, disasm 0x1ecea4) and the rebuild
+    /// hands every t == 1e8 node to `LList_Add` — OUT of the contact list (disasm 0x1ecee8
+    /// `c.2.s f0,f20` / 0x1ecef0 `bc1f` keep / 0x1ecef8 `jal LList_Add` drop); only the
+    /// zero-AND contacts remain for `Break_Update`'s damage walk. So a word with bits 0x02 /
+    /// 0x04 / 0x100 (the laser 0x0002, the watch 0x0100 [L ee_start_05.bin weapon_data
+    /// +0x10: 0x4e/0x4f = 0x0002, 0x54 = 0x0100]) never damages even a no-filter pane, while
+    /// the guns' 0x0008 (0x2/0x43/… [L same dump]) does; a pane's own param 2 shrinks the
+    /// passing set further (07000009's securityroom_glass param 2 = 0x30 → mask 0xffef:
+    /// nothing with ammo-word bits passes [D #344]).
+    /// Returns the kills for presentation; each kill spawns its pieces (crate::shatter).
     pub fn bullet_hit(&mut self, a: V3, b: V3, weapon_mask: u16, damage: f32, rng: &mut Rng) -> Vec<BreakEffect> {
         let mut hits = Vec::new();
         for (i, br) in self.list.iter_mut().enumerate().filter(|(_, b)| !b.dead) {
-            // `Collide_FilterBullets` [M 0x1ece30:24-33]: the weapon word against the pane's
-            // mask | 0x106 — non-zero AND = the hit is dropped (the contact's distance is set
-            // to the 1e8 sentinel and discarded).
+            // The filter's drop polarity [M 0x1ece30:24-33 + 0x1ecee4-0x1ecef8]: non-zero AND
+            // = the contact never reaches the damage walk.
             if weapon_mask & (br.filter | 0x106) != 0 { continue; }
             if Self::seg_box(a, b, br.lo, br.hi) {
                 br.health -= damage;
@@ -536,6 +593,12 @@ mod tests {
     use super::*;
     use crate::shatter::EFFECT_INFO;
 
+    /// The bullet_hit weapon argument is the weapon-DEFINITION word at +0x10 (the game loads it
+    /// `lhu 0x10($a0)` [M 0x1ece94]); the disc's gun records carry 0x0008 [L ee_start_05.bin
+    /// weapon_data @0x2bf150 + w·0x10c: 0x2 (the P2K) = 0x0008], the laser 0x0002, the watch
+    /// 0x0100.
+    const GUN: u16 = 0x0008;
+
     /// One breakable with one collision record — a triangle across the test bullet's path
     /// [(5,8) in XY, at z = −2.5] facing the shooter (−Z). Kills play the sound and spawn one
     /// debris piece (EffectInfo[0x10] — model 0x0200012d [D 0x3037c0+0x10·0x88]).
@@ -562,11 +625,6 @@ mod tests {
             frame: 0,
         }
     }
-
-    // The weapon argument of every `bullet_hit` call below is the weapon-DEFINITION word
-    // (`weapon_definition+0x10`, what `Collide_FilterBullets` compares [M 0x12bfd8:15 +
-    // 0x1ece30:24-33]) — a gun's 0x0008 passes the base 0x106 mask [L dump].
-    const GUN: u16 = 0x0008;
 
     #[test]
     fn the_first_bullet_kills_a_zero_health_vase_with_the_debris_roll() {
@@ -631,6 +689,46 @@ mod tests {
         }
         let kills = b.bullet_hit([5.0, 8.0, -4.0], [5.0, 8.0, -2.0], GUN, 10.0, &mut rng);
         assert_eq!(kills.len(), 1, "the 6th crosses below zero");
+    }
+
+    #[test]
+    fn the_laser_and_watch_words_never_reach_a_no_filter_pane() {
+        // `Collide_FilterBullets` [M 0x1ece30:24-33 + 0x1ecee4-0x1ecef8]: a class-5 contact
+        // whose weapon word ANDs `filter | 0x106` non-zero is dropped from the list — on a
+        // no-filter pane the base 0x106 (bits 0x2/0x4/0x100) rejects the laser's 0x0002 and
+        // the watch's 0x0100 [L ee_start_05.bin weapon_data +0x10: 0x4e/0x4f = 0x0002,
+        // 0x54 = 0x0100], while the guns' 0x0008 passes.
+        let seg = ([5.0, 8.0, -4.0], [5.0, 8.0, -2.0]);
+        for (name, word) in [("laser", 0x0002u16), ("watch", 0x0100u16)] {
+            let mut b = one(2, 50.0);
+            let mut rng = Rng::new(1);
+            let kills = b.bullet_hit(seg.0, seg.1, word, 25.0, &mut rng);
+            assert!(kills.is_empty() && !b.list[0].dead && (b.list[0].health - 50.0).abs() < 1e-6,
+                "the {name} word {word:#06x} never damages the pane");
+            assert!(b.shatter.debris.is_empty() && b.shatter.shards.is_empty(), "{name}: no pieces");
+        }
+        let mut b = one(2, 0.0);
+        let mut rng = Rng::new(1);
+        let kills = b.bullet_hit(seg.0, seg.1, GUN, 25.0, &mut rng);
+        assert_eq!(kills.len(), 1, "the gun word 0x0008 passes the 0x106 base mask");
+    }
+
+    #[test]
+    fn the_security_room_filter_word_rejects_gunfire_but_takes_a_zero_word() {
+        // 07000009's securityroom_glass #344 carries param 2 = 0x30 [D placement params] →
+        // `Break_Create` stores ~0x30 = 0xffcf [M 0x12c2e4-0x12c2f8] and `Break_Update` ORs
+        // 0x106 → mask 0xffef [M 0x12c028-0x12c030]: a gun's 0x0008 ANDs non-zero → dropped;
+        // only a zero word (the grenades' [L ee_start_05.bin: 0x2c..0x31 = 0x0000]) passes.
+        let mut b = one(2, 50.0);
+        b.list[0].filter = !0x30u16;
+        let mut rng = Rng::new(1);
+        let kills = b.bullet_hit([5.0, 8.0, -4.0], [5.0, 8.0, -2.0], GUN, 25.0, &mut rng);
+        assert!(kills.is_empty() && !b.list[0].dead, "gunfire is filtered out of the security glass");
+        let mut b = one(2, 0.0);
+        b.list[0].filter = !0x30u16;
+        let mut rng = Rng::new(1);
+        let kills = b.bullet_hit([5.0, 8.0, -4.0], [5.0, 8.0, -2.0], 0x0000, 25.0, &mut rng);
+        assert_eq!(kills.len(), 1, "a zero word (the explosive class) passes 0xffef");
     }
 
     #[test]

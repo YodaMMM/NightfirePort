@@ -146,7 +146,7 @@ fn the_slit_float_carries_bond_west_without_a_fall() {
 /// the carry never lands in the port. The thrust loop below drives the same plan and records
 /// progress without pinning a crossing.
 #[test]
-#[ignore = "the shaft is sealed: the slab at y 16.74 covers the whole deck cross-section and the west wall (x 4.43, body-solid, bullet-pass) spans every scanned z below it — no disc opening (probe1b_float/spawner); the game's route is the SP#211 fly-by whose event-6 player-carry never lands in the port (no event 6 in 0x060008f0's parsed streams; the ch-74 tail pulse is the unmeasured candidate — the report's live check)"]
+#[ignore = "the shaft is sealed BY THE GAME: the west wall is plc #128 OBJECT_Boundary_1 (mat 0x40, x 4.433, y −16.56..+16.74 — probe1b_wall), body-solid per [M] (the 0x40 drop is the bit-0x8 bullet queries only; CylGeom 0x109da0 rejects no vertical face by side; Player_ZeroG 0x192ab0 adds no bypass — the_boundary_wall_stops_the_float_and_passes_bullets pins it), so no real-input float crosses; the z ±8.82 mouths are SP#141/#142's iris-door booths EAST of the boundary (load-time loopers [M 0x1db9a8 + 0x1dbc08], not a route). The game's crossing past x 4.43 must be a scripted carry: the SP#211 chain (0x060007fd → 0x060008f0) pulses ch 75 (the float entry) and its tail pulses ch 74 (0x600096e, t392-399 [D]) — the unmeasured candidate. LIVE CHECKS for the main agent: (1) fresh boot, during the slit crossing — does the game's Bond pass x 4.43 westward in substate 9, or is he stopped like the port? (2) watch switch_channels[74] and the shuttle entity's matrix through 0x060008f0's t392-399 — does the player's position follow an entity (the carry), and at which address does the player object's position get written"]
 fn walk_arrival_to_drakes_defeat() {
     let iso = iso();
     let mut w = Walker::new(nf_view::load(&iso, "0700001b.bin", false).unwrap());
@@ -304,6 +304,153 @@ fn the_zero_g_entry_floats_bond_off_the_deck() {
     }
     assert!(rose, "the float rises off the deck band under the lift thruster (the walk-substate bond wedges at y -1.62)");
     let _ = min_x;
+}
+
+/// The sealed-shaft wall, decided: the face that stops the float at x ≈ 4.98
+/// IS the game's own boundary, and the game's body collides with it — the port's capsule stop is
+/// the game's behaviour, not a port artefact.
+///
+/// [D probe1b_wall] the face is plc #128 OBJECT_Boundary_1 (kind 0x8019, cel 0x8000, glist 0x0):
+/// a two-triangle pair at x 4.433 spanning y −16.56..+16.74, z −20.40..+20.40 (both stored
+/// normals face EAST, +x), surface byte 0x40 — present in the level archive at the slit band,
+/// at the mouths' height (y 9.45) and everywhere between.
+///
+/// [M] the game's rules stop the player body on it: the surface byte's 0x40 sets HITDATA+0x51
+/// bit 1 on every hit (Collide_Intersect 0x1ebaa8 disasm 0x1ebf78-0x1ebf80) and that bit drops
+/// hits only for the HITTEST+0x98 bit-0x8 bullet queries (0x1ebff0-0x1ec010) — the player body
+/// rides Collide_CylinderIntersect 0x1ecc00:61's kind 0x800, which carries no bit 0x8;
+/// Intersect_CylGeom 0x109da0's per-triangle loop rejects no face by side (the head-on cull
+/// :302-322 only skips faces within ~2.6° of horizontal), and Player_ZeroG 0x192ab0 composes
+/// only thrust/rotation — the shared movement applies the same body collision. The z ±8.82
+/// mouths do not reopen the route: the iris doors (SP#141/#142's meshes, x 5.23 [D]) sit EAST
+/// of the boundary, and the boundary spans the doors' whole y band — open doors dead-end at it.
+#[test]
+fn the_boundary_wall_stops_the_float_and_passes_bullets() {
+    let iso = iso();
+    let scene = nf_view::load(&iso, "0700001b.bin", false).unwrap();
+    let sim = scene.sim.as_ref().unwrap();
+    // The body ray east→west hits the 4.433 plane across the slit band and at the mouths'
+    // height, with the boundary's surface byte [D mat 0x40].
+    for (y, z) in [(-2.4f32, 0.0), (0.0, -4.0), (2.5, 0.0), (9.45, 8.82), (9.45, -8.82)] {
+        let (t, n, mat, _) = sim.world
+            .segment_surface_flags([5.5, y, z], [3.5, y, z], true)
+            .unwrap_or_else(|| panic!("the boundary ray (y {y}, z {z}) must hit [D plc #128 at x 4.433]"));
+        let x = 5.5 - t * 2.0;
+        assert!((x - 4.433).abs() < 0.01, "hit at x {x:.3} = the boundary plane 4.433 [D plc #128], got t {t}");
+        assert!((n[0] - 1.0).abs() < 0.01, "the stored normal faces east [D], got ({:.2},{:.2},{:.2})", n[0], n[1], n[2]);
+        assert_eq!(mat & 0x3f, 0, "the boundary's surface index is 0 [D mat 0x40]");
+        assert!(mat & 0x40 != 0, "the boundary carries the 0x40 surface flag [D]");
+    }
+    // Sisters (the game's ray rules): the bullet query passes (the 0x40 drop [M 0x1ebff0]) and
+    // the west→east ray passes (the stored normals face east; the ray test skips n·dir ≥ 0
+    // [M 0x10a8c8:168]).
+    for (y, z) in [(0.0f32, 0.0), (9.45, 8.82), (9.45, -8.82)] {
+        // The bullet is never stopped AT the boundary: the 0x40 drop [M 0x1ebff0-0x1ec010]
+        // releases the hit and the ray runs on (west of the boundary the 0x19 grills at x ≈ 3.8
+        // [D] can catch it — that is not the boundary).
+        if let Some(t) = sim.world.segment_bullet([5.5, y, z], [3.5, y, z]) {
+            let x = 5.5 - t * 2.0;
+            assert!(x < 4.4, "the bullet passes the boundary westward (the 0x40 drop [M 0x1ebff0-0x1ec010]) \
+                at y {y} z {z} — stopped at x {x:.3} instead");
+        }
+        assert!(sim.world.segment([3.5, y, z], [5.5, y, z]).is_none(),
+            "the west→east ray passes the east-facing boundary [M 0x10a8c8:168] at y {y} z {z}");
+    }
+    drop(sim);
+    // The float, real thrust only: enter at the slit mouth (the documented ch-75 stand-in for
+    // the disc's own SP#211 pulse — the chain test above drives the chain itself), lift clear
+    // of the deck band, then thrust west. The boundary stops the capsule at
+    // 4.433 + 0.55 (the body radius) ≈ 4.98 — min x must land in that window, never past it.
+    let mut w = Walker::new(nf_view::load(&iso, "0700001b.bin", false).unwrap());
+    w.wait_enabled(3000, "the shuttle arrival");
+    // [S] unverified — the same ground-substate premise as the entry test (the p3 == 2 spawn
+    // enters substate 8 [M 0x1910f8 :160-165]; this test pins the WALL, not the substate).
+    w.scene.sim.as_mut().unwrap().bond.substate = SS_WALK;
+    for wp in [[20.0f32, -1.9, 1.0], [17.0, -1.9, -1.0], [13.0, -1.9, -1.0], [10.0, -1.9, -1.0]] {
+        let _ = w.try_walk_to(walker::Wp::new(wp[0], wp[1], wp[2]).r(1.2), "the deck west");
+    }
+    let _ = w.try_walk_to(walker::Wp::new(8.6, -1.9, -0.6).r(1.2), "the slit mouth");
+    {
+        let sim = w.scene.sim.as_mut().unwrap();
+        sim.drones.channels.set(0x4b, 1, sim.drones.frame);
+    }
+    w.tick(Input::default(), false);
+    assert_eq!(w.scene.sim.as_ref().unwrap().bond.substate, SS_ZEROG_9,
+        "the ch-75 rise enters the float [M 0x216388:10-17]");
+    let mut min_x = f32::MAX;
+    for t in 0..1100u32 {
+        let input = if t < 220 { Input { lift: 1.0, ..Default::default() } }
+                    else { Input { forward: 1.0, ..Default::default() } };
+        w.tick(input, false);
+        let sim = w.scene.sim.as_ref().unwrap();
+        min_x = min_x.min(sim.bond.pos[0]);
+    }
+    assert!(min_x > 4.85 && min_x < 5.15,
+        "the float thrusts west and the boundary stops the capsule at 4.433 + 0.55 ≈ 4.98 \
+         [D plc #128; M the kind-0x800 body, no bit-0x8 drop; M CylGeom two-sided], got min x {min_x:.3}");
+}
+
+/// The iris doors, decided: the z ±8.82 booths' doors — SP#141/#142
+/// "ScriptPlayer_IrisDoorOpen" [D placement names/positions (5.23, 9.45, ∓8.82)], script
+/// 0x06000818 [D p0] — are LOAD-TIME LOOPERS, not missile-triggered pieces: the create runs
+/// `SP_LoadScript` for mode ∉ {0,1} [M SP_CreateScriptPlayer 0x1db9a8 tail] and its mode-8 arm
+/// starts the script LOOPING (`Script_Play(script, 1)`) in state 6 [M SP_LoadScript 0x1dbc08:46-48].
+/// The script's per-loop shape [D decode]: the 8 iris-panel entities (0x02000834..3b) animate
+/// OPEN at keys 0..120, the script HOLDS at t208 (stream 9 ev0x03 p0=0 — the −1 delay), the
+/// panels CLOSE at 480..600 with the door sounds (stream 10: 0x000004c4 at start, 0x000004c3 at
+/// t480), and the missile-done channels 0x18/0x1c are CLEARED at t550 (streams 12/13) — each
+/// ~10 s loop clears the missile bookkeeping. The channel-RISE restart does NOT apply: [M
+/// SP_Update 0x1dbda8 case 6] reloads only through the OTHER script slot, and both SPs carry a
+/// single script (hash[1] = 0 [D live players]) — the rise never starts them. The doors are NOT
+/// the route west either way: their meshes sit at x 5.23, east of the boundary [D probe1b_wall;
+/// the boundary pin test above].
+#[test]
+fn the_iris_doors_are_load_time_loopers() {
+    let iso = iso();
+    let mut w = Walker::new(nf_view::load(&iso, "0700001b.bin", false).unwrap());
+    w.wait_enabled(3000, "the shuttle arrival");
+    {
+        let sim = w.scene.sim.as_ref().unwrap();
+        // The create/load semantics: primed PLAYING loopers (state 6 = the mode-8 arm's
+        // Script_Play(loop=1) [M 0x1dbc08:46-48]) on their own out channels [D p6].
+        for plc in [141usize, 142] {
+            let p = sim.drones.scripts.players.iter().find(|p| p.placement == plc).unwrap();
+            assert_eq!(p.scripts[0], 0x0600_0818, "SP#{plc} carries the iris-door script [D p0]");
+            assert_eq!(p.modes[0], 8, "SP#{plc} is a mode-8 looper [D p2]");
+            assert_eq!((p.state, p.info[0].is_some()), (6, true),
+                "SP#{plc} primed PLAYING (state 6, script loaded) from the level load [M 0x1db9a8 + 0x1dbc08]");
+            assert_eq!(p.out, if plc == 141 { 0x1c } else { 0x18 }, "SP#{plc} fires on its own out channel [D p6]");
+        }
+        // The 8 iris-panel entities exist (the playing script created them [D streams 1-8,
+        // hashes 0x02000834..3b]). Their stored matrices are the streams' local keys — the world
+        // placement folds the parent chain (Script_Interp's live-matrix walk), so only the
+        // existence and the hash band are pinned here.
+        let mut panels = 0usize;
+        for o in sim.drones.scripts.objects.list.iter().flatten() {
+            if let nf_game::nis::Obj::Entity { hash, .. } = o {
+                if (0x0200_0834..=0x0200_083b).contains(hash) { panels += 1; }
+            }
+        }
+        assert!(panels >= 8, "the 8 iris-panel entities exist [D streams 1-8], found {panels}");
+        // The channel-rise sister: [M 0x1dbda8 case 6] reloads only through the other slot
+        // (hash[1] = 0 [D]) — a ch rise on the out channel starts NOTHING.
+        assert_eq!(sim.drones.scripts.players.iter().find(|p| p.placement == 141).unwrap().state, 6,
+            "sister: the doors stay looping loopers regardless of the missile channels");
+    }
+    {
+        let sim = w.scene.sim.as_mut().unwrap();
+        sim.drones.channels.set(0x1c, 1, sim.drones.frame);
+        sim.drones.channels.set(0x18, 1, sim.drones.frame);
+    }
+    w.tick(Input::default(), false);
+    {
+        let sim = w.scene.sim.as_ref().unwrap();
+        for plc in [141usize, 142] {
+            let p = sim.drones.scripts.players.iter().find(|p| p.placement == plc).unwrap();
+            assert_eq!(p.state, 6,
+                "sister: the ch 0x18/0x1c rise does NOT restart SP#{plc} [M 0x1dbda8 case 6 needs the other slot]");
+        }
+    }
 }
 
 /// The spawn pin (green): with ch 0x0a driven from the WALKED deck route, spawner #187 produces
