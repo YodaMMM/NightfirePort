@@ -9685,6 +9685,18 @@ pub fn build(level: &Level, cels_only: bool, skeletons: &HashMap<u8, Skeleton>, 
     /// palette to FAR (off-picture — the port's established "not drawn" state, the same mechanism as
     /// `fs.hidden`); objects the cel pass cannot place draw (the game's unlinked objects draw from
     /// the forced list, `View_AddForcedObjects` 0x1e5fb8). `None` = the walk is off (`NF_NOPORTAL`).
+    /// Render interpolation: the palette entries of the
+    /// gadget beams (the laser/stunner/uv beam slots TRACER_SLOTS..+3). They stretch from the
+    /// first-person watch to the hit, so the draw loop re-attaches them to the interpolated camera
+    /// like the view model. Port-side presentation only; the sim is untouched.
+    pub fn beam_entries(&self, l: &SkinLayout) -> Vec<usize> {
+        let att = l.attach_base as usize;
+        self.attachments.iter().enumerate()
+            .filter(|(_, a)| a.tracer.is_some_and(|t| (TRACER_SLOTS..TRACER_SLOTS + 3).contains(&t)))
+            .map(|(k, _)| att + k).collect()
+    }
+
+
     pub fn skin_palette(&self, l: &SkinLayout, choice: Option<usize>, time: f32, opts: ViewOpts, vis: Option<&[bool]>) -> (Vec<Mat4>, Vec<[f32; 4]>) {
         const FAR: Mat4 = [[0.0; 4], [0.0; 4], [0.0; 4], [0.0, -10000.0, 0.0, 1.0]];
         let prof_fs = nf_game::prof::scope("pal: frame_state_for");
