@@ -2849,7 +2849,24 @@ impl Sim {
             let straddle_cells = bond_cel
                 .map(|c| self.world.debug_straddle(c, [pc[0], pc[1] + ao, pc[2]], [pc[0], pc[1] + bo, pc[2]], ar))
                 .unwrap_or_default();
-            let ctx = nf_game::player::LadderCtx { ladders: &self.ladders, wires: &self.wires, wire_anims: Some(&self.wire_anims), water, sink, creepwalls: &self.creepwalls, level_bump_5fb: false, straddle: &straddle_cells };
+            // The near bots' collision capsules for the actor-actor push (`Collide_Jointy`
+            // 0x1ec180:229-281 via `LadderCtx::bot_capsules`): the game's bot hittest arms
+            // [M NDrone2_Collision 0x140e90:91-121 — top = pos + up·r, bottom = pos + up·(r − h),
+            // r 0.4 default / 0.55 kind 0xc, h the anim height word +0xa0 with default 1.0
+            // [M NDrone2_DefaultInit 0x14b300:48]] — upright bots (up = (0,1,0)), so the arms are
+            // pos + (0, ±0.4, 0) at h 1.0. Only the NEAR bots carry an ON capsule [M
+            // DroneFunc_NearPlayerCollision 0x14b190 + NDrone2_DoCollision 0x149ec8 — the kind
+            // word +0x464 goes 0x800 only within 2.0 of the player]; the 0.4 default stands for
+            // every bot here [S unverified: the sleeper's own kind word (the 0xc → 0.55 arm) is
+            // not read by the port — a live check item].
+            let bot_capsules: Vec<([f32; 3], [f32; 3], f32)> = {
+                let bp = self.bond.pos;
+                self.drones.list.iter()
+                    .filter(|x| x.enabled && ((x.pos[0] - bp[0]).powi(2) + (x.pos[1] - bp[1]).powi(2) + (x.pos[2] - bp[2]).powi(2)) < 2.0 * 2.0)
+                    .map(|x| ([x.pos[0], x.pos[1] + 0.4, x.pos[2]], [x.pos[0], x.pos[1] - 0.6, x.pos[2]], 0.4f32))
+                    .collect()
+            };
+            let ctx = nf_game::player::LadderCtx { ladders: &self.ladders, wires: &self.wires, wire_anims: Some(&self.wire_anims), water, sink, creepwalls: &self.creepwalls, level_bump_5fb: false, straddle: &straddle_cells, bot_capsules: &bot_capsules };
             // The third-icon context [M ThirdIcon_Update 0x196e80 + Player_CollisionHandler 0x1949a8:22]:
             // the tick starts with +0x95F = 0xFF (none), then every ENABLED icon (its param-1 channel on,
             // or param 1 == 0 = always [M ThirdIcon_Create 0x197070:27-32]) whose straddle-cel set holds
@@ -11260,6 +11277,7 @@ impl Sim {
                 ladders: &self.ladders, wires: &self.wires, wire_anims: Some(&self.wire_anims),
                 water, sink: input.crouch, creepwalls: &self.creepwalls, level_bump_5fb: false,
                 straddle: &[], // MP remotes carry no per-body cel link yet — no scoping.
+                bot_capsules: &[], // the remotes are bodies, not bots — no actor-actor push.
             };
             b.tick_ctx(&self.world, &ctx, &input);
             // mp-remote-fx: the body's jump launch / head bump sounds play at the flush.
