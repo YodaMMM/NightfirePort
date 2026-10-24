@@ -539,6 +539,17 @@ impl CollisionWorld {
     /// Whether the world carries a cel scope (`build_scoped` with a graph).
     pub fn has_scope(&self) -> bool { self.scope.is_some() }
 
+    /// Debug introspection (level-15-ladder-3): the scope graph's cell boxes and room flags, so a
+    /// test can ask which cel boxes contain a point without reaching into the private `ScopeData`.
+    pub fn debug_scope_cells(&self) -> Vec<([f32; 3], [f32; 3], bool)> {
+        match &self.scope {
+            Some(sc) => sc.graph.cells.iter().enumerate()
+                .map(|(i, (lo, hi))| (*lo, *hi, sc.graph.room.get(i).copied().unwrap_or(false)))
+                .collect(),
+            None => Vec::new(),
+        }
+    }
+
     /// Debug introspection (fix-08-collision): for every cell's scope bucket plus the `always`
     /// remainder, how many chunked runs whose bounds meet `lo..hi` it holds. Probes the per-cel
     /// attribution without reaching into the private `ScopeData`.
