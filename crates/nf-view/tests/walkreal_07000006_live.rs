@@ -53,6 +53,38 @@ use walker::{dxz, Act, Walker, Wp};
 
 fn iso() -> String { std::env::var("NF_ISO").expect("NF_ISO") }
 
+/// The tunnel ramp (y 42 → 49 over z −53..−65) stalls the walk's step-up: climb_stairs' 30-tick
+/// jump pulse gains 3.6 u of height in 4000 ticks and grinds the rest. Measured fallbacks (all
+/// pinned at (5.45, ~46, −59.04), the ramp's upper half): dense 8-tick jump pulses gained nothing
+/// (the ceiling bonk cancels each hop), a crouch-walk slid back to 45.45, and a re-center walk_to
+/// wedges on the ramp surface itself (the eye ray hits the slope). The upper tunnel is the walk's
+/// remaining OPEN leg — the fire path and the whole southern route are proven (see the first
+/// test's note).
+fn climb_the_tunnel(w: &mut Walker, label: &str) {
+    let start = w.total_ticks;
+    loop {
+        if w.total_ticks - start >= 5000 {
+            eprintln!("[06] {label}: tunnel climb cap at {:?}", w.scene.sim.as_ref().unwrap().bond.pos);
+            return;
+        }
+        let sim = w.scene.sim.as_ref().unwrap();
+        let p = sim.bond.pos;
+        if p[1] > 48.2 && dxz(p, [4.0, 49.0, -63.0]) < 2.5 { return; }
+        let desired = (4.0 - p[0]).atan2(-63.0 - p[2]);
+        let err = walker::wrap_pi(desired - sim.bond.yaw);
+        // The tunnel is low: a jump bonks the ceiling and cancels the step — crouch-walk the
+        // ramp (the game's own crouch move clears the head), dense tick-by-tick.
+        let input = Input {
+            turn: err.clamp(-0.08, 0.08),
+            forward: if err.abs() > 1.0 { 0.0 } else { 1.0 },
+            crouch: true,
+            ..Default::default()
+        };
+        drop(sim);
+        w.tick(input, false);
+    }
+}
+
 fn mission_row() -> usize {
     nf_game::mission::LEVELS.iter().position(|l| l.level == 0x0700_0006).expect("the 06 record")
 }
@@ -132,6 +164,10 @@ fn walk_to_the_gallery(w: &mut Walker, cut: bool) {
     w.walk_to(Wp::new(23.2, 39.1, 7.0), "the hedge gap");
     w.walk_to(Wp::new(27.2, 39.1, -2.4), "around the hedge end");
     w.walk_to(Wp::new(33.7, 39.1, -8.9), "the guardhouse court");
+    // The idle guard #438 (27.51, 39.18, −10.19) [D census] blocks the lane to door #47; the
+    // real fire path kills him (10 hp — the fire-path pins in fix_06_fire_live.rs walk this
+    // same fight with every press firing).
+    fight_through(w);
     w.walk_to(Wp::new(36.0, 39.1, -13.4), "before door #47");
     {
         let sim = w.scene.sim.as_ref().unwrap();
@@ -171,6 +207,9 @@ fn walk_to_the_gallery(w: &mut Walker, cut: bool) {
         eprintln!("[06] door {di} at {pos:?}");
         w.use_door(di, "door #59");
     }
+    // THROUGH the doorway (level-06-castle-fire): without this waypoint the mouth leg aims
+    // through the guardroom's west wall (the auto-closing doorway is a nav blind spot).
+    w.walk_to(Wp::new(26.6, 40.6, -23.6), "through door #59");
     // West up the steps to the searchlight courtyard mouth (the entry plates #525/#526 → 0x52;
     // SP #808's boot NIS fires and the walker skips it with the game's own skip action).
     w.walk_nav_to([8.4, 42.0, -12.0], "the searchlight courtyard mouth", 1.6);
@@ -195,7 +234,9 @@ fn walk_to_the_gallery(w: &mut Walker, cut: bool) {
     // The climb must actually gain the height — the door E below is only honest from beside it.
     w.climb_stairs([4.0, 49.0, -62.5], "up the tunnel", 1.6, 4000);
     if w.scene.sim.as_ref().unwrap().bond.pos[1] < 47.0 {
-        w.climb_stairs([4.0, 49.0, -62.5], "up the tunnel (retry)", 1.2, 4000);
+        // The walk's step-up grinds on the steep ramp (a re-center leg wedges on the ramp
+        // surface itself — the eye ray hits the slope): dense jump pulses instead.
+        climb_the_tunnel(w, "dense-pulse");
     }
     {
         let sim = w.scene.sim.as_ref().unwrap();
@@ -231,24 +272,17 @@ fn walk_to_the_gallery(w: &mut Walker, cut: bool) {
 /// the walk's one documented gap (see the header) — the LoadPoint chain it feeds (ch 0x83 →
 /// ch 0x02 → level_exit 07000007) is pinned green through the real trigger on master by
 /// walk_07000006_live.rs.
-/// [ignore] OPEN (level-06-guardroom-guard): the walked route reaches the guardhouse courtyard,
-/// where the idle guard #438 (skin 0x05000030, drone 2, placement (27.51, 39.18, −10.19) [D
-/// census: p3 switch channel 0, p13 = 0x0600021F the special-death script]) blocks the lane to
-/// door #47 and the fight cannot kill him through the real fire path. THE DIAGNOSIS (from
-/// probes): the guard is a NORMAL idle guard — the
-/// port's damage path for his IDLE state is present ([M] impact_args IDLE → (ATTACK, 0); his 16
-/// hit boxes sit at his body and a camera ray hits the head box at t 0.157 vs the first world hit
-/// 0.439) — the wedge is the PLAYER's fire path: (1) the harness `switch_to_armed` accepted the
-/// FISTS (their clip 1 passes the old `clip + spare > 0` test — fixed in walker.rs; the previous
-/// session's "8 rounds from the carried P2K" were punches, the fists' hit test is a 1.8-unit-range
-/// bullet); (2) with the P2K equipped the fire path still lands at most ONE bullet per engagement —
-/// the first press spawns ON the press tick but at a view rotated −1.38 rad from the aimed yaw
-/// (an intra-tick body turn measured at the fire site: bond.yaw −3.3134 vs the sampled −1.9311,
-/// coincident with the fire script's start), and every later press — 20-tick taps, held fire,
-/// idle-gated presses, 40-tick taps — spawns nothing (the fire script machine never releases a
-/// second round: 12 presses → 1 bullet, probe logs). The port gap to root-cause next: the
-/// press-tick yaw turn and the fire-script refire starvation (Player_SetFiringAnim 0x1a3c70 /
-/// Player_WeaponFiring 0x1a5460 / Gun::update_with), then un-ignore both tests.
+/// [ignore] OPEN (level-06-castle-fire): the OLD fire-path wedge (first press turns −1.38 rad,
+/// later presses starve — 12 presses 1 bullet) does NOT reproduce on master: the real-input pins
+/// in fix_06_fire_live.rs walk this route's guardhouse courtyard AND the searchlight-courtyard
+/// mouth past the boot NIS, and every press fires, the press tick turns the body nothing [M
+/// Player_WeaponFiring 0x1a5460 has no body-yaw write], held fire is the semi-auto's one round.
+/// The guard #438 dies to the real fire path (10 hp [D census]) and the walk gained the two legs
+/// the probes needed — the guardhouse fight and the explicit through-door #59 waypoint (the
+/// auto-closing doorway is a nav blind spot; without it the mouth leg aims through the guardroom
+/// wall). The walk now runs the truck ride → the well lane → the guardroom → the whole searchlight
+/// courtyard → door #71 → the tunnel to y 46.6, and wedges at the tunnel ramp's upper half (see
+/// climb_the_tunnel) — that geometry is the next port/harness question, not the fire path.
 #[test]
 #[ignore]
 fn walk_the_castle_interior_to_the_upper_gallery() {
@@ -286,7 +320,8 @@ fn walk_the_castle_interior_to_the_upper_gallery() {
 /// Sister: the same walk that stops before the tunnel never ends the level — no alarm-channel
 /// dependency, no ch 0x83, no objective fold, no exit. The gallery walk's asserts depend on the
 /// walked route, not on any earlier scripted hand-out.
-/// [ignore] with the full walk above (the same fire-path wedge).
+/// [ignore] with the full walk above (level-06-castle-fire: the fire path is proven whole; the
+/// remaining wedge is the tunnel ramp, see climb_the_tunnel).
 #[test]
 #[ignore]
 fn stopping_before_the_tunnel_never_ends_the_castle() {

@@ -34,7 +34,8 @@ def main():
              "The NightfirePort binaries include the following open-source crates. Each is listed with its declared",
              "licence, followed by the licence and notice files shipped in its source package.",
              "",
-             "In-tree code from rerac (ISC) is noticed in THIRD_PARTY_RERAC_LICENSE.txt.",
+             "In-tree code from rerac (ISC) is noticed in THIRD_PARTY_RERAC_LICENSE.txt; the VAG decoder",
+             "variant ported from OpenGOAL (ISC) is noticed in THIRD_PARTY_OPENGOAL_LICENSE.txt.",
              ""]
     for p in third:
         lines.append("=" * 100)

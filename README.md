@@ -190,7 +190,7 @@ This project is not affiliated with, endorsed by or connected to the rights hold
 
 Apart from the screenshots and clips on this page, the repository contains no game data. Golden test snapshots hold numbers, hashes and identifiers only. The research material (decompiles, ELFs, emulator snapshots) lives in a git-ignored directory and is never uploaded.
 
-Code reused from the rerac project (a Rust port of Ratchet & Clank 1, which served as the model for this one) is under its ISC licence; see `THIRD_PARTY_RERAC_LICENSE.txt`.
+Code reused from the rerac project (a Rust port of Ratchet & Clank 1, which served as the model for this one) is under its ISC licence; see `THIRD_PARTY_RERAC_LICENSE.txt`. Code ported from OpenGOAL (the Jak & Daxter decompilation project; its SPU ADPCM decoder variant lives in `crates/nf-formats/src/vag.rs`) keeps its ISC licence notice in `THIRD_PARTY_OPENGOAL_LICENSE.txt`.
 
 ## How the work is verified
 

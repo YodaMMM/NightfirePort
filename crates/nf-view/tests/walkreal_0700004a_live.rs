@@ -19,9 +19,25 @@
 #[path = "common/walker.rs"]
 mod walker;
 
-use walker::Walker;
+use nf_game::player::Input;
+use nf_game::world::V3;
+use walker::{wrap_pi, Walker};
 
 fn iso() -> String { std::env::var("NF_ISO").expect("NF_ISO") }
+
+/// The aim input toward `target` from Bond's eye — real look/turn only (the satchel test's aim).
+fn aim_input(w: &Walker, target: V3) -> Input {
+    let sim = w.scene.sim.as_ref().unwrap();
+    let b = &sim.bond;
+    let eye = [b.pos[0], b.pos[1] + b.eye, b.pos[2]];
+    let d = [target[0] - eye[0], target[1] - eye[1], target[2] - eye[2]];
+    let want_yaw = d[0].atan2(d[2]);
+    let len = (d[0] * d[0] + d[1] * d[1] + d[2] * d[2]).sqrt().max(1e-6);
+    let want_pitch = (d[1] / len).asin() / (std::f32::consts::FRAC_PI_2);
+    let yaw_err = wrap_pi(want_yaw - b.yaw);
+    let pitch_err = (want_pitch - b.pitch).clamp(-0.06, 0.06);
+    Input { turn: yaw_err.clamp(-0.06, 0.06), look: pitch_err, ..Default::default() }
+}
 
 // ROOT CAUSE (fix-final-blockers + fix-final-blockers2 — RESOLVED):
 // ① The leaves never touch the rider: at t1615 the d50/d51 leaves span z −0.98..−0.82 and Bond
@@ -42,12 +58,28 @@ fn iso() -> String { std::env::var("NF_ISO").expect("NF_ISO") }
 //    The NIS keys are WORLD-SPACE: the marker's key IS Bond's freeze pose; #289's camera key[0]
 //    (2.889,−7.829,−4.583) is the boarding spot (telephoto scale 0.344 — the shot films the
 //    landing from the shaft top). Identity-base SPs hid the wrong base in every earlier cut-scene.
-// ④ THE DESIGN: the enable (t2187, mode 1) puts Bond back at his freeze pose — 17.5 ABOVE the
-//    platform that kept descending — and he FALLS ONTO IT (probe walkreal_probe_fb6i: airborne
-//    t2188..2312, grounded t2313 at y −75.50, 0.4 below the key line, riding on to the lobby).
-//    The ride-loop scrape check exempts the disabled window plus the fall (until 5 grounded ticks).
+// ④ THE HAND-BACK, RESOLVED (level-4a-lift-4 + this task): master re-enables Bond at the landing
+//    scene's RAW marker key (1.79945, −54.12811, −3.45340) — the hash-0 kind-0x19 marker rule in
+//    nis.rs (interp case 1; pinned by fix_landing_matrix_live). The raw key IS a standing root ON
+//    the held platform (floor −55.16 + cc 1.0347 [M 0x194df0] = −54.13 = the key y; z −3.453 = the
+//    platform z centre, x 1.8 on the platform [D o0 raw bbox]) — no fall. The ride-loop scrape
+//    check therefore runs EVERY enabled tick with no fall exemption: an ungrounded void fall
+//    (the old composed-key hand-back) diverges from the key line in ~30 ticks of free fall and
+//    trips it — no vacuous pass.
+// ⑤ THE HOLD: the landing cut-scene holds the lift 575 ticks — the scene's hand-back marker sits
+//    at its t575 [D 0x060006cf s25], the lift script pauses (event 3) at tick 1611 [D script
+//    stream; NF_SCRIPTLOG], and the fresh-boot live audit measured the stop: the lift holds
+//    y −54.20 for the landing scene's disable (575 ticks) [L lift-4 audit]. The want-line
+//    therefore HOLDS while Bond is disabled (the keyed descent counts ACTIVE ticks only — the
+//    rate is unchanged; the line's phase shifts by the disabled ticks).
+// ⑥ THE SATCHELS: the two 0xD2 shooters drop timed charges onto this ride — #286 fires on the
+//    ch-0x22 rise (the landing scene's end event) and #287 on the ch-0x4f plate [D #286/#287;
+//    M Shooter_Update 0x17d0c0], each a 0x3b-family bullet with a 900-tick fuse and a
+//    2000-damage blast [M Bullet_init 0x12c5a0:199-211; the Explode_Create arm 0x12dd44]. The
+//    walk burns both with the laser watch — 1/tick off the 100-burn counter under the beam
+//    [M Bullet_DoTrails 0x12e2f0-0x12e390] — the satchel test's way; its sister pins the
+//    no-defuse direction (the blast kills, ch 0x62 ≈ 1377 ticks after the hand-back [L]).
 #[test]
-#[ignore = "level-4a-lift-landing: the POST-enable handback is the blocker, now narrowed to one question. NEW EVIDENCE (2026-10-23): (a) the old fall-exempt hole let the walk PASS VACUOUSLY - Bond re-enabled at the composed marker (1.799,-107.662,-6.830) fell past the platform (its z span -5.58..-1.30 [D o0 raw bbox] misses z -6.83) into the void (y -388 at t2698 [L probe fb6 rerun], -2571 in the walk) while the exemption ran ungrounded forever; the exemption is now TIME-CAPPED (300 ticks) so the void fall trips the scrape check. (b) [D dump_060006cf_marker_stream_raw] the marker stream s25's RAW key at t575 = (1.79945, -54.12811, -3.45340), quat yaw ~15 deg - a STANDING ROOT on the HELD platform: the platform floor -55.16 [L fb6: Bond grounded -54.13 root, platform row3 -46.12, floor local -9.04] + cc 1.0347 [M 0x194df0] = -54.13 = the key y; z -3.453 = the platform z centre (-5.58..-1.30 -> -3.44); x 1.8 on the platform (0.89..5.21). (c) [M disasm 0x1d9a7c-0x1d9a98 (case 1) + 0x1d9be4-0x1d9c0c (case 6)] Script_Interp's GetInterp base-concat flag = (stream+0x25 parent == -1) sltiu/nor pair - the base composes EXACTLY ONCE either way (unparented: inside GetInterp [M 0x1da158 tail]; parented: at the chain end [M 0x1d9a08:133/:270]) - the port's interp rule is CORRECT. (d) [D all-map scan] the composed pose (1.799,-107.662,-6.830) is a VOID in all 42 maps' collision (only the LiftShaft shells z -6.0..-0.75 exist at that y; nothing at z < -6.0 below y -90). CONTRADICTION: composing the SP #289 base (0,-53.534,-3.377 [D placement]) onto the world-space key doubles the landing level; the raw key is the designer's handback ON the platform. THE OPEN QUESTION: does the game's SP #289 SCRIPTINFO+0x00 carry the placement translation when the marker interp runs (the port's assumption [Script_Load 0x1d8248 reads the SP obj+0x30/0x50])? If it reads identity/near-zero the handback = the raw key and the port's SP base seeding is the bug. Live check: fieldprobe the 060006cf SCRIPTINFO+0x00 row3 at t2180..2190 + gdbwatch Bond's y t2190..2500. The walk stays ignored until the handback is settled; then the want-line must shift by the hold ticks (575) after the resume."]
 fn ride_the_lift_from_the_spawn_and_walk_into_the_lobby() {
     let iso = iso();
     let mut w = Walker::new(nf_view::load(&iso, "0700004a.bin", false).unwrap());
@@ -79,6 +111,16 @@ fn ride_the_lift_from_the_spawn_and_walk_into_the_lobby() {
     }
     let y_board = w.scene.sim.as_ref().unwrap().bond.pos[1];
 
+    // ⑥ the laser watch into the hand: the shooters' satchels drop on this ride and the beam
+    // burns them [M Bullet_DoTrails 0x12e2f0-0x12e390]. The draw completes in the t90
+    // pre-descent window [M 0x1a7ef8:318-319 the loadout tail equips the watch].
+    w.tick(Input { switch_to: Some(0x4e), ..Default::default() }, false);
+    for _ in 0..120 {
+        w.tick(Default::default(), false);
+        if w.scene.sim.as_ref().unwrap().gun.weapon == 0x4e { break; }
+    }
+    assert_eq!(w.scene.sim.as_ref().unwrap().gun.weapon, 0x4e, "the laser watch 0x4E is drawn [M 0x1a7ef8:318-319]");
+
     // fix-final-blockers: the −52 landing starts cut-scene #289 (0x060006cf — event 0xb/5/4 at
     // frame 1612: the view model, the drone freeze, PlayerDisable [NF_SCRIPTLOG]) — the game
     // plays the landing as a NIS and re-enables Bond at its end. The walkreal-c scrape was the
@@ -87,57 +129,70 @@ fn ride_the_lift_from_the_spawn_and_walk_into_the_lobby() {
     // walkreal-c "falls to −107.66". The real player WATCHES the landing cut-scene: skip it off.
     w.skip_cutscenes = false;
 
-    // The ride: no input while the script carries the platform down. The key line: y(t) =
-    // y_board − max(0, t−90)·(150/4950) [D keys]; a rider off the line by > 5 (free fall diverges
-    // in ~30 ticks) is the shaft-door scrape. The plates fire in descent order [D triggers].
+    // The ride: no movement input while the script carries the platform down (the only inputs
+    // are the watch's aim/fire at the landed charges, ⑥). The key line: y(t) =
+    // y_board − max(0, t−90−hold)·(150/4950) [D keys; ⑤ the hold]; a rider off the line by > 5
+    // (free fall diverges in ~30 ticks) is the shaft-door scrape. The plates fire in descent
+    // order [D triggers].
     let t0 = w.total_ticks;
     let mut fired: Vec<u32> = Vec::new();
     let mut scrape: Option<(u32, f32, f32)> = None;
-    let mut reground = 0u32;
-    let mut fall_exempt = false;
-    let mut fall_exempt_ticks = 0u32;
-    for k in 0..5400u32 {
-        w.tick(Default::default(), false);
+    let mut hold_ticks = 0u32; // ⑤ the landing scene's hold: disabled ticks shift the key line
+    let mut t84: Option<u32> = None;
+    for k in 0..6800u32 {
+        // ⑥ burn any landed charge while the cab descends — the beam is real held fire
+        // (1/tick off the 100-burn counter [M 0x12e2f0-0x12e390]; ~100 contact ticks per
+        // charge). While the landing scene has Bond disabled there is nothing to aim with.
+        let disabled_now = w.scene.sim.as_ref().unwrap().disabled;
+        let charge = if disabled_now { None } else {
+            w.scene.sim.as_ref().unwrap().drones.bullets.iter()
+                .find(|b| b.landed && !b.defused && b.burn > 0).map(|b| b.pos)
+        };
+        if let Some(cpos) = charge {
+            let input = aim_input(&w, cpos);
+            w.tick_fire(input);
+        } else {
+            w.tick(Default::default(), false);
+        }
         let sim = w.scene.sim.as_ref().unwrap();
         for ch in [0x3du32, 0x17, 0x18, 0x3f, 0x19, 0x45, 0x1a, 0x3e, 0x1b, 0x4f, 0x84] {
             if sim.drones.channels.on(ch) && !fired.contains(&ch) { fired.push(ch); }
         }
         let t = k + 60; // the board ticks count too
-        let want = (y_board - ((t as f32) - 90.0).max(0.0) * (150.0 / 4950.0)).max(y_board - 150.0);
+        // The keyed descent [D keys] with the landing hold (⑤): the disabled ticks are NOT
+        // active descent — the platform pauses (the script's event 3 [D]; the fresh-boot
+        // audit's 575-tick stop [L lift-4]) — so the line's phase shifts by every disabled
+        // tick and the descent resumes at the keyed rate after the hand-back.
+        let want = (y_board - ((t as f32) - 90.0 - hold_ticks as f32).max(0.0) * (150.0 / 4950.0)).max(y_board - 150.0);
         let y = sim.bond.pos[1];
-        // While the landing cut-scene has Bond disabled he legitimately freezes (the game's
-        // Player_CollisionHandler early-returns [M 0x1949a8:24]) — and the enable drops him at
-        // his freeze pose to fall onto the still-descending cab (the header ④). The scrape check
-        // resumes only once he is riding again (5 straight grounded ticks). The exemption is
-        // TIME-CAPPED at 300 ticks: the game's re-enable must ground him (the ④ fall took ~125
-        // ticks); an endless ungrounded fall is the void handback — the check trips (this was
-        // the vacuous pass: the old exemption ran while ungrounded forever and the walk
-        // "arrived" at y −2571 in free fall).
-        if sim.disabled {
-            fall_exempt = true;
-            fall_exempt_ticks = 0;
-            reground = 0;
-        } else if fall_exempt {
-            fall_exempt_ticks += 1;
-            if sim.bond.grounded {
-                reground += 1;
-                if reground >= 5 { fall_exempt = false; }
-            } else {
-                reground = 0;
-                if fall_exempt_ticks > 300 { fall_exempt = false; }
-            }
-        }
-        if scrape.is_none() && t > 150 && !sim.disabled && !fall_exempt && (y - want).abs() > 5.0 {
+        if sim.disabled { hold_ticks += 1; }
+        if t84.is_none() && sim.drones.channels.on(0x84) { t84 = Some(t); }
+        // The scrape check runs every enabled tick (④: the raw-key hand-back grounds Bond ON
+        // the platform — the old fall exemption is gone; a void fall diverges in ~30 ticks
+        // and trips this check, so the walk cannot pass vacuously).
+        if scrape.is_none() && t > 150 && !sim.disabled && (y - want).abs() > 5.0 {
             scrape = Some((t, y, want));
             eprintln!("[walk] the ride left the key line at t{t}: y {y:.2} want {want:.2} grounded={} substate={}",
                 sim.bond.grounded, sim.bond.substate);
             break;
         }
+        if sim.drones.level_exit.is_some() { break; } // the mission's LevelEnd — the ride is over
         if sim.drones.channels.on(0x4a) { break; }
     }
     let ride_ticks = w.total_ticks - t0;
     {
         let sim = w.scene.sim.as_ref().unwrap();
+        // ⑥ at least one landed satchel burned under THIS walk's beam (the game's chain: two
+        // shooters, one charge each [M 0x17d0c0's obj+0xFE |= 1]; both plates fire on the ride
+        // [D #281/#62] — the run burned 2), and none is left with a live fuse (the sister pins
+        // the no-defuse direction — the 900-tick fuse's blast kills and ch 0x62 fails [L]).
+        let burned = sim.drones.bullets.iter().filter(|b| b.defused).count();
+        assert!(burned >= 1,
+            "a landed satchel burned under the watch's beam [M 0x12e2f0; D #286] — burned {burned}, fired {fired:?}");
+        assert!(!sim.drones.bullets.iter().any(|b| b.landed && !b.defused),
+            "every landed satchel burned under the watch's beam [M 0x12e2f0] — got {:?}",
+            sim.drones.bullets.iter().filter(|b| b.landed)
+                .map(|b| (b.burn, b.defused)).collect::<Vec<_>>());
         assert!(fired.contains(&0x17) || fired.contains(&0x3d),
             "the descent plates fire during the ride ([D] floors), got {fired:?}");
         assert!(scrape.is_none(),
@@ -148,10 +203,17 @@ fn ride_the_lift_from_the_spawn_and_walk_into_the_lobby() {
             sim.bond.pos[1]);
         assert_eq!(sim.drones.mission.states[17][0], 3, "the objective stays revealed through the ride's end [L record 4a]");
         assert!(sim.bond.pos[1] < y_board - 140.0, "the ride covered the shaft (y {:.2} from {y_board})", sim.bond.pos[1]);
+        // The ride's end IS the level's end: the bottom plate #62 fires ch 0x84 [D #62] and the
+        // mission completes (`Event::LevelEnd` → `ResetMap_LevelToLoad(LevelToEndTo)`
+        // [M 0x182c60:73]; the run: 0x84 at t5488, the exit ~800 ticks later under the banner).
+        assert!(t84.is_some(), "the shaft's bottom plate #62 fires ch 0x84 [D #62] — fired {fired:?}");
+        assert!(sim.drones.level_exit.is_some(), "the mission's LevelEnd follows the bottom plate — the ride reaches the lobby's level end");
     }
 
-    // The walk out: north off the platform into the bottom lobby (the lobby strip at the shaft's
-    // south edge; the lobby doors at z 0 are the mission's "access").
+    // The walk out (the route's historical tail): with the ride's end the level has already
+    // exited (the bottom plate #62's ch 0x84 → the mission's LevelEnd), so these legs are the
+    // walker's stop_on_exit no-ops — kept so a regression that un-fires the exit makes the walk
+    // actually run (and its own waypoints/arrival checks apply).
     w.walk_to(walker::Wp::new(3.0, y_board - 149.5, -2.5).r(1.0), "off the platform");
     w.walk_to(walker::Wp::new(3.0, y_board - 149.5, 2.0).r(1.2), "into the lobby");
     {
