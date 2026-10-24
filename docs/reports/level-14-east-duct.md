@@ -107,8 +107,13 @@ spare 0 ×5 via the shoot helper's own weapon cycle). This is where the leg stop
   were SIGKILLed by the sandbox (exit −9) even with the foreground quiet — this session's memory
   cap is tighter than the previous session's clean run of the same suite. The 3 `disc_golden`
   failures are the documented slim-ISO ones; `identity_disc::the_real_disc_passes_the_identity_check`
-  also failed (not covered by the slim-ISO waiver — worth a master-side look). The final total
-  line is appended below if the run finished before the deadline.
+  also failed (not covered by the slim-ISO waiver — worth a master-side look). The suite's own
+  total line did not print before this session's deadline; summing the per-binary result lines
+  in its log at the deadline (18:58 UTC): **2701 passed, 6 failed, 235 ignored** across ~810
+  completed binary sections — the 6 being the 3 disc_golden, identity_disc, and the two
+  headless-render pylon tests (fix_0c_pylon_live, the same pair the previous session's suite log
+  shows failing) — plus ~15 bins SIGKILLed by the sandbox (exit −9) and a handful of tail bins
+  still running at the deadline.
 - The touched crate's own tests (nf-view: walkreal_07000014, probe14_mouth3/mouth4) ran
   green/ignored as expected.
 
