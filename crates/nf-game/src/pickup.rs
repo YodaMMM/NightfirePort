@@ -347,13 +347,25 @@ impl Pickup {
         // **the pickup's own obj passed as the exclude** — `Collide_PickObj` 0x1eae80:15-19 skips the HITTEST's
         // two exclude objects, so the ray's own endpoint (inside the pickup's world sphere, dist 0 < r) never
         // blocks. The floor contact: the ray ends at the resting centre, which the fall puts |centre.y| above the
-        // floor hit [M 0x18e148's rest] — for the Raptor |centre.y| ≈ 5e-7 [L probe], a sub-quantum contact the
-        // game's VU0 fixed-point triangle test (the 2^-14 = 6.1e-5 quantum, Intersect_PointGeom 0x1e92d8's
-        // decompile) absorbs onto the plane. The port's float rest carries no quantization, so its endpoint can
-        // sit a float-noise sliver INSIDE the plane (a batch-1022l run measured one >1e-4 deep — the take refused;
-        // this tree's sweep of ~50 stands around two drops found none, worst t: no hit at all). The end band is
-        // therefore the port's float-noise slack at 1e-3 (a millimetre — 10x the observed batch case, 16x the
-        // game's quantum, far below any real cover's thickness): a hit within it is the resting floor, not cover.
+        // floor hit [M 0x18e148:150-173 — position = ground-hit point + normal·(−|bounds centre y|) + model
+        // centre, state → 1] — for the Raptor |centre.y| ≈ 5e-7 [L probe]: ON the plane by design, never sunk.
+        // The take ray's triangle test is `Intersect_RayGeom` 0x10a8c8 (`Collide_LineOfSight` 0x1edf50 →
+        // `Collide_RayIntersect` 0x1ec690:100 sets the query type 0x201 → `Collide_Intersect` 0x1ebaa8:229
+        // dispatches ident-0x201 static geom there). Its quantisation is real: the vertices are int16 shorts
+        // converted to float and multiplied by the constant quad (2^-14, 2^-14, 2^-14, 1.0) [M 0x10a8c8:138-149;
+        // the same 2^-14 quad again at 0x10a8c8:315-317 for the returned hit position/normal; sister
+        // 0x1e92d8:185-187 in the point test] — the geometry carries no detail below the 2^-14 = 6.1e-5 quantum.
+        // But NO decompile line gives an END-OF-RAY band: the t-range is exact — backface `0.0 <= dot(n,dir)`
+        // skipped [M 0x10a8c8:168], `0.0 <= t <= 1.0` [M 0x10a8c8:171-172], and a candidate needs `t < best`
+        // with best initialised to 1.0 [M 0x10a8c8:95,135,180], so the game's ONLY end tolerance is that an exact
+        // t == 1.0 plane contact does not block; the three edge/inside tests are exact sign comparisons, no
+        // epsilon [M 0x10a8c8:220-244]. The port's float rest carries no quantization, so its endpoint can sit a
+        // float-noise sliver INSIDE the plane (a batch-1022l run measured one >1e-4 deep — the take refused; this
+        // tree's sweep of ~50 stands around two drops found none, worst t: no hit at all), a state the game's own
+        // rest never produces. The end band is therefore the port's float-noise slack at 1e-3 (a millimetre — 10x
+        // the observed batch case, 16x the game's quantum, far below any real cover's thickness): a hit within it
+        // is the resting floor, not cover. [S] unverified: the 1e-3 band is a port choice, not a game rule — no
+        // [M] line gives it (the game's rule is the exact t < 1.0 above).
         // fix-safe08b: the ray is the game's flags-0x721 query — cel-scoped (`Collide_StraddleCels`
         // 0x1eac98 from the player's cel, obj+0x20), the 0x1000 cage skipped (bit 0x20) and the
         // surface classes 0xd/0xe skipped (`Collide_Intersect` 0x1ebaa8's tail, bit 0x1; the class test
@@ -365,6 +377,9 @@ impl Pickup {
         // `build_PointOnFloor` 0x1c95a8:52 runs 0x70c (bit 0x8 set). So Bond never stands on a drop or a
         // corpse in the game, and the port registers neither — `Bond::stand_at` at floor + 1.1 is the game's
         // own standing height everywhere a drop rests.
+        // [S] unverified band (see above): the game's ray test is exact (t < 1.0 blocks, t == 1.0 clear
+        // [M 0x10a8c8:95,135,171-172,180]); 1e-3 is the port's slack for its float rest, kept out of
+        // game-behaviour claims. A settling read is in docs/reports/cite-take-ray-tolerance.md.
         let los = world.segment_take_scoped(cel, body, c).map_or(true, |t| t >= 1.0 - 1e-3);
         // `NF_PICKUPLOG=1`: every take test — Bond's position, the pickup centre, the distance against
         // radius + 1.1, the LOS ray, and the state (fix-player2's drop diagnostics).
@@ -800,10 +815,14 @@ mod tests {
         assert!(!p.touches(&floor, None, [0.5, 0.0, 3.0], [0.5, 1.0, 3.0]), "1.1 + radius away");
     }
 
-    /// The take ray's end band absorbs the rest noise: a drop whose resting centre sits a float-noise
-    /// sliver INSIDE the floor plane still takes. The game's own rest puts the sphere centre |centre y|
-    /// above the floor hit [M 0x18e148's fall rest] and its VU0 fixed-point triangle test absorbs a
-    /// sub-quantum (2^-14) contact onto the plane; the port's float rest can land the centre deeper
+    /// The take ray's end band absorbs the PORT's rest noise: a drop whose resting centre sits a
+    /// float-noise sliver INSIDE the floor plane still takes. This pins the port's own band (the 1e-3
+    /// in `touches`) — a port choice, NOT a game rule [S] unverified: the game's take-ray triangle
+    /// test `Intersect_RayGeom` 0x10a8c8 is exact — t ∈ [0, 1.0] [M 0x10a8c8:171-172], a candidate
+    /// needs t < best with best initialised 1.0 [M 0x10a8c8:95,135,180], the edge tests carry no
+    /// epsilon [M 0x10a8c8:220-244] — its only end tolerance is that an exact t == 1.0 contact does
+    /// not block, and its rest never sinks the centre (ground-hit point + normal·(−|centre y|) +
+    /// model centre [M 0x18e148:150-173]). The port's float rest can land the centre deeper
     /// (batch-1022l measured one >1e-4 deep — the old 1e-4 band refused it). Sister (can fail): the
     /// same geometry 5e-3 inside the plane — beyond the band, a genuine short hit, refused.
     #[test]
