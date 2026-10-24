@@ -240,3 +240,24 @@ from (second pass / letterbox / HUD layer), make the cutscene camera drive the w
 matches the gameplay widescreen treatment; cutscene top/bottom bars stay), never the gameplay
 camera during a cutscene. Test: no draw during a script-camera frame uses the gameplay camera;
 headless --shot before/after in the report. Evidence tags on every game-behaviour claim.
+
+### cutscene-side-strips (round, 22:35 UTC)
+
+Found the frame split: the cut-scene band (`cutscene_frame`) hard-coded the console 4:3 for every
+window, but the game builds the cut-scene view at the VIEWER's own aspect — `Script_UpdateCamera`
+0x1db518:9 multiplies the view by `viewer+0x114` (through `Vision_Calculate_View_Fustrum`
+0x1e7df8:79), and `Camera_CalcViewAngles` 0x1baf70:28-32 writes 16/9 there with the AV options'
+widescreen flag (`DAT_002a37c4`), 4/3 without. So with the widescreen option ON the game shows the
+cut-scene full-width 16/9; the port pillar-boxed it into the 4:3 centre with black side strips —
+the reported "cut-scene only in the 4:3 centre". Fix: `cutscene_frame` takes the viewer's aspect
+(the port's `Sim::view_aspect` mirror); the window path feeds it from the front end's AV row
+(`FrontEnd::view_aspect`, which now also feeds `Sim::view_aspect` — the field's documented host),
+the headless shot path from the sim (`NF_WIDESCREEN=1` render aid). Option off keeps the letterbox
+task's 4:3 pillar-box shape unchanged; option on = the cut-scene camera driving the whole frame at
+the same vertical FOV (the port's own gameplay widescreen treatment), its top/bottom bars staying.
+The camera itself never regresses: both draw paths replace the gameplay camera with the script
+camera while it is live (pinned: walk rule + `overlay_for` empty at live ticks).
+Tests: cutscene_side_strips_live (3) + fix_cutscene_letterbox_live (4, its 4:3 pins kept). PNGs in
+the report. Headless probe note: the repro's frame 1694 sits AFTER 07000004's intro script camera
+(live ~ticks 1–1330 on this tree's walk) — at 1694 the frame is honest gameplay (HUD, full 16:9);
+the composite the task describes matches an older pre-fix-cutscene-letterbox build.

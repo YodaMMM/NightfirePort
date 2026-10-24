@@ -108,19 +108,21 @@ fn no_letterbox_bars_before_the_scene_starts() {
         "no script bars before a script camera runs");
 }
 
-/// (2) The extent. `cutscene_frame` frames the cut-scene at the game's own 4:3: a 16:9 window
-/// pillar-boxes the game picture into the central 1280×720→960×720 band (the shot target's band
-/// is [160, 0, 960, 720]); a 4:3 window keeps the full frame. The projection aspect is 4/3 in
+/// (2) The extent. `cutscene_frame` frames the cut-scene at the game's own 4:3 (the viewer's
+/// viewer+0x114 with the AV widescreen row OFF — the game's default [M 0x1baf70:28-32]; the
+/// aspect argument is that value, cutscene-side-strips): a 16:9 window pillar-boxes the game
+/// picture into the central 1280×720→960×720 band (the shot target's band is
+/// [160, 0, 960, 720]); a 4:3 window keeps the full frame. The projection aspect is 4/3 in
 /// both — the game's own — never the window's.
 #[test]
 fn the_cutscene_frame_is_the_games_43_band() {
-    let (aspect, band) = nf_view::cutscene_frame(1280.0, 720.0);
+    let (aspect, band) = nf_view::cutscene_frame(1280.0, 720.0, 4.0 / 3.0);
     assert!((aspect - 4.0 / 3.0).abs() < 1e-6, "the cut-scene projects at the game's 4:3, got {aspect}");
     assert_eq!(band, [160.0, 0.0, 960.0, 720.0], "the band in a 1280×720 shot");
-    let (aspect, band) = nf_view::cutscene_frame(960.0, 720.0);
+    let (aspect, band) = nf_view::cutscene_frame(960.0, 720.0, 4.0 / 3.0);
     assert!((aspect - 4.0 / 3.0).abs() < 1e-6, "the cut-scene projects at the game's 4:3, got {aspect}");
     assert_eq!(band, [0.0, 0.0, 960.0, 720.0], "a 4:3 window keeps the full frame");
-    let (_, band) = nf_view::cutscene_frame(1024.0, 768.0);
+    let (_, band) = nf_view::cutscene_frame(1024.0, 768.0, 4.0 / 3.0);
     assert_eq!(band, [0.0, 0.0, 1024.0, 768.0], "a 4:3 window keeps the full frame");
 }
 
