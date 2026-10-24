@@ -87,7 +87,7 @@ fn set_crouch(w: &mut Walker, on: bool) {
 }
 
 #[test]
-#[ignore = "level-14-vent-grate state: leg 1a is REWRITTEN to the game's real route - the east duct (the_vent_grill_blocks_the_west_duct_per_the_game pins the closed grill; the_east_duct_route_reaches_the_stairwell_slot carries the real-input east attempt, still ignored on the mouth lintel): the west grill plane z=58.86 is the game's own closed geometry [M parsemap 0x1d1998:92 creates the cel for the 0x8000 placement; M Collide_Pick 0x1eb320:140/:145-151 skips nodes only on glist bits 0x20 / 0x1000+query-0x20 - the grill's glist 0x1 [D plc #100] is never tested; the bit-0x1 skip that opened the grill is REVERTED in world.rs], and the crawl leaves east past lid SP #328, descends south to the stairwell slot approach (45.23, 1.07, 56.27 [D probe14_eastduct]). The walk stays ignored on the SLOT CROSSING (unchanged from level-14-complete-2): the threshold face z=55.719 [D probe14_chute] stops the capsule 0.55 short and the under-opening floor is missing in the port's world (probe14_landing: y -> -210) - what the game's Bond does there needs a fresh-boot [L]. The 0.7-grounding note stays [M]: the lip graze GROUNDS per the game's rule [M Intersect_CylGeom 0x10a72c-34; Player_FeetOnPoint 0x194188:183-201; Collide_Update 0x1ea398:46c]."]
+#[ignore = "level-14-east-duct: leg 1a's route is REWRITTEN by this branch's findings - the west grill plane z=58.86 is the game's own closed geometry [M parsemap 0x1d1998:92 + Collide_Pick 0x1eb320:140/:145-151; D plc #100 glist 0x1, pinned by the_vent_grill_blocks_the_west_duct_per_the_game] AND the old 'east duct mouth' is the AirConditioningRoom's own sealed wall face x≈41.534 z 62.2..67.2 [D probe14_mouth4 part E; the game keeps it by the same [M] rules]. The real route (nav-proven [D block 0x05, map 54 path 2 nodes 4-8 → node 3 (49.08, 0.4, 52.9) → (49.1, 0.4, 42.8)]): crawl south off the room's south lip (z≈63.64 past lid #266) into the under-vent corridor, east to x≈49, south to the flat-grate mouths z=42.16, out onto the mezzanine - then this test's legs 2+ (the facility walk, the fuseboxes, Rook, the exit) run unchanged. The real-input traverse is blocked at the drop by the sleeper drone #270 (see the_east_duct_route_reaches_the_stairwell_slot's ignore reason). The 0.7-grounding note stays [M]: the lip graze GROUNDS per the game's rule [M Intersect_CylGeom 0x10a72c-34; Player_FeetOnPoint 0x194188:183-201; Collide_Update 0x1ea398:46c]."]
 fn walk_the_infiltration_to_the_delta_exit() {
     let iso = iso();
     let mut w = Walker::new(nf_view::load_with_carry(&iso, "07000014.bin", false, None).unwrap());
@@ -272,32 +272,73 @@ fn the_vent_grill_blocks_the_west_duct_per_the_game() {
     }
 }
 
-/// The real east route (level-14-vent-grate): from the vent start the crawl leaves through the
-/// EAST duct mouth — past lid SP #328 (45.28, 2.37, 63.66) [D] — and descends south to the
-/// stairwell slot approach (45.23, 1.07, 56.27 [D probe14_eastduct re-run 2026-10-22, both stance
-/// probes converging there]). The west grill plane z=58.86 is closed
+/// The real east route (level-14-east-duct, REWRITTEN): the vent room's east side is SEALED in the
+/// level's own collision — the AirConditioningRoom's east wall face at x≈41.534 runs z 62.2..67.2
+/// at full crawl height (two skins: tris 7418/7419/7422/7424/7599-7602/7713-7727 [D probe14_mouth4
+/// part E]; owner plc #16 "AirConditioningRoom" kind 0xc047, glist 0x0) — and the game KEEPS it:
+/// the placement carries 0x8000 so parsemap builds the runtime cel for the whole object [M
+/// parsemap_block_map_data_static 0x1d1998:92] and Collide_Pick skips a node only on glist bit 0x20
+/// (:140) or bit 0x1000 with the query's bit 0x20 (:145-151) [M Collide_Pick 0x1eb320] — neither
+/// is this cel's 0x0. The old "east duct mouth / lintel at crawl-head height" reading was wrong:
+/// nothing is scheduled to open that wall. The game's own walkability graph says the route leaves
+/// SOUTH: the room floor ends at z≈63.7 past lid SP #266 (40.80, 2.37, 63.66 [D]) and the nav web
+/// threads a −0.6-floor corridor at z≈62.9 running east-west x 37.4..49.1 [D block 0x05, map 54
+/// path 2 nodes 4-8] directly under the room, with the stairwell shaft (x 45-46, ceiling 5.06 [D])
+/// at its east end. So: crawl south over the lip, drop to the corridor, east to the shaft, then
+/// south down the stairwell to the slot approach (45.23, 1.07, 56.27 [D probe14_eastduct re-run
+/// 2026-10-22, both stance probes converging there]). The west grill plane z=58.86 stays closed
 /// (the_vent_grill_blocks_the_west_duct_per_the_game).
 #[test]
-#[ignore = "level-14-vent-grate: the REAL-input east crawl wedges at the duct mouth - both lanes (z=63.7 and z=65.4) stop at x=40.98 with head_bump=true (crouched, grounded; the mouth's lintel is at crawl-head height in the port's world). The probe14_eastduct scans only TELEPORT past the mouth, so nothing yet proves the spawn-side approach is open. Needed: a tri-owner dump of x 40.9..41.6, y 3.1..3.9, z 63.0..66.0 (whose object owns the lintel - a bit-0x1 label/lid art the revert restored, or the structural wall?) and a fresh-boot [L] of the game's Bond taking this mouth. NOT a regression: the pre-revert world never reached this wall honestly (the grill skip changed the same world)."]
+#[ignore = "level-14-east-duct: the south-lip route is proven ([D] the east wall is the game's own sealed collision - mouth4 part E; the nav corridor [D block 0x05] threads under the room and south at x≈49) and the real-input drop WORKS - but the drop slot is a trench (floor −0.6, z 62.2..63.64 [D probe14_mouth4 scoped-vs-flat: 2.40 at z≤62.2, −0.60 at z≥62.4]) exactly one capsule wide and the sleeper drone #270 (skin 0x05000090 [D] (40.83, 1.08, 62.85)) patrols inside it: Bond lands dead-centre on him (rest y 3.05, floor 2.38 below) and the sim recentres him on the carrier every tick (x frozen at 40.9837 across steer and climb_stairs jump legs). The starting gun's 12 rounds all miss from drone-back (health 10 untouched) and the loadout's other guns are empty (clip 0 spare 0 x5, the shoot helper's own cycle). Needed: the fresh-boot [L] of the game's drop-and-sleeper moment (does the game's drone-vs-player push park Bond BESIDE the sleeper, or can the starting gun kill from on top?), then the corridor east and the x≈49 south run complete the leg."]
 fn the_east_duct_route_reaches_the_stairwell_slot() {
     let iso = iso();
     let mut w = Walker::new(nf_view::load(&iso, "07000014.bin", false).unwrap());
     w.wait_enabled(3000, "the intro");
     w.wait(120);
     set_crouch(&mut w, true);
-    // East straight off the spawn along the z=65.4 lane — the probe14_eastduct scans' lane
-    // (their south-crawl starts (45.28, 3.05, 65.51) [D]).
-    w.walk_to(Wp::new(44.9, 2.4, 65.4).r(0.9), "east along the duct lane past lid #328");
+    // Leg A: crawl south off the room floor's south lip (z≈63.64 past lid #266) and drop to the
+    // −0.6 corridor the nav web threads [D map 54 path 2 nodes 4-8]. The x=41.2 lane dodges the
+    // sleeper drone #270 (40.83, 1.08, 62.85 [D]) under the lip.
+    w.walk_to(Wp::new(41.0, 2.4, 63.9).r(0.4), "the crawl south to the room's south lip");
+    // The drop lands on/beside the sleeper drone #270 (skin 0x05000090 [D] (40.83, 1.08, 62.85)) —
+    // the authored ambush: the only drop lane (x ≤40.98, the east wall caps the crawl) sits right
+    // over him and he carries Bond as he wanders. Kill him through the REAL gun path (the walker's
+    // aim+fire), then walk the corridor.
+    w.walk_to(Wp::new(40.9, -0.6, 60.2).r(1.4), "the drop south onto the sleeper's back");
     {
-        let p = w.scene.sim.as_ref().unwrap().bond.pos;
-        assert!(p[0] > 43.5, "the crawl reached the east duct lane [D the mouth past lid #328], got {p:?}");
+        let di = w.scene.sim.as_ref().unwrap().drones.list.iter()
+            .position(|d| d.skin == 0x0500_0090).expect("the sleeper drone #270 (skin 0x05000090) exists [D]");
+        let mut dead = false;
+        for attempt in 0..6 {
+            if w.shoot(di, "the vent sleeper #270") { dead = true; break; }
+            // No resupply walk here: the pickup route crosses the sealed grill — cycling weapons
+            // (the shoot helper's own cycle) reaches the loadout's other guns instead.
+            eprintln!("[014] sleeper attempt {attempt}: cycling to the next gun");
+        }
+        assert!(dead, "the sleeper drone must die to the walked gun path");
     }
-    // South down the east duct's descent to the slot approach.
-    w.walk_to(Wp::new(45.2, 1.1, 56.6).r(0.9), "south down the east duct to the slot");
+    // Off the carrier: JUMP east off the sleeper's back (climb_stairs hops every 30 ticks; the
+    // wandering carrier dithers the plain steer — the jump clears his edge).
+    let _ = w.climb_stairs([43.0, 0.3, 62.0], "jump east off the sleeper onto the corridor floor", 0.9, 1500);
     {
         let p = w.scene.sim.as_ref().unwrap().bond.pos;
-        assert!(p[0] > 44.0 && p[2] < 57.2 && p[1] < 1.6,
-            "the descent reached the stairwell slot approach [D probe14_eastduct], got {p:?}");
+        eprintln!("[014] after the sleeper: {:?}", p);
+    }
+    // Leg B: the corridor east to the x≈49 corner (the nav lane: node 5 (43.05, 0.4, 62.86) →
+    // node 4 (49.08, 0.4, 62.85) [D]).
+    let _ = w.try_walk_to(Wp::new(48.9, -0.6, 62.8).r(0.6), "the corridor east to the x≈49 corner");
+    {
+        let p = w.scene.sim.as_ref().unwrap().bond.pos;
+        eprintln!("[014] corridor east leg: {:?}", p);
+        assert!(p[0] > 45.0, "the corridor east made real progress [D nav nodes 5/4], got {p:?}");
+    }
+    // Leg C: south along the x≈49 lane toward the flat-grate vent mouths at z=42.16 [D #655/#600]
+    // — the nav thread node 3 (49.08, 0.4, 52.9) → (49.1, 0.4, 42.8) [D].
+    let _ = w.try_walk_to(Wp::new(49.05, -0.6, 53.2).r(0.7), "the corridor south past z≈53");
+    let _ = w.try_walk_to(Wp::new(49.05, -0.6, 43.4).r(0.7), "the corridor south to the vent mouths");
+    {
+        let p = w.scene.sim.as_ref().unwrap().bond.pos;
+        eprintln!("[014] corridor south leg: {:?}", p);
     }
     eprintln!("[014] east route: at {:?} in {} ticks", w.scene.sim.as_ref().unwrap().bond.pos, w.total_ticks);
 }
