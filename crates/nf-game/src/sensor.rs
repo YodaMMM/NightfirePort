@@ -185,6 +185,19 @@ pub struct Sensor {
 }
 
 impl Sensor {
+    /// The mount proxy's matrix (param 7's glist): `Sensor_SetBeam` 0x1af398:50-54 re-aligns it every
+    /// tick with `Mat_Align2Up(mount, (0,1,0), dir(obj+0x90))` [M] — `Mat_Align2Up` 0x1df4b0 writes
+    /// right = norm(up x dir), up, forward = norm(right x up) and leaves the translation (the
+    /// placement position the proxy was created at, `Sensor_Create` 0x1af010:109) — so the mount
+    /// stays upright and turns with the camera's heading.
+    pub fn mount_matrix(&self) -> Mat4 {
+        let d = [self.matrix[2][0], self.matrix[2][1], self.matrix[2][2]];
+        let norm = |v: [f32; 3]| { let l = (v[0] * v[0] + v[1] * v[1] + v[2] * v[2]).sqrt(); if l == 0.0 { v } else { [v[0] / l, v[1] / l, v[2] / l] } };
+        let r = norm([d[2], 0.0, -d[0]]); // (0,1,0) x d
+        let f = norm([-r[2], 0.0, r[0]]); // r x (0,1,0)
+        [[r[0], r[1], r[2], 0.0], [0.0, 1.0, 0.0, 0.0], [f[0], f[1], f[2], 0.0], [self.pos[0], self.pos[1], self.pos[2], 1.0]]
+    }
+
     /// `Sensor_InCone` 0x1af4f0 against the player [M; detection is player-only — disasm
     /// 0x1af644/0x1af97c/0x1afae0 pass `glb_players[0]` and nothing else ever reaches here].
     fn in_cone(&self, world: &CollisionWorld, player: &crate::drone::Player) -> bool {
