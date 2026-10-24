@@ -289,7 +289,7 @@ fn the_vent_grill_blocks_the_west_duct_per_the_game() {
 /// 2026-10-22, both stance probes converging there]). The west grill plane z=58.86 stays closed
 /// (the_vent_grill_blocks_the_west_duct_per_the_game).
 #[test]
-#[ignore = "level-14-east-duct: the south-lip route is proven ([D] the east wall is the game's own sealed collision - mouth4 part E; the nav corridor [D block 0x05] threads under the room and south at x≈49) and the real-input drop WORKS - but the drop lane (x≤40.98, the east wall caps the crawl) lands on the sleeper drone #270 (skin 0x05000090 [D] (40.83, 1.08, 62.85)), who then carries Bond as he wanders (observed z 62.9→59.4 at rest y 3.05, grounded=false, floor 2.38 below). 17 starting-gun rounds did not drop his 10 hp from drone-back (the aim lags the carrier). Needed: the fresh-boot [L] of the game's drop-and-sleeper moment (does the game's Bond land beside, not on, the sleeper? does the starting gun kill him in place?), then the corridor east and the x≈49 south run complete the leg."]
+#[ignore = "level-14-east-duct: the south-lip route is proven ([D] the east wall is the game's own sealed collision - mouth4 part E; the nav corridor [D block 0x05] threads under the room and south at x≈49) and the real-input drop WORKS - but the drop slot is a trench (floor −0.6, z 62.2..63.64 [D probe14_mouth4 scoped-vs-flat: 2.40 at z≤62.2, −0.60 at z≥62.4]) exactly one capsule wide and the sleeper drone #270 (skin 0x05000090 [D] (40.83, 1.08, 62.85)) patrols inside it: Bond lands dead-centre on him (rest y 3.05, floor 2.38 below) and the sim recentres him on the carrier every tick (x frozen at 40.9837 across steer and climb_stairs jump legs). The starting gun's 12 rounds all miss from drone-back (health 10 untouched) and the loadout's other guns are empty (clip 0 spare 0 x5, the shoot helper's own cycle). Needed: the fresh-boot [L] of the game's drop-and-sleeper moment (does the game's drone-vs-player push park Bond BESIDE the sleeper, or can the starting gun kill from on top?), then the corridor east and the x≈49 south run complete the leg."]
 fn the_east_duct_route_reaches_the_stairwell_slot() {
     let iso = iso();
     let mut w = Walker::new(nf_view::load(&iso, "07000014.bin", false).unwrap());
@@ -309,9 +309,11 @@ fn the_east_duct_route_reaches_the_stairwell_slot() {
         let di = w.scene.sim.as_ref().unwrap().drones.list.iter()
             .position(|d| d.skin == 0x0500_0090).expect("the sleeper drone #270 (skin 0x05000090) exists [D]");
         let mut dead = false;
-        for attempt in 0..3 {
+        for attempt in 0..6 {
             if w.shoot(di, "the vent sleeper #270") { dead = true; break; }
-            assert!(w.resupply(&format!("sleeper attempt {attempt}")), "no ammo for the sleeper");
+            // No resupply walk here: the pickup route crosses the sealed grill — cycling weapons
+            // (the shoot helper's own cycle) reaches the loadout's other guns instead.
+            eprintln!("[014] sleeper attempt {attempt}: cycling to the next gun");
         }
         assert!(dead, "the sleeper drone must die to the walked gun path");
     }
