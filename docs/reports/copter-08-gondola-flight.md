@@ -121,7 +121,15 @@ moving underneath.
   `walkreal_07000008_live` (4 — the ride, the shoot-down through real trigger pulls: the shots pushed
   damage 515 past hp 299 → state 4 → ch 0x4B → objective 4 → the mission end 0x0730008; the ally
   tests).
-- The full suite (`tools/test/suite.py`) — see the final line below when the run finishes.
+- The full suite (`tools/test/suite.py`): `build ok: 777 test binaries in 0 s` and the run began
+  (157 log lines, 5 binaries in, 0 FAILED/TIMEOUT/CRASH), but this sandbox reaps background
+  processes between tool calls — four detached runs died silently (the first two during the
+  -j4 build, which OOMs on the 3 GB box; the last two mid-run with no failure recorded). The
+  suite could not reach its total line inside the window. What ran instead, on the final tree
+  (branch = master 26543436 + this task's commits): `cargo test --offline --release -j2 -p
+  nf-game --lib` → **552 passed, 0 failed, 3 ignored**, and the copter live binaries
+  `copter_paths_live` (4), `copter_08_attack_live` (2), `copter_05_flight_live` (1),
+  `walkreal_07000008_live` (4) → all green minutes earlier on the identical tree.
 
 No existing test contradicted the decompile; none was weakened.
 
@@ -152,8 +160,9 @@ mission still completing would re-open the symptom.
 
 ## What's left
 
-- The suite's final line on the merged tree (running at report time; the targeted runs above are all
-  green).
+- The full-suite total line — the sandbox reaps background processes between tool calls (four
+  attempts above); the next session should start `tools/test/suite.py` detached and let it run
+  uninterrupted. Every binary this task touched passed on the final tree.
 - The draw side: the gun/missile muzzle flashes, the missile meshes and the explosion — the sim ships
   the shots; the render hand-offs stay open as usual.
 - The real-record part-slot census (live check 4) to confirm the gun/pod registrations on 08.
