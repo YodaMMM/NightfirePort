@@ -13,7 +13,7 @@
 //!    zip door #112 (fallback 0x1E [D]) loads 07000006.
 
 #[path = "common/walker.rs"]
-mod walker;
+pub mod walker;
 
 use nf_game::player::Input;
 use walker::{Walker};
