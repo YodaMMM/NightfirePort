@@ -248,9 +248,7 @@ fn guard_takes_cover_like_the_game() {
     // param_6 | 0xa27] — the first sight lands ~60 ticks earlier and shifts the shared stream at
     // the first-sight roll; the pin below is the LIVE trace and unchanged. Seed 2 was the
     // attack-reentry-choice merge's, 913).
-        #[allow(unreachable_code)]
-    {
-    // Seed 2 (re-picked at the attack-reentry-choice merge, 913: Attack's own fallback sends the level's
+        // Seed 2 (re-picked at the attack-reentry-choice merge, 913: Attack's own fallback sends the level's
     // mode-2 guard to SniperAim 0x2a [M 0x164210:85-88] instead of Combat, shifting the shared stream;
     // fix-impact-remainder2 had 4, fix-ai-remainder 1).
     let (drones, gi, rng) = l.drones_seeded(None, 61.342, 3);
@@ -272,7 +270,6 @@ fn guard_takes_cover_like_the_game() {
     let mut near = l.sim(drones, rng);
     for _ in 0..300 { near.tick(&d, &bond_at([67.31, 26.5, 99.47])); }
     assert!(near.list[gi].log.iter().all(|(_, s)| *s != 0x8c), "sister: cover must depend on the situation");
-    }
 }
 
 /// fix-anim-blend2 regression, shown RED before the fix (the switch tick moved +0.0095x/−0.0063z). The gate guard's
