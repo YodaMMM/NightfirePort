@@ -297,20 +297,38 @@ fn standing_short_leaves_the_armour() {
     assert!(!p.gone, "standing short never takes it");
 }
 
-/// KIND Load Point (the E route): at the closed lift doors the use sphere reaches the exit
-/// LOAD_LEVEL #63 (box z 10.33..12.49, x −5.01..−2.92 [D #63's volume]; the use point = head +
-/// view [M 0x1a5170:101-106] and the doors sit at z ≈ 13.2 [D SS placements]) — the key gate is
-/// param 1 = 0 = none [M Trigger_Activate 0x1b2318:76-90], so the E press loads 0700000a with
-/// objective 2 INCOMPLETE (no ch 0x46). Sister: no press, no exit.
+/// KIND Load Point (the E press at the CLOSED lift doors): the press fires NOTHING. The old
+/// reading (an E route through the closed doors that loads 0700000a with objective 2
+/// incomplete) is contradicted by the decompile + the disc, three ways:
+/// - The reach: the use point is Bond's head + the viewer direction, sphere r 1.0 [M
+///   `Player_Activate` 0x1a5170:100-108, `Player_GetHeadPos` 0x195aa0]. Bond pressed in to
+///   z 13.85 puts the use point at z 12.85 and the sphere at z 11.85..13.85. The Load Point's
+///   own pick shape is its collision glist — a thin plate at z 10.232..10.283 [D placements
+///   dump #63: object "Load Point", collision 12 tris] — ~1.6 beyond the sphere, and the
+///   game's refine (mode 0x101 → `Intersect_PointGeom`, the point IN the glist [M
+///   Collide_Intersect 0x1ebaa8]) is stricter than the port's AABB stand-in, which already
+///   misses (probe, 2026-10-24).
+/// - TOUCH_ONCE #67 (the box behind the doors, z 10.33..12.49, x −5.01..−2.92 [D #67] — the
+///   box the old ignore note called "the exit box") IS inside the head-origin sphere here,
+///   but its disc mask is 8 [D placement #67 params (0,50),(1,8)] and `Trigger_Activate`'s
+///   type-1 arm returns before any write without mask & 4 [M 0x1b2318:38-40] — E can never
+///   fire it (the same gate the port already applies to the plunge triggers).
+/// - The lift doors are SS objects (mask = param 2 = 1 [D SS #3/#2 params]); `SS_Activate`
+///   needs ext+0x1E & 4 [M 0x1a9ea8] — refused as well.
+/// The exit loads only through the open-doors routes: the panel press (ch 0x39) opens the SS
+/// doors, the walk-in touch #67 (mask 8 = the player touch bit) writes ch 0x32 and #63's
+/// gate auto-fires [M Trigger_Update 0x1b1a78:162-166] — pinned by walkreal_07000009 with
+/// objective 2 complete. An E load with obj2 incomplete would need the doors open WITHOUT
+/// the panel — no disc path writes ch 0x39 otherwise [D census, docs/levels/07000009.md].
+/// Sister: without_the_e_the_lift_mouth_exits_nothing (no press, same hold).
 #[test]
-#[ignore = "the port's use pick runs from the RENDER CAMERA (scene.rs passes `camera` as head) while the game's Player_Activate builds it from Player_GetHeadPos [M 0x1a5170:101-106]; at the closed lift doors the camera hangs ~2.5 behind Bond so the 1.0 sphere never spans the exit box (z 10.33..12.49 [D #63]) — Bond presses in to z 13.85 and the load never fires. The pick-origin fix is shared with the doors/switches/SPs (their tuned reaches assume the camera) and needs its own session; the elevator route (the ch 0x32 walk-in) is the pinned exit. Live check: PCSX2, stand at the closed lift doors, press E — expect the 0700000a load (route b, objective 2 incomplete)."]
-fn the_load_point_e_route_exits_with_objective_2_incomplete() {
+fn the_load_point_e_press_at_the_closed_doors_fires_nothing() {
     let Some(iso) = iso() else { eprintln!("NF_ISO not set — skipping"); return };
     let mut scene = load_09(&iso);
     settle_near(&mut scene, [-3.7, -369.0, 16.5]);
     face(&mut scene, [-3.79, -369.0, 13.0]);
-    // Walk INTO the doors (real input) so the use sphere spans the trigger box behind them
-    // (the probe: Bond presses in to z ≈ 13.85).
+    // Walk INTO the doors (real input); Bond presses in to z ≈ 13.85 (the probe: the
+    // head-origin use sphere z 11.85..13.85 — over #67's box edge, under the SS doors).
     for _ in 0..150 { scene.sim.as_mut().unwrap().step_bond(Input { forward: 1.0, ..Default::default() }, false, false, false); }
     let z = scene.sim.as_ref().unwrap().bond.pos[2];
     eprintln!("[exit] pressed-in bond z {z:.2}");
@@ -318,8 +336,10 @@ fn the_load_point_e_route_exits_with_objective_2_incomplete() {
     for _ in 0..60 { scene.sim.as_mut().unwrap().step_bond(Input::default(), false, false, false); }
     let sim = scene.sim.as_ref().unwrap();
     eprintln!("[exit] level_exit {:?} ch46 {}", sim.drones.level_exit, sim.drones.channels.on(0x46));
-    assert_eq!(sim.drones.level_exit, Some(0x0700_000a), "the E press at the doors loads 0700000a [M 0x1b2318 no-gate]");
-    assert!(!sim.drones.channels.on(0x46), "objective 2 never completed: the elevator was not activated [D AND mux #274]");
+    assert_eq!(sim.drones.level_exit, None, "the E press at the closed doors loads nothing [M 0x1b2318:38-40 type-1 mask&4; 0x1a9ea8 SS mask&4]");
+    assert!(!sim.drones.channels.on(0x32), "the E press never writes #67's ch 0x32 [D #67 mask 8; M 0x1b2318:38-40]");
+    assert!(!sim.drones.channels.on(0x39), "the exit-lift doors stay shut (no ch 0x39) [D SS #3/#2 mask 1; M 0x1a9ea8]");
+    assert!(!sim.drones.channels.on(0x46), "objective 2 stays incomplete [D AND mux #274]");
 }
 
 /// Sister: the same walk-in, no E — the level holds.

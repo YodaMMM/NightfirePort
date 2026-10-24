@@ -4827,13 +4827,17 @@ impl Sim {
             }
         }
         if use_edge && !crept {
-            // garage-lift-calls: the SP arm of `Player_Activate` picks from Bond's HEAD
-            // (`Player_GetHeadPos` [M 0x1a5170:100]), not the render camera — the camera hangs
-            // ~2.5 behind Bond and its sphere fell short of the 07000009 lift-call stations'
-            // entities. The doors/triggers/monitors keep the camera origin their reaches were
-            // tuned to (see player_use_doors). The last argument is Bond's body position
+            // use-pick-head: EVERY arm of `Player_Activate` picks from Bond's HEAD — the game
+            // builds the use point at `Player_GetHeadPos` + the viewer direction [M 0x1a5170:100-108,
+            // 0x195aa0] — never from the render camera. (run()'s `camera` param is step_bond's
+            // `self.bond.head()` binding, so this was already the head at runtime; passing the head
+            // EXPLICITLY removes the misnamed-arg trap that read as a camera pick — the free-cam
+            // harness `step()` binds the real camera, and its use_key is hard false, so the E path
+            // can never regress to it.) The arms: doors + the deferred trigger half + monitors take
+            // `head`; the SP/switch/PCQWORM arm takes `sp_head` (garage-lift-calls); the SS/gunimp
+            // pick below re-derives the same head. The last argument is Bond's body position
             // (obj+0xC0) — `SP_Activate` 0x1dc338:51-53's facing-dot input (use-pick-sp-standins).
-            self.drones.player_use_doors(&d, camera, look, self.drones.frame, self.bond.head(), self.bond.pos);
+            self.drones.player_use_doors(&d, self.bond.head(), look, self.drones.frame, self.bond.head(), self.bond.pos);
             // `Player_Activate` 0x1a5170's ONE pick for every class [M :100-108]: a sphere of radius
             // exactly 1.0 (asm 0x1a5278 `lui $at, 0x3f80`) centred at head + view dir (`Mat_GetDir`
             // of the slot viewer's matrix, asm 0x1a5250), through Collide_SphereIntersect 0x1ec940
@@ -4844,7 +4848,9 @@ impl Sim {
             // source, the same data Doors::create loads); the game's glist refine
             // (Intersect_PointGeom 0x1e92d8) is not ported — a mesh veto of a sphere hit is left
             // to the live checks (the report lists them).
-            let head = [camera[0], camera[1], camera[2]];
+            // use-pick-head: the SS/gunimp pick's origin is the SAME head [M 0x1a5170:100-108] —
+            // one pick serves every class, so no arm may keep its own origin.
+            let head = self.bond.head();
             let pick_c = [head[0] + look[0], head[1] + look[1], head[2] + look[2]];
             let mut ss_hits: Vec<(f32, usize)> = Vec::new();
             for (i, s) in self.drones.sss.list.iter().enumerate() {
