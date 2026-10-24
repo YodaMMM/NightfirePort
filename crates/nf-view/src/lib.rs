@@ -754,9 +754,31 @@ pub fn fail_restart_save(entry: Option<&nf_game::player::RamSave>, sim: &scene::
 /// load the restored state is captured unchanged (health = the carried exit health [M 0x1957a8
 /// SetHealth call], the arm's re-equips included).
 pub fn entry_checkpoint_save(sim: &scene::Sim) -> nf_game::player::RamSave {
+    let mut s = nf_game::player::RamSave::capture(
+        &sim.drones.health, sim.gun.switch_request, &sim.drones.inventory, &sim.drones.channels)
+        .with_mission(&sim.drones.mission);
+    // 987-mission-stats-carry: the game's re-save tail copies the RESIDENT tally — which on a warm
+    // load already holds the `Player_RamLoad` 0x1957a8:15-16 restore, because `Player_RamLoad` runs
+    // inside `Player_InitWeapon` BEFORE the re-save [M 0x1a7ef8 arms → 0x1a8a00 → :325]. The port
+    // applies the tally at the `Mission_Init` latch (the first tick), so a pre-latch entry capture
+    // reads it from the carry; post-latch (or a cold load — carry `None`, the record zeroed by the
+    // part-0 wipe) the live record is the truth.
+    s.tally = sim.drones.tally_carry.or(Some(nf_game::player::TallySave {
+        stats: sim.drones.progress.stats[0], bond_moments: sim.drones.progress.bond_moments,
+    }));
+    s
+}
+
+/// The warm level-change save — the capture `App::start_async_load`'s campaign arm (and the
+/// weapon-assets warm reload) hands the worker, i.e. `Trigger_Activate`'s `Player_RamSave`
+/// 0x195670: the player state + the mission globals + the mission tally (`PlrMissionStats[0]`
+/// 0x38 + `BondMoments` 0x14 [M 0x195670:10-11] — the pause SCORE counters' ride across the
+/// level change, 987-mission-stats-carry).
+pub fn warm_exit_save(sim: &scene::Sim) -> nf_game::player::RamSave {
     nf_game::player::RamSave::capture(
         &sim.drones.health, sim.gun.switch_request, &sim.drones.inventory, &sim.drones.channels)
         .with_mission(&sim.drones.mission)
+        .with_tally(&sim.drones.progress)
 }
 
 fn load_impl(iso_path: &str, archive: &str, all: bool, save: Option<&nf_game::player::RamSave>, dev: bool, give: &[u8], mp: bool, mp_settings: Option<nf_game::mp::MpSettings>, difficulty: u32) -> Result<scene::Scene> {
@@ -1354,6 +1376,9 @@ fn load_impl(iso_path: &str, archive: &str, all: bool, save: Option<&nf_game::pl
         // The mission globals ride the RamSave (the game keeps them in `.data` across the load; the
         // port restores them at the `Mission_Init` latch — map-tower2).
         sim.drones.mission_carry = save.and_then(|s| s.mission.clone());
+        // 987-mission-stats-carry: the mission tally rides the same RamSave (the game's
+        // `Player_RamSave` 0x195670:10-11 / `Player_RamLoad` 0x1957a8:15-16 pair).
+        sim.drones.tally_carry = save.and_then(|s| s.tally);
         let starts: Vec<nf_game::player::LevelStart> = level_starts(&level);
         if !starts.is_empty() {
             // The gate scan reads the carried channels on a warm transition (the save mirrors the live
@@ -3333,9 +3358,7 @@ impl App {
             // (the old zero-buffer fallback served 50.0).
             Some(fail_restart_save(self.entry_save.as_ref(), self.scene.sim.as_ref().unwrap()))
         } else {
-            self.scene.sim.as_ref().map(|sim| nf_game::player::RamSave::capture(
-                &sim.drones.health, sim.gun.switch_request, &sim.drones.inventory, &sim.drones.channels)
-                .with_mission(&sim.drones.mission))
+            Some(warm_exit_save(self.scene.sim.as_ref().unwrap()))
         };
         let name = level_archive_name(next);
         eprintln!("level: loading {name} ({})", if save.is_some() { "warm" } else { "cold" });
@@ -4295,9 +4318,7 @@ impl App {
                 if let Some(w) = self.pending_weapon_assets.take() {
                     if self.weapon_needs_assets(w) {
                         let (pos, yaw) = self.scene.sim.as_ref().map(|s| (s.bond.pos, s.bond.yaw)).unwrap_or(([0.0; 3], 0.0));
-                        let save = self.scene.sim.as_ref().map(|sim| nf_game::player::RamSave::capture(
-                            &sim.drones.health, sim.gun.switch_request, &sim.drones.inventory, &sim.drones.channels)
-                            .with_mission(&sim.drones.mission));
+                        let save = self.scene.sim.as_ref().map(warm_exit_save);
                         self.entry_save = save.clone();
                         let name = level_archive_name(self.scene.sim.as_ref().map_or(0, |s| s.level));
                         eprintln!("weapon assets: {w:#04x} is not on this level — warm reload with its assets");
