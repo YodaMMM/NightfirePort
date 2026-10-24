@@ -315,9 +315,9 @@ fn the_east_duct_route_reaches_the_stairwell_slot() {
         }
         assert!(dead, "the sleeper drone must die to the walked gun path");
     }
-    // Off the carrier: leap/steer east off the sleeper's back (try_walk_to: the wandering carrier
-    // makes the leg's arrival fuzzy — take what the sim gives and check the landing).
-    let _ = w.try_walk_to(Wp::new(42.6, -0.6, 60.0).r(0.7), "east off the sleeper onto the corridor floor");
+    // Off the carrier: JUMP east off the sleeper's back (climb_stairs hops every 30 ticks; the
+    // wandering carrier dithers the plain steer — the jump clears his edge).
+    let _ = w.climb_stairs([43.0, 0.3, 62.0], "jump east off the sleeper onto the corridor floor", 0.9, 1500);
     {
         let p = w.scene.sim.as_ref().unwrap().bond.pos;
         eprintln!("[014] after the sleeper: {:?}", p);
