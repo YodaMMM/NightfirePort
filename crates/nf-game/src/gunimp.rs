@@ -161,6 +161,11 @@ impl GunImp {
     /// barrel forward, `barrel_dir`); the base is #225's identity-rotation placement, so the
     /// composed yaw is `yaw_base + yaw_s` [D placements; the general non-yaw-only base is not
     /// modelled — 0d carries exactly one mount].
+    //
+    // draw hand-off: draw `TurretGuns[turret].art` (SP: the 0x02000b50 laser barrel) at this
+    // matrix over the placement's base glist — the game's gun child (`GunImp_Update`
+    // 0x1320d8:162-172 hashtable lookups) is the port's missing mesh, see
+    // docs/systems/cameras-turrets.md §5.
     pub fn barrel_matrix(&self) -> Mat4 {
         let yaw = self.yaw_base + self.yaw_s;
         let (sy, cy) = yaw.sin_cos();
