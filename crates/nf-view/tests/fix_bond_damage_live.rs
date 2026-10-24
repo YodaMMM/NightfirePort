@@ -53,7 +53,7 @@ fn shoot_from_front(scene: &mut nf_view::scene::Scene, damage: f32, weapon: u16)
         pos: [p[0], p[1] + 0.7, p[2] + 2.0],
         dir: [0.0, 0.0, -1.0],
         speed: 15.0, travelled: 0.0, range: 100.0,
-        damage, owner: usize::MAX, state: 0, weapon, flyby: false, bounces: 0,
+        damage, owner: usize::MAX, state: 0, weapon, flyby: false, bounces: 0, ..Bullet::TAIL
     });
     scene.sim.as_mut().unwrap().step_bond(Default::default(), false, false, false);
 }

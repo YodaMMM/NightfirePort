@@ -110,13 +110,16 @@ fn decryptor_opens_the_kind0_lock_through_the_real_path_and_the_sisters_hold() {
     // Use the SECOND kind-0 lock (#694, same out channel — still locked after #656's unlock).
     let li2 = sim.drones.locks.iter().position(|l| l.kind == 0 && l.out == 10 && !l.unlocked)
         .expect("the second kind-0 lock (#694) is still locked");
-    // Settle beside it first (the same place-once as the first spot).
+    // Settle beside it first (the same place-once as the first spot) — on ITS side of the door:
+    // #656 (x 7.01) and #694 (x 6.74) are the two faces of one door, and the gate's target is the
+    // nearest lock the ray meets [M 0x1a5460:557-566 on +0x880], so from #656's side the open #656
+    // blocks the aim at #694 (the far keypad is scanned from the far side, −x).
     let lp2_0 = sim.drones.locks[li2].pos;
-    let base2 = [lp2_0[0] + 1.2, lp2_0[1], lp2_0[2]];
+    let base2 = [lp2_0[0] - 1.2, lp2_0[1], lp2_0[2]];
     sim.bond.pos = base2;
     for _ in 0..90 { aim_and_fire(sim, lp2_0, base2, false); }
     let spot2 = sim.bond.pos;
-    // Aim at THIS lock (the first is unlocked now, so the pick must move to #694).
+    // Aim at THIS lock from its own side (the pick must name #694).
     for _ in 0..100 { aim_and_fire(sim, sim.drones.locks[li2].pos, spot2, true); }
     let (prog, solved) = (sim.drones.locks[li2].scan_progress, sim.drones.locks[li2].scan_solved);
     assert!(sim.drones.locks[li2].scanning && (prog > 0 || solved > 0),

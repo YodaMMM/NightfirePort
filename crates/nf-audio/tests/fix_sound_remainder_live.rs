@@ -69,3 +69,27 @@ fn precache_streams_only_and_dedups_the_real_start() {
     assert_eq!(d.start(&mut out, 175, Some([1.0, 0.0, 0.0]), 8, None), 0);
     assert_eq!(d.items(), 2);
 }
+
+/// `SFXPreCache` sets the voice up without keying it on (`StartSample` skips KeyOn while
+/// `KeyOnFrameDelay != 0`); the real start keys it on; an untaken pre-setup is deleted when the
+/// countdown reaches 0 [M sound.md §3.2].
+#[test]
+fn precache_holds_the_key_on_until_the_real_start() {
+    let plays = |out: &[Cmd]| out.iter().filter(|c| matches!(c, Cmd::Play { .. })).count();
+    let (mut d, _bank, _sbf) = driver();
+    let mut out = Vec::new();
+    d.pre_cache(&mut out, 175, 10);
+    assert_eq!(plays(&out), 0, "the precache keys nothing on");
+    for _ in 0..3 { d.update(&mut out, &[]); }
+    assert_eq!(plays(&out), 0, "still silent inside the window");
+    let mut out = Vec::new();
+    assert_eq!(d.start(&mut out, 175, Some([1.0, 0.0, 0.0]), 7, None), 0);
+    assert!(plays(&out) >= 1, "the real start keys the held voice on");
+    // Sister: a precache nobody takes over is deleted at expiry and never keyed on.
+    let (mut d, _bank, _sbf) = driver();
+    let mut out = Vec::new();
+    d.pre_cache(&mut out, 175, 10);
+    for _ in 0..16 { d.update(&mut out, &[]); }
+    assert_eq!(plays(&out), 0, "an untaken precache stays silent");
+    assert_eq!(d.items(), 0, "and is deleted");
+}

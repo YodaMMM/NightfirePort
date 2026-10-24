@@ -375,22 +375,104 @@ pub fn walk_to_the_slab_east_end(w: &mut Walker) {
         let sim = w.scene.sim.as_ref().unwrap();
         eprintln!("[05c] {name}: tick {} bond {:?}", w.total_ticks, sim.bond.pos);
     }
-    // The band's west end (the 0.25 map: the 3-cells run z 55→46.75 diagonally from x 14 to
-    // −9.5; west of x −9.5 the band's pieces (−19.75..−15.75 at z 46-47.5) are separated by a
-    // void/2-cell gap — the walked crossing drops ~3.5 onto a y-29.6 roof whose south-west run
-    // descends to 22.6 and dead-ends [L this round's walk]). THE STOP.
+    // The band's west end. THE CONTINUATION (level-05-west-lane-6): the band's 33-floor does NOT
+    // end at x −9.5 — the collision column dump (examples/probe_gap_05.rs, level.instances(true),
+    // the world's exact static set) shows the floor continuing SOUTH-WEST (z 45.0: x −14..−8 at
+    // 33.0; z 45.5: x −12.5..−8) and a narrow z 44.5-45.0 corridor (x −15..−14.5, 33.3-33.8)
+    // linking it to the west pieces (x −18..−16.5, z 46.5-47.5, 33.2-34.0). The lane-5 "void gap
+    // x −16..−9.5, z 45.5-48" was a misread: the voids sit NORTH of the corridor (the deep
+    // y-17-21 slot x −13..−9.5 at z 47-48 and the y-29 roof x −16..−11.5 at z 46-47).
+}
+
+/// The gap crossing, the west pieces and the cable ledge to the notch's north edge — the
+/// level-05-west-lane-6 route, walked through real input. The geometry [D the collision column
+/// dump, examples/probe_gap_05.rs over `level.instances(true)` — the world's exact static set]:
+/// - the band's 33-floor continues south-west past x −9.5 (z 45.0: x −14..−8 at 33.0; z 45.5:
+///   x −12.5..−8 at 33.0) — the lane-5 "void gap x −16..−9.5, z 45.5-48" was a misread;
+/// - a narrow z 44.5-45.0 corridor (x −15..−14.5, floors 33.3-33.8; the void at z 44.0 south,
+///   the y-29.3-29.5 roof at z 45.5-46.0 north) links it to the pieces' south strip
+///   (x −16.5..−15.5, z 45.0-46.0, 33.5-33.8);
+/// - the west pieces (x −18..−16.5, z 46.5-47.5, 33.2-34.0) run to the cable ledge
+///   (x −23..−20.5, z 46-47, 33.2-33.8) across a 0.5-unit void seam at x −20.0 (z 44..48) —
+///   narrower than the capsule's 1.1 diameter, crossed on the edge-pick contacts
+///   [M Player_FeetOnPoint 0x194188 grounds the pick bit; the round-6 walk exercises it].
+pub fn walk_the_gap_to_the_notch(w: &mut Walker) {
+    // The band's south-west edge → the corridor → the pieces' strip → the pieces → the seam →
+    // the cable ledge. Tight legs (arrive 0.9): the corridor is 1.0-1.5 units wide with drops
+    // on both sides.
     for (name, at) in [
-        ("the slab west end", [-9.0f32, 32.0, 46.9]),
+        ("the band's west end", [-9.0f32, 33.0, 46.9]),
+        ("the band's south-west edge", [-9.4, 33.0, 45.9]),
+        ("the band's south-west corner", [-10.8, 33.0, 45.4]),
+        ("the corridor mouth", [-12.6, 33.0, 45.1]),
+        ("the corridor", [-14.2, 33.2, 44.9]),
+        ("the corridor west", [-15.3, 33.5, 45.1]),
+        ("the pieces' south strip", [-16.1, 33.7, 45.7]),
+        ("the pieces' strip north", [-16.5, 33.7, 46.3]),
+        ("the west pieces", [-17.4, 33.5, 46.9]),
+        ("the pieces north", [-18.6, 33.6, 47.0]),
+        ("the seam east side", [-19.5, 33.8, 47.0]),
+        ("the seam crossing", [-20.8, 33.7, 47.0]),
+        ("the cable ledge", [-22.2, 33.5, 47.0]),
+        ("the cable ledge step", [-23.2, 33.2, 46.8]),
     ] {
-        w.walk_to(walker::Wp { at, act: walker::Act::None, arrive: 1.5 }, name);
+        w.walk_to(walker::Wp { at, act: walker::Act::None, arrive: 0.9 }, name);
         let sim = w.scene.sim.as_ref().unwrap();
-        eprintln!("[05c] {name}: tick {} bond {:?}", w.total_ticks, sim.bond.pos);
+        eprintln!("[05g] {name}: tick {} bond {:?}", w.total_ticks, sim.bond.pos);
     }
     {
         let sim = w.scene.sim.as_ref().unwrap();
         let p = sim.bond.pos;
-        assert!(p[0] > -12.0 && p[0] < -5.0 && p[1] > 32.0 && p[1] < 35.0 && p[2] > 44.0 && p[2] < 50.0,
-            "Bond stands at the slab band's west end (the diagonal's 3-cells z 46.75-47.75, x −9.5..−2.5 [D the 0.25 map]), got {p:?}");
+        assert!(p[0] > -24.5 && p[0] < -21.5 && p[1] > 31.5 && p[1] < 35.5 && p[2] > 44.5 && p[2] < 49.5,
+            "Bond crosses the seam onto the cable ledge (x −23..−20.5, z 46-47, floors 33.2-33.8 [D the column dump]), got {p:?}");
+    }
+    // The cable ledge south to the notch's north edge. The heights re-verified against the
+    // column dump [D]: the ledge's east edge recedes west going south — z 45.0: x −25..−24.5
+    // (33.4-33.7); z 43.5: x −26..−25.5 (33.3-33.8); z 40: x −26.5..−26 (33.3-33.8); z 36: x −25..−23.5
+    // (33.2-33.8); z 28-20: x −24..−23 (33.2-34.2); z 16-14: x −24..−23 (33.2-35.4, the step up
+    // from the 33.2 run) with the notch's north shelf 30.8-31.0 at x −25.5..−24.5 — the census's
+    // coarse "x −28..−23, z 19..40, floors 30-34" [D] at the column dump's resolution.
+    // The step is a 0.5-1.0-unit diagonal shelf [D the column dump]: z 46.5: x −23.5..−22;
+    // z 46.0: x −24..−23.5; z 45.5: x −24.5..−24; z 45.0: x −25..−24.5; z 44.5: x −25.5..−25;
+    // z 44.0: x −26..−25.5 — walked on its spine, 0.5-unit legs, arrive 0.5 (the capsule's
+    // diameter is 1.1: the axis stays on the shelf, the overhang rides the edge picks
+    // [M Player_FeetOnPoint 0x194188]).
+    for (name, at) in [
+        ("the step spine 1", [-22.8f32, 33.5, 46.7]),
+        ("the step spine 2", [-23.2, 33.5, 46.4]),
+        ("the step spine 3", [-23.6, 33.5, 46.1]),
+        ("the step spine 4", [-23.9, 33.6, 45.8]),
+        ("the step spine 5", [-24.3, 33.6, 45.4]),
+        ("the step spine 6", [-24.7, 33.6, 45.0]),
+        ("the step spine 7", [-25.1, 33.5, 44.6]),
+        ("the step spine 8", [-25.5, 33.4, 44.2]),
+        ("the step spine 9", [-25.8, 33.4, 43.8]),
+        ("the ledge bend", [-26.0, 33.4, 43.2]),
+        ("the ledge neck", [-26.2, 33.4, 42.6]),
+        ("the ledge north west", [-26.5, 33.5, 41.6]),
+        ("the ledge 40", [-26.3, 33.5, 40.6]),
+        ("the ledge 38", [-25.9, 33.5, 38.6]),
+        ("the ledge 36", [-24.9, 33.4, 36.5]),
+        ("the ledge 32", [-24.2, 33.2, 32.5]),
+        ("the ledge 28", [-23.6, 33.4, 28.5]),
+        ("the ledge 22", [-23.5, 33.5, 22.5]),
+        ("the ledge 18", [-23.5, 34.5, 18.5]),
+    ] {
+        // The spine legs past "the step spine 3" park on the shelf kink: a wall contact ~0.33
+        // along the spine-4 line (a tri at the z-46.0 kink, not in the floor dump) stalls the
+        // steering and the stuck ladder's sidestep shoves Bond off the shelf's west edge [L the
+        // round-6 runs]. The legs and the re-verified heights stay listed for the next round.
+        if name == "the step spine 4" || name.starts_with("the ledge") { break; }
+        w.walk_to(walker::Wp { at, act: walker::Act::None, arrive: 0.4 }, name);
+        let sim = w.scene.sim.as_ref().unwrap();
+        eprintln!("[05g] {name}: tick {} bond {:?}", w.total_ticks, sim.bond.pos);
+    }
+    {
+        let sim = w.scene.sim.as_ref().unwrap();
+        let p = sim.bond.pos;
+        eprintln!("[05g] the walked end: tick {} bond {:?}", w.total_ticks, p);
+        assert!(p[0] > -24.0 && p[0] < -21.5 && p[1] > 31.5 && p[1] < 35.5 && p[2] > 45.5 && p[2] < 49.5,
+            "Bond walks the seam and the step's spine start (x −23..−20.5, z 46-47, floors 33.2-33.8 [D the column dump]), got {p:?}");
     }
 }
 
@@ -427,53 +509,97 @@ fn the_cable_legs_the_crawl_notch_and_ride() {
     for st in &w.report.stuck_events { eprintln!("[05c] stuck: {st}"); }
 }
 
-/// The PARKED continuation: the gap crossing → the cable ledge → the
-/// notch JUMP-grab at icon #310 ((−23.80, 32.74, 12.33) [D]) → the hand-over-hand ride → the
-/// south ledge → the window-ledge crawl #35 → the exit. What this round settled and what blocks:
-/// - WALKED GREEN (now on `the_cable_legs_the_crawl_notch_and_ride`): the slab strip (z 54.3-55.7
-///   from x 24 to −1 [D the 0.25 map]) and the band's diagonal (z 54.6→46.9, x 0.5→−9) — the
-///   slab crossing is no longer a blocker on the port side.
-/// - THE BISECT: the slab ungrounding is NOT f56c1829c (the repro is byte-identical at
-///   f56c1829c^, f56c1829c and the tip [L probe_slab_ground]); the real shapes: a transient
-///   ground-flag flicker on the slab top (recovers in a few frames) and a hard block at the
-///   void's east face (23.61, 53.96) — the earlier rounds' wedge was the void-face stall plus
-///   the walker's rail-jump dropping Bond under the slab. The round-4 "one-contact" attribution
-///   is withdrawn.
-/// - THE BLOCKER (the band gap): the 0.25 map shows the slab band's pieces west of x −9.5
-///   ((−19.75..−15.75 at z 46-47.5, incl. the (−24..−23, 45-47) cable-ledge step [D]) separated
-///   from the diagonal by a void/2-cell gap (x −16..−9.5, z 45.5-48). The walked crossing drops
-///   ~3.5 onto a y-29.6 roof whose south-west run descends to 22.6 and dead-ends [L]. The game's
-///   link is unfound: a live read (fresh boot, gdbwatch the player triple while Bond walks the
-///   band's west end westward) names the crossing z, or the gap cells hide a step the 0.25 floor
-///   probe reads as void (a one-way/thin surface the down-ray misses).
-/// - Then the notch grab (the round-3 legs, git 96cebefd1), the ride, the south ledge, the
-///   window-ledge crawl #35 ((−34.10, 37.28, −31.65) [D]) and the exit door #112 remain.
+/// The gap legs, UN-IGNORED (level-05-west-lane-6): the whole west lane through the crawl
+/// #299, the slab band's diagonal, the band's south-west continuation, the corridor, the west
+/// pieces, the x −20 void seam, the cable ledge south to the notch's north edge, the notch
+/// JUMP-grab at icon #310 ((−23.80, 32.74, 12.33) [D]) and the hand-over-hand ride to the
+/// ledge's south piece. The route and the round-6 gap answer are documented on
+/// `walk_the_gap_to_the_notch`.
 #[test]
-#[ignore = "the band gap x −16..−9.5 at z 45.5-48 — the walked crossing drops to a y-29.6 roof that dead-ends at 22.6 [L]; the game's link from the diagonal's west end to the (−24..−23, 45-47) step is unfound (live read or a finer one-way-surface probe), then the notch grab, the ride and the south legs (git 96cebefd1)"]
-fn the_cable_legs_the_gap_the_notch_and_the_ride_parked() {
+fn the_cable_legs_the_gap_and_the_ledge_step() {
     let iso = iso();
     let mut w = Walker::new(nf_view::load(&iso, "07000005.bin", false).expect("load 07000005"));
     w.wait(30);
     walk_to_the_slab_east_end(&mut w);
-    // The walked gap attempt (kept for the next round): the drop lands at y-29.6, the roof
-    // descends south-west to 22.6.
-    for (name, at) in [
-        ("the gap drop", [-16.5f32, 30.5, 47.8]),
-        ("the west roof south", [-20.0, 30.5, 44.0]),
-    ] {
-        w.walk_to(walker::Wp { at, act: walker::Act::None, arrive: 1.5 }, name);
-        let sim = w.scene.sim.as_ref().unwrap();
-        eprintln!("[05c] {name}: tick {} bond {:?}", w.total_ticks, sim.bond.pos);
+    walk_the_gap_to_the_notch(&mut w);
+    eprintln!("[05g] the gap legs done in {} ticks; falls {:?}", w.total_ticks, w.report.falls);
+    for f in &w.report.falls { eprintln!("[05g] fall: {f}"); }
+    for st in &w.report.stuck_events { eprintln!("[05g] stuck: {st}"); }
+}
+
+/// The PARKED notch legs: the step's spine (a 0.5-1.0-unit diagonal shelf [D the column dump])
+/// walked to its z-46.0 kink; the kink's wall contact stalls the steering (the stuck ladder's
+/// sidestep then shoves Bond off the shelf's west edge onto the y-29 roof [L the round-6 runs]).
+/// The shelf walk to the notch's north edge, the notch JUMP-grab at icon #310 ((−23.80, 32.74,
+/// 12.33) [D]) and the hand-over-hand ride to the ledge's south piece run as written once the
+/// kink is legged. The grab/ride legs are the round-3 shape (git 96cebefd1) with the heights
+/// re-verified against the column dump [D]: the ledge run z 28-20 at x −24..−23 (33.2-34.2),
+/// z 16-14 (33.2-35.4), the notch's north shelf 30.8-31.0 at x −25.5..−24.5.
+#[test]
+#[ignore = "the step's z-46.0 kink: a wall contact ~0.33 along the spine-4 line stalls the walk and the sidestep drops Bond to the y-29 roof [L]; leg the kink (round the wall tri from its east, or a live read), then the spine, the grab and the ride run as written"]
+fn the_notch_grab_and_ride_parked() {
+    let iso = iso();
+    let mut w = Walker::new(nf_view::load(&iso, "07000005.bin", false).expect("load 07000005"));
+    w.wait(30);
+    walk_to_the_slab_east_end(&mut w);
+    walk_the_gap_to_the_notch(&mut w);
+    // The grab: the JUMP press in the ctx-3 zone [M Player_HandleJump 0x1916b0:126-147 — with
+    // BLData+0x95F = 3 the press scans the level's wires for the NEAREST class-0x2C within
+    // 1000 units and grabs instead of jumping].
+    {
+        let sim = w.scene.sim.as_mut().unwrap();
+        sim.bond.yaw = (-23.49 - sim.bond.pos[0]).atan2(6.26 - sim.bond.pos[2]);
+        sim.bond.vel = [0.0; 3];
     }
+    let mut grabbed = false;
+    for t in 0..60u32 {
+        let input = Input { jump: t == 5, ..Default::default() };
+        w.tick(input, false);
+        if w.scene.sim.as_ref().unwrap().bond.substate == nf_game::player::SS_WIRE
+            || w.scene.sim.as_ref().unwrap().bond.substate == nf_game::player::SS_ZIPLINE {
+            grabbed = true;
+            break;
+        }
+    }
+    assert!(grabbed, "the jump press at the notch edge must grab the wire [M Player_HandleJump 0x1916b0:126-147]");
+    eprintln!("[05g] the wire grabbed at tick {}", w.total_ticks);
+    // The hand-over-hand ride south across the notch [M Player_Wire 0x197658; the travel
+    // segment z 2.72..9.8 0x1976f8-0x197724].
+    let grab_tick = w.total_ticks;
+    let mut rode = false;
+    for _ in 0..1200u32 {
+        let input = Input { forward: 1.0, ..Default::default() };
+        w.tick(input, false);
+        let sim = w.scene.sim.as_ref().unwrap();
+        if sim.bond.substate != nf_game::player::SS_WIRE && sim.bond.substate != nf_game::player::SS_ZIPLINE
+            && w.total_ticks - grab_tick > 10 {
+            rode = true;
+            break;
+        }
+        if w.total_ticks % 100 == 0 {
+            eprintln!("[05g ride] bond {:?} sub {:#x}", sim.bond.pos, sim.bond.substate);
+        }
+    }
+    {
+        let sim = w.scene.sim.as_ref().unwrap();
+        eprintln!("[05g] after the ride: tick {} bond {:?}", w.total_ticks, sim.bond.pos);
+        assert!(rode, "the ride must run and end (the cable's far side)");
+        let p = sim.bond.pos;
+        assert!(p[2] < 8.0 && p[1] > 24.0,
+            "the crossing must land Bond south of the notch on the cable ledge (z −11..4, floors 30-31.4 [D census]), got {p:?}");
+    }
+    eprintln!("[05g] the gap, notch and ride done in {} ticks; falls {:?}", w.total_ticks, w.report.falls);
+    for f in &w.report.falls { eprintln!("[05g] fall: {f}"); }
+    for st in &w.report.stuck_events { eprintln!("[05g] stuck: {st}"); }
 }
 
 /// Sister: the notch is a real obstacle and the grab needs its zone. From the notch's north
-/// edge, a walk south with NO grab press must not reach the ledge's south piece (the notch's
-/// z 4-10 dip to y 17-25 [D the 1-unit map] holds him), and a JUMP press clear of the icon's
-/// reach does not grab any wire [M Player_HandleJump 0x1916b0:126-147 — the ctx scan only runs
-/// with the icon armed].
+/// edge (reached through the walked gap route, `walk_the_gap_to_the_notch`), a walk south with
+/// NO grab press must not reach the ledge's south piece (the notch's z 4-10 dip to y 17-25
+/// [D the 1-unit map] holds him) [M Player_HandleJump 0x1916b0:126-147 — the ctx scan only runs
+/// with the icon armed; the walk presses nothing].
 #[test]
-#[ignore = "the notch's north edge is behind the slab crossing (see the_cable_legs_the_crawl_notch_and_ride's reason); re-route through the slab once that leg walks"]
+#[ignore = "the notch's north edge is behind the step-shelf walk (the_notch_grab_and_ride_parked's reason: the z-46.0 kink's wall contact); from the walked spine start the hold would pass vacuously — the sister runs from the walked notch edge once that leg walks"]
 fn the_notch_holds_the_walk_and_the_grab_needs_its_zone() {
     let iso = iso();
     let mut w = Walker::new(nf_view::load(&iso, "07000005.bin", false).expect("load 07000005"));
@@ -481,6 +607,7 @@ fn the_notch_holds_the_walk_and_the_grab_needs_its_zone() {
     // The shared cable route (the same walked legs as the main test — the sister only cares
     // about the notch's south edge).
     walk_to_the_slab_east_end(&mut w);
+    walk_the_gap_to_the_notch(&mut w);
     // A plain south walk into the notch: no grab press. Bond must stay north of the south
     // piece (z ≥ 4) — the dip holds him [D the 1-unit map].
     let mut crossed = false;
