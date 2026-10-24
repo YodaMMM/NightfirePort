@@ -80,6 +80,10 @@ pub const TURRET_GUNS: [TurretGun; 12] = [
     TurretGun { muzzle: [0.0, 0.0, 1.71], art: 0x0200_0b50, weapon: 0x67, interval: f32::from_bits(1065353216), sound: 1307 },
 ];
 
+/// The distinct gun-child art hashes of `TURRET_GUNS` (the draw keeps one slot per art, so the
+/// MP weapon set's pick shows the right mesh — see `GunImp::art_slot`).
+pub const TURRET_ARTS: [u32; 7] = [0x0200_0b05, 0x0200_0a3b, 0x0200_0b06, 0x0200_0b08, 0x0200_0b07, 0x0200_0565, 0x0200_0b50];
+
 /// The single-player turret entry [M GunImp_Create 0x131f20:52-55 — the MPSettings+0x180 == 0
 /// arm reads 0xb]. The interval field stores raw float bits in the table (the game assigns it to
 /// an int cell the update reads back as a float); the decode keeps the bit pattern as f32.
@@ -161,11 +165,21 @@ impl GunImp {
     /// barrel forward, `barrel_dir`); the base is #225's identity-rotation placement, so the
     /// composed yaw is `yaw_base + yaw_s` [D placements; the general non-yaw-only base is not
     /// modelled — 0d carries exactly one mount].
-    //
-    // draw hand-off: draw `TurretGuns[turret].art` (SP: the 0x02000b50 laser barrel) at this
-    // matrix over the placement's base glist — the game's gun child (`GunImp_Update`
-    // 0x1320d8:162-172 hashtable lookups) is the port's missing mesh, see
-    // docs/systems/cameras-turrets.md §5.
+    /// The base object's matrix: the placement turned by the smoothed yaw only [M GunImp_Update
+    /// 0x1320d8:162-170 — `obj+0x90 = base · RotY(ext+0x84)`]; the gun child adds the pitch
+    /// (`barrel_matrix`, `*ext+0x90 = obj+0x90 · RotX(ext+0x80)` [M :171-173]).
+    pub fn base_matrix(&self) -> Mat4 {
+        let (sy, cy) = (self.yaw_base + self.yaw_s).sin_cos();
+        [[cy, 0.0, -sy, 0.0], [0.0, 1.0, 0.0, 0.0], [sy, 0.0, cy, 0.0], [self.pos[0], self.pos[1], self.pos[2], 1.0]]
+    }
+
+    /// The `TURRET_ARTS` index of this mount's gun child (`GunImp_Create` 0x131f20:85-89 creates it
+    /// from `TurretGuns[ext+0x9d].art`).
+    pub fn art_slot(&self) -> Option<usize> {
+        let art = TURRET_GUNS.get(self.turret as usize)?.art;
+        TURRET_ARTS.iter().position(|&a| a == art)
+    }
+
     pub fn barrel_matrix(&self) -> Mat4 {
         let yaw = self.yaw_base + self.yaw_s;
         let (sy, cy) = yaw.sin_cos();
