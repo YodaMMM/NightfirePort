@@ -1445,15 +1445,21 @@ impl Bond {
         self.fall_damage = None;
         // The spawn arrival settle (the `settle_hold` field doc): the boot holds the placed root
         // while the fall velocity accumulates; the release tick integrates the held velocity ONCE
-        // in the game's op order and the push/band tail below re-grounds him. The hold skips the
-        // whole tick (no move, no collision) — the handler phase cannot be running in the game's
-        // hold or its grounded tail would zero the accumulating velocity.
-        let settle_release = if self.settle_hold > 0 {
+        // in the game's op order and the push/band tail below re-grounds him. NARROWED
+        // (level-0a-office-hatch-7): the hold gates ONLY the pieces the observable pins — the
+        // gravity add stays unconditional, the vel→pos integration is skipped (the root holds),
+        // and the grounded tail's velocity zeroing is held off — everything else RUNS: the crouch
+        // read, the jump/look/move reads and the capsule PUSH resolution (the game's player never
+        // accumulates wall overlap: the broad whole-tick skip ejected the parked 09 body-armour
+        // tester into the pickup and left the 01 seam read inside the wall's contact — both
+        // master-green tests failed on the held ticks' unresolved geometry). The handler's ground
+        // phase still cannot ground him in the game's hold or its tail would zero the accumulating
+        // velocity — the port keeps the zeroing gated, not the tick skipped.
+        let (settle_held, settle_release) = if self.settle_hold > 0 {
             self.vel[1] += self.world_gravity[1] / 60.0; // [M 0x194df0:107]
             self.settle_hold -= 1;
-            if self.settle_hold > 0 { return; }
-            true
-        } else { false };
+            (self.settle_hold > 0, self.settle_hold == 0)
+        } else { (false, false) };
         // `Player_SSWalk` / `Player_SSCrouch`: the lockout runs down (*deviation*: the transition animation that may
         // end it early is not played).
         self.lockout = self.lockout.saturating_sub(1);
@@ -1609,7 +1615,7 @@ impl Bond {
             // in the substate (Player_ZeroG 0x192ab0 stores no +0x54 [M full-file scan]) and only
             // the matrix is authoritative in zero-g.
             self.yaw = self.zero_g_rot[2][0].atan2(self.zero_g_rot[2][2]);
-        } else if !settle_release {
+        } else {
         self.yaw += turn;
         self.pitch = (self.pitch + input.look).clamp(-1.0, 1.0);
         let (s, c) = (crate::trig::sinf(self.yaw), crate::trig::cosf(self.yaw)); // G-046: View_RotTransMatrix 0x1e5168:33-36 / RotMatrixX 0x1e46a0 PS2Sinf2 lanes [M]
@@ -1638,6 +1644,9 @@ self.local = [vs / k, vf / k];
         // integration is also the swim tail's job alone (it clamps first) — skip it here when swimming.
         // The settle's release tick skips the gate entirely: the held velocity integrates as it stands.
         if settle_release {
+        } else if settle_held {
+            // The settle added this tick's gravity above; the grounded arm's zeroing stays held
+            // off — the accumulating velocity IS the observable ([L ee_start root 1.0891]).
         } else if swimming {
         } else if zero_g {
             // `vel` (BL+0x50) is zeroed every zero-g tick [M 0x192ab0:71] — WldGravity has no
@@ -1658,6 +1667,9 @@ self.local = [vs / k, vf / k];
             // x/z velocities are zero through the hold.
             self.pos[1] += nf_formats::ps2float::mul(self.vel[1], crate::ssys::REC_FRAME_RATE);
             self.vel = [0.0; 3];
+        } else if settle_held {
+            // The root holds: no vel→pos integration on the held ticks ([L ee_start_0700000a —
+            // the placed 1.1 root reads 1.1 through the boot's hold]).
         } else {
             for k in 0..3 { if !(swimming && k == 1) { self.pos[k] += self.vel[k] / 60.0; } }
         }
@@ -1769,8 +1781,9 @@ self.local = [vs / k, vf / k];
             if self.fall_timer > 60 && self.fall_timer - 60 >= 10 { self.fall_damage = Some((self.fall_timer - 60) as f32); }
             self.fall_timer = 0;
         }
-        // Jump: a head bump ends the rise; landing after the delay.
-        if self.jump == 1 && self.head_bump {
+        // Jump: a head bump ends the rise; landing after the delay. The zeroing arms stay held
+        // off on the settle's held ticks (the accumulating velocity is the observable).
+        if !settle_held && self.jump == 1 && self.head_bump {
             self.vel = [0.0; 3];
             self.jump = 2;
             // [M Player_HandleJump 0x1916b0:195-198]: the bump zeroes the velocity and plays
@@ -1778,8 +1791,8 @@ self.local = [vs / k, vf / k];
             self.sfx_out.push((if ctx.level_bump_5fb { 0x5fb } else { 0xa3 }, self.pos));
         }
         self.land_delay = self.land_delay.saturating_sub(1);
-        if self.jump != 0 && self.land_delay == 0 && self.grounded && self.vel[1] <= 0.0 { self.vel = [0.0; 3]; self.jump = 0; }
-        if self.grounded && self.jump == 0 { self.vel[1] = 0.0; }
+        if !settle_held && self.jump != 0 && self.land_delay == 0 && self.grounded && self.vel[1] <= 0.0 { self.vel = [0.0; 3]; self.jump = 0; }
+        if !settle_held && self.grounded && self.jump == 0 { self.vel[1] = 0.0; }
         // `Player_PositionCamera` 0x18f5d8 (its viewer write is `Camera_Set` 0x1bbbf8 — the
         // `View_RotTransMatrix` 0x1e5168 matrix into viewer+0x120, the rot copy to +0xE0, the
         // pos copy to +0xC0, the byte +0x2B cleared [M 0x1bbbf8:5-16]): the port carries the
