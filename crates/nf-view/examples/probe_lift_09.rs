@@ -81,6 +81,42 @@ fn main() {
         }
     }
 
+    // 3b. Per-tick: how does the cab SP run, and when do the keys land?
+    {
+        let mut scene2 = nf_view::load(&iso_path, "07000009.bin", false).expect("reload");
+        println!("== per-tick cab SP watch ==");
+        {
+            let sim = scene2.sim.as_ref().unwrap();
+            let p = &sim.drones.scripts.players[0];
+            if let Some(s) = &p.info[p.cur] {
+                println!("  after load: delay {} play {:#04x} clock {:.1} len {}", s.delay, s.play, s.clock, s.nis.length);
+                let (kind, obj, fk, lk) = s.stream_bindings()[6];
+                println!("  s6 kind {kind} obj {obj:?} keys {fk}..{lk}");
+                let (a, b) = (fk as usize, lk as usize);
+                for (ki, k) in s.nis.keys[a..=b.min(s.nis.keys.len() - 1)].iter().enumerate() {
+                    println!("    key[{}] time {:.2} pos {:.2},{:.2},{:.2}", a + ki, k.time, k.pos[0], k.pos[1], k.pos[2]);
+                }
+            }
+        }
+        for t in 0..91u32 {
+            scene2.sim.as_mut().unwrap().step_bond(nf_game::player::Input::default(), false, false, false);
+            if t % 5 != 0 { continue; }
+            let sim = scene2.sim.as_ref().unwrap();
+            let p = &sim.drones.scripts.players[0];
+            let info = p.info[p.cur].as_ref();
+            let play = info.map(|s| s.play).unwrap_or(0xff);
+            let clock = info.map(|s| s.clock).unwrap_or(-1.0);
+            let delay = info.map(|s| s.delay).unwrap_or(0);
+            let objm = sim.drones.scripts.objects.list.iter().flatten().find_map(|o| match o {
+                nf_game::nis::Obj::Entity { src: (s, si), matrix, .. } if *s == 0x0600_007e && *si == 6 =>
+                    Some([matrix[3][0], matrix[3][1], matrix[3][2]]),
+                _ => None,
+            });
+            println!("  t{t}: p0 state {} cur {} play {play:#04x} clock {clock:.1} delay {delay} shell_t {:?}",
+                p.state, p.cur, objm.map(|m| format!("({:.2},{:.2},{:.2})", m[0], m[1], m[2])).unwrap_or("none".into()));
+        }
+    }
+
     // 3. The sim after ticks: what the scripts created.
     let mut scene = nf_view::load(&iso_path, "07000009.bin", false).expect("load 07000009");
     for _ in 0..120 { scene.sim.as_mut().unwrap().step_bond(nf_game::player::Input::default(), false, false, false); }
@@ -95,7 +131,7 @@ fn main() {
             let Some(o) = o else { continue };
             match o {
                 nf_game::nis::Obj::Entity { hash, kind, matrix, src, .. } => {
-                    let t = [matrix[0][3], matrix[1][3], matrix[2][3]];
+                    let t = [matrix[3][0], matrix[3][1], matrix[3][2]];
                     println!("  obj[{i}] ENTITY gfx {hash:#x} kind {kind:#x} at ({:.2},{:.2},{:.2}) src {:?}", t[0], t[1], t[2], src);
                 }
                 nf_game::nis::Obj::Anim { skin, script, frame, src, .. } =>
@@ -169,8 +205,8 @@ fn main() {
         for (i, o) in sim.drones.scripts.objects.list.iter().enumerate() {
             let Some(nf_game::nis::Obj::Entity { hash, matrix, src, .. }) = o else { continue };
             let got = sim.script_entity_k(*src, *hash, 0);
-            let t = [matrix[0][3], matrix[1][3], matrix[2][3]];
-            let rt = got.as_ref().map(|m| [m[0][3], m[1][3], m[2][3]]);
+            let t = [matrix[3][0], matrix[3][1], matrix[3][2]];
+            let rt = got.as_ref().map(|m| [m[3][0], m[3][1], m[3][2]]);
             println!("  obj[{i}] gfx {hash:#x} src {src:?} sim_t ({:.2},{:.2},{:.2}) render {:?}", t[0], t[1], t[2],
                 rt.map(|r| format!("({:.2},{:.2},{:.2})", r[0], r[1], r[2])).unwrap_or("NONE".into()));
         }
