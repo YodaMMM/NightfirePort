@@ -2107,16 +2107,20 @@ impl Drone {
         if param(5) < 0x24 {
             // The OLD chain, row 0 only: every shipped drone placement is parameter 5 = 100 (NEW;
             // 555/555 [D census, docs/systems/ai-dmode-inits.md]) and the only OLD-path creators —
-            // MP bots (`BOT_init` 0x1249e8 memsets its DIVars) and the coder event (07000001 NIS
-            // 0x0600003B, `Script_EventHandler` 0x1d94c0 case 8 → `Drone_CoderCreate` 0x13a108,
-            // memset + skin/script/param-7 words) — give parameter 5 = 0. Row 0's function is
-            // `NDrone2_init_DMODE_Normal` 0x14d958 (a pure tail-call) →
+            // MP bots (`BOT_init` 0x1249e8 memsets its DIVars) and the coder event (07000001 script
+            // 0600005B [D census], `Script_EventHandler` 0x1d94c0:138-143 case 8 →
+            // `Drone_CoderCreate` 0x13a108: memset 0xb0 + skin word 11 / start-script word 12 /
+            // event word 3 → word 20, i.e. parameters 0/1/7) — give parameter 5 = 0. Row 0's
+            // function is `NDrone2_init_DMODE_Normal` 0x14d958 (a pure tail-call) →
             // `NDrone2_init_DMODE_Defaults` 0x14d528: 40 `behaviour_util_setProperty(…, 1)` calls
             // [M 0x14d528:4-44]. `DoModeSettingsOLD` 0x14cfa0's unconditional tail list is inside
             // Defaults except 0x38; the +0xd8-conditional extras need +0xd8 ∈ {0x10,0xd,0x11,0x13}
             // and the `+0xC5 == 0x11` extras need mode 0x11 — row 0 leaves +0xC5 = 0 and the coder
-            // skin 0x0500005B takes the skin-switch default +0xd8 = 0 [M 0x14b300:96-99], so
-            // neither fires. Rows 1..22 are never dispatched (docs/port-map/unreached.md).
+            // skin 0x0500001B takes DefaultInit's case 0x500001b → +0xd8 = 9
+            // [M 0x14b300:153-156], 9 ∉ {0x10,0xd,0x11,0x13}, so neither fires. Rows 1..34 are
+            // never dispatched — parameter 5 ∈ {0, 100} on every main-map placement and every
+            // coder/bot template ([D census, docs/systems/ai-dmode-inits.md incl. the 2026-10-24
+            // addendum]; docs/port-map/unreached.md).
             for id in [1usize, 6, 7, 10, 0xc, 0x48, 0xf, 0x11, 0x13, 0x18, 0x1d, 0x4c, 0x21, 0x29,
                        0x2e, 0x37, 0x41, 0x42, 0x4f, 0x51, 0x5a, 0x24, 0x3c, 0x1f, 0x44, 0x33,
                        0x32, 0x31, 0x28, 0x27, 0x26, 0x30, 0x2f, 0x2a, 0x43, 0x3b, 0x17, 0x46,
