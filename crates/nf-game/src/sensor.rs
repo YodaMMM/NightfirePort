@@ -494,6 +494,7 @@ mod tests {
             seen: 0,
             last_hit: false,
             unhidden: false,
+            beam_len: 0.0,
         }
     }
 
@@ -546,7 +547,7 @@ mod tests {
 
     #[test]
     fn in_cone_hits_when_the_apex_is_inside_the_target_sphere() {
-        let s = sensor_aiming([-1.0, 0.0, 0.0]);
+        let mut s = sensor_aiming([-1.0, 0.0, 0.0]);
         let world = CollisionWorld::empty();
         // The sphere centre 0.2 off the apex, BEHIND the view axis (dir −x): outside the cone, but
         // inside the 1.0576 world sphere.
@@ -558,7 +559,7 @@ mod tests {
     /// auto-hit does not leak past the game's r² < d² guard [M 0x1ee100:37].
     #[test]
     fn in_cone_misses_behind_the_axis_outside_the_sphere() {
-        let s = sensor_aiming([-1.0, 0.0, 0.0]);
+        let mut s = sensor_aiming([-1.0, 0.0, 0.0]);
         let world = CollisionWorld::empty();
         let behind = player_at([1.5, 0.0, 0.0]);
         assert!(!s.in_cone(&world, &behind), "behind the axis, outside the sphere → no detect [M 0x1ee100:37]");

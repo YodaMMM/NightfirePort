@@ -178,3 +178,25 @@ SatchelDigits Bullet_DoTrails 0x12d890:485-553 and the per-digit beep 0x447 [M
 destroy arm). Each: a pose test on the draw lists (fails before) + a headless --shot/--cam render
 named in the report. Setup inherited (work/, ISO, nf-queue worktree). WORKLOG restored from the
 branch versions (origin/s/level-0a-office-hatch-8 + sleeper-push section) since master carries none.
+### camera-beam-satchel-draw (round result)
+All three §5 hand-off pieces reach the draw lists; the draw-list tests green
+(crates/nf-view/tests/camera_beam_satchel_wreck_live.rs 3/3, each fails on the pre-task tree).
+(1) The beam: the [M] chain found — the lens proxy (param 0 = 0x02000360 "Camera_Beam" [D probe];
+sensor.md's 0x02000FE0 row disagrees, flagged) is posed at the camera matrix (0x1af398:58) with
+obj+0xE8 = range/hit-distance (:72,:78) written by SetBeam inside InCone (0x1af4f0:54) and in
+state 2 (0x1af618:238); the draw is the PLAIN glist path (0x1e6780:43-45 — flags 0x241 [D]) with
+the create-time OnlyScaleZ (0x1af010:102) putting the stretch on the mesh's +z (unit-length [D]);
+port: world::line_of_sight_hit + Sensor::beam_len/beam_ray + the third camera slot in lock_slot.
+(2) The satchel: record 0x3d → family 0x3b (both brief statements hold); the landed mesh no longer
+collapses (stick_normal captured at the landing [M 0x12ce80:256-266]); the drone-fired charges now
+carry the countdown digits (Bullet::digits every state<2 tick [M 0x12d890:418-553]) and the 0x447
+beep at the decomp's (100.0, −1.0) [M :435-443] via Drones::pending_beeps.
+(3) The GT wreck: case-6 Gas_Init smoke ported exactly (init_gt_smoke, the 6-draw kind-7 shape,
+life 128 per the siblings [M 0x1cbce0/0x1a43f8]) emitted inline at the game's RNG position; the
+destroy burst is Emitter_Create(10,0,−2,barrel,up) [M :249-257] with no located def — presented
+as a [S] stand-in puff, named open. Ran: nf-game --lib 547/0/3; the new binary 3/3; siblings
+gun_turrets 2/2, gt_los 2/2, worldobj 5/5, fix_satchel_tripbomb 6/6, walkreal_4a_satchel 2/2.
+NOT reached: the full fast-runner sweep (this sandbox kills background processes; a foreground
+run does not fit the window beside the builds — the driver's final-tree sweep stands), the
+headless --shot renders (no GPU — the --cam spots are in the report for the main agent), the GT
+barrel-spin integration.
