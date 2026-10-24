@@ -183,3 +183,22 @@ fn probe14_mouth4_lip_rest() {
         println!("  lo [{:.3}, {:.3}, {:.3}] hi [{:.3}, {:.3}, {:.3}]", lo[0], lo[1], lo[2], hi[0], hi[1], hi[2]);
     }
 }
+
+#[test]
+#[ignore = "assertion-free probe dump; run with --ignored"]
+fn probe14_mouth4_scoped_vs_flat() {
+    let Some(iso) = iso() else { eprintln!("NF_ISO not set"); return };
+    let scene = nf_view::load(&iso, "07000014.bin", false).unwrap();
+    let world = &scene.sim.as_ref().unwrap().world;
+    // The rest column under the wedge (40.98, z 59.4..62.9): flat segment vs every cel's scoped hit.
+    for z in [59.4f32, 60.3, 61.4, 61.8, 62.4, 62.9] {
+        let flat = world.segment([40.98, 3.0, z], [40.98, -2.0, z]).map(|t| 3.0 + (-2.0 - 3.0) * t);
+        let mut scoped: Vec<String> = Vec::new();
+        for cel in 0..24usize {
+            if let Some((t, _n)) = world.segment_hit_scoped(Some(cel), [40.98, 3.0, z], [40.98, -2.0, z]) {
+                scoped.push(format!("cel{}:{:.2}", cel, 3.0 + (-2.0 - 3.0) * t));
+            }
+        }
+        println!("z {z:.1}: flat {flat:?}  scoped [{}]", scoped.join(" "));
+    }
+}
