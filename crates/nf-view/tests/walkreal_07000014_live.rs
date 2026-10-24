@@ -122,7 +122,7 @@ fn the_east_duct_route_reaches_the_stairwell_slot() {
         let sim = w.scene.sim.as_ref().unwrap();
         let (p, g) = (sim.bond.pos, sim.bond.grounded);
         let floored = sim.world.segment(p, [p[0], p[1] - 3.0, p[2]]).is_some();
-        // the SOUTH-rim graze, exactly as the driver's ghost described it: grounded with NO floor
+        // the SOUTH-rim graze, exactly as the earlier ghost reading described it: grounded with NO floor
         // within 3 m below while inside the slot's south catch window (the lip's top face grazes
         // the capsule rim at dist == r, [D probe14_ghost D3: q (40.984, 2.400, 62.207), dist
         // 0.5500 == r]) — walk NORTH back into the hole until the graze breaks. Everywhere else
