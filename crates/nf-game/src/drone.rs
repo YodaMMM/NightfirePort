@@ -16008,8 +16008,24 @@ fn segment_hits_sphere(a: V3, b: V3, c: V3, r: f32) -> bool {
                 let id = |k: usize| (oi as u64) << 6 | k as u64;
                 match o {
                     Some(crate::nis::Obj::Anim { skin, script, frame, .. }) => parts.extend(d.discrete_parts(*skin, *script, *frame).into_iter().enumerate().map(|(k, (h, m))| (id(k), h, m))),
-                    // fix-safe08: pickups (0xF0) stay out of the collision world — the game's `Script_CreateEntity`
-                    // control-unlinks the created pickup (0x1d8d54); its own glist blocked its take ray.
+                    // Every script Entity kind collides at its posed matrix: the creator arms AND the
+                    // fallthrough attach the SAME collision glist (`Script_CreateEntity` 0x1d8968's
+                    // fallthrough runs `hashtable_set_object_to_entity_gfx` 0x1ca6d8, which lands in
+                    // `Control_SetGList` :39 — the identical t_hashtable lookup the creator arms'
+                    // `hashtable_hashcode_to_celglist` 0x1ca798 makes), `Script_EntityStart` 0x1d8d78
+                    // links the fresh object into the cel chain (:113-115, any kind, obj+0x20 == 0),
+                    // and every MOVED entity is rebuilt + relinked per tick before `Collide_Update`
+                    // (`Script_Interp` 0x1d9a08:94 sets obj+0xfa bit 0x20; `control_movement_object_handler`
+                    // 0x1336f8:147-236 → `control_handle_cel_change` 0x133288 rebuilds + relinks; the
+                    // glist rides the object through `Collide_PickObj`). The five interactive kinds are
+                    // the exception — the port carries them in its own systems instead: the triggers
+                    // 0xea/0xeb become `crate::triggers::Trigger` volumes (below), the pickup 0xF0's
+                    // glist blocked its own take ray (fix-safe08; the game control-unlinks the created
+                    // pickup 0x1d8d54), the emitter 0xF2 arm control-unlinks explicitly
+                    // (0x1d8968:163-166), the AI volume 0xF5 is a drone volume. The old blacklist posed
+                    // exactly these five out; the s/level-14-trench-landing whitelist (only the four
+                    // celglist-creator kinds) un-posed the ride platforms (the paternoster cab
+                    // 0x2000367, the 0700004a lift entity obj_type 31, the gondola) and broke the rides.
                     Some(crate::nis::Obj::Entity { hash, kind, matrix, .. }) if !matches!(kind, 0xea | 0xeb | 0xf5 | 0xf2 | 0xf0) => parts.push((id(0), *hash, *matrix)),
                     _ => {}
                 }
