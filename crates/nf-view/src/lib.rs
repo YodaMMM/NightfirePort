@@ -29,6 +29,7 @@ pub mod menu_engine;
 pub mod mp_lobby;
 pub mod menu_music;
 pub mod settings;
+pub mod stdio_guard;
 pub mod movie;
 pub mod mpnet;
 pub mod mpfx;
@@ -6174,6 +6175,9 @@ pub fn movie_sfx_volume(fe: &menu::FrontEnd) -> u32 {
 }
 
 pub fn run() -> Result<()> {
+    // A closed output pipe (the reader of our stdout/stderr went away) must not crash the game: the
+    // log lines are diagnostics (stdio_guard.rs).
+    stdio_guard::install();
     // A panic also goes to nf-view-crash.log (message, place, backtrace): a crash in a window without a console
     // leaves a trace.
     let default_hook = std::panic::take_hook();
