@@ -15902,9 +15902,20 @@ fn segment_hits_sphere(a: V3, b: V3, c: V3, r: f32) -> bool {
                 let id = |k: usize| (oi as u64) << 6 | k as u64;
                 match o {
                     Some(crate::nis::Obj::Anim { skin, script, frame, .. }) => parts.extend(d.discrete_parts(*skin, *script, *frame).into_iter().enumerate().map(|(k, (h, m))| (id(k), h, m))),
-                    // fix-safe08: pickups (0xF0) stay out of the collision world — the game's `Script_CreateEntity`
-                    // control-unlinks the created pickup (0x1d8d54); its own glist blocked its take ray.
-                    Some(crate::nis::Obj::Entity { hash, kind, matrix, .. }) if !matches!(kind, 0xea | 0xeb | 0xf5 | 0xf2 | 0xf0) => parts.push((id(0), *hash, *matrix)),
+                    // The game's script Entity collides ONLY through the creator arms that link the object
+                    // into a cel (`build_LinkToRoom` 0x1c9680 → `control_link_object_to_cel`; the movement
+                    // capsule's object pass walks the visited cels' object chains — `Collide_Pick`
+                    // 0x1eb320 LAB_001eb8e8 walks `cel+8`). Of `Script_CreateEntity` 0x1d8968's arms exactly
+                    // these link: 0x20 Break_Create 0x12c230, 0x22 Ladder_Create 0x1966c0:22, 0x29
+                    // Switch_Create 0x1adcc0:38, 0xe1 Destroy_Create 0x12c318. Every other kind — the
+                    // triggers 0xea/0xeb, the pickup 0xf0, the emitter 0xf2, the AI volume 0xf5, and the
+                    // FALLTHROUGH for everything else (LAB_001d8a68: bare `control_create_object(0,0,0,0)`
+                    // + `hashtable_set_object_to_entity_gfx` gfx attach + `control_unlink_object`
+                    // 0x1d8d54 — kind 0x19 ladder art, kind 0x31 props, …) — never reaches a cel and is
+                    // never tested by the game's collide pass. The old blacklist posed the fallthrough
+                    // entities' glist shapes solid (07000014's drop-slot ghost: the lid script's kind-0x19
+                    // entity 0x02000751 rested Bond at y 2.97 on art the game does not collide).
+                    Some(crate::nis::Obj::Entity { hash, kind, matrix, .. }) if matches!(kind, 0x20 | 0x22 | 0x29 | 0xe1) => parts.push((id(0), *hash, *matrix)),
                     _ => {}
                 }
             }

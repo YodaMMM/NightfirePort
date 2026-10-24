@@ -177,3 +177,32 @@ slot; un-ignore the_east_duct_route_reaches_the_stairwell_slot and
 walk_the_infiltration_to_the_delta_exit as they go green. Reading docs/reports/level-14-sleeper-
 push.md (restored from 875b0e18 — the batch merge dropped docs/WORKLOG.md and docs/reports/ from
 master's tree; restored verbatim, entries below appended). Setup: repo/work/ISO already present.
+
+### level-14-trench-landing (step 1 done, the route green)
+STEP 1 DONE: the stall tri attributed (probe14_ghost, committed) — the ghost rest at y 2.97 is the
+room floor's south lip face (y 2.40, edge z 62.207) grazing the falling capsule's rim at dist
+0.5500 == r (push ~0, walkable=true, no floor within 3 m below) — a mid-air east turn pins Bond
+there; the game's own bit block would ground the same graze [M Intersect_CylGeom 0x109da0's bit
+block: dot1 up-face, dot2 q below B, dot3 normalize(q−B)·normalize(A−B) < 0.7 all pass at the
+stall], so the un-catch is the player's JUMP (the test's un-catch). The SECOND divergence the
+probe exposed is the real [M] fix: the lid script 0x06000A3B's entities (0x02000750 kind 0x31 —
+the 60-tri slab that roofed the slot closed — and 0x02000751 kind 0x19 ladder art at the lip)
+were SOLID in the port (the old kind blacklist in script_parts) but are RENDER-ONLY in the game:
+Script_CreateEntity 0x1d8968's fallthrough (LAB_001d8a68) creates them as bare control objects
+(control_create_object(0,0,0,0) + hashtable_set_object_to_entity_gfx + control_unlink_object
+0x1d8d54) and never cel-links them; the movement capsule's object pass tests only the visited
+cels' object chains [M Collide_Pick 0x1eb320 LAB_001eb8e8 walks cel+8; the cel-linkers are
+build_LinkToRoom 0x1c9680 → control_link_object_to_cel, called by Break_Create 0x12c230 /
+Ladder_Create 0x1966c0:22 / Switch_Create 0x1adcc0:38 / Destroy_Create 0x12c318 only]. Fixed by
+whitelisting script_parts' Entity kinds to {0x20, 0x22, 0x29, 0xe1}. ROUTE GREEN:
+the_east_duct_route_reaches_the_stairwell_slot un-ignored and passing — the crawl south, the drop
+(the jump un-catch) lands on the trench floor, the sleeper dies to the walked gun, the corridor
+east to x 48.67, the x 49 south run to z 44.03 (the mouths' lane) in 2306 ticks. GRAPPLE DECISION
+[D+M]: the mouths' lids sit at y 2.372 [D probe14_ghost C] 2.97 m above the corridor floor with no
+nav thread past (49.1, 0.4, 42.8) [D block 0x05] and the grapple points #626/#657
+(45.30/40.78, 4.79, 42.86) [D] hang 2.42 m above THEIR mouths' x — the player's route up is the
+Q-Claw, not a stairwell. RESTORED the two tests the s/batch-1024e merge dropped from master's
+tree (the_vent_grill_blocks_the_west_duct_per_the_game — green; walk_the_infiltration_to_the_
+delta_exit — ignored with the leg-1a rewrite note). Ran: nf-game lib 547, nf-view lib 96,
+sleeper_push_live 1, walkreal_07000001_live 3, walkreal_07000014_live 2 passed + 1 ignored, all
+green on the fixed tree. LEFT: the Q-Claw climb leg at the mouths, legs 2+ of the big walk.
