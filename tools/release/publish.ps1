@@ -72,7 +72,7 @@ if ($bridge) { $zip = Join-Path $out "NightfirePort-$tag-windows.zip"; $assets +
 # The notes are the plain-English summary only.
 $notesFile = Join-Path (Split-Path $out) "notes-$tag.md"
 [IO.File]::WriteAllText($notesFile, $Notes, (New-Object System.Text.UTF8Encoding $false))  # no BOM (5.1's utf8 adds one)
-$ghArgs = @("release", "create", $tag) + $assets + @("--repo", $repo, "--target", $head, "--title", "NightfirePort $Version", "--notes-file", $notesFile)
+$ghArgs = @("release", "create", $tag) + $assets + @("--repo", $repo, "--target", $head, "--title", "Nightfire Rust $Version", "--notes-file", $notesFile)
 if ($Draft) { $ghArgs += "--draft" }
 & gh @ghArgs
 if ($LASTEXITCODE -ne 0) { throw "gh release create failed" }
