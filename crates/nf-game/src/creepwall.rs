@@ -13,18 +13,28 @@ use crate::world::V3;
 pub struct CreepWall {
     /// The placement index (the port's identity for the object).
     pub placement: u32,
-    /// The placement transform's translation (the object's pos vec, `obj+0x80` [M 0x196758:78-79]).
+    /// The wall's pos vec (`obj+0x80`, what `Player_CollCreepWall` 0x196758:78-79 reads as the
+    /// crawl line's centre). That word is the WORLD-SPHERE CENTRE `Control_BuildWorldSph` 0x133070
+    /// wrote: the object's LOCAL bound centre transformed through the object's yaw matrix — the
+    /// bound-centre offset rides along (07000005 #299 "Wall Hug Short" centre x +1.95 [D the parsed
+    /// object bounds] puts the world centre 1.95 up the crawl axis from the placement translation).
     pub pos: V3,
     /// The placement's yaw (`obj+0x54`); the wall's axis runs along `yaw + π/2`
     /// [M 0x196758:80-86 + 0x1969d0:99-100: `Vec_Spherical_2_Cartesian(len, yaw + 1.5707964, 0)`].
     pub yaw: f32,
-    /// The axis half-length (`obj+0x8c`). `CreepWall_Create` sets no +0x8c itself — it arrives from
-    /// `control_create_object`. The port reads the object's OWN bound half-span along the crawl
-    /// axis (local x — both 07000005 creepwall objects carry the long axis there [D the parsed
-    /// object bounds: "Wall Hug Short" x −3.62..+7.52, "Wall Hug Window" x −5.32..+5.32; the
-    /// placement scale is (1,1,1) and cannot be the source]). The 07000005 crawl band's floor dip
-    /// (z 67-70 down to y 7-8 [D the 1-unit floor map]) is only crossable when the crawl spans
-    /// the prompts' z 60-70.6 — the bound span does exactly that.
+    /// The axis half-length (`obj+0x8c`). `CreepWall_Create` 0x196fc8 sets no +0x8c and neither does
+    /// `control_create_object` 0x1344e0 (its only stores are +0x30/+0x40/+0x50/+0x60/+0x90/+0xe0 —
+    /// the disasm's full store scan) — the write is `Control_BuildWorldSph` 0x133070 (called from
+    /// `build_LinkToRoom` 0x1c9680:40, which every Create ends with):
+    /// `*(float*)(obj+0x8c) = *(float*)(record+0x1c) * ABS(*(float*)(obj+0xe8))` — the object's
+    /// bound-sphere RADIUS (the same field the icons read as obj+0x8c [M wire.rs's Icon.radius,
+    /// 0x1c9680:42]) times the placement scale. The port reads the parsed object's radius × the
+    /// scale product (07000005: "Wall Hug Short" r 5.60, "Wall Hug Window" r 5.36 [D the parsed
+    /// objects] — the old half-span read (5.57/5.32) sat 0.03/0.04 under). The 07000005 crawl
+    /// band's floor dip (z 67-70 down to y 7-8 [D the 1-unit floor map]) is only crossable when the
+    /// crawl spans the prompts' z 60-70.6 [D placements #256 (24.20, 31.93, 60.01) / #257 (24.14,
+    /// 31.87, 70.56)] — the radius model's band z 60.21..71.41 covers exactly that (the old
+    /// translation-centred band 62.19..73.33 left the z-60 prompt 2.2 outside).
     pub half_len: f32,
     /// The switch channel held while Bond crawls: the 4th param word's low half (level+0x38 →
     /// the object's BLData u16[3], read as `*(short *)(params + 6)` [M 0x196fc8:19-22 +
@@ -73,30 +83,41 @@ fn param(p: &nf_formats::placement::Placement, k: u32) -> u32 {
 }
 
 /// Every creepwall placement of a level (`flags & 0xff == 0x3F`), mirroring the wire sweep
-/// (`wire::all`) [M 0x1d04f0 case 0x3F → `CreepWall_Create` 0x196fc8]. The wall's pos/yaw come from
-/// the placement transform (`control_create_object`'s vec pair); the half-length is the placement
-/// scale's x [S — the game's obj+0x8c arrives from that transform; no Create-side write]; the
-/// channel is param 3 [M 0x196fc8 reads placement+0x2c/0x30/0x34/0x38 into BLData u16[0..3], and
+/// (`wire::all`) [M 0x1d04f0 case 0x3F → `CreepWall_Create` 0x196fc8]. The wall's pos is the
+/// WORLD-SPHERE CENTRE (the local bound centre through the placement's yaw matrix [M
+/// `Control_BuildWorldSph` 0x133070 — the same transform `wire::icons` mirrors]) and the half-length
+/// the bound radius × |scale| [M 0x133070's `+0x8c` write, see the field doc]; the channel is
+/// param 3 [M 0x196fc8 reads placement+0x2c/0x30/0x34/0x38 into BLData u16[0..3], and
 /// `Player_Creep` reads `*(short *)(params + 6)` = u16[3] as the switch channel].
 pub fn all(level: &nf_formats::level::Level) -> Vec<CreepWall> {
     let mut out = Vec::new();
     for m in level.maps.iter() {
         for p in &m.placements {
             if p.flags & 0xff != 0x3f { continue; }
-            // The object's own bound half-span along the crawl axis (local x) [D — see the field
-            // doc]. The placement may reference the object by hashcode or by map index.
+            // The object's own bound centre + radius [M 0x133070 — see the field docs]. The
+            // placement may reference the object by hashcode or by map index.
             let obj = if p.by_hash() {
                 level.by_hash.get(&p.hashcode).and_then(|&(mp, oi)| level.maps.get(mp).and_then(|mm| mm.objects.get(oi)))
             } else {
                 m.objects.get(p.index as usize)
             };
-            let bound = obj.map(|o| ((o.max[0] - o.min[0]) * 0.5).abs());
+            let (centre, radius) = obj.map(|o| (o.centre, o.radius)).unwrap_or(([0.0; 3], 0.0));
+            let yaw = p.rotation[1];
+            // The world-sphere centre: the bound centre through the yaw-only matrix — the same
+            // computation `wire::icons` mirrors [M Control_BuildWorldSph 0x133070 via 0x1c9680:40].
+            let (s, c) = (crate::trig::sinf(yaw), crate::trig::cosf(yaw));
+            let pos = [
+                p.translation[0] + centre[0] * c + centre[2] * s,
+                p.translation[1] + centre[1],
+                p.translation[2] - centre[0] * s + centre[2] * c,
+            ];
             let scale = p.scale();
+            let s_max = scale.iter().fold(1.0f32, |a, &v| a * v.max(1e-6).abs());
             out.push(CreepWall {
                 placement: u32::from(p.index),
-                pos: p.translation,
-                yaw: p.rotation[1],
-                half_len: bound.filter(|b| *b > 0.0).unwrap_or_else(|| scale[0].abs().max(1.0)),
+                pos,
+                yaw,
+                half_len: if radius > 0.0 { radius * s_max } else { scale[0].abs().max(1.0) },
                 ch: param(p, 3) as u16,
             });
         }
