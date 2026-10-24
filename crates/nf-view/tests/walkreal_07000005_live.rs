@@ -384,6 +384,79 @@ pub fn walk_to_the_slab_east_end(w: &mut Walker) {
     // y-17-21 slot x −13..−9.5 at z 47-48 and the y-29 roof x −16..−11.5 at z 46-47).
 }
 
+/// The kink ramp + the ledge run to the notch's north edge, RAW full-forward real input
+/// (level-05-west-lane-8). The 45° ramp is mat 0x0c, n (−0.520, 0.680, 0.517), its base edge
+/// (−26.027, 33.0, 44.441) → (−23.393, 33.0, 47.090) — the wall-top line under it [D
+/// examples/probe_kink_05.rs]. On this ramp NEITHER the game nor the port grounds a
+/// capsule-tangent rest:
+/// - the feet-ray band needs |pos − hit| − 0.1 ≤ cc [M Player_FeetOnPoint 0x194188:106,
+///   decompile `*(float *)(hit + 0xc) - 0.1 <= fVar11`], but resting the walk capsule
+///   (B = pos − 0.485, r 0.55 [M Player_Collision 0x194df0 disasm 0x195444/0x195464]) tangent
+///   on the 47° face leaves the upright ray 0.485 + 0.55/0.68 = 1.294 long — over the 1.135
+///   band, always;
+/// - the pick word's bit 0 needs dot(normal, axis) > 0.7 [M Intersect_CylGeom 0x10a72c-0x10a734
+///   disasm: lhu +0x9c / bnez skip / the 0x3f33 0.7 gates / ori 1 / sh] and the ramp's 0.68
+///   never sets it;
+/// - the pick word's second feed — Collide_Intersect ORs a stack halfword into HITTEST+0x9c per
+///   intersect-loop pass [M 0x1ec138-0x1ec150 disasm: lhu +0x9c, lhu 0xec($sp), or, gated by
+///   lhu +0x94 & 0x200, sh] (cel+0x94 holds the glist flags [D MapObject.flags, level.rs]) — is
+///   CLOSED on this ramp: its instances (Room_Outerwall_Corner, Room_Outerwall_B2, Room_Road_B)
+///   carry glist flags 0x0 [D examples/probe_flags_05.rs], so the store is skipped.
+/// So the game's player on this ramp is push-borne ungrounded exactly like the port — the
+/// slope-blind push holds him out of the face while gravity accumulates
+/// [M Player_Collision 0x194df0:104 applies gravity iff ungrounded OR +0x110 < 0.5], and the
+/// push's horizontal part drifts him NW (up-slope-ward, toward the base edge and the wall cliff)
+/// — measured ~0.024/tick once airborne [L probe_kink2 run 1: at the walker's 0.45 near-target
+/// forward the drift beat the walk; Bond crossed the base edge at tick 11 of the raw steer and
+/// fell to the y-29 roof]. A player takes it at FULL forward, each leg aimed 0.35 SE (down-slope)
+/// of its waypoint so the walk outruns the drift. Real inputs only: turn + forward, no
+/// teleports, no state pokes; a fall to the roof or a wedged leg fails the helper.
+fn walk_the_kink_ramp(w: &mut Walker) {
+    let targets: [([f32; 3], &str); 16] = [
+        ([-23.9, 33.6, 45.8], "the step spine 4"),
+        ([-24.3, 33.6, 45.4], "the step spine 5"),
+        ([-24.7, 33.6, 45.0], "the step spine 6"),
+        ([-25.1, 33.5, 44.6], "the step spine 7"),
+        ([-25.5, 33.4, 44.2], "the step spine 8"),
+        ([-25.8, 33.4, 43.8], "the step spine 9"),
+        ([-26.0, 33.4, 43.2], "the ledge bend"),
+        ([-26.2, 33.4, 42.6], "the ledge neck"),
+        ([-26.5, 33.5, 41.6], "the ledge north west"),
+        ([-26.3, 33.5, 40.6], "the ledge 40"),
+        ([-25.9, 33.5, 38.6], "the ledge 38"),
+        ([-24.9, 33.4, 36.5], "the ledge 36"),
+        ([-24.2, 33.2, 32.5], "the ledge 32"),
+        ([-23.6, 33.4, 28.5], "the ledge 28"),
+        ([-23.5, 33.5, 22.5], "the ledge 22"),
+        ([-23.5, 34.5, 18.5], "the ledge 18"),
+    ];
+    let se_bias: f32 = 0.35;
+    let mut leg = 0usize;
+    let mut ticks_on_leg = 0u32;
+    while leg < targets.len() {
+        let (at, name) = targets[leg];
+        let p = w.scene.sim.as_ref().unwrap().bond.pos;
+        if walker::dxz(p, at) < 0.42 {
+            eprintln!("[05g] {name}: +{ticks_on_leg} ticks bond {:?}", p);
+            leg += 1;
+            ticks_on_leg = 0;
+            continue;
+        }
+        let aim = [at[0] + 0.709 * se_bias, at[1], at[2] - 0.705 * se_bias];
+        let desired = (aim[0] - p[0]).atan2(aim[2] - p[2]);
+        let err = walker::wrap_pi(desired - w.scene.sim.as_ref().unwrap().bond.yaw);
+        let input = Input { turn: err.clamp(-0.07, 0.07), forward: 1.0, ..Default::default() };
+        w.tick(input, false);
+        ticks_on_leg += 1;
+        let p1 = w.scene.sim.as_ref().unwrap().bond.pos;
+        assert!(p1[1] > 33.2,
+            "the kink walk stays on the ramp/ledge run (centre y > 33.2; the y-29 roof rest is 30.1): leg {name} fell, bond {p1:?}\n{}",
+            walker::fail_dump_pub(&w.scene, at, name));
+        assert!(ticks_on_leg <= 900,
+            "the kink walk leg {name} wedged at bond {p1:?}\n{}", walker::fail_dump_pub(&w.scene, at, name));
+    }
+}
+
 /// The gap crossing, the west pieces and the cable ledge to the notch's north edge — the
 /// level-05-west-lane-6 route, walked through real input. The geometry [D the collision column
 /// dump, examples/probe_gap_05.rs over `level.instances(true)` — the world's exact static set]:
@@ -437,42 +510,27 @@ pub fn walk_the_gap_to_the_notch(w: &mut Walker) {
     // z 44.0: x −26..−25.5 — walked on its spine, 0.5-unit legs, arrive 0.5 (the capsule's
     // diameter is 1.1: the axis stays on the shelf, the overhang rides the edge picks
     // [M Player_FeetOnPoint 0x194188]).
+    // The spine's first legs (flat cable-ledge floor, the walker's own steering): spine 1-3.
+    // From spine 3 the 45° kink ramp starts; its legs run in walk_the_kink_ramp below — the
+    // round-6/7 park ("a wall contact stalls the steering and the stuck ladder's sidestep shoves
+    // Bond off the shelf's west edge" [L]) is answered there: the ramp walk is taken at FULL
+    // forward with a 0.35 down-slope aim bias, real inputs only (see walk_the_kink_ramp's doc).
     for (name, at) in [
         ("the step spine 1", [-22.8f32, 33.5, 46.7]),
         ("the step spine 2", [-23.2, 33.5, 46.4]),
         ("the step spine 3", [-23.6, 33.5, 46.1]),
-        ("the step spine 4", [-23.9, 33.6, 45.8]),
-        ("the step spine 5", [-24.3, 33.6, 45.4]),
-        ("the step spine 6", [-24.7, 33.6, 45.0]),
-        ("the step spine 7", [-25.1, 33.5, 44.6]),
-        ("the step spine 8", [-25.5, 33.4, 44.2]),
-        ("the step spine 9", [-25.8, 33.4, 43.8]),
-        ("the ledge bend", [-26.0, 33.4, 43.2]),
-        ("the ledge neck", [-26.2, 33.4, 42.6]),
-        ("the ledge north west", [-26.5, 33.5, 41.6]),
-        ("the ledge 40", [-26.3, 33.5, 40.6]),
-        ("the ledge 38", [-25.9, 33.5, 38.6]),
-        ("the ledge 36", [-24.9, 33.4, 36.5]),
-        ("the ledge 32", [-24.2, 33.2, 32.5]),
-        ("the ledge 28", [-23.6, 33.4, 28.5]),
-        ("the ledge 22", [-23.5, 33.5, 22.5]),
-        ("the ledge 18", [-23.5, 34.5, 18.5]),
     ] {
-        // The spine legs past "the step spine 3" park on the shelf kink: a wall contact ~0.33
-        // along the spine-4 line (a tri at the z-46.0 kink, not in the floor dump) stalls the
-        // steering and the stuck ladder's sidestep shoves Bond off the shelf's west edge [L the
-        // round-6 runs]. The legs and the re-verified heights stay listed for the next round.
-        if name == "the step spine 4" || name.starts_with("the ledge") { break; }
         w.walk_to(walker::Wp { at, act: walker::Act::None, arrive: 0.4 }, name);
         let sim = w.scene.sim.as_ref().unwrap();
         eprintln!("[05g] {name}: tick {} bond {:?}", w.total_ticks, sim.bond.pos);
     }
+    walk_the_kink_ramp(w);
     {
         let sim = w.scene.sim.as_ref().unwrap();
         let p = sim.bond.pos;
         eprintln!("[05g] the walked end: tick {} bond {:?}", w.total_ticks, p);
-        assert!(p[0] > -24.0 && p[0] < -21.5 && p[1] > 31.5 && p[1] < 35.5 && p[2] > 45.5 && p[2] < 49.5,
-            "Bond walks the seam and the step's spine start (x −23..−20.5, z 46-47, floors 33.2-33.8 [D the column dump]), got {p:?}");
+        assert!(p[0] > -24.2 && p[0] < -22.8 && p[1] > 33.4 && p[1] < 35.8 && p[2] > 16.5 && p[2] < 20.5,
+            "Bond walks the seam, the kink ramp and the ledge run to the notch's north edge (the ledge 18 end x −23.5, z 18.5, centre y ~34.6-34.8 [L probe_kink2 run 2]), got {p:?}");
     }
 }
 
@@ -536,7 +594,6 @@ fn the_cable_legs_the_gap_and_the_ledge_step() {
 /// re-verified against the column dump [D]: the ledge run z 28-20 at x −24..−23 (33.2-34.2),
 /// z 16-14 (33.2-35.4), the notch's north shelf 30.8-31.0 at x −25.5..−24.5.
 #[test]
-#[ignore = "the step's z-46.0 kink: a wall contact ~0.33 along the spine-4 line stalls the walk and the sidestep drops Bond to the y-29 roof [L]; leg the kink (round the wall tri from its east, or a live read), then the spine, the grab and the ride run as written"]
 fn the_notch_grab_and_ride_parked() {
     let iso = iso();
     let mut w = Walker::new(nf_view::load(&iso, "07000005.bin", false).expect("load 07000005"));
@@ -545,15 +602,76 @@ fn the_notch_grab_and_ride_parked() {
     walk_the_gap_to_the_notch(&mut w);
     // The grab: the JUMP press in the ctx-3 zone [M Player_HandleJump 0x1916b0:126-147 — with
     // BLData+0x95F = 3 the press scans the level's wires for the NEAREST class-0x2C within
-    // 1000 units and grabs instead of jumping].
+    // 1000 units and grabs instead of jumping]. The ledge-18 end (z 18.8) sits north of the
+    // icon #310 zone ((−23.80, 32.74, 12.33) [D placements]): walk SOUTH into the zone with
+    // real input (steered at the icon, the walker's own turn rule) until the icon ctx arms 3 —
+    // the game's own armed-grab signal — before the press. The dip guard: the notch's dip
+    // drops to y 17-25 [D the 1-unit map]; a centre y under 29.0 means the walk fell in.
+    let mut in_zone = false;
+    for _ in 0..600u32 {
+        let sim = w.scene.sim.as_ref().unwrap();
+        let p = sim.bond.pos;
+        if sim.bond.icon_ctx == 3 { in_zone = true; break; }
+        if p[1] < 29.0 {
+            panic!("the zone walk fell into the notch's dip at {p:?}\n{}",
+                walker::fail_dump_pub(&w.scene, [-23.8, 32.7, 12.3], "the notch zone walk"));
+        }
+        let desired = (-23.8 - p[0]).atan2(12.33 - p[2]);
+        let err = walker::wrap_pi(desired - sim.bond.yaw);
+        let input = Input { turn: err.clamp(-0.07, 0.07), forward: 1.0, ..Default::default() };
+        w.tick(input, false);
+    }
+    assert!(in_zone, "the ctx-3 wire zone must arm before the notch's dip (icon #310 [D placements])");
+    // Settle into the press: walk at the icon (real input, steered, the dip guard armed) until
+    // the 0.95 head LOS clears — the press must pass the game's own gates [M Player_HandleJump
+    // 0x1916b0 via the port's jump arm: grounded_history, head_bump, and the 0.95 head LOS] —
+    // and the walk momentum decays (the first press attempt off the kink walk's residual drift
+    // was eaten with no jump and no grab [L the press diag run]; from the settled rest the same
+    // press grabs). The walk also nudges Bond off the x −23.55 line whose overhead tri of the
+    // upper ledge band blocked the head line.
+    let mut settled = false;
+    for _ in 0..600u32 {
+        let sim = w.scene.sim.as_ref().unwrap();
+        let p = sim.bond.pos;
+        let los = sim.world.line_of_sight(p, [p[0], p[1] + 0.95, p[2]], nf_game::world::LOS_PLAYER_HEADROOM);
+        // slow = under 0.032/tick (the kink walk's residual drift ran ~0.056/tick and kept him
+        // under the overhead tri whose down-push set head_bump at the press tick — the arm the
+        // press rides skips on head_bump [M the port's jump arm, Player_HandleJump's gates]);
+        // the wedged rest runs ~0 and clears the bump.
+        let slow = sim.bond.vel[0] * sim.bond.vel[0] + sim.bond.vel[2] * sim.bond.vel[2] < 0.001;
+        if los && slow && !sim.bond.head_bump { settled = true; break; }
+        if p[1] < 29.0 {
+            panic!("the close walk fell into the notch's dip at {p:?}\n{}",
+                walker::fail_dump_pub(&w.scene, [-23.8, 32.7, 12.3], "the notch close walk"));
+        }
+        let desired = (-23.8 - p[0]).atan2(12.33 - p[2]);
+        let err = walker::wrap_pi(desired - sim.bond.yaw);
+        let input = Input { turn: err.clamp(-0.07, 0.07), forward: if los { 0.3 } else { 1.0 }, ..Default::default() };
+        w.tick(input, false);
+    }
+    {
+        let sim = w.scene.sim.as_ref().unwrap();
+        let p = sim.bond.pos;
+        let los = sim.world.line_of_sight(p, [p[0], p[1] + 0.95, p[2]], nf_game::world::LOS_PLAYER_HEADROOM);
+        eprintln!("[05g] the zone: ctx {:#x} los {los} bond {:?} ghist {} bump {}",
+            sim.bond.icon_ctx, p, sim.bond.grounded_history, sim.bond.head_bump);
+        assert!(settled && los && sim.bond.icon_ctx == 3,
+            "the press settle must reach the armed ctx-3 zone with clear head LOS (icon #310 [D placements])");
+    }
+    // Face the wire's south run and press: the jump press at t == 5 of the loop (an edge).
     {
         let sim = w.scene.sim.as_mut().unwrap();
         sim.bond.yaw = (-23.49 - sim.bond.pos[0]).atan2(6.26 - sim.bond.pos[2]);
         sim.bond.vel = [0.0; 3];
     }
+    // The press pulses one edge per 6 ticks (the harness's edge-trigger rule — the game's
+    // jump is edge-triggered [M Input_Action mask 4]): the ledge-18 rest flaps grounded/airborne
+    // on the push dither and a down-push on a press tick sets head_bump, which skips the whole
+    // HandleJump arm that tick [M the port's jump arm]; a later pulse lands clean. [L the press
+    // diag runs: a single press from the drifted rest was eaten with no jump and no grab.]
     let mut grabbed = false;
-    for t in 0..60u32 {
-        let input = Input { jump: t == 5, ..Default::default() };
+    for t in 0..600u32 {
+        let input = Input { jump: t % 6 == 0, ..Default::default() };
         w.tick(input, false);
         if w.scene.sim.as_ref().unwrap().bond.substate == nf_game::player::SS_WIRE
             || w.scene.sim.as_ref().unwrap().bond.substate == nf_game::player::SS_ZIPLINE {
@@ -561,14 +679,26 @@ fn the_notch_grab_and_ride_parked() {
             break;
         }
     }
+    {
+        let sim = w.scene.sim.as_ref().unwrap();
+        eprintln!("[05g] the press: grabbed {grabbed} ctx {:#x} sub {:#x} ghist {} bump {} bond {:?}",
+            sim.bond.icon_ctx, sim.bond.substate, sim.bond.grounded_history, sim.bond.head_bump, sim.bond.pos);
+    }
     assert!(grabbed, "the jump press at the notch edge must grab the wire [M Player_HandleJump 0x1916b0:126-147]");
     eprintln!("[05g] the wire grabbed at tick {}", w.total_ticks);
     // The hand-over-hand ride south across the notch [M Player_Wire 0x197658; the travel
-    // segment z 2.72..9.8 0x1976f8-0x197724].
+    // segment z 2.72..9.8 0x1976f8-0x197724]. The ride's motion is STRAFE-driven — the strafe
+    // axis picks the stroke mode (7 toward B, 8 toward A, 6 idle) [M 0x1977c0-0x197834]; the
+    // old forward-only ride never advanced (the stroke never armed [L the ride diag: z stuck
+    // 8.2-8.9 for 1200 ticks]). Strafe 1.0 rides toward B; the drop paths are the action press
+    // or the 1800-tick auto-drop [M 0x197748-0x197834] — ride until the stroke ends at the far
+    // segment end (the strafe arm zeroes within 0.5² of the travelled-to end) or the wire drops.
     let grab_tick = w.total_ticks;
+    let mut last_z = w.scene.sim.as_ref().unwrap().bond.pos[2];
+    let mut stall_ticks = 0u32;
     let mut rode = false;
-    for _ in 0..1200u32 {
-        let input = Input { forward: 1.0, ..Default::default() };
+    for _ in 0..1800u32 {
+        let input = Input { strafe: 1.0, ..Default::default() };
         w.tick(input, false);
         let sim = w.scene.sim.as_ref().unwrap();
         if sim.bond.substate != nf_game::player::SS_WIRE && sim.bond.substate != nf_game::player::SS_ZIPLINE
@@ -576,17 +706,22 @@ fn the_notch_grab_and_ride_parked() {
             rode = true;
             break;
         }
+        let z = sim.bond.pos[2];
+        if (z - last_z).abs() < 0.01 { stall_ticks += 1; } else { stall_ticks = 0; }
+        last_z = z;
+        if stall_ticks > 60 { rode = true; break; } // the stroke ended at the segment's far end
         if w.total_ticks % 100 == 0 {
             eprintln!("[05g ride] bond {:?} sub {:#x}", sim.bond.pos, sim.bond.substate);
         }
     }
     {
         let sim = w.scene.sim.as_ref().unwrap();
-        eprintln!("[05g] after the ride: tick {} bond {:?}", w.total_ticks, sim.bond.pos);
-        assert!(rode, "the ride must run and end (the cable's far side)");
+        eprintln!("[05g] after the ride: tick {} (+{}) bond {:?} sub {:#x}",
+            w.total_ticks, w.total_ticks - grab_tick, sim.bond.pos, sim.bond.substate);
+        assert!(rode, "the ride must run and end (the stroke's far end or the drop)");
         let p = sim.bond.pos;
         assert!(p[2] < 8.0 && p[1] > 24.0,
-            "the crossing must land Bond south of the notch on the cable ledge (z −11..4, floors 30-31.4 [D census]), got {p:?}");
+            "the crossing must carry Bond south across the notch (the travel segment z 2.72..9.8 [M Player_Wire 0x1976f8-0x197724]; the landing z −11..4, floors 30-31.4 [D census]), got {p:?}");
     }
     eprintln!("[05g] the gap, notch and ride done in {} ticks; falls {:?}", w.total_ticks, w.report.falls);
     for f in &w.report.falls { eprintln!("[05g] fall: {f}"); }
@@ -599,7 +734,6 @@ fn the_notch_grab_and_ride_parked() {
 /// [D the 1-unit map] holds him) [M Player_HandleJump 0x1916b0:126-147 — the ctx scan only runs
 /// with the icon armed; the walk presses nothing].
 #[test]
-#[ignore = "the notch's north edge is behind the step-shelf walk (the_notch_grab_and_ride_parked's reason: the z-46.0 kink's wall contact); from the walked spine start the hold would pass vacuously — the sister runs from the walked notch edge once that leg walks"]
 fn the_notch_holds_the_walk_and_the_grab_needs_its_zone() {
     let iso = iso();
     let mut w = Walker::new(nf_view::load(&iso, "07000005.bin", false).expect("load 07000005"));
@@ -613,7 +747,11 @@ fn the_notch_holds_the_walk_and_the_grab_needs_its_zone() {
     let mut crossed = false;
     for t in 0..600u32 {
         let input = Input { forward: 1.0, ..Default::default() };
-        w.scene.sim.as_mut().unwrap().bond.yaw = std::f32::consts::FRAC_PI_2; // south
+        // SOUTH = −z here (the notch's dip is at z 4-10, south of the walked ledge-18 edge at
+        // z 18.5): the port's forward is (sin yaw, cos yaw) [M walk_to's own atan2(dz, dx)
+        // steering], so yaw π faces (0, −1). The old FRAC_PI_2 faced +x (east — off the ledge's
+        // east void) and predates the kink walk; the test never ran (ignored since birth).
+        w.scene.sim.as_mut().unwrap().bond.yaw = std::f32::consts::PI;
         w.tick(input, false);
         let sim = w.scene.sim.as_ref().unwrap();
         if t % 100 == 0 { eprintln!("[05s notch t{t}] bond {:?}", sim.bond.pos); }
