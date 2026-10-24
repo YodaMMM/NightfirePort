@@ -143,3 +143,26 @@ mezzanine; grapple points #626/#657 (45.30/40.78, 4.79, 42.86) at vent-mouth lev
 the_east_duct_route_reaches_the_stairwell_slot and walk_the_infiltration_to_the_delta_exit as
 they go green. Reading docs/reports/level-14-east-duct.md on origin/s/level-14-east-duct
 (merged; report not on master). Setup in progress.
+
+### level-14-sleeper-push (in progress)
+Branch s/level-14-sleeper-push from origin/master (4f31c0eb), merged origin/s/level-14-east-duct
+(its rewrite was NOT on master — merged here: the report, the rewritten east test, probe14_mouth4).
+STEP 1 DONE: the actor-actor push is the Jointy capsule arm [M Collide_Jointy 0x1ec180:229-281]
+— Bond's kind-0x800 hittest vs the near bot's capsule (arms pos ± up·r, r 0.4 [M NDrone2_Collision
+0x140e90:91-121], h +0xa0 default 1.0 [M DefaultInit 0x14b300:48]); the SP rule: the player (class
+3 [M Player_Init 0x1910f8:76]) resolves against the bot (class 2 [M NDrone2_CreateObj 0x14d7c8:14])
+with the FULL overlap (MPSettings+0x384 == 0 in SP [M C_SBNFMAP 0x20b8d8:26] → fVar12 = 1.0,
+0x1ec180:231-233) and the bot never resolves against the player. Ported as LadderCtx::bot_capsules
+(near bots only [M DroneFunc_NearPlayerCollision 0x14b190 < 2.0]) + the closest-spine push in
+physics_tick [M 0x1ec180:234-253]; test sleeper_push_live::the_drop_onto_the_sleeper_ends_beside_
+the_drone_not_on_top (green: the drop slides off the wandering carrier onto the slot floor).
+FINDING: the drop slot was never about the drone's back — it is ROOFED by vent-lid SP #266's glist
+shape [D probe: dynamic tris y 2.346..2.397 x 40.05..41.54 z 62.22..63.66]; the lid SPs sit mask
+0x4 = ACTIVATE [D placement p5] and the port's E path FIRES them (SP_Activate 0x1dc338): probe14_lid
+opened #266 on the first press, the 63-tick anim (script 0x06000A3B [D decode]) cleared the slot
+(tris 60 → 0 by k45) and Bond crossed the opening south. LEFT: the drop's landing wedges on a ghost
+rest y 2.97 (walkable=true, no tri found — the flipped lid's residual or the kind-25 second entity
+[S]); the corridor east + the x 49 south run + the mouths (the same mask-4 lids) + the mezzanine;
+the two walk tests stay ignored. The airborne gate on the push is a marked port choice [S] — the
+grounded-side push (allies: 01 armour walk, 0a west doorway, 01 E-key door all regressed with it
+on) awaits the game's per-bot +0x4f8/+0x570 bits (live check listed in the report).
