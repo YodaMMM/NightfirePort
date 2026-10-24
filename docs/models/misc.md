@@ -136,6 +136,12 @@ script-spawned breakables/destroyables/pickups (G-031).
    the C5 doors on 0700000d have NO variant (their map's block is all −1 but 010000cf's) so they stay
    drawn intact after the smash — game-accurate. The swap needs wiring into the draw when a variant
    exists (only 7-16 objects per level carry LOD entries [D]).
+   **Locks (0x2E) are wired:** every decryptor keypad is "Lock - KeypadLocked" with the LOD entry
+   "Lock - KeypadUnlocked" [D 0a/0b/11/12/14]; `Lock_Unlock` 0x1b0650 and `Lock_Update` case 1 run
+   `Control_NextLOD` 0x1349b0 on the unlock. Such locks leave the misc sweep and ride the posed door
+   slot space after the breakables (two slots per lock: the object, then its variant); the sim's
+   `Lock::lod_next` picks which one draws. Render: 0700000a out-49 keypad, red light → green light
+   (`NF_UNLOCK_AT=t:out` render aid).
 4. **GunImp child** — the turret child comes from the ELF's `TurretGuns` table (hash at
    `TurretGuns+gun·0x1c+0xC`, yaw/pitch animated in `GunImp_Update` 0x1320d8:162-172). Parent drawn;
    the child needs the table read (the HudTables precedent).

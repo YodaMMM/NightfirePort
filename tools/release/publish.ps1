@@ -1,6 +1,6 @@
 # Publishes the next NightfirePort release from a checkout at a GREEN master commit (players' launchers install it automatically on launch).
 #
-#   powershell -File tools\release\publish.ps1 -NotesFile <notes.md> [-Lane <checkout>] [-Version 0.1.7] [-Draft]
+#   powershell -File tools\release\publish.ps1 -NotesFile <notes.md> [-Lane <checkout>] [-Version 0.1.7] [-Draft] [-Prerelease]
 #   (or -Notes <text>; prefer -NotesFile: straight double quotes in -Notes break `powershell -File` argument passing)
 #
 # Version: the newest release's tag + 1 patch unless given. The tag is created on the lane's HEAD (which must be on
@@ -10,7 +10,8 @@ param(
     [string]$NotesFile = "",
     [string]$Lane = "",
     [string]$Version = "",
-    [switch]$Draft
+    [switch]$Draft,
+    [switch]$Prerelease
 )
 $ErrorActionPreference = "Stop"
 if (-not $NotesFile) { throw "-NotesFile is required: every note item needs a row in the proof.md beside it" }
@@ -72,8 +73,13 @@ if ($bridge) { $zip = Join-Path $out "NightfirePort-$tag-windows.zip"; $assets +
 # The notes are the plain-English summary only.
 $notesFile = Join-Path (Split-Path $out) "notes-$tag.md"
 [IO.File]::WriteAllText($notesFile, $Notes, (New-Object System.Text.UTF8Encoding $false))  # no BOM (5.1's utf8 adds one)
-$ghArgs = @("release", "create", $tag) + $assets + @("--repo", $repo, "--target", $head, "--title", "Nightfire Rust $Version", "--notes-file", $notesFile)
+$ghArgs = @("release", "create", $tag) + $assets + @("--repo", $repo, "--target", $head, "--title", "Nightfire Rust $Version alpha", "--notes-file", $notesFile)
 if ($Draft) { $ghArgs += "--draft" }
+# -Prerelease: only once every player runs a launcher that reads the release LIST (0.1.20 on); older launchers ask
+# GitHub for `releases/latest`, which skips prereleases, so for them a prerelease is never offered.
+if ($Prerelease) { $ghArgs += "--prerelease" }
 & gh @ghArgs
 if ($LASTEXITCODE -ne 0) { throw "gh release create failed" }
+# Every release before the newest is a prerelease (the alphas); the newest full release stays `latest`.
+if (-not $Draft -and -not $Prerelease -and $prevTag) { & gh release edit $prevTag.Trim() --repo $repo --prerelease | Out-Null }
 Write-Host "published $tag at $head$(if ($Draft) { ' (draft)' })"

@@ -161,6 +161,10 @@ pub struct HudTables {
     /// "\xff\x01" (font select 1) [L the page dump 2026-10-14; M MenuManager_Create 0x21b908:255-274
     /// sends the NAME tag as msg 0x23, Label_SendMessage 0x218890:100-104 applies it].
     pub font_header: Font,
+    /// `PdaDigits` (0x2bedb8, 10 words): the entity hashcodes of the decryptor screen's digit meshes
+    /// '0'..'9'; `Player_WeaponFiring` 0x1a5460:155-194 sets them on the view model's anim datums
+    /// 3−i (`AnimDatumSetEntity`), entity 0 for '*' and when idle [M].
+    pub pda_digits: [u32; 10],
 }
 
 impl HudTables {
@@ -227,7 +231,15 @@ impl HudTables {
         let ronin = sprites("RoninSprInfo")?;
         let laser = sprites("LaserSprInfo")?;
         let camera = sprites("CameraSprInfo")?;
+        let pda_digits = {
+            let (pa, _) = sym("PdaDigits")?;
+            let pb = Buf(at(pa)?);
+            let mut d = [0u32; 10];
+            for (k, v) in d.iter_mut().enumerate() { *v = pb.u32(k * 4)?; }
+            d
+        };
         Ok(HudTables {
+            pda_digits,
             health: sprites("HealthSprInfo")?,
             ammo: sprites("AmmoSprInfo")?,
             air,

@@ -457,3 +457,161 @@ fn door0_stays_locked_without_the_station_use() {
         assert!(sim.drones.doors.list[di].pos01 < 0.1, "the leaf never travelled");
     }
 }
+
+/// Task level-16-jetpack-escape-4 step 2: the launch chain run in the REAL mission order (the
+/// arrival → the spawn plate → the station/panels → the silo plate → the bridge touch, all walked)
+/// against the sister's teleported run (Bond placed on trigger #255). The disc data gives the
+/// order nothing to select: no event-0x11 conditional exists in any of the level's 17 scripts [D
+/// order16 probe], the ONLY writer of ch 0x81 is the touch trigger #255 [D place[255]], the only
+/// SP the order arms before the chain is SP#348's 0x060009f6 — two streams, no keys, no events [D]
+/// — and the four keypad SPs it also arms play display anims that write no channels [D 06000999].
+/// This pins that in the port: both orders re-enable Bond at the [D] stream-8 pit-floor pose and
+/// raise ch 243 on the same clock. The ONE channel-state difference the order makes — the cinema's
+/// stream 13 clears ch 180 (0xb4, door[4]'s panel channel) at its t747 [D 06000631 s13 EV0x0d] —
+/// is asserted per phase.
+#[test]
+fn the_real_order_launch_chain_matches_the_teleported_one() {
+    let iso = iso();
+    // ---- phase A: the real order, walked (the walkreal-c route incl. the station detour) ----
+    let mut w = Walker::new(nf_view::load_with_carry(&iso, "07000016.bin", false, Some(&carry(&[0x47, 0x48, 0x4a, 0x54, 0xce, 0x4b]))).unwrap());
+    w.wait_enabled(3000, "the launch-centre arrival");
+    w.wait(200);
+    let route: &[(&str, walker::Wp)] = &[
+        ("the corridor south", walker::Wp::new(4.3, 0.6, -72.5).r(1.2)),
+        ("door[7] through", walker::Wp::new(4.9, -0.1, -78.0).r(1.2)),
+        ("the lane east", walker::Wp::new(10.0, 0.0, -82.0).r(1.3)),
+        ("the lane south", walker::Wp::new(12.0, 0.0, -88.0).r(1.3)),
+        ("the ramp foot", walker::Wp::new(13.8, 0.0, -90.8).r(1.1)),
+        ("the ramp 1", walker::Wp::new(14.5, 0.6, -87.5).r(1.2)),
+        ("the ramp 2", walker::Wp::new(14.5, 2.4, -84.5).r(1.2)),
+        ("the ramp 3", walker::Wp::new(14.5, 4.6, -81.5).r(1.2)),
+        ("the ring east", walker::Wp::new(14.5, 5.9, -79.0).r(1.2)),
+        ("the ring 1", walker::Wp::new(6.0, 5.9, -78.5).r(1.4)),
+        ("the ring 2", walker::Wp::new(-4.0, 5.9, -79.0).r(1.4)),
+        ("the ring 3", walker::Wp::new(-11.0, 5.9, -81.0).r(1.4)),
+        ("the ring 4", walker::Wp::new(-13.0, 5.9, -86.0).r(1.4)),
+        ("the station west", walker::Wp::new(-16.5, 5.9, -88.0).r(1.3)),
+        ("the station south", walker::Wp::new(-16.3, 5.9, -93.5).r(1.2)),
+        ("the station E", walker::Wp::at(-15.2, 5.9, -94.6, walker::Act::Use { use_ticks: 120 }).r(1.2)),
+        ("the return 1", walker::Wp::new(-16.3, 5.9, -89.0).r(1.3)),
+        ("the return 2", walker::Wp::new(-13.0, 5.9, -85.0).r(1.4)),
+        ("the return 3", walker::Wp::new(-10.0, 5.9, -81.0).r(1.4)),
+        ("the return 4", walker::Wp::new(-4.0, 5.9, -79.0).r(1.4)),
+        ("the return 5", walker::Wp::new(6.0, 5.9, -78.5).r(1.4)),
+        ("the return 6", walker::Wp::new(14.5, 5.9, -79.0).r(1.2)),
+        ("the descent 1", walker::Wp::new(14.5, 4.6, -82.0).r(1.2)),
+        ("the descent 2", walker::Wp::new(14.5, 2.4, -85.0).r(1.2)),
+        ("the descent 3", walker::Wp::new(14.5, 0.6, -88.0).r(1.2)),
+        ("the east lane south", walker::Wp::new(9.5, 0.0, -100.0).r(1.6)),
+        ("the trench's west end", walker::Wp::new(4.0, 0.0, -108.0).r(1.6)),
+        ("door[0]'s west approach", walker::Wp::new(2.3, 0.0, -110.0).r(0.7)),
+        ("door[0]'s threshold", walker::Wp::new(2.3, 0.0, -113.2).r(0.7)),
+        ("door[0] through", walker::Wp::new(2.0, -0.1, -119.0).r(1.2)),
+        ("door[1] through", walker::Wp::new(2.0, -0.1, -132.0).r(1.2)),
+        ("door[3]'s panel", walker::Wp::at(3.4, 0.8, -141.5, walker::Act::Use { use_ticks: 90 }).r(0.8)),
+        ("door[3] off panel", walker::Wp::new(2.0, 0.0, -140.0).r(1.0)),
+        ("door[3] through", walker::Wp::new(2.0, -0.1, -147.0).r(1.2)),
+        ("door[2]'s panel", walker::Wp::at(3.4, 0.8, -151.9, walker::Act::Use { use_ticks: 90 }).r(0.8)),
+        ("door[2] off panel", walker::Wp::new(2.2, 0.0, -150.4).r(1.0)),
+        ("door[2] through", walker::Wp::new(2.2, -0.1, -151.5).r(1.2)),
+        ("the silo plate", walker::Wp::new(2.5, 0.3, -153.9).r(1.0)),
+        ("door[4]'s panel", walker::Wp::at(3.5, 1.0, -165.7, walker::Act::Use { use_ticks: 90 }).r(0.8)),
+        ("door[4] through", walker::Wp::new(2.5, 1.0, -169.0).r(1.3)),
+        // The staging point north of the ch-0x81 slab (its z span is −178.50..−174.32): the route
+        // stops SHORT of the touch so the cinema can be observed real-time (skip off) from the
+        // exact tick the slab fires — the walkreal legs that cross it run with skip on and FFwd
+        // the cinema mid-leg.
+        ("the slab's north edge", walker::Wp::new(2.4, 1.0, -172.0).r(0.8)),
+    ];
+    w.walk_route(route);
+    // Manual real-time approach: face south (yaw π = atan2(0, −1)) and walk into the slab, so the
+    // touch tick, the cinema's player-disable, the hand-back and ch 243 are all observed from this
+    // loop (walk_to is opaque and its legs tick through the disable).
+    w.skip_cutscenes = false;
+    let mut t81 = None;
+    for t in 0..900u32 {
+        if t81.is_none() && w.scene.sim.as_ref().unwrap().drones.channels.on(0x81) { t81 = Some(t); }
+        w.scene.sim.as_mut().unwrap().bond.yaw = std::f32::consts::PI;
+        w.tick(Input { forward: 1.0, ..Default::default() }, false);
+        let sim = w.scene.sim.as_ref().unwrap();
+        if sim.disabled || sim.bond.pos[1] < -5.0 { break; }
+    }
+    let t81 = t81.expect("the real-order touch fires ch 0x81 on the walked approach [D #255]");
+    {
+        let sim = w.scene.sim.as_ref().unwrap();
+        assert!(sim.drones.channels.on(0x8e), "the spawn plate fired [D #252]");
+        assert!(sim.drones.channels.on(0x24), "the station E fired [D #250]");
+        assert!(sim.drones.channels.on(0x8f), "the silo plate fired [D #253]");
+        assert!(sim.drones.channels.on(0xb4), "door[4]'s panel set ch 0xb4 in the real order [D #270]");
+        assert!(sim.drones.channels.on(0x81), "the bridge touch fired [D #255]");
+    }
+    // The chain plays out (no skip): record the re-enable, the pose, ch 243, the ch-0xb4 clear and
+    // the chaser.
+    w.skip_cutscenes = false;
+    let (mut t_reenable, mut pose, mut t243, mut b4_cleared) = (None, None, None, None);
+    let mut chaser_a = None;
+    for t in 0..9000u32 {
+        w.tick(Input::default(), false);
+        let _ = t81;
+        let sim = w.scene.sim.as_ref().unwrap();
+        if t_reenable.is_none() && sim.bond.pos[1] < -20.0 { t_reenable = Some(t); pose = Some(sim.bond.pos); }
+        if t243.is_none() && sim.drones.channels.on(243) { t243 = Some(t); }
+        if b4_cleared.is_none() && t_reenable.is_some() && !sim.drones.channels.on(0xb4) { b4_cleared = Some(t); }
+        if chaser_a.is_none() {
+            if let Some(i) = sim.drones.list.iter().position(|d| d.present && !d.corpse && d.skin & 0xffff == 0x1e && d.dtype == 0xf && !matches!(d.death_channel, 23..=26)) {
+                chaser_a = Some((i, t));
+            }
+        }
+        if let (Some((_, ct)), Some(t243)) = (chaser_a, t243) { if t > t243.max(ct) + 50 { break; } }
+    }
+    let t_reenable = t_reenable.expect("the real-order chain re-enables Bond at the pit floor [D stream-8 t747]");
+    let pose = pose.expect("the real-order hand-back pose recorded");
+    let t243 = t243.expect("ch 243 rises in the real order [D launch-script stream]");
+    let (_, ct_a) = chaser_a.expect("the chaser spawns in the real order (spawner #257 via ch 240) [D]");
+    eprintln!("[order] REAL   : ch0x81 +{t81}, re-enable +{t_reenable} (touch→re-enable {}) pose ({:.2},{:.2},{:.2}) ch243 +{t243} (+{} after re-enable) 0xb4 cleared +{b4_cleared:?} chaser +{ct_a}",
+        t_reenable - t81, pose[0], pose[1], pose[2], t243 - t_reenable);
+    assert!((pose[0] - 3.57).abs() < 0.6 && (pose[2] + 179.55).abs() < 0.6 && (pose[1] + 22.76).abs() < 1.2,
+        "the real-order hand-back pose is the [D] stream-8 pit-floor key (3.57,−22.76,−179.55) — the port's capsule rests ~0.4 lower [S], got {pose:?}");
+    assert!((1540..=1680).contains(&(t243 - t_reenable)),
+        "ch 243 lands ~1610 after the re-enable in the real order (got {}) — the [M absolute-Wait + D stream] model (1610), port 1603, live 1591 [L]", t243 - t_reenable);
+    let delta_a = t243 - t_reenable;
+    {
+        let sim = w.scene.sim.as_ref().unwrap();
+        assert!(!sim.drones.channels.on(0xb4), "the cinema's stream-13 t747 write cleared ch 0xb4 [D 06000631 s13 EV0x0d[180,0]]");
+    }
+
+    // ---- phase B: the teleported run (the sister's own setup: placed on trigger #255, no input) ----
+    let mut w = Walker::new(nf_view::load_with_carry(&iso, "07000016.bin", false, Some(&carry(&[0x47, 0x48, 0x4a, 0x54, 0xce, 0x4b]))).unwrap());
+    w.top_up_health = false;
+    w.skip_cutscenes = false;
+    {
+        let sim = w.scene.sim.as_mut().unwrap();
+        for _ in 0..600 { sim.step_bond(Input::default(), false, false, false); }
+        sim.bond.pos = [2.4, 1.2, -175.5];
+    }
+    let (mut t81, mut t_reenable, mut pose, mut t243, mut t_fail) = (None, None, None, None, None);
+    for t in 0..4200u32 {
+        w.tick(Input::default(), false);
+        let sim = w.scene.sim.as_ref().unwrap();
+        if t81.is_none() && sim.drones.channels.on(0x81) { t81 = Some(t); }
+        if t_reenable.is_none() && sim.bond.pos[1] < -20.0 { t_reenable = Some(t); pose = Some(sim.bond.pos); }
+        if t243.is_none() && sim.drones.channels.on(243) { t243 = Some(t); }
+        if sim.drones.mission.status() == 3 { t_fail = Some(t); break; }
+    }
+    let t81 = t81.expect("the teleported Bond touches #255 at once [L the sister's setup]");
+    let t_reenable = t_reenable.expect("the teleported chain re-enables Bond at the pit floor [D stream-8 t747]");
+    let pose = pose.expect("the teleported hand-back pose recorded");
+    let t243 = t243.expect("ch 243 rises in the teleported run [D]");
+    let t_fail = t_fail.expect("the teleported run fails through the death sequence [M; the sister pins +~450]");
+    eprintln!("[order] TELEPORT: ch0x81 +{t81}, re-enable +{t_reenable} (touch→re-enable {}) pose ({:.2},{:.2},{:.2}) ch243 +{t243} (+{} after re-enable) fail +{t_fail} (+{} after ch243)",
+        t_reenable - t81, pose[0], pose[1], pose[2], t243 - t_reenable, t_fail - t243);
+    assert!((pose[0] - 3.57).abs() < 0.6 && (pose[2] + 179.55).abs() < 0.6 && (pose[1] + 22.76).abs() < 1.2,
+        "the teleported hand-back pose is the same [D] stream-8 key, got {pose:?}");
+    assert!((1540..=1680).contains(&(t243 - t_reenable)),
+        "ch 243 lands ~1610 after the re-enable in the teleported run (got {})", t243 - t_reenable);
+    assert!((440..=470).contains(&(t_fail - t243)),
+        "the teleported fail rides the death sequence at the sister's pinned +~450 [M 0x19a6a8 RED_FADE_TICKS 448 + L 454], got {}", t_fail - t243);
+    let delta_b = t243 - t_reenable;
+    assert!((delta_a as i32 - delta_b as i32).abs() <= 60,
+        "the order does not move ch 243's clock (real {delta_a} vs teleported {delta_b}) — the [D] census says it cannot: no event-0x11 branch exists in the level's scripts and no pre-chain SP touches the chain");
+}
