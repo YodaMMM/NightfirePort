@@ -10535,7 +10535,14 @@ fn tick_charge_fuse(
     out: &mut Vec<(V3, f32, f32, usize, u16, u32, f32)>,
 ) {
     if !b.fuse_ticks || b.defused { return; }
-    b.fuse -= 1.0;
+    // The decrement [M 0x12d890 0x12dcc4-0x12dd2c]: families 0x59/0x5b never decrement; 0x37
+    // decrements unless its fuse holds the 7777.0 sentinel; every family then takes the < 0 test.
+    let fam = b.family(weapons);
+    // The other `+0x70 & 0x200` families (the grenades 0x2a/0x34-0x37/0x59/0x5b/0x68/0x69 [L the
+    // weapon table]) are thrown into the grenade pool, whose own fuse runs in grenade.rs; ticking them
+    // here as well would double their clock and blast them without their gas/smoke arms.
+    if fam != 0x3b { return; }
+    if !(matches!(fam, 0x59 | 0x5b) || (fam == 0x37 && b.fuse == 7777.0)) { b.fuse -= 1.0; }
     if b.fuse < 0.0 {
         b.state = 2; // [M 0x12dd44-0x12dd58]
         if let Some(w) = weapons.records.get(b.weapon as usize) {

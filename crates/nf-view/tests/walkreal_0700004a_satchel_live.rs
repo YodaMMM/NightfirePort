@@ -100,7 +100,6 @@ fn board_and_arm(w: &mut Walker) -> (f32, u32) {
 }
 
 #[test]
-#[ignore = "opt-in NF_ISO"]
 fn ride_the_lift_burn_both_satchels_with_the_laser_watch_and_reach_the_lobby_alive() {
     let iso = iso();
     let mut w = Walker::new(nf_view::load(&iso, "0700004a.bin", false).unwrap());
@@ -199,7 +198,6 @@ fn ride_the_lift_burn_both_satchels_with_the_laser_watch_and_reach_the_lobby_ali
 }
 
 #[test]
-#[ignore = "opt-in NF_ISO"]
 fn an_undefused_satchel_explodes_and_fails_the_mission_like_the_game() {
     let iso = iso();
     let mut w = Walker::new(nf_view::load(&iso, "0700004a.bin", false).unwrap());
