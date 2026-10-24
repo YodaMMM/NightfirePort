@@ -9393,10 +9393,16 @@ impl Drone {
                 }
                 self.firing = self.los;
                 if self.mode == 0x1c {
-                    if !self.ever_seen {
-                        // `+0x170 == 0`: no opponent object — the port's stand-in is `ever_seen`
-                        // (the vision pass assigns the opponent; the game's pointer is written by
-                        // `Drone_ProcessOpponents`). Hang at once.
+                    // `+0x170 == 0` [M 0x169730:46-51]: the opponent POINTER gone. In SP
+                    // `NDrone2_FindOpponent` 0x1424e0:100-120 (run every tick [M ControlSTANDARD
+                    // 0x1490f0:167]) points +0x170 at Bond's object unconditionally — no sight
+                    // test — and zeroes it only when `PlrStat_OkToUpdate` fails or the player is
+                    // dead, so the arm fires when the PLAYER IS DEAD, not when unseen (the port's
+                    // `bond_alive` fold, standins-drone-922 — the same fold the INTEROGATE/combat
+                    // re-eval arms carry). The old `ever_seen` stand-in sent a never-seen guard
+                    // to Hang AT THE ROPE TOP, where the stairwell's flights shadow him from every
+                    // landing below — the unkillable-roper repro.
+                    if !self.bond_alive {
                         self.set_state(state::ABSEIL_HANG);
                         return true;
                     }
@@ -9427,7 +9433,10 @@ impl Drone {
                 // The velocity decay ×(1.0 − FRAME_RATE_DIV·0.02) = 0.98 [M 0x169940:33; EE mul.s].
                 for v in &mut self.velocity { *v *= 0.98; }
                 self.firing = self.los;
-                if self.ever_seen {
+                // The opponent gate is the +0x170 pointer [M 0x169940:42-47] — the SP fold is
+                // `bond_alive` (NDrone2_FindOpponent 0x1424e0:100-120 re-points it at Bond every
+                // tick; see the Slide arm above), not the sight latch.
+                if self.bond_alive {
                     if self.player_pos[1] < self.rope[1] { self.rope[1] = self.player_pos[1]; }
                     if self.player_pos[1] + 3.0 + (self.hang_rand as f32) < self.pos[1] { self.set_state(state::ABSEIL_SLIDE); return true; }
                 }
@@ -13660,7 +13669,12 @@ fn segment_hits_sphere(a: V3, b: V3, c: V3, r: f32) -> bool {
             let dyaw = angle_difference(yaw, dv[0].atan2(dv[2]));
             if dyaw.abs() >= h { continue; }
             let dpitch = angle_difference(pitch, (dv[1] / dist).clamp(-1.0, 1.0).asin());
-            if dpitch.abs() >= v || !d.world.line_of_sight(head, p, crate::world::LOS_SENSOR) { continue; }
+            // The game's sensor LOS passes the stairwell's 0x40-material well panes [M
+            // Check_AutoAim 0x1a73f8:164-165 calls Collide_LineOfSight with mask 0xa;
+            // Collide_Intersect 0x1ebaa8:305-309/317-319 drop surface-0x40/0x80 hits under its
+            // 0x8 bit] — the plain segment test blocked the lock from every landing behind the
+            // pane, so the auto-aim never took the roping guard it visibly faces.
+            if dpitch.abs() >= v || !d.world.line_of_sight_masked(head, p, crate::world::LOS_SENSOR) { continue; }
             best = dist;
             found = Some((i, dyaw, dpitch));
         }
