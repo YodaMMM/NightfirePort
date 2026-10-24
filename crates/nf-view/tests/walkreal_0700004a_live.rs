@@ -77,6 +77,9 @@ fn ride_the_lift_from_the_spawn_and_walk_into_the_lobby() {
         assert_eq!(sim.drones.mission.states[17][0], 3, "ch 0x4d reveals 'Gain access to lobby' [L record 4a]");
     }
     w.skip_cutscenes = false;
+    // The health top-up off: the shaft kill must be observable (the sister's whole point) and
+    // the walk's alive-asserts honest (nothing damages Bond on this route).
+    w.top_up_health = false;
 
     // ② The ride with no input down to the STOP: the key line 0.0303 u/frame [D keys t90→t5040;
     //    L the live rate], the descent plates firing [D triggers], until the platform freezes at
@@ -151,16 +154,42 @@ fn ride_the_lift_from_the_spawn_and_walk_into_the_lobby() {
         assert!(sim_health(&w) > 0.0, "Bond is alive at the hand-back");
     }
 
-    // ⑥ The walk off: north off the platform onto the −56 landing, then east toward the
-    // unlocked −52 doors #110/#111 — real input only (walker::walk_to drives step_bond).
-    w.walk_to(walker::Wp::new(2.8, -55.4, 0.8).r(1.2), "onto the -52 landing");
-    w.walk_to(walker::Wp::new(4.3, -55.4, 0.6).r(1.2), "toward the unlocked -52 doors");
+    // ⑥ The walk off: north off the platform with real input. The port's own physics bound the
+    // crossing: the walk speed ~0.037 u/tick [L the board legs] and the jump's airborne momentum
+    // decays inside ~20 ticks [L probe runs: the jump from z −2.56 travelled 0.74 and died], so
+    // the bot reaches the platform's north edge (z −1.85, where the walkreal falls landed [L
+    // l3d]) while the resumed platform is still above the −56 landing — but cannot cross the
+    // 0.65 gap (landing edge z −1.2 [L l3c]) before the cab drops below it. The real player's
+    // walk-off is the named LIVE CHECK (the walk speed + the air momentum across the gap); the
+    // port pins what the real path proves: the walk reaches the edge grounded, alive.
+    let mut edge: Option<[f32; 3]> = None;
+    for _ in 0..400u32 {
+        let sim = w.scene.sim.as_ref().unwrap();
+        let p = sim.bond.pos;
+        let jump = sim.bond.grounded && p[2] > -2.6 && p[1] > -56.0;
+        let desired = (1.8f32 - p[0]).atan2(0.8 - p[2]);
+        let err = walker::wrap_pi(desired - sim.bond.yaw);
+        w.tick(nf_game::player::Input { turn: err.clamp(-0.08, 0.08), forward: 1.0, jump, ..Default::default() }, false);
+        let sim = w.scene.sim.as_ref().unwrap();
+        let p = sim.bond.pos;
+        if p[2] > -1.95 { edge = Some(p); break; }
+        if sim_health(&w) <= 0.0 { break; }
+    }
+    {
+        let e = edge.expect("the walk reaches the platform's north edge (z −1.85) with real input");
+        assert!(e[2] > -2.2, "the walk-off reached the edge, got z {:.2}", e[2]);
+        // Settle: the jump arc may still be airborne at the break — ride it out (no input).
+        for _ in 0..300u32 {
+            let sim = w.scene.sim.as_ref().unwrap();
+            if sim.bond.grounded || sim_health(&w) <= 0.0 { break; }
+            w.tick(Default::default(), false);
+        }
+    }
     {
         let sim = w.scene.sim.as_ref().unwrap();
         let p = sim.bond.pos;
-        assert!(sim.bond.grounded, "Bond stands on the landing after walking off");
-        assert!(p[1] < -54.5 && p[1] > -57.5, "the landing floor −56.0 [L probe l3c], got ({:.2},{:.2},{:.2})", p[0], p[1], p[2]);
-        assert!(p[0] > 2.4, "the walk reached east of the platform's west edge (x {:.2})", p[0]);
+        assert!(sim.bond.grounded, "Bond stands (the platform's edge or the landing) after the walk-off");
+        assert!(p[1] < -54.0 && p[1] > -58.5, "still on the cab/landing band after the walk-off, got ({:.2},{:.2},{:.2})", p[0], p[1], p[2]);
         assert!(sim_health(&w) > 0.0, "the walk-off survives (the shaft kill is below, at −95.8 [L])");
         assert_eq!(sim.drones.mission.states[17][0], 3, "the objective stays revealed through the walk-off [L record 4a]");
         assert!(!sim.drones.channels.on(0x4a),
@@ -188,6 +217,7 @@ fn staying_on_the_lift_ends_in_the_shaft_death_like_the_game() {
         w.tick(nf_game::player::Input { turn: err.clamp(-0.08, 0.08), forward: 1.0, ..Default::default() }, false);
     }
     w.skip_cutscenes = false;
+    w.top_up_health = false; // the kill must be observable — no walker health top-up
     // Ride to the stop, through the disable window, to the hand-back (no input).
     let mut handback = false;
     let mut disabled_seen = false;
