@@ -198,3 +198,24 @@ walk_office_floor_qworm_keyboard_hatch as they go green and drop the NF_CAPS_GAT
 once the gate is default. Branched from origin/s/level-0a-office-hatch-9 (its NF_CAPS_LOG/
 NF_CAPS_GATE code and ignored tests are this task's base), merged origin/master (suite runner,
 sleeper-push work).
+
+### level-0a-office-hatch-10 (round result, ~21:05 UTC)
+The overlap gate's reference is SETTLED and it kills the gate-as-port idea: HITTEST+0x50
+(BL+0x790) is a LIFETIME PUSH ACCUMULATOR — born (0,0,0) via the object-alloc memset
+[M control_create_object 0x1344e0:17; control_init_collision 0x134878 is an empty stub], written
+only by the per-landed-hit `+= world DeltaP` [M Collide_Intersect 0x1ebaa8:353-373], and LIVE it
+drifts: [L ee_snapshot.bin (played state, Bond at 104.7,25.0,107.1)] reads BL+0x790 =
+(1.208, 9.084, −14.449), ~15 m from its owner (the 05 lift ride's Σ). Verified negatively at the
+instruction level: an exhaustive ACTION.ELF scan of every immediate-offset instruction touching
+0x788/0x790/0x798 (sw/lw/swc1/lwc1/sh/lhu/sqc2/lqc2/addiu — sqc2 calibrated on the real
+`sqc2 vf2, 0x760(s2)` at 0x1950ec) finds only menu-stack spills; no per-tick seeder exists in
+code the decompile or the scan can see. The decoded tail [M Intersect_CylGeom 0x109da0:419-457:
+gate dot(q − H50, n) > 0, guard |q − H50| < radius, push (q − H50)/|q−H50|·(radius − |q−H50|)]
+therefore fires near-never on a walked line — the game's z 16.29 glide [L fresh boot] needs no
+gate (nothing pushes there at all), and the game's real wall-stop is a mechanism OUTSIDE the
+cylinder tail (DealWithObjHit 0x194458 = damage/ladder/wire/bullets only; FeetOnPoint 0x194188 =
+grounding only) — still unidentified, the named open point. The ref=bottom NF_CAPS_GATE probe
+stays OFF (its rationale corrected in world.rs; hatch-9's pins missed both ways), the three walk
+tests stay honestly ignored, nothing regressed: walkreal_0700000a_live 4 passed 3 ignored; the
+fast suite total in the report. Live checks (jamb-press HITDATA emptiness, the obj+0x30
+write-address trace, the 0a post-sweep H50 read) are in the report.
