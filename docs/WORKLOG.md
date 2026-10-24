@@ -21,3 +21,10 @@ Work Log (continued):
 Stage Summary:
 - fix_06_fire_live.rs: 3 real-input pins, all green. gun.rs held-automatic pin green; nf-game suite green.
 - walkreal_07000006_live.rs: route legs added, tests stay [ignore] with updated evidence (fire path proven whole; tunnel ramp open).
+
+Work Log (final):
+- Suite on the final tree (foreground segments; the sandbox kills background jobs between tool calls — two detached suite runs died with empty logs): nf-game all green, nf-audio green, nf-formats 11/3 with exactly the 3 allowed slim-ISO disc_golden failures, nf-view weapon/fire/06 slice 124/0/4, models+walker regression slice 56/0/13. models_world_live goldens unchanged.
+- Report written to docs/reports/level-06-castle-fire.md with the finding (the fire-path fault does not reproduce on master), the new pins, the walkreal route gains, the tunnel-ramp OPEN item, and two live checks for the main agent (the tunnel ramp render; the boot-NIS yaw accumulation).
+
+Stage Summary:
+- Branch s/level-06-castle-fire pushed with: fix_06_fire_live.rs (3 real-input pins), gun.rs held-automatic rate pin, walkreal_07000006_live.rs route legs + evidence rewrite (tests re-ignored on the tunnel ramp), WORKLOG, report.
