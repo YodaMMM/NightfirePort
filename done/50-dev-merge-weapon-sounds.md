@@ -22,3 +22,8 @@ say so in the report. Never weaken a decompile-backed test to make code pass.
 
 ---
 claimed-by: sandbox4 at 2026-10-24T13:32Z
+
+---
+## Report (done, 2026-10-24T14:17Z)
+
+Closed by the driver: the report is on `s/dev-merge-weapon-sounds` (docs/reports/dev-merge-weapon-sounds.md); the worker didn't run finish.sh.
