@@ -24,3 +24,8 @@ say so in the report. Never weaken a decompile-backed test to make code pass.
 
 ---
 claimed-by: sandbox4 at 2026-10-24T04:21Z
+
+---
+## Report (done, 2026-10-24T04:28Z)
+
+Closed by the driver: the report is on `s/floor-crack-01` (docs/reports/floor-crack-01.md); the worker didn't run finish.sh.
