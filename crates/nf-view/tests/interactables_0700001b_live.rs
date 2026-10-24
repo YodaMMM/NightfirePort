@@ -207,8 +207,25 @@ fn missile_console_shots_latch_and_the_launch_fails_on_ch_99() {
 /// event writes ch 100 [D decode; M Script_EventHandler 0x1d94c0 case 0x11] — ch 100 is the
 /// mission end → 0x0730001b [M 0x182c60:114-116]. Sister: the unfought gate leaves Drake
 /// unspawned and the mission running.
+/// UN-IGNORED (level-1b-drake-4): the old "walker kill leaves ch 0x0e off" blocker was the
+/// test's own ch-0x0e assert, not the kill. The kill ALWAYS raised the channel (the
+/// probe1b_killgap A/B runs: the walker path AND the raw path both die into AstronautDeath 0xbf
+/// with the raise); what broke the assert is the game's own CLEAR — SP#198's out write one tick
+/// after the defeat NIS ends [M SP_Update 0x1dbda8 case 3 sets cVar10 = 0, the :226 tail writes
+/// `switch_channels[out] = cVar10 != 0` while the still-on ch 0x0e keeps the mask-1 trigger
+/// armed; NF_CHWATCH=0x0e on this very test: raised at frame 3160 (Drones::tick_inner — Drake's
+/// death-channel write [D param 12 = 14]), cleared at 3881 (nis::Player::update) one tick after
+/// the NIS's t720 ch 0x64]. The assert now pins the raise via the game's switch_channels_time
+/// stamp [M 0x1b1a78:87,107,188-189] AND the game-true clear. The teleport to the arena basin
+/// stays the documented stand-in: the west crossing is sealed by the game's own boundary (plc
+/// #128 OBJECT_Boundary_1 at x 4.433, body-solid per [M];
+/// walkreal_0700001b_live::the_boundary_wall_stops_the_float_and_passes_bullets) and the whole
+/// 1b script lib carries NO player-position carry (the probe1b_carry sweep: no event 6 with a
+/// stream entity anywhere, no ch-74 reader among the SPs/ANDs/missiles/laser, the fly-by's 8
+/// entities are GFX-attach models [M Script_CreateEntity 0x1d8968's fall-through], kind 0x31 is
+/// the shootable FuseBox [M parsemap 0x1d04f0 case 0x31]) — the crossing's live checks stay in
+/// walkreal's ignored chain test.
 #[test]
-#[ignore = "the reached blocker, narrowed 2026-10-23: the spawner now spawns Drake the game's way (the gate driven while Bond is far — the min_dist screen [M 0x137cb0:30] refuses the on-spot drive the old order used) and the walker's fire kills him, but the death channel 0x0e does not rise through the walker-driven kill — the SAME kill through raw step_bond (probe1b_blockers::probe_drake_death) spawns him enabled, dies at t81 into AstronautDeath 0xbf and raises ch 0x0e; the walker path (w.shoot: exposed_aim box-centre aims + the reload/strafe inputs) leaves ch 0x0e off and the NIS chain dead. Un-ignore when the kill's channel raise survives the walker path. Route note (level-1b-drake-3): the teleport approach stays the documented stand-in — the west crossing is sealed by the game's own boundary (plc #128 OBJECT_Boundary_1 at x 4.433, body-solid per [M]; walkreal_0700001b_live::the_boundary_wall_stops_the_float_and_passes_bullets), so the on-foot route to the arena needs the scripted carry (the live checks in walkreal's ignored chain test)"]
 fn drake_defeat_by_real_fire_ends_the_mission() {
     // The arrival NIS is CUT here (the probe1b_blockers::probe_drake_death shape — the same
     // substate force the load() helper documents): the full arrival's script tail breaks the
@@ -268,7 +285,18 @@ fn drake_defeat_by_real_fire_ends_the_mission() {
     w.skip_cutscenes = true;
     {
         let sim = w.scene.sim.as_ref().unwrap();
-        assert!(sim.drones.channels.on(0x0e), "Drake's death channel ch 0x0e [D param 12 = 14]");
+        // The raise is stamped in the game's switch_channels_time [M 0x1b1a78:87,107,188-189 —
+        // every nonzero write stamps]: Drake's death channel fired. The channel itself reads 0 by
+        // the assert when the defeat NIS has ended: SP#198's own out write clears it one tick
+        // after the script ends — [M SP_Update 0x1dbda8 case 3 sets cVar10 = 0 and the tail
+        // `switch_channels[out] = cVar10 != 0` (:226) writes it while the still-on ch 0x0e keeps
+        // the mask-1 trigger armed] — the NF_CHWATCH=0x0e trace of this very run: raised at frame
+        // 3160 (Drones::tick_inner, the death write), cleared at 3881 (nis::Player::update, the
+        // SP out write) one tick after the NIS's t720 ch 0x64. Pin BOTH.
+        assert!(sim.drones.channels.time[0x0e as usize] != 0,
+            "Drake's death channel ch 0x0e was raised (the time stamp [M 0x1b1a78])");
+        assert!(!sim.drones.channels.on(0x0e),
+            "SP#198's out write clears ch 0x0e after the defeat NIS ends [M 0x1dbda8 case 3 + :226]");
         assert!(sim.drones.channels.on(0x0b), "the NIS's t600 event-11 writes ch 0x0b [D]");
         assert!(ended, "the NIS's t720 ch 100 ends the mission (MissionState 6) [M 0x182c60]");
         assert_eq!(sim.drones.mission.to_end, 0x0730_001b, "the station's own end code [M 0x182c60:114-116]");

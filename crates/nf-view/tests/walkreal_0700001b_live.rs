@@ -249,7 +249,11 @@ fn walk_arrival_to_drakes_defeat() {
     w.skip_cutscenes = true;
     {
         let sim = w.scene.sim.as_ref().unwrap();
-        assert!(sim.drones.channels.on(0x0e), "Drake's death channel ch 0x0e [D param 12 = 14]");
+        // The raise + the NIS-end clear: [M 0x1b1a78 the time stamp] / [M SP_Update 0x1dbda8
+        // case 3 cVar10 = 0 + the :226 out write] — the same pin the interactables defeat test
+        // carries (the NF_CHWATCH trace there: raised 3160, cleared 3881).
+        assert!(sim.drones.channels.time[0x0e as usize] != 0,
+            "Drake's death channel ch 0x0e was raised (the time stamp [M 0x1b1a78])");
         assert!(sim.drones.channels.on(0x0b), "the NIS's t600 event-11 writes ch 0x0b [D]");
         assert!(sim.drones.channels.on(100), "the NIS's t720 event-11 writes ch 0x64 = 100 [D]");
         assert!(ended, "the defeat NIS ends the mission (MissionState 6) [M 0x182c60]");
