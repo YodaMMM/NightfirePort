@@ -21,7 +21,14 @@
 //!   = p0 (skin), slot 1 = p1 (start script), slot 9 = p3 (setup) [M 0x13a160-0x13a184]; param 2
 //!   is dead; `Drone_Create` 0x136be0 → `NDrone2_CreateObj` (class 2, `LList_Add` 0x298E14 [M
 //!   0x14d7c8:10-14,29-30]) → `NDrone2_PostLoad_Init` [M 0x14d890]; state = IDLE (the caller's
-//!   hard-coded 7th argument 4, 0x1d96ec → 0x13a1a0).
+//!   hard-coded 7th argument 4, 0x1d96ec → 0x13a1a0). NOTE (ai-dmode-inits 2026-10-24): in the
+//!   game that 4 is transient — PostLoad_Init's DefaultInit runs DoTypeSettingsOLD(+0xC5 = 0),
+//!   whose by-mode arm overwrites +0x5A2 to 6 (prop 0x24 set by Defaults) before CoderCreate
+//!   returns [M 0x14d2e8:0x14d3bc; Drone_Create sets DIVars word 0 = obj so the call is reached,
+//!   0x136be0 aiStack_110[0] = iVar4]; the drone's start script (0x060000A6) then takes it to
+//!   PlayScript on enable, and the post-script fallback is start_state = 6 — which the port
+//!   computes identically (pinned in nf-game dmode_row0_near_player_live). The IDLE assert below
+//!   pins the port's pre-enable bookkeeping value, not a final game state.
 //! Opt-in via NF_ISO.
 
 fn iso() -> Option<String> { std::env::var("NF_ISO").ok() }

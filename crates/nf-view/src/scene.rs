@@ -6532,6 +6532,10 @@ fn z_basis(dir: [f32; 3], pos: [f32; 3]) -> [[f32; 4]; 4] {
 /// INVISIBLE; the slot
 /// mapping below is therefore newest-first, so an overflow drops the oldest exactly like the ring.
 const GRENADE_SLOTS: usize = 512;
+/// The projectile-slot base (the grenade range's size) — the drone bullet slots start here
+/// (`GRENADE_SLOTS + bullet_index`, the same indices the tracer attachments use). Public for
+/// the draw-list tests.
+pub const PROJECTILE_SLOT_BASE: usize = GRENADE_SLOTS;
 /// Bond's live projectiles drawn at once (rapid fire keeps 100+ rockets in the air; the game draws
 /// every bullet object — the old 8 hid the rest).
 const PLAYER_BULLET_SLOTS: usize = 32;
@@ -8248,11 +8252,20 @@ pub fn build(level: &Level, cels_only: bool, skeletons: &HashMap<u8, Skeleton>, 
             }
             gunimp_placements = level.maps[m].placements.iter().filter(|p| p.flags & 0xff == 0x34).count();
             // The security cameras (0x28, `Sensors::create`'s order and spawn gate), after the gun
-            // emplacements: two slots each — the camera body (the placement's own glist, `Sensor_Create`
-            // 0x1af010 stores it at obj+0xD8) at the swept/tracked pose `obj+0x90`, and the mount proxy
+            // emplacements: three slots each — the camera body (the placement's own glist, `Sensor_Create`
+            // 0x1af010 stores it at obj+0xD8) at the swept/tracked pose `obj+0x90`, the mount proxy
             // (param 7) re-aligned upright to the pose's direction by `Sensor_SetBeam` 0x1af398:50-54
-            // every tick [M]. The lens proxy (param 0) is the sight beam stretched to its hit length
-            // (obj+0xE8) — still a draw hand-off.
+            // every tick [M], and the sight beam: the lens proxy (param 0) is a gfx object whose glist
+            // (`hashtable_set_object_to_entity_gfx`, 0x1af010:106-107) `Sensor_SetBeam` poses at the
+            // camera's own matrix (`Mat_Copy(lens+0x90, obj+0x90)` 0x1af398:58) and stretches to the
+            // beam's hit length via obj+0xE8 (range 0x1af398:72, or the mask-8 ray's first-hit
+            // distance :78) [M]. The draw is the object's plain glist path (`View_DrawObjectGlist`
+            // 0x1e6780:43-45 — the Camera_Beam glist's flags 0x241 [D probe] carry no bit-8 billboard
+            // bit) with the object scale riding the mesh's length axis: the create ORs the
+            // OnlyScaleZ bit (0x1af010:102) and the Camera_Beam mesh is unit-length along local +z
+            // (z −0.0085..1.0283, x/y ±0.16 [D probe 0x02000360]), so the drawn beam runs lens →
+            // hit at constant cross-section. State 3 clears the lens's display mask (0x1af618:248-250)
+            // — no beam while disabled.
             let cam_base = gun_base + GUNIMP_SLOTS * gunimp_placements;
             if cels_only {
                 for (si, p) in level.maps[m].placements.iter().filter(|p| p.flags & 0xff == 0x28 && p.flags & 0xa000 == 0).enumerate() {
@@ -8261,10 +8274,11 @@ pub fn build(level: &Level, cels_only: bool, skeletons: &HashMap<u8, Skeleton>, 
                     let body = if p.by_hash() { level.by_hash.get(&p.hashcode).copied() }
                         else if (p.index as usize) < level.maps[m].objects.len() { Some((m, p.index as usize)) } else { None };
                     let mount = p.params.iter().find(|(k, _)| *k == 7).map(|&(_, v)| v).filter(|&h| h != 0).and_then(|h| level.by_hash.get(&h).copied());
-                    for (k, t) in [body, mount].into_iter().enumerate() {
+                    let beam = p.params.iter().find(|(k, _)| *k == 0).map(|&(_, v)| v).filter(|&h| h != 0).and_then(|h| level.by_hash.get(&h).copied());
+                    for (k, t) in [body, mount, beam].into_iter().enumerate() {
                         let Some((map, object)) = t.filter(|&t| has_gfx(t)) else { continue };
                         let inst = Instance { map, object, matrix: mx, placement: p.clone() };
-                        add_instance(level, &inst, Layer::Character, None, &mut groups, None, None, Some((cam_base + 2 * si + k) as u16), None, [1.0; 3], &room_cels, u32::MAX, u32::MAX);
+                        add_instance(level, &inst, Layer::Character, None, &mut groups, None, None, Some((cam_base + 3 * si + k) as u16), None, [1.0; 3], &room_cels, u32::MAX, u32::MAX);
                     }
                 }
             }
@@ -9170,7 +9184,18 @@ pub fn build(level: &Level, cels_only: bool, skeletons: &HashMap<u8, Skeleton>, 
                     }
                 } else if (slot as usize) < GRENADE_SLOTS + TRACER_SLOTS {
                     match s.drones.bullets.get(slot as usize - GRENADE_SLOTS) {
-                        Some(b) if b.state == 1 => (b.pos, b.dir, s.weapons.projectile_mesh(b.weapon as usize)),
+                        // camera-beam-satchel-draw: a LANDED satchel charge draws aligned to the
+                        // NEGATED landing normal (the game's stick pose [M Bullet_CollisionHandler
+                        // 0x12ce80:256-266]) — `Bullet_update` case 3 zeroes the flight dir
+                        // [M 0x12edec] and the old read collapsed the mesh to a point (align2dir
+                        // of the zero vector zeroes the rotation rows).
+                        Some(b) if b.state == 1 => {
+                            let dir = match (b.landed, b.stick_normal) {
+                                (true, Some(n)) => [-n[0], -n[1], -n[2]],
+                                _ => b.dir,
+                            };
+                            (b.pos, dir, s.weapons.projectile_mesh(b.weapon as usize))
+                        }
                         _ => return far,
                     }
                 } else {
@@ -9290,27 +9315,43 @@ pub fn build(level: &Level, cels_only: bool, skeletons: &HashMap<u8, Skeleton>, 
                         // satchel-stick2: NO `stuck` gate — `Bullet_DoTrails`' 0x3b tail spawns the
                         // two digit objects EVERY tick in every state < 2 [M 0x12d890:418-553; the
                         // sim writes `digits` in flight too — grenade.rs's tail runs before the
-                        // stuck early-out], so the numbers ride the satchel from the throw. The old
-                        // `g.stuck` filter hid the numbers: a
-                        // satchel that hadn't stuck yet drew nothing. In flight `phase.normal` is
-                        // the spawn's [0, 1, 0] placeholder (the stick overwrites it with the
+                        // stuck early-out], so the numbers ride the satchel from the throw. In flight the thrown one's
+                        // `phase.normal` is the spawn's [0, 1, 0] placeholder (the stick overwrites it with the
                         // surface normal), so the flight digits stand upright on the satchel [S —
                         // the game aligns them to the bullet's own matrix].
-                        let satchels: Vec<&nf_game::grenade::Grenade> = s.drones.grenades.iter()
+                        // camera-beam-satchel-draw: the source covers BOTH satchel carriers — the
+                        // thrown grenades AND the drone-fired 0x3b bullets (the 4a lift shooters
+                        // [D cameras-turrets.md §3 #286/#287 weapon 0x3d → family 0x3b]) whose
+                        // `Bullet::digits` the sim's DoTrails tail writes every tick [M 0x12d890:418-553].
+                        let mut satchels: Vec<([f32; 3], [f32; 3], Option<(u8, u8)>)> = s.drones.grenades.iter()
                             .filter(|g| g.weapon_type == 0x3b && g.state < 2 && g.phase.is_some())
+                            .map(|g| {
+                                let p = g.phase.as_ref().unwrap();
+                                (g.pos, [-p.normal[0], -p.normal[1], -p.normal[2]], p.digits)
+                            })
                             .collect();
-                        let Some(g) = satchels.get(slot) else { return far };
-                        let p = g.phase.as_ref().unwrap();
-                        let Some((tens, units)) = p.digits else { return far };
+                        for b in s.drones.bullets.iter()
+                            .filter(|b| b.state < 2 && b.digits.is_some() && b.family(&s.weapons) == 0x3b)
+                        {
+                            // A landed charge aligns to its stick normal; a flying one keeps the
+                            // upright placeholder the thrown arm uses [S as above].
+                            let dir = match (b.landed, b.stick_normal) {
+                                (true, Some(n)) => [-n[0], -n[1], -n[2]],
+                                _ => [0.0, 1.0, 0.0],
+                            };
+                            satchels.push((b.pos, dir, b.digits));
+                        }
+                        let Some((pos, align, digits)) = satchels.get(slot) else { return far };
+                        let Some((tens, units)) = digits else { return far };
                         let digit = if kind == 4 { tens } else { units };
-                        if mesh != 0x0200_0791 + digit as u32 { return far; }
-                        let mut m = nf_game::searchlight::align2dir([-p.normal[0], -p.normal[1], -p.normal[2]], [0.0, 1.0, 0.0], [1.0, 0.0, 0.0]);
+                        if mesh != 0x0200_0791 + *digit as u32 { return far; }
+                        let mut m = nf_game::searchlight::align2dir(*align, [0.0, 1.0, 0.0], [1.0, 0.0, 0.0]);
                         let (x, y, z) = (m[0], m[1], m[2]);
                         let (lx, ly, lz) = if kind == 4 { (-0.03f32, 0.032f32, 0.06f32) } else { (0.03, 0.032, 0.06) };
                         m[3] = [
-                            g.pos[0] + x[0] * lx + y[0] * ly + z[0] * lz,
-                            g.pos[1] + x[1] * lx + y[1] * ly + z[1] * lz,
-                            g.pos[2] + x[2] * lx + y[2] * ly + z[2] * lz,
+                            pos[0] + x[0] * lx + y[0] * ly + z[0] * lz,
+                            pos[1] + x[1] * lx + y[1] * ly + z[1] * lz,
+                            pos[2] + x[2] * lx + y[2] * ly + z[2] * lz,
                             1.0,
                         ];
                         m
@@ -9579,11 +9620,26 @@ pub fn build(level: &Level, cels_only: bool, skeletons: &HashMap<u8, Skeleton>, 
                     p => (gi.art_slot() == Some(p - 1)).then(|| gi.barrel_matrix()),
                 };
             }
-            // Past the emplacements: the security cameras, two slots each — the body at the sweep
-            // pose, the mount upright along the pose's direction [M Sensor_SetBeam 0x1af398:50-54].
+            // Past the emplacements: the security cameras, three slots each — the body at the sweep
+            // pose, the mount upright along the pose's direction [M Sensor_SetBeam 0x1af398:50-54],
+            // and the sight beam at the same pose with the lens obj+0xE8 stretch on the mesh's
+            // length axis [M 0x1af398:58,72,78 + 0x1af010:102; the Camera_Beam mesh's +z unit
+            // length, D probe]. State 3 collapses it (the lens display mask cleared [M 0x1af618:248-250]).
             let c = g - GUNIMP_SLOTS * self.gunimp_placements;
-            let sn = s.drones.sensors.list.get(c / 2)?;
-            return Some(if c % 2 == 0 { sn.matrix } else { sn.mount_matrix() });
+            let sn = s.drones.sensors.list.get(c / 3)?;
+            return match c % 3 {
+                0 => Some(sn.matrix),
+                1 => Some(sn.mount_matrix()),
+                _ => {
+                    if sn.lens == 0 || sn.state == 3 { return None; }
+                    // `Mat_Copy(lens+0x90, obj+0x90)` [M 0x1af398:58]: the lens rides the camera's
+                    // own pose matrix; the stretch scales the mesh's local z (the game's OnlyScaleZ
+                    // [M 0x1af010:102], the same row-2 scale the port's other beams use).
+                    let mut m = sn.matrix;
+                    for k in 0..3 { m[2][k] *= sn.beam_len; }
+                    Some(m)
+                }
+            };
         };
         (l.lod_next == (j % 2 == 1)).then(|| self.lock_matrices.get(j / 2).copied()).flatten()
     }
