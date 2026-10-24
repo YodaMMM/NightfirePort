@@ -6,6 +6,8 @@ Live [L fresh boot, PCSX2, god mode, logs in hand]: the ride descends at 0.0303 
 
 The branch `s/level-4a-lift-3` is NOT on master. Its nis.rs change (skip the script-base compose for hash-0 markers) broke exit_aim_01_live, interact_07000001_live (the armour pickup, the entry door), walk_0700004a_live (the descent plates) and fix_level_chain_live (the 4a cutscene movie code) — do not carry it over without fixing those. Its probes and its [S] kill zone at -95.80 are also off master. Its findings (the 575-tick landing-scene disable, the stop height) are in the facts above.
 
+Seen live [L fresh boot screenshots]: after the re-attach, by frame ~3582 (Bond at (1.799, -73.418, -3.453)) a satchel lies on the lift roof showing a green numeric countdown, with bullet sparks around it; the mission fails at ~-95.86 when nothing is defused. The objective shown on the descent is "Escape through the elevator shaft".
+
 1. Find the satchels in the data and decompile: who drops them (drone weapon/drop on the ride's spawners, or script entities), the object class and its update (the timer, what it writes on expiry — ch 0x62 or the mission-fail path [M Mission_Update 0x182c60]), and the laser defuse (likely the same burn as `Lock_Update` 0x1ae3d8's 0x4E arm the port already runs for hinges and bolts — cite it). Port them; remove the [S] kill zone.
 2. Tests, real input only: ride the lift, burn each satchel with the laser watch as it lands, and finish the ride alive into the lobby (whatever the real exit is once the satchels are defused); sister: an undefused satchel fails the mission when its timer ends.
 3. The probe tests (walkreal_probe_l3*) are assertion-free dumps; keep them ignored.
