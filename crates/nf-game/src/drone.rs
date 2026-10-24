@@ -7910,15 +7910,21 @@ impl Drone {
                 self.timer_c = Some(frame + 60);
                 true
             }
-            // [M 0x1650a0:30-49] case 3: `+0x170 != 0` returns to Attack 0x56 — the port's
-            // `has_opponent` (the drone opponent or the +0x238 grace for team 2). Which writer
-            // re-points +0x170 for a team-1 guard is not yet ported [S].
+            // [M 0x1650a0:27-31] case 3 (UPDATE): SP and `+0x170 != 0` → Attack 0x56. The
+            // re-point writer is `NDrone2_FindOpponent` 0x1424e0:100-121 (per tick from
+            // ControlSTANDARD 0x1490f0:167): for a team-1 guard it re-points +0x170 at Bond
+            // every tick and zeroes it only when the player is dead — so a guard whose Bond
+            // came back (or never died) leaves on the first update, seen or not; the old
+            // `(team != 2 && seen)` rule parked an unseening guard in 0x60 (the seen
+            // stand-in for the pointer). Case 0xc [M :37-47]: pointer → 0x56, else re-arm
+            // +0xcc4 = frame + 60, +0xcc8 = 0, +0xcc0 = 1. Both read the POINTER alone —
+            // never the +0x238 grace.
             (NO_OPPONENT, msg::UPDATE) => {
-                if self.has_opponent(frame) { self.set_state(ATTACK); }
+                if self.opp_pointer() { self.set_state(ATTACK); }
                 true
             }
             (NO_OPPONENT, msg::TIMER_C) => {
-                if self.has_opponent(frame) { self.set_state(ATTACK); } else { self.timer_c = Some(frame + 60); }
+                if self.opp_pointer() { self.set_state(ATTACK); } else { self.timer_c = Some(frame + 60); }
                 true
             }
             // `NDrone2_DSTATE_HostageDead` 0x172628 (state 0x0f) [M]. ENTER: `AlertStatusSet(3)` (level 1.0),
@@ -9831,13 +9837,25 @@ impl Drone {
         0
     }
 
-    /// `NDrone2_HasOpponent` 0x14ad58 on the port's model: a team-2 drone holds its drone
-    /// opponent or the `+0x238` 30-tick had-opponent grace [M 0x148338:20-31, 0x14ad58:7-15];
-    /// team 1/3 keep the player opponent — the pointer set only while Bond is alive
-    /// (FindOpponent's dead-player gates [M 0x1424e0:104-121]).
+    /// `NDrone2_HasOpponent` 0x14ad58 [M :8-15] on the port's model: `+0x170 != 0` or the
+    /// `+0x238` had-opponent grace (`frame <= stamp + 0x1e`, 30 frames). The +0x170 pointer is
+    /// team-folded: team 2 holds its drone opponent; team 1/3 hold Bond — FindOpponent
+    /// 0x1424e0:100-121 re-points it at Bond every tick (ControlSTANDARD 0x1490f0:167) and
+    /// zeroes it only when `PlrStat_OkToUpdate` fails or Bond is dead (class 3, health <= 0,
+    /// or class 0x12). The +0x238 stamp is written by `DroneVision_HaveOpponentSight`
+    /// 0x175ef0:66-67 on every sighted tick behind the reaction gate (:20-25), any team.
     fn has_opponent(&self, frame: u32) -> bool {
-        if self.team != 2 { return self.bond_alive; }
+        if self.team != 2 {
+            return self.bond_alive || (self.opp_have_frame != 0 && frame <= self.opp_have_frame + 30);
+        }
         self.opp_drone.is_some() || (self.opp_have_frame != 0 && frame <= self.opp_have_frame + 30)
+    }
+
+    /// The `+0x170` opponent POINTER alone — no `+0x238` grace: the `NoOpponent` 0x60 exit
+    /// reads exactly this (`case 3` [M 0x1650a0:27-31], `case 0xc` [M :37-43] — both test
+    /// `+0x170 != 0` and never the stamp). Same team fold as `has_opponent`.
+    fn opp_pointer(&self) -> bool {
+        if self.team != 2 { self.bond_alive } else { self.opp_drone.is_some() }
     }
 
     /// `DroneFunc_CombatState` (0x148338): the combat decision for 0x58 / 0x5A / 0x5C / 0x5E / 0x68 / 0x70. Every
@@ -9845,29 +9863,17 @@ impl Drone {
     /// from the firing states). Cover (0x8C) ported (WORKLOG 0023); grenades (0x2D) ported (WORKLOG 0080).
     fn combat_state(&mut self, d: &Data, rng: &mut Rng, frame: u32, from: u8) -> u8 {
         use state::*;
-        // [M 0x148338:20-31] the no-opponent gate FIRST: `+0x170 == 0` with the `+0x238` grace
-        // (30 ticks since the last seen stamp) expired → NoOpponent 0x60. Team 1 keeps its
-        // implicit player opponent (Bond alive) — the gate never fires for them.
-        if !self.has_opponent(frame) { return NO_OPPONENT; }
-        // The router's head [M 0x148338:19-31]: the opponent pointer gone (+0x170 == 0 —
-        // FindOpponent 0x1424e0:149-157 clears it the tick CanSeeObject fails) with no fresh
-        // +0x238 hold (0, or 30 frames stale — HasOpponent 0x14ad58) returns NoOpponent 0x60:
-        // combat cannot outlast the hold. The switch's own cases (0x58/0x68/0x70 minus 0x58 =
+        // The router's head [M 0x148338:19-31]: `+0x170 == 0` with no fresh `+0x238` hold
+        // (0, or 30 frames stale — `NDrone2_HasOpponent` 0x14ad58:8-15) returns NoOpponent
+        // 0x60: combat cannot outlast the hold. The +0x170 writer for team 1/3 is
+        // FindOpponent 0x1424e0:100-121 (Bond alive; zeroed only by the player-death gates),
+        // so the gate fires for them only while the PLAYER is dead — sight is not read here
+        // (the sight-based `unseen_ticks > 15` stand-in this gate once carried is gone: it
+        // parked unseening guards in 0x60 across searchlight/abseil/door-chase/bathhouse on
+        // 06/09/16, and the game's own 0x5c no-sight walk keeps the guard in combat via the
+        // router's moving arms). The switch's own cases (0x58/0x68/0x70 minus 0x58 =
         // 0x00/0x10/0x18 [M 0x148338:39-44]) route COMBAT and both fire states through here.
-        // The port's `seen`/`unseen_ticks` are the same sight machinery (unseen_ticks = the
-        // game's +0x274 ticks-since-LOS [M 0x176a28:216-223]); the >15 gate is the port's
-        // established stand-in for the hold window (the same gate that enters 0x5c) // [S] the
-        // window length: the game's hold is the +0x238 30-frame stamp, the port reuses 15.
-        // Without this exit the port's 0x5c (whose UPDATE is ONLY SeenAndAttacking + the
-        // router [M 0x164838:26-35]) parks a sight-lost guard forever — the 07000001 hall
-        // guard's 56k-tick COMBAT_NO_SIGHT freeze that stalled both escort walks.
-        // Off [S]: with the 15-tick stand-in for the +0x238 hold, this exit stalled searchlight,
-        // abseil, door-chase and bathhouse guards on 06/09/16. It returns with the game's own hold.
-        if false && matches!(from, COMBAT | COMBAT_OUT_OF_RANGE | COMBAT_NO_SIGHT | AIM_STAND_FIRE | AIM_CROUCH_FIRE)
-            && !self.seen && self.unseen_ticks > 15
-        {
-            return NO_OPPONENT;
-        }
+        if !self.has_opponent(frame) { return NO_OPPONENT; }
         if self.in_transition() { return 0; }
         let follow = !matches!(from, AIM_STAND_FIRE | AIM_CROUCH_FIRE);
         let mv = self.move_to_object(d, self.engage_range.min(6.0), follow);
@@ -15202,6 +15208,13 @@ fn segment_hits_sphere(a: V3, b: V3, c: V3, r: f32) -> bool {
                             dr.index, dr.seen_ticks, dr.reaction_time(d.level), dr.dist, dr.state);
                     }
                     dr.seen = true; dr.ever_seen = true;
+                    // +0x238 = the current frame [M DroneVision_HaveOpponentSight 0x175ef0:66-67 —
+                    // reached from ProcessDroneSight 0x176a28:216-231 on every opponent-visible
+                    // tick behind the reaction gate (:20-25), ANY team]: the had-opponent stamp
+                    // `NDrone2_HasOpponent` 0x14ad58:11-14 reads (30-frame combat hold) and
+                    // SeenAndAttacking 0x145150:17,31-32 (the music window). Team 2 re-stamps it
+                    // in the opponent fold below.
+                    dr.opp_have_frame = frame;
                     // `NDrone2_SetOpponent` 0x1422d0 → `DroneFunc_AllocateTargetID` 0x141f28: a team-1
                     // guard claims its shared registry slot on acquiring the opponent, and the sight
                     // stamp (`DroneFunc_TargetSeen` 0x14a008 — the game stamps it from the talk sites
