@@ -312,6 +312,31 @@ pub fn reattach_view_model(out: &mut [nf_formats::anim::Mat4], prev: &[nf_format
     }
 }
 
+/// The far "hidden" translation every collapsed slot carries (`[0, -10000, 0]`).
+fn collapsed(m: &nf_formats::anim::Mat4) -> bool { m[3][1] <= -9999.0 }
+
+/// The gadget beams stretch from the
+/// first-person watch to the hit point. They were blended in WORLD space while the watch is
+/// re-attached to the interpolated camera, so mid-turn the beam's start left the watch. Blend them
+/// in CAMERA space like the view model (component-wise: the beam's z axis is scaled by its length,
+/// so it is not a rotation) and re-attach to the draw camera. A beam appearing or vanishing (the
+/// collapsed slot) keeps the plain blend's snap.
+pub fn reattach_beams(out: &mut [nf_formats::anim::Mat4], prev: &[nf_formats::anim::Mat4], cur: &[nf_formats::anim::Mat4], alpha: f32,
+                      cam_prev: &Camera, cam_cur: &Camera, draw_cam: &Camera, entries: &[usize]) {
+    let (vp, vc, vd) = (cam_world_to_view(cam_prev), cam_world_to_view(cam_cur), cam_view_to_world(draw_cam));
+    for &k in entries {
+        let (Some(mp), Some(mc)) = (prev.get(k), cur.get(k)) else { continue };
+        if collapsed(mp) || collapsed(mc) { continue; }
+        let Some(op) = out.get_mut(k) else { continue };
+        let rel_p = nf_formats::anim::mul(mp, &vp);
+        let rel_c = nf_formats::anim::mul(mc, &vc);
+        let mut r = rel_c;
+        for i in 0..4 { for j in 0..4 { r[i][j] = rel_p[i][j] + (rel_c[i][j] - rel_p[i][j]) * alpha; } }
+        *op = nf_formats::anim::mul(&r, &vd);
+    }
+}
+
+
 impl Camera {
     /// The screen-right axis from the yaw alone — `dir() × Y` normalised for |pitch| < 90°, and still defined at
     /// ±90° (the game's clamp limit), where the cross product degenerates and the view flipped upside down.
@@ -2501,6 +2526,9 @@ struct App {
     /// perf-240: the presented-frame palette (seeded per tick) and the entries that move between the two ticks.
     pal_blend: Vec<nf_formats::anim::Mat4>,
     pal_moving: Vec<u32>,
+    /// The gadget-beam palette entries (`Scene::beam_entries`), refreshed when the palette is
+    /// rebuilt.
+    beam_entries: Vec<usize>,
     /// `--fps N`: a frame-rate cap (vsync off); None = vsync.
     fps_cap: Option<f32>,
     /// The always-on frame counter (top right): frames actually presented, counted over half-second
@@ -5300,6 +5328,7 @@ impl App {
                     self.pal_blend.clear();
                     self.pal_blend.extend_from_slice(&new.0);
                     self.pal_cur = Some(new);
+                    self.beam_entries = self.scene.beam_entries(&g.renderer.skin_layout);
                     self.cam_prev = self.cam_cur;
                     self.cam_cur = Some(self.cam);
                 }
@@ -5326,6 +5355,7 @@ impl App {
                                 if let (Some(entries), Some(cp), Some(cc)) =
                                     (vm_entries.as_ref(), self.cam_prev, self.cam_cur) {
                                     reattach_view_model(blended, pp, pal, alpha, &cp, &cc, &draw_cam, entries);
+                                    reattach_beams(blended, pp, pal, alpha, &cp, &cc, &draw_cam, &self.beam_entries);
                                 }
                             }
                             g.renderer.upload_skin(&g.queue, blended, cols);
@@ -5830,6 +5860,7 @@ impl App {
             pal_cur: None,
             pal_blend: Vec::new(),
             pal_moving: Vec::new(),
+            beam_entries: Vec::new(),
             fps_cap: None,
             fps_meter: FpsMeter::default(),
             frame_start: std::time::Instant::now(),
@@ -6395,6 +6426,11 @@ pub fn run() -> Result<()> {
                 // (the headless counterpart of the dev `--set-channel`).
                 if let Some((ct, cc)) = std::env::var("NF_CH_AT").ok().and_then(|v| v.split_once(':').and_then(|(a, b)| Some((a.parse::<u32>().ok()?, b.parse::<u32>().ok()?)))) {
                     if ct == t { let f = sim.drones.frame; sim.drones.channels.set(cc, 1, f); }
+                }
+                // Render aid (keypad LOD swap): `NF_UNLOCK_AT=t:out` unlocks the locks with that out
+                // channel on tick t (the state `Lock_Unlock` 0x1b0650 leaves), to render the swapped model.
+                if let Some((ut, uo)) = std::env::var("NF_UNLOCK_AT").ok().and_then(|v| v.split_once(':').and_then(|(a, b)| Some((a.parse::<u32>().ok()?, b.parse::<u16>().ok()?)))) {
+                    if ut == t { for l in sim.drones.locks.iter_mut().filter(|l| l.out == uo) { l.unlocked = true; } }
                 }
                 // Render aid (health-pane-fade): `NF_PANE_FADE=1` turns the pane-fade option on
                 // (`decay_gate`, PlayerSetting+0xB) from tick 1, so BL+0x8BC decays and the pane fades.
@@ -7621,4 +7657,33 @@ mod bonus_pause_stats {
         assert_eq!(s.surrendered, 5, "+0x14 → Surrendered");
         assert_eq!(s.bonus_pickups, 6, "+0x24 → the 007 Bonus row");
     }
+}
+
+#[cfg(test)]
+mod beam_reattach {
+    //! Render interpolation: the gadget beam re-attaches to the interpolated
+    //! camera. Port presentation only.
+    use super::*;
+
+    fn cam(yaw: f32) -> Camera { Camera { pos: Vec3::new(1.0, 2.0, 3.0), yaw, pitch: 0.1, fov: 1.0 } }
+
+    #[test]
+    fn the_beam_stays_fixed_in_the_view_through_a_turn() {
+        // A beam fixed relative to the view (watch to crosshair), its z stretched by 7 units.
+        let mut rel = [[1.0, 0.0, 0.0, 0.0], [0.0, 1.0, 0.0, 0.0], [0.0, 0.0, 7.0, 0.0], [0.2, -0.3, 0.5, 1.0]];
+        rel[2][1] = 0.4;
+        let (cp, cc) = (cam(0.0), cam(0.5));
+        let wp = nf_formats::anim::mul(&rel, &cam_view_to_world(&cp));
+        let wc = nf_formats::anim::mul(&rel, &cam_view_to_world(&cc));
+        let draw = lerp_cam(&cp, &cc, 0.5);
+        let mut out = vec![lerp_entry(&wp, &wc, 0.5)];
+        reattach_beams(&mut out, &[wp], &[wc], 0.5, &cp, &cc, &draw, &[0]);
+        let back = nf_formats::anim::mul(&out[0], &cam_world_to_view(&draw));
+        for i in 0..4 { for j in 0..4 { assert!((back[i][j] - rel[i][j]).abs() < 1e-4, "[{i}][{j}] {} vs {}", back[i][j], rel[i][j]); } }
+        // Sister: the plain world blend alone leaves the beam's start off the watch mid-turn.
+        let plain = nf_formats::anim::mul(&lerp_entry(&wp, &wc, 0.5), &cam_world_to_view(&draw));
+        let off = (0..3).map(|k| (plain[3][k] - rel[3][k]).powi(2)).sum::<f32>().sqrt();
+        assert!(off > 1e-3, "the world blend drifts ({off}) — the case this fixes");
+    }
+
 }

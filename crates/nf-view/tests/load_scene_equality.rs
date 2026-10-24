@@ -34,7 +34,10 @@ const BASELINE: &[(&str, &str)] = &[
     ("0700000c.bin", "8649f22da9950e97 4871902 10241460 8182 4681078 96 11011 170 22 40 15"),
     // script-entity-copies: one draw slot per ScriptPlayer running a script — 14's nine
     // SPs on the vent-lid script 0x06000A3B (+ its other shared scripts) add 20 attachments, +1600 vertices.
-    ("07000014.bin", "ab9bc43a93113896 7103958 14757756 6458 6950833 93 13411 173 41 37 32"),
+    // The keypads' LOD pair in the posed slots (Lock_Unlock 0x1b0650 / case 1 `Control_NextLOD`: three
+    // KeypadLocked + KeypadUnlocked) and the decryptor screen's PdaDigits on datums 0..3 (10 digits x 4
+    // datums x the 0x56/0x57 view models = +80 attachments) [M Player_WeaponFiring 0x1a5460:155-194].
+    ("07000014.bin", "62083f4393927514 7106502 14762802 6453 6953569 93 13491 173 41 37 32"),
     ("07000001.bin", "c3615aff5574ccb2 4396283 9211737 3489 4322981 76 9839 101 11 20 6"),
 ];
 
