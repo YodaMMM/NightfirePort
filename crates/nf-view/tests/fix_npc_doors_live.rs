@@ -83,12 +83,16 @@ fn doors_dump(w: &Walker, ci: usize) -> String {
 }
 
 #[test]
-// Ignored: after the stairwell fight was re-positioned, the
-// walker's ammo-resupply detour presses E on door #2 every tick while the escort works the same door in
-// DSTATE_OpenDoor — the double-activation deadlock is the game's own behaviour
-// (Door_Activate 0x135be0 reverses an opening door; the busy marker skips its motion tick). The port is faithful;
-// the harness must stop pressing while the escort holds the door, as fix_mission_live now does.
-#[ignore = "walker resupply deadlocks door #2 with the escort's DSTATE_OpenDoor (harness, not the port)"]
+// The old harness deadlock (the resupply detour mashing E on door #2 while the escort worked it
+// in DSTATE_OpenDoor) does not reproduce on the merged tree (master 26543436): the plate-crossing
+// resupply that did the mashing is gone — the reserve top-up routes around the live AND plate
+// (break-debris-shatter-2) and the resupply corridor rule keeps the legs on already-walked ground
+// (guard-first-shot-walkreal-2). Measured green twice (20.95 s / 20.82 s, deterministic sim):
+// door #2 OPEN at +30962 with bond→contact 10.6 (the escort's doing), the escort past x −15 at
+// +36031, door #1 opened with Bond 4.0 away. The three assertions below are the can-fail checks:
+// the route cross (1), the escort-not-Bond opener (2), and the no-closed-door settle (3); the
+// 120k-tick follow cap catches a re-deadlock (the game's own double-activation behaviour,
+// Door_Activate 0x135be0 reverses an opening door) as a failure, not a hang.
 fn the_escort_opens_the_interior_doors_on_his_route() {
     let iso = iso();
     let mut w = Walker::new(nf_view::load(&iso, "07000001.bin", false).expect("load 07000001"));
