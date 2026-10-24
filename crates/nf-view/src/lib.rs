@@ -2003,12 +2003,23 @@ pub fn overlay_for(scene: &scene::Scene, aspect: f32) -> gpu::HudFrame {
 /// game rendered every cut-scene at the console's 4:3 frame — the port's widescreen projection
 /// showed more at the sides than the game's frame (PCSX2 compare, frame 400:
 /// Dominique waiting in the left doorway visible in the port, outside the game's frame).
-/// Gameplay keeps the window's full widescreen. Returns (projection aspect, the band [x, y, w, h]
-/// in target pixels).
-pub fn cutscene_frame(win_w: f32, win_h: f32) -> (f32, [f32; 4]) {
-    const GAME: f32 = 4.0 / 3.0;
-    let (bw, bh) = if win_w / win_h > GAME { (win_h * GAME, win_h) } else { (win_w, win_w / GAME) };
-    (GAME, [(win_w - bw) * 0.5, (win_h - bh) * 0.5, bw, bh])
+/// Gameplay keeps the window's full widescreen.
+///
+/// cutscene-side-strips: the game's cut-scene view builds at the VIEWER's own aspect —
+/// `Script_UpdateCamera` 0x1db518:9 multiplies the view by `viewer+0x114` (through
+/// `Vision_Calculate_View_Fustrum` 0x1e7df8:79), and `Camera_CalcViewAngles` 0x1baf70:28-32
+/// writes 16/9 (0x3fe38e39) there with the AV options' widescreen flag (`DAT_002a37c4`) set,
+/// 4/3 (0x3faaaaab) otherwise. So `game_aspect` is that viewer+0x114 value (the port's
+/// `FrontEnd::view_aspect` / `Sim::view_aspect` mirror): with the widescreen option ON the
+/// cut-scene camera drives the WHOLE frame at 16/9 (same vertical FOV, widened horizontally —
+/// the port's own gameplay widescreen treatment); OFF keeps the 4:3 band the option-off game
+/// shows, pillar-boxed black on a wider window. Either way the frame is the script camera
+/// only — never the gameplay camera. Returns (projection aspect, the band [x, y, w, h] in
+/// target pixels).
+pub fn cutscene_frame(win_w: f32, win_h: f32, game_aspect: f32) -> (f32, [f32; 4]) {
+    let game = if game_aspect > 0.0 { game_aspect } else { 4.0 / 3.0 };
+    let (bw, bh) = if win_w / win_h > game { (win_h * game, win_h) } else { (win_w, win_w / game) };
+    (game, [(win_w - bw) * 0.5, (win_h - bh) * 0.5, bw, bh])
 }
 
 /// The HUD frame the headless `--shot` render draws (fix-cutscene-letterbox): the gameplay
@@ -2392,7 +2403,10 @@ fn shot(scene: &scene::Scene, cam: &Camera, out: &str, choice: Option<usize>, ti
     // fix-cutscene-letterbox: a live script camera frames the shot at the game's own 4:3 aspect
     // and pillar-boxes the render into the band; gameplay keeps the window's widescreen.
     let cut = scene.sim.as_ref().is_some_and(|s| s.script_camera().is_some());
-    let (proj_aspect, band) = if cut { cutscene_frame(w as f32, h as f32) } else { (w as f32 / h as f32, [0.0; 4]) };
+    // cutscene-side-strips: the shot frames at the viewer's own aspect (the sim's view_aspect;
+    // the window path feeds it from the front end's AV widescreen row) — see cutscene_frame.
+    let game_aspect = scene.sim.as_ref().map_or(4.0 / 3.0, |s| s.view_aspect);
+    let (proj_aspect, band) = if cut { cutscene_frame(w as f32, h as f32, game_aspect) } else { (w as f32 / h as f32, [0.0; 4]) };
     let (vp_shot, _) = cam.view_proj(proj_aspect);
     // The doors' `Door_IsClosed` snapshot for the walk's portal gate (fix-door-portal-links).
     let door_closed = scene.sim.as_ref().map(|s| s.drones.doors.closed_flags());
@@ -5352,7 +5366,13 @@ impl App {
                 // ride inside it). Gameplay keeps the window's widescreen. Same condition the HUD
                 // gate (`overlay_for`) drives the cut-scene HUD blank from.
                 let cutscene = self.scene.sim.as_ref().is_some_and(|s| s.script_camera().is_some());
-                let (proj_aspect, band) = if cutscene { cutscene_frame(g.config.width as f32, g.config.height as f32) } else { (aspect0, [0.0; 4]) };
+                // cutscene-side-strips: the front end owns the AV options' widescreen row
+                // (0x10000223 → viewer+0x114 [M 0x1baf70:28-32]); feed the same aspect the
+                // cut-scene view builds at (`Sim::view_aspect`, the gun tilt's input) and frame
+                // the cut-scene with it — see cutscene_frame. The game's default (row off) is 4/3.
+                let game_aspect = self.fe.as_ref().map_or(4.0 / 3.0, |fe| fe.view_aspect());
+                if let Some(sim) = self.scene.sim.as_mut() { sim.view_aspect = game_aspect; }
+                let (proj_aspect, band) = if cutscene { cutscene_frame(g.config.width as f32, g.config.height as f32, game_aspect) } else { (aspect0, [0.0; 4]) };
                 let (vp0, _) = draw_cam.view_proj(proj_aspect);
                 // One visibility walk per frame, shared by the palette's object cull and render's
                 // World cull (fix-portal): the eye's cel from `Camera_CheckLocation` 0x1bae90's
@@ -6413,6 +6433,13 @@ pub fn run() -> Result<()> {
                 let v: Vec<f32> = args.get(i + 1).context("--bond needs x,y,z")?.split(',').map(|t| t.parse()).collect::<Result<_, _>>()?;
                 sim.bond = nf_game::player::Bond::new([v[0], v[1], v[2]], v.get(3).copied().unwrap_or(sim.bond.yaw)); if let Some(&pt) = v.get(4) { sim.bond.pitch = pt; }
             }
+            // Render aid (cutscene-side-strips): `NF_WIDESCREEN=1` raises the headless sim's view
+            // aspect to the AV options' widescreen row's 16/9 — the value the game writes at
+            // viewer+0x114 [M Camera_CalcViewAngles 0x1baf70:28-32] and the cut-scene view builds
+            // at [M Script_UpdateCamera 0x1db518:9]. The window path feeds the same value from the
+            // front end's row (App redraw); the headless sim has no front end, so shots of the
+            // widened cut-scene frame set it here.
+            if std::env::var_os("NF_WIDESCREEN").is_some() { sim.view_aspect = 16.0 / 9.0; }
             // `--draw <id>`: equip that weapon (the `--give` path's equip) and switch to it before the ticks, so a
             // headless render can show a fire script frame by frame (`--draw 0x34 --pull 60 --frame 70`).
             let mut draw: Option<u8> = None;
