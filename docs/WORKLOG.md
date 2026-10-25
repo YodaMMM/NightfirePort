@@ -111,3 +111,20 @@ Progress:
   tree (that merge's own suite never completed); probe_pylon_render (GPU env red). CRASH ×7
   OOM (net_*/mp_*/walkreal_probe13). The two task binaries pass inside the suite run too.
   Full detail in docs/reports/level-0a-rain-indoors-3.md (Suite appendix).
+
+## level-0a-rain-indoors-4 (2026-10-25, sandbox expiring ~16:32 UTC)
+
+Branch `s/level-0a-rain-indoors-4` = origin/s/level-0a-rain-indoors-3 merged with origin/master
+(clean; master's tip c528468b includes the level-13 merge). Target: the one red left on the
+rain-3 tree — `bathhouse_shout_mixer_live::the_bathhouse_floor_guards_shout_reaches_the_mixer_too`
+(07000002) — no floor guard's shout voice (ids 111..115) keys within the 4x300-tick window after
+the plate cycles; the game-true rain consumes more of the shared generator
+[M Rand_* 0x1e36f0..0x1e3780], which moves the shout's voice pick/timing.
+
+Key context found before touching anything: the level-13 session's full suite (finished 13:36 UTC
+on master+level-13, total line 3296/23/193) shows BOTH rain-3 stream-shift reds PASS on that
+tree — "master's later merges moved the shared stream again and those pins hold here"
+(docs/reports/level-13-security-room.md, commit bfb48b04). This branch's merge brings exactly
+that master stream to the rain-3 base, so the first check is whether the pin holds here too;
+the task's step 1 (which draw decides the shout; is the window a game rule or a lucky stream
+value) runs regardless of the green/red outcome.
