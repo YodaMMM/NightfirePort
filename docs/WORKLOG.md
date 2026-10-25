@@ -32,3 +32,19 @@ Progress:
 - (09:40) Tests: NEW stairwell_bullets_07000011_live 2/2 (the round from the reported spot
   reaches and damages the rope guard through the real input path; sister: a wall round stops);
   fix_foliage_bullets_live 3/3 (corrected); nf-game lib 547/547.
+
+## level-11-stairwell-bullet-wall-2
+
+Branch `s/level-11-stairwell-bullet-wall-2` (from origin/s/level-11-stairwell-bullet-wall
+53dca022, merged with origin/master 34ac31a5 → 1ce7edf7). Window 10:20-12:20 UTC.
+
+Task: after the stairwell flight fix (the armed pick + the pass-flag walk [M 0x12e7b0/0x1ea398])
+merged with master, three tests go red, each green on master: gondola_windows_live (08 — does
+the round now pass the glass it should break?), walkreal_07000001_live and
+escort_follow_07000001_live (01 — which shot now reaches or misses whom?). Find the contact
+each new pass rule skips (or newly stops on), fix where the port departs from [M]; walks that
+depended on the old wrong blocking get played the player's way. All three + fix_foliage +
+the stairwell test green; the FULL suite on the merged tree; the total line in the report.
+
+Progress:
+- (10:24) Branch created and merged; WORKLOG started.
