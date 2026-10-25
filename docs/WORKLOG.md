@@ -35,3 +35,13 @@ level_end (26); nf-game+nf-formats+nf-audio 1091 passed / 4 failed (the slim-ISO
 disc_golden ×3 + identity_disc). The 806-binary suite: the build green (254 s), the run needs
 ~45-60 min foreground — this sandbox kills background jobs; the constraint + the covered bins are
 in the report. Report: docs/reports/level-04-mission-complete-early.md.
+
+## level-04-mission-hold-2 (2026-10-25, sandbox expiring ~01:51 UTC)
+Branch `s/level-04-mission-hold-2` = origin/s/level-04-mission-complete-early + origin/master merged.
+Task: keep the case-7 hold freeze (`GS_PausePlayer(1,0)` [M 0x182c60:123-130]) without breaking
+walk_07000013_live::the_front_entrance_completes_the_mission and
+civilian_no_shoot_live::the_trigger_fires_under_the_mark_and_the_civilian_takes_the_hit (both green
+on master, red on the merged tree). Audit what the game does during the case-7 hold (input only?
+weapon/fire? trigger?) [M], which mission internals run the case-7 arm, the 240-tick hold; fix the
+port's gate to the game's exact effect or make the tests act as a player can. Full suite on the
+final merged tree; report the total line.
