@@ -8275,6 +8275,11 @@ impl Drone {
                 // (0x15ce60, handler table 0x29b300+0xd·4 [L ee_snapshot]) and the current code
                 // carries no 0x0d stand-in; the note is historical.
                 if self.voice_type == 0x13 { self.set_state(crate::kiko::KIKO_MISSION); return true; }
+                // `+0x4F8 |= 0x10000` — the vision flag: the mission walker runs the sight pass
+                // (level-07-guest-talk: the 07 party mission-walkers never saw Bond without it,
+                // so NearArmedPerson's `+0x228 & 4` never acked and the scare/test was dead)
+                // [M 0x15d860:22 — the same pair CivilianPatrol's ENTER sets at 0x15d610:24].
+                self.vision_on = true;
                 self.call_anim(d, anim_state::WALK, 0, 0);
                 self.bond_talk_count = 0xff; self.bond_talk_cooldown = 0; // [M 0x15d860:23-24]
                 true
@@ -8533,7 +8538,29 @@ impl Drone {
             }
             (CIVILIAN, msg::UPDATE) => {
                 // 0x15d118:46 passes the stored +0xCF8 radius (10/20) — dead in NearArmedPerson [M 0x1787c8].
-                if self.near_armed_person(d) { self.sighted = true; self.set_state(CIVILIAN_SCARED); }
+                if self.near_armed_person(d) {
+                    self.sighted = true;
+                    // [M 0x15d118:50-66] the scare arm: `+0x4F8 |= 0x8000000`, then prop 0x33's
+                    // once-bit (+0x4FC |= 1, the 0x200000 latch) SHOUTS the armed intruder to
+                    // everyone — `NDrone2_DroneAlertToObject(20.0, 20.0, 0.7625, …, 0x11, Bond)`,
+                    // the alert source is BOND (level-07-guest-talk: the arm the port's CIVILIAN
+                    // UPDATE lacked — the PartyGirl scare 0x160140:63-70 had it, this state's own
+                    // arm was folded into the bare state change).
+                    self.own_sight = true;
+                    if self.prop(d, 0x33) && !self.scare_shouted {
+                        self.alert_bits |= 1; // `+0x4FC |= 1` [M 0x15d118:61]
+                        self.pending_shout = Some((msg::SHOUT, self.target.pos)); // the alert source is BOND [M 0x15d118:63-64]
+                        self.scare_shouted = true; // `+0x4F8 |= 0x200000` [M 0x15d118:65]
+                    }
+                    // [M 0x15d118:67-72] voice-0x10 civilians go armed: `+0x44 = 1` (team 1) and
+                    // ATTACK 0x56; every other voice → CivilianScared 0x12.
+                    if self.voice_type == 0x10 {
+                        self.team = 1;
+                        self.set_state(ATTACK);
+                        return true;
+                    }
+                    self.set_state(CIVILIAN_SCARED);
+                }
                 else { self.bond_talk(d, rng, frame); } // [M 0x15d118:47-49]
                 true
             }
@@ -14185,14 +14212,12 @@ fn segment_hits_sphere(a: V3, b: V3, c: V3, r: f32) -> bool {
         // `PCQWorm_Activate` 0x1b0840) — crate::useobj. The SP reach is the class-0 ENTITY path
         // [M 0x1a5170:121-122]: `w` supplies the glist spheres (elevator-buttons-09).
         // garage-lift-calls: the pick ORIGIN for the SP arm is Bond's HEAD — `Player_GetHeadPos`
-        // [M 0x1a5170:100], not the render camera. The game's sphere (radius 1.0 at head + 1×the
-        // viewer direction [M 0x1a5170:101-108]) reaches ~2.4 units from the eye; from the camera
-        // (which hangs ~2.5 behind Bond) it falls ~2.5 short — the 07000009 car-park lift-call
-        // stations (the mask-4 SCRIPT_liftSCRIPTPLAYER pair #21/#22's entities at the shaft
-        // mouths, z ≈ 26.3) sat just outside the camera-based sphere and the buttons never
-        // responded. The doors/trigger/monitor arms above keep the camera origin their reaches
-        // were tuned to (the game builds them from the same head ray [M 0x1a5170]; unifying them
-        // re-tunes every door reach and is its own task). `body` = the player object's obj+0xC0
+        // [M 0x1a5170:100] — as for every arm (use-pick-head: the game's ONE sphere at head + 1×the
+        // viewer direction [M 0x1a5170:101-108] serves doors/switches/SPs/triggers/monitors alike;
+        // scene.rs now passes the head for all of them). The garage session's "the camera hangs
+        // ~2.5 behind Bond" reading was wrong about the code — run()'s `camera` arg was ALREADY
+        // step_bond's `self.bond.head()` binding — but the head rule itself is the game's [M].
+        // `body` = the player object's obj+0xC0
         // (the body position) — `SP_Activate` 0x1dc338:51-53's facing-dot input (use-pick-sp-standins).
         self.useobjs.player_activate(&mut self.scripts, &mut self.channels, sp_head, look, frame, d, body);
         // `Player_Activate`'s class-0x38 monitor path (`Monitor_Activate` 0x1b0058): the use
