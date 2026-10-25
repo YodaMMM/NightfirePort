@@ -2150,6 +2150,34 @@ mod tests {
         assert_ne!(p2.state, 2, "a blast 0.2 from the origin must stay outside the 0.1 sphere");
     }
 
+    /// `SP_Hit` 0x1dc470's `+0x37` bullet-filter arm [M :64-70 — when the placement's filter
+    /// byte is set, a class-5 record raises bit 2 only while the bullet's
+    /// `weapon_data+0x00` u16 == `+0x37`]. No disc placement sets `+0x37` (the census,
+    /// dump_sp_hit_census) [D] — the arm is pinned from the decompile with a synthetic
+    /// player; the unfiltered arm (filter 0: any bullet raises the bit) is the urn test's.
+    #[test]
+    fn the_037_bullet_filter_arms_only_the_matching_weapon() {
+        let nis = Arc::new(Nis {
+            hashcode: 0x0600_0086, camera: false, loop_start: 0, length: 100,
+            streams: vec![NisStream { first_key: 0, last_key: 0, commands: Vec::new() }],
+            keys: Vec::new(),
+        });
+        let script = Script::load(nis, IDENT, 1.0);
+        let mut p = Player {
+            placement: 0, scripts: [0x0600_0086, 0], modes: [1, 0], stay: false, mask: 2, out: 0, gate: 0,
+            scale: 1.0, matrix: IDENT, cur: 0, state: 1, activated: false, countdown: 0, info: [Some(script), None],
+            deleted: false, live_matrix: IDENT, subs: Vec::new(), hit_points: 0.0, damage: 0.0, tick_damage: 0.0,
+            hidden: false, bullet_filter: 5, bullet_hits: vec![2], tick_bullet_hits: Vec::new(),
+        };
+        let mut ch = Channels::default();
+        let mut out = Vec::new();
+        p.update(&mut HashMap::new(), &mut Objects::default(), &mut ch, &TestWorld, 0, &mut out, false, SpStart::default());
+        assert_eq!(p.state, 1, "a weapon-2 bullet must not arm a +0x37 = 5 filter [M 0x1dc470:64-70]");
+        p.bullet_hits = vec![5];
+        p.update(&mut HashMap::new(), &mut Objects::default(), &mut ch, &TestWorld, 0, &mut out, false, SpStart::default());
+        assert_eq!(p.state, 2, "the matching weapon's bullet raises bit 2 — state 1 plays [M SP_Update case 1]");
+    }
+
     /// A HELD anim stream object's hit volume is the game's BuildWorldSph sphere of the anim's own
     /// model glist through the object matrix [M 0x133070:36-48 — obj+0xD8 carries the model, radius
     /// = glist+0x1C·|obj+0xE8|] — the port used to stand in (translation, radius 0). Sister: no
