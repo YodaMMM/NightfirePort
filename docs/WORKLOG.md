@@ -9,3 +9,8 @@
   report is missing, hence the requeue. This session: branch = master + the task branch (merge
   7c05c6e0, clean), pushed; verifying the two tests and the family on the merged tree, then the
   full suite for the total line, then the report + finish steps.
+- 2026-10-25T13:37Z sandbox7: DONE. The requeue's gap was the missing finish steps, not the code:
+  the prior session's fixes verified on the merged tree (interactables 6/6, walkreal 1/1), the
+  FULL suite completed on the final tree — total line `3296 passed, 23 failed, 193 ignored
+  (108 min)`, the 23 = 7 FAILED (4 slim-ISO + 3 GPU env) + 16 OOM CRASHes; the two rain-3
+  stream-shift reds pass here. Report + appendix pushed (bfb48b04); finish.sh OK; ntfy sent.
