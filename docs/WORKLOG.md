@@ -88,3 +88,17 @@ Progress:
   arm matches exactly (drone.rs 8892-8903). Inside the hall pd != 0.0 → the release fires; the
   contact walks his route west and the run reaches the plate → ch 0x10 → level_exit 07000002.
   walkreal_07000001_live 3/3 on the merged tree (master 4c1f5ffb in).
+- (16:35) Final-tree test runs (master 4c1f5ffb merged in before all of them): the priority set —
+  walkreal_07000001_live 3/3, escort_follow_07000001_live, gondola_windows_live,
+  zoe_gondola_realpath_live, stairwell_bullets_07000011_live, fix_foliage_bullets_live,
+  walk_07000001_live — 16 passed / 0 failed (suite.py --only). The lib binaries
+  (nf_game/nf_formats/nf_audio): 657 passed / 3 failed / 4 ignored on the first pass — all three
+  failures (nf_game profile round_trip + delete_in, nf_formats identity rejects_missing) were
+  the sandbox DISK FULL (save_to_dir(/tmp) ENOSPC; df 100%); after freeing 1.2 G all three pass
+  directly → the real lib result 660/0/4. The walker-sharing slice (87 binaries, --limit 60)
+  ran ~32 of them in the window left: one red —
+  interactables_0700000a_live::vending_glass_breaks_under_fire ("one dart scores ONE contact
+  0.1f, got {h1} dead {dead1}" at line 165) — NOT touched by this task's files (test-only
+  change); the prime suspect [S] is the -2 branch's glass-drain fix (kind-2 panes no longer
+  stop the round) giving the vending pane a second same-tick contact, the same class of
+  re-anchor the gondola pin needed; left open for the next session with the full suite.
