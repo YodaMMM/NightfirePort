@@ -12401,6 +12401,9 @@ impl Drones {
                 tick_damage: 0.0,
                 // +0x36: nothing hides a placed/fusebox/useobj SP at create [M 0x1db9a8].
                 hidden: false,
+                bullet_filter: 0,
+                bullet_hits: Vec::new(),
+                tick_bullet_hits: Vec::new(),
             });
         }
         // laser-scripts: `Switch_Create` 0x1adcc0:44-45 ends with `SP_Create(pos, rot, param 1,
@@ -12450,6 +12453,9 @@ impl Drones {
                 damage: 0.0,
                 tick_damage: 0.0,
                 hidden: false,
+                bullet_filter: 0,
+                bullet_hits: Vec::new(),
+                tick_bullet_hits: Vec::new(),
                 // The laser switch's player: no placement model of its own.
             });
             // The ext+0x0C link [M 0x1adcc0:46]: Switch_Update's unpause arm and Switch_Activate's
@@ -12546,6 +12552,9 @@ impl Drones {
                     damage: 0.0,
                     tick_damage: 0.0,
                     hidden: false,
+                    bullet_filter: 0,
+                    bullet_hits: Vec::new(),
+                    tick_bullet_hits: Vec::new(),
                 };
                 t.script_player_a = self.scripts.players.len();
                 self.scripts.players.push(mount(t.script_a));
@@ -13198,11 +13207,21 @@ fn segment_hits_sphere(a: V3, b: V3, c: V3, r: f32) -> bool {
         // tail [M SP_Update 0x1dc1c0-0x1dc330]) starts empty each frame. The site's per-tick
         // feeds start empty with them (the driver drains into `damage_site` after the tick).
         for p in &mut self.scripts.players { p.tick_damage = 0.0; }
+        // The chains rotate at the pass head [M `Collide_Update` 0x1ea398's first loop clears
+        // every hit list]: what the walk's `SP_Hit` reads (`bullet_hits`) becomes the LAST
+        // pass's gather — the game's Collide runs after the walk [M 0x1336f8:238], so a
+        // contact the pass records this tick reaches the SP's bit-2 arm on the NEXT tick.
+        for p in &mut self.scripts.players {
+            p.bullet_hits = std::mem::take(&mut p.tick_bullet_hits);
+        }
         self.site_bullet_damage = 0.0;
         self.site_blast_hits.clear();
         // The held hit-point scripts' stream objects — `SP_GetHitDamage` 0x1dc5f8's read set
         // (GAPS G-047: the 0700001b solar panels). Each bullet contact below adds its damage.
         let held_targets = self.scripts.held_hit_targets(d);
+        // `SP_Hit` 0x1dc470's bit-2 read set: the current stream objects of EVERY script
+        // player — no hit-point or hold gate (the urn is hp 0 and still reacts [M]).
+        let sp_bullet_targets = self.scripts.sp_bullet_targets(d);
         // copter-hitdata-damage: the copters' 9 part slots' world spheres, resolved once per
         // tick (the parts pose with the SP player — the documented one-tick script-entity lag;
         // the game's collide pass reads the same last-walk poses [M 0x1336f8:238]).
@@ -13482,6 +13501,19 @@ fn segment_hits_sphere(a: V3, b: V3, c: V3, r: f32) -> bool {
             for (pi, c, r) in &held_targets {
                 if Self::segment_hits_sphere(b.pos, end, *c, *r) {
                     self.scripts.add_hit_damage(*pi, b.damage);
+                }
+            }
+            // The SP_Hit bullet arm records the contact per player — the weapon id is the
+            // bullet's `weapon_data+0x00` u16 [M docs/fields/weapon_data.md: the id = the
+            // record index], the `+0x37` filter's comparison value [M 0x1dc470:64-70]. The
+            // gather goes into `tick_bullet_hits`; the NEXT pass's head rotates it into
+            // `bullet_hits` for the walk (Collide after the walk [M 0x1336f8:238]). Same
+            // player-bullets-only scope as the damage gather above [*deviation*].
+            let sp_weapon_id = d.weapons.records.get(b.weapon as usize)
+                .map_or(0u16, |r| u16::from_le_bytes([r[0x00], r[0x01]]));
+            for (pi, c, r) in &sp_bullet_targets {
+                if Self::segment_hits_sphere(b.pos, end, *c, *r) {
+                    self.scripts.add_bullet_hit(*pi, sp_weapon_id);
                 }
             }
             // mp-site-damage-offline: the site takes the bullet this tick — the game's collision

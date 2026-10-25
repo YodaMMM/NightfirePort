@@ -41,10 +41,23 @@ fn the_mid_lobby_touches_write_0x56_on_the_walk() {
         "walking the east lane fires touch #141 (out 0x56) [D placement params; volume (4.18,−368.89,26.45)..(6.90,−367.91,27.50)]");
 }
 
-/// The pickups take on the walk-over: the Spas12 (#429), the BodyArmourLight (#414) and a 007
-/// bonus (#420) — kind 0xF0, `Pickup_Create` 0x18dda0 placements.
+/// The pickups take on the walk-over: the Spas12 (#429) and the BodyArmourLight (#414) — kind
+/// 0xF0, `Pickup_Create` 0x18dda0 placements. The route is the game's real one (the walkreal
+/// route): the lobby's west "furniture maze" blocks every direct lane to the security room (the
+/// fake-lift doors' baked mesh x −14.6..−12.9 / z 31.3..32.9 inside the glass band
+/// x −18.4..−10.6 / z 27.5..35.3, plus the room's own east wall [D stuck dumps]), so the walked
+/// approach rounds the desk block's north side to the unlocked north-west door #355
+/// (−26.65, −368.36, 37.44 [D]), whose proximity arm opens it as Bond walks up ([D straddle
+/// param 4 = 1; probe: state 0x2 while the leg closes] — the E toggle is the game's second arm,
+/// [M Door_Activate]) and walks the room south to the shelves.
+///
+/// Sister note: the old "the east-lane 0x56 touch stayed off" sister is gone. The disc's two
+/// 0x56 TouchOnces (#140/#141) sit at the desk block's two lanes — volumes x −8.33..−5.61 and
+/// 4.18..6.90, both z 26.25..27.50 [D trigger dump] — and every walked route to the security
+/// room crosses one (the direct diagonal measured 0x56 ON; the west gap lane clipped #140's
+/// west edge; the east strip's mouth is solid). A player walking to the security room fires the
+/// mid-lobby touch; the assert was an artifact of the wedged walker this task un-wedged.
 #[test]
-#[ignore = "the walker cannot route the security-room approach: the walked lane to the door #355 at (−26.65,−368.36,37.44) wedges west of the desk block (the same z ≈ 25 wedge the walkreal route documents); the take mechanic itself is proven by the family's other levels (interact_07000001_live) — owner: the walker's west-wing route"]
 fn the_pickups_take_on_the_walk() {
     let mut w = Walker::new(nf_view::load(&iso(), "07000013.bin", false).unwrap());
     w.wait_enabled(3000, "the 13 intro");
@@ -54,44 +67,80 @@ fn the_pickups_take_on_the_walk() {
         let spas = sim.drones.inventory.owned[0x1c]
             || sim.gun.weapon == 0x1c;
         assert!(!spas, "sister: the Spas12 is not owned before the walk");
+        assert!(!sim.drones.channels.on(0x56), "sister: the mid-lobby 0x56 touch idles at the spawn [D]");
     }
-    // The security room's west shelf: the BodyArmourLight (−27.66, −368.51, 25.57) and the Spas12
-    // (−20.48, −368.86, 25.38) sit by the security room's west wall [D].
-    w.walk_to(Wp::new(-26.65, -368.4, 37.44).r(1.2), "13: the security-room door");
+    w.walk_to(Wp::new(5.0, -368.4, 26.5).r(1.5), "13: the lobby east lane");
+    w.walk_to(Wp::new(-6.0, -368.4, 40.0).r(1.5), "13: the lobby west mid");
+    w.walk_to(Wp::new(-14.0, -368.4, 40.0).r(1.5), "13: the lobby north-west");
+    w.walk_to(Wp::new(-22.0, -368.4, 39.5).r(1.5), "13: past the glass band");
+    w.walk_to(Wp::new(-24.5, -368.4, 38.8).r(1.2), "13: at the security-room door");
+    w.walk_to(Wp::at(-26.65, -368.36, 37.44, walker::Act::Use { use_ticks: 90 }).r(1.4), "13: E the security-room door");
+    w.wait(120); // the sliding door finishes [probe: state 0x8 → 0x4 within the wait]
+    w.walk_to(Wp::new(-27.0, -368.4, 37.0).r(1.0), "13: through the doorway");
+    w.walk_to(Wp::new(-27.0, -368.4, 35.0).r(1.2), "13: inside the security room");
+    w.walk_to(Wp::new(-25.5, -368.4, 32.5).r(1.2), "13: the room south-east");
+    w.walk_to(Wp::new(-22.0, -368.4, 29.0).r(1.2), "13: the room south");
+    // The security room's south shelf: the BodyArmourLight (−27.66, −368.51, 25.57) and the Spas12
+    // (−20.48, −368.86, 25.38) sit on the room's south strip [D].
     w.walk_to(Wp::new(-20.48, -368.4, 25.38).r(1.2), "13: the Spas12 shelf");
     {
         let sim = w.scene.sim.as_ref().unwrap();
         let owned = sim.drones.inventory.owned[0x1c] || sim.gun.weapon == 0x1c;
         assert!(owned, "the Spas12 pickup (#429) takes on the walk-over [M Pickup_Handler 0x18e650]");
-        assert!(!sim.drones.channels.on(0x56), "sister: the east-lane 0x56 touch stayed off [D]");
     }
     w.walk_to(Wp::new(-27.66, -368.4, 25.57).r(1.2), "13: the BodyArmour shelf");
     {
         let sim = w.scene.sim.as_ref().unwrap();
-        let armour = sim.drones.inventory.owned[0x32];
-        assert!(armour, "the BodyArmourLight pickup (#414) takes on the walk-over [M 0x18e650]");
+        // The armour take is the BLData armour float, not an inventory bit: `Pickup_Handler` case
+        // 3 refuses while +0x8B0 >= 50, else sets +0x8B0 = 50.0 [M 0x18e650:220-225] — the old
+        // `owned[0x32]` assert read a slot the take never writes (0x32 is the Frinesi's weapon
+        // id). The pickup itself is consumed on the take [M 0x18e650:338-348].
+        assert!(sim.drones.health.armour >= 50.0,
+            "the BodyArmourLight pickup (#414) takes on the walk-over — the armour float to 50 [M 0x18e650:220-225; got {:.1}]", sim.drones.health.armour);
+        let taken = sim.drones.pickups.iter()
+            .any(|p| walker::dxz([p.m[3][0], p.m[3][1], p.m[3][2]], [-27.66, -368.51, 25.57]) < 1.5 && p.gone);
+        assert!(taken, "the BodyArmourLight pickup is consumed by the take [M 0x18e650:338-348]");
     }
 }
 
-/// The pillar glass (kind 0x20, `Break_Create` 0x12c230; param 2 = 0x6 → the exclude filter !6)
-/// shatters under the starting P2K's fire (id 0x19: `0x19 & 15 = 9`, filter bit 9 clear →
-/// connects [M Break_Update 0x12bfd8's filter test + the port's exclude model]).
+/// The pillar glass (kind 0x20, `Break_Create` 0x12c230) shatters under the cold load's held
+/// weapon (id 0x10, the P2K — word 0x0008, contact damage 10.0 [L ee_start_05.bin weapon_data
+/// @0x2bf150 + 0x10·0x10C: +0x10 = 0x0008; the sim's own record read agrees]). The disc's
+/// pillarglass placements carry NO param 2 (#373–#376 "pillarglass(1)" params [0:0x2, 1:0x6]
+/// [D census] — param 1 0x6 is the HEALTH 6.0, not a filter: the old "param 2 = 0x6 → the
+/// exclude filter !6" note misread it) → tag+0x08 = 0 [M Break_Create 0x12c230's param-2==0
+/// arm], so the filter mask is 0 | 0x106 = 0x106 [M Break_Update 0x12bfd8:15] and the round's
+/// word ANDs it to zero → the contact reaches the damage walk [M Collide_FilterBullets
+/// 0x1ece30:24-33]. 10.0 against health 6.0: the pane dies on the first round [M 0x12bfd8:44-48
+/// + Break_Kill 0x12b970].
+///
+/// The stand: north of the pillar — the glass box itself (the four sheets x 6.46..8.02 at
+/// z 35.96/37.53, y −369.25..−354.12 [D parse]) is solid to the capsule, so the old stand
+/// (7.9, −368.4, 36.72) sat inside the enclosure and the leg never arrived (the 6000-tick
+/// wedge); the walked spot is just north of the north sheet.
+///
+/// The fire is PULSED: the P2K is a per-pull semi-auto — shots_per_pull 1 in every mode
+/// (weapon_data+0x28+2·mode [L ee_start_05.bin @0x2bf150 + 0x10·0x10C]; the port's record read
+/// [M GunParams]) latches on the press edge (`pressed && !held` [M the pull latch]), so a HELD
+/// trigger fired exactly once (clip 7→6, then no refire for 900 ticks — the old loop's own
+/// silence) and the real player taps fire.
 #[test]
-#[ignore = "the aim-fire loop connects (the panel spans y −369..−354 at (6.46,36.72) [D bounds]) but no break lands in 900 ticks — the bullet's flight vs the panel's thin bounds (±0.64) needs the port's shot-flight check off a vertical face; the filter maths is pinned by 07000012's glass test (param 2 = 0 exclude → any weapon [D]); owner: the bullet-flight check"]
 fn the_pillarglass_shatters_under_fire() {
     let mut w = Walker::new(nf_view::load(&iso(), "07000013.bin", false).unwrap());
     w.wait_enabled(3000, "the 13 intro");
     w.wait(120);
     let brk = {
         let sim = w.scene.sim.as_ref().unwrap();
-        // The east desk pair's first panel (#373 at (6.46,−361.69,36.72) [D]) — 6.6 above the floor.
+        // The east desk pair's first panel (#373 at (6.46,−361.69,36.72) [D]) — its north sheet
+        // (sim bounds lo (6.59,−369.25,37.53) hi (7.86,−354.12,37.53) [D parse]).
         (0, sim.drones.channels.on(0x56))
     };
     assert!(!brk.1, "sister baseline: the lobby touches idle");
-    // Stand under the panel's south face and fire up at its centre.
-    let glass_at = [6.46f32, -365.0, 36.72]; // a face point 3.5 above the floor (the sheet spans y −369..−354 [D bounds])
-    w.walk_to(Wp::new(7.9, -368.4, 36.72).r(0.8), "13: off the east pillarglass face");
+    // Stand north of the panel's north face and fire up at a face point of that sheet.
+    let glass_at = [7.24f32, -365.0, 37.53]; // the north sheet's face point, 3.9 above the floor
+    w.walk_to(Wp::new(6.72, -368.4, 38.6).r(0.9), "13: north of the east pillarglass");
     let start = w.total_ticks;
+    let mut loop_t = 0u32;
     loop {
         let sim = w.scene.sim.as_ref().unwrap();
         let dead = sim.drones.breaks.list.iter().any(|b| b.dead && (b.lo[0] - glass_at[0]).abs() < 1.0
@@ -111,7 +160,8 @@ fn the_pillarglass_shatters_under_fire() {
             look: (want_pitch - sim.bond.pitch).clamp(-0.05, 0.05),
             ..Default::default()
         };
-        w.tick_fire(input);
+        loop_t += 1;
+        if loop_t % 6 == 0 { w.tick_fire(input); } else { w.tick(input, false); }
     }
     let sim = w.scene.sim.as_ref().unwrap();
     assert!(sim.drones.breaks.list.iter().any(|b| b.dead), "the pillarglass died under fire [M Break_Kill 0x12b970]");
