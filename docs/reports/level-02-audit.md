@@ -69,3 +69,19 @@ Branch `s/level-02-audit` (off origin/master 24084ef2). Sandbox 21:04–23:03 UT
 
 not visible to me — this session's driver interface shows no token, context-window or cost
 figures.
+
+## ntfy failed
+
+All three fallbacks, in order, from the sandbox at ~22:55 UTC 2026-10-25:
+
+1. `curl -sS -m 20 -H "Title: NightfirePort" -d "level-02-audit: done …" https://ntfy.sh/nightfire-yoda-8k3x`
+   → `curl: (28) Connection timed out after 20002 milliseconds`
+2. `python3 urllib` (ASCII payload, timeout=20) →
+   `urllib.error.URLError: <urlopen error [Errno 101] Network is unreachable>`
+3. `wget -q -O- --post-data "level-02-audit: done …" https://ntfy.sh/nightfire-yoda-8k3x`
+   → no output, killed at the 60 s tool timeout (connection never established).
+
+The queue finish step itself succeeded (`finish.sh` printed `OK done 20-level-02-audit`; the
+`cat: docs/reports/level-02-audit.md: No such file or directory` line above it is the script
+resolving the report path from the worktree root — the file is on the branch at
+`docs/reports/level-02-audit.md`, commit 87793363).
