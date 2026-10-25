@@ -1963,8 +1963,17 @@ impl Drone {
             special_death: param(13), special_spot: pos, special_yaw: yaw,
             stationary: param(13) != 0 && param(13) != 0x0600_021f, alpha: 255.0, raise: None,
             boundary: 0,
-            // `NDrone2_DefaultInit` 0x14b300:60 arms +0x4F8 bit 1 with the init flags.
-            push_move: true,
+            // `NDrone2_DefaultInit` 0x14b300:60 `+0x4F8 = (x & 0xffea05e2) | 0x801e2`: the clear
+            // mask 0xffea05e2 clears bit 0 (~mask 0x15fa1d carries it) and 0x801e2 arms bits
+            // 1,5,6,7,8,15,23 — NOT bit 0. Both push-move gates read bit 0 (`DroneMove_SetBoundryFlags`
+            // 0x14f140:47 `(x ^ 1) & 1 == 0`, `Drone_Control` 0x139268:80 `uVar2 & 1`), and the
+            // full-decompile scan found no `| 1` writer into +0x4f8 (the ORs are 0x10/8/0x1a0/
+            // 0x8000/0x100000/0x200000/0x80000000). The game's undrawn raw slide is therefore
+            // UNCLAMPED for default-init drones; closed-door stops come from the door-node
+            // parking (`ReachedDestNode` 0x153358 → `DSTATE_OpenDoor` 0x81) while +0xBA8 is held.
+            // (level-07-rook-doorway-2: the earlier fold doc armed "bit 1" and the port set
+            // push_move true off it — bit 1 is not the gate the clamp reads; doc struck.)
+            push_move: false,
             head_yaw: 0.0, head_pitch: 0.0, tracking: false, track_recheck: 0, aim_pitch: 0.0,
             captain: false, snap: 0.0, event_20: false, event_21: false, holstered: false, anim_sounds: Vec::new(), voice_type: voice_type(skin), female: matches!(skin & 0xffff, 0x0e | 0x0f | 0x10 | 0x11 | 0x52 | 0x15 | 0x20 | 0x22..=0x24 | 0x17 | 0x18 | 0x2b | 0x2d | 0x34 | 0x3b | 0x3c | 0x5e), voice: None, voice_finished: true, talks: Vec::new(), patrol_cooldown: 0,
             facial_talk: None, facial_talk_start: 0, facial_talk_fired: 0, facial_talk_pending: None, facial_played: Vec::new(), talk_line: None, talk_track: false, talk_track_until: 0, facial_last_stamp: None,
@@ -18718,8 +18727,17 @@ mod tests {
             corpse: false, death_pending: false, hit_by_player: false, fail_reason: None, alert_status: 0, alert_status_prev: 0, alert_status_frame: 0, interro_armed: false, interro_min_dist: 0.0, interro_step: 0, interro_latch: None, assist_src: None, assist_ended: false, armed_peer_dist: f32::MAX, wait_channel: 0, wait_channel_on: false, route_blocked: false, death_channel: 0, special_death: 0, special_spot: pos, special_yaw: 0.0,
             alert_pending: 0,
             boundary: 0,
-            // `NDrone2_DefaultInit` 0x14b300:60 arms +0x4F8 bit 1 with the init flags.
-            push_move: true,
+            // `NDrone2_DefaultInit` 0x14b300:60 `+0x4F8 = (x & 0xffea05e2) | 0x801e2`: the clear
+            // mask 0xffea05e2 clears bit 0 (~mask 0x15fa1d carries it) and 0x801e2 arms bits
+            // 1,5,6,7,8,15,23 — NOT bit 0. Both push-move gates read bit 0 (`DroneMove_SetBoundryFlags`
+            // 0x14f140:47 `(x ^ 1) & 1 == 0`, `Drone_Control` 0x139268:80 `uVar2 & 1`), and the
+            // full-decompile scan found no `| 1` writer into +0x4f8 (the ORs are 0x10/8/0x1a0/
+            // 0x8000/0x100000/0x200000/0x80000000). The game's undrawn raw slide is therefore
+            // UNCLAMPED for default-init drones; closed-door stops come from the door-node
+            // parking (`ReachedDestNode` 0x153358 → `DSTATE_OpenDoor` 0x81) while +0xBA8 is held.
+            // (level-07-rook-doorway-2: the earlier fold doc armed "bit 1" and the port set
+            // push_move true off it — bit 1 is not the gate the clamp reads; doc struck.)
+            push_move: false,
             armed_peer_exit_dist: f32::MAX,
             peer_latch: u32::MAX,
             drawn_grace: 2, // `control_init_object` 0x134630:16
