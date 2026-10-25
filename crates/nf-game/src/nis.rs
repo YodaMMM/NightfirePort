@@ -569,6 +569,22 @@ impl Script {
                         let (Some(&sp), Some(a), Some(b)) = (cmds.get(pc + 1), rd(1, 2), rd(3, 2)) else { self.streams[i].pc = None; return };
                         next = pc + 7;
                         if self.flags & 0x20 == 0 {
+                            // `Script_CameraStart` 0x1d9140 opens with `Mat_IdentityT()` on the
+                            // SCRIPTINFO's own base matrix si+0x00 (the decompile drops the argument;
+                            // its a0 is param_1 = the SCRIPTINFO, whose first field IS the base the
+                            // interps concat): from the camera op on the player's base is the IDENTITY,
+                            // so every stream interp's base concat — case 1's entity tail
+                            // `Concat(si+0x00, ·)` [M 0x1d9a08:133] and the camera's — runs on the
+                            // identity and the keys are the world matrix. The port only skipped the
+                            // concat for the camera case, so 07000014's opening scene 0x06000833 still
+                            // composed the SP #276 placement (52.1566, 2.6365, 46.6214) into its door
+                            // entity streams 10/11 (hashes 0x02000891/92 [D decode]): the door movers
+                            // sat at (79.95, 3.93, 96.19), 56 units from the door placements #116/#117
+                            // (27.788, 1.203, 49.671 [D]), and the control-room door never moved while
+                            // Kiko walked through it. Scripts without a camera op keep the placement
+                            // base (the fusebox wires, the safe, the pickups [D] — no camera op in
+                            // their scripts, so this reset never runs for them).
+                            self.matrix = IDENT;
                             let s = &mut self.streams[i];
                             if s.obj.is_none() {
                                 objs.list.push(Some(Obj::Camera { matrix: IDENT, fov: 1.0, src: (self.nis.hashcode, i as u8) }));
