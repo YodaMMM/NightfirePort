@@ -1009,7 +1009,13 @@ impl Script {
                 if self.fade_flags & 0x20 != 0 { return; }
                 let Some(o) = self.streams[i].obj else { return };
                 let Some((m, scale, _)) = self.keys(i) else { return };
-                let m = mul(&m, &self.matrix);
+                // `Script_CameraStart` 0x1d9140 opens with `Mat_IdentityT()` — the
+                // camera's base concat runs on the IDENTITY, not on the SP's placement matrix, so the
+                // camera's world matrix is the keys alone. The port composed `self.matrix` (the SP's
+                // placement) here, which pushed 07000014's cut-scene camera from the room out to
+                // (78.06, 4.79, 82.69) — ~40 units away, inside rock: a flat blue void.
+                // (`Script_GetInterp`'s base-concat flag still runs; its base is the identity this
+                // op installed, so the concat is a no-op.) The entity/anim paths keep the real base.
                 if let Some(Some(Obj::Camera { matrix, fov, .. })) = objs.list.get_mut(o) { *matrix = m; *fov = scale * (4.0 / 3.0); }
             }
             2 => {
