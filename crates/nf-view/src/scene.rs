@@ -2852,18 +2852,31 @@ impl Sim {
             // The near bots' collision capsules for the actor-actor push (`Collide_Jointy`
             // 0x1ec180:229-281 via `LadderCtx::bot_capsules`): the game's bot hittest arms
             // [M NDrone2_Collision 0x140e90:91-121 — top = pos + up·r, bottom = pos + up·(r − h),
-            // r 0.4 default / 0.55 kind 0xc, h the anim height word +0xa0 with default 1.0
-            // [M NDrone2_DefaultInit 0x14b300:48]] — upright bots (up = (0,1,0)), so the arms are
-            // pos + (0, ±0.4, 0) at h 1.0. Only the NEAR bots carry an ON capsule [M
-            // DroneFunc_NearPlayerCollision 0x14b190 + NDrone2_DoCollision 0x149ec8 — the kind
-            // word +0x464 goes 0x800 only within 2.0 of the player]; the 0.4 default stands for
-            // every bot here [S unverified: the sleeper's own kind word (the 0xc → 0.55 arm) is
-            // not read by the port — a live check item].
-            let bot_capsules: Vec<([f32; 3], [f32; 3], f32)> = {
+            // r 0.4 default / 0.55 for the class word +0xd8 == 0xc [M :92-94], h the anim height
+            // word +0xa0 with default 1.0 [M NDrone2_DefaultInit 0x14b300:48]] — upright bots
+            // (up = (0,1,0)), so the arms are top = pos + (0, r, 0), bottom = pos + (0, r−1.0, 0)
+            // at h 1.0. The ON/OFF per bot [M NDrone2_DoCollision 0x149ec8:11-34]:
+            // alive (+0x4f8&0x200 clear) and enabled (+0x20 — the port's `enabled`, cleared by
+            // WAIT_SWITCH's ENTER Enable(0) [M 0x15b960:14-16, 0x149dd0]); the 07000007 guests
+            // (the civilian team +0x44 = 3 — the port's `team` fold [M
+            // GetDroneTypeAttackTypeFriend 0x14cbd8:48-61]; class +0xd8 0xd/0xe from skins
+            // 0x5000015/0x5000019-0x21 [M DefaultInit 0x14b300:128-132,156-160]) ride in every
+            // stance (their DoCollision returns 1 through the near arm [M 0x149ec8:23-26]) — the
+            // other classes are the airborne-only [S] port choice (see the push site). The dead
+            // build no push capsule (SetAsDead's obj+0xf0&0x20 skips the broadphase [M
+            // 0x14a2f0:20]; DoCollision returns 0 [M 0x149ec8:11]) — the port's `corpse`. The
+            // 2.0 pick radius is an optimization only: an overlap needs
+            // dist < r_mine + r_theirs ≤ 0.95 < 2.0. The 1.0 height stands for
+            // every bot here [S unverified: the anim height word +0xa0 is not read by the port —
+            // a live check item].
+            let bot_capsules: Vec<([f32; 3], [f32; 3], f32, bool)> = {
                 let bp = self.bond.pos;
                 self.drones.list.iter()
-                    .filter(|x| x.enabled && ((x.pos[0] - bp[0]).powi(2) + (x.pos[1] - bp[1]).powi(2) + (x.pos[2] - bp[2]).powi(2)) < 2.0 * 2.0)
-                    .map(|x| ([x.pos[0], x.pos[1] + 0.4, x.pos[2]], [x.pos[0], x.pos[1] - 0.6, x.pos[2]], 0.4f32))
+                    .filter(|x| x.enabled && !x.corpse && ((x.pos[0] - bp[0]).powi(2) + (x.pos[1] - bp[1]).powi(2) + (x.pos[2] - bp[2]).powi(2)) < 2.0 * 2.0)
+                    .map(|x| {
+                        let r = if x.voice_type == 0xc { 0.55f32 } else { 0.4f32 };
+                        ([x.pos[0], x.pos[1] + r, x.pos[2]], [x.pos[0], x.pos[1] + r - 1.0, x.pos[2]], r, x.team == 3)
+                    })
                     .collect()
             };
             let ctx = nf_game::player::LadderCtx { ladders: &self.ladders, wires: &self.wires, wire_anims: Some(&self.wire_anims), water, sink, creepwalls: &self.creepwalls, level_bump_5fb: false, straddle: &straddle_cells, bot_capsules: &bot_capsules };

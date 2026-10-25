@@ -189,14 +189,18 @@ pub struct LadderCtx<'a> {
     /// `CollisionWorld::debug_straddle` with the current substate's pick arm (`Bond::pick_arm`);
     /// EMPTY = no scoping (no cel graph — unit tests, MP remotes), every ladder tested.
     pub straddle: &'a [usize],
-    /// The live bots' collision capsules as `(top, bottom, radius)` — the game's bot hittest arms
-    /// (`NDrone2_Collision` 0x140e90:91-121: top = pos + up·r, bottom = pos + up·(r − h), r 0.4
-    /// default / 0.55 kind 0xc, h = the anim height word +0xa0, default 1.0 [M DefaultInit
-    /// 0x14b300:48]) for the actor-actor push of `Collide_Jointy` 0x1ec180:229-281. The Sim fills
-    /// the NEAR bots only (`DroneFunc_NearPlayerCollision` 0x14b190: the bot's collision capsule
-    /// is ON within 2.0 of the player [M NDrone2_DoCollision 0x149ec8]); EMPTY = no bots (unit
-    /// tests, MP remotes) — no actor push runs.
-    pub bot_capsules: &'a [(V3, V3, f32)],
+    /// The live bots' collision capsules as `(top, bottom, radius, guest_team)` — the game's bot
+    /// hittest arms (`NDrone2_Collision` 0x140e90:91-121: top = pos + up·r, bottom = pos +
+    /// up·(r − h), r 0.4 default / 0.55 for the class word +0xd8 == 0xc [M :92-94], h = the anim
+    /// height word +0xa0, default 1.0 [M DefaultInit 0x14b300:48]) for the actor-actor push of
+    /// `Collide_Jointy` 0x1ec180:229-281. The Sim fills the bots whose capsule is ON: alive
+    /// (+0x4f8&0x200 clear [M NDrone2_DoCollision 0x149ec8:11]) and enabled (+0x20 [M :12]) —
+    /// the 07000007 guests (the civilian team, the port's `team == 3` [M
+    /// GetDroneTypeAttackTypeFriend 0x14cbd8:48-61]) ride in every stance; the other classes are
+    /// the airborne-only [S] port choice (see the push site). The 2.0 pick radius is the fill's
+    /// optimization only: an overlap needs dist < r_mine + r_theirs ≤ 0.95 < 2.0. EMPTY = no
+    /// bots (unit tests, MP remotes) — no actor push runs.
+    pub bot_capsules: &'a [(V3, V3, f32, bool)],
 }
 
 impl Default for LadderCtx<'_> {
@@ -1804,26 +1808,32 @@ self.local = [vs / k, vf / k];
         // the query's owner) and returns 0 for a class-3 other (:231-233) — the PLAYER (class 3
         // [M Player_Init 0x1910f8:76]) is pushed off the BOT (class 2 [M NDrone2_CreateObj
         // 0x14d7c8:14]) and the bot never pushes itself. The class-3-vs-3 and class-2-vs-2 gates
-        // (:213-227) don't fire on a mixed pair. The bot's capsule is ON only NEAR the player
-        // [M DroneFunc_NearPlayerCollision 0x14b190 — `2.0 <= dist` fails the DoCollision gate
-        // 0x149ec8]: the Sim passes only those (see `LadderCtx::bot_capsules`). Dead-centre the
+        // (:213-227) don't fire on a mixed pair. The bot's capsule is ON per NDrone2_DoCollision
+        // 0x149ec8:11-34 (alive + enabled; class 0xc unconditionally, the other classes through
+        // the near/OR arms — see `LadderCtx::bot_capsules`). Dead-centre the
         // between-spines delta is vertical — Bond rides tangent ON the carrier and slides off as
         // it walks (the delta tilts); beside its spine the push is lateral. The Jointy push does
         // NOT ride the DeltaP accumulator (Jointy writes +0x10 only [M :253-266]), so this sits
         // after the add-back and `pick_ref` keeps the static pass's value.
-        // [S] unverified — the PORT CHOICE gate: the push rides only while Bond is AIRBORNE
-        // (the drop-onto case the task pins). The game's own per-bot ON/OFF gates (+0x4f8 bit
-        // 0x20/0x200, +0x570 bit 2 — NDrone2_DoCollision 0x149ec8) are not modelled per bot
-        // yet, and master's green walks path Bond THROUGH ally tangent zones (the 01 armour
-        // walk, the 0a west doorway): the grounded-side push against allies is a live-check
-        // item, not shipped here. The sleeper drop (grounded false through the whole contact)
-        // keeps its [M] push either way.
-        if !ctx.bot_capsules.is_empty() && !self.grounded {
+        // The game's own pass has NO player-stance gate: `Player_Collision` 0x194df0 builds the
+        // player's kind-0x800 hittest every frame (mask 0 [M :88]) and the SP Jointy arm pushes
+        // the class-3 owner off every capsule-ON class-2 bot [M 0x1ec180:229-233,251-266].
+        // [S] unverified — the PORT CHOICE gate for the NON-guest bots: their push rides only
+        // while Bond is AIRBORNE (the drop-onto case the sleeper task pinned). The game can
+        // still turn a non-guest bot's capsule OFF per bot (the anim no-collide bit +0x570&2
+        // [M 0x149ec8:30-31], obj+0xfc) — not modelled — and the grounded-side push against
+        // them (a hall bouncer at (79.5,−50.3) stalls the 07000007 hall walk) stays the
+        // live-check item, not shipped here. The CIVILIAN team (the game's +0x44 = 3: the
+        // guest dtypes [M GetDroneTypeAttackTypeFriend 0x14cbd8:48-61]; the port's `team`
+        // fold) rides in EVERY stance — the party crowd is solid exactly as the task pins.
+        // The sleeper drop (grounded false through the whole contact) keeps its [M] push.
+        if !ctx.bot_capsules.is_empty() {
             let (ja, jb) = self.capsule();
             if std::env::var("NF_PUSH_DEBUG").is_ok() {
                 eprintln!("[pushdbg] n={} ja={:?} jb={:?} bots={:?}", ctx.bot_capsules.len(), ja, jb, ctx.bot_capsules);
             }
-            for &(ta, tb, tr) in ctx.bot_capsules {
+            for &(ta, tb, tr, guest_team) in ctx.bot_capsules {
+                if self.grounded && !guest_team { continue; } // [S] port choice, see above
                 let mut p = closest_on_seg(ta, tb, ja);
                 let mut q = closest_on_seg(ja, jb, p);
                 p = closest_on_seg(ta, tb, q);
