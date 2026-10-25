@@ -38,3 +38,14 @@ pocket back-off (walker.rs, stuck 3/4 → 60-tick reverse). No full-suite total 
 binaries) — the next round runs tools/test/suite.py on the merged tree. Live checks: gdbwatch
 drone+0x4f8 bit 1 at 07000007 boot (expect set) and 0x320 bits for an undrawn walker at the west
 doorway (expect the walking-direction bit CLEAR — settles the per-cel BLINK question).
+
+## level-07-rook-doorway-2 (2026-10-25, sandbox expiring ~21:44 UTC)
+Branch s/level-07-rook-doorway-2 off origin/s/level-07-rook-doorway + origin/master. Task: port
+the game's per-cel bounds test exactly [M AINetwork_BoundsTest 0x155330, the straddled-cel BLINK
+walk M 0x157d80:113-158, the cel the drone stands in] so the clamp probe sees only the walls the
+game's does; un-ignore the_mission_walker_completes_his_doorway_leg; Rook (drone 22, Path_3)
+crosses the west doorway (79.53, 44.0, -50.32) in real play. npc_doors_live and the 01/07 walks
+stay green; full suite on the merged tree, total line in the report.
+
+Work started (19:4x UTC): branch created from rain-5's merge base, origin/master merged, pushed
+before any code change. Setup reused: work/ slim tree and Nightfire-onfoot.iso already present.
