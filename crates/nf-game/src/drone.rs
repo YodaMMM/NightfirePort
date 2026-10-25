@@ -381,6 +381,63 @@ pub mod state {
     pub const STRAFE_DODGE_RIGHT: u8 = 0x78;
     pub const ROLL_LEFT_CROUCH: u8 = 0x79;
     pub const ROLL_RIGHT_CROUCH: u8 = 0x7a;
+
+    // ---- DSTATE handlers never entered on the shipped path (ai-dstates-uncited) ----------------
+    // These `NDrone2_DSTATE_*` handlers sit in `NDrone2_StateFuncs` 0x29b300 [L — each id's slot
+    // holds the address below, byte-identical across ee_snapshot/ee_start_05/ee_start_07000001/
+    // ee_start_0700000a] but no entry channel on the shipped disc reaches them, so the port has
+    // no constants or arms for their ids. The entry-channel census over all 3039 decomp files:
+    // `Drone_SM_SetState` 0x1758c0 literals (319 sites, hex+decimal — the only our-id hits are the
+    // two tester edges noted below), `+0x5A2/+0x5A4/+0x5A6` stores (constants {0x14,0x56,0xbd,
+    // 0x8e,4,0x29,0xe,0x13,0x1f,0x3a,0x68,0x7e,0x65,0xcf,0x8a,0x12} + field copies — none ours),
+    // the msg-carried id `SetState(…, *(msg+0xcd8))` (only producer `DSTATE_Disabled` 0x172440:45;
+    // drone-side +0xcd8 stores are {0,1,0x56,0x24,0x25,0x26,0xff}), the anim-end channel
+    // CallAnim arg4 → +0x596 → SetEndAIState → SetState (our-id literals: Prone's 0x6c and
+    // Tester3's 0xba, both below), and the `DroneTypeSettings` 0x29aee8 start/alt columns (the
+    // only our-id rows are 8 = 0xb7/0xb7 and 11 alt = 0xb5). `NDrone2_GetDTYPENEW` 0x14c938's
+    // return domain {0,2,4,5,7,9,10,0xd,0xe,0x10,0x11,0x12,0x13,0x15,0x16,0x17,0x18,0x19,0x1e}
+    // plus every other `+0xC5` writer (docs/fields/dronetype-tables.md) never yields 8 or 0xb,
+    // so rows 8 and 11 are never applied and their ids stay unreachable:
+    //   - 0x3b `NDrone2_DSTATE_Interogator` 0x1729f0: no producer. ENTER → Idle 4 [M 0x1729f0];
+    //     `init_DMODE_Interogator` 0x14e238 is a Defaults-only stub [M].
+    //   - 0x57 `NDrone2_DSTATE_Alerted1stEncounter` 0x173178: no producer. ENTER → 0x5a
+    //     CombatOutOfRange [M 0x173178]; the 0x57 in DroneFunc_HandleImpact 0x1469b8:266 is an
+    //     ANIM id, not a state [M].
+    //   - 0x5d `NDrone2_DSTATE_CombatTooClose` 0x173338: no producer; DroneFunc_CombatState
+    //     0x148338 emits 0x58/0x5a/0x5c/0x5e/0x68/0x70 [M]. ENTER sets +0x4F8 |= 0x10000 → 0x67
+    //     AimStand [M 0x173338]; the too-close ×2 damage is FireWeapon's own threshold
+    //     [M 0x30cb14], not this state.
+    //   - 0x6b `NDrone2_DSTATE_Prone` 0x166940: no producer (the 0x6b literals decomp-wide are
+    //     ninja ANIM ids [M]; DefaultInit zeroes the +0xF4 spawn-state field [M 0x14b300] — only a
+    //     script store could spawn a drone into Prone).
+    //   - 0x6c `NDrone2_DSTATE_ProneFire` 0x166a28: produced only by Prone — its CallAnim
+    //     end-state AND its HandleImpact(…,0x6c,1) forwarding [M 0x166940:35 + 0x1469b8:82/127] —
+    //     which never runs (0x6b above).
+    //   - 0x80 `NDrone2_DSTATE_HoldItRightThere` 0x173570: no producer; DefaultInit's 0x80 is the
+    //     field store +0xBA0 = 0x80 [M 0x14b300:825], not a state id.
+    //   - 0x9d `NDrone2_DSTATE_SeenOpponent` 0x173b38: no producer. ENTER → 0x56 Attack
+    //     [M 0x173b38].
+    //   - 0xa1 `NDrone2_DSTATE_SeenExplosive` 0x173bb8: no producer; body is a no-op
+    //     (accepts msgs 0/1/3) [M 0x173bb8].
+    //   - 0xb5 `NDrone2_DSTATE_FailMission` 0x173f68: only table presence is `DroneTypeSettings`
+    //     row 11's ALT column [L 0x29aee8+132 = ffff 0000 b500…] — reaching the state needs mode
+    //     0xb, which no writer produces (census above). The game's own alert fold arm
+    //     (start−4)==0xB1 → 0x12 [M 0x14cbd8:122-155] is likewise an unreachable-start arm; the
+    //     port mirrors it in `start_state`'s `0xb5 => 0x12` for table fidelity.
+    //   - 0xb7 `NDrone2_DSTATE_Tester1` 0x16db90: SetState'd only by Tester2 [M 0x174150:18] and
+    //     Tester4 [M 0x1742d8:26]; `DroneTypeSettings[8]` start/alt = 0xb7 [L 0x29af48] needs
+    //     mode 8 — never produced.
+    //   - 0xb8 `NDrone2_DSTATE_Tester2` 0x174150: no producer (debug).
+    //   - 0xb9 `NDrone2_DSTATE_Tester3` 0x1741c8: no producer at all — the only fully entry-less
+    //     tester. (InjuredTalk's 0xb9 is a per-level table index, not a state [M 0x13fa20:33-37].)
+    //   - 0xba `NDrone2_DSTATE_Tester4` 0x1742d8: produced only via Tester3's CallAnim end-state
+    //     [M 0x1741c8:26] — transitively unreached through 0xb9.
+    //   - 0xbb `NDrone2_DSTATE_HangUp` 0x1743d8: no producer. Msg 1 clears +0x98 on the two
+    //     objects at drone+0x530/+0x534 [M 0x1743d8].
+    //   - 0xbc `NDrone2_DSTATE_WaitForever` 0x174430: no producer; no-op parking state
+    //     [M 0x174430].
+    // Residual caveat: DSTATE_Disabled's msg-carried id is statically unboundable — a live
+    // gdbwatch over these addresses during a full run would close it (docs/port-map/unreached.md).
 }
 
 /// The MP chatter family's four sites — `DroneFunc_InjuredTalk` 0x13fa20 (BulletImpact survival),
@@ -2041,6 +2098,14 @@ impl Drone {
         // 0x1291e8 — the DTYPE 0xc3 (MP bot) init — is an 8-byte EMPTY body [M 001291e8 decompile],
         // reached through the {id, fn} table at 0x29B050 (0x29B054 → 0x1291e8); so its port job is
         // exactly nothing, which this name-keyed dispatch preserves for every other init too.
+        // The prefix matches the two real bodies, `NDrone2_initDTYPE_Sniper` 0x14e570
+        // (`DroneTypeSettings` row 2) and `NDrone2_initDTYPE_SniperAlert` 0x14e580 (row 25, the
+        // alert sniper: reached at creation on 4 story levels — 43 placements whose mode-2 block
+        // carries alert level 3 → GetDTYPENEW 0x14c938:105-110 → +0xC5 = 0x19 → row 25 [D census,
+        // ai-dstates-uncited report]). Both are only `+0x4F8 |= 0x10`: SniperAlert's extra
+        // `Drone_DCVfromOBJ` 0x13a0a0 call fills a STACK DCVars that nothing reads (disasm
+        // 0x14e580: `daddu a1,sp,zero`, `jal 0x13a0a0`, sole drone store `sw v1,0x4f8(s0)` after
+        // `ori v1,v1,0x10` [M]) and 0x13a0a0 itself only reads the obj [M 0013a0a0 decompile].
         if row(self.mode).and_then(|t| t.init.as_deref()).is_some_and(|n| n.starts_with("NDrone2_initDTYPE_Sniper")) { self.stationary = true; }
         // No mode-init property writes here: placed drones take `DoModeSettingsNEW` 0x14c600 (placement
         // param 5 = 100 on all 555 placements [D census, docs/port-map/unreached.md]), which fills both
@@ -15943,8 +16008,24 @@ fn segment_hits_sphere(a: V3, b: V3, c: V3, r: f32) -> bool {
                 let id = |k: usize| (oi as u64) << 6 | k as u64;
                 match o {
                     Some(crate::nis::Obj::Anim { skin, script, frame, .. }) => parts.extend(d.discrete_parts(*skin, *script, *frame).into_iter().enumerate().map(|(k, (h, m))| (id(k), h, m))),
-                    // fix-safe08: pickups (0xF0) stay out of the collision world — the game's `Script_CreateEntity`
-                    // control-unlinks the created pickup (0x1d8d54); its own glist blocked its take ray.
+                    // Every script Entity kind collides at its posed matrix: the creator arms AND the
+                    // fallthrough attach the SAME collision glist (`Script_CreateEntity` 0x1d8968's
+                    // fallthrough runs `hashtable_set_object_to_entity_gfx` 0x1ca6d8, which lands in
+                    // `Control_SetGList` :39 — the identical t_hashtable lookup the creator arms'
+                    // `hashtable_hashcode_to_celglist` 0x1ca798 makes), `Script_EntityStart` 0x1d8d78
+                    // links the fresh object into the cel chain (:113-115, any kind, obj+0x20 == 0),
+                    // and every MOVED entity is rebuilt + relinked per tick before `Collide_Update`
+                    // (`Script_Interp` 0x1d9a08:94 sets obj+0xfa bit 0x20; `control_movement_object_handler`
+                    // 0x1336f8:147-236 → `control_handle_cel_change` 0x133288 rebuilds + relinks; the
+                    // glist rides the object through `Collide_PickObj`). The five interactive kinds are
+                    // the exception — the port carries them in its own systems instead: the triggers
+                    // 0xea/0xeb become `crate::triggers::Trigger` volumes (below), the pickup 0xF0's
+                    // glist blocked its own take ray (fix-safe08; the game control-unlinks the created
+                    // pickup 0x1d8d54), the emitter 0xF2 arm control-unlinks explicitly
+                    // (0x1d8968:163-166), the AI volume 0xF5 is a drone volume. The old blacklist posed
+                    // exactly these five out; the s/level-14-trench-landing whitelist (only the four
+                    // celglist-creator kinds) un-posed the ride platforms (the paternoster cab
+                    // 0x2000367, the 0700004a lift entity obj_type 31, the gondola) and broke the rides.
                     Some(crate::nis::Obj::Entity { hash, kind, matrix, .. }) if !matches!(kind, 0xea | 0xeb | 0xf5 | 0xf2 | 0xf0) => parts.push((id(0), *hash, *matrix)),
                     _ => {}
                 }
