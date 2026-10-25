@@ -7,7 +7,7 @@
 //! (`bathhouse_voices_live`) only polls `drones.audio.live_ids()` and PASSED on the same tree,
 //! so the break is somewhere between the AttackTalk speak roll [M 0x13eac0] and the mixer Play.
 //! This probe replays the exact choreography and dumps, per tick: the EE pool's live ids, the
-//! driver's live voice ids, every stream Play; per guard: `voice`/`last_voice` transitions and
+//! the reported live voice ids, every stream Play; per guard: `voice`/`last_voice` transitions and
 //! the state-log entries added each cycle (the talk sites are the ATTACK / AIM_STAND_FIRE 0x68 /
 //! COMBAT_NO_MOVE 0x59 ENTERs).
 //!

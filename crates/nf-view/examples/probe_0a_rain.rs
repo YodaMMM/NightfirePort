@@ -37,7 +37,7 @@ fn main() {
             }
         }
     }
-    // The office-lounge spot from the user's report.
+    // The office-lounge spot where rain drew indoors.
     let spot = [-37.50f32, 1.11, -16.95];
     println!("== containment for the office spot {:?} ==", spot);
     for (i, p) in ps.iter().enumerate() {

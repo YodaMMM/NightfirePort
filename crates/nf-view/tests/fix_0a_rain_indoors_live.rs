@@ -52,7 +52,7 @@ fn no_rain_draws_inside_the_office_lounge() {
 }
 
 /// Sister: the rain still draws OUTSIDE — at the same office state the active rainbox5 strip west
-/// of the wall keeps populated drops (the user sees rain through the west windows), and at the
+/// of the wall keeps populated drops (rain shows through the west windows), and at the
 /// 0a spawn the overhead rainbox1 fills.
 #[test]
 fn rain_still_draws_outside_its_boxes() {

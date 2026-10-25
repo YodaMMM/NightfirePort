@@ -1,7 +1,7 @@
 //! level-4a-cutscene probe: 0700004a fresh load (no --bond, no pos writes), idle input — logs
 //! every scripted cut-scene the level plays: which scripts run (the SP start + its pack hashes
 //! [D the level's SPs #42/#273/#276/#289]), the script camera per tick (position, fov — the
-//! driver's symptom pair: a near-zero fov key draws a flat void; a camera inside geometry draws
+//! reported symptom pair: a near-zero fov key draws a flat void; a camera inside geometry draws
 //! nothing), the hand-back (camera off, the disable transitions), and the actors on screen.
 //! Probe (assertion-free except the load) — the pins land in the fix tests. Opt-in via NF_ISO.
 

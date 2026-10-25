@@ -1,5 +1,5 @@
 //! level-4a-cutscene-autoaim: Bond rides the 0700004a cab (real input, no pos writes, no
-//! re-seating) and SHOOTS from it while it descends — the driver's report: "auto aim doesn't
+//! re-seating) and SHOOTS from it while it descends — the reported "auto aim doesn't
 //! play too well with shooting from the elevator".
 //!
 //! THE GAME'S AUTO-AIM HAS NO VELOCITY TERMS ANYWHERE — the moving shooter changes nothing:
@@ -25,7 +25,7 @@
 //! The real-play gap that keeps the pick dark on the ride is NOT the aim chain: the shaft doors
 //! never auto-open in the port (the level's KNOWN GAP §6, docs/levels/0700004a.md) and the
 //! scene harness never sets the render-side `drawn` bit the pick gates on [M 0x1a73f8:65-109] —
-//! both listed under "Live checks for the main agent" in the report. Opt-in via NF_ISO.
+//! both left as live checks against the real game. Opt-in via NF_ISO.
 
 #[path = "common/walker.rs"]
 mod walker;
