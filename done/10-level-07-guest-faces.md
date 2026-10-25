@@ -19,3 +19,8 @@ say so in the report. Never weaken a decompile-backed test to make code pass.
 
 ---
 claimed-by: sandbox4 at 2026-10-25T16:31Z
+
+---
+## Report (done, 2026-10-25T17:22Z)
+
+Closed by the driver: the report is on `s/level-07-guest-faces` (docs/reports/level-07-guest-faces.md); the worker didn't run finish.sh.
