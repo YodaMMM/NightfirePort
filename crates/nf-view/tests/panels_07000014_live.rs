@@ -40,9 +40,9 @@ fn entities_near(sim: &nf_view::scene::Sim, hashes: &[u32]) -> Vec<(u32, u8, [f3
 /// The route lid at (51.58, 3.58, 44.94): before any use, only the key-1 fusebox prop exists;
 /// the use press FROM INSIDE THE DUCT (the SP's use sphere rides its live matrix at y 3.58
 /// [M SP_Activate 0x1dc338]) replays the script and the ladder art 0x02000751 spawns at the
-/// lid's base — the art beneath the opening. From the facility floor (y 1.03, the driver's spot)
+/// lid's base — the art beneath the opening. From the facility floor (y 1.03, the reported spot)
 /// the sphere is out of reach (d ≈ 2.6): the crawl must E-open the lid before descending, or the
-/// opening shows with nothing beneath it — the driver's symptom and the route legs' open question
+/// opening shows with nothing beneath it — the reported symptom and the route legs' open question
 /// (docs/levels/07000014.md §1a).
 #[test]
 fn the_route_lid_use_spawns_the_ladder_art_beneath_the_opening() {
@@ -86,7 +86,7 @@ fn the_route_lid_use_spawns_the_ladder_art_beneath_the_opening() {
 /// 0x02000A61 / 0x02000A73, type 0x31 [D 0x06000A1B s0/s1/s3 Entity cmds]) spawn behind the
 /// front panel. The port's fusebox.rs stands in for them (docs/levels/07000014.md §5 "the wire
 /// sub-objects are the documented stand-in — the SP-entity bullet path is not ported"), so the
-/// driver's "wall panel with nothing behind it" shows the recess empty. The fix: run the
+/// reported "wall panel with nothing behind it" shows the recess empty. The fix: run the
 /// fusebox script's Entity streams through the same SP-entity path the lid replay uses.
 #[test]
 #[ignore = "fail-first repro: the fusebox script's wire entities are a documented stand-in (docs/levels/07000014.md §5)"]
