@@ -63,20 +63,14 @@ fn kill_438(w: &mut Walker) {
 /// 3. the doorway ends clear: no enabled non-corpse drone inside the door #47 jamb box
 ///    (x 34.6..36.6, z −17.3..−15.2) bound to the door, and the door itself is back at the shut
 ///    idle 0x2 (the broken build held it at 0x4 with the guard bound).
-/// [ignore = "pins the FIXED behavior: the game never runs ChangeToAttackMode (0x14a648) from
-/// ATTACK — its five jal sites are 0x14ce68/0x14d45c/0x15da54/0x15e35c/0x165948 — so the port's
-/// ATTACK-ENTER flush arm must go. Removing it was validated green on this walk (the ch-16 guard
-/// keeps mode 0, fights through the door #47 doorway, the door ends shut-idle 0x2) and on
-/// nf-game's 887 unit tests + every rook_*/fix_06_* neighbor — but it flips
-/// walkreal_07000001_live::walk_from_the_spawn_to_the_exit_with_the_contact red (master green):
-/// the 01 walk's balance depends on the non-decompile flush parking the corridor guards as
-/// stationary snipers. Landing needs the 01 re-derivation first: which guard kills the contact,
-/// his dtype/alt_state, and where the game's own +0x5a4 lifecycle (GetDroneTypeAttackTypeFriend
-/// 0x14cbd8 caseD_3 writes the attack fold INTO +0x5a4) clears his pending alt. Pre-fix run of
-/// this exact walk: the guard froze at (35.47, 41.00, −16.93) in mode 25 / state 0x2a, bound to
-/// door #1, the door held at 0x4, for the whole 1800-tick watch."]
+/// [ignore removed level-06-rook-door-3: the landing gate is done. The flush arm is gone on this
+/// branch, and the 01 contact kill was re-derived (NOT a guard's kill — the harness's own
+/// weapon-0x1c volley through the walking escort's line; the game's Drone_CollisionHandler
+/// 0x140968:85-95 has no team gate) and fixed in the WALK (the shoot line gate). Both 01 walkreal
+/// tests run green with the flush still removed. Pre-fix run of this exact walk: the guard froze
+/// at (35.47, 41.00, −16.93) in mode 25 / state 0x2a, bound to door #1, the door held at 0x4, for
+/// the whole 1800-tick watch.]
 #[test]
-#[ignore]
 fn the_switch16_guard_fights_through_the_door47_doorway() {
     let iso = iso();
     let mut w = Walker::new(nf_view::load_with_carry(&iso, "07000006.bin", false, Some(&carry(&[0x1d, 0x45, 0x70]))).expect("load 07000006"));
