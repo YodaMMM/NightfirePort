@@ -105,3 +105,9 @@ Progress:
 - (10:46) Full suite started on the final merged tree (daemon). Recovered binaries spot-run green:
   sight_frustum 2/2, fix_pickups_ammo 4/4, escort_hide_findrun 3/3 (three more pending the suite:
   direct runs OOM-killed under the build's memory pressure).
+- (11:37) Cutoff state: suite 232/798 binaries, no total line (projects ~12:46 — past expiry).
+  FAILED: bathhouse_shout_mixer (07000002 shout voice window), interactables_07000041 (glass
+  pan fire window) — both the rain-2 merge's stream-shift class, first seen on this merged
+  tree (that merge's own suite never completed); probe_pylon_render (GPU env red). CRASH ×7
+  OOM (net_*/mp_*/walkreal_probe13). The two task binaries pass inside the suite run too.
+  Full detail in docs/reports/level-0a-rain-indoors-3.md (Suite appendix).
