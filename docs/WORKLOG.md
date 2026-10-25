@@ -33,3 +33,21 @@ decompiles [M] and the 0a weather setup [D]; fix + tests; report + finish.
   through the real load + step_bond; rainbox5/rainbox1 strips stay populated).
 - (07:10-07:25) Report + finish. Suite baseline (start tree): 3 disc_golden + identity_disc +
   probe_render_pylon_only FAILED — master's, pre-fix; touched crates run green directly.
+
+
+## level-0a-rain-indoors-2
+
+Branch `s/level-0a-rain-indoors-2` (origin/master 38f1bc93 merged with
+origin/s/level-0a-rain-indoors f7246aaf). Window 08:06-10:05 UTC.
+
+Plan: land the rain fall speed (-0.5 step, already on the rain branch) WITHOUT shifting
+other levels' placements/AI. The merged tree turns 7 live tests red; the suspect is the
+Drops path consuming the shared random stream differently (faster fall -> more AddDrop
+calls -> different Rand() draw count/order -> every later draw shifts). Census the drops
+decompiles [M 0x18bf68/0x18c580/0x18c278] for their exact generator + draw order, make the
+port draw identically, get all 7 + fix_0a_rain_indoors_live green, full suite on the final
+tree merged with origin/master.
+
+Progress:
+- (08:08) Setup: repo cloned fresh (sandbox reset), branch created + pushed; work-slim/ISO
+  downloads starting.
