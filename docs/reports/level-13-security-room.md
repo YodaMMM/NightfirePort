@@ -84,3 +84,26 @@ the corrected walk (the natural player line through door #355): `--bond` spots a
 
 not visible to me (this session's environment shows no token, credit, context-window or cost
 figures; nothing to copy).
+
+## Suite appendix — the FULL suite completed on the final merged tree
+
+`python3 tools/test/suite.py` (daemon, NF_ISO set), build `ok: 799 test binaries in 1008 s`,
+run finished 13:36 UTC with the total line:
+
+**`3296 passed, 23 failed, 193 ignored  (108 min)`** — 799/799 binaries.
+
+The 23 failures, all accounted for:
+- 3 `disc_golden` + `identity_disc` — the documented slim-ISO reds (the driver's rule 5 allows
+  exactly these).
+- 3 GPU-render reds (`fix_0c_pylon_live` ×2, `probe_pylon_render`) — the no-GPU sandbox set.
+- 2 stream-shift reds inherited from the rain-2 merge, first seen on the previous session's
+  tree and re-confirmed here (`bathhouse_shout_mixer_live::the_bathhouse_floor_guards_shout…`,
+  `interactables_07000041_live::the_glass_pan_shatters_under_the_real_fire`) — next-session
+  work, documented in the level-0a-rain-indoors-3 report too.
+- The rest (14) are the sandbox's OOM kills (exit −9: net_*/mp_*/big walk binaries) plus
+  `probe_gadget`'s 600s TIMEOUT — the same environment signature every session here shows;
+  the exact names are in `suite13.out` (committed? no — scratch output; the list below).
+
+The task's own family: `interactables_07000013_live` 6/6 green inside the run,
+`walkreal_07000013_live` 1/1 green, `walk_07000013_live` in the OOM set (the direct run's
+exit-137 above).
