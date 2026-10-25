@@ -1405,6 +1405,37 @@ pub struct Drone {
     pub bond_talk_cooldown: u32,
     /// `+0xCE0`: the `DroneFunc_DoBondTalk` lines-spoken count [M 0x144488].
     pub bond_talk_done: u32,
+    /// `+0x53C`: the facial anim object attached for the current talk line — `AnimFacialAppend`
+    /// 0x1c6490's return, stored by `NDrone2_SpeechSFX` 0x141b00's facial arm [M 0x141b00:18-23].
+    /// The port holds the attached facial script's hash while the line plays (lip-flap not modelled).
+    pub facial_talk: Option<u32>,
+    /// The tick the facial script attached — the script's time origin (the game's script time
+    /// starts at 1 and advances 1 per tick, `speed · FRAME_RATE_MUL` with speed 1 here) [M speech.md §5].
+    pub facial_talk_start: u32,
+    /// The script time up to which the attached facial script's op-1 commands have fired (the
+    /// `(from, to]` pass each tick, `AnimProcessScriptCmds` 0x1c1b38 [M]).
+    pub facial_talk_fired: u32,
+    /// `(+0x4C, +0x48)`: the facial script id queued when `AnimScriptPeekSfx` 0x1c6ca8 found the
+    /// line's own sound, with its due tick `now + 0x14` — ControlSTANDARD appends it 20 ticks later
+    /// [M 0x141b00:24-28; speech.md §1.4].
+    pub facial_talk_pending: Option<(u32, u32)>,
+    /// The sfx ids the facial script's op-1 commands fired — `Sound_Play3D` at the drone, the
+    /// handle discarded (never in `+0x4D0` [M speech.md §5]); the port's observable for "the line sounded".
+    pub facial_played: Vec<u32>,
+    /// The line id of the `SpeechSFX` request that started the current talk (queued, attached or
+    /// pushed direct) — the port's observable for the BondTalk line pin (the game passes it as the
+    /// `SpeechSFX` argument [M 0x1446b0 case 0xd]).
+    pub talk_line: Option<usize>,
+    /// `+0x2C` + `+0x358`: the `NDrone2_HeadTrackObj` request (the talk head turn) — active while
+    /// `frame <= talk_track_until` [M 0x14ada0:25-29], and `DoHeadTrackingBehaviour` 0x147578:37-39
+    /// defers to it (`now <= +0x358` → return) until it expires.
+    pub talk_track: bool,
+    pub talk_track_until: u32,
+    /// The `Drone_SfxInfo` `lastFrame` stamp of the FACIAL arm [M 0x141b00:32-33], folded per drone
+    /// (the game's entry is a global shared by every drone [S fold — the 07 BondTalk cooldowns,
+    /// 480/600 ticks, exceed every shared entry's repeat except 0x8e/0x95/0x96's 2112 [D the
+    /// SfxInfo dump], which no two same-set drones drive within one window here]).
+    pub facial_last_stamp: Option<u32>,
     /// The `0x298f84` global ("a drone saw the opponent last frame"), latched by `Drone_InitComms`
     /// 0x139520:265 from ProcessDroneSight's per-frame counter 0x298fa0 [M 0x176a28:224] — lent to
     /// the drones by `Drones::tick` like `patrol_cooldown`; read by HeardNoiseTalk.
@@ -1920,11 +1951,13 @@ impl Drone {
             stationary: param(13) != 0 && param(13) != 0x0600_021f, alpha: 255.0, raise: None,
             head_yaw: 0.0, head_pitch: 0.0, tracking: false, track_recheck: 0, aim_pitch: 0.0,
             captain: false, snap: 0.0, event_20: false, event_21: false, holstered: false, anim_sounds: Vec::new(), voice_type: voice_type(skin), female: matches!(skin & 0xffff, 0x0e | 0x0f | 0x10 | 0x11 | 0x52 | 0x15 | 0x20 | 0x22..=0x24 | 0x17 | 0x18 | 0x2b | 0x2d | 0x34 | 0x3b | 0x3c | 0x5e), voice: None, voice_finished: true, talks: Vec::new(), patrol_cooldown: 0,
+            facial_talk: None, facial_talk_start: 0, facial_talk_fired: 0, facial_talk_pending: None, facial_played: Vec::new(), talk_line: None, talk_track: false, talk_track_until: 0, facial_last_stamp: None,
             talk_step: 0, hostage_voice: 0, hostage_voice_clear: false,
             // obj+0xFE bit 0 (delete-me; docs/fields/obj-tag.md:44) — see the field.
             delete_me: false,
             talk_script: 0, talk_cooldown: 0,
-            last_voice: 0, bond_talk_count: 0, bond_talk_cooldown: 0, bond_talk_done: 0, saw_opp_last_frame: false, footstep: false, anim_stops: Vec::new(), drops: Vec::new(), free_root: false, bounded: true, dtype: param(15) as u8, mode_normal: param(16) as u8, mode_alert: param(21) as u8, mode: 0, alt_mode: 0, team: 1, alt_state: 0, scared_radius: 20.0, screamed: false, scare_shouted: false, pending_shout: None,
+            last_voice: 0, bond_talk_count: 0, bond_talk_cooldown: 0, bond_talk_done: 0, saw_opp_last_frame: false, footstep: false, anim_stops: Vec::new(), drops: Vec::new(),
+            free_root: false, bounded: true, dtype: param(15) as u8, mode_normal: param(16) as u8, mode_alert: param(21) as u8, mode: 0, alt_mode: 0, team: 1, alt_state: 0, scared_radius: 20.0, screamed: false, scare_shouted: false, pending_shout: None,
             // `DroneFunc_NearPlayerCollision`'s source array:
             dist_to_player: [100000.0; 4],
             velocity: [0.0; 3], in_air: false, on_surface: true,
@@ -4084,10 +4117,10 @@ impl Drone {
                     return;
                 }
                 if !self.aimed_at || self.bond_talk_count != 0 || frame <= self.bond_talk_cooldown { return; }
-                // HeadTrack(0, players, 200) [M 0x1446b0 case 9] — the port's head tracking is not
-                // modelled for civilians; no observable port state.
+                // HeadTrack(0, players, 200) [M 0x1446b0 case 9 — `NDrone2_HeadTrackObj` 0x14ada0]
+                self.head_track_obj(d, frame, 200);
                 let r = rng.rand(2) as usize;
-                let h = self.speech_request(d, 0x95 + r, false);
+                let h = self.speech_request(d, 0x95 + r, false, frame);
                 if h == 0 && !self.facial_attached() { return; }
                 self.bond_talk_cooldown = frame + 480; // fptoui(now + 480·FRAME_RATE_DIV) [M]
                 self.bond_talk_count = 1;
@@ -4102,7 +4135,8 @@ impl Drone {
                 // variant by the character id `+0xE0`: 0x5000020 → 0, 0x5000022 → 1, 0x5000023 → 2, else 3 [M 0x1446b0 case 0xd]
                 let variant = match self.skin & 0xffff { 0x20 => 0, 0x22 => 1, 0x23 => 2, _ => 3 };
                 let r = rng.rand(11) as usize;
-                let h = self.speech_request(d, 0x58 + r * 4 + variant, false);
+                self.head_track_obj(d, frame, 200); // HeadTrack(0, players, 200) [M 0x1446b0 case 0xd:125]
+                let h = self.speech_request(d, 0x58 + r * 4 + variant, false, frame);
                 if h == 0 && !self.facial_attached() { return; }
                 self.bond_talk_cooldown = frame + 600; // [M 0x1446b0 case 0xd]
                 self.bond_talk_count = rng.rand(7) as u32;
@@ -4119,7 +4153,8 @@ impl Drone {
                 }
                 if !self.aimed_at || self.bond_talk_count != 0 || frame <= self.bond_talk_cooldown { return; }
                 let r = rng.rand(4) as usize;
-                let h = self.speech_request(d, 0x97 + r, false);
+                self.head_track_obj(d, frame, 200); // HeadTrack(0, players, 200) [M 0x1446b0 case 0x10:174]
+                let h = self.speech_request(d, 0x97 + r, false, frame);
                 if h == 0 && !self.facial_attached() { return; }
                 self.bond_talk_cooldown = frame + 480;
                 self.bond_talk_count = 0; // LAB_00144fe4 [M]
@@ -4131,7 +4166,8 @@ impl Drone {
                     return;
                 }
                 if !self.aimed_at || self.bond_talk_count != 0 || frame <= self.bond_talk_cooldown { return; }
-                let h = self.speech_request(d, 0x8e, false);
+                self.head_track_obj(d, frame, 200); // HeadTrack(0, players, 200) [M 0x1446b0 case 0x11:211]
+                let h = self.speech_request(d, 0x8e, false, frame);
                 if h == 0 && !self.facial_attached() { return; }
                 self.bond_talk_cooldown = frame + 480;
             }
@@ -4152,8 +4188,12 @@ impl Drone {
                 // 0x43f0/0x4370/0x4370/0x4396) and `+0xCD8 += 1` (join 0x144dac). Step 6 speaks nothing:
                 // HeadTrack(600) and `+0xCD8 += 1` [0x144d94-0x144db4]; then 7 > 6 returns. No Rand draw.
                 let step = self.bond_talk_count as usize;
-                let Some((idx, facial, delay)) = Self::party_talk_step(step) else { self.bond_talk_count += 1; return; };
-                let h = if facial { self.speech_request(d, idx, false) } else { self.speech_direct(d, idx) };
+                let Some((idx, facial, delay)) = Self::party_talk_step(step) else {
+                    self.head_track_obj(d, frame, 600); // step 6: HeadTrack(600), no line [M 0x144d94-0x144db4]
+                    self.bond_talk_count += 1; return;
+                };
+                if facial { self.head_track_obj(d, frame, 200); } // steps 0/1/3/5: HeadTrack before SpeechSFX [M]
+                let h = if facial { self.speech_request(d, idx, false, frame) } else { self.speech_direct(d, idx) };
                 if h == 0 && !self.facial_attached() { return; }
                 self.bond_talk_cooldown = frame + delay;
                 self.bond_talk_count += 1;
@@ -4189,8 +4229,9 @@ impl Drone {
         if self.voice_busy() { return; }
         if frame < self.bond_talk_cooldown { return; } // `now < +0xCDC` [M 0x144488:41]
         if self.bond_talk_done != 0 && !again { return; } // `+0xCE0 == 0 || again` [M 0x144488:44]
-        // HeadTrack(0, players, head_track) [M 0x144488:47] — not modelled for civilians.
-        let h = self.speech_request(d, idx, false);
+        // HeadTrack(0, players, head_track) [M 0x144488:47 — `NDrone2_HeadTrackObj` 0x14ada0]
+        self.head_track_obj(d, frame, _head_track);
+        let h = self.speech_request(d, idx, false, frame);
         if h == 0 && !self.facial_attached() { return; } // [M 0x144488:50-53]
         self.bond_talk_count = self.bond_talk_count.wrapping_add(1);
         self.bond_talk_cooldown = frame + delay; // the signed float reinterpret of the u32 [M 0x144488:59-63]
@@ -4200,25 +4241,71 @@ impl Drone {
     /// The Bond-talk SpeechSFX request `SpeechSFX(idx, 0, 1, 1)` (useFacial + facialOnly) —
     /// `NDrone2_SpeechSFX` 0x141b00 [M; speech.md §1.3]: an entry without a facial id goes
     /// FACIAL(0) — nothing, no handle [M :13-14]; an entry with a facial id whose script IS in
-    /// the level stays on the (unported) FACIAL path — no handle [M :17]; the hashtable-miss arm
-    /// zeroes `facialAnimId` (permanent) and goes DIRECT — the line plays as plain audio and
-    /// returns a handle [M :18-28; the miss test's port source is `Data.scripts`, the level
-    /// archive's kind-5 0x06 anim-script entries [D census: 07000005 carries none of the 61
-    /// speech facial hashes, 07000007 carries 54]]. The DIRECT gates the port folds here: the
-    /// entry's sfx non-zero and the `+0x4D0` busy test [M :21-26 — `voice_busy`, the port's
-    /// +0x4D0 fold]; the 30-frame post-load and global repeat-delay gates ride the queue
-    /// processor (`speech()`), and the callers' cooldown bookkeeping (480/600 frames) exceeds
-    /// both [S]. The 843 form always returned 0, so Bond-talk never advanced on miss levels —
-    /// review 2026-10-21.
-    fn speech_request(&mut self, d: &Data, idx: usize, _force: bool) -> u32 {
+    /// the level takes the FACIAL arm [M :15-35]: while no facial line is playing or pending
+    /// (bytes +0x36/+0x37 both clear, the u64 window at +0x30 [M :16]), `AnimScriptPeekSfx`
+    /// 0x1c6ca8 peeks the script's own op-1 sound — found → the script id is queued at +0x4c with
+    /// +0x37 = 1 and +0x48 = now + 0x14, `SFXPreCache(sfx, 0x14)` [M :24-28; the port's precache
+    /// rides the play — the start-latency fold of speech.md §4.5, headless-optional [S]] — else
+    /// `AnimFacialAppend` 0x1c6490 appends the script at once (+0x53c, +0x36 = 1, +0x37 = 0 [M
+    /// :18-23]). Either way the arm returns 0 (facial lines never return / store a handle [M :35])
+    /// and stamps the SfxInfo entry's `lastFrame = now` once +0x53c stands [M :32-33]; the entry's
+    /// repeat gate then refuses re-entry until `lastFrame + repeat` [M :9-12; the port's stamp is
+    /// per drone — see `facial_last_stamp`]. The hashtable-miss arm zeroes `facialAnimId`
+    /// (permanent) and goes DIRECT — the line plays as plain audio and returns a handle [M :18-28;
+    /// the miss test's port source is `Data.scripts`, the level archive's kind-5 0x06 anim-script
+    /// entries [D census: 07000005 carries none of the 61 speech facial hashes, 07000007 carries
+    /// 54]]. The DIRECT gates the port folds here: the entry's sfx non-zero and the `+0x4D0` busy
+    /// test [M :21-26 — `voice_busy`, the port's +0x4D0 fold]; the 30-frame post-load and global
+    /// repeat-delay gates ride the queue processor (`speech()`), and the callers' cooldown
+    /// bookkeeping (480/600 frames) exceeds both [S]. The 843 form always returned 0, so Bond-talk
+    /// never advanced on miss levels — review 2026-10-21.
+    fn speech_request(&mut self, d: &Data, idx: usize, _force: bool, frame: u32) -> u32 {
         let Some(l) = d.voices.and_then(|v| v.get(idx)) else { return 0 };
         if l.facial == 0 { return 0; } // facialOnly → FACIAL(0), nothing [M 0x141b00:13-14]
-        if d.scripts.contains_key(&l.facial) { return 0; } // present script → FACIAL, no handle [M :17]
+        if d.scripts.contains_key(&l.facial) {
+            // The FACIAL arm [M 0x141b00:15-35]. The entry's repeat gate first [M :9-12; the
+            // per-drone stamp fold — see `facial_last_stamp`].
+            if self.facial_last_stamp.is_some_and(|t| frame < t + l.repeat as u32) { return 0; }
+            // bytes +0x36 and +0x37 both clear — no facial line playing or pending [M :16]
+            if self.facial_talk.is_none() && self.facial_talk_pending.is_none() {
+                let sfx = Self::peek_script_sfx(d, l.facial); // AnimScriptPeekSfx [M 0x1c6ca8]
+                if sfx != 0 {
+                    // the queue arm: +0x4c = fid, +0x37 = 1, +0x48 = now + 0x14 [M :24-27];
+                    // SFXPreCache(sfx, 0x14) [M :28] — folded into the play [S, §4.5].
+                    self.facial_talk_pending = Some((l.facial, frame + 20));
+                } else {
+                    // the attach arm: AnimFacialAppend now — +0x53c = the script, +0x36 = 1,
+                    // +0x37 = 0 [M :18-23 + 0x1c6490; the port always appends [S: the game's
+                    // AnimScriptAppend can refuse on a full script slot]].
+                    self.facial_talk = Some(l.facial);
+                    self.facial_talk_start = frame;
+                    self.facial_talk_fired = 0;
+                }
+                self.talk_line = Some(idx); // the line that started this talk (see the field)
+            }
+            if self.facial_talk.is_some() {
+                self.facial_last_stamp = Some(frame); // e.lastFrame = now [M :32-33]
+            }
+            return 0; // facial lines never return / store a handle [M :35]
+        }
         // hashtable miss → DIRECT [M :18-28].
         if l.sfx == 0 { return 0; }
         if self.voice_busy() { return 0; }
+        self.talk_line = Some(idx);
         self.talks.push((idx, false));
         l.sfx
+    }
+
+    /// `AnimScriptPeekSfx(hash)` 0x1c6ca8 [M]: the loaded script's first op-1 command's sfx id, 0
+    /// when the script is absent or carries no sound command (the parsed-command fold of the
+    /// encoded walk: op 1 → `u16 cmd[2]`; ops 0/2–4 skip, op ≥ 5 bails).
+    fn peek_script_sfx(d: &Data, hash: u32) -> u32 {
+        match d.scripts.get(&hash) {
+            Some(s) => s.commands.iter().find_map(|c| {
+                if c.op == 1 { Some(c.args.get(1).copied().unwrap_or(0) as u32) } else { None }
+            }).unwrap_or(0),
+            None => 0,
+        }
     }
 
     /// `SpeechSFX(idx, 0, 0, 0)` — the DIRECT path [M 0x141b00; speech.md §1.3]: plays when the entry has
@@ -4233,9 +4320,25 @@ impl Drone {
         }
     }
 
-    /// `+0x53C`: a facial anim object attached — the port has no facial system, so never [M
-    /// 0x144488:51; speech.md §1.3 "facial lines never return / store a handle"].
-    fn facial_attached(&self) -> bool { false }
+    /// `+0x53C`: a facial anim object attached — `NDrone2_SpeechSFX` 0x141b00's facial arm stores
+    /// `AnimFacialAppend` 0x1c6490's return there [M 0x141b00:18-23], ControlSTANDARD's T+20 append
+    /// re-sets it [M speech.md §1.4], and the stop-at-end script clears it when the line finishes
+    /// [M 0x1c6490's +0xb5 = 3 + §1.4's +0x35 → +0x36 clear].
+    fn facial_attached(&self) -> bool { self.facial_talk.is_some() }
+
+    /// `NDrone2_HeadTrackObj(0, obj, time, dcv)` 0x14ada0 [M]: the prop-0x4c gate
+    /// (`behaviour_util_getProperty(0x4c, +0x4d8)` — 0 → no-op, returns 0 [M :13-16]), then the
+    /// tracking request: `AnimObjectSetHeadTracking(3.0, 0.13, obj, target, 1, 1, 5)` [M :18],
+    /// model+0xe0 = 0.07 for the callers' first arg 0 (both talk callers pass 0 [M 0x1446b0 /
+    /// 0x144488]; 0x3d8f5c29 = 0.07f), `+0x360 = target`, `+0x2c = time != 0`, `+0x358 = now +
+    /// time` (FRAME_RATE_DIV 1 at 60 Hz [M :25-29]). `DoHeadTrackingBehaviour` 0x147578:37-39
+    /// defers to the window (`now <= +0x358` → return), so the talk target owns the head until
+    /// the 200-tick request expires.
+    fn head_track_obj(&mut self, d: &Data, frame: u32, time: u32) {
+        if !self.prop(d, 0x4c) { return; } // [M 0x14ada0:13-16]
+        self.talk_track = time != 0; // [M 0x14ada0:26]
+        self.talk_track_until = frame + time; // fptoui(now + time·FRAME_RATE_DIV) [M 0x14ada0:27-29]
+    }
 
     /// `NDrone2_TalkToMissionObj` (0x14a8b8) — the Hostage (0x15cb78 case 0x1A) and HostageKiller
     /// (0x15c728 case 0x1A) mission-talk msg (sent by `NDrone2_MonitorTalkToMissionObj` 0x144340's
@@ -7918,7 +8021,7 @@ impl Drone {
                 }
                 if self.dist < self.interro_min_dist { self.interro_min_dist = self.dist; }
                 if self.interro_min_dist - self.dist < -4.0 {
-                    let _ = self.speech_request(d, 0x4a, false); // SpeechSFX(0x4a, 0, 1, 1) — NOT forced, facial-only [M 0x161a40 case 3] (review 2026-10-21: was a forced direct line)
+                    let _ = self.speech_request(d, 0x4a, false, frame); // SpeechSFX(0x4a, 0, 1, 1) — NOT forced, facial-only [M 0x161a40 case 3] (review 2026-10-21: was a forced direct line)
                     self.set_state(ATTACK);
                 }
                 true
@@ -7934,7 +8037,7 @@ impl Drone {
                 self.interro_step += 1;
                 if d.level == 0x0700_0007 {
                     match step {
-                        0 => { self.call_anim(d, anim_state::AIM_STAND, 0, 0); let _ = self.speech_request(d, 0x51, false); /* SpeechSFX(0x51, 0, 1, 1) [M 0x161a40 case 0xc] */ self.timer_c = Some(frame + 180); }
+                        0 => { self.call_anim(d, anim_state::AIM_STAND, 0, 0); let _ = self.speech_request(d, 0x51, false, frame); /* SpeechSFX(0x51, 0, 1, 1) [M 0x161a40 case 0xc] */ self.timer_c = Some(frame + 180); }
                         1 => self.set_state(ATTACK),
                         _ => {}
                     }
@@ -16858,6 +16961,44 @@ fn segment_hits_sphere(a: V3, b: V3, c: V3, r: f32) -> bool {
             if dr.enabled && dr.present && !self.npc_system_disabled {
                 dr.handle_talking(d.level, frame, self.player_pos, true, &self.channels.v, &mut self.afo_throttle, &mut self.power_last);
             }
+            // NDrone2_ControlSTANDARD 0x1490f0's facial bookkeeping, after the state's update [M
+            // speech.md §1.4]: the T+20 pending append (the first frame with `now > +0x48`, i.e.
+            // T+21), then the playing script's own op-1 sound commands (`AnimProcessScriptCmds`
+            // 0x1c1b38 case 1 — one `Rand(500)` pitch draw per fired op-1 [M :319-322], the sound
+            // at the drone, the handle discarded), then the stop-at-end detach (+0xb5 = 3 [M
+            // 0x1c6490]; the game's +0x35 done flag clears +0x36 [M §1.4]).
+            if let Some((hash, due)) = dr.facial_talk_pending {
+                if frame > due {
+                    dr.facial_talk = Some(hash); // the delayed AnimFacialAppend [M §1.4]
+                    dr.facial_talk_start = frame;
+                    dr.facial_talk_fired = 0;
+                    dr.facial_talk_pending = None;
+                }
+            }
+            if let Some(hash) = dr.facial_talk {
+                let start = dr.facial_talk_start;
+                let now_t = frame - start + 1; // script time: 1 on the attach tick, +1 per tick [M speech.md §5]
+                match d.scripts.get(&hash) {
+                    Some(script) => {
+                        for c in &script.commands {
+                            if c.op != 1 { continue; }
+                            let Some(&f) = c.args.first() else { continue };
+                            let f = f as u32;
+                            if f > dr.facial_talk_fired && f <= now_t {
+                                let sfx = c.args.get(1).copied().unwrap_or(0) as u32;
+                                let _pitch = rng.rand(500) as i32 - 250; // [M 0x1c1b38:319-322; consumed, not applied — sound.rs header]
+                                dr.anim_sounds.push(sfx); // Sound_Play3D at the drone [M :320-322]
+                                dr.facial_played.push(sfx);
+                            }
+                        }
+                        dr.facial_talk_fired = now_t;
+                        if now_t >= script.length as u32 {
+                            dr.facial_talk = None; // stop at end [M 0x1c6490's +0xb5 = 3; §1.4]
+                        }
+                    }
+                    None => { dr.facial_talk = None; } // cannot happen for a present-script attach
+                }
+            }
             let talks = std::mem::take(&mut dr.talks);
             if !talks.is_empty() { talk_queue.push((index, talks)); }
             self.used = std::mem::take(&mut dr.links_used);
@@ -16897,11 +17038,26 @@ fn segment_hits_sphere(a: V3, b: V3, c: V3, r: f32) -> bool {
             // and the angles ease back. `NDrone2_HeadTrackObj` 0x14ada0 (the Bond-talk request, from
             // `DroneFunc_DoBondTalk` 0x144488 / `NDrone2_BondTalk` 0x1446b0 behind the prop-0x4c gate) is
             // the third writer of the same state: `AnimObjectSetHeadTracking(3.0, 0.13, obj, talk_target,
-            // 1, 1, 5)` [M 0x14ada0:9-15] — the port's tracking block below covers it with the same
-            // 3.0 range gate and the eye stand-in [S fold]. HeadTrack's clamps: yaw ±1.1, 0 beyond 2.6;
+            // 1, 1, 5)` [M 0x14ada0:9-15] — ported as `talk_track`/`talk_track_until` (set by
+            // `head_track_obj` from the talk arms); its window defers this block [M 0x147578:37-39].
+            // HeadTrack's clamps: yaw ±1.1, 0 beyond 2.6;
             // pitch [-1.0, +0.6]; speed 0.14 alerted (`DCVars+0x50c > 0.66`) else 0.07 (0x1472c8). Both angles positive up.
+            if dr.talk_track && frame > dr.talk_track_until { dr.talk_track = false; } // the window expired — the game's resume re-targets fresh [M 0x1472c8:69-70]
             let aiming = dr.anim.class == 2 && dr.aims_torso();
-            if aiming {
+            if dr.talk_track {
+                // The HeadTrackObj window: `DoHeadTrackingBehaviour` returns while `now <= +0x358`
+                // [M 0x147578:37-39] — the talk target (Bond, the `glb_players` stand-in) owns the
+                // head. The ease speed is model+0xe0 = 0.07 [M 0x14ada0:19-21] within
+                // SetHeadTracking's 3.0 range [M 0x14ada0:18; the guest stands inside it — the
+                // BondTalk radius is 3.0 [M 0x1446b0:12]].
+                let (want_y, want_p) = if dr.dist <= 3.0 {
+                    dr.head_track_want(d, player.eye).unwrap_or((0.0, 0.0))
+                } else {
+                    (0.0, 0.0)
+                };
+                dr.head_yaw = rotate_to_bearing(dr.head_yaw, want_y, 0.07, crate::trig::PI);
+                dr.head_pitch = rotate_to_bearing(dr.head_pitch, want_p, 0.07, crate::trig::PI);
+            } else if aiming {
                 let dy = player.eye[1] - (dr.pos[1] + 1.2);
                 let want_p = (dy / dr.dist.max(0.001)).atan().clamp(-0.9, 0.9);
                 dr.aim_pitch = rotate_to_bearing(dr.aim_pitch, want_p, 0.2, crate::trig::PI);
@@ -18477,6 +18633,7 @@ mod tests {
             delete_me: false,
             talk_script: 0, talk_cooldown: 0,
             last_voice: 0, bond_talk_count: 0, bond_talk_cooldown: 0, bond_talk_done: 0, saw_opp_last_frame: false, footstep: false, anim_stops: Vec::new(), drops: Vec::new(),
+            facial_talk: None, facial_talk_start: 0, facial_talk_fired: 0, facial_talk_pending: None, facial_played: Vec::new(), talk_line: None, talk_track: false, talk_track_until: 0, facial_last_stamp: None,
             free_root: false, bounded: true, dtype: 0, mode_normal: 0, mode_alert: 0, mode: 0, alt_mode: 0, team: 1, alt_state: 0, scared_radius: 20.0, screamed: false, scare_shouted: false, pending_shout: None, alert_block: 0.0,
             door_open_at: 0,
             hit_door: None, door_return: 0, door_node: None, door_attempt: false, pending_door_msg: false, hit_door_open: true,
