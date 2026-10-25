@@ -142,3 +142,12 @@ Progress:
   NOT wired this window (no time to run the required suite on a behaviour change); the wiring
   needs a per-tick cell for the bullet (bbox candidates + a room-preference tie-break [S] or the
   nf-view find_cell_raycast port) and the full suite + the real-input pins.
+- (20:12 UTC) `segment_bullet_scoped(cell, from, to)` LANDED in world.rs (not yet wired into the
+  flight): the straddle-BFS runs + always + missile + dynamic, the flat walk's one-sided 0x40 drop,
+  flat fallback on no-scope/out-of-range cells. Pinned by the new lib test
+  `the_bullets_scoped_pick_skies_the_portal_unreachable_walls` (unreachable cel → the round flies
+  on; straddled portal → stops; the 0x40 fudge passes with the card behind stopping; fallbacks).
+  NOTE: the shared `seg_tri_hit` was NOT touched (it stays two-sided — the portal semantics); the
+  new `ray_tri_t` carries the one-sided ray rule [M 0x10a8c8:168]. nf-game lib: 549/0/5 on this
+  tree. The fast runner (started 19:14 on the merged tree, before every edit of this task) still
+  running — no total line yet; its failures so far are the merged tree's own.
