@@ -81,3 +81,27 @@ within a frame [M 0x17bc88/0x1e36f0..0x1e3780]), fix the order. Then both green 
 Progress:
 - (10:04) Setup: sandbox warm from the urn-break session; branch s/level-0a-rain-indoors-3 created from
   origin/s/level-0a-rain-indoors-2, origin/master merged clean; pushing before work starts.
+- (10:44) Both reds green, pushed. Mechanisms:
+  - armour: the sim's `level_exit Some(0x0700000A)` (the CURRENT level) is NOT the east-side
+    LOAD_LEVEL #59 (next 0x0700000B [D]) and no script event 0x12 fires (NF_EXIT_DBG dump) — it is
+    the mission's LevelEnd [M Mission case 4 → ResetMap_LevelToLoad(LevelToEndTo) 0x182c60:73].
+    The graph's route to the armour turns north off the z≈5.5 corridor at its node 8; the steering
+    wedges there (+1017 ticks) and parks Bond inside the west office's ch-0x15 TOUCH plates
+    (#11/#22, x −24.27..−19.96, z 8.89..14.45 [D trigger dump]) — a long stand satisfies the
+    mission's end condition. The plates' brief crossings are harmless (out 0x15 feeds the
+    door-unlock muxes [D docs]; walkreal-0a's west_doorway_repro walks straight over them, green).
+    Fix: the walk takes the AI ring's west-office legs (walkreal-0a's proven anchors), wall-clear
+    at body height [probe leg rays]. armour test green 2.12 s.
+  - escort: the contact's stream-shifted park at (3.4,6.3,6.6) put Bond's close-through-the-nav
+    into the gallery doorway wedge (4-5.5, 11.5) — the slide door's open panel + the wall band at
+    z≈11.05, re-closed every 360 quiet ticks by the auto-close [M 0x13660c-0x136700]. Fix
+    (player's stick moves, no assert touched): the lateral jog in the stall recovery + walking the
+    doorway frame's OPEN east half. escort test green 25.59 s (9533 distance checks, level_exit
+    07000002 at tick 53311).
+  - No port draw-ORDER divergence found beyond the rain-2 report's alignment [M 0x17bc88 /
+    0x18c278 / 0x18c580]; both reds were walk choreography resting on one lucky stream decision
+    each. The [S] per-test seed (05-snapshot XOR mix) remains the documented port choice; the
+    per-level game-seed rebaseline stays next-session.
+- (10:46) Full suite started on the final merged tree (daemon). Recovered binaries spot-run green:
+  sight_frustum 2/2, fix_pickups_ammo 4/4, escort_hide_findrun 3/3 (three more pending the suite:
+  direct runs OOM-killed under the build's memory pressure).
