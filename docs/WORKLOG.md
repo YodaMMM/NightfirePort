@@ -173,3 +173,9 @@ level-0a-rain-indoors-5 (2026-10-25 19:22): the glass-pan red root-caused and fi
   Bullet_init's spread draws [M 0x12c5a0:167-170] move nothing; the game spawns from the head bone
   [M 0x1a4bf0:226-245]. The rewrite aims Bond::head at the box centre through HALF_PI, asserts
   health 0 / damage 3.5 / one-landed-hit kill / health −3.5 after. Binary green 14/14 (2 ignored).
+
+---
+level-0a-rain-indoors-5 (2026-10-25 19:36): merged origin/master (batch-1025l, 24084ef2 — cut-scene
+  camera tests; src: anim.rs, nis.rs, scene.rs) into the branch; report drafted at
+  docs/reports/level-0a-rain-indoors-5.md; suite daemon restarted on the final tree 19:28 UTC
+  (the pre-merge daemon's partial run: only the 2 documented slim-ISO reds, no unexpected fails).
