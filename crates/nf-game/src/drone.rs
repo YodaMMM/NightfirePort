@@ -1342,6 +1342,19 @@ pub struct Drone {
     pub special_spot: V3,
     pub special_yaw: f32,
     pub stationary: bool,
+    /// `Drone+0x320`: `DroneMove_SetBoundryFlags` 0x14f140's four blocked-direction bits
+    /// (2 = local +z, 4 = local −z, 8 = local +x, 0x10 = local −x), zeroed and re-probed each
+    /// control tick [M 0x14f140:46-47]. Consumers: the undrawn slide's clamp (Drone_Control
+    /// 0x139268:76-83, bits 2/4) and the anim root-motion clamp (DroneAnim_PreTransCallback
+    /// 0x13b490:120-135).
+    pub boundary: u32,
+    /// `Drone+0x4F8 & 1` — the push-move flag that gates the boundary probes (0x14f140:47) and
+    /// the slide clamp (0x139268:76). SET at creation: `NDrone2_DefaultInit` 0x14b300:60's
+    /// `+0x4F8 = (+0x4F8 & 0xffea05e2) | 0x801e2` arms bit 1 with the rest of the init flags (the
+    /// only found clearer is `DSTATE_AstronautLaunch` 0x16dd28:19's `& 0xfffffffd` — an air/rope
+    /// special the +0x23 gate already excludes). The boundary-flags-fold doc's "setter
+    /// unaccounted" missed this line; the clamp is live on the shipped paths.
+    pub push_move: bool,
     /// A captain (`+0x19`).
     pub captain: bool,
     /// `+0x1A`: the special death's free root motion — the whole root translation (vertical too) moves the object,
@@ -1949,6 +1962,9 @@ impl Drone {
             death_channel: param(12) as u8,
             special_death: param(13), special_spot: pos, special_yaw: yaw,
             stationary: param(13) != 0 && param(13) != 0x0600_021f, alpha: 255.0, raise: None,
+            boundary: 0,
+            // `NDrone2_DefaultInit` 0x14b300:60 arms +0x4F8 bit 1 with the init flags.
+            push_move: true,
             head_yaw: 0.0, head_pitch: 0.0, tracking: false, track_recheck: 0, aim_pitch: 0.0,
             captain: false, snap: 0.0, event_20: false, event_21: false, holstered: false, anim_sounds: Vec::new(), voice_type: voice_type(skin), female: matches!(skin & 0xffff, 0x0e | 0x0f | 0x10 | 0x11 | 0x52 | 0x15 | 0x20 | 0x22..=0x24 | 0x17 | 0x18 | 0x2b | 0x2d | 0x34 | 0x3b | 0x3c | 0x5e), voice: None, voice_finished: true, talks: Vec::new(), patrol_cooldown: 0,
             facial_talk: None, facial_talk_start: 0, facial_talk_fired: 0, facial_talk_pending: None, facial_played: Vec::new(), talk_line: None, talk_track: false, talk_track_until: 0, facial_last_stamp: None,
@@ -2789,6 +2805,36 @@ impl Drone {
         None
     }
 
+    /// `DroneMove_SetBoundryFlags` 0x14f140: zeroes drone+0x320, then — only while the push-move
+    /// flag `+0x4F8 & 1` arms (`push_move`) — probes the four axis directions from the feet:
+    /// (0,0,±0.5)/(±0.5,0,0) scaled for mode-0x1E bots (none ported), rotated through the yaw
+    /// (the game's `ApplyMatrixLVI(obj+0x90)`, the same local→world map the slide and `can_move`
+    /// use), and tested with the game's `NDrone2_MoveTest` semantics. At the 0.5 probe length the
+    /// MoveTest's distance/slope gates pass by construction [M 0x155330:86-93]; the reachable test
+    /// is `AINetwork_BoundsTest` ONLY — the game's scan has NO collision line of sight [M
+    /// 0x155330:95-108; the port's `move_test` adds one, a documented [S] stand-in that must NOT
+    /// stand in here: its rays graze the 07000007 doorway throat and would block the game-passable
+    /// doorway]. `MoveTest != 1` sets the bit (2 = +z, 4 = −z, 8 = +x, 0x10 = −x) [M
+    /// 0x14f140:82-84/119-121/156-158/193-195]; the movement-locked arm (`+0x4F8 & 0x10`, the
+    /// port's `stationary`) skips every probe and sets all four bits [M 0x14f140:51, 88, 125, 162
+    /// — `bVar3` stays false]. The probes publish the reach globals (DroneReachCheckPos /
+    /// DAT_0029b2f4-fc) [M :73-76 etc.] — the port reads no globals. Called behind the +0x23
+    /// air/rope flag from the control tick, `NDrone2_ControlSTANDARD` 0x1490f0:202-206.
+    fn set_boundary_flags(&mut self, d: &Data) {
+        self.boundary = 0;
+        if !self.push_move { return; }
+        let (s, c) = (crate::trig::sinf(self.yaw), crate::trig::cosf(self.yaw));
+        let feet = self.feet();
+        for (bit, (ox, oz)) in [
+            (2u32, (0.5f32 * s, 0.5f32 * c)), (4, (-0.5 * s, -0.5 * c)),
+            (8, (0.5 * c, -0.5 * s)), (0x10, (-0.5 * c, 0.5 * s)),
+        ] {
+            let ok = !self.stationary
+                && d.nav.bounds_test(feet, [feet[0] + ox, feet[1], feet[2] + oz], false, false).0 == 1;
+            if !ok { self.boundary |= bit; }
+        }
+    }
+
     /// Advances the script; at its end continues with the danim's follow-on (`Drone_AnimInfo +10`); handles a pending
     /// call (`DroneAnim_CallHandler`): start the transition danim, complete when the anim state is reached.
     fn update_anim(&mut self, d: &Data) -> Option<(u8, u8)> {
@@ -2798,8 +2844,41 @@ impl Drone {
         // 0.02 per frame with no gait while the drawn patroller near the gate shows the walk's 115-tick gait.
         let info = d.tables.info.get(self.anim.danim as usize).copied().unwrap_or([0; 24]);
         if !self.drawn && info[0] & 4 != 0 && self.anim.blend_wait == 0 {
+            // The game's undrawn slide is a RAW position add — no MoveTest, no ray, no push: on the
+            // `NDrone2_DoAnimation == 0` arm `Drone_Control` adds `sinf(obj+0x54)·Drone+0x58c` to
+            // obj+0x30 and `sinf(obj+0x54 + π/2)·Drone+0x58c` to obj+0x38 directly [M
+            // Drone_Control 0x139268:75-96; the `+0x580 != GameState+0x52` gate :71 — the port's
+            // danim record belongs to this game state by construction]. `Drone+0x58c` is
+            // `Drone_AnimInfo[danim]+4`, stored when the danim was set [M SetDAnimInternal
+            // 0x13aee8:50-51] (= this `v`), and the slide gate `+0x570 & 4` is that danim's info
+            // flags word [M 0x149f88:11-18]. Routing the slide through `move_by`'s probe wedged
+            // every undrawn walker that stood near jamb/door geometry: the 0.4-overshoot rays
+            // graze the 07000007 west doorway's throat and rejected every 0.02 step forever
+            // (drone[22] frozen at (79.42,−50.32) with 994 consecutive `probe_move` rejects,
+            // walk danim 0x188 looping — s/level-07-guest-collision-3).
+            // The game's clamp on the same arm [M 0x139268:76-83]: while the push-move flag arms
+            // (`+0x4F8 & 1`, `push_move` — its setter is unaccounted in the decompile,
+            // docs/systems/boundary-flags-fold.md) AND no door is bound (`+0xBA8 == 0`, the
+            // port's `hit_door`), a blocked local +z (`+0x320` bit 2) zeroes a positive slide and
+            // bit 4 a negative one; the bits are `DroneMove_SetBoundryFlags`'s probes [M 0x14f140,
+            // `set_boundary_flags`]. (The game also clears `+0x4F8 & 0x100000` here [M :74] — the
+            // port's flag has no reader; unmodelled.)
             let v = f32::from_le_bytes([info[4], info[5], info[6], info[7]]);
-            if v != 0.0 && v.is_finite() { self.move_by(d, [crate::trig::sinf(self.yaw) * v, crate::trig::cosf(self.yaw) * v]); }
+            if v != 0.0 && v.is_finite() {
+                let mut v = v;
+                if self.push_move && self.hit_door.is_none() {
+                    if self.boundary & 2 != 0 && v > 0.0 { v = 0.0; }
+                    if self.boundary & 4 != 0 && v < 0.0 { v = 0.0; }
+                }
+                if v != 0.0 {
+                    let dx = crate::trig::sinf(self.yaw) * v;
+                    let dz = crate::trig::cosf(self.yaw) * v;
+                    self.pos[0] += dx;
+                    self.pos[2] += dz;
+                    self.special_spot[0] += dx;
+                    self.special_spot[2] += dz;
+                }
+            }
             self.root_prev = None;
             return self.call_handler(d);
         }
@@ -17180,6 +17259,11 @@ fn segment_hits_sphere(a: V3, b: V3, c: V3, r: f32) -> bool {
                     }
                 }
             }
+            // `NDrone2_ControlSTANDARD` 0x1490f0:202-206: behind the +0x23 air/rope flag,
+            // `DroneMove_SetBoundryFlags` re-probes the four local-axis boundary bits each tick —
+            // before the anim pass whose slide (Drone_Control 0x139268:76-83) and root motion
+            // (DroneAnim_PreTransCallback 0x13b490:120-135) read them.
+            if !dr.air { dr.set_boundary_flags(d); }
             let _pa = crate::prof::scope("drone: update_anim");
             if let Some((next_ai, done_msg)) = dr.update_anim(d) {
                 // `DroneAnim_CallFullyComplete` 0x13dcb8's deferred arm via `DroneAnim_SetEndAIState` (0x13dd00):
@@ -18624,6 +18708,9 @@ mod tests {
             opp_los: false,
             corpse: false, death_pending: false, hit_by_player: false, fail_reason: None, alert_status: 0, alert_status_prev: 0, alert_status_frame: 0, interro_armed: false, interro_min_dist: 0.0, interro_step: 0, interro_latch: None, assist_src: None, assist_ended: false, armed_peer_dist: f32::MAX, wait_channel: 0, wait_channel_on: false, route_blocked: false, death_channel: 0, special_death: 0, special_spot: pos, special_yaw: 0.0,
             alert_pending: 0,
+            boundary: 0,
+            // `NDrone2_DefaultInit` 0x14b300:60 arms +0x4F8 bit 1 with the init flags.
+            push_move: true,
             armed_peer_exit_dist: f32::MAX,
             peer_latch: u32::MAX,
             drawn_grace: 2, // `control_init_object` 0x134630:16
