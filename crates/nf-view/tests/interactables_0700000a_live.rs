@@ -100,10 +100,28 @@ fn armour_pickup_taken_by_walking_over_it() {
     assert!(w.scene.sim.as_ref().unwrap().drones.health.armour == 0.0,
         "Bond spawns without armour");
     // #730 sits on the office floor at (−13.46, 0.90, 7.61) [D]; out of the cab, then the AI
-    // graph's own route (the direct line crosses the office-N walls [D]).
+    // ring's west-office legs — the anchors walkreal-0a's ring walks green on this branch (the
+    // west_doorway_repro legs). The graph's own route to the armour room turns north off the
+    // z≈5.5 corridor at its node 8, and the steering wedges against the passage wall there:
+    // under the game-speed rain's stream the wedge parks Bond inside the west office's ch-0x15
+    // floor plates (#11/#22, x −24.27..−19.96, z 8.89..14.45 [D trigger dump]) for ~1000 ticks —
+    // long enough for the mission's LevelEnd to fire and the sim to request the level reload
+    // mid-route [M Mission case 4 → ResetMap_LevelToLoad(LevelToEndTo) 0x182c60:73; the plates'
+    // brief crossings are harmless — the ring repro walks straight over them]. The player's line
+    // is the ring's own: down the west office block, east along the z≈5.5 corridor, then
+    // north-east onto the armour — every leg wall-clear at body height [probe leg rays].
     w.walk_to(Wp::new(-3.9, 0.0, 13.2), "out of the lift");
     w.walk_to(Wp::new(-3.9, 0.0, 15.5).r(1.2), "lobby south");
-    assert!(w.follow_nav_route([-12.6, 0.4, 8.6], "to the armour's room"), "no nav route to the armour");
+    w.walk_to(Wp::new(-10.0, 0.4, 16.0).r(1.2), "the west hall");
+    for (to, label) in [
+        ([-20.5, 1.3, 16.5], "the west offices' north corridor"),
+        ([-20.5, 1.3, 5.5], "down the west office block"),
+        ([-17.5, 1.3, 5.5], "east of the west door"),
+        ([-16.2, 1.3, 5.8], "the ai node 27 east"),
+        ([-15.0, 1.3, 5.7], "the ai node 26 east"),
+    ] {
+        w.walk_to(Wp::new(to[0], to[1], to[2]).r(1.2), label);
+    }
     w.walk_to(Wp::new(-13.46, 0.4, 7.61).r(0.9), "onto the BodyArmourHeavy");
     w.wait(20);
     assert!((w.scene.sim.as_ref().unwrap().drones.health.armour - 50.0).abs() < 1.0,
