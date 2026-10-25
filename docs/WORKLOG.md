@@ -18,3 +18,23 @@ Plan: reuse the sandbox (work/ + ISO + nf-queue); branch pushed at start; census
 mission records + the 070004a exit/movie triggers [D]; trace the port's 0x072004a resolve; port the
 mission-end path so the outros play as the game's; real-input tests for both endings; suite in
 foreground chunks (the sandbox kills background jobs); report + finish steps.
+
+### mission-outros — the outro mechanism + the subtitle-track port (2026-10-25 ~23:55 UTC)
+The level-end vs mission-end distinction, from the decompile + the disc: 0700004a (Phoenix Fire
+part 3 of mission 0x07000011 [L the mission table]) ends at the LEVEL only — the pack cut-scene
+0x060006cf's stream 27 writes ch 0x22 [D 0780004a.bin], the out-0x22 SP starts, and the lib's
+0x060006d3 fires event 0x12 with the movie code 0x0720004a [D] — which has NO script arm and NO
+UsingMovie entry [M 0x1d6360's switch + 0x107eb8] → state 6 pops instantly → phase 2 chains
+0x072004a → 0x0710013 → 0x07000013 [M 0x1d3560]. The MISSION ends on 0700013: case 6 →
+LevelToEndTo 0x0730013 [M 0x182c60:107-110]. 07000004 = the mission end directly (0x0730004 [M
+:89-90]). Both outros' visible halves: the PSS video + the SP_Create'd SUBTITLE script [M
+0x1d6360's script switch] — the scripts are timed Text tracks [D 07000500.bin: 0x0600095d =
+8 entries, length 2695; 0x06000968 = 4 entries, 2292]. The root cause of "the cut-scene doesn't
+play": the slim image's PSS are 0-byte stubs [D] and the game skips a failed open (BGFMVPlaying
+stays 0 [M 0x1081a8]) — the port matched the game but played nothing. PORTED: the subtitle track
+(outro_script_for = 0x1d6360's 14 arms; subtitle_track reads 07000500.bin's type-7 script), the
+FE's ST_MOVIE tick runs the track beside the movie (the active label/time exposed for the draw),
+and when the PSS can't start the hold runs the track's length [S — the stand-in; the game on a
+stub pops at once]. Tests: mission_outros_live (3 — the track data, the script start, the hold,
+the resolve → the results; the 4a chain + the no-0x4a-writer pin). Adjacent green:
+reward_after_outro, doublecross_transitions_live, fix_mission_live, walkreal_07000004_live.

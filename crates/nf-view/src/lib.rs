@@ -6961,16 +6961,37 @@ pub fn mission_movie_glue(fe: &mut menu::FrontEnd, slot: &mut Option<movie::Play
             None => {
                 let code = fe.flow.movie_code;
                 if code != 0 {
-                    match movie::Player::start(iso, code, movie_sfx_volume(fe)) {
-                        Ok(p) => {
-                            eprintln!("movie: playing {code:08x} (state 6)");
-                            fe.flow.movie_playing = true; // BGFMVPlaying = 1 [M 0x1081a8]
-                            *slot = Some(p);
+                    // mission-outros: the subtitle script rides the movie [M 0x1d6360's
+                    // SP_Create beside psiStartBackgroundMovie] — loaded once off 07000500.bin.
+                    if fe.flow.outro_subs.is_none() {
+                        fe.flow.outro_subs = menu::subtitle_track(iso, code);
+                        if let Some(t) = &fe.flow.outro_subs {
+                            eprintln!("movie: subtitle track {code:08x} → {} entries, length {}", t.entries.len(), t.length);
                         }
-                        Err(e) => {
-                            eprintln!("movie: {code:08x} not started: {e:?} — the headless countdown stands in");
-                            fe.flow.movie_playing = false; // an un-started movie: BGFMVPlaying == 0 [M 0x1082e8]
+                    }
+                    if !fe.flow.outro_hold_armed {
+                        match movie::Player::start(iso, code, movie_sfx_volume(fe)) {
+                            Ok(p) => {
+                                eprintln!("movie: playing {code:08x} (state 6)");
+                                fe.flow.movie_playing = true; // BGFMVPlaying = 1 [M 0x1081a8]
+                                *slot = Some(p);
+                            }
+                            Err(e) => {
+                                eprintln!("movie: {code:08x} not started: {e:?} — the headless countdown stands in");
+                                fe.flow.movie_playing = false; // an un-started movie: BGFMVPlaying == 0 [M 0x1082e8]
+                                // mission-outros: the no-movie hold runs the subtitle track's
+                                // length — the game holds state 6 on the retail PSS's life
+                                // [M 0x1082e8], and on a stubbed image (this sandbox's
+                                // /MOVIES/*.PSS are 0-byte [D]) it would pop at once; the
+                                // track's length keeps the outro up with its text. [S] the
+                                // stand-in duration — the retail timing (the track spans the
+                                // movie [D the parsed lengths 2695/2292]) — is the model.
+                                if let Some(t) = &fe.flow.outro_subs { fe.flow.movie_frames = t.length; }
+                                fe.flow.outro_hold_armed = true;
+                            }
                         }
+                    } else {
+                        fe.flow.movie_playing = false;
                     }
                 } else {
                     fe.flow.movie_playing = false;
@@ -6999,6 +7020,12 @@ pub fn mission_movie_glue(fe: &mut menu::FrontEnd, slot: &mut Option<movie::Play
             // (`briefing_plays_live`, bisected to the a2cdd771 merge).
             let code = fe.flow.level_to_load;
             if matches!((code >> 20) & 0xff, 0x71 | 0x73) {
+                // mission-outros: the subtitle script loads with the movie [M 0x1d6360's
+                // SP_Create beside psiStartBackgroundMovie — the early-started decoder still
+                // runs beside it].
+                if fe.flow.outro_subs.is_none() {
+                    fe.flow.outro_subs = menu::subtitle_track(iso, code);
+                }
                 match movie::Player::start(iso, code, movie_sfx_volume(fe)) {
                     Ok(p) => {
                         *slot = Some(p);
