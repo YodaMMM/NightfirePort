@@ -14275,8 +14275,17 @@ fn segment_hits_sphere(a: V3, b: V3, c: V3, r: f32) -> bool {
             let g = &mut self.props.gunimps[gi];
             // aim [M 0x1320d8:124-135]: yaw -= stick-x·FR·0.015, pitch -= stick-y·FR·0.015,
             // pitch clamped to [−π/2, +π/4]; FRAME_RATE_MUL = 1.0 [L].
-            g.yaw -= turn * 0.015;
-            let p = g.pitch - look * 0.015;
+            // gunimp-aim-signs: the two axes are NOT symmetric. `Input.turn` is
+            // the player's yaw delta, and the port's yaw grows LEFT (`player.rs:860` `yaw += turn`)
+            // while the game's action 3 is the raw stick x (right+), so `yaw -= action3` becomes
+            // `yaw += turn`. `Input.look` is the player's pitch delta, UP-positive (`lib.rs:6067`
+            // `look -= dy`; the invert setting is applied upstream at `lib.rs:4823`), and the gun's
+            // `pitch` is the game's own down-positive angle (the mount's view pitch is
+            // `-pitch_s*0.5`, `mounted_pose`), so the game's `pitch -= action4` maps straight to
+            // `pitch -= look` -- flipping it reversed the pitch ("up and down
+            // are bad".
+            g.yaw += turn;
+            let p = g.pitch - look;
             g.pitch = if p < -1.5707964 { -1.5707964 } else if p > 0.7853982 { 0.7853982 } else { p };
             // the 0.15 ease toward the smoothed mirrors [M 0x1320d8:136-161]
             g.pitch_s += (g.pitch - g.pitch_s) * 0.15;
