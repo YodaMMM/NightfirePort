@@ -156,3 +156,18 @@ diff against Bullet_init 0x12d890 / Bullet_CollisionHandler 0x12ce80 / Bullet_Do
 lighting + digit-draw paths, fix each difference with [M] citations, real-input tests from the
 level start, headless renders of the three named spots. Suite started in background at branch
 creation.
+
+Outcome (same session, 17:1x UTC): the ride probe (real input from the level start) matched the
+driver's spots to ~10 ticks and showed the SIM green end to end (lands, rides at −0.0303 u/tick
+with the cab, fuse ticks, laser burns, undefused blast fails the mission). All four play
+symptoms were draw-side; three fixes landed: (1) the satchel mesh 0x20007b3 carries glist 0x880
+[D] — the bullet-slot blanket 1.0 dim exemption replaced by the game's mesh-0x800 rule
+[M 0x1e5888 + 0x1cb178 + 0x1336f8]; the ride's colour slot now reads the shaft ambient
+[25,27,35]; (2) the countdown digits drew BURIED (the old z +0.06 ran along −normal) — replaced
+with the game's offsets (0.09375/0.03262, −0.0021, −0.123) and the RotMatrix((π/2,0,π)) fold
+[M 0x12d890:486-511, 0x1e2368, 0x1e2820]; they now draw 0.123 above the stuck charge; (3) the
+cab (script entity kind 49, mesh 0x20005b4) keys its translation at the mesh-space origin whose
+cel is an off-shaft VOID room — the palette room test and the script ambient arm now read the
+posed glist-bounds centre (the game's obj+0x80 world sphere [M 0x133070]). No GPU in the
+sandbox — the three spot renders + the fresh-boot checks are listed for the main agent in the
+report. Report: docs/reports/level-4a-satchels-lift.md.

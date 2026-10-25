@@ -10058,6 +10058,29 @@ pub fn build(level: &Level, cels_only: bool, skeletons: &HashMap<u8, Skeleton>, 
             let nb = c.skeleton.bones as usize;
             if fs.hidden[ci] { for k in 0..=nb { p[base + k] = collapse(&c.matrix); } continue; }
             let cpos = fs.posed[ci].as_ref().map_or(c.matrix[3], |(_, _, m)| m[3]);
+            // satchel-lift-cab: a script ENTITY character's room test reads the posed matrix ×
+            // its mesh's glist-bounds centre, not the bare translation. The 0700004a lift cab
+            // (script obj #0, entity kind 49, hash 0x20005b4) keys its ride translation at the
+            // mesh-space origin (0, y, 0) while the cab GEOMETRY sits in the shaft (x ≈ 3.6,
+            // z ≈ −2 [D the mesh bounds]); `cel_index_at` at the bare origin resolves to the
+            // off-shaft void rooms (28/22/21 [L probe4a_draw]) — never in the portal walk's set
+            // from the eye's shaft cell — so the palette collapsed the cab every ride frame and
+            // the driver rode inside an invisible cab (the black frame at (3.61, −54.06, −2.58):
+            // "only a hazard-striped strip, a column and a green case draw"). The game relinks
+            // the moved entity into its cel chain per tick (`control_handle_cel_change` 0x133288
+            // [M 0x1336f8:147-236]) and poses its world sphere from the GLIST bounds
+            // (`Control_BuildWorldSph` 0x133070) — the world-geometry centre is the port's
+            // stand-in for that link cel. Entities without bounds keep the translation.
+            let vis_pos = match (fs.posed[ci].as_ref(), self.sim.as_ref().and_then(|s| s.char_script.get(ci).copied().flatten())) {
+                (Some((_, _, m)), Some((hash, _))) => self.sim.as_ref()
+                    .and_then(|s| s.glist_bounds.get(&hash))
+                    .map_or(cpos, |(lo, hi)| {
+                        let bc = [0, 1, 2].map(|k| (lo[k] + hi[k]) * 0.5);
+                        let w = transform(m, bc);
+                        [w[0], w[1], w[2], 1.0]
+                    }),
+                _ => cpos,
+            };
             // The first-person view model is never room-culled: the game draws it in its own list-2
             // pass after the world, not through any cel's object list [M Game_Draw: the view model's
             // list-2 draw after psiLight_SetLights(0); View_SetDrawInNoViews is its only hide]. The
@@ -10065,7 +10088,7 @@ pub fn build(level: &Level, cels_only: bool, skeletons: &HashMap<u8, Skeleton>, 
             // in a cel the walk had not marked (doorways, room edges), so the hands and gun
             // vanished.
             let view_model = self.view_models.values().any(|&v| v == ci);
-            if !live_drone(ci) && !view_model && !vis_room([cpos[0], cpos[1], cpos[2]]) { for k in 0..=nb { p[base + k] = FAR; } continue; }
+            if !live_drone(ci) && !view_model && !vis_room([vis_pos[0], vis_pos[1], vis_pos[2]]) { for k in 0..=nb { p[base + k] = FAR; } continue; }
             match &fs.posed[ci] {
                 Some((mats, _, m)) => {
                     p[base] = *m;
@@ -10335,7 +10358,28 @@ pub fn build(level: &Level, cels_only: bool, skeletons: &HashMap<u8, Skeleton>, 
                             // A script entity is its own object (the truck: nine 0x8880 objects [L]):
                             // 0x800-glist entities dim by the ambient at their live matrix; the others
                             // (coronas, triggers) draw untinted — not character 0's ambient.
-                            return match s.script_entity_k((h, si), hash, k as usize).map(|m4| amb_at(s, &m4)) {
+                            // satchel-lift-cab: the ambient reads the entity's GEOMETRY centre (the
+                            // posed matrix × its glist-bounds centre), not the bare matrix
+                            // translation — the 0700004a lift cab keys its ride translation at the
+                            // mesh-space origin (0, y, 0) whose cel is the off-shaft void room
+                            // (28/22/21 [L probe4a_draw]); the dim followed the void's ambient and
+                            // the cab drew black inside its own shaft (the driver's black frame at
+                            // (3.61, −54.06, −2.58): the interior invisible against the dark shaft,
+                            // only the hazard strip, a column and the satchel showing). The game's
+                            // object ambient ramps toward the cel ITS world sphere sits in
+                            // (`Lights_CalcAmbientLight` 0x1cb178 over obj+0x20's cel; the world
+                            // sphere is the posed glist bounds, `Control_BuildWorldSph` 0x133070).
+                            let geom = |m4: &Mat4| -> Mat4 {
+                                match s.glist_bounds.get(&hash) {
+                                    Some((lo, hi)) => {
+                                        let bc = [0, 1, 2].map(|k| (lo[k] + hi[k]) * 0.5);
+                                        let w = transform(m4, bc);
+                                        [[m4[0][0], m4[0][1], m4[0][2], 0.0], [m4[1][0], m4[1][1], m4[1][2], 0.0], [m4[2][0], m4[2][1], m4[2][2], 0.0], [w[0], w[1], w[2], 1.0]]
+                                    }
+                                    None => *m4,
+                                }
+                            };
+                            return match s.script_entity_k((h, si), hash, k as usize).map(|m4| amb_at(s, &geom(&m4))) {
                                 Some(m) if self.models_0x800.get(&hash).copied().unwrap_or(false) => m,
                                 _ => one(),
                             };
