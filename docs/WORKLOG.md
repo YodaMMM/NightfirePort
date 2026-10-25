@@ -12,3 +12,13 @@ Plan: reuse sandbox work/ + ISO + nf-queue; branch pushed at start; fast suite r
 early; census the 0x06000833 script streams (channels, events on the door object) and the
 port's Door_* path; reproduce before fix; tests pin only [M]/[D]/[L]-evidenced behaviour;
 report + finish steps.
+
+## level-14-cutscene-door-2 (2026-10-26, sandbox expiring ~01:08 UTC)
+Branch `s/level-14-cutscene-door-2` off origin/s/level-14-cutscene-door (6acb90a1), to merge
+origin/master. Task: land ONLY the door-leaf keying from that branch (script 0x06000833 streams
+10/11 key the door leaves 0x02000891/0x02000892 [D]; the port never applied them to placed door
+pair #116/#117), keeping master's camera-only Script_CameraStart identity rule (nis.rs case 4)
+— NOT the branch's whole-script-base reset, which turns 4 master-green live tests red
+(walkreal_07000001_live, walkreal_07000008_live, zoe_gondola_realpath_live,
+interact_07000001_live). All four must stay green plus the door test; full suite on the merged
+tree; report + finish steps.
