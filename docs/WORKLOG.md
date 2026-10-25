@@ -13,3 +13,23 @@ Plan: reuse sandbox work/ + ISO + nf-queue; branch pushed at start; fast suite r
 early; census Script_CameraStart / Script_UpdateCamera / Script_Interp case 4 and the port's
 camera path, then the auto-aim census (target pick + lead, moving shooter); reproduce before
 fix; tests pin only [M]/[D]/[L]-evidenced behaviour; report + finish steps.
+
+- (17:28-19:10) Branch pushed at start; fast suite up (run_suite.sh launcher: alsa prefix env;
+  the nohup needs setsid + cargo on PATH here). [M] cut-scene census: fresh-load probe
+  (probe_0700004a_cutscenes_live) — SP #42 0x06000571 t0 (no camera, the playable ride), the
+  landing NIS 0x060006cf t1611-2186 (camera ON, 4 shots fov 0.672/0.375/0.500/0.459 = key scales
+  0.504/0.281/0.375/0.3445, hand-back t2186 = the 575-tick [L lift-4] hold, disable off t2187),
+  SP 0x06000052 t3088, exit t3540 — no near-zero fov, no inside-geometry eye; the camera math is
+  already bit-pinned (fix_camera_exact_math). Open delta [S]: the port's fov aspect is hard-coded
+  4/3 [nis.rs:1013] vs the game's live viewer aspect [M 0x1baf70:22-42] (16:9 tighter shots).
+  [M] auto-aim census: the game's chain has NO velocity anywhere — Check_AutoAim 0x1a73f8
+  (instantaneous cones + LOS mask 0xa, screen-space offsets 0x120/0x124), GetAimingPoint 0x1a4a98
+  (re-projection through the 512x448 viewer planes, self-consistent at fixed fov),
+  WeaponInitBullet 0x1a4bf0/Bullet_init 0x12c5a0 (no shooter/cab inheritance), FeetOnPoint
+  0x194188 → InheritVelocity 0x133e88 (position only, aim world). Port matches structurally.
+  The real-play "tracks badly on the elevator" root cause: the shaft doors never auto-open
+  (the level's KNOWN GAP §6) + the harness's unset drawn bit — the ride pin shows 150 sensor-LOS
+  ticks from the moving cab through the 0x40 panes (t2701+, y -71.59) that the game's pick would
+  consume. Pins: fix_autoaim_elevator_live (ride+hand-back+LOS windows) and ai_live::
+  auto_aim_from_a_moving_shooter_is_the_same_instantaneous_geometry (no-lead). Report + renders
+  + live checks: docs/reports/level-4a-cutscene-autoaim.md.
