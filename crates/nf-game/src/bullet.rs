@@ -193,13 +193,13 @@ impl Bullet {
         if self.travelled > self.range { step -= self.travelled - self.range; }
         let l = step.max(1.0);
         let end = [self.pos[0] + self.dir[0] * l, self.pos[1] + self.dir[1] * l, self.pos[2] + self.dir[2] * l];
-        // fix-foliage-bullets: the flight trace reports pass-flagged hits like any other (the
-        // shell of a 0x41-flagged tree node reaches the handler); the caller's HITDATA walk then
-        // carries the round past them (`Collide_Update` 0x1ea398:216-229 keeps pass-flagged hits
-        // in the walk, `Bullet_CollisionHandler` 0x12ce80 sets state 1 past them). The one trace
-        // the game runs with the bit-0x8 DROP is the homing LOS (`Bullet_homing` 0x12f358:92,
-        // flags 8) — the port's `segment_bullet` there.
-        let tw = world.segment(self.pos, end);
+        // The flight trace drops the pass-flagged hits (segment_bullet) — the same rule the
+        // player-bullet flight walks [M Bullet_update 0x12e7b0 disasm 0x12f030-0x12f058 arms the
+        // HITTEST pick every flying tick (+0x94 = 0x101/0x201, +0x9a = the surface mask), and
+        // Collide_Update 0x1ea398:216-229 walks the sorted contact list past every pass-flagged
+        // hit (glist node 0x40 / surface byte 0x40, Collide_Intersect disasm 0x1ebf78-0x1ebf80)
+        // to the first solid one]. Drone-fired rounds run the same Bullet_update.
+        let tw = world.segment_bullet(self.pos, end);
         let tp = segment_cylinder(self.pos, end, player);
         let at = |t: f32| [self.pos[0] + (end[0] - self.pos[0]) * t, self.pos[1] + (end[1] - self.pos[1]) * t, self.pos[2] + (end[2] - self.pos[2]) * t];
         // CompHitData 0x1d33c0 [M] — QuickSort comparator id 2 (Collide_Update 0x1ea398 / Collide_RayIntersect 0x1ec690 / Collide_SphereIntersect 0x1ec940 / Collide_CylinderIntersect 0x1ecc00 / Collide_FilterBullets 0x1ece30 sort their hit lists by the f32 at HITDATA+0xc, ascending); the port keeps no hit list — the nearest-of comparison below replaces the sort.

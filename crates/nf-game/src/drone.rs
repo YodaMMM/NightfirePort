@@ -13570,14 +13570,23 @@ fn segment_hits_sphere(a: V3, b: V3, c: V3, r: f32) -> bool {
                 }
             }
             self.bullet_path_weapons.push(b.weapon);
-            // fix-foliage-bullets: the flight trace stays the plain first-hit ray. The game's
-            // pass machinery lives in the Collide_Update walk (0x1ea398:216-229) and the
-            // handler's per-hit state-1 arm (0x12ce80), but the bullets' own HITTEST stays
-            // inactive (+0x94 = 0 [M 0x12c668]) and the live-pinned guard cover trace
-            // (ai_live guard_takes_cover_like_the_game, UnderCoverAim 37) says the round stops
-            // on the flagged tree's first face — the pass does NOT lift the flight stop. The
-            // bit-0x8 drop is the AIM/LOS family's (segment_bullet).
-            let tw = d.world.segment(b.pos, end);
+            // The flight trace drops the pass-flagged hits (segment_bullet): the game's flying
+            // bullet ARMS its HITTEST pick every tick (+0x94 = 0x101/0x201, +0x9a = the surface
+            // mask 0x20 for guns without weapon_data+0x6c & 0x800 [M Bullet_update 0x12e7b0 disasm
+            // 0x12f030-0x12f058, 0x12f134/0x12f154]) and its sorted contact list is walked past
+            // every pass-flagged hit to the first solid one [M Collide_Update 0x1ea398:216-229 —
+            // pass = HITDATA+0x51 bit 1 (the glist node 0x40 flag / the surface byte's 0x40,
+            // Collide_Intersect disasm 0x1ebf78-0x1ebf80) | +0x50 bit 0x40 | the 0x80 random roll
+            // | (mask 0x20 → glass class 0x10 passes); a non-pass hit ends the walk]. The
+            // stairwell's 'stairwell_blocking_ploys…' fudge (glist 0x10, triangles mat 0x40 [D
+            // 07000011 map43#126]) is exactly such a pass surface: the game's rounds fly through
+            // it to the rope guards. (The earlier reading here — the flight keeps the plain
+            // first-hit ray because HITTEST+0x94 stays 0 — read the INIT zeroing at 0x12c668;
+            // the flight re-arms the mask per tick, so the walk rule governs.) The 0x80 random
+            // roll and the glass-class pass are not modelled in the port's flight trace (no
+            // 0x80/glass surface sits on these paths; adding the roll would spend RNG the game
+            // spends only per 0x80 hit) — [S] documented deviation.
+            let tw = d.world.segment_bullet(b.pos, end);
             for (i, dr) in self.list.iter().enumerate() {
                 // `Drone_CollisionHandler` 0x140968:62 returns while `NPCGlobals == 0` (the NIS freeze:
                 // drones take no damage) and `Collide_PickObj` 0x1eae80:26-30 drops `obj+0xF0 & 0x20`

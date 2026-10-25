@@ -16,3 +16,19 @@ a round into a real wall still stops.
 
 Progress:
 - (08:48) Sandbox survived (repo + work/ + ISO + rust present); branch created and pushed.
+- (09:00) [M census + disasm] The blocker identified: map43#126 "stairwell_blocking_ploys, this
+  may look od buts its a fudge!!!! do not change or thre game will break!" (glist 0x10, triangle
+  surface byte 0x40) crosses every Bond->guard ray at t 0.05-0.10 (census test
+  stairwell_bullet_census_07000011 in world.rs, --ignored). The game's flight passes it: the
+  flying bullet ARMS its HITTEST pick every tick (+0x94 = 0x101/0x201, +0x9a = surface mask 0x20
+  for guns without weapon+0x6c & 0x800 [M Bullet_update 0x12e7b0 disasm 0x12f030-0x12f058,
+  0x12f134/0x12f154]) and Collide_Update's walk goes past every pass-flagged hit to the first
+  solid one [M 0x1ea398:216-229]. The earlier "the pick never arms" reading (Bullet_init's
+  0x12c668 zeroing) was the init value only — the flight re-arms per tick.
+- (09:10) Fix: the player- and drone-bullet flight traces use segment_bullet (drop node/mat 0x40)
+  [drone.rs update_player_bullets + bullet.rs Bullet::update]; the foliage-test premise corrected
+  (its flight assertion flipped to the walk rule — the tree stop moves to the unflagged wood
+  core; the bulletproof LOOK unchanged, the core's decals hide inside the canopy).
+- (09:40) Tests: NEW stairwell_bullets_07000011_live 2/2 (the round from the reported spot
+  reaches and damages the rope guard through the real input path; sister: a wall round stops);
+  fix_foliage_bullets_live 3/3 (corrected); nf-game lib 547/547.

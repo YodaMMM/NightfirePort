@@ -2152,4 +2152,93 @@ mod tests {
             assert!(!w.line_of_sight([0.0, 1.0, 0.0], [4.0, 1.0, 0.0], m), "{name}: plain geometry blocks");
         }
     }
+
+    /// level-11-stairwell-bullet-wall: the assertion-free bullet-path census. From each reported
+    /// Bond spot toward the rope guards [D task brief], list EVERY triangle the port's collision
+    /// sets hold on the ray (static / missile cage / dynamic), with the owner's identity (map,
+    /// object, name, glist flags), the material byte and the pass flags — the candidate invisible
+    /// wall the game's bullet passes. Run with --ignored --nocapture.
+    #[test]
+    #[ignore = "assertion-free census; run with --ignored --nocapture"]
+    fn stairwell_bullet_census_07000011() {
+        use nf_formats::iso9660::IsoImage;
+        let iso = std::env::var("NF_ISO").expect("NF_ISO");
+        let img = IsoImage::open(&iso).expect("open iso");
+        let (entries, bin) = nf_formats::disc::files_bin_entries(&img).expect("FILES.BIN");
+        let fe = entries.iter().find(|e| e.name.eq_ignore_ascii_case("07000011.bin")).expect("archive");
+        let data = img.read_bytes(bin.lba as u64 * 2048 + fe.offset as u64, fe.size as u64).expect("read");
+        let level = Level::parse(&data).expect("parse 07000011");
+        let instances = level.instances(true).0;
+        let w = CollisionWorld::build(&level, &instances);
+        // The pushed static instances in push order (build_scoped's filter: collision present,
+        // not the 0x20 shadow flag, not the 0x1000 cage) — the identity table for stat.owners.
+        let mut stat_src: Vec<(usize, usize)> = Vec::new();
+        for inst in &instances {
+            let obj = &level.maps[inst.map].objects[inst.object];
+            if obj.collision.is_none() { continue; }
+            if obj.flags & 0x20 != 0 || obj.flags & 0x1000 != 0 { continue; }
+            stat_src.push((inst.map, inst.object));
+        }
+        let spots: [[f32; 3]; 3] = [[15.91, 24.01, -2.45], [20.35, 24.01, -2.44], [15.33, 26.69, 1.33]];
+        let guards: [[f32; 3]; 2] = [[18.895, 46.516, 1.434], [19.745, 46.580, 0.363]];
+        for (si, s) in spots.iter().enumerate() {
+            for (gi, g) in guards.iter().enumerate() {
+                let d0 = [g[0] - s[0], g[1] - s[1], g[2] - s[2]];
+                let len = (d0[0] * d0[0] + d0[1] * d0[1] + d0[2] * d0[2]).sqrt();
+                let dir = [d0[0] / len, d0[1] / len, d0[2] / len];
+                let far = 40.0f32;
+                let to = [s[0] + dir[0] * (len + far), s[1] + dir[1] * (len + far), s[2] + dir[2] * (len + far)];
+                eprintln!("\n[spot {} -> guard {}] from ({:.2},{:.2},{:.2}) guard ({:.2},{:.2},{:.2}) guard-dist {:.2} far-end ({:.2},{:.2},{:.2})",
+                    si, gi, s[0], s[1], s[2], g[0], g[1], g[2], len, to[0], to[1], to[2]);
+                let dd = sub(to, *s);
+                let mut hits: Vec<(f32, &'static str, String, u8, bool, [f32; 3])> = Vec::new();
+                let dynamic = w.dynamic.read().unwrap();
+                let sets: [(&'static str, &Geo); 3] = [("stat", &w.stat), ("missile", &w.missile), ("dyn", &dynamic.geo)];
+                for (set, geo) in sets {
+                    for (ri, o) in geo.objects.iter().enumerate() {
+                        let id = if set == "stat" {
+                            let src = geo.owners.get(ri).copied().unwrap_or(u32::MAX) as usize;
+                            match stat_src.get(src) {
+                                Some((m, oi)) => {
+                                    let ob = &level.maps[*m].objects[*oi];
+                                    format!("map{}#{} '{}' glist {:#x}", m, oi, ob.name, ob.flags)
+                                }
+                                None => format!("run{ri}?"),
+                            }
+                        } else {
+                            format!("run{ri}")
+                        };
+                        for k in o.tris.clone() {
+                            let t3 = &geo.tris[k];
+                            let e1 = sub(t3[1], t3[0]);
+                            let e2 = sub(t3[2], t3[0]);
+                            if dot(cross(e1, e2), dd) >= 0.0 { continue; } // back face
+                            let pv = cross(dd, e2);
+                            let det = dot(e1, pv);
+                            if det.abs() < 1e-12 { continue; }
+                            let inv = 1.0 / det;
+                            let sv = sub(*s, t3[0]);
+                            let u = dot(sv, pv) * inv;
+                            if !(0.0..=1.0).contains(&u) { continue; }
+                            let qv = cross(sv, e1);
+                            let v = dot(dd, qv) * inv;
+                            if v < 0.0 || u + v > 1.0 { continue; }
+                            let tt = dot(e2, qv) * inv;
+                            if (0.0..=1.0).contains(&tt) {
+                                let pt = [s[0] + dd[0] * tt, s[1] + dd[1] * tt, s[2] + dd[2] * tt];
+                                hits.push((tt, set, id.clone(), geo.mats[k], geo.bullet_pass(k), pt));
+                            }
+                        }
+                    }
+                }
+                hits.sort_by(|a, b| a.0.partial_cmp(&b.0).unwrap());
+                for (tt, set, id, mat, pass, pt) in hits.iter().take(14) {
+                    eprintln!("  t={:.4} {:>7} mat={:#04x} pass={} at ({:.2},{:.2},{:.2}) owner {}",
+                        tt, set, mat, pass, pt[0], pt[1], pt[2], id);
+                }
+                eprintln!("  port segment={:?} segment_bullet={:?}",
+                    w.segment(*s, to), w.segment_bullet(*s, to));
+            }
+        }
+    }
 }
