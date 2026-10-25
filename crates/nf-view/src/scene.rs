@@ -2536,7 +2536,15 @@ impl Sim {
         // (`death_tick` inside the drones' tick), and the other machines' replica of this slot
         // (`step_net_remotes`) stops on the shared state — so must the local body.
         let net_dead = self.net_dead();
-        let (mut input, trigger, reload, use_key) = if self.drones.death.active || menu_pause || net_dead {
+        // mission-hold: `Mission_Update` case 7 runs `GS_PausePlayer(1, 0)` EVERY tick of the
+        // banner hold — the 240-tick success hold (state 6) and the fail/death holds (states 2/3)
+        // alike [M 0x182c60:123-130 — the case body is unconditional in `InternalState` 7]. The
+        // player's input dies while the world and the HUD keep running (the banner's own message
+        // ticks down through `Text_UpdateMsg`, which no pause gate covers). Without the gate Bond
+        // kept walking/shooting under the "Mission Complete" box on 07000004 (level-04-mission-
+        // complete-early), where the game freezes him until case 4's load.
+        let mission_hold = self.drones.mission.internal == 7;
+        let (mut input, trigger, reload, use_key) = if self.drones.death.active || menu_pause || net_dead || mission_hold {
             (Default::default(), false, false, false)
         } else { (input, trigger, reload, use_key) };
         // gunimp: while a mounted gun owns the player (`GunImp_Activate` 0x132f00 — the 0xc
