@@ -49,3 +49,28 @@ stay green; full suite on the merged tree, total line in the report.
 
 Work started (19:4x UTC): branch created from rain-5's merge base, origin/master merged, pushed
 before any code change. Setup reused: work/ slim tree and Nightfire-onfoot.iso already present.
+
+Outcome (level-07-rook-doorway-2, 20:4x UTC): the per-cel port landed — bounds_test now builds the
+game's exact shape: find_cel(a) → Collide_StraddleCels (the world's straddle walk, the +1.0 y lift,
+the 0x201 ray portal test) → the to-cel membership gate [M 0x157d80:106-127, 0x1eac98] → the walk
+over ONLY the walls whose post cels (build_FindCel of the post, [M 0x1d2f18:30-34]) are straddled;
+Wall carries ca/cb, the flat walk stays as the no-scope stand-in for the tests' unscoped worlds.
+KEY FINDING (the real freeze cause): the previous round's fold-doc correction armed "+0x4F8 bit 1"
+but both push-move gates read BIT 0 [M 0x14f140:47 `(x^1)&1==0`, 0x139268:80 `uVar2&1`], and
+DefaultInit 0x14b300:60's composite `(x & 0xffea05e2) | 0x801e2` CLEARS bit 0 (the ~mask carries
+it) and never re-arms it — a full-decompile scan found no `| 1` writer into +0x4f8. The game's
+undrawn raw slide is UNCLAMPED for default-init drones; the port's push_move true (off the bit-1
+misread) was the freeze: Rook's forward probe crossed the east jamb wall #685 (cel 8, in the
+straddle set) at 0.006 into the probe and the clamp zeroed the 0.02 slide every tick (boundary
+0x12, travelled 0.00). push_move=false; the doorway-leg test un-ignored and GREEN (Rook crosses);
+the 07 walks 3/3 green (the full party walk + the zone test + the leg), the 01 walks 3/3 green
+(including the contact walk), nav unit tests 8/8. RED left: npc_doors_live's
+the_01_escort_driven_through_the_shoji — the driven 0x63 Mayhew crosses the CLOSED never-activated
+shoji (closest 1.33): the clamp was the substituted stopper; the game's real one is not the
+OptimiseRoute trims (end-only [M 0x156760:59-116]) nor the Handler post probe (r 0.2 [M
+0x3e4ccccd]) — by elimination the drone-body vs closed-leaf world push (NDrone2_Collision
+0x140e90; the port's drone consults only the AI boundary push_out, which skips 0x800 walls, and
+the doors ARE in set_dynamic) — next round traces the port's drone-vs-dynamic-leaf push on the
+shoji approach. Scratch probes (untracked): nf-view/examples/scratch_celprobe07.rs,
+scratch_rooktick.rs. No full-suite total line yet (background jobs die between tool calls here);
+foreground slices: nf-game lib nav, walkreal_07000001/07, npc_doors_live.
