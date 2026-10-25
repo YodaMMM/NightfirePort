@@ -43,3 +43,7 @@ Work log (12:57 UTC):
 - Verified the full chain is already ported and pinned: wires exist from the preload [M 0x1dbc08:46-54], group 0 = stream 1 wire 0x02000AA1, group 1 = stream 5 wire 0x02000AA4 [M 0x1d94c0:172-175 → 0x1b0970], the cut is the hit path [M 0x1adfe8:88-123] (fix_fusebox_cut_live 4/4 incl. the 07000014 laser sabotage → 0x8C), E is inert [M 0x1a5170:95-160 no 0x3C arm; mask 1 no bit 4]. All four wire glists resolve to models (meshes exist).
 - Rewrote the ignored test to pin the decompile truth (correct hashes, preload as the spawn agent, the E press pinned inert through real input, the behind-the-panel geometry, the registrations, the glist resolution) and un-ignored it: panels_07000014_live 2/2 green; walk_07000014_live 2/2; fusebox_06_live 4/4.
 - Updated the two stale passages in docs/levels/07000014.md (the stand-in/E-cut notes).
+
+Finish log (14:03 UTC):
+- The sandbox kills background processes between tool calls (3 launches dead, zero output) and the disk filled twice (stale duplicate build artifacts; freed ~3.7 GB) + OOM at -j4 — so the suite ran as foreground slices with suite.py semantics (one binary, --test-threads=1, 300 s wall) via a resumable runner outside the repo: 56/795 real test binaries, 927 passed / 0 failed / 8 ignored, TIMEOUT campaign_flow_live (300 s cap; re-run with 600 s next message). All four lib harnesses + the full task neighborhood green.
+- Report docs/reports/level-14-fusebox-wires.md written and pushed; finish.sh + ntfy next.
