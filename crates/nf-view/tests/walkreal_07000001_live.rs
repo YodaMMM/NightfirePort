@@ -204,6 +204,35 @@ fn walk_from_the_spawn_to_the_exit_with_the_contact() {
             let sim = w.scene.sim.as_ref().unwrap();
             let cstate = sim.drones.list[ci].state;
             drop(sim);
+            // The meet hall's west wall check (the level-11-stairwell-bullet-wall-3 stall): Bond
+            // chased guard 15 OUT of the hall (the north lane) and stands in the west corridor with
+            // the hall's west wall segment (x≈1.93, z 11.1-13.1 [D the disc's collision cels — the
+            // port's ray fan, walkreal_probe11::dump_07000001_west_wall]) between him and the
+            // contact; every close/walk-past target sits inside the hall and the straight-line
+            // steering wedges on the wall face (the nav's own first hop is a hall-side node across
+            // the wall, and the stuck ladder's sidesteps slide ALONG it, never the ~1.7 north to
+            // the wall's north edge). The player walks back the lane he came out by — the hall's
+            // north opening, the AI's own chain node[8] (−0.39,14.28) → node[23] (3.39,14.69) →
+            // node[7] (6.88,14.62) [D nav path 0 nodes+links; the lane passes the AI's bounds
+            // walls through their z≈13.1 north end], then closes on the contact; the AllyLeadWait
+            // release [M NDrone2_DSTATE_AllyLeadWait 0x15eda8 case 3: pd > −7.0 && (pd != 0.0 ||
+            // dist2d < 5.0)] needs Bond within 5.0 straight-line when pd == 0.0 (Bond off the
+            // route's 5.0 node scan), and inside the hall he is.
+            {
+                let sim = w.scene.sim.as_ref().unwrap();
+                let (bp, cp) = (sim.bond.pos, sim.drones.list[ci].pos);
+                let walled = bp[0] < 2.0 && sim.world.segment(bp, cp).is_some();
+                drop(sim);
+                if walled {
+                    eprintln!("[01] round {round}: the hall's west wall is between Bond ({bp:?}) and the contact ({cp:?}) — walking the north lane back in");
+                    w.walk_nav_to([0.6, 6.5, 14.3], "the west corridor lane (north)", 1.4);
+                    w.walk_nav_to([3.39, 6.4, 14.69], "the hall's north opening (nav node 23)", 1.4);
+                    w.walk_nav_to([6.88, 6.4, 14.62], "inside the hall (nav node 7)", 1.4);
+                    w.walk_nav_to(settled, "close on the contact (the [M 0x15eda8] release band)", 1.2);
+                    prev_settled = settled;
+                    continue;
+                }
+            }
             if cstate == nf_game::drone::state::PLAYER_IN_WAY {
                 let sim = w.scene.sim.as_ref().unwrap();
                 let cp = sim.drones.list[ci].pos;
