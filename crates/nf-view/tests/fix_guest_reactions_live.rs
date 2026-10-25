@@ -32,9 +32,16 @@ fn iso() -> Option<String> { std::env::var("NF_ISO").ok() }
 /// the sight pass's visibility cone and BondTalk's facing gate meet. Returns nothing; the caller
 /// watches the guest each tick via the closure's walker.
 fn hold_in_front_of(w: &mut Walker, guest: usize, dist: f32) {
+    hold_at_offset(w, guest, dist, 0.0);
+}
+
+/// `hold_in_front_of` at an angular offset from the guest's front line (rad): the BondTalk facing
+/// gate still holds (the ±π/2 cone [M 0x1446b0:14] swallows the offset + the idle wobble) but the
+/// head must turn a real ~offset angle to track Bond (`HeadTrackObj`'s want [M 0x14ada0]).
+fn hold_at_offset(w: &mut Walker, guest: usize, dist: f32, offset: f32) {
     let sim = w.scene.sim.as_ref().unwrap();
     let g = sim.drones.list[guest].pos;
-    let gyaw = sim.drones.list[guest].yaw;
+    let gyaw = sim.drones.list[guest].yaw + offset;
     let front = [g[0] + gyaw.sin() * dist, g[1], g[2] + gyaw.cos() * dist];
     let b = sim.bond.pos;
     let eye = [b[0], b[1] + sim.bond.eye, b[2]];
@@ -216,13 +223,15 @@ fn an_armed_bond_scares_a_guest_who_shouts_the_intruder() {
 /// 0x1a7810), Bond within 3.0 (+0x1a0), the guest's facing within ±π/2 (+0x1d4) — and an UNARMED
 /// Bond must NOT scare the guest: the ObjectIsArmed gate [M 0x1446b0:16] keeps the guest in its
 /// talk branch (0x11/0x2f, no shout, no ch 99). The line itself: every 07000007 BondTalk table
-/// entry is FACIAL-PRESENT on this level [D the voice-table dump: 0x58..0x63, 0x84..0x8f, 0x8e,
-/// 0x95..0x9a all carry facial script hashes present in the archive] — the game plays them through
-/// the facial pipeline (`AnimFacialAppend` +0x53c, the script queued at +0x4c, its sound via
-/// `AnimScriptPeekSfx`+`SFXPreCache` [M 0x141b00 facial arm; BondTalk 0x1446b0 advances the
-/// cooldown once +0x53c stands]) — the port's FACIAL path is unported and its silence is PINNED
-/// by `speech_facial_fallback_live` (present scripts stay on the silent path), so no line id can
-/// be pinned as sound here; see the report's live checks for the game-side proof request.
+/// entry is FACIAL-PRESENT on this level [D the voice-table dump] and the ported facial arm plays
+/// it — the guest (voice set 0xd [M 0x1446b0 case 0xd]) requests `0x58 + rand(11)*4 + variant`
+/// (variant by `+0xE0`'s skin byte [M :109-127]), the facial script queues at +0x4c with the
+/// 20-tick delay (`AnimScriptPeekSfx` 0x1c6ca8 found the script's own op-1 [M 0x141b00:24-28]),
+/// and the line sounds from the facial script's own op-1 command — its sfx id == the entry's
+/// sfxId [D census (probe_facial_ops): every present 07 facial script's first op-1 == sfxId];
+/// BondTalk's cooldown (600) advances once +0x53c stands [M :128-135]. The head turns to Bond:
+/// `HeadTrackObj(player, 200)` [M 0x1446b0:125 → 0x14ada0:25-29] holds the +0x2c/+0x358 window
+/// for 200 ticks, and `DoHeadTrackingBehaviour` defers to it [M 0x147578:37-39].
 #[test]
 fn walking_up_to_a_guest_acks_the_talk_gates_and_does_not_scare() {
     let Some(iso) = iso() else { eprintln!("NF_ISO not set — skipping"); return };
@@ -242,6 +251,10 @@ fn walking_up_to_a_guest_acks_the_talk_gates_and_does_not_scare() {
         let (i, _) = best.expect("an enabled party guest near Bond's spawn");
         (i, sim.drones.list[i].pos)
     };
+    {
+        let sim = w.scene.sim.as_ref().unwrap();
+        assert_eq!(sim.drones.list[guest].voice_type, 13, "the party guest talks with BondTalk set 0xd [M 0x1446b0 case 0xd; the port's voice_type(skin) == +0xd8]");
+    }
     // The fists (the talk gate refuses an armed Bond [M 0x1446b0:16]) — the real switch input.
     for _ in 0..40 { w.tick(Input { switch_to: Some(1), ..Default::default() }, false); }
     assert_eq!(w.scene.sim.as_ref().unwrap().gun.weapon, 1, "the fists equip (the real switch path)");
@@ -267,6 +280,41 @@ fn walking_up_to_a_guest_acks_the_talk_gates_and_does_not_scare() {
         assert!(dist < 3.0, "Bond stands inside the BondTalk radius (3.0 [M 0x1446b0:12]), got {dist:.1}");
         assert!(!scared && !shouted, "an UNARMED Bond up close never scares the guest (the ObjectIsArmed             gate keeps the talk branch [M 0x1446b0:16]); state {:#x} shouted {}", g.state, shouted);
         assert!(matches!(g.state, 0x11 | 0x2f | 0x14), "the guest sits in a talk-capable state             (Civilian 0x11 / PartyGirl 0x2f / CivilianPatrol 0x14), got {:#x}", g.state);
+    }
+    // Hold the crosshair on the guest from ~40° off its front line (still inside the ±π/2 facing
+    // cone [M 0x1446b0:14] and the sight cone) and wait for the talk: the line id from the guest's
+    // dtype table, the line's own sound, and the head turn (an offset hold makes the turn real —
+    // head-on, the want yaw is ~0 and the ease correctly stays at it).
+    let mut line: Option<usize> = None;
+    let mut sounded: Vec<u32> = Vec::new();
+    let mut tracked = false; let mut head_turned = false;
+    for _ in 0..2400u32 {
+        hold_at_offset(&mut w, guest, 2.0, 0.7);
+        let sim = w.scene.sim.as_ref().unwrap();
+        let g = &sim.drones.list[guest];
+        if let Some(v) = g.talk_line { line = Some(v); }
+        for s in &g.facial_played { if !sounded.contains(s) { sounded.push(*s); } }
+        if g.talk_track {
+            tracked = true;
+            if g.head_yaw.abs() > 0.02 { head_turned = true; }
+        }
+        if line.is_some() && !sounded.is_empty() && tracked && head_turned { break; }
+    }
+    {
+        let sim = w.scene.sim.as_ref().unwrap();
+        let g = &sim.drones.list[guest];
+        let voices = sim.voices.as_deref().expect("the 07 voice table");
+        let v = line.expect("the guest requested a BondTalk line [M 0x1446b0 case 0xd]");
+        let variant = match g.skin & 0xffff { 0x20 => 0, 0x22 => 1, 0x23 => 2, _ => 3 };
+        assert!(v >= 0x58 && v <= 0x83 && (v - 0x58) % 4 == variant,
+            "the line id came from the set-0xd dtype table `0x58 + rand(11)*4 + {variant}` [M 0x1446b0 case 0xd:109-127], got 0x{v:02x}");
+        assert!(!sounded.is_empty(), "the line sounded through the facial script's own op-1 [M 0x141b00:15-35; D census op-1 == sfxId]");
+        assert!(sounded.contains(&(voices[v].sfx as u32)),
+            "the requested line's own sound was among the played (the op-1 == sfxId [D census]), line 0x{v:02x}, sounded {sounded:?}");
+        assert!(tracked, "HeadTrackObj's window stood after the talk [M 0x1446b0 case 0xd:125; 0x14ada0:25-29]");
+        assert!(head_turned, "the guest's head turned toward the offset Bond inside the window [M 0x147578:37-39 + 0x14ada0]");
+        assert!(!matches!(g.state, 0x12 | 0x13) && !g.scare_shouted, "still no scare (the talk branch holds [M 0x1446b0:16])");
+        assert!(g.voice.is_none(), "the facial line never stores +0x4D0 [M 0x141b00:35]");
     }
 }
 
