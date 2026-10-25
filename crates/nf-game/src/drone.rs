@@ -11624,6 +11624,11 @@ pub struct Drones {
     pub doors: crate::door::Doors,
     /// The fuseboxes (`FuseBox_Create` 0x1b0448; map-tower2): 07000014's OBJECT_FuseBox1 sabotage boxes.
     pub fuseboxes: Vec<crate::fusebox::FuseBox>,
+    /// fusebox-geometry: the wire objects' LOCAL bounds by hash (`FuseBox` scripts' Entity streams),
+    /// resolved against the live entity matrix at contact time — the game collides the round with the
+    /// wire OBJECT's geometry (`Collide_PickObj` 0x1eae80 → `obj+0xD0` → `FuseBox_Update`
+    /// 0x1adfe8:88-123), not a sphere at the entity translation.
+    pub wire_geo: std::collections::HashMap<u32, ([f32; 3], [f32; 3])>,
     /// The helicopter (`Copter_Create` 0x17d340, placement 0x2F; fix-objects2): 07000008's
     /// extraction copter — gated on ch 5, its arrival writes ch 0x4B (the last mission objective).
     pub copters: Vec<crate::copter::Copter>,
@@ -11996,7 +12001,7 @@ impl Drones {
             movie_request: None,
             pickups: Vec::new(), inventory: crate::pickup::Inventory::level_start(0x73, 34), taken: Vec::new(), scripts: Default::default(), player_events: Vec::new(), npc_enabled: true, hold_npcs: false, hold_active: false,
             npc_system_disabled: false,
-            spawn_counter: 0, audio: Default::default(), script_sounds: Vec::new(), map_sounds: Default::default(), music: Default::default(), attack_gate: Default::default(), alarm_music: [0; 3], voice_last: Vec::new(), patrol_cooldown: 0, saw_opp_this_frame: false, saw_opp_last_frame: false, searchlights: Default::default(), doors: Default::default(), fuseboxes: Vec::new(), sss: Default::default(), bullet_paths: Vec::new(), sl_shots: Vec::new(), props: Default::default(), break_kills: Vec::new(), breaks: Default::default(), monitors: Default::default(), mission: crate::mission::Mission::new(), mission_carry: None, mission_inited: false, mission_events: Vec::new(), useobjs: Default::default(), ai_points: Vec::new(), bullet_path_weapons: Vec::new(), copters: Vec::new(), copter_paths: Vec::new(), locks: Vec::new(), grapple_points: Vec::new(), prev_event2: 0,
+            spawn_counter: 0, audio: Default::default(), script_sounds: Vec::new(), map_sounds: Default::default(), music: Default::default(), attack_gate: Default::default(), alarm_music: [0; 3], voice_last: Vec::new(), patrol_cooldown: 0, saw_opp_this_frame: false, saw_opp_last_frame: false, searchlights: Default::default(), doors: Default::default(), fuseboxes: Vec::new(), wire_geo: Default::default(), sss: Default::default(), bullet_paths: Vec::new(), sl_shots: Vec::new(), props: Default::default(), break_kills: Vec::new(), breaks: Default::default(), monitors: Default::default(), mission: crate::mission::Mission::new(), mission_carry: None, mission_inited: false, mission_events: Vec::new(), useobjs: Default::default(), ai_points: Vec::new(), bullet_path_weapons: Vec::new(), copters: Vec::new(), copter_paths: Vec::new(), locks: Vec::new(), grapple_points: Vec::new(), prev_event2: 0,
             bullet_contacts_now: Vec::new(),
             bullet_contacts_prev: Vec::new(),
             // fix-06-alarm.
@@ -12299,6 +12304,32 @@ impl Drones {
             obj.map(|o| (o.centre, o.radius))
         });
         self.fuseboxes = fuseboxes;
+        // fusebox-geometry: the wire objects' LOCAL bounds, keyed by hash. The contact resolves the
+        // entity's hash at hit time and transforms these by the object's live matrix.
+        {
+            use nf_formats::nis::Cmd;
+            let mut geo: std::collections::HashMap<u32, ([f32; 3], [f32; 3])> = Default::default();
+            for fb in &self.fuseboxes {
+                let Some(nis) = level.nis.get(&fb.script) else { continue };
+                for st in nis.streams.iter() {
+                    for cmd in st.decode() {
+                        let Cmd::Entity { hash, .. } = cmd else { continue };
+                        if geo.contains_key(&hash) { continue; }
+                        let Some(&(m, o)) = level.by_hash.get(&hash) else { continue };
+                        let (mut lo, mut hi) = ([f32::MAX; 3], [f32::MIN; 3]);
+                        for leaf in &level.maps[m].objects[o].gfx.leaves {
+                            for b in &leaf.batches {
+                                for v in &b.verts {
+                                    for c in 0..3 { lo[c] = lo[c].min(v.pos[c]); hi[c] = hi[c].max(v.pos[c]); }
+                                }
+                            }
+                        }
+                        if lo[0] <= hi[0] { geo.insert(hash, (lo, hi)); }
+                    }
+                }
+            }
+            self.wire_geo = geo;
+        }
         // SimpleScripts (`SS_Create` 0x1a9c58): the 0xE2 placements with a non-zero key count, their
         // keys from the main map's 0x19 blocks (map-tower2).
         self.sss = crate::ss::SsList::create(&level.maps[m].placements, &path_blocks, |p| {
@@ -12642,6 +12673,31 @@ impl Drones {
     /// sound (the first-person fire script's, 0x403 for the P2K) for the drones' hearing.
     /// The closest approach of the segment `a`–`b` to the sphere (centre `c`, radius `r`): the classic
 /// closest-point-on-segment distance test.
+/// The round's segment against an axis-aligned box (the slab test) — the fusebox wire contact.
+fn segment_hits_aabb(a: V3, b: V3, lo: V3, hi: V3) -> bool {
+    let mut t0 = 0.0f32;
+    let mut t1 = 1.0f32;
+    for k in 0..3 {
+        let (p, d) = (a[k], b[k] - a[k]);
+        if d.abs() < 1e-9 {
+            if p < lo[k] || p > hi[k] {
+                return false;
+            }
+        } else {
+            let (mut ta, mut tb) = ((lo[k] - p) / d, (hi[k] - p) / d);
+            if ta > tb {
+                std::mem::swap(&mut ta, &mut tb);
+            }
+            t0 = t0.max(ta);
+            t1 = t1.min(tb);
+            if t0 > t1 {
+                return false;
+            }
+        }
+    }
+    true
+}
+
 fn segment_hits_sphere(a: V3, b: V3, c: V3, r: f32) -> bool {
     let ab = [b[0] - a[0], b[1] - a[1], b[2] - a[2]];
     let ac = [c[0] - a[0], c[1] - a[1], c[2] - a[2]];
@@ -13467,12 +13523,52 @@ fn segment_hits_sphere(a: V3, b: V3, c: V3, r: f32) -> bool {
             let kind = d.weapons.records.get(b.weapon as usize).map_or(0u16, |r| u16::from_le_bytes([r[0x10], r[0x11]]));
             if crate::fusebox::FuseBox::hit_survives_filter(kind) {
                 let mut contacts: Vec<(usize, usize, usize)> = Vec::new();
+                // fusebox-geometry: the round is tested against the wire OBJECT's own bounds (the
+                // `Collide_PickObj` 0x1eae80 pick + `FuseBox_Update` 0x1adfe8:88-123 chain). The old
+                // 0.5-radius sphere sat at the script entity's translation, which on 07000014 is
+                // 1.5 m BELOW the visible cable run ([D] OBJECT_GreenWire1/BlueWire1 local y 1.49..1.72
+                // through the entity matrix), so a beam on the cables never touched it.
                 for (fi, fb) in self.fuseboxes.iter().enumerate() {
                     for (g, k, obj) in fb.alive_wires() {
-                        if let Some(p) = Self::script_obj_pos(&self.scripts, d, obj) {
-                            if Self::segment_hits_sphere(b.pos, end, p, crate::fusebox::WIRE_RADIUS) {
-                                contacts.push((fi, g, k));
+                        let hit = match self.scripts.objects.list.get(obj) {
+                            Some(Some(crate::nis::Obj::Entity { hash, matrix, .. })) => {
+                                match self.wire_geo.get(hash) {
+                                    Some((lo, hi)) => {
+                                        let (mut wlo, mut whi) = ([f32::MAX; 3], [f32::MIN; 3]);
+                                        for cx in 0..2 {
+                                            for cy in 0..2 {
+                                                for cz in 0..2 {
+                                                    let p = [
+                                                        if cx == 0 { lo[0] } else { hi[0] },
+                                                        if cy == 0 { lo[1] } else { hi[1] },
+                                                        if cz == 0 { lo[2] } else { hi[2] },
+                                                    ];
+                                                    let w = nf_formats::placement::transform(matrix, p);
+                                                    for c in 0..3 {
+                                                        wlo[c] = wlo[c].min(w[c]);
+                                                        whi[c] = whi[c].max(w[c]);
+                                                    }
+                                                }
+                                            }
+                                        }
+                                        // the cables are flat: a hair of thickness for the slab test
+                                        for c in 0..3 {
+                                            wlo[c] -= 0.01;
+                                            whi[c] += 0.01;
+                                        }
+                                        Self::segment_hits_aabb(b.pos, end, wlo, whi)
+                                    }
+                                    None => Self::script_obj_pos(&self.scripts, d, obj).is_some_and(|p| {
+                                        Self::segment_hits_sphere(b.pos, end, p, crate::fusebox::WIRE_RADIUS)
+                                    }),
+                                }
                             }
+                            _ => Self::script_obj_pos(&self.scripts, d, obj).is_some_and(|p| {
+                                Self::segment_hits_sphere(b.pos, end, p, crate::fusebox::WIRE_RADIUS)
+                            }),
+                        };
+                        if hit {
+                            contacts.push((fi, g, k));
                         }
                     }
                 }
