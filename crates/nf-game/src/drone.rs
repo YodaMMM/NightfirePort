@@ -14185,14 +14185,12 @@ fn segment_hits_sphere(a: V3, b: V3, c: V3, r: f32) -> bool {
         // `PCQWorm_Activate` 0x1b0840) — crate::useobj. The SP reach is the class-0 ENTITY path
         // [M 0x1a5170:121-122]: `w` supplies the glist spheres (elevator-buttons-09).
         // garage-lift-calls: the pick ORIGIN for the SP arm is Bond's HEAD — `Player_GetHeadPos`
-        // [M 0x1a5170:100], not the render camera. The game's sphere (radius 1.0 at head + 1×the
-        // viewer direction [M 0x1a5170:101-108]) reaches ~2.4 units from the eye; from the camera
-        // (which hangs ~2.5 behind Bond) it falls ~2.5 short — the 07000009 car-park lift-call
-        // stations (the mask-4 SCRIPT_liftSCRIPTPLAYER pair #21/#22's entities at the shaft
-        // mouths, z ≈ 26.3) sat just outside the camera-based sphere and the buttons never
-        // responded. The doors/trigger/monitor arms above keep the camera origin their reaches
-        // were tuned to (the game builds them from the same head ray [M 0x1a5170]; unifying them
-        // re-tunes every door reach and is its own task). `body` = the player object's obj+0xC0
+        // [M 0x1a5170:100] — as for every arm (use-pick-head: the game's ONE sphere at head + 1×the
+        // viewer direction [M 0x1a5170:101-108] serves doors/switches/SPs/triggers/monitors alike;
+        // scene.rs now passes the head for all of them). The garage session's "the camera hangs
+        // ~2.5 behind Bond" reading was wrong about the code — run()'s `camera` arg was ALREADY
+        // step_bond's `self.bond.head()` binding — but the head rule itself is the game's [M].
+        // `body` = the player object's obj+0xC0
         // (the body position) — `SP_Activate` 0x1dc338:51-53's facing-dot input (use-pick-sp-standins).
         self.useobjs.player_activate(&mut self.scripts, &mut self.channels, sp_head, look, frame, d, body);
         // `Player_Activate`'s class-0x38 monitor path (`Monitor_Activate` 0x1b0058): the use
