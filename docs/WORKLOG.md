@@ -128,3 +128,21 @@ tree — "master's later merges moved the shared stream again and those pins hol
 that master stream to the rain-3 base, so the first check is whether the pin holds here too;
 the task's step 1 (which draw decides the shout; is the window a game rule or a lucky stream
 value) runs regardless of the green/red outcome.
+- (15:35) Root cause of the mixer floor red, probed with
+  `crates/nf-view/examples/probe_02_shout_window.rs` (a dump, not a test):
+  the old choreography's "away" spot (−47.0, 6.0, −23.3) IS the bunker plate #389 [D], so the
+  4x300 window actually rode the BUNKER TRIO's single enable-time AttackTalk coin — the floor
+  five (guards #0-4, switch_channel 0x15 [probe dump]) enable at the floor plate and PATROL
+  (start states 0x4/0x5/0x7, no Attack enter, no roll); the trio (#13-15, sw_ch 0x81) enables
+  with start state ATTACK and rolls `0x33 + Rand_Rand(4)` then the 1-in-2 odds [M 0x13eac0] —
+  once per boot (TouchOnce). The game-true rain's extra shared-generator draws moved that one
+  coin's stream position [M Rand_* 0x1e36f0..0x1e3780] → all three guards landed silent in this
+  tree's stream (the voices twin passed only because its 30-tick phase shifts the enable 30
+  frames → a different coin — and it polls the 5-tick EE pool, not the mixer Play batch).
+  Fix (the player's walk, no assert touched): Bond steps onto EVERY wake plate on the level
+  (out 0x15/0x81/0x17/0x18/0x19/0x08 [D placements], 20+ guards), 1200 ticks each (the bunker
+  test's window) — each wake's guards roll AttackTalk at their Attack enters [M 0x13eac0]; a
+  stream shift moves WHICH guard shouts, never whether the chain carries a shout. Test green
+  3.66 s; the recovered reds from rounds 2-3 all re-run green on this tree: sight_frustum 2/2,
+  doublecross 6/6, escort_hide_findrun 3/3, fix_pickups_ammo 4/4, hostage_killer_02 5/5,
+  fix_0a_rain 2/2, interactables_0a 7/7, escort_follow escort_at_walking 1/1.
