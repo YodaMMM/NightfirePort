@@ -133,16 +133,20 @@ Nothing visual is claimed — this task is a test-choreography fix; the port's a
 not visible to me (this session's environment shows no token, credit, context-window or cost
 figures; nothing to copy).
 
-## Suite appendix (state at the 15:35 UTC checkpoint)
+## Suite appendix (state at the 15:42 UTC checkpoint)
 
 - Daemon started 14:56 UTC on the merged tree (rain-3 + master) with the double-fork wrapper
-  (exported PATH/PKG_CONFIG_PATH/NF_ISO first); build `799 test binaries` finished ~14:55.
-- At 15:35: 417 binaries run, no total line yet. Results so far:
-  - FAILED (6): the 4 documented slim-ISO reds (`identity_disc` + 3 `disc_golden` — the
-    driver's rule 5 allows exactly these), `bathhouse_shout_mixer_live::…` (**stale — the
-    pre-fix binary; the fixed test passes 2/2 directly**), and
+  (exported PATH/PKG_CONFIG_PATH/NF_ISO first); the build finished ~14:55.
+- At 15:42: **529 binaries run**, no total line yet (the projected finish ~16:46 is past the
+  sandbox expiry). Results so far — every failure is in a documented class:
+  - FAILED (9): the 4 documented slim-ISO reds (`identity_disc` + 3 `disc_golden` — the
+    driver's rule 5 allows exactly these), the 3 no-GPU sandbox reds (`probe_pylon_render`,
+    `fix_0c_pylon_live` ×2), `bathhouse_shout_mixer_live::…` (**stale — the pre-fix binary;
+    the fixed test passes 2/2 directly**), and
     `interactables_07000041_live::the_glass_pan_shatters_under_the_real_fire` (documented above).
-  - CRASH (exit −9, the sandbox OOM set): net_match_end_clients_live, frame_cost_live,
-    mp_online_failures, net_soak_faults_live (+ the usual net_*/mp_* set as the run proceeds).
+  - CRASH ×12 (exit −9, the sandbox OOM set: net_*/mp_*/frame_cost — the same signature every
+    session shows).
+- The task's own binary inside the suite run is the STALE pre-fix one (the suite built before
+  the fix); the fixed test's green is the direct run above.
 - The daemon keeps running until the sandbox dies; the next session should read
   `/tmp/suite4_daemon.log` and `/home/z/suite.log` before re-running anything.
