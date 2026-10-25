@@ -122,6 +122,28 @@ pub fn ticks_for_frame(anim_time: &mut f32, dt: f32, max_ticks: u32) -> u32 {
     *anim_time += dt * 60.0;
     (*anim_time as u32).saturating_sub(before).min(max_ticks)
 }
+/// fix-interp-camera-bracket: one presented frame's interpolation bracket. The camera bracket is
+/// advanced FIRST (on the frames that rebuild the palette), then the draw camera and the blend
+/// fraction are taken from that same bracket — so the camera and the palette always interpolate
+/// between the same two ticks. The loop used to do it the other way round: `draw_cam` was computed
+/// from the PREVIOUS bracket while `pal_prev`/`pal_cur` were blended from the new one, so every
+/// frame that ran a tick drew the camera one whole tick behind the world. Measured on 0700004a's
+/// lift (drawn eye y, one tick = -0.0303 u): -22.72629, -22.76416, -22.77174, -22.77932,
+/// -22.75659 - i.e. 1.25, 0.25, 0.25 then a 0.75-tick BACKWARD jump, 21 px at 1 m, every fourth
+/// frame. Pub for the headless interpolation tests (fix-interp-camera-bracket).
+pub fn draw_bracket(cam_prev: &mut Option<Camera>, cam_cur: &mut Option<Camera>, cam_now: Camera,
+                    advanced: bool, fract: f32, interp: bool) -> (Camera, f32) {
+    if advanced || cam_cur.is_none() {
+        *cam_prev = *cam_cur;
+        *cam_cur = Some(cam_now);
+    }
+    let alpha = if interp { fract } else { 1.0 };
+    let draw = match (*cam_prev, *cam_cur) {
+        (Some(a), Some(b)) if interp => lerp_cam(&a, &b, alpha),
+        _ => cam_now,
+    };
+    (draw, alpha)
+}
 /// The palette half of the G-043 interpolation: the draw loop blends the previous tick's skin
 /// palette into the latest one while `lerp_cam` blends the camera by angle. fix-interp-ghosting:
 /// world matrices blend as ROTATION (slerp of the rotation part [M `Quat_Slerp_Acc` 0x1e4188] — a
@@ -5358,31 +5380,15 @@ impl App {
                 self.opts.up = u;
                 let interp0 = !self.noclip && !self.paused && self.scene.sim.is_some() && std::env::var_os("NF_NOINTERP").is_none()
                     && self.dev.as_deref().map_or(true, |d| d.interp);
-                let alpha0 = if interp0 { self.anim_time.fract() } else { 1.0 };
-                let draw_cam = match (self.cam_prev, self.cam_cur) { (Some(a), Some(b)) if interp0 => lerp_cam(&a, &b, alpha0), _ => self.cam };
-                let aspect0 = g.config.width as f32 / g.config.height as f32;
-                // fix-cutscene-letterbox: a live script camera frames the view at the game's own
-                // 4:3 aspect and pillar-boxes the render into the band (the game's letterbox bars
-                // ride inside it). Gameplay keeps the window's widescreen. Same condition the HUD
-                // gate (`overlay_for`) drives the cut-scene HUD blank from.
-                let cutscene = self.scene.sim.as_ref().is_some_and(|s| s.script_camera().is_some());
-                // cutscene-side-strips: the front end owns the AV options' widescreen row
-                // (0x10000223 → viewer+0x114 [M 0x1baf70:28-32]); feed the same aspect the
-                // cut-scene view builds at (`Sim::view_aspect`, the gun tilt's input) and frame
-                // the cut-scene with it — see cutscene_frame. The game's default (row off) is 4/3.
-                let game_aspect = self.fe.as_ref().map_or(4.0 / 3.0, |fe| fe.view_aspect());
-                if let Some(sim) = self.scene.sim.as_mut() { sim.view_aspect = game_aspect; }
-                let (proj_aspect, band) = if cutscene { cutscene_frame(g.config.width as f32, g.config.height as f32, game_aspect) } else { (aspect0, [0.0; 4]) };
-                let (vp0, _) = draw_cam.view_proj(proj_aspect);
-                // One visibility walk per frame, shared by the palette's object cull and render's
-                // World cull (fix-portal): the eye's cel from `Camera_CheckLocation` 0x1bae90's
-                // persistent state, the walk from it [M 0x1e86e8].
-                // The Toggles page's portal-culling row: off passes no world, so the walk returns
-                // everything (the whole level draws — the isolation view).
-                let portal = self.dev.as_deref().map_or(true, |d| d.portal_cull);
-                let door_closed = if portal { self.scene.sim.as_ref().map(|s| s.drones.doors.closed_flags()) } else { None };
-                let vis = g.renderer.cel_visibility(draw_cam.pos.to_array(), vp0, if portal { self.scene.sim.as_ref().map(|s| &s.world) } else { None }, door_closed.as_deref());
-                // G-043: build the palette only when a tick ran, then draw between the last two ticks.
+                // G-043 (fix-interp-camera-bracket): rebuild the palette AND advance the camera
+                // bracket HERE, before the draw camera and the blend fraction are taken. The
+                // bracket is one thing: `cam_prev`/`cam_cur` and `pal_prev`/`pal_cur` must be the
+                // same two ticks. It used to be two: `draw_cam` was read from the OLD bracket
+                // while `pal_prev`/`pal_cur` were blended from the NEW pair, so every frame that
+                // ran a tick drew the camera one whole tick behind the world. Measured on
+                // 0700004a's lift (drawn eye y, tick = -0.0303 u): -22.72629, -22.76416,
+                // -22.77174, -22.77932, -22.75659 - a 0.75-tick BACKWARD jump every fourth frame
+                // (21 px at 1 m), i.e. the double image on moving things, on every level, interp on only.
                 let pal_rebuilt = self.ticked || self.pal_cur.is_none();
                 if pal_rebuilt { PAL_REBUILDS.fetch_add(1, std::sync::atomic::Ordering::Relaxed); }
                 if pal_rebuilt {
@@ -5405,9 +5411,30 @@ impl App {
                     self.pal_blend.extend_from_slice(&new.0);
                     self.pal_cur = Some(new);
                     self.beam_entries = self.scene.beam_entries(&g.renderer.skin_layout);
-                    self.cam_prev = self.cam_cur;
-                    self.cam_cur = Some(self.cam);
                 }
+                let (draw_cam, alpha0) = draw_bracket(&mut self.cam_prev, &mut self.cam_cur, self.cam, pal_rebuilt, self.anim_time.fract(), interp0);
+                let aspect0 = g.config.width as f32 / g.config.height as f32;
+                // fix-cutscene-letterbox: a live script camera frames the view at the game's own
+                // 4:3 aspect and pillar-boxes the render into the band (the game's letterbox bars
+                // ride inside it). Gameplay keeps the window's widescreen. Same condition the HUD
+                // gate (`overlay_for`) drives the cut-scene HUD blank from.
+                let cutscene = self.scene.sim.as_ref().is_some_and(|s| s.script_camera().is_some());
+                // cutscene-side-strips: the front end owns the AV options' widescreen row
+                // (0x10000223 → viewer+0x114 [M 0x1baf70:28-32]); feed the same aspect the
+                // cut-scene view builds at (`Sim::view_aspect`, the gun tilt's input) and frame
+                // the cut-scene with it — see cutscene_frame. The game's default (row off) is 4/3.
+                let game_aspect = self.fe.as_ref().map_or(4.0 / 3.0, |fe| fe.view_aspect());
+                if let Some(sim) = self.scene.sim.as_mut() { sim.view_aspect = game_aspect; }
+                let (proj_aspect, band) = if cutscene { cutscene_frame(g.config.width as f32, g.config.height as f32, game_aspect) } else { (aspect0, [0.0; 4]) };
+                let (vp0, _) = draw_cam.view_proj(proj_aspect);
+                // One visibility walk per frame, shared by the palette's object cull and render's
+                // World cull (fix-portal): the eye's cel from `Camera_CheckLocation` 0x1bae90's
+                // persistent state, the walk from it [M 0x1e86e8].
+                // The Toggles page's portal-culling row: off passes no world, so the walk returns
+                // everything (the whole level draws — the isolation view).
+                let portal = self.dev.as_deref().map_or(true, |d| d.portal_cull);
+                let door_closed = if portal { self.scene.sim.as_ref().map(|s| s.drones.doors.closed_flags()) } else { None };
+                let vis = g.renderer.cel_visibility(draw_cam.pos.to_array(), vp0, if portal { self.scene.sim.as_ref().map(|s| &s.world) } else { None }, door_closed.as_deref());
                 let interp = interp0;
                 let alpha = alpha0;
                 let fp_blend = std::time::Instant::now();
