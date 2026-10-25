@@ -98,15 +98,19 @@ inside the game's bands.
   the 11:40 cutoff; the next session should re-read `suite.out` (and `/home/z/suite.log` for
   the per-binary durations) before pushing further.
 - **Discovered on this merged tree** (not one of the task's two reds; the rain-2 merge's suite
-  never completed, so this is the first time it ran): `bathhouse_shout_mixer_live::
-  the_bathhouse_floor_guards_shout_reaches_the_mixer_too` (07000002) fails — no floor guard's
-  shout voice (ids 111..115) keys within the 4×300-tick window after the plate cycles. It
-  PASSES on the urn-break tree's suite run (absent from that run's failure list at 529/794
-  binaries) and fails here reproducibly (direct run 4.46 s, 1 passed / 1 failed) — the same
-  stream-shift class as the two fixed reds: the shout's voice pick/timing rides the shared
-  generator, and the game-true rain moved it. Fixing it means re-pinning a stream-dependent
-  expectation (or the per-level game-seed rebaseline [S]) — next-session work, with the
-  evidence above.
+  never completed, so this is the first time it ran):
+  1. `bathhouse_shout_mixer_live::the_bathhouse_floor_guards_shout_reaches_the_mixer_too`
+     (07000002) fails — no floor guard's shout voice (ids 111..115) keys within the 4×300-tick
+     window after the plate cycles. It PASSES on the urn-break tree's suite run (absent from
+     that run's failure list at 529/794 binaries) and fails here reproducibly (direct run
+     4.46 s, 1 passed / 1 failed).
+  2. `interactables_07000041_live::the_glass_pan_shatters_under_the_real_fire` fails in the
+     suite run (same session, same tree).
+  Both are the same stream-shift class as the two fixed reds: the pinned expectation rides the
+  shared generator's position (a voice pick, a shot window), and the game-true rain moved it.
+  My diff cannot have caused either (two test files this task owns + an env-gated debug print).
+  Fixing them means re-pinning stream-dependent expectations (or the per-level game-seed
+  rebaseline [S]) — next-session work, with the evidence above.
 - The environment's OOM kills (exit −9: net_*/mp_* and several big live binaries under memory
   pressure) are sandbox limits, not test failures — same signature as the previous sessions
   (the urn-break tree's 529-binary partial run shows the same OOM set plus the GPU-render
@@ -123,3 +127,25 @@ claimed. (If wanted: the armour walk's new ring legs can be rendered from
 
 not visible to me (this session's environment shows no token, credit, context-window or cost
 figures; nothing to copy).
+
+## Suite appendix (state at the 11:40 UTC cutoff)
+
+- The first daemon (10:44) was killed with the previous session's surviving suite (it had been
+  running the urn-break tree since 09:34 and held memory); the final-tree suite relaunched
+  10:56 UTC with a proper stdout redirect.
+- `build ok: 798 test binaries in 407 s` (warm build).
+- At 11:37 UTC: **232 / 798 binaries run**, no total line. Average ~7.3 s/binary projects the
+  remaining ~566 binaries at ~69 min — the total line would land ~12:46 UTC, past the sandbox
+  expiry (~12:00).
+- FAILED so far (3): bathhouse_shout_mixer_live::the_bathhouse_floor_guards_shout_reaches_the_mixer_too,
+  interactables_07000041_live::the_glass_pan_shatters_under_the_real_fire (both documented
+  above — stream-shift class, not from this task's diff), probe_pylon_render (the GPU-render
+  environment red, expected on the no-GPU sandbox).
+- CRASH ×7 (exit −9, the sandbox OOM signature, same set class as the previous sessions):
+  see `suite.out` for the names (mp_*/net_* and the big walk binaries).
+- The two task binaries' results inside the suite run: interactables_0700000a_live and
+  escort_follow_07000001_live ran their full test sets before the cutoff — the armour and
+  escort tests pass there too (only the 41-level glass red above is from the interactables
+  family).
+- The daemon keeps running until the sandbox dies; the next session should read `suite.out` /
+  `/home/z/suite.log` first — if the sandbox persisted, the total line may already be there.
