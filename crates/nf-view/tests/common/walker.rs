@@ -34,6 +34,8 @@ pub fn wrap_pi(a: f32) -> f32 {
 /// XZ distance.
 pub fn dxz(a: V3, b: V3) -> f32 { ((a[0] - b[0]).powi(2) + (a[2] - b[2]).powi(2)).sqrt() }
 
+fn walker_dx(a: V3, b: [f32; 3]) -> f32 { dxz(a, [b[0], b[1], b[2]]) }
+
 /// What to do once the waypoint is reached (or while approaching it).
 #[derive(Clone, Copy, Debug)]
 pub enum Act {
@@ -111,6 +113,12 @@ pub struct Walker {
     /// tick_inner, ~2 u resolution, 512 points). The resupply rule draws its corridor from it —
     /// see `resupply` for why the harness must not take off-path ammo detours.
     trail: Vec<V3>,
+    /// Per-tick drone watch (level-06-rook-door debugging, env-gated `NF_DRONE_WATCH="3,4"`):
+    /// each listed drone's last logged state; tick_inner prints a line on every state change or
+    /// >0.03 move, so a leg that runs inside walk_nav_to stays observable. Additive; no test sets
+    /// it by default.
+    pub drone_watch: Vec<usize>,
+    watch_last: Vec<(u8, [f32; 3])>,
 }
 
 /// The stuck dump, public for the walkreal tests' own aim loops (walkreal-b2).
@@ -150,6 +158,9 @@ impl Walker {
 
     pub fn new(scene: Scene) -> Walker {
         let pos = scene.sim.as_ref().unwrap().bond.pos;
+        let drone_watch: Vec<usize> = std::env::var("NF_DRONE_WATCH").ok()
+            .map(|s| s.split(',').filter_map(|x| x.trim().parse().ok()).collect()).unwrap_or_default();
+        let watch_last = vec![(0u8, [0.0f32; 3]); drone_watch.len()];
         Walker {
             scene, top_up_health: true, keep_alive: Vec::new(), stop_on_exit: true, skip_cutscenes: true,
             report: Report { legs: Vec::new(), stuck_events: Vec::new(), falls: Vec::new() },
@@ -157,6 +168,7 @@ impl Walker {
             sidestep: 0, max_y: pos[1], lenient: false,
             trail: Vec::new(),
             alarm_last: Vec::new(),
+            drone_watch, watch_last,
         }
     }
 
@@ -252,6 +264,20 @@ impl Walker {
         self.scene.sim.as_mut().unwrap().step_bond(input, fire, false, use_key);
         let sim = self.scene.sim.as_ref().unwrap();
         self.total_ticks += 1;
+        if !self.drone_watch.is_empty() {
+            for (k, &i) in self.drone_watch.iter().enumerate() {
+                if let Some(dr) = sim.drones.list.get(i) {
+                    let (ls, lp) = self.watch_last[k];
+                    if dr.present && !dr.corpse && (dr.state != ls || walker_dx(dr.pos, lp) > 0.03) {
+                        eprintln!("[watch +{}] d#{i} mode {} st {:#x} p ({:.2},{:.2},{:.2}) r {} hd {:?}",
+                            self.total_ticks, dr.mode, dr.state, dr.pos[0], dr.pos[1], dr.pos[2],
+                            dr.route.as_ref().map(|r| format!("p{} {}/{}", r.path, r.index, r.nodes.len())).unwrap_or("-".into()),
+                            dr.hit_door);
+                        self.watch_last[k] = (dr.state, dr.pos);
+                    }
+                }
+            }
+        }
         // The walked-path breadcrumb (guard-first-shot-walkreal-2): every 2 u of ground cover.
         // Fights and nav legs both flow through here, so the trail is the route Bond really
         // walked — the resupply corridor is cut from it.
