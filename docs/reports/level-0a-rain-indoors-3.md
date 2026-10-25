@@ -97,8 +97,20 @@ inside the game's bands.
   previous session's partial run). The report's Suite appendix records the partial coverage at
   the 11:40 cutoff; the next session should re-read `suite.out` (and `/home/z/suite.log` for
   the per-binary durations) before pushing further.
+- **Discovered on this merged tree** (not one of the task's two reds; the rain-2 merge's suite
+  never completed, so this is the first time it ran): `bathhouse_shout_mixer_live::
+  the_bathhouse_floor_guards_shout_reaches_the_mixer_too` (07000002) fails — no floor guard's
+  shout voice (ids 111..115) keys within the 4×300-tick window after the plate cycles. It
+  PASSES on the urn-break tree's suite run (absent from that run's failure list at 529/794
+  binaries) and fails here reproducibly (direct run 4.46 s, 1 passed / 1 failed) — the same
+  stream-shift class as the two fixed reds: the shout's voice pick/timing rides the shared
+  generator, and the game-true rain moved it. Fixing it means re-pinning a stream-dependent
+  expectation (or the per-level game-seed rebaseline [S]) — next-session work, with the
+  evidence above.
 - The environment's OOM kills (exit −9: net_*/mp_* and several big live binaries under memory
-  pressure) are sandbox limits, not test failures — same signature as the previous sessions.
+  pressure) are sandbox limits, not test failures — same signature as the previous sessions
+  (the urn-break tree's 529-binary partial run shows the same OOM set plus the GPU-render
+  pylon reds).
 
 ## Live checks for the main agent
 
