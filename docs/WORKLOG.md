@@ -31,3 +31,7 @@ the base. The port lands the identity ONLY for the default create arm's gfx-boun
 (probe_cam_scripts) shows those are the ONLY such streams in camera-op scripts, and the
 0x31/0x19/hash-0 classes keep the placement compose the live walks pin. Whole-script reset
 reverted (master's camera-only rule stays).
+Verification: on the final tree — cutscene_door_07000014_live 2 passed; countdown_cutscene_cameras_live
+2 passed; interact_07000001_live 10 passed; zoe_gondola_realpath_live 1 passed; walkreal_07000001_live
+3 passed; walkreal_07000008_live 4 passed. Full suite on the merged tree running; total line to the
+report. Checkpoints pushed at each step.
