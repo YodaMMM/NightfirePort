@@ -7323,29 +7323,18 @@ impl Drone {
                 self.set_state(if matches!(d.level, 0x0700_0009 | 0x0700_000a) { CIVILIAN_CHALLENGE } else { INTEROGATE });
                 true
             }
-            // `NDrone2_ChangeToAttackMode` 0x14a648 through `DroneFunc_FirstAttack`: the alternate state
-            // (`+0x5A4`) with no second switch — take the alternate mode
-            // (mode 2 becomes 0x19, sniper alert, whose init keeps the drone stationary) and go to that state.
-            // The game's helper flushes the pending resume (`+0x5a4`): promotes the pending mode byte
-            // `+0xc6` → `+0xc5` (ninja 2 → 0x19), clears `+0xc6`/`+0x5a4`, switches to the 2nd behaviour block
-            // when the mission's `+0xc48` == 100, sets `+0x28`/`+0x29`, and RETURNS `+0x5a4`'s old value for
-            // the caller's `SetState` [M 0x14a648:7-36; callers 0x14cbd8:124, 0x14d2e8 (DoTypeSettingsOLD),
-            // 0x15d860:60, 0x15e1e8, 0x165640:72]. The port's `alt_state`/`alt_mode` pair is that flush.
-            (ATTACK, msg::ENTER) if self.alt_state != 0 && self.second_channel == 0 && self.alt_state != ATTACK && self.alt_state != 0xb4 => {
-                self.alert = 1.0;
-                self.return_state = ATTACK;
-                if self.alert_bits & 0x10 == 0 { self.attack_frame = frame; }
-                self.alert_bits |= 0x10 | if self.prop(d, 0x33) { 1 } else { 0 };
-                self.sight_range = self.sight_range.max(self.combat_range);
-                self.half_fov = 0.0;
-                if self.alt_mode != 0 { self.mode = self.alt_mode; }
-                if self.mode == 2 { self.mode = 0x19; self.stationary = true; }
-                let st = self.alt_state;
-                self.alt_mode = 0;
-                self.alt_state = 0;
-                self.set_state(st);
-                true
-            }
+            // NO ATTACK-ENTER alt flush here. `NDrone2_ChangeToAttackMode` 0x14a648 is called from
+            // exactly five sites — the `jal` census of ACTION.ELF: 0x14ce68 (GetDroneTypeAttackTypeFriend
+            // 0x14cbd8's kind-0xb creation arm), 0x14d45c (DoTypeSettingsOLD 0x14d2e8 — no NEW placement),
+            // 0x15da54 (CivilianMission arrival), 0x15e35c (EnemyMission arrival, ported below; ENEMY_MISSION),
+            // 0x165948 (GoToGoalPosition, mode-7-gated). `NDrone2_DSTATE_Attack` 0x164210 and
+            // `DroneFunc_FirstAttack` 0x148010 are NOT callers: the game's ATTACK ENTER [M 0x164210 case 1]
+            // reads only the mode byte (+0xc5 2/0x19 → SniperAim 0x2a, else the 0x67/0x58 combat arms) and
+            // never touches +0x5a4. The old port arm flushed `alt_state` on every ATTACK re-entry (mode
+            // promote 0 → 0x19 + stationary) — that parked the 07000006 switch-16 guard in door #47's jamb
+            // as a stationary sniper (docs/systems/rook-door-06.md) and is the non-game behaviour this
+            // branch removes; +0x5a4 keeps its game lifecycle only (creation fold write [M 0x14cea8], the
+            // EnemyMission arrival flush, ChangeToAttackMode's own clear).
             // `DroneFunc_FirstAttack` (0x148010), once per drone, after its own first sighting: `NDrone2_CheckSurrender` →
             // alertness 1, `+0x4F8 |= 0x6000000`, `+0x524` = now if unset, sight widened — and Surrender_Anim, without
             // the shout (`+0x4FC |= 0x10` is skipped).
