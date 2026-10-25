@@ -1262,6 +1262,22 @@ pub struct Player {
     /// 66) while #241's (gate 0) plays from load — the snapshot's twin looping pairs, one +0x36 = 1
     /// (0x16ddb40) and one 0 (0x16df360) [L ee_start_05.bin; docs/systems/copter-sp-hide.md].
     pub hidden: bool,
+    /// `SCRIPTPLAYER_tag+0x37` — the bullet-filter weapon id [M `SP_CreateScriptPlayer`
+    /// 0x1db9a8:56 (placement param 8, u8); `SP_Hit` 0x1dc470:64-70 — when set, a class-5 hit
+    /// raises bit 2 only while the bullet's `weapon_data+0x00` u16 (the weapon id,
+    /// docs/fields/weapon_data.md) equals `+0x37`]. The disc census: no placement sets it —
+    /// every mask-bit-2 SP carries 0 (dump_sp_hit_census) [D].
+    pub bullet_filter: u8,
+    /// The weapon ids of the player bullets whose flight touched any of the CURRENT script's
+    /// stream objects, recorded by the LAST completed bullet pass — the port's analog of the
+    /// `+0xD0` HITDATA chains during the control walk. The game's Collide pass runs AFTER the
+    /// walk [M `control_movement_object_handler` 0x1336f8:238], so a contact recorded at tick
+    /// N is read by `SP_Hit` at tick N+1; the bullet-pass head rotates the finished gather in
+    /// here.
+    pub bullet_hits: Vec<u16>,
+    /// The gather the running bullet pass fills (cleared at its head, rotated into
+    /// `bullet_hits` at the NEXT pass's head — the game's one-frame order).
+    pub tick_bullet_hits: Vec<u16>,
     // The removed `model` field (the placement hash) was once the SP-body use-target FALLBACK [S];
     // the game's use pick hits the class-0 script ENTITIES only (`entity_use_targets`) — the
     // class-0x1B SP body is inert to it [M 0x1a5170:121-122, the class walk has no 0x1B case] — and
@@ -1287,6 +1303,9 @@ impl Player {
             tick_damage: 0.0,
             // +0x36: nothing hides a placed/fusebox/useobj SP at create [M 0x1db9a8].
             hidden: false,
+            bullet_filter: g(8) as u8,
+            bullet_hits: Vec::new(),
+            tick_bullet_hits: Vec::new(),
         })
     }
 
@@ -1409,8 +1428,10 @@ impl Player {
         s.update(&mut self.subs, lib, objs, ch, w, frame, out);
     }
 
-    /// `SP_Update` (0x1dbda8). Trigger flags: only the channel bit (1) and activation (4); bullets and touching
-    /// objects (2, 8, 0x10, `SP_Hit`) are not modelled yet. `skip` is the game's `Input_Action(-1, 0x19, 1)` —
+    /// `SP_Update` (0x1dbda8). Trigger flags: the channel bit (1), activation (4) and — level-07-urn-break —
+    /// `SP_Hit` 0x1dc470's bullet bit (2): the last pass's player-bullet contacts on the current
+    /// stream objects, filterable by the placement's `+0x37` weapon id. The touching-object bits
+    /// (8, 0x10) are not modelled yet. `skip` is the game's `Input_Action(-1, 0x19, 1)` —
     /// any player pressed the skip action this tick (`Scripts::skip_request`, set by the viewer's key handler).
     pub fn update(&mut self, lib: &HashMap<u32, Arc<Nis>>, objs: &mut Objects, ch: &mut Channels, w: &dyn World, frame: u32, out: &mut Vec<Request>, skip: bool, gate: SpStart) {
         // The disabled byte gates the WHOLE update — including `Script_Update` [M 0x1dbda8:57-59].
@@ -1471,6 +1492,23 @@ impl Player {
                     }
                 }
             }
+        }
+        // `SP_Hit` 0x1dc470's bullet arm — bit 2 [M :62-71]: a class-5 (bullet) record on any
+        // CURRENT script stream object's `+0xD0` chain, under the same `countdown == 0` gate as
+        // the `SP_Hit` call itself [M 0x1dbda8:66]. The `+0x37` arm [M :64-70]: when the
+        // placement's bullet filter (param 8) is set, only bullets of THAT weapon
+        // (`weapon_data+0x00` u16 == `+0x37`) raise the bit — the census has no placement using
+        // it (dump_sp_hit_census) [D]. The chains hold the LAST pass's contacts — the game's
+        // Collide pass runs after the walk [M 0x1336f8:238], so the bit lands one tick after
+        // the flight (the bullet-pass head rotates `tick_bullet_hits` into `bullet_hits`).
+        // The mask == 2 special case's `Collide_FilterBullets(obj+0xD0, 0x106)` [M :31-34]
+        // reorders the chain and stamps +0xC = 1e8 on the flagged records; `SP_Hit`'s own walk
+        // visits every node either way [M :36-76, the OR is position-independent], so the
+        // trigger result is unaffected — no port analog (the port models no per-object chains).
+        if self.countdown == 0 && !self.bullet_hits.is_empty() {
+            let hit = self.bullet_filter == 0
+                || self.bullet_hits.iter().any(|&w| w == self.bullet_filter as u16);
+            if hit { flags |= 2; }
         }
         let mut value = self.out != 0 && ch.on(self.out as u32);
         if self.countdown != 0 { self.countdown -= 1; }
@@ -1676,6 +1714,9 @@ impl Scripts {
                 tick_damage: 0.0,
                 // +0x36: nothing hides a placed/fusebox/useobj SP at create [M 0x1db9a8].
                 hidden: false,
+                bullet_filter: 0,
+                bullet_hits: Vec::new(),
+                tick_bullet_hits: Vec::new(),
             });
         }
         Scripts { lib, players, objects: Objects::default(), requests: Vec::new(), primed: false, skip_request: false }
@@ -1734,6 +1775,64 @@ impl Scripts {
             }
         }
         out
+    }
+
+    /// `SP_Hit` 0x1dc470's bit-2 read set: the current script's stream objects of EVERY player
+    /// with a loaded script — `Script_GetObj` 0x1db688 walks the kind-1/2 records, with NO
+    /// hit-point or hold gate (the urn carries 0 hit points and still reacts [M]; the game
+    /// fills the `+0xD0` chains regardless and `SP_Hit` reads them while the countdown is 0).
+    /// Same `(player, centre, radius)` shape and sphere as `held_hit_targets` — the game's
+    /// `Control_BuildWorldSph` volume [M 0x133070:36-48; no glist → the translation + 0.1,
+    /// :19-27]. Read-only; the bullet pass records contacts through `add_bullet_hit`.
+    pub fn sp_bullet_targets(&self, w: &dyn World) -> Vec<(usize, [f32; 3], f32)> {
+        let mut out = Vec::new();
+        for (pi, p) in self.players.iter().enumerate() {
+            if p.deleted { continue; }
+            let Some(s) = p.info[p.cur].as_ref() else { continue };
+            for i in 0..s.streams.len() {
+                if !matches!(s.streams[i].kind, 1 | 2) { continue; }
+                let Some(o) = s.streams[i].obj else { continue };
+                let Some(Some(obj)) = self.objects.list.get(o) else { continue };
+                match obj {
+                    Obj::Entity { hash, matrix, .. } => {
+                        let (c, r) = w.glist_sphere(*hash).unwrap_or(([0.0; 3], 0.1));
+                        let centre = [
+                            matrix[0][0] * c[0] + matrix[1][0] * c[1] + matrix[2][0] * c[2] + matrix[3][0],
+                            matrix[0][1] * c[0] + matrix[1][1] * c[1] + matrix[2][1] * c[2] + matrix[3][1],
+                            matrix[0][2] * c[0] + matrix[1][2] * c[1] + matrix[2][2] * c[2] + matrix[3][2]];
+                        out.push((pi, centre, r));
+                    }
+                    Obj::Anim { skin, .. } => {
+                        // The anim object's BuildWorldSph volume: its own model glist (obj+0xD8 =
+                        // the skin) through the object matrix; no glist → the game's no-record
+                        // path (translation, radius 0.1) [M 0x133070:19-27].
+                        if let Some(m) = s.stream_matrix(i, &self.objects, w) {
+                            let (c, r) = w.glist_sphere(*skin).unwrap_or(([0.0; 3], 0.1));
+                            let centre = [
+                                m[0][0] * c[0] + m[1][0] * c[1] + m[2][0] * c[2] + m[3][0],
+                                m[0][1] * c[0] + m[1][1] * c[1] + m[2][1] * c[2] + m[3][1],
+                                m[0][2] * c[0] + m[1][2] * c[1] + m[2][2] * c[2] + m[3][2]];
+                            out.push((pi, centre, r));
+                        }
+                    }
+                    _ => {
+                        if let Some(m) = s.stream_matrix(i, &self.objects, w) {
+                            out.push((pi, [m[3][0], m[3][1], m[3][2]], 0.1));
+                        }
+                    }
+                }
+            }
+        }
+        out
+    }
+
+    /// One player-bullet contact on a script player's stream objects this tick — the game's
+    /// Collide pass appends the class-5 HITDATA to the object's `+0xD0` chain [M 0x1ea398] and
+    /// `SP_Hit`'s walk reads it on the NEXT walk (Collide after the walk [M 0x1336f8:238]).
+    /// The weapon id is the bullet's `weapon_data+0x00` u16 — the `+0x37` filter's comparison
+    /// value [M 0x1dc470:64-70; docs/fields/weapon_data.md: the id equals the record index].
+    pub fn add_bullet_hit(&mut self, player: usize, weapon: u16) {
+        if let Some(p) = self.players.get_mut(player) { p.tick_bullet_hits.push(weapon); }
     }
 
     /// One bullet contact's damage on a player's stream objects this tick (`Collide_Update`
@@ -1836,6 +1935,9 @@ impl Scripts {
             tick_damage: 0.0,
             // +0x36: nothing hides a placed/fusebox/useobj SP at create [M 0x1db9a8].
             hidden: false,
+            bullet_filter: 0,
+            bullet_hits: Vec::new(),
+            tick_bullet_hits: Vec::new(),
         });
     }
 
@@ -1859,6 +1961,9 @@ impl Scripts {
             tick_damage: 0.0,
             // `SP_HideObj(sp, 1)` while the gate channel is armed and off [M 0x17d340:73-74].
             hidden: gate != 0 && !ch.on(gate as u32),
+            bullet_filter: 0,
+            bullet_hits: Vec::new(),
+            tick_bullet_hits: Vec::new(),
             // The runtime spawn has no placement model.
         });
     }
@@ -2043,6 +2148,9 @@ mod tests {
             scale: 1.0, matrix: IDENT, cur: 0, state: 1, activated: false, countdown: 0, info: [Some(script), None],
             deleted: false, live_matrix: IDENT, subs: Vec::new(), hit_points: 0.0, damage: 0.0, tick_damage: 0.0,
             hidden: false,
+            bullet_filter: 0,
+            bullet_hits: Vec::new(),
+            tick_bullet_hits: Vec::new(),
         };
         let mut ch = Channels::default();
         let mut out = Vec::new();
@@ -2053,10 +2161,38 @@ mod tests {
         // Sister: 0.2 away is outside the 0.1 sphere — the radius is the game's, not a guess.
         let mut p2 = Player { placement: 0, scripts: [0x0600_0086, 0], modes: [1, 0], stay: false, mask: 2, out: 0, gate: 0,
             scale: 1.0, matrix: IDENT, cur: 0, state: 1, activated: false, countdown: 0, info: [None, None],
-            deleted: false, live_matrix: IDENT, subs: Vec::new(), hit_points: 0.0, damage: 0.0, tick_damage: 0.0, hidden: false };
+            deleted: false, live_matrix: IDENT, subs: Vec::new(), hit_points: 0.0, damage: 0.0, tick_damage: 0.0, hidden: false, bullet_filter: 0, bullet_hits: Vec::new(), tick_bullet_hits: Vec::new() };
         let gate2 = SpStart { health_ok: true, mission: 0, music2: 0, blasts: vec![([5.2, 0.0, 0.0], 0.0)] };
         p2.update(&mut HashMap::new(), &mut objs, &mut ch, &TestWorld, 0, &mut out, false, gate2);
         assert_ne!(p2.state, 2, "a blast 0.2 from the origin must stay outside the 0.1 sphere");
+    }
+
+    /// `SP_Hit` 0x1dc470's `+0x37` bullet-filter arm [M :64-70 — when the placement's filter
+    /// byte is set, a class-5 record raises bit 2 only while the bullet's
+    /// `weapon_data+0x00` u16 == `+0x37`]. No disc placement sets `+0x37` (the census,
+    /// dump_sp_hit_census) [D] — the arm is pinned from the decompile with a synthetic
+    /// player; the unfiltered arm (filter 0: any bullet raises the bit) is the urn test's.
+    #[test]
+    fn the_037_bullet_filter_arms_only_the_matching_weapon() {
+        let nis = Arc::new(Nis {
+            hashcode: 0x0600_0086, camera: false, loop_start: 0, length: 100,
+            streams: vec![NisStream { first_key: 0, last_key: 0, commands: Vec::new() }],
+            keys: Vec::new(),
+        });
+        let script = Script::load(nis, IDENT, 1.0);
+        let mut p = Player {
+            placement: 0, scripts: [0x0600_0086, 0], modes: [1, 0], stay: false, mask: 2, out: 0, gate: 0,
+            scale: 1.0, matrix: IDENT, cur: 0, state: 1, activated: false, countdown: 0, info: [Some(script), None],
+            deleted: false, live_matrix: IDENT, subs: Vec::new(), hit_points: 0.0, damage: 0.0, tick_damage: 0.0,
+            hidden: false, bullet_filter: 5, bullet_hits: vec![2], tick_bullet_hits: Vec::new(),
+        };
+        let mut ch = Channels::default();
+        let mut out = Vec::new();
+        p.update(&mut HashMap::new(), &mut Objects::default(), &mut ch, &TestWorld, 0, &mut out, false, SpStart::default());
+        assert_eq!(p.state, 1, "a weapon-2 bullet must not arm a +0x37 = 5 filter [M 0x1dc470:64-70]");
+        p.bullet_hits = vec![5];
+        p.update(&mut HashMap::new(), &mut Objects::default(), &mut ch, &TestWorld, 0, &mut out, false, SpStart::default());
+        assert_eq!(p.state, 2, "the matching weapon's bullet raises bit 2 — state 1 plays [M SP_Update case 1]");
     }
 
     /// A HELD anim stream object's hit volume is the game's BuildWorldSph sphere of the anim's own
@@ -2093,6 +2229,9 @@ mod tests {
             scale: 1.0, matrix: IDENT, cur: 0, state: 1, activated: false, countdown: 0, info: [Some(script), None],
             deleted: false, live_matrix: IDENT, subs: Vec::new(), hit_points: 20.0, damage: 0.0, tick_damage: 0.0,
             hidden: false,
+            bullet_filter: 0,
+            bullet_hits: Vec::new(),
+            tick_bullet_hits: Vec::new(),
         });
         let targets = scripts.held_hit_targets(&AnimWorld);
         assert_eq!(targets.len(), 1, "the held anim stream object must be a hit target");
@@ -2280,6 +2419,9 @@ mod tests {
             tick_damage: 0.0,
             // +0x36: nothing hides a placed/fusebox/useobj SP at create [M 0x1db9a8].
             hidden: false,
+            bullet_filter: 0,
+            bullet_hits: Vec::new(),
+            tick_bullet_hits: Vec::new(),
         };
         let mut lib = HashMap::new();
         lib.insert(0x0600_0421u32, nis);
@@ -2322,6 +2464,9 @@ mod tests {
             tick_damage: 0.0,
             // +0x36: nothing hides a placed/fusebox/useobj SP at create [M 0x1db9a8].
             hidden: false,
+            bullet_filter: 0,
+            bullet_hits: Vec::new(),
+            tick_bullet_hits: Vec::new(),
         };
         let mut objs2 = Objects::default();
         p2.load(&lib, &mut objs2, &mut ch, &world, 0, &mut out);
@@ -2366,7 +2511,7 @@ mod tests {
         let world = TestWorld;
         let mut out = Vec::new();
         let mut p = Player { placement: 0, scripts: [0x0600_0832, 0], modes: [1, 0], stay: false, mask: 0, out: 0, gate: 0, scale: 1.0, matrix: IDENT, cur: 0, state: 7, activated: false, countdown: 0, info: [None, None], deleted: false,
-            live_matrix: IDENT, subs: Vec::new(), hit_points: 0.0, damage: 0.0, tick_damage: 0.0, hidden: false };
+            live_matrix: IDENT, subs: Vec::new(), hit_points: 0.0, damage: 0.0, tick_damage: 0.0, hidden: false, bullet_filter: 0, bullet_hits: Vec::new(), tick_bullet_hits: Vec::new() };
         p.load(&lib, &mut objs, &mut ch, &world, 0, &mut out);
         {
             let s = p.info[0].as_ref().unwrap();
@@ -2398,7 +2543,7 @@ mod tests {
         }));
         let mut objs2 = Objects::default();
         let mut p2 = Player { placement: 0, scripts: [0x0600_0833, 0], modes: [1, 0], stay: false, mask: 0, out: 0, gate: 0, scale: 1.0, matrix: IDENT, cur: 0, state: 7, activated: false, countdown: 0, info: [None, None], deleted: false,
-            live_matrix: IDENT, subs: Vec::new(), hit_points: 0.0, damage: 0.0, tick_damage: 0.0, hidden: false };
+            live_matrix: IDENT, subs: Vec::new(), hit_points: 0.0, damage: 0.0, tick_damage: 0.0, hidden: false, bullet_filter: 0, bullet_hits: Vec::new(), tick_bullet_hits: Vec::new() };
         p2.load(&lib, &mut objs2, &mut ch, &world, 0, &mut out);
         {
             let s = p2.info[0].as_ref().unwrap();
