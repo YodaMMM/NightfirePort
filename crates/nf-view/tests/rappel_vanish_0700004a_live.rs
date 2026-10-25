@@ -166,11 +166,11 @@ fn a_shot_rope_guard_falls_instead_of_vanishing() {
     assert!(lowest < ky - 25.0, "the fall covered the shaft below the rope point (kill y {ky}, lowest {lowest}) — the game's free fall down the shaft");
 }
 
-/// Sister at difficulty 2: the third abseiler (#288, −50.1, ch 0x19) also exists [D] — the
-/// placements' difficulty gate is the port's own spawn path, pinned here so the census cannot
-/// silently drop a placement.
+/// Sister: the difficulty-1 spawn census [D + M 0x136be0:49] — exactly the two min-difficulty-1
+/// abseiler placements exist in the sim (the third, #288 at −50.1 ch 0x19, is gated to
+/// difficulty ≥ 2 by its param 2 and is absent here; the count proves the gate).
 #[test]
-fn the_disc_abseil_census_at_difficulty_1_and_2() {
+fn the_disc_abseil_census_at_difficulty_1() {
     let iso = iso();
     let mut scene = nf_view::load(&iso, "0700004a.bin", false).expect("load 0700004a");
     let sim = scene.sim.as_mut().unwrap();
