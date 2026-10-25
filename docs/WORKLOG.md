@@ -48,3 +48,20 @@ the stairwell test green; the FULL suite on the merged tree; the total line in t
 
 Progress:
 - (10:24) Branch created and merged; WORKLOG started.
+
+## level-11-stairwell-bullet-wall-3
+
+Branch `s/level-11-stairwell-bullet-wall-3` (from origin/s/level-11-stairwell-bullet-wall-2
+8f5bf8c3, merged with origin/master). Window 15:24-17:24 UTC.
+
+Task: the one red that remains: `walkreal_07000001_live::walk_from_the_spawn_to_the_exit_with_
+the_contact`. The fight resolves differently, parking the contact in AllyLeadWait (0x20) at
+route node 15 (6.9, 6.3, 9.1) with Bond 6.1 away; the release [M 0x15eda8 case 3: pd > -7.0
+&& (pd != 0.0 || dist2d < 5.0)] reads pd == 0.0 and needs Bond within 5.0, but Bond's walk
+stalls at (1.38, 6.7, 11.61) in the hall (the nav gives up at its 3000-tick cap). Find why
+Bond's walk stalls there and walk it the way a player would with real input; check the release
+rule against [M]. Then green + stairwell + gondola window + escort + foliage; FULL suite on
+the merged tree; the total line in the report.
+
+Progress:
+- (15:26) Branch created, master merged, WORKLOG started. Fast suite starting.
