@@ -127,3 +127,18 @@ Progress:
   flat world exposes the exterior backdrop planes the game's pick never sees. The port's flight also
   still misses the walk's other arms ([M Collide_Update 0x1ea398:216-229]: the glass 0x10 pass under
   the +0x9a & 0x20 mask the bullet arms [M 0x12f048-58]; the 0x80 50% roll — a shared-RNG draw).
+- (20:10 UTC) Correction to the 20:05 note: the EMPTY cell128 bucket was a probe artifact — the
+  probe's world used the RAW build_scoped keying (pushed ordinal = cell index), while the sim's
+  loader re-keys the buckets (attribute_scope ×2, scene.rs 8482/8504: a room-class cell keeps its
+  own runs, a generic's runs join its chain owner). In the SIM's keying graphcell128 (the
+  stairwell's ROOM_StairWell_2 cel, 0xc047) holds the room's runs, and the fudge/blockingpolys
+  (0x8019 generics) ride their chain owner's bucket. So the fix is NOT a bucket repair — it is the
+  FLIGHT QUERY: give the player-bullet trace the game's cel-scoped pick (straddle BFS from the
+  bullet's cel [M Collide_Pick 0x1eb320:125 + Collide_StraddleCels 0x1eac98; the start cel re-fed
+  per tick, disasm 0x12f0d8]) over the sim-keyed buckets + always + missile + dynamic, with the
+  existing 0x40 pass drop. In the stairwell that set is graphcell128 only: the round sees the
+  room's far wall and the chained fudge (0x40 → passes), NEVER exterior_cell5_back_right
+  (graphcell151, not straddled) → the mid-air decal planes disappear, matching the game.
+  NOT wired this window (no time to run the required suite on a behaviour change); the wiring
+  needs a per-tick cell for the bullet (bbox candidates + a room-preference tie-break [S] or the
+  nf-view find_cell_raycast port) and the full suite + the real-input pins.
