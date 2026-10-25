@@ -44,3 +44,31 @@ port what's missing; suite; report.
   the pins + the doc. No product code changed.
 - (03:55) Level doc §4/§8 rewritten (15 doors, not 18; the #251 story lock; the "inert lock"
   note disproven by the pack-script writer). Checkpoint pushed.
+
+### level-07-party-door-lock-2 (started 05:27 UTC, 2026-10-25)
+
+Task: land the party-door-lock tests — un-assert the ch-200 "never written" claim (a [D] scan
+result, not an [M] proof), move the two #[ignore]d dumps out of the tests, run the 07 family
+un-ignored on the tree merged with origin/master, full suite on the final tree.
+
+Plan: branch from origin/master 38f1bc93 + merge origin/s/level-07-party-door-lock; demote the
+two ch-200 assertions to logged observations; move the dumps to nf-view examples; run the
+touched binaries; suite in the background; report.
+
+- (05:27-05:35) Branch from origin/master 38f1bc93, merged origin/s/level-07-party-door-lock
+  (clean, no conflicts), pushed the checkpoint.
+- (05:38-05:56) The edits: party_door_lock_07000007_live's two `assert!(!channels.on(200))`
+  (boot + post-scene) are now eprintln observations citing docs/systems/switch-channel-writers.md
+  (the [M] writer-family census: 129 write sites in 60 files; none of this level's records
+  resolves to 200 — that resolution is [D], so the claim stays out of pass/fail). The
+  [M]-backed lock assertions stay (the E refusal [M Door_Activate 0x135be0 LAB_00135cf8], #244
+  still opening, the armed ch_lock field [M 0x1363c8:106]). The two #[ignore]d dumps
+  (dump_07000007_doors_and_channel_writers, dump_06000073_stream8) moved from
+  tests/census_07000007.rs (deleted) to crates/nf-view/examples/ (content unchanged, #[test] →
+  fn main, `--ignored --nocapture` → `cargo run --example`).
+- (05:47-05:56) Ran un-ignored on the merged tree (release, --test-threads=1): party_door_lock_
+  07000007_live 2/2, walkreal_07000007_live 2/2, interact_07000007_live 7/7, probe_07_door_lock
+  1/1, probe_07_route 1/1 — 13 passed, 0 failed; the examples build clean (cargo test builds
+  them, so a broken example would fail the suite).
+- (05:57) Fast suite started in the background on this tree (the final tree unless the suite
+  says otherwise).

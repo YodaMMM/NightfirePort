@@ -17,8 +17,11 @@
 //! activates the door (close) once no player stands in its blocking zone; #251 is then CLOSED with
 //! lock channel 200 — and nothing on the level writes ch 200 [D: the script lib's only channel
 //! event is [130, 0]; no trigger's out is 200 (the census); no writer family carries 200 (docs/
-//! systems/switch-channel-writers.md)] — so [M Door_Activate 0x135be0 LAB_00135cf8] every later E
-//! press on the closed door is refused with the hit sound (320 [D p7]). The locked door gives no
+//! systems/switch-channel-writers.md)]. NOTE (level-07-party-door-lock-2): that no-writer claim is
+//! a [D] scan result, NOT an [M] proof, so it is NOT asserted here — the test logs ch 200's state
+//! as an observation and pins only the [M]-backed behaviour (the E refusal, the free door still
+//! opening). [M Door_Activate 0x135be0 LAB_00135cf8] refuses every later E press on the closed
+//! door while ch 200 is off, with the hit sound (320 [D p7]). The locked door gives no
 //! text hint at all [M Door_DoMsg 0x135f18:20-24 — the lock gate; the "locked" feedback is the
 //! hit sound only], and the "Door Unlocked" message (0x2000003) belongs to ch 200's rising edge
 //! [M 0x1363c8:88-107], which never fires on this level.
@@ -66,7 +69,12 @@ fn walk_to_the_story_point(w: &mut Walker) {
         assert_eq!(d.ch_lock, 200, "door #251's lock channel is 200 [D p3]");
         assert_eq!(d.state & 0xff, 4, "door #251 is created OPEN (starts-open flags 0x25 [D]; M 0x136100:96-99)");
         assert!(sim.drones.channels.on(130), "the starts-open door forced its open channel on [M 0x136100 tail]");
-        assert!(!sim.drones.channels.on(200), "ch 200 is off at boot — the ch-200 doors start locked [M Door_Activate's lock arm]");
+        // [D] observation, not an assertion (level-07-party-door-lock-2): ch 200 reading 0 at boot
+        // follows from the [D] no-writer scan (docs/systems/switch-channel-writers.md maps every
+        // [M] writer family; none of this level's records resolves to 200), not from an [M] proof
+        // — logged, kept out of pass/fail.
+        eprintln!("[07 lock] observation: ch 200 {} at boot (the [D] no-writer scan says off; not asserted)",
+            sim.drones.channels.on(200) as u8);
     }
 
     // The party's own route to the hall (the walkreal anchors).
@@ -181,7 +189,11 @@ fn the_party_corridor_door_locks_at_the_control_scene() {
         let sim = w.scene.sim.as_ref().unwrap();
         let d = &sim.drones.doors.list[door_i(&w, 251)];
         assert!(d.state & 0xc == 0, "the use key is refused on the locked party door (state {:#04x}) [M Door_Activate 0x135be0 LAB_00135cf8 — ch 200 off, ch_lock 200]", d.state);
-        assert!(!sim.drones.channels.on(200), "ch 200 stays off — the lock is permanent on this level [D: no writer]");
+        // [D] observation, not an assertion (level-07-party-door-lock-2): "ch 200 never written on
+        // this level" is the [D] scan's result (docs/systems/switch-channel-writers.md), not an
+        // [M] proof — logged, kept out of pass/fail.
+        eprintln!("[07 lock] observation: ch 200 {} after the E presses (the [D] no-writer scan says it stays off; not asserted)",
+            sim.drones.channels.on(200) as u8);
         assert_eq!(d.ch_lock, 200, "the lock channel field stays armed (the one-shot unlock edge never fired) [M 0x1363c8:106 clears it only on the edge]");
     }
     eprintln!("[07 lock] the party door locked at tick {}", w.total_ticks);

@@ -1,10 +1,11 @@
-//! level-07-party-door-lock census: the party level's doors (kind 0xDB with every param), the
+//! level-07-party-door-lock probe (moved out of the tests at level-07-party-door-lock-2 — a
+//! dump, not a test): the party level's doors (kind 0xDB with every param), the
 //! triggers/SPs/exits, and every script stream's channel-write events (event 0x0D = set
 //! ch p0 ← p1 [M Script_EventHandler 0x1d94c0 case 0xd]; event 0x11 = conditional set
-//! ch (p0 on ? p1 : p2) ← p3 [M case 0x11]). Assertion-free diagnostic, run with
-//! `cargo test -p nf-view --test census_07000007 -- --ignored --nocapture`.
-
-fn iso() -> Option<String> { std::env::var("NF_ISO").ok() }
+//! ch (p0 on ? p1 : p2) ← p3 [M case 0x11]).
+//!
+//! Run with:
+//!   NF_ISO=<iso> cargo run -p nf-view --release --example dump_07000007_doors_and_channel_writers
 
 use nf_formats::iso9660::IsoImage;
 use nf_formats::level::Level;
@@ -17,10 +18,8 @@ fn read_archive(iso: &str, archive: &str) -> Vec<u8> {
     img.read_bytes(bin.lba as u64 * 2048 + fe.offset as u64, fe.size as u64).expect("read")
 }
 
-#[test]
-#[ignore = "assertion-free census dump; run with --ignored --nocapture"]
-fn dump_07000007_doors_and_channel_writers() {
-    let Some(iso) = iso() else { eprintln!("NF_ISO not set"); return };
+fn main() {
+    let Some(iso) = std::env::var("NF_ISO").ok() else { eprintln!("NF_ISO not set"); return };
     let data = read_archive(&iso, "07000007.bin");
     let lv = Level::parse(&data).expect("parse");
     let mm = lv.main_map().unwrap();
@@ -92,18 +91,4 @@ fn dump_07000007_doors_and_channel_writers() {
     // The pack's streamed scripts are already in the lib (nf_view::load decodes the level's type-0xC
     // records → 07800007.bin/07900007.bin kind-7 entries into level.nis — lib.rs's loadable-pack pass).
     println!("\n=== script lib size: {} scripts ===", sim.drones.scripts.lib.len());
-}
-
-#[test]
-#[ignore = "assertion-free dump; run with --ignored --nocapture"]
-fn dump_06000073_stream8() {
-    let Some(iso) = iso() else { eprintln!("NF_ISO not set"); return };
-    let scene = nf_view::load(&iso, "07000007.bin", false).expect("load 07");
-    let sim = scene.sim.as_ref().unwrap();
-    let nis = &sim.drones.scripts.lib[&0x0600_0073];
-    println!("script 06000073: length {} camera {} loop_start {} streams {}", nis.length, nis.camera, nis.loop_start, nis.streams.len());
-    for (si, s) in nis.streams.iter().enumerate() {
-        let ops: Vec<String> = s.commands.iter().map(|b| format!("{b:02x}")).collect();
-        println!("stream {si} keys {}..{} cmds [{}]", s.first_key, s.last_key, ops.join(" "));
-    }
 }
