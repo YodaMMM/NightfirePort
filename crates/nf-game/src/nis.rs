@@ -566,6 +566,23 @@ impl Script {
                         // `Script_CameraStart` (0x1d9140): u8 spline, u16 first key, u16 last key; the camera uses keys
                         // first..last − 1. Skipped while flag 0x20 (no cameras). The camera-active flag (`+0xAB5 |=
                         // 0x10` [M 0x1d9140]) arms `Script_FFwd`'s skip.
+                        // THE BASE RESET [M 0x1d916c]: `Script_CameraStart`'s first act — before the flag test — is
+                        // `Mat_IdentityT(SCRIPTINFO)`: the jal's a0 still holds param_1 (SCRIPTINFO) at the call
+                        // (the prologue only copies a0→s1/a1→s2 and s0 = a1+0x14; nothing else writes a0), and the
+                        // decompiler dropped the argument. `Mat_IdentityT` 0x1e34c8 zeroes all 0x40 bytes and writes
+                        // the 1.0 diagonal — the script's base matrix becomes IDENTITY for the rest of the script
+                        // (nothing restores it: `Script_CameraEnd` 0x1db348 only kills the stream; the Mat_IdentityT
+                        // caller census has no other Script_* hit). A script WITH a camera op therefore keys every
+                        // matrix — the camera (case 4 concats SCRIPTINFO+0x00 [M 0x1da054-68 + 0x1da838-44]) and its
+                        // entities (case 1's parent chain + base [M 0x1d9b30-74]) — in WORLD space from the camera
+                        // start on; the [D] keys of 07000014's three cut-scenes (0x06000833/0x0600062f/0x06000848,
+                        // camera-flag 1 [D header]) sit on real level geometry only un-composed, and their composed
+                        // positions are disc-data voids. Scripts WITHOUT a camera op (0x06000a1b's wires,
+                        // 0x060009e2's SafePickUps, 0x06000a22's truck — camera-flag 0 [D header]) keep the
+                        // placement base `Script_Load` wrote [M 0x1d8498 View_RotTransMatrix(obj+0x50, obj+0x30,
+                        // SCRIPTINFO)] and key LOCAL offsets. This also explains the [L]-measured 0700004a landing
+                        // hand-back (0x060006cf, camera-flag 1): the marker's raw key IS the game's enable spot.
+                        self.matrix = IDENT;
                         let (Some(&sp), Some(a), Some(b)) = (cmds.get(pc + 1), rd(1, 2), rd(3, 2)) else { self.streams[i].pc = None; return };
                         next = pc + 7;
                         if self.flags & 0x20 == 0 {

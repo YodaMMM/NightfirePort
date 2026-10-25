@@ -12,9 +12,17 @@
 //!   scale, +0x2c time; stride 0x30) and the 10th arg = 1 concats the ScriptPlayer's base
 //!   matrix (disasm 0x1da054-0x1da068); `Script_UpdateCamera` 0x1db518 copies it to viewer 4 and
 //!   `Camera_CalcViewAngles` 0x1baf70 takes the vertical fov = key scale × viewer+0x114 = 4/3.
-//!   The port: nf-game/src/nis.rs case 4 (:950-962, the base concat :960) + `Script::keys`
-//!   (:1088-1143). Placement #276's rotation is (0,0,0) [D] so the base concat is the pure
-//!   translation (52.156647, 2.636515, 46.62138).
+//!   THE BASE IS IDENTITY for this scene: `Script_CameraStart` 0x1d9140's first act — before the
+//!   flag test — is `Mat_IdentityT(SCRIPTINFO)` [M 0x1d916c: the jal's a0 still holds param_1;
+//!   the decompiler dropped the argument], so SCRIPTINFO+0x00 (which `Script_Load` 0x1d8498
+//!   seeded with the placement transform) reads identity from the camera start on and nothing
+//!   restores it (`Script_CameraEnd` 0x1db348 kills the stream only). The camera world matrix
+//!   IS the raw key. The earlier reading (base = the placement translation, camera =
+//!   (78.06, 4.79, 82.69)) put every shot of this scene — and 0x0600062f/0x06000848's cameras
+//!   and the 0x0600062f hand-back marker — in disc-data voids (probe_the_disc_data_at_the_stages:
+//!   zero placements and zero glists at (70..105, 70..105)); the raw keys sit in the real
+//!   security-centre room. Scripts without a camera op keep the placement base (0x06000a1b's
+//!   wires, 0x060009e2's SafePickUps — camera-flag 0 [D header]).
 //! - The disc key values below were decoded from 07800014.bin's NIS 06000833 (host-float eval
 //!   of the PS2 key records, ±1e-5): shot A (ticks 0..199) holds local (25.9049, 2.1571,
 //!   36.0720) with the t0 key's fov scale 0.445614 and 0.373221 from t1; shot B (t200..329)
@@ -27,7 +35,10 @@ use nf_game::player::Input;
 
 fn iso() -> Option<String> { std::env::var("NF_ISO").ok() }
 
-/// Placement #276's translation [D placements-all map 54 #276].
+/// Placement #276's translation [D placements-all map 54 #276] — the base `Script_Load` seeds
+/// [M 0x1d8498] and `Script_CameraStart` resets to identity [M 0x1d916c] before any key runs.
+/// Kept for the record; the expectations below are the RAW keys.
+#[allow(dead_code)]
 const SP276_T: [f32; 3] = [52.156647, 2.636515, 46.62138];
 /// The disc key positions (local to the placement) [D 07800014.bin NIS 06000833 keys].
 const SHOT_A_LOCAL: [f32; 3] = [25.9049, 2.1571, 36.0720]; // keys t0..t199
@@ -70,11 +81,11 @@ fn the_opening_scene_camera_matches_the_disc_keys() {
     let close = |a: f32, b: f32| (a - b).abs() < 5e-3;
     for (t, pos, fov) in &shots {
         let (want_pos, want_fov): ([f32; 3], f32) = match *t {
-            0 => (add(SP276_T, SHOT_A_LOCAL), FOV_A0),
-            1..=199 => (add(SP276_T, SHOT_A_LOCAL), FOV_A),
-            200..=329 => (add(SP276_T, SHOT_B_LOCAL), FOV_B),
-            330..=498 => (add(SP276_T, SHOT_B_LOCAL), FOV_B), // mid-dolly: pinned loosely below
-            500..=1400 => (add(SP276_T, SHOT_C_LOCAL), FOV_A0),
+            0 => (SHOT_A_LOCAL, FOV_A0),
+            1..=199 => (SHOT_A_LOCAL, FOV_A),
+            200..=329 => (SHOT_B_LOCAL, FOV_B),
+            330..=498 => (SHOT_B_LOCAL, FOV_B), // mid-dolly: pinned loosely below
+            500..=1400 => (SHOT_C_LOCAL, FOV_A0),
             _ => continue,
         };
         if *t == 330 { continue; } // the dolly is mid-flight here; the endpoints pin it
@@ -82,11 +93,11 @@ fn the_opening_scene_camera_matches_the_disc_keys() {
             "camera tick {t}: pos {pos:?} vs the disc keys {want_pos:?} (placement + key local [D 06000833])");
         assert!(close(*fov, want_fov), "camera tick {t}: fov {fov:.6} vs the disc key scale × 4/3 {want_fov:.6} [M 0x1baf70]");
     }
-    // The base concat: the port's camera minus the placement translation IS the raw key local.
+    // The base is the IDENTITY `Script_CameraStart` writes [M 0x1d916c]: the port's camera IS
+    // the raw key (the concat of SCRIPTINFO+0x00 [M 0x1da054-0x1da068] is a no-op here).
     let (pos, _y, _p, fov) = sim.script_camera().expect("the camera still runs");
-    let local = [pos[0] - SP276_T[0], pos[1] - SP276_T[1], pos[2] - SP276_T[2]];
-    assert!(close(local[0], SHOT_C_LOCAL[0]) && close(local[1], SHOT_C_LOCAL[1]) && close(local[2], SHOT_C_LOCAL[2]),
-        "the camera matrix carries the placement translation + the key local [M 0x1da054-0x1da068 base concat], got local {local:?}");
+    assert!(close(pos[0], SHOT_C_LOCAL[0]) && close(pos[1], SHOT_C_LOCAL[1]) && close(pos[2], SHOT_C_LOCAL[2]),
+        "the camera world matrix is the raw key (the base is identity [M 0x1d916c]), got {pos:?}");
     let _ = fov;
     for (t, pos, fov) in &shots { eprintln!("trace: camera tick {t} pos {pos:?} fov {fov:.6}"); }
 }
@@ -155,4 +166,5 @@ fn the_scene_actors_exist_and_the_camera_cels_resolve() {
     eprintln!("trace: bucket owners over the scene room floor: {:?}", owners);
 }
 
+#[allow(dead_code)]
 fn add(a: [f32; 3], b: [f32; 3]) -> [f32; 3] { [a[0] + b[0], a[1] + b[1], a[2] + b[2]] }
