@@ -137,8 +137,9 @@ figures; nothing to copy).
 
 - Daemon started 14:56 UTC on the merged tree (rain-3 + master) with the double-fork wrapper
   (exported PATH/PKG_CONFIG_PATH/NF_ISO first); the build finished ~14:55.
-- At 15:42: **529 binaries run**, no total line yet (the projected finish ~16:46 is past the
-  sandbox expiry). Results so far — every failure is in a documented class:
+- At 15:53: **625 binaries run**, no total line yet (the projected finish ~16:46 is past the
+  sandbox expiry). Results so far — every failure is in a documented class (9 FAILED, 13 OOM
+  CRASHes — the same set as the 15:42 checkpoint below, plus one more OOM):
   - FAILED (9): the 4 documented slim-ISO reds (`identity_disc` + 3 `disc_golden` — the
     driver's rule 5 allows exactly these), the 3 no-GPU sandbox reds (`probe_pylon_render`,
     `fix_0c_pylon_live` ×2), `bathhouse_shout_mixer_live::…` (**stale — the pre-fix binary;
