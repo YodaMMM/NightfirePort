@@ -70,11 +70,16 @@ deliverables are the census, the real-input pins, and the corrected docs.
 - **Crates run**: `nf-view` (the new tests + the census/probes; the whole 07 test family:
   walkreal_07000007_live 2/2, interact_07000007_live in the running suite).
 - **Fast suite** (`tools/test/suite.py`, started 02:47 UTC on this branch's tree — the product
-  code is identical to the final tree since the branch adds only tests/docs): **PENDING — read
-  from suite.out before the finish**. This sandbox's known environmental reds (from the previous
-  session's full run, same tree family): 3 allowed `disc_golden`, `identity_disc` (the onfoot
-  ISO's 518,435 sectors vs the full retail 1,191,072 the test pins), 3 GPU-render tests (no
-  `/dev/dri`), and the `net_*`/`mp_*` OOM SIGKILLs (3 GB RAM).
+  code is identical to the final tree since the branch adds only tests/docs): ran to **779 of 791
+  binaries** and was stopped at the session's deadline (the last ~12 binaries are the w-tail
+  walk probes). Partial tally: 27 red entries, ALL the sandbox's known environmental families —
+  the 3 allowed `disc_golden` (slim work/), `identity_disc` (the onfoot ISO's 518,435 sectors vs
+  the full retail 1,191,072 the test pins), the 3 GPU-render tests (no `/dev/dri` — wgpu adapter
+  NotFound), and OOM SIGKILLs (exit −9) among the `net_*`/`mp_*` stress binaries and two walk
+  probes — the same set a full run of the same tree family produced yesterday (23 reds there; the
+  OOM count varies with memory pressure). Zero failures in any binary this branch's files touch:
+  walkreal_07000007_live 2/2 green, interact_07000007_live green, and the new
+  party_door_lock_07000007_live 2/2 (run directly).
 
 ## What's left
 
