@@ -14563,6 +14563,15 @@ fn segment_hits_sphere(a: V3, b: V3, c: V3, r: f32) -> bool {
                 // levels that do fire 0x12. Set `level_exit` so the main loop reloads the next level
                 // [M Script_EventHandler 0x1d94c0:189-199].
                 crate::nis::Request::LoadLevel { level } => {
+                    // exit-hold debug (NF_EXIT_DBG=1): which script players stand where when a
+                    // script asks for a level load — the 0700000a armour-route reset hunt.
+                    if std::env::var("NF_EXIT_DBG").as_deref() == Ok("1") {
+                        let ps: Vec<String> = self.scripts.players.iter()
+                            .map(|p| format!("#{} scripts {:?}/{:?} state {} cur {} act {}",
+                                p.placement, p.scripts[0], p.scripts[1], p.state, p.cur, p.activated))
+                            .collect();
+                        eprintln!("[exit-dbg] script event 0x12 LoadLevel {level:#x}; players: {}", ps.join(" | "));
+                    }
                     if self.level_exit.is_none() {
                         self.level_exit = Some(level);
                         self.music.event(3, 1);

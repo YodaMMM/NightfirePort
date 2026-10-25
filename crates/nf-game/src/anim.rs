@@ -703,8 +703,10 @@ fn script_frame_of(seq: &Sequence, time: f32) -> Option<(u32, f32)> {
 /// straight copy. `out` = the object's morph weight array (animData+0xb0, `count` floats).
 /// (`AnimFacialAppend` 0x1c6490 is the game's slot-2 feeder — it appends the talk script via
 /// `AnimScriptAppend` with marker 0xe0000002, stop-at-end +0xb5 = 3, and sets the anim object's
-/// speaking byte +0x109 = 2. The port's slot-2 consumer is this `slot2` parameter, but no
-/// gameplay append fills it: `Drones::speech` skips facial lines — see the note there.)
+/// speaking byte +0x109 = 2. The port's slot-2 consumer is this `slot2` parameter, filled by
+/// `Scene::facial_weights_at` from the drone's `facial_talk`/`facial_talk_start` (the +0x53c
+/// attach that `NDrone2_SpeechSFX` 0x141b00's facial arm and `speech_request` already model) —
+/// level-07-guest-faces.)
 pub fn facial_blend(out: &mut [f32], slot0: Option<&[f32]>, slot1: Option<&[f32]>, slot2: Option<&[f32]>, eyes: [u8; 2], script_cam: bool) {
     if script_cam {
         if let Some(s2) = slot2 {

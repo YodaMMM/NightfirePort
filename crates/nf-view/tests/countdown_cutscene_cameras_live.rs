@@ -28,6 +28,9 @@ use nf_game::player::Input;
 fn iso() -> Option<String> { std::env::var("NF_ISO").ok() }
 
 /// Placement #276's translation [D placements-all map 54 #276].
+// The SP's placement translation: NOT part of the camera's world matrix (the camera start resets
+// the script base to identity [M 0x1d9140]); kept for the entity paths' reference.
+#[allow(dead_code)]
 const SP276_T: [f32; 3] = [52.156647, 2.636515, 46.62138];
 /// The disc key positions (local to the placement) [D 07800014.bin NIS 06000833 keys].
 const SHOT_A_LOCAL: [f32; 3] = [25.9049, 2.1571, 36.0720]; // keys t0..t199
@@ -79,14 +82,14 @@ fn the_opening_scene_camera_matches_the_disc_keys() {
         };
         if *t == 330 { continue; } // the dolly is mid-flight here; the endpoints pin it
         assert!(close(pos[0], want_pos[0]) && close(pos[1], want_pos[1]) && close(pos[2], want_pos[2]),
-            "camera tick {t}: pos {pos:?} vs the disc keys {want_pos:?} (placement + key local [D 06000833])");
+            "camera tick {t}: pos {pos:?} vs the disc keys {want_pos:?} (the keys alone: Script_CameraStart resets the base to identity [M 0x1d9140 Mat_IdentityT at 0x1d916c; D 06000833])");
         assert!(close(*fov, want_fov), "camera tick {t}: fov {fov:.6} vs the disc key scale × 4/3 {want_fov:.6} [M 0x1baf70]");
     }
-    // The camera's world matrix is the keys ALONE [M Script_CameraStart 0x1d9140's Mat_IdentityT on
-    // si+0x00 — the camera-base fix; the TEST was wrong before: it pinned the placement compose].
+    // The base concat runs on the identity Script_CameraStart installed [M 0x1da054-0x1da068 the
+    // concat; 0x1d916c Mat_IdentityT]: the camera IS the raw key, with no placement translation.
     let (pos, _y, _p, fov) = sim.script_camera().expect("the camera still runs");
     assert!(close(pos[0], SHOT_C_LOCAL[0]) && close(pos[1], SHOT_C_LOCAL[1]) && close(pos[2], SHOT_C_LOCAL[2]),
-        "the camera's world matrix is the key matrix alone [M 0x1d9140], got {pos:?}");
+        "the camera is the key alone (identity base) [M 0x1d916c], got {pos:?}");
     let _ = fov;
     for (t, pos, fov) in &shots { eprintln!("trace: camera tick {t} pos {pos:?} fov {fov:.6}"); }
 }
