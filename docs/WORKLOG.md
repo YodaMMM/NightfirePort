@@ -112,3 +112,18 @@ Progress:
   Plan: raycast the decal planes from that spot, list every surface the port stops on (owner/placement,
   glist flags, surface byte, collision class, drawn geometry [D]), match each against the game's remaining
   pass arms [M], fix, then the real-input test + fast suite + full suite.
+- (20:05 UTC) The walls4 census + the scope probe are in (both assertion-free, --ignored):
+  `world.rs stairwell_walls4_census_07000011` (the fan from the reported spot; every hit named with
+  owner/glist/placement flags/mat/drawn) and `nf-view/tests/stairwell_walls4_scope_07000011_live.rs`
+  (the game's pick is cel-scoped [M Collide_Pick 0x1eb320:125 + Collide_StraddleCels 0x1eac98: the
+  candidate nodes come ONLY from the portal BFS; the bullet re-feeds its start cel per tick, disasm
+  0x12f0cc-0x12f0d8]). Data so far: the port's flat segment_bullet stops the round on map43#175
+  'exterior_cell5_back_right' (glist 0x0, mat 0x0a, the diagonal plane under the stair flight + the
+  upright mid-well plane) at t 0.048-0.10 — the game's BFS from the stairwell's own cel (graphcell128
+  = ROOM_StairWell_2's cel, the spot's containment cell) collects ONLY that cel along these rays, so
+  cell151 (back_right's cel) is NEVER picked → the round passes. The port's scoped bucket for
+  graphcell128 is EMPTY though (scoped_run_owners → 0 runs; segment_hit_scoped → None) — the
+  build_scoped cell↔instance alignment is the open defect; the sim runs the flat world here, and the
+  flat world exposes the exterior backdrop planes the game's pick never sees. The port's flight also
+  still misses the walk's other arms ([M Collide_Update 0x1ea398:216-229]: the glass 0x10 pass under
+  the +0x9a & 0x20 mask the bullet arms [M 0x12f048-58]; the 0x80 50% roll — a shared-RNG draw).

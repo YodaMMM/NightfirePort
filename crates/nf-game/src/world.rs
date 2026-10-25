@@ -871,6 +871,18 @@ impl CollisionWorld {
         Some(out)
     }
 
+    /// Diagnostic (level-11-stairwell-bullet-wall-4): the scoped bucket for `cell` as the ray
+    /// `from → to` straddles it — the same run list `segment_hit_scoped` tests, as (run, owner
+    /// pushed-instance ordinal) pairs so a probe can name every owner. Read-only.
+    pub fn scoped_run_owners(&self, cell: usize, from: V3, to: V3) -> Option<Vec<(u32, u32)>> {
+        let runs = self.scoped_runs(cell, &mut Self::ray_portal_hit(from, to))?;
+        Some(runs.into_iter().map(|r| {
+            let o = &self.stat.objects[r as usize];
+            let owner = if o.tris.start < self.stat.owners.len() { self.stat.owners[o.tris.start] } else { u32::MAX };
+            (r, owner)
+        }).collect())
+    }
+
     /// The actor-capsule portal test (`Intersect_Portal`'s 0x800 path [M 0x1ea7b8]: the point on the
     /// capsule's segment closest to the portal's +0x70 reference point, then that point's distance to
     /// the portal's two triangles against radius × 1.5). The reference point is the portal's CENTRE —
@@ -2240,5 +2252,165 @@ mod tests {
                     w.segment(*s, to), w.segment_bullet(*s, to));
             }
         }
+    }
+
+    /// level-11-stairwell-bullet-wall-4: the assertion-free census for the second reported spot.
+    /// Bond (22.40, 30.09, 1.42, yaw -1.505, pitch -0.035) frame 2944 fires into the well and the
+    /// decals hang mid-air on two flat planes (one diagonal under the stair flight, one upright
+    /// across the middle of the well). From that spot a fan of rays crosses the well; EVERY hit is
+    /// listed with the owner's identity (map, object, name, glist flags — bit 0x10 = not drawn
+    /// [M View_AddCels 0x1e6ba0]), the surface byte, its low-6-bit class, the port's pass flag and
+    /// whether the owner has any DRAWN geometry [D the parsed gfx leaves]. Run --ignored --nocapture.
+    #[test]
+    #[ignore = "assertion-free census; run with --ignored --nocapture"]
+    fn stairwell_walls4_census_07000011() {
+        use nf_formats::iso9660::IsoImage;
+        let iso = std::env::var("NF_ISO").expect("NF_ISO");
+        let img = IsoImage::open(&iso).expect("open iso");
+        let (entries, bin) = nf_formats::disc::files_bin_entries(&img).expect("FILES.BIN");
+        let fe = entries.iter().find(|e| e.name.eq_ignore_ascii_case("07000011.bin")).expect("archive");
+        let data = img.read_bytes(bin.lba as u64 * 2048 + fe.offset as u64, fe.size as u64).expect("read");
+        let level = Level::parse(&data).expect("parse 07000011");
+        let instances = level.instances(true).0;
+        let w = CollisionWorld::build(&level, &instances);
+        let mut stat_src: Vec<(usize, usize)> = Vec::new();
+        let mut stat_src_plc: Vec<u32> = Vec::new();
+        for inst in &instances {
+            let obj = &level.maps[inst.map].objects[inst.object];
+            if obj.collision.is_none() { continue; }
+            if obj.flags & 0x20 != 0 || obj.flags & 0x1000 != 0 { continue; }
+            stat_src.push((inst.map, inst.object));
+            stat_src_plc.push(inst.placement.flags);
+        }
+        // The reported spot and aim [D task brief]: yaw -1.505, pitch -0.035 → the port's look()
+        // lanes [M crates/nf-game/src/player.rs Bond::look]: p = pitch·π/2, dir = [cp·sy, sp, cp·cy].
+        let s = [22.40f32, 30.09, 1.42];
+        let p = (-0.035f32) * (std::f32::consts::PI / 2.0);
+        let (sp, cp) = (p.sin(), p.cos());
+        let (sy, cy) = ((-1.505f32).sin(), (-1.505f32).cos());
+        let base = [cp * sy, sp, cp * cy];
+        eprintln!("[walls4] spot ({:.2},{:.2},{:.2}) base dir [{:.4},{:.4},{:.4}] stat tris {} objects {}", s[0], s[1], s[2], base[0], base[1], base[2], w.stat.tris.len(), w.stat.objects.len());
+        // The decal planes: fire across the well. A fan over yaw ±0.45 and pitch ±0.22.
+        let mut planes: std::collections::BTreeMap<(String, u8, bool), (usize, f32, f32, [f32;3], bool)> = Default::default();
+        let dynamic = w.dynamic.read().unwrap();
+        for yaw_off in [-0.45f32, -0.3, -0.15, -0.075, 0.0, 0.075, 0.15, 0.3, 0.45] {
+            for pitch_off in [-0.22f32, -0.11, 0.0, 0.11, 0.22] {
+                let a = yaw_off + (-1.505f32);
+                let q = (pitch_off * (std::f32::consts::PI / 2.0)) + p;
+                let (sq, cq) = (q.sin(), q.cos());
+                let (sa, ca) = (a.sin(), a.cos());
+                let dir = [cq * sa, sq, cq * ca];
+                let far = 70.0f32;
+                let to = [s[0] + dir[0] * far, s[1] + dir[1] * far, s[2] + dir[2] * far];
+                let dd = sub(to, s);
+                let sets: [(&str, &Geo); 3] = [("stat", &w.stat), ("missile", &w.missile), ("dyn", &dynamic.geo)];
+                for (set, geo) in sets {
+                    for (ri, o) in geo.objects.iter().enumerate() {
+                        for k in o.tris.clone() {
+                            let t3 = &geo.tris[k];
+                            let e1 = sub(t3[1], t3[0]);
+                            let e2 = sub(t3[2], t3[0]);
+                            if dot(cross(e1, e2), dd) >= 0.0 { continue; }
+                            let pv = cross(dd, e2);
+                            let det = dot(e1, pv);
+                            if det.abs() < 1e-12 { continue; }
+                            let inv = 1.0 / det;
+                            let sv = sub(s, t3[0]);
+                            let u = dot(sv, pv) * inv;
+                            if !(0.0..=1.0).contains(&u) { continue; }
+                            let qv = cross(sv, e1);
+                            let v = dot(dd, qv) * inv;
+                            if v < 0.0 || u + v > 1.0 { continue; }
+                            let tt = dot(e2, qv) * inv;
+                            if !(0.0..=1.0).contains(&tt) { continue; }
+                            let pt = [s[0] + dd[0] * tt, s[1] + dd[1] * tt, s[2] + dd[2] * tt];
+                            let (id, drawn) = if set == "stat" {
+                                let src = geo.owners.get(ri).copied().unwrap_or(u32::MAX) as usize;
+                                match stat_src.get(src) {
+                                    Some((m, oi)) => {
+                                        let ob = &level.maps[*m].objects[*oi];
+                                        let drawn = !ob.gfx.leaves.is_empty();
+                                        (format!("map{}#{} '{}' glist {:#x}", m, oi, ob.name, ob.flags), drawn)
+                                    }
+                                    None => (format!("run{ri}?"), false),
+                                }
+                            } else { (format!("{set} run{ri}"), false) };
+                            let mat = geo.mats[k];
+                            let key = (id.clone(), mat, geo.bullet_pass(k));
+                            let e = planes.entry(key).or_insert((0, tt, tt, pt, drawn));
+                            e.0 += 1;
+                            e.1 = e.1.min(tt);
+                            e.2 = e.2.max(tt);
+                        }
+                    }
+                }
+            }
+        }
+        eprintln!("[walls4] distinct hit planes (owner, mat, port-pass) — rays 45, far 70: map {} entries", planes.len());
+        for ((id, mat, pass), (n, t0, t1, pt, drawn)) in &planes {
+            eprintln!("  {:>3} hits t {:.3}..{:.3} at ({:.2},{:.2},{:.2}) mat={:#04x} class={:#x} port_pass={} drawn={} | {}",
+                n, t0, t1, pt[0], pt[1], pt[2], mat, mat & 0x3f, pass, drawn, id);
+        }
+        // The one-segment view: what the flight sees on the centre ray, plus 4 near-centre rays —
+        // every hit in order with the owner's placement flags and the triangle's vertices (the
+        // diagonal-vs-upright read).
+        let mut rays: Vec<(&str, [f32; 3])> = vec![("centre", base)];
+        for (nm, yo, po) in [("yaw-0.075", -0.075f32, 0.0), ("yaw+0.075", 0.075, 0.0), ("pitch-0.11", 0.0, -0.11), ("pitch+0.11", 0.0, 0.11)] {
+            let a = yo + (-1.505f32);
+            let q = (po * (std::f32::consts::PI / 2.0)) + p;
+            let (sq, cq) = (q.sin(), q.cos());
+            let (sa, ca) = (a.sin(), a.cos());
+            rays.push((nm, [cq * sa, sq, cq * ca]));
+        }
+        for (nm, dir) in &rays {
+            let far = 70.0f32;
+            let to = [s[0] + dir[0] * far, s[1] + dir[1] * far, s[2] + dir[2] * far];
+            let dd = sub(to, s);
+            eprintln!("[walls4] ray {nm} dir [{:.4},{:.4},{:.4}]:", dir[0], dir[1], dir[2]);
+            let mut hits: Vec<(f32, String, u8, bool, [[f32; 3]; 3])> = Vec::new();
+            let sets: [(&str, &Geo); 3] = [("stat", &w.stat), ("missile", &w.missile), ("dyn", &dynamic.geo)];
+            for (set, geo) in sets {
+                for (ri, o) in geo.objects.iter().enumerate() {
+                    for k in o.tris.clone() {
+                        let t3 = &geo.tris[k];
+                        let e1 = sub(t3[1], t3[0]);
+                        let e2 = sub(t3[2], t3[0]);
+                        if dot(cross(e1, e2), dd) >= 0.0 { continue; }
+                        let pv = cross(dd, e2);
+                        let det = dot(e1, pv);
+                        if det.abs() < 1e-12 { continue; }
+                        let inv = 1.0 / det;
+                        let sv = sub(s, t3[0]);
+                        let u = dot(sv, pv) * inv;
+                        if !(0.0..=1.0).contains(&u) { continue; }
+                        let qv = cross(sv, e1);
+                        let v = dot(dd, qv) * inv;
+                        if v < 0.0 || u + v > 1.0 { continue; }
+                        let tt = dot(e2, qv) * inv;
+                        if !(0.0..=1.0).contains(&tt) { continue; }
+                        let (id, drawn) = if set == "stat" {
+                            let src = geo.owners.get(ri).copied().unwrap_or(u32::MAX) as usize;
+                            match stat_src.get(src) {
+                                Some((m, oi)) => {
+                                    let ob = &level.maps[*m].objects[*oi];
+                                    let drawn = !ob.gfx.leaves.is_empty();
+                                    (format!("map{}#{} '{}' glist {:#x} plcflags {:#x} drawn {}", m, oi, ob.name, ob.flags, stat_src_plc.get(src).copied().unwrap_or(0), drawn), drawn)
+                                }
+                                None => (format!("run{ri}?"), false),
+                            }
+                        } else { (format!("{set} run{ri}"), false) };
+                        hits.push((tt, format!("{id} mat={:#04x} port_pass={}", geo.mats[k], geo.bullet_pass(k)), geo.mats[k], geo.bullet_pass(k), *t3));
+                    }
+                }
+            }
+            hits.sort_by(|a, b| a.0.partial_cmp(&b.0).unwrap());
+            for (tt, id, _, _, tri) in hits.iter().take(10) {
+                eprintln!("  t={:.4} {} at ({:.2},{:.2},{:.2}) tri [({:.1},{:.1},{:.1})({:.1},{:.1},{:.1})({:.1},{:.1},{:.1})]",
+                    tt, id, s[0] + dd[0] * tt, s[1] + dd[1] * tt, s[2] + dd[2] * tt,
+                    tri[0][0], tri[0][1], tri[0][2], tri[1][0], tri[1][1], tri[1][2], tri[2][0], tri[2][1], tri[2][2]);
+            }
+        }
+        let to = [s[0] + base[0] * 70.0, s[1] + base[1] * 70.0, s[2] + base[2] * 70.0];
+        eprintln!("[walls4] centre segment={:?} segment_bullet={:?}", w.segment(s, to), w.segment_bullet(s, to));
     }
 }
