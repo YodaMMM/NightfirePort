@@ -80,11 +80,12 @@ inside the game's bands.
   -- --test-threads=1 --nocapture` → **ok. 1 passed** (2.12 s).
 - `cargo test --offline --release -p nf-view --test escort_follow_07000001_live escort_at_walking
   -- --test-threads=1 --nocapture` → **ok. 1 passed** (25.59 s).
-- The recovered-test binaries, run directly (`--test-threads=1`): sight_frustum_live **2/2**,
-  fix_pickups_ammo_live **4/4**, escort_hide_findrun_live **3/3**. The other three
-  (doublecross_transitions_live, hostage_killer_07000002_live, fix_0a_rain_indoors_live)
-  OOM-killed (exit −9) under the suite build's memory pressure in the sandbox — they are
-  covered by the full suite run below.
+- The recovered-test binaries (the final tree's build), run directly (`--test-threads=1`):
+  sight_frustum_live **2/2**, doublecross_transitions_live **6/6**, escort_hide_findrun_live
+  **3/3**, fix_pickups_ammo_live **4/4**, hostage_killer_07000002_live **5/5**,
+  fix_0a_rain_indoors_live **2/2** — all 22 recovered tests green. (The first direct pass OOM-
+  killed three of them under the suite build's rustc pressure; they passed cleanly once the
+  build was done.)
 - **Full suite**: started 10:44 UTC on this final merged tree (daemon,
   `NF_ISO=... python3 tools/test/suite.py > suite.out`). See the Suite appendix for the state
   at the cutoff.
