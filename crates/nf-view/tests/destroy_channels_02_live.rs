@@ -19,7 +19,7 @@ fn the_destroyables_out_channels_match_the_disc() {
     let sim = scene.sim.as_ref().unwrap();
     let ds = &sim.drones.props.destroy;
     assert_eq!(ds.len(), 6, "the census: six 0xE1 placements [D #14/#299/#301/#390/#392/#394]");
-    let ch = |i: u32| {
+    let ch = |i: usize| {
         ds.iter().find(|d| d.placement == i).unwrap_or_else(|| panic!("destroyable #{i} missing"))
     };
     // [D param 0] per placement; [M 0x12c318:35] the port carries param 0 into obj+0xF6.
