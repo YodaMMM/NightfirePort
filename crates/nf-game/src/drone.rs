@@ -2798,8 +2798,27 @@ impl Drone {
         // 0.02 per frame with no gait while the drawn patroller near the gate shows the walk's 115-tick gait.
         let info = d.tables.info.get(self.anim.danim as usize).copied().unwrap_or([0; 24]);
         if !self.drawn && info[0] & 4 != 0 && self.anim.blend_wait == 0 {
+            // The game's undrawn slide is a RAW position add — no MoveTest, no probe:
+            // `obj+0x30 += sinf(obj+0x54) * Drone+0x58c; obj+0x38 += sinf(obj+0x54 + π/2) * Drone+0x58c`
+            // [M Drone_Control 0x139268:75-96, the `NDrone2_DoAnimation == 0` arm]. `Drone+0x58c` is
+            // `Drone_AnimInfo[danim]+4` stored when the danim was set [M SetDAnimInternal 0x13aee8:51]
+            // (= this `v`), and the slide gate `+0x570 & 4` is that danim's info flags word [M
+            // 0x13aee8:50 store, 0x149f88:11-18 read — undrawn non-guest, no blend-out script
+            // (+0x538), settings speed non-zero]. Routing the slide through `move_by`'s probe wedged
+            // every undrawn walker that stood near jamb/door geometry: the 0.4-overshoot probe rays
+            // graze the throat and reject the 0.02 step forever (07000007's drone[22] frozen in the
+            // west doorway — 994 consecutive `probe_move` rejects traced, walk danim 0x188 looping).
+            // (The game also clears `+0x4F8 & 0x100000` here and clamps a negative speed against the
+            // +0x320 strafe bits while a door is bound [M 0x139268:77-84]; neither has a port reader.)
             let v = f32::from_le_bytes([info[4], info[5], info[6], info[7]]);
-            if v != 0.0 && v.is_finite() { self.move_by(d, [crate::trig::sinf(self.yaw) * v, crate::trig::cosf(self.yaw) * v]); }
+            if v != 0.0 && v.is_finite() {
+                let dx = crate::trig::sinf(self.yaw) * v;
+                let dz = crate::trig::cosf(self.yaw) * v;
+                self.pos[0] += dx;
+                self.pos[2] += dz;
+                self.special_spot[0] += dx;
+                self.special_spot[2] += dz;
+            }
             self.root_prev = None;
             return self.call_handler(d);
         }

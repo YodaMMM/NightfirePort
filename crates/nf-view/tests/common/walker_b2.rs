@@ -84,6 +84,7 @@ pub struct Walker {
     stuck_cycles: u32,
     float_ticks: u32,
     sidestep: i32,
+    backoff: u32,
     max_y: f32,
     /// Lenient walks bail (u32::MAX) at the 6000-tick cap instead of panicking — the caller
     /// decides (walkreal_0700000b_live's deck leg keeps the interactions real on a wedge).
@@ -132,7 +133,7 @@ impl Walker {
         Walker {
             scene, top_up_health: true, stop_on_exit: true,
             report: Report { legs: Vec::new(), stuck_events: Vec::new(), falls: Vec::new() },
-            total_ticks: 0, pos, last_sample: pos, sample_tick: 0, stuck: 0, stuck_cycles: 0, float_ticks: 0,
+            total_ticks: 0, pos, last_sample: pos, sample_tick: 0, stuck: 0, stuck_cycles: 0, float_ticks: 0, backoff: 0,
             sidestep: 0, max_y: pos[1], lenient: false,
             alarm_last: Vec::new(),
             alarm_props_dumped: None,
@@ -756,6 +757,12 @@ impl Walker {
                     input.forward = if input.forward > 0.0 { 1.0 } else { 0.0 };
                 }
             }
+            if self.backoff != 0 {
+                // The player's back-off: straight reverse out of the pocket, no turn — the
+                // re-approach then enters from a different angle (the node-6→7 arc's desk pocket).
+                input.forward = -1.0;
+                self.backoff -= 1;
+            }
             if self.sidestep != 0 {
                 input.strafe = if self.sidestep > 0 { 1.0 } else { -1.0 };
                 input.forward = 0.4;
@@ -787,21 +794,26 @@ impl Walker {
                     let door_i = sim.drones.doors.list.iter().position(|d| dxz(d.pos, self.pos) < 2.8);
                     if let Some(di) = door_i {
                         drop(sim);
-                        self.use_door(di, label);
-                        self.stuck = 0;
+                        let st = self.scene.sim.as_ref().unwrap().drones.doors.list[di].state;
+                        if st & 0xc != 0 && self.stuck < 2 {
+                            // Open or swinging: give the walk-through its chance before the ladder
+                            // spends its mitigations (`use_door`'s open early-return presses
+                            // nothing, so an open door must not reset the counter either).
+                        } else {
+                            self.use_door(di, label);
+                            self.stuck = 0;
+                        }
                     } else if self.stuck == 1 {
                         self.sidestep = 40; // nudge right
                     } else if self.stuck == 2 {
                         self.sidestep = -40; // nudge left
                     } else if self.stuck == 3 {
-                        // jump once
-                        let sim = self.scene.sim.as_mut().unwrap();
-                        let j = sim.bond.grounded;
-                        if j { self.tick(Input { jump: true, ..Default::default() }, false); }
+                        // The player's back-off: reverse straight out of the pocket for a second,
+                        // then re-approach (the next loop's steering enters from the new angle).
+                        self.backoff = 60;
                     } else if self.stuck == 4 {
                         // back up, sidestep, and jump (crate-top pickups need the hop)
-                        self.tick(Input { forward: -0.6, ..Default::default() }, false);
-                        self.tick(Input { forward: -0.6, ..Default::default() }, false);
+                        self.backoff = 60;
                         self.sidestep = 40;
                         let sim = self.scene.sim.as_mut().unwrap();
                         if sim.bond.grounded { self.tick(Input { jump: true, forward: 1.0, ..Default::default() }, false); }
