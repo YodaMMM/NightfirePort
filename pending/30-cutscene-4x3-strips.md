@@ -19,3 +19,6 @@ say so in the report. Never weaken a decompile-backed test to make code pass.
   `NF_ISO=<abs path> nohup python3 tools/test/suite.py > suite.out 2>&1 &` (docs/tools/test-suite.md; once `tools/test/suite.py`
   is on your branch: merge `origin/master` first). Read `tail -1 suite.out` and its FAILED/TIMEOUT lines before you push, and
   run it once more on your final tree (merged with `origin/master`). Report the total line.
+
+## Lead (measured headless on 8de76e31a, check it)
+The F12 frame shows the gameplay HUD and the first-person gun, so no script camera is live in it, yet the letterbox band + "Mission Complete" draw: the scene script overlay (`scene_overlay_up` -> `Scene::script_overlay_hud`, lib.rs ~2047-2089) runs on a different flag from `script_camera()`, so the band outlives the camera. Find the game rule for when the letterbox/overlay ends relative to the camera end [M Camera_Enable 0x1b9920, the script overlay ops] and tie them together.
