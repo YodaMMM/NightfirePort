@@ -367,7 +367,8 @@ impl Camera {
     fn dir(&self) -> Vec3 { Vec3::new(self.pitch.cos() * self.yaw.sin(), self.pitch.sin(), self.pitch.cos() * self.yaw.cos()) }
     /// Right-handed view, wgpu clip depth 0..1, 60° vertical field of view (column-major for the shader).
     /// (full view-projection, the same with the eye at the origin for sky objects that follow the viewer).
-    fn view_proj(&self, aspect: f32) -> ([[f32; 4]; 4], [[f32; 4]; 4]) {
+    /// Pub for the level probes that replicate the render cull headlessly (no GPU in the sandbox).
+    pub fn view_proj(&self, aspect: f32) -> ([[f32; 4]; 4], [[f32; 4]; 4]) {
         let (near, far, f) = (0.05f32, 4000.0f32, 1.0 / (self.fov * 0.5).tan());
         let proj = Mat4::from_cols_array_2d(&[[f / aspect, 0.0, 0.0, 0.0], [0.0, f, 0.0, 0.0], [0.0, 0.0, far / (near - far), -1.0], [0.0, 0.0, near * far / (near - far), 0.0]]);
         let fw = self.dir().normalize();
@@ -2407,7 +2408,9 @@ fn mp_drive_shots(scene: &mut scene::Scene, args: &[String], spec: &str, out: &s
     Ok(())
 }
 
-fn shot(scene: &scene::Scene, cam: &Camera, out: &str, choice: Option<usize>, time: f32, mut opts: scene::ViewOpts, notex: bool, nofog: bool, menu: Option<&gpu::HudFrame>, movie: Option<&(u32, u32, Vec<u8>)>) -> Result<()> {
+/// Headless render to a PNG (the `--shot` path; pub for the level probes that drive a real
+/// route first and then capture the frame the player sees).
+pub fn shot(scene: &scene::Scene, cam: &Camera, out: &str, choice: Option<usize>, time: f32, mut opts: scene::ViewOpts, notex: bool, nofog: bool, menu: Option<&gpu::HudFrame>, movie: Option<&(u32, u32, Vec<u8>)>) -> Result<()> {
     let (w, h) = (1280u32, 720u32);
     let instance = wgpu::Instance::new(wgpu::InstanceDescriptor::new_without_display_handle());
     let (_adapter, device, queue) = pollster::block_on(device(&instance, None))?;

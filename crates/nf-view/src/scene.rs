@@ -9314,9 +9314,7 @@ pub fn build(level: &Level, cels_only: bool, skeletons: &HashMap<u8, Skeleton>, 
                     },
                     // fix-satchel-tripbomb: the satchel's countdown digits (kinds 4 = tens, 5 = units)
                     // — the meshes SatchelDigits[sec/10]/[sec%10] [L 0x2bed90], drawn at the stuck
-                    // satchel's matrix (aligned to −normal [M 0x12ce80:266]) offset along its own
-                    // axes [*suggested*: the game offsets by its own small rotation/translation pair
-                    // 0x12d890:486-511 — the port's (±0.03, 0.032, 0.06) is cosmetic].
+                    // satchel's matrix (aligned to −normal [M 0x12ce80:266]).
                     4 | 5 => {
                         // satchel-stick2: NO `stuck` gate — `Bullet_DoTrails`' 0x3b tail spawns the
                         // two digit objects EVERY tick in every state < 2 [M 0x12d890:418-553; the
@@ -9352,14 +9350,41 @@ pub fn build(level: &Level, cels_only: bool, skeletons: &HashMap<u8, Skeleton>, 
                         let digit = if kind == 4 { tens } else { units };
                         if mesh != 0x0200_0791 + *digit as u32 { return far; }
                         let mut m = nf_game::searchlight::align2dir(*align, [0.0, 1.0, 0.0], [1.0, 0.0, 0.0]);
+                        // satchel-lift-digits: the game's digit object [M Bullet_DoTrails 0x12d890:
+                        // 485-553]: `MulMatrix0(obj+0x90_of_the_bullet, M_local, digit+0x90)` [M
+                        // 0x1e2820 — out = A×B] with `M_local = RotMatrix((π/2, 0, π))` [M 0x1e2368,
+                        // the constant pair at 0x12e424-0x12e438: 0x3fc90fdb = π/2, 0x40490fdb = π],
+                        // and the translation `bullet+0x30 + M_bullet · v` (the _vmulabc/
+                        // _vmaddabc/_vmaddbc chain over `bullet+0x30`), where v holds the two
+                        // constant offsets at 0x12e41c-0x12e478: the tens digit (0.09375, −0.0021,
+                        // −0.123), the units (0.03262, −0.0021, −0.123). In the stick frame (the z
+                        // row = −normal, the same align2dir constants `Mat_Align2Dir` takes at
+                        // 0x12d210 — 0x2d6210 up / 0x2d6220 right) the local z −0.123 maps the
+                        // digits 0.123 OUTWARD along +normal — the display floats off the face the
+                        // charge sticks to (a floor-stuck charge shows its digits from above). The
+                        // old port offsets (±0.03, 0.032, +0.06) ran the z along −normal (INTO the
+                        // case/floor): the display drew buried — the 4a ride showed a charge with
+                        // no digits (the driver's play spots at (4.37, −79.29/−83.87, −1.85)).
+                        let (lx, ly, lz) = if kind == 4 { (0.093_75f32, -0.002_1f32, -0.123f32) } else { (0.032_62f32, -0.002_1f32, -0.123f32) };
                         let (x, y, z) = (m[0], m[1], m[2]);
-                        let (lx, ly, lz) = if kind == 4 { (-0.03f32, 0.032f32, 0.06f32) } else { (0.03, 0.032, 0.06) };
                         m[3] = [
                             pos[0] + x[0] * lx + y[0] * ly + z[0] * lz,
                             pos[1] + x[1] * lx + y[1] * ly + z[1] * lz,
                             pos[2] + x[2] * lx + y[2] * ly + z[2] * lz,
                             1.0,
                         ];
+                        // The local rotation: rows × M_local (MulMatrix0's A×B; the port's rows are
+                        // the game's rows — the same row-vector convention the translation used).
+                        let loc = nf_formats::placement::object_matrix([std::f32::consts::FRAC_PI_2, 0.0, std::f32::consts::PI], [0.0; 3]);
+                        let rows = [m[0], m[1], m[2]];
+                        for (r, row) in rows.iter().enumerate() {
+                            m[r] = [
+                                row[0] * loc[0][0] + row[1] * loc[1][0] + row[2] * loc[2][0],
+                                row[0] * loc[0][1] + row[1] * loc[1][1] + row[2] * loc[2][1],
+                                row[0] * loc[0][2] + row[1] * loc[1][2] + row[2] * loc[2][2],
+                                0.0,
+                            ];
+                        }
                         m
                     }
                     _ => far,
@@ -10267,11 +10292,35 @@ pub fn build(level: &Level, cels_only: bool, skeletons: &HashMap<u8, Skeleton>, 
                         // [M 0x134630:18-21; Swoosh_Create/Update never write obj+0x103..0x105], so its
                         // tweak RGB is 1.0 — no cel-ambient dim (the dim made the grey ribbon vanish).
                         if a.projectile.is_some_and(|(slot, _)| slot >= SWOOSH_SLOT_BASE) { return one(); }
-                        // rocket-flare: the flying bullet objects (drone and player slots) keep the 0xFF tint
-                        // too — `Bullet_init`/`Bullet_update` never write obj+0x103..0x105 [M 0x12c5a0,
-                        // 0x12e7b0] — so the rocket's own orange light saturates it to the PS2's white flare
-                        // (the cel-ambient dim left the blue low: a yellow star). Grenade slots unchanged.
-                        if a.projectile.is_some_and(|(slot, _)| (slot as usize) >= GRENADE_SLOTS) { return one(); }
+                        // satchel-lift-dim: the flying bullet objects (drone and player slots) kept a
+                        // blanket 0xFF tint for the rocket's white flare — but the game's tweak dim is
+                        // the MESH's 0x800 glist flag, not the slot: `View_SetupRenderModes_Tweak`
+                        // 0x1e5888 multiplies the tint by obj+0x100..0x102 only when obj+0xF0 carries
+                        // 0x800, and `control_movement_object_handler` 0x1336f8 ramps those ambient
+                        // bytes toward the cel's for EVERY dynamic object (`Lights_CalcAmbientLight`
+                        // 0x1cb178, the same gate). The rocket meshes carry no 0x800 [L probe4a_flags:
+                        // the 0x20007b3 satchel mesh flags 0x880, the digit meshes 0x20a0] so the
+                        // flare stays white; the satchel's mesh 0x20007b3 carries 0x880 [D
+                        // 0700004a] — the landed charge dims to its cel's ambient (the lift shaft's
+                        // [25,27,35] [L probe]) — the old blanket 1.0 drew it full-bright (the
+                        // driver's play: "a satchel on the cab floor drawn full-bright"). The dim is
+                        // the ambient AT THE CHARGE's live position (its own cel, like the game's
+                        // obj+0x100 ramp — a fresh-created object SNAPS on its first cel link
+                        // [`control_link_object_to_cel` 0x1346b8 copies the cel ambient over the
+                        // all-0xFF init], so no ClrStep ramp is modelled; the ride's shaft shares one
+                        // ambient triple, and the [S] deviation only shows crossing cels mid-ramp).
+                        if let Some((slot, mesh)) = a.projectile {
+                            if (slot as usize) >= GRENADE_SLOTS {
+                                if !self.models_0x800.get(&mesh).copied().unwrap_or(false) { return one(); }
+                                let bi = slot as usize - GRENADE_SLOTS;
+                                let pos = if bi < TRACER_SLOTS {
+                                    s.drones.bullets.get(bi).map(|b| b.pos)
+                                } else {
+                                    s.drones.player_bullets.get(bi - TRACER_SLOTS).map(|b| b.pos)
+                                };
+                                return pos.map(|p| s.ambient_at(p).map(mul_bytes).unwrap_or_else(one)).unwrap_or_else(one);
+                            }
+                        }
                         if a.dropped {
                             // The dropped gun is a pickup object (`DroneWeap_DropWeapon` → `Pickup_Create`
                             // 0x18dda0, the same forced 0x840): the ambient dim at its drop matrix.
