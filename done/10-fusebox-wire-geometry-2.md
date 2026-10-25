@@ -32,3 +32,8 @@ claimed-by: sandbox4 at 2026-10-25T20:54Z
 ---
 ## Report (done, 2026-10-25T22:37Z)
 
+
+---
+## Report from the worker (done, 2026-10-25T22:37Z)
+
+Closed by the driver: the report is on `s/fusebox-wire-geometry-2` (docs/reports/fusebox-wire-geometry-2.md); the worker didn't run finish.sh.
