@@ -19,3 +19,8 @@ say so in the report. Never weaken a decompile-backed test to make code pass.
 
 ---
 claimed-by: sandbox7 at 2026-10-25T20:10Z
+
+---
+## Report (done, 2026-10-25T21:00Z)
+
+Closed by the driver: the report is on `s/level-4a-rappel-vanish` (docs/reports/level-4a-rappel-vanish.md); the worker didn't run finish.sh.
