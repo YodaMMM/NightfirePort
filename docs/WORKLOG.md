@@ -31,3 +31,12 @@ the scene.rs use-pick call and every camera-as-head caller; switch to head pos; 
   (scene.rs 4840/4853), false camera comments corrected (scene.rs, drone.rs). Test rewritten
   to the proven negative with the full citation block; 15/15 green on interact_07000009.
   Checkpoint pushed. Next: the wider interact_*/walkreal_* set, full suite, report.
+
+- (00:12 UTC) Final tree tested in foreground chunks (background dies between tool calls here):
+  nf-view E-path surface 341 passed / 0 failed / 14 pre-ignored (interact_07000009 15/15 with
+  the rewritten test, garage/kiko/level_end/exit_aim/vent5 13, interact_ 61, interactables_ 92,
+  walkreal_ 65, lib 96); nf-game 886 / 0 (drone.rs delta comment-only); nf-formats+nf-audio
+  133 / 3 — the 3 allowed disc_golden failures, crate untouched. Tally 1360 / 3 / 20.
+  suite.py fast runner unusable here: nohup+setsid both killed between tool calls; also
+  collected 789 binaries (no dedup; 640 distinct in the 21:17 log; full run ~74 min). Report
+  written. Finish steps next.
