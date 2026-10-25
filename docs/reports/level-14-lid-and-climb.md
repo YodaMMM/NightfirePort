@@ -120,3 +120,20 @@ Fresh boot 07000014:
 ## Usage
 
 not visible to me (this environment exposes no token, credit or context-window figures).
+
+## Correction (level-14-east-walkway, 2026-10-25)
+
+§1's "the E-press replay re-runs NOTHING: the stream cursors rest after their End ops" is WRONG.
+The mode-0x40 preload is Play + ONE `Script_Update` tick + Stop ([M] SP_LoadScript 0x1dbc08:46-54),
+and `Script_Update` 0x1da998 only advances the streams while SCRIPTINFO+0xab2 bit 0 (playing) is
+set — `Script_Stop` 0x1db668 clears exactly that bit, so the cursors FREEZE at t≈1, they do not
+rest at their End ops. The state-1 trigger path ([M] SP_Update 0x1dbda8 case 1) calls only
+`Script_Play` (no rewind — `Script_Set2Start` 0x1daf00 lives only in SP_LoadScript's already-loaded
+arm), so the replay RESUMES from t≈1 and runs the script to its end: the key-61 ladder art
+0x02000751 DOES spawn on the use (the stream's Entity op at key 61), and only then does the
+stay-1 SP die (case 2's +0x35 arm → state 5 → obj+0xfe |= 1). The port's SP implementation
+(crates/nf-game/src/nis.rs `load`/`update`: mode ∉ {1,8} → start+update+stop+state 1; state-1
+trigger → `s.start(looping)` with no rewind) matches the decompile, and
+panels_07000014_live::the_route_lid_use_spawns_the_ladder_art_beneath_the_opening (master, green)
+pins it. §1's other conclusions stand unchanged: the slab never moves (identity keys [D
+probe14_spdump]), the lids never open, the corridor-side Q-Claw climb stays refuted.
