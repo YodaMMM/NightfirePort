@@ -17951,6 +17951,9 @@ fn segment_hits_sphere(a: V3, b: V3, c: V3, r: f32) -> bool {
                         // fear props within the entry's radius that sees the object sends itself msg 0x21
                         // [M 0x1435f0:30-52]. The port triggers once at the bounce (the game rescans every frame
                         // while the object exists; a documented deviation).
+                        if std::env::var_os("NF_AILOG").is_some() {
+                            eprintln!("[expl] queue push p=({:.2},{:.2},{:.2}) wt={:#x} bounces {}", p[0], p[1], p[2], g.weapon_type, g.bounces);
+                        }
                         self.explosive_queue.push((p, g.weapon_type));
                         break;
                     }
@@ -18191,10 +18194,16 @@ fn segment_hits_sphere(a: V3, b: V3, c: V3, r: f32) -> bool {
         // flee [M 0x138b10:143-159 + 0x1435f0:24-29 — only kind-2 entries trigger]; satchel 0x3B-0x40 → radius
         // 12.0, flee 14.0 [M 0x138b10:113-141 + 0x1431c0:122-152]. Per drone: fear prop 0x3A/0x3B [M 0x1435f0:30-34],
         // within the radius, and the object visible [M 0x1435f0:37-44 — DroneVision_ObjectVisibility
-        // 0x1781a8 ≥ 0.7 (the ±e4/≤e8/<2 cone) + CanSeeObject(5,0); the port stands the cone in with the
-        // bare segment test here — a noted deviation].
+        // 0x1781a8 ≥ 0.7 (returns exactly 0.0/1.0, so the threshold is the pass bit) + CanSeeObject(5,0)].
+        // level-07-guest-collision-5: the ObjectVisibility cone is PORTED — <2.0 always visible, >50.0 never,
+        // else |angle_difference(+0x380 facing, atan2(dx,dz))| ≤ +0xe4 (when e4 != 0) AND dist ≤ +0xe8; the
+        // port's +0x380/+0xe4/+0xe8 are `yaw`/`half_fov`/`sight_range` (the same expression the alert pass runs,
+        // FindAlertedDrones), and CanSeeObject(5,0) keeps the head-ray segment test.
         let queued = std::mem::take(&mut self.explosive_queue);
         for (p, wt) in queued {
+            if std::env::var_os("NF_AILOG").is_some() {
+                eprintln!("[expl] drain p=({:.2},{:.2},{:.2}) wt={:#x}", p[0], p[1], p[2], wt);
+            }
             let cls = match wt {
                 0x34 => Some((12.0f32, 4.0f32, 120u32, 0x87u8)),
                 0x35 => Some((8.0, 10.0, 600, 0)),
@@ -18203,12 +18212,24 @@ fn segment_hits_sphere(a: V3, b: V3, c: V3, r: f32) -> bool {
             };
             let Some((radius, run, ticks, ret)) = cls else { continue };
             let Drones { list, rng, .. } = self;
-            for dr in list.iter_mut() {
+            for (i, dr) in list.iter_mut().enumerate() {
                 if !dr.present || dr.corpse || !dr.enabled { continue; }
                 let (dx, dy, dz) = (dr.pos[0] - p[0], dr.pos[1] - p[1], dr.pos[2] - p[2]);
                 if dx * dx + dy * dy + dz * dz > radius * radius { continue; }
                 if !dr.prop(d, 0x3a) && !dr.prop(d, 0x3b) { continue; }
-                if !d.world.line_of_sight([dr.pos[0], dr.pos[1] + 1.0, dr.pos[2]], p, crate::world::LOS_GUARD_VISION) { continue; }
+                // The ObjectVisibility cone [M 0x1781a8] — see the block comment above.
+                let dist = (dx * dx + dy * dy + dz * dz).sqrt();
+                let in_view = dist < 2.0
+                    || ((dr.half_fov == 0.0
+                        || angle_difference(dr.yaw, atan2_approx(dx, dz)).abs() <= dr.half_fov)
+                        && dist <= dr.sight_range);
+                let los = d.world.line_of_sight([dr.pos[0], dr.pos[1] + 1.0, dr.pos[2]], p, crate::world::LOS_GUARD_VISION);
+                if std::env::var_os("NF_AILOG").is_some() {
+                    eprintln!("[expl] dr#{i} vt {:#x} team {} state {:#x} dist {dist:.2} yaw {:.2} fov {:.2} rng {:.1} cone {in_view} los {los}",
+                        dr.voice_type, dr.team, dr.state, dr.yaw, dr.half_fov, dr.sight_range);
+                }
+                if !in_view { continue; }
+                if !los { continue; }
                 dr.explosive_msg = Some((p, run, ret, frame + ticks));
                 dr.send(d, rng, frame, msg::EXPLOSIVE);
             }
