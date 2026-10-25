@@ -22,3 +22,8 @@ say so in the report. Never weaken a decompile-backed test to make code pass.
 
 ---
 claimed-by: sandbox6 at 2026-10-25T19:37Z
+
+---
+## Report (done, 2026-10-25T20:42Z)
+
+Closed by the driver: the report is on `s/level-07-rook-doorway-2` (docs/reports/level-07-rook-doorway-2.md); the worker didn't run finish.sh.
