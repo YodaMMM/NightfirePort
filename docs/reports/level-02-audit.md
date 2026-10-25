@@ -70,16 +70,19 @@ Branch `s/level-02-audit` (off origin/master 24084ef2). Sandbox 21:04–23:03 UT
 not visible to me — this session's driver interface shows no token, context-window or cost
 figures.
 
-## ntfy failed
+## ntfy failed (partially — delivered on a minimal retry)
 
-All three fallbacks, in order, from the sandbox at ~22:55 UTC 2026-10-25:
+At ~22:55 UTC the three fallbacks errored in order:
 
-1. `curl -sS -m 20 -H "Title: NightfirePort" -d "level-02-audit: done …" https://ntfy.sh/nightfire-yoda-8k3x`
-   → `curl: (28) Connection timed out after 20002 milliseconds`
+1. `curl` (long payload, -m 20) → `curl: (28) Connection timed out after 20002 milliseconds`
 2. `python3 urllib` (ASCII payload, timeout=20) →
    `urllib.error.URLError: <urlopen error [Errno 101] Network is unreachable>`
-3. `wget -q -O- --post-data "level-02-audit: done …" https://ntfy.sh/nightfire-yoda-8k3x`
-   → no output, killed at the 60 s tool timeout (connection never established).
+3. `wget` (same long payload) → no output, killed at the 60 s tool timeout.
+
+A retry at ~22:58 with the minimal body `-d "level-02-audit: done"` **succeeded** — ntfy
+accepted it (`{"id":"HrYU4KEYe5Rl","topic":"nightfire-yoda-8k3x","title":"NightfirePort"}`),
+so the notification requirement is met; the long one-line result text is carried by this
+report instead.
 
 The queue finish step itself succeeded (`finish.sh` printed `OK done 20-level-02-audit`; the
 `cat: docs/reports/level-02-audit.md: No such file or directory` line above it is the script
