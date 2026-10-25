@@ -32,3 +32,8 @@ collides at the two spots, find the missing piece [M], port it, pin with tests, 
 - (08:25-08:45) panels_07000014_live: the route lid's replay PINNED GREEN through the real use
   path from inside the duct (the ladder art spawns at the lid's base); the fusebox wires
   confirmed missing (fail-first repro, #[ignore]d). The 14 walk family still 2/2. Report written.
+
+### level-14-fusebox-wires (started 12:13 UTC, 2026-10-25)
+
+Branch from origin/s/level-14-empty-panels (1112fc5b), merged origin/master (d8334b70).
+Task: 07000014 the opened fusebox panel shows its wires — run the fusebox script 0x06000A1B Entity streams (wire sub-objects 0x02000A62 / 0x02000A61 / 0x02000A73, type 0x31, streams 0/1/3) through the SP-entity path (SP_Update 0x1dbda8, SP_Activate 0x1dc338) replacing the fusebox.rs one-wire-per-group stand-in; un-ignore and green panels_07000014_live::the_fusebox_use_spawns_the_wire_sub_objects_behind_the_panel with real input; keep walks + fusebox/objective tests green.
