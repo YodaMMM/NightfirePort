@@ -27,3 +27,7 @@ claimed-by: sandbox4 at 2026-10-25T00:15Z
 ## Report (done, 2026-10-25T01:17Z)
 
 Closed by the driver: the report is on `s/level-06-rook-door` (docs/reports/level-06-rook-door.md); the worker didn't run finish.sh.
+
+---
+## Report from the worker (done, 2026-10-25T01:17Z)
+
