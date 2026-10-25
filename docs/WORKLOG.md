@@ -156,3 +156,20 @@ level-0a-rain-indoors-5 (2026-10-25): session start. Branch from rain-4 (c357ae1
   that path (fire spread / damage roll / glass health), decide whether the test pins a game
   rule or one lucky stream value, and make it assert the game's rule — or drive the real fire
   the way a player does — never weaker than [M].
+
+---
+level-0a-rain-indoors-5 (2026-10-25 19:22): the glass-pan red root-caused and fixed. The test was
+  wrong three ways, none of them the game's rule: (1) it wrote RADIANS into bond.pitch, which is
+  the game's ±1 view pitch (Bond::look reads mul(pitch, HALF_PI) [M RotMatrixX 0x1e46a0:16-24]) —
+  the shot actually flew at pitch·π/2 = −0.5519 rad (probe: bullet dir[1] −0.5245 = sin(−0.3515·π/2)
+  exactly); (2) it aimed at y 0.9 while pane #48's box tops at 0.499 [D the placement]; (3) it hit
+  anyway on one tree because Bond's settle height put the mis-aimed ray inside the box — the
+  generator's position moved that settle (the env draws [M 0x17bc88/0x18c580 consume the shared
+  generator every tick, Drones::tick runs them first]), and the 0.3 height shift moved the ray out.
+  The break itself is rule-decided, not stream-decided: the pane's health is param 1 = 0 [D PL#48;
+  M 0x12c230's parse], Break_Update subtracts the round's FIXED contact damage (weapon_data+0x0C =
+  3.5 [L ee_snapshot 0x2bf368]; Bullet_update's per-tick write [M 0x12e7b0 disasm 0x12f05c-0x12f0b8])
+  and kills on health < 0 [M 0x12bfd8:44-53]; the P2K's spread field is 0.0 [L 0x2bf368 +0x24] so
+  Bullet_init's spread draws [M 0x12c5a0:167-170] move nothing; the game spawns from the head bone
+  [M 0x1a4bf0:226-245]. The rewrite aims Bond::head at the box centre through HALF_PI, asserts
+  health 0 / damage 3.5 / one-landed-hit kill / health −3.5 after. Binary green 14/14 (2 ignored).
