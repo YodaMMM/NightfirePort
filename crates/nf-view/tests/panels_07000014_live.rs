@@ -81,34 +81,77 @@ fn the_route_lid_use_spawns_the_ladder_art_beneath_the_opening() {
     assert!(d < 6.0, "the ladder art spawns at the lid's base, got {:?}", ladder[0].2);
 }
 
-/// FAIL-FIRST repro, #[ignore]d until the fix lands (a red test must not ride the branch): the
-/// use press at the real fusebox #385 runs its script and the wire sub-objects (0x02000A62 /
-/// 0x02000A61 / 0x02000A73, type 0x31 [D 0x06000A1B s0/s1/s3 Entity cmds]) spawn behind the
-/// front panel. The port's fusebox.rs stands in for them (docs/levels/07000014.md §5 "the wire
-/// sub-objects are the documented stand-in — the SP-entity bullet path is not ported"), so the
-/// reported "wall panel with nothing behind it" shows the recess empty. The fix: run the
-/// fusebox script's Entity streams through the same SP-entity path the lid replay uses.
+/// The wire sub-objects behind the fusebox panel. CORRECTED against the decompile (the original
+/// fail-first repro asserted a transcription slip and the wrong spawning agent — see the report):
+///
+/// - The spawn agent is the box's mode-0x40 PRELOAD, not the use: `FuseBox_Create` 0x1b0448's tail
+///   `SP_Create(param 0, mode 0x40)` runs the script ONCE at level load ([M] SP_LoadScript
+///   0x1dbc08:46-54 — any mode outside {1,8} runs Play+Update+Stop, state 1), and the key-1
+///   `Entity` commands of streams 0/1/3/5 spawn the wires 0x02000AA2 / 0x02000AA1 / 0x02000AB3 /
+///   0x02000AA4 (obj_type 0x31) [D 0x06000A1B decode — the raw disc bytes e.g. stream 0
+///   `07 a2 0a 00 02` big-endian-fold to 0x02000AA2; the "0x02000A62/61/73" in the earlier notes
+///   drop the 0x40 bit]. `Script_CreateEntity` 0x1d8968 creates by type [M].
+/// - The use press is INERT at the box: `Player_Activate` 0x1a5170:95-160 has no class-0x3C arm,
+///   and the box's SP carries mask 1 (SP_Create's param_6 = 0 [M 0x1dc7e0]; the port primes it
+///   with mask 1), so `SP_Activate` 0x1dc338's bit-4 gate refuses — the E press neither spawns nor
+///   removes the wires (the sister pin on 07000008: fix_fusebox_cut_live::e_presses_do_nothing_to_the_fusebox).
+///   The wires take the DAMAGE path instead — `FuseBox_Update` 0x1adfe8:88-96 cuts a registered
+///   wire whose hit list survives `Collide_FilterBullets(list, 0xfffd)` (the Laser's 0x0002 cuts,
+///   gunfire's 0x0008 is dropped [L weapon_data]); the full sabotage chain on THIS level is pinned
+///   green by fix_fusebox_cut_live::the_07000014_sabotage_cuts_through_the_real_laser.
+/// - The registrations follow the decode: stream 2's event 0xF (group 0) hands over stream 1's
+///   entity and stream 6's (group 1) stream 5's ([M] Script_EventHandler 0x1d94c0:172-175 →
+///   FuseBox_Register 0x1b0970), i.e. group 0 holds 0x02000AA1 and group 1 holds 0x02000AA4.
+/// - "Behind the panel": the wall panel is the small door object #386 at (−89.58, −0.68, 49.17)
+///   [D placement]; the wires sit at the box #385 (−89.30, −2.22, 49.36) [D] — east of the panel,
+///   the room side. All four wire glists resolve to models (the meshes exist and the entities join
+///   the render set); the visible open-panel check is the named headless render in the report.
 #[test]
-#[ignore = "fail-first repro: the fusebox script's wire entities are a documented stand-in (docs/levels/07000014.md §5)"]
 fn the_fusebox_use_spawns_the_wire_sub_objects_behind_the_panel() {
     let iso = iso();
     let mut scene = nf_view::load(&iso, "07000014.bin", false).expect("load 07000014");
+    const WIRES: [u32; 4] = [0x0200_0aa2, 0x0200_0aa1, 0x0200_0ab3, 0x0200_0aa4];
+    let box385: [f32; 3] = [-89.30, -2.22, 49.36]; // [D placement #385]
+    let panel386_x: f32 = -89.58;                  // [D placement #386, the wall panel]
     {
         let sim = scene.sim.as_mut().unwrap();
         for _ in 0..30 { sim.step_bond(Default::default(), false, false, false); }
-        let pre = entities_near(sim, &[0x0200_0a61, 0x0200_0a62, 0x0200_0a73]);
+        // At load: all four wires exist AT the box, behind the panel, with drawable meshes —
+        // the preload's one-tick play reached the key-1 Entity commands [M 0x1dbc08:46-54].
+        let near385 = |p: [f32; 3]| ((p[0] - box385[0]).powi(2) + (p[1] - box385[1]).powi(2) + (p[2] - box385[2]).powi(2)).sqrt() < 3.0;
+        let pre = entities_near(sim, &WIRES);
         eprintln!("[fusebox] at load: {pre:?}");
-        // Bond at the fusebox wall, facing it (the fusebox at (−89.30, −2.22, 49.36)); the yaw is
-        // atan2(dx, dz) [D the walker's convention]: dx −0.90, dz +0.76 → −0.87.
+        for h in WIRES {
+            let e = pre.iter().find(|(hh, _, p)| *hh == h && near385(*p))
+                .unwrap_or_else(|| panic!("wire {h:08x} exists at load at the fusebox #385 (the mode-0x40 preload runs the script once [M 0x1dbc08:46-54; D 0x06000A1B s0/s1/s3/s5 key-1 Entity cmds]) — got {pre:?}"));
+            assert!(e.2[0] > panel386_x, "wire {h:08x} is behind the panel #386 (east of x {panel386_x}, the room side), got {:?}", e.2);
+        }
+        assert_eq!(pre.iter().filter(|(_, _, p)| near385(*p)).count(), 4, "all four decode wires sit at box #385 [D decode]");
+        // The decode's registrations: group 0 = stream 1's wire, group 1 = stream 5's.
+        use nf_game::nis::World;
+        let data = sim.data();
+        let fb = sim.drones.fuseboxes.iter().find(|f| f.placement == 385).expect("fusebox #385 exists [D]");
+        let group_hash = |g: usize| fb.groups[g].slots.iter().find_map(|s| s.and_then(|obj| match sim.drones.scripts.objects.list.get(obj) {
+            Some(Some(nf_game::nis::Obj::Entity { hash, .. })) => Some(*hash), _ => None }));
+        assert_eq!(group_hash(0), Some(0x0200_0aa1), "group 0 holds stream 1's wire [M 0x1d94c0:172-175 → 0x1b0970; D decode]");
+        assert_eq!(group_hash(1), Some(0x0200_0aa4), "group 1 holds stream 5's wire [M 0x1d94c0:172-175 → 0x1b0970; D decode]");
+        for h in WIRES {
+            assert!(data.glist_sphere(h).is_some(), "the wire {h:08x} glist resolves to a model (the mesh draws)");
+        }
+        // The real-input drive: Bond at the panel, the use press through step_bond (the SP's mask
+        // 1 has no bit 4 — SP_Activate refuses [M 0x1dc338]; the press pins the inertness here).
         sim.bond.pos = [-88.40, -2.20, 48.60];
-        sim.bond.yaw = -0.87;
+        sim.bond.yaw = -0.87; // face the box: atan2(dx, dz) [D the walker's convention]
         for k in 0..6 { sim.step_bond(Input::default(), false, false, k == 0); }
     }
     for t in 0..120 {
         scene.sim.as_mut().unwrap().step_bond(Default::default(), false, false, false);
     }
     let sim = scene.sim.as_ref().unwrap();
-    let post = entities_near(sim, &[0x0200_0a61, 0x0200_0a62, 0x0200_0a73]);
+    let post = entities_near(sim, &WIRES);
     eprintln!("[fusebox] after the use + 120 ticks: {post:?}");
-    assert!(!post.is_empty(), "the use at the real fusebox #385 runs script 0x06000A1B and the wire sub-objects spawn [D 0x06000A1B s0/s1/s3 Entity cmds] — got {post:?}");
+    let near385 = |p: [f32; 3]| ((p[0] - box385[0]).powi(2) + (p[1] - box385[1]).powi(2) + (p[2] - box385[2]).powi(2)).sqrt() < 3.0;
+    assert_eq!(post.iter().filter(|(_, _, p)| near385(*p)).count(), 4, "the use press neither spawns nor removes the wires ([M 0x1a5170:95-160 no 0x3C arm; SP mask 1 has no bit 4]) — got {post:?}");
+    let fb = sim.drones.fuseboxes.iter().find(|f| f.placement == 385).expect("fusebox #385");
+    assert_eq!(fb.alive_wires().count(), 2, "both groups still hold their registered wire [M FuseBox_Register 0x1b0970]");
 }
