@@ -107,6 +107,11 @@ pub struct Walker {
     stuck: u32,
     stuck_cycles: u32,
     sidestep: i32,
+    /// The player's pocket back-off: straight reverse out of a pocket for 60 ticks before the
+    /// re-approach (the swung-open shoji panel's pocket — s/level-07-guest-collision-3's
+    /// harness arm; the walkreal_01 flank walks enter the pocket from new lines once the
+    /// undrawn guards move by the game's raw add).
+    backoff: u32,
     max_y: f32,
     pub lenient: bool,
     /// The walked path: a coarse breadcrumb of ground Bond actually covered (pushed in
@@ -176,7 +181,7 @@ impl Walker {
             scene, top_up_health: true, keep_alive: Vec::new(), stop_on_exit: true, skip_cutscenes: true,
             report: Report { legs: Vec::new(), stuck_events: Vec::new(), falls: Vec::new() },
             total_ticks: 0, pos, last_sample: pos, sample_tick: 0, stuck: 0, stuck_cycles: 0,
-            sidestep: 0, max_y: pos[1], lenient: false,
+            sidestep: 0, backoff: 0, max_y: pos[1], lenient: false,
             trail: Vec::new(),
             alarm_last: Vec::new(),
             drone_watch, watch_last,
@@ -965,6 +970,12 @@ impl Walker {
                 ..Default::default()
             };
             if err.abs() > 1.2 { input.forward = 0.0; }
+            if self.backoff != 0 {
+                // The pocket back-off: straight reverse, no turn — the re-approach then
+                // enters from a different angle (the swung-panel pocket, s/level-07-guest-collision-3).
+                input.forward = -1.0;
+                self.backoff -= 1;
+            }
             if self.sidestep != 0 {
                 // Pure lateral (no forward): the diagonal walk grinds into the same wall corner.
                 input.strafe = if self.sidestep > 0 { 1.0 } else { -1.0 };
@@ -1026,10 +1037,12 @@ impl Walker {
                         let sim = self.scene.sim.as_mut().unwrap();
                         let j = sim.bond.grounded;
                         if j { self.tick(Input { jump: true, forward: 1.0, ..Default::default() }, false); }
+                        // The player's back-off: reverse straight out of the pocket for a second,
+                        // then re-approach (the next loop's steering enters from the new angle).
+                        self.backoff = 60;
                     } else if self.stuck == 4 {
                         // back up, sidestep, and jump (crate-top pickups need the hop)
-                        self.tick(Input { forward: -0.6, ..Default::default() }, false);
-                        self.tick(Input { forward: -0.6, ..Default::default() }, false);
+                        self.backoff = 60;
                         self.sidestep = 40;
                         let sim = self.scene.sim.as_mut().unwrap();
                         if sim.bond.grounded { self.tick(Input { jump: true, forward: 1.0, ..Default::default() }, false); }

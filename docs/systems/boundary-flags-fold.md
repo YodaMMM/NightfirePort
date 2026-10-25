@@ -7,14 +7,21 @@
 ## The game's mechanism [M 0x14f140]
 
 - Clears drone+0x320 (the four blocked-direction bits), then — only while `+0x4F8 & 1`
-  (the lateral push-move flag; its setter is unaccounted in the decompile) — probes four
-  axis directions from the feet: (0,0,±0.5)/(±0.5,0,0), scaled by bot speed for mode-0x1E
-  bots, rotated through `ApplyMatrixLVI(obj+0x90)`, staged into the `DroneReachCheckPos`
+  (the push-move flag) — probes four axis directions from the feet: (0,0,±0.5)/(±0.5,0,0),
+  scaled by bot speed for mode-0x1E bots, rotated through `ApplyMatrixLVI(obj+0x90)`, staged into the `DroneReachCheckPos`
   globals, tested with `NDrone2_MoveTest(feet, probe, 0, obj, 0,0,0)`. `MoveTest != 1` sets
   the bit (2 = +z, 4 = −z, 8 = +x, 0x10 = −x). When the drone is movement-locked
   (`+0x4F8 & 0x10`) the probe is skipped and the bit is set anyway.
+- **The gate's setter IS accounted (2026-10-25 correction): `NDrone2_DefaultInit` 0x14b300:60's
+  `+0x4F8 = (+0x4F8 & 0xffea05e2) | 0x801e2` arms bit 1 with the rest of the init flags — every
+  drone starts with the probes live. The only found clearer is `DSTATE_AstronautLaunch`
+  0x16dd28:19 (`& 0xfffffffd`), an air/rope special the +0x23 gate already excludes. The older
+  "setter unaccounted" note here was wrong (the OR's composite constant hid the bit).**
+- The MoveTest is the AINetwork bounds scan ONLY — the distance/slope gates then
+  `AINetwork_BoundsTest` [M NDrone2_MoveTest 0x155330:86-108]; no collision line of sight.
 - Consumers: `Drone_Control` 0x139268:76-83 zeroes the +0x58c lateral velocity against bits
-  2/4; `DroneAnim_PreTransCallback` 0x13b490:120-135 zeroes anim root-motion z/x against
+  2/4 while `+0x4F8 & 1` arms and no door is bound (`+0xBA8 == 0`);
+  `DroneAnim_PreTransCallback` 0x13b490:120-135 zeroes anim root-motion z/x against
   bits 2/4/8/0x10 — the walls stop the walk.
 
 ## The port's fold
