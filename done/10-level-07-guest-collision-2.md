@@ -25,3 +25,8 @@ say so in the report. Never weaken a decompile-backed test to make code pass.
 
 ---
 claimed-by: sandbox3 at 2026-10-25T03:41Z
+
+---
+## Report (done, 2026-10-25T05:19Z)
+
+Closed by the driver: the report is on `s/level-07-guest-collision-2` (docs/reports/level-07-guest-collision-2.md); the worker didn't run finish.sh.
