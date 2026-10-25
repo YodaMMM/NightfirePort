@@ -50,3 +50,11 @@ Progress:
   1/1; ledge 2/2; cutscene_guard_models 3/3; walk_07000014 2/2; walk_07000005 2/2;
   walk_07000016 3/3; walk_0700004a 1/1; walk_07000002/06/07/08 9/9. Final tree = merge
   origin/master (batch-1025c) — 07000014 batch re-run green on it.
+
+## level-14-cutscene-fall-2 (start)
+- (11:23) Branch s/level-14-cutscene-fall-2 = origin/master + origin/s/level-14-cutscene-fall
+  (c2d9fbc8). Mission: the identity base reset at camera start re-keys 01/08 camera-flag
+  scripts whose entity keys are local offsets (6 red test groups on the merged tree). Plan:
+  pin the exact rule [M 0x1d916c, case 4 @0x1da054 vs case 1 @0x1d9b30, per-SCRIPTINFO reset
+  when a player runs several scripts], fix nis.rs, all named tests green, full suite via
+  tools/test/suite.py.
