@@ -33,3 +33,9 @@ stops the walk; un-ignore; full suite; report.
   walk_the_castle_interior_to_the_upper_gallery + stopping_before_the_tunnel_never_ends_the_castle
   pass together (2 passed, 26.9 s, no falls); the sister's negative asserts (no ch 0x83, no
   objective fold, no exit) unchanged. Level doc's walk-status paragraph rewritten. Suite next.
+
+- (00:40-02:15 UTC, 2026-10-25) Continuation session (sandbox reset): re-wired the toolchain
+  (cargo PATH, user-prefix ALSA headers PKG_CONFIG_PATH, NF_ISO), merged origin/master
+  (9 commits, clean; merge 9e9bbd75) for the final suite run, and ran tools/test/suite.py on
+  the final tree. walkreal_07000006_live: BOTH tests pass in the suite (26.6 s, 2 passed,
+  0 failed). Report written to docs/reports/level-06-castle-walks.md.
