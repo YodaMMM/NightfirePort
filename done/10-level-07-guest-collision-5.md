@@ -29,3 +29,7 @@ claimed-by: sandbox4 at 2026-10-25T14:03Z
 ## Report (done, 2026-10-25T15:30Z)
 
 Closed by the driver: the report is on `s/level-07-guest-collision-5` (docs/reports/level-07-guest-collision-5.md); the worker didn't run finish.sh.
+
+---
+## Report from the worker (done, 2026-10-25T15:30Z)
+
