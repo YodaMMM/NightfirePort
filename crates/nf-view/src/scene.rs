@@ -7497,9 +7497,20 @@ pub fn build(level: &Level, cels_only: bool, skeletons: &HashMap<u8, Skeleton>, 
                 .filter(|p| p.flags & 0xff == 0x2f)
                 .flat_map(|p| [4u32, 5].map(|k| p.params.iter().find(|(i, _)| *i == k).map_or(0, |&(_, v)| v)))
                 .filter(|&h| h != 0).collect()).unwrap_or_default();
+            // fusebox-panel-14: a fusebox placement (0x31) carries its script in param 0 and
+            // `FuseBox_Create` runs it at load [M docs/levels/07000014.md 5; nf-game/fusebox.rs], so
+            // its entity streams (the wires behind the front panel) need draw slots like a placed
+            // player's. Without them the wires exist in `scripts.objects` but nothing draws them --
+            // the opened panel's recess rendered empty.
+            let fusebox_scripts: Vec<u32> = level.maps[m].placements.iter()
+                .filter(|p| p.flags & 0xff == 0x31)
+                .filter_map(|p| p.params.iter().find(|(k, _)| *k == 0).map(|&(_, v)| v))
+                .filter(|&v| v >= 0x0600_0000)
+                .collect();
             let mut hashes: Vec<u32> = players.iter().flat_map(|p| p.scripts).filter(|&h| h != 0)
                 .chain(switch_scripts)
                 .chain(copter_scripts)
+                .chain(fusebox_scripts.iter().copied())
                 .chain([0x0600_0052u32, 0x0600_0027, 0x0600_004f, 0x0600_07c4]).collect();
             let mut queued: std::collections::HashSet<u32> = hashes.iter().copied().collect();
             // lift-indicators-09: a SUB-script's entities need one draw slot per LIVE copy — every placed
@@ -7592,8 +7603,12 @@ pub fn build(level: &Level, cels_only: bool, skeletons: &HashMap<u8, Skeleton>, 
                                 // copy of the stream's entities (07000014's three vent lids are nine SPs on
                                 // 0x06000A3B — one slot drew only the newest lid; the hatch under the spawn
                                 // stayed invisible while it opened).
+                                // fusebox-panel-14: each fusebox placement runs its own player of the
+                                // same script, so its copies count toward the slot count the way a
+                                // placed SP's does.
+                                let boxes = fusebox_scripts.iter().filter(|&&v| v == h).count();
                                 let copies = sub_copies.get(&h).copied()
-                                    .unwrap_or_else(|| players.iter().filter(|p| p.scripts.contains(&h)).count())
+                                    .unwrap_or_else(|| players.iter().filter(|p| p.scripts.contains(&h)).count() + boxes)
                                     .clamp(1, 16);
                                 let inst = Instance { map, object, matrix: ident, placement: placement.clone() };
                                 for k in 0..copies {
