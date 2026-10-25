@@ -252,6 +252,34 @@ impl Walker {
         }
     }
 
+    /// `climb_stairs` without the jump pulses: for slopes and slab seams where an airborne
+    /// crossing re-links Bond onto a stacked cel's phantom floor (the 06 tunnel's landing: the
+    /// ramp cel's ~48.07 plane runs under the 49.0 landing slab [D floor-map probe], the slab's
+    /// own cel never pushes him while he rides it, and a mid-air re-link at the seam instead
+    /// drops him into the south shaft void). Same steering as climb_stairs, no jump input ever.
+    pub fn walk_slope(&mut self, target: V3, label: &str, arrive: f32, max_ticks: u32) -> bool {
+        eprintln!("[walk] {label}: slope begin (bond {:?})", self.scene.sim.as_ref().unwrap().bond.pos);
+        let start = self.total_ticks;
+        loop {
+            if self.total_ticks - start >= max_ticks {
+                eprintln!("[walk] {label}: slope cap (bond {:?} target {target:?})", self.scene.sim.as_ref().unwrap().bond.pos);
+                return false;
+            }
+            if self.stop_on_exit && self.scene.sim.as_ref().unwrap().drones.level_exit.is_some() { return true; }
+            let p = self.scene.sim.as_ref().unwrap().bond.pos;
+            if dxz(p, target) < arrive { return true; }
+            let sim = self.scene.sim.as_ref().unwrap();
+            let desired = (target[0] - p[0]).atan2(target[2] - p[2]);
+            let err = wrap_pi(desired - sim.bond.yaw);
+            let input = Input {
+                turn: err.clamp(-0.08, 0.08),
+                forward: if err.abs() > 1.0 { 0.0 } else { 1.0 },
+                ..Default::default()
+            };
+            self.tick(input, false);
+        }
+    }
+
     pub fn tick(&mut self, input: Input, use_key: bool) {
         self.tick_inner(input, use_key, false);
     }
