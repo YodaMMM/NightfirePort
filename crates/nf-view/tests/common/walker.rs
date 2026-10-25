@@ -119,6 +119,17 @@ pub struct Walker {
     /// it by default.
     pub drone_watch: Vec<usize>,
     watch_last: Vec<(u8, [f32; 3])>,
+    /// level-06-rook-door-3 kill attribution (env-gated `NF_HEALTH_TRACE`, additive): every
+    /// drone's health diffed each tick, so a death prints the last_damage/hit/blast evidence
+    /// with the live bullet owners — the harness records no killer, this is the read.
+    health_last: Vec<f32>,
+    /// The friendly-fire shield (opt-in; the 01 escort sets the contact): while `Some(i)`,
+    /// `shoot` refuses a tap whose aim line, extended past the target, would cross drone `i`'s
+    /// torso — the game's bullets hit ANY drone [M Drone_CollisionHandler 0x140968:85-95 walks
+    /// the +0xD0 contacts into NDrone2_DealWithObjHit with no team gate], and the real player
+    /// steps off the line (the strafe) instead of shooting the escort. `None` = the old
+    /// behaviour, every other caller unchanged.
+    pub shield: Option<usize>,
 }
 
 /// The stuck dump, public for the walkreal tests' own aim loops (walkreal-b2).
@@ -169,6 +180,8 @@ impl Walker {
             trail: Vec::new(),
             alarm_last: Vec::new(),
             drone_watch, watch_last,
+            health_last: Vec::new(),
+            shield: None,
         }
     }
 
@@ -318,6 +331,23 @@ impl Walker {
                     .collect();
                 eprintln!("[alarm] t{} fail {:#x} live [{}]",
                     self.total_ticks, sim.drones.mission.fail_label, states.join(" "));
+            }
+        }
+        if std::env::var_os("NF_HEALTH_TRACE").is_some() {
+            if self.health_last.len() < sim.drones.list.len() {
+                self.health_last.resize(sim.drones.list.len(), f32::MAX);
+            }
+            for (i, d) in sim.drones.list.iter().enumerate() {
+                let prev = self.health_last[i];
+                self.health_last[i] = d.health;
+                if prev == d.health || prev == f32::MAX || !d.present { continue; }
+                let live: Vec<String> = sim.drones.bullets.iter()
+                    .filter(|b| b.state < 2)
+                    .map(|b| format!("d{}:w{}", b.owner, b.weapon))
+                    .collect();
+                eprintln!("[hp] t{} d#{i} skin {:#x} team {} {prev:.1}->{:.1} st {:#x} mode {} alt {:#x} dtype {} at ({:.2},{:.2},{:.2}) last_dmg {:.1} hit {:?} by_player {} blast {:?} opp {:?} bullets [{}]",
+                    self.total_ticks, d.skin, d.team, d.health, d.state, d.mode, d.alt_state, d.dtype,
+                    d.pos[0], d.pos[1], d.pos[2], d.last_damage, d.hit, d.hit_by_player, d.blast, d.opp_drone, live.join(" "));
             }
         }
         if sim.bond.pos[1] < y_before - 0.4 && !sim.bond.grounded {
@@ -535,6 +565,42 @@ impl Walker {
                 if t % 30 == 0 { aim = self.exposed_aim(di); }
                 let (bp, dp) = (sim.bond.pos, sim.drones.list[di].pos);
                 let at = aim.unwrap_or([dp[0], dp[1] + 0.3, dp[2]]);
+                // The friendly-fire line gate (the 01 escort's shield): the game's bullets hit
+                // ANY drone — Drone_CollisionHandler 0x140968:85-95 hands every +0xD0 contact to
+                // NDrone2_DealWithObjHit with no team gate (Collide_PickObj 0x1eae80:26-30 drops
+                // only the disabled +0xF0 & 0x20). The kill this gate prevents: the escort walked
+                // into the corridor line and one of guard #5's volley pellets (weapon 0x1c: 8
+                // pellets, spread 32 [L ee_start_05.bin weapon_data 0x2bf150 — max deviation
+                // 32·0.0014 = 0.0448 rad]) hit the walking contact's head part 0.16 off the aim
+                // line (the NF_HEALTH_TRACE kill, level-06-rook-door-3). A tap whose cone — the
+                // aim line extended past the target WIDENED by the spread's reach 0.05·ds — would
+                // cross the shield's cylinder is NOT taken; the blocked arm's strafe below (the
+                // real player's step off the line) re-aims instead. Only shots THROUGH the
+                // target's line count: the shield must stand beyond the target along the ray. The
+                // y band (feet − 1.2 .. feet + 2.2) covers the cowering hide boxes, which hang
+                // BELOW the feet origin (the kill's head part landed at feet − 0.58).
+                let mut shield_block = false;
+                if let Some(s) = self.shield {
+                    if let Some(sd) = sim.drones.list.get(s) {
+                        if !sd.corpse && sd.health > 0.0 {
+                            let eye = [bp[0], bp[1] + sim.bond.eye - sim.bond.crouch_drop, bp[2]];
+                            let ds = dxz(sd.pos, eye);
+                            let dtg = dxz(dp, eye).max(1e-3);
+                            if ds > dtg + 0.5 {
+                                let t = ds / dtg;
+                                let ex = eye[0] + (at[0] - eye[0]) * t;
+                                let ez = eye[2] + (at[2] - eye[2]) * t;
+                                let ey = eye[1] + (at[1] - eye[1]) * t;
+                                let miss2 = (ex - sd.pos[0]).powi(2) + (ez - sd.pos[2]).powi(2);
+                                let reach = 0.9 + 0.05 * ds;
+                                if miss2 < reach * reach
+                                    && (sd.pos[1] - 1.2) < ey && ey < (sd.pos[1] + 2.2) {
+                                    shield_block = true;
+                                }
+                            }
+                        }
+                    }
+                }
                 let dx = dp[0] - bp[0];
                 let dz = dp[2] - bp[2];
                 let dy = at[1] - (bp[1] + sim.bond.eye - sim.bond.crouch_drop);
@@ -544,7 +610,7 @@ impl Walker {
                 let perr = want_pitch - sim.bond.pitch;
                 let clip_empty = sim.gun.clip == 0 && sim.gun.spare > 0;
                 let reload = clip_empty && t % 20 == 0;
-                let blocked = aim.is_none();
+                let blocked = aim.is_none() || shield_block;
                 blocked_streak = if blocked { blocked_streak + 1 } else { 0 };
                 // Tap only when the view is ON the part (the boxes are ~0.3 wide; the fixed-period
                 // taps sprayed ammo at a drifting aim) and SOMETHING is exposed.
