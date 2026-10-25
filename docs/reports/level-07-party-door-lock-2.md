@@ -89,6 +89,8 @@ order reached are all green in-suite: `party_door_lock_07000007_live` (2 passed,
 did not reach) was verified directly on this same tree instead: 2 passed, 0 failed (§3). The
 sandbox's known environmental red families (the 3 `disc_golden`, `identity_disc`, the GPU-render
 trio, the net_*/mp_* OOM SIGKILLs) all live in the unreached tail — none appears in the 610.
+(A 07:17 continuation snapshot reached 635 binaries and added exactly one predicted environmental
+red: `CRASH net_soak_faults_live (exit -9)` — the OOM-kill family; no test-failure red appeared.)
 
 ## What's left
 
