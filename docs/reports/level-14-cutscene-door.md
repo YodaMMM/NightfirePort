@@ -121,3 +121,10 @@ countdown_cutscene_cameras_live --test cutscene_camera_07000014_live -- --test-t
 
 not visible to me (no token/credit/context-window/cost figures are shown anywhere in this sandbox
 environment; the agent transcript does not display usage meters).
+
+## ntfy failed
+
+All three fallbacks failed at ~20:47 UTC (same network block as the level-4a session's record):
+1. `curl -sS -m 20 -H "Title: NightfirePort" -d "…" https://ntfy.sh/nightfire-yoda-8k3x` → `curl: (28) Connection timed out after 20001 milliseconds`
+2. `python3 urllib.request` (timeout=20) → no output, the shell call was killed at 60 s with the request unanswered
+3. `wget -q -O- --post-data "…" https://ntfy.sh/nightfire-yoda-8k3x` → killed by the 25 s timeout with no output
