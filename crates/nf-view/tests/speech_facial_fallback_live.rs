@@ -148,12 +148,41 @@ fn a_present_script_talker_never_plays_nor_advances() {
             });
             let d = &sim.drones.list[i];
             let (npos, nyaw) = (d.pos, d.yaw);
+            // The push dodge: the guest push [M NDrone2_DoCollision 0x149ec8:11-34 + Collide_Jointy
+            // 0x1ec180:229-266] shoves Bond off a spot that sits inside a live capsule, and the
+            // mid-tick displacement swings the aim ray off the talker. The real player's move is a
+            // step-back: keep the SAME seed line (the vt-14 blocker sits on it — the census
+            // geometry above) and step the radius out until the spot is clear of every live
+            // capsule, so the ray forms and holds. The asserts are untouched.
+            let clear_r = {
+                let caps: Vec<([f32; 2], f32)> = sim.drones.list.iter()
+                    .filter(|x| x.present && x.enabled && !x.corpse)
+                    .map(|x| {
+                        let r = if x.voice_type == 0xc { 0.55f32 } else { 0.4f32 };
+                        ([x.pos[0], x.pos[2]], r)
+                    })
+                    .collect();
+                let mut chosen: Option<f32> = None;
+                let mut best = (2.2f32, -1.0f32);
+                for &r_ext in &[2.2f32, 2.5, 2.8, 3.1, 3.4] {
+                    let px = npos[0] + nyaw.sin() * r_ext;
+                    let pz = npos[2] + nyaw.cos() * r_ext;
+                    let mut min_d = f32::MAX;
+                    for &(cp, cr) in &caps {
+                        let dd = ((px - cp[0]).powi(2) + (pz - cp[1]).powi(2)).sqrt() - cr;
+                        if dd < min_d { min_d = dd; }
+                    }
+                    if min_d >= 1.05 { chosen = Some(r_ext); break; }
+                    if min_d > best.1 { best = (r_ext, min_d); }
+                }
+                chosen.unwrap_or(best.0)
+            };
             let sim = scene.sim.as_mut().unwrap();
             let (s2, c2) = (nyaw.sin(), nyaw.cos());
-            sim.bond.pos = [npos[0] + s2 * 2.2, npos[1], npos[2] + c2 * 2.2];
+            sim.bond.pos = [npos[0] + s2 * clear_r, npos[1], npos[2] + c2 * clear_r];
             sim.bond.yaw = (npos[0] - sim.bond.pos[0]).atan2(npos[2] - sim.bond.pos[2]);
             let dy = 0.4f32 - 1.6; // mid-body aim [M 0x1a7810's cylinder]
-            sim.bond.pitch = (dy / 2.2f32.hypot(1.2)).asin();
+            sim.bond.pitch = (dy / clear_r.hypot(1.2)).asin();
         }
         tick(&mut scene, &mut snd);
         let sim = scene.sim.as_ref().unwrap();

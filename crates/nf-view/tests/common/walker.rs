@@ -705,6 +705,10 @@ impl Walker {
         // (the 01 stairwell head's threshold door sat on the lane, opened, auto-closed, and
         // re-hijacked the mitigation forever, so the sidestep/jump ladder never ran).
         let mut last_door: Option<usize> = None;
+        // The bot-dodge tangent side (+1 = the away-projected side, -1 = flipped). A stalled
+        // escape flips it — the hall guest pocket wedged the first pick against the seating.
+        let mut dodge_sign = 1.0f32;
+        let mut dodging = false;
         loop {
             if self.total_ticks - start_ticks >= 40_000 && !self.lenient {
                 let dump = fail_dump(&self.scene, wp.at, label);
@@ -873,6 +877,91 @@ impl Walker {
                 ..Default::default()
             };
             if err.abs() > 1.2 { input.forward = 0.0; }
+            // The bot dodge (guest-solid walks): an alive enabled team-3 bot's capsule holds
+            // grounded Bond (0.55 + r) off [M NDrone2_DoCollision 0x149ec8:11-34 — the
+            // NearPlayerCollision 0x14b190 near arm keeps the capsule ON within 2.0 of a player,
+            // for every class, through PreDroneControl 0x148db0's per-frame +0x154+4i distances;
+            // Collide_Jointy 0x1ec180:229-266 pushes the class-3 player with the full overlap].
+            // The walker plays the real player's sidestep-around: a bot BESIDE Bond (within the
+            // hold band) steers him directly away from the bot's spine; a bot AHEAD whose hold
+            // band covers the direct line biases the steer target perpendicular away until the
+            // line clears. Non-team-3 bots don't push grounded Bond in the port (the [S]
+            // airborne-only choice at the push site) — the dodge mirrors exactly the pusher set.
+            {
+                dodging = false;
+                let (mut esc_x, mut esc_z) = (0.0f32, 0.0f32);
+                let mut escaping = false;
+                let mut k = 0.0f32;
+                let (mut ax, mut az) = (0.0f32, 0.0f32);
+                let tx = wp.at[0] - p[0];
+                let tz = wp.at[2] - p[2];
+                let tl = (tx * tx + tz * tz).sqrt();
+                for g in sim.drones.list.iter() {
+                    if !g.enabled || g.corpse || g.team != 3 { continue; }
+                    let r = if g.voice_type == 0xc { 0.55f32 } else { 0.4f32 };
+                    let hold = 0.55 + r;
+                    let bx = g.pos[0] - p[0];
+                    let bz = g.pos[2] - p[2];
+                    let bd = (bx * bx + bz * bz).sqrt();
+                    if bd < hold + 0.25 {
+                        // Beside Bond: steer directly away from the spine (the radial escape).
+                        let (ex, ez) = if bd > 1e-4 { (bx / bd, bz / bd) } else { (0.0, 1.0) };
+                        esc_x -= ex; esc_z -= ez;
+                        escaping = true;
+                    } else if tl > 0.5 && !escaping {
+                        let ux = tx / tl;
+                        let uz = tz / tl;
+                        let proj = bx * ux + bz * uz;
+                        if proj < 1.2 || proj > tl + 0.6 { continue; }
+                        let px = bx - proj * ux;
+                        let pz = bz - proj * uz;
+                        let pd = (px * px + pz * pz).sqrt();
+                        if pd >= hold + 0.35 { continue; }
+                        // Away from the bot, from its closest point on the line.
+                        let (axn, azn) = if pd > 1e-4 { (-px / pd, -pz / pd) } else { (-uz, ux) };
+                        let need = (hold + 0.35 - pd + 0.25).min(2.2);
+                        if need > k { k = need; ax = axn; az = azn; }
+                    }
+                }
+                if escaping {
+                    // Tangential slide: the Jointy push [M 0x1ec180:251-266] cancels the
+                    // into-capsule component of the walk by itself, so steer ALONG the capsule's
+                    // flank — the away direction swung toward the waypoint — and let the radial
+                    // push hold the band. Steering directly away just cancels against the push
+                    // (the 07000007 hall guest limit-cycled there: walk 0.083/tick radial vs push
+                    // 0.07/tick = parked).
+                    let (mut t2x, mut t2z) = (wp.at[0] - p[0], wp.at[2] - p[2]);
+                    let t2l = (t2x * t2x + t2z * t2z).sqrt().max(1e-4);
+                    t2x /= t2l; t2z /= t2l;
+                    let dot = esc_x * t2x + esc_z * t2z;
+                    let mut px = esc_x - dot * t2x;
+                    let mut pz = esc_z - dot * t2z;
+                    let pl = (px * px + pz * pz).sqrt();
+                    if pl < 0.3 {
+                        // The away direction is parallel to the waypoint direction: pick the
+                        // perpendicular of away that still points toward the waypoint.
+                        px = -esc_z; pz = esc_x;
+                        let pl2 = (px * px + pz * pz).sqrt();
+                        px /= pl2; pz /= pl2;
+                        if px * t2x + pz * t2z < 0.0 { px = -px; pz = -pz; }
+                    } else {
+                        px /= pl; pz /= pl;
+                    }
+                    px *= dodge_sign; pz *= dodge_sign;
+                    input.turn = wrap_pi(px.atan2(pz) - sim.bond.yaw).clamp(-0.08, 0.08);
+                    input.forward = 1.0;
+                    dodging = true;
+                    if std::env::var("NF_DODGE_DEBUG").is_ok() {
+                        eprintln!("[dodge] t{} bond {:?} yaw {:.2} tan ({:.2},{:.2}) turn {:.3} stuck {}",
+                            self.total_ticks, p, sim.bond.yaw, px, pz, input.turn, self.stuck);
+                    }
+                } else if k > 0.0 {
+                    let dx = wp.at[0] + ax * k - p[0];
+                    let dz = wp.at[2] + az * k - p[2];
+                    input.turn = wrap_pi(dx.atan2(dz) - sim.bond.yaw).clamp(-0.08, 0.08);
+                    input.forward = if input.forward > 0.0 { 1.0 } else { 0.0 };
+                }
+            }
             if self.sidestep != 0 {
                 // Pure lateral (no forward): the diagonal walk grinds into the same wall corner.
                 input.strafe = if self.sidestep > 0 { 1.0 } else { -1.0 };
@@ -887,7 +976,13 @@ impl Walker {
                 let moved = dxz(self.pos, self.last_sample);
                 self.sample_tick = 0;
                 self.last_sample = self.pos;
-                if moved < 0.3 {
+                if moved < 0.3 && dodging {
+                    // The dodge itself is walled (the first tangent side ran into furniture):
+                    // flip the flank and keep sliding — the sidestep ladder would only fight
+                    // the escape here.
+                    dodge_sign = -dodge_sign;
+                    self.stuck = 0;
+                } else if moved < 0.3 {
                     self.stuck += 1;
                     // The real player's reaction: a closed door in reach → press E until it moves,
                     // then let the swing finish. Anything else: sidestep, jump, then report.
