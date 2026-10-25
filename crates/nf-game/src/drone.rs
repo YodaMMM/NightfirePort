@@ -13386,8 +13386,21 @@ fn segment_hits_sphere(a: V3, b: V3, c: V3, r: f32) -> bool {
                 if let Some((_, i)) = contact {
                     // The round dies on the first solid object hit — the glass absorbs it
                     // [M 0x12cff0-4]; nothing behind it scores or stops it this tick.
-                    b.dead = true;
+                    // EXCEPT the glass panes: the game's walk (Collide_Update 0x1ea398:216-229,
+                    // the disasm 0x1ea6cc-0x1ea6e4 region) passes a class-0x10 surface whenever
+                    // the bullet's HITTEST+0x9a carries the 0x20 mask (Bullet_update 0x12e7b0
+                    // disasm 0x12f048-0x12f058 arms it for every gun without weapon_data+0x6c &
+                    // 0x800 — the guns that break glass), and the handler's own glass arm
+                    // [M Bullet_CollisionHandler 0x12ce80 — `if ((+0x50 & 0x3f) == 0x10) pass`
+                    // under the same +0x6c & 0x800 gate] re-passes the hit after the class-'('
+                    // breakable stop. The pane still takes the damage: the collision pass
+                    // appends the contact to the pane's obj+0xD0 chain whether or not the round
+                    // stops [M the same pass the fusebox wires and SS Operate read] and
+                    // `Break_Update` 0x12bfd8:36-37 drains health from that chain. So a kind-2
+                    // (glass [D params; M 0x12c230:21]) pane's hit drains WITHOUT killing the
+                    // round; a non-glass breakable keeps the stop.
                     let br = &mut self.breaks.list[i];
+                    if br.kind != 2 { b.dead = true; }
                     br.health -= contact_dmg;
                     if br.health < 0.0 {
                         if let Some(k) = self.breaks.kill(i, b.pos, end, &mut self.rng) {
