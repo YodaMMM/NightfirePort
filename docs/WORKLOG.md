@@ -146,3 +146,13 @@ value) runs regardless of the green/red outcome.
   3.66 s; the recovered reds from rounds 2-3 all re-run green on this tree: sight_frustum 2/2,
   doublecross 6/6, escort_hide_findrun 3/3, fix_pickups_ammo 4/4, hostage_killer_02 5/5,
   fix_0a_rain 2/2, interactables_0a 7/7, escort_follow escort_at_walking 1/1.
+
+---
+level-0a-rain-indoors-5 (2026-10-25): session start. Branch from rain-4 (c357ae17) + master
+  (aa94ce02). Task: the last red from the rain fix — interactables_07000041_live::
+  the_glass_pan_shatters_under_the_real_fire, green on master, red on the merged tree (the
+  rain-3 report's second stream-shift red: a pinned fire window riding the shared generator's
+  position [M Rand_* 0x1e36f0..0x1e3780]). Plan: find which draw decides the glass break on
+  that path (fire spread / damage roll / glass health), decide whether the test pins a game
+  rule or one lucky stream value, and make it assert the game's rule — or drive the real fire
+  the way a player does — never weaker than [M].
