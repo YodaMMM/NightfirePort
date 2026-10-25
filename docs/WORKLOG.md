@@ -22,3 +22,12 @@ pair #116/#117), keeping master's camera-only Script_CameraStart identity rule (
 (walkreal_07000001_live, walkreal_07000008_live, zoe_gondola_realpath_live,
 interact_07000001_live). All four must stay green plus the door test; full suite on the merged
 tree; report + finish steps.
+Investigation: the game rule is disassembly-proven now — `Script_CameraStart` 0x1d9140 writes
+`Mat_IdentityT` over si+0x00 (a0 untouched from entry to the jal = param_1 [M disasm]); the
+case-1 main `Script_GetInterp` call stores the 10th-arg base flag = (stream->parent == -1) at
+0x1d9a98 [M disasm; the decompile drops the slot]; `Script_CameraEnd` 0x1db348 never restores
+the base. The port lands the identity ONLY for the default create arm's gfx-bound movers
+(obj_type 0xff, hash != 0, unparented — the door-leaf class): a whole-disc census
+(probe_cam_scripts) shows those are the ONLY such streams in camera-op scripts, and the
+0x31/0x19/hash-0 classes keep the placement compose the live walks pin. Whole-script reset
+reverted (master's camera-only rule stays).

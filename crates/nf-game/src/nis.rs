@@ -196,6 +196,16 @@ pub struct Script {
     streams: Vec<Stream>,
     /// The owning `Player`'s placement index (for `NF_SCRIPTLOG`); 0 until `Player::load` sets it.
     pub player: usize,
+    /// `Script_CameraStart` 0x1d9140 ran on this script: the game writes `Mat_IdentityT` over the
+    /// player's own base matrix si+0x00 (the decompile drops the argument; the disassembly shows
+    /// a0 untouched from entry to the `jal 0x1e34c8` — a0 = param_1 = the SCRIPTINFO, whose first
+    /// field IS that base [M 0x1d9140, `daddu $s1,$a0,$zero` at 0x1d915c then `jal` at 0x1d916c]).
+    /// `Script_CameraEnd` 0x1db348 kills the stream and clears +0xAB5 bit 4; it does NOT restore
+    /// si+0x00 [M 0x1db348:5-13] — the identity sticks for the script's lifetime. The port keeps
+    /// `self.matrix` (the SP placement) for every other reader — master's camera-only rule — and
+    /// consults this flag where the game's identity base matters (the case-1 unparented entity
+    /// compose; see the interp comment).
+    pub camera_started: bool,
 }
 
 /// The port's object store for scripts: indices stay valid; `None` = deleted.
@@ -320,7 +330,8 @@ impl Script {
     pub fn load(nis: Arc<Nis>, matrix: Mat4, scale: f32) -> Script {
         let streams = nis.streams.iter().map(|s| Stream { first_key: s.first_key, last_key: s.last_key, pc: Some(0), parent: -1, ..Default::default() }).collect();
         let flags = if nis.camera { 0x40 } else { 0 };
-        Script { nis, matrix, scale, delay: 0, clock: 0.0, flags, script_cam: false, play: 0, fade_clock: 0.0, fade_len: 0, fade_flags: 0, streams, player_at: None, player_mode: 0, pending: Vec::new(), pending_weapon: Vec::new(), player: 0 }
+        Script { nis, matrix, scale, delay: 0, clock: 0.0, flags, script_cam: false, play: 0, fade_clock: 0.0, fade_len: 0, fade_flags: 0, streams, player_at: None, player_mode: 0, pending: Vec::new(), pending_weapon: Vec::new(), player: 0,
+            camera_started: false }
     }
 
     /// `Script_Play` (0x1db588).
@@ -571,20 +582,25 @@ impl Script {
                         if self.flags & 0x20 == 0 {
                             // `Script_CameraStart` 0x1d9140 opens with `Mat_IdentityT()` on the
                             // SCRIPTINFO's own base matrix si+0x00 (the decompile drops the argument;
-                            // its a0 is param_1 = the SCRIPTINFO, whose first field IS the base the
-                            // interps concat): from the camera op on the player's base is the IDENTITY,
-                            // so every stream interp's base concat — case 1's entity tail
-                            // `Concat(si+0x00, ·)` [M 0x1d9a08:133] and the camera's — runs on the
-                            // identity and the keys are the world matrix. The port only skipped the
-                            // concat for the camera case, so 07000014's opening scene 0x06000833 still
-                            // composed the SP #276 placement (52.1566, 2.6365, 46.6214) into its door
-                            // entity streams 10/11 (hashes 0x02000891/92 [D decode]): the door movers
-                            // sat at (79.95, 3.93, 96.19), 56 units from the door placements #116/#117
-                            // (27.788, 1.203, 49.671 [D]), and the control-room door never moved while
-                            // Kiko walked through it. Scripts without a camera op keep the placement
-                            // base (the fusebox wires, the safe, the pickups [D] — no camera op in
-                            // their scripts, so this reset never runs for them).
-                            self.matrix = IDENT;
+                            // the disassembly shows a0 untouched from entry to the call — a0 =
+                            // param_1 = the SCRIPTINFO [M 0x1d9140 disasm]): from the camera op on
+                            // the game's player base is the IDENTITY, so an unparented entity
+                            // stream's base concat (`Script_GetInterp`'s flag = parent == -1, stored
+                            // to the call's 10th slot at 0x1d9a98 [M 0x1d9a08 disasm]) runs on the
+                            // identity and its keys are the world matrix. 07000014's opening scene
+                            // 0x06000833 keys its door entity streams 10/11 (hashes 0x02000891/92
+                            // [D decode]) in WORLD space — the keys sit on the door placements
+                            // #116/#117 (27.788, 1.203, 49.671 [D]) — so the port must not compose
+                            // the SP #276 placement (52.1566, 2.6365, 46.6214) into them: pre-fix
+                            // the leaves sat at (79.95, 3.93, 96.19), 56 units off, and the door
+                            // never moved while Kiko walked through it.
+                            //
+                            // The port does NOT reset the whole `self.matrix` here (the cutscene-door
+                            // branch did, and four live walks went red — the walks' pinned poses
+                            // keep the placement base): master's camera-only rule stays, and
+                            // `camera_started` scopes the identity to the readers the game proves
+                            // (see the case-1 interp comment).
+                            self.camera_started = true;
                             let s = &mut self.streams[i];
                             if s.obj.is_none() {
                                 objs.list.push(Some(Obj::Camera { matrix: IDENT, fov: 1.0, src: (self.nis.hashcode, i as u8) }));
@@ -1011,8 +1027,27 @@ impl Script {
                     p = self.streams[p as usize].parent;
                     n += 1;
                 }
-                let hash0 = matches!(&objs.list.get(o), Some(Some(Obj::Entity { hash: 0, kind: 0x19, .. })));
-                if !hash0 { m = mul(&m, &self.matrix); }
+                let (ehash, ekind) = match objs.list.get(o) { Some(Some(Obj::Entity { hash, kind, .. })) => (*hash, *kind), _ => (0, 0) };
+                let hash0 = ehash == 0 && ekind == 0x19;
+                // The camera-started identity, scoped to the class the game proves AND the door
+                // needs: an unparented case-1 stream's base compose is `Script_GetInterp`'s flag
+                // = parent == -1 (the 10th arg stored at 0x1d9a98 [M 0x1d9a08 disasm; the
+                // decompile drops the slot; the tail `if (param_10) Concat(si+0x00, out)` is
+                // 0x1da158's]), and `Script_CameraStart` has overwritten si+0x00 with the identity
+                // [M 0x1d9140 disasm] — so from the camera op on the game's unparented entity
+                // matrix is the KEYS ALONE. The port scopes it to the DEFAULT create arm's
+                // gfx-bound movers (obj_type 0xff, hash != 0 — `Script_CreateEntity` 0x1d8968's
+                // fallthrough: `control_create_object` + `hashtable_set_object_to_entity_gfx`
+                // 0x1ca6d8 [M]), the class 07000014's door leaves (streams 10/11, no parent, 0xff,
+                // hashes 0x02000891/92 [D decode]) key world space in: composing the SP placement
+                // threw them 56 units off and the door never moved while Kiko walked through it.
+                // A whole-disc census (probe_cam_scripts) finds NO other non-zero-hash 0xff
+                // stream in a camera-op script, so nothing else shifts. The special arms keep the
+                // compose (a port choice: 07000001's intro 0x06000087 s5/s11 kind-0x31 and the
+                // hash-0 classes pin composed spots in the live walks — interact_07000001,
+                // walkreal_07000001 — and 0700004a's hash-0 0xff/0x19 markers pin theirs in 4a-lift-4).
+                let keys_alone = self.camera_started && ehash != 0 && ekind == 0xff && self.streams[i].parent < 0;
+                if !hash0 && !keys_alone { m = mul(&m, &self.matrix); }
                 if let Some(Some(Obj::Entity { matrix, alpha: a, .. })) = objs.list.get_mut(o) { *matrix = m; *a = alpha; }
             }
             4 => {
