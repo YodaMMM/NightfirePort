@@ -89,7 +89,7 @@ fn the_route_lid_use_spawns_the_ladder_art_beneath_the_opening() {
 ///   0x1dbc08:46-54 — any mode outside {1,8} runs Play+Update+Stop, state 1), and the key-1
 ///   `Entity` commands of streams 0/1/3/5 spawn the wires 0x02000AA2 / 0x02000AA1 / 0x02000AB3 /
 ///   0x02000AA4 (obj_type 0x31) [D 0x06000A1B decode — the raw disc bytes e.g. stream 0
-///   `07 a2 0a 00 02` big-endian-fold to 0x02000AA2; the "0x02000A62/61/73" in the hand-off notes
+///   `07 a2 0a 00 02` big-endian-fold to 0x02000AA2; the "0x02000A62/61/73" in the earlier notes
 ///   drop the 0x40 bit]. `Script_CreateEntity` 0x1d8968 creates by type [M].
 /// - The use press is INERT at the box: `Player_Activate` 0x1a5170:95-160 has no class-0x3C arm,
 ///   and the box's SP carries mask 1 (SP_Create's param_6 = 0 [M 0x1dc7e0]; the port primes it
