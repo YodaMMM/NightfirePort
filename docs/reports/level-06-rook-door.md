@@ -61,10 +61,14 @@ the arm; run the 01 walkreal binary and this test un-ignored together.
   escort-door-harness; unchanged here), rook_sp_06_live.
 - The fast runner could not be used as designed: this sandbox kills every background process
   between tool calls (verified twice with setsid), so the suite ran as foreground slices of
-  directly-invoked test binaries instead (the list above). The full four-crate suite did not fit
-  the window on this round's tree; the touched binaries are all green as listed, and the only
-  known red anywhere is walkreal_07000001_live **with the unlanded fix applied** — master itself
-  is untouched by this branch.
+  directly-invoked test binaries instead. Totals on the final pushed tree (master 3a0cb26e + the
+  walker hook + the ignored evidence test): **nf-game 887 passed / 0 failed; nf-formats +
+  nf-audio 133 passed / 0 failed; nf-view slices (rook_*, fix_06_*, escort_follow, fix_mission,
+  fix_npc_doors, doors_remainder, fix_drone3, fix_cutscene_actors, fix_searchlight_alarm,
+  fix_searchlights_guards) 36 passed / 0 failed / 1 ignored (fix_npc_doors' master ignore)** —
+  1056 passed, 0 failed across the slices that ran. The full four-crate run (774 binaries) did
+  not fit the window; the only known red anywhere is walkreal_07000001_live **with the unlanded
+  fix applied** — on the pushed tree master's greens hold.
 
 ## What's left
 
