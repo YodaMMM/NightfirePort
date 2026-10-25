@@ -58,3 +58,20 @@ Progress:
   pin the exact rule [M 0x1d916c, case 4 @0x1da054 vs case 1 @0x1d9b30, per-SCRIPTINFO reset
   when a player runs several scripts], fix nis.rs, all named tests green, full suite via
   tools/test/suite.py.
+- (12:50) [M root-cause chain pinned for the 01/08 red set] The reset itself is exactly the
+  game's: `Mat_IdentityT(SCRIPTINFO)` at every op-0x0d [M 0x1d916c disasm: a0 = param_1 at the
+  jal], the base reaches entities via the own-interp flag = (stream+0x25 == -1) [M 0x1d9c0c
+  disasm: `nor`+`sltiu` → sw ($sp)] or the chain-root `Concat(SCRIPTINFO, obj+0x90)` [M
+  0x1d9d34], the camera always [M 0x1da068 sw of literal 1], sub-scripts carry their own
+  SCRIPTINFO [M 0x1db050 Script_Load + case-7 keying]. The port matches all four.
+- (12:50) [D/the diff] On 01/08 every camera-flag script's SP base is identity EXCEPT the
+  PS2-sine epsilon: the port's `object_matrix` rot (0,0,0) → m00 1.0000002 (`sinf(π/2)`
+  [M PS2Sinf3 G-046]) — the game wipes it at the intro's first-tick camera op, the pre-merge
+  port composed 2120 intro ticks with it. Measured first divergence: guard D0 (skin 0x05000036)
+  x differs 4.8e-7 at tick 254 (probe_first_divergence/probe_drones_at_divergence, both trees);
+  the epsilon compounds through the glist AI volumes into route flips — the 6 red groups pinned
+  the epsilon routes. Master (d8334b70) green 10/10 on interact_07000001; merged tree red —
+  the reset alone causes it (nis.rs diff = exactly the reset block).
+- (12:50) 14-side intact on the merged tree: cutscene_fall_07000014_live 2/2 green. The 6
+  groups' re-pin (per the task's test rule, with [M 0x1d916c]) is what's left; probes
+  base_reset_probe_01_08.rs + door_trace_01.rs are untracked diagnostics.
