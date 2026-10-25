@@ -93,17 +93,21 @@ run finished 13:36 UTC with the total line:
 **`3296 passed, 23 failed, 193 ignored  (108 min)`** — 799/799 binaries.
 
 The 23 failures, all accounted for:
-- 3 `disc_golden` + `identity_disc` — the documented slim-ISO reds (the driver's rule 5 allows
-  exactly these).
-- 3 GPU-render reds (`fix_0c_pylon_live` ×2, `probe_pylon_render`) — the no-GPU sandbox set.
-- 2 stream-shift reds inherited from the rain-2 merge, first seen on the previous session's
-  tree and re-confirmed here (`bathhouse_shout_mixer_live::the_bathhouse_floor_guards_shout…`,
-  `interactables_07000041_live::the_glass_pan_shatters_under_the_real_fire`) — next-session
-  work, documented in the level-0a-rain-indoors-3 report too.
-- The rest (14) are the sandbox's OOM kills (exit −9: net_*/mp_*/big walk binaries) plus
-  `probe_gadget`'s 600s TIMEOUT — the same environment signature every session here shows;
-  the exact names are in `suite13.out` (committed? no — scratch output; the list below).
+- 7 FAILED: 3 `disc_golden` + `identity_disc` (the documented slim-ISO reds — the driver's
+  rule 5 allows exactly these) + 3 GPU-render reds (`fix_0c_pylon_live` ×2,
+  `probe_pylon_render` — the no-GPU sandbox set).
+- 16 CRASH (exit −9), the sandbox's OOM signature: `mp_online_failures`, `net_soak_faults_live`,
+  `walk_07000013_live`, `mp_remote_fx_live`, `mp_16_slots_live`, `net_desync_report_live`,
+  `mp_perf_16_live`, `mp_death_hands_online`, `net_join_live`, `walkreal_probe13`,
+  `net_resync_live`, `mp_shot_effects_live`, `net_e2e_loopback_live`, `mp_stress_explosives_live`,
+  `mp_bots_moving_live`, `net_match_end_clients_live` — the same net/mp/big-walk memory kills
+  every session here shows.
+
+Notably, the two stream-shift reds the level-0a-rain-indoors-3 session saw on ITS tree
+(`bathhouse_shout_mixer_live::the_bathhouse_floor_guards_shout…` and
+`interactables_07000041_live::the_glass_pan_shatters_under_the_real_fire`) PASS on this merged
+tree — master's later merges moved the shared stream again and those pins hold here.
 
 The task's own family: `interactables_07000013_live` 6/6 green inside the run,
-`walkreal_07000013_live` 1/1 green, `walk_07000013_live` in the OOM set (the direct run's
-exit-137 above).
+`walkreal_07000013_live` 1/1 green; `walk_07000013_live` is in the OOM set above (the direct
+run's exit-137 above).
