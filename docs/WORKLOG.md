@@ -102,3 +102,13 @@ Progress:
   change); the prime suspect [S] is the -2 branch's glass-drain fix (kind-2 panes no longer
   stop the round) giving the vending pane a second same-tick contact, the same class of
   re-anchor the gondola pin needed; left open for the next session with the full suite.
+
+## level-11-stairwell-bullet-wall-4 (branch s/level-11-stairwell-bullet-wall-4) — 07000011 the remaining invisible walls in the stairwell
+- (18:58 UTC) Sandbox reset → full setup redone. Branch s/level-11-stairwell-bullet-wall-4 created from
+  origin/s/level-11-stairwell-bullet-wall-3 (cd9ef225, its tip) and origin/master (aa94ce02) merged in; pushed.
+  Goal: after wall-3's [M Collide_Update 0x1ea398:216-229] 0x40 pass bit, bullets fired from
+  Bond (22.40, 30.09, 1.42, yaw -1.505, pitch -0.035) frame 2944 into the well still trace flat planes —
+  bullet holes hang mid-air (one diagonal under the stair flight, one upright across the middle of the well).
+  Plan: raycast the decal planes from that spot, list every surface the port stops on (owner/placement,
+  glist flags, surface byte, collision class, drawn geometry [D]), match each against the game's remaining
+  pass arms [M], fix, then the real-input test + fast suite + full suite.
