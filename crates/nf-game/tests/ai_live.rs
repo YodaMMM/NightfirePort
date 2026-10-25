@@ -1456,3 +1456,40 @@ fn validate_cover_anim_matches_the_game_table() {
     assert_eq!(g.validate_cover_anim(&d, 0x78), 0x78, "≥ 0x77 passes unvalidated [M 0x13bf40:12,22]");
     assert!(missing > 0, "the gate guard's set validated everything — the 0xFFFF arm is untested");
 }
+
+/// level-4a-cutscene-autoaim — the no-lead pin [M 0x1a7c98 → 0x1a73f8 → 0x1a4a98 → 0x12c5a0]: the
+/// game's auto-aim chain takes NO velocity anywhere (the pick's only inputs are the player obj and
+/// the option byte; the bullet dir = the aim ray, speed = weapon+0x20), so a shooter carried by a
+/// moving platform (the 0700004a cab: 150 units / 4950 ticks [D keys], the rider carried by
+/// `Control_InheritVelocity` 0x133e88) picks from the SAME instantaneous geometry exactly as a
+/// static shooter: shift BOTH head and target by the cab's per-tick delta — the same geometry
+/// seen from the moved frame — and the pick takes the same guard with the same snapped ray and
+/// the same stored assist offset. No term remembers a velocity.
+#[test]
+fn auto_aim_from_a_moving_shooter_is_the_same_instantaneous_geometry() {
+    let Some(l) = Level05::load() else { eprintln!("skip: NF_ISO not set"); return };
+    let d = l.data();
+    let run = |bond_y: f32| {
+        let (drones, i, rng) = l.drones(None, 61.342);
+        let mut sim = l.sim(drones, rng);
+        let p = bond_at([69.3, bond_y, 99.5]);
+        sim.tick(&d, &p);
+        assert!(sim.list[i].drawn, "the gate guard is drawn (the pick's drawn gate [M 0x1a73f8:65-109])");
+        let bone2 = sim.list[i].palette(&d).unwrap()[2][3];
+        let to = [bone2[0] - p.eye[0], bone2[1] - p.eye[1], bone2[2] - p.eye[2]];
+        let n = (to[0] * to[0] + to[1] * to[1] + to[2] * to[2]).sqrt();
+        let yaw = to[0].atan2(to[2]);
+        let look = [(yaw + 0.05).sin(), 0.0, (yaw + 0.05).cos()];
+        let dir = sim.auto_aim(&d, p.eye, look, 2);
+        (i, sim.aim_target, dir, sim.aim_offset, to, n)
+    };
+    let (i, tgt, dir, off, to, n) = run(26.5);
+    assert_eq!(tgt, Some(i), "the static pick takes the guard");
+    for k in 0..3 { assert!((dir[k] - to[k] / n).abs() < 1e-3, "the ray is the guard's bone 2 (the snap)"); }
+    // The rider one cab-tick lower (the world-frame head [M 0x133e88]), the guard unchanged: the
+    // pick re-solves from the NEW head instantly — no velocity term delays or biases it.
+    let (i2, tgt2, dir2, off2, to2, n2) = run(26.5 - 150.0 / 4950.0);
+    assert_eq!(tgt2, Some(i2), "the riding pick (the head carried one tick down) takes the same guard");
+    for k in 0..3 { assert!((dir2[k] - to2[k] / n2).abs() < 1e-3, "the riding ray re-snaps to the bone 2 from the new head"); }
+    assert!((off[1] - off2[1]).abs() < 0.02, "the assist offset tracks the geometry, not a velocity history ({off:?} vs {off2:?})");
+}
