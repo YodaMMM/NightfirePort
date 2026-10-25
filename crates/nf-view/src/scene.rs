@@ -9734,10 +9734,17 @@ pub fn build(level: &Level, cels_only: bool, skeletons: &HashMap<u8, Skeleton>, 
                         let seq = s.seqs.get(&q)?;
                         nf_game::anim::facial_weights(seq, (frame - wstart as f32 + 1.0).max(1.0), count)?
                     }
-                    // no face window on this script: the zero base (see above).
+                    // no face window on this script: a script actor keeps the cutscene-faces
+                    // model (None — no morph term; the game reads its never-started facial
+                    // slot's zeroed buffer [M AnimSeqNew 0x1c7248], visually the same neutral).
+                    // A DRONE falls through to the zero base — the facial slots (the talk
+                    // marker) still drive the face there (see below; the 07000007 guests'
+                    // idle anims carry no face window — the frozen-face bug).
+                    None if c.script.is_some() => return None,
                     None => vec![0.0; count],
                 }
             }
+            None if c.script.is_some() => return None,
             None => vec![0.0; count],
         };
         // fix-facial3: `AnimFacialBlend` (0x1be648) — the drone's facial script slots over the track
