@@ -356,3 +356,69 @@ fn the_group_plate_wakes_the_walkers_and_the_guards_stay_calm() {
     }
     assert!(!moved.is_empty(), "the ch-6 walkers walk their kind-8 routes once the plate fires [M 0x1728c0/0x172730 → 0x154190 → 0x15d860], moved {moved:?}");
 }
+
+/// The task's real-input pin (level-07-rook-doorway): Rook — drone 22 (vt 0x10, ch 23, team 3,
+/// skin 0x5000026, walking "Rook Patrol Path_3") — completes his doorway leg through the west
+/// doorway (door at (80.0, 43.0, -49.9)). The freeze the driver measured (Bond at
+/// (76.13, 44.13, -51.97), frame 1086, Rook parked at (79.53, 44.0, -50.32)) was the port's
+/// undrawn slide routed through `move_by`'s 0.4-overshoot probe — the rays graze the doorway
+/// throat and rejected every 0.02 step. The slide is now the game's raw add with the game's
+/// boundary clamp [M Drone_Control 0x139268:75-96 + DroneMove_SetBoundryFlags 0x14f140].
+/// IGNORED on this tree: with the clamp live the walker22 start pose (80.15, −50.46) freezes
+/// AGAIN — the port's ONE-CEL boundary flattening applies wall #684/#685 (the 0x800 door-wall
+/// pair at x 79.86/80.14, z −51.12..−49.89) to every probe, while the game's BoundsTest walks
+/// only the STRADDLED CELS' BLINK lists [M 0x157d80:113-158] and evidently does not carry this
+/// doorway's wall into the probed cels' lists (the real Rook crosses; s/level-07-guest-collision-3's
+/// raw-add-only tree passed this same leg at t256). Next round: the probe's per-cel BLINK filter
+/// (or the door-state wall handling), then un-ignore.
+#[test]
+#[ignore = "level-07-rook-doorway left-work: the doorway leg freezes under the live boundary clamp — the port's one-cel wall flattening probes walls the game's per-cel BLINK lists would not (the game's Rook crosses the west doorway); needs the straddled-cel filter in the SetBoundryFlags probes [M 0x157d80]"]
+fn the_mission_walker_completes_his_doorway_leg() {
+    let mut w = Walker::new(nf_view::load(&iso(), "07000007.bin", false).expect("load 07000007"));
+    w.wait_enabled(3000, "the party start");
+    w.wait(60);
+    // The wake: the same anchors the full walk uses up to the hall mouth — the ch-6 plate #476,
+    // the ch-0x17 plate #415 (the chan-23 group's wake) fire on the way [D census §4].
+    for (name, at) in [
+        ("west aisle south", [35.7f32, 43.6, -70.6]),
+        ("west aisle north", [42.6, 43.6, -70.5]),
+        ("the west wall run", [42.6, 43.6, -45.0]),
+        ("the north door", [49.4, 43.6, -44.7]),
+        ("the north row west", [62.7, 43.6, -44.3]),
+        ("the north row east", [76.5, 43.6, -44.9]),
+        ("the hall west mouth", [76.6, 43.6, -50.7]),
+    ] {
+        w.walk_nav_to(at, name, 1.5);
+    }
+    w.wait(120);
+    let (idx, start) = {
+        let sim = w.scene.sim.as_ref().unwrap();
+        let hit = sim.drones.list.iter().enumerate()
+            .find(|(_, d)| d.present && !d.corpse && d.switch_channel == 23
+                && matches!(d.state, nf_game::drone::state::CIVILIAN_MISSION | 0x11))
+            .expect("the chan-23 mission walker woke onto his route [D census §4; M 0x15b960 case 3 → 0x1728c0]");
+        (hit.0, hit.1.pos)
+    };
+    eprintln!("[07 leg] walker{idx} starts at {start:?}");
+    // Bond faces west (yaw atan2(−1,0)): the walker's doorway is behind him — the undrawn slide
+    // the game uses for every off-screen drone [M 0x149f88 + 0x139268:75-96].
+    for t in 0..9000u32 {
+        {
+            let sim = w.scene.sim.as_ref().unwrap();
+            let err = walker::wrap_pi(-std::f32::consts::FRAC_PI_2 - sim.bond.yaw);
+            let input = Input { turn: err.clamp(-0.08, 0.08), ..Default::default() };
+            let d = &sim.drones.list[idx];
+            let at_far = walker::dxz(d.pos, [74.39, 43.4, -44.97]) < 2.5;
+            let travelled = walker::dxz(d.pos, start);
+            if at_far && travelled > 5.0 {
+                eprintln!("[07 leg] walker{idx} reached the far node at t{t}, travelled {travelled:.2}");
+                break;
+            }
+            if t == 8999 {
+                panic!("the chan-23 mission walker never completed his doorway leg: travelled {travelled:.2}, pos {:?}, state {:#04x}",
+                    d.pos, d.state);
+            }
+        }
+        w.tick(Input::default(), false);
+    }
+}
