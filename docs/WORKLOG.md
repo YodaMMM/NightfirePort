@@ -72,3 +72,9 @@ touched binaries; suite in the background; report.
   them, so a broken example would fail the suite).
 - (05:57) Fast suite started in the background on this tree (the final tree unless the suite
   says otherwise).
+- (05:57-07:16) Fast suite on the final tree (double-fork daemon: the plain `nohup ... &` was
+  killed between tool calls and the first daemon died on a missing cargo PATH — the working
+  launcher exports env.sh's PATH/PKG_CONFIG_PATH/NF_ISO before the fork). Harvest at the
+  deadline: 610 of 791 binaries, ZERO FAILED/TIMEOUT/CRASH; party_door_lock_07000007_live 2/2,
+  probe_07_door_lock 1/1, probe_07_route 1/1, interact_07000007_live 7/7 green in-suite;
+  walkreal_07000007_live (w-tail, unreached) green by direct run. Report written and pushed.
