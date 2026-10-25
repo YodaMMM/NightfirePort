@@ -66,3 +66,18 @@ Progress:
   stale save-state field (InitDrops disasm 0x18c1f0-0x18c220 sets it only for 05/06, as the C).
 - (08:50) Fix: rain step = uniform [wind0, fall, wind1]; snow/rising keep the per-slot table.
   Unit tests re-pinned: rain y step EXACTLY 0.5, x/z constant (no slant exists). env:: 6/6.
+
+## level-0a-rain-indoors-3
+
+Task: the last two reds from the rain fix (branch starts from s/level-0a-rain-indoors-2 merged with origin/master):
+interactables_0700000a_live::armour_pickup_taken_by_walking_over_it and
+escort_follow_07000001_live::escort_at_walking_speed_keeps_the_games_distance_and_the_exit_opens.
+Find what the shifted random stream changes on each path (which draw, which drone/door/channel decision),
+whether the expectation rests on a port-only [S] value; where the walk needs one lucky draw, play it with real
+input; where the port's per-frame draw ORDER differs from the game (Env_Update Rand(20000), AI draws, order
+within a frame [M 0x17bc88/0x1e36f0..0x1e3780]), fix the order. Then both green with rain at game speed, the
+5 recovered tests still green, full suite on the final tree merged with origin/master.
+
+Progress:
+- (10:04) Setup: sandbox warm from the urn-break session; branch s/level-0a-rain-indoors-3 created from
+  origin/s/level-0a-rain-indoors-2, origin/master merged clean; pushing before work starts.
