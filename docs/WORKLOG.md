@@ -65,3 +65,26 @@ the merged tree; the total line in the report.
 
 Progress:
 - (15:26) Branch created, master merged, WORKLOG started. Fast suite starting.
+- (16:05) The stall root-caused: after the guard-15 chase took him out through the hall's north
+  lane, Bond stands in the west corridor at (1.38, 6.7, 11.61) with the hall's west wall segment
+  (x≈1.93, z 11.1-13.1 [D the disc's collision cels — the port's ray fan,
+  walkreal_probe11::dump_07000001_west_wall]) between him and the contact parked at route node 15
+  (6.9, 6.3, 9.1) in AllyLeadWait 0x20. Every close/walk-past target sits inside the hall; the
+  straight-line steering wedges on the wall face (the diagonal to the walk-past point catches the
+  jamb at (1.85, 11.05), t 0.29 [D rays]), the nav's own first hop is a hall-side node ACROSS the
+  wall (the AI's per-path A* routes from the corridor side straight to node[6] (6.99, 11.78)),
+  and the stuck ladder's sidesteps slide ALONG the wall, never the ~1.7 north to the wall's north
+  edge. The openings [D rays]: the middle one (z≈7.3-10.8) is a raised sill (the corridor floor
+  drops to 4.41 south of z≈10; the sill top 6.19), the north one (z≈13.3-16.5) is the lane the
+  AI itself uses — path[0] node[8] (−0.39,14.28) → node[23] (3.39,14.69) → node[7] (6.88,14.62)
+  [D nav nodes+links], and the AI's bounds walls seal z≈9.16 (x −12..2.29) and z≈13.07
+  (x −10..6.14) west of the hall, so the north lane is the walk road.
+- (16:08) Fix (test-side, the player's play): in the no-guards round, when the world segment
+  Bond→contact is blocked and Bond is west of the wall (x < 2.0), walk the north lane back in
+  ((0.6, 14.3) → node 23 → node 7) and close on the contact. The release [M
+  NDrone2_DSTATE_AllyLeadWait 0x15eda8 case 3: no armed peer within 10 (0x41200000, flag 1) →
+  pd = ObjectMissionPathDistance(5.0); pd ≤ −7.0 stays; pd == 0.0 && dist2d ≥ 5.0 stays;
+  otherwise SetState(0x1d)] — checked against the decompile: the port's ALLY_LEAD_WAIT UPDATE
+  arm matches exactly (drone.rs 8892-8903). Inside the hall pd != 0.0 → the release fires; the
+  contact walks his route west and the run reaches the plate → ch 0x10 → level_exit 07000002.
+  walkreal_07000001_live 3/3 on the merged tree (master 4c1f5ffb in).
