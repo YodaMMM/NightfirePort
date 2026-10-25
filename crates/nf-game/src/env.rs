@@ -33,11 +33,14 @@ pub struct Drops {
     pub wind: [f32; 2],
     /// `DAT_003194f4`: the step's extra y, set by `InitDrops` to −0.5 for rain (kind 1) and 0.0 for
     /// snow / rising [M 0x18bf68: `DAT_003194f4 = 0xbf000000` in the `DropType == 1` arm, 0 in the
-    /// else]. `UpdateDrops` folds it into every per-tick step through the wind quad
-    /// `{WindVector, DAT_003194f4, DAT_003194f8} · FRAME_RATE_MUL` → `RandTable2` [M 0x18c580:
-    /// `_lqc2`/`_vmulbc` broadcast FRAME_RATE_MUL (x), `_vadd` into the drop position], so rain
-    /// falls at ~0.55/tick (33 units/s), not the table's snow-speed 0.025–0.1 — the difference
-    /// between a drop drifting ≤ 0.9 m from its box over a 22.5 m fall and up to ~6 m.
+    /// else]. For rain it is the WHOLE y step: the rain branch adds the wind quad
+    /// `{WindVector, DAT_003194f4, DAT_003194f8} · FRAME_RATE_MUL` uniformly to every drop and
+    /// nothing else [M 0x18c580 rain branch: `_lqc2(_WindVector2)` + `_vadd` into each position —
+    /// disasm 0x18c6f8 `beq DropType,1 → 0x18c7e0`; the per-slot `RandTable2` is computed but read
+    /// only by the snow/rising scratchpad walk]. So rain falls at exactly 0.5/tick (30 units/s)
+    /// with NO per-slot slant — a drop keeps the x/z its `AddDrop` draws gave it for its whole
+    /// fall (the wind stays 0 for rain: `InitDrops` zeroes it and the kind-1 path never runs the
+    /// two wind draws [M 0x18c580:139]). Snow/rising keep the table's 0.025–0.1/tick plus slant.
     pub fall: f32,
     pub boxes: Vec<RainBox>,
     /// Clipped boxes of this tick and whether each is active.
@@ -99,12 +102,16 @@ impl Drops {
             (RainBox { min: lo, max: hi }, hi[0] > lo[0] && hi[2] > lo[2])
         }).collect();
         if !self.clipped.iter().any(|b| b.1) { return; }
-        // `RandTable2` = velocity + the wind quad (its y is DAT_003194f4: −0.5 for rain, 0 otherwise
-        // [M 0x18bf68, 0x18c580 — the `_vadd` folds the whole quad into the position]).
+        // Rain steps by the wind quad ALONE — the same vector for every drop [M 0x18c580 rain
+        // branch: `auVar21 = _lqc2(_WindVector2); auVar20 = _vadd(auVar21, auVar20)` per drop; the
+        // per-slot `RandTable2` computed just above is read ONLY by the snow/rising branch's
+        // scratchpad walk `((uint)lVar2 & 0x1f) * 0x10 + iStack_f8` (iStack_f8 = RandTable2
+        // 0x3192f0)]. Snow/rising: `RandTable2[i] = RandTable1[i]·FRM + quad·FRM` [M 0x18c580:185-202].
         let step: Vec<V3> = self.vel.iter().map(|v| [v[0] + self.wind[0], v[1] + self.fall, v[2] + self.wind[1]]).collect();
+        let rain_step = [self.wind[0], self.fall, self.wind[1]];
         for i in 0..self.drops.len() {
             if self.alive[i] {
-                let s = step[i & 31];
+                let s = if self.kind == 1 { rain_step } else { step[i & 31] };
                 let d = &mut self.drops[i];
                 for k in 0..3 { d[k] += s[k]; }
                 let dead = if self.kind == 2 { d[3] < d[1] } else { d[1] < d[3] };
@@ -274,47 +281,57 @@ mod tests {
         assert!(e.alive.iter().all(|&a| !a));
     }
 
-/// Rain falls at the game's speed: `DAT_003194f4 = −0.5` joins every per-tick y step [M 0x18bf68
-/// (the `DropType == 1` arm), 0x18c580 (the wind quad → `RandTable2` → `_vadd` into the position)] —
-/// ~0.55/tick, not the table's 0.025–0.1. A 22.5 m fall (spawn eye+7.5..15, kill eye−7.5) then takes
-/// ≤ 43 ticks, so the per-slot slant (vx, vz ∈ ±0.02/tick [M 0x18bf68: `FRand(0.04) − 0.02`]) drifts
-/// a drop ≤ 0.86 m from its box footprint — rain stays inside its RainBox (the office-lounge symptom:
-/// the slow fall drifted it up to ~6 m into rooms the boxes don't cover). Snow keeps the slow fall
+/// Rain falls at the game's speed AND straight: `DAT_003194f4 = −0.5` is the whole y step and the
+/// x/z stay where `AddDrop` put them. [M 0x18bf68 sets DAT_003194f4 = −0.5 for rain; M 0x18c580
+/// rain branch: each drop's step is `_lqc2(_WindVector2)` + `_vadd` — the uniform wind quad
+/// `{WindVector, DAT_003194f4, DAT_003194f8}·FRM`, NOT the per-slot `RandTable2` (the table loop
+/// runs but is read only by the snow/rising scratchpad walk); disasm 0x18c6f8 `beq DropType,1 →
+/// 0x18c7e0`]. So every rain drop falls at exactly 0.5/tick (30 units/s) with no slant — a
+/// 15–22.5 m fall (spawn eye+7.5..15 [M 0x18c278:38-39], kill max(box floor, eye−7.5)
+/// [M 0x18c278:106-108]) takes 30–45 ticks, and with WindVector 0 for rain [M 0x18bf68 zeroes it;
+/// 0x18c580:139 the kind-1 path skips the two wind draws] the drift is exactly 0 — rain stays in
+/// its RainBox (the office-lounge symptom: the slow fall + slant drifted it up to ~6 m into rooms
+/// the boxes don't cover). Snow keeps the slow per-slot fall
 /// (`DAT_003194f4 = 0` [M 0x18bf68 else arm]) and drifts wide — the sister pins that.
 #[test]
 fn rain_falls_at_the_game_speed_and_stays_in_its_box() {
     let mut rng = Rng::new(7);
     let mut fill = Rng::new(8);
     // A tall open-air box: the clipped floor stays below the kill height, so every drop falls the
-    // full spawn-to-kill 15..22.5 m (the worst drift case).
+    // full spawn-to-kill 15..22.5 m.
     let boxes = vec![RainBox { min: [-30.0, -100.0, -30.0], max: [30.0, 60.0, 30.0] }];
     let mut d = Drops::new(1, boxes, 0x0700_000a, &mut rng);
     assert_eq!(d.fall, -0.5, "InitDrops sets DAT_003194f4 = -0.5 for rain [M 0x18bf68]");
     assert_eq!(d.drops.len(), 0x80, "rain on 07000009..0b runs 128 drops [M 0x18bf68]");
     let eye = [0.0, 10.0, 0.0];
-    let max_drift = 1.0f32; // the [M] bound is 0.86; 1.0 leaves float slack
+    // Track one drop's full fall: y steps exactly 0.5/tick; x/z NEVER change [M 0x18c580 rain
+    // branch — the step is the uniform quad with WindVector 0; no per-slot slant exists].
+    let mut tracked: Option<[f32; 4]> = None;
+    let mut fell = 0.0f32;
+    let mut steps = 0u32;
     for tick in 0..600 {
         d.update(&mut rng, &mut fill, eye, 0.0);
+        let mut matched = false;
         for (p, &a) in d.drops.iter().zip(&d.alive) {
             if !a { continue; }
-            let out = p[0].abs() - 30.0 > max_drift || p[2].abs() - 30.0 > max_drift;
-            assert!(!out, "tick {tick}: rain drop {p:?} left its box by > {max_drift} m");
+            assert!(p[0].abs() <= 30.0 && p[2].abs() <= 30.0,
+                "tick {tick}: rain drop {p:?} outside its box — rain has no slant to drift with");
+            if let Some(t) = tracked {
+                if p[0] == t[0] && p[2] == t[2] && p[1] < t[1] {
+                    let dy = t[1] - p[1];
+                    assert_eq!(dy, 0.5, "rain y step must be exactly 0.5 [M 0x18c580 rain branch], got {dy}");
+                    fell += dy; steps += 1; matched = true;
+                    tracked = Some(*p);
+                }
+            } else if p[1] > eye[1] + 7.0 && p[1] < eye[1] + 15.5 {
+                tracked = Some(*p);
+                matched = true;
+            }
         }
+        if !matched && steps < 10 { tracked = None; } // re-acquire after a death
+        if steps >= 10 { break; }
     }
-    assert!(d.alive.iter().filter(|&&a| a).count() > 60, "the rain stays populated");
-    // The fall speed itself: consecutive y deltas of an alive drop sit in vel.y (−0.1..−0.025) + −0.5.
-    let mut saw_step = false;
-    for i in 0..d.drops.len() {
-        if !d.alive[i] { continue; }
-        let before = d.drops[i][1];
-        d.update(&mut rng, &mut fill, eye, 0.0);
-        if !d.alive[i] { continue; }
-        let dy = before - d.drops[i][1];
-        assert!((0.5..=0.65).contains(&dy), "rain y step {dy} outside −0.5 + vel.y [M 0x18bf68/0x18c580]");
-        saw_step = true;
-        break;
-    }
-    assert!(saw_step, "no alive drop survived a tick to measure the fall");
+    assert!(steps >= 10, "no drop survived 10 ticks to measure the fall (fell {fell})");
 }
 
 /// Sister: snow keeps `DAT_003194f4 = 0` [M 0x18bf68 else arm] — its y step stays in the table's

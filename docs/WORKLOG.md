@@ -51,3 +51,18 @@ tree merged with origin/master.
 Progress:
 - (08:08) Setup: repo cloned fresh (sandbox reset), branch created + pushed; work-slim/ISO
   downloads starting.
+- (08:45) [M census] The shared generator confirmed: Rand_Rand 0x1e3738 / Rand_Random 0x1e36f0 /
+  Rand_FRand 0x1e3780 all step the same SEED_X/SEED_Y (0x30d0a0/4) — drops and AI share one
+  stream. Per-frame rain consumers [M]: Env_Update 0x17bc88 draws Rand(20000) unconditionally
+  under glb_world, then UpdateDrops; rain draws NO wind draws (0x18c580:139 kind!=1 gate) and
+  3 FRands per AddDrop (0x18c278:29-40), capped Added<0x15/frame in slot order (0x18c9fc slti
+  disasm). **The port's real bug [M 0x18c580 rain branch]: rain steps by the UNIFORM wind quad
+  (`_lqc2(_WindVector2)` + `_vadd`), NOT the per-slot RandTable2 (read only by the snow/rising
+  scratchpad walk) — the port applied `step[i & 31]` to rain too, giving every drop a fake
+  ±0.02 slant and a vel.y-varying fall (0.525-0.6) instead of the game's exact straight 0.5.
+  Different death times -> different respawn counts -> the shared stream shifts on every rain
+  level -> the 7 pins break.** [L ee_start snapshots]: CurrentMax is a u16 (0x30d784): 01=0x40,
+  0a=0x80, 05=0x1000 — the port's unsigned split is right; InitBodge=1 in the 01/0a dumps is a
+  stale save-state field (InitDrops disasm 0x18c1f0-0x18c220 sets it only for 05/06, as the C).
+- (08:50) Fix: rain step = uniform [wind0, fall, wind1]; snow/rising keep the per-slot table.
+  Unit tests re-pinned: rain y step EXACTLY 0.5, x/z constant (no slant exists). env:: 6/6.
