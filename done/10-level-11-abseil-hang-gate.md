@@ -22,3 +22,8 @@ say so in the report. Never weaken a decompile-backed test to make code pass.
 
 ---
 claimed-by: sandbox6 at 2026-10-25T04:17Z
+
+---
+## Report (done, 2026-10-25T05:28Z)
+
+Closed by the driver: the report is on `s/level-11-abseil-hang-gate` (docs/reports/level-11-abseil-hang-gate.md); the worker didn't run finish.sh.
