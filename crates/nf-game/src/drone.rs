@@ -2444,7 +2444,7 @@ impl Drone {
             let np = p.nodes[node_id as usize].pos;
             let sq2d = (np[0] - obj_pos[0]).powi(2) + (np[2] - obj_pos[2]).powi(2);
             if !best.is_none_or(|_| sq2d < best_sq2d) { continue; }
-            if !d.nav.node_scan_ok(feet, np) { continue; }
+            if !d.nav.node_scan_ok(d.world, feet, np) { continue; }
             best_sq2d = sq2d;
             best = Some(k);
         }
@@ -2830,7 +2830,7 @@ impl Drone {
             (8, (0.5 * c, -0.5 * s)), (0x10, (-0.5 * c, 0.5 * s)),
         ] {
             let ok = !self.stationary
-                && d.nav.bounds_test(feet, [feet[0] + ox, feet[1], feet[2] + oz], false, false).0 == 1;
+                && d.nav.bounds_test(d.world, feet, [feet[0] + ox, feet[1], feet[2] + oz], false, false).0 == 1;
             if !ok { self.boundary |= bit; }
         }
     }

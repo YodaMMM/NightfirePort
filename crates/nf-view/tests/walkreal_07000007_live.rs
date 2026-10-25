@@ -372,7 +372,6 @@ fn the_group_plate_wakes_the_walkers_and_the_guards_stay_calm() {
 /// raw-add-only tree passed this same leg at t256). Next round: the probe's per-cel BLINK filter
 /// (or the door-state wall handling), then un-ignore.
 #[test]
-#[ignore = "level-07-rook-doorway left-work: the doorway leg freezes under the live boundary clamp — the port's one-cel wall flattening probes walls the game's per-cel BLINK lists would not (the game's Rook crosses the west doorway); needs the straddled-cel filter in the SetBoundryFlags probes [M 0x157d80]"]
 fn the_mission_walker_completes_his_doorway_leg() {
     let mut w = Walker::new(nf_view::load(&iso(), "07000007.bin", false).expect("load 07000007"));
     w.wait_enabled(3000, "the party start");

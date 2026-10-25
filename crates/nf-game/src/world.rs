@@ -627,6 +627,18 @@ impl CollisionWorld {
         out
     }
 
+    /// `Collide_StraddleCels` 0x1eac98 as `AINetwork_BoundsTest` 0x157d80 drives it [M]: the
+    /// HITTEST carries the segment with BOTH endpoints lifted +1.0 in y ([M 0x157d80:106-107]
+    /// — `fStack_16c/fStack_15c = y + 1.0`) and flags 0x201 ([M :109] — the ray portal test),
+    /// and the flood starts at the from-cel ([M :111] — HITTEST+0x80; the game passes the
+    /// drone's cel word or `build_FindCel` of the probe, `NDrone2_MoveTest` 0x155330:75-80).
+    /// `None` = the world carries no cel scope (the tests' flat worlds) — the caller stands in.
+    pub fn bounds_straddle_cels(&self, start: usize, a: V3, b: V3) -> Option<Vec<usize>> {
+        if self.scope.is_none() { return None; }
+        let mut hit = Self::ray_portal_hit([a[0], a[1] + 1.0, a[2]], [b[0], b[1] + 1.0, b[2]]);
+        Some(self.straddle(start, &mut hit))
+    }
+
     /// Debug introspection (fix-08-collision2): the straddle set a capsule query at `a..b` with
     /// radius `r` keeps from `cell` — the `Collide_StraddleCels` result the scoped passes test —
     /// so a missing portal crossing is probeable from a test.

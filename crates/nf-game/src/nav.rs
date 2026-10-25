@@ -47,7 +47,21 @@ pub struct NavPath {
 
 /// A boundary wall (BLINK) between two posts; heights from a ray up (`AIBounds_Link2Cel`).
 #[derive(Clone, Debug)]
-pub struct Wall { pub a: V3, pub b: V3, pub ha: f32, pub hb: f32, pub flags: u32 }
+pub struct Wall {
+    pub a: V3,
+    pub b: V3,
+    pub ha: f32,
+    pub hb: f32,
+    pub flags: u32,
+    /// The runtime cels of the two end posts — `AIBounds_Link2Cel` 0x1d2f18:30-34 stores
+    /// `build_FindCel(post+0x10, glb_world)` in each BNODE+0xc, and `AIBounds_Prepare` 0x1d3008:20-28
+    /// chains every edge into its two end posts' cels' +0x34 BLINK lists (once when both posts share
+    /// a cel). `AINetwork_BoundsTest` 0x157d80 walks ONLY the straddled cels' lists, so an edge is
+    /// tested iff one of these two cels is straddled. `None` = the build world carried no cel scope
+    /// (the tests' flat worlds — the wall then tests on every probe, the old one-cel stand-in).
+    pub ca: Option<usize>,
+    pub cb: Option<usize>,
+}
 
 pub struct Network {
     pub paths: Vec<NavPath>,
@@ -82,7 +96,10 @@ impl Network {
                 }).collect();
                 for l in &p.links {
                     let (Some(a), Some(b)) = (posts.get(l.a as usize), posts.get(l.b as usize)) else { continue };
-                    walls.push(Wall { a: a.0, b: b.0, ha: a.1, hb: b.1, flags: 0 });
+                    // [M AIBounds_Link2Cel 0x1d2f18:30-34] each post's cel = build_FindCel(post+0x10,
+                    // glb_world) at load; the edge joins both cels' BLINK lists (AIBounds_Prepare).
+                    let (ca, cb) = (world.find_cel(a.0), world.find_cel(b.0));
+                    walls.push(Wall { a: a.0, b: b.0, ha: a.1, hb: b.1, flags: 0, ca, cb });
                 }
             } else {
                 let nodes: Vec<NavNode> = p.nodes.iter().map(|n| NavNode { pos: pos(n), flags: match n.raw[0] { 0x2468_abce => 0, f => f } }).collect();
@@ -176,7 +193,7 @@ impl Network {
         // (no collision LOS) — the port's probe takes the nearest evidenced ray mask (8 | 4).
         if !world.line_of_sight([a[0], a[1] + 1.0, a[2]], [b[0], b[1] + 1.0, b[2]], crate::world::LOS_PROBE_8) { return (0, None); }
         if !self.bounds { return (1, None); }
-        self.bounds_test(a, b, near, want_hit)
+        self.bounds_test(world, a, b, near, want_hit)
     }
 
     /// `DroneMove_ObjectMissionPathDistance`'s node qualification (0x153f50:100-121) — the same gate
@@ -188,19 +205,53 @@ impl Network {
     /// ONLY (`AINetwork_BoundsTest`, gated on the boundary count DAT_002c8774 = `self.bounds`) —
     /// the game's scan has NO collision-world line of sight (furniture must not disqualify a
     /// route node).
-    pub fn node_scan_ok(&self, feet: V3, np: V3) -> bool {
+    pub fn node_scan_ok(&self, world: &CollisionWorld, feet: V3, np: V3) -> bool {
         let dy = np[1] - feet[1];
         let h2 = (np[0] - feet[0]).powi(2) + (np[2] - feet[2]).powi(2);
         if h2 + dy * dy > 900.0 || dy.abs() > 4.0 { return false; }
         if dy.abs() > self.slope_dy && dy.abs().atan2(h2.sqrt()) > self.max_slope { return false; }
         if !self.bounds { return true; }
-        self.bounds_test(feet, np, false, false).0 == 1
+        self.bounds_test(world, feet, np, false, false).0 == 1
     }
 
-    /// `AINetwork_BoundsTest` over every wall (one cel).
-    pub fn bounds_test(&self, a: V3, b: V3, near: bool, want_hit: bool) -> (i32, Option<V3>) {
+    /// `AINetwork_BoundsTest` 0x157d80 — the per-cel port. The game builds a HITTEST from `a`/`b`
+    /// (both y +1.0 [M :106-107], flags 0x201 [M :109]) and floods `Collide_StraddleCels` 0x1eac98
+    /// from the FROM cel through the portals the segment crosses, the start cel appended last
+    /// [M :112-113, 0x1eac98:80-84]; BLOCKED unless the TO cel is among the flooded cels
+    /// ([M :114-127] — the `param_4` membership gate; a NULL from-cel blocks at :112's `!= 0`),
+    /// then walks EVERY flooded cel's +0x34 BLINK list — first intersect blocks ([M :140-163];
+    /// the hit-record path needs the VECTOR* out, param_5, `want_hit` here). The lists carry the
+    /// edges `AIBounds_Prepare` 0x1d3008 chained into the cels of their end posts (post cel =
+    /// `build_FindCel` of the post position [M AIBounds_Link2Cel 0x1d2f18:30-34]) — a wall is
+    /// tested iff one of its two post cels is in the straddle set, which is what keeps the 07
+    /// west doorway's jamb walls (whose posts stand in the side cels) out of a probe that only
+    /// crosses the threshold cel. The FROM cel the game reads off the caller's CelPos (the drone's
+    /// word +0x20 for the probes [M 0x14f140:69, NDrone2_MoveTest 0x155330:75]); the port's
+    /// drones carry no cel word, so `find_cel(a)` stands in — the same `build_FindCel` the
+    /// load-time link and the relinks run [M build_LinkToRoom 0x1c9680 → 0x1c8cb0]. Deviation
+    /// [S]: a world without a cel scope (the tests' flat worlds) walks every wall — the old
+    /// one-cel stand-in this body used before the per-cel port.
+    pub fn bounds_test(&self, world: &CollisionWorld, a: V3, b: V3, near: bool, want_hit: bool) -> (i32, Option<V3>) {
+        let cels = world.find_cel(a).and_then(|start| world.bounds_straddle_cels(start, a, b));
+        let Some(cels) = cels else {
+            let all: Vec<&Wall> = self.walls.iter().collect();
+            return self.walk_walls(&all, a, b, near, want_hit);
+        };
+        // The gates: the from-cel must exist (BoundsTest's `param_2 != 0`) and the to-cel must be
+        // among the straddled cels ([M 0x157d80:112-127] — else return 0, blocked).
+        if world.find_cel(b).is_none_or(|to| !cels.iter().any(|&c| c == to)) { return (0, None); }
+        let walls: Vec<&Wall> = self.walls.iter()
+            .filter(|w| cels.iter().any(|&c| Some(c) == w.ca || Some(c) == w.cb))
+            .collect();
+        self.walk_walls(&walls, a, b, near, want_hit)
+    }
+
+    /// The BLINK-list walk `AINetwork_BoundsTest` 0x157d80:140-215 runs per straddled cel — the
+    /// edge/segment test and the proximity carve-outs are unchanged from the port's validated
+    /// reads (the 01 shoji's d 0.416 stop, WORKLOG level-07-rook-doorway).
+    fn walk_walls(&self, walls: &[&Wall], a: V3, b: V3, near: bool, want_hit: bool) -> (i32, Option<V3>) {
         let mut best: Option<(f32, V3)> = None;
-        for w in &self.walls {
+        for w in walls {
             if let Some(i) = intersects(w, a, b) {
                 if !want_hit { return (0, None); }
                 let d = dist3([i[0], a[1], i[2]], a);
@@ -875,7 +926,7 @@ mod tests {
         // A corridor along +x; a boundary post line whose near post sits 0.1 off the creep line.
         let mut n = net(&[[0.0, 0.0, 0.0], [4.0, 0.0, 0.0]], &[(0, 1)], 4);
         n.bounds = true;
-        n.walls.push(Wall { a: [1.65, 0.0, 0.1], b: [1.65, 0.0, 2.0], ha: 2.0, hb: 2.0, flags: 0 });
+        n.walls.push(Wall { a: [1.65, 0.0, 0.1], b: [1.65, 0.0, 2.0], ha: 2.0, hb: 2.0, flags: 0, ca: None, cb: None });
         let mut r = Route::for_path(&n, 0, 0);
         r.creep.step = 3; // target (1.2, 0, 0), next point q ≈ (1.6, 0, 0)
         r.target = r.creep.point(3);
@@ -904,7 +955,7 @@ mod tests {
         n.bounds = true;
         // A post 0.03 off the line right at the previous step point (0.8): the 0.1 post test on
         // feet(0.1)→prev(0.8) fails, and the same post blocks the feet→target read at 0.2.
-        n.walls.push(Wall { a: [0.83, 0.0, 0.03], b: [0.83, 0.0, 2.0], ha: 2.0, hb: 2.0, flags: 0 });
+        n.walls.push(Wall { a: [0.83, 0.0, 0.03], b: [0.83, 0.0, 2.0], ha: 2.0, hb: 2.0, flags: 0, ca: None, cb: None });
         let mut r = Route::for_path(&n, 0, 0);
         r.creep.step = 3; // target (1.2, 0, 0), prev (0.8, 0, 0)
         r.target = r.creep.point(3);
@@ -922,7 +973,7 @@ mod tests {
         assert_eq!(n.move_test(&w, [0.0; 3], [2.0, 0.0, 0.0], false, false).0, 1);
         assert_eq!(n.move_test(&w, [0.0; 3], [2.0, 5.0, 0.0], false, false).0, 0, "|dy| > 4");
         n.bounds = true;
-        n.walls.push(Wall { a: [1.0, 0.0, -1.0], b: [1.0, 0.0, 1.0], ha: 2.0, hb: 2.0, flags: 0 });
+        n.walls.push(Wall { a: [1.0, 0.0, -1.0], b: [1.0, 0.0, 1.0], ha: 2.0, hb: 2.0, flags: 0, ca: None, cb: None });
         assert_eq!(n.move_test(&w, [0.0; 3], [2.0, 0.0, 0.0], false, false).0, 0, "through the wall");
         assert_eq!(n.move_test(&w, [0.0; 3], [2.0, 0.0, 0.0], false, true).0, -1);
         n.walls.clear();
@@ -949,7 +1000,7 @@ mod tests {
     fn boundary_push_distance_is_xz_only() {
         let n = Network {
             paths: vec![],
-            walls: vec![Wall { a: [2.0, 0.0, 0.0], b: [2.0, 0.0, 10.0], ha: 2.0, hb: 2.0, flags: 0 }],
+            walls: vec![Wall { a: [2.0, 0.0, 0.0], b: [2.0, 0.0, 10.0], ha: 2.0, hb: 2.0, flags: 0, ca: None, cb: None }],
             bounds: true, slope_dy: 2.0, max_slope: 0.8727,
         };
         // Feet 0.3 east of the wall at y=1 (inside the band [−0.4, +2]): 3D d² = 1.09 > r²
@@ -968,7 +1019,7 @@ mod tests {
     fn boundary_band_top_is_the_post_height_lerp() {
         let n = Network {
             paths: vec![],
-            walls: vec![Wall { a: [0.0, 0.0, 0.0], b: [10.0, 0.0, 0.0], ha: 1.0, hb: 3.0, flags: 0 }],
+            walls: vec![Wall { a: [0.0, 0.0, 0.0], b: [10.0, 0.0, 0.0], ha: 1.0, hb: 3.0, flags: 0, ca: None, cb: None }],
             bounds: true, slope_dy: 2.0, max_slope: 0.8727,
         };
         // Mid-segment: top = 0 + 1.0 + 0.5·(3.0 − 1.0) = 2.0 — feet at 0.9 are inside → pushed
