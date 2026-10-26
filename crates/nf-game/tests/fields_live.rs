@@ -71,7 +71,7 @@ fn fusebox_07000014_param2_decides_the_live_wire_hurt() {
         // A box with +0x56 == 0: a group-1 wire dying to a kept hit (the Laser's 0x0002 category
         // word [L weapon_data]) MUST hurt (the fixed polarity) — the real cut path [M 0x1adfe8].
         let mut b2 = nf_game::fusebox::FuseBox {
-            placement: b.placement, pos: b.pos, ch: b.ch, groups: Default::default(),
+            placement: b.placement, pos: b.pos, ch: b.ch, groups: Default::default(), script: b.script,
         };
         b2.register_wire(0, 1); // the group-1 wire (the script's event-0xF registration)
         b2.mark_hit(1, 0);
