@@ -50,3 +50,39 @@ fn dump_07000013_placements_by_kind() {
         }
     }
 }
+
+#[test]
+#[ignore = "assertion-free census dump; run with --ignored"]
+fn dump_07000013_scripts() {
+    use nf_formats::levelbin::LevelBin;
+    use nf_formats::nis::{Cmd, Nis};
+    let Some(iso) = iso() else { eprintln!("NF_ISO not set"); return };
+    for archive in ["07000013.bin", "07800013.bin", "07900013.bin", "07000500.bin"] {
+        let data = match std::panic::catch_unwind(|| read_archive(&iso, archive)) {
+            Ok(d) => d,
+            Err(_) => { println!("== {archive}: not present =="); continue; }
+        };
+        let lb = LevelBin::parse(&data).expect("levelbin");
+        let script_count = lb.entries.iter().filter(|e| e.kind == 7).count();
+        println!("== {archive}: {} entries, {script_count} kind-7 scripts ==", lb.entries.len());
+        for se in lb.entries.iter().filter(|e| e.kind == 7) {
+            let nis = match Nis::parse(se.hash(), lb.data(&data, se)) {
+                Ok(n) => n,
+                Err(e) => { println!("script {:08x}: parse failed {e}", se.hash()); continue; }
+            };
+            println!("script {:08x} len {} streams {}", nis.hashcode, nis.length, nis.streams.len());
+            for (si, s) in nis.streams.iter().enumerate() {
+                println!(" stream {si}: keys {}..{}", s.first_key, s.last_key);
+                for c in s.decode() {
+                    match c {
+                        Cmd::Entity { hash, parent, spline, obj_type, params } =>
+                            println!("   Entity glist {hash:08x} parent {parent:?} spline {spline} type {obj_type:02x} params {params:?}"),
+                        Cmd::Anim { skin, script, start } => println!("   Anim skin {skin:08x} script {script:08x} start {start}"),
+                        Cmd::Event { kind, params } => println!("   Event kind {kind:02x} params {params:?}"),
+                        other => println!("   {other:?}"),
+                    }
+                }
+            }
+        }
+    }
+}
