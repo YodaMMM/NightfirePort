@@ -8101,15 +8101,6 @@ pub fn build(level: &Level, cels_only: bool, skeletons: &HashMap<u8, Skeleton>, 
                 }
                 // 0x3B hidden-until-channel (DynamicObject_Create 0x18dbf8:31, param 0 = the s16 channel).
                 if kind == 0x3b && p.params.iter().find(|(i, _)| *i == 0).is_some_and(|(_, v)| *v != 0) { continue; }
-                // level-1b-audit: in the sim-posed build the gated dynamic object rides a posed slot
-                // below (after the sensors) instead of this static instance — the static draw never
-                // collapses when the sim deletes the object (`DynamicObject_Update` 0x18d3b8:26 mode-0
-                // armed-B → obj+0xFE bit 0 → the delete pass), so 0700001b's control-room glass kept
-                // rendering after ch 10 (Drake's gate) fired. In --all the static draw stays.
-                if kind == 0x3b && cels_only { *misc_drawn.entry(0x3b).or_default() += 1; continue; }
-                // The rotors spin on a posed slot below (after the dynamic objects): the static draw
-                // held the placement pose forever [M rotor_update 0x18f568 writes obj+0x50 every tick].
-                if kind == 0x71 && cels_only { *misc_drawn.entry(0x71).or_default() += 1; continue; }
                 let target = if p.by_hash() { level.by_hash.get(&p.hashcode).copied() }
                     else if (p.index as usize) < level.maps[m].objects.len() { Some((m, p.index as usize)) } else { None };
                 let Some((map, object)) = target else { continue };
@@ -8161,6 +8152,15 @@ pub fn build(level: &Level, cels_only: bool, skeletons: &HashMap<u8, Skeleton>, 
                 if obj.flags & 0x10 != 0 && FLAGS_COPYING.contains(&kind) { continue; }
                 if !obj.gfx.leaves.iter().any(|l| !l.batches.is_empty()) || obj.flags & 0x400 != 0 { continue; }
                 if let Some(h) = &nf_hide { if h.split(',').any(|n| !n.is_empty() && obj.name.contains(n)) { continue; } }
+                // level-1b-audit: in the sim-posed build the gated dynamic object rides a posed slot
+                // below (after the sensors) instead of this static instance — the static draw never
+                // collapses when the sim deletes the object (`DynamicObject_Update` 0x18d3b8:26 mode-0
+                // armed-B → obj+0xFE bit 0 → the delete pass), so 0700001b's control-room glass kept
+                // rendering after ch 10 (Drake's gate) fired. In --all the static draw stays.
+                if kind == 0x3b && cels_only { *misc_drawn.entry(0x3b).or_default() += 1; continue; }
+                // The rotors spin on a posed slot below (after the dynamic objects): the static draw
+                // held the placement pose forever [M rotor_update 0x18f568 writes obj+0x50 every tick].
+                if kind == 0x71 && cels_only { *misc_drawn.entry(0x71).or_default() += 1; continue; }
                 // A lock whose object has a LOD variant (the keypads: "Lock - KeypadLocked" →
                 // "Lock - KeypadUnlocked" [D block 0x27]) rides the posed slot space below, so the
                 // unlock's `Control_NextLOD` can swap it.
