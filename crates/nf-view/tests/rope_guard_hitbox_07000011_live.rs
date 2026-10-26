@@ -1,6 +1,6 @@
 //! level-11-rope-guard-hitbox: shots at the roping guard on 07000011 through the REAL world build
 //! (the scoped `CollisionWorld::build_scoped` the Scene uses), from the driver's [L 2026-10-26]
-//! playtest spot — the landing (14.11, 34.03, 0.26) looking up at rope guard p258
+//! reported spot — the landing (14.11, 34.03, 0.26) looking up at rope guard p258
 //! (18.895, 46.516, 1.434, ch 0x13). The port's flight pick is `segment_bullet_scoped(find_cel)
 //! ` [M Bullet_update 0x12e7b0 disasm 0x12f0cc-0x12f0d8 re-feeds the start cel] vs the drone
 //! pick `Collide_PickObj` 0x1eae80 (0x201) + `Collide_Jointy` 0x1ec180.
@@ -101,7 +101,7 @@ fn bond_at(p: [f32; 3]) -> Player { Player { yaw: 0.0, pos: p, target: [p[0], p[
 
 const LEVEL: &str = "07000011.bin";
 const LEVEL_ID: u32 = 0x0700_0011;
-/// The driver's [L 2026-10-26] playtest spot.
+/// The reported spot.
 const LANDING: [f32; 3] = [14.11, 34.03, 0.26];
 
 fn rope_guard_to(sim: &mut Drones, d: &Data, p: &Player, want: u8, max: u32) -> Option<(usize, u32)> {
