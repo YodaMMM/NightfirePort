@@ -63,6 +63,76 @@ fn take_burning_stance(sim: &mut nf_view::scene::Sim, box_pos: [f32; 3], wire: [
     best
 }
 
+/// The wire object's VISIBLE geometry: its local bounds (`Drones::wire_geo`, from the box script's
+/// Entity streams' meshes) through the live entity matrix — the same world slab the bullet pass
+/// tests the round against (`Collide_PickObj` 0x1eae80 → obj+0xD0 → `FuseBox_Update`
+/// 0x1adfe8:88-123). None when no geometry resolves (the pass falls back to the translation
+/// sphere — 07000008's boxes do, 07000014's don't: their cables sit 1.5 m above the translation).
+fn wire_world_box(sim: &nf_view::scene::Sim, obj: usize) -> Option<([f32; 3], [f32; 3])> {
+    match sim.drones.scripts.objects.list.get(obj)? {
+        Some(nf_game::nis::Obj::Entity { hash, matrix, .. }) => {
+            let (lo, hi) = sim.drones.wire_geo.get(hash)?;
+            let (mut wlo, mut whi) = ([f32::MAX; 3], [f32::MIN; 3]);
+            for cx in 0..2 { for cy in 0..2 { for cz in 0..2 {
+                let p = [if cx == 0 { lo[0] } else { hi[0] }, if cy == 0 { lo[1] } else { hi[1] }, if cz == 0 { lo[2] } else { hi[2] }];
+                let w = nf_formats::placement::transform(matrix, p);
+                for c in 0..3 { wlo[c] = wlo[c].min(w[c]); whi[c] = whi[c].max(w[c]); }
+            } } }
+            Some((wlo, whi))
+        }
+        _ => None,
+    }
+}
+
+/// Where a player aims to burn the wire: the VISIBLE cable's centre, else the translation.
+fn wire_aim_point(sim: &nf_view::scene::Sim, obj: usize) -> [f32; 3] {
+    if let Some((lo, hi)) = wire_world_box(sim, obj) {
+        return [(lo[0] + hi[0]) * 0.5, (lo[1] + hi[1]) * 0.5, (lo[2] + hi[2]) * 0.5];
+    }
+    nf_game::drone::Drones::script_obj_pos(&sim.drones.scripts, &sim.data(), obj).unwrap_or([0.0; 3])
+}
+
+/// Hold fire and walk the crosshair onto the wire's VISIBLE geometry the way a player does: each
+/// tick aims at `aim + delta`, reads the Laser round the tick spawned and shifts `delta` by that
+/// round's miss against the wire's own bounds. `done` is the test's own success probe. Returns
+/// whether `done` fired.
+fn burn_wire(scene: &mut nf_view::scene::Scene, obj: usize, max_ticks: u32, mut done: impl FnMut(&nf_view::scene::Sim) -> bool) -> bool {
+    let mut delta = [0.0f32; 3];
+    for _ in 0..max_ticks {
+        let round = {
+            let sim = scene.sim.as_mut().unwrap();
+            let aim = wire_aim_point(sim, obj);
+            let target = [aim[0] + delta[0], aim[1] + delta[1], aim[2] + delta[2]];
+            let head = sim.bond.head();
+            let dir = [target[0] - head[0], target[1] - head[1], target[2] - head[2]];
+            let l = (dir[0] * dir[0] + dir[1] * dir[1] + dir[2] * dir[2]).sqrt().max(1e-4);
+            sim.bond.yaw = dir[0].atan2(dir[2]);
+            sim.bond.pitch = (dir[1] / l).asin() / std::f32::consts::FRAC_PI_2;
+            let n0 = sim.drones.player_bullets.len();
+            sim.step_bond(Input::default(), true, false, false);
+            let hit = done(sim);
+            if hit { None } else {
+                sim.drones.player_bullets.get(n0).filter(|b| b.weapon == 0x4e)
+                    .map(|b| (b.pos, b.dir, b.speed))
+            }
+        };
+        if round.is_none() && done(scene.sim.as_ref().unwrap()) { return true; }
+        if let Some((pos, dir, speed)) = round {
+            let sim = scene.sim.as_ref().unwrap();
+            if let Some((lo, hi)) = wire_world_box(sim, obj) {
+                let centre = [(lo[0] + hi[0]) * 0.5, (lo[1] + hi[1]) * 0.5, (lo[2] + hi[2]) * 0.5];
+                let e = [pos[0] + dir[0] * speed, pos[1] + dir[1] * speed, pos[2] + dir[2] * speed];
+                let ab = [e[0] - pos[0], e[1] - pos[1], e[2] - pos[2]];
+                let ab2 = ab[0] * ab[0] + ab[1] * ab[1] + ab[2] * ab[2];
+                let t = if ab2 > 1e-9 { (((centre[0] - pos[0]) * ab[0] + (centre[1] - pos[1]) * ab[1] + (centre[2] - pos[2]) * ab[2]) / ab2).clamp(0.0, 1.0) } else { 0.0 };
+                let closest = [pos[0] + ab[0] * t, pos[1] + ab[1] * t, pos[2] + ab[2] * t];
+                for c in 0..3 { delta[c] = (delta[c] + (centre[c] - closest[c])).clamp(-0.8, 0.8); }
+            }
+        }
+    }
+    done(scene.sim.as_ref().unwrap())
+}
+
 /// The laser burns the 07000008 GuardRoom fusebox's wire → ch 137 → the doorway bolt opens.
 /// Fail-first on the pre-fix tree: no wire registration existed and E did the cut.
 #[test]
@@ -217,38 +287,26 @@ fn the_07000014_sabotage_cuts_through_the_real_laser() {
             let fb = &sim.drones.fuseboxes[f];
             eprintln!("[sab] box {} ch {:?} wires {:?}", fb.placement, fb.ch,
                 fb.alive_wires().map(|(g, k, o)| (g, k, o)).collect::<Vec<_>>());
-            let list: Vec<(usize, usize, [f32; 3])> = fb.alive_wires()
-                .filter_map(|(g, k, o)| nf_game::drone::Drones::script_obj_pos(&sim.drones.scripts, &sim.data(), o).map(|p| (g, k, p)))
-                .collect();
+            let list: Vec<(usize, usize, usize)> = fb.alive_wires().map(|(g, k, o)| (g, k, o)).collect();
             (f, list)
         };
         assert!(!wires.is_empty(), "box {fb}: the script registered wires (group 0 AND group 1 [L NF_SCRIPTLOG])");
-        // Burn each wire: settle near the box, slide inside the Laser's range, aim through it,
-        // hold fire.
-        for &(g, k, wp) in &wires {
+        // Burn each wire: settle near the box, slide inside the Laser's range toward the VISIBLE
+        // cable (the wire object's world bounds — on 07000014 the entity translation sits 1.5 m
+        // below the cables [D OBJECT_GreenWire1/BlueWire1 local y 1.49..1.72]), aim through it,
+        // hold fire with the player's own aim-walk onto the cable.
+        for &(g, k, obj) in &wires {
             {
                 let sim = scene.sim.as_mut().unwrap();
                 let bp = sim.drones.fuseboxes[fb].pos;
-                let dist = take_burning_stance(sim, bp, wp);
-                eprintln!("[sab] wire at {wp:?} stance dist {dist:.2}");
+                let aim = wire_aim_point(sim, obj);
+                let dist = take_burning_stance(sim, bp, aim);
+                eprintln!("[sab] wire obj {obj} visible at {aim:?} stance dist {dist:.2}");
                 assert!(dist < 3.6, "the stance reaches box {fb}'s wire (Laser range 4.0)");
             }
             let draw = Input { switch_to: Some(0x4e), ..Default::default() };
             for _ in 0..40 { scene.sim.as_mut().unwrap().step_bond(draw, false, false, false); }
-            let mut dead = false;
-            for _ in 0..200u32 {
-                {
-                    let sim = scene.sim.as_mut().unwrap();
-                    let head = sim.bond.head();
-                    let dir = [wp[0] - head[0], wp[1] - head[1], wp[2] - head[2]];
-                    let l = (dir[0] * dir[0] + dir[1] * dir[1] + dir[2] * dir[2]).sqrt().max(1e-4);
-                    sim.bond.yaw = dir[0].atan2(dir[2]);
-                    sim.bond.pitch = (dir[1] / l).asin() / (std::f32::consts::FRAC_PI_2);
-                }
-                scene.sim.as_mut().unwrap().step_bond(Input::default(), true, false, false);
-                let sim = scene.sim.as_ref().unwrap();
-                if sim.drones.fuseboxes[fb].groups[g].slots[k].is_none() { dead = true; break; }
-            }
+            let dead = burn_wire(&mut scene, obj, 200, |sim| sim.drones.fuseboxes[fb].groups[g].slots[k].is_none());
             eprintln!("[sab] box {fb} wire g{g}k{k} dead {dead} ch {want:#x} {}", scene.sim.as_ref().unwrap().drones.channels.on(want as u32));
             assert!(dead, "the laser burns box {fb}'s group-{g} wire");
         }
