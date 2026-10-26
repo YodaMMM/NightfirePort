@@ -2301,7 +2301,7 @@ mod tests {
     }
 
     /// level-11-stairwell-bullet-wall: the assertion-free bullet-path census. From each reported
-    /// Bond spot toward the rope guards [D task brief], list EVERY triangle the port's collision
+    /// Bond spot toward the rope guards [D the reported spot], list EVERY triangle the port's collision
     /// sets hold on the ray (static / missile cage / dynamic), with the owner's identity (map,
     /// object, name, glist flags), the material byte and the pass flags — the candidate invisible
     /// wall the game's bullet passes. Run with --ignored --nocapture.
@@ -2417,7 +2417,7 @@ mod tests {
             stat_src.push((inst.map, inst.object));
             stat_src_plc.push(inst.placement.flags);
         }
-        // The reported spot and aim [D task brief]: yaw -1.505, pitch -0.035 → the port's look()
+        // The reported spot and aim [D the reported spot]: yaw -1.505, pitch -0.035 → the port's look()
         // lanes [M crates/nf-game/src/player.rs Bond::look]: p = pitch·π/2, dir = [cp·sy, sp, cp·cy].
         let s = [22.40f32, 30.09, 1.42];
         let p = (-0.035f32) * (std::f32::consts::PI / 2.0);

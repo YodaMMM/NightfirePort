@@ -31,7 +31,7 @@ fn by_placement(scene: &Scene, p: usize) -> usize {
         .unwrap_or_else(|| panic!("stairwell guard placement {p} present at load [D]"))
 }
 
-/// The reported repro spot [D task brief]: Bond root (15.33, 26.69, 1.33). The abseiler p258's
+/// The reported repro spot [D the reported spot]: Bond root (15.33, 26.69, 1.33). The abseiler p258's
 /// rope anchor is (18.895, 46.516, 1.434) [D]; the hang parks him ~3 above the height Bond held
 /// when the wake plate fired [M NDrone2_DSTATE_AbseilSlide 0x169730:55-58] — here the plate spot's
 /// 29.37, so he hangs at ~32.25, and the spot→guard ray crosses the fudge's 0x40 plane.
