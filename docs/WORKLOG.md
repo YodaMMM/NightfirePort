@@ -109,3 +109,13 @@ report + finish.
   :205/:229/:257/:282 + every Collide_Intersect/Intersect_CylGeom caller with the player],
   which 0x40 faces are body-solid (1b boundary) vs walkable-through (0c skylight glass [L]),
   port that rule only, keep all six + the 0c roof-walk green. Suite setup starting.
+- (23:15 UTC, 10-26) level-0c-display-hatch-4: the 0x800 words are the cylinder SHAPE word
+  (HITTEST+0x94), not the filter flags — the filter flags are HITTEST+0x98 = BL+0x7d8,
+  written 0 by Player_Collision 0x194df0:88 for every substate (zipline 15: 0x1c0, no 0x800);
+  [L ee_start_05.bin BL 0x16cf0f0: +0x94=0x0800, +0x98=0x0000, +0x9a=0x0000]. The hatch-3
+  blanket mat-0x40 body reject REVERTED — glass is body-solid (the 1b boundary stops the
+  float), the feet ray's 0xc flags (bit 0x8) and the bullet 0x800 masks do the pass-through.
+  All six broken tests green again (walkreal_0700001b 8/0+1i, walkreal_07000001 3/0,
+  walkreal_07000008 4/0, walkreal_07000011 1/0, fix_npc_doors 1/0, mp_perf_16 2/0);
+  fix_0c_hatch_live 5/0 with the revert (the [L] roof route never touches the pane);
+  nf-game --lib 578/0. Full suite not run (sandbox kills background jobs; next session).
