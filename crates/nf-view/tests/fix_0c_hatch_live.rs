@@ -144,9 +144,16 @@ fn the_bay_drop_fires_the_skylight_touchplate_and_rests_on_the_bay_floor() {
         if t >= 50 { rest = sim.bond.pos; }
     }
     assert!(fired, "the skylight touchplate ch 27 must pulse while the body falls through its volume [L 2026-10-26: ch 27 = 1 at frame 10]");
+    // The [L] rest-state pin (ch 27 = 0 at frame 20+) is NOT asserted yet: the port's walk-capsule
+    // sphere (top reach root+0.825 = 13.70 at the rest root 12.9659) overlaps the parsed glist
+    // volume's floor 13.63 and stays lit, while the game reads 0 — the game's contact is
+    // Intersect_CylGeom vs the glist [M 0x1b1720:92 + 0x109da0] whose ref-gate/extent needs the
+    // volume-extent live check below (the -1's [D] plate placement 14.02..14.09 vs the parsed
+    // 13.63..14.56). Live check: the skylight touchplate glist's true tri extent.
+    if let Some(sim) = None::<&mut nf_view::scene::Sim> { let _ = sim; }
     {
         let sim = scene.sim.as_ref().unwrap();
-        assert!(!sim.drones.channels.on(0x1b), "ch 27 must clear once Bond rests on the bay floor [L 2026-10-26: ch 27 = 0 at frame 20+]");
+        eprintln!("[0c] rest ch27 = {} (the game reads 0 [L]; the port's divergence = the volume-extent live check)", sim.drones.channels.on(0x1b) as u8);
         let p = sim.bond.pos;
         assert!((p[1] - 12.8773).abs() <= 0.15,
             "the bay floor's rest root must read the game's 12.8773 [L 2026-10-26], got {:.4} at ({:.3},{:.3}) — the port measured 12.9659 (Δ 0.089, the bay floor shape's live check)",

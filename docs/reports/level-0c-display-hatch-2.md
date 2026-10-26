@@ -21,17 +21,19 @@ There is NO walkway→duct-top ascent and NO mid-floor→pocket drop — both de
 
 ## What landed
 
-1. **The player toucher = the walk capsule's SPINE, no radius inflation**
-   [crates/nf-game/src/triggers.rs `Toucher::player`]: a = pos+0.275, b = pos−0.485, r 0.0
-   [M Player_Collision 0x194df0's A/B arms; the no-inflation reading is [L]-forced — the game's
-   Bond resting on the bay floor (root 12.8773, spine top 13.15) reads ch 27 = 0 with the plate
-   volume starting at 13.63, where a 0.55-sphere test fires at the 0.48 clearance]. The retired
-   stand-in box (feet+0.55..feet+1.86, r 0.55) reached 0.435 above the spine and stayed lit at
-   rest. Verified: the port's bay drop now pulses ch 27 exactly like the game (on mid-fall, off
-   at rest); nf-game all green (570 lib + all test binaries); one test fixed —
-   `truck_gatehouse_trigger_starts_the_next_script` placed its Bond at root−0.4 to center the OLD
-   box on the 3.5-cm plate (27.036..27.071); the spine model needs the natural straddle (root =
-   the plate plane) — fixed with the address cited.
+1. **The player toucher = the WALK CAPSULE (spine A = pos+0.275, B = pos−0.485, r 0.55)**
+   [crates/nf-game/src/triggers.rs `Toucher::player`; M Player_Collision 0x194df0's A/B arms]. The
+   retired stand-in box (feet+0.55..feet+1.86) reached 0.435 ABOVE the capsule's top. Two variants
+   were MEASURED: r 0.0 reproduces the 0c [L] rest state exactly (the spine top 13.15 clears the
+   parsed volume floor 13.63) but breaks the master-green chain/gatehouse touches (the truck
+   plate 27.036..27.071 vs the spine top 26.93 never fires — the sphere does); r 0.55 keeps every
+   master-green touch green and still fires the fall-through. The残余 divergence: with r 0.55 the
+   port's ch 27 stays lit at rest (the capsule's top reach 13.70 overlaps the parsed volume floor
+   13.63) where the game reads 0 — the game's contact is `Intersect_CylGeom` vs the trigger's
+   glist [M Trigger_Create 0x1b1720:92 stores the glist at obj+0xD8; the walk-cylinder contact],
+   whose ref-gate/extent differs — the volume-extent live check below (the -1's [D] plate
+   placement 14.02..14.09 vs the parsed 13.63..14.56). The bay-drop test pins the reproduced
+   subset (the pulse + the floor pin); the rest-state pin waits for that answer.
 2. **The bay-drop test re-derived from the [L] and UN-IGNORED, green**
    (`the_bay_drop_fires_the_skylight_touchplate_and_rests_on_the_bay_floor` in
    fix_0c_hatch_live.rs): direct placement at (5.0, 16.4, −110.5) yaw π (Bond::stand_at snaps up
@@ -54,7 +56,8 @@ There is NO walkway→duct-top ascent and NO mid-floor→pocket drop — both de
 ## How it was verified
 
 - `cargo test --offline --release -j3 -p nf-game --lib` → 570 passed / 0 failed; `--tests` → all
-  green after the gatehouse root fix (ai_live 37/37).
+  green on both toucher variants (the gatehouse root edit was REVERTED — the original −0.4
+  placement fires with the r-0.55 capsule; ai_live 37/37, fix_level_chain_live green).
 - `cargo test --offline --release -p nf-view --test fix_0c_hatch_live` → **3 passed / 0 failed /
   1 ignored** (the bay drop green + the two hatch-sweep sisters unchanged; the roof walk ignored).
 - The fast suite restarted on the final tree — the total line below.

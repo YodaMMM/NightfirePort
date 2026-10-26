@@ -72,3 +72,7 @@ report + finish.
   ignored: the port's SS #179 rests risen (matrix y 20.0) and a dynamic poly at z ~ -110.66
   freezes the mouth — the game walks it unburned [L 2]. Report + live checks filed; suite on the
   final tree running.
+- (18:20 UTC, 10-26) Toucher settled at the walk CAPSULE with r 0.55 (the r-0.0 variant broke the
+  master-green chain/gatehouse touches — measured, reverted); the bay-drop test pins the pulse +
+  the floor pin, the rest-state ch 27 divergence documented (the volume-extent live check).
+  fix_0c_hatch_live 3 passed / 1 ignored. Suite restarted on the final tree.

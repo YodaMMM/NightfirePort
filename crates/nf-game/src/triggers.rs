@@ -169,16 +169,18 @@ pub struct Trigger {
 pub struct Toucher { pub a: V3, pub b: V3, pub r: f32, pub drone: bool, pub skin: u32, pub contain: bool }
 
 impl Toucher {
-    /// Bond in the normal stance: the WALK CAPSULE's SPINE the game's collision pass registers
-    /// against trigger glists — A = pos + up·0.275, B = pos + up·(0.55 − cc) [M Player_Collision
+    /// Bond in the normal stance: the WALK CAPSULE the game's collision pass registers against
+    /// trigger glists — A = pos + up·0.275, B = pos + up·(0.55 − cc) [M Player_Collision
     /// 0x194df0's A/B arms, cc 1.0347 standing → B = pos − 0.485; the feet arg here is pos − 0.6,
-    /// so a = feet + 0.875, b = feet + 0.115], r 0.0 — the body-volume test carries NO radius
-    /// inflation [L 2026-10-26, 0700000c: Bond resting on the bay floor (root 12.8773, spine top
-    /// 13.15) reads ch 27 = 0 with the skylight volume at y 13.63..14.56 — a radius-0.55 sphere
-    /// test would fire at 0.48 clearance; the falling spine crossing the volume pulses it]. The
-    /// old stand-in box (feet+0.55..feet+1.86, r 0.55) reached 0.435 above the spine's top and
-    /// stayed lit at rest. The crouched capsule's shorter B is not modelled here [S] unverified.
-    pub fn player(feet: V3) -> Toucher { Toucher { a: [feet[0], feet[1] + 0.875, feet[2]], b: [feet[0], feet[1] + 0.115, feet[2]], r: 0.0, drone: false, skin: 0, contain: true } }
+    /// so a = feet + 0.875, b = feet + 0.115], r 0.55. The retired stand-in box
+    /// (feet+0.55..feet+1.86) reached 0.435 ABOVE the capsule's top and stayed lit at rest where
+    /// the game reads clear [L 2026-10-26, 0700000c: Bond resting on the bay floor (root 12.8773)
+    /// reads ch 27 = 0 — the capsule's top 13.70 clears the parsed plate volume's floor 13.63 by
+    /// 0.07 only because the parse rides the glist's 13.63..14.56 bound while the -1's [D]
+    /// placement puts the plate at 14.02..14.09; with r 0 the truck gatehouse plate
+    /// (27.036..27.071, root 26.654 → spine top 26.93) never fires — the 0.55 sphere does]. The
+    /// crouched capsule's shorter B is not modelled here [S] unverified.
+    pub fn player(feet: V3) -> Toucher { Toucher { a: [feet[0], feet[1] + 0.875, feet[2]], b: [feet[0], feet[1] + 0.115, feet[2]], r: 0.55, drone: false, skin: 0, contain: true } }
 }
 
 /// One class-5 (BULLET) contact for this tick: a projectile's per-tick flight segment and its
