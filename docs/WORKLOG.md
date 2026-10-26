@@ -62,3 +62,13 @@ report + finish.
   edge holds Bond back from the 6.27 pocket) to find the real route into the display case, port
   what the port lacks, re-derive + un-ignore the two ignored 0c tests. Sandbox kept repo/ISO/
   work/target from the previous session; branch pushed as checkpoint.
+
+- (18:25 UTC, 10-26) level-0c-display-hatch-2 SESSION: the route settled — the bay drop from the
+  walkway side is the game's way in (the ascent + mid-floor legs are [L]-dead). The player toucher
+  ported to the walk capsule's SPINE with no radius inflation [M 0x194df0's A/B; L-forced by the
+  rest-state ch 27 = 0] — the bay drop now pulses ch 27 exactly like the game; nf-game green (the
+  gatehouse test's -0.4 root hack fixed for the spine model); the bay-drop test re-derived from
+  the [L] and UN-IGNORED GREEN (3 passed / 1 ignored in fix_0c_hatch_live). The roof walk stays
+  ignored: the port's SS #179 rests risen (matrix y 20.0) and a dynamic poly at z ~ -110.66
+  freezes the mouth — the game walks it unburned [L 2]. Report + live checks filed; suite on the
+  final tree running.
