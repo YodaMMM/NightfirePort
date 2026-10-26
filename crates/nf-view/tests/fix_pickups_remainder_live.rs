@@ -71,6 +71,12 @@ fn pickup_census_every_level_creates_and_offers_its_pickups() {
         let expected: Vec<(u16, u16, i16, [f32; 3])> = match nf_formats::level::Level::parse(&read_archive(&iso, lv)) {
             Ok(lv2) => lv2.maps[lv2.main_map().unwrap_or(0)].placements.iter()
                 .filter(|p| p.flags & 0xff == 0xf0)
+                // pickup-medal-gate: the kind-6 rows create ONLY with the level's gold medal
+                // recorded [M Pickup_Create 0x18dda0:93-95]; this census loads the fresh-boot
+                // zero `bonus[0]` word [L ee_start_05 0x2e1b88], so the game itself would create
+                // nothing for them — they are not in the expected set here (the gated arm is
+                // pinned by gold_medal_gate + the interactables no-medal sisters).
+                .filter(|p| param(p, 0) as u16 != nf_game::pickup::kind::BOND_BONUS)
                 .map(|p| (param(p, 0) as u16, param(p, 1) as u16, param(p, 2) as i16, p.translation))
                 .collect(),
             Err(e) => { failures.push(format!("{level_name}: level re-read failed {e}")); Vec::new() }
