@@ -34,3 +34,14 @@ exit restores the player view, idle without Action) — all green. An earlier dr
 through a re-routed Player_Activate and the exit tick drain 9→8; fixed to the decompile structure
 (edge inside Monitor_Update, separate drain arm) with the decompile read directly
 (work/decomp/ACTION.ELF/001afcc8). Full suite re-running on the merged tree for the report.
+
+Done (22:30 UTC, final commit): the camera view is playable on 07000014 — Action at a security
+console enters the game's camera view on the group's first CameraList camera, the edge cycles
+forward with no wrap, the view exits past the last camera (or on the watched camera's death with no
+replacement) and restores the player view with the controls live, and the console re-arms after the
+9→4→0 cooldown. The active view camera (pos/yaw/pitch from the watched sensor's matrix) is exposed
+per tick via Sim::monitor_camera() and consumed by nf-view's camera pick; the SecCamPane overlay and
+the watched-camera/player mesh hides are the follow-up draw-side task (listed in the report).
+Tests: nf_game lib 580/0, nf_view+nf_formats+nf_audio libs 208/0, monitor_view_07000014_live 3/0;
+the 6 remaining suite failures are out-of-task (3 disc_golden expected on the slim ISO, identity_disc
+sector-count doc mismatch, fix_0c_pylon_live ×2) — triaged in docs/reports/level-14-camera-view.md.

@@ -139,7 +139,31 @@ port now mirrors that structure, and the decompile file was re-read line by line
 
 ## Full suite (final tree)
 
-(pending — filled in at finish)
+The sandbox reaps every detached/background process at tool-call boundaries, so the full ~111-minute
+suite cannot complete inside this session's window (the 21:57 UTC background start was killed with
+0 bytes of output; a controlled `setsid nohup … & disown` probe confirmed the reaping). The test
+binaries were instead run through the same fast runner (`python3 tools/test/suite.py --only …`) in
+the foreground on the FINAL tree (merge of origin/master batch-1026j + this task's commits):
+
+| binaries | result |
+|---|---|
+| `nf_game` (lib — 585 unit tests incl. monitor::/sensor::/mission::) | 580 passed, 0 failed, 5 ignored |
+| `nf_view`, `nf_formats`, `nf_audio` (lib) | 208 passed, 0 failed, 0 ignored |
+| `monitor_view_07000014_live` (the task's live tests) | 3 passed, 0 failed |
+| the 8 binaries that failed the earlier pre-merge baseline suite | 52 passed, 6 failed |
+
+843 passed, 6 failed across the binaries run (each binary green-unless-noted; no TIMEOUT/CRASH).
+The 6 failures are OUT OF TASK and pre-existing (triaged on the merged tree):
+- `disc_golden` ×3 (bigf header/tables/directory tree) — expected on the slim ISO per the task rules;
+  the reads disagree with the golden TSVs around `/DRIVING/MIS01.MUS` (BIGF "too small" + 1499
+  manifest + 159 dir-tree diffs) — a disc-layout/BIGF reading issue owned elsewhere;
+- `identity_disc::the_real_disc_passes_the_identity_check` — the disc is read fine (NIGHTFIRE SLUS-20579
+  NTSC 1.00) but the sector count ≠ docs/build-identity.md's 1,191,072 (env/doc mismatch, not code);
+- `fix_0c_pylon_live` ×2 — the 0C pylon view checks; 0C rendering, untouched by this task's diff
+  (monitor/sensor/drone-edge/scene-freeze only).
+For contrast, the earlier pre-merge baseline (suite.out of 20:08 UTC) had 8 failed binaries; the
+master merge fixed 5 of them (level_reload_live, mp_world_sync_live, use_key_census_live,
+walk_07000005_live, gate_guard_truck_live now all pass).
 
 ## What's left (draw side, a separate task)
 
@@ -180,4 +204,13 @@ port now mirrors that structure, and the decompile file was re-read line by line
 
 ## Usage
 
-(to be filled at finish)
+My own session's token/context/cost figures are not visible to me (the environment shows me no
+token, credit or context-window counter for this conversation). Figures the environment DID show,
+copied exactly from the subagent results' footer ("Tokens ->" lines):
+- independent-audit subagent: prompt 112335, completion 4942, total 117277;
+- sandbox-availability probe: prompt 7608, completion 437, total 8045;
+- suite monitor probe: prompt 8158, completion 882, total 9040;
+- suite restart probe: prompt 18185, completion 1176, total 19361;
+- targeted-binary suite runs: prompt 36466, completion 1175, total 37641;
+- remaining-crate-lib suite run: prompt 9897, completion 377, total 10274.
+No cost figures were shown anywhere.
