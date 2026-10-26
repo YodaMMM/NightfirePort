@@ -52,6 +52,20 @@ fn the_hatch_sweep_takes_the_game_rate_ticks() {
     let sim = scene.sim.as_mut().unwrap();
     let ss138 = sim.drones.sss.of_placement(138).expect("ventmesh-front SS exists [D #138]");
     let ss179 = sim.drones.sss.of_placement(179).expect("VentBlockingPoly SS exists [D #179]");
+    // [D] the REST pose is the placement transform: the placement t = (5.7526, 16.2985, −112.2475)
+    // and the 0x19 path record 5's key0 = the same spot, key1 = (5.7526, 20.0, −112.2475) — the
+    // 2×2 glass pane (its 2 collision tris, mat 0x40 [D coll-obj 45/114]) covers the vent opening
+    // (wall z −112.25..−112.34, opening y 15.03..17.42 [D]) at rest and RISES on the burn. The
+    // port's key parse reads the record sequentially (door::parse_keys), so key0 = rest; the
+    // round-2 "rests risen at 20.0" note read the probe's POST-BURN dump. Glass never collides
+    // the body either way [M Collide_Filter 0x1ed888:7-9 + the 0x800 collide-flags word].
+    {
+        let m = sim.drones.sss.list[ss179].matrix;
+        let tr = [m[3][0], m[3][1], m[3][2]];
+        assert!((tr[0] - 5.7526).abs() < 0.01 && (tr[1] - 16.2985).abs() < 0.01
+            && (tr[2] + 112.2475).abs() < 0.01,
+            "SS #179 rests at the placement transform (the vent glass DOWN) [D placement + 0x19 record 5 key0], at {:?}", tr);
+    }
     sim.step_bond(Input::default(), false, false, false);
     assert!(sim.drones.channels.on(18), "the AND mux #505 raised ch 18 [D #505]");
     // Count the ticks from the mux's rise to each SS's last key.
@@ -165,18 +179,23 @@ fn the_bay_drop_fires_the_skylight_touchplate_and_rests_on_the_bay_floor() {
     }
 }
 
-/// The ROOF WALK [L 2026-10-26]: placed on the roof at (5.75, 17.6, −110.6) walking south, the
-/// game descends its south slope — y 17.6 → 17.4666 (z −112.62) → 17.3904 (−113.58) → 17.1399
+/// THE ROOF WALK, re-derived (round 3) — the duct leg's [L]-proven end is the BALCONY, not the
+/// case. The [L 2026-10-26] roof walk (fresh boot, placed (5.75, 17.6, −110.6) walking south)
+/// descends the south slope — y 17.6 → 17.4666 (z −112.62) → 17.3904 (−113.58) → 17.1399
 /// (−114.38) → 16.7153 (−115.18) → 16.1164 (−115.98) → 15.6536 from z −116.78 on (to −120.53) —
-/// and ch 27 STAYS 0 the whole walk (walking on the roof never fires the skylight; the plate's
-/// volume is inside the bay). The port CANNOT walk this leg yet: its SS #179 VentBlockingPoly
-/// rests at matrix y 20.0 (the game's rest is 16.3 [L pending — the -1's check 3 was not run]) and
-/// a dynamic poly with its north face at z ≈ −110.66 freezes the capsule at (5.75, 18.28,
-/// −110.11) — the game walks the same spot unburned [L 2026-10-26]. IGNORED until the blocker's
-/// rest pose/keys are fixed (the -1 report's live check 3 + the report's SS-keys live check).
+/// and 15.6536 = the balcony 14.61 + 1.0436, the standing root offset (the mid floor's [L] rest
+/// 12.3877 over its ~11.35 surface reads the same +1.04). ch 27 STAYS 0 the whole walk [L].
+/// The old "open hole carries Bond down" reading (y < 9.5) is DEAD: the bay's south end is a
+/// solid wall (room_storage01 mat-0x06 quads, plane z −112.34, y 11.62..13.57 [D coll-scan])
+/// with the ventblocker_01/02 glass panes at z −112.36 behind it [D], and the game holds a
+/// south-walking body on the bay floor [L 2026-10-26] — no pocket drop from the bay. The port's
+/// roof walk used to freeze at z −110.11 = −110.66 + r 0.55 on the STATIC skylight-lantern glass
+/// (room_sk1 mat-0x40 quads, y 17.21..24.47 [D coll-scan]) — glass never collides the player's
+/// body [M Collide_Filter 0x1ed888:7-9 rejects surf & 0x40 under the 0x800 collide-flags word
+/// Player_Collision 0x194df0 writes in every substate; the [L] walk crosses it unburned],
+/// ported this round; the walk now follows the [L] descent onto the balcony.
 #[test]
-#[ignore = "the port's SS #179 VentBlockingPoly rests risen (matrix y 20.0) and its poly's north face at z ~ -110.66 freezes the roof walk at (5.75, 18.28, -110.11); the game walks the roof south unburned [L 2026-10-26: y 17.6 -> 15.6536 by z -116.78, ch 27 stays 0] — needs the SS #179 rest pose/keys fix (the -1's live check 3)"]
-fn from_the_duct_top_the_open_hole_carries_bond_down() {
+fn from_the_duct_top_the_roof_walk_descends_to_the_balcony() {
     let Some(_) = iso() else { eprintln!("NF_ISO not set — skipping"); return };
     let mut scene = load_at([5.8, 18.6, -110.8], std::f32::consts::PI);
     burn_display_hinges(&mut scene);
@@ -194,16 +213,62 @@ fn from_the_duct_top_the_open_hole_carries_bond_down() {
     let sim = scene.sim.as_mut().unwrap();
     sim.step_bond(Input { crouch: true, ..Default::default() }, false, false, false);
     assert!(sim.bond.crouched, "the crouch key crouched Bond");
+    let mut ch27 = false;
     for tick in 1..=900u32 {
         sim.step_bond(Input { forward: 1.0, ..Default::default() }, false, false, false);
+        if sim.drones.channels.on(0x1b) { ch27 = true; }
         if tick % 90 == 0 {
             let p = sim.bond.pos;
             eprintln!("tick {tick}: pos ({:.2}, {:.2}, {:.2}) crouched {}", p[0], p[1], p[2], sim.bond.crouched);
         }
-        let p = sim.bond.pos;
-        if p[1] < 9.5 && p[2] < -111.5 { break; }
     }
     let p = sim.bond.pos;
     assert!(p[2] < -111.5, "Bond crosses the vent plane; stalled at z {:.2}", p[2]);
-    assert!(p[1] < 9.5, "Bond reaches the display ground; ended at y {:.2}", p[1]);
+    assert!(!ch27, "ch 27 stays 0 the whole roof walk [L 2026-10-26]");
+    assert!((p[1] - 15.6536).abs() <= 0.25 && p[2] <= -116.0,
+        "the roof walk rests on the balcony at the game's root 15.6536 [L 2026-10-26: 15.6536 from z -116.78 on], got y {:.4} at z {:.2}", p[1], p[2]);
+}
+
+/// THE CASE LEG [D]: the display case is the OPEN GROUND FLOOR — room_storage01's 6.15/6.27
+/// floor runs east to x 11.19 [D coll-scan at (8.5, 6.5, −110.5)] and the level's guards patrol
+/// it (oDrone #397 at (5.63, 7.36, −112.62), #400 at (9.14, 7.36, −114.14) [D placements], root
+/// ≈ floor + 1.09). The jetpack display spot is Camera_Subject #414 at (5.50, 7.55, −110.37)
+/// [D; the kind-0xFD glist box x 4.86..6.13, y 6.28..8.91, z −110.95..−109.79 frames it]. Bond
+/// walks in from the east floor: dropped onto the open floor at (8.5, 7.4, −110.5) facing west
+/// (the bay-drop test's direct-placement pattern — the real fall + walk input) he reaches the
+/// display spot standing at the ground root = floor 6.27 + 1.04 = 7.31 (the [L] rests read the
+/// same +1.04 over their surfaces: 12.8773 in the bay, 12.3873 on the mid floor).
+#[test]
+fn the_ground_floor_walk_reaches_the_jetpack_display() {
+    let Some(_) = iso() else { eprintln!("NF_ISO not set — skipping"); return };
+    let mut scene = load_at([8.5, 7.4, -110.5], 0.0);
+    {
+        let sim = scene.sim.as_mut().unwrap();
+        sim.bond.pos = [8.5, 7.4, -110.5];
+        sim.bond.vel = [0.0; 3];
+        sim.bond.yaw = -std::f32::consts::FRAC_PI_2; // west (forward = (sin yaw, cos yaw))
+        sim.bond.grounded = false;
+    }
+    let sim = scene.sim.as_mut().unwrap();
+    for _ in 0..240 { sim.step_bond(Input::default(), false, false, false); }
+    let mut at_spot: Option<[f32; 3]> = None;
+    for _tick in 1..=600u32 {
+        sim.step_bond(Input { forward: 1.0, ..Default::default() }, false, false, false);
+        let p = sim.bond.pos;
+        // snapshot the first sample inside the display-spot framing box's east edge (x 6.13 [D]);
+        if at_spot.is_none() && p[0] <= 6.0 { at_spot = Some(p); }
+        if p[0] <= 5.0 { break; }
+    }
+    let p = sim.bond.pos;
+    let at_spot = at_spot.expect("Bond walks west onto the case floor past x 6.0");
+    eprintln!("[0c] at the display spot: ({:.3}, {:.3}, {:.3}); end ({:.3}, {:.3}, {:.3})",
+        at_spot[0], at_spot[1], at_spot[2], p[0], p[1], p[2]);
+    // The display spot sample: inside the camera box's z band (−110.95..−109.79 [D]) and at the
+    // ground root 7.31.
+    assert!(at_spot[2] < -109.5 && at_spot[2] > -111.25,
+        "the west walk crosses the jetpack's z band [D #414 at z −110.37, box −110.95..−109.79]; at z {:.2}", at_spot[2]);
+    assert!((at_spot[1] - 7.31).abs() <= 0.25,
+        "the ground root = floor 6.27 + 1.04 = 7.31 [D floor tris + the [L] +1.04 offsets]; at y {:.4}", at_spot[1]);
+    assert!(p[0] < 5.0, "Bond continues west across the case; ended at x {:.2}", p[0]);
+    assert!((p[1] - 7.31).abs() <= 0.3, "the whole case floor walks at the ground root; at y {:.4}", p[1]);
 }

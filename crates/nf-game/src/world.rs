@@ -347,6 +347,15 @@ fn capsule_tri_contact(t: &[V3; 3], mat: u8, a: &mut V3, b: &mut V3, r: f32, gro
     if (0..3).any(|k| th[k] < sl[k] || tl[k] > sh[k]) { return false; }
     // Water surfaces never collide the player (the cel scoping — see capsule_push).
     if mat & 0x3f == 0xE { return false; }
+    // Glass never collides the player's body [M Collide_Filter 0x1ed888:7-9: `(surf & 0x40) &&
+    // (flags & 0x800)` pushes the distance to 1e8 (rejected), and Player_Collision 0x194df0
+    // writes the collide-flags word 0x800 in EVERY substate (:205, :229, :257, :282);
+    // Intersect_CylGeom 0x109da0:533-540 consults the filter on each closer candidate. [L
+    // 2026-10-26, fresh boot]: the game walks the 0c skylight-lantern glass (room_sk1 mat-0x40
+    // quads, plane z −110.66, y 17.21..24.47, x 4.21..7.33) unburned at roof level — the port's
+    // roof walk froze at z −110.11 = −110.66 + r 0.55 on it. Same reject covers the SS/dynamic
+    // panes (#179 VentBlockingPoly's tris are mat 0x40 [D coll-obj 45/114]).
+    if mat & 0x40 != 0 { return false; }
     let n = cross(sub(t[1], t[0]), sub(t[2], t[0]));
     let nl = dot(n, n).sqrt();
     if nl < 1e-12 { return false; }

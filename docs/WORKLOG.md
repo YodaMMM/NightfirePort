@@ -86,3 +86,19 @@ report + finish.
   keyed motion] + the game's rules [M], port what the port lacks, un-ignore
   from_the_duct_top_the_open_hole_carries_bond_down or replace it with the real route's test.
   Suite started in background.
+- (20:30 UTC, 10-26) level-0c-display-hatch-3: the route + the glass reject landed. [M] Collide_Filter
+  0x1ed888:7-9 rejects surf & 0x40 (glass) under the 0x800 collide-flags word Player_Collision
+  0x194df0 writes in every substate (:205/:229/:257/:282); Intersect_CylGeom 0x109da0:533-540
+  consults it — the port's capsule_tri_contact now skips mat & 0x40 (the roof walk's z −110.66
+  blocker was the STATIC skylight-lantern glass room_sk1 [D mat-0x40 quads y 17.21..24.47], not
+  SS #179). [D] #179's 0x19 record 5: key0 = the placement (5.7526, 16.2985, −112.2475) = rest
+  (the vent glass DOWN over the opening y 15.03..17.42), key1 = 20.0 = risen — the round-2
+  "rests risen" note read the probe's post-burn dump; rest pin added to the_hatch_sweep. The
+  route: the duct roof walk's [L]-proven end is the BALCONY (15.6536 = 14.61 + 1.04); the bay's
+  south end is a solid wall (mat 0x06, z −112.34, y 11.62..13.57) + ventblocker_01/02 glass
+  (mat 0x40, z −112.36) — the case is the OPEN GROUND FLOOR (room_storage01 6.15/6.27 floor east
+  to x 11.19 [D], guards #397/#400 patrol it [D]), the jetpack display spot = Camera_Subject
+  #414 (5.50, 7.55, −110.37) [D]. The ignored test REPLACED by two green tests:
+  from_the_duct_top_the_roof_walk_descends_to_the_balcony ([L] waypoints + ch 27 stays 0) and
+  the_ground_floor_walk_reaches_the_jetpack_display (west walk across the case at root 7.31).
+  fix_0c_hatch_live 5/0; nf-game --lib 578/0; the 0c walk/chain/interactable batteries green.
