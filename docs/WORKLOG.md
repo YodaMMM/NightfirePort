@@ -38,3 +38,12 @@ and when the PSS can't start the hold runs the track's length [S — the stand-i
 stub pops at once]. Tests: mission_outros_live (3 — the track data, the script start, the hold,
 the resolve → the results; the 4a chain + the no-0x4a-writer pin). Adjacent green:
 reward_after_outro, doublecross_transitions_live, fix_mission_live, walkreal_07000004_live.
+
+### mission-outros-2 — the outro hold on the REAL disc (2026-10-26 ~01:00 UTC)
+Branch start: s/mission-outros-2 = origin/s/mission-outros + origin/master (already contained).
+Goal: on the full ISO (07300004.PSS / 07300013.PSS present) the two outro tests end at 1 tick —
+state 6's movie hold pops at once in the headless path. Find why the hold ends immediately with
+a real movie (decoder not driven per tick in the harness? psiMovieFinished read as finished
+before the first frame [M 0x1082e8]?) and make the hold last the movie's real length
+(BGFMVPlaying == 0) with the subtitle track running beside it [M 0x1d6360:101-112]; tests assert
+the real-movie hold with the disc present, the no-movie stand-in only when the file is absent.
