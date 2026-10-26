@@ -721,3 +721,74 @@ fn west_doorway_wedge_dump() {
     }
     eprintln!("[wedge] leg-6 budget out");
 }
+
+/// The HITTEST+0x50 lifetime accumulator (the port's `Bond.pick_ref`): the driver's 2026-10-26
+/// fresh-boot reads [L, PCSX2, player obj 0x1b78640, BL 0x1b78750, HITTEST+0x50 = BL+0x790]:
+/// it boots (0,0,0), is NEVER reseeded on a walk, stays EXACTLY constant while Bond free-walks
+/// the west hall (frames 20-60+, x −8.93 → −17.1), grows by EXACTLY the per-tick push under the
+/// west hall wall press ((0.1, 0, 0) per contact tick, 0.27723 → 3.27709 over 30 ticks, y/z
+/// unchanged), and carries over a reload. The only writer is the DeltaP add-back [M Collide_Intersect
+/// 0x1ebaa8:353-373], which the port applies as `pick_ref += push` [M player.rs, the walk tick].
+#[test]
+fn the_pick_ref_accumulator_tracks_the_game_ref() {
+    let mut w = load_carry(None);
+    // Fresh load: the accumulator reads (0,0,0) [L ee_start_0700000a BL+0x790].
+    assert_eq!(w.scene.sim.as_ref().unwrap().bond.pick_ref, [0.0f32; 3],
+        "the accumulator boots (0,0,0) [L ee_start_0700000a BL+0x790]");
+
+    // The free walk: probe-placed at the game's own hall line (−8.0, 1.12, 16.29), yaw −1.5708 =
+    // west, stick forward [L 2026-10-26]. The first ticks ride the south wall's skin out to the
+    // equilibrium (the game's settled z 16.8288 [L]); after that the walk is push-free.
+    {
+        let sim = w.scene.sim.as_mut().unwrap();
+        sim.bond.pos = [-8.0, 1.12, 16.29];
+        sim.bond.vel = [0.0; 3];
+        sim.bond.yaw = -1.5708;
+        sim.bond.grounded = true;
+    }
+    w.wait(10);
+    for _ in 0..25 { w.tick(nf_game::player::Input { forward: 1.0, ..Default::default() }, false); }
+    let ref_free0 = w.scene.sim.as_ref().unwrap().bond.pick_ref;
+    let pos_free0 = w.scene.sim.as_ref().unwrap().bond.pos;
+    for _ in 0..40 { w.tick(nf_game::player::Input { forward: 1.0, ..Default::default() }, false); }
+    let sim = w.scene.sim.as_ref().unwrap();
+    let (ref_free1, pos_free1) = (sim.bond.pick_ref, sim.bond.pos);
+    // The [L] constancy is exact on the real game (its VU0 equilibrium arithmetic); the port's
+    // spine-arithmetic skin ride wobbles at the 1e-5 scale (measured: x exact, y 5e-11, z 3e-5
+    // over this window) — pinned 3 decades below the [L] 0.1-per-contact-tick push scale the
+    // press pins below.
+    for k in 0..3 {
+        assert!((ref_free1[k] - ref_free0[k]).abs() < 1e-3,
+            "the accumulator holds on the free hall walk [L 2026-10-26: frames 20-60+, x {:.2} -> {:.2}; \
+             axis {k} moved {} (ref0 {ref_free0:?} pos0 {pos_free0:?} ref1 {ref_free1:?} pos1 {pos_free1:?})]",
+            pos_free0[0], pos_free1[0], ref_free1[k] - ref_free0[k]);
+    }
+    assert!(pos_free1[0] < pos_free0[0] - 1.0, "Bond must actually be walking west ({} -> {})", pos_free0[0], pos_free1[0]);
+
+    // The wall press: out at the west end (the game's wall skin x −45.856/−45.956 [L]), stick
+    // forward into it. Every contact tick the push (0.1, 0, 0) adds back: the accumulator's x
+    // grows by ~0.1 per tick while y/z hold still.
+    {
+        let sim = w.scene.sim.as_mut().unwrap();
+        sim.bond.pos = [-40.0, 1.12, 16.83];
+        sim.bond.vel = [0.0; 3];
+        sim.bond.yaw = -1.5708;
+        sim.bond.grounded = true;
+        sim.bond.pick_ref = [0.0; 3]; // the [L] window's own baseline (the game's 0.27723 carried history)
+    }
+    w.wait(10);
+    let press0 = w.scene.sim.as_ref().unwrap().bond.pick_ref;
+    assert_eq!(press0, [0.0f32; 3], "the press window starts from the zeroed baseline");
+    let mut press_samples: Vec<(f32, f32, f32)> = Vec::new();
+    for _ in 0..80 { w.tick(nf_game::player::Input { forward: 1.0, ..Default::default() }, false); }
+    let sim = w.scene.sim.as_ref().unwrap();
+    let (ref_press, pos_press) = (sim.bond.pick_ref, sim.bond.pos);
+    let _ = press_samples;
+    // The 80-tick press reaches the wall (~59 ticks of 0.1 steps) and holds: the [L] press adds
+    // +0.1 per contact tick. The port's held press covers >= 15 contact ticks => x >= 1.5.
+    assert!(ref_press[0] >= 1.5, "the wall press must accumulate the +0.1 pushes [L 2026-10-26: \
+        0.27723 -> 3.27709 over 30 contact ticks], got {}", ref_press[0]);
+    assert!(ref_press[1].abs() < 1e-3 && (ref_press[2]).abs() < 1e-3,
+        "the press's pushes are x-only [L 2026-10-26: y 0.08088 and z −22.77985 unchanged], got {ref_press:?}");
+    assert!(pos_press[0] <= -45.0, "Bond reached the wall skin (x {:.3})", pos_press[0]);
+}
