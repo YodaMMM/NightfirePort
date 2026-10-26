@@ -340,7 +340,7 @@ fn cross(a: V3, b: V3) -> V3 { [a[1] * b[2] - a[2] * b[1], a[2] * b[0] - a[0] * 
 ///   own ride grounds on (the ray tolerance is exceeded at the skin-rest equilibrium on that
 ///   steep a face, so the pick arm must fire); confirming the gate is an
 ///   open live check.
-fn capsule_tri_contact(t: &[V3; 3], mat: u8, a: &mut V3, b: &mut V3, r: f32, grow: f32, total: &mut V3, walkable: &mut bool, pick: &mut bool, top_guard: bool) -> bool {
+fn capsule_tri_contact(t: &[V3; 3], mat: u8, a: &mut V3, b: &mut V3, r: f32, grow: f32, total: &mut V3, walkable: &mut bool, pick: &mut bool, top_guard: bool, _wall_ref: V3) -> bool {
     let tl = [0, 1, 2].map(|k| t[0][k].min(t[1][k]).min(t[2][k]));
     let th = [0, 1, 2].map(|k| t[0][k].max(t[1][k]).max(t[2][k]));
     let (sl, sh) = ([0, 1, 2].map(|k| a[k].min(b[k]) - grow), [0, 1, 2].map(|k| a[k].max(b[k]) + grow));
@@ -424,13 +424,37 @@ fn capsule_tri_contact(t: &[V3; 3], mat: u8, a: &mut V3, b: &mut V3, r: f32, gro
     let gate_on = CAPS_GATE.get_or_init(|| std::env::var("NF_CAPS_GATE").is_ok());
     if *gate_on && n[1] <= 0.7 && dot(sub(q, *b), n) <= 0.0 { return false; }
     let dir = if dist > 1e-6 { [v[0] / dist, v[1] / dist, v[2] / dist] } else if dot(n, sub(*a, q)) >= 0.0 { n } else { [-n[0], -n[1], -n[2]] };
+    // MEASURED AND REVERTED this round (level-0a-band-settle-2): the game's push dir is the
+    // RADIAL normalize(q − ref) [M Intersect_CylGeom 0x109da0:442-446], not the per-face rule
+    // probed here. Ported with ref = the pass's pre-push bottom (wall faces only): raw radial —
+    // the corner crossed in 85 ticks (the game's slide) but the up component lifted Bond to y
+    // 1.7773 vs the game's 1.1159 [L]; horizontal-projected radial — the corner wedged again
+    // (6 mitigation cycles). Both reverted; the real ref is the lifetime DeltaP accumulator
+    // HITTEST+0x50 [M 0x1ebaa8:353-373 the only writer; L ee_start boots (0,0,0)] whose live
+    // walked value cannot be pinned statically — the report's live checks ask for it.
     let push = [dir[0] * (r - dist), dir[1] * (r - dist), dir[2] * (r - dist)];
     if caps_log() {
         eprintln!("[cap] PUSH cent=({:.3},{:.3},{:.3}) q=({:.3},{:.3},{:.3}) p=({:.3},{:.3},{:.3}) d={dist:.4} push=({:.4},{:.4},{:.4}) n=({:.3},{:.3},{:.3}) edge={on_edge} a=({:.3},{:.3},{:.3}) b=({:.3},{:.3},{:.3})",
             (t[0][0]+t[1][0]+t[2][0])/3.0, (t[0][1]+t[1][1]+t[2][1])/3.0, (t[0][2]+t[1][2]+t[2][2])/3.0,
             q[0], q[1], q[2], p[0], p[1], p[2], push[0], push[1], push[2], n[0], n[1], n[2], a[0], a[1], a[2], b[0], b[1], b[2]);
     }
-    for k in 0..3 { a[k] += push[k]; b[k] += push[k]; total[k] += push[k]; }
+    // The below-B displacement kill (level-0a-band-settle-2, re-landing band-settle's
+    // experiment (a)): a contact whose closest point q sits well BELOW the capsule bottom B
+    // loses its displacement but keeps the grounding signals. The game's own per-face gate is
+    // `0 < dot(q − ref, n)` [M Intersect_CylGeom 0x109da0:421-431 — the whole push inside the
+    // `>0` arm, ref = HITTEST+0x50], which for a walked-floor contact (q under the capsule,
+    // ref above it) never pushes — the game's floor ride is the feet band alone [M
+    // Player_FeetOnPoint 0x194188:106] and the walked dy itself carries the climb [L band-settle
+    // finding 1: the game's walked dy grows over the flat slab]. The real ref is the lifetime
+    // DeltaP accumulator [M 0x1ebaa8:353-373 the only writer; L ee_start boots (0,0,0)], whose
+    // live walked value cannot be pinned statically — the ref≈B reading here is the port choice
+    // [S] unverified, measured against the walkreal battery. The walked floor sits 0.604 below B
+    // (dy 1.0891 [L] − 0.4847 [M 0x194df0's B arm]) — the 0.5 carve-out keeps every shallower
+    // contact (the stair/step edges the 01/05 climbs ride) pushing.
+    let deep_below = q[1] < b[1] - 0.5;
+    if !deep_below {
+        for k in 0..3 { a[k] += push[k]; b[k] += push[k]; total[k] += push[k]; }
+    }
     if n[1].abs() > 0.7 && q[1] < b[1] { *walkable = true; }
     // The pick bit's dot1 gate [M Intersect_CylGeom 0x109da0 disasm 0x10a650-0x10a674: the bit
     // block requires `dot(face normal, capsule axis) > 0.7` — up-facing faces only; a wall's
@@ -905,6 +929,8 @@ impl CollisionWorld {
         let Some(runs) = self.scoped_runs(cell, &mut Self::capsule_portal_hit(a, b, r)) else { return self.capsule_push(a, b, r, top_guard) };
         let dynamic = self.dynamic.read().unwrap();
         let (mut a, mut b) = (a, b);
+        // The pass-start bottom: the radial wall dir's ref stand-in (see capsule_tri_contact).
+        let wall_ref = b;
         let mut total = [0f32; 3];
         let mut walkable = false;
         let mut pick = false;
@@ -914,7 +940,7 @@ impl CollisionWorld {
         for k in 0..3 { lo[k] = a[k].min(b[k]) - grow; hi[k] = a[k].max(b[k]) + grow; }
         let stat = &self.stat;
         let mut test = |t: &[V3; 3], mat: u8, a: &mut V3, b: &mut V3, total: &mut V3, walkable: &mut bool, pick: &mut bool| {
-                capsule_tri_contact(t, mat, a, b, r, grow, total, walkable, pick, top_guard);
+                capsule_tri_contact(t, mat, a, b, r, grow, total, walkable, pick, top_guard, wall_ref);
         };
         for r in runs {
             let o = &stat.objects[r as usize];
@@ -954,6 +980,7 @@ impl CollisionWorld {
         let Some(runs) = self.scoped_runs(cell, &mut Self::capsule_portal_hit(a, b, r)) else { return self.capsule_pick_contact(a, b, r, pick_ref_y) };
         let dynamic = self.dynamic.read().unwrap();
         let (mut a, mut b) = (a, b);
+        let b0 = b; // the pass-start bottom (the radial wall dir's ref stand-in)
         let mut total = [0f32; 3];
         let mut walkable = false;
         let mut pick = false;
@@ -965,12 +992,12 @@ impl CollisionWorld {
         for run in runs {
             let o = &stat.objects[run as usize];
             if !(0..3).any(|k| o.hi[k] < lo[k] || o.lo[k] > hi[k]) {
-                for k in o.tris.clone() { capsule_tri_contact(&stat.tris[k], stat.mats[k], &mut a, &mut b, r, grow, &mut total, &mut walkable, &mut pick, false); }
+                for k in o.tris.clone() { capsule_tri_contact(&stat.tris[k], stat.mats[k], &mut a, &mut b, r, grow, &mut total, &mut walkable, &mut pick, false, b0); }
             }
         }
         for g in [&dynamic.geo] {
             for o in overlapping(g, lo, hi) {
-                for k in o.tris.clone() { capsule_tri_contact(&g.tris[k], g.mats[k], &mut a, &mut b, r, grow, &mut total, &mut walkable, &mut pick, false); }
+                for k in o.tris.clone() { capsule_tri_contact(&g.tris[k], g.mats[k], &mut a, &mut b, r, grow, &mut total, &mut walkable, &mut pick, false, b0); }
             }
         }
         // dot2 pass-global [M 0x10a66c-0x10a6a0; the collapse argument in the doc above]: the
@@ -982,6 +1009,7 @@ impl CollisionWorld {
     pub fn capsule_pick_contact(&self, a: V3, b: V3, r: f32, pick_ref_y: f32) -> bool {
         let b_pre_y = b[1];
         let (mut a, mut b) = (a, b);
+        let b0 = b; // the pass-start bottom (the radial wall dir's ref stand-in)
         let mut total = [0f32; 3];
         let mut walkable = false;
         let mut pick = false;
@@ -990,7 +1018,7 @@ impl CollisionWorld {
         let mut hi = [0f32; 3];
         for k in 0..3 { lo[k] = a[k].min(b[k]) - grow; hi[k] = a[k].max(b[k]) + grow; }
         self.near_actor(lo, hi, |t, mat| {
-            capsule_tri_contact(t, mat, &mut a, &mut b, r, grow, &mut total, &mut walkable, &mut pick, false);
+            capsule_tri_contact(t, mat, &mut a, &mut b, r, grow, &mut total, &mut walkable, &mut pick, false, b0);
         });
         pick && pick_ref_y < b_pre_y
     }
@@ -1653,6 +1681,7 @@ impl CollisionWorld {
     /// game's non-head-on path tests them.
     pub fn capsule_push(&self, a: V3, b: V3, r: f32, top_guard: bool) -> (V3, bool) {
         let (mut a, mut b) = (a, b);
+        let b0 = b; // the pass-start bottom (the radial wall dir's ref stand-in)
         let mut total = [0f32; 3];
         let mut walkable = false;
         let mut pick = false;
@@ -1661,7 +1690,7 @@ impl CollisionWorld {
         let mut hi = [0f32; 3];
         for k in 0..3 { lo[k] = a[k].min(b[k]) - grow; hi[k] = a[k].max(b[k]) + grow; }
         self.near_actor(lo, hi, |t, mat| {
-                capsule_tri_contact(t, mat, &mut a, &mut b, r, grow, &mut total, &mut walkable, &mut pick, top_guard);
+                capsule_tri_contact(t, mat, &mut a, &mut b, r, grow, &mut total, &mut walkable, &mut pick, top_guard, b0);
         });
         (total, walkable)
     }
