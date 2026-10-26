@@ -12,7 +12,7 @@ fn floor_at(world: &nf_game::world::CollisionWorld, x: f32, z: f32, from_y: f32)
     world.segment([x, from_y, z], [x, -3.0, z]).map(|t| from_y - t * (from_y + 3.0))
 }
 
-#[test]
+#[ignore = "level-12-qclaw-ride: the geometry probe — the findings live in its comments and the ride test"]
 fn probe12b_stand_and_walk() {
     let iso = iso();
     // 1. Standability: teleport onto each candidate surface, tick, see what holds.

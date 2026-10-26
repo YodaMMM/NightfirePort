@@ -11,7 +11,7 @@ fn floor_at(world: &nf_game::world::CollisionWorld, x: f32, z: f32, from_y: f32)
     world.segment([x, from_y, z], [x, -3.0, z]).map(|t| from_y - t * (from_y + 3.0))
 }
 
-#[test]
+#[ignore = "level-12-qclaw-ride: the geometry probe — the findings live in its comments and the ride test"]
 fn probe12_grapple_geometry() {
     let iso = iso();
     let mut scene = nf_view::load_with_carry_difficulty(&iso, "07000012.bin", false, None, 3).unwrap();
