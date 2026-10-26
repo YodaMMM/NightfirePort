@@ -156,3 +156,13 @@ Progress:
   contain a7afd219) to pick the side; suspects: 353b1008 script-actor SP-matrix riding,
   display-hatch-2 toucher final shape, the merge edges. Report:
   docs/reports/capsule-cull-and-los-masks-5.md.
+
+- capsule-cull-and-los-masks-6 (branch s/capsule-cull-and-los-masks-6, opened from
+  capsule-5 d5ecf7a9; origin/master dcc4a733 already contained — 0 behind, no merge
+  needed): continues the mp digest divergence. Round 5 bracketed the first divergence to
+  t142, bodies/slot-3 (frame_rng aligned), cause inside 4a155ddf's master-side content or
+  its merge resolution. This window: build 4a155ddf^1/^2 to pick the side, diff the
+  per-tick component hashes (NF_NET_HASHDBG) to the first divergent component, name the
+  moving change, fix to the game's rule or prove the new value [M], re-pin; every round
+  3/5 green test stays green. Door-state filter: s/door-state-collision exists; if it
+  lands on master first, drop the door-state content from this branch.
