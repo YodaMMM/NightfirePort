@@ -13,3 +13,8 @@ ported behaviour.
 
 Work log:
 - Setup: cloned repo, created branch, pushed initial checkpoint.
+- Found prior art: docs/systems/ai-dmode-inits.md + drone.rs init_properties already prove the
+  DMODE dispatch census (all 555 placements NEW, only row 0 dispatched). Remaining: per-init [M]
+  summaries for the 26 still-uncited family members, a disc-table row test, HUD pane create
+  audit (HealthPane 4-sprite loop + timers, InfoStatus/PickupStatus secondary slots), and
+  Text_SendMessage 0x223600 (not cited anywhere in crates).
