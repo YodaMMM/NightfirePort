@@ -20,3 +20,8 @@ say so in the report. Never weaken a decompile-backed test to make code pass.
 
 ---
 claimed-by: sandbox6 at 2026-10-26T17:17Z
+
+---
+## Report (done, 2026-10-26T18:19Z)
+
+Closed by the driver: the report is on `s/level-4a-ride-cutscene` (docs/reports/level-4a-ride-cutscene.md); the worker didn't run finish.sh.
