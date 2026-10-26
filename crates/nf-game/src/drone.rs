@@ -13518,7 +13518,9 @@ fn segment_hits_sphere(a: V3, b: V3, c: V3, r: f32) -> bool {
                     // (glass [D params; M 0x12c230:21]) pane's hit drains WITHOUT killing the
                     // round; a non-glass breakable keeps the stop.
                     let br = &mut self.breaks.list[i];
-                    if br.kind != 2 { b.dead = true; }
+                    let glass_pass = br.kind == 2 && d.weapons.records.get(b.weapon as usize)
+                        .is_some_and(|w| u32::from_le_bytes([w[0x6c], w[0x6d], w[0x6e], w[0x6f]]) & 0x800 == 0);
+                    if !glass_pass { b.dead = true; }
                     br.health -= contact_dmg;
                     if br.health < 0.0 {
                         if let Some(k) = self.breaks.kill(i, b.pos, end, &mut self.rng) {
