@@ -28,3 +28,19 @@ Progress:
   branch start (534b939d), pushed.
 - next: reproduce the failing groups on the final tree, read the round-1 report
   docs/reports/capsule-cull-and-los-masks.md, fix by game evidence [M], full suite, report.
+
+Progress (this window, continued):
+- origin/master merged (LOS_TURRET_TRACK 0x72f kept; the branch's unconditional cull arms and
+  per-caller masks kept; the master-side scratch gates the branch deleted are deleted in the merged
+  tree too).
+- GT_Track's per-candidate ray now ends at the candidate's obj+0x80 world-sphere centre
+  [M 0x17f9c8:271-278, Control_BuildWorldSph 0x133070] — TrackCand.sph; guards keep the feet
+  stand-in [S]. nf-game lib 556 green.
+- [L] ee_start_0700000a: gun #636 (ext 0x1b9e400) ext+0xd0 = 1.9865224 — the game's track ray starts
+  ~0.29 above the deck; the port's muzzle_offset is 0.0 behind the script-VM gap (GT_Create's
+  script-bbox formula [M 0x17ffa0:140]) — the turret deploy groups' blocker, next window's item.
+- bathhouse_shout_mixer_live already green on the final tree; mp_net's digest pin moved exactly one
+  top byte (0xfb5e...->0xbc5e..., low 56 bits identical); the other groups reproduced, causes in
+  docs/reports/capsule-cull-and-los-masks-2.md.
+- suite runner: background dies at the tool-call boundary (measured twice); foreground slice ran
+  104 binaries / 0 failures; a full pass does not fit the window.
