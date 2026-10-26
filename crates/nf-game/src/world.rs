@@ -426,7 +426,7 @@ fn capsule_tri_contact(t: &[V3; 3], mat: u8, a: &mut V3, b: &mut V3, r: f32, gro
     if *gate_on && n[1] <= 0.7 && dot(sub(q, *b), n) <= 0.0 { return false; }
     let spine_dir = if dist > 1e-6 { [v[0] / dist, v[1] / dist, v[2] / dist] } else if dot(n, sub(*a, q)) >= 0.0 { n } else { [-n[0], -n[1], -n[2]] };
     // THE RADIAL-DIR ARM, landed (level-0a-band-settle-3) [M Intersect_CylGeom 0x109da0:421-453]:
-    // v = q − ref with ref = the caller's HITTEST+0x50 lifetime push accumulator (the driver's
+    // v = q − ref with ref = the caller's HITTEST+0x50 lifetime push accumulator (the
     // 2026-10-26 fresh-boot reads [L]: it boots (0,0,0), is NEVER reseeded on a walk, grows by
     // exactly the push on every wall-contact tick (0.27723 → 3.27709 by +0.1 steps at the west
     // hall wall), stays EXACTLY constant on free walks, and carries over a reload — the add-back
@@ -468,7 +468,7 @@ fn capsule_tri_contact(t: &[V3; 3], mat: u8, a: &mut V3, b: &mut V3, r: f32, gro
     // …gated OFF by default (NF_WALK_KILL=1 to measure): with the kill on, 05 walks 8/8 green
     // and the 0a corner crosses (870 ticks, was a permanent wedge), but 01's
     // walk_from_the_spawn_to_the_exit_with_the_contact fails (the AND-touch never fires — the
-    // contact's plate approach shifts) — the driver's keep-01/05-green constraint wins until
+    // contact's plate approach shifts) — the keep-01/05-green constraint wins until
     // that walk is re-verified. The ref≈B reading is the port choice [S] unverified, measured
     // against the walkreal battery. The walked floor sits 0.604 below B
     // (dy 1.0891 [L] − 0.4847 [M 0x194df0's B arm]) — the 0.5 carve-out keeps every shallower

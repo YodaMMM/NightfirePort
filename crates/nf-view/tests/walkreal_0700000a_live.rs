@@ -722,7 +722,7 @@ fn west_doorway_wedge_dump() {
     eprintln!("[wedge] leg-6 budget out");
 }
 
-/// The HITTEST+0x50 lifetime accumulator (the port's `Bond.pick_ref`): the driver's 2026-10-26
+/// The HITTEST+0x50 lifetime accumulator (the port's `Bond.pick_ref`): the 2026-10-26
 /// fresh-boot reads [L, PCSX2, player obj 0x1b78640, BL 0x1b78750, HITTEST+0x50 = BL+0x790]:
 /// it boots (0,0,0), is NEVER reseeded on a walk, stays EXACTLY constant while Bond free-walks
 /// the west hall (frames 20-60+, x −8.93 → −17.1), grows by EXACTLY the per-tick push under the
