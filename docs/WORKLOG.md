@@ -76,3 +76,7 @@ regions included) so the jamb-slide pushes reproduce the [L] frame table (live P
 god mode, yaw -1.5708 from (-8.0,1.12,16.29)); the [L] write-watch found only Collide_Intersect
 0x1ebaa8+0x644 (PC 0x1ec0ec) writing HITTEST+0x10 — the slide is the per-face DeltaP add-back.
 Then un-ignore the three walkreal_0700000a tests, keep every other walkreal test green.
+
+## level-0a-band-settle-4 (2026-10-26, round 2 report)
+The per-face DeltaP path decoded at the metal (no code landed — the experiment measured-and-
+reverted, tree = settle-3 byte-identical). Key finds in the report + the next round's plan.
