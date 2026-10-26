@@ -17,16 +17,27 @@ use walker::{Act, Walker, Wp};
 fn iso() -> String { std::env::var("NF_ISO").expect("NF_ISO") }
 
 /// The warm load the real run hands this level: objectives 3-6 + the hatch unlock carried
-/// [M Player_RamSave 0x195670:13; walkreal_0700000b_live's load_warm].
-fn load_warm() -> Walker {
-    let cold = nf_view::load_with_carry(&iso(), "0700000b.bin", false, None).expect("load cold");
+/// [M Player_RamSave 0x195670:13; walkreal_0700000b_live's load_warm]. `bits` = the `bonus[0]`
+/// word in play (0 = the fresh-boot state; the kind-6 gate reads it [M 0x18dda0:93-95]).
+fn load_warm_bits(bits: u64) -> Walker {
+    let cold = nf_view::load_with_carry_medals(&iso(), "0700000b.bin", false, None, 1, bits).expect("load cold");
     let save = {
         let sim = cold.sim.as_ref().unwrap();
         nf_game::player::RamSave::capture(&sim.drones.health, sim.gun.switch_request, &sim.drones.inventory, &sim.drones.channels)
     };
-    let mut w = Walker::new(nf_view::load_with_carry(&iso(), "0700000b.bin", false, Some(&save)).expect("load warm"));
+    let mut w = Walker::new(nf_view::load_with_carry_medals(&iso(), "0700000b.bin", false, Some(&save), 1, bits).expect("load warm"));
     for c in [0x46u8, 0x47, 0x48, 0x49, 0x4a] { w.scene.sim.as_mut().unwrap().drones.set_channel(c); }
     w
+}
+
+fn load_warm() -> Walker { load_warm_bits(0) }
+
+/// The gold-medal `bonus[0]` word for `base_map` [M PlrStats_HasGoldMedal 0x199a40;
+/// Menu_SetLevelBonus 0x1ffa10 is the award arm]. pickup-medal-gate.
+fn gold_bits(base_map: u32) -> u64 {
+    let mut p = nf_game::progress::Progress::default();
+    p.set_level_bonus(base_map, 3, 0);
+    p.bonus[0]
 }
 
 /// Teleport Bond onto the executive floor (the lift-gap stand-in walkreal_0700000b_live pins)
@@ -222,7 +233,11 @@ fn dome_laserbeam_crossing_fires_ch0d() {
 /// take path. Sisters: armour 0 and the rocket un-owned before.
 #[test]
 fn exec_floor_pickups_taken_by_walking_over() {
-    let mut w = load_warm();
+    // The kind-6 row exists only with the level's gold medal recorded [M Pickup_Create
+    // 0x18dda0:93-95]: 0700000b plays under BaseMap 0x07000009 (the mission table [L ee_start_05
+    // 0x2a4350], the gold bit the 0x0700005/9/11 kind-4 group's rank 1 [L 0x2bc920 row 5;
+    // M 0x199210]) — the warm load carries the medal word (pickup-medal-gate).
+    let mut w = load_warm_bits(gold_bits(0x0700_0009));
     to_exec_floor(&mut w);
     assert_eq!(w.scene.sim.as_ref().unwrap().drones.health.armour, 0.0, "sister: no armour before");
     assert!(!w.scene.sim.as_ref().unwrap().drones.inventory.owned[0x2e], "sister: the rocket un-owned before");
@@ -258,6 +273,12 @@ fn exec_floor_pickups_taken_by_walking_over() {
     w.scene.sim.as_mut().unwrap().bond.vel = [0.0; 3];
     w.wait(20);
     assert!(taken(&w), "the BOND_BONUS pickup is consumed on the walk-over [M 0x18e650:234-236]");
+    // The no-medal arm [M 0x18dda0:93-95]: the same warm load with the fresh-boot zero word
+    // creates no kind-6 at all — #300's spot holds nothing.
+    let mut bare = load_warm_bits(0);
+    to_exec_floor(&mut bare);
+    assert!(bare.scene.sim.as_ref().unwrap().drones.pickups.iter().all(|p| p.kind != nf_game::pickup::kind::BOND_BONUS),
+        "no gold medal → the kind-6 bonus is not created [M 0x18dda0:93-95]");
 }
 
 /// The rooftop vent (0xEA TouchOnce #327, mask 4 = USE, out ch 0x77 [D]) fires on the E and the

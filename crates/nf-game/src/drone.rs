@@ -900,6 +900,12 @@ pub struct Drone {
     pub los: bool,
     pub seen: bool,
     pub ever_seen: bool,
+    /// `+0x228 & 8` exactly — the bit `DroneVision_HaveOpponentSight` 0x175ef0:82-86 sets when a
+    /// sight is reaction-acked AND prop 0x3c is set (the other setter, `HostageIdle` 0x15ce60:17,
+    /// is hostage-only). `ever_seen` above folds the plain sight-ack without the prop gate, so
+    /// the two differ for 0x3c-less guards; `AttackTalk`'s type-3 arm reads this one
+    /// [M 0x13eac0:63-65]. (level-13-guard-barks.)
+    pub ever_seen_3c: bool,
     /// The SP opponent-object test [M NDrone2_FindOpponent 0x1424e0:100-120 — ControlSTANDARD
     /// 0x1490f0:167 runs it EVERY tick, and for a non-ally drone it points `Drone_tag+0x170` at
     /// Bond's object unconditionally, zeroing it only when `PlrStat_OkToUpdate` fails, the
@@ -1880,7 +1886,7 @@ impl Drone {
             // (The lookup is `behaviour_util_getStats` 0x1c7e58 — `drone_stats + type·0x60 + kind·0x20`,
             // driven by `NDrone2_DoModeSettingsNEW` 0x14c600:81; its word +8 is the health [M].)
             accuracy: 5, aggression: 0, reaction: 0,
-            los: false, seen: false, ever_seen: false, bond_alive: true, visibility: 0.0, seen_ticks: 0, unseen_ticks: 0, vision_on: false,
+            los: false, seen: false, ever_seen: false, ever_seen_3c: false, bond_alive: true, visibility: 0.0, seen_ticks: 0, unseen_ticks: 0, vision_on: false,
             dist: 0.0, yaw_to_opp: 0.0,
             state: state::GLOBAL, prev_state: 0, next_state: None, entered: 0, timer_c: None, timer_d: None,
             alarm_yaw: 0.0, alarm_run: false, timer_c_payload: 0, alarm_patrol: param(23) as u8, alarm_point: None,
@@ -3880,11 +3886,15 @@ impl Drone {
     /// `NDrone2_AttackTalk` (0x13eac0) for the single-player voice sets of these levels: type 2 picks 0x37 + Rand(9)
     /// then speaks 1 in 3; type 1 0x33 + Rand(4) at 1 in 2 (0xA3 + Rand(8) always on 0x11 / 0x0B / 0x13); type 3 0xAC +
     /// Rand(7). Others: *not modelled* (level-specific sets).
-    fn attack_talk(&mut self, d: &Data, rng: &mut Rng) {
+    fn attack_talk(&mut self, level: u32, rng: &mut Rng) {
         if self.state == state::ATTACK { self.attack_entry_talks += 1; }
         if self.voice_busy() || self.health <= 0.0 { return; }
+        // `NDrone2_AttackTalk` 0x13eac0:62-65 — the type-3 arm returns BEFORE its Rand_Rand(7)
+        // when `+0x228 & 8` (the prop-0x3c ever-sighted bit, HaveOpponentSight 0x175ef0:82-86) is
+        // set: a guard who has ever held a sighted opponent stays silent on the attack entries.
+        if self.voice_type == 3 && self.ever_seen_3c { return; }
         let (odds, idx) = match self.voice_type {
-            1 if matches!(d.level, 0x0700_0011 | 0x0700_000b | 0x0700_0013) => (0, 0xa3 + rng.rand(8) as usize),
+            1 if matches!(level, 0x0700_0011 | 0x0700_000b | 0x0700_0013) => (0, 0xa3 + rng.rand(8) as usize),
             1 => (2, 0x33 + rng.rand(4) as usize),
             2 => (3, 0x37 + rng.rand(9) as usize),
             3 => (0, 0xac + rng.rand(7) as usize),
@@ -7214,7 +7224,7 @@ impl Drone {
             (SNIPER_IDLE, msg::FORCED_ATTACK) => { self.set_state(ATTACK); true }
             // SniperAim: anim 0x0A, sight and combat range 1000; Bond in sight (`+0x228 & 4`) → SniperFire.
             (SNIPER_AIM, msg::ENTER) => {
-                self.attack_talk(d, rng);
+                self.attack_talk(d.level, rng);
                 self.vision_on = true;
                 self.stationary = true;
                 self.call_anim(d, anim_state::AIM_STAND, 0, 0);
@@ -7236,7 +7246,7 @@ impl Drone {
             }
             (SNIPER_FIRE, msg::TIMER_C) => { self.firing = true; true }
             (SNIPER_FIRE, msg::UPDATE) => {
-                self.attack_talk(d, rng);
+                self.attack_talk(d.level, rng);
                 self.desired_yaw = self.yaw_to_opp;
                 if self.clip < 1 { self.set_state(SNIPER_RELOAD); }
                 else if self.unseen_ticks >= 0x10 { self.set_state(SNIPER_AIM); }
@@ -7518,10 +7528,10 @@ impl Drone {
                     // prop-0x1B roll; FirstAttack's own `AttackTalk` [M 0x148010:94] follows only when
                     // FirstSightState chose no state, or when the bit is clear.
                     let first_sight = self.own_sight;
-                    if first_sight { self.seen_player_talk(d, rng); } else { self.attack_talk(d, rng); }
+                    if first_sight { self.seen_player_talk(d, rng); } else { self.attack_talk(d.level, rng); }
                     first = if self.prop(d, 0x1b) { if rng.rand(2) == 0 { 0 } else { self.choose_combat_move(d, rng) } }
                         else if self.prop(d, 0x18) { 0 } else if self.prop(d, 0x19) { self.choose_combat_move(d, rng) } else { 0 };
-                    if first_sight && first == 0 { self.attack_talk(d, rng); }
+                    if first_sight && first == 0 { self.attack_talk(d.level, rng); }
                     // `FirstAttack` may switch to the second behaviour block (`+0x5A4` ≠ 0, not modelled); [L] the 07000005
                     // gate guard still used its first block after a fight (`+0x4D8` = `+0x4DC`, WORKLOG 0021), so no switch.
                 }
@@ -7663,7 +7673,7 @@ impl Drone {
                 if self.mode == 2 { self.set_state(SNIPER_FIRE); return true; }
                 self.vision_on = true;
                 self.call_anim(d, anim_state::AIM_STAND, 0, 0);
-                self.attack_talk(d, rng);
+                self.attack_talk(d.level, rng);
                 if self.anim_set != 0x13 { self.firing = true; }
                 else { self.timer_c = Some(frame + 60); }
                 true
@@ -7806,7 +7816,7 @@ impl Drone {
             }
             (AIM_STAND_FIRE, msg::ENTER) => {
                 // Non-snipers talk (`+0xC5` ≠ 2; `+0x4F8 & 0x10` and prop 0x40 not modelled).
-                if !self.stationary { self.attack_talk(d, rng); }
+                if !self.stationary { self.attack_talk(d.level, rng); }
                 self.call_anim(d, anim_state::AIM_STAND, 0, 0);
                 self.vision_on = true;
                 // [M 0x166328:48-52] the impact-danim deferral: a guard still playing danim 0x13 (the
@@ -9654,7 +9664,7 @@ impl Drone {
             // height → hang. Then SetAngleToObj(opponent). The +0x3b firing flag = LOS (& the +0x1e
             // gate — no decomp writer on these drones, fresh allocations read 0).
             (state::ABSEIL_SLIDE, msg::UPDATE) => {
-                self.attack_talk(d, rng);
+                self.attack_talk(d.level, rng);
                 if self.on_surface {
                     self.air = false;
                     self.anim_set = self.saved_anim_set;
@@ -9699,7 +9709,7 @@ impl Drone {
             // applies it); the firing flag as in the slide; the rope tracking; back to the slide when
             // the opponent is more than 3.0 + hang_rand BELOW the drone.
             (state::ABSEIL_HANG, msg::UPDATE) => {
-                self.attack_talk(d, rng);
+                self.attack_talk(d.level, rng);
                 self.desired_yaw = self.yaw_to_opp;
                 // The velocity decay ×(1.0 − FRAME_RATE_DIV·0.02) = 0.98 [M 0x169940:33; EE mul.s].
                 for v in &mut self.velocity { *v *= 0.98; }
@@ -15833,6 +15843,10 @@ fn segment_hits_sphere(a: V3, b: V3, c: V3, r: f32) -> bool {
                             dr.index, dr.seen_ticks, dr.reaction_time(d.level), dr.dist, dr.state);
                     }
                     dr.seen = true; dr.ever_seen = true;
+                    // `DroneVision_HaveOpponentSight` 0x175ef0:82-86: with prop 0x3c the same ack
+                    // sets `+0x228 & 8` (and the +0x234 stamp + the 0xf self-msg; the mode-4
+                    // music ping is not ported). AttackTalk's type-3 arm reads exactly this bit.
+                    if dr.prop(d, 0x3c) { dr.ever_seen_3c = true; }
                     // `NDrone2_SetOpponent` 0x1422d0 → `DroneFunc_AllocateTargetID` 0x141f28: a team-1
                     // guard claims its shared registry slot on acquiring the opponent, and the sight
                     // stamp (`DroneFunc_TargetSeen` 0x14a008 — the game stamps it from the talk sites
@@ -18770,6 +18784,35 @@ mod tests {
         assert!(dr5.talks.is_empty(), "health ≤ 0 returns [M 0x13f420:28-30]");
     }
 
+    /// `NDrone2_AttackTalk` 0x13eac0's type-3 ever-sighted gate [M :62-68 with
+    /// 0x175ef0:82-86]: the 07000013 lobby guards (voice type 3, prop 0x3c on all 12 [D
+    /// behaviour words]) lose the 0xac+Rand(7) bark once a sighting has been reaction-acked.
+    #[test]
+    fn attack_talk_type3_gates_on_the_ever_sighted_bit() {
+        let mut rng = Rng::new(7);
+        let mut dr = drone_at([0.0, 0.0, 0.0]);
+        dr.voice_type = 3;
+        dr.ever_seen_3c = true;
+        let draws = rng.draws;
+        dr.attack_talk(0x0700_0013, &mut rng);
+        assert!(dr.talks.is_empty(), "the ever-sighted type-3 guard stays silent [M 0x13eac0:63-65]");
+        assert_eq!(rng.draws - draws, 0, "the return is BEFORE the Rand_Rand(7) [M 0x13eac0:64]");
+        // Sister (can fail): a never-sighted type-3 guard barks 0xac + Rand(7), always spoken.
+        let mut dr2 = drone_at([0.0, 0.0, 0.0]);
+        dr2.voice_type = 3;
+        dr2.attack_talk(0x0700_0013, &mut rng);
+        assert_eq!(dr2.talks.len(), 1, "always spoken [M 0x13eac0:66-68]");
+        assert!((0xac..=0xb2).contains(&dr2.talks[0].0), "0xac + Rand(7), got {:?}", dr2.talks);
+        // And a guard whose plain ever_seen folded WITHOUT prop 0x3c keeps the bark: the game's
+        // bit only sets under the 0x3c gate [M 0x175ef0:82-86], so the port's ever_seen_3c — not
+        // ever_seen — is the field AttackTalk reads.
+        let mut dr3 = drone_at([0.0, 0.0, 0.0]);
+        dr3.voice_type = 3;
+        dr3.ever_seen = true;
+        dr3.attack_talk(0x0700_0013, &mut rng);
+        assert_eq!(dr3.talks.len(), 1, "ever_seen without 0x3c is NOT the game's bit");
+    }
+
     /// `DroneFunc_FirstAlertState` 0x147f58's table [M :8-44]: the gate bits, the 0x200000 arm's
     /// four level classes, and sisters that flip each.
     #[test]
@@ -18889,7 +18932,7 @@ mod tests {
             gun_through_wall: false,
             dist_to_player: [100000.0; 4],
             props: [0; 3], alert_props: None, sight_range: 0.0, half_fov: 0.0, engage_range: 0.0, combat_range: 0.0,
-            accuracy: 0, aggression: 0, reaction: 0, los: false, seen: false, ever_seen: false, bond_alive: true, visibility: 0.0,
+            accuracy: 0, aggression: 0, reaction: 0, los: false, seen: false, ever_seen: false, ever_seen_3c: false, bond_alive: true, visibility: 0.0,
             seen_ticks: 0, unseen_ticks: 0, vision_on: false, dist: 0.0, yaw_to_opp: 0.0,
             state: 0, prev_state: 0, next_state: None, entered: 0, timer_c: None, timer_d: None,
             alarm_yaw: 0.0, alarm_run: false, timer_c_payload: 0, alarm_patrol: 0, alarm_point: None,

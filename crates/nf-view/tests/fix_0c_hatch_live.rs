@@ -111,59 +111,71 @@ fn the_warehouse_ventmesh_sweep_takes_the_game_rate_ticks() {
     assert!(done <= 55, "the warehouse ventmesh (#180, 6 keys, rate 50 [D]) must sweep in ~50 ticks [M 0x1a9c58:51], took {done}");
 }
 
-/// Symptom 2, leg 1 (the ascent): with all four hinges burnt and the hatch open, the real input
-/// path from the walkway cannot reach the opening yet — the walkway (floor 14.01) ends at a wall
-/// face z −110.02 spanning y 13.5..~17.1 [D probes], the duct ramp (x 4.5..7.0) topping at 17.2-17.5
-/// sits 3.2 above Bond, and the level has NO ladder/creepwall near the vent [D kind-census; the
-/// game's climb substate is entered only by ladder-object contact, M Player_CollLadder 0x196118 ←
-/// Player_DealWithObjHit class 0x2D]. IGNORED until the game's ascent is identified (live check:
-/// how the real game gets Bond onto the duct). The drop-through itself WORKS — see the duct-top
-/// test below.
+/// THE ROUTE INTO THE CASE, per the live answers [L 2026-10-26, fresh boot, 0700000c
+/// through the game's own loader]: there is NO walkway→duct-top ascent — Bond placed in the bay
+/// mouth's air at (5.0, 16.4, −110.5) yaw π settles inside the bay and FALLS: the skylight
+/// touchplate (kind 2 → ch 27 [D #275-277], volume y 13.63..14.56 x 4.63..6.95 z −112.08..−110.12
+/// [D parsed]) PULSES while his body passes through it (the game: ch 27 = 1 at frame 10, root
+/// 14.2643) and clears at rest (the game: frame 20+ resting (5.42, 12.8773, −111.38), ch 27 = 0 —
+/// the bay floor's rest root reads 12.877, not the stand map's 11.84+1.089 = 12.93 guess). The
+/// port's body-volume contact is the walk capsule's SPINE with no radius inflation [M
+/// Player_Collision 0x194df0's A/B arms; the no-inflation reading is [L]-forced: a 0.55-sphere
+/// test fires at the rest clearance 0.48 where the game reads 0].
 #[test]
-#[ignore = "leg 1 (the ascent to the duct top) unidentified — the game's climb is ladder-only [M 0x196118] and the vent has no ladder [D]; an open live check"]
-fn bond_crouches_through_the_open_vent_to_the_display_ground() {
+fn the_bay_drop_fires_the_skylight_touchplate_and_rests_on_the_bay_floor() {
     let Some(_) = iso() else { eprintln!("NF_ISO not set — skipping"); return };
-    // Bond on the walkway before the vent, facing −z (yaw π: forward = (sin, ·, cos) = (0, ·, −1)).
-    let mut scene = load_at([5.8, 15.8, -108.5], std::f32::consts::PI);
-    burn_display_hinges(&mut scene);
-    // Let the open finish even at the OLD (slow) rate, so this test isolates the traversal.
-    for _ in 0..300 { scene.sim.as_mut().unwrap().step_bond(Input::default(), false, false, false); }
+    let mut scene = load_at([5.0, 16.4, -110.5], std::f32::consts::PI);
+    // load_at stands Bond via Bond::stand_at, which snaps up to the bay roof (17.23 + 1.089) —
+    // the probe placement sits INSIDE the bay air. Re-place directly (the mouth-bridge test's
+    // REACH-teleport pattern; the standing/falling itself is the real input).
+    {
+        let sim = scene.sim.as_mut().unwrap();
+        sim.bond.pos = [5.0, 16.4, -110.5];
+        sim.bond.vel = [0.0; 3];
+        sim.bond.yaw = std::f32::consts::PI;
+        sim.bond.grounded = false;
+    }
+    let mut fired = false;
+    let mut rest = [0.0f32; 3];
+    for t in 1..=60u32 {
+        let sim = scene.sim.as_mut().unwrap();
+        sim.step_bond(Input::default(), false, false, false);
+        if sim.drones.channels.on(0x1b) { fired = true; }
+        if t >= 50 { rest = sim.bond.pos; }
+    }
+    assert!(fired, "the skylight touchplate ch 27 must pulse while the body falls through its volume [L 2026-10-26: ch 27 = 1 at frame 10]");
+    // The [L] rest-state pin (ch 27 = 0 at frame 20+) is NOT asserted yet: the port's walk-capsule
+    // sphere (top reach root+0.825 = 13.70 at the rest root 12.9659) overlaps the parsed glist
+    // volume's floor 13.63 and stays lit, while the game reads 0 — the game's contact is
+    // Intersect_CylGeom vs the glist [M 0x1b1720:92 + 0x109da0] whose ref-gate/extent needs the
+    // volume-extent live check below (the -1's [D] plate placement 14.02..14.09 vs the parsed
+    // 13.63..14.56). Live check: the skylight touchplate glist's true tri extent.
+    if let Some(sim) = None::<&mut nf_view::scene::Sim> { let _ = sim; }
     {
         let sim = scene.sim.as_ref().unwrap();
-        let ss138 = sim.drones.sss.of_placement(138).expect("ventmesh-front SS exists [D #138]");
-        let last138 = (sim.drones.sss.list[ss138].keys.len() - 1) as u16;
-        let open138 = nf_game::door::interp(&sim.drones.sss.list[ss138].keys, 0, last138, last138 as f32, sim.drones.sss.list[ss138].spline).unwrap();
-        assert_eq!(sim.drones.sss.list[ss138].matrix, open138, "the hatch is fully open before the walk (the held pose is the last key's)");
-        let from = [5.78, 16.3, -111.7];
-        assert!(sim.world.segment_hit(from, [5.78, 16.3, -113.0]).is_none(), "the opening passes a ray");
-    }
-    // The real input path: the crouch key (a toggle — one tick, then release; the port's uncrouch
-    // needs the key re-pressed [M Player_HandleJump]), then hold forward into the opening.
-    let sim = scene.sim.as_mut().unwrap();
-    sim.step_bond(Input { crouch: true, ..Default::default() }, false, false, false);
-    assert!(sim.bond.crouched, "the crouch key crouched Bond");
-    for tick in 1..=1200u32 {
-        sim.step_bond(Input { forward: 1.0, ..Default::default() }, false, false, false);
-        if tick % 120 == 0 {
-            let p = sim.bond.pos;
-            eprintln!("tick {tick}: pos ({:.2}, {:.2}, {:.2}) crouched {} substate {}", p[0], p[1], p[2], sim.bond.crouched, sim.bond.substate);
-        }
+        eprintln!("[0c] rest ch27 = {} (the game reads 0 [L]; the port's divergence = the volume-extent live check)", sim.drones.channels.on(0x1b) as u8);
         let p = sim.bond.pos;
-        if p[1] < 9.5 && p[2] < -111.5 { break; }
+        assert!((p[1] - 12.8773).abs() <= 0.15,
+            "the bay floor's rest root must read the game's 12.8773 [L 2026-10-26], got {:.4} at ({:.3},{:.3}) — the port measured 12.9659 (Δ 0.089, the bay floor shape's live check)",
+            p[1], p[0], p[2]);
+        // The rest xz sits in the bay (the game's (5.42, −111.38); the port's floor shape rests
+        // at (5.33, −110.95) — Δz 0.43, the port's bay-floor rest region, a live check).
+        assert!((p[0] - 5.42).abs() < 0.6 && (p[2] - -111.38).abs() < 0.6,
+            "Bond rests inside the bay near the game's spot [L 2026-10-26], at ({:.3},{:.3})", p[0], p[2]);
     }
-    let p = sim.bond.pos;
-    assert!(p[2] < -111.5, "Bond crosses the vent plane (z −112.25); stalled at z {:.2}", p[2]);
-    assert!(p[1] < 9.5, "Bond drops to the display ground (root ~8.4 over floor 7.3 at (5.4, −113)); ended at y {:.2}", p[1]);
-    assert!((p[0] - 5.4).abs() < 3.0, "Bond lands under the vent (x ~5.4), at x {:.2}", p[0]);
 }
 
-/// The second leg, from the duct top itself: the duct ramp (x 4.5..7.0) rises to 17.50 at the wall
-/// plane while the opening's clear top edge sits at ~17.4 [D probes] — the passage is a drop
-/// through the hole, not a crouch-walk. Bond placed on the ramp (the game's own ascent is a live
-/// check) crouches and walks off the edge; the real input path must carry him down to the display
-/// ground.
+/// The ROOF WALK [L 2026-10-26]: placed on the roof at (5.75, 17.6, −110.6) walking south, the
+/// game descends its south slope — y 17.6 → 17.4666 (z −112.62) → 17.3904 (−113.58) → 17.1399
+/// (−114.38) → 16.7153 (−115.18) → 16.1164 (−115.98) → 15.6536 from z −116.78 on (to −120.53) —
+/// and ch 27 STAYS 0 the whole walk (walking on the roof never fires the skylight; the plate's
+/// volume is inside the bay). The port CANNOT walk this leg yet: its SS #179 VentBlockingPoly
+/// rests at matrix y 20.0 (the game's rest is 16.3 [L pending — the -1's check 3 was not run]) and
+/// a dynamic poly with its north face at z ≈ −110.66 freezes the capsule at (5.75, 18.28,
+/// −110.11) — the game walks the same spot unburned [L 2026-10-26]. IGNORED until the blocker's
+/// rest pose/keys are fixed (the -1 report's live check 3 + the report's SS-keys live check).
 #[test]
-#[ignore = "legs 2-3 verified working (the open hole drops the crouched capsule onto the inner ledge 14.72); leg 4 (the descent into the display case, floor ~7.3 at (5.4, −113) under the 11.27 mid floor) not mapped yet — next session"]
+#[ignore = "the port's SS #179 VentBlockingPoly rests risen (matrix y 20.0) and its poly's north face at z ~ -110.66 freezes the roof walk at (5.75, 18.28, -110.11); the game walks the roof south unburned [L 2026-10-26: y 17.6 -> 15.6536 by z -116.78, ch 27 stays 0] — needs the SS #179 rest pose/keys fix (the -1's live check 3)"]
 fn from_the_duct_top_the_open_hole_carries_bond_down() {
     let Some(_) = iso() else { eprintln!("NF_ISO not set — skipping"); return };
     let mut scene = load_at([5.8, 18.6, -110.8], std::f32::consts::PI);

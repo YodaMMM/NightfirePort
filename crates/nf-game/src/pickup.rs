@@ -163,8 +163,15 @@ impl Pickup {
     /// Kinds 7–11 are intercepted by `Pickup_Create` → `Pickup_CreateFromSet` (0x18f1b0): a kind-0 pickup of the
     /// set weapon (`PickupMatrix[row][(kind-7)*2]`, the BASE id, `clip_size·2` rounds, the WEAPON's own glist —
     /// not the placement's object).
-    pub fn create_placed(translation: V3, rotation: [f32; 3], type_: u16, id: u16, rounds: i16, switch_channel: u16, sound: u16, respawn: u16, lifetime: u8, model: u32, bounds: Model, w: &WeaponData, models: &std::collections::HashMap<u32, Model>) -> Option<Pickup> {
+    /// `has_gold_medal` = `PlrStats_HasGoldMedal` 0x199a40 over the current `bonus[0]` word and the level's
+    /// BaseMap — the game's gate sits between the id check and the set intercept [M 0x18dda0:88-104:
+    /// `if ((uVar7 == 6) && (PlrStats_HasGoldMedal__Fv(), lVar3 == 0)) return 0;`] — a kind-6 (the '007'
+    /// bonus) with no gold medal for the level creates NOTHING.
+    pub fn create_placed(translation: V3, rotation: [f32; 3], type_: u16, id: u16, rounds: i16, switch_channel: u16, sound: u16, respawn: u16, lifetime: u8, model: u32, bounds: Model, w: &WeaponData, models: &std::collections::HashMap<u32, Model>, has_gold_medal: bool) -> Option<Pickup> {
         if id == 0xFFFF { return None; }
+        // The kind-6 gold-medal gate, in the game's order: after the id −1 check, BEFORE the
+        // 7..=11 set intercept [M 0x18dda0:89-104].
+        if type_ == kind::BOND_BONUS && !has_gold_medal { return None; }
         if (7..=11).contains(&type_) {
             return Self::create_from_set(translation, rotation, type_, w, models);
         }

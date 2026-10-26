@@ -472,14 +472,14 @@ pub fn load_mp(iso: &str, archive: &str, all: bool) -> Result<scene::Scene> {
 }
 
 fn load_inner(iso: &str, archive: &str, all: bool, mp: bool) -> Result<scene::Scene> {
-    load_impl(iso, archive, all, None, false, &[], mp, None, 1)
+    load_impl(iso, archive, all, None, false, &[], mp, None, 1, 0)
 }
 
 /// net-match-host: the ONLINE match load — the MP core from the negotiated settings (the host's
 /// choices + seed, equal on every machine) instead of the `--mp` default. The level build draws
 /// from the settings' seed (see `Scene::build`'s Rng note).
 pub fn load_mp_carry(iso: &str, archive: &str, all: bool, save: Option<&nf_game::player::RamSave>, settings: nf_game::mp::MpSettings) -> Result<scene::Scene> {
-    load_impl(iso, archive, all, save, false, &[], true, Some(settings), 1)
+    load_impl(iso, archive, all, save, false, &[], true, Some(settings), 1, 0)
 }
 
 /// mp-join-in-progress: the late joiner's headless fast-forward. Loads the
@@ -655,7 +655,7 @@ pub fn mp_late_join_catchup_joins(
 /// `--dev`: the same load with the dev view-model merge (folded 190-fix-dev2). Normal play never
 /// passes `dev = true`, so no extra archive is opened without the flag.
 pub fn load_dev(iso: &str, archive: &str, all: bool) -> Result<scene::Scene> {
-    load_impl(iso, archive, all, None, true, &[], false, None, 1)
+    load_impl(iso, archive, all, None, true, &[], false, None, 1, 0)
 }
 
 /// `load` pre-merged for the given weapon ids (`--give` at startup, the dev menu's lazy give):
@@ -663,7 +663,7 @@ pub fn load_dev(iso: &str, archive: &str, all: bool) -> Result<scene::Scene> {
 /// from their owning archive before the scene builds, so the weapon draws exactly as it does on a
 /// level that carries it (`weapon_assets::merge_weapon_assets`).
 pub fn load_weapons(iso: &str, archive: &str, all: bool, wids: &[u8]) -> Result<scene::Scene> {
-    load_impl(iso, archive, all, None, false, wids, false, None, 1)
+    load_impl(iso, archive, all, None, false, wids, false, None, 1, 0)
 }
 
 /// The sim catch-up cap (`NF_MAXTICKS`, default 4) — see the frame loop.
@@ -680,18 +680,18 @@ const NET_HASH_EVERY: u32 = 15;
 /// wrote, and `Player_InitWeapon` (0x1a7ef8) runs the per-level loadout switch over `Player_RamLoad`
 /// (0x1957a8). `None` = a cold load (the game's boot path; `Player_RamLoad`'s whole body is skipped).
 pub fn load_with_carry(iso: &str, archive: &str, all: bool, save: Option<&nf_game::player::RamSave>) -> Result<scene::Scene> {
-    load_impl(iso, archive, all, save, false, &[], false, None, 1)
+    load_impl(iso, archive, all, save, false, &[], false, None, 1, 0)
 }
 
 /// The carry-over load pre-merged for the given weapon ids (the dev menu's lazy give: the same
 /// warm reload the level transition runs, plus the given weapons' assets).
 pub fn load_with_carry_weapons(iso: &str, archive: &str, all: bool, save: Option<&nf_game::player::RamSave>, wids: &[u8]) -> Result<scene::Scene> {
-    load_impl(iso, archive, all, save, false, wids, false, None, 1)
+    load_impl(iso, archive, all, save, false, wids, false, None, 1, 0)
 }
 
 /// `--dev` level transition: the carry-over load with the dev view-model merge.
 pub fn load_with_carry_dev(iso: &str, archive: &str, all: bool, save: Option<&nf_game::player::RamSave>) -> Result<scene::Scene> {
-    load_impl(iso, archive, all, save, true, &[], false, None, 1)
+    load_impl(iso, archive, all, save, true, &[], false, None, 1, 0)
 }
 
 /// difficulty-effects: the front-end's launch path — the mission loads with the difficulty the
@@ -699,12 +699,21 @@ pub fn load_with_carry_dev(iso: &str, archive: &str, all: bool, save: Option<&nf
 /// [M C_SBNFDFCTY 0x216ca8:15, 0x1c7e78:25 boot default 2]). The plain `load*` wrappers keep 1
 /// (the old direct-load replay parity).
 pub fn load_with_carry_difficulty(iso: &str, archive: &str, all: bool, save: Option<&nf_game::player::RamSave>, difficulty: u32) -> Result<scene::Scene> {
-    load_impl(iso, archive, all, save, false, &[], false, None, difficulty)
+    load_impl(iso, archive, all, save, false, &[], false, None, difficulty, 0)
+}
+
+/// pickup-medal-gate: the campaign load with the `bonus[0]` word in play — the game's `bonus[]`
+/// global (`LS_LoadBonus` 0x1ce488 fills it from the save's BUNS block; nothing resets it per map
+/// [M Menu_SetBonus 0x1ff898's writers]) that `PlrStats_HasGoldMedal` 0x199a40 reads for
+/// `Pickup_Create`'s kind-6 gate [M 0x18dda0:93-95]. The front end passes the active profile's
+/// word; the plain `load*` wrappers keep 0 (the fresh-boot BSS state [L ee_start_05 0x2e1b88]).
+pub fn load_with_carry_medals(iso: &str, archive: &str, all: bool, save: Option<&nf_game::player::RamSave>, difficulty: u32, bonus: u64) -> Result<scene::Scene> {
+    load_impl(iso, archive, all, save, false, &[], false, None, difficulty, bonus)
 }
 
 /// difficulty-effects: the warm reload with a weapon-asset set at the selected difficulty.
 pub fn load_with_carry_weapons_difficulty(iso: &str, archive: &str, all: bool, save: Option<&nf_game::player::RamSave>, wids: &[u8], difficulty: u32) -> Result<scene::Scene> {
-    load_impl(iso, archive, all, save, false, wids, false, None, difficulty)
+    load_impl(iso, archive, all, save, false, wids, false, None, difficulty, 0)
 }
 
 /// The fail/death menu's Restart serve — the reload loop's `level_exit_restart` branch
@@ -803,7 +812,7 @@ pub fn warm_exit_save(sim: &scene::Sim) -> nf_game::player::RamSave {
         .with_tally(&sim.drones.progress)
 }
 
-fn load_impl(iso_path: &str, archive: &str, all: bool, save: Option<&nf_game::player::RamSave>, dev: bool, give: &[u8], mp: bool, mp_settings: Option<nf_game::mp::MpSettings>, difficulty: u32) -> Result<scene::Scene> {
+fn load_impl(iso_path: &str, archive: &str, all: bool, save: Option<&nf_game::player::RamSave>, dev: bool, give: &[u8], mp: bool, mp_settings: Option<nf_game::mp::MpSettings>, difficulty: u32, bonus: u64) -> Result<scene::Scene> {
     use nf_formats::{anim::Sequence, character, levelbin::LevelBin};
     use std::collections::HashMap;
     let mut t = std::time::Instant::now();
@@ -1247,6 +1256,8 @@ fn load_impl(iso_path: &str, archive: &str, all: bool, save: Option<&nf_game::pl
         // machine — the session's settings blob carries it); 0 keeps the pre-net constant.
         mp_seed: mp_settings.as_ref().map_or(0, |st| st.seed),
         mp_body_skins: std::array::from_fn(|slot| mp_settings.as_ref().map_or(0, |st| nf_game::mp::slot_skin(st, slot))),
+        // pickup-medal-gate: the `bonus[0]` word the kind-6 gate reads [M 0x199a40 → 0x18dda0:93-95].
+        bonus,
     };
     let mut scene = scene::Scene::build(&level, !all, &skeletons, sequences, Some(&drones), difficulty, mp_settings.as_ref());
     phase_mark("07 scene build (Scene::build)", t); t = std::time::Instant::now();
@@ -3435,11 +3446,17 @@ impl App {
         // level load reads GameState+0x28; the direct-load wrappers keep the replay 1].
         let mp_settings = self.pending_mp_settings.take();
         let difficulty = self.selected_difficulty;
+        // pickup-medal-gate: the profile's `bonus[0]` word rides every front-end load — the game's
+        // `bonus[]` global is ONE store that survives every map load (only `LS_LoadBonus` 0x1ce488
+        // and the award path write it [M Menu_SetBonus 0x1ff898 callers]), so the kind-6 gate
+        // [M 0x18dda0:93-95] reads the save's medals on every level. No profile → the fresh-boot
+        // zero word [L ee_start_05 0x2e1b88].
+        let bonus = self.fe.as_ref().map_or(0, |fe| fe.bonus_bits());
         let job = async_load::Job::spawn(move || {
             if let Some(st) = mp_settings {
                 load_mp_carry(&iso, &name, all, save.as_ref(), st)
             } else if dev { load_with_carry_dev(&iso, &name, all, save.as_ref()) }
-            else { load_with_carry_difficulty(&iso, &name, all, save.as_ref(), difficulty) }
+            else { load_with_carry_medals(&iso, &name, all, save.as_ref(), difficulty, bonus) }
                 .map_err(|e| e.to_string())
         });
         self.async_load = Some(LevelLoad { job, next, ptp_return, ready: None });
@@ -6466,6 +6483,18 @@ pub fn run() -> Result<()> {
             // `--set-channel N` (dev, headless too): raise one switch channel before the ticks — the window
             // path raises it at frame 120; render checks of channel-driven draws need it here as well.
             if let Some(c) = args.iter().position(|a| a == "--set-channel").and_then(|i| args.get(i + 1)).and_then(|v| v.parse::<u8>().ok()) { sim.drones.set_channel(c); }
+            // `--debris-probe x,y,z` (dev render aid): four blast-debris pieces (the MetalHash_132 meshes,
+            // `Debris_CreateEx` 0x1ac808's class-0x10 object) thrown up so they are back at that height on
+            // tick 60 under the debris gravity (`--frame 60`), so a shot shows their draw.
+            if let Some(v) = args.iter().position(|a| a == "--debris-probe").and_then(|i| args.get(i + 1)) {
+                let c: Vec<f32> = v.split(',').filter_map(|t| t.parse().ok()).collect();
+                if c.len() == 3 {
+                    for (k, &h) in nf_game::explode::METAL_HASH_132.iter().enumerate() {
+                        sim.drones.blast_debris.push(nf_game::shatter::Debris { model: h, pos: [c[0] + 0.3 * k as f32 - 0.45, c[1], c[2]],
+                            rot: [0.3 * k as f32, 0.5, 0.0], vel: [0.0, 0.0803, 0.0], spin: [0.0; 3], life: 100_000, fade: 0xff, e8: 1.0 });
+                    }
+                }
+            }
             // `--hold-npcs` (dev): guards freeze where they stand but stay shootable — aim render checks at them.
             if args.iter().any(|a| a == "--hold-npcs") { sim.drones.hold_npcs = true; }
             // `--bond x,y,z`: Bond starts exactly there (in the air he falls), instead of the level start.
