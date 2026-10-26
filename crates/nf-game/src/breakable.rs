@@ -403,11 +403,9 @@ impl Breaks {
     /// (interact_07000001_live.rs:171).
     pub fn drone_step(&mut self, drone_from: V3, drone_to: V3, level_01: bool, scripted_walk: bool, blocked_reach: f32, rng: &mut Rng) -> Vec<BreakEffect> {
         let mut kills = Vec::new();
-        // The scripted-walk gate is NOT the game's rule: PCSX2 at frame 2175 of 07000001 shows pane
-        // #130 already in shards with the opening Yakuza crouched inside after his scripted dive
-        // [L 2026-10-26, PCSX2 frame 2175] — a root-motion step drains too.
-        let _ = scripted_walk;
-        if !level_01 { return kills; }
+        // The caller passes `scripted_walk` only for an AI state's anim step; a PlayScript start
+        // script's move drains (the opening Yakuza's dive shatters #130 [L 2026-10-26, PCSX2 frame 2175]).
+        if !level_01 || scripted_walk { return kills; }
         let sq = (drone_to[0] - drone_from[0]).powi(2)
             + (drone_to[1] - drone_from[1]).powi(2)
             + (drone_to[2] - drone_from[2]).powi(2);
