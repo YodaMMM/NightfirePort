@@ -77,7 +77,14 @@ channel-writer census, each with the game's behaviour [M/D], the port's, and a G
   the CRASH lines are environmental kills, not test failures; the previous session recorded the
   same. Re-running those binaries standalone is the honest read.
 
-Suite total: PENDING — filled in before the finish (see below).
+Suite total (partial, killed at the wall): **1414 passed, 0 failed, 115 ignored over 413 of 820
+binaries**; 6 binaries CRASHed with exit -9 (SIGKILL): net_match_end_clients_live,
+mp_online_failures, net_soak_faults_live, mp_remote_fx_live, net_desync_report_live,
+mp_death_hands_online — all net_*/mp_* memory hogs; `mp_online_failures` SIGKILLs standalone too,
+so the kill is the binary's own footprint against the 4 GB sandbox ceiling, not a test failure and
+not this branch's doing (the branch changes no lib code). The run was killed at a hung binary
+(~08:45 UTC) with the sandbox wall at 09:16; the remaining 407 binaries are untouched ground for
+the next session's total line.
 
 ## Live checks for the main agent
 
