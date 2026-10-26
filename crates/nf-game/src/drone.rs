@@ -1759,6 +1759,11 @@ pub struct Drone {
     /// along for `NDrone2_FindOpponent`'s exact alive test [M 0x1424e0 disasm 0x1430e4-0x1430f0:
     /// the candidate needs `(+0xFE & 1) == 0`].
     pub delete_me: bool,
+    /// `Drone+0x4F8 & 0x4` — the 0700004a dead-body-keeps-gravity bit: `NDrone2_DSTATE_Death_Anim`
+    /// 0x1637f8:26 and `NDrone2_DSTATE_AbseilDeath` 0x169b28:20 set it on enter, and
+    /// `NDrone2_DoGravity` 0x141e58:12-15 returns 1 (gravity on) on it BEFORE every other gate —
+    /// a corpse carrying it falls even with the collision bit 0x20 cleared [M].
+    pub keeps_gravity: bool,
 }
 
 /// Normalise a vector (the grenade throw direction helper).
@@ -1998,6 +2003,8 @@ impl Drone {
             blocked_reach: 0.0,
             // +0x174 — the shared target registry slot, allocated on first sight.
             target_id: 0xff,
+            // 0700004a dead-body-keeps-gravity (AbseilDeath's ENTER arm) — see the field.
+            keeps_gravity: false,
             // BodyGlow_Create 0x1ac158 — every guard spawn glows on the shipped path (the
             // switch_NO_DRONES gate is 0 in every shipped level [M 0x1ac158:9]).
             body_glow: crate::body_glow::create(0, false),
@@ -5683,7 +5690,7 @@ impl Drone {
     /// drones up to 0.2 (the live traces pin the snap's heights; the fix-driver-air2 probe showed the 109j
     /// settle-everywhere transients flipped the seeded cover RNG — danim 178 90@1.0 instead of lean-out 176 51@1.5
     /// → UnderCoverAim 90 vs live 37). The `free_root` path (SpecialDeath) bypasses this; `bounded = false` (the
-    /// AI-boundary push-out flag) also skips it. [M] constants: WldGravity (0,−9.8,0), REC_FRAME_RATE 1/60,
+    /// collision bit 0x20) skips it too — except the `keeps_gravity` (bit 4) corpse's collision-free gravity arm. [M] constants: WldGravity (0,−9.8,0), REC_FRAME_RATE 1/60,
     /// hip+0.6 ray, 0.2 on-surface, probe 0.4 (0x140e90; 0.55 when +0xd8 == 0xc and 0.3 when +0x2f — unmodelled,
     /// the gate's band only shifts, the sit/stand split does not change), 0.125 settle rate.
     pub fn collision_handler(&mut self, world: &CollisionWorld) {
@@ -5713,7 +5720,28 @@ impl Drone {
             }
             return;
         }
-        if self.free_root || !self.bounded { return; }
+        if self.free_root { return; }
+        if !self.bounded {
+            // Bit 0x20 cleared: `NDrone2_DoCollision` 0x149ec8:12-14 returns 0 — no collision
+            // (no down-ray, no hits, no settle). The 0x4F8 & 4 corpse still gravitates:
+            // `NDrone2_DoGravity` 0x141e58:12-15 returns 1 on the bit BEFORE the 0x20/0x200 folds,
+            // and the handler's DoGravity arm integrates it collision-free — velocity +=
+            // WldGravity·REC_FRAME_RATE (the feet flag anim+0x60 & 8 stays clear: no probe runs in
+            // this branch), then pos += velocity·REC_FRAME_RATE; no damping (the ×0.98 tail is the
+            // rope arm's, [M 0x140968:139-141 vs 152-192]) and no settle ([M 0x140968:292-295 — the
+            // tail's feet-flag test never fires]). The 0700004a abseil corpse falls through the
+            // shaft until the draw-grace soft-delete removes it [M 0x169b28 case 3].
+            if self.keeps_gravity {
+                self.in_air = true;
+                self.on_surface = false;
+                self.velocity[1] += -9.8 * (1.0 / 60.0);
+                let r = 1.0 / 60.0;
+                self.pos[0] += self.velocity[0] * r;
+                self.pos[1] += self.velocity[1] * r;
+                self.pos[2] += self.velocity[2] * r;
+            }
+            return;
+        }
         // `+0x4F8 & 0x4000` cleared at the top.
         self.in_air = false;
         // `NDrone2_DoCollision` / `NDrone2_DoGravity` predicates: the game gates these on the drone
@@ -9702,9 +9730,12 @@ impl Drone {
                 if d.level == 0x0700_004a {
                     // +0x4f8 = (& ~0x20) | 4: the port's `bounded` flag stands for the collision bit
                     // 0x20 — clearing it drops the corpse through the collision driver untouched
-                    // (the free-fall arm of `Drone_CollisionHandler`'s air branch does not apply —
-                    // +0x23 = 0 below — but the gravity/branch gate in the port is `bounded`).
+                    // (DoCollision 0x149ec8:12-14 returns 0 with the bit clear), and bit 4
+                    // (`keeps_gravity`) keeps the gravity running: DoGravity 0x141e58:12-15 returns
+                    // 1 on the bit BEFORE the 0x20/0x200 folds — the corpse free-falls, the
+                    // collision handler's DoGravity arm integrates it [M 0x169b28:18-21].
                     self.bounded = false;
+                    self.keeps_gravity = true;
                 } else {
                     self.corpse = true; // obj+0xf0 bit 0x20
                 }
@@ -9723,15 +9754,24 @@ impl Drone {
                 self.drop_weapon(d, rng);
                 true
             }
-            // UPDATE (case 3): on 0700004a wait to be drawn, then Enable(0) + obj+0xfe |= 1 (the soft
-            // delete); elsewhere wait for +0xcdc == 0 and the feet probe (the corpse landed) → danim
-            // 10, +0xcdc = 1, DEAD 0x47 [M case 3]. The game's danim 10 arm is `DroneAnim_SetDAnimNow`
+            // UPDATE (case 3): on 0700004a the corpse stays while it has been drawn recently
+            // (`obj+0xFC != 0` — the early return) and is Enable(0)'d + obj+0xFE |= 1 (the soft
+            // delete) once the drawn-grace is out [M 0x169b28:41-47]; elsewhere wait for +0xcdc == 0
+            // and the feet probe (the corpse landed) → danim 10, +0xcdc = 1, DEAD 0x47 [M case 3].
+            // The game's danim 10 arm is `DroneAnim_SetDAnimNow`
             // (0x13dd78: clear the completion action, `SetDAnimInternal(10, 0, 0)`, mark +0x57B on a
             // started script) followed by `+0x596 = 0x47` [M 0x169b28:53-55] — DEAD is the completion
             // state, applied when the class-9 follow-on 0xbf starts (see the landing arm).
             (state::ABSEIL_DEATH, msg::UPDATE) => {
                 if d.level == 0x0700_004a {
-                    if self.drawn { self.delete_me = true; self.present = false; self.enabled = false; }
+                    // `obj+0xFC != 0` → the corpse persists this tick [M 0x169b28:42-44]: the
+                    // drawn-grace counter (obj+0xFC — 2 per drawn tick, decremented per control
+                    // pass [M 0x1e62d8:71 / 0x1336f8:242-246]) is read BEFORE this tick's refresh
+                    // (see Drones::tick), so `drawn_grace == 0` is the game's third undrawn control
+                    // pass. Then `NDrone2_Enable(0)` + obj+0xFE |= 1 — the soft delete [M
+                    // 0x169b28:45-46]. (The old port inverted the gate on the per-tick cull flag —
+                    // it deleted the corpse the first DRAWN tick, the reported vanish.)
+                    if self.drawn_grace == 0 { self.delete_me = true; self.present = false; self.enabled = false; }
                 } else if !self.abseil_land_latch {
                     // The landing gate is +0xcdc (NOT +0xcd8 — the old port polled the death-channel
                     // latch here and never landed) [M 0x169b28 case 3]: the feet probe (anim+0x60 & 8,
@@ -11624,6 +11664,11 @@ pub struct Drones {
     pub doors: crate::door::Doors,
     /// The fuseboxes (`FuseBox_Create` 0x1b0448; map-tower2): 07000014's OBJECT_FuseBox1 sabotage boxes.
     pub fuseboxes: Vec<crate::fusebox::FuseBox>,
+    /// fusebox-geometry: the wire objects' LOCAL bounds by hash (`FuseBox` scripts' Entity streams),
+    /// resolved against the live entity matrix at contact time — the game collides the round with the
+    /// wire OBJECT's geometry (`Collide_PickObj` 0x1eae80 → `obj+0xD0` → `FuseBox_Update`
+    /// 0x1adfe8:88-123), not a sphere at the entity translation.
+    pub wire_geo: std::collections::HashMap<u32, ([f32; 3], [f32; 3])>,
     /// The helicopter (`Copter_Create` 0x17d340, placement 0x2F; fix-objects2): 07000008's
     /// extraction copter — gated on ch 5, its arrival writes ch 0x4B (the last mission objective).
     pub copters: Vec<crate::copter::Copter>,
@@ -11996,7 +12041,7 @@ impl Drones {
             movie_request: None,
             pickups: Vec::new(), inventory: crate::pickup::Inventory::level_start(0x73, 34), taken: Vec::new(), scripts: Default::default(), player_events: Vec::new(), npc_enabled: true, hold_npcs: false, hold_active: false,
             npc_system_disabled: false,
-            spawn_counter: 0, audio: Default::default(), script_sounds: Vec::new(), map_sounds: Default::default(), music: Default::default(), attack_gate: Default::default(), alarm_music: [0; 3], voice_last: Vec::new(), patrol_cooldown: 0, saw_opp_this_frame: false, saw_opp_last_frame: false, searchlights: Default::default(), doors: Default::default(), fuseboxes: Vec::new(), sss: Default::default(), bullet_paths: Vec::new(), sl_shots: Vec::new(), props: Default::default(), break_kills: Vec::new(), breaks: Default::default(), monitors: Default::default(), mission: crate::mission::Mission::new(), mission_carry: None, mission_inited: false, mission_events: Vec::new(), useobjs: Default::default(), ai_points: Vec::new(), bullet_path_weapons: Vec::new(), copters: Vec::new(), copter_paths: Vec::new(), locks: Vec::new(), grapple_points: Vec::new(), prev_event2: 0,
+            spawn_counter: 0, audio: Default::default(), script_sounds: Vec::new(), map_sounds: Default::default(), music: Default::default(), attack_gate: Default::default(), alarm_music: [0; 3], voice_last: Vec::new(), patrol_cooldown: 0, saw_opp_this_frame: false, saw_opp_last_frame: false, searchlights: Default::default(), doors: Default::default(), fuseboxes: Vec::new(), wire_geo: Default::default(), sss: Default::default(), bullet_paths: Vec::new(), sl_shots: Vec::new(), props: Default::default(), break_kills: Vec::new(), breaks: Default::default(), monitors: Default::default(), mission: crate::mission::Mission::new(), mission_carry: None, mission_inited: false, mission_events: Vec::new(), useobjs: Default::default(), ai_points: Vec::new(), bullet_path_weapons: Vec::new(), copters: Vec::new(), copter_paths: Vec::new(), locks: Vec::new(), grapple_points: Vec::new(), prev_event2: 0,
             bullet_contacts_now: Vec::new(),
             bullet_contacts_prev: Vec::new(),
             // fix-06-alarm.
@@ -12299,6 +12344,32 @@ impl Drones {
             obj.map(|o| (o.centre, o.radius))
         });
         self.fuseboxes = fuseboxes;
+        // fusebox-geometry: the wire objects' LOCAL bounds, keyed by hash. The contact resolves the
+        // entity's hash at hit time and transforms these by the object's live matrix.
+        {
+            use nf_formats::nis::Cmd;
+            let mut geo: std::collections::HashMap<u32, ([f32; 3], [f32; 3])> = Default::default();
+            for fb in &self.fuseboxes {
+                let Some(nis) = level.nis.get(&fb.script) else { continue };
+                for st in nis.streams.iter() {
+                    for cmd in st.decode() {
+                        let Cmd::Entity { hash, .. } = cmd else { continue };
+                        if geo.contains_key(&hash) { continue; }
+                        let Some(&(m, o)) = level.by_hash.get(&hash) else { continue };
+                        let (mut lo, mut hi) = ([f32::MAX; 3], [f32::MIN; 3]);
+                        for leaf in &level.maps[m].objects[o].gfx.leaves {
+                            for b in &leaf.batches {
+                                for v in &b.verts {
+                                    for c in 0..3 { lo[c] = lo[c].min(v.pos[c]); hi[c] = hi[c].max(v.pos[c]); }
+                                }
+                            }
+                        }
+                        if lo[0] <= hi[0] { geo.insert(hash, (lo, hi)); }
+                    }
+                }
+            }
+            self.wire_geo = geo;
+        }
         // SimpleScripts (`SS_Create` 0x1a9c58): the 0xE2 placements with a non-zero key count, their
         // keys from the main map's 0x19 blocks (map-tower2).
         self.sss = crate::ss::SsList::create(&level.maps[m].placements, &path_blocks, |p| {
@@ -12642,6 +12713,31 @@ impl Drones {
     /// sound (the first-person fire script's, 0x403 for the P2K) for the drones' hearing.
     /// The closest approach of the segment `a`–`b` to the sphere (centre `c`, radius `r`): the classic
 /// closest-point-on-segment distance test.
+/// The round's segment against an axis-aligned box (the slab test) — the fusebox wire contact.
+fn segment_hits_aabb(a: V3, b: V3, lo: V3, hi: V3) -> bool {
+    let mut t0 = 0.0f32;
+    let mut t1 = 1.0f32;
+    for k in 0..3 {
+        let (p, d) = (a[k], b[k] - a[k]);
+        if d.abs() < 1e-9 {
+            if p < lo[k] || p > hi[k] {
+                return false;
+            }
+        } else {
+            let (mut ta, mut tb) = ((lo[k] - p) / d, (hi[k] - p) / d);
+            if ta > tb {
+                std::mem::swap(&mut ta, &mut tb);
+            }
+            t0 = t0.max(ta);
+            t1 = t1.min(tb);
+            if t0 > t1 {
+                return false;
+            }
+        }
+    }
+    true
+}
+
 fn segment_hits_sphere(a: V3, b: V3, c: V3, r: f32) -> bool {
     let ab = [b[0] - a[0], b[1] - a[1], b[2] - a[2]];
     let ac = [c[0] - a[0], c[1] - a[1], c[2] - a[2]];
@@ -13467,12 +13563,52 @@ fn segment_hits_sphere(a: V3, b: V3, c: V3, r: f32) -> bool {
             let kind = d.weapons.records.get(b.weapon as usize).map_or(0u16, |r| u16::from_le_bytes([r[0x10], r[0x11]]));
             if crate::fusebox::FuseBox::hit_survives_filter(kind) {
                 let mut contacts: Vec<(usize, usize, usize)> = Vec::new();
+                // fusebox-geometry: the round is tested against the wire OBJECT's own bounds (the
+                // `Collide_PickObj` 0x1eae80 pick + `FuseBox_Update` 0x1adfe8:88-123 chain). The old
+                // 0.5-radius sphere sat at the script entity's translation, which on 07000014 is
+                // 1.5 m BELOW the visible cable run ([D] OBJECT_GreenWire1/BlueWire1 local y 1.49..1.72
+                // through the entity matrix), so a beam on the cables never touched it.
                 for (fi, fb) in self.fuseboxes.iter().enumerate() {
                     for (g, k, obj) in fb.alive_wires() {
-                        if let Some(p) = Self::script_obj_pos(&self.scripts, d, obj) {
-                            if Self::segment_hits_sphere(b.pos, end, p, crate::fusebox::WIRE_RADIUS) {
-                                contacts.push((fi, g, k));
+                        let hit = match self.scripts.objects.list.get(obj) {
+                            Some(Some(crate::nis::Obj::Entity { hash, matrix, .. })) => {
+                                match self.wire_geo.get(hash) {
+                                    Some((lo, hi)) => {
+                                        let (mut wlo, mut whi) = ([f32::MAX; 3], [f32::MIN; 3]);
+                                        for cx in 0..2 {
+                                            for cy in 0..2 {
+                                                for cz in 0..2 {
+                                                    let p = [
+                                                        if cx == 0 { lo[0] } else { hi[0] },
+                                                        if cy == 0 { lo[1] } else { hi[1] },
+                                                        if cz == 0 { lo[2] } else { hi[2] },
+                                                    ];
+                                                    let w = nf_formats::placement::transform(matrix, p);
+                                                    for c in 0..3 {
+                                                        wlo[c] = wlo[c].min(w[c]);
+                                                        whi[c] = whi[c].max(w[c]);
+                                                    }
+                                                }
+                                            }
+                                        }
+                                        // the cables are flat: a hair of thickness for the slab test
+                                        for c in 0..3 {
+                                            wlo[c] -= 0.01;
+                                            whi[c] += 0.01;
+                                        }
+                                        Self::segment_hits_aabb(b.pos, end, wlo, whi)
+                                    }
+                                    None => Self::script_obj_pos(&self.scripts, d, obj).is_some_and(|p| {
+                                        Self::segment_hits_sphere(b.pos, end, p, crate::fusebox::WIRE_RADIUS)
+                                    }),
+                                }
                             }
+                            _ => Self::script_obj_pos(&self.scripts, d, obj).is_some_and(|p| {
+                                Self::segment_hits_sphere(b.pos, end, p, crate::fusebox::WIRE_RADIUS)
+                            }),
+                        };
+                        if hit {
+                            contacts.push((fi, g, k));
                         }
                     }
                 }
@@ -18249,6 +18385,14 @@ fn segment_hits_sphere(a: V3, b: V3, c: V3, r: f32) -> bool {
         let mut ch = std::mem::take(&mut self.channels);
         self.sss.tick(&mut ch, &ss_contacts, self.frame);
         self.channels = ch;
+        // The SS operate arm's own sample (level-06-audit): `Sound_Play3D(…, ext+0x14, obj+0x80)`
+        // on the 0x40 -> 1 transition [M 0x1a9948:86-89] — 07000006's barrel traps #353/#354/#389/#390
+        // carry sample 0x11b [D census]. Same routing as the lock's pending_sounds.
+        if !self.sss.pending_sounds.is_empty() {
+            for (id, pos) in self.sss.pending_sounds.drain(..) {
+                self.audio.play3d(id as u32, pos, None);
+            }
+        }
         // The sound triggers (`SoundTrigger_Update` 0x1b2790 — the object walk's per-frame pass;
         // fix-06-alarm): the alarm siren starts the same frame its ON channel is up.
         { let _p = crate::prof::scope("phase: sound batch"); self.sound_triggers.tick(&mut self.audio, &self.channels); }
@@ -18704,6 +18848,8 @@ mod tests {
             blocked_reach: 0.0,
             // +0x174 — the shared target registry slot.
             target_id: 0xff,
+            // 0700004a dead-body-keeps-gravity (AbseilDeath's ENTER arm) — see the field.
+            keeps_gravity: false,
         };
         dr
     }

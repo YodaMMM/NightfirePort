@@ -760,6 +760,51 @@ mod tests {
         assert!(drone_plate.hit(&ch, &[Toucher { drone: true, ..on[0] }], &[]));
     }
 
+    /// `Trigger_Update` case 5 — the OUT mux (`Trigger_MultiplexOut` 0x1b2ed8 forces subtype 5
+    /// [M 0x1b2ed8:14-22]): every tick it copies the OUT channel's state into each target
+    /// [M 0x1b1a78:147-158, `switch_channels[list[i]] := switch_channels[out]`], a 0 state
+    /// included — the mirror, not a latch. 0700000b's #304 is the disc shape: out 0x41 →
+    /// targets [0x5A, 0x64(100)] [D placements-all #304] — the parachute-jump chain's last hop.
+    #[test]
+    fn out_mux_mirrors_the_out_channel_both_ways_each_tick() {
+        let mut ch = Channels::default();
+        let mut out = Trigger { kind: kind::OUT, out: 0x41, list: vec![0x5a, 0x64], ..plate(kind::OUT, 0, 0, vec![]) };
+        // Source off → the targets are driven to 0 (a stale 1 would be cleared — the mirror law).
+        ch.set(0x5a, 1, 1);
+        out.update(&mut ch, &[], &[], 2);
+        assert!(!ch.on(0x5a) && !ch.on(0x64));
+        // Source on → both targets rise.
+        ch.set(0x41, 1, 3);
+        out.update(&mut ch, &[], &[], 4);
+        assert!(ch.on(0x5a) && ch.on(0x64));
+        // Source falls again → the targets follow (not latched).
+        ch.set(0x41, 0, 5);
+        out.update(&mut ch, &[], &[], 6);
+        assert!(!ch.on(0x5a) && !ch.on(0x64));
+    }
+
+    /// `Trigger_Calc`'s level latches [M 0x1b1900 — the hard-coded per-level copies]: on
+    /// 0700000b ch 0x34 on → ch 0x2d rises every calc (the roof cut-scene SP #177's arming law;
+    /// the disc carries no placement writer for 0x2d [D trig dump — 60 records, no 0x2d out]),
+    /// while 0x34 low leaves 0x2d alone.
+    #[test]
+    fn the_0b_calc_latch_copies_0x34_into_0x2d() {
+        let mut ch = Channels::default();
+        let mut trigs: Vec<Trigger> = vec![];
+        ch.set(0x34, 1, 1);
+        calc(0x0700_000b, &mut trigs, &mut ch, &[], &[], 2);
+        assert!(ch.on(0x2d));
+        // A different level does not latch.
+        let mut ch2 = Channels::default();
+        ch2.set(0x34, 1, 1);
+        calc(0x0700_000a, &mut trigs, &mut ch2, &[], &[], 2);
+        assert!(!ch2.on(0x2d));
+        // 0x34 off → no rise on 0b either.
+        let mut ch3 = Channels::default();
+        calc(0x0700_000b, &mut trigs, &mut ch3, &[], &[], 2);
+        assert!(!ch3.on(0x2d));
+    }
+
     /// The movie trigger (0xF4 → action 0xd), `Trigger_Update` case 0xd [M 0x1b1a78:190-201, disasm
     /// 0x1b1f24-0x1b1f78]: fires only when the FIRST input slot is non-zero AND its channel is on;
     /// the fire CLEARS that channel (so it cannot re-fire until something re-arms it) and raises
