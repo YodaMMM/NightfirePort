@@ -60,6 +60,21 @@ pub struct SpaceLaser {
     pub deleted: bool,
     /// ext lane 3+0x0C as a bool: the whine handle being live (the port has no sound runtime).
     pub whine_on: bool,
+    /// The loaded script's tick clock — the port's `Script_Update` stand-in (the game runs
+    /// `Script_Update` every tick in states 1 and 3 [M 0x1aa3f8:116/:176]; `Script_IsPlaying`
+    /// 0x1db630 reports the play head against the stream's End marker [M Script_StreamEnd
+    /// 0x1db420 clears the play bit]). Advanced by the sim wiring after each `tick`.
+    pub script_ticks: u32,
+    /// The loaded script's [D] length (the lib record's `length` field; the wiring fills it at
+    /// the `LoadScript` hand-off from `Data::scripts` — 360/360/10 for the 1b records
+    /// [D docs/levels/0700001b-audit.md:606-612]). 0 = no script loaded (a missing script is
+    /// the game's own `Script_Load` failure — `Script_IsPlaying(0)` reports 0 and state 1
+    /// exits on the next tick).
+    pub script_len: u32,
+    /// The live whine handle (`Sound_Play(100.0, 0x5de, 0, 0)`'s return, stored at
+    /// ext lane 3+0x0C [M 0x1aa3f8:119-121]; `Sound_Stop`ed on the shared tail [M :231-235]).
+    /// 0 = none. Written by the sim wiring only.
+    pub whine_handle: u32,
 }
 
 fn param(params: &[(u32, u32)], k: u32) -> u32 {
@@ -83,9 +98,14 @@ pub fn from_placement(placement: usize, params: &[(u32, u32)]) -> SpaceLaser {
         fire_origin: [0.0; 3],
         target: [0.0; 3],
         arm_delay: param(params, 3) as f32, // ext lane 3+0x00 = param 3 (165.0 on disc [D])
-        cooldown: 0.0,
+        // ext lane 3+0x08 = the creator's constant 0x41200000 = 10.0 s [M 001aa8b8:38] — the
+        // first shot waits the full 10 s re-fire period, it does not fire on the first gate tick.
+        cooldown: 10.0,
         deleted: false,
         whine_on: false,
+        script_ticks: 0,
+        script_len: 0,
+        whine_handle: 0,
     }
 }
 
@@ -119,6 +139,26 @@ pub enum LaserOut {
     Beam { alpha: u8 },
     /// `Emitter_Create(0,0,0xc000010, target, 0x2d6210, 0,0,0)` at the hit point [M :189].
     ImpactEmitter,
+}
+
+/// The state-2 fire's beam object (`control_create_object(0x40, …)` then `obj+0xff = 0x10`
+/// [M 0x1aa3f8:159-165 — control_funcs row 0x10 = `Debris_Update` 0x1aac00, object.md:110]):
+/// ext+0x30 = 5 (the life counter), ext+0x32 = 0 (the alpha decay rate), the mesh 0x20005cd,
+/// obj+0x106 = `0x7f + Rand(0x80)` (the brightness byte; rate 0 → it never decays)
+/// [M 0x1aa3f8:163-167], the stretch origin→target set once by `PositionBeam` [M :188].
+/// `Debris_Update` decrements ext+0x30 per tick and raises the delete flag when it drops
+/// below 1 — the beam lives 5 update ticks [M 001aac00:20-28]. The port models exactly that
+/// as the renderer's draw hand-off (endpoints + alpha per tick; the draw is done separately).
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct LaserBeam {
+    /// The fire origin (the stretch start).
+    pub from: V3,
+    /// The aim lane at the fire tick — the ray impact point when the ray hit [M :153-160].
+    pub to: V3,
+    /// obj+0x106: `0x7f + Rand(0x80)` [M :166-167].
+    pub alpha: u8,
+    /// ext+0x30: 5 at creation, −1 per update tick, deleted at < 1 [M 001aac00:20-28].
+    pub life: i16,
 }
 
 /// The per-tick inputs: the live channels, GameState+0x52, the player position quad
