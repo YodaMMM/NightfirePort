@@ -85,7 +85,13 @@ There is NO walkway→duct-top ascent and NO mid-floor→pocket drop — both de
 
 ## Suite result
 
-(pending — the suite is running; the line lands before the finish)
+The fast suite was started twice on the final tree: the first run died on this round's own probe
+example (a `door::Key` field typo — fixed and pushed, 9c2adcca), the restart on the final tree
+**built clean: `build ok: 829 test binaries in 874 s`** and was in its run phase when this report
+was filed; the sandbox expiry cut the run before the total line — no full-suite total from this
+sandbox (the same record as the -1 round). The crates the tests touch were run directly:
+nf-game (lib 570/0 + all test binaries green) and nf-view's fix_0c_hatch_live (3 passed / 1
+ignored), fix_level_chain_live (green), ai_live (37/37).
 
 ## Usage
 
