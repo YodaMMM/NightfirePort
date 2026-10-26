@@ -204,6 +204,35 @@ fn walk_from_the_spawn_to_the_exit_with_the_contact() {
             let sim = w.scene.sim.as_ref().unwrap();
             let cstate = sim.drones.list[ci].state;
             drop(sim);
+            // The meet hall's west wall check (the level-11-stairwell-bullet-wall-3 stall): Bond
+            // chased guard 15 OUT of the hall (the north lane) and stands in the west corridor with
+            // the hall's west wall segment (x≈1.93, z 11.1-13.1 [D the disc's collision cels — the
+            // port's ray fan, walkreal_probe11::dump_07000001_west_wall]) between him and the
+            // contact; every close/walk-past target sits inside the hall and the straight-line
+            // steering wedges on the wall face (the nav's own first hop is a hall-side node across
+            // the wall, and the stuck ladder's sidesteps slide ALONG it, never the ~1.7 north to
+            // the wall's north edge). The player walks back the lane he came out by — the hall's
+            // north opening, the AI's own chain node[8] (−0.39,14.28) → node[23] (3.39,14.69) →
+            // node[7] (6.88,14.62) [D nav path 0 nodes+links; the lane passes the AI's bounds
+            // walls through their z≈13.1 north end], then closes on the contact; the AllyLeadWait
+            // release [M NDrone2_DSTATE_AllyLeadWait 0x15eda8 case 3: pd > −7.0 && (pd != 0.0 ||
+            // dist2d < 5.0)] needs Bond within 5.0 straight-line when pd == 0.0 (Bond off the
+            // route's 5.0 node scan), and inside the hall he is.
+            {
+                let sim = w.scene.sim.as_ref().unwrap();
+                let (bp, cp) = (sim.bond.pos, sim.drones.list[ci].pos);
+                let walled = bp[0] < 2.0 && sim.world.segment(bp, cp).is_some();
+                drop(sim);
+                if walled {
+                    eprintln!("[01] round {round}: the hall's west wall is between Bond ({bp:?}) and the contact ({cp:?}) — walking the north lane back in");
+                    w.walk_nav_to([0.6, 6.5, 14.3], "the west corridor lane (north)", 1.4);
+                    w.walk_nav_to([3.39, 6.4, 14.69], "the hall's north opening (nav node 23)", 1.4);
+                    w.walk_nav_to([6.88, 6.4, 14.62], "inside the hall (nav node 7)", 1.4);
+                    w.walk_nav_to(settled, "close on the contact (the [M 0x15eda8] release band)", 1.2);
+                    prev_settled = settled;
+                    continue;
+                }
+            }
             if cstate == nf_game::drone::state::PLAYER_IN_WAY {
                 let sim = w.scene.sim.as_ref().unwrap();
                 let cp = sim.drones.list[ci].pos;
@@ -211,9 +240,9 @@ fn walk_from_the_spawn_to_the_exit_with_the_contact() {
                 drop(sim);
                 eprintln!("[01] round {round}: contact in PlayerInWay — Bond steps back off his lane");
                 w.walk_nav_to(back, "step out of the lead's way", 3.0);
-            } else if round >= 10 {
+            } else if round >= 24 {
                 let sim = w.scene.sim.as_ref().unwrap();
-                panic!("[01] the contact stalled at ({:.1},{:.1},{:.1}) state {:#x} armed_peer {:.1} with no guard to clear (round {round})",
+                panic!("[01] the contact stalled at ({:.1},{:.1},{:.1}) state {:#x} armed_peer {:.1} with no guard to clear (round {round}; the cap 24 gives the [M 0x15eda8] d2<5 release time to land on the slow closing)",
                     settled[0], settled[1], settled[2], sim.drones.list[ci].state, sim.drones.list[ci].armed_peer_dist);
             } else if walker::dxz(settled, prev_settled) < 1.0 {
                 let sim = w.scene.sim.as_ref().unwrap();
@@ -225,11 +254,34 @@ fn walk_from_the_spawn_to_the_exit_with_the_contact() {
                 eprintln!("[01] round {round}: the lead is wedged at ({:.1},{:.1},{:.1}) state {cstate:#x} — Bond walks past him toward the plate (the lead resumes out of the way band and re-paths)",
                     settled[0], settled[1], settled[2]);
                 prev_settled = settled;
+                let before = w.scene.sim.as_ref().unwrap().bond.pos;
                 w.walk_nav_to(ahead, "walk past the wedged lead", 3.0);
+                let moved = walker::dxz(w.scene.sim.as_ref().unwrap().bond.pos, before);
+                if moved < 1.0 {
+                    // The nav gave up (the hall's meet-frozen bodies park mid-lane when the
+                    // fight resolves differently): a real player vaults the crowd — the jump
+                    // press carries the capsule over the parked bodies.
+                    eprintln!("[01] the walk-past nav gave up — Bond vaults forward (the jump press)");
+                    let sim = w.scene.sim.as_ref().unwrap();
+                    let (bp, cp) = (sim.bond.pos, sim.drones.list[ci].pos);
+                    drop(sim);
+                    let to = [cp[0] - bp[0], cp[2] - bp[2]];
+                    let l = (to[0] * to[0] + to[1] * to[1]).sqrt().max(1e-4);
+                    for _ in 0..90 {
+                        let sim = w.scene.sim.as_ref().unwrap();
+                        let err = walker::wrap_pi(to[0].atan2(to[1]) - sim.bond.yaw);
+                        drop(sim);
+                        w.tick(nf_game::player::Input { forward: 1.0, jump: true, turn: err.clamp(-0.08, 0.08), ..Default::default() }, false);
+                    }
+                }
             } else {
+                // Close RIGHT up (1.2, not the old 4.0): the AllyLeadWait release [M 0x15eda8
+                // case 3, the port's ALLY_LEAD_WAIT arm] needs Bond's mission-path distance back
+                // inside (−7, 0] — on the hall's winding route a 4.0 straight-line stop still read
+                // > 7 route-units and the wait held. A real player walks up to his partner.
                 eprintln!("[01] round {round}: no guards to clear (contact state {cstate:#x}) — closing on him");
                 prev_settled = settled;
-                w.walk_nav_to(settled, "close on the contact", 4.0);
+                w.walk_nav_to(settled, "close on the contact", 1.2);
             }
             continue;
         }

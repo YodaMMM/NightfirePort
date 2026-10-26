@@ -546,10 +546,180 @@ impl Copter {
     }
 }
 
+/// One missile pod's firing inputs (`Copter_FireMissile` 0x17d9f0 reads the pod obj's):
+/// `+0x80` the world position, `+0x90` the matrix whose row 2 `Mat_GetDir` 0x1e2218 returns,
+/// and `*(pod+0xD8)+0x38` — the pod's cel-glist sphere radius, the muzzle stand-off [M :79-84].
+#[derive(Clone, Copy, Debug)]
+pub struct MissilePod {
+    pub pos: V3,
+    /// `Mat_GetDir(pod+0x90)` — the pod's facing (the non-homing bullet direction) [M :78].
+    pub facing: V3,
+    /// `*(pod_glist)+0x38` [M :79-84; the gun path reads the same scalar with a ×1.0 factor at
+    /// 0x17d828:66-84].
+    pub glist_radius: f32,
+}
+
+/// `Copter_FireMissile` 0x17d9f0 — the state-2 missile arm (`Copter_Update` 0x17dbb8:188-198
+/// calls it every attack tick while `attackmode_159 & 1 == 0`).
+///
+/// Order of operations (the RNG order is stream-visible, pinned by the tests below):
+/// 1. `Rand_Rand(0x86e6)` — unconditional; even → pod `*(rec+0x50)` (slot 8), odd →
+///    `*(rec+0x4C)` (slot 7) [M :47-54, disasm 0x17da0c `ori 0x86e6`].
+/// 2. pod absent → return None, no further draws [M :55-57].
+/// 3. cadence: `GameState+0x52 % (u32)(FRAME_RATE_INT · DiffMod) != 0` → return None (one
+///    missile per 60·DiffMod ticks) [M :58-64, disasm 0x17da30-0x17da9c].
+/// 4. on GameState 0x07000008: `Rand_Rand((u32)(8.0/DiffMod)) == 0` → homing — the bullet
+///    direction is `normalise(player+0x30 − pod+0xC0)` [M :65-76]; otherwise (and on every
+///    other level) the direction is the pod's facing [M :78].
+/// 5. spawn: `pos = pod+0x80 + dir·(glist_radius · 1.5)`, weapon record 0x6d (109), 0x62 (98)
+///    on 0x07000008, `Bullet_init(-1, copter, pod, weapon_data+id·0x10c, pos, dir, 0xffff)`
+///    [M :79-97; weapon_data base 0x2bf150 — disasm 0x17db4c-0x17db58]. Draw hand-off: the
+///    bullet's flight/mesh is the port's bullet machinery, not this module's.
+///
+/// Returns `Some((spawn_pos, dir, weapon_id, homing))` on a firing tick.
+pub fn fire_missile(
+    rng: &mut crate::drone::Rng,
+    frame: u32,
+    diff_mod: f32,
+    level_is_07000008: bool,
+    pod_7: Option<MissilePod>,
+    pod_8: Option<MissilePod>,
+    player: V3,
+) -> Option<(V3, V3, u32, bool)> {
+    let pick = rng.rand(0x86e6); // [M :47 the draw happens before every gate]
+    let pod = if pick & 1 == 0 { pod_8 } else { pod_7 }; // [M :49-54]
+    let pod = pod?;
+    let period = (60.0f32 * diff_mod) as u32; // FRAME_RATE_INT=60 [M disasm 0x17da38-0x17da68 fptoui]
+    if frame % period != 0 {
+        return None; // [M :61-64]
+    }
+    let (dir, homing) = if level_is_07000008 && rng.rand((8.0f32 / diff_mod) as u32) == 0 {
+        // [M :65-76 — homing on 0x07000008 only; chance 1/8·1/1.5→(u32)5·…: fptoui(8.0/DiffMod)]
+        let mut d = [player[0] - pod.pos[0], player[1] - pod.pos[1], player[2] - pod.pos[2]];
+        let len = (d[0] * d[0] + d[1] * d[1] + d[2] * d[2]).sqrt();
+        if len > 0.0 {
+            d = [d[0] / len, d[1] / len, d[2] / len];
+        }
+        (d, true)
+    } else {
+        (pod.facing, false) // [M :78 Mat_GetDir]
+    };
+    let muzzle = pod.glist_radius * 1.5; // [M :79-84]
+    let pos = [
+        pod.pos[0] + dir[0] * muzzle,
+        pod.pos[1] + dir[1] * muzzle,
+        pod.pos[2] + dir[2] * muzzle,
+    ];
+    let weapon = if level_is_07000008 { 0x62 } else { 0x6d }; // [M disasm 0x17db28/0x17db30]
+    Some((pos, dir, weapon, homing))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::drone::Rng;
     use crate::door::{interp, parse_keys};
+
+    // --- Copter_FireMissile 0x17d9f0 ---
+
+    fn pods() -> (MissilePod, MissilePod) {
+        (
+            MissilePod { pos: [10.0, 0.0, 0.0], facing: [0.0, 0.0, 1.0], glist_radius: 2.0 }, // slot 7
+            MissilePod { pos: [20.0, 0.0, 0.0], facing: [1.0, 0.0, 0.0], glist_radius: 4.0 }, // slot 8
+        )
+    }
+
+    /// [M 0x17d9f0:47-54] the pod pick draw happens BEFORE the cadence gate: every call
+    /// consumes exactly one draw on a non-firing tick, and the parity routes slot 8 (even) /
+    /// slot 7 (odd) exactly as the raw draw says.
+    #[test]
+    fn fire_missile_pod_parity_and_draw_order() {
+        let (p7, p8) = pods();
+        // A non-cadence frame: the draw is still consumed, nothing fires. [M :47,:61-64]
+        let mut rng = Rng::new(7);
+        let r = fire_missile(&mut rng, 1, 1.0, false, Some(p7), Some(p8), [0.0; 3]);
+        assert!(r.is_none(), "frame 1 % 60 != 0 must not fire [M :61-64]");
+        assert_eq!(rng.draws, 1, "the pod draw precedes the cadence gate [M :47 disasm 0x17da0c]");
+        // Cadence frame: fires from whichever pod the parity picks, matching the raw draw.
+        let (mut rng, mut mirror) = (Rng::new(7), Rng::new(7));
+        let even = mirror.rand(0x86e6) & 1 == 0;
+        let (pos, dir, weapon, homing) =
+            fire_missile(&mut rng, 60, 1.0, false, Some(p7), Some(p8), [0.0; 3]).unwrap();
+        assert_eq!(rng.draws, 1, "no homing draw off 0x07000008 [M :65 level-gated]");
+        let want = if even { p8 } else { p7 };
+        assert_eq!(pos, [want.pos[0] + want.facing[0] * 6.0, 0.0, want.pos[2] + want.facing[2] * 6.0],
+            "muzzle = pod pos + dir·(glist_radius·1.5) [M :79-84]");
+        assert_eq!(dir, want.facing, "non-homing dir = Mat_GetDir(pod+0x90) [M :78]");
+        assert!(!homing);
+        assert_eq!(weapon, 0x6d, "weapon record 109 off 0x07000008 [M disasm 0x17db28]");
+    }
+
+    /// [M :55-57] no pod registered → None; the pick draw still ran (pod draw is unconditional).
+    #[test]
+    fn fire_missile_without_pods_is_inert_but_draws() {
+        let mut rng = Rng::new(7);
+        let r = fire_missile(&mut rng, 60, 1.0, false, None, None, [0.0; 3]);
+        assert!(r.is_none());
+        assert_eq!(rng.draws, 1, "[M :47 the draw precedes the pod check]");
+    }
+
+    /// [M :58-64] the cadence: exactly the frames where GameState+0x52 % (60·DiffMod) == 0 fire.
+    #[test]
+    fn fire_missile_cadence_is_60_times_diffmod() {
+        let (p7, p8) = pods();
+        let mut rng = Rng::new(3);
+        let fired: Vec<u32> = (1..=240u32)
+            .filter(|f| fire_missile(&mut rng, *f, 2.0, false, Some(p7), Some(p8), [0.0; 3]).is_some())
+            .collect();
+        assert_eq!(fired, vec![120, 240], "period (u32)(60·2.0) = 120 [M :58-64]");
+    }
+
+    /// [M :65-76] homing on 0x07000008 only: the winning roll turns the bullet toward the
+    /// player; on other levels the same stream never homes.
+    #[test]
+    fn fire_missile_homing_is_level_and_roll_gated() {
+        let (p7, p8) = pods();
+        // Find a seed whose FIRST draw leaves the cadence passing and whose homing roll == 0.
+        let player = [0.0, -5.0, 0.0];
+        let mut seed = 0u32;
+        let homing = loop {
+            let (mut rng, mut mirror) = (Rng::new(seed), Rng::new(seed));
+            mirror.rand(0x86e6);
+            if mirror.rand(8) == 0 {
+                break seed;
+            }
+            seed += 1;
+            let _ = rng;
+        };
+        let (p7h, p8h) = pods();
+        let mut rng = Rng::new(homing);
+        // Which pod fires depends on the pick; run once to learn it, then assert the direction.
+        let mut probe = Rng::new(homing);
+        let learn = probe.rand(0x86e6) & 1 == 0;
+        let _ = learn;
+        let (pos, dir, weapon, home) =
+            fire_missile(&mut rng, 60, 1.0, true, Some(p7h), Some(p8h), player).unwrap();
+        let want = if { Rng::new(homing).rand(0x86e6) & 1 == 0 } { p8h } else { p7h };
+        let len = ((player[0] - want.pos[0]).powi(2) + (player[1] - want.pos[1]).powi(2)
+            + (player[2] - want.pos[2]).powi(2))
+            .sqrt();
+        let expect = [
+            (player[0] - want.pos[0]) / len,
+            (player[1] - want.pos[1]) / len,
+            (player[2] - want.pos[2]) / len,
+        ];
+        assert_eq!((dir[0] - expect[0]).abs(), 0.0, "dir = normalise(player − pod) [M :69-74]");
+        assert!(home, "the roll==0 tick homes [M :66-68]");
+        assert_eq!(weapon, 0x62, "weapon record 98 on 0x07000008 [M disasm 0x17db30]");
+        let _ = pos;
+        // Sister: off 07000008 the same seed does NOT home and does not draw the roll.
+        let (p7s, p8s) = pods();
+        let mut rng2 = Rng::new(homing);
+        let (_, dir2, _, home2) =
+            fire_missile(&mut rng2, 60, 1.0, false, Some(p7s), Some(p8s), player).unwrap();
+        assert!(!home2);
+        assert_ne!(dir2, expect, "non-homing dir is the pod facing [M :78]");
+    }
 
     fn copter() -> Copter {
         Copter {

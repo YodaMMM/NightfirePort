@@ -479,6 +479,7 @@ fn box_of(from: V3, to: V3) -> (V3, V3) {
 }
 
 /// Whether the segment `from → to` crosses the triangle `t` (Möller–Trumbore, t in [0, 1]).
+/// TWO-SIDED — the portal crossing's semantics; do not "fix" onto the ray walks' one-sided rule.
 fn seg_tri_hit(from: V3, to: V3, t: &[V3; 3]) -> bool {
     let d = sub(to, from);
     let (e1, e2) = (sub(t[1], t[0]), sub(t[2], t[0]));
@@ -494,6 +495,27 @@ fn seg_tri_hit(from: V3, to: V3, t: &[V3; 3]) -> bool {
     if v < 0.0 || u + v > 1.0 { return false; }
     let tt = dot(e2, q) * inv;
     (0.0..=1.0).contains(&tt)
+}
+
+/// The ray-triangle fraction for the bullet walks (Möller–Trumbore, ONE-SIDED like every game ray
+/// test [M Intersect_RayGeom 0x10a8c8:168: `n·dir >= 0` skips the triangle]) — the same arithmetic
+/// `segment_in_sets_drop_pass` inlines, as a shared body so the scoped and flat bullet walks agree
+/// term for term.
+fn ray_tri_t(from: V3, d: V3, t: &[V3; 3]) -> Option<f32> {
+    let (e1, e2) = (sub(t[1], t[0]), sub(t[2], t[0]));
+    if dot(cross(e1, e2), d) >= 0.0 { return None; } // back face [M 0x10a8c8:168]
+    let p = cross(d, e2);
+    let det = dot(e1, p);
+    if det.abs() < 1e-12 { return None; }
+    let inv = 1.0 / det;
+    let s = sub(from, t[0]);
+    let u = dot(s, p) * inv;
+    if !(0.0..=1.0).contains(&u) { return None; }
+    let q = cross(s, e1);
+    let v = dot(d, q) * inv;
+    if v < 0.0 || u + v > 1.0 { return None; }
+    let tt = dot(e2, q) * inv;
+    (0.0..=1.0).contains(&tt).then_some(tt)
 }
 
 impl CollisionWorld {
@@ -900,6 +922,64 @@ impl CollisionWorld {
         }
         for &r in &sc.always { if !taken[r as usize] { taken[r as usize] = true; out.push(r); } }
         Some(out)
+    }
+
+    /// Diagnostic (level-11-stairwell-bullet-wall-4): the scoped bucket for `cell` as the ray
+    /// `from → to` straddles it — the same run list `segment_hit_scoped` tests, as (run, owner
+    /// pushed-instance ordinal) pairs so a probe can name every owner. Read-only.
+    pub fn scoped_run_owners(&self, cell: usize, from: V3, to: V3) -> Option<Vec<(u32, u32)>> {
+        let runs = self.scoped_runs(cell, &mut Self::ray_portal_hit(from, to))?;
+        Some(runs.into_iter().map(|r| {
+            let o = &self.stat.objects[r as usize];
+            let owner = if o.tris.start < self.stat.owners.len() { self.stat.owners[o.tris.start] } else { u32::MAX };
+            (r, owner)
+        }).collect())
+    }
+
+    /// The bullet-family segment over the game's cel-scoped pick: `segment_bullet` MINUS every
+    /// static triangle outside the straddle cells — `Collide_Pick` 0x1eb320:125 takes its candidate
+    /// nodes ONLY from `Collide_StraddleCels` 0x1eac98 (the BFS from the query's cel through the
+    /// portals the segment crosses), and the flying bullet re-feeds that start cel every tick
+    /// [M Bullet_update 0x12e7b0 disasm 0x12f0cc-0x12f0d8]. The missile cage and the dynamic set
+    /// stay in (the ForcedList walk runs when HITTEST+0x98's bit 0x10 is clear — the bullet's
+    /// +0x98 = 0 [M 0x12f040]; the cage rides the with-missile half the flat bullet query uses).
+    /// Falls back to the flat `segment_bullet` when there is no scope or the cell is unknown — the
+    /// caller's safety net, same as the scoped actor queries.
+    pub fn segment_bullet_scoped(&self, cell: Option<usize>, from: V3, to: V3) -> Option<f32> {
+        let Some(cell) = cell else { return self.segment_bullet(from, to) };
+        // An out-of-range cell is a caller bug: the flat answer is the conservative fallback (the
+        // scoped actor queries instead test nothing — their callers keep a valid `bond.cel`).
+        let in_range = self.scope.as_ref().is_some_and(|sc| cell < sc.graph.cells.len());
+        if !in_range { return self.segment_bullet(from, to); }
+        let Some(runs) = self.scoped_runs(cell, &mut Self::ray_portal_hit(from, to)) else { return self.segment_bullet(from, to) };
+        let d = sub(to, from);
+        let mut best = None::<f32>;
+        {
+            let stat = &self.stat;
+            for r in &runs {
+                let o = &stat.objects[*r as usize];
+                for k in o.tris.clone() {
+                    if stat.bullet_pass(k) { continue; } // the pass-flagged hits the bit-0x8 queries drop [M 0x1ebff0]
+                    let t = &stat.tris[k];
+                    if let Some(tt) = ray_tri_t(from, d, t) {
+                        if best.is_none_or(|b| tt < b) { best = Some(tt); }
+                    }
+                }
+            }
+        }
+        let dynamic = self.dynamic.read().unwrap();
+        for g in [&self.missile, &dynamic.geo] {
+            for o in along(g, from, to) {
+                for k in o.tris.clone() {
+                    if g.bullet_pass(k) { continue; } // [M 0x1ebff0]
+                    let t = &g.tris[k];
+                    if let Some(tt) = ray_tri_t(from, d, t) {
+                        if best.is_none_or(|b| tt < b) { best = Some(tt); }
+                    }
+                }
+            }
+        }
+        best
     }
 
     /// The actor-capsule portal test (`Intersect_Portal`'s 0x800 path [M 0x1ea7b8]: the point on the
@@ -1950,6 +2030,73 @@ mod tests {
         assert!(w3.segment_take_scoped(None, [0.0, 0.5, 0.0], [0.0, 0.5, 4.0]).is_some(), "unmapped cell: the flat fallback keeps the old behaviour");
     }
 
+    /// level-11-stairwell-bullet-wall-4: the bullet flight's cel-scoped pick. [M Collide_Pick
+    /// 0x1eb320:125 — the candidate nodes come ONLY from Collide_StraddleCels' BFS; the flying
+    /// bullet re-feeds its start cel per tick, disasm 0x12f0cc-0x12f0d8] — a wall in a
+    /// portal-unreachable cel stops the flat trace but not the scoped one; a straddled portal
+    /// brings it back; the 0x40 pass drop rides the scoped walk like the flat one
+    /// [M 0x1ebff0-0x1ec010]; an unmapped cell falls back to the flat answer.
+    #[test]
+    fn the_bullets_scoped_pick_skies_the_portal_unreachable_walls() {
+        let wall = [
+            [[2.0, 0.0, -2.0], [2.0, 2.0, 2.0], [2.0, 2.0, -2.0]],
+            [[2.0, 0.0, -2.0], [2.0, 0.0, 2.0], [2.0, 2.0, 2.0]],
+        ];
+        let mut stat = Geo::default();
+        for t in wall { stat.push(std::iter::once((t, 0x0au8))); }
+        stat.chunk(16);
+        let cell_centre = |lo: V3, hi: V3| [0, 1, 2].map(|k| (lo[k] + hi[k]) / 2.0);
+        let mut graph = ScopeGraph {
+            cells: vec![([-8.0, -8.0, -8.0], [1.9, 8.0, 8.0]), ([1.95, -8.0, -8.0], [8.0, 8.0, 8.0])],
+            portals: Vec::new(),
+            room: vec![true, true],
+        };
+        let mut scope_cells = vec![Vec::new(); graph.cells.len()];
+        let mut always = Vec::new();
+        for (run, _) in stat.owners.iter().enumerate() {
+            let c = cell_centre(stat.objects[run].lo, stat.objects[run].hi);
+            match graph.cells.iter().position(|(lo, hi)| (0..3).all(|k| lo[k] <= c[k] && c[k] <= hi[k])) {
+                Some(i) => scope_cells[i].push(run as u32),
+                None => always.push(run as u32),
+            }
+        }
+        let mk = |graph: ScopeGraph, cells: Vec<Vec<u32>>| CollisionWorld {
+            stat: Geo { tris: stat.tris.clone(), mats: stat.mats.clone(), objects: stat.objects.clone(), groups: Vec::new(), owners: Vec::new(), pass: stat.pass.clone() },
+            missile: Geo::default(), dynamic: Default::default(), shapes: Default::default(), shape_mats: Default::default(),
+            scope: Some(ScopeData { graph, cells, always: always.clone() }),
+        };
+        let ray = ([1.5, 1.0, 0.0], [3.5, 1.0, 0.0]);
+        let w = mk(graph.clone(), scope_cells.clone());
+        assert!(w.segment_bullet(ray.0, ray.1).is_some(), "flat: the wall stops the round");
+        assert!(w.segment_bullet_scoped(Some(0), ray.0, ray.1).is_none(),
+            "scoped from cell 0: the wall's cell 1 is portal-unreachable — the round flies on [M 0x1eb320:125]");
+        // Sister: a straddled portal brings the wall back into the pick.
+        graph.portals.push(ScopePortal { tris: [[[1.8, 0.0, -4.0], [1.8, 4.0, -4.0], [1.8, 4.0, 4.0]], [[1.8, 0.0, -4.0], [1.8, 4.0, 4.0], [1.8, 0.0, 4.0]]], a: 0, b: 1, centre: [1.8, 2.0, 0.0] });
+        scope_cells[1].push(0);
+        let w2 = mk(graph, scope_cells);
+        assert_eq!(w2.segment_bullet_scoped(Some(0), ray.0, ray.1), w2.segment_bullet(ray.0, ray.1),
+            "with the straddled portal the scoped pick stops on the wall like the flat one");
+        // The 0x40 pass drop inside the straddled cells: a pass-flagged plane in cell 0 in front of
+        // a solid card in cell 0 — the scoped walk skips the plane and stops on the card behind.
+        let mut stat3 = Geo::default();
+        let fudge = [[[0.0, 0.0, -2.0], [0.0, 2.0, 2.0], [0.0, 2.0, -2.0]]];
+        let card = [[[1.0, 0.0, -2.0], [1.0, 2.0, 2.0], [1.0, 2.0, -2.0]]];
+        for t in fudge { stat3.push(std::iter::once((t, 0x40u8))); } // the surface byte's pass bit [M 0x1ebf78-80]
+        for t in card { stat3.push(std::iter::once((t, 0x0au8))); }
+        stat3.chunk(16);
+        let w3 = CollisionWorld {
+            stat: stat3, missile: Geo::default(), dynamic: Default::default(), shapes: Default::default(), shape_mats: Default::default(),
+            scope: Some(ScopeData { graph: ScopeGraph { cells: vec![([-8.0; 3], [8.0; 3])], portals: Vec::new(), room: vec![true] }, cells: vec![vec![0, 1]], always: Vec::new() }),
+        };
+        assert_eq!(w3.segment_bullet_scoped(Some(0), [-1.0, 1.0, 0.0], [2.0, 1.0, 0.0]), w3.segment_bullet([-1.0, 1.0, 0.0], [2.0, 1.0, 0.0]),
+            "the scoped walk keeps the flat walk's 0x40 drop: the fudge plane passes, the card stops");
+        assert!(w3.segment_bullet_scoped(Some(0), [-1.0, 1.0, 0.0], [2.0, 1.0, 0.0]).unwrap() > 0.3,
+            "the stop is the card at x=1, not the fudge at x=0");
+        // Unmapped cell → the flat fallback (the safety net the other scoped queries share).
+        assert_eq!(w.segment_bullet_scoped(None, ray.0, ray.1), w.segment_bullet(ray.0, ray.1), "unmapped cell: flat fallback");
+        assert_eq!(w.segment_bullet_scoped(Some(9), ray.0, ray.1), w.segment_bullet(ray.0, ray.1), "out-of-range cell: flat fallback");
+    }
+
     /// fix-foliage-bullets: the bullet-family queries (`segment_bullet`, `segment_surface_bullet`)
     /// drop every hit whose hit-data would carry the pass flag — the glist node's flags bit 0x40
     /// (`cel+0x94` [M parsemap_block_map_data_static 0x1d1998:103]) or the surface byte's bit 0x40
@@ -2187,5 +2334,254 @@ mod tests {
         for (name, m) in [("guard", LOS_GUARD_VISION), ("headroom", LOS_PLAYER_HEADROOM)] {
             assert!(!w.line_of_sight([0.0, 1.0, 0.0], [4.0, 1.0, 0.0], m), "{name}: plain geometry blocks");
         }
+    }
+
+    /// level-11-stairwell-bullet-wall: the assertion-free bullet-path census. From each reported
+    /// Bond spot toward the rope guards [D the reported spot], list EVERY triangle the port's collision
+    /// sets hold on the ray (static / missile cage / dynamic), with the owner's identity (map,
+    /// object, name, glist flags), the material byte and the pass flags — the candidate invisible
+    /// wall the game's bullet passes. Run with --ignored --nocapture.
+    #[test]
+    #[ignore = "assertion-free census; run with --ignored --nocapture"]
+    fn stairwell_bullet_census_07000011() {
+        use nf_formats::iso9660::IsoImage;
+        let iso = std::env::var("NF_ISO").expect("NF_ISO");
+        let img = IsoImage::open(&iso).expect("open iso");
+        let (entries, bin) = nf_formats::disc::files_bin_entries(&img).expect("FILES.BIN");
+        let fe = entries.iter().find(|e| e.name.eq_ignore_ascii_case("07000011.bin")).expect("archive");
+        let data = img.read_bytes(bin.lba as u64 * 2048 + fe.offset as u64, fe.size as u64).expect("read");
+        let level = Level::parse(&data).expect("parse 07000011");
+        let instances = level.instances(true).0;
+        let w = CollisionWorld::build(&level, &instances);
+        // The pushed static instances in push order (build_scoped's filter: collision present,
+        // not the 0x20 shadow flag, not the 0x1000 cage) — the identity table for stat.owners.
+        let mut stat_src: Vec<(usize, usize)> = Vec::new();
+        for inst in &instances {
+            let obj = &level.maps[inst.map].objects[inst.object];
+            if obj.collision.is_none() { continue; }
+            if obj.flags & 0x20 != 0 || obj.flags & 0x1000 != 0 { continue; }
+            stat_src.push((inst.map, inst.object));
+        }
+        let spots: [[f32; 3]; 3] = [[15.91, 24.01, -2.45], [20.35, 24.01, -2.44], [15.33, 26.69, 1.33]];
+        let guards: [[f32; 3]; 2] = [[18.895, 46.516, 1.434], [19.745, 46.580, 0.363]];
+        for (si, s) in spots.iter().enumerate() {
+            for (gi, g) in guards.iter().enumerate() {
+                let d0 = [g[0] - s[0], g[1] - s[1], g[2] - s[2]];
+                let len = (d0[0] * d0[0] + d0[1] * d0[1] + d0[2] * d0[2]).sqrt();
+                let dir = [d0[0] / len, d0[1] / len, d0[2] / len];
+                let far = 40.0f32;
+                let to = [s[0] + dir[0] * (len + far), s[1] + dir[1] * (len + far), s[2] + dir[2] * (len + far)];
+                eprintln!("\n[spot {} -> guard {}] from ({:.2},{:.2},{:.2}) guard ({:.2},{:.2},{:.2}) guard-dist {:.2} far-end ({:.2},{:.2},{:.2})",
+                    si, gi, s[0], s[1], s[2], g[0], g[1], g[2], len, to[0], to[1], to[2]);
+                let dd = sub(to, *s);
+                let mut hits: Vec<(f32, &'static str, String, u8, bool, [f32; 3])> = Vec::new();
+                let dynamic = w.dynamic.read().unwrap();
+                let sets: [(&'static str, &Geo); 3] = [("stat", &w.stat), ("missile", &w.missile), ("dyn", &dynamic.geo)];
+                for (set, geo) in sets {
+                    for (ri, o) in geo.objects.iter().enumerate() {
+                        let id = if set == "stat" {
+                            let src = geo.owners.get(ri).copied().unwrap_or(u32::MAX) as usize;
+                            match stat_src.get(src) {
+                                Some((m, oi)) => {
+                                    let ob = &level.maps[*m].objects[*oi];
+                                    format!("map{}#{} '{}' glist {:#x}", m, oi, ob.name, ob.flags)
+                                }
+                                None => format!("run{ri}?"),
+                            }
+                        } else {
+                            format!("run{ri}")
+                        };
+                        for k in o.tris.clone() {
+                            let t3 = &geo.tris[k];
+                            let e1 = sub(t3[1], t3[0]);
+                            let e2 = sub(t3[2], t3[0]);
+                            if dot(cross(e1, e2), dd) >= 0.0 { continue; } // back face
+                            let pv = cross(dd, e2);
+                            let det = dot(e1, pv);
+                            if det.abs() < 1e-12 { continue; }
+                            let inv = 1.0 / det;
+                            let sv = sub(*s, t3[0]);
+                            let u = dot(sv, pv) * inv;
+                            if !(0.0..=1.0).contains(&u) { continue; }
+                            let qv = cross(sv, e1);
+                            let v = dot(dd, qv) * inv;
+                            if v < 0.0 || u + v > 1.0 { continue; }
+                            let tt = dot(e2, qv) * inv;
+                            if (0.0..=1.0).contains(&tt) {
+                                let pt = [s[0] + dd[0] * tt, s[1] + dd[1] * tt, s[2] + dd[2] * tt];
+                                hits.push((tt, set, id.clone(), geo.mats[k], geo.bullet_pass(k), pt));
+                            }
+                        }
+                    }
+                }
+                hits.sort_by(|a, b| a.0.partial_cmp(&b.0).unwrap());
+                for (tt, set, id, mat, pass, pt) in hits.iter().take(14) {
+                    eprintln!("  t={:.4} {:>7} mat={:#04x} pass={} at ({:.2},{:.2},{:.2}) owner {}",
+                        tt, set, mat, pass, pt[0], pt[1], pt[2], id);
+                }
+                eprintln!("  port segment={:?} segment_bullet={:?}",
+                    w.segment(*s, to), w.segment_bullet(*s, to));
+            }
+        }
+    }
+
+    /// level-11-stairwell-bullet-wall-4: the assertion-free census for the second reported spot.
+    /// Bond (22.40, 30.09, 1.42, yaw -1.505, pitch -0.035) frame 2944 fires into the well and the
+    /// decals hang mid-air on two flat planes (one diagonal under the stair flight, one upright
+    /// across the middle of the well). From that spot a fan of rays crosses the well; EVERY hit is
+    /// listed with the owner's identity (map, object, name, glist flags — bit 0x10 = not drawn
+    /// [M View_AddCels 0x1e6ba0]), the surface byte, its low-6-bit class, the port's pass flag and
+    /// whether the owner has any DRAWN geometry [D the parsed gfx leaves]. Run --ignored --nocapture.
+    #[test]
+    #[ignore = "assertion-free census; run with --ignored --nocapture"]
+    fn stairwell_walls4_census_07000011() {
+        use nf_formats::iso9660::IsoImage;
+        let iso = std::env::var("NF_ISO").expect("NF_ISO");
+        let img = IsoImage::open(&iso).expect("open iso");
+        let (entries, bin) = nf_formats::disc::files_bin_entries(&img).expect("FILES.BIN");
+        let fe = entries.iter().find(|e| e.name.eq_ignore_ascii_case("07000011.bin")).expect("archive");
+        let data = img.read_bytes(bin.lba as u64 * 2048 + fe.offset as u64, fe.size as u64).expect("read");
+        let level = Level::parse(&data).expect("parse 07000011");
+        let instances = level.instances(true).0;
+        let w = CollisionWorld::build(&level, &instances);
+        let mut stat_src: Vec<(usize, usize)> = Vec::new();
+        let mut stat_src_plc: Vec<u32> = Vec::new();
+        for inst in &instances {
+            let obj = &level.maps[inst.map].objects[inst.object];
+            if obj.collision.is_none() { continue; }
+            if obj.flags & 0x20 != 0 || obj.flags & 0x1000 != 0 { continue; }
+            stat_src.push((inst.map, inst.object));
+            stat_src_plc.push(inst.placement.flags);
+        }
+        // The reported spot and aim [D the reported spot]: yaw -1.505, pitch -0.035 → the port's look()
+        // lanes [M crates/nf-game/src/player.rs Bond::look]: p = pitch·π/2, dir = [cp·sy, sp, cp·cy].
+        let s = [22.40f32, 30.09, 1.42];
+        let p = (-0.035f32) * (std::f32::consts::PI / 2.0);
+        let (sp, cp) = (p.sin(), p.cos());
+        let (sy, cy) = ((-1.505f32).sin(), (-1.505f32).cos());
+        let base = [cp * sy, sp, cp * cy];
+        eprintln!("[walls4] spot ({:.2},{:.2},{:.2}) base dir [{:.4},{:.4},{:.4}] stat tris {} objects {}", s[0], s[1], s[2], base[0], base[1], base[2], w.stat.tris.len(), w.stat.objects.len());
+        // The decal planes: fire across the well. A fan over yaw ±0.45 and pitch ±0.22.
+        let mut planes: std::collections::BTreeMap<(String, u8, bool), (usize, f32, f32, [f32;3], bool)> = Default::default();
+        let dynamic = w.dynamic.read().unwrap();
+        for yaw_off in [-0.45f32, -0.3, -0.15, -0.075, 0.0, 0.075, 0.15, 0.3, 0.45] {
+            for pitch_off in [-0.22f32, -0.11, 0.0, 0.11, 0.22] {
+                let a = yaw_off + (-1.505f32);
+                let q = (pitch_off * (std::f32::consts::PI / 2.0)) + p;
+                let (sq, cq) = (q.sin(), q.cos());
+                let (sa, ca) = (a.sin(), a.cos());
+                let dir = [cq * sa, sq, cq * ca];
+                let far = 70.0f32;
+                let to = [s[0] + dir[0] * far, s[1] + dir[1] * far, s[2] + dir[2] * far];
+                let dd = sub(to, s);
+                let sets: [(&str, &Geo); 3] = [("stat", &w.stat), ("missile", &w.missile), ("dyn", &dynamic.geo)];
+                for (set, geo) in sets {
+                    for (ri, o) in geo.objects.iter().enumerate() {
+                        for k in o.tris.clone() {
+                            let t3 = &geo.tris[k];
+                            let e1 = sub(t3[1], t3[0]);
+                            let e2 = sub(t3[2], t3[0]);
+                            if dot(cross(e1, e2), dd) >= 0.0 { continue; }
+                            let pv = cross(dd, e2);
+                            let det = dot(e1, pv);
+                            if det.abs() < 1e-12 { continue; }
+                            let inv = 1.0 / det;
+                            let sv = sub(s, t3[0]);
+                            let u = dot(sv, pv) * inv;
+                            if !(0.0..=1.0).contains(&u) { continue; }
+                            let qv = cross(sv, e1);
+                            let v = dot(dd, qv) * inv;
+                            if v < 0.0 || u + v > 1.0 { continue; }
+                            let tt = dot(e2, qv) * inv;
+                            if !(0.0..=1.0).contains(&tt) { continue; }
+                            let pt = [s[0] + dd[0] * tt, s[1] + dd[1] * tt, s[2] + dd[2] * tt];
+                            let (id, drawn) = if set == "stat" {
+                                let src = geo.owners.get(ri).copied().unwrap_or(u32::MAX) as usize;
+                                match stat_src.get(src) {
+                                    Some((m, oi)) => {
+                                        let ob = &level.maps[*m].objects[*oi];
+                                        let drawn = !ob.gfx.leaves.is_empty();
+                                        (format!("map{}#{} '{}' glist {:#x}", m, oi, ob.name, ob.flags), drawn)
+                                    }
+                                    None => (format!("run{ri}?"), false),
+                                }
+                            } else { (format!("{set} run{ri}"), false) };
+                            let mat = geo.mats[k];
+                            let key = (id.clone(), mat, geo.bullet_pass(k));
+                            let e = planes.entry(key).or_insert((0, tt, tt, pt, drawn));
+                            e.0 += 1;
+                            e.1 = e.1.min(tt);
+                            e.2 = e.2.max(tt);
+                        }
+                    }
+                }
+            }
+        }
+        eprintln!("[walls4] distinct hit planes (owner, mat, port-pass) — rays 45, far 70: map {} entries", planes.len());
+        for ((id, mat, pass), (n, t0, t1, pt, drawn)) in &planes {
+            eprintln!("  {:>3} hits t {:.3}..{:.3} at ({:.2},{:.2},{:.2}) mat={:#04x} class={:#x} port_pass={} drawn={} | {}",
+                n, t0, t1, pt[0], pt[1], pt[2], mat, mat & 0x3f, pass, drawn, id);
+        }
+        // The one-segment view: what the flight sees on the centre ray, plus 4 near-centre rays —
+        // every hit in order with the owner's placement flags and the triangle's vertices (the
+        // diagonal-vs-upright read).
+        let mut rays: Vec<(&str, [f32; 3])> = vec![("centre", base)];
+        for (nm, yo, po) in [("yaw-0.075", -0.075f32, 0.0), ("yaw+0.075", 0.075, 0.0), ("pitch-0.11", 0.0, -0.11), ("pitch+0.11", 0.0, 0.11)] {
+            let a = yo + (-1.505f32);
+            let q = (po * (std::f32::consts::PI / 2.0)) + p;
+            let (sq, cq) = (q.sin(), q.cos());
+            let (sa, ca) = (a.sin(), a.cos());
+            rays.push((nm, [cq * sa, sq, cq * ca]));
+        }
+        for (nm, dir) in &rays {
+            let far = 70.0f32;
+            let to = [s[0] + dir[0] * far, s[1] + dir[1] * far, s[2] + dir[2] * far];
+            let dd = sub(to, s);
+            eprintln!("[walls4] ray {nm} dir [{:.4},{:.4},{:.4}]:", dir[0], dir[1], dir[2]);
+            let mut hits: Vec<(f32, String, u8, bool, [[f32; 3]; 3])> = Vec::new();
+            let sets: [(&str, &Geo); 3] = [("stat", &w.stat), ("missile", &w.missile), ("dyn", &dynamic.geo)];
+            for (set, geo) in sets {
+                for (ri, o) in geo.objects.iter().enumerate() {
+                    for k in o.tris.clone() {
+                        let t3 = &geo.tris[k];
+                        let e1 = sub(t3[1], t3[0]);
+                        let e2 = sub(t3[2], t3[0]);
+                        if dot(cross(e1, e2), dd) >= 0.0 { continue; }
+                        let pv = cross(dd, e2);
+                        let det = dot(e1, pv);
+                        if det.abs() < 1e-12 { continue; }
+                        let inv = 1.0 / det;
+                        let sv = sub(s, t3[0]);
+                        let u = dot(sv, pv) * inv;
+                        if !(0.0..=1.0).contains(&u) { continue; }
+                        let qv = cross(sv, e1);
+                        let v = dot(dd, qv) * inv;
+                        if v < 0.0 || u + v > 1.0 { continue; }
+                        let tt = dot(e2, qv) * inv;
+                        if !(0.0..=1.0).contains(&tt) { continue; }
+                        let (id, drawn) = if set == "stat" {
+                            let src = geo.owners.get(ri).copied().unwrap_or(u32::MAX) as usize;
+                            match stat_src.get(src) {
+                                Some((m, oi)) => {
+                                    let ob = &level.maps[*m].objects[*oi];
+                                    let drawn = !ob.gfx.leaves.is_empty();
+                                    (format!("map{}#{} '{}' glist {:#x} plcflags {:#x} drawn {}", m, oi, ob.name, ob.flags, stat_src_plc.get(src).copied().unwrap_or(0), drawn), drawn)
+                                }
+                                None => (format!("run{ri}?"), false),
+                            }
+                        } else { (format!("{set} run{ri}"), false) };
+                        hits.push((tt, format!("{id} mat={:#04x} port_pass={}", geo.mats[k], geo.bullet_pass(k)), geo.mats[k], geo.bullet_pass(k), *t3));
+                    }
+                }
+            }
+            hits.sort_by(|a, b| a.0.partial_cmp(&b.0).unwrap());
+            for (tt, id, _, _, tri) in hits.iter().take(10) {
+                eprintln!("  t={:.4} {} at ({:.2},{:.2},{:.2}) tri [({:.1},{:.1},{:.1})({:.1},{:.1},{:.1})({:.1},{:.1},{:.1})]",
+                    tt, id, s[0] + dd[0] * tt, s[1] + dd[1] * tt, s[2] + dd[2] * tt,
+                    tri[0][0], tri[0][1], tri[0][2], tri[1][0], tri[1][1], tri[1][2], tri[2][0], tri[2][1], tri[2][2]);
+            }
+        }
+        let to = [s[0] + base[0] * 70.0, s[1] + base[1] * 70.0, s[2] + base[2] * 70.0];
+        eprintln!("[walls4] centre segment={:?} segment_bullet={:?}", w.segment(s, to), w.segment_bullet(s, to));
     }
 }

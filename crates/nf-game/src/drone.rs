@@ -10820,7 +10820,7 @@ fn seg_point_dist2(a: V3, b: V3, p: V3) -> f32 {
 fn tick_charge_fuse(
     weapons: &nf_formats::weapon::WeaponData,
     b: &mut crate::bullet::Bullet,
-    out: &mut Vec<(V3, f32, f32, usize, u16, u32, f32)>,
+    out: &mut Vec<(V3, f32, f32, usize, u16, u32, f32, u16)>,
     beeps: &mut Vec<V3>,
 ) {
     if !b.fuse_ticks || b.defused { return; }
@@ -10836,7 +10836,11 @@ fn tick_charge_fuse(
         b.state = 2; // [M 0x12dd44-0x12dd58]
         if let Some(w) = weapons.records.get(b.weapon as usize) {
             let f = |o: usize| f32::from_le_bytes(w[o..o + 4].try_into().unwrap());
-            out.push((b.pos, f(0x08), f(0x0c), usize::MAX, b.weapon, 0x0600_0052, f(0x08)));
+            // explode-debris-spawn: Bullet_DoTrails' timer-death 12th arg is an UNWRITTEN stack
+            // slot (no `sw …,0($sp)` in the window before the jal 0x17cbd0 @0x12e1f0) — the value
+            // is runtime residue, indeterminate statically; the stand-in is 0 (no debris) [S
+            // unverified — live check in the report].
+            out.push((b.pos, f(0x08), f(0x0c), usize::MAX, b.weapon, 0x0600_0052, f(0x08), 0));
         }
     }
     // The 0x3b tail [M Bullet_DoTrails 0x12d890:418-444, 485-553]: the two countdown digits are
@@ -11331,7 +11335,15 @@ pub struct Drones {
     /// [M 0x12d0ac `lwc1 $f12, 8($v1)` + `mov.s $f13, $f12`; 0x12ce1c]) while the Samurai bolt's
     /// 0x100000/0x200000 arms pass f12 = 1.0 [M 0x12d0ec-0x12d0f0 `lui $at, 0x3f80; mtc1 $at, $f12`]
     /// with radius f13 = +0x08. Tuple: (pos, radius, damage, owner, weapon_type, script, scale).
-    pub pending_blasts: Vec<(V3, f32, f32, usize, u16, u32, f32)>,
+    pub pending_blasts: Vec<(V3, f32, f32, usize, u16, u32, f32, u16)>,
+    /// explode-debris-spawn: the live blast objects (`Explode_Create` 0x17cbd0's class-0x0F
+    /// objects, EXPLODEINFO at obj+0xE0) — age/kind/script state per blast, ticked each frame at
+    /// the head of the control walk (newest first) like the game's `DynamicObjList` [M 0x1336f8
+    /// dispatch + 0x134698 prepend; `Explode_Update` 0x17c350].
+    pub blasts: Vec<crate::explode::Explosion>,
+    /// explode-debris-spawn: the blasts' debris particles (`Debris_CreateEx` 0x1ac808's class-0x10
+    /// objects), integrated by `Debris_Update` 0x1aac00 (shared with the breakable path).
+    pub blast_debris: Vec<crate::shatter::Debris>,
     /// The satchel countdown beeps raised this tick (pos) — Bullet_DoTrails' 0x447 arm
     /// [M 0x12d890:435-443], flushed to audio + `sounds` after the bullets pass.
     pub pending_beeps: Vec<V3>,
@@ -12087,6 +12099,8 @@ impl Drones {
             // fix-restart-target: the fail-menu Restart's warm arm + the current level (GameState+0xC).
             level_exit_restart: false,
             pending_blasts: Vec::new(),
+            blasts: Vec::new(),
+            blast_debris: Vec::new(),
             pending_beeps: Vec::new(),
             fusebox_hurts: 0,
             level_current: 0,
@@ -12236,6 +12250,11 @@ impl Drones {
     /// The level attach without the level id (the world-fx level gates see 0) — every headless
     /// caller's original form; the scene build passes the id through `attach_level_id`.
     pub fn attach_level(&mut self, level: &nf_formats::level::Level) { self.attach_level_id(level, 0) }
+
+    /// The pending weather drop type — the `InitDrops(drop_type)` argument `Env_Create` 0x17b968
+    /// passes when the level's winning 0xDF placement builds `GlobalEnv`; the port's `env`
+    /// carries it from the first tick on. Test/inspection accessor (`env_pending` is internal).
+    pub fn pending_env_drop_type(&self) -> Option<u8> { self.env_pending.as_ref().map(|(k, _)| *k) }
 
     pub fn attach_level_id(&mut self, level: &nf_formats::level::Level, level_hash: u32) {
         self.triggers = crate::triggers::build(level);
@@ -12538,7 +12557,15 @@ impl Drones {
                 if sw.placement == i { sw.sp = Some(idx); }
             }
         }
-        if let Some(p) = ps.iter().find(|p| p.flags & 0xff == 0xdf) {
+        // The weather placement: `Env_Create` 0x17b968 sets `GlobalEnv = env` on EVERY
+        // successful call (and `InitDrops(drop_type)` 0x18bf68:8 with it), so with several
+        // 0xDF placements the LAST created one wins — the same placement-order walk
+        // `parsemap_create_dynamic_objects` 0x1d04f0 runs (07000014 carries two: #425 Weather
+        // p0=0xff, then #588 Bubble_gen p0=2 [D census]; the game's live DropType is 2).
+        // [S unverified: the game's `build_FindCel` gate can skip a placement whose cel lookup
+        // fails or whose cel already carries an env (0x17b968 early-outs before the store) —
+        // the port has no cel-attach model, so it takes the last match unconditionally.]
+        if let Some(p) = ps.iter().rev().find(|p| p.flags & 0xff == 0xdf) {
             let kind = p.params.iter().find(|(i, _)| *i == 0).map_or(0, |&(_, v)| v as u8);
             let boxes = level.instances(false).0.iter().filter(|i| i.placement.flags & 0xff == 0x32).map(|i| {
                 let o = &level.maps[i.map].objects[i.object];
@@ -12988,7 +13015,7 @@ fn segment_hits_sphere(a: V3, b: V3, c: V3, r: f32) -> bool {
     /// arms pass 1.0 [M 0x12d0ac / 0x12d0ec-0x12d0f0; fix-blast-scripts2]. scale = radius·0.06666667
     /// [M 0x17cbd0:84-106] is the object's obj+0xE8 field, NOT the script scale; its own Sound(0x3E)
     /// is the blast sound [D script stream 36].
-    fn spawn_blast(&mut self, d: &Data, pos: V3, radius: f32, damage: f32, owner: usize, weapon_type: u16, player_pos: V3, frame: u32, script: u32, scale: f32) {
+    fn spawn_blast(&mut self, d: &Data, pos: V3, radius: f32, damage: f32, owner: usize, weapon_type: u16, player_pos: V3, frame: u32, script: u32, scale: f32, debris_kind: u16) {
         // Every present drone is swept (the port's established GLOBAL-fallback convention: the
         // disabled guards' msg 9 lands on HandleImpact's (0, false) arm and takes the damage —
         // the merged frag pin `frag_at_the_same_spot_kills_the_trio` requires it; whether the
@@ -13099,6 +13126,34 @@ fn segment_hits_sphere(a: V3, b: V3, c: V3, r: f32) -> bool {
         // questions) — the old shape stays.
         if radius >= 0.5 { self.shake = self.shake.max(radius); }
         self.explosions.push((pos, radius, damage, owner, weapon_type));
+        // explode-debris-spawn: the blast is a persistent object now — `Explode_Create` 0x17cbd0's
+        // class-0x0F object with its EXPLODEINFO, ticked at the walk head from the next frame
+        // [M 0x1336f8 walk + 0x17c350 update]. Lifetime: a loaded script's +0xAB0 u16 — 165 for
+        // the standard blast script [L/M 0x17cd18], 15 when no script loaded [M 0x17cd38]; other
+        // scripts' +0xAB0 stand in at 165 [S unverified — only affects when the record dies, and
+        // their debris arm is dead anyway (the +0x98 gate)]. The debris direction/jitter come from
+        // the aligned basis: up row and basisA+basisB [M 0x17c930:118-131 (Mat_GetUp /
+        // Vec_MakeOrthonormalBasis) — the port's align2dir shape, S: the game aligns the SCRIPT's
+        // matrix].
+        let lifetime = if script == crate::explode::BLAST_SCRIPT_0x0600052 {
+            crate::explode::BLAST_SCRIPT_LIFETIME
+        } else if script == 0 {
+            15
+        } else {
+            crate::explode::BLAST_SCRIPT_LIFETIME // [S] unverified for other scripts
+        };
+        self.blasts.push(crate::explode::Explosion {
+            pos, radius, damage, attacker: owner,
+            lifetime,
+            script: script != 0,
+            debris: debris_kind,
+            propagated: true, // the port propagates at spawn (the game on the first collide pass)
+            age: 0,
+            weapon_type,
+            script_hash: script,
+            debris_dir: [bm[1][0], bm[1][1], bm[1][2]],
+            debris_jitter: [bm[0][0] + bm[2][0], bm[0][1] + bm[2][1], bm[0][2] + bm[2][2]],
+        });
     }
 
     /// Bond's bullets for one tick (`Bullet_update`, `Collide_Update`): the segment of max(step, 1) units against the
@@ -13480,7 +13535,10 @@ fn segment_hits_sphere(a: V3, b: V3, c: V3, r: f32) -> bool {
             // queried here (pure), applied in the match below.
             let mut best: Option<(usize, i16, f32)> = None;
             if !net_world {
-                let tstop = d.world.segment_bullet(b.pos, end);
+                // The round's world stop rides the game's cel-scoped pick [M Collide_Pick 0x1eb320:125
+                // candidate nodes from Collide_StraddleCels 0x1eac98 only; Bullet_update re-feeds
+                // the round's start cel every tick, disasm 0x12f0cc-0x12f0d8].
+                let tstop = d.world.segment_bullet_scoped(d.world.find_cel(b.pos), b.pos, end);
                 for (i, br) in self.breaks.list.iter().enumerate().filter(|(_, x)| !x.dead) {
                     // `Collide_FilterBullets` [M 0x1ece30:24-33]: the weapon's category word
                     // against the pane's mask | 0x106 — non-zero AND drops the contact.
@@ -13504,8 +13562,23 @@ fn segment_hits_sphere(a: V3, b: V3, c: V3, r: f32) -> bool {
                 if let Some((_, i)) = contact {
                     // The round dies on the first solid object hit — the glass absorbs it
                     // [M 0x12cff0-4]; nothing behind it scores or stops it this tick.
-                    b.dead = true;
+                    // EXCEPT the glass panes: the game's walk (Collide_Update 0x1ea398:216-229,
+                    // the disasm 0x1ea6cc-0x1ea6e4 region) passes a class-0x10 surface whenever
+                    // the bullet's HITTEST+0x9a carries the 0x20 mask (Bullet_update 0x12e7b0
+                    // disasm 0x12f048-0x12f058 arms it for every gun without weapon_data+0x6c &
+                    // 0x800 — the guns that break glass), and the handler's own glass arm
+                    // [M Bullet_CollisionHandler 0x12ce80 — `if ((+0x50 & 0x3f) == 0x10) pass`
+                    // under the same +0x6c & 0x800 gate] re-passes the hit after the class-'('
+                    // breakable stop. The pane still takes the damage: the collision pass
+                    // appends the contact to the pane's obj+0xD0 chain whether or not the round
+                    // stops [M the same pass the fusebox wires and SS Operate read] and
+                    // `Break_Update` 0x12bfd8:36-37 drains health from that chain. So a kind-2
+                    // (glass [D params; M 0x12c230:21]) pane's hit drains WITHOUT killing the
+                    // round; a non-glass breakable keeps the stop.
                     let br = &mut self.breaks.list[i];
+                    let glass_pass = br.kind == 2 && d.weapons.records.get(b.weapon as usize)
+                        .is_some_and(|w| u32::from_le_bytes([w[0x6c], w[0x6d], w[0x6e], w[0x6f]]) & 0x800 == 0);
+                    if !glass_pass { b.dead = true; }
                     br.health -= contact_dmg;
                     if br.health < 0.0 {
                         if let Some(k) = self.breaks.kill(i, b.pos, end, &mut self.rng) {
@@ -13543,7 +13616,7 @@ fn segment_hits_sphere(a: V3, b: V3, c: V3, r: f32) -> bool {
             // (r, 0.5, r·6) awaits the radius plumbing at creation.
             if !net_world && self.monitors.bullet_hit(b.pos, end, b.damage) {
                 let m = self.monitors.list.iter().find(|m| m.state == 3).map(|m| m.pos);
-                if let Some(p) = m { self.pending_blasts.push((p, 3.0, 200.0, usize::MAX, 0, 0x0600_0027, 3.0)); }
+                if let Some(p) = m { self.pending_blasts.push((p, 3.0, 200.0, usize::MAX, 0, 0x0600_0027, 3.0, 0)); }
             }
             // The 0x54 camera-subject detector rides the same pass (a shot marker, not a solid
             // contact — it does not consume the round [M props.rs camera_shot_hit]).
@@ -13555,7 +13628,9 @@ fn segment_hits_sphere(a: V3, b: V3, c: V3, r: f32) -> bool {
                 // fix-blast-scripts2: Destroy_Smash's f12 reads the tag's +0x8c [M 0x12bcdc `lwc1
                 // $f12, 140($16)`] — the port keeps the historical scale = radius here (no disc
                 // contradiction surfaced; the green destroy test pins the script, not the scale).
-                self.pending_blasts.push((pos, radius, damage, usize::MAX, 0, script, radius));
+                // explode-debris-spawn: Destroy_Smash's 12th arg (the u16 debris kind) is an
+                // explicit 0 — `sw $zero,($sp)` [M 0x12bcf8]; no destroyable blast spawns debris.
+                self.pending_blasts.push((pos, radius, damage, usize::MAX, 0, script, radius, 0));
             }
             // The fusebox wires see the bullet this tick (`Collide_Update` 0x1ea398 pushes the pick
             // onto the hit object's `obj+0xD0`; `FuseBox_Update` 0x1adfe8:88 filters the list with
@@ -13741,14 +13816,26 @@ fn segment_hits_sphere(a: V3, b: V3, c: V3, r: f32) -> bool {
                 }
             }
             self.bullet_path_weapons.push(b.weapon);
-            // fix-foliage-bullets: the flight trace stays the plain first-hit ray. The game's
-            // pass machinery lives in the Collide_Update walk (0x1ea398:216-229) and the
-            // handler's per-hit state-1 arm (0x12ce80), but the bullets' own HITTEST stays
-            // inactive (+0x94 = 0 [M 0x12c668]) and the live-pinned guard cover trace
-            // (ai_live guard_takes_cover_like_the_game, UnderCoverAim 37) says the round stops
-            // on the flagged tree's first face — the pass does NOT lift the flight stop. The
-            // bit-0x8 drop is the AIM/LOS family's (segment_bullet).
-            let tw = d.world.segment(b.pos, end);
+            // The flight trace drops the pass-flagged hits (segment_bullet): the game's flying
+            // bullet ARMS its HITTEST pick every tick (+0x94 = 0x101/0x201, +0x9a = the surface
+            // mask 0x20 for guns without weapon_data+0x6c & 0x800 [M Bullet_update 0x12e7b0 disasm
+            // 0x12f030-0x12f058, 0x12f134/0x12f154]) and its sorted contact list is walked past
+            // every pass-flagged hit to the first solid one [M Collide_Update 0x1ea398:216-229 —
+            // pass = HITDATA+0x51 bit 1 (the glist node 0x40 flag / the surface byte's 0x40,
+            // Collide_Intersect disasm 0x1ebf78-0x1ebf80) | +0x50 bit 0x40 | the 0x80 random roll
+            // | (mask 0x20 → glass class 0x10 passes); a non-pass hit ends the walk]. The
+            // stairwell's 'stairwell_blocking_ploys…' fudge (glist 0x10, triangles mat 0x40 [D
+            // 07000011 map43#126]) is exactly such a pass surface: the game's rounds fly through
+            // it to the rope guards. (The earlier reading here — the flight keeps the plain
+            // first-hit ray because HITTEST+0x94 stays 0 — read the INIT zeroing at 0x12c668;
+            // the flight re-arms the mask per tick, so the walk rule governs.) The 0x80 random
+            // roll and the glass-class pass are not modelled in the port's flight trace (no
+            // 0x80/glass surface sits on these paths; adding the roll would spend RNG the game
+            // spends only per 0x80 hit) — [S] documented deviation.
+            // The cel-scoped pick (see the contact pass above): geometry outside the cells the
+            // segment straddles - the exterior backdrop planes around 07000011's stairwell - is
+            // never a candidate [M 0x1eb320:125, 0x1eac98].
+            let tw = d.world.segment_bullet_scoped(d.world.find_cel(b.pos), b.pos, end);
             for (i, dr) in self.list.iter().enumerate() {
                 // `Drone_CollisionHandler` 0x140968:62 returns while `NPCGlobals == 0` (the NIS freeze:
                 // drones take no damage) and `Collide_PickObj` 0x1eae80:26-30 drops `obj+0xF0 & 0x20`
@@ -13839,7 +13926,7 @@ fn segment_hits_sphere(a: V3, b: V3, c: V3, r: f32) -> bool {
                         // arms are the SAME Explode_Create on world and flesh contacts (this is the
                         // flesh one), so the scale rule carries over unchanged.
                         let scale = if flags70h & 4 != 0 { radius } else { 1.0 };
-                        self.pending_blasts.push((hit.point, radius, damage, usize::MAX, b.weapon, script, scale));
+                        self.pending_blasts.push((hit.point, radius, damage, usize::MAX, b.weapon, script, scale, 0)); // flesh hit: HITDATA+0x50 = 0 [M Collide_Jointy 0x1ec180:125/173] — no debris
                     }
                     // fix-flesh-impacts: the victim's flesh puff. The bullet's own contact effect is
                     // NOT what characters show: the anim-coll hit writes HITDATA+0x50 = 0
@@ -14075,7 +14162,12 @@ fn segment_hits_sphere(a: V3, b: V3, c: V3, r: f32) -> bool {
                     // Queued, not spawned: the grenade section's per-tick `explosions.clear()` runs
                     // after the flush (before the queue's drain), so a blast spawned here directly
                     // would be wiped before the view sees it — the queue drains after that clear.
-                    self.pending_blasts.push((hit, radius, damage, usize::MAX, weapon, script, scale));
+                    // explode-debris-spawn: the 12th arg is HITDATA+0x50 & 0x3F — the hit material
+                    // [M 0x12d084-0x12d0bc: `lbu $v0,0x50($s2); andi $v0,$v0,0x3f; sw $v0,($sp)`].
+                    // The port's surface material id `m` indexes the same 0x3037c0 EffectInfo rows
+                    // the game's debris path reads [S: the m ↔ hitdata+0x50 identity rests on the
+                    // shared table indexing — live check in the report].
+                    self.pending_blasts.push((hit, radius, damage, usize::MAX, weapon, script, scale, (m as u16) & 0x3f));
                 }
                 if ricochet.is_some() { pierced_last = false; break; }
                 if !pierce { pierced_last = false; break; }
@@ -15630,7 +15722,8 @@ fn segment_hits_sphere(a: V3, b: V3, c: V3, r: f32) -> bool {
             if hit {
                 let (pos, radius, damage, script) = (mine.pos, mine.radius, mine.damage, mine.script);
                 self.mines[mi].exploded = true;
-                self.spawn_blast(d, pos, radius, damage, usize::MAX, 0, player.pos, frame, script, radius);
+                self.spawn_blast(d, pos, radius, damage, usize::MAX, 0, player.pos, frame, script, radius,
+                    0); // explode-debris-spawn: Mine_Update's inline Explode_Create stores kind 0 [M 0x17c930:128]
             }
         }
         crate::worldobj::WorldObjects::tick(
@@ -16427,6 +16520,41 @@ fn segment_hits_sphere(a: V3, b: V3, c: V3, r: f32) -> bool {
         // mp-never-mentioned: the game's walk head (0x1336f8 step 1 [M]) calls the per-frame
         // debug-draw hook `MP_DebugDraw` 0x18bf60 (jal 0x133738) — an **empty `jr ra` stub**
         // [M size 8 @0x18bf60]. The port mirrors the stub: no debug-draw pass either.
+        // explode-debris-spawn: the blast objects (class 0x0F) and their debris (class 0x10) sit
+        // in the game's single newest-first `DynamicObjList` walk — a blast created late tick N
+        // is the list head in tick N+1, ahead of every placement object, and debris created
+        // during a blast's own update prepend after it, so they tick before the blast from the
+        // next tick on [M 0x1336f8:54-68 + control_add_object_to_list 0x134698 prepend +
+        // 0x1ac808's control_create_object]. The port ticks debris (newest first — insertion
+        // order is creation order), then blasts (newest first), immediately before the ordered
+        // walk below; a blast's first tick is age 1 like the game's (GameState+0x52 − obj+0xEC
+        // on the first update [M 0x134630 + 0x17c350:31]). The MP gate (MPSettings == 1 [M
+        // 0x17c35b]) has no port branch to gate — the sim is single-player.
+        crate::shatter::Shatter::update_debris_list(&mut self.blast_debris);
+        let stone_on = self.channels.on(0x53); // switch_channels[0x53] [M 0x17c450]
+        let mut dead_blasts = Vec::new();
+        for bi in (0..self.blasts.len()).rev() {
+            if !self.blasts[bi].update() {
+                dead_blasts.push(bi); // script ended → `obj+0xFE |= 1`, no debris arm this tick [M 0x17c394-0x17c3a0]
+                continue;
+            }
+            let spawn = crate::explode::debris_arm(&self.blasts[bi], &mut self.rng, frame, d.level, stone_on);
+            for p in spawn {
+                self.blast_debris.push(crate::shatter::Debris {
+                    model: p.gfx,
+                    pos: self.blasts[bi].pos,
+                    rot: [0.0; 3],
+                    vel: p.vel,
+                    spin: p.spin,
+                    life: p.life as i32,
+                    fade: 0xff, // obj+0x106 = 0xff at create [M 0x1ac808:27]
+                    e8: p.scale,
+                });
+            }
+        }
+        for bi in dead_blasts {
+            self.blasts.remove(bi);
+        }
         let mut order: Vec<(usize, u8, usize)> = self.list.iter().enumerate().filter(|(_, x)| x.present).map(|(i, x)| (if x.spawn_seq != 0 { usize::MAX - x.spawn_seq as usize } else { x.placement }, 0, i))
             .chain(self.triggers.iter().enumerate().filter(|(_, t)| t.kind != crate::triggers::kind::TOUCH).map(|(j, t)| (t.placement, 1, j)))
             .chain(self.spawners.iter().enumerate().map(|(j, sp)| (sp.placement, 2, j)))
@@ -16460,7 +16588,8 @@ fn segment_hits_sphere(a: V3, b: V3, c: V3, r: f32) -> bool {
         // the damage = param 5 × 0.01 [M 0x12c424]).
         for (pos, radius, damage, kind) in self.props.channel_kills(&self.channels) {
             let script = match kind { 1 => 0x0600_0027, 2 => 0x0600_004f, _ => 0x0600_0052 };
-            self.pending_blasts.push((pos, radius, damage, usize::MAX, 0, script, radius));
+            // explode-debris-spawn: kind 0 — the same Destroy_Smash call as the bullet path [M 0x12bcf8].
+            self.pending_blasts.push((pos, radius, damage, usize::MAX, 0, script, radius, 0));
         }
         // The actor list `Door_Update`'s proximity test (`dist² < (r1+r2)²·2` over classes
         // 2/3/0x12, skipping `obj+0xF0 & 0x10` candidates [M 0x136678-0x136684]) sees: the player
@@ -18061,7 +18190,10 @@ fn segment_hits_sphere(a: V3, b: V3, c: V3, r: f32) -> bool {
                             let damage = d.weapons.records.get(g.weapon_type as usize)
                                 .map_or(0.0, |r| f32::from_le_bytes(r[0x0c..0x10].try_into().unwrap()));
                             // fix-blast-scripts2: scale = the game's f12 = +0x08 [M 0x12d0ac].
-                            self.pending_blasts.push((p, radius, damage, g.owner, g.weapon_type, 0x0600_0052, radius));
+                            // explode-debris-spawn: the contact arm's 12th arg is HITDATA+0x50 & 0x3F
+                            // [M 0x12d09c] — the port's Bounce event carries no material yet, so the
+                            // stand-in is 0 (no debris) [S unverified — live check in the report].
+                            self.pending_blasts.push((p, radius, damage, g.owner, g.weapon_type, 0x0600_0052, radius, 0));
                             g.state = 2; // the object is destroyed by the blast
                             break;
                         }
@@ -18195,8 +18327,10 @@ fn segment_hits_sphere(a: V3, b: V3, c: V3, r: f32) -> bool {
                         // nothing; the kill is the CONTACT path below.
                         if weapon_type != 0x45 {
                             // fix-blast-scripts2: the fuse death's f12 = weapon_data+0x08 = the radius
-                            // [M 0x12ce1c `lwc1 $f12, 8($2)`].
-                            self.pending_blasts.push((pos, radius, damage, owner, weapon_type, 0x0600_0052, radius));
+                            // [M 0x12ce1c `lwc1 $f12, 8($2)`]. explode-debris-spawn: the fuse arm's
+                            // 12th arg is an explicit 0 — `sw $zero,($sp)` [M 0x12ce14]; fuse blasts
+                            // never spawn debris.
+                            self.pending_blasts.push((pos, radius, damage, owner, weapon_type, 0x0600_0052, radius, 0));
                         }
                         break;
                     }
@@ -18292,15 +18426,15 @@ fn segment_hits_sphere(a: V3, b: V3, c: V3, r: f32) -> bool {
                 let rec = d.weapons.records.get(0x3a);
                 let radius = rec.map_or(8.0, |r| f32::from_le_bytes(r[0x08..0x0c].try_into().unwrap()));
                 let damage = rec.map_or(100.0, |r| f32::from_le_bytes(r[0x0c..0x10].try_into().unwrap()));
-                self.pending_blasts.push((pos, radius, damage, self.grenades[gi].owner, 0x3a, 0x0600_0052, radius));
+                self.pending_blasts.push((pos, radius, damage, self.grenades[gi].owner, 0x3a, 0x0600_0052, radius, 0));
                 self.grenades[gi].state = 2;
             } else {
                 self.tripbomb_beams.push((pos, end_trig));
             }
         }
         let blasts = std::mem::take(&mut self.pending_blasts);
-        for (pos, radius, damage, owner, weapon_type, script, scale) in blasts {
-            self.spawn_blast(d, pos, radius, damage, owner, weapon_type, player.pos, frame, script, scale);
+        for (pos, radius, damage, owner, weapon_type, script, scale, debris_kind) in blasts {
+            self.spawn_blast(d, pos, radius, damage, owner, weapon_type, player.pos, frame, script, scale, debris_kind);
         }
         self.grenades.retain(|g| g.state < 2);
         // The mid-pass death drain. A blast kills through the victim's own `send(EXPLOSION)` from
