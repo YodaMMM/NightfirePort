@@ -14595,16 +14595,31 @@ fn segment_hits_sphere(a: V3, b: V3, c: V3, r: f32) -> bool {
         // (the body position) — `SP_Activate` 0x1dc338:51-53's facing-dot input (use-pick-sp-standins).
         self.useobjs.player_activate(&mut self.scripts, &mut self.channels, sp_head, look, frame, d, body);
         // `Player_Activate`'s class-0x38 monitor path (`Monitor_Activate` 0x1b0058): the use
-        // sphere's nearest monitor within reach activates (or, while viewing, the same 0xE edge
-        // cycles/exits). Reach: the door rule (head+look sphere 1.0 vs the object's sphere) —
-        // 2.2 like the SS arm in the view.
+        // sphere's nearest monitor within reach activates. Reach: the door rule (head+look
+        // sphere 1.0 vs the object's sphere) — 2.2 like the SS arm in the view. NOTE: while the
+        // monitor view stands this arm must NOT run — the game's `Player_Update` returns early
+        // [M 0x193600:80-87 behind `Player_Disable` 0x195f70:16] so `Player_Activate` never
+        // fires, and the edge's only consumer is `Monitor_Update`'s arm — scene.rs routes it
+        // through `monitor_use_edge` below.
         for (mi, m) in self.monitors.list.iter().enumerate() {
             let dx = m.pos[0] - head[0]; let dy = m.pos[1] - head[1]; let dz = m.pos[2] - head[2];
             if dx*dx + dy*dy + dz*dz <= 2.2f32*2.2f32 {
-                self.monitors.activate(mi, &self.sensors);
+                self.monitors.activate(mi, &mut self.sensors);
                 break;
             }
         }
+    }
+
+    /// `Monitor_Update` 0x1afcc8:118-158's action-0xE press edge while the view stands — the
+    /// edge's ONLY consumer (the player's `Player_Activate` is behind the freeze [M
+    /// `Player_Disable` 0x195f70:16 → `Player_Update` 0x193600:80-87 early-return]). Runs the
+    /// cycle/exit arm on the viewing monitor; returns true when the view ended (the game's
+    /// restore arm :159-168 — `Player_Enable` 0x195498 zeroes the velocities, scene.rs mirrors
+    /// that on the sim side).
+    pub fn monitor_use_edge(&mut self) -> bool {
+        let Some(mi) = self.monitors.list.iter().position(|m| m.state == 2) else { return false; };
+        self.monitors.activate(mi, &mut self.sensors);
+        self.monitors.list[mi].state != 2
     }
 
     /// The class-0x1D trigger half of `Player_Activate` (0x1a5170:134-137). Bond's use sphere (radius 1.0 at

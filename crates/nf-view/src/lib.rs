@@ -5280,6 +5280,15 @@ impl App {
                                     }
                                 }
                             }
+                            // level-14-camera-view [M `Monitor_Update` 0x1afcc8:175
+                            // `Mat_Copy(sensor_obj+0x90 → viewer+0x120)` per viewed tick;
+                            // `Camera_SetUpdator` 0x1bc370:11 was passed 0 at the activate
+                            // (`Monitor_Activate` 0x1b0058:44) — the player's updator is
+                            // detached, so the watched sensor's swept pose is the view's only
+                            // writer]: the security-console feed IS the watched camera's pose.
+                            if let Some((p, yaw, pitch)) = sim.monitor_camera() {
+                                self.cam = Camera { pos: Vec3::new(p[0], p[1], p[2]), yaw, pitch, fov: GAME_FOV };
+                            }
                             // A script's cut-scene camera takes over the view (`Camera_Enable(4)`).
                             if let Some((p, yaw, pitch, fov)) = sim.script_camera() { self.cam = Camera { pos: Vec3::new(p[0], p[1], p[2]), yaw, pitch, fov }; }
                             // fix-sentinel-camera-play [M `Player_PositionCamera` 0x18f5d8 case 0xc]: while the

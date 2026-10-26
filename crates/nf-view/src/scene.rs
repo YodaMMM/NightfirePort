@@ -2525,6 +2525,16 @@ impl Sim {
         self.pda_tick();
         self.smoke.retain(|s| !s.dead());
         let (trigger, reload) = if self.disabled { input = Default::default(); (false, false) } else { (trigger, reload) };
+        // level-14-camera-view: the monitor view freezes the player — `Monitor_Activate`
+        // 0x1b0058:46 runs `Player_Disable(player, 0)` [M 0x195f70:16-22: BL+0x94A = 0] and
+        // `Player_Update` 0x193600:80-87 returns early while it stands — no move/aim/fire
+        // reaches the body (the game also hides the player and the weapon through obj+0xF0
+        // |= 0x10 — draw side). The world keeps ticking (Monitor_Update and Sensor_Update are
+        // object updates [M 0x1afcc8/0x1af618]); the view's own input is the action-0xE edge,
+        // routed at the use-edge dispatch below [M 0x1afcc8:118-158].
+        let monitor_view = self.monitor_viewing();
+        if monitor_view { input = Default::default(); }
+        let (trigger, reload) = if monitor_view { (false, false) } else { (trigger, reload) };
         // fix-death-restart: a dead Bond gets no input — `Player_Update` 0x193600 runs only the anim
         // and `Player_HandleDeath` for state 2/3 [M 0x193600:317-319] — and the 0x40000042 menu
         // pauses the player (`GS_PausePlayer(1,0)` [M 0x182c60:124]). The fire bit still reaches
@@ -3510,6 +3520,32 @@ impl Sim {
         let look_yaw = d[0].atan2(d[2]);
         let look_pitch = -(d[1]).atan2(horiz);
         Some((cam, look_yaw, look_pitch, 1.0))
+    }
+
+    /// level-14-camera-view: the monitor view's live state — true while a console's camera feed
+    /// stands (`Monitor_Activate` 0x1b0058:40 state 2; the game's player freeze + HUD pane
+    /// hand-off ride the same state [M 0x195f70:16, 0x1b0058:47-49]).
+    pub fn monitor_viewing(&self) -> bool {
+        self.drones.monitors.list.iter().any(|m| m.state == 2)
+    }
+
+    /// level-14-camera-view: the ACTIVE VIEW CAMERA while a security console's feed stands —
+    /// the watched sensor's own pose. The game's chain [M]: `Monitor_Update` 0x1afcc8:175 runs
+    /// `Mat_Copy(watched_obj+0x90 → viewer+0x120)` every viewed tick (the sensor's swept pose —
+    /// `Sensor_Update` 0x1af618:174-179 interpolates the framelist into obj+0x90), and
+    /// `Camera_SetUpdator` 0x1bc370:11 detached the player's updator at the activate
+    /// (0x1b0058:44 passes 0), so the sensor matrix is the view's only writer. The port exposes
+    /// (pos, yaw, pitch) from the matrix (row 2 = `Mat_GetDir`'s axis [M 0x1a5170:101 reads it
+    /// for the use pick; row 3 = the translation]) with the missile-cam's direction conversion
+    /// (lib.rs's `view_override` arm): yaw = `atan2(d.x, d.z)`, pitch = `asin(d.y)`.
+    /// Draw side (the SecCamPane overlay, the watched camera body's display-mask hide, the
+    /// player/weapon hide) is a separate task.
+    pub fn monitor_camera(&self) -> Option<([f32; 3], f32, f32)> {
+        let m = self.drones.monitors.list.iter().find(|m| m.state == 2)?;
+        let s = self.drones.sensors.list.get(m.watched?)?;
+        let pos = [s.matrix[3][0], s.matrix[3][1], s.matrix[3][2]];
+        let dir = [s.matrix[2][0], s.matrix[2][1], s.matrix[2][2]];
+        Some((pos, dir[0].atan2(dir[2]), dir[1].clamp(-1.0, 1.0).asin()))
     }
 
     /// nis-event9-cnis: the `C_NIS_Handler` route's boot — the mission-driven cut-scene entry the
@@ -4830,7 +4866,13 @@ impl Sim {
         let use_edge = use_key && !self.use_key_prev;
         self.use_key_prev = use_key;
         let mut crept = false;
-        if use_edge {
+        // level-14-camera-view: one snapshot for the whole edge region (the state cannot change
+        // between here and the dispatch below — the world ticks run after it). While the monitor
+        // view stands the game's `Player_Activate` never runs (`Player_Update` 0x193600:80-87
+        // returns early behind the freeze [M `Player_Disable` 0x195f70:16]) — the creepwall arm
+        // included; the edge goes to Monitor_Update's arm only (the dispatch gate below).
+        let monitor_view = self.monitor_viewing();
+        if use_edge && !monitor_view {
             // `Player_Activate` 0x1a5170:66-97's creepwall arm comes FIRST: with the third-icon
             // context 6 (BLData+0x95f, the game's ONLY gate [M 0x1a5170:66 `if (BL+0x95f == 6)`])
             // the use key scans every object for class '+' (0x2B) and calls
@@ -4855,7 +4897,15 @@ impl Sim {
                 }
             }
         }
-        if use_edge && !crept {
+        // level-14-camera-view: while the monitor view stands, the press edge's ONLY consumer is
+        // `Monitor_Update`'s action-0xE arm [M 0x1afcc8:118-158 — `Input_SetAction(0xE,1)`
+        // 0x1b0058:45 consumed the activating press; `Player_Activate` is behind the freeze]:
+        // cycle to the next same-group camera, or exit. The exit's `Player_Enable` 0x195498
+        // zeroes the velocities [M :81-86 `Vec_Zero(BL+0x50)` + BL+0x20/0x30/0x40].
+        if use_edge && !crept && monitor_view {
+            if self.drones.monitor_use_edge() { self.bond.vel = [0.0; 3]; }
+        }
+        if use_edge && !crept && !monitor_view {
             // use-pick-head: EVERY arm of `Player_Activate` picks from Bond's HEAD — the game
             // builds the use point at `Player_GetHeadPos` + the viewer direction [M 0x1a5170:100-108,
             // 0x195aa0] — never from the render camera. (run()'s `camera` param is step_bond's

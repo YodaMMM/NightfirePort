@@ -191,6 +191,11 @@ pub struct Sensor {
     /// hits. The game draws the lens glist with the object's own scale (the +0xFA bit-0x1
     /// OnlyScaleZ the create ORs in, 0x1af010:102 — the stretch rides the mesh's length axis).
     pub beam_len: f32,
+    /// `obj+0xF8` — the display mask, init 0x1F [M* obj-tag.md]. The monitor view drives it:
+    /// `Monitor_Activate` 0x1b0058:26 writes 0 on the picked camera (the body vanishes while
+    /// the feed looks through it) and `Monitor_Update` 0x1afcc8 restores 1 on the cycled-away /
+    /// replaced one (:75, :85, :103, :125, :143). Draw-side consumer pending.
+    pub display_mask: u16,
 }
 
 impl Sensor {
@@ -443,6 +448,7 @@ impl Sensors {
                 seen: 0,
                 last_hit: false,
                 unhidden: false,
+                display_mask: 0x1F,
             });
         }
         Sensors { list }
@@ -495,6 +501,7 @@ mod tests {
             last_hit: false,
             unhidden: false,
             beam_len: 0.0,
+            display_mask: 0x1F,
         }
     }
 
