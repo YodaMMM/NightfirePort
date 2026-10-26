@@ -344,25 +344,45 @@ mod tests {
         assert!(out.iter().all(|o| !matches!(o, LaserOut::LoadScript { .. })));
     }
 
-    /// [M :94-148] gate open, armed: cooldown < 0 → the p0/p1 pick draw, the tracking script
-    /// load (mode 0, REGISTER), target = player, state 1; the script's end → state 2 fires the
-    /// bullet (record 107) + beam + emitter and re-arms the 10 s cooldown [M :128-191].
+    /// [M :94-148] gate open, armed: after the creator's 10.0 s cooldown spends [M 001aa8b8:38
+    /// — ext+0x38 = 0x41200000 at create; the old 0.0 seed here contradicted the creator and
+    /// fired on the first gate tick — the TEST was wrong, fixed 2026-10-26 with the address],
+    /// cooldown < 0 → the p0/p1 pick draw, the tracking script load (mode 0, REGISTER),
+    /// target = player, state 1; the script's end → state 2 fires the bullet (record 107) +
+    /// beam + emitter and re-arms the 10 s cooldown [M :128-191].
     #[test]
     fn the_armed_fire_path() {
         let mut l = from_placement(0, &[(0, 0x060007c0), (1, 0x060007c1), (3, 165), (5, 99), (7, 19)]);
         let mut ch = Channels::default();
         ch.set(19, 1, 0); // the arm gate — only ever poked in a live check, never on disc [D]
-        // tick 1: gate open, cooldown 0 → 0 − 1/60 < 0 → the tracking branch.
-        let out = tick(&mut l, &mut ch, 1, false);
-        let LaserOut::LoadScript { id, play_mode, register } = out[0] else { panic!("{out:?}") };
+        // The 10.0 s creator seed spends at ~tick 600 (10.0 at −1/60 per tick with the float
+        // drift; the decrement then the check [M :94-99]) → the tracking branch. The unit
+        // harness feeds script_playing explicitly, so the 360-tick tracking window is driven
+        // by hand after the load.
+        let load_out = {
+            let mut load = None;
+            let mut script_left = 0u32;
+            for f in 1..=601u32 {
+                let playing = script_left > 0;
+                let out = tick(&mut l, &mut ch, f, playing);
+                if load.is_none() && out.iter().any(|o| matches!(o, LaserOut::LoadScript { .. })) {
+                    load = Some(out);
+                    script_left = 360;
+                } else if script_left > 0 { script_left -= 1; }
+            }
+            load.expect("the tracking script loads once the 10 s seed spends [M 001aa8b8:38]")
+        };
+        let LaserOut::LoadScript { id, play_mode, register } = &load_out[0] else { panic!("{load_out:?}") };
+        let (id, play_mode, register) = (*id, *play_mode, *register);
         assert_eq!((id, play_mode, register), (0x060007c0, 0, true), "mode 0 + the Register callback [M :100-108]");
         assert_eq!(l.target, [1.0, 2.0, 3.0], "the player quad → lane 1 [M :105-112]");
         assert_eq!(l.state, 1);
         l.register([7.0, 8.0, 9.0]); // the script's registered object parks the fire origin [M 0x1aa9e8]
         assert_eq!(l.fire_origin, [7.0, 8.0, 9.0]);
-        // tick 2: script still playing → whine, stay in 1. tick 3: script ended → state 2.
-        let out = tick(&mut l, &mut ch, 2, true);
-        assert!(matches!(out[0], LaserOut::WhineStart));
+        // The loop's last playing tick already latched the whine [M :115-121 — the port's
+        // first-free-handle start]; state 1 holds while the script plays, ends into 2.
+        let _ = tick(&mut l, &mut ch, 2, true);
+        assert!(l.whine_on, "the whine latched in state 1 [M :119-121]");
         assert_eq!(l.state, 1);
         let out = tick(&mut l, &mut ch, 3, false);
         assert_eq!(l.state, 2);
