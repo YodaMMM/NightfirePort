@@ -46,3 +46,13 @@
   off): 05 8/8 green, the 0a corner crosses (870 ticks, was a wedge), 01's contact walk
   regressed → gated until re-verified. The three 0a tests re-pinned to the settled [L] values
   (1.1285 / 1.1159), still ignored. Branch pushed; suite on the final tree started.
+
+## level-0a-band-settle-3
+
+- (18:10 UTC, 10-26) Branch created from origin/s/level-0a-band-settle-2 (0952c663), merged
+  origin/master (118a362b). Task: with the driver's two live reads [L 2026-10-26] — HITTEST+0x50
+  never reseeded on a walk (carries over a reload; constant during free walks, grows by exactly
+  the push on each wall-contact tick) and HITTEST+0x10 = (0.1, 0, 0) per contact tick at the west
+  hall wall — port the ref as the running sum of pushes (the add-back), land the radial-dir rule,
+  drop NF_WALK_KILL if unneeded, un-ignore the three walkreal_0700000a tests with their [L] pins.
+  Session starting: suite + decompile reads next.
