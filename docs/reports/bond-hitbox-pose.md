@@ -99,3 +99,17 @@ tree, run individually as above.
 
 not visible to me — this session's environment shows no token, credit, cost or context-window
 figures anywhere I can read.
+
+## ntfy failed
+
+All three fallbacks failed (2026-10-26 ~14:20 UTC):
+
+1. `curl -sS -m 20 -H "Title: NightfirePort" -d "bond-hitbox-pose: …" https://ntfy.sh/nightfire-yoda-8k3x`
+   → `curl: (28) Connection timed out after 20002 milliseconds`
+2. `python3 -c "… urlopen(Request('https://ntfy.sh/nightfire-yoda-8k3x', …), timeout=20)"`
+   → `urllib.error.URLError: <urlopen error [Errno 101] Network is unreachable>`
+3. `wget -q -O- --post-data "bond-hitbox-pose: …" https://ntfy.sh/nightfire-yoda-8k3x`
+   → no output, still hanging when killed at 60 s (timeout).
+
+The branch, report and finish.sh claim (`OK done 50-bond-hitbox-pose`) were all in place; only the
+push notification could not leave the sandbox.
