@@ -18623,7 +18623,11 @@ fn segment_hits_sphere(a: V3, b: V3, c: V3, r: f32) -> bool {
         let level_01 = d.level == 0x0700_0001;
         for (dr, from) in self.list.iter().zip(drone_from) {
             if !dr.present || dr.corpse { continue; }
-            for k in self.breaks.drone_step(from, dr.pos, level_01, dr.scripted_move, 0.0 /* the rejected-step drain waits on the pane ride [S] */, &mut self.rng) {
+            // The root-motion gate holds for the AI states' anim steps (a sniper's in-place anim beside
+            // pane #206 never shatters it) but NOT for a start script played in PlayScript: the opening
+            // Yakuza's scripted dive shatters #130 [L 2026-10-26, PCSX2 frame 2175].
+            let anim_carried = dr.scripted_move && dr.state != state::PLAY_SCRIPT;
+            for k in self.breaks.drone_step(from, dr.pos, level_01, anim_carried, 0.0 /* the rejected-step drain waits on the pane ride [S] */, &mut self.rng) {
                 self.break_kills.push((k.placement, k.kind, k.sound));
                 if std::env::var("TASE_DBG").is_ok() { eprintln!("[brk-contact] f{} placement {} kind {} sound {} at ({:.1},{:.1},{:.1})", self.frame, k.placement, k.kind, k.sound, k.pos[0], k.pos[1], k.pos[2]); }
                 let id = u32::from(k.sound);
