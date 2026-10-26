@@ -157,3 +157,4 @@ fn crosshair_on_a_lobby_guard_is_silent() {
     // gate can skip the ray entirely — the pin is the silence, which is what the task asks.)");
     assert!(speech.is_empty(), "no speech at all from the face-to-face window: {speech:?}");
 }
+
