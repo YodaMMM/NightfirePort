@@ -1759,6 +1759,11 @@ pub struct Drone {
     /// along for `NDrone2_FindOpponent`'s exact alive test [M 0x1424e0 disasm 0x1430e4-0x1430f0:
     /// the candidate needs `(+0xFE & 1) == 0`].
     pub delete_me: bool,
+    /// `Drone+0x4F8 & 0x4` — the 0700004a dead-body-keeps-gravity bit: `NDrone2_DSTATE_Death_Anim`
+    /// 0x1637f8:26 and `NDrone2_DSTATE_AbseilDeath` 0x169b28:20 set it on enter, and
+    /// `NDrone2_DoGravity` 0x141e58:12-15 returns 1 (gravity on) on it BEFORE every other gate —
+    /// a corpse carrying it falls even with the collision bit 0x20 cleared [M].
+    pub keeps_gravity: bool,
 }
 
 /// Normalise a vector (the grenade throw direction helper).
@@ -1998,6 +2003,8 @@ impl Drone {
             blocked_reach: 0.0,
             // +0x174 — the shared target registry slot, allocated on first sight.
             target_id: 0xff,
+            // 0700004a dead-body-keeps-gravity (AbseilDeath's ENTER arm) — see the field.
+            keeps_gravity: false,
             // BodyGlow_Create 0x1ac158 — every guard spawn glows on the shipped path (the
             // switch_NO_DRONES gate is 0 in every shipped level [M 0x1ac158:9]).
             body_glow: crate::body_glow::create(0, false),
@@ -5683,7 +5690,7 @@ impl Drone {
     /// drones up to 0.2 (the live traces pin the snap's heights; the fix-driver-air2 probe showed the 109j
     /// settle-everywhere transients flipped the seeded cover RNG — danim 178 90@1.0 instead of lean-out 176 51@1.5
     /// → UnderCoverAim 90 vs live 37). The `free_root` path (SpecialDeath) bypasses this; `bounded = false` (the
-    /// AI-boundary push-out flag) also skips it. [M] constants: WldGravity (0,−9.8,0), REC_FRAME_RATE 1/60,
+    /// collision bit 0x20) skips it too — except the `keeps_gravity` (bit 4) corpse's collision-free gravity arm. [M] constants: WldGravity (0,−9.8,0), REC_FRAME_RATE 1/60,
     /// hip+0.6 ray, 0.2 on-surface, probe 0.4 (0x140e90; 0.55 when +0xd8 == 0xc and 0.3 when +0x2f — unmodelled,
     /// the gate's band only shifts, the sit/stand split does not change), 0.125 settle rate.
     pub fn collision_handler(&mut self, world: &CollisionWorld) {
@@ -5713,7 +5720,28 @@ impl Drone {
             }
             return;
         }
-        if self.free_root || !self.bounded { return; }
+        if self.free_root { return; }
+        if !self.bounded {
+            // Bit 0x20 cleared: `NDrone2_DoCollision` 0x149ec8:12-14 returns 0 — no collision
+            // (no down-ray, no hits, no settle). The 0x4F8 & 4 corpse still gravitates:
+            // `NDrone2_DoGravity` 0x141e58:12-15 returns 1 on the bit BEFORE the 0x20/0x200 folds,
+            // and the handler's DoGravity arm integrates it collision-free — velocity +=
+            // WldGravity·REC_FRAME_RATE (the feet flag anim+0x60 & 8 stays clear: no probe runs in
+            // this branch), then pos += velocity·REC_FRAME_RATE; no damping (the ×0.98 tail is the
+            // rope arm's, [M 0x140968:139-141 vs 152-192]) and no settle ([M 0x140968:292-295 — the
+            // tail's feet-flag test never fires]). The 0700004a abseil corpse falls through the
+            // shaft until the draw-grace soft-delete removes it [M 0x169b28 case 3].
+            if self.keeps_gravity {
+                self.in_air = true;
+                self.on_surface = false;
+                self.velocity[1] += -9.8 * (1.0 / 60.0);
+                let r = 1.0 / 60.0;
+                self.pos[0] += self.velocity[0] * r;
+                self.pos[1] += self.velocity[1] * r;
+                self.pos[2] += self.velocity[2] * r;
+            }
+            return;
+        }
         // `+0x4F8 & 0x4000` cleared at the top.
         self.in_air = false;
         // `NDrone2_DoCollision` / `NDrone2_DoGravity` predicates: the game gates these on the drone
@@ -9702,9 +9730,12 @@ impl Drone {
                 if d.level == 0x0700_004a {
                     // +0x4f8 = (& ~0x20) | 4: the port's `bounded` flag stands for the collision bit
                     // 0x20 — clearing it drops the corpse through the collision driver untouched
-                    // (the free-fall arm of `Drone_CollisionHandler`'s air branch does not apply —
-                    // +0x23 = 0 below — but the gravity/branch gate in the port is `bounded`).
+                    // (DoCollision 0x149ec8:12-14 returns 0 with the bit clear), and bit 4
+                    // (`keeps_gravity`) keeps the gravity running: DoGravity 0x141e58:12-15 returns
+                    // 1 on the bit BEFORE the 0x20/0x200 folds — the corpse free-falls, the
+                    // collision handler's DoGravity arm integrates it [M 0x169b28:18-21].
                     self.bounded = false;
+                    self.keeps_gravity = true;
                 } else {
                     self.corpse = true; // obj+0xf0 bit 0x20
                 }
@@ -9723,15 +9754,24 @@ impl Drone {
                 self.drop_weapon(d, rng);
                 true
             }
-            // UPDATE (case 3): on 0700004a wait to be drawn, then Enable(0) + obj+0xfe |= 1 (the soft
-            // delete); elsewhere wait for +0xcdc == 0 and the feet probe (the corpse landed) → danim
-            // 10, +0xcdc = 1, DEAD 0x47 [M case 3]. The game's danim 10 arm is `DroneAnim_SetDAnimNow`
+            // UPDATE (case 3): on 0700004a the corpse stays while it has been drawn recently
+            // (`obj+0xFC != 0` — the early return) and is Enable(0)'d + obj+0xFE |= 1 (the soft
+            // delete) once the drawn-grace is out [M 0x169b28:41-47]; elsewhere wait for +0xcdc == 0
+            // and the feet probe (the corpse landed) → danim 10, +0xcdc = 1, DEAD 0x47 [M case 3].
+            // The game's danim 10 arm is `DroneAnim_SetDAnimNow`
             // (0x13dd78: clear the completion action, `SetDAnimInternal(10, 0, 0)`, mark +0x57B on a
             // started script) followed by `+0x596 = 0x47` [M 0x169b28:53-55] — DEAD is the completion
             // state, applied when the class-9 follow-on 0xbf starts (see the landing arm).
             (state::ABSEIL_DEATH, msg::UPDATE) => {
                 if d.level == 0x0700_004a {
-                    if self.drawn { self.delete_me = true; self.present = false; self.enabled = false; }
+                    // `obj+0xFC != 0` → the corpse persists this tick [M 0x169b28:42-44]: the
+                    // drawn-grace counter (obj+0xFC — 2 per drawn tick, decremented per control
+                    // pass [M 0x1e62d8:71 / 0x1336f8:242-246]) is read BEFORE this tick's refresh
+                    // (see Drones::tick), so `drawn_grace == 0` is the game's third undrawn control
+                    // pass. Then `NDrone2_Enable(0)` + obj+0xFE |= 1 — the soft delete [M
+                    // 0x169b28:45-46]. (The old port inverted the gate on the per-tick cull flag —
+                    // it deleted the corpse the first DRAWN tick, the reported vanish.)
+                    if self.drawn_grace == 0 { self.delete_me = true; self.present = false; self.enabled = false; }
                 } else if !self.abseil_land_latch {
                     // The landing gate is +0xcdc (NOT +0xcd8 — the old port polled the death-channel
                     // latch here and never landed) [M 0x169b28 case 3]: the feet probe (anim+0x60 & 8,
@@ -18704,6 +18744,8 @@ mod tests {
             blocked_reach: 0.0,
             // +0x174 — the shared target registry slot.
             target_id: 0xff,
+            // 0700004a dead-body-keeps-gravity (AbseilDeath's ENTER arm) — see the field.
+            keeps_gravity: false,
         };
         dr
     }
