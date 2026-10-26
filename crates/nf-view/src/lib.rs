@@ -3887,9 +3887,13 @@ impl App {
                     }
                 }
                 // psiMovieFinished [M 0x1082e8, polled by the page's 0x50]: while the real movie
-                // decodes the headless budget is held; its end is the finish.
-                match &self.movie {
+                // decodes the headless budget is held; its end is the finish. The no-decode
+                // player's BGFMVPlaying stand-in advances one frame per poll ([`Player::
+                // headless_advance`] — the opened PSS holds for its real length [M 0x1081a8 +
+                // 0x108060]).
+                match &mut self.movie {
                     Some(p) if p.code() == code && !p.is_looping() => {
+                        p.headless_advance();
                         if p.finished() { fe.intro_movie_finished(); } else { fe.intro_live = true; }
                     }
                     _ => {}
@@ -3932,7 +3936,13 @@ impl App {
                     }
                 }
             }
-            if self.movie.as_ref().is_some_and(|p| p.code() == code && p.finished()) {
+            // psiMovieFinished [M 0x1082e8]: the poll advances the no-decode stand-in one frame
+            // per call ([`Player::headless_advance`]).
+            let ended = match self.movie.as_mut() {
+                Some(p) if p.code() == code => { p.headless_advance(); p.finished() }
+                _ => false,
+            };
+            if ended {
                 // The 0x50 finish arm restarts the pair while it is down [M 0x20a1f0:34-39].
                 fe.music.movie_finished();
                 fe.attract_movie_finished();
@@ -6955,7 +6965,12 @@ pub fn mission_movie_glue(fe: &mut menu::FrontEnd, slot: &mut Option<movie::Play
             Some(p) => {
                 // BGFMVPlaying follows the player: 1 while it decodes, 0 at the end of file —
                 // state 6 pops through the psiMovieFinished arm on the next main_tick
-                // [M 0x1082e8 + 0x1c98c8 case 6].
+                // [M 0x1082e8 + 0x1c98c8 case 6]. Without a decoder (no `movies` feature, or a
+                // declined worker) the opened PSS still holds for its real length [M 0x1081a8's
+                // BGFMVPlaying = 1 + 0x108060's end-of-file clear; D the PSS's audio track]: the
+                // stand-in advances one frame per host call, then `finished` fires and the pop is
+                // the game's own.
+                p.headless_advance();
                 fe.flow.movie_playing = !p.finished();
             }
             None => {

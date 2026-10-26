@@ -15,10 +15,14 @@
 //!   there [D — this file re-scans the parsed scene].
 //!
 //! The slim on-foot image's /MOVIES/*.PSS are 0-byte stubs [D — the ISO tree], and the game
-//! itself skips a movie whose open fails (`BGFMVPlaying` stays 0 [M 0x1081a8's strFileOpen arm]).
-//! The port's no-movie hold therefore runs the subtitle track's length — the port's stand-in for
-//! the retail PSS's duration [S], marked, never asserted as game behaviour: the assertions below
-//! pin the track's disc data, the script starts, and the flow's resolve.
+//! itself skips a movie whose open fails (`BGFMVPlaying` stays 0 [M 0x1081a8's strFileOpen arm]);
+//! there the port's no-movie hold runs the subtitle track's length [S — the stand-in]. On an
+//! image with the real movies the open SUCCEEDS [M 0x1081a8: BGFMVPlaying = 1] and state 6 lasts
+//! the PSS's own life — BGFMVPlaying clears only at the decode pump's end of file [M 0x108060;
+//! psiMovieFinished = BGFMVPlaying == 0, 0x1082e8] — so the hold runs the movie's real length
+//! [D the PSS's audio track: 07300004.PSS = 2 384 128 PCM samples at 48 kHz = 2980 ticks;
+//! 07300013.PSS = 2 040 064 = 2550 ticks, golden/pss_movies.tsv], and the tests assert that when
+//! the file is present (both lengths measured off the image at run time).
 
 use nf_view::menu::{self, FrontEnd, Outcome, Stats};
 
@@ -37,6 +41,17 @@ fn lang(iso_path: &str) -> nf_formats::hud::Lang {
 fn frame(fe: &mut FrontEnd, slot: &mut Option<nf_view::movie::Player>, iso: &str) {
     nf_view::mission_movie_glue(fe, slot, iso);
     fe.tick();
+}
+
+/// The image's PSS length for a movie code, in 60 Hz game ticks: the audio track's duration —
+/// the game's master clock [M audioDecSendToIOP 0x107100; main 0x109080's decode pump]. None
+/// when the image stubs the file (the slim on-foot ISO's /MOVIES are 0-byte [D]) — the game's
+/// own open fails there [M 0x1081a8's strFileOpen arm] and state 6 pops at once [M 0x1082e8].
+fn movie_ticks60(iso_path: &str, code: u32) -> Option<u32> {
+    let img = nf_formats::iso9660::IsoImage::open(iso_path).expect("open iso");
+    let m = nf_view::movie::Movie::load(&img, &format!("{code:08X}")).ok()?;
+    let secs = m.audio().expect("the movie has an audio stream").seconds();
+    Some((secs * 60.0).round() as u32)
 }
 
 /// The Double Cross outro: the track's disc data + the script start + the hold + the resolve.
@@ -58,7 +73,7 @@ fn the_double_cross_outro_runs_its_subtitle_script() {
     eprintln!("[mo] 0600095d: {} entries, first \"{}\" at t{}", tr.entries.len(), text, first.tick);
 
     // The host-shaped end sequence: mission_ended → the outro code wraps to a movie; the glue
-    // loads the track and (with the PSS a stub here) arms the no-movie hold.
+    // loads the track and starts the PSS (or, with the file a stub, arms the no-movie hold).
     let mut fe = FrontEnd::new();
     fe.flow.current_level = 0x0700_0004;
     fe.flow.stack = vec![menu::ST_RUNNER]; // the host's demo_results boots the runner state
@@ -78,9 +93,22 @@ fn the_double_cross_outro_runs_its_subtitle_script() {
         if fe.flow.phase2_resolved.is_some() { resolved = true; break; }
     }
     assert!(resolved, "the outro resolved (the state-6 hold ran its course)");
+    // The hold is the movie's own life: BGFMVPlaying = 1 on the successful open [M 0x1081a8] and
+    // 0 only at the decode pump's end of file [M 0x108060], so state 6 lasts the PSS's real
+    // duration [D — 07300004.PSS: 2 384 128 PCM samples at 48 kHz = 49.67 s = 2980 ticks,
+    // golden/pss_movies.tsv] with the subtitle script running beside it [M 0x1d6360's SP_Create].
+    // On a stub image the open fails and the game pops at once [M 0x1081a8] — the port's
+    // no-movie hold then runs the track's length [S], which still outlasts the entries.
+    match movie_ticks60(&iso_v, 0x0730_0004) {
+        Some(pss) => assert!(movie_ticks.abs_diff(pss) <= 2,
+            "the hold ran the movie's real length [M 0x1081a8 + 0x108060 + 0x1082e8; \
+             D the PSS's audio track], hold {movie_ticks} vs PSS {pss}"),
+        None => eprintln!("[mo] 07300004.PSS is a stub on this image — the [S] track-length stand-in held"),
+    }
     assert!(movie_ticks >= 2690,
-        "the outro stayed up through the track's entries [S the hold length is the port's stand-in; \
-         the disc track's 9th entry completes at t2690], got {movie_ticks}");
+        "the outro stayed up through the track's entries [D the track's 9th entry completes at \
+         t2690; the PSS runs 2980 ticks [D], the stand-in hold runs the track's 2695 [S]], \
+         got {movie_ticks}");
     assert!(saw_first_subtitle, "the subtitle script's first Text showed [M 0x1d6360's SP_Create]");
     assert_eq!(fe.flow.phase2_resolved.take(), Some(menu::FRONTEND_LEVEL),
         "the outro routes to the front-end map [M 0x1d3560: 0x7300004 → 0x7000048]");
@@ -124,9 +152,19 @@ fn the_phoenix_fire_outro_runs_its_subtitle_script() {
         if fe.flow.phase2_resolved.is_some() { resolved = true; break; }
     }
     assert!(resolved, "the outro resolved");
+    // The hold is the movie's own life [M 0x1081a8 + 0x108060 + 0x1082e8]: the PSS's real
+    // duration [D — 07300013.PSS: 2 040 064 PCM samples at 48 kHz = 42.5 s = 2550 ticks,
+    // golden/pss_movies.tsv]; the stub image takes the [S] track-length stand-in instead.
+    match movie_ticks60(&iso_v, 0x0730_0013) {
+        Some(pss) => assert!(movie_ticks.abs_diff(pss) <= 2,
+            "the hold ran the movie's real length [M 0x1081a8 + 0x108060 + 0x1082e8; \
+             D the PSS's audio track], hold {movie_ticks} vs PSS {pss}"),
+        None => eprintln!("[mo] 07300013.PSS is a stub on this image — the [S] track-length stand-in held"),
+    }
     assert!(movie_ticks >= 2280,
-        "the outro stayed up through the track's entries [S the hold is the port's stand-in; \
-         the track's last full entry completes at t2286], got {movie_ticks}");
+        "the outro stayed up through the track's entries [D the track's last full entry completes \
+         at t2286; the PSS runs 2550 ticks [D], the stand-in hold runs the track's 2292 [S]], \
+         got {movie_ticks}");
     assert!(saw_first_subtitle, "the subtitle script's first Text showed [M 0x1d6360's SP_Create]");
     assert_eq!(fe.flow.phase2_resolved.take(), Some(menu::FRONTEND_LEVEL),
         "the outro routes to the front-end map [M 0x1d3560]");
