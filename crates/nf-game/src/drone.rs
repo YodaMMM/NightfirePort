@@ -17798,53 +17798,6 @@ fn segment_hits_sphere(a: V3, b: V3, c: V3, r: f32) -> bool {
                 }
             }
         }
-        // `Break_Update` 0x12bfd8's drone arm: on 07000001 ONLY, a drone (class 2) in a glass pane's
-        // contact list drains the pane by its move this tick — `health -= Vec_SqDist3D(obj+0x30,
-        // obj+0x40) * 20.0` (obj+0x40 = the pre-walk position) [M 0x12bfd8:20-27, the
-        // `GameState+12 == 0x7000001` and `*inst == 2` (glass) gates]; health < 0 → `Break_Kill`
-        // [M :43-45]. The opening Yakuza's PlayScript dive carries him through placement #130's
-        // window; the port drained panes only from bullets, so the window stayed whole. The contact
-        // is the drone's body capsule (ext+0x45C r 0.4 [M Drone_CollisionHandler 0x140968]) against
-        // the pane's bounds, one entry per drone per tick.
-        if d.level == 0x0700_0001 {
-            let n = self.breaks.list.len();
-            for i in 0..n {
-                let (lo, hi, kind, dead) = { let b = &self.breaks.list[i]; (b.lo, b.hi, b.kind, b.dead) };
-                if dead || kind != 2 { continue; }
-                let mut drain = 0.0f32;
-                let mut hit: Option<(V3, V3)> = None;
-                for (di, x) in self.list.iter().enumerate() {
-                    if !x.present || x.corpse { continue; }
-                    let pre = drone_pre.get(di).copied().unwrap_or(x.pos);
-                    let touches = [0.4f32, 1.0, 1.6].iter().any(|&h| {
-                        let c = [x.pos[0], x.pos[1] + h, x.pos[2]];
-                        let q = [c[0].clamp(lo[0], hi[0]), c[1].clamp(lo[1], hi[1]), c[2].clamp(lo[2], hi[2])];
-                        let dd = (c[0] - q[0]).powi(2) + (c[1] - q[1]).powi(2) + (c[2] - q[2]).powi(2);
-                        dd <= 0.4 * 0.4
-                    });
-                    if !touches { continue; }
-                    let mv = (x.pos[0] - pre[0]).powi(2) + (x.pos[1] - pre[1]).powi(2) + (x.pos[2] - pre[2]).powi(2);
-                    drain += mv * 20.0;
-                    hit = Some((pre, x.pos));
-                }
-                let Some((a, b)) = hit else { continue };
-                self.breaks.list[i].health -= drain;
-                if self.breaks.list[i].health < 0.0 {
-                    if let Some(k) = self.breaks.kill(i, a, b, &mut self.rng) {
-                        self.break_kills.push((k.placement, k.kind, k.sound));
-                        if let Some(o) = k.script_obj {
-                            if let Some(slot) = self.scripts.objects.list.get_mut(o) { *slot = None; }
-                        }
-                        let id = u32::from(k.sound);
-                        self.audio.play3d(id, k.pos, None);
-                        if let Some(t) = d.sfx {
-                            let e = t.get(id);
-                            if !e.looped { self.sounds.push(Sound { id, pos: k.pos, inner: e.inner, outer: e.outer, weight: e.weight }); }
-                        }
-                    }
-                }
-            }
-        }
         // `Doors_Calc` — the control pass's last act (0x1336f8's tail): the door groups sync, the busy markers
         // clear. (`switch_channels_prev` is snapshotted after `Trigger_Calc`, at the top of the tick — see above.)
         self.doors.calc();

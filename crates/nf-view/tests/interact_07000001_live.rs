@@ -182,7 +182,9 @@ fn bullets_shatter_the_glass_and_vases_and_the_sister_stays_whole() {
     let mut w2 = Walker::new(nf_view::load(&iso, "07000001.bin", false).expect("reload"));
     past_intro(&mut w2);
     let s2 = w2.scene.sim.as_ref().unwrap();
-    assert!(s2.drones.breaks.list.iter().all(|b| !b.dead), "unshot scenery stays whole (the sister)");
+    // The opening Yakuza's dive shatters the hall window #130 on its own [L 2026-10-26, PCSX2 frame 2175];
+    // everything else nobody shot stays whole.
+    assert!(s2.drones.breaks.list.iter().filter(|b| b.placement != 130).all(|b| !b.dead), "unshot scenery stays whole (the sister)");
 }
 
 #[test]
