@@ -6129,6 +6129,16 @@ pub struct Scene {
     /// The 0x2E locks' placement matrices (`Lock::create` order): where the keypads' posed slots
     /// draw the placed object or its LOD variant.
     pub lock_matrices: Vec<Mat4>,
+    /// The 0x3B gated dynamic objects' placement matrices (`WorldObjects::create` order — every
+    /// 0x3b placement, placement order): where the posed slots draw them, collapsed once the sim
+    /// deletes the object (`DynamicObject_Update` 0x18d3b8:26 mode-0 armed-B → obj+0xFE bit 0 →
+    /// the delete pass; 0700001b's control-room glass dies with ch 10, Drake's gate).
+    pub dynobj_matrices: Vec<Mat4>,
+    /// The rotors (0x71, `WorldObjects::create`'s order — every 0x71 placement): the placement
+    /// rotation and translation. `rotor_init` 0x18f4b8 creates the object at the placement ROT
+    /// (`control_create_object(0x20, pos, rot)`) and `rotor_update` 0x18f568 adds ROT·FRAME_RATE_MUL
+    /// to obj+0x50 each spinning tick, so the drawn rotation is the placement ROT + the sim's angle.
+    pub rotor_placements: Vec<([f32; 3], [f32; 3])>,
     /// The 0x34 placements the build gave posed slots (the camera slots follow them; the sim's
     /// gunimp list may be emptied by the MP Gun Emplacements setting, the slot layout is not).
     pub gunimp_placements: usize,
@@ -8142,6 +8152,15 @@ pub fn build(level: &Level, cels_only: bool, skeletons: &HashMap<u8, Skeleton>, 
                 if obj.flags & 0x10 != 0 && FLAGS_COPYING.contains(&kind) { continue; }
                 if !obj.gfx.leaves.iter().any(|l| !l.batches.is_empty()) || obj.flags & 0x400 != 0 { continue; }
                 if let Some(h) = &nf_hide { if h.split(',').any(|n| !n.is_empty() && obj.name.contains(n)) { continue; } }
+                // level-1b-audit: in the sim-posed build the gated dynamic object rides a posed slot
+                // below (after the sensors) instead of this static instance — the static draw never
+                // collapses when the sim deletes the object (`DynamicObject_Update` 0x18d3b8:26 mode-0
+                // armed-B → obj+0xFE bit 0 → the delete pass), so 0700001b's control-room glass kept
+                // rendering after ch 10 (Drake's gate) fired. In --all the static draw stays.
+                if kind == 0x3b && cels_only { *misc_drawn.entry(0x3b).or_default() += 1; continue; }
+                // The rotors spin on a posed slot below (after the dynamic objects): the static draw
+                // held the placement pose forever [M rotor_update 0x18f568 writes obj+0x50 every tick].
+                if kind == 0x71 && cels_only { *misc_drawn.entry(0x71).or_default() += 1; continue; }
                 // A lock whose object has a LOD variant (the keypads: "Lock - KeypadLocked" →
                 // "Lock - KeypadUnlocked" [D block 0x27]) rides the posed slot space below, so the
                 // unlock's `Control_NextLOD` can swap it.
@@ -8194,6 +8213,8 @@ pub fn build(level: &Level, cels_only: bool, skeletons: &HashMap<u8, Skeleton>, 
         // cone along the aim, the spot on its ray hit, the corona a camera billboard (docs/systems/world-objects.md).
         crate::phase_mark("b5f coronas/wires/ladders/misc", t); t = std::time::Instant::now();
         let mut lock_matrices: Vec<Mat4> = Vec::new();
+        let mut dynobj_matrices: Vec<Mat4> = Vec::new();
+        let mut rotor_placements: Vec<([f32; 3], [f32; 3])> = Vec::new();
         let mut gunimp_placements = 0usize;
         if let Some(m) = level.main_map() {
             for (pi, pl) in nf_game::searchlight::part_placements(&level.maps[m].placements).into_iter().enumerate() {
@@ -8331,6 +8352,47 @@ pub fn build(level: &Level, cels_only: bool, skeletons: &HashMap<u8, Skeleton>, 
                         add_instance(level, &inst, Layer::Character, None, &mut groups, None, None, Some((cam_base + 3 * si + k) as u16), None, [1.0; 3], &room_cels, u32::MAX, u32::MAX);
                     }
                 }
+            }
+            // The gated dynamic objects (0x3B, `WorldObjects::create`'s order — every 0x3b placement,
+            // placement order), after the sensors: one slot each at the placement matrix, collapsed
+            // once the sim deletes the object (`DynamicObject_Update` 0x18d3b8:26 — mode 0 with armed
+            // B sets obj+0xFE bit 0, the movement pass's delete; 0700001b's GLASS_ControlRoom (p1 =
+            // ch 10, Drake's gate) is the level's one). The create-time hidden gate (p0 != 0 →
+            // obj+0xF0 = glist | 0x30... the draw excluded) matches the static loop's.
+            let n_sensors_build = level.maps[m].placements.iter().filter(|p| p.flags & 0xff == 0x28 && p.flags & 0xa000 == 0).count();
+            let dynobj_base = cam_base + 3 * n_sensors_build;
+            for (di, p) in level.maps[m].placements.iter().filter(|p| p.flags & 0xff == 0x3b).enumerate() {
+                let mx = nf_formats::placement::object_matrix(p.rotation, p.translation);
+                dynobj_matrices.push(mx);
+                if !cels_only { continue; }
+                // A p0-gated object is created hidden (|0x30) and shown when p0's channel rises — the
+                // slot carries it from load; the per-tick pose collapses it while hidden [M 0x18dbf8:27-29].
+                let target = if p.by_hash() { level.by_hash.get(&p.hashcode).copied() }
+                    else if (p.index as usize) < level.maps[m].objects.len() { Some((m, p.index as usize)) } else { None };
+                let Some((map, object)) = target else { continue };
+                let obj = &level.maps[map].objects[object];
+                // The static loop's gates: the glist's own no-draw bit 0x10 (a FLAGS_COPYING kind), the
+                // mirror-only 0x400, and an empty glist [M View_AddObjects 0x1e62d8:33,38-47].
+                if obj.flags & 0x410 != 0 || !obj.gfx.leaves.iter().any(|l| !l.batches.is_empty()) { continue; }
+                if let Ok(h) = std::env::var("NF_HIDE") { if h.split(',').any(|n| !n.is_empty() && level.maps[map].objects[object].name.contains(n)) { continue; } }
+                let inst = Instance { map, object, matrix: mx, placement: p.clone() };
+                add_instance(level, &inst, Layer::Character, None, &mut groups, None, None, Some((dynobj_base + di) as u16), None, [1.0; 3], &room_cels, u32::MAX, u32::MAX);
+            }
+            // The rotors (0x71, `WorldObjects::create`'s order), after the dynamic objects: one slot each,
+            // posed every tick at the placement ROT + the sim's accumulated spin [M 0x18f4b8, 0x18f568].
+            let rotor_base = dynobj_base + level.maps[m].placements.iter().filter(|p| p.flags & 0xff == 0x3b).count();
+            for (ri, p) in level.maps[m].placements.iter().filter(|p| p.flags & 0xff == 0x71).enumerate() {
+                rotor_placements.push((p.rotation, p.translation));
+                if !cels_only { continue; }
+                let target = if p.by_hash() { level.by_hash.get(&p.hashcode).copied() }
+                    else if (p.index as usize) < level.maps[m].objects.len() { Some((m, p.index as usize)) } else { None };
+                let Some((map, object)) = target else { continue };
+                let obj = &level.maps[map].objects[object];
+                if obj.flags & 0x410 != 0 || !obj.gfx.leaves.iter().any(|l| !l.batches.is_empty()) { continue; }
+                if let Ok(h) = std::env::var("NF_HIDE") { if h.split(',').any(|n| !n.is_empty() && level.maps[map].objects[object].name.contains(n)) { continue; } }
+                let mx = nf_formats::placement::object_matrix(p.rotation, p.translation);
+                let inst = Instance { map, object, matrix: mx, placement: p.clone() };
+                add_instance(level, &inst, Layer::Character, None, &mut groups, None, None, Some((rotor_base + ri) as u16), None, [1.0; 3], &room_cels, u32::MAX, u32::MAX);
             }
             // Level-placed pickups (`Pickup_Create` 0x18dda0): `View_DrawObjectGlist` 0x1e6780 draws
             // `obj+0xD8` at `obj+0x90` — the same object carries the glist the renderer draws [M], so the
@@ -8808,7 +8870,7 @@ pub fn build(level: &Level, cels_only: bool, skeletons: &HashMap<u8, Skeleton>, 
                 }
             }
         }
-        Scene { shard_tex, cels: room_cels, cel_graph, streams: None, music_files: None, music_tables: None, sound_bank: None, sound_spares: Vec::new(), snow_texture, vertices, indices, materials, textures, hud_textures, woman: None, hud, script_billboards, view_models, mp_bodies, mp_body_weapons, mp_char_bodies, mp_anim_sets, fog, bounds, start, stats, characters, char_vertex_start, char_verts, sequences, attachments, sim, colliders, models_0x800, npc_pool, ladders_drawn, grapple_hooks_drawn, misc_drawn, lock_matrices, gunimp_placements }
+        Scene { shard_tex, cels: room_cels, cel_graph, streams: None, music_files: None, music_tables: None, sound_bank: None, sound_spares: Vec::new(), snow_texture, vertices, indices, materials, textures, hud_textures, woman: None, hud, script_billboards, view_models, mp_bodies, mp_body_weapons, mp_char_bodies, mp_anim_sets, fog, bounds, start, stats, characters, char_vertex_start, char_verts, sequences, attachments, sim, colliders, models_0x800, npc_pool, ladders_drawn, grapple_hooks_drawn, misc_drawn, lock_matrices, dynobj_matrices, rotor_placements, gunimp_placements }
     }
 
     /// Sequence index and frame a character shows after `ticks` 60 Hz updates: its start script (`choice = None`) or the
@@ -9676,6 +9738,25 @@ pub fn build(level: &Level, cels_only: bool, skeletons: &HashMap<u8, Skeleton>, 
             // length axis [M 0x1af398:58,72,78 + 0x1af010:102; the Camera_Beam mesh's +z unit
             // length, D probe]. State 3 collapses it (the lens display mask cleared [M 0x1af618:248-250]).
             let c = g - GUNIMP_SLOTS * self.gunimp_placements;
+            // Past the sensors: the gated dynamic objects (0x3B, `WorldObjects::create`'s order), one
+            // slot each — the placement matrix until the sim deletes the object (`DynamicObject_Update`
+            // 0x18d3b8:26 mode-0 armed-B → obj+0xFE bit 0 → the delete pass), then collapsed.
+            if c >= 3 * s.drones.sensors.list.len() {
+                let di = c - 3 * s.drones.sensors.list.len();
+                if di >= self.dynobj_matrices.len() {
+                    let ri = di - self.dynobj_matrices.len();
+                    let (rot, trans) = *self.rotor_placements.get(ri)?;
+                    let a = s.drones.worldobjs.rotors.get(ri)?.angle;
+                    return Some(nf_formats::placement::object_matrix([rot[0] + a[0], rot[1] + a[1], rot[2] + a[2]], trans));
+                }
+                // The live object by its create slot (the delete pass drops dead ones from the list);
+                // gone, or hidden by the no-draw bits `View_AddObjects` 0x1e62d8:33 tests
+                // (`obj+0xF0 & 0x8010` — the create's |0x30 while p0's channel is off, mode != 0's
+                // |0x30 while B is armed [M 0x18dbf8:27-29, 0x18d3b8:34-36]) → collapsed.
+                let d = s.drones.worldobjs.dynobjs.iter().find(|d| d.slot as usize == di)?;
+                if d.dead || d.flags & 0x8010 != 0 { return None; }
+                return self.dynobj_matrices.get(di).copied();
+            }
             let sn = s.drones.sensors.list.get(c / 3)?;
             return match c % 3 {
                 0 => Some(sn.matrix),

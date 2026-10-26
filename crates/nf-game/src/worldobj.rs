@@ -133,6 +133,9 @@ pub struct DynObject {
     pub alpha: u8,
     /// obj+0xFE bit 0 (mode 0 + B armed → deleted by the movement pass that tick).
     pub dead: bool,
+    /// The create order among the level's 0x3b placements (the draw's posed slot; the delete pass
+    /// removes dead objects from the list, so the list index is not stable).
+    pub slot: u16,
 }
 
 impl DynObject {
@@ -385,7 +388,9 @@ impl WorldObjects {
                     // glist's +0x44 word (0x18dbf8:15-16), |0x30 when p0 != 0 (0x18dbf8:27-29).
                     let (base, centre) = glist(p);
                     let m = nf_formats::placement::object_matrix(p.rotation, p.translation);
+                    let slot = w.dynobjs.len() as u16;
                     w.dynobjs.push(DynObject {
+                        slot,
                         // obj+0x80 (the world sphere the fade distance reads): the matrix translation
                         // plus the rotated glist centre (Control_BuildWorldSph's steady state).
                         pos: nf_formats::placement::transform(&m, centre),
