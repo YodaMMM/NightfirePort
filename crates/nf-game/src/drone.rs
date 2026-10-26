@@ -2225,7 +2225,10 @@ impl Drone {
             // [M 0x14b300:153-156], 9 ∉ {0x10,0xd,0x11,0x13}, so neither fires. Rows 1..34 are
             // never dispatched — parameter 5 ∈ {0, 100} on every main-map placement and every
             // coder/bot template ([D census, docs/systems/ai-dmode-inits.md incl. the 2026-10-24
-            // addendum]; docs/port-map/unreached.md).
+            // addendum]; docs/port-map/unreached.md). The whole 33-fn family's per-init bodies
+            // (0x14d528..0x14e568, incl. the 8 Defaults tail-calls and the empty DeleteMe/Ninja/Bot)
+            // are summarised in the ai-dmode-inits.md appendix and their row bytes pinned by
+            // nf-formats' dmode_row_table test — none of rows 1..34 needs a port path.
             for id in [1usize, 6, 7, 10, 0xc, 0x48, 0xf, 0x11, 0x13, 0x18, 0x1d, 0x4c, 0x21, 0x29,
                        0x2e, 0x37, 0x41, 0x42, 0x4f, 0x51, 0x5a, 0x24, 0x3c, 0x1f, 0x44, 0x33,
                        0x32, 0x31, 0x28, 0x27, 0x26, 0x30, 0x2f, 0x2a, 0x43, 0x3b, 0x17, 0x46,

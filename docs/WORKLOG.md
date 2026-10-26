@@ -18,3 +18,10 @@ Work log:
   summaries for the 26 still-uncited family members, a disc-table row test, HUD pane create
   audit (HealthPane 4-sprite loop + timers, InfoStatus/PickupStatus secondary slots), and
   Text_SendMessage 0x223600 (not cited anywhere in crates).
+- Added: docs/systems/ai-dmode-inits.md appendix (all 33 init bodies, grouped), drone.rs family
+  citation, nf-formats/tests/dmode_row_table.rs (35 disc rows pinned — Defaults is not a row fn,
+  fixed after first run), nf-formats/tests/hud_pane_creators.rs (glow templates == the
+  HealthPane create-loop writes; ammo/health create pointers), hud-panes.md [S]->[M] upgrades
+  for the four status creates + a create-fn audit section. Both new tests pass.
+- Next: Text_SendMessage 0x223600 caller census ([M] __Menu_SendMessage 0x1f1c18 type-0xc arm +
+  TextBox_Update 0x2237c8 self-0x53) vs the port's generic control_msg — census test pending.
