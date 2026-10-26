@@ -62,6 +62,10 @@ has three bark channels, and the port now matches all three:
 - The `tools/test/suite.py` fast runner does not survive the background kill between tool calls
   in this sandbox (measured again this session); the crates the change touches were run as
   above, plus the shared live suites listed.
+- Broad slice: `cargo test --offline --release -j2 -p nf-game -p nf-formats -- --test-threads=1`
+  — nf-formats 89 lib + 5 test bins green; `disc_golden` 11 passed / 3 failed = exactly the 3
+  slim-ISO `disc_golden` failures the task allows (bigf_header/bigf_tables/directory_tree
+  golden manifests); nf-game's own runs are the 563/0 lib + the live suites above.
 
 ## Corrections made to the docs
 
