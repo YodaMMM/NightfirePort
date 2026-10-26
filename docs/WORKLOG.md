@@ -13,3 +13,10 @@ docs/levels/07000011-audit.md with a GAP column; small gaps fixed [M] with tests
 documented as their own future tasks. Tests pin only proven behaviour ([M]/[D]/[L] evidence).
 Plan: census placements/scripts/records from the disc first, then decompile-side handler chains per
 kind present, then port-side coverage, then fixes. Suite runner starts once the ISO + toolchain land.
+level-11-audit completion (2026-10-26 ~08:55 UTC): census 319 placements/0 unresolved + 7 scripts +
+mission record #15 [L]; audit table docs/levels/07000011-audit.md (one row per placement, GAP
+column); port matches the game on every sim-side law this level exercises (symptom list resolved in
+docs/reports/level-11-audit.md); 3 pin-tests added (door lock-edge full law, 0xf9 difficulty gate,
+rotor tick) — 3/3 pass; one draw-only gap (rotor pose, mesh/matrix + render spots named); 6 doc
+errata; suite chunked in the sandbox's foreground (background jobs die here): 820 binaries cached,
+60-72 run per chunk, 0 failures except the known no-GPU probe_pylon_render, no total line.
