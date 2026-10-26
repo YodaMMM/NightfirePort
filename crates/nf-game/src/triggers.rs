@@ -651,6 +651,11 @@ pub fn build(level: &Level) -> Vec<Trigger> {
     let mut out = Vec::new();
     for (i, p) in map.placements.iter().enumerate() {
         let param = |k: u32| p.params.iter().find(|(j, _)| *j == k).map(|&(_, v)| v).unwrap_or(0);
+        // Kind 0xF9 is NOT a trigger: `parsemap_create_dynamic_objects` case 0xf9 calls
+        // `SoundTrigger_Create` 0x1b2628 (class 0x40) [M 0x1d04f0:504-510] — p0 is the ON-channel
+        // gate, p1 the one-shot flag, p2 the sound id [M 0x1b2628:41-48; 0x1b2790]. The port's
+        // sound triggers (crate::sound) own them. The game's InverterTrigger (0x1b3040, class
+        // 0x53) comes from case 0x41 [M 0x1d04f0:265-268] and worldobj.rs owns it.
         let raw_dc = p.flags == 0xdc;
         let kind = match p.flags { 0xea => kind::TOUCH_ONCE, 0xeb => kind::TOUCH, 0xec => kind::AND, 0xed => kind::SEQ_AND, 0xee => kind::OUT,
             0xef => kind::OR, 0xe8 => kind::LOAD_LEVEL, 0xf4 => kind::MOVIE, 0xdc => param(0) as u8, _ => continue };
