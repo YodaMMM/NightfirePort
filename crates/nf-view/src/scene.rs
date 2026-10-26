@@ -11807,7 +11807,8 @@ impl Sim {
             let radius = (ext[0] * ext[0] + ext[1] * ext[1] + ext[2] * ext[2]).sqrt() * match kind { 1 => 4.0f32, 2 => 2.0, _ => 3.0 };
             let script = match kind { 1 => 0x0600_0027, 2 => 0x0600_004f, _ => 0x0600_0052 };
             // The look only (damage 0): the drones' blast pass plays the script next tick.
-            self.drones.pending_blasts.push((c, radius, 0.0, usize::MAX, 0, script, radius));
+            // explode-debris-spawn: Destroy_Smash's 12th arg is 0 [M 0x12bcf8].
+            self.drones.pending_blasts.push((c, radius, 0.0, usize::MAX, 0, script, radius, 0));
             let bots: Vec<(usize, [f32; 3], f32)> = self.mp.as_ref().map_or(Vec::new(), |m| m.bots.iter().enumerate()
                 .filter(|(_, b)| !b.dead).map(|(j, b)| (j, [b.brain.pos[0], b.brain.pos[1] - BOT_EYE, b.brain.pos[2]], 0.4)).collect());
             for slot in 0..nf_net::MAX_AGENTS {
