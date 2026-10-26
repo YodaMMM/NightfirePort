@@ -14,7 +14,7 @@ fn p3(v: [f32; 3]) -> String { format!("({:.2},{:.2},{:.2})", v[0], v[1], v[2]) 
 #[test]
 fn probe_blockers() {
     let iso = iso();
-    let mut scene = nf_view::load(&iso, "0700001b.bin", false).expect("load 1b");
+    let mut scene = nf_view::load_with_carry_medals(&iso, "0700001b.bin", false, None, 1, u64::MAX).expect("load 1b"); // kind-6 pickups need the gold medal [M 0x18dda0:93]
     // --- A) spawners + grouped drones ---
     {
         let sim = scene.sim.as_ref().unwrap();
