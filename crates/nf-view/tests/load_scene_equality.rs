@@ -33,13 +33,19 @@ fn iso() -> Option<String> { std::env::var("NF_ISO").ok() }
 // batch-1024a: the security cameras' body + mount posed slots (`Sensor_Create` 0x1af010 / `Sensor_SetBeam`
 // 0x1af398 — 01 ×1, 02, 14 ×14), 14's b1 drones on skin 0x0500008c (`NDrone2_DefaultInit` 0x14b300:82-95).
 const BASELINE: &[(&str, &str)] = &[
-    ("07000002.bin", "184995bc34f63bb4 4484117 9372399 5353 4346823 81 9825 205 28 25 8"),
-    ("07000005.bin", "57ab143029eee3f2 4387197 9170895 3614 4302856 73 9759 106 19 16 6"), // the two copter SPs + their script draw slots
+    // pickup-medal-gate re-pin: the fresh-boot loads now run `Pickup_Create`'s kind-6 gate
+    // [M 0x18dda0:93-95] — the 007 rows (kind 6) create only with the level's gold medal
+    // recorded, and these pins were captured with bonus[0] = 0 (the fresh-boot word [L
+    // ee_start_05 0x2e1b88]). Each drifted level lost exactly its kind-6 rows' meshes: −418
+    // verts / −314 indices / −1 material slot per token (07000002 −3, 07000005 −2, 0700000c −4,
+    // 07000001 −2 pickups; 07000014 places no kind-6 and is bit-identical).
+    ("07000002.bin", "de7bd1606a4cfd9b 4482863 9369771 5351 4345569 81 9825 205 28 25 5"),
+    ("07000005.bin", "b80e33e25d834925 4386361 9169143 3612 4302020 73 9759 106 19 16 4"), // the two copter SPs + their script draw slots
     // lift-indicators-09 re-pin: one draw slot per `Script_SubScriptStart` op per running SP
     // [M 0x1db050] — 0700000c's multi-SP sub chains add 6 slots (+248 vertices, +576 indices,
     // +1 attachment); 07000014's vent-lid SPs are placed SPs (unchanged), the rest have no
     // multi-SP sub chains.
-    ("0700000c.bin", "22bb59aa786e1035 4872150 10242036 8182 4681326 96 11012 170 22 40 15"),
+    ("0700000c.bin", "c12cf82213a78ffa 4870478 10238532 8180 4679654 96 11012 170 22 40 11"),
     // script-entity-copies: one draw slot per ScriptPlayer running a script — 14's nine
     // SPs on the vent-lid script 0x06000A3B (+ its other shared scripts) add 20 attachments, +1600 vertices.
     // The keypads' LOD pair in the posed slots (Lock_Unlock 0x1b0650 / case 1 `Control_NextLOD`: three
@@ -51,8 +57,10 @@ const BASELINE: &[(&str, &str)] = &[
     // +59235 indices, +105 materials, +50005 char_verts, +15 attachments over the old pin.
     // fusebox-draw-slots re-pin: 07000014's five fusebox placements (kind 0x31) now seed their
     // param-0 script 0x06000A1B, +20 script-entity slots (the cabinet and wire art) [M FuseBox_Create].
-    ("07000014.bin", "9e25e8e7f4e5bd74 7147319 14846157 6583 6994386 98 13526 173 41 37 32"),
-    ("07000001.bin", "3efd2cdd3e5616ab 4396377 9211989 3491 4323075 76 9839 101 11 20 6"),
+    // 07000014 places two kind-6 rows as well: −836 verts / −752 indices / −2 material slots,
+    // pickups 32 → 30 (same gate).
+    ("07000014.bin", "15648c40fdef75cb 7146483 14844405 6581 6993550 98 13526 173 41 37 30"),
+    ("07000001.bin", "a5307145ca16e54b 4395541 9210237 3489 4322239 76 9839 101 11 20 4"),
 ];
 
 #[test]
