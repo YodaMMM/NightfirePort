@@ -24,3 +24,8 @@ say so in the report. Never weaken a decompile-backed test to make code pass.
 
 ---
 claimed-by: sandbox1 at 2026-10-26T15:49Z
+
+---
+## Report (done, 2026-10-26T16:50Z)
+
+Closed by the driver: the report is on `s/level-0a-band-settle-2` (docs/reports/level-0a-band-settle-2.md); the worker didn't run finish.sh.
