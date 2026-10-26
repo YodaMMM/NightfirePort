@@ -20,3 +20,8 @@ say so in the report. Never weaken a decompile-backed test to make code pass.
 
 ---
 claimed-by: sandbox5 at 2026-10-26T21:17Z
+
+---
+## Report (done, 2026-10-26T22:22Z)
+
+Closed by the driver: the report is on `s/capsule-cull-and-los-masks-5` (docs/reports/capsule-cull-and-los-masks-5.md); the worker didn't run finish.sh.
