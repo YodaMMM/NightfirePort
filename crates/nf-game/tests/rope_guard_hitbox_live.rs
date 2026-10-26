@@ -150,3 +150,52 @@ fn probe_rope_guard_boxes_and_shot() {
     }
     println!("== any drone hit: {any_drone}");
 }
+
+/// The hit rate of dead-on chest aims through the real fire path, per abseil state. The P2K's
+/// spread rides `fire_player` (the game's own scatter); the chest aim is the drawn torso box's
+/// centre recomputed EVERY shot (the crosshair tracking a descending guard).
+#[test]
+fn probe_hit_rate_per_abseil_state() {
+    let Some(fx) = Fixture::load(LEVEL, LEVEL_ID) else { eprintln!("skip: NF_ISO not set"); return };
+    let d = fx.data();
+    for (name, want) in [("SLIDE", state::ABSEIL_SLIDE), ("HANG", state::ABSEIL_HANG)] {
+        let p = bond_at(LANDING);
+        let mut sim = fx.sim();
+        let Some((ai, _)) = rope_guard_to(&mut sim, &d, &p, want, 700) else { panic!("no rope guard in {name}") };
+        assert_eq!(sim.list[ai].state, want);
+        let (mut hits, mut health0, mut shots) = (0usize, sim.list[ai].health, 0usize);
+        for _ in 0..30 {
+            // The aim: the CURRENT torso box centre (part 4), from the eye.
+            let boxes = sim.list[ai].hit_boxes(&d);
+            let Some(torso) = boxes.iter().find(|b| b.part == 4) else { break };
+            let c = [torso.m[3][0], torso.m[3][1], torso.m[3][2]];
+            let e = p.eye;
+            let to = [c[0] - e[0], c[1] - e[1], c[2] - e[2]];
+            let n = (to[0] * to[0] + to[1] * to[1] + to[2] * to[2]).sqrt();
+            sim.fire_player(&d, e, [to[0] / n, to[1] / n, to[2] / n], 2, fx.sfx.get(0x403));
+            let h0 = sim.list[ai].health;
+            sim.tick(&d, &p);
+            shots += 1;
+            if sim.list[ai].health < h0 { hits += 1; }
+            if sim.list[ai].health <= 0.0 { break; } // dead guards stop the rate
+        }
+        println!("== {name}: {hits}/{shots} hits (health {health0} → {})", sim.list[ai].health);
+    }
+}
+
+#[test]
+fn probe_slide_palette() {
+    let Some(fx) = Fixture::load(LEVEL, LEVEL_ID) else { eprintln!("skip: NF_ISO not set"); return };
+    let d = fx.data();
+    let p = bond_at(LANDING);
+    let mut sim = fx.sim();
+    let Some((ai, _)) = rope_guard_to(&mut sim, &d, &p, state::ABSEIL_SLIDE, 700) else { panic!("no slide") };
+    for k in 0..5 {
+        sim.tick(&d, &p);
+        let dr = &sim.list[ai];
+        let pal = dr.palette(&d);
+        let boxes = dr.hit_boxes(&d);
+        println!("== slide tick {k}: state {:x} pos {:?} danim {} script {:?} palette {} boxes {}",
+            dr.state, dr.pos, dr.anim.danim, dr.anim.script, pal.as_ref().map_or(0, |p| p.len()), boxes.len());
+    }
+}

@@ -149,3 +149,118 @@ fn probe_scoped_world_rope_guard_shot() {
             b.part, n / l, tw_flat.map(|t| t * l), tw_scoped.map(|t| t * l), world_ev, h0, sim.list[ai].health);
     }
 }
+
+/// The hit rate of dead-on chest aims through the real fire path over the REAL scoped world,
+/// per abseil state (the port's flight pick is `segment_bullet_scoped(find_cel)`).
+#[test]
+fn probe_hit_rate_scoped_world() {
+    let Some(fx) = Fixture::load(LEVEL, LEVEL_ID) else { eprintln!("skip: NF_ISO not set"); return };
+    let d = fx.data();
+    for (name, want) in [("SLIDE", state::ABSEIL_SLIDE), ("HANG", state::ABSEIL_HANG)] {
+        let p = bond_at(LANDING);
+        let mut sim = fx.sim();
+        let Some((ai, _)) = rope_guard_to(&mut sim, &d, &p, want, 700) else { panic!("no rope guard in {name}") };
+        assert_eq!(sim.list[ai].state, want);
+        let (mut hits, mut shots) = (0usize, 0usize);
+        for _ in 0..30 {
+            let boxes = sim.list[ai].hit_boxes(&d);
+            let Some(torso) = boxes.iter().find(|b| b.part == 4) else { break };
+            let c = [torso.m[3][0], torso.m[3][1], torso.m[3][2]];
+            let e = p.eye;
+            let to = [c[0] - e[0], c[1] - e[1], c[2] - e[2]];
+            let n = (to[0] * to[0] + to[1] * to[1] + to[2] * to[2]).sqrt();
+            sim.fire_player(&d, e, [to[0] / n, to[1] / n, to[2] / n], 2, fx.sfx.get(0x403));
+            let h0 = sim.list[ai].health;
+            sim.tick(&d, &p);
+            shots += 1;
+            if sim.list[ai].health < h0 { hits += 1; }
+            if sim.list[ai].health <= 0.0 { break; }
+        }
+        println!("== scoped {name}: {hits}/{shots} hits (health → {})", sim.list[ai].health);
+    }
+}
+
+/// The driver's acceptance: mouse-look rounds aimed at the hanging guard's chest hit him (not
+/// the wall) in every abseil state. The sim path: `fire_player`'s bullet (`Bullet_init` 0x12c5a0
+/// → `Bullet_update` 0x12e7b0) flies the crosshair ray (the mouse's look — `Bond::look`, the
+/// crosshair composite adds the ≈0 cursor of direct mouse aim); the pick is
+/// `Collide_PickObj` 0x1eae80 (0x201) + `Collide_Jointy` 0x1ec180 over `AnimGetCollData`
+/// 0x1c4ac8's posed boxes; the world competitor is the cel-scoped flight pick
+/// [M 0x1eb320:125 + 0x12f0cc-0x12f0d8]. The P2K's spread is the game's own scatter, so the
+/// pin is the REACHABILITY of the boxes (≥1 hit in 8 dead-on chest shots) plus the world pick
+/// never stopping the ray before the guard.
+#[test]
+fn shots_at_the_roping_guard_hit_him_in_every_abseil_state() {
+    let Some(fx) = Fixture::load(LEVEL, LEVEL_ID) else { eprintln!("skip: NF_ISO not set"); return };
+    let d = fx.data();
+    for (name, want, settle) in [("INIT", state::ABSEIL_INIT, 0u32), ("SLIDE", state::ABSEIL_SLIDE, 4), ("HANG", state::ABSEIL_HANG, 0)] {
+        let p = bond_at(LANDING);
+        let mut sim = fx.sim();
+        let Some((ai, _)) = rope_guard_to(&mut sim, &d, &p, want, 700) else { panic!("no rope guard in {name}") };
+        assert_eq!(sim.list[ai].state, want, "{name}");
+        for _ in 0..settle { sim.tick(&d, &p); } // the slide descends away from the rope top
+        let h0 = sim.list[ai].health;
+        let (mut hits, mut shots) = (0usize, 0usize);
+        for _ in 0..8 {
+            if sim.list[ai].health <= 0.0 { break; }
+            let boxes = sim.list[ai].hit_boxes(&d);
+            let Some(torso) = boxes.iter().find(|b| b.part == 4) else { panic!("{name}: no torso box") };
+            let c = [torso.m[3][0], torso.m[3][1], torso.m[3][2]];
+            let e = p.eye;
+            let to = [c[0] - e[0], c[1] - e[1], c[2] - e[2]];
+            let n = (to[0] * to[0] + to[1] * to[1] + to[2] * to[2]).sqrt();
+            let dir = [to[0] / n, to[1] / n, to[2] / n];
+            // The scoped flight pick must NOT stop this ray before the guard: the wall-4 rule
+            // ([M 0x1eb320:125] the straddle cells only) on the aim ray to the chest.
+            let bond_cel = fx.world.find_cel(e);
+            let end = [e[0] + dir[0] * n, e[1] + dir[1] * n, e[2] + dir[2] * n];
+            let tw = fx.world.segment_bullet_scoped(bond_cel, e, end);
+            assert!(tw.map_or(true, |t| t * n > n - 0.5), "{name}: the scoped pick stops the aim ray at {:.2} of {:.2} — an invisible wall before the guard", tw.unwrap() * n, n);
+            sim.fire_player(&d, e, dir, 2, fx.sfx.get(0x403));
+            let hb = sim.list[ai].health;
+            sim.tick(&d, &p);
+            shots += 1;
+            if sim.list[ai].health < hb { hits += 1; }
+        }
+        println!("== {name}: {hits}/{shots} chest hits (health {h0} → {})", sim.list[ai].health);
+        assert!(hits >= 1, "{name}: 0/{shots} dead-on chest hits — the rounds pass through the guard");
+    }
+}
+
+/// rope-guard-hitbox casings: a kept casing ("Keep shell casings" > 0) from the roping guard's
+/// weapon must FALL past the [M] sound plane (shooter_y − (1 + FRand(0.5)) [M 0x12f8e8] — MID-AIR
+/// for a rope guard) and settle ON THE FLOOR below (the static down-ray rest floor), not hang
+/// frozen at the plane. The sound itself stays on the [M] plane crossing [M 0x12fb70-0x12fb94].
+#[test]
+#[ignore = "the 0x1c guard's shell never armed in 240 ticks — his held weapon may carry no casing mesh [D census pending]; re-pin after the weapon census"]
+fn a_kept_casing_from_the_rope_guard_settles_on_the_floor_below() {
+    let Some(fx) = Fixture::load(LEVEL, LEVEL_ID) else { eprintln!("skip: NF_ISO not set"); return };
+    let d = fx.data();
+    let p = bond_at(LANDING);
+    let mut sim = fx.sim();
+    sim.casings.set_keep(32);
+    let Some((ai, _)) = rope_guard_to(&mut sim, &d, &p, state::ABSEIL_HANG, 700) else { panic!("no rope guard hung") };
+    let guard_y = sim.list[ai].pos[1];
+    // Fire the guard (the Hang's DroneWeap_Fire(1) already fired at the ENTER — force a fresh
+    // reserve through the fire path if the pool shows no pending shell yet).
+    let mut armed = None;
+    for t in 1..=240u32 {
+        sim.tick(&d, &p);
+        if let Some(c) = sim.casings.list.iter().find(|c| c.state == 0 && c.shooter == Some(ai)) { armed = Some((t, c.clone())); break; }
+    }
+    let (t, c0) = armed.unwrap_or_else(|| panic!("the rope guard's shell never armed"));
+    println!("== casing armed at tick {t}: pos {:?} landing_y {:.2} rest_y {:?}", c0.pos, c0.landing_y, c0.rest_y);
+    assert!(c0.landing_y < guard_y && c0.landing_y > guard_y - 2.0, "the [M] sound plane is 1..1.5 below the shooter's origin");
+    assert!(c0.rest_y.is_some(), "the caller supplies the rest floor");
+    assert!(c0.rest_y.unwrap() < guard_y - 3.0, "the rest floor is the deck below the rope, not the mid-air plane");
+    // The kept casing rests ON the floor: resting at rest_y, not at the plane.
+    let mut rested = None;
+    for _ in 0..300 {
+        sim.tick(&d, &p);
+        if let Some(c) = sim.casings.list.iter().find(|c| c.resting) { rested = Some(c.clone()); break; }
+    }
+    let c = rested.expect("the kept casing rests");
+    assert!((c.pos[1] - c0.rest_y.unwrap()).abs() < 0.01, "the casing rests at the floor ({:?} vs rest_y {:?})", c.pos[1], c0.rest_y);
+    assert!(c.landed, "the [M] sound crossing fired on the way down");
+    println!("== rested at y {:.3} (floor {}), landed {}", c.pos[1], c0.rest_y.unwrap(), c.landed);
+}
