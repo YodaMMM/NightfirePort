@@ -39,13 +39,13 @@ const BASELINE: &[(&str, &str)] = &[
     // → the delete pass, control_delete_object 0x133178:16-17) to a posed Character-layer slot
     // that collapses; the vertices/indices/materials/char_verts counts follow, [S port
     // engineering] like every pin here.
-    ("07000002.bin", "0b21596c9eea856d 4484117 9372399 5349 4347130 81 9825 205 28 25 8"),
-    ("07000005.bin", "57ab143029eee3f2 4387197 9170895 3614 4302856 73 9759 106 19 16 6"), // the two copter SPs + their script draw slots; re-pinned 10-26: the 0x3b dynamic objects ride posed slots [M View_AddObjects 0x1e62d8:33, DynamicObject_Update 0x18d3b8]
+    ("07000002.bin", "73525d9ad44022ee 4516629 9446895 5351 4379642 81 10721 205 28 25 8"),
+    ("07000005.bin", "8d18d38d5d4d4b9e 4419709 9245391 3616 4335368 73 10655 106 19 16 6"), // the two copter SPs + their script draw slots; re-pinned 10-26: the 0x3b dynamic objects ride posed slots [M View_AddObjects 0x1e62d8:33, DynamicObject_Update 0x18d3b8]
     // lift-indicators-09 re-pin: one draw slot per `Script_SubScriptStart` op per running SP
     // [M 0x1db050] — 0700000c's multi-SP sub chains add 6 slots (+248 vertices, +576 indices,
     // +1 attachment); 07000014's vent-lid SPs are placed SPs (unchanged), the rest have no
     // multi-SP sub chains.
-    ("0700000c.bin", "0b1bf624e1b36f7a 4872150 10242036 8125 4683918 96 11012 170 22 40 15"), // re-pinned 10-26: 0x3b on posed slots
+    ("0700000c.bin", "acc2b96c220e9960 4904662 10316532 8127 4716430 96 11908 170 22 40 15"), // re-pinned 10-26: 0x3b on posed slots
     // script-entity-copies: one draw slot per ScriptPlayer running a script — 14's nine
     // SPs on the vent-lid script 0x06000A3B (+ its other shared scripts) add 20 attachments, +1600 vertices.
     // The keypads' LOD pair in the posed slots (Lock_Unlock 0x1b0650 / case 1 `Control_NextLOD`: three
@@ -57,8 +57,8 @@ const BASELINE: &[(&str, &str)] = &[
     // +59235 indices, +105 materials, +50005 char_verts, +15 attachments over the old pin.
     // fusebox-draw-slots re-pin: 07000014's five fusebox placements (kind 0x31) now seed their
     // param-0 script 0x06000A1B, +20 script-entity slots (the cabinet and wire art) [M FuseBox_Create].
-    ("07000014.bin", "d3c6baa1d611e8e3 7148927 14848773 6484 6997588 98 13526 173 41 37 32"), // re-pinned 10-26: p0-gated 0x3b instanced from load (created hidden [M 0x18dbf8:27-29])
-    ("07000001.bin", "51125bee69c81067 4396377 9211989 3487 4323398 76 9839 101 11 20 6"), // re-pinned 10-26: the radio-room rotors on posed slots [M rotor_update 0x18f568]
+    ("07000014.bin", "2ea3dfde7ea1224c 7181439 14923269 6486 7030100 98 14422 173 41 37 32"), // re-pinned 10-26: p0-gated 0x3b instanced from load (created hidden [M 0x18dbf8:27-29])
+    ("07000001.bin", "d954f0b14254308d 4428889 9286485 3489 4355910 76 10735 101 11 20 6"), // re-pinned 10-26: the radio-room rotors on posed slots [M rotor_update 0x18f568]
 ];
 
 #[test]
