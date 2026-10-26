@@ -12592,6 +12592,30 @@ impl Drones {
                 // that load failure.
                 if !self.scripts.lib.contains_key(&t.script_a) || !self.scripts.lib.contains_key(&t.script_b) { continue; }
                 t.pos = p.translation;
+                // ext+0xd0 = the script-A union model bbox max.z × 1.5 [M GT_Create 0x17ffa0:118-140 —
+                // the Script_GetObj walk 0x1db688 unions each created object's glist bounds
+                // (obj+0xd8 → celglist, min +0x20 / max +0x30) and stores fStack_a8 (max.z) × 1.5].
+                // The port's script VM gap leaves the create-time object table unbuilt, so the union
+                // walks script A's static Entity commands and resolves each hash through the level's
+                // glist table: the 0700000a wall gun's union max.z 1.3243483 × 1.5 = 1.9865224 = the
+                // live ext+0xd0 [L ee_start_0700000a.bin ext 0x1b9e400+0xd0; D the three GunSamuri
+                // glist objects 0x020005a9/a8/ab]. Verified for every script whose created set is its
+                // full static set; a script that creates objects later would union them at the game's
+                // create beat only — none on the disc's 41 turret placements ([S] that general case).
+                if let Some(nis) = level.nis.get(&t.script_a) {
+                    let mut maxz: Option<f32> = None;
+                    for st in nis.streams.iter() {
+                        for c in st.decode() {
+                            if let nf_formats::nis::Cmd::Entity { hash, .. } = c {
+                                if let Some(&(m, o)) = level.by_hash.get(&hash) {
+                                    let z = level.maps[m].objects[o].max[2];
+                                    maxz = Some(maxz.map_or(z, |z0: f32| z0.max(z)));
+                                }
+                            }
+                        }
+                    }
+                    t.muzzle_offset = maxz.unwrap_or(0.0) * 1.5;
+                }
                 // ext+0x80: the create-time fire direction [M 0017ffa0:141-147] — facing 0
                 // reads `Mat_GetDir(obj+0x90)` (the matrix's forward row), else `Mat_GetUp`
                 // negated (the up row, negated).
@@ -15305,20 +15329,25 @@ fn segment_hits_sphere(a: V3, b: V3, c: V3, r: f32) -> bool {
                 if t.delete_flag { continue; }
                 // The per-candidate LOS walk [M 0x17f9c8:271-278 — one
                 // `Collide_LineOfSight(from, cand+0x80, level, obj, cand, 0x72f)` per scanned
-                // target]. The from-point is the turret's position (obj+0x30; the game's ray
-                // starts at the barrel transform pos + fire_dir·(ext+0xd0 muzzle offset)
-                // [M 0x17f9c8:230-258, ext+0xd0 = GT_Create's script-bbox max.z × 1.5
-                // 0x17ffa0:140] — the port's script VM gap leaves muzzle_offset 0.0, and with
-                // the END at the candidate's obj+0x80 the mount geometry is out of the ray's
-                // path). The end-point is the candidate's obj+0x80 world-sphere centre [M
+                // target]. The from-point is the game's muzzle push [M 0x17f9c8:232-242 — the
+                // ray starts at the barrel transform pos + the barrel dir · ext+0xd0; the port's
+                // stand-in is t.pos + fire_dir · muzzle_offset, the script VM gap documented at
+                // gt.rs]: with the [L] 1.9865224 the wall gun's ray starts ≈0.29 above the deck,
+                // below the mount — the unpushed ray clips the mount/deck and never arms.
+                // The end-point is the candidate's obj+0x80 world-sphere centre [M
                 // 0x17f9c8:271-278] — NOT the obj+0x30 feet the range gates read: the sphere
                 // centre rides at/above the deck top for a standing target, so the deck face
                 // under a candidate never blocks the track ray (the game's t-window is
                 // inclusive 0..1 [M Intersect_RayGeom 0x10a8c8:171-172], an exact endpoint
                 // touch WOULD count). The masked drop semantics are unconditional since
                 // capsule-cull-and-los-masks.
+                let gt_from = [
+                    t.pos[0] + t.fire_dir[0] * t.muzzle_offset,
+                    t.pos[1] + t.fire_dir[1] * t.muzzle_offset,
+                    t.pos[2] + t.fire_dir[2] * t.muzzle_offset,
+                ];
                 for c in cands.iter_mut() {
-                    c.los_ok = d.world.line_of_sight(t.pos, c.sph, crate::world::LOS_TURRET_TRACK);
+                    c.los_ok = d.world.line_of_sight(gt_from, c.sph, crate::world::LOS_TURRET_TRACK);
                 }
                 // GT_Update's top ticks BOTH scripts then reads their +0x9c [M 0x180498:111-112,
                 // 232-233]. The port's script players tick later in the control walk (they are
@@ -15372,6 +15401,15 @@ fn segment_hits_sphere(a: V3, b: V3, c: V3, r: f32) -> bool {
                         self.audio.play3d(sound, muzzle, None);
                         if let Some(w) = d.weapons.records.get(crate::gt::TURRET_WEAPON_RECORD) {
                             let f32_at = |o: usize| f32::from_le_bytes(w[o..o + 4].try_into().unwrap());
+                            // `Bullet_init`'s in-body spread cone [M 0x12c5a0:160-180 — the
+                            // weapon+0x24 cone (× the 0x40000-flag gate) through
+                            // FRand_MVar2(2s) → FRand(2π) → FRand(π) →
+                            // Vec_Spherical_2_Cartesian, added x/z/y then normalised twice] —
+                            // the same 3 draws every shooter's `Bullet_init` makes (the drone
+                            // arms at 10712/12828/12955/14467); the GT arm skipped them, so the
+                            // port's turret shots never spent the game's RNG stream.
+                            let flags68 = u32::from_le_bytes(w[0x68..0x6c].try_into().unwrap());
+                            let dir = crate::bullet::spread(dir, f32_at(0x24), flags68, &mut self.rng);
                             let mut b = crate::bullet::Bullet {
                                 pos: muzzle, dir, speed: f32_at(0x20), travelled: 0.0, range: f32_at(0x1c),
                                 damage: f32_at(0x0c), owner: usize::MAX, state: 0,

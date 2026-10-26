@@ -111,9 +111,11 @@ pub struct GTurret {
     /// ext+0xd4/d8: the barrel spin angle and velocity [M 00180498 case 4/7].
     pub spin: f32,
     pub spin_vel: f32,
-    /// ext+0xd0: the muzzle offset along the barrel (GT_Create's script bbox max.z × 1.5 —
-    /// the port's script VM is the tracked gap, so it stays a settable 0.0 from placements)
-    /// [M 0017ffa0:155-158].
+    /// ext+0xd0: the muzzle offset along the barrel (GT_Create's script bbox max.z × 1.5
+    /// [M 0017ffa0:118-140]). The port's script VM cannot enumerate the script objects' models,
+    /// so `Drones::attach_level_id` fills it from script A's static Entity commands resolved
+    /// through the level's glist bounds — the 0700000a wall gun reads 1.9865224, the live value
+    /// [L ee_start_0700000a.bin ext 0x1b9e400+0xd0].
     pub muzzle_offset: f32,
     /// The two scripts' per-object done flag (obj+0x9c on each `Script_GetObj` record): the
     /// game's script VM sets it; the port's script VM is the tracked gap (gt.rs module doc),
