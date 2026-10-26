@@ -77,7 +77,22 @@ Touched-crate runs, on the final tree (all green):
 - `walkreal_07000001_live` — 3 passed.
 - `walkreal_07000008_live` — 4 passed.
 
-Full suite on the merged final tree — see the total line below.
+Full suite on the merged final tree (`NF_ISO=… python3 tools/test/suite.py`, started 23:49 UTC,
+build ok 809 binaries in 1030 s). The sandbox deadline (01:08 UTC) cut the run phase short — the
+per-binary totals summed from the log at the last read before the finish steps:
+
+- cut-off (00:53 UTC): 368/809 binaries done — **1223 passed, 1 failed, 74 ignored**, plus 2 CRASH (exit -9)
+  `mp_stress_explosives_live` / `mp_online_failures` (the sandbox's OOM killer; the same two
+  crashed the same way on the pre-fix tree in the level-14-cutscene-door session).
+- The single FAILED binary is `probe_render_pylon_only` — the pre-existing master failure the
+  previous session's suite run also recorded (with `fix_0c_pylon_live`), not a file this task
+  touches.
+- The touched binaries completed inside the suite green: `cutscene_door_07000014_live` (3 s),
+  `interact_07000001_live` (25 s), `countdown_cutscene_cameras_live` (3 s). The four walk
+  binaries that had not been reached alphabetically were run directly on the same tree above
+  (all green).
+- `fix_0c_pylon_live` had not been reached at the cut-off; its two known reds stand as
+  pre-existing (master's own, recorded in both prior sessions' suites).
 
 ## 5. What's left
 
@@ -117,3 +132,11 @@ static pair still draws — if yes, the SS swap is the follow-up).
    0x020006b1, obj_type 0x31) around t1500 — expected under the port's choice: placement + keys
    (the composed spot); if the game shows the keys alone there, the case-1 rule can be widened to
    every unparented stream in camera-started scripts and the walks' pinned spots re-measured.
+
+## Usage
+
+not visible to me (this sandbox shows no token, credit, cost or context-window meters anywhere —
+no environment variable, no status line, no transcript header carries them).
+
+## ntfy
+
