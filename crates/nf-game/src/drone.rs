@@ -13480,7 +13480,10 @@ fn segment_hits_sphere(a: V3, b: V3, c: V3, r: f32) -> bool {
             // queried here (pure), applied in the match below.
             let mut best: Option<(usize, i16, f32)> = None;
             if !net_world {
-                let tstop = d.world.segment_bullet(b.pos, end);
+                // The round's world stop rides the game's cel-scoped pick [M Collide_Pick 0x1eb320:125
+                // candidate nodes from Collide_StraddleCels 0x1eac98 only; Bullet_update re-feeds
+                // the round's start cel every tick, disasm 0x12f0cc-0x12f0d8].
+                let tstop = d.world.segment_bullet_scoped(d.world.find_cel(b.pos), b.pos, end);
                 for (i, br) in self.breaks.list.iter().enumerate().filter(|(_, x)| !x.dead) {
                     // `Collide_FilterBullets` [M 0x1ece30:24-33]: the weapon's category word
                     // against the pane's mask | 0x106 — non-zero AND drops the contact.
@@ -13504,8 +13507,23 @@ fn segment_hits_sphere(a: V3, b: V3, c: V3, r: f32) -> bool {
                 if let Some((_, i)) = contact {
                     // The round dies on the first solid object hit — the glass absorbs it
                     // [M 0x12cff0-4]; nothing behind it scores or stops it this tick.
-                    b.dead = true;
+                    // EXCEPT the glass panes: the game's walk (Collide_Update 0x1ea398:216-229,
+                    // the disasm 0x1ea6cc-0x1ea6e4 region) passes a class-0x10 surface whenever
+                    // the bullet's HITTEST+0x9a carries the 0x20 mask (Bullet_update 0x12e7b0
+                    // disasm 0x12f048-0x12f058 arms it for every gun without weapon_data+0x6c &
+                    // 0x800 — the guns that break glass), and the handler's own glass arm
+                    // [M Bullet_CollisionHandler 0x12ce80 — `if ((+0x50 & 0x3f) == 0x10) pass`
+                    // under the same +0x6c & 0x800 gate] re-passes the hit after the class-'('
+                    // breakable stop. The pane still takes the damage: the collision pass
+                    // appends the contact to the pane's obj+0xD0 chain whether or not the round
+                    // stops [M the same pass the fusebox wires and SS Operate read] and
+                    // `Break_Update` 0x12bfd8:36-37 drains health from that chain. So a kind-2
+                    // (glass [D params; M 0x12c230:21]) pane's hit drains WITHOUT killing the
+                    // round; a non-glass breakable keeps the stop.
                     let br = &mut self.breaks.list[i];
+                    let glass_pass = br.kind == 2 && d.weapons.records.get(b.weapon as usize)
+                        .is_some_and(|w| u32::from_le_bytes([w[0x6c], w[0x6d], w[0x6e], w[0x6f]]) & 0x800 == 0);
+                    if !glass_pass { b.dead = true; }
                     br.health -= contact_dmg;
                     if br.health < 0.0 {
                         if let Some(k) = self.breaks.kill(i, b.pos, end, &mut self.rng) {
@@ -13741,14 +13759,26 @@ fn segment_hits_sphere(a: V3, b: V3, c: V3, r: f32) -> bool {
                 }
             }
             self.bullet_path_weapons.push(b.weapon);
-            // fix-foliage-bullets: the flight trace stays the plain first-hit ray. The game's
-            // pass machinery lives in the Collide_Update walk (0x1ea398:216-229) and the
-            // handler's per-hit state-1 arm (0x12ce80), but the bullets' own HITTEST stays
-            // inactive (+0x94 = 0 [M 0x12c668]) and the live-pinned guard cover trace
-            // (ai_live guard_takes_cover_like_the_game, UnderCoverAim 37) says the round stops
-            // on the flagged tree's first face — the pass does NOT lift the flight stop. The
-            // bit-0x8 drop is the AIM/LOS family's (segment_bullet).
-            let tw = d.world.segment(b.pos, end);
+            // The flight trace drops the pass-flagged hits (segment_bullet): the game's flying
+            // bullet ARMS its HITTEST pick every tick (+0x94 = 0x101/0x201, +0x9a = the surface
+            // mask 0x20 for guns without weapon_data+0x6c & 0x800 [M Bullet_update 0x12e7b0 disasm
+            // 0x12f030-0x12f058, 0x12f134/0x12f154]) and its sorted contact list is walked past
+            // every pass-flagged hit to the first solid one [M Collide_Update 0x1ea398:216-229 —
+            // pass = HITDATA+0x51 bit 1 (the glist node 0x40 flag / the surface byte's 0x40,
+            // Collide_Intersect disasm 0x1ebf78-0x1ebf80) | +0x50 bit 0x40 | the 0x80 random roll
+            // | (mask 0x20 → glass class 0x10 passes); a non-pass hit ends the walk]. The
+            // stairwell's 'stairwell_blocking_ploys…' fudge (glist 0x10, triangles mat 0x40 [D
+            // 07000011 map43#126]) is exactly such a pass surface: the game's rounds fly through
+            // it to the rope guards. (The earlier reading here — the flight keeps the plain
+            // first-hit ray because HITTEST+0x94 stays 0 — read the INIT zeroing at 0x12c668;
+            // the flight re-arms the mask per tick, so the walk rule governs.) The 0x80 random
+            // roll and the glass-class pass are not modelled in the port's flight trace (no
+            // 0x80/glass surface sits on these paths; adding the roll would spend RNG the game
+            // spends only per 0x80 hit) — [S] documented deviation.
+            // The cel-scoped pick (see the contact pass above): geometry outside the cells the
+            // segment straddles - the exterior backdrop planes around 07000011's stairwell - is
+            // never a candidate [M 0x1eb320:125, 0x1eac98].
+            let tw = d.world.segment_bullet_scoped(d.world.find_cel(b.pos), b.pos, end);
             for (i, dr) in self.list.iter().enumerate() {
                 // `Drone_CollisionHandler` 0x140968:62 returns while `NPCGlobals == 0` (the NIS freeze:
                 // drones take no damage) and `Collide_PickObj` 0x1eae80:26-30 drops `obj+0xF0 & 0x20`

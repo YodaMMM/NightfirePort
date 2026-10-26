@@ -123,6 +123,7 @@ fn firing_at_a_ride_window_breaks_it_dead_bit_glass_sound_entity_gone() {
     // then press the trigger in bursts and watch `break_kills` — the kill's row and entity are
     // both gone the same tick (the deletion), so the kill queue is the observable.
     let mut target_obj = target_obj;
+    let mut paths_at_kill = 0usize;
     let (kills_before, panes_before) = loop {
         let sim = w.scene.sim.as_mut().unwrap();
         if !sim.drones.breaks.list.iter().any(|b| b.script_obj == Some(target_obj) && !b.dead) {
@@ -158,7 +159,12 @@ fn firing_at_a_ride_window_breaks_it_dead_bit_glass_sound_entity_gone() {
         {
             let sim = w.scene.sim.as_mut().unwrap();
             new_kills = sim.drones.break_kills[kills_before..].to_vec();
-            if !new_kills.is_empty() { break; }
+            if !new_kills.is_empty() {
+                // The kill tick's flight segments are still on the books (the per-tick clear runs
+                // at the NEXT tick's bullet update): the kill came from the bullet pass.
+                paths_at_kill = sim.drones.bullet_paths_len();
+                break;
+            }
             let head = sim.bond.head();
             let input = if let Some(br) = sim.drones.breaks.list.iter().find(|b| b.script_obj == Some(target_obj) && !b.dead) {
                 let target = [(br.lo[0] + br.hi[0]) / 2.0, (br.lo[1] + br.hi[1]) / 2.0, (br.lo[2] + br.hi[2]) / 2.0];
@@ -185,7 +191,16 @@ fn firing_at_a_ride_window_breaks_it_dead_bit_glass_sound_entity_gone() {
         "the dead row dropped at the sync (the pane left the world with its object)");
     assert!(sim.drones.breaks.shatter.shards.is_empty() && sim.drones.breaks.shatter.debris.is_empty(),
         "a script pane spawns NO pieces (psiCreateBreakableData is placement-only [M 0x1d04f0:70-73])");
-    assert!(!sim.drones.bullet_paths().0.is_empty(), "the kill came from the bullet pass");
+    // The kill came from the bullet pass: the flight segments were on the books on the kill tick.
+    // (The old pin here — paths non-empty 7 ticks after the kill — held on the pre-stairwell
+    // flight only through the accidental double-pierce of the pass-flagged glass static in front
+    // of the pane: the game's sorted walk [M Collide_Update 0x1ea398:216-229] passes the glass
+    // class-0x10 surface AND the kind-2 pane, then the round dies on the solid far wall behind —
+    // the whole flight is one 2.5 m tick. The drain-without-stop is the game's glass mechanic:
+    // the pass appends the contact to the pane's obj+0xD0 chain and `Break_Update` 0x12bfd8:36-37
+    // drains it, while `Bullet_CollisionHandler` 0x12ce80's glass arm (+0x50 & 0x3f == 0x10 under
+    // the +0x6c & 0x800 gate) keeps the round flying.)
+    assert!(paths_at_kill > 0, "the kill came from the bullet pass (flight segments on the kill tick)");
 }
 
 /// Sister: the same ride, the same aim, the trigger never pressed — no pane dies.
