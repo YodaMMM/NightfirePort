@@ -15,3 +15,20 @@ start; suite in the background early; the level doc docs/levels/07000012.md as t
 via a disc dump; the decomp per kind from work/decomp/ACTION.ELF.
 (Note: the previous session's task fusebox-inverter-2 was closed first — its finish.sh + ntfy
 had been lost with the sandbox; the queue shows it done with the report attached.)
+
+### level-12-audit — the audit written; the script/record sections + the death-channel pin (2026-10-26 ~07:55 UTC)
+docs/levels/07000012-audit.md: all 792 main-map placements as rows grouped by 33 kinds (each with
+the game's [M/D] chain, the port's, GAP), plus: the four SP scripts decoded per stream (the intro
+0x06000530 has NO camera op — the level doc's "entities + camera" was wrong on the camera half;
+#662's script is 0x060005bb, the doc's 0x060005FB a misread); the full kind-7 sweep — exactly four
+channel writes on the level (intro ch 0x3c + sub 0x89 pulse, both with NO consumers; the death
+script's ch 0x62); the mission record (2 objectives, fail 0xffffffff — the civilian ch 0x63 and
+shaft ch 0x62 fail OUTSIDE the record); the writer census (no writer of the door lock channels
+0xc8/0xc5 nor the alarm 0x61 — those doors never lock by data, in the game as well; the door
+"lock" channel's rising edge is an UNLOCK: label 0x2000003 = "Door Unlocked" [D door-text-labels.md,
+M 0x1363c8:88-112 — the burn opens #754]); the dispatcher-skip rows (0x19/0x47/0x31 — the port
+matches behaviourally). Large gap #1 in the report: the drone HITTEST (the walk-through-Bond
+symptom) — the [M] chain cited from drone.rs's own spec comment. New tests
+(scripts_07000012_live): the shaft-fall ch 0x62 pin (green); the intro park pin (mask p5=2 ->
+state 0 [M 0x1db9a8:74-86], the 07000006 #808 precedent). The two test binaries got SIGKILLed
+under suite memory pressure — re-run after the suite drains.
