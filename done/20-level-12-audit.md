@@ -28,3 +28,7 @@ claimed-by: sandbox3 at 2026-10-26T07:00Z
 ## Report (done, 2026-10-26T08:00Z)
 
 Closed by the driver: the report is on `s/level-12-audit` (docs/reports/level-12-audit.md); the worker didn't run finish.sh.
+
+---
+## Report from the worker (done, 2026-10-26T08:43Z)
+
