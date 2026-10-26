@@ -12535,7 +12535,15 @@ impl Drones {
                 if sw.placement == i { sw.sp = Some(idx); }
             }
         }
-        if let Some(p) = ps.iter().find(|p| p.flags & 0xff == 0xdf) {
+        // The weather placement: `Env_Create` 0x17b968 sets `GlobalEnv = env` on EVERY
+        // successful call (and `InitDrops(drop_type)` 0x18bf68:8 with it), so with several
+        // 0xDF placements the LAST created one wins — the same placement-order walk
+        // `parsemap_create_dynamic_objects` 0x1d04f0 runs (07000014 carries two: #425 Weather
+        // p0=0xff, then #588 Bubble_gen p0=2 [D census]; the game's live DropType is 2).
+        // [S unverified: the game's `build_FindCel` gate can skip a placement whose cel lookup
+        // fails or whose cel already carries an env (0x17b968 early-outs before the store) —
+        // the port has no cel-attach model, so it takes the last match unconditionally.]
+        if let Some(p) = ps.iter().rev().find(|p| p.flags & 0xff == 0xdf) {
             let kind = p.params.iter().find(|(i, _)| *i == 0).map_or(0, |&(_, v)| v as u8);
             let boxes = level.instances(false).0.iter().filter(|i| i.placement.flags & 0xff == 0x32).map(|i| {
                 let o = &level.maps[i.map].objects[i.object];
