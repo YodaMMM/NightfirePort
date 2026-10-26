@@ -106,16 +106,21 @@ of round 3: 177 files unchanged except the injected records.
   build ONE wave's targets, run each binary, record the result, DELETE the binary. Results
   live in scripts/wave_state.json.
 - **Waves completed: `mo` 17/17 binaries (93 passed / 0 failed / 0 ignored, except the
-  briefing_plays_live 14 analysed above) and `game` 89/89 binaries (nf-game, 344 passed /
-  0 failed / 3 ignored).** Every binary green except the analysed briefing artifact.
-- **Not run (window + disk): nf-formats, nf-audio and the remaining ~680 nf-view test files**
-  (waves `formats_audio`, `audio`, `view0…` in the runner — re-invoke
-  `python3 scripts/wave_suite.py scripts/wave_state.json <wave>` to continue). My diff touches
-  nf-view only (movie.rs + one lib.rs comment); nf-game's 89 binaries cover the largest
-  untouched surface and are green. nf-formats's movie tests: `pss_movies_live` ran green on the
-  stub ISO earlier in the session (3 passed, the designed skips; pre-fix tree, and the fix
-  does not touch nf-formats). The 3 `disc_golden` slim-ISO allowances sit in nf-formats's
-  binaries — not reached this session.
+  briefing_plays_live 14 analysed above), `game` 89/89 binaries (nf-game, 344 passed / 0 failed /
+  3 ignored), and `formats_audio` 25/25 binaries (nf-formats, 138 passed / 6 failed / 3 ignored).**
+- The formats_audio failures are ALL the injected image talking, not the diff: `pss_movies_g008`
+  (3), `pss_movies_live` (2) and `pss_vag_golden` (1) assert RETAIL movie byte content
+  (golden/pss_movies.tsv's packet counts, ADPCM goldens) — my synthetic movies carry only silence
+  at the retail durations, so content asserts cannot pass; on the slim image these tests SKIP by
+  design ("is a stub on this image"), which is how `pss_movies_live` passed 3/3 earlier this
+  session. They are nf-formats tests reading demux/PCM bytes — nothing in them touches the
+  nf-view Player this task changed.
+- **Not run: nf-audio's test binaries** (wave `audio`) and the remaining ~680 nf-view test files
+  (waves `view0…`) — re-invoke `python3 scripts/wave_suite.py scripts/wave_state.json <wave>` to
+  continue. My diff touches nf-view only (movie.rs + one lib.rs comment); nf-game's 89 binaries
+  cover the largest untouched surface and are green. The 3 `disc_golden` slim-ISO allowances sit
+  in nf-formats's binaries — `disc_golden` did not appear in the wave's FAILED lines; the
+  pss-family failures above are the image, not the calibration.
 - The rule-5 command was run for the touched crate in its two feature shapes
   (`cargo test --offline --release -j2 -p nf-view [--features nf-view/movies] --test
   mission_outros_live` → 3/3 both); the full four-crate `cargo test` line could not complete
@@ -126,9 +131,10 @@ of round 3: 177 files unchanged except the injected records.
 
 ## What's left
 
-- The remaining suite waves (nf-formats, nf-audio, ~680 nf-view files) — the state file makes
+- The remaining suite waves (nf-audio, ~680 nf-view files) — the state file makes
   them resumable; nothing in them is expected to interact with this diff (nf-view's movie and
-  glue consumers all ran green).
+  glue consumers all ran green, and the nf-formats failures above are the synthetic image's
+  content, which the retail machine does not have).
 - On a retail-disc machine: the 18 briefing_plays_live rows + `suite.py --only
   mission_outros_live` should hold the retail PSS lengths with no injected data.
 
