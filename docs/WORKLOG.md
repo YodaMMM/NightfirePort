@@ -102,3 +102,18 @@ Plan: branch s/level-11-rope-guard-hitbox from origin/master (7b4cabf2) pushed a
 suite runner started in the background; census the bullet-pick path + the abseil pose/jointy hit
 test in the port; write the failing mouse-look tests per abseil state; fix with [M] citations;
 casing settle test; full suite; report + finish by 20:30 UTC.
+
+## level-11-rope-guard-hitbox (18:51–20:30 UTC, 10-26)
+
+- Branch from origin/master 7b4cabf2 pushed as checkpoint 1 (18:56). Probes committed (19:36,
+  20:03, 20:25): the sim-side Jointy pick hits dead-on chest aims in INIT/SLIDE/HANG over the
+  flat AND the scoped worlds (nf-view live test green, the scoped flight pick never stops the
+  aim ray); the HANG state's CallAnim(2) never starts (danim 11 persists) — recorded, not the
+  miss's cause.
+- The frozen-casings fix (20:25): kept casings now rest on the static floor beneath the eject
+  point (`rest_y` down-ray at eject/arm; casing.rs `eject_with_floor`/`reserve_with_floor`, the
+  tick_inner bones closure computes the floor) instead of the mid-air [M] sound plane — the rope
+  guard's kept shells fell 10+ units to the deck. keep=0 behaviour untouched (game-exact).
+- Ran: nf-game lib (0 failed, incl. casing 7/7), nf-view rope_guard_hitbox_07000011_live (3
+  passed / 1 ignored). The background suite predates the final tree — rerun is next round's
+  first step. Report: docs/reports/level-11-rope-guard-hitbox.md.
