@@ -52,3 +52,13 @@ report + finish.
   the opening onto the balcony then OSCILLATES (15.62/−120.85 ↔ 15.35/−120.67) at the pier ramp
   base — the leg-4 descent (sill → mid floor 11.27 → ground 6.27 → ramp north into the case) is
   the mapped candidate.
+
+## level-0c-display-hatch-2
+
+- (17:01 UTC, 10-26) Branch created from origin/s/level-0c-display-hatch (b828d267), merged
+  origin/master. Task: use the driver's four fresh [L 2026-10-26] answers (the bay floor reads
+  12.877 not 11.84; the skylight touchplate ch 0x1b pulses on a body passing through its volume
+  — the drop into the bay fired it at ~14.1; the roof walk never fires it; the mid floor's north
+  edge holds Bond back from the 6.27 pocket) to find the real route into the display case, port
+  what the port lacks, re-derive + un-ignore the two ignored 0c tests. Sandbox kept repo/ISO/
+  work/target from the previous session; branch pushed as checkpoint.
