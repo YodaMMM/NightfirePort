@@ -17,7 +17,7 @@ fn probe_bunker_cells() {
         let mut x = -62.0f32;
         while x <= -41.0 {
             let (a, b) = ([x, 6.75, z], [x, 6.05, z]);
-            let (push, _) = world.capsule_push(a, b, 0.55, false);
+            let (push, _) = world.capsule_push(a, b, 0.55, false, [1.0e9, 1.0e9, 1.0e9]);
             let blocked = push.iter().any(|v| v.abs() > 0.05);
             row.push(if blocked { '#' } else { '.' });
             x += 1.0;

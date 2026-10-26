@@ -99,7 +99,7 @@ fn bond_at(p: [f32; 3]) -> Player { Player { yaw: 0.0, pos: p, target: [p[0], p[
 
 const LEVEL: &str = "07000011.bin";
 const LEVEL_ID: u32 = 0x0700_0011;
-/// The driver's [L 2026-10-26] playtest spot: the stairwell landing the shots come from.
+/// The reported spot: the stairwell landing the shots come from.
 const LANDING: [f32; 3] = [14.11, 34.03, 0.26];
 
 /// The rope guard p258 (ch 0x13 [D param 3]): release the switch, run the chain to the wanted

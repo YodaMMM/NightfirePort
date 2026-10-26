@@ -87,16 +87,16 @@ fn probe_door32_corner() {
         ("to mid-door (26.0,41.4,70.1)", [29.55f32, 41.45, 68.97], [26.0, 41.45, 70.1]),
     ] {
         let seg = sim.world.segment(a, b);
-        let (push, _w) = sim.world.capsule_push(a, b, 0.4, false);
+        let (push, _w) = sim.world.capsule_push(a, b, 0.4, false, [1.0e9, 1.0e9, 1.0e9]);
         eprintln!("{label}: segment={seg:?} capsule_push a->b push=({:.3},{:.3},{:.3})", push[0], push[1], push[2]);
     }
 
     // the capsule exactly at the walker's stuck pose
     let (a, c) = capsule_at([29.55f32, 41.45, 68.97]);
-    let (push, walkable) = sim.world.capsule_push(a, c, 0.4, false);
+    let (push, walkable) = sim.world.capsule_push(a, c, 0.4, false, [1.0e9, 1.0e9, 1.0e9]);
     eprintln!("stuck capsule push=({:.3},{:.3},{:.3}) walkable={}", push[0], push[1], push[2], walkable);
     let (a2, c2) = capsule_at([29.55f32, 41.45, 70.1]);
-    let (push2, walkable2) = sim.world.capsule_push(a2, c2, 0.4, false);
+    let (push2, walkable2) = sim.world.capsule_push(a2, c2, 0.4, false, [1.0e9, 1.0e9, 1.0e9]);
     eprintln!("at-threshold capsule push=({:.3},{:.3},{:.3}) walkable={}", push2[0], push2[1], push2[2], walkable2);
 }
 
@@ -186,7 +186,7 @@ fn probe_door29_lane() {
         ("to (8.0, 70.0)", [8.0f32, 41.4, 70.0]),
     ] {
         let seg = sim.world.segment([5.58f32, 42.4, 72.78], [to[0], 42.4, to[2]]);
-        let (push, _w) = sim.world.capsule_push([5.58f32, 41.46, 72.78], [5.58f32, 43.36, 72.78], 0.4, false);
+        let (push, _w) = sim.world.capsule_push([5.58f32, 41.46, 72.78], [5.58f32, 43.36, 72.78], 0.4, false, [1.0e9, 1.0e9, 1.0e9]);
         let floor_to = sim.world.floor_below(to, 8.0);
         eprintln!("{label}: seg={seg:?} stuck_push=({:.3},{:.3},{:.3}) floor_at_dest={floor_to:?}",
             push[0], push[1], push[2]);
