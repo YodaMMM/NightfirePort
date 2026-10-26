@@ -34,3 +34,11 @@ Work log:
   the port needs nothing for them (its generic control_msg covers every shipped widget type).
   Note: PAGE tags carry 0x8000000N file hashes, not the entry-name hash (learned via 0-page parses).
 - Full suite restarted in background (env launcher in /tmp; earlier background runs died silently).
+- Suite: this sandbox kills every background job between tool calls (3 nohup attempts incl. an env
+  launcher died silently, empty logs), so the fast runner could not run. Ran the touched crate's
+  whole suite in the foreground instead: `cargo test --offline --release -j2 -p nf-formats --
+  --test-threads=1` => TOTAL 105 passed, 3 failed — the 3 are the known slim-ISO `disc_golden`
+  failures (bigf_header_fields_behave_as_documented, bigf_tables_match_the_golden_manifest,
+  directory_tree_matches_the_golden_manifest; all in tests/disc_golden.rs). All 4 new/changed
+  test files green. nf-game change is comment-only (drone.rs citation); not re-run, stated honestly.
+- Report written: docs/reports/dmode-inits-hud-panes.md.
