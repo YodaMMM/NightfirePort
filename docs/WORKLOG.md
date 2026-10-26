@@ -125,3 +125,26 @@ Progress:
   4/4, hint_boot 2/2, glist0 2/2, remainder 4/4, cutscene_14 2/2, party_lock_07 2/2,
   rook_06 1/1, rook_06_walk 1/1 = 37 passed 0 failed. Suite started 21:39 UTC on the fixed
   tree (setsid-detached; round-4's plain nohup died at the tool-call boundary again).
+- mp digest (four_human_session_digest_is_pinned): tick0 MATCHES the pin (0x5c0bb60a8cdf8938);
+  the final moved to 0xbc5e2155a3786e9c (pin 0xfb7b58f73e340ec3). Baseline built at a7afd219
+  (own CARGO_TARGET_DIR /home/z/nfbaseline-target; its NF_NET_HASHDBG run re-verifies the
+  pinned values exactly). First divergence: session t142 (sim frame 143), component = bodies
+  (slot 3 only: x +0.00122, y -0.00235, everything else identical; the match component moves
+  with it through write_net_slot_positions). frame_rng stays aligned at the divergence — the
+  round-3 shared-RNG-draw suspect is NOT the first mover. The world component never moves all
+  session (Ravine has NO doors, no takes, no channel writes — the door-state fix is provably
+  inert on this level). Probe exonerations (env-gated single builds): the band-settle-3
+  radial-dir arm (NF_NO_RADIAL) and the bit-0x20 static skip (NF_KEEP_BIT20) do NOT produce
+  the divergence. Cause commit narrowed to a7afd219..4a155ddf (rounds 1-3 + their batch
+  merges); the diag harness only compiles on trees containing a7afd219 (net_tick/net_rng),
+  so older lineage checkouts (level-14-complete-2 etc.) cannot run it — the next window
+  bisects the master-lineage merge points (62aa121a, 1875e21f) or probes the grounded-gates
+  fix (be9d1c6f, chute-lip FeetOnPoint band) as an env-gated revert on HEAD. Diagnostic test
+  landed: crates/nf-view/tests/mp_digest_diag.rs (the pin's session shape printing the
+  per-tick fold h0; the component API version is in the report).
+- suite: background runners die at the tool-call boundary in this sandbox (setsid included,
+  fifth sandbox to measure it); the full four-crate suite did NOT fit. What ran (foreground):
+  nf-game lib 581/0, the door family 37/0 (fix_npc_doors, npc_doors, portal x2, aim_ray,
+  text_labels, hint_boot, glist0, remainder, cutscene_14, party_lock_07, rook_06 x2,
+  react_path), walkreal_07000008_live 4/4, the mp pin test (red, documented above). The
+  next window must run the full suite per the standing rule.
