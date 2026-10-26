@@ -3610,6 +3610,14 @@ impl Sim {
         best.map(|(tf, i)| (i, tf))
     }
 
+    /// Bond's 16 body boxes at his current pose (`damage::bond_boxes` over this Sim's tables) —
+    /// the guard-round hit test's input, exposed for the tests (the every-level 16-box assert).
+    pub fn bond_hit_boxes(&self) -> Vec<nf_game::damage::HitBox> {
+        let d = nf_game::drone::Data { tables: &self.tables, props: &self.props, scripts: &self.scripts, weapons: &self.weapons, world: &self.world, level: self.level, sequences: &self.seqs, skins: &self.skins, skeletons: &self.skeletons, nav: &self.nav, covers: &self.covers, tuning: &self.tuning, hitboxes: &self.hitboxes, volumes: &self.volumes, sfx: self.sfx.as_ref(), models: &self.models, surfaces: self.surfaces.as_ref(), voices: self.voices.as_deref(), difficulty: self.drones.difficulty,
+            ai_points: &self.ai_points };
+        nf_game::damage::bond_boxes(&d, self.bond.yaw, self.bond.pos)
+    }
+
     fn run(&mut self, pos: [f32; 3], sph: [f32; 3], camera: [f32; 3], look: [f32; 3], aim: [f32; 3], trigger: bool, aiming: bool, reload: bool, use_key: bool, stick: bool) {
         // fix-weapon-anims + fix-aim-raise2: the aim raise/lower edges — the RAW button (the
         // param; the gated BIT is `self.aiming`, which `aim_gate` maintained before run) — before
