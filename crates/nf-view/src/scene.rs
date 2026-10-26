@@ -8365,10 +8365,15 @@ pub fn build(level: &Level, cels_only: bool, skeletons: &HashMap<u8, Skeleton>, 
                 let mx = nf_formats::placement::object_matrix(p.rotation, p.translation);
                 dynobj_matrices.push(mx);
                 if !cels_only { continue; }
-                if p.params.iter().find(|(k, _)| *k == 0).is_some_and(|&(_, v)| v != 0) { continue; }
+                // A p0-gated object is created hidden (|0x30) and shown when p0's channel rises — the
+                // slot carries it from load; the per-tick pose collapses it while hidden [M 0x18dbf8:27-29].
                 let target = if p.by_hash() { level.by_hash.get(&p.hashcode).copied() }
                     else if (p.index as usize) < level.maps[m].objects.len() { Some((m, p.index as usize)) } else { None };
                 let Some((map, object)) = target else { continue };
+                let obj = &level.maps[map].objects[object];
+                // The static loop's gates: the glist's own no-draw bit 0x10 (a FLAGS_COPYING kind), the
+                // mirror-only 0x400, and an empty glist [M View_AddObjects 0x1e62d8:33,38-47].
+                if obj.flags & 0x410 != 0 || !obj.gfx.leaves.iter().any(|l| !l.batches.is_empty()) { continue; }
                 if let Ok(h) = std::env::var("NF_HIDE") { if h.split(',').any(|n| !n.is_empty() && level.maps[map].objects[object].name.contains(n)) { continue; } }
                 let inst = Instance { map, object, matrix: mx, placement: p.clone() };
                 add_instance(level, &inst, Layer::Character, None, &mut groups, None, None, Some((dynobj_base + di) as u16), None, [1.0; 3], &room_cels, u32::MAX, u32::MAX);
@@ -8382,6 +8387,8 @@ pub fn build(level: &Level, cels_only: bool, skeletons: &HashMap<u8, Skeleton>, 
                 let target = if p.by_hash() { level.by_hash.get(&p.hashcode).copied() }
                     else if (p.index as usize) < level.maps[m].objects.len() { Some((m, p.index as usize)) } else { None };
                 let Some((map, object)) = target else { continue };
+                let obj = &level.maps[map].objects[object];
+                if obj.flags & 0x410 != 0 || !obj.gfx.leaves.iter().any(|l| !l.batches.is_empty()) { continue; }
                 if let Ok(h) = std::env::var("NF_HIDE") { if h.split(',').any(|n| !n.is_empty() && level.maps[map].objects[object].name.contains(n)) { continue; } }
                 let mx = nf_formats::placement::object_matrix(p.rotation, p.translation);
                 let inst = Instance { map, object, matrix: mx, placement: p.clone() };
@@ -9742,8 +9749,12 @@ pub fn build(level: &Level, cels_only: bool, skeletons: &HashMap<u8, Skeleton>, 
                     let a = s.drones.worldobjs.rotors.get(ri)?.angle;
                     return Some(nf_formats::placement::object_matrix([rot[0] + a[0], rot[1] + a[1], rot[2] + a[2]], trans));
                 }
-                let d = s.drones.worldobjs.dynobjs.get(di)?;
-                if d.dead { return None; }
+                // The live object by its create slot (the delete pass drops dead ones from the list);
+                // gone, or hidden by the no-draw bits `View_AddObjects` 0x1e62d8:33 tests
+                // (`obj+0xF0 & 0x8010` — the create's |0x30 while p0's channel is off, mode != 0's
+                // |0x30 while B is armed [M 0x18dbf8:27-29, 0x18d3b8:34-36]) → collapsed.
+                let d = s.drones.worldobjs.dynobjs.iter().find(|d| d.slot as usize == di)?;
+                if d.dead || d.flags & 0x8010 != 0 { return None; }
                 return self.dynobj_matrices.get(di).copied();
             }
             let sn = s.drones.sensors.list.get(c / 3)?;

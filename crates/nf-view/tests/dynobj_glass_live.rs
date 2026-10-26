@@ -88,3 +88,42 @@ fn the_1b_control_room_glass_vanishes_when_drakes_gate_fires() {
         "the glass slot COLLAPSED after the gate [M 0x18d3b8:26 + control_delete_object 0x133178:16-17; \
          the old tree's static instance stayed at the placement matrix]");
 }
+
+/// GAP-16-1: the 0x3b objects follow their channels every tick. 07000016's SecurityStation edge
+/// (ch 0x24) shows the unlocked screen (created hidden, |0x30 while p0's channel is off
+/// [M 0x18dbf8:27-29]; the channel restore 0x18d3b8:16) and hides the locked one (mode != 0, B armed
+/// → |0x30 [M 0x18d3b8:34-36]); ch 0xcc reveals the lift-shaft blockers. The draw shows a slot iff
+/// `View_AddObjects` 0x1e62d8:33 would submit it: `(obj+0xF0 & 0x8010) == 0` and not deleted.
+#[test]
+fn the_16_screens_swap_with_their_channels() {
+    let Ok(_) = std::env::var("NF_ISO") else { eprintln!("NF_ISO not set — skipping"); return };
+    std::env::set_var("NF_SILENT", "1");
+    let mut scene = nf_view::load(&iso(), "07000016.bin", false).expect("load 07000016");
+    settle(&mut scene, 300);
+    let base = {
+        let sim = scene.sim.as_ref().unwrap();
+        sim.drones.doors.list.len() + sim.drones.sss.list.len() + sim.drones.breaks.list.len()
+            + 2 * sim.drones.locks.len()
+            + (1 + nf_game::gunimp::TURRET_ARTS.len()) * scene.gunimp_placements
+            + 3 * sim.drones.sensors.list.len()
+    };
+    let (layout, _attrs) = scene.skin_layout();
+    let shown = |scene: &nf_view::scene::Scene| -> Vec<bool> {
+        let (pal, _cols) = scene.skin_palette(&layout, None, 240.0, opts(), None);
+        (0..scene.dynobj_matrices.len()).map(|di| pal[layout.door_base as usize + base + di][3][1] > -9000.0).collect()
+    };
+    let want = |scene: &nf_view::scene::Scene| -> Vec<bool> {
+        let s = scene.sim.as_ref().unwrap();
+        (0..scene.dynobj_matrices.len()).map(|di| s.drones.worldobjs.dynobjs.iter()
+            .find(|d| d.slot as usize == di).is_some_and(|d| !d.dead && d.flags & 0x8010 == 0)).collect()
+    };
+    assert!(!scene.dynobj_matrices.is_empty(), "07000016 carries 0x3b rows [D the level-16 audit]");
+    let (s0, w0) = (shown(&scene), want(&scene));
+    assert_eq!(s0, w0, "at load the drawn set is the sim's visible set [M 0x1e62d8:33]");
+    for ch in [0x24u8, 0xcc] { scene.sim.as_mut().unwrap().drones.set_channel(ch); }
+    settle(&mut scene, 10);
+    for _ in 0..3 { scene.sim.as_mut().unwrap().step_bond(Default::default(), false, false, false); }
+    let (s1, w1) = (shown(&scene), want(&scene));
+    assert_eq!(s1, w1, "after ch 0x24/0xcc the drawn set is the sim's visible set");
+    assert_ne!(w0, w1, "the channel edges change what is visible [M 0x18d3b8]");
+}
