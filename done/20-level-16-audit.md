@@ -23,3 +23,8 @@ say so in the report. Never weaken a decompile-backed test to make code pass.
 
 ---
 claimed-by: sandbox7 at 2026-10-26T09:39Z
+
+---
+## Report (done, 2026-10-26T10:37Z)
+
+Closed by the driver: the report is on `s/level-16-audit` (docs/reports/level-16-audit.md); the worker didn't run finish.sh.
