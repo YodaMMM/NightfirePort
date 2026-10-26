@@ -13799,9 +13799,32 @@ fn segment_hits_sphere(a: V3, b: V3, c: V3, r: f32) -> bool {
             // 0.5 floor was a stand-in.
             if matches!(b.weapon, 0x4e | 0x4f) {
                 let amount = if b.weapon == 0x4e { 3u8 } else { 10u8 }; // [M 0x1ae3d8:60-66]
+                // capsule-cull-and-los-masks-4: the burn trace (env-gated, additive — the
+                // NF_WALK_TRACE pattern): per held laser tick, every lock whose centre lies within
+                // 8 units of the segment prints the muzzle, the segment end, the lock's pos/radius
+                // and the closest segment→centre distance, so a stance stall (Bond never gets the
+                // bolt into reach) separates from a contact miss (in reach but the sphere test
+                // fails). Trace only — no behaviour.
+                let burn_trace = std::env::var_os("NF_BURN_TRACE").is_some();
                 let hits: Vec<usize> = self.locks.iter().enumerate()
                     .filter(|(_, lk)| !lk.burned && Self::segment_hits_sphere(b.pos, end, lk.pos, lk.radius))
                     .map(|(k, _)| k).collect();
+                if burn_trace {
+                    for (k, lk) in self.locks.iter().enumerate() {
+                        if lk.burned { continue; }
+                        let ab = [end[0] - b.pos[0], end[1] - b.pos[1], end[2] - b.pos[2]];
+                        let ac = [lk.pos[0] - b.pos[0], lk.pos[1] - b.pos[1], lk.pos[2] - b.pos[2]];
+                        let len2 = ab[0] * ab[0] + ab[1] * ab[1] + ab[2] * ab[2];
+                        let t = if len2 <= 0.0 { 0.0 } else { (ac[0] * ab[0] + ac[1] * ab[1] + ac[2] * ab[2]) / len2 }.clamp(0.0, 1.0);
+                        let dd = [ac[0] - ab[0] * t, ac[1] - ab[1] * t, ac[2] - ab[2] * t];
+                        let dist = (dd[0] * dd[0] + dd[1] * dd[1] + dd[2] * dd[2]).sqrt();
+                        if dist < 8.0 {
+                            eprintln!("[burn] f{} w{:#x} muzzle=({:.2},{:.2},{:.2}) end=({:.2},{:.2},{:.2}) lock{} pos=({:.2},{:.2},{:.2}) r{:.3} dist{:.3} hit{}",
+                                frame, b.weapon, b.pos[0], b.pos[1], b.pos[2], end[0], end[1], end[2],
+                                k, lk.pos[0], lk.pos[1], lk.pos[2], lk.radius, dist, hits.contains(&k) as u8);
+                        }
+                    }
+                }
                 for k in hits {
                     if self.locks[k].burn(amount, &mut self.channels, frame) {
                         // The burn-through sound: `Lock_Update` 0x1ae3d8:90-99 plays 0x249 (the

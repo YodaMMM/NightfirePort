@@ -87,3 +87,21 @@ pushed. The two round-3 leftovers:
    the pin's commit a7afd219 in its own CARGO_TARGET_DIR, per-tick component hashes on both
    trees, first divergent component+tick, fix the port or re-derive the pin with the cause.
 Both must be green; the turret/armour/zoe/level_end groups must stay green.
+
+## capsule-cull-and-los-masks-4 (2026-10-26, this window)
+
+Progress:
+- walkreal_07000008 :164 red NAILED: a stance stall against the OPEN secure-room door leaf's
+  collision. Three env-gated traces landed (NF_BURN_TRACE drone.rs lock block, NF_PUSH_TRACE
+  world.rs capsule_tri_contact, NF_DOOR_TRACE walker.rs). The stall: Bond freezes at
+  (154.50,43.1..43.4,-120.64) 1600+ ticks; the bolt sits 4.18 out vs the laser reach 4.0 [L]
+  — the walk, not the burn. The blocker face (x=155.003, z -118..-123, y 36.75..42.75, mat
+  0x0a) tracks door #10's open pose; the door's keys [D] swing it 180 deg by quat (pos moves
+  0.004) and the leaf's natural pose IS that panel. The port poses every glist door into
+  set_dynamic unconditionally; the game's door solidity rides the CLOSED-state zone [M
+  door.rs]. Fix recipe: gate the door parts by state==CLOSED in drone.rs's doors.extend +
+  run the door battery. NOT landed (shared collision surface, window closed).
+- NF_WALK_GHOST cross-check: the push is load-bearing on 08 (Bond falls out of the world) —
+  the through-push stays. The mp digest pin: method only (NF_NET_HASHDBG needs no code change;
+  baseline build at a7afd219 didn't fit).
+- left: land the door-state fix + full battery, the mp pin diff, the suite total line.

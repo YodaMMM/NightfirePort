@@ -365,6 +365,19 @@ fn capsule_tri_contact(t: &[V3; 3], mat: u8, a: &mut V3, b: &mut V3, r: f32, gro
     let push = [dir[0] * (r - dist), dir[1] * (r - dist), dir[2] * (r - dist)];
     for k in 0..3 { a[k] += push[k]; b[k] += push[k]; total[k] += push[k]; }
     if n[1].abs() > 0.7 && q[1] < b[1] { *walkable = true; }
+    // capsule-cull-and-los-masks-4: NF_PUSH_TRACE (env-gated, additive — the NF_WALK_TRACE
+    // pattern; a OnceLock bool so the hot per-face path pays one relaxed load): every
+    // contributing face whose push is deeper than 0.05 (a real overlap — the resting ground's
+    // hair-pushes stay silent) prints its vertices, mat, normal, distance and push, so a walk
+    // stall at a doorway names the face the port pushes and the game does not. Trace only.
+    {
+        static PUSHDBG: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
+        if *PUSHDBG.get_or_init(|| std::env::var_os("NF_PUSH_TRACE").is_some()) && r - dist > 0.05 {
+            eprintln!("[push] tri ({:.3},{:.3},{:.3}) ({:.3},{:.3},{:.3}) ({:.3},{:.3},{:.3}) mat{:#04x} n=({:.2},{:.2},{:.2}) dist{:.3} push=({:.3},{:.3},{:.3})",
+                t[0][0], t[0][1], t[0][2], t[1][0], t[1][1], t[1][2], t[2][0], t[2][1], t[2][2],
+                mat, n[0], n[1], n[2], dist, push[0], push[1], push[2]);
+        }
+    }
     // The pick bit's dot1 gate [M Intersect_CylGeom 0x109da0 disasm 0x10a650-0x10a674: the bit
     // block requires `dot(face normal, capsule axis) > 0.7` — up-facing faces only; a wall's
     // horizontal normal and a ceiling's down normal never set the bit]. The dot2 gate
