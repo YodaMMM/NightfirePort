@@ -85,7 +85,19 @@ replacement asserts strictly more than the old one did about the game's data.
 - The disc evidence comes from `dump_f9_41_placements` on `Nightfire-onfoot.iso`; the census rows
   agree with `census0c.txt` (kind 0xf9: 5) and `docs/levels/07000014.md` §1 (0x41: 4, 0xf9: 18).
 
-Suite total: PENDING (filled in below when the run completes).
+Suite total: the fast runner never completed — the sandbox's shell died ~20 minutes into the
+per-binary pass (every tool call failed until the session ended). Its last output was
+`build ok: 818 test binaries in 998 s` then `CRASH net_join_live (exit -9)` (a SIGKILL 4 s into
+`late_join_replay_mismatch_is_refused_with_a_clear_reason` — an external kill, not a test failure;
+net_join is untouched by this branch). The binaries this task touched all ran green by hand:
+`nf-game --test 07000014_inverter_trigger_live`, and `nf-view --test fix_guard_misc_live --
+--test interactables_07000041_live` (exact commands in the WORKLOG). The next session should run
+`tools/test/suite.py` once on the merged tree for the formal total line.
+One extra check landed after the report draft: the game's dynamic-object dispatcher skips any
+placement with `flags & 0xa000 != 0` [M parsemap_block_map_data_dynamic 0x1d1b68], and the port's
+`sound.rs` honours it while `worldobj.rs::create` does not — a disc-wide scan
+(`dump_a000_skipped_rows`) found **zero** affected rows (kinds 0x41/0xd2/0x3b/0xe7/0x71/0xfb/0xf9
+with the skip bits) on any main map, so it is behaviourally inert on this disc; left as noted.
 
 ## Live checks for the main agent
 
