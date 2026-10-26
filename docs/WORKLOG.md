@@ -47,3 +47,27 @@ a real movie (decoder not driven per tick in the harness? psiMovieFinished read 
 before the first frame [M 0x1082e8]?) and make the hold last the movie's real length
 (BGFMVPlaying == 0) with the subtitle track running beside it [M 0x1d6360:101-112]; tests assert
 the real-movie hold with the disc present, the no-movie stand-in only when the file is absent.
+
+### mission-outros-2 — the state-6 hold is the movie's real length (2026-10-26 ~02:30 UTC)
+ROOT CAUSE of "the outro ends after 1 tick with a real movie" (headless, full ISO): the test
+binaries build WITHOUT the `movies` feature (opt-in), and `Player::open`'s no-feature path
+returned `Ok` with `ended: true` — finished before the first frame — for a file that OPENED fine.
+The game: a successful open sets BGFMVPlaying = 1 [M 0x1081a8] and clears it only when the decode
+pump finishes the file [M 0x108060]; psiMovieFinished is BGFMVPlaying == 0 [M 0x1082e8]. A stub
+open failure is the only pop-at-once case [M 0x1081a8's strFileOpen arm]. FIX (movie.rs): the
+player carries the movie's real length in 60 Hz ticks — the PSS's audio-track duration [D
+golden/pss_movies.tsv: 07300004.PSS = 2 384 128 PCM samples at 48 kHz = 2980 ticks; 07300013.PSS
+= 2 040 064 = 2550] — and when no decoder runs (no `movies` feature, declined worker) holds that
+long (`headless_advance`, driven once per frame by the host's BGFMVPlaying polls: the glue, the
+intro poll, the attract poll). A DECLINED start (not whitelisted / file absent / 0-byte stub)
+still reports finished at once — the game's un-started movie. The no-movie stand-in hold (the
+subtitle track's length [S]) now applies ONLY to the stub/absent case. Tests assert the real
+hold when the image has the PSS (measured off the image at run time) and the stand-in when it
+does not. VERIFIED: mission_outros_live 3/3 green (stub image here), adjacent green set
+(reward_after_outro, doublecross_transitions_live, fix_mission_live, walkreal_07000004_live,
+movie_playback_flow, gameflow_stack_sp_run, front_end_chain_live, menu_audio_flows) all ok;
+full suite on the final tree: 308/737 binaries completed with results 940 passed / 2 failed —
+the 2 were fix_0c_vent2_live under 4-way-parallel OOM pressure and pass in isolation; the rest
+of the window was cut by the sandbox (OOM at -P4, wall time at -P2). The real-movie path itself
+is not exercisable in this sandbox (the slim image's PSS are 0-byte stubs [D]) — the two new
+hold assertions fire on an image with the retail movies.
