@@ -32,3 +32,11 @@ symptom) — the [M] chain cited from drone.rs's own spec comment. New tests
 (scripts_07000012_live): the shaft-fall ch 0x62 pin (green); the intro park pin (mask p5=2 ->
 state 0 [M 0x1db9a8:74-86], the 07000006 #808 precedent). The two test binaries got SIGKILLed
 under suite memory pressure — re-run after the suite drains.
+
+### level-12-audit — the finish (2026-10-26 ~08:50 UTC)
+The suite ran to 413 of 820 binaries before the wall: 1414 passed / 0 failed / 115 ignored; the 6
+CRASHes are exit -9 SIGKILLs of the net_*/mp_* memory hogs (mp_online_failures SIGKILLs standalone
+too — the 4 GB sandbox ceiling, not a failure; no lib code changed on this branch). Suite killed at
+a hung binary; the next session owns the remaining 407 binaries + the formal total. Report at
+docs/reports/level-12-audit.md with the live checks (the intro's activation beat, the guard bump,
+the civilian barks, the death-cam render).
