@@ -12237,6 +12237,11 @@ impl Drones {
     /// caller's original form; the scene build passes the id through `attach_level_id`.
     pub fn attach_level(&mut self, level: &nf_formats::level::Level) { self.attach_level_id(level, 0) }
 
+    /// The pending weather drop type — the `InitDrops(drop_type)` argument `Env_Create` 0x17b968
+    /// passes when the level's winning 0xDF placement builds `GlobalEnv`; the port's `env`
+    /// carries it from the first tick on. Test/inspection accessor (`env_pending` is internal).
+    pub fn pending_env_drop_type(&self) -> Option<u8> { self.env_pending.as_ref().map(|(k, _)| *k) }
+
     pub fn attach_level_id(&mut self, level: &nf_formats::level::Level, level_hash: u32) {
         self.triggers = crate::triggers::build(level);
         // The AI points (`Drone_AIPoint` 0x137550; `parsemap_create_dynamic_objects` case 0xE9): type =
@@ -12538,7 +12543,15 @@ impl Drones {
                 if sw.placement == i { sw.sp = Some(idx); }
             }
         }
-        if let Some(p) = ps.iter().find(|p| p.flags & 0xff == 0xdf) {
+        // The weather placement: `Env_Create` 0x17b968 sets `GlobalEnv = env` on EVERY
+        // successful call (and `InitDrops(drop_type)` 0x18bf68:8 with it), so with several
+        // 0xDF placements the LAST created one wins — the same placement-order walk
+        // `parsemap_create_dynamic_objects` 0x1d04f0 runs (07000014 carries two: #425 Weather
+        // p0=0xff, then #588 Bubble_gen p0=2 [D census]; the game's live DropType is 2).
+        // [S unverified: the game's `build_FindCel` gate can skip a placement whose cel lookup
+        // fails or whose cel already carries an env (0x17b968 early-outs before the store) —
+        // the port has no cel-attach model, so it takes the last match unconditionally.]
+        if let Some(p) = ps.iter().rev().find(|p| p.flags & 0xff == 0xdf) {
             let kind = p.params.iter().find(|(i, _)| *i == 0).map_or(0, |&(_, v)| v as u8);
             let boxes = level.instances(false).0.iter().filter(|i| i.placement.flags & 0xff == 0x32).map(|i| {
                 let o = &level.maps[i.map].objects[i.object];
