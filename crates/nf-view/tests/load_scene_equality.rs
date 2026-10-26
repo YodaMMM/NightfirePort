@@ -33,13 +33,19 @@ fn iso() -> Option<String> { std::env::var("NF_ISO").ok() }
 // batch-1024a: the security cameras' body + mount posed slots (`Sensor_Create` 0x1af010 / `Sensor_SetBeam`
 // 0x1af398 — 01 ×1, 02, 14 ×14), 14's b1 drones on skin 0x0500008c (`NDrone2_DefaultInit` 0x14b300:82-95).
 const BASELINE: &[(&str, &str)] = &[
-    ("07000002.bin", "184995bc34f63bb4 4484117 9372399 5353 4346823 81 9825 205 28 25 8"),
-    ("07000005.bin", "57ab143029eee3f2 4387197 9170895 3614 4302856 73 9759 106 19 16 6"), // the two copter SPs + their script draw slots
+    // level-1b-audit re-pin (all four drifted levels carry a 0x3b gated dynamic object): the
+    // 0x3b draw moved from a build-time static World instance (which never collapsed when the
+    // sim deleted the object — DynamicObject_Update 0x18d3b8:26 mode-0 armed-B → obj+0xFE bit 0
+    // → the delete pass, control_delete_object 0x133178:16-17) to a posed Character-layer slot
+    // that collapses; the vertices/indices/materials/char_verts counts follow, [S port
+    // engineering] like every pin here.
+    ("07000002.bin", "0b21596c9eea856d 4484117 9372399 5349 4347130 81 9825 205 28 25 8"),
+    ("07000005.bin", "c6c2c3b3266656c0 4387235 9170955 3615 4302894 73 9759 106 19 16 6"), // the two copter SPs + their script draw slots
     // lift-indicators-09 re-pin: one draw slot per `Script_SubScriptStart` op per running SP
     // [M 0x1db050] — 0700000c's multi-SP sub chains add 6 slots (+248 vertices, +576 indices,
     // +1 attachment); 07000014's vent-lid SPs are placed SPs (unchanged), the rest have no
     // multi-SP sub chains.
-    ("0700000c.bin", "22bb59aa786e1035 4872150 10242036 8182 4681326 96 11012 170 22 40 15"),
+    ("0700000c.bin", "d320dd515a05663f 4872150 10242036 8127 4683784 96 11012 170 22 40 15"),
     // script-entity-copies: one draw slot per ScriptPlayer running a script — 14's nine
     // SPs on the vent-lid script 0x06000A3B (+ its other shared scripts) add 20 attachments, +1600 vertices.
     // The keypads' LOD pair in the posed slots (Lock_Unlock 0x1b0650 / case 1 `Control_NextLOD`: three
@@ -51,7 +57,7 @@ const BASELINE: &[(&str, &str)] = &[
     // +59235 indices, +105 materials, +50005 char_verts, +15 attachments over the old pin.
     // fusebox-draw-slots re-pin: 07000014's five fusebox placements (kind 0x31) now seed their
     // param-0 script 0x06000A1B, +20 script-entity slots (the cabinet and wire art) [M FuseBox_Create].
-    ("07000014.bin", "9e25e8e7f4e5bd74 7147319 14846157 6583 6994386 98 13526 173 41 37 32"),
+    ("07000014.bin", "a5daf973b3118395 7147319 14846157 6483 6995980 98 13526 173 41 37 32"),
     ("07000001.bin", "3efd2cdd3e5616ab 4396377 9211989 3491 4323075 76 9839 101 11 20 6"),
 ];
 
