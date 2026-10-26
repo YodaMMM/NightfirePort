@@ -361,25 +361,8 @@ fn capsule_tri_contact(t: &[V3; 3], mat: u8, a: &mut V3, b: &mut V3, r: f32, gro
     let v = sub(p, q);
     let dist = dot(v, v).sqrt();
     if dist >= r { return false; }
-    // Scratch gate (level-0a-office-hatch-9, NF_CAPS_GATE=1): the game's push tail requires
-    // `0 < dot(q − ref, n)` [M Intersect_CylGeom 0x109da0:431 — v = hitpoint − HITTEST+0x50,
-    // the dot against the face plane, the whole push inside the `>0` arm] AND `|q − ref| < radius`
-    // [M 0x109da0:447], the push dir/mag `(q − ref)/|q − ref|·(radius − |q − ref|)`. hatch-10
-    // settled HITTEST+0x50 as the lifetime push accumulator [L ee_snapshot: drift ≈15 m from the
-    // owner] — NOT the spine bottom probed here; with the true ref the tail near-never fires on a
-    // walked line, so the game's z 16.29 glide needs no gate (nothing pushes there at all) and the
-    // port's wall-stop must come from a mechanism not yet identified. This ref=bottom probe stays
-    // OFF: with it the corner crossed but the exit-y missed both ways (1.0655 / 1.2142 vs the
-    // game's 1.120 [L fresh boot]) and the glide walk floated ungrounded (hatch-9's measurements).
-    let gate_on = CAPS_GATE.get_or_init(|| std::env::var("NF_CAPS_GATE").is_ok());
-    if *gate_on && n[1] <= 0.7 && dot(sub(q, *b), n) <= 0.0 { return false; }
     let dir = if dist > 1e-6 { [v[0] / dist, v[1] / dist, v[2] / dist] } else if dot(n, sub(*a, q)) >= 0.0 { n } else { [-n[0], -n[1], -n[2]] };
     let push = [dir[0] * (r - dist), dir[1] * (r - dist), dir[2] * (r - dist)];
-    if caps_log() {
-        eprintln!("[cap] PUSH cent=({:.3},{:.3},{:.3}) q=({:.3},{:.3},{:.3}) p=({:.3},{:.3},{:.3}) d={dist:.4} push=({:.4},{:.4},{:.4}) n=({:.3},{:.3},{:.3}) edge={on_edge} a=({:.3},{:.3},{:.3}) b=({:.3},{:.3},{:.3})",
-            (t[0][0]+t[1][0]+t[2][0])/3.0, (t[0][1]+t[1][1]+t[2][1])/3.0, (t[0][2]+t[1][2]+t[2][2])/3.0,
-            q[0], q[1], q[2], p[0], p[1], p[2], push[0], push[1], push[2], n[0], n[1], n[2], a[0], a[1], a[2], b[0], b[1], b[2]);
-    }
     for k in 0..3 { a[k] += push[k]; b[k] += push[k]; total[k] += push[k]; }
     if n[1].abs() > 0.7 && q[1] < b[1] { *walkable = true; }
     // The pick bit's dot1 gate [M Intersect_CylGeom 0x109da0 disasm 0x10a650-0x10a674: the bit

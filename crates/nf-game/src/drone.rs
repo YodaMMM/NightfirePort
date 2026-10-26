@@ -15287,11 +15287,13 @@ fn segment_hits_sphere(a: V3, b: V3, c: V3, r: f32) -> bool {
             // world — a candidate behind geometry is not trackable.
             let mut cands: Vec<crate::gt::TrackCand> = Vec::new();
             if self.health.health > 0.0 {
-                cands.push(crate::gt::TrackCand { obj: u32::MAX, pos: player.pos, copter: false, los_ok: true });
+                cands.push(crate::gt::TrackCand { obj: u32::MAX, pos: player.pos, copter: false, los_ok: true, sph: player.sph });
             }
             for (i, dr) in self.list.iter().enumerate() {
                 if dr.present && !dr.corpse {
-                    cands.push(crate::gt::TrackCand { obj: i as u32, pos: dr.pos, copter: false, los_ok: true });
+                    // [S] the guards' obj+0x80 centre is not carried — the feet position stands in
+                    // for both fields until the drone records build the world sphere.
+                    cands.push(crate::gt::TrackCand { obj: i as u32, pos: dr.pos, copter: false, los_ok: true, sph: dr.pos });
                 }
             }
             let chans = &self.channels;
@@ -15300,12 +15302,20 @@ fn segment_hits_sphere(a: V3, b: V3, c: V3, r: f32) -> bool {
                 if t.delete_flag { continue; }
                 // The per-candidate LOS walk [M 0x17f9c8:271-278 — one
                 // `Collide_LineOfSight(from, cand+0x80, level, obj, cand, 0x72f)` per scanned
-                // target]. The from-point is the turret's position (obj+0x30; the decompile
-                // reads `*(ext+0xb0)+0x30`, the mounted script's subject transform, which for
-                // these turret rigs is the turret body [S unverified stand-in]). The masked
-                // drop semantics stay behind LOS_MASKS_ON like every other caller.
+                // target]. The from-point is the turret's position (obj+0x30; the game's ray
+                // starts at the barrel transform pos + fire_dir·(ext+0xd0 muzzle offset)
+                // [M 0x17f9c8:230-258, ext+0xd0 = GT_Create's script-bbox max.z × 1.5
+                // 0x17ffa0:140] — the port's script VM gap leaves muzzle_offset 0.0, and with
+                // the END at the candidate's obj+0x80 the mount geometry is out of the ray's
+                // path). The end-point is the candidate's obj+0x80 world-sphere centre [M
+                // 0x17f9c8:271-278] — NOT the obj+0x30 feet the range gates read: the sphere
+                // centre rides at/above the deck top for a standing target, so the deck face
+                // under a candidate never blocks the track ray (the game's t-window is
+                // inclusive 0..1 [M Intersect_RayGeom 0x10a8c8:171-172], an exact endpoint
+                // touch WOULD count). The masked drop semantics are unconditional since
+                // capsule-cull-and-los-masks.
                 for c in cands.iter_mut() {
-                    c.los_ok = d.world.line_of_sight(t.pos, c.pos, crate::world::LOS_TURRET_TRACK);
+                    c.los_ok = d.world.line_of_sight(t.pos, c.sph, crate::world::LOS_TURRET_TRACK);
                 }
                 // GT_Update's top ticks BOTH scripts then reads their +0x9c [M 0x180498:111-112,
                 // 232-233]. The port's script players tick later in the control walk (they are
