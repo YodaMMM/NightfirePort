@@ -85,7 +85,7 @@ fn run(tag: &str, level: &str, save: Option<&nf_game::player::RamSave>, walk: u3
         sim.bond.pos = [at[0], at[1] + 1.0, at[2]];
     }
     eprintln!("[{tag}] bond spawn {:?}", scene.sim.as_ref().unwrap().bond.pos);
-    // Per-tick multiset diff of the driver's live items: an increase = a sound started this
+    // Per-tick multiset diff of the live items: an increase = a sound started this
     // tick, a decrease = a sound ended this tick (the driver removes ended items in the same
     // update). sound_tick consumes the EE command queue itself (lib.rs take_commands), so the
     // item list is the observable.

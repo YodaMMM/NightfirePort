@@ -111,7 +111,7 @@ fn the_warehouse_ventmesh_sweep_takes_the_game_rate_ticks() {
     assert!(done <= 55, "the warehouse ventmesh (#180, 6 keys, rate 50 [D]) must sweep in ~50 ticks [M 0x1a9c58:51], took {done}");
 }
 
-/// THE ROUTE INTO THE CASE, per the driver's live answers [L 2026-10-26, fresh boot, 0700000c
+/// THE ROUTE INTO THE CASE, per the live answers [L 2026-10-26, fresh boot, 0700000c
 /// through the game's own loader]: there is NO walkway→duct-top ascent — Bond placed in the bay
 /// mouth's air at (5.0, 16.4, −110.5) yaw π settles inside the bay and FALLS: the skylight
 /// touchplate (kind 2 → ch 27 [D #275-277], volume y 13.63..14.56 x 4.63..6.95 z −112.08..−110.12

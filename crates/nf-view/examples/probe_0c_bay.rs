@@ -1,4 +1,4 @@
-//! Scratch (level-0c-display-hatch-2): the port at the driver's three fresh [L 2026-10-26]
+//! Scratch (level-0c-display-hatch-2): the port at three fresh [L 2026-10-26]
 //! placements — the bay drop (the touchplate ch 27 pulse + the rest root), the roof walk south
 //! (ch 27 must stay 0), and the mid floor's north-edge hold.
 use nf_game::player::Input;
