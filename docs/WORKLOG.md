@@ -9,3 +9,13 @@
   the on-foot levels that place 0xD8 bodies, port the update + the force calls that reach it,
   tests: rest stays put, a blast or a shot moves it along the game's integration. Sandbox kept
   repo/ISO/target/cargo/alsa from the bond session; work/ and nf-queue redone.
+
+- (15:18 UTC, 10-26) rigid-body-remainder DONE this session: the evolution core ported into
+  crates/nf-game/src/rigid_body.rs (RbState + RB_AddImpulsiveForce/AtPoint/ToWorld/ToBody/
+  VecSpecial/apply_omega/ApplyImpulses/ApplyWind/EulerEvolve + RB_Update's heat-puff impulse +
+  the class-5 explosion arm of RestingContact), every function [M]-cited with disassembly where
+  the C was VU-opaque; the (w,x,y,z) quat layout caught by the test. 11/11 module tests green.
+  Callers + the 7 census levels [D] + reachability in the report; remainder = the dispatch
+  wiring, the contact trio (RestingContact/Rot/CalcTorque), the up-righting tail, Env_GetWindVel,
+  the full suite run. Report: docs/reports/rigid-body-remainder.md; finish.sh OK; ntfy via wget
+  (curl timed out, urllib network-unreachable).
