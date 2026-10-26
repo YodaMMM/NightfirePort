@@ -5140,11 +5140,15 @@ impl Sim {
             None
         };
         let mp_death_was_active = self.drones.death.active;
-        self.drones.tick(&d, &player, use_edge && monitor_view);
+        // level-14-camera-view: stage the viewing press edge for the monitors' tick — the game
+        // polls it INSIDE Monitor_Update [M 0x1afcc8:117-118]; the staged edge is consumed
+        // (cleared) in tick_inner.
+        self.drones.monitor_edge = use_edge && monitor_view;
+        self.drones.tick(&d, &player);
         // level-14-camera-view: the exit arm's `Player_Enable` 0x195498 zeroes the velocities
-        // [M :81-86 `Vec_Zero(BL+0x50)` + BL+0x20/0x30/0x40] — mirrored after the tick that
-        // ran the exit (the view ended this tick).
-        if use_edge && monitor_view && !self.monitor_viewing() { self.bond.vel = [0.0; 3]; }
+        // [M Player_Enable 0x195498:81-86 zeroes the ext vectors +0x50/+0x20/+0x40/+0x10/+0x30]
+        // — mirrored after the tick that ran the exit (the view ended this tick).
+        if monitor_view && !self.monitor_viewing() { self.bond.vel = [0.0; 3]; }
         // mp-site-damage-offline: the local pipeline's site contacts land the game's way — the
         // frame's blasts first (the case-0x35 direct `MP_ApplyDamage` per blast [M 0x17c518:187]),
         // then the frame's bullet sum as ONE store (the game's `SP_GetHitDamage` chain read

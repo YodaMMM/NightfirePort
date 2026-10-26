@@ -11933,6 +11933,12 @@ pub struct Drones {
     /// `DroneSpawner_Control` 0x137e68:216/:224). The port increments it at the team-2 pick's
     /// probes; the other consumers are not instrumented yet (open in the report).
     pub los_probes: u16,
+    /// level-14-camera-view: the action-0xE press edge for the CURRENT tick, set by scene.rs
+    /// right before `tick` while a monitor view stands — `Monitor_Update` polls the edge itself
+    /// (`Input_Action(slot, 0xE, 4)` 0x1afcc8:117-118), so it rides the monitors' tick inside
+    /// `tick_inner` and is consumed (cleared) there. Kept off the `tick` signature: the 2-arg
+    /// form is called from ~30 test harnesses.
+    pub monitor_edge: bool,
 }
 
 /// mp-world-sync (agent 9): one body as the online shared world sees it (see `Drones::net_bodies`).
@@ -12180,6 +12186,8 @@ impl Drones {
             spawn_fade: Some((45, 45)),
             // 987-mission-stats-carry: no tally on the load until the RamSave seeds it.
             tally_carry: None,
+            // level-14-camera-view: no press edge pending (scene.rs sets it per tick).
+            monitor_edge: false,
     };
         drones
     }
@@ -15177,17 +15185,17 @@ fn segment_hits_sphere(a: V3, b: V3, c: V3, r: f32) -> bool {
             _ => true,
         }
     }
-    pub fn tick(&mut self, d: &Data, player: &Player, monitor_edge: bool) {
+    pub fn tick(&mut self, d: &Data, player: &Player) {
         if self.hold_npcs && self.npc_enabled {
             self.npc_enabled = false;
             self.hold_active = true;
-            self.tick_inner(d, player, monitor_edge);
+            self.tick_inner(d, player);
             self.hold_active = false;
             // Dev-only: a script's event 5 during a held tick is not kept (the hold already freezes them).
             self.npc_enabled = true;
             return;
         }
-        self.tick_inner(d, player, monitor_edge);
+        self.tick_inner(d, player);
     }
 
     /// `NDrone2_FindOpponent` 0x1424e0's team-2 arm, per tick (the ControlSTANDARD 0x1490f0:167
@@ -15275,7 +15283,10 @@ fn segment_hits_sphere(a: V3, b: V3, c: V3, r: f32) -> bool {
             .map(|(i, _)| i).collect()
     }
 
-    fn tick_inner(&mut self, d: &Data, player: &Player, monitor_edge: bool) {
+    fn tick_inner(&mut self, d: &Data, player: &Player) {
+        // level-14-camera-view: consume the press edge scene.rs staged for this tick (cleared
+        // here so a stale edge can never leak into a later tick).
+        let monitor_edge = std::mem::replace(&mut self.monitor_edge, false);
         // options-census: the health-pane fade alpha decays while the Advanced row (0x1000_023b,
         // PlayerSetting+0x0b) is set [M Player_Update 0x193600:414-429 — BLData+0x8bc loses
         // 0.0020833·FRAME_RATE_MUL per tick, clamped at 0; row 0 pins it to 1.0].
