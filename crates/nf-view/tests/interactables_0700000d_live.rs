@@ -17,18 +17,22 @@ use walker::{Act, Walker, Wp};
 fn iso() -> String { std::env::var("NF_ISO").expect("NF_ISO") }
 
 /// The warm load the real run hands this level: record 11's channels ride the save [M 0x182270:92-95].
-fn load_warm() -> Walker {
-    let cold = nf_view::load_with_carry(&iso(), "0700000d.bin", false, None).expect("load cold");
+/// `bits` = the `bonus[0]` word in play (0 = the fresh-boot state; the kind-6 gate reads it
+/// [M 0x18dda0:93-95]).
+fn load_warm_bits(bits: u64) -> Walker {
+    let cold = nf_view::load_with_carry_medals(&iso(), "0700000d.bin", false, None, 1, bits).expect("load cold");
     let save = {
         let sim = cold.sim.as_ref().unwrap();
         nf_game::player::RamSave::capture(&sim.drones.health, sim.gun.switch_request, &sim.drones.inventory, &sim.drones.channels)
     };
-    let mut w = Walker::new(nf_view::load_with_carry(&iso(), "0700000d.bin", false, Some(&save)).expect("load warm"));
+    let mut w = Walker::new(nf_view::load_with_carry_medals(&iso(), "0700000d.bin", false, Some(&save), 1, bits).expect("load warm"));
     for c in [0x1bu8, 0x1c] { w.scene.sim.as_mut().unwrap().drones.set_channel(c); }
     w.wait_enabled(3000, "the intro");
     w.wait(60);
     w
 }
+
+fn load_warm() -> Walker { load_warm_bits(0) }
 
 /// The yard stand-in (walkreal's documented teleport past the unported crane ride), then settle.
 fn to_yard(w: &mut Walker) {
@@ -404,7 +408,13 @@ fn oil_barrel_shoot_smashes_with_blast() {
 /// rifle un-owned / the bonus sitting before.
 #[test]
 fn pickups_taken_by_walking_over() {
-    let mut w = load_warm();
+    // The kind-6 row (#439) creates only with the level's gold medal recorded [M Pickup_Create
+    // 0x18dda0:93-95]: 0700000d plays under BaseMap 0x0700000c (the mission table [L ee_start_05
+    // 0x2a4350 row 12], the gold bit = the 0x070000c row's counter-3 bit 40 [L 0x2bc920 row 6,
+    // desc[3] = (40, 1, 0x4000c) — kind 1, a plain bit, no group]) — the medaled load.
+    let mut p = nf_game::progress::Progress::default();
+    p.set_level_bonus(0x0700_000c, 3, 0); // [M Menu_SetLevelBonus 0x1ffa10]
+    let mut w = load_warm_bits(p.bonus[0]);
     w.top_up_health = true;
     assert_eq!(w.scene.sim.as_ref().unwrap().drones.health.armour, 0.0, "sister: no armour before");
     assert!(!w.scene.sim.as_ref().unwrap().drones.inventory.owned[0x1f], "sister: weapon 0x1f un-owned before");
@@ -436,6 +446,12 @@ fn pickups_taken_by_walking_over() {
     }
     w.wait(20);
     assert!(taken(&w), "the bond bonus is consumed on the walk-over [M 0x18e650:234-236]");
+    // The no-medal arm [M 0x18dda0:93-95]: the same warm load with the fresh-boot zero word
+    // creates no kind-6 at all — #439's spot holds nothing.
+    let mut bare = load_warm_bits(0);
+    bare.top_up_health = true;
+    assert!(bare.scene.sim.as_ref().unwrap().drones.pickups.iter().all(|p| p.kind != nf_game::pickup::kind::BOND_BONUS),
+        "no gold medal → the kind-6 bonus is not created [M 0x18dda0:93-95]");
 }
 
 /// The zip-wire kind: the three wires created with the disc's spheres [D #271/#484/#487;

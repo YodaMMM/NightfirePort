@@ -326,6 +326,32 @@ fn gold_group(entry_idx: usize, counter: usize) -> (u16, usize, usize) {
     (d.bit + rank as u16, len, rank)
 }
 
+/// `Menu_HasMedal(map, medal, controller)` 0x202580's lookup over explicit bonus bits: the
+/// kind-`kind` reward bit of `hash`'s RewardsTable row [M 0x202580 →
+/// `PlrStarts_ProcessRewardCounter(&bonus[controller], map, medal, 0, &info)` 0x199210 — the
+/// `has` byte at info+0xc]. A `hash` with no RewardsTable row (or `kind` ≥ 5, the game's
+/// `if (param_3 < 5)` guard [M 0x199210:24]) leaves `info` zeroed → false.
+pub fn medal_set(bits: u64, hash: u32, kind: u32) -> bool {
+    let Some(idx) = REWARDS_TABLE.iter().position(|e| e.hash == hash) else { return false };
+    if kind > 4 { return false; }
+    let d = REWARDS_TABLE[idx].desc[kind as usize];
+    let bit = if d.kind == 4 { gold_group(idx, kind as usize).0 } else { d.bit };
+    if bit >= 0x3F { return false; }
+    bits & (1u64 << bit) != 0
+}
+
+/// `PlrStats_HasGoldMedal` 0x199a40 [M]: `Menu_HasMedal(Mission_BaseMapHCode(), 3, 0)` — the
+/// GOLD medal (counter 3) of `hash` in the player-0 bonus word. `hash` is the mission layer's
+/// `BaseMap` (0x30cba0; `Mission_BaseMapHCode` 0x1830a0 returns it while `MPSettings+0x384` is
+/// 0, GameState+0xc in a match) — for the level archives that is the `LEVELS` row's `mission`
+/// hash, not the archive id (mission 0700000a plays under BaseMap 0x07000009, 07000011 under
+/// 0x07000011 [L ee_start_05.bin 0x2a4350 — the mission table, the disasm pairing: the mission
+/// id at 0x2a4350+k·0x28, the map at +4]). The only caller is `Pickup_Create`'s kind-6 gate
+/// [M 0x18dda0:93-95].
+pub fn has_gold_medal(bits: u64, hash: u32) -> bool {
+    medal_set(bits, hash, 3)
+}
+
 /// The kind-4 group's widened bits in scan order (entry-major, counter 1..4 minor) — the bits the
 /// game tests for the group's set count [M 0x199210:53-55 `1 << (bit + iVar9)`].
 fn gold_group_bits(entry_idx: usize, counter: usize) -> Vec<u16> {
@@ -731,7 +757,9 @@ impl Progress {
     /// arm's caller (`Menu_HasMedal` needs just the bit).
     pub fn process_reward_counter(&mut self, hash: u32, counter: u32, slot: usize, set: bool) -> bool {
         let Some(idx) = REWARDS_TABLE.iter().position(|e| e.hash == hash) else { return false };
-        if counter == 0 || counter > 5 { return false; }
+        // The game's counter guard is `if (param_3 < 5)` [M 0x199210:24] — counters 0..4 only;
+        // counter 5 walked into `desc[5]` (out of bounds) before the guard said > 5.
+        if counter == 0 || counter > 4 { return false; }
         let d = REWARDS_TABLE[idx].desc[counter as usize];
         let bit = if d.kind == 4 { gold_group(idx, counter as usize).0 } else { d.bit };
         if bit >= 0x3F { return false; }
@@ -743,12 +771,7 @@ impl Progress {
     /// `Menu_HasMedal` — the kind-`kind` reward bit of `hash` in `bonus[slot]`
     /// (gold = kind 3 [M PlrStats_HasGoldMedal 0x199a40 → Menu_HasMedal(BaseMapHCode, 3, 0)]).
     pub fn has_medal(&self, hash: u32, kind: u32, slot: usize) -> bool {
-        let Some(idx) = REWARDS_TABLE.iter().position(|e| e.hash == hash) else { return false };
-        if kind > 5 { return false; }
-        let d = REWARDS_TABLE[idx].desc[kind as usize];
-        let bit = if d.kind == 4 { gold_group(idx, kind as usize).0 } else { d.bit };
-        if bit >= 0x3F { return false; }
-        self.bonus[slot] & (1u64 << bit) != 0
+        medal_set(self.bonus[slot], hash, kind)
     }
 
     /// `Menu_SetLevelBonus` 0x1ffa10: award `medal` (1 bronze .. 4 platinum, 5 none) for `hash` —

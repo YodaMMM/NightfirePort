@@ -80,7 +80,7 @@ fn lid_open_drop_watch() {
         let p = sim.bond.pos;
         eprintln!("[lid] after the drop (ok={dropped}): {p:?}");
         let (a, b) = sim.bond.capsule_seg();
-        let (push, walkable) = sim.world.capsule_push(a, b, 0.55, false);
+        let (push, walkable) = sim.world.capsule_push(a, b, 0.55, false, [1.0e9, 1.0e9, 1.0e9]);
         eprintln!("[lid] stall: push {push:?} walkable {walkable} segment {:?}", sim.world.segment(p, [p[0], p[1] - 3.0, p[2]]));
         let dtri = sim.world.dynamic_tris_near([40.4, 2.1, 62.2], [41.5, 3.1, 62.9]);
         eprintln!("[lid] stall dyn tris: {} first {:?}", dtri.len(), dtri.first());

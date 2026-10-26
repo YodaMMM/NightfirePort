@@ -33,19 +33,25 @@ fn iso() -> Option<String> { std::env::var("NF_ISO").ok() }
 // batch-1024a: the security cameras' body + mount posed slots (`Sensor_Create` 0x1af010 / `Sensor_SetBeam`
 // 0x1af398 — 01 ×1, 02, 14 ×14), 14's b1 drones on skin 0x0500008c (`NDrone2_DefaultInit` 0x14b300:82-95).
 const BASELINE: &[(&str, &str)] = &[
+    // pickup-medal-gate re-pin: the fresh-boot loads now run `Pickup_Create`'s kind-6 gate
+    // [M 0x18dda0:93-95] — the 007 rows (kind 6) create only with the level's gold medal
+    // recorded, and these pins were captured with bonus[0] = 0 (the fresh-boot word [L
+    // ee_start_05 0x2e1b88]). Each drifted level lost exactly its kind-6 rows' meshes: −418
+    // verts / −314 indices / −1 material slot per token (07000002 −3, 07000005 −2, 0700000c −4,
+    // 07000001 −2 pickups; 07000014 places no kind-6 and is bit-identical).
     // level-1b-audit re-pin (all four drifted levels carry a 0x3b gated dynamic object): the
     // 0x3b draw moved from a build-time static World instance (which never collapsed when the
     // sim deleted the object — DynamicObject_Update 0x18d3b8:26 mode-0 armed-B → obj+0xFE bit 0
     // → the delete pass, control_delete_object 0x133178:16-17) to a posed Character-layer slot
     // that collapses; the vertices/indices/materials/char_verts counts follow, [S port
     // engineering] like every pin here.
-    ("07000002.bin", "73525d9ad44022ee 4516629 9446895 5351 4379642 81 10721 205 28 25 8"),
-    ("07000005.bin", "8d18d38d5d4d4b9e 4419709 9245391 3616 4335368 73 10655 106 19 16 6"), // the two copter SPs + their script draw slots; re-pinned 10-26: the 0x3b dynamic objects ride posed slots [M View_AddObjects 0x1e62d8:33, DynamicObject_Update 0x18d3b8]
+    ("07000002.bin", "5b4d9561f68ad990 4515375 9444267 5349 4378388 81 10721 205 28 25 5"),
+    ("07000005.bin", "5d1c6e9fc7975905 4418873 9243639 3614 4334532 73 10655 106 19 16 4"), // the two copter SPs + their script draw slots; re-pinned 10-26: the 0x3b dynamic objects ride posed slots [M View_AddObjects 0x1e62d8:33, DynamicObject_Update 0x18d3b8]
     // lift-indicators-09 re-pin: one draw slot per `Script_SubScriptStart` op per running SP
     // [M 0x1db050] — 0700000c's multi-SP sub chains add 6 slots (+248 vertices, +576 indices,
     // +1 attachment); 07000014's vent-lid SPs are placed SPs (unchanged), the rest have no
     // multi-SP sub chains.
-    ("0700000c.bin", "acc2b96c220e9960 4904662 10316532 8127 4716430 96 11908 170 22 40 15"), // re-pinned 10-26: 0x3b on posed slots
+    ("0700000c.bin", "6fbb691bdffc5780 4902990 10313028 8125 4714758 96 11908 170 22 40 11"), // re-pinned 10-26: 0x3b on posed slots
     // script-entity-copies: one draw slot per ScriptPlayer running a script — 14's nine
     // SPs on the vent-lid script 0x06000A3B (+ its other shared scripts) add 20 attachments, +1600 vertices.
     // The keypads' LOD pair in the posed slots (Lock_Unlock 0x1b0650 / case 1 `Control_NextLOD`: three
@@ -57,8 +63,10 @@ const BASELINE: &[(&str, &str)] = &[
     // +59235 indices, +105 materials, +50005 char_verts, +15 attachments over the old pin.
     // fusebox-draw-slots re-pin: 07000014's five fusebox placements (kind 0x31) now seed their
     // param-0 script 0x06000A1B, +20 script-entity slots (the cabinet and wire art) [M FuseBox_Create].
-    ("07000014.bin", "2ea3dfde7ea1224c 7181439 14923269 6486 7030100 98 14422 173 41 37 32"), // re-pinned 10-26: p0-gated 0x3b instanced from load (created hidden [M 0x18dbf8:27-29])
-    ("07000001.bin", "d954f0b14254308d 4428889 9286485 3489 4355910 76 10735 101 11 20 6"), // re-pinned 10-26: the radio-room rotors on posed slots [M rotor_update 0x18f568]
+    // 07000014 places two kind-6 rows as well: −836 verts / −752 indices / −2 material slots,
+    // pickups 32 → 30 (same gate).
+    ("07000014.bin", "08e5274d2bcefe07 7180603 14921517 6484 7029264 98 14422 173 41 37 30"), // re-pinned 10-26: p0-gated 0x3b instanced from load (created hidden [M 0x18dbf8:27-29])
+    ("07000001.bin", "4cf366fbc7e055ae 4428053 9284733 3487 4355074 76 10735 101 11 20 4"), // re-pinned 10-26: the radio-room rotors on posed slots [M rotor_update 0x18f568]
 ];
 
 #[test]

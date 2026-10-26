@@ -131,7 +131,7 @@ fn probe14_ghost_owners() {
         let p = sim.bond.pos;
         println!("== D. after the drop (fell={dropped}): pos {p:?} grounded {}", sim.bond.grounded);
         let (a, b) = sim.bond.capsule_seg();
-        let (push, walkable) = sim.world.capsule_push(a, b, 0.55, false);
+        let (push, walkable) = sim.world.capsule_push(a, b, 0.55, false, [1.0e9, 1.0e9, 1.0e9]);
         println!("  capsule_push {push:?} walkable {walkable} (a {a:?} b {b:?} crouched {})", sim.bond.crouched);
         println!("  segment 3 m down: {:?}", sim.world.segment(p, [p[0], p[1] - 3.0, p[2]]));
         // == D3. the CONTACT faces at the rest point: replicate capsule_tri_contact's core over

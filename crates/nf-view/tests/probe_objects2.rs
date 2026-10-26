@@ -279,7 +279,7 @@ fn probe_walk_down_the_stairs() {
         let r = obj.radius + 2.0;
         if (c[0] - here[0]).abs() > r || (c[1] - here[1]).abs() > r || (c[2] - here[2]).abs() > r { continue }
         let w = mini.entry(i).or_insert_with(|| nf_game::world::CollisionWorld::build(&level, std::slice::from_ref(&insts[i])));
-        let (push, _) = w.capsule_push([here[0], here[1] + 1.0, here[2]], [here[0], here[1] + 0.1, here[2]], 0.55, false);
+        let (push, _) = w.capsule_push([here[0], here[1] + 1.0, here[2]], [here[0], here[1] + 0.1, here[2]], 0.55, false, [1.0e9, 1.0e9, 1.0e9]);
         let m = push.iter().map(|v| v * v).sum::<f32>().sqrt();
         // A forward segment at chest and knee height.
         let seg = |y: f32| w.segment([here[0], here[1] + y, here[2]], [here[0] + facing[0] * 2.0, here[1] + y, here[2] + facing[2] * 2.0]);
