@@ -114,3 +114,14 @@ Progress:
   door-state fix in drone.rs set_dynamic (doors collide by Door_IsClosed 0x1367b0 — CLOSED
   blocks; OPEN/OPENING/CLOSING leaves do not), review the SS parts (#205 safe door, #217
   bolt) the same way, run the door family, then the mp digest pin per round-4 item 8.
+- LANDED: drone.rs set_dynamic's doors.extend now filters by Door::is_closed(&group_states)
+  (Door_IsClosed 0x1367b0: kind-1 always closed, grouped reads DoorGroupsStates, else
+  obj+0xF4 == CLOSED exactly [M]). walkreal_07000008_live 4/4 GREEN (the briefcase walk
+  29.7s, was :164 red 1600+ tick stall). SS parts (#205 safe door, #217 bolt) reviewed: the
+  game's script-entity glist path has no state gate [M 0x1d8968/0x1ca6d8/0x1ca798] — they
+  stay unconditional; the safe door's swept open pose clears the route (the walk passes
+  "before the safe" -> briefcase after ch 136, green). Door family green: fix_npc_doors 1/1,
+  npc_doors 6+1ign, portal_links 3/3, portal 2/2, react_path 1/1, aim_ray 2/2, text_labels
+  4/4, hint_boot 2/2, glist0 2/2, remainder 4/4, cutscene_14 2/2, party_lock_07 2/2,
+  rook_06 1/1, rook_06_walk 1/1 = 37 passed 0 failed. Suite started 21:39 UTC on the fixed
+  tree (setsid-detached; round-4's plain nohup died at the tool-call boundary again).
