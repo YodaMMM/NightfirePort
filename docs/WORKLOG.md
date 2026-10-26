@@ -24,3 +24,12 @@
   still wall-stuck; (b) + the anti-motion wall projection — froze the doorway approach earlier.
   The three tests stay #[ignore] (updated notes pending the driver's live checks); the tree is
   master + docs only; walkreal_0700000a_live 4 passed / 3 ignored on the final tree.
+
+## level-0a-band-settle-2
+
+- (15:53 UTC, 10-26) Branch created from origin/s/level-0a-band-settle (f65c48f5), merged
+  origin/master (82362142). Task: port the collision-handler tail (PC 0x194c70 =
+  Player_CollisionHandler 0x1949a8 + 0x2c8, the live-proven wall stop [L 2026-10-26]) in place
+  of the stand-in, re-land experiment (a)'s below-B kill if needed, re-pin + un-ignore the three
+  ignored walkreal_0700000a_live tests to the driver's fresh [L] numbers (settled values), keep
+  walkreal_07000001/05 green. Setup starting: work-slim + onfoot ISO downloads next.
