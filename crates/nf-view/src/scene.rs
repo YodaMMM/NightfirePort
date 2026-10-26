@@ -5736,6 +5736,19 @@ impl Sim {
     }
 
 
+    /// The base matrix of the live animated script object from `src` on `skin` (its owning SP's matrix at
+    /// the start - see `Obj::Anim::base`); the same newest-first walk as `script_anim`.
+    pub fn script_anim_base(&self, src: (u32, u8), skin: u32) -> Option<Mat4> {
+        let hidden = self.drones.scripts.hidden_stream_objects();
+        self.drones.scripts.objects.list.iter().enumerate().rev().find_map(|(i, o)| {
+            if hidden.contains(&i) { return None; }
+            match o {
+                Some(nf_game::nis::Obj::Anim { skin: k, src: o, base, .. }) if *o == src && *k == skin => Some(*base),
+                _ => None,
+            }
+        })
+    }
+
     /// The world matrix of the live script entity `hash` from `src`.
     pub fn script_entity(&self, src: (u32, u8), hash: u32) -> Option<Mat4> { self.script_entity_k(src, hash, 0) }
 
@@ -8958,7 +8971,13 @@ pub fn build(level: &Level, cels_only: bool, skeletons: &HashMap<u8, Skeleton>, 
                 // matrix, for the 07000002 intro the CAMERA (obj[0] trans == player[1] live trans
                 // [-27.25, 1.41, 34.39]) — which drew the actors inside the camera: a
                 // render showed the intro room with NO characters at all.
-                return Some((anim::skin_matrices(&world, &c.skin), world, c.matrix));
+                // ride-cutscene-base: the cast rides its SP's matrix. 0700004a's ride pack (SP #289, base
+                // (0, -53.53, -3.38)) carries car-local roots (sequence 0x040005fd root (2.35, 0.85, -0.64)
+                // [D]); the PCSX2 ride (frame 700) shows the guard and the officer in the car's hatch, so
+                // the drawn object is the base (identity for the world-root scenes - their SPs sit at the
+                // origin, so their picture is unchanged).
+                let base = s.script_anim_base(src, c.skin.hashcode).unwrap_or(c.matrix);
+                return Some((anim::skin_matrices(&world, &c.skin), world, base));
             }
             // MP bodies (mp-body-anim): the PLAYER anim set the game's MP body runs, from the slot's
             // script list (`Sim::mp_anim`, ticked by `advance_mp_anim` — idle, the distance-driven

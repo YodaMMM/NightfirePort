@@ -23,7 +23,10 @@ pub enum Obj {
     /// by `AnimObjectDraw` (0x1c4490:256-265) as `weapon_data[w]+0x80` mesh on datum `weapon_data[w]+0x50`.
     /// `ticked`: false until the stream's first `Script_Interp` runs — the game's fresh anim script has no previous
     /// time, so the start frame's own commands fire on that first interp (`AnimScriptTick`'s old time is 0).
-    Anim { skin: u32, script: u32, frame: f32, weapon: u8, src: (u32, u8), ticked: bool },
+    Anim { skin: u32, script: u32, frame: f32, weapon: u8, src: (u32, u8), ticked: bool,
+        /// The owning SP's matrix at the start (the base the pack's car-local roots ride; world-root
+        /// scenes sit at an identity base) - PCSX2 0700004a ride frame 700: the cast stands in the car.
+        base: Mat4 },
     /// A cut-scene camera (`CAM_INFO`, `Script_CameraStart`): its world matrix (rows: right, up, forward, position)
     /// and vertical field of view in radians (key scale × `+0x114` = 4/3, `Camera_CalcViewAngles`).
     Camera { matrix: Mat4, fov: f32, src: (u32, u8) },
@@ -811,7 +814,7 @@ impl Script {
         let len = w.anim_length(script).unwrap_or(1).max(1) as f32;
         let f = start as f32;
         let frame = if f < 1.0 || len < f { if f < 1.0 { 1.0 } else { len } } else { f };
-        objs.list.push(Some(Obj::Anim { skin, script, frame, weapon: 0, src: (self.nis.hashcode, i as u8), ticked: false }));
+        objs.list.push(Some(Obj::Anim { skin, script, frame, weapon: 0, src: (self.nis.hashcode, i as u8), ticked: false, base: self.matrix }));
         let s = &mut self.streams[i];
         s.obj = Some(objs.list.len() - 1);
         s.kind = 2;
@@ -2268,7 +2271,7 @@ mod tests {
         script.streams[0].kind = 2;
         script.delay = 5; // HELD: the damage tail's gate
         let mut objs = Objects::default();
-        objs.list.push(Some(Obj::Anim { skin: 0x0500_003A, script: 0x0600_0001, frame: 1.0, weapon: 0, src: (0x0600_0086, 0), ticked: true }));
+        objs.list.push(Some(Obj::Anim { skin: 0x0500_003A, script: 0x0600_0001, frame: 1.0, weapon: 0, src: (0x0600_0086, 0), ticked: true, base: IDENT }));
         script.streams[0].obj = Some(0);
         let mut scripts = Scripts::default();
         scripts.objects = objs;
