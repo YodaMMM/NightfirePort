@@ -651,21 +651,47 @@ pub fn build(level: &Level) -> Vec<Trigger> {
     let mut out = Vec::new();
     for (i, p) in map.placements.iter().enumerate() {
         let param = |k: u32| p.params.iter().find(|(j, _)| *j == k).map(|&(_, v)| v).unwrap_or(0);
+        let raw_dc = p.flags == 0xdc;
         let kind = match p.flags { 0xea => kind::TOUCH_ONCE, 0xeb => kind::TOUCH, 0xec => kind::AND, 0xed => kind::SEQ_AND, 0xee => kind::OUT,
             0xef => kind::OR, 0xe8 => kind::LOAD_LEVEL, 0xf4 => kind::MOVIE, 0xdc => param(0) as u8, _ => continue };
-        // Every trigger family — typed 0xEA-0xEF wrappers and the raw 0xDC alike — shares one param
-        // layout: the type byte at p0 (the typed wrappers overwrite it), out = p1, inputs = p2..p8,
-        // mask = p9, lock = p10, hide = p11 [M Trigger_Create 0x1b1720:61-91; the 0xEA-0xEF wrappers
-        // all tail-call it with the same param_3]. No shift for the raw type.
+        // The typed 0xEA-0xEF wrappers rewrite the param block before `Trigger_Create` (slot 0 = the
+        // type, slot 1 = the out, the mask/lock/hide re-homed per wrapper) — `from_params`' arms read
+        // the wrapper-shifted slots. The RAW 0xDC rows run the direct `Trigger_Create` map instead:
+        // out = slot 1 (p1), inputs = slots 2..8 (p2..p8), mask = slot 9 (p9, 0 -> the create's
+        // default 2), lock = slot 10 (p10), hide = slot 11 (p11), the type byte = p0 [M 0x1b1720:61-91
+        // — rec 0x20 = slot 1, ext+0x26..0x32 = slots 2..8, the mask/lock/hide from slots 9/10/11;
+        // re-derived against 0x1b2b88/0x1b2c68's wrapper stores this task]. 0700000c's skylight plates
+        // #275-277 are raw rows: p0=2 (Touch), p1=0x1b (the OUT — the objective channel, NOT ch 2),
+        // p9=0 -> the mask defaults to 2 (class-5 bullets).
         let q = |k: u32| param(k);
         let target = if p.by_hash() { level.by_hash.get(&p.hashcode).copied() } else if (p.index as usize) < map.objects.len() { Some((m, p.index as usize)) } else { None };
         let mx = object_matrix(p.rotation, p.translation);
         let tris: Vec<[V3; 3]> = target.and_then(|(om, oi)| level.maps[om].objects[oi].collision.as_ref())
             .map(|c| c.triangles().into_iter().map(|t| t.map(|v| transform(&mx, v))).collect()).unwrap_or_default();
         // Touch triggers on channel 0x7D only work on level 0x07001500.
-        if let Some(t) = Trigger::from_params(i, kind, q, tris) { out.push(t); }
+        match Trigger::from_params(i, kind, q, tris) {
+            Some(mut t) if raw_dc => {
+                apply_raw_dc_map(&mut t, &param);
+                if !matches!(t.kind, kind::TOUCH | kind::TOUCH_ONCE) || t.out != 0x7d { out.push(t); }
+            }
+            Some(t) => out.push(t),
+            None => {}
+        }
     }
     out
+}
+
+/// The RAW 0xDC record map (no wrapper): `Trigger_Create`'s direct stores — out = slot 1, the input
+/// list = slots 2..8, mask = slot 9 (0 -> the create's default 2 [M 0x1b1720:80-84]), lock = slot 10,
+/// hide = slot 11 [M 0x1b1720:61-91]. Applied after `from_params` built the wrapper-shaped record.
+fn apply_raw_dc_map(t: &mut Trigger, q: &impl Fn(u32) -> u32) {
+    t.out = q(1) as u8;
+    let m = q(9);
+    t.mask = if m == 0 { 2 } else { m };
+    t.list = (2..=8).map(q).collect();
+    t.lock = q(10) as u8;
+    t.hide = q(11) != 0;
+    t.filter_gate = t.list.get(4).copied().unwrap_or(0) as u8;
 }
 
 /// The level exit's real use target, resolved the way `Player_Activate` 0x1a5170's pick and the
@@ -1289,5 +1315,29 @@ mod tests {
         assert!(mixed.hit(&ch, &on, &[]));
         assert!(mixed.hit(&ch, &on, &[frag]));
         assert!(mixed.hit(&ch, &[], &[satchel]), "no player: the mask-2 arm — an empty filter fires on any contact [M :130-135]");
+    }
+    /// The RAW 0xDC map (no wrapper): out = p1, the inputs = p2..p8, mask = p9 with the create's
+    /// 0 -> 2 default, lock = p10, hide = p11 [M 0x1b1720:61-91]. 0700000c's skylight plates
+    /// #275-277 are the shipped rows: p0=2 (Touch), p1=0x1b (the OUT — the objective channel),
+    /// p9=0 -> mask 2 (class-5 bullets) [D census].
+    #[test]
+    fn the_raw_dc_rows_read_the_direct_create_map() {
+        let params = [2u32, 0x1b, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0];
+        let q = move |k: u32| params.get(k as usize).copied().unwrap_or(0);
+        let mut t = Trigger::from_params(0, q(0) as u8, q, Vec::new()).unwrap();
+        apply_raw_dc_map(&mut t, &q);
+        assert_eq!(t.out, 0x1b, "the raw out = slot 1 [M 0x1b1720:67-69]");
+        assert_eq!(t.mask, 2, "mask slot 9 = 0 -> the create's default 2 [M 0x1b1720:80-84]");
+        assert_eq!(t.lock, 0);
+        assert!(!t.hide);
+        assert_eq!(t.list, vec![0, 0, 0, 0, 0, 0, 0], "the inputs = slots 2..8");
+        // A sister with the mask slot populated keeps the placed value.
+        let params2 = [2u32, 0x1b, 0, 0, 0, 0, 0, 0, 0, 5, 7, 1];
+        let q2 = move |k: u32| params2.get(k as usize).copied().unwrap_or(0);
+        let mut t2 = Trigger::from_params(0, q2(0) as u8, q2, Vec::new()).unwrap();
+        apply_raw_dc_map(&mut t2, &q2);
+        assert_eq!(t2.mask, 5);
+        assert_eq!(t2.lock, 7);
+        assert!(t2.hide);
     }
 }

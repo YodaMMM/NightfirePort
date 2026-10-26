@@ -61,8 +61,9 @@ pub struct Ss {
     /// ext+0x24 = param 1 — the wrap flag: 0 → the wrap re-arms to 0x40 (re-operable), non-zero →
     /// the wrap disarms to 0 [M 0x1a9948:121-126].
     pub wrap_flag: u16,
-    /// ext+0x14 = param 4 — the operate sound id (0xffff = none; `Sound_Play3D` at the 0x40
-    /// operate arm [M 0x1a9948:86-88]). Unplayed headlessly; kept for the field map.
+    /// ext+0x14 = param 4 — the operate sound id (0xffff = none): `Sound_Play3D` at the 0x40
+    /// operate arm [M 0x1a9948:86-89], played through the sim's sound sink (0700000c's hatch
+    /// #138 carries sample 0x1d6, 07000008's safe door #205 the same [D censuses]).
     pub sound: u16,
     /// The placement object's gfx-sphere radius — the game's obj+0x8C world-sphere radius source
     /// (`Control_BuildWorldSph` 0x133070:48 takes the glist bound radius × |scale|) — the use-key
@@ -165,7 +166,7 @@ impl SsList {
     /// create [M 0x1a9c58:51], so the rate word is the sweep's whole duration in ticks:
     /// 0700000c's `ventmesh-front` #138 (6 keys, rate 50 [D]) reaches its last key in 50 ticks
     /// (fix-0c-hatch; the old 1/rate model was five times slow).
-    pub fn tick(&mut self, ch: &mut Channels, contacts: &[u8], frame: u32) {
+    pub fn tick(&mut self, ch: &mut Channels, contacts: &[u8], frame: u32, audio: &mut crate::sound::Sounds) {
         for (i, s) in self.list.iter_mut().enumerate() {
             if s.keys.len() < 2 { continue; }
             let last = (s.keys.len() - 1) as u16;
@@ -197,8 +198,16 @@ impl SsList {
                     // per tick [M Collide_Update 0x1ea398:10-27 clears obj+0xD0 each pass], so
                     // a re-required operate stalled the render at t = one step (the shot
                     // winch).
+                    // The operate arm plays the operate sound BEFORE the state-1 latch [M
+                    // 0x1a9948:86-89 — `Sound_Play3D(100.0, ext+0x14 = param 4, at obj+0x80)`
+                    // precedes `*(ext+0x22) = 1`; decomp 001a9948 lines 88-92]. The 0xffff rows
+                    // are the game's bank miss (silent) — the port skips the call (same
+                    // observable).
+                    if s.sound != 0xffff {
+                        audio.play3d(s.sound as u32, s.pos(), None);
+                    }
                     s.state = 1;
-                    Self::sweep(s, last, step); // the sound arm [M 0x1a9948:86-89] is unplayed
+                    Self::sweep(s, last, step);
                 }
                 8 => {
                     // The loop: pose, advance, wrap t to 0 past the last key, stay 8.
@@ -230,5 +239,68 @@ impl SsList {
     /// The SS of a placement index (the render's per-instance lookup).
     pub fn of_placement(&self, placement: usize) -> Option<usize> {
         self.list.iter().position(|s| s.placement == placement)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::sound::Sounds;
+
+    fn one(ss: Ss) -> SsList { SsList { list: vec![ss] } }
+
+    fn sample_ss(sound: u16) -> Ss {
+        // Two keys, state 0x40, mask 1 (the channel half — no contact classes), channel 5,
+        // the 07000008 #205 / 0700000c #138 shape [D censuses: mode 0x40, wrap 1, mask 1,
+        // sound 0x1d6], with the channel renumbered.
+        Ss {
+            placement: 0,
+            channel: 5,
+            keys: vec![
+                crate::door::Key { pos: [0.0, 0.0, 0.0], quat: [0.0, 0.0, 0.0, 1.0] },
+                crate::door::Key { pos: [1.0, 0.0, 0.0], quat: [0.0, 0.0, 0.0, 1.0] },
+            ],
+            rate: 30,
+            spline: false,
+            state: 0x40,
+            mask: 1,
+            t: 0.0,
+            matrix: IDENT,
+            hash: 0,
+            rest: 0.0,
+            wrap_flag: 1,
+            sound,
+            radius: 1.0,
+        }
+    }
+
+    /// The 0x40 operate arm plays the operate sound BEFORE the state-1 latch
+    /// [M 0x1a9948:86-89 — Sound_Play3D(100.0, ext+0x14, at obj+0x80) precedes
+    /// `*(ext+0x22) = 1`; decomp 001a9948 lines 88-92]. 0700000c's hatch #138 and
+    /// 07000008's safe door #205 carry sample 0x1d6 (470) [D censuses].
+    #[test]
+    fn the_0x40_operate_arm_plays_the_operate_sound_then_latches() {
+        let mut ch = Channels::default();
+        ch.set(5, 1, 0);
+        let mut audio = Sounds::default();
+        let mut l = one(sample_ss(470));
+        l.tick(&mut ch, &[], 1, &mut audio);
+        assert_eq!(l.list[0].state, 1, "the operate latch [M 0x1a9948:89]");
+        assert!(audio.active_ids().contains(&470), "the operate sound played [M 0x1a9948:86-89]");
+        assert!(l.list[0].t > 0.0);
+    }
+
+    /// The 0xffff sound rows are the game's bank miss — Sound_Play3D(0xffff) resolves
+    /// nothing, so nothing is heard [D the censuses' 0xffff rows; the field map's
+    /// "0xffff = none"]. The port skips the call; the latch still runs.
+    #[test]
+    fn the_ffff_sound_row_latches_without_a_sound() {
+        let mut ch = Channels::default();
+        ch.set(5, 1, 0);
+        let mut audio = Sounds::default();
+        let mut l = one(sample_ss(0xffff));
+        l.tick(&mut ch, &[], 1, &mut audio);
+        assert_eq!(l.list[0].state, 1);
+        assert!(audio.live_ids().is_empty(), "no voice created for the 0xffff row");
     }
 }
