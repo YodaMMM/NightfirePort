@@ -1735,14 +1735,15 @@ impl Scripts {
         // raises the heads' on-channels in a staged reveal — ch 64 (0x40) = 1 at wait 1, ch 63 (0x3F) at
         // 59, ch 61 (0x3D) at 116, ch 62 (0x3E) at 167 [D 07000006 kind-7 NIS 0x06000066; the heads'
         // on-channels are 64/63/61/62 on the four 0xDE kind-1 placements] — all four courtyard lights
-        // sweep within ~2.8 s of the script's start. Nothing in the level's
-        // placements, triggers or sub-scripts references the script (no param carries the hash; the raw
-        // bytes occur nowhere in 07000006.bin outside compressed-data noise), so the game's activation
-        // beat is not derivable from the disc — the port boots it once at level start, mode 1 (play
-        // once), the way a hidden `SP_CreateScriptPlayer` one-shot runs (`spawn_once`'s precedent, the
-        // copter script [M 0x1dbc08's mode dispatch]). Without it the port's courtyard heads stay state
-        // 3 (dark) forever, the alarm channel 55 can never rise and the guards never react. The real
-        // activation moment (which SP fires it in the game, and on which beat) is an open
+        // sweep within ~2.8 s of the script's start. The script's owner on the disc is SP placement
+        // #808 (kind 0xD9, p0 = 0x06000066, mask p5 = 1, out ch 0x34) [D census, level-06-audit]:
+        // mask != 0 parks it in state 0 [M 0x1db9a8:74-86] where only its SP_Hit/activate path can
+        // start it — a beat not derivable headlessly. The port therefore ALSO boots the script once
+        // at level start, mode 1 (play once), the way a hidden `SP_CreateScriptPlayer` one-shot runs
+        // (`spawn_once`'s precedent, the copter script [M 0x1dbc08's mode dispatch]); the placement
+        // player is created alongside and stays idle. Without the boot the port's courtyard heads
+        // stay state 3 (dark) forever, the alarm channel 55 can never rise and the guards never
+        // react. The real activation moment (which beat moves #808 in the game) is an open
         // live check. Pinned to the level by its own data: a class-0x22 head
         // placement whose alarm channel is 55 AND the script in the lib.
         let light_boot = placements.iter().any(|p| p.flags & 0xff == 0xde
