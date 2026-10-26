@@ -71,3 +71,21 @@ the 2 were fix_0c_vent2_live under 4-way-parallel OOM pressure and pass in isola
 of the window was cut by the sandbox (OOM at -P4, wall time at -P2). The real-movie path itself
 is not exercisable in this sandbox (the slim image's PSS are 0-byte stubs [D]) — the two new
 hold assertions fire on an image with the retail movies.
+
+### mission-outros-3 — the suite-runner failure is the unfixed tree; the fix proven on an injected real-movie image (2026-10-26 ~06:00 UTC)
+Branch start: s/mission-outros-3 = origin/s/mission-outros-2 + origin/master (merge clean).
+The driver's suite failure ("the outro stayed up through the track's entries ... got 1", both
+outro tests, full disc) is the OLD `Player::open` state, not a runner-env difference: the tree
+that fails carries mission_outros_live's tests WITHOUT the mission-outros-2 fix — only
+s/mission-outros and s/mission-outros-2 contain the test file, and s/mission-outros's
+`Player::open` still returns `Ok` with `ended: true` for an OPENED file in the no-`movies`
+build ([M origin/s/mission-outros movie.rs:234]; master has neither test nor fix). With real
+PSS bytes the start SUCCEEDS [M 0x1081a8's strFileOpen arm], the glue reports BGFMVPlaying = 1
+for one poll, the next poll sees `finished()` and state 6 pops — movie_ticks = 1. NF_SILENT,
+the cwd and the runner's wall-clock are not in the hold path at all: the no-`movies` player
+reads only the ISO (NF_ISO) and its audio-track duration.
+PROOF SETUP for the real-movie path (this sandbox's image stubs every PSS [D ISO tree]):
+scripts/inject_movies.py builds minimal valid PSS files whose PCM audio tracks carry the
+retail durations [D golden/pss_movies.tsv: 07300004 = 2 384 128 samples = 2980 ticks;
+07300013 = 2 040 064 = 2550], appends them to an ISO copy and rewrites their ISO9660 directory
+records → Nightfire-movies-test.iso. The outro tests then take the REAL-movie branch here.
