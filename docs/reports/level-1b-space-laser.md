@@ -111,3 +111,11 @@
 
 not visible to me — this session's driver surface shows no token, cost or context-window
 figures (the IM gateway metadata carries only session/chat/trace ids).
+
+## ntfy failed
+
+The notification's first two fallbacks failed with the ntfy daily-quota error (the third,
+wget -q, exited 0 with no output — its result is unverifiable):
+curl: {"code":42908,"http":429,"error":"limit reached: daily message quota reached; increase
+your limits with a paid plan, see https://ntfy.sh","link":"https://ntfy.sh/docs/publish/#limitations"}
+python3 urllib: urllib.error.HTTPError: HTTP Error 429: Too Many Requests
