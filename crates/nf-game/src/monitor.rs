@@ -163,7 +163,7 @@ mod tests {
             placement: 1, pos: [1.0; 3], matrix: Default::default(), quat: Default::default(),
             keys: Vec::new(), limit: 0, step: 0.0, t: 0.0, cos_half: 0.0, sin_half: 0.0,
             range: 6.0, out: 0, disable: 0, monitor_id: 1, listed: true, lens: 0, mount: 0,
-            monitor_ch: 0, state: 0, detect: 0.0, beep: 0.0, seen: 0, last_hit: false, unhidden: false,
+            monitor_ch: 0, state: 0, detect: 0.0, beep: 0.0, seen: 0, last_hit: false, unhidden: false, beam_len: 0.0,
         }] };
         assert!(mons.activate(0, &sensors), "state 0 + a group-1 listed sensor → state 2 [M 0x1b0058]");
         assert_eq!(mons.list[0].state, 2);

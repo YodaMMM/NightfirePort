@@ -86,7 +86,9 @@ fn mounted_stick_right_turns_the_view_and_dmount_restores() {
     // follows it exactly (the carried yaw IS yaw_base + yaw_s [M :175]).
     for _ in 0..60 {
         let mut input = Input::default();
-        input.turn = 1.0;
+        // turn is the view's yaw delta (yaw grows LEFT): a full stick-right is -0.015 rad/tick,
+        // the game's `yaw -= action3 * 0.015` for action3 = +1 [M 0x1320d8:125].
+        input.turn = -0.015;
         scene.sim.as_mut().unwrap().step_bond(input, false, false, false);
     }
     {
@@ -118,7 +120,7 @@ fn mounted_stick_right_turns_the_view_and_dmount_restores() {
     // pitch = −pitch_s·0.5 EXACTLY [M :194].
     for _ in 0..60 {
         let mut input = Input::default();
-        input.look = 1.0;
+        input.look = 0.015; // the view's up-positive pitch delta: a full stick-up [M :126]
         scene.sim.as_mut().unwrap().step_bond(input, false, false, false);
     }
     {

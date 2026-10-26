@@ -2496,6 +2496,11 @@ impl Sim {
         // and a one-tick-early reset.)
         let scanned_due = self.decryptor_scanned_lag.take();
         self.decryptor_scanned_lag = self.decryptor_scanned.take();
+        // fix-decryptor-sounds: the digit/unlock chimes a scanning lock raised this tick (the
+        // [M] `Lock_Update` 0x1ae3d8:368/:374 `Sound_Play` family, played here at the lock's
+        // position through the port's 3-D path). Collected first: the loop holds the locks
+        // mutably and the audio handle lives on the same `drones`.
+        let mut lock_sounds: Vec<(u32, [f32; 3])> = Vec::new();
         for (i, l) in self.drones.locks.iter_mut().enumerate() {
             match scanned_due.filter(|(li, _)| *li == i) {
                 Some((_, upgraded)) => {
@@ -2511,7 +2516,12 @@ impl Sim {
             // `Control_NextLOD` on the unlock (Lock_Unlock 0x1b0650:23 / case 1's framelist end): the
             // keypad's model becomes its LOD variant and keeps it (see `Lock::lod_next`).
             if l.unlocked || l.burned { l.lod_next = true; }
+            if !l.pending_sounds.is_empty() {
+                let pos = l.pos;
+                for id in l.pending_sounds.drain(..) { lock_sounds.push((id, pos)); }
+            }
         }
+        for (id, pos) in lock_sounds { self.drones.audio.play3d(id, pos, None); }
         self.pda_tick();
         self.smoke.retain(|s| !s.dead());
         let (trigger, reload) = if self.disabled { input = Default::default(); (false, false) } else { (trigger, reload) };
@@ -2526,7 +2536,15 @@ impl Sim {
         // (`death_tick` inside the drones' tick), and the other machines' replica of this slot
         // (`step_net_remotes`) stops on the shared state — so must the local body.
         let net_dead = self.net_dead();
-        let (mut input, trigger, reload, use_key) = if self.drones.death.active || menu_pause || net_dead {
+        // mission-hold: `Mission_Update` case 7 runs `GS_PausePlayer(1, 0)` EVERY tick of the
+        // banner hold — the 240-tick success hold (state 6) and the fail/death holds (states 2/3)
+        // alike [M 0x182c60:123-130 — the case body is unconditional in `InternalState` 7]. The
+        // player's input dies while the world and the HUD keep running (the banner's own message
+        // ticks down through `Text_UpdateMsg`, which no pause gate covers). Without the gate Bond
+        // kept walking/shooting under the "Mission Complete" box on 07000004 (level-04-mission-
+        // complete-early), where the game freezes him until case 4's load.
+        let mission_hold = self.drones.mission.internal == 7;
+        let (mut input, trigger, reload, use_key) = if self.drones.death.active || menu_pause || net_dead || mission_hold {
             (Default::default(), false, false, false)
         } else { (input, trigger, reload, use_key) };
         // gunimp: while a mounted gun owns the player (`GunImp_Activate` 0x132f00 — the 0xc
@@ -2849,7 +2867,24 @@ impl Sim {
             let straddle_cells = bond_cel
                 .map(|c| self.world.debug_straddle(c, [pc[0], pc[1] + ao, pc[2]], [pc[0], pc[1] + bo, pc[2]], ar))
                 .unwrap_or_default();
-            let ctx = nf_game::player::LadderCtx { ladders: &self.ladders, wires: &self.wires, wire_anims: Some(&self.wire_anims), water, sink, creepwalls: &self.creepwalls, level_bump_5fb: false, straddle: &straddle_cells };
+            // The near bots' collision capsules for the actor-actor push (`Collide_Jointy`
+            // 0x1ec180:229-281 via `LadderCtx::bot_capsules`): the game's bot hittest arms
+            // [M NDrone2_Collision 0x140e90:91-121 — top = pos + up·r, bottom = pos + up·(r − h),
+            // r 0.4 default / 0.55 kind 0xc, h the anim height word +0xa0 with default 1.0
+            // [M NDrone2_DefaultInit 0x14b300:48]] — upright bots (up = (0,1,0)), so the arms are
+            // pos + (0, ±0.4, 0) at h 1.0. Only the NEAR bots carry an ON capsule [M
+            // DroneFunc_NearPlayerCollision 0x14b190 + NDrone2_DoCollision 0x149ec8 — the kind
+            // word +0x464 goes 0x800 only within 2.0 of the player]; the 0.4 default stands for
+            // every bot here [S unverified: the sleeper's own kind word (the 0xc → 0.55 arm) is
+            // not read by the port — a live check item].
+            let bot_capsules: Vec<([f32; 3], [f32; 3], f32)> = {
+                let bp = self.bond.pos;
+                self.drones.list.iter()
+                    .filter(|x| x.enabled && ((x.pos[0] - bp[0]).powi(2) + (x.pos[1] - bp[1]).powi(2) + (x.pos[2] - bp[2]).powi(2)) < 2.0 * 2.0)
+                    .map(|x| ([x.pos[0], x.pos[1] + 0.4, x.pos[2]], [x.pos[0], x.pos[1] - 0.6, x.pos[2]], 0.4f32))
+                    .collect()
+            };
+            let ctx = nf_game::player::LadderCtx { ladders: &self.ladders, wires: &self.wires, wire_anims: Some(&self.wire_anims), water, sink, creepwalls: &self.creepwalls, level_bump_5fb: false, straddle: &straddle_cells, bot_capsules: &bot_capsules };
             // The third-icon context [M ThirdIcon_Update 0x196e80 + Player_CollisionHandler 0x1949a8:22]:
             // the tick starts with +0x95F = 0xFF (none), then every ENABLED icon (its param-1 channel on,
             // or param 1 == 0 = always [M ThirdIcon_Create 0x197070:27-32]) whose straddle-cel set holds
@@ -3287,6 +3322,14 @@ impl Sim {
             match e {
                 nf_game::nis::Request::PlayerDisable => {
                     self.disabled = true;
+                    // nis-timer-pause: the game's event-4 arm is Player_Disable +
+                    // PlarStat_LogTimerPause(0) [M 0x1d94c0:118-121] — the cut-scene freezes the
+                    // mission clock (the accumulator runs only while +0x34 == 0, [M 0x1995a0:9-14]);
+                    // Script_Free's re-enable unpauses it [M 0x1da880:44-48]. Without this, both of
+                    // 07000007's cut-scenes (SP #419 3000 ticks, SP #420 4326 ticks) keep the
+                    // timer row counting.
+                    // SP slot 0 [M — the game's call passes slot 0].
+                    self.drones.progress.stats[0].log_timer_pause();
                     // goggles: `Player_SetCamMode` 0x195928 clears viewer+0x236 on every camera
                     // -mode change (arms :15/:23/:27/:40) and `Camera_Reset` 0x1b9af0:50 clears
                     // it too — a cut-scene's cam hand-off kills the goggles view. The battery
@@ -3312,6 +3355,9 @@ impl Sim {
                     }
                 }
                 nf_game::nis::Request::PlayerEnable { at, .. } => {
+                    // nis-timer-pause: Script_Free's arm is Player_Enable +
+                    // PlarStat_LogTimerUnpause(0) [M 0x1da880:44-48 — +0x2C := the clock, +0x34 := 0].
+                    self.drones.progress.stats[0].log_timer_unpause(nf_game::progress::PlrMissionStats::now_100ths(self.drones.frame));
                     if let Some(m) = at {
                         self.bond = nf_game::player::Bond::stand_at(&self.world, [m[3][0], m[3][1], m[3][2]], m[2][0].atan2(m[2][2]));
                     }
@@ -4810,13 +4856,17 @@ impl Sim {
             }
         }
         if use_edge && !crept {
-            // garage-lift-calls: the SP arm of `Player_Activate` picks from Bond's HEAD
-            // (`Player_GetHeadPos` [M 0x1a5170:100]), not the render camera — the camera hangs
-            // ~2.5 behind Bond and its sphere fell short of the 07000009 lift-call stations'
-            // entities. The doors/triggers/monitors keep the camera origin their reaches were
-            // tuned to (see player_use_doors). The last argument is Bond's body position
+            // use-pick-head: EVERY arm of `Player_Activate` picks from Bond's HEAD — the game
+            // builds the use point at `Player_GetHeadPos` + the viewer direction [M 0x1a5170:100-108,
+            // 0x195aa0] — never from the render camera. (run()'s `camera` param is step_bond's
+            // `self.bond.head()` binding, so this was already the head at runtime; passing the head
+            // EXPLICITLY removes the misnamed-arg trap that read as a camera pick — the free-cam
+            // harness `step()` binds the real camera, and its use_key is hard false, so the E path
+            // can never regress to it.) The arms: doors + the deferred trigger half + monitors take
+            // `head`; the SP/switch/PCQWORM arm takes `sp_head` (garage-lift-calls); the SS/gunimp
+            // pick below re-derives the same head. The last argument is Bond's body position
             // (obj+0xC0) — `SP_Activate` 0x1dc338:51-53's facing-dot input (use-pick-sp-standins).
-            self.drones.player_use_doors(&d, camera, look, self.drones.frame, self.bond.head(), self.bond.pos);
+            self.drones.player_use_doors(&d, self.bond.head(), look, self.drones.frame, self.bond.head(), self.bond.pos);
             // `Player_Activate` 0x1a5170's ONE pick for every class [M :100-108]: a sphere of radius
             // exactly 1.0 (asm 0x1a5278 `lui $at, 0x3f80`) centred at head + view dir (`Mat_GetDir`
             // of the slot viewer's matrix, asm 0x1a5250), through Collide_SphereIntersect 0x1ec940
@@ -4827,7 +4877,9 @@ impl Sim {
             // source, the same data Doors::create loads); the game's glist refine
             // (Intersect_PointGeom 0x1e92d8) is not ported — a mesh veto of a sphere hit is left
             // to the live checks (the report lists them).
-            let head = [camera[0], camera[1], camera[2]];
+            // use-pick-head: the SS/gunimp pick's origin is the SAME head [M 0x1a5170:100-108] —
+            // one pick serves every class, so no arm may keep its own origin.
+            let head = self.bond.head();
             let pick_c = [head[0] + look[0], head[1] + look[1], head[2] + look[2]];
             let mut ss_hits: Vec<(f32, usize)> = Vec::new();
             for (i, s) in self.drones.sss.list.iter().enumerate() {
@@ -6077,6 +6129,9 @@ pub struct Scene {
     /// The 0x2E locks' placement matrices (`Lock::create` order): where the keypads' posed slots
     /// draw the placed object or its LOD variant.
     pub lock_matrices: Vec<Mat4>,
+    /// The 0x34 placements the build gave posed slots (the camera slots follow them; the sim's
+    /// gunimp list may be emptied by the MP Gun Emplacements setting, the slot layout is not).
+    pub gunimp_placements: usize,
     pub ladders_drawn: usize,
     /// How many grapple-point (0x3A) placements got a World-layer instance (fix-grapple-hook's
     /// draw sweep). The game draws each point's pulley mesh exactly once through the dynamic-object
@@ -6474,6 +6529,8 @@ fn casing_matrix(c: &nf_game::casing::Casing) -> Mat4 {
 /// re-uploads lights [M View_DrawObjList 0x1e69a0:75-98] — so the gun takes NO point lights. The renderer
 /// zeroes them for these draws; `node` is otherwise read only for World cel culling.
 pub const VIEW_MODEL_NODE: u32 = u32::MAX - 1;
+/// Posed slots per gun emplacement: the base object, then one per `gunimp::TURRET_ARTS` gun child.
+const GUNIMP_SLOTS: usize = 1 + nf_game::gunimp::TURRET_ARTS.len();
 
 /// Tracer slots (bullets drawn at once).
 const TRACER_SLOTS: usize = 32;
@@ -6510,6 +6567,10 @@ fn z_basis(dir: [f32; 3], pos: [f32; 3]) -> [[f32; 4]; 4] {
 /// INVISIBLE; the slot
 /// mapping below is therefore newest-first, so an overflow drops the oldest exactly like the ring.
 const GRENADE_SLOTS: usize = 512;
+/// The projectile-slot base (the grenade range's size) — the drone bullet slots start here
+/// (`GRENADE_SLOTS + bullet_index`, the same indices the tracer attachments use). Public for
+/// the draw-list tests.
+pub const PROJECTILE_SLOT_BASE: usize = GRENADE_SLOTS;
 /// Bond's live projectiles drawn at once (rapid fire keeps 100+ rockets in the air; the game draws
 /// every bullet object — the old 8 hid the rest).
 const PLAYER_BULLET_SLOTS: usize = 32;
@@ -6780,15 +6841,17 @@ pub fn build(level: &Level, cels_only: bool, skeletons: &HashMap<u8, Skeleton>, 
                 && p.params.iter().find(|(j, _)| *j == 2).map_or(false, |&(_, v)| v > difficulty)
         };
         char_instances.retain(|(_, i)| !gated(&i.placement));
-        // drone-skins-g021: the drone's object is built from the hash `NDrone2_DefaultInit`
-        // 0x14b300:563-565 hands `AnimObjectNew` — the placement param 0 as the captain swap
-        // (:536-555) left it in +0xe0 (the sim's `dr.skin`). `character_instances` keyed the
-        // raw param, so a placement whose raw skin no session container carries (07000014's
-        // 0x050000b1 — carried only by 07000015/16 [D], which the story loads after 14) drew
-        // nothing even for a captain, whose swapped skin (kind 6 → 0x05000093, kind 7 →
-        // 0x050000b2) the game resolves from the level's own archive. The non-captains stay
-        // skinless exactly like the game's `AnimObjectNew` 0x1be910:44-46 miss. Raw-present
-        // placements keep their pre-existing draw path untouched.
+        // drone-skins-g021 (corrected by cite-14-skinless-drones): the drone's object is built from
+        // the hash `NDrone2_DefaultInit` 0x14b300:563-565 hands `AnimObjectNew` — Drone+0xe0 after
+        // the 07000014 param-0 rewrite (:82-95: 0x050000b1 → 0x0500008c on GameState+12 ==
+        // 0x07000014, BEFORE the kind switch) and the captain swap (:536-555; the sim's `dr.skin`
+        // mirrors both). `character_instances` keyed the raw param, so a placement whose final
+        // +0xe0 hash differs from it needs the rebuild here: 07000014's 0x050000b1 placements
+        // (the skin is carried only by 07000015/16 [D], which the story loads after 14 — the raw
+        // request would draw nothing) and the captains (kind 6 → 0x05000093, kind 7 → 0x050000b2,
+        // both in the own archive). A final hash the table lacks draws nothing — the game's
+        // `AnimObjectNew` 0x1be910:44-46 miss. Raw-present placements keep their pre-existing
+        // draw path untouched.
         let mut drone_skins: HashMap<[u32; 3], u32> = HashMap::new();
         if let (Some(d), Some(m)) = (drones, level.main_map()) {
             // `captain_skin` is pure (params + property tables + difficulty): the drones do not
@@ -6799,25 +6862,33 @@ pub fn build(level: &Level, cels_only: bool, skeletons: &HashMap<u8, Skeleton>, 
                     let param = |k: u32| p.params.iter().find(|(j, _)| *j == k).map(|&(_, v)| v).unwrap_or(0);
                     let raw = param(0);
                     if raw >> 24 != 5 { continue; }
-                    let Some(swapped) = nf_game::drone::captain_skin(raw, &param, props, d.level_id, difficulty) else { continue; };
-                    if swapped == raw { continue; }
-                    // The game builds the captain's object from the swapped record: the draw
-                    // resolves the swapped hash (`NDrone2_DefaultInit` 0x14b300:563-565), so the
-                    // raw skin's meshes give way to the swapped skin's. When the raw skin is not
-                    // in the table (07000014's 0x050000b1 — carried only by 07000015/16 [D],
-                    // which the story loads after 14) `character_instances` built no instance at
-                    // all and the swapped skin's mains are ADDED; a swapped skin the table lacks
-                    // (the game's `AnimObjectNew` 0x1be910:44-46 miss) draws nothing.
+                    // The 07000014 rewrite [M 0x14b300:82-95]: with GameState+12 == 0x07000014 the
+                    // param-0 skin 0x050000b1 is rewritten to 0x0500008c in Drone+0xe0 BEFORE any
+                    // read — the kind switch, the captain block and the `AnimObjectNew` request
+                    // ([M 0x14b300:563-565]) all see the rewritten value, captain or not. The raw
+                    // 0x050000b1 never reaches the skin table (carried only by 07000016 entry 139
+                    // @0x8594a0 / 07000015 entry 102 @0x609e60 [D], which the story loads after 14);
+                    // 0x0500008c is in 07000014's own archive [D], so the placement resolves.
+                    let request = if raw == 0x0500_00b1 && d.level_id == 0x0700_0014 { 0x0500_008c } else { raw };
+                    let swapped = nf_game::drone::captain_skin(request, &param, props, d.level_id, difficulty);
+                    let final_skin = swapped.unwrap_or(request);
+                    if final_skin == raw { continue; } // the ordinary path's instances are already keyed param0
+                    // The game builds the object from the final +0xe0 hash (`NDrone2_DefaultInit`
+                    // 0x14b300:563-565 — the rewritten param or the captain swap), so the draw
+                    // resolves the final hash and the raw skin's meshes give way to it. When the
+                    // raw skin is not in the table (07000014's 0x050000b1 placements) no instance
+                    // was built at all and the final skin's mains are ADDED; a final skin the
+                    // table lacks (the game's `AnimObjectNew` 0x1be910:44-46 miss) draws nothing.
                     let bits = p.translation.map(f32::to_bits);
                     char_instances.retain(|(_, i)| i.placement.translation.map(f32::to_bits) != bits);
-                    if let Some(sk) = level.skins.get(&swapped) {
+                    if let Some(sk) = level.skins.get(&final_skin) {
                         for h in sk.main.iter().flatten() {
                             if let Some(&(map, object)) = level.by_hash.get(h) {
                                 char_instances.push((Some(pi), Instance { map, object, matrix: nf_formats::placement::object_matrix(p.rotation, p.translation), placement: p.clone() }));
                             }
                         }
                     }
-                    drone_skins.insert(bits, swapped);
+                    drone_skins.insert(bits, final_skin);
                 }
             }
         }
@@ -7036,8 +7107,9 @@ pub fn build(level: &Level, cels_only: bool, skeletons: &HashMap<u8, Skeleton>, 
             let raw_hash = inst.placement.params.iter().find(|(i, _)| *i == 0).map(|&(_, v)| v).unwrap_or(0);
             // drone-skins-g021: the captain-swapped drone draws its swapped skin (`+0xe0`,
             // `NDrone2_DefaultInit` 0x14b300:563-565) — `drone_skins` only carries the
-            // raw-missing 0x0f placements (see the extension above); everything else keeps
-            // the raw param.
+            // 0x0f placements whose final +0xe0 hash differs from the raw param (the
+            // rewritten 0x050000b1 and the captain swaps, see the extension above);
+            // everything else keeps the raw param.
             let skin_hash = drone_skins.get(&inst.placement.translation.map(f32::to_bits)).copied().unwrap_or(raw_hash);
             let Some(skin) = level.skins.get(&skin_hash) else { continue };
             let Some(skeleton) = skeletons.get(&skin.skeleton) else { continue };
@@ -7444,20 +7516,50 @@ pub fn build(level: &Level, cels_only: bool, skeletons: &HashMap<u8, Skeleton>, 
                 .filter(|p| p.flags & 0xff == 0x2f)
                 .flat_map(|p| [4u32, 5].map(|k| p.params.iter().find(|(i, _)| *i == k).map_or(0, |&(_, v)| v)))
                 .filter(|&h| h != 0).collect()).unwrap_or_default();
+            // fusebox-panel-14: a fusebox placement (0x31) carries its script in param 0 and
+            // `FuseBox_Create` runs it at load [M docs/levels/07000014.md 5; nf-game/fusebox.rs], so
+            // its entity streams (the wires behind the front panel) need draw slots like a placed
+            // player's. Without them the wires exist in `scripts.objects` but nothing draws them --
+            // the opened panel's recess rendered empty.
+            let fusebox_scripts: Vec<u32> = level.maps[m].placements.iter()
+                .filter(|p| p.flags & 0xff == 0x31)
+                .filter_map(|p| p.params.iter().find(|(k, _)| *k == 0).map(|&(_, v)| v))
+                .filter(|&v| v >= 0x0600_0000)
+                .collect();
             let mut hashes: Vec<u32> = players.iter().flat_map(|p| p.scripts).filter(|&h| h != 0)
                 .chain(switch_scripts)
                 .chain(copter_scripts)
+                .chain(fusebox_scripts.iter().copied())
                 .chain([0x0600_0052u32, 0x0600_0027, 0x0600_004f, 0x0600_07c4]).collect();
             let mut queued: std::collections::HashSet<u32> = hashes.iter().copied().collect();
+            // lift-indicators-09: a SUB-script's entities need one draw slot per LIVE copy — every placed
+            // SP running a parent script starts the sub once per `Script_SubScriptStart` op [M 0x1db050],
+            // so 07000009's two cab SPs (0x060007D/0x060007E) start 0x0600064E/0x0600064F three times each
+            // and the sim holds six indicator plates / six button plates. The old count (placed SPs whose
+            // OWN scripts contain the hash) read 1 for every sub hash, and `Sim::script_entity_k` serves
+            // only the newest match — one cab's plates drew, the other cab's never did. Accumulated in the
+            // sub walk (parents may pop after their subs), read in the Entity arm below.
+            let mut sub_copies: std::collections::HashMap<u32, usize> = std::collections::HashMap::new();
+            let mut order: Vec<u32> = Vec::new();
             while let Some(h) = hashes.pop() {
+                order.push(h);
                 let Some(nis) = level.nis.get(&h) else { continue };
+                let running = players.iter().filter(|p| p.scripts.contains(&h)).count().clamp(1, 16);
                 for st in nis.streams.iter() {
                     for cmd in st.decode() {
                         if let nf_formats::nis::Cmd::SubScript { hash: sub, .. } = cmd {
-                            if sub != 0 && queued.insert(sub) { hashes.push(sub); }
+                            if sub != 0 {
+                                *sub_copies.entry(sub).or_insert(0) += running;
+                                if queued.insert(sub) { hashes.push(sub); }
+                            }
                         }
                     }
                 }
+            }
+            // The slots are created after the WHOLE walk so every sub hash's copy count is final
+            // (a parent may pop after its sub); `order` preserves the original pop order, so the
+            // attachment indices match the pre-fix build.
+            for &h in &order {
                 let Some(nis) = level.nis.get(&h) else { continue };
                 for (si, st) in nis.streams.iter().enumerate() {
                     for cmd in st.decode() {
@@ -7520,7 +7622,13 @@ pub fn build(level: &Level, cels_only: bool, skeletons: &HashMap<u8, Skeleton>, 
                                 // copy of the stream's entities (07000014's three vent lids are nine SPs on
                                 // 0x06000A3B — one slot drew only the newest lid; the hatch under the spawn
                                 // stayed invisible while it opened).
-                                let copies = players.iter().filter(|p| p.scripts.contains(&h)).count().clamp(1, 16);
+                                // fusebox-panel-14: each fusebox placement runs its own player of the
+                                // same script, so its copies count toward the slot count the way a
+                                // placed SP's does.
+                                let boxes = fusebox_scripts.iter().filter(|&&v| v == h).count();
+                                let copies = sub_copies.get(&h).copied()
+                                    .unwrap_or_else(|| players.iter().filter(|p| p.scripts.contains(&h)).count() + boxes)
+                                    .clamp(1, 16);
                                 let inst = Instance { map, object, matrix: ident, placement: placement.clone() };
                                 for k in 0..copies {
                                     add_instance(level, &inst, Layer::Character, Some((0, Some(attachments.len() as u32))), &mut groups, None, None, None, None, [1.0; 3], &room_cels, u32::MAX, u32::MAX);
@@ -8038,6 +8146,9 @@ pub fn build(level: &Level, cels_only: bool, skeletons: &HashMap<u8, Skeleton>, 
                 // "Lock - KeypadUnlocked" [D block 0x27]) rides the posed slot space below, so the
                 // unlock's `Control_NextLOD` can swap it.
                 if kind == 0x2e && level.maps[map].lod_target(object).is_some() { *misc_drawn.entry(kind).or_default() += 1; continue; }
+                // A gun emplacement (0x34) turns with its mount: its base and gun child ride the posed
+                // slot space below (`GunImp_Update` 0x1320d8:162-173 re-poses both every tick).
+                if kind == 0x34 { *misc_drawn.entry(kind).or_default() += 1; continue; }
                 // The 0x800 dim, the same rule the main static loop applies (View_SetupRenderModes_Tweak 0x1e5888).
                 let mult = if obj.flags & 0x800 != 0 {
                     let mx = nf_formats::placement::object_matrix(p.rotation, p.translation);
@@ -8083,6 +8194,7 @@ pub fn build(level: &Level, cels_only: bool, skeletons: &HashMap<u8, Skeleton>, 
         // cone along the aim, the spot on its ray hit, the corona a camera billboard (docs/systems/world-objects.md).
         crate::phase_mark("b5f coronas/wires/ladders/misc", t); t = std::time::Instant::now();
         let mut lock_matrices: Vec<Mat4> = Vec::new();
+        let mut gunimp_placements = 0usize;
         if let Some(m) = level.main_map() {
             for (pi, pl) in nf_game::searchlight::part_placements(&level.maps[m].placements).into_iter().enumerate() {
                 let p = &level.maps[m].placements[pl];
@@ -8160,6 +8272,64 @@ pub fn build(level: &Level, cels_only: bool, skeletons: &HashMap<u8, Skeleton>, 
                 for (k, o) in [object, next].into_iter().enumerate() {
                     let inst = Instance { map, object: o, matrix: mx, placement: p.clone() };
                     add_instance(level, &inst, Layer::Character, None, &mut groups, None, None, Some((lock_base + 2 * li + k) as u16), None, [1.0; 3], &room_cels, u32::MAX, u32::MAX);
+                }
+            }
+            // The gun emplacements (0x34, `Props::create`'s order — every 0x34 placement), after the
+            // locks: GUNIMP_SLOTS per mount — the placement's base object, then one slot per
+            // `TURRET_ARTS` gun child (`GunImp_Create` 0x131f20:85-89 builds the child from
+            // `TurretGuns[ext+0x9d].art`; the MP weapon set picks the entry later in this build, so
+            // every art gets a slot and `frame_state` shows the mount's own). Base at `base_matrix`,
+            // gun at `barrel_matrix` [M GunImp_Update 0x1320d8:162-173].
+            let n_locks = level.maps[m].placements.iter().filter(|p| p.flags & 0xff == 0x2e).count();
+            let gun_base = lock_base + 2 * n_locks;
+            if cels_only {
+                for (gi, p) in level.maps[m].placements.iter().filter(|p| p.flags & 0xff == 0x34).enumerate() {
+                    let slot0 = gun_base + GUNIMP_SLOTS * gi;
+                    let mx = nf_formats::placement::object_matrix(p.rotation, p.translation);
+                    let target = if p.by_hash() { level.by_hash.get(&p.hashcode).copied() }
+                        else if (p.index as usize) < level.maps[m].objects.len() { Some((m, p.index as usize)) } else { None };
+                    let has_gfx = |(cm, co): (usize, usize)| level.maps[cm].objects[co].gfx.leaves.iter().any(|l| !l.batches.is_empty());
+                    if let Some((map, object)) = target.filter(|&t| has_gfx(t)) {
+                        let inst = Instance { map, object, matrix: mx, placement: p.clone() };
+                        add_instance(level, &inst, Layer::Character, None, &mut groups, None, None, Some(slot0 as u16), None, [1.0; 3], &room_cels, u32::MAX, u32::MAX);
+                    }
+                    for (a, art) in nf_game::gunimp::TURRET_ARTS.iter().enumerate() {
+                        let Some((map, object)) = level.by_hash.get(art).copied().filter(|&t| has_gfx(t)) else { continue };
+                        let inst = Instance { map, object, matrix: mx, placement: p.clone() };
+                        add_instance(level, &inst, Layer::Character, None, &mut groups, None, None, Some((slot0 + 1 + a) as u16), None, [1.0; 3], &room_cels, u32::MAX, u32::MAX);
+                    }
+                }
+            }
+            gunimp_placements = level.maps[m].placements.iter().filter(|p| p.flags & 0xff == 0x34).count();
+            // The security cameras (0x28, `Sensors::create`'s order and spawn gate), after the gun
+            // emplacements: three slots each — the camera body (the placement's own glist, `Sensor_Create`
+            // 0x1af010 stores it at obj+0xD8) at the swept/tracked pose `obj+0x90`, the mount proxy
+            // (param 7) re-aligned upright to the pose's direction by `Sensor_SetBeam` 0x1af398:50-54
+            // every tick [M], and the sight beam: the lens proxy (param 0) is a gfx object whose glist
+            // (`hashtable_set_object_to_entity_gfx`, 0x1af010:106-107) `Sensor_SetBeam` poses at the
+            // camera's own matrix (`Mat_Copy(lens+0x90, obj+0x90)` 0x1af398:58) and stretches to the
+            // beam's hit length via obj+0xE8 (range 0x1af398:72, or the mask-8 ray's first-hit
+            // distance :78) [M]. The draw is the object's plain glist path (`View_DrawObjectGlist`
+            // 0x1e6780:43-45 — the Camera_Beam glist's flags 0x241 [D probe] carry no bit-8 billboard
+            // bit) with the object scale riding the mesh's length axis: the create ORs the
+            // OnlyScaleZ bit (0x1af010:102) and the Camera_Beam mesh is unit-length along local +z
+            // (z −0.0085..1.0283, x/y ±0.16 [D probe 0x02000360]), so the drawn beam runs lens →
+            // hit at constant cross-section. State 3 clears the lens's display mask (0x1af618:248-250)
+            // — no beam while disabled.
+            let cam_base = gun_base + GUNIMP_SLOTS * gunimp_placements;
+            if cels_only {
+                for (si, p) in level.maps[m].placements.iter().filter(|p| p.flags & 0xff == 0x28 && p.flags & 0xa000 == 0).enumerate() {
+                    let mx = nf_formats::placement::object_matrix(p.rotation, p.translation);
+                    let has_gfx = |(cm, co): (usize, usize)| level.maps[cm].objects[co].gfx.leaves.iter().any(|l| !l.batches.is_empty());
+                    let body = if p.by_hash() { level.by_hash.get(&p.hashcode).copied() }
+                        else if (p.index as usize) < level.maps[m].objects.len() { Some((m, p.index as usize)) } else { None };
+                    let mount = p.params.iter().find(|(k, _)| *k == 7).map(|&(_, v)| v).filter(|&h| h != 0).and_then(|h| level.by_hash.get(&h).copied());
+                    let beam = p.params.iter().find(|(k, _)| *k == 0).map(|&(_, v)| v).filter(|&h| h != 0).and_then(|h| level.by_hash.get(&h).copied());
+                    for (k, t) in [body, mount, beam].into_iter().enumerate() {
+                        let Some((map, object)) = t.filter(|&t| has_gfx(t)) else { continue };
+                        let inst = Instance { map, object, matrix: mx, placement: p.clone() };
+                        add_instance(level, &inst, Layer::Character, None, &mut groups, None, None, Some((cam_base + 3 * si + k) as u16), None, [1.0; 3], &room_cels, u32::MAX, u32::MAX);
+                    }
                 }
             }
             // Level-placed pickups (`Pickup_Create` 0x18dda0): `View_DrawObjectGlist` 0x1e6780 draws
@@ -8412,6 +8582,9 @@ pub fn build(level: &Level, cels_only: bool, skeletons: &HashMap<u8, Skeleton>, 
             // end and MP, the call returns at once — the port's spawn does the same job by doing nothing
             // (docs/systems/anim-debug-and-queries.md, docs/port-map/unreached.md §863).
             let bond = nf_game::player::Bond::stand_at(&world, p0, yaw0);
+            // The spawn arrival settle is NOT armed on this structural fallback: the level start
+            // re-places the bond in lib.rs (the `Player_Init` 0x1910f8 path) and arms it there
+            // (`arm_spawn_settle` doc — the [L] evidence is the boot's level-start placement).
             let mut drones = nf_game::drone::Drones::new(list, rng);
             drones.lights = lights;
             // The selected difficulty BEFORE the creates: every create-time gate reads it
@@ -8635,7 +8808,7 @@ pub fn build(level: &Level, cels_only: bool, skeletons: &HashMap<u8, Skeleton>, 
                 }
             }
         }
-        Scene { shard_tex, cels: room_cels, cel_graph, streams: None, music_files: None, music_tables: None, sound_bank: None, sound_spares: Vec::new(), snow_texture, vertices, indices, materials, textures, hud_textures, woman: None, hud, script_billboards, view_models, mp_bodies, mp_body_weapons, mp_char_bodies, mp_anim_sets, fog, bounds, start, stats, characters, char_vertex_start, char_verts, sequences, attachments, sim, colliders, models_0x800, npc_pool, ladders_drawn, grapple_hooks_drawn, misc_drawn, lock_matrices }
+        Scene { shard_tex, cels: room_cels, cel_graph, streams: None, music_files: None, music_tables: None, sound_bank: None, sound_spares: Vec::new(), snow_texture, vertices, indices, materials, textures, hud_textures, woman: None, hud, script_billboards, view_models, mp_bodies, mp_body_weapons, mp_char_bodies, mp_anim_sets, fog, bounds, start, stats, characters, char_vertex_start, char_verts, sequences, attachments, sim, colliders, models_0x800, npc_pool, ladders_drawn, grapple_hooks_drawn, misc_drawn, lock_matrices, gunimp_placements }
     }
 
     /// Sequence index and frame a character shows after `ticks` 60 Hz updates: its start script (`choice = None`) or the
@@ -9061,7 +9234,18 @@ pub fn build(level: &Level, cels_only: bool, skeletons: &HashMap<u8, Skeleton>, 
                     }
                 } else if (slot as usize) < GRENADE_SLOTS + TRACER_SLOTS {
                     match s.drones.bullets.get(slot as usize - GRENADE_SLOTS) {
-                        Some(b) if b.state == 1 => (b.pos, b.dir, s.weapons.projectile_mesh(b.weapon as usize)),
+                        // camera-beam-satchel-draw: a LANDED satchel charge draws aligned to the
+                        // NEGATED landing normal (the game's stick pose [M Bullet_CollisionHandler
+                        // 0x12ce80:256-266]) — `Bullet_update` case 3 zeroes the flight dir
+                        // [M 0x12edec] and the old read collapsed the mesh to a point (align2dir
+                        // of the zero vector zeroes the rotation rows).
+                        Some(b) if b.state == 1 => {
+                            let dir = match (b.landed, b.stick_normal) {
+                                (true, Some(n)) => [-n[0], -n[1], -n[2]],
+                                _ => b.dir,
+                            };
+                            (b.pos, dir, s.weapons.projectile_mesh(b.weapon as usize))
+                        }
                         _ => return far,
                     }
                 } else {
@@ -9181,27 +9365,43 @@ pub fn build(level: &Level, cels_only: bool, skeletons: &HashMap<u8, Skeleton>, 
                         // satchel-stick2: NO `stuck` gate — `Bullet_DoTrails`' 0x3b tail spawns the
                         // two digit objects EVERY tick in every state < 2 [M 0x12d890:418-553; the
                         // sim writes `digits` in flight too — grenade.rs's tail runs before the
-                        // stuck early-out], so the numbers ride the satchel from the throw. The old
-                        // `g.stuck` filter hid the numbers: a
-                        // satchel that hadn't stuck yet drew nothing. In flight `phase.normal` is
-                        // the spawn's [0, 1, 0] placeholder (the stick overwrites it with the
+                        // stuck early-out], so the numbers ride the satchel from the throw. In flight the thrown one's
+                        // `phase.normal` is the spawn's [0, 1, 0] placeholder (the stick overwrites it with the
                         // surface normal), so the flight digits stand upright on the satchel [S —
                         // the game aligns them to the bullet's own matrix].
-                        let satchels: Vec<&nf_game::grenade::Grenade> = s.drones.grenades.iter()
+                        // camera-beam-satchel-draw: the source covers BOTH satchel carriers — the
+                        // thrown grenades AND the drone-fired 0x3b bullets (the 4a lift shooters
+                        // [D cameras-turrets.md §3 #286/#287 weapon 0x3d → family 0x3b]) whose
+                        // `Bullet::digits` the sim's DoTrails tail writes every tick [M 0x12d890:418-553].
+                        let mut satchels: Vec<([f32; 3], [f32; 3], Option<(u8, u8)>)> = s.drones.grenades.iter()
                             .filter(|g| g.weapon_type == 0x3b && g.state < 2 && g.phase.is_some())
+                            .map(|g| {
+                                let p = g.phase.as_ref().unwrap();
+                                (g.pos, [-p.normal[0], -p.normal[1], -p.normal[2]], p.digits)
+                            })
                             .collect();
-                        let Some(g) = satchels.get(slot) else { return far };
-                        let p = g.phase.as_ref().unwrap();
-                        let Some((tens, units)) = p.digits else { return far };
+                        for b in s.drones.bullets.iter()
+                            .filter(|b| b.state < 2 && b.digits.is_some() && b.family(&s.weapons) == 0x3b)
+                        {
+                            // A landed charge aligns to its stick normal; a flying one keeps the
+                            // upright placeholder the thrown arm uses [S as above].
+                            let dir = match (b.landed, b.stick_normal) {
+                                (true, Some(n)) => [-n[0], -n[1], -n[2]],
+                                _ => [0.0, 1.0, 0.0],
+                            };
+                            satchels.push((b.pos, dir, b.digits));
+                        }
+                        let Some((pos, align, digits)) = satchels.get(slot) else { return far };
+                        let Some((tens, units)) = digits else { return far };
                         let digit = if kind == 4 { tens } else { units };
-                        if mesh != 0x0200_0791 + digit as u32 { return far; }
-                        let mut m = nf_game::searchlight::align2dir([-p.normal[0], -p.normal[1], -p.normal[2]], [0.0, 1.0, 0.0], [1.0, 0.0, 0.0]);
+                        if mesh != 0x0200_0791 + *digit as u32 { return far; }
+                        let mut m = nf_game::searchlight::align2dir(*align, [0.0, 1.0, 0.0], [1.0, 0.0, 0.0]);
                         let (x, y, z) = (m[0], m[1], m[2]);
                         let (lx, ly, lz) = if kind == 4 { (-0.03f32, 0.032f32, 0.06f32) } else { (0.03, 0.032, 0.06) };
                         m[3] = [
-                            g.pos[0] + x[0] * lx + y[0] * ly + z[0] * lz,
-                            g.pos[1] + x[1] * lx + y[1] * ly + z[1] * lz,
-                            g.pos[2] + x[2] * lx + y[2] * ly + z[2] * lz,
+                            pos[0] + x[0] * lx + y[0] * ly + z[0] * lz,
+                            pos[1] + x[1] * lx + y[1] * ly + z[1] * lz,
+                            pos[2] + x[2] * lx + y[2] * ly + z[2] * lz,
                             1.0,
                         ];
                         m
@@ -9458,7 +9658,39 @@ pub fn build(level: &Level, cels_only: bool, skeletons: &HashMap<u8, Skeleton>, 
     /// matrix, the other is `None` (collapsed). `Control_NextLOD` 0x1349b0 is the swap (`Lock::lod_next`).
     fn lock_slot(&self, s: &Sim, k: usize) -> Option<Mat4> {
         let j = k.checked_sub(s.drones.doors.list.len() + s.drones.sss.list.len() + s.drones.breaks.list.len())?;
-        let l = s.drones.locks.get(j / 2)?;
+        let Some(l) = s.drones.locks.get(j / 2) else {
+            // Past the locks: the gun emplacements, GUNIMP_SLOTS each — slot 0 the base at
+            // `base_matrix`, slot 1 + a the `TURRET_ARTS[a]` gun child at `barrel_matrix`, shown only
+            // when it is this mount's art [M GunImp_Update 0x1320d8:162-173].
+            let g = j.checked_sub(2 * s.drones.locks.len())?;
+            if g < GUNIMP_SLOTS * self.gunimp_placements {
+                let gi = s.drones.props.gunimps.get(g / GUNIMP_SLOTS)?;
+                return match g % GUNIMP_SLOTS {
+                    0 => Some(gi.base_matrix()),
+                    p => (gi.art_slot() == Some(p - 1)).then(|| gi.barrel_matrix()),
+                };
+            }
+            // Past the emplacements: the security cameras, three slots each — the body at the sweep
+            // pose, the mount upright along the pose's direction [M Sensor_SetBeam 0x1af398:50-54],
+            // and the sight beam at the same pose with the lens obj+0xE8 stretch on the mesh's
+            // length axis [M 0x1af398:58,72,78 + 0x1af010:102; the Camera_Beam mesh's +z unit
+            // length, D probe]. State 3 collapses it (the lens display mask cleared [M 0x1af618:248-250]).
+            let c = g - GUNIMP_SLOTS * self.gunimp_placements;
+            let sn = s.drones.sensors.list.get(c / 3)?;
+            return match c % 3 {
+                0 => Some(sn.matrix),
+                1 => Some(sn.mount_matrix()),
+                _ => {
+                    if sn.lens == 0 || sn.state == 3 { return None; }
+                    // `Mat_Copy(lens+0x90, obj+0x90)` [M 0x1af398:58]: the lens rides the camera's
+                    // own pose matrix; the stretch scales the mesh's local z (the game's OnlyScaleZ
+                    // [M 0x1af010:102], the same row-2 scale the port's other beams use).
+                    let mut m = sn.matrix;
+                    for k in 0..3 { m[2][k] *= sn.beam_len; }
+                    Some(m)
+                }
+            };
+        };
         (l.lod_next == (j % 2 == 1)).then(|| self.lock_matrices.get(j / 2).copied()).flatten()
     }
 
@@ -9500,39 +9732,71 @@ pub fn build(level: &Level, cels_only: bool, skeletons: &HashMap<u8, Skeleton>, 
         // fix-facial3: drone-backed characters sample their own playing script's face window — the
         // same source the root-motion path reads (`Drone::script_frame`, the drone's live
         // `anim.script`/`ftime`); the script-object path keeps its live `Obj::Anim` frame.
+        // level-07-guest-faces: a drone whose body anim carries no facial window contributes NO
+        // base window — the blend still runs over a zero base (the game's gameplay base is the
+        // idle marker script's +0x54 buffer, `AnimFacialBlend` 0x1be648 reads only the three
+        // +0x80 marker scripts in gameplay — the body script's marker is 0 [M AnimScriptInit
+        // 0x1c1600:58-61]); the guest's idle anim (07000007 census) carries no face window, so the
+        // zero base is what lets the facial slots animate the face at all.
         let (script_h, frame) = match c.script {
-            Some(src) => s.script_anim(src, c.skin.hashcode)?,
+            Some(src) => { let (h, f) = s.script_anim(src, c.skin.hashcode)?; (Some(h), f) }
             None => {
                 let di = (*s.char_drone.get(ci)?)?;
                 let dr = &s.drones.list[di];
-                (dr.anim.script?, 1.0 + dr.anim.ftime)
+                (dr.anim.script, 1.0 + dr.anim.ftime)
             }
         };
-        let script = s.scripts.get(&script_h)?;
-        // cutscene-faces: the face window is the game's own classifier — the SEQUENCE's flags bit
-        // 0x8 [M AnimProcessScriptCmds 0x1c1b38: `*(int *)(lVar6 + 0xc) >> 3 & 1` on the raw
-        // sequence record; a facial window plays in the script's +0x54 slot via AnimSeqSet
-        // 0x1c7460's param_7 slot pick], the same rule `script_pose_together` poses bones by. The
-        // old `channels.len() == count` probe was fix-facial2's stand-in; the two agree on EVERY
-        // sequence on the disc — the census: 18,244 kind-4 sequences, flags {0x00 × 17363,
-        // 0x01 × 10, 0x08 × 871} and every flags-0x08 one has exactly 22 channels (a body window
-        // is 3·bones + 3·popcount(mask) — always ≡ 0 mod 3, so 22 can never be one). The game
-        // reads the slot buffer as `skin.facial` floats whatever the track carries
-        // [M AnimFacialBlend 0x1be648's uVar9 loop], and `facial_weights` keeps that count guard.
-        let win = script.sequences().filter(|(a, _, _)| (*a as f32) <= frame)
-            .filter_map(|(a, _, q)| s.seqs.get(&q).filter(|sq| sq.flags & 0x8 != 0).map(|sq| (a, q)))
-            .last()?;
-        let seq = s.seqs.get(&win.1)?;
-        let mut out = nf_game::anim::facial_weights(seq, (frame - win.0 as f32 + 1.0).max(1.0), count)?;
+        let mut out = match script_h.and_then(|h| s.scripts.get(&h)) {
+            Some(script) => {
+                // cutscene-faces: the face window is the game's own classifier — the SEQUENCE's
+                // flags bit 0x8 [M AnimProcessScriptCmds 0x1c1b38: `*(int *)(lVar6 + 0xc) >> 3 & 1`
+                // on the raw sequence record; a facial window plays in the script's +0x54 slot via
+                // AnimSeqSet 0x1c7460's param_7 slot pick], the same rule `script_pose_together`
+                // poses bones by. The old `channels.len() == count` probe was fix-facial2's
+                // stand-in; the two agree on EVERY sequence on the disc — the census: 18,244
+                // kind-4 sequences, flags {0x00 × 17363, 0x01 × 10, 0x08 × 871} and every
+                // flags-0x08 one has exactly 22 channels (a body window is 3·bones +
+                // 3·popcount(mask) — always ≡ 0 mod 3, so 22 can never be one). The game reads the
+                // slot buffer as `skin.facial` floats whatever the track carries
+                // [M AnimFacialBlend 0x1be648's uVar9 loop], and `facial_weights` keeps that count
+                // guard.
+                let win = script.sequences().filter(|(a, _, _)| (*a as f32) <= frame)
+                    .filter_map(|(a, _, q)| s.seqs.get(&q).filter(|sq| sq.flags & 0x8 != 0).map(|sq| (a, q)))
+                    .last();
+                match win {
+                    Some((wstart, q)) => {
+                        let seq = s.seqs.get(&q)?;
+                        nf_game::anim::facial_weights(seq, (frame - wstart as f32 + 1.0).max(1.0), count)?
+                    }
+                    // no face window on this script: a script actor keeps the cutscene-faces
+                    // model (None — no morph term; the game reads its never-started facial
+                    // slot's zeroed buffer [M AnimSeqNew 0x1c7248], visually the same neutral).
+                    // A DRONE falls through to the zero base — the facial slots (the talk
+                    // marker) still drive the face there (see below; the 07000007 guests'
+                    // idle anims carry no face window — the frozen-face bug).
+                    None if c.script.is_some() => return None,
+                    None => vec![0.0; count],
+                }
+            }
+            None if c.script.is_some() => return None,
+            None => vec![0.0; count],
+        };
         // fix-facial3: `AnimFacialBlend` (0x1be648) — the drone's facial script slots over the track
         // weights: slot 0 (the idle face) copies straight, slot 1 (the blink) overrides |w| > 0.01.
         // The drone's script-object sibling has no slots (the game's script objects get theirs from
         // the same driver — the difference is [S] unverified (kept out of pass/fail; the tracks
         // dominate there — AnimFacialBlend 0x1be648's per-object slot source not traced).
+        // level-07-guest-faces: slot 2 — the TALK marker 0xe0000002 script `NDrone2_SpeechSFX`
+        // 0x141b00 attached through `AnimFacialAppend` 0x1c6490 (`Drone.facial_talk`/`_start`, the
+        // port's +0x53c) — now feeds the blend too: it overrides |w| > 0.01 over the base, the
+        // game's gameplay talk layer [M 0x1be648's lVar6 arm; the marker set at 0x1c6490 (+0x80 =
+        // 0xe0000002)]. Slot time is the talk clock the op-1 sounds already run on (`now_t = frame
+        // − start + 1`, 1 on the attach tick — drone.rs's op-1 gate [M speech.md §5]); the
+        // window's frame is that minus the window's first frame.
         if c.script.is_none() {
             if let Some(di) = s.char_drone.get(ci).copied().flatten() {
                 let dr = &s.drones.list[di];
-                let now = dr.last_tick;
+                let now = s.drones.frame; // the clock `facial_talk_start` is stamped with (`let frame = self.frame`, Drones::tick_inner)
                 let slot_w = |slot: Option<(u32, u32)>| -> Option<Vec<f32>> {
                     let (h, start) = slot?;
                     if (now as i64) < start as i64 { return None; }
@@ -9543,8 +9807,20 @@ pub fn build(level: &Level, cels_only: bool, skeletons: &HashMap<u8, Skeleton>, 
                 };
                 let idle = slot_w(dr.facial_idle);
                 let blink = slot_w(dr.facial_blink);
-                if idle.is_some() || blink.is_some() {
-                    nf_game::anim::facial_blend(&mut out, idle.as_deref(), blink.as_deref(), None, [0, 0], false);
+                // the talk slot runs the op-1 talk clock: script time now_t = frame − start + 1
+                // (1 on the attach tick), and the window's frame = now_t − first + 1 — the same
+                // rule the body-window path applies (`(frame − wstart + 1)` above; `facial_weights`
+                // takes the frame directly).
+                let talk = dr.facial_talk.and_then(|h| {
+                    let start = dr.facial_talk_start;
+                    if (now as i64) < start as i64 { return None; }
+                    let fscript = s.scripts.get(&h)?;
+                    let (first, _, q) = fscript.sequences().next()?;
+                    let fseq = s.seqs.get(&q)?;
+                    nf_game::anim::facial_weights(fseq, (now - start) as f32 - first as f32 + 2.0, count)
+                });
+                if idle.is_some() || blink.is_some() || talk.is_some() {
+                    nf_game::anim::facial_blend(&mut out, idle.as_deref(), blink.as_deref(), talk.as_deref(), [0, 0], false);
                 }
             }
         }
@@ -11154,6 +11430,7 @@ impl Sim {
                 ladders: &self.ladders, wires: &self.wires, wire_anims: Some(&self.wire_anims),
                 water, sink: input.crouch, creepwalls: &self.creepwalls, level_bump_5fb: false,
                 straddle: &[], // MP remotes carry no per-body cel link yet — no scoping.
+                bot_capsules: &[], // the remotes are bodies, not bots — no actor-actor push.
             };
             b.tick_ctx(&self.world, &ctx, &input);
             // mp-remote-fx: the body's jump launch / head bump sounds play at the flush.

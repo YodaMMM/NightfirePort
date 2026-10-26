@@ -90,7 +90,7 @@ pub fn report_id() -> String {
 // ── the entry save (the carried state a level starts with) ─────────────────────────────────────────────────────
 
 const SAV_MAGIC: &[u8; 4] = b"NFES";
-const SAV_VERSION: u16 = 1;
+const SAV_VERSION: u16 = 2; // 2: + the mission tally (RamSave.tally); 1 still decodes
 
 fn put_u32(o: &mut Vec<u8>, v: u32) { o.extend_from_slice(&v.to_le_bytes()); }
 
@@ -123,6 +123,18 @@ pub fn encode_ram_save(s: &nf_game::player::RamSave) -> Vec<u8> {
             for v in &m.states { put_u32(&mut o, *v); }
         }
     }
+    // v2: the carried mission tally (PlrMissionStats[0] + the bond moments).
+    match &s.tally {
+        None => o.push(0),
+        Some(t) => {
+            o.push(1);
+            let st = &t.stats;
+            for v in [st.detected, st.shots_fired, st.shots_hit_enemy, st.dispatched, st.disabled, st.surrendered,
+                      st.spawned, st.bond_moments, st.bonus_pickups, st.last_time, st.elapsed, st.timer_run] { put_u32(&mut o, v); }
+            o.extend_from_slice(&st.health.to_le_bytes());
+            for v in &t.bond_moments { o.extend_from_slice(&v.to_le_bytes()); }
+        }
+    }
     o
 }
 
@@ -145,7 +157,7 @@ pub fn decode_ram_save(b: &[u8]) -> Result<nf_game::player::RamSave, String> {
     let mut r = R { b, p: 0 };
     if r.take(4)? != SAV_MAGIC { return Err("not an entry.sav".into()); }
     let ver = r.u16()?;
-    if ver != SAV_VERSION { return Err(format!("entry.sav version {ver} (this build reads {SAV_VERSION})")); }
+    if ver != 1 && ver != SAV_VERSION { return Err(format!("entry.sav version {ver} (this build reads 1..={SAV_VERSION})")); }
     let mut s = nf_game::player::RamSave { health: r.f32()?, armour: r.f32()?, weapon: r.u8()?, ..Default::default() };
     let n = r.len()?; s.carried = (0..n).map(|_| r.i16()).collect::<Result<_, _>>()?;
     let n = r.len()?; s.clip = (0..n).map(|_| r.i16()).collect::<Result<_, _>>()?;
@@ -159,6 +171,19 @@ pub fn decode_ram_save(b: &[u8]) -> Result<nf_game::player::RamSave, String> {
         let n = r.len()?;
         let states = (0..n).map(|_| r.u32()).collect::<Result<_, _>>()?;
         s.mission = Some(nf_game::mission::MissionSave { base_map: f[0], order: f[1], internal: f[2], state: f[3], fail_label: f[4], to_end: f[5], states });
+    }
+    if ver >= 2 && r.u8()? == 1 {
+        let mut f = [0u32; 12];
+        for v in f.iter_mut() { *v = r.u32()?; }
+        let health = r.f32()?;
+        let mut bm = [0i16; 10];
+        for v in bm.iter_mut() { *v = r.i16()?; }
+        let stats = nf_game::progress::PlrMissionStats {
+            detected: f[0], shots_fired: f[1], shots_hit_enemy: f[2], dispatched: f[3], disabled: f[4], surrendered: f[5],
+            spawned: f[6], bond_moments: f[7], bonus_pickups: f[8], last_time: f[9], elapsed: f[10], timer_run: f[11], health,
+            ..Default::default()
+        };
+        s.tally = Some(nf_game::player::TallySave { stats, bond_moments: bm });
     }
     Ok(s)
 }
@@ -531,6 +556,10 @@ mod tests {
             carried: vec![1, -2, 300], clip: vec![7, 0], owned: vec![true, false, true], keys: vec![false, true],
             channels: (0..=255u8).collect(), ch_time: vec![0, 123_456, u32::MAX],
             mission: Some(nf_game::mission::MissionSave { base_map: 0x0700_000b, order: 2, internal: 1, state: 3, fail_label: 9, to_end: 0, states: vec![4, 3, 2] }),
+            tally: Some(nf_game::player::TallySave {
+                stats: nf_game::progress::PlrMissionStats { detected: 2, shots_fired: 40, shots_hit_enemy: 17, health: 63.5, elapsed: 98_765, ..Default::default() },
+                bond_moments: [1, 0, 2, 0, 0, 0, 0, 0, 0, 3],
+            }),
         };
         let b = encode_ram_save(&s);
         let r = decode_ram_save(&b).expect("decodes");

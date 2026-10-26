@@ -165,14 +165,17 @@ fn the_flight_plate_wakes_the_0x13_guards_and_a_guard_in_view_alerts() {
 }
 
 /// The mode-0x1c abseiler's hang gate [M NDrone2_DSTATE_AbseilSlide 0x169730:55-58 — hang when the
-/// drone's Y < opponent Y + FRAME_RATE_MUL·3.0]: p258 (rope at (18.895, 46.516, 1.434) [D], woken
-/// by the 0x13 plate) must hang within 3.0 above Bond's height, not slide past it. MEASURED on the
-/// current code (this task's probe, d3, Bond parked at (22.34, 29.37, 3.52)): p258 slid to y 22.34
-/// before hanging — 10.0 past the 32.37 gate — leaving him hanging mid-well beside the y-24
-/// landings (one floating a body height above the other). Ignored until the gate
-/// is fixed; the numbers are the pin.
+/// object Y (+0x34) < the opponent object's +0x34 + FRAME_RATE_MUL·3.0; the opponent pointer +0x170
+/// points at Bond every SP tick (NDrone2_FindOpponent 0x1424e0:100-121); the rope fold above it,
+/// +0x674 = min(+0x674, +0x184) [M :52-54]]: p258 (rope at (18.895, 46.516, 1.434) [D], woken by
+/// the 0x13 plate) must hang within 3.0 above Bond's height, not slide past it. The 2026-10-18
+/// measurement (y 22.34, 10 past the 32.37 gate) predates the two abseil-path fixes now on master —
+/// the shared ×0.98 flying-velocity damping [M 0x140968:139-141, standins-drone-921] that
+/// equilibrates the slide at ~5.75 u/s instead of accumulating unbounded, and the +0x170 pointer
+/// semantics (combat-sight-loss-exit). On the current tree the per-tick slide log shows the gate
+/// firing at 32.34 → the hang at 32.25 (the port's `rope`/`player_pos`/`pos` are the compared
+/// fields; un-ignored with that measurement).
 #[test]
-#[ignore = "the abseiler slides past the 3.0 hang gate (measured y 22.34 vs the 32.37 gate)"]
 fn the_mode_1c_abseiler_hangs_within_the_game_s_3_0_of_the_opponent() {
     let mut scene = load_d3();
     {

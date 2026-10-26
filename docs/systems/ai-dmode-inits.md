@@ -81,3 +81,46 @@ slot). `NDrone2_DoCollision` 0x149ec8:23-26 and `NDrone2_DoGravity` 0x141e58:29-
 call it: within 2.0 of a player both force their "physics on" return, overriding the
 `+0x570 & 2` no-physics flag; `Drone_CollisionHandler` 0x140968:152-190 picks the
 object-collision branch on `DoCollision` and the free-gravity branch otherwise.
+
+## Addendum 2026-10-24 (ai-dmode-inits): the coder event's true hashes, the full row dump, census scope
+
+Re-derived everything on this page independently ([D] fresh ISO scan + [M] disassembly). Three
+corrections and two completions; the conclusions (all placements NEW, only row 0 dispatched on the
+shipped game) are unchanged.
+
+1. **The coder event's hashes above are wrong.** The disc carries exactly one `Cmd::Event` kind 8
+   among 851 events in 468 scripts: **07000001 entry `0600005B`** (not `0600003B` — no such entry
+   exists anywhere on the disc), raw params **[0x0500001B, 0x060000A6, 16, 1]** (not
+   0x0500005B/0x06000106) [D census; raw stream `12 04 08 | 1B000005 | A6000006 | 10000000 |
+   01000000 | 12`]. `Script_EventHandler` 0x1d94c0:138-143 case 8 passes them to
+   `Drone_CoderCreate` 0x13a108 with a constant 7th arg 4; the stores land at template words
+   11/12/20 [M 0x13a108:0x13a160 sw s0,44(sp) / 0x13a168 sw s1,48(sp) / 0x13a170 sw s2,80(sp)] =
+   parameters 0 (skin 0x0500001B), 1 (start script 0x060000A6) and 7 (= 1, the event's fourth
+   word); the third word (16) is param_5's low half and is never stored. Consequences: skin
+   0x0500001B takes DefaultInit's **case 0x500001b → +0xd8 = 9** (not the switch default 0)
+   [M 0x14b300:153-156] — the +0xd8-conditional extras still don't fire (9 ∉ {0x10,0xd,0x11,0x13}).
+   CoderCreate's `sh s5,1442(v0)` writes **+0x5A2 = 4** [M 0x13a108:0x13a1a0], but DefaultInit's
+   `DoTypeSettingsOLD`(+0xC5 = 0) overwrites it unconditionally: DroneTypeSettings row 0 start = −1
+   → by mode → prop 0x24 (Defaults sets it) → **+0x5A2 = 6 InitPatrol** [M 0x14d2e8:0x14d32c /
+   0x14d3bc `sh v0,1442(s0)`, prop checks 0x14d394-0x14d3b8].
+2. **Row word+4 → +0x500/+0x50C confirmed at instruction level** (a byte-scan misses it because it
+   is FPU): `lwc1 f0,4(s2)` @0x14d010 → `swc1 f0,0x50C(s1)` @0x14d014 + `swc1 f0,0x500(s1)`
+   @0x14d01c [M 0x14cfa0].
+3. **Census scope corrections.** 35 archives carry a type-1 main map (not 34); 21 of them carry
+   drones (07000048/07000500 have main maps but no drones); the 555 is the main-map total
+   {100: 555} — unchanged. The scan additionally finds **33 kind-0x0f template records** (all
+   `flags == 0x0000000F`) with parameter 5 = 0 in the type-0 (template) map `01000166`, object
+   hash 0x02000637, byte-identical across the 41 archives carrying that map — 588 kind-0x0f
+   records total. Whether template-map records ever reach `Drone_Create` at runtime is
+   [S] unverified from disc; if they do they select row 0 like the coder event (parameter 5 = 0),
+   so the row-0-only conclusion holds either way.
+4. **Full 35-row dump** ([D table 0x29ad40, all 32 non-NULL fn pointers exact-symbol matches;
+   byte+0 → +0xC5 @0x14d038/0x14d040, byte+1 → +0x44 @0x14d078/0x14d07c, word+8 `jalr`
+   @0x14d080-0x14d090; bounds `sltiu v0,s3,0x24` @0x14cfc8): rows 0-22 as tabled above (row 20 =
+   `init_DMODE_Ambush` 0x14e018, type 0x10, team 1), plus rows 23-33: 23 `CivilianGuard`
+   0x14e158 (type 0x13, team 3), 24 `Interogator` 0x14e238 (0x14, 1), 25 `CivDoorGuard` 0x14e258
+   (0x16, 3), 26 `TruckDriver` 0x14e348 (0x17, 3), 27 `CastleChatGuard1` 0x14e370 (0x18, 1),
+   28 `CastleChatGuard2` 0x14e3a0 (0x18, 1), 29 `SniperAlert` 0x14e3e0 (0x19, 1, alert 1.0),
+   30 `PartyGirlLooker` 0x14e490 (0x12, 3), 31/32/34 fn = NULL, 33 `Bot` 0x14e568 (0x1e, team 2).
+   Rows 1-34 are never dispatched: parameter 5 ∈ {0, 100} on every main-map placement and every
+   coder/bot template [D census].

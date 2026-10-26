@@ -5,8 +5,18 @@
 //! (Stats); Button_Update sends 0x5d on action 0x20 and 0x5e on action 0x21 [M 0x1ef948:80-87,
 //! :115-125] — the hint "~X Stats ~Y Dossier". The port's Side (Tab/E, the ~Y keycap) is 0x5d; the
 //! port's key for 0x5e here is Extra (Q) [S unverified — the pad meaning of 0x20/0x21 is U-011].
+//!
+//! results-stats-key RESOLVES that open part [M psiInput_MapInputs 0x10cd80:377-424 — the default
+//! arm runs for EVERY controller style: action 0x1f ← pad & 0x40, 0x20 ← & 0x80, 0x21 ← & 0x20,
+//! 0x22 ← & 0x10, 0x1a-0x1d ← & 0x1000/0x4000/0x8000/0x2000] + [L docs/systems/input.md §2/§3, the
+//! WORKLOG 0006 live trace: pad bits △ 0x10, ○ 0x20, ✕ 0x40, □ 0x80, Up 0x1000, Down 0x4000, Left
+//! 0x8000, Right 0x2000]: **action 0x20 = □ (the Dossier's key), action 0x21 = ○ (the Stats key)**
+//! — exactly the hint's own glyphs [D USATxt.dat Txt 0x2d0 = "~A Continue  ~X Stats  ~Y Dossier",
+//! ~X = the ○ glyph, ~Y = □ (specialchar 0x2dd8d8)]. The port's Action::Side (Tab/E) carries 0x5d
+//! and Action::Extra carries 0x5e; the keycaps name their keyboard keys (pc_key: ~Y → "Tab",
+//! ~X → "Del") — Del is bound to Extra so the hint names a key that works.
 
-use nf_view::menu::{menu_overlay, Action, FrontEnd, Outcome, Page, PAGE_RESULTS, PAGE_STATS};
+use nf_view::menu::{key_action, menu_overlay, pad_menu_action, pc_key, Action, FrontEnd, KeyCap, Outcome, Page, PAGE_RESULTS, PAGE_STATS};
 
 fn crate_texture(hash: u32) -> nf_view::scene::TextureImage {
     let (w, h) = if hash == 0x0300_0075 { (256, 128) } else if hash == 0x0300_0005 { (512, 128) } else { (8, 8) };
@@ -102,4 +112,72 @@ fn the_results_side_opens_the_dossier() {
     g.page = Page::Results;
     let _ = g.action(Action::Back);
     assert_ne!(g.page, Page::Dossier, "△ is not the 0x5d arm");
+}
+
+/// The results hint's keycaps name keys that work (results-stats-key). The hint is the game's own
+/// text [D USATxt.dat Txt 0x2d0 "~A Continue  ~X Stats  ~Y Dossier"]; its ~X/~Y are the pad's ○/□
+/// [M specialchar 0x2dd8d8 + 0x10cd80:411-413 (0x21 ← & 0x20 = ○, 0x20 ← & 0x80 = □); L
+/// docs/systems/input.md §2]. The keycap source is `pc_key` (~X → "Del", ~Y → "Tab"), and the
+/// port binds those exact keys: Del (and Q) produce the 0x5e arm's Action::Extra, Tab/E the 0x5d
+/// arm's Action::Side [M the arms: P_NFRESULTS 0x208e78:222-230; Button_Update 0x1ef948:80-88].
+#[test]
+fn the_results_hint_keycaps_name_keys_that_work() {
+    use winit::keyboard::KeyCode;
+    // ~A Continue: ✕ = Confirm = Enter [M Button_Update 0x1ef948:74,105-107 — action 0x1f edge →
+    // msg 0x4b; action 0x1f ← pad & 0x40 = ✕ (0x10cd80:410); L §3].
+    assert_eq!(pc_key('A'), Some(KeyCap::Text("Enter")));
+    assert_eq!(key_action(KeyCode::Enter), Some(Action::Confirm));
+    // ~X Stats: ○ = action 0x21 → msg 0x5e → the Stats page [M 0x1ef948:84-88,116-121;
+    // 0x208e78:225-230]. The keycap says Del; Del (and the older stand-in Q) must open it.
+    assert_eq!(pc_key('X'), Some(KeyCap::Text("Del")));
+    assert_eq!(key_action(KeyCode::Delete), Some(Action::Extra));
+    assert_eq!(key_action(KeyCode::KeyQ), Some(Action::Extra));
+    let mut fe = FrontEnd::new();
+    fe.outcome = Outcome::Complete;
+    fe.page = Page::Results;
+    fe.flow.page = PAGE_RESULTS;
+    assert!(fe.action(Action::Extra));
+    assert_eq!(fe.page, Page::Stats);
+    // ~Y Dossier: □ = action 0x20 → msg 0x5d → the Dossier [M 0x1ef948:80-83,123-127;
+    // 0x208e78:222-224]. The keycap says Tab; Tab (and E) must open it.
+    assert_eq!(pc_key('Y'), Some(KeyCap::Text("Tab")));
+    assert_eq!(key_action(KeyCode::Tab), Some(Action::Side));
+    assert_eq!(key_action(KeyCode::KeyE), Some(Action::Side));
+    let mut fe = FrontEnd::new();
+    fe.outcome = Outcome::Complete;
+    fe.page = Page::Results;
+    fe.flow.page = PAGE_RESULTS;
+    assert!(fe.action(Action::Side));
+    assert_eq!(fe.page, Page::Dossier);
+}
+
+/// The pad's menu vocabulary carries the same arms (results-stats-key): the game's menu actions
+/// are style-independent [M psiInput_MapInputs 0x10cd80:377-424 — the default arm fills
+/// 0x1a-0x22 for every style] and the widgets read their press edges [M Button_Update
+/// 0x1ef948:74-91]. The port's `pad_menu_action` maps each edge onto the Action the page arms
+/// read; a held button does not repeat (the edge masks are the game's own re-arm rule).
+#[test]
+fn the_pad_edges_carry_the_results_arms() {
+    let mut prev = 0u16;
+    // ○ (0x20) — the Stats key [L §2; M 0x1ef948:84-88] — opens the Stats page.
+    assert_eq!(pad_menu_action(0x20, &mut prev), Some(Action::Extra));
+    assert_eq!(prev, 0x20);
+    // Held ○: no repeat (the game sends msg 0x5e on the 0x21 edge only [M 0x1ef948:84]).
+    assert_eq!(pad_menu_action(0x20, &mut prev), None);
+    // □ (0x80) while ○ is still held — the Dossier arm.
+    assert_eq!(pad_menu_action(0x20 | 0x80, &mut prev), Some(Action::Side));
+    // Everything released, then ✕ (0x40) — the Confirm/Continue arm.
+    assert_eq!(pad_menu_action(0, &mut prev), None);
+    assert_eq!(pad_menu_action(0x40, &mut prev), Some(Action::Confirm));
+    // △ (0x10) — Back (the manager's pop [M MenuManager_Update 0x21c3d8:78-105]).
+    assert_eq!(pad_menu_action(0x10, &mut prev), Some(Action::Back));
+    // The d-pad: Up 0x1000 / Down 0x4000 / Left 0x8000 / Right 0x2000 [M 0x10cd80:410-413].
+    assert_eq!(pad_menu_action(0x1000, &mut prev), Some(Action::Up));
+    assert_eq!(pad_menu_action(0x4000, &mut prev), Some(Action::Down));
+    assert_eq!(pad_menu_action(0x8000, &mut prev), Some(Action::Left));
+    assert_eq!(pad_menu_action(0x2000, &mut prev), Some(Action::Right));
+    // Start (0x800) alone maps to nothing — no menu handler reads action 0x1e's edge
+    // [M the Menu_InputAction call sites: 0x1f/0x20/0x21/0x22/0x1a-0x1d only].
+    assert_eq!(pad_menu_action(0x800, &mut prev), None);
+    assert_eq!(pad_menu_action(0, &mut prev), None);
 }

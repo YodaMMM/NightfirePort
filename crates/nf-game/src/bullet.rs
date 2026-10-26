@@ -72,6 +72,18 @@ pub struct Bullet {
     /// way `Player_FeetOnPoint` 0x194188 does for Bond [L the live run: the charge rides the
     /// descending cab — Bond at (1.799, −73.418, −3.453) with the charge on the cab roof]).
     pub landed: bool,
+    /// The landing surface's normal (draw-side): the game's landed pose aligns the mesh to the
+    /// hit normal (`Mat_Align2Dir(obj+0x90, −normal, …)` [M Bullet_CollisionHandler 0x12ce80:256-266,
+    /// the thrown-stick arm's alignment — the port's landing stores the normal for the renderer]).
+    /// None while flying.
+    pub stick_normal: Option<V3>,
+    /// `BU+0x100`: the quarter-second latch of the satchel countdown [M Bullet_DoTrails
+    /// 0x12d890:435-441 — the beep fires when `qs != *(ushort*)(BU+0x100)`, then latches].
+    pub last_qs: i16,
+    /// The two countdown digits this tick (`SatchelDigits[sec/10]`, `SatchelDigits[sec%10]`,
+    /// sec = fuse/60 [M 0x12d890:421-422, 485-553 — the digit objects spawn EVERY tick in every
+    /// state < 2]). None until the first 0x3b DoTrails tick.
+    pub digits: Option<(u8, u8)>,
 }
 
 impl Bullet {
@@ -82,6 +94,7 @@ impl Bullet {
         pos: [0.0; 3], dir: [0.0; 3], speed: 0.0, travelled: 0.0, range: 0.0, damage: 0.0,
         owner: 0, state: 0, weapon: 0, flyby: false, bounces: 0,
         fuse: 210.0, fuse_ticks: false, burn: 0, defused: false, landed: false,
+        stick_normal: None, last_qs: 0, digits: None,
     };
 
     /// `Bullet_init` 0x12c5a0's fuse block (the tail of the initializer, after the velocity

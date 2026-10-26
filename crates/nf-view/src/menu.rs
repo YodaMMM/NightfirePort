@@ -10404,6 +10404,45 @@ pub fn key_action(key: winit::keyboard::KeyCode) -> Option<Action> {
         KeyCode::Tab | KeyCode::KeyE => Action::Side,
         // ~Y/Triangle: the debriefing's Replay (C_MPDBG msg 0x5d) [M 0x217860:12-16]; a PC stand-in [S].
         KeyCode::KeyQ => Action::Extra,
+        // results-stats-key: Delete is the hint's own key for the ○ arm — the results page's hint is
+        // the game's text "~A Continue  ~X Stats  ~Y Dossier" [D USATxt.dat Txt 0x2d0], ~X is the pad's
+        // ○ (action 0x21 — [M psiInput_MapInputs 0x10cd80:412 default arm: action 0x21 ← pad & 0x20;
+        // [L docs/systems/input.md §2/§3, WORKLOG 0006: pad 0x20 = ○] — and Button_Update sends its
+        // msg 0x5e on the 0x21 edge [M 0x1ef948:84-88,116-121], which P_NFRESULTS routes to the
+        // Mission Stats page [M 0x208e78:225-230]), and the port's hint keycap for ~X reads "Del"
+        // (`pc_key` below). Bind Del so the keycap names a key that works: Del = the keyboard's ○.
+        KeyCode::Delete => Action::Extra,
+        _ => return None,
+    })
+}
+
+/// The pad's menu vocabulary (results-stats-key): the game's menu actions are STYLE-INDEPENDENT —
+/// the default arm of `psiInput_MapInputs` 0x10cd80 (lines 377-424) fills actions 0x1a-0x22 from the
+/// buttons word for every controller style, and the menu widgets read their edges [M Button_Update
+/// 0x1ef948:74-91 (✕ 0x1f → msg 0x4b confirm, □ 0x20 → 0x5d, ○ 0x21 → 0x5e); Scroll_Update
+/// 0x221b20:111-114 (the d-pad 0x1a-0x1d drive the list); MenuManager_Update 0x21c3d8:77-105 (△ =
+/// action 0x22 is the page pop, msg 0x5f)]. The bits are the game's own pad layout [L
+/// docs/systems/input.md §2, WORKLOG 0006 measured live]: △ 0x10, ○ 0x20, ✕ 0x40, □ 0x80, Start
+/// 0x800, Up 0x1000, Right 0x2000, Down 0x4000, Left 0x8000. The port maps each edge onto the menu
+/// Action the keyboard's stand-in key produces for the same arm (Confirm=Enter, Side=Tab, Extra=Q/Del,
+/// Back=Esc). Start has no menu arm in the handlers that read these edges, so it maps to nothing
+/// here [M the call sites above; in-mission Start is the pause — the App's own key, not a menu action].
+/// Returns at most ONE action per call — several edges in one frame queue over the next frames, the
+/// keyboard's one-event-per-action shape [S]. `prev` carries the last word so a held button does not
+/// repeat (the game re-arms on the same edge masks, 4 = newly pressed).
+pub fn pad_menu_action(buttons: u16, prev: &mut u16) -> Option<Action> {
+    let new = buttons & !*prev;
+    *prev = buttons;
+    let has = |b: u16| new & b != 0;
+    Some(match () {
+        _ if has(0x40) => Action::Confirm,    // ✕ [M Button_Update 0x1ef948:74,105-107]
+        _ if has(0x80) => Action::Side,       // □ [M :80-83,123-127 — msg 0x5d]
+        _ if has(0x20) => Action::Extra,      // ○ [M :84-88,116-121 — msg 0x5e]
+        _ if has(0x10) => Action::Back,       // △ [M MenuManager_Update 0x21c3d8:78-105 — msg 0x5f]
+        _ if has(0x1000) => Action::Up,       // d-pad [M 0x10cd80:410-413 + Scroll_Update 0x221b20:111-114]
+        _ if has(0x4000) => Action::Down,
+        _ if has(0x8000) => Action::Left,
+        _ if has(0x2000) => Action::Right,
         _ => return None,
     })
 }

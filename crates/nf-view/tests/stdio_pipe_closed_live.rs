@@ -8,6 +8,8 @@
 
 use std::process::{Command, Stdio};
 
+// The guard is Windows-only (players run the Windows build; stdio_guard.rs relays through a Win32 pipe).
+#[cfg(windows)]
 #[test]
 fn a_closed_stderr_pipe_does_not_crash_the_game() {
     let Ok(iso) = std::env::var("NF_ISO") else { eprintln!("NF_ISO not set — skipping"); return };

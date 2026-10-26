@@ -69,30 +69,64 @@ fn the_searchlight_family_sweeps_as_one_light() {
 }
 
 /// The breakables (0x20 ×16: Glass/IceSmash panes [D PL#44..#113]): a glass pane (kind 2) dies to
-/// the real fire path — `Break_Kill` shatter [M 0x12b970 via breakable.rs]. Sister: the pane
-/// stands while unshot.
+/// the real fire path, and the break is the game's RULE, not a stream roll. Pane #48's authored
+/// health is 0 (placement param 1 [M 0x12c230 disasm 0x12c2a8-0x12c2e0 cvt.s.w]), so the FIRST
+/// landed round kills: `Break_Update` subtracts the round's contact damage from the health and
+/// calls `Break_Kill` on the health < 0 crossing [M 0x12bfd8:44-53] — the subtract is the round's
+/// FIXED HITTEST word (weapon_data+0x0C = 3.5 for the P2K [L ee_snapshot.bin weapon_data
+/// 0x2bf368 +0x0c]; `Bullet_update` rewrites it every flight tick [M 0x12e7b0 disasm
+/// 0x12f05c-0x12f0b8]), and no draw sits anywhere on that path [M 0x12bfd8 has no Rand call;
+/// 0x12e7b0's only Rand is the whoosh arm's pitch]. The shared generator's draws on the fire path
+/// move nothing here: `Bullet_init`'s three spread draws apply a radius from the record's +0x24
+/// spread field [M 0x12c5a0:167-170] and the P2K's field is 0.0 [L ee_snapshot.bin 0x2bf368
+/// +0x24], so every round flies the aim exactly. The game spawns the round from the player's head
+/// bone and re-aims it at the aim point [M Player_WeaponInitBullet 0x1a4bf0:226-245
+/// `AnimGetBoneWorldTrans` + `Vec_Normalise(aim − start)`], and `Bond::look` reads the view pitch
+/// as the game's ±1 value scaled by π/2 [M RotMatrixX 0x1e46a0:16-24 — the port's `mul(pitch,
+/// HALF_PI)`], so the aim below writes the atan pitch through HALF_PI and aims from `Bond::head`
+/// (the same origin the fire uses). Sister: the pane stands while unshot.
+///
+/// (The previous cut wrote RADIANS into the ±1 pitch field and aimed at y 0.9 — above the pane's
+/// box top 0.499 [D the placement's bounds] — and only hit because Bond's settle height put the
+/// mis-aimed ray inside the box on one stream and not on another: a geometry accident riding the
+/// generator's position, not a game rule. The test was wrong; this cut pins the rule.)
 #[test]
 fn the_glass_pan_shatters_under_the_real_fire() {
     let Some(iso) = iso() else { eprintln!("NF_ISO not set — skipping"); return };
     let mut scene = load(&iso);
     let sim = scene.sim.as_mut().unwrap();
     settle(sim);
-    // Pane #48 (kind 2, centre (3.42, 0.25, -68.64) [D the probe dump]).
+    // Pane #48 (kind 2, box x 3.176..3.667, y 0..0.499, z −68.903..−68.371 [D the placement]).
     let idx = sim.drones.breaks.list.iter().position(|b| b.placement == 48).expect("pane #48 parses");
     assert_eq!(sim.drones.breaks.list[idx].kind, 2, "pane #48 is a glass break (kind 2 [D])");
+    assert_eq!(sim.drones.breaks.list[idx].health, 0.0, "pane #48's authored health is param 1 = 0 [D PL#48; M 0x12c230's parse]");
+    assert!(!sim.drones.breaks.list[idx].dead, "sister: the pane stands while unshot");
     sim.bond = nf_game::player::Bond::stand_at(&sim.world, [3.42, 1.4, -64.0], 0.0);
     for _ in 0..30 { sim.step_bond(Input::default(), false, false, false); }
-    // Aim at the pane's centre and hold fire.
-    let target = [3.42, 0.9, -68.64];
-    let dx = target[0] - sim.bond.pos[0]; let dy = target[1] - (sim.bond.pos[1] + 1.5); let dz = target[2] - sim.bond.pos[2];
-    // Bond::look's convention: yaw 0 faces +Z, forward = (sin y, ·, cos y).
-    sim.bond.yaw = (dx as f32).atan2(dz as f32);
-    sim.bond.pitch = ((dy as f32) / ((dx * dx + dz * dz) as f32).sqrt()).atan();
+    // The P2K's fixed contact damage [L ee_snapshot.bin 0x2bf368 +0x0c; M 0x12e7b0's per-tick write].
+    let dmg = sim.weapons.bullet_contact_damage(0x2);
+    assert_eq!(dmg, 3.5, "the P2K's HITTEST contact damage is the record's +0x0C [L]");
+    // Aim the fire's own origin (the head [M 0x1a4bf0:226-245]) at the pane's box centre; the
+    // view pitch is the game's ±1 value [M RotMatrixX 0x1e46a0 — Bond::look's mul(pitch, HALF_PI)].
+    let target = [3.42, 0.25, -68.64];
+    let head = sim.bond.head();
+    let dx = target[0] - head[0]; let dy = target[1] - head[1]; let dz = target[2] - head[2];
+    let dist = (dx * dx + dz * dz).sqrt();
+    sim.bond.yaw = dx.atan2(dz);
+    sim.bond.pitch = (dy / dist).atan() / std::f32::consts::FRAC_PI_2;
     sim.gun.switch_request = 0x2; // the P2K: the real fire path (09's kill test precedent)
     for _ in 0..20 { sim.step_bond(Input::default(), false, false, false); }
+    // Hold fire: the first round spawns on the press tick (+0x44 = 0 [M 0x1a5460:688-690]) and
+    // flies the aim through the box centre — the health-0 pane dies on the first landed hit
+    // [M 0x12bfd8:44-53]. The window length is choreography, not a pin.
     let mut shot = false;
-    for _ in 0..40 { sim.step_bond(Input::default(), true, false, false); if sim.drones.breaks.list[idx].dead { shot = true; break; } }
-    assert!(shot, "the glass pane shatters under the held fire [M Break_Kill 0x12b970]");
+    for _ in 0..40 {
+        sim.step_bond(Input::default(), true, false, false);
+        if sim.drones.breaks.list[idx].dead { shot = true; break; }
+    }
+    assert!(shot, "the glass pane shatters under the held fire [M 0x12bfd8:44-53's crossing + 0x12b970's kind-2 kill]");
+    assert!((sim.drones.breaks.list[idx].health - (-dmg)).abs() < 1e-4,
+        "the kill is the first landed round's subtract: 0 − {} [M 0x12bfd8:44-53]", dmg);
 }
 
 /// The pickup ("Pickup X9", 0xF0, PL#101 at (20.66, 0, −39.34), kind 0, weapon 0x1e, 10 rounds

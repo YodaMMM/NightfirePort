@@ -122,6 +122,28 @@ pub fn ticks_for_frame(anim_time: &mut f32, dt: f32, max_ticks: u32) -> u32 {
     *anim_time += dt * 60.0;
     (*anim_time as u32).saturating_sub(before).min(max_ticks)
 }
+/// fix-interp-camera-bracket: one presented frame's interpolation bracket. The camera bracket is
+/// advanced FIRST (on the frames that rebuild the palette), then the draw camera and the blend
+/// fraction are taken from that same bracket — so the camera and the palette always interpolate
+/// between the same two ticks. The loop used to do it the other way round: `draw_cam` was computed
+/// from the PREVIOUS bracket while `pal_prev`/`pal_cur` were blended from the new one, so every
+/// frame that ran a tick drew the camera one whole tick behind the world. Measured on 0700004a's
+/// lift (drawn eye y, one tick = -0.0303 u): -22.72629, -22.76416, -22.77174, -22.77932,
+/// -22.75659 - i.e. 1.25, 0.25, 0.25 then a 0.75-tick BACKWARD jump, 21 px at 1 m, every fourth
+/// frame. Pub for the headless interpolation tests (fix-interp-camera-bracket).
+pub fn draw_bracket(cam_prev: &mut Option<Camera>, cam_cur: &mut Option<Camera>, cam_now: Camera,
+                    advanced: bool, fract: f32, interp: bool) -> (Camera, f32) {
+    if advanced || cam_cur.is_none() {
+        *cam_prev = *cam_cur;
+        *cam_cur = Some(cam_now);
+    }
+    let alpha = if interp { fract } else { 1.0 };
+    let draw = match (*cam_prev, *cam_cur) {
+        (Some(a), Some(b)) if interp => lerp_cam(&a, &b, alpha),
+        _ => cam_now,
+    };
+    (draw, alpha)
+}
 /// The palette half of the G-043 interpolation: the draw loop blends the previous tick's skin
 /// palette into the latest one while `lerp_cam` blends the camera by angle. fix-interp-ghosting:
 /// world matrices blend as ROTATION (slerp of the rotation part [M `Quat_Slerp_Acc` 0x1e4188] — a
@@ -754,9 +776,31 @@ pub fn fail_restart_save(entry: Option<&nf_game::player::RamSave>, sim: &scene::
 /// load the restored state is captured unchanged (health = the carried exit health [M 0x1957a8
 /// SetHealth call], the arm's re-equips included).
 pub fn entry_checkpoint_save(sim: &scene::Sim) -> nf_game::player::RamSave {
+    let mut s = nf_game::player::RamSave::capture(
+        &sim.drones.health, sim.gun.switch_request, &sim.drones.inventory, &sim.drones.channels)
+        .with_mission(&sim.drones.mission);
+    // 987-mission-stats-carry: the game's re-save tail copies the RESIDENT tally — which on a warm
+    // load already holds the `Player_RamLoad` 0x1957a8:15-16 restore, because `Player_RamLoad` runs
+    // inside `Player_InitWeapon` BEFORE the re-save [M 0x1a7ef8 arms → 0x1a8a00 → :325]. The port
+    // applies the tally at the `Mission_Init` latch (the first tick), so a pre-latch entry capture
+    // reads it from the carry; post-latch (or a cold load — carry `None`, the record zeroed by the
+    // part-0 wipe) the live record is the truth.
+    s.tally = sim.drones.tally_carry.or(Some(nf_game::player::TallySave {
+        stats: sim.drones.progress.stats[0], bond_moments: sim.drones.progress.bond_moments,
+    }));
+    s
+}
+
+/// The warm level-change save — the capture `App::start_async_load`'s campaign arm (and the
+/// weapon-assets warm reload) hands the worker, i.e. `Trigger_Activate`'s `Player_RamSave`
+/// 0x195670: the player state + the mission globals + the mission tally (`PlrMissionStats[0]`
+/// 0x38 + `BondMoments` 0x14 [M 0x195670:10-11] — the pause SCORE counters' ride across the
+/// level change, 987-mission-stats-carry).
+pub fn warm_exit_save(sim: &scene::Sim) -> nf_game::player::RamSave {
     nf_game::player::RamSave::capture(
         &sim.drones.health, sim.gun.switch_request, &sim.drones.inventory, &sim.drones.channels)
         .with_mission(&sim.drones.mission)
+        .with_tally(&sim.drones.progress)
 }
 
 fn load_impl(iso_path: &str, archive: &str, all: bool, save: Option<&nf_game::player::RamSave>, dev: bool, give: &[u8], mp: bool, mp_settings: Option<nf_game::mp::MpSettings>, difficulty: u32) -> Result<scene::Scene> {
@@ -911,18 +955,24 @@ fn load_impl(iso_path: &str, archive: &str, all: bool, save: Option<&nf_game::pl
     //    hashtable get: on GameState+0xc == 0x0700000c → 0x05000087 (0700000c's own skin), on
     //    0x07000014 → 0x05000093 (07000014's own). The port mirrors it at load: the placement hash
     //    0x05000090 resolves to the substitute skin's data — exactly the object the game builds.
-    // 2. 07000014's 0x050000b1 (11 placements) has NO substitution (the disassembly covers only
-    //    0x05000090) — the game's skin table accumulates every archive loaded in the session
-    //    (`AnimLoadFile` 0x1bdf40 registers per map; nothing frees between levels — 0x1d8248 is
-    //    `Script_Load`, the old mislabel), and 0x050000b1
-    //    lives in 07000015/16's archives [D]. `CommonAnimFile` (the LoaderLoad type-4 name source,
-    //    the variable at 0x30d860 [M 0x1d4a00 case 0: `param_2 = CommonAnimFile` — the only
-    //    reference in ACTION.ELF, no writer]) is 0 at every level-start snapshot [L
+    // 2. 07000014's 0x050000b1 (11 placements) has NO substitution in `AnimObjectNew` (the
+    //    disassembly covers only 0x05000090) — but the RENDER request is never the raw hash:
+    //    `NDrone2_DefaultInit` REWRITES the param-0 0x050000b1 to 0x0500008c in Drone+0xe0 on
+    //    GameState+12 == 0x07000014, before the kind switch, the captain block and the
+    //    `AnimObjectNew` handoff [M 0x14b300:82-95, :563-565] (found by cite-14-skinless-drones;
+    //    the earlier reading here concluded the placements draw skinless). 0x0500008c is in
+    //    07000014's own archive [D]; the raw 0x050000b1 lives in 07000015/16's archives [D] and
+    //    never registers on a fresh story run (the skin table accumulates every archive loaded in
+    //    the session — `AnimLoadFile` 0x1bdf40 registers per map; nothing frees between levels —
+    //    0x1d8248 is `Script_Load`, the old mislabel). `CommonAnimFile` (the LoaderLoad type-4
+    //    name source, the variable at 0x30d860 [M 0x1d4a00 case 0: `param_2 = CommonAnimFile` —
+    //    the only reference in ACTION.ELF, no writer]) is 0 at every level-start snapshot [L
     //    ee_start_05.bin / ee_start_07000001.bin / ee_start_0700000a.bin @0x30d860], so the common
-    //    file is not the source here. The port merges the holding archive: its maps (the skin's
-    //    meshes are glist objects of that archive), object hashcodes (first wins), skins and
-    //    skeletons — and its 07F sequences ONLY for skeletons the level has no sequences for (a NEW
-    //    bucket; the per-skeleton lists are order-sensitive gameplay data — the WORKLOG's warning).
+    //    file is not the source here either. The port still merges the holding archive for skins a
+    //    placement DOES request: its maps (the skin's meshes are glist objects of that archive),
+    //    object hashcodes (first wins), skins and skeletons — and its 07F sequences ONLY for
+    //    skeletons the level has no sequences for (a NEW bucket; the per-skeleton lists are
+    //    order-sensitive gameplay data — the WORKLOG's warning).
     {
         let mm = level.main_map();
         // The substitution [M 0x1be910]: 0x05000090 → the level's own variant, before anything
@@ -975,14 +1025,17 @@ fn load_impl(iso_path: &str, archive: &str, all: bool, save: Option<&nf_game::pl
             // `Script_FreeFromHashTable` 0x1daec0's single scripts. A fresh story session
             // before level L therefore holds the front-end container (boot, 0x07000048) plus
             // every earlier story level's container (mission::LEVELS order). A container the
-            // session has not loaded is NOT a source: 07000014's 0x050000b1 is carried only by
-            // 07000015/16's archives [D scan of all 99 containers — the only carriers], which
-            // the story loads AFTER 14, so the game's `hashtable_getitem` misses and
-            // `AnimObjectNew` 0x1be910:44-46 returns 0 — `NDrone2_DefaultInit` 0x14b300:563-565
-            // discards the return and the placement draws no character (skinless). The
-            // captains are the exception: 0x14b300:536-555 swaps a kind-6 captain's skin to
-            // 0x05000093 (kind 7 → 0x050000b2, …) before the request, which 14's own archive
-            // carries — the sim's `captain_setup` models that swap.
+            // session has not loaded is NOT a source: 07000014's raw 0x050000b1 is carried only
+            // by 07000015/16's archives [D scan of all 99 containers — the only carriers:
+            // 07000016 entry 139 @0x8594a0 len 0x860, 07000015 entry 102 @0x609e60 len 0x860],
+            // which the story loads AFTER 14, so the table never registers it. The placements
+            // still resolve: `NDrone2_DefaultInit` REWRITES the param-0 0x050000b1 to the
+            // own-archive 0x0500008c in Drone+0xe0 before any read [M 0x14b300:82-95, :563-565;
+            // cite-14-skinless-drones], and the captains swap on top of that (0x14b300:536-555:
+            // kind 6 → 0x05000093, kind 7 → 0x050000b2 — the sim's `captain_setup`). A skin a
+            // placement DOES request with no session carrier (07000001's script lane) just
+            // misses — `AnimObjectNew` 0x1be910:44-46 returns 0, `NDrone2_DefaultInit`
+            // 0x14b300:563-565 discards the return and the placement draws no character.
             static SKIN_ARCHIVES: std::sync::OnceLock<HashMap<u32, Vec<String>>> = std::sync::OnceLock::new();
             let index = SKIN_ARCHIVES.get_or_init(|| {
                 let mut map: HashMap<u32, Vec<String>> = HashMap::new();
@@ -1026,7 +1079,7 @@ fn load_impl(iso_path: &str, archive: &str, all: bool, save: Option<&nf_game::pl
             for want in wanted.iter() {
                 let Some(carriers) = index.get(want) else { eprintln!("g-021: skin {want:08x} is on no archive of the disc"); continue };
                 let Some(archive_name) = carriers.iter().find(|n| session_container(n)) else {
-                    eprintln!("g-021: skin {want:08x} is carried only by {} — no container the session has loaded; the game's hashtable_getitem 0x1ca5b0 misses and the placement draws no character (AnimObjectNew 0x1be910:44-46)",
+                    eprintln!("g-021: skin {want:08x} is carried only by {} — no container the session has loaded; the table never registers it. On 07000014 the 0x050000b1 placements still resolve through the Drone+0xe0 rewrite [M 0x14b300:82-95, :563-565]; a skin a placement DOES request with no session carrier just misses (AnimObjectNew 0x1be910:44-46) and draws no character",
                         carriers.join("/"));
                     continue;
                 };
@@ -1354,6 +1407,9 @@ fn load_impl(iso_path: &str, archive: &str, all: bool, save: Option<&nf_game::pl
         // The mission globals ride the RamSave (the game keeps them in `.data` across the load; the
         // port restores them at the `Mission_Init` latch — map-tower2).
         sim.drones.mission_carry = save.and_then(|s| s.mission.clone());
+        // 987-mission-stats-carry: the mission tally rides the same RamSave (the game's
+        // `Player_RamSave` 0x195670:10-11 / `Player_RamLoad` 0x1957a8:15-16 pair).
+        sim.drones.tally_carry = save.and_then(|s| s.tally);
         let starts: Vec<nf_game::player::LevelStart> = level_starts(&level);
         if !starts.is_empty() {
             // The gate scan reads the carried channels on a warm transition (the save mirrors the live
@@ -1368,6 +1424,13 @@ fn load_impl(iso_path: &str, archive: &str, all: bool, save: Option<&nf_game::pl
                 // `Player_Init(0, pos, rot, params)` creates the player object at the entry; the port
                 // stands him on the floor below (the level start convention, `Bond::stand_at`).
                 sim.bond = nf_game::player::Bond::stand_at(&sim.world, s.pos, s.yaw);
+                // The spawn arrival settle — the LEVEL-START path only (`arm_spawn_settle` doc):
+                // the boot holds the placed root four ticks then drops it into the band [L
+                // ee_start_0700000a root 1.0891111 bit-exact]; the gate is [S] unverified. The
+                // mid-game `Player_Enable` 0x195498 does NOT go through `Player_StandAtNewPosition`
+                // (the matrix origin direct [M :57-68]) and must not carry the hold — the 05 truck
+                // hand-off's crouch press is the first post-enable tick.
+                sim.bond.arm_spawn_settle();
                 // `Player_Init` 0x1910f8:152-172 [M]: the default WldGravity write (0, −9.8, 0),
                 // then p3 == 2 → `Vec_Zero(&WldGravity)` (the spacewalk starts; disasm 0x19151c-
                 // 0x191550 the default, 0x191618 the zero). fix-world-gravity.
@@ -1903,7 +1966,11 @@ pub fn sound_tick(s: &mut nf_audio::sfx::Sound, sim: &mut scene::Sim) {
         if let Some((reverb, underwater)) = env_send { drv.set_environment(reverb, underwater); }
         for c in cmds {
             match c {
-                nf_game::sound::Cmd::Listener { pos, norm, dir, .. } => { drv.set_listener(pos, dir, norm); }
+                nf_game::sound::Cmd::Listener { pos, norm, dir, .. } => {
+                    // The pan probe (level-0a-office-hatch-8): the listener the sound is mixed against.
+                    if mpfx_log { eprintln!("[snd] f{frame} listener {pos:?} norm {norm:?} dir {dir:?}"); }
+                    drv.set_listener(pos, dir, norm);
+                }
                 nf_game::sound::Cmd::Start { handle, id, pos, radii } => {
                     // mp-remote-fx's log: every driver start with its position (NF_MPFX_LOG).
                     if mpfx_log {
@@ -1958,12 +2025,23 @@ pub fn overlay_for(scene: &scene::Scene, aspect: f32) -> gpu::HudFrame {
 /// game rendered every cut-scene at the console's 4:3 frame — the port's widescreen projection
 /// showed more at the sides than the game's frame (PCSX2 compare, frame 400:
 /// Dominique waiting in the left doorway visible in the port, outside the game's frame).
-/// Gameplay keeps the window's full widescreen. Returns (projection aspect, the band [x, y, w, h]
-/// in target pixels).
-pub fn cutscene_frame(win_w: f32, win_h: f32) -> (f32, [f32; 4]) {
-    const GAME: f32 = 4.0 / 3.0;
-    let (bw, bh) = if win_w / win_h > GAME { (win_h * GAME, win_h) } else { (win_w, win_w / GAME) };
-    (GAME, [(win_w - bw) * 0.5, (win_h - bh) * 0.5, bw, bh])
+/// Gameplay keeps the window's full widescreen.
+///
+/// cutscene-side-strips: the game's cut-scene view builds at the VIEWER's own aspect —
+/// `Script_UpdateCamera` 0x1db518:9 multiplies the view by `viewer+0x114` (through
+/// `Vision_Calculate_View_Fustrum` 0x1e7df8:79), and `Camera_CalcViewAngles` 0x1baf70:28-32
+/// writes 16/9 (0x3fe38e39) there with the AV options' widescreen flag (`DAT_002a37c4`) set,
+/// 4/3 (0x3faaaaab) otherwise. So `game_aspect` is that viewer+0x114 value (the port's
+/// `FrontEnd::view_aspect` / `Sim::view_aspect` mirror): with the widescreen option ON the
+/// cut-scene camera drives the WHOLE frame at 16/9 (same vertical FOV, widened horizontally —
+/// the port's own gameplay widescreen treatment); OFF keeps the 4:3 band the option-off game
+/// shows, pillar-boxed black on a wider window. Either way the frame is the script camera
+/// only — never the gameplay camera. Returns (projection aspect, the band [x, y, w, h] in
+/// target pixels).
+pub fn cutscene_frame(win_w: f32, win_h: f32, game_aspect: f32) -> (f32, [f32; 4]) {
+    let game = if game_aspect > 0.0 { game_aspect } else { 4.0 / 3.0 };
+    let (bw, bh) = if win_w / win_h > game { (win_h * game, win_h) } else { (win_w, win_w / game) };
+    (game, [(win_w - bw) * 0.5, (win_h - bh) * 0.5, bw, bh])
 }
 
 /// The HUD frame the headless `--shot` render draws (fix-cutscene-letterbox): the gameplay
@@ -2347,7 +2425,10 @@ fn shot(scene: &scene::Scene, cam: &Camera, out: &str, choice: Option<usize>, ti
     // fix-cutscene-letterbox: a live script camera frames the shot at the game's own 4:3 aspect
     // and pillar-boxes the render into the band; gameplay keeps the window's widescreen.
     let cut = scene.sim.as_ref().is_some_and(|s| s.script_camera().is_some());
-    let (proj_aspect, band) = if cut { cutscene_frame(w as f32, h as f32) } else { (w as f32 / h as f32, [0.0; 4]) };
+    // cutscene-side-strips: the shot frames at the viewer's own aspect (the sim's view_aspect;
+    // the window path feeds it from the front end's AV widescreen row) — see cutscene_frame.
+    let game_aspect = scene.sim.as_ref().map_or(4.0 / 3.0, |s| s.view_aspect);
+    let (proj_aspect, band) = if cut { cutscene_frame(w as f32, h as f32, game_aspect) } else { (w as f32 / h as f32, [0.0; 4]) };
     let (vp_shot, _) = cam.view_proj(proj_aspect);
     // The doors' `Door_IsClosed` snapshot for the walk's portal gate (fix-door-portal-links).
     let door_closed = scene.sim.as_ref().map(|s| s.drones.doors.closed_flags());
@@ -3333,9 +3414,7 @@ impl App {
             // (the old zero-buffer fallback served 50.0).
             Some(fail_restart_save(self.entry_save.as_ref(), self.scene.sim.as_ref().unwrap()))
         } else {
-            self.scene.sim.as_ref().map(|sim| nf_game::player::RamSave::capture(
-                &sim.drones.health, sim.gun.switch_request, &sim.drones.inventory, &sim.drones.channels)
-                .with_mission(&sim.drones.mission))
+            Some(warm_exit_save(self.scene.sim.as_ref().unwrap()))
         };
         let name = level_archive_name(next);
         eprintln!("level: loading {name} ({})", if save.is_some() { "warm" } else { "cold" });
@@ -4210,6 +4289,20 @@ impl App {
     /// passes its wall clock, the headless harness 1/60). The draw half (`draw_frame`)
     /// runs after it; the window event loop calls both, in this order.
     fn frame(&mut self, dt: f32) {
+        // pad-menus (results-stats-key): the pad drives the front end's arms — the game reads its
+        // style-independent menu actions (0x1a-0x22) off the pad edges every frame and the widgets
+        // send their messages on those edges [M psiInput_MapInputs 0x10cd80:377-424 +
+        // Button_Update 0x1ef948:74-91; the mapping cites in menu::pad_menu_action], so the port
+        // feeds the same edges through the keyboard's Action path. No pad (or the feature off):
+        // nothing. `poll_menu` runs every frame while the backend exists so no edge leaks across
+        // the menus/gameplay boundary; the action is consumed only when the front end owns input.
+        #[cfg(feature = "gamepad")]
+        if let Some(pad) = self.pad.as_mut() {
+            let a = pad.poll_menu();
+            if self.fe.is_some() {
+                if let Some(a) = a { self.menu_input(a); }
+            }
+        }
                 // fix-movie-playback: the movie glue runs before the load path so a phase-2
                 // resolve lands in the same frame the state 6 popped.
                 self.menu_script_tick();
@@ -4295,9 +4388,7 @@ impl App {
                 if let Some(w) = self.pending_weapon_assets.take() {
                     if self.weapon_needs_assets(w) {
                         let (pos, yaw) = self.scene.sim.as_ref().map(|s| (s.bond.pos, s.bond.yaw)).unwrap_or(([0.0; 3], 0.0));
-                        let save = self.scene.sim.as_ref().map(|sim| nf_game::player::RamSave::capture(
-                            &sim.drones.health, sim.gun.switch_request, &sim.drones.inventory, &sim.drones.channels)
-                            .with_mission(&sim.drones.mission));
+                        let save = self.scene.sim.as_ref().map(warm_exit_save);
                         self.entry_save = save.clone();
                         let name = level_archive_name(self.scene.sim.as_ref().map_or(0, |s| s.level));
                         eprintln!("weapon assets: {w:#04x} is not on this level — warm reload with its assets");
@@ -5289,25 +5380,15 @@ impl App {
                 self.opts.up = u;
                 let interp0 = !self.noclip && !self.paused && self.scene.sim.is_some() && std::env::var_os("NF_NOINTERP").is_none()
                     && self.dev.as_deref().map_or(true, |d| d.interp);
-                let alpha0 = if interp0 { self.anim_time.fract() } else { 1.0 };
-                let draw_cam = match (self.cam_prev, self.cam_cur) { (Some(a), Some(b)) if interp0 => lerp_cam(&a, &b, alpha0), _ => self.cam };
-                let aspect0 = g.config.width as f32 / g.config.height as f32;
-                // fix-cutscene-letterbox: a live script camera frames the view at the game's own
-                // 4:3 aspect and pillar-boxes the render into the band (the game's letterbox bars
-                // ride inside it). Gameplay keeps the window's widescreen. Same condition the HUD
-                // gate (`overlay_for`) drives the cut-scene HUD blank from.
-                let cutscene = self.scene.sim.as_ref().is_some_and(|s| s.script_camera().is_some());
-                let (proj_aspect, band) = if cutscene { cutscene_frame(g.config.width as f32, g.config.height as f32) } else { (aspect0, [0.0; 4]) };
-                let (vp0, _) = draw_cam.view_proj(proj_aspect);
-                // One visibility walk per frame, shared by the palette's object cull and render's
-                // World cull (fix-portal): the eye's cel from `Camera_CheckLocation` 0x1bae90's
-                // persistent state, the walk from it [M 0x1e86e8].
-                // The Toggles page's portal-culling row: off passes no world, so the walk returns
-                // everything (the whole level draws — the isolation view).
-                let portal = self.dev.as_deref().map_or(true, |d| d.portal_cull);
-                let door_closed = if portal { self.scene.sim.as_ref().map(|s| s.drones.doors.closed_flags()) } else { None };
-                let vis = g.renderer.cel_visibility(draw_cam.pos.to_array(), vp0, if portal { self.scene.sim.as_ref().map(|s| &s.world) } else { None }, door_closed.as_deref());
-                // G-043: build the palette only when a tick ran, then draw between the last two ticks.
+                // G-043 (fix-interp-camera-bracket): rebuild the palette AND advance the camera
+                // bracket HERE, before the draw camera and the blend fraction are taken. The
+                // bracket is one thing: `cam_prev`/`cam_cur` and `pal_prev`/`pal_cur` must be the
+                // same two ticks. It used to be two: `draw_cam` was read from the OLD bracket
+                // while `pal_prev`/`pal_cur` were blended from the NEW pair, so every frame that
+                // ran a tick drew the camera one whole tick behind the world. Measured on
+                // 0700004a's lift (drawn eye y, tick = -0.0303 u): -22.72629, -22.76416,
+                // -22.77174, -22.77932, -22.75659 - a 0.75-tick BACKWARD jump every fourth frame
+                // (21 px at 1 m), i.e. the double image on moving things, on every level, interp on only.
                 let pal_rebuilt = self.ticked || self.pal_cur.is_none();
                 if pal_rebuilt { PAL_REBUILDS.fetch_add(1, std::sync::atomic::Ordering::Relaxed); }
                 if pal_rebuilt {
@@ -5330,9 +5411,30 @@ impl App {
                     self.pal_blend.extend_from_slice(&new.0);
                     self.pal_cur = Some(new);
                     self.beam_entries = self.scene.beam_entries(&g.renderer.skin_layout);
-                    self.cam_prev = self.cam_cur;
-                    self.cam_cur = Some(self.cam);
                 }
+                let (draw_cam, alpha0) = draw_bracket(&mut self.cam_prev, &mut self.cam_cur, self.cam, pal_rebuilt, self.anim_time.fract(), interp0);
+                let aspect0 = g.config.width as f32 / g.config.height as f32;
+                // fix-cutscene-letterbox: a live script camera frames the view at the game's own
+                // 4:3 aspect and pillar-boxes the render into the band (the game's letterbox bars
+                // ride inside it). Gameplay keeps the window's widescreen. Same condition the HUD
+                // gate (`overlay_for`) drives the cut-scene HUD blank from.
+                let cutscene = self.scene.sim.as_ref().is_some_and(|s| s.script_camera().is_some());
+                // cutscene-side-strips: the front end owns the AV options' widescreen row
+                // (0x10000223 → viewer+0x114 [M 0x1baf70:28-32]); feed the same aspect the
+                // cut-scene view builds at (`Sim::view_aspect`, the gun tilt's input) and frame
+                // the cut-scene with it — see cutscene_frame. The game's default (row off) is 4/3.
+                let game_aspect = self.fe.as_ref().map_or(4.0 / 3.0, |fe| fe.view_aspect());
+                if let Some(sim) = self.scene.sim.as_mut() { sim.view_aspect = game_aspect; }
+                let (proj_aspect, band) = if cutscene { cutscene_frame(g.config.width as f32, g.config.height as f32, game_aspect) } else { (aspect0, [0.0; 4]) };
+                let (vp0, _) = draw_cam.view_proj(proj_aspect);
+                // One visibility walk per frame, shared by the palette's object cull and render's
+                // World cull (fix-portal): the eye's cel from `Camera_CheckLocation` 0x1bae90's
+                // persistent state, the walk from it [M 0x1e86e8].
+                // The Toggles page's portal-culling row: off passes no world, so the walk returns
+                // everything (the whole level draws — the isolation view).
+                let portal = self.dev.as_deref().map_or(true, |d| d.portal_cull);
+                let door_closed = if portal { self.scene.sim.as_ref().map(|s| s.drones.doors.closed_flags()) } else { None };
+                let vis = g.renderer.cel_visibility(draw_cam.pos.to_array(), vp0, if portal { self.scene.sim.as_ref().map(|s| &s.world) } else { None }, door_closed.as_deref());
                 let interp = interp0;
                 let alpha = alpha0;
                 let fp_blend = std::time::Instant::now();
@@ -6358,6 +6460,13 @@ pub fn run() -> Result<()> {
                 let v: Vec<f32> = args.get(i + 1).context("--bond needs x,y,z")?.split(',').map(|t| t.parse()).collect::<Result<_, _>>()?;
                 sim.bond = nf_game::player::Bond::new([v[0], v[1], v[2]], v.get(3).copied().unwrap_or(sim.bond.yaw)); if let Some(&pt) = v.get(4) { sim.bond.pitch = pt; }
             }
+            // Render aid (cutscene-side-strips): `NF_WIDESCREEN=1` raises the headless sim's view
+            // aspect to the AV options' widescreen row's 16/9 — the value the game writes at
+            // viewer+0x114 [M Camera_CalcViewAngles 0x1baf70:28-32] and the cut-scene view builds
+            // at [M Script_UpdateCamera 0x1db518:9]. The window path feeds the same value from the
+            // front end's row (App redraw); the headless sim has no front end, so shots of the
+            // widened cut-scene frame set it here.
+            if std::env::var_os("NF_WIDESCREEN").is_some() { sim.view_aspect = 16.0 / 9.0; }
             // `--draw <id>`: equip that weapon (the `--give` path's equip) and switch to it before the ticks, so a
             // headless render can show a fire script frame by frame (`--draw 0x34 --pull 60 --frame 70`).
             let mut draw: Option<u8> = None;

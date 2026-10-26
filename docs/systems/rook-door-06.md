@@ -127,3 +127,65 @@ written before the walk start was found and over-generalised one branch of case 
   All 5 re-derived tests pass with the walk-start drone.rs unchanged
   — the rook door still works on the real path (`rook_door_06_walk_live`
   green), and the driver's states are the game's.
+
+## The real-path stall found — the doorway park (level-06-rook-door, 2026-10-25)
+
+The real player path was walked end to end with real inputs (the walkreal legs: the truck spawn →
+the dismount → the greeting plates → the west lane → the well courtyard → the hedge gap → the
+guardhouse court → #438 killed on the fire path → E-door #47 → the guardroom → E-door #59 → the
+searchlight-courtyard mouth), logging every drone's state/position/door binding per tick
+(`crates/nf-view/tests/rook06_realpath_live.rs`, opt-in NF_ISO). The doorway stall is NOT the
+driver and NOT the escort — it is the **switch-16 guard pair beside door #47** (drones at
+(30.3, 41.1, −16.8) and (36.1, 41.2, −19.4) [D census + drone-props; the placement at
+(25.4, 39.4, −14.5) in the same courtyard holds the lead props 0x1d/0x23 and the patrol props
+0x24/0x25 but never spawns into the sim's 26]). The chain, per-tick from the walk:
+
+1. Walking the interior route raises the step channels (12/13/16/17/18 observed; 15 at the mouth)
+   [D #514–#523]; ch 16 enables the pair.
+2. The pair engages Bond (he just fired on #438) and fights in the normal-block combat states
+   (0x67/0x68/0x6d/0x69/0x73/0x74 … observed for 5000+ ticks).
+3. Losing sight of Bond, one of them takes **RUN_FOR_COVER 0x8c** whose cover route crosses the
+   **path 7 door-node pair** (35.9, 40.7, −15.7 / −16.8) at door #47: `ReachedDestNode` stands the
+   door in +0xBA8 and parks him in **DSTATE_OpenDoor 0x81** (observed at +9496), the door opens,
+   he resumes 0x8c and completes the run INSIDE THE DOORWAY (observed +9505).
+4. The RUN_FOR_COVER arrival re-enters ATTACK, and the port's **ATTACK-ENTER flush arm** ran
+   `NDrone2_ChangeToAttackMode`: his mode flipped **0 → 25 (0x19)** mid-fight (observed +9506) and
+   ATTACK's own mode gate sent him to **SniperAim 0x2a — stationary, sight/combat range 1000**.
+   He stood in the door jamb (35.47, 41.00, −16.93), bound to door #1, the door held at 0x4, for
+   the whole 1800-tick watch. The player coming back through #47 finds an NPC parked in the
+   doorway — the playtest door stall.
+
+### Why the flush arm is not the game's [M]
+
+`NDrone2_ChangeToAttackMode` 0x14a648 is called from exactly five sites — the `jal 0x14a648`
+census of ACTION.ELF: 0x14ce68 (inside `NDrone2_GetDroneTypeAttackTypeFriend` 0x14cbd8, guarded
+`+0xd8 (kind) == 0xb` and alert ≥ 1), 0x14d45c (`DoTypeSettingsOLD` 0x14d2e8 — OLD placements;
+every 06 drone is NEW, param 5 = 0x64 [D drone-props]), 0x15da54 (`CivilianMission` 0x15d860 case
+3's mission-arrival arm), 0x15e35c (`EnemyMission` 0x15e1e8 case 3's arrival — itself gated
+`GameState != 0x0700006`), and 0x165948 (`GoToGoalPosition` 0x165640). **`NDrone2_DSTATE_Attack`
+0x164210 and `DroneFunc_FirstAttack` 0x148010 are not callers.** A kind-2 NEW placement guard in
+plain combat therefore never flushes: the port's ATTACK-ENTER arm (the mode 0 → 0x19 stationary
+sniper flip) is the stall's whole cause.
+
+The same read exposed the game's +0x5a4 lifecycle the port is missing:
+`GetDroneTypeAttackTypeFriend`'s tail (0x14cea8 caseD_3) **writes the attack-fold result INTO
++0x5a4** (`+0x5a4 = uVar4`, the 0x56/0x12/0x2a/0xa7 fold) when the alt mode byte +0xc6 is clear
+and the second switch +0x135 is set or the alert field +0x504 ≥ 1.0 — so a guard who has been
+through one full-alert start-state computation no longer carries a flushable pending alt at all.
+The port's `start_state` computes the fold but never writes it back, which is why the (wrong)
+flush arm could fire mid-combat with a creation-time alt still pending.
+
+### The fix, validated — and the 01 conflict that holds it
+
+Removing the ATTACK-ENTER arm (+ the flush moved into a `change_to_attack_mode` helper used by
+EnemyMission's existing arrival arm) was validated on the exact walk above: the guard keeps his
+placement mode 0, fights THROUGH the doorway (he crossed to the courtyard side and pursued Bond),
+door #47 ends at the shut idle 0x2; green on nf-game's 887 unit tests, every rook_*/fix_06_*
+neighbor, escort_follow/fix_mission. **It flips `walkreal_07000001_live::
+walk_from_the_spawn_to_the_exit_with_the_contact` red (master green, 3 passed on master, 2+1 with
+the fix: the contact dies, state 0x47 at (−4.4, 6.3, 14.6), round 10)** — the 01 walk's balance
+depends on the non-decompile flush parking the corridor guards as stationary snipers before they
+hunt the contact. Landing order: re-derive 01 first (which guard kills the contact, his
+dtype/kind and alt_state, and whether the +0x5a4 fold-write alone clears the situation), then
+remove the arm. The full evidence walk is committed as `rook06_realpath_live.rs`
+(#[ignore]d with the whole chain in the ignore reason until the fix lands).

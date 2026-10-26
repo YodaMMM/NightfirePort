@@ -78,6 +78,8 @@ pub struct Group {
 
 pub struct FuseBox {
     pub placement: usize,
+    /// The box's script hash (placement param 0) — the wire-geometry walk reads its Entity streams.
+    pub script: u32,
     /// The box's world position (the placement translation + the object's centre).
     pub pos: V3,
     /// +0x54/+0x56/+0x5C/+0x5E: group 0's two channels, then group 1's (placement params 1–4).
@@ -106,6 +108,7 @@ impl FuseBox {
             let pos = [p.translation[0] + centre[0], p.translation[1] + centre[1], p.translation[2] + centre[2]];
             out.push(FuseBox {
                 placement: i,
+                script,
                 pos,
                 ch: [param(1) as u16, param(2) as u16, param(3) as u16, param(4) as u16],
                 groups: Default::default(),
@@ -204,7 +207,7 @@ mod tests {
     use crate::triggers::Channels;
 
     fn box_with(ch: [u16; 4]) -> FuseBox {
-        FuseBox { placement: 0, pos: [0.0; 3], ch, groups: Default::default() }
+        FuseBox { placement: 0, pos: [0.0; 3], ch, groups: Default::default(), script: 0 }
     }
 
     /// FuseBox_Register 0x1b0970: the first zero slot takes the object, count++.

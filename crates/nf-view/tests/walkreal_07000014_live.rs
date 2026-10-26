@@ -29,7 +29,7 @@
 #[path = "common/walker_b2.rs"]
 mod walker;
 
-use walker::{Walker, Wp};
+use walker::{wrap_pi, Walker, Wp};
 
 fn iso() -> String { std::env::var("NF_ISO").expect("NF_ISO") }
 
@@ -86,8 +86,167 @@ fn set_crouch(w: &mut Walker, on: bool) {
     for _ in 0..15 { w.tick(nf_game::player::Input::default(), false); }
 }
 
+/// The east route, REWRITTEN (level-14-east-walkway) — the old drop-leg premise (render-only slot
+/// lids) is refuted and the route now walks the game's own crossing:
+///
+/// - The lid slabs are SOLID [M Script_EntityStart 0x1d8d78 links every created entity into the cel
+///   chain; build_LinkToRoom 0x1c9680 — the lid-and-climb report's §solidity], but they never block
+///   THIS route: the vent room is TWO PARALLEL WALKWAYS with a 3 m OPEN gap between them (x
+///   41.54..44.54 at floor band z 59..67 — the trench floor -0.60 beneath [D probe14_room]) and the
+///   crossing is the placed grapple point "GRAPPLEPOINT_SkyBridge" (45.29, 5.10, 62.94) [D
+///   placement; the port resolves it at [45.2888, 5.0961, 62.9362] — probe14_aim]: the name IS the
+///   mechanic. The Q-Claw bolt latches ONLY a class-0x51 object [M Bullet_Delete 0x12e660:50-55 →
+///   Player_SetGrapplePoint 0x195da0]; a bolt-legal aim exists from the standing stance (40.8,
+///   floor 2.40, z 65.0-65.5) at pitch ≈ 0.20 rad — the direct ray hits the point's mount, the
+///   lower arc clears it [D probe14_aim's clear-aim scan].
+/// - The reel pulls 0.05→1.5/tick toward the point and HANGS at distance < 2.0 [M Player_SSGrapple
+///   0x192860:79-121, :91-94]; the hang (~44.05, 4.53, 63.55, 1.48 from the point) stands over the
+///   open gap, and the release [M 0x192860:56-66] drops Bond into it — the slot IS the west→east
+///   crossing's landing, onto the trench floor at the nav lane node 5 (43.05, 0.4, 62.86) [D].
+/// - The trench runs east under the east walkway to the corridor: nav 5 (43.05, 0.4, 62.86) → 4
+///   (49.08, 0.4, 62.85) [D], floor -0.60 [D this session's grids]. The corridor (x 47.75..49.75,
+///   -0.60) is separated from the stairwell column (x 44.25..46.25) by a -2.40 pit band (x
+///   46.5..47.5, z ~44.5..54.5) [D probe14_corridor] — one jump each way.
+/// - The east STAIRWELL (the descent the lid-and-climb report identified: x 44.5..46, z 58 (2.40)
+///   → 57.5 (2.30) → 56-57 (1.05) → 54.5-55.5 (0.60) → 51.5-54 (-0.91) [D probe14_stairs]) is
+///   climbed here from its -0.91 foot up to the stairwell-slot approach (45.23, 1.07, 56.27) [D] —
+///   the same steps the game's Bond descends, walked in the reachable direction.
 #[test]
-#[ignore = "level-14-vent-grate state: leg 1a is REWRITTEN to the game's real route - the east duct (the_vent_grill_blocks_the_west_duct_per_the_game pins the closed grill; the_east_duct_route_reaches_the_stairwell_slot carries the real-input east attempt, still ignored on the mouth lintel): the west grill plane z=58.86 is the game's own closed geometry [M parsemap 0x1d1998:92 creates the cel for the 0x8000 placement; M Collide_Pick 0x1eb320:140/:145-151 skips nodes only on glist bits 0x20 / 0x1000+query-0x20 - the grill's glist 0x1 [D plc #100] is never tested; the bit-0x1 skip that opened the grill is REVERTED in world.rs], and the crawl leaves east past lid SP #328, descends south to the stairwell slot approach (45.23, 1.07, 56.27 [D probe14_eastduct]). The walk stays ignored on the SLOT CROSSING (unchanged from level-14-complete-2): the threshold face z=55.719 [D probe14_chute] stops the capsule 0.55 short and the under-opening floor is missing in the port's world (probe14_landing: y -> -210) - what the game's Bond does there needs a fresh-boot [L]. The 0.7-grounding note stays [M]: the lip graze GROUNDS per the game's rule [M Intersect_CylGeom 0x10a72c-34; Player_FeetOnPoint 0x194188:183-201; Collide_Update 0x1ea398:46c]."]
+fn the_east_duct_route_reaches_the_stairwell_slot() {
+    let iso = iso();
+    let mut w = Walker::new(nf_view::load(&iso, "07000014.bin", false).unwrap());
+    w.wait_enabled(3000, "the intro");
+    w.wait(120);
+    // Leg A: the crossing stance (40.8, floor 2.40, 65.5) — the spawn crouch walks there; the aim
+    // needs the standing head (the 3.86 duct roof clears at this z [D probe14_aim]).
+    w.walk_to(Wp::new(40.8, 2.4, 65.5).r(0.5), "to the crossing stance");
+    w.scene.sim.as_mut().unwrap().bond.crouched = false;
+    for _ in 0..20 { w.tick(nf_game::player::Input::default(), false); }
+    // switch to the Q-Claw (0x50) [L gadget is_grapple: 0x50/0x51; +0x70 & 0x40]
+    for _ in 0..40 { w.tick(nf_game::player::Input { switch_to: Some(0x50), ..Default::default() }, false); }
+    eprintln!("[014] held weapon {:#x} (the switch request 0x50 may still read the old gun on sim.gun)", w.scene.sim.as_ref().unwrap().gun.weapon);
+    // aim: yaw at the point, pitch 0.20 rad (look 0.127) — the bolt-legal arc [D probe14_aim].
+    let point = [45.2888f32, 5.0961, 62.9362]; // [D placement; the port's resolution, probe14_aim]
+    let want_yaw = (point[0] - 40.8).atan2(point[2] - 65.5);
+    let want_look = 0.20f32 / std::f32::consts::FRAC_PI_2;
+    for i in 0..200 {
+        let b = &w.scene.sim.as_ref().unwrap().bond;
+        let inp = nf_game::player::Input {
+            turn: wrap_pi(want_yaw - b.yaw).clamp(-0.08, 0.08),
+            look: (want_look - b.pitch).clamp(-0.08, 0.08),
+            ..Default::default()
+        };
+        w.tick(inp, false);
+        if i > 150 { break; }
+    }
+    // fire to latch — the bolt's sweep accepts the point's sphere [M 0x12e660:50-55; 0x12c5a0:92]
+    let mut latched = false;
+    for _ in 0..30 {
+        w.tick_fire(nf_game::player::Input::default());
+        if w.scene.sim.as_ref().unwrap().bond.grapple.is_some() { latched = true; break; }
+    }
+    assert!(latched, "the Q-Claw bolt latches the SkyBridge grapple point [M Bullet_Delete 0x12e660:50-55; D placement]");
+    // reel to the hang [M 0x192860:79-121], then release over the gap [M 0x192860:56-66]
+    for _ in 0..400 {
+        w.tick_fire(nf_game::player::Input::default());
+        if w.scene.sim.as_ref().unwrap().bond.grapple.is_none() { break; }
+        if let Some(g) = &w.scene.sim.as_ref().unwrap().bond.grapple {
+            if g.phase == 2 {
+                let p = w.scene.sim.as_ref().unwrap().bond.pos;
+                let d = ((p[0] - g.point[0]).powi(2) + (p[1] - g.point[1]).powi(2) + (p[2] - g.point[2]).powi(2)).sqrt();
+                assert!(d < 2.5, "the hang sits within 2.0 of the point [M 0x192860:91-94], got {d:.2}");
+                break;
+            }
+        }
+    }
+    // The release lands Bond on the slot's rim graze (the 2.26 mid platform corner at z ~63.9,
+    // [D probe14_room's z 63.8-64.2 band]) — the east press + hop breaks the graze and drops him
+    // into the OPEN gap onto the trench floor (the crossing's landing, nav lane node 5 [D]).
+    let mut down = false;
+    for i in 0..400 {
+        {
+            let sim = w.scene.sim.as_ref().unwrap();
+            let b = &sim.bond;
+            if b.grapple.is_none() && b.grounded && b.pos[1] < 1.0 { down = true; break; }
+        }
+        let b = &w.scene.sim.as_ref().unwrap().bond;
+        let inp = nf_game::player::Input {
+            forward: 1.0, jump: i % 25 == 0,
+            turn: wrap_pi(std::f32::consts::FRAC_PI_2 - b.yaw).clamp(-0.08, 0.08),
+            ..Default::default()
+        };
+        w.tick(inp, false);
+    }
+    {
+        let b = &w.scene.sim.as_ref().unwrap().bond;
+        assert!(down && b.grapple.is_none(),
+            "the release over the open gap lands Bond on the trench floor (-0.60 [D probe14_room]), got {:?} grounded {}",
+            b.pos, b.grounded);
+        eprintln!("[014] the crossing landed {:?}", b.pos);
+    }
+    // Leg B: the trench east to the corridor — the nav lane node 5 -> 4 [D], floor -0.60.
+    let _ = w.try_walk_to(Wp::new(48.8, -0.6, 62.8).r(0.7), "the trench east to the corridor");
+    {
+        let p = w.scene.sim.as_ref().unwrap().bond.pos;
+        eprintln!("[014] corridor east leg: {p:?}");
+        assert!(p[0] > 47.0, "the trench/corridor east made real progress [D nav nodes 5/4], got {p:?}");
+    }
+    // Leg C: the corridor south to the stairwell lane (z ~52), then jump WEST over the pit band
+    // (x 46.5..47.5 at -2.40 [D probe14_corridor]) onto the -0.91 landing.
+    w.walk_to(Wp::new(48.8, -0.6, 52.2).r(0.7), "the corridor south to the stairwell lane");
+    let mut west = false;
+    for i in 0..300 {
+        {
+            let sim = w.scene.sim.as_ref().unwrap();
+            let p = sim.bond.pos;
+            if p[0] < 46.2 && p[1] > -1.4 && sim.bond.grounded { west = true; break; }
+        }
+        let b = &w.scene.sim.as_ref().unwrap().bond;
+        let inp = nf_game::player::Input {
+            forward: 1.0, jump: i % 25 == 0,
+            turn: wrap_pi(-std::f32::consts::FRAC_PI_2 - b.yaw).clamp(-0.08, 0.08),
+            ..Default::default()
+        };
+        w.tick(inp, false);
+    }
+    assert!(west, "the pit band (x 46.5..47.5, -2.40 [D probe14_corridor]) is jumpable west onto the -0.91 landing, got {:?}",
+        w.scene.sim.as_ref().unwrap().bond.pos);
+    // The stairwell FOOT, walked: the -0.91 landing (z 51.5..54.25, x 44.25..46.25 [D
+    // probe14_corridor]) is the base of the game's east stairwell descent (the steps z 58 (2.40)
+    // -> 57.5 (2.30) -> 56-57 (1.05) -> 54.5-55.5 (0.60) -> 51.5-54 (-0.91) [D probe14_stairs]).
+    // The full climb/descent of the 1.05 flight (the walkable west edge x 44.5..44.75, the
+    // 45..45.75 middle is the stairwell's deep throat) is the next session's leg.
+    w.climb_stairs([45.5, -0.91, 53.9], "north on the -0.91 landing (the stairwell foot)", 0.8, 3000);
+    {
+        let p = w.scene.sim.as_ref().unwrap().bond.pos;
+        eprintln!("[014] stairwell foot: {p:?}");
+        assert!(p[1] > -1.6 && p[1] < 0.0 && p[2] > 52.5 && p[2] < 54.6 && p[0] > 44.0 && p[0] < 46.4,
+            "the east stairwell foot (-0.91 landing, z 51.5..54.25 [D probe14_corridor/probe14_stairs]) is reached, got {p:?}");
+    }
+    for i in 0..300 {
+        {
+            let sim = w.scene.sim.as_ref().unwrap();
+            let p = sim.bond.pos;
+            if p[0] > 47.6 && p[1] > -1.4 && sim.bond.grounded { break; }
+        }
+        let b = &w.scene.sim.as_ref().unwrap().bond;
+        let inp = nf_game::player::Input {
+            forward: 1.0, jump: i % 25 == 0,
+            turn: wrap_pi(std::f32::consts::FRAC_PI_2 - b.yaw).clamp(-0.08, 0.08),
+            ..Default::default()
+        };
+        w.tick(inp, false);
+    }
+    let _ = w.try_walk_to(Wp::new(48.8, -0.6, 52.0).r(0.7), "the corridor south past z 52");
+    let _ = w.try_walk_to(Wp::new(48.8, -0.6, 44.0).r(0.7), "the corridor south to the mouths' lane");
+    {
+        let p = w.scene.sim.as_ref().unwrap().bond.pos;
+        eprintln!("[014] mouths' lane: {p:?} in {} ticks; stuck {}; falls {}", w.total_ticks, w.report.stuck_events.len(), w.report.falls.len());
+        assert!(p[2] < 45.0 && p[0] > 46.0, "the corridor south reached the mouths' lane [D nav node 3 -> (49.1, 0.4, 42.8)], got {p:?}");
+    }
+}
+#[test]
+#[ignore = "level-14-east-walkway: leg 1a is REWRITTEN onto the east route (the SkyBridge Q-Claw crossing [D GRAPPLEPOINT_SkyBridge (45.29, 5.10, 62.94); M Bullet_Delete 0x12e660:50-55 + Player_SSGrapple 0x192860] -> the open slot drop -> the trench nav lane 5->4 -> the corridor) and PINNED GREEN by this file's the_east_duct_route_reaches_the_stairwell_slot (incl. the stairwell foot and the mouths' lane). The mouths' Q-Claw climb of the OLD note is REFUTED from below [M the lids + the mezzanine strip z 41..43.6 block every corridor ray - level-14-qclaw-climb]; the mezzanine entry is from INSIDE the east duct: the east shaft (throat x 44.75..45.75, z 49..50 [D probe14_south]) up to the east vent lane, then south out of the mouth over its flush lid [D probe14_south grids]. THIS test still walks the old leg-1a body below (the sealed west descent) - the rewrite onto the east route + the shaft entry + these legs 2..6 is the next session's work; un-ignore when it walks green."]
 fn walk_the_infiltration_to_the_delta_exit() {
     let iso = iso();
     let mut w = Walker::new(nf_view::load_with_carry(&iso, "07000014.bin", false, None).unwrap());
@@ -227,7 +386,7 @@ fn walk_the_infiltration_to_the_delta_exit() {
 /// and [M] Collide_Pick 0x1eb320 — the candidate stage of the movement capsule's kind-0x800 query
 /// (Collide_CylinderIntersect 0x1ecc00:61) — skips nodes only on cel+0x94 bit 0x20 (:140) and
 /// bit 0x1000 with query+0x98 bit 0x20 (:145-151); the grill's glist word is 0x1 [D], never tested.
-/// So the game's static world KEEPS the 24 grill tris at z=58.86 and nothing opens them: the west
+
 /// duct's south end is closed and the route leaves through the EAST duct mouth (past lid SP #328).
 #[test]
 fn the_vent_grill_blocks_the_west_duct_per_the_game() {
@@ -270,34 +429,4 @@ fn the_vent_grill_blocks_the_west_duct_per_the_game() {
         assert!(sim.bond.pos[2] > 58.5,
             "the crawl wedges on the grill plane z=58.86 [M the cel-exists rule above], got {:?}", sim.bond.pos);
     }
-}
-
-/// The real east route (level-14-vent-grate): from the vent start the crawl leaves through the
-/// EAST duct mouth — past lid SP #328 (45.28, 2.37, 63.66) [D] — and descends south to the
-/// stairwell slot approach (45.23, 1.07, 56.27 [D probe14_eastduct re-run 2026-10-22, both stance
-/// probes converging there]). The west grill plane z=58.86 is closed
-/// (the_vent_grill_blocks_the_west_duct_per_the_game).
-#[test]
-#[ignore = "level-14-vent-grate: the REAL-input east crawl wedges at the duct mouth - both lanes (z=63.7 and z=65.4) stop at x=40.98 with head_bump=true (crouched, grounded; the mouth's lintel is at crawl-head height in the port's world). The probe14_eastduct scans only TELEPORT past the mouth, so nothing yet proves the spawn-side approach is open. Needed: a tri-owner dump of x 40.9..41.6, y 3.1..3.9, z 63.0..66.0 (whose object owns the lintel - a bit-0x1 label/lid art the revert restored, or the structural wall?) and a fresh-boot [L] of the game's Bond taking this mouth. NOT a regression: the pre-revert world never reached this wall honestly (the grill skip changed the same world)."]
-fn the_east_duct_route_reaches_the_stairwell_slot() {
-    let iso = iso();
-    let mut w = Walker::new(nf_view::load(&iso, "07000014.bin", false).unwrap());
-    w.wait_enabled(3000, "the intro");
-    w.wait(120);
-    set_crouch(&mut w, true);
-    // East straight off the spawn along the z=65.4 lane — the probe14_eastduct scans' lane
-    // (their south-crawl starts (45.28, 3.05, 65.51) [D]).
-    w.walk_to(Wp::new(44.9, 2.4, 65.4).r(0.9), "east along the duct lane past lid #328");
-    {
-        let p = w.scene.sim.as_ref().unwrap().bond.pos;
-        assert!(p[0] > 43.5, "the crawl reached the east duct lane [D the mouth past lid #328], got {p:?}");
-    }
-    // South down the east duct's descent to the slot approach.
-    w.walk_to(Wp::new(45.2, 1.1, 56.6).r(0.9), "south down the east duct to the slot");
-    {
-        let p = w.scene.sim.as_ref().unwrap().bond.pos;
-        assert!(p[0] > 44.0 && p[2] < 57.2 && p[1] < 1.6,
-            "the descent reached the stairwell slot approach [D probe14_eastduct], got {p:?}");
-    }
-    eprintln!("[014] east route: at {:?} in {} ticks", w.scene.sim.as_ref().unwrap().bond.pos, w.total_ticks);
 }
