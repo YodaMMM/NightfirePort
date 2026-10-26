@@ -56,3 +56,15 @@
   hall wall — port the ref as the running sum of pushes (the add-back), land the radial-dir rule,
   drop NF_WALK_KILL if unneeded, un-ignore the three walkreal_0700000a tests with their [L] pins.
   Session starting: suite + decompile reads next.
+
+- (19:25 UTC, 10-26) level-0a-band-settle-3 SESSION: the radial-dir arm landed [M 0x109da0:421-453]
+  (v = q − ref, dot(v,n) > 0, |v| < r, push = v̂(r − |v|)) with ref = pick_ref plumbed through
+  capsule_push/pick (16 test/example call sites, far ref = old behaviour); the ref's copy+0x50
+  mapping proven at the metal (disasm 0x1ebc84/0x1ebcc4: copy $sp+0x50, the RotPreTransVec out
+  $sp+0xa0 = copy+0x50; rigid ⇒ with the [L] walked values the tail is INERT on walks — the [L]
+  pushes are the spine-rule depenetration, kept as the [S] stand-in). pick_ref accumulator test
+  landed ACTIVE ([L]: boot (0,0,0), the free-walk hold, the +0.1/contact-tick press add-back).
+  NF_WALK_KILL stays gated (the kill still the only crossing mechanism; the 01 regression needs
+  the live re-check). The trio stays ignored (the slide writer unidentified — the live checks
+  name it). Battery: 0a 5/3i, 01 3/0, 05 8/0; nf-game 925/0; formats+audio 133/0; suite chunks
+  132 binaries 0 fails (fix_0c_pylon = the no-GPU env). Report docs/reports/level-0a-band-settle-3.md.
