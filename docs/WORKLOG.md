@@ -112,3 +112,19 @@ tests fail at the "the outro resolved" assert because the decoder thread finishe
 wall-clock time, not per poll. Plan: make the state-6 "finished" decision tick-driven (the
 host's movie poll count, the PSS audio length in ticks, per round 2) on BOTH builds, keep the
 decoded picture path for the real app. Evidence to cite: [M 0x108060, 0x1082e8].
+
+### mission-outros-4 — results (2026-10-26 ~10:25 UTC)
+The state-6 hold now follows the game's rule on BOTH builds: BGFMVPlaying clears when the
+movie's frames are consumed [M 0x108060, 0x1082e8], driven by the host's per-frame poll count
+to the PSS's audio length [D golden/pss_movies.tsv] — the one-line change is open()'s movies
+arm (headless_left no longer requires stream.is_none()); the decoder thread keeps feeding the
+picture path only. Reproduced the driver's exact symptom first (movies-ON, injected real-dura-
+tion image: `movie: decoding 07300004 ahead of state 6`, both outro tests dead at :95/:154 in
+1.35 s), then 3/3 on all four feature × image shapes. Movies-gated mo wave 17/17 binaries green
+(93 tests); nf-game wave 89/89 green. briefing_plays_live's 14 movies-ON failures on the
+injected image analysed in the report (synthetic movies have no decodable pictures; the
+present() stream-EOF arm is pre-existing and untouched; the file is #![cfg(feature="movies")]
+and contributes 0 tests to the suite's build). Suite: sandbox kills background jobs (nohup died
+in 8 s, verified) and the 9.9 GB rootfs cannot hold the 818-binary build — waves with
+per-binary deletion instead (scripts/wave_suite.py, state resumable); nf-formats/nf-audio/~680
+nf-view files not reached (window). Report: docs/reports/mission-outros-4.md.
