@@ -7777,6 +7777,9 @@ pub fn build(level: &Level, cels_only: bool, skeletons: &HashMap<u8, Skeleton>, 
                 // models from `EffectInfo[mat & 0x3f]+0x74` (nf_game::shatter::EFFECT_INFO) — they share
                 // the debris slots (slot k ≥ effects.debris.len() poses breaks.shatter.debris).
                 debris_meshes.extend(nf_game::shatter::EFFECT_INFO.iter().map(|e| e.model).filter(|m| *m != 0));
+                // The blast debris (`Explode_Update` 0x17c350 → `Debris_CreateEx` 0x1ac808, the same class-0x10
+                // object): `MetalHash_132` / `StoneHash_133` meshes; their slots follow the breakable pieces.
+                debris_meshes.extend(nf_game::explode::METAL_HASH_132.iter().chain(nf_game::explode::STONE_HASH_133.iter()).copied());
                 let mut casing_meshes: Vec<u32> = surf.ammo.casing_mesh.iter().copied().filter(|m| *m != 0).collect();
                 // The gas puffs (`Gas_Init` 0x1aacc8): one draw slot per pool index for each mesh a puff can carry —
                 // SMOKE_QUAD (muzzle smoke, searchlight smoke, trails) and every `EffectInfo` gas mesh (the impact
@@ -9313,7 +9316,17 @@ pub fn build(level: &Level, cels_only: bool, skeletons: &HashMap<u8, Skeleton>, 
                                 for r in 0..3 { for k in 0..3 { m[r][k] *= d.e8; } }
                                 m
                             }
-                            _ => far,
+                            Some(_) => far,
+                            // Past the breakable pieces: the blast debris — the same `Debris_Update` 0x1aac00
+                            // object and draw (euler `rot` at obj+0x30, scaled by obj+0xe8).
+                            None => match s.drones.blast_debris.get(slot - s.drones.effects.debris.len() - s.drones.breaks.shatter.debris.len()) {
+                                Some(d) if d.model == mesh => {
+                                    let mut m = nf_formats::placement::object_matrix(d.rot, d.pos);
+                                    for r in 0..3 { for k in 0..3 { m[r][k] *= d.e8; } }
+                                    m
+                                }
+                                _ => far,
+                            },
                         },
                     },
                     // fix-grenade-throw: the smoke grenade's cloud (`Occlude_Create` 0x17ea80) — a
