@@ -148,3 +148,8 @@ casing settle test; full suite; report + finish by 20:30 UTC.
   census table empty.
 - Suite: full-run constraints this window (2-core sandbox, background jobs killed between tool
   calls) — see the report for what ran on the final tree.
+- Final tree (merged origin/master dcc4a733): nf-game lib 578/0/5i, nf-view
+  rope_guard_hitbox_07000011_live 7/0/0i, nf-game rope_guard_hitbox_live 4/0. The full
+  four-crate suite run is the next round's first step (background jobs die between tool calls
+  here; a 10-min foreground chunk never passed the build). Report:
+  docs/reports/level-11-abseil-hang-pose.md.
