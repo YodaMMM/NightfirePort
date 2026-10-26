@@ -25,3 +25,12 @@ Work log:
   for the four status creates + a create-fn audit section. Both new tests pass.
 - Next: Text_SendMessage 0x223600 caller census ([M] __Menu_SendMessage 0x1f1c18 type-0xc arm +
   TextBox_Update 0x2237c8 self-0x53) vs the port's generic control_msg — census test pending.
+- Text_SendMessage 0x223600 [M]: dispatcher read (arms 0x14/0x16/0x21/0x2b/0x39/0x3b/0x3d/0x47/0x53,
+  default -> Label_SendMessage(+0x94)); dispatch proven at __Menu_SendMessage 0x1f1c18 (type byte
+  +0x7b, case 0xc); sole constructor Manager_SendMessage 0x21c858 case 0xc -> Text_Init 0x222b80
+  (sole jal 0x21cad4). Caller census [D]: new nf-formats/tests/textbox_msg_census.rs walks all 34
+  shipped menu defs (283 pages) via the calltree_census multi-hash parse — ZERO type-0xc controls
+  anywhere -> Text_SendMessage and TextBox_Update 0x2237c8 are unreachable in the shipped game;
+  the port needs nothing for them (its generic control_msg covers every shipped widget type).
+  Note: PAGE tags carry 0x8000000N file hashes, not the entry-name hash (learned via 0-page parses).
+- Full suite restarted in background (env launcher in /tmp; earlier background runs died silently).
