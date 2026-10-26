@@ -12234,6 +12234,11 @@ impl Drones {
     /// caller's original form; the scene build passes the id through `attach_level_id`.
     pub fn attach_level(&mut self, level: &nf_formats::level::Level) { self.attach_level_id(level, 0) }
 
+    /// The pending weather drop type — the `InitDrops(drop_type)` argument `Env_Create` 0x17b968
+    /// passes when the level's winning 0xDF placement builds `GlobalEnv`; the port's `env`
+    /// carries it from the first tick on. Test/inspection accessor (`env_pending` is internal).
+    pub fn pending_env_drop_type(&self) -> Option<u8> { self.env_pending.as_ref().map(|(k, _)| *k) }
+
     pub fn attach_level_id(&mut self, level: &nf_formats::level::Level, level_hash: u32) {
         self.triggers = crate::triggers::build(level);
         // The AI points (`Drone_AIPoint` 0x137550; `parsemap_create_dynamic_objects` case 0xE9): type =

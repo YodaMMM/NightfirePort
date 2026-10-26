@@ -37,23 +37,25 @@ fn the_weather_is_the_last_0xdf_placement_bubble_gen() {
         p.params.iter().find(|(k, _)| *k == 0).map(|&(_, v)| v as u8).unwrap_or(0)
     };
 
-    // [D] the two weather rows in placement order, with their drop types.
-    let dfs: Vec<usize> = placements
+    // [D] the two weather rows in placement order (census flat ids #425/#588 = "Weather" then
+    // "Bubble_gen"; positions verbatim), with their drop types.
+    let dfs: Vec<&Placement> = placements
         .iter()
-        .enumerate()
-        .filter(|(_, p)| p.flags & 0xff == 0xdf)
-        .map(|(i, _)| i)
+        .filter(|p| p.flags & 0xff == 0xdf)
         .collect();
-    assert_eq!(dfs, vec![425, 588], "07000014's kind-0xDF rows (measured on the disc)");
-    assert_eq!(p0(&placements[425]), 0xff, "[D] #425 Weather p0 = 0xff");
-    assert_eq!(p0(&placements[588]), 2, "[D] #588 Bubble_gen p0 = 2 (bubbles)");
+    assert_eq!(dfs.len(), 2, "07000014's kind-0xDF rows (measured on the disc)");
+    let close = |a: [f32; 3], b: [f32; 3]| a.iter().zip(b).all(|(x, y)| (x - y).abs() < 0.01);
+    assert!(close(dfs[0].translation, [0.0, 0.0, 0.0]), "[D] first 0xDF = #425 Weather at the origin");
+    assert!(close(dfs[1].translation, [75.67, 1.25, 47.86]), "[D] last 0xDF = #588 Bubble_gen");
+    assert_eq!(p0(dfs[0]), 0xff, "[D] Weather p0 = 0xff");
+    assert_eq!(p0(dfs[1]), 2, "[D] Bubble_gen p0 = 2 (bubbles)");
 
     // [M 0x17b968] the port's env must come from the LAST 0xDF row — Bubble_gen, not Weather.
     let mut sim = nf_game::drone::Drones::new(Vec::new(), nf_game::drone::Rng::new(1));
     sim.attach_level_id(&level, 0x0700_0014);
-    let (kind, _) = sim.env_pending.as_ref().expect("the port builds weather from a 0xDF row");
+    let (kind, _) = match sim.pending_env_drop_type() { Some(k) => (k, ()), None => panic!("the port builds weather from a 0xDF row") };
     assert_eq!(
-        *kind, 2,
+        kind, 2,
         "GlobalEnv/InitDrops take the LAST 0xDF's drop type [M 0x17b968 stores on every call]"
     );
     assert_eq!(sim.sun_vector, [0.0; 3], "[D] Bubble_gen carries no sun params (p9 = 0)");
