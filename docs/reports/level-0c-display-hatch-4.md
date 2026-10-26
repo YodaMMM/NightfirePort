@@ -92,3 +92,14 @@ body-solid vs walkable-through, port that rule only, and keep all six plus the
 ## Usage
 
 not visible to me
+
+## ntfy failed
+
+All three fallbacks, 23:17 UTC 2026-10-26:
+
+1. `curl -sS -m 20 -H "Title: NightfirePort" -d "level-0c-display-hatch-4: ..." https://ntfy.sh/nightfire-yoda-8k3x`
+   → `{"code":42908,"http":429,"error":"limit reached: daily message quota reached; increase your limits with a paid plan, see https://ntfy.sh","link":"https://ntfy.sh/docs/publish/#limitations"}`
+2. `python3 -c "import urllib.request as u; u.urlopen(u.Request('https://ntfy.sh/nightfire-yoda-8k3x', data=..., headers={'Title':'NightfirePort'}), timeout=20)"`
+   → `urllib.error.HTTPError: HTTP Error 429: Too Many Requests`
+3. `wget -q -O- --post-data "level-0c-display-hatch-4: done" https://ntfy.sh/nightfire-yoda-8k3x`
+   → no output, non-zero exit (same 429; `-q` suppressed the body)
