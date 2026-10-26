@@ -215,9 +215,23 @@ fn the_armour_pickup_takes_for_fifty() {
         for _ in 0..40 { sim.step_bond(Input::default(), false, false, false); if sim.drones.pickups[idx].gone { break; } }
         assert!(sim.drones.pickups[idx].gone, "the armour took on contact");
         assert_eq!(sim.drones.health.armour, 50.0, "armour +50 [M Pickup_Handler armour arm]");
-        // The kind-6 bonuses: same take path, delete-on-take [D #502/#503 respawn 0].
-        let bonus = sim.drones.pickups.iter().filter(|p| p.kind == 6).count();
+        // The kind-6 bonuses: same take path, delete-on-take [D #502/#503 respawn 0]. They exist
+        // only with 07000007's gold medal recorded [M Pickup_Create 0x18dda0:93-95] — 07000007
+        // plays under BaseMap 0x07000005 (the mission table [L ee_start_05 0x2a4350], the gold bit
+        // the 0x0700005/9/11 kind-4 group's rank 0 [L 0x2bc920 row 1; M 0x199210]) — so this test
+        // loads the medal word (pickup-medal-gate).
+        let mut p = nf_game::progress::Progress::default();
+        p.set_level_bonus(0x0700_0005, 3, 0); // [M Menu_SetLevelBonus 0x1ffa10]
+        let Some(iso) = iso() else { eprintln!("NF_ISO not set — skipping"); return };
+        let mut scene2 = nf_view::load_with_carry_medals(&iso, "07000007.bin", false, None, 1, p.bonus[0]).expect("medal load");
+        let sim2 = scene2.sim.as_mut().unwrap();
+        free(sim2);
+        let bonus = sim2.drones.pickups.iter().filter(|p| p.kind == 6).count();
         assert_eq!(bonus, 2, "the two Pickup 007 bonuses are created [D #502/#503]");
+        // The no-medal arm [M 0x18dda0:93-95]: the plain load (fresh-boot zero word) creates none.
+        let bare = load().unwrap();
+        assert!(bare.sim.as_ref().unwrap().drones.pickups.iter().all(|pk| pk.kind != 6),
+            "no gold medal → the kind-6 bonuses are not created [M 0x18dda0:93-95]");
     }
 }
 

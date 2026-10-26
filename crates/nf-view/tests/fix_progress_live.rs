@@ -29,10 +29,23 @@ fn yaw_to(from: [f32; 3], at: [f32; 3]) -> f32 {
 /// (`Player_WeaponInitBullet` 0x1a4bf0:258), hit-enemy per player hit on a team-1 drone
 /// (`NDrone2_HitDamage` 0x145558:57-60), dispatched on the player's kill (`OnInitDeath`
 /// 0x145bd0:57-59), bonus pickups in `Pickup_Handler` case 6 (0x18e650:234-236).
+/// The gold-medal `bonus[0]` word for `base_map` — the state `PlrStats_HasGoldMedal` 0x199a40
+/// reads [M Menu_HasMedal(BaseMapHCode, 3, 0) → the RewardsTable bit]; the award arm is
+/// `Menu_SetLevelBonus` 0x1ffa10 (the port's `set_level_bonus`). pickup-medal-gate: without these
+/// bits the kind-6 '007' pickups are not created at all [M Pickup_Create 0x18dda0:93-95].
+fn gold_bits(base_map: u32) -> u64 {
+    let mut p = nf_game::progress::Progress::default();
+    p.set_level_bonus(base_map, 3, 0);
+    p.bonus[0]
+}
+
 #[test]
 fn killing_two_guards_and_taking_a_bonus_tallies_like_the_decompile() {
     let Some(iso) = iso() else { eprintln!("NF_ISO not set — skipping"); return };
-    let mut scene = nf_view::load(&iso, "07000005.bin", false).expect("load 07000005");
+    // The bonus pickup exists only with the level's gold medal recorded [M 0x18dda0:93-95 —
+    // 07000005 plays under BaseMap 0x07000005, whose gold bit is the 0x0700005/9/11 kind-4
+    // group's rank 0 [L ee_start_05 0x2bc920 row 1; M 0x199210 group scan]] — the load carries it.
+    let mut scene = nf_view::load_with_carry_medals(&iso, "07000005.bin", false, None, 1, gold_bits(0x0700_0005)).expect("load 07000005");
     let sim = scene.sim.as_mut().unwrap();
     tick_idle(sim, 30);
     // The level's drones exist: the live start count is 13 (spawner 266 brought one in within the
@@ -86,7 +99,7 @@ fn killing_two_guards_and_taking_a_bonus_tallies_like_the_decompile() {
     // One Bond-bonus pickup (kind 6 [M Pickup_Handler case 6 0x18e650:234-236]): teleport Bond onto
     // it, the tick's pickup pass takes it.
     let bonus = sim.drones.pickups.iter().position(|p| p.kind == nf_game::pickup::kind::BOND_BONUS && !p.gone)
-        .expect("07000005 places Bond-bonus pickups (the row-8 count is 7 [L])");
+        .expect("07000005 places Bond-bonus pickups with the gold medal recorded (the row-8 count is 7 [L]; the gate M 0x18dda0:93-95 opens)");
     let at = sim.drones.pickups[bonus].m[3];
     sim.bond.pos = [at[0], at[1], at[2]];
     tick_idle(sim, 5);
