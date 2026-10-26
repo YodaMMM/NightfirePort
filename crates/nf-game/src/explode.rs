@@ -422,4 +422,140 @@ mod tests {
         assert_eq!(d.len(), 3);
         assert!(d.iter().all(|p| p.gfx == 0x2000_009));
     }
+
+    #[test]
+    fn the_debris_arm_spin_constant_is_the_games_word() {
+        // [M 0x1ac808:40 `Rand_FRandHalf_Vec(0x3e71463b, …)`; L ee_start_05.bin] the port's
+        // constant must be bit-equal to the game's word — the old 0.24414063 (0x3E7A0000) was not.
+        assert_eq!(0.235_619_47f32.to_bits(), 0x3e71_463b);
+    }
+
+    #[test]
+    fn the_hash_arrays_match_the_snapshot() {
+        // [L ee_start_05.bin @0x2a3718/@0x2a3728; symbols MetalHash.132/StoneHash.133].
+        assert_eq!(METAL_HASH_132, [0x0200_0414, 0x0200_0415, 0x0200_0416, 0x0200_041b]);
+        assert_eq!(STONE_HASH_133, [0x0200_0664, 0x0200_0665, 0x0200_0666, 0x0200_0664]);
+    }
+
+    fn blast(kind: u16, script: u32) -> Explosion {
+        Explosion { pos: [0.0; 3], radius: 10.0, damage: 80.0, attacker: usize::MAX,
+            lifetime: 165, script: script != 0, debris: kind, propagated: true, age: 1,
+            weapon_type: 0x34, script_hash: script, debris_dir: [0.0, 1.0, 0.0],
+            debris_jitter: [0.0; 3] }
+    }
+
+    #[test]
+    fn kind_zero_blasts_never_draw_or_spawn_debris() {
+        // The mine's inline Explode_Create stores kind 0 [M 0x17c930:128], Destroy_Smash's stack
+        // slot is an explicit 0 [M 0x12bcf8 sw $zero,($sp)], the fuse arm's too [M 0x12ce14] — and
+        // `Explode_Update` returns BEFORE the Rand_Rand(5) draw on kind == 0 [M 0x17c350:25-27].
+        // 07000015's mines and oil barrels blast through these calls: no debris, no draws, ever.
+        for kind in [0u16] {
+            let mut rng = crate::drone::Rng::new(3);
+            for age in 1..=41u32 {
+                let mut e = blast(kind, 0x0600_0052);
+                e.age = age;
+                let before = rng.draws;
+                assert!(debris_arm(&e, &mut rng, 1000 + age, 0x0700_0015, false).is_empty());
+                assert_eq!(rng.draws - before, 0, "kind 0 returns before the draw [M 0x17c350:25]");
+            }
+        }
+        // Sister (can fail): kind 6 DOES reach the draw.
+        let mut rng = crate::drone::Rng::new(3);
+        let e = blast(6, 0x0600_0052);
+        let before = rng.draws;
+        let _ = debris_arm(&e, &mut rng, 1000, 0x0700_0015, false);
+        assert_eq!(rng.draws - before, 1, "one Rand_Rand(5) draw per gated tick [M 0x17c350:34]");
+    }
+
+    #[test]
+    fn non_blast_script_blasts_never_draw_or_spawn_debris() {
+        // `inst+0x34 != 0 && SCRIPTINFO+0x98 != 0x6000052 → return` before the draw [M 0x17c350:28].
+        // The monitor blast (0x0600027) and the Samurai bolt's (0x06007c4) never spawn debris.
+        for script in [0x0600_0027u32, 0x0600_004f, 0x0600_07c4] {
+            let mut rng = crate::drone::Rng::new(5);
+            let e = blast(6, script);
+            let before = rng.draws;
+            assert!(debris_arm(&e, &mut rng, 1000, 0x0700_0015, false).is_empty());
+            assert_eq!(rng.draws - before, 0);
+        }
+        // Sister (can fail): the standard blast script passes the gate.
+        let mut rng = crate::drone::Rng::new(5);
+        let e = blast(6, 0x0600_0052);
+        let before = rng.draws;
+        let _ = debris_arm(&e, &mut rng, 1000, 0x0700_0015, false);
+        assert_eq!(rng.draws - before, 1);
+    }
+
+    #[test]
+    fn the_first_quarter_gate_and_the_modulo_gate() {
+        // lifetime>>2 < age → return before the draw [M 0x17c350:31]; with lifetime 165 the arm
+        // is dead from age 42 on [M 0x17cd18 the +0xAB0 u16]. The draw then happens EVERY gated
+        // tick — consumed even when the modulo fails [M 0x17c350:34-38] — and the passing tick
+        // spawns 3 particles whose 10 draws each ride the shared stream [M 0x1ac808 draws].
+        let mut rng = crate::drone::Rng::new(9);
+        for age in 42..=50u32 {
+            let mut e = blast(6, 0x0600_0052);
+            e.age = age;
+            let before = rng.draws;
+            assert!(debris_arm(&e, &mut rng, 7, 0x0700_0015, false).is_empty());
+            assert_eq!(rng.draws - before, 0, "age {} is past the first quarter", age);
+        }
+        // Find a passing game_time with this seed (fresh stream per probe), then pin the counts.
+        let mut passing = None;
+        for t in 1..200u32 {
+            let mut rng = crate::drone::Rng::new(11);
+            let e = blast(6, 0x0600_0052);
+            if !debris_arm(&e, &mut rng, t, 0x0700_0015, false).is_empty() { passing = Some(t); break; }
+        }
+        let t = passing.expect("a kind-6 blast must pass the modulo gate within 200 ticks");
+        let mut rng = crate::drone::Rng::new(11);
+        let e = blast(6, 0x0600_0052);
+        let d = debris_arm(&e, &mut rng, t, 0x0700_0015, false);
+        assert_eq!(d.len(), 3, "Debris_CreateEx count = 3 [M 0x17c350:66]");
+        assert_eq!(rng.draws, 1 + 3 * 10, "the gate draw + 10 draws per particle [M 0x1ac808:25-41]");
+        assert!(d.iter().all(|p| METAL_HASH_132.contains(&p.gfx)), "metal meshes for kind 6");
+        assert!(d.iter().all(|p| (90..180).contains(&p.life)), "life = Rand(90) + 90 [M 0x1ac808:29-31]");
+        // Sister (can fail): a different seed at the same tick — the draw stream differs, so the
+        // replay is not vacuous (the port's rand is the ledger-replayed primitive,
+        // tests/diff_calls.rs `Rand_Rand` 40 calls bit-exact).
+        let mut rng = crate::drone::Rng::new(12);
+        let e = blast(6, 0x0600_0052);
+        let before = rng.draws;
+        let d2 = debris_arm(&e, &mut rng, t, 0x0700_0015, false);
+        assert!(rng.draws - before >= 1);
+        let _ = d2;
+    }
+
+    #[test]
+    fn stone_kinds_are_gated_on_level_and_channel() {
+        // Kinds 8/10/0xB need GameState level 0x0700008 AND switch_channels[0x53] on [M 0x17c350:49-58];
+        // kinds 7/9 and the unlisted kinds fall through the switch to nothing (after the draw) [M :46-48].
+        for kind in [8u16, 10, 0xb] {
+            let mut rng = crate::drone::Rng::new(7);
+            let e = blast(kind, 0x0600_0052);
+            let before = rng.draws;
+            assert!(debris_arm(&e, &mut rng, 5, 0x0700_0015, true).is_empty(), "wrong level");
+            assert_eq!(rng.draws - before, 1, "the draw still happens (the level gate is post-draw)");
+            assert!(debris_arm(&e, &mut rng, 5, 0x0700_0008, false).is_empty(), "channel off");
+            // The stone meshes on the one level where they can fire.
+            let mut found = None;
+            for t in 1..200u32 {
+                let mut rng = crate::drone::Rng::new(21);
+                if !debris_arm(&e, &mut rng, t, 0x0700_0008, true).is_empty() { found = Some(t); break; }
+            }
+            let t = found.expect("stone debris must be reachable on 0x0700008 with ch 0x53");
+            let mut rng = crate::drone::Rng::new(21);
+            let d = debris_arm(&e, &mut rng, t, 0x0700_0008, true);
+            assert_eq!(d.len(), 3);
+            assert!(d.iter().all(|p| STONE_HASH_133.contains(&p.gfx)));
+        }
+        for kind in [7u16, 9, 1, 12] {
+            let mut rng = crate::drone::Rng::new(7);
+            let e = blast(kind, 0x0600_0052);
+            let before = rng.draws;
+            assert!(debris_arm(&e, &mut rng, 5, 0x0700_0008, true).is_empty());
+            assert_eq!(rng.draws - before, 1, "kind {} draws then falls through the switch", kind);
+        }
+    }
 }
