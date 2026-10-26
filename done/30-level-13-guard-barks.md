@@ -20,3 +20,8 @@ say so in the report. Never weaken a decompile-backed test to make code pass.
 
 ---
 claimed-by: sandbox6 at 2026-10-26T15:55Z
+
+---
+## Report (done, 2026-10-26T16:56Z)
+
+Closed by the driver: the report is on `s/level-13-guard-barks` (docs/reports/level-13-guard-barks.md); the worker didn't run finish.sh.
