@@ -155,10 +155,19 @@ fn melee_event_creates_the_close_combat_bullet() {
         player.sph = player.pos;
         player.capsule = ([player.pos[0], player.pos[1] + 1.086, player.pos[2]], player.pos);
         sim.tick(&d, &player);
-        // The punch bullet flies and connects inside the same tick, so the outcome is the hit on
-        // Bond (the record's id rides the Hit): in range → one hit by weapon 0x65; out → none.
+        // The punch bullet flies at the record's 1.5/tick [L weapon_data 0x65: speed 1.5, range 1.5];
+        // from 1.5 out it arrives the tick AFTER the spawn (the first tick's segment is
+        // (FRand(0.5)+0.5)·1.5 ≤ 1.5 [M Bullet_update], which stops just short of the 16 boxes'
+        // front faces — the old cylinder's r 0.25 surface sat 0.25 closer, which is where the old
+        // same-tick claim came from). Tick until the bullet resolves (≤ 4: the range 1.5 dies at
+        // travelled > 1.5 [M Bullet_update's ranged-out arm]).
+        let mut hit = false;
+        for _ in 0..4 {
+            if !sim.player_hits.is_empty() { hit = true; break; }
+            sim.tick(&d, &player);
+        }
         if dist < 1.75 {
-            assert_eq!(sim.player_hits.len(), 1, "the punch connects in range (dist {dist})");
+            assert!(hit, "the punch connects in range (dist {dist})");
             assert_eq!(sim.player_hits[0].1, gi, "the hit is the melee guard's bullet");
         } else {
             assert!(sim.player_hits.is_empty(), "out of the 1.75 punch range (dist {dist}): {:?}", sim.player_hits);

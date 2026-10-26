@@ -45,12 +45,20 @@ fn load_at(pos: [f32; 3]) -> nf_view::scene::Scene {
     scene
 }
 
-/// Stages a guard bullet two units in front of Bond's EYE (yaw 0 → +Z ahead; the standing eye rides
-/// 0.7 above the feet — BL+0x908 [L bldata.md, M 0x18f5d8:117-128]) and steps once.
+/// Stages a guard's round two units in front of Bond, straight into the TORSO box. The staging is
+/// the box geometry, not the old cylinder's eye line: the 16 boxes at the [L] idle pose put the
+/// torso box's centre at the root + (−0.025, +0.287, −0.086) — the bone4/bone1 midpoint 0.2866 the
+/// snapshot test pins [L ee_start_05, reload_and_bond_hitboxes_live] — and the EYE (root + 0.7,
+/// BL+0x908 [L bldata.md, M 0x18f5d8:117-128]) rides 1.3 cm ABOVE the head box's top face
+/// (centre +0.577, half 0.11), so an eye-height line threads the head/torso gap at the idle pose
+/// the port holds (the game's live aim palette is not modelled yet). A −Z line through the torso
+/// centre crosses no earlier-listed box (the head box bottom is +0.467), so `Collide_Jointy`'s
+/// list-order walk reports part 4 [M 0x1ec180]. Bond's pos here is the game's root convention
+/// (floor + 1.085 standing [L 07000005 start, M Player_Collision 0x194df0]).
 fn shoot_from_front(scene: &mut nf_view::scene::Scene, damage: f32, weapon: u16) {
     let p = scene.sim.as_ref().unwrap().bond.pos;
     scene.sim.as_mut().unwrap().drones.bullets.push(Bullet {
-        pos: [p[0], p[1] + 0.7, p[2] + 2.0],
+        pos: [p[0] - 0.025, p[1] + 0.287, p[2] + 2.0],
         dir: [0.0, 0.0, -1.0],
         speed: 15.0, travelled: 0.0, range: 100.0,
         damage, owner: usize::MAX, state: 0, weapon, flyby: false, bounces: 0, ..Bullet::TAIL

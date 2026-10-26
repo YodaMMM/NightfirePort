@@ -75,6 +75,23 @@ pub fn first_box_hit(start: V3, ray: V3, boxes: &[HitBox]) -> Option<(i16, f32)>
 /// `CollisionBones::for_skin` picks `HumanCollisionBones`.
 pub const BOND_SKIN: u32 = 0x0500_0007;
 
+/// The player's skin hash, per level — `Player_Init` 0x1910f8:94-108's switch on the level id
+/// (`GameState+0x12`), the value handed to `AnimObjectNew` [M]: 0x0500009 on 07000001-07000004,
+/// 0x050000d on 07000007/07000008, 0x050007c on 0700001b, 0x0500007 everywhere else. The disc
+/// carries each per its own levels (0x05000009 in 01-04's own archives, 0x050000d in 05-08's,
+/// 0x0500007c in 16/1b/43 [D nf-extract bin-list census, kind-3 entries]); on 07000048 none of
+/// the player skins is in the level's own archive — the game's session hashtable still holds
+/// 0x05000007 from the previous level's containers [M AnimLoadFile 0x1d8248 registers and nothing
+/// unregisters], so the port's loader merges it the same way (nf-view's load).
+pub fn player_skin_hash(level: u32) -> u32 {
+    match level {
+        0x0700_0001..=0x0700_0004 => 0x0500_0009,
+        0x0700_0007 | 0x0700_0008 => 0x0500_000d,
+        0x0700_001b => 0x0500_007c,
+        _ => BOND_SKIN,
+    }
+}
+
 /// Bond's standing idle pose, root-local frame [L]: the AnimObject+0xB8 palette of the 07000001 /
 /// 07000005 / 0700000a level-start EE snapshots with the object matrix (obj+0x90) undone — the
 /// three levels agree to ±0.011 on every axis (the idle sway; all three are the idle's first
@@ -117,8 +134,9 @@ pub(crate) const BOND_IDLE_POSE: [(i16, [f32; 3], [[f32; 3]; 3]); 20] = [
 /// the other bone's rotation, entry 0's centre rule (the bone plus (0, bone.y − other.y, 0)).
 /// Not modelled: the palette's walk/crouch animation (the boxes hold the idle stance at any yaw).
 pub fn bond_boxes(d: &Data<'_>, yaw: f32, pos: V3) -> Vec<HitBox> {
-    let Some(skin) = d.skins.get(&BOND_SKIN) else { return Vec::new() };
-    let table = d.hitboxes.for_skin(BOND_SKIN);
+    let sk = player_skin_hash(d.level);
+    let Some(skin) = d.skins.get(&sk) else { return Vec::new() };
+    let table = d.hitboxes.for_skin(sk);
     let om = nf_formats::placement::object_matrix([0.0, yaw, 0.0], pos);
     // The yaw matrix's 3×3 (row-vector rows; object_matrix's rows 0..2, the translation is row 3).
     let ry = [[om[0][0], om[0][1], om[0][2]], [om[1][0], om[1][1], om[1][2]], [om[2][0], om[2][1], om[2][2]]];

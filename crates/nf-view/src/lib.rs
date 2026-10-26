@@ -992,6 +992,66 @@ fn load_impl(iso_path: &str, archive: &str, all: bool, save: Option<&nf_game::pl
             }
             _ => {}
         }
+        // bond-hitbox-pose: the PLAYER's skin on every level. `Player_Init` 0x1910f8:94-108 resolves
+        // the level's player-skin hash off the level id and hands it to `AnimObjectNew` — the
+        // hashtable always resolves it (a skinless Bond is never shipped). The disc carries each
+        // level's own player skin in its own archive — 0x05000009 in 01-04, 0x050000d in 05-08,
+        // 0x0500007c in 16/1b/43, 0x05000007 in the other story archives [D nf-extract bin-list
+        // census, kind-3 heads; all 0x05000007 carriers share sha1 04709295…, the record is
+        // identical everywhere] — except 07000048 (the front-end container, no player skin at all).
+        // There the session table's earlier registration stands [M AnimLoadFile 0x1bdf40 registers
+        // per container and nothing frees skins — the g-021 session model below]. The port: when
+        // the own archive lacks the level's player skin, merge that ONE skin record from a carrier
+        // (session carriers first — 07000048 or an earlier story level — else the first carrier
+        // [S the front-end chain's container order is not observable from here]; the record is
+        // byte-identical across carriers [D], so the source cannot change the table's content).
+        {
+            let cur = u32::from_str_radix(&archive[..8], 16).unwrap_or(0);
+            let want = nf_game::damage::player_skin_hash(cur);
+            if !level.skins.contains_key(&want) {
+                static PLAYER_SKIN_CARRIERS: std::sync::OnceLock<HashMap<u32, Vec<String>>> = std::sync::OnceLock::new();
+                let carriers = PLAYER_SKIN_CARRIERS.get_or_init(|| {
+                    let mut map: HashMap<u32, Vec<String>> = HashMap::new();
+                    for e in entries.iter().filter(|e| e.name.len() == 12 && e.name.ends_with(".bin")) {
+                        let Ok(d) = iso.read_bytes(bin.lba as u64 * 2048 + e.offset as u64, e.size as u64) else { continue };
+                        let Ok(l) = LevelBin::parse(&d) else { continue };
+                        for pe in l.entries.iter().filter(|pe| pe.kind == 3) {
+                            let raw = l.data(&d, pe);
+                            if raw.len() < 4 { continue }
+                            let h = u32::from_le_bytes(raw[0..4].try_into().unwrap());
+                            if (h & 0xff00_0000) == 0x0500_0000 { map.entry(h).or_default().push(e.name.clone()); }
+                        }
+                    }
+                    map
+                });
+                let story_pos = |id: u32| nf_game::mission::LEVELS.iter().position(|l| l.level == id);
+                let cur_pos = story_pos(cur);
+                let session = |name: &str| -> bool {
+                    if name.eq_ignore_ascii_case("07000048.bin") { return true; }
+                    let Some(id) = name.get(..8).and_then(|s| u32::from_str_radix(s, 16).ok()) else { return false };
+                    match (story_pos(id), cur_pos) {
+                        (Some(p), Some(c)) => p < c,
+                        (Some(_), None) => true,
+                        (None, _) => false,
+                    }
+                };
+                if let Some(list) = carriers.get(&want) {
+                    let found = list.iter().find(|n| session(n)).or_else(|| list.first()).cloned();
+                    if let Some(archive_name) = found {
+                        if let Some(fd) = read(&archive_name)? {
+                            let foreign = Level::parse(&fd)?;
+                            if let Some(sk) = foreign.skins.get(&want) {
+                                level.skins.insert(want, sk.clone());
+                            } else {
+                                eprintln!("player skin: carrier {archive_name} parsed without {want:08x}");
+                            }
+                        }
+                    }
+                } else {
+                    eprintln!("player skin: {want:08x} is on no archive of the disc — Bond's hit boxes will be empty here");
+                }
+            }
+        }
         let mut wanted: Vec<u32> = Vec::new();
         if let Some(m) = mm {
             for p in level.maps[m].placements.iter().filter(|p| p.flags & 0xff == 0x0f) {

@@ -212,6 +212,13 @@ impl Bullet {
         let tw = world.segment(self.pos, end);
         let ray = [end[0] - self.pos[0], end[1] - self.pos[1], end[2] - self.pos[2]];
         let tp = crate::damage::first_box_hit(self.pos, ray, boxes);
+        // bond-hitbox-pose scratch: NF_BULLETPLOG traces the box walk (boxes count, the ray, the
+        // box hit) for the staged melee/damage tests.
+        if std::env::var_os("NF_BULLETPLOG").is_some() && !boxes.is_empty() {
+            eprintln!("[bullet] weapon {:#x} pos ({:.2},{:.2},{:.2}) dir ({:.2},{:.2},{:.2}) l {:.2} end ({:.2},{:.2},{:.2}) boxes {} tp {:?} tw {:?}",
+                self.weapon, self.pos[0], self.pos[1], self.pos[2], self.dir[0], self.dir[1], self.dir[2], l,
+                end[0], end[1], end[2], boxes.len(), tp, tw);
+        }
         let at = |t: f32| [self.pos[0] + (end[0] - self.pos[0]) * t, self.pos[1] + (end[1] - self.pos[1]) * t, self.pos[2] + (end[2] - self.pos[2]) * t];
         // CompHitData 0x1d33c0 [M] — QuickSort comparator id 2 (Collide_Update 0x1ea398 / Collide_RayIntersect 0x1ec690 / Collide_SphereIntersect 0x1ec940 / Collide_CylinderIntersect 0x1ecc00 / Collide_FilterBullets 0x1ece30 sort their hit lists by the f32 at HITDATA+0xc, ascending); the port keeps no hit list — the nearest-of comparison below replaces the sort.
         let ev = match (tw, tp) {
