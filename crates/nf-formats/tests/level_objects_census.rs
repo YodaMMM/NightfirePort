@@ -79,8 +79,8 @@ fn pinned() -> Vec<((String, u8), u64)> {
         (("07000008.BIN".to_string(), 0x2f), 3),
         (("0700000B.BIN".to_string(), 0x2f), 3),
         (("07000012.BIN".to_string(), 0x2f), 2),
-        (("07000046.BIN".to_string(), 0x2f), 1),
         (("0700001B.BIN".to_string(), 0x38), 1),
+        (("07000046.BIN".to_string(), 0x2f), 1),
     ]
 }
 
