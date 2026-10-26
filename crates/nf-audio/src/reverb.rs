@@ -3,11 +3,15 @@
 //! `SFXUpdateEnvironment` / `psiSetReverb`), and the reverb DSP those registers run.
 //!
 //! Evidence:
-//! - `PS2_SetupReverb` (SFX.IRX 0xc944) calls `sceSdSetEffectAttr(core, {mode: 4, depth 0/0, delay 30,
-//!   feedback 200})` on both cores, `sceSdSetCoreAttr(core | SD_CORE_EFFECT_ENABLE, 1)` and
+//! - `PS2_SetupReverb` (SFX.IRX 0xc944) calls `sceSdSetEffectAttr(core, attr)` on both cores with a
+//!   24-byte attr at $sp+0x14: mode 4 at attr+4, depth 0/0 at attr+8/a, delay 0x1e at attr+0xc,
+//!   feedback 0xc8 at attr+0x10, and 0x6fe0 at attr+0x14 (which libsd never reads) [D SFX.IRX
+//!   0xc944 disasm: sw 4,0x18($fp); sh 0,0x1c; sh 0,0x1e; sw 0x1e,0x20; sw 0xc8,0x24;
+//!   sw 0x6fe0,0x28; attr = $fp+0x14]. It then calls `sceSdSetCoreAttr(core | 2, 1)` and
 //!   `sceSdSetAddr(core | SD_A_EEA_HI, EEA−1)` with EEA 0x200000 (core 0) / 0x1E0000 (core 1)
-//!   [M SFX.IRX decomp]. libsd ignores delay/feedback for non-ECHO/DELAY modes (resets them to 0),
-//!   so mode 4 runs the plain preset [M ps2sdk libsd effect.c].
+//!   [M SFX.IRX 0xc944]. Disc libsd reads only attr+4 (mode, 0x960), attr+8/a (depths → P-block
+//!   regs 0x764/0x766 + core*40, 0xcac..0xcc4) and, for ECHO/DELAY modes only, attr+0xc/0x10
+//!   (delay/feedback, 0xb18/0xbfc) — so mode 4 runs the plain preset row [D LIBSD.IRX 0x91c..0xd88].
 //! - `psiSetReverb` (0xc840) writes the scaled depth to EVOLL/EVOLR of both cores: entries
 //!   0xb80/0xc80 (core 0) and 0xb81/0xc81 (core 1) — libsd `ParamRegList[0xb/0xc]` = `SD_P_EVOLL/EVOLR`
 //!   [M ps2sdk libsd freesd.c]. The per-voice reverb sends are the VMIXEL/VMIXER wet-mix enables
@@ -46,11 +50,17 @@
 //! - Mode names disagree between ps2sdk sources: `libsd-common.h` calls mode 9 PIPE, `effect.c`'s
 //!   comment calls it CLEAR. Both call mode 4 STUDIO_3 (what the game uses). Recorded, not resolved.
 
-/// The effect-area sizes per mode (`EffectSizes` in ps2sdk effect.c), in 16-sample units.
+/// The effect-area sizes per mode, in 16-sample units. Disc: u32 words at LIBSD.IRX file offset
+/// 0x4208 (va 0x4158), read at 0x9dc (`lw $v1, 0x4158(mode*4)`) and scaled `<< 3` to samples at
+/// 0x9e4 — each disc word is exactly 2× the unit value used here ([D] words 0x2, 0x4D8, 0x3E8,
+/// 0x908, 0xDFC, 0x15BC, 0x1ED8, 0x3008, 0x3008, 0x780; ps2sdk effect.c's `EffectSizes` agrees).
 pub const EFFECT_SIZES: [u16; 10] = [0x1, 0x26C, 0x1F4, 0x484, 0x6FE, 0xADE, 0xF6C, 0x1804, 0x1804, 0x3C0];
 
-/// The per-mode preset tables (`EffectParams[10][16]` in ps2sdk effect.c), u32 rows that unpack to
-/// the 32 register halfwords little-endian (the IRX memcpy's them onto the stack as u16s, MIPS LE).
+/// The per-mode preset tables, u32 rows that unpack to the 32 register halfwords little-endian.
+/// Disc: LIBSD.IRX file offset 0x4230 (va 0x4180), 10 rows of 0x44 bytes — a reserved zero u32
+/// followed by the 16 param u32s; libsd memcpy's the whole row to its stack (src = 0x4180 +
+/// mode*0x44, len 0x44 [D LIBSD.IRX 0xa08..0xa24 and the second copy at 0xae4..0xb00, memcpy 0x880])
+/// and consumes row words 1..16. Every word matches ps2sdk effect.c's `EffectParams`.
 pub const EFFECT_PRESETS: [[u32; 16]; 10] = [
     // OFF
     [0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00010001, 0x00000000, 0x00000000,
@@ -124,10 +134,11 @@ pub struct ReverbRegs {
 }
 
 impl ReverbRegs {
-    /// Unpacks `EFFECT_PRESETS[mode]` into the register set. ps2sdk memcpy's the 64 bytes as u16s
-    /// (each u32 row splits little-endian into two registers), then `SetEffectData` writes them in
-    /// hardware order: volumes raw, delays through `SetEffectRegister`'s 17-bit (val>>14, val<<2)
-    /// halfword pairs. This returns the preset's own u16 values — the documented register set.
+    /// Unpacks the preset row into the register set. Disc libsd memcpy's the 0x44-byte row (a
+    /// reserved zero u32, then these 16 u32s, each splitting little-endian into two register
+    /// halfwords) onto its stack [D LIBSD.IRX 0xa08..0xa24], then writes them in hardware order:
+    /// volumes raw, delays through the 17-bit form val<<2 [D LIBSD.IRX 0x139c `sll $a0,$a0,0x10` /
+    /// 0x13a4 `sra $s0,$a0,0xe`]. This returns the preset's own u16 values — the documented register set.
     pub fn from_mode(mode: usize) -> ReverbRegs {
         let rows = EFFECT_PRESETS[mode];
         let mut w = [0u16; 32];
@@ -162,9 +173,14 @@ pub const SD_ENABLE_EFFECTS: u16 = 1 << 7;
 pub const SD_SWITCH_VMIXEL: [u16; 2] = [0x1900, 0x1901];
 pub const SD_SWITCH_VMIXER: [u16; 2] = [0x1B00, 0x1B01];
 
-/// The effect start address libsd computes for a mode: EEA − (size*16 − 2) [M ps2sdk effect.c].
+/// The effect start address libsd computes for a mode: EEA − (samples − 1), where samples =
+/// size_word << 3 = size*16 [D LIBSD.IRX 0x9dc..0x9f8: `lw 0x4158(mode*4)`, `sll $v1,$v1,3`,
+/// `addiu $v1,−1`, `subu` from getEEA 0xdb8 = (lhu 0x33c << 17) | 0x1FFFF; the shadow lands in the
+/// ESA regs at 0xccc..0xd0c (HI 0x2e0 = esa>>17, LO 0x2e2 = esa>>1)]. The effect area is therefore
+/// exactly size*16 samples — 0x6FE0 for mode 4. ps2sdk's effect.c computes EEA − (size*16 − 2),
+/// one sample off; the disc wins.
 pub fn effect_esa(core: usize, mode: usize) -> u32 {
-    GAME_EEA[core] - (((EFFECT_SIZES[mode] as u32) << 4) - 2)
+    GAME_EEA[core] - (((EFFECT_SIZES[mode] as u32) << 4) - 1)
 }
 
 /// The reverb resampler's FIR taps (PCSX2 `ReverbResample.cpp`: `NUM_TAPS = 39`,
@@ -488,15 +504,47 @@ mod tests {
     fn game_setup_registers() {
         assert_eq!(GAME_EFFECT_MODE, 4);
         assert_eq!(GAME_EEA, [0x1FFFFF, 0x1DFFFF]);
-        // EffectSizes[4] = 0x6FE (matches the 0x6fe0 the decompile keeps beside the attr [M]).
+        // EffectSizes[4] = 0x6FE: half the disc's size-table word 0xDFC (LIBSD.IRX file 0x4218),
+        // and 0xDFC << 3 = 0x6fe0 — the word PS2_SetupReverb stacks at attr+0x14 [D LIBSD.IRX
+        // 0x4208 table + 0x9e4 `sll 3`; SFX.IRX 0xc944: sw 0x6fe0,0x28($fp)].
         assert_eq!(EFFECT_SIZES[GAME_EFFECT_MODE], 0x6FE);
-        // ESA = EEA − (0x6FE*16 − 2).
-        assert_eq!(effect_esa(0, GAME_EFFECT_MODE), 0x1FFFFF - 0x6FDE);
-        assert_eq!(effect_esa(1, GAME_EFFECT_MODE), 0x1DFFFF - 0x6FDE);
-        assert_eq!(game_area(0), 0x6FDF);
+        // ESA = EEA − (samples − 1), so the area is exactly samples = size*16 [D LIBSD.IRX 0x9dc..0x9f8].
+        assert_eq!(effect_esa(0, GAME_EFFECT_MODE), 0x1FFFFF - 0x6FDF);
+        assert_eq!(effect_esa(1, GAME_EFFECT_MODE), 0x1DFFFF - 0x6FDF);
+        assert_eq!(game_area(0), 0x6FE0);
         assert_eq!(SD_ENABLE_EFFECTS, 0x80);
         assert_eq!(SD_SWITCH_VMIXEL, [0x1900, 0x1901]);
         assert_eq!(SD_SWITCH_VMIXER, [0x1B00, 0x1B01]);
+    }
+
+    /// The disc's raw LIBSD.IRX table bytes, pinned so any drift from the disc fails here: the 10
+    /// u32 size words at file offset 0x4208 (units = word/2, samples = word<<3) and the mode-4
+    /// param row's 16 u32s (file 0x4348, va 0x4298, row words 1..16). [D] /MODULES/LIBSD.IRX on
+    /// SLUS-20579 (LBA 768, 25397 bytes, sha1 7217b6c78b233d9ad72dbd379f148ad334311b8a; the load
+    /// segment maps file 0xb0 to va 0). Sister test to game_setup_registers: pins the source
+    /// bytes, not just the derived numbers.
+    #[test]
+    fn disc_libsd_tables_are_the_port_tables() {
+        let size_words: [u32; 10] =
+            [0x2, 0x4D8, 0x3E8, 0x908, 0xDFC, 0x15BC, 0x1ED8, 0x3008, 0x3008, 0x780];
+        for (word, unit) in size_words.iter().zip(EFFECT_SIZES.iter()) {
+            assert_eq!(word % 2, 0, "size word {word:#x} must halve cleanly");
+            assert_eq!(word / 2, *unit as u32, "units for word {word:#x}");
+            // samples = word << 3 (LIBSD.IRX 0x9e4) = the port's area in samples.
+            assert_eq!(*word << 3, (*unit as u32) << 4, "samples for word {word:#x}");
+        }
+        // Mode 4: 0xDFC << 3 = 0x6fe0 — the stack word in PS2_SetupReverb [D SFX.IRX 0xc974].
+        assert_eq!(size_words[4] << 3, 0x6fe0);
+        // The mode-4 param row on the disc, reserved word 0 excluded (16 u32s at file 0x4348).
+        let disc_row4: [u32; 16] = [
+            0x00A900E3, 0x4FA86F60, 0x4510BCE0, 0xA680BEF0, 0x52C05680, 0x0B580DFB, 0x0A3C0D09,
+            0x09730BD9, 0x08DA0B59, 0x05E908D9, 0x04B007EC, 0x03D206EF, 0x031D05EA, 0x0238031C,
+            0x00AA0154, 0x80008000,
+        ];
+        assert_eq!(EFFECT_PRESETS[GAME_EFFECT_MODE], disc_row4);
+        // ESA per the disc formula (EEA − (samples − 1)) lands at 0x1F9020 / 0x1D9020.
+        assert_eq!(effect_esa(0, GAME_EFFECT_MODE), 0x1F9020);
+        assert_eq!(effect_esa(1, GAME_EFFECT_MODE), 0x1D9020);
     }
 
     /// The environment chain [M SFX.IRX 0xdb4/0xe60/0xd68]: clamps, the −26472 underwater magic,

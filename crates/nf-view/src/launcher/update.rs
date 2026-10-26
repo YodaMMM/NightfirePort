@@ -269,12 +269,33 @@ pub fn cleanup_old(dir: &Path) {
 /// The licence notices baked into this exe (build.rs), plus the in-tree rerac code's notice.
 pub const NOTICES: &str = include_str!(concat!(env!("OUT_DIR"), "/notices.txt"));
 const RERAC_NOTICE: &str = include_str!("../../../../THIRD_PARTY_RERAC_LICENSE.txt");
+const OPENGOAL_NOTICE: &str = include_str!("../../../../THIRD_PARTY_OPENGOAL_LICENSE.txt");
+
+/// The in-tree third-party licences the exe carries beside the baked file's text. Every
+/// `THIRD_PARTY_*_LICENSE.txt` at the repo root must appear here — the notices test walks the
+/// root and requires each file's text in [`notices_text`] (a new root licence file without a
+/// wire-in fails there).
+const IN_TREE_NOTICES: [(&str, &str); 2] = [
+    ("rerac (in-tree code)", RERAC_NOTICE),
+    ("OpenGOAL (in-tree port)", OPENGOAL_NOTICE),
+];
+
+/// The full notices text `write_notices` writes: what the build baked (build.rs — the
+/// release-generated `THIRD_PARTY_NOTICES.txt` from tools/release/notices.py, or the dev
+/// placeholder) plus every in-tree licence file.
+pub fn notices_text() -> String {
+    let mut text = String::from(NOTICES);
+    for (name, body) in IN_TREE_NOTICES {
+        text.push_str(&format!("\n\n==== {name} ====\n\n{body}"));
+    }
+    text
+}
 
 /// Writes the licence notices to `<config dir>/THIRD_PARTY_NOTICES.txt` (a release is just the exe; the notices
 /// travel inside it). Rewritten only when they changed.
 pub fn write_notices() {
     let Some(dir) = crate::settings::config_dir() else { return };
-    let text = format!("{NOTICES}\n\n==== rerac (in-tree code) ====\n\n{RERAC_NOTICE}");
+    let text = notices_text();
     let path = dir.join("THIRD_PARTY_NOTICES.txt");
     if std::fs::read_to_string(&path).ok().as_deref() != Some(text.as_str()) {
         let _ = std::fs::create_dir_all(&dir);
@@ -290,6 +311,35 @@ pub fn install_dir() -> Option<PathBuf> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// Every `THIRD_PARTY_*_LICENSE.txt` at the repo root rides in the notices the exe carries: the
+    /// build bakes the generated file's text (build.rs via NF_NOTICES_FILE) and [`notices_text`]
+    /// appends each in-tree licence, so the full text lands in `<config dir>/THIRD_PARTY_NOTICES.txt`.
+    /// A new root licence file without a wire-in fails here.
+    #[test]
+    fn every_root_third_party_licence_rides_in_the_notices() {
+        let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+            .ancestors()
+            .nth(2)
+            .unwrap()
+            .to_path_buf();
+        let text = notices_text();
+        let mut checked = 0;
+        for entry in std::fs::read_dir(&root).unwrap() {
+            let entry = entry.unwrap();
+            let name = entry.file_name().to_string_lossy().into_owned();
+            if !(name.starts_with("THIRD_PARTY_") && name.ends_with("_LICENSE.txt")) {
+                continue;
+            }
+            let body = std::fs::read_to_string(entry.path()).unwrap();
+            assert!(text.contains(&body), "{name} is missing from the exe's notices");
+            checked += 1;
+        }
+        assert!(
+            checked >= 2,
+            "expected the rerac and OpenGOAL licence files at the repo root, found {checked}"
+        );
+    }
 
     // The bridge release's shape: the exe + its sha, and the old launchers' zip + sha.
     const LATEST: &str = r#"{"url":"https://api.github.com/repos/YodaMMM/NightfirePort/releases/1","tag_name":"v0.1.12","name":"NightfirePort 0.1.12",

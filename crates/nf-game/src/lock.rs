@@ -100,6 +100,11 @@ pub struct Lock {
     pub scan_progress: u32,
     /// The solved digit count, `DAT_002a37e3` (0..4; 4 = the unlock [M 0x1aebec-0x1aebf4]).
     pub scan_solved: u8,
+    /// fix-decryptor-sounds: the sounds this tick's scan earned, drained by the caller and played at
+    /// the lock's position ([M `Lock_Update` 0x1ae3d8:368 `Sound_Play(100.0, 0x5db, 0, 0)` per solved
+    /// digit, :374 `Sound_Play(100.0, 0x5da, 0, 0)` on the unlock). The game's `Sound_Play` is the
+    /// non-positional family; the port's only path is the 3-D one, so the caller plays it at `pos`.
+    pub pending_sounds: Vec<u32>,
     /// The game's lock state word is 5 (scanning) while a scan runs [M 0x1ae3d8:188].
     pub scanning: bool,
     /// `Control_NextLOD` 0x1349b0 has run: `obj+0xD8` is the glist's LOD variant (the keypad's
@@ -136,6 +141,7 @@ impl Lock {
                 code: param(1) as u16,
                 scan_progress: 0,
                 scan_solved: 0,
+                pending_sounds: Vec::new(),
                 scanning: false,
                 lod_next: false,
             });
@@ -264,9 +270,13 @@ impl Lock {
         if (4 - digit) * 40 < self.scan_progress {
             self.scan_solved += 1;
             self.scan_progress = 5; // the solve resets the progress [M :367]
+            // fix-decryptor-sounds: one chime per solved digit [M 0x1ae3d8:368].
+            self.pending_sounds.push(0x5db);
             if self.scan_solved >= 4 {
                 self.unlocked = true; // Lock_Unlock 0x1b0650:28-31 → state 1 (leaves the scan state 5)
                 self.scanning = false;
+                // fix-decryptor-sounds: the unlock chime [M 0x1ae3d8:374].
+                self.pending_sounds.push(0x5da);
                 if self.out != 0 { ch.set(self.out as u32, 1, frame); } // case 1 [M :193-196]
                 return true;
             }
@@ -421,7 +431,7 @@ mod tests {
         Lock {
             placement: 0, pos: [0.0; 3], radius: 1.0, out, key_channels: [0xffff; 2],
             burn: 0, burned: false, unlock_on_operative: false, unlocked: false,
-            kind, code, scan_progress: 0, scan_solved: 0, scanning: false, lod_next: false,
+            kind, code, scan_progress: 0, scan_solved: 0, pending_sounds: Vec::new(), scanning: false, lod_next: false,
             burn_a: 0xff, burn_b: 0xff, grace: 0,
         }
     }

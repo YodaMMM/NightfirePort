@@ -17,7 +17,7 @@ The two exceptions the game itself creates, and their port handling:
 |---|---|---|---|---|
 | 0700000c | 0x05000090 | 7 | `AnimObjectNew` (0x1be910 disasm 0x1be958-0x1be9b0) substitutes **0x05000087** (0700000c's own skin) before the hashtable get | mirrored at load (`nf-view lib.rs`); the entry keeps the placement hash identity |
 | 07000014 | 0x05000090 | 15 | the same, substitute **0x05000093** (07000014's own) | mirrored at load |
-| 07000014 | 0x050000b1 | 11 | no substitution (the disassembly covers only 0x05000090); the session skin table accumulates every archive loaded (`AnimLoadFile` **0x1bdf40** — first-wins, nothing frees between levels; 0x1d8248 is `Script_Load`, the old mislabel) and 0x050000b1 lives in 07000015/16's archives [D] | the load merges the holding archive's maps, object hashcodes (first-wins), skins and skeletons; `CommonAnimFile` (0x30d860 [M 0x1d4a00 case 0 — the only reference, no writer; no type-4 call site exists, and FILES.BIN carries no common archive]) is 0 at every level-start snapshot [L ee_start_05/07000001/0700000a @0x30d860], so the common file is not the source — dead code in the retail build |
+| 07000014 | 0x050000b1 | 11 | not requested raw: `NDrone2_DefaultInit` **0x14b300:82-95** rewrites the param-0 0x050000b1 to 0x0500008c in Drone+0xe0 on GameState+12 == 0x07000014, before the kind switch / captain block / `AnimObjectNew` request (:563-565 reads +0xe0) — 0x0500008c is a 07000014 own-archive skin [D]; captains then swap kinds 6/7 → 0x05000093/0x050000b2 [M :536-555]. The raw skin lives in 07000015/16's archives [D census: 07000016 entry 139 @0x8594a0 len 0x860, 07000015 entry 102 @0x609e60 len 0x860] and never registers on a fresh story run (the session skin table accumulates every archive loaded, `AnimLoadFile` **0x1bdf40** — first-wins, nothing frees between levels; the single-caller writer chain 0x1d4880 case 3 → 0x1bdf40 → 0x1bd500) — the rewrite is the game's only path for these placements. (Found by cite-14-skinless-drones; the earlier row here said "no substitution, renders skinless".) | the load merges the holding archive's maps, object hashcodes (first-wins), skins and skeletons for skins a placement DOES request; `CommonAnimFile` (0x30d860 [M 0x1d4a00 case 0 — the only reference, no writer; no type-4 call site exists, and FILES.BIN carries no common archive]) is 0 at every level-start snapshot [L ee_start_05/07000001/0700000a @0x30d860], so the common file is not the source — dead code in the retail build |
 
 Dead references found (listed, not fixed — nothing to resolve against): 0700001b's cut-scene script
 names skins **0x05050a17 / 0x05050ad2**, which exist on NO archive of the disc [D scan of every
@@ -68,7 +68,7 @@ Stand 3 units north of each level's first placed drone group, facing it:
 | 07000011 | `--bond 16.3,49.0,8.8,0.0` | the Tower-2 guards |
 | 07000012 | `--bond 10.1,2.4,17.7,0.0` | the Tower-2 B guards |
 | 07000013 | `--bond 4.2,-367.2,47.0,0.0` | the Tower-2 C guards |
-| 07000014 | `--bond 40.8,2.2,59.9,0.0` | the airbase — **0x05000090 → 0x05000093 substitute, 0x050000b1 merged from 07000015/16** |
+| 07000014 | `--bond 40.8,2.2,59.9,0.0` | the airbase — **0x05000090 → 0x05000093 substitute, 0x050000b1 → 0x0500008c rewrite [M 0x14b300:82-95]** |
 | 07000015 | `--bond 50.1,42.6,-3.1,0.0` | EvilBase 2 (05000087/8c) |
 | 07000016 | `--bond 2.1,7.9,-84.1,0.0` | EvilSilo — the 0x050000b1 source archive |
 | 0700001b | `--bond 2.9,1.5,-3.0,0.0` | the space station (05000078/8f/ba) |

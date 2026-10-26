@@ -26,6 +26,17 @@
 //! Door_Tunnel_G9_2 (4.00, 49.00, −64.88) → the upper gallery (y≈50.1, the WineTruck building's
 //! top corridor, z −65..−70).
 //!
+//! THE TUNNEL SWITCHBACK (the climb the walk used to die in): the shaft between doors #71/#72
+//! is NOT one straight ramp — the disc's stacked floors [D the dense floor map probed on this
+//! tree: floor_below column stacks x 2.0..7.0 × z −50.5..−65.5] show the low ramp 42.0 → 44.8
+//! over z −51.5..−58.5 ending at the shaft's south-east corner, an east lane (x 6.25–7.0)
+//! carrying the turn 44.6 → 46.8 northward, and the upper ramp 47.2 → 48.8 over z −55.5..−59.25
+//! running back south to the 49.0 landing (z −59.75.., door #72 at −64.88). A straight shot at
+//! (4.0, 49, −62.5) walks under the upper ramp and grinds into the south-east corner (Bond was
+//! lifted by the capsule's floor band against the landing's face, jump apex 46.6 < the 48.8
+//! slab [D probe trace]); the walk follows the switchback instead — every leg the player's own
+//! walk+jump input through climb_stairs.
+//!
 //! THE OPEN LEG (the walk's one gap): the gallery → the
 //! dressing room (the LoadPoint #746 at (35.5, 44.5, −54.1)). The port's collision gives no
 //! walked connection yet: the gallery's north lip at z≈−65.5 (x 20–30) blocks both walking and
@@ -132,6 +143,10 @@ fn walk_to_the_gallery(w: &mut Walker, cut: bool) {
     w.walk_to(Wp::new(23.2, 39.1, 7.0), "the hedge gap");
     w.walk_to(Wp::new(27.2, 39.1, -2.4), "around the hedge end");
     w.walk_to(Wp::new(33.7, 39.1, -8.9), "the guardhouse court");
+    // The idle guard #438 (27.51, 39.18, −10.19) [D census] blocks the lane to door #47; the
+    // real fire path kills him (10 hp — the fire-path pins in fix_06_fire_live.rs walk this
+    // same fight with every press firing).
+    fight_through(w);
     w.walk_to(Wp::new(36.0, 39.1, -13.4), "before door #47");
     {
         let sim = w.scene.sim.as_ref().unwrap();
@@ -171,6 +186,9 @@ fn walk_to_the_gallery(w: &mut Walker, cut: bool) {
         eprintln!("[06] door {di} at {pos:?}");
         w.use_door(di, "door #59");
     }
+    // THROUGH the doorway (level-06-castle-fire): without this waypoint the mouth leg aims
+    // through the guardroom's west wall (the auto-closing doorway is a nav blind spot).
+    w.walk_to(Wp::new(26.6, 40.6, -23.6), "through door #59");
     // West up the steps to the searchlight courtyard mouth (the entry plates #525/#526 → 0x52;
     // SP #808's boot NIS fires and the walker skips it with the game's own skip action).
     w.walk_nav_to([8.4, 42.0, -12.0], "the searchlight courtyard mouth", 1.6);
@@ -191,15 +209,27 @@ fn walk_to_the_gallery(w: &mut Walker, cut: bool) {
     }
     // Through the doorway to the inside spot (trigger #674 (4.42, 42.66, −52.94) [D census]).
     w.walk_to(Wp::new(4.42, 42.7, -52.9), "into the tunnel");
-    // Up the tunnel (y 42 → 49) to the upper door #72 Door_Tunnel_G9_2 (4.00, 49.00, −64.88).
-    // The climb must actually gain the height — the door E below is only honest from beside it.
-    w.climb_stairs([4.0, 49.0, -62.5], "up the tunnel", 1.6, 4000);
-    if w.scene.sim.as_ref().unwrap().bond.pos[1] < 47.0 {
-        w.climb_stairs([4.0, 49.0, -62.5], "up the tunnel (retry)", 1.2, 4000);
-    }
+    // THE TUNNEL SWITCHBACK up to the upper door #72 Door_Tunnel_G9_2 (4.00, 49.00, −64.88).
+    // Legs follow the disc's own surfaces (see the header's floor map [D]); each is the
+    // player's own walk+jump input. The shaft's south-east corner is a dead end under the
+    // upper ramp — the old straight shot grinded there (jump apex 46.6 < the 48.8 slab face).
+    w.climb_stairs([4.3, 44.6, -58.0], "up the low ramp", 1.4, 2400);
+    w.climb_stairs([6.7, 45.1, -58.3], "the shaft's east gap", 1.2, 1600);
+    // The corner's walkable lane narrows to x 6.75-7.0 at z −57.0 (the upper ramp's east face
+    // tapers east as it rises [D floor map]) — tight arrive radii so each leg actually reaches
+    // its mark before the next re-aims; the shallow lane→ramp step (46.8 → 47.4) is at z −56.0.
+    w.climb_stairs([6.85, 45.9, -57.0], "the east lane north", 0.5, 2000);
+    w.climb_stairs([6.45, 46.8, -56.1], "the corner shelf", 0.5, 2000);
+    w.climb_stairs([5.6, 47.5, -56.0], "onto the upper ramp", 0.7, 1600);
+    // The upper ramp and the seam into the landing are walked WITHOUT the jump pulses: an
+    // airborne seam crossing re-links Bond onto the ramp cel's phantom plane under the landing
+    // slab and the shaft void swallows him [D the seam probe on this tree: grounded the whole
+    // crossing at root ~50.0; the jump-pulsed legs fell past y 47 into the slab's underside].
+    w.walk_slope([4.0, 48.9, -59.0], "south up the upper ramp", 0.9, 2000);
+    w.walk_slope([4.0, 49.0, -63.0], "the landing, up to door #72", 0.8, 1600);
     {
         let sim = w.scene.sim.as_ref().unwrap();
-        assert!(sim.bond.pos[1] > 47.0, "the tunnel climb gains the upper level (y {:.2} at {:?})",
+        assert!(sim.bond.pos[1] > 47.0, "the switchback gains the upper level (y {:.2} at {:?})",
             sim.bond.pos[1], sim.bond.pos);
     }
     {
@@ -225,32 +255,20 @@ fn walk_to_the_gallery(w: &mut Walker, cut: bool) {
 /// The full play through the real input path: the truck-ride spawn → the dismount → the well
 /// courtyard's hedge lane → E-doors #47/#59 (the guardroom, with the stealth route's optional
 /// fusebox Laser cut through the real aim/fire path) → the searchlight courtyard → E-doors
-/// #71/#72 (the tunnel climb) → the upper gallery. Every door on the route is E-opened by the
-/// player's own use key, the fusebox channels fire from the player's own Laser, and the level's
-/// only objective is revealed by the route itself (ch 0x46). The gallery → dressing-room leg is
-/// the walk's one documented gap (see the header) — the LoadPoint chain it feeds (ch 0x83 →
-/// ch 0x02 → level_exit 07000007) is pinned green through the real trigger on master by
-/// walk_07000006_live.rs.
-/// [ignore] OPEN (level-06-guardroom-guard): the walked route reaches the guardhouse courtyard,
-/// where the idle guard #438 (skin 0x05000030, drone 2, placement (27.51, 39.18, −10.19) [D
-/// census: p3 switch channel 0, p13 = 0x0600021F the special-death script]) blocks the lane to
-/// door #47 and the fight cannot kill him through the real fire path. THE DIAGNOSIS (from
-/// probes): the guard is a NORMAL idle guard — the
-/// port's damage path for his IDLE state is present ([M] impact_args IDLE → (ATTACK, 0); his 16
-/// hit boxes sit at his body and a camera ray hits the head box at t 0.157 vs the first world hit
-/// 0.439) — the wedge is the PLAYER's fire path: (1) the harness `switch_to_armed` accepted the
-/// FISTS (their clip 1 passes the old `clip + spare > 0` test — fixed in walker.rs; the previous
-/// session's "8 rounds from the carried P2K" were punches, the fists' hit test is a 1.8-unit-range
-/// bullet); (2) with the P2K equipped the fire path still lands at most ONE bullet per engagement —
-/// the first press spawns ON the press tick but at a view rotated −1.38 rad from the aimed yaw
-/// (an intra-tick body turn measured at the fire site: bond.yaw −3.3134 vs the sampled −1.9311,
-/// coincident with the fire script's start), and every later press — 20-tick taps, held fire,
-/// idle-gated presses, 40-tick taps — spawns nothing (the fire script machine never releases a
-/// second round: 12 presses → 1 bullet, probe logs). The port gap to root-cause next: the
-/// press-tick yaw turn and the fire-script refire starvation (Player_SetFiringAnim 0x1a3c70 /
-/// Player_WeaponFiring 0x1a5460 / Gun::update_with), then un-ignore both tests.
+/// #71/#72 (the tunnel switchback, see the header's floor map [D]) → the upper gallery. Every
+/// door on the route is E-opened by the player's own use key, the fusebox channels fire from the
+/// player's own Laser, and the level's only objective is revealed by the route itself (ch 0x46).
+/// The gallery → dressing-room leg is the walk's one documented gap (see the header) — the
+/// LoadPoint chain it feeds (ch 0x83 → ch 0x02 → level_exit 07000007) is pinned green through
+/// the real trigger on master by walk_07000006_live.rs.
+/// History: the OLD blocker (the fire fault — first press turns −1.38 rad, later presses starve)
+/// does not reproduce on master: the real-input pins in fix_06_fire_live.rs walk this route's
+/// guardhouse courtyard AND the searchlight-courtyard mouth past the boot NIS, every press fires,
+/// and the press tick turns the body nothing [M Player_WeaponFiring 0x1a5460 has no body-yaw
+/// write]. The wedge that kept this test ignored was the tunnel: a straight shot at (4.0, 49,
+/// −62.5) grinds in the shaft's south-east corner under the upper ramp; the switchback legs in
+/// walk_to_the_gallery walk the disc's own two-ramp shape instead [D floor map].
 #[test]
-#[ignore]
 fn walk_the_castle_interior_to_the_upper_gallery() {
     let iso = iso();
     let mut w = Walker::new(nf_view::load_with_carry(&iso, "07000006.bin", false,
@@ -286,9 +304,7 @@ fn walk_the_castle_interior_to_the_upper_gallery() {
 /// Sister: the same walk that stops before the tunnel never ends the level — no alarm-channel
 /// dependency, no ch 0x83, no objective fold, no exit. The gallery walk's asserts depend on the
 /// walked route, not on any earlier scripted hand-out.
-/// [ignore] with the full walk above (the same fire-path wedge).
 #[test]
-#[ignore]
 fn stopping_before_the_tunnel_never_ends_the_castle() {
     let iso = iso();
     let mut w = Walker::new(nf_view::load_with_carry(&iso, "07000006.bin", false,

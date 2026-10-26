@@ -196,6 +196,16 @@ pub struct Script {
     streams: Vec<Stream>,
     /// The owning `Player`'s placement index (for `NF_SCRIPTLOG`); 0 until `Player::load` sets it.
     pub player: usize,
+    /// `Script_CameraStart` 0x1d9140 ran on this script: the game writes `Mat_IdentityT` over the
+    /// player's own base matrix si+0x00 (the decompile drops the argument; the disassembly shows
+    /// a0 untouched from entry to the `jal 0x1e34c8` — a0 = param_1 = the SCRIPTINFO, whose first
+    /// field IS that base [M 0x1d9140, `daddu $s1,$a0,$zero` at 0x1d915c then `jal` at 0x1d916c]).
+    /// `Script_CameraEnd` 0x1db348 kills the stream and clears +0xAB5 bit 4; it does NOT restore
+    /// si+0x00 [M 0x1db348:5-13] — the identity sticks for the script's lifetime. The port keeps
+    /// `self.matrix` (the SP placement) for every other reader — master's camera-only rule — and
+    /// consults this flag where the game's identity base matters (the case-1 unparented entity
+    /// compose; see the interp comment).
+    pub camera_started: bool,
 }
 
 /// The port's object store for scripts: indices stay valid; `None` = deleted.
@@ -320,7 +330,8 @@ impl Script {
     pub fn load(nis: Arc<Nis>, matrix: Mat4, scale: f32) -> Script {
         let streams = nis.streams.iter().map(|s| Stream { first_key: s.first_key, last_key: s.last_key, pc: Some(0), parent: -1, ..Default::default() }).collect();
         let flags = if nis.camera { 0x40 } else { 0 };
-        Script { nis, matrix, scale, delay: 0, clock: 0.0, flags, script_cam: false, play: 0, fade_clock: 0.0, fade_len: 0, fade_flags: 0, streams, player_at: None, player_mode: 0, pending: Vec::new(), pending_weapon: Vec::new(), player: 0 }
+        Script { nis, matrix, scale, delay: 0, clock: 0.0, flags, script_cam: false, play: 0, fade_clock: 0.0, fade_len: 0, fade_flags: 0, streams, player_at: None, player_mode: 0, pending: Vec::new(), pending_weapon: Vec::new(), player: 0,
+            camera_started: false }
     }
 
     /// `Script_Play` (0x1db588).
@@ -530,15 +541,22 @@ impl Script {
                         let s = &mut self.streams[i];
                         s.tag = stream as u16;
                         // The tag (+0x20) and the start frame (+0x22 = stream clock + 1) are written
-                        // before the start gate [M 0x1d8820:20-28].
+                        // before the start gate [M 0x1d8820:20-28], and the stream's sound handle
+                        // (+0x10) is CLEARED at the top of `Script_SoundStart` [M 0x1d8820:19 —
+                        // `*(undefined4 *)(param_2 + 0x10) = 0` precedes the gate unconditionally]:
+                        // a stream's second line starts even while the first one-shot's handle is
+                        // still latched (the old voice is abandoned, not stopped — the game keeps no
+                        // stop call here). 07000004's story stream 15 carries two lines (0x5e @298,
+                        // 0x134 @654 [D]); without the clear the 0x134 start is gated off.
+                        s.sound_id = None;
                         s.sound_start_frame = (s.clock as i32 + 1) as i16;
-                        // The start gate [M 0x1d8820]: `stream+0x10 == 0 && script+0xAB5 & 0x20 == 0`.
-                        // A stream with a live handle never re-fires, and once the skip's fade has run
-                        // past its length (+0xAB5 bit 5 — the catch-up state `Script_Update` sets) no
-                        // new line starts: the skipped script's remaining lines (and their SoundEnd
-                        // arms) never come to be. The kind still becomes 5 even when the id is the
-                        // 0xffff "none" (handle 0) [M :36-52].
-                        if s.sound_id.is_none() && self.fade_flags & 0x20 == 0 {
+                        // The start gate [M 0x1d8820]: `script+0xAB5 & 0x20 == 0` (the handle-0 half
+                        // is the clear above). Once the skip's fade has run past its length (+0xAB5
+                        // bit 5 — the catch-up state `Script_Update` sets) no new line starts: the
+                        // skipped script's remaining lines (and their SoundEnd arms) never come to
+                        // be. The kind still becomes 5 even when the id is the 0xffff "none"
+                        // (handle 0) [M :36-52].
+                        if self.fade_flags & 0x20 == 0 {
                             s.kind = 5;
                             s.sound_id = (id & 0xfffff != 0xffff).then_some(id);
                             out.push(Request::Sound { id, at: if b[0] == 1 { None } else { at }, src: (self.nis.hashcode, i as u8) });
@@ -569,6 +587,27 @@ impl Script {
                         let (Some(&sp), Some(a), Some(b)) = (cmds.get(pc + 1), rd(1, 2), rd(3, 2)) else { self.streams[i].pc = None; return };
                         next = pc + 7;
                         if self.flags & 0x20 == 0 {
+                            // `Script_CameraStart` 0x1d9140 opens with `Mat_IdentityT()` on the
+                            // SCRIPTINFO's own base matrix si+0x00 (the decompile drops the argument;
+                            // the disassembly shows a0 untouched from entry to the call — a0 =
+                            // param_1 = the SCRIPTINFO [M 0x1d9140 disasm]): from the camera op on
+                            // the game's player base is the IDENTITY, so an unparented entity
+                            // stream's base concat (`Script_GetInterp`'s flag = parent == -1, stored
+                            // to the call's 10th slot at 0x1d9a98 [M 0x1d9a08 disasm]) runs on the
+                            // identity and its keys are the world matrix. 07000014's opening scene
+                            // 0x06000833 keys its door entity streams 10/11 (hashes 0x02000891/92
+                            // [D decode]) in WORLD space — the keys sit on the door placements
+                            // #116/#117 (27.788, 1.203, 49.671 [D]) — so the port must not compose
+                            // the SP #276 placement (52.1566, 2.6365, 46.6214) into them: pre-fix
+                            // the leaves sat at (79.95, 3.93, 96.19), 56 units off, and the door
+                            // never moved while Kiko walked through it.
+                            //
+                            // The port does NOT reset the whole `self.matrix` here (the cutscene-door
+                            // branch did, and four live walks went red — the walks' pinned poses
+                            // keep the placement base): master's camera-only rule stays, and
+                            // `camera_started` scopes the identity to the readers the game proves
+                            // (see the case-1 interp comment).
+                            self.camera_started = true;
                             let s = &mut self.streams[i];
                             if s.obj.is_none() {
                                 objs.list.push(Some(Obj::Camera { matrix: IDENT, fov: 1.0, src: (self.nis.hashcode, i as u8) }));
@@ -995,8 +1034,27 @@ impl Script {
                     p = self.streams[p as usize].parent;
                     n += 1;
                 }
-                let hash0 = matches!(&objs.list.get(o), Some(Some(Obj::Entity { hash: 0, kind: 0x19, .. })));
-                if !hash0 { m = mul(&m, &self.matrix); }
+                let (ehash, ekind) = match objs.list.get(o) { Some(Some(Obj::Entity { hash, kind, .. })) => (*hash, *kind), _ => (0, 0) };
+                let hash0 = ehash == 0 && ekind == 0x19;
+                // The camera-started identity, scoped to the class the game proves AND the door
+                // needs: an unparented case-1 stream's base compose is `Script_GetInterp`'s flag
+                // = parent == -1 (the 10th arg stored at 0x1d9a98 [M 0x1d9a08 disasm; the
+                // decompile drops the slot; the tail `if (param_10) Concat(si+0x00, out)` is
+                // 0x1da158's]), and `Script_CameraStart` has overwritten si+0x00 with the identity
+                // [M 0x1d9140 disasm] — so from the camera op on the game's unparented entity
+                // matrix is the KEYS ALONE. The port scopes it to the DEFAULT create arm's
+                // gfx-bound movers (obj_type 0xff, hash != 0 — `Script_CreateEntity` 0x1d8968's
+                // fallthrough: `control_create_object` + `hashtable_set_object_to_entity_gfx`
+                // 0x1ca6d8 [M]), the class 07000014's door leaves (streams 10/11, no parent, 0xff,
+                // hashes 0x02000891/92 [D decode]) key world space in: composing the SP placement
+                // threw them 56 units off and the door never moved while Kiko walked through it.
+                // A whole-disc census (probe_cam_scripts) finds NO other non-zero-hash 0xff
+                // stream in a camera-op script, so nothing else shifts. The special arms keep the
+                // compose (a port choice: 07000001's intro 0x06000087 s5/s11 kind-0x31 and the
+                // hash-0 classes pin composed spots in the live walks — interact_07000001,
+                // walkreal_07000001 — and 0700004a's hash-0 0xff/0x19 markers pin theirs in 4a-lift-4).
+                let keys_alone = self.camera_started && ehash != 0 && ekind == 0xff && self.streams[i].parent < 0;
+                if !hash0 && !keys_alone { m = mul(&m, &self.matrix); }
                 if let Some(Some(Obj::Entity { matrix, alpha: a, .. })) = objs.list.get_mut(o) { *matrix = m; *a = alpha; }
             }
             4 => {
@@ -1009,7 +1067,13 @@ impl Script {
                 if self.fade_flags & 0x20 != 0 { return; }
                 let Some(o) = self.streams[i].obj else { return };
                 let Some((m, scale, _)) = self.keys(i) else { return };
-                let m = mul(&m, &self.matrix);
+                // `Script_CameraStart` 0x1d9140 opens with `Mat_IdentityT()` — the
+                // camera's base concat runs on the IDENTITY, not on the SP's placement matrix, so the
+                // camera's world matrix is the keys alone. The port composed `self.matrix` (the SP's
+                // placement) here, which pushed 07000014's cut-scene camera from the room out to
+                // (78.06, 4.79, 82.69) — ~40 units away, inside rock: a flat blue void.
+                // (`Script_GetInterp`'s base-concat flag still runs; its base is the identity this
+                // op installed, so the concat is a no-op.) The entity/anim paths keep the real base.
                 if let Some(Some(Obj::Camera { matrix, fov, .. })) = objs.list.get_mut(o) { *matrix = m; *fov = scale * (4.0 / 3.0); }
             }
             2 => {
@@ -1245,6 +1309,22 @@ pub struct Player {
     /// 66) while #241's (gate 0) plays from load — the snapshot's twin looping pairs, one +0x36 = 1
     /// (0x16ddb40) and one 0 (0x16df360) [L ee_start_05.bin; docs/systems/copter-sp-hide.md].
     pub hidden: bool,
+    /// `SCRIPTPLAYER_tag+0x37` — the bullet-filter weapon id [M `SP_CreateScriptPlayer`
+    /// 0x1db9a8:56 (placement param 8, u8); `SP_Hit` 0x1dc470:64-70 — when set, a class-5 hit
+    /// raises bit 2 only while the bullet's `weapon_data+0x00` u16 (the weapon id,
+    /// docs/fields/weapon_data.md) equals `+0x37`]. The disc census: no placement sets it —
+    /// every mask-bit-2 SP carries 0 (dump_sp_hit_census) [D].
+    pub bullet_filter: u8,
+    /// The weapon ids of the player bullets whose flight touched any of the CURRENT script's
+    /// stream objects, recorded by the LAST completed bullet pass — the port's analog of the
+    /// `+0xD0` HITDATA chains during the control walk. The game's Collide pass runs AFTER the
+    /// walk [M `control_movement_object_handler` 0x1336f8:238], so a contact recorded at tick
+    /// N is read by `SP_Hit` at tick N+1; the bullet-pass head rotates the finished gather in
+    /// here.
+    pub bullet_hits: Vec<u16>,
+    /// The gather the running bullet pass fills (cleared at its head, rotated into
+    /// `bullet_hits` at the NEXT pass's head — the game's one-frame order).
+    pub tick_bullet_hits: Vec<u16>,
     // The removed `model` field (the placement hash) was once the SP-body use-target FALLBACK [S];
     // the game's use pick hits the class-0 script ENTITIES only (`entity_use_targets`) — the
     // class-0x1B SP body is inert to it [M 0x1a5170:121-122, the class walk has no 0x1B case] — and
@@ -1270,6 +1350,9 @@ impl Player {
             tick_damage: 0.0,
             // +0x36: nothing hides a placed/fusebox/useobj SP at create [M 0x1db9a8].
             hidden: false,
+            bullet_filter: g(8) as u8,
+            bullet_hits: Vec::new(),
+            tick_bullet_hits: Vec::new(),
         })
     }
 
@@ -1392,8 +1475,10 @@ impl Player {
         s.update(&mut self.subs, lib, objs, ch, w, frame, out);
     }
 
-    /// `SP_Update` (0x1dbda8). Trigger flags: only the channel bit (1) and activation (4); bullets and touching
-    /// objects (2, 8, 0x10, `SP_Hit`) are not modelled yet. `skip` is the game's `Input_Action(-1, 0x19, 1)` —
+    /// `SP_Update` (0x1dbda8). Trigger flags: the channel bit (1), activation (4) and — level-07-urn-break —
+    /// `SP_Hit` 0x1dc470's bullet bit (2): the last pass's player-bullet contacts on the current
+    /// stream objects, filterable by the placement's `+0x37` weapon id. The touching-object bits
+    /// (8, 0x10) are not modelled yet. `skip` is the game's `Input_Action(-1, 0x19, 1)` —
     /// any player pressed the skip action this tick (`Scripts::skip_request`, set by the viewer's key handler).
     pub fn update(&mut self, lib: &HashMap<u32, Arc<Nis>>, objs: &mut Objects, ch: &mut Channels, w: &dyn World, frame: u32, out: &mut Vec<Request>, skip: bool, gate: SpStart) {
         // The disabled byte gates the WHOLE update — including `Script_Update` [M 0x1dbda8:57-59].
@@ -1454,6 +1539,23 @@ impl Player {
                     }
                 }
             }
+        }
+        // `SP_Hit` 0x1dc470's bullet arm — bit 2 [M :62-71]: a class-5 (bullet) record on any
+        // CURRENT script stream object's `+0xD0` chain, under the same `countdown == 0` gate as
+        // the `SP_Hit` call itself [M 0x1dbda8:66]. The `+0x37` arm [M :64-70]: when the
+        // placement's bullet filter (param 8) is set, only bullets of THAT weapon
+        // (`weapon_data+0x00` u16 == `+0x37`) raise the bit — the census has no placement using
+        // it (dump_sp_hit_census) [D]. The chains hold the LAST pass's contacts — the game's
+        // Collide pass runs after the walk [M 0x1336f8:238], so the bit lands one tick after
+        // the flight (the bullet-pass head rotates `tick_bullet_hits` into `bullet_hits`).
+        // The mask == 2 special case's `Collide_FilterBullets(obj+0xD0, 0x106)` [M :31-34]
+        // reorders the chain and stamps +0xC = 1e8 on the flagged records; `SP_Hit`'s own walk
+        // visits every node either way [M :36-76, the OR is position-independent], so the
+        // trigger result is unaffected — no port analog (the port models no per-object chains).
+        if self.countdown == 0 && !self.bullet_hits.is_empty() {
+            let hit = self.bullet_filter == 0
+                || self.bullet_hits.iter().any(|&w| w == self.bullet_filter as u16);
+            if hit { flags |= 2; }
         }
         let mut value = self.out != 0 && ch.on(self.out as u32);
         if self.countdown != 0 { self.countdown -= 1; }
@@ -1633,14 +1735,15 @@ impl Scripts {
         // raises the heads' on-channels in a staged reveal — ch 64 (0x40) = 1 at wait 1, ch 63 (0x3F) at
         // 59, ch 61 (0x3D) at 116, ch 62 (0x3E) at 167 [D 07000006 kind-7 NIS 0x06000066; the heads'
         // on-channels are 64/63/61/62 on the four 0xDE kind-1 placements] — all four courtyard lights
-        // sweep within ~2.8 s of the script's start. Nothing in the level's
-        // placements, triggers or sub-scripts references the script (no param carries the hash; the raw
-        // bytes occur nowhere in 07000006.bin outside compressed-data noise), so the game's activation
-        // beat is not derivable from the disc — the port boots it once at level start, mode 1 (play
-        // once), the way a hidden `SP_CreateScriptPlayer` one-shot runs (`spawn_once`'s precedent, the
-        // copter script [M 0x1dbc08's mode dispatch]). Without it the port's courtyard heads stay state
-        // 3 (dark) forever, the alarm channel 55 can never rise and the guards never react. The real
-        // activation moment (which SP fires it in the game, and on which beat) is an open
+        // sweep within ~2.8 s of the script's start. The script's owner on the disc is SP placement
+        // #808 (kind 0xD9, p0 = 0x06000066, mask p5 = 1, out ch 0x34) [D census, level-06-audit]:
+        // mask != 0 parks it in state 0 [M 0x1db9a8:74-86] where only its SP_Hit/activate path can
+        // start it — a beat not derivable headlessly. The port therefore ALSO boots the script once
+        // at level start, mode 1 (play once), the way a hidden `SP_CreateScriptPlayer` one-shot runs
+        // (`spawn_once`'s precedent, the copter script [M 0x1dbc08's mode dispatch]); the placement
+        // player is created alongside and stays idle. Without the boot the port's courtyard heads
+        // stay state 3 (dark) forever, the alarm channel 55 can never rise and the guards never
+        // react. The real activation moment (which beat moves #808 in the game) is an open
         // live check. Pinned to the level by its own data: a class-0x22 head
         // placement whose alarm channel is 55 AND the script in the lib.
         let light_boot = placements.iter().any(|p| p.flags & 0xff == 0xde
@@ -1659,6 +1762,9 @@ impl Scripts {
                 tick_damage: 0.0,
                 // +0x36: nothing hides a placed/fusebox/useobj SP at create [M 0x1db9a8].
                 hidden: false,
+                bullet_filter: 0,
+                bullet_hits: Vec::new(),
+                tick_bullet_hits: Vec::new(),
             });
         }
         Scripts { lib, players, objects: Objects::default(), requests: Vec::new(), primed: false, skip_request: false }
@@ -1717,6 +1823,64 @@ impl Scripts {
             }
         }
         out
+    }
+
+    /// `SP_Hit` 0x1dc470's bit-2 read set: the current script's stream objects of EVERY player
+    /// with a loaded script — `Script_GetObj` 0x1db688 walks the kind-1/2 records, with NO
+    /// hit-point or hold gate (the urn carries 0 hit points and still reacts [M]; the game
+    /// fills the `+0xD0` chains regardless and `SP_Hit` reads them while the countdown is 0).
+    /// Same `(player, centre, radius)` shape and sphere as `held_hit_targets` — the game's
+    /// `Control_BuildWorldSph` volume [M 0x133070:36-48; no glist → the translation + 0.1,
+    /// :19-27]. Read-only; the bullet pass records contacts through `add_bullet_hit`.
+    pub fn sp_bullet_targets(&self, w: &dyn World) -> Vec<(usize, [f32; 3], f32)> {
+        let mut out = Vec::new();
+        for (pi, p) in self.players.iter().enumerate() {
+            if p.deleted { continue; }
+            let Some(s) = p.info[p.cur].as_ref() else { continue };
+            for i in 0..s.streams.len() {
+                if !matches!(s.streams[i].kind, 1 | 2) { continue; }
+                let Some(o) = s.streams[i].obj else { continue };
+                let Some(Some(obj)) = self.objects.list.get(o) else { continue };
+                match obj {
+                    Obj::Entity { hash, matrix, .. } => {
+                        let (c, r) = w.glist_sphere(*hash).unwrap_or(([0.0; 3], 0.1));
+                        let centre = [
+                            matrix[0][0] * c[0] + matrix[1][0] * c[1] + matrix[2][0] * c[2] + matrix[3][0],
+                            matrix[0][1] * c[0] + matrix[1][1] * c[1] + matrix[2][1] * c[2] + matrix[3][1],
+                            matrix[0][2] * c[0] + matrix[1][2] * c[1] + matrix[2][2] * c[2] + matrix[3][2]];
+                        out.push((pi, centre, r));
+                    }
+                    Obj::Anim { skin, .. } => {
+                        // The anim object's BuildWorldSph volume: its own model glist (obj+0xD8 =
+                        // the skin) through the object matrix; no glist → the game's no-record
+                        // path (translation, radius 0.1) [M 0x133070:19-27].
+                        if let Some(m) = s.stream_matrix(i, &self.objects, w) {
+                            let (c, r) = w.glist_sphere(*skin).unwrap_or(([0.0; 3], 0.1));
+                            let centre = [
+                                m[0][0] * c[0] + m[1][0] * c[1] + m[2][0] * c[2] + m[3][0],
+                                m[0][1] * c[0] + m[1][1] * c[1] + m[2][1] * c[2] + m[3][1],
+                                m[0][2] * c[0] + m[1][2] * c[1] + m[2][2] * c[2] + m[3][2]];
+                            out.push((pi, centre, r));
+                        }
+                    }
+                    _ => {
+                        if let Some(m) = s.stream_matrix(i, &self.objects, w) {
+                            out.push((pi, [m[3][0], m[3][1], m[3][2]], 0.1));
+                        }
+                    }
+                }
+            }
+        }
+        out
+    }
+
+    /// One player-bullet contact on a script player's stream objects this tick — the game's
+    /// Collide pass appends the class-5 HITDATA to the object's `+0xD0` chain [M 0x1ea398] and
+    /// `SP_Hit`'s walk reads it on the NEXT walk (Collide after the walk [M 0x1336f8:238]).
+    /// The weapon id is the bullet's `weapon_data+0x00` u16 — the `+0x37` filter's comparison
+    /// value [M 0x1dc470:64-70; docs/fields/weapon_data.md: the id equals the record index].
+    pub fn add_bullet_hit(&mut self, player: usize, weapon: u16) {
+        if let Some(p) = self.players.get_mut(player) { p.tick_bullet_hits.push(weapon); }
     }
 
     /// One bullet contact's damage on a player's stream objects this tick (`Collide_Update`
@@ -1819,6 +1983,9 @@ impl Scripts {
             tick_damage: 0.0,
             // +0x36: nothing hides a placed/fusebox/useobj SP at create [M 0x1db9a8].
             hidden: false,
+            bullet_filter: 0,
+            bullet_hits: Vec::new(),
+            tick_bullet_hits: Vec::new(),
         });
     }
 
@@ -1842,6 +2009,9 @@ impl Scripts {
             tick_damage: 0.0,
             // `SP_HideObj(sp, 1)` while the gate channel is armed and off [M 0x17d340:73-74].
             hidden: gate != 0 && !ch.on(gate as u32),
+            bullet_filter: 0,
+            bullet_hits: Vec::new(),
+            tick_bullet_hits: Vec::new(),
             // The runtime spawn has no placement model.
         });
     }
@@ -2026,6 +2196,9 @@ mod tests {
             scale: 1.0, matrix: IDENT, cur: 0, state: 1, activated: false, countdown: 0, info: [Some(script), None],
             deleted: false, live_matrix: IDENT, subs: Vec::new(), hit_points: 0.0, damage: 0.0, tick_damage: 0.0,
             hidden: false,
+            bullet_filter: 0,
+            bullet_hits: Vec::new(),
+            tick_bullet_hits: Vec::new(),
         };
         let mut ch = Channels::default();
         let mut out = Vec::new();
@@ -2036,10 +2209,38 @@ mod tests {
         // Sister: 0.2 away is outside the 0.1 sphere — the radius is the game's, not a guess.
         let mut p2 = Player { placement: 0, scripts: [0x0600_0086, 0], modes: [1, 0], stay: false, mask: 2, out: 0, gate: 0,
             scale: 1.0, matrix: IDENT, cur: 0, state: 1, activated: false, countdown: 0, info: [None, None],
-            deleted: false, live_matrix: IDENT, subs: Vec::new(), hit_points: 0.0, damage: 0.0, tick_damage: 0.0, hidden: false };
+            deleted: false, live_matrix: IDENT, subs: Vec::new(), hit_points: 0.0, damage: 0.0, tick_damage: 0.0, hidden: false, bullet_filter: 0, bullet_hits: Vec::new(), tick_bullet_hits: Vec::new() };
         let gate2 = SpStart { health_ok: true, mission: 0, music2: 0, blasts: vec![([5.2, 0.0, 0.0], 0.0)] };
         p2.update(&mut HashMap::new(), &mut objs, &mut ch, &TestWorld, 0, &mut out, false, gate2);
         assert_ne!(p2.state, 2, "a blast 0.2 from the origin must stay outside the 0.1 sphere");
+    }
+
+    /// `SP_Hit` 0x1dc470's `+0x37` bullet-filter arm [M :64-70 — when the placement's filter
+    /// byte is set, a class-5 record raises bit 2 only while the bullet's
+    /// `weapon_data+0x00` u16 == `+0x37`]. No disc placement sets `+0x37` (the census,
+    /// dump_sp_hit_census) [D] — the arm is pinned from the decompile with a synthetic
+    /// player; the unfiltered arm (filter 0: any bullet raises the bit) is the urn test's.
+    #[test]
+    fn the_037_bullet_filter_arms_only_the_matching_weapon() {
+        let nis = Arc::new(Nis {
+            hashcode: 0x0600_0086, camera: false, loop_start: 0, length: 100,
+            streams: vec![NisStream { first_key: 0, last_key: 0, commands: Vec::new() }],
+            keys: Vec::new(),
+        });
+        let script = Script::load(nis, IDENT, 1.0);
+        let mut p = Player {
+            placement: 0, scripts: [0x0600_0086, 0], modes: [1, 0], stay: false, mask: 2, out: 0, gate: 0,
+            scale: 1.0, matrix: IDENT, cur: 0, state: 1, activated: false, countdown: 0, info: [Some(script), None],
+            deleted: false, live_matrix: IDENT, subs: Vec::new(), hit_points: 0.0, damage: 0.0, tick_damage: 0.0,
+            hidden: false, bullet_filter: 5, bullet_hits: vec![2], tick_bullet_hits: Vec::new(),
+        };
+        let mut ch = Channels::default();
+        let mut out = Vec::new();
+        p.update(&mut HashMap::new(), &mut Objects::default(), &mut ch, &TestWorld, 0, &mut out, false, SpStart::default());
+        assert_eq!(p.state, 1, "a weapon-2 bullet must not arm a +0x37 = 5 filter [M 0x1dc470:64-70]");
+        p.bullet_hits = vec![5];
+        p.update(&mut HashMap::new(), &mut Objects::default(), &mut ch, &TestWorld, 0, &mut out, false, SpStart::default());
+        assert_eq!(p.state, 2, "the matching weapon's bullet raises bit 2 — state 1 plays [M SP_Update case 1]");
     }
 
     /// A HELD anim stream object's hit volume is the game's BuildWorldSph sphere of the anim's own
@@ -2076,6 +2277,9 @@ mod tests {
             scale: 1.0, matrix: IDENT, cur: 0, state: 1, activated: false, countdown: 0, info: [Some(script), None],
             deleted: false, live_matrix: IDENT, subs: Vec::new(), hit_points: 20.0, damage: 0.0, tick_damage: 0.0,
             hidden: false,
+            bullet_filter: 0,
+            bullet_hits: Vec::new(),
+            tick_bullet_hits: Vec::new(),
         });
         let targets = scripts.held_hit_targets(&AnimWorld);
         assert_eq!(targets.len(), 1, "the held anim stream object must be a hit target");
@@ -2263,6 +2467,9 @@ mod tests {
             tick_damage: 0.0,
             // +0x36: nothing hides a placed/fusebox/useobj SP at create [M 0x1db9a8].
             hidden: false,
+            bullet_filter: 0,
+            bullet_hits: Vec::new(),
+            tick_bullet_hits: Vec::new(),
         };
         let mut lib = HashMap::new();
         lib.insert(0x0600_0421u32, nis);
@@ -2305,6 +2512,9 @@ mod tests {
             tick_damage: 0.0,
             // +0x36: nothing hides a placed/fusebox/useobj SP at create [M 0x1db9a8].
             hidden: false,
+            bullet_filter: 0,
+            bullet_hits: Vec::new(),
+            tick_bullet_hits: Vec::new(),
         };
         let mut objs2 = Objects::default();
         p2.load(&lib, &mut objs2, &mut ch, &world, 0, &mut out);
@@ -2349,7 +2559,7 @@ mod tests {
         let world = TestWorld;
         let mut out = Vec::new();
         let mut p = Player { placement: 0, scripts: [0x0600_0832, 0], modes: [1, 0], stay: false, mask: 0, out: 0, gate: 0, scale: 1.0, matrix: IDENT, cur: 0, state: 7, activated: false, countdown: 0, info: [None, None], deleted: false,
-            live_matrix: IDENT, subs: Vec::new(), hit_points: 0.0, damage: 0.0, tick_damage: 0.0, hidden: false };
+            live_matrix: IDENT, subs: Vec::new(), hit_points: 0.0, damage: 0.0, tick_damage: 0.0, hidden: false, bullet_filter: 0, bullet_hits: Vec::new(), tick_bullet_hits: Vec::new() };
         p.load(&lib, &mut objs, &mut ch, &world, 0, &mut out);
         {
             let s = p.info[0].as_ref().unwrap();
@@ -2381,7 +2591,7 @@ mod tests {
         }));
         let mut objs2 = Objects::default();
         let mut p2 = Player { placement: 0, scripts: [0x0600_0833, 0], modes: [1, 0], stay: false, mask: 0, out: 0, gate: 0, scale: 1.0, matrix: IDENT, cur: 0, state: 7, activated: false, countdown: 0, info: [None, None], deleted: false,
-            live_matrix: IDENT, subs: Vec::new(), hit_points: 0.0, damage: 0.0, tick_damage: 0.0, hidden: false };
+            live_matrix: IDENT, subs: Vec::new(), hit_points: 0.0, damage: 0.0, tick_damage: 0.0, hidden: false, bullet_filter: 0, bullet_hits: Vec::new(), tick_bullet_hits: Vec::new() };
         p2.load(&lib, &mut objs2, &mut ch, &world, 0, &mut out);
         {
             let s = p2.info[0].as_ref().unwrap();

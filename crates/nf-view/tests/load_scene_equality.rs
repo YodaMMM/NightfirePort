@@ -20,25 +20,39 @@ fn iso() -> Option<String> { std::env::var("NF_ISO").ok() }
 // The baseline is re-pinned only for deliberate scene-content changes. Those so far: the per-character
 // light pick (the game picks lights per object [M View_DrawObjList 0x1e69a0:73-81]); the swoosh ribbon
 // pools and 32 projectile slots per projectile mesh; the switch-script lasers' ON art (07000014); the
-// captains' swapped skins (`NDrone2_DefaultInit` 0x14b300:563-565) and the dropped 0x050000b1 session
-// merge on 07000014 (the game's hashtable misses it, AnimObjectNew 0x1be910:44-46); the 0x20
+// captains' swapped skins and the 0x050000b1 placements' rewritten request skin
+// (`NDrone2_DefaultInit` 0x14b300:563-565 + the :82-95 rewrite — 0x050000b1 → 0x0500008c;
+// the raw skin stays unregistered, AnimLoadFile 0x1bdf40); the 0x20
 // breakables in the posed slot space (`Break_Kill` 0x12b970); the rain-mesh slots on DropType-1
 // SNOW_gen levels (`DrawDrops` 0x18cb90, mesh 0x02000290); the watch-hand attachments; the
 // suppressor swap piece (bone 43, state 8) without the duplicate +0x7C view-entity extra; and one
 // draw slot per ScriptPlayer running a script; the 0700000c walkway soldiers now drawn; and no
 // characters for drone placements above the load's difficulty (`Drone_Create` 0x136be0 makes none;
 // 07000014 drops 18 such instances).
+// camera-beam-satchel-draw: the cameras' third posed slot (the lens beam, Sensor_SetBeam 0x1af398) — 14's beams add vertices; 02's slot layout shifts.
+// batch-1024a: the security cameras' body + mount posed slots (`Sensor_Create` 0x1af010 / `Sensor_SetBeam`
+// 0x1af398 — 01 ×1, 02, 14 ×14), 14's b1 drones on skin 0x0500008c (`NDrone2_DefaultInit` 0x14b300:82-95).
 const BASELINE: &[(&str, &str)] = &[
-    ("07000002.bin", "37773b0bd1266a44 4483929 9371895 5352 4346635 81 9825 205 28 25 8"),
+    ("07000002.bin", "184995bc34f63bb4 4484117 9372399 5353 4346823 81 9825 205 28 25 8"),
     ("07000005.bin", "57ab143029eee3f2 4387197 9170895 3614 4302856 73 9759 106 19 16 6"), // the two copter SPs + their script draw slots
-    ("0700000c.bin", "8649f22da9950e97 4871902 10241460 8182 4681078 96 11011 170 22 40 15"),
+    // lift-indicators-09 re-pin: one draw slot per `Script_SubScriptStart` op per running SP
+    // [M 0x1db050] — 0700000c's multi-SP sub chains add 6 slots (+248 vertices, +576 indices,
+    // +1 attachment); 07000014's vent-lid SPs are placed SPs (unchanged), the rest have no
+    // multi-SP sub chains.
+    ("0700000c.bin", "22bb59aa786e1035 4872150 10242036 8182 4681326 96 11012 170 22 40 15"),
     // script-entity-copies: one draw slot per ScriptPlayer running a script — 14's nine
     // SPs on the vent-lid script 0x06000A3B (+ its other shared scripts) add 20 attachments, +1600 vertices.
     // The keypads' LOD pair in the posed slots (Lock_Unlock 0x1b0650 / case 1 `Control_NextLOD`: three
     // KeypadLocked + KeypadUnlocked) and the decryptor screen's PdaDigits on datums 0..3 (10 digits x 4
     // datums x the 0x56/0x57 view models = +80 attachments) [M Player_WeaponFiring 0x1a5460:155-194].
-    ("07000014.bin", "62083f4393927514 7106502 14762802 6453 6953569 93 13491 173 41 37 32"),
-    ("07000001.bin", "c3615aff5574ccb2 4396283 9211737 3489 4322981 76 9839 101 11 20 6"),
+    // cite-14-skinless-drones re-pin: 07000014's five non-captain 0x050000b1 placements now draw
+    // their characters through the Drone+0xe0 rewrite (0x050000b1 → 0x0500008c before the
+    // AnimObjectNew request [M 0x14b300:82-95, :563-565]) — +5 characters, +30005 vertices,
+    // +59235 indices, +105 materials, +50005 char_verts, +15 attachments over the old pin.
+    // fusebox-draw-slots re-pin: 07000014's five fusebox placements (kind 0x31) now seed their
+    // param-0 script 0x06000A1B, +20 script-entity slots (the cabinet and wire art) [M FuseBox_Create].
+    ("07000014.bin", "9e25e8e7f4e5bd74 7147319 14846157 6583 6994386 98 13526 173 41 37 32"),
+    ("07000001.bin", "3efd2cdd3e5616ab 4396377 9211989 3491 4323075 76 9839 101 11 20 6"),
 ];
 
 #[test]

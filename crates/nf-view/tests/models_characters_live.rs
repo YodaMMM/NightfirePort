@@ -1,17 +1,20 @@
 //! models-characters: every skinned character on the disc resolves, poses and draws.
 //!
-//! - G-021: the 33 drone placements whose skin (placement param 0) is not in their level's archive
-//!   [D scan: 0700000c ×7 and 07000014 ×15 want 0x05000090, 07000014 ×11 want 0x050000b1]. The
-//!   game resolves the 0x05000090 placements through the substitution (`AnimObjectNew` 0x1be910
-//!   disasm 0x1be958-0x1be9b0: on GameState+0xC == 0x0700000c → 0x05000087, on 0x07000014 →
-//!   0x05000093, before the hashtable get). 0x050000b1 resolves for NO fresh story session: it is
-//!   carried only by 07000015/16's archives [D scan], which the story loads after 07000014, the
-//!   session table holds only what loaded containers registered (`AnimLoadFile` 0x1bdf40,
-//!   first-wins, nothing frees — the only deletions are the hashtype-4 pack wipes 0x1d69e8 +
-//!   0x1ca520), so `hashtable_getitem` 0x1ca5b0 misses and `AnimObjectNew` 0x1be910:44-46 returns
-//!   0 — the placement draws no character (`NDrone2_DefaultInit` 0x14b300:563-565 discards the
-//!   return). The port's session gate (drone-skins-g021) models exactly that; the old
-//!   "foreign guards resolve" expectation here pinned the pre-gate port, not the game.
+//! - G-021 (corrected by cite-14-skinless-drones): the drone placements whose skin (placement
+//!   param 0) is not in their level's archive [D scan: 0700000c ×7 and 07000014 ×15 want
+//!   0x05000090, 07000014 ×11 want 0x050000b1]. The game resolves the 0x05000090 placements
+//!   through the substitution (`AnimObjectNew` 0x1be910 disasm 0x1be958-0x1be9b0: on
+//!   GameState+0xC == 0x0700000c → 0x05000087, on 0x07000014 → 0x05000093, before the hashtable
+//!   get). The 0x050000b1 requests never reach the table either: on 0x07000014 the param-0 skin
+//!   is REWRITTEN to 0x0500008c in Drone+0xe0 before the kind switch and the captain block
+//!   [M 0x14b300:82-95], and `AnimObjectNew` gets the rewritten +0xe0 [M 0x14b300:563-565] —
+//!   0x0500008c is a 07000014 own-archive skin [D]. (The earlier reading here — "0x050000b1
+//!   resolves for NO fresh story session, the placement draws no character" — missed the
+//!   rewrite; the raw skin indeed rides only 07000015/16 [D census: 07000016 entry 139 @0x8594a0,
+//!   07000015 entry 102 @0x609e60], which the story loads after 14, and nothing else registers
+//!   skins [M 0x1bdf40/0x1d4880 single-caller chain].) The port's session gate (drone-skins-g021)
+//!   plus the rewrite model exactly that; the old "foreign guards resolve" expectation here
+//!   pinned the pre-gate port, not the game.
 //! - The gameplay guard: the merge must not touch the level's own per-skeleton sequence lists
 //!   (the order-sensitive data the WORKLOG warns about).
 //!
@@ -67,27 +70,32 @@ fn g021_the_power_station_s_foreign_guards_resolve() {
 
 /// G-021 on 07000014 (the airbase): 26 placements want 0x05000090 (×15) and 0x050000b1 (×11) [D].
 /// The substitution (`AnimObjectNew` 0x1be910:40-43 — GameState+0xC == 0x07000014 → 0x05000093)
-/// resolves every 0x05000090 placement from the own archive. 0x050000b1 resolves for NO fresh
-/// story session: it is carried ONLY by 07000015/16's archives [D scan], which the story loads
-/// AFTER 14; the session table (`AnimLoadFile` 0x1bdf40 first-wins, nothing frees — the only
-/// deletions are the hashtype-4 pack wipes 0x1d69e8 + 0x1ca520) lacks it, `hashtable_getitem`
-/// 0x1ca5b0 misses, `AnimObjectNew` 0x1be910:44-46 returns 0 and the placement draws no character
-/// (`NDrone2_DefaultInit` 0x14b300:563-565 discards the return) — the game's cited skinless
-/// exception. The captains are the only out (0x14b300:536-555 swaps kinds 6/7 to 0x05000093/
-/// 0x050000b2, both in the own archive — the sim's `captain_setup`). The old expectation here
-/// (the foreign merge resolving 0x050000b1) pinned the pre-session-gate port, not the game.
+/// resolves every 0x05000090 placement from the own archive. The 0x050000b1 requests are REWRITTEN
+/// to 0x0500008c in Drone+0xe0 before the kind switch and the captain block [M 0x14b300:82-95],
+/// and `AnimObjectNew` 0x1be910 receives the rewritten +0xe0 [M 0x14b300:563-565] — 0x0500008c is
+/// a 07000014 own-archive skin [D], so these placements resolve too. (The raw 0x050000b1 itself is
+/// carried ONLY by 07000015/16's archives [D census], which the story loads AFTER 14; the session
+/// table (`AnimLoadFile` 0x1bdf40 first-wins, nothing frees — the only deletions are the
+/// hashtype-4 pack wipes 0x1d69e8 + 0x1ca520) therefore never holds it, which is why the rewrite
+/// is the game's only path for these placements.) The captains additionally swap kinds 6/7 to
+/// 0x05000093/0x050000b2 [M 0x14b300:536-555 — the sim's `captain_setup`]. The old expectation
+/// here (the foreign merge resolving 0x050000b1) pinned the pre-session-gate port, not the game.
 #[test]
 fn g021_the_airbase_s_foreign_guards_resolve() {
     let Some(iso) = iso() else { eprintln!("NF_ISO not set — skipping"); return };
     let scene = nf_view::load(&iso, "07000014.bin", false).expect("load");
     // 0x05000090: the substitute entry (0x05000093's data) builds the characters.
     assert_level_skins_complete("07000014.bin", &[0x0500_0090], 7, &[0x0500_00b1]);
-    // 0x050000b1: on NO container the session has loaded — the loaded table must NOT hold it and
-    // no character may draw for it (the game's hashtable miss renders these skinless).
+    // 0x050000b1: on NO container the session has loaded — the loaded table must NOT hold it (the
+    // game never registers it on a fresh story run) and no character may draw for the raw hash:
+    // the placements render through the rewritten 0x0500008c request [M 0x14b300:82-95, :563-565].
     assert!(!scene.sim.as_ref().unwrap().skins.contains_key(&0x0500_00b1),
-        "0x050000b1 resolved on 07000014 — it is carried only by 07000015/16 [D], which the story loads after 14; the game's hashtable_getitem 0x1ca5b0 misses (AnimObjectNew 0x1be910:44-46)");
+        "0x050000b1 resolved on 07000014 — it is carried only by 07000015/16 [D], which the story loads after 14; the session table never registers it (AnimLoadFile 0x1bdf40 first-wins)");
     assert_eq!(scene.characters.iter().filter(|c| c.skin.hashcode == 0x0500_00b1).count(), 0,
-        "a character drew for 0x050000b1 on 07000014 — the game draws these placements skinless");
+        "a character drew for 0x050000b1 on 07000014 — the game's request is the rewritten 0x0500008c [M 0x14b300:82-95, :563-565], never the raw hash");
+    // The rewritten requests resolve: characters built for 0x0500008c from the own archive [D].
+    assert!(scene.characters.iter().any(|c| c.skin.hashcode == 0x0500_008c),
+        "no character drew for 0x0500008c on 07000014 — the rewritten 0x050000b1 requests [M 0x14b300:82-95, :563-565] must resolve from the own archive [D]");
 }
 
 /// The gameplay guard: the G-021 merge adds no sequence to any skeleton the level's own 07F already

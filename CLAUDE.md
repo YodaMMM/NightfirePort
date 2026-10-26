@@ -39,7 +39,7 @@ logic, not an emulator wrapper or a static recompiler. Read `docs/PLAN.md` first
 |---|---|---|
 | rerac (re-rac/rerac) | ISC | reuse with notice kept (`THIRD_PARTY_RERAC_LICENSE.txt`); `iso9660.rs`, `sha1.rs` came via RC2Port |
 | RC2Port (user's own code) | user's | copied: `buf`, `iso9660`, `sha1`, `vif`, `pss`, `vag`, `png`, Ghidra scripts |
-| OpenGOAL (open-goal/jak-project) | ISC (*sourced*, docs/research/native-port-methodology.md) | reuse allowed with notice; `vag.rs` mirrors its `sceSdNote2Pitch` and keeps an OpenGOAL decoder variant — add the OpenGOAL notice file (GAPS G-007) |
+| OpenGOAL (open-goal/jak-project) | ISC (*sourced*, docs/research/native-port-methodology.md) | reuse allowed with notice kept (`THIRD_PARTY_OPENGOAL_LICENSE.txt`); `vag.rs` mirrors its `sceSdNote2Pitch` and keeps an OpenGOAL decoder variant (GAPS G-007) |
 | Raikaru/nightfire-engine | none | **facts only** |
 | NightfireResearch/* (GitHub) | none | **facts only**; their wiki (wiki.nightfire.dev) is CC BY 4.0 — facts with attribution |
 | eurotools GPL-3 tools (EngineX era) | GPL-3.0 | format reference only, never copy code |

@@ -1,10 +1,18 @@
-//! speech-facial-fallback (945): `NDrone2_SpeechSFX` 0x141b00's hashtable-miss arm — a facial-id
-//! line whose script is absent from the level plays DIRECT (facialAnimId := 0, permanent) and
-//! returns a handle; a present script stays on the (unported) FACIAL path — no handle [M
-//! 0x141b00; speech.md §1.3]. The presence test's port source: `Data.scripts`, the level
-//! archive's kind-5 0x06 anim-script entries [D census (zz probe, 2026-10-22): the 61 speech
-//! facial hashes are 0x06-namespace; 07000005 carries 0 of them, 07000007 carries 54 — the
-//! absent set on 07000007 includes the bond-talk lines 0x70/0x72/0x73 (sfx 397/399/400)].
+//! speech-facial-fallback (945), re-derived onto the game's advance-and-play behaviour: the
+//! absent-script draws keep the hashtable-miss arm — `facialAnimId := 0` (permanent), the line
+//! plays DIRECT and returns a handle [M 0x141b00:18-28] — while a present-script draw now takes
+//! the ported FACIAL arm [M 0x141b00:15-35]: `AnimScriptPeekSfx` 0x1c6ca8 finds the script's own
+//! op-1 sound, the script id queues at +0x4c with +0x37 = 1 and +0x48 = now + 0x14
+//! (`SFXPreCache(sfx, 0x14)`), ControlSTANDARD appends it at T+21 [M speech.md §1.4], and the
+//! line sounds from the FACIAL SCRIPT's own op-1 command — its sfx id, which the census shows
+//! equals the entry's sfxId [D census (probe_facial_ops, this level): every present 07 BondTalk
+//! facial script's first op-1 sfx == the entry's sfxId]. The facial arm returns 0 (no handle,
+//! `+0x4D0` untouched [M :35]) and stamps the entry once +0x53c stands, so the caller's
+//! bookkeeping advances [M 0x1446b0 case 0xd join; 0x144488:50-63]. The presence test's port
+//! source: `Data.scripts`, the level archive's kind-5 0x06 anim-script entries [D census
+//! (zz probe, 2026-10-22): the 61 speech facial hashes are 0x06-namespace; 07000005 carries 0 of
+//! them, 07000007 carries 54 — the absent set on 07000007 includes the bond-talk lines
+//! 0x70/0x72/0x73 (sfx 397/399/400)].
 //! Through the real path (`nf_view::load` + `Sim::step_bond` + `nf_view::sound_tick`, silent).
 //! Opt-in: set `NF_ISO`.
 use nf_game::player::Input;
@@ -54,18 +62,27 @@ fn free_bond(scene: &mut nf_view::scene::Scene, snd: &mut nf_audio::sfx::Sound) 
 /// keys line `0x58 + r*4 + variant` [M]; with the NPC's variant != 1 the absent-script draws are
 /// exactly lines 0x70/0x72/0x73 (sfx 397/399/400 [D census]) — those play DIRECT (the
 /// hashtable-miss arm [M 0x141b00:18-28]) and advance the bookkeeping (h != 0 [M case 0xd
-/// join]); every present-script draw (54 of the 61 facial scripts ride the level archive [D])
-/// goes FACIAL — no handle, nothing sounds, the bookkeeping does not move [M :15-17].
+/// join]); every present-script draw takes the ported FACIAL arm — no handle, the line sounds
+/// later from the facial script's own op-1 (== the entry's sfxId [D census]) and the
+/// bookkeeping advances once +0x53c stands [M 0x141b00:32-35 + the case 0xd join].
 #[test]
-fn bond_talk_plays_the_absent_script_lines_and_stays_silent_on_present_ones() {
+fn bond_talk_plays_the_absent_script_lines_direct_and_the_present_ones_through_the_facial() {
     let Some(iso) = iso() else { eprintln!("NF_ISO not set — skipping"); return };
     unsafe { std::env::set_var("NF_SILENT", "1"); }
     let mut scene = nf_view::load(&iso, "07000007.bin", false).expect("load 07000007");
     let mut snd = bare_sound(&mut scene);
     free_bond(&mut scene, &mut snd);
     let absent = [397u32, 399, 400]; // set 0xd's absent-script lines on 07000007 [D census]
+    // the present-script set-0xd sfx ids [D census: 0x58..0x6f + 0x71 — 463, 374..396, 398]
+    let present: Vec<u32> = {
+        let sim = scene.sim.as_ref().unwrap();
+        let voices = sim.voices.as_deref().unwrap();
+        (0x58..0x84).filter(|&i| sim.scripts.contains_key(&voices[i].facial))
+            .map(|i| voices[i].sfx).collect()
+    };
     let mut target: Option<usize> = None;
     let mut played: Vec<u32> = Vec::new();
+    let mut facial: Vec<u32> = Vec::new();
     let mut advanced = false;
     for t in 0..4500u32 {
         {
@@ -98,43 +115,55 @@ fn bond_talk_plays_the_absent_script_lines_and_stays_silent_on_present_ones() {
         if let Some(i) = target {
             let d = &sim.drones.list[i];
             if let Some(v) = d.voice { if !played.contains(&v.1) { played.push(v.1); } }
+            for s in &d.facial_played { if !facial.contains(s) { facial.push(*s); } }
             if d.bond_talk_count > 0 || d.bond_talk_cooldown > 0 { advanced = true; }
         }
-        if played.len() >= 2 && advanced { break; }
+        if played.len() >= 1 && facial.len() >= 2 && advanced { break; }
     }
     assert!(target.is_some(), "the crosshair reached a type-13 civilian");
-    assert!(advanced, "the bond-talk bookkeeping advanced on a miss level (the bug: speech_request always returned 0)");
-    assert!(!played.is_empty(), "an absent-script bond-talk line played [M 0x141b00:18-28]");
+    assert!(advanced, "the bond-talk bookkeeping advanced (both arms advance [M 0x1446b0 case 0xd join])");
+    assert!(!played.is_empty(), "an absent-script bond-talk line played DIRECT [M 0x141b00:18-28]");
     for sfx in &played {
-        assert!(absent.contains(sfx), "sfx {sfx} played — only the absent-script lines {absent:?} may sound [D census; M 0x141b00:15-17 keeps present ones on the silent FACIAL path]");
+        assert!(absent.contains(sfx), "sfx {sfx} played — the DIRECT arm plays only the absent-script lines {absent:?} [D census]");
+    }
+    assert!(!facial.is_empty(), "a present-script line sounded through the facial pipeline [M 0x141b00:15-35]");
+    for sfx in &facial {
+        assert!(present.contains(sfx), "facial sfx {sfx} played — the FACIAL arm sounds the script's own op-1, == the entry's sfxId of a present line [D census; M 0x1c6ca8]");
+        assert!(!absent.contains(sfx), "an absent-script line took the FACIAL arm (impossible: the miss arm goes DIRECT [M 0x141b00:18-19])");
     }
 }
 
 /// Sister (the same level, the same path, a present-script-only talker): voice type 14 runs
 /// BondTalk case 0xe — lines `0x84 + rand(9)`, ALL of whose facial scripts ride 07000007 [D
-/// census: 132..=140 all present] — so every draw takes the FACIAL path: no handle, no voice,
-/// and `do_bond_talk`'s bookkeeping never advances (`h == 0 && !+0x53C` → return [M 0x141b00:15-17;
-/// 0x1446b0 case 0xe → 0x144488:50-53]). The reach: Bond seeds at the nearest type-13 (whose
-/// head-on ray a type-14 neighbour blocks — the census geometry), then locks onto the aimed
-/// type-14.
+/// census: 132..=140 all present, each carrying its own op-1 == the entry's sfxId] — so every
+/// draw takes the FACIAL arm: the line sounds through the facial script's own op-1, the
+/// bookkeeping ADVANCES once +0x53c stands [M 0x141b00:32-35; 0x1446b0 case 0xe → 0x144488:50-63],
+/// and `+0x4D0` stays clear — a facial line never stores a handle [M 0x141b00:35]. The reach:
+/// Bond seeds at the nearest type-13 (whose head-on ray a type-14 neighbour blocks — the census
+/// geometry), then locks onto the aimed type-14.
 #[test]
-fn a_present_script_talker_never_plays_nor_advances() {
+fn a_present_script_talker_plays_through_the_facial_and_advances() {
     let Some(iso) = iso() else { eprintln!("NF_ISO not set — skipping"); return };
     unsafe { std::env::set_var("NF_SILENT", "1"); }
     let mut scene = nf_view::load(&iso, "07000007.bin", false).expect("load 07000007");
     let mut snd = bare_sound(&mut scene);
     free_bond(&mut scene, &mut snd);
-    // the census sanity: every set-0xe line's script is present on this level [D]
+    // the census sanity: every set-0xe line's script is present on this level, and its own op-1
+    // sound == the entry's sfxId [D census; M 0x1c6ca8's first-op-1 walk]
     {
         let sim = scene.sim.as_ref().unwrap();
         let voices = sim.voices.as_deref().unwrap();
         for i in 132..=140 {
             assert!(voices[i].facial != 0 && sim.scripts.contains_key(&voices[i].facial),
                 "line {i} must be facial with a present script [D census]");
+            let op1 = sim.scripts.get(&voices[i].facial).and_then(|s| s.commands.iter()
+                .find(|c| c.op == 1).and_then(|c| c.args.get(1)).copied()).unwrap_or(0) as u32;
+            assert_eq!(op1, voices[i].sfx as u32, "line {i}'s facial script's own op-1 sfx [D census]");
         }
     }
     let mut target: Option<usize> = None;
-    let mut any_voice = false;
+    let mut any_facial = false;
+    let mut done = 0u32;
     for t in 0..2700u32 {
         {
             let sim = scene.sim.as_ref().unwrap();
@@ -164,10 +193,13 @@ fn a_present_script_talker_never_plays_nor_advances() {
         }
         if let Some(i) = target {
             let d = &sim.drones.list[i];
-            if d.voice.is_some() { any_voice = true; }
-            assert_eq!(d.bond_talk_done, 0, "a present-script draw advanced the bookkeeping [M 0x141b00:15-17; 0x144488:50-53]");
+            any_facial |= !d.facial_played.is_empty();
+            done = done.max(d.bond_talk_done);
+            assert!(d.voice.is_none(), "a facial line stored +0x4D0 (the facial arm never returns or stores a handle [M 0x141b00:35])");
         }
+        if any_facial && done > 0 { break; }
     }
     assert!(target.is_some(), "the crosshair reached a type-14 talker");
-    assert!(!any_voice, "a present-script line played [D census; M 0x141b00:15-17]");
+    assert!(any_facial, "a present-script line sounded through the facial script's own op-1 [M 0x141b00:15-35; D census op-1 == sfxId]");
+    assert!(done > 0, "the bookkeeping advanced once +0x53c stood [M 0x144488:50-63]");
 }

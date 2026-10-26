@@ -13,6 +13,7 @@ pub struct Backend {
     driver: PadDriver,
     tuning: nf_formats::tuning::Tuning,
     buttons: u16,
+    prev_buttons: u16,
     rx: u8,
     ry: u8,
     lx: u8,
@@ -37,7 +38,7 @@ impl Backend {
         let elf = iso.read_file(iso.find("/ACTION.ELF")?).ok()?;
         let cfg = PadConfig::from_action_elf(&elf)?;
         let tuning = nf_formats::tuning::Tuning::from_action_elf(&elf).unwrap_or_default();
-        Some(Backend { gilrs, driver: PadDriver::new(cfg), tuning, buttons: 0, rx: 0x7f, ry: 0x7f, lx: 0x7f, ly: 0x7f, connected: false })
+        Some(Backend { gilrs, driver: PadDriver::new(cfg), tuning, buttons: 0, prev_buttons: 0, rx: 0x7f, ry: 0x7f, lx: 0x7f, ly: 0x7f, connected: false })
     }
 
     fn byte(v: f32) -> u8 { (127.0 + v.clamp(-1.0, 1.0) * 127.0).round().clamp(0.0, 255.0) as u8 }
@@ -52,7 +53,7 @@ impl Backend {
         while let Some(Event { event, .. }) = self.gilrs.next_event() {
             match event {
                 EventType::Connected => self.connected = true,
-                EventType::Disconnected => { self.connected = false; self.buttons = 0; self.rx = 0x7f; self.ry = 0x7f; self.lx = 0x7f; self.ly = 0x7f; }
+                EventType::Disconnected => { self.connected = false; self.buttons = 0; self.prev_buttons = 0; self.rx = 0x7f; self.ry = 0x7f; self.lx = 0x7f; self.ly = 0x7f; }
                 EventType::ButtonPressed(b, _) | EventType::ButtonRepeated(b, _) => self.buttons |= Self::bit(b),
                 EventType::ButtonReleased(b, _) => self.buttons &= !Self::bit(b),
                 EventType::AxisChanged(axis, v, _) => match axis {
@@ -111,5 +112,16 @@ impl Backend {
         if input.weapon_cycle == 0 { input.weapon_cycle = p.weapon_cycle; }
         if input.gadget_cycle == 0 { input.gadget_cycle = p.gadget_cycle; }
         if input.switch_to.is_none() { input.switch_to = p.switch_to; }
+    }
+
+    /// The front end's pad input (results-stats-key): drains the events and returns the ONE menu
+    /// action a newly-pressed button maps to — the game's style-independent menu vocabulary
+    /// (`crate::menu::pad_menu_action` holds the [M] citations: ✕ confirm, □ side, ○ extra, △ back,
+    /// the d-pad directions). `prev_buttons` updates every call so a held button never repeats and
+    /// no edge leaks across the menus/gameplay boundary; the caller feeds it to `menu_input` only
+    /// while the front end owns the input.
+    pub fn poll_menu(&mut self) -> Option<crate::menu::Action> {
+        self.poll();
+        crate::menu::pad_menu_action(self.buttons, &mut self.prev_buttons)
     }
 }

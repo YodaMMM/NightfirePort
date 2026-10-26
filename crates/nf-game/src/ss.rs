@@ -62,7 +62,7 @@ pub struct Ss {
     /// the wrap disarms to 0 [M 0x1a9948:121-126].
     pub wrap_flag: u16,
     /// ext+0x14 = param 4 — the operate sound id (0xffff = none; `Sound_Play3D` at the 0x40
-    /// operate arm [M 0x1a9948:86-88]). Unplayed headlessly; kept for the field map.
+    /// operate arm [M 0x1a9948:86-88]). Played via `SsList::pending_sounds` on the arm.
     pub sound: u16,
     /// The placement object's gfx-sphere radius — the game's obj+0x8C world-sphere radius source
     /// (`Control_BuildWorldSph` 0x133070:48 takes the glist bound radius × |scale|) — the use-key
@@ -87,7 +87,12 @@ impl Ss {
 
 /// Every animated SimpleScript of the level, in placement order.
 #[derive(Clone, Debug, Default)]
-pub struct SsList { pub list: Vec<Ss> }
+pub struct SsList {
+    pub list: Vec<Ss>,
+    /// The 0x40 operate arm's `Sound_Play3D(96.0, -1.0, -1.0, sample, obj+0x80, …)` [M 0x1a9948:86-89]
+    /// — (sample, position) emitted once per armed->playing transition, drained by the Drones tick.
+    pub pending_sounds: Vec<(u16, V3)>,
+}
 
 impl SsList {
     /// `SS_Create` over the main map's 0xE2 placements with a non-zero key count. The sphere argument
@@ -128,7 +133,7 @@ impl SsList {
                 radius: obj_radius,
             });
         }
-        SsList { list }
+        SsList { list, pending_sounds: Vec::new() }
     }
 
     /// `SS_Update` 0x1a9948 — the playhead is **state-driven**, not channel-seeked [M, the
@@ -197,8 +202,14 @@ impl SsList {
                     // per tick [M Collide_Update 0x1ea398:10-27 clears obj+0xD0 each pass], so
                     // a re-required operate stalled the render at t = one step (the shot
                     // winch).
+                    // The sound arm [M 0x1a9948:86-89]: `Sound_Play3D(…, ext+0x14, obj+0x80)`
+                    // fires on this transition when the sample word is not 0xffff — the
+                    // object's own matrix translation is the position.
+                    if s.sound != 0xffff {
+                        self.pending_sounds.push((s.sound, [s.matrix[0][3], s.matrix[1][3], s.matrix[2][3]]));
+                    }
                     s.state = 1;
-                    Self::sweep(s, last, step); // the sound arm [M 0x1a9948:86-89] is unplayed
+                    Self::sweep(s, last, step);
                 }
                 8 => {
                     // The loop: pose, advance, wrap t to 0 past the last key, stay 8.

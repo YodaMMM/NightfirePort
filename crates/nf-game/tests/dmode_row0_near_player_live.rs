@@ -92,14 +92,17 @@ fn bond_at(p: [f32; 3]) -> Player { Player { yaw: 0.0, pos: p, target: [p[0], p[
 const LEVEL: &str = "0700001b.bin";
 const LEVEL_ID: u32 = 0x0700_001b;
 
-/// The 07000001 coder event's exact DIVars shape [D census: NIS 0x0600003B kind 8, params
-/// 0x0500005B / 0x06000106 / 16 / 1 → words 11/12/20; everything else memset 0, so parameter 5
-/// (word 18) = 0 → `DoModeSettingsOLD` row 0]. Parameter k = word 13+k [M Drone_Create
-/// 0x136be0:59,81 copies template+0x2C to Drone+0xC34].
+/// The 07000001 coder event's exact DIVars shape [D census: script 0600005B kind 8, raw words
+/// 0x0500001B / 0x060000A6 / 16 / 1; `Script_EventHandler` 0x1d94c0:138-143 case 8 hands them to
+/// `Drone_CoderCreate` 0x13a108, whose stores land at template words 11/12/20 [M 0x13a108:
+/// 0x13a160 sw s0,44(sp) / 0x13a168 sw s1,48(sp) / 0x13a170 sw s2,80(sp)] — parameters 0 (skin),
+/// 1 (start script) and 7; the third word (16) is param_5's low half and is never stored. All
+/// other bytes memset 0 [M 0x13a108 memset 0xb0], so parameter 5 = 0 → `DoModeSettingsOLD` row 0.
+/// Parameter k = word 13+k [M Drone_Create 0x136be0:59,81 copies template+0x2C to Drone+0xC34].
 fn coder_event_params() -> impl Fn(u32) -> u32 {
     |k: u32| match k {
-        0 => 0x0500_005b,
-        1 => 0x0600_0106,
+        0 => 0x0500_001b,
+        1 => 0x0600_00a6,
         7 => 1,
         _ => 0,
     }
@@ -125,10 +128,17 @@ fn coder_event_row0_sets_the_defaults_props() {
     assert_eq!((dr.alert, dr.alert_floor), (0.0, 0.0), "row 0's word+4 is 0.0");
     assert_eq!(dr.mode, 0, "row 0's mode byte is 0");
     assert_eq!(dr.team, 1, "row 0's team byte is 1");
+    // The game's start state: CoderCreate stores the constant 4 to +0x5A2 [M 0x13a108:0x13a1a0
+    // sh s5,1442(v0); 0x1d94c0:141 passes 4], then DefaultInit's DoTypeSettingsOLD(+0xC5 = 0)
+    // OVERWRITES it — DroneTypeSettings row 0 start = −1 → by mode: mode 0 → behaviour prop
+    // 0x24 (Defaults sets it) → 6 InitPatrol [M 0x14d2e8:0x14d32c/0x14d3bc sh v0,1442(s0),
+    // prop check 0x14d394-0x14d3b8; M 0x14d528:23 sets 0x24]. The port never had the 4 and
+    // computes the same 6.
+    assert_eq!(dr.start_state(&d), 6, "coder drone starts in InitPatrol (6), not CoderCreate's raw 4");
     // Sister: the same shape one word over (parameter 5 = 100, every placement [D 555/555])
     // dispatches NEW and must not carry the Defaults-only bits.
     let mut rng2 = Rng::new(0x1234_5678);
-    let new_path = nf_game::drone::Drone::new(&d, [4.0, 1.0, 4.0], 0.0, |k| match k { 0 => 0x0500_005b, 1 => 0x0600_0106, 5 => 100, 7 => 1, _ => 0 }, &mut rng2);
+    let new_path = nf_game::drone::Drone::new(&d, [4.0, 1.0, 4.0], 0.0, |k| match k { 0 => 0x0500_001b, 1 => 0x0600_00a6, 5 => 100, 7 => 1, _ => 0 }, &mut rng2);
     assert_eq!(d.props.get(0x48, &new_path.props), 0, "NEW path must not run Defaults");
     assert_eq!(d.props.get(0x51, &new_path.props), 0, "sister: 0x51 is Defaults/0x17-mode only");
 }

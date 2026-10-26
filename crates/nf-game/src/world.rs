@@ -44,6 +44,8 @@ pub const LOS_GUARD_VISION: u32 = 0xa27; // DroneVision_CanSeeObjectFrom 0x176f1
 pub const LOS_PLAYER_HEADROOM: u32 = 0xd; // Player_SSCrouch 0x1924c0:100-101 / Player_HandleJump 0x1916b0:161-162 mask 9 | 4
 pub const LOS_PROBE_8: u32 = 0xc; // mask 8 | 4 — Player_SSGrapple 0x192860:86-88, Searchlight_Update 0x1cb900:338-340, Sensor_SetBeam 0x1af398:73-75, Bullet_homing 0x12f358:92-93
 pub const LOS_SENSOR: u32 = 0xe; // Sensor_InCone 0x1af4f0:84-86 / Check_AutoAim 0x1a73f8:164-165 / Bullet_DoTrails flash 0x12d890:343-345 mask 0xa | 4
+pub const LOS_TURRET_TRACK: u32 = 0x72f; // GT_Track 0x17f9c8:258 — the target scan's per-candidate `Collide_LineOfSight(from, cand+0x80, level, obj, cand, 0x72f)` filter (already includes the wrapper's | 4)
+
 #[derive(Default)]
 struct Geo {
     tris: Vec<[V3; 3]>,
@@ -359,8 +361,25 @@ fn capsule_tri_contact(t: &[V3; 3], mat: u8, a: &mut V3, b: &mut V3, r: f32, gro
     let v = sub(p, q);
     let dist = dot(v, v).sqrt();
     if dist >= r { return false; }
+    // Scratch gate (level-0a-office-hatch-9, NF_CAPS_GATE=1): the game's push tail requires
+    // `0 < dot(q − ref, n)` [M Intersect_CylGeom 0x109da0:431 — v = hitpoint − HITTEST+0x50,
+    // the dot against the face plane, the whole push inside the `>0` arm] AND `|q − ref| < radius`
+    // [M 0x109da0:447], the push dir/mag `(q − ref)/|q − ref|·(radius − |q − ref|)`. hatch-10
+    // settled HITTEST+0x50 as the lifetime push accumulator [L ee_snapshot: drift ≈15 m from the
+    // owner] — NOT the spine bottom probed here; with the true ref the tail near-never fires on a
+    // walked line, so the game's z 16.29 glide needs no gate (nothing pushes there at all) and the
+    // port's wall-stop must come from a mechanism not yet identified. This ref=bottom probe stays
+    // OFF: with it the corner crossed but the exit-y missed both ways (1.0655 / 1.2142 vs the
+    // game's 1.120 [L fresh boot]) and the glide walk floated ungrounded (hatch-9's measurements).
+    let gate_on = CAPS_GATE.get_or_init(|| std::env::var("NF_CAPS_GATE").is_ok());
+    if *gate_on && n[1] <= 0.7 && dot(sub(q, *b), n) <= 0.0 { return false; }
     let dir = if dist > 1e-6 { [v[0] / dist, v[1] / dist, v[2] / dist] } else if dot(n, sub(*a, q)) >= 0.0 { n } else { [-n[0], -n[1], -n[2]] };
     let push = [dir[0] * (r - dist), dir[1] * (r - dist), dir[2] * (r - dist)];
+    if caps_log() {
+        eprintln!("[cap] PUSH cent=({:.3},{:.3},{:.3}) q=({:.3},{:.3},{:.3}) p=({:.3},{:.3},{:.3}) d={dist:.4} push=({:.4},{:.4},{:.4}) n=({:.3},{:.3},{:.3}) edge={on_edge} a=({:.3},{:.3},{:.3}) b=({:.3},{:.3},{:.3})",
+            (t[0][0]+t[1][0]+t[2][0])/3.0, (t[0][1]+t[1][1]+t[2][1])/3.0, (t[0][2]+t[1][2]+t[2][2])/3.0,
+            q[0], q[1], q[2], p[0], p[1], p[2], push[0], push[1], push[2], n[0], n[1], n[2], a[0], a[1], a[2], b[0], b[1], b[2]);
+    }
     for k in 0..3 { a[k] += push[k]; b[k] += push[k]; total[k] += push[k]; }
     if n[1].abs() > 0.7 && q[1] < b[1] { *walkable = true; }
     // The pick bit's dot1 gate [M Intersect_CylGeom 0x109da0 disasm 0x10a650-0x10a674: the bit
@@ -529,6 +548,17 @@ impl CollisionWorld {
 
     /// Whether the world carries a cel scope (`build_scoped` with a graph).
     pub fn has_scope(&self) -> bool { self.scope.is_some() }
+
+    /// Debug introspection (level-15-ladder-3): the scope graph's cell boxes and room flags, so a
+    /// test can ask which cel boxes contain a point without reaching into the private `ScopeData`.
+    pub fn debug_scope_cells(&self) -> Vec<([f32; 3], [f32; 3], bool)> {
+        match &self.scope {
+            Some(sc) => sc.graph.cells.iter().enumerate()
+                .map(|(i, (lo, hi))| (*lo, *hi, sc.graph.room.get(i).copied().unwrap_or(false)))
+                .collect(),
+            None => Vec::new(),
+        }
+    }
 
     /// Debug introspection (fix-08-collision): for every cell's scope bucket plus the `always`
     /// remainder, how many chunked runs whose bounds meet `lo..hi` it holds. Probes the per-cel
@@ -1648,6 +1678,50 @@ impl CollisionWorld {
         self.segment(from, to).map(|t| from[1] + (to[1] - from[1]) * t)
     }
 
+    /// The distance-returning `line_of_sight`: the same masked walk with the same drop filters
+    /// (`Collide_RayIntersect` 0x1ec690 with the caller's mask on HITTEST+0x98, the drops in
+    /// `Collide_Intersect` 0x1ebaa8:300-319), returning the closest hit's FRACTION of `a → b`
+    /// (`Some` = blocked at that fraction, `None` = clear). `Sensor_SetBeam` 0x1af398:77-79
+    /// stores the first hit's distance (HITDATA+0xC) into the lens object's obj+0xE8 — the beam
+    /// stretch — for the same mask-8 ray the bool gate walks (LOS_PROBE_8, world.rs top).
+    pub fn line_of_sight_hit(&self, a: V3, b: V3, mask: u32) -> Option<f32> {
+        let d = sub(b, a);
+        let dynamic = self.dynamic.read().unwrap();
+        let skip_cage = mask & 0x20 != 0;
+        let (drop_node, drop_surface, drop_de, drop_10) =
+            (mask & 0x8 != 0, mask & 0x800 != 0, mask & 0x1 != 0, mask & 0x2 != 0);
+        let sets: [Option<&Geo>; 3] = [Some(&self.stat), (!skip_cage).then_some(&self.missile), Some(&dynamic.geo)];
+        let mut best = None::<f32>;
+        for g in sets.into_iter().flatten() {
+            for o in along(g, a, b) {
+                for k in o.tris.clone() {
+                    let m = g.mats[k];
+                    let low = m & 0x3f;
+                    if drop_node && (g.pass[k] || m & 0x40 != 0 || m & 0x80 != 0) { continue; }
+                    if drop_surface && m & 0x40 != 0 { continue; }
+                    if drop_de && (low == 0xd || low == 0xe) { continue; }
+                    if drop_10 && low == 0x10 { continue; }
+                    let t = &g.tris[k];
+                    let (e1, e2) = (sub(t[1], t[0]), sub(t[2], t[0]));
+                    if dot(cross(e1, e2), d) >= 0.0 { continue; } // back face [M 0x10a8c8:168]
+                    let p = cross(d, e2);
+                    let det = dot(e1, p);
+                    if det.abs() < 1e-12 { continue; }
+                    let inv = 1.0 / det;
+                    let s = sub(a, t[0]);
+                    let u = dot(s, p) * inv;
+                    if !(0.0..=1.0).contains(&u) { continue; }
+                    let q = cross(s, e1);
+                    let v = dot(d, q) * inv;
+                    if v < 0.0 || u + v > 1.0 { continue; }
+                    let tt = dot(e2, q) * inv;
+                    if (0.0..=1.0).contains(&tt) && best.is_none_or(|bb| tt < bb) { best = Some(tt); }
+                }
+            }
+        }
+        best
+    }
+
     /// walls-990 debug: the static objects whose bounds contain `p` (expanded 0.05), as
     /// `(min, max)` pairs — a probe hit's owner candidates, printed by the stairwell-walls test
     /// to name the invisible wall the guards stop against. Static set only (the moving set's
@@ -1656,6 +1730,21 @@ impl CollisionWorld {
         self.stat.objects.iter().filter(|o| {
             (0..3).all(|k| p[k] >= o.lo[k] - 0.05 && p[k] <= o.hi[k] + 0.05)
         }).map(|o| (o.lo, o.hi)).collect()
+    }
+
+    /// Scratch dump (level-0a-office-hatch-9): every static triangle with its centroid inside
+    /// `lo..hi`, in world space — the doorway-base/corner tri dumps the walk diagnosis runs.
+    pub fn dump_tris_in(&self, lo: V3, hi: V3) -> Vec<[[f32; 3]; 3]> {
+        let mut out = Vec::new();
+        let inside = |c: V3| (0..3).all(|k| c[k] >= lo[k] && c[k] <= hi[k]);
+        for o in overlapping(&self.stat, lo, hi) {
+            for k in o.tris.clone() {
+                let t = &self.stat.tris[k];
+                let c = [0, 1, 2].map(|ax| (t[0][ax] + t[1][ax] + t[2][ax]) / 3.0);
+                if inside(c) { out.push(*t); }
+            }
+        }
+        out
     }
 }
 

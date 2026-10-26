@@ -530,6 +530,21 @@ impl Gun {
 mod tests {
     use super::*;
 
+    /// Held fire with an AUTOMATIC re-fires at the record's own rate: the fresh press arms the
+    /// pull (`shots_per_pull`), each shot re-arms the refire timer at `+0x40` ticks [M
+    /// Player_WeaponFiring 0x1a5460:601-655]. Weapon 0x12's record measures spp 999 / interval 6
+    /// [L ee_start_05.bin weapon_data @ 0x2bf150, stride 0x10C: the u16 at +0x28 (mode 0) =
+    /// 0x3E7, the tick count at +0x40 = 6].
+    #[test]
+    fn held_automatic_fires_at_the_record_rate() {
+        let p = GunParams { shots_per_pull: 999, interval: 6.0, clip: 30, ammo_per_shot: 1, reload_ticks: 0, one_at_a_time: false, reload_start_ticks: 0, reload_loop_ticks: 0, reload_end_ticks: 0, ammo_type: 1, fire_anim_len: 0, fire_script: 0x0600_0900, fire_last: 0 };
+        let mut g = Gun::new(0x12, 30, 60);
+        let shots: Vec<usize> = (0..37).filter(|&t| g.update(true, p)).collect();
+        assert_eq!(shots, [0, 6, 12, 18, 24, 30, 36], "held fire → the record's interval [M 0x1a5460:601-655; L weapon 0x12: spp 999, interval 6]");
+        // Sister: the semi-automatic P2K held the same way fires ONCE (the pull re-arms on the
+        // press edge only) — pinned on the level above and in fix_06_fire_live.rs.
+    }
+
     #[test]
     fn one_shot_per_press_at_most_every_interval() {
         let p = GunParams { shots_per_pull: 1, interval: 8.0, clip: 7, ammo_per_shot: 1, reload_ticks: reload_ticks(0, 0x0600_0827, 0x1004, &|_| Some(155)), one_at_a_time: false, reload_start_ticks: 0, reload_loop_ticks: 111, reload_end_ticks: 0, ammo_type: 1, fire_anim_len: 0, fire_script: 0x0600_0823, fire_last: 0 };

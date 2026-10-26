@@ -9,7 +9,8 @@
 //! forms is up to a few LSB per step, and it then feeds the history; measured on the disc's own data,
 //! docs/formats/pss.md §independent): [`decode`] is the rounded form (`+32` before `>> 6`, the classic SPU
 //! description and the form the port plays); [`decode_opengoal_variant`] shifts the two prediction terms
-//! separately without rounding (OpenGOAL `game/sound/common/voice.cpp` `Voice::DecodeSamples`). Checked against
+//! separately without rounding (OpenGOAL `game/sound/common/voice.cpp` `Voice::DecodeSamples`; OpenGOAL's
+//! ISC licence: `THIRD_PARTY_OPENGOAL_LICENSE.txt`). Checked against
 //! published implementations (2026-10-15): DuckStation master (`spu.cpp`) shifts per term (the OpenGoal form),
 //! ffmpeg's `adpcm_psx` truncates the summed products toward zero, vgmstream's `psx_decoder.c` uses float
 //! coefficients — none of them is the rounded form, so both are kept until the SPU2's own behaviour is traced.

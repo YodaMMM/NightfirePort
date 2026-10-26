@@ -117,14 +117,23 @@ fn the_trigger_fires_under_the_mark_and_the_civilian_takes_the_hit() {
     // Mission_SetFailLabel(0x4000034), the fail channel 0x60] — the game's real protection.
     assert!(health1 <= 0.0, "the P2K kills the 10-health civilian");
     assert_eq!(sim.drones.mission.fail_label, 0x0400_0034, "Killed Civilians [M 0x13e560]");
-    // Aim off the body: the crosshair clears and a shot flies (the aim-leaves half of the task's
-    // question — nothing latches).
+    // The kill armed the fail hold: ch 99 → internal 2 (TimeOut = VIDEO_FRAME_RATE·4 +
+    // VIDEO_FRAME_RATE = 300 [M 0x182c60:45-57]) → case 7's GS_PausePlayer(1, 0) EVERY tick
+    // [M 0x182c60:123-130]. The flag freezes the player whole — Player_Update returns on
+    // GS_IsPaused before any input or weapon work [M 0x193600:88-91] — so no shot can fly here.
+    // The world keeps running (control_movement_object_handler answers only to the global
+    // GS_PauseGame, which fires when the hold ends [M 0x1c9790; 0x182c60:127-129]), and after
+    // the hold the fail menu opens [M 0x182c60:77-81]. The old tail ("a shot flies once the
+    // aim is off") acted inside the frozen window and contradicted the decompile: the TEST was
+    // wrong (fixed; the no-latch fire pin lives above — the trigger fires under the mark —
+    // and in the guard test's live-state burst).
     sim.bond.yaw += 0.9;
     let clip2 = sim.drones.inventory.clip[sim.gun.weapon as usize];
     burst(&mut sim, 2);
+    assert_eq!(sim.drones.mission.internal, 7, "the 300-tick fail hold is live after the kill [M 0x182c60:45-57, 123-130]");
     assert_eq!(sim.crosshair_state(), 2, "the mark clears when the aim leaves");
-    assert!(sim.drones.inventory.clip[sim.gun.weapon as usize] < clip2 || clip2 == 0,
-        "a shot flies once the aim is off (or the gun ran dry)");
+    assert_eq!(sim.drones.inventory.clip[sim.gun.weapon as usize], clip2,
+        "the fail hold eats the trigger — the player is frozen [M 0x182c60:123-130; 0x193600:88-91]");
 }
 
 /// The sister: a GUARD beside the civilian is shootable — the normal crosshair, the lock, the
