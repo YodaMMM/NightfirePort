@@ -68,3 +68,11 @@
   the live re-check). The trio stays ignored (the slide writer unidentified — the live checks
   name it). Battery: 0a 5/3i, 01 3/0, 05 8/0; nf-game 925/0; formats+audio 133/0; suite chunks
   132 binaries 0 fails (fix_0c_pylon = the no-GPU env). Report docs/reports/level-0a-band-settle-3.md.
+
+## level-0a-band-settle-4 (2026-10-26)
+Branch s/level-0a-band-settle-4 from origin/s/level-0a-band-settle-3 + merge origin/master.
+Task: port Intersect_CylGeom 0x109da0's per-face DeltaP exactly (0x109da0:300-460, edge/vertex
+regions included) so the jamb-slide pushes reproduce the [L] frame table (live PCSX2 0700000a,
+god mode, yaw -1.5708 from (-8.0,1.12,16.29)); the [L] write-watch found only Collide_Intersect
+0x1ebaa8+0x644 (PC 0x1ec0ec) writing HITTEST+0x10 — the slide is the per-face DeltaP add-back.
+Then un-ignore the three walkreal_0700000a tests, keep every other walkreal test green.
