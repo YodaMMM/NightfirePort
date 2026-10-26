@@ -85,13 +85,14 @@ There is NO walkway→duct-top ascent and NO mid-floor→pocket drop — both de
 
 ## Suite result
 
-The fast suite was started twice on the final tree: the first run died on this round's own probe
-example (a `door::Key` field typo — fixed and pushed, 9c2adcca), the restart on the final tree
-**built clean: `build ok: 829 test binaries in 874 s`** and was in its run phase when this report
-was filed; the sandbox expiry cut the run before the total line — no full-suite total from this
-sandbox (the same record as the -1 round). The crates the tests touch were run directly:
-nf-game (lib 570/0 + all test binaries green) and nf-view's fix_0c_hatch_live (3 passed / 1
-ignored), fix_level_chain_live (green), ai_live (37/37).
+The fast suite ran on the mid-round tree (the walk-capsule r-0.55 toucher): build clean (829
+test binaries in 874 s), the run surfaced 2 failures — `interactables_07000011_live` (the
+disc-gate sound triggers) and `fix_level_chain_live::the_07000006_party_touch_chains_to_07000007`
+— both caused by the toucher's reduced top reach. **The toucher was REVERTED to the master box**
+(with the two measured variants documented in the source comment); on the final tree:
+`fix_0c_hatch_live` 3 passed / 1 ignored, `fix_level_chain_live` 5/0, `nf-game --lib` 570/0, and
+the earlier full `--tests` battery. The full suite did not re-run on the final tree before the
+sandbox expiry — no total line from this sandbox (the same record as the -1 round).
 
 ## Usage
 

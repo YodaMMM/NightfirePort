@@ -1050,8 +1050,6 @@ fn truck_gatehouse_trigger_starts_the_next_script() {
         let p38 = sim.scripts.players.iter().find(|p| p.scripts[0] == 0x0600_08c8).unwrap();
         (seen, p38.state, events)
     };
-    // The walk-capsule toucher [M 0x194df0's A/B arms + r 0.55]: root 26.654 puts the capsule's
-    // top reach at 27.48, over the glist plate 27.036..27.071.
     let (on, state, events) = run(bond_at([98.487, 27.054 - 0.4, 106.358]));
     eprintln!("inside: channel 0x5C at {on:?}, player #38 state {state}, events {events:?}");
     assert!(on.is_some_and(|t| t >= 1890) && state != 1 && state != 0);

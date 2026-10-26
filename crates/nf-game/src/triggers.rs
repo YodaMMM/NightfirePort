@@ -169,18 +169,21 @@ pub struct Trigger {
 pub struct Toucher { pub a: V3, pub b: V3, pub r: f32, pub drone: bool, pub skin: u32, pub contain: bool }
 
 impl Toucher {
-    /// Bond in the normal stance: the WALK CAPSULE the game's collision pass registers against
-    /// trigger glists — A = pos + up·0.275, B = pos + up·(0.55 − cc) [M Player_Collision
-    /// 0x194df0's A/B arms, cc 1.0347 standing → B = pos − 0.485; the feet arg here is pos − 0.6,
-    /// so a = feet + 0.875, b = feet + 0.115], r 0.55. The retired stand-in box
-    /// (feet+0.55..feet+1.86) reached 0.435 ABOVE the capsule's top and stayed lit at rest where
-    /// the game reads clear [L 2026-10-26, 0700000c: Bond resting on the bay floor (root 12.8773)
-    /// reads ch 27 = 0 — the capsule's top 13.70 clears the parsed plate volume's floor 13.63 by
-    /// 0.07 only because the parse rides the glist's 13.63..14.56 bound while the -1's [D]
-    /// placement puts the plate at 14.02..14.09; with r 0 the truck gatehouse plate
-    /// (27.036..27.071, root 26.654 → spine top 26.93) never fires — the 0.55 sphere does]. The
-    /// crouched capsule's shorter B is not modelled here [S] unverified.
-    pub fn player(feet: V3) -> Toucher { Toucher { a: [feet[0], feet[1] + 0.875, feet[2]], b: [feet[0], feet[1] + 0.115, feet[2]], r: 0.55, drone: false, skin: 0, contain: true } }
+    /// Bond in the normal stance (`Player_Collision` 0x194DF0, hip height 1.035 read live).
+    /// level-0c-display-hatch-2 measured two tighter models against the full battery and
+    /// REVERTED both: the walk-capsule SPINE with r 0 (A = pos+0.275, B = pos−0.485 [M
+    /// 0x194df0's A/B arms]) reproduces the 0c [L] rest state (ch 27 = 0 at the bay-floor rest)
+    /// but breaks the master-green chain/gatehouse touches (the truck plate 27.036..27.071 vs
+    /// the spine top 26.93 never fires); the spine with r 0.55 still lights the 0c rest state
+    /// (the top reach 13.70 vs the parsed volume floor 13.63) AND broke
+    /// interactables_07000011_live (the disc-gate sound triggers) + the 07000006 party-touch
+    /// chain in the final-tree suite run. The box's extra top reach (pos+1.26 vs the capsule's
+    /// pos+0.275) is what those contacts need; the 0c [L] rest divergence (the game's ch 27 = 0
+    /// at the bay-floor rest, the box's reach 14.14 over the parsed volume floor 13.63) stays a
+    /// documented live check — the game's true contact is `Intersect_CylGeom` vs the trigger's
+    /// glist [M Trigger_Create 0x1b1720:92 stores the glist at obj+0xD8], whose ref-gate/extent
+    /// the port has not modelled.
+    pub fn player(feet: V3) -> Toucher { Toucher { a: [feet[0], feet[1] + 0.55, feet[2]], b: [feet[0], feet[1] + 1.86, feet[2]], r: 0.55, drone: false, skin: 0, contain: true } }
 }
 
 /// One class-5 (BULLET) contact for this tick: a projectile's per-tick flight segment and its
