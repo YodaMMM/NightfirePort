@@ -159,3 +159,58 @@ fn thirdcam_07000005_registers_the_camera_splines() {
         assert!(d > 0.01, "the camera spline moves (translation {:.2})", d);
     }
 }
+
+/// 07000016's five DynamicObjects (the audit's kind 0x3b): two complementary display pairs swap on
+/// their lock channels, and the lift-shaft blockers unhide on the pit-squad death channel.
+/// `DynamicObject_Create` 0x18dbf8: obj+0xF0 = the glist's +0x44 word, |0x30 when p0 != 0 —
+/// bit 0x10 = not drawn [M docs/atlas/object.md +0xF0; `View_AddObjects` 0x1e62d8 skips & 0x8010].
+/// `DynamicObject_Update` 0x18d3b8: watch A (p0) ON → restore the stored word (0x30 cleared =
+/// drawn); watch B (p1), mode 0: ON → obj+0xFE bit 0 (the delete pass removes it — the port's
+/// `dead`), OFF → the distance fade. Placements [D census]: #682 Screen_door_unlocked (p0 = 0x24),
+/// #683 Screen_door_locked (p1 = 0x24), #503 Door2_switch (p1 = 0x94), #504 Door2_switch_locked
+/// (p0 = 0x94), #532 Blocking_polys_lift_shaft1 (p0 = 0xcc).
+#[test]
+fn dynobj_07000016_display_pairs_swap_on_their_lock_channels() {
+    let Some(iso) = iso() else { eprintln!("NF_ISO not set — skipping"); return };
+    let mut scene = load(&iso, "07000016.bin");
+    {
+        let sim = scene.sim.as_ref().expect("sim");
+        assert_eq!(sim.drones.worldobjs.dynobjs.len(), 5, "the five 0x3b placements");
+        // The create states [M 0x18dbf8:31]: watch-A objects hidden (0x30 set), watch-B drawn.
+        for ch in [0x24u16, 0x94, 0xcc] {
+            let a = sim.drones.worldobjs.dynobjs.iter().find(|o| o.ch_a == ch).expect("watch-A object");
+            assert_eq!(a.flags & 0x30, 0x30, "watch-A ch {ch:#x} hidden at create");
+        }
+        for ch in [0x24u16, 0x94] {
+            let b = sim.drones.worldobjs.dynobjs.iter().find(|o| o.ch_b == ch).expect("watch-B object");
+            assert_eq!(b.flags & 0x10, 0, "watch-B ch {ch:#x} drawn at create");
+        }
+    }
+    for _ in 0..10 { scene.sim.as_mut().expect("sim").step_bond(Default::default(), false, false, false); }
+    // door[0]'s SecurityStation rises ch 0x24: the unlocked screen appears, the locked one is deleted.
+    let mut sim = scene.sim.as_mut().expect("sim");
+    let frame = sim.drones.frame;
+    sim.drones.channels.set(0x24, 1, frame);
+    sim.step_bond(Default::default(), false, false, false);
+    let sim = scene.sim.as_ref().expect("sim");
+    let a24 = sim.drones.worldobjs.dynobjs.iter().find(|o| o.ch_a == 0x24).expect("watch-A 0x24");
+    assert_eq!(a24.flags, a24.base_flags, "watch-A 0x24 restored (drawn)");
+    assert!(sim.drones.worldobjs.dynobjs.iter().all(|o| o.ch_b != 0x24), "watch-B 0x24 deleted (obj+0xFE bit 0)");
+    // The tower pair on 0x94 (no disc writer — but the channel arm must hold when it does rise).
+    let mut sim = scene.sim.as_mut().expect("sim");
+    let frame = sim.drones.frame;
+    sim.drones.channels.set(0x94, 1, frame);
+    sim.step_bond(Default::default(), false, false, false);
+    let sim = scene.sim.as_ref().expect("sim");
+    let a94 = sim.drones.worldobjs.dynobjs.iter().find(|o| o.ch_a == 0x94).expect("watch-A 0x94");
+    assert_eq!(a94.flags, a94.base_flags, "watch-A 0x94 restored (drawn)");
+    assert!(sim.drones.worldobjs.dynobjs.iter().all(|o| o.ch_b != 0x94), "watch-B 0x94 deleted");
+    // The lift-shaft blockers: drone #698's death channel 0xcc unhides them.
+    let mut sim = scene.sim.as_mut().expect("sim");
+    let frame = sim.drones.frame;
+    sim.drones.channels.set(0xcc, 1, frame);
+    sim.step_bond(Default::default(), false, false, false);
+    let sim = scene.sim.as_ref().expect("sim");
+    let acc = sim.drones.worldobjs.dynobjs.iter().find(|o| o.ch_a == 0xcc).expect("watch-A 0xcc");
+    assert_eq!(acc.flags, acc.base_flags, "the blockers restored (drawn) on 0xcc");
+}
