@@ -30,3 +30,8 @@ claimed-by: sandbox6 at 2026-10-25T22:57Z
 ---
 ## Report (done, 2026-10-26T00:53Z)
 
+
+---
+## Report from the worker (done, 2026-10-26T00:53Z)
+
+Closed by the driver: the report is on `s/level-14-cutscene-door-2` (docs/reports/level-14-cutscene-door-2.md); the worker didn't run finish.sh.
