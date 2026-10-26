@@ -148,3 +148,11 @@ Progress:
   text_labels, hint_boot, glist0, remainder, cutscene_14, party_lock_07, rook_06 x2,
   react_path), walkreal_07000008_live 4/4, the mp pin test (red, documented above). The
   next window must run the full suite per the standing rule.
+- mp digest bisect continued (merge points, the diag harness runs only on trees containing
+  a7afd219): 62aa121a (1024h) CLEAN, 15c0e34a (1026c) CLEAN, 82362142 (1026d, rigid-body
+  incl.) CLEAN, 18ca71c8 (1026f) CLEAN — each matches the pinned final fb7b58f73e340ec3 to
+  t239 — 4a155ddf DIVERGENT. Cause bracketed to 4a155ddf's master-side content
+  (batch-1026g/h/i/j) or the merge resolution. Next window: build 4a155ddf^1/^2 (both
+  contain a7afd219) to pick the side; suspects: 353b1008 script-actor SP-matrix riding,
+  display-hatch-2 toucher final shape, the merge edges. Report:
+  docs/reports/capsule-cull-and-los-masks-5.md.
