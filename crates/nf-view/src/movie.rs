@@ -156,9 +156,12 @@ struct PcmOut {
 ///
 /// Without the cargo feature `movies` the player can't decode (`start` still runs the whitelist +
 /// file checks, so an opened file is a started one [M 0x1081a8: BGFMVPlaying = 1 on the successful
-/// open]) — the headless hold then runs the movie's real length ([`Player::headless_advance`],
-/// advanced by the host's per-frame BGFMVPlaying polls), so the state machine stays testable
-/// everywhere and the hold matches the game.
+/// open]). On EVERY build the state-6 hold is the game's own measure — the host's per-frame
+/// BGFMVPlaying polls to the movie's real length ([`Player::headless_advance`]; the pump consumes
+/// one frame per second vblank [M main 0x109080] and clears BGFMVPlaying at the file's end [M
+/// 0x108060]) — so the state machine stays testable everywhere and the hold matches the game,
+/// whether or not a decoder thread runs beside it (mission-outros-4: the `movies` build held on
+/// the decoder's wall-clock progress, and a fast headless poll loop never reached the end).
 pub struct Player {
     code: u32,
     /// The front end's backdrop loops [M `Menu_PlayMovie(aux, 0, 1, …)` — loop = 1,
@@ -196,11 +199,18 @@ pub struct Player {
     /// exactly this: BGFMVPlaying = 1 on the successful open [M 0x1081a8], 0 only when the decode
     /// pump finishes the file [M 0x108060], and psiMovieFinished is BGFMVPlaying == 0 [M 0x1082e8].
     pub length_ticks: u32,
-    /// The no-real-decode BGFMVPlaying stand-in: `Some(left)` only when the file OPENED but no
-    /// decoder runs (no `movies` feature, or a declined worker) and the movie plays once — the
-    /// host's per-frame polls advance it ([`Player::headless_advance`]); at 0 `ended` sets, the
-    /// game's end-of-file arm [M 0x108060]. None with a live stream (the decoder is the clock) and
-    /// for a looping backdrop (0x108060's else arm restarts the file — never finished).
+    /// The BGFMVPlaying poll count, in 60 Hz ticks left of the movie's own life: `Some(left)` on
+    /// every once-through movie the file OPENED for (the `headless_advance` call site is the
+    /// host's per-frame BGFMVPlaying poll). The game's hold is exactly this measure, on every
+    /// build: BGFMVPlaying = 1 on the successful open [M 0x1081a8], the decode pump consumes one
+    /// frame per second vblank [M main 0x109080] and clears BGFMVPlaying at the file's end [M
+    /// 0x108060], `psiMovieFinished` is BGFMVPlaying == 0 [M 0x1082e8] — frames consumed per
+    /// tick, so the port counts the host's polls to the movie's length [D the PSS's audio track].
+    /// With the `movies` feature a live decoder thread keeps feeding the PICTURE path (`present`)
+    /// on the wall/audio clock; only the "finished" decision is poll-driven, not the decoder's
+    /// own progress. None for a looping backdrop (0x108060's else arm restarts the file — never
+    /// finished) and for a DECLINED start (never opened: BGFMVPlaying stayed 0 [M 0x1081a8's
+    /// strFileOpen arm] — `finished` is true at once).
     headless_left: Option<u32>,
 }
 
@@ -274,10 +284,14 @@ impl Player {
                 Ok(s) => Some(s),
                 Err(e) => { eprintln!("movie: {code:08x}: {e}"); None }
             };
-            // A declined worker still opened the file: the hold is the game's [M 0x1081a8
-            // BGFMVPlaying = 1; 0x108060's end-of-file clear], like the no-`movies` build. A live
-            // stream ends itself; a looping backdrop restarts instead [M 0x108060's else arm].
-            let headless_left = (stream.is_none() && !looping && length_ticks > 0).then_some(length_ticks);
+            // mission-outros-4: the state-6 hold is the game's on EVERY build [M 0x1081a8
+            // BGFMVPlaying = 1 on the open; the pump consumes one frame per second vblank [M
+            // main 0x109080] and clears BGFMVPlaying at the file's end [M 0x108060] — so the
+            // host's per-frame polls to the movie's length are the finish, NOT the decoder
+            // thread's own (wall-clock) progress; a fast headless poll loop must still reach the
+            // end. The live stream keeps feeding the picture path; a looping backdrop restarts
+            // instead of finishing [M 0x108060's else arm].
+            let headless_left = (!looping && length_ticks > 0).then_some(length_ticks);
             Ok(Player { code, looping, volume, last: None, tick: 0, started: None, ended: false, stream, pcm: std::sync::Arc::new(pcm), rate, _pcm: None, timing: Timing::default(), length_ticks, headless_left })
         }
     }
@@ -291,22 +305,23 @@ impl Player {
     /// the mission-flow players never do.
     pub fn is_looping(&self) -> bool { self.looping }
 
-    /// `psiMovieFinished__Fv` 0x001082e8: `BGFMVPlaying == 0` — true once the decoder hit the end of
-    /// the file and the port has shown what it has, or once the no-real-decode hold ran out (the
-    /// opened PSS's real length [D the audio track]; a DECLINED start — not whitelisted, file
-    /// absent, 0-byte stub — still reports immediately: the game's un-started movie, BGFMVPlaying
-    /// stayed 0 [M 0x1081a8's strFileOpen arm]).
+    /// `psiMovieFinished__Fv` 0x001082e8: `BGFMVPlaying == 0` — true once the movie's frames are
+    /// consumed: the poll-count hold ran out ([`Player::headless_advance`], the opened PSS's real
+    /// length [D the audio track]) or the picture path hit the stream's end (`present`). A
+    /// DECLINED start — not whitelisted, file absent, 0-byte stub — still reports immediately:
+    /// the game's un-started movie, BGFMVPlaying stayed 0 [M 0x1081a8's strFileOpen arm].
     pub fn finished(&self) -> bool { self.ended }
 
     /// The movie's real playback length in 60 Hz game ticks [D — the PSS's audio-track duration;
     /// see the field].
     pub fn length_ticks(&self) -> u32 { self.length_ticks }
 
-    /// One 60 Hz frame of the no-real-decode hold: with the file opened but no decoder (no
-    /// `movies` feature, or a declined worker) the opened PSS still models the game's
-    /// BGFMVPlaying — set on the successful open [M 0x1081a8], cleared only at the decode pump's
-    /// end of file [M 0x108060] — so the hold runs the movie's real length [D the audio track].
-    /// The host's BGFMVPlaying polls call this once per frame; a live decoder ignores it.
+    /// One 60 Hz frame of the BGFMVPlaying hold, on every build: the file OPENED, so the opened
+    /// PSS models the game's BGFMVPlaying — set on the successful open [M 0x1081a8], cleared only
+    /// when the movie's frames are consumed [M 0x108060] — so the hold runs the movie's real
+    /// length [D the audio track]. The host's BGFMVPlaying polls call this once per frame; the
+    /// decoder thread (the `movies` feature's picture path) does not drive it — a fast headless
+    /// poll loop reaches the movie's end at the same poll count as a 60 Hz display.
     pub fn headless_advance(&mut self) {
         if let Some(left) = self.headless_left.as_mut() {
             *left -= 1;

@@ -6963,13 +6963,14 @@ pub fn mission_movie_glue(fe: &mut menu::FrontEnd, slot: &mut Option<movie::Play
         }
         match slot {
             Some(p) => {
-                // BGFMVPlaying follows the player: 1 while it decodes, 0 at the end of file —
-                // state 6 pops through the psiMovieFinished arm on the next main_tick
-                // [M 0x1082e8 + 0x1c98c8 case 6]. Without a decoder (no `movies` feature, or a
-                // declined worker) the opened PSS still holds for its real length [M 0x1081a8's
-                // BGFMVPlaying = 1 + 0x108060's end-of-file clear; D the PSS's audio track]: the
-                // stand-in advances one frame per host call, then `finished` fires and the pop is
-                // the game's own.
+                // BGFMVPlaying follows the player: 1 while the movie's frames are unconsumed,
+                // 0 once they are — state 6 pops through the psiMovieFinished arm on the next
+                // main_tick [M 0x1082e8 + 0x1c98c8 case 6]. On EVERY build the hold is the
+                // host's per-frame poll count to the movie's real length [M 0x1081a8's
+                // BGFMVPlaying = 1 + 0x108060's end-of-file clear; D the PSS's audio track]:
+                // the stand-in advances one frame per host call, then `finished` fires and the
+                // pop is the game's own — the `movies` feature's decoder thread only feeds the
+                // picture path and does not pace this decision (mission-outros-4).
                 p.headless_advance();
                 fe.flow.movie_playing = !p.finished();
             }
