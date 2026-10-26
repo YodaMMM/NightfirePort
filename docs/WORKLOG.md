@@ -45,3 +45,18 @@ on master, red on the merged tree). Audit what the game does during the case-7 h
 weapon/fire? trigger?) [M], which mission internals run the case-7 arm, the 240-tick hold; fix the
 port's gate to the game's exact effect or make the tests act as a player can. Full suite on the
 final merged tree; report the total line.
+
+### level-04-mission-hold-2 — progress (2026-10-26 ~00:20 UTC)
+The hold audited [M]: case 7 (0x182c60:123-130) runs GS_PausePlayer(1,0) every tick (flag =
+MPGame[slot*0x30]+0 [0x17d280]); Player_Update returns entirely on it [0x193600:88-91] — no
+input, no weapon, no use-key (Player_Activate 0x1a5170 rides Player_WeaponFiring 0x1a5460:402
+inside the frozen update); the world keeps running (Game_Run 0x1c9790 gates only the GLOBAL
+GS_PauseGame byte 0x2a37b8 [0x17d178], which fires at the hold's end :127-129). Internals
+reaching case 7: 2 fail (300 ticks, :52), 3 death (1.0, :58), 6 success (240, :122). The port's
+gate (scene.rs mission_hold) matches — no engine change. BOTH red tests were acting inside the
+frozen window; fixed as tests, with addresses: walk_07000013's E-press moved mid-mission (the E
+arm loads with the 0x4E gate off [0x1b2318 case 10]) + the post-hold tail pins mission_end
+(scene.rs LevelEnd: ptp_handover, level_exit nulled); civilian's aim-off tail now pins the
+freeze (clip unchanged across the burst during the fail hold) instead of a shot the game cannot
+fire. Green: walk_07000013_live 2, civilian_no_shoot_live 3, walkreal_07000004_live 4 (the
+branch's own). Full suite on the final tree running (tools/test/suite.py).
