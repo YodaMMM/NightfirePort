@@ -87,6 +87,7 @@ fn caps_log() -> bool {
 /// hatch-9 pins missed both ways; the port keeps it env-gated OFF until the game's real wall-stop
 /// source is identified (the tail cannot be it — see docs/reports/level-0a-office-hatch-10.md).
 static CAPS_GATE: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
+static WALK_KILL: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
 
 #[derive(Default)]
 struct Geo {
@@ -448,10 +449,16 @@ fn capsule_tri_contact(t: &[V3; 3], mat: u8, a: &mut V3, b: &mut V3, r: f32, gro
     // finding 1: the game's walked dy grows over the flat slab]. The real ref is the lifetime
     // DeltaP accumulator [M 0x1ebaa8:353-373 the only writer; L ee_start boots (0,0,0)], whose
     // live walked value cannot be pinned statically — the ref≈B reading here is the port choice
-    // [S] unverified, measured against the walkreal battery. The walked floor sits 0.604 below B
+    // …gated OFF by default (NF_WALK_KILL=1 to measure): with the kill on, 05 walks 8/8 green
+    // and the 0a corner crosses (870 ticks, was a permanent wedge), but 01's
+    // walk_from_the_spawn_to_the_exit_with_the_contact fails (the AND-touch never fires — the
+    // contact's plate approach shifts) — the driver's keep-01/05-green constraint wins until
+    // that walk is re-verified. The ref≈B reading is the port choice [S] unverified, measured
+    // against the walkreal battery. The walked floor sits 0.604 below B
     // (dy 1.0891 [L] − 0.4847 [M 0x194df0's B arm]) — the 0.5 carve-out keeps every shallower
     // contact (the stair/step edges the 01/05 climbs ride) pushing.
-    let deep_below = q[1] < b[1] - 0.5;
+    let deep_below = *WALK_KILL.get_or_init(|| std::env::var("NF_WALK_KILL").is_ok())
+        && q[1] < b[1] - 0.5;
     if !deep_below {
         for k in 0..3 { a[k] += push[k]; b[k] += push[k]; total[k] += push[k]; }
     }
