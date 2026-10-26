@@ -530,15 +530,22 @@ impl Script {
                         let s = &mut self.streams[i];
                         s.tag = stream as u16;
                         // The tag (+0x20) and the start frame (+0x22 = stream clock + 1) are written
-                        // before the start gate [M 0x1d8820:20-28].
+                        // before the start gate [M 0x1d8820:20-28], and the stream's sound handle
+                        // (+0x10) is CLEARED at the top of `Script_SoundStart` [M 0x1d8820:19 —
+                        // `*(undefined4 *)(param_2 + 0x10) = 0` precedes the gate unconditionally]:
+                        // a stream's second line starts even while the first one-shot's handle is
+                        // still latched (the old voice is abandoned, not stopped — the game keeps no
+                        // stop call here). 07000004's story stream 15 carries two lines (0x5e @298,
+                        // 0x134 @654 [D]); without the clear the 0x134 start is gated off.
+                        s.sound_id = None;
                         s.sound_start_frame = (s.clock as i32 + 1) as i16;
-                        // The start gate [M 0x1d8820]: `stream+0x10 == 0 && script+0xAB5 & 0x20 == 0`.
-                        // A stream with a live handle never re-fires, and once the skip's fade has run
-                        // past its length (+0xAB5 bit 5 — the catch-up state `Script_Update` sets) no
-                        // new line starts: the skipped script's remaining lines (and their SoundEnd
-                        // arms) never come to be. The kind still becomes 5 even when the id is the
-                        // 0xffff "none" (handle 0) [M :36-52].
-                        if s.sound_id.is_none() && self.fade_flags & 0x20 == 0 {
+                        // The start gate [M 0x1d8820]: `script+0xAB5 & 0x20 == 0` (the handle-0 half
+                        // is the clear above). Once the skip's fade has run past its length (+0xAB5
+                        // bit 5 — the catch-up state `Script_Update` sets) no new line starts: the
+                        // skipped script's remaining lines (and their SoundEnd arms) never come to
+                        // be. The kind still becomes 5 even when the id is the 0xffff "none"
+                        // (handle 0) [M :36-52].
+                        if self.fade_flags & 0x20 == 0 {
                             s.kind = 5;
                             s.sound_id = (id & 0xfffff != 0xffff).then_some(id);
                             out.push(Request::Sound { id, at: if b[0] == 1 { None } else { at }, src: (self.nis.hashcode, i as u8) });
