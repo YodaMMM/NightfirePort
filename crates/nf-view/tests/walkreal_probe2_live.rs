@@ -44,7 +44,7 @@ fn capsule_at(hip: f32) -> (V3, V3) { ([0.0, hip + 0.275, 0.0], [0.0, hip - 0.48
 /// Whether a standing capsule at (x, hip, z) is pushed (blocked) — the probe grid's cell test.
 fn cell_blocked(world: &CollisionWorld, x: f32, hip: f32, z: f32) -> bool {
     let (a, b) = capsule_at(hip);
-    let (push, _) = world.capsule_push([x, a[1], z], [x, b[1], z], 0.55, false);
+    let (push, _) = world.capsule_push([x, a[1], z], [x, b[1], z], 0.55, false, [1.0e9, 1.0e9, 1.0e9]);
     push.iter().any(|v| v.abs() > 0.05)
 }
 
@@ -218,7 +218,7 @@ fn probe2_corridor_push() {
         let mut x = -28.25f32;
         while x <= -25.5 {
             let (a, b) = capsule_at(f + 1.1);
-            let (push, _) = world.capsule_push([x, a[1], z], [x, b[1], z], 0.55, false);
+            let (push, _) = world.capsule_push([x, a[1], z], [x, b[1], z], 0.55, false, [1.0e9, 1.0e9, 1.0e9]);
             let m = (push[0].powi(2) + push[2].powi(2)).sqrt();
             let ch = if m < 1e-9 { '.' } else { format!("{}", (m * 20.0).round().min(9.0) as u8).pop().unwrap() };
             row.push(ch);
@@ -235,7 +235,7 @@ fn probe2_corridor_push() {
         let mut x = -27.4f32;
         while x <= -26.4 {
             let (a, b) = capsule_at(f + 1.1);
-            let (push, _) = world.capsule_push([x, a[1], z], [x, b[1], z], 0.55, false);
+            let (push, _) = world.capsule_push([x, a[1], z], [x, b[1], z], 0.55, false, [1.0e9, 1.0e9, 1.0e9]);
             row.push(if push[1] > 0.05 { 'u' } else if push[1] < -0.05 { 'd' } else { '.' });
             x += 0.25;
         }

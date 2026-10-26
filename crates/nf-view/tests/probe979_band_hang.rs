@@ -56,8 +56,8 @@ fn probe_band_hang() {
         let sim = w.scene.sim.as_ref().unwrap();
         let bond = &sim.bond;
         let (a, b) = bond.capsule_seg();
-        let (push, walkable) = sim.world.capsule_push_scoped(bond.cel, a, b, nf_game::player::RADIUS, false);
-        let (push2, _) = sim.world.capsule_push(a, b, nf_game::player::RADIUS, false);
+        let (push, walkable) = sim.world.capsule_push_scoped(bond.cel, a, b, nf_game::player::RADIUS, false, [1.0e9, 1.0e9, 1.0e9]);
+        let (push2, _) = sim.world.capsule_push(a, b, nf_game::player::RADIUS, false, [1.0e9, 1.0e9, 1.0e9]);
         eprintln!("p{:2} y {:.5} g={} push_scoped ({:+.5},{:+.5},{:+.5}) w{} push_flat ({:+.5},{:+.5},{:+.5})",
             t, bond.pos[1], bond.grounded, push[0], push[1], push[2], walkable, push2[0], push2[1], push2[2]);
     }

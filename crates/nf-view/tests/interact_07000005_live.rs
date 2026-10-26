@@ -29,6 +29,19 @@ fn load(iso: &str) -> Walker {
     w
 }
 
+/// The gold-medal `bonus[0]` word for 07000005 — the state `PlrStats_HasGoldMedal` 0x199a40 reads
+/// [M Menu_HasMedal(BaseMapHCode, 3, 0)]; the award arm is `Menu_SetLevelBonus` 0x1ffa10.
+/// pickup-medal-gate: the kind-6 rows create only with the medal recorded [M 0x18dda0:93-95];
+/// 07000005 plays under BaseMap 0x07000005 (the mission table [L ee_start_05 0x2a4350]), whose
+/// gold bit is the 0x0700005/9/11 kind-4 group's rank 0 [L 0x2bc920 row 1; M 0x199210].
+fn load_medaled(iso: &str) -> Walker {
+    let mut p = nf_game::progress::Progress::default();
+    p.set_level_bonus(0x0700_0005, 3, 0);
+    let mut w = Walker::new(nf_view::load_with_carry_medals(iso, "07000005.bin", false, None, 1, p.bonus[0]).expect("medal load 07000005"));
+    w.wait(30);
+    w
+}
+
 /// KIND: the static creations, pinned by their disc numbers ([D]; the creators named in the
 /// census). No operation exists for these — the count + the field values ARE the game behaviour.
 /// Includes the four origin-parked FuseBox 0x31 placements: `FuseBox_Create` 0x1b0448 needs
@@ -37,7 +50,8 @@ fn load(iso: &str) -> Walker {
 #[test]
 fn the_census_creations_match_the_disc() {
     let iso = iso();
-    let w = load(&iso);
+    // The two kind-6 tokens need the level's gold medal [M 0x18dda0:93-95] — the medaled load.
+    let w = load_medaled(&iso);
     let sim = w.scene.sim.as_ref().unwrap();
     let d = &sim.drones;
     // Starts [D #26/#0], drones [D ×16], doors [D ×5], ScriptPlayers [D ×6].
@@ -178,7 +192,8 @@ fn the_ladder_climb_reaches_the_upper_ledge() {
 #[test]
 fn the_armour_pickup_sets_fifty_and_the_bonus_token_logs() {
     let iso = iso();
-    let mut w = load(&iso);
+    // The bonus token (kind 6) needs the level's gold medal [M 0x18dda0:93-95] — the medaled load.
+    let mut w = load_medaled(&iso);
     {
         let sim = w.scene.sim.as_ref().unwrap();
         assert!(sim.drones.health.armour < 50.0, "sister: armour starts under 50");

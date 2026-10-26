@@ -14,7 +14,7 @@ fn load15() -> Walker {
     // create-unlock tag [M Lock_Create 0x1ae1f8 tail: tag+0x44 != 0 && GameState+0x28 == 1 →
     // Lock_Unlock] — and the burn leg pins the Agent+ behaviour, so the tests run past the
     // auto-unlock (the same choice walkreal_07000012 made).
-    let mut w = Walker::new(nf_view::load_with_carry_difficulty(&iso(), "07000015.bin", false, None, 3).unwrap());
+    let mut w = Walker::new(nf_view::load_with_carry_medals(&iso(), "07000015.bin", false, None, 3, u64::MAX /* kind-6 pickups need the gold medal [M 0x18dda0:93] */).unwrap());
     assert!(w.wait_enabled(3000, "the silo arrival"), "the intro releases Bond");
     w.wait(120);
     w

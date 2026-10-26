@@ -90,7 +90,9 @@ fn the_static_world_kinds_all_register() {
     assert_eq!(sim.drones.grapple_points.len(), 5, "grapple points: graple_pulley ×5 [D]");
     assert_eq!(sim.drones.locks.len(), 5, "locks: hingelock1/3 ×4 + VentLatch #182 [D]");
     assert_eq!(sim.drones.sss.list.len(), 8, "SSs: the two vent meshes + blockers + 3 winches + Door_secret1 [D]");
-    assert_eq!(sim.drones.pickups.len(), 15, "pickups [D]");
+    // 15 kind-0xF0 placements [D], but the four kind-6 rows create nothing on the fresh-boot
+    // `bonus[0]` word — `Pickup_Create`'s gold-medal gate [M 0x18dda0:93-95] — so the sim holds 11.
+    assert_eq!(sim.drones.pickups.len(), 11, "15 placements [D] minus the 4 gated kind-6 rows [M 0x18dda0:93-95]");
     assert_eq!(sim.drones.props.destroy.len(), 12, "destroyables: the oil barrels [D]");
     // The twelve kind-0x31s are param-less [D], so FuseBox::create (which needs the script
     // hash in param 0 [M 0x1b0448]) creates none: the kind's 0c instances are inert.

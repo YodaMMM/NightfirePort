@@ -45,6 +45,49 @@ pub const LOS_PLAYER_HEADROOM: u32 = 0xd; // Player_SSCrouch 0x1924c0:100-101 / 
 pub const LOS_PROBE_8: u32 = 0xc; // mask 8 | 4 — Player_SSGrapple 0x192860:86-88, Searchlight_Update 0x1cb900:338-340, Sensor_SetBeam 0x1af398:73-75, Bullet_homing 0x12f358:92-93
 pub const LOS_SENSOR: u32 = 0xe; // Sensor_InCone 0x1af4f0:84-86 / Check_AutoAim 0x1a73f8:164-165 / Bullet_DoTrails flash 0x12d890:343-345 mask 0xa | 4
 pub const LOS_TURRET_TRACK: u32 = 0x72f; // GT_Track 0x17f9c8:258 — the target scan's per-candidate `Collide_LineOfSight(from, cand+0x80, level, obj, cand, 0x72f)` filter (already includes the wrapper's | 4)
+/// The per-caller masks are not applied yet [S]: with them on, guard cover, turret shots and
+/// several real-path walks broke; `line_of_sight` keeps the static-world segment test until then.
+pub const LOS_MASKS_ON: bool = false;
+/// The normalized-spine head-on cull [M Intersect_CylGeom 0x109da0:302-322]. level-0a-office-hatch-9
+/// measured the arms' orientation: the game skips the horizontal face BELOW the spine (the
+/// corner walk's y-0.19 floor-band lifter — the port dithered 1.13→1.21 on it while the game
+/// crosses 1.127→1.120 [L fresh boot]) and keeps the one above/behind (the stair-step climb).
+/// With f the A-from crossing fraction, a below-spine plane clamps to f=1 and an above-spine
+/// one to f=0, so the skip arms are (up-face ∧ f>0.5) ∨ (down-face ∧ f<0.5) — the previous
+/// arms had the f halves swapped. Still OFF: with the corrected arms the corner walk's
+/// wedge MOVES (the try_walk_to line stalls at (−18.05, 5.22), 6000 ticks) — the global flip
+/// needs the full real-path battery this window cannot run; the arms finding is pinned here
+/// and in the report.
+pub const HEAD_ON_CULL_ON: bool = false;
+
+/// Scratch diagnostics gate (level-0a-office-hatch-9): `NF_CAPS_LOG=1` makes
+/// `capsule_tri_contact` print every applied push (and every head-on-cull skip) as one
+/// `eprintln` line — the per-tick capsule contact/push log the walk diagnoses run on. Off by
+/// default; the hot path reads a `OnceLock` bool.
+fn caps_log() -> bool {
+    static ON: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
+    *ON.get_or_init(|| std::env::var("NF_CAPS_LOG").is_ok())
+}
+
+/// Scratch gate switch (level-0a-office-hatch-9): `NF_CAPS_GATE=1` turns the `dot(q − B, n) > 0`
+/// push-tail gate on (see the contact fn). Off by default — measured before it lands.
+///
+/// level-0a-office-hatch-10 settled the game's reference (HITTEST+0x50 = BL+0x790) and it is NOT
+/// the spine bottom: boot (0,0,0) via the object-alloc memset [M control_create_object 0x1344e0:17;
+/// L ee_start_0700000a and ee_start_05 both read exactly zero at BL+0x790 while +0x760/+0x770 hold
+/// the seeded A/B], the only writer is the per-landed-hit `+= world DeltaP` [M Collide_Intersect
+/// 0x1ebaa8:353-373 — no other access exists: an exhaustive ACTION.ELF scan of every
+/// immediate-offset instruction (sw/swc1/lw/lwc1/sqc2 0x3E-0x3F/lqc2 0x37/addiu) touching
+/// 0x790/0x788/0x798 finds only menu-stack spills at 0x2012c4-8], and the live mid-play value is a
+/// drift vector ≈ (1.21, 9.08, −14.45), ~15 m from its owner [L ee_snapshot.bin: BL 0x16cf0f0,
+/// Bond at (104.71, 24.97, 107.05)]. The decoded tail `dot(q − HITTEST+0x50, n) > 0` +
+/// `|q − HITTEST+0x50| < radius` [M Intersect_CylGeom 0x109da0:420-457] therefore fires only
+/// against triangles within `radius` of that drifted point — near-never on a walked line. The
+/// ref=bottom gate below is NOT the game's shape (it ports a value the field never holds) and its
+/// hatch-9 pins missed both ways; the port keeps it env-gated OFF until the game's real wall-stop
+/// source is identified (the tail cannot be it — see docs/reports/level-0a-office-hatch-10.md).
+static CAPS_GATE: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
+static WALK_KILL: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
 
 #[derive(Default)]
 struct Geo {
@@ -298,7 +341,7 @@ fn cross(a: V3, b: V3) -> V3 { [a[1] * b[2] - a[2] * b[1], a[2] * b[0] - a[0] * 
 ///   own ride grounds on (the ray tolerance is exceeded at the skin-rest equilibrium on that
 ///   steep a face, so the pick arm must fire); confirming the gate is an
 ///   open live check.
-fn capsule_tri_contact(t: &[V3; 3], mat: u8, a: &mut V3, b: &mut V3, r: f32, grow: f32, total: &mut V3, walkable: &mut bool, pick: &mut bool, top_guard: bool) -> bool {
+fn capsule_tri_contact(t: &[V3; 3], mat: u8, a: &mut V3, b: &mut V3, r: f32, grow: f32, total: &mut V3, walkable: &mut bool, pick: &mut bool, top_guard: bool, ref_v: V3) -> bool {
     let tl = [0, 1, 2].map(|k| t[0][k].min(t[1][k]).min(t[2][k]));
     let th = [0, 1, 2].map(|k| t[0][k].max(t[1][k]).max(t[2][k]));
     let (sl, sh) = ([0, 1, 2].map(|k| a[k].min(b[k]) - grow), [0, 1, 2].map(|k| a[k].max(b[k]) + grow));
@@ -361,9 +404,72 @@ fn capsule_tri_contact(t: &[V3; 3], mat: u8, a: &mut V3, b: &mut V3, r: f32, gro
     let v = sub(p, q);
     let dist = dot(v, v).sqrt();
     if dist >= r { return false; }
-    let dir = if dist > 1e-6 { [v[0] / dist, v[1] / dist, v[2] / dist] } else if dot(n, sub(*a, q)) >= 0.0 { n } else { [-n[0], -n[1], -n[2]] };
-    let push = [dir[0] * (r - dist), dir[1] * (r - dist), dir[2] * (r - dist)];
-    for k in 0..3 { a[k] += push[k]; b[k] += push[k]; total[k] += push[k]; }
+    // Scratch gate (level-0a-office-hatch-9, NF_CAPS_GATE=1): the game's push tail requires
+    // `0 < dot(q − ref, n)` [M Intersect_CylGeom 0x109da0:431 — v = hitpoint − HITTEST+0x50,
+    // the dot against the face plane, the whole push inside the `>0` arm] AND `|q − ref| < radius`
+    // [M 0x109da0:447], the push dir/mag `(q − ref)/|q − ref|·(radius − |q − ref|)`. hatch-10
+    // settled HITTEST+0x50 as the lifetime push accumulator [L ee_snapshot: drift ≈15 m from the
+    // owner] — NOT the spine bottom probed here; with the true ref the tail near-never fires on a
+    // walked line, so the game's z 16.29 glide needs no gate (nothing pushes there at all) and the
+    // port's wall-stop must come from a mechanism not yet identified. This ref=bottom probe stays
+    // OFF: with it the corner crossed but the exit-y missed both ways (1.0655 / 1.2142 vs the
+    // game's 1.120 [L fresh boot]) and the glide walk floated ungrounded (hatch-9's measurements).
+    let gate_on = CAPS_GATE.get_or_init(|| std::env::var("NF_CAPS_GATE").is_ok());
+    if *gate_on && n[1] <= 0.7 && dot(sub(q, *b), n) <= 0.0 { return false; }
+    let spine_dir = if dist > 1e-6 { [v[0] / dist, v[1] / dist, v[2] / dist] } else if dot(n, sub(*a, q)) >= 0.0 { n } else { [-n[0], -n[1], -n[2]] };
+    // THE RADIAL-DIR ARM, landed (level-0a-band-settle-3) [M Intersect_CylGeom 0x109da0:421-453]:
+    // v = q − ref with ref = the caller's HITTEST+0x50 lifetime push accumulator (the
+    // 2026-10-26 fresh-boot reads [L]: it boots (0,0,0), is NEVER reseeded on a walk, grows by
+    // exactly the push on every wall-contact tick (0.27723 → 3.27709 by +0.1 steps at the west
+    // hall wall), stays EXACTLY constant on free walks, and carries over a reload — the add-back
+    // 0x1ebaa8:353-373 is its only writer [M]). The tail's ref rides the per-object stack copy's
+    // +0x50 = the world +0x50's object-local image [M disasm 0x1ebcc4: the RotPreTransVec out
+    // lands at copy+0x50; Mat_Inverse+RotPreTransVec = Rᵀ(world − t), rigid] — the port's flat
+    // world frame takes the accumulator as-is. Gates: dot(v, n) > 0 [M :421-431] and
+    // |v| < radius [M :447], push = normalize(v)·(radius − |v|) [M :442-453]. The decompile's
+    // :432-437 overwrites the Dist2Tri measure fVar30 with |v| — with the [L] walked ref values
+    // (18-63 m from any contacted q) the |v| < radius gate can never pass on a walked line, so
+    // the arm is behaviourally inert there and the SPINE-DIR fallback below carries the [L]
+    // wall-step behaviour (the push = the walk step along the wall normal — exactly 0.1 per
+    // contact tick at the west hall wall, first touch 0.01056 = the approach penetration [L
+    // 2026-10-26]; the spine rule reproduces both: r − dist = the penetration). When the ref
+    // DOES sit within radius behind a face (dot(v, n) > 0), the radial push fires as decoded.
+    let vr = sub(q, ref_v);
+    let dist_r = dot(vr, vr).sqrt();
+    let (dir, mag) = if dist_r > 1e-6 && dist_r < r && dot(vr, n) > 0.0 {
+        ([vr[0] / dist_r, vr[1] / dist_r, vr[2] / dist_r], r - dist_r)
+    } else {
+        (spine_dir, r - dist)
+    };
+    let push = [dir[0] * mag, dir[1] * mag, dir[2] * mag];
+    if caps_log() {
+        eprintln!("[cap] PUSH cent=({:.3},{:.3},{:.3}) q=({:.3},{:.3},{:.3}) p=({:.3},{:.3},{:.3}) d={dist:.4} push=({:.4},{:.4},{:.4}) n=({:.3},{:.3},{:.3}) edge={on_edge} a=({:.3},{:.3},{:.3}) b=({:.3},{:.3},{:.3})",
+            (t[0][0]+t[1][0]+t[2][0])/3.0, (t[0][1]+t[1][1]+t[2][1])/3.0, (t[0][2]+t[1][2]+t[2][2])/3.0,
+            q[0], q[1], q[2], p[0], p[1], p[2], push[0], push[1], push[2], n[0], n[1], n[2], a[0], a[1], a[2], b[0], b[1], b[2]);
+    }
+    // The below-B displacement kill (level-0a-band-settle-2, re-landing band-settle's
+    // experiment (a)): a contact whose closest point q sits well BELOW the capsule bottom B
+    // loses its displacement but keeps the grounding signals. The game's own per-face gate is
+    // `0 < dot(q − ref, n)` [M Intersect_CylGeom 0x109da0:421-431 — the whole push inside the
+    // `>0` arm, ref = HITTEST+0x50], which for a walked-floor contact (q under the capsule,
+    // ref above it) never pushes — the game's floor ride is the feet band alone [M
+    // Player_FeetOnPoint 0x194188:106] and the walked dy itself carries the climb [L band-settle
+    // finding 1: the game's walked dy grows over the flat slab]. The real ref is the lifetime
+    // DeltaP accumulator [M 0x1ebaa8:353-373 the only writer; L ee_start boots (0,0,0)], whose
+    // live walked value cannot be pinned statically — the ref≈B reading here is the port choice
+    // …gated OFF by default (NF_WALK_KILL=1 to measure): with the kill on, 05 walks 8/8 green
+    // and the 0a corner crosses (870 ticks, was a permanent wedge), but 01's
+    // walk_from_the_spawn_to_the_exit_with_the_contact fails (the AND-touch never fires — the
+    // contact's plate approach shifts) — the keep-01/05-green constraint wins until
+    // that walk is re-verified. The ref≈B reading is the port choice [S] unverified, measured
+    // against the walkreal battery. The walked floor sits 0.604 below B
+    // (dy 1.0891 [L] − 0.4847 [M 0x194df0's B arm]) — the 0.5 carve-out keeps every shallower
+    // contact (the stair/step edges the 01/05 climbs ride) pushing.
+    let deep_below = *WALK_KILL.get_or_init(|| std::env::var("NF_WALK_KILL").is_ok())
+        && q[1] < b[1] - 0.5;
+    if !deep_below {
+        for k in 0..3 { a[k] += push[k]; b[k] += push[k]; total[k] += push[k]; }
+    }
     if n[1].abs() > 0.7 && q[1] < b[1] { *walkable = true; }
     // capsule-cull-and-los-masks-4: NF_PUSH_TRACE (env-gated, additive — the NF_WALK_TRACE
     // pattern; a OnceLock bool so the hot per-face path pays one relaxed load): every
@@ -926,11 +1032,13 @@ impl CollisionWorld {
 
     /// The actor capsule against the straddle cells' static geometry (`capsule_push` over the cel
     /// scope; falls back to the flat world when there is no scope or the query's cell is unmapped).
-    pub fn capsule_push_scoped(&self, cell: Option<usize>, a: V3, b: V3, r: f32, top_guard: bool) -> (V3, bool) {
-        let Some(cell) = cell else { return self.capsule_push(a, b, r, top_guard) };
-        let Some(runs) = self.scoped_runs(cell, &mut Self::capsule_portal_hit(a, b, r)) else { return self.capsule_push(a, b, r, top_guard) };
+    pub fn capsule_push_scoped(&self, cell: Option<usize>, a: V3, b: V3, r: f32, top_guard: bool, ref_v: V3) -> (V3, bool) {
+        let Some(cell) = cell else { return self.capsule_push(a, b, r, top_guard, ref_v) };
+        let Some(runs) = self.scoped_runs(cell, &mut Self::capsule_portal_hit(a, b, r)) else { return self.capsule_push(a, b, r, top_guard, ref_v) };
         let dynamic = self.dynamic.read().unwrap();
         let (mut a, mut b) = (a, b);
+        // ref_v = the caller's HITTEST+0x50 lifetime push accumulator (the radial arm's ref — see
+        // capsule_tri_contact).
         let mut total = [0f32; 3];
         let mut walkable = false;
         let mut pick = false;
@@ -940,7 +1048,7 @@ impl CollisionWorld {
         for k in 0..3 { lo[k] = a[k].min(b[k]) - grow; hi[k] = a[k].max(b[k]) + grow; }
         let stat = &self.stat;
         let mut test = |t: &[V3; 3], mat: u8, a: &mut V3, b: &mut V3, total: &mut V3, walkable: &mut bool, pick: &mut bool| {
-                capsule_tri_contact(t, mat, a, b, r, grow, total, walkable, pick, top_guard);
+                capsule_tri_contact(t, mat, a, b, r, grow, total, walkable, pick, top_guard, ref_v);
         };
         for r in runs {
             let o = &stat.objects[r as usize];
@@ -974,10 +1082,10 @@ impl CollisionWorld {
     /// kills the arm on low/negative-floor levels and keeps it on high ones. dot3
     /// (0x10a6a8-0x10a734, `normalize(R)·axis < 0.7`) is vacuous once dot2 holds
     /// (R·axis < 0 ⟹ R·axis/|R| < 0) and is not ported as a separate test.
-    pub fn capsule_pick_contact_scoped(&self, cell: Option<usize>, a: V3, b: V3, r: f32, pick_ref_y: f32) -> bool {
+    pub fn capsule_pick_contact_scoped(&self, cell: Option<usize>, a: V3, b: V3, r: f32, pick_ref_y: f32, ref_v: V3) -> bool {
         let b_pre_y = b[1];
-        let Some(cell) = cell else { return self.capsule_pick_contact(a, b, r, pick_ref_y) };
-        let Some(runs) = self.scoped_runs(cell, &mut Self::capsule_portal_hit(a, b, r)) else { return self.capsule_pick_contact(a, b, r, pick_ref_y) };
+        let Some(cell) = cell else { return self.capsule_pick_contact(a, b, r, pick_ref_y, ref_v) };
+        let Some(runs) = self.scoped_runs(cell, &mut Self::capsule_portal_hit(a, b, r)) else { return self.capsule_pick_contact(a, b, r, pick_ref_y, ref_v) };
         let dynamic = self.dynamic.read().unwrap();
         let (mut a, mut b) = (a, b);
         let mut total = [0f32; 3];
@@ -991,12 +1099,12 @@ impl CollisionWorld {
         for run in runs {
             let o = &stat.objects[run as usize];
             if !(0..3).any(|k| o.hi[k] < lo[k] || o.lo[k] > hi[k]) {
-                for k in o.tris.clone() { capsule_tri_contact(&stat.tris[k], stat.mats[k], &mut a, &mut b, r, grow, &mut total, &mut walkable, &mut pick, false); }
+                for k in o.tris.clone() { capsule_tri_contact(&stat.tris[k], stat.mats[k], &mut a, &mut b, r, grow, &mut total, &mut walkable, &mut pick, false, ref_v); }
             }
         }
         for g in [&dynamic.geo] {
             for o in overlapping(g, lo, hi) {
-                for k in o.tris.clone() { capsule_tri_contact(&g.tris[k], g.mats[k], &mut a, &mut b, r, grow, &mut total, &mut walkable, &mut pick, false); }
+                for k in o.tris.clone() { capsule_tri_contact(&g.tris[k], g.mats[k], &mut a, &mut b, r, grow, &mut total, &mut walkable, &mut pick, false, ref_v); }
             }
         }
         // dot2 pass-global [M 0x10a66c-0x10a6a0; the collapse argument in the doc above]: the
@@ -1005,7 +1113,7 @@ impl CollisionWorld {
     }
 
     /// The flat-world `capsule_pick_contact_scoped` (no cel scope).
-    pub fn capsule_pick_contact(&self, a: V3, b: V3, r: f32, pick_ref_y: f32) -> bool {
+    pub fn capsule_pick_contact(&self, a: V3, b: V3, r: f32, pick_ref_y: f32, ref_v: V3) -> bool {
         let b_pre_y = b[1];
         let (mut a, mut b) = (a, b);
         let mut total = [0f32; 3];
@@ -1016,7 +1124,7 @@ impl CollisionWorld {
         let mut hi = [0f32; 3];
         for k in 0..3 { lo[k] = a[k].min(b[k]) - grow; hi[k] = a[k].max(b[k]) + grow; }
         self.near_actor(lo, hi, |t, mat| {
-            capsule_tri_contact(t, mat, &mut a, &mut b, r, grow, &mut total, &mut walkable, &mut pick, false);
+            capsule_tri_contact(t, mat, &mut a, &mut b, r, grow, &mut total, &mut walkable, &mut pick, false, ref_v);
         });
         pick && pick_ref_y < b_pre_y
     }
@@ -1677,7 +1785,7 @@ impl CollisionWorld {
     /// is jumped through from below; the BOTTOM half is solid. The old stand-in's wider
     /// 0.70-0.763 band (≈45-77° slopes above the capsule) is gone — those faces push, as the
     /// game's non-head-on path tests them.
-    pub fn capsule_push(&self, a: V3, b: V3, r: f32, top_guard: bool) -> (V3, bool) {
+    pub fn capsule_push(&self, a: V3, b: V3, r: f32, top_guard: bool, ref_v: V3) -> (V3, bool) {
         let (mut a, mut b) = (a, b);
         let mut total = [0f32; 3];
         let mut walkable = false;
@@ -1687,7 +1795,7 @@ impl CollisionWorld {
         let mut hi = [0f32; 3];
         for k in 0..3 { lo[k] = a[k].min(b[k]) - grow; hi[k] = a[k].max(b[k]) + grow; }
         self.near_actor(lo, hi, |t, mat| {
-                capsule_tri_contact(t, mat, &mut a, &mut b, r, grow, &mut total, &mut walkable, &mut pick, top_guard);
+                capsule_tri_contact(t, mat, &mut a, &mut b, r, grow, &mut total, &mut walkable, &mut pick, top_guard, ref_v);
         });
         (total, walkable)
     }
@@ -1918,9 +2026,9 @@ mod tests {
         let w = mk(graph.clone(), scope_cells.clone());
         // The capsule stands in cell 0, 1 unit west of the wall: the flat world pushes it out; the
         // scoped one does not (cell 1 is portal-unreachable).
-        let (flat, _) = w.capsule_push([1.6, 1.0, 0.0], [1.6, 1.2, 0.0], 0.55, false);
+        let (flat, _) = w.capsule_push([1.6, 1.0, 0.0], [1.6, 1.2, 0.0], 0.55, false, [1.0e9, 1.0e9, 1.0e9]);
         assert!(flat[0] < -0.1, "flat: pushed west of the wall {flat:?}");
-        let (scoped, _) = w.capsule_push_scoped(Some(0), [1.6, 1.0, 0.0], [1.6, 1.2, 0.0], 0.55, false);
+        let (scoped, _) = w.capsule_push_scoped(Some(0), [1.6, 1.0, 0.0], [1.6, 1.2, 0.0], 0.55, false, [1.0e9, 1.0e9, 1.0e9]);
         assert_eq!(scoped, [0.0; 3], "scoped: the portal-unreachable wall is not tested");
         // The floor ray behaves the same way: a ray THROUGH the wall plane.
         assert!(w.segment_hit([1.5, 1.0, 0.0], [2.5, 1.0, 0.0]).is_some(), "flat segment_hit still sees the wall");
@@ -1929,7 +2037,7 @@ mod tests {
         graph.portals.push(ScopePortal { tris: [[[1.8, 0.0, -4.0], [1.8, 4.0, -4.0], [1.8, 4.0, 4.0]], [[1.8, 0.0, -4.0], [1.8, 4.0, 4.0], [1.8, 0.0, 4.0]]], a: 0, b: 1, centre: [1.8, 2.0, 0.0] });
         scope_cells[1].push(0);
         let w2 = mk(graph, scope_cells);
-        let (scoped2, _) = w2.capsule_push_scoped(Some(0), [1.6, 1.0, 0.0], [1.6, 1.2, 0.0], 0.55, false);
+        let (scoped2, _) = w2.capsule_push_scoped(Some(0), [1.6, 1.0, 0.0], [1.6, 1.2, 0.0], 0.55, false, [1.0e9, 1.0e9, 1.0e9]);
         assert!(scoped2[0] < -0.1, "with the straddled portal the wall blocks again {scoped2:?}");
         // The take ray's surface filter: a mat-0xd triangle in the START cell is skipped by
         // segment_take_scoped (the 0x721 bit 0x1) while the flat segment_actor still hits it.
@@ -2152,10 +2260,10 @@ mod tests {
         let w = world(floor);
         // The climb spine: 1.31 long, vertical. Crossing at f = a_y / 1.31.
         // f = 0.4 (crossing near the top): the game's cull skips — pass-through from below.
-        let (push, _) = w.capsule_push([0.0, 0.524, 0.0], [0.0, 0.524 - 1.31, 0.0], 0.55, false);
+        let (push, _) = w.capsule_push([0.0, 0.524, 0.0], [0.0, 0.524 - 1.31, 0.0], 0.55, false, [1.0e9, 1.0e9, 1.0e9]);
         assert_eq!(push, [0.0; 3], "f=0.4: the up-floor is jumped through from below (push {push:?})");
         // Sister (can fail): f = 0.6 (crossing near the bottom end): solid — pushed up onto the floor.
-        let (push, _) = w.capsule_push([0.0, 0.786, 0.0], [0.0, 0.786 - 1.31, 0.0], 0.55, false);
+        let (push, _) = w.capsule_push([0.0, 0.786, 0.0], [0.0, 0.786 - 1.31, 0.0], 0.55, false, [1.0e9, 1.0e9, 1.0e9]);
         assert!(push[1] > 0.3, "f=0.6: the up-floor is solid underfoot (push {push:?})");
         // The 0.70-0.763 band the old stand-in over-culled: an UP-facing face with n_y = +0.73
         // (≈43°) hanging above the capsule. The game's raw dot 0.73·1.31 = 0.956 < 0.999 does not
@@ -2169,7 +2277,7 @@ mod tests {
             [2.0, 3.5 - 3.745, 2.0],
         ]];
         let w = world(slope);
-        let (push, _) = w.capsule_push([0.0, 1.2, 0.0], [0.0, 1.2 - 1.31, 0.0], 0.55, false);
+        let (push, _) = w.capsule_push([0.0, 1.2, 0.0], [0.0, 1.2 - 1.31, 0.0], 0.55, false, [1.0e9, 1.0e9, 1.0e9]);
         assert!(push[1] < -0.05, "n·y=0.73 (in the old 0.7-0.763 over-cull band): the game's cull \
             does not skip it — the capsule is pushed off the underside (push {push:?})");
     }
@@ -2187,10 +2295,10 @@ mod tests {
             [[-10.0, 0.0, -10.0], [10.0, 0.0, 10.0], [10.0, 0.0, -10.0]],
         ];
         let w = world(floor);
-        let (push, _) = w.capsule_push([0.0, 0.30388, 0.0], [0.0, 0.30388 - 0.7597, 0.0], 0.55, false);
+        let (push, _) = w.capsule_push([0.0, 0.30388, 0.0], [0.0, 0.30388 - 0.7597, 0.0], 0.55, false, [1.0e9, 1.0e9, 1.0e9]);
         assert_eq!(push, [0.0; 3], "walk spine, flat floor at f=0.4: the game's cull skips it (push {push:?})");
         // Sister (can fail): the same floor crossed in the BOTTOM half (f = 0.6): solid.
-        let (push, _) = w.capsule_push([0.0, 0.4558, 0.0], [0.0, 0.4558 - 0.7597, 0.0], 0.55, false);
+        let (push, _) = w.capsule_push([0.0, 0.4558, 0.0], [0.0, 0.4558 - 0.7597, 0.0], 0.55, false, [1.0e9, 1.0e9, 1.0e9]);
         assert!(push[1] > 0.3, "walk spine, flat floor at f=0.6: solid underfoot (push {push:?})");
         // The 43° slope above the capsule: n·d̂ = 0.73 < 0.999 — NOT culled (the old |n·y| > 0.7
         // rule skipped it outright); the capsule below is pushed off the underside.
@@ -2200,7 +2308,7 @@ mod tests {
             [2.0, 3.5 - 3.745, 2.0],
         ]];
         let w = world(slope);
-        let (push, _) = w.capsule_push([0.0, 1.2, 0.0], [0.0, 1.2 - 0.7597, 0.0], 0.55, false);
+        let (push, _) = w.capsule_push([0.0, 1.2, 0.0], [0.0, 1.2 - 0.7597, 0.0], 0.55, false, [1.0e9, 1.0e9, 1.0e9]);
         assert!(push[1] < -0.05, "n·y=0.73 on the walk spine: no cull — pushed off the underside (push {push:?})");
     }
 
