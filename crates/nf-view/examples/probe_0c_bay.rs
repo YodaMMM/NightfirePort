@@ -161,8 +161,11 @@ fn block_rays(path: &str) {
             if let Some(idx) = sim.drones.sss.of_placement(*pi) {
                 let ss = &sim.drones.sss.list[idx];
                 let m = &ss.matrix;
-                println!("  SS #{pi}: state {:#x} t {} keys {} matrix rows y: {:.3} {:.3} {:.3} | trans {:.3} {:.3} {:.3}",
-                    ss.state, ss.t, ss.keys.len(), m[1][0], m[1][1], m[1][2], m[3][0], m[3][1], m[3][2]);
+                println!("  SS #{pi}: state {:#x} t {} rate {} keys {} matrix trans {:.3} {:.3} {:.3}",
+                    ss.state, ss.t, ss.rate, ss.keys.len(), m[3][0], m[3][1], m[3][2]);
+                for (ki, k) in ss.keys.iter().enumerate() {
+                    println!("    key{ki}: trans {:.3} {:.3} {:.3}", k.m[3][0], k.m[3][1], k.m[3][2]);
+                }
             }
         }
     }
