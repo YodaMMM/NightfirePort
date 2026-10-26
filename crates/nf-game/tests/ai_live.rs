@@ -1050,7 +1050,11 @@ fn truck_gatehouse_trigger_starts_the_next_script() {
         let p38 = sim.scripts.players.iter().find(|p| p.scripts[0] == 0x0600_08c8).unwrap();
         (seen, p38.state, events)
     };
-    let (on, state, events) = run(bond_at([98.487, 27.054 - 0.4, 106.358]));
+    // Root at the plate's plane: the game's body-volume contact is the walk capsule's SPINE
+    // (A = pos+0.275, B = pos-0.485 [M Player_Collision 0x194df0], no radius inflation [L
+    // 2026-10-26 0700000c skylight]) — the spine must STRADDLE the glist plate (27.036..27.071);
+    // the old -0.4 hack centered the retired feet+0.55..feet+1.86 box on it.
+    let (on, state, events) = run(bond_at([98.487, 27.054, 106.358]));
     eprintln!("inside: channel 0x5C at {on:?}, player #38 state {state}, events {events:?}");
     assert!(on.is_some_and(|t| t >= 1890) && state != 1 && state != 0);
     // The cut-scene (0x060008C8): event 4 disables Bond at once; after its 143 ticks `Script_Free` puts him at stream
