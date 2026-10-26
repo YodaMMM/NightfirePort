@@ -89,3 +89,17 @@ scripts/inject_movies.py builds minimal valid PSS files whose PCM audio tracks c
 retail durations [D golden/pss_movies.tsv: 07300004 = 2 384 128 samples = 2980 ticks;
 07300013 = 2 040 064 = 2550], appends them to an ISO copy and rewrites their ISO9660 directory
 records → Nightfire-movies-test.iso. The outro tests then take the REAL-movie branch here.
+
+### mission-outros-3 — results (2026-10-26 ~07:12 UTC)
+The A/B proof on the injected real-movie image (scripts/inject_movies.py — minimal valid PSS
+carrying the retail PCM durations [D golden/pss_movies.tsv], appended to an ISO copy, directory
+records rewritten): OLD tree (s/mission-outros, no-fix player `ended: true` [M movie.rs:234])
+under the suite shape (NF_SILENT=1, per-package cwd) fails BOTH outro tests with the driver's
+exact "got 1"; THIS branch passes 3/3 with the holds matching the injected PSS lengths
+(2980/2550 ± 2, no stub fallback). Both invocation shapes green on the injected image:
+suite.py --only with NF_SILENT=1 and cargo test without NF_SILENT. No code change needed —
+the mission-outros-2 hold already depends only on the movie's real length; the driver's suite
+failure was the unfixed tree. Full suite on the final tree (master 2757d099 merged, 818
+binaries, chunk runner — this sandbox kills background jobs): 81/818 recorded, 401 passed /
+0 failed / 11 ignored, no FAILED/TIMEOUT; targeted 11-binary outro/movie sweep 34/34. Report:
+docs/reports/mission-outros-3.md.
