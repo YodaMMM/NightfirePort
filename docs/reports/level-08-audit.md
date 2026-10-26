@@ -52,7 +52,13 @@ placement/script/mission record against the game.
   1059 s), the run phase was still in progress at the finish deadline — the partial read and the
   caveat are below.
 
-Suite partial at finish: (filled in at finish.)
+Suite partial at finish (the run phase is alphabetical across 811 binaries and the window closed
+first): **270 binaries completed — 1650 passed, 4 failed, 82 ignored**. The 4 failures are the
+documented slim-ISO set: the 3 `disc_golden` tests (allowed by the task) + `identity_disc` (the
+full-disc identity check — expected on the trimmed onfoot ISO). `net_join_live` CRASHed (exit -9,
+the OOM class the 05 session recorded for the net tests). No TIMEOUTs, and none of the 08 paths
+failed (the 08 binaries were also run directly — see Verification). The remaining ~540 binaries
+were not reached; the next session can re-run the suite to completion.
 
 ## What's left (large gaps -> follow-up tasks)
 

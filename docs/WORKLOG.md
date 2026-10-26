@@ -39,3 +39,17 @@ Work Log:
 
 Stage Summary:
 - The audit, the fix and the validation are all on the branch; finish steps next (push, report, finish.sh, ntfy).
+
+---
+Task ID: level-08-audit
+Agent: worker (s/level-08-audit)
+Task: (final) finish steps.
+
+Work Log:
+- Suite partial at the window's close: 270 binaries completed, 1650 passed / 4 failed (the 3 disc_golden + identity_disc on the trimmed ISO) / 82 ignored; net_join_live CRASH exit -9 (the OOM class); no TIMEOUTs; no 08 path failed (the 08 binaries ran directly green).
+- The 'spare' scripts row corrected: 06000027/4f/52/7c4 are the game's hard-coded effect scripts [M 0x136ce8:93, 0x180498:436, 0x1afcc8:45]; only 0600006f is a true spare.
+- The drone wait-split corrected (9 live / 11 wait-42 / 6 wait-44).
+- Report finalized with the partial tally; finish steps follow.
+
+Stage Summary:
+- The deliverable (docs/levels/07000008-audit.md, 308 placement rows + scripts + mission records) is on the branch; the SS operate-sound fix + 2 unit tests merged into the tree; the report carries the large gaps (the sky +0x4a word, D-004 medal gate, the ride/intro per-instance extras, the per-instance follow-up tests) and the live-check list.
