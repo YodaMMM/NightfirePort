@@ -16532,7 +16532,18 @@ fn segment_hits_sphere(a: V3, b: V3, c: V3, r: f32) -> bool {
             // Doors are solid through their object's collision mesh at `obj+0x90` (`Collide_PickObj` walks the
             // cel-linked objects whatever moves them); the pose this tick's `Door_Update` writes lands in the
             // same set_dynamic now (the game's Collide_Update is post-walk [M 0x1336f8:238]). Id: high bit 40 + the door index.
-            parts.extend(drones.doors.list.iter().enumerate().filter(|(_, x)| x.glist != 0)
+            // capsule-cull-and-los-masks-4/5: the solidity rides the door's own state, the way the game's
+            // zone rule does — `Door_IsClosed` 0x1367b0: a kind-1 door always reads closed, a grouped door
+            // reads `DoorGroupsStates[g] == 2`, the rest read `obj+0xF4 == CLOSED` exactly — OPEN/OPENING/
+            // CLOSING leaves do not block [M door.rs `Door::is_closed`; the zone consumer 0x135738/0x1336f8].
+            // The port posed every glist door's mesh into the collision set unconditionally, so the OPEN
+            // Secure Room door #10's leaf (its natural pose = the 5x6 panel at x 155.003, z -118..-123
+            // [D the door's keys]) blocked walkreal_07000008 at the doorway — Bond froze at
+            // (154.50, 43.10..43.42, -120.64) for 1600+ ticks on that face (docs/reports/
+            // capsule-cull-and-los-masks-4.md items 4-6). The game's level geography requires walking
+            // through the open doorway, and its only state-gated solidity mechanism is this rule.
+            parts.extend(drones.doors.list.iter().enumerate()
+                .filter(|(_, x)| x.glist != 0 && x.is_closed(&drones.doors.group_states))
                 .map(|(k, x)| (0x100_0000_0000 | k as u64, x.glist, x.matrix)));
             // The SimpleScripts too (fix-party-mission item 7): the safe door (ch 136) and the doorway
             // bolt (ch 137) are solid at their posed matrix, like the doors. Id: bit 41 + the ss index.
