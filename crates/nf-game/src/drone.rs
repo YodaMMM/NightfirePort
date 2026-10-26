@@ -18249,6 +18249,14 @@ fn segment_hits_sphere(a: V3, b: V3, c: V3, r: f32) -> bool {
         let mut ch = std::mem::take(&mut self.channels);
         self.sss.tick(&mut ch, &ss_contacts, self.frame);
         self.channels = ch;
+        // The SS operate arm's own sample (level-06-audit): `Sound_Play3D(…, ext+0x14, obj+0x80)`
+        // on the 0x40 -> 1 transition [M 0x1a9948:86-89] — 07000006's barrel traps #353/#354/#389/#390
+        // carry sample 0x11b [D census]. Same routing as the lock's pending_sounds.
+        if !self.sss.pending_sounds.is_empty() {
+            for (id, pos) in self.sss.pending_sounds.drain(..) {
+                self.audio.play3d(id as u32, pos, None);
+            }
+        }
         // The sound triggers (`SoundTrigger_Update` 0x1b2790 — the object walk's per-frame pass;
         // fix-06-alarm): the alarm siren starts the same frame its ON channel is up.
         { let _p = crate::prof::scope("phase: sound batch"); self.sound_triggers.tick(&mut self.audio, &self.channels); }
