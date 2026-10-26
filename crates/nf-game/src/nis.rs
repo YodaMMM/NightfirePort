@@ -196,6 +196,16 @@ pub struct Script {
     streams: Vec<Stream>,
     /// The owning `Player`'s placement index (for `NF_SCRIPTLOG`); 0 until `Player::load` sets it.
     pub player: usize,
+    /// `Script_CameraStart` 0x1d9140 ran on this script: the game writes `Mat_IdentityT` over the
+    /// player's own base matrix si+0x00 (the decompile drops the argument; the disassembly shows
+    /// a0 untouched from entry to the `jal 0x1e34c8` — a0 = param_1 = the SCRIPTINFO, whose first
+    /// field IS that base [M 0x1d9140, `daddu $s1,$a0,$zero` at 0x1d915c then `jal` at 0x1d916c]).
+    /// `Script_CameraEnd` 0x1db348 kills the stream and clears +0xAB5 bit 4; it does NOT restore
+    /// si+0x00 [M 0x1db348:5-13] — the identity sticks for the script's lifetime. The port keeps
+    /// `self.matrix` (the SP placement) for every other reader — master's camera-only rule — and
+    /// consults this flag where the game's identity base matters (the case-1 unparented entity
+    /// compose; see the interp comment).
+    pub camera_started: bool,
 }
 
 /// The port's object store for scripts: indices stay valid; `None` = deleted.
@@ -320,7 +330,8 @@ impl Script {
     pub fn load(nis: Arc<Nis>, matrix: Mat4, scale: f32) -> Script {
         let streams = nis.streams.iter().map(|s| Stream { first_key: s.first_key, last_key: s.last_key, pc: Some(0), parent: -1, ..Default::default() }).collect();
         let flags = if nis.camera { 0x40 } else { 0 };
-        Script { nis, matrix, scale, delay: 0, clock: 0.0, flags, script_cam: false, play: 0, fade_clock: 0.0, fade_len: 0, fade_flags: 0, streams, player_at: None, player_mode: 0, pending: Vec::new(), pending_weapon: Vec::new(), player: 0 }
+        Script { nis, matrix, scale, delay: 0, clock: 0.0, flags, script_cam: false, play: 0, fade_clock: 0.0, fade_len: 0, fade_flags: 0, streams, player_at: None, player_mode: 0, pending: Vec::new(), pending_weapon: Vec::new(), player: 0,
+            camera_started: false }
     }
 
     /// `Script_Play` (0x1db588).
@@ -530,15 +541,22 @@ impl Script {
                         let s = &mut self.streams[i];
                         s.tag = stream as u16;
                         // The tag (+0x20) and the start frame (+0x22 = stream clock + 1) are written
-                        // before the start gate [M 0x1d8820:20-28].
+                        // before the start gate [M 0x1d8820:20-28], and the stream's sound handle
+                        // (+0x10) is CLEARED at the top of `Script_SoundStart` [M 0x1d8820:19 —
+                        // `*(undefined4 *)(param_2 + 0x10) = 0` precedes the gate unconditionally]:
+                        // a stream's second line starts even while the first one-shot's handle is
+                        // still latched (the old voice is abandoned, not stopped — the game keeps no
+                        // stop call here). 07000004's story stream 15 carries two lines (0x5e @298,
+                        // 0x134 @654 [D]); without the clear the 0x134 start is gated off.
+                        s.sound_id = None;
                         s.sound_start_frame = (s.clock as i32 + 1) as i16;
-                        // The start gate [M 0x1d8820]: `stream+0x10 == 0 && script+0xAB5 & 0x20 == 0`.
-                        // A stream with a live handle never re-fires, and once the skip's fade has run
-                        // past its length (+0xAB5 bit 5 — the catch-up state `Script_Update` sets) no
-                        // new line starts: the skipped script's remaining lines (and their SoundEnd
-                        // arms) never come to be. The kind still becomes 5 even when the id is the
-                        // 0xffff "none" (handle 0) [M :36-52].
-                        if s.sound_id.is_none() && self.fade_flags & 0x20 == 0 {
+                        // The start gate [M 0x1d8820]: `script+0xAB5 & 0x20 == 0` (the handle-0 half
+                        // is the clear above). Once the skip's fade has run past its length (+0xAB5
+                        // bit 5 — the catch-up state `Script_Update` sets) no new line starts: the
+                        // skipped script's remaining lines (and their SoundEnd arms) never come to
+                        // be. The kind still becomes 5 even when the id is the 0xffff "none"
+                        // (handle 0) [M :36-52].
+                        if self.fade_flags & 0x20 == 0 {
                             s.kind = 5;
                             s.sound_id = (id & 0xfffff != 0xffff).then_some(id);
                             out.push(Request::Sound { id, at: if b[0] == 1 { None } else { at }, src: (self.nis.hashcode, i as u8) });
@@ -569,6 +587,27 @@ impl Script {
                         let (Some(&sp), Some(a), Some(b)) = (cmds.get(pc + 1), rd(1, 2), rd(3, 2)) else { self.streams[i].pc = None; return };
                         next = pc + 7;
                         if self.flags & 0x20 == 0 {
+                            // `Script_CameraStart` 0x1d9140 opens with `Mat_IdentityT()` on the
+                            // SCRIPTINFO's own base matrix si+0x00 (the decompile drops the argument;
+                            // the disassembly shows a0 untouched from entry to the call — a0 =
+                            // param_1 = the SCRIPTINFO [M 0x1d9140 disasm]): from the camera op on
+                            // the game's player base is the IDENTITY, so an unparented entity
+                            // stream's base concat (`Script_GetInterp`'s flag = parent == -1, stored
+                            // to the call's 10th slot at 0x1d9a98 [M 0x1d9a08 disasm]) runs on the
+                            // identity and its keys are the world matrix. 07000014's opening scene
+                            // 0x06000833 keys its door entity streams 10/11 (hashes 0x02000891/92
+                            // [D decode]) in WORLD space — the keys sit on the door placements
+                            // #116/#117 (27.788, 1.203, 49.671 [D]) — so the port must not compose
+                            // the SP #276 placement (52.1566, 2.6365, 46.6214) into them: pre-fix
+                            // the leaves sat at (79.95, 3.93, 96.19), 56 units off, and the door
+                            // never moved while Kiko walked through it.
+                            //
+                            // The port does NOT reset the whole `self.matrix` here (the cutscene-door
+                            // branch did, and four live walks went red — the walks' pinned poses
+                            // keep the placement base): master's camera-only rule stays, and
+                            // `camera_started` scopes the identity to the readers the game proves
+                            // (see the case-1 interp comment).
+                            self.camera_started = true;
                             let s = &mut self.streams[i];
                             if s.obj.is_none() {
                                 objs.list.push(Some(Obj::Camera { matrix: IDENT, fov: 1.0, src: (self.nis.hashcode, i as u8) }));
@@ -995,8 +1034,27 @@ impl Script {
                     p = self.streams[p as usize].parent;
                     n += 1;
                 }
-                let hash0 = matches!(&objs.list.get(o), Some(Some(Obj::Entity { hash: 0, kind: 0x19, .. })));
-                if !hash0 { m = mul(&m, &self.matrix); }
+                let (ehash, ekind) = match objs.list.get(o) { Some(Some(Obj::Entity { hash, kind, .. })) => (*hash, *kind), _ => (0, 0) };
+                let hash0 = ehash == 0 && ekind == 0x19;
+                // The camera-started identity, scoped to the class the game proves AND the door
+                // needs: an unparented case-1 stream's base compose is `Script_GetInterp`'s flag
+                // = parent == -1 (the 10th arg stored at 0x1d9a98 [M 0x1d9a08 disasm; the
+                // decompile drops the slot; the tail `if (param_10) Concat(si+0x00, out)` is
+                // 0x1da158's]), and `Script_CameraStart` has overwritten si+0x00 with the identity
+                // [M 0x1d9140 disasm] — so from the camera op on the game's unparented entity
+                // matrix is the KEYS ALONE. The port scopes it to the DEFAULT create arm's
+                // gfx-bound movers (obj_type 0xff, hash != 0 — `Script_CreateEntity` 0x1d8968's
+                // fallthrough: `control_create_object` + `hashtable_set_object_to_entity_gfx`
+                // 0x1ca6d8 [M]), the class 07000014's door leaves (streams 10/11, no parent, 0xff,
+                // hashes 0x02000891/92 [D decode]) key world space in: composing the SP placement
+                // threw them 56 units off and the door never moved while Kiko walked through it.
+                // A whole-disc census (probe_cam_scripts) finds NO other non-zero-hash 0xff
+                // stream in a camera-op script, so nothing else shifts. The special arms keep the
+                // compose (a port choice: 07000001's intro 0x06000087 s5/s11 kind-0x31 and the
+                // hash-0 classes pin composed spots in the live walks — interact_07000001,
+                // walkreal_07000001 — and 0700004a's hash-0 0xff/0x19 markers pin theirs in 4a-lift-4).
+                let keys_alone = self.camera_started && ehash != 0 && ekind == 0xff && self.streams[i].parent < 0;
+                if !hash0 && !keys_alone { m = mul(&m, &self.matrix); }
                 if let Some(Some(Obj::Entity { matrix, alpha: a, .. })) = objs.list.get_mut(o) { *matrix = m; *a = alpha; }
             }
             4 => {
@@ -1009,7 +1067,13 @@ impl Script {
                 if self.fade_flags & 0x20 != 0 { return; }
                 let Some(o) = self.streams[i].obj else { return };
                 let Some((m, scale, _)) = self.keys(i) else { return };
-                let m = mul(&m, &self.matrix);
+                // `Script_CameraStart` 0x1d9140 opens with `Mat_IdentityT()` — the
+                // camera's base concat runs on the IDENTITY, not on the SP's placement matrix, so the
+                // camera's world matrix is the keys alone. The port composed `self.matrix` (the SP's
+                // placement) here, which pushed 07000014's cut-scene camera from the room out to
+                // (78.06, 4.79, 82.69) — ~40 units away, inside rock: a flat blue void.
+                // (`Script_GetInterp`'s base-concat flag still runs; its base is the identity this
+                // op installed, so the concat is a no-op.) The entity/anim paths keep the real base.
                 if let Some(Some(Obj::Camera { matrix, fov, .. })) = objs.list.get_mut(o) { *matrix = m; *fov = scale * (4.0 / 3.0); }
             }
             2 => {
@@ -1671,14 +1735,15 @@ impl Scripts {
         // raises the heads' on-channels in a staged reveal — ch 64 (0x40) = 1 at wait 1, ch 63 (0x3F) at
         // 59, ch 61 (0x3D) at 116, ch 62 (0x3E) at 167 [D 07000006 kind-7 NIS 0x06000066; the heads'
         // on-channels are 64/63/61/62 on the four 0xDE kind-1 placements] — all four courtyard lights
-        // sweep within ~2.8 s of the script's start. Nothing in the level's
-        // placements, triggers or sub-scripts references the script (no param carries the hash; the raw
-        // bytes occur nowhere in 07000006.bin outside compressed-data noise), so the game's activation
-        // beat is not derivable from the disc — the port boots it once at level start, mode 1 (play
-        // once), the way a hidden `SP_CreateScriptPlayer` one-shot runs (`spawn_once`'s precedent, the
-        // copter script [M 0x1dbc08's mode dispatch]). Without it the port's courtyard heads stay state
-        // 3 (dark) forever, the alarm channel 55 can never rise and the guards never react. The real
-        // activation moment (which SP fires it in the game, and on which beat) is an open
+        // sweep within ~2.8 s of the script's start. The script's owner on the disc is SP placement
+        // #808 (kind 0xD9, p0 = 0x06000066, mask p5 = 1, out ch 0x34) [D census, level-06-audit]:
+        // mask != 0 parks it in state 0 [M 0x1db9a8:74-86] where only its SP_Hit/activate path can
+        // start it — a beat not derivable headlessly. The port therefore ALSO boots the script once
+        // at level start, mode 1 (play once), the way a hidden `SP_CreateScriptPlayer` one-shot runs
+        // (`spawn_once`'s precedent, the copter script [M 0x1dbc08's mode dispatch]); the placement
+        // player is created alongside and stays idle. Without the boot the port's courtyard heads
+        // stay state 3 (dark) forever, the alarm channel 55 can never rise and the guards never
+        // react. The real activation moment (which beat moves #808 in the game) is an open
         // live check. Pinned to the level by its own data: a class-0x22 head
         // placement whose alarm channel is 55 AND the script in the lib.
         let light_boot = placements.iter().any(|p| p.flags & 0xff == 0xde

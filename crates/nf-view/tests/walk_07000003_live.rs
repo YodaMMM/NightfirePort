@@ -7,10 +7,11 @@
 //!    gate channel) at (18.11, 6.65, 16.05). Same `Trigger_Activate` 0x1b2318 key-gate refusal as
 //!    07000002's [M 0x1b2318:76-90].
 //! 3. The mission's three objectives (the table 0x2a3f18) watch ch 0x4E / 0x51 / 0x53; the script
-//!    0x06000563 writes ch 0x96 (the searchlight alarm / monitor channel [D script decode]). The writers
-//!    of the key-gate ch 0x52 are NOT on the disc (scanned: scripts, triggers, drone death channels,
-//!    pickups, doors, locks — see docs/levels/07000003.md); the test drives it directly and asserts the
-//!    real refusal + load behaviour both ways. The level carries 1 ladder at (34.2, 7.6, 18.2) and 5
+//!    0x06000563 writes ch 0x96 (the searchlight alarm / monitor channel [D script decode]). The key-gate
+//!    ch 0x52's disc writer is AND trigger #435 (out 0x52 = 0x4E AND 0x51 [D; M 0x1b2c68] — corrected by
+//!    the 2026-10-25 audit, docs/levels/07000003-audit.md GAP-2); 0x4E itself is the script-spawned safe
+//!    key's take channel and 0x51 stays with the un-ported mission layer, so the test drives 0x52
+//!    directly and asserts the real refusal + load behaviour both ways (sister: wiring_07000003_live). The level carries 1 ladder at (34.2, 7.6, 18.2) and 5
 //!    water cels (the garden moat) [D levels.md survey] — the ported ladder/water systems cover them.
 
 use nf_formats::iso9660::IsoImage;

@@ -16,7 +16,7 @@
 #[path = "common/walker.rs"]
 mod walker;
 
-use walker::Walker;
+use walker::{Walker, Wp};
 
 use nf_game::player::Input;
 
@@ -100,6 +100,7 @@ fn escort_at_walking_speed_keeps_the_games_distance_and_the_exit_opens() {
     w.keep_alive.push(ci);
     let mut checked = 0u32;
     let mut last_round = [0.0f32; 3];
+    let mut last_bond: Option<[f32; 3]> = None;
     let settled = 'escort: {
         for round in 0..12 {
             let mp = w.scene.sim.as_ref().unwrap().drones.list[ci].pos;
@@ -165,6 +166,30 @@ fn escort_at_walking_speed_keeps_the_games_distance_and_the_exit_opens() {
             };
             eprintln!("[escort] round {round} stall: contact ({:.1},{:.1},{:.1}) state {cstate:#x} path {cpd:.1} bond ({:.1},{:.1},{:.1}) db {:.1}",
                 cp[0], cp[1], cp[2], w.scene.sim.as_ref().unwrap().bond.pos[0], w.scene.sim.as_ref().unwrap().bond.pos[2], w.scene.sim.as_ref().unwrap().bond.pos[1], walker::dxz(cp, w.scene.sim.as_ref().unwrap().bond.pos));
+            // The un-wedge (the player's stick move): a round that ended where it started means
+            // Bond is wedged against a wall corner — the direct steer and the nav legs all slide
+            // into the same wall. The game's player rounds it with the stick's LATERAL component
+            // (the analog strafe the walk uses everywhere else, e.g. the wire ride): jog laterally
+            // both ways with a little forward until Bond actually moves, then let the recovery
+            // below re-aim from the freed spot.
+            let bond_now = w.scene.sim.as_ref().unwrap().bond.pos;
+            if last_bond.is_some_and(|p| walker::dxz(p, bond_now) < 0.5) {
+                eprintln!("[escort] round {round}: bond wedged at ({:.1},{:.1},{:.1}) — the stick's lateral jog",
+                    bond_now[0], bond_now[1], bond_now[2]);
+                for side in [1.0f32, -1.0] {
+                    let jog_start = w.total_ticks;
+                    while w.total_ticks - jog_start < 45 {
+                        let sim = w.scene.sim.as_ref().unwrap();
+                        let desired = (cp[0] - sim.bond.pos[0]).atan2(cp[2] - sim.bond.pos[2]);
+                        let err = walker::wrap_pi(desired - sim.bond.yaw);
+                        let input = Input { turn: err.clamp(-0.07, 0.07), strafe: side, forward: 0.2, ..Default::default() };
+                        drop(sim);
+                        w.tick(input, false);
+                    }
+                    if walker::dxz(w.scene.sim.as_ref().unwrap().bond.pos, bond_now) > 0.5 { break; }
+                }
+            }
+            last_bond = Some(bond_now);
             {
                 let sim = w.scene.sim.as_ref().unwrap();
                 let d = &sim.drones.list[ci];
@@ -214,6 +239,18 @@ fn escort_at_walking_speed_keeps_the_games_distance_and_the_exit_opens() {
                 // them): the direct steer wedges against it and holds the route gap open. Close
                 // through the nav route — the walker's stuck handler opens the route's doors under
                 // Bond's feet [the walkreal-a guard-approach rule].
+                // The gallery doorway wedge (the stream-shifted park at (3.4, 6.3, 6.6) puts this
+                // recovery to work every round): Bond's west approach at (4-5.5, 11.5) clips the
+                // slide door's OPEN panel — the auto-close [M 0x13660c-0x136700] re-closes it every
+                // 360 quiet ticks and the re-open slides the panel back WEST across the approach.
+                // The player walks the frame's OPEN east half instead: along the south wall face,
+                // through the frame's east side, then re-aim from the lead's side of the wall.
+                let bp = w.scene.sim.as_ref().unwrap().bond.pos;
+                if bp[0] > 2.5 && bp[0] < 7.0 && bp[2] > 10.5 && bp[2] < 12.5 && cp[2] < bp[2] - 2.0 {
+                    eprintln!("[escort] round {round}: the gallery doorway wedge — walking the frame's open east half");
+                    w.try_walk_to(Wp::new(8.4, 1.3, 11.6).r(1.0), "the doorway's east jamb");
+                    w.try_walk_to(Wp::new(8.4, 1.3, 10.2).r(1.0), "through the open half");
+                }
                 w.walk_nav_to(cp, "the line to the lead is blocked — close through the nav", 2.0);
             } else if (cp[1] - w.scene.sim.as_ref().unwrap().bond.pos[1]).abs() > 1.5 {
                 // A floor gap (the lead parked at a stair head, Bond below): the direct steer is
