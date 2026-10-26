@@ -92,7 +92,11 @@ fn recompute_camera(sim: &nf_view::scene::Sim) -> Option<(Mat4, Mat4, f32)> {
         (p, nf_game::anim::slerp(k[ix[1]].quat, k[ix[2]].quat, t))
     };
     let keys_matrix = decomp_quat_trans_to_mat(q, pos);
-    let camera = decomp_mul(&keys_matrix, &script.matrix);
+    // The camera's base is the IDENTITY: Script_CameraStart opens with Mat_IdentityT on the script
+    // base [M 0x1d9140, the jal at 0x1d916c], so the camera is the keys alone (the concat with an
+    // exact identity is a no-op).
+    let camera = keys_matrix;
+    let _ = decomp_mul;
     Some((camera, keys_matrix, script.matrix[3][0]))
 }
 

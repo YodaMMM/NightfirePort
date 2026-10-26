@@ -122,6 +122,28 @@ pub fn ticks_for_frame(anim_time: &mut f32, dt: f32, max_ticks: u32) -> u32 {
     *anim_time += dt * 60.0;
     (*anim_time as u32).saturating_sub(before).min(max_ticks)
 }
+/// fix-interp-camera-bracket: one presented frame's interpolation bracket. The camera bracket is
+/// advanced FIRST (on the frames that rebuild the palette), then the draw camera and the blend
+/// fraction are taken from that same bracket — so the camera and the palette always interpolate
+/// between the same two ticks. The loop used to do it the other way round: `draw_cam` was computed
+/// from the PREVIOUS bracket while `pal_prev`/`pal_cur` were blended from the new one, so every
+/// frame that ran a tick drew the camera one whole tick behind the world. Measured on 0700004a's
+/// lift (drawn eye y, one tick = -0.0303 u): -22.72629, -22.76416, -22.77174, -22.77932,
+/// -22.75659 - i.e. 1.25, 0.25, 0.25 then a 0.75-tick BACKWARD jump, 21 px at 1 m, every fourth
+/// frame. Pub for the headless interpolation tests (fix-interp-camera-bracket).
+pub fn draw_bracket(cam_prev: &mut Option<Camera>, cam_cur: &mut Option<Camera>, cam_now: Camera,
+                    advanced: bool, fract: f32, interp: bool) -> (Camera, f32) {
+    if advanced || cam_cur.is_none() {
+        *cam_prev = *cam_cur;
+        *cam_cur = Some(cam_now);
+    }
+    let alpha = if interp { fract } else { 1.0 };
+    let draw = match (*cam_prev, *cam_cur) {
+        (Some(a), Some(b)) if interp => lerp_cam(&a, &b, alpha),
+        _ => cam_now,
+    };
+    (draw, alpha)
+}
 /// The palette half of the G-043 interpolation: the draw loop blends the previous tick's skin
 /// palette into the latest one while `lerp_cam` blends the camera by angle. fix-interp-ghosting:
 /// world matrices blend as ROTATION (slerp of the rotation part [M `Quat_Slerp_Acc` 0x1e4188] — a
@@ -3865,9 +3887,13 @@ impl App {
                     }
                 }
                 // psiMovieFinished [M 0x1082e8, polled by the page's 0x50]: while the real movie
-                // decodes the headless budget is held; its end is the finish.
-                match &self.movie {
+                // decodes the headless budget is held; its end is the finish. The no-decode
+                // player's BGFMVPlaying stand-in advances one frame per poll ([`Player::
+                // headless_advance`] — the opened PSS holds for its real length [M 0x1081a8 +
+                // 0x108060]).
+                match &mut self.movie {
                     Some(p) if p.code() == code && !p.is_looping() => {
+                        p.headless_advance();
                         if p.finished() { fe.intro_movie_finished(); } else { fe.intro_live = true; }
                     }
                     _ => {}
@@ -3910,7 +3936,13 @@ impl App {
                     }
                 }
             }
-            if self.movie.as_ref().is_some_and(|p| p.code() == code && p.finished()) {
+            // psiMovieFinished [M 0x1082e8]: the poll advances the no-decode stand-in one frame
+            // per call ([`Player::headless_advance`]).
+            let ended = match self.movie.as_mut() {
+                Some(p) if p.code() == code => { p.headless_advance(); p.finished() }
+                _ => false,
+            };
+            if ended {
                 // The 0x50 finish arm restarts the pair while it is down [M 0x20a1f0:34-39].
                 fe.music.movie_finished();
                 fe.attract_movie_finished();
@@ -5358,31 +5390,15 @@ impl App {
                 self.opts.up = u;
                 let interp0 = !self.noclip && !self.paused && self.scene.sim.is_some() && std::env::var_os("NF_NOINTERP").is_none()
                     && self.dev.as_deref().map_or(true, |d| d.interp);
-                let alpha0 = if interp0 { self.anim_time.fract() } else { 1.0 };
-                let draw_cam = match (self.cam_prev, self.cam_cur) { (Some(a), Some(b)) if interp0 => lerp_cam(&a, &b, alpha0), _ => self.cam };
-                let aspect0 = g.config.width as f32 / g.config.height as f32;
-                // fix-cutscene-letterbox: a live script camera frames the view at the game's own
-                // 4:3 aspect and pillar-boxes the render into the band (the game's letterbox bars
-                // ride inside it). Gameplay keeps the window's widescreen. Same condition the HUD
-                // gate (`overlay_for`) drives the cut-scene HUD blank from.
-                let cutscene = self.scene.sim.as_ref().is_some_and(|s| s.script_camera().is_some());
-                // cutscene-side-strips: the front end owns the AV options' widescreen row
-                // (0x10000223 → viewer+0x114 [M 0x1baf70:28-32]); feed the same aspect the
-                // cut-scene view builds at (`Sim::view_aspect`, the gun tilt's input) and frame
-                // the cut-scene with it — see cutscene_frame. The game's default (row off) is 4/3.
-                let game_aspect = self.fe.as_ref().map_or(4.0 / 3.0, |fe| fe.view_aspect());
-                if let Some(sim) = self.scene.sim.as_mut() { sim.view_aspect = game_aspect; }
-                let (proj_aspect, band) = if cutscene { cutscene_frame(g.config.width as f32, g.config.height as f32, game_aspect) } else { (aspect0, [0.0; 4]) };
-                let (vp0, _) = draw_cam.view_proj(proj_aspect);
-                // One visibility walk per frame, shared by the palette's object cull and render's
-                // World cull (fix-portal): the eye's cel from `Camera_CheckLocation` 0x1bae90's
-                // persistent state, the walk from it [M 0x1e86e8].
-                // The Toggles page's portal-culling row: off passes no world, so the walk returns
-                // everything (the whole level draws — the isolation view).
-                let portal = self.dev.as_deref().map_or(true, |d| d.portal_cull);
-                let door_closed = if portal { self.scene.sim.as_ref().map(|s| s.drones.doors.closed_flags()) } else { None };
-                let vis = g.renderer.cel_visibility(draw_cam.pos.to_array(), vp0, if portal { self.scene.sim.as_ref().map(|s| &s.world) } else { None }, door_closed.as_deref());
-                // G-043: build the palette only when a tick ran, then draw between the last two ticks.
+                // G-043 (fix-interp-camera-bracket): rebuild the palette AND advance the camera
+                // bracket HERE, before the draw camera and the blend fraction are taken. The
+                // bracket is one thing: `cam_prev`/`cam_cur` and `pal_prev`/`pal_cur` must be the
+                // same two ticks. It used to be two: `draw_cam` was read from the OLD bracket
+                // while `pal_prev`/`pal_cur` were blended from the NEW pair, so every frame that
+                // ran a tick drew the camera one whole tick behind the world. Measured on
+                // 0700004a's lift (drawn eye y, tick = -0.0303 u): -22.72629, -22.76416,
+                // -22.77174, -22.77932, -22.75659 - a 0.75-tick BACKWARD jump every fourth frame
+                // (21 px at 1 m), i.e. the double image on moving things, on every level, interp on only.
                 let pal_rebuilt = self.ticked || self.pal_cur.is_none();
                 if pal_rebuilt { PAL_REBUILDS.fetch_add(1, std::sync::atomic::Ordering::Relaxed); }
                 if pal_rebuilt {
@@ -5405,9 +5421,30 @@ impl App {
                     self.pal_blend.extend_from_slice(&new.0);
                     self.pal_cur = Some(new);
                     self.beam_entries = self.scene.beam_entries(&g.renderer.skin_layout);
-                    self.cam_prev = self.cam_cur;
-                    self.cam_cur = Some(self.cam);
                 }
+                let (draw_cam, alpha0) = draw_bracket(&mut self.cam_prev, &mut self.cam_cur, self.cam, pal_rebuilt, self.anim_time.fract(), interp0);
+                let aspect0 = g.config.width as f32 / g.config.height as f32;
+                // fix-cutscene-letterbox: a live script camera frames the view at the game's own
+                // 4:3 aspect and pillar-boxes the render into the band (the game's letterbox bars
+                // ride inside it). Gameplay keeps the window's widescreen. Same condition the HUD
+                // gate (`overlay_for`) drives the cut-scene HUD blank from.
+                let cutscene = self.scene.sim.as_ref().is_some_and(|s| s.script_camera().is_some());
+                // cutscene-side-strips: the front end owns the AV options' widescreen row
+                // (0x10000223 → viewer+0x114 [M 0x1baf70:28-32]); feed the same aspect the
+                // cut-scene view builds at (`Sim::view_aspect`, the gun tilt's input) and frame
+                // the cut-scene with it — see cutscene_frame. The game's default (row off) is 4/3.
+                let game_aspect = self.fe.as_ref().map_or(4.0 / 3.0, |fe| fe.view_aspect());
+                if let Some(sim) = self.scene.sim.as_mut() { sim.view_aspect = game_aspect; }
+                let (proj_aspect, band) = if cutscene { cutscene_frame(g.config.width as f32, g.config.height as f32, game_aspect) } else { (aspect0, [0.0; 4]) };
+                let (vp0, _) = draw_cam.view_proj(proj_aspect);
+                // One visibility walk per frame, shared by the palette's object cull and render's
+                // World cull (fix-portal): the eye's cel from `Camera_CheckLocation` 0x1bae90's
+                // persistent state, the walk from it [M 0x1e86e8].
+                // The Toggles page's portal-culling row: off passes no world, so the walk returns
+                // everything (the whole level draws — the isolation view).
+                let portal = self.dev.as_deref().map_or(true, |d| d.portal_cull);
+                let door_closed = if portal { self.scene.sim.as_ref().map(|s| s.drones.doors.closed_flags()) } else { None };
+                let vis = g.renderer.cel_visibility(draw_cam.pos.to_array(), vp0, if portal { self.scene.sim.as_ref().map(|s| &s.world) } else { None }, door_closed.as_deref());
                 let interp = interp0;
                 let alpha = alpha0;
                 let fp_blend = std::time::Instant::now();
@@ -6926,24 +6963,51 @@ pub fn mission_movie_glue(fe: &mut menu::FrontEnd, slot: &mut Option<movie::Play
         }
         match slot {
             Some(p) => {
-                // BGFMVPlaying follows the player: 1 while it decodes, 0 at the end of file —
-                // state 6 pops through the psiMovieFinished arm on the next main_tick
-                // [M 0x1082e8 + 0x1c98c8 case 6].
+                // BGFMVPlaying follows the player: 1 while the movie's frames are unconsumed,
+                // 0 once they are — state 6 pops through the psiMovieFinished arm on the next
+                // main_tick [M 0x1082e8 + 0x1c98c8 case 6]. On EVERY build the hold is the
+                // host's per-frame poll count to the movie's real length [M 0x1081a8's
+                // BGFMVPlaying = 1 + 0x108060's end-of-file clear; D the PSS's audio track]:
+                // the stand-in advances one frame per host call, then `finished` fires and the
+                // pop is the game's own — the `movies` feature's decoder thread only feeds the
+                // picture path and does not pace this decision (mission-outros-4).
+                p.headless_advance();
                 fe.flow.movie_playing = !p.finished();
             }
             None => {
                 let code = fe.flow.movie_code;
                 if code != 0 {
-                    match movie::Player::start(iso, code, movie_sfx_volume(fe)) {
-                        Ok(p) => {
-                            eprintln!("movie: playing {code:08x} (state 6)");
-                            fe.flow.movie_playing = true; // BGFMVPlaying = 1 [M 0x1081a8]
-                            *slot = Some(p);
+                    // mission-outros: the subtitle script rides the movie [M 0x1d6360's
+                    // SP_Create beside psiStartBackgroundMovie] — loaded once off 07000500.bin.
+                    if fe.flow.outro_subs.is_none() {
+                        fe.flow.outro_subs = menu::subtitle_track(iso, code);
+                        if let Some(t) = &fe.flow.outro_subs {
+                            eprintln!("movie: subtitle track {code:08x} → {} entries, length {}", t.entries.len(), t.length);
                         }
-                        Err(e) => {
-                            eprintln!("movie: {code:08x} not started: {e:?} — the headless countdown stands in");
-                            fe.flow.movie_playing = false; // an un-started movie: BGFMVPlaying == 0 [M 0x1082e8]
+                    }
+                    if !fe.flow.outro_hold_armed {
+                        match movie::Player::start(iso, code, movie_sfx_volume(fe)) {
+                            Ok(p) => {
+                                eprintln!("movie: playing {code:08x} (state 6)");
+                                fe.flow.movie_playing = true; // BGFMVPlaying = 1 [M 0x1081a8]
+                                *slot = Some(p);
+                            }
+                            Err(e) => {
+                                eprintln!("movie: {code:08x} not started: {e:?} — the headless countdown stands in");
+                                fe.flow.movie_playing = false; // an un-started movie: BGFMVPlaying == 0 [M 0x1082e8]
+                                // mission-outros: the no-movie hold runs the subtitle track's
+                                // length — the game holds state 6 on the retail PSS's life
+                                // [M 0x1082e8], and on a stubbed image (a test image's
+                                // /MOVIES/*.PSS are 0-byte [D]) it would pop at once; the
+                                // track's length keeps the outro up with its text. [S] the
+                                // stand-in duration — the retail timing (the track spans the
+                                // movie [D the parsed lengths 2695/2292]) — is the model.
+                                if let Some(t) = &fe.flow.outro_subs { fe.flow.movie_frames = t.length; }
+                                fe.flow.outro_hold_armed = true;
+                            }
                         }
+                    } else {
+                        fe.flow.movie_playing = false;
                     }
                 } else {
                     fe.flow.movie_playing = false;
@@ -6972,6 +7036,12 @@ pub fn mission_movie_glue(fe: &mut menu::FrontEnd, slot: &mut Option<movie::Play
             // (`briefing_plays_live`, bisected to the a2cdd771 merge).
             let code = fe.flow.level_to_load;
             if matches!((code >> 20) & 0xff, 0x71 | 0x73) {
+                // mission-outros: the subtitle script loads with the movie [M 0x1d6360's
+                // SP_Create beside psiStartBackgroundMovie — the early-started decoder still
+                // runs beside it].
+                if fe.flow.outro_subs.is_none() {
+                    fe.flow.outro_subs = menu::subtitle_track(iso, code);
+                }
                 match movie::Player::start(iso, code, movie_sfx_volume(fe)) {
                     Ok(p) => {
                         *slot = Some(p);

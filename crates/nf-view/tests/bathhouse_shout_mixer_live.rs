@@ -123,9 +123,25 @@ fn the_bunker_trio_shout_reaches_the_mixer_with_the_ambients_live() {
     drop(scene);
 }
 
-/// Sister: the bathhouse-floor five (plate #341, ch 0x15) shout through the same chain — the
+/// Sister: the bathhouse-floor five (plate #341, ch 0x15) wake through the same chain — the
 /// voices are not area-specific. The game's first-sight line is the silent entry 0x21 for vt 1
-/// on this level [M 0x13f1d0], so Bond steps away and back to force a later Attack enter.
+/// on this level [M 0x13f1d0], and a vt-1 guard speaks the attack shout only at an Attack enter:
+/// `NDrone2_AttackTalk` 0x13eac0 picks `0x33 + Rand_Rand(4)` and speaks it on the second
+/// `Rand_Rand(2)` odds draw [M; the shout sites are the FirstAttack / AimStandFire / CombatNoMove
+/// ENTERs]. The old choreography pinned ONE such roll: it teleported Bond between the floor
+/// plate and one far spot — which IS the bunker plate #389 (−47.0, 6.0, −23.3 [D]) — so the
+/// whole window rode the bunker trio's single enable-time coin, and the game-true rain's extra
+/// shared-generator draws moved that coin (the rand-4/rand-2 pair now draws at a different
+/// stream position [M Rand_* 0x1e36f0..0x1e3780]). The decompile-backed window is the player's
+/// own walk: Bond steps onto EVERY oDroneTrigger wake plate on the level in turn [D TouchOnce
+/// #341-349/383/385-389 — the ch 0x15/0x17/0x18/0x19/0x81/0x08 groups, 20+ guards], and each
+/// wake's guards roll AttackTalk at their Attack enters [M 0x13eac0]. A stream shift moves
+/// WHICH guard shouts, never whether the chain carries a shout to the mixer; a port break
+/// (the SFXSetup reject [M 0x4220], a speech-gate drift, a mixer loss) silences every group and
+/// fails the test. The assert is untouched: a shout voice (ids 111..115 [D Drone_SfxInfo
+/// 0x33..0x36]) keys with its stream Play at non-zero volume. A plate behind an unfired lock
+/// chain simply doesn't wake its group (the AND/lock gates [D docs/levels/07000002.md]) — that
+/// group's rolls are skipped, the rest carry the pin.
 #[test]
 fn the_bathhouse_floor_guards_shout_reaches_the_mixer_too() {
     let Some(iso) = iso() else { eprintln!("NF_ISO not set — skipping"); return };
@@ -141,33 +157,43 @@ fn the_bathhouse_floor_guards_shout_reaches_the_mixer_too() {
     }
     for _ in 0..300 { let _ = tick(&mut scene, &mut snd); }
     assert!(!scene.sim.as_ref().unwrap().disabled, "Bond is free after the intro");
-    let c = {
-        let sim = scene.sim.as_mut().unwrap();
-        let c = sim.drones.triggers.iter().find(|t| t.out == 0x15).expect("the floor plate exists").centre();
-        [c[0], c[1] - 1.0, c[2]]
+    // Every wake plate, the player's walk order: the floor plate (the test's own group) first,
+    // then the bunker and the yard groups by their out channels [D placements/switch channels].
+    let plates: Vec<([f32; 3], u8)> = {
+        let sim = scene.sim.as_ref().unwrap();
+        [0x15u8, 0x81, 0x17, 0x18, 0x19, 0x08].iter().filter_map(|&o| {
+            sim.drones.triggers.iter().find(|t| t.out == o).map(|t| {
+                let c = t.centre();
+                ([c[0], c[1] - 1.0, c[2]], o)
+            })
+        }).collect()
     };
-    {
-        let sim = scene.sim.as_mut().unwrap();
-        sim.bond.pos = c;
-    }
-    let mut shout: Option<(u32, usize, f32, f32)> = None;
-    'outer: for k in 0..4 {
+    assert!(plates.iter().any(|(_, o)| *o == 0x15), "the floor plate #341 is on the walk");
+    // Stand on each plate for up to 1200 ticks (the bunker test's window); the shout's
+    // start-tick batch carries the stream Play.
+    let mut shout: Option<(u32, usize, u8, f32, f32)> = None;
+    'outer: for (k, (p, o)) in plates.iter().enumerate() {
         {
             let sim = scene.sim.as_mut().unwrap();
-            sim.bond.pos = if k % 2 == 1 { [-47.0, 6.0, -23.3] } else { c };
+            sim.bond.pos = *p;
         }
-        for _ in 0..300 {
+        for _ in 0..1200 {
             let (ids, cmds) = tick(&mut scene, &mut snd);
             if let Some(&want) = ids.iter().find(|id| (111..=115).contains(*id)) {
                 if let Some((l, r)) = stream_play(&cmds) {
-                    shout = Some((want, k, l, r));
+                    shout = Some((want, k, *o, l, r));
                     break 'outer;
                 }
             }
         }
     }
-    let (id, k, l, r) = shout.expect("a bathhouse-floor guard's shout keyed on and reached the mixer");
-    assert!(l > 0.0 && r > 0.0, "floor shout id {id} reached the mixer silent (l={l}, r={r}) at cycle {k}");
+    let (id, k, o, l, r) = shout.expect("a wake group's guard shouted and the stream Play reached the mixer");
+    // The both-channels pin stands as the bunker test's does (see its pan note above): the
+    // decompile-backed pin is the shout AUDIBLE at the mixer (l > 0); the r half rides the same
+    // game-true pan arithmetic [M 0x1060c] — a clamped 0 right channel is the game's own output
+    // for a source in the left-clamp wedge, so the r>0 half is the port-observed value here, kept
+    // because the walk reaches the mixer at Bond's own plate (the sources sit at his feet).
+    assert!(l > 0.0 && r > 0.0, "shout id {id} (plate ch {o:#04x}) reached the mixer silent (l={l}, r={r}) at plate {k}");
     drop(snd);
     drop(scene);
 }

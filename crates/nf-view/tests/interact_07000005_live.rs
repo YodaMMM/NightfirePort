@@ -245,9 +245,12 @@ fn the_searchlight_sweeps_and_the_orphan_light_never_arms() {
 
 /// KIND: hurt 0xE4 — the class-0x27 volume damage [M Player_DealWithObjHit 0x194458:95-103 →
 /// Player_HandlePain(damage, Hurt_GetType, −1); armour cannot absorb pain types 1..7 [M
-/// 0x1902c8:84-104]]. Bond walks off the upper west ledge at (−5, 34.3, 45) toward the valley: the
-/// fall crosses the y-8.1 Hurt plane #329 (x −76..−23, z −0.2..74 [D the object cels]) whose 1000
-/// type-6 damage kills outright. Sister: Bond stays on the ledge — alive, no fail channel.
+/// 0x1902c8:84-104]]. WHO LAW [M Hurt_Update 0x17e5d0:51-104]: these volumes' who byte p4 is 1 on
+/// ten of the thirteen rows (level-05-audit's census) and who 1 collects nothing, ever — those
+/// planes are CONFIGURED-INERT on the disc; only the three who-0 Hurt_B planes can fire. The kill
+/// this walk asserts is the game's OTHER valley path: the plunge shells (mask 8, out 0xBE [D]) →
+/// SP #284 → the death NIS 0x06000952 → its event 0xD [98,1] → ch 0x62 [D]. Sister: Bond stays on
+/// the ledge — alive, no fail channel.
 #[test]
 fn the_valley_fall_dies_in_the_hurt_volume() {
     let iso = iso();

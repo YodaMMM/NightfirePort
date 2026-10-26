@@ -1405,6 +1405,37 @@ pub struct Drone {
     pub bond_talk_cooldown: u32,
     /// `+0xCE0`: the `DroneFunc_DoBondTalk` lines-spoken count [M 0x144488].
     pub bond_talk_done: u32,
+    /// `+0x53C`: the facial anim object attached for the current talk line — `AnimFacialAppend`
+    /// 0x1c6490's return, stored by `NDrone2_SpeechSFX` 0x141b00's facial arm [M 0x141b00:18-23].
+    /// The port holds the attached facial script's hash while the line plays (lip-flap not modelled).
+    pub facial_talk: Option<u32>,
+    /// The tick the facial script attached — the script's time origin (the game's script time
+    /// starts at 1 and advances 1 per tick, `speed · FRAME_RATE_MUL` with speed 1 here) [M speech.md §5].
+    pub facial_talk_start: u32,
+    /// The script time up to which the attached facial script's op-1 commands have fired (the
+    /// `(from, to]` pass each tick, `AnimProcessScriptCmds` 0x1c1b38 [M]).
+    pub facial_talk_fired: u32,
+    /// `(+0x4C, +0x48)`: the facial script id queued when `AnimScriptPeekSfx` 0x1c6ca8 found the
+    /// line's own sound, with its due tick `now + 0x14` — ControlSTANDARD appends it 20 ticks later
+    /// [M 0x141b00:24-28; speech.md §1.4].
+    pub facial_talk_pending: Option<(u32, u32)>,
+    /// The sfx ids the facial script's op-1 commands fired — `Sound_Play3D` at the drone, the
+    /// handle discarded (never in `+0x4D0` [M speech.md §5]); the port's observable for "the line sounded".
+    pub facial_played: Vec<u32>,
+    /// The line id of the `SpeechSFX` request that started the current talk (queued, attached or
+    /// pushed direct) — the port's observable for the BondTalk line pin (the game passes it as the
+    /// `SpeechSFX` argument [M 0x1446b0 case 0xd]).
+    pub talk_line: Option<usize>,
+    /// `+0x2C` + `+0x358`: the `NDrone2_HeadTrackObj` request (the talk head turn) — active while
+    /// `frame <= talk_track_until` [M 0x14ada0:25-29], and `DoHeadTrackingBehaviour` 0x147578:37-39
+    /// defers to it (`now <= +0x358` → return) until it expires.
+    pub talk_track: bool,
+    pub talk_track_until: u32,
+    /// The `Drone_SfxInfo` `lastFrame` stamp of the FACIAL arm [M 0x141b00:32-33], folded per drone
+    /// (the game's entry is a global shared by every drone [S fold — the 07 BondTalk cooldowns,
+    /// 480/600 ticks, exceed every shared entry's repeat except 0x8e/0x95/0x96's 2112 [D the
+    /// SfxInfo dump], which no two same-set drones drive within one window here]).
+    pub facial_last_stamp: Option<u32>,
     /// The `0x298f84` global ("a drone saw the opponent last frame"), latched by `Drone_InitComms`
     /// 0x139520:265 from ProcessDroneSight's per-frame counter 0x298fa0 [M 0x176a28:224] — lent to
     /// the drones by `Drones::tick` like `patrol_cooldown`; read by HeardNoiseTalk.
@@ -1728,6 +1759,11 @@ pub struct Drone {
     /// along for `NDrone2_FindOpponent`'s exact alive test [M 0x1424e0 disasm 0x1430e4-0x1430f0:
     /// the candidate needs `(+0xFE & 1) == 0`].
     pub delete_me: bool,
+    /// `Drone+0x4F8 & 0x4` — the 0700004a dead-body-keeps-gravity bit: `NDrone2_DSTATE_Death_Anim`
+    /// 0x1637f8:26 and `NDrone2_DSTATE_AbseilDeath` 0x169b28:20 set it on enter, and
+    /// `NDrone2_DoGravity` 0x141e58:12-15 returns 1 (gravity on) on it BEFORE every other gate —
+    /// a corpse carrying it falls even with the collision bit 0x20 cleared [M].
+    pub keeps_gravity: bool,
 }
 
 /// Normalise a vector (the grenade throw direction helper).
@@ -1920,11 +1956,13 @@ impl Drone {
             stationary: param(13) != 0 && param(13) != 0x0600_021f, alpha: 255.0, raise: None,
             head_yaw: 0.0, head_pitch: 0.0, tracking: false, track_recheck: 0, aim_pitch: 0.0,
             captain: false, snap: 0.0, event_20: false, event_21: false, holstered: false, anim_sounds: Vec::new(), voice_type: voice_type(skin), female: matches!(skin & 0xffff, 0x0e | 0x0f | 0x10 | 0x11 | 0x52 | 0x15 | 0x20 | 0x22..=0x24 | 0x17 | 0x18 | 0x2b | 0x2d | 0x34 | 0x3b | 0x3c | 0x5e), voice: None, voice_finished: true, talks: Vec::new(), patrol_cooldown: 0,
+            facial_talk: None, facial_talk_start: 0, facial_talk_fired: 0, facial_talk_pending: None, facial_played: Vec::new(), talk_line: None, talk_track: false, talk_track_until: 0, facial_last_stamp: None,
             talk_step: 0, hostage_voice: 0, hostage_voice_clear: false,
             // obj+0xFE bit 0 (delete-me; docs/fields/obj-tag.md:44) — see the field.
             delete_me: false,
             talk_script: 0, talk_cooldown: 0,
-            last_voice: 0, bond_talk_count: 0, bond_talk_cooldown: 0, bond_talk_done: 0, saw_opp_last_frame: false, footstep: false, anim_stops: Vec::new(), drops: Vec::new(), free_root: false, bounded: true, dtype: param(15) as u8, mode_normal: param(16) as u8, mode_alert: param(21) as u8, mode: 0, alt_mode: 0, team: 1, alt_state: 0, scared_radius: 20.0, screamed: false, scare_shouted: false, pending_shout: None,
+            last_voice: 0, bond_talk_count: 0, bond_talk_cooldown: 0, bond_talk_done: 0, saw_opp_last_frame: false, footstep: false, anim_stops: Vec::new(), drops: Vec::new(),
+            free_root: false, bounded: true, dtype: param(15) as u8, mode_normal: param(16) as u8, mode_alert: param(21) as u8, mode: 0, alt_mode: 0, team: 1, alt_state: 0, scared_radius: 20.0, screamed: false, scare_shouted: false, pending_shout: None,
             // `DroneFunc_NearPlayerCollision`'s source array:
             dist_to_player: [100000.0; 4],
             velocity: [0.0; 3], in_air: false, on_surface: true,
@@ -1965,6 +2003,8 @@ impl Drone {
             blocked_reach: 0.0,
             // +0x174 — the shared target registry slot, allocated on first sight.
             target_id: 0xff,
+            // 0700004a dead-body-keeps-gravity (AbseilDeath's ENTER arm) — see the field.
+            keeps_gravity: false,
             // BodyGlow_Create 0x1ac158 — every guard spawn glows on the shipped path (the
             // switch_NO_DRONES gate is 0 in every shipped level [M 0x1ac158:9]).
             body_glow: crate::body_glow::create(0, false),
@@ -2185,7 +2225,10 @@ impl Drone {
             // [M 0x14b300:153-156], 9 ∉ {0x10,0xd,0x11,0x13}, so neither fires. Rows 1..34 are
             // never dispatched — parameter 5 ∈ {0, 100} on every main-map placement and every
             // coder/bot template ([D census, docs/systems/ai-dmode-inits.md incl. the 2026-10-24
-            // addendum]; docs/port-map/unreached.md).
+            // addendum]; docs/port-map/unreached.md). The whole 33-fn family's per-init bodies
+            // (0x14d528..0x14e568, incl. the 8 Defaults tail-calls and the empty DeleteMe/Ninja/Bot)
+            // are summarised in the ai-dmode-inits.md appendix and their row bytes pinned by
+            // nf-formats' dmode_row_table test — none of rows 1..34 needs a port path.
             for id in [1usize, 6, 7, 10, 0xc, 0x48, 0xf, 0x11, 0x13, 0x18, 0x1d, 0x4c, 0x21, 0x29,
                        0x2e, 0x37, 0x41, 0x42, 0x4f, 0x51, 0x5a, 0x24, 0x3c, 0x1f, 0x44, 0x33,
                        0x32, 0x31, 0x28, 0x27, 0x26, 0x30, 0x2f, 0x2a, 0x43, 0x3b, 0x17, 0x46,
@@ -4084,10 +4127,10 @@ impl Drone {
                     return;
                 }
                 if !self.aimed_at || self.bond_talk_count != 0 || frame <= self.bond_talk_cooldown { return; }
-                // HeadTrack(0, players, 200) [M 0x1446b0 case 9] — the port's head tracking is not
-                // modelled for civilians; no observable port state.
+                // HeadTrack(0, players, 200) [M 0x1446b0 case 9 — `NDrone2_HeadTrackObj` 0x14ada0]
+                self.head_track_obj(d, frame, 200);
                 let r = rng.rand(2) as usize;
-                let h = self.speech_request(d, 0x95 + r, false);
+                let h = self.speech_request(d, 0x95 + r, false, frame);
                 if h == 0 && !self.facial_attached() { return; }
                 self.bond_talk_cooldown = frame + 480; // fptoui(now + 480·FRAME_RATE_DIV) [M]
                 self.bond_talk_count = 1;
@@ -4102,7 +4145,8 @@ impl Drone {
                 // variant by the character id `+0xE0`: 0x5000020 → 0, 0x5000022 → 1, 0x5000023 → 2, else 3 [M 0x1446b0 case 0xd]
                 let variant = match self.skin & 0xffff { 0x20 => 0, 0x22 => 1, 0x23 => 2, _ => 3 };
                 let r = rng.rand(11) as usize;
-                let h = self.speech_request(d, 0x58 + r * 4 + variant, false);
+                self.head_track_obj(d, frame, 200); // HeadTrack(0, players, 200) [M 0x1446b0 case 0xd:125]
+                let h = self.speech_request(d, 0x58 + r * 4 + variant, false, frame);
                 if h == 0 && !self.facial_attached() { return; }
                 self.bond_talk_cooldown = frame + 600; // [M 0x1446b0 case 0xd]
                 self.bond_talk_count = rng.rand(7) as u32;
@@ -4119,7 +4163,8 @@ impl Drone {
                 }
                 if !self.aimed_at || self.bond_talk_count != 0 || frame <= self.bond_talk_cooldown { return; }
                 let r = rng.rand(4) as usize;
-                let h = self.speech_request(d, 0x97 + r, false);
+                self.head_track_obj(d, frame, 200); // HeadTrack(0, players, 200) [M 0x1446b0 case 0x10:174]
+                let h = self.speech_request(d, 0x97 + r, false, frame);
                 if h == 0 && !self.facial_attached() { return; }
                 self.bond_talk_cooldown = frame + 480;
                 self.bond_talk_count = 0; // LAB_00144fe4 [M]
@@ -4131,7 +4176,8 @@ impl Drone {
                     return;
                 }
                 if !self.aimed_at || self.bond_talk_count != 0 || frame <= self.bond_talk_cooldown { return; }
-                let h = self.speech_request(d, 0x8e, false);
+                self.head_track_obj(d, frame, 200); // HeadTrack(0, players, 200) [M 0x1446b0 case 0x11:211]
+                let h = self.speech_request(d, 0x8e, false, frame);
                 if h == 0 && !self.facial_attached() { return; }
                 self.bond_talk_cooldown = frame + 480;
             }
@@ -4152,8 +4198,12 @@ impl Drone {
                 // 0x43f0/0x4370/0x4370/0x4396) and `+0xCD8 += 1` (join 0x144dac). Step 6 speaks nothing:
                 // HeadTrack(600) and `+0xCD8 += 1` [0x144d94-0x144db4]; then 7 > 6 returns. No Rand draw.
                 let step = self.bond_talk_count as usize;
-                let Some((idx, facial, delay)) = Self::party_talk_step(step) else { self.bond_talk_count += 1; return; };
-                let h = if facial { self.speech_request(d, idx, false) } else { self.speech_direct(d, idx) };
+                let Some((idx, facial, delay)) = Self::party_talk_step(step) else {
+                    self.head_track_obj(d, frame, 600); // step 6: HeadTrack(600), no line [M 0x144d94-0x144db4]
+                    self.bond_talk_count += 1; return;
+                };
+                if facial { self.head_track_obj(d, frame, 200); } // steps 0/1/3/5: HeadTrack before SpeechSFX [M]
+                let h = if facial { self.speech_request(d, idx, false, frame) } else { self.speech_direct(d, idx) };
                 if h == 0 && !self.facial_attached() { return; }
                 self.bond_talk_cooldown = frame + delay;
                 self.bond_talk_count += 1;
@@ -4189,8 +4239,9 @@ impl Drone {
         if self.voice_busy() { return; }
         if frame < self.bond_talk_cooldown { return; } // `now < +0xCDC` [M 0x144488:41]
         if self.bond_talk_done != 0 && !again { return; } // `+0xCE0 == 0 || again` [M 0x144488:44]
-        // HeadTrack(0, players, head_track) [M 0x144488:47] — not modelled for civilians.
-        let h = self.speech_request(d, idx, false);
+        // HeadTrack(0, players, head_track) [M 0x144488:47 — `NDrone2_HeadTrackObj` 0x14ada0]
+        self.head_track_obj(d, frame, _head_track);
+        let h = self.speech_request(d, idx, false, frame);
         if h == 0 && !self.facial_attached() { return; } // [M 0x144488:50-53]
         self.bond_talk_count = self.bond_talk_count.wrapping_add(1);
         self.bond_talk_cooldown = frame + delay; // the signed float reinterpret of the u32 [M 0x144488:59-63]
@@ -4200,25 +4251,71 @@ impl Drone {
     /// The Bond-talk SpeechSFX request `SpeechSFX(idx, 0, 1, 1)` (useFacial + facialOnly) —
     /// `NDrone2_SpeechSFX` 0x141b00 [M; speech.md §1.3]: an entry without a facial id goes
     /// FACIAL(0) — nothing, no handle [M :13-14]; an entry with a facial id whose script IS in
-    /// the level stays on the (unported) FACIAL path — no handle [M :17]; the hashtable-miss arm
-    /// zeroes `facialAnimId` (permanent) and goes DIRECT — the line plays as plain audio and
-    /// returns a handle [M :18-28; the miss test's port source is `Data.scripts`, the level
-    /// archive's kind-5 0x06 anim-script entries [D census: 07000005 carries none of the 61
-    /// speech facial hashes, 07000007 carries 54]]. The DIRECT gates the port folds here: the
-    /// entry's sfx non-zero and the `+0x4D0` busy test [M :21-26 — `voice_busy`, the port's
-    /// +0x4D0 fold]; the 30-frame post-load and global repeat-delay gates ride the queue
-    /// processor (`speech()`), and the callers' cooldown bookkeeping (480/600 frames) exceeds
-    /// both [S]. The 843 form always returned 0, so Bond-talk never advanced on miss levels —
-    /// review 2026-10-21.
-    fn speech_request(&mut self, d: &Data, idx: usize, _force: bool) -> u32 {
+    /// the level takes the FACIAL arm [M :15-35]: while no facial line is playing or pending
+    /// (bytes +0x36/+0x37 both clear, the u64 window at +0x30 [M :16]), `AnimScriptPeekSfx`
+    /// 0x1c6ca8 peeks the script's own op-1 sound — found → the script id is queued at +0x4c with
+    /// +0x37 = 1 and +0x48 = now + 0x14, `SFXPreCache(sfx, 0x14)` [M :24-28; the port's precache
+    /// rides the play — the start-latency fold of speech.md §4.5, headless-optional [S]] — else
+    /// `AnimFacialAppend` 0x1c6490 appends the script at once (+0x53c, +0x36 = 1, +0x37 = 0 [M
+    /// :18-23]). Either way the arm returns 0 (facial lines never return / store a handle [M :35])
+    /// and stamps the SfxInfo entry's `lastFrame = now` once +0x53c stands [M :32-33]; the entry's
+    /// repeat gate then refuses re-entry until `lastFrame + repeat` [M :9-12; the port's stamp is
+    /// per drone — see `facial_last_stamp`]. The hashtable-miss arm zeroes `facialAnimId`
+    /// (permanent) and goes DIRECT — the line plays as plain audio and returns a handle [M :18-28;
+    /// the miss test's port source is `Data.scripts`, the level archive's kind-5 0x06 anim-script
+    /// entries [D census: 07000005 carries none of the 61 speech facial hashes, 07000007 carries
+    /// 54]]. The DIRECT gates the port folds here: the entry's sfx non-zero and the `+0x4D0` busy
+    /// test [M :21-26 — `voice_busy`, the port's +0x4D0 fold]; the 30-frame post-load and global
+    /// repeat-delay gates ride the queue processor (`speech()`), and the callers' cooldown
+    /// bookkeeping (480/600 frames) exceeds both [S]. The 843 form always returned 0, so Bond-talk
+    /// never advanced on miss levels — review 2026-10-21.
+    fn speech_request(&mut self, d: &Data, idx: usize, _force: bool, frame: u32) -> u32 {
         let Some(l) = d.voices.and_then(|v| v.get(idx)) else { return 0 };
         if l.facial == 0 { return 0; } // facialOnly → FACIAL(0), nothing [M 0x141b00:13-14]
-        if d.scripts.contains_key(&l.facial) { return 0; } // present script → FACIAL, no handle [M :17]
+        if d.scripts.contains_key(&l.facial) {
+            // The FACIAL arm [M 0x141b00:15-35]. The entry's repeat gate first [M :9-12; the
+            // per-drone stamp fold — see `facial_last_stamp`].
+            if self.facial_last_stamp.is_some_and(|t| frame < t + l.repeat as u32) { return 0; }
+            // bytes +0x36 and +0x37 both clear — no facial line playing or pending [M :16]
+            if self.facial_talk.is_none() && self.facial_talk_pending.is_none() {
+                let sfx = Self::peek_script_sfx(d, l.facial); // AnimScriptPeekSfx [M 0x1c6ca8]
+                if sfx != 0 {
+                    // the queue arm: +0x4c = fid, +0x37 = 1, +0x48 = now + 0x14 [M :24-27];
+                    // SFXPreCache(sfx, 0x14) [M :28] — folded into the play [S, §4.5].
+                    self.facial_talk_pending = Some((l.facial, frame + 20));
+                } else {
+                    // the attach arm: AnimFacialAppend now — +0x53c = the script, +0x36 = 1,
+                    // +0x37 = 0 [M :18-23 + 0x1c6490; the port always appends [S: the game's
+                    // AnimScriptAppend can refuse on a full script slot]].
+                    self.facial_talk = Some(l.facial);
+                    self.facial_talk_start = frame;
+                    self.facial_talk_fired = 0;
+                }
+                self.talk_line = Some(idx); // the line that started this talk (see the field)
+            }
+            if self.facial_talk.is_some() {
+                self.facial_last_stamp = Some(frame); // e.lastFrame = now [M :32-33]
+            }
+            return 0; // facial lines never return / store a handle [M :35]
+        }
         // hashtable miss → DIRECT [M :18-28].
         if l.sfx == 0 { return 0; }
         if self.voice_busy() { return 0; }
+        self.talk_line = Some(idx);
         self.talks.push((idx, false));
         l.sfx
+    }
+
+    /// `AnimScriptPeekSfx(hash)` 0x1c6ca8 [M]: the loaded script's first op-1 command's sfx id, 0
+    /// when the script is absent or carries no sound command (the parsed-command fold of the
+    /// encoded walk: op 1 → `u16 cmd[2]`; ops 0/2–4 skip, op ≥ 5 bails).
+    fn peek_script_sfx(d: &Data, hash: u32) -> u32 {
+        match d.scripts.get(&hash) {
+            Some(s) => s.commands.iter().find_map(|c| {
+                if c.op == 1 { Some(c.args.get(1).copied().unwrap_or(0) as u32) } else { None }
+            }).unwrap_or(0),
+            None => 0,
+        }
     }
 
     /// `SpeechSFX(idx, 0, 0, 0)` — the DIRECT path [M 0x141b00; speech.md §1.3]: plays when the entry has
@@ -4233,9 +4330,25 @@ impl Drone {
         }
     }
 
-    /// `+0x53C`: a facial anim object attached — the port has no facial system, so never [M
-    /// 0x144488:51; speech.md §1.3 "facial lines never return / store a handle"].
-    fn facial_attached(&self) -> bool { false }
+    /// `+0x53C`: a facial anim object attached — `NDrone2_SpeechSFX` 0x141b00's facial arm stores
+    /// `AnimFacialAppend` 0x1c6490's return there [M 0x141b00:18-23], ControlSTANDARD's T+20 append
+    /// re-sets it [M speech.md §1.4], and the stop-at-end script clears it when the line finishes
+    /// [M 0x1c6490's +0xb5 = 3 + §1.4's +0x35 → +0x36 clear].
+    fn facial_attached(&self) -> bool { self.facial_talk.is_some() }
+
+    /// `NDrone2_HeadTrackObj(0, obj, time, dcv)` 0x14ada0 [M]: the prop-0x4c gate
+    /// (`behaviour_util_getProperty(0x4c, +0x4d8)` — 0 → no-op, returns 0 [M :13-16]), then the
+    /// tracking request: `AnimObjectSetHeadTracking(3.0, 0.13, obj, target, 1, 1, 5)` [M :18],
+    /// model+0xe0 = 0.07 for the callers' first arg 0 (both talk callers pass 0 [M 0x1446b0 /
+    /// 0x144488]; 0x3d8f5c29 = 0.07f), `+0x360 = target`, `+0x2c = time != 0`, `+0x358 = now +
+    /// time` (FRAME_RATE_DIV 1 at 60 Hz [M :25-29]). `DoHeadTrackingBehaviour` 0x147578:37-39
+    /// defers to the window (`now <= +0x358` → return), so the talk target owns the head until
+    /// the 200-tick request expires.
+    fn head_track_obj(&mut self, d: &Data, frame: u32, time: u32) {
+        if !self.prop(d, 0x4c) { return; } // [M 0x14ada0:13-16]
+        self.talk_track = time != 0; // [M 0x14ada0:26]
+        self.talk_track_until = frame + time; // fptoui(now + time·FRAME_RATE_DIV) [M 0x14ada0:27-29]
+    }
 
     /// `NDrone2_TalkToMissionObj` (0x14a8b8) — the Hostage (0x15cb78 case 0x1A) and HostageKiller
     /// (0x15c728 case 0x1A) mission-talk msg (sent by `NDrone2_MonitorTalkToMissionObj` 0x144340's
@@ -5580,7 +5693,7 @@ impl Drone {
     /// drones up to 0.2 (the live traces pin the snap's heights; the fix-driver-air2 probe showed the 109j
     /// settle-everywhere transients flipped the seeded cover RNG — danim 178 90@1.0 instead of lean-out 176 51@1.5
     /// → UnderCoverAim 90 vs live 37). The `free_root` path (SpecialDeath) bypasses this; `bounded = false` (the
-    /// AI-boundary push-out flag) also skips it. [M] constants: WldGravity (0,−9.8,0), REC_FRAME_RATE 1/60,
+    /// collision bit 0x20) skips it too — except the `keeps_gravity` (bit 4) corpse's collision-free gravity arm. [M] constants: WldGravity (0,−9.8,0), REC_FRAME_RATE 1/60,
     /// hip+0.6 ray, 0.2 on-surface, probe 0.4 (0x140e90; 0.55 when +0xd8 == 0xc and 0.3 when +0x2f — unmodelled,
     /// the gate's band only shifts, the sit/stand split does not change), 0.125 settle rate.
     pub fn collision_handler(&mut self, world: &CollisionWorld) {
@@ -5610,7 +5723,28 @@ impl Drone {
             }
             return;
         }
-        if self.free_root || !self.bounded { return; }
+        if self.free_root { return; }
+        if !self.bounded {
+            // Bit 0x20 cleared: `NDrone2_DoCollision` 0x149ec8:12-14 returns 0 — no collision
+            // (no down-ray, no hits, no settle). The 0x4F8 & 4 corpse still gravitates:
+            // `NDrone2_DoGravity` 0x141e58:12-15 returns 1 on the bit BEFORE the 0x20/0x200 folds,
+            // and the handler's DoGravity arm integrates it collision-free — velocity +=
+            // WldGravity·REC_FRAME_RATE (the feet flag anim+0x60 & 8 stays clear: no probe runs in
+            // this branch), then pos += velocity·REC_FRAME_RATE; no damping (the ×0.98 tail is the
+            // rope arm's, [M 0x140968:139-141 vs 152-192]) and no settle ([M 0x140968:292-295 — the
+            // tail's feet-flag test never fires]). The 0700004a abseil corpse falls through the
+            // shaft until the draw-grace soft-delete removes it [M 0x169b28 case 3].
+            if self.keeps_gravity {
+                self.in_air = true;
+                self.on_surface = false;
+                self.velocity[1] += -9.8 * (1.0 / 60.0);
+                let r = 1.0 / 60.0;
+                self.pos[0] += self.velocity[0] * r;
+                self.pos[1] += self.velocity[1] * r;
+                self.pos[2] += self.velocity[2] * r;
+            }
+            return;
+        }
         // `+0x4F8 & 0x4000` cleared at the top.
         self.in_air = false;
         // `NDrone2_DoCollision` / `NDrone2_DoGravity` predicates: the game gates these on the drone
@@ -7323,29 +7457,18 @@ impl Drone {
                 self.set_state(if matches!(d.level, 0x0700_0009 | 0x0700_000a) { CIVILIAN_CHALLENGE } else { INTEROGATE });
                 true
             }
-            // `NDrone2_ChangeToAttackMode` 0x14a648 through `DroneFunc_FirstAttack`: the alternate state
-            // (`+0x5A4`) with no second switch — take the alternate mode
-            // (mode 2 becomes 0x19, sniper alert, whose init keeps the drone stationary) and go to that state.
-            // The game's helper flushes the pending resume (`+0x5a4`): promotes the pending mode byte
-            // `+0xc6` → `+0xc5` (ninja 2 → 0x19), clears `+0xc6`/`+0x5a4`, switches to the 2nd behaviour block
-            // when the mission's `+0xc48` == 100, sets `+0x28`/`+0x29`, and RETURNS `+0x5a4`'s old value for
-            // the caller's `SetState` [M 0x14a648:7-36; callers 0x14cbd8:124, 0x14d2e8 (DoTypeSettingsOLD),
-            // 0x15d860:60, 0x15e1e8, 0x165640:72]. The port's `alt_state`/`alt_mode` pair is that flush.
-            (ATTACK, msg::ENTER) if self.alt_state != 0 && self.second_channel == 0 && self.alt_state != ATTACK && self.alt_state != 0xb4 => {
-                self.alert = 1.0;
-                self.return_state = ATTACK;
-                if self.alert_bits & 0x10 == 0 { self.attack_frame = frame; }
-                self.alert_bits |= 0x10 | if self.prop(d, 0x33) { 1 } else { 0 };
-                self.sight_range = self.sight_range.max(self.combat_range);
-                self.half_fov = 0.0;
-                if self.alt_mode != 0 { self.mode = self.alt_mode; }
-                if self.mode == 2 { self.mode = 0x19; self.stationary = true; }
-                let st = self.alt_state;
-                self.alt_mode = 0;
-                self.alt_state = 0;
-                self.set_state(st);
-                true
-            }
+            // NO ATTACK-ENTER alt flush here. `NDrone2_ChangeToAttackMode` 0x14a648 is called from
+            // exactly five sites — the `jal` census of ACTION.ELF: 0x14ce68 (GetDroneTypeAttackTypeFriend
+            // 0x14cbd8's kind-0xb creation arm), 0x14d45c (DoTypeSettingsOLD 0x14d2e8 — no NEW placement),
+            // 0x15da54 (CivilianMission arrival), 0x15e35c (EnemyMission arrival, ported below; ENEMY_MISSION),
+            // 0x165948 (GoToGoalPosition, mode-7-gated). `NDrone2_DSTATE_Attack` 0x164210 and
+            // `DroneFunc_FirstAttack` 0x148010 are NOT callers: the game's ATTACK ENTER [M 0x164210 case 1]
+            // reads only the mode byte (+0xc5 2/0x19 → SniperAim 0x2a, else the 0x67/0x58 combat arms) and
+            // never touches +0x5a4. The old port arm flushed `alt_state` on every ATTACK re-entry (mode
+            // promote 0 → 0x19 + stationary) — that parked the 07000006 switch-16 guard in door #47's jamb
+            // as a stationary sniper (docs/systems/rook-door-06.md) and is the non-game behaviour this
+            // branch removes; +0x5a4 keeps its game lifecycle only (creation fold write [M 0x14cea8], the
+            // EnemyMission arrival flush, ChangeToAttackMode's own clear).
             // `DroneFunc_FirstAttack` (0x148010), once per drone, after its own first sighting: `NDrone2_CheckSurrender` →
             // alertness 1, `+0x4F8 |= 0x6000000`, `+0x524` = now if unset, sight widened — and Surrender_Anim, without
             // the shout (`+0x4FC |= 0x10` is skipped).
@@ -7918,7 +8041,7 @@ impl Drone {
                 }
                 if self.dist < self.interro_min_dist { self.interro_min_dist = self.dist; }
                 if self.interro_min_dist - self.dist < -4.0 {
-                    let _ = self.speech_request(d, 0x4a, false); // SpeechSFX(0x4a, 0, 1, 1) — NOT forced, facial-only [M 0x161a40 case 3] (review 2026-10-21: was a forced direct line)
+                    let _ = self.speech_request(d, 0x4a, false, frame); // SpeechSFX(0x4a, 0, 1, 1) — NOT forced, facial-only [M 0x161a40 case 3] (review 2026-10-21: was a forced direct line)
                     self.set_state(ATTACK);
                 }
                 true
@@ -7934,7 +8057,7 @@ impl Drone {
                 self.interro_step += 1;
                 if d.level == 0x0700_0007 {
                     match step {
-                        0 => { self.call_anim(d, anim_state::AIM_STAND, 0, 0); let _ = self.speech_request(d, 0x51, false); /* SpeechSFX(0x51, 0, 1, 1) [M 0x161a40 case 0xc] */ self.timer_c = Some(frame + 180); }
+                        0 => { self.call_anim(d, anim_state::AIM_STAND, 0, 0); let _ = self.speech_request(d, 0x51, false, frame); /* SpeechSFX(0x51, 0, 1, 1) [M 0x161a40 case 0xc] */ self.timer_c = Some(frame + 180); }
                         1 => self.set_state(ATTACK),
                         _ => {}
                     }
@@ -9610,9 +9733,12 @@ impl Drone {
                 if d.level == 0x0700_004a {
                     // +0x4f8 = (& ~0x20) | 4: the port's `bounded` flag stands for the collision bit
                     // 0x20 — clearing it drops the corpse through the collision driver untouched
-                    // (the free-fall arm of `Drone_CollisionHandler`'s air branch does not apply —
-                    // +0x23 = 0 below — but the gravity/branch gate in the port is `bounded`).
+                    // (DoCollision 0x149ec8:12-14 returns 0 with the bit clear), and bit 4
+                    // (`keeps_gravity`) keeps the gravity running: DoGravity 0x141e58:12-15 returns
+                    // 1 on the bit BEFORE the 0x20/0x200 folds — the corpse free-falls, the
+                    // collision handler's DoGravity arm integrates it [M 0x169b28:18-21].
                     self.bounded = false;
+                    self.keeps_gravity = true;
                 } else {
                     self.corpse = true; // obj+0xf0 bit 0x20
                 }
@@ -9631,15 +9757,24 @@ impl Drone {
                 self.drop_weapon(d, rng);
                 true
             }
-            // UPDATE (case 3): on 0700004a wait to be drawn, then Enable(0) + obj+0xfe |= 1 (the soft
-            // delete); elsewhere wait for +0xcdc == 0 and the feet probe (the corpse landed) → danim
-            // 10, +0xcdc = 1, DEAD 0x47 [M case 3]. The game's danim 10 arm is `DroneAnim_SetDAnimNow`
+            // UPDATE (case 3): on 0700004a the corpse stays while it has been drawn recently
+            // (`obj+0xFC != 0` — the early return) and is Enable(0)'d + obj+0xFE |= 1 (the soft
+            // delete) once the drawn-grace is out [M 0x169b28:41-47]; elsewhere wait for +0xcdc == 0
+            // and the feet probe (the corpse landed) → danim 10, +0xcdc = 1, DEAD 0x47 [M case 3].
+            // The game's danim 10 arm is `DroneAnim_SetDAnimNow`
             // (0x13dd78: clear the completion action, `SetDAnimInternal(10, 0, 0)`, mark +0x57B on a
             // started script) followed by `+0x596 = 0x47` [M 0x169b28:53-55] — DEAD is the completion
             // state, applied when the class-9 follow-on 0xbf starts (see the landing arm).
             (state::ABSEIL_DEATH, msg::UPDATE) => {
                 if d.level == 0x0700_004a {
-                    if self.drawn { self.delete_me = true; self.present = false; self.enabled = false; }
+                    // `obj+0xFC != 0` → the corpse persists this tick [M 0x169b28:42-44]: the
+                    // drawn-grace counter (obj+0xFC — 2 per drawn tick, decremented per control
+                    // pass [M 0x1e62d8:71 / 0x1336f8:242-246]) is read BEFORE this tick's refresh
+                    // (see Drones::tick), so `drawn_grace == 0` is the game's third undrawn control
+                    // pass. Then `NDrone2_Enable(0)` + obj+0xFE |= 1 — the soft delete [M
+                    // 0x169b28:45-46]. (The old port inverted the gate on the per-tick cull flag —
+                    // it deleted the corpse the first DRAWN tick, the reported vanish.)
+                    if self.drawn_grace == 0 { self.delete_me = true; self.present = false; self.enabled = false; }
                 } else if !self.abseil_land_latch {
                     // The landing gate is +0xcdc (NOT +0xcd8 — the old port polled the death-channel
                     // latch here and never landed) [M 0x169b28 case 3]: the feet probe (anim+0x60 & 8,
@@ -11532,6 +11667,11 @@ pub struct Drones {
     pub doors: crate::door::Doors,
     /// The fuseboxes (`FuseBox_Create` 0x1b0448; map-tower2): 07000014's OBJECT_FuseBox1 sabotage boxes.
     pub fuseboxes: Vec<crate::fusebox::FuseBox>,
+    /// fusebox-geometry: the wire objects' LOCAL bounds by hash (`FuseBox` scripts' Entity streams),
+    /// resolved against the live entity matrix at contact time — the game collides the round with the
+    /// wire OBJECT's geometry (`Collide_PickObj` 0x1eae80 → `obj+0xD0` → `FuseBox_Update`
+    /// 0x1adfe8:88-123), not a sphere at the entity translation.
+    pub wire_geo: std::collections::HashMap<u32, ([f32; 3], [f32; 3])>,
     /// The helicopter (`Copter_Create` 0x17d340, placement 0x2F; fix-objects2): 07000008's
     /// extraction copter — gated on ch 5, its arrival writes ch 0x4B (the last mission objective).
     pub copters: Vec<crate::copter::Copter>,
@@ -11904,7 +12044,7 @@ impl Drones {
             movie_request: None,
             pickups: Vec::new(), inventory: crate::pickup::Inventory::level_start(0x73, 34), taken: Vec::new(), scripts: Default::default(), player_events: Vec::new(), npc_enabled: true, hold_npcs: false, hold_active: false,
             npc_system_disabled: false,
-            spawn_counter: 0, audio: Default::default(), script_sounds: Vec::new(), map_sounds: Default::default(), music: Default::default(), attack_gate: Default::default(), alarm_music: [0; 3], voice_last: Vec::new(), patrol_cooldown: 0, saw_opp_this_frame: false, saw_opp_last_frame: false, searchlights: Default::default(), doors: Default::default(), fuseboxes: Vec::new(), sss: Default::default(), bullet_paths: Vec::new(), sl_shots: Vec::new(), props: Default::default(), break_kills: Vec::new(), breaks: Default::default(), monitors: Default::default(), mission: crate::mission::Mission::new(), mission_carry: None, mission_inited: false, mission_events: Vec::new(), useobjs: Default::default(), ai_points: Vec::new(), bullet_path_weapons: Vec::new(), copters: Vec::new(), copter_paths: Vec::new(), locks: Vec::new(), grapple_points: Vec::new(), prev_event2: 0,
+            spawn_counter: 0, audio: Default::default(), script_sounds: Vec::new(), map_sounds: Default::default(), music: Default::default(), attack_gate: Default::default(), alarm_music: [0; 3], voice_last: Vec::new(), patrol_cooldown: 0, saw_opp_this_frame: false, saw_opp_last_frame: false, searchlights: Default::default(), doors: Default::default(), fuseboxes: Vec::new(), wire_geo: Default::default(), sss: Default::default(), bullet_paths: Vec::new(), sl_shots: Vec::new(), props: Default::default(), break_kills: Vec::new(), breaks: Default::default(), monitors: Default::default(), mission: crate::mission::Mission::new(), mission_carry: None, mission_inited: false, mission_events: Vec::new(), useobjs: Default::default(), ai_points: Vec::new(), bullet_path_weapons: Vec::new(), copters: Vec::new(), copter_paths: Vec::new(), locks: Vec::new(), grapple_points: Vec::new(), prev_event2: 0,
             bullet_contacts_now: Vec::new(),
             bullet_contacts_prev: Vec::new(),
             // fix-06-alarm.
@@ -12207,6 +12347,32 @@ impl Drones {
             obj.map(|o| (o.centre, o.radius))
         });
         self.fuseboxes = fuseboxes;
+        // fusebox-geometry: the wire objects' LOCAL bounds, keyed by hash. The contact resolves the
+        // entity's hash at hit time and transforms these by the object's live matrix.
+        {
+            use nf_formats::nis::Cmd;
+            let mut geo: std::collections::HashMap<u32, ([f32; 3], [f32; 3])> = Default::default();
+            for fb in &self.fuseboxes {
+                let Some(nis) = level.nis.get(&fb.script) else { continue };
+                for st in nis.streams.iter() {
+                    for cmd in st.decode() {
+                        let Cmd::Entity { hash, .. } = cmd else { continue };
+                        if geo.contains_key(&hash) { continue; }
+                        let Some(&(m, o)) = level.by_hash.get(&hash) else { continue };
+                        let (mut lo, mut hi) = ([f32::MAX; 3], [f32::MIN; 3]);
+                        for leaf in &level.maps[m].objects[o].gfx.leaves {
+                            for b in &leaf.batches {
+                                for v in &b.verts {
+                                    for c in 0..3 { lo[c] = lo[c].min(v.pos[c]); hi[c] = hi[c].max(v.pos[c]); }
+                                }
+                            }
+                        }
+                        if lo[0] <= hi[0] { geo.insert(hash, (lo, hi)); }
+                    }
+                }
+            }
+            self.wire_geo = geo;
+        }
         // SimpleScripts (`SS_Create` 0x1a9c58): the 0xE2 placements with a non-zero key count, their
         // keys from the main map's 0x19 blocks (map-tower2).
         self.sss = crate::ss::SsList::create(&level.maps[m].placements, &path_blocks, |p| {
@@ -12309,6 +12475,9 @@ impl Drones {
                 tick_damage: 0.0,
                 // +0x36: nothing hides a placed/fusebox/useobj SP at create [M 0x1db9a8].
                 hidden: false,
+                bullet_filter: 0,
+                bullet_hits: Vec::new(),
+                tick_bullet_hits: Vec::new(),
             });
         }
         // laser-scripts: `Switch_Create` 0x1adcc0:44-45 ends with `SP_Create(pos, rot, param 1,
@@ -12358,6 +12527,9 @@ impl Drones {
                 damage: 0.0,
                 tick_damage: 0.0,
                 hidden: false,
+                bullet_filter: 0,
+                bullet_hits: Vec::new(),
+                tick_bullet_hits: Vec::new(),
                 // The laser switch's player: no placement model of its own.
             });
             // The ext+0x0C link [M 0x1adcc0:46]: Switch_Update's unpause arm and Switch_Activate's
@@ -12454,6 +12626,9 @@ impl Drones {
                     damage: 0.0,
                     tick_damage: 0.0,
                     hidden: false,
+                    bullet_filter: 0,
+                    bullet_hits: Vec::new(),
+                    tick_bullet_hits: Vec::new(),
                 };
                 t.script_player_a = self.scripts.players.len();
                 self.scripts.players.push(mount(t.script_a));
@@ -12541,6 +12716,31 @@ impl Drones {
     /// sound (the first-person fire script's, 0x403 for the P2K) for the drones' hearing.
     /// The closest approach of the segment `a`–`b` to the sphere (centre `c`, radius `r`): the classic
 /// closest-point-on-segment distance test.
+/// The round's segment against an axis-aligned box (the slab test) — the fusebox wire contact.
+fn segment_hits_aabb(a: V3, b: V3, lo: V3, hi: V3) -> bool {
+    let mut t0 = 0.0f32;
+    let mut t1 = 1.0f32;
+    for k in 0..3 {
+        let (p, d) = (a[k], b[k] - a[k]);
+        if d.abs() < 1e-9 {
+            if p < lo[k] || p > hi[k] {
+                return false;
+            }
+        } else {
+            let (mut ta, mut tb) = ((lo[k] - p) / d, (hi[k] - p) / d);
+            if ta > tb {
+                std::mem::swap(&mut ta, &mut tb);
+            }
+            t0 = t0.max(ta);
+            t1 = t1.min(tb);
+            if t0 > t1 {
+                return false;
+            }
+        }
+    }
+    true
+}
+
 fn segment_hits_sphere(a: V3, b: V3, c: V3, r: f32) -> bool {
     let ab = [b[0] - a[0], b[1] - a[1], b[2] - a[2]];
     let ac = [c[0] - a[0], c[1] - a[1], c[2] - a[2]];
@@ -13106,11 +13306,21 @@ fn segment_hits_sphere(a: V3, b: V3, c: V3, r: f32) -> bool {
         // tail [M SP_Update 0x1dc1c0-0x1dc330]) starts empty each frame. The site's per-tick
         // feeds start empty with them (the driver drains into `damage_site` after the tick).
         for p in &mut self.scripts.players { p.tick_damage = 0.0; }
+        // The chains rotate at the pass head [M `Collide_Update` 0x1ea398's first loop clears
+        // every hit list]: what the walk's `SP_Hit` reads (`bullet_hits`) becomes the LAST
+        // pass's gather — the game's Collide runs after the walk [M 0x1336f8:238], so a
+        // contact the pass records this tick reaches the SP's bit-2 arm on the NEXT tick.
+        for p in &mut self.scripts.players {
+            p.bullet_hits = std::mem::take(&mut p.tick_bullet_hits);
+        }
         self.site_bullet_damage = 0.0;
         self.site_blast_hits.clear();
         // The held hit-point scripts' stream objects — `SP_GetHitDamage` 0x1dc5f8's read set
         // (GAPS G-047: the 0700001b solar panels). Each bullet contact below adds its damage.
         let held_targets = self.scripts.held_hit_targets(d);
+        // `SP_Hit` 0x1dc470's bit-2 read set: the current stream objects of EVERY script
+        // player — no hit-point or hold gate (the urn is hp 0 and still reacts [M]).
+        let sp_bullet_targets = self.scripts.sp_bullet_targets(d);
         // copter-hitdata-damage: the copters' 9 part slots' world spheres, resolved once per
         // tick (the parts pose with the SP player — the documented one-tick script-entity lag;
         // the game's collide pass reads the same last-walk poses [M 0x1336f8:238]).
@@ -13356,12 +13566,52 @@ fn segment_hits_sphere(a: V3, b: V3, c: V3, r: f32) -> bool {
             let kind = d.weapons.records.get(b.weapon as usize).map_or(0u16, |r| u16::from_le_bytes([r[0x10], r[0x11]]));
             if crate::fusebox::FuseBox::hit_survives_filter(kind) {
                 let mut contacts: Vec<(usize, usize, usize)> = Vec::new();
+                // fusebox-geometry: the round is tested against the wire OBJECT's own bounds (the
+                // `Collide_PickObj` 0x1eae80 pick + `FuseBox_Update` 0x1adfe8:88-123 chain). The old
+                // 0.5-radius sphere sat at the script entity's translation, which on 07000014 is
+                // 1.5 m BELOW the visible cable run ([D] OBJECT_GreenWire1/BlueWire1 local y 1.49..1.72
+                // through the entity matrix), so a beam on the cables never touched it.
                 for (fi, fb) in self.fuseboxes.iter().enumerate() {
                     for (g, k, obj) in fb.alive_wires() {
-                        if let Some(p) = Self::script_obj_pos(&self.scripts, d, obj) {
-                            if Self::segment_hits_sphere(b.pos, end, p, crate::fusebox::WIRE_RADIUS) {
-                                contacts.push((fi, g, k));
+                        let hit = match self.scripts.objects.list.get(obj) {
+                            Some(Some(crate::nis::Obj::Entity { hash, matrix, .. })) => {
+                                match self.wire_geo.get(hash) {
+                                    Some((lo, hi)) => {
+                                        let (mut wlo, mut whi) = ([f32::MAX; 3], [f32::MIN; 3]);
+                                        for cx in 0..2 {
+                                            for cy in 0..2 {
+                                                for cz in 0..2 {
+                                                    let p = [
+                                                        if cx == 0 { lo[0] } else { hi[0] },
+                                                        if cy == 0 { lo[1] } else { hi[1] },
+                                                        if cz == 0 { lo[2] } else { hi[2] },
+                                                    ];
+                                                    let w = nf_formats::placement::transform(matrix, p);
+                                                    for c in 0..3 {
+                                                        wlo[c] = wlo[c].min(w[c]);
+                                                        whi[c] = whi[c].max(w[c]);
+                                                    }
+                                                }
+                                            }
+                                        }
+                                        // the cables are flat: a hair of thickness for the slab test
+                                        for c in 0..3 {
+                                            wlo[c] -= 0.01;
+                                            whi[c] += 0.01;
+                                        }
+                                        Self::segment_hits_aabb(b.pos, end, wlo, whi)
+                                    }
+                                    None => Self::script_obj_pos(&self.scripts, d, obj).is_some_and(|p| {
+                                        Self::segment_hits_sphere(b.pos, end, p, crate::fusebox::WIRE_RADIUS)
+                                    }),
+                                }
                             }
+                            _ => Self::script_obj_pos(&self.scripts, d, obj).is_some_and(|p| {
+                                Self::segment_hits_sphere(b.pos, end, p, crate::fusebox::WIRE_RADIUS)
+                            }),
+                        };
+                        if hit {
+                            contacts.push((fi, g, k));
                         }
                     }
                 }
@@ -13377,6 +13627,19 @@ fn segment_hits_sphere(a: V3, b: V3, c: V3, r: f32) -> bool {
             for (pi, c, r) in &held_targets {
                 if Self::segment_hits_sphere(b.pos, end, *c, *r) {
                     self.scripts.add_hit_damage(*pi, b.damage);
+                }
+            }
+            // The SP_Hit bullet arm records the contact per player — the weapon id is the
+            // bullet's `weapon_data+0x00` u16 [M docs/fields/weapon_data.md: the id = the
+            // record index], the `+0x37` filter's comparison value [M 0x1dc470:64-70]. The
+            // gather goes into `tick_bullet_hits`; the NEXT pass's head rotates it into
+            // `bullet_hits` for the walk (Collide after the walk [M 0x1336f8:238]). Same
+            // player-bullets-only scope as the damage gather above [*deviation*].
+            let sp_weapon_id = d.weapons.records.get(b.weapon as usize)
+                .map_or(0u16, |r| u16::from_le_bytes([r[0x00], r[0x01]]));
+            for (pi, c, r) in &sp_bullet_targets {
+                if Self::segment_hits_sphere(b.pos, end, *c, *r) {
+                    self.scripts.add_bullet_hit(*pi, sp_weapon_id);
                 }
             }
             // mp-site-damage-offline: the site takes the bullet this tick — the game's collision
@@ -14129,8 +14392,17 @@ fn segment_hits_sphere(a: V3, b: V3, c: V3, r: f32) -> bool {
             let g = &mut self.props.gunimps[gi];
             // aim [M 0x1320d8:124-135]: yaw -= stick-x·FR·0.015, pitch -= stick-y·FR·0.015,
             // pitch clamped to [−π/2, +π/4]; FRAME_RATE_MUL = 1.0 [L].
-            g.yaw -= turn * 0.015;
-            let p = g.pitch - look * 0.015;
+            // gunimp-aim-signs: the two axes are NOT symmetric. `Input.turn` is
+            // the player's yaw delta, and the port's yaw grows LEFT (`player.rs:860` `yaw += turn`)
+            // while the game's action 3 is the raw stick x (right+), so `yaw -= action3` becomes
+            // `yaw += turn`. `Input.look` is the player's pitch delta, UP-positive (`lib.rs:6067`
+            // `look -= dy`; the invert setting is applied upstream at `lib.rs:4823`), and the gun's
+            // `pitch` is the game's own down-positive angle (the mount's view pitch is
+            // `-pitch_s*0.5`, `mounted_pose`), so the game's `pitch -= action4` maps straight to
+            // `pitch -= look` -- flipping it reversed the pitch ("up and down
+            // are bad".
+            g.yaw += turn;
+            let p = g.pitch - look;
             g.pitch = if p < -1.5707964 { -1.5707964 } else if p > 0.7853982 { 0.7853982 } else { p };
             // the 0.15 ease toward the smoothed mirrors [M 0x1320d8:136-161]
             g.pitch_s += (g.pitch - g.pitch_s) * 0.15;
@@ -14430,6 +14702,15 @@ fn segment_hits_sphere(a: V3, b: V3, c: V3, r: f32) -> bool {
                 // levels that do fire 0x12. Set `level_exit` so the main loop reloads the next level
                 // [M Script_EventHandler 0x1d94c0:189-199].
                 crate::nis::Request::LoadLevel { level } => {
+                    // exit-hold debug (NF_EXIT_DBG=1): which script players stand where when a
+                    // script asks for a level load — the 0700000a armour-route reset hunt.
+                    if std::env::var("NF_EXIT_DBG").as_deref() == Ok("1") {
+                        let ps: Vec<String> = self.scripts.players.iter()
+                            .map(|p| format!("#{} scripts {:?}/{:?} state {} cur {} act {}",
+                                p.placement, p.scripts[0], p.scripts[1], p.state, p.cur, p.activated))
+                            .collect();
+                        eprintln!("[exit-dbg] script event 0x12 LoadLevel {level:#x}; players: {}", ps.join(" | "));
+                    }
                     if self.level_exit.is_none() {
                         self.level_exit = Some(level);
                         self.music.event(3, 1);
@@ -16858,6 +17139,44 @@ fn segment_hits_sphere(a: V3, b: V3, c: V3, r: f32) -> bool {
             if dr.enabled && dr.present && !self.npc_system_disabled {
                 dr.handle_talking(d.level, frame, self.player_pos, true, &self.channels.v, &mut self.afo_throttle, &mut self.power_last);
             }
+            // NDrone2_ControlSTANDARD 0x1490f0's facial bookkeeping, after the state's update [M
+            // speech.md §1.4]: the T+20 pending append (the first frame with `now > +0x48`, i.e.
+            // T+21), then the playing script's own op-1 sound commands (`AnimProcessScriptCmds`
+            // 0x1c1b38 case 1 — one `Rand(500)` pitch draw per fired op-1 [M :319-322], the sound
+            // at the drone, the handle discarded), then the stop-at-end detach (+0xb5 = 3 [M
+            // 0x1c6490]; the game's +0x35 done flag clears +0x36 [M §1.4]).
+            if let Some((hash, due)) = dr.facial_talk_pending {
+                if frame > due {
+                    dr.facial_talk = Some(hash); // the delayed AnimFacialAppend [M §1.4]
+                    dr.facial_talk_start = frame;
+                    dr.facial_talk_fired = 0;
+                    dr.facial_talk_pending = None;
+                }
+            }
+            if let Some(hash) = dr.facial_talk {
+                let start = dr.facial_talk_start;
+                let now_t = frame - start + 1; // script time: 1 on the attach tick, +1 per tick [M speech.md §5]
+                match d.scripts.get(&hash) {
+                    Some(script) => {
+                        for c in &script.commands {
+                            if c.op != 1 { continue; }
+                            let Some(&f) = c.args.first() else { continue };
+                            let f = f as u32;
+                            if f > dr.facial_talk_fired && f <= now_t {
+                                let sfx = c.args.get(1).copied().unwrap_or(0) as u32;
+                                let _pitch = rng.rand(500) as i32 - 250; // [M 0x1c1b38:319-322; consumed, not applied — sound.rs header]
+                                dr.anim_sounds.push(sfx); // Sound_Play3D at the drone [M :320-322]
+                                dr.facial_played.push(sfx);
+                            }
+                        }
+                        dr.facial_talk_fired = now_t;
+                        if now_t >= script.length as u32 {
+                            dr.facial_talk = None; // stop at end [M 0x1c6490's +0xb5 = 3; §1.4]
+                        }
+                    }
+                    None => { dr.facial_talk = None; } // cannot happen for a present-script attach
+                }
+            }
             let talks = std::mem::take(&mut dr.talks);
             if !talks.is_empty() { talk_queue.push((index, talks)); }
             self.used = std::mem::take(&mut dr.links_used);
@@ -16897,11 +17216,26 @@ fn segment_hits_sphere(a: V3, b: V3, c: V3, r: f32) -> bool {
             // and the angles ease back. `NDrone2_HeadTrackObj` 0x14ada0 (the Bond-talk request, from
             // `DroneFunc_DoBondTalk` 0x144488 / `NDrone2_BondTalk` 0x1446b0 behind the prop-0x4c gate) is
             // the third writer of the same state: `AnimObjectSetHeadTracking(3.0, 0.13, obj, talk_target,
-            // 1, 1, 5)` [M 0x14ada0:9-15] — the port's tracking block below covers it with the same
-            // 3.0 range gate and the eye stand-in [S fold]. HeadTrack's clamps: yaw ±1.1, 0 beyond 2.6;
+            // 1, 1, 5)` [M 0x14ada0:9-15] — ported as `talk_track`/`talk_track_until` (set by
+            // `head_track_obj` from the talk arms); its window defers this block [M 0x147578:37-39].
+            // HeadTrack's clamps: yaw ±1.1, 0 beyond 2.6;
             // pitch [-1.0, +0.6]; speed 0.14 alerted (`DCVars+0x50c > 0.66`) else 0.07 (0x1472c8). Both angles positive up.
+            if dr.talk_track && frame > dr.talk_track_until { dr.talk_track = false; } // the window expired — the game's resume re-targets fresh [M 0x1472c8:69-70]
             let aiming = dr.anim.class == 2 && dr.aims_torso();
-            if aiming {
+            if dr.talk_track {
+                // The HeadTrackObj window: `DoHeadTrackingBehaviour` returns while `now <= +0x358`
+                // [M 0x147578:37-39] — the talk target (Bond, the `glb_players` stand-in) owns the
+                // head. The ease speed is model+0xe0 = 0.07 [M 0x14ada0:19-21] within
+                // SetHeadTracking's 3.0 range [M 0x14ada0:18; the guest stands inside it — the
+                // BondTalk radius is 3.0 [M 0x1446b0:12]].
+                let (want_y, want_p) = if dr.dist <= 3.0 {
+                    dr.head_track_want(d, player.eye).unwrap_or((0.0, 0.0))
+                } else {
+                    (0.0, 0.0)
+                };
+                dr.head_yaw = rotate_to_bearing(dr.head_yaw, want_y, 0.07, crate::trig::PI);
+                dr.head_pitch = rotate_to_bearing(dr.head_pitch, want_p, 0.07, crate::trig::PI);
+            } else if aiming {
                 let dy = player.eye[1] - (dr.pos[1] + 1.2);
                 let want_p = (dy / dr.dist.max(0.001)).atan().clamp(-0.9, 0.9);
                 dr.aim_pitch = rotate_to_bearing(dr.aim_pitch, want_p, 0.2, crate::trig::PI);
@@ -18054,6 +18388,14 @@ fn segment_hits_sphere(a: V3, b: V3, c: V3, r: f32) -> bool {
         let mut ch = std::mem::take(&mut self.channels);
         self.sss.tick(&mut ch, &ss_contacts, self.frame);
         self.channels = ch;
+        // The SS operate arm's own sample (level-06-audit): `Sound_Play3D(…, ext+0x14, obj+0x80)`
+        // on the 0x40 -> 1 transition [M 0x1a9948:86-89] — 07000006's barrel traps #353/#354/#389/#390
+        // carry sample 0x11b [D census]. Same routing as the lock's pending_sounds.
+        if !self.sss.pending_sounds.is_empty() {
+            for (id, pos) in self.sss.pending_sounds.drain(..) {
+                self.audio.play3d(id as u32, pos, None);
+            }
+        }
         // The sound triggers (`SoundTrigger_Update` 0x1b2790 — the object walk's per-frame pass;
         // fix-06-alarm): the alarm siren starts the same frame its ON channel is up.
         { let _p = crate::prof::scope("phase: sound batch"); self.sound_triggers.tick(&mut self.audio, &self.channels); }
@@ -18477,6 +18819,7 @@ mod tests {
             delete_me: false,
             talk_script: 0, talk_cooldown: 0,
             last_voice: 0, bond_talk_count: 0, bond_talk_cooldown: 0, bond_talk_done: 0, saw_opp_last_frame: false, footstep: false, anim_stops: Vec::new(), drops: Vec::new(),
+            facial_talk: None, facial_talk_start: 0, facial_talk_fired: 0, facial_talk_pending: None, facial_played: Vec::new(), talk_line: None, talk_track: false, talk_track_until: 0, facial_last_stamp: None,
             free_root: false, bounded: true, dtype: 0, mode_normal: 0, mode_alert: 0, mode: 0, alt_mode: 0, team: 1, alt_state: 0, scared_radius: 20.0, screamed: false, scare_shouted: false, pending_shout: None, alert_block: 0.0,
             door_open_at: 0,
             hit_door: None, door_return: 0, door_node: None, door_attempt: false, pending_door_msg: false, hit_door_open: true,
@@ -18508,6 +18851,8 @@ mod tests {
             blocked_reach: 0.0,
             // +0x174 — the shared target registry slot.
             target_id: 0xff,
+            // 0700004a dead-body-keeps-gravity (AbseilDeath's ENTER arm) — see the field.
+            keeps_gravity: false,
         };
         dr
     }

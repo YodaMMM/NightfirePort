@@ -45,6 +45,14 @@ fn walk_from_the_spawn_to_the_exit_with_the_contact() {
     let sim = w.scene.sim.as_ref().unwrap();
     let ci = sim.drones.list.iter().position(|d| d.skin == 0x0500_004f).expect("the contact");
     drop(sim);
+    // The friendly-fire shield (level-06-rook-door-3): the game's bullets hit ANY drone — no
+    // team gate in Drone_CollisionHandler 0x140968:85-95 [M] — and the attributed round-0 kill
+    // was BOND's own spread past guard #5 into the walking contact's head (the NF_HEALTH_TRACE
+    // read; the guard set {3,5,14,15} never shot him — drone-fired bullets cannot even reach a
+    // drone in the port, and the game's shooter would be the player's own pellet there too).
+    // The player's play: never take a shot whose line runs through the escort. Every clearing
+    // loop below inherits it through `shoot`.
+    w.shield = Some(ci);
     let guards: Vec<usize> = {
         let sim = w.scene.sim.as_ref().unwrap();
         (0..sim.drones.list.len()).filter(|&i| {

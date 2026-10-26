@@ -64,6 +64,49 @@ fn an_alarm_switch_press_raises_the_alarm_and_fails_the_mission() {
     assert_eq!(sim.drones.level_exit, Some(0x0700_0009), "objective 1 inverted on 0x61 fails the mission [M 0x1827d8]");
 }
 
+/// KIND Switch, the ch-0x7D side of the alarm mux: the lobby pull #76 (alarmswitchplayer,
+/// ch 125 = 0x7D [D placement #76 param 0, at (−9.11, −368.05, 68.48)]) is one of the four
+/// 0x7D writers feeding OR mux #278's SECOND input (params (0:0x61, 1:0x7C, 2:0x7D) [D #278];
+/// the game ORs the listed inputs into the out channel [M Trigger_MultiplexOrIn 0x1b2d38]). The
+/// E press writes ch 0x7D [M Switch_Activate 0x1b02a8 through the port's useobj switch arm],
+/// the mux lifts ch 0x61 and objective 1 (INVERTED on ch 0x61) fails the mission [M 0x1827d8] —
+/// the same landing as the ch-0x7C pull in the sister test above, pinned here for the other
+/// mux input, which no 09 test exercised before this audit.
+#[test]
+fn a_ch7d_alarm_pull_raises_the_alarm_too() {
+    let Some(iso) = iso() else { eprintln!("NF_ISO not set — skipping"); return };
+    let mut scene = load_09(&iso);
+    // Stand Bond beside the ch-0x7D pull (a teleport to reach the spot — the press itself is the
+    // real input path), then pulse E until the mux lands, exactly like the ch-0x7C sister test.
+    let spot = {
+        let sim = scene.sim.as_ref().unwrap();
+        let s = sim.drones.useobjs.switches.iter().find(|s| s.ch == 125 && s.gate == 0)
+            .expect("an alarmswitchplayer on ch 125 with no gate [D placements #76/77/79/276]");
+        s.pos
+    };
+    {
+        let sim = scene.sim.as_mut().unwrap();
+        sim.bond.pos = [spot[0] + 0.9, spot[1], spot[2]];
+    }
+    let mut fired = false;
+    for k in 0..120 {
+        {
+            let sim = scene.sim.as_mut().unwrap();
+            let b = &mut sim.bond;
+            b.yaw = (spot[0] - b.pos[0]).atan2(spot[2] - b.pos[2]);
+            b.pitch = 0.0;
+            sim.step_bond(Input::default(), false, false, k % 6 == 0);
+            if sim.drones.channels.on(0x7d) { fired = true; break; }
+        }
+    }
+    let sim = scene.sim.as_ref().unwrap();
+    assert!(fired, "the E pulses at the ch-0x7D pull must raise ch 0x7D [M Switch_Activate 0x1b02a8]");
+    assert!(sim.drones.channels.on(0x61), "OR mux #278: ch 0x7D raises the alarm ch 0x61 [D #278]");
+    for _ in 0..340 { scene.sim.as_mut().unwrap().step_bond(Input::default(), false, false, false); }
+    let sim = scene.sim.as_ref().unwrap();
+    assert_eq!(sim.drones.level_exit, Some(0x0700_0009), "objective 1 inverted on 0x61 fails the mission [M 0x1827d8]");
+}
+
 /// Sister: the same stance with NO press — ch 0x7C/0x61 stay low and the level never ends.
 #[test]
 fn without_the_press_the_alarm_stays_off() {

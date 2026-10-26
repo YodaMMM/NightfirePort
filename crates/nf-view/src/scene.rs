@@ -2496,6 +2496,11 @@ impl Sim {
         // and a one-tick-early reset.)
         let scanned_due = self.decryptor_scanned_lag.take();
         self.decryptor_scanned_lag = self.decryptor_scanned.take();
+        // fix-decryptor-sounds: the digit/unlock chimes a scanning lock raised this tick (the
+        // [M] `Lock_Update` 0x1ae3d8:368/:374 `Sound_Play` family, played here at the lock's
+        // position through the port's 3-D path). Collected first: the loop holds the locks
+        // mutably and the audio handle lives on the same `drones`.
+        let mut lock_sounds: Vec<(u32, [f32; 3])> = Vec::new();
         for (i, l) in self.drones.locks.iter_mut().enumerate() {
             match scanned_due.filter(|(li, _)| *li == i) {
                 Some((_, upgraded)) => {
@@ -2511,7 +2516,12 @@ impl Sim {
             // `Control_NextLOD` on the unlock (Lock_Unlock 0x1b0650:23 / case 1's framelist end): the
             // keypad's model becomes its LOD variant and keeps it (see `Lock::lod_next`).
             if l.unlocked || l.burned { l.lod_next = true; }
+            if !l.pending_sounds.is_empty() {
+                let pos = l.pos;
+                for id in l.pending_sounds.drain(..) { lock_sounds.push((id, pos)); }
+            }
         }
+        for (id, pos) in lock_sounds { self.drones.audio.play3d(id, pos, None); }
         self.pda_tick();
         self.smoke.retain(|s| !s.dead());
         let (trigger, reload) = if self.disabled { input = Default::default(); (false, false) } else { (trigger, reload) };
@@ -2526,7 +2536,15 @@ impl Sim {
         // (`death_tick` inside the drones' tick), and the other machines' replica of this slot
         // (`step_net_remotes`) stops on the shared state — so must the local body.
         let net_dead = self.net_dead();
-        let (mut input, trigger, reload, use_key) = if self.drones.death.active || menu_pause || net_dead {
+        // mission-hold: `Mission_Update` case 7 runs `GS_PausePlayer(1, 0)` EVERY tick of the
+        // banner hold — the 240-tick success hold (state 6) and the fail/death holds (states 2/3)
+        // alike [M 0x182c60:123-130 — the case body is unconditional in `InternalState` 7]. The
+        // player's input dies while the world and the HUD keep running (the banner's own message
+        // ticks down through `Text_UpdateMsg`, which no pause gate covers). Without the gate Bond
+        // kept walking/shooting under the "Mission Complete" box on 07000004 (level-04-mission-
+        // complete-early), where the game freezes him until case 4's load.
+        let mission_hold = self.drones.mission.internal == 7;
+        let (mut input, trigger, reload, use_key) = if self.drones.death.active || menu_pause || net_dead || mission_hold {
             (Default::default(), false, false, false)
         } else { (input, trigger, reload, use_key) };
         // gunimp: while a mounted gun owns the player (`GunImp_Activate` 0x132f00 — the 0xc
@@ -3304,6 +3322,14 @@ impl Sim {
             match e {
                 nf_game::nis::Request::PlayerDisable => {
                     self.disabled = true;
+                    // nis-timer-pause: the game's event-4 arm is Player_Disable +
+                    // PlarStat_LogTimerPause(0) [M 0x1d94c0:118-121] — the cut-scene freezes the
+                    // mission clock (the accumulator runs only while +0x34 == 0, [M 0x1995a0:9-14]);
+                    // Script_Free's re-enable unpauses it [M 0x1da880:44-48]. Without this, both of
+                    // 07000007's cut-scenes (SP #419 3000 ticks, SP #420 4326 ticks) keep the
+                    // timer row counting.
+                    // SP slot 0 [M — the game's call passes slot 0].
+                    self.drones.progress.stats[0].log_timer_pause();
                     // goggles: `Player_SetCamMode` 0x195928 clears viewer+0x236 on every camera
                     // -mode change (arms :15/:23/:27/:40) and `Camera_Reset` 0x1b9af0:50 clears
                     // it too — a cut-scene's cam hand-off kills the goggles view. The battery
@@ -3329,6 +3355,9 @@ impl Sim {
                     }
                 }
                 nf_game::nis::Request::PlayerEnable { at, .. } => {
+                    // nis-timer-pause: Script_Free's arm is Player_Enable +
+                    // PlarStat_LogTimerUnpause(0) [M 0x1da880:44-48 — +0x2C := the clock, +0x34 := 0].
+                    self.drones.progress.stats[0].log_timer_unpause(nf_game::progress::PlrMissionStats::now_100ths(self.drones.frame));
                     if let Some(m) = at {
                         self.bond = nf_game::player::Bond::stand_at(&self.world, [m[3][0], m[3][1], m[3][2]], m[2][0].atan2(m[2][2]));
                     }
@@ -7487,9 +7516,20 @@ pub fn build(level: &Level, cels_only: bool, skeletons: &HashMap<u8, Skeleton>, 
                 .filter(|p| p.flags & 0xff == 0x2f)
                 .flat_map(|p| [4u32, 5].map(|k| p.params.iter().find(|(i, _)| *i == k).map_or(0, |&(_, v)| v)))
                 .filter(|&h| h != 0).collect()).unwrap_or_default();
+            // fusebox-panel-14: a fusebox placement (0x31) carries its script in param 0 and
+            // `FuseBox_Create` runs it at load [M docs/levels/07000014.md 5; nf-game/fusebox.rs], so
+            // its entity streams (the wires behind the front panel) need draw slots like a placed
+            // player's. Without them the wires exist in `scripts.objects` but nothing draws them --
+            // the opened panel's recess rendered empty.
+            let fusebox_scripts: Vec<u32> = level.maps[m].placements.iter()
+                .filter(|p| p.flags & 0xff == 0x31)
+                .filter_map(|p| p.params.iter().find(|(k, _)| *k == 0).map(|&(_, v)| v))
+                .filter(|&v| v >= 0x0600_0000)
+                .collect();
             let mut hashes: Vec<u32> = players.iter().flat_map(|p| p.scripts).filter(|&h| h != 0)
                 .chain(switch_scripts)
                 .chain(copter_scripts)
+                .chain(fusebox_scripts.iter().copied())
                 .chain([0x0600_0052u32, 0x0600_0027, 0x0600_004f, 0x0600_07c4]).collect();
             let mut queued: std::collections::HashSet<u32> = hashes.iter().copied().collect();
             // lift-indicators-09: a SUB-script's entities need one draw slot per LIVE copy — every placed
@@ -7582,8 +7622,12 @@ pub fn build(level: &Level, cels_only: bool, skeletons: &HashMap<u8, Skeleton>, 
                                 // copy of the stream's entities (07000014's three vent lids are nine SPs on
                                 // 0x06000A3B — one slot drew only the newest lid; the hatch under the spawn
                                 // stayed invisible while it opened).
+                                // fusebox-panel-14: each fusebox placement runs its own player of the
+                                // same script, so its copies count toward the slot count the way a
+                                // placed SP's does.
+                                let boxes = fusebox_scripts.iter().filter(|&&v| v == h).count();
                                 let copies = sub_copies.get(&h).copied()
-                                    .unwrap_or_else(|| players.iter().filter(|p| p.scripts.contains(&h)).count())
+                                    .unwrap_or_else(|| players.iter().filter(|p| p.scripts.contains(&h)).count() + boxes)
                                     .clamp(1, 16);
                                 let inst = Instance { map, object, matrix: ident, placement: placement.clone() };
                                 for k in 0..copies {
@@ -9688,39 +9732,71 @@ pub fn build(level: &Level, cels_only: bool, skeletons: &HashMap<u8, Skeleton>, 
         // fix-facial3: drone-backed characters sample their own playing script's face window — the
         // same source the root-motion path reads (`Drone::script_frame`, the drone's live
         // `anim.script`/`ftime`); the script-object path keeps its live `Obj::Anim` frame.
+        // level-07-guest-faces: a drone whose body anim carries no facial window contributes NO
+        // base window — the blend still runs over a zero base (the game's gameplay base is the
+        // idle marker script's +0x54 buffer, `AnimFacialBlend` 0x1be648 reads only the three
+        // +0x80 marker scripts in gameplay — the body script's marker is 0 [M AnimScriptInit
+        // 0x1c1600:58-61]); the guest's idle anim (07000007 census) carries no face window, so the
+        // zero base is what lets the facial slots animate the face at all.
         let (script_h, frame) = match c.script {
-            Some(src) => s.script_anim(src, c.skin.hashcode)?,
+            Some(src) => { let (h, f) = s.script_anim(src, c.skin.hashcode)?; (Some(h), f) }
             None => {
                 let di = (*s.char_drone.get(ci)?)?;
                 let dr = &s.drones.list[di];
-                (dr.anim.script?, 1.0 + dr.anim.ftime)
+                (dr.anim.script, 1.0 + dr.anim.ftime)
             }
         };
-        let script = s.scripts.get(&script_h)?;
-        // cutscene-faces: the face window is the game's own classifier — the SEQUENCE's flags bit
-        // 0x8 [M AnimProcessScriptCmds 0x1c1b38: `*(int *)(lVar6 + 0xc) >> 3 & 1` on the raw
-        // sequence record; a facial window plays in the script's +0x54 slot via AnimSeqSet
-        // 0x1c7460's param_7 slot pick], the same rule `script_pose_together` poses bones by. The
-        // old `channels.len() == count` probe was fix-facial2's stand-in; the two agree on EVERY
-        // sequence on the disc — the census: 18,244 kind-4 sequences, flags {0x00 × 17363,
-        // 0x01 × 10, 0x08 × 871} and every flags-0x08 one has exactly 22 channels (a body window
-        // is 3·bones + 3·popcount(mask) — always ≡ 0 mod 3, so 22 can never be one). The game
-        // reads the slot buffer as `skin.facial` floats whatever the track carries
-        // [M AnimFacialBlend 0x1be648's uVar9 loop], and `facial_weights` keeps that count guard.
-        let win = script.sequences().filter(|(a, _, _)| (*a as f32) <= frame)
-            .filter_map(|(a, _, q)| s.seqs.get(&q).filter(|sq| sq.flags & 0x8 != 0).map(|sq| (a, q)))
-            .last()?;
-        let seq = s.seqs.get(&win.1)?;
-        let mut out = nf_game::anim::facial_weights(seq, (frame - win.0 as f32 + 1.0).max(1.0), count)?;
+        let mut out = match script_h.and_then(|h| s.scripts.get(&h)) {
+            Some(script) => {
+                // cutscene-faces: the face window is the game's own classifier — the SEQUENCE's
+                // flags bit 0x8 [M AnimProcessScriptCmds 0x1c1b38: `*(int *)(lVar6 + 0xc) >> 3 & 1`
+                // on the raw sequence record; a facial window plays in the script's +0x54 slot via
+                // AnimSeqSet 0x1c7460's param_7 slot pick], the same rule `script_pose_together`
+                // poses bones by. The old `channels.len() == count` probe was fix-facial2's
+                // stand-in; the two agree on EVERY sequence on the disc — the census: 18,244
+                // kind-4 sequences, flags {0x00 × 17363, 0x01 × 10, 0x08 × 871} and every
+                // flags-0x08 one has exactly 22 channels (a body window is 3·bones +
+                // 3·popcount(mask) — always ≡ 0 mod 3, so 22 can never be one). The game reads the
+                // slot buffer as `skin.facial` floats whatever the track carries
+                // [M AnimFacialBlend 0x1be648's uVar9 loop], and `facial_weights` keeps that count
+                // guard.
+                let win = script.sequences().filter(|(a, _, _)| (*a as f32) <= frame)
+                    .filter_map(|(a, _, q)| s.seqs.get(&q).filter(|sq| sq.flags & 0x8 != 0).map(|sq| (a, q)))
+                    .last();
+                match win {
+                    Some((wstart, q)) => {
+                        let seq = s.seqs.get(&q)?;
+                        nf_game::anim::facial_weights(seq, (frame - wstart as f32 + 1.0).max(1.0), count)?
+                    }
+                    // no face window on this script: a script actor keeps the cutscene-faces
+                    // model (None — no morph term; the game reads its never-started facial
+                    // slot's zeroed buffer [M AnimSeqNew 0x1c7248], visually the same neutral).
+                    // A DRONE falls through to the zero base — the facial slots (the talk
+                    // marker) still drive the face there (see below; the 07000007 guests'
+                    // idle anims carry no face window — the frozen-face bug).
+                    None if c.script.is_some() => return None,
+                    None => vec![0.0; count],
+                }
+            }
+            None if c.script.is_some() => return None,
+            None => vec![0.0; count],
+        };
         // fix-facial3: `AnimFacialBlend` (0x1be648) — the drone's facial script slots over the track
         // weights: slot 0 (the idle face) copies straight, slot 1 (the blink) overrides |w| > 0.01.
         // The drone's script-object sibling has no slots (the game's script objects get theirs from
         // the same driver — the difference is [S] unverified (kept out of pass/fail; the tracks
         // dominate there — AnimFacialBlend 0x1be648's per-object slot source not traced).
+        // level-07-guest-faces: slot 2 — the TALK marker 0xe0000002 script `NDrone2_SpeechSFX`
+        // 0x141b00 attached through `AnimFacialAppend` 0x1c6490 (`Drone.facial_talk`/`_start`, the
+        // port's +0x53c) — now feeds the blend too: it overrides |w| > 0.01 over the base, the
+        // game's gameplay talk layer [M 0x1be648's lVar6 arm; the marker set at 0x1c6490 (+0x80 =
+        // 0xe0000002)]. Slot time is the talk clock the op-1 sounds already run on (`now_t = frame
+        // − start + 1`, 1 on the attach tick — drone.rs's op-1 gate [M speech.md §5]); the
+        // window's frame is that minus the window's first frame.
         if c.script.is_none() {
             if let Some(di) = s.char_drone.get(ci).copied().flatten() {
                 let dr = &s.drones.list[di];
-                let now = dr.last_tick;
+                let now = s.drones.frame; // the clock `facial_talk_start` is stamped with (`let frame = self.frame`, Drones::tick_inner)
                 let slot_w = |slot: Option<(u32, u32)>| -> Option<Vec<f32>> {
                     let (h, start) = slot?;
                     if (now as i64) < start as i64 { return None; }
@@ -9731,8 +9807,20 @@ pub fn build(level: &Level, cels_only: bool, skeletons: &HashMap<u8, Skeleton>, 
                 };
                 let idle = slot_w(dr.facial_idle);
                 let blink = slot_w(dr.facial_blink);
-                if idle.is_some() || blink.is_some() {
-                    nf_game::anim::facial_blend(&mut out, idle.as_deref(), blink.as_deref(), None, [0, 0], false);
+                // the talk slot runs the op-1 talk clock: script time now_t = frame − start + 1
+                // (1 on the attach tick), and the window's frame = now_t − first + 1 — the same
+                // rule the body-window path applies (`(frame − wstart + 1)` above; `facial_weights`
+                // takes the frame directly).
+                let talk = dr.facial_talk.and_then(|h| {
+                    let start = dr.facial_talk_start;
+                    if (now as i64) < start as i64 { return None; }
+                    let fscript = s.scripts.get(&h)?;
+                    let (first, _, q) = fscript.sequences().next()?;
+                    let fseq = s.seqs.get(&q)?;
+                    nf_game::anim::facial_weights(fseq, (now - start) as f32 - first as f32 + 2.0, count)
+                });
+                if idle.is_some() || blink.is_some() || talk.is_some() {
+                    nf_game::anim::facial_blend(&mut out, idle.as_deref(), blink.as_deref(), talk.as_deref(), [0, 0], false);
                 }
             }
         }

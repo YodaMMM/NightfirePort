@@ -49,7 +49,9 @@ const BASELINE: &[(&str, &str)] = &[
     // their characters through the Drone+0xe0 rewrite (0x050000b1 → 0x0500008c before the
     // AnimObjectNew request [M 0x14b300:82-95, :563-565]) — +5 characters, +30005 vertices,
     // +59235 indices, +105 materials, +50005 char_verts, +15 attachments over the old pin.
-    ("07000014.bin", "9a182a2ecc59ce97 7144309 14840367 6566 6991376 98 13506 173 41 37 32"),
+    // fusebox-draw-slots re-pin: 07000014's five fusebox placements (kind 0x31) now seed their
+    // param-0 script 0x06000A1B, +20 script-entity slots (the cabinet and wire art) [M FuseBox_Create].
+    ("07000014.bin", "9e25e8e7f4e5bd74 7147319 14846157 6583 6994386 98 13526 173 41 37 32"),
     ("07000001.bin", "3efd2cdd3e5616ab 4396377 9211989 3491 4323075 76 9839 101 11 20 6"),
 ];
 
