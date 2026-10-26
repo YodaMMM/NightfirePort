@@ -3314,6 +3314,14 @@ impl Sim {
             match e {
                 nf_game::nis::Request::PlayerDisable => {
                     self.disabled = true;
+                    // nis-timer-pause: the game's event-4 arm is Player_Disable +
+                    // PlarStat_LogTimerPause(0) [M 0x1d94c0:118-121] — the cut-scene freezes the
+                    // mission clock (the accumulator runs only while +0x34 == 0, [M 0x1995a0:9-14]);
+                    // Script_Free's re-enable unpauses it [M 0x1da880:44-48]. Without this, both of
+                    // 07000007's cut-scenes (SP #419 3000 ticks, SP #420 4326 ticks) keep the
+                    // timer row counting.
+                    // SP slot 0 [M — the game's call passes slot 0].
+                    self.drones.progress.stats[0].log_timer_pause();
                     // goggles: `Player_SetCamMode` 0x195928 clears viewer+0x236 on every camera
                     // -mode change (arms :15/:23/:27/:40) and `Camera_Reset` 0x1b9af0:50 clears
                     // it too — a cut-scene's cam hand-off kills the goggles view. The battery
@@ -3339,6 +3347,9 @@ impl Sim {
                     }
                 }
                 nf_game::nis::Request::PlayerEnable { at, .. } => {
+                    // nis-timer-pause: Script_Free's arm is Player_Enable +
+                    // PlarStat_LogTimerUnpause(0) [M 0x1da880:44-48 — +0x2C := the clock, +0x34 := 0].
+                    self.drones.progress.stats[0].log_timer_unpause(nf_game::progress::PlrMissionStats::now_100ths(self.drones.frame));
                     if let Some(m) = at {
                         self.bond = nf_game::player::Bond::stand_at(&self.world, [m[3][0], m[3][1], m[3][2]], m[2][0].atan2(m[2][2]));
                     }
