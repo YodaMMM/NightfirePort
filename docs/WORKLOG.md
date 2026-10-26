@@ -105,3 +105,12 @@ Progress:
   the through-push stays. The mp digest pin: method only (NF_NET_HASHDBG needs no code change;
   baseline build at a7afd219 didn't fit).
 - left: land the door-state fix + full battery, the mp pin diff, the suite total line.
+
+## capsule-cull-and-los-masks-5 (2026-10-26, this window)
+
+Progress:
+- Branch from origin/s/capsule-cull-and-los-masks-4, merged origin/master (world.rs conflict
+  resolved to master's landed band-settle-3 radial-dir arm). This window: land round-4's
+  door-state fix in drone.rs set_dynamic (doors collide by Door_IsClosed 0x1367b0 — CLOSED
+  blocks; OPEN/OPENING/CLOSING leaves do not), review the SS parts (#205 safe door, #217
+  bolt) the same way, run the door family, then the mp digest pin per round-4 item 8.
