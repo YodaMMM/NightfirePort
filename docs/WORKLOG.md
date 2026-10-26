@@ -75,3 +75,15 @@ Progress:
 - left: walkreal_07000008 (thread-order-flaky at the :164 burn gate after the final master
   merge — instrumentation plan in the report), mp digest pin (baseline-diff method in the
   report), the full-suite total line.
+
+## capsule-cull-and-los-masks-4 (started 2026-10-26)
+
+Plan: branch from origin/s/capsule-cull-and-los-masks-3 (ca2e7389) + merged origin/master,
+pushed. The two round-3 leftovers:
+1. walkreal_07000008_live walk_the_gondola_to_the_briefcase_and_back (:164, ch 134 never
+   written) — env-gated [burn] trace at the contact site + NF_WALK_TRACE on the fusebox->safe
+   legs, separate the stance stall from the burn, fix the cause (push-tail gate suspect).
+2. mp_net_slots_post_move_live four_human_session_digest_is_pinned (:285) — baseline tree at
+   the pin's commit a7afd219 in its own CARGO_TARGET_DIR, per-tick component hashes on both
+   trees, first divergent component+tick, fix the port or re-derive the pin with the cause.
+Both must be green; the turret/armour/zoe/level_end groups must stay green.
