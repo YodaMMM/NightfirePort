@@ -117,7 +117,10 @@ final read) it had reached the `fix_*`/`s*` range with:
   final merged tree as noted above. Same for `fix_pickups_remainder_live`'s all-level census:
   it expected every 0xF0 placement to create — the kind-6 rows included — which the decompile
   contradicts [M 0x18dda0:93-95]; the expected set now skips the gated rows (fresh-boot word)
-  and the test re-ran green on the final tree (35.7 s).
+  and the test re-ran green on the final tree (35.7 s). Likewise
+  `interact_0700000c_live::the_static_world_kinds_all_register` pinned "pickups 15 [D]" — the
+  disc's PLACEMENT count; the fresh-boot load creates 11 (the four kind-6 rows gated [M
+  0x18dda0:93-95]) — re-pinned and re-run green.
 
 No total line yet — the run is longer than the window. The next message can resume from the
 branch and re-run `python3 tools/test/suite.py` for the full pass (the tree is merged with
