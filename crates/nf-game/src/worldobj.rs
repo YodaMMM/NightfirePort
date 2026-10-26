@@ -539,3 +539,28 @@ mod music_trigger_tests {
         assert_eq!(last_fire, 6 + 28, "the event stops 0x1e ticks after the re-arm stops");
     }
 }
+
+/// `rotor_update` 0x18f568: the object matrix rotation (obj+0x50) accumulates spin·FRAME_RATE_MUL
+/// every tick while the gate channel reads 0 (gate 0 = always spins), and freezes while it reads 1.
+/// The angle is the draw-side getter (07000011's three fans: #199/obj#128, #205/#206/obj#134).
+#[cfg(test)]
+mod rotor_tests {
+    use super::*;
+    use crate::triggers::Channels;
+
+    #[test]
+    fn rotor_tick_accumulates_and_gate_stops() {
+        let mut r = Rotor { spin: [0.25, 0.0, 0.0], gate: 7, angle: [0.0; 3] };
+        let mut ch = Channels::default();
+        r.tick(&ch);
+        r.tick(&ch);
+        assert!((r.angle[0] - 0.5).abs() < 1e-6, "two ticks add 2·spin: {}", r.angle[0]);
+        ch.set(7, 1, 1);
+        r.tick(&ch);
+        assert!((r.angle[0] - 0.5).abs() < 1e-6, "gate on: frozen at {}", r.angle[0]);
+        // Sister: gate 0 never freezes, even with a channel set.
+        let mut always = Rotor { spin: [0.0, 0.1, 0.0], gate: 0, angle: [0.0; 3] };
+        always.tick(&ch);
+        assert!((always.angle[1] - 0.1).abs() < 1e-6, "gate-0 rotor ignores the channels");
+    }
+}
