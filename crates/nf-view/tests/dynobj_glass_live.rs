@@ -118,6 +118,8 @@ fn the_16_screens_swap_with_their_channels() {
             .find(|d| d.slot as usize == di).is_some_and(|d| !d.dead && d.flags & 0x8010 == 0)).collect()
     };
     assert!(!scene.dynobj_matrices.is_empty(), "07000016 carries 0x3b rows [D the level-16 audit]");
+    for d in &scene.sim.as_ref().unwrap().drones.worldobjs.dynobjs { eprintln!("[dynobj] slot {} pos {:?} ch_a {:#x} ch_b {:#x} mode {} flags {:#x}", d.slot, d.pos, d.ch_a, d.ch_b, d.mode, d.flags); }
+    for di in 0..scene.dynobj_matrices.len() { eprintln!("[slot] {} verts {} m {:?}", di, scene.char_verts.iter().filter(|v| v.door == Some((base + di) as u16)).count(), scene.dynobj_matrices[di][3]); }
     let (s0, w0) = (shown(&scene), want(&scene));
     assert_eq!(s0, w0, "at load the drawn set is the sim's visible set [M 0x1e62d8:33]");
     for ch in [0x24u8, 0xcc] { scene.sim.as_mut().unwrap().drones.set_channel(ch); }

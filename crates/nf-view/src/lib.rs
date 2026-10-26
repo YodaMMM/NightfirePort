@@ -6453,6 +6453,9 @@ pub fn run() -> Result<()> {
             let shot_input = nf_game::player::Input { aiming: zoom_hold, zoom: zoom_hold, strafe: if strafe_hold { 1.0 } else { 0.0 }, ..Default::default() };
             // `--channels`: every switch channel on first (as K).
             if args.iter().any(|a| a == "--channels") { for c in 1..=255 { sim.drones.set_channel(c) } }
+            // `--set-channel N` (dev, headless too): raise one switch channel before the ticks — the window
+            // path raises it at frame 120; render checks of channel-driven draws need it here as well.
+            if let Some(c) = args.iter().position(|a| a == "--set-channel").and_then(|i| args.get(i + 1)).and_then(|v| v.parse::<u8>().ok()) { sim.drones.set_channel(c); }
             // `--hold-npcs` (dev): guards freeze where they stand but stay shootable — aim render checks at them.
             if args.iter().any(|a| a == "--hold-npcs") { sim.drones.hold_npcs = true; }
             // `--bond x,y,z`: Bond starts exactly there (in the air he falls), instead of the level start.
