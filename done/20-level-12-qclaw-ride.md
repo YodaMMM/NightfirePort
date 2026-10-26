@@ -20,3 +20,8 @@ say so in the report. Never weaken a decompile-backed test to make code pass.
 
 ---
 claimed-by: sandbox6 at 2026-10-26T22:23Z
+
+---
+## Report (done, 2026-10-26T23:18Z)
+
+Closed by the driver: the report is on `s/level-12-qclaw-ride` (docs/reports/level-12-qclaw-ride.md); the worker didn't run finish.sh.
