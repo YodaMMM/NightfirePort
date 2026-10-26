@@ -6954,6 +6954,16 @@ impl FrontEnd {
         bits
     }
 
+    /// pickup-medal-gate: the active profile's `bonus[0]` word — the game's `bonus[]` global
+    /// `LS_LoadBonus` 0x1ce488 fills from the save's BUNS block and `PlrStats_HasGoldMedal`
+    /// 0x199a40 reads for `Pickup_Create`'s kind-6 gate [M 0x18dda0:93-95]. 0 without a profile
+    /// (the fresh-boot BSS word [L ee_start_05 0x2e1b88]; a Play-without-saving session's awards
+    /// live only in the sim's own progress in the port [S — the game's globals would carry them,
+    /// see `unlock_mp_settings`'s note]).
+    pub fn bonus_bits(&self) -> u64 {
+        self.profile.as_ref().map_or(0, |p| p.progress.bonus[0])
+    }
+
     /// The SP list's driving handover [M `C_SBNFMAP` 0x20b8d8 case 0x4b → `ResetMap_LevelToLoad`
     /// 0x1d3800:104-108]: Some(hash) while the flow sits at GameFlow state 9 — the state whose
     /// game handler launches DRIVING.ELF (`Boot_GetPTPData` 0x1c8198 → `psiLaunchDriving`

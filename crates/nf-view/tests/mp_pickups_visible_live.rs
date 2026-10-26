@@ -81,6 +81,13 @@ fn mp_arena_set_pickups_follow_the_weapon_set_and_resolve() {
 
 /// Sister: the SP level 07000001 loads without a match and its pickups are unchanged — no
 /// weapon-set kinds, every pickup still drawn from its placement's own object, SP spin rule.
+/// The gold-medal `bonus[0]` word for `base_map` [M PlrStats_HasGoldMedal 0x199a40;
+/// Menu_SetLevelBonus 0x1ffa10 is the award arm]. pickup-medal-gate.
+fn gold_bits(base_map: u32) -> u64 {
+    let mut p = nf_game::progress::Progress::default();
+    p.set_level_bonus(base_map, 3, 0);
+    p.bonus[0]
+}
 #[test]
 fn sp_level_pickups_are_unchanged() {
     let Some(iso) = iso() else { eprintln!("NF_ISO not set — skipping"); return };
@@ -89,7 +96,10 @@ fn sp_level_pickups_are_unchanged() {
     let mi = level.main_map().unwrap();
     let f0: Vec<&Placement> = level.maps[mi].placements.iter().filter(|p| p.flags & 0xff == 0xf0).collect();
     assert_eq!(f0.len(), 6, "07000001 places six pickups [D: kinds 1 x2, 3 x2, 6 x2]");
-    let scene = nf_view::load(&iso, "07000001.bin", false).expect("07000001 loads");
+    // pickup-medal-gate: the two kind-6 rows create only with 07000001's gold medal recorded
+    // [M 0x18dda0:93-95; the mission table pairs 07000001 → BaseMap 0x07000001 [L ee_start_05
+    // 0x2a4350], whose gold bit is the 0x0700001/1b kind-4 group's rank 0 [L 0x2bc920 row 4]].
+    let scene = nf_view::load_with_carry_medals(&iso, "07000001.bin", false, None, 1, gold_bits(0x0700_0001)).expect("07000001 loads");
     let sim = scene.sim.as_ref().expect("the sim builds");
     let pickups = &sim.drones.pickups;
     // Every 0xF0 placement created its pickup, at the placement's own spot (the index pairing holds).

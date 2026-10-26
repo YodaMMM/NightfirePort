@@ -317,6 +317,27 @@ pub struct DroneContext {
     /// mp-character-data: the 16 animation-set descriptors (ACTION.ELF 0x2b91b0..0x2b9430) [D] —
     /// the ids `mp_body_pose` returns.
     pub mp_anims: Option<nf_formats::mpanim::MpAnimSets>,
+    /// pickup-medal-gate: the game's `bonus[0]` word (0x2e1b88, the player-0 u64 the save's BUNS
+    /// block carries [M LS_LoadBonus 0x1ce488 → Menu_SetBonus(…, 0)]) — the state
+    /// `PlrStats_HasGoldMedal` 0x199a40 reads for `Pickup_Create`'s kind-6 gate [M 0x18dda0:93-95].
+    /// The front end passes the active profile's word; 0 = the fresh-boot BSS state [L ee_start_05
+    /// 0x2e1b88 all zero].
+    pub bonus: u64,
+}
+
+impl DroneContext {
+    /// `Mission_BaseMapHCode()` 0x1830a0 + `PlrStats_HasGoldMedal` 0x199a40 for the build's level:
+    /// the `LEVELS` row's `mission` hash for `level_id` — the same lookup `Mission_Init` 0x182270
+    /// runs over the game's 24-record mission table (the port's `crate::mission::LEVELS` [L
+    /// ee_start_05.bin 0x2a4350], SP arm `MPSettings+0x384 == 0` → `BaseMap` [M 0x1830a0:3-5]) —
+    /// then the gold bit over `bonus`. A level with no row (the front end 0x07000048, the MP maps)
+    /// plays BaseMap −1 → no RewardsTable row → no medal → the gate stays shut, as the game's.
+    pub fn has_gold_medal(&self, level_id: u32) -> bool {
+        match nf_game::mission::LEVELS.iter().find(|l| l.level == level_id) {
+            Some(l) => nf_game::progress::has_gold_medal(self.bonus, l.mission),
+            None => false,
+        }
+    }
 }
 
 /// mp-combat-weapons: one released round as the local fire pipeline produced it — what the
@@ -6254,7 +6275,7 @@ fn pool_replay(groups: &mut Groups, rec: &PoolRecord, attachment: Option<u32>) {
 /// this way [D the level-bin script; the parked 0xF0 placements sit 10 units east, inside the east
 /// wall]. Scans `level.nis` sorted by hashcode (deterministic); pack scripts (07x00008) are not in
 /// the level archive and fall back to the runtime's no-slot push (takeable, by-hash mesh).
-fn script_pickup_reservations(level: &Level, weapons: &nf_formats::weapon::WeaponData, models: &std::collections::HashMap<u32, nf_game::pickup::Model>, level_id: u32) -> (Vec<nf_game::pickup::Pickup>, Vec<((u32, u8), usize)>) {
+fn script_pickup_reservations(level: &Level, weapons: &nf_formats::weapon::WeaponData, models: &std::collections::HashMap<u32, nf_game::pickup::Model>, level_id: u32, has_gold_medal: bool) -> (Vec<nf_game::pickup::Pickup>, Vec<((u32, u8), usize)>) {
     let mut out = Vec::new();
     let mut slots = Vec::new();
     let mut hashes: Vec<u32> = level.nis.keys().copied().collect();
@@ -6274,7 +6295,7 @@ fn script_pickup_reservations(level: &Level, weapons: &nf_formats::weapon::Weapo
                 [key[0], key[1], key[2]], [0.0; 3], p(0) as u16, p(1) as u16,
                 nf_game::pickup::Pickup::create_rounds_override(level_id, p(1) as u16, p(2) as u16 as i16),
                 p(3) as u16, p(4) as u16, p(5) as u16, 0, obj_.hashcode,
-                nf_game::pickup::Model { centre: obj_.centre, radius: obj_.radius }, weapons, models) else { continue };
+                nf_game::pickup::Model { centre: obj_.centre, radius: obj_.radius }, weapons, models, has_gold_medal) else { continue };
             pk.label = 0; // [M 0x1d8c1c delay slot `sw $zero, 0x20($sp)`]: the SCRIPT arm passes label 0 —
                           // unlike the placements, Script_CreateEntity never reads record+0x44 (param 6).
                           // pickups-g029: the old p(6) stood in for the placement rule.
@@ -6770,6 +6791,7 @@ impl Scene {
     weapons: &nf_formats::weapon::WeaponData,
     level_id: u32,
     models: &std::collections::HashMap<u32, nf_game::pickup::Model>,
+    has_gold_medal: bool,
 ) -> Option<nf_game::pickup::Pickup> {
     let param = |idx: u32| -> u32 { p.params.iter().find(|(i, _)| *i == idx).map(|(_, v)| *v).unwrap_or(0) };
     let type_ = param(0) as u16;
@@ -6804,7 +6826,7 @@ impl Scene {
         }
         (false, _) => {
             let (model, bounds, obj) = obj?;
-            let mut p2 = nf_game::pickup::Pickup::create_placed(p.translation, p.rotation, type_, id, rounds, switch_channel, sound, respawn as u16, lifetime, model, bounds, weapons, models)?;
+            let mut p2 = nf_game::pickup::Pickup::create_placed(p.translation, p.rotation, type_, id, rounds, switch_channel, sound, respawn as u16, lifetime, model, bounds, weapons, models, has_gold_medal)?;
             p2.obj = Some(obj);
             p2
         }
@@ -6959,12 +6981,12 @@ pub fn build(level: &Level, cels_only: bool, skeletons: &HashMap<u8, Skeleton>, 
             let mp_row = mp.map(nf_game::mp::equip::weapon_row);
             let placed_pickups: Vec<nf_game::pickup::Pickup> = level.maps[mm].placements.iter()
                 .filter(|p| p.flags & 0xff == 0xf0)
-                .filter_map(|p| Self::placed_pickup_from_placement(level, p, mm, mp_row.as_ref(), &placed_weapons, drones.map(|d| d.level_id).unwrap_or(0), &hoist_models))
+                .filter_map(|p| Self::placed_pickup_from_placement(level, p, mm, mp_row.as_ref(), &placed_weapons, drones.map(|d| d.level_id).unwrap_or(0), &hoist_models, drones.map_or(false, |d| d.has_gold_medal(d.level_id))))
                 .collect();
             // fix-safe08: the scripts' obj_type-0xF0 Entity spawns reserve slots after the placed
             // pickups, in the SAME order the sim build appends them (the draw slot k must equal the
             // sim's pickups[k]).
-            let (reserved, _render_slots) = script_pickup_reservations(level, &placed_weapons, &hoist_models, drones.map(|d| d.level_id).unwrap_or(0));
+            let (reserved, _render_slots) = script_pickup_reservations(level, &placed_weapons, &hoist_models, drones.map(|d| d.level_id).unwrap_or(0), drones.map_or(false, |d| d.has_gold_medal(d.level_id)));
             let reserved_len = reserved.len();
             let mut placed_pickups = placed_pickups;
             placed_pickups.extend(reserved);
@@ -8774,9 +8796,9 @@ pub fn build(level: &Level, cels_only: bool, skeletons: &HashMap<u8, Skeleton>, 
             // pickups[k] pair the draw slots and model the match's weapons.
             let placed_pickups: Vec<nf_game::pickup::Pickup> = level.maps[m].placements.iter()
                 .filter(|p| p.flags & 0xff == 0xf0)
-                .filter_map(|p| Self::placed_pickup_from_placement(level, p, m, mp_row.as_ref(), &weapons, d.level_id, &pickup_models))
+                .filter_map(|p| Self::placed_pickup_from_placement(level, p, m, mp_row.as_ref(), &weapons, d.level_id, &pickup_models, d.has_gold_medal(d.level_id)))
                 .collect();
-            let (reserved, sim_slots) = script_pickup_reservations(level, &weapons, &pickup_models, d.level_id);
+            let (reserved, sim_slots) = script_pickup_reservations(level, &weapons, &pickup_models, d.level_id, d.has_gold_medal(d.level_id));
             let placed_len = placed_pickups.len();
             drones.pickups.extend(placed_pickups);
             drones.pickups.extend(reserved);
