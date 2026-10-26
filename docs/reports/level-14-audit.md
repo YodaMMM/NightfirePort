@@ -89,12 +89,18 @@ all 10 NIS + all mission records `none`.
 
 ## Suite
 
-The suite was restarted at ~10:19 UTC (the 08:51 start had died: cargo missing from the nohup
-PATH, then the ALSA pkgconfig path fixed). **No completed total line at report time** — the run
-outlives this report; read `tail -1 suite.out` + `grep -E "FAILED|TIMEOUT|CRASH" suite.out` on
-the branch checkout for the result. Touched crate: nf-game only; the new weather test ran green
-by hand. On the final tree the only expected deltas vs master are the weather change + the new
-test + the audit/report docs.
+The suite was restarted at ~09:59 UTC (the 08:51 start had died: cargo missing from the nohup
+PATH, then the ALSA pkgconfig path fixed). Build ok: **822 test binaries in 1080 s**; the run was
+still in progress when the sandbox ended — **no total line at report time**; read
+`tail -1 suite.out` + `grep -E "FAILED|TIMEOUT|CRASH" suite.out` on the branch checkout for the
+final result. Observed before the sandbox ended (suite.out, 10:37 UTC): FAILED
+identity_disc::the_real_disc_passes_the_identity_check, FAILED disc_golden::bigf_header_fields…,
+FAILED disc_golden::bigf_tables…, FAILED disc_golden::directory_tree… (this onfoot image is
+re-laid-out — FILES.BIN at LBA 145346, not the golden 817977 — so the disc-identity/golden
+binaries cannot match on it; nf-formats is untouched by this branch), CRASH
+net_match_end_clients_live (exit -9, the sandbox's known 4 GB-ceiling kill). Touched crate:
+nf-game only; the new weather test ran green by hand
+(`cargo test -p nf-game --test weather_env_07000014_live` = 1 passed).
 
 ## What's left
 
