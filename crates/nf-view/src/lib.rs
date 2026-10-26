@@ -3887,9 +3887,13 @@ impl App {
                     }
                 }
                 // psiMovieFinished [M 0x1082e8, polled by the page's 0x50]: while the real movie
-                // decodes the headless budget is held; its end is the finish.
-                match &self.movie {
+                // decodes the headless budget is held; its end is the finish. The no-decode
+                // player's BGFMVPlaying stand-in advances one frame per poll ([`Player::
+                // headless_advance`] — the opened PSS holds for its real length [M 0x1081a8 +
+                // 0x108060]).
+                match &mut self.movie {
                     Some(p) if p.code() == code && !p.is_looping() => {
+                        p.headless_advance();
                         if p.finished() { fe.intro_movie_finished(); } else { fe.intro_live = true; }
                     }
                     _ => {}
@@ -3932,7 +3936,13 @@ impl App {
                     }
                 }
             }
-            if self.movie.as_ref().is_some_and(|p| p.code() == code && p.finished()) {
+            // psiMovieFinished [M 0x1082e8]: the poll advances the no-decode stand-in one frame
+            // per call ([`Player::headless_advance`]).
+            let ended = match self.movie.as_mut() {
+                Some(p) if p.code() == code => { p.headless_advance(); p.finished() }
+                _ => false,
+            };
+            if ended {
                 // The 0x50 finish arm restarts the pair while it is down [M 0x20a1f0:34-39].
                 fe.music.movie_finished();
                 fe.attract_movie_finished();
@@ -6953,24 +6963,51 @@ pub fn mission_movie_glue(fe: &mut menu::FrontEnd, slot: &mut Option<movie::Play
         }
         match slot {
             Some(p) => {
-                // BGFMVPlaying follows the player: 1 while it decodes, 0 at the end of file —
-                // state 6 pops through the psiMovieFinished arm on the next main_tick
-                // [M 0x1082e8 + 0x1c98c8 case 6].
+                // BGFMVPlaying follows the player: 1 while the movie's frames are unconsumed,
+                // 0 once they are — state 6 pops through the psiMovieFinished arm on the next
+                // main_tick [M 0x1082e8 + 0x1c98c8 case 6]. On EVERY build the hold is the
+                // host's per-frame poll count to the movie's real length [M 0x1081a8's
+                // BGFMVPlaying = 1 + 0x108060's end-of-file clear; D the PSS's audio track]:
+                // the stand-in advances one frame per host call, then `finished` fires and the
+                // pop is the game's own — the `movies` feature's decoder thread only feeds the
+                // picture path and does not pace this decision (mission-outros-4).
+                p.headless_advance();
                 fe.flow.movie_playing = !p.finished();
             }
             None => {
                 let code = fe.flow.movie_code;
                 if code != 0 {
-                    match movie::Player::start(iso, code, movie_sfx_volume(fe)) {
-                        Ok(p) => {
-                            eprintln!("movie: playing {code:08x} (state 6)");
-                            fe.flow.movie_playing = true; // BGFMVPlaying = 1 [M 0x1081a8]
-                            *slot = Some(p);
+                    // mission-outros: the subtitle script rides the movie [M 0x1d6360's
+                    // SP_Create beside psiStartBackgroundMovie] — loaded once off 07000500.bin.
+                    if fe.flow.outro_subs.is_none() {
+                        fe.flow.outro_subs = menu::subtitle_track(iso, code);
+                        if let Some(t) = &fe.flow.outro_subs {
+                            eprintln!("movie: subtitle track {code:08x} → {} entries, length {}", t.entries.len(), t.length);
                         }
-                        Err(e) => {
-                            eprintln!("movie: {code:08x} not started: {e:?} — the headless countdown stands in");
-                            fe.flow.movie_playing = false; // an un-started movie: BGFMVPlaying == 0 [M 0x1082e8]
+                    }
+                    if !fe.flow.outro_hold_armed {
+                        match movie::Player::start(iso, code, movie_sfx_volume(fe)) {
+                            Ok(p) => {
+                                eprintln!("movie: playing {code:08x} (state 6)");
+                                fe.flow.movie_playing = true; // BGFMVPlaying = 1 [M 0x1081a8]
+                                *slot = Some(p);
+                            }
+                            Err(e) => {
+                                eprintln!("movie: {code:08x} not started: {e:?} — the headless countdown stands in");
+                                fe.flow.movie_playing = false; // an un-started movie: BGFMVPlaying == 0 [M 0x1082e8]
+                                // mission-outros: the no-movie hold runs the subtitle track's
+                                // length — the game holds state 6 on the retail PSS's life
+                                // [M 0x1082e8], and on a stubbed image (a test image's
+                                // /MOVIES/*.PSS are 0-byte [D]) it would pop at once; the
+                                // track's length keeps the outro up with its text. [S] the
+                                // stand-in duration — the retail timing (the track spans the
+                                // movie [D the parsed lengths 2695/2292]) — is the model.
+                                if let Some(t) = &fe.flow.outro_subs { fe.flow.movie_frames = t.length; }
+                                fe.flow.outro_hold_armed = true;
+                            }
                         }
+                    } else {
+                        fe.flow.movie_playing = false;
                     }
                 } else {
                     fe.flow.movie_playing = false;
@@ -6999,6 +7036,12 @@ pub fn mission_movie_glue(fe: &mut menu::FrontEnd, slot: &mut Option<movie::Play
             // (`briefing_plays_live`, bisected to the a2cdd771 merge).
             let code = fe.flow.level_to_load;
             if matches!((code >> 20) & 0xff, 0x71 | 0x73) {
+                // mission-outros: the subtitle script loads with the movie [M 0x1d6360's
+                // SP_Create beside psiStartBackgroundMovie — the early-started decoder still
+                // runs beside it].
+                if fe.flow.outro_subs.is_none() {
+                    fe.flow.outro_subs = menu::subtitle_track(iso, code);
+                }
                 match movie::Player::start(iso, code, movie_sfx_volume(fe)) {
                     Ok(p) => {
                         *slot = Some(p);

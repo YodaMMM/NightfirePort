@@ -346,6 +346,21 @@ pub struct GameFlow {
     /// `GetLevelToLoadFromMovieCode` 0x1d3560]. The host reads and clears it to schedule the real
     /// level load after the movie (and to drop the front end when it is a mission).
     pub phase2_resolved: Option<u32>,
+    /// mission-outros: the active movie's subtitle track — the game SP_Creates the matched script
+    /// object beside every whitelisted movie [M `ResetMap_Load` 0x1d6360's script switch:
+    /// `hashtable_getitem` → `SP_Create`]; the host loads it off 07000500.bin (`subtitle_track`).
+    pub outro_subs: Option<SubtitleTrack>,
+    /// mission-outros: the subtitle clock (ticks since the state-6 hold began) — the game's SP
+    /// clock runs from the SP_Create [M 0x1db9a8/0x1dbda8]. Fields on their own lines [WORKLOG
+    /// lesson 4].
+    pub outro_sub_clock: u32,
+    /// mission-outros: the active subtitle right now — (the text label, the ticks left) — the
+    /// draw reads it over the movie frame; None between entries.
+    pub outro_sub_active: Option<(u32, u32)>,
+    /// mission-outros: the no-movie hold armed once — when the PSS can't start (a stubbed
+    /// image), the state-6 hold runs the track's length instead of popping at once [S — see
+    /// mission_movie_glue].
+    pub outro_hold_armed: bool,
 }
 
 impl GameFlow {
@@ -422,8 +437,19 @@ impl GameFlow {
             // holds — psiMovieFinished is BGFMVPlaying == 0 [M 0x1082e8], and the host clears
             // movie_playing when the decoder ends; the skip goes through skip_movie. The frame
             // countdown only runs when no real movie ever started (the slim ISO's zeroed PSS
-            // files, fix-menus' headless model).
+            // files, fix-menus' headless model) — mission-outros: it is the subtitle track's
+            // length there, so the outro stays up with its text.
             ST_MOVIE => {
+                // The subtitle script ticks alongside the movie [M 0x1d6360's SP_Create beside
+                // psiStartBackgroundMovie; the track's timed Text commands [D 07000500.bin]] —
+                // the active entry rides the clock the draw can read.
+                if self.outro_subs.is_some() {
+                    self.outro_sub_clock = self.outro_sub_clock.saturating_add(1);
+                    let t = self.outro_sub_clock;
+                    self.outro_sub_active = self.outro_subs.as_ref().and_then(|tr|
+                        tr.entries.iter().find(|e| t >= e.tick && t < e.tick + e.show)
+                            .map(|e| (e.label, e.tick + e.show - t)));
+                }
                 if self.movie_playing { return; }
                 self.movie_frames = self.movie_frames.saturating_sub(1);
                 if self.movie_frames == 0 { self.pop_state(); }
@@ -711,6 +737,90 @@ pub fn outro_for(level: u32) -> u32 {
         0x0700_001b => 0x0730_001b,
         _ => FRONTEND_LEVEL,
     }
+}
+
+/// mission-outros: the movie-code → subtitle-script map [M `ResetMap_Load` 0x1d6360's script
+/// switch — for every whitelisted movie the loader looks the code's script up
+/// (`hashtable_getitem`) and `SP_Create`s it beside `psiStartBackgroundMovie`; the pairs below
+/// are that switch's arms verbatim]. The scripts are the movies' subtitle tracks [D
+/// 07000500.bin's type-7 entries — each decodes to a single stream of timed `Text` commands;
+/// the two this task owns: 0x0730004's 0x0600095d (length 2695) and 0x0730013's 0x06000968
+/// (length 2292)]. 0 = the code has no arm (no SP is created).
+pub fn outro_script_for(movie_code: u32) -> u32 {
+    match movie_code {
+        0x0730_0004 => 0x0600_095d,
+        0x0730_0008 => 0x0600_0962,
+        0x0730_000b => 0x0600_0964,
+        0x0730_000d => 0x0600_0966,
+        0x0730_0013 => 0x0600_0968,
+        0x0730_0017 => 0x0600_097a,
+        0x0730_001b => 0x0600_096c,
+        0x0710_0001 => 0x0600_095a,
+        0x0710_0005 => 0x0600_0961,
+        0x0710_0009 => 0x0600_0963,
+        0x0710_000c => 0x0600_0965,
+        0x0710_0011 => 0x0600_0967,
+        0x0710_0014 => 0x0600_0969,
+        0x0710_0018 => 0x0600_096b,
+        _ => 0,
+    }
+}
+
+/// One timed `Text` of a subtitle track [D 07000500.bin: the script streams decode to
+/// `Wait`/`Marker`/`Text{label,time}` sequences; the `Marker` right after each `Text` stamps
+/// the absolute tick it shows at, `time` is its display life].
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct SubtitleEntry {
+    pub tick: u32,
+    pub label: u32,
+    pub show: u32,
+}
+
+/// The whole track: the entries in play order + the script's own length (the header's `length`
+/// [D 07000500.bin: 0x0600095d → 2695, 0x06000968 → 2292]) — the state-6 hold runs this long
+/// when the movie data is absent [S — the port's stand-in for the retail PSS's duration, which
+/// the game holds to via `BGFMVPlaying` [M 0x1082e8]; on a stubbed image the game pops at once,
+/// the port keeps the outro up with its text].
+#[derive(Clone, Debug, Default, PartialEq)]
+pub struct SubtitleTrack {
+    pub entries: Vec<SubtitleEntry>,
+    pub length: u32,
+}
+
+/// mission-outros: the subtitle track for a movie code, read off the disc [D
+/// FILES.BIN → 07000500.bin (the shared movie PTP the loader fetches first — `LoaderLoad(0,
+/// 0x07000500)` [M 0x1d6360 phase 0]), the type-7 script `outro_script_for(code)` names,
+/// `Nis::parse`]. None when the code has no script arm or the archive/entry is missing.
+pub fn subtitle_track(iso_path: &str, movie_code: u32) -> Option<SubtitleTrack> {
+    let hash = outro_script_for(movie_code);
+    if hash == 0 { return None; }
+    let img = nf_formats::iso9660::IsoImage::open(iso_path).ok()?;
+    let (entries, bin) = nf_formats::disc::files_bin_entries(&img).ok()?;
+    let fe = entries.iter().find(|e| e.name.eq_ignore_ascii_case("07000500.bin"))?;
+    let data = img.read_bytes(bin.lba as u64 * 2048 + fe.offset as u64, fe.size as u64).ok()?;
+    let lb = nf_formats::levelbin::LevelBin::parse(&data).ok()?;
+    let e = lb.entries.iter().find(|e| e.name == format!("{hash:08x}"))?;
+    let blob = lb.data(&data, e);
+    let nis = nf_formats::nis::Nis::parse(hash, blob).ok()?;
+    // The track: each `Text` stamps at the `Marker` that follows it; the header's `length` is
+    // the hold [D the parsed headers].
+    let mut out = SubtitleTrack { entries: Vec::new(), length: nis.length as u32 };
+    let mut pending: Option<(u32, u32)> = None; // (label, show)
+    for (si, st) in nis.streams.iter().enumerate() {
+        if si > 0 { break; } // the tracks are single-stream [D the parsed scripts]
+        for c in st.decode() {
+            match c {
+                nf_formats::nis::Cmd::Text { label, time } => pending = Some((label, time as u32)),
+                nf_formats::nis::Cmd::Marker(m) => {
+                    if let Some((label, show)) = pending.take() {
+                        out.entries.push(SubtitleEntry { tick: m as u32, label, show });
+                    }
+                }
+                _ => {}
+            }
+        }
+    }
+    Some(out)
 }
 
 /// The difficulty choices [M Txt 0x14d/0x14e/0x14f = "Operative"/"Agent"/"00 Agent" (USATxt.dat), the
