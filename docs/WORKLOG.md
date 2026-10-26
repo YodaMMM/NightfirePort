@@ -26,3 +26,16 @@ Work Log:
 
 Stage Summary:
 - docs/levels/07000008-audit.md complete (the 996 sweep + 308 placement rows + scripts + mission records); ss.rs/drone.rs carry the sound fix; suite in flight.
+
+---
+Task ID: level-08-audit
+Agent: worker (s/level-08-audit)
+Task: (continuation) the 08-relevant tests validated on the final tree; report drafted.
+
+Work Log:
+- Ran the prebuilt 08 test binaries directly (lock-free): simplescript 2/2, fix_safe08 5/5, pickups08 5/5, fix_fusebox_cut 4/4, decomp_audit_07000008 1/1, hurt_07000008 2/2, walk_07000008 3/3, walkreal_07000008 4/4 (153.7s), cutscene_08_actors 2/2 — the SS operate-sound change is validated on every 08 path that touches ss.rs.
+- The full suite (tools/test/suite.py) build ok (811 binaries, 1059s); the run phase is alphabetical and was still in the c's at 04:26 — it cannot finish inside the window; the report carries the partial + the direct-run list.
+- docs/reports/level-08-audit.md drafted (Usage: not visible to me).
+
+Stage Summary:
+- The audit, the fix and the validation are all on the branch; finish steps next (push, report, finish.sh, ntfy).
