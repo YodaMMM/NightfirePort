@@ -70,3 +70,18 @@ report + finish.
   the lift floor under Bond. Decode the pack's Entity/Anim/attach streams, pin the ops [M
   0x1d94c0 family, Script_GetObj 0x1db688], port the missing ops/lookups. Sandbox fresh: repo +
   work-slim + onfoot ISO re-downloaded; branch pushed as checkpoint.
+- (17:20-19:15 UTC) Probe session: the pack 0x060006cf decoded from the disc (nf-extract + a
+  python levelbin walk); the ride-scene objects pinned live in a new nf-view test
+  (ride_cutscene_objects_live): the sim carries the satchel entity 0x02000758 (s7, keyed local,
+  base-composed — first seen (3.43,−52.05,−4.21), still moving at t300), the lift floor 0x020006ee
+  (s13), NIS_P99 0x020006b1 (s12), NIS_LIFTHATCH 0x020006e1 (s10); the s3 guard anim (0x0500004)
+  carries the event-0xB weapon byte 0x18 [M 0x1d94c0 case 0xb]; all three characters pose
+  (pack sequences 0x040005fd/fe/ff + 0x040006e6/7/8 loaded). FOUND GAP (not yet fixed — 19:19
+  sandbox line): the render's script-anim characters draw the pose root RAW (identity object
+  matrix) but the pack's body-sequence roots are CAR-LOCAL [D 0x040005fd ch0 f1 (2.35, 0.85,
+  −0.64), the same space as the satchel's local keys] and SP #289's base is the car (0,−53.53,
+  −3.38) [D placement; #273 plays the same pack at base (0,0,0)] — the cast (and the satchel on
+  the guard's hand datum) draws ~53 units off, at the map top. Fix recipe in the report: carry
+  the SP base on Obj::Anim at Script_AnimStart and compose it in frame_state_for's script arm.
+  Two SPs (#273/#289) play the pack — the entity draw slots are per-copy k (2 each), the anim
+  characters are per-skin singletons following the newest match.
