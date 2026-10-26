@@ -14599,8 +14599,8 @@ fn segment_hits_sphere(a: V3, b: V3, c: V3, r: f32) -> bool {
         // sphere 1.0 vs the object's sphere) — 2.2 like the SS arm in the view. NOTE: while the
         // monitor view stands this arm must NOT run — the game's `Player_Update` returns early
         // [M 0x193600:80-87 behind `Player_Disable` 0x195f70:16] so `Player_Activate` never
-        // fires, and the edge's only consumer is `Monitor_Update`'s arm — scene.rs routes it
-        // through `monitor_use_edge` below.
+        // fires, and the press edge's only consumer is `Monitor_Update`'s own arm — the edge
+        // rides the monitors' tick (`drones.tick(..., monitor_edge)` from scene.rs).
         for (mi, m) in self.monitors.list.iter().enumerate() {
             let dx = m.pos[0] - head[0]; let dy = m.pos[1] - head[1]; let dz = m.pos[2] - head[2];
             if dx*dx + dy*dy + dz*dz <= 2.2f32*2.2f32 {
@@ -14608,18 +14608,6 @@ fn segment_hits_sphere(a: V3, b: V3, c: V3, r: f32) -> bool {
                 break;
             }
         }
-    }
-
-    /// `Monitor_Update` 0x1afcc8:118-158's action-0xE press edge while the view stands — the
-    /// edge's ONLY consumer (the player's `Player_Activate` is behind the freeze [M
-    /// `Player_Disable` 0x195f70:16 → `Player_Update` 0x193600:80-87 early-return]). Runs the
-    /// cycle/exit arm on the viewing monitor; returns true when the view ended (the game's
-    /// restore arm :159-168 — `Player_Enable` 0x195498 zeroes the velocities, scene.rs mirrors
-    /// that on the sim side).
-    pub fn monitor_use_edge(&mut self) -> bool {
-        let Some(mi) = self.monitors.list.iter().position(|m| m.state == 2) else { return false; };
-        self.monitors.activate(mi, &mut self.sensors);
-        self.monitors.list[mi].state != 2
     }
 
     /// The class-0x1D trigger half of `Player_Activate` (0x1a5170:134-137). Bond's use sphere (radius 1.0 at
@@ -15187,17 +15175,17 @@ fn segment_hits_sphere(a: V3, b: V3, c: V3, r: f32) -> bool {
             _ => true,
         }
     }
-    pub fn tick(&mut self, d: &Data, player: &Player) {
+    pub fn tick(&mut self, d: &Data, player: &Player, monitor_edge: bool) {
         if self.hold_npcs && self.npc_enabled {
             self.npc_enabled = false;
             self.hold_active = true;
-            self.tick_inner(d, player);
+            self.tick_inner(d, player, monitor_edge);
             self.hold_active = false;
             // Dev-only: a script's event 5 during a held tick is not kept (the hold already freezes them).
             self.npc_enabled = true;
             return;
         }
-        self.tick_inner(d, player);
+        self.tick_inner(d, player, monitor_edge);
     }
 
     /// `NDrone2_FindOpponent` 0x1424e0's team-2 arm, per tick (the ControlSTANDARD 0x1490f0:167
@@ -15285,7 +15273,7 @@ fn segment_hits_sphere(a: V3, b: V3, c: V3, r: f32) -> bool {
             .map(|(i, _)| i).collect()
     }
 
-    fn tick_inner(&mut self, d: &Data, player: &Player) {
+    fn tick_inner(&mut self, d: &Data, player: &Player, monitor_edge: bool) {
         // options-census: the health-pane fade alpha decays while the Advanced row (0x1000_023b,
         // PlayerSetting+0x0b) is set [M Player_Update 0x193600:414-429 — BLData+0x8bc loses
         // 0.0020833·FRAME_RATE_MUL per tick, clamped at 0; row 0 pins it to 1.0].
@@ -15756,9 +15744,11 @@ fn segment_hits_sphere(a: V3, b: V3, c: V3, r: f32) -> bool {
             &mut self.music,
         );
         drop(_pwo);
-        // `Monitor_Update` 0x1afcc8: the viewing monitors latch the watched sensor's
-        // monitor-view channel and set its +0x60 unhide; the exit cooldown drains.
-        self.monitors.tick(&mut self.sensors, &mut self.channels, frame);
+        // `Monitor_Update` 0x1afcc8: the viewing monitors consume the action-0xE press edge
+        // (the game polls it INSIDE this update, :117-118), latch the watched sensor's
+        // monitor-view channel and set its +0x60 unhide; the exit cooldown drains — a separate
+        // switch arm, so the exit tick leaves state 9 and the drain starts the next tick.
+        self.monitors.tick(&mut self.sensors, &mut self.channels, frame, monitor_edge);
         // `Drone_InitComms` 0x139520:214-244: corpses (0x0F, 0x47, 0xBF keyed at the state-entry
         // time `+0x11C` — the port's `entered`; 0x48 at `+0x11C + DAT_00298F58` = 600
         // [M 0x13a5a8:10 — the old +300 was the pre-audit timer value]); beyond 3

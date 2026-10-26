@@ -4897,14 +4897,13 @@ impl Sim {
                 }
             }
         }
-        // level-14-camera-view: while the monitor view stands, the press edge's ONLY consumer is
-        // `Monitor_Update`'s action-0xE arm [M 0x1afcc8:118-158 — `Input_SetAction(0xE,1)`
-        // 0x1b0058:45 consumed the activating press; `Player_Activate` is behind the freeze]:
-        // cycle to the next same-group camera, or exit. The exit's `Player_Enable` 0x195498
-        // zeroes the velocities [M :81-86 `Vec_Zero(BL+0x50)` + BL+0x20/0x30/0x40].
-        if use_edge && !crept && monitor_view {
-            if self.drones.monitor_use_edge() { self.bond.vel = [0.0; 3]; }
-        }
+        // level-14-camera-view: the viewing press edge is `Monitor_Update`'s own consumer
+        // [M 0x1afcc8:117-118 — `Input_Action(slot, 0xE, 4)` is polled INSIDE the state-2 arm;
+        // `Input_SetAction(0xE,1)` 0x1b0058:45 consumed the activating press, and
+        // `Player_Activate` never runs behind the freeze [M 0x195f70:16 → 0x193600:80-87]] —
+        // the edge rides the monitors' tick below (`drones.tick(..., monitor_edge)`), so the
+        // exit's state 9 lands inside the tick and the cooldown drains the NEXT tick, like the
+        // game's separate switch arms [M 0x1afcc8:55-65 vs :159-168].
         if use_edge && !crept && !monitor_view {
             // use-pick-head: EVERY arm of `Player_Activate` picks from Bond's HEAD — the game
             // builds the use point at `Player_GetHeadPos` + the viewer direction [M 0x1a5170:100-108,
@@ -5120,7 +5119,11 @@ impl Sim {
             None
         };
         let mp_death_was_active = self.drones.death.active;
-        self.drones.tick(&d, &player);
+        self.drones.tick(&d, &player, use_edge && monitor_view);
+        // level-14-camera-view: the exit arm's `Player_Enable` 0x195498 zeroes the velocities
+        // [M :81-86 `Vec_Zero(BL+0x50)` + BL+0x20/0x30/0x40] — mirrored after the tick that
+        // ran the exit (the view ended this tick).
+        if use_edge && monitor_view && !self.monitor_viewing() { self.bond.vel = [0.0; 3]; }
         // mp-site-damage-offline: the local pipeline's site contacts land the game's way — the
         // frame's blasts first (the case-0x35 direct `MP_ApplyDamage` per blast [M 0x17c518:187]),
         // then the frame's bullet sum as ONE store (the game's `SP_GetHitDamage` chain read

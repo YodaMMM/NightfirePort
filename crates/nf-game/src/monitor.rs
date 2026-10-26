@@ -79,36 +79,15 @@ impl Monitors {
         Monitors { list }
     }
 
-    /// `Monitor_Activate` 0x1b0058: state 0 → pick the group's FIRST `CameraList` sensor
-    /// (`Sensor.listed`, not destroyed — the head walk :17-36), hide it (`obj+0xF8 = 0`, :26) →
-    /// state 2. State 2 + this call = `Monitor_Update`'s action-0xE arm (0x1afcc8:120-157): the
-    /// watched sensor's display mask restores to 1 and the walk goes FORWARD from it — no wrap;
-    /// the next live same-group camera, or the exit (state 9, watched = None, :159-168).
+    /// `Monitor_Activate` 0x1b0058: the state gate is `monitor->0xF4 == 0` [:12-13] — the
+    /// ACTIVATE is the enter only: pick the group's FIRST `CameraList` sensor (`Sensor.listed`,
+    /// not destroyed — the head walk :17-36), hide it (`obj+0xF8 = 0`, :26) → state 2. While
+    /// viewing the action-0xE edge is `Monitor_Update`'s own consumer (0x1afcc8:117-168) — it
+    /// rides `tick`'s `monitor_edge`, NOT this call (the decompile's activate never runs in
+    /// state 2: `Player_Activate` is behind the player freeze). Returns whether the enter fired.
     pub fn activate(&mut self, i: usize, sensors: &mut crate::sensor::Sensors) -> bool {
         let Some(m) = self.list.get_mut(i) else { return false };
         if m.state == 3 { return false; }
-        if m.state == 2 {
-            let group = m.group;
-            let cur = m.watched;
-            if let Some(ci) = cur {
-                // [M 0x1afcc8:125] the current camera's mask restores before the walk.
-                sensors.list[ci].display_mask = 1;
-                m.watched = Self::next_listed_from(sensors, group, ci + 1);
-            }
-            match m.watched {
-                Some(ni) => {
-                    // [M 0x1afcc8:143] the next camera's body hides while the feed is on it.
-                    sensors.list[ni].display_mask = 0;
-                    return true;
-                }
-                None => {
-                    // [M 0x1afcc8:159-168] the exit arm: state 9 (the restore — the re-attached
-                    // updator, Player_Enable, the panes — is the port's derived freeze-end).
-                    m.state = 9;
-                    return true;
-                }
-            }
-        }
         if m.state != 0 { return false; }
         let group = m.group;
         let first = Self::next_listed_from(sensors, group, 0);
@@ -137,9 +116,14 @@ impl Monitors {
 
     /// `Monitor_Update` 0x1afcc8's per-tick body for the viewing monitors: a watched sensor that
     /// died hands the view to the next live same-group sensor (forward, then the head) or exits;
-    /// the viewed tick latches the sensor's monitor-view channel (channel 0 skips the write) and
-    /// sets its +0x60 unhide; the cooldown states drain 9 → 8 → … → 5 → 4 → 0.
-    pub fn tick(&mut self, sensors: &mut crate::sensor::Sensors, channels: &mut Channels, frame: u32) {
+    /// the action-0xE press edge (`monitor_edge` — the game polls it INSIDE this function,
+    /// `Input_Action(slot, 0xE, 4)` :117-118) cycles FORWARD with no wrap or exits; the viewed
+    /// tick latches the sensor's monitor-view channel (channel 0 skips the write) and sets its
+    /// +0x60 unhide; the cooldown states drain 9 → 8 → … → 5 → 4 → 0 — a SEPARATE switch arm
+    /// from the state-2 exit, so the exit tick itself leaves state 9 and the drain starts the
+    /// next tick [M :55-65 vs :159-168].
+    pub fn tick(&mut self, sensors: &mut crate::sensor::Sensors, channels: &mut Channels, frame: u32,
+                monitor_edge: bool) {
         for m in &mut self.list {
             match m.state {
                 2 => {
@@ -155,9 +139,23 @@ impl Monitors {
                             if let Some(ni) = m.watched { sensors.list[ni].display_mask = 0; }
                         }
                     }
+                    // [M 0x1afcc8:117-158] the press edge: the watched camera's mask restores
+                    // (:125) and the walk goes FORWARD from it (its node's next) — no wrap; the
+                    // next live same-group camera hides (:143) or the exit arm runs (:159-168).
+                    if monitor_edge {
+                        if let Some(ci) = m.watched {
+                            sensors.list[ci].display_mask = 1;
+                            m.watched = Self::next_listed_from(sensors, m.group, ci + 1);
+                        }
+                        match m.watched {
+                            Some(ni) => sensors.list[ni].display_mask = 0,
+                            None => m.state = 9,
+                        }
+                    }
                     if m.watched.is_none() {
                         // [M 0x1afcc8:159-168] the exit arm (the watched camera died with no
-                        // replacement): state 9, the restore is the port's derived freeze-end.
+                        // replacement, or the press walked past the last camera): state 9, the
+                        // restore is the port's derived freeze-end.
                         m.state = 9;
                     } else {
                         let si = m.watched.unwrap();
@@ -231,7 +229,7 @@ mod tests {
         assert_eq!(mons.list[0].state, 2);
         assert_eq!(sensors.list[0].display_mask, 0, "the picked camera's display mask clears [M 0x1b0058:26]");
         let mut ch = Channels::default();
-        mons.tick(&mut sensors, &mut ch, 10);
+        mons.tick(&mut sensors, &mut ch, 10, false);
         assert!(ch.on(5), "the viewed tick writes the sensor's monitor-view channel [M 0x1afcc8:170-174]");
         assert!(sensors.list[0].unhidden, "the sensor's +0x60 unhide sets while viewed [M 0x1afcc8:176]");
         // The channel-0 sister: the game's own gate skips the write.
@@ -239,37 +237,42 @@ mod tests {
         let mut sensors0 = crate::sensor::Sensors { list: vec![sensor_at(1, 1, 0)] };
         mons0.activate(0, &mut sensors0);
         let mut ch0 = Channels::default();
-        mons0.tick(&mut sensors0, &mut ch0, 10);
+        mons0.tick(&mut sensors0, &mut ch0, 10, false);
         assert!(!ch0.on(0), "channel 0 skips the write [M 0x1afcc8:171 `if (uVar2 != 0)`]");
     }
 
     #[test]
     fn the_view_cycles_forward_and_the_press_after_the_last_camera_exits_and_re_arms() {
-        // [M 0x1afcc8:120-157] the cycle walks FORWARD from the watched sensor (its node's
-        // next) — no wrap: from B the next is C (the old head-walk pick was wrong), and past
-        // the last camera the exit arm runs (:159-168: state 9). The cooldown drains one state
-        // per tick 9 → 8 → … → 5, 4 → 0 [M :55-65], and the console re-arms.
+        // [M 0x1afcc8:117-158] the press edge is Monitor_Update's own consumer: the cycle walks
+        // FORWARD from the watched sensor (its node's next) — no wrap: from B the next is C —
+        // and past the last camera the exit arm runs (:159-168: state 9). The exit and the
+        // cooldown drain are SEPARATE switch arms, so the exit tick itself leaves state 9 and
+        // the drain starts the next tick, one state per tick 9 → 8 → … → 5, 4 → 0 [M :55-65],
+        // and the console re-arms.
         let mut mons = Monitors { list: vec![monitor()] };
         let mut sensors = crate::sensor::Sensors {
             list: vec![sensor_at(1, 1, 0), sensor_at(2, 1, 0), sensor_at(3, 1, 0)],
         };
         assert!(mons.activate(0, &mut sensors));
         assert_eq!(mons.list[0].watched, Some(0), "the enter picks the list head [M 0x1b0058:17-36]");
-        assert!(mons.activate(0, &mut sensors), "E cycles");
+        mons.tick(&mut sensors, &mut Channels::default(), 0, true); // the E edge cycles
         assert_eq!(mons.list[0].watched, Some(1), "from A forward → B [M 0x1afcc8:124-153]");
         assert_eq!(sensors.list[0].display_mask, 1, "the cycled-away mask restores [M 0x1afcc8:125]");
         assert_eq!(sensors.list[1].display_mask, 0, "the next camera hides [M 0x1afcc8:143]");
-        assert!(mons.activate(0, &mut sensors));
+        mons.tick(&mut sensors, &mut Channels::default(), 1, true);
         assert_eq!(mons.list[0].watched, Some(2));
-        assert!(mons.activate(0, &mut sensors), "past the last camera the exit runs [M 0x1afcc8:159-168]");
-        assert_eq!(mons.list[0].state, 9);
+        mons.tick(&mut sensors, &mut Channels::default(), 2, true); // past the last camera
+        assert_eq!(mons.list[0].state, 9, "the exit runs [M 0x1afcc8:159-168]");
         assert_eq!(mons.list[0].watched, None);
         assert_eq!(sensors.list[2].display_mask, 1, "the last camera unhides before the walk [M 0x1afcc8:125]");
+        // The activate is the state-0 enter only [M 0x1b0058:12-13] — it refuses while the
+        // cooldown stands.
+        assert!(!mons.activate(0, &mut sensors), "state 9 refuses the activate [M 0x1b0058:12-13]");
         for expected in [8, 7, 6, 5, 4] {
-            mons.tick(&mut sensors, &mut Channels::default(), 0);
+            mons.tick(&mut sensors, &mut Channels::default(), 0, false);
             assert_eq!(mons.list[0].state, expected, "the cooldown decrements [M 0x1afcc8:61-63]");
         }
-        mons.tick(&mut sensors, &mut Channels::default(), 0);
+        mons.tick(&mut sensors, &mut Channels::default(), 0, false);
         assert_eq!(mons.list[0].state, 0, "state 4 → 0 [M 0x1afcc8:65]");
         assert!(mons.activate(0, &mut sensors), "the cooled-down console re-arms");
         assert_eq!(mons.list[0].watched, Some(0));
@@ -285,12 +288,12 @@ mod tests {
         mons.activate(0, &mut sensors);
         assert_eq!(mons.list[0].watched, Some(0));
         sensors.list[0].state = 3; // the disable channel put it down [M 0x1af618:107-117]
-        mons.tick(&mut sensors, &mut Channels::default(), 0);
+        mons.tick(&mut sensors, &mut Channels::default(), 0, false);
         assert_eq!(mons.list[0].watched, Some(1), "the replacement walks forward [M 0x1afcc8:76-93]");
         assert_eq!(sensors.list[0].display_mask, 1, "the dead camera unhides [M 0x1afcc8:75]");
         assert_eq!(sensors.list[1].display_mask, 0);
         sensors.list[1].state = 3;
-        mons.tick(&mut sensors, &mut Channels::default(), 0);
+        mons.tick(&mut sensors, &mut Channels::default(), 0, false);
         assert_eq!(mons.list[0].state, 9, "no replacement → the exit [M 0x1afcc8:159-168]");
         assert_eq!(mons.list[0].watched, None);
     }
@@ -301,7 +304,7 @@ mod tests {
         let mut mons = Monitors { list: vec![monitor()] };
         let mut sensors = crate::sensor::Sensors { list: Vec::new() };
         let mut ch = Channels::default();
-        mons.tick(&mut sensors, &mut ch, 10);
+        mons.tick(&mut sensors, &mut ch, 10, false);
         assert!(!ch.on(0), "an idle monitor writes nothing");
         assert!(!mons.activate(0, &mut sensors), "no same-group sensor → the activate refuses");
         // A 1.0-health console dies to one 25-damage bullet [M Monitor_ApplyDamage].
