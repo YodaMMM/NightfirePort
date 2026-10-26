@@ -44,3 +44,15 @@ Progress (this window, continued):
   docs/reports/capsule-cull-and-los-masks-2.md.
 - suite runner: background dies at the tool-call boundary (measured twice); foreground slice ran
   104 binaries / 0 failures; a full pass does not fit the window.
+
+## capsule-cull-and-los-masks-3 (started 2026-10-26)
+
+Plan: branch from origin/master (d4f15b9e) + merged origin/s/capsule-cull-and-los-masks-2
+(53c15437), pushed. Work list from round 2's report:
+1. GTurret muzzle_offset = script-A union model bbox max.z x 1.5 [M GT_Create 0x17ffa0:140],
+   track ray starts at t.pos + fire_dir * muzzle_offset [M 0x17f9c8:230-258] — turret deploy groups.
+2. interact_07000009_live armour take (:329): trace the 0x721 take ray's hit faces + surface bytes.
+3. mp_net_slots_post_move_live digest pin: find the state byte that moved the top byte.
+4. zoe_gondola_realpath_live, level_end_live (:270), walkreal_07000008_live (:164).
+Suite runner starts next; the round-2 sandbox measured that background nohup dies at the
+tool-call boundary — will retry once, then run foreground slices if it dies again.
