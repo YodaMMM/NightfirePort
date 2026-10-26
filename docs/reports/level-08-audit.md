@@ -34,7 +34,7 @@ placement/script/mission record against the game.
    `the_ffff_sound_row_latches_without_a_sound` — both green.
 5. **Corrections** (in the audit file, level doc untouched per the shared-file rule): the spawner
    groups are 4/3/5 + 1/2 (§7's "group 2" drift); trigger #80's ch 43 has no reader on the level
-   (dead content); all 26 drones are placed (9 no-wait / 9 wait-42 / 7 wait-44 / the ally #265).
+   (dead content); all 26 drones are placed (9 live from the load incl. the ally #265 / 11 wait-42 / 6 wait-44).
 
 ## Verification
 
