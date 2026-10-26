@@ -117,3 +117,34 @@ casing settle test; full suite; report + finish by 20:30 UTC.
 - Ran: nf-game lib (0 failed, incl. casing 7/7), nf-view rope_guard_hitbox_07000011_live (3
   passed / 1 ignored). The background suite predates the final tree — rerun is next round's
   first step. Report: docs/reports/level-11-rope-guard-hitbox.md.
+
+## level-11-abseil-hang-pose (started 20:14 UTC, 10-26)
+
+- Branch s/level-11-abseil-hang-pose from origin/master a9298ef5, merged
+  s/level-11-rope-guard-hitbox (e61f0f95: the rest_y casing fix, the per-state shot tests, the
+  ignored kept-casing pin), pushed as checkpoint 1 (20:16).
+- The abseil anim chain AUDITED against the decompile (the task's premise included): the game's
+  CallAnim 0x13ab58 queues a pending record (+0x558, +0x55a=1) — the danim is picked per frame by
+  CallHandler 0x13add0 → GetDAnimForCall 0x13db30 (the current state's transition list, else
+  state 0's) → SetAnimCall 0x13def8 → SetDAnimInternal 0x13aee8 (+0x56a = info[danim].state,
+  reached+ZeroAnimCall when the new state equals the folded pending want, SetEndAnim 0x1e when
+  the danim has no script). The abseil danims exist ONLY in anim sets 15/17 [D tables]: 0xb
+  (0x892, state 2), 0xc (0x89c, state 3), 7 (0x893, death 0x40). The port forces set 0xf on the
+  abseil placements [M DefaultInit's +0xdc save] and its call_anim_variant/call_handler model
+  the queue — a tick-by-tick probe (both worlds) shows the port ALREADY walking the game's
+  chain: Init danim 11 → Slide danim 12 (the state-2 transition key 3) → Hang RESTARTS danim 11
+  (state 3's key 2 — the hang pose IS state 2's clip, the same id as the rope-grab; the
+  predecessor's "danim 11 persists / CallAnim(2) never started" read the final state only — the
+  12→11 restart was invisible to it). Death 0x92 plays danim 7 then the class-9 follow-on 191.
+- Pinned (nf-view rope_guard_hitbox_07000011_live, 7 passed / 0 ignored):
+  the_abseil_states_play_their_own_anims — per-state danim/script/anim-state with the restart's
+  fresh anim.time, the death pair, and hang-pose ≠ slide-pose [M 0x169610/0x169730/0x169940/
+  0x169b28 + the tables]. The kept-casing pin UN-IGNORED: the census answers it — the roper's
+  weapon 0x19, ammo byte 5, casing_mesh[5] = 0x02000047 ≠ 0 [D]; the old fixture's Bond sat on
+  the landing the stairwell flights shadow from the rope (los never rose, the guard never
+  fired); the pin's eye now sits at the rope top and the shell arms at tick 10 through the real
+  sight→fire→reserve→arm path, sounds on the [M] plane (45.22 = shooter − 1.38) and RESTS on the
+  floor below (15.003). Fixture gained the real `surfaces` (AmmoData) — the old None left the
+  census table empty.
+- Suite: full-run constraints this window (2-core sandbox, background jobs killed between tool
+  calls) — see the report for what ran on the final tree.
