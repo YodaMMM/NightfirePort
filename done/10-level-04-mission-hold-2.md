@@ -24,3 +24,8 @@ say so in the report. Never weaken a decompile-backed test to make code pass.
 
 ---
 claimed-by: sandbox7 at 2026-10-25T23:49Z
+
+---
+## Report (done, 2026-10-26T00:15Z)
+
+Closed by the driver: the report is on `s/level-04-mission-hold-2` (docs/reports/level-04-mission-hold-2.md); the worker didn't run finish.sh.
