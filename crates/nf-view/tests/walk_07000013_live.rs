@@ -114,6 +114,22 @@ fn the_front_entrance_completes_the_mission() {
     // Sister: away from the end zone the mission stays open.
     for _ in 0..30 { sim.step_bond(Input::default(), false, false, false); }
     assert_ne!(sim.drones.mission.state, 6, "no success away from the entrance");
+    // The level's own E8 #72 [D]: E inside its volume requests 0x07300013 — the game's E arm
+    // falls through to the load with the gate 0x4E off (the fallback write, param 3 = 0, is
+    // empty) [M 0x1b2318 case 10]. A player can press it any time the mission is running —
+    // which is what pins it here, BEFORE the success walk: once the mission completes, case 7's
+    // GS_PausePlayer(1, 0) every tick freezes the player whole (Player_Update returns on the
+    // GS_IsPaused flag before any input or weapon work [M 0x193600:88-91]; the use-key chain
+    // Player_Activate 0x1a5170 rides Player_WeaponFiring 0x1a5460:402, inside the frozen
+    // update), and at hold's end the case-4 LevelEnd hands the driving code to the port's end
+    // sequence — no exit press ever lands there (scene.rs LevelEnd: ptp_handover +
+    // mission_end). The port gates the hold the same way (scene.rs mission_hold).
+    let gate_exit = sim.drones.triggers.iter()
+        .find(|t| t.kind == nf_game::triggers::kind::LOAD_LEVEL && t.gate == 0x4e)
+        .expect("the oTrigger Load level #72 (gate 0x4E) exists").clone();
+    sim.bond.pos = [(gate_exit.lo[0] + gate_exit.hi[0]) * 0.5, gate_exit.lo[1] + 0.2, (gate_exit.lo[2] + gate_exit.hi[2]) * 0.5];
+    for _ in 0..6 { sim.step_bond(Input::default(), false, false, true); }
+    assert_eq!(sim.drones.level_exit, Some(0x0730_0013), "E at the front-gate exit requests the driving interlude [M 0x1b2318]");
     // Walk the front entrance: #156 (ch 0x50, −8.61…−4.15, 65.09…67.16) then the success touches
     // #73/#164/#165 (ch 0x64) [D].
     sim.bond.pos = [-6.4, -368.0, 66.2];
@@ -135,13 +151,23 @@ fn the_front_entrance_completes_the_mission() {
         if sim.drones.mission.to_end == 0x0730_0013 { ended = true; break; }
     }
     assert!(ended, "LevelToEndTo must be 0x07300013 (the driving interlude) [M 0x182c60]");
-    // The level's own E8 #72 [D]: E inside its volume requests 0x07300013 — the game's E arm falls
-    // through to the load with the gate 0x4E off (the fallback write, param 3 = 0, is empty)
-    // [M 0x1b2318 case 10]. The driving level itself is not ported (mission.md §3).
-    let gate_exit = sim.drones.triggers.iter()
-        .find(|t| t.kind == nf_game::triggers::kind::LOAD_LEVEL && t.gate == 0x4e)
-        .expect("the oTrigger Load level #72 (gate 0x4E) exists").clone();
-    sim.bond.pos = [(gate_exit.lo[0] + gate_exit.hi[0]) * 0.5, gate_exit.lo[1] + 0.2, (gate_exit.lo[2] + gate_exit.hi[2]) * 0.5];
-    for _ in 0..6 { sim.step_bond(Input::default(), false, false, true); }
-    assert_eq!(sim.drones.level_exit, Some(0x0730_0013), "E at the front-gate exit requests the driving interlude [M 0x1b2318]");
+    // The banner hold: Mission_Update case 7 runs GS_PausePlayer(1, 0) EVERY tick and
+    // TimeOut -= FRAME_RATE_MUL [M 0x182c60:123-130; TimeOut = (VIDEO_FRAME_RATE & 0xffff) << 2
+    // = 240, :122]. The port gates input the same way (scene.rs mission_hold). The world is NOT
+    // frozen (control_movement_object_handler answers only to the global GS_PauseGame, which
+    // fires when the hold ends [M 0x1c9790; 0x182c60:127-129]). At 0, case 4's LevelEnd hands
+    // the driving code to the port's end sequence (the host's outro → results; the sim-side
+    // tail is mission_end) [M 0x182c60:65-76 → scene.rs LevelEnd]: drain the hold, then pin it.
+    let mut held = 0u32;
+    for _ in 0..400u32 {
+        if sim.drones.mission.internal != 7 { break; }
+        sim.step_bond(Input::default(), false, false, false);
+        held += 1;
+    }
+    assert!(held > 0, "the case-7 hold was live after the success [M 0x182c60:123-130]");
+    assert_ne!(sim.drones.mission.internal, 7, "the 240-tick hold ends into case 4 [M 0x182c60:125-129]");
+    // case 4 fires the LevelEnd the tick after the drain breaks (the loop leaves internal at 4
+    // before its mission.update ran) [M 0x182c60:65-76].
+    for _ in 0..2 { sim.step_bond(Input::default(), false, false, false); }
+    assert_eq!(sim.drones.mission_end, Some(0x0730_0013), "the LevelEnd hands 0x07300013 to the end sequence [M 0x182c60:65-76; scene.rs LevelEnd]");
 }
