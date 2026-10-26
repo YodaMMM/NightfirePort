@@ -214,3 +214,26 @@ copied exactly from the subagent results' footer ("Tokens ->" lines):
 - targeted-binary suite runs: prompt 36466, completion 1175, total 37641;
 - remaining-crate-lib suite run: prompt 9897, completion 377, total 10274.
 No cost figures were shown anywhere.
+
+## ntfy failed
+
+The required ntfy notification could not be delivered: ntfy.sh returns HTTP 429 (the topic's daily
+message quota is exhausted) on all three fallbacks, tried in order at 22:28 UTC 2026-10-26:
+
+- `curl -sS -m 20 -H "Title: NightfirePort" -d "level-14-camera-view: done — the 07000014 security
+  console enters the game's camera view on Action; report at docs/reports/level-14-camera-view.md"
+  https://ntfy.sh/nightfire-yoda-8k3x` — exit 0 but the response body is the API error:
+  `{"code":42908,"http":429,"error":"limit reached: daily message quota reached; increase your
+  limits with a paid plan, see https://ntfy.sh","link":"https://ntfy.sh/docs/publish/#limitations"}`
+- `python3 -c "import urllib.request as u; u.urlopen(u.Request('https://ntfy.sh/nightfire-yoda-8k3x',
+  data=b'level-14-camera-view: done', headers={'Title':'NightfirePort'}), timeout=20)"` —
+  `urllib.error.HTTPError: HTTP Error 429: Too Many Requests`
+- `wget -q -O- --post-data "level-14-camera-view: done" https://ntfy.sh/nightfire-yoda-8k3x` —
+  exit code 8 (server error response), no output.
+
+The one-line result the notification would have carried: "level-14-camera-view: done — Action at
+the 07000014 security console enters the game's camera view (Monitor/Sensor chain, the feed is the
+watched sensor's matrix; ThirdCam is the climb-rail camera, not this view); the edge cycles forward,
+the exit restores the player view, the active view camera is exposed per tick for the renderer;
+targeted suites on the final tree: 843 passed / 6 out-of-task failed (3 disc_golden expected on the
+slim ISO)."
