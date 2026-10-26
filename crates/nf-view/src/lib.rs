@@ -6997,7 +6997,7 @@ pub fn mission_movie_glue(fe: &mut menu::FrontEnd, slot: &mut Option<movie::Play
                                 fe.flow.movie_playing = false; // an un-started movie: BGFMVPlaying == 0 [M 0x1082e8]
                                 // mission-outros: the no-movie hold runs the subtitle track's
                                 // length — the game holds state 6 on the retail PSS's life
-                                // [M 0x1082e8], and on a stubbed image (this sandbox's
+                                // [M 0x1082e8], and on a stubbed image (a test image's
                                 // /MOVIES/*.PSS are 0-byte [D]) it would pop at once; the
                                 // track's length keeps the outro up with its text. [S] the
                                 // stand-in duration — the retail timing (the track spans the
