@@ -279,3 +279,17 @@ port gets wrong and pin it.
 - (22:45 UTC, 10-26) The walk from the spawn toward (20, 26) sticks at (21.64, 1.06, 19.49) —
   a wall segment 0.08 along the path (walker 6000-tick cap); the SE office area is sealed from
   the spawn side at z ~19.5. Hunting the real entry next (the lobby side x 10..14 south).
+- (23:14 UTC, 10-26) level-12-qclaw-ride: THE RIDE TEST GREEN (qclaw_ride_07000012_live): the
+  walked route (shaft lobby -> the z 18.5-21 wall gap x 8..11 -> the SE strip below the point,
+  all legs real), the parapet stance (11, 4.63, 28) as THE documented stand-in (the deck entry
+  by foot is the open item), the claw select via switch_to (the fresh_11 kit owns 0x50 [M
+  0x1a7ef8 case 0x7000012]), the aim, the fire latch [M 0x12e660:50-55 -> 0x195da0], the reel
+  with the 1.5 SP cap pinned per-tick [M 0x192860:96-104], the phase-2 hang < 2.0 [M
+  0x192860:91-94], the held-fire hold, the release -> SS_WALK + the straight drop onto the
+  3.25 deck, the walk-on across the deck; the away-aim sister latches nothing. Touched-crate
+  coverage: nf-game --lib 578/0, interact_07000005_live 11/0, gadget_select_live 2/0,
+  interactables_07000011_live 14/0, walkreal_07000014_live 2/0+1i, walk_07000012_live 4/0,
+  enemies_07000012_live 3/0. Full suite = chunk_suite foreground chunks (this sandbox kills
+  background jobs); tally grows until the report's final push. Geometry probes committed
+  ignored (qclaw_probe12{,b,c,d,e}: the office roof blocks every floor aim; 95 deck stances
+  clear; the deck collision is async-load-gated; the parapet is a ~1-unit walk).
