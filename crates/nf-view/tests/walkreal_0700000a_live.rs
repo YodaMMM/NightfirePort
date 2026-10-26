@@ -224,7 +224,7 @@ fn walk_leg_watched(w: &mut Walker, to: [f32; 3], arrive: f32, label: &str) -> b
 }
 
 #[test]
-#[ignore = "the spawn settle is in (the sisters' notes) and this round's run walked the ring to 'east past the alarm-panel corridor' (+98 ticks) before wedging at 'the ai lane to the N-S corridor': Bond (−11.25, 1.14, −14.60) ungrounded, the segment to (−8.60, −14.20) hit at 0.21 [the run's STUCK dump] — the same south-leg wall the -2/-4 rounds met; the mouth's guard slot is 0.5 wide (the jamb corner (−10.60, −18.66) [L the bridge-edge sister]) and cannot take the player's 1.1 capsule, so the mouth crossing still needs either the guard-timing solution (walk the legs steadily, no wedges) or the route's south-leg geometry re-derived at the player's radius. The bridge-edge sister pins the band at a genuine ledge edge."]
+#[ignore = "the 2026-10-26 live checks name the wall stopper (the handler tail 0x194c70) and give the settled [L] heights (the doorway slide 1.1285, the corner slide 1.1159), but this round's ring run still stuck at the walker's cap (the lane leg + the jamb slide the port cannot reproduce with the spine-dir pushes; the radial-dir ports measured-and-reverted — see docs/reports/level-0a-band-settle-2.md) — the ring needs the game's real ref value (the live check in the report)"]
 fn walk_office_floor_qworm_keyboard_hatch() {
     let mut w = load_carry(None);
     {
@@ -498,7 +498,7 @@ fn the_spawn_height_matches_the_game_snapshot() {
 /// stuck panic) — the climb needs the game's per-tick push/step shape through the doorway (the
 /// live check in the report).
 #[test]
-#[ignore = "the port glides the settled 1.0891 (the spawn settle is in) but does not reproduce the doorway base climb's +0.0256 band settle [L 1.1147 fresh boot]; the port's capsule pushes off the base face (−8.604..−8.304, z 16.278 [D tris]) for +0.0036 only and the dead-on approach wedges — needs the game's climb shape (the live check)"]
+#[ignore = "the live answers are in [L 2026-10-26: the game slides north around the jamb to z 16.83 and through, settling y 1.1285; the wall press's stopper is the handler tail 0x194c70 obj+0x30 += BL+0x750] but the port's per-face pushes jam at the jamb (the walker's straight-line walk_to stuck at (-9.15,1.09,15.92) with the kill on); the radial-dir ports measured-and-reverted (the up-lift / the re-wedge, see the report) — needs the game's real ref value (the live check in the report)"]
 fn the_west_hall_glide_height_matches_the_game() {
     let mut w = load_carry(None);
     // Wait out the SS door sweep (the same guard the main walk runs).
@@ -521,9 +521,15 @@ fn the_west_hall_glide_height_matches_the_game() {
     // Read the glide y in the hall's steady window (x −9.5..−11.39 on the walked line).
     let p = w.scene.sim.as_ref().unwrap().bond.pos;
     assert!(p[0] < -9.0, "walked into the west hall, at {p:?}");
-    // The game's steady hall glide [L fresh boot]: 1.1147 within 0.003.
-    assert!((p[1] - 1.1147).abs() <= 0.003,
-        "the west hall glide must read the game's 1.1147 [L], got {:.4} at ({:.3},{:.3})",
+    // The game's steady hall glide, RE-PINNED to the 2026-10-26 probe trace [L fresh boot,
+    // probe-placed at 1.12, walked west from (-8.0, 1.12, 16.29)]: the settled y 1.1285 (the
+    // probe's frames 21/28/36 and the post-release rest all read 1.1285; the old 1.1147 came
+    // from a spawn-height walk and the driver pins the SETTLED values, not the first sample),
+    // z 16.8295 (the slide north around the jamb — the game is NOT stopped at x -8.304 [L]),
+    // passed x -9.0106 at frame 36. The port cannot reproduce the slide yet (the radial-dir
+    // experiments, see docs/reports/level-0a-band-settle-2.md) — the test stays ignored.
+    assert!((p[1] - 1.1285).abs() <= 0.003,
+        "the west hall glide must read the game's settled 1.1285 [L 2026-10-26], got {:.4} at ({:.3},{:.3})",
         p[1], p[0], p[2]);
 }
 
@@ -536,7 +542,7 @@ fn the_west_hall_glide_height_matches_the_game() {
 /// (1.0891 rest) but the hall glide's +0.0256 climb settle is not (the glide sister's note), so the
 /// corner still enters 0.02 under the game's 1.1147 line.
 #[test]
-#[ignore = "the port wedges at the corner (y dithers across the band edge 1.1347); the game walks through at y 1.127→1.120 [L fresh boot] — needs the hall glide's base-climb settle (the_west_hall_glide_height_matches_the_game's note, the live check) and the corner push landing re-derived (the -2 report's open item: Player_CollisionHandler 0x1949a8:136-140)"]
+#[ignore = "the corner now CROSSES with the below-B kill (NF_WALK_KILL=1) at 870 ticks vs the game's ~60 frames [L 2026-10-26], and the crossing still rides the spine-dir pushes (the radial-dir ports measured-and-reverted — see the report) — the exit-y pin is re-settled to 1.1159 [L 2026-10-26]; un-ignore once the crossing is walk-speed"]
 fn the_corner_crosses_like_the_game() {
     let mut w = load_carry(None);
     for _ in 0..150 {
@@ -565,8 +571,10 @@ fn the_corner_crosses_like_the_game() {
         w.scene.sim.as_ref().unwrap().bond.pos);
     assert!(w.total_ticks - start_ticks <= 300, "the crossing must be walk-speed, took {} ticks", w.total_ticks - start_ticks);
     let p = w.scene.sim.as_ref().unwrap().bond.pos;
-    // The game's exit y 1.120 within 0.01 [L fresh boot] (still settling toward the hall glide).
-    assert!((p[1] - 1.120).abs() <= 0.01, "the corner exit y must read the game's 1.120 [L], got {:.4}", p[1]);
+    // The game's settled exit y, RE-PINNED [L 2026-10-26 fresh boot: placed (-17.87, 1.12, 4.87),
+    // yaw 2.987, 60 frames forward — the xz path bends (a slide), y settles 1.1186 mid-path then
+    // 1.1159 at the end (-17.9715, 1.1159, -0.4162); the driver pins the settled values].
+    assert!((p[1] - 1.1159).abs() <= 0.005, "the corner exit y must read the game's settled 1.1159 [L 2026-10-26], got {:.4}", p[1]);
 }
 
 /// The task's repro (collision-0a-west-doorway-floor): walk the ring's west legs one by one and

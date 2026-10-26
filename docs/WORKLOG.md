@@ -33,3 +33,16 @@
   of the stand-in, re-land experiment (a)'s below-B kill if needed, re-pin + un-ignore the three
   ignored walkreal_0700000a_live tests to the driver's fresh [L] numbers (settled values), keep
   walkreal_07000001/05 green. Setup starting: work-slim + onfoot ISO downloads next.
+
+- (17:40 UTC, 10-26) level-0a-band-settle-2 SESSION: the tail decoded (0x194c70 = obj+0x30 +=
+  BL+0x750 [M disasm]; BL+0x750 = HITTEST+0x10, zeroed per tick at Collide_Update 0x1ea398:50,
+  fed by the per-object DeltaP add-back 0x1ebaa8:353-373 — the port already has the shape at
+  player.rs:1845). The per-face rule decoded (Intersect_CylGeom 0x109da0:421-470: v = q − ref,
+  dot(v,n) > 0, |v| < radius, push = normalize(v)·(radius − |v|), _DeltaP accumulates, A/B/bounds
+  shift); the ref = the lifetime accumulator whose boot (0,0,0) [L] contradicts the live 33
+  tail writes — the ref's walked value is the open fact (live checks in the report). Two
+  radial-dir ports built and measured, both reverted (85-tick corner cross with an up-lift to
+  1.7773; horizontal radial re-wedges). The below-B kill re-landed GATED (NF_WALK_KILL, default
+  off): 05 8/8 green, the 0a corner crosses (870 ticks, was a wedge), 01's contact walk
+  regressed → gated until re-verified. The three 0a tests re-pinned to the settled [L] values
+  (1.1285 / 1.1159), still ignored. Branch pushed; suite on the final tree started.
