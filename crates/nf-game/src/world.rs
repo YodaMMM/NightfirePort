@@ -69,8 +69,24 @@ fn caps_log() -> bool {
     *ON.get_or_init(|| std::env::var("NF_CAPS_LOG").is_ok())
 }
 
-/// Kill switch (level-0a-band-settle-2): `NF_WALK_KILL=1` enables the below-B displacement kill
-/// (see the contact fn). Off by default — the 01 plate walk regression (settle-3) is unexplained.
+/// Scratch gate switch (level-0a-office-hatch-9): `NF_CAPS_GATE=1` turns the `dot(q − B, n) > 0`
+/// push-tail gate on (see the contact fn). Off by default — measured before it lands.
+///
+/// level-0a-office-hatch-10 settled the game's reference (HITTEST+0x50 = BL+0x790) and it is NOT
+/// the spine bottom: boot (0,0,0) via the object-alloc memset [M control_create_object 0x1344e0:17;
+/// L ee_start_0700000a and ee_start_05 both read exactly zero at BL+0x790 while +0x760/+0x770 hold
+/// the seeded A/B], the only writer is the per-landed-hit `+= world DeltaP` [M Collide_Intersect
+/// 0x1ebaa8:353-373 — no other access exists: an exhaustive ACTION.ELF scan of every
+/// immediate-offset instruction (sw/swc1/lw/lwc1/sqc2 0x3E-0x3F/lqc2 0x37/addiu) touching
+/// 0x790/0x788/0x798 finds only menu-stack spills at 0x2012c4-8], and the live mid-play value is a
+/// drift vector ≈ (1.21, 9.08, −14.45), ~15 m from its owner [L ee_snapshot.bin: BL 0x16cf0f0,
+/// Bond at (104.71, 24.97, 107.05)]. The decoded tail `dot(q − HITTEST+0x50, n) > 0` +
+/// `|q − HITTEST+0x50| < radius` [M Intersect_CylGeom 0x109da0:420-457] therefore fires only
+/// against triangles within `radius` of that drifted point — near-never on a walked line. The
+/// ref=bottom gate below is NOT the game's shape (it ports a value the field never holds) and its
+/// hatch-9 pins missed both ways; the port keeps it env-gated OFF until the game's real wall-stop
+/// source is identified (the tail cannot be it — see docs/reports/level-0a-office-hatch-10.md).
+static CAPS_GATE: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
 static WALK_KILL: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
 
 #[derive(Default)]
@@ -325,7 +341,7 @@ fn cross(a: V3, b: V3) -> V3 { [a[1] * b[2] - a[2] * b[1], a[2] * b[0] - a[0] * 
 ///   own ride grounds on (the ray tolerance is exceeded at the skin-rest equilibrium on that
 ///   steep a face, so the pick arm must fire); confirming the gate is an
 ///   open live check.
-fn capsule_tri_contact(t: &[V3; 3], mat: u8, a: &mut V3, b: &mut V3, r: f32, grow: f32, total: &mut V3, walkable: &mut bool, pick: &mut bool, top_guard: bool, _ref_v: V3) -> bool {
+fn capsule_tri_contact(t: &[V3; 3], mat: u8, a: &mut V3, b: &mut V3, r: f32, grow: f32, total: &mut V3, walkable: &mut bool, pick: &mut bool, top_guard: bool, ref_v: V3) -> bool {
     let tl = [0, 1, 2].map(|k| t[0][k].min(t[1][k]).min(t[2][k]));
     let th = [0, 1, 2].map(|k| t[0][k].max(t[1][k]).max(t[2][k]));
     let (sl, sh) = ([0, 1, 2].map(|k| a[k].min(b[k]) - grow), [0, 1, 2].map(|k| a[k].max(b[k]) + grow));
@@ -382,63 +398,58 @@ fn capsule_tri_contact(t: &[V3; 3], mat: u8, a: &mut V3, b: &mut V3, r: f32, gro
         let c = [0, 1, 2].map(|k| (t[0][k] + t[1][k] + t[2][k]) / 3.0);
         closest_on_segment(*a, *b, c)
     };
-    // The game's Dist2Tri first arm [M ASH_vecutil_Dist2Tri 0x109770: the query's signed plane
-    // distance < 0 → flags = 99, the closest-point OUT-POINTER IS NEVER WRITTEN and the function
-    // returns early; the caller skips flags == 99 outright (0x10a528 `beq v1,v0,0010a7b8`) and
-    // its `0.0 <= return` gate (0x10a510 c.olt) double-covers it — a query behind the face plane
-    // is fully inert]: the port's plane is the normalized n, so the signed distance's sign =
-    // dot(p − t0, n).
-    if dot(sub(p, t[0]), n) < 0.0 { return false; }
-    // THE SECOND QUERY, operands settled by the 2026-10-26 live reads [M Intersect_CylGeom
-    // 0x10a344-0x10a4fc]: Dist2Tri #1's OUT-POINTER is copy+0x50 (0x10a2fc `addiu t2,s1,0x50`
-    // before the 0x10a324 jal) — when the flags come back ≠ 0/99 (the closest point on an
-    // edge/vertex — the port's on_edge), the game projects copy+0x50 = Q1 (NOT the accumulator
-    // image: the [L] breakpoint at 0x10a540 shows 96(sp) riding the spine — the feet/A-end/
-    // on-edge-projection points — while copy+0x60, the accumulator's transformed image, sits
-    // constant at (−22.0782, 0.3832, 12.2086) across all 12 faces of the jamb tick) onto the
-    // spine A/B clamped [0,1] (0x10a3b4/0x10a3c4 the 1.0/0.0 clamps) and RE-RUNS Dist2Tri from
-    // it (0x10a4fc, the out-write again) — the tail's copy+0x50 = the SECOND closest point Q2.
-    let (q0, on_edge) = closest_on_triangle(p, t);
-    let q = if on_edge {
-        p = closest_on_segment(*a, *b, q0);
-        closest_on_triangle(p, t).0
-    } else {
-        q0
-    };
-    // The port's push-tail guard stays for the SWIM path only (a triangle whose closest point
-    // lies at/beyond the capsule's TOP end A never pushes there; without it the real-capsule
-    // math pushes THROUGH thin slabs — the 02 hut deck's SW fin wedge [L probe_swim_pocket
-    // PUSHDBG]). The old citation ("v = q − A, dot(v, B − A)") was a misread of the tail's
-    // gates — the real tail gates are the dot and |v| tests decoded below; the walk/NPC paths
-    // keep the unguarded through-push (escort_follow_07000001_live regressed with it on).
+    let (q, on_edge) = closest_on_triangle(p, t);
+    if on_edge { p = closest_on_segment(*a, *b, q); }
+    // The game's push-tail guard [M Intersect_CylGeom 0x109da0 push tail: `v = q − A`,
+    // `if (0.0 < dot(v, B − A))` gates the whole `dist < r` push]: a triangle whose closest
+    // point lies at/beyond the capsule's TOP end A never pushes. Without it the real-capsule
+    // math pushes THROUGH thin slabs (the 02 hut deck's SW fin wedge [L probe_swim_pocket
+    // PUSHDBG]). The horizontal faces ride the game's SEPARATE unguarded head-on path
+    // [M the `0.7 < |dot(n, axis)|` re-push block after the guarded push], so the guard keys on
+    // the oblique/vertical faces only; the SWIM path passes it (top_guard) and the walk/NPC
+    // paths keep the unguarded through-push (escort_follow_07000001_live regressed with it on).
     if top_guard && n[1].abs() <= 0.7 && dot(sub(q, *a), sub(*b, *a)) <= 0.0 { return false; }
-    // THE RADIAL TAIL, operands settled (level-0a-band-settle-5) [M Intersect_CylGeom
-    // 0x10a53c-0x10a61c disasm]: vf3 = 96(sp) = the QUERY (the plane crossing, the parallel
-    // branch's centroid projection onto the spine, or the second query), vf1 = copy+0x50 = Q
-    // (Dist2Tri's out-write, loaded 0x10a540 — settle-4's LQC2/SQC2 flip: printed sqc2 =
-    // LQC2 = a LOAD), vf2 = copy+0x00 = the face plane. v = QUERY − Q (the decompile's
-    // `_vsub(auVar32,auVar10)`; settle-4's "v = Q − query" had the order inverted — the [L]
-    // wall-press equilibrium needs v pointing AWAY from the face: the [L] 0.1/tick push with
-    // the query pressed r−0.1 = 0.45 inside and the first touch r−0.539 = 0.01056 [L
-    // 2026-10-26] both fall out of v = query − Q with the gates below). Gates: `0 < dot(v,
-    // plane)` [M 0x10a568 c.ole f0,0.0 → bc1t skip] — a floor's interior crossing (v = 0) and
-    // a query behind the plane never push — then `|v| < radius` [M 0x10a5c8 c.ole radius,|v| →
-    // bc1t skip; radius = copy+0x8c]. Push = v̂·(radius − |v|) [M 0x10a590-0x10a5d8: |v| == 0 →
-    // the dir quad ≈ 0 (the flags-bits denormal `sq v0,0(sp)` — push ≈ 0, NOT the old ±n
-    // fallback), else dir = v·(1/|v|); mag = radius − |v|]; accumulated into DeltaP 0x2d9bd0
-    // [M 0x10a5e8 load / 0x10a608 store — the add-back total] and the query AABB min/max
-    // 16(sp)/32(sp) [M 0x10a610/0x10a62c — the broad-phase tracks the pushed capsule], and the
-    // spine endpoints move WITH the push [M 0x10a614/0x10a61c stores to copy+0x20/+0x30].
-    // THE ACCUMULATOR (HITTEST+0x50) IS NOT AN OPERAND: the [L] breakpoint shows copy+0x60 =
-    // the accumulator's transformed image constant across the tick — it is only the ADD-BACK
-    // target (Collide_Intersect 0x1ebaa8:353-373 += DeltaP), so the settle-3 radial arm
-    // (ref = the accumulator) is gone; ref_v stays plumbed for the add-back callers only.
     let v = sub(p, q);
     let dist = dot(v, v).sqrt();
-    if dot(v, n) <= 0.0 { return false; }
     if dist >= r { return false; }
-    let dir = if dist > 1e-6 { [v[0] / dist, v[1] / dist, v[2] / dist] } else { [0.0; 3] };
-    let push = [dir[0] * (r - dist), dir[1] * (r - dist), dir[2] * (r - dist)];
+    // Scratch gate (level-0a-office-hatch-9, NF_CAPS_GATE=1): the game's push tail requires
+    // `0 < dot(q − ref, n)` [M Intersect_CylGeom 0x109da0:431 — v = hitpoint − HITTEST+0x50,
+    // the dot against the face plane, the whole push inside the `>0` arm] AND `|q − ref| < radius`
+    // [M 0x109da0:447], the push dir/mag `(q − ref)/|q − ref|·(radius − |q − ref|)`. hatch-10
+    // settled HITTEST+0x50 as the lifetime push accumulator [L ee_snapshot: drift ≈15 m from the
+    // owner] — NOT the spine bottom probed here; with the true ref the tail near-never fires on a
+    // walked line, so the game's z 16.29 glide needs no gate (nothing pushes there at all) and the
+    // port's wall-stop must come from a mechanism not yet identified. This ref=bottom probe stays
+    // OFF: with it the corner crossed but the exit-y missed both ways (1.0655 / 1.2142 vs the
+    // game's 1.120 [L fresh boot]) and the glide walk floated ungrounded (hatch-9's measurements).
+    let gate_on = CAPS_GATE.get_or_init(|| std::env::var("NF_CAPS_GATE").is_ok());
+    if *gate_on && n[1] <= 0.7 && dot(sub(q, *b), n) <= 0.0 { return false; }
+    let spine_dir = if dist > 1e-6 { [v[0] / dist, v[1] / dist, v[2] / dist] } else if dot(n, sub(*a, q)) >= 0.0 { n } else { [-n[0], -n[1], -n[2]] };
+    // THE RADIAL-DIR ARM, landed (level-0a-band-settle-3) [M Intersect_CylGeom 0x109da0:421-453]:
+    // v = q − ref with ref = the caller's HITTEST+0x50 lifetime push accumulator (the
+    // 2026-10-26 fresh-boot reads [L]: it boots (0,0,0), is NEVER reseeded on a walk, grows by
+    // exactly the push on every wall-contact tick (0.27723 → 3.27709 by +0.1 steps at the west
+    // hall wall), stays EXACTLY constant on free walks, and carries over a reload — the add-back
+    // 0x1ebaa8:353-373 is its only writer [M]). The tail's ref rides the per-object stack copy's
+    // +0x50 = the world +0x50's object-local image [M disasm 0x1ebcc4: the RotPreTransVec out
+    // lands at copy+0x50; Mat_Inverse+RotPreTransVec = Rᵀ(world − t), rigid] — the port's flat
+    // world frame takes the accumulator as-is. Gates: dot(v, n) > 0 [M :421-431] and
+    // |v| < radius [M :447], push = normalize(v)·(radius − |v|) [M :442-453]. The decompile's
+    // :432-437 overwrites the Dist2Tri measure fVar30 with |v| — with the [L] walked ref values
+    // (18-63 m from any contacted q) the |v| < radius gate can never pass on a walked line, so
+    // the arm is behaviourally inert there and the SPINE-DIR fallback below carries the [L]
+    // wall-step behaviour (the push = the walk step along the wall normal — exactly 0.1 per
+    // contact tick at the west hall wall, first touch 0.01056 = the approach penetration [L
+    // 2026-10-26]; the spine rule reproduces both: r − dist = the penetration). When the ref
+    // DOES sit within radius behind a face (dot(v, n) > 0), the radial push fires as decoded.
+    let vr = sub(q, ref_v);
+    let dist_r = dot(vr, vr).sqrt();
+    let (dir, mag) = if dist_r > 1e-6 && dist_r < r && dot(vr, n) > 0.0 {
+        ([vr[0] / dist_r, vr[1] / dist_r, vr[2] / dist_r], r - dist_r)
+    } else {
+        (spine_dir, r - dist)
+    };
+    let push = [dir[0] * mag, dir[1] * mag, dir[2] * mag];
     if caps_log() {
         eprintln!("[cap] PUSH cent=({:.3},{:.3},{:.3}) q=({:.3},{:.3},{:.3}) p=({:.3},{:.3},{:.3}) d={dist:.4} push=({:.4},{:.4},{:.4}) n=({:.3},{:.3},{:.3}) edge={on_edge} a=({:.3},{:.3},{:.3}) b=({:.3},{:.3},{:.3})",
             (t[0][0]+t[1][0]+t[2][0])/3.0, (t[0][1]+t[1][1]+t[2][1])/3.0, (t[0][2]+t[1][2]+t[2][2])/3.0,
