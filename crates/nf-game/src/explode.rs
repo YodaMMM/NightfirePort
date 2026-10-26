@@ -59,6 +59,18 @@ pub struct Explosion {
     /// `drone.rs`'s tick on the weapon's own `+0x70` flags: & 0x2000 flash / & 0x20000 smoke [M
     /// 0x12dd60, 0x12e104]).
     pub weapon_type: u16,
+    /// `SCRIPTINFO+0x98`: the loaded script's id — `Explode_Update`'s debris arm plays only for
+    /// 0x0600052 [M 0x17c350:28]. 0 = no script loaded (the arm's script gate then passes — the
+    /// game reads `inst+0x34 != 0 &&` before the hash compare).
+    pub script_hash: u32,
+    /// `instance+0x00..0x0f`: the debris direction — `Mat_GetUp` reads the aligned script matrix's
+    /// up row into the block [M 0x17cbd0:96]. The port stores the aligned basis' up row [S: the
+    /// game's matrix is the SCRIPT's, aligned by `Mat_Align2Dir`; the port's `align2dir` builds
+    /// the same shape from the to-player vector].
+    pub debris_dir: V3,
+    /// `instance+0x10..0x1f`: the debris jitter — basisA + basisB of `Vec_MakeOrthonormalBasis`
+    /// over the normalised to-closest-player vector [M 0x17c930:118-131, 0x17cbd0].
+    pub debris_jitter: V3,
 }
 
 impl Explosion {
@@ -75,6 +87,9 @@ impl Explosion {
             propagated: false,
             age: 0,
             weapon_type,
+            script_hash: 0,
+            debris_dir: [0.0, 1.0, 0.0],
+            debris_jitter: [0.0; 3],
         }
     }
 
@@ -140,14 +155,76 @@ pub fn create_debris(
         for k in 0..3 {
             vel[k] = (mag * dir[k] + jitter[k] * rng.frand_half(speed)) * (1.0 / 60.0); // REC_FRAME_RATE [M 0x1ac808:33-38]
         }
-        // `Rand_FRandHalf_Vec(0x3e71463b, …)` [M 0x1ac808:40] — three half-range draws.
+        // `Rand_FRandHalf_Vec(0x3e71463b, …)` [M 0x1ac808:40] — three half-range draws. The
+        // constant is 0x3E71463B = 0.2356194704771042 (exact f32) [L ee_start_05.bin].
         for s in spin.iter_mut() {
-            *s = rng.frand_half(0.244_140_63);
+            *s = rng.frand_half(0.235_619_47);
         }
         let g = gfx[rng.rand(gfx.len() as u32 - 1) as usize];
         out.push(DebrisSpawn { vel, spin, life, scale, gfx: g, class: 0x10 });
     }
     out
+}
+
+/// `MetalHash_132` @0x2A3718 — the metal debris mesh hashes `Explode_Update` hands to
+/// `Debris_CreateEx` for kinds 5/6 [L ee_start_05.bin @0x2a3718, four u32s; symbol
+/// work/action-symtab.tsv `002a3718 MetalHash.132`].
+pub const METAL_HASH_132: [u32; 4] = [0x0200_0414, 0x0200_0415, 0x0200_0416, 0x0200_041b];
+
+/// `StoneHash_133` @0x2A3728 — the stone debris meshes, kinds 8/10/0xB, gated on level 0x0700008
+/// with switch channel 0x53 on [L ee_start_05.bin @0x2a3728; the 4th entry repeats the 1st].
+pub const STONE_HASH_133: [u32; 4] = [0x0200_0664, 0x0200_0665, 0x0200_0666, 0x0200_0664];
+
+/// The blast script 0x0600052's `SCRIPTINFO+0xAB0` u16 — the lifetime `Explode_Create` stores for
+/// a loaded script [M 0x17cd18], the window the debris arm may spawn in (first quarter: age ≤
+/// 41 [M 0x17c350:31]).
+pub const BLAST_SCRIPT_0x0600052: u32 = 0x0600_0052;
+pub const BLAST_SCRIPT_LIFETIME: u16 = 165;
+
+/// `Explode_Update` 0x17c350's debris arm, over the port's RNG. The gates in the game's order
+/// [M 0x17c350:21-67]: MPSettings == 1 → none (the port's sim is single-player, no MP branch to
+/// gate); debris kind == 0 → none WITHOUT a draw [M :25]; a loaded script whose +0x98 !=
+/// 0x0600052 → none WITHOUT a draw [M :28]; `lifetime >> 2 < age` → none WITHOUT a draw [M :31];
+/// then ONE `Rand_Rand(5)` draw, and `GameState_time % (r + 10) == 0` gates the spawn [M :34-38];
+/// kinds 5/6 → `MetalHash_132`, 8/10/0xB → `StoneHash_133` only on level 0x0700008 with switch
+/// channel 0x53 on, 7/9 and everything else → nothing [M :41-62]. A passing tick calls
+/// `Debris_CreateEx(2·radius, obj+0xC0, up, jitter, 180, 3, cel, hash, 4)` — 3 particles from the
+/// 180-tick life base [M :63-67, 0x1ac808]. `game_time` is the port's frame counter standing in
+/// for GameState+0x52 [S: the alignment of the two counters is a live check]. Returns the spawned
+/// particles (empty = nothing this tick); the draws happen exactly as in the game — consumed
+/// even when the modulo gate then fails.
+pub fn debris_arm(
+    e: &Explosion,
+    rng: &mut crate::drone::Rng,
+    game_time: u32,
+    level: u32,
+    stone_channel_on: bool,
+) -> Vec<DebrisSpawn> {
+    if e.debris == 0 {
+        return Vec::new();
+    }
+    if e.script_hash != 0 && e.script_hash != BLAST_SCRIPT_0x0600052 {
+        return Vec::new();
+    }
+    if (e.lifetime as u32) >> 2 < e.age {
+        return Vec::new();
+    }
+    let r = rng.rand(5);
+    if game_time % (r + 10) != 0 {
+        return Vec::new();
+    }
+    let gfx: &[u32] = match e.debris {
+        5 | 6 => &METAL_HASH_132,
+        8 | 10 | 0xb => {
+            if level != 0x0700_0008 || !stone_channel_on {
+                return Vec::new();
+            }
+            &STONE_HASH_133
+        }
+        _ => return Vec::new(),
+    };
+    create_debris(rng, e.radius + e.radius, e.debris_dir, e.debris_jitter,
+        (60.0f32 * 3.0) as u32, 3, gfx)
 }
 
 /// Who an explosion damaged, in the port's terms (`Explode_Propagate`'s per-case effects).
@@ -322,7 +399,8 @@ mod tests {
             assert!((30..60).contains(&p.life), "life = Rand(30) + 30, got {}", p.life);
             assert!(gfx.contains(&p.gfx));
             for s in p.spin {
-                assert!(s.abs() <= 0.244_140_63, "the spin is a half-range draw, got {s}");
+                // [M 0x1ac808:40] the spin constant is 0x3E71463B = 0.23561947… [L ee_start_05.bin].
+                assert!(s.abs() <= 0.235_619_47, "the spin is a half-range draw, got {s}");
             }
             // The velocity's y rides the blast direction (jitter only perturbs it around mag·dir).
             assert!(p.vel[1] > 0.0, "the direction term dominates on the y axis: {p:?}");
