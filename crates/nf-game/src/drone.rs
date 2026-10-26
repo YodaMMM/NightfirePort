@@ -18383,7 +18383,7 @@ fn segment_hits_sphere(a: V3, b: V3, c: V3, r: f32) -> bool {
             c
         };
         let mut ch = std::mem::take(&mut self.channels);
-        self.sss.tick(&mut ch, &ss_contacts, self.frame);
+        self.sss.tick(&mut ch, &ss_contacts, self.frame, &mut self.audio);
         self.channels = ch;
         // The sound triggers (`SoundTrigger_Update` 0x1b2790 — the object walk's per-frame pass;
         // fix-06-alarm): the alarm siren starts the same frame its ON channel is up.

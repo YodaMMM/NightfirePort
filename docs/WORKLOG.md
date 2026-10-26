@@ -11,3 +11,18 @@ Work Log:
 
 Stage Summary:
 - Branch s/level-08-audit exists on origin at the clean master point; no code changed yet.
+
+---
+Task ID: level-08-audit
+Agent: worker (s/level-08-audit)
+Task: (continuation) the per-placement audit assembled; the SS operate-sound gap fixed.
+
+Work Log:
+- Ran census_07000008 --ignored: all 308 placements re-dumped (32 kinds; rainbox 14, low-cover 25, all four muxes 0xEC AND-type).
+- gen_audit08.py -> docs/levels/07000008-audit.md: the 308 per-placement rows appended after the 996 audit's entry-sweep content (the file keeps both parts), + the scripts section (13 level-bin kind-7 scripts + 0x06000077 in pack 07800008 + 0x06000078 in pack 07900008, all decoded with dump_sp_script [D]) + the mission-record section (record 3 @0x2a4354, objectives @0x2a3e88 [L]).
+- Fixed the SS operate-sound gap [M 0x1a9948:86-89]: SsList::tick plays param 4 at the 0x40 arm through the sim's sound sink; 0xffff stays silent. Two unit tests green.
+- Corrections found: spawner groups 4/3/5 + 1/2; trigger #80's ch 43 has no reader; all 26 drones are placed (9 no-wait, 9 wait-42, 7 wait-44, the ally).
+- Suite restarted on the final tree; running.
+
+Stage Summary:
+- docs/levels/07000008-audit.md complete (the 996 sweep + 308 placement rows + scripts + mission records); ss.rs/drone.rs carry the sound fix; suite in flight.
