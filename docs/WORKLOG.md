@@ -12,3 +12,20 @@
   unhittable Bond on levels without the skin), pose them by Bond's state (crouch vs stand), then
   the full suite with fix_bond_damage_live and anim_events_live green. Sandbox reused: repo, work/,
   Nightfire-onfoot.iso, target/ present.
+
+## bond-hitbox-pose (session 2, continuation)
+
+- (14:15 UTC, 10-26) Sandbox had reset; full setup redone (repo, work-slim, ISO, rustup 1.99.1,
+  ALSA user prefix, queue worktree). Verified the three prior commits by running them:
+  fix_bond_damage_live 7/7 (crouch-vs-stand round test in), anim_events_live 4+1ign (melee
+  connects), bond_boxes_every_level_live 1/1 (16 boxes every story level).
+- Suite chunks (foreground; background dies here) flagged mp_perf_16_live's digest: bisected over
+  the branch with a throwaway worktree — breaks exactly at the crouch-pose commit (5da2b3aa);
+  cause is the deliberate [L]-backed crouch root drop (0.4847) meeting the run's scripted crouch
+  presses (i.crouch = ph % 307 == 0). Re-pinned 0xb270_68a8_2582_fec6 (kills 39), documented in
+  the test; commit abb44f33.
+- Triage: fix_0c_pylon_live + probe_pylon_render = no-GPU sandbox (wgpu adapter NotFound);
+  fix_pickups_trace_live + walkreal_07000014_live fail identically at merge base 051c5240
+  (verified by base-tree runs) — pre-existing, not this branch's.
+- Coverage: 187/823 suite binaries run this session (0 new failures); the rest is the next
+  session's first move. Report: docs/reports/bond-hitbox-pose.md.
