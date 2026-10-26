@@ -47,8 +47,10 @@ placement/script/mission record against the game.
 - `dump_sp_script`/`list_scripts` over 0700000c.bin — the scripts section.
 - `cargo test --release --offline -p nf-game --lib triggers::` — 25 passed (incl. the new raw-0xDC
   test); `--lib ss::tests` — 11 passed (incl. the two SS-sound tests).
-- The 0c live suites on the fixed tree, run directly: `fix_level_0c_live` 4/4, `walk_0700000c_live`
-  4/4, `walkreal_0700000c_live` 2/2, `laser_watch_0c_live` 2/2 — the fixes break nothing.
+- The 0c/trigger live suites on the fixed tree, run directly: `fix_level_0c_live` 4/4,
+  `walk_0700000c_live` 4/4, `walkreal_0700000c_live` 2/2, `laser_watch_0c_live` 2/2,
+  `guards_0c_live` 1/1, `hatch_crouch_live` 4/4, `fix_0c_hatch_live` 2 passed + 2 ignored,
+  `fix_ladder_water_live` 4/4 — the fixes break nothing.
 - The full four-crate suite via `tools/test/suite.py` on the final tree: see the partial below.
 
 Suite partial at finish: (filled in at finish.)
