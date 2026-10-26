@@ -164,7 +164,7 @@ fn block_rays(path: &str) {
                 println!("  SS #{pi}: state {:#x} t {} rate {} keys {} matrix trans {:.3} {:.3} {:.3}",
                     ss.state, ss.t, ss.rate, ss.keys.len(), m[3][0], m[3][1], m[3][2]);
                 for (ki, k) in ss.keys.iter().enumerate() {
-                    println!("    key{ki}: trans {:.3} {:.3} {:.3}", k.m[3][0], k.m[3][1], k.m[3][2]);
+                    println!("    key{ki}: pos {:.3} {:.3} {:.3}", k.pos[0], k.pos[1], k.pos[2]);
                 }
             }
         }
