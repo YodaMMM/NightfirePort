@@ -103,3 +103,12 @@ failure was the unfixed tree. Full suite on the final tree (master 2757d099 merg
 binaries, chunk runner — this sandbox kills background jobs): 81/818 recorded, 401 passed /
 0 failed / 11 ignored, no FAILED/TIMEOUT; targeted 11-binary outro/movie sweep 34/34. Report:
 docs/reports/mission-outros-3.md.
+
+### mission-outros-4 — branch start (2026-10-26 ~08:47 UTC)
+Branch start: s/mission-outros-4 = origin/s/mission-outros-3 + origin/master (merge clean).
+Task: the outro hold must survive the WORKSPACE build, where the `movies` feature unifies ON
+and the glue prints `movie: decoding 07300004 ahead of state 6`; both mission_outros_live
+tests fail at the "the outro resolved" assert because the decoder thread finishes on
+wall-clock time, not per poll. Plan: make the state-6 "finished" decision tick-driven (the
+host's movie poll count, the PSS audio length in ticks, per round 2) on BOTH builds, keep the
+decoded picture path for the real app. Evidence to cite: [M 0x108060, 0x1082e8].
