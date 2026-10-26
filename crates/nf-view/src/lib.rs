@@ -6466,6 +6466,18 @@ pub fn run() -> Result<()> {
             // `--set-channel N` (dev, headless too): raise one switch channel before the ticks — the window
             // path raises it at frame 120; render checks of channel-driven draws need it here as well.
             if let Some(c) = args.iter().position(|a| a == "--set-channel").and_then(|i| args.get(i + 1)).and_then(|v| v.parse::<u8>().ok()) { sim.drones.set_channel(c); }
+            // `--debris-probe x,y,z` (dev render aid): four blast-debris pieces (the MetalHash_132 meshes,
+            // `Debris_CreateEx` 0x1ac808's class-0x10 object) thrown up so they are back at that height on
+            // tick 60 under the debris gravity (`--frame 60`), so a shot shows their draw.
+            if let Some(v) = args.iter().position(|a| a == "--debris-probe").and_then(|i| args.get(i + 1)) {
+                let c: Vec<f32> = v.split(',').filter_map(|t| t.parse().ok()).collect();
+                if c.len() == 3 {
+                    for (k, &h) in nf_game::explode::METAL_HASH_132.iter().enumerate() {
+                        sim.drones.blast_debris.push(nf_game::shatter::Debris { model: h, pos: [c[0] + 0.3 * k as f32 - 0.45, c[1], c[2]],
+                            rot: [0.3 * k as f32, 0.5, 0.0], vel: [0.0, 0.0803, 0.0], spin: [0.0; 3], life: 100_000, fade: 0xff, e8: 1.0 });
+                    }
+                }
+            }
             // `--hold-npcs` (dev): guards freeze where they stand but stay shootable — aim render checks at them.
             if args.iter().any(|a| a == "--hold-npcs") { sim.drones.hold_npcs = true; }
             // `--bond x,y,z`: Bond starts exactly there (in the air he falls), instead of the level start.
