@@ -24,3 +24,8 @@ say so in the report. Never weaken a decompile-backed test to make code pass.
 
 ---
 claimed-by: sandbox6 at 2026-10-26T19:08Z
+
+---
+## Report (done, 2026-10-26T20:05Z)
+
+Closed by the driver: the report is on `s/level-0c-display-hatch-3` (docs/reports/level-0c-display-hatch-3.md); the worker didn't run finish.sh.
