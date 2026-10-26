@@ -24,3 +24,12 @@ claimed-by: sandbox5 at 2026-10-26T20:08Z
 ---
 ## Report (done, 2026-10-26T21:16Z)
 
+Branch s/level-11-abseil-hang-pose (tip e5b3ec86) — the full report is
+docs/reports/level-11-abseil-hang-pose.md on that branch. One line: the abseil anim chain
+audited against the decompile — the port already walks the game's queued CallAnim path (the
+hang pose IS anim state 2's danim 11, restarted from the slide's danim 12); all four abseil
+states' anims pinned [M] (nf-view rope_guard_hitbox_07000011_live 7 passed / 0 failed /
+0 ignored, incl. the un-ignored kept-casing pin: the weapon census 0x19 ammo 5 → mesh
+0x02000047, the shell arms, sounds on the [M] plane and rests on the floor below); nf-game lib
+578/0/5i. The full four-crate suite run is the next round's first step (this sandbox kills
+background jobs between tool calls; a 10-min foreground chunk never passed the build).
