@@ -15,8 +15,6 @@ pub mod kind {
     pub const OUT: u8 = 5;
     pub const LOAD_LEVEL: u8 = 10;
     pub const OR: u8 = 0xc;
-    /// InverterTrigger (0x1b30a8): clears its output channel while its input channel is on.
-    pub const INVERTER: u8 = 6;
     /// The movie-player trigger (`Trigger_MoviePlayer` 0x1b2a08 writes action 0xd into slot 0).
     pub const MOVIE: u8 = 0xd;
 }
@@ -653,17 +651,11 @@ pub fn build(level: &Level) -> Vec<Trigger> {
     let mut out = Vec::new();
     for (i, p) in map.placements.iter().enumerate() {
         let param = |k: u32| p.params.iter().find(|(j, _)| *j == k).map(|&(_, v)| v).unwrap_or(0);
-        // InverterTrigger_Update 0x1b30a8 [M]: `if (ch[+0xf4] != 0 && ch[+0xf6] != 0) ch[+0xf6] = 0;` — the
-        // placement's p0 is the INPUT (+0xf4) and p1 the OUTPUT (+0xf6). The Trigger struct is reused with the
-        // mux mapping and the two swapped, so `out` lands on p1 and `list[0]` on p0.
-        if p.flags == 0xf9 {
-            let swap = |k: u32| if k == 0 { param(1) } else if k == 1 { param(0) } else { param(k) };
-            if let Some(mut t) = Trigger::from_params(i, kind::AND, |k| swap(k), Vec::new()) {
-                t.kind = kind::INVERTER;
-                out.push(t);
-            }
-            continue;
-        }
+        // Kind 0xF9 is NOT a trigger: `parsemap_create_dynamic_objects` case 0xf9 calls
+        // `SoundTrigger_Create` 0x1b2628 (class 0x40) [M 0x1d04f0:504-510] — p0 is the ON-channel
+        // gate, p1 the one-shot flag, p2 the sound id [M 0x1b2628:41-48; 0x1b2790]. The port's
+        // sound triggers (crate::sound) own them. The game's InverterTrigger (0x1b3040, class
+        // 0x53) comes from case 0x41 [M 0x1d04f0:265-268] and worldobj.rs owns it.
         let kind = match p.flags { 0xea => kind::TOUCH_ONCE, 0xeb => kind::TOUCH, 0xec => kind::AND, 0xed => kind::SEQ_AND, 0xee => kind::OUT,
             0xef => kind::OR, 0xe8 => kind::LOAD_LEVEL, 0xf4 => kind::MOVIE, 0xdc => param(0) as u8, _ => continue };
         // Every trigger family — typed 0xEA-0xEF wrappers and the raw 0xDC alike — shares one param
@@ -720,11 +712,6 @@ pub fn calc(level: u32, triggers: &mut [Trigger], ch: &mut Channels, touchers: &
     for t in triggers.iter().filter(|t| t.kind == kind::TOUCH) { ch.set(t.out as u32, 0, frame); }
     let hits: Vec<u8> = triggers.iter().filter(|t| t.kind == kind::TOUCH && !(t.lock != 0 && ch.on(t.lock as u32)) && t.hit(ch, touchers, bullets)).map(|t| t.out).collect();
     for out in hits { ch.set(out as u32, 1, frame); }
-    // InverterTrigger_Update 0x1b30a8: clear the output while the input AND the output are on.
-    for t in triggers.iter().filter(|t| t.kind == kind::INVERTER) {
-        let input = t.list.first().copied().unwrap_or(0) as u32;
-        if ch.on(input) && ch.on(t.out as u32) { ch.set(t.out as u32, 0, frame); }
-    }
 }
 
 #[cfg(test)]
