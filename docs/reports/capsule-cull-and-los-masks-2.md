@@ -112,3 +112,14 @@
 
 Token, context-window, cost and credit figures for this session: not visible to me (no such counters
 are exposed in this environment; nothing to copy exactly).
+
+## ntfy failed
+
+All three fallbacks failed (2026-10-26 ~12:32Z):
+
+1. `curl -sS -m 20 -H "Title: NightfirePort" -d "capsule-cull-and-los-masks-2: ..." https://ntfy.sh/nightfire-yoda-8k3x`
+   → `curl: (28) Connection timed out after 20002 milliseconds`
+2. `python3 -c "import urllib.request as u; u.urlopen(u.Request('https://ntfy.sh/nightfire-yoda-8k3x', data=b'capsule-cull-and-los-masks-2: done (report on branch 3e4721ca; 5 groups diagnosed, next window continues)', headers={'Title':'NightfirePort'}), timeout=20)"`
+   → `urllib.error.URLError: <urlopen error [Errno 101] Network is unreachable>`
+3. `wget -q -O- --post-data "capsule-cull-and-los-masks-2: done (report on branch 3e4721ca; 5 groups diagnosed, next window continues)" https://ntfy.sh/nightfire-yoda-8k3x`
+   → no output; the call was killed at the 30 s tool timeout (network to ntfy.sh unreachable from this sandbox).
