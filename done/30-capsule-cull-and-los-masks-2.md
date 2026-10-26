@@ -147,3 +147,8 @@ claimed-by: sandbox4 at 2026-10-26T10:41Z
 
 Token, context-window, cost and credit figures for this session: not visible to me (no such counters
 are exposed in this environment; nothing to copy exactly).
+
+---
+## ntfy failed (append, 2026-10-26T11:30Z)
+
+All three fallbacks failed: curl (28) Connection timed out after 20002 milliseconds; python urllib.error.URLError <urlopen error [Errno 101] Network is unreachable>; wget killed at the 30 s tool timeout with no output. Full record: docs/reports/capsule-cull-and-los-masks-2.md on s/capsule-cull-and-los-masks-2 (53c15437).
