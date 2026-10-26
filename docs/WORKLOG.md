@@ -76,3 +76,13 @@ report + finish.
   master-green chain/gatehouse touches — measured, reverted); the bay-drop test pins the pulse +
   the floor pin, the rest-state ch 27 divergence documented (the volume-extent live check).
   fix_0c_hatch_live 3 passed / 1 ignored. Suite restarted on the final tree.
+- (19:20 UTC, 10-26) level-0c-display-hatch-3 SESSION START: branch from origin/master + merge of
+  origin/s/level-0c-display-hatch-2 (the toucher + bay-drop test). Task: the three fresh [L
+  2026-10-26] answers (the bay floor's SOUTH side is a wall — no pocket drop from z -111.4; the
+  mid floor's real root 12.39 — the port's 12.36 is right, no 0.93 gap; SS #179's rest matrix y
+  still unread — the runtime address unknown) say the case is NOT entered from the bay's south
+  edge nor the mid floor. Find the remaining route into the 6.27 pocket / jetpack #414 at
+  (5.50, 7.55, -110.37) from the level's own data [D placements, triggers, scripts, SS #179's
+  keyed motion] + the game's rules [M], port what the port lacks, un-ignore
+  from_the_duct_top_the_open_hole_carries_bond_down or replace it with the real route's test.
+  Suite started in background.
