@@ -18383,7 +18383,7 @@ fn segment_hits_sphere(a: V3, b: V3, c: V3, r: f32) -> bool {
             c
         };
         let mut ch = std::mem::take(&mut self.channels);
-        self.sss.tick(&mut ch, &ss_contacts, self.frame);
+        self.sss.tick(&mut ch, &ss_contacts, self.frame, &mut self.audio);
         self.channels = ch;
         // The SS operate arm's own sample (level-06-audit): `Sound_Play3D(…, ext+0x14, obj+0x80)`
         // on the 0x40 -> 1 transition [M 0x1a9948:86-89] — 07000006's barrel traps #353/#354/#389/#390
