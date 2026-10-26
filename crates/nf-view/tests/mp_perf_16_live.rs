@@ -50,7 +50,12 @@ fn iso() -> Option<String> {
 // Re-pinned for standins-scene-930: an online bot's armour pickup now runs Pickup_Handler's class-2 case 3
 // (BOT_vars+0xA4 / the armour byte += amount, capped 50 [M 0x18e650:119-133]) instead of the old +20 health,
 // so the fights run differently — kills 37; the two machines' per-tick hashes still agree.
-const PINNED_DIGEST: u64 = 0x89cb_fcb6_ae45_c2ac;
+// Re-pinned for bond-hitbox-pose (0xb270_68a8_2582_fec6, kills 39 over 3600 ticks): Bond's crouch toggle now
+// applies the settled root drop (standing rest 1.086 [L], crouched 0.607 [L the truck ride] —
+// ROOT_HEIGHT − CROUCH_ROOT_HEIGHT = 0.4847, player.rs; the port never lowered a crouched root before), and
+// this run's scripted humans press crouch (`i.crouch = ph % 307 == 0`), so their root — and every shot that
+// tests their boxes — rides the stance now; the two machines' per-tick hashes still agree every tick.
+const PINNED_DIGEST: u64 = 0xb270_68a8_2582_fec6;
 
 const TICKS: u32 = 3600;
 
