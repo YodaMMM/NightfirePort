@@ -720,6 +720,10 @@ pub struct Player {
     /// The runtime cel the queries start from (obj+0x20 — fix-safe08b): the `pCelList` cell index in
     /// the world's `ScopeGraph`; `None` = the flat (unscoped) world.
     pub cel: Option<usize>,
+    /// The crouch stance (`Player_SSCrouch` 0x1924c0's state, the port's `Bond::crouched`): the
+    /// hit-box pose picks the crouch idle's palette when set [D the SP crouch anim-set descriptor
+    /// 0x2b91d8's idle script 0x060009ff → seq 0x0400084e; M PlayerAnimSetInitCrouch 0x18fea0].
+    pub crouched: bool,
 }
 
 /// The player as an AI target (`DAT_00298fd0`): his position when the nodes were found, the frame (`+0x54`), and per
@@ -17679,7 +17683,7 @@ fn segment_hits_sphere(a: V3, b: V3, c: V3, r: f32) -> bool {
         // glist and +0xFA bit 3 [L ee_start_05.bin 0x16cefe0]) at the [L] standing idle palette
         // (`damage::bond_boxes`); the old cylinder was the documented deviation.
         self.impacts.clear();
-        let bond_boxes = crate::damage::bond_boxes(d, player.yaw, player.pos);
+        let bond_boxes = crate::damage::bond_boxes(d, player.yaw, player.pos, player.crouched);
         let viewer = player.pos;
         for b in &mut self.bullets {
             let (from, dir) = (b.pos, b.dir);

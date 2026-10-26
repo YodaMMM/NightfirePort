@@ -99,7 +99,7 @@ impl Level05 {
     }
 }
 
-fn bond_at(p: [f32; 3]) -> Player { Player { yaw: 0.0, pos: p, target: [p[0], p[1] + 0.5, p[2]], eye: [p[0], p[1] + 1.0, p[2]], aim: [-1.0, 0.0, 0.0], sph: p, capsule: ([p[0], p[1] + 1.086, p[2]], p), hanging: false, cel: None } }
+fn bond_at(p: [f32; 3]) -> Player { Player { yaw: 0.0, pos: p, target: [p[0], p[1] + 0.5, p[2]], eye: [p[0], p[1] + 1.0, p[2]], aim: [-1.0, 0.0, 0.0], sph: p, capsule: ([p[0], p[1] + 1.086, p[2]], p), hanging: false, cel: None , crouched: false } }
 
 /// The seen-bark sfx ids: `Drone_SfxInfo` entries 0x49..=0x4e [L ee_start_05.bin @0x2812d0+idx·32].
 fn seen_line_sfx(l: &Level05) -> Vec<u32> { (0x49..=0x4e).map(|i| l.voices[i as usize].sfx).collect() }

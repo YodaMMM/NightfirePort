@@ -124,6 +124,42 @@ pub(crate) const BOND_IDLE_POSE: [(i16, [f32; 3], [[f32; 3]; 3]); 20] = [
     (56, [0.1278, -0.9710, 0.5125], [[0.9935, -0.0125, 0.1129], [0.0121, 0.9999, 0.0040], [-0.1129, -0.0026, 0.9936]]),
 ];
 
+/// Bond's crouch idle pose, root-local frame — the SAME derivation as `BOND_IDLE_POSE`, from the
+/// crouch idle's own anim: the SP crouch anim-set descriptor [D 0x2b91d8 = index 1 of the 16
+/// @0x2b91b0, `PlayerAnimSetInitCrouch` 0x18fea0's SP arm] → idle script 0x060009ff → sequence
+/// 0x0400084e (skeleton 0, 2 frames) frame 1, through the port's own player
+/// (`anim::local_pose` + `anim::world_pose`, the same pipeline the standing idle validates against
+/// the snapshot table's rotations exactly). The root bone's translation (the anim's root motion)
+/// is anchored out — the game moves it into the object (obj+0x30 rides the stance's cc:
+/// `CROUCH_ROOT_HEIGHT` 0.55 [L, M AnimObj+0xCC]), which the port's `Bond::pos` already carries.
+/// The legs fold up under the hips (bones 51/52 at y −0.30/−0.43 vs the idle's −0.90/−0.97) and
+/// the head origin drops to +0.405 (idle +0.545); the composed head box lands ~0.5 lower in the
+/// world once the dropped root is applied. The [L] crouched-palette crosscheck is requested in the
+/// report's live checks (no crouched snapshot exists in work/).
+#[rustfmt::skip]
+pub(crate) const BOND_CROUCH_POSE: [(i16, [f32; 3], [[f32; 3]; 3]); 20] = [
+    ( 0, [0.0000, 0.0000, 0.0000], [[0.7351, 0.3174, 0.5990], [0.0831, 0.8347, -0.5444], [-0.6728, 0.4500, 0.5872]]),
+    ( 1, [-0.0201, 0.0590, -0.0065], [[0.8359, -0.0184, 0.5486], [-0.3593, 0.7372, 0.5722], [-0.4150, -0.6754, 0.6096]]),
+    ( 4, [-0.2147, 0.3524, 0.2584], [[0.8663, 0.4968, 0.0520], [-0.4957, 0.8679, -0.0332], [-0.0616, 0.0030, 0.9981]]),
+    ( 5, [-0.2470, 0.4050, 0.2937], [[0.9880, 0.1423, 0.0594], [-0.1251, 0.9650, -0.2306], [-0.0901, 0.2204, 0.9712]]),
+    (19, [0.0035, 0.2655, 0.3567], [[0.7808, -0.5511, 0.2942], [0.2740, 0.7253, 0.6315], [-0.5615, -0.4125, 0.7174]]),
+    (20, [0.2434, 0.1099, 0.4183], [[-0.8789, 0.0577, 0.4735], [0.3857, 0.6700, 0.6343], [-0.2806, 0.7401, -0.6111]]),
+    (21, [-0.0149, 0.1349, 0.5312], [[-0.5943, -0.0077, 0.8042], [0.4661, 0.8116, 0.3523], [-0.6554, 0.5842, -0.4787]]),
+    (23, [-0.1038, 0.1527, 0.6384], [[-0.7508, -0.4429, 0.4901], [0.0728, 0.6819, 0.7278], [-0.6565, 0.5821, -0.4797]]),
+    (31, [-0.2967, 0.2740, 0.0568], [[0.0201, 0.5284, 0.8487], [-0.8436, 0.4646, -0.2693], [-0.5366, -0.7106, 0.4551]]),
+    (32, [-0.2732, 0.1254, -0.2051], [[0.5521, 0.8255, -0.1176], [-0.8157, 0.5054, -0.2814], [-0.1729, 0.2513, 0.9523]]),
+    (35, [-0.4220, -0.1035, -0.1390], [[0.7023, 0.7074, 0.0789], [-0.6682, 0.6934, -0.2696], [-0.2455, 0.1366, 0.9597]]),
+    (39, [-0.5380, -0.1820, -0.1339], [[0.3970, 0.9174, -0.0290], [-0.8844, 0.3739, -0.2794], [-0.2455, 0.1366, 0.9597]]),
+    (49, [-0.1503, -0.1200, 0.0219], [[0.7838, -0.3119, 0.5370], [0.5534, 0.7431, -0.3761], [-0.2818, 0.5920, 0.7551]]),
+    (50, [-0.4015, -0.4362, 0.1863], [[0.7472, -0.3305, 0.5765], [-0.6423, -0.1367, 0.7541], [-0.1704, -0.9338, -0.3144]]),
+    (51, [-0.0771, -0.3006, -0.1782], [[0.7029, 0.0400, 0.7101], [-0.7028, 0.1923, 0.6848], [-0.1092, -0.9805, 0.1633]]),
+    (52, [-0.0593, -0.4343, -0.2189], [[0.7815, -0.0978, 0.6162], [-0.0316, 0.9802, 0.1956], [-0.6231, -0.1723, 0.7629]]),
+    (53, [0.0494, -0.0338, 0.1847], [[0.9747, 0.0984, 0.2007], [0.2215, -0.3051, -0.9262], [-0.0299, 0.9472, -0.3192]]),
+    (54, [-0.0290, 0.1078, 0.5879], [[0.9830, 0.0584, 0.1740], [-0.0780, 0.9911, 0.1078], [-0.1662, -0.1195, 0.9788]]),
+    (55, [0.0403, -0.3808, 0.4738], [[0.9930, -0.0389, 0.1117], [0.0361, 0.9990, 0.0272], [-0.1127, -0.0230, 0.9934]]),
+    (56, [0.0432, -0.4542, 0.5939], [[0.9956, -0.0049, 0.0933], [0.0092, 0.9989, -0.0462], [-0.0930, 0.0468, 0.9946]]),
+];
+
 /// Bond's 16 body boxes (`AnimGetCollData` 0x1c4ac8 over `HumanCollisionBones` 0x2c6be8 [D]) at the
 /// [L] standing idle pose, riding Bond's yaw: the game's guard-round test is `Collide_Intersect`
 /// 0x1ebaa8:101-105's `Collide_Jointy` gate (the player obj carries glist and obj+0xFA bit 3 —
@@ -133,7 +169,7 @@ pub(crate) const BOND_IDLE_POSE: [(i16, [f32; 3], [[f32; 3]; 3]); 20] = [
 /// the first box hit), the part ids (bone a), the half extents × the skin scale, the box matrix =
 /// the other bone's rotation, entry 0's centre rule (the bone plus (0, bone.y − other.y, 0)).
 /// Not modelled: the palette's walk/crouch animation (the boxes hold the idle stance at any yaw).
-pub fn bond_boxes(d: &Data<'_>, yaw: f32, pos: V3) -> Vec<HitBox> {
+pub fn bond_boxes(d: &Data<'_>, yaw: f32, pos: V3, crouch: bool) -> Vec<HitBox> {
     let sk = player_skin_hash(d.level);
     let Some(skin) = d.skins.get(&sk) else { return Vec::new() };
     let table = d.hitboxes.for_skin(sk);
@@ -141,7 +177,7 @@ pub fn bond_boxes(d: &Data<'_>, yaw: f32, pos: V3) -> Vec<HitBox> {
     // The yaw matrix's 3×3 (row-vector rows; object_matrix's rows 0..2, the translation is row 3).
     let ry = [[om[0][0], om[0][1], om[0][2]], [om[1][0], om[1][1], om[1][2]], [om[2][0], om[2][1], om[2][2]]];
     let mut palette = vec![[[0.0, 0.0, 0.0, 0.0]; 4]; 60];
-    for (bone, t, r) in BOND_IDLE_POSE {
+    for (bone, t, r) in if crouch { BOND_CROUCH_POSE } else { BOND_IDLE_POSE } {
         let mut m = [[0.0f32; 4]; 4];
         for i in 0..3 {
             for j in 0..3 { m[i][j] = r[i][0] * ry[0][j] + r[i][1] * ry[1][j] + r[i][2] * ry[2][j]; }

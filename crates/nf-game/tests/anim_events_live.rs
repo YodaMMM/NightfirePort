@@ -88,7 +88,7 @@ impl Fixture {
     }
 }
 
-fn bond_away() -> Player { Player { yaw: 0.0, pos: [0.0, -500.0, 0.0], target: [0.0, -499.5, 0.0], eye: [0.0, -499.0, 0.0], aim: [-1.0, 0.0, 0.0], sph: [0.0, -500.0, 0.0], capsule: ([0.0, -498.9, 0.0], [0.0, -500.0, 0.0]), hanging: false, cel: None } }
+fn bond_away() -> Player { Player { yaw: 0.0, pos: [0.0, -500.0, 0.0], target: [0.0, -499.5, 0.0], eye: [0.0, -499.0, 0.0], aim: [-1.0, 0.0, 0.0], sph: [0.0, -500.0, 0.0], capsule: ([0.0, -498.9, 0.0], [0.0, -500.0, 0.0]), hanging: false, cel: None, crouched: false } }
 
 /// The frame of the first op-4 kind-2 command with the given event arg in `hash`.
 fn event_frame(d: &Data, hash: u32, arg: u16) -> Option<(u32, u32)> {

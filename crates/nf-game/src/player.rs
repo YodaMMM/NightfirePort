@@ -1513,6 +1513,15 @@ impl Bond {
         } else if !self.crouched && self.jump == 0 && input.crouch && self.lockout == 0 {
             self.crouched = true;
             self.cc = CROUCH_ROOT_HEIGHT;
+            // The root follows the stance: the game's settled obj+0x30 rides floor + cc + 0.051 —
+            // standing 1.086 [L 07000005 start + the stand_at assert], crouched 0.607 [L the truck
+            // ride, player.rs's CROUCH_ROOT_HEIGHT note] — a drop of ROOT_HEIGHT −
+            // CROUCH_ROOT_HEIGHT = 0.4847. The port runs no Bond body anims (the crouch anim's root
+            // motion is unparsed — the creep doc), so the toggle applies the settled drop directly;
+            // the 60-tick lockout above models the transition window the game spends blending.
+            if self.grounded {
+                self.pos[1] -= ROOT_HEIGHT - CROUCH_ROOT_HEIGHT;
+            }
             self.lockout = 60;
         } else if self.crouched && self.lockout == 0 && !self.head_bump && headroom(world)
             // options-census: the stand condition follows the Crouch option [M Player_SSCrouch
@@ -1521,6 +1530,10 @@ impl Bond {
             && (if !input.crouch_hold { input.crouch || input.jump } else { !input.crouch }) {
             self.crouched = false;
             self.cc = ROOT_HEIGHT;
+            // The stand-up mirrors the crouch drop (the same settled-root arithmetic, reversed).
+            if self.grounded {
+                self.pos[1] += ROOT_HEIGHT - CROUCH_ROOT_HEIGHT;
+            }
             self.lockout = 60;
         } else if !self.crouched && self.jump == 0 && input.jump && self.grounded_history != 0 && !self.head_bump && headroom(world) {
             // `Player_HandleJump` 0x1916b0:118-147 — the jump grab: with the third-icon context 3 (the

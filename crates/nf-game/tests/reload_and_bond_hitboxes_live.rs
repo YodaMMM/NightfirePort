@@ -88,7 +88,7 @@ impl Level05 {
     }
 }
 
-fn bond_at(p: [f32; 3]) -> Player { Player { yaw: 0.0, pos: p, target: [p[0], p[1] + 0.5, p[2]], eye: [p[0], p[1] + 1.0, p[2]], aim: [-1.0, 0.0, 0.0], sph: p, capsule: ([p[0], p[1] + 1.086, p[2]], p), hanging: false, cel: None } }
+fn bond_at(p: [f32; 3]) -> Player { Player { yaw: 0.0, pos: p, target: [p[0], p[1] + 0.5, p[2]], eye: [p[0], p[1] + 1.0, p[2]], aim: [-1.0, 0.0, 0.0], sph: p, capsule: ([p[0], p[1] + 1.086, p[2]], p), hanging: false, cel: None, crouched: false } }
 
 /// The disc's `HumanCollisionBones` 0x2c6be8 part ids in table order (bone a of each of the 16
 /// entries; the terminator is entry 16) [D 0x2c6be8, file offset 0x1c0ae8].
@@ -103,7 +103,7 @@ const DISC_PARTS: [i16; 16] = [5, 4, 53, 54, 55, 56, 49, 50, 51, 52, 20, 21, 23,
 fn bond_boxes_match_the_snapshot_palette() {
     let Some(l) = Level05::load() else { eprintln!("skip: NF_ISO not set"); return };
     let d = l.data();
-    let boxes = nf_game::damage::bond_boxes(&d, -2.147, [104.95, 24.96, 108.83]);
+    let boxes = nf_game::damage::bond_boxes(&d, -2.147, [104.95, 24.96, 108.83], false);
     assert_eq!(boxes.len(), 16, "HumanCollisionBones: 16 boxes + terminator [D 0x2c6be8]");
     assert_eq!(boxes.iter().map(|b| b.part).collect::<Vec<_>>(), DISC_PARTS, "the part ids in table order [D]");
     let centre = |part: i16| boxes.iter().find(|b| b.part == part).unwrap();
@@ -132,7 +132,7 @@ fn rounds_hit_each_body_region() {
     let Some(l) = Level05::load() else { eprintln!("skip: NF_ISO not set"); return };
     let d = l.data();
     let pos = [104.95, 24.96, 108.83];
-    let boxes = nf_game::damage::bond_boxes(&d, -2.147, pos);
+    let boxes = nf_game::damage::bond_boxes(&d, -2.147, pos, false);
     assert_eq!(boxes.len(), 16);
     let mut misses = Vec::new();
     for b in &boxes {
