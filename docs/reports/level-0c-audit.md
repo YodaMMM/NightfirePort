@@ -53,7 +53,14 @@ placement/script/mission record against the game.
   `fix_ladder_water_live` 4/4 — the fixes break nothing.
 - The full four-crate suite via `tools/test/suite.py` on the final tree: see the partial below.
 
-Suite partial at finish: (filled in at finish.)
+Suite partial at finish (the run phase is sequential across 812 binaries and the window closed
+first): **364 binaries completed — 1265 passed, 3 failed, 100 ignored**. The 3 failures are the
+documented GPU render probes (`fix_0c_pylon_live` ×2, `probe_pylon_render` — this sandbox has no
+GPU; the 05 session recorded the same set). The CRASH lines are the net/mp OOM class (exit -9:
+net_resync, mp_shot_effects, mp_stress_explosives, net_match_end_clients, mp_online_failures — the
+05 session's recorded environmental set). No TIMEOUTs, and no 0c/trigger path failed (the 0c
+binaries were also run directly — see Verification). The remaining ~450 binaries were not reached;
+the next session can re-run the suite to completion.
 
 ## What's left (large gaps -> follow-up tasks)
 

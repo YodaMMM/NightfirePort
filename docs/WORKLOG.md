@@ -26,3 +26,16 @@ Work Log:
 
 Stage Summary:
 - The deliverable is complete and pushed; the suite runs for the final partial tally; report + finish steps next.
+
+---
+Task ID: level-0c-audit
+Agent: worker (s/level-0c-audit)
+Task: (final) finish steps.
+
+Work Log:
+- Extra direct runs on the fixed tree: guards_0c 1/1, hatch_crouch 4/4, fix_0c_hatch 2+2 ignored, fix_ladder_water 4/4 — all green.
+- Suite partial at the window's close: 364 binaries, 1265 passed / 3 failed (the GPU render probes fix_0c_pylon ×2 + probe_pylon_render — the documented no-GPU set) / 100 ignored; the net/mp CRASHes are the exit -9 OOM class; no TIMEOUTs.
+- Report finalized with the tally; finish.sh + ntfy follow.
+
+Stage Summary:
+- docs/levels/0700000c-audit.md (575 rows + scripts + record 11) and the two fixes (the SS operate sound re-applied; the RAW 0xDC map) are on s/level-0c-audit; the report carries the large gaps (the sky +0x4a word, D-004, the env 0xff weather, the SS posed render) and the live-check list.
