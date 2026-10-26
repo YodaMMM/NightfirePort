@@ -20,3 +20,8 @@ say so in the report. Never weaken a decompile-backed test to make code pass.
 
 ---
 claimed-by: sandbox1 at 2026-10-26T19:32Z
+
+---
+## Report (done, 2026-10-26T22:00Z)
+
+Closed by the driver: the report is on `s/level-14-camera-view` (docs/reports/level-14-camera-view.md); the worker didn't run finish.sh.
