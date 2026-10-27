@@ -15,7 +15,7 @@
 
 use crate::drone::{Data, Player, Rng};
 use crate::trig::{angle_difference, atan2_approx, sinf, PI, TAU};
-use nf_formats::placement::{object_matrix, Placement};
+use nf_formats::placement::{object_matrix, view_rot_trans_matrix, Placement};
 use nf_formats::ps2float::{add_noguard, mul};
 
 pub type V3 = [f32; 3];
@@ -207,7 +207,9 @@ impl Searchlights {
                 placement: i, kind, pos: p.translation, base_yaw: p.rotation[1],
                 on: param(1) as u8, off: param(2) as u8, alarm: param(3) as u8,
                 half: 0.0, mid: 0.0, phase, drawn: kind < 2,
-                matrix: object_matrix(p.rotation, p.translation),
+                // Searchlight_Create builds obj+0x90 with CCO(0) → View_RotTransMatrix
+                // [M 0x1cb4f8:25, 0x1344e0:26-29].
+                matrix: view_rot_trans_matrix(p.rotation, p.translation),
                 state: if param(1) != 0 { 3 } else { 0 },
                 pitch: 0.0, yaw: p.rotation[1], links: [None; 5], killed: false,
                 light: None, alpha: 0xff, scale: 1.0, box_min, box_max,

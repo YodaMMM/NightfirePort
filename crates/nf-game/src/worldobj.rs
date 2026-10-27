@@ -372,8 +372,9 @@ impl WorldObjects {
                     w.inverters.push(Inverter { ch_in: param(0) as u16, ch_out: param(1) as u16 });
                 }
                 0xd2 => {
-                    // Shooter_Create 0x17d030: p0 → obj+0xF4, p1 → obj+0xF6.
-                    let m = nf_formats::placement::object_matrix(p.rotation, p.translation);
+                    // Shooter_Create 0x17d030: p0 → obj+0xF4, p1 → obj+0xF6. Its obj+0x90 comes
+                    // from CCO(0) → View_RotTransMatrix [M 0x17d030:10, 0x1344e0:26-29].
+                    let m = nf_formats::placement::view_rot_trans_matrix(p.rotation, p.translation);
                     w.shooters.push(Shooter {
                         pos: p.translation,
                         // Mat_GetDir(obj+0x90): the matrix's forward column (identity → +z).
@@ -387,7 +388,8 @@ impl WorldObjects {
                     // DynamicObject_Create 0x18dbf8: p0/p1 (u16), p2 (u16), p3 (u8); obj+0xF0 = the
                     // glist's +0x44 word (0x18dbf8:15-16), |0x30 when p0 != 0 (0x18dbf8:27-29).
                     let (base, centre) = glist(p);
-                    let m = nf_formats::placement::object_matrix(p.rotation, p.translation);
+                    // obj+0x90: CCO(0) → View_RotTransMatrix [M 0x18dbf8:13, 0x1344e0:26-29].
+                    let m = nf_formats::placement::view_rot_trans_matrix(p.rotation, p.translation);
                     let slot = w.dynobjs.len() as u16;
                     w.dynobjs.push(DynObject {
                         slot,

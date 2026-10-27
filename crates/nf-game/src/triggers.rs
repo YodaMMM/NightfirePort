@@ -5,7 +5,7 @@
 
 use crate::world::V3;
 use nf_formats::level::Level;
-use nf_formats::placement::{object_matrix, transform};
+use nf_formats::placement::{transform, view_rot_trans_matrix};
 
 pub mod kind {
     pub const TOUCH_ONCE: u8 = 1;
@@ -683,7 +683,9 @@ pub fn build(level: &Level) -> Vec<Trigger> {
         // p9=0 -> the mask defaults to 2 (class-5 bullets).
         let q = |k: u32| param(k);
         let target = if p.by_hash() { level.by_hash.get(&p.hashcode).copied() } else if (p.index as usize) < map.objects.len() { Some((m, p.index as usize)) } else { None };
-        let mx = object_matrix(p.rotation, p.translation);
+        // Trigger_Create builds obj+0x90 with control_create_object's quaternion-0 arm →
+        // View_RotTransMatrix [M 0x1b1720:52, 0x1344e0:26-29].
+        let mx = view_rot_trans_matrix(p.rotation, p.translation);
         let tris: Vec<[V3; 3]> = target.and_then(|(om, oi)| level.maps[om].objects[oi].collision.as_ref())
             .map(|c| c.triangles().into_iter().map(|t| t.map(|v| transform(&mx, v))).collect()).unwrap_or_default();
         // Touch triggers on channel 0x7D only work on level 0x07001500.
