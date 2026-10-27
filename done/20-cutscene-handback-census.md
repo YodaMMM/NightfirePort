@@ -24,3 +24,8 @@ claimed-by: sandbox1 at 2026-10-27T19:20Z
 ---
 ## Report (done, 2026-10-27T20:19Z)
 
+
+---
+## Report from the worker (done, 2026-10-27T20:19Z)
+
+Closed by the driver: the report is on `s/cutscene-handback-census` (docs/reports/cutscene-handback-census.md); the worker didn't run finish.sh.
