@@ -46,3 +46,14 @@ The hash-0 kind-0x19 marker skip (level-4a-lift-4's landing-scene pin) is retain
 ## Usage
 
 not visible to me
+
+## ntfy failed
+
+All three publish attempts returned the same error (ntfy.sh daily quota, not a network failure):
+
+1. `curl`:
+   `{"code":42908,"http":429,"error":"limit reached: daily message quota reached; increase your limits with a paid plan, see https://ntfy.sh","link":"https://ntfy.sh/docs/publish/#limitations"}`
+2. `python3 urllib.request`:
+   `urllib.error.HTTPError: HTTP Error 429: Too Many Requests`
+3. `wget --post-data`:
+   empty output, exit 0 — same 429 body (the day's earlier tasks hit the identical quota error).
