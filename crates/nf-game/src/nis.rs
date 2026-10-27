@@ -916,13 +916,45 @@ impl Script {
         let g = |k: usize| p.get(k).copied().unwrap_or(0);
         match kind {
             3 => {
-                // `SCRIPTINFO+0x9C = p0 − 1` (the delay), then every stream's object gets
-                // `Vec_Copy2(obj+0xC0 → obj+0x30, obj+0x40)` — the position snapped to its matrix before the
-                // pause [M 0x1d94c0:98-117, port-check §6]. The port's streams hold no separate position:
-                // `Obj::Entity.matrix` IS the animated matrix, so the sync's invariant (position == matrix
-                // while paused) holds by construction.
-                self.delay = g(0) as i32 - 1
+                // `Script_EventHandler` 0x1d94c0:98-116, two halves [M]:
+                // (1) `SCRIPTINFO+0x9C = p0 − 1` — skipped while a skip is armed (+0xAB5 bit 0x1,
+                //     set by `Script_FFwd` 0x1dac78:56, cleared by `Script_Update`'s end block
+                //     0x1da998:109; the port's fade_flags bit 1 [M nis.rs ffwd]). 303 disc sites
+                //     [D the script_events_dump sweep]: 297 pass p0 = 0 → delay = −1 → the
+                //     negative-delay HOLD (`Script_Update` 0x1da998 runs the streams only while
+                //     the delay is 0; a negative delay holds without a decrement [M disasm
+                //     0x1da9c4-0x1da9dc]) until `SP_Activate` 0x1dc338:84 or `SP_UnPause`
+                //     0x1dca58:13 zeroes it — the shutters' and the lifts' hold; 6 pass p0 > 0
+                //     (06000048 s3 [500]×2, 060008bc s13 [120]×2, 06000a1f s1 [60], 0600091a s12
+                //     [10], 060007fd s1 [250] [D]) → a timed pause that counts down.
+                // (2) the spawn-transform bake: every stream's entity/anim object
+                //     (`Script_GetObj` 0x1db688 returns kinds 1/2 only) gets
+                //     `Vec_Copy2(obj+0xC0, obj+0x30, obj+0x40)` [M call-site disasm
+                //     0x1d95e0-0x1d9614; `Vec_Copy2` 0x1e2cf8 disasm: a0 is READ, a1 AND a2 are
+                //     WRITTEN] — the object's position (+0x30) and previous position (+0x40) snap
+                //     to its matrix translation row (+0xC0; obj-tag.md). The port's script objects
+                //     carry no separate +0x30/+0x40: `Obj::Entity.matrix` IS the animated matrix
+                //     (its translation row is exactly the game's +0xC0) and an `Obj::Anim`'s
+                //     position is derived per frame from the same anim data the game's matrix row
+                //     holds, so the bake's invariant (position == matrix translation) holds by
+                //     construction and there is no second store to make. `Script_EntityStart`'s
+                //     create-time tail runs the identical copy (a0=e+0xC0, a1=e+0x40, a2=e+0x30,
+                //     disasm 0x1d8f00-0x1d8f0c), so a fresh spawn is born baked — 06000959's
+                //     Event 3 (t0 and t16 [D script_events_dump], the same ticks as its two Entity
+                //     ops) then only re-asserts it: the disc's shutter keys are all identity
+                //     [D script_events_dump dump_06000959_keys_and_sp427], so the baked transform
+                //     IS the SP-base composed one, cel and bake alike.
+                if self.fade_flags & 1 == 0 {
+                    self.delay = g(0) as i32 - 1
+                }
             }
+            // Event 4 [M 0x1d94c0:118-121]: `Player_Disable(glb_players, 0)` +
+            // `PlarStat_LogTimerPause(0)`. `Player_Disable` 0x195f70 (param 0): `BL+0x94a = 0` —
+            // the byte `Player_Update` 0x193600:80 and `Player_CollisionHandler` 0x1949a8:24 gate
+            // on, i.e. input and the collision pass stop (the port's `disabled`, which zeroes the
+            // input every tick); the player obj's +0xF0 |= 0x10 (not drawn) and its AnimObject's
+            // (BL+0x7E8) likewise; BL+0x7D4 = 0 has no port model. The timer pause rides the same
+            // request on the view side (`log_timer_pause()`, slot 0 [M 0x199520:6-9]).
             4 => out.push(Request::PlayerDisable),
             // Where the player comes back: the previous stream's entity (else where he is), applied by `Script_Free`.
             6 => {
