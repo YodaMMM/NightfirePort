@@ -293,9 +293,14 @@ fn the_records_spinner_takes_the_clicks_the_drawn_arrows_advertise() {
     assert_eq!(fe.cursor, 11);
     assert!(click(&mut fe, 497.0, 133.0), "▶ = Down");
     assert_eq!(fe.cursor, 0);
-    // A click on the spinner row itself is ✕ — Enter's action (back to the Dossier).
-    assert!(click(&mut fe, 300.0, 132.0));
-    assert_eq!(fe.page, Page::Dossier);
+    // A click on the spinner row itself maps to ✕, and the game's ✕ does NOTHING here:
+    // C_RBDSRECORDS 0x20bf00 arms only msg 0x49 (the selection rebind) — no 0x4b arm [M] —
+    // so the click acts like the Gadgets centre's (consumed-nothing → false) and the page
+    // stays (the old back-to-the-Dossier pin had no decompile basis; fixed with the address,
+    // menu-dossier-navigation).
+    assert!(!click(&mut fe, 300.0, 132.0), "the row's ✕ has no arm [M 0x20bf00]");
+    assert_eq!(fe.page, Page::Records);
+    assert_eq!(fe.cursor, 0);
     // Sister: the score rows below are readouts — clicks do nothing there.
     let mut g = FrontEnd::new();
     to_records(&mut g);
@@ -533,10 +538,15 @@ fn the_dossier_gadget_and_weapon_wheels_hover_like_the_keyboard() {
     // The centre's ✕ is the keyboard's Confirm: nothing (no select arm [M]).
     assert!(!click(&mut fe, 450.0, 190.0));
     assert_eq!(fe.page, Page::Gadgets);
-    // The Weapons wheel behaves the same (row 3 of the dossier wheel; Back lands the dossier
-    // wheel on row 0 [M the Gadgets Back arm]).
+    // The Weapons wheel behaves the same (row 3 of the dossier wheel). Back pops the manager's
+    // stack, so the Dossier wheel returns to the row that OPENED the page — Gadgets' row 2
+    // [M 0x21c858:592-600 — the pop re-opens the saved page with its saved cursor; the wheel's
+    // 0x44 carried lparam 0, 0x216eb0:20/:26].
     assert!(act(&mut fe, Action::Back), "back to the Dossier");
-    for _ in 0..3 { assert!(act(&mut fe, Action::Down)); }
+    assert_eq!(fe.page, Page::Dossier);
+    assert_eq!(fe.cursor, 2, "the wheel returns to the Gadgets row that opened the page [M 0x21c858:598-600]");
+    assert!(act(&mut fe, Action::Down), "one Down reaches Weapons");
+    assert_eq!(fe.cursor, 3);
     assert!(act(&mut fe, Action::Confirm), "Weapons");
     assert_eq!(fe.page, Page::Weapons);
     assert!(hover(&mut fe, 450.0, 211.0));

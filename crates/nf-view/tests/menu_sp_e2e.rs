@@ -648,3 +648,98 @@ fn the_final_mission_routes_to_the_win_page_and_credits() {
     assert_eq!(fe.page, Page::Credits, "the credits open with the win source [M 0x215100:48]");
     assert!(!fe.win_movie_finished(), "sister: the host's movie-end call is inert after the skip");
 }
+
+// ── menu-dossier-navigation: the Dossier's page stack [M 0x21c858] ───────────────────────────
+
+/// A completed mission's results page, through the real boot → main → codename → difficulty →
+/// mission → runner → results path (the same walk a_completed_mission… takes, without the save).
+fn completed_results(fe: &mut FrontEnd, dir: std::path::PathBuf) -> u32 {
+    fe.set_profile_dir(dir);
+    to_missions(fe);
+    assert_eq!(fe.page, Page::MissionSelect);
+    // The Exchange (row 1) completes: the driving notice on row 0 dismissed, the row picked.
+    assert!(act(fe, Action::Up), "Up to Paris Prelude (the list opens on row 1 [M 0x20b608:60-64])");
+    assert!(act(fe, Action::Confirm), "Paris Prelude's driving notice");
+    assert!(fe.notice.is_some());
+    assert!(act(fe, Action::Confirm), "dismiss the driving notice");
+    assert!(act(fe, Action::Down));
+    assert!(act(fe, Action::Confirm), "The Exchange starts");
+    let level = fe.requested_level.take().expect("the level request");
+    let mut progress = nf_game::progress::Progress::default();
+    progress.nightfire_status = fe.packed_unlocks();
+    fe.flow.stack = vec![menu::ST_RUNNER];
+    fe.flow.current_level = level;
+    fe.mission_ended(Outcome::Complete, Stats::default());
+    assert_eq!(fe.requested_level.take(), Some(menu::FRONTEND_LEVEL));
+    assert_eq!(drive_end_to_map(fe), None);
+    assert!(fe.reopen_queued_page(), "the results page opens with the fresh manager [M 0x1d6360:160-163]");
+    assert!(fe.results_enter(&mut progress, level, 6, fe.difficulty as u32, None), "the results build");
+    assert_eq!(fe.page, Page::Results);
+    level
+}
+
+/// The strand: Results → □/Tab (msg 0x5d) → the Dossier → Back MUST return to the Results page
+/// the Tab came from — the game's 0x5d runs Manager_SendMessage(0x44, 0x4000002b, 0) whose
+/// lparam 0 pushes the opener {page, cursor} onto the manager's stack [M P_NFRESULTS 0x208e78:
+/// 222-230 + the push rule 0x21c858:262-274; the pop 0x21c858:582-602]. The old push-less hop
+/// left the Dossier over an empty stack whose 0x5f does nothing [M 0x21c858:604-610 +
+/// P_DOSSIER 0x216de0's 0x4c/0x50-only arms] — the port fell through to the mission list and
+/// the player was stranded away from the results.
+#[test]
+fn the_results_tab_opens_the_dossier_and_back_returns_to_the_results() {
+    let dir = card_dir("dossier-strand");
+    let mut fe = FrontEnd::new();
+    completed_results(&mut fe, dir.clone());
+    let results_cursor = fe.cursor;
+    // □/Tab (the "~Y Dossier" hint) opens the Dossier — the wheel resets to Records [M 0x216de0:9-16].
+    assert!(act(&mut fe, Action::Side), "Tab opens the Dossier [M 0x208e78:222-230]");
+    assert_eq!(fe.page, Page::Dossier);
+    assert_eq!(fe.cursor, 0, "the Dossier wheel opens at Records [M 0x216de0:9-16]");
+    // Back pops the opener: the RESULTS page with its saved cursor [M 0x21c858:592-600].
+    assert!(act(&mut fe, Action::Back));
+    assert_eq!(fe.page, Page::Results, "Back returns to the page the Tab came from [M 0x21c858:592-600]");
+    assert_eq!(fe.cursor, results_cursor, "the results cursor rode the pop [M 0x21c858:598-600]");
+    assert_eq!(fe.flow.page, menu::PAGE_RESULTS);
+    // …and the results page still works (its own ✕/Tab arms re-run).
+    assert!(act(&mut fe, Action::Extra), "the ~X Stats arm [M 0x208e78:225-230]");
+    assert_eq!(fe.page, Page::Stats);
+    assert!(act(&mut fe, Action::Back), "Stats' Back pops the Results opener");
+    assert_eq!(fe.page, Page::Results);
+    // The Results page's own empty-stack △ does nothing: P_NFRESULTS 0x208e78 arms only
+    // 0x4b/0x4c/0x50/0x5d/0x5e [M] — the pop's msg-99 reaches no arm, the page stays.
+    let _ = fe.action(Action::Back);
+    assert_eq!(fe.page, Page::Results, "the empty-stack 0x5f strands nobody [M 0x21c858:604-610]");
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+/// The Dossier family walks the stack exactly as the game runs it [M C_SBDOSSIER 0x216eb0:12-32,
+/// the push rule 0x21c858:262-274, the pop 0x21c858:582-602]: the mission list □ → the Dossier →
+/// each sub-page (Records/Rewards immediate, Gadgets/Weapons through the CloseIris delay) →
+/// Back → the Dossier wheel on the row that opened the page → Back → the mission list with ITS
+/// saved cursor. No hop in the walk strands the player.
+#[test]
+fn the_dossier_family_walks_back_through_the_page_stack() {
+    let mut fe = FrontEnd::new();
+    to_missions(&mut fe);
+    let list_cursor = fe.cursor;
+    assert!(act(&mut fe, Action::Side), "□ opens the Dossier [M C_SBNFMAP 0x20b8d8:47-48]");
+    assert_eq!(fe.page, Page::Dossier);
+    for (row, want) in [(0usize, Page::Records), (1, Page::Rewards), (2, Page::Gadgets), (3, Page::Weapons)] {
+        // Walk the wheel to the row (it wraps [M 0x221b20:186-210] — walk forward from 0).
+        while fe.cursor != row {
+            assert!(act(&mut fe, Action::Down), "the wheel wraps [M 0x2221b20:186-210]");
+        }
+        assert!(act(&mut fe, Action::Confirm), "row {row} opens its page [M 0x216eb0:12-32]");
+        assert_eq!(fe.page, want, "the wheel's row {row} page");
+        // Back pops the Dossier opener with the wheel's saved row [M 0x21c858:582-602].
+        assert!(act(&mut fe, Action::Back));
+        assert_eq!(fe.page, Page::Dossier);
+        assert_eq!(fe.cursor, row, "the wheel returns to the row that opened the page [M 0x21c858:598-600]");
+    }
+    // The Dossier's own Back pops the mission list opener with its saved cursor
+    // [M 0x21c858:582-602; the list's □ 0x44 carried lparam 0 through the CloseIris delay
+    // [M 0x20b8d8:48 + 0x202190]].
+    assert!(act(&mut fe, Action::Back));
+    assert_eq!(fe.page, Page::MissionSelect);
+    assert_eq!(fe.cursor, list_cursor, "the list cursor rode the pop [M 0x21c858:598-600]");
+}
