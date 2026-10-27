@@ -134,6 +134,15 @@ Fresh boot 07000014, walk west into the #262 band (x < 41.75 at z ≈ 39) on the
 3. Does the game's Bond ever walk/jump the mezzanine's south edge himself (top 3.5-3.7 at z
    38.21 [D walk-4]), or is the drop exclusively cut-scene-carried?
 
+## ntfy failed
+
+All three fallbacks failed with the same server-side limit:
+
+1. `curl -sS -m 20 -H "Title: NightfirePort" -d "level-14-vent-drop: …" https://ntfy.sh/nightfire-yoda-8k3x`
+   → `{"code":42908,"http":429,"error":"limit reached: daily message quota reached; increase your limits with a paid plan, see https://ntfy.sh","link":"https://ntfy.sh/docs/publish/#limitations"}`
+2. python urllib → `HTTP Error 429: Too Many Requests`
+3. `wget -S -q -O- --post-data …` → `HTTP/1.1 429 Too Many Requests`
+
 ## Usage
 
 not visible to me — this sandbox exposes no token, credit or context-window figures to the
