@@ -4650,6 +4650,29 @@ impl FrontEnd {
         self.mission_stats.is_some()
     }
 
+    /// The results sub-pages' 0x4c builds, run by the host right after the action that opened
+    /// the page (the game delivers the 0x44 page-change to the new page's handler, whose 0x4c
+    /// arm builds against the live progress layer — mission-results-page):
+    /// - `Page::Stats` — `P_NFSTATS_Handler` 0x209938 case 0x4c: `PlrStat_GetScore(0)` (the
+    ///   commit [M :36-38]) then the rows; the port mirrors it through [`FrontEnd::stats_enter`]
+    ///   with `Mission_Status()` 6 (the results path [M 0x182c60:88] — the page only opens from
+    ///   the results' Del arm [M 0x208e78:225-230]).
+    /// - `Page::NfBonus` — `P_NFBONUS_Handler` 0x209670 case 0x4c: `Menu_GetLevelBonuses`
+    ///   ([M :14]) and the tier text ONLY when `DAT_002e1c2c` (the new-reward flag) stands
+    ///   [M :16-18] — the port's `new_reward`; [`FrontEnd::bonus_enter`]'s `has_text`.
+    /// `progress` is the host's mission-end snapshot (the sim dies with the front-end load; the
+    /// game's globals persist in BSS until the next Mission_Init). Rebuilt on every open, like
+    /// the game's own enter.
+    pub fn results_subpages_enter(&mut self, progress: &mut nf_game::progress::Progress, lang: Option<&Lang>) {
+        if self.page == Page::Stats {
+            // [M 0x209938:31-36 — GetScore(0), the commit, then the rows.]
+            self.stats_enter(progress, self.results_level, 6, progress.difficulty, lang);
+        } else if self.page == Page::NfBonus && self.bonus.is_none() {
+            let has_text = self.new_reward; // DAT_002e1c2c [M 0x209670:16-18]
+            self.bonus_enter(progress, self.results_level, has_text);
+        }
+    }
+
     // ── fix-save-profile: the codename profiles (the port's memory card) ──────────────────────
 
     /// Point the front end at the profiles dir (the port's memory card) and enumerate the saved
@@ -6302,6 +6325,10 @@ impl FrontEnd {
                 // is the 0x5d key (□ — MissionSelect's Dossier arm), and the 0x5e key here is Extra
                 // [S unverified — the pad meaning of actions 0x20/0x21 is U-011]. The host calls
                 // `stats_enter` when the Stats page comes up (the game's 0x4c build).
+                // mission-results-page: both arms pass 0x44's arg 0 — `uStack_b0 = (arg ^ 1) & 1`
+                // [M 0x21c858 case 0x44] makes arg 0 PUSH the current page + its saved cursor
+                // (+0x1bc/+0xac → Stack_Push) onto the manager's back stack, so the sub-page's
+                // default pop returns here (the wheel path's own push [M the MissionSelect □ arm]).
                 Action::Side if !self.results_box => {
                     // [M P_NFRESULTS 0x208e78:222-224 → LAB_0020947c:230 — msg 0x5d runs
                     // Manager_SendMessage(0x44, 0x4000002b, 0); lparam 0's bit-0-clear pushes the

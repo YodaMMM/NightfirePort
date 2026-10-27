@@ -19029,6 +19029,12 @@ fn segment_hits_sphere(a: V3, b: V3, c: V3, r: f32) -> bool {
             // `PlrStat_LogHealth` 0x199620 ← `Player_SetHealth` 0x1960b8:14: the snapshot GetScore's
             // row 6 reads; the port writes it once per tick (the game's last write wins too).
             self.progress.log_health(ms, self.health.health);
+            // `PlarStat_LogUpdateElapsedTime` 0x1995a0 ← `Player_Update` 0x193600:132, every
+            // tick: +0x30 += clock − +0x2C, then +0x2C := clock, gated on +0x34 == 0 (the timer
+            // runs — the NIS/script pauses stamp +0x34 through the scene's request side
+            // [M 0x1d94c0:118-121 + 0x1da880:44-48]). The clock is the port's frame-derived
+            // 1/100 s [S — psiGetTimeIn100ths' stand-in; only differences matter].
+            self.progress.log_update_elapsed(crate::progress::PlrMissionStats::now_100ths(self.frame));
         }
         // fix-scores-handoff (G-045 remainder): the level-end score-row production. When the
         // level-exit latch stands at the tick's end (the trigger LOAD_LEVELs, the
