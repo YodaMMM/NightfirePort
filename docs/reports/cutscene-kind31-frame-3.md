@@ -83,3 +83,14 @@ adds that carve-out to the general rule; all five red tests and the 01/14 batter
 ## Usage
 
 not visible to me
+
+## ntfy failed
+
+All three publish attempts returned the ntfy.sh daily quota error (not a network failure):
+
+1. `curl`:
+   `{"code":42908,"http":429,"error":"limit reached: daily message quota reached; increase your limits with a paid plan, see https://ntfy.sh","link":"https://ntfy.sh/docs/publish/#limitations"}`
+2. `python3 urllib.request`:
+   `urllib.error.HTTPError: HTTP Error 429: Too Many Requests`
+3. `wget --post-data`:
+   empty output, exit 0 — the same 429 body (the day's earlier tasks hit the identical quota).
