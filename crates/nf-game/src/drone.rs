@@ -12933,9 +12933,7 @@ fn segment_hits_sphere(a: V3, b: V3, c: V3, r: f32) -> bool {
             // The player's shell is reserved now and ejected when the +0x78 delay ends, from the view model's
             // datum as posed then (`eject_bone_now`, set by the viewer each tick) [M 0x12fde0 / 0x12f678].
             Some(_) => self.casings.reserve(&d.surfaces.map(|s| &s.ammo).unwrap_or(&Default::default()), w, None),
-            None => self.casings.eject_with_floor(&d.surfaces.map(|s| &s.ammo).unwrap_or(&Default::default()), w, from, yaw, pitch, from[1],
-                // The kept-casing rest floor [S rope-guard-hitbox]: the static floor beneath the muzzle.
-                d.world.segment(from, [from[0], from[1] - 40.0, from[2]]).map(|t| from[1] - 40.0 * t), &mut self.rng),
+            None => self.casings.eject(&d.surfaces.map(|s| &s.ammo).unwrap_or(&Default::default()), w, from, yaw, pitch, from[1], &mut self.rng),
         }
         // Heard by the drones; the audible shot comes from the gun's fire script (op 1), played by the player's owner.
         if !sound.looped { self.sounds.push(Sound { id: sound.id, pos: from, inner: sound.inner, outer: sound.outer, weight: sound.weight }); }
@@ -15359,33 +15357,20 @@ fn segment_hits_sphere(a: V3, b: V3, c: V3, r: f32) -> bool {
             // [M Bullet_init_casing_ex 0x12f678:83-114 — AnimGetBoneWorldTrans runs there]:
             // the player's from the view model (`eject_bone_now`), a guard's from its own
             // eject bone this tick (standins-drone-925).
-            let mut guard_bones: Vec<(usize, nf_formats::anim::Mat4, f32, Option<f32>)> = Vec::new();
+            let mut guard_bones: Vec<(usize, nf_formats::anim::Mat4, f32)> = Vec::new();
             let pend: Vec<Option<usize>> = self.casings.list.iter()
                 .filter(|c| c.state == 3 && c.pending).map(|c| c.shooter).collect();
             for s in pend.into_iter().flatten() {
-                if !guard_bones.iter().any(|(j, _, _, _)| *j == s) {
+                if !guard_bones.iter().any(|(j, _, _)| *j == s) {
                     if let Some(dr) = self.list.get(s) {
-                        if let Some(m) = dr.eject_matrix(d) {
-                            // The kept-casing rest floor [S rope-guard-hitbox]: the static floor
-                            // beneath the eject point (a 40-unit down-ray) — a rope guard hangs
-                            // 10+ units above the deck and the [M] plane rest froze there.
-                            let e = [m[3][0], m[3][1], m[3][2]];
-                            let floor = d.world.segment(e, [e[0], e[1] - 40.0, e[2]]).map(|t| e[1] - 40.0 * t);
-                            guard_bones.push((s, m, dr.pos[1], floor));
-                        }
+                        if let Some(m) = dr.eject_matrix(d) { guard_bones.push((s, m, dr.pos[1])); }
                     }
                 }
             }
-            let bone = self.eject_bone_now.as_ref().map(|(m, y)| {
-                let floor = {
-                    let e = [m[3][0], m[3][1], m[3][2]];
-                    d.world.segment(e, [e[0], e[1] - 40.0, e[2]]).map(|t| e[1] - 40.0 * t)
-                };
-                (m, *y, floor)
-            });
+            let bone = self.eject_bone_now.as_ref().map(|(m, y)| (m, *y));
             self.casings.update(|sh| {
                 if sh == usize::MAX { bone } else {
-                    guard_bones.iter().find(|(j, _, _, _)| *j == sh).map(|(_, m, y, f)| (m, *y, *f))
+                    guard_bones.iter().find(|(j, _, _)| *j == sh).map(|(_, m, y)| (m, *y))
                 }
             }, &mut self.rng, |id, pos| { audio.play3d(id as u32, pos, None); });
         }
