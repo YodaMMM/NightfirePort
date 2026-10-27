@@ -1652,6 +1652,19 @@ impl Bond {
         } else {
             self.pos[0] += c * vs + s * vf;
             self.pos[2] += -s * vs + c * vf;
+            // The walked dy [M 0x193600:284-295 — the walk tick's move add is the FULL matrix
+            // product: obj+0x30 += walk_matrix · local move, no lane dropped; the walk matrix is
+            // obj+0x90 · RotMatrix(BL+0x30) [M 0x192310:70-74 — the rate vector's x lane is the
+            // view pitch, the same RotMatrixX(view pitch) the G-046 dir reads], so the forward
+            // row's y = sin(pitch·π/2) rides into the position with the forward move. The right
+            // row stays horizontal (RotX leaves (1,0,0); RotY keeps its y at 0) and the walk's
+            // move has no vertical lane, so this term is the whole vertical. The port models the
+            // forward row's y with the same look() the swim branch rides (level-0a-band-settle-8;
+            // the 0a hall glide's +0.02 climb at vf ≈ 0.1 fits pitch ≈ −0.02..−0.03 rad [L
+            // band-settle-2 brief]). [S] unverified: the game's matrix accumulates the per-tick
+            // rate while the port reads the clamped view pitch — the clamp's divergence is not
+            // modelled.]
+            self.pos[1] += self.look()[1] * vf;
         }
 self.local = [vs / k, vf / k];
         }

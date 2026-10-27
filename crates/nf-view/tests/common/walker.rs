@@ -961,6 +961,11 @@ impl Walker {
             let err = wrap_pi(desired - sim.bond.yaw);
             let mut input = Input {
                 turn: err.clamp(-0.07, 0.07),
+                // The walked dy [M 0x193600:284-295] rides the view pitch into y every walking
+                // tick, so the walker walks LEVEL: ease the look pitch back to 0 (the door-use and
+                // aim legs pitch the view and leave it — without this the leftover pitch drifts
+                // the walk's y by up to ~0.009/tick and the tuned y pins break).
+                look: (-sim.bond.pitch).clamp(-0.06, 0.06),
                 forward: if d > 2.2 { 1.0 } else { 0.45 },
                 ..Default::default()
             };
