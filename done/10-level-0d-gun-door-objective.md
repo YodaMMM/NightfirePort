@@ -20,3 +20,8 @@ say so in the report. Never weaken a decompile-backed test to make code pass.
 
 ---
 claimed-by: sandbox7 at 2026-10-27T06:58Z
+
+---
+## Report (done, 2026-10-27T08:07Z)
+
+Closed by the driver: the report is on `s/level-0d-gun-door-objective` (docs/reports/level-0d-gun-door-objective.md); the worker didn't run finish.sh.
