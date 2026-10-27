@@ -97,3 +97,10 @@ handful of state ENTERs. The game sets it far more widely: 139 state functions w
 ## Usage
 
 not visible to me (no token/credit/context-window figures are shown in this environment).
+
+## ntfy failed
+
+All three transports failed with the same server response:
+`{"code":42908,"http":429,"error":"limit reached: daily message quota reached; increase your limits with a paid plan, see https://ntfy.sh","link":"https://ntfy.sh/docs/publish/#limitations"}`
+(curl — the JSON above; python3 urllib → `HTTPError: HTTP Error 429: Too Many Requests`; wget -q — empty
+output, exit code masked by the pipe, same quota response body suppressed by -q).
