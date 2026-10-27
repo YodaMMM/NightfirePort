@@ -89,18 +89,25 @@ fn caps_log() -> bool {
 static CAPS_GATE: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
 static WALK_KILL: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
 
-/// The settle-5 radial-tail rule (level-0a-band-settle-6-b, landed unconditionally after the
-/// 01-plate-walk bisect — each delta ran green on walkreal_07000001_live alone, the all-on
-/// combination too):
-///   — the settle-3 radial arm (ref = the HITTEST+0x50 accumulator) REMOVED: the tail's
-///     dir/mag is always (v̂, r − |v|) with v = query − Q [M 0x10a53c-0x10a61c].
-///   — the on-edge second query: project Q1 onto the spine clamped [0,1] and RE-RUN the
-///     closest-point query from it — the tail's Q = Q2 [M 0x10a344-0x10a4fc], with the caller's
-///     gate covering the SECOND call [M 0x10a510/0x10a528] (the mis-encoding the bisect caught:
-///     without it a re-run whose projected query sits behind the plane pushed THROUGH the face
-///     and walkreal_07000001_live's hall-guard fight failed).
-///   — the always-on dot gate: `dot(v, n) <= 0` skips the face's push [M 0x10a568].
-///   — |v| == 0 → the dir quad ≈ 0 (push ≈ 0), not the ±n fallback [M 0x10a5bc `sq v0,0(sp)`].
+/// The settle-5 radial-tail rule — level-0a-band-settle-6-c RESTRICTED state. The full suite
+/// broke 21 tests across many levels with the settle-6-b all-on landing (Bond settles ~1 unit
+/// high: the teleport-settle climbs the spine bottom to r above the floor — interactables_07000015
+/// y 41.315 vs the walkway ~40.35 — so floor touch plates, walk-over pickups and use-key doors
+/// fail). Measured on this round's repro runs, NONE of the four landed deltas is landable on the
+/// port's substitute tail today:
+///   — D4 (the always-on dot gate [M 0x10a568]) turns the behind-plane wedge faces inert; the
+///     walk's settle then climbs the sloped skirts to the r-equilibrium (the 21-test break).
+///   — D3 alone (the on-edge Q2 re-run [M 0x10a344-0x10a4fc] + the second call's flags-99 gate
+///     [M 0x10a510/0x10a528]) perturbs the edge-contact push ~2e-4 and re-enters the same climb
+///     (interactables_07000015 8/12 red) while its 01-plate-walk fix stands [M the bisect].
+///   — D1/D5 (the always-on v̂ tail, the |v|==0 zero quad [M 0x10a5bc]) shift the same settle.
+/// The tail's gates live inside the accumulator-relative arm in the decompile (v = hitpoint −
+/// HITTEST+0x50 [M 0x109da0:421-431]) whose |v| < radius gate near-never passes on a walked line
+/// [L ee_snapshot drift ≈15 m from the owner] — the game's real walk-vertical is the feet band
+/// [M Player_FeetOnPoint 0x194188] + the walked dy, not this tail. ALL FOUR deltas are therefore
+/// REVERTED to the settle-3 merged shape (the 20 non-01 levels' green state); the tail operand
+/// decode [M 0x10a53c-0x10a61c] and the feet-band port stay open work — see
+/// docs/reports/level-0a-band-settle-6-c.md.
 /// HELD BACK (env-gated, default off): the Dist2Tri flags-99 behind-plane skip on the FIRST
 /// query [M 0x109770 + 0x10a33c `beq v1,99`]. It is [M]-faithful, but its landing wedges the
 /// 01 escort walk: after guard 6 dried the gun, every nav leg out of (5.48, 6.67, 11.60) gave
@@ -442,24 +449,20 @@ fn capsule_tri_contact(t: &[V3; 3], mat: u8, a: &mut V3, b: &mut V3, r: f32, gro
     if *CAPS_D2.get_or_init(|| std::env::var("NF_CAPS_D2").is_ok()) && dot(sub(p, t[0]), n) < 0.0 {
         return false;
     }
-    let (mut q, on_edge) = closest_on_triangle(p, t);
-    // Delta 3 (the on-edge second query): on an edge/vertex flag the game projects copy+0x50 —
-    // at that moment Q1, Dist2Tri #1's out-write [M 0x10a2fc `addiu t2,s1,0x50` before the
-    // 0x10a324 jal] — onto the spine A/B clamped [0,1] [M 0x10a3b4/0x10a3c4] and RE-RUNS Dist2Tri
-    // from it [M 0x10a4fc, the out-write again]: the tail's Q = Q2. The old port projected Q1 (p)
-    // but kept Q1 (q) in the tail.
-    if on_edge {
-        p = closest_on_segment(*a, *b, q);
-        // The caller's gate covers the SECOND call too [M 0x10a510 `0.0 <= return` c.olt +
-        // 0x10a528 `flags != 99` beq — both load the flags/distance the last Dist2Tri wrote]:
-        // Dist2Tri #2's input is the projected point, and when IT sits strictly behind the face
-        // plane the call returns flags 99 with the out-pointer NEVER rewritten (it keeps Q1) and
-        // the whole face stays inert — the tail is unreachable. Without this check the port
-        // pushed THROUGH such a face (v = query − Q pointing behind it) and the 01 walk's
-        // hall-guard fight failed.
-        if dot(sub(p, t[0]), n) < 0.0 { return false; }
-        q = closest_on_triangle(p, t).0;
-    }
+    let (q, on_edge) = closest_on_triangle(p, t);
+    // level-0a-band-settle-6-c: the settle-6-b Delta 3 (the on-edge second query, the tail's
+    // Q = Q2 [M 0x10a344-0x10a4fc] with the caller's flags-99 gate on the re-run
+    // [M 0x10a510/0x10a528]) is REVERTED along with D1/D4/D5 — measured alone it still breaks
+    // the teleport-settle class: the re-run's q = closest_on_triangle(p2) changes the edge
+    // contact's v = p2 − q by ~2e-4 (the 07000015 walkway's tick-1 north-wall edge push x
+    // −0.0005 vs master's −0.0003), which diverts the settle into the sloped-skirt wedge whose
+    // repeated v̂ pushes climb the spine bottom to r above the floor (interactables_07000015
+    // the_dead_ladder y 41.315 vs the walkway ~40.35; 8/12 tests in that file). Master's
+    // through-push out of the wedge keeps every y-settle reachable. The 01-plate-walk need the
+    // bisect proved (the second Dist2Tri call's flags-99 gate) is REAL [M] but cannot land on
+    // the substitute tail without the walk's vertical coming from the game's own feet-band
+    // mechanism — see docs/reports/level-0a-band-settle-6-c.md for the live-check list.
+    if on_edge { p = closest_on_segment(*a, *b, q); }
     // The game's push-tail guard [M Intersect_CylGeom 0x109da0 push tail: `v = q − A`,
     // `if (0.0 < dot(v, B − A))` gates the whole `dist < r` push]: a triangle whose closest
     // point lies at/beyond the capsule's TOP end A never pushes. Without it the real-capsule
@@ -471,12 +474,19 @@ fn capsule_tri_contact(t: &[V3; 3], mat: u8, a: &mut V3, b: &mut V3, r: f32, gro
     if top_guard && n[1].abs() <= 0.7 && dot(sub(q, *a), sub(*b, *a)) <= 0.0 { return false; }
     let v = sub(p, q);
     let dist = dot(v, v).sqrt();
-    // Delta 4: the always-on dot gate [M 0x10a568 `c.ole → bc1t` — `0 < dot(v, plane)` gates the
-    // whole push]: a face whose v ⊥ n or points behind it never pushes — the floor's interior
-    // crossing (v = 0) and a query behind a sloped approach face included.
-    if dot(v, n) <= 0.0 {
-        return false;
-    }
+    // level-0a-band-settle-6-c RESTRICTION: the settle-6-b "always-on" dot gate (dot(v, n) <= 0
+    // skip, [M 0x10a568]) is REVERTED here. The full suite broke 21 tests across many levels with
+    // it (Bond settles ~1 unit high — the teleport-settle climbs the spine bottom to r above the
+    // floor: interactables_07000015 y 41.315 vs the walkway ~40.35). Repro: with the gate, the
+    // behind-plane face at the walkway's north wall goes inert (per the game's flags-99 rule
+    // [M 0x109770 + 0x10a33c]) but the sloped skirt faces then push the spine up (dir = v̂,
+    // mag = r − |v|, repeatedly) to the r-equilibrium; on master the same behind-plane contact
+    // pushes THROUGH (out of the wedge) and every y-settle interaction stays reachable. The
+    // always-on reading over-applies: in the decompile the dot test sits inside the accumulator-
+    // relative arm (v = hitpoint − HITTEST+0x50 [M 0x109da0:421-431]) whose |v| < radius gate
+    // near-never passes on a walked line [L ee_snapshot drift ≈15 m], so the game's tail does not
+    // carry the always-on v̂-push this encoding gave it. See the D3-revert comment below for the
+    // measured D3-alone result.
     if dist >= r { return false; }
     // Scratch gate (level-0a-office-hatch-9, NF_CAPS_GATE=1): the game's push tail requires
     // `0 < dot(q − ref, n)` [M Intersect_CylGeom 0x109da0:431 — v = hitpoint − HITTEST+0x50,
@@ -490,20 +500,22 @@ fn capsule_tri_contact(t: &[V3; 3], mat: u8, a: &mut V3, b: &mut V3, r: f32, gro
     // game's 1.120 [L fresh boot]) and the glide walk floated ungrounded (hatch-9's measurements).
     let gate_on = CAPS_GATE.get_or_init(|| std::env::var("NF_CAPS_GATE").is_ok());
     if *gate_on && n[1] <= 0.7 && dot(sub(q, *b), n) <= 0.0 { return false; }
-    let spine_dir = if dist > 1e-6 {
-        [v[0] / dist, v[1] / dist, v[2] / dist]
+    // level-0a-band-settle-6-c RESTRICTION (the Delta 1 + Delta 5 revert): the settle-6-b
+    // re-encoding (dir = v̂ always; |v| == 0 → the zero quad [M 0x10a5bc `sq v0,0(sp)`]; the
+    // settle-3 radial arm removed) is REVERTED to the settle-3 merged shape — the radial arm
+    // (ref = HITTEST+0x50, the [L] boot-(0,0,0) lifetime push total, the only writer the add-back
+    // 0x1ebaa8:353-373 [M]) behind its own |v| < radius + dot(v, n) > 0 gates, and the |v| == 0
+    // spine-dir fallback. Master's shape was green on every level; the always-on v̂ tail lifted
+    // the walk's vertical settle ~1 unit off the floor in 21 tests (the repro above). The tail's
+    // [M 0x10a53c-0x10a61c] operand decode stays an open question for the live-check round.
+    let spine_dir = if dist > 1e-6 { [v[0] / dist, v[1] / dist, v[2] / dist] } else if dot(n, sub(*a, q)) >= 0.0 { n } else { [-n[0], -n[1], -n[2]] };
+    let vr = sub(q, ref_v);
+    let dist_r = dot(vr, vr).sqrt();
+    let (dir, mag) = if dist_r > 1e-6 && dist_r < r && dot(vr, n) > 0.0 {
+        ([vr[0] / dist_r, vr[1] / dist_r, vr[2] / dist_r], r - dist_r)
     } else {
-        // Delta 5 [M 0x10a5bc `sq v0,0(sp)`]: |v| == 0 → the dir quad ≈ 0 (the flags-bits
-        // denormal, the game's "clear" trick) — push ≈ 0, NOT a ±n fallback.
-        [0.0f32; 3]
+        (spine_dir, r - dist)
     };
-    // The settle-5 radial tail (landed, level-0a-band-settle-6-b). Delta 1: the settle-3 radial
-    // arm (ref = the accumulator) is GONE — the tail's operands are v = query − Q only
-    // [M 0x10a53c-0x10a61c], dir = v̂, mag = r − |v|; the accumulator (HITTEST+0x50, the [L]
-    // boot-(0,0,0) lifetime push total whose only writer is the add-back 0x1ebaa8:353-373 [M])
-    // is only the add-back target — the [L] copy+0x60 image sits constant across the tick's
-    // faces — so ref_v stays plumbed for the add-back callers only.
-    let (dir, mag) = (spine_dir, r - dist);
     let push = [dir[0] * mag, dir[1] * mag, dir[2] * mag];
     if caps_log() {
         eprintln!("[cap] PUSH cent=({:.3},{:.3},{:.3}) q=({:.3},{:.3},{:.3}) p=({:.3},{:.3},{:.3}) d={dist:.4} push=({:.4},{:.4},{:.4}) n=({:.3},{:.3},{:.3}) edge={on_edge} a=({:.3},{:.3},{:.3}) b=({:.3},{:.3},{:.3})",

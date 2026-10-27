@@ -26,3 +26,16 @@ radial-tail landing, e.g. interactables_07000015 south walkway y 41.315 vs floor
 find which part of the change applies outside the case the game gates it to
 [M Player_FeetOnPoint 0x194188 and the walk's vertical], restrict it to exactly that, get the
 whole suite green with the 0a walk tests. Work in progress.
+
+## level-0a-band-settle-6-c (2026-10-27, the restriction verdict)
+Reproduced the 21-test break on the settle-6-b all-on radial tail: the teleport-settle climbs
+the spine bottom to r above the floor (interactables_07000015 the_dead_ladder y 41.31509 vs the
+walkway ~40.35 [D floor tris]; NF_CAPS_LOG shows the sloped skirt faces' repeated v̂ pushes).
+Master's tail escapes the wedge through a behind-plane face (d=0.0013, push −n·0.5487) and the
+whole file is green. Measured D4 alone (the always-on dot gate [M 0x10a568]) = the break; D3
+alone (the Q2 re-run [M 0x10a344-0x10a4fc] + the second call's flags-99 gate [M 0x10a510/0x10a528])
+perturbs the tick-1 edge push ~2e-4 and re-enters the same climb (8/12 red) — its 01 fix stands
+only in isolation. Landed the full revert of D1/D3/D4/D5 to the settle-3 merged tail shape; D2
+stays env-gated OFF (NF_CAPS_D2). walkreal_07000001_live 3/0 and interactables_07000015_live
+12/0 on the reverted tree (the master merge carries the 01-file fixes the bisect's baseline
+lacked). The tail operand decode [M 0x10a53c-0x10a61c] + the feet-band port stay open work.
