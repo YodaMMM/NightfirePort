@@ -159,6 +159,15 @@ fn escort_at_walking_speed_keeps_the_games_distance_and_the_exit_opens() {
             }
             // Stall recovery — the walkreal-a rules: clear armed started guards within 14, step
             // out of the way band, or walk past the wedged lead so he re-paths.
+            // The ally-wait hold ( ReachedDestNode 0x153358:85-94 parks the contact in 0x21 at the
+            // 0x20 node until ch 0x99) needs the corridor plate crossed first: the TOUCH plate at
+            // (6.79, 6.04, 8.91) raises ch 0x32 → the OUT mux mirrors 0x33 → SP #276 starts →
+            // 06000086 writes ch 0x0e → the ambush guards enable; their deaths raise 0x99 through
+            // the AND mux and the hold releases [D the 07000001 placements + lib dump]. The plate
+            // is ON the escort route between the hold and door #1 — the walking player crosses it.
+            if !w.scene.sim.as_ref().unwrap().drones.channels.on(0x33) {
+                w.walk_nav_to([6.79, 0.0, 8.91], "onto the corridor plate", 0.4);
+            }
             let (cstate, cp, cpd) = {
                 let sim = w.scene.sim.as_ref().unwrap();
                 let d = &sim.drones.list[ci];
