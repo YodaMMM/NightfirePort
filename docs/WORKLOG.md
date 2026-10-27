@@ -223,3 +223,11 @@ east vent lane. The shaft is a floor-less well (open < -20 [D probe14_shaft3]), 
 phase-2 no-fire detach [M gadget.rs:490] vs the observed hold at y 4.54) — the next session
 debugs that loop, then leg 1f (the lane south + the connector west to #301 [D probe14_tunnel/
 probe14_mouthfin]) and the untouched legs 2..6. Suite did not fit (background kills).
+
+## level-14-full-walk-2 (2026-10-27, this window)
+Continued from level-14-full-walk: branch cut from its tip, origin/master merged. Goal this
+window: reconcile the release-onto-the-lane leg with the phase-2 no-fire detach [M
+Player_SSGrapple 0x192860], land on the east vent lane, then leg 1f (lane south over the
+flush lid, connector west to #301) and legs 2..6 to the exit on real input only; the walk
+test stays green end-to-end or back to #[ignore] with the exact blocker. Suite via
+tools/test/suite.py started early in the window.
