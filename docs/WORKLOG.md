@@ -21,3 +21,13 @@ cutscene-kind31-frame-2 — the general rule replaces the per-script scope (2026
 - Green: the 01/14 real-path battery, nf-game 933/0/8, the cutscene nf-view chunk 373/0/18.
   Open: walkreal_07000008_live timeout at the gondola leg (no baseline; 07000008's 0x31 scripts
   have no camera op).
+
+cutscene-kind31-frame-3 — started (2026-10-27 ~18:57 UTC)
+
+- Goal: frame-2's general rule `keys_alone = camera_started && parent < 0` turned five real-path
+  tests red: walkreal_07000008_live (gondola floor plate ch 4 [D #236 mask 8] x2), zoe_gondola_realpath_live
+  (same), mayhew_hold_live (escort never parked in AllyLeadMissionWait 0x21), escort_hide_findrun_live
+  (route index 2, want 1). Find which unparented stream in which camera script reads keys-alone
+  where the game composes (or vice versa) — scene camera op tick vs stream op tick, SubScriptStart
+  base reset [M 0x1db050:28-38], SP_SetPosRot [M 0x1db920] — fix the rule to the game's behaviour,
+  keep frame-2's 01/14 battery green.
