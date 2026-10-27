@@ -35,7 +35,17 @@ pub enum Obj {
         /// [D 0x040005fd/fe/ff] because the pack's op-0x0d turned its SCRIPTINFO base identity —
         /// the ENTITY streams share that frame (nis.rs case 1's keys-alone rule). Kept as a
         /// diagnostic snapshot; no reader applies it.
-        base: Mat4 },
+        base: Mat4,
+        /// The object's live world matrix — the game's obj+0x90 [M]: `AnimObjectUpdate` 0x1befd8
+        /// rebuilds it through `Control_GetObjMatrix` 0x134210 = `View_RotTransMatrix(obj+0x50 rot,
+        /// obj+0x30 pos)` (0x1befd8:290; every consumer rebuilds it the same way —
+        /// `Control_BuildWorldSph` 0x133070:17), and obj+0x30 accumulates the animation's root track
+        /// [M AnimFrameResolve 0x1c35f8:~428-432 delta add] — for a script anim created at the origin,
+        /// the root track IS the world pose. `Script_EventHandler` case 6 snapshots the previous
+        /// stream's object's +0x90 for kinds {1, 2} alike [M 0x1d94c0:125-134], so the port carries
+        /// the root pose per tick (`World::anim_obj_matrix`); identity until the first ticked frame
+        /// resolves (control_create_object 0x1344e0 builds it at the origin [M]).
+        matrix: Mat4 },
     /// A cut-scene camera (`CAM_INFO`, `Script_CameraStart`): its world matrix (rows: right, up, forward, position)
     /// and vertical field of view in radians (key scale × `+0x114` = 4/3, `Camera_CalcViewAngles`).
     Camera { matrix: Mat4, fov: f32, src: (u32, u8) },
@@ -317,6 +327,13 @@ pub struct PendingPickup {
 pub trait World {
     fn anim_length(&self, script: u32) -> Option<u16>;
     fn discrete0(&self, skin: u32, script: u32, frame: f32) -> Option<Mat4>;
+    /// An animated object's own world matrix at `frame` — the game's obj+0x90 that
+    /// `Script_EventHandler` case 6 snapshots from the previous stream's object [M 0x1d94c0:125-134;
+    /// built by `AnimObjectUpdate` 0x1befd8:290 → `Control_GetObjMatrix` 0x134210 =
+    /// `View_RotTransMatrix(obj+0x50, obj+0x30)` with obj+0x30 carrying the animation's root track,
+    /// 0x1c35f8:~428-432]. `None` (the default): the data is absent — the game's rebuild would not
+    /// run either, and the object keeps its last matrix.
+    fn anim_obj_matrix(&self, skin: u32, script: u32, frame: f32) -> Option<Mat4> { let _ = (skin, script, frame); None }
     /// An animation script's op-1 sound ids with frame in `(from, to]` — the interval `AnimProcessScriptCmds`
     /// (0x1c1b38 case 1) fires, in command order. Empty default: only the runtime's `Data` holds the scripts.
     fn anim_ops1(&self, script: u32, from: i32, to: i32) -> Vec<u32> { let _ = (script, from, to); Vec::new() }
@@ -846,7 +863,8 @@ impl Script {
         let len = w.anim_length(script).unwrap_or(1).max(1) as f32;
         let f = start as f32;
         let frame = if f < 1.0 || len < f { if f < 1.0 { 1.0 } else { len } } else { f };
-        objs.list.push(Some(Obj::Anim { skin, script, frame, weapon: 0, src: (self.nis.hashcode, i as u8), ticked: false, base: self.matrix }));
+        objs.list.push(Some(Obj::Anim { skin, script, frame, weapon: 0, src: (self.nis.hashcode, i as u8), ticked: false, base: self.matrix,
+            matrix: IDENT }));
         let s = &mut self.streams[i];
         s.obj = Some(objs.list.len() - 1);
         s.kind = 2;
@@ -993,11 +1011,18 @@ impl Script {
             // (BL+0x7E8) likewise; BL+0x7D4 = 0 has no port model. The timer pause rides the same
             // request on the view side (`log_timer_pause()`, slot 0 [M 0x199520:6-9]).
             4 => out.push(Request::PlayerDisable),
-            // Where the player comes back: the previous stream's entity (else where he is), applied by `Script_Free`.
+            // Where the player comes back: the previous stream's object — entity OR anim, the game's
+            // gate admits kinds {1, 2} and snapshots that object's +0x90 either way
+            // [M 0x1d94c0:73-84, 125-134] — else where he is, applied by `Script_Free`.
             6 => {
                 self.flags |= 0x100;
                 let prev = i.checked_sub(1).map(|j| &self.streams[j]).filter(|s| matches!(s.kind, 1 | 2)).and_then(|s| s.obj);
-                self.player_at = prev.and_then(|o| match objs.list.get(o) { Some(Some(Obj::Entity { matrix, .. })) => Some(*matrix), _ => None });
+                self.player_at = prev.and_then(|o| match objs.list.get(o) {
+                    Some(Some(Obj::Entity { matrix, .. })) => Some(*matrix),
+                    // The kind-2 arm: the anim object's live obj+0x90 (the carried root pose).
+                    Some(Some(Obj::Anim { matrix, .. })) => Some(*matrix),
+                    _ => None,
+                });
                 self.player_mode = g(0) as u8;
                 // fix-final-blockers2 diagnostic: which stream/object the snapshot came from (the game's iVar5
                 // = record(i−1)+0x10 gated on record(i−1)+0x24 kind ∈ {1,2}, fallback `glb_players+0x90`
@@ -1211,7 +1236,7 @@ impl Script {
                 let s = &self.streams[i];
                 let f = s.clock - s.start_clock + s.start_frame;
                 let o = s.obj;
-                if let Some(Some(Obj::Anim { script, frame, ticked, .. })) = o.and_then(|o| objs.list.get_mut(o)) {
+                if let Some(Some(Obj::Anim { skin, script, frame, ticked, matrix, .. })) = o.and_then(|o| objs.list.get_mut(o)) {
                     let len = w.anim_length(*script).unwrap_or(1).max(1) as f32;
                     // `Script_Interp` case 2 (0x1d9a08) writes the stream's frame into the anim script's time
                     // (+0x90) and zeroes its advance (+0x98), then runs `AnimObjectUpdate` → `AnimScriptTick` →
@@ -1222,6 +1247,12 @@ impl Script {
                     let from = if *ticked { *frame as i32 } else { 0 };
                     *frame = f.floor().clamp(1.0, len);
                     *ticked = true;
+                    // `AnimObjectUpdate` rebuilds the object's own matrix obj+0x90 from the anim's live
+                    // rot/pos — `Control_GetObjMatrix` 0x134210 `View_RotTransMatrix(obj+0x50, obj+0x30)`
+                    // [M 0x1befd8:290], obj+0x30 carrying the root track [M 0x1c35f8:~428-432]. The port
+                    // reads the World's root pose at the now-current frame; when the data is absent the
+                    // game's rebuild would not run either and obj+0x90 keeps its last value.
+                    if let Some(m) = w.anim_obj_matrix(*skin, *script, *frame) { *matrix = m; }
                     for id in w.anim_ops1(*script, from, *frame as i32) {
                         out.push(Request::AnimSound { id, at: o });
                     }
@@ -2401,7 +2432,8 @@ mod tests {
         script.streams[0].kind = 2;
         script.delay = 5; // HELD: the damage tail's gate
         let mut objs = Objects::default();
-        objs.list.push(Some(Obj::Anim { skin: 0x0500_003A, script: 0x0600_0001, frame: 1.0, weapon: 0, src: (0x0600_0086, 0), ticked: true, base: IDENT }));
+        objs.list.push(Some(Obj::Anim { skin: 0x0500_003A, script: 0x0600_0001, frame: 1.0, weapon: 0, src: (0x0600_0086, 0), ticked: true, base: IDENT,
+            matrix: IDENT }));
         script.streams[0].obj = Some(0);
         let mut scripts = Scripts::default();
         scripts.objects = objs;

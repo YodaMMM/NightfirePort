@@ -11989,6 +11989,18 @@ pub fn voice_type(skin: u32) -> u16 {
 /// The script runtime's view of the level data: animation lengths and an animated object's discrete object 0.
 impl crate::nis::World for Data<'_> {
     fn anim_length(&self, script: u32) -> Option<u16> { self.scripts.get(&script).map(|s| s.length) }
+    /// The anim object's own world matrix (obj+0x90): the posed root at `frame` — the game's
+    /// `Control_GetObjMatrix` 0x134210 product with obj+0x30 carrying the animation's root track
+    /// [M 0x1befd8:290 → 0x134210; 0x1c35f8:~428-432]. The pose is `script_pose_together`'s (the
+    /// render-verified anim placement rule — scene.rs's script_anim position), its bone 0 through
+    /// `world_pose` (the root keeps its translation: the object sits at the origin and the root
+    /// carries it).
+    fn anim_obj_matrix(&self, skin: u32, script: u32, frame: f32) -> Option<nf_formats::anim::Mat4> {
+        let sk = self.skins.get(&skin)?;
+        let skel = self.skeletons.get(&sk.skeleton)?;
+        let pose = crate::anim::script_pose_together(self.scripts, self.sequences, skel, sk, script, frame)?;
+        nf_formats::anim::world_pose(&pose, sk).first().copied()
+    }
     /// fix-script-objects: the glist's local bounding sphere from the level's model table (the
     /// map object's centre and radius — `Control_BuildWorldSph` 0x133070's inputs).
     fn glist_sphere(&self, hash: u32) -> Option<([f32; 3], f32)> {
