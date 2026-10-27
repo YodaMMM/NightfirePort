@@ -60,6 +60,21 @@ pub struct SpaceLaser {
     pub deleted: bool,
     /// ext lane 3+0x0C as a bool: the whine handle being live (the port has no sound runtime).
     pub whine_on: bool,
+    /// The loaded script's tick clock — the port's `Script_Update` stand-in (the game runs
+    /// `Script_Update` every tick in states 1 and 3 [M 0x1aa3f8:116/:176]; `Script_IsPlaying`
+    /// 0x1db630 reports the play head against the stream's End marker [M Script_StreamEnd
+    /// 0x1db420 clears the play bit]). Advanced by the sim wiring after each `tick`.
+    pub script_ticks: u32,
+    /// The loaded script's [D] length (the lib record's `length` field; the wiring fills it at
+    /// the `LoadScript` hand-off from `Data::scripts` — 360/360/10 for the 1b records
+    /// [D docs/levels/0700001b-audit.md:606-612]). 0 = no script loaded (a missing script is
+    /// the game's own `Script_Load` failure — `Script_IsPlaying(0)` reports 0 and state 1
+    /// exits on the next tick).
+    pub script_len: u32,
+    /// The live whine handle (`Sound_Play(100.0, 0x5de, 0, 0)`'s return, stored at
+    /// ext lane 3+0x0C [M 0x1aa3f8:119-121]; `Sound_Stop`ed on the shared tail [M :231-235]).
+    /// 0 = none. Written by the sim wiring only.
+    pub whine_handle: u32,
 }
 
 fn param(params: &[(u32, u32)], k: u32) -> u32 {
@@ -83,9 +98,14 @@ pub fn from_placement(placement: usize, params: &[(u32, u32)]) -> SpaceLaser {
         fire_origin: [0.0; 3],
         target: [0.0; 3],
         arm_delay: param(params, 3) as f32, // ext lane 3+0x00 = param 3 (165.0 on disc [D])
-        cooldown: 0.0,
+        // ext lane 3+0x08 = the creator's constant 0x41200000 = 10.0 s [M 001aa8b8:38] — the
+        // first shot waits the full 10 s re-fire period, it does not fire on the first gate tick.
+        cooldown: 10.0,
         deleted: false,
         whine_on: false,
+        script_ticks: 0,
+        script_len: 0,
+        whine_handle: 0,
     }
 }
 
@@ -119,6 +139,26 @@ pub enum LaserOut {
     Beam { alpha: u8 },
     /// `Emitter_Create(0,0,0xc000010, target, 0x2d6210, 0,0,0)` at the hit point [M :189].
     ImpactEmitter,
+}
+
+/// The state-2 fire's beam object (`control_create_object(0x40, …)` then `obj+0xff = 0x10`
+/// [M 0x1aa3f8:159-165 — control_funcs row 0x10 = `Debris_Update` 0x1aac00, object.md:110]):
+/// ext+0x30 = 5 (the life counter), ext+0x32 = 0 (the alpha decay rate), the mesh 0x20005cd,
+/// obj+0x106 = `0x7f + Rand(0x80)` (the brightness byte; rate 0 → it never decays)
+/// [M 0x1aa3f8:163-167], the stretch origin→target set once by `PositionBeam` [M :188].
+/// `Debris_Update` decrements ext+0x30 per tick and raises the delete flag when it drops
+/// below 1 — the beam lives 5 update ticks [M 001aac00:20-28]. The port models exactly that
+/// as the renderer's draw hand-off (endpoints + alpha per tick; the draw is done separately).
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct LaserBeam {
+    /// The fire origin (the stretch start).
+    pub from: V3,
+    /// The aim lane at the fire tick — the ray impact point when the ray hit [M :153-160].
+    pub to: V3,
+    /// obj+0x106: `0x7f + Rand(0x80)` [M :166-167].
+    pub alpha: u8,
+    /// ext+0x30: 5 at creation, −1 per update tick, deleted at < 1 [M 001aac00:20-28].
+    pub life: i16,
 }
 
 /// The per-tick inputs: the live channels, GameState+0x52, the player position quad
@@ -304,25 +344,45 @@ mod tests {
         assert!(out.iter().all(|o| !matches!(o, LaserOut::LoadScript { .. })));
     }
 
-    /// [M :94-148] gate open, armed: cooldown < 0 → the p0/p1 pick draw, the tracking script
-    /// load (mode 0, REGISTER), target = player, state 1; the script's end → state 2 fires the
-    /// bullet (record 107) + beam + emitter and re-arms the 10 s cooldown [M :128-191].
+    /// [M :94-148] gate open, armed: after the creator's 10.0 s cooldown spends [M 001aa8b8:38
+    /// — ext+0x38 = 0x41200000 at create; the old 0.0 seed here contradicted the creator and
+    /// fired on the first gate tick — the TEST was wrong, fixed 2026-10-26 with the address],
+    /// cooldown < 0 → the p0/p1 pick draw, the tracking script load (mode 0, REGISTER),
+    /// target = player, state 1; the script's end → state 2 fires the bullet (record 107) +
+    /// beam + emitter and re-arms the 10 s cooldown [M :128-191].
     #[test]
     fn the_armed_fire_path() {
         let mut l = from_placement(0, &[(0, 0x060007c0), (1, 0x060007c1), (3, 165), (5, 99), (7, 19)]);
         let mut ch = Channels::default();
         ch.set(19, 1, 0); // the arm gate — only ever poked in a live check, never on disc [D]
-        // tick 1: gate open, cooldown 0 → 0 − 1/60 < 0 → the tracking branch.
-        let out = tick(&mut l, &mut ch, 1, false);
-        let LaserOut::LoadScript { id, play_mode, register } = out[0] else { panic!("{out:?}") };
+        // The 10.0 s creator seed spends at ~tick 600 (10.0 at −1/60 per tick with the float
+        // drift; the decrement then the check [M :94-99]) → the tracking branch. The unit
+        // harness feeds script_playing explicitly, so the 360-tick tracking window is driven
+        // by hand after the load.
+        let load_out = {
+            let mut load = None;
+            let mut script_left = 0u32;
+            for f in 1..=601u32 {
+                let playing = script_left > 0;
+                let out = tick(&mut l, &mut ch, f, playing);
+                if load.is_none() && out.iter().any(|o| matches!(o, LaserOut::LoadScript { .. })) {
+                    load = Some(out);
+                    script_left = 360;
+                } else if script_left > 0 { script_left -= 1; }
+            }
+            load.expect("the tracking script loads once the 10 s seed spends [M 001aa8b8:38]")
+        };
+        let LaserOut::LoadScript { id, play_mode, register } = &load_out[0] else { panic!("{load_out:?}") };
+        let (id, play_mode, register) = (*id, *play_mode, *register);
         assert_eq!((id, play_mode, register), (0x060007c0, 0, true), "mode 0 + the Register callback [M :100-108]");
         assert_eq!(l.target, [1.0, 2.0, 3.0], "the player quad → lane 1 [M :105-112]");
         assert_eq!(l.state, 1);
         l.register([7.0, 8.0, 9.0]); // the script's registered object parks the fire origin [M 0x1aa9e8]
         assert_eq!(l.fire_origin, [7.0, 8.0, 9.0]);
-        // tick 2: script still playing → whine, stay in 1. tick 3: script ended → state 2.
-        let out = tick(&mut l, &mut ch, 2, true);
-        assert!(matches!(out[0], LaserOut::WhineStart));
+        // The loop's last playing tick already latched the whine [M :115-121 — the port's
+        // first-free-handle start]; state 1 holds while the script plays, ends into 2.
+        let _ = tick(&mut l, &mut ch, 2, true);
+        assert!(l.whine_on, "the whine latched in state 1 [M :119-121]");
         assert_eq!(l.state, 1);
         let out = tick(&mut l, &mut ch, 3, false);
         assert_eq!(l.state, 2);
