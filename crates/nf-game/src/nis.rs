@@ -1152,6 +1152,18 @@ impl Script {
                 // (78.06, 4.79, 82.69) — ~40 units away, inside rock: a flat blue void.
                 // (`Script_GetInterp`'s base-concat flag still runs; its base is the identity this
                 // op installed, so the concat is a no-op.) The entity/anim paths keep the real base.
+                // level-4a-ride-hand-props: 0700004a's ride pack 0x060006cf keys its WHOLE scene in one
+                // car-local frame — the camera t0-t230 holds at the hatch key (2.89,-7.99,-3.08)'s level,
+                // the cast roots (2.35,0.85,-0.64) sit on the pack's own lift entity (s13 keys (0,0.99,0)),
+                // the charge (s7 (3.43,1.49,-0.84)) rides above the deck [D 0780004a decode] — and the
+                // pack's ENTITY streams compose the SP base (0,-53.53,-3.38) [D placement] onto that
+                // frame (ride_cutscene_objects_live pins the satchel/lift at the car). With the camera
+                // keys-alone the port's camera floats ~50 units above the props it must show. The game's
+                // compose site for the camera stays unproven (Script_CameraStart 0x1d9140's
+                // Mat_IdentityT destination is dropped by the decompile), so the SP-base compose here is
+                // // [S] unverified — scoped to THIS pack script (07000014's world-keyed camera stays
+                // keys-alone, its render pinned by capture_placement_07000014_live).
+                let m = if self.nis.hashcode == 0x0600_06cf { mul(&m, &self.matrix) } else { m };
                 if let Some(Some(Obj::Camera { matrix, fov, .. })) = objs.list.get_mut(o) { *matrix = m; *fov = scale * (4.0 / 3.0); }
             }
             2 => {

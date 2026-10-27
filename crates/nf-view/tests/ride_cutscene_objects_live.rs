@@ -63,6 +63,9 @@ fn the_landing_cutscene_carries_the_satchel_the_guard_anim_and_the_lift_floor() 
     let mut guard_mid: Option<[f32; 3]> = None;
     let mut hatch_mid: Option<[f32; 3]> = None;
     let mut guard_drawn_y: Option<f32> = None;
+    let mut guard_drawn: Option<[f32; 3]> = None;
+    let mut hand_world: Option<[f32; 3]> = None;
+    let mut cam_mid: Option<[f32; 3]> = None;
     for k in 0..6800u32 {
         w.tick(Input::default(), false);
         let sim = w.scene.sim.as_ref().unwrap();
@@ -115,16 +118,41 @@ fn the_landing_cutscene_carries_the_satchel_the_guard_anim_and_the_lift_floor() 
                     }
                 }
                 // ride-cutscene-base: where the guard DRAWS — the posed object matrix applied to his world
-                // root. PCSX2 0700004a, frame 700 of the ride (the car parked at y -54.2): the red-beret
-                // guard holds the charge up in the car's hatch with the officer beside him [L 2026-10-26].
+                // root. The pack keys its whole scene car-local [D 0780004a decode]: the guard root
+                // (2.35,0.85,-0.64) sits on the pack's own lift (s13 keys (0,0.99,0)), the charge (s7
+                // (3.43,1.49,-0.84)) is the held-up prop — and the pack's entities compose the SP base
+                // (0,-53.53,-3.38) [D placement] (this file pins the satchel/lift there). The guard draws
+                // at the same compose: base ∘ root ≈ (2.46,-52.97,-4.27) mid-scene — on the car deck
+                // (the lift entity composed ≈ (0,-55.8,-3.4), its deck ≈ -52.7); PCSX2 0700004a ride
+                // frame 700: the red-beret guard holds the charge up in the car's hatch, the officer
+                // beside him [L 2026-10-26]. The compose site is // [S] unverified (see scene.rs
+                // pose_one) — the position itself is [D root ∘ base].
                 let fs = w.scene.frame_state_for(None, 0.0, nf_view::scene::ViewOpts::default(), false);
                 for (ci, c) in w.scene.characters.iter().enumerate() {
                     if c.script != Some((0x0600_06cf, 3)) { continue; }
                     if let Some(Some((_, world, m))) = fs.posed.get(ci) {
                         let t = [world[0][3][0], world[0][3][1], world[0][3][2]];
-                        let wy = m[0][1] * t[0] + m[1][1] * t[1] + m[2][1] * t[2] + m[3][1];
-                        eprintln!("guard drawn root y {wy:.2} (object base y {:.2})", m[3][1]);
+                        let p = |k: usize| m[0][k] * t[0] + m[1][k] * t[1] + m[2][k] * t[2] + m[3][k];
+                        let wy = p(1);
+                        eprintln!("guard drawn root ({:.2},{:.2},{:.2}) (object base y {:.2})", p(0), wy, p(2), m[3][1]);
                         guard_drawn_y = Some(wy);
+                        guard_drawn = Some([p(0), wy, p(2)]);
+                        // The held weapon (event 0xB → weapon byte 0x18 [M 0x1d94c0 case 0xb; D s4]) draws
+                        // on the weapon datum's bone [M AnimObjectDraw 0x1c4490:256-265 + AnimDatumSetEntity
+                        // 0x1c7848: the skin+0x20 datum row's quat/vec ∘ the bone's world palette]. Its draw
+                        // slot: the attachment this scene build created for the guard character.
+                        for (ai, a) in w.scene.attachments.iter().enumerate() {
+                            if a.character as usize == ci && a.bone != 0 && fs.attach.get(ai).is_some() {
+                                let aw = fs.attach[ai];
+                                eprintln!("guard attachment a{ai} (bone {}) world ({:.2},{:.2},{:.2})", a.bone, aw[3][0], aw[3][1], aw[3][2]);
+                                hand_world = Some([aw[3][0], aw[3][1], aw[3][2]]);
+                            }
+                        }
+                    }
+                }
+                for o in sim.drones.scripts.objects.list.iter().flatten() {
+                    if let nf_game::nis::Obj::Camera { matrix, src: (h, 0), .. } = o {
+                        if *h == 0x0600_06cf { cam_mid = Some([matrix[3][0], matrix[3][1], matrix[3][2]]); }
                     }
                 }
                 satchel_mid = sim.script_entity((0x0600_06cf, 7), 0x0200_0758).map(|m| [m[3][0], m[3][1], m[3][2]]);
@@ -197,11 +225,16 @@ fn the_landing_cutscene_carries_the_satchel_the_guard_anim_and_the_lift_floor() 
         assert!((v(2, 1) - -0.64).abs() < 0.02,
             "the body root ch2 (z) is the car-local -0.64 [D], got {}", v(2, 1));
     }
-    // The port's own draw state mid-scene: the object base stays the identity (c.matrix) and the
-    // posed root rides the raw car-local track — the OPEN mechanism, printed not asserted (the
-    // game's compose site is the live check; landing a guess broke 07000014 once, see d6af2214).
+    // The port's own draw state mid-scene: the guard now draws at the SP base ∘ root — the same
+    // frame his props occupy (the compose site is // [S] unverified, see scene.rs pose_one; the
+    // position is [D root (2.35,0.85,-0.64) ∘ SP base (0,-53.53,-3.38), mid-scene pose (2.46,0.56,-0.89)]).
     if let Some(gy) = guard_drawn_y {
         eprintln!("guard drawn root y {gy:.2} (the game: in the car, deck ≈ -52.7 = SP base (0,-53.53,-3.38) ∘ root (2.35,0.85,-0.64) [D+L])");
+    }
+    if let Some(cam) = cam_mid {
+        // // [S] unverified (nis.rs case 4's scoped compose): printed, not asserted — the camera
+        // rides the same base so the composed cast/props are in its frame.
+        eprintln!("camera mid-scene ({:.2},{:.2},{:.2}) (raw keys ≈ (2.9,-8.3,-4.6); composed lands at the car)", cam[0], cam[1], cam[2]);
     }
 
     // The scene carried everything through the hand-back: the satchel and the lift floor were
@@ -213,4 +246,18 @@ fn the_landing_cutscene_carries_the_satchel_the_guard_anim_and_the_lift_floor() 
     // The guard's hand: event 0xB wrote the weapon byte 0x18 on the s3 anim [M 0x1d94c0 case 0xb;
     // D s4] — the held-charge mesh on the hand datum (AnimObjectDraw 0x1c4490:256-265).
     assert_eq!(guard_weapon.map(|(_, w)| w), Some(0x18), "the guard anim's weapon byte is 0x18 (event 0xB [M 0x1d94c0 case 0xb; D s4])");
+    // The guard DRAWS on the car deck (base ∘ root ≈ (2.46,-52.97,-4.27) mid-scene): the pack keys
+    // its whole scene car-local [D 0780004a decode], its entities compose the SP base [D placement],
+    // and the guard's root sits on the pack's own lift (s13 keys (0,0.99,0) [D]) — the raw roots
+    // put the guards (and their held weapons) ~54 units above the car, out of the scene.
+    let gd = guard_drawn.expect("the guard's drawn root resolved mid-scene");
+    assert!((gd[1] - -52.97).abs() < 0.8 && (gd[0] - 2.46).abs() < 0.8 && (gd[2] - -4.27).abs() < 0.8,
+        "the guard draws at base ∘ root on the car deck [D root ∘ base], got {gd:?}");
+    // The held weapon's draw slot follows its datum bone [M AnimObjectDraw 0x1c4490:256-265 +
+    // AnimDatumSetEntity 0x1c7848] through the same base — and the pack's own keyed charge (s7
+    // 0x02000758 [D]) is authored to that hand mid-scene: the hand-off reads as one pose.
+    let hw = hand_world.expect("the guard's weapon attachment resolved mid-scene");
+    let ch = satchel_mid.expect("the charge entity live mid-scene");
+    let d2 = (hw[0] - ch[0]).powi(2) + (hw[1] - ch[1]).powi(2) + (hw[2] - ch[2]).powi(2);
+    assert!(d2 < 9.0, "the guard's held weapon follows its parent bone to the keyed charge [D s7 keys + M 0x1c4490], hand {hw:?} vs charge {ch:?} (d² {d2:.2})");
 }

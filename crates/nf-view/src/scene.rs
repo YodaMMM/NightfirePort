@@ -1008,7 +1008,17 @@ impl Sim {
         // [M Obj::Anim doc; AnimSeqTick 0x1c28d0 takes the root motion as the object's movement].
         let local = nf_game::anim::script_pose_together(&self.scripts, &self.seqs, skeleton, skin, script, frame)?;
         let world = anim::world_pose(&local, skin);
-        Some([world[0][3][0], world[0][3][1], world[0][3][2]])
+        let mut p = [world[0][3][0], world[0][3][1], world[0][3][2]];
+        // level-4a-ride-hand-props: the ride pack's cast draws at the SP base ∘ root (the pose_one
+        // arm above), so the ambient sample follows it — // [S] unverified mechanism, same scope.
+        if src.0 == 0x0600_06cf {
+            if let Some(b) = self.script_anim_base(src, skin_hash) {
+                p = [b[0][0] * p[0] + b[1][0] * p[1] + b[2][0] * p[2] + b[3][0],
+                     b[0][1] * p[0] + b[1][1] * p[1] + b[2][1] * p[2] + b[3][1],
+                     b[0][2] * p[0] + b[1][2] * p[1] + b[2][2] * p[2] + b[3][2]];
+            }
+        }
+        Some(p)
     }
 }
 
@@ -9024,7 +9034,23 @@ pub fn build(level: &Level, cels_only: bool, skeletons: &HashMap<u8, Skeleton>, 
                 // roots near (26..34, 1.2, 48) beside the room, SP base (52.16, 2.64, 46.62) — composing
                 // it threw the cast ~50 units away, an empty cut-scene). 0700004a's ride pack is the
                 // exception (car-local roots; the cast stands in the car in PCSX2) — its mechanism is open.
-                return Some((anim::skin_matrices(&world, &c.skin), world, c.matrix));
+                // level-4a-ride-hand-props: for the ride pack 0x060006cf the cast MUST ride the same
+                // base its props do — the pack keys everything car-local (the guard root (2.35,0.85,-0.64)
+                // sits on the pack's own lift s13 keys (0,0.99,0); the charge s7 (3.43,1.49,-0.84) is the
+                // held-up prop above the deck [D 0780004a decode]) and the pack's entities compose the
+                // SP base (0,-53.53,-3.38) [D placement] (ride_cutscene_objects_live). Raw roots put the
+                // guards ~54 units above the car — out of the composed camera's frame, their held
+                // weapons with them. The game's anim compose site is unproven (Script_Interp case 2
+                // composes no matrix the C shows [M 0x1d9a08:140-199]; obj+0x30 carries the raw root
+                // [M AnimGetFirstTrans 0x1c7348 + AnimFrameResolve 0x1c35f8's delta add]) — the SP-base
+                // compose here is // [S] unverified, scoped to THIS pack script (07000014's world-rooted
+                // cast keeps c.matrix, its render pinned by capture_placement_07000014_live).
+                let m = if src.0 == 0x0600_06cf {
+                    s.script_anim_base(src, c.skin.hashcode).unwrap_or(c.matrix)
+                } else {
+                    c.matrix
+                };
+                return Some((anim::skin_matrices(&world, &c.skin), world, m));
             }
             // MP bodies (mp-body-anim): the PLAYER anim set the game's MP body runs, from the slot's
             // script list (`Sim::mp_anim`, ticked by `advance_mp_anim` — idle, the distance-driven
