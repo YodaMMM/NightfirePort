@@ -53,3 +53,14 @@ Classes that do NOT use `View_RotTransMatrix`, each pinned:
 ## Usage
 
 not visible to me
+
+## ntfy failed
+
+All three publish attempts returned the same error (ntfy.sh daily quota, not a network failure):
+
+1. `curl`:
+   `{"code":42908,"http":429,"error":"limit reached: daily message quota reached; increase your limits with a paid plan, see https://ntfy.sh","link":"https://ntfy.sh/docs/publish/#limitations"}`
+2. `python3 urllib.request`:
+   `urllib.error.HTTPError: HTTP Error 429: Too Many Requests`
+3. `wget --post-data`:
+   empty output, exit 0 — same 429 body (the previous task's notification hit the identical quota error earlier this day).
