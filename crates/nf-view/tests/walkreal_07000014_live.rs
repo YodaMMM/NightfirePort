@@ -471,7 +471,7 @@ fn walk_the_infiltration_to_the_delta_exit() {
                 turn: wrap_pi(0.0 - b.yaw).clamp(-0.08, 0.08),
                 ..Default::default()
             }
-        } else if i < 140 {
+        } else if i < 95 {
             // north-forward: the drift lengthens the wire past the hang radius — the release
             // [M 0x192860:56-66] — and Bond drops straight onto the lane below
             nf_game::player::Input {
