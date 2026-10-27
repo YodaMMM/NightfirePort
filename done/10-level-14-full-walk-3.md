@@ -20,3 +20,8 @@ say so in the report. Never weaken a decompile-backed test to make code pass.
 
 ---
 claimed-by: sandbox5 at 2026-10-27T13:14Z
+
+---
+## Report (done, 2026-10-27T13:35Z)
+
+Closed by the driver: the report is on `s/level-14-full-walk-3` (docs/reports/level-14-full-walk-3.md); the worker didn't run finish.sh.
