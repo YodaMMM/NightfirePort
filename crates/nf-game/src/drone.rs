@@ -11346,6 +11346,10 @@ pub struct Drones {
     /// 0x100000/0x200000 arms pass f12 = 1.0 [M 0x12d0ec-0x12d0f0 `lui $at, 0x3f80; mtc1 $at, $f12`]
     /// with radius f13 = +0x08. Tuple: (pos, radius, damage, owner, weapon_type, script, scale).
     pub pending_blasts: Vec<(V3, f32, f32, usize, u16, u32, f32, u16)>,
+    /// gunimp-door: the mounted laser's beam `Explode_Propagate` requests [M GunImp_Update
+    /// 0x1320d8:433-436 — `(4.0, 5.0, the ray hit, cel, the imp obj)`], queued by the fire tick
+    /// and drained at the same tick's blast slot (the sweep's drone arm needs the tick's `Data`).
+    pub pending_beam_blasts: Vec<(V3, f32, f32, usize)>,
     /// explode-debris-spawn: the live blast objects (`Explode_Create` 0x17cbd0's class-0x0F
     /// objects, EXPLODEINFO at obj+0xE0) — age/kind/script state per blast, ticked each frame at
     /// the head of the control walk (newest first) like the game's `DynamicObjList` [M 0x1336f8
@@ -12120,6 +12124,7 @@ impl Drones {
             // fix-restart-target: the fail-menu Restart's warm arm + the current level (GameState+0xC).
             level_exit_restart: false,
             pending_blasts: Vec::new(),
+            pending_beam_blasts: Vec::new(),
             blasts: Vec::new(),
             blast_debris: Vec::new(),
             rbodies: Default::default(),
@@ -14547,7 +14552,7 @@ fn segment_hits_sphere(a: V3, b: V3, c: V3, r: f32) -> bool {
     /// bullet (`Bullet_init`'s owner is the player object [M 0x1320d8:327-331]) and flies the
     /// player-bullet flight, so its class-5 contacts drain the C5 `Destroy` leaves
     /// (`Destroy_CollisionHandler` 0x12bd48).
-    pub fn gunimp_tick(&mut self, weapons: &nf_formats::weapon::WeaponData, look: f32, turn: f32, fire: bool, use_key: bool, bond: &mut crate::player::Bond) {
+    pub fn gunimp_tick(&mut self, weapons: &nf_formats::weapon::WeaponData, world: &crate::world::CollisionWorld, look: f32, turn: f32, fire: bool, use_key: bool, bond: &mut crate::player::Bond) {
         let Some(gi) = self.props.gunimps.iter().position(|g| g.active) else { return };
         if use_key {
             // `Input_Action(slot, 0xe, 4)` → `GunImp_Deactivate` 0x132c18 [M 0x1320d8:119-123]:
@@ -14683,11 +14688,51 @@ fn segment_hits_sphere(a: V3, b: V3, c: V3, r: f32) -> bool {
             snd: 0, swoosh: None, born: self.frame,
         });
         // gunimp-beam: the fire arm draws the game's beam quad `0x20005cd` through
-        // `PositionBeam(muzzle, ray hit)` (`GunImp_Update` 0x1320d8:394-407 — the ray is the 1000-unit
-        // `Collide_RayIntersect` along the barrel, the far point when it misses). The scene stretches
+        // `PositionBeam(muzzle, ray hit)` (`GunImp_Update` 0x1320d8:394-407). The scene stretches
         // the quad along this pair; the sim side keeps the endpoints.
-        let far = [muzzle[0] + dir[0] * 1000.0, muzzle[1] + dir[1] * 1000.0, muzzle[2] + dir[2] * 1000.0];
+        let far0 = [muzzle[0] + dir[0] * 1000.0, muzzle[1] + dir[1] * 1000.0, muzzle[2] + dir[2] * 1000.0];
+        // gunimp-door: the fire arm's ray [M 0x1320d8:372-384 — `Collide_RayIntersect(muzzle,
+        // muzzle + dir·1000, cel, the imp obj, 0, &list, 0, 8)`] — the beam stops at the hit
+        // [M :385-387 — the far point becomes the hitdata's position], and the 0x67 arm runs
+        // `Explode_Propagate(4.0, 5.0, hit, cel, the imp obj)` at it [M :433-436]. The sweep's
+        // case 0x21 smashes a destroyable it reaches with ≥ 1.0 damage [M 0x17c518:141-177] and
+        // `Destroy_Smash` 0x12bb60:40 writes the leaf's channel — C5's ch 0x1f, the objective-6
+        // record's complete channel. The bullet drain alone (`Destroy_CollisionHandler`
+        // 0x12bd48:31-35, 50 a contact [L ee_start_05 +0x67·0x10c+0x0c]) needs 201 contact ticks
+        // against bigdoor02's 10000 [D p3] — the beam hit is the door's killer on the PS2.
+        // The port's ray: the scoped world segment plus the destroy leaves' and the breakables'
+        // own volumes (the game's ray hits the door itself — bigdoor02 carries a collision block
+        // [D]; the port's destroy box is its collision model) — nearest stop wins.
+        let mut best_t = world.segment_bullet_scoped(world.find_cel(muzzle), muzzle, far0);
+        for dr in self.props.destroy.iter().filter(|x| !x.dead) {
+            if let Some(t) = crate::breakable::Breaks::seg_box_t(muzzle, far0, dr.lo, dr.hi) {
+                if best_t.is_none_or(|b| t < b) { best_t = Some(t); }
+            }
+        }
+        for br in self.breaks.list.iter().filter(|x| !x.dead) {
+            if let Some(t) = crate::breakable::Breaks::seg_box_t(muzzle, far0, br.lo, br.hi) {
+                if best_t.is_none_or(|b| t < b) { best_t = Some(t); }
+            }
+        }
+        let (far, hit) = match best_t {
+            Some(t) => {
+                let h = [muzzle[0] + (far0[0] - muzzle[0]) * t, muzzle[1] + (far0[1] - muzzle[1]) * t,
+                         muzzle[2] + (far0[2] - muzzle[2]) * t];
+                (h, Some(h))
+            }
+            None => (far0, None),
+        };
         self.props.gunimps[gi].beam = Some((muzzle, far));
+        if weapon == 0x67 {
+            if let Some(hit) = hit {
+                // The attacker is the imp object, not the player [M :435 — param_1 of
+                // GunImp_Update; usize::MAX is the port's player mark, so the beam carries
+                // MAX-1: a guard hit by the beam does not credit Bond]. The sweep drains at
+                // this tick's blast slot (`run_beam_explodes` — the drone arm needs the tick's
+                // `Data`).
+                self.pending_beam_blasts.push((hit, 4.0, 5.0, usize::MAX - 1));
+            }
+        }
         // gunimp-sound: the non-loop arms' per-shot one-shot at the muzzle [M 0x1320d8:332-334];
         // the laser's loop already plays (the arm above) and carries 0xffff here.
         if per_shot != 0xffff {
@@ -14698,6 +14743,91 @@ fn segment_hits_sphere(a: V3, b: V3, c: V3, r: f32) -> bool {
         // 9.0, intensity rand+1.5, rgb (0, 255, 255), channel 0, life 1 tick, kind 1 (muzzle flash).
         let intensity = 1.5 + self.rng.frand(1.0);
         self.lights.create(9.0, intensity, muzzle, [0, 0xff, 0xff], 0, 0, 1, 0, &mut self.rng);
+    }
+
+    /// The mounted laser's beam `Explode_Propagate` [M GunImp_Update 0x1320d8:433-436 —
+    /// `(4.0, 5.0, the ray hit, cel, the imp obj)`; the sweep itself 0x17c518], drained at the
+    /// fire tick's blast slot. The falloff/sweep is the shared `explode::propagate` [M 0x17c518];
+    /// the arms the port applies: case 0x21 the destroyable smash (`Destroy_Smash` 0x12bb60 — the
+    /// channel write included), case 0x20 the breakable `Break_ApplyDamage` [M :163-167], case 2
+    /// the drone `Drone_ExplosiveHit` msg 9 [M :112-123], case 3 `Player_Hurt` [M :125-140]. The
+    /// game's remaining cases (0 copter, 5 the model destructibles, 0x28 vehicle, 0x35 MP, 0x36
+    /// GT, 0x37 sensor, 0x38 monitor, 0x3d sub, 0x4b hit-list) stay unwired here — none is
+    /// reachable from the 0d mount's beam [D census], and the blast path's own sweep covers the
+    /// copter/GT arms for the callers that need them.
+    fn run_beam_explodes(&mut self, d: &Data, player_pos: V3, frame: u32) {
+        let beams = std::mem::take(&mut self.pending_beam_blasts);
+        if beams.is_empty() { return; }
+        for (pos, radius, damage, owner) in beams {
+            let destroys: Vec<(usize, V3, f32, bool)> = self.props.destroy.iter().enumerate()
+                .filter(|(_, x)| !x.dead)
+                .map(|(i, x)| {
+                    let ext = [(x.hi[0] - x.lo[0]) / 2.0, (x.hi[1] - x.lo[1]) / 2.0, (x.hi[2] - x.lo[2]) / 2.0];
+                    (i, [(x.lo[0] + x.hi[0]) / 2.0, (x.lo[1] + x.hi[1]) / 2.0, (x.lo[2] + x.hi[2]) / 2.0],
+                     (ext[0] * ext[0] + ext[1] * ext[1] + ext[2] * ext[2]).sqrt(), false)
+                }).collect();
+            let breaks_t: Vec<(usize, V3, f32)> = self.breaks.list.iter().enumerate()
+                .filter(|(_, x)| !x.dead)
+                .map(|(i, x)| {
+                    let ext = [(x.hi[0] - x.lo[0]) / 2.0, (x.hi[1] - x.lo[1]) / 2.0, (x.hi[2] - x.lo[2]) / 2.0];
+                    (i, [(x.lo[0] + x.hi[0]) / 2.0, (x.lo[1] + x.hi[1]) / 2.0, (x.lo[2] + x.hi[2]) / 2.0],
+                     (ext[0] * ext[0] + ext[1] * ext[1] + ext[2] * ext[2]).sqrt())
+                }).collect();
+            // The sweep's candidates are the game's `Collide_SphereIntersect(pos, radius, cel,
+            // …, 0xc0)` hits [M 0x17c518:67-68]; the port passes its live lists, the falloff
+            // gate inside `propagate` picks the reached ones. The drones' 0.4 hit radius is the
+            // spawn_blast convention (the guards' body sphere stand-in).
+            let drones_t: Vec<(usize, V3, f32)> = self.list.iter().enumerate()
+                .filter(|(_, x)| x.present && !x.corpse).map(|(i, x)| (i, x.pos, 0.4)).collect();
+            let hits = crate::explode::propagate(pos, radius, damage, owner,
+                &crate::explode::Targets { drones: &drones_t, player: player_pos, breaks: &breaks_t,
+                    destroys: &destroys, copters: &[] });
+            // case 0x21 → `Destroy_Smash` [M 0x17c518:141-177 → 0x12bb60]: the channel write is
+            // the smash's, the blast queued like the bullet-kill path's (script by the type
+            // byte, owner the imp — not the player).
+            for i in hits.destroys {
+                if let Some((c, r, dmg, kind)) = self.props.smash(i, &mut self.channels, frame) {
+                    let script = match kind { 1 => 0x0600_0027, 2 => 0x0600_004f, _ => 0x0600_0052 };
+                    self.pending_blasts.push((c, r, dmg, owner, 0, script, r, 0));
+                }
+            }
+            // case 0x20 → `Break_ApplyDamage` [M 0x17c518:163-167 — hitdata+8 = the amount;
+            // the same subtract `Break_Update` 0x12bfd8:37 makes], the kill the bullet walk's.
+            for (i, dmg) in hits.breaks {
+                self.breaks.list[i].health -= dmg;
+                if self.breaks.list[i].health < 0.0 {
+                    if let Some(k) = self.breaks.kill(i, pos, pos, &mut self.rng) {
+                        self.break_kills.push((k.placement, k.kind, k.sound));
+                        let id = u32::from(k.sound);
+                        self.audio.play3d(id, k.pos, None);
+                        if let Some(t) = d.sfx {
+                            let e = t.get(id);
+                            if !e.looped { self.sounds.push(Sound { id, pos: k.pos, inner: e.inner, outer: e.outer, weight: e.weight }); }
+                        }
+                    }
+                }
+            }
+            // case 2 → `Drone_ExplosiveHit` [M 0x17c518:112-123], the spawn_blast shape: the
+            // damage is the msg-9 handler's job. owner MAX-1 (the imp) never sets hit_by_player.
+            for (di, ddmg) in hits.drones {
+                if let Some(dr) = self.list.get_mut(di) {
+                    dr.last_damage = ddmg;
+                    if owner == usize::MAX { dr.hit_by_player = true; }
+                    dr.blast = Some(pos); // DroneImpact+0x10: the blast VECTOR (the anim bearing)
+                    dr.send(d, &mut self.rng, frame, msg::EXPLOSION);
+                }
+            }
+            // case 3 → `Player_Hurt` [M 0x17c518:125-140], the spawn_blast arm (the difficulty
+            // factor applied inside `pain_generic`; the pain grunt rides the 1-in-4 roll).
+            if let Some(ph) = hits.player.filter(|_| !self.net_no_self_hurt) {
+                let before = self.health.health;
+                if self.health.pain_generic(&mut self.rng, ph, self.difficulty, d.level, 0) {
+                    self.play_pain_grunt(player_pos);
+                }
+                self.pain_alpha = 1.0;
+                self.player_hits.push((frame, owner, before - self.health.health));
+            }
+        }
     }
 
     /// `Player_Activate` (0x1a5170): Bond's use sphere (radius 1.0 at head + 1 unit forward) activates every
@@ -18720,6 +18850,9 @@ fn segment_hits_sphere(a: V3, b: V3, c: V3, r: f32) -> bool {
                 self.tripbomb_beams.push((pos, end_trig));
             }
         }
+        // gunimp-door: the mounted laser's beam explode drains here — the same tick the fire
+        // queued it, where the tick's `Data` is at hand (see `run_beam_explodes`).
+        self.run_beam_explodes(d, player.pos, frame);
         let blasts = std::mem::take(&mut self.pending_blasts);
         for (pos, radius, damage, owner, weapon_type, script, scale, debris_kind) in blasts {
             self.spawn_blast(d, pos, radius, damage, owner, weapon_type, player.pos, frame, script, scale, debris_kind);
