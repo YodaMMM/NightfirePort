@@ -30,7 +30,7 @@
 use crate::triggers::Channels;
 use crate::world::V3;
 use nf_formats::level::Level;
-use nf_formats::placement::{object_matrix, transform};
+use nf_formats::placement::{object_matrix_for_class, transform};
 
 #[derive(Clone, Debug)]
 pub struct CamSubject {
@@ -85,7 +85,10 @@ pub fn bounds(level: &Level, m: usize, p: &nf_formats::placement::Placement) -> 
     let obj = if p.by_hash() { level.by_hash.get(&p.hashcode).map(|&(map, object)| &level.maps[map].objects[object]) }
         else { level.maps[m].objects.get(p.index as usize) };
     let Some(o) = obj else { return ([0.0; 3], [0.0; 3]) };
-    let mx = object_matrix(p.rotation, p.translation);
+    // Per-class builder: bounds() is reached from breakable placements (0x20, CCO(0) →
+    // View_RotTransMatrix [M 0x12c230:12]); the class predicate keeps any other caller on the
+    // game's own builder for its class [M placement::object_matrix_for_class].
+    let mx = object_matrix_for_class(p.flags & 0xff, p.creates_cel(), p.rotation, p.translation);
     let mut corners = Vec::new();
     let sane = [o.min, o.max].iter().all(|b| b.iter().all(|v| v.abs() < 1.0e6));
     if sane {

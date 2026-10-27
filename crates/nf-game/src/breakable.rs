@@ -54,7 +54,7 @@ use crate::drone::Rng;
 use crate::shatter::{self, DebrisRec, GlassTri, ShardVert, Source};
 use crate::world::V3;
 use nf_formats::level::Level;
-use nf_formats::placement::{object_matrix, transform};
+use nf_formats::placement::{transform, view_rot_trans_matrix};
 
 /// One kill effect for the caller to present (sound + shatter/debris) — `Break_Kill` 0x12b970's
 /// observable outputs. The game plays the sound at obj+0x80 (the placed object's position).
@@ -134,7 +134,9 @@ fn resolve<'a>(level: &'a Level, m: usize, p: &nf_formats::placement::Placement)
 /// crate::props::bounds — the glist bounds the collision pass would register).
 fn bounds(level: &Level, m: usize, p: &nf_formats::placement::Placement) -> (V3, V3) {
     let Some(o) = resolve(level, m, p) else { return ([0.0; 3], [0.0; 3]) };
-    let mx = object_matrix(p.rotation, p.translation);
+    // Break_Create builds obj+0x90 with control_create_object's quaternion-0 arm →
+    // View_RotTransMatrix [M 0x12c230:12, 0x1344e0:26-29].
+    let mx = view_rot_trans_matrix(p.rotation, p.translation);
     let mut corners = Vec::new();
     let sane = [o.min, o.max].iter().all(|b| b.iter().all(|v| v.abs() < 1.0e6));
     if sane {
@@ -244,7 +246,7 @@ impl Breaks {
                 // 0x106 into [M 0x12c028-0x12c030].
                 filter: if p2 == 0 { 0 } else { !(p2 as u16) },
                 dead: false,
-                matrix: object_matrix(p.rotation, p.translation),
+                matrix: view_rot_trans_matrix(p.rotation, p.translation), // [M 0x12c230:12 CCO(0)]
                 src,
                 shape_key,
                 dead_frame: u32::MAX,
