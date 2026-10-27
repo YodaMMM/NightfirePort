@@ -20,7 +20,7 @@ SUITE: (filled below after the run)
 
 Nothing known for this task. The page draw itself (layout/label rendering) is the existing page renderer's job and unchanged by this task.
 
-## Live checks for the main agent
+## Live checks for maintainers
 
 The following would confirm the port against the real game; none block the merge:
 
