@@ -1111,27 +1111,29 @@ impl Script {
                 // compose (a port choice: 07000001's intro 0x06000087 s5/s11 kind-0x31 and the
                 // hash-0 classes pin composed spots in the live walks — interact_07000001,
                 // walkreal_07000001 — and 0700004a's hash-0 0xff/0x19 markers pin theirs in 4a-lift-4).
-                let keys_alone = self.camera_started && ehash != 0 && ekind == 0xff && self.streams[i].parent < 0
-                    // level-14-capture-placement: 07000014's kiko scene 0x0600062F keys its kind-0x31
-                    // streams in WORLD space once the camera starts — the marker (stream 10, hash 0,
-                    // key t1197 local (-55.4948, 1.5464, 42.0171) [D 07900014.bin decode]) sits BETWEEN
-                    // the camera's own keys (stream 0: (-51.2739, 0.5677, 39.6973) t0 → (-55.7541,
-                    // 0.8911, 40.6857) t515, the same world frame [D decode; the camera's base is the
-                    // identity from Script_CameraStart 0x1d9140]) and in the control center the walker
-                    // stands in (the touch #381 volume -51.97…−46.39, 0…2.07, 37.28…39.46 [D]). The
-                    // game's event 6 snapshots THIS stream's entity matrix as the PlayerEnable return
-                    // [M 0x1d94c0 case 6: Mat_Copy(prev obj +0x90 → si+0x40); Script_Free 0x1da880:44-48
-                    // → Player_Enable(glb_players, si+0x40, +0xAB6); Player_Enable 0x195498 writes the
-                    // matrix translation into the player +0x30], so the compose decides where Bond
-                    // lands: the SP #382 placement compose (-51.5703, 0.0, 31.2664) threw the marker to
-                    // (-107.0651, 1.5464, 73.2835) — the void; Bond fell to (-107.07, -89.41, 73.28).
-                    // The wire stream 5 (hash 0x020006b1, kind 0x31) keys the same frame (local
-                    // (-49.4690, 0.7531, 39.7303) → in-room). Scoped to this script's kind-0x31
-                    // unparented streams: 07000001's intro 0x06000087 s5/s11 (also kind-0x31 hash-0)
-                    // keeps the port's composed pinning (its live walks pass on it) — re-checking that
-                    // scene's key frame against the disc is the report's next-window item.
-                    || (self.camera_started && ekind == 0x31 && self.streams[i].parent < 0
-                        && self.nis.hashcode == 0x0600_062f);
+                // cutscene-kind31-frame-2 — the GENERAL rule replaces the per-class/per-script
+                // scopes (the 0xff-hash arm and the 0x0600_062F arm this replaces): an unparented
+                // case-1 stream ALWAYS concats si+0x00 — the 10th arg to Script_GetInterp is
+                // `(stream+0x25 parent == -1)` stored at 0x1d9c0c [M 0x1d9a08 case-1 disasm; case 6
+                // the same at 0x1d9a98, case 7 at 0x1d9d6c; the ancestor calls pass 0 at
+                // 0x1d9cd4/0x1d9b30] — and GetInterp's tail runs `Concat(si+0x00, out)` on it
+                // [M 0x1da838-0x1da844]. si+0x00's VALUE is the lifecycle: View_RotTransMatrix of
+                // the SP placement at Script_Load [M 0x1d8248:148], then Mat_IdentityT(si) when
+                // Script_CameraStart (op 0x0d) decodes — binary-proven a0=si at 0x1d916c — and
+                // NEVER restored (Script_CameraEnd 0x1db348:9-13 doesn't touch it; the only other
+                // writers are Script_SetPosRot/SP_SetPosRot 0x1db920:10-19 and SubScriptStart's
+                // zero-vector load 0x1db050:28-38). So every unparented stream's keys (and the
+                // event-6 hand-back snapshot of its entity, Script_EventHandler 0x1d94c0 case 6
+                // Mat_Copy(obj+0x90 → si+0x40) → Script_Free 0x1da880:44-48 → Player_Enable
+                // 0x195498 player +0x30) land COMPOSED before the script's camera op and
+                // KEYS-ALONE after it — no per-kind or per-hash branch exists in the interp path
+                // [M Script_CreateEntity 0x1d8968:35-173: kind only selects the constructor]. The
+                // disc census (nf-formats/tests/nis_kind31_census.rs): every kind-0x31 stream in a
+                // camera script keys at/after its script's camera tick — 0x0600062F's s10 (op
+                // t1197) and 0x06000087's s5/s11 alike — so the world-frame reading generalizes.
+                // The hash-0 kind-0x19 marker skip above stays: its 4a-lift-4 pin is [L] and its
+                // scene's base state is not re-derived here.
+                let keys_alone = self.camera_started && self.streams[i].parent < 0;
                 if !hash0 && !keys_alone { m = mul(&m, &self.matrix); }
                 if let Some(Some(Obj::Entity { matrix, alpha: a, .. })) = objs.list.get_mut(o) { *matrix = m; *a = alpha; }
             }
