@@ -99,3 +99,16 @@ props were never in the scene's own frame.
 ## Usage
 
 not visible to me
+
+## ntfy failed
+
+All three transports returned the ntfy daily-quota error (2026-10-27 ~18:57 UTC):
+
+1. `curl -sS -m 20 -H "Title: NightfirePort" -d "level-4a-ride-hand-props: …" https://ntfy.sh/nightfire-yoda-8k3x`
+   → `{"code":42908,"http":429,"error":"limit reached: daily message quota reached; increase your limits with a paid plan, see https://ntfy.sh","link":"https://ntfy.sh/docs/publish/#limitations"}`
+2. python urllib → `urllib.error.HTTPError: HTTP Error 429: Too Many Requests`
+3. wget post → same quota rejection (silent, exit 0), body empty.
+
+(The previous task's report records the same quota failure earlier today — the topic's daily limit
+is shared across workers.)
+
