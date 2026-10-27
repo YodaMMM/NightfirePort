@@ -141,6 +141,19 @@ fn walk_from_the_spawn_to_the_exit_with_the_contact() {
             "every ch-0xE guard must have left WAIT_SWITCH when the scene wrote the channel (states {states:?})");
     }
 
+    // Top up BEFORE the hall: the meet scene's weapon hand left clip 32 spare 0, and the hall's
+    // dodge fights burn more than a clip per guard (guard 6's fight ran dry at +634 ticks; the
+    // resupply detour from inside the hall then wedged on the hall's south wall, the ambush
+    // stayed alive and ch 0x99 never rose — the hold kept the contact at node 33 and the exit
+    // died with it). A player tops up at the corridor boxes before the hall: the walked-path
+    // corridor's own rule (resupply()).
+    {
+        let sim = w.scene.sim.as_ref().unwrap();
+        let dry = (sim.gun.clip as i32) + (sim.gun.spare as i32) < 48;
+        drop(sim);
+        if dry { w.resupply("pre-hall ammo"); }
+    }
+
     // The hall detour: the disc's AND mux (kind 3, out 0x99 = 153, list [0x11,0x12,0x13] [D the
     // placement]) fires when the three named guards are dead — their death channels are 0x13,
     // 0x11, 0x12 [D placement params]. A real player clearing the north-east hall fires this
@@ -162,7 +175,23 @@ fn walk_from_the_spawn_to_the_exit_with_the_contact() {
     w.walk_nav_to([2.9, 6.3, 16.3], "stage into the hall (east door)", 3.0);
     for g in named {
         let gpos = w.scene.sim.as_ref().unwrap().drones.list[g].pos;
+        // The guards hunt: guard 11 left his placement for the hall's south entry and the
+        // approach from the courtyard side wedged on the hall's south wall (the nav gave up
+        // at the 3000-tick cap, segment_to_target ≈0.47). Re-stage through the proven route
+        // (the meet-room corridor → the east door) before closing from inside.
+        if walker::dxz(w.scene.sim.as_ref().unwrap().bond.pos, gpos) > 9.0 {
+            walker::hall_restage(&mut w, &format!("guard {g} approach"));
+        }
         w.walk_nav_to(gpos, &format!("approach hall guard {g}"), 3.0);
+        // Dry mid-hall is the walk's own trap: the hall's south wall walls the resupply nav
+        // off from the corridor boxes (every southward hop wedged at segment t≈0.095). A
+        // player steps out the door he came in by: east door → corridor box → back inside.
+        {
+            let sim = w.scene.sim.as_ref().unwrap();
+            let dry = sim.gun.clip + sim.gun.spare < 8;
+            drop(sim);
+            if dry { walker::hall_ammo_ladder(&mut w, &format!("hall guard {g} ammo")); }
+        }
         if !w.shoot(g, &format!("hall guard {g}")) {
             if w.resupply("hall ammo") { w.shoot(g, &format!("hall guard {g}")); }
         }
