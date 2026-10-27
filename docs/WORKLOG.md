@@ -58,3 +58,12 @@ stayed alive, ch 0x99 never rose, the contact held at node 33 and the exit died 
   → 0x1d release → Mayhew walks 121 u → ch10 → exit end to end).
 - Verified green: mayhew_hold_live 5.7s, escort_follow_07000001_live 23.0s, fix_npc_doors_live
   308.6s. Full suite next.
+
+### level-01-mayhew-wait-2 — done (2026-10-27 ~07:25 UTC)
+
+Both red tests green on the final tree: walkreal_07000001_live 3/3 (61.1 s), fix_mission_live
+4/4 (7.2 s); mayhew_hold_live 5.7 s, escort_follow_07000001_live 23.0 s, fix_npc_doors_live
+308.6 s — the driver's five, plus every nf-view test binary compiling (--no-run, 0 errors).
+The full 4-crate runner could not complete in this sandbox (background processes are killed
+between tool calls — nohup and setsid both confirmed dead twice); the report lists exactly
+what ran and the left-over command. Report: docs/reports/level-01-mayhew-wait-2.md.
