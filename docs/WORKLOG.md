@@ -31,3 +31,21 @@ cutscene-kind31-frame-3 — started (2026-10-27 ~18:57 UTC)
   where the game composes (or vice versa) — scene camera op tick vs stream op tick, SubScriptStart
   base reset [M 0x1db050:28-38], SP_SetPosRot [M 0x1db920] — fix the rule to the game's behaviour,
   keep frame-2's 01/14 battery green.
+
+## cutscene-handback-census (branch s/cutscene-handback-census)
+
+Census of every SP script's event-6 hand-back on every on-foot level [D 0700* archives, kind-0xd9
+placements]: each script runs through the real port runtime (Script::load at the placement base →
+update ticks → free) and the Request::PlayerEnable snapshot is checked against the level's own
+static collision (floor within 2.5 below). 26 hand-back rows over 14 levels, 12 fallbacks, 0 voids;
+the two 4a rows match level-4a-lift-4's [L] landing-pad pin (the "missing floor" is the lift
+platform, a dynamic object) and are pinned as a named position-equality exception
+[nis_handback_census.rs]. Findings: (1) kind-2 (anim) prev streams — the game snapshots
+anim_obj+0x90 (live via AnimObjectUpdate 0x1befd8:290 → Control_GetObjMatrix 0x134210) but the
+port falls back; four rows hit it (0600007f/06000084/06000080/060006d3), documented not pinned;
+(2) 0x06000074 (07000005 SP #71) is on no archive [D probe] — the missing-script arm is correct;
+(3) the frame-2 rule holds disc-wide (every snapshot row's script has cam@0 → keys-alone).
+Code: one read-only accessor (Script::stream_kind). Ran: nf_formats 91/0, nf_game lib 578/0/5ign,
+nf_view lib 96/0, the 14-bin cutscene-sensitive integration set 13 green (walk_07000014_live
+rc=137 = sandbox OOM kill, not a failure); the remaining ~845 bins did not fit the window
+(background jobs are killed between tool calls here — foreground chunks only).
