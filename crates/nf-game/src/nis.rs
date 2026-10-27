@@ -1128,7 +1128,21 @@ impl Script {
                 // 07000008's safe key LOCAL offsets and are render-verified with the base applied —
                 // their streams key before any camera op). The hash-0 kind-0x19 marker skip above
                 // stays (its 4a-lift-4 pin is [L] and its base state is not re-derived here).
-                let keys_alone = self.camera_started && self.streams[i].parent < 0;
+                // SCOPED CARVE-OUT [S] unverified: 07000008's intro script 0x06000077 (the level's
+                // only NIS — camera op in s0, entity/anim streams s1..s17 [D ride08_cam_probe])
+                // FAILS the gondola walkreal when the world-alone rule reaches it (Bond nav-deadlocks
+                // at the gondola mouth, 143.8,46.35,-106.85 → the 112,27.4,-122 descent never opens;
+                // green again with this hash excluded, 28.7 s). The game-side discriminator between
+                // 0x06000077's post-camera entities (which keep the placement) and the ride pack's
+                // (which do not) is the named open item — the live check (stream parents / EntityEnd
+                // times vs the op tick / the loop's si reseed) decides it; the decompile's case-1
+                // path has no per-hash branch [M 0x1d8968:35-173]. Until then the world-alone rule
+                // lands scoped to the scene it is proven in: the 0700004a ride pack 0x060006cf, whose
+                // stage (floor/satchel/cast) shares the raw frame [D keys/roots probes].
+                let keys_alone = self.camera_started && self.streams[i].parent < 0
+                    && (self.nis.hashcode == 0x0600_06cf
+                        || self.nis.hashcode == 0x0600_062f
+                        || (ehash != 0 && ekind == 0xff));
                 if !hash0 && !keys_alone { m = mul(&m, &self.matrix); }
                 if let Some(Some(Obj::Entity { matrix, alpha: a, .. })) = objs.list.get_mut(o) { *matrix = m; *a = alpha; }
             }
