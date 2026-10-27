@@ -226,3 +226,15 @@ other walkreal/door/mp tests.
 - New probe crates/nf-view/tests/door_pose_probe.rs: dumps 07000008/07000007 leaf keys + create
   poses ([D] evidence for the next round's pose questions).
 - Family runs (walkreal 24 + door family + nf-game doors) launched in background; mp pin next.
+
+### door-state-collision-2 final (06:20 UTC)
+
+- Fix landed (55e06f54): the is_closed solidity filter REVERTED; the unconditional
+  glist extend restored with the full decomp-evidence comment (state-blind collision;
+  Door_IsClosed = render vision only). door_pose_probe added (leaf key dumps).
+- Verified on the final tree: the 4 named reds GREEN; walkreal_07000008 4/4; ALL 24
+  walkreal binaries GREEN; the door family GREEN (15 nf-view + 7 nf-game binaries);
+  mp spot set + the EXACT digest pin GREEN; nf-game --lib 578/0/5.
+- The full-suite tally did not fit the window (background jobs die at the tool-call
+  boundary; the suite build chunk consumed the last 393 s). Report:
+  docs/reports/door-state-collision-2.md.
