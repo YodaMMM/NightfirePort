@@ -166,3 +166,40 @@ Progress:
   moving change, fix to the game's rule or prove the new value [M], re-pin; every round
   3/5 green test stays green. Door-state filter: s/door-state-collision exists; if it
   lands on master first, drop the door-state content from this branch.
+
+- capsule-cull-and-los-masks-6: the digest MOVER NAMED AND RE-PINNED. The pin's final
+  0xfb7b58f73e340ec3 → 0xbc5e2155a3786e9c is the game's head-on cull: bisect by tree
+  (pin binary runs) 82362142 GREEN → 24af5915 (capsule-1's LOS_MASKS_ON/HEAD_ON_CULL_ON
+  flip) already 0xbc5e… → the cull const flipped back OFF on that tree GREEN (sole
+  mover; the LOS masks digest-inert) → 4a155ddf^1 = ca2e7389 (capsule-3 tip) 0xbc5e…
+  WITHOUT any master-side content (merge + master exonerated; round 5's two surviving
+  suspects — 353b1008 riding, hatch-2 — are master-side and master is green). The port's
+  inline cull is the decompile verbatim [M Intersect_CylGeom 0x109da0:321-322 — the skip
+  ((0.999 < n·d̂) && (0.5 < f)) || ((n·d̂ < −0.999) && (f < 0.5)); f the crossing fraction
+  from A clamped :310-320; the spine NORMALIZED :109f74 Vec_Normalise 0x1e3000; walk
+  A = HITTEST+0x20 = BLData+0x760 (top), B = +0x30 = +0x770 = pos + up·(0.55 − cc)
+  [M Player_Collision 0x194df0 :301/:333]] — the old pin predated the cull and baked in
+  a non-game rule; the TEST was wrong per the decompile. Re-pinned
+  (mp_net_slots_post_move_live, tick0 unchanged 0x5c0bb60a8cdf8938) with the full
+  citation; both its tests + mp_digest_diag green on the final tree. First divergence
+  (round 5, unchanged): t142, bodies, slot 3 only (airborne off the t134 scripted jump,
+  pressed at the z −206.70874 wall), Δx +0.00122, Δy −0.00235.
+- origin/master MOVED mid-session (dcc4a733 → ec917093 batch-1026l: cast-revert,
+  hatch-4, abseil, glass-01); merged clean (9995f255); door-state-collision NOT in
+  master (no drop needed); the pin re-verified green on the merged tree.
+- Suite: the background runner died between tool calls again (6th sandbox to measure
+  it); the 845-artifact suite cannot fit the 10-min tool cap (its build phase alone
+  exceeded 590 s once, then a disk-full hit at 100% — freed 2.5 G of stale pre-session
+  deps artifacts). Ran directly on the merged tree (--test-threads=1, NF_SILENT=1):
+  mp_net_slots_post_move_live 2/0, mp_digest_diag 1/0, gt_los_live 2/0,
+  gun_turrets_live 2/0, interact_07000006_live 9/0, interact_07000009_live 16/0,
+  level_end_live 6/0, zoe_gondola_realpath_live 1/0, fix_npc_doors_live 1/0,
+  door_aim_ray_live 2/0, door_portal_links_live 3/0, door_text_labels_live 4/0,
+  door_hint_boot_count_live 2/0, door_glist0_e_dead_live 2/0, npc_doors_live 6/0+1ign,
+  walkreal_07000008_live 4/0. TWO FLAGS UP: (1) ai_live guard_takes_cover_like_the_game
+  is RED on a716ffac ALREADY (pre-merge, = the capsule-5 base): the state-sequence
+  assert at ai_live.rs:263 ([0x58,0x5a,0x8c,0x93,0x94,0x95,0x96]) — made green in
+  capsule-1 (8b31c613, seed 3), so the mover sits in capsule-2..5 (gt.rs muzzle/track/
+  spread, the drone.rs door gate, or the band-settle radial tail); rounds 4/5 did not
+  run ai_live. Next window: bisect ai_live on the capsule-2..5 commits, THEN re-merge
+  master. (2) the full 845-binary suite still has not run end to end in this sandbox.
