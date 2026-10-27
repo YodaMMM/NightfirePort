@@ -11354,6 +11354,12 @@ pub struct Drones {
     /// explode-debris-spawn: the blasts' debris particles (`Debris_CreateEx` 0x1ac808's class-0x10
     /// objects), integrated by `Debris_Update` 0x1aac00 (shared with the breakable path).
     pub blast_debris: Vec<crate::shatter::Debris>,
+    /// rigid-body-wiring: the kind-0xD8 rigid bodies (`RB_Create` 0x1d6bf0 via
+    /// `parsemap_create_dynamic_objects` 0x1d04f0 case 0xD8) — created per level attach,
+    /// ticked in the control walk at the per-kind dispatch entry {RB_Update 0x1d6e38,
+    /// RB_CollisionHandler 0x1d7a80} (the 0x26f9c8 table pair), blasts armed through the
+    /// class-5 hit arm of `RB_RestingContact` 0x1d7168.
+    pub rbodies: crate::rigid_body::Rbodies,
     /// The satchel countdown beeps raised this tick (pos) — Bullet_DoTrails' 0x447 arm
     /// [M 0x12d890:435-443], flushed to audio + `sounds` after the bullets pass.
     pub pending_beeps: Vec<V3>,
@@ -11880,6 +11886,10 @@ pub struct Drones {
     /// disc-wide [D script-census.md:144]); the creator's param map in `crate::space_laser`.
     /// `SpaceLaser_Update` 0x1aa3f8 (the arm/fire/damage flow) is the remaining gap.
     pub space_lasers: Vec<crate::space_laser::SpaceLaser>,
+    /// The space lasers' beams alive this tick (`Debris_Update` 0x1aac00's class-0x10 beam
+    /// objects — life 5 ticks, alpha fixed [M 001aac00:20-28]): the renderer's draw hand-off
+    /// (the draw is done separately; the sim only exposes the endpoints + alpha per tick).
+    pub space_laser_beams: Vec<crate::space_laser::LaserBeam>,
     /// frag-throw-timing2: the last stun flash's recorded inputs (the `FlashProbe` doc). One
     /// pop deep — each new pop overwrites it; cleared nowhere (the probe is read-after-pop by
     /// tests; the flash state itself decays independently).
@@ -12069,6 +12079,7 @@ impl Drones {
             spawn_counter: 0, audio: Default::default(), script_sounds: Vec::new(), map_sounds: Default::default(), music: Default::default(), attack_gate: Default::default(), alarm_music: [0; 3], voice_last: Vec::new(), patrol_cooldown: 0, saw_opp_this_frame: false, saw_opp_last_frame: false, searchlights: Default::default(), doors: Default::default(), fuseboxes: Vec::new(), wire_geo: Default::default(), sss: Default::default(), bullet_paths: Vec::new(), sl_shots: Vec::new(), props: Default::default(), break_kills: Vec::new(), breaks: Default::default(), monitors: Default::default(), mission: crate::mission::Mission::new(), mission_carry: None, mission_inited: false, mission_events: Vec::new(), useobjs: Default::default(), ai_points: Vec::new(), bullet_path_weapons: Vec::new(), copters: Vec::new(), copter_paths: Vec::new(), locks: Vec::new(), grapple_points: Vec::new(), prev_event2: 0,
             bullet_contacts_now: Vec::new(),
             bullet_contacts_prev: Vec::new(),
+            space_laser_beams: Vec::new(),
             // fix-06-alarm.
             sound_triggers: Default::default(),
             // The shared target registry (NPCGlobals DAT_00299110).
@@ -12111,6 +12122,7 @@ impl Drones {
             pending_blasts: Vec::new(),
             blasts: Vec::new(),
             blast_debris: Vec::new(),
+            rbodies: Default::default(),
             pending_beeps: Vec::new(),
             fusebox_hurts: 0,
             level_current: 0,
@@ -12310,6 +12322,9 @@ impl Drones {
         self.breaks = crate::breakable::Breaks::create(level);
         // The monitor consoles (0x30) [M Monitor_Create 0x1b08b0 — same pass].
         self.monitors = crate::monitor::Monitors::create(level);
+        // The kind-0xD8 rigid bodies (RB_Create 0x1d6bf0 via parsemap_create_dynamic_objects
+        // 0x1d04f0 case 0xD8 — the main map's placements, the parsemap-epilogue rule).
+        self.rbodies = crate::rigid_body::Rbodies::create(level);
         // The Q-Worm PCs (0x35) and switches (0x29) of `Player_Activate` 0x1a5170 (map-tower;
         // `parsemap_create_dynamic_objects` 0x1d04f0 cases 0x35/0x29, crate::useobj).
         let mm = level.main_map().unwrap_or(0);
@@ -12678,7 +12693,18 @@ impl Drones {
         self.space_lasers.clear();
         for (i, p) in level.maps[mi].placements.iter().enumerate() {
             if p.flags & 0xff != 0x38 { continue; }
-            self.space_lasers.push(crate::space_laser::from_placement(i, &p.params));
+            let mut l = crate::space_laser::from_placement(i, &p.params);
+            // The fire origin seeds from the placement's own position: the game's lane 0 fills
+            // only through `SpaceLaser_Register` 0x1aa9e8 (the tracking scripts' event callback
+            // [M Script_EventHandler 0x1d94c0:173-174], copying the current entity's obj+0xC0),
+            // and those entities are bare `control_create_object(0, ...)` objects at the zero
+            // quad [M Script_CreateEntity 0x1d8968's fallthrough + Script_EntityStart
+            // 0x1d8d78's `Vec_Copy2(+0xc0, +0x40, +0x30)` of zeros] — the level's kind-0x38
+            // placement IS the "BigLaserBeam Fire Marker" at (0,0,0) [D 0700001b-audit.md:275],
+            // so the registered quad reads the placement's position. The stream decode shows no
+            // position ops [D audit:611-612]; a live check settles the register's result.
+            l.fire_origin = p.translation;
+            self.space_lasers.push(l);
         }
         // Never-called proofs [M/D]: the walk's remaining AI-reachable creators have no disc
         // placements. `Sub_Create` 0x1ad6c0 (case 0x36, 0x1d04f0:215) and `MiniSub_Create`
@@ -12933,9 +12959,7 @@ fn segment_hits_sphere(a: V3, b: V3, c: V3, r: f32) -> bool {
             // The player's shell is reserved now and ejected when the +0x78 delay ends, from the view model's
             // datum as posed then (`eject_bone_now`, set by the viewer each tick) [M 0x12fde0 / 0x12f678].
             Some(_) => self.casings.reserve(&d.surfaces.map(|s| &s.ammo).unwrap_or(&Default::default()), w, None),
-            None => self.casings.eject_with_floor(&d.surfaces.map(|s| &s.ammo).unwrap_or(&Default::default()), w, from, yaw, pitch, from[1],
-                // The kept-casing rest floor [S rope-guard-hitbox]: the static floor beneath the muzzle.
-                d.world.segment(from, [from[0], from[1] - 40.0, from[2]]).map(|t| from[1] - 40.0 * t), &mut self.rng),
+            None => self.casings.eject(&d.surfaces.map(|s| &s.ammo).unwrap_or(&Default::default()), w, from, yaw, pitch, from[1], &mut self.rng),
         }
         // Heard by the drones; the audible shot comes from the gun's fire script (op 1), played by the player's owner.
         if !sound.looped { self.sounds.push(Sound { id: sound.id, pos: from, inner: sound.inner, outer: sound.outer, weight: sound.weight }); }
@@ -13085,6 +13109,48 @@ fn segment_hits_sphere(a: V3, b: V3, c: V3, r: f32) -> bool {
         // straight into rec+0x64 and rec+0x6c.
         for (ci, dmg) in hits.copters {
             if let Some(c) = self.copters.get_mut(ci) { c.damage += dmg; c.attack_acc += dmg; }
+        }
+        // rigid-body-wiring: the blast reaches the kind-0xD8 bodies through the class-5 hit
+        // arm of RB_RestingContact 0x1d7168 / RB_RestingContactRot 0x1d73a0. The game's
+        // explode sweep (Collide_SphereIntersect 0x17c518:67) finds the objects and the
+        // falloff is the shared exact form (:78-81 — the port's mp::combat::blast_falloff);
+        // the hit record's velocity/point construction is the port's stand-in [S — the game's
+        // explosion-object contact record is unported], the arm math itself is the
+        // decompile's [M 0x1d7238-0x1d72e4 / 0x1d7428-0x1d74c8].
+        if !self.rbodies.list.is_empty() {
+            for rbo in self.rbodies.list.iter_mut() {
+                let centre = rbo.st.trans;
+                let falloff = crate::mp::combat::blast_falloff(pos, radius, damage, centre, rbo.st.s13c);
+                if falloff < 0.0002 { continue; }
+                let dir = [centre[0] - pos[0], centre[1] - pos[1], centre[2] - pos[2]];
+                let mag = (dir[0] * dir[0] + dir[1] * dir[1] + dir[2] * dir[2]).sqrt();
+                let vel = if mag > 0.0 { [dir[0] / mag, dir[1] / mag, dir[2] / mag] } else { [0.0, 1.0, 0.0] };
+                // The contact point stand-in [S]: the body's surface point toward the blast,
+                // offset by a fixed tangent — an axis-aligned point makes r ∥ impulse and the
+                // game's r×impulse torque would read zero for every sphere-sphere blast, while
+                // the game's barrels visibly tip (the explosion is a gas volume, not a point:
+                // its contact is off-axis). The tangent is deterministic per body (no RNG).
+                let tangent = {
+                    let c = [vel[1] * 0.0 - vel[2] * 1.0, vel[2] * 0.0 - vel[0] * 0.0, vel[0] * 1.0 - vel[1] * 0.0];
+                    let m = (c[0] * c[0] + c[1] * c[1] + c[2] * c[2]).sqrt();
+                    if m > 0.0 { [c[0] / m * rbo.st.s13c * 0.5, c[1] / m * rbo.st.s13c * 0.5, c[2] / m * rbo.st.s13c * 0.5] } else { [0.0; 3] }
+                };
+                let point = [
+                    centre[0] + vel[0] * rbo.st.s13c + tangent[0],
+                    centre[1] + vel[1] * rbo.st.s13c + tangent[1],
+                    centre[2] + vel[2] * rbo.st.s13c + tangent[2],
+                ];
+                rbo.hits.push(crate::rigid_body::RbHit {
+                    scale: falloff,
+                    normal: [-vel[0], -vel[1], -vel[2]],
+                    vel,
+                    point,
+                    other_class: 5,
+                    other_pos: pos,
+                });
+            }
+            let mut rb_sounds = Vec::new();
+            self.rbodies.handle_collisions(&mut rb_sounds);
         }
         for (di, ddmg) in hits.drones {
             if let Some(dr) = self.list.get_mut(di) {
@@ -14489,6 +14555,8 @@ fn segment_hits_sphere(a: V3, b: V3, c: V3, r: f32) -> bool {
             // the pose KEPT [M 0x132c18:33-47 writes no object position]. The velocity zeroes
             // with the game's BL+0x50/+0x10 [M 0x132c18:44-45].
             self.props.gunimps[gi].active = false;
+            // gunimp-beam-lifetime: leaving the gun clears the beam with it.
+            self.props.gunimps[gi].beam = None;
             bond.vel = [0.0; 3];
             return;
         }
@@ -14523,7 +14591,13 @@ fn segment_hits_sphere(a: V3, b: V3, c: V3, r: f32) -> bool {
             bond.pitch = pitch;
             bond.vel = [0.0; 3];
         }
-        if !fire || self.props.gunimps[gi].cooldown > 0.0 { return; }
+        if !fire || self.props.gunimps[gi].cooldown > 0.0 {
+            // gunimp-beam-lifetime: the game's beam object is created and positioned per shot
+            // (`GunImp_Update` 0x1320d8:394-407) and stops drawing with the fire state — the port must not
+            // leave the last shot's quad hanging in the room after the trigger is released.
+            self.props.gunimps[gi].beam = None;
+            return;
+        }
         let tg = &crate::gunimp::TURRET_GUNS[(self.props.gunimps[gi].turret as usize).min(crate::gunimp::TURRET_GUNS.len() - 1)];
         {
             let g = &mut self.props.gunimps[gi];
@@ -14556,6 +14630,20 @@ fn segment_hits_sphere(a: V3, b: V3, c: V3, r: f32) -> bool {
             guided_cam: false, // 0x67's +0x6C is 0 [L] — the arm is inert either way
             snd: 0, swoosh: None, born: self.frame,
         });
+        // gunimp-beam: the fire arm draws the game's beam quad `0x20005cd` through
+        // `PositionBeam(muzzle, ray hit)` (`GunImp_Update` 0x1320d8:394-407 — the ray is the 1000-unit
+        // `Collide_RayIntersect` along the barrel, the far point when it misses). The scene stretches
+        // the quad along this pair; the sim side keeps the endpoints.
+        let far = [muzzle[0] + dir[0] * 1000.0, muzzle[1] + dir[1] * 1000.0, muzzle[2] + dir[2] * 1000.0];
+        self.props.gunimps[gi].beam = Some((muzzle, far));
+        // gunimp-sound: the TurretGuns entry's fire sound (+0x18 = 1307 for the laser [D ACTION.ELF @0x26f520])
+        // played at the muzzle through the 3-D path [M GunImp_Update 0x1320d8's Sound_Play3D on the shot].
+        self.audio.play3d(tg.sound as u32, muzzle, None);
+        // gunimp-light: the same fire arm creates the muzzle light [M GunImp_Update 0x1320d8 —
+        // Rand_FRand(1.0) then Light_Create(9.0, rand+1.5, muzzle, 0, 0xff, 0xff, 0, 0, 1, 0)]: radius
+        // 9.0, intensity rand+1.5, rgb (0, 255, 255), channel 0, life 1 tick, kind 1 (muzzle flash).
+        let intensity = 1.5 + self.rng.frand(1.0);
+        self.lights.create(9.0, intensity, muzzle, [0, 0xff, 0xff], 0, 0, 1, 0, &mut self.rng);
     }
 
     /// `Player_Activate` (0x1a5170): Bond's use sphere (radius 1.0 at head + 1 unit forward) activates every
@@ -15359,33 +15447,20 @@ fn segment_hits_sphere(a: V3, b: V3, c: V3, r: f32) -> bool {
             // [M Bullet_init_casing_ex 0x12f678:83-114 — AnimGetBoneWorldTrans runs there]:
             // the player's from the view model (`eject_bone_now`), a guard's from its own
             // eject bone this tick (standins-drone-925).
-            let mut guard_bones: Vec<(usize, nf_formats::anim::Mat4, f32, Option<f32>)> = Vec::new();
+            let mut guard_bones: Vec<(usize, nf_formats::anim::Mat4, f32)> = Vec::new();
             let pend: Vec<Option<usize>> = self.casings.list.iter()
                 .filter(|c| c.state == 3 && c.pending).map(|c| c.shooter).collect();
             for s in pend.into_iter().flatten() {
-                if !guard_bones.iter().any(|(j, _, _, _)| *j == s) {
+                if !guard_bones.iter().any(|(j, _, _)| *j == s) {
                     if let Some(dr) = self.list.get(s) {
-                        if let Some(m) = dr.eject_matrix(d) {
-                            // The kept-casing rest floor [S rope-guard-hitbox]: the static floor
-                            // beneath the eject point (a 40-unit down-ray) — a rope guard hangs
-                            // 10+ units above the deck and the [M] plane rest froze there.
-                            let e = [m[3][0], m[3][1], m[3][2]];
-                            let floor = d.world.segment(e, [e[0], e[1] - 40.0, e[2]]).map(|t| e[1] - 40.0 * t);
-                            guard_bones.push((s, m, dr.pos[1], floor));
-                        }
+                        if let Some(m) = dr.eject_matrix(d) { guard_bones.push((s, m, dr.pos[1])); }
                     }
                 }
             }
-            let bone = self.eject_bone_now.as_ref().map(|(m, y)| {
-                let floor = {
-                    let e = [m[3][0], m[3][1], m[3][2]];
-                    d.world.segment(e, [e[0], e[1] - 40.0, e[2]]).map(|t| e[1] - 40.0 * t)
-                };
-                (m, *y, floor)
-            });
+            let bone = self.eject_bone_now.as_ref().map(|(m, y)| (m, *y));
             self.casings.update(|sh| {
                 if sh == usize::MAX { bone } else {
-                    guard_bones.iter().find(|(j, _, _, _)| *j == sh).map(|(_, m, y, f)| (m, *y, *f))
+                    guard_bones.iter().find(|(j, _, _)| *j == sh).map(|(_, m, y)| (m, *y))
                 }
             }, &mut self.rng, |id, pos| { audio.play3d(id as u32, pos, None); });
         }
@@ -15618,6 +15693,113 @@ fn segment_hits_sphere(a: V3, b: V3, c: V3, r: f32) -> bool {
             for m in &mut self.space_missiles {
                 m.tick(chans, deploy, frame);
             }
+        }
+        // The SpaceLasers tick in the same control pass — control_funcs row 0x50 =
+        // `SpaceLaser_Update` 0x1aa3f8 [M docs/atlas/object.md:164; the dispatcher case 0x38
+        // @0x1d06fc creates them — parsemap_create_dynamic_objects decomp :225-227]. The
+        // class-0x10 beam objects tick here too (`Debris_Update` 0x1aac00's life counter).
+        self.space_laser_beams.retain_mut(|b| {
+            b.life -= 1; // [M 001aac00:27-28 ext+0x30 decremented per update]
+            b.life > 0 // [M 001aac00:20-22 < 1 -> obj+0xfe |= 1, the delete pass]
+        });
+        {
+            let mut fired: Vec<crate::bullet::Bullet> = Vec::new();
+            let mut out: Vec<crate::space_laser::LaserOut> = Vec::new();
+            for l in &mut self.space_lasers {
+                if l.deleted { continue; }
+                // The game runs `Script_Update` on the loaded script every state-1/state-3 tick
+                // [M 0x1aa3f8:116/:176] and reads `Script_IsPlaying` for the state-1 exit
+                // [M :122-126] — the port's clock: the [D] lib length, read at the load.
+                let playing = l.script_len != 0 && l.script_ticks < l.script_len;
+                out.clear();
+                {
+                    let mut t = crate::space_laser::SpaceLaserTick {
+                        ch: &mut self.channels, frame, player: player.pos, script_playing: playing,
+                    };
+                    l.tick(&mut t, &mut self.rng, &mut out);
+                }
+                // [M :116/:176 the per-tick Script_Update runs in states 1 and 3 only.]
+                if l.state == 1 || l.state == 3 { l.script_ticks += 1; }
+                for o in out.drain(..) {
+                    match o {
+                        crate::space_laser::LaserOut::LoadScript { id, .. } => {
+                            // [D] the lib record's length (the tracking pair 360, the dead
+                            // script 10 [D 0700001b-audit.md:606-612]); the port ends the
+                            // script at it ([M] `Script_StreamEnd` 0x1db420 clears the play
+                            // bit at the End marker). A miss = the game's own Script_Load
+                            // failure: IsPlaying reports 0 and state 1 exits next tick.
+                            l.script_len = self.scripts.lib.get(&id).map(|n| n.length as u32).unwrap_or(0);
+                            // The load tick runs its own Script_Update [M 0x1aa3f8:103/:112 —
+                            // Script_Load + Script_Play + Script_Update inside state 0's arms].
+                            l.script_ticks = 1;
+                        }
+                        crate::space_laser::LaserOut::WhineStart => {
+                            // [M :119-121] Sound_Play(100.0, 0x5de, 0, 0), the handle at
+                            // ext lane 3+0x0C.
+                            l.whine_handle = self.audio.play(0x5de);
+                            l.whine_on = true;
+                        }
+                        crate::space_laser::LaserOut::SoundStop => {
+                            // [M :184-187/:190-195 the shared tail] Sound_Stop + the clear.
+                            if l.whine_handle != 0 { self.audio.stop(l.whine_handle); }
+                            l.whine_handle = 0;
+                            l.whine_on = false;
+                        }
+                        crate::space_laser::LaserOut::FireBullet { dir } => {
+                            // [M :128-152] the ray from the origin along the unit dir, 1000
+                            // units (0x447a0000), the game's mask-8 ray — the pass-flagged
+                            // hits drop [M Collide_Intersect disasm 0x1ebff0-0x1ec010] =
+                            // `segment_bullet` [M world.rs]. A hit rewrites the aim lane to
+                            // the impact point [M :153-160] — the beam endpoint + the
+                            // emitter site.
+                            let from = l.fire_origin;
+                            let far = [from[0] + dir[0] * 1000.0, from[1] + dir[1] * 1000.0, from[2] + dir[2] * 1000.0];
+                            let to = d.world.segment_bullet(from, far)
+                                .map(|t| [from[0] + (far[0] - from[0]) * t, from[1] + (far[1] - from[1]) * t, from[2] + (far[2] - from[2]) * t])
+                                .unwrap_or(far);
+                            l.target = to;
+                            // [M :172-175] Bullet_init(-1, obj, 0, 0x2c6154, origin, dir,
+                            // 0xffff) — the weapon def @0x2c6154 = weapon_data 0x2bf150 +
+                            // 107·0x10c = record 107; the s16 −1 owner = none (the port's
+                            // usize::MAX sentinel; nothing reads Bullet.owner for credit).
+                            if let Some(w) = d.weapons.records.get(107) {
+                                let f32_at = |o: usize| f32::from_le_bytes(w[o..o + 4].try_into().unwrap());
+                                let mut b = crate::bullet::Bullet {
+                                    pos: from, dir, speed: f32_at(0x20), travelled: 0.0,
+                                    range: f32_at(0x1c), damage: f32_at(0x0c), owner: usize::MAX,
+                                    state: 0, weapon: 107, flyby: d.weapons.flyby(107), bounces: 0,
+                                    ..crate::bullet::Bullet::TAIL
+                                };
+                                b.init_fuse(w);
+                                fired.push(b);
+                            }
+                            // [M :156] Sound_Play3D(100.0, -1.0, -1.0, 0x46a, origin, 0, 0, 0).
+                            self.audio.play3d(0x46a, from, None);
+                        }
+                        crate::space_laser::LaserOut::Beam { alpha } => {
+                            // [M :159-174] the class-0x10 beam object, mesh 0x20005cd, the
+                            // stretch origin→aim lane (`PositionBeam`), life 5, alpha
+                            // 0x7f+Rand(0x80) (the draw consumed it inside l.tick).
+                            self.space_laser_beams.push(crate::space_laser::LaserBeam {
+                                from: l.fire_origin, to: l.target, alpha, life: 5,
+                            });
+                        }
+                        crate::space_laser::LaserOut::ImpactEmitter => {
+                            // [M :189] Emitter_Create(0, 0, 0xc000010, target, 0x2d6210, 0, 0,
+                            // 0) — the impact arm's shape (world_fx::spawn_impact; a
+                            // def-hash miss = no object, the placement path's own rule). The
+                            // normal is [S] unverified: the game's arg mapping is
+                            // decompile-opaque (the aim slot rides the call); the port passes
+                            // world-up.
+                            self.fx.spawn_impact(0x2d6210, l.target, [0.0, 1.0, 0.0]);
+                        }
+                    }
+                }
+            }
+            self.bullets.extend(fired);
+            // [M :189-195] state 4's obj+0xfe |= 1 — the game's delete pass removes the
+            // object the same frame's control walk; the port drops it after the tick.
+            self.space_lasers.retain(|l| !l.deleted);
         }
         // Music: `Drone_InitComms` resets the attack gate; `DroneFunc_CheckAlarmRaised` (07000005 / 06) posts event 2 = 3
         // for the first 58 frames of channel 0xA4, then = 1 for the first 598 of channel 0x37 or 0x61; Bond dead →
@@ -16486,6 +16668,13 @@ fn segment_hits_sphere(a: V3, b: V3, c: V3, r: f32) -> bool {
             let _pane_parts = drones.breaks.list.iter().enumerate()
                 .filter(|(_, b)| (!b.dead || b.dead_frame == drones.frame) && b.shape_key != 0)
                 .map(|(k, b)| (0x400_0000_0000 | k as u64, b.shape_key, b.matrix));
+            // The rigid bodies (rigid-body-wiring): the kind-0xD8 props collide at their live
+            // obj+0x90 matrix (`Collide_PickObj` walks the cel-linked objects; RB_Create's
+            // build_LinkToRoom links the body into the room's cel chain [M 0x1d6bf0]). Id:
+            // bit 43 + the body index. At rest the rows are the identity quat's (RB_SetState —
+            // the same rows the game's first update writes) over the placement translation.
+            parts.extend(drones.rbodies.list.iter().enumerate()
+                .map(|(k, x)| (0x800_0000_0000 | k as u64, x.glist, x.matrix())));
             parts
         };
         // Script triggers (`Trigger_TouchOnce` / `Trigger_Touch` made by `Script_CreateEntity`): one per live entity,
@@ -16595,6 +16784,11 @@ fn segment_hits_sphere(a: V3, b: V3, c: V3, r: f32) -> bool {
             // The sensors (sensor-volumes): `Sensor_Update` among the control funcs — class 0x37
             // sits in the same `control_funcs` table the walk dispatches [M 0x26f890 + 0x37·12].
             .chain(self.sensors.list.iter().enumerate().map(|(j, s)| (s.placement, 6, j)))
+            // rigid-body-wiring: the kind-0xD8 bodies tick in the same per-object dispatch —
+            // `RB_Update` sits in the game's per-kind control table {0x1d6e38, 0x1d7a80}
+            // (0x26f9c8/0x26f9cc, ELF scan); the runtime order is the object list's creation
+            // order, which the placement-keyed sort preserves.
+            .chain(self.rbodies.list.iter().enumerate().map(|(j, r)| (r.placement as usize, 7u8, j)))
             .collect();
         order.sort_by(|a, b| b.0.cmp(&a.0).then(a.1.cmp(&b.1)));
         // `Doors_Calc`'s head memset (0x135fe0:13), which the game runs at the TOP of
@@ -16764,6 +16958,17 @@ fn segment_hits_sphere(a: V3, b: V3, c: V3, r: f32) -> bool {
                         None => { self.audio.play3d(id as u32, pos, None); }
                     }
                 }
+                continue;
+            }
+            if what == 7 { let _pw = crate::prof::scope("ctl: kind 7");
+                // `RB_Update` 0x1d6e38 (the per-kind dispatch pair {0x1d6e38, 0x1d7a80} at
+                // 0x26f9c8/0x26f9cc): the heat-puff gate passes nothing (the port carries no
+                // per-object room cel yet — the shared RNG is untouched on rest), zero wind
+                // (the Env_GetWindVel census is open), the evolve. The collision handler runs
+                // where its hits were armed (spawn_blast's class-5 arm — the game's
+                // Collide_Update is post-walk, 0x1336f8:238, and the next update applies the
+                // accumulated impulses).
+                self.rbodies.tick(self.level_current & 0xf, &mut self.rng);
                 continue;
             }
             if what == 3 { let _pw = crate::prof::scope("ctl: kind 3");
