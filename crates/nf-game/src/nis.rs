@@ -1414,7 +1414,11 @@ impl Player {
     pub fn from_placement(index: usize, p: &Placement) -> Option<Player> {
         let g = |k: u32| p.params.iter().find(|x| x.0 == k).map_or(0, |x| x.1);
         if g(0) == 0 && g(1) == 0 { return None; }
-        let matrix = nf_formats::placement::object_matrix(p.rotation, p.translation);
+        // The SP's runtime object matrix is View_RotTransMatrix's product [M 0x1db9a8 →
+        // 0x1344e0 (param_4 == 0 arm); level-14-vent-grates] — the same builder the static
+        // draw uses for the 0xd9 family now (level.rs `instances`). The old RotMatrix reading
+        // placed pitched SP objects 1.44 units off their frames (the vent grates).
+        let matrix = nf_formats::placement::view_rot_trans_matrix(p.rotation, p.translation);
         let (modes, mask) = ([g(2) as u16, g(3) as u16], g(5) as u16);
         let state = if modes[0] == 1 { 7 } else if mask == 0 { 6 } else { 0 };
         Some(Player {
