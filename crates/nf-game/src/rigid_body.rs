@@ -620,6 +620,7 @@ pub fn rb_collision_handler(
     }
 }
 
+#[derive(Clone)]
 /// The kind-0xD8 sim object (`RB_Create` 0x1d6bf0's): the placement's body with its runtime
 /// slots and the obj-side fields the game's object carries. `st.pos`/`st.trans` start at the
 /// placement translation — the at-rest state IS the static draw [D the props draw correctly
@@ -658,6 +659,7 @@ impl RbObj {
     }
 }
 
+#[derive(Clone)]
 /// All kind-0xD8 bodies of the main map, in placement order (`parsemap_create_dynamic_objects`
 /// 0x1d04f0 case 0xD8 — the main map's placements only, the parsemap-epilogue rule the port's
 /// other creators follow).
