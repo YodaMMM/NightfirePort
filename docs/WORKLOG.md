@@ -187,3 +187,17 @@ Progress:
   #10's open POSE (07000008) vs the game's obj+0x90, then replace the filter with the
   pose fix. mp_online_failures OOMs at this sandbox's 3GB cap (dmesg recorded).
   Full report: docs/reports/door-state-collision.md.
+
+## door-state-collision-2 (started 2026-10-27 ~04:45 UTC)
+
+Task: four red tests under the Door_IsClosed 0x1367b0 collision filter carried on
+s/door-state-collision (walkreal_07000001_live contact, probe_07_route STUCK,
+walkreal_07000014_live east duct, ai_live guard cover). Find what the walker/guard
+hits, decide from [M Door_IsClosed 0x1367b0; zone 0x135738/0x1336f8; drone cover pick]:
+fix the port or re-derive the pin. All four green + walkreal_07000008_live 4/4 + all
+other walkreal/door/mp tests.
+- Branch from origin/s/door-state-collision (441a1199) + merge origin/master (1a3ba0b4)
+  = 3ac5db7a. Prior round's finding carried: probe_07_route's OPEN kind-0 hall door at
+  (94.9,43.0,-47.2) is load-bearing over the doorway step when filtered; movement
+  collision likely keeps leaves solid with passability from the pose, not the zone rule.
+- Setup verified: work/, ISO (1,061,754,880 B), env.sh, nf-queue all present.
