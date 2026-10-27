@@ -109,6 +109,10 @@ pub struct GunImp {
     pub cooldown: f32,
     /// `ext+0x9c` — the hot byte (200 heat reached).
     pub hot: bool,
+    /// The firing beam this shot leaves behind: `(muzzle, hit)` for the game's `0x20005cd` quad
+    /// (`PositionBeam(muzzle → ray hit)`, `GunImp_Update` 0x1320d8:394) and the `0x200026e` flare at
+    /// the hit. `Some` on the shot tick, `None` otherwise; the scene stretches the quad along it.
+    pub beam: Option<(V3, V3)>,
     /// `ext+0x9d` — the `TurretGuns` entry: 0xb in SP, the MP weapon set (Random: a `Rand_Rand(10)`
     /// pick) [M GunImp_Create 0x131f20:52-63,87].
     pub turret: u8,

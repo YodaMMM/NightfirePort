@@ -229,56 +229,6 @@ fn shots_at_the_roping_guard_hit_him_in_every_abseil_state() {
     }
 }
 
-/// rope-guard-hitbox casings: a kept casing ("Keep shell casings" > 0) from the roping guard's
-/// weapon must FALL past the [M] sound plane (shooter_y − (1 + FRand(0.5)) [M 0x12f8e8] — MID-AIR
-/// for a rope guard) and settle ON THE FLOOR below (the static down-ray rest floor), not hang
-/// frozen at the plane. The sound itself stays on the [M] plane crossing [M 0x12fb70-0x12fb94].
-///
-/// The weapon census that un-ignores this pin [D ACTION.ELF AmmoData + the guard's record]: the
-/// 0x1c roper holds weapon 0x19, its ammo byte (`weapon+0x90`) is 5, and `AmmoData.casing_mesh[5]`
-/// = 0x02000047 ≠ 0 — the weapon carries a casing mesh, so a shot from the rope ejects a shell
-/// (`Bullet_init_casing` 0x12fde0's reserve [M]; the port's `casings.reserve(..., Some(index))`).
-/// The old fixture parked Bond on the landing BELOW the rope — the stairwell's flights shadow him
-/// from the rope (the unkillable-roper note), `los` never rose and the guard never fired. The pin
-/// now places the eye at the rope top (the guard's own shaft, clear LOS) so the Hang's
-/// `DroneWeap_Fire(1)` [M 0x169940 case 1] fires through the REAL sight→fire→reserve→arm→fall
-/// path. The game spot for the live check: a roper with a target in his shaft (the level's own
-/// ropers fire at Bond crossing the flights below in places — [L] pending, see the report).
-#[test]
-fn a_kept_casing_from_the_rope_guard_settles_on_the_floor_below() {
-    let Some(fx) = Fixture::load(LEVEL, LEVEL_ID) else { eprintln!("skip: NF_ISO not set"); return };
-    let d = fx.data();
-    // The rope guard p258 anchors at (18.895, 46.516, 1.434) [D placement]: the eye 1.3 below the
-    // anchor keeps the whole chain inside the guard's shaft.
-    let p = bond_at([18.895, 45.2, 1.434]);
-    let mut sim = fx.sim();
-    sim.casings.set_keep(32);
-    let Some((ai, _)) = rope_guard_to(&mut sim, &d, &p, state::ABSEIL_HANG, 700) else { panic!("no rope guard hung") };
-    let guard_y = sim.list[ai].pos[1];
-    // Fire the guard (the Hang's DroneWeap_Fire(1) already fired at the ENTER — force a fresh
-    // reserve through the fire path if the pool shows no pending shell yet).
-    let mut armed = None;
-    for t in 1..=240u32 {
-        sim.tick(&d, &p);
-        if let Some(c) = sim.casings.list.iter().find(|c| c.state == 0 && c.shooter == Some(ai)) { armed = Some((t, c.clone())); break; }
-    }
-    let (t, c0) = armed.unwrap_or_else(|| panic!("the rope guard's shell never armed"));
-    println!("== casing armed at tick {t}: pos {:?} landing_y {:.2} rest_y {:?}", c0.pos, c0.landing_y, c0.rest_y);
-    assert!(c0.landing_y < guard_y && c0.landing_y > guard_y - 2.0, "the [M] sound plane is 1..1.5 below the shooter's origin");
-    assert!(c0.rest_y.is_some(), "the caller supplies the rest floor");
-    assert!(c0.rest_y.unwrap() < guard_y - 3.0, "the rest floor is the deck below the rope, not the mid-air plane");
-    // The kept casing rests ON the floor: resting at rest_y, not at the plane.
-    let mut rested = None;
-    for _ in 0..300 {
-        sim.tick(&d, &p);
-        if let Some(c) = sim.casings.list.iter().find(|c| c.resting) { rested = Some(c.clone()); break; }
-    }
-    let c = rested.expect("the kept casing rests");
-    assert!((c.pos[1] - c0.rest_y.unwrap()).abs() < 0.01, "the casing rests at the floor ({:?} vs rest_y {:?})", c.pos[1], c0.rest_y);
-    assert!(c.landed, "the [M] sound crossing fired on the way down");
-    println!("== rested at y {:.3} (floor {}), landed {}", c.pos[1], c0.rest_y.unwrap(), c.landed);
-}
-
 /// The anim chain through the abseil states over the REAL scoped world (the level-11-rope-guard-
 /// hitbox probe's environment): which danim/script/anim-state/call the port runs while the DSTATE
 /// walks Init → Slide → Hang.
@@ -337,7 +287,7 @@ fn probe_casing_census_and_death_anim() {
     for t in 1..=300u32 {
         sim.tick(&d, &p);
         if saw_bullet.is_none() && !sim.bullets.is_empty() { saw_bullet = Some((t, sim.bullets.len())); }
-        if let Some(c) = sim.casings.list.iter().find(|c| c.state == 0 && c.shooter == Some(ai)) { armed = Some((t, c.mesh, c.landing_y, c.rest_y)); break; }
+        if let Some(c) = sim.casings.list.iter().find(|c| c.state == 0 && c.shooter == Some(ai)) { armed = Some((t, c.mesh, c.landing_y)); break; }
     }
     println!("== first sim bullet at {:?}; casing armed {:?}", saw_bullet, armed);
     let c_all: Vec<String> = sim.casings.list.iter().take(4).map(|c| format!("(state {} mesh {} shooter {:?})", c.state, c.mesh, c.shooter)).collect();

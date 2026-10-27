@@ -81,13 +81,6 @@ pub struct Casing {
     /// integration stops and the 240-tick despawn no longer applies (the game has no rest at all:
     /// class 0x0d has no collide handler, the casing sinks through the floor until it despawns).
     pub resting: bool,
-    /// rope-guard-hitbox [S; PC-port only, keep > 0 only]: the FLOOR beneath the eject point (a
-    /// static down-ray the caller runs at the eject/arm tick) — a kept casing rests THERE instead
-    /// of on the [M] sound plane. The game's landing plane is the shooter's y − (1 + FRand(0.5))
-    /// [M 0x12f8e8] — 1..1.5 below the ORIGIN: for a ground shooter that is at the floor, but a
-    /// roping guard hangs 10+ units above it, so the plane is MID-AIR and kept casings froze
-    /// there. The sound keeps the [M] plane crossing; only the rest moves to the floor.
-    pub rest_y: Option<f32>,
     /// Which body reserved the shell — `None` = the player, `Some(i)` = drone index i. The game
     /// stamps no shooter (the pool is global, `ShellCasings[32]`); the port keys the delay-expiry
     /// re-pose with it: `Bullet_init_casing_ex` 0x12f678 runs `AnimGetBoneWorldTrans(shooter, datum)`
@@ -117,7 +110,7 @@ impl Casings {
     pub fn new() -> Casings { Casings { list: (0..POOL).map(|_| Casing {
         state: 2, delay: 0.0, pos: [0.0; 3], vel: [0.0; 3], spin: [0.0; 3], rot: 0.0, age: 0.0,
         landing_y: 0.0, mesh: 0, material: 0, landed: false, pending: false, local: [0.0; 3], shooter: None,
-        resting: false, rest_y: None,
+        resting: false,
     }).collect(), next: 0, keep: 0, ejected: 0 } }
 
     /// The PC-port option's current value (0 = the game's behaviour).
@@ -136,7 +129,7 @@ impl Casings {
                 shooter: None,
                 state: 2, delay: 0.0, pos: [0.0; 3], vel: [0.0; 3], spin: [0.0; 3], rot: 0.0, age: 0.0,
                 landing_y: 0.0, mesh: 0, material: 0, landed: false, pending: false, local: [0.0; 3],
-                resting: false, rest_y: None,
+                resting: false,
             });
         }
         // Dropping the option releases the extension slots (their casings leave with them).
@@ -157,12 +150,6 @@ impl Casings {
     /// 0x12f860..0x12f8f0]: 3× `Rand_FRand_MVar2(0.1, 0.05)` (spin), 3× `(0.01, 0.005)` (velocity
     /// jitter), 1× `Rand_FRand(0.5)` (landing plane).
     pub fn eject(&mut self, ammo: &nf_formats::sfx::AmmoData, weapon: &[u8], origin: V3, yaw: f32, pitch: f32, shooter_y: f32, rng: &mut Rng) {
-        self.eject_with_floor(ammo, weapon, origin, yaw, pitch, shooter_y, None, rng)
-    }
-
-    /// `eject` with the kept-casing rest floor (rope-guard-hitbox; `None` = the game's plane rest).
-    #[allow(clippy::too_many_arguments)]
-    pub fn eject_with_floor(&mut self, ammo: &nf_formats::sfx::AmmoData, weapon: &[u8], origin: V3, yaw: f32, pitch: f32, shooter_y: f32, rest_floor: Option<f32>, rng: &mut Rng) {
         // The bone-rotation stand-in: the shooter's yaw about y, then the pitch ([S]; the game uses
         // `AnimGetBoneWorldTrans`'s matrix, which carries the view model's own orientation).
         let (cy, sy) = (yaw.cos(), yaw.sin());
@@ -172,7 +159,7 @@ impl Casings {
         let up = [fwd[1] * right[2] - fwd[2] * right[1], fwd[2] * right[0] - fwd[0] * right[2], fwd[0] * right[1] - fwd[1] * right[0]];
         let pad = |v: [f32; 3]| [v[0], v[1], v[2], 0.0];
         let bone = [pad(right), pad(up), pad(fwd), [origin[0], origin[1], origin[2], 1.0]];
-        self.eject_bone_with_floor(ammo, weapon, &bone, shooter_y, rest_floor, rng);
+        self.eject_bone(ammo, weapon, &bone, shooter_y, rng);
     }
 
     /// fix-sg5-casings: the game's own eject transform [M Bullet_init_casing_ex 0x12f678:83-160]:
@@ -186,11 +173,6 @@ impl Casings {
     /// `Rand_FRand_MVar2(0.1, 0.05)` (spin), 3× `(0.01, 0.005)` (velocity jitter), 1×
     /// `Rand_FRand(0.5)` (landing plane) — identical to `eject`, the shared RNG stays bit-exact.
     pub fn eject_bone(&mut self, ammo: &nf_formats::sfx::AmmoData, weapon: &[u8], bone: &[[f32; 4]; 4], shooter_y: f32, rng: &mut Rng) {
-        self.eject_bone_with_floor(ammo, weapon, bone, shooter_y, None, rng)
-    }
-
-    /// `eject_bone` with the kept-casing rest floor (rope-guard-hitbox).
-    pub fn eject_bone_with_floor(&mut self, ammo: &nf_formats::sfx::AmmoData, weapon: &[u8], bone: &[[f32; 4]; 4], shooter_y: f32, rest_floor: Option<f32>, rng: &mut Rng) {
         let delay = weapon[0x78] as f32;
         let ammo_byte = weapon[0x90] as usize;
         let Some(&mesh) = ammo.casing_mesh.get(ammo_byte) else { return };
@@ -212,7 +194,7 @@ impl Casings {
         let slot = &mut self.list[self.next];
         *slot = Casing {
             state: 3, delay, pos: origin, vel, spin, rot: 0.0, age: 0.0, landing_y, mesh, material, landed: false,
-            pending: false, local, resting: false, rest_y: rest_floor,
+            pending: false, local, resting: false,
             shooter,
         };
         self.ejected += 1;
@@ -229,12 +211,6 @@ impl Casings {
     /// which re-poses the shooter's bone at the expiry tick [M 0x12f678:83-114]. `shooter` keys that
     /// re-pose (`None` = the player's view model, `Some(i)` = drone i).
     pub fn reserve(&mut self, ammo: &nf_formats::sfx::AmmoData, weapon: &[u8], shooter: Option<usize>) {
-        self.reserve_with_floor(ammo, weapon, shooter, None)
-    }
-
-    /// `reserve` with the kept-casing rest floor (rope-guard-hitbox; the deferred eject's floor is
-    /// usually unknown until the arm, so the caller passes `None` and the arm supplies it).
-    pub fn reserve_with_floor(&mut self, ammo: &nf_formats::sfx::AmmoData, weapon: &[u8], shooter: Option<usize>, rest_floor: Option<f32>) {
         let Some(&mesh) = ammo.casing_mesh.get(weapon[0x90] as usize) else { return };
         if mesh == 0 { return; }
         let f = |o: usize| f32::from_le_bytes(weapon[o..o + 4].try_into().unwrap());
@@ -242,7 +218,7 @@ impl Casings {
         *slot = Casing {
             state: 3, delay: weapon[0x78] as f32, pos: [0.0; 3], vel: [0.0; 3], spin: [0.0; 3], rot: 0.0, age: 0.0,
             landing_y: 0.0, mesh, material: (weapon[0x50] & 0x3f) as u16, landed: false, pending: true,
-            local: [f(0xf8), -f(0xfc), f(0x100)], resting: false, rest_y: rest_floor,
+            local: [f(0xf8), -f(0xfc), f(0x100)], resting: false,
             shooter,
         };
         self.ejected += 1;
@@ -251,7 +227,7 @@ impl Casings {
 
     /// `Bullet_init_casing_ex` 0x12f678 for a reserved player shell: the datum's world matrix NOW, the 7 RNG
     /// draws in the game's order, the landing plane from the shooter's y.
-    fn arm(c: &mut Casing, bone: &[[f32; 4]; 4], shooter_y: f32, rest_floor: Option<f32>, rng: &mut Rng) {
+    fn arm(c: &mut Casing, bone: &[[f32; 4]; 4], shooter_y: f32, rng: &mut Rng) {
         let local = c.local;
         let spin = [frand_mvar2(rng, 0.1, 0.05), frand_mvar2(rng, 0.1, 0.05), frand_mvar2(rng, 0.1, 0.05)];
         let jitter = [frand_mvar2(rng, 0.01, 0.005), frand_mvar2(rng, 0.01, 0.005), frand_mvar2(rng, 0.01, 0.005)];
@@ -263,7 +239,6 @@ impl Casings {
         c.vel = [e[0] + jitter[0], e[1] + jitter[1], e[2] + jitter[2]];
         c.spin = spin;
         c.landing_y = shooter_y - (rng.frand(0.5) + 1.0);
-        c.rest_y = rest_floor;
         c.pos = [bone[3][0], bone[3][1], bone[3][2]];
         c.pending = false;
     }
@@ -277,7 +252,7 @@ impl Casings {
     /// `AnimGetBoneWorldTrans(shooter, datum)` inside `Bullet_init_casing_ex` at the expiry tick
     /// [M 0x12f678:83-114], so each pending shell re-poses ITS OWN shooter's bone then. `None` for a
     /// due shell (no view model / no such drone) drops it — the game's NULL-datum arm.
-    pub fn update<'a>(&mut self, mut bones: impl FnMut(usize) -> Option<(&'a [[f32; 4]; 4], f32, Option<f32>)>, rng: &mut Rng, mut play: impl FnMut(u16, V3)) {
+    pub fn update<'a>(&mut self, mut bones: impl FnMut(usize) -> Option<(&'a [[f32; 4]; 4], f32)>, rng: &mut Rng, mut play: impl FnMut(u16, V3)) {
         for c in self.list.iter_mut() {
             match c.state {
                 3 => {
@@ -285,7 +260,7 @@ impl Casings {
                     if c.delay <= 0.0 {
                         if c.pending {
                             match bones(c.shooter.unwrap_or(usize::MAX)) {
-                                Some((bone, y, floor)) => { Self::arm(c, bone, y, floor, rng); c.state = 0; }
+                                Some((bone, y)) => { Self::arm(c, bone, y, rng); c.state = 0; }
                                 None => { c.pending = false; c.state = 2; }
                             }
                         } else { c.state = 0; }
@@ -308,23 +283,12 @@ impl Casings {
                         // casings-persist [S]: with the keep option the crossing becomes a rest —
                         // the casing settles exactly on its plane (the game itself keeps falling
                         // through the floor: class 0x0d has no collide handler). No RNG draws.
-                        // rope-guard-hitbox: a known rest floor (rest_y) holds the rest until the
-                        // casing REACHES the floor — a rope guard's [M] plane hangs mid-air and the
-                        // old here-rest froze kept casings 10+ units above the stairwell floor.
-                        if self.keep > 0 && c.rest_y.is_none() {
+                        if self.keep > 0 {
                             c.resting = true;
                             c.pos[1] = plane;
                             c.vel = [0.0; 3];
                             c.spin = [0.0; 3];
                         }
-                    }
-                    // The keep-option rest on a KNOWN floor: the sound already fired on the [M]
-                    // plane crossing above; the fall continues to rest_y and settles there.
-                    if self.keep > 0 && !c.resting && c.rest_y.is_some_and(|ry| c.pos[1] <= ry) {
-                        c.resting = true;
-                        c.pos[1] = c.rest_y.unwrap();
-                        c.vel = [0.0; 3];
-                        c.spin = [0.0; 3];
                     }
                     // The despawn: age > 240 → state 2, undrawn, age = 32767.0 [M 0x12fc58-0x12fc94].
                     // With keep > 0 a resting casing is held (the option's point); an in-flight one
