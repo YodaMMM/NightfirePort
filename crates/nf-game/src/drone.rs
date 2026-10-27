@@ -6953,6 +6953,11 @@ impl Drone {
             // `NDrone2_SeenAndAttacking` (fix-ai-traces' live check 2: the game's guard alert never
             // reaches 1.0 in the PlayScript window — no [L] evidence it fires).
             (PLAY_SCRIPT, msg::ENTER) => {
+                // `+0x4F8 |= 0x10000 | 0x2000` [M 0x15ba68:24-25] — the scripted drone runs the sight
+                // pipeline while the script plays (the 0x2000 half is state::UNAWARE's `watching`, set
+                // centrally below; 0x10000 is per-arm). The 01 starting guard's sight ack lands DURING
+                // his scripted walk because of this bit (guard_first_shot_01_live).
+                self.vision_on = true;
                 let (st, follow) = match self.start_script {
                     0x6000_168 => (10, 0x32),
                     0x6000_169 => (5, 0x32),
@@ -9616,6 +9621,7 @@ impl Drone {
             // no DroneTypeSettings row starts there — so the tests drive it directly. ENTER (case 1):
             // anim 0x21, find + open the elevator door (the class-0x1c door within 2.0), +0xcd8 = 0.
             (state::ELEVATOR_JUMPER, msg::ENTER) => {
+                self.vision_on = true; // `+0x4F8 |= 0x10000` [M 0x169488:16]
                 self.call_anim(d, anim_state::ALERT_IDLE, 0, 0);
                 self.elevator_scan = true;
                 self.door_attempt = true;
@@ -9642,6 +9648,7 @@ impl Drone {
             // Rand_Rand(60), +0xcc8 = 0, +0xcc0 = 1, +0x23 = 1, the rope point = the object position, +0xcd8 = 0
             // [M case 1].
             (state::ABSEIL_INIT, msg::ENTER) => {
+                self.vision_on = true; // `+0x4F8 |= 0x10000` [M 0x169610:19]
                 self.set_danim(d, 0xb, 0);
                 self.timer_c = Some(frame + rng.rand(60) as u32);
                 self.air = true;
@@ -9656,6 +9663,8 @@ impl Drone {
             // +0x50 = 0x40dccccd = 6.9 (the daily audit 2026-10-17: the old 6.5 contradicted the
             // store); mode 0x1b drops the rope point to −1000 (0xc47a0000) [M case 1].
             (state::ABSEIL_SLIDE, msg::ENTER) => {
+                self.vision_on = true; // `+0x4F8 |= 0x10000` [M 0x169730:19] — the sliding roper runs
+                // the sight pass (his `firing = los` mid-rope [M 0x169730:40-44] reads it)
                 self.call_anim(d, 3, 0, 0);
                 self.air = true;
                 self.descend_speed = 6.9;
@@ -9703,6 +9712,7 @@ impl Drone {
             // DCVars+0x1c = (int)Rand_FRand(1.0) = 0, +0x50 = 0 (the descent stops), DroneWeap_Fire(1)
             // [M case 1].
             (state::ABSEIL_HANG, msg::ENTER) => {
+                self.vision_on = true; // `+0x4F8 |= 0x10000` [M 0x169940:18]
                 self.call_anim(d, 2, 0, 0);
                 self.air = true;
                 self.hang_rand = 0;
@@ -9733,6 +9743,7 @@ impl Drone {
             // the saved anim set back, mode = +0xc4, the land anim 0x21 → 0x67 [M case 1]. UPDATE:
             // SeenAndAttacking, +0x3b = 0 [M case 3]. No decomp caller (like 0x8d).
             (state::ABSEIL_STEP_OFF, msg::ENTER) => {
+                self.vision_on = true; // `+0x4F8 |= 0x10000` [M 0x1738e0:16]
                 self.anim.state = 0;
                 self.air = false;
                 self.anim_set = self.saved_anim_set;
