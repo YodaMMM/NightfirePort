@@ -97,10 +97,10 @@ fn the_woken_guards_smash_through_the_entry_hall_glass() {
         }
     }
     for l in &seen { eprintln!("[breach] {l}"); }
-    assert_eq!(pane130_at_122, Some(true),
-        "pane 130 is whole at 0xB+122 — g0's scripted walk-by does not shatter it [D the observed run: \
-         the pane survives until the breach at 0xB+911; M 0x1336f8:212 — the +0x40 copy lands after \
-         the anim/root-motion processing, so a scripted step drains 0]");
+    assert_eq!(pane130_at_122, Some(false),
+        "pane 130 is already broken at 0xB+122: g0's scripted dive shatters it [L 2026-10-26: PCSX2 at \
+         frame 2175 of the level start shows the window in shards with the guard crouched inside; the \
+         earlier reading that a scripted step drains 0 (M 0x1336f8:212) did not hold live]");
     match crossed {
         Some((t, i)) => eprintln!("[breach] guard {i} crossed to the courtyard at 0xB+{t} (informational)"),
         None => eprintln!("[breach] no squad guard crossed the pane plane in the watch — the port's \

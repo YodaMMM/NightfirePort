@@ -8996,13 +8996,11 @@ pub fn build(level: &Level, cels_only: bool, skeletons: &HashMap<u8, Skeleton>, 
                 // matrix, for the 07000002 intro the CAMERA (obj[0] trans == player[1] live trans
                 // [-27.25, 1.41, 34.39]) — which drew the actors inside the camera: a
                 // render showed the intro room with NO characters at all.
-                // ride-cutscene-base: the cast rides its SP's matrix. 0700004a's ride pack (SP #289, base
-                // (0, -53.53, -3.38)) carries car-local roots (sequence 0x040005fd root (2.35, 0.85, -0.64)
-                // [D]); the PCSX2 ride (frame 700) shows the guard and the officer in the car's hatch, so
-                // the drawn object is the base (identity for the world-root scenes - their SPs sit at the
-                // origin, so their picture is unchanged).
-                let base = s.script_anim_base(src, c.skin.hashcode).unwrap_or(c.matrix);
-                return Some((anim::skin_matrices(&world, &c.skin), world, base));
+                // NOT the SP base: most scenes' casts carry WORLD roots (07000014's control-room scene:
+                // roots near (26..34, 1.2, 48) beside the room, SP base (52.16, 2.64, 46.62) — composing
+                // it threw the cast ~50 units away, an empty cut-scene). 0700004a's ride pack is the
+                // exception (car-local roots; the cast stands in the car in PCSX2) — its mechanism is open.
+                return Some((anim::skin_matrices(&world, &c.skin), world, c.matrix));
             }
             // MP bodies (mp-body-anim): the PLAYER anim set the game's MP body runs, from the slot's
             // script list (`Sim::mp_anim`, ticked by `advance_mp_anim` — idle, the distance-driven
