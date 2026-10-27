@@ -20,3 +20,8 @@ say so in the report. Never weaken a decompile-backed test to make code pass.
 
 ---
 claimed-by: sandbox7 at 2026-10-27T02:54Z
+
+---
+## Report (done, 2026-10-27T04:38Z)
+
+Closed by the driver: the report is on `s/level-0d-gun-aim-audio` (docs/reports/level-0d-gun-aim-audio.md); the worker didn't run finish.sh.
