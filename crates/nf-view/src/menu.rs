@@ -354,6 +354,12 @@ pub struct GameFlow {
     /// clock runs from the SP_Create [M 0x1db9a8/0x1dbda8]. Fields on their own lines [WORKLOG
     /// lesson 4].
     pub outro_sub_clock: u32,
+    /// The state-6 movie clock: one per flow tick (the game's 60 Hz main_tick) while state 6 runs;
+    /// the host advances the movie player by the ticks it has not polled yet (`movie_polled`), so the
+    /// BGFMVPlaying hold runs at the game's rate whatever the redraw rate [M 0x1081a8 + 0x108060].
+    pub movie_clock: u32,
+    /// The movie clock ticks the host has already fed to the player.
+    pub movie_polled: u32,
     /// mission-outros: the active subtitle right now — (the text label, the ticks left) — the
     /// draw reads it over the movie frame; None between entries.
     pub outro_sub_active: Option<(u32, u32)>,
@@ -440,6 +446,7 @@ impl GameFlow {
             // files, fix-menus' headless model) — mission-outros: it is the subtitle track's
             // length there, so the outro stays up with its text.
             ST_MOVIE => {
+                self.movie_clock = self.movie_clock.saturating_add(1);
                 // The subtitle script ticks alongside the movie [M 0x1d6360's SP_Create beside
                 // psiStartBackgroundMovie; the track's timed Text commands [D 07000500.bin]] —
                 // the active entry rides the clock the draw can read.
@@ -509,6 +516,8 @@ impl GameFlow {
         // still carries the 0x71/0x73 prefix"]. The driving codes 0x09xxxxxx load directly.
         if matches!((level >> 20) & 0xff, 0x71 | 0x73) {
             self.movie_code = level;
+            self.movie_clock = 0;
+            self.movie_polled = 0;
             self.push_state(ST_MOVIE, 0);
             return false;
         }
