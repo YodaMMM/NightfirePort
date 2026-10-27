@@ -108,7 +108,9 @@ impl Hurt {
             let param = |k: u32| p.params.iter().find(|(j, _)| *j == k).map_or(0, |&(_, v)| v);
             let target = if p.by_hash() { level.by_hash.get(&p.hashcode).copied() }
             else if (p.index as usize) < map.objects.len() { Some((m, p.index as usize)) } else { None };
-            let mx = nf_formats::placement::object_matrix(p.rotation, p.translation);
+            // Hurt_Create builds obj+0x90 with CCO(0) → View_RotTransMatrix
+            // [M 0x17e870:17, 0x1344e0:26-29].
+            let mx = nf_formats::placement::view_rot_trans_matrix(p.rotation, p.translation);
             let tris: Vec<[V3; 3]> = target
                 .and_then(|(om, oi)| level.maps[om].objects[oi].collision.as_ref())
                 .map(|c| c.triangles().into_iter().map(|t| t.map(|v| transform(&mx, v))).collect())
