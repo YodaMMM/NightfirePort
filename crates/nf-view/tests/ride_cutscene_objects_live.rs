@@ -173,6 +173,37 @@ fn the_landing_cutscene_carries_the_satchel_the_guard_anim_and_the_lift_floor() 
     assert_eq!(poses.len(), 3, "all three anim characters posed mid-scene");
     assert!(poses.iter().all(|&(_, _, ok)| ok), "every cut-scene character's pose resolves mid-scene, got {poses:?}");
 
+    // THE CAR-LOCAL ROOTS, pinned [D 0x040005fd's root channels — read through the port's own
+    // parse at mid-scene]: the body sequence's root translation ch0/1/2 reads (2.35, 0.85, -0.64)
+    // with flags 0x0 and 222 channels; the facial 0x040006e6 carries flags 0x8, 22 channels and a
+    // zero root. The game draws the cast IN the car (parked y -54.2 [L ride frame 700]) on these
+    // roots — the base compose mechanism stays open (see the report: the anim object's obj+0x30
+    // IS the raw root track [M AnimGetFirstTrans 0x1c7348 + AnimFrameResolve 0x1c35f8's delta
+    // add], Script_Interp case 2 composes no base [M 0x1d9a08:140-199], and Script_AnimStart's
+    // GetInterp call carries the SP-base flag but its output is unread [M disasm 0x1d90b4-
+    // 0x1d9118]) — the PCSX2 obj+0x30/obj+0x90 read decides where it enters.
+    {
+        let sim = w.scene.sim.as_ref().unwrap();
+        let sc = sim.scripts.get(&0x0600_06d0u32).expect("the guard's script 0x060006d0 [D s3]");
+        let seqs: Vec<u32> = sc.sequences().map(|(_a, _b, q)| q).collect();
+        assert!(seqs.contains(&0x0400_05fd), "the guard's body sequence 0x040005fd loads [D], got {seqs:08x?}");
+        let body = sim.seqs.get(&0x0400_05fd).expect("the body sequence parsed");
+        let v = |ch: usize, fr: u32| body.value(ch, fr);
+        assert_eq!(body.flags, 0x0, "the body sequence's header flags byte [D]");
+        assert!((v(0, 1) - 2.35).abs() < 0.02 && (v(0, 100) - 2.35).abs() < 0.02,
+            "the body root ch0 (x) is the car-local 2.35 [D], got {} / {}", v(0, 1), v(0, 100));
+        assert!((v(1, 1) - 0.85).abs() < 0.02,
+            "the body root ch1 (y) is the car-local 0.85 [D] (the car parked at y -54.2 [L]), got {}", v(1, 1));
+        assert!((v(2, 1) - -0.64).abs() < 0.02,
+            "the body root ch2 (z) is the car-local -0.64 [D], got {}", v(2, 1));
+    }
+    // The port's own draw state mid-scene: the object base stays the identity (c.matrix) and the
+    // posed root rides the raw car-local track — the OPEN mechanism, printed not asserted (the
+    // game's compose site is the live check; landing a guess broke 07000014 once, see d6af2214).
+    if let Some(gy) = guard_drawn_y {
+        eprintln!("guard drawn root y {gy:.2} (the game: in the car, deck ≈ -52.7 = SP base (0,-53.53,-3.38) ∘ root (2.35,0.85,-0.64) [D+L])");
+    }
+
     // The scene carried everything through the hand-back: the satchel and the lift floor were
     // still live near the end (their keyed paths run the whole 575 [D]).
     assert!(scene_ticks >= 500, "the landing cut-scene played (~575 ticks [D 0x060006cf]), got {scene_ticks}");
@@ -182,7 +213,4 @@ fn the_landing_cutscene_carries_the_satchel_the_guard_anim_and_the_lift_floor() 
     // The guard's hand: event 0xB wrote the weapon byte 0x18 on the s3 anim [M 0x1d94c0 case 0xb;
     // D s4] — the held-charge mesh on the hand datum (AnimObjectDraw 0x1c4490:256-265).
     assert_eq!(guard_weapon.map(|(_, w)| w), Some(0x18), "the guard anim's weapon byte is 0x18 (event 0xB [M 0x1d94c0 case 0xb; D s4])");
-    // The guard's drawn height is OPEN (the car-local roots need a mechanism the port lacks — the SP-base
-    // compose broke the world-root scenes); PCSX2 ride frame 700 shows him in the car's hatch [L].
-    if let Some(gy) = guard_drawn_y { eprintln!("guard drawn root y {gy} (the game: the car at y -54.2)"); }
 }
