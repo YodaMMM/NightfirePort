@@ -9,6 +9,9 @@
 use nf_game::drone::state;
 use nf_game::player::Input;
 
+#[path = "common/walker.rs"]
+mod walker;
+
 fn iso() -> Option<String> { std::env::var("NF_ISO").ok() }
 
 fn load(iso: &str, level: &str) -> nf_view::scene::Scene {
@@ -180,6 +183,87 @@ fn the_07000001_exit_works_end_to_end() {
         eprintln!("[mission] Mayhew at {:?} state {:#x} route {}", sim.drones.list[mi].pos, sim.drones.list[mi].state, sim.drones.list[mi].route.is_some());
     }
     let mi = scene.sim.as_ref().unwrap().drones.list.iter().position(|d| d.skin == 0x0500_004f).unwrap();
+    // ── The ambush the ally-wait hold waits for (level-01-mayhew-wait-2) ────────────────────
+    // The hold parks the escort at the kind-8 route's ally-wait node 33 (flag 0x20
+    // [M NDrone2_ReachedDestNode 0x153358:85-94]) until the ambush beyond the courtyard door
+    // is cleared: the three ch-0x0e guards die → death channels 0x13/0x11/0x12 → the AND mux
+    // raises ch 0x99 [D mux pl 318] → the 0x21 UPDATE (0x15efc8 case 3) releases to Lead. The
+    // game's own trace holds the contact in 0x21 at (2.94,7.22) for 1262 frames while the
+    // ambush runs [L tests/traces/01-doors.trace] — the PLAYER walks ahead into the ambush
+    // (Bond riding 3.9 behind a parked escort never crosses the meet plate, so the ride below
+    // cannot clear it for him). Bond walks the meet plate — ch 0x32 → the 0x33 mirror
+    // [M Trigger_Update 0x1b1a78 case 5] → SP #276 → ch 0x0e [D placements] — and clears the
+    // three guards through the real fire path; only then does the escort ride.
+    {
+        let contact = mi;
+        let mut w = walker::Walker::new(scene);
+        w.shield = Some(contact);
+        // The intro tail's tail (event 6 re-places Bond) — the walkreal's post-intro settle.
+        w.wait(300);
+        w.walk_nav_to([6.8, 6.0, 8.9], "the meet plate (walk ahead into the ambush)", 1.0);
+        // The plate is a TOUCH_ONCE on Bond's capsule: walk the centre tightly, then sweep the
+        // quad (the walkreal's crossing — a nav stop a hair short never crosses).
+        {
+            let sim = w.scene.sim.as_ref().unwrap();
+            let plate = sim.drones.triggers.iter()
+                .find(|t| t.kind == walker::trigger_kind::TOUCH_ONCE && t.out == 0x32)
+                .map(|t| t.centre())
+                .expect("the meet plate");
+            drop(sim);
+            w.walk_to(walker::Wp { at: plate, act: walker::Act::None, arrive: 0.25 }, "onto the meet plate");
+            for (dx, dz) in [(0.0f32, 0.9f32), (0.0, -0.9), (0.9, 0.0), (-0.9, 0.0)] {
+                if w.scene.sim.as_ref().unwrap().drones.channels.on(0x32) { break; }
+                w.walk_to(walker::Wp { at: [plate[0] + dx, plate[1], plate[2] + dz], act: walker::Act::None, arrive: 0.2 },
+                    &format!("the meet plate sweep ({dx},{dz})"));
+                if w.scene.sim.as_ref().unwrap().drones.channels.on(0x32) { break; }
+                w.walk_to(walker::Wp { at: plate, act: walker::Act::None, arrive: 0.2 }, "back across the meet plate");
+            }
+            let sim = w.scene.sim.as_ref().unwrap();
+            assert!(sim.drones.channels.on(0x32), "walking the meet plate must fire its ch 0x32 [D placement]");
+        }
+        // The scene plays out (SP #276, ~280 frames [D decode]) and stream 9's event 0xD writes
+        // ch 0x0e [D the lib dump] — the three ambush guards start.
+        let mut e_at = None;
+        for t in 0..2400u32 {
+            w.tick(Default::default(), false);
+            if w.scene.sim.as_ref().unwrap().drones.channels.on(0xe) { e_at = Some(t); break; }
+        }
+        assert!(e_at.is_some(), "the meet plate must fire ch 0x32 → the 0x33 mirror → SP #276 must play and write ch 0xE");
+        w.wait(120);
+        let named: Vec<usize> = {
+            let sim = w.scene.sim.as_ref().unwrap();
+            (0..sim.drones.list.len())
+                .filter(|&i| [0x11u8, 0x12, 0x13].contains(&sim.drones.list[i].death_channel))
+                .collect()
+        };
+        assert_eq!(named.len(), 3, "three guards carry death channels 0x11/0x12/0x13 [D]");
+        for g in named {
+            let gpos = w.scene.sim.as_ref().unwrap().drones.list[g].pos;
+            if walker::dxz(w.scene.sim.as_ref().unwrap().bond.pos, gpos) > 9.0 {
+                walker::hall_restage(&mut w, &format!("guard {g} approach"));
+            }
+            w.walk_nav_to(gpos, &format!("approach ambush guard {g}"), 3.0);
+            {
+                let sim = w.scene.sim.as_ref().unwrap();
+                let dry = sim.gun.clip + sim.gun.spare < 8;
+                drop(sim);
+                if dry { walker::hall_ammo_ladder(&mut w, &format!("ambush guard {g} ammo")); }
+            }
+            if !w.shoot(g, &format!("ambush guard {g}")) {
+                if w.resupply("ambush ammo") { w.shoot(g, &format!("ambush guard {g}")); }
+            }
+        }
+        w.wait(30);
+        let mut n99 = None;
+        for t in 0..1200u32 {
+            if w.scene.sim.as_ref().unwrap().drones.channels.on(0x99) { n99 = Some(t); break; }
+            w.tick(Default::default(), false);
+        }
+        assert!(n99.is_some(), "AND(0x11,0x12,0x13) must raise ch 0x99 once the three ambush guards are dead [D mux pl 318] — the hold's release channel");
+        eprintln!("[mission] the ambush cleared: ch 0x99 on, the hold releases (Mayhew at {:?} state {:#x})",
+            w.scene.sim.as_ref().unwrap().drones.list[contact].pos, w.scene.sim.as_ref().unwrap().drones.list[contact].state);
+        scene = w.scene;
+    }
     // The plate centre (Touch #137's volume).
     let (cx, cy, cz) = {
         let sim = scene.sim.as_ref().unwrap();

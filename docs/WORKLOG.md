@@ -36,3 +36,25 @@ walks clear the ambush on real input (the three ch-0x0e guards), then re-verify 
 AND-touch fires with Bond + contact. Must stay green: escort_follow_07000001_live,
 mayhew_hold_live, fix_npc_doors_live. Branch `s/level-01-mayhew-wait-2` from
 origin/s/level-01-mayhew-wait @ 14769917, merging origin/master.
+
+### level-01-mayhew-wait-2 — the walks clear the ambush (2026-10-27 ~07:05 UTC)
+
+Both red tests fixed by making the walks do what the hold requires (the hold stays): the
+release is ch 0x99 — the AND of the three ambush guards' death channels 0x13/0x11/0x12
+[D mux pl 318] — and the game's own trace parks the contact in 0x21 at (2.94,7.22) for 1262
+frames while the ambush runs [L tests/traces/01-doors.trace], so the PLAYER walks ahead into
+the ambush. Root cause of the red: the meet scene's weapon hand leaves clip 32 spare 0, the
+hall dodge fights run dry (guard 6 at +634 ticks), and the resupply/approach nav from inside
+the hall wedges on the hall's south wall (segment t≈0.095/0.47, 3000-tick caps) — the ambush
+stayed alive, ch 0x99 never rose, the contact held at node 33 and the exit died with it.
+- walker.rs: appended hall_restage (meet-room corridor → east-door stage, proven legs) and
+  hall_ammo_ladder (out the east door (7.9,5.3,11.1) → corridor box → back in). Additive only.
+- walkreal_07000001_live: pre-hall top-up (< 48 rounds) + per-guard re-stage when the
+  approach starts > 9 away + the per-guard dry ladder. PASS (level_exit to 07000002, ch 153
+  on at tick 54829, contact at the AND-touch, 14 self-recovering lenient wedges).
+- fix_mission_live: new ambush phase before the ride loop — Bond walks the meet plate (the
+  TOUCH_ONCE sweep), waits ch 0x0e, kills the three named guards through the real fire path
+  (shield on the contact), waits ch 0x99, then the escort ride runs as before. PASS (ch 0x99
+  → 0x1d release → Mayhew walks 121 u → ch10 → exit end to end).
+- Verified green: mayhew_hold_live 5.7s, escort_follow_07000001_live 23.0s, fix_npc_doors_live
+  308.6s. Full suite next.
