@@ -203,3 +203,15 @@ Progress:
   spread, the drone.rs door gate, or the band-settle radial tail); rounds 4/5 did not
   run ai_live. Next window: bisect ai_live on the capsule-2..5 commits, THEN re-merge
   master. (2) the full 845-binary suite still has not run end to end in this sandbox.
+
+## capsule-cull-and-los-masks-7 (started 2026-10-27)
+
+- Branch s/capsule-cull-and-los-masks-7 opened from origin/s/capsule-cull-and-los-masks-6,
+  merged origin/master (83490999): one conflict in crates/nf-game/src/drone.rs — HEAD
+  (masks-6) carried the door `is_closed` filter, master (door-state-collision-2) has the
+  unconditional state-blind extend; took master's side per the task (movement collision is
+  state-blind: `Door_IsClosed` 0x1367b0's only caller is `Vision_Recurse` 0x1e82e0:51,
+  render portal visibility; `Collide_PickObj` 0x1eae80 never reads door state). Capsule
+  cull and LOS mask work kept. Flags inherited from masks-6: ai_live
+  guard_takes_cover_like_the_game red on the capsule-5 base (bisect capsule-2..5 next);
+  the full 845-binary suite not yet run end to end in this sandbox.
