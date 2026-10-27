@@ -24,3 +24,8 @@ claimed-by: sandbox7 at 2026-10-27T04:39Z
 ---
 ## Report (done, 2026-10-27T06:19Z)
 
+
+---
+## Report from the worker (done, 2026-10-27T06:19Z)
+
+Closed by the driver: the report is on `s/door-state-collision-2` (docs/reports/door-state-collision-2.md); the worker didn't run finish.sh.
