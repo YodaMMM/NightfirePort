@@ -93,7 +93,7 @@ fn the_beam_starts_on_the_drawn_muzzle_and_rides_the_barrel_axis_at_several_aim_
         g.yaw = yaw; g.pitch = pitch; g.yaw_s = yaw; g.pitch_s = pitch;
         g.cooldown = 0.0;
         let before = sim.drones.player_bullets.len();
-        sim.drones.gunimp_tick(&weapons, 0.0, 0.0, true, false, &mut sim.bond);
+        sim.drones.gunimp_tick(&weapons, &sim.world, 0.0, 0.0, true, false, &mut sim.bond);
         let g = &sim.drones.props.gunimps[0];
         let Some((a, b)) = g.beam else { panic!("a held shot leaves the beam armed (yaw {yaw}, pitch {pitch})") };
         let m0 = expected_muzzle(g);
@@ -102,7 +102,11 @@ fn the_beam_starts_on_the_drawn_muzzle_and_rides_the_barrel_axis_at_several_aim_
              at yaw {yaw} pitch {pitch}: beam {a:?} vs expected {m0:?}");
         let d = expected_dir(g);
         let len = ((b[0] - a[0]).powi(2) + (b[1] - a[1]).powi(2) + (b[2] - a[2]).powi(2)).sqrt();
-        assert!(len > 900.0, "the beam reaches the 1000-unit ray tail [M :373-381] (got {len})");
+        // [M :385-387] the far point is the RAY HIT when the ray hits one — the 1000-unit tail
+        // is the MISS answer. These aims cross the station's geometry, so the length is the
+        // clamp's answer: never past the tail (the old >900 pin contradicted the decompile for
+        // hitting rays — 0700000d_gunimp_door_live pins the clamp positively at the C5 door).
+        assert!(len <= 1000.0 + 1e-3, "the beam never passes the ray tail [M :373-381] (got {len})");
         assert!(close((b[0] - a[0]) / len, d[0]) && close((b[1] - a[1]) / len, d[1]) && close((b[2] - a[2]) / len, d[2]),
             "the beam's direction is the drawn barrel's forward row [M :325 Mat_GetDir] \
              at yaw {yaw} pitch {pitch}: beam {:?} vs expected {d:?}", [b[0] - a[0], b[1] - a[1], b[2] - a[2]]);

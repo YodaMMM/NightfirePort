@@ -57,12 +57,12 @@ fn the_fire_sound_starts_once_holds_while_firing_and_stops_on_release() {
     let weapons = weapons();
     let sim = scene.sim.as_mut().unwrap();
     // The first fire tick starts exactly ONE voice.
-    sim.drones.gunimp_tick(&weapons, 0.0, 0.0, true, false, &mut sim.bond);
+    sim.drones.gunimp_tick(&weapons, &sim.world, 0.0, 0.0, true, false, &mut sim.bond);
     assert_eq!(count_active(sim, LASER_FIRE), 1, "the first shot starts the 1307 loop once [M :284-291]");
     // Holding the trigger across two full cooldown cycles (the 1.0 s interval ≈ 60 ticks
     // [M TurretGuns[0xb]+0x14 = 1.0]): still exactly one voice — no restart, no stacking.
     for _ in 0..130 {
-        sim.drones.gunimp_tick(&weapons, 0.0, 0.0, true, false, &mut sim.bond);
+        sim.drones.gunimp_tick(&weapons, &sim.world, 0.0, 0.0, true, false, &mut sim.bond);
     }
     assert_eq!(count_active(sim, LASER_FIRE), 1,
         "a held trigger keeps ONE 1307 loop across the cooldown shots [M :271-278 keeps the handle; \
@@ -70,15 +70,15 @@ fn the_fire_sound_starts_once_holds_while_firing_and_stops_on_release() {
     // The handle is the game's ext+0x98: nonzero while held.
     assert!(sim.drones.props.gunimps[0].fire_handle != 0, "the stored handle [M :290]");
     // Releasing the trigger stops the loop [M :251-269].
-    sim.drones.gunimp_tick(&weapons, 0.0, 0.0, false, false, &mut sim.bond);
+    sim.drones.gunimp_tick(&weapons, &sim.world, 0.0, 0.0, false, false, &mut sim.bond);
     assert_eq!(count_active(sim, LASER_FIRE), 0, "releasing the trigger stops the loop [M :261-269]");
     assert_eq!(sim.drones.props.gunimps[0].fire_handle, 0, "the handle zeroes [M :267]");
     // A later press starts it again — once.
     sim.drones.props.gunimps[0].cooldown = 0.0;
-    sim.drones.gunimp_tick(&weapons, 0.0, 0.0, true, false, &mut sim.bond);
+    sim.drones.gunimp_tick(&weapons, &sim.world, 0.0, 0.0, true, false, &mut sim.bond);
     assert_eq!(count_active(sim, LASER_FIRE), 1, "a re-press starts the loop again, once [M :284-291]");
     // Dismounting while firing kills the loop with the mount [M 0x132c18:62-63].
-    sim.drones.gunimp_tick(&weapons, 0.0, 0.0, true, true, &mut sim.bond);
+    sim.drones.gunimp_tick(&weapons, &sim.world, 0.0, 0.0, true, true, &mut sim.bond);
     assert!(!sim.drones.props.gunimps[0].active, "the use key dismounts");
     assert_eq!(count_active(sim, LASER_FIRE), 0, "the dismount stops the loop [M 0x132c18:62-63]");
 }
@@ -92,11 +92,11 @@ fn the_overheat_stops_the_loop_while_the_trigger_stays_down() {
     // [M :292-298] and the tick drains 1.0 [M :100-106], net +1.0 per held tick.
     for i in 0..230 {
         sim.drones.props.gunimps[0].cooldown = 0.0; // skip the interval wait, not the heat
-        sim.drones.gunimp_tick(&weapons, 0.0, 0.0, true, false, &mut sim.bond);
+        sim.drones.gunimp_tick(&weapons, &sim.world, 0.0, 0.0, true, false, &mut sim.bond);
         if sim.drones.props.gunimps[0].hot {
             // The tick AFTER the saturation goes through the game's pressed+hot stop path
             // [M :271-278 → :261-269]: the loop stops while the trigger is still down.
-            sim.drones.gunimp_tick(&weapons, 0.0, 0.0, true, false, &mut sim.bond);
+            sim.drones.gunimp_tick(&weapons, &sim.world, 0.0, 0.0, true, false, &mut sim.bond);
             assert_eq!(count_active(sim, LASER_FIRE), 0,
                 "the hot byte stops the held loop [M :271-278] (shot {i})");
             assert_eq!(sim.drones.props.gunimps[0].fire_handle, 0, "the handle zeroes [M :267]");

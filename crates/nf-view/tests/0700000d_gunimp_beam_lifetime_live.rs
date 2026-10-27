@@ -19,13 +19,13 @@ fn the_mounted_laser_beam_dies_with_the_trigger_and_the_mount() {
     sim.drones.gunimp_activate(gi);
     let mut bond = sim.bond.clone();
     let beam = |s: &nf_view::scene::Sim| s.drones.props.gunimps[gi].beam;
-    sim.drones.gunimp_tick(&weapons, 0.0, 0.0, true, false, &mut bond);
+    sim.drones.gunimp_tick(&weapons, &sim.world, 0.0, 0.0, true, false, &mut bond);
     assert!(beam(sim).is_some(), "a shot sets the beam (the quad draws this tick)");
-    sim.drones.gunimp_tick(&weapons, 0.0, 0.0, false, false, &mut bond);
+    sim.drones.gunimp_tick(&weapons, &sim.world, 0.0, 0.0, false, false, &mut bond);
     assert!(beam(sim).is_none(), "releasing the trigger clears the beam [M: the beam object stops with the fire]");
-    sim.drones.gunimp_tick(&weapons, 0.0, 0.0, true, false, &mut bond);
+    sim.drones.gunimp_tick(&weapons, &sim.world, 0.0, 0.0, true, false, &mut bond);
     assert!(beam(sim).is_some(), "firing again re-arms it");
-    sim.drones.gunimp_tick(&weapons, 0.0, 0.0, false, true, &mut bond);
+    sim.drones.gunimp_tick(&weapons, &sim.world, 0.0, 0.0, false, true, &mut bond);
     assert!(!sim.drones.props.gunimps[gi].active, "the use key dismounts");
     assert!(beam(sim).is_none(), "dismounting clears the beam with the mount (no stale quad in the room)");
 }
