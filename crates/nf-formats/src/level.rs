@@ -553,6 +553,7 @@ impl Level {
                         p.creates_cel(),
                         p.rotation,
                         p.translation,
+                        p.quaternion(),
                     );
                     out.push(Instance { map, object, matrix, placement: p.clone() })
                 }

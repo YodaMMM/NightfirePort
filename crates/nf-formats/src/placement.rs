@@ -32,6 +32,10 @@ impl Placement {
     pub fn creates_cel(&self) -> bool { self.flags & Self::CREATE_CEL != 0 }
     /// +0x34..+0x3C as floats.
     pub fn scale(&self) -> [f32; 3] { [4, 5, 6].map(|k| f32::from_bits(self.extra[k])) }
+    /// The +0x24..+0x34 quaternion (x, y, z, w) — `parsemap_create_dynamic_objects` 0x1d04f0
+    /// copies these four words into the `quaternion_tag` it hands the creators that take one
+    /// (0x27 `GT_Create`, 0x34 `GunImp_Create`, 0xf2's inline `Quat_QuatToMat` 0x1e3e80) [M].
+    pub fn quaternion(&self) -> [f32; 4] { [0, 1, 2, 3].map(|k| f32::from_bits(self.extra[k])) }
 }
 
 /// Parses a 0x1A payload; it must end exactly at the last record (true for all 2,230 maps).
@@ -82,6 +86,34 @@ pub fn object_matrix(rot: [f32; 3], trans: [f32; 3]) -> [[f32; 4]; 4] {
     ]
 }
 
+/// `Quat_QuatToMat` (ACTION.ELF 0x1e3e80), ported store for store: with (x, y, z, w) = the
+/// quaternion's four floats, 2y/2z as doubling adds (`fVar1`/`fVar2` [M :18,:20]), `(2x)·x` and
+/// `(2x)·w` (`fVar6`/`fVar8` [M :21-22]), the nine rotation entries in the decompile's order —
+/// the adds/subs through the EE FPU's no-guard model (`add_noguard`, the same ops the verified
+/// `drone::quat_quat_to_mat` replay uses) and the products chopped [M :23-31]:
+/// m[0]=1−(2y²+2z²), m[1]=2xy+2zw, m[2]=2xz−2yw; m[4]=2xy−2zw, m[5]=1−(2x²+2z²), m[6]=2yz+2xw;
+/// m[8]=2xz+2yw, m[9]=2yz−2xw, m[10]=1−(2x²+2y²) — read as the row-vector 3×3 (the game's MATRIX
+/// rows at +0x00/+0x10/+0x20). The bottom row is the caller's: the 0xf2 dispatcher stores the
+/// placement translation there [M 0x1d04f0:476-477] and `GunImp_Create` via `Mat_SetTrans`
+/// [M 0x131f20:67].
+pub fn quat_quat_to_mat(q: [f32; 4]) -> [[f32; 4]; 4] {
+    use crate::ps2float as pf;
+    let (x, y, z, w) = (q[0], q[1], q[2], q[3]);
+    let add = |a: f32, b: f32| pf::add_noguard(a, b, true);
+    let sub = |a: f32, b: f32| pf::add_noguard(a, -b, true);
+    let mul = pf::mul;
+    let a = add(y, y); // fVar1 = 2y [M :18]
+    let b = add(z, z); // fVar2 = 2z [M :20]
+    let c = mul(add(x, x), x); // fVar6 = (2x)·x [M :21]
+    let d = mul(add(x, x), w); // fVar8 = (2x)·w [M :22]
+    [
+        [sub(1.0, add(mul(a, y), mul(b, z))), add(mul(a, x), mul(b, w)), sub(mul(b, x), mul(a, w)), 0.0],
+        [sub(mul(a, x), mul(b, w)), sub(1.0, add(c, mul(b, z))), add(mul(b, y), d), 0.0],
+        [add(mul(b, x), mul(a, w)), sub(mul(b, y), d), sub(1.0, add(c, mul(a, y))), 0.0],
+        [0.0, 0.0, 0.0, 1.0],
+    ]
+}
+
 /// The placement classes whose creator builds the object's matrix with `View_RotTransMatrix`
 /// 0x1e5168 (the Y·Z·X composition), i.e. every `parsemap_create_dynamic_objects` 0x1d04f0 case
 /// whose creator reaches `control_create_object` 0x1344e0 with the quaternion arg = 0 — and all
@@ -123,11 +155,14 @@ pub fn object_matrix(rot: [f32; 3], trans: [f32; 3]) -> [[f32; 4]; 4] {
 /// - 0x0f `Drone_Create` 0x136be0 / 0xf1 `DroneSpawner_Create` 0x1378d0 pass NULL pos/rot to
 ///   CCO — the object matrix is the identity; the placement vectors live in the ext.
 /// - 0x34 `GunImp_Create` 0x131f20:66-69 and 0xf2 (the dispatcher builds the emitter matrix
-///   inline, 0x1d04f0:474-478) use `Quat_QuatToMat` 0x1e3e80 on the placement's +0x24 quaternion.
+///   inline, 0x1d04f0:474-478) build with `Quat_QuatToMat` 0x1e3e80 on the placement's +0x24
+///   quaternion — `object_matrix_for_class` returns that matrix (translation = the placement
+///   position, as `Mat_SetTrans` [M 0x1e3478] / the dispatcher's row-3 stores write it); for 0x34
+///   the prebuilt matrix then overwrites the created object's at `Control_CreateObjEx` 0x1343c8:18-23.
 /// - 0x24/0x25/0x4e/0xe5/0xe6/0xe9/0xdf build no object matrix at all; 0xdf `Env_Create`
 ///   0x17b968:98-105 uses `RotMatrix` only to derive the wind direction vector.
 /// Unlisted ids fall to the dispatcher's default (no creator, 0x1d04f0:544-545).
-pub fn object_matrix_for_class(class: u32, creates_cel: bool, rot: [f32; 3], trans: [f32; 3]) -> [[f32; 4]; 4] {
+pub fn object_matrix_for_class(class: u32, creates_cel: bool, rot: [f32; 3], trans: [f32; 3], quat: [f32; 4]) -> [[f32; 4]; 4] {
     let view = !creates_cel
         && matches!(class,
             0x20 | 0x21 | 0x22 | 0x27 | 0x28 | 0x29 | 0x2b | 0x2c | 0x2e | 0x2f | 0x30 | 0x31
@@ -135,7 +170,15 @@ pub fn object_matrix_for_class(class: u32, creates_cel: bool, rot: [f32; 3], tra
             | 0x4a | 0x71 | 0xd2 | 0xd4 | 0xd5 | 0xd8 | 0xd9 | 0xdb | 0xdc | 0xde | 0xe0 | 0xe1
             | 0xe2 | 0xe3 | 0xe4 | 0xe7 | 0xe8 | 0xea..=0xef | 0xf0 | 0xf3 | 0xf4 | 0xf5 | 0xf8
             | 0xf9 | 0xfa | 0xfb | 0xfc | 0xfd | 0xfe);
-    if view { view_rot_trans_matrix(rot, trans) } else { object_matrix(rot, trans) }
+    if view {
+        view_rot_trans_matrix(rot, trans)
+    } else if !creates_cel && matches!(class, 0x34 | 0xf2) {
+        let mut m = quat_quat_to_mat(quat);
+        m[3] = [trans[0], trans[1], trans[2], 1.0];
+        m
+    } else {
+        object_matrix(rot, trans)
+    }
 }
 
 pub fn transform(m: &[[f32; 4]; 4], v: [f32; 3]) -> [f32; 3] {
@@ -274,15 +317,64 @@ mod tests {
         assert!(view.iter().zip(&rot).any(|(a, b)| a.iter().zip(b).any(|(x, y)| x.to_bits() != y.to_bits())));
         // The class predicate [M the per-case catalog on object_matrix_for_class]: dynamic
         // dispatcher cases with a live matrix build → View; the static path, the pinned
-        // RotMatrix exceptions, the quaternion classes and the unlisted ids → RotMatrix.
+        // RotMatrix exceptions and the unlisted ids → RotMatrix; the quaternion classes 0x34/0xf2
+        // → `Quat_QuatToMat` on the +0x24 quaternion [M 0x1d04f0:474-478, 0x131f20:66-67,
+        // 0x1343c8:18-23] (the old RotMatrix expectation here predated the quat port and
+        // contradicted the decompile — fixed, see the WORKLOG).
+        let q = [0.1, 0.2, 0.3, 0.9];
         for class in [0x20, 0x22, 0x28, 0x29, 0x2e, 0x31, 0x3a, 0x3b, 0x71, 0xd2, 0xd4, 0xd9, 0xdb, 0xdc, 0xe2, 0xea, 0xf0, 0xfc, 0xfe] {
-            assert_eq!(object_matrix_for_class(class, false, r, [1.0, 2.0, 3.0]), view_rot_trans_matrix(r, [1.0, 2.0, 3.0]), "{class:#x} must use View_RotTransMatrix");
+            assert_eq!(object_matrix_for_class(class, false, r, [1.0, 2.0, 3.0], q), view_rot_trans_matrix(r, [1.0, 2.0, 3.0]), "{class:#x} must use View_RotTransMatrix");
         }
-        for (class, cel) in [(0x19, true), (0x47, true), (0x0f, false), (0x26, false), (0x2a, false), (0x34, false), (0xf2, false), (0xf1, false), (0x24, false), (0xdf, false), (0xf6, false), (0x99, false)] {
-            assert_eq!(object_matrix_for_class(class, cel, r, [1.0, 2.0, 3.0]), object_matrix(r, [1.0, 2.0, 3.0]), "{class:#x} (cel={cel}) must use RotMatrix");
+        for (class, cel) in [(0x19, true), (0x47, true), (0x0f, false), (0x26, false), (0x2a, false), (0xf1, false), (0x24, false), (0xdf, false), (0xf6, false), (0x99, false)] {
+            assert_eq!(object_matrix_for_class(class, cel, r, [1.0, 2.0, 3.0], q), object_matrix(r, [1.0, 2.0, 3.0]), "{class:#x} (cel={cel}) must use RotMatrix");
+        }
+        for class in [0x34, 0xf2] {
+            let mut want = quat_quat_to_mat(q);
+            want[3] = [1.0, 2.0, 3.0, 1.0];
+            assert_eq!(object_matrix_for_class(class, false, r, [1.0, 2.0, 3.0], q), want, "{class:#x} must use Quat_QuatToMat on the +0x24 quaternion");
+            // A creates_cel row of a quaternion class never reaches the dispatcher either.
+            assert_eq!(object_matrix_for_class(class, true, r, [1.0, 2.0, 3.0], q), object_matrix(r, [1.0, 2.0, 3.0]), "{class:#x} (cel) must use RotMatrix");
         }
         // A creates_cel row of a View class never reaches the dispatcher: the static path wins.
-        assert_eq!(object_matrix_for_class(0xd9, true, r, [0.0; 3]), object_matrix(r, [0.0; 3]));
+        assert_eq!(object_matrix_for_class(0xd9, true, r, [0.0; 3], q), object_matrix(r, [0.0; 3]));
+    }
+
+    /// `Quat_QuatToMat` 0x1e3e80: the nine entries replay the decompile's arithmetic on a
+    /// non-trivial quat, and a pure-yaw quat closes onto the yaw-only RotMatrix rows (the port's
+    /// base matrix) — the identity every yaw-only 0x34/0xf2 disc row relies on.
+    #[test]
+    fn quat_to_mat_matches_the_decompile_and_closes_on_yaw() {
+        use crate::ps2float as pf;
+        let q = [0.16, -0.33, 0.52, 0.77];
+        let (x, y, z, w) = (q[0], q[1], q[2], q[3]);
+        let add = |a: f32, b: f32| pf::add_noguard(a, b, true);
+        let sub = |a: f32, b: f32| pf::add_noguard(a, -b, true);
+        let mul = pf::mul;
+        // The decompile's locals [M 0x1e3e80:15-31], verbatim.
+        let (f1, f2) = (add(y, y), add(z, z));
+        let (f6, f8) = (mul(add(x, x), x), mul(add(x, x), w));
+        let want = [
+            [sub(1.0, add(mul(f1, y), mul(f2, z))), add(mul(f1, x), mul(f2, w)), sub(mul(f2, x), mul(f1, w))],
+            [sub(mul(f1, x), mul(f2, w)), sub(1.0, add(f6, mul(f2, z))), add(mul(f2, y), f8)],
+            [add(mul(f2, x), mul(f1, w)), sub(mul(f2, y), f8), sub(1.0, add(f6, mul(f1, y)))],
+        ];
+        let m = quat_quat_to_mat(q);
+        for i in 0..3 { for j in 0..3 { assert_eq!(m[i][j].to_bits(), want[i][j].to_bits(), "[{i}][{j}]"); } }
+        assert_eq!(m[3], [0.0, 0.0, 0.0, 1.0]);
+        // Pure yaw θ about +y: (0, sin(θ/2), 0, cos(θ/2)) — the entries replay the exact op
+        // chains (f1 = 2y, f2 = 2z = 0), closing onto the row-vector RotY rows.
+        let th = 0.8f32;
+        let (s, c) = ((th * 0.5).sin(), (th * 0.5).cos());
+        let (f1, sc) = (add(s, s), mul(add(s, s), c));
+        let my = quat_quat_to_mat([0.0, s, 0.0, c]);
+        assert_eq!(my[0][0].to_bits(), sub(1.0, mul(f1, s)).to_bits()); // 1 − 2sin²(θ/2)
+        assert_eq!(my[0][2].to_bits(), sub(0.0, sc).to_bits()); // −2sin(θ/2)cos(θ/2)
+        assert_eq!(my[2][0].to_bits(), sc.to_bits());
+        assert_eq!(my[1][1].to_bits(), 1.0f32.to_bits());
+        assert_eq!((my[0][1], my[1][0], my[1][2], my[2][1]), (0.0, 0.0, 0.0, 0.0));
+        // The unit quat's rotation-sized entries.
+        let m2 = quat_quat_to_mat([0.5, 0.5, 0.5, 0.5]);
+        for row in &m2 { for v in &row[..3] { assert!(v.abs() <= 1.0 + 1.0e-6, "rotation-sized entries only: {v}"); } }
     }
 
     /// Yaw-only rows (rx = rz = 0): the builders agree to the PS2Sinf(π/2) = 1.0000001 ulp —
