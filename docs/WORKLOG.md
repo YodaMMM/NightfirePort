@@ -210,3 +210,16 @@ Q-Claw crossing [D GRAPPLEPOINT_SkyBridge (45.29, 5.10, 62.94)] -> open slot dro
 nav lane 5->4 -> corridor; mezzanine entry from inside the east duct, throat x 44.75..45.75,
 z 49..50 [D probe14_south]), add the shaft entry, then walk legs 2..6 to the level exit on
 real input only. Un-ignore the test when green; every other walkreal/door test stays green.
+
+## level-14-full-walk (2026-10-27, this window)
+Leg 1a rewritten onto the east route and UN-IGNORED: the pinned crossing chain green to the
+stairwell foot, then NEW the z-51 west pit jump onto the 0.60 segment (46.29, 1.26, 50.75)
+[D probe14_shaft2], then the SHAFT ENTRY solved as the Q-Claw reel to mouths' grapple #626
+(45.30, 4.79, 42.86) — the lip-skimming ray (0.03-0.09 clearance [D probe14_shaft4]) + the 1.0
+sweep [M 0x12c5a0:92] latches from the segment, the reel hangs (45.37, 4.59, 43.91) over the
+east vent lane. The shaft is a floor-less well (open < -20 [D probe14_shaft3]), the lip is
++1.41 over a 0.78 jump apex [M], zero ladders [D probe14_ladders], no nav nodes above y 1.0
+[D probe14_nav] — the reel IS the entry. The one red step: the release-onto-the-lane (the
+phase-2 no-fire detach [M gadget.rs:490] vs the observed hold at y 4.54) — the next session
+debugs that loop, then leg 1f (the lane south + the connector west to #301 [D probe14_tunnel/
+probe14_mouthfin]) and the untouched legs 2..6. Suite did not fit (background kills).
