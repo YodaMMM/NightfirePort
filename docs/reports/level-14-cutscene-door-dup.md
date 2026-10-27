@@ -53,12 +53,14 @@ cutscene_camera_07000014_live (1), door_aim_ray_live (2), door_glist0_e_dead_liv
 ride_cutscene_objects_live (1).
 
 **Suite.** Started in the background at 02:29 UTC on the pre-fix tree (845 binaries, build
-1150 s); it had not finished by the deadline window. Its failures up to 03:54 UTC are all
-environmental, none in code I touched: `identity_disc` + 3 `disc_golden` (the slim ISO's
-golden-table drift), `fix_0c_pylon_live` ×2 + `probe_pylon_render` (no GPU/wgpu in the
-sandbox — the prior task's worklog records the same two), and CRASH exit -9 for
-`mp_bot_objectives_live` / `zerog_0700001b_live` (killed — sandbox memory). The door/cutscene
-binaries affected by this change pass locally as listed above.
+1150 s); it had not finished by the 04:26 UTC deadline (last observed 04:15 UTC, still
+running). Every FAILED/TIMEOUT/CRASH line it produced (11 by 04:15) is environmental, none in
+code I touched: `identity_disc` + 3 `disc_golden` (the slim ISO's golden-table drift),
+`fix_0c_pylon_live` ×2 + `probe_pylon_render` (no GPU/wgpu in the sandbox — the prior task's
+worklog records the same two), and CRASH exit -9 for `mp_bot_objectives_live`,
+`zerog_0700001b_live`, `mp_stress_explosives_live`, `mp_online_failures` (killed — sandbox
+memory). The door/cutscene binaries affected by this change pass locally as listed above.
+Re-run the suite on the merged tree before merging.
 
 ## What's left
 
