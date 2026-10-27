@@ -2300,6 +2300,27 @@ impl Drone {
     /// there; the probe and its per-tick source array are the port of the function.
     pub fn near_player_collision(&self) -> bool { self.dist_to_player.iter().any(|&x| x < 2.0) }
 
+    /// The per-tick actor-actor capsule [M NDrone2_Collision 0x140e90:59-124]: the two ends are
+    /// `pos + up·r` and `pos + up·(r − hip)`; `r = 0.3` when the down/asleep flag `+0x2F` is set
+    /// (both ends then coincide at `pos + up·(r − hip)` [M :76-88 — one VADD, identical stores]),
+    /// else `r = 0.4`, or `0.55` in DSTATE 0xC (`*(short*)(ext+0xd8) == 0xC` [M :91-94]). `hip`
+    /// is the anim height word `+0xa0`, default 1.0 [M NDrone2_DefaultInit 0x14b300:48 — the
+    /// port does not model the height word; the default stands]. Upright walkers only (the
+    /// port's walkers keep up = (0,1,0); the flying/grabbed 0x200 arms are the documented
+    /// unmodelled edges). This is the capsule the class-2 collide consumer probes the player
+    /// with [M 0x140e90 feeds Collide_Update's pick through the enabled hittest, 0x1ea398
+    /// Phase B] and the shape `LadderCtx::bot_capsules` carries for the Jointy push.
+    pub fn bump_capsule(&self) -> (V3, V3, f32) {
+        if self.down {
+            let y = self.pos[1] + 0.3 - 1.0;
+            ([self.pos[0], y, self.pos[2]], [self.pos[0], y, self.pos[2]], 0.3)
+        } else {
+            let r = if self.state == state::HOSTAGE_SAVED { 0.55 } else { 0.4 };
+            ([self.pos[0], self.pos[1] + r, self.pos[2]],
+             [self.pos[0], self.pos[1] + r - 1.0, self.pos[2]], r)
+        }
+    }
+
     // ---- patrols and idling ------------------------------------------------------------------------------------
 
     /// `NDrone2_AssignAIPath(mask)`: the nearest node (2D, < 0.3) of a path with `kind & mask` → `InitAIPath`.
@@ -18230,6 +18251,18 @@ fn segment_hits_sphere(a: V3, b: V3, c: V3, r: f32) -> bool {
                 }
             }
         }
+        // fix-drone-bump (drone-bump-collision): the class-2 collide consumer's player arm
+        // (NDrone2_DealWithObjHit 0x13fff0:108-125 — class-3 hitdata → Drone_Message(obj, 0x22,
+        // 0, 0) per contact; receivers CivilianMission 0x15d860:130-137 → SetState(0x17) and
+        // CivilianMissionWait 0x15dbb0:136-141 → the +2 s re-arm; the port's msg::WAIT_PAUSE
+        // handlers already port both) is IMPLEMENTED AND REVERTED: the naive always-on sender
+        // froze a 07000007 mission civilian inside Bond's path (probe_07_route's hall-door leg
+        // STUCK at (79.2, 44.4, -51.1), the frozen bot at (79.6, -50.3) in permanent 0.88
+        // contact) — the walkreal-1-4 lesson again. The unproven piece is the PICK-level gate:
+        // whether the drone's hittest seek config picks the class-3 player at all
+        // [Collide_PickObj 0x1eae80:83-87's seeker-class filters hint it may not]; a live
+        // gdbwatch of the contact list at a real bump settles it. The Jointy push (player.rs)
+        // is the decompile-backed half and stays. See docs/reports/drone-bump-collision.md.
         // `Doors_Calc` — the control pass's last act (0x1336f8's tail): the door groups sync, the busy markers
         // clear. (`switch_channels_prev` is snapshotted after `Trigger_Calc`, at the top of the tick — see above.)
         self.doors.calc();

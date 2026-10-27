@@ -2895,14 +2895,17 @@ impl Sim {
             // [M NDrone2_DefaultInit 0x14b300:48]] — upright bots (up = (0,1,0)), so the arms are
             // pos + (0, ±0.4, 0) at h 1.0. Only the NEAR bots carry an ON capsule [M
             // DroneFunc_NearPlayerCollision 0x14b190 + NDrone2_DoCollision 0x149ec8 — the kind
-            // word +0x464 goes 0x800 only within 2.0 of the player]; the 0.4 default stands for
-            // every bot here [S unverified: the sleeper's own kind word (the 0xc → 0.55 arm) is
-            // not read by the port — a live check item].
+            // word +0x464 goes 0x800 only within 2.0 of the player]. The radius/shape arms now
+            // come from the ported capsule itself (`Drone::bump_capsule` [M NDrone2_Collision
+            // 0x140e90:59-124 — 0.3 down / 0.55 DSTATE 0xC / 0.4 default, ends pos+up·r and
+            // pos+up·(r − hip), hip default 1.0]); the corpse exclusion mirrors the class-2
+            // contact gate's dead mapping [S — the door gate 0x135980:53-61's port mapping;
+            // Jointy itself has no corpse-word evidence either way]. drone-bump-collision.
             let bot_capsules: Vec<([f32; 3], [f32; 3], f32)> = {
                 let bp = self.bond.pos;
                 self.drones.list.iter()
-                    .filter(|x| x.enabled && ((x.pos[0] - bp[0]).powi(2) + (x.pos[1] - bp[1]).powi(2) + (x.pos[2] - bp[2]).powi(2)) < 2.0 * 2.0)
-                    .map(|x| ([x.pos[0], x.pos[1] + 0.4, x.pos[2]], [x.pos[0], x.pos[1] - 0.6, x.pos[2]], 0.4f32))
+                    .filter(|x| x.enabled && !x.corpse && ((x.pos[0] - bp[0]).powi(2) + (x.pos[1] - bp[1]).powi(2) + (x.pos[2] - bp[2]).powi(2)) < 2.0 * 2.0)
+                    .map(|x| x.bump_capsule())
                     .collect()
             };
             let ctx = nf_game::player::LadderCtx { ladders: &self.ladders, wires: &self.wires, wire_anims: Some(&self.wire_anims), water, sink, creepwalls: &self.creepwalls, level_bump_5fb: false, straddle: &straddle_cells, bot_capsules: &bot_capsules };

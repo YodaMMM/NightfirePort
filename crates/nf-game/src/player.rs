@@ -1846,14 +1846,17 @@ self.local = [vs / k, vf / k];
         // it walks (the delta tilts); beside its spine the push is lateral. The Jointy push does
         // NOT ride the DeltaP accumulator (Jointy writes +0x10 only [M :253-266]), so this sits
         // after the add-back and `pick_ref` keeps the static pass's value.
-        // [S] unverified — the PORT CHOICE gate: the push rides only while Bond is AIRBORNE
-        // (the drop-onto case the task pins). The game's own per-bot ON/OFF gates (+0x4f8 bit
-        // 0x20/0x200, +0x570 bit 2 — NDrone2_DoCollision 0x149ec8) are not modelled per bot
-        // yet, and master's green walks path Bond THROUGH ally tangent zones (the 01 armour
-        // walk, the 0a west doorway): the grounded-side push against allies is a live-check
-        // item, not shipped here. The sleeper drop (grounded false through the whole contact)
-        // keeps its [M] push either way.
-        if !ctx.bot_capsules.is_empty() && !self.grounded {
+        // drone-bump-collision: the stance gate is GONE — the game's Jointy push has none:
+        // `Player_Collision` 0x194df0 runs the class-3 resolve against every armed class-2
+        // capsule in every stance [M Collide_Jointy 0x1ec180:229-266 — SP fVar12 = 1.0, the
+        // FULL overlap on the query's owner; the class-3-other return 0x1ec180:231-233 means
+        // the bot never resolves against the player, so the push is Bond-side only]. The old
+        // [S] airborne-only gate (rounds 1-4 of level-07-guest-collision) is replaced by the
+        // game's rule: the push rides whenever an ARMED bot capsule overlaps, the per-bot
+        // arming being the collide gates in `LadderCtx::bot_capsules`' producer (scene.rs —
+        // NDrone2_Collision 0x140e90 + NDrone2_DoCollision 0x149ec8). The drone-side reaction
+        // to the same contact is the msg-0x22 bump (drone.rs, the tick_inner post-walk sender).
+        if !ctx.bot_capsules.is_empty() {
             let (ja, jb) = self.capsule();
             if std::env::var("NF_PUSH_DEBUG").is_ok() {
                 eprintln!("[pushdbg] n={} ja={:?} jb={:?} bots={:?}", ctx.bot_capsules.len(), ja, jb, ctx.bot_capsules);
