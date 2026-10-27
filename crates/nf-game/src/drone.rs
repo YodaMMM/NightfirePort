@@ -12481,7 +12481,8 @@ impl Drones {
                 else { level.maps[m].objects.get(p.index as usize) };
             let Some(o) = obj else { return Vec::new() };
             let Some(c) = o.collision.as_ref() else { return Vec::new() };
-            let mx = nf_formats::placement::object_matrix(p.rotation, p.translation);
+            // Mine_Create's obj+0x90: CCO(0) → View_RotTransMatrix [M 0x17ce28:16].
+            let mx = nf_formats::placement::view_rot_trans_matrix(p.rotation, p.translation);
             c.triangles().into_iter().map(|t| t.map(|v| nf_formats::placement::transform(&mx, v))).collect()
         });
         let ps = &level.maps[m].placements;
@@ -12500,7 +12501,8 @@ impl Drones {
             let p = &level.maps[m].placements[fb.placement];
             let script = p.params.iter().find(|(k, _)| *k == 0).map_or(0, |&(_, v)| v);
             if script < 0x0600_0000 { continue; }
-            let m = nf_formats::placement::object_matrix(p.rotation, p.translation);
+            // FuseBox_Create's obj+0x90: CCO(0) → View_RotTransMatrix [M 0x1b0448:12].
+            let m = nf_formats::placement::view_rot_trans_matrix(p.rotation, p.translation);
             self.scripts.players.push(crate::nis::Player {
                 placement: fb.placement,
                 scripts: [script, 0],
@@ -12549,7 +12551,8 @@ impl Drones {
         for (i, p) in ps.iter().enumerate().filter(|(_, p)| p.flags & 0xff == 0x29) {
             let script = p.params.iter().find(|(k, _)| *k == 1).map_or(0, |&(_, v)| v);
             if script < 0x0600_0000 { continue; }
-            let m = nf_formats::placement::object_matrix(p.rotation, p.translation);
+            // Switch_Create's obj+0x90: CCO(0) → View_RotTransMatrix [M 0x1adcc0:15].
+            let m = nf_formats::placement::view_rot_trans_matrix(p.rotation, p.translation);
             let idx = self.scripts.players.len();
             self.scripts.players.push(crate::nis::Player {
                 placement: i,
@@ -12676,7 +12679,9 @@ impl Drones {
                 // ext+0x80: the create-time fire direction [M 0017ffa0:141-147] — facing 0
                 // reads `Mat_GetDir(obj+0x90)` (the matrix's forward row), else `Mat_GetUp`
                 // negated (the up row, negated).
-                let m = nf_formats::placement::object_matrix(p.rotation, p.translation);
+                // GT_Create's obj+0x90: Control_CreateObjEx → CCO(0) → View_RotTransMatrix
+                // [M 0x17ffa0:69-71, 0x1343c8:14-19].
+                let m = nf_formats::placement::view_rot_trans_matrix(p.rotation, p.translation);
                 t.fire_dir = if t.facing == 0 { [m[2][0], m[2][1], m[2][2]] } else { [-m[1][0], -m[1][1], -m[1][2]] };
                 // The two `Script_Load`s run as script players: `Script_Play(_, 1)` is the
                 // LOOPING play [M 001db588:16-19 — the non-zero arg sets play |= 9],
@@ -12684,7 +12689,7 @@ impl Drones {
                 // mode-8 load beat (prime → start(true) + one update) is exactly that, and
                 // the walk ticks them every frame after (the fusebox/laser mount precedent).
                 // Mask 1 so the load beat runs; no gate, no out channel (GT drives them).
-                let base = nf_formats::placement::object_matrix(p.rotation, p.translation);
+                let base = nf_formats::placement::view_rot_trans_matrix(p.rotation, p.translation); // [M 0x17ffa0:69-71 CCO(0)]
                 let mount = |hash: u32| crate::nis::Player {
                     placement: i,
                     scripts: [hash, 0],
@@ -19100,6 +19105,12 @@ fn segment_hits_sphere(a: V3, b: V3, c: V3, r: f32) -> bool {
             // `PlrStat_LogHealth` 0x199620 ← `Player_SetHealth` 0x1960b8:14: the snapshot GetScore's
             // row 6 reads; the port writes it once per tick (the game's last write wins too).
             self.progress.log_health(ms, self.health.health);
+            // `PlarStat_LogUpdateElapsedTime` 0x1995a0 ← `Player_Update` 0x193600:132, every
+            // tick: +0x30 += clock − +0x2C, then +0x2C := clock, gated on +0x34 == 0 (the timer
+            // runs — the NIS/script pauses stamp +0x34 through the scene's request side
+            // [M 0x1d94c0:118-121 + 0x1da880:44-48]). The clock is the port's frame-derived
+            // 1/100 s [S — psiGetTimeIn100ths' stand-in; only differences matter].
+            self.progress.log_update_elapsed(crate::progress::PlrMissionStats::now_100ths(self.frame));
         }
         // fix-scores-handoff (G-045 remainder): the level-end score-row production. When the
         // level-exit latch stands at the tick's end (the trigger LOAD_LEVELs, the

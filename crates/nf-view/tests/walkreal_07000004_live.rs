@@ -370,3 +370,160 @@ fn the_kill_leads_into_the_games_outro() {
     assert_eq!(fe.page, nf_view::menu::Page::Results, "the results page, after the outro");
     eprintln!("[04-outro] the kill led into the game's end sequence in {} walk ticks", w.total_ticks);
 }
+
+/// mission-results-page: the results page WORKS — the walked kill runs the real end path to the
+/// results page, then Del opens the Mission Stats page with the mission's own tallies, Tab opens
+/// the Dossier, Enter continues, and the score/medal/reward bits follow the tracked stats:
+/// 1. the mission's tallies accumulate through the real fire path — shots [M PlrStat_LogShotFired
+///    0x1998d8 ← Player_WeaponInitBullet 0x1a4bf0:258], the kill [M PlrStat_LogEnemyDispatched
+///    0x1996a8 ← NDrone2_LogDroneDeath 0x14ab00:29], the elapsed clock every tick [M
+///    PlarStat_LogUpdateElapsedTime 0x1995a0 ← Player_Update 0x193600:132];
+/// 2. `demo_results` builds the front end from those tallies (nf_view::mission_end_stats — the
+///    old `menu::Stats::default()` zeroed them) and commits the score through `results_enter`
+///    [M P_NFRESULTS 0x208e78:77 GetScore(0) + :169 Menu_SetLevelBonus];
+/// 3. Del → page 0x40000037 [M :225-230], whose 0x4c runs `PlrStat_GetScore(0)` [M P_NFSTATS
+///    0x209938:36] — the rows carry the same tallies; Tab → 0x4000002b [M :222-224]; Enter →
+///    the new-reward/mission-list routing [M 0x208e78 case 0x50's 0x44 sends + P_NFBONUS
+///    0x209670 case 0x4c's DAT_002e1c2c text gate].
+#[test]
+fn the_results_page_opens_stats_and_dossier_and_scores_the_real_tallies() {
+    let iso = iso();
+    let mut w = load_ready(&iso);
+    // The armament walk + the assassination — the outro test's route, the real input path.
+    w.tick(Default::default(), false);
+    w.tick(Default::default(), false);
+    let (uzi, armour) = {
+        let sim = w.scene.sim.as_ref().unwrap();
+        let uzi = sim.drones.pickups.iter()
+            .find(|p| p.kind == 0 && p.weapon == 18 && !p.gone && (p.start[2] - 42.66).abs() < 1.0)
+            .or_else(|| sim.drones.pickups.iter().find(|p| p.kind == 0 && p.weapon == 18 && !p.gone))
+            .map(|p| p.start).expect("the StormUzi pickup");
+        let armour = sim.drones.pickups.iter().find(|p| p.kind == 3 && !p.gone).map(|p| p.start)
+            .expect("the BodyArmourHeavy pickup");
+        (uzi, armour)
+    };
+    w.walk_nav_to(uzi, "the StormUzi pickup", 0.4);
+    w.walk_nav_to(armour, "the armour pickup", 0.4);
+    let target_i = w.scene.sim.as_ref().unwrap().drones.list.iter()
+        .position(|d| d.skin == 0x0500_001e).expect("the target drone exists");
+    let killed = w.shoot(target_i, "the target");
+    assert!(killed || w.scene.sim.as_ref().unwrap().drones.list[target_i].corpse
+        || w.scene.sim.as_ref().unwrap().drones.list[target_i].health <= 0.0, "the target must die");
+    let mut raised = false;
+    for _ in 0..900u32 {
+        w.tick(Default::default(), false);
+        if w.scene.sim.as_ref().unwrap().drones.channels.on(0x54) { raised = true; break; }
+    }
+    assert!(raised, "the kill must raise ch 0x54 [M DroneFunc_SetDeathChannel 0x13e660]");
+    let mut ended = false;
+    for _ in 0..900u32 {
+        w.tick(Default::default(), false);
+        if w.scene.sim.as_ref().unwrap().drones.mission_end.is_some() { ended = true; break; }
+    }
+    assert!(ended, "case 4 must fire the level end [M 0x182c60:65-76]");
+
+    // ── demo_results' steps (nf-view lib.rs) against the LIVE sim ──
+    // The tallies the mission leaves behind (the fire path's own shots + the kill + the clock):
+    let stats = nf_view::mission_end_stats(&w.scene.sim.as_ref().unwrap().drones.progress);
+    eprintln!("[04-results] the tracked stats: fired {} hit {} acc {}% time {}s moves {} dispatched {} subdued {} surrendered {} bonus {}",
+        stats.shots_fired, stats.shots_hit, stats.accuracy_pct, stats.time_s, stats.bond_moves,
+        stats.dispatched, stats.subdued, stats.surrendered, stats.bonus_pickups);
+    assert!(stats.shots_fired > 0, "the walk's real shots logged [M 0x1998d8 ← 0x1a4bf0:258]");
+    assert!(stats.shots_hit > 0, "the kill's hits logged [M 0x199840 ← NDrone2_HitDamage 0x145558:60]");
+    assert!(stats.dispatched >= 1, "the kill dispatched [M 0x1996a8 ← 0x14ab00:29]");
+    assert!(stats.time_s > 0, "the elapsed clock accumulated per tick [M 0x1995a0 ← 0x193600:132]");
+
+    let mut fe = nf_view::menu::FrontEnd::new();
+    fe.flow.current_level = 0x0700_0004;
+    fe.flow.stack = vec![nf_view::menu::ST_RUNNER]; // the host's demo_results boots the runner state
+    fe.mission_ended(nf_view::menu::Outcome::Complete, stats.clone());
+    let (base, diff) = {
+        let sim = w.scene.sim.as_ref().unwrap();
+        (sim.drones.mission.base_map, sim.drones.progress.difficulty)
+    };
+    assert_eq!(base, 0x0700_0001, "Double Cross part 2's base map is the mission's first level [L the mission table; M Mission_Init 0x182270:52]");
+    {
+        let sim = w.scene.sim.as_mut().unwrap();
+        assert!(fe.results_enter(&mut sim.drones.progress, base, 6, diff, None),
+            "the results enter commits [M 0x208e78:77 GetScore(0)]");
+        // The host's mission-end snapshot (the sim dies with the front-end load; the game's
+        // globals are BSS [M 0x209938:36, 0x182270:65]).
+        let mut snap = sim.drones.progress.clone();
+        let idx = snap.table.iter().position(|e| e.hash == base).unwrap();
+        let last = snap.table[idx].last;
+        let th = snap.table[idx].thresholds;
+        assert!(last > 0, "the commit landed a score [M 0x1984b0:309-315 last = total]");
+        let expect_medal = if last >= th[3] { 4u32 } else if last >= th[2] { 3 }
+            else if last >= th[1] { 2 } else if last >= th[0] { 1 } else { 5 };
+        eprintln!("[04-results] committed score {last} vs thresholds {th:?} → medal {expect_medal}");
+        // The outro plays, the load tail opens the page (the reward_after_outro walk).
+        fe.flow.movie_playing = true;
+        for _ in 0..70 { fe.tick(); }
+        fe.flow.movie_playing = false;
+        fe.tick();
+        assert!(fe.flow.phase2_resolved.take().is_some());
+        assert!(fe.flow.load_tick());
+        assert!(fe.reopen_queued_page(), "the load tail's MenuManager_Create [M 0x1d6360:160-163]");
+        assert_eq!(fe.page, nf_view::menu::Page::Results, "the results page is up");
+        // The page's fields are the commit's: the score is entry+0x34 [M :96-97] and the medal
+        // compare is the game's own threshold chain [M :98-142].
+        let rf = fe.results.as_ref().expect("the fields built on the enter");
+        assert_eq!(rf.score, last, "the score line is the committed last [M :96-97 SeparateNumber(+0x34)]");
+        assert_eq!(rf.medal, expect_medal, "the medal follows the thresholds [M :98-142]");
+        // The reward bits: the medal loop commits tiers medal..1 [M Menu_SetLevelBonus 0x1ffa10
+        // :70-82 — the counter loop]; a first medal is a NEW reward [M :76-79 DAT_002e1c2c = 1].
+        for tier in 1u32..=4 {
+            let has = snap.has_medal(base, tier, 0);
+            assert_eq!(has, tier <= expect_medal && expect_medal < 5,
+                "reward bit tier {tier} follows the medal [M 0x1ffa10:70-82]");
+        }
+        assert_eq!(fe.new_reward, expect_medal < 5, "the first medal is a new reward [M 0x1ffa10:76-79]");
+
+        // ── Del opens the Mission Stats page and it builds from the same tallies ──
+        assert!(fe.action(nf_view::menu::Action::Extra),
+            "Del opens the Stats page [M 0x208e78:225-230 msg 0x5e → 0x40000037]");
+        assert_eq!(fe.page, nf_view::menu::Page::Stats);
+        assert_eq!(fe.flow.page, nf_view::menu::PAGE_STATS, "the page id [M 0x40000037]");
+        // The host's menu_after hook — the game's page-enter 0x4c build [M 0x209938:31-38].
+        fe.results_subpages_enter(&mut snap, None);
+        let rows = fe.mission_stats.as_ref().expect("the stats rows built [M 0x209938:31-38]");
+        let find = |id: u32| rows.iter().find(|r| r.id == id).unwrap_or_else(|| panic!("row {id:#x} missing"));
+        assert_eq!(find(0x15b).current, stats.dispatched.to_string(),
+            "the Dispatched row reads the same tally [M 0x209938:60-62 ← GetScore's refill +0x0C]");
+        assert_eq!(find(0x165).current, stats.bond_moves.to_string(),
+            "the Bond Moves row [M 0x209938:57-59 ← +0x20]");
+        assert_eq!(find(0x15e).current, format!("{}%", stats.accuracy_pct),
+            "the Accuracy row's pct is the row-5 ratio [M 0x209938:100-102]");
+        assert!(find(0x160).current != "00:00", "the Time row carries the elapsed clock [M 0x209938:103-108 ← +0x30]");
+        // Back to the results.
+        assert!(fe.action(nf_view::menu::Action::Back));
+        assert_eq!(fe.page, nf_view::menu::Page::Results, "Back returns to the results");
+
+        // ── Tab opens the Dossier ──
+        assert!(fe.action(nf_view::menu::Action::Side),
+            "Tab opens the Dossier [M 0x208e78:222-224 msg 0x5d → 0x4000002b]");
+        assert_eq!(fe.page, nf_view::menu::Page::Dossier);
+        assert_eq!(fe.flow.page, nf_view::menu::PAGE_DOSSIER, "the page id [M 0x4000002b]");
+        assert!(fe.action(nf_view::menu::Action::Back));
+        assert_eq!(fe.page, nf_view::menu::Page::Results, "Back returns (the deep navigation is menu-dossier-navigation's)");
+
+        // ── Enter continues: the new-reward routing, then the mission list ──
+        assert!(fe.action(nf_view::menu::Action::Confirm), "Enter acts [M 0x208e78 case 0x50]");
+        if fe.new_reward {
+            assert_eq!(fe.page, nf_view::menu::Page::NfBonus,
+                "a new reward routes to the 007 Bonus page [M 0x208e78 case 0x50's 0x44 → 0x40000038]");
+            // The host's hook — P_NFBONUS's 0x4c: the tier text only when DAT_002e1c2c [M 0x209670:16-18].
+            fe.results_subpages_enter(&mut snap, None);
+            let bonus = fe.bonus.as_ref().expect("the bonus fields built [M 0x209670:14-18]");
+            assert!(bonus.has_text && !bonus.text_labels.is_empty(),
+                "the tier text composed for the new reward [M 0x209670:22-41]");
+            for (i, l) in bonus.lines.iter().enumerate() {
+                assert_eq!(l.has, (i as u32 + 1) <= expect_medal, "tier {} line follows the medal [M Menu_GetLevelBonuses]", i + 1);
+            }
+            assert!(fe.action(nf_view::menu::Action::Confirm), "Enter on the bonus continues [M 0x209670 case 0x4b]");
+        }
+        assert_eq!(fe.page, nf_view::menu::Page::MissionSelect,
+            "the results flow continues to the mission list [M 0x208e78:40-43 / 0x209670:50-53 just_completed == 0 → 0x4000001c]");
+        assert_eq!(fe.flow.page, nf_view::menu::PAGE_MISSION_SELECT);
+    }
+}

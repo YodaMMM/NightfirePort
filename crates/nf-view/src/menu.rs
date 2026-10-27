@@ -4650,6 +4650,29 @@ impl FrontEnd {
         self.mission_stats.is_some()
     }
 
+    /// The results sub-pages' 0x4c builds, run by the host right after the action that opened
+    /// the page (the game delivers the 0x44 page-change to the new page's handler, whose 0x4c
+    /// arm builds against the live progress layer — mission-results-page):
+    /// - `Page::Stats` — `P_NFSTATS_Handler` 0x209938 case 0x4c: `PlrStat_GetScore(0)` (the
+    ///   commit [M :36-38]) then the rows; the port mirrors it through [`FrontEnd::stats_enter`]
+    ///   with `Mission_Status()` 6 (the results path [M 0x182c60:88] — the page only opens from
+    ///   the results' Del arm [M 0x208e78:225-230]).
+    /// - `Page::NfBonus` — `P_NFBONUS_Handler` 0x209670 case 0x4c: `Menu_GetLevelBonuses`
+    ///   ([M :14]) and the tier text ONLY when `DAT_002e1c2c` (the new-reward flag) stands
+    ///   [M :16-18] — the port's `new_reward`; [`FrontEnd::bonus_enter`]'s `has_text`.
+    /// `progress` is the host's mission-end snapshot (the sim dies with the front-end load; the
+    /// game's globals persist in BSS until the next Mission_Init). Rebuilt on every open, like
+    /// the game's own enter.
+    pub fn results_subpages_enter(&mut self, progress: &mut nf_game::progress::Progress, lang: Option<&Lang>) {
+        if self.page == Page::Stats {
+            // [M 0x209938:31-36 — GetScore(0), the commit, then the rows.]
+            self.stats_enter(progress, self.results_level, 6, progress.difficulty, lang);
+        } else if self.page == Page::NfBonus && self.bonus.is_none() {
+            let has_text = self.new_reward; // DAT_002e1c2c [M 0x209670:16-18]
+            self.bonus_enter(progress, self.results_level, has_text);
+        }
+    }
+
     // ── fix-save-profile: the codename profiles (the port's memory card) ──────────────────────
 
     /// Point the front end at the profiles dir (the port's memory card) and enumerate the saved
@@ -6018,33 +6041,48 @@ impl FrontEnd {
                 Action::Up => { let n = self.rows(); self.cursor = (self.cursor + n - 1) % n; return self.focus_moved(); }
                 Action::Down => { let n = self.rows(); self.cursor = (self.cursor + 1) % n; return self.focus_moved(); }
                 Action::Confirm => {
-                    // The wheel's row opens its page [M C_SBDOSSIER 0x216eb0:12-31 — index 0 →
+                    // The wheel's row opens its page [M C_SBDOSSIER 0x216eb0:12-32 — index 0 →
                     // 0x4000003a Records, 1 → 0x4000003b Rewards, 2 → 0x4000003c Gadgets,
-                    // 3 → 0x4000003d Weapons]. Every page's init resets its scroll to row 0
-                    // [M the wheel controls' own MSG 0x2e (0,0) [D page data] + P_DSGADGETS
-                    // 0x217190:10's explicit reset; P_DSREWARDS/P_DSRECORDS leave the list at
-                    // GameState+0x48's row — the port keeps the cursor at the mission].
-                    // G-048(1): both row arms ride Menu_ChangePageCloseIris [M 0x216eb0:20/:26].
+                    // 3 → 0x4000003d Weapons]. Rows 0/1 ride the handler's DIRECT
+                    // Manager_SendMessage(0x44, page, 0) (:29-31 — immediate); rows 2/3 ride
+                    // Menu_ChangePageCloseIris (:20/:26 — the 10-tick delayed 0x44 [M 0x202190]).
+                    // Every one of those 0x44s carries lparam 0, whose bit-0-clear PUSHES the
+                    // opener {page, cursor} onto the manager's stack [M 0x21c858:262-274] — so
+                    // Back on the sub-page re-opens THIS page with the wheel on the row that
+                    // opened it [M 0x21c858:592-600].
+                    // Cursor on arrival: Records/Rewards select sp_level's highlighted row
+                    // (msg 0x1e GameState+0x72 [M 0x217248:11-13, 0x2172c8:11-13]); Gadgets/
+                    // Weapons reset to row 0 (the init MSG 0x2e (0,0) [D page data] + P_DSGADGETS
+                    // 0x217190:10 / P_DSWEAPONS 0x217038:35).
                     let to = Self::dossier_row_page(self.cursor);
-                    let cur = if to == Page::Records { self.mission.min(CAMPAIGN.len() - 1) } else { 0 };
-                    self.close_iris_page(to, cur);
+                    self.back_stack.push((Page::Dossier, self.cursor));
+                    if matches!(to, Page::Records | Page::Rewards) {
+                        let cur = self.mission.min(CAMPAIGN.len() - 1);
+                        self.enter_page(to);
+                        self.cursor = cur;
+                    } else {
+                        self.close_iris_page(to, 0);
+                    }
                     return true;
                 }
-                // fe-audit 1019: the Dossier has no △ arm of its own [M P_DOSSIER 0x216de0 has
-                // only the 0x4c/0x50 arms], and the disc's front-end def binds no msg-99 script
-                // on any page [D the 08000002 tag stream: every page's only SCRIPT is
-                // 0x2000000f on the 0x4c-open slot 0]. So Back is the manager's default pop —
-                // reopen the stack top's page with its saved cursor [M 0x21c858:592-600].
+                // Back is the manager's pop: the opener {page, cursor} rides the stack
+                // [M 0x21c858:582-602 — the pop re-opens the top's page via the 0x44/lparam-5
+                // re-entry and restores its cursor with the 0x22]. On an EMPTY stack the 0x5f
+                // sends msg 99 to the page's handler [M 0x21c858:604-610]; P_DOSSIER 0x216de0
+                // arms only 0x4c/0x50 — nothing happens and the Dossier stays (the old
+                // MissionSelect hop had no decompile arm).
                 Action::Back => {
                     if let Some((p, cur)) = self.back_stack.pop() {
                         self.enter_page(p);
                         self.cursor = cur;
-                    } else {
-                        self.enter_page(Page::MissionSelect);
+                        self.flow.page = p.id();
                     }
                     return true;
                 }
-                Action::Side => { self.enter_page(Page::MissionSelect); return true; }   // □ again reopens the list
+                // □ has no arm on the Dossier: P_DOSSIER 0x216de0 handles only 0x4c/0x50 and
+                // C_SBDOSSIER 0x216eb0 only 0x4b/0x49/0x51/0x54 [M] — the old "□ reopens the
+                // list" hop was a port choice, not the game's.
+                Action::Side => return false,
                 _ => {}
             },
             Page::Records => match a {
@@ -6052,42 +6090,87 @@ impl FrontEnd {
                 // The mission list walks the campaign [M the list control 0x10000174 is filled from
                 // sp_level by Menu_AddItemsToControl (P_DSRECORDS 0x217248:11-13); a row's selection
                 // drives C_RBDSRECORDS 0x20bf00's binds].
+                // The list wraps at both ends: Scroll_Update 0x2221b20 wraps while the scroll's
+                // +0x144 flag stands, Scroll_Init 0x2214f0 sets it from the control record
+                // (disasm 0x2217b8-0x2217cc: the record's != 0xff field — 0x10000174's d1 = 0 and
+                // f1 = 25 [D 08000002's parsed record]) and msg 0x69 — the only clear
+                // [M 0x221810:136-139] — appears in none of the Dossier family's streams
+                // [D the parsed pages' MSG tags].
                 Action::Up => { self.cursor = (self.cursor + CAMPAIGN.len() - 1) % CAMPAIGN.len(); return self.focus_moved(); }
                 Action::Down => { self.cursor = (self.cursor + 1) % CAMPAIGN.len(); return self.focus_moved(); }
-                Action::Back | Action::Confirm | Action::Side => { self.enter_page(Page::Dossier); self.cursor = 0; return true; }
+                // Back pops to the Dossier with the wheel's saved row [M 0x21c858:582-602]; the
+                // opener is the wheel itself (its 0x44 carried lparam 0 [M 0x216eb0:29-31]).
+                // ✕ and □ do nothing: C_RBDSRECORDS 0x20bf00 arms only msg 0x49 (the rebind) and
+                // P_DSRECORDS 0x217248 only 0x4c [M] — the old ✕-returns-to-Dossier arm had no
+                // decompile basis.
+                Action::Back => {
+                    if let Some((p, cur)) = self.back_stack.pop() {
+                        self.enter_page(p);
+                        self.cursor = cur;
+                        self.flow.page = p.id();
+                    }
+                    return true;
+                }
+                Action::Confirm | Action::Side => return false,
                 Action::Extra => {}
             },
-            // The three pages the Dossier wheel's rows 1-3 open. Their scrolls are the game's own
-            // lists: Up/Down step ±1 and clamp [S unverified — fe-audit: if these are M_SCROLLs they
-            // wrap like the Dossier wheel (Scroll_Init 0x2214f0:102-103 sets the wrap flag; only msg
-            // 0x69, 0x221810:136-138, clears it); their control type is not checked yet]; every move notifies the owner (msg 0x49) which
-            // rebinds; Confirm does nothing (no handler arm [M C_RBDSREWARDS 0x20c248, the wheel
-            // handlers' 0x51 arm is the INIT]); Back/□ return to the Dossier (the Records page's
-            // mapping; no handler overrides the manager's default back [S]).
+            // The three pages the Dossier wheel's rows 1-3 open. Their scroll controls are the
+            // game's own wheels: Up/Down step ±1 and WRAP at both ends — Scroll_Update 0x2221b20
+            // wraps while the scroll's +0x144 flag stands, Scroll_Init sets it at create from the
+            // control record (disasm 0x2217b8-0x2217cc: `lw +0x10` != 0xff — 0x1000017a/0x1000016f/
+            // 0x10000173 carry d1 = 0, f1 = 25, f2 = 2-3 [D the parsed records], and their last
+            // bound MSG's a-parameter is 0 or 4, both != 0xff), and msg 0x69 — the only clear
+            // [M 0x221810:136-139] — appears in none of their streams [D the parsed MSG tags].
+            // Every move notifies the owner (msg 0x49) which rebinds [M 0x2221b20:237-241];
+            // Confirm does nothing (no handler arm [M C_RBDSREWARDS 0x20c248, C_SBDSGTSCROLL
+            // 0x20bcc0, C_SBDSWPSCROLL 0x20bab0]); Back pops to the Dossier with the wheel's
+            // saved row [M 0x21c858:582-602 — the wheel's 0x44 carried lparam 0, 0x216eb0:20/:26/:31];
+            // □ has no arm on any of them [M the same handlers].
             Page::Rewards => match a {
                 Action::Left | Action::Right => {}
-                Action::Up if self.cursor > 0 => { self.cursor -= 1; return true; }
-                Action::Down if self.cursor + 1 < CAMPAIGN.len() => { self.cursor += 1; return true; }
-                Action::Up | Action::Down => return false,   // clamped [S unverified, see above]
-                Action::Back | Action::Side => { self.page = Page::Dossier; self.cursor = 0; return true; }
+                Action::Up => { self.cursor = (self.cursor + CAMPAIGN.len() - 1) % CAMPAIGN.len(); return self.focus_moved(); }
+                Action::Down => { self.cursor = (self.cursor + 1) % CAMPAIGN.len(); return self.focus_moved(); }
+                Action::Back => {
+                    if let Some((p, cur)) = self.back_stack.pop() {
+                        self.enter_page(p);
+                        self.cursor = cur;
+                        self.flow.page = p.id();
+                    }
+                    return true;
+                }
+                Action::Side => return false,
                 Action::Confirm => return false,             // no select arm [M 0x20c248]
                 Action::Extra => {}
             },
             Page::Gadgets => match a {
                 Action::Left | Action::Right => {}
-                Action::Up if self.cursor > 0 => { self.cursor -= 1; return true; }
-                Action::Down if self.cursor + 1 < GADGETS_TABLE.len() => { self.cursor += 1; return true; }
-                Action::Up | Action::Down => return false,
-                Action::Back | Action::Side => { self.page = Page::Dossier; self.cursor = 0; return true; }
+                Action::Up => { self.cursor = (self.cursor + GADGETS_TABLE.len() - 1) % GADGETS_TABLE.len(); return self.focus_moved(); }
+                Action::Down => { self.cursor = (self.cursor + 1) % GADGETS_TABLE.len(); return self.focus_moved(); }
+                Action::Back => {
+                    if let Some((p, cur)) = self.back_stack.pop() {
+                        self.enter_page(p);
+                        self.cursor = cur;
+                        self.flow.page = p.id();
+                    }
+                    return true;
+                }
+                Action::Side => return false,
                 Action::Confirm => return false,
                 Action::Extra => {}
             },
             Page::Weapons => match a {
                 Action::Left | Action::Right => {}
-                Action::Up if self.cursor > 0 => { self.cursor -= 1; return true; }
-                Action::Down if self.cursor + 1 < WEAPONS_TABLE.len() => { self.cursor += 1; return true; }
-                Action::Up | Action::Down => return false,
-                Action::Back | Action::Side => { self.page = Page::Dossier; self.cursor = 0; return true; }
+                Action::Up => { self.cursor = (self.cursor + WEAPONS_TABLE.len() - 1) % WEAPONS_TABLE.len(); return self.focus_moved(); }
+                Action::Down => { self.cursor = (self.cursor + 1) % WEAPONS_TABLE.len(); return self.focus_moved(); }
+                Action::Back => {
+                    if let Some((p, cur)) = self.back_stack.pop() {
+                        self.enter_page(p);
+                        self.cursor = cur;
+                        self.flow.page = p.id();
+                    }
+                    return true;
+                }
+                Action::Side => return false,
                 Action::Confirm => return false,
                 Action::Extra => {}
             },
@@ -6242,14 +6325,28 @@ impl FrontEnd {
                 // is the 0x5d key (□ — MissionSelect's Dossier arm), and the 0x5e key here is Extra
                 // [S unverified — the pad meaning of actions 0x20/0x21 is U-011]. The host calls
                 // `stats_enter` when the Stats page comes up (the game's 0x4c build).
+                // mission-results-page: both arms pass 0x44's arg 0 — `uStack_b0 = (arg ^ 1) & 1`
+                // [M 0x21c858 case 0x44] makes arg 0 PUSH the current page + its saved cursor
+                // (+0x1bc/+0xac → Stack_Push) onto the manager's back stack, so the sub-page's
+                // default pop returns here (the wheel path's own push [M the MissionSelect □ arm]).
                 Action::Side if !self.results_box => {
+                    // [M P_NFRESULTS 0x208e78:222-224 → LAB_0020947c:230 — msg 0x5d runs
+                    // Manager_SendMessage(0x44, 0x4000002b, 0); lparam 0's bit-0-clear pushes the
+                    // opener {page, cursor} [M 0x21c858:262-274], so Back on the Dossier returns
+                    // HERE with the results cursor — the old push-less hop stranded the player on
+                    // the mission list (the Dossier's empty-stack 0x5f does nothing [M
+                    // 0x21c858:604-610 + P_DOSSIER 0x216de0's 0x4c/0x50-only arms]).
+                    self.back_stack.push((Page::Results, self.cursor));
                     self.enter_page(Page::Dossier);
                     self.flow.page = PAGE_DOSSIER;
-                    self.cursor = 0;
+                    self.cursor = 0;   // the wheel resets on open [M 0x216de0:9-16]
                     return true;
                 }
                 Action::Extra if !self.results_box => {
-                    self.page = Page::Stats;
+                    // [M 0x208e78:225-226 → :230 — msg 0x5e runs 0x44 0x40000037 lparam 0 — the
+                    // same push; Back on the Stats page pops back here.]
+                    self.back_stack.push((Page::Results, self.cursor));
+                    self.enter_page(Page::Stats);
                     self.flow.page = PAGE_STATS;
                     return true;
                 }
@@ -6366,9 +6463,17 @@ impl FrontEnd {
             // page-open keyframe runtime itself (`Script_RunFrame` 0x220580 + splines 0x2208b8/
             // 0x220bc8) is unported — menus render final states only (uncited-audit gap M1).
             Page::Stats => match a {
+                // [M the manager's 0x5f pop 0x21c858:582-602 — the Stats page was opened by the
+                // results page's 0x5e 0x44 lparam 0 [M 0x208e78:225-230], so the pop re-opens
+                // Results with its saved cursor. P_NFSTATS 0x209938 arms no keys [M :31-124], so
+                // an empty stack does nothing (the old hard-coded Results hop bypassed the
+                // stack).]
                 Action::Back => {
-                    self.page = Page::Results;
-                    self.flow.page = PAGE_RESULTS;
+                    if let Some((p, cur)) = self.back_stack.pop() {
+                        self.enter_page(p);
+                        self.cursor = cur;
+                        self.flow.page = p.id();
+                    }
                     return true;
                 }
                 Action::Up | Action::Down | Action::Confirm | Action::Side | Action::Left | Action::Right => {}
@@ -6848,7 +6953,24 @@ impl FrontEnd {
             // arm is the hint's continue): the win page while the campaign just ended, else the
             // mission list [M 0x209670:46-57].
             Page::NfBonus => match a {
-                Action::Up | Action::Down | Action::Side | Action::Left | Action::Right | Action::Extra => {}
+                // [M P_NFBONUS 0x209670:60-68 — msg 0x5d runs 0x44 0x4000002b lparam 0 and 0x5e
+                // runs 0x44 0x40000037 lparam 0; both push the Bonus onto the manager's stack
+                // [M 0x21c858:262-274], so Back on the Dossier/Stats returns here.]
+                Action::Side if !self.results_box => {
+                    self.back_stack.push((Page::NfBonus, self.cursor));
+                    self.enter_page(Page::Dossier);
+                    self.flow.page = PAGE_DOSSIER;
+                    self.cursor = 0;   // the wheel resets on open [M 0x216de0:9-16]
+                    return true;
+                }
+                Action::Extra if !self.results_box => {
+                    self.back_stack.push((Page::NfBonus, self.cursor));
+                    self.enter_page(Page::Stats);
+                    self.flow.page = PAGE_STATS;
+                    return true;
+                }
+                Action::Side | Action::Extra => {}
+                Action::Up | Action::Down | Action::Left | Action::Right => {}
                 Action::Confirm | Action::Back => {
                     if self.just_completed {
                         self.win_enter();

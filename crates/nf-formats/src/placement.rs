@@ -82,6 +82,62 @@ pub fn object_matrix(rot: [f32; 3], trans: [f32; 3]) -> [[f32; 4]; 4] {
     ]
 }
 
+/// The placement classes whose creator builds the object's matrix with `View_RotTransMatrix`
+/// 0x1e5168 (the Y·Z·X composition), i.e. every `parsemap_create_dynamic_objects` 0x1d04f0 case
+/// whose creator reaches `control_create_object` 0x1344e0 with the quaternion arg = 0 — and all
+/// 91 `control_create_object` call sites in ACTION.ELF pass a literal 0 (the `Quat_QuatToMat`
+/// arm has no live caller), so the matrix is always `View_RotTransMatrix(obj+0x50, obj+0x30,
+/// obj+0x90)` [M 0x1344e0:26-29]. Per-case evidence (creator → CCO(0)):
+/// 0x20 `Break_Create` 0x12c230:12; 0x21 `Ripples_Create` 0x1acc90:14; 0x22 `Ladder_Create`
+/// 0x1966c0:11; 0x27 `GT_Create` 0x17ffa0:69-71 (via `Control_CreateObjEx` 0x1343c8, which
+/// forwards 0); 0x28 `Sensor_Create` 0x1af010:54; 0x29 `Switch_Create` 0x1adcc0:15; 0x2b
+/// `LeafGen_Create` 0x1acbd0:11; 0x2c `Lightning_Create` 0x18cde8:16; 0x2e `Lock_Create`
+/// 0x1ae1f8:17 (the pre-spline seed — swing/sliding doors and framed locks overwrite obj+0x90
+/// from `Spline_Interp` path frames afterwards [M 0x135440:53-58, 0x136100:83-91]); 0x2f
+/// `Copter_Create` 0x17d340:46; 0x30 `Monitor_Create` 0x1b08b0:12; 0x31 `FuseBox_Create`
+/// 0x1b0448:12; 0x32 `RainBox_Create` 0x18d840:12; 0x33 `Hint_Create` 0x1b3248:26; 0x35
+/// `PCQWorm_Create` 0x1b07a8:12-13; 0x36 `Sub_Create` 0x1ad6c0:17-18; 0x37 `MiniSub_Create`
+/// 0x182130:13-14; 0x38 `Create_SpaceLaser` 0x1aa8b8:13-14; 0x39 `Create_SpaceMissile`
+/// 0x1a9ef0:14-15; 0x3a `Grapple_Create` 0x198298:11; 0x3b `DynamicObject_Create` 0x18dbf8:13;
+/// 0x3e `Wire_Create` 0x1981d8:13; 0x3f `CreepWall_Create` 0x196fc8:12; 0x4a `Apocalypse_Create`
+/// 0x18dcc0:14; 0x71 `rotor_init` 0x18f4b8:13; 0xd2 `Shooter_Create` 0x17d030:10; 0xd4
+/// `Cloud_Create` 0x18d620:13; 0xd5 `OneSided_Create` 0x1e7ce8:9; 0xd8 `RB_Create` 0x1d6bf0:42;
+/// 0xd9 `SP_CreateScriptPlayer` 0x1db9a8:19; 0xdb `Door_Create` 0x136100:21 (pre-spline seed);
+/// 0xdc/0xe8/0xea-0xef/0xf4 `Trigger_Create` 0x1b1720:52; 0xde `Searchlight_Create` 0x1cb4f8:25;
+/// 0xe0 `Creature_Create` 0x134ab8:55-56; 0xe1 `Destroy_Create` 0x12c318:16; 0xe2 `SS_Create`
+/// 0x1a9c58:16; 0xe3 `Flicker_Create` 0x1acb00:43; 0xe4 `Hurt_Create` 0x17e870:17; 0xe7
+/// `ThirdCam_Create` 0x1bc510:11; 0xf0 `Pickup_Create` 0x18dda0:108-113 (the `Mat_Copy`
+/// alternate is dead — the dispatcher passes MATRIX* 0 [M 0x1d04f0:459-462]); 0xf3
+/// `Env_Tree_Create` 0x17c200:13; 0xf5/0xf8 `Drone_AIVolume_Create` 0x1376c0:52-64; 0xf9
+/// `SoundTrigger_Create` 0x1b2628:41; 0xfa `ThirdIcon_Create` 0x197070:16; 0xfb
+/// `MusicTrigger_Create` 0x1b30e0:13; 0xfc `Corona_Create` 0x18da00:11; 0xfd `CamSubject_Create`
+/// 0x1bc5d8:11; 0xfe `Mine_Create` 0x17ce28:16.
+///
+/// The classes NOT in this set, and why:
+/// - `creates_cel` rows (0x8000) never reach the dispatcher: `parsemap_block_map_data_static`
+///   0x1d1998 stores the vectors raw and `parseentity_transform_bounding_box` 0x1d0fb0:28-29
+///   builds the world bbox with `RotMatrix` + `Mat_SetTrans` — the X·Y·Z composition.
+/// - 0x26 `MP_RegisterMPObject` 0x185990:64-65 builds with `RotMatrix` + `Mat_SetTrans`.
+/// - 0x2a `View_AddSkyObj` 0x1e79a0 stores the vectors; `View_DrawSky` 0x1e5ad0:184,194 applies
+///   `RotMatrix` at draw time.
+/// - 0x0f `Drone_Create` 0x136be0 / 0xf1 `DroneSpawner_Create` 0x1378d0 pass NULL pos/rot to
+///   CCO — the object matrix is the identity; the placement vectors live in the ext.
+/// - 0x34 `GunImp_Create` 0x131f20:66-69 and 0xf2 (the dispatcher builds the emitter matrix
+///   inline, 0x1d04f0:474-478) use `Quat_QuatToMat` 0x1e3e80 on the placement's +0x24 quaternion.
+/// - 0x24/0x25/0x4e/0xe5/0xe6/0xe9/0xdf build no object matrix at all; 0xdf `Env_Create`
+///   0x17b968:98-105 uses `RotMatrix` only to derive the wind direction vector.
+/// Unlisted ids fall to the dispatcher's default (no creator, 0x1d04f0:544-545).
+pub fn object_matrix_for_class(class: u32, creates_cel: bool, rot: [f32; 3], trans: [f32; 3]) -> [[f32; 4]; 4] {
+    let view = !creates_cel
+        && matches!(class,
+            0x20 | 0x21 | 0x22 | 0x27 | 0x28 | 0x29 | 0x2b | 0x2c | 0x2e | 0x2f | 0x30 | 0x31
+            | 0x32 | 0x33 | 0x35 | 0x36 | 0x37 | 0x38 | 0x39 | 0x3a | 0x3b | 0x3e | 0x3f | 0x41
+            | 0x4a | 0x71 | 0xd2 | 0xd4 | 0xd5 | 0xd8 | 0xd9 | 0xdb | 0xdc | 0xde | 0xe0 | 0xe1
+            | 0xe2 | 0xe3 | 0xe4 | 0xe7 | 0xe8 | 0xea..=0xef | 0xf0 | 0xf3 | 0xf4 | 0xf5 | 0xf8
+            | 0xf9 | 0xfa | 0xfb | 0xfc | 0xfd | 0xfe);
+    if view { view_rot_trans_matrix(rot, trans) } else { object_matrix(rot, trans) }
+}
+
 pub fn transform(m: &[[f32; 4]; 4], v: [f32; 3]) -> [f32; 3] {
     [0, 1, 2].map(|c| v[0] * m[0][c] + v[1] * m[1][c] + v[2] * m[2][c] + m[3][c])
 }
@@ -174,5 +230,79 @@ mod tests {
         // Only z = π/2: x → (cz, sz, ..) = y.
         let m = object_matrix([0.0, 0.0, h], [0.0; 3]);
         assert!(close(transform(&m, [1.0, 0.0, 0.0]), [0.0, 1.0, 0.0]));
+    }
+
+    /// `View_RotTransMatrix` 0x1e5168 composes Ry·Rz·Rx (column reading of the four 16-byte
+    /// blocks); `RotMatrix` 0x1e2368 composes Rx·Ry·Rz. Same PS2Sinf3 values, different product
+    /// grouping — the test rebuilds both closed forms from the game's own sinf and pins the
+    /// port's two builders entry-for-entry, then checks the class predicate.
+    #[test]
+    fn view_rows_match_the_decompose_and_the_class_predicate_pins_the_builders() {
+        use crate::ps2float as pf;
+        let fadd = |a, b| pf::add_noguard(a, b, true);
+        let fsub = |a: f32, b: f32| pf::add_noguard(a, -b, true);
+        let mul = pf::mul;
+        let sinf = crate::anim::sinf;
+        let half = f32::from_bits(0x3fc9_0fdb);
+        let closed = |rot: [f32; 3]| {
+            let (x, y, z) = (rot[0], rot[1], rot[2]);
+            // The two PS2Sinf3 calls, verbatim argument lists [M 0x1e5168:33-36 = 0x1e2368:28-31].
+            let (cx, sx, cy) = (sinf(fadd(x, half)), sinf(x), sinf(fadd(y, half)));
+            let (cz, sz, sy) = (sinf(fadd(z, half)), sinf(z), sinf(y));
+            // View_RotTransMatrix's twelve stores [M 0x1e5168:37-48], read as rows.
+            let view = [
+                [mul(cy, cz), sz, -(mul(cz, sy))],
+                [fsub(mul(sx, sy), mul(mul(cx, cy), sz)), mul(cx, cz), fadd(mul(cy, sx), mul(mul(cx, sy), sz))],
+                [fadd(mul(cx, sy), mul(mul(cy, sx), sz)), -(mul(cz, sx)), fsub(mul(cx, cy), mul(mul(sx, sy), sz))],
+            ];
+            // RotMatrix's nine stores [M 0x1e2368:32-40], read as rows.
+            let rot = [
+                [mul(cy, cz), fadd(mul(mul(sx, sy), cz), mul(cx, sz)), fadd(mul(mul(cx, -sy), cz), mul(sx, sz))],
+                [mul(cy, -sz), fsub(mul(cx, cz), mul(mul(sx, sy), sz)), fsub(mul(sx, cz), mul(mul(cx, -sy), sz))],
+                [sy, mul(-sx, cy), mul(cx, cy)],
+            ];
+            (view, rot)
+        };
+        // A pitched + yawed + rolled rotation — the rows where the two builders disagree.
+        let r = [0.37, 1.1, -0.53];
+        let (view, rot) = closed(r);
+        for i in 0..3 { for j in 0..3 {
+            assert_eq!(view_rot_trans_matrix(r, [0.0; 3])[i][j].to_bits(), view[i][j].to_bits(), "view[{i}][{j}]");
+            assert_eq!(object_matrix(r, [0.0; 3])[i][j].to_bits(), rot[i][j].to_bits(), "rot[{i}][{j}]");
+        } }
+        // And the two really do differ for that rotation (else the switch would be moot).
+        assert!(view.iter().zip(&rot).any(|(a, b)| a.iter().zip(b).any(|(x, y)| x.to_bits() != y.to_bits())));
+        // The class predicate [M the per-case catalog on object_matrix_for_class]: dynamic
+        // dispatcher cases with a live matrix build → View; the static path, the pinned
+        // RotMatrix exceptions, the quaternion classes and the unlisted ids → RotMatrix.
+        for class in [0x20, 0x22, 0x28, 0x29, 0x2e, 0x31, 0x3a, 0x3b, 0x71, 0xd2, 0xd4, 0xd9, 0xdb, 0xdc, 0xe2, 0xea, 0xf0, 0xfc, 0xfe] {
+            assert_eq!(object_matrix_for_class(class, false, r, [1.0, 2.0, 3.0]), view_rot_trans_matrix(r, [1.0, 2.0, 3.0]), "{class:#x} must use View_RotTransMatrix");
+        }
+        for (class, cel) in [(0x19, true), (0x47, true), (0x0f, false), (0x26, false), (0x2a, false), (0x34, false), (0xf2, false), (0xf1, false), (0x24, false), (0xdf, false), (0xf6, false), (0x99, false)] {
+            assert_eq!(object_matrix_for_class(class, cel, r, [1.0, 2.0, 3.0]), object_matrix(r, [1.0, 2.0, 3.0]), "{class:#x} (cel={cel}) must use RotMatrix");
+        }
+        // A creates_cel row of a View class never reaches the dispatcher: the static path wins.
+        assert_eq!(object_matrix_for_class(0xd9, true, r, [0.0; 3]), object_matrix(r, [0.0; 3]));
+    }
+
+    /// Yaw-only rows (rx = rz = 0): the builders agree to the PS2Sinf(π/2) = 1.0000001 ulp —
+    /// bit-equal on every entry except [0][2] and [2][0], where View carries one cosine factor
+    /// and RotMatrix two (cx·cz = 1.0000002), and [1][0], which is +0.0 under View and −0.0
+    /// under RotMatrix (cy·−sz vs the subtrahend form). Transformed geometry moves ≤ 10⁻⁷ per
+    /// unit — the scale the vent-grates swap already accepted battery-wide.
+    #[test]
+    fn yaw_only_rows_agree_between_the_builders_to_the_cosine_ulp() {
+        let r = [0.0, 0.8, 0.0];
+        let (v, o) = (view_rot_trans_matrix(r, [1.0, 2.0, 3.0]), object_matrix(r, [1.0, 2.0, 3.0]));
+        for (i, j) in [(0, 0), (0, 1), (1, 1), (1, 2), (2, 1), (2, 2), (3, 0), (3, 1), (3, 2)] {
+            assert_eq!(v[i][j].to_bits(), o[i][j].to_bits(), "[{i}][{j}] must be bit-equal for yaw-only rows");
+        }
+        assert_eq!(v[1][0].to_bits(), 0); // +0.0 — the subtrahend form
+        assert_eq!(o[1][0].to_bits(), 0x8000_0000); // −0.0 — cy·−sz
+        assert!(((v[0][2] - o[0][2]).abs() as f64) < 2.0e-6 && ((v[2][0] - o[2][0]).abs() as f64) < 2.0e-6);
+        for p in [[1.0, 0.5, -0.25], [10.0, -3.0, 2.0]] {
+            let (a, b) = (transform(&v, p), transform(&o, p));
+            for k in 0..3 { assert!((a[k] - b[k]).abs() < 2.0e-6, "point {p:?} axis {k}"); }
+        }
     }
 }

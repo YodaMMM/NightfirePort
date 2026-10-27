@@ -2605,6 +2605,12 @@ struct App {
     fe_clock: f32,
     /// The sim reported the mission's own end this frame (see `Drones::mission_end`).
     pending_mission_end: bool,
+    /// mission-results-page: the finished mission's progress layer, snapshotted at
+    /// `demo_results` — the results sub-pages' data source after the sim is gone (the game's
+    /// PlrMissionStats/ScoringTable are BSS globals the pages read until the next Mission_Init
+    /// [M 0x209938:36, 0x182270:65]). Consumed by the `menu_after` hook through
+    /// `FrontEnd::results_subpages_enter`.
+    results_progress: Option<nf_game::progress::Progress>,
     /// mp-match-end: the sim's MP machine reached the debriefing handover (`MP_Update` 0x184bd0
     /// case 4 → `MpGame::request_debriefing`): the finished match's debriefing board and its
     /// settings (`Sim::take_mp_debrief_request`), drained by `App::mp_results` after the tick.
@@ -3029,6 +3035,21 @@ impl App {
 
     /// After a menu action (key, click or hover): the page's sounds, the level it requested and its close.
     fn menu_after(&mut self) {
+        // mission-results-page: the results sub-pages' 0x4c builds — the game delivers the 0x44
+        // page change to the opened page, whose enter arm runs against the progress layer (the
+        // Stats page's GetScore(0) [M P_NFSTATS 0x209938:31-38]; the bonus page's
+        // Menu_GetLevelBonuses + the DAT_002e1c2c text gate [M P_NFBONUS 0x209670:14-18]). The
+        // port builds here, after the action, against the mission-end snapshot.
+        if self.results_progress.is_some() {
+            let sub = matches!(self.fe.as_ref().map(|fe| fe.page),
+                Some(menu::Page::Stats) | Some(menu::Page::NfBonus));
+            if sub {
+                let lang = self.lang.clone();
+                if let (Some(fe), Some(p)) = (self.fe.as_mut(), self.results_progress.as_mut()) {
+                    fe.results_subpages_enter(p, lang.as_ref());
+                }
+            }
+        }
         // profile-session: every action may move the session (a create, a codename load, a
         // results save) — keep the standing copy current so any manager drop hands it on.
         self.stash_profile_session();
@@ -3772,7 +3793,13 @@ impl App {
         // game's own commit runs at the page enter — the data lands before any page can read it).
         fe.flow.stack = vec![menu::ST_RUNNER];
         fe.flow.current_level = self.level_code;
-        fe.mission_ended(if complete { menu::Outcome::Complete } else { menu::Outcome::Failed }, menu::Stats::default());
+        // mission-results-page: the results data rides the mission's tracked tallies — the game's
+        // results page and its Stats sub-page read the live `PlrMissionStats` through GetScore's
+        // row refill [M 0x1984b0:66-84; P_NFRESULTS 0x208e78:77, P_NFSTATS 0x209938:36]. The old
+        // `menu::Stats::default()` zeroed the mission-end read.
+        let end_stats = self.scene.sim.as_ref().map(|s| mission_end_stats(&s.drones.progress));
+        fe.mission_ended(if complete { menu::Outcome::Complete } else { menu::Outcome::Failed },
+            end_stats.unwrap_or_default());
         // The completed page's enter runs against the live progress layer [M P_NFRESULTS 0x208e78
         // :77 GetScore(0) + :169 Menu_SetLevelBonus] — the fields the overlay draws
         // (front-end-chain). GameState+0x48 is BaseMap [M 0x182c60:68-70's clamp].
@@ -3791,6 +3818,13 @@ impl App {
                     // merge the sim's tally into the profile BEFORE the save prompt can run.
                     fe.sync_profile_progress(&sim.drones.progress);
                 }
+                // mission-results-page: the sub-pages' data source. The sim dies with the
+                // front-end load, but the game's PlrMissionStats/ScoringTable are BSS globals
+                // the pages keep reading (the Stats page's own GetScore(0) [M 0x209938:36]; the
+                // bonus page's Menu_GetLevelBonuses [M 0x209670:14]) until the next Mission_Init
+                // wipes them [M 0x182270:65]. The snapshot stands in; the menu_after hook builds
+                // the page the action opened through `FrontEnd::results_subpages_enter`.
+                self.results_progress = Some(sim.drones.progress.clone());
             }
         }
         self.fe = Some(fe);
@@ -5982,6 +6016,7 @@ impl App {
             menu_clock: 0.0,
             fe_clock: 0.0,
             pending_mission_end: false,
+            results_progress: None,
             pending_mp_debrief: None,
             force_channel: None,
             cam_prev: None,
@@ -6970,6 +7005,30 @@ fn pause_stats(sim: &scene::Sim) -> menu::Stats {
         surrendered: s.surrendered,
         bonus_pickups: s.bonus_pickups,
         ..menu::Stats::default()
+    }
+}
+
+/// The mission's tracked tallies as the results page's stats (mission-results-page). The game's
+/// results screen and its Stats sub-page read the SAME counters through `PlrStat_GetScore`'s row
+/// refill [M 0x1984b0:66-84 — row0 +0x20 bond moments, row1 +0x0C dispatched, row2 +0x10
+/// disabled, row3 +0x14 surrendered, row5 +0x04/+0x08 shots, row7 +0x30 the 1/100-s elapsed,
+/// row8 +0x24 bonus pickups]. The accuracy percentage is the row-5 ratio the game rounds
+/// [M 0x1984b0's shared ratio block — round(min/count × 100)], full marks with no shots
+/// [M :74-78 — row+0x8 = row+0x0 when fired == 0].
+pub fn mission_end_stats(p: &nf_game::progress::Progress) -> menu::Stats {
+    let s = p.stats();
+    menu::Stats {
+        shots_fired: s.shots_fired,
+        shots_hit: s.shots_hit_enemy,
+        accuracy_pct: if s.shots_fired > 0 {
+            (s.shots_hit_enemy as f32 / s.shots_fired as f32 * 100.0).round() as u32
+        } else { 100 },
+        time_s: s.elapsed / 100, // +0x30 counts 1/100 s [M 0x1995a0:10-13]
+        bond_moves: s.bond_moments,
+        dispatched: s.dispatched,
+        subdued: s.disabled,
+        surrendered: s.surrendered,
+        bonus_pickups: s.bonus_pickups,
     }
 }
 

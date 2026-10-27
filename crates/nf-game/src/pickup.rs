@@ -180,7 +180,9 @@ impl Pickup {
         // Y by `radius - |centre.y|` (that's for DROPPED pickups that fall to the floor; level-placed
         // pickups are already at the correct height). Lowering puts the sphere centre below the floor,
         // causing the LOS test in `touches` to fail [bug fix C-12].
-        let m = nf_formats::placement::object_matrix(rotation, translation);
+        // Pickup_Create builds obj+0x90 with CCO(0) → View_RotTransMatrix; the Mat_Copy
+        // alternate is dead from the dispatcher (MATRIX* 0) [M 0x18dda0:108-113, 0x1d04f0:459-462].
+        let m = nf_formats::placement::view_rot_trans_matrix(rotation, translation);
         let p = Pickup {
             kind: type_, weapon: id, rounds, model, bounds, m,
             start: translation, vel: [0.0; 3], state: 1, lifetime: 0,
@@ -218,7 +220,7 @@ impl Pickup {
         let model = w.model(base as usize);
         let bounds = *models.get(&model)?;
         let rounds = (w.clip_size(base as usize) as i16).wrapping_mul(2);
-        let m = nf_formats::placement::object_matrix(rotation, translation);
+        let m = nf_formats::placement::view_rot_trans_matrix(rotation, translation); // [M 0x18dda0:108 CCO(0)]
         // The create call's stack arguments [M 0x18f1b0 disasm: `sw v1(0xF5),0(sp)` 0x18f24c →
         // param 9 sound, `sw s5(1),8(sp)` → param 10 rest, `sw s6(3),16(sp)` 0x18f25c → param 11,
         // `sw zero,24(sp)` → param 12; `Pickup_Create` 0x18dda0 stores param 11 → +0x2C (the

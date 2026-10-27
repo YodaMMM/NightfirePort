@@ -27,53 +27,69 @@ fn the_dossier_wheels_rows_open_the_three_pages() {
         fe.page = Page::Dossier;
         fe.cursor = row;
         assert!(fe.action(Action::Confirm), "row {row} confirm opens its page");
-        // G-048(1): both wheel arms ride Menu_ChangePageCloseIris [M C_SBDOSSIER 0x216eb0:20/:26 →
+        // Rows 2/3 (Gadgets/Weapons) ride Menu_ChangePageCloseIris [M C_SBDOSSIER 0x216eb0:20/:26 →
         // 0x202190:8-9 — the 0x44 lands 10 ticks out and its processing lifts the input block
-        // 0x21c858:315]. The old immediate-flip assert pinned the pre-G-048 port choice; fixed
-        // with the address (fe-gaps-g048-2).
+        // 0x21c858:315]; row 1 (Rewards) is the handler's DIRECT Manager_SendMessage(0x44, page, 0)
+        // [M 0x216eb0:15-16, :29-31 — immediate]. The old all-rows-CloseIris comment pinned the
+        // pre-dossier-navigation reading; fixed with the address.
         for _ in 0..menu::CLOSE_IRIS_PAGE_TICKS + 2 { fe.tick(); }
         assert_eq!(fe.page, want, "the wheel's row {row} opens its page [M 0x216eb0:12-31, 0x202190:8-9]");
         assert_eq!(fe.page.id(), id);
         assert_eq!(fe.cursor, 0, "the page's init msg 0x2e (0,0) resets the scroll [D page data]");
-        // Back returns to the Dossier (the Records page's own mapping — the sub-pages' Back/0x5f
-        // pops are immediate [M], not CloseIris callers).
+        // Back pops the manager's stack to the Dossier with the wheel on the row that opened
+        // the page [M 0x21c858:582-602 — the pop restores the saved {page, cursor}; the wheel's
+        // 0x44 carried lparam 0, 0x216eb0:20/:26/:31].
         assert!(fe.action(Action::Back));
         assert_eq!(fe.page, Page::Dossier);
+        assert_eq!(fe.cursor, row, "the wheel's saved row rode the pop [M 0x21c858:598-600]");
     }
 }
 
-// --- the scroll: one step per press. fe-audit: the old "clamp, +0x144 never set" reading was
-// inverted — Scroll_Init sets the wrap flag +0x144 = 1 [M 0x2214f0:102-103] and only msg 0x69 clears
-// it [M Scroll_SendMessage 0x221810:136-138]. Whether these three lists are M_SCROLLs (and so wrap)
-// is not checked: their end behaviour is [S unverified] and out of pass/fail here. ---
+// --- the scroll: one step per press. The three lists WRAP at both ends: Scroll_Update
+// 0x2221b20 wraps while the scroll's +0x144 flag stands, Scroll_Init sets it at create from the
+// control record (disasm 0x2217b8-0x2217cc: `lw +0x10` != 0xff — 0x1000017a/0x1000016f/0x10000173
+// carry d1 = 0, f1 = 25, f2 = 2-3 [D the parsed records]; their last bound MSG's a-parameter is
+// 0 or 4, also != 0xff), and msg 0x69 — the only clear [M 0x221810:136-139] — appears in none of
+// the Dossier family's streams [D the parsed MSG tags]. (The init field's exact mapping is the
+// live check in the report; both readings agree here.) ---
 
 #[test]
 fn the_three_pages_scroll_one_step_and_their_own_row_counts() {
     let mut fe = FrontEnd::new();
     fe.page = Page::Rewards;
     assert_eq!(fe.rows(), 12, "the Rewards list is the 12 sp_level rows [M P_DSREWARDS 0x2172c8:11-13]");
-    let _ = fe.action(Action::Up); // the list's end [S unverified]
+    fe.action(Action::Up);
+    assert_eq!(fe.cursor, 11, "Up at the first row wraps to the last [M 0x2221b20:202-210]");
     fe.cursor = 0;
     assert!(fe.action(Action::Down) && fe.cursor == 1);
     fe.cursor = 11;
-    let _ = fe.action(Action::Down); // the list's end [S unverified]
+    fe.action(Action::Down);
+    assert_eq!(fe.cursor, 0, "Down at the last row wraps to the first [M 0x2221b20:186-194]");
     fe.cursor = 11;
     assert!(fe.action(Action::Up) && fe.cursor == 10);
 
     fe.page = Page::Gadgets;
     fe.cursor = 0; // the page's own init msg 0x2e (0,0) [D page data]
     assert_eq!(fe.rows(), 14, "the gadgets wheel's range is [0, 0xd] [M C_SBDSGTSCROLL 0x20bcc0:64-67]");
-    let _ = fe.action(Action::Up); // the list's end [S unverified]
+    fe.action(Action::Up);
+    assert_eq!(fe.cursor, 13, "Up wraps [M 0x2221b20:202-210]");
     fe.cursor = 13;
-    let _ = fe.action(Action::Down); // the list's end [S unverified]
-    assert!(fe.action(Action::Back) && fe.page == Page::Dossier);
+    fe.action(Action::Down);
+    assert_eq!(fe.cursor, 0, "Down wraps [M 0x2221b20:186-194]");
+    // With an empty stack (this page was entered directly, no opener pushed) the 0x5f pops
+    // nothing and msg 99 reaches no arm [M 0x21c858:604-610 + C_SBDSGTSCROLL 0x20bcc0's
+    // 0x49/0x54-only arms] — the page stays. The pushed pop is pinned in
+    // the_dossier_wheels_rows_open_the_three_pages / the_dossier_family_walks_back….
+    assert!(fe.action(Action::Back));
+    assert_eq!(fe.page, Page::Gadgets, "the empty-stack 0x5f does nothing [M 0x21c858:604-610]");
 
     fe.page = Page::Weapons;
     fe.cursor = 0;
     assert_eq!(fe.rows(), 27, "the weapons wheel's range is [0, 0x1a] [M C_SBDSWPSCROLL 0x20bab0:64-68]");
     assert!(!fe.action(Action::Confirm), "Confirm does nothing — no handler arm [M 0x20bab0]");
     fe.cursor = 26;
-    let _ = fe.action(Action::Down); // the list's end [S unverified]
+    fe.action(Action::Down);
+    assert_eq!(fe.cursor, 0, "Down wraps [M 0x2221b20:186-194]");
     // Sister (headless): the wheel rows bind the tables' +0x04 labels.
     assert_eq!(menu::GADGETS_TABLE.len(), 14);
     assert_eq!(menu::WEAPONS_TABLE.len(), 27);
