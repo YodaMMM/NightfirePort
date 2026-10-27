@@ -16465,21 +16465,29 @@ fn segment_hits_sphere(a: V3, b: V3, c: V3, r: f32) -> bool {
                     _ => {}
                 }
             }
-            // Doors are solid through their object's collision mesh at `obj+0x90` (`Collide_PickObj` walks the
-            // cel-linked objects whatever moves them); the pose this tick's `Door_Update` writes lands in the
-            // same set_dynamic now (the game's Collide_Update is post-walk [M 0x1336f8:238]). Id: high bit 40 + the door index.
-            // capsule-cull-and-los-masks-4/5: the solidity rides the door's own state, the way the game's
-            // zone rule does — `Door_IsClosed` 0x1367b0: a kind-1 door always reads closed, a grouped door
-            // reads `DoorGroupsStates[g] == 2`, the rest read `obj+0xF4 == CLOSED` exactly — OPEN/OPENING/
-            // CLOSING leaves do not block [M door.rs `Door::is_closed`; the zone consumer 0x135738/0x1336f8].
-            // The port posed every glist door's mesh into the collision set unconditionally, so the OPEN
-            // Secure Room door #10's leaf (its natural pose = the 5x6 panel at x 155.003, z -118..-123
-            // [D the door's keys]) blocked walkreal_07000008 at the doorway — Bond froze at
-            // (154.50, 43.10..43.42, -120.64) for 1600+ ticks on that face (docs/reports/
-            // capsule-cull-and-los-masks-4.md items 4-6). The game's level geography requires walking
-            // through the open doorway, and its only state-gated solidity mechanism is this rule.
+            // Doors are solid through their object's collision mesh at `obj+0x90`, whatever the door's
+            // state — the movement-collision path is STATE-BLIND: `Door_Interp` 0x135738 writes the live
+            // pose to obj+0x90 and sets obj+0xFA bit 0x20 every tick, `control_movement_object_handler`
+            // 0x1336f8:147-236 relinks every moved object into the cel chain by position alone
+            // (`control_handle_cel_change` 0x133288 — no state read), and `Collide_PickObj` 0x1eae80
+            // masks by hittest kind + obj flags only — never obj+0xF4/DoorGroupsStates. The state rule
+            // `Door_IsClosed` 0x1367b0 (kind 1 always closed; grouped → DoorGroupsStates[g]==2; else
+            // obj+0xF4==CLOSED) has exactly ONE caller in the decompile: `Vision_Recurse` 0x1e82e0:51
+            // (← `Vision_Portal_Recurse` 0x1e86e8:32 ← `View_CaptureScene` 0x1e6df0:25) — the RENDER
+            // visibility recursion through door portals, not movement collision. The s/door-state-collision
+            // filter (leaves skipped unless is_closed) was that render rule misapplied to solidity: it
+            // deleted OPEN leaves the game keeps solid, and the full suite went red — probe_07_route
+            // (Bond hovers over the 1.1 doorway step at (94.17,44.14,-47.02) once the OPEN kind-0 hall
+            // door leaf leaves the collide set; the leaf IS the sill bridge), walkreal_07000001_live
+            // (the spawn→exit contact), walkreal_07000014_live (the east duct route), ai_live
+            // (guard_takes_cover — cover points that use a door leaf as cover). With the unconditional
+            // extend all four are green AND walkreal_07000008_live is 4/4 (the secure-room walk
+            // included; its door #10/122's open pose swings clear along +x at z −121.33 [D the keys:
+            // closed −90° at key1, open ends 0°/180°], so the always-solid open leaf never blocks the
+            // doorway — the passability comes from the pose, the same mechanism as the SS review below).
+            // Id: high bit 40 + the door index.
             parts.extend(drones.doors.list.iter().enumerate()
-                .filter(|(_, x)| x.glist != 0 && x.is_closed(&drones.doors.group_states))
+                .filter(|(_, x)| x.glist != 0)
                 .map(|(k, x)| (0x100_0000_0000 | k as u64, x.glist, x.matrix)));
             // The SimpleScripts too (fix-party-mission item 7): the safe door (ch 136) and the doorway
             // bolt (ch 137) are solid at their posed matrix, like the doors. Id: bit 41 + the ss index.
