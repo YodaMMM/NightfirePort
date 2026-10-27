@@ -13111,11 +13111,26 @@ fn segment_hits_sphere(a: V3, b: V3, c: V3, r: f32) -> bool {
                 let dir = [centre[0] - pos[0], centre[1] - pos[1], centre[2] - pos[2]];
                 let mag = (dir[0] * dir[0] + dir[1] * dir[1] + dir[2] * dir[2]).sqrt();
                 let vel = if mag > 0.0 { [dir[0] / mag, dir[1] / mag, dir[2] / mag] } else { [0.0, 1.0, 0.0] };
+                // The contact point stand-in [S]: the body's surface point toward the blast,
+                // offset by a fixed tangent — an axis-aligned point makes r ∥ impulse and the
+                // game's r×impulse torque would read zero for every sphere-sphere blast, while
+                // the game's barrels visibly tip (the explosion is a gas volume, not a point:
+                // its contact is off-axis). The tangent is deterministic per body (no RNG).
+                let tangent = {
+                    let c = [vel[1] * 0.0 - vel[2] * 1.0, vel[2] * 0.0 - vel[0] * 0.0, vel[0] * 1.0 - vel[1] * 0.0];
+                    let m = (c[0] * c[0] + c[1] * c[1] + c[2] * c[2]).sqrt();
+                    if m > 0.0 { [c[0] / m * rbo.st.s13c * 0.5, c[1] / m * rbo.st.s13c * 0.5, c[2] / m * rbo.st.s13c * 0.5] } else { [0.0; 3] }
+                };
+                let point = [
+                    centre[0] + vel[0] * rbo.st.s13c + tangent[0],
+                    centre[1] + vel[1] * rbo.st.s13c + tangent[1],
+                    centre[2] + vel[2] * rbo.st.s13c + tangent[2],
+                ];
                 rbo.hits.push(crate::rigid_body::RbHit {
                     scale: falloff,
                     normal: [-vel[0], -vel[1], -vel[2]],
                     vel,
-                    point: [centre[0] - vel[0] * rbo.st.s13c, centre[1] - vel[1] * rbo.st.s13c, centre[2] - vel[2] * rbo.st.s13c],
+                    point,
                     other_class: 5,
                     other_pos: pos,
                 });
