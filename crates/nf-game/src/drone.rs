@@ -14557,6 +14557,13 @@ fn segment_hits_sphere(a: V3, b: V3, c: V3, r: f32) -> bool {
             self.props.gunimps[gi].active = false;
             // gunimp-beam-lifetime: leaving the gun clears the beam with it.
             self.props.gunimps[gi].beam = None;
+            // and the looped fire sound dies with the mount [M GunImp_Deactivate 0x132c18:62-63 —
+            // `Sound_Stop(impl+0x98)`, the handle zeroed].
+            if self.props.gunimps[gi].fire_handle != 0 {
+                let h = self.props.gunimps[gi].fire_handle;
+                self.audio.stop(h);
+                self.props.gunimps[gi].fire_handle = 0;
+            }
             bond.vel = [0.0; 3];
             return;
         }
@@ -14579,8 +14586,11 @@ fn segment_hits_sphere(a: V3, b: V3, c: V3, r: f32) -> bool {
             // the 0.15 ease toward the smoothed mirrors [M 0x1320d8:136-161]
             g.pitch_s += (g.pitch - g.pitch_s) * 0.15;
             g.yaw_s += (g.yaw - g.yaw_s) * 0.15;
-            // the cooldown drains every tick regardless of state [M 0x1320d8:107-112]
-            g.cooldown -= 1.0;
+            // the heat and cooldown drains [M 0x1320d8:100-112]: each drains 1.0 per tick while
+            // positive, clamped at 0; the heat's floor clears the hot byte (the overheat
+            // recovers ~200 ticks after the last shot).
+            if g.heat > 0.0 { g.heat -= 1.0; } else { g.heat = 0.0; g.hot = false; }
+            g.cooldown = if g.cooldown > 0.0 { g.cooldown - 1.0 } else { 0.0 };
             // The player carry [M 0x1320d8:175-194]: the pose rides the smoothed turret (Bond's
             // yaw = the turret body's yaw, his position the seat through base·RotY, his view
             // pitch −pitch_s·0.5); the velocity zeroes — the game's disabled player runs no walk
@@ -14591,7 +14601,26 @@ fn segment_hits_sphere(a: V3, b: V3, c: V3, r: f32) -> bool {
             bond.pitch = pitch;
             bond.vel = [0.0; 3];
         }
-        if !fire || self.props.gunimps[gi].cooldown > 0.0 {
+        // The fire/stop block [M GunImp_Update 0x1320d8:247-278]: released or hot → the stop
+        // path — `Sound_Stop(ext+0x98)` + handle zero (the 0x61 arm adds its spin-down 0x5e6 at
+        // :262-264) — and RETURN (the port's per-shot `play3d` was the fire-audio stutter: a
+        // re-attack every cadence tick instead of the stored handle's loop [M :284-291]);
+        // pressed while the cooldown holds → return with the loop kept (:256-258).
+        if !fire || self.props.gunimps[gi].hot {
+            if self.props.gunimps[gi].fire_handle != 0 {
+                let h = self.props.gunimps[gi].fire_handle;
+                let w = crate::gunimp::TURRET_GUNS[(self.props.gunimps[gi].turret as usize).min(crate::gunimp::TURRET_GUNS.len() - 1)].weapon;
+                if w == 0x61 {
+                    let p = self.props.gunimps[gi].pos;
+                    self.audio.play3d(0x5e6, p, None);
+                }
+                self.audio.stop(h);
+                self.props.gunimps[gi].fire_handle = 0;
+            }
+            self.props.gunimps[gi].beam = None;
+            return;
+        }
+        if self.props.gunimps[gi].cooldown > 0.0 {
             // gunimp-beam-lifetime: the game's beam object is created and positioned per shot
             // (`GunImp_Update` 0x1320d8:394-407) and stops drawing with the fire state — the port must not
             // leave the last shot's quad hanging in the room after the trigger is released.
@@ -14602,10 +14631,33 @@ fn segment_hits_sphere(a: V3, b: V3, c: V3, r: f32) -> bool {
         {
             let g = &mut self.props.gunimps[gi];
             // the refill [M 0x1320d8:324 — `piVar2[0x25] = TurretGuns[+0x14]`], the heat [M
-            // 0x1320d8:292-298 — += 2.0 per laser shot, 200 saturates the hot byte]
+            // :292-298 — the 0x67/0x70 arm += 2.0 per shot, the 0x61 arm += 8.0 (:313); 200
+            // saturates the hot byte]
             g.cooldown = tg.interval;
-            g.heat += 2.0;
+            g.heat += if tg.weapon == 0x61 { 8.0 } else { 2.0 };
             if g.heat > 200.0 { g.hot = true; }
+        }
+        // The fire sounds [M 0x1320d8:281-334]: the 0x67/0x70 arm plays the TurretGuns entry's
+        // sound ONCE while no handle is stored (:284-291 — at the imp's own position +0x30; the
+        // loop holds across the cooldown ticks while the trigger stays down); the 0x61 arm plays
+        // the spin-up 0x5e4 and stores the 0x5e5 loop (:302-314); every other weapon plays its
+        // table sound per shot at the muzzle (:322, :332-334 — the loop arms carry 0xffff there).
+        let mut per_shot = 0xffffu32;
+        {
+            let g = &mut self.props.gunimps[gi];
+            match tg.weapon {
+                0x67 | 0x70 => {
+                    if g.fire_handle == 0 { g.fire_handle = self.audio.play3d(tg.sound as u32, g.pos, None); }
+                }
+                0x61 => {
+                    if g.fire_handle == 0 {
+                        self.audio.play3d(0x5e4, g.pos, None);
+                        g.fire_handle = self.audio.play3d(0x5e5, g.pos, None);
+                    }
+                    per_shot = tg.sound as u32;
+                }
+                _ => per_shot = tg.sound as u32,
+            }
         }
         let (muzzle, dir) = {
             let g = &self.props.gunimps[gi];
@@ -14636,9 +14688,11 @@ fn segment_hits_sphere(a: V3, b: V3, c: V3, r: f32) -> bool {
         // the quad along this pair; the sim side keeps the endpoints.
         let far = [muzzle[0] + dir[0] * 1000.0, muzzle[1] + dir[1] * 1000.0, muzzle[2] + dir[2] * 1000.0];
         self.props.gunimps[gi].beam = Some((muzzle, far));
-        // gunimp-sound: the TurretGuns entry's fire sound (+0x18 = 1307 for the laser [D ACTION.ELF @0x26f520])
-        // played at the muzzle through the 3-D path [M GunImp_Update 0x1320d8's Sound_Play3D on the shot].
-        self.audio.play3d(tg.sound as u32, muzzle, None);
+        // gunimp-sound: the non-loop arms' per-shot one-shot at the muzzle [M 0x1320d8:332-334];
+        // the laser's loop already plays (the arm above) and carries 0xffff here.
+        if per_shot != 0xffff {
+            self.audio.play3d(per_shot, muzzle, None);
+        }
         // gunimp-light: the same fire arm creates the muzzle light [M GunImp_Update 0x1320d8 —
         // Rand_FRand(1.0) then Light_Create(9.0, rand+1.5, muzzle, 0, 0xff, 0xff, 0, 0, 1, 0)]: radius
         // 9.0, intensity rand+1.5, rgb (0, 255, 255), channel 0, life 1 tick, kind 1 (muzzle flash).
