@@ -293,6 +293,7 @@ mod tests {
         p.gunimps.push(crate::gunimp::GunImp {
             placement: 0, pos: [0.0; 3], yaw_base: 0.0, pitch: 0.0, yaw: 0.0, pitch_s: 0.0, yaw_s: 0.0,
             active: true, heat: 0.0, cooldown: 0.0, hot: false, turret: 0xb, seat: 0.0, radius: 0.0,
+            beam: None,
             fire_handle: 0,
         });
         p.gunimp_player_has_died();
