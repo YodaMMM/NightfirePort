@@ -22,9 +22,17 @@
 //!
 //! Opt-in via `NF_ISO`.
 
+use nf_formats::iso9660::IsoImage;
 use nf_game::player::Input;
 
 fn iso() -> Option<String> { std::env::var("NF_ISO").ok() }
+
+fn read_archive(iso: &str, archive: &str) -> Vec<u8> {
+    let img = IsoImage::open(iso).expect("open iso");
+    let (entries, bin) = nf_formats::disc::files_bin_entries(&img).expect("FILES.BIN");
+    let fe = entries.iter().find(|e| e.name.eq_ignore_ascii_case(archive)).expect("archive");
+    img.read_bytes(bin.lba as u64 * 2048 + fe.offset as u64, fe.size as u64).expect("read")
+}
 
 /// The disc key endpoints of the two door leaves [D 06000833 streams 10/11].
 const LEAF_A_CLOSED: f32 = 27.7915;
@@ -106,4 +114,94 @@ fn the_door_leaves_have_draw_slots_at_the_placement() {
              static placement pair #116/#117 would read as a door that never opens [D decode; \
              Script_CreateEntity 0x1d8968's default arm binds the hash's gfx]");
     }
+}
+
+/// cutscene-door-dup: the game hides an object whose glist flags (celglist+0x44 = MapObject.flags)
+/// carry 0x40000 from the CUT-SCENE camera: `Control_SetGList` 0x134960 clears obj+0xF8's bit 0x10
+/// for such objects, `Script_CameraStart` 0x1d9140 renders ONLY camera 4 while a scene runs (its
+/// viewer+0x28 = 4 → object_display_mask 0x10 [M View_CaptureScene 0x1e6df0 / build_alloc_viewer
+/// 0x1c9378]), and both draw walks gate on `obj+0xF8 & object_display_mask` first (View_AddObjects
+/// 0x1e62d8:33, View_AddForcedObjects 0x1e5fb8:79). [D] 07000014: the control-room door
+/// placements at (27.788, 1.203, 49.671) ride the entity-params packs Door_Slide_3A/3B
+/// (block+8 = 0x00040000), so the placed doors vanish while the scene's leaf entities draw; the
+/// scene's leaf hashes 0x02000891/92 resolve to Elevator_Door_Slide_3A/3B (flags 0), which keep
+/// the bit. Without the rule the port drew the closed placed leaf behind the scene's mover — the
+/// "static copy" of the door.
+#[test]
+fn the_placed_door_hides_from_the_scene_camera_while_the_leaves_move() {
+    let Some(_) = iso() else { eprintln!("NF_ISO not set — skipping"); return };
+    std::env::set_var("NF_SILENT", "1");
+    let mut scene = nf_view::load(&iso().unwrap(), "07000014.bin", false).expect("load 07000014");
+    // The disc's own parse for the [D] assertions (the scene does not carry the level tree).
+    let data = read_archive(&iso().unwrap(), "07000014.bin");
+    let lv = nf_formats::level::Level::parse(&data).expect("parse 07000014");
+    let main = lv.main_map().expect("main map");
+    // The control-room pair and a pack-0x80000 door (placement #104's object, entity-params idx
+    // 103 [D]) that must stay visible on every camera.
+    let (mut pair, mut control) = (Vec::new(), Vec::new());
+    for (i, p) in lv.maps[main].placements.iter().enumerate() {
+        if p.flags & 0xff != 0xdb { continue; }
+        if (p.translation[2] - 49.6707).abs() < 0.01 && (p.translation[0] - 27.7878).abs() < 0.01 { pair.push(i); }
+        if (p.translation[2] - (-25.9752)).abs() < 0.01 { control.push(i); }
+    }
+    assert_eq!(pair.len(), 2, "the control-room door pair at (27.788, 1.203, 49.671) [D block 0x1A]");
+    let glist_flags = |pi: usize| {
+        let p = &lv.maps[main].placements[pi];
+        assert!(!p.by_hash(), "doors place by index [D]");
+        lv.maps[main].objects[p.index as usize].flags
+    };
+    for &pi in &pair {
+        assert!(glist_flags(pi) & 0x40000 != 0,
+            "the control-room pair's packs (Door_Slide_3A/3B) carry glist flag 0x40000 [D idx 116/117]");
+        assert!(scene.door_scene_hidden.contains(&pi), "the pair is scene-hidden [M Control_SetGList 0x134960]");
+    }
+    for &pi in &control {
+        assert!(glist_flags(pi) & 0x40000 == 0,
+            "the corridor door's pack (idx 103) carries 0x80000, not 0x40000 [D]");
+        assert!(!scene.door_scene_hidden.contains(&pi), "the corridor door draws on every camera");
+    }
+    // The pair's door slots.
+    let pair_slots: Vec<usize> = nf_game::door::door_placements(&lv.maps[main].placements).into_iter()
+        .enumerate().filter(|(_, pl)| pair.contains(pl)).map(|(di, _)| di).collect();
+    assert_eq!(pair_slots.len(), 2, "both pair leaves ride door slots");
+    let far = |m: [[f32; 4]; 4]| m[3][1] < -9999.0;
+    let (layout, _attrs) = scene.skin_layout();
+    let slot_pose = |scene: &nf_view::scene::Scene, di: usize| {
+        let (pal, _cols) = scene.skin_palette(&layout, None, 240.0, nf_view::scene::ViewOpts::default(), None);
+        pal[layout.door_base as usize + di]
+    };
+    // Before any scene: the placed doors draw (closed) — normal play is unaffected.
+    assert!(!far(slot_pose(&scene, pair_slots[0])) && !far(slot_pose(&scene, pair_slots[1])),
+        "the closed placed pair draws before the scene (camera 0, mask 0x01) [M View_AddForcedObjects 0x1e5fb8:79]");
+    // Fire the scene on the real path (the vent-drop touch #301) and wait for the script camera.
+    {
+        let sim = scene.sim.as_mut().unwrap();
+        sim.bond.pos = [40.7, 2.6, 39.0];
+        let mut fired = false;
+        for _ in 0..1100u32 {
+            sim.step_bond(Input::default(), false, false, false);
+            if sim.script_camera().is_some() { fired = true; break; }
+        }
+        assert!(fired, "the control-room scene never started (no script camera) — the vent-drop trigger [D placement #301]");
+    }
+    // While the script camera renders (mask 0x10): the placed pair collapses, and the scene's own
+    // leaf movers keep animating (exactly one door draws, and it moves with the scene).
+    for &di in &pair_slots {
+        assert!(far(slot_pose(&scene, di)),
+            "the placed door slot must collapse while the script camera renders [M Control_SetGList 0x134960 → \
+             obj+0xF8 bit 0x10 clear; View_AddObjects 0x1e62d8:33]");
+    }
+    // The leaves' open keys sit at scene ticks 539-546 of 1400 [D 06000833 streams 10/11] — watch
+    // for the whole opening window, not just the first ticks after the camera op.
+    let mut max_gap = 0.0f32;
+    for _ in 0..1000u32 {
+        scene.sim.as_mut().unwrap().step_bond(Input::default(), false, false, false);
+        let leaves = leaf_positions(scene.sim.as_ref().unwrap());
+        if let (Some(&(_, a)), Some(&(_, b))) = (leaves.iter().find(|(h, _)| *h == 0x0200_0891),
+                                                  leaves.iter().find(|(h, _)| *h == 0x0200_0892)) {
+            max_gap = max_gap.max(b[0] - a[0]);
+            if max_gap > 0.5 { break; }
+        }
+    }
+    assert!(max_gap > 0.5, "the scene's leaf movers must keep animating while the placed pair is hidden (max gap {max_gap:.4}, the [D] open gap 1.6118)");
 }
