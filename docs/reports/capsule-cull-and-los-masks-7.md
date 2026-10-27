@@ -98,3 +98,13 @@ and the cull/masks behaviour was already live-checked by the -6 report's section
 
 not visible to me — this environment exposes no token, cost or context-window figures
 for this session.
+
+## ntfy failed
+
+All three fallbacks failed with the ntfy.sh daily-quota 429 (same as several earlier
+windows):
+
+- curl: `{"code":42908,"http":429,"error":"limit reached: daily message quota reached;
+  increase your limits with a paid plan, see https://ntfy.sh/docs/publish/#limitations"}`
+- python urllib: `urllib.error.HTTPError: HTTP Error 429: Too Many Requests`
+- wget: silent (-q), no output, non-zero (same 429).
