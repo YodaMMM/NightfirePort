@@ -809,6 +809,29 @@ impl Script {
     }
 
     /// `Script_AnimStart` (0x1d8f40).
+    ///
+    /// The placement decode (level-4a-ride-cast-b): the object is created at the origin
+    /// (`control_create_object(0, 0x2d6200, 0x2d6200, 0)` [M 0x1d8f40:69 — 0x2d6200 is the origin
+    /// vector [L ACTION.ELF]]) and `AnimGetFirstTrans` seeds obj+0x30 with the SEQUENCE's root
+    /// translation at the start frame [M 0x1d8f40:94; 0x1c7348 — flag 0x800000 on the anim script,
+    /// which AnimScriptTick 0x1c2630:43 sets every tick]; `AnimFrameResolve` 0x1c35f8 then adds the
+    /// root track's per-frame delta to obj+0x30. `Script_Interp` case 2 (the anim stream's per-tick)
+    /// advances the frame and calls AnimObjectUpdate — it composes NO base and touches no matrix
+    /// [M 0x1d9a08:140-199], and Script_AnimStart's own `Script_GetInterp` call passes the SP-base
+    /// concat flag SET (the disasm's stack arg `sw a2,0(sp)` with a2=1 at 0x1d90b4/0x1d90d8 — the
+    /// callee's tail `if (base) Concat(SCRIPTINFO, out)` [M 0x1da158:195-197]) but its output
+    /// matrix is never read by this caller [M disasm 0x1d90f8-0x1d9118] — a dead call here.
+    /// The renderer builds the bone palette under the object's OWN matrix obj+0x90
+    /// [M psiBuildMatrixPalette 0x111498:134-160, root = obj+0x90..0xcc], which for script anims
+    /// nothing in the script path rewrites. The open question for the 0700004a ride pack (whose
+    /// sequence 0x040005fd roots are car-local [D (2.35, 0.85, -0.64)] while the game draws the
+    /// cast in the car [L ride frame 700]): the object hierarchy's parent pointer obj+0x1c
+    /// [M Control_CreateObjEx 0x1343c8:26 writes it; AnimProcessScriptCmds 0x1c1b38:282-301 composes
+    /// a placement against the parent's matrix rows +0x90/0xa0/0xb0 and position +0x30] is ZERO for
+    /// script-anim objects (control_create_object never sets it) — WHO links the ride cast to the
+    /// car (or what else composes the SP base into the draw) is the report's live check: a PCSX2
+    /// read of the guard's anim object obj+0x30 / obj+0x90 / obj+0x1c mid-ride decides between a
+    /// parent compose and a draw-side base.
     fn anim_start(&mut self, i: usize, subs: &mut Vec<Option<Script>>, script: u32, skin: u32, start: u32, objs: &mut Objects, w: &dyn World) {
         if self.streams[i].obj.is_some() { self.kill(i, subs, objs); }
         let len = w.anim_length(script).unwrap_or(1).max(1) as f32;
