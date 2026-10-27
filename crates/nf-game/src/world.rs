@@ -545,7 +545,12 @@ fn capsule_tri_contact(t: &[V3; 3], mat: u8, a: &mut V3, b: &mut V3, r: f32, gro
     if !deep_below {
         for k in 0..3 { a[k] += push[k]; b[k] += push[k]; total[k] += push[k]; }
     }
-    if n[1].abs() > 0.7 && q[1] < b[1] { *walkable = true; }
+    // The walkable gate is the game's dot1 [M Intersect_CylGeom 0x109da0 disasm 0x10a650-0x10a674:
+    // `dot(face normal, axis) > 0.7` — the axis runs B→A (up), so UP-facing faces only; the old
+    // `.abs()` let CEILING/underside faces ground the walk (level-14-full-walk-2: the mouths' hood
+    // underside at 07000014 y ~3.5 froze the release fall 1.1 above the lane — a contact the
+    // game's gate never sets walkable). Same sign discipline as the pick bit below.
+    if n[1] > 0.7 && q[1] < b[1] { *walkable = true; }
     // The pick bit's dot1 gate [M Intersect_CylGeom 0x109da0 disasm 0x10a650-0x10a674: the bit
     // block requires `dot(face normal, capsule axis) > 0.7` — up-facing faces only; a wall's
     // horizontal normal and a ceiling's down normal never set the bit]. The dot2 gate
