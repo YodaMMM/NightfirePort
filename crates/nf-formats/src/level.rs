@@ -524,7 +524,21 @@ impl Level {
             if cels_only && !p.creates_cel() { continue; }
             let target = if p.by_hash() { self.by_hash.get(&p.hashcode).copied() } else if (p.index as usize) < self.maps[main].objects.len() { Some((main, p.index as usize)) } else { None };
             match target {
-                Some((map, object)) => out.push(Instance { map, object, matrix: placement::object_matrix(p.rotation, p.translation), placement: p.clone() }),
+                Some((map, object)) => {
+                    // level-14-vent-grates: the 0xd9 ScriptPlayer placements create their runtime
+                    // object through SP_CreateScriptPlayer 0x1db9a8 → control_create_object
+                    // 0x1344e0, whose matrix is View_RotTransMatrix 0x1e5168 — NOT RotMatrix
+                    // 0x1e2368 [M 0x1d04f0 case 0xd9]. With a pitched rotation the two place the
+                    // object differently (the vent grates drew 1.44 units proud of the wall). The
+                    // other placement classes keep the RotMatrix reading until each creator is
+                    // pinned (the yaw-only rows are identical under both).
+                    let matrix = if p.flags & 0xff == 0xd9 {
+                        placement::view_rot_trans_matrix(p.rotation, p.translation)
+                    } else {
+                        placement::object_matrix(p.rotation, p.translation)
+                    };
+                    out.push(Instance { map, object, matrix, placement: p.clone() })
+                }
                 None => missing += 1,
             }
         }
