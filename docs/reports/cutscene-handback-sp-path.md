@@ -52,3 +52,10 @@ Foreground runs, `--offline --release`, `NF_ISO` set (this sandbox kills backgro
 ## Usage
 
 not visible to me
+
+## ntfy failed
+
+All three fallbacks ran; the ntfy.sh daily message quota rejected every attempt (HTTP 429):
+- curl: `{"code":42908,"http":429,"error":"limit reached: daily message quota reached; increase your limits with a paid plan, see https://ntfy.sh","link":"https://ntfy.sh/docs/publish/#limitations"}`
+- python urllib: `urllib.error.HTTPError: HTTP Error 429: Too Many Requests`
+- wget: `HTTP request sent, awaiting response... 429 Too Many Requests` / `ERROR 429: Too Many Requests.`
