@@ -101,3 +101,9 @@ Total: **1044 passed, 3 failed (the allowed disc_golden set), 12 ignored** + the
 ## Usage
 
 not visible to me (no token/credit/context-window figures are shown in this environment).
+
+## ntfy failed
+
+All three transports failed with the same server response:
+`{"code":42908,"http":429,"error":"limit reached: daily message quota reached; increase your limits with a paid plan, see https://ntfy.sh","link":"https://ntfy.sh/docs/publish/#limitations"}`
+(curl, then python3 urllib → `HTTPError: HTTP Error 429: Too Many Requests`, then wget — same quota error, empty output).
