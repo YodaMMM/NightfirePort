@@ -32,7 +32,7 @@ adds that carve-out to the general rule; all five red tests and the 01/14 batter
   `nis_camscan08.rs` (all unparented entity streams in camera scripts, all `*08` archives).
 - `tools/test/suite_resume.py`: a resumable fast-runner wrapper (same binaries/flags/600 s per-binary
   limit; per-binary results in a state file so repeated foreground invocations make forward progress) —
-  this sandbox reaps every background process between tool calls, so `nohup … &` suites die instantly.
+  this environment reaps every background process between tool calls, so `nohup … &` suites die instantly.
 
 ## Verification
 
@@ -42,7 +42,7 @@ adds that carve-out to the general rule; all five red tests and the 01/14 batter
   frame-2's open timeout item, now completing.
 - The 01/14 battery from frame-2's report, all green: `walkreal_07000001_live` 3/3, `interact_07000001_live`
   10/10, `exit_aim_01_live` 1/1, `capture_placement_07000014_live` 1/1 (three consecutive re-runs; one
-  first-run-after-rebuild FAILED once at 4.1 s and passed on every subsequent run — treated as a sandbox
+  first-run-after-rebuild FAILED once at 4.1 s and passed on every subsequent run — treated as a runner
   flake, worth one retry on the next run), `walkreal_07000014_live` 2/2, `walk_07000014_live` 2/2 (the
   merged tree carries 2 tests; frame-2's "3/3" predates the origin/master merge), `exit_aim_hint_live`
   2/2, `probe14_capture_end` 0/0/1 ignored.
@@ -68,7 +68,7 @@ adds that carve-out to the general rule; all five red tests and the 01/14 batter
   and `SP_SetPosRot`'s only SP-mode caller is `Copter_Move` 0x17d628:115. The compose is pinned by the
   five real-path tests; the mechanism is a live check below.
 
-## Live checks for the main agent
+## Live checks for maintainers
 
 1. **The si+0x00 restorer** (settles the carve-out's mechanism): in 07000001, boot fresh, let the intro
    run, and watch `si+0x00` (the SCRIPTINFO of script 0x06000087 — find the si via the SP player at the

@@ -34,10 +34,10 @@ The hash-0 kind-0x19 marker skip (level-4a-lift-4's landing-scene pin) is retain
 
 ## What's left
 
-- `walkreal_07000008_live` times out at the gondola-briefcase leg (450 s cap; no completed baseline run exists in this sandbox's logs, so pre-existing walk length vs a rule stall is undetermined). Next session: run it at the runner's default 600 s; if still stuck, bisect against master — 07000008's kind-0x31 scripts have no camera op [D census], so any stall would come from a non-0x31 unparented stream in a camera script.
+- `walkreal_07000008_live` times out at the gondola-briefcase leg (450 s cap; no completed baseline run exists in this environment's logs, so pre-existing walk length vs a rule stall is undetermined). Next session: run it at the runner's default 600 s; if still stuck, bisect against master — 07000008's kind-0x31 scripts have no camera op [D census], so any stall would come from a non-0x31 unparented stream in a camera script.
 - The census covers kind-0x31 streams; a follow-up could extend the same verdict table to every unparented entity stream in camera scripts (the rule applies to all kinds).
 
-## Live checks for the main agent
+## Live checks for maintainers
 
 1. 07000001 intro: after the intro cut-scene ends, Bond should stand where the game puts him (the port hands him back at the scene's stream-11 snapshot — create-time identity per the game's zero-vector entity creation). A fresh-boot [L] of Bond's position at intro end would pin the hand-back independently of the port.
 2. 07000001 intro s5 (hash 0x20006b1, a wire/rope object): its world-frame position should visually match the disc's key coordinates (the camera frame), not offset by the intro SP's placement base.

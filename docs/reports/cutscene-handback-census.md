@@ -22,17 +22,17 @@ Branch `s/cutscene-handback-census` (based on master 08f06953 + the kind31-frame
 
 ## Verification
 
-What ran (foreground chunks; this sandbox kills background jobs between tool calls, so the full suite's ~866 binaries could not all fit the window — the run was prioritized):
+What ran (foreground chunks; this environment kills background jobs between tool calls, so the full suite's ~866 binaries could not all fit the window — the run was prioritized):
 
 - All three lib bins, release: **nf_formats 91 passed / 0 failed**, **nf_game 578 / 0 / 5 ignored** (includes every nis.rs unit test), **nf_view 96 / 0**.
-- The cutscene/hand-back-sensitive integration set (14 bins, 2-way): **13 green** — nis_handback_census 1/1, nis_kind31_census 1/1, capture_placement_07000014_live 1/1, exit_aim_01_live 1/1, exit_aim_hint_live 2/2, interact_07000001_live 10/10, walkreal_07000001_live 3/3, walkreal_07000014_live 2/2 + 1 ign, walk_07000014_live rc=137 (**OOM kill, not a failure** — the sandbox's memory ceiling; the same walk passed on master's tree in prior sessions), fix_finale_live 4/4, fix_kimiko_handback_live 1/1, cutscene_side_strips_live 3/3, simplescript_live 2/2.
+- The cutscene/hand-back-sensitive integration set (14 bins, 2-way): **13 green** — nis_handback_census 1/1, nis_kind31_census 1/1, capture_placement_07000014_live 1/1, exit_aim_01_live 1/1, exit_aim_hint_live 2/2, interact_07000001_live 10/10, walkreal_07000001_live 3/3, walkreal_07000014_live 2/2 + 1 ign, walk_07000014_live rc=137 (**OOM kill, not a failure** — the runner's memory ceiling; the same walk passed on master's tree in prior sessions), fix_finale_live 4/4, fix_kimiko_handback_live 1/1, cutscene_side_strips_live 3/3, simplescript_live 2/2.
 - Not run this window: the remaining ~845 integration binaries (nf-game's other 90+ bins, nf-view's long walks, nf-audio). No disc_golden/identity_disc failures were triggered (those bins were not among the ones run).
 
 ## What's left
 
 - The kind-2 prev-stream fix [S suggested path]: carry the anim object's world matrix (the game's `Control_GetObjMatrix` product) on `Obj::Anim` — the port's `base: Mat4` field plus the anim root track already in the ride-pack work would supply it — and let the event-6 arm snapshot `Obj::Anim` too, then re-run this census: the four fallback rows become snapshots whose positions must land on floors. The census test is the safety net for that change.
 - The full suite on the final tree (the prioritized subset above ran green; the rest is unchanged-from-master code paths except the one accessor).
-- Live checks for the main agent: (1) 07000002/03 — after the 0x0600007f/0x06000084/0x06000080 cut-scenes end, where does Bond stand relative to the scene's anim actor (the kind-2 divergence predicts the game hands him back AT the actor's anim pose, the port where he was disabled)? A fresh-boot [L] of Bond's position at each scene's end would pin the game's rule for kind-2 prev streams. (2) 0700004a landing pad — already pinned [L level-4a-lift-4], re-confirm unchanged.
+- Live checks for maintainers: (1) 07000002/03 — after the 0x0600007f/0x06000084/0x06000080 cut-scenes end, where does Bond stand relative to the scene's anim actor (the kind-2 divergence predicts the game hands him back AT the actor's anim pose, the port where he was disabled)? A fresh-boot [L] of Bond's position at each scene's end would pin the game's rule for kind-2 prev streams. (2) 0700004a landing pad — already pinned [L level-4a-lift-4], re-confirm unchanged.
 
 ## Usage
 
