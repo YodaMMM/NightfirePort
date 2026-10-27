@@ -231,3 +231,22 @@ Player_SSGrapple 0x192860], land on the east vent lane, then leg 1f (lane south 
 flush lid, connector west to #301) and legs 2..6 to the exit on real input only; the walk
 test stays green end-to-end or back to #[ignore] with the exact blocker. Suite via
 tools/test/suite.py started early in the window.
+
+## level-14-full-walk-2 (2026-10-27, this window) — the release reconciled
+The release-onto-the-lane leg is SOLVED. The printed state walk through the release loop
+proves the detach IS the first no-fire tick [M Player_SSGrapple 0x192860:56-66] — the prior
+"still on the wire" was two hidden facts: (1) the straight drop lands on the MOUTHS' HOOD, a
+solid cover at top 3.93 over the lane z 43.8..48.5 (the open strip is z 42.3..43.5 [D the
+down-ray grid]); (2) the fall past the hood edge froze 1.1 above the lane on a walkable
+contact with the hood's DOWN-facing underside — the port's `n[1].abs() > 0.7` walkable gate
+let ceilings ground the walk; the game's dot1 is up-facing only [M Intersect_CylGeom 0x109da0
+disasm 0x10a650-0x10a674] — fixed in world.rs (the crossing chain + the vent grill re-ran
+green on it). NEW: the phase-2 hang drift ported [M Player_Move 0x191dd0:111-141's eased
+0.075/tick lanes + the SSGrapple tail commit, the rope pin holding y] — `grapple_drift` on
+Bond (own line, struct end), the stick now swings the hang at the walk's speed. The route:
+hang, hold fire, drift south over the strip, release, drop onto the lane — GREEN
+((45.497, 2.954, 42.747), feet on the 2.38 lane). The walk test is BACK TO #[ignore] with the
+exact blocker: leg 1f's lane-south passes under the hood overhang (the underside band y
+~3.4..3.9) and walk_to wedges on the head graze — next session maps the underside (up-facing
+rays / a live check) and re-unignores. Suite: started late (the toolchain setup ate the first
+40 min — rustup + ALSA from debs into a user prefix), tally in the report.

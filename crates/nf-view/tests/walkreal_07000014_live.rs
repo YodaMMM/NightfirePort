@@ -247,7 +247,18 @@ fn the_east_duct_route_reaches_the_stairwell_slot() {
         assert!(p[2] < 45.0 && p[0] > 46.0, "the corridor south reached the mouths' lane [D nav node 3 -> (49.1, 0.4, 42.8)], got {p:?}");
     }
 }
+// BACK TO #[ignore] (level-14-full-walk-2): the release leg is FIXED and green — the reconcile
+// printed the grapple state through the release loop (the detach IS the first no-fire tick
+// [M 0x192860:56-66]; the prior hold was the mouths' hood catch + the walkable underside bug,
+// both fixed this round) and the drop landed the lane (45.497, 2.954, 42.747) green in the run.
+// The EXACT blocker is the NEXT leg: 1f's lane-south walk (45.49, 42.75 -> (45.0, 2.4, 40.0))
+// passes UNDER the mouths' hood overhang (the underside band y ~3.4..3.9 over the strip z
+// 42.2..43.5 [D the scratch's down-ray grid — invisible to down-rays, it is a down-facing
+// face]) with the walking head (~3.9 at the 2.38 lane) grazing it: walk_to wedged/stuck
+// (walker_b2:519) on its first approach. Next session: map the underside band with up-facing
+// rays (or a live check), then re-unignore. Never red and un-ignored.
 #[test]
+#[ignore]
 fn walk_the_infiltration_to_the_delta_exit() {
     let iso = iso();
     let mut w = Walker::new(nf_view::load_with_carry(&iso, "07000014.bin", false, None).unwrap());
@@ -448,10 +459,41 @@ fn walk_the_infiltration_to_the_delta_exit() {
     }
     assert!(hung, "the reel hangs over the east vent lane [M 0x192860:91-94], got {:?}",
         w.scene.sim.as_ref().unwrap().bond.pos);
-    // The release: the hang ends on the input ticks (the pinned crossing's pattern) — drift
-    // NORTH along the lane (the lane runs z ≤ 48.5; an east drift runs off its edge) with the
-    // hop cadence shaking the wire, then idle; the drop lands on the lane (2.40).
+    // The release: RECONCILED against [M Player_SSGrapple 0x192860 phase 2 — the first no-fire
+    // tick detaches]. The printed state walk (the scratch, level-14-full-walk-2) shows the detach
+    // firing on the release loop's tick 1 — the prior "still on the wire" read was wrong twice
+    // over: (1) the straight drop lands on the MOUTHS' HOOD — a solid cover over the lane at top
+    // 3.93 spanning z 43.8..48.5 (the open lane strip is z 42.3..43.5, tops 2.38-2.40 [D the
+    // down-ray grid: y-6.0 rays over x 44.8..46.0]); (2) the fall PAST the hood's south edge was
+    // frozen mid-air 1.1 above the lane by the walk's walkable contact on the hood's underside —
+    // a DOWN-facing face the game's dot1 gate never sets walkable [M Intersect_CylGeom 0x109da0
+    // disasm 0x10a650-0x10a674: dot(face normal, axis) > 0.7, up-facing only; the port's .abs()
+    // diverged — fixed in world.rs]. The game's hang swing [M Player_Move 0x191dd0:111-141 + the
+    // SSGrapple tail commit LAB_00192a24, the rope pin holding y] carries the stick's drift, so
+    // the route: hold fire, drift SOUTH over the open strip, release, drop onto the lane (2.38).
     let mut lane = false;
+    for i in 0..160 {
+        {
+            let sim = w.scene.sim.as_ref().unwrap();
+            let b = &sim.bond;
+            let p = b.pos;
+            if b.grapple.is_none() && b.grounded && p[1] > 1.8 && p[1] < 3.4
+                && p[2] < 48.4 && p[0] > 44.0 && p[0] < 47.0 {
+                lane = true;
+                break;
+            }
+        }
+        // The drift: fire HELD (the hang stays [M 0x192860:57-62]), the stick south — the
+        // grapple_drift lanes ease to the walk's 0.075/tick [M 0x191dd0:111-141].
+        let b = &w.scene.sim.as_ref().unwrap().bond;
+        let inp = nf_game::player::Input {
+            forward: 1.0,
+            turn: wrap_pi(std::f32::consts::PI - b.yaw).clamp(-0.08, 0.08),
+            ..Default::default()
+        };
+        w.tick_fire(inp);
+        if w.scene.sim.as_ref().unwrap().bond.pos[2] < 42.45 { break; }
+    }
     for i in 0..400 {
         {
             let sim = w.scene.sim.as_ref().unwrap();
@@ -463,24 +505,12 @@ fn walk_the_infiltration_to_the_delta_exit() {
                 break;
             }
         }
+        // The release: the first no-fire tick detaches [M 0x192860:56-66]; the drop is the
+        // port's pinned no-momentum fall (the shipped flow's +0x10 is zero at the break).
         let b = &w.scene.sim.as_ref().unwrap().bond;
-        let inp = if i < 45 {
-            // turn-only: square up north (+z, away from the point) with no forward — a forward
-            // press mid-turn swings the wire east off the lane's edge
-            nf_game::player::Input {
-                turn: wrap_pi(0.0 - b.yaw).clamp(-0.08, 0.08),
-                ..Default::default()
-            }
-        } else if i < 95 {
-            // north-forward: the drift lengthens the wire past the hang radius — the release
-            // [M 0x192860:56-66] — and Bond drops straight onto the lane below
-            nf_game::player::Input {
-                forward: 1.0, jump: i % 25 == 0,
-                turn: wrap_pi(0.0 - b.yaw).clamp(-0.08, 0.08),
-                ..Default::default()
-            }
-        } else {
-            nf_game::player::Input::default()
+        let inp = nf_game::player::Input {
+            turn: wrap_pi(std::f32::consts::PI - b.yaw).clamp(-0.08, 0.08),
+            ..Default::default()
         };
         w.tick(inp, false);
     }
