@@ -20,3 +20,8 @@ say so in the report. Never weaken a decompile-backed test to make code pass.
 
 ---
 claimed-by: sandbox5 at 2026-10-27T14:27Z
+
+---
+## Report (done, 2026-10-27T14:34Z)
+
+Closed by the driver: the report is on `s/cutscene-kind31-frame` (docs/reports/cutscene-kind31-frame.md); the worker didn't run finish.sh.
