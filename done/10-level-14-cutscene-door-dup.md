@@ -20,3 +20,8 @@ say so in the report. Never weaken a decompile-backed test to make code pass.
 
 ---
 claimed-by: sandbox5 at 2026-10-27T01:00Z
+
+---
+## Report (done, 2026-10-27T01:07Z)
+
+Closed by the driver: the report is on `s/level-14-cutscene-door-dup` (docs/reports/level-14-cutscene-door-dup.md); the worker didn't run finish.sh.
