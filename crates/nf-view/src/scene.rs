@@ -6195,6 +6195,14 @@ pub struct Scene {
     /// Bug 3 diagnostic: objects with collision, for the "name what I'm touching" overlay (`C` key). Each entry is
     /// the object's name and its world-space AABB (lo, hi), built from the instance matrix + the object's bounds.
     pub colliders: Vec<(String, [f32; 3], [f32; 3])>,
+    /// cutscene-door-dup: the main-map door placements whose object's glist flags (celglist+0x44 =
+    /// MapObject.flags) carry 0x40000 — `Control_SetGList` 0x134960 clears obj+0xF8's bit 0x10 for
+    /// such objects, and `Script_CameraStart` 0x1d9140 renders ONLY camera 4 while a scene runs
+    /// (viewer+0x28 = 4 → object_display_mask 0x10 [M View_CaptureScene 0x1e6df0 / build_alloc_viewer
+    /// 0x1c9378]), so both draw walks (View_AddObjects 0x1e62d8:33, View_AddForcedObjects
+    /// 0x1e5fb8:79) skip them: the placed doors are invisible during a cut-scene. Keyed by
+    /// placement index; the palette pass collapses their slots while the script camera renders.
+    pub door_scene_hidden: std::collections::HashSet<usize>,
 }
 
 /// `psiPreGameRun` (0x11e2e8, read): per level the fog colour and `Ps2Far1`; `FogOn` only on these levels.
@@ -8259,6 +8267,7 @@ pub fn build(level: &Level, cels_only: bool, skeletons: &HashMap<u8, Skeleton>, 
         let mut dynobj_matrices: Vec<Mat4> = Vec::new();
         let mut rotor_placements: Vec<([f32; 3], [f32; 3])> = Vec::new();
         let mut gunimp_placements = 0usize;
+        let mut door_scene_hidden = std::collections::HashSet::new();
         if let Some(m) = level.main_map() {
             for (pi, pl) in nf_game::searchlight::part_placements(&level.maps[m].placements).into_iter().enumerate() {
                 let p = &level.maps[m].placements[pl];
@@ -8272,11 +8281,20 @@ pub fn build(level: &Level, cels_only: bool, skeletons: &HashMap<u8, Skeleton>, 
             // Doors (`Door_Create`'s creation order = `door_placements`): each door's object as Character-layer
             // vertices posed by the simulation every tick (`Door_Interp`'s matrix at `obj+0x90`); the mesh is
             // opaque, so the pass ordering is depth-correct against the world (docs/systems/world-objects.md).
+            // cutscene-door-dup: collect the door placements whose object's glist flags (celglist+0x44 =
+            // MapObject.flags) carry 0x40000: Control_SetGList 0x134960 clears obj+0xF8's channel-4 bit for
+            // them, and Script_CameraStart 0x1d9140 renders ONLY camera 4 while a scene runs (mask 0x10
+            // [M View_CaptureScene 0x1e6df0 / build_alloc_viewer 0x1c9378]), so both draw walks
+            // (View_AddObjects 0x1e62d8:33 / View_AddForcedObjects 0x1e5fb8:79) skip them: the placed doors
+            // hide during a cut-scene. 07000014's control-room pair rides the packs Door_Slide_3A/3B
+            // (entity-params block+8 = 0x00040000, idx 116/117 [D]); the scene's leaf hashes 0x02000891/92
+            // resolve to Elevator_Door_Slide_3A/3B (flags 0, map 010001c6 [D]) - one door, moving.
             for (di, pl) in nf_game::door::door_placements(&level.maps[m].placements).into_iter().enumerate() {
                 let p = &level.maps[m].placements[pl];
                 let target = if p.by_hash() { level.by_hash.get(&p.hashcode).copied() }
                     else if (p.index as usize) < level.maps[m].objects.len() { Some((m, p.index as usize)) } else { None };
                 let Some((map, object)) = target else { continue };
+                if level.maps[map].objects[object].flags & 0x40000 != 0 { door_scene_hidden.insert(pl); }
                 // `NF_HIDE` leaves the door out of the draw (the A/B check; the simulation still runs it).
                 if let Ok(h) = std::env::var("NF_HIDE") { if h.split(',').any(|n| !n.is_empty() && level.maps[map].objects[object].name.contains(n)) { continue; } }
                 let inst = Instance { map, object, matrix: nf_formats::placement::object_matrix(p.rotation, p.translation), placement: p.clone() };
@@ -8913,7 +8931,8 @@ pub fn build(level: &Level, cels_only: bool, skeletons: &HashMap<u8, Skeleton>, 
                 }
             }
         }
-        Scene { shard_tex, cels: room_cels, cel_graph, streams: None, music_files: None, music_tables: None, sound_bank: None, sound_spares: Vec::new(), snow_texture, vertices, indices, materials, textures, hud_textures, woman: None, hud, script_billboards, view_models, mp_bodies, mp_body_weapons, mp_char_bodies, mp_anim_sets, fog, bounds, start, stats, characters, char_vertex_start, char_verts, sequences, attachments, sim, colliders, models_0x800, npc_pool, ladders_drawn, grapple_hooks_drawn, misc_drawn, lock_matrices, dynobj_matrices, rotor_placements, gunimp_placements }
+        Scene { shard_tex, cels: room_cels, cel_graph, streams: None, music_files: None, music_tables: None, sound_bank: None, sound_spares: Vec::new(), snow_texture, vertices, indices, materials, textures, hud_textures, woman: None, hud, script_billboards, view_models, mp_bodies, mp_body_weapons, mp_char_bodies, mp_anim_sets, fog, bounds, start, stats, characters, char_vertex_start, char_verts, sequences, attachments, sim, colliders, models_0x800, npc_pool, ladders_drawn, grapple_hooks_drawn, misc_drawn, lock_matrices, dynobj_matrices, rotor_placements, gunimp_placements,
+            door_scene_hidden }
     }
 
     /// Sequence index and frame a character shows after `ticks` 60 Hz updates: its start script (`choice = None`) or the
@@ -10317,7 +10336,15 @@ pub fn build(level: &Level, cels_only: bool, skeletons: &HashMap<u8, Skeleton>, 
                     None => FAR,
                 };
             }
+            let scene_cam = s.script_camera().is_some();
             for k in 0..(l.pick_base - l.door_base) as usize {
+                // cutscene-door-dup: while the script camera renders (the scene's camera 4, object_display_mask
+                // 0x10), an object whose glist flags carry 0x40000 is invisible [M Control_SetGList 0x134960
+                // clears obj+0xF8's bit 0x10 for it; View_AddObjects 0x1e62d8:33 / View_AddForcedObjects
+                // 0x1e5fb8:79 gate first on obj+0xF8 & object_display_mask]. Collapse the placed door's slot
+                // (the port's FAR not-drawn state) so the static closed leaf stops drawing behind the scene's
+                // own leaf movers (07000014's control-room duplicate).
+                if scene_cam && s.drones.doors.list.get(k).is_some_and(|d| self.door_scene_hidden.contains(&d.placement)) { p[l.door_base as usize + k] = FAR; continue; }
                 // The door region also holds the SimpleScripts' matrices (map-tower2): the ss vertices
                 // index `n_doors + k`, and `pick_base − door_base` = max door-or-ss index + 1.
                 // After the SS slots: the breakables (`Breaks::create` order), alive → placement matrix.
