@@ -18,3 +18,11 @@ first-query flags-99 skip, [M]-faithful) env-gated — its landing wedges 01's r
 the game's rate (155 ticks to (-9.27,1.12,16.60) [L 2026-10-26]). 01 battery 3/0, 0a 5/0+3i,
 nf-game lib 578/0. The trio stays ignored (the y-settle climb; the corner float) — the report
 names each test's one remaining mechanism.
+
+## level-0a-band-settle-6-c (2026-10-27)
+Branch s/level-0a-band-settle-6-c from origin/s/level-0a-band-settle-6-b, merged origin/master.
+Task: the full suite broke 21 tests across many levels (Bond settles ~1 unit high on the
+radial-tail landing, e.g. interactables_07000015 south walkway y 41.315 vs floor ~40.35) —
+find which part of the change applies outside the case the game gates it to
+[M Player_FeetOnPoint 0x194188 and the walk's vertical], restrict it to exactly that, get the
+whole suite green with the 0a walk tests. Work in progress.
