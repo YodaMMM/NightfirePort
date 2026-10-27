@@ -177,3 +177,13 @@ Progress:
   (Ravine 0700004b has no doors; the filter is inert there, as capsule-cull-5 measured).
 - Suite: chunk_suite.py (background runners die at the tool-call boundary in this
   sandbox) on the final tree; totals in the report.
+- FINDING (end of window): probe_07_route is GREEN on master, RED under the filter
+  (A/B via revert --no-commit / reset --hard in-sandbox): the OPEN kind-0 hall door
+  (state=0x4 pos01=1.00 ch_open=0) at (94.9,43.0,-47.2) is load-bearing over the
+  44.13->43.0 doorway step — filtered out, Bond hovers (grounded=false) at
+  (94.17,44.14,-47.02) to the 6000-tick cap. Door_IsClosed 0x1367b0 is the ZONE rule
+  [M 0x135738/0x1336f8]; movement collision likely keeps the leaf always solid with
+  passability from the pose (same mechanism as the SS review). Next round: pin door
+  #10's open POSE (07000008) vs the game's obj+0x90, then replace the filter with the
+  pose fix. mp_online_failures OOMs at this sandbox's 3GB cap (dmesg recorded).
+  Full report: docs/reports/door-state-collision.md.
