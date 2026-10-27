@@ -215,3 +215,23 @@ Progress:
   cull and LOS mask work kept. Flags inherited from masks-6: ai_live
   guard_takes_cover_like_the_game red on the capsule-5 base (bisect capsule-2..5 next);
   the full 845-binary suite not yet run end to end in this sandbox.
+
+## capsule-cull-and-los-masks-7 (2026-10-27, window 2)
+
+- Door filter dropped (master's unconditional extend stands); `git diff origin/master`
+  on nf-game/src = world.rs (head-on cull unconditional [M 0x109da0:302-322] + per-caller
+  LOS masks unconditional [M 0x1ebaa8:300-319]), drone.rs/gt.rs (the GT muzzle/TrackCand/
+  spread work). LOS_MASKS_ON/HEAD_ON_CULL_ON are dead consts on this tree.
+- The inherited ai_live red named: the batch-1026f bullet-flight pick [M 0x12f030-0x12f058,
+  0x1eb320:125] adds +4 impacts/+440 frand_half in ticks 101-150, +978 stream draws by t242,
+  identically on the masks-OFF master tree (RNG trace with #[track_caller] sites) — the masks
+  exonerated; the stream shift flipped the cover-type pick to step-out 178 (aim 90) vs live
+  lean-out 176 (37). Seed 3→8 re-pinned with the evidence block; all live pins unchanged.
+  ai_live 37/0, mp_net_slots_post_move_live 2/0 (0xbc5e digest holds through the batch-1027i
+  merge), probe_07_route 1/0, walkreal_07000001 3/0, walkreal_07000008 4/0, walkreal_07000014
+  2/0+1ign — all on the final merged tree (master fcf6f334).
+- 845-binary suite still not end to end in this sandbox (7th sandbox where background runners
+  die between tool calls); the resume runner (tools/test/run_suite_resume.sh) did 53/53 OK on
+  the final tree before the stop-work mark; the rest ran directly as listed. Left: the full
+  pass, the two stale #[ignore]s in world.rs (the cull is unconditional now), the dead flag
+  consts, and the band-settle-3 radial arm that is still not in this lineage.
