@@ -86,6 +86,42 @@ pub fn transform(m: &[[f32; 4]; 4], v: [f32; 3]) -> [f32; 3] {
     [0, 1, 2].map(|c| v[0] * m[0][c] + v[1] * m[1][c] + v[2] * m[2][c] + m[3][c])
 }
 
+/// `View_RotTransMatrix` (ACTION.ELF 0x1e5168): the placement-matrix builder the game's DYNAMIC
+/// object creations use — `SP_CreateScriptPlayer` 0x1db9a8 → `control_create_object` 0x1344e0
+/// (param_4 == 0 → `View_RotTransMatrix(obj+0x50 (the stored rotation), obj+0x30 (the position),
+/// obj+0x24 (the matrix))` [M]; the same creator serves the 0xd9 ScriptPlayer placements via
+/// `parsemap_create_dynamic_objects` 0x1d04f0 case 0xd9). NOT the same composition as `RotMatrix`
+/// 0x1e2368 — with a pitched rotation (rx ≠ 0) the two place the object differently, which is the
+/// vent-grate bug: the wall grates of 07000014 (rot (−π/2, ±π/2, 0)) drew their panel 1.44 units
+/// proud of the wall under the RotMatrix reading; this composition lays the panel FLUSH in the
+/// wall plane (verified against the duct mouths at (30.10, 3.58, 46.42) / (51.58, 3.58, 44.94)).
+/// The rows below follow the decompile with the output slots pinned from the DISASSEMBLY (the
+/// decompiler's local names do not line up with PS2Sinf3's output pointers; the two calls write
+/// (cx, sx, cy) to sp+0/4/8 and (cz, sz, sy) to sp+0xc/0x10/0x14 — jal 0x11fc20 with a0/a1/a2 =
+/// sp, sp+4, sp+8 and sp+0xc, sp+0x10, sp+0x14, inputs f12 = rx+π/2 / rz+π/2, f14 = ry+π/2 / ry,
+/// f13 = rx / rz):
+/// row0 = [cy·cz, sz, −cz·sy], row1 = [sx·sy − cx·cy·sz, cx·cz, cy·sx + cx·sy·sz],
+/// row2 = [cx·sy + cy·sx·sz, −cz·sx, cx·cy − sx·sy·sz], trans = the placement translation.
+/// For rx = rz = 0 this collapses to the RotMatrix rows (every yaw-only placement draws
+/// identically — the whole existing test battery is untouched by the swap).
+pub fn view_rot_trans_matrix(rot: [f32; 3], trans: [f32; 3]) -> [[f32; 4]; 4] {
+    use crate::anim::sinf;
+    use crate::ps2float as pf;
+    let fadd = |a, b| pf::add_noguard(a, b, true);
+    let fsub = |a: f32, b: f32| pf::add_noguard(a, -b, true);
+    let (rx, ry, rz) = (rot[0], rot[1], rot[2]);
+    let half = f32::from_bits(0x3fc9_0fdb); // π/2 — the same literal the asm loads (0x3fc90fdb)
+    let (cx, sx, cy) = (sinf(fadd(rx, half)), sinf(rx), sinf(fadd(ry, half)));
+    let (cz, sz, sy) = (sinf(fadd(rz, half)), sinf(rz), sinf(ry));
+    let m = pf::mul;
+    [
+        [m(cy, cz), sz, -(m(cz, sy)), 0.0],
+        [fsub(m(sx, sy), m(m(cx, cy), sz)), m(cx, cz), fadd(m(cy, sx), m(m(cx, sy), sz)), 0.0],
+        [fadd(m(cx, sy), m(m(cy, sx), sz)), -(m(cz, sx)), fsub(m(cx, cy), m(m(sx, sy), sz)), 0.0],
+        [trans[0], trans[1], trans[2], 1.0],
+    ]
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
