@@ -1175,7 +1175,14 @@ impl Script {
                 // test-pinned behaviour; see the report's live check (a PCSX2 read of si+0x00 at
                 // the anchor tick settles the restorer).
                 let hash0_anchor = ehash == 0 && ekind != 0x19;
-                let keys_alone = self.camera_started && self.streams[i].parent < 0 && !hash0_anchor;
+                // 07000014's capture marker (0x0600062F s10, hash 0, kind 0x31) is a hash-0 anchor
+                // too, yet the game hands Bond back at its world-frame key [D (-55.49, 1.55, 42.02)
+                // inside the control center; composed it is the void]. What separates it from the
+                // 01/08 anchors is the same open restorer question as above, so its proven scope
+                // stays [S] until the live read of si+0x00 settles it (capture_placement_07000014_live
+                // and nis_handback_census pin it).
+                let keys_alone = self.camera_started && self.streams[i].parent < 0
+                    && (!hash0_anchor || self.nis.hashcode == 0x0600_062f);
                 if !hash0 && !keys_alone { m = mul(&m, &self.matrix); }
                 if let Some(Some(Obj::Entity { matrix, alpha: a, .. })) = objs.list.get_mut(o) { *matrix = m; *a = alpha; }
             }
