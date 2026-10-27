@@ -63,6 +63,7 @@ fn the_landing_cutscene_carries_the_satchel_the_guard_anim_and_the_lift_floor() 
     let mut guard_mid: Option<[f32; 3]> = None;
     let mut hatch_mid: Option<[f32; 3]> = None;
     let mut guard_drawn_y: Option<f32> = None;
+    let mut char_roots: Vec<(u8, [f32; 3])> = Vec::new();
     for k in 0..6800u32 {
         w.tick(Input::default(), false);
         let sim = w.scene.sim.as_ref().unwrap();
@@ -98,7 +99,7 @@ fn the_landing_cutscene_carries_the_satchel_the_guard_anim_and_the_lift_floor() 
                             .map(|pose| pose.first().map(|(t, _)| *t).unwrap_or([0.0; 3]));
                         let ok = root.is_some();
                         poses.push((si, c.skin.hashcode, ok));
-                        if let Some(t) = root { eprintln!("char s{si} root at ({:.2},{:.2},{:.2})", t[0], t[1], t[2]); }
+                        if let Some(t) = root { eprintln!("char s{si} root at ({:.2},{:.2},{:.2})", t[0], t[1], t[2]); char_roots.push((si, t)); }
                         if si == 3 {
                             // The anim script's own windows and the pack sequences' frame-0 roots.
                             let sc = sim.scripts.get(&0x0600_06d0u32);
@@ -202,6 +203,42 @@ fn the_landing_cutscene_carries_the_satchel_the_guard_anim_and_the_lift_floor() 
     // game's compose site is the live check; landing a guess broke 07000014 once, see d6af2214).
     if let Some(gy) = guard_drawn_y {
         eprintln!("guard drawn root y {gy:.2} (the game: in the car, deck ≈ -52.7 = SP base (0,-53.53,-3.38) ∘ root (2.35,0.85,-0.64) [D+L])");
+    }
+
+    // THE WORLD-ALONE KEYS (level-4a-ride-bond-float): the pack's entity streams key in WORLD
+    // space, because s0 carries op 0x0d (CameraStart) at t0 — before every entity stream keys
+    // [D 0780004a.bin 0x060006cf s0 cmds `0d 00 00 00 7d 00`] — and `Script_CameraStart`
+    // overwrites the SCRIPTINFO base si+0x00 with Mat_IdentityT (a0 = si untouched from entry
+    // [M 0x1d916c disasm]; never restored [M 0x1db348]) while an unparented case-1 stream's own
+    // GetInterp call carries the base-concat flag `(parent == -1)` [M 0x1d9a7c-0x1d9a98 + tail
+    // Concat(si,out) 0x1da158] — so past the camera op the game's entity matrices ARE the raw
+    // keys. The whole stage shares the raw frame [D keys probe]: the lift floor s13 keys
+    // t0 (0, 0.990, 0) → t575 (0, −5.334, 0), the satchel s7 t0 (3.429, 1.488, −0.836) →
+    // t575 (3.226, −0.776, −2.002), the camera s0 t0 (2.889, −7.829, −4.583) → t575
+    // (2.094, −9.921, −2.073) — all descending together; the cast's roots ride the same frame
+    // (guard 0.852→0.598, Bond −6.949→−13.455 on the rope, officer 1.153→0.550 [D root probe]).
+    // Composing the SP #289 base (0, −53.534, −3.377) [D placement] into the post-camera
+    // entities threw the floor to −52.5..−58.9 under a keys-alone cast — Bond floated above the
+    // port's own floor (the task's symptom). The lift script 0x06000571 has NO camera op
+    // (`camera false` [D cab probe]) so its local-offset cab keys keep the placement compose —
+    // the ride itself is untouched.
+    {
+        let floor = lift_mid.expect("the lift floor (s13) is live mid-scene [D]");
+        assert!(floor[1] > -5.9 && floor[1] < 1.4,
+            "the floor keys WORLD-ALONE past the camera op: mid-scene y {} within the raw key span [−5.334, 0.990] [D keys + M 0x1d916c/0x1d9a98/0x1da158]", floor[1]);
+        let satchel = satchel_mid.expect("the satchel (s7) is live mid-scene [D]");
+        assert!(satchel[1] > -1.2 && satchel[1] < 1.9,
+            "the satchel keys WORLD-ALONE: mid-scene y {} within the raw key span [−0.776, 1.488] [D keys]", satchel[1]);
+        let root_of = |si: u8| char_roots.iter().find(|(s, _)| *s == si).map(|(_, t)| *t);
+        let guard = root_of(3).expect("the guard (s3) posed mid-scene [D]");
+        assert!((guard[1] - 0.72).abs() < 0.4,
+            "the guard's root rides the raw track: mid-scene y {} ≈ the 0.852→0.598 span [D root probe]", guard[1]);
+        let bond = root_of(2).expect("Bond (s2) posed mid-scene [D]");
+        assert!(bond[1] > -13.8 && bond[1] < -6.5,
+            "Bond's root is the rope descend: mid-scene y {} within the −6.949→−13.455 span [D root probe 0x040005fe]", bond[1]);
+        let officer = root_of(1).expect("the officer (s1) posed mid-scene [D]");
+        assert!(officer[1] > 0.2 && officer[1] < 1.5,
+            "the officer's root rides the raw track: mid-scene y {} within the 1.153→0.550 span [D root probe 0x040005ff]", officer[1]);
     }
 
     // The scene carried everything through the hand-back: the satchel and the lift floor were
