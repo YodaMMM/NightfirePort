@@ -2574,7 +2574,7 @@ impl Sim {
         // [M `GunImp_Update` 0x1320d8:119-131]. Bond stands — the port zeroes his input for the
         // rest of the tick (the game's disabled player runs only the imp).
         let (mut input, trigger, reload, use_key) = if self.drones.props.gunimps.iter().any(|g| g.active) {
-            self.drones.gunimp_tick(&self.weapons, input.look, input.turn, trigger || input.fire, use_key, &mut self.bond);
+            self.drones.gunimp_tick(&self.weapons, &self.world, input.look, input.turn, trigger || input.fire, use_key, &mut self.bond);
             // The dismount (`GunImp_Deactivate` 0x132c18): `AnimObj[99] = AnimObj[100]` — the
             // weapon saved by the mount's `Player_WeaponNone` is requested back (the climb
             // dismount's carry).
