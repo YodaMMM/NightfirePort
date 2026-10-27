@@ -25,3 +25,14 @@ is #2). The old "ch 0x21 writer unknown" note was a mis-read of SP #276's out pa
 Left: the full suite on the merged tree (this sandbox kills background processes; the suite
 needs ~40 min of foreground windows), and walkreal_07000001_live may need the same
 plate-crossing harness step. Report: docs/reports/level-01-mayhew-wait.md.
+
+### level-01-mayhew-wait-2 — start (2026-10-27 ~05:58 UTC)
+
+Task: after the ally-wait hold (node 33, flag 0x20, release ch 0x99), two full-suite tests
+went red: walkreal_07000001_live::walk_from_the_spawn_to_the_exit_with_the_contact and
+fix_mission_live::the_07000001_exit_works_end_to_end — both walks reach the exit without
+clearing the ambush, so the contact stays parked at node 33. Plan: keep the hold; make the
+walks clear the ambush on real input (the three ch-0x0e guards), then re-verify the exit
+AND-touch fires with Bond + contact. Must stay green: escort_follow_07000001_live,
+mayhew_hold_live, fix_npc_doors_live. Branch `s/level-01-mayhew-wait-2` from
+origin/s/level-01-mayhew-wait @ 14769917, merging origin/master.
