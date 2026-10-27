@@ -201,3 +201,28 @@ other walkreal/door/mp tests.
   (94.9,43.0,-47.2) is load-bearing over the doorway step when filtered; movement
   collision likely keeps leaves solid with passability from the pose, not the zone rule.
 - Setup verified: work/, ISO (1,061,754,880 B), env.sh, nf-queue all present.
+
+### door-state-collision-2 progress (05:45 UTC)
+
+- Decomp verdict [M]: the movement-collision path is STATE-BLIND. `Door_Interp` 0x135738
+  writes the live pose to obj+0x90 (moved bit 0x20) every tick; `control_movement_object_handler`
+  0x1336f8:147-236 relinks every moved object into the cel chain by position alone
+  (`control_handle_cel_change` 0x133288 — no state read); `Collide_PickObj` 0x1eae80 masks by
+  hittest kind + obj flags only, never obj+0xF4/DoorGroupsStates. `Door_IsClosed` 0x1367b0's
+  ONLY caller in the decompile is `Vision_Recurse` 0x1e82e0:51 (← `Vision_Portal_Recurse`
+  0x1e86e8:32 ← `View_CaptureScene` 0x1e6df0:25) — the render visibility recursion through door
+  portals. The prior round's "zone consumer 0x135738/0x1336f8" attribution was wrong: those are
+  the pose/tick path, not is_closed consumers.
+- The filter (leaves solid iff is_closed) REVERTED to the unconditional extend (55e06f54), with
+  the full evidence comment. A/B on the merged tree (441a1199 + merge 1a3ba0b4):
+  - filter ON: probe_07_route RED (reproduced, 19.2 s hover-STUCK); 07000008 4/4 GREEN.
+  - filter OFF (always-solid): probe_07_route GREEN 3.98 s; ai_live 37/37 (incl.
+    guard_takes_cover_like_the_game); walkreal_07000001_live 3/3 (incl. the contact walk);
+    walkreal_07000014_live 2/2+1ign (east duct green); walkreal_07000008_live 4/4 GREEN.
+  - The prior round's "master stalls 07000008 at the secure room" is STALE: on the MERGED tree
+    the always-solid secure-room walk passes (door #10/122's open pose swings clear along +x at
+    z −121.33 [D keys: closed −90° key1, ends 0°/180°]; pos01→1.0 measured in-sandbox). The
+    STUCK noise in some runs is the walker's lenient give-up legs, not failures.
+- New probe crates/nf-view/tests/door_pose_probe.rs: dumps 07000008/07000007 leaf keys + create
+  poses ([D] evidence for the next round's pose questions).
+- Family runs (walkreal 24 + door family + nf-game doors) launched in background; mp pin next.
