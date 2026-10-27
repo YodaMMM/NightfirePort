@@ -105,3 +105,10 @@ renamed or repurposed; the only new arm (FOLLOW_WAIT) sits beside its UPDATE arm
 ## Usage
 
 not visible to me (no token/credit/context-window figures are shown in this environment).
+
+## ntfy failed
+
+All three transports failed with the same server response:
+`{"code":42908,"http":429,"error":"limit reached: daily message quota reached; increase your limits with a paid plan, see https://ntfy.sh","link":"https://ntfy.sh/docs/publish/#limitations"}`
+(curl — the JSON above; python3 urllib → `HTTPError: HTTP Error 429: Too Many Requests`; wget — same quota
+response, empty output suppressed by -q).
