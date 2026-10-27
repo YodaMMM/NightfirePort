@@ -205,8 +205,9 @@ impl UseObjects {
                 Some(o) => {
                     // 0x133070:34-48 — the local sphere centre through the object matrix, the
                     // local radius × |obj+0xE8| (the placement's scale triple product here; the
-                    // Tower PCs carry scale 1 [D placements extra]).
-                    let mx = nf_formats::placement::object_matrix(p.rotation, p.translation);
+                    // Tower PCs carry scale 1 [D placements extra]). The matrix is the created
+                    // object's obj+0x90: CCO(0) → View_RotTransMatrix [M 0x1b07a8:12-13].
+                    let mx = nf_formats::placement::view_rot_trans_matrix(p.rotation, p.translation);
                     let s: f32 = p.scale().iter().map(|v| v.abs()).product();
                     pc.sph_centre = nf_formats::placement::transform(&mx, o.centre);
                     pc.radius = o.radius * s;

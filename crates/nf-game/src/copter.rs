@@ -63,7 +63,7 @@
 use crate::door::{self, Key};
 use crate::triggers::Channels;
 use crate::world::V3;
-use nf_formats::placement::{object_matrix, Placement};
+use nf_formats::placement::{view_rot_trans_matrix, Placement};
 use nf_formats::anim::Mat4;
 
 /// The load-time `FRAME_RATE` = 30 [M 0x30d0d0 — the doors' CREATE_FRAME_RATE; `Copter_Create`
@@ -257,7 +257,9 @@ impl Copter {
             let own = paths.iter().rposition(|c| c.placement == i);
             out.push(Copter {
                 placement: i,
-                matrix: object_matrix(p.rotation, p.translation),
+                // Copter_Create builds obj+0x90 with CCO(0) → View_RotTransMatrix
+                // [M 0x17d340:46, 0x1344e0:26-29].
+                matrix: view_rot_trans_matrix(p.rotation, p.translation),
                 gate: param(6) as u16,
                 out: param(7) as u16,
                 arrival: param(8) as u16,

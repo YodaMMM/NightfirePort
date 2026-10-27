@@ -31,7 +31,7 @@ use crate::door::{interp, parse_keys, quat_matrix, Key, Mat4};
 use crate::trig::sinf;
 use crate::triggers::Channels;
 use crate::world::{CollisionWorld, V3};
-use nf_formats::placement::{object_matrix, Placement};
+use nf_formats::placement::{view_rot_trans_matrix, Placement};
 
 /// `SENSOR+0x14` — the aim quaternion the track/return states blend.
 type Quat = [f32; 4];
@@ -416,7 +416,9 @@ impl Sensors {
             // `SENSOR+0x2C` in the game's op order [M 0x1af010:89-96]: (count−1) · (1/60) · (60/rate).
             let step = if rate > 0.0 { limit as f32 * REC * (60.0 / rate) } else { 0.0 };
             let angle = param(1) as f32;
-            let matrix = object_matrix(p.rotation, p.translation);
+            // Sensor_Create builds obj+0x90 with CCO(0) → View_RotTransMatrix
+            // [M 0x1af010:54, 0x1344e0:26-29].
+            let matrix = view_rot_trans_matrix(p.rotation, p.translation);
             list.push(Sensor {
                 placement: i,
                 pos: p.translation,

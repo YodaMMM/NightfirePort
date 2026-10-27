@@ -31,7 +31,7 @@
 use crate::triggers::Channels;
 use crate::trig::sinf;
 use crate::world::CollisionWorld;
-use nf_formats::placement::{object_matrix, Placement};
+use nf_formats::placement::{view_rot_trans_matrix, Placement};
 
 pub type V3 = [f32; 3];
 /// Row-vector 4×4 (translation in row 3) — the same layout as the game's `MATRIX` at `obj+0x90` [L].
@@ -374,7 +374,9 @@ impl Doors {
             let index = (p.extra[8] & 0xffff) as usize;
             let keys = if count != 0 { path_blocks.get(index).map(|b| parse_keys(b)) } else { None };
             let (glist, centre, radius) = object(p).unwrap_or((0, p.translation, 0.0));
-            let m = object_matrix(p.rotation, p.translation);
+            // Door_Create's pre-spline seed matrix: CCO(0) → View_RotTransMatrix; the swing/sliding
+            // key paths overwrite obj+0x90 from Spline_Interp afterwards [M 0x136100:21,83-91].
+            let m = view_rot_trans_matrix(p.rotation, p.translation);
             let flags = (par(8) | par(9)) as u16;
             let mut d = Door {
                 placement: pi,

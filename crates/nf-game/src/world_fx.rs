@@ -857,6 +857,10 @@ impl WorldFx {
                     let dir = [sp * ct * speed, cp * speed, sp * st * speed];
                     // The object basis (obj+0x90): the impact emitters carry the Mat_SetDir/
                     // SetNorm/SetUp rows built from the hit normal; the placements the euler matrix.
+                    // KNOWN GAP: the game builds a 0xf2 placement emitter's matrix with
+                    // Quat_QuatToMat on the placement's +0x24 quaternion [M 0x1d04f0:474-478], not
+                    // from the Euler angles — the port still reads the Euler here ([S] interim;
+                    // 16/52 of the disc's 0xf2 rows carry pitch/roll [D placement_rot_census]).
                     let m = e.basis.unwrap_or_else(|| nf_formats::placement::object_matrix(e.rotation, [0.0; 3]));
                     p.vel = [0, 1, 2].map(|k| m[k][0] * dir[0] + m[k][1] * dir[1] + m[k][2] * dir[2]);
                     p.pos = e.pos;
