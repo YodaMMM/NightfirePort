@@ -31,3 +31,23 @@ cutscene-kind31-frame-3 — started (2026-10-27 ~18:57 UTC)
   where the game composes (or vice versa) — scene camera op tick vs stream op tick, SubScriptStart
   base reset [M 0x1db050:28-38], SP_SetPosRot [M 0x1db920] — fix the rule to the game's behaviour,
   keep frame-2's 01/14 battery green.
+
+cutscene-kind31-frame-3 — the hash-0 carve-out on the general rule (2026-10-27 ~20:40 UTC)
+
+- Frame-2's rule turned five real-path tests red. Bisect (a temporary NF_KA_CLASS knob, removed):
+  kind-0x31/0x19 WITH hash going keys-alone keeps mayhew_hold green; HASH-0 entities going
+  keys-alone turns it red. The disc census (new nf-formats tests): the only hash-0 entity streams
+  in camera scripts are the hand-back ANCHORS — 0x06000087 s11 (hash 0, 0x31, op@2118, ONE key;
+  keys[a..=b] is INCLUSIVE so frame-2's "s11 never keys" was the camera's exclusive-convention
+  misread) and 0x06000077 s15 (hash 0, 0xff, op@3870, ONE key) — each one tick before its
+  event-6 hand-back (EventHandler 0x1d94c0 case 6 snapshots the PREVIOUS stream's obj+0x90).
+- Fix: keys_alone = camera_started && parent < 0 && !(hash == 0 && kind != 0x19) — the gfx-bound
+  rule keeps frame-2's world-frame reading (07000014's doors), hash-0 non-0x19 anchors compose
+  (five tests), the hash-0 0x19 marker skip keeps its 4a [L] pin.
+- Green: the five (mayhew 1/1, escort_hide_findrun 3/3, zoe 1/1, walkreal_07000008 4/4 — the
+  frame-2 gondola-timeout open item resolved) + the 01/14 battery (walkreal_07000001 3/3,
+  interact_07000001 10/10, exit_aim_01 1/1, capture_placement 1/1, walkreal_07000014 2/2,
+  walk_07000014 2/2 — the merged tree has 2 tests, exit_aim_hint 2/2, probe14 ignored).
+- Open: the [M] restorer of si+0x00 between the camera op and the anchor tick is NOT derived;
+  the full fast-runner suite did not fit the sandbox window (background processes are reaped
+  between tool calls here); tools/test/suite_resume.py is the resumable driver for the next run.
