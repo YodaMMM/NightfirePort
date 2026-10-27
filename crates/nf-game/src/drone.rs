@@ -17480,17 +17480,30 @@ fn segment_hits_sphere(a: V3, b: V3, c: V3, r: f32) -> bool {
             //   opens and 0x21's UPDATE (0x15efc8 case 3) exits to 0x1d. The port HAS every link of
             //   that chain (the mux is Trigger::update's AND; the death writes at drone.rs).
             //   The guards' enable channel 0x0e is written by script 0x06000086 (SP #276: modes
-            //   [0,0] → state 0, mask 1, out 0x21 — the SP starts when switch_channels[0x21] rises
-            //   [M nis.rs state-0 arm]) — and ch 0x21's writer is in NO placement, script event,
-            //   door, mux or pickup the port parses (the full scans: every placement
-            //   param == 0x21/0x99/0x11-0x13; every script event 0xd/0x11 write — the only one is
-            //   0x06000086's own 0x0e; the doors' ch_open are all 0). Enabling the entry now stalls
-            //   the escort forever (walkreal_07000001's repro: parked at (3.5, 6.3, 7.1) state 0x21,
-            //   "no guard to clear" — the courtyard guards stay WAIT_SWITCH, enabled=false, outside
-            //   the test's clearing filter) and the fix_mission_live shoji ping-pongs. The game's
-            //   ch-0x21 writer is an open live check; the outbox
-            //   stays (the resolution proves the node dispatch), the state entry waits for it.
-            let _ = dr.ally_wait_node.take();
+            //   [0,0] → state 0, mask 1). The earlier note called SP #276's start channel 0x21 and
+            //   its writer "an open live check" — that was a mis-read: the SP's start channel is
+            //   param 6, `out` = 0x33 [D placement #276; nis.rs `Player::from_placement` `out: g(6)`,
+            //   and `SP_Update` state 0 starts on `ch.on(out)` — nis.rs `flags & mask`, M
+            //   0x1dbda8:80-106], and the WRITER is Touch trigger #2 (kind 1, mask 0x08 player) at
+            //   (6.79, 6.04, 8.91) on the corridor before door #1, out 0x33 [D trigger census]. So:
+            //   Bond walks the corridor → the plate raises 0x33 → SP #276 starts → 06000086 stream 9
+            //   event 0xd writes ch 0x0e [D the lib dump] → drones 6/7/11 (the courtyard guards,
+            //   enable ch 0x0e) start → they die → 0x11/0x12/0x13 → the mux → 0x99 → the hold
+            //   releases. No stall: the hold requires the player to walk ahead into the ambush,
+            //   which is the game's escort pacing (the real trace parks the contact 1262 frames at
+            //   the node while the ambush runs).
+            //   [level-01-mayhew-wait 2026-10-27]
+            if let Some(_wait_node) = dr.ally_wait_node.take() {
+                // [M 0x153358:85-94]: only while switch channel 0x99 is off; the current state is
+                // saved in +0x5A2 (`return_state`) and the drone parks in
+                // `DSTATE_AllyLeadMissionWait` (0x21); staying put when already 0x21. The release
+                // is 0x21's UPDATE (0x15efc8 case 3) when the latched channel (0x99 — +0x12C has
+                // no writer) rises → 0x1d AllyLead.
+                if !self.channels.on(0x99) && dr.state != state::LEAD_MISSION_WAIT {
+                    dr.return_state = dr.state;
+                    dr.set_state(state::LEAD_MISSION_WAIT);
+                }
+            }
             // The kick request (`NDrone2_KickObject` 0x14aa00): the bound ScriptPlayer's script
             // unpauses (`SP_UnPause` 0x1dca58: `+0x2c = 1`, the current script's pause cleared).
             if dr.kick_attempt {

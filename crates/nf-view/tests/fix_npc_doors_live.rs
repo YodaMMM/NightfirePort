@@ -203,7 +203,12 @@ fn the_escort_opens_the_interior_doors_on_his_route() {
             // opened on schedule: the +1327 OPEN line). A dry mid-round spiral is the real time
             // sink (each wedged resupply leg burns 2×6000 ticks), and the per-round top-up below
             // keeps the fights supplied.
-            assert!(w.total_ticks - start_ticks < 120_000, "the escort follow cap\n{}", doors_dump(&w, ci));
+            // mayhew-wait: the ally-wait hold (0x153358:85-94) inserts the ambush leg — the
+            // corridor plate arms SP #276 (ch 0x33), the three guards fight and die, ch 0x99
+            // releases the hold — before the escort leads west. The pre-hold cap measured 120k
+            // with door #2 at +54215; the hold leg moves the doors past +160190 (measured), so
+            // the budget follows the run, not the assertions.
+            assert!(w.total_ticks - start_ticks < 260_000, "the escort follow cap\n{}", doors_dump(&w, ci));
         }
         // Stalled: who is armed and started within 14 of the contact (LeadHide's band)?
         let guards: Vec<usize> = {
@@ -216,6 +221,13 @@ fn the_escort_opens_the_interior_doors_on_his_route() {
         };
         if guards.is_empty() {
             // No threat: close on him and try again (the lead wait bands, PlayerInWay).
+            // The ally-wait hold (0x153358:85-94 → 0x21 until ch 0x99) needs the corridor plate
+            // (6.79, 6.04, 8.91) crossed to arm the ambush (ch 0x32 → mux → 0x33 → SP #276 →
+            // 0x0e → the guards; their deaths → AND mux → 0x99 releases the hold) [D the
+            // placements + the lib dump] — the plate is on the escort route, walk it.
+            if !w.scene.sim.as_ref().unwrap().drones.channels.on(0x33) {
+                w.walk_nav_to([6.79, 0.0, 8.91], "onto the corridor plate", 0.4);
+            }
             let cpos = w.scene.sim.as_ref().unwrap().drones.list[ci].pos;
             w.walk_nav_to(cpos, "close on the contact", 4.0);
             continue;
@@ -248,14 +260,18 @@ fn the_escort_opens_the_interior_doors_on_his_route() {
     assert!(cpos1[0] < -15.0,
         "the escort never led past the interior shoji doors (settled at ({:.1},{:.1},{:.1}))",
         cpos1[0], cpos1[1], cpos1[2]);
-    // 2. SISTER: door #1 (the screenshot door) opened while Bond was OUTSIDE his 2.0 use reach of
-    //    it — the escort's own door handling (DSTATE_OpenDoor → Door_Activate), not Bond's E.
-    //    (Bond's follow keeps him 4.5..10 behind the contact; only the guard-clear rounds walk him
-    //    elsewhere, and those runs begin after the escort's first door.)
-    let d1 = open_events.iter().find(|n| n.contains("door #1 ")).expect("door #1 never opened");
-    let bond_d1: f32 = d1.rsplit("bond→contact ").next().and_then(|s| s.trim().parse().ok()).unwrap_or(0.0);
-    eprintln!("[01] door #1 opened with Bond {bond_d1:.1} from the contact");
-    assert!(bond_d1 > 2.5, "door #1 opened with Bond too close ({bond_d1:.1}) — not the escort's doing? ({d1})");
+    // 2. SISTER (mayhew-wait revision): door #2 — the escort's own door handling
+    //    (DSTATE_OpenDoor → Door_Activate) — opened while Bond was OUTSIDE his 2.0 use reach of
+    //    it. The original pin named door #1: the ally-wait hold (0x153358:85-94 → 0x21 until ch
+    //    0x99) changes that flow, and the game's own data says the test's premise was wrong —
+    //    the ambush guards whose deaths raise 0x99 stand BEYOND door #1 ((5.42,14.44)/(9.05,
+    //    17.01)/(5.93,17.86) [D]), so the PLAYER opens door #1 during the ambush while the
+    //    escort is still held west of it. The escort's first self-opened door is #2, and the
+    //    run shows it: OPEN at +160190 with bond→contact 17.0.
+    let d2 = open_events.iter().find(|n| n.contains("door #2 ")).expect("door #2 never opened");
+    let bond_d2: f32 = d2.rsplit("bond→contact ").next().and_then(|s| s.trim().parse().ok()).unwrap_or(0.0);
+    eprintln!("[01] door #2 opened with Bond {bond_d2:.1} from the contact");
+    assert!(bond_d2 > 2.5, "door #2 opened with Bond too close ({bond_d2:.1}) — not the escort's doing? ({d2})");
     // 3. And he is not parked against a still-closed door (the old symptom):
     //    every door within 2.5 of his settled position is OPEN.
     let blocking: Vec<String> = w.scene.sim.as_ref().unwrap().drones.doors.list.iter().enumerate()
