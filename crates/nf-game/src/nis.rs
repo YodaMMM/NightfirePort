@@ -1103,46 +1103,74 @@ impl Script {
                 }
                 let (ehash, ekind) = match objs.list.get(o) { Some(Some(Obj::Entity { hash, kind, .. })) => (*hash, *kind), _ => (0, 0) };
                 let hash0 = ehash == 0 && ekind == 0x19;
-                // The camera-started identity — the GENERAL lifecycle rule: an unparented case-1
-                // stream always concats si+0x00 (the 10th GetInterp arg = parent == -1, stored at
-                // 0x1d9a98 [M 0x1d9a08 disasm; tail `if (param_10) Concat(si+0x00, out)` 0x1da158's]),
-                // and si+0x00's VALUE is the lifecycle: the SP placement at Script_Load [M
-                // 0x1d8248:148] until Script_CameraStart (op 0x0d) overwrites it with Mat_IdentityT
-                // — a0 = si binary-proven at 0x1d916c — and it is NEVER restored (Script_CameraEnd
-                // 0x1db348:9-13 doesn't touch it). So every unparented stream's keys land COMPOSED
-                // before the script's camera op and KEYS-ALONE after it — no per-kind/per-hash
-                // branch exists in the interp path [M Script_CreateEntity 0x1d8968:35-173]. The
-                // 0700004a ride pack 0x060006cf is the whole-disc proof both ways [D 0780004a.bin]:
-                // s0 carries op 0x0d (Camera first 0 last 0x7d) at t0 — BEFORE every cast/entity
-                // stream starts (s1/s2/s3 anims at t125/127/129, s7 satchel t133, s13 lift floor
-                // t1405-keyed keys (0, 0.99→-5.33, 0)) — so the scene's camera (2.889, -7.829,
-                // -4.583 → 2.094, -9.921, -2.073 [D key[0]/key[124]]), the lift floor, the satchel
-                // AND the anim cast all draw keys-alone in the shaft's boarding frame: the guards'
-                // roots (0.85/1.15) stand on the keyed floor (0.99) and Bond's root (-6.9→-13.5,
-                // seq 0x040005fe [D]) hangs ~8 below it — the rope descend. Composing the SP base
-                // (0, -53.53, -3.38) [D placement #289] into the pack's entities after the camera
-                // op threw the deck 53 units under the cast — Bond floated above the port's own
-                // composed floor (level-4a-ride-cast-b's open compose site, resolved HERE: the
-                // game's base is the IDENTITY past op 0x0d). The pre-camera compose stays: the
-                // streams before the camera op keep the placement (07000014's fusebox wire and
-                // 07000008's safe key LOCAL offsets and are render-verified with the base applied —
-                // their streams key before any camera op). The hash-0 kind-0x19 marker skip above
-                // stays (its 4a-lift-4 pin is [L] and its base state is not re-derived here).
-                // SCOPED CARVE-OUT [S] unverified: 07000008's intro script 0x06000077 (the level's
-                // only NIS — camera op in s0, entity/anim streams s1..s17 [D ride08_cam_probe])
-                // FAILS the gondola walkreal when the world-alone rule reaches it (Bond nav-deadlocks
-                // at the gondola mouth, 143.8,46.35,-106.85 → the 112,27.4,-122 descent never opens;
-                // green again with this hash excluded, 28.7 s). The game-side discriminator between
-                // 0x06000077's post-camera entities (which keep the placement) and the ride pack's
-                // (which do not) is the named open item — the live check (stream parents / EntityEnd
-                // times vs the op tick / the loop's si reseed) decides it; the decompile's case-1
-                // path has no per-hash branch [M 0x1d8968:35-173]. Until then the world-alone rule
-                // lands scoped to the scene it is proven in: the 0700004a ride pack 0x060006cf, whose
-                // stage (floor/satchel/cast) shares the raw frame [D keys/roots probes].
-                let keys_alone = self.camera_started && self.streams[i].parent < 0
-                    && (self.nis.hashcode == 0x0600_06cf
-                        || self.nis.hashcode == 0x0600_062f
-                        || (ehash != 0 && ekind == 0xff));
+                // The camera-started identity, scoped to the class the game proves AND the door
+                // needs: an unparented case-1 stream's base compose is `Script_GetInterp`'s flag
+                // = parent == -1 (the 10th arg stored at 0x1d9a98 [M 0x1d9a08 disasm; the
+                // decompile drops the slot; the tail `if (param_10) Concat(si+0x00, out)` is
+                // 0x1da158's]), and `Script_CameraStart` has overwritten si+0x00 with the identity
+                // [M 0x1d9140 disasm] — so from the camera op on the game's unparented entity
+                // matrix is the KEYS ALONE. The port scopes it to the DEFAULT create arm's
+                // gfx-bound movers (obj_type 0xff, hash != 0 — `Script_CreateEntity` 0x1d8968's
+                // fallthrough: `control_create_object` + `hashtable_set_object_to_entity_gfx`
+                // 0x1ca6d8 [M]), the class 07000014's door leaves (streams 10/11, no parent, 0xff,
+                // hashes 0x02000891/92 [D decode]) key world space in: composing the SP placement
+                // threw them 56 units off and the door never moved while Kiko walked through it.
+                // A whole-disc census (probe_cam_scripts) finds NO other non-zero-hash 0xff
+                // stream in a camera-op script, so nothing else shifts. The special arms keep the
+                // compose (a port choice: 07000001's intro 0x06000087 s5/s11 kind-0x31 and the
+                // hash-0 classes pin composed spots in the live walks — interact_07000001,
+                // walkreal_07000001 — and 0700004a's hash-0 0xff/0x19 markers pin theirs in 4a-lift-4).
+                // cutscene-kind31-frame-2 — the GENERAL rule replaces the per-class/per-script
+                // scopes (the 0xff-hash arm and the 0x0600_062F arm this replaces): an unparented
+                // case-1 stream ALWAYS concats si+0x00 — the 10th arg to Script_GetInterp is
+                // `(stream+0x25 parent == -1)` stored at 0x1d9c0c [M 0x1d9a08 case-1 disasm; case 6
+                // the same at 0x1d9a98, case 7 at 0x1d9d6c; the ancestor calls pass 0 at
+                // 0x1d9cd4/0x1d9b30] — and GetInterp's tail runs `Concat(si+0x00, out)` on it
+                // [M 0x1da838-0x1da844]. si+0x00's VALUE is the lifecycle: View_RotTransMatrix of
+                // the SP placement at Script_Load [M 0x1d8248:148], then Mat_IdentityT(si) when
+                // Script_CameraStart (op 0x0d) decodes — binary-proven a0=si at 0x1d916c — and
+                // NEVER restored (Script_CameraEnd 0x1db348:9-13 doesn't touch it; the only other
+                // writers are Script_SetPosRot/SP_SetPosRot 0x1db920:10-19 and SubScriptStart's
+                // zero-vector load 0x1db050:28-38). So every unparented stream's keys (and the
+                // event-6 hand-back snapshot of its entity, Script_EventHandler 0x1d94c0 case 6
+                // Mat_Copy(obj+0x90 → si+0x40) → Script_Free 0x1da880:44-48 → Player_Enable
+                // 0x195498 player +0x30) land COMPOSED before the script's camera op and
+                // KEYS-ALONE after it — no per-kind or per-hash branch exists in the interp path
+                // [M Script_CreateEntity 0x1d8968:35-173: kind only selects the constructor]. The
+                // disc census (nf-formats/tests/nis_kind31_census.rs): every kind-0x31 stream in a
+                // camera script keys at/after its script's camera tick — 0x0600062F's s10 (op
+                // t1197) and 0x06000087's s5 alike — so the world-frame reading generalizes to
+                // the GFX-BOUND streams; frame-3 adds the hash-0 carve-out below.
+                // The hash-0 kind-0x19 marker skip above stays: its 4a-lift-4 pin is [L] and its
+                // scene's base state is not re-derived here.
+                // cutscene-kind31-frame-3 — the HASH-0 carve-out on frame-2's general rule: the
+                // general keys_alone (camera_started && parent < 0) holds for the GFX-BOUND
+                // streams (07000014's door leaves 0x02000891/92 key world-frame post-camera —
+                // the level-14-capture-placement pin), but the HASH-0 entity streams compose
+                // ALWAYS: the two disc hand-back anchors — 0x06000087 s11 (hash 0, obj_type 0x31,
+                // created op@2118 with ONE key at t2118 — keys[a..=b] INCLUSIVE, so the census's
+                // "first_key 3893 > last_key 3892 no-keys" read was the camera's exclusive
+                // convention misapplied) and 0x06000077 s15 (hash 0, obj_type 0xff, op@3870, ONE
+                // key) — each sits one tick before its script's event-6 hand-back
+                // (Script_EventHandler 0x1d94c0 case 6 snapshots the PREVIOUS stream's obj+0x90
+                // into si+0x40; Script_Free 0x1da880:44-48 Player_Enables the player at it), and
+                // the real-path tests pin the COMPOSED spot (mayhew_hold/escort_hide_findrun/
+                // walkreal_07000008/zoe_gondola all red when these go keys-alone, green composed;
+                // the NF_KA_CLASS bisect: hash-0 red, kind-0x31/0x19-with-hash green).
+                // The [M] mechanism for the carve-out is NOT derived: the case-1 own-key call
+                // passes the base flag (parent == -1) [M 0x1d9c0c] and GetInterp's tail
+                // Concat(si, out) prepends si+0x00 [M 0x1da1a4 sw a0=si to 0(sp), 0x1da840], and
+                // Script_CameraStart writes Mat_IdentityT(si) [M 0x1d916c disasm a0=si] — so
+                // si+0x00 should be the identity at the anchor tick, and the game's observed
+                // compose needs something to restore the placement base between the camera op
+                // (t0) and the anchor (t2118/t3870). No restorer found in the decompile
+                // (CameraEnd 0x1db348 doesn't touch si+0x00; SubScriptStart 0x1db050 bases the
+                // SUB's own si on the zero vector 0x2d6200 [L ee_snapshot]; SP_SetPosRot's only
+                // SP-mode caller is Copter_Move 0x17d628:115). The compose itself is the
+                // test-pinned behaviour; see the report's live check (a PCSX2 read of si+0x00 at
+                // the anchor tick settles the restorer).
+                let hash0_anchor = ehash == 0 && ekind != 0x19;
+                let keys_alone = self.camera_started && self.streams[i].parent < 0 && !hash0_anchor;
                 if !hash0 && !keys_alone { m = mul(&m, &self.matrix); }
                 if let Some(Some(Obj::Entity { matrix, alpha: a, .. })) = objs.list.get_mut(o) { *matrix = m; *a = alpha; }
             }
