@@ -1130,10 +1130,38 @@ impl Script {
                 // [M Script_CreateEntity 0x1d8968:35-173: kind only selects the constructor]. The
                 // disc census (nf-formats/tests/nis_kind31_census.rs): every kind-0x31 stream in a
                 // camera script keys at/after its script's camera tick — 0x0600062F's s10 (op
-                // t1197) and 0x06000087's s5/s11 alike — so the world-frame reading generalizes.
+                // t1197) and 0x06000087's s5 alike — so the world-frame reading generalizes to
+                // the GFX-BOUND streams; frame-3 adds the hash-0 carve-out below.
                 // The hash-0 kind-0x19 marker skip above stays: its 4a-lift-4 pin is [L] and its
                 // scene's base state is not re-derived here.
-                let keys_alone = self.camera_started && self.streams[i].parent < 0;
+                // cutscene-kind31-frame-3 — the HASH-0 carve-out on frame-2's general rule: the
+                // general keys_alone (camera_started && parent < 0) holds for the GFX-BOUND
+                // streams (07000014's door leaves 0x02000891/92 key world-frame post-camera —
+                // the level-14-capture-placement pin), but the HASH-0 entity streams compose
+                // ALWAYS: the two disc hand-back anchors — 0x06000087 s11 (hash 0, obj_type 0x31,
+                // created op@2118 with ONE key at t2118 — keys[a..=b] INCLUSIVE, so the census's
+                // "first_key 3893 > last_key 3892 no-keys" read was the camera's exclusive
+                // convention misapplied) and 0x06000077 s15 (hash 0, obj_type 0xff, op@3870, ONE
+                // key) — each sits one tick before its script's event-6 hand-back
+                // (Script_EventHandler 0x1d94c0 case 6 snapshots the PREVIOUS stream's obj+0x90
+                // into si+0x40; Script_Free 0x1da880:44-48 Player_Enables the player at it), and
+                // the real-path tests pin the COMPOSED spot (mayhew_hold/escort_hide_findrun/
+                // walkreal_07000008/zoe_gondola all red when these go keys-alone, green composed;
+                // the NF_KA_CLASS bisect: hash-0 red, kind-0x31/0x19-with-hash green).
+                // The [M] mechanism for the carve-out is NOT derived: the case-1 own-key call
+                // passes the base flag (parent == -1) [M 0x1d9c0c] and GetInterp's tail
+                // Concat(si, out) prepends si+0x00 [M 0x1da1a4 sw a0=si to 0(sp), 0x1da840], and
+                // Script_CameraStart writes Mat_IdentityT(si) [M 0x1d916c disasm a0=si] — so
+                // si+0x00 should be the identity at the anchor tick, and the game's observed
+                // compose needs something to restore the placement base between the camera op
+                // (t0) and the anchor (t2118/t3870). No restorer found in the decompile
+                // (CameraEnd 0x1db348 doesn't touch si+0x00; SubScriptStart 0x1db050 bases the
+                // SUB's own si on the zero vector 0x2d6200 [L ee_snapshot]; SP_SetPosRot's only
+                // SP-mode caller is Copter_Move 0x17d628:115). The compose itself is the
+                // test-pinned behaviour; see the report's live check (a PCSX2 read of si+0x00 at
+                // the anchor tick settles the restorer).
+                let hash0_anchor = ehash == 0 && ekind != 0x19;
+                let keys_alone = self.camera_started && self.streams[i].parent < 0 && !hash0_anchor;
                 if !hash0 && !keys_alone { m = mul(&m, &self.matrix); }
                 if let Some(Some(Obj::Entity { matrix, alpha: a, .. })) = objs.list.get_mut(o) { *matrix = m; *a = alpha; }
             }
