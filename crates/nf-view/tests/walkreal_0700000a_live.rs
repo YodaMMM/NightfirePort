@@ -498,7 +498,7 @@ fn the_spawn_height_matches_the_game_snapshot() {
 /// stuck panic) — the climb needs the game's per-tick push/step shape through the doorway (the
 /// live check in the report).
 #[test]
-#[ignore = "the live answers are in [L 2026-10-26: the game slides north around the jamb to z 16.83 and through, settling y 1.1285; the wall press's stopper is the handler tail 0x194c70 obj+0x30 += BL+0x750] but the port's per-face pushes jam at the jamb (the walker's straight-line walk_to stuck at (-9.15,1.09,15.92) with the kill on); the radial-dir ports measured-and-reverted (the up-lift / the re-wedge, see the report) — needs the game's real ref value (the live check in the report)"]
+#[ignore = "the through-line route (landed here from settle-5's decode) now CROSSES the doorway at the game's rate with the landed settle-5 radial tail — 155 ticks to (-9.27,1.12,16.60) [L 2026-10-26, reproduced this round] — but the y pin still reads 1.1201 vs the settled 1.1285 [L 2026-10-26]: the hall glide's +0.0256 climb settle (the feet-band walked-dy growth, band-settle finding 1) is the separate mechanism still unported"]
 fn the_west_hall_glide_height_matches_the_game() {
     let mut w = load_carry(None);
     // Wait out the SS door sweep (the same guard the main walk runs).
@@ -511,13 +511,13 @@ fn the_west_hall_glide_height_matches_the_game() {
     }
     w.walk_to(Wp::new(-3.9, 0.0, 13.2), "out of the lift");
     w.walk_to(Wp::new(-3.9, 0.0, 15.5).r(1.2), "lobby south");
-    // The game's doorway line [L fresh boot: its walk brushed the doorway's wall base at
-    // x −8.304 and ended the glide at (−11.39, 16.29)] — the base pieces sit at z ≈ 16.28
-    // (the jamb tris (−8.604..−8.304, y 0..0.19) at z 16.278 [D port world tris]); the older
-    // straight (−10, 16.0) leg crossed x −8.3 at z ≈ 15.86, SOUTH of the base, and the port's
-    // capsule (bottom riding dy − cc = 0.054 above the floor) cleared it without a touch.
-    w.walk_to(Wp::new(-8.45, 0.4, 16.29).r(0.4), "the doorway base line");
-    w.walk_to(Wp::new(-10.0, 0.4, 16.29).r(0.8), "the west hall");
+    // The game's glide is ONE walk from the lobby through the doorway into the hall [L
+    // 2026-10-26: the fresh-boot glide crosses the doorway in 155 ticks, exiting at
+    // (-9.27, 1.12, 16.60) — the jamb slide around the base pieces at z ≈ 16.278 (the jamb tris
+    // (-8.604..-8.304, y 0..0.19) [D port world tris]) is part of the through-line, not a
+    // detour]. The old (-8.45, 16.29) stop sat INSIDE the jamb column's x-range and wedged the
+    // walker (the doorway slide's route is the through-line, decoded on settle-5).
+    w.walk_to(Wp::new(-10.0, 0.4, 16.29).r(0.8), "the west hall (the through-line)");
     // Read the glide y in the hall's steady window (x −9.5..−11.39 on the walked line).
     let p = w.scene.sim.as_ref().unwrap().bond.pos;
     assert!(p[0] < -9.0, "walked into the west hall, at {p:?}");

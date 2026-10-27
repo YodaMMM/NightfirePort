@@ -11346,6 +11346,10 @@ pub struct Drones {
     /// 0x100000/0x200000 arms pass f12 = 1.0 [M 0x12d0ec-0x12d0f0 `lui $at, 0x3f80; mtc1 $at, $f12`]
     /// with radius f13 = +0x08. Tuple: (pos, radius, damage, owner, weapon_type, script, scale).
     pub pending_blasts: Vec<(V3, f32, f32, usize, u16, u32, f32, u16)>,
+    /// gunimp-door: the mounted laser's beam `Explode_Propagate` requests [M GunImp_Update
+    /// 0x1320d8:433-436 — `(4.0, 5.0, the ray hit, cel, the imp obj)`], queued by the fire tick
+    /// and drained at the same tick's blast slot (the sweep's drone arm needs the tick's `Data`).
+    pub pending_beam_blasts: Vec<(V3, f32, f32, usize)>,
     /// explode-debris-spawn: the live blast objects (`Explode_Create` 0x17cbd0's class-0x0F
     /// objects, EXPLODEINFO at obj+0xE0) — age/kind/script state per blast, ticked each frame at
     /// the head of the control walk (newest first) like the game's `DynamicObjList` [M 0x1336f8
@@ -11354,6 +11358,12 @@ pub struct Drones {
     /// explode-debris-spawn: the blasts' debris particles (`Debris_CreateEx` 0x1ac808's class-0x10
     /// objects), integrated by `Debris_Update` 0x1aac00 (shared with the breakable path).
     pub blast_debris: Vec<crate::shatter::Debris>,
+    /// rigid-body-wiring: the kind-0xD8 rigid bodies (`RB_Create` 0x1d6bf0 via
+    /// `parsemap_create_dynamic_objects` 0x1d04f0 case 0xD8) — created per level attach,
+    /// ticked in the control walk at the per-kind dispatch entry {RB_Update 0x1d6e38,
+    /// RB_CollisionHandler 0x1d7a80} (the 0x26f9c8 table pair), blasts armed through the
+    /// class-5 hit arm of `RB_RestingContact` 0x1d7168.
+    pub rbodies: crate::rigid_body::Rbodies,
     /// The satchel countdown beeps raised this tick (pos) — Bullet_DoTrails' 0x447 arm
     /// [M 0x12d890:435-443], flushed to audio + `sounds` after the bullets pass.
     pub pending_beeps: Vec<V3>,
@@ -11880,6 +11890,10 @@ pub struct Drones {
     /// disc-wide [D script-census.md:144]); the creator's param map in `crate::space_laser`.
     /// `SpaceLaser_Update` 0x1aa3f8 (the arm/fire/damage flow) is the remaining gap.
     pub space_lasers: Vec<crate::space_laser::SpaceLaser>,
+    /// The space lasers' beams alive this tick (`Debris_Update` 0x1aac00's class-0x10 beam
+    /// objects — life 5 ticks, alpha fixed [M 001aac00:20-28]): the renderer's draw hand-off
+    /// (the draw is done separately; the sim only exposes the endpoints + alpha per tick).
+    pub space_laser_beams: Vec<crate::space_laser::LaserBeam>,
     /// frag-throw-timing2: the last stun flash's recorded inputs (the `FlashProbe` doc). One
     /// pop deep — each new pop overwrites it; cleared nowhere (the probe is read-after-pop by
     /// tests; the flash state itself decays independently).
@@ -12069,6 +12083,7 @@ impl Drones {
             spawn_counter: 0, audio: Default::default(), script_sounds: Vec::new(), map_sounds: Default::default(), music: Default::default(), attack_gate: Default::default(), alarm_music: [0; 3], voice_last: Vec::new(), patrol_cooldown: 0, saw_opp_this_frame: false, saw_opp_last_frame: false, searchlights: Default::default(), doors: Default::default(), fuseboxes: Vec::new(), wire_geo: Default::default(), sss: Default::default(), bullet_paths: Vec::new(), sl_shots: Vec::new(), props: Default::default(), break_kills: Vec::new(), breaks: Default::default(), monitors: Default::default(), mission: crate::mission::Mission::new(), mission_carry: None, mission_inited: false, mission_events: Vec::new(), useobjs: Default::default(), ai_points: Vec::new(), bullet_path_weapons: Vec::new(), copters: Vec::new(), copter_paths: Vec::new(), locks: Vec::new(), grapple_points: Vec::new(), prev_event2: 0,
             bullet_contacts_now: Vec::new(),
             bullet_contacts_prev: Vec::new(),
+            space_laser_beams: Vec::new(),
             // fix-06-alarm.
             sound_triggers: Default::default(),
             // The shared target registry (NPCGlobals DAT_00299110).
@@ -12109,8 +12124,10 @@ impl Drones {
             // fix-restart-target: the fail-menu Restart's warm arm + the current level (GameState+0xC).
             level_exit_restart: false,
             pending_blasts: Vec::new(),
+            pending_beam_blasts: Vec::new(),
             blasts: Vec::new(),
             blast_debris: Vec::new(),
+            rbodies: Default::default(),
             pending_beeps: Vec::new(),
             fusebox_hurts: 0,
             level_current: 0,
@@ -12310,6 +12327,9 @@ impl Drones {
         self.breaks = crate::breakable::Breaks::create(level);
         // The monitor consoles (0x30) [M Monitor_Create 0x1b08b0 — same pass].
         self.monitors = crate::monitor::Monitors::create(level);
+        // The kind-0xD8 rigid bodies (RB_Create 0x1d6bf0 via parsemap_create_dynamic_objects
+        // 0x1d04f0 case 0xD8 — the main map's placements, the parsemap-epilogue rule).
+        self.rbodies = crate::rigid_body::Rbodies::create(level);
         // The Q-Worm PCs (0x35) and switches (0x29) of `Player_Activate` 0x1a5170 (map-tower;
         // `parsemap_create_dynamic_objects` 0x1d04f0 cases 0x35/0x29, crate::useobj).
         let mm = level.main_map().unwrap_or(0);
@@ -12702,7 +12722,18 @@ impl Drones {
         self.space_lasers.clear();
         for (i, p) in level.maps[mi].placements.iter().enumerate() {
             if p.flags & 0xff != 0x38 { continue; }
-            self.space_lasers.push(crate::space_laser::from_placement(i, &p.params));
+            let mut l = crate::space_laser::from_placement(i, &p.params);
+            // The fire origin seeds from the placement's own position: the game's lane 0 fills
+            // only through `SpaceLaser_Register` 0x1aa9e8 (the tracking scripts' event callback
+            // [M Script_EventHandler 0x1d94c0:173-174], copying the current entity's obj+0xC0),
+            // and those entities are bare `control_create_object(0, ...)` objects at the zero
+            // quad [M Script_CreateEntity 0x1d8968's fallthrough + Script_EntityStart
+            // 0x1d8d78's `Vec_Copy2(+0xc0, +0x40, +0x30)` of zeros] — the level's kind-0x38
+            // placement IS the "BigLaserBeam Fire Marker" at (0,0,0) [D 0700001b-audit.md:275],
+            // so the registered quad reads the placement's position. The stream decode shows no
+            // position ops [D audit:611-612]; a live check settles the register's result.
+            l.fire_origin = p.translation;
+            self.space_lasers.push(l);
         }
         // Never-called proofs [M/D]: the walk's remaining AI-reachable creators have no disc
         // placements. `Sub_Create` 0x1ad6c0 (case 0x36, 0x1d04f0:215) and `MiniSub_Create`
@@ -12957,9 +12988,7 @@ fn segment_hits_sphere(a: V3, b: V3, c: V3, r: f32) -> bool {
             // The player's shell is reserved now and ejected when the +0x78 delay ends, from the view model's
             // datum as posed then (`eject_bone_now`, set by the viewer each tick) [M 0x12fde0 / 0x12f678].
             Some(_) => self.casings.reserve(&d.surfaces.map(|s| &s.ammo).unwrap_or(&Default::default()), w, None),
-            None => self.casings.eject_with_floor(&d.surfaces.map(|s| &s.ammo).unwrap_or(&Default::default()), w, from, yaw, pitch, from[1],
-                // The kept-casing rest floor [S rope-guard-hitbox]: the static floor beneath the muzzle.
-                d.world.segment(from, [from[0], from[1] - 40.0, from[2]]).map(|t| from[1] - 40.0 * t), &mut self.rng),
+            None => self.casings.eject(&d.surfaces.map(|s| &s.ammo).unwrap_or(&Default::default()), w, from, yaw, pitch, from[1], &mut self.rng),
         }
         // Heard by the drones; the audible shot comes from the gun's fire script (op 1), played by the player's owner.
         if !sound.looped { self.sounds.push(Sound { id: sound.id, pos: from, inner: sound.inner, outer: sound.outer, weight: sound.weight }); }
@@ -13109,6 +13138,48 @@ fn segment_hits_sphere(a: V3, b: V3, c: V3, r: f32) -> bool {
         // straight into rec+0x64 and rec+0x6c.
         for (ci, dmg) in hits.copters {
             if let Some(c) = self.copters.get_mut(ci) { c.damage += dmg; c.attack_acc += dmg; }
+        }
+        // rigid-body-wiring: the blast reaches the kind-0xD8 bodies through the class-5 hit
+        // arm of RB_RestingContact 0x1d7168 / RB_RestingContactRot 0x1d73a0. The game's
+        // explode sweep (Collide_SphereIntersect 0x17c518:67) finds the objects and the
+        // falloff is the shared exact form (:78-81 — the port's mp::combat::blast_falloff);
+        // the hit record's velocity/point construction is the port's stand-in [S — the game's
+        // explosion-object contact record is unported], the arm math itself is the
+        // decompile's [M 0x1d7238-0x1d72e4 / 0x1d7428-0x1d74c8].
+        if !self.rbodies.list.is_empty() {
+            for rbo in self.rbodies.list.iter_mut() {
+                let centre = rbo.st.trans;
+                let falloff = crate::mp::combat::blast_falloff(pos, radius, damage, centre, rbo.st.s13c);
+                if falloff < 0.0002 { continue; }
+                let dir = [centre[0] - pos[0], centre[1] - pos[1], centre[2] - pos[2]];
+                let mag = (dir[0] * dir[0] + dir[1] * dir[1] + dir[2] * dir[2]).sqrt();
+                let vel = if mag > 0.0 { [dir[0] / mag, dir[1] / mag, dir[2] / mag] } else { [0.0, 1.0, 0.0] };
+                // The contact point stand-in [S]: the body's surface point toward the blast,
+                // offset by a fixed tangent — an axis-aligned point makes r ∥ impulse and the
+                // game's r×impulse torque would read zero for every sphere-sphere blast, while
+                // the game's barrels visibly tip (the explosion is a gas volume, not a point:
+                // its contact is off-axis). The tangent is deterministic per body (no RNG).
+                let tangent = {
+                    let c = [vel[1] * 0.0 - vel[2] * 1.0, vel[2] * 0.0 - vel[0] * 0.0, vel[0] * 1.0 - vel[1] * 0.0];
+                    let m = (c[0] * c[0] + c[1] * c[1] + c[2] * c[2]).sqrt();
+                    if m > 0.0 { [c[0] / m * rbo.st.s13c * 0.5, c[1] / m * rbo.st.s13c * 0.5, c[2] / m * rbo.st.s13c * 0.5] } else { [0.0; 3] }
+                };
+                let point = [
+                    centre[0] + vel[0] * rbo.st.s13c + tangent[0],
+                    centre[1] + vel[1] * rbo.st.s13c + tangent[1],
+                    centre[2] + vel[2] * rbo.st.s13c + tangent[2],
+                ];
+                rbo.hits.push(crate::rigid_body::RbHit {
+                    scale: falloff,
+                    normal: [-vel[0], -vel[1], -vel[2]],
+                    vel,
+                    point,
+                    other_class: 5,
+                    other_pos: pos,
+                });
+            }
+            let mut rb_sounds = Vec::new();
+            self.rbodies.handle_collisions(&mut rb_sounds);
         }
         for (di, ddmg) in hits.drones {
             if let Some(dr) = self.list.get_mut(di) {
@@ -14528,7 +14599,7 @@ fn segment_hits_sphere(a: V3, b: V3, c: V3, r: f32) -> bool {
     /// bullet (`Bullet_init`'s owner is the player object [M 0x1320d8:327-331]) and flies the
     /// player-bullet flight, so its class-5 contacts drain the C5 `Destroy` leaves
     /// (`Destroy_CollisionHandler` 0x12bd48).
-    pub fn gunimp_tick(&mut self, weapons: &nf_formats::weapon::WeaponData, look: f32, turn: f32, fire: bool, use_key: bool, bond: &mut crate::player::Bond) {
+    pub fn gunimp_tick(&mut self, weapons: &nf_formats::weapon::WeaponData, world: &crate::world::CollisionWorld, look: f32, turn: f32, fire: bool, use_key: bool, bond: &mut crate::player::Bond) {
         let Some(gi) = self.props.gunimps.iter().position(|g| g.active) else { return };
         if use_key {
             // `Input_Action(slot, 0xe, 4)` → `GunImp_Deactivate` 0x132c18 [M 0x1320d8:119-123]:
@@ -14536,6 +14607,15 @@ fn segment_hits_sphere(a: V3, b: V3, c: V3, r: f32) -> bool {
             // the pose KEPT [M 0x132c18:33-47 writes no object position]. The velocity zeroes
             // with the game's BL+0x50/+0x10 [M 0x132c18:44-45].
             self.props.gunimps[gi].active = false;
+            // gunimp-beam-lifetime: leaving the gun clears the beam with it.
+            self.props.gunimps[gi].beam = None;
+            // and the looped fire sound dies with the mount [M GunImp_Deactivate 0x132c18:62-63 —
+            // `Sound_Stop(impl+0x98)`, the handle zeroed].
+            if self.props.gunimps[gi].fire_handle != 0 {
+                let h = self.props.gunimps[gi].fire_handle;
+                self.audio.stop(h);
+                self.props.gunimps[gi].fire_handle = 0;
+            }
             bond.vel = [0.0; 3];
             return;
         }
@@ -14558,8 +14638,11 @@ fn segment_hits_sphere(a: V3, b: V3, c: V3, r: f32) -> bool {
             // the 0.15 ease toward the smoothed mirrors [M 0x1320d8:136-161]
             g.pitch_s += (g.pitch - g.pitch_s) * 0.15;
             g.yaw_s += (g.yaw - g.yaw_s) * 0.15;
-            // the cooldown drains every tick regardless of state [M 0x1320d8:107-112]
-            g.cooldown -= 1.0;
+            // the heat and cooldown drains [M 0x1320d8:100-112]: each drains 1.0 per tick while
+            // positive, clamped at 0; the heat's floor clears the hot byte (the overheat
+            // recovers ~200 ticks after the last shot).
+            if g.heat > 0.0 { g.heat -= 1.0; } else { g.heat = 0.0; g.hot = false; }
+            g.cooldown = if g.cooldown > 0.0 { g.cooldown - 1.0 } else { 0.0 };
             // The player carry [M 0x1320d8:175-194]: the pose rides the smoothed turret (Bond's
             // yaw = the turret body's yaw, his position the seat through base·RotY, his view
             // pitch −pitch_s·0.5); the velocity zeroes — the game's disabled player runs no walk
@@ -14570,15 +14653,63 @@ fn segment_hits_sphere(a: V3, b: V3, c: V3, r: f32) -> bool {
             bond.pitch = pitch;
             bond.vel = [0.0; 3];
         }
-        if !fire || self.props.gunimps[gi].cooldown > 0.0 { return; }
+        // The fire/stop block [M GunImp_Update 0x1320d8:247-278]: released or hot → the stop
+        // path — `Sound_Stop(ext+0x98)` + handle zero (the 0x61 arm adds its spin-down 0x5e6 at
+        // :262-264) — and RETURN (the port's per-shot `play3d` was the fire-audio stutter: a
+        // re-attack every cadence tick instead of the stored handle's loop [M :284-291]);
+        // pressed while the cooldown holds → return with the loop kept (:256-258).
+        if !fire || self.props.gunimps[gi].hot {
+            if self.props.gunimps[gi].fire_handle != 0 {
+                let h = self.props.gunimps[gi].fire_handle;
+                let w = crate::gunimp::TURRET_GUNS[(self.props.gunimps[gi].turret as usize).min(crate::gunimp::TURRET_GUNS.len() - 1)].weapon;
+                if w == 0x61 {
+                    let p = self.props.gunimps[gi].pos;
+                    self.audio.play3d(0x5e6, p, None);
+                }
+                self.audio.stop(h);
+                self.props.gunimps[gi].fire_handle = 0;
+            }
+            self.props.gunimps[gi].beam = None;
+            return;
+        }
+        if self.props.gunimps[gi].cooldown > 0.0 {
+            // gunimp-beam-lifetime: the game's beam object is created and positioned per shot
+            // (`GunImp_Update` 0x1320d8:394-407) and stops drawing with the fire state — the port must not
+            // leave the last shot's quad hanging in the room after the trigger is released.
+            self.props.gunimps[gi].beam = None;
+            return;
+        }
         let tg = &crate::gunimp::TURRET_GUNS[(self.props.gunimps[gi].turret as usize).min(crate::gunimp::TURRET_GUNS.len() - 1)];
         {
             let g = &mut self.props.gunimps[gi];
             // the refill [M 0x1320d8:324 — `piVar2[0x25] = TurretGuns[+0x14]`], the heat [M
-            // 0x1320d8:292-298 — += 2.0 per laser shot, 200 saturates the hot byte]
+            // :292-298 — the 0x67/0x70 arm += 2.0 per shot, the 0x61 arm += 8.0 (:313); 200
+            // saturates the hot byte]
             g.cooldown = tg.interval;
-            g.heat += 2.0;
+            g.heat += if tg.weapon == 0x61 { 8.0 } else { 2.0 };
             if g.heat > 200.0 { g.hot = true; }
+        }
+        // The fire sounds [M 0x1320d8:281-334]: the 0x67/0x70 arm plays the TurretGuns entry's
+        // sound ONCE while no handle is stored (:284-291 — at the imp's own position +0x30; the
+        // loop holds across the cooldown ticks while the trigger stays down); the 0x61 arm plays
+        // the spin-up 0x5e4 and stores the 0x5e5 loop (:302-314); every other weapon plays its
+        // table sound per shot at the muzzle (:322, :332-334 — the loop arms carry 0xffff there).
+        let mut per_shot = 0xffffu32;
+        {
+            let g = &mut self.props.gunimps[gi];
+            match tg.weapon {
+                0x67 | 0x70 => {
+                    if g.fire_handle == 0 { g.fire_handle = self.audio.play3d(tg.sound as u32, g.pos, None); }
+                }
+                0x61 => {
+                    if g.fire_handle == 0 {
+                        self.audio.play3d(0x5e4, g.pos, None);
+                        g.fire_handle = self.audio.play3d(0x5e5, g.pos, None);
+                    }
+                    per_shot = tg.sound as u32;
+                }
+                _ => per_shot = tg.sound as u32,
+            }
         }
         let (muzzle, dir) = {
             let g = &self.props.gunimps[gi];
@@ -14603,6 +14734,147 @@ fn segment_hits_sphere(a: V3, b: V3, c: V3, r: f32) -> bool {
             guided_cam: false, // 0x67's +0x6C is 0 [L] — the arm is inert either way
             snd: 0, swoosh: None, born: self.frame,
         });
+        // gunimp-beam: the fire arm draws the game's beam quad `0x20005cd` through
+        // `PositionBeam(muzzle, ray hit)` (`GunImp_Update` 0x1320d8:394-407). The scene stretches
+        // the quad along this pair; the sim side keeps the endpoints.
+        let far0 = [muzzle[0] + dir[0] * 1000.0, muzzle[1] + dir[1] * 1000.0, muzzle[2] + dir[2] * 1000.0];
+        // gunimp-door: the fire arm's ray [M 0x1320d8:372-384 — `Collide_RayIntersect(muzzle,
+        // muzzle + dir·1000, cel, the imp obj, 0, &list, 0, 8)`] — the beam stops at the hit
+        // [M :385-387 — the far point becomes the hitdata's position], and the 0x67 arm runs
+        // `Explode_Propagate(4.0, 5.0, hit, cel, the imp obj)` at it [M :433-436]. The sweep's
+        // case 0x21 smashes a destroyable it reaches with ≥ 1.0 damage [M 0x17c518:141-177] and
+        // `Destroy_Smash` 0x12bb60:40 writes the leaf's channel — C5's ch 0x1f, the objective-6
+        // record's complete channel. The bullet drain alone (`Destroy_CollisionHandler`
+        // 0x12bd48:31-35, 50 a contact [L ee_start_05 +0x67·0x10c+0x0c]) needs 201 contact ticks
+        // against bigdoor02's 10000 [D p3] — the beam hit is the door's killer on the PS2.
+        // The port's ray: the scoped world segment plus the destroy leaves' and the breakables'
+        // own volumes (the game's ray hits the door itself — bigdoor02 carries a collision block
+        // [D]; the port's destroy box is its collision model) — nearest stop wins.
+        let mut best_t = world.segment_bullet_scoped(world.find_cel(muzzle), muzzle, far0);
+        for dr in self.props.destroy.iter().filter(|x| !x.dead) {
+            if let Some(t) = crate::breakable::Breaks::seg_box_t(muzzle, far0, dr.lo, dr.hi) {
+                if best_t.is_none_or(|b| t < b) { best_t = Some(t); }
+            }
+        }
+        for br in self.breaks.list.iter().filter(|x| !x.dead) {
+            if let Some(t) = crate::breakable::Breaks::seg_box_t(muzzle, far0, br.lo, br.hi) {
+                if best_t.is_none_or(|b| t < b) { best_t = Some(t); }
+            }
+        }
+        let (far, hit) = match best_t {
+            Some(t) => {
+                let h = [muzzle[0] + (far0[0] - muzzle[0]) * t, muzzle[1] + (far0[1] - muzzle[1]) * t,
+                         muzzle[2] + (far0[2] - muzzle[2]) * t];
+                (h, Some(h))
+            }
+            None => (far0, None),
+        };
+        self.props.gunimps[gi].beam = Some((muzzle, far));
+        if weapon == 0x67 {
+            if let Some(hit) = hit {
+                // The attacker is the imp object, not the player [M :435 — param_1 of
+                // GunImp_Update; usize::MAX is the port's player mark, so the beam carries
+                // MAX-1: a guard hit by the beam does not credit Bond]. The sweep drains at
+                // this tick's blast slot (`run_beam_explodes` — the drone arm needs the tick's
+                // `Data`).
+                self.pending_beam_blasts.push((hit, 4.0, 5.0, usize::MAX - 1));
+            }
+        }
+        // gunimp-sound: the non-loop arms' per-shot one-shot at the muzzle [M 0x1320d8:332-334];
+        // the laser's loop already plays (the arm above) and carries 0xffff here.
+        if per_shot != 0xffff {
+            self.audio.play3d(per_shot, muzzle, None);
+        }
+        // gunimp-light: the same fire arm creates the muzzle light [M GunImp_Update 0x1320d8 —
+        // Rand_FRand(1.0) then Light_Create(9.0, rand+1.5, muzzle, 0, 0xff, 0xff, 0, 0, 1, 0)]: radius
+        // 9.0, intensity rand+1.5, rgb (0, 255, 255), channel 0, life 1 tick, kind 1 (muzzle flash).
+        let intensity = 1.5 + self.rng.frand(1.0);
+        self.lights.create(9.0, intensity, muzzle, [0, 0xff, 0xff], 0, 0, 1, 0, &mut self.rng);
+    }
+
+    /// The mounted laser's beam `Explode_Propagate` [M GunImp_Update 0x1320d8:433-436 —
+    /// `(4.0, 5.0, the ray hit, cel, the imp obj)`; the sweep itself 0x17c518], drained at the
+    /// fire tick's blast slot. The falloff/sweep is the shared `explode::propagate` [M 0x17c518];
+    /// the arms the port applies: case 0x21 the destroyable smash (`Destroy_Smash` 0x12bb60 — the
+    /// channel write included), case 0x20 the breakable `Break_ApplyDamage` [M :163-167], case 2
+    /// the drone `Drone_ExplosiveHit` msg 9 [M :112-123], case 3 `Player_Hurt` [M :125-140]. The
+    /// game's remaining cases (0 copter, 5 the model destructibles, 0x28 vehicle, 0x35 MP, 0x36
+    /// GT, 0x37 sensor, 0x38 monitor, 0x3d sub, 0x4b hit-list) stay unwired here — none is
+    /// reachable from the 0d mount's beam [D census], and the blast path's own sweep covers the
+    /// copter/GT arms for the callers that need them.
+    fn run_beam_explodes(&mut self, d: &Data, player_pos: V3, frame: u32) {
+        let beams = std::mem::take(&mut self.pending_beam_blasts);
+        if beams.is_empty() { return; }
+        for (pos, radius, damage, owner) in beams {
+            let destroys: Vec<(usize, V3, f32, bool)> = self.props.destroy.iter().enumerate()
+                .filter(|(_, x)| !x.dead)
+                .map(|(i, x)| {
+                    let ext = [(x.hi[0] - x.lo[0]) / 2.0, (x.hi[1] - x.lo[1]) / 2.0, (x.hi[2] - x.lo[2]) / 2.0];
+                    (i, [(x.lo[0] + x.hi[0]) / 2.0, (x.lo[1] + x.hi[1]) / 2.0, (x.lo[2] + x.hi[2]) / 2.0],
+                     (ext[0] * ext[0] + ext[1] * ext[1] + ext[2] * ext[2]).sqrt(), false)
+                }).collect();
+            let breaks_t: Vec<(usize, V3, f32)> = self.breaks.list.iter().enumerate()
+                .filter(|(_, x)| !x.dead)
+                .map(|(i, x)| {
+                    let ext = [(x.hi[0] - x.lo[0]) / 2.0, (x.hi[1] - x.lo[1]) / 2.0, (x.hi[2] - x.lo[2]) / 2.0];
+                    (i, [(x.lo[0] + x.hi[0]) / 2.0, (x.lo[1] + x.hi[1]) / 2.0, (x.lo[2] + x.hi[2]) / 2.0],
+                     (ext[0] * ext[0] + ext[1] * ext[1] + ext[2] * ext[2]).sqrt())
+                }).collect();
+            // The sweep's candidates are the game's `Collide_SphereIntersect(pos, radius, cel,
+            // …, 0xc0)` hits [M 0x17c518:67-68]; the port passes its live lists, the falloff
+            // gate inside `propagate` picks the reached ones. The drones' 0.4 hit radius is the
+            // spawn_blast convention (the guards' body sphere stand-in).
+            let drones_t: Vec<(usize, V3, f32)> = self.list.iter().enumerate()
+                .filter(|(_, x)| x.present && !x.corpse).map(|(i, x)| (i, x.pos, 0.4)).collect();
+            let hits = crate::explode::propagate(pos, radius, damage, owner,
+                &crate::explode::Targets { drones: &drones_t, player: player_pos, breaks: &breaks_t,
+                    destroys: &destroys, copters: &[] });
+            // case 0x21 → `Destroy_Smash` [M 0x17c518:141-177 → 0x12bb60]: the channel write is
+            // the smash's, the blast queued like the bullet-kill path's (script by the type
+            // byte, owner the imp — not the player).
+            for i in hits.destroys {
+                if let Some((c, r, dmg, kind)) = self.props.smash(i, &mut self.channels, frame) {
+                    let script = match kind { 1 => 0x0600_0027, 2 => 0x0600_004f, _ => 0x0600_0052 };
+                    self.pending_blasts.push((c, r, dmg, owner, 0, script, r, 0));
+                }
+            }
+            // case 0x20 → `Break_ApplyDamage` [M 0x17c518:163-167 — hitdata+8 = the amount;
+            // the same subtract `Break_Update` 0x12bfd8:37 makes], the kill the bullet walk's.
+            for (i, dmg) in hits.breaks {
+                self.breaks.list[i].health -= dmg;
+                if self.breaks.list[i].health < 0.0 {
+                    if let Some(k) = self.breaks.kill(i, pos, pos, &mut self.rng) {
+                        self.break_kills.push((k.placement, k.kind, k.sound));
+                        let id = u32::from(k.sound);
+                        self.audio.play3d(id, k.pos, None);
+                        if let Some(t) = d.sfx {
+                            let e = t.get(id);
+                            if !e.looped { self.sounds.push(Sound { id, pos: k.pos, inner: e.inner, outer: e.outer, weight: e.weight }); }
+                        }
+                    }
+                }
+            }
+            // case 2 → `Drone_ExplosiveHit` [M 0x17c518:112-123], the spawn_blast shape: the
+            // damage is the msg-9 handler's job. owner MAX-1 (the imp) never sets hit_by_player.
+            for (di, ddmg) in hits.drones {
+                if let Some(dr) = self.list.get_mut(di) {
+                    dr.last_damage = ddmg;
+                    if owner == usize::MAX { dr.hit_by_player = true; }
+                    dr.blast = Some(pos); // DroneImpact+0x10: the blast VECTOR (the anim bearing)
+                    dr.send(d, &mut self.rng, frame, msg::EXPLOSION);
+                }
+            }
+            // case 3 → `Player_Hurt` [M 0x17c518:125-140], the spawn_blast arm (the difficulty
+            // factor applied inside `pain_generic`; the pain grunt rides the 1-in-4 roll).
+            if let Some(ph) = hits.player.filter(|_| !self.net_no_self_hurt) {
+                let before = self.health.health;
+                if self.health.pain_generic(&mut self.rng, ph, self.difficulty, d.level, 0) {
+                    self.play_pain_grunt(player_pos);
+                }
+                self.pain_alpha = 1.0;
+                self.player_hits.push((frame, owner, before - self.health.health));
+            }
+        }
     }
 
     /// `Player_Activate` (0x1a5170): Bond's use sphere (radius 1.0 at head + 1 unit forward) activates every
@@ -15406,33 +15678,20 @@ fn segment_hits_sphere(a: V3, b: V3, c: V3, r: f32) -> bool {
             // [M Bullet_init_casing_ex 0x12f678:83-114 — AnimGetBoneWorldTrans runs there]:
             // the player's from the view model (`eject_bone_now`), a guard's from its own
             // eject bone this tick (standins-drone-925).
-            let mut guard_bones: Vec<(usize, nf_formats::anim::Mat4, f32, Option<f32>)> = Vec::new();
+            let mut guard_bones: Vec<(usize, nf_formats::anim::Mat4, f32)> = Vec::new();
             let pend: Vec<Option<usize>> = self.casings.list.iter()
                 .filter(|c| c.state == 3 && c.pending).map(|c| c.shooter).collect();
             for s in pend.into_iter().flatten() {
-                if !guard_bones.iter().any(|(j, _, _, _)| *j == s) {
+                if !guard_bones.iter().any(|(j, _, _)| *j == s) {
                     if let Some(dr) = self.list.get(s) {
-                        if let Some(m) = dr.eject_matrix(d) {
-                            // The kept-casing rest floor [S rope-guard-hitbox]: the static floor
-                            // beneath the eject point (a 40-unit down-ray) — a rope guard hangs
-                            // 10+ units above the deck and the [M] plane rest froze there.
-                            let e = [m[3][0], m[3][1], m[3][2]];
-                            let floor = d.world.segment(e, [e[0], e[1] - 40.0, e[2]]).map(|t| e[1] - 40.0 * t);
-                            guard_bones.push((s, m, dr.pos[1], floor));
-                        }
+                        if let Some(m) = dr.eject_matrix(d) { guard_bones.push((s, m, dr.pos[1])); }
                     }
                 }
             }
-            let bone = self.eject_bone_now.as_ref().map(|(m, y)| {
-                let floor = {
-                    let e = [m[3][0], m[3][1], m[3][2]];
-                    d.world.segment(e, [e[0], e[1] - 40.0, e[2]]).map(|t| e[1] - 40.0 * t)
-                };
-                (m, *y, floor)
-            });
+            let bone = self.eject_bone_now.as_ref().map(|(m, y)| (m, *y));
             self.casings.update(|sh| {
                 if sh == usize::MAX { bone } else {
-                    guard_bones.iter().find(|(j, _, _, _)| *j == sh).map(|(_, m, y, f)| (m, *y, *f))
+                    guard_bones.iter().find(|(j, _, _)| *j == sh).map(|(_, m, y)| (m, *y))
                 }
             }, &mut self.rng, |id, pos| { audio.play3d(id as u32, pos, None); });
         }
@@ -15689,6 +15948,113 @@ fn segment_hits_sphere(a: V3, b: V3, c: V3, r: f32) -> bool {
             for m in &mut self.space_missiles {
                 m.tick(chans, deploy, frame);
             }
+        }
+        // The SpaceLasers tick in the same control pass — control_funcs row 0x50 =
+        // `SpaceLaser_Update` 0x1aa3f8 [M docs/atlas/object.md:164; the dispatcher case 0x38
+        // @0x1d06fc creates them — parsemap_create_dynamic_objects decomp :225-227]. The
+        // class-0x10 beam objects tick here too (`Debris_Update` 0x1aac00's life counter).
+        self.space_laser_beams.retain_mut(|b| {
+            b.life -= 1; // [M 001aac00:27-28 ext+0x30 decremented per update]
+            b.life > 0 // [M 001aac00:20-22 < 1 -> obj+0xfe |= 1, the delete pass]
+        });
+        {
+            let mut fired: Vec<crate::bullet::Bullet> = Vec::new();
+            let mut out: Vec<crate::space_laser::LaserOut> = Vec::new();
+            for l in &mut self.space_lasers {
+                if l.deleted { continue; }
+                // The game runs `Script_Update` on the loaded script every state-1/state-3 tick
+                // [M 0x1aa3f8:116/:176] and reads `Script_IsPlaying` for the state-1 exit
+                // [M :122-126] — the port's clock: the [D] lib length, read at the load.
+                let playing = l.script_len != 0 && l.script_ticks < l.script_len;
+                out.clear();
+                {
+                    let mut t = crate::space_laser::SpaceLaserTick {
+                        ch: &mut self.channels, frame, player: player.pos, script_playing: playing,
+                    };
+                    l.tick(&mut t, &mut self.rng, &mut out);
+                }
+                // [M :116/:176 the per-tick Script_Update runs in states 1 and 3 only.]
+                if l.state == 1 || l.state == 3 { l.script_ticks += 1; }
+                for o in out.drain(..) {
+                    match o {
+                        crate::space_laser::LaserOut::LoadScript { id, .. } => {
+                            // [D] the lib record's length (the tracking pair 360, the dead
+                            // script 10 [D 0700001b-audit.md:606-612]); the port ends the
+                            // script at it ([M] `Script_StreamEnd` 0x1db420 clears the play
+                            // bit at the End marker). A miss = the game's own Script_Load
+                            // failure: IsPlaying reports 0 and state 1 exits next tick.
+                            l.script_len = self.scripts.lib.get(&id).map(|n| n.length as u32).unwrap_or(0);
+                            // The load tick runs its own Script_Update [M 0x1aa3f8:103/:112 —
+                            // Script_Load + Script_Play + Script_Update inside state 0's arms].
+                            l.script_ticks = 1;
+                        }
+                        crate::space_laser::LaserOut::WhineStart => {
+                            // [M :119-121] Sound_Play(100.0, 0x5de, 0, 0), the handle at
+                            // ext lane 3+0x0C.
+                            l.whine_handle = self.audio.play(0x5de);
+                            l.whine_on = true;
+                        }
+                        crate::space_laser::LaserOut::SoundStop => {
+                            // [M :184-187/:190-195 the shared tail] Sound_Stop + the clear.
+                            if l.whine_handle != 0 { self.audio.stop(l.whine_handle); }
+                            l.whine_handle = 0;
+                            l.whine_on = false;
+                        }
+                        crate::space_laser::LaserOut::FireBullet { dir } => {
+                            // [M :128-152] the ray from the origin along the unit dir, 1000
+                            // units (0x447a0000), the game's mask-8 ray — the pass-flagged
+                            // hits drop [M Collide_Intersect disasm 0x1ebff0-0x1ec010] =
+                            // `segment_bullet` [M world.rs]. A hit rewrites the aim lane to
+                            // the impact point [M :153-160] — the beam endpoint + the
+                            // emitter site.
+                            let from = l.fire_origin;
+                            let far = [from[0] + dir[0] * 1000.0, from[1] + dir[1] * 1000.0, from[2] + dir[2] * 1000.0];
+                            let to = d.world.segment_bullet(from, far)
+                                .map(|t| [from[0] + (far[0] - from[0]) * t, from[1] + (far[1] - from[1]) * t, from[2] + (far[2] - from[2]) * t])
+                                .unwrap_or(far);
+                            l.target = to;
+                            // [M :172-175] Bullet_init(-1, obj, 0, 0x2c6154, origin, dir,
+                            // 0xffff) — the weapon def @0x2c6154 = weapon_data 0x2bf150 +
+                            // 107·0x10c = record 107; the s16 −1 owner = none (the port's
+                            // usize::MAX sentinel; nothing reads Bullet.owner for credit).
+                            if let Some(w) = d.weapons.records.get(107) {
+                                let f32_at = |o: usize| f32::from_le_bytes(w[o..o + 4].try_into().unwrap());
+                                let mut b = crate::bullet::Bullet {
+                                    pos: from, dir, speed: f32_at(0x20), travelled: 0.0,
+                                    range: f32_at(0x1c), damage: f32_at(0x0c), owner: usize::MAX,
+                                    state: 0, weapon: 107, flyby: d.weapons.flyby(107), bounces: 0,
+                                    ..crate::bullet::Bullet::TAIL
+                                };
+                                b.init_fuse(w);
+                                fired.push(b);
+                            }
+                            // [M :156] Sound_Play3D(100.0, -1.0, -1.0, 0x46a, origin, 0, 0, 0).
+                            self.audio.play3d(0x46a, from, None);
+                        }
+                        crate::space_laser::LaserOut::Beam { alpha } => {
+                            // [M :159-174] the class-0x10 beam object, mesh 0x20005cd, the
+                            // stretch origin→aim lane (`PositionBeam`), life 5, alpha
+                            // 0x7f+Rand(0x80) (the draw consumed it inside l.tick).
+                            self.space_laser_beams.push(crate::space_laser::LaserBeam {
+                                from: l.fire_origin, to: l.target, alpha, life: 5,
+                            });
+                        }
+                        crate::space_laser::LaserOut::ImpactEmitter => {
+                            // [M :189] Emitter_Create(0, 0, 0xc000010, target, 0x2d6210, 0, 0,
+                            // 0) — the impact arm's shape (world_fx::spawn_impact; a
+                            // def-hash miss = no object, the placement path's own rule). The
+                            // normal is [S] unverified: the game's arg mapping is
+                            // decompile-opaque (the aim slot rides the call); the port passes
+                            // world-up.
+                            self.fx.spawn_impact(0x2d6210, l.target, [0.0, 1.0, 0.0]);
+                        }
+                    }
+                }
+            }
+            self.bullets.extend(fired);
+            // [M :189-195] state 4's obj+0xfe |= 1 — the game's delete pass removes the
+            // object the same frame's control walk; the port drops it after the tick.
+            self.space_lasers.retain(|l| !l.deleted);
         }
         // Music: `Drone_InitComms` resets the attack gate; `DroneFunc_CheckAlarmRaised` (07000005 / 06) posts event 2 = 3
         // for the first 58 frames of channel 0xA4, then = 1 for the first 598 of channel 0x37 or 0x61; Bond dead →
@@ -16529,24 +16895,38 @@ fn segment_hits_sphere(a: V3, b: V3, c: V3, r: f32) -> bool {
                     _ => {}
                 }
             }
-            // Doors are solid through their object's collision mesh at `obj+0x90` (`Collide_PickObj` walks the
-            // cel-linked objects whatever moves them); the pose this tick's `Door_Update` writes lands in the
-            // same set_dynamic now (the game's Collide_Update is post-walk [M 0x1336f8:238]). Id: high bit 40 + the door index.
-            // capsule-cull-and-los-masks-4/5: the solidity rides the door's own state, the way the game's
-            // zone rule does — `Door_IsClosed` 0x1367b0: a kind-1 door always reads closed, a grouped door
-            // reads `DoorGroupsStates[g] == 2`, the rest read `obj+0xF4 == CLOSED` exactly — OPEN/OPENING/
-            // CLOSING leaves do not block [M door.rs `Door::is_closed`; the zone consumer 0x135738/0x1336f8].
-            // The port posed every glist door's mesh into the collision set unconditionally, so the OPEN
-            // Secure Room door #10's leaf (its natural pose = the 5x6 panel at x 155.003, z -118..-123
-            // [D the door's keys]) blocked walkreal_07000008 at the doorway — Bond froze at
-            // (154.50, 43.10..43.42, -120.64) for 1600+ ticks on that face (docs/reports/
-            // capsule-cull-and-los-masks-4.md items 4-6). The game's level geography requires walking
-            // through the open doorway, and its only state-gated solidity mechanism is this rule.
+            // Doors are solid through their object's collision mesh at `obj+0x90`, whatever the door's
+            // state — the movement-collision path is STATE-BLIND: `Door_Interp` 0x135738 writes the live
+            // pose to obj+0x90 and sets obj+0xFA bit 0x20 every tick, `control_movement_object_handler`
+            // 0x1336f8:147-236 relinks every moved object into the cel chain by position alone
+            // (`control_handle_cel_change` 0x133288 — no state read), and `Collide_PickObj` 0x1eae80
+            // masks by hittest kind + obj flags only — never obj+0xF4/DoorGroupsStates. The state rule
+            // `Door_IsClosed` 0x1367b0 (kind 1 always closed; grouped → DoorGroupsStates[g]==2; else
+            // obj+0xF4==CLOSED) has exactly ONE caller in the decompile: `Vision_Recurse` 0x1e82e0:51
+            // (← `Vision_Portal_Recurse` 0x1e86e8:32 ← `View_CaptureScene` 0x1e6df0:25) — the RENDER
+            // visibility recursion through door portals, not movement collision. The s/door-state-collision
+            // filter (leaves skipped unless is_closed) was that render rule misapplied to solidity: it
+            // deleted OPEN leaves the game keeps solid, and the full suite went red — probe_07_route
+            // (Bond hovers over the 1.1 doorway step at (94.17,44.14,-47.02) once the OPEN kind-0 hall
+            // door leaf leaves the collide set; the leaf IS the sill bridge), walkreal_07000001_live
+            // (the spawn→exit contact), walkreal_07000014_live (the east duct route), ai_live
+            // (guard_takes_cover — cover points that use a door leaf as cover). With the unconditional
+            // extend all four are green AND walkreal_07000008_live is 4/4 (the secure-room walk
+            // included; its door #10/122's open pose swings clear along +x at z −121.33 [D the keys:
+            // closed −90° at key1, open ends 0°/180°], so the always-solid open leaf never blocks the
+            // doorway — the passability comes from the pose, the same mechanism as the SS review below).
+            // Id: high bit 40 + the door index.
             parts.extend(drones.doors.list.iter().enumerate()
-                .filter(|(_, x)| x.glist != 0 && x.is_closed(&drones.doors.group_states))
+                .filter(|(_, x)| x.glist != 0)
                 .map(|(k, x)| (0x100_0000_0000 | k as u64, x.glist, x.matrix)));
             // The SimpleScripts too (fix-party-mission item 7): the safe door (ch 136) and the doorway
             // bolt (ch 137) are solid at their posed matrix, like the doors. Id: bit 41 + the ss index.
+            // door-state-collision's SS review (#205 safe door, #217 bolt): UNCONDITIONAL stays — the
+            // game's script-entity collision path has no state gate: `Script_CreateEntity` 0x1d8968's
+            // fallthrough `hashtable_set_object_to_entity_gfx` 0x1ca6d8 lands the glist whatever the
+            // script's playhead state is, and every moved entity is rebuilt + relinked per tick
+            // [M 0x1d8968/0x1ca6d8/0x1ca798/0x1d9a08]; the swept open pose IS the clearance mechanism
+            // (walkreal_07000008 passes "before the safe" -> briefcase only after ch 136 opens #205).
             parts.extend(drones.sss.list.iter().enumerate().filter(|(_, x)| x.hash != 0)
                 .map(|(k, x)| (0x200_0000_0000 | k as u64, x.hash, x.matrix)));
             // The breakable panes (placement 0x20) are solid while alive: the game's pane object
@@ -16568,6 +16948,13 @@ fn segment_hits_sphere(a: V3, b: V3, c: V3, r: f32) -> bool {
             let _pane_parts = drones.breaks.list.iter().enumerate()
                 .filter(|(_, b)| (!b.dead || b.dead_frame == drones.frame) && b.shape_key != 0)
                 .map(|(k, b)| (0x400_0000_0000 | k as u64, b.shape_key, b.matrix));
+            // The rigid bodies (rigid-body-wiring): the kind-0xD8 props collide at their live
+            // obj+0x90 matrix (`Collide_PickObj` walks the cel-linked objects; RB_Create's
+            // build_LinkToRoom links the body into the room's cel chain [M 0x1d6bf0]). Id:
+            // bit 43 + the body index. At rest the rows are the identity quat's (RB_SetState —
+            // the same rows the game's first update writes) over the placement translation.
+            parts.extend(drones.rbodies.list.iter().enumerate()
+                .map(|(k, x)| (0x800_0000_0000 | k as u64, x.glist, x.matrix())));
             parts
         };
         // Script triggers (`Trigger_TouchOnce` / `Trigger_Touch` made by `Script_CreateEntity`): one per live entity,
@@ -16677,6 +17064,11 @@ fn segment_hits_sphere(a: V3, b: V3, c: V3, r: f32) -> bool {
             // The sensors (sensor-volumes): `Sensor_Update` among the control funcs — class 0x37
             // sits in the same `control_funcs` table the walk dispatches [M 0x26f890 + 0x37·12].
             .chain(self.sensors.list.iter().enumerate().map(|(j, s)| (s.placement, 6, j)))
+            // rigid-body-wiring: the kind-0xD8 bodies tick in the same per-object dispatch —
+            // `RB_Update` sits in the game's per-kind control table {0x1d6e38, 0x1d7a80}
+            // (0x26f9c8/0x26f9cc, ELF scan); the runtime order is the object list's creation
+            // order, which the placement-keyed sort preserves.
+            .chain(self.rbodies.list.iter().enumerate().map(|(j, r)| (r.placement as usize, 7u8, j)))
             .collect();
         order.sort_by(|a, b| b.0.cmp(&a.0).then(a.1.cmp(&b.1)));
         // `Doors_Calc`'s head memset (0x135fe0:13), which the game runs at the TOP of
@@ -16846,6 +17238,17 @@ fn segment_hits_sphere(a: V3, b: V3, c: V3, r: f32) -> bool {
                         None => { self.audio.play3d(id as u32, pos, None); }
                     }
                 }
+                continue;
+            }
+            if what == 7 { let _pw = crate::prof::scope("ctl: kind 7");
+                // `RB_Update` 0x1d6e38 (the per-kind dispatch pair {0x1d6e38, 0x1d7a80} at
+                // 0x26f9c8/0x26f9cc): the heat-puff gate passes nothing (the port carries no
+                // per-object room cel yet — the shared RNG is untouched on rest), zero wind
+                // (the Env_GetWindVel census is open), the evolve. The collision handler runs
+                // where its hits were armed (spawn_blast's class-5 arm — the game's
+                // Collide_Update is post-walk, 0x1336f8:238, and the next update applies the
+                // accumulated impulses).
+                self.rbodies.tick(self.level_current & 0xf, &mut self.rng);
                 continue;
             }
             if what == 3 { let _pw = crate::prof::scope("ctl: kind 3");
@@ -17278,17 +17681,30 @@ fn segment_hits_sphere(a: V3, b: V3, c: V3, r: f32) -> bool {
             //   opens and 0x21's UPDATE (0x15efc8 case 3) exits to 0x1d. The port HAS every link of
             //   that chain (the mux is Trigger::update's AND; the death writes at drone.rs).
             //   The guards' enable channel 0x0e is written by script 0x06000086 (SP #276: modes
-            //   [0,0] → state 0, mask 1, out 0x21 — the SP starts when switch_channels[0x21] rises
-            //   [M nis.rs state-0 arm]) — and ch 0x21's writer is in NO placement, script event,
-            //   door, mux or pickup the port parses (the full scans: every placement
-            //   param == 0x21/0x99/0x11-0x13; every script event 0xd/0x11 write — the only one is
-            //   0x06000086's own 0x0e; the doors' ch_open are all 0). Enabling the entry now stalls
-            //   the escort forever (walkreal_07000001's repro: parked at (3.5, 6.3, 7.1) state 0x21,
-            //   "no guard to clear" — the courtyard guards stay WAIT_SWITCH, enabled=false, outside
-            //   the test's clearing filter) and the fix_mission_live shoji ping-pongs. The game's
-            //   ch-0x21 writer is an open live check; the outbox
-            //   stays (the resolution proves the node dispatch), the state entry waits for it.
-            let _ = dr.ally_wait_node.take();
+            //   [0,0] → state 0, mask 1). The earlier note called SP #276's start channel 0x21 and
+            //   its writer "an open live check" — that was a mis-read: the SP's start channel is
+            //   param 6, `out` = 0x33 [D placement #276; nis.rs `Player::from_placement` `out: g(6)`,
+            //   and `SP_Update` state 0 starts on `ch.on(out)` — nis.rs `flags & mask`, M
+            //   0x1dbda8:80-106], and the WRITER is Touch trigger #2 (kind 1, mask 0x08 player) at
+            //   (6.79, 6.04, 8.91) on the corridor before door #1, out 0x33 [D trigger census]. So:
+            //   Bond walks the corridor → the plate raises 0x33 → SP #276 starts → 06000086 stream 9
+            //   event 0xd writes ch 0x0e [D the lib dump] → drones 6/7/11 (the courtyard guards,
+            //   enable ch 0x0e) start → they die → 0x11/0x12/0x13 → the mux → 0x99 → the hold
+            //   releases. No stall: the hold requires the player to walk ahead into the ambush,
+            //   which is the game's escort pacing (the real trace parks the contact 1262 frames at
+            //   the node while the ambush runs).
+            //   [level-01-mayhew-wait 2026-10-27]
+            if let Some(_wait_node) = dr.ally_wait_node.take() {
+                // [M 0x153358:85-94]: only while switch channel 0x99 is off; the current state is
+                // saved in +0x5A2 (`return_state`) and the drone parks in
+                // `DSTATE_AllyLeadMissionWait` (0x21); staying put when already 0x21. The release
+                // is 0x21's UPDATE (0x15efc8 case 3) when the latched channel (0x99 — +0x12C has
+                // no writer) rises → 0x1d AllyLead.
+                if !self.channels.on(0x99) && dr.state != state::LEAD_MISSION_WAIT {
+                    dr.return_state = dr.state;
+                    dr.set_state(state::LEAD_MISSION_WAIT);
+                }
+            }
             // The kick request (`NDrone2_KickObject` 0x14aa00): the bound ScriptPlayer's script
             // unpauses (`SP_UnPause` 0x1dca58: `+0x2c = 1`, the current script's pause cleared).
             if dr.kick_attempt {
@@ -18543,6 +18959,9 @@ fn segment_hits_sphere(a: V3, b: V3, c: V3, r: f32) -> bool {
                 self.tripbomb_beams.push((pos, end_trig));
             }
         }
+        // gunimp-door: the mounted laser's beam explode drains here — the same tick the fire
+        // queued it, where the tick's `Data` is at hand (see `run_beam_explodes`).
+        self.run_beam_explodes(d, player.pos, frame);
         let blasts = std::mem::take(&mut self.pending_blasts);
         for (pos, radius, damage, owner, weapon_type, script, scale, debris_kind) in blasts {
             self.spawn_blast(d, pos, radius, damage, owner, weapon_type, player.pos, frame, script, scale, debris_kind);

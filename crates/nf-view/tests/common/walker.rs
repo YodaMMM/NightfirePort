@@ -1290,3 +1290,30 @@ pub fn nav_route_global(sim: &nf_view::scene::Sim, start: V3, dest: V3) -> Optio
 pub fn cel_of(cels: &[nf_view::scene::Cel], p: [f32; 3]) -> Option<usize> {
     nf_view::scene::find_cel(cels, p)
 }
+
+// ---- the 07000001 ambush helpers (level-01-mayhew-wait-2) -----------------------------------
+// The ally-wait hold (the kind-8 route's node 33, flag 0x20 [M NDrone2_ReachedDestNode
+// 0x153358:85-94]) releases only on ch 0x99 — the AND of the three ambush guards' death
+// channels 0x13/0x11/0x12 [D mux pl 318] — and the real trace holds the contact in 0x21 at
+// (2.94,7.22) for 1262 frames while the ambush runs [L tests/traces/01-doors.trace]. The
+// player clears it on foot. These are the two ladders the hall's own geometry demands: the
+// hall's south wall walls the resupply/approach nav off from the corridor (the wedged
+// resupply sat at segment t≈0.095 of every southward hop, the wedged guard approach at
+// ≈0.47 — both gave up at the 3000-tick cap).
+
+/// Back to the proven inside-the-hall stage point through the meet-room corridor. The
+/// guards hunt along the hall's south entry, and an approach from the courtyard side wedges
+/// on the hall's south wall; the meet-room hop crosses x≈1.9 south of the wall span
+/// (z 11.1–13.1 [D cels]) and the hall hop is the east-door route the stage already proved.
+pub fn hall_restage(w: &mut Walker, label: &str) {
+    w.walk_nav_to([6.5, 6.4, 8.2], &format!("{label}: the meet-room corridor"), 1.6);
+    w.walk_nav_to([2.9, 6.3, 16.3], &format!("{label}: the hall stage (east door)"), 3.0);
+}
+
+/// Dry inside the hall: a player steps out the door he came in by. East door (7.9,5.3,11.1)
+/// [D placement] → the corridor boxes (resupply's walked-path corridor) → back inside.
+pub fn hall_ammo_ladder(w: &mut Walker, label: &str) {
+    w.walk_nav_to([7.9, 5.3, 11.1], &format!("{label}: out the hall's east door"), 1.6);
+    w.resupply(label);
+    hall_restage(w, label);
+}

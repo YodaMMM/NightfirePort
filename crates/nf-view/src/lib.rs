@@ -7003,7 +7003,12 @@ pub fn mission_movie_glue(fe: &mut menu::FrontEnd, slot: &mut Option<movie::Play
                 // the stand-in advances one frame per host call, then `finished` fires and the
                 // pop is the game's own — the `movies` feature's decoder thread only feeds the
                 // picture path and does not pace this decision (mission-outros-4).
-                p.headless_advance();
+                // One player poll per flow tick (60 Hz), not per redraw: at 240 Hz the per-redraw poll
+                // ran the hold out in a quarter of the movie (the Double Cross outro cut out early).
+                while fe.flow.movie_polled < fe.flow.movie_clock {
+                    p.headless_advance();
+                    fe.flow.movie_polled += 1;
+                }
                 fe.flow.movie_playing = !p.finished();
             }
             None => {

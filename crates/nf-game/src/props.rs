@@ -169,6 +169,8 @@ impl Props {
                         seat
                     };
                     props.gunimps.push(crate::gunimp::GunImp {
+                    beam: None,
+                    fire_handle: 0,
                         placement: i, pos: p.translation, yaw_base: p.rotation[1],
                         pitch: 0.0, yaw: 0.0, pitch_s: 0.0, yaw_s: 0.0,
                         active: false, heat: 0.0, cooldown: 0.0, hot: false,
@@ -222,28 +224,41 @@ impl Props {
         }
     }
 
+    /// `Destroy_Smash` 0x12bb60's death half for leaf `i`: the one-shot latch, the dead mark
+    /// (obj+0xff = 1 [M :33/:41]), the channel write `switch_channels[+0x12] = 1` [M :40 — the
+    /// same write `Destroy_CollisionHandler` 0x12bd48:42 reaches through the bullet-contact path]
+    /// and the type-script blast [M :58-76: kind 1 → 0x6000027 ×4, kind 2 → 0x600004f ×2, other
+    /// non-zero → 0x6000052 ×3; the port keeps its established radius/damage stand-ins, see the
+    /// bullet_hit note]. Returns the blast tuple the caller queues.
+    pub fn smash(&mut self, i: usize, ch: &mut Channels, frame: u32) -> Option<(V3, f32, f32, u8)> {
+        let d = self.destroy.get_mut(i)?;
+        if d.dead { return None; }
+        d.dead = true;
+        ch.set(d.channel as u32, 1, frame);
+        if d.kind == 0 { return None; }
+        let c = [(d.lo[0] + d.hi[0]) / 2.0, (d.lo[1] + d.hi[1]) / 2.0, (d.lo[2] + d.hi[2]) / 2.0];
+        let ext = [(d.hi[0] - d.lo[0]) / 2.0, (d.hi[1] - d.lo[1]) / 2.0, (d.hi[2] - d.lo[2]) / 2.0];
+        let sphere = (ext[0] * ext[0] + ext[1] * ext[1] + ext[2] * ext[2]).sqrt();
+        let mult = match d.kind { 1 => 4.0f32, 2 => 2.0, _ => 3.0 };
+        Some((c, sphere * mult, d.blast_damage, d.kind))
+    }
+
     pub fn bullet_hit(&mut self, a: V3, b: V3, weapon: u16, damage: f32, ch: &mut Channels, frame: u32) -> Vec<(V3, f32, f32, u8)> {
         let mut smashes = Vec::new();
         self.camera_shot_hit(a, b, weapon, ch, frame);
-        for d in self.destroy.iter_mut().filter(|d| !d.dead) {
-            if Self::seg_box(a, b, d.lo, d.hi) {
-                d.health -= damage;
-                if d.health < 0.0 {
-                    d.dead = true;
-                    ch.set(d.channel as u32, 1, frame);
-                    // `Destroy_Smash` 0x12bb60: the blast only for a non-zero type byte [M
-                    // 0x12bc50]. Radius [M 0x12bcdc `lwc1 f12,140(s0)` × the type mult 4/2/3
-                    // (0x12bc74/0x12bc84/0x12bc94)] reads the placed obj's +0x8C sphere — a field
-                    // the port doesn't parse; the bounds' half-diagonal stands in [*suggested*],
-                    // open live check. Position: the obj's own `+0x80` [M 0x12bd08 a1 =
-                    // s3 = obj+0x80]; the port uses the bounds centre.
-                    if d.kind != 0 {
-                        let c = [(d.lo[0] + d.hi[0]) / 2.0, (d.lo[1] + d.hi[1]) / 2.0, (d.lo[2] + d.hi[2]) / 2.0];
-                        let ext = [(d.hi[0] - d.lo[0]) / 2.0, (d.hi[1] - d.lo[1]) / 2.0, (d.hi[2] - d.lo[2]) / 2.0];
-                        let sphere = (ext[0] * ext[0] + ext[1] * ext[1] + ext[2] * ext[2]).sqrt();
-                        let mult = match d.kind { 1 => 4.0f32, 2 => 2.0, _ => 3.0 };
-                        smashes.push((c, sphere * mult, d.blast_damage, d.kind));
-                    }
+        for i in 0..self.destroy.len() {
+            if self.destroy[i].dead { continue; }
+            let (hit, health) = {
+                let d = &self.destroy[i];
+                (Self::seg_box(a, b, d.lo, d.hi), d.health - damage)
+            };
+            if hit {
+                self.destroy[i].health = health;
+                if health < 0.0 {
+                    // `Destroy_CollisionHandler` 0x12bd48:31-49 drains HITDATA+8 per class-5
+                    // contact and reaches the death through `Destroy_Smash` — the channel write
+                    // and the blast are the smash's [M 0x12bb60:40,:58-76].
+                    if let Some(s) = self.smash(i, ch, frame) { smashes.push(s); }
                 }
             }
         }
@@ -291,6 +306,8 @@ mod tests {
         p.gunimps.push(crate::gunimp::GunImp {
             placement: 0, pos: [0.0; 3], yaw_base: 0.0, pitch: 0.0, yaw: 0.0, pitch_s: 0.0, yaw_s: 0.0,
             active: true, heat: 0.0, cooldown: 0.0, hot: false, turret: 0xb, seat: 0.0, radius: 0.0,
+            beam: None,
+            fire_handle: 0,
         });
         p.gunimp_player_has_died();
         assert!(!p.gunimps[0].active);
