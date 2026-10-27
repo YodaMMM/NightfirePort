@@ -14487,6 +14487,8 @@ fn segment_hits_sphere(a: V3, b: V3, c: V3, r: f32) -> bool {
             // the pose KEPT [M 0x132c18:33-47 writes no object position]. The velocity zeroes
             // with the game's BL+0x50/+0x10 [M 0x132c18:44-45].
             self.props.gunimps[gi].active = false;
+            // gunimp-beam-lifetime: leaving the gun clears the beam with it.
+            self.props.gunimps[gi].beam = None;
             bond.vel = [0.0; 3];
             return;
         }
@@ -14521,7 +14523,13 @@ fn segment_hits_sphere(a: V3, b: V3, c: V3, r: f32) -> bool {
             bond.pitch = pitch;
             bond.vel = [0.0; 3];
         }
-        if !fire || self.props.gunimps[gi].cooldown > 0.0 { return; }
+        if !fire || self.props.gunimps[gi].cooldown > 0.0 {
+            // gunimp-beam-lifetime: the game's beam object is created and positioned per shot
+            // (`GunImp_Update` 0x1320d8:394-407) and stops drawing with the fire state — the port must not
+            // leave the last shot's quad hanging in the room after the trigger is released.
+            self.props.gunimps[gi].beam = None;
+            return;
+        }
         let tg = &crate::gunimp::TURRET_GUNS[(self.props.gunimps[gi].turret as usize).min(crate::gunimp::TURRET_GUNS.len() - 1)];
         {
             let g = &mut self.props.gunimps[gi];
@@ -14554,6 +14562,20 @@ fn segment_hits_sphere(a: V3, b: V3, c: V3, r: f32) -> bool {
             guided_cam: false, // 0x67's +0x6C is 0 [L] — the arm is inert either way
             snd: 0, swoosh: None, born: self.frame,
         });
+        // gunimp-beam: the fire arm draws the game's beam quad `0x20005cd` through
+        // `PositionBeam(muzzle, ray hit)` (`GunImp_Update` 0x1320d8:394-407 — the ray is the 1000-unit
+        // `Collide_RayIntersect` along the barrel, the far point when it misses). The scene stretches
+        // the quad along this pair; the sim side keeps the endpoints.
+        let far = [muzzle[0] + dir[0] * 1000.0, muzzle[1] + dir[1] * 1000.0, muzzle[2] + dir[2] * 1000.0];
+        self.props.gunimps[gi].beam = Some((muzzle, far));
+        // gunimp-sound: the TurretGuns entry's fire sound (+0x18 = 1307 for the laser [D ACTION.ELF @0x26f520])
+        // played at the muzzle through the 3-D path [M GunImp_Update 0x1320d8's Sound_Play3D on the shot].
+        self.audio.play3d(tg.sound as u32, muzzle, None);
+        // gunimp-light: the same fire arm creates the muzzle light [M GunImp_Update 0x1320d8 —
+        // Rand_FRand(1.0) then Light_Create(9.0, rand+1.5, muzzle, 0, 0xff, 0xff, 0, 0, 1, 0)]: radius
+        // 9.0, intensity rand+1.5, rgb (0, 255, 255), channel 0, life 1 tick, kind 1 (muzzle flash).
+        let intensity = 1.5 + self.rng.frand(1.0);
+        self.lights.create(9.0, intensity, muzzle, [0, 0xff, 0xff], 0, 0, 1, 0, &mut self.rng);
     }
 
     /// `Player_Activate` (0x1a5170): Bond's use sphere (radius 1.0 at head + 1 unit forward) activates every
