@@ -119,3 +119,8 @@ else changed vs master: every non-pack script keeps master's exact compose behav
 ## Usage
 
 not visible to me — this sandbox exposes no token, credit or context-window figures to the session.
+
+## ntfy
+
+curl and the python fallback both returned HTTP 429 ("daily message quota reached"); the wget
+fallback posted successfully (exit 0).
