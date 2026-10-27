@@ -348,6 +348,23 @@ fn capsule_tri_contact(t: &[V3; 3], mat: u8, a: &mut V3, b: &mut V3, r: f32, gro
     if (0..3).any(|k| th[k] < sl[k] || tl[k] > sh[k]) { return false; }
     // Water surfaces never collide the player (the cel scoping — see capsule_push).
     if mat & 0x3f == 0xE { return false; }
+    // NO mat-0x40 (glass) skip here. The body query never filter-rejects glass:
+    // [M Collide_Filter 0x1ed888:7-9] rejects `(surf & 0x40) && (flags & 0x800)` — but the flags
+    // word is HITTEST+0x98, and Player_Collision 0x194df0:88 writes it to **0** for every
+    // substate (only substate 15 zipline writes 0x1c0, :382 — no 0x800 bit either). The 0x800
+    // words at :205/:229/:257/:282 land in HITTEST+**0x94** = the SHAPE word (0x800 = cylinder,
+    // read by Collide_Update 0x1ea398:78 and the Collide_Intersect 0x1ebaa8:181-296 dispatch),
+    // not the filter flags. [L ee_start_05.bin BL 0x16cf0f0 (ground HITTEST 0x16cf830 ✓
+    // docs/fields/obj-tag-player.md:52): +0x94 = 0x0800, +0x98 = 0x0000, +0x9a = 0x0000 —
+    // the body query carries no 0x800 and its +0x9a gate bit 0x10 is clear, so
+    // Intersect_CylGeom 0x109da0:533-540 never even calls the filter for the walk. Ray queries
+    // carry the masks instead: the feet ray passes 0xc [M Player_FeetOnPoint 0x194188:100] whose
+    // bit 0x8 rejects glass/0x80-surfs via the filter's HITDATA+0x51-or-surf 0x40/0x80 path, and
+    // the bullet/sensor rays pass 0x800-family masks (the segment paths below). Glass is
+    // therefore BODY-SOLID (the 0700001b boundary wall [L walkreal_0700001b_live] stops the
+    // float); the 0c skylight-lantern panes' [L 2026-10-26] walk-through needs a different
+    // mechanism than this per-triangle reject (the hatch-3 blanket skip broke six walkreal/npc
+    // tests — reverted; see docs/reports/level-0c-display-hatch-4.md).
     let n = cross(sub(t[1], t[0]), sub(t[2], t[0]));
     let nl = dot(n, n).sqrt();
     if nl < 1e-12 { return false; }

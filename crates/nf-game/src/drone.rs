@@ -12933,9 +12933,7 @@ fn segment_hits_sphere(a: V3, b: V3, c: V3, r: f32) -> bool {
             // The player's shell is reserved now and ejected when the +0x78 delay ends, from the view model's
             // datum as posed then (`eject_bone_now`, set by the viewer each tick) [M 0x12fde0 / 0x12f678].
             Some(_) => self.casings.reserve(&d.surfaces.map(|s| &s.ammo).unwrap_or(&Default::default()), w, None),
-            None => self.casings.eject_with_floor(&d.surfaces.map(|s| &s.ammo).unwrap_or(&Default::default()), w, from, yaw, pitch, from[1],
-                // The kept-casing rest floor [S rope-guard-hitbox]: the static floor beneath the muzzle.
-                d.world.segment(from, [from[0], from[1] - 40.0, from[2]]).map(|t| from[1] - 40.0 * t), &mut self.rng),
+            None => self.casings.eject(&d.surfaces.map(|s| &s.ammo).unwrap_or(&Default::default()), w, from, yaw, pitch, from[1], &mut self.rng),
         }
         // Heard by the drones; the audible shot comes from the gun's fire script (op 1), played by the player's owner.
         if !sound.looped { self.sounds.push(Sound { id: sound.id, pos: from, inner: sound.inner, outer: sound.outer, weight: sound.weight }); }
@@ -14489,6 +14487,8 @@ fn segment_hits_sphere(a: V3, b: V3, c: V3, r: f32) -> bool {
             // the pose KEPT [M 0x132c18:33-47 writes no object position]. The velocity zeroes
             // with the game's BL+0x50/+0x10 [M 0x132c18:44-45].
             self.props.gunimps[gi].active = false;
+            // gunimp-beam-lifetime: leaving the gun clears the beam with it.
+            self.props.gunimps[gi].beam = None;
             bond.vel = [0.0; 3];
             return;
         }
@@ -14523,7 +14523,13 @@ fn segment_hits_sphere(a: V3, b: V3, c: V3, r: f32) -> bool {
             bond.pitch = pitch;
             bond.vel = [0.0; 3];
         }
-        if !fire || self.props.gunimps[gi].cooldown > 0.0 { return; }
+        if !fire || self.props.gunimps[gi].cooldown > 0.0 {
+            // gunimp-beam-lifetime: the game's beam object is created and positioned per shot
+            // (`GunImp_Update` 0x1320d8:394-407) and stops drawing with the fire state — the port must not
+            // leave the last shot's quad hanging in the room after the trigger is released.
+            self.props.gunimps[gi].beam = None;
+            return;
+        }
         let tg = &crate::gunimp::TURRET_GUNS[(self.props.gunimps[gi].turret as usize).min(crate::gunimp::TURRET_GUNS.len() - 1)];
         {
             let g = &mut self.props.gunimps[gi];
@@ -14556,6 +14562,20 @@ fn segment_hits_sphere(a: V3, b: V3, c: V3, r: f32) -> bool {
             guided_cam: false, // 0x67's +0x6C is 0 [L] — the arm is inert either way
             snd: 0, swoosh: None, born: self.frame,
         });
+        // gunimp-beam: the fire arm draws the game's beam quad `0x20005cd` through
+        // `PositionBeam(muzzle, ray hit)` (`GunImp_Update` 0x1320d8:394-407 — the ray is the 1000-unit
+        // `Collide_RayIntersect` along the barrel, the far point when it misses). The scene stretches
+        // the quad along this pair; the sim side keeps the endpoints.
+        let far = [muzzle[0] + dir[0] * 1000.0, muzzle[1] + dir[1] * 1000.0, muzzle[2] + dir[2] * 1000.0];
+        self.props.gunimps[gi].beam = Some((muzzle, far));
+        // gunimp-sound: the TurretGuns entry's fire sound (+0x18 = 1307 for the laser [D ACTION.ELF @0x26f520])
+        // played at the muzzle through the 3-D path [M GunImp_Update 0x1320d8's Sound_Play3D on the shot].
+        self.audio.play3d(tg.sound as u32, muzzle, None);
+        // gunimp-light: the same fire arm creates the muzzle light [M GunImp_Update 0x1320d8 —
+        // Rand_FRand(1.0) then Light_Create(9.0, rand+1.5, muzzle, 0, 0xff, 0xff, 0, 0, 1, 0)]: radius
+        // 9.0, intensity rand+1.5, rgb (0, 255, 255), channel 0, life 1 tick, kind 1 (muzzle flash).
+        let intensity = 1.5 + self.rng.frand(1.0);
+        self.lights.create(9.0, intensity, muzzle, [0, 0xff, 0xff], 0, 0, 1, 0, &mut self.rng);
     }
 
     /// `Player_Activate` (0x1a5170): Bond's use sphere (radius 1.0 at head + 1 unit forward) activates every
@@ -15359,33 +15379,20 @@ fn segment_hits_sphere(a: V3, b: V3, c: V3, r: f32) -> bool {
             // [M Bullet_init_casing_ex 0x12f678:83-114 — AnimGetBoneWorldTrans runs there]:
             // the player's from the view model (`eject_bone_now`), a guard's from its own
             // eject bone this tick (standins-drone-925).
-            let mut guard_bones: Vec<(usize, nf_formats::anim::Mat4, f32, Option<f32>)> = Vec::new();
+            let mut guard_bones: Vec<(usize, nf_formats::anim::Mat4, f32)> = Vec::new();
             let pend: Vec<Option<usize>> = self.casings.list.iter()
                 .filter(|c| c.state == 3 && c.pending).map(|c| c.shooter).collect();
             for s in pend.into_iter().flatten() {
-                if !guard_bones.iter().any(|(j, _, _, _)| *j == s) {
+                if !guard_bones.iter().any(|(j, _, _)| *j == s) {
                     if let Some(dr) = self.list.get(s) {
-                        if let Some(m) = dr.eject_matrix(d) {
-                            // The kept-casing rest floor [S rope-guard-hitbox]: the static floor
-                            // beneath the eject point (a 40-unit down-ray) — a rope guard hangs
-                            // 10+ units above the deck and the [M] plane rest froze there.
-                            let e = [m[3][0], m[3][1], m[3][2]];
-                            let floor = d.world.segment(e, [e[0], e[1] - 40.0, e[2]]).map(|t| e[1] - 40.0 * t);
-                            guard_bones.push((s, m, dr.pos[1], floor));
-                        }
+                        if let Some(m) = dr.eject_matrix(d) { guard_bones.push((s, m, dr.pos[1])); }
                     }
                 }
             }
-            let bone = self.eject_bone_now.as_ref().map(|(m, y)| {
-                let floor = {
-                    let e = [m[3][0], m[3][1], m[3][2]];
-                    d.world.segment(e, [e[0], e[1] - 40.0, e[2]]).map(|t| e[1] - 40.0 * t)
-                };
-                (m, *y, floor)
-            });
+            let bone = self.eject_bone_now.as_ref().map(|(m, y)| (m, *y));
             self.casings.update(|sh| {
                 if sh == usize::MAX { bone } else {
-                    guard_bones.iter().find(|(j, _, _, _)| *j == sh).map(|(_, m, y, f)| (m, *y, *f))
+                    guard_bones.iter().find(|(j, _, _)| *j == sh).map(|(_, m, y)| (m, *y))
                 }
             }, &mut self.rng, |id, pos| { audio.play3d(id as u32, pos, None); });
         }
@@ -18640,7 +18647,11 @@ fn segment_hits_sphere(a: V3, b: V3, c: V3, r: f32) -> bool {
         let level_01 = d.level == 0x0700_0001;
         for (dr, from) in self.list.iter().zip(drone_from) {
             if !dr.present || dr.corpse { continue; }
-            for k in self.breaks.drone_step(from, dr.pos, level_01, dr.scripted_move, 0.0 /* the rejected-step drain waits on the pane ride [S] */, &mut self.rng) {
+            // The root-motion gate holds for the AI states' anim steps (a sniper's in-place anim beside
+            // pane #206 never shatters it) but NOT for a start script played in PlayScript: the opening
+            // Yakuza's scripted dive shatters #130 [L 2026-10-26, PCSX2 frame 2175].
+            let anim_carried = dr.scripted_move && dr.state != state::PLAY_SCRIPT;
+            for k in self.breaks.drone_step(from, dr.pos, level_01, anim_carried, 0.0 /* the rejected-step drain waits on the pane ride [S] */, &mut self.rng) {
                 self.break_kills.push((k.placement, k.kind, k.sound));
                 if std::env::var("TASE_DBG").is_ok() { eprintln!("[brk-contact] f{} placement {} kind {} sound {} at ({:.1},{:.1},{:.1})", self.frame, k.placement, k.kind, k.sound, k.pos[0], k.pos[1], k.pos[2]); }
                 let id = u32::from(k.sound);

@@ -199,3 +199,34 @@ fn probe_slide_palette() {
             dr.state, dr.pos, dr.anim.danim, dr.anim.script, pal.as_ref().map_or(0, |p| p.len()), boxes.len());
     }
 }
+
+/// The anim chain through every abseil state: which danim/script/anim-state/call the port runs
+/// while the DSTATE walks Init → Slide → Hang. The level-11-rope-guard-hitbox probe saw danim 11
+/// (the Init rope-grab, script 0x6000892) persisting into Hang — this trace shows where the
+/// port's `call_anim` stops producing danims.
+#[test]
+fn probe_abseil_anim_chain() {
+    let Some(fx) = Fixture::load(LEVEL, LEVEL_ID) else { eprintln!("skip: NF_ISO not set"); return };
+    let d = fx.data();
+    let p = bond_at(LANDING);
+    let mut sim = fx.sim();
+    for _ in 0..3 { sim.tick(&d, &p); }
+    let Some(ai) = sim.list.iter().position(|x| x.present && x.mode == 0x1c) else { panic!("no rope guard") };
+    sim.set_channel(0x13);
+    let mut last: Option<(u8, u16, u16, Option<u32>, Option<(u16, u8, u8)>, bool)> = None;
+    for t in 1..=900 {
+        sim.tick(&d, &p);
+        let dr = &sim.list[ai];
+        let key = (dr.state, dr.anim.danim, dr.anim.state, dr.anim.script, dr.anim.call, dr.anim.reached);
+        if last != Some(key) {
+            println!("t {:4} DSTATE {:#04x} danim {:4} anim.state {:#04x} class {} script {:?} call {:?} reached {}",
+                t, dr.state, dr.anim.danim, dr.anim.state, dr.anim.class, dr.anim.script, dr.anim.call, dr.anim.reached);
+            last = Some(key);
+        }
+        if dr.state == state::ABSEIL_HANG && dr.anim.danim != 0xb { println!("== hang pose started at t {t}"); break; }
+    }
+    let dr = &sim.list[ai];
+    println!("== final: DSTATE {:#04x} danim {} anim.state {:#04x} script {:?} call {:?} reached {}",
+        dr.state, dr.anim.danim, dr.anim.state, dr.anim.script, dr.anim.call, dr.anim.reached);
+    println!("== anim_set {} (saved {}) mode {:#x} attack_mode {:#x}", dr.anim_set, dr.saved_anim_set, dr.mode, dr.attack_mode);
+}

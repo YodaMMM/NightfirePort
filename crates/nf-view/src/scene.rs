@@ -7728,7 +7728,12 @@ pub fn build(level: &Level, cels_only: bool, skeletons: &HashMap<u8, Skeleton>, 
                 // sg5-laser-draw: the weapon laser sight (`Player_LaserPointer` 0x1a65d8) — the beam
                 // sprite 0x2000133 and the red dot 0x2000132 [M ll. 189-205, the `Player_InitWeapon`
                 // 0x1a7ef8 objects]; both follow `Sim::laser_sight`.
-                (TRACER_SLOTS + 5, 0x0200_0133), (TRACER_SLOTS + 6, 0x0200_0132)] {
+                // gunimp-beam: the mounted laser's beam quad `lazer_Big` (0x20005cd) and its impact
+                // flare `taser_muzzle` (0x200026e) — the game's own draw for weapon 0x67
+                // [M GunImp_Update 0x1320d8:394-407 `PositionBeam(muzzle, ray hit)`; D 0700000d
+                // resolves both, the quad extending along -z like the watch laser's sprite].
+                (TRACER_SLOTS + 5, 0x0200_0133), (TRACER_SLOTS + 6, 0x0200_0132),
+                (TRACER_SLOTS + 7, 0x0200_05cd), (TRACER_SLOTS + 8, 0x0200_026e)] {
                 if drones.is_some() {
                     if let Some(&(bmap, bobj)) = level.by_hash.get(&hash) {
                         let binst = Instance { map: bmap, object: bobj, matrix: anim::quat_trans_to_mat([0.0, 0.0, 0.0, 1.0], [0.0; 3]), placement: level.maps[level.main_map().unwrap_or(0)].placements.first().cloned().unwrap_or_default() };
@@ -8996,13 +9001,11 @@ pub fn build(level: &Level, cels_only: bool, skeletons: &HashMap<u8, Skeleton>, 
                 // matrix, for the 07000002 intro the CAMERA (obj[0] trans == player[1] live trans
                 // [-27.25, 1.41, 34.39]) — which drew the actors inside the camera: a
                 // render showed the intro room with NO characters at all.
-                // ride-cutscene-base: the cast rides its SP's matrix. 0700004a's ride pack (SP #289, base
-                // (0, -53.53, -3.38)) carries car-local roots (sequence 0x040005fd root (2.35, 0.85, -0.64)
-                // [D]); the PCSX2 ride (frame 700) shows the guard and the officer in the car's hatch, so
-                // the drawn object is the base (identity for the world-root scenes - their SPs sit at the
-                // origin, so their picture is unchanged).
-                let base = s.script_anim_base(src, c.skin.hashcode).unwrap_or(c.matrix);
-                return Some((anim::skin_matrices(&world, &c.skin), world, base));
+                // NOT the SP base: most scenes' casts carry WORLD roots (07000014's control-room scene:
+                // roots near (26..34, 1.2, 48) beside the room, SP base (52.16, 2.64, 46.62) — composing
+                // it threw the cast ~50 units away, an empty cut-scene). 0700004a's ride pack is the
+                // exception (car-local roots; the cast stands in the car in PCSX2) — its mechanism is open.
+                return Some((anim::skin_matrices(&world, &c.skin), world, c.matrix));
             }
             // MP bodies (mp-body-anim): the PLAYER anim set the game's MP body runs, from the slot's
             // script list (`Sim::mp_anim`, ticked by `advance_mp_anim` — idle, the distance-driven
@@ -9164,6 +9167,28 @@ pub fn build(level: &Level, cels_only: bool, skeletons: &HashMap<u8, Skeleton>, 
                 // and 0x200026d "taser" [M 0x1a46a8]), and `Draw_LaserBeam`'s stretch is the beam
                 // object's own scale (obj+0xE8 = the muzzle→hit distance) with the yaw/pitch of
                 // muzzle→hit in obj+0x50 (the negated-yaw euler) [M 0x1a4560:44-62].
+                // gunimp-beam: the mounted laser's quad along `GunImp.beam` (muzzle, ray hit) — the
+                // game's `PositionBeam` [M 0x1320d8:394-407]. The sprite extends along -z and the
+                // object's +z points hit -> muzzle (the same tail as PositionBeam 0x1a9400), built
+                // with the gadget beam's matrix helper; the flare sits at the hit, unscaled.
+                if (slot as usize == TRACER_SLOTS + 7 || slot as usize == TRACER_SLOTS + 8) {
+                    // gunimp-beam-lifetime: only the MOUNTED imp's beam draws - a dismounted gun's last shot must not
+                // leave its quad hanging in the room (the sim clears eam while the imp is active).
+                let pair = self.sim.as_ref().and_then(|s| s.drones.props.gunimps.iter().find(|g| g.active).and_then(|g| g.beam));
+                    let Some((a, b)) = pair else { return [[0.0; 4], [0.0; 4], [0.0; 4], [0.0, -10000.0, 0.0, 1.0]] };
+                    if slot as usize == TRACER_SLOTS + 8 {
+                        return nf_game::aivolume::matrix([0.0, 0.0, 0.0], b);
+                    }
+                    let d = [b[0] - a[0], b[1] - a[1], b[2] - a[2]];
+                    let len = (d[0] * d[0] + d[1] * d[1] + d[2] * d[2]).sqrt();
+                    if len < 1e-4 { return [[0.0; 4], [0.0; 4], [0.0; 4], [0.0, -10000.0, 0.0, 1.0]]; }
+                    let v = [a[0] - b[0], a[1] - b[1], a[2] - b[2]];
+                    let yaw = v[0].atan2(v[2]);
+                    let pitch = -v[1].atan2((v[0] * v[0] + v[2] * v[2]).sqrt());
+                    let mut m = nf_game::aivolume::matrix([pitch, yaw, 0.0], a);
+                    for k in 0..3 { m[2][k] *= len; }
+                    return m;
+                }
                 if slot as usize >= TRACER_SLOTS + 5 {
                     // sg5-laser-draw: the laser sight [M Player_LaserPointer 0x1a65d8]. Slot +5 the
                     // beam, datum → end, stretched like the tripbomb beam below (the same −z mesh);
