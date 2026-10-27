@@ -9583,8 +9583,14 @@ impl Drone {
                 self.vision_on = true;
                 if self.prop(d, 0x56) { self.set_state(crate::kiko::RUN_TO_ALARM); return true; }
                 let mut ret = ATTACK;
-                if matches!(d.level, 0x0700_0011 | 0x0700_0012 | 0x0700_0013 | 0x0700_0041) && !self.ever_seen {
-                    ret = if self.alert < 0.66 { IDLE } else { ALERT };
+                // [M 0x168910:24-31] the Tower-mission clause (0x41/0x11/0x12/0x13), gated on the
+                // 0x4000000 attack latch being CLEAR (`+0x4F8 & 0x4000000` — the port's `sighted`):
+                // `uVar2 = 4; if ((+0x50c < 0.66) || (uVar2 = 5, +0x50c < 1.0)) +0x5a2 = uVar2` —
+                // under 0.66 the resume is Idle 4, under 1.0 Alert 5, at full alertness the 0x56
+                // Attack write above (:23) STANDS (the clause only ever LOWERS it). The old
+                // `!ever_seen` gate read the wrong latch and the old value never kept ATTACK.
+                if matches!(d.level, 0x0700_0011 | 0x0700_0012 | 0x0700_0013 | 0x0700_0041) && !self.sighted {
+                    ret = if self.alert < 0.66 { IDLE } else if self.alert < 1.0 { ALERT } else { ATTACK };
                 }
                 self.return_state = ret;
                 if self.find_run_to_point(d) {
@@ -16164,7 +16170,11 @@ fn segment_hits_sphere(a: V3, b: V3, c: V3, r: f32) -> bool {
         // `NPCGlobals != 0` block [M 0x139520:124-284]: a cut-scene that fired event 5 freezes all of these.
         if self.npc_enabled {
         // Visibility every tick for drones with vision on; line of sight for one drone per tick (round robin).
-        for dr in &mut self.list { dr.visibility = if dr.present && !dr.corpse && (dr.vision_on || dr.alert >= 1.0) { dr.visibility() } else { 0.0 }; if dr.visibility < 0.7 { dr.los = false; } }
+        // [M 0x176a28 first loop] the visibility value is computed ONLY while the 0x10000 vision bit
+        // stands (set by the sight-capable states' ENTERs, cleared by RouteMsgDCV on every state
+        // change) — there is NO alertness bypass: a waiting (WaitSwitch/Enable(0)) or otherwise
+        // vision-off guard has no sight pipeline at all, whatever its +0x50c alertness.
+        for dr in &mut self.list { dr.visibility = if dr.present && !dr.corpse && dr.vision_on { dr.visibility() } else { 0.0 }; if dr.visibility < 0.7 { dr.los = false; } }
         let ln = self.llist.len();
         for k in 0..ln {
             let slot = (self.los_cursor + 1 + k) % ln.max(1);
