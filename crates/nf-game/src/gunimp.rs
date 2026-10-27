@@ -129,27 +129,41 @@ pub struct GunImp {
     /// (`Control_BuildWorldSph` 0x133070:48 takes the glist bound radius × |scale|) — the use-key
     /// pick's candidate radius [M Collide_PickObj 0x1eae80:219-228, `1.0 + obj+0x8C`].
     pub radius: f32,
+    /// `ext+0x98` — the looped fire sound's handle: `Sound_Play3D(TurretGuns[+0x18], obj+0x30)`
+    /// stored the first fire tick while the trigger holds (0x67/0x70/0x61 arms), `Sound_Stop`ed
+    /// on release or overheat [M GunImp_Update 0x1320d8:261-269, :281-298], and on dismount
+    /// [M GunImp_Deactivate 0x132c18:62-63]. 0 = not playing.
+    pub fire_handle: u32,
 }
 
 impl GunImp {
-    /// The barrel matrix's +Z [M 0x1320d8:162-172 — RotY(yaw_s) after RotX(pitch_s) on the base].
+    /// The drawn barrel matrix's +Z [M GunImp_Update 0x1320d8:325 — `Mat_GetDir(dir, cel+0x90)`,
+    /// and Mat_GetDir 0x1e3398 reads the matrix's third row (+0x20..+0x28) un-negated — the
+    /// disassembly]. The cel is the matrix the aim drives and the draw poses
+    /// (`barrel_matrix`), so the fire direction reads from that same matrix.
     pub fn barrel_dir(&self) -> V3 {
-        let (sp, cp) = self.pitch_s.sin_cos();
-        let (sy, cy) = self.yaw_s.sin_cos();
-        // RotX(pitch)·(0,0,1) = (0, −sin p, cos p) in the game's matrix sense, then RotY(yaw):
-        // (sin y·cos p, −sin p, cos y·cos p) — the port's yaw convention matches Bond's
-        // (dx.atan2(dz), walker's aim loop).
-        [sy * cp, -sp, cy * cp]
+        let m = self.barrel_matrix();
+        let f = [m[2][0], m[2][1], m[2][2]];
+        let l = (f[0] * f[0] + f[1] * f[1] + f[2] * f[2]).sqrt().max(1e-9);
+        [f[0] / l, f[1] / l, f[2] / l]
     }
 
-    /// `TurretGuns[0xb]`'s muzzle offset through the barrel matrix, plus the placement origin
-    /// [M 0x1320d8:196-211 — the offset vector rotated by the gun object's matrix].
+    /// `TurretGuns[turret]`'s 12-byte muzzle offset through the drawn barrel matrix, plus its
+    /// translation [M GunImp_Update 0x1320d8:196-211 — the offset vector against the gun cel's
+    /// matrix rows (its +0x90/+0xA0/+0xB0) with the cel's +0xC0 translation added; :165-172
+    /// compose that cel as `base·RotY(yaw_s)·RotX(pitch_s)` — disassembly: `Concat(src, dst)`
+    /// writes `dst = src·dst` and `Mat_CopyRot` copies only rows 0-2, keeping the cel's own
+    /// translation row, so the cel rides the base translation]. The same matrix the draw uses
+    /// (`barrel_matrix`), so the beam and the bullet start on the drawn muzzle.
     pub fn muzzle(&self) -> V3 {
-        let d = self.barrel_dir();
-        let m = TURRET_GUNS[(self.turret as usize).min(TURRET_GUNS.len() - 1)].muzzle;
-        // The offset (0, 0, 1.71) is pure barrel-forward; the rotated form keeps the general shape.
-        let along = m[2];
-        [self.pos[0] + d[0] * along + m[0], self.pos[1] + d[1] * along + m[1], self.pos[2] + d[2] * along + m[2]]
+        let m = self.barrel_matrix();
+        let o = TURRET_GUNS[(self.turret as usize).min(TURRET_GUNS.len() - 1)].muzzle;
+        // The row-vector product o·M (columns of the rotation rows) + the translation row.
+        [
+            m[3][0] + m[0][0] * o[0] + m[1][0] * o[1] + m[2][0] * o[2],
+            m[3][1] + m[0][1] * o[0] + m[1][1] * o[1] + m[2][1] * o[2],
+            m[3][2] + m[0][2] * o[0] + m[1][2] * o[1] + m[2][2] * o[2],
+        ]
     }
 
     /// The mounted player pose the game writes every tick [M 0x1320d8:175-194]: the player
