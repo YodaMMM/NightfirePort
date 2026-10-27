@@ -11354,6 +11354,12 @@ pub struct Drones {
     /// explode-debris-spawn: the blasts' debris particles (`Debris_CreateEx` 0x1ac808's class-0x10
     /// objects), integrated by `Debris_Update` 0x1aac00 (shared with the breakable path).
     pub blast_debris: Vec<crate::shatter::Debris>,
+    /// rigid-body-wiring: the kind-0xD8 rigid bodies (`RB_Create` 0x1d6bf0 via
+    /// `parsemap_create_dynamic_objects` 0x1d04f0 case 0xD8) — created per level attach,
+    /// ticked in the control walk at the per-kind dispatch entry {RB_Update 0x1d6e38,
+    /// RB_CollisionHandler 0x1d7a80} (the 0x26f9c8 table pair), blasts armed through the
+    /// class-5 hit arm of `RB_RestingContact` 0x1d7168.
+    pub rbodies: crate::rigid_body::Rbodies,
     /// The satchel countdown beeps raised this tick (pos) — Bullet_DoTrails' 0x447 arm
     /// [M 0x12d890:435-443], flushed to audio + `sounds` after the bullets pass.
     pub pending_beeps: Vec<V3>,
@@ -12116,6 +12122,7 @@ impl Drones {
             pending_blasts: Vec::new(),
             blasts: Vec::new(),
             blast_debris: Vec::new(),
+            rbodies: Default::default(),
             pending_beeps: Vec::new(),
             fusebox_hurts: 0,
             level_current: 0,
@@ -12315,6 +12322,9 @@ impl Drones {
         self.breaks = crate::breakable::Breaks::create(level);
         // The monitor consoles (0x30) [M Monitor_Create 0x1b08b0 — same pass].
         self.monitors = crate::monitor::Monitors::create(level);
+        // The kind-0xD8 rigid bodies (RB_Create 0x1d6bf0 via parsemap_create_dynamic_objects
+        // 0x1d04f0 case 0xD8 — the main map's placements, the parsemap-epilogue rule).
+        self.rbodies = crate::rigid_body::Rbodies::create(level);
         // The Q-Worm PCs (0x35) and switches (0x29) of `Player_Activate` 0x1a5170 (map-tower;
         // `parsemap_create_dynamic_objects` 0x1d04f0 cases 0x35/0x29, crate::useobj).
         let mm = level.main_map().unwrap_or(0);
@@ -13099,6 +13109,33 @@ fn segment_hits_sphere(a: V3, b: V3, c: V3, r: f32) -> bool {
         // straight into rec+0x64 and rec+0x6c.
         for (ci, dmg) in hits.copters {
             if let Some(c) = self.copters.get_mut(ci) { c.damage += dmg; c.attack_acc += dmg; }
+        }
+        // rigid-body-wiring: the blast reaches the kind-0xD8 bodies through the class-5 hit
+        // arm of RB_RestingContact 0x1d7168 / RB_RestingContactRot 0x1d73a0. The game's
+        // explode sweep (Collide_SphereIntersect 0x17c518:67) finds the objects and the
+        // falloff is the shared exact form (:78-81 — the port's mp::combat::blast_falloff);
+        // the hit record's velocity/point construction is the port's stand-in [S — the game's
+        // explosion-object contact record is unported], the arm math itself is the
+        // decompile's [M 0x1d7238-0x1d72e4 / 0x1d7428-0x1d74c8].
+        if !self.rbodies.list.is_empty() {
+            for rbo in self.rbodies.list.iter_mut() {
+                let centre = rbo.st.trans;
+                let falloff = crate::mp::combat::blast_falloff(pos, radius, damage, centre, rbo.st.s13c);
+                if falloff < 0.0002 { continue; }
+                let dir = [centre[0] - pos[0], centre[1] - pos[1], centre[2] - pos[2]];
+                let mag = (dir[0] * dir[0] + dir[1] * dir[1] + dir[2] * dir[2]).sqrt();
+                let vel = if mag > 0.0 { [dir[0] / mag, dir[1] / mag, dir[2] / mag] } else { [0.0, 1.0, 0.0] };
+                rbo.hits.push(crate::rigid_body::RbHit {
+                    scale: falloff,
+                    normal: [-vel[0], -vel[1], -vel[2]],
+                    vel,
+                    point: [centre[0] - vel[0] * rbo.st.s13c, centre[1] - vel[1] * rbo.st.s13c, centre[2] - vel[2] * rbo.st.s13c],
+                    other_class: 5,
+                    other_pos: pos,
+                });
+            }
+            let mut rb_sounds = Vec::new();
+            self.rbodies.handle_collisions(&mut rb_sounds);
         }
         for (di, ddmg) in hits.drones {
             if let Some(dr) = self.list.get_mut(di) {
@@ -16616,6 +16653,13 @@ fn segment_hits_sphere(a: V3, b: V3, c: V3, r: f32) -> bool {
             let _pane_parts = drones.breaks.list.iter().enumerate()
                 .filter(|(_, b)| (!b.dead || b.dead_frame == drones.frame) && b.shape_key != 0)
                 .map(|(k, b)| (0x400_0000_0000 | k as u64, b.shape_key, b.matrix));
+            // The rigid bodies (rigid-body-wiring): the kind-0xD8 props collide at their live
+            // obj+0x90 matrix (`Collide_PickObj` walks the cel-linked objects; RB_Create's
+            // build_LinkToRoom links the body into the room's cel chain [M 0x1d6bf0]). Id:
+            // bit 43 + the body index. At rest the rows are the identity quat's (RB_SetState —
+            // the same rows the game's first update writes) over the placement translation.
+            parts.extend(drones.rbodies.list.iter().enumerate()
+                .map(|(k, x)| (0x800_0000_0000 | k as u64, x.glist, x.matrix())));
             parts
         };
         // Script triggers (`Trigger_TouchOnce` / `Trigger_Touch` made by `Script_CreateEntity`): one per live entity,
@@ -16725,6 +16769,11 @@ fn segment_hits_sphere(a: V3, b: V3, c: V3, r: f32) -> bool {
             // The sensors (sensor-volumes): `Sensor_Update` among the control funcs — class 0x37
             // sits in the same `control_funcs` table the walk dispatches [M 0x26f890 + 0x37·12].
             .chain(self.sensors.list.iter().enumerate().map(|(j, s)| (s.placement, 6, j)))
+            // rigid-body-wiring: the kind-0xD8 bodies tick in the same per-object dispatch —
+            // `RB_Update` sits in the game's per-kind control table {0x1d6e38, 0x1d7a80}
+            // (0x26f9c8/0x26f9cc, ELF scan); the runtime order is the object list's creation
+            // order, which the placement-keyed sort preserves.
+            .chain(self.rbodies.list.iter().enumerate().map(|(j, r)| (r.placement as usize, 7u8, j)))
             .collect();
         order.sort_by(|a, b| b.0.cmp(&a.0).then(a.1.cmp(&b.1)));
         // `Doors_Calc`'s head memset (0x135fe0:13), which the game runs at the TOP of
@@ -16894,6 +16943,17 @@ fn segment_hits_sphere(a: V3, b: V3, c: V3, r: f32) -> bool {
                         None => { self.audio.play3d(id as u32, pos, None); }
                     }
                 }
+                continue;
+            }
+            if what == 7 { let _pw = crate::prof::scope("ctl: kind 7");
+                // `RB_Update` 0x1d6e38 (the per-kind dispatch pair {0x1d6e38, 0x1d7a80} at
+                // 0x26f9c8/0x26f9cc): the heat-puff gate passes nothing (the port carries no
+                // per-object room cel yet — the shared RNG is untouched on rest), zero wind
+                // (the Env_GetWindVel census is open), the evolve. The collision handler runs
+                // where its hits were armed (spawn_blast's class-5 arm — the game's
+                // Collide_Update is post-walk, 0x1336f8:238, and the next update applies the
+                // accumulated impulses).
+                self.rbodies.tick(self.level_current & 0xf, &mut self.rng);
                 continue;
             }
             if what == 3 { let _pw = crate::prof::scope("ctl: kind 3");
