@@ -89,24 +89,25 @@ fn caps_log() -> bool {
 static CAPS_GATE: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
 static WALK_KILL: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
 
-/// The five settle-5 radial-tail deltas, each behind its own env flag for the 01-plate-walk
-/// bisect (level-0a-band-settle-6-b). All default OFF = the settle-3 merged behaviour; setting
-/// the variable (any value) turns that one delta on:
-///   `NF_CAPS_D1` — the settle-3 radial arm (ref = the HITTEST+0x50 accumulator) removed; the
-///     tail's dir/mag is always (v̂, r − |v|) with v = query − Q [M 0x10a53c-0x10a61c].
-///   `NF_CAPS_D2` — the behind-plane skip: the query strictly behind the face plane never pushes
-///     (Dist2Tri's flags-99 arm [M 0x109770]; the caller skips flags == 99 [M 0x10a528]).
-///   `NF_CAPS_D3` — the on-edge second query: project Q1 onto the spine clamped [0,1] and RE-RUN
-///     the closest-point query from it — the tail's Q = Q2 [M 0x10a344-0x10a4fc].
-///   `NF_CAPS_D4` — the always-on dot gate: `dot(v, n) <= 0` skips the face's push entirely
-///     [M 0x10a568] — a floor's interior crossing (v = 0) and a query behind a sloped face included.
-///   `NF_CAPS_D5` — |v| == 0 → the dir quad ≈ 0 (push ≈ 0), NOT the ±n fallback [M 0x10a5bc
-///     `sq v0,0(sp)` — the flags-bits denormal].
-static CAPS_D1: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
+/// The settle-5 radial-tail rule (level-0a-band-settle-6-b, landed unconditionally after the
+/// 01-plate-walk bisect — each delta ran green on walkreal_07000001_live alone, the all-on
+/// combination too):
+///   — the settle-3 radial arm (ref = the HITTEST+0x50 accumulator) REMOVED: the tail's
+///     dir/mag is always (v̂, r − |v|) with v = query − Q [M 0x10a53c-0x10a61c].
+///   — the on-edge second query: project Q1 onto the spine clamped [0,1] and RE-RUN the
+///     closest-point query from it — the tail's Q = Q2 [M 0x10a344-0x10a4fc], with the caller's
+///     gate covering the SECOND call [M 0x10a510/0x10a528] (the mis-encoding the bisect caught:
+///     without it a re-run whose projected query sits behind the plane pushed THROUGH the face
+///     and walkreal_07000001_live's hall-guard fight failed).
+///   — the always-on dot gate: `dot(v, n) <= 0` skips the face's push [M 0x10a568].
+///   — |v| == 0 → the dir quad ≈ 0 (push ≈ 0), not the ±n fallback [M 0x10a5bc `sq v0,0(sp)`].
+/// HELD BACK (env-gated, default off): the Dist2Tri flags-99 behind-plane skip on the FIRST
+/// query [M 0x109770 + 0x10a33c `beq v1,99`]. It is [M]-faithful, but its landing wedges the
+/// 01 escort walk: after guard 6 dried the gun, every nav leg out of (5.48, 6.67, 11.60) gave
+/// up at the 3000-tick cap with segment_to_target=Some on all targets (the resupply pocket —
+/// the push shape that used to carry Bond out of it is a behind-plane face the game skips).
+/// Set NF_CAPS_D2 to measure it; the next round re-derives the 01 harness pins against it.
 static CAPS_D2: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
-static CAPS_D3: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
-static CAPS_D4: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
-static CAPS_D5: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
 
 #[derive(Default)]
 struct Geo {
@@ -434,24 +435,30 @@ fn capsule_tri_contact(t: &[V3; 3], mat: u8, a: &mut V3, b: &mut V3, r: f32, gro
         let c = [0, 1, 2].map(|k| (t[0][k] + t[1][k] + t[2][k]) / 3.0);
         closest_on_segment(*a, *b, c)
     };
-    // Delta 2 (NF_CAPS_D2): Dist2Tri's flags-99 arm [M 0x109770 — the signed plane distance
-    // `dot(p, plane) + w < 0` returns flags 99 with the out-pointer NEVER written; the caller
-    // skips flags == 99 outright at 0x10a528 and its `0.0 <= return` gate at 0x10a510
-    // double-covers]: the query strictly behind the face plane never pushes.
+    // Delta 2 — HELD BACK, env-gated (see the CAPS_D2 doc above): Dist2Tri's flags-99 arm on
+    // the first query [M 0x109770 — the signed plane distance `dot(p, plane) + w < 0` returns
+    // flags 99 with the out-pointer NEVER written; the caller skips it outright at 0x10a33c
+    // `beq v1,v0(99)` → 0x10a508]: the query strictly behind the face plane never pushes.
     if *CAPS_D2.get_or_init(|| std::env::var("NF_CAPS_D2").is_ok()) && dot(sub(p, t[0]), n) < 0.0 {
         return false;
     }
     let (mut q, on_edge) = closest_on_triangle(p, t);
-    // Delta 3 (NF_CAPS_D3): on an edge/vertex flag the game projects copy+0x50 — at that moment
-    // Q1, Dist2Tri #1's out-write [M 0x10a2fc `addiu t2,s1,0x50` before the 0x10a324 jal] — onto
-    // the spine A/B clamped [0,1] [M 0x10a3b4/0x10a3c4] and RE-RUNS Dist2Tri from it [M 0x10a4fc,
-    // the out-write again]: the tail's Q = Q2. The old port projected Q1 (p) but kept Q1 (q) in
-    // the tail.
+    // Delta 3 (the on-edge second query): on an edge/vertex flag the game projects copy+0x50 —
+    // at that moment Q1, Dist2Tri #1's out-write [M 0x10a2fc `addiu t2,s1,0x50` before the
+    // 0x10a324 jal] — onto the spine A/B clamped [0,1] [M 0x10a3b4/0x10a3c4] and RE-RUNS Dist2Tri
+    // from it [M 0x10a4fc, the out-write again]: the tail's Q = Q2. The old port projected Q1 (p)
+    // but kept Q1 (q) in the tail.
     if on_edge {
         p = closest_on_segment(*a, *b, q);
-        if *CAPS_D3.get_or_init(|| std::env::var("NF_CAPS_D3").is_ok()) {
-            q = closest_on_triangle(p, t).0;
-        }
+        // The caller's gate covers the SECOND call too [M 0x10a510 `0.0 <= return` c.olt +
+        // 0x10a528 `flags != 99` beq — both load the flags/distance the last Dist2Tri wrote]:
+        // Dist2Tri #2's input is the projected point, and when IT sits strictly behind the face
+        // plane the call returns flags 99 with the out-pointer NEVER rewritten (it keeps Q1) and
+        // the whole face stays inert — the tail is unreachable. Without this check the port
+        // pushed THROUGH such a face (v = query − Q pointing behind it) and the 01 walk's
+        // hall-guard fight failed.
+        if dot(sub(p, t[0]), n) < 0.0 { return false; }
+        q = closest_on_triangle(p, t).0;
     }
     // The game's push-tail guard [M Intersect_CylGeom 0x109da0 push tail: `v = q − A`,
     // `if (0.0 < dot(v, B − A))` gates the whole `dist < r` push]: a triangle whose closest
@@ -464,10 +471,10 @@ fn capsule_tri_contact(t: &[V3; 3], mat: u8, a: &mut V3, b: &mut V3, r: f32, gro
     if top_guard && n[1].abs() <= 0.7 && dot(sub(q, *a), sub(*b, *a)) <= 0.0 { return false; }
     let v = sub(p, q);
     let dist = dot(v, v).sqrt();
-    // Delta 4 (NF_CAPS_D4): the always-on dot gate [M 0x10a568 `c.ole → bc1t` — `0 < dot(v,
-    // plane)` gates the whole push]: a face whose v ⊥ n or points behind it never pushes — the
-    // floor's interior crossing (v = 0) and a query behind a sloped approach face included.
-    if *CAPS_D4.get_or_init(|| std::env::var("NF_CAPS_D4").is_ok()) && dot(v, n) <= 0.0 {
+    // Delta 4: the always-on dot gate [M 0x10a568 `c.ole → bc1t` — `0 < dot(v, plane)` gates the
+    // whole push]: a face whose v ⊥ n or points behind it never pushes — the floor's interior
+    // crossing (v = 0) and a query behind a sloped approach face included.
+    if dot(v, n) <= 0.0 {
         return false;
     }
     if dist >= r { return false; }
@@ -485,41 +492,18 @@ fn capsule_tri_contact(t: &[V3; 3], mat: u8, a: &mut V3, b: &mut V3, r: f32, gro
     if *gate_on && n[1] <= 0.7 && dot(sub(q, *b), n) <= 0.0 { return false; }
     let spine_dir = if dist > 1e-6 {
         [v[0] / dist, v[1] / dist, v[2] / dist]
-    } else if *CAPS_D5.get_or_init(|| std::env::var("NF_CAPS_D5").is_ok()) {
-        // Delta 5 (NF_CAPS_D5) [M 0x10a5bc `sq v0,0(sp)`]: |v| == 0 → the dir quad ≈ 0 (the
-        // flags-bits denormal, the game's "clear" trick) — push ≈ 0, NOT a ±n fallback.
-        [0.0f32; 3]
-    } else if dot(n, sub(*a, q)) >= 0.0 { n } else { [-n[0], -n[1], -n[2]] };
-    // THE RADIAL-DIR ARM, landed (level-0a-band-settle-3) [M Intersect_CylGeom 0x109da0:421-453]:
-    // v = q − ref with ref = the caller's HITTEST+0x50 lifetime push accumulator (the
-    // 2026-10-26 fresh-boot reads [L]: it boots (0,0,0), is NEVER reseeded on a walk, grows by
-    // exactly the push on every wall-contact tick (0.27723 → 3.27709 by +0.1 steps at the west
-    // hall wall), stays EXACTLY constant on free walks, and carries over a reload — the add-back
-    // 0x1ebaa8:353-373 is its only writer [M]). The tail's ref rides the per-object stack copy's
-    // +0x50 = the world +0x50's object-local image [M disasm 0x1ebcc4: the RotPreTransVec out
-    // lands at copy+0x50; Mat_Inverse+RotPreTransVec = Rᵀ(world − t), rigid] — the port's flat
-    // world frame takes the accumulator as-is. Gates: dot(v, n) > 0 [M :421-431] and
-    // |v| < radius [M :447], push = normalize(v)·(radius − |v|) [M :442-453]. The decompile's
-    // :432-437 overwrites the Dist2Tri measure fVar30 with |v| — with the [L] walked ref values
-    // (18-63 m from any contacted q) the |v| < radius gate can never pass on a walked line, so
-    // the arm is behaviourally inert there and the SPINE-DIR fallback below carries the [L]
-    // wall-step behaviour (the push = the walk step along the wall normal — exactly 0.1 per
-    // contact tick at the west hall wall, first touch 0.01056 = the approach penetration [L
-    // 2026-10-26]; the spine rule reproduces both: r − dist = the penetration). When the ref
-    // DOES sit within radius behind a face (dot(v, n) > 0), the radial push fires as decoded.
-    let (dir, mag) = if *CAPS_D1.get_or_init(|| std::env::var("NF_CAPS_D1").is_ok()) {
-        // Delta 1 (NF_CAPS_D1): the settle-3 radial arm removed — the tail's operands are
-        // v = query − Q only [M 0x10a53c-0x10a61c], dir = v̂, mag = r − |v|.
-        (spine_dir, r - dist)
     } else {
-        let vr = sub(q, ref_v);
-        let dist_r = dot(vr, vr).sqrt();
-        if dist_r > 1e-6 && dist_r < r && dot(vr, n) > 0.0 {
-            ([vr[0] / dist_r, vr[1] / dist_r, vr[2] / dist_r], r - dist_r)
-        } else {
-            (spine_dir, r - dist)
-        }
+        // Delta 5 [M 0x10a5bc `sq v0,0(sp)`]: |v| == 0 → the dir quad ≈ 0 (the flags-bits
+        // denormal, the game's "clear" trick) — push ≈ 0, NOT a ±n fallback.
+        [0.0f32; 3]
     };
+    // The settle-5 radial tail (landed, level-0a-band-settle-6-b). Delta 1: the settle-3 radial
+    // arm (ref = the accumulator) is GONE — the tail's operands are v = query − Q only
+    // [M 0x10a53c-0x10a61c], dir = v̂, mag = r − |v|; the accumulator (HITTEST+0x50, the [L]
+    // boot-(0,0,0) lifetime push total whose only writer is the add-back 0x1ebaa8:353-373 [M])
+    // is only the add-back target — the [L] copy+0x60 image sits constant across the tick's
+    // faces — so ref_v stays plumbed for the add-back callers only.
+    let (dir, mag) = (spine_dir, r - dist);
     let push = [dir[0] * mag, dir[1] * mag, dir[2] * mag];
     if caps_log() {
         eprintln!("[cap] PUSH cent=({:.3},{:.3},{:.3}) q=({:.3},{:.3},{:.3}) p=({:.3},{:.3},{:.3}) d={dist:.4} push=({:.4},{:.4},{:.4}) n=({:.3},{:.3},{:.3}) edge={on_edge} a=({:.3},{:.3},{:.3}) b=({:.3},{:.3},{:.3})",
