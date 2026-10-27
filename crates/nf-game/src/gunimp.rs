@@ -13,11 +13,12 @@
 //!
 //! The turret hardware is the `TurretGuns` table [D ACTION.ELF @0x26f520, 12 × 0x1c bytes; LOAD
 //! vaddr 0x107100 = file 0x1000, so file 0x169420]: per entry a 12-byte muzzle offset, the gun
-//! art hash (+0x0c), the weapon id (+0x10), the fire interval in seconds as a float bit pattern
-//! (+0x14), the fire sound (+0x18). Entry 0xb is the laser: muzzle (0, 0, 1.71), art 0x02000b50,
-//! weapon **0x67**, interval 1.0, sound 1307. `GunImp_Create` picks the entry from MPSettings in
-//! the decompile — the single-player arm reads 0xb [M 0x131f20:52-63]; the port (single player
-//! only) hard-sets 0xb and pins the laser entry by hash.
+//! art hash (+0x0c), the weapon id (+0x10), the fire interval in TICKS as a float bit pattern
+//! (+0x14 — the update counts FRAME_RATE_MUL = 1.0 a tick down [M 0x1320d8:107-112, :324]), the
+//! fire sound (+0x18). Entry 0xb is the laser: muzzle (0, 0, 1.71), art
+//! 0x02000b50, weapon **0x67**, interval 1.0, sound 1307. `GunImp_Create` picks the entry from
+//! MPSettings in the decompile — the single-player arm reads 0xb [M 0x131f20:52-63]; the port
+//! (single player only) hard-sets 0xb and pins the laser entry by hash.
 //!
 //! Use (`Player_Activate` 0x1a5170's class walk reaching class 0x47 → `GunImp_Activate`
 //! 0x132f00): `Player_ChangeSubState(0xc)`, cam mode 0xe, `Player_Disable(player, 1)`,
@@ -42,9 +43,16 @@
 //!   Direct `Bullet_init` — no `PlrStat_LogShotFired` (that logs inside `Player_WeaponInitBullet`'s
 //!   pellet loop [M 0x1a4bf0:258], which this path never reaches) and no fire-mode bookkeeping.
 //!
-//! Beam visuals (the 0x20005cd quad `PositionBeam(muzzle → ray hit)`, the 0x200026e impact flare,
-//! `Explode_Propagate` at the hit for 0x67) are presentation: the port exposes the getters the
-//! draw code calls (`muzzle`, `barrel_dir`, `heat`, `hot`) — no drawing here.
+//! Beam visuals: the 0x20005cd quad `PositionBeam(muzzle → ray hit)` and the 0x200026e impact
+//! flare are presentation — the port exposes the getters the draw code calls (`muzzle`,
+//! `barrel_dir`, `heat`, `hot`) — no drawing here. The ray itself is NOT presentation: the fire
+//! arm casts the 1000-unit `Collide_RayIntersect` [M 0x1320d8:372-384], clamps the beam at the
+//! hit [M :385-387], and the 0x67 arm runs `Explode_Propagate(4.0, 5.0, hit, cel, the imp obj)`
+//! at it [M :433-436] — the sweep's case 0x21 smashes a destroyable it reaches with ≥ 1.0
+//! damage [M 0x17c518:141-177] and `Destroy_Smash` 0x12bb60:40 writes the leaf's channel. On
+//! 0700000d that is C5's ch 0x1f: the mounted laser kills its objective door on the first beam
+//! contact (drone.rs `run_beam_explodes`; the 50-a-contact bullet drain
+//! [Destroy_CollisionHandler 0x12bd48:31-35] is the slow second path).
 //!
 //! Tags: [M] the addresses above, [D] the disc bytes, [L] the snapshot reads, [S] suggested.
 
@@ -59,7 +67,8 @@ pub struct TurretGun {
     pub art: u32,
     /// The weapon id (+0x10) — `weapon_data + w·0x10c` is the round's datum.
     pub weapon: u8,
-    /// The fire interval in seconds (+0x14, float bits).
+    /// The fire interval in ticks (+0x14, float bits — the update counts 1.0 a tick down
+    /// [M 0x1320d8:107-112, :324]).
     pub interval: f32,
     /// The fire sound (+0x18).
     pub sound: u32,
