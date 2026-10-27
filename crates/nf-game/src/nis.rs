@@ -928,6 +928,11 @@ impl Script {
         }
     }
 
+    /// Read-only probe accessor (the hand-back census): a stream's kind byte after the run — the
+    /// game's event-6 snapshot gate reads the same record's kind byte ∈ {1, 2}
+    /// [M Script_EventHandler 0x1d94c0:73-84].
+    pub fn stream_kind(&self, i: usize) -> Option<u8> { self.streams.get(i).map(|s| s.kind) }
+
     /// fix-final-blockers2 probe accessor: every stream's (kind, bound-object index, first/last key) —
     /// the probe pairs the obj index with `Scripts::objects.list` matrices. Read-only, no behaviour.
     pub fn stream_bindings(&self) -> Vec<(u8, Option<usize>, u16, u16)> {
