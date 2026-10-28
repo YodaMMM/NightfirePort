@@ -17017,13 +17017,17 @@ fn segment_hits_sphere(a: V3, b: V3, c: V3, r: f32) -> bool {
             None => self.update_pickups(d, player, frame),
         } }
         // `Destroy_Update` 0x12c4f8's second arm (30-35): a live destroyable whose +0x10 word
-        // (placement param 1 [M 0x12c318:36]) names an ON channel smashes, the word clears. 07000008's
-        // GuardRoom SmallExplosionBox #234 carries +0x10 = 137 — the FUSEBOX_GuardRoomDoorLock's
-        // channel [D the census] — so the fusebox cut smashes it (996-level-08-decomp-audit; the
-        // "out ch 137" reading in docs/levels/07000008.md had the direction reversed). The blast
-        // rides the same queue the bullet-path smash uses (Destroy_Smash 0x12bb60's Explode_Create,
-        // the damage = param 5 × 0.01 [M 0x12c424]).
-        for (pos, radius, damage, kind) in self.props.channel_kills(&self.channels) {
+        // (placement param 1 [M 0x12c318:36]) names an ON channel smashes, the word clears, and
+        // the smash — being the game's `Destroy_Smash` [M 0x12c4f8:35] — writes the tag's death
+        // channel [M 0x12bb60:40]. 07000008's GuardRoom SmallExplosionBox #234 carries +0x10 =
+        // 137 — the FUSEBOX_GuardRoomDoorLock's channel [D the census] — so the fusebox cut
+        // smashes it (996-level-08-decomp-audit; the "out ch 137" reading in
+        // docs/levels/07000008.md had the direction reversed). On 07000014 the write chains the
+        // generator-hall cascade to box #729's death ch 0x85 — Door_Slide_11A/B's lock channel
+        // [D the census; M 0x1363c8:88-107] — so the sabotage sequence ends at the door unlock.
+        // The blast rides the same queue the bullet-path smash uses (Destroy_Smash 0x12bb60's
+        // Explode_Create, the damage = param 5 × 0.01 [M 0x12c424]).
+        for (pos, radius, damage, kind) in self.props.channel_kills(&mut self.channels, frame) {
             let script = match kind { 1 => 0x0600_0027, 2 => 0x0600_004f, _ => 0x0600_0052 };
             // explode-debris-spawn: kind 0 — the same Destroy_Smash call as the bullet path [M 0x12bcf8].
             self.pending_blasts.push((pos, radius, damage, usize::MAX, 0, script, radius, 0));
