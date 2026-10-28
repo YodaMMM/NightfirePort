@@ -312,3 +312,16 @@ capsule every cycle). Still red: the walkreal_01 follow (the walk's step-down gl
 the z-12 soffit — full probe evidence, live check listed) and the mp_perf_16 digest
 (capsule-9's two-stream method documented). Report:
 docs/reports/capsule-cull-and-los-masks-10.md.
+
+## capsule-cull-and-los-masks-11 (2026-10-28, UTC)
+
+Branch s/capsule-cull-and-los-masks-11, from origin/s/capsule-cull-and-los-masks-10,
+merged origin/master (clean). Scope: the two remaining cull/masks reds —
+(1) walkreal_07000001 following_mayhew_down_completes_the_level: port the game's
+walk-DOWN behaviour (Player_Collision 0x194df0 ground snap / step-down,
+Player_StandAtNewPosition 0x190d88, walk floor scope) so the plate descent at
+(-33.44, 4.72, 12.03) no longer pins between the z-11 tread edge and the z-12
+soffit; (2) mp_perf_16 sixteen_participants_fixed_run_digest_is_pinned: dump
+per-tick net_state_hash streams of a master build vs this tree, name the first
+diverging tick's mover, re-pin with that mover cited. Double Cross Part 1 must
+stay finishable. Work in progress; will update as steps land.
