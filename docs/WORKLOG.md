@@ -258,3 +258,13 @@ Progress:
   (suite.py default 600). ~596 binaries + the 600 s re-run left for the next window;
   runner state in suite-progress.txt format. Report:
   docs/reports/capsule-cull-and-los-masks-8.md
+
+## capsule-cull-and-los-masks-9 (2026-10-28)
+
+- Branch opened from origin/s/capsule-cull-and-los-masks-8 (78c435f7), origin/master
+  480aa3db merged. Task: the five reproducible reds from the -8 unconditional
+  cull+masks tree (walkreal_01 mayhew exit, fix_npc_doors escort doors,
+  mp_perf_16 early-out+digest, fix_searchlight_remainder courtyard head) — find what
+  the game does at that moment and fix the port or re-derive the test with a cite;
+  plus the line_of_sight_masked double read-lock collapse and dropping
+  tools/test/run_suite_resume.sh. Full suite before push; checkpoints every 20-30 min.
