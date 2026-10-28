@@ -54,6 +54,25 @@ fn hut_ladder(sim: &Sim) -> (usize, nf_game::ladder::Ladder) {
 fn dismount_into_the_pond_lets_go_of_the_ladder() {
     let Some(_) = iso() else { eprintln!("NF_ISO not set — skipping"); return; };
     let mut sim = load();
+    // The intro cut-scene SP #400 must resolve before the placement: the game releases Bond
+    // from it at frame ~1531 to (-27.504, 1.131, 32.348) [L 2026-10-27 PCSX2, PLAYERS obj+0x30],
+    // the port's event-6 hand-back reads the previous stream's ANIM matrix [M 0x1d94c0:125-134]
+    // and would overwrite a placement made mid-scene. The game's own skip action resolves it.
+    {
+        // The intro SP primes on the FIRST step_bond (disabled reads false before it), so: step
+        // once to let the scene grab Bond, then hold the game's skip action until it releases him
+        // — the hand-back has landed by the release tick.
+        let mut saw_scene = false;
+        let mut n = 0u32;
+        while n < 400 {
+            if sim.disabled { saw_scene = true; } else if saw_scene { break; }
+            if sim.disabled { sim.drones.scripts.skip_request = true; }
+            sim.step_bond(nf_game::player::Input::default(), false, false, false);
+            n += 1;
+        }
+        assert!(saw_scene && !sim.disabled,
+            "the intro cut-scene never released Bond ({n} ticks, saw_scene {saw_scene})");
+    }
     let (li, lad) = hut_ladder(&mut sim);
     assert!(lad.bottom() < 3.5, "the picked ladder does not reach into the pond: bottom {}", lad.bottom());
     // Onto the ladder from the water: spawn mid-column (root 3.0 — inside the game's grabbable swim
@@ -97,6 +116,25 @@ fn dismount_into_the_pond_lets_go_of_the_ladder() {
 fn swimming_into_the_ladder_still_grabs() {
     let Some(_) = iso() else { eprintln!("NF_ISO not set — skipping"); return; };
     let mut sim = load();
+    // The intro cut-scene SP #400 must resolve before the placement: the game releases Bond
+    // from it at frame ~1531 to (-27.504, 1.131, 32.348) [L 2026-10-27 PCSX2, PLAYERS obj+0x30],
+    // the port's event-6 hand-back reads the previous stream's ANIM matrix [M 0x1d94c0:125-134]
+    // and would overwrite a placement made mid-scene. The game's own skip action resolves it.
+    {
+        // The intro SP primes on the FIRST step_bond (disabled reads false before it), so: step
+        // once to let the scene grab Bond, then hold the game's skip action until it releases him
+        // — the hand-back has landed by the release tick.
+        let mut saw_scene = false;
+        let mut n = 0u32;
+        while n < 400 {
+            if sim.disabled { saw_scene = true; } else if saw_scene { break; }
+            if sim.disabled { sim.drones.scripts.skip_request = true; }
+            sim.step_bond(nf_game::player::Input::default(), false, false, false);
+            n += 1;
+        }
+        assert!(saw_scene && !sim.disabled,
+            "the intro cut-scene never released Bond ({n} ticks, saw_scene {saw_scene})");
+    }
     let (li, lad) = hut_ladder(&mut sim);
     let front = [lad.centre[0] + lad.yaw.sin() * 1.2, 3.0, lad.centre[2] + lad.yaw.cos() * 1.2];
     sim.bond = nf_game::player::Bond::new(front, lad.yaw + std::f32::consts::PI);

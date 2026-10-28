@@ -12018,6 +12018,18 @@ pub fn voice_type(skin: u32) -> u16 {
 /// The script runtime's view of the level data: animation lengths and an animated object's discrete object 0.
 impl crate::nis::World for Data<'_> {
     fn anim_length(&self, script: u32) -> Option<u16> { self.scripts.get(&script).map(|s| s.length) }
+    /// The anim object's own world matrix (obj+0x90): the posed root at `frame` — the game's
+    /// `Control_GetObjMatrix` 0x134210 product with obj+0x30 carrying the animation's root track
+    /// [M 0x1befd8:290 → 0x134210; 0x1c35f8:~428-432]. The pose is `script_pose_together`'s (the
+    /// render-verified anim placement rule — scene.rs's script_anim position), its bone 0 through
+    /// `world_pose` (the root keeps its translation: the object sits at the origin and the root
+    /// carries it).
+    fn anim_obj_matrix(&self, skin: u32, script: u32, frame: f32) -> Option<nf_formats::anim::Mat4> {
+        let sk = self.skins.get(&skin)?;
+        let skel = self.skeletons.get(&sk.skeleton)?;
+        let pose = crate::anim::script_pose_together(self.scripts, self.sequences, skel, sk, script, frame)?;
+        nf_formats::anim::world_pose(&pose, sk).first().copied()
+    }
     /// fix-script-objects: the glist's local bounding sphere from the level's model table (the
     /// map object's centre and radius — `Control_BuildWorldSph` 0x133070's inputs).
     fn glist_sphere(&self, hash: u32) -> Option<([f32; 3], f32)> {
@@ -12030,16 +12042,6 @@ impl crate::nis::World for Data<'_> {
     }
     fn discrete0(&self, skin: u32, script: u32, frame: f32) -> Option<nf_formats::anim::Mat4> {
         self.discrete_parts(skin, script, frame).into_iter().next().map(|p| p.1)
-    }
-    /// The anim object's root-track matrix at the frame: bone 0 of the posed skeleton (see
-    /// `World::anim_root`). The vent-drop hand-back's capture source — the player body skin
-    /// 0x0500005e has no discrete parts, so `discrete0` reads None for it.
-    fn anim_root(&self, skin: u32, script: u32, frame: f32) -> Option<nf_formats::anim::Mat4> {
-        let sk = self.skins.get(&skin)?;
-        let skel = self.skeletons.get(&sk.skeleton)?;
-        let (q, f) = crate::anim::script_frame(self.scripts.get(&script)?, frame)?;
-        let seq = self.sequences.get(&q).filter(|q| nf_formats::anim::fits(q, skel))?;
-        nf_formats::anim::world_pose(&nf_formats::anim::local_pose(seq, skel, sk, f as u32), sk).into_iter().next()
     }
     /// The op-1 sounds of `script` with frame in `(from, to]`, in command order (`AnimProcessScriptCmds`
     /// 0x1c1b38 case 1 iterates the commands forward). The weapon-id remaps are skipped: they only apply when
@@ -13761,7 +13763,27 @@ fn segment_hits_sphere(a: V3, b: V3, c: V3, r: f32) -> bool {
             if !net_world {
                 self.props.camera_shot_hit(b.pos, end, b.weapon, &mut self.channels, frame);
             }
-            for (pos, radius, damage, kind) in if net_world { Vec::new() } else { self.props.bullet_hit(b.pos, end, b.weapon, b.damage, &mut self.channels, frame) } {
+            // The round's category word `weapon_data+0x10` [M 0x1ece30:26] — the destroy leaves'
+            // `Collide_FilterBullets` mask reads it below, the fusebox's the same word further down.
+            let weapon_word = d.weapons.records.get(b.weapon as usize).map_or(0u16, |r| u16::from_le_bytes([r[0x10], r[0x11]]));
+            // The destroy leaves are solid: the C5 doors carry a collision block [D] — the mount's
+            // own ray stops on them (the fire arm below does) and so does the round [M
+            // Bullet_CollisionHandler 0x12ce80's state-2 death on the first solid hit]. A filtered
+            // contact (`weapon_word & mask != 0` [M 0x1ece30:26-33]) is NO contact: the round
+            // passes through (handheld gunfire plinks the wall behind). The leaf's handler drain
+            // runs in the props pass right below; the death keeps it to ONE contact per round
+            // [L ~50/frame — one 50-damage 0x67 round a tick, not one per overlap tick].
+            let mut destroy_stop = false;
+            if !net_world {
+                for de in self.props.destroy.iter().filter(|x| !x.dead) {
+                    if weapon_word & de.mask != 0 { continue; }
+                    if crate::breakable::Breaks::seg_box_t(b.pos, end, de.lo, de.hi).is_some() {
+                        destroy_stop = true;
+                        break;
+                    }
+                }
+            }
+            for (pos, radius, damage, kind) in if net_world { Vec::new() } else { self.props.bullet_hit(b.pos, end, b.weapon, weapon_word, b.damage, &mut self.channels, frame) } {
                 let script = match kind { 1 => 0x0600_0027, 2 => 0x0600_004f, _ => 0x0600_0052 };
                 // fix-blast-scripts2: Destroy_Smash's f12 reads the tag's +0x8c [M 0x12bcdc `lwc1
                 // $f12, 140($16)`] — the port keeps the historical scale = radius here (no disc
@@ -13770,13 +13792,17 @@ fn segment_hits_sphere(a: V3, b: V3, c: V3, r: f32) -> bool {
                 // explicit 0 — `sw $zero,($sp)` [M 0x12bcf8]; no destroyable blast spawns debris.
                 self.pending_blasts.push((pos, radius, damage, usize::MAX, 0, script, radius, 0));
             }
+            // The solid leaf took the round: it dies here, after the drain registered — the
+            // game's one contact per round [M Bullet_CollisionHandler 0x12ce80's state-2 death;
+            // the [D] collision note above].
+            if destroy_stop { b.dead = true; }
             // The fusebox wires see the bullet this tick (`Collide_Update` 0x1ea398 pushes the pick
             // onto the hit object's `obj+0xD0`; `FuseBox_Update` 0x1adfe8:88 filters the list with
             // `Collide_FilterBullets(list, 0xfffd)` — class-5 hitters whose category word
             // `weapon_definition+0x10` ANDs non-zero are dropped [M 0x1ece30:24-31]). Disc words
             // [L dump]: guns 0x0008 (dropped — gunfire never cuts a wire), the Laser 0x0002 (kept —
             // it cuts), the watch/Decryptor beams 0x0100 (dropped).
-            let kind = d.weapons.records.get(b.weapon as usize).map_or(0u16, |r| u16::from_le_bytes([r[0x10], r[0x11]]));
+            let kind = weapon_word;
             if crate::fusebox::FuseBox::hit_survives_filter(kind) {
                 let mut contacts: Vec<(usize, usize, usize)> = Vec::new();
                 // fusebox-geometry: the round is tested against the wire OBJECT's own bounds (the
@@ -14814,12 +14840,12 @@ fn segment_hits_sphere(a: V3, b: V3, c: V3, r: f32) -> bool {
         let beams = std::mem::take(&mut self.pending_beam_blasts);
         if beams.is_empty() { return; }
         for (pos, radius, damage, owner) in beams {
-            let destroys: Vec<(usize, V3, f32, bool)> = self.props.destroy.iter().enumerate()
+            let destroys: Vec<(usize, V3, f32, bool, u16)> = self.props.destroy.iter().enumerate()
                 .filter(|(_, x)| !x.dead)
                 .map(|(i, x)| {
                     let ext = [(x.hi[0] - x.lo[0]) / 2.0, (x.hi[1] - x.lo[1]) / 2.0, (x.hi[2] - x.lo[2]) / 2.0];
                     (i, [(x.lo[0] + x.hi[0]) / 2.0, (x.lo[1] + x.hi[1]) / 2.0, (x.lo[2] + x.hi[2]) / 2.0],
-                     (ext[0] * ext[0] + ext[1] * ext[1] + ext[2] * ext[2]).sqrt(), false)
+                     (ext[0] * ext[0] + ext[1] * ext[1] + ext[2] * ext[2]).sqrt(), false, x.mask)
                 }).collect();
             let breaks_t: Vec<(usize, V3, f32)> = self.breaks.list.iter().enumerate()
                 .filter(|(_, x)| !x.dead)
@@ -17086,6 +17112,11 @@ fn segment_hits_sphere(a: V3, b: V3, c: V3, r: f32) -> bool {
             // explode-debris-spawn: kind 0 — the same Destroy_Smash call as the bullet path [M 0x12bcf8].
             self.pending_blasts.push((pos, radius, damage, usize::MAX, 0, script, radius, 0));
         }
+        // The destroy leaves' colour pair steps once per tick — the tail of every non-death
+        // `Destroy_CollisionHandler` call [M 0x12bd48:61-95]: the beam-contact leaves flash
+        // (−5), the rest recover (+1). Runs after the bullet pass so this tick's contacts are
+        // already folded into the hit67 marks.
+        self.props.destroy_colour_tick();
         // The actor list `Door_Update`'s proximity test (`dist² < (r1+r2)²·2` over classes
         // 2/3/0x12, skipping `obj+0xF0 & 0x10` candidates [M 0x136678-0x136684]) sees: the player
         // first (`glb_players`, the activator of every auto-activation) with radius 0.4, then every
