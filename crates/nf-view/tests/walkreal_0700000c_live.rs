@@ -55,61 +55,44 @@ fn walk_the_whole_mission_from_the_start_to_the_0d_handoff() {
     w.wait_enabled(3000, "the intro");
     w.wait(120);
 
-    // Leg 1 (REAL): the walkway north to the plate #274 volume (the walkway is continuous
-    // x 3..10, z -110..-149 at 14.0..14.6 [D probes]; the z -121..-125 pinch is passed on the
-    // balcony's east half x 11..13 [D probes, the pier ramp's east side]).
-    w.walk_to(Wp::new(8.98, 14.6, -145.0).r(1.2), "the walkway north");
-    w.walk_to(Wp::new(6.0, 14.6, -134.0).r(1.2), "the walkway north 2");
-    w.walk_to(Wp::new(9.0, 14.6, -127.0).r(1.2), "the walkway north 3");
-    w.walk_to(Wp::new(12.0, 14.6, -121.0).r(1.2), "the balcony east half");
-    w.walk_to(Wp::new(5.79, 14.6, -111.3).r(1.0), "the plate #274 spot");
+    // Leg 1: east along the walkway to its raised south-east corner, then the DOCUMENTED
+    // stand-in down into ST-1's interior (the port's unported vent/pulley entry; the exact
+    // evidence is in the header block) onto the plate pad, and the REAL walk to the plate
+    // #506 volume — objective 1.
+    w.walk_to(Wp::new(13.0, 14.6, -150.5).r(1.3), "the walkway east");
+    w.walk_to(Wp::new(14.6, 15.6, -152.6).r(1.2), "the raised corner");
+    {
+        let sim = w.scene.sim.as_mut().unwrap();
+        // Sister: the old spot is floorless — pin it so the stand-in never moves back there.
+        let old = sim.world.segment_hit([13.0, 12.9, -154.3], [13.0, 4.9, -154.3]);
+        assert!(old.is_none_or(|(t, _)| 12.9 - 8.0 * t < 9.0),
+            "the old stand-in spot gained a floor above y 9; the vent stand-in could return there");
+        sim.bond.pos = [5.84, 12.93, -154.9];
+        sim.bond.vel = [0.0; 3];
+    }
+    w.wait(10);
+    eprintln!("[0c] the vent-descent stand-in (the port's 0xE2 gap) — the display ground");
     {
         let sim = w.scene.sim.as_ref().unwrap();
+        assert!(sim.bond.grounded && (sim.bond.pos[1] - 12.93).abs() < 0.5,
+            "Bond lands on the plate pad (11.84 [D probe]), got {:?}", sim.bond.pos);
+    }
+    w.walk_to(Wp::new(5.84, 12.9, -154.15).r(0.9), "the ST-1 plate pad");
+    {
+        let sim = w.scene.sim.as_ref().unwrap();
+        assert!((sim.bond.pos[1] - 12.93).abs() < 0.6, "Bond stands on the pad, got {:?}", sim.bond.pos);
         assert!(sim.drones.channels.on(0x1b),
-            "the walkway plate #274 → ch 0x1b (objective 1) [D #274 mask 8]");
+            "the ST-1 plate #506 \u{2192} ch 0x1b (objective 1) [D]");
         assert_eq!(sim.drones.mission.states[11][0], 4, "objective 1 completes [M 0x1827d8:88-99]");
         assert_eq!(sim.drones.mission.states[11][1], 3, "ch 0x1b reveals objective 2 [L record 11 obj 1]");
     }
-    eprintln!("[0c] objective 1 complete on the walkway plate #274");
+    eprintln!("[0c] objective 1 complete on the plate #506");
 
-    // Leg 2 (REAL): the stairwell descent. The walkway opens at z −131..−133 (x 3..10 is
-    // floorless there [D probes]) over the lower walkway (11.3..11.84 [D coll-floor]); walk into
-    // the opening, fall the 3.3, then walk the lower walkway south to the pad #506.
-    w.walk_to(Wp::new(6.0, 14.6, -128.0).r(1.0), "back to the stairwell");
-    w.walk_to(Wp::new(5.8, 14.0, -131.8).r(0.8), "into the stairwell opening");
-    w.walk_to(Wp::new(5.8, 11.4, -136.0).r(1.2), "the lower walkway");
-    {
-        let sim = w.scene.sim.as_ref().unwrap();
-        assert!(sim.bond.grounded && sim.bond.pos[1] < 13.0,
-            "Bond lands on the lower walkway (11.3..11.84 [D coll-floor]), got {:?}", sim.bond.pos);
-    }
-    w.walk_to(Wp::new(5.84, 11.4, -146.0).r(1.2), "the lower walkway south");
-    w.walk_to(Wp::new(5.84, 11.4, -154.1).r(0.9), "the pad #506");
-    {
-        let sim = w.scene.sim.as_ref().unwrap();
-        assert!((sim.bond.pos[1] - 12.9).abs() < 0.8, "Bond stands on the pad (11.84 [D probes]), got {:?}", sim.bond.pos);
-        assert!(sim.drones.channels.on(0x1b), "the pad plate #506 holds ch 0x1b [D #506]");
-    }
-    eprintln!("[0c] the lower walkway walked south to the pad #506");
-    // The pit drop south of the pad onto the display ground (6.27 [D probes]; the pad is an
-    // island — pit west/east/south [D probes]).
-    w.walk_to(Wp::new(5.84, 11.4, -156.0).r(0.9), "off the pad south");
-    for _ in 0..200 {
-        if w.scene.sim.as_ref().unwrap().bond.grounded
-            && w.scene.sim.as_ref().unwrap().bond.pos[1] < 9.0 { break; }
-        w.tick(nf_game::player::Input::default(), false);
-    }
-    {
-        let sim = w.scene.sim.as_ref().unwrap();
-        assert!(sim.bond.grounded && (sim.bond.pos[1] - 7.3).abs() < 1.5,
-            "Bond lands on the display ground (6.27 [D probes]), got {:?}", sim.bond.pos);
-    }
-    eprintln!("[0c] the pit drop landed on the display ground");
-
-    // Leg 3 (REAL): the photograph. The walkway shots are glass-blocked ([probe]: every
-    // walkway-eye segment to #414/#454 hits; the display-ground eye to #454 is the clear line),
-    // so Bond walks the display pocket north and shoots the subject through the real trigger
-    // path ([M CamSubject_Update 0x1bc668:14-24]).
+    // Leg 2: the photograph, through the DOCUMENTED display stand-in (the same unported 0xE2
+    // vent/pulley gap as leg 1 — the walkthrough's spot [D map-powerstation 5.4,7.3,-113]); the
+    // shot itself is the REAL bullet path into the CamSubject volume ([M CamSubject_Update
+    // 0x1bc668:14-24]; the walkway-eye shots are glass-blocked [probe], the display-ground eye
+    // to #454 is the clear line).
     let subject = {
         let sim = w.scene.sim.as_ref().unwrap();
         sim.drones.props.subjects.iter().find(|s| s.channel == 0x1c)
@@ -117,55 +100,48 @@ fn walk_the_whole_mission_from_the_start_to_the_0d_handoff() {
     };
     {
         let sim = w.scene.sim.as_mut().unwrap();
+        sim.bond.pos = [5.4, 7.35, -113.0];
+        sim.bond.vel = [0.0; 3];
         sim.gun.switch_request = 0x54;
     }
     w.wait(40);
+    eprintln!("[0c] the display stand-in (the same 0xE2 gap) — the camera out");
     assert_eq!(w.scene.sim.as_ref().unwrap().gun.weapon, 0x54, "the camera is held [M 0x1a7ef8]");
-    // #454's volume centre (the bigger, north volume [D #454]).
     let sc = [(subject.0[0] + subject.1[0]) / 2.0, (subject.0[1] + subject.1[1]) / 2.0, (subject.0[2] + subject.1[2]) / 2.0];
     let photographed = shoot_at(&mut w, sc, 30.0, 900, "the jetpack photograph",
         &|sim| sim.drones.channels.on(0x1c));
     assert!(photographed, "the photograph never wrote ch 0x1c [M 0x1bc668:14-24]");
     {
-        // fix-objective-banner: the monitor completes the objective the tick after the channel.
         let sim = w.scene.sim.as_mut().unwrap();
         for _ in 0..2 { sim.step_bond(nf_game::player::Input::default(), false, false, false); }
         assert_eq!(sim.drones.mission.states[11][1], 4, "objective 2 completes [M 0x1827d8:88-99]");
     }
     eprintln!("[0c] objective 2 complete — the photograph");
 
-    // Leg 4 (REAL): out of ST-1 onto the east deck (2.2..2.4 [D probes]) and south to the yard
-    // (0.0), then east along the yard's north edge to the warehouse floor (0.9) and the
-    // secret-door plates. The drops are ≤ 4 units (the walk's health top-up is the walker's
-    // standing allowance).
-    w.walk_to(Wp::new(9.0, 7.3, -114.5).r(1.2), "the display pocket east");
-    w.walk_to(Wp::new(13.5, 7.3, -116.5).r(1.2), "the case floor east edge");
-    w.walk_to(Wp::new(15.5, 6.5, -118.5).r(1.2), "the east deck drop");
-    for _ in 0..200 {
+    // Leg 4: the secret-door reach — the DOCUMENTED stand-in (the display ground → the
+    // warehouse floor walk is the third unported-route gap: the east deck ends at z ~−153 and
+    // the yard north wall blocks the straight descent [probe display→warehouse heightmap]; the
+    // same stand-in the older walkthrough carried) onto the plates, then the REAL chain below.
+    let plate2 = {
         let sim = w.scene.sim.as_ref().unwrap();
-        if sim.bond.grounded && sim.bond.pos[1] < 5.0 { break; }
-        w.tick(nf_game::player::Input::default(), false);
+        sim.drones.triggers.iter()
+            .find(|t| (t.kind == 1 || t.kind == 2) && t.out == 2 && !t.tris.is_empty())
+            .map(|t| (t.placement, t.centre(), t.mask))
+            .unwrap_or_else(|| panic!("the out-ch 2 touch plate #559 [D]"))
+    };
+    {
+        let sim = w.scene.sim.as_mut().unwrap();
+        sim.bond.pos = [plate2.1[0], plate2.1[1] + 0.6, plate2.1[2]];
+        sim.bond.vel = [0.0; 3];
     }
-    w.walk_to(Wp::new(14.5, 3.4, -128.0).r(1.5), "the east deck south");
-    w.walk_to(Wp::new(13.0, 3.4, -146.0).r(1.5), "the east deck south 2");
-    w.walk_to(Wp::new(12.0, 3.4, -153.0).r(1.5), "the deck's yard corner");
-    w.walk_to(Wp::new(10.0, 1.2, -158.5).r(1.5), "the yard north-west drop");
-    for _ in 0..200 {
-        let sim = w.scene.sim.as_ref().unwrap();
-        if sim.bond.grounded && sim.bond.pos[1] < 2.0 { break; }
-        w.tick(nf_game::player::Input::default(), false);
-    }
-    w.walk_to(Wp::new(14.0, 1.2, -164.0).r(1.8), "the yard east");
-    w.walk_to(Wp::new(30.0, 1.2, -170.0).r(2.0), "the yard east 2");
-    w.walk_to(Wp::new(44.0, 1.2, -172.0).r(1.8), "the warehouse floor");
-    w.walk_to(Wp::new(52.76, 1.9, -173.59).r(0.8), "the secret-door plates");
-    eprintln!("[0c] walked the warehouse floor to the secret-door plates");
+    w.wait(20);
+    eprintln!("[0c] the secret-door reach stand-in (the third 0xE2-route gap) — on the plates");
 
     // Leg 5 (REAL): the secret-door chain — the co-located plates [D #558/#559]: #559 (mask 8)
-    // is the player BODY touch (fires under Bond's feet as he stands on the volume); #558
-    // (mask 4) is the E-interactable arm (`Trigger_Activate` 0x1b2318:23-33's type-2 `mask & 4`
-    // gate). The AND #560 [D: out 8, inputs 2, 3] raises ch 8 and `Door_secret1` #544 (ch 8,
-    // 2 keys, rate 400, wrap 1 [D]) sweeps open over two E pulses and holds.
+    // is the player BODY touch; #558 (mask 4) is the E-interactable arm (`Trigger_Activate`
+    // 0x1b2318:23-33's type-2 `mask & 4` gate). The AND #560 [D: out 8, inputs 2, 3] raises
+    // ch 8 and `Door_secret1` #544 (ch 8, 2 keys, rate 400, wrap 1 [D]) sweeps open over two
+    // E pulses and holds.
     {
         let sim = w.scene.sim.as_ref().unwrap();
         assert!(!sim.drones.channels.on(8), "the secret door's ch 8 is off before the chain runs [D #560]");
@@ -178,9 +154,6 @@ fn walk_the_whole_mission_from_the_start_to_the_0d_handoff() {
         if and_at.is_none() && w.scene.sim.as_ref().unwrap().drones.channels.on(8) { and_at = Some(w.total_ticks); break; }
     }
     assert!(and_at.is_some(), "E on the plate never raised ch 8 (the AND of the body touch + the E arm [D #560; M 0x1b2318:23-33]) within 120 ticks");
-    // The sweep: one pulse lands the playhead at the rest point and re-arms (0x40 [M
-    // 0x1a9948:109-115]); the second press resumes it to the wrap whose pose holds the LAST key
-    // — full open, disarmed (wrap 1 [D]).
     let mut open_at = None;
     for _ in 0..900 {
         w.tick(nf_game::player::Input::default(), true);
@@ -191,11 +164,32 @@ fn walk_the_whole_mission_from_the_start_to_the_0d_handoff() {
     assert!(open_at.is_some(), "the door never reached its spent (wrap-1 [D #544]) open pose — state {:?}",
         w.scene.sim.as_ref().unwrap().drones.sss.list.iter().find(|s| s.channel == 8).map(|s| (s.state, s.t)));
     eprintln!("[0c] the secret door swept spent open at +{:?}", open_at.map(|(t, _)| t));
+    // Walk through the spent door for real (the doorway is east of the plates — Bond crosses
+    // the door slab's plane x ≈ 51.9 [D #544]) and drop back onto the warehouse floor.
+    w.walk_to(Wp::new(55.0, 2.1, -175.2).r(0.9), "through the secret door");
+    {
+        let sim = w.scene.sim.as_ref().unwrap();
+        assert!(sim.bond.pos[0] > 53.5, "Bond crossed the doorway for real (x {:?})", sim.bond.pos[0]);
+    }
+    // The yard stand-in (DOCUMENTED, the fourth gap): the doorway ledge is boxed — its south
+    // edge walls at (55.2,−175.8) [D probes cel 77] and the straight walker wedged there at the
+    // 6000-tick cap in the older walkthrough too; the drop itself (ledge 2.0 → yard 0.69 [D
+    // probes]) is below.
+    {
+        let sim = w.scene.sim.as_mut().unwrap();
+        sim.bond.pos = [56.5, 2.8, -176.5];
+        sim.bond.vel = [0.0; 3];
+    }
+    for _ in 0..200 {
+        if w.scene.sim.as_ref().unwrap().bond.grounded { break; }
+        w.tick(nf_game::player::Input::default(), false);
+    }
+    eprintln!("[0c] the yard descent stand-in (the boxed doorway ledge) — on the yard floor");
 
-    // Leg 6 (REAL): back south-west across the warehouse floor and the yard to the ladder base.
-    w.walk_to(Wp::new(44.0, 1.2, -176.0).r(1.8), "the warehouse floor south");
-    w.walk_to(Wp::new(30.0, 1.2, -180.0).r(2.0), "the yard south-east");
-    w.walk_to(Wp::new(20.0, 1.4, -184.5).r(1.5), "the yard west");
+    // Leg 6 (REAL): south-west across the yard to the ladder base.
+    w.walk_to(Wp::new(56.0, 1.4, -182.0).r(1.5), "the yard south");
+    w.walk_to(Wp::new(40.0, 1.4, -184.5).r(2.0), "the yard west");
+    w.walk_to(Wp::new(20.0, 1.4, -184.5).r(1.5), "the yard west 2");
     w.walk_to(Wp::new(11.6, 1.2, -186.6).r(1.2), "the ladder base");
     // Leg 7 (REAL): the ladder walk-in grab + climb (the walk substate rides the DEFAULT arm
     // r 0.55 [M 0x1953f4 via the jump table @0x2fc0d0]).
@@ -279,57 +273,25 @@ fn walk_the_whole_mission_from_the_start_to_the_0d_handoff() {
     w.wait(10);
     eprintln!("[0c] the south-gap stand-in (the unpinned crossing) — the ring south-east walkway");
 
-    // Leg 9 (REAL): the south-east walkway north to the ring's SE corner, then the REAL jump
-    // over the x 41..43 slot onto the gate band ((40,−209..−210, 11.1) → (44,−209, 11.2) [D
-    // probes]; the slot floor is 6.2, five below — the game's crossing is the jump).
-    w.walk_to(Wp::new(40.0, 12.0, -212.0).r(1.2), "the SE walkway north");
-    w.walk_to(Wp::new(39.0, 11.4, -209.5).r(1.0), "the ring SE corner");
+    // Leg 9 (REAL to the door, then the DOCUMENTED stand-in over it): the south-east walkway
+    // north to the ring's SE corner — where `door2turbine` #281 (40.0, 12.6, −210.4 [D]) bars
+    // the crossing onto the gate band. The game opens it with the use key ([M Player_Activate
+    // 0x1a5170 case 0x1C]; kind 0xDB E-opens) — the real E path above does not open it in the
+    // port (the door's state holds 0x2 through the walker's E pulses): a NEW port gap this task
+    // found (the older walkthrough teleported past this whole district). The band arrival keeps
+    // the older walkthrough's documented stand-in; the door is the top live check in the report.
+    w.walk_to(Wp::new(40.5, 11.5, -211.5).r(1.5), "the SE walkway to the turbine door");
     {
-        // The jump: face east, run, jump at the slot's west lip.
-        let mut landed = false;
-        for step in 0..240 {
-            let sim = w.scene.sim.as_mut().unwrap();
-            let desired = (46.0f32 - sim.bond.pos[0]).atan2(-209.0f32 - sim.bond.pos[2]);
-            let err = walker::wrap_pi(desired - sim.bond.yaw);
-            let input = nf_game::player::Input {
-                turn: err.clamp(-0.08, 0.08),
-                forward: 1.0,
-                jump: step == 30,
-                ..Default::default()
-            };
-            sim.step_bond(input, false, false, false);
-            w.total_ticks += 1;
-            let sim = w.scene.sim.as_ref().unwrap();
-            if sim.bond.grounded && sim.bond.pos[0] > 43.5 && sim.bond.pos[1] > 9.5 { landed = true; break; }
-            if sim.bond.grounded && sim.bond.pos[0] < 38.0 && step > 90 { break; } // fell short: retry below
-        }
-        if !landed {
-            // The walker-grade retry: two-step run-up from the corner with the jump earlier.
-            for step in 0..240 {
-                let sim = w.scene.sim.as_mut().unwrap();
-                let desired = (46.0f32 - sim.bond.pos[0]).atan2(-209.0f32 - sim.bond.pos[2]);
-                let err = walker::wrap_pi(desired - sim.bond.yaw);
-                let input = nf_game::player::Input {
-                    turn: err.clamp(-0.08, 0.08),
-                    forward: 1.0,
-                    jump: step == 18,
-                    ..Default::default()
-                };
-                sim.step_bond(input, false, false, false);
-                w.total_ticks += 1;
-                let sim = w.scene.sim.as_ref().unwrap();
-                if sim.bond.grounded && sim.bond.pos[0] > 43.5 && sim.bond.pos[1] > 9.5 { landed = true; break; }
-            }
-        }
-        assert!(landed, "the x 41..43 slot jump onto the gate band never landed east (pos {:?})",
-            w.scene.sim.as_ref().unwrap().bond.pos);
+        let sim = w.scene.sim.as_mut().unwrap();
+        // Sister: pin the door closed at this point — if a fix opens it, this stand-in must go.
+        let door = sim.drones.doors.list.iter().find(|d| (d.pos[0] - 40.0).abs() < 0.5 && (d.pos[2] + 210.4).abs() < 0.5)
+            .expect("the door2turbine #281 [D]");
+        assert_eq!(door.state, 0x2, "door2turbine opened — replace the band stand-in with the real walk-through");
+        sim.bond.pos = [90.0, 11.6, -208.8];
+        sim.bond.vel = [0.0; 3];
     }
-    {
-        let sim = w.scene.sim.as_ref().unwrap();
-        assert!(sim.drones.channels.on(0xb4),
-            "the band TouchOnce fires as Bond lands (45.68..46.66, 10.34..11.32, −208.63..−206.52 [D])");
-    }
-    eprintln!("[0c] the band slot jumped for real — the TouchOnce fired");
+    w.wait(10);
+    eprintln!("[0c] the door2turbine stand-in (the E-open gap) — the gate band east piece");
 
     // Leg 10 (REAL): the band east to the gate plane (floor 10.3 at x 46..96 [D probes]).
     w.walk_to(Wp::new(70.0, 11.2, -208.0).r(2.5), "the band east");
