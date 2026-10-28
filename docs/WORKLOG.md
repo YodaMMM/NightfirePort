@@ -20,3 +20,16 @@ Plan:
 - Port the blast call site; tests through the real input path (destroying the
   copter -> blast kind 6 -> debris cadence).
 - Full suite on the final tree; push; report; finish steps.
+
+## copter-death-debris — progress (2026-10-28 ~17:30 UTC)
+
+- [M] the whole chain pinned: the death tail 0x17e390-0x17e3c8 (states 4/5 exempt, 6 on
+  0x0700000b/0x07000012), case 6's Explode_Create at 0x17e120-0x17e168 (f12=f13=10.0,
+  f14=0x4286cccd=67.4, a3=0x0600052, stack u16=6, t3=NULL), the callee's routing 0x17cbd0,
+  Explode_Update's debris arm 0x17c350:34-67 (kind 6 -> MetalHash_132, 3 per passing tick).
+- Ported: Copter::update returns the case-6 blast; the walk queues it into pending_blasts with
+  the call-site values (attacker usize::MAX-1 for the game's NULL). The debris arm was already
+  in (explode-debris-spawn).
+- Tests: nf-game lib 584/0 (2 new: the call-site constants, the state-6 dispatch); the live
+  tests on 0700000b (death -> kind-6 blast -> 3 metal particles in the 41-tick window, none
+  after) and the 07000005 sister (state 4, no blast). Suite on the final tree: running.
