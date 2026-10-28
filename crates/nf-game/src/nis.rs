@@ -330,9 +330,12 @@ pub trait World {
     /// An animated object's own world matrix at `frame` — the game's obj+0x90 that
     /// `Script_EventHandler` case 6 snapshots from the previous stream's object [M 0x1d94c0:125-134;
     /// built by `AnimObjectUpdate` 0x1befd8:290 → `Control_GetObjMatrix` 0x134210 =
-    /// `View_RotTransMatrix(obj+0x50, obj+0x30)` with obj+0x30 carrying the animation's root track,
-    /// 0x1c35f8:~428-432]. `None` (the default): the data is absent — the game's rebuild would not
-    /// run either, and the object keeps its last matrix.
+    /// `View_RotTransMatrix(obj+0x50, obj+0x30)` with obj+0x30 carrying the animation's root track —
+    /// bone 0 of the posed skeleton, `AnimGetFirstTrans` 0x1c7348 seeding it and
+    /// `AnimFrameResolve` 0x1c35f8:428-432 adding the root's per-frame delta — 0x1c35f8:~428-432].
+    /// Unlike `discrete0` this does not go through the skin's discrete-part list (`sk.extra`),
+    /// which many skins (the player body 0x0500005e) do not have. `None` (the default): the data
+    /// is absent — the game's rebuild would not run either, and the object keeps its last matrix.
     fn anim_obj_matrix(&self, skin: u32, script: u32, frame: f32) -> Option<Mat4> { let _ = (skin, script, frame); None }
     /// An animation script's op-1 sound ids with frame in `(from, to]` — the interval `AnimProcessScriptCmds`
     /// (0x1c1b38 case 1) fires, in command order. Empty default: only the runtime's `Data` holds the scripts.
@@ -1023,6 +1026,46 @@ impl Script {
                     Some(Some(Obj::Anim { matrix, .. })) => Some(*matrix),
                     _ => None,
                 });
+                // The vent-drop hand-back (level-14-vent-drop): for 07000014's scene 0x06000833 the
+                // pack has NO marker entity stream — the previous stream (s13) is Wait/Marker only
+                // [D the pack's full stream dump], so the game's case-6 capture hits the
+                // `glb_players+0x90` fallback [M 0x1d94c0:73-84,125-134] — yet the game still
+                // carries Bond from the mezzanine into the facility (no walkable entry exists [D
+                // walk-4: the z 38.21 wall, nav None]). The one mover the disc data offers is the
+                // scripted Bond body (stream 18, script 0x06000857, the player's skin 0x0500005e
+                // [D]) whose world root ends inside the facility at (27.60, 0.98, 43.56) [D the
+                // root track]. Capture it the same way the Kiko precedent composes (nis.rs
+                // level-14-capture-placement): the body's live root IS the hand-back pose. The
+                // mover reads the GENERAL per-interp anim matrix (the kind-2 arm's field — the
+                // merge resolved master's `root` onto it). [S] unverified — the game-side
+                // discriminator (strict player-matrix fallback vs the body's root) is the report's
+                // live check 1; this arm only fires when the strict capture found nothing
+                // (player_at.is_none()), so packs WITH an entity keep the proven path.
+                if self.player_at.is_none() && self.nis.hashcode == 0x0600_0833 {
+                    match objs.list.iter().rev().flatten().next() {
+                        // A world that never resolves the matrix (no `anim_obj_matrix`) leaves the
+                        // seed IDENT: keep the strict fallback rather than handing Bond back at the
+                        // origin.
+                        Some(Obj::Anim { script: 0x0600_0857, matrix, .. }) if *matrix != IDENT => {
+                            if std::env::var("NF_SCRIPTLOG").is_ok_and(|v| v == "1") {
+                                eprintln!("[scriptlog] vent fallback: body root ({:.2},{:.2},{:.2})", matrix[3][0], matrix[3][1], matrix[3][2]);
+                            }
+                            self.player_at = Some(*matrix);
+                        }
+                        _ => {
+                            if std::env::var("NF_SCRIPTLOG").is_ok_and(|v| v == "1") {
+                                let n: Vec<String> = objs.list.iter().flatten().map(|o| match o {
+                                    Obj::Anim { script, skin, .. } => format!("anim {script:08x}/{skin:08x}"),
+                                    Obj::Entity { hash, .. } => format!("ent {hash:08x}"),
+                                    Obj::Camera { .. } => "cam".into(),
+                                    Obj::Sprite { hash, .. } => format!("spr {hash:08x}"),
+                                    Obj::Light { .. } => "light".into(),
+                                }).collect();
+                                eprintln!("[scriptlog] vent fallback: NO 06000857 anim; objects [{}]", n.join(", "));
+                            }
+                        }
+                    }
+                }
                 self.player_mode = g(0) as u8;
                 // fix-final-blockers2 diagnostic: which stream/object the snapshot came from (the game's iVar5
                 // = record(i−1)+0x10 gated on record(i−1)+0x24 kind ∈ {1,2}, fallback `glb_players+0x90`
@@ -1266,6 +1309,9 @@ impl Script {
                     for (id, frames) in w.anim_ops1_precache(*script, *frame as i32 - 1, *frame as i32 + 50) {
                         out.push(Request::PreCache { id, frames });
                     }
+                    // The body's world root at the frame rides the SAME field: the per-interp
+                    // matrix IS obj+0x90's rebuild (the root track composed with the object's
+                    // static transform) — the event-6 fallback reads it above.
                 }
             }
             7 => {

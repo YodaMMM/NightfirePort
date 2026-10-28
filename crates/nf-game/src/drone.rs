@@ -1807,21 +1807,10 @@ pub fn quat_axis_angle_to_quat(axis: [f32; 3], ang: f32) -> [f32; 4] {
 /// `Quat_QuatToMat` (0x1e3e80), bit-exact: the 9 rotation elements written in the game's order with
 /// EE adds/muls — 2y/2z as doubling adds, (2x)·x and (2x)·w, the diagonal as 1 − (sum) [M :15-31].
 /// The game writes only the three rotation rows; the port's 4×4 carries the neutral bottom row.
+/// The implementation lives in `nf_formats::placement` (the 0x34/0xf2 placement classes build
+/// their matrices with it too); this wrapper keeps the verified call-site path.
 pub fn quat_quat_to_mat(q: [f32; 4]) -> nf_formats::anim::Mat4 {
-    let (x, y, z, w) = (q[0], q[1], q[2], q[3]);
-    let add = crate::trig::ee_add;
-    let sub = crate::trig::ee_sub;
-    let mul = nf_formats::ps2float::mul;
-    let a = add(y, y); // fVar1 = 2y [M :18]
-    let b = add(z, z); // fVar2 = 2z [M :20]
-    let c = mul(add(x, x), x); // fVar6 = (2x)·x [M :21]
-    let d = mul(add(x, x), w); // fVar8 = (2x)·w [M :22]
-    [
-        [sub(1.0, add(mul(a, y), mul(b, z))), add(mul(a, x), mul(b, w)), sub(mul(b, x), mul(a, w)), 0.0],
-        [sub(mul(a, x), mul(b, w)), sub(1.0, add(c, mul(b, z))), add(mul(b, y), d), 0.0],
-        [add(mul(b, x), mul(a, w)), sub(mul(b, y), d), sub(1.0, add(c, mul(a, y))), 0.0],
-        [0.0, 0.0, 0.0, 1.0],
-    ]
+    nf_formats::placement::quat_quat_to_mat(q)
 }
 
 impl Drone {
@@ -12053,7 +12042,18 @@ impl Data<'_> {
         };
         // A sequence without a channel for every bone (cut-scene 0x06000997 on 0x0500002E: its sequence is not this
         // archive's full set) gives no parts.
-        pose().unwrap_or_default()
+        let out = pose().unwrap_or_default();
+        if out.is_empty() && std::env::var_os("NF_PARTS_DEBUG").is_some() {
+            let sk = self.skins.get(&skin).map(|s| s.skeleton);
+            let skel = sk.and_then(|k| self.skeletons.get(&k));
+            let q = self.scripts.get(&script).and_then(|s| crate::anim::script_frame(s, frame).map(|(q, _)| q));
+            let seq = q.and_then(|q| self.sequences.get(&q));
+            eprintln!("[parts] miss skin {skin:08x} script {script:08x} frame {frame}: skin_skel {sk:?} script_in {} seqs {} q {q:08x?} seq_in {} seq_skel {:?} fits {:?}",
+                self.scripts.contains_key(&script), self.sequences.len(),
+                seq.is_some(), seq.map(|s| s.skeleton),
+                seq.zip(skel).map(|(s, k)| nf_formats::anim::fits(s, k)));
+        }
+        out
     }
 }
 
@@ -17029,13 +17029,17 @@ fn segment_hits_sphere(a: V3, b: V3, c: V3, r: f32) -> bool {
             None => self.update_pickups(d, player, frame),
         } }
         // `Destroy_Update` 0x12c4f8's second arm (30-35): a live destroyable whose +0x10 word
-        // (placement param 1 [M 0x12c318:36]) names an ON channel smashes, the word clears. 07000008's
-        // GuardRoom SmallExplosionBox #234 carries +0x10 = 137 — the FUSEBOX_GuardRoomDoorLock's
-        // channel [D the census] — so the fusebox cut smashes it (996-level-08-decomp-audit; the
-        // "out ch 137" reading in docs/levels/07000008.md had the direction reversed). The blast
-        // rides the same queue the bullet-path smash uses (Destroy_Smash 0x12bb60's Explode_Create,
-        // the damage = param 5 × 0.01 [M 0x12c424]).
-        for (pos, radius, damage, kind) in self.props.channel_kills(&self.channels) {
+        // (placement param 1 [M 0x12c318:36]) names an ON channel smashes, the word clears, and
+        // the smash — being the game's `Destroy_Smash` [M 0x12c4f8:35] — writes the tag's death
+        // channel [M 0x12bb60:40]. 07000008's GuardRoom SmallExplosionBox #234 carries +0x10 =
+        // 137 — the FUSEBOX_GuardRoomDoorLock's channel [D the census] — so the fusebox cut
+        // smashes it (996-level-08-decomp-audit; the "out ch 137" reading in
+        // docs/levels/07000008.md had the direction reversed). On 07000014 the write chains the
+        // generator-hall cascade to box #729's death ch 0x85 — Door_Slide_11A/B's lock channel
+        // [D the census; M 0x1363c8:88-107] — so the sabotage sequence ends at the door unlock.
+        // The blast rides the same queue the bullet-path smash uses (Destroy_Smash 0x12bb60's
+        // Explode_Create, the damage = param 5 × 0.01 [M 0x12c424]).
+        for (pos, radius, damage, kind) in self.props.channel_kills(&mut self.channels, frame) {
             let script = match kind { 1 => 0x0600_0027, 2 => 0x0600_004f, _ => 0x0600_0052 };
             // explode-debris-spawn: kind 0 — the same Destroy_Smash call as the bullet path [M 0x12bcf8].
             self.pending_blasts.push((pos, radius, damage, usize::MAX, 0, script, radius, 0));
