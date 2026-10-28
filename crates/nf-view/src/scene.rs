@@ -2941,6 +2941,16 @@ impl Sim {
                 // bots Bond shares a cel with keep the push.
                 self.drones.list.iter()
                     .filter(|x| x.kind_464 == 0x800 && !x.corpse)
+                    // CORPSES NEVER COLLIDE (master-side citation, kept in the merge): `SetAsDead`
+                    // 0x14a2f0:9 sets +0x4F8&0x200 at death, and `NDrone2_DoCollision` 0x149ec8:11
+                    // returns 0 (collision OFF) whenever that bit is set — on every level but the
+                    // special 0x700004a — and `NDrone2_Collision` 0x140e90:64 gates the same bit
+                    // (docs/fields/drone.md, the 0x4F8&0x200 row, census-verified). The game's dead
+                    // bot presents no capsule for the player's Jointy query: Bond walks over bodies.
+                    // Without this gate the walkreal_07000001 escort wedge reproduces — Bond lands
+                    // on a fresh corpse's capsule top (pos+0.4), the push holds him airborne
+                    // (grounded never settles), every nav leg dies at the cap, and the escort waits
+                    // for a Bond who can no longer reach the [M 0x15eda8] release band.
                     // drone-bump-collision-8 [L audits/live-07-eastdoor.txt via the driver,
                     // fresh-boot 07000007 2026-10-28]: Bond placed ON the E-spot (94.6, 44.4,
                     // -47.4) — 0.48 from d10's shifted centre — STANDS there 120 frames; placed

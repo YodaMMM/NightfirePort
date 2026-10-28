@@ -134,6 +134,11 @@ fn the_captor_and_hostage_alternate_mission_lines() {
     let mut paired = false;
     let mut last_handles: [Option<u32>; 2] = [None; 2];                     // last voice handle seen per drone
     let mut k_prev_step = 0u16;                                             // the killer's talk_step last tick
+    // The captor's OWN turn observed: +0x4ce (talk_step) is written only by the monitor — case 0
+    // self-sends 0x1A and advances 0→1 [M 0x144340 case 0 (`uVar1 != 0` → Drone_Message(*param_1,
+    // 0x1a); the only other writer is DefaultInit's zero [M 0x14b300:80]] — so talk_step != 0
+    // before anything spoke is exactly the captor's opener turn having run.
+    let mut captor_turn = false;
     let mut open_gap = false;                                               // silent gap of the open period
     let mut gap_after: Option<usize> = None;                                // the drone whose period just closed
     let mut gap_killer_voice = false;                                       // the killer's voice seen in the gap
@@ -153,6 +158,7 @@ fn the_captor_and_hostage_alternate_mission_lines() {
         let sent = k_prev_step == 1 && k.talk_step == 2;
         k_prev_step = k.talk_step;
         if sent { hostage_sends += 1; expect = Some((hi, t + 4)); }
+        if !captor_turn && periods.is_empty() && open.is_none() && k.talk_step != 0 { captor_turn = true; }
         // The gap between periods: the killer's turn is the only thing between two hostage
         // periods — record whether his voice appears there at all.
         if open.is_none() {
@@ -204,7 +210,14 @@ fn the_captor_and_hostage_alternate_mission_lines() {
         assert!(overlap.is_none(), "mission voices overlapped — each waits on the other's +0x4D0 [M 0x144340:10-24, 47-56]");
         assert!(hostage_sends >= 2, "the step machine keeps sending 0x1A to the hostage (the bug: never any send); got {hostage_sends}");
         assert!(periods.len() >= 4, "both sides speak twice — the dialogue runs; periods {periods:?}");
-        assert_eq!(periods[0].2, ki, "the opener is the captor's own line [M 0x144340:34-40]");
+        // The captor's TURN is first — step 0 sends 0x1A to his own obj and advances [M
+        // 0x144340 case 0] — but one of his six lines is silent [M 0x14a8b8 0x29+Rand_Rand(6);
+        // D line 0x2E carries sfxId 0; M 0x141b00 SpeechSFX returns before +0x4D0 is written;
+        // M 0x144340:10-24 step 1's busy test then falls through at once], so the first
+        // OBSERVED period may be the hostage's — accepted only across the captor's own turn
+        // (talk_step != 0 before anything spoke; see the captor_turn note above).
+        assert!(periods[0].2 == ki || (periods[0].2 == hi && captor_turn),
+            "the opener is the captor's own line [M 0x144340:34-40]; a hostage first is valid only across his silent-0x2E roll [M 0x14a8b8 + D 0x2E.sfx=0 + M 0x141b00 + M 0x144340:10-24]; captor_turn {captor_turn}, periods {periods:?}");
         for i in 1..periods.len() {
             // Strict alternation with the one proven exception (the silent-0x2E roll — see the
             // header comment): a same-side repeat is accepted only across a gap where the

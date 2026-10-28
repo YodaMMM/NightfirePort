@@ -142,6 +142,38 @@ started by the script trigger on channel 0x5C — a 5 × 5 plate at y 27.05 that
 24.75 above the waiting truck): disable at once, Bond's jump into the truck (anim 0x06000A24 on skin 0x05000007) under
 the script camera, and after 143 ticks Bond on the bed at (92.254, 19.424, 103.576).
 
+## Skip hand-back [M] (level-02-skip-handback)
+
+The skip is `Input_Action(-1, 0x19, 1)` read in `SP_Update` state 2 every tick (`Script_FFwd(si, 1)` unless the script
+is one of the three death NISs [M 0x1dbda8:129-141, `Script_IsDeathNIS` 0x1dae60]; pad mask 0x840 = R1 / D-pad down,
+pad 0 [M psiInput_MapInputs 0x10cd80:415-417]). `Script_FFwd` (0x1dac78) arms only while a script camera is running
+(`+0xAB5` bit 4, set by `Script_CameraStart` 0x1d9140:47, cleared by `Script_CameraEnd` 0x1db348:12): the first press
+fades to black over `min(length − clock, 45)` ticks, sets `+0xAB2` bit 4, `+0xA4 = FRAME_RATE_MUL`, posts
+`Music_Event(5)`, sets `+0xAB5` bit 0, marks every kind-2 stream object's drone `+0xC8 |= 0x40000`, and (when
+`ScriptCam != 0`) clears all held actions and flushes the subtitles [M 0x1dac78:23-70]; a no-camera script (event 0x10,
+`+0xAA8 & 0x20`) instead just kills its camera stream. Later presses only clear `+0xAB2` bit 4 [M :86-88].
+
+While the fade runs the script keeps playing at 1×. `Script_Update`'s do-while [M 0x1da998:19-100] ticks normally
+while `+0xA4 <= +0xAB4`; once the fade passes its length it sets `+0xAB5` bit 5 and SPINS — running every stream and
+advancing the clocks +1 per pass inside the one call — until the script stops: the remaining commands, events and the
+end all run, compressed into wall-clock. `Script_Interp` case 2 (kind-2 anim) and case 4 (camera) RETURN while
+`+0xAB5 & 0x20` [M 0x1d9a08:146, 205] — the anim object's `+0x90` world matrix freezes at the last pre-freeze pose
+(its clamped local frame at clock press + fade_len); case 1 (kind-1 entity spline) has no freeze gate and keys
+through the catch-up. Events (op 0x12) still fire at their scripted ticks — the clocks never skip.
+
+So the skip hand-back is press-time dependent, not a fixed point: event 6 (case 6 [M 0x1d94c0:125-134]) snapshots the
+kind-1/2 prev stream object's matrix WHEN IT FIRES — for a skip armed at clock K, an event 6 firing at tick
+≤ K + fade_len captures the play-path pose; one firing later captures the FROZEN anim pose at frame
+(K + fade_len − start_clock + start_frame), clamped — which equals the anim's end pose only when the anim had already
+run to its last frame by the freeze tick. `Script_Free` then re-enables Bond there as on the play path
+[M 0x1da880:44-48]. The port implements exactly this (`Script::ffwd` / the `fade_flags & 0x20` gates in
+`Script::interp` / the catch-up loop in `Script::update`); `crates/nf-game/tests/nis_skip_handback.rs` drives
+07000002/03/14's every event-6 SP script through the real skip input (`Scripts::skip_request` → `begin_tick` →
+`SP_Update` state 2) and pins the rule. Measured on 07000002's intro hand-back scene 0x06000084 (prev stream an anim,
+event 6 at t1539): play `(-27.502, 1.162, 32.364)` — the game's fresh-boot play value `(-27.504, 1.131, 32.348)` [L,
+live measurement]; skip armed at t4 (fade 45) `(-27.295, 1.218, 28.952)` = the anim object's frozen frame-~50 pose, not the
+anim's end pose; skip armed at t770 `(-27.357, 1.128, 32.032)` — the same rule further along.
+
 ## Riding [M]
 
 `Player_FeetOnPoint` (0x194188) casts cc + 0.6 below the player; when the hit belongs to an object (not types 2, 3, 5,

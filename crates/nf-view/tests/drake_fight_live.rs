@@ -40,6 +40,17 @@ fn free(sim: &mut nf_view::scene::Sim, ticks: u32) -> bool {
     !sim.disabled
 }
 
+/// The walk allowance (the walkreal harness's own rule): the station's defence AI still runs —
+/// the zero-g skins' ASTRONAUT_LAUNCH/COMBAT/COMBAT_MOVE ENTERs carry the game's sight bit
+/// [M 0x16dd28:17, 0x174458:16, 0x174550:18] and DroneMove_AstronautCombat fires on the sight
+/// flag [M 0x154618:78] — the player stands it off by fighting; this scripted-sequence stand-in
+/// cannot, so the shots cannot kill Bond here (the health top-up, the same allowance the
+/// walkreal 01 walk documents in its header).
+fn step_alive(sim: &mut nf_view::scene::Sim) {
+    sim.step_bond(Input::default(), false, false, false);
+    if sim.drones.health.health < 100.0 { sim.drones.health.health = 100.0; }
+}
+
 /// The launch sequence's phases on the game's trigger, then the disarm branch:
 /// ch 19 → state 0 arms every missile (`MissileDeploy[k] = 1`, the p3 seeds are all < the 512.0
 /// step [M 0x1aa1ec-238]) → the p0 scripts write their gate channels 31..38 at t359 (missile 4's
@@ -64,7 +75,7 @@ fn the_missile_launch_sequence_reaches_each_phase_and_disarms() {
         sim.drones.channels.set(19, 1, sim.drones.frame);
     }
     // Phase 1 — state 0 arms on the first gated tick (every p3 seed 0..105 < the 512.0 step).
-    for _ in 0..3 { scene.sim.as_mut().unwrap().step_bond(Input::default(), false, false, false); }
+    for _ in 0..3 { step_alive(scene.sim.as_mut().unwrap()); }
     {
         let sim = scene.sim.as_ref().unwrap();
         assert!(sim.drones.missile_deploy.iter().all(|&b| b == 1),
@@ -72,7 +83,7 @@ fn the_missile_launch_sequence_reaches_each_phase_and_disarms() {
         assert!(sim.drones.space_missiles.iter().all(|m| m.state == 1), "every missile is in state 1 [M 0x1aa21c]");
     }
     // Phase 2 — the p0 scripts' gate writes at t359 [D]; missile 4 wrote ch 192 at its t1 [D].
-    for _ in 0..370 { scene.sim.as_mut().unwrap().step_bond(Input::default(), false, false, false); }
+    for _ in 0..370 { step_alive(scene.sim.as_mut().unwrap()); }
     {
         let sim = scene.sim.as_ref().unwrap();
         for g in [31u32, 32, 33, 35, 36, 37, 38] {
@@ -84,7 +95,7 @@ fn the_missile_launch_sequence_reaches_each_phase_and_disarms() {
     // ch 1..8 at their t682 [D] (gate 34's ch 34 rise — SP #216 — is disc-positive in the port).
     let mut console = Vec::new();
     for _ in 0..2000u32 {
-        scene.sim.as_mut().unwrap().step_bond(Input::default(), false, false, false);
+        step_alive(scene.sim.as_mut().unwrap());
         shoot_held_disarm_sps(scene.sim.as_mut().unwrap());
         let sim = scene.sim.as_ref().unwrap();
         for k in 1..=8u32 { if sim.drones.channels.on(k) && !console.contains(&k) { console.push(k); } }
@@ -99,7 +110,7 @@ fn the_missile_launch_sequence_reaches_each_phase_and_disarms() {
     // ch 21..28; AND #139 → ch 9.
     let mut disarmed = false;
     for _ in 0..7000u32 {
-        scene.sim.as_mut().unwrap().step_bond(Input::default(), false, false, false);
+        step_alive(scene.sim.as_mut().unwrap());
         let sim = scene.sim.as_ref().unwrap();
         if sim.drones.missile_deploy.iter().all(|&b| b == 2) { disarmed = true; break; }
     }
@@ -110,7 +121,7 @@ fn the_missile_launch_sequence_reaches_each_phase_and_disarms() {
     }
     let mut ch9 = false;
     for _ in 0..3000u32 {
-        scene.sim.as_mut().unwrap().step_bond(Input::default(), false, false, false);
+        step_alive(scene.sim.as_mut().unwrap());
         if scene.sim.as_ref().unwrap().drones.channels.on(9) { ch9 = true; break; }
     }
     {
@@ -125,7 +136,7 @@ fn the_missile_launch_sequence_reaches_each_phase_and_disarms() {
         assert!(!sim.drones.channels.on(199), "sister: the abort channel stays clear on the disarm path [M 0x1aa354 vs 0x1aa360]");
         // The objective monitor folds ch 9 into objective 1 the tick after (the monitor runs at the
         // top of the tick [M 0x1827d8; fix-objective-banner]).
-        for _ in 0..2 { scene.sim.as_mut().unwrap().step_bond(Input::default(), false, false, false); }
+        for _ in 0..2 { step_alive(scene.sim.as_mut().unwrap()); }
         let sim = scene.sim.as_ref().unwrap();
         assert!(sim.drones.mission.states.iter().flatten().any(|&s| s == 4),
             "objective 1 'Disable the missiles' completes [L record 1b: text 0x04000059, ch 9]");
