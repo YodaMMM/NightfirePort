@@ -112,3 +112,24 @@ Remaining red: the EAST door — two CIVILIAN_DOOR_GUARDs (0x31 [D type row mode
 the guards' zone reaction never fires in the port (near_armed_person needs the reaction-acked sight).
 Live checks in the report own it. A test-side north-arc waypoint was tried and reverted (the nav
 steer wedges at the same pin; not evidence-backed).
+
+drone-bump-collision-7 start: branch = origin/s/drone-bump-collision-6 (988e9a49) merged with
+origin/master (17aa36ab — already an ancestor), clean. This round: the east door's two CIVILIAN_DOOR_GUARDs
+(0x31) — port the game's answer to a player walking up to them (the zone reactions' opponent model) and
+settle the depenetration question, then the four east-door reds. Cutoff 16:30 UTC; background jobs die
+between tool calls in this sandbox (setsid included), so everything ran foreground.
+
+drone-bump-collision-7: the 0x31 zone read now runs on the game's opponent model — DoorGuardHandler's
++0x170 gate [M 0x1416d8:16-24] is the port's `bond_alive` fold [M NDrone2_FindOpponent 0x1424e0:100-120,
+run every tick from ControlSTANDARD 0x1490f0:167; PlrStat_OkToUpdate 0x1993e0 is the mission-status gate],
+replacing the [S] "the guard currently sees Bond" los stand-in that starved the zone ladder (the
+reaction-acked sight +0x228 & 4 is NearArmedPerson's gate, not the zone read's). The zone reactions now
+fire on real input — and the measured answer stands: the zones only FACE Bond (SetAngleToObj [M
+0x160648:61-83]); the guards never translate (the idle shuffle ±0.15 [watch d10/d19]); the two capsules
+OVERLAP each other (centers 0.97 < 2×0.95 [D boot (94.89,−48.00)/(93.66,−47.98)]), so the doorway is a
+wall no steer rounds (east = the jamb pocket (95.43,−48.62), west = the d19 pinch); and the depenetration
+hypothesis is refuted statically — the leaf swings away from the activator [M Door_SetupSwing side·swing]
+and never touches the guards, bots resolve against neither the world nor the player in SP [M Collide_Jointy
+0x1ec180:229-233], and the guards' capsules are [M]-proven armed (DefaultInit 0x14b300:60 keeps 0x4f8 bit
+0x20, clears 0x200; DoCollision 0x149ec8; NDrone2_Collision 0x140e90) — so nothing pushes them for an
+unarmed player. The E-spot reachability itself is the [L] question (the report's live checks).
