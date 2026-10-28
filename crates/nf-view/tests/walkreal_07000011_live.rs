@@ -106,6 +106,14 @@ fn walk_spawn_to_the_lower_floor_load_point() {
     w.walk_to(Wp::new(14.8, 35.4, 5.0).r(0.9), "the south-west landing 35.2");
     band(&w, 34.6, 36.6, "the SW landing");
     w.walk_to(Wp::new(14.8, 31.4, -2.6).r(1.0), "the west flight C down (35.2→31.1)");
+    // drone-bump-collision-3: the armed stairwell guards (the flight-plate wakes [D §5]; their
+    // control runs → DoCollision's near arm inside 2.0 [M 0x149ec8:30-33] → kind +0x464 = 0x800
+    // [M 0x140e90:95-101]) shove Bond a hair off the old descent line during the flights, and
+    // the leg's 2D arrival now fires a tick while Bond is still mid-fall over the last step gap
+    // (grounded=false, floor 0.46 below — the probe; the old line read him settled). Let the
+    // fall land before the band check: the check's substance (Bond between the flight's bottom
+    // and the landing above, not in the well) is unchanged.
+    w.wait(20);
     band(&w, 30.4, 32.5, "flight C's bottom");
     w.walk_to(Wp::new(22.4, 31.3, -3.0).r(1.0), "the north strip 31.1 east");
     w.walk_to(Wp::new(23.0, 27.4, 3.8).r(1.0), "the east connector down (31.1→27.1)");
