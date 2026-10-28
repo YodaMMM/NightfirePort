@@ -13721,7 +13721,10 @@ fn segment_hits_sphere(a: V3, b: V3, c: V3, r: f32) -> bool {
             if !net_world {
                 self.props.camera_shot_hit(b.pos, end, b.weapon, &mut self.channels, frame);
             }
-            for (pos, radius, damage, kind) in if net_world { Vec::new() } else { self.props.bullet_hit(b.pos, end, b.weapon, b.damage, &mut self.channels, frame) } {
+            // The round's category word `weapon_data+0x10` [M 0x1ece30:26] — the destroy leaves'
+            // `Collide_FilterBullets` mask reads it below, the fusebox's the same word further down.
+            let weapon_word = d.weapons.records.get(b.weapon as usize).map_or(0u16, |r| u16::from_le_bytes([r[0x10], r[0x11]]));
+            for (pos, radius, damage, kind) in if net_world { Vec::new() } else { self.props.bullet_hit(b.pos, end, b.weapon, weapon_word, b.damage, &mut self.channels, frame) } {
                 let script = match kind { 1 => 0x0600_0027, 2 => 0x0600_004f, _ => 0x0600_0052 };
                 // fix-blast-scripts2: Destroy_Smash's f12 reads the tag's +0x8c [M 0x12bcdc `lwc1
                 // $f12, 140($16)`] — the port keeps the historical scale = radius here (no disc
@@ -13736,7 +13739,7 @@ fn segment_hits_sphere(a: V3, b: V3, c: V3, r: f32) -> bool {
             // `weapon_definition+0x10` ANDs non-zero are dropped [M 0x1ece30:24-31]). Disc words
             // [L dump]: guns 0x0008 (dropped — gunfire never cuts a wire), the Laser 0x0002 (kept —
             // it cuts), the watch/Decryptor beams 0x0100 (dropped).
-            let kind = d.weapons.records.get(b.weapon as usize).map_or(0u16, |r| u16::from_le_bytes([r[0x10], r[0x11]]));
+            let kind = weapon_word;
             if crate::fusebox::FuseBox::hit_survives_filter(kind) {
                 let mut contacts: Vec<(usize, usize, usize)> = Vec::new();
                 // fusebox-geometry: the round is tested against the wire OBJECT's own bounds (the
@@ -14774,12 +14777,12 @@ fn segment_hits_sphere(a: V3, b: V3, c: V3, r: f32) -> bool {
         let beams = std::mem::take(&mut self.pending_beam_blasts);
         if beams.is_empty() { return; }
         for (pos, radius, damage, owner) in beams {
-            let destroys: Vec<(usize, V3, f32, bool)> = self.props.destroy.iter().enumerate()
+            let destroys: Vec<(usize, V3, f32, bool, u16)> = self.props.destroy.iter().enumerate()
                 .filter(|(_, x)| !x.dead)
                 .map(|(i, x)| {
                     let ext = [(x.hi[0] - x.lo[0]) / 2.0, (x.hi[1] - x.lo[1]) / 2.0, (x.hi[2] - x.lo[2]) / 2.0];
                     (i, [(x.lo[0] + x.hi[0]) / 2.0, (x.lo[1] + x.hi[1]) / 2.0, (x.lo[2] + x.hi[2]) / 2.0],
-                     (ext[0] * ext[0] + ext[1] * ext[1] + ext[2] * ext[2]).sqrt(), false)
+                     (ext[0] * ext[0] + ext[1] * ext[1] + ext[2] * ext[2]).sqrt(), false, x.mask)
                 }).collect();
             let breaks_t: Vec<(usize, V3, f32)> = self.breaks.list.iter().enumerate()
                 .filter(|(_, x)| !x.dead)
@@ -17038,6 +17041,11 @@ fn segment_hits_sphere(a: V3, b: V3, c: V3, r: f32) -> bool {
             // explode-debris-spawn: kind 0 — the same Destroy_Smash call as the bullet path [M 0x12bcf8].
             self.pending_blasts.push((pos, radius, damage, usize::MAX, 0, script, radius, 0));
         }
+        // The destroy leaves' colour pair steps once per tick — the tail of every non-death
+        // `Destroy_CollisionHandler` call [M 0x12bd48:61-95]: the beam-contact leaves flash
+        // (−5), the rest recover (+1). Runs after the bullet pass so this tick's contacts are
+        // already folded into the hit67 marks.
+        self.props.destroy_colour_tick();
         // The actor list `Door_Update`'s proximity test (`dist² < (r1+r2)²·2` over classes
         // 2/3/0x12, skipping `obj+0xF0 & 0x10` candidates [M 0x136678-0x136684]) sees: the player
         // first (`glb_players`, the activator of every auto-activation) with radius 0.4, then every

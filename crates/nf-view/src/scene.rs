@@ -8051,8 +8051,11 @@ pub fn build(level: &Level, cels_only: bool, skeletons: &HashMap<u8, Skeleton>, 
         //   sets obj+0xF0 bit 0x10 when facing away; reached whenever a level places type-0xd5 objects —
         //   07000041 does [D levels.md census]. The port's per-triangle backface cull of the placed glist
         //   is the same job at draw time) · 0xD8 RB_Create 0x1d6bf0:52 (rigid bodies evolve obj+0x90 once
-        //   disturbed; at rest = placement) · 0xE1 Destroy_Create 0x12c318:23 (death keeps the object drawn:
-        //   Destroy_Smash 0x12bb60 sets class 1 and only swaps to the block-0x27 LOD variant when one exists)
+        //   disturbed; at rest = placement) · 0xE1 Destroy_Create 0x12c318:23 (death hides the
+        //   mesh: Destroy_Smash 0x12bb60 swaps the glist to tag+0x00 — the LOD pointer or the
+        //   next 0x50 glist slot, undrawable for the C5 leaves [L]; see destroy_object_state
+        //   below — the pre-2026-10-28 "death keeps the object drawn" reading missed the swap's
+        //   always-nonzero argument [M 0x12bbb8 asm + 0x1d1b68])
         //   · 0xE3 Flicker_Create 0x1acb00:49 · 0xFA ThirdIcon_Create 0x197070:33 / 0xFD CamSubject_Create
         //   0x1bc5d8:17 / 0x4A Apocalypse_Create 0x18dcc0:20 — these attach whatever glist the placement
         //   carries; `psiDrawObjectMatrix` no-ops on an empty one, so only objects with gfx batches draw.
@@ -8138,6 +8141,29 @@ pub fn build(level: &Level, cels_only: bool, skeletons: &HashMap<u8, Skeleton>, 
             // probability and threshold are the game's, the stream is the documented port
             // choice. The vehicles draw only — the port's MP has no drivable car (docs/GAPS.md).
             let ctx_level = drones.map_or(0, |d| d.level_id);
+            // The destroy leaves' death hides their mesh. `Destroy_Smash` 0x12bb60 swaps the
+            // object's glist — `Control_SetGList(obj, *(tag+0x00))` [M 0x12bbb8-0x12bbc8 asm, the
+            // argument the decompile drops], and tag+0x00 is `*(glist+0x40)` (the block-0x27 LOD
+            // pointer [M 0x12c318:23-26]) or, when the disc word is −1 (nothing written
+            // [M 0x1d1f10:14-17]), the create-time fallback `pCelList + glistIndex·0x50 + 0x50`
+            // [M 0x1d1b68 loop head] — the NEXT 0x50-byte runtime glist slot. The C5 leaves
+            // resolve that slot to an undrawable glist: both door meshes leave the doorway when
+            // the smashes land [L PCSX2 2026-10-27 — gone by ~190 frames]. The port models the
+            // outcome: once every 0xe1 placement on the same object is dead the mesh stops
+            // drawing (#93/#470 share bigdoor01's obj 91 [D probe_0d_destroy_lod]); leaves with
+            // a real LOD target would need that target's art — none exists on the probed discs.
+            let mut destroy_object_state: std::collections::HashMap<(usize, usize), (u32, u32)> = std::collections::HashMap::new();
+            if let Some(dr) = drones {
+                for (pi, p) in level.maps[m].placements.iter().enumerate() {
+                    if p.flags & 0xff != 0xe1 { continue; }
+                    let target = if p.by_hash() { level.by_hash.get(&p.hashcode).copied() }
+                        else if (p.index as usize) < level.maps[m].objects.len() { Some((m, p.index as usize)) } else { None };
+                    let Some(key) = target else { continue; };
+                    let e = destroy_object_state.entry(key).or_insert((0, 0));
+                    e.1 += 1;
+                    if dr.props.destroy.iter().find(|x| x.placement == pi).is_none_or(|x| !x.dead) { e.0 += 1; }
+                }
+            }
             let mut car_rng = mp.map(|ms| nf_game::drone::Rng::new(ms.seed ^ 0x4341_5253));
             for p in level.maps[m].placements.iter().filter(|p| MISC_KINDS.contains(&((p.flags & 0xff) as u8))) {
                 let kind = (p.flags & 0xff) as u8;
@@ -8155,6 +8181,9 @@ pub fn build(level: &Level, cels_only: bool, skeletons: &HashMap<u8, Skeleton>, 
                 let target = if p.by_hash() { level.by_hash.get(&p.hashcode).copied() }
                     else if (p.index as usize) < level.maps[m].objects.len() { Some((m, p.index as usize)) } else { None };
                 let Some((map, object)) = target else { continue };
+                // A fully-smashed destroyable draws nothing (the destroyed-glist swap — the
+                // destroy_object_state note above).
+                if kind == 0xe1 && destroy_object_state.get(&(map, object)).is_some_and(|&(alive, total)| total > 0 && alive == 0) { continue; }
                 let obj = &level.maps[map].objects[object];
                 // Empty glists draw nothing (`View_DrawObjectGlist`'s psiDrawObjectMatrix no-ops), and a
                 // mirror-only object (glist flags 0x400, View_AddObjects 0x1e62d8:38-47) has no mirror viewer here.
