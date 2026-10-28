@@ -58,6 +58,9 @@ next message should run it first thing on this tree.
   beam-stop tests still green.
 - `cargo check --offline --release -p nf-view` and the four-crate `cargo test --no-run`:
   **BUILD GREEN** on the merged tree (after the props.rs fix above).
+- `cargo test --offline --release -p nf-game --lib -- --test-threads=1`: **582 passed, 0 failed,
+  5 ignored** — the destroy/explode/gunimp unit families (the drain machinery's home crate) are
+  green on the final merged tree.
 - **Not run: the full four-crate suite total line.** This sandbox kills background processes
   between tool calls (three detached runners died — setsid/nohup/disown all included), and the
   foreground `python3 tools/test/suite.py` run spent its whole 10-minute tool window inside the
