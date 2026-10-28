@@ -215,6 +215,19 @@ const REQUIRED: &[(&str, &str)] = &[
     ("GRENADE_THROW", "0x173480:15"),
     // AllyGoToGoalPosition sets the bit on UPDATE (case 3), not ENTER [M 0x15f938:20]
     ("GO_TO_GOAL_ALLY", "0x15f938:20"),
+    // ---- the vision-bit-unported-states round: the wrapper / sighting / prone / ninja states ----
+    ("COMBAT_TOO_CLOSE", "0x173338:12"),
+    ("OBSTRUCTED", "0x173390:14"),
+    ("PRONE", "0x166940:14"),
+    ("PRONE_FIRE", "0x166a28:27"),
+    ("HOLD_IT_RIGHT_THERE", "0x173570:14"),
+    ("SEEN_DEAD_BODY", "0x16acd0:16"),
+    ("SEEN_SURRENDERED_DRONE", "0x16ade0:17"),
+    ("NINJA_STAND", "0x16b990:18"),
+    // the port's consts for the fight bands (the census's old NINJA_ATTACK_*_RANGE names)
+    ("NINJA_LONG_RANGE", "0x16bfc0:19"),
+    ("NINJA_MID_RANGE", "0x16c248:27"),
+    ("NINJA_SHORT_RANGE", "0x16c650:20"),
 ];
 
 /// Writer states the port has no handler for yet ([M] each is a census writer). When one gets an
@@ -222,18 +235,9 @@ const REQUIRED: &[(&str, &str)] = &[
 const NOT_IMPLEMENTED: &[(&str, &str)] = &[
     ("CASTLE_CHAT_GUARD1", "0x1612e0:21"),
     ("INTEROGATE_WALK", "0x162338:20"),
-    ("COMBAT_TOO_CLOSE", "0x173338:12"),
-    ("OBSTRUCTED", "0x173390:14"),
+    // AimStandDiscard's impact resume is the drone's own +0x5a2 word (a per-drone dynamic the
+    // impact_args table cannot express yet) — the ENTER/UPDATE port waits for that reader.
     ("AIM_STAND_DISCARD", "0x166840:15"),
-    ("PRONE", "0x166940:14"),
-    ("PRONE_FIRE", "0x166a28:27"),
-    ("HOLD_IT_RIGHT_THERE", "0x173570:14"),
-    ("SEEN_DEAD_BODY", "0x16acd0:16"),
-    ("SEEN_SURRENDERED_DRONE", "0x16ade0:17"),
-    ("NINJA_STAND", "0x16b990:18"),
-    ("NINJA_ATTACK_LONG_RANGE", "0x16bfc0:19"),
-    ("NINJA_ATTACK_MID_RANGE", "0x16c248:27"),
-    ("NINJA_ATTACK_SHORT_RANGE", "0x16c650:20"),
 ];
 
 #[test]

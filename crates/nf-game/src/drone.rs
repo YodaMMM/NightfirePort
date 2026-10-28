@@ -41,6 +41,9 @@ pub mod state {
     /// flip a coin to 0x70 AimCrouchFire, else 0x68 AimStandFire [M 0x173280:ENTER].
     pub const COMBAT_NEW_SIGHTING: u8 = 0x5b;
     pub const COMBAT_NO_SIGHT: u8 = 0x5c;
+    /// `NDrone2_DSTATE_CombatTooClose` 0x173338 = `NDrone2_StateFuncs[0x5d]` [L 0x29b300+0x5d·4]: a
+    /// pure wrapper — ENTER sets the vision bit and routes to AimStand 0x67 [M 0x173338:11-16].
+    pub const COMBAT_TOO_CLOSE: u8 = 0x5d;
     /// `NDrone2_DSTATE_CombatWait` 0x164960 — `NDrone2_StateFuncs[0x5e]` 0x29b300 [ELF]. The port called
     /// it COMBAT_WAIT (the state a mover parks in when `DroneMove_NoBunching` flags a drone
     /// ahead, `DroneAnim_SetCombatMoveAnim` 0x13cfb0:35-39); the game's table names it CombatWait.
@@ -48,6 +51,10 @@ pub mod state {
     pub const COMBAT_NO_ROUTE: u8 = 0x5f;
     /// `NDrone2_DSTATE_NoOpponent` 0x1650a0 (`NDrone2_StateFuncs[0x60]`).
     pub const NO_OPPONENT: u8 = 0x60;
+    /// `NDrone2_DSTATE_Obstructed` 0x173390 = `NDrone2_StateFuncs[0x61]` [L 0x29b300+0x61·4]: a mover's
+    /// blocked pause — ENTER plays the alert-idle anim 0x21, arms timer C one second out and invalidates
+    /// the attack route [M 0x173390:12-26]; TIMER_C returns to the pre-obstruction state +0x5a0.
+    pub const OBSTRUCTED: u8 = 0x61;
     /// `NDrone2_DSTATE_HostageDead` 0x172628 (`NDrone2_StateFuncs[0x0f]`): a hostage's death (SpecialDeath
     /// routes mode-5 drones here instead of Dead 0x47 [M 0x163c68:93-98]).
     pub const HOSTAGE_DEAD: u8 = 0x0f;
@@ -73,6 +80,10 @@ pub mod state {
     /// `NDrone2_DSTATE_DroneStuck` 0x165ef0 = `NDrone2_StateFuncs[0x7f]` [M table]. ENTER turns the
     /// vision on and falls straight through to CombatNoRoute 0x5f [M 0x165ef0 case 1].
     pub const DRONE_STUCK: u8 = 0x7f;
+    /// `NDrone2_DSTATE_HoldItRightThere` 0x173570 = `NDrone2_StateFuncs[0x80]` [L 0x29b300+0x80·4]: the
+    /// challenge stance — ENTER alert 1, +0x50C = 1.0, face the opponent, the aim-stand anim 10 [M
+    /// 0x173570:11-19]; UPDATE re-faces and runs SeenAndAttacking [M 0x173570:24-30].
+    pub const HOLD_IT_RIGHT_THERE: u8 = 0x80;
     /// `NDrone2_DSTATE_Investigate` 0x168070 = `NDrone2_StateFuncs[0x7e]` [M table]: the blind-cheat
     /// search state — `NDrone2_DSTATE_CombatOutOfRange` 0x164690 (ENTER, the `switch_BLIND_DRONES != 0`
     /// arm — the shipped cheat `C_CHCHBLIND_Handler` 0x215d60 sets the switch) parks the return state
@@ -172,6 +183,13 @@ pub mod state {
     pub const ABSEIL_HANG: u8 = 0x90;
     pub const ABSEIL_STEP_OFF: u8 = 0x91;
     pub const ABSEIL_DEATH: u8 = 0x92;
+    /// `NDrone2_DSTATE_SeenDeadBody` 0x16acd0 = `NDrone2_StateFuncs[0x9e]` [L 0x29b300+0x9e·4] and
+    /// SeenSurrenderedDrone 0x16ade0 = [0x9f]: the sighting pauses — ENTER alert 1, +0x50C = 1.0, the
+    /// attack resume +0x5a2 = 0x56, the alert route built, the alert-idle anim 0x21 with follow-on
+    /// AlertToPosition 0x62 [M 0x16acd0:13-21 / 0x16ade0:13-25]; 0x9f adds the one-in-6 bark [M
+    /// 0x16ade0:26-30].
+    pub const SEEN_DEAD_BODY: u8 = 0x9e;
+    pub const SEEN_SURRENDERED_DRONE: u8 = 0x9f;
     pub const UNDER_COVER_INIT: u8 = 0x93;
     pub const UNDER_COVER_IDLE: u8 = 0x94;
     pub const UNDER_COVER_AIM: u8 = 0x95;
@@ -363,6 +381,13 @@ pub mod state {
     pub const AIM_STAND: u8 = 0x67;
     pub const AIM_STAND_FIRE: u8 = 0x68;
     pub const AIM_STAND_RELOAD: u8 = 0x69;
+    /// `NDrone2_DSTATE_Prone` 0x166940 = `NDrone2_StateFuncs[0x6b]` [L 0x29b300+0x6b·4]: the prone
+    /// sighting hold — ENTER alert 1, the prone anim 0x1d with follow-on ProneFire 0x6c [M 0x166940:12-16];
+    /// every impact arm resumes INTO ProneFire [M 0x166940 case 6..0x19].
+    pub const PRONE: u8 = 0x6b;
+    /// `NDrone2_DSTATE_ProneFire` 0x166a28 = `NDrone2_StateFuncs[0x6c]` [L 0x29b300+0x6c·4]: the prone
+    /// fire — ENTER alert 1, the vision bit, the attack route invalidated, Fire(1) [M 0x166a28:14-22].
+    pub const PRONE_FIRE: u8 = 0x6c;
     pub const AIM_BACKOFF: u8 = 0x6d;
     /// `NDrone2_DSTATE_CrouchCover` 0x166d90 = `NDrone2_StateFuncs[0x6e]` [M table]: the mode-0x11
     /// (cover-croucher) drone's AimCrouch — `NDrone2_DSTATE_AimCrouch` 0x166f28 ENTER branches on the
@@ -3200,6 +3225,15 @@ impl Drone {
             // `HandleImpact(0, 0)` [M 0x162a70's case 8]; DrawWeapon the SAME [M DSTATE_DrawWeapon
             // 0x166000:62-67 — case 8 → `HandleImpact(dc, msg, 0x66, 0)`, the resume argument 0].
             SURRENDER_ANIM | SURRENDERED => (DEATH_ANIM, false),
+            // SeenDeadBody 0x9e / SeenSurrenderedDrone 0x9f: case 6/8 → HandleImpact(0x56, 0), the
+            // 7/9/0x17/0x18/0x19 group → HandleImpact(0x56, 1) [M 0x16acd0:23-43 / 0x16ade0:34-54]
+            // — a shot at a body-watcher ATTACKS (resume Attack), the blast staggers.
+            SEEN_DEAD_BODY | SEEN_SURRENDERED_DRONE => (ATTACK, false),
+            // Prone 0x6b: every impact arm 6/7/8/9/0x17/0x18/0x19 → HandleImpact(0x6c, 1) [M
+            // 0x166940:28-38] — a shot prone drone returns fire from ProneFire. ProneFire 0x6c: the
+            // same group passes (SM+4, 1) [M 0x166a28:57-70] — [S] the SM+4 resume reads as the
+            // state the SM sits in (0x6c) while prone-firing, so the port pins PRONE_FIRE.
+            PRONE | PRONE_FIRE => (PRONE_FIRE, true),
             UNSURRENDER_ANIM | DRAW_WEAPON => (0, false),
             AIM_CROUCH | AIM_STAND_RELOAD | AIM_CROUCH_RELOAD | COMBAT_OUT_OF_RANGE | COMBAT_NO_SIGHT | COMBAT_WAIT
                 | GO_TO_GOAL | DRONE_STUCK => (0, false),
@@ -3404,7 +3438,10 @@ impl Drone {
             | state::ENEMY_MISSION
             // escort-lead-substates (835): the ally family's group arm (resume, 1).
             | ALLY_LEAD_INIT | ALLY_LEAD | PLAYER_IN_WAY | LEAD_HIDE | ALLY_LEAD_WAIT | LEAD_MISSION_WAIT | LEAD_BOND_COMBAT
-            | ALLY_LEAD_DONE | FOLLOW_INIT | FOLLOW | FOLLOW_WAIT | FOLLOW_DONE | GO_TO_GOAL_ALLY);
+            | ALLY_LEAD_DONE | FOLLOW_INIT | FOLLOW | FOLLOW_WAIT | FOLLOW_DONE | GO_TO_GOAL_ALLY
+            // SeenDeadBody/SeenSurrenderedDrone's 7/9/0x17/0x18/0x19 group is (0x56, 1) [M
+            // 0x16acd0:29-43 / 0x16ade0:40-54] — the blast staggers the watcher.
+            | SEEN_DEAD_BODY | SEEN_SURRENDERED_DRONE);
         if allow {
             // 0x1469b8:178-193: stamp the resume (the 0x53-0x55 impact states are excluded), then
             // state 0x54 — its ENTER re-runs the impact with allow = 1 (the stagger anim).
@@ -8177,6 +8214,106 @@ impl Drone {
                 self.desired_yaw = self.yaw_to_opp;
                 true
             }
+            // ---- the vision-bit census's NOT_IMPLEMENTED writer states, ported (vision-bit-unported-states) ----
+
+            // CombatTooClose 0x5d [M 0x173338:11-16]: ENTER — the vision bit, then straight to
+            // AimStand 0x67 [L 0x29b300+0x67·4 = 0x166178]. Cases 0/1 only; every other message is
+            // unhandled (→ GLOBAL = the HandleImpact base, as in the game's `return 0`).
+            (COMBAT_TOO_CLOSE, msg::ENTER) => {
+                self.vision_on = true; // `+0x4F8 |= 0x10000` [M 0x173338:12]
+                self.set_state(AIM_STAND); // SetState(0x67) [M 0x173338:14]
+                true
+            }
+            // Obstructed 0x61 [M 0x173390:12-37]: ENTER — the vision bit, the alert-idle anim 0x21,
+            // timer C armed one frame-rate second out (+0xCC4 = frame + FRAME_RATE_INT, payload
+            // +0xCC8 = 0, arm byte +0xCC0 = 1 [M 0x173390:17-24]) and the attack route invalidated
+            // [M 0x173390:26]. UPDATE = SeenAndAttacking [M 0x173390:30]; TIMER_C (msg 0xc) returns
+            // to the pre-obstruction state +0x5a0 [M 0x173390:34-37] — the port folds +0x5a0 into
+            // `return_state` (the same resume word the game's resume writers use).
+            (OBSTRUCTED, msg::ENTER) => {
+                self.vision_on = true; // [M 0x173390:14]
+                self.call_anim(d, anim_state::ALERT_IDLE, 0, 0); // CallAnim(0, 0x21, …) [M 0x173390:16]
+                self.timer_c = Some(frame + 60); // +0xCC4 = frame + FRAME_RATE_INT (60) [M 0x173390:18-24]
+                self.croute = None; // NDrone2_InvalidateAttackRoute [M 0x173390:26; +0x854 = 0 per 0x155020]
+                true
+            }
+            (OBSTRUCTED, msg::UPDATE) => { self.desired_yaw = self.yaw_to_opp; true } // SeenAndAttacking [M 0x173390:30]
+            (OBSTRUCTED, msg::TIMER_C) => { self.set_state(self.return_state); true } // SetState(+0x5a0) [M 0x173390:34-37]
+            // HoldItRightThere 0x80 [M 0x173570:11-30]: ENTER — the vision bit, alert 1 (+0x50C =
+            // 1.0), face the opponent (+0x170), the aim-stand anim 10 [M 0x173570:12-19]. UPDATE
+            // re-faces and runs SeenAndAttacking [M 0x173570:24-30]. Impacts unhandled (→ GLOBAL
+            // base), as in the game's `return 0`.
+            (HOLD_IT_RIGHT_THERE, msg::ENTER) => {
+                self.vision_on = true; // `+0x4F8 |= 0x10000` [M 0x173570:12]
+                self.alert = 1.0; // `+0x50C = 1.0` [M 0x173570:14]
+                self.desired_yaw = self.yaw_to_opp; // SetAngleToObj(+0x170) [M 0x173570:15-18]
+                self.call_anim(d, anim_state::AIM_STAND, 0, 0); // CallAnim(0, 10, …) — anim 10 = the aim-stand [M 0x173570:19]
+                true
+            }
+            (HOLD_IT_RIGHT_THERE, msg::UPDATE) => {
+                self.desired_yaw = self.yaw_to_opp; // [M 0x173570:27-30]
+                true
+            }
+            // SeenDeadBody 0x9e [M 0x16acd0:12-22]: ENTER — the vision bit, alert 1, +0x50C = 1.0,
+            // the attack resume +0x5a2 = 0x56, SetDroneAlertRoute (route invalidate; the goal-route
+            // build [S] unported), the alert-idle anim 0x21 with follow-on AlertToPosition
+            // 0x62 [M 0x16acd0:20]. UPDATE is unhandled (the switch has no case 3 → `return 0` →
+            // GLOBAL). The impact arms are (0x56, …) — see `impact_args`.
+            (SEEN_DEAD_BODY, msg::ENTER) => {
+                self.vision_on = true; // `+0x4F8 |= 0x10000` [M 0x16acd0:15]
+                self.alert = 1.0; // `+0x50C = 1.0` [M 0x16acd0:17]
+                self.return_state = ATTACK; // `+0x5a2 = 0x56` [M 0x16acd0:18]
+                // NDrone2_SetDroneAlertRoute 0x154b20: invalidate the route +0x860, build the
+                // goal-position AITarget at +0xa80 and SetupGoalPosition(2.0, …) toward the alert
+                // position [M 0x154b20:6-13] — NOT an AssignAIPath walk (the assign_path fold is
+                // the patrol-path builder, a different call). The port models the invalidate;
+                // the goal-position route build is [S] unported — no test drives this state yet.
+                self.route = None; // AINetwork_InvalidateRoute(+0x860) [M 0x154b20:7]
+                self.call_anim(d, anim_state::ALERT_IDLE, ALERT_TO_POSITION, 0); // anim 0x21, end-AI 0x62 [M 0x16acd0:20-21]
+                true
+            }
+            // SeenSurrenderedDrone 0x9f [M 0x16ade0:12-32]: the same ENTER, plus the one-in-6 bark
+            // (`Rand_Rand(6) == 0` → PlaySFX 0x23) [M 0x16ade0:26-30].
+            (SEEN_SURRENDERED_DRONE, msg::ENTER) => {
+                self.vision_on = true; // [M 0x16ade0:16]
+                self.alert = 1.0; // [M 0x16ade0:18]
+                self.return_state = ATTACK; // [M 0x16ade0:19]
+                self.route = None; // SetDroneAlertRoute's invalidate [M 0x16ade0:20 → 0x154b20:7]; the goal-route build [S] unported
+                let bark = rng.rand(6) == 0; // [M 0x16ade0:21-24] — the draw keeps the shared stream; PlaySFX(0x23) itself [S] unported (no sfx reader)
+                let _ = bark;
+                self.call_anim(d, anim_state::ALERT_IDLE, ALERT_TO_POSITION, 0); // [M 0x16ade0:31-32]
+                true
+            }
+            // Prone 0x6b [M 0x166940:11-16]: ENTER — the vision bit, alert 1, the prone anim 0x1d
+            // with follow-on ProneFire 0x6c [M 0x166940:15-16]. UPDATE = SeenAndAttacking + the
+            // +0x38 stance byte (no ported reader — not modelled, the NinjaStand precedent) [M
+            // 0x166940:24-27]. The impact arms all resume into ProneFire (impact_args below).
+            (PRONE, msg::ENTER) => {
+                self.vision_on = true; // [M 0x166940:14]
+                self.alert_status_set(1, frame); // [M 0x166940:15]
+                self.call_anim(d, 0x1d, PRONE_FIRE, 0); // anim 0x1d, end-AI 0x6c [M 0x166940:16]
+                true
+            }
+            (PRONE, msg::UPDATE) => { self.desired_yaw = self.yaw_to_opp; true } // SeenAndAttacking [M 0x166940:24-26]
+            // ProneFire 0x6c [M 0x166a28:14-22 / 30-56]: ENTER — alert 1, the vision bit, the
+            // attack route invalidated, Fire(1) [M 0x166a28:18-22]. UPDATE — SeenAndAttacking; no
+            // opponent → NoOpponent 0x60 [M 0x166a28:35-40]; then the +0x3b firing-flag refresh
+            // from the seen bit / ammo word +0x274 (the port's `firing`), firing → Fire(1) [M
+            // 0x166a28:43-56]. (The `switch_BLIND_DRONES` ENTER arm is the shipped cheat, always 0
+            // [M 0x166a28:15-19 — the non-blind path is the break].)
+            (PRONE_FIRE, msg::ENTER) => {
+                self.alert_status_set(1, frame); // [M 0x166a28:19]
+                self.vision_on = true; // `+0x4F8 |= 0x10000` [M 0x166a28:20]
+                self.croute = None; // NDrone2_InvalidateAttackRoute [M 0x166a28:21]
+                self.fire(d, rng, frame, true); // DroneWeap_Fire(1) [M 0x166a28:22]
+                true
+            }
+            (PRONE_FIRE, msg::UPDATE) => {
+                self.desired_yaw = self.yaw_to_opp; // SeenAndAttacking [M 0x166a28:31-33]
+                if !self.has_opponent(frame) { self.set_state(NO_OPPONENT); return true; } // [M 0x166a28:34-40]
+                if self.firing { self.fire(d, rng, frame, true); } // [M 0x166a28:53-56 — the +0x3b set arm; the +0x274 reload gate rides the port's fire()]
+                true
+            }
             (NO_OPPONENT, msg::ENTER) => {
                 self.alert_status_set(0, frame); // [M 0x1650a0:13] — the status byte; NoOpponent writes no +0x50C
                 self.call_anim(d, anim_state::ALERT_IDLE, 0, 0);
@@ -9200,7 +9337,11 @@ impl Drone {
             // 0x14b0f8:6, and `NDrone2_PreDroneControl` 0x148db0:126 behind the +0x18 flag) [M] — a
             // visual-only spawn the port's draw layer does not build (nothing in
             // the AI reads the eyes datum on the ported paths [M 0x16b990 reads it for the cheat arm only]).
-            (0xa6, msg::ENTER) => { self.set_state(crate::kiko::NINJA_ATTACK); true }
+            (crate::kiko::NINJA_STAND, msg::ENTER) => {
+                self.vision_on = true; // `+0x4F8 |= 0x10000` [M 0x16b990:19-21] (transient: the immediate 0xa7 re-enter re-sets it)
+                self.set_state(crate::kiko::NINJA_ATTACK); // [M 0x16b990:27-31 — the switch_BLIND_DRONES == 0 arm]
+                true
+            }
             // NinjaAttack 0xa7 (0x16bb50): ENTER — vision on, +0x4F8 |= 0x80000000, alert 1.0, then
             // the distance routing (bands or the close-band evasion / sword / stand-fire choice);
             // UPDATE re-routes each tick while no transition is pending.

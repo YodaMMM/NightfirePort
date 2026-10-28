@@ -129,6 +129,12 @@ pub const DONE_PRESS_ALARM: u8 = 0x8b;
 pub const HOSTAGE_GO_TO_GOAL: u8 = 0x64;
 pub const JUST_STAND: u8 = 0xb6;
 pub const NINJA_ATTACK: u8 = 0xa7;
+/// `NDrone2_DSTATE_NinjaStand` 0x16b990 = `NDrone2_StateFuncs[0xa6]` [L 0x29b300+0xa6·4]: the
+/// fight-entry stand — ENTER sets the vision bit (+0x4f8 |= 0x10000 [M 0x16b990:19-21], plus the
+/// top bit 0x80000000 and the 3.0/5.0 band floats +0xf0/+0xfc, no ported readers), plays the
+/// overlay datum (0 / 100·0x2000312) and routes straight to NINJA_ATTACK 0xa7 [M 0x16b990:27-31 —
+/// the `switch_BLIND_DRONES == 0` arm; the shipped cheat 0x215d60 keeps it 0].
+pub const NINJA_STAND: u8 = 0xa6;
 pub const NINJA_LONG_RANGE: u8 = 0xa8;
 pub const NINJA_MID_RANGE: u8 = 0xa9;
 pub const NINJA_SHORT_RANGE: u8 = 0xaa;
