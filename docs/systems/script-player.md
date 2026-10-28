@@ -171,7 +171,7 @@ run to its last frame by the freeze tick. `Script_Free` then re-enables Bond the
 07000002/03/14's every event-6 SP script through the real skip input (`Scripts::skip_request` → `begin_tick` →
 `SP_Update` state 2) and pins the rule. Measured on 07000002's intro hand-back scene 0x06000084 (prev stream an anim,
 event 6 at t1539): play `(-27.502, 1.162, 32.364)` — the game's fresh-boot play value `(-27.504, 1.131, 32.348)` [L,
-task brief]; skip armed at t4 (fade 45) `(-27.295, 1.218, 28.952)` = the anim object's frozen frame-~50 pose, not the
+live measurement]; skip armed at t4 (fade 45) `(-27.295, 1.218, 28.952)` = the anim object's frozen frame-~50 pose, not the
 anim's end pose; skip armed at t770 `(-27.357, 1.128, 32.032)` — the same rule further along.
 
 ## Riding [M]

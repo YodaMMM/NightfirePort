@@ -369,7 +369,7 @@ fn skip_handback_matches_the_games_freeze_rule() {
 }
 
 /// The [L] anchor: the port's play hand-back for the 07000002 intro scene is the game's measured
-/// (-27.504, 1.131, 32.348) (fresh-boot PCSX2, the task brief).
+/// (-27.504, 1.131, 32.348) (fresh-boot PCSX2).
 #[test]
 fn play_handback_07000002_matches_the_live_pin() {
     let Some(path) = iso_path() else { eprintln!("skip: NF_ISO not set"); return };
