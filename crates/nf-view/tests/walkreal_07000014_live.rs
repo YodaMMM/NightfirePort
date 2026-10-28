@@ -37,7 +37,7 @@
 #[path = "common/walker_b2.rs"]
 mod walker;
 
-use walker::{wrap_pi, Walker, Wp};
+use walker::{wrap_pi, Act, Walker, Wp};
 
 fn iso() -> String { std::env::var("NF_ISO").expect("NF_ISO") }
 
@@ -869,6 +869,20 @@ fn walk_the_infiltration_to_the_delta_exit() {
     assert_eq!(w.scene.sim.as_ref().unwrap().drones.mission.states[20][3], 4, "objective 4 completes [M 0x1827d8]");
 
     // Leg 6: to the Delta exit #944 — walked; E fires the fallback write + the load.
+    //
+    // The exit pocket is OFF-NAV: the probe's `nav_route` from the wake-touch spot returns None
+    // (the level's own bots never route here — a player-only pocket), so the walk is the player's
+    // real approach: the double slide doors #121/#122 (24.02,1.2,−22.8 [D]) are the passage's
+    // doors — stay on the approach floor (the direct steer descends onto the y 0.65 shelf south
+    // of the doorway and wedges on its east reveal, the probe's west-facing face), press E (a
+    // TOGGLE [M Door_Activate 0x135be0]; the slides answer from CLOSED and from CLOSING — the
+    // activate turns a closing slide back to OPENING), through the doorway, then the exit.
+    // level-13-guards-start-alerted-8: the RNG-shifted tree's direct leg wedged at
+    // (23.31,1.14,−24.64) — master's unshifted route slipped the doorway diagonally; the three
+    // legs below are the approach the probe walked green from BOTH the leg-6 start and the wedge
+    // spot itself (E reacted, the exit leg arrived at +137 ticks).
+    w.walk_to(Wp::new(22.9, 1.0, -22.8).r(1.2), "the delta doorway approach");
+    w.walk_to(Wp { at: [24.0, 1.2, -22.8], act: Act::Use { use_ticks: 240 }, arrive: 1.1 }, "E the delta slides");
     w.walk_to(Wp::new(27.79, 1.28, -25.32).r(1.0), "to the Delta exit #944");
     let mut loaded = false;
     for _ in 0..60 {
