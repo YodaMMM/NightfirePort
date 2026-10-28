@@ -1892,11 +1892,9 @@ impl CollisionWorld {
     /// 0x1a73f8:164-165) passes the stairwell's 0x40-material well panes that a plain segment
     /// test blocks; mask 0x20 skips the 0x1000-flagged nodes (the port's missile cage).
     pub fn line_of_sight_masked(&self, a: V3, b: V3, mask: u32) -> bool {
-        let d = sub(b, a);
-        let dynamic = self.dynamic.read().unwrap();
-        let skip_cage = mask & 0x20 != 0;
-        let (drop_node, drop_surface, drop_de, drop_10) =
-            (mask & 0x8 != 0, mask & 0x800 != 0, mask & 0x1 != 0, mask & 0x2 != 0);
+        // One call, one read lock: `masked_scan` takes `self.dynamic` itself — the old body took
+        // the same read lock here a second time on the calling thread before delegating (a writer
+        // arriving between the two acquisitions could deadlock the read-read re-entry).
         Self::masked_scan(self, a, b, mask)
     }
 
