@@ -114,6 +114,18 @@ fn sixteen_participants_fixed_run_digest_is_pinned() {
         digest = fold(digest, ha);
         hashes.push(ha);
     }
+    // capsule-cull-and-los-masks-11: the re-pin method's dump arm. NF_MP16_DUMP=<path> writes the
+    // per-tick `net_tick` hash stream (one `t <tick> <hash:016x>` line per tick) BEFORE the pin
+    // assert, so a red still lands its stream. The diff against the master build's stream names
+    // the first diverging tick; the mover behind it gets cited in the re-pin.
+    if let Ok(path) = std::env::var("NF_MP16_DUMP") {
+        let mut out = String::with_capacity(hashes.len() * 32);
+        for (t, h) in hashes.iter().enumerate() {
+            out.push_str(&format!("t {t} {h:#018x}\n"));
+        }
+        std::fs::write(&path, out).expect("write NF_MP16_DUMP stream");
+        eprintln!("[perf16] dumped {} tick hashes to {path}", hashes.len());
+    }
     let sa = a.sim.as_ref().unwrap();
     let kills: i32 = sa.mp.as_ref().unwrap().game.slots.iter().map(|s| s.kills).sum();
     let mut sorted = ta.clone();

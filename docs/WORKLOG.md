@@ -325,3 +325,16 @@ soffit; (2) mp_perf_16 sixteen_participants_fixed_run_digest_is_pinned: dump
 per-tick net_state_hash streams of a master build vs this tree, name the first
 diverging tick's mover, re-pin with that mover cited. Double Cross Part 1 must
 stay finishable. Work in progress; will update as steps land.
+
+Checkpoint (16:59 UTC): red 1 evidence ported to the decompile chain — the walk-down glue is
+the FeetOnPoint band (hit − 0.1 <= cc [M 0x194188:106] ⟺ the floor within 0.1 below the capsule
+bottom; cc = AnimObj+0xCC = the root above the feet [L], port ROOT_HEIGHT 1.0347183), gravity
+beyond it [M 0x194df0:104], so the game descends stairs per-riser by gravity and the walk-down
+tolerance is 0.1, NOT larger than the port's step-up 0.5. The head-on cull [M 0x109da0:321-322]
+skips a down-facing face only when crossed in the spine's BOTTOM half (f > 0.5) — the descent's
+soffit pressing the capsule's top half is NOT culled and pushes. The port already implements
+both, so the wedge at (−33.44, 4.72, 12.03) is an emergent arrival state (probe: the step-down
+gravity cycle works on open floors; the jam needs the live game's approach line). Red 2: the
+NF_MP16_DUMP stream arm landed in mp_perf_16_live (per-tick hashes before the pin assert);
+this tree's 3600-tick stream dumped (digest 0xfd4fcbf81586b3f1 confirmed); the master build +
+diff + mover-cited re-pin is the next window's step 1 (10.6 s per dump run).
