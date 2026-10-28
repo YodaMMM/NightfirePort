@@ -20,3 +20,24 @@ The census: 137 real `NDrone2_DSTATE_*` writers (the raw-160 grep carried three 
   14 NOT_IMPLEMENTED writer states from the decompile (ENTER/UPDATE/EXIT), wire dispatch, move
   rows into the census's required table, test on levels that use them [D placements/scripts];
   AI/escort/walk families stay green.
+
+### vision-bit-unported-states — outcome
+
+- The census's NOT_IMPLEMENTED table corrected: the ninja fight bands 0xa8/0xa9/0xaa were
+  ALREADY ported with vision_on (the census's old game-function names masked the port's
+  NINJA_*_RANGE consts); NINJA_STAND 0xa6's arm was invisible to the parser (the literal
+  (0xa6, msg::ENTER)) — now uses the new kiko::NINJA_STAND const and carries the game's
+  ENTER vision bit [M 0x16b990:19-21]. Census REQUIRED 122 rows, NOT_IMPLEMENTED 3.
+- Seven census-writer states ported from the decompile (CombatTooClose 0x5d, Obstructed
+  0x61, HoldItRightThere 0x80, SeenDeadBody 0x9e, SeenSurrenderedDrone 0x9f, Prone 0x6b,
+  ProneFire 0x6c) — arms, consts, impact_args/blast-group entries; id→function verified
+  [L ee_snapshot @0x29b300+id·4]. SetDroneAlertRoute decoded as route-invalidate +
+  goal-position build (NOT AssignAIPath) [M 0x154b20].
+- Green on the final tree: census 1/0, nf-game lib 578/0/5, ai_live 37/0, escort 1/0,
+  walkreal_01 3/0, walkreal_08 4/0, walkreal_14 2/0+1ign, probe_07 1/0, fix_finale 4/0,
+  mp_net digest 2/0. Sweep 131/876 in two parallel foreground chunks (background runners
+  die between tool calls here); bathhouse shout/voices pair FAILS on this lineage
+  (audio-mixer path — needs a master bisect next window), campaign_flow_live hits the
+  300 s runner cap, probe13's sweep TIMEOUT did not reproduce in isolation (8.3 s).
+- Left: the level-13 reach diagnosis, CastleChatGuard1/InterogateWalk/AimStandDiscard
+  (0x6a needs the dynamic +0x5a2 resume), the bathhouse bisect, the full sweep.
