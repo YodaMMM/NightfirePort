@@ -28,7 +28,28 @@ fn iso() -> Option<String> { std::env::var("NF_ISO").ok() }
 fn load() -> Sim {
     let iso = iso().expect("NF_ISO");
     let mut scene = nf_view::load(&iso, "07000002.bin", false).expect("load 07000002");
-    scene.sim.take().expect("sim")
+    let mut sim = scene.sim.take().expect("sim");
+    // The game's fresh 07000002 boot holds Bond disabled in the intro cut-scene SP #400
+    // (0x06000084) and releases him at frame ~1531 to (-27.504, 1.131, 32.348) [L 2026-10-27
+    // PCSX2, PLAYERS obj+0x30]: the port's event-6 hand-back snapshots the previous stream's
+    // ANIM object's matrix [M 0x1d94c0:125-134] and MOVES Bond at the release — master's
+    // fallback left him wherever he stood, which is what these routes were calibrated
+    // against. Resolve the scene with the game's own skip action first, so every placement
+    // below sticks [M Script_FFwd 0x1dac78, SP_Update 0x1dbda8].
+    // The intro SP primes on the FIRST step_bond (disabled reads false before it), so: step
+    // once to let the scene grab Bond, then hold the game's skip action until it releases him
+    // — the hand-back has landed by the release tick.
+    let mut saw_scene = false;
+    let mut n = 0u32;
+    while n < 400 {
+        if sim.disabled { saw_scene = true; } else if saw_scene { break; }
+        if sim.disabled { sim.drones.scripts.skip_request = true; }
+        sim.step_bond(nf_game::player::Input::default(), false, false, false);
+        n += 1;
+    }
+    assert!(saw_scene && !sim.disabled,
+        "the intro cut-scene never released Bond ({n} ticks, saw_scene {saw_scene})");
+    sim
 }
 
 /// One step through the real path; the level's scripts grab Bond into cut-scenes within seconds,
