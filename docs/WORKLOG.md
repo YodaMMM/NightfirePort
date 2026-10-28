@@ -18,3 +18,19 @@ Plan:
 - Correct the merged level-0d-gun-door-objective test that pins the
   one-contact smash.
 - Tests on real input from the mount; full suite before push.
+
+### level-0d-c5-door-laser outcome (2026-10-28)
+
+- Ported: the Explode_Propagate case-0x21 0x20 gate [M 0x17c518:170] (Targets.destroys carries
+  tag+0x14 now), the Collide_FilterBullets weapon-word mask in the destroy bullet path
+  [M 0x1ece30:26-33; D words 0x0001/0x0008/0x0020 dropped, 0x0010 mounted kept], the hit-colour
+  pair obj+0x104/0x105 (−5 on a 0x67 contact tick, +1 recover, death freeze [M 0x12bd48:61-95]),
+  the destroy leaves as solid bullet stops (one 50-damage contact per round [L ~50/frame]), the
+  merged gun-door test corrected (its one-contact smash contradicted [L] + [M]).
+- asm/decomp findings: Destroy_Smash's SetGList arg = ext+0x00 = the LOD pointer or the
+  create-time fallback pCelList+idx·0x50+0x50 [M 0x12bbb8 asm, 0x12c318:23-26, 0x1d1b68] — the
+  brief's glist+0x50 destroyed entry; the C5 leaves have no block-0x27 LOD [D probe].
+- Left: the sustained-fire harness stalls after ~5 landed contacts (heat/trigger quirk — beam
+  up, no contacts); the drain test is #[ignore]d with the reason. The draw-side destroyed-glist
+  hide needs a per-frame static-instance hook (the 0x3b gap's shape). p6>0 deferred channel
+  writes unported (the C5 doors are p6=0).
