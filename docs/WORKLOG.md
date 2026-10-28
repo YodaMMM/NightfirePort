@@ -133,3 +133,15 @@ and never touches the guards, bots resolve against neither the world nor the pla
 0x1ec180:229-233], and the guards' capsules are [M]-proven armed (DefaultInit 0x14b300:60 keeps 0x4f8 bit
 0x20, clears 0x200; DoCollision 0x149ec8; NDrone2_Collision 0x140e90) — so nothing pushes them for an
 unarmed player. The E-spot reachability itself is the [L] question (the report's live checks).
+
+## drone-bump-collision-8 (2026-10-28, UTC)
+
+Branch s/drone-bump-collision-8, from origin/s/drone-bump-collision-7, merged origin/master
+(clean). Scope: the 07 east door's Bond-vs-door-guard push. The -7 live checks are answered
+(audits/live-07-eastdoor.txt): the guards do not relocate; Bond STANDS on the E-spot (94.6,
+44.4, -47.4), 0.48 from d10's centre, and stays 120 frames — the port pins him at the 0.95
+r-sum contour; placed between the guards the game walks Bond out NORTH. Suspects [M]:
+Collide_Jointy 0x1ec180:203-281's radius source, NDrone2_Collision 0x140e90:66-101, the anim
+height word, whether the 0x31 guards are armed. Port the game's numbers, then green
+probe_07_route, party_door_lock_07000007_live (x2), cutscene_timer_pause_live,
+walkreal_07000007_live's hall walk. Work in progress; will update as steps land.
