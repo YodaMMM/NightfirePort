@@ -48,3 +48,25 @@ gallery probe (probe_gallery06.rs committed) timed out under suite contention �
   data lists [D records / Mission_MonitorObjectives 0x1827d8 M], in player order, each
   asserted complete, ending on the level exit firing; blockers are port gaps to fix with
   [M/D] evidence or list for the main agent if draw-only.
+
+- level-0d-every-objective: the walkreal_0700000d_live walk EXTENDED TO THE END. The old
+  documented stop at the C5 door (objective 6 uncompletable) was obsolete: the level census
+  (docs/levels/0700000d.md §7, 2026-10-22) corrected §6 — ch 0x1f IS reachable by shooting
+  (`Destroy_CollisionHandler` 0x12bd48 subtracts every class-5 bullet's damage, death writes
+  switch_channels [M :35]; the disc hint "considerable firepower" 0x4000066 [D]). New legs:
+  the shooting stand 11+ m off the bigdoor02 #96 yard face (blast-reach guard, top_up_health),
+  the mounted laser 0x67 [D GunImp #225; L probe clip 0/spare 0 sustains fire, 50 dmg/hit],
+  shoot_at through the real trigger path until ch 0x1f (~200 hits on health 10000 [D]),
+  objective 6 asserted complete (states[12][2] == 4 [M 0x1827d8:88-99]), the corridor walk
+  through the dead door raises ch 0x28 (the re-firing Touch #433 [D; M triggers.rs]), the AND
+  #434 [0x1e & 0x1f & 0x28] raises ch 100, `Mission_Update` state 6 [M 0x182c60] ends to
+  0x730000d [D record] — asserted. Every objective the mission data lists now asserted
+  complete: 3 (record 11, start trigger ch 0x23), 4 (0x1d), 5 (0x1e), 6 (0x1f). The remaining
+  stand-in: the crane sequence into the yard (SP #115 script 0x060009EF ride) — documented,
+  unchanged.
+- Run (this sandbox: background jobs die between tool calls; chunk_suite.py + targeted runs):
+  walkreal_0700000d_live 1/0 (5.1 s), interactables_0700000d_live 11/0, walk_0700000d_live
+  3/0, patrol_walk_0c_0d_live 2/0, census/audit_0700000d 2/0, gunimp 0d family 6/0,
+  nf-view crate sweep (timeout-cut at 9.3 min) 179/0 across 38 binaries, chunk_suite
+  cumulative 14 binaries 258/0 recorded (885-bin full sweep cannot fit the 2 h window —
+  third sandbox to measure the background-kill + build cost).
