@@ -56,3 +56,12 @@ south band, walker wedges at the 0.95 contact against the armed party crowd), ma
 on armed combat guards) — by giving the walker the real player's response to a crowd: wait for the line to clear,
 step around the contact, or take the west mouth on measured timing. Every bot assumption cited [M]; never disarm
 the bots. Suite total line to be quoted in the report.
+
+### drone-bump-collision-4, session end (10:00 UTC)
+
+The merge kept the [M] always-on Jointy push (master's airborne-only gate was [S]); the walker gained the
+crowd answer (slide + doorway anti-trap with the mutual-block wait, opt-in `crowd_aware`). mayhew_hold_live
+GREEN. The 07 trio still red at the west mouth: armed route walker parked ON the door's nav node
+((79.75,−50.45) [D]), the pair mutually freezes, the 900-tick wait loses to the route dwell. Full anatomy +
+live checks in docs/reports/drone-bump-collision-4.md. Suite started on the final tree (background runners
+die between tool calls in this sandbox — the report quotes whatever landed).
