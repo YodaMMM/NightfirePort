@@ -1057,13 +1057,125 @@ impl Walker {
                         };
                         if let Some(bi) = bot_i {
                             self.trap_fires += 1;
-                            for _ in 0..70 { self.tick(Input { forward: -0.6, ..Default::default() }, false); }
+                            // drone-bump-collision-5, the mouth pass. The game's armed guest at the
+                            // 07 west mouth WALKS her kind-8 route through the door: path3 is a
+                            // ring whose door-flagged node pair (nodes 0/6, flags 0x2 [D the nav
+                            // dump]) straddles the free door — ReachedDestNode stands her in
+                            // DSTATE_OpenDoor on the pair [M 0x153358:149-163], the state opens
+                            // the door herself and waits DoorIsOpen [M 0x1681f8:18-67, cases
+                            // 1/0xc], and the ring continues [D links 0→11→12→13→14→10→…]. The
+                            // player's answer: WAIT her through (her wake→west-side crossing is
+                            // ~100 ticks [the drone-bump-collision-5 probe]), then slide past on
+                            // the lateral tangent — the Jointy push stays live the whole time (no
+                            // disarm, no dodge: Bond walks into the capsule and the push answers
+                            // [M 0x1ec180:229-266]).
+                            //
+                            // (a) The wait: stand up to 600 ticks; done as soon as she clears the
+                            // 2.6 band or walks 1.2 from her wait-start spot (mid-route she is
+                            // gone in tens of ticks; a bot parked/frozen by the port's own
+                            // probe_move stand-in never clears — [S] the port-side artifact, not
+                            // a game claim).
                             let b0 = self.scene.sim.as_ref().unwrap().drones.list[bi].pos;
-                            for _ in 0..900 {
+                            let mut cleared = false;
+                            for _ in 0..300 {
                                 self.tick(Input::default(), false);
-                                let sim = self.scene.sim.as_ref().unwrap();
-                                let b1 = sim.drones.list[bi].pos;
-                                if dxz(b1, b0) > 1.0 || dxz(b1, self.pos) > 3.4 { break; }
+                                self.pos = self.scene.sim.as_ref().unwrap().bond.pos;
+                                let b1 = self.scene.sim.as_ref().unwrap().drones.list[bi].pos;
+                                if dxz(b1, self.pos) > 2.6 || dxz(b1, b0) > 1.2 { cleared = true; break; }
+                            }
+                            // (b) The pass: read the mouth the way a player does. A fan of 3 m
+                            // world rays around the goal bearing; among the clear ones, take the
+                            // best mix of goal progress and clearance past the bot's capsule and
+                            // walk it, re-reading every tick so the aim follows the widening gap.
+                            // At the 07 west mouth the measured band is the door's south side —
+                            // from the stuck spot (79.20,−51.25) only the 45..75° rays reach the
+                            // hall, passing 0.7..0.9 from dr22's parked capsule, and the Jointy
+                            // push rounds it [M 0x1ec180:229-266; the drone-bump-collision-5 gap
+                            // scan, probe_drone5_gap]. The bot-free door-side offset variant
+                            // failed here: the open leaf / north jamb blocks the north arc
+                            // [the same scan], so the fan reads the real gap instead.
+                            if !cleared {
+                                // (b0) Break the contact first: walk radially OUT of her capsule
+                                // (the mouth's wall absorbs the blocked component and the free
+                                // component slides along it). At the pinned spot the direct goal
+                                // aim sits 0.49 INTO the capsule's radial half-space — the push
+                                // cancels every step (400 ticks, zero displacement [the
+                                // drone-bump-collision-5 trap trace]); from a broken contact the
+                                // radial rotates toward the wall and the wall itself absorbs the
+                                // push's radial arm, letting the tangential cross survive.
+                                for _k in 0..120 {
+                                    self.pos = self.scene.sim.as_ref().unwrap().bond.pos;
+                                    let (rx, rz) = {
+                                        let sim = self.scene.sim.as_ref().unwrap();
+                                        let b = sim.drones.list[bi].pos;
+                                        (self.pos[0] - b[0], self.pos[2] - b[2])
+                                    };
+                                    if (rx * rx + rz * rz).sqrt() > 1.25 { break; }
+                                    let rl = (rx * rx + rz * rz).sqrt().max(0.01);
+                                    let aim = [self.pos[0] + rx / rl * 3.0, self.pos[2] + rz / rl * 3.0];
+                                    let desired = (aim[0] - self.pos[0]).atan2(aim[1] - self.pos[2]);
+                                    let err = wrap_pi(desired - self.scene.sim.as_ref().unwrap().bond.yaw);
+                                    let input = Input {
+                                        turn: err.clamp(-0.07, 0.07),
+                                        forward: if err.abs() < 1.2 { 1.0 } else { 0.45 },
+                                        ..Default::default()
+                                    };
+                                    self.tick(input, false);
+                                }
+                                for _k in 0..400 {
+                                    self.pos = self.scene.sim.as_ref().unwrap().bond.pos;
+                                    let (bx, bz, gy, gx, gz) = {
+                                        let sim = self.scene.sim.as_ref().unwrap();
+                                        let b = sim.drones.list[bi].pos;
+                                        (b[0], b[2], self.pos[1], wp.at[0] - self.pos[0], wp.at[2] - self.pos[2])
+                                    };
+                                    let gl = (gx * gx + gz * gz).sqrt().max(0.01);
+                                    let base = (gx / gl).atan2(gz / gl);
+                                    let (mut best_dir, mut best_score) = ([0.0f32; 2], f32::MIN);
+                                    {
+                                        let sim = self.scene.sim.as_ref().unwrap();
+                                        for k in -6i32..=6 {
+                                            let a = base + k as f32 * (std::f32::consts::PI / 12.0);
+                                            let (dx, dz) = (a.sin(), a.cos());
+                                            if sim.world.segment([self.pos[0], gy, self.pos[2]],
+                                                [self.pos[0] + dx * 3.0, gy, self.pos[2] + dz * 3.0]).is_some() { continue; }
+                                            // The capsule clearance over the ray's first 1.2 m.
+                                            let mut cd = f32::MAX;
+                                            for t in [0.3f32, 0.6, 0.9, 1.2] {
+                                                let (px, pz) = (self.pos[0] + dx * t, self.pos[2] + dz * t);
+                                                cd = cd.min(((px - bx).powi(2) + (pz - bz).powi(2)).sqrt());
+                                            }
+                                            let score = (dx * gx + dz * gz) / gl * (cd / 1.2).min(1.0);
+                                            if score > best_score { best_score = score; best_dir = [dx, dz]; }
+                                        }
+                                    }
+                                    if best_score > f32::MIN {
+                                        let aim = [self.pos[0] + best_dir[0] * 3.0, self.pos[2] + best_dir[1] * 3.0];
+                                        let desired = (aim[0] - self.pos[0]).atan2(aim[1] - self.pos[2]);
+                                        let err = wrap_pi(desired - self.scene.sim.as_ref().unwrap().bond.yaw);
+                                        // forward never zeroed near the body (the -4 crowd rule):
+                                        // the push's tangential arm needs forward motion to slide.
+                                        let input = Input {
+                                            turn: err.clamp(-0.07, 0.07),
+                                            forward: if err.abs() < 1.2 { 1.0 } else { 0.45 },
+                                            ..Default::default()
+                                        };
+                                        self.tick(input, false);
+                                    } else {
+                                        self.tick(Input::default(), false);
+                                    }
+                                    // Past = 0.8 BEHIND her along the crossing (the plain behind-0
+                                    // form fires while Bond is still at the door plane — her z
+                                    // offset makes the dot negative early — and the main loop's
+                                    // crowd slide re-pins him there), or the 2.4 band cleared.
+                                    let past = {
+                                        let sim = self.scene.sim.as_ref().unwrap();
+                                        let b = sim.drones.list[bi].pos;
+                                        (b[0] - self.pos[0]) * gx + (b[2] - self.pos[2]) * gz < -0.8 * gl
+                                            || dxz(b, self.pos) > 2.4
+                                    };
+                                    if past { break; }
+                                }
                             }
                             self.stuck = 0;
                             self.last_sample = self.pos;
