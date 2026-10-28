@@ -2941,6 +2941,21 @@ impl Sim {
                 // bots Bond shares a cel with keep the push.
                 self.drones.list.iter()
                     .filter(|x| x.kind_464 == 0x800 && !x.corpse)
+                    // drone-bump-collision-8 [L audits/live-07-eastdoor.txt via the driver,
+                    // fresh-boot 07000007 2026-10-28]: Bond placed ON the E-spot (94.6, 44.4,
+                    // -47.4) — 0.48 from d10's shifted centre — STANDS there 120 frames; placed
+                    // between the pair the game walks him out NORTH. The 0x31 at-post door
+                    // guards' capsules are inert to the player: no Jointy push fires at any
+                    // range the tests reach (their own SP query returns 0 against a class-3
+                    // opponent [M Collide_Jointy 0x1ec180:229-233], and the player-side resolve
+                    // that the armed +0x464 word predicts [M 0x140e90:95-101] is contradicted
+                    // by the measurement — the unmodelled DoCollision/Pick arm that zeroes it
+                    // for the at-post pair is the live-check item). Until that arm is named,
+                    // the at-post CIVILIAN_DOOR_GUARD state does not join the push set — the
+                    // port's double 0.95 contour wall (Bond r 0.55 + bot r 0.4 [M 0x194df0:316,
+                    // 0x140e90:91-94]) is what pinned probe_07_route / party_door_lock /
+                    // cutscene / walkreal at the east door.
+                    .filter(|x| x.state != nf_game::drone::state::CIVILIAN_DOOR_GUARD)
                     .filter(|x| straddle_cells.contains(&self.world.find_cel(x.pos).unwrap_or(usize::MAX)))
                     .map(|x| x.bump_capsule())
                     .collect()

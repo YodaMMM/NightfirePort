@@ -145,3 +145,15 @@ Collide_Jointy 0x1ec180:203-281's radius source, NDrone2_Collision 0x140e90:66-1
 height word, whether the 0x31 guards are armed. Port the game's numbers, then green
 probe_07_route, party_door_lock_07000007_live (x2), cutscene_timer_pause_live,
 walkreal_07000007_live's hall walk. Work in progress; will update as steps land.
+
+drone-bump-collision-8 checkpoint (18:05 UTC): the fix landed — the at-post CIVILIAN_DOOR_GUARD
+(0x31) state no longer joins the player push set (scene.rs bot_capsules filter), cited to the
+-7 live answers [L: Bond stands on the E-spot 0.48 from d10's centre, 120 frames, no push; the
+static chain [M 0x1ec180/0x140e90/0x149ec8/0x1ebaa8] reconciles everywhere else]. Measured on
+the rebuilt tree: cutscene_timer_pause_live GREEN (1/0), walkreal_07000007_live GREEN (2/0),
+party_door_lock 1/2 (the sister now fails LATER — the #244 use-key assert at :272, past the old
+wedge), probe_07_route reaches the doorway (94.86, −48.03) but the route's post-E legs wedge on
+walker pathing (the crowd_aware steer still repulses off the guards — the same [L] contract
+needs the steer exemption; the E use-zone is the 0x48 trigger at (94.3, 43.7, −45.9), not the
+door face). Next: the walker steer exemption + the E-leg use-zone re-derivation, then the
+remaining legs, then the full suite.
