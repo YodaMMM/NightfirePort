@@ -88,7 +88,7 @@ pub fn bounds(level: &Level, m: usize, p: &nf_formats::placement::Placement) -> 
     // Per-class builder: bounds() is reached from breakable placements (0x20, CCO(0) →
     // View_RotTransMatrix [M 0x12c230:12]); the class predicate keeps any other caller on the
     // game's own builder for its class [M placement::object_matrix_for_class].
-    let mx = object_matrix_for_class(p.flags & 0xff, p.creates_cel(), p.rotation, p.translation);
+    let mx = object_matrix_for_class(p.flags & 0xff, p.creates_cel(), p.rotation, p.translation, p.quaternion());
     let mut corners = Vec::new();
     let sane = [o.min, o.max].iter().all(|b| b.iter().all(|v| v.abs() < 1.0e6));
     if sane {
@@ -140,7 +140,15 @@ impl Props {
                     kill_channel: param(1) as u16 }),
                 // `GunImp_Create` 0x131f20 (placement 0x34, class 0x47): the SP arm mounts the
                 // TurretGuns[0xb] hardware (the laser) [M 0x131f20:52-63]; the base transform is
-                // the placement's (0x225's rotation is identity [D]).
+                // `Quat_QuatToMat` on the placement's +0x24 quaternion with `Mat_SetTrans` writing
+                // the position into the translation row [M 0x131f20:66-67] — that prebuilt matrix
+                // then overwrites the created object's at `Control_CreateObjEx` 0x1343c8:18-23
+                // (the class's matrix builder runs the same quat path, see
+                // placement::object_matrix_for_class). The port's runtime keeps the yaw-only base
+                // model (gunimp.rs): every 0x34 disc row is yaw-only with a consistent pure-yaw
+                // quat (identity or a π yaw — max |quat − euler| 4.8e-7 over all 37 rows
+                // [D placement_rot_census]), so `yaw_base = rotation[1]` equals the quat's yaw on
+                // all disc data — pinned per row by the census test.
                 0x34 => {
                     // The seat offset's source word: the glist's +0x28 float = the object record's
                     // min.z (the bounds block copies at the +8 shift; see gunimp.rs's seat doc)

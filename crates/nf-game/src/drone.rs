@@ -1807,21 +1807,10 @@ pub fn quat_axis_angle_to_quat(axis: [f32; 3], ang: f32) -> [f32; 4] {
 /// `Quat_QuatToMat` (0x1e3e80), bit-exact: the 9 rotation elements written in the game's order with
 /// EE adds/muls — 2y/2z as doubling adds, (2x)·x and (2x)·w, the diagonal as 1 − (sum) [M :15-31].
 /// The game writes only the three rotation rows; the port's 4×4 carries the neutral bottom row.
+/// The implementation lives in `nf_formats::placement` (the 0x34/0xf2 placement classes build
+/// their matrices with it too); this wrapper keeps the verified call-site path.
 pub fn quat_quat_to_mat(q: [f32; 4]) -> nf_formats::anim::Mat4 {
-    let (x, y, z, w) = (q[0], q[1], q[2], q[3]);
-    let add = crate::trig::ee_add;
-    let sub = crate::trig::ee_sub;
-    let mul = nf_formats::ps2float::mul;
-    let a = add(y, y); // fVar1 = 2y [M :18]
-    let b = add(z, z); // fVar2 = 2z [M :20]
-    let c = mul(add(x, x), x); // fVar6 = (2x)·x [M :21]
-    let d = mul(add(x, x), w); // fVar8 = (2x)·w [M :22]
-    [
-        [sub(1.0, add(mul(a, y), mul(b, z))), add(mul(a, x), mul(b, w)), sub(mul(b, x), mul(a, w)), 0.0],
-        [sub(mul(a, x), mul(b, w)), sub(1.0, add(c, mul(b, z))), add(mul(b, y), d), 0.0],
-        [add(mul(b, x), mul(a, w)), sub(mul(b, y), d), sub(1.0, add(c, mul(a, y))), 0.0],
-        [0.0, 0.0, 0.0, 1.0],
-    ]
+    nf_formats::placement::quat_quat_to_mat(q)
 }
 
 impl Drone {
