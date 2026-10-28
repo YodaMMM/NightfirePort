@@ -36,3 +36,14 @@ Plan:
   band (z −72, the game's nav chain #149-155, guards #271/#272) does not connect in the disc's
   data. Wire #251 is only the 8-unit hand-over-hand cable [D its bounds].
 - Suite runner restarted with the ALSA prefix fixed (/tmp was wiped; scripts/run_suite.sh).
+
+## level-05-every-objective — final (2026-10-28)
+
+- The file is 9/9 green (69.87 s): the new the_cable_landing_walks_the_south_walkway_toward_
+  the_zip_door pins the cable route's exit blocker with disc evidence (the trench at z −12,
+  the void band z −40..−64, the isolated battlement nav chain #149-155).
+- The report (docs/reports/level-05-every-objective.md) carries the [D] objective-record dump
+  (6 records over 4 parts), the coverage audit, the blockers and the live checks.
+- The full-suite runner was killed three times by the sandbox gateway; its partial output
+  (suite.out, untracked) had no FAILED/TIMEOUT lines. nf-view walkreal_07000005_live 9/0 is
+  the crates-touched run this branch can prove in the window.
