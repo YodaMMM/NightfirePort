@@ -914,6 +914,61 @@ fn load_impl(iso_path: &str, archive: &str, all: bool, save: Option<&nf_game::pl
     // gadget lines — e.g. 0c's own EquipWeapon(0x58, 0) [M 0x1a8568] — own the Q-Worm on levels
     // whose session hashtable misses it). Snapshots: before the asset merge, after it, after g-021.
     let loadout_skins_pre_assets: std::collections::HashSet<u32> = level.skins.keys().copied().collect();
+    // cutscene-handback-sp-path: the level's cut-scene packs' ANIM SET. The game loads the pack a
+    // trigger names before its cut-scene: `LoadableLoad` 0x1d69e8 = AnimCacheDisable +
+    // `hashtable_delete_hashtype(0x4000000)` (the 0x04-top-byte sequences wipe) + `LoaderLoad(2,
+    // pack)` in a loop [M 0x1d69e8; LoaderProcess 0x1d4880 case 3 → AnimLoadFile 0x1bdf40:43-47
+    // registers first-wins, `hashtable_additem` only on a miss]. The pack sequences are where the
+    // cut-scene anims' root tracks live [D 06000501's windows 0x04000584/0x04000474 in 07900002.bin,
+    // 06000504's 0x04000477/0x04000551 in 07800002.bin, 060006d5's 0x040006f0/0x04000601 in
+    // 0790004a.bin — none of them in the level's 07F pack], so the runtime `Data`'s
+    // `anim_obj_matrix`/`anim_length` (drone.rs) resolve kind-2 cut-scene streams ONLY with these
+    // entries merged — without them the SP-path event-6 snapshot poses at the create identity.
+    // Merge rule = the census's `AnimWorld::for_level` (nis_handback_census.rs), the level's own
+    // entries first-wins (`or_insert` on every table); a pack sequence additionally skips any
+    // hashcode a bucket already holds, so an appended entry never shifts an existing bucket index
+    // or flips a `by_hash`/`seqs` resolution (Scene builds both after this). [S] unverified port
+    // choice where a hash would collide: the game wipes sequences and holds the PACK's during the
+    // scene (the 0x1d69e8 delete), the port keeps the union with the level's copy — no collision
+    // exists on the pinned rows [D]. Skins ride in AFTER the loadout snapshot above (the
+    // availability gate sees the level's own set only) and BEFORE the cut-scene-actor sweep below
+    // (a pack skin satisfies its ScriptPlayer placement locally — the pack IS the game's source
+    // for those actors). `share_datums` re-runs because the game's AnimPostLoadInit 0x1be1a8 runs
+    // per skin-file load (each pack's registration included).
+    let nn = &archive[3..8];
+    for pfx in ["078", "079", "07A"] {
+        let pack = format!("{pfx}{nn}.bin");
+        let Some(fe) = entries.iter().find(|e| e.name.eq_ignore_ascii_case(&pack)) else { continue };
+        let Ok(pd) = iso.read_bytes(bin.lba as u64 * 2048 + fe.offset as u64, fe.size as u64) else { continue };
+        let Ok(plb) = LevelBin::parse(&pd) else { continue };
+        for e in plb.entries.iter().filter(|e| e.kind == 6) {
+            if let Ok(s) = character::parse_skeleton(plb.data(&pd, e)) { skeletons.entry(s.id as u8).or_insert(s); }
+        }
+        for e in plb.entries.iter().filter(|e| e.kind == 5) {
+            if let Ok(s) = nf_formats::anim::Script::parse(plb.data(&pd, e)) { level_scripts.entry(s.hashcode).or_insert(s); }
+        }
+        for e in plb.entries.iter().filter(|e| e.kind == 4 && e.length >= 0x40) {
+            if let Ok(s) = Sequence::parse(plb.data(&pd, e)) {
+                if sequences.values().any(|v| v.iter().any(|q| q.hashcode == s.hashcode)) { continue; }
+                // The pack sequences ride the fix-cutscenes loader's SENTINEL key
+                // (`0x80 | skeleton`), NOT the gameplay bucket: the game's `LoadableLoad`
+                // 0x1d69e8 wipes the 0x4000000 hashtable and streams the pack's kind-4 rows,
+                // so they REPLACE the cache while the scene plays and NEVER join the level's
+                // per-skeleton sequence list — that list is order-sensitive gameplay data
+                // (`frame_of`'s `k % len` idle cycle, the skeleton-filtered `seq_index`). The
+                // sentinel key still reaches the by-hash map `Scene::seqs` (flattened over
+                // every bucket), the only reader a cut-scene's `Script_AnimStart` resolution
+                // and the kind-2 `anim_obj_matrix` pose use.
+                sequences.entry(s.skeleton | 0x80).or_default().push(s);
+            }
+        }
+        for e in plb.entries.iter().filter(|e| e.kind == 3) {
+            if let Ok(s) = character::parse_skin(plb.data(&pd, e), |id| skeletons.get(&id).map(|k| k.bones)) {
+                level.skins.entry(s.hashcode).or_insert(s);
+            }
+        }
+    }
+    nf_formats::level::share_datums(&mut level.skins);
     if weapon_wanted != weapon_assets::Wanted::None {
         // weapon_data once for the whole load (the EE initialiser run the merge needs is the same
         // one the DroneContext consumes below; `--dev` used to run it twice).
@@ -1912,6 +1967,19 @@ fn posed_vertices(scene: &scene::Scene, choice: Option<usize>, time: f32, opts: 
     scene.posed_vertices(choice, time, opts)
 }
 
+/// The destroyed-glist swap's draw side, per frame: the destroyed Destroy leaves' material centres
+/// as f32 bits (the draw filter's match key). The game's `Destroy_Smash` 0x12bb60 swaps the dead
+/// leaf's object onto the destroyed glist entry — the block-0x27 LOD pointer or the parsemap
+/// fallback slot [M 0x12bbb8 asm + 0x1d1b68]; the C5 leaves' fallback slot is undrawable [D
+/// lod_word −1] and the doorway ends open [L], so the dead leaf's static materials stop drawing.
+fn dead_destroy_centres(scene: &scene::Scene) -> Vec<[u32; 3]> {
+    let Some(sim) = scene.sim.as_ref() else { return Vec::new() };
+    scene.destroy_centres.iter()
+        .filter(|(_, pi)| sim.drones.props.destroy.get(*pi).is_some_and(|d| d.dead))
+        .map(|(c, _)| c.map(f32::to_bits))
+        .collect()
+}
+
 /// The snow quads facing the camera, plus the emitter particles (fix-world-fx: the same billboard
 /// pass — `Emitter_Draw` 0x17b708 path A draws both through `psiDrawParticleList`).
 fn snow_for(scene: &scene::Scene, cam: &Camera) -> Vec<scene::Vertex> {
@@ -2447,6 +2515,8 @@ fn shot(scene: &scene::Scene, cam: &Camera, out: &str, choice: Option<usize>, ti
     // spot the eye's cel walk doesn't resolve.
     let world = if std::env::var_os("NF_NO_PORTAL_CULL").is_some() { None } else { scene.sim.as_ref().map(|s| &s.world) };
     let vis_shot = r.cel_visibility(cam.pos.to_array(), vp_shot, world, door_closed.as_deref());
+    // The destroyed-glist swap's draw side: the dead Destroy leaves' centres (see Scene::destroy_centres).
+    r.destroy_dead = dead_destroy_centres(scene);
     // Objects are never room-culled (see the live path).
     r.update_skin(&queue, scene, choice, time, opts, None);
     r.set_char_light_centres(scene);
@@ -5653,6 +5723,9 @@ impl App {
                 if scene_overlay_up(&self.scene, movie_frame.is_some()) { hud.append(&self.scene.script_overlay_hud(aspect)); }
                 g.renderer.lights = self.scene.frame_lights();
                 g.renderer.screen_aspect = g.config.width as f32 / g.config.height.max(1) as f32;
+                // The destroyed-glist swap's draw side: the dead Destroy leaves' centres
+                // (see Scene::destroy_centres) — the doorway ends open [L] once the leaf is dead.
+                g.renderer.destroy_dead = dead_destroy_centres(&self.scene);
                 let fp_enc = std::time::Instant::now();
                 g.renderer.set_shards(&g.queue, &self.scene.shard_draws());
                 let enc = g.renderer.render(&g.device, &g.queue, &view, &g.depth, vp, vp_rot, draw_cam.pos.to_array(), self.anim_time as u32, &snow, &hud, movie_frame, if cutscene { Some(band) } else { None });

@@ -107,11 +107,16 @@ fn the_under_bathhouse_guards_shout_lines_key_on_through_the_real_path() {
     }
 
     // The tunnel route's order: Bond reaches the yard plate with ch 0x66 still clear, steps on it.
+    // He stands ON the plate (the AABB centre, inside [D placement 389's volume 5.34..6.73]) — the
+    // player's own walk-over posture. The old `-1.0` drop buried him below the stair lip: the trio
+    // woke, hunted and camped in CombatNoSight 0x5c, where no shout site re-enters (the sites are
+    // the FirstAttack / AimStandFire / CombatNoMove ENTERs [M 0x148010:94 / 0x13eac0's callers]) —
+    // the shout never rolled regardless of the RNG stream position.
     let c = {
         let sim = scene.sim.as_mut().unwrap();
         let c = sim.drones.triggers.iter().find(|t| t.out == 0x81).unwrap().centre();
         assert!(!sim.drones.channels.on(0x66), "the wire-gap chain has not fired on this route");
-        [c[0], c[1] - 1.0, c[2]]
+        c
     };
     {
         let sim = scene.sim.as_mut().unwrap();
@@ -134,7 +139,10 @@ fn the_under_bathhouse_guards_shout_lines_key_on_through_the_real_path() {
     // are watched every tick (a shout node lives ~1 s).
     {
         let mut seen = std::collections::HashSet::new();
-        for _ in 0..600 {
+        // The trio's first shout roll lands ~550-800 ticks after the wake on the game-true
+        // timeline (the probe: plays at +552/+786 post-teleport [L 2026-10-28]); 600 closed
+        // before the roll on a shifted preamble.
+        for _ in 0..1200 {
             let sim = scene.sim.as_mut().unwrap();
             for id in sim.drones.audio.live_ids() { if (111..=115).contains(&id) && !pool_hits.contains(&id) { pool_hits.push(id); } }
             tick(&mut scene, &mut snd, &mut seen);
@@ -220,7 +228,9 @@ fn the_bathhouse_floor_guards_shout_lines_key_on_too() {
                 // 1.5 units off the guard at his floor height: inside the [M 0x175af0] 2.0 arm.
                 sim.bond.pos = [gp[0] + 1.5, gp[1], gp[2]];
             }
-            for _ in 0..450 {
+            // master's window [L probe: the roll can land +552/+786 after the wake; 450 closed
+            // early on a shifted preamble]: patience only — the loop breaks on the first hit.
+            for _ in 0..1200 {
                 let sim = scene2.sim.as_ref().unwrap();
                 for id in sim.drones.audio.live_ids() { if (111..=115).contains(&id) && !pool_hits2.contains(&id) { pool_hits2.push(id); } }
                 tick(&mut scene2, &mut snd2, &mut seen2);

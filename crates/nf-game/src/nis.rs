@@ -24,15 +24,6 @@ pub enum Obj {
     /// `ticked`: false until the stream's first `Script_Interp` runs — the game's fresh anim script has no previous
     /// time, so the start frame's own commands fire on that first interp (`AnimScriptTick`'s old time is 0).
     Anim { skin: u32, script: u32, frame: f32, weapon: u8, src: (u32, u8), ticked: bool,
-        /// The body's current WORLD root matrix, refreshed each interp [M 0x1d9a08 case 2 →
-        /// `AnimFrameResolve` 0x1c35f8: obj+0x30 = root track at the frame]. A diagnostic like `base`
-        /// for every pack EXCEPT the vent-drop hand-back: `Script_EventHandler` 0x1d94c0 case 6's
-        /// capture falls back to the player's own matrix when the previous stream has no entity, yet
-        /// the game still carries Bond through the 07000014 vent scene 0x06000833 (no other entry
-        /// exists [D walk-4 walls/nav]) — the one mover the disc data offers is the scripted Bond
-        /// body stream (s18, script 0x06000857) whose root ends inside the facility [D root track].
-        /// Set per tick in `interp` case 2; read by the event-6 fallback below.
-        root: Mat4,
         /// The owning SP's matrix snapshot at `Script_AnimStart` [M 0x1d8f40's `self.matrix`]. NOT a
         /// draw base: the game composes NO base onto script-anim objects — obj+0x30 IS the raw root
         /// track [M AnimGetFirstTrans 0x1c7348 + AnimFrameResolve 0x1c35f8:428-432's delta add], the
@@ -44,7 +35,17 @@ pub enum Obj {
         /// [D 0x040005fd/fe/ff] because the pack's op-0x0d turned its SCRIPTINFO base identity —
         /// the ENTITY streams share that frame (nis.rs case 1's keys-alone rule). Kept as a
         /// diagnostic snapshot; no reader applies it.
-        base: Mat4 },
+        base: Mat4,
+        /// The object's live world matrix — the game's obj+0x90 [M]: `AnimObjectUpdate` 0x1befd8
+        /// rebuilds it through `Control_GetObjMatrix` 0x134210 = `View_RotTransMatrix(obj+0x50 rot,
+        /// obj+0x30 pos)` (0x1befd8:290; every consumer rebuilds it the same way —
+        /// `Control_BuildWorldSph` 0x133070:17), and obj+0x30 accumulates the animation's root track
+        /// [M AnimFrameResolve 0x1c35f8:~428-432 delta add] — for a script anim created at the origin,
+        /// the root track IS the world pose. `Script_EventHandler` case 6 snapshots the previous
+        /// stream's object's +0x90 for kinds {1, 2} alike [M 0x1d94c0:125-134], so the port carries
+        /// the root pose per tick (`World::anim_obj_matrix`); identity until the first ticked frame
+        /// resolves (control_create_object 0x1344e0 builds it at the origin [M]).
+        matrix: Mat4 },
     /// A cut-scene camera (`CAM_INFO`, `Script_CameraStart`): its world matrix (rows: right, up, forward, position)
     /// and vertical field of view in radians (key scale × `+0x114` = 4/3, `Camera_CalcViewAngles`).
     Camera { matrix: Mat4, fov: f32, src: (u32, u8) },
@@ -326,12 +327,16 @@ pub struct PendingPickup {
 pub trait World {
     fn anim_length(&self, script: u32) -> Option<u16>;
     fn discrete0(&self, skin: u32, script: u32, frame: f32) -> Option<Mat4>;
-    /// The anim object's ROOT-track world matrix at the frame — bone 0 of the posed skeleton
-    /// (`AnimGetFirstTrans` 0x1c7348 seeds obj+0x30 with the sequence's root translation;
-    /// `AnimFrameResolve` 0x1c35f8:428-432 adds the root's per-frame delta). Unlike `discrete0`
-    /// this does not go through the skin's discrete-part list (`sk.extra`), which many skins
-    /// (the player body 0x0500005e) do not have — the vent-drop hand-back reads it.
-    fn anim_root(&self, _skin: u32, _script: u32, _frame: f32) -> Option<Mat4> { None }
+    /// An animated object's own world matrix at `frame` — the game's obj+0x90 that
+    /// `Script_EventHandler` case 6 snapshots from the previous stream's object [M 0x1d94c0:125-134;
+    /// built by `AnimObjectUpdate` 0x1befd8:290 → `Control_GetObjMatrix` 0x134210 =
+    /// `View_RotTransMatrix(obj+0x50, obj+0x30)` with obj+0x30 carrying the animation's root track —
+    /// bone 0 of the posed skeleton, `AnimGetFirstTrans` 0x1c7348 seeding it and
+    /// `AnimFrameResolve` 0x1c35f8:428-432 adding the root's per-frame delta — 0x1c35f8:~428-432].
+    /// Unlike `discrete0` this does not go through the skin's discrete-part list (`sk.extra`),
+    /// which many skins (the player body 0x0500005e) do not have. `None` (the default): the data
+    /// is absent — the game's rebuild would not run either, and the object keeps its last matrix.
+    fn anim_obj_matrix(&self, skin: u32, script: u32, frame: f32) -> Option<Mat4> { let _ = (skin, script, frame); None }
     /// An animation script's op-1 sound ids with frame in `(from, to]` — the interval `AnimProcessScriptCmds`
     /// (0x1c1b38 case 1) fires, in command order. Empty default: only the runtime's `Data` holds the scripts.
     fn anim_ops1(&self, script: u32, from: i32, to: i32) -> Vec<u32> { let _ = (script, from, to); Vec::new() }
@@ -861,7 +866,8 @@ impl Script {
         let len = w.anim_length(script).unwrap_or(1).max(1) as f32;
         let f = start as f32;
         let frame = if f < 1.0 || len < f { if f < 1.0 { 1.0 } else { len } } else { f };
-        objs.list.push(Some(Obj::Anim { skin, script, frame, weapon: 0, src: (self.nis.hashcode, i as u8), ticked: false, base: self.matrix, root: IDENT }));
+        objs.list.push(Some(Obj::Anim { skin, script, frame, weapon: 0, src: (self.nis.hashcode, i as u8), ticked: false, base: self.matrix,
+            matrix: IDENT }));
         let s = &mut self.streams[i];
         s.obj = Some(objs.list.len() - 1);
         s.kind = 2;
@@ -1008,11 +1014,18 @@ impl Script {
             // (BL+0x7E8) likewise; BL+0x7D4 = 0 has no port model. The timer pause rides the same
             // request on the view side (`log_timer_pause()`, slot 0 [M 0x199520:6-9]).
             4 => out.push(Request::PlayerDisable),
-            // Where the player comes back: the previous stream's entity (else where he is), applied by `Script_Free`.
+            // Where the player comes back: the previous stream's object — entity OR anim, the game's
+            // gate admits kinds {1, 2} and snapshots that object's +0x90 either way
+            // [M 0x1d94c0:73-84, 125-134] — else where he is, applied by `Script_Free`.
             6 => {
                 self.flags |= 0x100;
                 let prev = i.checked_sub(1).map(|j| &self.streams[j]).filter(|s| matches!(s.kind, 1 | 2)).and_then(|s| s.obj);
-                self.player_at = prev.and_then(|o| match objs.list.get(o) { Some(Some(Obj::Entity { matrix, .. })) => Some(*matrix), _ => None });
+                self.player_at = prev.and_then(|o| match objs.list.get(o) {
+                    Some(Some(Obj::Entity { matrix, .. })) => Some(*matrix),
+                    // The kind-2 arm: the anim object's live obj+0x90 (the carried root pose).
+                    Some(Some(Obj::Anim { matrix, .. })) => Some(*matrix),
+                    _ => None,
+                });
                 // The vent-drop hand-back (level-14-vent-drop): for 07000014's scene 0x06000833 the
                 // pack has NO marker entity stream — the previous stream (s13) is Wait/Marker only
                 // [D the pack's full stream dump], so the game's case-6 capture hits the
@@ -1022,20 +1035,22 @@ impl Script {
                 // scripted Bond body (stream 18, script 0x06000857, the player's skin 0x0500005e
                 // [D]) whose world root ends inside the facility at (27.60, 0.98, 43.56) [D the
                 // root track]. Capture it the same way the Kiko precedent composes (nis.rs
-                // level-14-capture-placement): the body's live root IS the hand-back pose.
-                // [S] unverified — the game-side discriminator (strict player-matrix fallback vs the
-                // body's root) is the report's live check 1; this arm only fires when the strict
-                // capture found nothing (player_at.is_none()), so packs WITH an entity keep the
-                // proven path.
+                // level-14-capture-placement): the body's live root IS the hand-back pose. The
+                // mover reads the GENERAL per-interp anim matrix (the kind-2 arm's field — the
+                // merge resolved master's `root` onto it). [S] unverified — the game-side
+                // discriminator (strict player-matrix fallback vs the body's root) is the report's
+                // live check 1; this arm only fires when the strict capture found nothing
+                // (player_at.is_none()), so packs WITH an entity keep the proven path.
                 if self.player_at.is_none() && self.nis.hashcode == 0x0600_0833 {
                     match objs.list.iter().rev().flatten().next() {
-                        // A world that never resolves the root (no `anim_root`) leaves the seed IDENT:
-                        // keep the strict fallback rather than handing Bond back at the origin.
-                        Some(Obj::Anim { script: 0x0600_0857, root, .. }) if *root != IDENT => {
+                        // A world that never resolves the matrix (no `anim_obj_matrix`) leaves the
+                        // seed IDENT: keep the strict fallback rather than handing Bond back at the
+                        // origin.
+                        Some(Obj::Anim { script: 0x0600_0857, matrix, .. }) if *matrix != IDENT => {
                             if std::env::var("NF_SCRIPTLOG").is_ok_and(|v| v == "1") {
-                                eprintln!("[scriptlog] vent fallback: body root ({:.2},{:.2},{:.2})", root[3][0], root[3][1], root[3][2]);
+                                eprintln!("[scriptlog] vent fallback: body root ({:.2},{:.2},{:.2})", matrix[3][0], matrix[3][1], matrix[3][2]);
                             }
-                            self.player_at = Some(*root);
+                            self.player_at = Some(*matrix);
                         }
                         _ => {
                             if std::env::var("NF_SCRIPTLOG").is_ok_and(|v| v == "1") {
@@ -1264,7 +1279,7 @@ impl Script {
                 let s = &self.streams[i];
                 let f = s.clock - s.start_clock + s.start_frame;
                 let o = s.obj;
-                if let Some(Some(Obj::Anim { script, frame, ticked, root, skin, .. })) = o.and_then(|o| objs.list.get_mut(o)) {
+                if let Some(Some(Obj::Anim { skin, script, frame, ticked, matrix, .. })) = o.and_then(|o| objs.list.get_mut(o)) {
                     let len = w.anim_length(*script).unwrap_or(1).max(1) as f32;
                     // `Script_Interp` case 2 (0x1d9a08) writes the stream's frame into the anim script's time
                     // (+0x90) and zeroes its advance (+0x98), then runs `AnimObjectUpdate` → `AnimScriptTick` →
@@ -1275,6 +1290,12 @@ impl Script {
                     let from = if *ticked { *frame as i32 } else { 0 };
                     *frame = f.floor().clamp(1.0, len);
                     *ticked = true;
+                    // `AnimObjectUpdate` rebuilds the object's own matrix obj+0x90 from the anim's live
+                    // rot/pos — `Control_GetObjMatrix` 0x134210 `View_RotTransMatrix(obj+0x50, obj+0x30)`
+                    // [M 0x1befd8:290], obj+0x30 carrying the root track [M 0x1c35f8:~428-432]. The port
+                    // reads the World's root pose at the now-current frame; when the data is absent the
+                    // game's rebuild would not run either and obj+0x90 keeps its last value.
+                    if let Some(m) = w.anim_obj_matrix(*skin, *script, *frame) { *matrix = m; }
                     for id in w.anim_ops1(*script, from, *frame as i32) {
                         out.push(Request::AnimSound { id, at: o });
                     }
@@ -1288,13 +1309,9 @@ impl Script {
                     for (id, frames) in w.anim_ops1_precache(*script, *frame as i32 - 1, *frame as i32 + 50) {
                         out.push(Request::PreCache { id, frames });
                     }
-                    // The body's world root at the frame (obj+0x30's live value): the root bone of
-                    // the posed skeleton [M AnimFrameResolve 0x1c35f8:428-432]. Read back by the
-                    // event-6 fallback for the 0x06000833 hand-back.
-                    if let Some(m) = w.anim_root(*skin, *script, *frame) { *root = m; }
-                    else if std::env::var("NF_SCRIPTLOG").is_ok_and(|v| v == "1") && *script == 0x0600_0857 {
-                        eprintln!("[scriptlog] root-store MISS skin {skin:08x} script {script:08x} frame {frame}");
-                    }
+                    // The body's world root at the frame rides the SAME field: the per-interp
+                    // matrix IS obj+0x90's rebuild (the root track composed with the object's
+                    // static transform) — the event-6 fallback reads it above.
                 }
             }
             7 => {
@@ -2461,7 +2478,8 @@ mod tests {
         script.streams[0].kind = 2;
         script.delay = 5; // HELD: the damage tail's gate
         let mut objs = Objects::default();
-        objs.list.push(Some(Obj::Anim { skin: 0x0500_003A, script: 0x0600_0001, frame: 1.0, weapon: 0, src: (0x0600_0086, 0), ticked: true, base: IDENT, root: IDENT }));
+        objs.list.push(Some(Obj::Anim { skin: 0x0500_003A, script: 0x0600_0001, frame: 1.0, weapon: 0, src: (0x0600_0086, 0), ticked: true, base: IDENT,
+            matrix: IDENT }));
         script.streams[0].obj = Some(0);
         let mut scripts = Scripts::default();
         scripts.objects = objs;
