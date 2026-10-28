@@ -296,17 +296,21 @@ impl Walker {
     }
 
     pub fn tick(&mut self, input: Input, use_key: bool) {
-        self.tick_inner(input, use_key, false);
+        self.tick_inner(input, use_key, false, false);
     }
 
     /// One tick with the trigger HELD (walkreal-b2): the gadget burns come from the held fire's refire
     /// [M Player_WeaponInitBullet 0x1a4bf0 → Player_MuzzleFlash 0x1a4298 → Draw_LaserBeam 0x1a4560; the
     /// held-fire loop 0x1a5460:601-694]; `Lock_Update` 0x1ae3d8:194 burns the lock the beam touches.
+    /// An empty clip with spare ammo reloads on this tick instead (the game's R; shoot_point's long
+    /// windows outlive one clip — the walkreal corridor shot emptied on the captors before the box).
     pub fn tick_fire(&mut self, input: Input) {
-        self.tick_inner(input, false, true);
+        let (clip, spare) = { let sim = self.scene.sim.as_ref().unwrap(); (sim.gun.clip, sim.gun.spare) };
+        let reload = clip == 0 && spare > 0;
+        self.tick_inner(input, false, true, reload);
     }
 
-    fn tick_inner(&mut self, input: Input, use_key: bool, fire: bool) {
+    fn tick_inner(&mut self, input: Input, use_key: bool, fire: bool, reload: bool) {
         for k in 0..self.keep_alive.len() {
             let i = self.keep_alive[k];
             if let Some(dr) = self.scene.sim.as_mut().unwrap().drones.list.get_mut(i) {
@@ -317,7 +321,7 @@ impl Walker {
             self.scene.sim.as_mut().unwrap().drones.scripts.skip_request = true;
         }
         let y_before = self.scene.sim.as_ref().unwrap().bond.pos[1];
-        self.scene.sim.as_mut().unwrap().step_bond(input, fire, false, use_key);
+        self.scene.sim.as_mut().unwrap().step_bond(input, fire, reload, use_key);
         let sim = self.scene.sim.as_ref().unwrap();
         self.total_ticks += 1;
         if !self.drone_watch.is_empty() {
@@ -584,8 +588,11 @@ impl Walker {
                     ..Default::default()
                 };
                 drop(sim);
-                self.tick_fire(input);
-                let _ = on_target;
+                // Tap only when the view is ON the point (the same discipline `shoot` uses): the
+                // aim wobbles ±0.05 rad while converging, which at the walkreal corridor shot's
+                // 6.5 m is a 0.33 m miss band over the 0.41 m-tall computer — the blind hold
+                // burned clips into the wall and never touched the box.
+                if on_target { self.tick_fire(input); } else { self.tick(input, false); }
             }
         }
         eprintln!("[walk] {label}: shoot_point cap");

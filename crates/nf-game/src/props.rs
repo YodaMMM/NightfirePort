@@ -67,6 +67,22 @@ pub struct Destroy {
     /// of `Destroy_Update` 0x12c4f8:30-35 smashes the tag when the channel is ON and clears the
     /// word. 0 = inert. #234 on 07000008 carries 137 (the fusebox's channel) [D the census].
     pub kill_channel: u16,
+    /// `tag+0x14` — the bullet category mask [M 0x12c318:47-52 `*(param+0x3c) == 0 ? 0 : ~*(u16*)`]:
+    /// `Collide_FilterBullets` 0x1ece30:26-33 drops every class-5 contact whose
+    /// `weapon_data+0x10` word ANDs non-zero against it, and `Explode_Propagate` 0x17c518's case
+    /// 0x21 smashes on a blast only when `& 0x20 == 0`. The 0700000d C5 doors carry p4 0x10 →
+    /// 0xFFEF [D #93/#96]: handheld gunfire (0x08/0x0020 words) drops, the mounted guns 0x61/0x67/
+    /// 0x70 (0x0010) pass [D weapon_data], and no blast reaches the smash.
+    pub mask: u16,
+    /// `obj+0x104`/`obj+0x105` — the hit-flash colour pair [M Destroy_CollisionHandler
+    /// 0x12bd48:61-95]: a weapon-0x67 contact tick drops both by 5 (clamped at 0), every other
+    /// handler tick recovers both by 1 (clamped at 255); the death return skips the step so the
+    /// pair freezes. [L PCSX2 2026-10-27: 00ff0000 under the beam, ~3/frame recovery once it
+    /// leaves — the port steps per handler call, one per tick.] The draw reads it for the hit tint.
+    pub colour: [u8; 2],
+    /// Tick scratch: a class-5 contact whose weapon is 0x67 reached this leaf this tick (the
+    /// colour step's drop half [M 0x12bd48:32-34]). Cleared by `destroy_colour_tick`.
+    pub hit67: bool,
 }
 
 #[derive(Clone, Debug, Default)]
@@ -135,9 +151,13 @@ impl Props {
                 0xfd => props.subjects.push(CamSubject { placement: i, lo, hi, channel: param(0) as u8, hit: false }),
                 // `Destroy_Create` 0x12c318: tag+0x12 = param 0, tag+0x04 (health) = param 3
                 // (as f32; the tag holds a float the handler subtracts into), tag+0x16 (kind) =
-                // param 2's low byte, tag+0x08 (smash blast damage) = param 5 [M disasm].
+                // param 2's low byte, tag+0x08 (smash blast damage) = param 5, tag+0x14 (the
+                // bullet mask) = ~param 4 with 0 staying 0 [M 0x12c318:47-52 disasm]. The colour
+                // pair starts white (recovery clamps at 255 [M 0x12bd48:62-68]).
                 0xe1 => props.destroy.push(Destroy { placement: i, lo, hi, channel: param(0) as u8, health: param(3) as f32, dead: false, kind: (param(2) & 0xff) as u8, blast_damage: param(5) as f32 * 0.01,
-                    kill_channel: param(1) as u16 }),
+                    kill_channel: param(1) as u16,
+                    mask: (param(4) == 0).then_some(0).unwrap_or(!(param(4) as u16)),
+                    colour: [0xff, 0xff], hit67: false }),
                 // `GunImp_Create` 0x131f20 (placement 0x34, class 0x47): the SP arm mounts the
                 // TurretGuns[0xb] hardware (the laser) [M 0x131f20:52-63]; the base transform is
                 // `Quat_QuatToMat` on the placement's +0x24 quaternion with `Mat_SetTrans` writing
@@ -254,26 +274,54 @@ impl Props {
         Some((c, sphere * mult, d.blast_damage, d.kind))
     }
 
-    pub fn bullet_hit(&mut self, a: V3, b: V3, weapon: u16, damage: f32, ch: &mut Channels, frame: u32) -> Vec<(V3, f32, f32, u8)> {
+    /// `weapon_word` is the round's `weapon_data+0x10` category word [M 0x1ece30:26] — the
+    /// caller reads it off the same record the game's hitdata carries. Per leaf the game first
+    /// filters (`Collide_FilterBullets(list, tag+0x14)`: a class-5 contact whose word ANDs
+    /// non-zero is dropped — set to the 1e8 dead distance and removed from the list [M
+    /// 0x1ece30:30, the 0x4cbebc20 store]), so a dropped contact deals NOTHING and never
+    /// reaches the handler's walk or the colour arms.
+    pub fn bullet_hit(&mut self, a: V3, b: V3, weapon: u16, weapon_word: u16, damage: f32, ch: &mut Channels, frame: u32) -> Vec<(V3, f32, f32, u8)> {
         let mut smashes = Vec::new();
         self.camera_shot_hit(a, b, weapon, ch, frame);
         for i in 0..self.destroy.len() {
             if self.destroy[i].dead { continue; }
+            // The filter [M 0x1ece30:26-33]: the contact dies before the handler's walk.
+            if weapon_word & self.destroy[i].mask != 0 { continue; }
             let (hit, health) = {
                 let d = &self.destroy[i];
                 (Self::seg_box(a, b, d.lo, d.hi), d.health - damage)
             };
             if hit {
+                // The colour arm's weapon read [M 0x12bd48:32 — the contact's weapon id word ==
+                // 0x67 sets the drop step]: this tick's flash decision, applied once per tick.
+                if weapon == 0x67 { self.destroy[i].hit67 = true; }
                 self.destroy[i].health = health;
                 if health < 0.0 {
                     // `Destroy_CollisionHandler` 0x12bd48:31-49 drains HITDATA+8 per class-5
                     // contact and reaches the death through `Destroy_Smash` — the channel write
-                    // and the blast are the smash's [M 0x12bb60:40,:58-76].
+                    // and the blast are the smash's [M 0x12bb60:40,:58-76]. The handler RETURNS
+                    // here, so the death tick skips the colour step (the freeze at death).
                     if let Some(s) = self.smash(i, ch, frame) { smashes.push(s); }
                 }
             }
         }
         smashes
+    }
+
+    /// The colour pair's once-per-tick step, the tail of every non-death
+    /// `Destroy_CollisionHandler` call [M 0x12bd48:61-95]: a weapon-0x67 contact this tick
+    /// (kind-5, past the filter) drops both bytes 5 (clamped 0), any other tick recovers both
+    /// 1 (clamped 255 — the run's `if (iVar6 == 0)` recover arm covers the no-contact ticks
+    /// too, and kind-5 contacts of other weapons damage WITHOUT stopping the recovery). Dead
+    /// leaves freeze: the death return skips the step and the smashed object's handler never
+    /// runs again (class byte 0x01 [M 0x12bb60] has no collision handler).
+    pub fn destroy_colour_tick(&mut self) {
+        for d in self.destroy.iter_mut().filter(|d| !d.dead) {
+            for k in 0..2 {
+                d.colour[k] = if d.hit67 { d.colour[k].saturating_sub(5) } else { d.colour[k].saturating_add(1) };
+            }
+            d.hit67 = false;
+        }
     }
 
     /// `Destroy_Update` 0x12c4f8's second arm (30-35): every tick a live destroyable whose +0x10
@@ -308,7 +356,7 @@ mod tests {
         Props {
             subjects: vec![CamSubject { placement: 0, lo: [4.0, 7.0, -111.0], hi: [6.0, 9.0, -109.0], channel: 0x1c, hit: false }],
             destroy: vec![Destroy { placement: 1, lo: [133.0, 4.0, -270.0], hi: [137.0, 7.0, -268.0], channel: 0x1f, health: 100.0, dead: false,
-            kind: 1, blast_damage: 100.0, kill_channel: 0 }],
+            kind: 1, blast_damage: 100.0, kill_channel: 0, mask: 0xffef, colour: [0xff, 0xff], hit67: false }],
             gunimps: Vec::new(),
         }
     }
@@ -337,35 +385,92 @@ mod tests {
         let mut p = box_props();
         let mut ch = Channels::default();
         // The camera's (weapon 0x54) shot through the 0700000c jetpack display's box.
-        p.bullet_hit([5.0, 8.0, -112.0], [5.0, 8.0, -108.0], 0x54, 1.0, &mut ch, 10);
+        p.bullet_hit([5.0, 8.0, -112.0], [5.0, 8.0, -108.0], 0x54, 0x0100, 1.0, &mut ch, 10);
         assert!(ch.on(0x1c), "the photograph writes ch 0x1c [M 0x1bc668:20-22]");
         // A sister: the same shot with a gun does nothing (the weapon byte gates the subject).
         let mut p = box_props();
         let mut ch = Channels::default();
-        p.bullet_hit([5.0, 8.0, -112.0], [5.0, 8.0, -108.0], 0x1e, 1.0, &mut ch, 10);
+        p.bullet_hit([5.0, 8.0, -112.0], [5.0, 8.0, -108.0], 0x1e, 0x0020, 1.0, &mut ch, 10);
         assert!(!ch.on(0x1c), "a non-camera bullet never photographs the subject");
     }
 
     #[test]
     fn bullets_whittle_the_door_until_it_writes_its_channel() {
         let mut p = box_props();
+        p.destroy[0].mask = 0; // the generic p4-0 door: the filter passes everything [M 0x12c318:49-51]
         let mut ch = Channels::default();
         // 9 hits of 10 damage leave the 100-health door standing; the 10th lands exactly on 0.0,
         // which the game's `fVar9 < 0.0` does NOT count [M 0x12bd48:46].
         for f in 0..10 {
-            p.bullet_hit([135.0, 5.5, -270.5], [135.0, 5.5, -267.5], 0x1e, 10.0, &mut ch, f);
+            p.bullet_hit([135.0, 5.5, -270.5], [135.0, 5.5, -267.5], 0x1e, 0x0020, 10.0, &mut ch, f);
             assert!(!ch.on(0x1f), "hit {f}: the door stands");
             assert!(!p.destroy[0].dead);
         }
         // The 11th crosses below zero → the death channel.
-        p.bullet_hit([135.0, 5.5, -270.5], [135.0, 5.5, -267.5], 0x1e, 10.0, &mut ch, 10);
+        p.bullet_hit([135.0, 5.5, -270.5], [135.0, 5.5, -267.5], 0x1e, 0x0020, 10.0, &mut ch, 10);
         assert!(ch.on(0x1f), "the death writes ch 0x1f [M 0x12bd48:51-57]");
         assert!(p.destroy[0].dead);
         // A sister: a shot that misses the box does nothing.
         let mut p = box_props();
         let mut ch = Channels::default();
-        p.bullet_hit([20.0, 5.5, -270.5], [20.0, 5.5, -267.5], 0x1e, 10.0, &mut ch, 1);
+        p.bullet_hit([20.0, 5.5, -270.5], [20.0, 5.5, -267.5], 0x1e, 0x0020, 10.0, &mut ch, 1);
         assert!(!ch.on(0x1f) && !p.destroy[0].dead, "a miss never damages the door");
+    }
+
+    /// `Collide_FilterBullets` 0x1ece30:26-33 with the C5 doors' tag+0x14 = 0xFFEF [D #93/#96
+    /// p4 0x10; M 0x12c318:47-52]: handheld gunfire's category word (0x0008 [D weapon_data
+    /// 0x08], 0x0020 [D 0x2e]) ANDs non-zero → the contact is dropped and the door takes
+    /// nothing; the mounted guns 0x61/0x67/0x70 carry 0x0010 [D] → they pass.
+    #[test]
+    fn the_c5_mask_drops_handheld_rounds_and_passes_the_mounted_guns() {
+        let mut ch = Channels::default();
+        // A handheld gun's round straight through the door: no drain, no colour mark.
+        let mut p = box_props();
+        p.bullet_hit([135.0, 5.5, -270.5], [135.0, 5.5, -267.5], 0x08, 0x0008, 7.0, &mut ch, 1);
+        assert_eq!(p.destroy[0].health, 100.0, "the 0x08 word meets 0xFFEF — the contact is dropped [M 0x1ece30:26-33]");
+        p.destroy_colour_tick();
+        assert_eq!(p.destroy[0].colour, [0xff, 0xff], "a dropped contact is no contact — the recovery arm runs [M 0x12bd48:61-68]");
+        // The mounted gun's word passes: the same round drains.
+        p.bullet_hit([135.0, 5.5, -270.5], [135.0, 5.5, -267.5], 0x67, 0x0010, 50.0, &mut ch, 2);
+        assert_eq!(p.destroy[0].health, 50.0, "the 0x0010 word passes the 0xFFEF mask [D]");
+        assert!(p.destroy[0].hit67, "a 0x67 contact sets the flash drop");
+        // An unmasked door (p4 0 → tag+0x14 = 0 [M 0x12c318:49-51]) takes everything.
+        let mut p = box_props();
+        p.destroy[0].mask = 0;
+        p.bullet_hit([135.0, 5.5, -270.5], [135.0, 5.5, -267.5], 0x08, 0x0008, 7.0, &mut ch, 3);
+        assert_eq!(p.destroy[0].health, 93.0, "mask 0 filters nothing [M 0x1ece30 with param_2 = 0]");
+    }
+
+    /// The colour pair's per-tick step [M Destroy_CollisionHandler 0x12bd48:61-95]: a 0x67
+    /// contact tick drops both bytes 5, other ticks recover 1 (clamped both ends), and the
+    /// death freeze leaves the pair where the smash caught it. [L PCSX2 2026-10-27: 00ff0000
+    /// under the beam, ~3/frame recovery measured on display frames.]
+    #[test]
+    fn the_colour_pair_drops_under_the_beam_and_recovers_after() {
+        let mut ch = Channels::default();
+        let mut p = box_props();
+        // 51 contact ticks take the pair 0xff → 0 (255 = 51·5 − 0: saturating at 0).
+        for f in 0..51 {
+            p.bullet_hit([135.0, 5.5, -270.5], [135.0, 5.5, -267.5], 0x67, 0x0010, 0.5, &mut ch, f);
+            p.destroy_colour_tick();
+        }
+        assert_eq!(p.destroy[0].colour, [0x00, 0x00], "51 drops of 5 saturate the pair at 0 [M 0x12bd48:71-95]");
+        // The beam leaves: recovery +1 a tick.
+        for _ in 0..59 { p.destroy_colour_tick(); }
+        assert_eq!(p.destroy[0].colour, [0x3b, 0x3b], "59 recoveries of 1 [L 00ff3b3b]");
+        for _ in 0..196 { p.destroy_colour_tick(); }
+        assert_eq!(p.destroy[0].colour, [0xff, 0xff], "recovery clamps at 255 [M 0x12bd48:62-68]");
+        // Death freezes the pair: the smash tick skips the step.
+        p.bullet_hit([135.0, 5.5, -270.5], [135.0, 5.5, -267.5], 0x67, 0x0010, 200.0, &mut ch, 52);
+        assert!(p.destroy[0].dead);
+        p.destroy_colour_tick();
+        assert_eq!(p.destroy[0].colour, [0xff, 0xff], "a dead leaf never steps again [M 0x12bd48:49 return]");
+        // A non-0x67 contact damages WITHOUT stopping the recovery (iVar6 stays 0).
+        let mut p = box_props();
+        p.bullet_hit([135.0, 5.5, -270.5], [135.0, 5.5, -267.5], 0x33, 0x0010, 5.0, &mut ch, 1);
+        p.destroy_colour_tick();
+        assert_eq!(p.destroy[0].health, 95.0, "the 0x33 round (word 0x0010, [D]) drains");
+        assert_eq!(p.destroy[0].colour, [0xff, 0xff], "no 0x67 contact — the recover arm [M 0x12bd48:61]");
     }
 
     /// `Destroy_Update` 0x12c4f8's second arm (30-35): a live destroyable whose +0x10 word
@@ -407,8 +512,8 @@ mod tests {
         let mut p = Props::default();
         // Two tags: placement 0 kills on ch 5 and dies writing ch 6; placement 1 (newer) kills on
         // ch 6 and dies writing ch 7. A single pass after ch 5 rises smashes only the OLDER tag.
-        p.destroy.push(Destroy { placement: 0, lo: [0.0; 3], hi: [1.0; 3], channel: 6, health: 1.0, dead: false, kind: 0, blast_damage: 0.0, kill_channel: 5 });
-        p.destroy.push(Destroy { placement: 1, lo: [2.0; 3], hi: [3.0; 3], channel: 7, health: 1.0, dead: false, kind: 0, blast_damage: 0.0, kill_channel: 6 });
+        p.destroy.push(Destroy { placement: 0, lo: [0.0; 3], hi: [1.0; 3], channel: 6, health: 1.0, dead: false, kind: 0, blast_damage: 0.0, kill_channel: 5, mask: 0, colour: [0xff, 0xff], hit67: false });
+        p.destroy.push(Destroy { placement: 1, lo: [2.0; 3], hi: [3.0; 3], channel: 7, health: 1.0, dead: false, kind: 0, blast_damage: 0.0, kill_channel: 6, mask: 0, colour: [0xff, 0xff], hit67: false });
         let mut ch = Channels::default();
         ch.set(5, 1, 1);
         let s = p.channel_kills(&mut ch, 1);

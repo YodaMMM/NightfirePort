@@ -23,8 +23,17 @@
 //! player) or be the game's own fallback (no snapshot → the player stays where he is). A snapshot
 //! over void is a hand-back into the abyss and fails the census.
 //!
+//! The kind-2 (anim) prev streams: the game's gate admits them and snapshots the ANIM object's
+//! +0x90 — its live world matrix [M 0x1d94c0:125-134; built by `AnimObjectUpdate` 0x1befd8:290 →
+//! `Control_GetObjMatrix` 0x134210 = `View_RotTransMatrix(obj+0x50, obj+0x30)`, obj+0x30 carrying
+//! the animation's root track 0x1c35f8:~428-432]. The port carries that matrix on `Obj::Anim`
+//! (`World::anim_obj_matrix`, the posed root) and its event-6 arm snapshots `Obj::Anim` too; the
+//! four scenes that used to fall back — 07000002's 0x0600007f and 0x06000084, 07000003's
+//! 0x06000080, 0700004a's 0x060006d3 [D decode, each prev stream an Anim stream] — are HARD
+//! assertions: each must produce a snapshot, and the shared geometry verdict must give it a floor.
+//!
 //! Run: `NF_ISO=… cargo test -p nf-game --test nis_handback_census -- --nocapture`
-//! (the full table prints; the hard assertion covers only the geometry verdicts).
+//! (the full table prints; the hard assertions are the four kind-2 rows + the geometry verdicts).
 
 use nf_formats::iso9660::IsoImage;
 use nf_formats::level::Level;
@@ -38,12 +47,88 @@ use std::sync::Arc;
 
 type Mat4 = nf_formats::anim::Mat4;
 
-/// A headless world: no anim data (kind-2 streams resolve no discrete object — the port's anim
-/// objects carry no per-frame world matrix for the snapshot to read anyway), no glist spheres.
-struct CensusWorld;
-impl World for CensusWorld {
-    fn anim_length(&self, _script: u32) -> Option<u16> { None }
+/// The anim data the census resolves kind-2 streams through: the level archive's own skins
+/// (kind-3), skeletons (kind-6) and anim scripts (kind-5) plus its `07F…` sequence pack (kind-4)
+/// [D the three packs the four kind-2 rows need: 07000002.bin has skins 05000009/34/4f and anim
+/// scripts 06000501/02/03/04, 07000003.bin has 05000009 and 06000552, 0700004a.bin has
+/// 05000004/06/07 and 060006d4/d5/d6; sequences in 07F00002/07F00003/07F0004a].
+struct AnimWorld {
+    scripts: HashMap<u32, nf_formats::anim::Script>,
+    sequences: HashMap<u32, nf_formats::anim::Sequence>,
+    skins: HashMap<u32, nf_formats::character::Skin>,
+    skeletons: HashMap<u8, nf_formats::character::Skeleton>,
+}
+impl Clone for AnimWorld {
+    fn clone(&self) -> Self {
+        AnimWorld {
+            scripts: self.scripts.clone(), sequences: self.sequences.clone(),
+            skins: self.skins.clone(), skeletons: self.skeletons.clone(),
+        }
+    }
+}
+impl Default for AnimWorld {
+    fn default() -> Self {
+        AnimWorld { scripts: Default::default(), sequences: Default::default(), skins: Default::default(), skeletons: Default::default() }
+    }
+}
+impl AnimWorld {
+    /// The level's own anim set: skins (the parsed level's kind-3), skeletons (kind-6) and anim
+    /// scripts (kind-5) from the level archive, sequences (kind-4) from its `07F…` pack
+    /// (the same per-level set the runtime loads [M nf-view's loader; disc::level_sequences]).
+    fn for_level(iso: &IsoImage, level: &Level, name: &str, data: &[u8]) -> AnimWorld {
+        let lb = LevelBin::parse(data).ok();
+        let mut skeletons: HashMap<u8, nf_formats::character::Skeleton> = lb.as_ref().map(|lb| lb.entries.iter().filter(|e| e.kind == 6)
+            .filter_map(|e| nf_formats::character::parse_skeleton(lb.data(data, e)).ok())
+            .map(|s| (s.id as u8, s)).collect()).unwrap_or_default();
+        let mut scripts: HashMap<u32, nf_formats::anim::Script> = lb.as_ref().map(|lb| lb.entries.iter().filter(|e| e.kind == 5)
+            .filter_map(|e| nf_formats::anim::Script::parse(lb.data(data, e)).ok())
+            .map(|x| (x.hashcode, x)).collect()).unwrap_or_default();
+        let mut sequences = disc::level_sequences(iso, name).unwrap_or_default();
+        let mut skins = level.skins.clone();
+        // The level's cut-scene packs (078/079/07A-000NN — the loadable archives its triggers
+        // load [M LoadableLoad 0x1d69e8]): their kind-4 sequences carry the cut-scene anims' root
+        // tracks [D 06000501's windows 0x04000584/0x04000474 live in 07900002.bin, 06000504's
+        // 0x04000477/0x04000551 in 07800002.bin, 060006d5's 0x040006f0/0x04000601 in 0790004a.bin
+        // — none of them in the level's 07F pack]. The level's own set stays first-wins.
+        let (entries, bin) = disc::files_bin_entries(iso).expect("FILES.BIN");
+        let nn = &name[3..8];
+        for pfx in ["078", "079", "07A"] {
+            let pack = format!("{pfx}{nn}.bin");
+            let Some(fe) = entries.iter().find(|e| e.name.eq_ignore_ascii_case(&pack)) else { continue };
+            let Ok(pd) = iso.read_bytes(bin.lba as u64 * 2048 + fe.offset as u64, fe.size as u64) else { continue };
+            let Ok(plb) = LevelBin::parse(&pd) else { continue };
+            for e in plb.entries.iter().filter(|e| e.kind == 4 && e.length >= 0x40) {
+                if let Ok(s) = nf_formats::anim::Sequence::parse(plb.data(&pd, e)) { sequences.entry(s.hashcode).or_insert(s); }
+            }
+            for e in plb.entries.iter().filter(|e| e.kind == 5) {
+                if let Ok(s) = nf_formats::anim::Script::parse(plb.data(&pd, e)) { scripts.entry(s.hashcode).or_insert(s); }
+            }
+            for e in plb.entries.iter().filter(|e| e.kind == 6) {
+                if let Ok(s) = nf_formats::character::parse_skeleton(plb.data(&pd, e)) { skeletons.entry(s.id as u8).or_insert(s); }
+            }
+            for e in plb.entries.iter().filter(|e| e.kind == 3) {
+                if let Ok(s) = nf_formats::character::parse_skin(plb.data(&pd, e), |id| skeletons.get(&id).map(|k| k.bones)) {
+                    skins.entry(s.hashcode).or_insert(s);
+                }
+            }
+        }
+        AnimWorld { scripts, sequences, skins, skeletons }
+    }
+}
+impl World for AnimWorld {
+    fn anim_length(&self, script: u32) -> Option<u16> { self.scripts.get(&script).map(|s| s.length) }
     fn discrete0(&self, _skin: u32, _script: u32, _frame: f32) -> Option<Mat4> { None }
+    /// The anim object's own world matrix (obj+0x90): the posed root at `frame` — the same rule the
+    /// runtime's `Data` implements (drone.rs): `script_pose_together`'s bone 0 through
+    /// `world_pose` [M 0x1befd8:290 → 0x134210 View_RotTransMatrix(obj+0x50, obj+0x30); the root
+    /// keeps its translation]. `None` when the skin/script/sequence is not loaded — the census row
+    /// then falls back exactly as before this change.
+    fn anim_obj_matrix(&self, skin: u32, script: u32, frame: f32) -> Option<Mat4> {
+        let sk = self.skins.get(&skin)?;
+        let skel = self.skeletons.get(&sk.skeleton)?;
+        let pose = nf_game::anim::script_pose_together(&self.scripts, &self.sequences, skel, sk, script, frame)?;
+        nf_formats::anim::world_pose(&pose, sk).first().copied()
+    }
 }
 
 fn iso_path() -> Option<String> { std::env::var("NF_ISO").ok() }
@@ -73,6 +158,13 @@ fn script_lib(iso: &IsoImage) -> HashMap<u32, Arc<nf_formats::nis::Nis>> {
 /// Does any stream raise the event-6 hand-back?
 fn has_event6(nis: &nf_formats::nis::Nis) -> bool {
     nis.streams.iter().any(|st| st.decode().iter().any(|c| matches!(c, Cmd::Event { kind: 6, .. })))
+}
+
+/// Is the stream before `e6_stream` an ANIM stream (the game's kind-2 prev gate [M 0x1d94c0:73-84])?
+/// Only these rows need the anim world; the sweep builds it lazily per level.
+fn prev_stream_is_anim(nis: &nf_formats::nis::Nis, e6_stream: usize) -> bool {
+    let Some(s) = nis.streams.get(e6_stream.wrapping_sub(1)) else { return false };
+    s.decode().iter().any(|c| matches!(c, Cmd::Anim { .. }))
 }
 
 /// The script's first camera-op tick under the runner's timing (ops between Wait/End holds fire at
@@ -115,7 +207,7 @@ fn event6_ticks(nis: &nf_formats::nis::Nis) -> Vec<(usize, f32)> {
 /// kind byte ∈ {1, 2} [M 0x1d94c0:73-84], so a fallback with prev kind 1/2 is a divergence row.
 fn run_handback(
     nis: Arc<nf_formats::nis::Nis>, base: Mat4, scale: f32, lib: &HashMap<u32, Arc<nf_formats::nis::Nis>>,
-    e6_stream: usize,
+    e6_stream: usize, w: &AnimWorld,
 ) -> (Option<Mat4>, u8, usize, Option<u8>) {
     let mut subs: Vec<Option<Script>> = Vec::new();
     let mut objs = Objects::default();
@@ -128,7 +220,7 @@ fn run_handback(
     let cap = 5400usize;
     let mut ticks = 0usize;
     while s.playing() && ticks < cap {
-        s.update(&mut subs, lib, &mut objs, &mut ch, &CensusWorld, ticks as u32, &mut out);
+        s.update(&mut subs, lib, &mut objs, &mut ch, w, ticks as u32, &mut out);
         ticks += 1;
     }
     // BEFORE free: `kill` clears every stream's kind byte at free time (s.kind = 0), so the
@@ -158,6 +250,19 @@ fn census_sp_handbacks_land_on_floors() {
     let mut misses = 0usize;
     let mut failures: Vec<String> = Vec::new();
 
+    // The four kind-2 prev-stream hand-backs the game snapshots through the anim object's +0x90
+    // [M 0x1d94c0:73-84, 125-134]: the level bin and script hash of each [D nf-extract decode —
+    // 0600007f s3→s2 (Anim 0x06000501, skin 0x05000009), 06000084 s3→s2 (Anim 0x06000504, skin
+    // 0x05000009), 06000080 s2→s1 (Anim 0x06000552, skin 0x05000009), 060006d3 s4→s3 (Anim
+    // 0x060006d5, skin 0x0500004)]. Before the anim-matrix carry the port fell back to where the
+    // player was disabled on exactly these four scenes; now each row must snapshot.
+    const KIND2_ROWS: [(&str, u32); 4] = [
+        ("07000002.bin", 0x0600_007f),
+        ("07000002.bin", 0x0600_0084),
+        ("07000003.bin", 0x0600_0080),
+        ("0700004a.bin", 0x0600_06d3),
+    ];
+
     for fe in entries.iter().filter(|e| {
         let n = e.name.to_ascii_lowercase();
         n.starts_with("0700") && n.ends_with(".bin")
@@ -170,6 +275,9 @@ fn census_sp_handbacks_land_on_floors() {
         // The level's static collision: the same build every live test floors against.
         let world = CollisionWorld::build(&level, &level.instances(true).0);
         let mut level_rows = 0usize;
+        // The anim world, built lazily on the level's first kind-2 prev row (the parse of the
+        // level's 07F sequence pack is the cost; only the levels with kind-2 rows pay it).
+        let mut anim: Option<AnimWorld> = None;
 
         for (pi, p) in ps.iter().enumerate() {
             if p.flags & 0xff != 0xd9 { continue; }
@@ -190,9 +298,25 @@ fn census_sp_handbacks_land_on_floors() {
                 if !has_event6(nis) { continue; }
                 let e6 = event6_ticks(nis);
                 let e6_stream = e6.first().map(|(si, _)| *si).unwrap_or(0);
-                let (at, mode, ticks, prev_kind) = run_handback(Arc::clone(nis), base, scale, &lib, e6_stream);
+                let need_anim = prev_stream_is_anim(nis, e6_stream);
+                if need_anim && anim.is_none() {
+                    anim = Some(AnimWorld::for_level(&iso, &level, &fe.name, &data));
+                }
+                let empty = AnimWorld::default();
+                let aw = anim.as_ref().unwrap_or(&empty);
+                let (at, mode, ticks, prev_kind) = run_handback(Arc::clone(nis), base, scale, &lib, e6_stream, aw);
                 rows += 1;
                 level_rows += 1;
+                // The kind-2 hard rows: the game snapshots the anim object's +0x90 here
+                // [M 0x1d94c0:73-84, 125-134], so the port must produce a snapshot (the geometry
+                // verdict runs through the shared path below).
+                if KIND2_ROWS.iter().any(|(l, hh)| *l == fe.name && *hh == h) {
+                    assert!(
+                        at.is_some(),
+                        "{} script {h:#09x}: no hand-back snapshot from the kind-2 prev stream — the port fell back where the game snapshots the anim object's +0x90 [M 0x1d94c0:125-134]",
+                        fe.name
+                    );
+                }
                 let ct = cam_tick(nis);
                 match at {
                     None => {

@@ -52,11 +52,17 @@
 //! `barrel_dir`, `heat`, `hot`) — no drawing here. The ray itself is NOT presentation: the fire
 //! arm casts the 1000-unit `Collide_RayIntersect` [M 0x1320d8:372-384], clamps the beam at the
 //! hit [M :385-387], and the 0x67 arm runs `Explode_Propagate(4.0, 5.0, hit, cel, the imp obj)`
-//! at it [M :433-436] — the sweep's case 0x21 smashes a destroyable it reaches with ≥ 1.0
-//! damage [M 0x17c518:141-177] and `Destroy_Smash` 0x12bb60:40 writes the leaf's channel. On
-//! 0700000d that is C5's ch 0x1f: the mounted laser kills its objective door on the first beam
-//! contact (drone.rs `run_beam_explodes`; the 50-a-contact bullet drain
-//! [Destroy_CollisionHandler 0x12bd48:31-35] is the slow second path).
+//! at it [M :433-436]. The sweep's case 0x21 smashes a destroyable it reaches with ≥ 1.0 damage
+//! ONLY when the leaf's tag+0x14 mask clears bit 0x20 [M 0x17c518:170] — the C5 doors' 0xFFEF
+//! [D p4 0x10, M 0x12c318:47-52] keeps it SET, so the blast never smashes them. The door's real
+//! death is the beam ROUND's drain: the 0x67 bullet (50 damage [D weapon_data+0x67·0x10c+0x0c])
+//! flies the player-bullet flight into `Destroy_CollisionHandler` 0x12bd48 — ~50 a contact tick,
+//! ~200 ticks for bigdoor02's 10000 [L PCSX2 2026-10-27: 10000 → 7100 → 4050 over two 60-frame
+//! bursts; the door's colour pair obj+0x104/0x105 drops to 00 and recovers ~3/display-frame
+//! after], then `Destroy_Smash` 0x12bb60 writes ch 0x1f (objective 6) and the trigger channel
+//! smashes bigdoor01 the SAME frame [M Destroy_Update 0x12c4f8:29-33]. The handheld guns can
+//! never start the drain: their category words (0x0008/0x0020 [D]) meet the doors' 0xFFEF in
+//! `Collide_FilterBullets` 0x1ece30 and drop (props.rs `bullet_hit`).
 //!
 //! Tags: [M] the addresses above, [D] the disc bytes, [L] the snapshot reads, [S] suggested.
 
