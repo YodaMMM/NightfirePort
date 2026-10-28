@@ -23,3 +23,7 @@ Root-caused two of the seven reds through the real path (NF_CHWATCH + state trac
 ## level-13-guards-start-alerted-5
 
 Branch s/level-13-guards-start-alerted-5 (from origin/s/level-13-guards-start-alerted-4 @ d5556ae0, merged origin/master @ 480aa3db). Task: round 4 fixed drake_fight_live and the contact-shield half of walkreal_07000001_live. Still red: walkreal_07000001_live (layer 2: the hall's corpses at the east door and the door that will not finish its swing — find what the game's door does against a body [M the door's swing/collision path] and what the escort does), drone_weapon_drop_live (the dodging guard in state 0x68 — identify the state [M], aim like the game's player with auto-aim [M Check_AutoAim 0x1a73f8]), fix_pickups_ammo_live (same family), hostage_killer_07000002_live (the shared-RNG opener roll [M 0x14a8b8, 0x144340:34-40] — the test must follow the game's stream, not a fixed coin), bathhouse_voices_live / bathhouse_shout_mixer_live. For each: the game's behaviour [M] first, then fix the port or re-derive the test with the cite; no weakened asserts. Run the FULL suite and quote its total line.
+
+### level-13-guards-start-alerted-5 — progress (checkpoint 1)
+
+Three of the five red families fixed through the real path, all on the branch tree (individual binary runs, --test-threads=1): hostage_killer_07000002_live 5/5, drone_weapon_drop_live 3/3, fix_pickups_ammo_live 4/4. Remaining: walkreal_07000001_live layer 2 (the east-door wedge), bathhouse_voices_live / bathhouse_shout_mixer_live. The full suite runs at the end of the window.
