@@ -65,3 +65,11 @@ GREEN. The 07 trio still red at the west mouth: armed route walker parked ON the
 ((79.75,−50.45) [D]), the pair mutually freezes, the 900-tick wait loses to the route dwell. Full anatomy +
 live checks in docs/reports/drone-bump-collision-4.md. Suite started on the final tree (background runners
 die between tool calls in this sandbox — the report quotes whatever landed).
+
+## drone-bump-collision-5 (2026-10-28)
+
+Branch `s/drone-bump-collision-5` = `origin/master` (ae4d2894) merged with `origin/s/drone-bump-collision-4`.
+Continuing the 07 west-mouth wedge: the goal is the game's kind-8 route dwell + door swing/collision model at
+the mouth, then the player's real answer for the four red tests (party_door_lock_07000007_live x2,
+cutscene_timer_pause_live, probe_07_route) — wait the bot through, step aside, take the measured timing, with
+cites. The push stays. Full suite to land on the final tree.
