@@ -51,3 +51,18 @@ Plan:
   first nohup died between tool calls).
 - Census + a near-switch placement probe against the disc; SP/console draw-path
   audit in nf-view; fix; full suite; report; finish steps.
+
+Final (2026-10-28): the switch-spot premise REFUTED — the game has no drawn prop at the touch
+itself ([M Trigger_Create 0x1b1720:95 obj+0xF0 = glist 0x50 bit 0x10; D leaves 0]); the visible
+switch is the 0x3b CONSOLE_Electricity trio 2.1 west (Active from load → deleted at 0x8c →
+Inactive → (0x5b) → Static) and the INFO-bar hints ("Power system safeguards operational" /
+"Danger: safeguards offline. System critical" [D USATxt.dat 0x100020c/0d]) — all already
+working in the port, now pinned. The M.Hatch SPs #947/#950/#952 (m54 indices; script 0x06000708,
+triggers 0x85/0x54 = the out-channel bit [M SP_Hit 0x1dc470:17-19]) verified end to end: the
+preloads spawn 02000724 at the SP poses, the replays swap to 02000725 in place at t31, the
+keep flag (event 0xc at t54) preserves them, the SPs self-delete; 02000a6b "GLOW_Light_1"
+resolves only via 0700000a.bin and its gfx block is EMPTY on the disc — no pixels either side.
+No code change needed; the new tests carry the proof. Full suite: the sandbox kills detached
+runs — 118/878 binaries done in the window (464 passed / 0 failed / 30 ignored / 0 bad),
+resumable via scripts/suite_chunk.py; the 07000014 binaries are in the unrun set. Report:
+docs/reports/level-14-switch-wall.md.
