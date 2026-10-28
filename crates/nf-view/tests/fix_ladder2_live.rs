@@ -218,6 +218,28 @@ fn swim_repro_walks_on_the_water_from_the_bank() {
     let floor = sim.world.floor_below([bx, 8.0, cz], 12.0).expect("the west bank floor");
     eprintln!("bank floor {floor:.4} vs water surface {} (delta {})", c.water, c.water - floor);
     assert!(floor > c.water, "the start spot is not a bank above the water");
+    // The game's fresh 07000002 boot holds Bond disabled in the intro cut-scene SP #400
+    // (0x06000084) and releases him at frame ~1531 to (-27.504, 1.131, 32.348) [L 2026-10-27
+    // PCSX2, PLAYERS obj+0x30]: the port's event-6 hand-back snapshots the previous stream's
+    // ANIM object's matrix [M 0x1d94c0:125-134] and MOVES Bond at the release — master's
+    // fallback left him wherever he stood (even a placement made mid-scene), which is what
+    // this route was calibrated against. Resolve the scene with the game's own skip action
+    // first, so the bank placement below sticks [M Script_FFwd 0x1dac78, SP_Update 0x1dbda8].
+    {
+        // The intro SP primes on the FIRST step_bond (disabled reads false before it), so: step
+        // once to let the scene grab Bond, then hold the game's skip action until it releases him
+        // — the hand-back has landed by the release tick.
+        let mut saw_scene = false;
+        let mut n = 0u32;
+        while n < 400 {
+            if sim.disabled { saw_scene = true; } else if saw_scene { break; }
+            if sim.disabled { sim.drones.scripts.skip_request = true; }
+            sim.step_bond(nf_game::player::Input::default(), false, false, false);
+            n += 1;
+        }
+        assert!(saw_scene && !sim.disabled,
+            "the intro cut-scene never released Bond ({n} ticks, saw_scene {saw_scene})");
+    }
     sim.bond = nf_game::player::Bond::stand_at(&sim.world, [bx, floor + 1.1, cz], 0.0);
     sim.bond.yaw = std::f32::consts::FRAC_PI_2; // face +x, into the pond (yaw 0 faces +z)
     let fwd = nf_game::player::Input { forward: 1.0, ..Default::default() };

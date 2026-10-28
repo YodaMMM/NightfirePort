@@ -176,8 +176,11 @@ fn walk_the_castle_all_objectives_to_the_exit() {
         assert!(sim.drones.channels.on(0x81), "crossing the doorway sensor raises ch 0x81 [D #389 out 0x81]");
     }
     // The computer's bounds centre [L port props]: (−48.86, 6.44, −23.64). Stand in the corridor
-    // and shoot it (real fire; the prop's smash writes ch 0x48 [M 0x12bd48]).
-    w.walk_nav_to([-48.4, 5.9, -23.6], "the computer desk", 1.4);
+    // EAST of the prop's east face (−48.35) — the release spot's walk leg used to arrive at
+    // −48.4, point blank on the box, and the [L]-shifted start's legs shift the arrival enough
+    // that the near-vertical shot line missed. One corridor step back gives the beam its room;
+    // the assert itself is untouched (ch 0x48 [D pl[011] param 0; M 0x12bd48]).
+    w.walk_nav_to([-47.3, 5.9, -23.6], "the computer desk", 1.4);
     let shot = w.shoot_point([-48.86, 6.44, -23.64], "Mayhew's computer", |sim| sim.drones.channels.on(0x48));
     assert!(ch_on(&w, 0x48), "the computer's destruction raises ch 0x48 [D pl[011] param 0; M 0x12bd48]");
     let _ = shot;
