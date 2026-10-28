@@ -163,7 +163,17 @@ fn early_out_segments_match_the_full_search() {
         let to = [q[0] + j(rnd()), q[1] + j(rnd()) - 0.4, q[2] + j(rnd())];
         let full = w.segment(from, to).is_none();
         assert_eq!(w.segment_clear(from, to), full, "segment {from:?} -> {to:?}");
-        assert_eq!(w.line_of_sight(from, to, nf_game::world::LOS_GUARD_VISION), full);
+        // The guard-vision ray is the MASKED query [M Collide_Intersect 0x1ebaa8:300-319,
+        // Collide_Pick 0x1eb320:140-152 — the 0xa27 drops (0x40 surfs, 0xd/0xe, 0x10 glass) are
+        // unconditional on this tree], so its game answer legitimately diverges from the plain
+        // segment wherever those surfaces block; the early-out contract pairs it with the full
+        // nearest-hit walk under the SAME mask (`Collide_RayIntersect` 0x1ec690's distance body,
+        // the same drop arms), not with the unmasked segment.
+        assert_eq!(
+            w.line_of_sight(from, to, nf_game::world::LOS_GUARD_VISION),
+            w.line_of_sight_hit(from, to, nf_game::world::LOS_GUARD_VISION).is_none(),
+            "guard-vision early-out vs the full masked walk {from:?} -> {to:?}"
+        );
         let full_b = w.segment_surface_bullet(from, to).is_none();
         assert_eq!(w.segment_bullet_clear(from, to), full_b, "bullet segment {from:?} -> {to:?}");
         blocked += (!full) as u32;
