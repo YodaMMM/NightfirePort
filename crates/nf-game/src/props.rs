@@ -325,21 +325,24 @@ impl Props {
     }
 
     /// `Destroy_Update` 0x12c4f8's second arm (30-35): every tick a live destroyable whose +0x10
-    /// word names an ON channel smashes and the word clears. Returns the same blast tuples as
-    /// `bullet_hit` (the smash is `Destroy_Smash` 0x12bb60 — the same blast routing).
-    pub fn channel_kills(&mut self, ch: &Channels) -> Vec<(V3, f32, f32, u8)> {
+    /// word names an ON channel smashes and the word clears. The smash is the game's full
+    /// `Destroy_Smash` 0x12bb60 [M 0x12c4f8:35], so it WRITES the tag's death channel
+    /// `switch_channels[+0x12] = 1` for a non-zero channel [M 0x12bb60:40] — the same write the
+    /// bullet path's smash makes. On 07000014 the generator-hall cascade runs through exactly
+    /// those writes: box #726 (kill ch 0x51, death 0x52 [D the census]) → GENERATORS_Intact #1113
+    /// (kill 0x52, death 0x4e) → box #727 (kill 0x4e, death 0x53) → generator #1152 (0x5c) → box
+    /// #728 (0xaf) → generator #1154 (0x5a) → box #730 (0xc9) → generator #1153 (0x5b) → box #729
+    /// (kill 0x5b, death **0x85** — Door_Slide_11A/B's lock channel [D placements; M 0x1363c8
+    /// reads +0x68]). The walk order is the control walk's newest-first object order [M
+    /// 0x1336f8:54-68, the order drone.rs' dispatch sorts by], so one cascade link propagates
+    /// per tick. Returns the same blast tuples as `bullet_hit`.
+    pub fn channel_kills(&mut self, ch: &mut Channels, frame: u32) -> Vec<(V3, f32, f32, u8)> {
         let mut smashes = Vec::new();
-        for d in self.destroy.iter_mut().filter(|d| !d.dead && d.kill_channel != 0) {
-            if !ch.on(d.kill_channel as u32) { continue; }
-            d.kill_channel = 0; // the game clears the word [M 0x12c4f8:32]
-            d.dead = true;
-            if d.kind != 0 {
-                let c = [(d.lo[0] + d.hi[0]) / 2.0, (d.lo[1] + d.hi[1]) / 2.0, (d.lo[2] + d.hi[2]) / 2.0];
-                let ext = [(d.hi[0] - d.lo[0]) / 2.0, (d.hi[1] - d.lo[1]) / 2.0, (d.hi[2] - d.lo[2]) / 2.0];
-                let sphere = (ext[0] * ext[0] + ext[1] * ext[1] + ext[2] * ext[2]).sqrt();
-                let mult = match d.kind { 1 => 4.0f32, 2 => 2.0, _ => 3.0 };
-                smashes.push((c, sphere * mult, d.blast_damage, d.kind));
-            }
+        for i in (0..self.destroy.len()).rev() {
+            if self.destroy[i].dead || self.destroy[i].kill_channel == 0 { continue; }
+            if !ch.on(self.destroy[i].kill_channel as u32) { continue; }
+            self.destroy[i].kill_channel = 0; // the game clears the word [M 0x12c4f8:32]
+            if let Some(s) = self.smash(i, ch, frame) { smashes.push(s); }
         }
         smashes
     }
@@ -472,28 +475,52 @@ mod tests {
 
     /// `Destroy_Update` 0x12c4f8's second arm (30-35): a live destroyable whose +0x10 word
     /// (placement param 1 [M 0x12c318:36 `piVar1+4 = tag+0x30`]) names an ON channel smashes and
-    /// the word clears. 07000008's GuardRoom SmallExplosionBox #234 carries +0x10 = 137 [D the
-    /// census p1 = 0x89] — the FUSEBOX_GuardRoomDoorLock's channel [D the census].
+    /// the word clears. The smash is `Destroy_Smash` [M 0x12c4f8:35], which writes the death
+    /// channel for a non-zero +0x12 [M 0x12bb60:40]. 07000008's GuardRoom SmallExplosionBox #234
+    /// carries +0x10 = 137 [D the census p1 = 0x89] — the FUSEBOX_GuardRoomDoorLock's channel
+    /// [D the census] — and a zero death channel (nothing to write); 07000014's cascade boxes
+    /// carry non-zero deaths, so the write is pinned here too.
     #[test]
     fn the_external_kill_channel_smashes_the_tag_and_clears() {
         let mut p = box_props();
         p.destroy[0].kill_channel = 137;
         let mut ch = Channels::default();
         // The channel off: the tag stands (the arm reads the channel every tick).
-        let s = p.channel_kills(&ch);
+        let s = p.channel_kills(&mut ch, 10);
         assert!(s.is_empty() && !p.destroy[0].dead, "the channel off — the tag stands [M 0x12c4f8:30-31's ON read]");
         // The channel on: the smash, with the type-1 blast (the same routing the bullet smash uses).
         ch.set(137, 1, 10);
-        let s = p.channel_kills(&ch);
+        let s = p.channel_kills(&mut ch, 10);
         assert_eq!(s.len(), 1, "the channel kill smashes [M 0x12c4f8:32-35 → Destroy_Smash]");
         assert_eq!(s[0].3, 1, "the kind rides the blast tuple (the type-1 script 0x06000027 ×4 radius [M 0x12bc70-0x12bc98])");
         assert!(p.destroy[0].dead, "the tag is dead");
+        assert!(ch.on(0x1f), "the death channel rides the remote smash [M 0x12c4f8:35 → 0x12bb60:40]");
         // The word cleared: a second pass never re-smashes [M 0x12c4f8:32's `+0x10 = 0`].
-        let s = p.channel_kills(&ch);
+        let s = p.channel_kills(&mut ch, 11);
         assert!(s.is_empty(), "the word cleared — no re-smash [M 0x12c4f8:32]");
         // A zero word is inert (every disc box without the listener).
         let mut p = box_props();
-        let s = p.channel_kills(&ch);
+        let s = p.channel_kills(&mut ch, 12);
         assert!(s.is_empty() && !p.destroy[0].dead, "kill_channel 0 is inert");
+    }
+
+    /// The remote kills run in the control walk's newest-first order [M 0x1336f8:54-68], so a
+    /// chain of kill→death links propagates one link per tick even when the next tag's kill
+    /// channel is written by an earlier-in-the-list tag this same tick.
+    #[test]
+    fn the_remote_kill_cascade_propagates_one_link_per_tick_newest_first() {
+        let mut p = Props::default();
+        // Two tags: placement 0 kills on ch 5 and dies writing ch 6; placement 1 (newer) kills on
+        // ch 6 and dies writing ch 7. A single pass after ch 5 rises smashes only the OLDER tag.
+        p.destroy.push(Destroy { placement: 0, lo: [0.0; 3], hi: [1.0; 3], channel: 6, health: 1.0, dead: false, kind: 0, blast_damage: 0.0, kill_channel: 5 });
+        p.destroy.push(Destroy { placement: 1, lo: [2.0; 3], hi: [3.0; 3], channel: 7, health: 1.0, dead: false, kind: 0, blast_damage: 0.0, kill_channel: 6 });
+        let mut ch = Channels::default();
+        ch.set(5, 1, 1);
+        let s = p.channel_kills(&mut ch, 1);
+        assert!(s.is_empty(), "a kind-0 smash returns no blast [M 0x12bc50's kind gate]");
+        assert!(p.destroy[0].dead && ch.on(6), "the older tag dies and writes its death ch [M 0x12bb60:40]");
+        assert!(!p.destroy[1].dead, "the newer tag (checked first, newest-first) waits a tick [M 0x1336f8:54-68]");
+        p.channel_kills(&mut ch, 2);
+        assert!(p.destroy[1].dead && ch.on(7), "the cascade links one tick later");
     }
 }
