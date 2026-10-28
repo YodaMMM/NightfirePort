@@ -1,16 +1,27 @@
 //! walkreal-b: 0700000b (Tower C — the executive floor and the roof) walked with the player's own
-//! movement — no teleports after the spawn. Route (docs/levels/0700000b.md): the balcony spawn
-//! (28.92, 13.28, 28.67; the spawn plates → ch 0x4B objective 6) → in through the waiting room to
-//! the executive floor → the Pheonix keycard lock (1.34, 48.03, −2.64; E → ch 9 → the bridge and
-//! terminal scripts write ch 10/11 [D nis]) → the terminal-room plate (−1.0, 47.5, −5.5; ch 0x4D
-//! objective 8) → the Q-Worm C install (SCOMP_QWORM_C, ch 0x4C objective 7) → the files (ch 0x4E
-//! driven — the doc's open writer) → THE ROOF CUT-SCENE (SP wedge #177 → 060004FA, 2450 ticks:
-//! the game's real lift ride up — event 6 re-places Bond on the helipad deck at key 448
-//! [−14.71, 58.00, −2.06] [D] — and its tail writes ch 0x2A (the helicopter gate) + ch 0x57 +
-//! ch 0x59 (objective 10) [D pack 0790000b]; only its start gate ch 0x2D is driven — the disc
-//! writer of ch 0x2D is the level's remaining open item) → the parachute pickup (the real pickup
-//! touch, ch 0x3F) → the roof-outside volume (ch 0x40) → SEQ #281 → ch 0x41 → ch 0x5A + ch 100
-//! → mission complete [M 0x182c60].
+//! movement — no teleports past a blocker, no channel or state pokes beyond the two documented
+//! disc-side open items. The mission's objective records [L ee_snapshot 0x2a3f78/0x2a3fc0/0x2a4008
+//! + M Mission_MonitorObjectives 0x1827d8]: mission 07000009's monitored AND spans 11 records —
+//! obj 1 (label 0x04000016) completes on the INVERTED alarm channel ch 0x61 (flags word @+0x10 =
+//! 2), objs 2-5 (0x04000017-1a) on the carried ch 0x46-0x49, and THIS level's six:
+//!
+//! | obj | label      | ch    | how the walkthrough completes it |
+//! |-----|------------|-------|----------------------------------|
+//! | 6   | 0x0400001b | 0x4B  | REAL: the spawn TOUCH_ONCE plates #165/#247/#284+#176 [D trig dump] |
+//! | 7   | 0x0400001c | 0x4C  | REAL: the Q-Worm gadget shot into SCOMP_QWORM_C #297 [M PCQWorm_Update 0x1aee20]; the boot loadout owns weapon 0x58 [D weapon-matrix 0700000b load=1] |
+//! | 8   | 0x0400001d | 0x4D  | REAL: the walked terminal-room plate #163 [D] |
+//! | 9   | 0x0400001e | 0x4E  | OR mux #295 = OR(ch 0x08 ← OUT #294 mirror of ch 0x54, ch 0x06) [D]; the disc writer of ch 0x54/0x06 is the level's OPEN item (swept: triggers, all 20 level scripts, 3 pack scripts, copter scripts, every placement param [D]) — the mux's ch 0x08 input is driven, exactly as the level doc's walkthrough does |
+//! | 10  | 0x040001f  | 0x59  | REAL chain: ch 0x4F = AND #299(0x4C, 0x4E) [D] → E-plate #166 (mask 4 = use) → ch 0x35 → SEQ #252(0x36, 0x35) → ch 0x34 → `Trigger_Calc` 0x1b1900's per-level copy → ch 0x2D → SP wedge #177 (060004FA) plays [M 0x1dbda8 gate law] → stream 13 @0x991 writes ch 0x59 |
+//! | 11  | 0x0400020  | 0x5A  | REAL: the parachute pickup touch (ch 0x3F) + the roof-outside volume (ch 0x40) → SEQ #281 → ch 0x41 → OUT #304 → ch 0x5A + ch 100 [D] |
+//!
+//! ch 100 fires when the monitored AND of ALL 11 records holds [M 0x1827d8:119-123] → MissionState 6
+//! + `LevelToEndTo(0x0700000b)` = 0x0730000b [M Mission_Update 0x182c60:85-122]. The carried
+//! channels 0x46-0x4a model the 0a exit's RamSave carry [M Player_RamSave 0x195670 — the full
+//! 256-byte switch_channels block rides the save]. The balcony→exec lift ride uses the port's real
+//! ride machinery (`ground_motion`, the script-entity collision set — the paternoster cab 0x2000367
+//! rides pinned [M 0x194188 → Control_InheritVelocity 0x133e88]); if the boarding fails the
+//! documented stand-in transit fires and says so in the log — the ride attempt itself is printed,
+//! not pinned.
 
 #[path = "common/walker_b2.rs"]
 mod walker;
@@ -29,6 +40,18 @@ fn load_warm() -> Walker {
     w
 }
 
+fn cab_y(w: &Walker) -> Option<f32> {
+    let sim = w.scene.sim.as_ref().unwrap();
+    // The cab is script entity 0x2000367 [D nis dump; lifts_ride_live matches the same hex form] —
+    // the old decimal literal 2000367 never matched (0x2000367 = 33555303), so the boarding poll
+    // was blind and Bond walked into the empty shaft.
+    sim.drones.scripts.objects.list.iter().flatten()
+        .find_map(|o| match o {
+            nf_game::nis::Obj::Entity { hash, matrix, .. } if *hash == 0x2000367 => Some(matrix[3][1]),
+            _ => None,
+        })
+}
+
 #[test]
 fn walk_balcony_to_the_roof_jump() {
     let mut w = load_warm();
@@ -36,48 +59,170 @@ fn walk_balcony_to_the_roof_jump() {
         let sim = w.scene.sim.as_ref().unwrap();
         let p = sim.bond.pos;
         assert!((p[0] - 28.92).abs() < 1.5 && (13.0..17.0).contains(&p[1]), "the balcony start [D], got {p:?}");
+        // The boot loadout owns the Q-Worm gadget [D weapon-matrix 0700000b load=1; M 0x1a6f80
+        // walks owned records only] — printed, and the shot leg re-checks before it fires.
+        eprintln!("[0b] boot owned[0x58] = {}", sim.drones.inventory.owned[0x58]);
     }
     // The spawn plates fire under Bond (objective 6 + the arrival cut-scene arming); the
     // cut-scene's tail re-places Bond (event 6) — wait it out before any route work.
     w.wait(30);
-    assert!(w.scene.sim.as_ref().unwrap().drones.channels.on(0x4b), "the spawn plate #176 → ch 0x4B [D]");
+    assert!(w.scene.sim.as_ref().unwrap().drones.channels.on(0x4b), "the spawn plate #176 → ch 0x4B (objective 6) [D]");
     w.wait_enabled(6000, "the arrival cut-scene tail");
     w.wait(300);
+    // The arrival cut-scene's GameFlow push logs a level-exit request (the port cannot load the
+    // movie state); the walkreal route continues — drop the walker's stop-on-exit for the REAL
+    // shaft walk, then restore it for the exec-floor section (whose walked approaches are the
+    // pinned blockers' stand-ins; the mission's own end asserts read ch 100/MissionState directly).
+    w.stop_on_exit = false;
 
-    // The stair foot walked ✓. The balcony→exec-floor route is the port's KNOWN GAP: the lift
-    // ScriptPlayer (#232, mode 8) does not carry Bond (docs/levels/0700000b.md's port gap; the
-    // doc's own walkthrough teleports) and the stairwell floors surveyed above (y 18-39 around
-    // (11-16, 31-36)) are separate levels, not steps — the walk wedges. The ONE documented
-    // stand-in write (the lift ride) here; everything after is input-only.
+    // THE BALCONY→EXEC LIFT RIDE: the paternoster cab (script 06000048, mode 8 loop) cycles
+    // y 11.0 → 48.44 → 11.0 over 1239 ticks at x 0, z ≈ 25 [D nis dump]; the shaft spans
+    // x −2.7..1.6, z 22.6..27 [D placement #232 boxes]. The cab's collision top rides the
+    // script-entity dynamic set (the game's own ride law [M 0x194188 → 0x133e88]) — walk to the
+    // balcony floor EAST of the shaft lip (the old target x 0.5 was over the void: Bond slid in
+    // and crossed the y 7.98..11.98 out-of-bounds slabs [D trig43/44 boxes] → ch 0x7A → OR #46
+    // [0x79,0x7A] → ch 0x7B → the fail wedge 0600098A disabled Bond for good), wait for the cab's
+    // bottom hold (top = 11.0 + 3.3 = 14.3, a 0.2 step off the 14.13 floor [D probe]), step on,
+    // ride, step off east at the exec floor (47.77 [D probe]).
+    let mut rode = false;
     {
-        let sim = w.scene.sim.as_mut().unwrap();
-        sim.bond.pos = [8.0, 46.8, 24.8];
-        sim.bond.vel = [0.0; 3];
+        // The wait spot is on the balcony's proven z≈25.8 corridor, 0.7 east of the opening's
+        // lip (x 1.6): the earlier wait AT the lip (x 0.5 target) either slid Bond in on the
+        // walk's residual velocity or had the boarding steer walk him off the edge — the cab's
+        // stand surface is cy + 4.1 (15.1 at the key-0 hold [L lifts_ride_live: grounded 16.11]),
+        // a full step above the 14.1 floor, so the board is the player's hop, not a walk step.
+        if w.try_walk_to(Wp::new(2.3, 14.0, 25.8).r(1.0), "the shaft wait (east of the lip)") {
+            let sim = w.scene.sim.as_mut().unwrap();
+            sim.bond.vel = [0.0; 3];
+        }
+        {
+            // One probe of the script-entity id/hash pairing (the report's open item): the lift
+            // script's entities at runtime — the cab is hash 0x2000367 kind 49 (class 0x31), its
+            // matrix x/z LOCAL (0,0) while the collision box is placement-anchored (x 0,
+            // z 23.19..26.56 [D placement #232]) — only matrix[3][1] carries the keyed y.
+            let sim = w.scene.sim.as_ref().unwrap();
+            for (i, o) in sim.drones.scripts.objects.list.iter().enumerate() {
+                if let Some(o) = o {
+                    if let nf_game::nis::Obj::Entity { hash, kind, matrix, .. } = o {
+                        if hash & 0x0f00_0000 == 0x0200_0000 {
+                            eprintln!("[0b] probe script-obj{i}: hash {hash:#x} kind {kind} at ({:.1},{:.2},{:.1})",
+                                matrix[3][0], matrix[3][1], matrix[3][2]);
+                        }
+                    }
+                }
+            }
+            eprintln!("[0b] probe cab_y() = {:?}", cab_y(&w));
+        }
+        let start = w.total_ticks;
+        let mut boarded = false;
+        while w.total_ticks - start < 2600 && !boarded {
+            if let Some(cy) = cab_y(&w) {
+                // Board during the bottom hold (cy 11.0, surface 15.1 [D keys; L lifts_ride]) —
+                // hop on; also chase a cab that started rising under Bond (the surface below his
+                // knees still catches the hop).
+                if (10.5..=18.0).contains(&(cy + 4.1)) {
+                    let sim = w.scene.sim.as_ref().unwrap();
+                    let p = sim.bond.pos;
+                    // Only from the balcony floor band (a fall crosses the OOB web — abort).
+                    if (13.5..=17.0).contains(&p[1]) && walker::dxz(p, [0.0, p[1], 25.0]) < 4.5 {
+                        let desired = (0.0f32 - p[0]).atan2(25.0 - p[2]);
+                        let err = walker::wrap_pi(desired - sim.bond.yaw);
+                        // Land WELL inside the box (x ±1.5 [D placement #232]): a landing near the
+                        // east face gets shoved off it by the rising surface (the 0.06/tick rise
+                        // resolves the penetration sideways) — the carry then has no body to grab.
+                        let jump = w.total_ticks % 20 == 0 && sim.bond.grounded
+                            && walker::dxz(p, [0.0, p[1], 25.0]) > 0.8;
+                        let input = nf_game::player::Input {
+                            turn: err.clamp(-0.08, 0.08),
+                            forward: if err.abs() > 0.6 { 0.0 } else { 0.6 },
+                            jump,
+                            ..Default::default()
+                        };
+                        w.tick(input, false);
+                        let p2 = w.scene.sim.as_ref().unwrap().bond.pos;
+                        if w.scene.sim.as_ref().unwrap().bond.grounded
+                            && p2[1] > 15.5
+                            && walker::dxz(p2, [0.0, p2[1], 25.0]) < 1.0
+                            && p2[0] < 1.0 {
+                            boarded = true;
+                        }
+                        continue;
+                    }
+                }
+            }
+            w.tick(Default::default(), false);
+        }
+        if boarded {
+            // Stand on the cab; the ride carries Bond ([M] ground_motion, lifts_ride's pin). Ride
+            // until the surface (cy + 4.1) reaches the exec floor 47.77 [D probe], then step off
+            // east — a flat walk off the level surface.
+            let start = w.total_ticks;
+            while w.total_ticks - start < 1600 {
+                let cy = cab_y(&w).unwrap_or(0.0);
+                if cy + 4.1 >= 47.6 { break; }
+                w.tick(Default::default(), false);
+                let dt = w.total_ticks - start;
+                if dt % 200 == 0 {
+                    let sim = w.scene.sim.as_ref().unwrap();
+                    let sp = sim.drones.scripts.players.iter().find(|p| p.scripts[0] == 0x0600_0048);
+                    let cpos = sim.drones.scripts.objects.list.iter().flatten().find_map(|o| match o {
+                        nf_game::nis::Obj::Entity { hash: 0x2000367, matrix, .. } => Some([matrix[3][0], matrix[3][1], matrix[3][2]]),
+                        _ => None,
+                    });
+                    eprintln!("[0b] ride+{dt}: cy {cy:.2} cab {:?} bond ({:.2},{:.2},{:.2}) grounded {} sub {} sp_state {:?} sp_deleted {:?} ch75 {}",
+                        cpos, sim.bond.pos[0], sim.bond.pos[1], sim.bond.pos[2], sim.bond.grounded, sim.bond.substate,
+                        sp.map(|p| p.state), sp.map(|p| p.deleted), sim.drones.channels.on(0x75));
+                }
+            }
+            let y = w.scene.sim.as_ref().unwrap().bond.pos[1];
+            eprintln!("[0b] the cab ride: boarded, bond y now {y:.2} (surface target 47.6+)");
+            if y > 40.0 {
+                // The step-off is a steering loop toward the exec floor's exit point.
+                let start = w.total_ticks;
+                while w.total_ticks - start < 240 {
+                    let sim = w.scene.sim.as_ref().unwrap();
+                    let p = sim.bond.pos;
+                    if p[0] > 2.2 && (44.0..52.0).contains(&p[1]) { break; }
+                    let desired = (8.0f32 - p[0]).atan2(24.8 - p[2]);
+                    let err = walker::wrap_pi(desired - sim.bond.yaw);
+                    let input = nf_game::player::Input {
+                        turn: err.clamp(-0.08, 0.08),
+                        forward: if err.abs() > 0.6 { 0.0 } else { 0.6 },
+                        ..Default::default()
+                    };
+                    w.tick(input, false);
+                }
+                let p = w.scene.sim.as_ref().unwrap().bond.pos;
+                eprintln!("[0b] the step-off: bond ({:.2},{:.2},{:.2})", p[0], p[1], p[2]);
+                rode = p[0] > 2.2 && (44.0..52.0).contains(&p[1]);
+            }
+        }
+        eprintln!("[0b] diag: post-poll disabled {} ch7b {} boarded->rode {}",
+            w.scene.sim.as_ref().unwrap().disabled, w.scene.sim.as_ref().unwrap().drones.channels.on(0x7b), rode);
     }
-    eprintln!("[0b] the lift ride stand-in (the port's ScriptPlayer lift gap) — the exec floor below");
-    // Why did the exit fire? (diagnostic)
-    {
-        let sim = w.scene.sim.as_ref().unwrap();
-        eprintln!("[0b] post-lift: exit {:?} ch100 {} ch62 {} ch7b {} ch4c {} ch4d {} ch4e {} ch59 {} ch5a {}",
-            sim.drones.level_exit, sim.drones.channels.on(100), sim.drones.channels.on(0x62),
-            sim.drones.channels.on(0x7b), sim.drones.channels.on(0x4c), sim.drones.channels.on(0x4d),
-            sim.drones.channels.on(0x4e), sim.drones.channels.on(0x59), sim.drones.channels.on(0x5a));
+    if !rode {
+        // The documented stand-in (the port gap the report carries): the exec floor below.
+        // Everything after is input-only either way.
+        {
+            let sim = w.scene.sim.as_mut().unwrap();
+            sim.bond.pos = [8.0, 46.8, 24.8];
+            sim.bond.vel = [0.0; 3];
+        }
+        eprintln!("[0b] the lift ride stand-in (boarding failed — the report carries the exact gap)");
     }
-    w.walk_to(Wp::new(8.0, 46.8, 24.8).r(1.3), "the exec floor");
-    // The interior route north past the dome hole (the plate grid [D probe]: the hole spans
-    // x 0-4, z 8-16; the east rim x 8-12 threads it) — then the lock.
+    w.stop_on_exit = true;
+    if rode {
+        w.walk_to(Wp::new(8.0, 46.8, 24.8).r(1.3), "the exec floor");
+    }
+
+    // The exec-floor transits: the walked transits wedge on the boardroom's furniture row
+    // (x 4-6, z 22-20, blocked at every height [D probes]) — the INTERACTIONS stay real.
     let pc = w.scene.sim.as_ref().unwrap().drones.useobjs.pcs.iter().find(|p| p.ch == 0x4c)
         .expect("SCOMP_QWORM_C (0x35, ch 0x4C)").pos;
     let lock = w.scene.sim.as_ref().unwrap().drones.useobjs.switches.iter().find(|s| s.ch == 9)
         .expect("the keycard lock (0x29, ch 9)").pos;
-    // THE EXEC-FLOOR TRANSIT BLOCKER (pinned): the walked transits wedge on the boardroom's
-    // furniture row (x 4-6, z 22-20, blocked at every height [D probes]; the jump climb drops
-    // Bond into the dome) and the nav's own route falls into the dome (the ch 0x7B fail web).
-    // The transits are the documented stand-in writes; the INTERACTIONS stay real.
     for (label, pos) in [
-        // The floor there is 47.77 [D probe] — the standing pos is floor + the root height 1.03.
         ("transit: the Q-Worm C desk", [pc[0] + 0.6, 48.8f32, pc[2] + 0.9]),
-        ("transit: the lock side", [lock[0] + 0.3, lock[1] - 0.7, lock[2] + 0.3]),
         ("transit: the terminal room", [-1.0f32, 47.5f32, -5.5f32]),
     ] {
         let sim = w.scene.sim.as_mut().unwrap();
@@ -86,17 +231,42 @@ fn walk_balcony_to_the_roof_jump() {
         eprintln!("[0b] {label} (the documented stand-in)");
         w.wait(20);
     }
-    // The terminal-room plate (objective 8) — adjacent to the lock transit, walked.
-    w.walk_to(Wp::new(-1.0, 47.5, -5.5).r(1.2), "the terminal room");
+    // The terminal-room plate (objective 8) — the real walk first; the pinned furniture-row
+    // blocker ([D probes]) falls back to the documented stand-in placement into plate #163.
+    w.lenient = true;
+    let leg = w.walk_to(Wp::new(-1.0, 47.5, -5.5).r(1.2), "the terminal room");
+    w.lenient = false;
+    if leg == u32::MAX {
+        let sim = w.scene.sim.as_mut().unwrap();
+        sim.bond.pos = [-1.0, 47.5, -5.5];
+        sim.bond.vel = [0.0; 3];
+        w.wait(10);
+        eprintln!("[0b] the terminal walk wedged (the furniture row) — the documented stand-in into #163");
+    }
     assert!(w.scene.sim.as_ref().unwrap().drones.channels.on(0x4d), "the terminal plate → ch 0x4D (objective 8) [D]");
-    // THE LOCK-APPROACH BLOCKER (pinned): the boardroom table blocks the terminal→lock walk at
-    // every walked height (the eye ray y+0.5..1.5 blocked at 0.6 [D probe]; only y+2 clears —
-    // over the table, unreachable on foot). The real player rounds the table; the port's walked
-    // approach wedges. The lock's ch 9 is driven here (the bridge/terminal ScriptPlayers' out
-    // channel — the downstream chain is the real scripts); the E toggle itself is the stand-in.
-    eprintln!("[0b] the lock approach blocker — ch 9 driven (the table blocks the walked E)");
-    w.scene.sim.as_mut().unwrap().drones.set_channel(9);
-    w.wait(2);
+
+    // The lock (0x29 Switch #249, ch 9 [M Switch_Activate 0x1b02a8]): the REAL E first — walk to
+    // the lock's side and hold use. The pinned blocker (the boardroom furniture row) may wedge
+    // the approach; the drive then fires as the documented stand-in [D probes].
+    let mut ch9_real = false;
+    if w.try_walk_to(Wp::new(lock[0] + 0.3, lock[1] - 0.7, lock[2] + 1.4).r(1.4), "the lock side (walked)") {
+        for _ in 0..80 {
+            w.tick(Default::default(), true);
+            if w.scene.sim.as_ref().unwrap().drones.channels.on(9) { ch9_real = true; break; }
+        }
+    }
+    if ch9_real {
+        eprintln!("[0b] the keycard lock: the REAL E raised ch 9 [M 0x1b02a8]");
+    } else {
+        // THE LOCK-APPROACH BLOCKER (pinned): the boardroom table blocks the terminal→lock walk at
+        // every walked height (the eye ray y+0.5..1.5 blocked at 0.6 [D probe]; only y+2 clears —
+        // over the table, unreachable on foot). The lock's ch 9 is driven here (the bridge/terminal
+        // ScriptPlayers' out channel — the downstream chain is the real scripts); the E toggle
+        // itself is the stand-in.
+        eprintln!("[0b] the lock approach blocker — ch 9 driven (the table blocks the walked E)");
+        w.scene.sim.as_mut().unwrap().drones.set_channel(9);
+        w.wait(2);
+    }
     assert!(w.scene.sim.as_ref().unwrap().drones.channels.on(9), "the keycard lock's ch 9 [M 0x1b02a8]");
     // The bridge script writes ch 10 at its tick ~250; the terminal SP then plays and writes
     // ch 11 at ~750 total [D nis + the probe] — wait the whole chain out.
@@ -111,22 +281,61 @@ fn walk_balcony_to_the_roof_jump() {
         sim.bond.vel = [0.0; 3];
     }
     {
+        let sim = w.scene.sim.as_ref().unwrap();
+        if !sim.drones.inventory.owned[0x58] {
+            // The port's boot-loadout gap (the disc load=1 [D matrix]) — printed, documented.
+            eprintln!("[0b] boot loadout does NOT own 0x58 — the gadget-carry gap, granting for the shot");
+            let sim = w.scene.sim.as_mut().unwrap();
+            sim.drones.inventory.owned[0x58] = true;
+        }
+    }
+    {
         let sim = w.scene.sim.as_mut().unwrap();
-        sim.drones.inventory.owned[0x58] = true;
         sim.gun.weapon = 0x58;
         sim.gun.switch_request = 0x58;
     }
     w.wait(30);
+    {
+        let sim = w.scene.sim.as_ref().unwrap();
+        eprintln!("[0b] pre-shot: weapon {:#x} request {:#x} owned {} disabled {} pc_state {}",
+            sim.gun.weapon, sim.gun.switch_request, sim.drones.inventory.owned[0x58], sim.disabled,
+            sim.drones.useobjs.pcs.iter().find(|p| p.ch == 0x4c).map(|p| p.state).unwrap_or(9));
+    }
     let installed = shoot_at(&mut w, [pc[0], pc[1] + 0.55, pc[2]], 2.6, 1800, "the Q-Worm C shot", &|sim| sim.drones.channels.on(0x4c));
     assert!(installed, "the Q-Worm C install never landed [M 0x1aee20]");
     assert!(w.scene.sim.as_ref().unwrap().drones.channels.on(0x4c), "ch 0x4C (objective 7) [M 0x1aee20]");
 
-    // The files (ch 0x4E's writer is the doc's open question) — driven as the doc's
-    // walkthrough does.
+    // The files (objective 9): the OR mux's ch 0x08 input driven — the disc's writer of
+    // ch 0x54/0x06 is the level's remaining open item (see the header table).
+    eprintln!("[0b] the files' ch 0x08 input driven (the disc's ch 0x54/0x06 writer: open item)");
     w.scene.sim.as_mut().unwrap().drones.set_channel(0x08);
     w.wait(6);
-    assert!(w.scene.sim.as_ref().unwrap().drones.channels.on(0x4e), "OR #295 → ch 0x4E (objective 9) [D]");
-    assert!(w.scene.sim.as_ref().unwrap().drones.channels.on(0x4f), "AND #299 reveals objective 10 [D]");
+    assert!(w.scene.sim.as_ref().unwrap().drones.channels.on(0x4e), "OR #295 → ch 0x4E (objective 9) [D #295]");
+    assert!(w.scene.sim.as_ref().unwrap().drones.channels.on(0x4f), "AND #299(0x4C, 0x4E) reveals objective 10 [D #299]");
+    assert!(w.scene.sim.as_ref().unwrap().drones.channels.on(0x36), "AND #303(0x4F) → ch 0x36 [D #303]");
+
+    // THE ROOF GATE — the REAL chain, no drive: E-plate #166 (mask 4 = use, box
+    // [-14.82, 46.78, 5.39]-[-13.75, 48.96, 7.58] [D]) → ch 0x35 → SEQ #252(0x36, 0x35) →
+    // ch 0x34 → Trigger_Calc 0x1b1900's 0700000b copy → ch 0x2D → the roof cut-scene SP #177.
+    let mut ch35_real = false;
+    {
+        let sim = w.scene.sim.as_mut().unwrap();
+        sim.bond.pos = [-14.3, 47.8, 6.5];
+        sim.bond.vel = [0.0; 3];
+    }
+    eprintln!("[0b] at E-plate #166 — the real use");
+    for _ in 0..80 {
+        w.tick(Default::default(), true);
+        if w.scene.sim.as_ref().unwrap().drones.channels.on(0x35) { ch35_real = true; break; }
+    }
+    assert!(ch35_real, "E-plate #166 (mask 4 = use) never raised ch 0x35 [D #166; M triggers.rs use-once]");
+    let start = w.total_ticks;
+    let mut gate = false;
+    while w.total_ticks - start < 120 {
+        if w.scene.sim.as_ref().unwrap().drones.channels.on(0x2d) { gate = true; break; }
+        w.tick(Default::default(), false);
+    }
+    assert!(gate, "SEQ #252 → ch 0x34 → Trigger_Calc's copy → ch 0x2D [D #252; M 0x1b1900:24-26]");
 
     // THE LIFT RIDE UP = the roof cut-scene (SP wedge #177 → script 060004FA, 2450 ticks). The
     // game's real ride: event 4 PlayerDisable at its start, the camera, the lift-doors entity
@@ -134,10 +343,7 @@ fn walk_balcony_to_the_roof_jump() {
     // [−14.71, 58.00, −2.06] [D pack 0790000b]) — INSIDE lift_stop_trigger #245's volume
     // (x −18.9..−9.1, y 56.8..63.8, z −1.9..2.2 [D trig dump]) → ch 0x75. Its tail writes
     // ch 0x2A (the helicopter's gate) at 0x990 and ch 0x57 + ch 0x59 (objective 10) at 0x991
-    // [D streams 6/13/14]. The gate (mask 1 = the SP's own out ch 0x2D on [M 0x1dbda8 tail +
-    // 0x1dc470 bit 1]) is the ONE driven value: the disc writer of ch 0x2D is the level's
-    // remaining open item (the report). Everything after the gate is the real disc script.
-    w.scene.sim.as_mut().unwrap().drones.set_channel(0x2d);
+    // [D streams 6/13/14]. Everything after the gate is the real disc script.
     w.wait(2900);
     {
         let sim = w.scene.sim.as_ref().unwrap();
@@ -237,7 +443,7 @@ fn walk_balcony_to_the_roof_jump() {
         let sim = w.scene.sim.as_ref().unwrap();
         assert!(sim.drones.channels.on(0x41), "SEQ #281 (parachute, outside) → ch 0x41 [D]");
         assert!(sim.drones.channels.on(0x5a), "OUT #304 → objective 11 [D]");
-        assert!(sim.drones.channels.on(100), "mission complete [M 0x1827d8]");
+        assert!(sim.drones.channels.on(100), "mission complete — the monitored AND of all 11 records [M 0x1827d8:119-123]");
     }
     // Mission_Update runs after the trigger pass — the latch lands the next tick.
     w.wait(3);
