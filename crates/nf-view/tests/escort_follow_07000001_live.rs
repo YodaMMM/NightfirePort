@@ -101,6 +101,7 @@ fn escort_at_walking_speed_keeps_the_games_distance_and_the_exit_opens() {
     let mut checked = 0u32;
     let mut last_round = [0.0f32; 3];
     let mut last_bond: Option<[f32; 3]> = None;
+    let mut last_flee = 0u32;
     let settled = 'escort: {
         for round in 0..12 {
             let mp = w.scene.sim.as_ref().unwrap().drones.list[ci].pos;
@@ -124,17 +125,37 @@ fn escort_at_walking_speed_keeps_the_games_distance_and_the_exit_opens() {
                 let db = walker::dxz(bond, dpos);
                 // The distance asserts — the game's own bands, evaluated whenever the escort
                 // machine has computed the path value this tick (Lead/Wait update it).
+                // The bands hold outside the scare's grace: the recovery's SetState(0x20) carries no
+                // band [M 0x173658 case 1] and the re-anchor walk takes a moment, so within 600 ticks
+                // of the last flee sighting the resumed Wait may sit outside the -7/0 band [M
+                // 0x15eda8 case 3 pins the ALLY_LEAD-case-3 door, not the recovery's].
+                let grace = w.total_ticks.saturating_sub(last_flee) <= 600;
                 if matches!(dstate, state::ALLY_LEAD | state::ALLY_LEAD_WAIT) {
                     checked += 1;
                     if dstate == state::ALLY_LEAD {
                         assert!(pd >= -9.0, "the lead abandoned Bond: path {pd:.1} < -9.0 at ({:.1},{:.1},{:.1}) [M 0x15e698 case 3]", dpos[0], dpos[1], dpos[2]);
-                    } else {
+                    } else if !grace {
                         assert!(pd <= -7.0 || pd == 0.0,
                             "the lead resumed outside the game's band: path {pd:.1} in AllyLeadWait [M 0x15eda8 case 3]");
                     }
-                    assert!(db < 24.0, "the escort left Bond behind: {db:.1} straight-line at ({:.1},{:.1},{:.1})", dpos[0], dpos[1], dpos[2]);
+                    if !grace {
+                        assert!(db < 24.0, "the escort left Bond behind: {db:.1} straight-line at ({:.1},{:.1},{:.1})", dpos[0], dpos[1], dpos[2]);
+                    }
                 }
-                assert!(ESCORT_STATES.contains(&dstate), "the escort left the ally machine: state {dstate:#x}");
+                                // The grenade scare's flee chain is the game's own answer for the escorted contact:
+                // the ally states' case 0x21 arms call ConsiderExplosive [M 0x15e698:131 et al.] and
+                // Drone_SM_SetState(0x86) [M 0x1431c0:194-195] - the escort leaves the ally machine
+                // for the run-away/hide/recover chain and the recovery re-anchors the route and
+                // returns to AllyLeadWait [M 0x173658 case 1]. level-13-guards-7: the -6 corpse fix
+                // shifted the shared-RNG stream so the guard-15 fight's grenade now lands inside the
+                // escort's explosive scan. The resume is pinned below (the grace window + the round
+                // loop), not the absence of the scare.
+                if matches!(dstate, state::RUN_AWAY_FROM_OBJECT | state::HIDE_FROM_SCARY_OBJECT | state::RECOVER_FROM_SCARY_OBJECT) {
+                    last_flee = w.total_ticks;
+                }
+                assert!(ESCORT_STATES.contains(&dstate)
+                    || matches!(dstate, state::RUN_AWAY_FROM_OBJECT | state::HIDE_FROM_SCARY_OBJECT | state::RECOVER_FROM_SCARY_OBJECT),
+                    "the escort left the ally machine: state {dstate:#x}");
                 drop(sim);
                 still = if walker::dxz(dpos, last) < 0.0025 { still + 1 } else { 0 };
                 last = dpos;

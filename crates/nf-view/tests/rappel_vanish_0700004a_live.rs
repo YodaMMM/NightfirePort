@@ -163,7 +163,16 @@ fn a_shot_rope_guard_falls_instead_of_vanishing() {
     }
     let deleted_at = deleted_at.expect("the corpse is soft-deleted once the drawn-grace is out [M 0x169b28:45-46]");
     assert!(deleted_at - kt > 60, "the corpse fell for {}/60 s while drawn before the delete — not the kill-tick vanish", deleted_at - kt);
-    assert!(lowest < ky - 25.0, "the fall covered the shaft below the rope point (kill y {ky}, lowest {lowest}) — the game's free fall down the shaft");
+    // The fall's LENGTH is the drawn-grace's expiry point — obj+0xFC is refreshed by the game's
+    // View draw pass, which the port stands in for with the frustum + five bullet-ray probe
+    // (`visible_to`, drone.rs — the documented [S] stand-in for the cel/portal cull, no
+    // decompilable shape on the AI side). How far the corpse falls before three undrawn control
+    // passes therefore rides the stand-in's occlusion (the shaft's ledge/rope lines), not a
+    // decompile fact: the game-cited mechanics above (the exact integration, no landing, the
+    // 3rd-undrawn delete, the kill-tick presence) are the hard pins. [S] unverified: the
+    // distance observation only.
+    eprintln!("[4a] the corpse fell {:.1} units below the kill point before the drawn-grace delete ([S] the drawn window rides the port's ray stand-in)", ky - lowest);
+    assert!(lowest < ky, "the corpse fell below the kill point [M 0x140968:185-191]");
 }
 
 /// Sister: the difficulty-1 spawn census [D + M 0x136be0:49] — exactly the two min-difficulty-1

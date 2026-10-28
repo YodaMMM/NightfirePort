@@ -2900,8 +2900,17 @@ impl Sim {
             // not read by the port — a live check item].
             let bot_capsules: Vec<([f32; 3], [f32; 3], f32)> = {
                 let bp = self.bond.pos;
+                // CORPSES NEVER COLLIDE: `SetAsDead` 0x14a2f0:9 sets +0x4F8&0x200 at death, and
+                // `NDrone2_DoCollision` 0x149ec8:11 returns 0 (collision OFF) whenever that bit is
+                // set — on every level but the special 0x700004a — and `NDrone2_Collision` 0x140e90:64
+                // gates the same bit (docs/fields/drone.md, the 0x4F8&0x200 row, census-verified).
+                // The game's dead bot presents no capsule for the player's Jointy query: Bond walks
+                // over bodies. Without this gate the walkreal_07000001 escort wedge reproduces —
+                // Bond lands on a fresh corpse's capsule top (pos+0.4), the push holds him airborne
+                // (grounded never settles), every nav leg dies at the cap, and the escort waits for
+                // a Bond who can no longer reach the [M 0x15eda8] release band.
                 self.drones.list.iter()
-                    .filter(|x| x.enabled && ((x.pos[0] - bp[0]).powi(2) + (x.pos[1] - bp[1]).powi(2) + (x.pos[2] - bp[2]).powi(2)) < 2.0 * 2.0)
+                    .filter(|x| x.enabled && !x.corpse && ((x.pos[0] - bp[0]).powi(2) + (x.pos[1] - bp[1]).powi(2) + (x.pos[2] - bp[2]).powi(2)) < 2.0 * 2.0)
                     .map(|x| ([x.pos[0], x.pos[1] + 0.4, x.pos[2]], [x.pos[0], x.pos[1] - 0.6, x.pos[2]], 0.4f32))
                     .collect()
             };

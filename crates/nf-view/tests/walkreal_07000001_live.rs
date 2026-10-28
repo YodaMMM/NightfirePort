@@ -776,8 +776,18 @@ fn following_mayhew_down_completes_the_level() {
         drop(sim);
         if cleared == before && wedged {
             // No guard to clear and the contact is holding: close on him (the AllyLeadWait release band
-            // [M 0x15eda8 case 3] needs Bond within 5.0 straight-line when pd == 0.0).
+            // [M 0x15eda8 case 3] needs Bond within 5.0 straight-line when pd == 0.0). When the
+            // straight line crosses collision (the hall's south structure — see the trail-loop's
+            // corner note), the player rounds it by the north lane first.
             let cp = w.scene.sim.as_ref().unwrap().drones.list[ci].pos;
+            let bp = w.scene.sim.as_ref().unwrap().bond.pos;
+            let walled = w.scene.sim.as_ref().unwrap().world.segment(bp, [cp[0], bp[1], cp[2]]).is_some();
+            if walled {
+                eprintln!("[01f] the contact is across the hall's south structure — walking the north lane back in");
+                w.walk_nav_to([5.45, 6.6, 14.3], "round the hall's south structure (north)", 1.4);
+                w.walk_nav_to([6.88, 6.4, 14.62], "the hall's north opening (nav node 7)", 1.4);
+                w.walk_nav_to([7.4, 6.0, 11.0], "back through the east door band", 1.4);
+            }
             w.walk_nav_to(cp, "close on the contact", 1.2);
         }
     }
@@ -825,6 +835,21 @@ fn following_mayhew_down_completes_the_level() {
             }
             eprintln!("[01f] the contact stood still 10 s at ({:.2},{:.2},{:.2}) state {cstate:#x} — closing in (the release bands [M 0x15eda8])",
                 cp[0], cp[1], cp[2]);
+            // The hall's south-west inner corner: when the straight line to the contact crosses
+            // collision, Bond is boxed by the hall's south structure — the x≈6.03 wall (z 11.6-13+)
+            // and the z≈11.05 wall ([D the disc's collision cels — the port's segment fan: the corner
+            // casts hit at 0.10-0.39 in every direction but north; the doorway band x 6.5-7.9,
+            // z 12.0→10.4 is the only opening]). The player rounds the structure by its north end —
+            // the AI's own lane node[23] (3.39,14.69) → node[7] (6.88,14.62) [D nav path 0] — and
+            // comes back in through the east door band (the main test's west-wall ladder).
+            let bp = w.scene.sim.as_ref().unwrap().bond.pos;
+            let walled = w.scene.sim.as_ref().unwrap().world.segment(bp, [cp[0], bp[1], cp[2]]).is_some();
+            if walled {
+                eprintln!("[01f] the contact is across the hall's south structure — walking the north lane back in");
+                w.walk_nav_to([5.45, 6.6, 14.3], "round the hall's south structure (north)", 1.4);
+                w.walk_nav_to([6.88, 6.4, 14.62], "the hall's north opening (nav node 7)", 1.4);
+                w.walk_nav_to([7.4, 6.0, 11.0], "back through the east door band", 1.4);
+            }
             w.walk_nav_to(cp, "close on the waiting contact", 3.0);
             continue;
         }
