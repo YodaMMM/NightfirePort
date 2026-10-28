@@ -25,3 +25,7 @@ claimed-by: sandbox4 at 2026-10-28T21:15Z
 ## Report (done, 2026-10-28T22:27Z)
 
 Closed by the driver: the report is on `s/level-0d-every-objective` (docs/reports/level-0d-every-objective.md); the worker didn't run finish.sh.
+
+---
+## Report from the worker (done, 2026-10-28T22:31Z)
+
