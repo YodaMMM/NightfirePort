@@ -238,6 +238,14 @@ fn walk_the_whole_mission_on_real_input() {
     ] {
         w.walk_nav_to(at, name, 1.5);
     }
+    // Sister: the descent was WALKED — the walkway's zone plates (TouchOnces out 42/43/44, the
+    // ambush spawners' start channels [D placements; M Trigger_Hit 0x1b1fc8 walk-in mask 8])
+    // fired on the way down; a teleport to the landing would leave them off.
+    {
+        let sim = w.scene.sim.as_ref().unwrap();
+        assert!(sim.drones.channels.on(0x2a) || sim.drones.channels.on(0x2b) || sim.drones.channels.on(0x2c),
+            "the walked descent crossed the walkway ambush plates (42/43/44) [D]");
+    }
     w.climb_stairs([107.25, 27.7, -119.5], "the stairwell down", 1.6, 4200);
     // The boarding ([D the floor probe]): the platform (y 27.25, z −121..−122.5) ends at the car
     // shaft — the middle (x 112) is open below (the cabin hangs there; its floor is the plate at
