@@ -8,11 +8,15 @@
 //! → the REAL yard walk to the ST-3 plate #378 (118.48–157.56, 3.74–13.26, −311.35..−306.49 [D])
 //! → ch 0x1d (objective 4) → the REAL laser photograph (0x54 carried [M 0x1a7ef8 case 0x700000d
 //! keeps the loadout]) into the CamSubject volumes #494/#495 (ch 0x1e [D]) → ch 0x1e (objective
-//! 5) → the REAL yard walk north to the C5 door — the corridor plate #433's sloped faces fire
-//! ch 0x28 under Bond ([D; the walkthrough's (134, 5, −267) spot]) → THE DOCUMENTED STOP at the
-//! C5 door: objective 6 (ch 0x1f) cannot complete — the mounted-laser cut-scene is unported and
-//! nothing else on the disc writes ch 0x1f [D docs/levels/0700000d.md §6]; the AND #434 stays
-//! open, no mission complete.
+//! 5) → the REAL yard walk north to the C5 door → the REAL kill: shoot `bigdoor02` #96 to death
+//! (health 10000 [D]; `Destroy_CollisionHandler` 0x12bd48 subtracts EVERY class-5 bullet's
+//! damage, death writes ch 0x1f [M :35]) → ch 0x1f (objective 6) → through the dead door, the
+//! corridor plate #433's low stretch fires ch 0x28 ([D; M triggers.rs — the re-firing Touch whose
+//! exit clears it, so the crossing comes after the kill]) → the AND #434 [0x1e & 0x1f & 0x28] →
+//! ch 100 → `Mission_Update` state 6 ends the level to 0x730000d [M 0x182c60:102-103]. The disc's
+//! own hint "your only way out is through that security door marked C5 … considerable firepower"
+//! [D USATxt 0x4000066] — the shooting route is the game's too; the mounted-laser CUT-SCENE
+//! remains unported (docs/levels/0700000d.md §6), the laser GUN is the level's own #225 [D].
 
 #[path = "common/walker_b2.rs"]
 mod walker;
@@ -96,30 +100,81 @@ fn walk_arrival_to_the_c5_door() {
         assert_eq!(sim.drones.mission.states[12][1], 4, "objective 5 completes [M 0x1827d8:88-99]");
     }
 
-    // Leg 4: north to the C5 door — the yard, the corridor slope (the plate #433's sloped faces
-    // fire ch 0x28 under Bond [D]) — walked.
+    // Leg 4: north to the shooting stand — the yard face of bigdoor02 #96 (bounds
+    // 131.78..137.08, 3.99..7.35, −269.85..−269.15 [D placed gfx]) seen from 11+ m out, outside
+    // the death blast's reach (blast damage 1000 [D p5]; top_up_health guards anyway).
     w.walk_to(Wp::new(138.0, 4.5, -305.0).r(1.5), "back to the plate");
-    w.walk_to(Wp::new(136.0, 4.2, -278.0).r(2.0), "the yard north");
-    w.walk_to(Wp::new(136.0, 8.0, -266.0).r(1.5), "the corridor slope");
+    w.walk_to(Wp::new(135.0, 4.5, -281.0).r(1.5), "the shooting stand");
+    w.top_up_health = true;
+    // The weapon: the level's own MOUNTED LASER 0x67 (the catwalk gun, GunImp #225 [D; the disc's
+    // hint 0x4000066 "considerable firepower"]). The mounted class sustains fire with no ammo
+    // pool [L probe: clip 0/spare 0 keeps firing, 50 damage a hit; M Destroy_CollisionHandler
+    // 0x12bd48 subtracts every class-5 contact] — ~200 hits for the 10000 health. The carried
+    // loadout cannot (0x1e: 35 × 40 = 1400 [D ammo caps]). The switch_request is the walkreal's
+    // established gadget-select idiom (the camera leg above) [S port choice, not a game rule].
+    {
+        let sim = w.scene.sim.as_mut().unwrap();
+        let wd = sim.weapons.clone();
+        let rounds = wd.clip_size(0x67).max(1);
+        let _ = sim.drones.inventory.equip_weapon(&wd, 0x67, rounds, true);
+        sim.gun.switch_request = 0x67;
+    }
+    w.wait(30);
+    let door = |w: &Walker| w.scene.sim.as_ref().unwrap().drones.props.destroy.iter()
+        .find(|d| d.placement == 96).cloned().unwrap();
     {
         let sim = w.scene.sim.as_ref().unwrap();
-        assert!(sim.drones.channels.on(0x28), "the corridor plate #433 fires ch 0x28 [D]");
+        let d0 = door(&w);
+        assert!(!d0.dead && d0.health > 9000.0, "bigdoor02 stands at ~10000 health [D p3], got {}", d0.health);
+        assert!(sim.drones.channels.on(0x1e) && !sim.drones.channels.on(0x28),
+            "the photograph input is latched; the corridor input comes after the kill [D #434 list]");
     }
-    w.walk_to(Wp::new(134.5, 12.6, -268.0).r(1.2), "the C5 door");
+    let target = [134.5, 5.6, -269.4];
+    let killed = shoot_at(&mut w, target, 25.0, 30000, "the C5 kill",
+        &|sim| sim.drones.channels.on(0x1f));
+    assert!(killed, "shooting bigdoor02 (health 10000 [D p3]) must write ch 0x1f [M 0x12bd48:35]");
+    {
+        // fix-objective-banner: the monitor completes the objective the tick after the channel.
+        let dead = door(&w).dead;
+        assert!(dead, "the leaf is dead");
+        let sim = w.scene.sim.as_mut().unwrap();
+        for _ in 0..2 { sim.step_bond(nf_game::player::Input::default(), false, false, false); }
+        assert_eq!(sim.drones.mission.states[12][2], 4, "objective 6 completes [M 0x1827d8:88-99]");
+    }
 
-    // THE DOCUMENTED STOP (pinned): the C5 Destroy leaves (healths 1000/10000 [D]) cannot die —
-    // the mounted-laser cut-scene is unported and nothing else writes ch 0x1f [D §6]. The AND
-    // #434 stays open and the mission cannot complete.
-    {
+    // Leg 5: through the dead door into the corridor — the re-firing plate #433's low stretch
+    // raises ch 0x28 while the crossing continues [D; M triggers.rs] — and with 0x1e + 0x1f
+    // latched the AND #434 raises ch 100 [D #434 list; M Trigger_Update's AND arm].
+    w.walk_to(Wp::new(136.0, 4.2, -278.0).r(2.0), "the yard north");
+    w.walk_to(Wp::new(136.0, 5.2, -267.5).r(1.5), "the corridor slope");
+    assert!(w.scene.sim.as_ref().unwrap().drones.channels.on(0x28), "the corridor plate #433 fires ch 0x28 [D]");
+    // The mux → ch 100 → mission end → 0x730000d [M 0x182c60:102-103]. The end sequence runs
+    // `Mission_Update`'s state-6 timeout (VIDEO_FRAME_RATE << 2 = 240 ticks [M :88-91]) before
+    // `LevelEnd` → `ResetMap_LevelToLoad` [M :65-76] — wait it out.
+    let mut ended = false;
+    for _ in 0..120 {
+        w.scene.sim.as_mut().unwrap().step_bond(nf_game::player::Input::default(), false, false, false);
         let sim = w.scene.sim.as_ref().unwrap();
-        let destroys: Vec<f32> = sim.drones.props.destroy.iter().map(|d| d.health).collect();
-        assert!(destroys.contains(&1000.0) && destroys.contains(&10000.0),
-            "the C5 leaves stand at their disc healths [D], got {destroys:?}");
-        assert!(!sim.drones.channels.on(0x1f), "ch 0x1f (the C5 death) is off — the documented blocker");
-        assert!(!sim.drones.channels.on(100), "the AND #434 is open: no mission complete [D]");
-        assert_ne!(sim.drones.mission.status(), 6, "the mission stays open at the C5 stop");
+        if sim.drones.channels.on(100) { ended = true; break; }
     }
-    eprintln!("[0d] walked to the C5 door in {} ticks; stuck {}; falls {}", w.total_ticks, w.report.stuck_events.len(), w.report.falls.len());
+    assert!(ended, "mux #434 [0x1e & 0x1f & 0x28] must raise ch 100 [D; M Trigger_Update's AND arm]");
+    let mut exit = None;
+    for _ in 0..400 {
+        w.scene.sim.as_mut().unwrap().step_bond(nf_game::player::Input::default(), false, false, false);
+        let sim = w.scene.sim.as_ref().unwrap();
+        if sim.drones.mission.status() == 6 { exit = sim.drones.level_exit.or(sim.drones.mission_end); if exit.is_some() { break; } }
+    }
+    let sim = w.scene.sim.as_ref().unwrap();
+    assert_eq!(sim.drones.mission.status(), 6, "Mission_Update state 6 [M 0x182c60]");
+    assert_eq!(exit, Some(0x0730_000d), "the level hands off to the driving level [D record; M 0x182c60:102-103], got {exit:?}");
+    // EVERY objective the level's mission data lists, complete [L record 12; M 0x1827d8:88-99]:
+    // objective 3 (record 11, the TR-2 advance — completed at the start trigger), 4 (ST-3),
+    // 5 (the photograph), 6 (the C5 kill). State 4 = COMPLETE [M mission.rs states].
+    assert_eq!(sim.drones.mission.states[11][2], 4, "objective 3 complete");
+    assert_eq!(sim.drones.mission.states[12][0], 4, "objective 4 complete");
+    assert_eq!(sim.drones.mission.states[12][1], 4, "objective 5 complete");
+    assert_eq!(sim.drones.mission.states[12][2], 4, "objective 6 complete");
+    eprintln!("[0d] the full mission walked + completed in {} ticks; stuck {}; falls {}", w.total_ticks, w.report.stuck_events.len(), w.report.falls.len());
 }
 
 /// Fire the held weapon at a static point through the real trigger path (the walker's aim loop;
