@@ -264,7 +264,10 @@ fn skip_handback_matches_the_games_freeze_rule() {
                 let fires = event6_fires(nis);
                 if fires.is_empty() { continue; }
                 // The LAST event-6 fire decides the hand-back (each fire overwrites +0x40
-                // [M 0x1d94c0 case 6]).
+                // [M 0x1d94c0 case 6]) — last in EXECUTION order: by fire tick, then stream
+                // index (the streams run 0..n within one tick [M Script_Update 0x1da998:26-32]).
+                let mut fires = fires;
+                fires.sort_by_key(|&(si, t)| (t.to_bits(), si));
                 let (e6_stream, e6_tick) = *fires.last().unwrap();
                 let prev_kind = nis.streams.get(e6_stream.wrapping_sub(1))
                     .map(|st| st.decode().iter().any(|c| matches!(c, Cmd::Anim { .. })))
