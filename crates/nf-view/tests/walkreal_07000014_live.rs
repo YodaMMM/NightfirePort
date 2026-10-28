@@ -247,16 +247,28 @@ fn the_east_duct_route_reaches_the_stairwell_slot() {
         assert!(p[2] < 45.0 && p[0] > 46.0, "the corridor south reached the mouths' lane [D nav node 3 -> (49.1, 0.4, 42.8)], got {p:?}");
     }
 }
-// BACK TO #[ignore] (level-14-full-walk-2): the release leg is FIXED and green — the reconcile
-// printed the grapple state through the release loop (the detach IS the first no-fire tick
-// [M 0x192860:56-66]; the prior hold was the mouths' hood catch + the walkable underside bug,
-// both fixed this round) and the drop landed the lane (45.497, 2.954, 42.747) green in the run.
-// The EXACT blocker is the NEXT leg: 1f's lane-south walk (45.49, 42.75 -> (45.0, 2.4, 40.0))
-// passes UNDER the mouths' hood overhang (the underside band y ~3.4..3.9 over the strip z
-// 42.2..43.5 [D the scratch's down-ray grid — invisible to down-rays, it is a down-facing
-// face]) with the walking head (~3.9 at the 2.38 lane) grazing it: walk_to wedged/stuck
-// (walker_b2:519) on its first approach. Next session: map the underside band with up-facing
-// rays (or a live check), then re-unignore. Never red and un-ignored.
+// STILL #[ignore] (level-14-full-walk-4): leg 1f now walks GREEN — the walk-2 hood-underside
+// blocker is gone on master (cleared by the later collision merges). In the run: the lane south
+// past the mouth arrived (45.14, 2.95, 40.77) at +58, the connector west arrived (41.88, 2.79,
+// 39.03) at +1465, the SP #276 cut-scene wrote ch 0x47 and objective 1 completes [M 0x1827d8].
+// The EXACT blocker is leg 2's start — the game's vent drop into the facility never carries
+// Bond across:
+// (a) the mezzanine's south edge is a WALL at z ~38.21, top ~3.5-3.7 [D the scratch's
+//     south-rays at x 40.9: first hit z 38.21374 for y 2.5..3.5, open from y 3.7] — not
+//     jumpable: the apex is 0.78 [M Player_HandleJump vel = -GRAVITY*0.4, GRAVITY 9.8] and
+//     clearing needs the spine bottom above 3.6, i.e. center > 4.6;
+// (b) the #301 TouchOnce (out 0xd9 [D], band 39.68..41.75 / 2.07..4.14 / 37.62..40.40) FIRES
+//     on the west walk (the connector walk crosses x 41.75 inside the band) but nothing in the
+//     port moves Bond down — the gap z 37.25..38.0 stays a deep open trench [D probe14_mouthfin
+//     C/D down-rays open past -1];
+// (c) SP #276 (0x06000833, 1400 ticks [D]) runs to its end (sim disabled ~1000 ticks, ch 0x47
+//     written) and leaves Bond at the mezzanine — the port's SP does not SetPosRot the player
+//     (the scratch printed pos constant (41.88, 2.83, 39.03) through the whole SP);
+// (d) nav_route west from the mezzanine is None: the only nearby nodes (41.3/38.7, 0.4, 36.1)
+//     sit SOUTH of the gap, unreachable on foot from the mezzanine.
+// Next session: find the game's vent-drop handoff (which script/SP record moves the player —
+// live check in docs/reports/level-14-full-walk-4.md), port it, then legs 2..6. Never red and
+// un-ignored.
 #[test]
 #[ignore]
 fn walk_the_infiltration_to_the_delta_exit() {
