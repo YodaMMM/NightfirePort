@@ -13516,8 +13516,18 @@ fn segment_hits_sphere(a: V3, b: V3, c: V3, r: f32) -> bool {
             self.list[evaluator].door_planes = planes;
         }
         // ---- DoorGuardHandler [M 0x1416d8] ----
-        // Needs an opponent (+0x170; the port's stand-in: the guard currently sees Bond [S]);
-        // the height gate below is the game's [M 0x1416d8:22]. The planes' owner evaluates, the
+        // The opponent gate is the game's +0x170 != 0 [M 0x1416d8:16-24 — `d10+0x170`/`d19+0x170`
+        // NULL → return 0], and in SP `NDrone2_FindOpponent` 0x1424e0:100-120 (run EVERY tick
+        // [M ControlSTANDARD 0x1490f0:167]) points +0x170 at Bond's object UNCONDITIONALLY —
+        // no sight test — zeroing it only when `PlrStat_OkToUpdate` fails [M 0x1993e0: the
+        // mission-status gate], the player object's class-3 health ≤ 0 [M 0x1424e0:111-115] or
+        // the class-0x12 body [M :116-119]. The port's `bond_alive` fold is exactly that
+        // pointer (drone.rs, standins-drone-922, stamped every tick before the LOS gate) — the
+        // old [S] `los` stand-in (the guard currently sees Bond) starved the zone ladder: a
+        // door guard whose sight never acked (the reaction-acked `+0x228 & 4` is a DIFFERENT
+        // gate — `NearArmedPerson`'s, not the zone read's) kept `door_zone` 0 forever and the
+        // 0x31 UPDATE's zone reactions never fired.
+        // The height gate below is the game's [M 0x1416d8:22]. The planes' owner evaluates, the
         // 0xff holder mirrors the partner's value (the game reads the partner's +0x2CC).
         for i in 0..self.list.len() {
             if self.list[i].state != state::CIVILIAN_DOOR_GUARD { continue; }
@@ -13532,11 +13542,12 @@ fn segment_hits_sphere(a: V3, b: V3, c: V3, r: f32) -> bool {
                 self.list[i].door_zone = if self.list[p].door_side == 0xff { 0xff } else { self.list[p].door_zone };
                 continue;
             }
-            // The opponent gates [M 0x1416d8:16-24]: +0x170 != 0 (the port's stand-in: the guard
-            // currently sees Bond [S]) and |opp +0x34 − my +0x34| ≤ 2.0 — the OPPONENT's HEIGHT
+            // The opponent gates [M 0x1416d8:16-24]: +0x170 != 0 (the port's `bond_alive` fold —
+            // FindOpponent 0x1424e0:100-120 re-points it at Bond every tick [M ControlSTANDARD
+            // 0x1490f0:167]) and |opp +0x34 − my +0x34| ≤ 2.0 — the OPPONENT's HEIGHT
             // against the evaluator's own, not an aim yaw [M disasm 0x14170c-0x141738:
             // `lwc1 0x34($t0)` / `lwc1 0x34($a2)`, `c.olt.s $f3,$f0` + `bc1fl`].
-            if !self.list[i].los || (player.pos[1] - self.list[i].pos[1]).abs() >= 2.0 {
+            if !self.list[i].bond_alive || (player.pos[1] - self.list[i].pos[1]).abs() >= 2.0 {
                 self.list[i].door_zone = 0;
                 continue;
             }
