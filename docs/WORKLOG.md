@@ -33,3 +33,10 @@ Plan:
 - Tests: nf-game lib 584/0 (2 new: the call-site constants, the state-6 dispatch); the live
   tests on 0700000b (death -> kind-6 blast -> 3 metal particles in the 41-tick window, none
   after) and the 07000005 sister (state 4, no blast). Suite on the final tree: running.
+
+## copter-death-debris — final (2026-10-28 17:55 UTC)
+
+- The task body is complete and green: nf-game --lib 584/0, nf-view copter_death_debris_live
+  2/0, the report committed. The full suite hit the sandbox cutoff at 17:55 UTC with 94/879
+  binaries run (380 passed, 0 failed, one no-network MP crash) — the next message re-runs the
+  runner on this unchanged tree for the total line.

@@ -101,9 +101,25 @@ per gated tick was already ported and now simply receives a record whose kind is
 
 ## Suite
 
-```
-(to be filled from suite.out's total line before the finish step)
-```
+The fast runner (`tools/test/suite.py`) started in the background at 17:31 UTC on the final tree
+(origin/master 8a966fa3 was already the branch base — nothing to merge) after a warm 1060 s
+build: `build ok: 879 test binaries in 1060 s`. **Cutoff**: this sandbox's ~2 h window expired
+before the run phase could — at 17:55 UTC the runner had completed 94 of the 879 binaries,
+**380 tests passed, 0 failed** across them, with one environment crash: `CRASH
+mp_online_failures (exit -9)` — the MP-online binary SIGKILLed at the runner's 600 s per-binary
+limit; this sandbox has no network peers, and the binary touches none of this task's code (the
+copter chain lives in nf-game's `copter.rs`/`drone.rs` walk head, both fully green in the 94).
+No FAILED and no TIMEOUT lines otherwise.
+
+The crates this task's tests touch were run to completion outside the runner:
+- `nf-game --lib` (the whole crate's unit suite): **584 passed, 0 failed**, 5 pre-existing
+  ignores — includes the 2 new copter tests and every existing copter/explode/blast test.
+- `nf-view --test copter_death_debris_live`: **2 passed, 0 failed** (the 0700000b death→blast→
+  debris chain and the 07000005 departure sister).
+
+The next message (this branch survives) re-runs `NF_ISO=… nohup python3 tools/test/suite.py >
+suite.out 2>&1 &` on the unchanged tree and quotes the total line — the build cache is warm, so
+it goes straight to the run phase.
 
 ## What's left
 
@@ -130,3 +146,9 @@ the live tests run the real level data. Two optional confirmations if a PCSX2 se
 2. **The blast position**: the game's blast object `obj+0x30` at creation should equal the
    copter's last flight position (the matrix row it flew to), not the placement spot — confirms
    the walk's obj+0x30 ← obj+0xc0 sync [M 0x1336f8:386-387] against the live run.
+
+## Usage
+
+- Input/output tokens, context used, cost: **not visible to me** — this environment exposes no
+  token, credit or context-window figures for the session (no meter in the tool output or the
+  UI the driver sends through). Read from: nothing to read from.
