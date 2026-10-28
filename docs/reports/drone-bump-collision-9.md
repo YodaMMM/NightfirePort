@@ -84,3 +84,12 @@ New assertion-free probe `crates/nf-view/tests/probe_07_hover.rs` measures the w
 
 - Context window: not visible to me (no token/credit figures are exposed in this environment).
 - Input/output tokens, cost: not visible to me.
+
+## ntfy failed
+
+All three fallbacks returned HTTP 429 (the ntfy.sh daily publish quota — server-side):
+
+- `curl -sS -m 20 -H "Title: NightfirePort" -d "..." https://ntfy.sh/nightfire-yoda-8k3x` →
+  `{"code":42908,"http":429,"error":"limit reached: daily message quota reached; increase your limits with a paid plan, see https://ntfy.sh","link":"https://ntfy.sh/docs/publish/#limitations"}`
+- `python3 urllib` → `urllib.error.HTTPError: HTTP Error 429: Too Many Requests`
+- `wget --post-data` → `ERROR 429: Too Many Requests`
