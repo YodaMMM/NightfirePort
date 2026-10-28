@@ -108,8 +108,33 @@ Fresh boot (a save-state resume skips the boot path), level 07000007, no input, 
 
 ## Suite
 
-Run per the driver's command (the fast runner, `tools/test/suite.py`) on this tree; the total line is
-quoted at the bottom of this report (appended after the run finished).
+The full four-crate run per the driver's command, via the fast runner on this tree
+(`NF_ISO=<abs> python3 tools/test/suite.py`; build ok: **882 test binaries in 1162 s**). The sandbox
+expired mid-run — the runner was stopped at the 13:05 UTC cutoff having completed **228 binaries**
+(all of `nf-game` and into `nf-formats`; `nf-view`'s ~500 binaries, the red tests' crate, were not
+reached). Partial total at cutoff, in the runner's own shape:
+
+```
+1456 passed, 4 failed, 41 ignored
+FAILED identity_disc::the_real_disc_passes_the_identity_check
+FAILED disc_golden::bigf_header_fields_behave_as_documented
+FAILED disc_golden::bigf_tables_match_the_golden_manifest
+FAILED disc_golden::directory_tree_matches_the_golden_manifest
+```
+
+The 4 failures are the slim-ISO disc-golden family the driver's brief allows (byte-identity checks
+against the full ISO). No code failure in anything the runner reached.
+
+Direct runs on this tree of the tests this round touches (all quoted from `cargo test --release
+--test-threads=1`, nf-view):
+
+- `probe_07_route` — FAILED (the mouth wedge, `E the hall door` cap).
+- `party_door_lock_07000007_live` — FAILED ×2 (the same wedge: `the hall east` + `E the hall door`).
+- `cutscene_timer_pause_live` — FAILED (`the control scene…`: `E the hall door`, 26.1 s).
+- `walkreal_07000007_live` — 1 passed / 1 FAILED (the same mouth; the test does not opt into
+  `crowd_aware`, so this round's walker change is inert for it — the moved RNG phase parks dr22 on its
+  route; see the blocker section).
+- `probe_drone5_mouth`, `probe_drone5_gap` — pass (assertion-free probes, the anatomy + the scan).
 
 ## Usage
 
