@@ -152,3 +152,18 @@ the live tests run the real level data. Two optional confirmations if a PCSX2 se
 - Input/output tokens, context used, cost: **not visible to me** — this environment exposes no
   token, credit or context-window figures for the session (no meter in the tool output or the
   UI the driver sends through). Read from: nothing to read from.
+
+## ntfy failed
+
+All three notification attempts failed (2026-10-28 ~17:57 UTC):
+
+1. `curl -sS -m 20 -H "Title: NightfirePort" -d "copter-death-debris: …" https://ntfy.sh/nightfire-yoda-8k3x`
+   → `{"code":42908,"http":429,"error":"limit reached: daily message quota reached; increase your limits with a paid plan, see https://ntfy.sh","link":"https://ntfy.sh/docs/publish/#limitations"}`
+2. `python3 -c "import urllib.request as u; u.urlopen(u.Request('https://ntfy.sh/nightfire-yoda-8k3x', data=…, headers={'Title':'NightfirePort'}), timeout=20)"`
+   → `urllib.error.URLError: <urlopen error [Errno 101] Network is unreachable>`
+3. `wget -q -O- --post-data "copter-death-debris: …" https://ntfy.sh/nightfire-yoda-8k3x`
+   → hung past the 30 s timeout and was killed (the same unreachable network; an earlier
+   piped invocation printed rc=0 only because `tail` masked wget's exit — the honest un-piped
+   retry is the hang above).
+
+The queue entry (`done/30-copter-death-debris.md`) carries the full report either way.
