@@ -130,12 +130,31 @@ fn drops_and_boxes_take_through_the_real_path_with_the_game_numbers() {
 
     // -- A dropped guard gun taken twice: the second take is ammo up to the cap. --
     // 07000001's Raptor guards hold 0xE (clip 9, type 3, cap 36 [L weapon_data + ammo_data]).
+    // LIVE raptors only — enabled: the game's own target selection refuses the disabled
+    // placements (`+0xF4 == 1` → return [M Check_AutoAim 0x1a73f8]). `drawn` (+0xFC) is the
+    // port's per-tick cull stand-in [M 0x1446b0:8-31 per drone.rs bond_talk] — NOT an
+    // activation flag, so it does not gate the finder. The census that found this: only ONE
+    // 0xE carrier is enabled at load (#0 at (−4.9, 6.3, −0.1)); #11/#14/#15 wait disabled on
+    // their placement switch channels — the level's script enables them in play. The test
+    // fires each waiting raptor's own channel once below (the game's enable path [M the
+    // placement param 3 → Drone.switch_channel; the channels lending into Drones::tick]), the
+    // same scaffolding the hostage_killer pairing test uses for its placement channels.
     let raptor = |scene: &Scene| scene.sim.as_ref().unwrap().drones.list.iter().enumerate()
-        .find(|(_, dr)| dr.present && !dr.corpse && dr.health > 0.0 && dr.weapon == 0xe)
+        .find(|(_, dr)| dr.present && dr.enabled && !dr.corpse && dr.health > 0.0 && dr.weapon == 0xe)
         .map(|(i, _)| i);
     let mut kills = 0u32;
     let mut first_take = None;
     let mut second_take = None;
+    {
+        // Bring the waiting 0xE raptors in the way the level's script does: fire each one's
+        // placement switch channel once, then let the enable land.
+        let chans: std::collections::BTreeSet<u8> = scene.sim.as_ref().unwrap().drones.list.iter()
+            .filter(|dr| dr.present && dr.weapon == 0xe && !dr.enabled && dr.switch_channel != 0)
+            .map(|dr| dr.switch_channel).collect();
+        let f = scene.sim.as_ref().unwrap().drones.frame;
+        for ch in chans { scene.sim.as_mut().unwrap().drones.channels.set(ch as u32, 1, f); }
+        for _ in 0..30 { step(&mut scene, false, Some(&mut dev)); }
+    }
     while kills < 8 {
         let Some(gi) = raptor(&scene) else { break };
         if !kill_raptor(&mut scene, gi, Some(&mut dev)) { kills += 1; continue; }
@@ -153,6 +172,12 @@ fn drops_and_boxes_take_through_the_real_path_with_the_game_numbers() {
             let sim = scene.sim.as_ref().unwrap();
             assert!(sim.drones.inventory.owned[0xe], "0xE owned after the first take");
             assert_eq!(sim.drones.inventory.clip[0xe], 9, "a full clip [M 0x1a8a58]");
+            // Switch back to the P2K through the real switch input: the taken 0xE's 9 rounds
+            // drain dry inside one kill_raptor window (the trace: clip 6→1→0 by t300) and a
+            // dry gun kills nothing for the remaining 1700 ticks.
+            let draw = nf_game::player::Input { switch_to: Some(2), ..Default::default() };
+            for _ in 0..60 { scene.sim.as_mut().unwrap().step_bond(draw, false, false, false); }
+            assert_eq!(scene.sim.as_ref().unwrap().gun.weapon, 2, "back on the P2K for the next kill");
         } else if second_take.is_none() { second_take = t; break; }
     }
     assert_eq!(first_take, Some(nf_game::pickup::Taken::Weapon { weapon: 0xe }), "the first take is the gun (owned, clip 9)");
@@ -297,9 +322,33 @@ fn the_kind_4_item_pickup_shows_its_label_message() {
 
 fn at_of_index(scene: &Scene, k: usize) -> [f32; 3] { let p = &scene.sim.as_ref().unwrap().drones.pickups[k]; [p.m[3][0], p.m[3][1], p.m[3][2]] }
 
+/// The guard's bone-2 world position — the game's own auto-aim target point
+/// [M Check_AutoAim 0x1a73f8 `AnimGetBoneWorldTrans(param_2, 0x80000002, 0)`; the port's
+/// `auto_aim` reads the same palette bone]. Fallback: 1.1 above the root when the palette is
+/// not resolvable (the standing body's mid-chest band).
+fn bone2(scene: &Scene, gi: usize) -> Option<[f32; 3]> {
+    let sim = scene.sim.as_ref().unwrap();
+    let data = nf_game::drone::Data {
+        tables: &sim.tables, props: &sim.props, scripts: &sim.scripts, weapons: &sim.weapons,
+        world: &sim.world, level: sim.level, sequences: &sim.seqs, skins: &sim.skins,
+        skeletons: &sim.skeletons, nav: &sim.nav, covers: &sim.covers, tuning: &sim.tuning,
+        hitboxes: &sim.hitboxes, volumes: &sim.volumes, sfx: sim.sfx.as_ref(), models: &sim.models,
+        surfaces: sim.surfaces.as_ref(), voices: sim.voices.as_deref(), difficulty: sim.drones.difficulty,
+        ai_points: &sim.ai_points,
+    };
+    sim.drones.list[gi].palette(&data).and_then(|m| m.get(2).map(|r| [r[3][0], r[3][1], r[3][2]]))
+}
+
 /// Kill the Raptor guard `gi` through the real fire path (fix-pickups-trace's kill_guard, god
 /// mode only), then let the drop fall and land.
+/// The kill shoots like the game's player: the assist option is ON by default ([L]
+/// PlayerSetting+1 = 1; the scene's `auto_aim: false` default is the mouse-off D-001) and
+/// `Check_AutoAim` 0x1a73f8 bends each shot onto bone 2 — the aim below points at that bone so
+/// the raw aim sits inside the H/V cones instead of at the root (the standing hit spheres are
+/// built on bones 5/0x37/0x33 [M NDrone2_Collision 0x140e90 else-branch]; with the sight census
+/// the raptors fight/dodge and the old root+0.3 aim passed under them).
 fn kill_raptor(scene: &mut Scene, gi: usize, mut dev: Option<&mut Dev>) -> bool {
+    scene.sim.as_mut().unwrap().auto_aim = true;
     let spots = |gp: [f32; 3], floor: f32| -> Vec<[f32; 3]> {
         let mut v = Vec::new();
         for r in [3.0f32, 4.5] {
@@ -312,7 +361,10 @@ fn kill_raptor(scene: &mut Scene, gi: usize, mut dev: Option<&mut Dev>) -> bool 
     };
     let mut spot = 0usize;
     for t in 0..2000 {
-        let (gp, gchest) = { let dr = &scene.sim.as_ref().unwrap().drones.list[gi]; (dr.pos, [dr.pos[0], dr.pos[1] + 0.3, dr.pos[2]]) };
+        let (gp, gchest) = {
+            let dr = &scene.sim.as_ref().unwrap().drones.list[gi];
+            (dr.pos, bone2(scene, gi).unwrap_or([dr.pos[0], dr.pos[1] + 1.1, dr.pos[2]]))
+        };
         let los = |from: [f32; 3]| scene.sim.as_ref().unwrap().world.line_of_sight([from[0], from[1] + 1.0, from[2]], gchest, nf_game::world::LOS_PROBE_8);
         let floor = scene.sim.as_ref().unwrap().world.floor_below(gp, 6.0).unwrap_or(gp[1]);
         let cands = spots(gp, floor);
