@@ -58,3 +58,26 @@ Plan:
 - Add the per-frame static-instance visibility hook for dead Destroy objects
   (the 0x3b channel-show gap's shape), document the draw hook for the render.
 - Full suite on the final merged tree before push (fast runner).
+
+### level-0d-c5-door-laser-2 outcome (2026-10-28)
+
+- The sustained-fire stall root-caused: the drain test's aim loop converged on the SMOOTHED aim
+  (0.02 window) while the game's ease [M 0x1320d8:136-161] leaves the raw ~0.1 rad past during a
+  saturating approach — the zero-input ticks then eased the barrel past the door (the settled beam
+  dug into the deck ~4 units short: beam far y 3.985 vs the door's y-lo 3.9875, probe trace). The
+  port's fire path is decompile-faithful (the ease, the smoothed-matrix spawn [M :325 + :196-211],
+  the every-tick re-trigger [M :107-112/:324]) — the TEST was wrong per the rules: it now converges
+  on the RAW stick rest [M :124-135] and coasts the ease before the trigger (the [L] rest-drain
+  shape). The drain test is un-ignored GREEN: six −1500 bursts, the heat arithmetic [M] saturates
+  the hot byte at shot ~201 with the door at exactly 0, the ~200-tick recovery pause rides out, the
+  kill shot takes the death catch to −50, bigdoor01 same-tick at 1000, ch 0x1f, objective 6 → 4.
+- The destroyed-glist swap's draw side: the drawn 0xe1 leaves' centres recorded at build
+  (Scene::destroy_centres, the group cull sphere's exact transform) and a per-frame dead gate in
+  the renderer's draw filter (Renderer::destroy_dead fed from the sim in lib.rs) — the C5 leaves
+  swap to an undrawable slot [D lod_word −1], the doorway ends open [L]. Render spots listed in
+  the report.
+- The merged-tree build fix: master's cascade test constructors gained the Destroy fields the
+  predecessor branch added (mask/colour/hit67, p4 0 → mask 0). Four-crate BUILD green.
+- Left: the FULL suite total line on the final tree (this sandbox kills background runners and the
+  foreground run's build step consumed the window — the next message runs suite.py first thing);
+  p6 > 0 deferred channel writes (carried, needs the live check).
