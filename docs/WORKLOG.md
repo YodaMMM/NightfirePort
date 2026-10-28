@@ -203,3 +203,27 @@ suspect — bisect left). Report: docs/reports/drone-bump-collision-9.md with tw
   at (93.41, −46.32) (y 43.215 over the 43.0 floor) — identify the object [D placement +
   footprint], re-anchor the route like a player walks. Never disarm the push. Full suite total
   line to quote.
+
+- drone-bump-collision-10: BOTH merge-red items green. (1) walkreal_07000001_live
+  walk_from_the_spawn_to_the_exit_with_the_contact 4/0 on the merged tree: the RNG shift
+  (the merge's vision_on arms, +0x4F8 |= 0x10000 [M 0x16a2d0:15 et al.]) moved an armed
+  stepper into the stairwell head's south gap — the contact parks at route_idx 27 and Bond's
+  descent line gets repelled east — so the walk fights the pocket guards BEFORE the descent
+  (the same real-input fight the recovery loop runs, order re-derived [S]) and opens the
+  mid-stairwell auto-closed double doors (−33.1, 6.0/7.3, 9.0 [D dump]; auto-close 360 ticks
+  [M Door_Update's scan]) with the game's player move: the E press [M Player_Activate
+  0x1a5170:100-129 → Door_Activate 0x135be0; the opener census — no contact opens a closed
+  idle ch_open-0 leaf]. The walker gained the blocker-door arm (a closed unlocked door on the
+  blocked walk line gets the E). (2) probe_07_route 1/0: the rim object identified
+  [D examples/probe_07_rimobj] — ChestOfDrawsSmall_6a/6b (world AABB x 90.68..92.32, y
+  42.89..44.00, z −46.39..−45.49; the 43.215 rim the -9 capsule measured is the pair's
+  east-face collision edge) + OBJECT_BookCase (x 86.18..91.38, z −52.75..−48.26); the old
+  manual legs hugged the pair's east face at 0.18 < the 0.45 capsule — the post-E legs now
+  walk_nav_to (the nav web routes the player's gap) and the whole route reaches #251's
+  threshold without the wedge.
+- Run: walkreal_07000001_live 4/0 (215 s), probe_07_route 1/0 (12.8 s), walkreal_07000007_live
+  2/0, party_door_lock_07000007_live 2/0, probe_07_hover 1/0, cutscene_timer_pause_live 1/0,
+  walkreal_0700000d_live 1/0, walk_0700000d_live 3/0, patrol_walk_0c_0d_live 2/0; chunk_suite
+  (this tree): nf_view 96/0 recorded, 3/892 binaries — the full 892-binary sweep does not fit
+  the 2 h window (background jobs die between tool calls; the chunk build alone ~25 min after
+  the walker.rs edit relinks ~200 nf-view bins).
