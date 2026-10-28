@@ -748,7 +748,7 @@ fn the_notch_grab_and_ride_parked() {
 /// by the disc's own trench at z −12 (floor 23.5 — a 9-unit drop from the walkway's 32.3 north
 /// lip) and the void band z −40..−64. The walk below PINS the stall as the blocker's evidence
 /// (a [D]-backed negative test, no ignore needed); the route to the zip door stays open for the
-/// main agent's live checks (a scripted carry, a climb volume, or a 07000006-side approach).
+/// live checks (a scripted carry, a climb volume, or a 07000006-side approach).
 #[test]
 fn the_cable_landing_walks_the_south_walkway_toward_the_zip_door() {
     let iso = iso();
