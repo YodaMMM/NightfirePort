@@ -299,3 +299,16 @@ sixteen_participants_fixed_run_digest_is_pinned (both — digest re-pin only wit
 named), fix_searchlight_remainder a_courtyard_head_tracks_bond_until_the_lost_limit (cull —
 start Bond where the game's player stands). Double Cross Part 1 must stay finishable. Full
 suite, quote the total line.
+
+Final (2026-10-28): two of the four reds closed with harness re-derives from the game's
+behaviour — the escort follow backs out of the PlayerInWay stay band (60° cone AND 3.5
+[M 0x15ea28 case 3]; the lead walks into a parked follower and waits for the player to
+clear the cone), and the searchlight tracking stands Bond on the courtyard floor at the
+housing's base (the spot lands on his sphere [M 0x1cb900 hit branch]; the old chase
+teleported him onto the non-standing 41.01 landing — the cull [M 0x109da0:302-322] is what
+makes it non-standing — pre-loading the lost counter to 804-815). The walker's stuck jumps
+gained a 2.2 headroom guard (the jump cycle under the 01 stairwell soffit re-pinned the
+capsule every cycle). Still red: the walkreal_01 follow (the walk's step-down glide into
+the z-12 soffit — full probe evidence, live check listed) and the mp_perf_16 digest
+(capsule-9's two-stream method documented). Report:
+docs/reports/capsule-cull-and-los-masks-10.md.
