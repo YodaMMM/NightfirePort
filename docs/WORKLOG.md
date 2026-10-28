@@ -288,3 +288,14 @@ Progress:
   here), the digest re-pin (needs the named mover — per-tick hash diff method in the
   report), the escort sight-gate trace, the follow wedge instrumentation. Report:
   docs/reports/capsule-cull-and-los-masks-9.md
+
+## capsule-cull-and-los-masks-10 (2026-10-28, branch s/capsule-cull-and-los-masks-10)
+
+Task: continue capsule-9 (branch from e6fb14dd, origin/master 929c6606 merged clean). Close
+the four last reds from the game's behaviour [M]: walkreal_07000001
+following_mayhew_down_completes_the_level (cull), fix_npc_doors
+the_escort_opens_the_interior_doors_on_his_route (masks), mp_perf_16
+sixteen_participants_fixed_run_digest_is_pinned (both — digest re-pin only with the mover
+named), fix_searchlight_remainder a_courtyard_head_tracks_bond_until_the_lost_limit (cull —
+start Bond where the game's player stands). Double Cross Part 1 must stay finishable. Full
+suite, quote the total line.
