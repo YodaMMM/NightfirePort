@@ -393,8 +393,13 @@ pub struct EmitterParticle {
 pub struct EmitterFx {
     pub placement: usize,
     pub pos: V3,
-    /// The placement rotation (the spawn direction's basis; the game rotates by obj+0x90).
+    /// The placement rotation words (+0x18..+0x20), raw — the port's interim spawn-basis source
+    /// until the +0x24 quaternion path landed (the spawn now reads `quat`; these stay for the
+    /// census cross-checks).
     pub rotation: [f32; 3],
+    /// The placement's +0x24..+0x34 quaternion (x, y, z, w) — the game's spawn-basis source for
+    /// the 0xf2 path [M 0x1d04f0:474-478].
+    pub quat: [f32; 4],
     /// param 0: the def hash (resolved against the level's block-0x30 defs).
     pub def: u32,
     /// param 1: 0 → −1 (emit while enabled), 1 → 0 (one-shot), n → n/60 s countdown.
@@ -420,7 +425,7 @@ pub struct EmitterFx {
     pub shared_rng: bool,
     /// The object basis `Mat_SetDir/SetNorm/SetUp` 0x1e3418/0x1e3458/0x1e3438 built from the hit
     /// normal (`Emitter_Create` 0x17ae00): rows [Norm = v, Up = normal, Dir = u] — the spawn's
-    /// local +y rides the normal. `None` → the placement euler matrix (the 0xf2 path).
+    /// local +y rides the normal. `None` → the 0xf2 placement chain (see the spawn site).
     pub basis: Option<[[f32; 4]; 4]>,
 }
 
@@ -605,7 +610,7 @@ impl WorldFx {
                     let Some(d) = fx.defs.get(&param(0)) else { continue; };
                     let rate = match param(1) as i32 { 0 => -1.0, 1 => 0.0, n => n as f32 * REC_FRAME_RATE };
                     fx.emitters.push(EmitterFx {
-                        placement: i, pos, rotation: p.rotation,
+                        placement: i, pos, rotation: p.rotation, quat: p.quaternion(),
                         def: param(0), rate,
                         ch_on: param(2) as u16, ch_off: param(3) as u16, ch_out: param(4) as u16,
                         toggle_period: param(5) as i32 as f32,
@@ -650,7 +655,7 @@ impl WorldFx {
             [0.0, 0.0, 0.0, 1.0],
         ];
         self.emitters.push(EmitterFx {
-            placement: usize::MAX, pos, rotation: [0.0; 3],
+            placement: usize::MAX, pos, rotation: [0.0; 3], quat: [0.0; 4],
             def: def_hash, rate: 0.0, ch_on: 0, ch_off: 0, ch_out: 0,
             toggle_period: 0.0, toggle_timer: 0.0, toggle_state: true,
             expired: true, dead_ticks: 0,
@@ -856,12 +861,27 @@ impl WorldFx {
                     let (ct, st) = (crate::trig::cosf(yaw), crate::trig::sinf(yaw));
                     let dir = [sp * ct * speed, cp * speed, sp * st * speed];
                     // The object basis (obj+0x90): the impact emitters carry the Mat_SetDir/
-                    // SetNorm/SetUp rows built from the hit normal; the placements the euler matrix.
-                    // KNOWN GAP: the game builds a 0xf2 placement emitter's matrix with
-                    // Quat_QuatToMat on the placement's +0x24 quaternion [M 0x1d04f0:474-478], not
-                    // from the Euler angles — the port still reads the Euler here ([S] interim;
-                    // 16/52 of the disc's 0xf2 rows carry pitch/roll [D placement_rot_census]).
-                    let m = e.basis.unwrap_or_else(|| nf_formats::placement::object_matrix(e.rotation, [0.0; 3]));
+                    // SetNorm/SetUp rows built from the hit normal. The 0xf2 placements run the
+                    // game's own chain [M]: the dispatcher builds the matrix with Quat_QuatToMat
+                    // on the placement's +0x24 quaternion (0x1d04f0:474-478), Emitter_CreatePlist
+                    // passes ONLY its up row (Mat_GetUp, 0x17b848 — matrix +0x10 [M Mat_GetUp
+                    // 0x1e33b8]) and the position (the matrix's +0x30 translation row), and
+                    // Emitter_Create rebuilds the basis from that up vector exactly like the
+                    // impact path (Vec_MakeOrthonormalBasis + Mat_SetDir/SetNorm/SetUp,
+                    // 0x17ae00:104-107) — rows [Norm = v, Up = up, Dir = u]. A pure-yaw quat's
+                    // matrix row 1 is (0, 1, 0) [M 0x1e3e80 entries], so every yaw-only
+                    // placement spawns on the reconstructed identity basis regardless of yaw.
+                    let m = e.basis.unwrap_or_else(|| {
+                        let qm = nf_formats::placement::quat_quat_to_mat(e.quat);
+                        let up = [qm[1][0], qm[1][1], qm[1][2]];
+                        let (u, v) = crate::effect::orthonormal_basis_pair(up);
+                        [
+                            [v[0], v[1], v[2], 0.0],
+                            [up[0], up[1], up[2], 0.0],
+                            [u[0], u[1], u[2], 0.0],
+                            [0.0, 0.0, 0.0, 1.0],
+                        ]
+                    });
                     p.vel = [0, 1, 2].map(|k| m[k][0] * dir[0] + m[k][1] * dir[1] + m[k][2] * dir[2]);
                     p.pos = e.pos;
                     p.life = life;
@@ -1052,7 +1072,7 @@ mod tests {
         };
         let mut fx = WorldFx { defs: std::iter::once((0x1234, def.clone())).collect(), ..Default::default() };
         fx.emitters.push(EmitterFx {
-            placement: 0, pos: [1.0, 2.0, 3.0], rotation: [0.0; 3], def: 0x1234, rate: -1.0,
+            placement: 0, pos: [1.0, 2.0, 3.0], rotation: [0.0; 3], quat: [0.0; 4], def: 0x1234, rate: -1.0,
             ch_on: 0, ch_off: 0, ch_out: 0x66, toggle_period: 0.0, toggle_timer: 0.0,
             toggle_state: true, expired: false, dead_ticks: 0, parts: (0..8).map(|_| EmitterParticle {
                 pos: [0.0; 3], vel: [0.0; 3], age: 99999.0, life: 0.0, rgba: [0; 4],

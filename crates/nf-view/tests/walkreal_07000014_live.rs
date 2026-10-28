@@ -247,33 +247,25 @@ fn the_east_duct_route_reaches_the_stairwell_slot() {
         assert!(p[2] < 45.0 && p[0] > 46.0, "the corridor south reached the mouths' lane [D nav node 3 -> (49.1, 0.4, 42.8)], got {p:?}");
     }
 }
-// STILL #[ignore] (level-14-full-walk-4): leg 1f now walks GREEN — the walk-2 hood-underside
-// blocker is gone on master (cleared by the later collision merges). In the run: the lane south
-// past the mouth arrived (45.14, 2.95, 40.77) at +58, the connector west arrived (41.88, 2.79,
-// 39.03) at +1465, the SP #276 cut-scene wrote ch 0x47 and objective 1 completes [M 0x1827d8].
-// The EXACT blocker is leg 2's start — the game's vent drop into the facility never carries
-// Bond across:
-// (a) the mezzanine's south edge is a WALL at z ~38.21, top ~3.5-3.7 [D the scratch's
-//     south-rays at x 40.9: first hit z 38.21374 for y 2.5..3.5, open from y 3.7] — not
-//     jumpable: the apex is 0.78 [M Player_HandleJump vel = -GRAVITY*0.4, GRAVITY 9.8] and
-//     clearing needs the spine bottom above 3.6, i.e. center > 4.6;
-// (b) the #301 TouchOnce (out 0xd9 [D], band 39.68..41.75 / 2.07..4.14 / 37.62..40.40) FIRES
-//     on the west walk (the connector walk crosses x 41.75 inside the band) but nothing in the
-//     port moves Bond down — the gap z 37.25..38.0 stays a deep open trench [D probe14_mouthfin
-//     C/D down-rays open past -1];
-// (c) SP #276 (0x06000833, 1400 ticks [D]) runs to its end (sim disabled ~1000 ticks, ch 0x47
-//     written) and leaves Bond at the mezzanine — the port's SP does not SetPosRot the player
-//     (the scratch printed pos constant (41.88, 2.83, 39.03) through the whole SP);
-// (d) nav_route west from the mezzanine is None: the only nearby nodes (41.3/38.7, 0.4, 36.1)
-//     sit SOUTH of the gap, unreachable on foot from the mezzanine.
-// Next session: find the game's vent-drop handoff (which script/SP record moves the player —
-// live check in docs/reports/level-14-full-walk-4.md), port it, then legs 2..6. Never red and
-// un-ignored.
-#[test]
-#[ignore]
-fn walk_the_infiltration_to_the_delta_exit() {
-    let iso = iso();
-    let mut w = Walker::new(nf_view::load_with_carry(&iso, "07000014.bin", false, None).unwrap());
+// level-14-vent-drop-2: the vent-drop hand-back is PORTED and pinned (see
+// the_vent_drop_hands_bond_into_the_facility, green): nis.rs's event-6 fallback captures the
+// scripted Bond body's world root (s18, script 0x06000857; the pack 0x06000833 has NO marker
+// entity stream [D its full stream dump], so the strict previous-stream capture finds nothing and
+// the game still carries Bond in [D walk-4 walls/nav]) and Script_Free's Player_Enable lands him
+// inside the facility at the body's event-time root. [S] unverified game-side (the live check in
+// docs/reports/level-14-vent-drop.md).
+// STILL #[ignore]: the hand-back is green but leg 2 wedges at the facility's west double door
+// (-52.2, 1.2, 40.1) (kind 2, state 0x2, pos01 0.00, ch_open 0, ch_lock 0x85, lock_flag 0,
+// approach 0 — two records at the same spot): the walker's "opening door" interaction does not
+// move it, Bond stands (-52.79, 1.14, 39.33) with the target (-49.0, 1.0, 38.4) 3.90 away, and
+// walk_to hits the 6000-tick cap. Whether the game opens it from a switch channel, the approach
+// side, or an interaction the port lacks is the next session's first question (the #381 band x
+// −51.97…−46.39 [D] sits just east of it).
+/// Legs 1a..1f walked on real input (the spawn → the crossing → the trench/corridor/stairwell →
+/// the shaft Q-Claw reel → the vent lane → the mezzanine connector), then the #301 touch → the SP
+/// #276 vent cut-scene (0x06000833) → the ch 0x47 wait → the disabled tail → the hand-back assert.
+/// Shared by the pinned hand-back test and the full delta-exit walk.
+fn walk_infiltration_to_handback(w: &mut Walker) {
     {
         let sim = w.scene.sim.as_ref().unwrap();
         let p = sim.bond.pos;
@@ -550,6 +542,39 @@ fn walk_the_infiltration_to_the_delta_exit() {
         if !w.scene.sim.as_ref().unwrap().disabled { break; }
         w.tick(nf_game::player::Input::default(), false);
     }
+    {
+        // The hand-back: Script_Free's Player_Enable landed Bond at the body's live root at event-6
+        // time [M Script_Free 0x1da880:44-48 → Player_Enable 0x195498 copies the matrix translation;
+        // the capture is the port's [S] — the report's live check 1]. The root at the scene's last
+        // tick is the anim's frame ~1106 (the body stream starts at t294 [D the pack dump], the scene
+        // ends at t1399; the seq-04000728 end (27.60, 0.98, 43.56) [D the root track] is NOT the
+        // hand-back pose — the anim's later frames carry the body further). The proven essentials:
+        // Bond is INSIDE the facility (floor y ≈ 1), past the mezzanine wall (z 38.21 [D walk-4]) —
+        // never the mezzanine he stood on and never the void.
+        let p = w.scene.sim.as_ref().unwrap().bond.pos;
+        assert!(p[1] > 0.3 && p[1] < 2.0 && p[2] < 39.5 && (25.0..35.0).contains(&p[0]),
+            "the vent cut-scene hands Bond back inside the facility at the body's event-time root [D the pack's anim root; M Player_Enable 0x195498], got {p:?}");
+        eprintln!("[014] hand-back at {p:?}");
+    }
+}
+
+/// The vent-drop hand-back PINNED (level-14-vent-drop-2): the walked infiltration ends in the SP
+/// #276 cut-scene, and Script_Free's Player_Enable (fed by the event-6 body-root fallback) stands
+/// Bond INSIDE the facility — the exact symptom level-14-full-walk-4 reported (Bond left on the
+/// mezzanine) is gone. Green un-ignored.
+#[test]
+fn the_vent_drop_hands_bond_into_the_facility() {
+    let iso = iso();
+    let mut w = Walker::new(nf_view::load_with_carry(&iso, "07000014.bin", false, None).unwrap());
+    walk_infiltration_to_handback(&mut w);
+}
+
+#[test]
+#[ignore]
+fn walk_the_infiltration_to_the_delta_exit() {
+    let iso = iso();
+    let mut w = Walker::new(nf_view::load_with_carry(&iso, "07000014.bin", false, None).unwrap());
+    walk_infiltration_to_handback(&mut w);
 
     // Leg 2: west through the facility to the Kiko cut-scene touch #381 — walked (the long cross
     // floor; the nav web threads the corridors [D]).
