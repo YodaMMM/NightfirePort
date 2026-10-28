@@ -21,3 +21,21 @@ Plan:
   where the C looks incomplete].
 - Port the missing opener; write real-input tests; un-ignore legs 2..6.
 - Full suite (cargo test crates + fast runner), push, report, finish.
+
+### level-14-west-door progress (2026-10-28 ~09:00 UTC)
+
+- The 0x85 mystery RESOLVED: touch `oDroneTrigger1b` (map 54 placement 399, kind 0xEB) at
+  (-60.30, 0.61, 38.37) has params (0,160),(1,4) -> out 0xA0, mask 4 [D]. Mask bit 0x4 is the
+  E-USE flag: `Trigger_Activate` 0x1b2318 (types 1/2) requires `mask & 4` then writes
+  `switch_channels[out]=1` [M]; `Player_Activate` 0x1a5170 case 0x1D -> Trigger_Activate [M].
+  The panel-sequence "mask matches nothing" touch is an E-USE SWITCH, not a proximity touch.
+- Chain [D]: fuseboxes 0x87+0x88 -> AND -> 0x8C; E-use -> 0xA0; SEQ_AND plc 393 [0x8C,0xA0]->0x51;
+  kill cascade plc 400(0x51->0x52) -> 787 GENERATORS(0x52->0x4e) -> 401(0x4e->0x53) -> ... ->
+  plc 403(0x5b->0x85); Door_Slide_11A/B plc 151/152 (p3=133=0x85 lock, group 99, approach 0)
+  unlock on the rising edge and auto-open [M Door_Update 0x1363c8:88-107 -> Door_Activate].
+- Scripts ruled out [D]: no script stream in 07000014/078/079/07A00014 writes 0x85/0x51/0xA0
+  (nf-extract nis census; only 0x92/0x93/0xb7/0x8a/0x47/0x0e/0xb8/0x48/0x10/0x11/0x4a writes).
+- Port status: door.rs has the rising-edge auto-open; triggers.rs activate_request has the
+  mask&4 E path; props.rs channel_kills (panel-sequence) cascades. Remaining: make the walk
+  test E-use the touch after the fusebox cuts and route legs 2..6 without the pre-unlock door
+  crossing; run and un-ignore.
