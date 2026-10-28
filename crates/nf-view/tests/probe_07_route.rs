@@ -43,10 +43,20 @@ fn probe_the_route() {
         ("the north door", [49.4, 43.6, -44.7]),
         ("the north row west", [62.7, 43.6, -44.3]),
         ("the north row east", [76.5, 43.6, -44.9]),
-        ("the hall north lane", [80.0, 43.6, -46.6]),
-        ("the hall north lane east", [90.5, 43.6, -46.6]),
     ] {
         w.walk_nav_to(at, name, 1.5);
+    }
+    // The hall crossed on MANUAL legs (no nav): the nav web's hall nodes sit in the crowd band
+    // ((79.75,−50.45) et al. [D the nav dump]) and walk Bond into the armed party bots. The
+    // manual lane hugs z ≈ −45.6, north of the crowd and of the seating the (80,−46.5) nav hop
+    // launched Bond off.
+    for (name, at) in [
+        ("the hall lane manual west", [80.0f32, 43.6, -45.6]),
+        ("the hall lane manual mid", [86.0, 43.6, -45.8]),
+        ("the hall lane manual east", [91.5, 43.6, -46.2]),
+    ] {
+        w.walk_to(Wp::new(at[0], at[1], at[2]).r(1.1), name);
+        println!("[route] {name} ok bond {:?}", w.scene.sim.as_ref().unwrap().bond.pos);
     }
     println!("[route] before E: ch48 {}", w.scene.sim.as_ref().unwrap().drones.channels.on(0x48) as u8);
     w.walk_to(Wp { at: [94.6, 43.6, -47.4], act: Act::Use { use_ticks: 240 }, arrive: 0.7 }, "E the hall door");
