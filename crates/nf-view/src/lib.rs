@@ -950,7 +950,16 @@ fn load_impl(iso_path: &str, archive: &str, all: bool, save: Option<&nf_game::pl
         for e in plb.entries.iter().filter(|e| e.kind == 4 && e.length >= 0x40) {
             if let Ok(s) = Sequence::parse(plb.data(&pd, e)) {
                 if sequences.values().any(|v| v.iter().any(|q| q.hashcode == s.hashcode)) { continue; }
-                sequences.entry(s.skeleton).or_default().push(s);
+                // The pack sequences ride the fix-cutscenes loader's SENTINEL key
+                // (`0x80 | skeleton`), NOT the gameplay bucket: the game's `LoadableLoad`
+                // 0x1d69e8 wipes the 0x4000000 hashtable and streams the pack's kind-4 rows,
+                // so they REPLACE the cache while the scene plays and NEVER join the level's
+                // per-skeleton sequence list — that list is order-sensitive gameplay data
+                // (`frame_of`'s `k % len` idle cycle, the skeleton-filtered `seq_index`). The
+                // sentinel key still reaches the by-hash map `Scene::seqs` (flattened over
+                // every bucket), the only reader a cut-scene's `Script_AnimStart` resolution
+                // and the kind-2 `anim_obj_matrix` pose use.
+                sequences.entry(s.skeleton | 0x80).or_default().push(s);
             }
         }
         for e in plb.entries.iter().filter(|e| e.kind == 3) {
