@@ -56,7 +56,7 @@ const BASELINE: &[(&str, &str)] = &[
     // sentinel-bucket flattening order in `Scene::seqs`. [S port engineering] like every pin
     // here — the mover is named (the sentinel re-key), no game claim.
     ("07000002.bin", "c7a5b7abe4577d7c 4515435 9444387 5350 4378448 81 10723 205 28 25 5"),
-    ("07000005.bin", "f205e79adf2192ca 4418933 9243759 3615 4334592 73 10657 106 19 16 4"), // the two copter SPs + their script draw slots; re-pinned 10-26: the 0x3b dynamic objects ride posed slots [M View_AddObjects 0x1e62d8:33, DynamicObject_Update 0x18d3b8]
+    ("07000005.bin", "b28f7247c6c229a9 4420067 9246489 3616 4335726 73 10657 106 19 16 4"), // the two copter SPs + their script draw slots; re-pinned 10-26: the 0x3b dynamic objects ride posed slots [M View_AddObjects 0x1e62d8:33, DynamicObject_Update 0x18d3b8]; re-pinned 10-28: the searchlight heads' block-0x27 LOD meshes (OBJECT_SearchLightBroken) on their own slots [M Control_NextLOD 0x1349b0] (+1134 verts, +1 material)
     // lift-indicators-09 re-pin: one draw slot per `Script_SubScriptStart` op per running SP
     // [M 0x1db050] — 0700000c's multi-SP sub chains add 6 slots (+248 vertices, +576 indices,
     // +1 attachment); 07000014's vent-lid SPs are placed SPs (unchanged), the rest have no
