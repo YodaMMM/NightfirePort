@@ -67,3 +67,14 @@ segment_to_target Some(0.1227), no bot within 3.0) that master's walk clears; di
 [D] and the route difference, fix the port if a collision rule is wrong [M Player_Collision], or give
 leg 6 the player's real approach with the cite. Cutoff 17:53 UTC; the suite runs foreground (this
 sandbox kills background jobs between tool calls).
+
+level-13-guards-start-alerted-8: leg 6 walked as the player's real approach — the probe
+(probe_14_delta_leg6) shows the exit pocket is off-nav, the blocker is the #121/#122 doorway's
+east reveal (a west-facing face at the y-0.65 shelf's east edge; zero displacement pressed into
+it), and the passage is the double slide doors (24.02,1.2,-22.8 [D]) — E a toggle [M Door_Activate
+0x135be0] answered from CLOSED and from CLOSING. The three legs (approach → E → the exit) arrive
+from both the leg-6 start and the wedge spot; walkreal_07000014_live 5/5 (Countdown Part 1
+finishable), walkreal_07000013_live 1/1 (Double Cross Part 1 finishable). Suite: the mission-walk
+slice 50 passed / 0 failed (14 binaries incl. master's switch_wall_probe); the full total line
+did not fit the window (background jobs die between tool calls here; the audio binaries alone
+burned a 9.3-min slice at 54 binaries).
