@@ -82,3 +82,18 @@ freezes it at (79.48,−50.32) with the creep raced to leg 13→14: the probe_mo
 3225] blocks the body while Route::follow's creep keeps advancing (the game's body never blocks — root
 motion has no world gate, the only horizontal constraint is the bounds push [M 0x13b490/0x157bd0, see
 walls-990 note]). Scratch probe probe_drone5_mouth.rs holds the anatomy.
+
+drone-bump-collision-5 trap round: the walker's doorway anti-trap now plays the player's three beats —
+wait the bot through (300 ticks, break early when she clears the 2.6 band or walks 1.2), break the
+capsule contact radially (the mouth's wall absorbs the blocked component), then cross on a vision fan
+(3 m world rays around the goal bearing, best mix of goal progress and capsule clearance, re-read every
+tick; past = 0.8 behind her along the crossing). The gap-scan probe (probe_drone5_gap.rs) maps the
+mouth: from the pin (79.20,−51.25) only the 45..75° world rays reach the hall and the open-leaf/jamb
+blocks the north arc — while dr22 parks at (79.51,−50.32) the passable band is ~0.1 m and NOTHING
+walks through; the fan correctly picks the direct east ray and the Jointy push cancels it (400 ticks,
+zero displacement [the trap trace]). The trap also refreshed self.pos per tick (it was stale inside the
+wait/fan loops — the aims computed from a frozen origin). walkreal_07000007_live's second test now
+wedges at the same mouth (it does not opt into crowd_aware — the moved shared-RNG phase parks dr22 on
+its route too). The verdict stands: the port's probe_move stand-in parks the armed guest mid-mouth; the
+game's root motion is ungated [M 0x13b490/0x157bd0] so she walks through and the player waits — the
+bot-side move model is the next round's fix, with the live checks in the report.
