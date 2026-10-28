@@ -166,3 +166,14 @@ tree: cutscene_timer_pause_live 1/0 GREEN, walkreal_07000007_live 2/0 GREEN, par
 -46.32), grounded=false, floor 0.23 below — not a guard push). Report:
 docs/reports/drone-bump-collision-8.md — two live checks own the open arms (the at-post push
 killer; the east door's real use zone).
+
+drone-bump-collision-9 start (19:45 UTC): branch opened from origin/s/drone-bump-collision-8,
+merged origin/master (conflict in scene.rs bot_capsules resolved for the -8 lineage filter —
+kind_464 + CIVILIAN_DOOR_GUARD exclusion + straddle — with master's corpse-gate citation folded
+into the comment). Scope: (1) probe_07_route's post-E hover wedge — Bond (93.40, -46.32) hangs
+0.23 over the floor, grounded=false, 6000-tick leg: find which floor/portal/door-leaf face the
+port's scoped floor ray reads there vs the game [M Player_FeetOnPoint 0x194188, Player_Collision
+0x194df0, the open leaf's dynamic tris] and fix it; (2) party_door_lock's sister "#244 still
+answers the use key" — derive the door's real use zone from its 0x48 trigger bounds [D] and the
+use path [M Player_Activate 0x1a5170], re-derive the stand point with the cite. Work in
+progress; will update as steps land.
