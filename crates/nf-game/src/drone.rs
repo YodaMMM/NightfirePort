@@ -5405,9 +5405,24 @@ impl Drone {
                 true
             }
             (HIDE_FROM_SCARY_OBJECT, msg::EXIT) => { self.scared = false; true }
-            // ENTER: the mission-bot path (+0xC5 == 0xC) is not ported; else +0x2B = 0 and +0x5A0 != 0x89 → 0x56
-            // (the port has no RunToAlarm 0x89, so always Attack) [M 0x173658:22-42]. No anim is played here.
-            (RECOVER_FROM_SCARY_OBJECT, msg::ENTER) => { self.scared = false; self.set_state(ATTACK); true }
+            // ENTER [M 0x173658 case 1]: the mission-lead MODE byte 0x0C re-anchors the mission route
+            // (`NDrone2_ReFindMissionPath` 0x153a30) and returns to ALLY_LEAD_WAIT 0x20 — GO_TO_GOAL
+            // 0x63 when the re-anchor fails; the other modes clear the scare latch (+0x2B) and resume
+            // ATTACK 0x56 (or the challenge 0x89 when the alert snapshot +0x5A0 holds it — the port has
+            // no RunToAlarm 0x89, so always Attack). No anim is played here. The old unconditional
+            // ATTACK sent the escorted contact through the civilian scared chain into CIVILIAN_HIDING
+            // — the escort_follow red (level-13-guards-7; the -6 corpse fix shifted the shared-RNG
+            // stream so the guard-15 fight's grenade now reaches the escort's explosive scan).
+            (RECOVER_FROM_SCARY_OBJECT, msg::ENTER) => {
+                if self.mode == 0x0c {
+                    let re = self.re_find_mission_path(d);
+                    self.set_state(if re { ALLY_LEAD_WAIT } else { GO_TO_GOAL });
+                } else {
+                    self.scared = false;
+                    self.set_state(ATTACK);
+                }
+                true
+            }
             _ => false,
         })
     }
@@ -6907,6 +6922,15 @@ impl Drone {
                 // (0x5a), 0x164838 (0x5c)]. AlertToPosition's is the constant 0x56 [M 0x165270:145-148],
                 // which the ATTACK fall-through already gives.
                 else if matches!(s, COMBAT_NO_MOVE | COMBAT_OUT_OF_RANGE | COMBAT_NO_SIGHT) { s }
+                // The ally-lead family's case-0x21 arms: ConsiderExplosive with the state's own resume —
+                // ALLY_LEAD_INIT passes 0 [M 0x15e4f0:64], every other lead state its own state
+                // [M 0x15e698:131, 0x15eda8:90, 0x15ec08:64, 0x15efc8:56, 0x15ea28:86, 0x15f120:71,
+                // 0x15f2e8:38], the ally cover run 0x28 [M 0x15f938:61]. The old ATTACK fall-through
+                // returned the escorted contact into combat instead of the ally machine — the
+                // escort_follow 0x86 red (the -6 corpse fix shifted the shared-RNG stream, so the
+                // guard-15 fight's grenade now lands inside the escort's scan radius).
+                else if s == ALLY_LEAD_INIT { 0 }
+                else if matches!(s, ALLY_LEAD | ALLY_LEAD_WAIT | LEAD_HIDE | LEAD_MISSION_WAIT | PLAYER_IN_WAY | LEAD_BOND_COMBAT | ALLY_LEAD_DONE | GO_TO_GOAL_ALLY) { s }
                 else { ATTACK };
             self.take_explosive_msg(d, frame, resume);
             return true;

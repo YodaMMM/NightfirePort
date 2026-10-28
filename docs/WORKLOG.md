@@ -45,3 +45,17 @@ Branch created and the master merge landed (one conflict in bathhouse_voices_liv
 Both 07000001 reds green on the branch tree (walkreal_07000001_live 4/4, --test-threads=1). Two fixes: (1) the port's near-bot capsule set (Collide_Jointy 0x1ec180 via LadderCtx::bot_capsules) now excludes corpses — SetAsDead 0x14a2f0:9 sets 0x4F8&0x200 and DoCollision 0x149ec8:11 returns 0 for dead bots on every level but 0x700004a, so the game presents no corpse capsule; the old filter let a fresh corpse's capsule top (pos+0.4) hold airborne Bond 1.14 above the floor at the east-door pile, every nav leg died at the cap, and the escort waited forever in AllyLeadWait (Bond out of the [M 0x153f50] node scan, path 0.0, never inside the [M 0x15eda8] 5.0 release band). (2) the [01f] walk's closes/trails now round the hall's south structure by its north end (the AI's own node[23] (3.39,14.69) → node[7] (6.88,14.62) lane [D nav path 0]) when the straight line to the contact crosses collision — the corner's x≈6.03/z≈11.05 walls box Bond ([D the disc's collision cels; the port's segment fan]) and the doorway band x 6.5-7.9 z 12.0-10.4 is the opening. Next: the suite slices that fit the window (background is killed between tool calls in this sandbox — proven again this session), then the report.
 
 level-13-guards-start-alerted-7 start: branch = s/level-13-guards-start-alerted-6 (011027d0) merged with origin/master (17aa36ab — carries the un-ignored 07000014 delta-exit walk; the merge touched only walkreal_07000014_live.rs), clean. This round: the two merged-tree reds — escort_follow_07000001_live's "the escort left the ally machine: state 0x86" (:137) and walkreal_07000014_live's "Rook's death channel 0x54" (:858) — find the game's answer [M] and fix the port or re-derive the test. Suite next; cutoff 16:04 UTC.
+
+level-13-guards-start-alerted-7: both reds' port sides fixed — (1) the escort: the ally-lead family's
+case-0x21 explosive resumes were missing (the fallback handed ALLY_LEAD resume ATTACK) — added [M
+0x15e4f0:64 resume 0; 0x15e698:131 / 0x15eda8:90 / 0x15ec08:64 / 0x15efc8:56 / 0x15ea28:86 /
+0x15f120:71 / 0x15f2e8:38 own state; 0x15f938:61 → 0x28] — and RECOVER_FROM_SCARY_OBJECT's mission-lead
+arm landed [M 0x173658 case 1: mode 0x0c → ReFindMissionPath → 0x20, fail 0x63; else +0x2B=0 → 0x56]:
+Mayhew's grenade flee now cycles back into the ally machine (the flee ran 8800 ticks into
+CIVILIAN_HIDING before). escort_follow green (2085 distance checks, the flee grace window pinned in
+the test with the cites). (2) Rook: the sight bit walks him into the combat chain and his bullet death
+lands in DeathByExplosion whose channel drain runs the tick AFTER the kill [L the +0 poll: ch54 true
+at +0] — the test's same-tick read now polls 30 ticks with the [M 0x163a80:44-59] delivery cite; ch54 +
+objective 4 pass. Remaining red in that test: leg 6 (to the Delta exit #944) wedges on WORLD geometry
+at (23.85,1.2,-24.72) (no bots within 3; segment hit t=0.12, cel 16) — next window's item. Suite
+running on the final tree; totals in the report.

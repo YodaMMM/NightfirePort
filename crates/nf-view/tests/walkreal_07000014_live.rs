@@ -853,11 +853,18 @@ fn walk_the_infiltration_to_the_delta_exit() {
         assert!(w.resupply(&format!("Rook attempt {attempt}")), "no ammo for the Rook kill");
     }
     assert!(dead, "Rook must die to the walked gun path");
-    {
-        let sim = w.scene.sim.as_ref().unwrap();
-        assert!(sim.drones.channels.on(0x54), "Rook's death channel 0x54 fires [D param 12; M 0x13e660]");
-        // fix-objective-banner: the monitor completes the objective the tick after the channel.
+    // The death channel's delivery [M 0x13e660 via the death DSTATEs - DeathByExplosion 0x163a80:44
+    // (case 2), :59 (case 0xc), the case-3 drain] runs on the death state's own ticks, at least one
+    // after the ENTER that lands the corpse. The walked kill completes inside one walker tick and the
+    // channel lands the next - a same-tick read is not the game's contract (level-13-guards-7: with
+    // the sight bit Rook dies out of the combat chain, whose final bullet ticks one slot later).
+    let mut ch54 = false;
+    for _ in 0..30 {
+        if w.scene.sim.as_ref().unwrap().drones.channels.on(0x54) { ch54 = true; break; }
+        w.tick(nf_game::player::Input::default(), false);
     }
+    assert!(ch54, "Rook's death channel 0x54 fires [D param 12; M 0x13e660; M 0x163a80:44-59 - the death DSTATE's case 2/3/0xc delivery]");
+    // fix-objective-banner: the monitor completes the objective the tick after the channel.
     for _ in 0..2 { w.tick(nf_game::player::Input::default(), false); }
     assert_eq!(w.scene.sim.as_ref().unwrap().drones.mission.states[20][3], 4, "objective 4 completes [M 0x1827d8]");
 
