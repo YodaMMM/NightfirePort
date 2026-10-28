@@ -103,8 +103,14 @@ correct as-is).
   `walkreal_07000001_live` run passed 4/4 (76.52 s), including
   `following_mayhew_down_completes_the_level`** — the final tree validated inside the runner.
   The FAILED set so far is exactly the 4 allowed slim-ISO failures
-  (`identity_disc::the_real_disc_passes_the_identity_check`, 3 × `disc_golden`); the pass was
-  still working through the remaining binaries at report time.
+  (`identity_disc::the_real_disc_passes_the_identity_check`, 3 × `disc_golden`). Two additional
+  CRASH lines appeared — `mp_stress_explosives_live` and `mp_online_failures`, both `exit -9`
+  (SIGKILL) — while this sandbox was simultaneously running the task's own direct walkreal runs
+  beside the suite (3 GB RAM total); a standalone re-run of `mp_online_failures` was green through
+  its first two tests and then was killed again the same way with the suite still running, and the
+  `mp_stress_explosives_live` explosives-spam binary was killed standalone too — sandbox memory,
+  not test logic. Neither binary is touched by this task; the next session can re-run them alone.
+  The pass was still working through the remaining binaries at report time.
 
 ## Live checks for the main agent
 
