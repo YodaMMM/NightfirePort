@@ -1029,7 +1029,9 @@ impl Script {
                 // proven path.
                 if self.player_at.is_none() && self.nis.hashcode == 0x0600_0833 {
                     match objs.list.iter().rev().flatten().next() {
-                        Some(Obj::Anim { script: 0x0600_0857, root, .. }) => {
+                        // A world that never resolves the root (no `anim_root`) leaves the seed IDENT:
+                        // keep the strict fallback rather than handing Bond back at the origin.
+                        Some(Obj::Anim { script: 0x0600_0857, root, .. }) if *root != IDENT => {
                             if std::env::var("NF_SCRIPTLOG").is_ok_and(|v| v == "1") {
                                 eprintln!("[scriptlog] vent fallback: body root ({:.2},{:.2},{:.2})", root[3][0], root[3][1], root[3][2]);
                             }
