@@ -31,3 +31,12 @@ origin/master. nis.rs conflict resolved onto the general rule: one per-interp an
 + World::anim_obj_matrix), master's root/anim_root dropped, the 0x06000833 vent fallback reads the general
 matrix with its IDENT guard. Target: the three reds (models_characters g021, load_scene_equality,
 bath_hatch_02) + the full suite total line.
+
+### cutscene-handback-anim-prev-4, session end (10:45 UTC)
+
+The merge resolved onto the general per-interp anim matrix (root/anim_root dropped, the 0x06000833 fallback
+reads Obj::Anim.matrix with the IDENT guard). The three tasked reds green: g021 via the sentinel re-key
+[M LoadableLoad 0x1d69e8, the fix-cutscenes precedent], the equality re-pin ([S] pin, mover named),
+bath_hatch_02 re-derived from the real start [L] + the hold-position E phase. Suite on the final tree:
+877 binaries built; the run phase in flight at the cutoff — 314 run, 1034 passed, 1 failed (the no-GPU
+pylon probe, environment), 98 ignored; details in the report.
