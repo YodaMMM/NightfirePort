@@ -39,3 +39,19 @@ Plan:
   mask&4 E path; props.rs channel_kills (panel-sequence) cascades. Remaining: make the walk
   test E-use the touch after the fusebox cuts and route legs 2..6 without the pre-unlock door
   crossing; run and un-ignore.
+
+### level-14-west-door final (2026-10-28 09:25 UTC)
+
+- MISSING LINK FOUND AND PINNED: the west double door's 0x85 comes from the kill cascade whose
+  root is touch `oDroneTrigger1b` (map 54 placement 399, out 0xA0, mask 0x4) — mask bit 0x4 is
+  the E-USE flag [M Trigger_Activate 0x1b2318:23-33; Player_Activate 0x1a5170 case 0x1D], not a
+  contact class [M Trigger_Hit 0x1b1fc8]. It is a switch the player presses E on; SEQ_AND 393
+  [0x8C, 0xA0] → 0x51 arms the cascade. The 1-tick pulse suffices (Trigger_Calc 0x1b1900 clears
+  type-2 touch outs per frame; the newest-first control walk reads the pulse one frame late
+  [M 0x134698 + 0x1336f8]).
+- No product code changed — the port already had every piece. New green test
+  `the_e_use_switch_fires_the_sabotage_cascade_and_opens_the_west_door` (walkreal_07000014_live):
+  E through the real use path → 0xA0 → 0x51 pulse → cascade → 0x85 → the door unlocked, lock
+  field cleared, pos01 > 0.5. Binary total: 4 passed / 0 failed / 1 ignored.
+- The delta-exit walk stays #[ignore]: leg 2's nav route crosses the locked door plane (the
+  next blocker is the route, not the mechanics) — the report carries the waypoint fix plan.
