@@ -649,3 +649,248 @@ fn the_hall_guards_wait_for_the_meet_scenes_channel() {
     assert!(waiting.iter().all(|&s| s == nf_game::drone::state::WAIT_SWITCH),
         "every ch-0xE guard must sit in WAIT_SWITCH while the meet plate is unfired (states {waiting:?}) [M NDrone2_DSTATE_Global]");
 }
+
+/// The driver's real path: clear the ambush, then FOLLOW Mayhew down — Bond stays behind him on
+/// the whole descent (never the walker's tuned plate-first lead), Mayhew's mission route runs to
+/// its end (path-0 node 36, INSIDE the LoadPointActivator plate volume [D the nav dump: node 36
+/// (-32.947, 3.695, 12.837) vs the plate lo (-33.80, 0.64, 12.17) hi (-32.41, 3.96, 18.68)]), and
+/// the game's AllyLeadDone parks him there [M NDrone2_DSTATE_AllyLeadDone 0x15f2e8 case 3
+/// falls to the default — no movement]. Bond then steps onto the plate: the AND (mask 0x18,
+/// filter skin 0x4F [M Trigger_Hit 0x1b1fc8]) fires ch 0x10 → the exit loads 07000002.
+#[test]
+fn following_mayhew_down_completes_the_level() {
+    let iso = iso();
+    let mut w = Walker::new(nf_view::load(&iso, "07000001.bin", false).expect("load 07000001"));
+    // ---- the route to the stairwell head (the main test's play, condensed) ------------------
+    for t in 0..4000u32 {
+        w.tick(Default::default(), false);
+        if w.scene.sim.as_ref().unwrap().drones.channels.on(0xb) {
+            eprintln!("[01f] intro ch 0xB at tick {t}"); break;
+        }
+    }
+    w.wait_enabled(6000, "the intro tail");
+    w.wait(300);
+    let sim = w.scene.sim.as_ref().unwrap();
+    let ci = sim.drones.list.iter().position(|d| d.skin == 0x0500_004f).expect("the contact");
+    drop(sim);
+    w.shield = Some(ci);
+    let plate = walker::trigger_centre(w.scene.sim.as_ref().unwrap(), walker::trigger_kind::TOUCH, 0x10).expect("the AND-touch plate");
+    // Clear whatever armed guard stands within 14 of the contact (the hide exit needs the coast
+    // clear [M NDrone2_NotNearArmedDrone 0x177640]).
+    let mut cleared = std::collections::HashSet::new();
+    let clear_around = |w: &mut Walker, cleared: &mut std::collections::HashSet<usize>, label: &str| {
+        let guards: Vec<usize> = {
+            let sim = w.scene.sim.as_ref().unwrap();
+            let cp = sim.drones.list[ci].pos;
+            (0..sim.drones.list.len()).filter(|&i| {
+                let d = &sim.drones.list[i];
+                i != ci && d.team == 1 && d.started && !d.corpse && d.enabled && d.health > 0.0
+                    && ((2..0x47).contains(&d.weapon) || (0x6a..=0x71).contains(&d.weapon))
+                    && walker::dxz(d.pos, cp) < 14.0 && !cleared.contains(&i)
+            }).collect()
+        };
+        for g in guards {
+            let (gpos, los_clear) = {
+                let sim = w.scene.sim.as_ref().unwrap();
+                let d = &sim.drones.list[g];
+                let bp = sim.bond.pos;
+                let eye = [bp[0], bp[1] + sim.bond.eye - sim.bond.crouch_drop, bp[2]];
+                (d.pos, sim.world.segment(eye, [d.pos[0], d.pos[1] + 0.3, d.pos[2]]).is_none())
+            };
+            if walker::dxz(gpos, w.scene.sim.as_ref().unwrap().bond.pos) > 9.0 || !los_clear {
+                w.walk_nav_to(gpos, &format!("{label}: approach guard {g}"), 3.0);
+            }
+            if w.scene.sim.as_ref().unwrap().gun.clip + w.scene.sim.as_ref().unwrap().gun.spare < 8 { w.resupply("ammo"); }
+            if w.scene.sim.as_ref().unwrap().gun.clip + w.scene.sim.as_ref().unwrap().gun.spare == 0 { continue; }
+            let killed = w.shoot(g, &format!("{label}: guard {g}"))
+                || { if w.resupply("ammo retry") { w.shoot(g, &format!("{label}: guard {g}")) } else { false } };
+            let sim = w.scene.sim.as_ref().unwrap();
+            let dead = sim.drones.list[g].corpse || sim.drones.list[g].health <= 0.0;
+            drop(sim);
+            if killed || dead { cleared.insert(g); }
+        }
+    };
+    clear_around(&mut w, &mut cleared, "spawn side");
+    // The meet beat: walk the plate at (6.8, 6.0, 8.9) → ch 0x32 → the 0x33 mirror → SP #276 → ch 0xE.
+    w.walk_nav_to([6.8, 6.0, 8.9], "the meet plate (NE hall)", 1.0);
+    {
+        let sim = w.scene.sim.as_ref().unwrap();
+        let meet = sim.drones.triggers.iter()
+            .find(|t| t.kind == walker::trigger_kind::TOUCH_ONCE && t.out == 0x32)
+            .map(|t| t.centre()).expect("the meet plate");
+        drop(sim);
+        w.walk_to(Wp { at: meet, act: Act::None, arrive: 0.25 }, "onto the meet plate");
+        for (dx, dz) in [(0.0f32, 0.9f32), (0.0, -0.9), (0.9, 0.0), (-0.9, 0.0)] {
+            if w.scene.sim.as_ref().unwrap().drones.channels.on(0x32) { break; }
+            w.walk_to(Wp { at: [meet[0] + dx, meet[1], meet[2] + dz], act: Act::None, arrive: 0.2 }, "the meet plate sweep");
+            if w.scene.sim.as_ref().unwrap().drones.channels.on(0x32) { break; }
+            w.walk_to(Wp { at: meet, act: Act::None, arrive: 0.2 }, "back across the meet plate");
+        }
+    }
+    assert!(w.scene.sim.as_ref().unwrap().drones.channels.on(0x32), "the meet plate must fire ch 0x32");
+    let mut e_at = None;
+    for t in 0..2400u32 {
+        w.tick(Default::default(), false);
+        if w.scene.sim.as_ref().unwrap().drones.channels.on(0xe) { e_at = Some(t); break; }
+    }
+    assert!(e_at.is_some(), "the meet scene must write ch 0xE");
+    w.wait(120);
+    // Pre-hall ammo, then the hall's three named guards (death channels 0x11/0x12/0x13) → ch 0x99.
+    {
+        let sim = w.scene.sim.as_ref().unwrap();
+        let dry = (sim.gun.clip as i32) + (sim.gun.spare as i32) < 48;
+        drop(sim);
+        if dry { w.resupply("pre-hall ammo"); }
+    }
+    w.walk_nav_to([2.9, 6.3, 16.3], "stage into the hall (east door)", 3.0);
+    let named: Vec<usize> = {
+        let sim = w.scene.sim.as_ref().unwrap();
+        (0..sim.drones.list.len()).filter(|&i| [0x11u8, 0x12, 0x13].contains(&sim.drones.list[i].death_channel)).collect()
+    };
+    for g in named {
+        let gpos = w.scene.sim.as_ref().unwrap().drones.list[g].pos;
+        if walker::dxz(gpos, w.scene.sim.as_ref().unwrap().bond.pos) > 9.0 {
+            walker::hall_restage(&mut w, "hall restage");
+        }
+        w.walk_nav_to(gpos, &format!("approach hall guard {g}"), 3.0);
+        if w.scene.sim.as_ref().unwrap().gun.clip + w.scene.sim.as_ref().unwrap().gun.spare < 8 {
+            walker::hall_ammo_ladder(&mut w, "hall ammo");
+        }
+        if !w.shoot(g, &format!("hall guard {g}")) {
+            if w.resupply("hall ammo") { w.shoot(g, &format!("hall guard {g}")); }
+        }
+    }
+    w.wait(30);
+    assert!(w.scene.sim.as_ref().unwrap().drones.channels.on(0x99), "the hall AND must fire ch 0x99");
+    // Follow the contact out of the hall to the stairwell head (the main test's follow loop, but
+    // stopping AT the head — the FOLLOW begins at the descent).
+    let head: V3 = [-30.8, 6.4, 13.1];
+    for round in 0..12 {
+        let settled = w.follow(ci, &format!("the contact r{round}"), 12000, head);
+        if walker::dxz(settled, head) < 4.0 { break; }
+        let before = cleared.clone();
+        clear_around(&mut w, &mut cleared, "lead r");
+        let sim = w.scene.sim.as_ref().unwrap();
+        let wedged = settled == w.scene.sim.as_ref().unwrap().drones.list[ci].pos
+            && sim.drones.list[ci].state != nf_game::drone::state::PLAYER_IN_WAY;
+        drop(sim);
+        if cleared == before && wedged {
+            // No guard to clear and he didn't move: close on him (the AllyLeadWait release band
+            // [M 0x15eda8 case 3] needs Bond within 5.0 straight-line when pd == 0.0).
+            let cp = w.scene.sim.as_ref().unwrap().drones.list[ci].pos;
+            w.walk_nav_to(cp, "close on the contact", 1.2);
+        }
+    }
+    clear_around(&mut w, &mut cleared, "stairwell head");
+    // ---- THE FOLLOW: trail him down the stairwell, never overtaking --------------------------
+    // The trail point sits 4.0 behind him on the Bond→contact line: outside the PlayerInWay
+    // 3.5 stay band [M 0x15ea28:32-47], and close enough that the LeadWait band cannot hold —
+    // the wait enters at pd ≤ −9.0 / (pd == 0.0 && dist ≥ 5.0) [M 0x15e698 case 3] and releases
+    // at pd > −7.0 [M 0x15eda8 case 3]; a 5.5 trail on the corridor's zigzag read ~7.8
+    // route-units and parked him in AllyLeadWait (the first run's stall at (−18.8, 14.6)).
+    let mut trail_still = 0u32;
+    let mut last_cp = w.scene.sim.as_ref().unwrap().drones.list[ci].pos;
+    let mut rounds = 0u32;
+    let mut closed_in = 0u32;
+    let parked_at;
+    loop {
+        rounds += 1;
+        assert!(rounds < 120, "the follow never settled: contact at {:?} state {:#x}",
+            w.scene.sim.as_ref().unwrap().drones.list[ci].pos, w.scene.sim.as_ref().unwrap().drones.list[ci].state);
+        if w.scene.sim.as_ref().unwrap().drones.channels.on(0x10) { parked_at = w.scene.sim.as_ref().unwrap().drones.list[ci].pos; break; }
+        let (cp, cstate) = {
+            let sim = w.scene.sim.as_ref().unwrap();
+            (sim.drones.list[ci].pos, sim.drones.list[ci].state)
+        };
+        // Parked: the route is done (AllyLeadDone parks [M 0x15f2e8]).
+        if cstate == nf_game::drone::state::ALLY_LEAD_DONE {
+            eprintln!("[01f] the contact parked in AllyLeadDone at ({:.2},{:.2},{:.2}) after {rounds} follow rounds — tick {}",
+                cp[0], cp[1], cp[2], w.total_ticks);
+            parked_at = cp;
+            break;
+        }
+        if walker::dxz(cp, last_cp) < 0.05 { trail_still += 60; } else { trail_still = 0; closed_in = 0; }
+        last_cp = cp;
+        if trail_still > 600 {
+            // He stood still 10 s — a player closes the gap: the wait's own release
+            // ([M 0x15eda8 case 3] pd > −7.0 && (pd != 0.0 || dist < 5.0)) and the PlayerInWay
+            // exit both come from Bond's position. Two closes, then give up with the dump.
+            closed_in += 1;
+            trail_still = 0;
+            if closed_in > 2 {
+                eprintln!("[01f] the contact stood still 30 s at ({:.2},{:.2},{:.2}) state {cstate:#x} despite {closed_in} closes — tick {}",
+                    cp[0], cp[1], cp[2], w.total_ticks);
+                parked_at = cp;
+                break;
+            }
+            eprintln!("[01f] the contact stood still 10 s at ({:.2},{:.2},{:.2}) state {cstate:#x} — closing in (the release bands [M 0x15eda8])",
+                cp[0], cp[1], cp[2]);
+            w.walk_nav_to(cp, "close on the waiting contact", 3.0);
+            continue;
+        }
+        // Guards near him first (the hide keeps him off the route); the approach may overtake —
+        // a player swaps positions for a fight, then falls back in behind.
+        let armed_near = {
+            let sim = w.scene.sim.as_ref().unwrap();
+            let cp = sim.drones.list[ci].pos;
+            (0..sim.drones.list.len()).any(|i| {
+                let d = &sim.drones.list[i];
+                i != ci && d.team == 1 && d.started && !d.corpse && d.enabled && d.health > 0.0
+                    && ((2..0x47).contains(&d.weapon) || (0x6a..=0x71).contains(&d.weapon))
+                    && walker::dxz(d.pos, cp) < 14.0 && !cleared.contains(&i)
+            })
+        };
+        if armed_near { clear_around(&mut w, &mut cleared, "follow"); continue; }
+        let bp = w.scene.sim.as_ref().unwrap().bond.pos;
+        let (dx, dz) = (cp[0] - bp[0], cp[2] - bp[2]);
+        let l = (dx * dx + dz * dz).sqrt().max(1e-3);
+        let trail = [cp[0] - dx / l * 4.0, cp[1], cp[2] - dz / l * 4.0];
+        w.walk_nav_to(trail, &format!("trail the contact {rounds}"), 2.0);
+    }
+    // The endgame state: the contact where the follow left him, Bond behind.
+    {
+        let sim = w.scene.sim.as_ref().unwrap();
+        let d = &sim.drones.list[ci];
+        eprintln!("[01f] follow done: contact at ({:.2},{:.2},{:.2}) state {:#x} route {:?} bond at ({:.2},{:.2},{:.2}) tick {}",
+            d.pos[0], d.pos[1], d.pos[2], d.state, d.route.as_ref().map(|r| (r.index, r.nodes.len())),
+            sim.bond.pos[0], sim.bond.pos[1], sim.bond.pos[2], w.total_ticks);
+        // Who could hold the hide / block the AND: every live armed guard within 20 of him.
+        for (i, o) in sim.drones.list.iter().enumerate() {
+            if i == ci || o.team != 1 || !o.started || o.corpse || !o.enabled || o.health <= 0.0 { continue; }
+            let dd = walker::dxz(o.pos, d.pos);
+            if dd < 20.0 {
+                eprintln!("[01f] armed peer {i} skin {:#x} at ({:.1},{:.1},{:.1}) d {:.1} state {:#x} health {:.0} weapon {:#x}",
+                    o.skin, o.pos[0], o.pos[1], o.pos[2], dd, o.state, o.health, o.weapon);
+            }
+        }
+    }
+    // Bond takes the plate (the player's final step — the AND needs him in the volume).
+    w.walk_nav_to(plate, "Bond onto the plate", 0.8);
+    // The AND needs BOTH touchers inside the volume for a beat [M Trigger_Hit 0x1b1fc8]; wait for it.
+    let mut fired = None;
+    for t in 0..600u32 {
+        w.tick(Default::default(), false);
+        if w.scene.sim.as_ref().unwrap().drones.channels.on(0x10) { fired = Some(t); break; }
+    }
+    let sim = w.scene.sim.as_ref().unwrap();
+    let d = &sim.drones.list[ci];
+    eprintln!("[01f] after the plate wait: ch 0x10 fired at {fired:?}; contact ({:.2},{:.2},{:.2}) state {:#x} bond {:?}",
+        d.pos[0], d.pos[1], d.pos[2], d.state, sim.bond.pos);
+    let contact_toucher = nf_game::triggers::Toucher {
+        a: [d.pos[0], d.pos[1] - 1.0, d.pos[2]], b: d.head(), r: 0.4, drone: true, skin: d.skin, contain: true,
+    };
+    // On-foot Bond: `contain: !hanging` with hanging false — the sim's own on-foot construction
+    // [drone.rs 16711], and this walk never leaves the ground.
+    let bond_toucher = nf_game::triggers::Toucher {
+        contain: true, ..nf_game::triggers::Toucher::player([sim.bond.pos[0], sim.bond.pos[1] - 0.6, sim.bond.pos[2]])
+    };
+    if let Some(t) = sim.drones.triggers.iter().find(|t| t.kind == walker::trigger_kind::TOUCH && t.out == 0x10) {
+        eprintln!("[01f] plate lo {:?} hi {:?}: contact touched_by={} bond touched_by={}",
+            t.lo, t.hi, t.touched_by(&contact_toucher), t.touched_by(&bond_toucher));
+    }
+    assert!(fired.is_some(), "the AND-touch must fire with Bond AND the parked contact on the plate");
+    drop(sim);
+    assert_eq!(w.scene.sim.as_ref().unwrap().drones.level_exit, Some(0x0700_0002), "the exit fires to 07000002");
+    eprintln!("[01f] level_exit to 07000002 at tick {} (follow route)", w.total_ticks);
+    for f in &w.report.falls { eprintln!("[01f] fall: {f}"); }
+}
