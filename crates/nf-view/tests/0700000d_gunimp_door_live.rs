@@ -72,6 +72,16 @@ fn mount(scene: &nf_view::scene::Scene) -> ([f32; 3], [f32; 3], f32, f32) {
     (g.muzzle(), g.barrel_dir(), g.yaw_base + g.yaw_s, g.pitch_s)
 }
 
+/// The mount's RAW aim next to the smoothed mirrors: (muzzle, raw yaw, raw pitch, smoothed yaw,
+/// smoothed pitch). The raw pair is ext+0x74/0x70 — the stick's own position [M GunImp_Update
+/// 0x1320d8:124-135]; the smoothed mirrors ext+0x84/0x80 ease onto it at 0.15/tick [M :136-161]
+/// and drive the barrel matrices [M :165-173].
+fn mount_raw(scene: &nf_view::scene::Scene) -> ([f32; 3], f32, f32, f32, f32) {
+    let sim = scene.sim.as_ref().unwrap();
+    let g = sim.drones.props.gunimps.iter().find(|g| g.active).unwrap();
+    (g.muzzle(), g.yaw_base + g.yaw, g.pitch, g.yaw_base + g.yaw_s, g.pitch_s)
+}
+
 /// bigdoor02 #96's bounds centre — the C5 leaf the objective names [D placements; props.parse].
 fn c5(scene: &nf_view::scene::Scene) -> [f32; 3] {
     let d = c5_b(scene);
@@ -128,13 +138,19 @@ fn hold_fire(scene: &mut nf_view::scene::Scene, shots: u32, max_ticks: u32, done
     (ticks, fired)
 }
 
-// level-0d-c5-door-laser: the drain machinery is green (the trace shows −50.0 a landed contact,
-// the death catch at −50 [L], the same-frame channel smash of bigdoor01), but through THIS
-// harness the mount lands only ~5 contacts and then stops taking effect (heat/trigger quirk —
-// the held fire keeps the beam up yet the health freezes). The end-state asserts stay written
-// and the next message diagnoses the sustained-fire path; see the task report.
+// level-0d-c5-door-laser-2: the sustained-fire stall is found — it was THIS harness's aim loop,
+// not the port's fire path. The loop measured convergence on the SMOOTHED aim (a 0.02 window),
+// but the smoothed mirror lags the raw by the ease [M GunImp_Update 0x1320d8:136-161]: a
+// saturating approach breaks the loop with the raw still ~0.1 rad past the target, and the
+// zero-input ticks then ease the barrel past the door (the settled beam dug into the deck
+// ~4 units short — beam far y 3.985 vs the door's y-lo 3.9875 in the probe trace). The
+// decompile-checked fire path is faithful: the 0.15 ease [M :136-161], the round's spawn
+// origin/direction from the smoothed cel matrix [M :325 Mat_GetDir + :196-211 the muzzle], the
+// every-tick re-trigger under the held trigger (cooldown refills 1.0, drains 1.0/tick [M
+// :107-112, :324]). The game's own [L] rest-drain shape is: the player rests the STICK (the raw
+// aim) on the door, the ease settles the barrel onto it, and the held trigger drains −50/tick.
+// The loop now converges on the RAW aim and coasts the ease before the trigger.
 #[test]
-#[ignore = "the sustained-fire harness stalls after ~5 landed contacts — next message continues (level-0d-c5-door-laser report)"]
 fn the_beam_drains_the_c5_door_at_50_a_tick_and_the_smash_fires_at_zero() {
     let Some(mut scene) = mounted_after_plate() else { eprintln!("NF_ISO not set or the mount is unreachable — skipping"); return };
     let target = c5(&scene);
@@ -151,35 +167,48 @@ fn the_beam_drains_the_c5_door_at_50_a_tick_and_the_smash_fires_at_zero() {
     // shots must NOT kill (the old one-contact smash would be long done) and the drain must be
     // EXACTLY 50 a landed round.
     // Converge the aim with the player's own look inputs (the mount's smoothed aim eases at
-    // 0.15/tick [M 0x1320d8:136-161]) WITHOUT touching the trigger — `fire_at`'s converged
-    // flag doubles as step_bond's fire trigger, so the aim here runs its own loop.
+    // 0.15/tick [M 0x1320d8:136-161]) WITHOUT touching the trigger — and measure convergence on
+    // the RAW aim (the stick's rest position, ext+0x74/0x70 [M :124-135]): the ease's lag means
+    // a window on the smoothed mirror breaks while the raw is still past the door (the stall
+    // this harness carried — see the note above the test).
     let mut aim_ticks = 0u32;
     let mut hit = false;
     while aim_ticks < 160 {
-        let (muzzle, _dir, yaw_t, pitch_s) = mount(&scene);
+        let (muzzle, yaw_raw, pitch_raw, _yaw_s, _pitch_s) = mount_raw(&scene);
         let (dx, dy, dz) = (target[0] - muzzle[0], target[1] - muzzle[1], target[2] - muzzle[2]);
         let len = (dx * dx + dy * dy + dz * dz).sqrt().max(1e-6);
         let want_yaw = dx.atan2(dz);
         let want_pitch = (-dy / len).asin();
-        hit = wrap_pi(want_yaw - yaw_t).abs() < 0.02 && (pitch_s - want_pitch).abs() < 0.02;
+        hit = wrap_pi(want_yaw - yaw_raw).abs() < 0.02 && (pitch_raw - want_pitch).abs() < 0.02;
         if hit { break; }
         let input = nf_game::player::Input {
-            turn: wrap_pi(want_yaw - yaw_t).clamp(-0.08, 0.08),
-            look: (pitch_s - want_pitch).clamp(-0.08, 0.08),
+            turn: wrap_pi(want_yaw - yaw_raw).clamp(-0.08, 0.08),
+            look: (pitch_raw - want_pitch).clamp(-0.08, 0.08),
             aiming: true, ..Default::default() };
         scene.sim.as_mut().unwrap().step_bond(input, false, false, false);
         aim_ticks += 1;
     }
     assert!(hit, "the mount must reach the aim onto the C5 door within {aim_ticks} ticks");
+    // The coast: the stick rests, the smoothed mirror eases onto the raw at 0.15/tick
+    // [M 0x1320d8:136-161] — the game's own settle before the trigger (the [L] stick-at-rest
+    // bursts ran with the beam already on the door). 40 ticks take a full-window residual
+    // (0.08 rad) down by 0.85^40 ≈ 1.5e-3 — the beam sits on the door's face.
+    for _ in 0..40 { scene.sim.as_mut().unwrap().step_bond(Default::default(), false, false, false); }
     assert!(!scene.sim.as_ref().unwrap().drones.props.destroy.iter().any(|d| d.placement == 96 && d.dead),
         "the aim alone never fires — the door stands [L the beam is the trigger's]");
     // Fire in bursts and watch the drain, the brief's live shape [L 10000 → 7100 → 4050 over
     // two 60-frame bursts]: each held burst drains bigdoor02 down, the beam never kills on the
     // first contact [M 0x17c518:170's 0x20 gate], and the colour pair drops under the beam.
+    // 24 bursts, not 8: the heat arithmetic [M 0x1320d8 — += 2.0 a shot, −1.0 a tick, a shot
+    // EVERY tick under the held trigger] puts the hot byte up at shot ~201 — the door sits at
+    // exactly 0 — and the game's own hot gate then blocks the fire arm for the ~200-tick
+    // recovery (the byte clears when the heat drains to 0 [M the 0x1320d8 head]); the kill
+    // shot (health 0 → the death catch at −50 [L]) lands after the recovery. The burst loop
+    // rides the whole pause out and the done callback stops it on the death tick.
     let mut last = 10000.0f32;
     let mut saw_drain = false;
     let mut saw_flash = false;
-    for _ in 0..8 {
+    for _ in 0..24 {
         let (bt, bf) = hold_fire(&mut scene, 30, 90, &|sim| sim.drones.channels.on(0x1f));
         let b = c5_b(&scene);
         eprintln!("burst: held {bt} fired {bf}, bigdoor02 health {} colour {:?} dead {}", b.health, b.colour, b.dead);

@@ -1912,6 +1912,19 @@ fn posed_vertices(scene: &scene::Scene, choice: Option<usize>, time: f32, opts: 
     scene.posed_vertices(choice, time, opts)
 }
 
+/// The destroyed-glist swap's draw side, per frame: the destroyed Destroy leaves' material centres
+/// as f32 bits (the draw filter's match key). The game's `Destroy_Smash` 0x12bb60 swaps the dead
+/// leaf's object onto the destroyed glist entry — the block-0x27 LOD pointer or the parsemap
+/// fallback slot [M 0x12bbb8 asm + 0x1d1b68]; the C5 leaves' fallback slot is undrawable [D
+/// lod_word −1] and the doorway ends open [L], so the dead leaf's static materials stop drawing.
+fn dead_destroy_centres(scene: &scene::Scene) -> Vec<[u32; 3]> {
+    let Some(sim) = scene.sim.as_ref() else { return Vec::new() };
+    scene.destroy_centres.iter()
+        .filter(|(_, pi)| sim.drones.props.destroy.get(*pi).is_some_and(|d| d.dead))
+        .map(|(c, _)| c.map(f32::to_bits))
+        .collect()
+}
+
 /// The snow quads facing the camera, plus the emitter particles (fix-world-fx: the same billboard
 /// pass — `Emitter_Draw` 0x17b708 path A draws both through `psiDrawParticleList`).
 fn snow_for(scene: &scene::Scene, cam: &Camera) -> Vec<scene::Vertex> {
@@ -2447,6 +2460,8 @@ fn shot(scene: &scene::Scene, cam: &Camera, out: &str, choice: Option<usize>, ti
     // spot the eye's cel walk doesn't resolve.
     let world = if std::env::var_os("NF_NO_PORTAL_CULL").is_some() { None } else { scene.sim.as_ref().map(|s| &s.world) };
     let vis_shot = r.cel_visibility(cam.pos.to_array(), vp_shot, world, door_closed.as_deref());
+    // The destroyed-glist swap's draw side: the dead Destroy leaves' centres (see Scene::destroy_centres).
+    r.destroy_dead = dead_destroy_centres(scene);
     // Objects are never room-culled (see the live path).
     r.update_skin(&queue, scene, choice, time, opts, None);
     r.set_char_light_centres(scene);
@@ -5653,6 +5668,9 @@ impl App {
                 if scene_overlay_up(&self.scene, movie_frame.is_some()) { hud.append(&self.scene.script_overlay_hud(aspect)); }
                 g.renderer.lights = self.scene.frame_lights();
                 g.renderer.screen_aspect = g.config.width as f32 / g.config.height.max(1) as f32;
+                // The destroyed-glist swap's draw side: the dead Destroy leaves' centres
+                // (see Scene::destroy_centres) — the doorway ends open [L] once the leaf is dead.
+                g.renderer.destroy_dead = dead_destroy_centres(&self.scene);
                 let fp_enc = std::time::Instant::now();
                 g.renderer.set_shards(&g.queue, &self.scene.shard_draws());
                 let enc = g.renderer.render(&g.device, &g.queue, &view, &g.depth, vp, vp_rot, draw_cam.pos.to_array(), self.anim_time as u32, &snow, &hud, movie_frame, if cutscene { Some(band) } else { None });
