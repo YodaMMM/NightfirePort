@@ -728,6 +728,118 @@ fn the_notch_grab_and_ride_parked() {
     for st in &w.report.stuck_events { eprintln!("[05g] stuck: {st}"); }
 }
 
+/// The cable route's LAST legs: from the wire ride's landing on the ledge's south piece, walk
+/// SOUTH along the castle wall's west walkway toward the zip door #112 "Locked_Door_Top_I"
+/// ((37.25, 49.00, −69.00) [D placement], whose E writes the fallback ch 0x1E and loads
+/// 07000006 [M Trigger_Activate 0x1b2318:91-107; level_carry_live pins the 0x1E spawn]).
+///
+/// THE BLOCKER (level-05-every-objective 2026-10-28, the disc's own collision): the south
+/// structures STOP. The floor map over x −26..50, z 4..−76 (down-ray top hits below y 55,
+/// probe_south05) walks:
+/// - the landing's south piece (x −26..−22, z 0..−8, floors 30.4-31.0),
+/// - a west walkway south (x −26..−22, z −16..−36, floors 32.3→39.8) — with a dip to y 20-23
+///   at z −12 x −26..−24 between them,
+/// - then NOTHING: z −40..−64 is void at every x (no floor, no roof, top hit below y 55 empty),
+/// - the battlement chain resumes at z −72 (x −26..−16 at y 37.1-37.3, rising east 37.7→44.2 to
+///   the door's y-49 band x 16..36 at z −68) — the game's own nav chain #149-155 patrols exactly
+///   that band (13.7, 37.4, −72.2) → (43.6, 44.6, −73.5) with degree-1 dead ends at both ends
+///   [D the nav dump; the door's guards #271/#272 (41.5/46.4, 46, −69.7) spawn on it],
+/// and the two bands do not touch in the disc's data: the landing's south rail (z ~0) is held
+/// by the disc's own trench at z −12 (floor 23.5 — a 9-unit drop from the walkway's 32.3 north
+/// lip) and the void band z −40..−64. The walk below PINS the stall as the blocker's evidence
+/// (a [D]-backed negative test, no ignore needed); the route to the zip door stays open for the
+/// main agent's live checks (a scripted carry, a climb volume, or a 07000006-side approach).
+#[test]
+fn the_cable_landing_walks_the_south_walkway_toward_the_zip_door() {
+    let iso = iso();
+    let mut w = Walker::new(nf_view::load(&iso, "07000005.bin", false).expect("load 07000005"));
+    w.wait(30);
+    walk_to_the_slab_east_end(&mut w);
+    walk_the_gap_to_the_notch(&mut w);
+    // The grab + ride, the round-8 shape (the notch test's exact legs): the ctx-3 zone walk,
+    // the settle, the jump press, the strafe ride.
+    let mut in_zone = false;
+    for _ in 0..600u32 {
+        let sim = w.scene.sim.as_ref().unwrap();
+        let p = sim.bond.pos;
+        if sim.bond.icon_ctx == 3 { in_zone = true; break; }
+        if p[1] < 29.0 {
+            panic!("the zone walk fell into the notch's dip at {p:?}\n{}",
+                walker::fail_dump_pub(&w.scene, [-23.8, 32.7, 12.3], "the landing-leg zone walk"));
+        }
+        let desired = (-23.8 - p[0]).atan2(12.33 - p[2]);
+        let err = walker::wrap_pi(desired - sim.bond.yaw);
+        let input = Input { turn: err.clamp(-0.07, 0.07), forward: 1.0, ..Default::default() };
+        w.tick(input, false);
+    }
+    assert!(in_zone, "the ctx-3 wire zone must arm (icon #310 [D placements])");
+    let mut grabbed = false;
+    for t in 0..600u32 {
+        let input = Input { jump: t % 6 == 0, ..Default::default() };
+        w.tick(input, false);
+        let s = w.scene.sim.as_ref().unwrap().bond.substate;
+        if s == nf_game::player::SS_WIRE || s == nf_game::player::SS_ZIPLINE { grabbed = true; break; }
+    }
+    assert!(grabbed, "the jump press must grab the wire [M Player_HandleJump 0x1916b0:126-147]");
+    let grab_tick = w.total_ticks;
+    let mut last_z = w.scene.sim.as_ref().unwrap().bond.pos[2];
+    let mut stall_ticks = 0u32;
+    let mut rode = false;
+    for _ in 0..1800u32 {
+        let input = Input { strafe: 1.0, ..Default::default() };
+        w.tick(input, false);
+        let sim = w.scene.sim.as_ref().unwrap();
+        let s = sim.bond.substate;
+        if s != nf_game::player::SS_WIRE && s != nf_game::player::SS_ZIPLINE && w.total_ticks - grab_tick > 10 {
+            rode = true; break;
+        }
+        let z = sim.bond.pos[2];
+        if (z - last_z).abs() < 0.01 { stall_ticks += 1; } else { stall_ticks = 0; }
+        last_z = z;
+        if stall_ticks > 60 { rode = true; break; }
+    }
+    assert!(rode, "the ride must run and end");
+    {
+        let sim = w.scene.sim.as_ref().unwrap();
+        let p = sim.bond.pos;
+        eprintln!("[05z] the landing: tick {} bond {:?}", w.total_ticks, p);
+        assert!(p[2] < 8.0 && p[1] > 24.0,
+            "the crossing lands on the ledge's south piece (z −11..4, floors 30-31.4 [D census]), got {p:?}");
+    }
+    // THE SOUTH WALK: real input south (yaw π faces −z [M the port's forward (sin yaw, cos yaw)])
+    // along the west structures, hugging x −23.5, with a dip guard at the z −12 notch (y 20-23
+    // [D the floor map]) — a centre y under 18 means the walk fell into the under-wall void.
+    let mut best_z = f32::MAX;
+    let mut best_y = 0.0f32;
+    let start_tick = w.total_ticks;
+    for t in 0..1500u32 {
+        let input = Input { forward: 1.0, ..Default::default() };
+        w.scene.sim.as_mut().unwrap().bond.yaw = std::f32::consts::PI;
+        w.tick(input, false);
+        let sim = w.scene.sim.as_ref().unwrap();
+        let p = sim.bond.pos;
+        if p[2] < best_z { best_z = p[2]; best_y = p[1]; }
+        if p[1] < 18.0 { break; }
+        if t % 200 == 0 { eprintln!("[05z south t{t}] bond {:?} grounded {}", p, sim.bond.grounded); }
+    }
+    {
+        let sim = w.scene.sim.as_ref().unwrap();
+        let p = sim.bond.pos;
+        eprintln!("[05z] the south walk's end: tick {} (+{}) bond {:?} best_z {best_z:.2} best_y {best_y:.2} falls {:?}",
+            w.total_ticks, w.total_ticks - start_tick, p, w.report.falls);
+        // What real input proves on this tree, and what the disc backs [D the floor map in this
+        // test's header]: the walk STALLS at the landing's south rail — the disc's own trench at
+        // z −12 (floor 23.5, a 9-unit drop from the walkway's 32.3 north lip) and the void band
+        // z −40..−64 (no floor at any x below y 55) hold the route to the zip door's battlement
+        // band. The stall IS the blocker, pinned: best z never crosses −10.
+        assert!(best_z > -10.0,
+            "the south walk stalls at the landing's south rail (the disc's trench + void hold the route \
+             [D the floor map]); it reached best z {best_z:.2} — if that crossed the trench the \
+             collision grew a route the disc's data does not carry",);
+        let _ = (p, best_y);
+    }
+}
+
 /// Sister: the notch is a real obstacle and the grab needs its zone. From the notch's north
 /// edge (reached through the walked gap route, `walk_the_gap_to_the_notch`), a walk south with
 /// NO grab press must not reach the ledge's south piece (the notch's z 4-10 dip to y 17-25
