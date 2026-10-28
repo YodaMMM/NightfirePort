@@ -101,3 +101,12 @@ order, ending on the level exit firing.
 - Input/output tokens, context used, cost: **not visible to me** (this environment shows no
   token or cost figures; the subagent transcripts reported prompt/completion counts per call,
   but the session-level totals are not exposed anywhere I can read).
+
+## ntfy failed
+
+All three fallbacks hit the ntfy daily quota (429):
+1. `curl -sS -m 20 -H "Title: NightfirePort" -d "level-0c-every-objective: …" https://ntfy.sh/nightfire-yoda-8k3x`
+   → `{"code":42908,"http":429,"error":"limit reached: daily message quota reached; increase your limits with a paid plan, see https://ntfy.sh","link":"https://ntfy.sh/docs/publish/#limitations"}`
+2. python3 urllib → `urllib.error.HTTPError: HTTP Error 429: Too Many Requests`
+3. `wget -q -O- --post-data "level-0c-every-objective: done" https://ntfy.sh/nightfire-yoda-8k3x`
+   → silent (empty), rc 0 but no body — the same 429 page suppressed by -q; treated as failed.
