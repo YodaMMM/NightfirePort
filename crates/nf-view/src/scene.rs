@@ -2903,8 +2903,24 @@ impl Sim {
             // Jointy itself has no corpse-word evidence either way]. drone-bump-collision.
             let bot_capsules: Vec<([f32; 3], [f32; 3], f32)> = {
                 let bp = self.bond.pos;
+                // The PICK-LEVEL gate the game resolves the class-3 query through: `Collide_Pick`
+                // 0x1eb320 walks only the seeker's straddled cels (:125 `Collide_StraddleCels`
+                // build; :312-336 the per-cel loop — `iVar9 = *(int *)(iVar12 + 8)` = the cel's
+                // object list, `Collide_PickObj(hittest, obj, owner)` per obj with `obj->0xf0 &
+                // 0x30000000 == 0`), so a bot whose own cel the player's pick capsule does NOT
+                // straddle is never a pick candidate — no contact node, no Jointy resolve, no
+                // push [M 0x1eae80 → 0x1ebaa8 → 0x1ec180]. The straddle set here is the same
+                // one the third-icon context consumes (the pick capsule = `pick_arm` + the
+                // hittest radius, anchored at the integrated pre-push-out spot). The bot's cel
+                // is the port's `find_cel(pos)` stand-in for the game's obj+0x20 link (the same
+                // stand-in the sight check uses [S noted at drone.rs `same_cel`]; the game's
+                // link is relinked by control_handle_cel_change 0x133288, one tick of staleness
+                // at most on both sides). drone-bump-collision-2: bots across a cel boundary —
+                // the hall-door-gap bot of probe_07_route, the party-door crowds — stop pushing;
+                // bots Bond shares a cel with keep the push.
                 self.drones.list.iter()
                     .filter(|x| x.enabled && !x.corpse && ((x.pos[0] - bp[0]).powi(2) + (x.pos[1] - bp[1]).powi(2) + (x.pos[2] - bp[2]).powi(2)) < 2.0 * 2.0)
+                    .filter(|x| straddle_cells.contains(&self.world.find_cel(x.pos).unwrap_or(usize::MAX)))
                     .map(|x| x.bump_capsule())
                     .collect()
             };
