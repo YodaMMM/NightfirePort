@@ -338,3 +338,15 @@ gravity cycle works on open floors; the jam needs the live game's approach line)
 NF_MP16_DUMP stream arm landed in mp_perf_16_live (per-tick hashes before the pin assert);
 this tree's 3600-tick stream dumped (digest 0xfd4fcbf81586b3f1 confirmed); the master build +
 diff + mover-cited re-pin is the next window's step 1 (10.6 s per dump run).
+
+mp_perf_16 CLOSED (17:00 UTC): the two-stream diff ran live — master (origin/master 8a966fa3,
+worktree build, this test's NF_MP16_DUMP/NF_MP16_MOVERS arms) passes the OLD pin
+0x89cb_fcb6_ae45_c2ac; this tree diverges at TICK 167, mover = the slot-0 LOCAL body (bond
+replica 0): x −14.2978→−14.2967 / z −6.7677→−6.7666 (≈1.1e-3; identical scripted inputs; the
+bots and the net agree — the two machines' per-tick hashes match every tick on this tree). The
+branch's game-true walk-collision behaviour reaches the MP sim through the local player's own
+capsule move. Pin re-set to 0xfd4f_cbf8_1586_b3f1 with the mover cited in the pin comment;
+mp_perf_16_live 2 passed / 0 failed on the branch tree. Hazard note: a master worktree build
+against a SHARED CARGO_TARGET_DIR overwrites the branch's rlibs while the branch fingerprints
+say fresh — the next branch build must `touch crates/nf-game/src/lib.rs crates/nf-view/src/lib.rs`
+first (cost this session: one false "branch" run that reproduced master's digest).

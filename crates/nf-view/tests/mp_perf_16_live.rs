@@ -50,7 +50,16 @@ fn iso() -> Option<String> {
 // Re-pinned for standins-scene-930: an online bot's armour pickup now runs Pickup_Handler's class-2 case 3
 // (BOT_vars+0xA4 / the armour byte += amount, capped 50 [M 0x18e650:119-133]) instead of the old +20 health,
 // so the fights run differently — kills 37; the two machines' per-tick hashes still agree.
-const PINNED_DIGEST: u64 = 0x89cb_fcb6_ae45_c2ac;
+// Re-pinned for capsule-cull-and-los-masks-11 (0xfd4f_cbf8_1586_b3f1, kills 40 over 3600 ticks):
+// the two-stream diff the -10 report called for, run live — a master build (origin/master
+// 8a966fa3, this test's NF_MP16_DUMP/NF_MP16_MOVERS arms) still passes the OLD pin, and this
+// tree diverges from it at TICK 167 with the mover named: the slot-0 LOCAL body (bond replica 0)
+// walks x −14.2978→−14.2967 / z −6.7677→−6.7666 (≈1.1e-3, the scripted walk inputs identical),
+// i.e. the branch's game-true walk-collision cull/masks behaviour reaching the MP sim through
+// the local player's own capsule move — NOT a bot, a net or an RNG divergence (the two machines'
+// per-tick hashes still agree every tick on this tree). Streams: /tmp of the session, reproduced
+// twice (0xfd4fcbf81586b3f1 both runs).
+const PINNED_DIGEST: u64 = 0xfd4f_cbf8_1586_b3f1;
 
 const TICKS: u32 = 3600;
 
@@ -104,6 +113,11 @@ fn sixteen_participants_fixed_run_digest_is_pinned() {
     let mut digest = 0xcbf2_9ce4_8422_2325u64;
     let mut hashes = Vec::with_capacity(TICKS as usize);
     let mut ta = Vec::with_capacity(TICKS as usize);
+    // capsule-cull-and-los-masks-11: the mover-naming arm. The mover lines ride the SAME walk
+    // that folds the digest (slot-0 machine `a`): per tick, the two human bodies' pos/yaw bits
+    // and every drone's pos/yaw bits + state. NF_MP16_MOVERS=<path> writes them, so the diff
+    // against the master build's stream names the first diverging tick AND its mover directly.
+    let mut movers = String::new();
     for t in 0..TICKS {
         let row: [nf_net::Input; nf_net::MAX_AGENTS] = std::array::from_fn(|sl| if sl < 2 { walk(t, sl) } else { NEUTRAL });
         let t0 = std::time::Instant::now();
@@ -113,6 +127,20 @@ fn sixteen_participants_fixed_run_digest_is_pinned() {
         assert_eq!(ha, hb, "tick {t}: the two machines disagree");
         digest = fold(digest, ha);
         hashes.push(ha);
+        use std::fmt::Write as _;
+        let sa = a.sim.as_ref().unwrap();
+        let _ = write!(movers, "t {t} h {:08x} {:08x} {:08x} {:08x} {:08x} {:08x}",
+            sa.bond.pos[0].to_bits(), sa.bond.pos[1].to_bits(), sa.bond.pos[2].to_bits(),
+            sa.bond.yaw.to_bits(), sa.bond.vel[0].to_bits(), sa.bond.vel[1].to_bits());
+        for (i, d) in sa.drones.list.iter().enumerate() {
+            let _ = write!(movers, " d{i} {:08x} {:08x} {:08x} {:08x} {:04x}",
+                d.pos[0].to_bits(), d.pos[1].to_bits(), d.pos[2].to_bits(), d.yaw.to_bits(), d.state);
+        }
+        let _ = writeln!(movers);
+    }
+    if let Ok(path) = std::env::var("NF_MP16_MOVERS") {
+        std::fs::write(&path, movers).expect("write NF_MP16_MOVERS stream");
+        eprintln!("[perf16] dumped mover lines to {path}");
     }
     // capsule-cull-and-los-masks-11: the re-pin method's dump arm. NF_MP16_DUMP=<path> writes the
     // per-tick `net_tick` hash stream (one `t <tick> <hash:016x>` line per tick) BEFORE the pin
