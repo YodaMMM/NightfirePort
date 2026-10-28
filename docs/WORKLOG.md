@@ -99,3 +99,16 @@ game's root motion is ungated [M 0x13b490/0x157bd0] so she walks through and the
 bot-side move model is the next round's fix, with the live checks in the report.
 
 drone-bump-collision-6 start: branch = s/drone-bump-collision-5 (cbd1c5c1) merged with origin/master (17aa36ab), clean. This round ports the bot-side move model at the 07 west mouth per round-5's verdict — the game's route-walk root motion is ungated world-wise [M DroneAnim_PreTransCallback 0x13b490 / AINetwork_GetBoundsPushVectorForSphere 0x157bd0] while the port's probe_move stand-in parks dr22 mid-mouth — then the five reds (party_door_lock x2, cutscene_timer_pause, probe_07_route, walkreal_07000007 hall walk) go green behind it. Suite started in background; checkpoints every ~25 min; cutoff 14:57 UTC.
+
+drone-bump-collision-6: the route walk now moves by the game's own constraint — root motion applied
+ungated [M AnimFrameResolve 0x1c35f8:425-432] behind the boundary-flag per-axis clamp [M
+DroneMove_SetBoundryFlags 0x14f140's four nav-only NDrone2_MoveTest 0x155330 probes; the zeroing in
+DroneAnim_PreTransCallback 0x13b490:120-136 on the object-local step], the clamp skipped while the
+door target +0xBA8 stands [M 0x13b490:120] — replacing probe_move for route-walk anims only (combat
+keeps the walls-990 fold). dr22 crosses the west mouth (79.34,-50.27 at t100; the round-5 park is
+gone) and completes her ring idx15/15 [probe_drone5_mouth]; the four red tests' mouth legs arrive.
+Remaining red: the EAST door — two CIVILIAN_DOOR_GUARDs (0x31 [D type row mode 0x16 start 49], boot
+(94.89,-48.00)/(93.66,-47.98)) shuffle in the doorway and the game-true Jointy pin leaves no passage;
+the guards' zone reaction never fires in the port (near_armed_person needs the reaction-acked sight).
+Live checks in the report own it. A test-side north-arc waypoint was tried and reverted (the nav
+steer wedges at the same pin; not evidence-backed).
