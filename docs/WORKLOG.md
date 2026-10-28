@@ -242,3 +242,19 @@ Progress:
   already merged in). Task: interact_07000009_live body-armour take never fires
   (Bond on the right floor), plus the masks-7 report's other diagnosed/pending groups.
   Suite baseline starting; checkpoints every 20-30 min.
+
+## capsule-cull-and-los-masks-8 (2026-10-28, window complete)
+
+- The task's named remaining group (interact_07000009_live body-armour take) already
+  passes: 16/0 twice on this tree; the fix is ebdba184 (ancestor of ac8c16bb — the brief
+  was written against a stale tip state). Nothing weakened.
+- Dead LOS_MASKS_ON / HEAD_ON_CULL_ON consts deleted, stale comments re-pointed
+  (comment-only; 0xbc5e digest pin + 581 nf-game lib tests hold). The two #[ignore]d
+  world.rs tests are the intentional assertion-free censuses — nothing to un-ignore.
+- band-settle-3 arrived via master fcf6f334: walk families re-run green (walkreal
+  01/07/08/09/11/14 + probe_07_route), ai_live 37/0, mp_net 2/0, interact_09 16/0.
+- Sweep: 278/874 binaries, 275 OK; disc_golden expected-on-slim FAIL, fix_0c_pylon_live
+  = no-GPU sandbox (wgpu adapter NotFound), campaign_flow_live = 300 s runner cap
+  (suite.py default 600). ~596 binaries + the 600 s re-run left for the next window;
+  runner state in suite-progress.txt format. Report:
+  docs/reports/capsule-cull-and-los-masks-8.md
