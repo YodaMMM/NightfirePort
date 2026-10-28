@@ -14,10 +14,16 @@
 //! flush lid (z 42.16 [D #655/#600]) onto the mezzanine → west across the sloped connector
 //! (z 39.5..38.25, 2.15..2.40 [D probe14_mouthfin]) → the vent drop TouchOnce #301 (39.68…41.75,
 //! 2.07…4.14, 37.62…40.40 [D]) → the SP #276 cut-scene (0x06000833, 1400 ticks) writes ch 0x47
-//! (objective 1) → the REAL walk west through the facility to the Kiko cut-scene touch #381 →
-//! SP #382 (0x0600062F) writes ch 0x48 (objective 2) → down into the west generator room → the
-//! two fuseboxes cut through the REAL Laser path ([M FuseBox_Update 0x1adfe8]; #383 p1 0x87,
-//! #385 p1 0x88 [D]) → AND #391 raises 0x8C → back east to the server-room escape touch #456 →
+//! (objective 1) → the REAL walk west through the facility to the Kiko cut-scene touch #381 (the
+//! SOUTH loop — the closed 0x85 door pair seals its doorway, so the west wing is reached the
+//! game's own way through the server room's west corridor [D nav nodes 94-97/150/591-600]) →
+//! SP #382 (0x0600062F) writes ch 0x48 (objective 2) → the west generator room via the (−58.8,
+//! 31.65) passage and the ramp down (nodes 193/623/628/631) → the two fuseboxes cut through the
+//! REAL Laser path ([M FuseBox_Update 0x1adfe8]; #383 p1 0x87, #385 p1 0x88 [D]) → AND #391
+//! raises 0x8C → back east up the north ramp to the E-use switch oDroneTrigger1b (−60.30, 0.61,
+//! 38.37; touch out 0xA0, mask 4 [D placement 399; M Trigger_Activate 0x1b2318]) → SEQ_AND 0x51 →
+//! the box/generator cascade → 0x85 → Door_Slide_11A/B unlock and auto-open [M Door_Update
+//! 0x1363c8:88-107] → east THROUGH the opened doorway to the server-room escape touch #456 →
 //! SEQ_AND #445 → SP #407 (0x06000848) writes ch 0x4A (objective 3) → east to Rook's wake touch
 //! #476 → SEQ_AND #475 wakes Rook (skin 0x05000066 [D]) → the REAL gun path kills him → his
 //! death channel 0x54 fires [D drone param 12; M set_death_channel 0x13e660] (objective 4) →
@@ -35,21 +41,56 @@ use walker::{wrap_pi, Walker, Wp};
 
 fn iso() -> String { std::env::var("NF_ISO").expect("NF_ISO") }
 
+/// The wire object's VISIBLE geometry (copied from walk_07000014_live's helpers): its local
+/// bounds (`Drones::wire_geo`) through the live entity matrix — the same world slab the bullet
+/// pass tests the round against (`Collide_PickObj` 0x1eae80 → obj+0xD0 → `FuseBox_Update`
+/// 0x1adfe8:88-123). The entity translation sits 1.5 m BELOW the cables [D
+/// OBJECT_GreenWire1/BlueWire1 local y 1.49..1.72 through the entity matrix].
+fn wire_world_box(sim: &nf_view::scene::Sim, obj: usize) -> Option<([f32; 3], [f32; 3])> {
+    match sim.drones.scripts.objects.list.get(obj)? {
+        Some(nf_game::nis::Obj::Entity { hash, matrix, .. }) => {
+            let (lo, hi) = sim.drones.wire_geo.get(hash)?;
+            let (mut wlo, mut whi) = ([f32::MAX; 3], [f32::MIN; 3]);
+            for cx in 0..2 { for cy in 0..2 { for cz in 0..2 {
+                let p = [if cx == 0 { lo[0] } else { hi[0] }, if cy == 0 { lo[1] } else { hi[1] }, if cz == 0 { lo[2] } else { hi[2] }];
+                let w = nf_formats::placement::transform(matrix, p);
+                for c in 0..3 { wlo[c] = wlo[c].min(w[c]); whi[c] = whi[c].max(w[c]); }
+            } } }
+            Some((wlo, whi))
+        }
+        _ => None,
+    }
+}
+
+/// Where a player aims to burn the wire: the VISIBLE cable's centre, else the translation.
+fn wire_aim_point(sim: &nf_view::scene::Sim, obj: usize) -> [f32; 3] {
+    if let Some((lo, hi)) = wire_world_box(sim, obj) {
+        return [(lo[0] + hi[0]) * 0.5, (lo[1] + hi[1]) * 0.5, (lo[2] + hi[2]) * 0.5];
+    }
+    nf_game::drone::Drones::script_obj_pos(&sim.drones.scripts, &sim.data(), obj).unwrap_or([0.0; 3])
+}
+
 /// Walk to a stance inside the Laser's range of a fusebox wire and burn it through the REAL fire
 /// path. E does nothing on fuseboxes — `Player_Activate` 0x1a5170 has no class-0x3C arm [M
 /// 0x1a5170:95-160] — the game's cut is the Laser beam (weapon 0x4E, range 4.0 [L weapon_data
 /// 0x4E +0x1C]) into the wire sub-object; `FuseBox_Update` 0x1adfe8 writes the group's channel
-/// words on the wire death. (walkreal-b's original E-cut predates that finding and never fired.)
+/// words on the wire death. The aim walks the crosshair onto the VISIBLE cable the way a player
+/// does: each held-fire tick reads the spawned Laser round's miss against the wire's own world
+/// slab and shifts the aim (the walk_07000014 burn_wire rule, through the walk's turn/look
+/// inputs instead of a teleport-aim).
 fn cut_fusebox(w: &mut Walker, box_pos: [f32; 3], want: u8, label: &str) {
     let sim = w.scene.sim.as_ref().unwrap();
     let fb = sim.drones.fuseboxes.iter().position(|f| f.ch[0] as u32 == want as u32)
         .unwrap_or_else(|| panic!("{label}: the fusebox with group-0 channel {want:#x} exists [D]"));
-    let (bp, wire) = {
+    let (bp, wire, wire_obj) = {
         let sim = w.scene.sim.as_ref().unwrap();
-        let wp = sim.drones.fuseboxes[fb].alive_wires()
-            .filter_map(|(_, _, o)| nf_game::drone::Drones::script_obj_pos(&sim.drones.scripts, &sim.data(), o))
-            .next().expect("the script registered wires (groups 0 and 1 [L])");
-        (sim.drones.fuseboxes[fb].pos, wp)
+        // The group-0 wire (the p1 word's group [D placements 383/385 p1]); fall back to the
+        // first alive wire if the group-0 slot is empty.
+        let obj = sim.drones.fuseboxes[fb].alive_wires().find(|(g, _, _)| *g == 0)
+            .or_else(|| sim.drones.fuseboxes[fb].alive_wires().next())
+            .map(|(_, _, o)| o)
+            .expect("the script registered wires (groups 0 and 1 [L])");
+        (sim.drones.fuseboxes[fb].pos, wire_aim_point(sim, obj), obj)
     };
     let cands = [[0.6f32, -1.2, 0.0], [-0.6, -1.2, 0.0], [0.0, -1.2, 0.6], [0.0, -1.2, -0.6]];
     let mut stood = false;
@@ -65,18 +106,43 @@ fn cut_fusebox(w: &mut Walker, box_pos: [f32; 3], want: u8, label: &str) {
     assert!(stood, "{label}: a stance inside the Laser's range exists [L weapon_data 0x4E +0x1C]");
     for _ in 0..40 { w.tick(nf_game::player::Input { switch_to: Some(0x4e), ..Default::default() }, false); }
     let start = w.total_ticks;
+    let mut delta = [0.0f32; 3];
     loop {
-        let sim = w.scene.sim.as_ref().unwrap();
-        if sim.drones.channels.on(want as u32) { break; }
+        let (n0, want_on) = {
+            let sim = w.scene.sim.as_ref().unwrap();
+            (sim.drones.player_bullets.len(), sim.drones.channels.on(want as u32))
+        };
+        if want_on { break; }
         assert!(w.total_ticks - start < 600, "{label}: the laser cut never wrote ch {want:#x} [M 0x1adfe8]");
-        let head = sim.bond.head();
-        let dir = [wire[0] - head[0], wire[1] - head[1], wire[2] - head[2]];
-        let l = (dir[0] * dir[0] + dir[1] * dir[1] + dir[2] * dir[2]).sqrt().max(1e-4);
+        // Steer the crosshair at the (feedback-shifted) visible-cable point and hold fire.
+        let (yaw, pitch) = {
+            let sim = w.scene.sim.as_ref().unwrap();
+            let head = sim.bond.head();
+            let t = [wire[0] + delta[0], wire[1] + delta[1], wire[2] + delta[2]];
+            let dir = [t[0] - head[0], t[1] - head[1], t[2] - head[2]];
+            let l = (dir[0] * dir[0] + dir[1] * dir[1] + dir[2] * dir[2]).sqrt().max(1e-4);
+            (dir[0].atan2(dir[2]), ((dir[1] / l).atan() / std::f32::consts::FRAC_PI_2))
+        };
         w.tick_fire(nf_game::player::Input {
-            turn: (dir[0].atan2(dir[2]) - sim.bond.yaw).clamp(-0.08, 0.08),
-            look: (((dir[1] / l).atan() / std::f32::consts::FRAC_PI_2) - sim.bond.pitch).clamp(-0.08, 0.08),
+            turn: (yaw - w.scene.sim.as_ref().unwrap().bond.yaw).clamp(-0.08, 0.08),
+            look: (pitch - w.scene.sim.as_ref().unwrap().bond.pitch).clamp(-0.08, 0.08),
             ..Default::default()
         });
+        // The round's miss against the wire's world slab shifts the aim (burn_wire's rule).
+        let round = w.scene.sim.as_ref().unwrap().drones.player_bullets.get(n0)
+            .filter(|b| b.weapon == 0x4e).map(|b| (b.pos, b.dir, b.speed));
+        if let Some((pos, dir, speed)) = round {
+            let centre = w.scene.sim.as_ref().unwrap();
+            if let Some((lo, hi)) = wire_world_box(centre, wire_obj) {
+                let c = [(lo[0] + hi[0]) * 0.5, (lo[1] + hi[1]) * 0.5, (lo[2] + hi[2]) * 0.5];
+                let e = [pos[0] + dir[0] * speed, pos[1] + dir[1] * speed, pos[2] + dir[2] * speed];
+                let ab = [e[0] - pos[0], e[1] - pos[1], e[2] - pos[2]];
+                let ab2 = ab[0] * ab[0] + ab[1] * ab[1] + ab[2] * ab[2];
+                let t = if ab2 > 1e-9 { (((c[0] - pos[0]) * ab[0] + (c[1] - pos[1]) * ab[1] + (c[2] - pos[2]) * ab[2]) / ab2).clamp(0.0, 1.0) } else { 0.0 };
+                let closest = [pos[0] + ab[0] * t, pos[1] + ab[1] * t, pos[2] + ab[2] * t];
+                for k in 0..3 { delta[k] = (delta[k] + (c[k] - closest[k])).clamp(-0.8, 0.8); }
+            }
+        }
     }
     eprintln!("[014] {label}: ch {want:#x} on at +{} ticks (laser cut)", w.total_ticks - start);
 }
@@ -570,18 +636,59 @@ fn the_vent_drop_hands_bond_into_the_facility() {
 }
 
 #[test]
-#[ignore]
 fn walk_the_infiltration_to_the_delta_exit() {
     let iso = iso();
     let mut w = Walker::new(nf_view::load_with_carry(&iso, "07000014.bin", false, None).unwrap());
     walk_infiltration_to_handback(&mut w);
 
-    // Leg 2: west through the facility to the Kiko cut-scene touch #381 — walked (the long cross
-    // floor; the nav web threads the corridors [D]).
-    w.follow_nav_route([-49.0, 1.0, 38.4], "west to the Kiko touch #381");
+    // Leg 2: west to the Kiko cut-scene touch #381 — the walk's OWN route (level-14-delta-exit-walk).
+    // The closed Door_Slide_11A/B pair (ch_lock 0x85 [D placements 151/152]) seals its doorway
+    // completely until the sabotage cascade: the leaves' collision plane x≈−52.35 blocks the walk
+    // from BOTH sides across z 39.2..41.3 and the static frame jambs (tris x −53.5..−52.5 and
+    // −51.7..−51.0 [D probe]) seal z 38.6..38.9 — this session's crossing probe (the walk east
+    // stops at (−52.79, 1.20, 39.42), the walk west never leaves the east jamb). The old leg-2
+    // premise ("the nav route crosses the closed door plane" and slips by) was wrong — the west
+    // wing is reached the game's own way, the SOUTH loop (the nav web's west corridor
+    // x −48.6..−57.4 at z 25.7..30.5, nodes 94-97/150/591/592/599/600 [D nav path 0]), which
+    // never crosses the 0x85 plane. The 0x85 door is crossed ONLY after it unlocks (leg 4).
+    w.follow_nav_route([-48.7, 0.9, 33.2], "the south loop to the west corridor");
     {
         let sim = w.scene.sim.as_ref().unwrap();
-        assert!(sim.bond.pos[0] < -45.0, "Bond stands in the #381 band (x −51.97…−46.39 [D]), got {:?}", sim.bond.pos);
+        let p = sim.bond.pos;
+        assert!(p[0] < -46.0 && p[0] > -51.5 && (30.0..35.5).contains(&p[2]),
+            "the south loop ends in the west corridor (node 192 (−48.64, 0.4, 32.13) [D nav]), got {p:?}");
+    }
+    w.walk_to(Wp::new(-49.6, 0.9, 35.5).r(1.2), "north to the Kiko band's south edge");
+    // Walk north into the band; the TouchOnce #381 fires (out 0x08 [D placement 381]) and the SP
+    // #382 cut-scene (0x0600062F) takes over: the pack's scripted body carries Bond WEST past the
+    // closed 0x85 door (the sweep's mid-scene pose (−56.18, 40.59) [D probe]; the same event-6
+    // body mechanism as the vent hand-back [M Script_Free 0x1da880 → Player_Enable 0x195498]).
+    // Steering must STOP at the touch: resuming toward the band after the scene drags Bond back
+    // east into the sealed doorway (the original leg-2 wedge — the E-press loop on the locked
+    // leaf). The scene, not the walk, delivers the west side.
+    {
+        let start = w.total_ticks;
+        loop {
+            assert!(w.total_ticks - start < 4000, "the #381 touch never fired");
+            {
+                let sim = w.scene.sim.as_ref().unwrap();
+                if sim.drones.channels.on(0x08) || sim.disabled { break; }
+            }
+            let sim = w.scene.sim.as_ref().unwrap();
+            let b = &sim.bond;
+            let inp = nf_game::player::Input {
+                turn: wrap_pi((-49.2f32 - b.pos[0]).atan2(38.4 - b.pos[2]) - b.yaw).clamp(-0.08, 0.08),
+                forward: 1.0,
+                ..Default::default()
+            };
+            w.tick(inp, false);
+        }
+        eprintln!("[014] the #381 touch fired at {:?} (+{} ticks)",
+            w.scene.sim.as_ref().unwrap().bond.pos, w.total_ticks - start);
+    }
+    {
+        let sim = w.scene.sim.as_ref().unwrap();
+        assert!(sim.bond.pos[0] < -46.0, "Bond stands in the #381 band (x −51.97…−46.39 [D]), got {:?}", sim.bond.pos);
     }
     let mut ch48 = false;
     for _ in 0..2400 {
@@ -589,14 +696,40 @@ fn walk_the_infiltration_to_the_delta_exit() {
         if w.scene.sim.as_ref().unwrap().drones.channels.on(0x48) { ch48 = true; break; }
     }
     assert!(ch48, "the Kiko cut-scene 0x0600062F must write ch 0x48 [D]");
+    // fix-objective-banner: the monitor completes the objective the tick after the channel.
+    for _ in 0..2 { w.tick(nf_game::player::Input::default(), false); }
     assert_eq!(w.scene.sim.as_ref().unwrap().drones.mission.states[20][1], 4, "objective 2 completes [M 0x1827d8]");
     for _ in 0..900 {
         if !w.scene.sim.as_ref().unwrap().disabled { break; }
         w.tick(nf_game::player::Input::default(), false);
     }
 
-    // Leg 3: down into the west generator room; the two fuseboxes cut through the REAL path.
+    // Leg 3a: the west generator room — the scene released Bond on the west side (the west
+    // corridor's north lane, z ≈ 40.6 [D the sweep's mid-scene pose]); the corridor west along
+    // the nav lanes (nodes 613/614/626 [D nav]), then south (nodes 625/615/623), the ramp head
+    // (node 628) and down into the hall (floors −0.6/−1.4/−2.2 at x −63.7/−65/−66.2, z 32.8
+    // [D probe]; node 631), then the hall's south lane west (nodes 663/654/653 [D nav]).
+    {
+        let p = w.scene.sim.as_ref().unwrap().bond.pos;
+        eprintln!("[014] the Kiko scene released Bond at {p:?}");
+    }
+    w.walk_to(Wp::new(-57.9, 0.1, 40.77).r(1.5), "the west corridor's north lane");
+    w.walk_to(Wp::new(-60.5, 0.05, 40.77).r(1.0), "the corridor west (node 626)");
+    w.walk_to(Wp::new(-60.5, 0.05, 35.7).r(1.2), "the corridor south (node 615)");
+    w.walk_to(Wp::new(-60.5, 0.05, 32.84).r(1.0), "the lane east end (node 623)");
+    w.walk_to(Wp::new(-63.7, 0.05, 32.85).r(1.0), "the ramp head (node 628)");
+    w.walk_to(Wp::new(-66.3, -1.78, 32.85).r(1.0), "down the generator ramp (node 631)");
+    w.walk_to(Wp::new(-72.4, -1.78, 32.7).r(1.2), "the hall south lane (node 663)");
+    w.walk_to(Wp::new(-82.9, -1.78, 33.4).r(1.2), "the hall south lane west (node 654)");
+    w.walk_to(Wp::new(-87.5, -1.78, 33.4).r(1.2), "the hall west end (node 653)");
+
+    // Leg 3b: the two fuseboxes cut through the REAL laser path [M FuseBox_Update 0x1adfe8] —
+    // box A in its south alcove (floor −2.2 [D probe]), then the hall's west lane north (nodes
+    // 649/644/204) to box B in the north alcove (its south candidate floor −2.2 [D probe]).
     cut_fusebox(&mut w, [-89.31, -2.22, 30.79], 0x87, "fusebox #383");
+    w.walk_to(Wp::new(-89.3, -1.78, 36.99).r(1.2), "the box A north lane (node 649)");
+    w.walk_to(Wp::new(-89.3, -1.78, 40.58).r(1.2), "the hall west lane north (node 644)");
+    w.walk_to(Wp::new(-89.3, -1.78, 45.7).r(1.2), "the hall north-west (node 204)");
     cut_fusebox(&mut w, [-89.30, -2.22, 49.36], 0x88, "fusebox #385");
     for _ in 0..10 { w.tick(nf_game::player::Input::default(), false); }
     {
@@ -606,8 +739,83 @@ fn walk_the_infiltration_to_the_delta_exit() {
             "no live-wire hurt with +0x56 configured [M 0x1adfe8:99-101]");
     }
 
-    // Leg 4: back east to the server-room escape touch #456 — walked; the SP #407 cut-scene
-    // (0x06000848, 950 ticks [D]) writes ch 0x4A.
+    // Leg 3c: the E-use switch oDroneTrigger1b (out 0xA0, mask 4 [D placement 399; M
+    // Trigger_Activate 0x1b2318:23-33]) — the hall's north lane back east (nodes 641/637/635/
+    // 199 [D nav]), up the north ramp (node 632 (−66.23, −1.78, 48.5) → node 630 (−63.7, 0.019,
+    // 48.05); the hop-climb the stairs walker uses), then the west corridor south (nodes
+    // 620/618/626) into the switch band (lo −63.08…−57.52, z 37.33…39.41 [D]).
+    w.walk_to(Wp::new(-87.5, -1.78, 46.7).r(1.2), "the hall north lane (node 641)");
+    w.walk_to(Wp::new(-72.7, -1.78, 47.4).r(1.2), "the hall north lane east (node 635)");
+    w.walk_to(Wp::new(-66.3, -1.78, 48.4).r(1.0), "the north ramp foot (node 632)");
+    w.climb_stairs([-63.6, 0.05, 48.0], "up the north ramp (node 630)", 1.0, 3000);
+    w.walk_to(Wp::new(-60.5, 0.05, 47.4).r(1.0), "the west corridor north lane (node 620)");
+    w.walk_to(Wp::new(-60.5, 0.05, 43.79).r(1.0), "the corridor south (node 618)");
+    w.walk_to(Wp::new(-60.5, 0.05, 40.77).r(1.0), "the corridor south to the switch band (node 626)");
+    w.walk_to(Wp::new(-60.3, 0.6, 38.4).r(0.6), "into the switch band (the E-use spot)");
+    // The E press through the REAL Player_Activate use path (the walk's own input): aim at the
+    // touch's volume centre with turn/look steering (the cut_fusebox aim convention), then hold
+    // E — the green the_e_use_switch_fires_the_sabotage_cascade_and_opens_the_west_door's press
+    // loop, reached on foot instead of teleported [M 0x1a5170:100-108, 0x1b2318:23-33].
+    let t_centre = [-60.29973f32, 0.61489844, 38.371338]; // [D placement 399 centre]
+    for _ in 0..60 {
+        let sim = w.scene.sim.as_ref().unwrap();
+        let head = sim.bond.head();
+        let d = [t_centre[0] - head[0], t_centre[1] - head[1], t_centre[2] - head[2]];
+        let l = (d[0] * d[0] + d[1] * d[1] + d[2] * d[2]).sqrt().max(1e-4);
+        let b = &sim.bond;
+        let inp = nf_game::player::Input {
+            turn: (d[0].atan2(d[2]) - b.yaw).clamp(-0.08, 0.08),
+            look: (((d[1] / l).atan() / std::f32::consts::FRAC_PI_2) - b.pitch).clamp(-0.08, 0.08),
+            ..Default::default()
+        };
+        w.tick(inp, false);
+    }
+    let mut fired = false;
+    for _ in 0..12 {
+        w.tick(nf_game::player::Input::default(), true);
+        if w.scene.sim.as_ref().unwrap().drones.channels.on(0xa0) { fired = true; break; }
+    }
+    assert!(fired, "the E press fires the mask-4 touch → 0xA0 [M 0x1b2318:23-33; D placement 399]");
+    // The cascade: the touch's 0xA0 is a 1-tick pulse (Trigger_Calc 0x1b1900's type-2 clear), so
+    // 0x51 pulses too and the rest rides the death channels — track "ever on" for the pulse
+    // links (the E-use test's track loop) [D placement 393; M 0x1b1900].
+    let (mut seen51, mut ch85) = (false, false);
+    for _k in 0..300u32 {
+        {
+            let sim = w.scene.sim.as_ref().unwrap();
+            let ch = &sim.drones.channels;
+            if ch.on(0x51) { seen51 = true; }
+            if ch.on(0x85) { ch85 = true; }
+        }
+        w.tick(nf_game::player::Input::default(), false);
+        if ch85 { break; }
+    }
+    assert!(seen51, "SEQ_AND [0x8C, 0xA0] raised 0x51 (the 1-tick pulse) [D placement 393]");
+    assert!(ch85, "the cascade ends at box #729's death 0x85 [D the kill→death pairs]");
+    // The door unlocked for good and AUTO-OPENED on the 0x85 rising edge [M 0x1363c8:88-107].
+    {
+        let sim = w.scene.sim.as_ref().unwrap();
+        let door = sim.drones.doors.list.iter().position(|d| d.placement == 151)
+            .expect("Door_Slide_11A exists [D placement 151]");
+        assert!(!sim.drones.doors.is_locked(door, &sim.drones.channels),
+            "Door_Slide_11A/B unlocks on the 0x85 rising edge [M 0x1363c8:88-107]");
+    }
+    for _ in 0..180 { w.tick(nf_game::player::Input::default(), false); }
+    {
+        let sim = w.scene.sim.as_ref().unwrap();
+        let door = sim.drones.doors.list.iter().position(|d| d.placement == 151).unwrap();
+        assert!(sim.drones.doors.list[door].pos01 > 0.5,
+            "the door slid open while the walk waited (pos01 {:.2})", sim.drones.doors.list[door].pos01);
+    }
+
+    // Leg 4: east THROUGH the opened doorway to the server-room escape touch #456 — the walk's
+    // own crossing (the unlock auto-open slid the leaves clear [M 0x1363c8:88-107]), then the
+    // loop east (leg 2's route reversed); the SP #407 cut-scene (0x06000848, 950 ticks [D])
+    // writes ch 0x4A.
+    w.walk_to(Wp::new(-60.5, 0.05, 39.57).r(1.0), "the west corridor at the door's west face");
+    w.walk_to(Wp::new(-56.6, 0.4, 39.56).r(1.0), "the corridor east to the door");
+    w.walk_to(Wp::new(-51.4, 0.4, 39.56).r(1.0), "through the opened doorway");
+    w.walk_to(Wp::new(-49.2, 0.9, 38.4).r(1.0), "the Kiko corridor east");
     w.follow_nav_route([-33.1, 0.9, 26.8], "east to the escape touch #456");
     let mut ch4a = false;
     for _ in 0..2000 {
@@ -617,6 +825,8 @@ fn walk_the_infiltration_to_the_delta_exit() {
         assert!(sim.drones.channels.on(0x0c), "the room touch #456 fired 0x0C on contact [D]");
     }
     assert!(ch4a, "the escape cut-scene must write ch 0x4A [D]");
+    // fix-objective-banner: the monitor completes the objective the tick after the channel.
+    for _ in 0..2 { w.tick(nf_game::player::Input::default(), false); }
     assert_eq!(w.scene.sim.as_ref().unwrap().drones.mission.states[20][2], 4, "objective 3 completes [M 0x1827d8]");
     for _ in 0..900 {
         if !w.scene.sim.as_ref().unwrap().disabled { break; }
@@ -633,6 +843,10 @@ fn walk_the_infiltration_to_the_delta_exit() {
         assert!(sim.drones.channels.on(0x0d), "SEQ_AND #475 [0x8C, 0x0F] raises 0x0D [D]");
         assert!(sim.drones.list[rook_i].started, "Rook leaves his switch-channel wait [M 0x14b300]");
     }
+    // The kill: the walked gun path. The fusebox cuts left the Laser (0x4e) in hand — a tool
+    // whose rounds never drew blood (the run's own trace: 198 taps at point-blank, health 10.0
+    // constant) — so the hand weapon 0x2 goes back up first [L loadout: owned at the start].
+    for _ in 0..40 { w.tick(nf_game::player::Input { switch_to: Some(0x2), ..Default::default() }, false); }
     let mut dead = false;
     for attempt in 0..3 {
         if w.shoot(rook_i, "Rook") { dead = true; break; }
@@ -642,8 +856,10 @@ fn walk_the_infiltration_to_the_delta_exit() {
     {
         let sim = w.scene.sim.as_ref().unwrap();
         assert!(sim.drones.channels.on(0x54), "Rook's death channel 0x54 fires [D param 12; M 0x13e660]");
-        assert_eq!(sim.drones.mission.states[20][3], 4, "objective 4 completes [M 0x1827d8]");
+        // fix-objective-banner: the monitor completes the objective the tick after the channel.
     }
+    for _ in 0..2 { w.tick(nf_game::player::Input::default(), false); }
+    assert_eq!(w.scene.sim.as_ref().unwrap().drones.mission.states[20][3], 4, "objective 4 completes [M 0x1827d8]");
 
     // Leg 6: to the Delta exit #944 — walked; E fires the fallback write + the load.
     w.walk_to(Wp::new(27.79, 1.28, -25.32).r(1.0), "to the Delta exit #944");
