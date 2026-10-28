@@ -34,3 +34,27 @@ Plan:
   up, no contacts); the drain test is #[ignore]d with the reason. The draw-side destroyed-glist
   hide needs a per-frame static-instance hook (the 0x3b gap's shape). p6>0 deferred channel
   writes unported (the C5 doors are p6=0).
+
+## level-0d-c5-door-laser-2 (2026-10-28, branch s/level-0d-c5-door-laser-2)
+
+Task: continue s/level-0d-c5-door-laser (merged origin/master 480aa3db). Two
+items left: (1) the sustained-fire defect — trigger held with no look input,
+~5 contacts land then the health freezes while the beam quad stays up and the
+heat climbs; the game drains steadily under a plain held trigger [L PCSX2
+2026-10-27: 10000 -> 7100 -> 4050 over two 60-frame bursts, stick at rest].
+Find the port's fault in the no-input fire path (aim easing, the round's spawn
+origin/direction once the aim settles, the fire arm's re-trigger) against
+GunImp_Update 0x1320d8 [M], fix it, and un-ignore
+the_beam_drains_the_c5_door_at_50_a_tick_and_the_smash_fires_at_zero.
+(2) The destroyed-glist swap's draw: expose the dead/destroyed state so the
+static instance stops drawing (C5 leaves have no LOD variant [D lod_word -1],
+doorway ends open [L]); list the draw hook in the report for the main agent's
+render.
+
+Plan:
+- Reproduce the stall in the no-input fire harness, trace where contacts stop
+  landing (aim easing settle, round spawn origin/direction, re-trigger), fix
+  against [M] evidence, un-ignore the drain test.
+- Add the per-frame static-instance visibility hook for dead Destroy objects
+  (the 0x3b channel-show gap's shape), document the draw hook for the render.
+- Full suite on the final merged tree before push (fast runner).
