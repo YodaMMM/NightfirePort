@@ -177,3 +177,17 @@ port's scoped floor ray reads there vs the game [M Player_FeetOnPoint 0x194188, 
 answers the use key" — derive the door's real use zone from its 0x48 trigger bounds [D] and the
 use path [M Player_Activate 0x1a5170], re-derive the stand point with the cite. Work in
 progress; will update as steps land.
+
+drone-bump-collision-9 final (21:04 UTC): the sister FIXED — party_door_lock_07000007_live 2/0 green.
+The old stand (94.5, -47.6) sat inside the open swing door's swallow band [M Door_Activate 0x135be0's
+kind-0 arm: |closed-frame z ∓ 0.3| = 0.65 < r 1.292 [D d244 dump] → busy-only]; the new stand is the
+0x48 plate #412's box centre (94.27, -45.92) [D bounds x 93.31..95.23, z -46.43..-45.41]: |f| = 1.63 >
+1.292 clears the band and the r-1.0 use sphere [M Player_Activate 0x1a5170:100-108 + Collide_PickObj
+0x1eae80's 0x101 arm] reaches the open leaf's live sphere (94.888, 44.125, -47.884). The post-E wedge
+DIAGNOSED (probe_07_hover): the scoped floor ray reads the real floor y 43.0 there (scoped == flat —
+the game's own read [M 0x194188]); the capsule rests on a walkable rim y 43.215 of a level-placement
+object beside the route line (walkable map bounds it) — the route anchors are the fix point, probe_07_route
+stays red, the port's collision unchanged. Green on this tree: party_door_lock 2/0, cutscene_timer_pause
+1/0, walkreal_07000007 2/0. Suite: --only critical set partial (disk-full outage + the 10-min tool cap
+killed the full run) — 11 passed 1 failed (walkreal_07000001's contact test, the merge's RNG-shift
+suspect — bisect left). Report: docs/reports/drone-bump-collision-9.md with two live checks.
