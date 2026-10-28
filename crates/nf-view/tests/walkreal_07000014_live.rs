@@ -712,3 +712,118 @@ fn the_vent_grill_blocks_the_west_duct_per_the_game() {
             "the crawl wedges on the grill plane z=58.86 [M the cel-exists rule above], got {:?}", sim.bond.pos);
     }
 }
+
+/// The west double door's opener chain, E-USE ROOT (level-14-west-door). The touch
+/// `oDroneTrigger1b` (map 54 placement 399, kind 0xEB) at (-60.30, 0.61, 38.37) carries
+/// (p0, p1) = (0xA0, 0x4) [D placements-all] — for the 0xEB wrapper p0 IS the out-channel and
+/// p1 the contact mask ([M] `Trigger_Touch` 0x1b2aa8 re-homes old p0 → slot 1 and old p1 → slot
+/// 9 before `Trigger_Create` 0x1b1720 reads out = slot 1, mask = slot 9). Mask bit 0x4 is the
+/// E-USE flag, not a contact class: `Trigger_Hit` 0x1b1fc8 builds contact bits {2 bullet,
+/// 8 player, 0x10 drone} only, so a mask of 0x4 never fires by contact (the panel test pins
+/// that), while `Trigger_Activate` 0x1b2318's type-2 arm REQUIRES `mask & 4` and then writes
+/// `switch_channels[out] = 1` [M :23-33] — reached from `Player_Activate` 0x1a5170's
+/// class-0x1D arm [M :134-137, the use sphere 0x1a5170:100-108]. With the sabotage AND 0x8C
+/// up, the E press raises 0xA0 → SEQ_AND (map 54 placement 393) [0x8C, 0xA0] → 0x51 [D] → the
+/// kill cascade → box death 0x85 [D pairs] → Door_Slide_11A/B (map 54 placements 151/152,
+/// p3 = 0x85) unlock on the rising edge and auto-open [M Door_Update 0x1363c8:88-107].
+#[test]
+fn the_e_use_switch_fires_the_sabotage_cascade_and_opens_the_west_door() {
+    let iso = iso();
+    let mut scene = nf_view::load(&iso, "07000014.bin", false).expect("load 07000014");
+    for _ in 0..400 {
+        if !scene.sim.as_ref().unwrap().disabled { break; }
+        scene.sim.as_mut().unwrap().step_bond(nf_game::player::Input::default(), false, false, false);
+    }
+    // The touch exists with the disc's fields [D placement 399].
+    let t_centre = {
+        let sim = scene.sim.as_ref().unwrap();
+        let i = sim.drones.triggers.iter()
+            .position(|t| t.out == 0xa0 && t.mask & 4 != 0 && t.kind == nf_game::triggers::kind::TOUCH)
+            .expect("the 0xA0 E-use touch (mask 4, kind 0xEB TOUCH) exists [D placement 399]");
+        let t = &sim.drones.triggers[i];
+        assert!(!t.tris.is_empty(), "the touch carries its object's volume [D oDroneTrigger1b]");
+        eprintln!("[014] the E-use touch: placement {} AABB {:?}", t.placement, (t.lo, t.hi));
+        [(t.lo[0] + t.hi[0]) * 0.5, (t.lo[1] + t.hi[1]) * 0.5, (t.lo[2] + t.hi[2]) * 0.5]
+    };
+    // The door starts locked; nothing has armed [M 0x1363c8:93-96].
+    let door = scene.sim.as_ref().unwrap().drones.doors.list.iter()
+        .position(|d| d.ch_lock == 0x85)
+        .expect("Door_Slide_11A/B with lock ch 0x85 exists [D placements 151/152]");
+    {
+        let sim = scene.sim.as_ref().unwrap();
+        assert!(sim.drones.doors.is_locked(door, &sim.drones.channels), "the door starts locked");
+        assert!(!sim.drones.channels.on(0x51) && !sim.drones.channels.on(0x85) && !sim.drones.channels.on(0xa0),
+            "nothing armed at load [D]");
+    }
+    // The fusebox words (the real laser cut is the walk's leg 3 and the panel tests' pin);
+    // seeding both raises 0x8C through the REAL AND mux [D AND plc (0x87,0x88)→0x8C].
+    scene.sim.as_mut().unwrap().drones.channels.set(0x87, 1, 1);
+    scene.sim.as_mut().unwrap().drones.channels.set(0x88, 1, 1);
+    scene.sim.as_mut().unwrap().bond.pos = [-60.3, 0.9, 38.4];
+    for _ in 0..60 { scene.sim.as_mut().unwrap().step_bond(nf_game::player::Input::default(), false, false, false); }
+    {
+        let sim = scene.sim.as_ref().unwrap();
+        assert!(sim.drones.channels.on(0x8c), "AND [0x87, 0x88] raises 0x8C [D]");
+        assert!(!sim.drones.channels.on(0xa0) && !sim.drones.channels.on(0x51),
+            "standing in the touch's volume without E fires nothing [M 0x1b1fc8 mask 0x4]");
+    }
+    // Aim at the touch's volume centre and press E through the REAL Player_Activate path
+    // (the use sphere head + 1×look [M 0x1a5170:100-108]; the port's AABB stand-in).
+    {
+        let sim = scene.sim.as_ref().unwrap();
+        let head = sim.bond.head();
+        let d = [t_centre[0] - head[0], t_centre[1] - head[1], t_centre[2] - head[2]];
+        let l = (d[0] * d[0] + d[1] * d[1] + d[2] * d[2]).sqrt().max(1e-4);
+        let sim = scene.sim.as_mut().unwrap();
+        sim.bond.yaw = d[0].atan2(d[2]);
+        sim.bond.pitch = (d[1] / l).asin() / std::f32::consts::FRAC_PI_2; // look() units [M BL+0x8a8·π/2]
+        eprintln!("[014] aiming at the touch: head {head:?} centre {t_centre:?} yaw {:.2} pitch {:.2}", sim.bond.yaw, sim.bond.pitch);
+    }
+    let mut fired = false;
+    for _ in 0..12 {
+        scene.sim.as_mut().unwrap().step_bond(nf_game::player::Input::default(), false, false, true);
+        if scene.sim.as_ref().unwrap().drones.channels.on(0xa0) { fired = true; break; }
+    }
+    assert!(fired, "the E press fires the mask-4 touch → 0xA0 [M 0x1b2318:23-33; D placement 399]");
+    // The SEQ_AND's write is a LEVEL write recomputed per tick while its inputs hold — but the
+    // touch's 0xA0 is a 1-tick pulse (Trigger_Calc 0x1b1900's type-2 clear each frame), so 0x51
+    // pulses too; the cascade's first link reads it inside the pulse window and the rest ride
+    // the death channels (never cleared). Track "ever on" for the pulse links, level for 0x85.
+    let (mut seen51, mut ch85) = (false, false);
+    for k in 0..300u32 {
+        {
+            let sim = scene.sim.as_ref().unwrap();
+            let ch = &sim.drones.channels;
+            if ch.on(0x51) { seen51 = true; }
+            if ch.on(0x85) { ch85 = true; }
+            if k % 25 == 0 {
+                eprintln!("[014] cascade tick {k}: a0 {} 51{} 52 {} 4e {} 53 {} 85 {}",
+                    ch.on(0xa0), seen51 as u8, ch.on(0x52), ch.on(0x4e), ch.on(0x53), ch.on(0x85));
+            }
+        }
+        {
+            let sim = scene.sim.as_mut().unwrap();
+            sim.drones.health.health = 100.0;
+            sim.step_bond(nf_game::player::Input::default(), false, false, false);
+        }
+        if ch85 { break; }
+    }
+    assert!(seen51, "SEQ_AND [0x8C, 0xA0] raised 0x51 (the 1-tick pulse) [D placement 393]");
+    assert!(ch85, "the cascade ends at box #729's death 0x85 [D the kill→death pairs]");
+    // The door unlocked for good and AUTO-OPENED on the rising edge [M 0x1363c8:88-107].
+    {
+        let sim = scene.sim.as_ref().unwrap();
+        assert!(!sim.drones.doors.is_locked(door, &sim.drones.channels),
+            "Door_Slide_11A/B unlocks on the 0x85 rising edge [M 0x1363c8:88-107]");
+        assert_eq!(sim.drones.doors.list[door].ch_lock, 0, "the lock field cleared [M 0x1363c8:106]");
+        assert!(sim.drones.doors.list[door].state & 0xC != 0 || sim.drones.doors.list[door].pos01 > 0.0,
+            "the unlock edge OPENS the door (state {:?} pos01 {})",
+            sim.drones.doors.list[door].state, sim.drones.doors.list[door].pos01);
+    }
+    for _ in 0..120 { scene.sim.as_mut().unwrap().step_bond(nf_game::player::Input::default(), false, false, false); }
+    {
+        let sim = scene.sim.as_ref().unwrap();
+        assert!(sim.drones.doors.list[door].pos01 > 0.5,
+            "the door slides open (pos01 {:.2})", sim.drones.doors.list[door].pos01);
+    }
+}
