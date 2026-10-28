@@ -81,6 +81,11 @@ The port code carries the whole chain since earlier tasks (verified, not modifie
 `fade_flags & 0x20` freeze gates in `Script::interp` kinds 2/4/7 [M 0x1d9a08:146, 205], the event-6
 snapshot (`Script::event` case 6) and `Script::free`'s `PlayerEnable`.
 
+The test is not vacuous: with the kind-2 freeze gate mutated off (the interp allowed to keep keying through
+the catch-up), `skip_handback_matches_the_games_freeze_rule` FAILS at the frozen-pose assertion — the
+skips then land at the catch-up pose instead of the frozen one. Mutation run once for evidence, reverted
+(the final tree carries no source change).
+
 ## What I ran
 
 - `cargo test --offline --release -p nf-game --test nis_skip_handback` — 2 passed (the numbers above).
