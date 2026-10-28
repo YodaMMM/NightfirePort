@@ -97,3 +97,5 @@ wedges at the same mouth (it does not opt into crowd_aware — the moved shared-
 its route too). The verdict stands: the port's probe_move stand-in parks the armed guest mid-mouth; the
 game's root motion is ungated [M 0x13b490/0x157bd0] so she walks through and the player waits — the
 bot-side move model is the next round's fix, with the live checks in the report.
+
+drone-bump-collision-6 start: branch = s/drone-bump-collision-5 (cbd1c5c1) merged with origin/master (17aa36ab), clean. This round ports the bot-side move model at the 07 west mouth per round-5's verdict — the game's route-walk root motion is ungated world-wise [M DroneAnim_PreTransCallback 0x13b490 / AINetwork_GetBoundsPushVectorForSphere 0x157bd0] while the port's probe_move stand-in parks dr22 mid-mouth — then the five reds (party_door_lock x2, cutscene_timer_pause, probe_07_route, walkreal_07000007 hall walk) go green behind it. Suite started in background; checkpoints every ~25 min; cutoff 14:57 UTC.
