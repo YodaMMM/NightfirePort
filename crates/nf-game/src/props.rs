@@ -512,8 +512,8 @@ mod tests {
         let mut p = Props::default();
         // Two tags: placement 0 kills on ch 5 and dies writing ch 6; placement 1 (newer) kills on
         // ch 6 and dies writing ch 7. A single pass after ch 5 rises smashes only the OLDER tag.
-        p.destroy.push(Destroy { placement: 0, lo: [0.0; 3], hi: [1.0; 3], channel: 6, health: 1.0, dead: false, kind: 0, blast_damage: 0.0, kill_channel: 5 });
-        p.destroy.push(Destroy { placement: 1, lo: [2.0; 3], hi: [3.0; 3], channel: 7, health: 1.0, dead: false, kind: 0, blast_damage: 0.0, kill_channel: 6 });
+        p.destroy.push(Destroy { placement: 0, lo: [0.0; 3], hi: [1.0; 3], channel: 6, health: 1.0, dead: false, kind: 0, blast_damage: 0.0, kill_channel: 5, mask: 0, colour: [0xff, 0xff], hit67: false });
+        p.destroy.push(Destroy { placement: 1, lo: [2.0; 3], hi: [3.0; 3], channel: 7, health: 1.0, dead: false, kind: 0, blast_damage: 0.0, kill_channel: 6, mask: 0, colour: [0xff, 0xff], hit67: false });
         let mut ch = Channels::default();
         ch.set(5, 1, 1);
         let s = p.channel_kills(&mut ch, 1);
