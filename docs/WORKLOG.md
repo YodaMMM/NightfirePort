@@ -235,3 +235,10 @@ Progress:
   the final tree before the stop-work mark; the rest ran directly as listed. Left: the full
   pass, the two stale #[ignore]s in world.rs (the cull is unconditional now), the dead flag
   consts, and the band-settle-3 radial arm that is still not in this lineage.
+
+## capsule-cull-and-los-masks-8 (2026-10-28)
+
+- Branch opened from origin/s/capsule-cull-and-los-masks-7 (7f639227, master fcf6f334
+  already merged in). Task: interact_07000009_live body-armour take never fires
+  (Bond on the right floor), plus the masks-7 report's other diagnosed/pending groups.
+  Suite baseline starting; checkpoints every 20-30 min.
