@@ -42,9 +42,12 @@ fn load_warm() -> Walker {
 
 fn cab_y(w: &Walker) -> Option<f32> {
     let sim = w.scene.sim.as_ref().unwrap();
+    // The cab is script entity 0x2000367 [D nis dump; lifts_ride_live matches the same hex form] —
+    // the old decimal literal 2000367 never matched (0x2000367 = 33555303), so the boarding poll
+    // was blind and Bond walked into the empty shaft.
     sim.drones.scripts.objects.list.iter().flatten()
         .find_map(|o| match o {
-            nf_game::nis::Obj::Entity { hash, matrix, .. } if *hash == 2000367 => Some(matrix[3][1]),
+            nf_game::nis::Obj::Entity { hash, matrix, .. } if *hash == 0x2000367 => Some(matrix[3][1]),
             _ => None,
         })
 }
@@ -76,60 +79,126 @@ fn walk_balcony_to_the_roof_jump() {
     // y 11.0 → 48.44 → 11.0 over 1239 ticks at x 0, z ≈ 25 [D nis dump]; the shaft spans
     // x −2.7..1.6, z 22.6..27 [D placement #232 boxes]. The cab's collision top rides the
     // script-entity dynamic set (the game's own ride law [M 0x194188 → 0x133e88]) — walk to the
-    // shaft mouth, board when the cab's top is level with the balcony floor, stand, step off at
-    // the exec floor (47.77 [D probe]).
+    // balcony floor EAST of the shaft lip (the old target x 0.5 was over the void: Bond slid in
+    // and crossed the y 7.98..11.98 out-of-bounds slabs [D trig43/44 boxes] → ch 0x7A → OR #46
+    // [0x79,0x7A] → ch 0x7B → the fail wedge 0600098A disabled Bond for good), wait for the cab's
+    // bottom hold (top = 11.0 + 3.3 = 14.3, a 0.2 step off the 14.13 floor [D probe]), step on,
+    // ride, step off east at the exec floor (47.77 [D probe]).
     let mut rode = false;
-    if w.try_walk_to(Wp::new(0.5, 14.0, 25.0).r(1.6), "the shaft mouth") {
+    {
+        // The wait spot is on the balcony's proven z≈25.8 corridor, 0.7 east of the opening's
+        // lip (x 1.6): the earlier wait AT the lip (x 0.5 target) either slid Bond in on the
+        // walk's residual velocity or had the boarding steer walk him off the edge — the cab's
+        // stand surface is cy + 4.1 (15.1 at the key-0 hold [L lifts_ride_live: grounded 16.11]),
+        // a full step above the 14.1 floor, so the board is the player's hop, not a walk step.
+        if w.try_walk_to(Wp::new(2.3, 14.0, 25.8).r(1.0), "the shaft wait (east of the lip)") {
+            let sim = w.scene.sim.as_mut().unwrap();
+            sim.bond.vel = [0.0; 3];
+        }
+        {
+            // One probe of the script-entity id/hash pairing (the report's open item): the lift
+            // script's entities at runtime — the cab is hash 0x2000367 kind 49 (class 0x31), its
+            // matrix x/z LOCAL (0,0) while the collision box is placement-anchored (x 0,
+            // z 23.19..26.56 [D placement #232]) — only matrix[3][1] carries the keyed y.
+            let sim = w.scene.sim.as_ref().unwrap();
+            for (i, o) in sim.drones.scripts.objects.list.iter().enumerate() {
+                if let Some(o) = o {
+                    if let nf_game::nis::Obj::Entity { hash, kind, matrix, .. } = o {
+                        if hash & 0x0f00_0000 == 0x0200_0000 {
+                            eprintln!("[0b] probe script-obj{i}: hash {hash:#x} kind {kind} at ({:.1},{:.2},{:.1})",
+                                matrix[3][0], matrix[3][1], matrix[3][2]);
+                        }
+                    }
+                }
+            }
+            eprintln!("[0b] probe cab_y() = {:?}", cab_y(&w));
+        }
         let start = w.total_ticks;
         let mut boarded = false;
-        while w.total_ticks - start < 1600 && !boarded {
+        while w.total_ticks - start < 2600 && !boarded {
             if let Some(cy) = cab_y(&w) {
-                let top = cy + 3.3;
-                // Board while the cab's top is within a step of the balcony floor and rising.
-                if (13.0..=14.6).contains(&top) {
+                // Board during the bottom hold (cy 11.0, surface 15.1 [D keys; L lifts_ride]) —
+                // hop on; also chase a cab that started rising under Bond (the surface below his
+                // knees still catches the hop).
+                if (10.5..=18.0).contains(&(cy + 4.1)) {
                     let sim = w.scene.sim.as_ref().unwrap();
                     let p = sim.bond.pos;
-                    let desired = (0.0f32 - p[0]).atan2(25.0 - p[2]);
-                    let err = walker::wrap_pi(desired - sim.bond.yaw);
-                    let input = nf_game::player::Input {
-                        turn: err.clamp(-0.08, 0.08),
-                        forward: if err.abs() > 0.6 { 0.0 } else { 0.5 },
-                        ..Default::default()
-                    };
-                    w.tick(input, false);
-                    if walker::dxz(w.scene.sim.as_ref().unwrap().bond.pos, [0.0, p[1], 25.0]) < 1.4 {
-                        boarded = true;
+                    // Only from the balcony floor band (a fall crosses the OOB web — abort).
+                    if (13.5..=17.0).contains(&p[1]) && walker::dxz(p, [0.0, p[1], 25.0]) < 4.5 {
+                        let desired = (0.0f32 - p[0]).atan2(25.0 - p[2]);
+                        let err = walker::wrap_pi(desired - sim.bond.yaw);
+                        // Land WELL inside the box (x ±1.5 [D placement #232]): a landing near the
+                        // east face gets shoved off it by the rising surface (the 0.06/tick rise
+                        // resolves the penetration sideways) — the carry then has no body to grab.
+                        let jump = w.total_ticks % 20 == 0 && sim.bond.grounded
+                            && walker::dxz(p, [0.0, p[1], 25.0]) > 0.8;
+                        let input = nf_game::player::Input {
+                            turn: err.clamp(-0.08, 0.08),
+                            forward: if err.abs() > 0.6 { 0.0 } else { 0.6 },
+                            jump,
+                            ..Default::default()
+                        };
+                        w.tick(input, false);
+                        let p2 = w.scene.sim.as_ref().unwrap().bond.pos;
+                        if w.scene.sim.as_ref().unwrap().bond.grounded
+                            && p2[1] > 15.5
+                            && walker::dxz(p2, [0.0, p2[1], 25.0]) < 1.0
+                            && p2[0] < 1.0 {
+                            boarded = true;
+                        }
+                        continue;
                     }
-                    continue;
                 }
             }
             w.tick(Default::default(), false);
         }
         if boarded {
-            // Stand on the cab; the ride carries Bond ([M] ground_motion). Ride until the top
-            // reaches the exec floor's band, then step off east (the old leg's exit point).
+            // Stand on the cab; the ride carries Bond ([M] ground_motion, lifts_ride's pin). Ride
+            // until the surface (cy + 4.1) reaches the exec floor 47.77 [D probe], then step off
+            // east — a flat walk off the level surface.
             let start = w.total_ticks;
-            while w.total_ticks - start < 1400 {
+            while w.total_ticks - start < 1600 {
                 let cy = cab_y(&w).unwrap_or(0.0);
-                if cy + 3.3 >= 47.0 { break; }
+                if cy + 4.1 >= 47.6 { break; }
                 w.tick(Default::default(), false);
+                let dt = w.total_ticks - start;
+                if dt % 200 == 0 {
+                    let sim = w.scene.sim.as_ref().unwrap();
+                    let sp = sim.drones.scripts.players.iter().find(|p| p.scripts[0] == 0x0600_0048);
+                    let cpos = sim.drones.scripts.objects.list.iter().flatten().find_map(|o| match o {
+                        nf_game::nis::Obj::Entity { hash: 0x2000367, matrix, .. } => Some([matrix[3][0], matrix[3][1], matrix[3][2]]),
+                        _ => None,
+                    });
+                    eprintln!("[0b] ride+{dt}: cy {cy:.2} cab {:?} bond ({:.2},{:.2},{:.2}) grounded {} sub {} sp_state {:?} sp_deleted {:?} ch75 {}",
+                        cpos, sim.bond.pos[0], sim.bond.pos[1], sim.bond.pos[2], sim.bond.grounded, sim.bond.substate,
+                        sp.map(|p| p.state), sp.map(|p| p.deleted), sim.drones.channels.on(0x75));
+                }
             }
             let y = w.scene.sim.as_ref().unwrap().bond.pos[1];
-            eprintln!("[0b] the cab ride: boarded, bond y now {y:.2} (cab top target 47+)");
+            eprintln!("[0b] the cab ride: boarded, bond y now {y:.2} (surface target 47.6+)");
             if y > 40.0 {
-                let sim = w.scene.sim.as_ref().unwrap();
-                let p = sim.bond.pos;
-                let desired = (8.0f32 - p[0]).atan2(24.8 - p[2]);
-                let err = walker::wrap_pi(desired - sim.bond.yaw);
-                let input = nf_game::player::Input {
-                    turn: err.clamp(-0.08, 0.08),
-                    forward: if err.abs() > 0.6 { 0.0 } else { 0.6 },
-                    ..Default::default()
-                };
-                for _ in 0..90 { w.tick(input, false); }
-                rode = w.scene.sim.as_ref().unwrap().bond.pos[1] > 44.0;
+                // The step-off is a steering loop toward the exec floor's exit point.
+                let start = w.total_ticks;
+                while w.total_ticks - start < 240 {
+                    let sim = w.scene.sim.as_ref().unwrap();
+                    let p = sim.bond.pos;
+                    if p[0] > 2.2 && (44.0..52.0).contains(&p[1]) { break; }
+                    let desired = (8.0f32 - p[0]).atan2(24.8 - p[2]);
+                    let err = walker::wrap_pi(desired - sim.bond.yaw);
+                    let input = nf_game::player::Input {
+                        turn: err.clamp(-0.08, 0.08),
+                        forward: if err.abs() > 0.6 { 0.0 } else { 0.6 },
+                        ..Default::default()
+                    };
+                    w.tick(input, false);
+                }
+                let p = w.scene.sim.as_ref().unwrap().bond.pos;
+                eprintln!("[0b] the step-off: bond ({:.2},{:.2},{:.2})", p[0], p[1], p[2]);
+                rode = p[0] > 2.2 && (44.0..52.0).contains(&p[1]);
             }
         }
+        eprintln!("[0b] diag: post-poll disabled {} ch7b {} boarded->rode {}",
+            w.scene.sim.as_ref().unwrap().disabled, w.scene.sim.as_ref().unwrap().drones.channels.on(0x7b), rode);
     }
     if !rode {
         // The documented stand-in (the port gap the report carries): the exec floor below.
@@ -228,7 +297,9 @@ fn walk_balcony_to_the_roof_jump() {
     w.wait(30);
     {
         let sim = w.scene.sim.as_ref().unwrap();
-        eprintln!("[0b] pre-shot: weapon {:#x} request {:#x} owned {}", sim.gun.weapon, sim.gun.switch_request, sim.drones.inventory.owned[0x58]);
+        eprintln!("[0b] pre-shot: weapon {:#x} request {:#x} owned {} disabled {} pc_state {}",
+            sim.gun.weapon, sim.gun.switch_request, sim.drones.inventory.owned[0x58], sim.disabled,
+            sim.drones.useobjs.pcs.iter().find(|p| p.ch == 0x4c).map(|p| p.state).unwrap_or(9));
     }
     let installed = shoot_at(&mut w, [pc[0], pc[1] + 0.55, pc[2]], 2.6, 1800, "the Q-Worm C shot", &|sim| sim.drones.channels.on(0x4c));
     assert!(installed, "the Q-Worm C install never landed [M 0x1aee20]");
