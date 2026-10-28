@@ -851,8 +851,8 @@ fn following_mayhew_down_completes_the_level() {
     {
         let sim = w.scene.sim.as_ref().unwrap();
         let d = &sim.drones.list[ci];
-        eprintln!("[01f] follow done: contact at ({:.2},{:.2},{:.2}) state {:#x} route {:?} bond at ({:.2},{:.2},{:.2}) tick {}",
-            d.pos[0], d.pos[1], d.pos[2], d.state, d.route.as_ref().map(|r| (r.index, r.nodes.len())),
+        eprintln!("[01f] follow done (park {:?}): contact at ({:.2},{:.2},{:.2}) state {:#x} route {:?} bond at ({:.2},{:.2},{:.2}) tick {}",
+            parked_at, d.pos[0], d.pos[1], d.pos[2], d.state, d.route.as_ref().map(|r| (r.index, r.nodes.len())),
             sim.bond.pos[0], sim.bond.pos[1], sim.bond.pos[2], w.total_ticks);
         // Who could hold the hide / block the AND: every live armed guard within 20 of him.
         for (i, o) in sim.drones.list.iter().enumerate() {
