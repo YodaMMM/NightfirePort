@@ -2888,22 +2888,63 @@ impl Sim {
             let straddle_cells = bond_cel
                 .map(|c| self.world.debug_straddle(c, [pc[0], pc[1] + ao, pc[2]], [pc[0], pc[1] + bo, pc[2]], ar))
                 .unwrap_or_default();
-            // The near bots' collision capsules for the actor-actor push (`Collide_Jointy`
+            // The bots' collision capsules for the actor-actor push (`Collide_Jointy`
             // 0x1ec180:229-281 via `LadderCtx::bot_capsules`): the game's bot hittest arms
             // [M NDrone2_Collision 0x140e90:91-121 — top = pos + up·r, bottom = pos + up·(r − h),
             // r 0.4 default / 0.55 kind 0xc, h the anim height word +0xa0 with default 1.0
             // [M NDrone2_DefaultInit 0x14b300:48]] — upright bots (up = (0,1,0)), so the arms are
-            // pos + (0, ±0.4, 0) at h 1.0. Only the NEAR bots carry an ON capsule [M
-            // DroneFunc_NearPlayerCollision 0x14b190 + NDrone2_DoCollision 0x149ec8 — the kind
-            // word +0x464 goes 0x800 only within 2.0 of the player]; the 0.4 default stands for
-            // every bot here [S unverified: the sleeper's own kind word (the 0xc → 0.55 arm) is
-            // not read by the port — a live check item].
+            // pos + (0, ±0.4, 0) at h 1.0. The radius/shape arms now
+            // come from the ported capsule itself (`Drone::bump_capsule` [M NDrone2_Collision
+            // 0x140e90:59-124 — 0.3 down / 0.55 DSTATE 0xC / 0.4 default, ends pos+up·r and
+            // pos+up·(r − hip), hip the ext+0xa0 anim height (drone-bump-collision-3)]);
+            // drone-bump-collision. drone-bump-collision-3: the ON/OFF of a bot's capsule is its
+            // kind word ext+0x464, refreshed 0x800/0 on the bot's OWN control tick through
+            // `NDrone2_DoCollision` 0x149ec8 (disasm-checked) and zeroed outright while the drone
+            // system is frozen [M Drone_CollisionHandler 0x140968:71-75] — NOT a live-distance
+            // test (the collision-2 note "0x800 only within 2.0" was the near ARM alone; the
+            // drawn-grace arm at 0x149ec8:34-37 and the :42-44 fall-through arm every enabled
+            // bot whose anim carries no no-collision flag).
             let bot_capsules: Vec<([f32; 3], [f32; 3], f32)> = {
-                let bp = self.bond.pos;
+                // drone-bump-collision-3 [M Player_Update 0x193600:80-88 + :361]: `Player_Collision`
+                // — the Jointy resolve's ONLY caller — runs AFTER the ext+0x94a enable gate, and
+                // `Player_Disable(player, 0)` 0x195f70:12-14 zeroes that byte: a script-disabled
+                // Bond runs NO class-3 query at all and is NEVER pushed. The port's scripted Bond
+                // keeps its tick_ctx (zeroed input, the cut-scene rails move him); only the push
+                // arm drops out here.
+                if self.disabled { Vec::new() } else {
+                // The ARming gate [M] — the bot's own kind word ext+0x464: `NDrone2_Collision`
+                // 0x140e90:66-72/95-101 rewrites it 0x800/0 EVERY control tick through
+                // `NDrone2_DoCollision` 0x149ec8 (disasm-checked), from `NDrone2_ControlSTANDARD`
+                // 0x1490f0:230; `DefaultInit` 0x14b300:576 starts it 0x800; `Drone_CollisionHandler`
+                // 0x140968:71-75 forces it 0 every tick the drone system is frozen
+                // (`Drone_PauseNoDraw` 0x13a710's `Drone_bDisableSystem`, script event 5's
+                // `Drone_EnableAll(0)` → `NPCGlobals = 0` [M 0x1383e8 tail]) and `Drone_Control`
+                // 0x139268:39-42 gates the re-arm off the same flags. So a bot's capsule takes part
+                // in the player push only while its own control pass runs and arms — the port's
+                // `kind_464` (drone.rs, refreshed at the per-bot control pass). The corpse
+                // exclusion stays the collision-2 [S] door-gate mapping (Jointy itself has no
+                // corpse-word evidence either way).
+                // The PICK-LEVEL gate the game resolves the class-3 query through: `Collide_Pick`
+                // 0x1eb320 walks only the seeker's straddled cels (:125 `Collide_StraddleCels`
+                // build; :312-336 the per-cel loop — `iVar9 = *(int *)(iVar12 + 8)` = the cel's
+                // object list, `Collide_PickObj(hittest, obj, owner)` per obj with `obj->0xf0 &
+                // 0x30000000 == 0`), so a bot whose own cel the player's pick capsule does NOT
+                // straddle is never a pick candidate — no contact node, no Jointy resolve, no
+                // push [M 0x1eae80 → 0x1ebaa8 → 0x1ec180]. The straddle set here is the same
+                // one the third-icon context consumes (the pick capsule = `pick_arm` + the
+                // hittest radius, anchored at the integrated pre-push-out spot). The bot's cel
+                // is the port's `find_cel(pos)` stand-in for the game's obj+0x20 link (the same
+                // stand-in the sight check uses [S noted at drone.rs `same_cel`]; the game's
+                // link is relinked by control_handle_cel_change 0x133288, one tick of staleness
+                // at most on both sides). drone-bump-collision-2: bots across a cel boundary —
+                // the hall-door-gap bot of probe_07_route, the party-door crowds — stop pushing;
+                // bots Bond shares a cel with keep the push.
                 self.drones.list.iter()
-                    .filter(|x| x.enabled && ((x.pos[0] - bp[0]).powi(2) + (x.pos[1] - bp[1]).powi(2) + (x.pos[2] - bp[2]).powi(2)) < 2.0 * 2.0)
-                    .map(|x| ([x.pos[0], x.pos[1] + 0.4, x.pos[2]], [x.pos[0], x.pos[1] - 0.6, x.pos[2]], 0.4f32))
+                    .filter(|x| x.kind_464 == 0x800 && !x.corpse)
+                    .filter(|x| straddle_cells.contains(&self.world.find_cel(x.pos).unwrap_or(usize::MAX)))
+                    .map(|x| x.bump_capsule())
                     .collect()
+                }
             };
             let ctx = nf_game::player::LadderCtx { ladders: &self.ladders, wires: &self.wires, wire_anims: Some(&self.wire_anims), water, sink, creepwalls: &self.creepwalls, level_bump_5fb: false, straddle: &straddle_cells, bot_capsules: &bot_capsules };
             // The third-icon context [M ThirdIcon_Update 0x196e80 + Player_CollisionHandler 0x1949a8:22]:

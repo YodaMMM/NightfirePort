@@ -107,6 +107,9 @@ pub struct Walker {
     stuck: u32,
     stuck_cycles: u32,
     sidestep: i32,
+    /// drone-bump-collision-4: the doorway anti-trap's per-leg budget (3 fires, then the plain
+    /// stuck ladder) — reset at each `walk_to`.
+    trap_fires: u32,
     max_y: f32,
     pub lenient: bool,
     /// The walked path: a coarse breadcrumb of ground Bond actually covered (pushed in
@@ -130,6 +133,16 @@ pub struct Walker {
     /// steps off the line (the strafe) instead of shooting the escort. `None` = the old
     /// behaviour, every other caller unchanged.
     pub shield: Option<usize>,
+    /// drone-bump-collision-4 (opt-in; default false → every other caller bit-identical): the
+    /// crowd answer. While true, a leg whose line runs through an ARMED bot is walked the way a
+    /// player steers — aim at a point ~1.8 beside the bot and keep walking forward, so the
+    /// Jointy push [M 0x1ec180:229-281] slides Bond along the capsule instead of pinning him
+    /// at the 0.95 contact equilibrium (the stuck ladder's pure strafe cannot escape: the
+    /// push's radial arm re-centers Bond every tick — the -3 round's (79.19,−51.21) wedge).
+    /// Armed = the bot's kind word +0x464 reads 0x800 [M NDrone2_Collision 0x140e90:95-101
+    /// rewrites it every control tick; Drone_CollisionHandler 0x140968:71-75 zeroes it while
+    /// the drone system is frozen].
+    pub crowd_aware: bool,
 }
 
 /// The stuck dump, public for the walkreal tests' own aim loops (walkreal-b2).
@@ -177,11 +190,13 @@ impl Walker {
             report: Report { legs: Vec::new(), stuck_events: Vec::new(), falls: Vec::new() },
             total_ticks: 0, pos, last_sample: pos, sample_tick: 0, stuck: 0, stuck_cycles: 0,
             sidestep: 0, max_y: pos[1], lenient: false,
+            trap_fires: 0,
             trail: Vec::new(),
             alarm_last: Vec::new(),
             drone_watch, watch_last,
             health_last: Vec::new(),
             shield: None,
+            crowd_aware: false,
         }
     }
 
@@ -790,6 +805,7 @@ impl Walker {
     pub fn walk_to(&mut self, wp: Wp, label: &str) -> u32 {
         let start_ticks = self.total_ticks;
         let mut use_left = 0u32;
+        self.trap_fires = 0;
         let mut ladder = false;
         let mut riding = false;
         // The last door the stuck handler used: the second use of the SAME door without Bond
@@ -957,14 +973,49 @@ impl Walker {
 
             // Steering: turn toward the target, walk forward. Stuck detection every 60 ticks.
             let sim = self.scene.sim.as_ref().unwrap();
-            let desired = (wp.at[0] - p[0]).atan2(wp.at[2] - p[2]);
+            let mut aim = [wp.at[0], wp.at[2]];
+            let mut crowd_slide = false;
+            // drone-bump-collision-4: the crowd answer (opt-in `crowd_aware`). Armed bots inside
+            // the 2.2 band repulse the steer direction the way a player steers past a body —
+            // goal attraction + bot repulsion, forward NEVER zeroed inside the band — so the
+            // Jointy push (a radial position projection out of the capsule overlap [M
+            // Collide_Jointy 0x1ec180:229-266: the separation vector is ADDED to the player's
+            // position slots; tangential motion survives it]) slides Bond along the capsule
+            // instead of pinning him at the 0.95 contact equilibrium. Armed = the bot's kind
+            // word +0x464 reads 0x800 [M NDrone2_Collision 0x140e90:95-101 rewrites it every
+            // control tick; Drone_CollisionHandler 0x140968:71-75 zeroes it while the drone
+            // system is frozen]. (The earlier bypass-aim variant stalled: `err > 1.2 → forward
+            // 0` turned in place inside the push's radial arm.)
+            if self.crowd_aware && sim.bond.grounded && d > 1.0 {
+                let (gx, gz) = (wp.at[0] - p[0], wp.at[2] - p[2]);
+                let gl = (gx * gx + gz * gz).sqrt();
+                if gl > 0.5 {
+                    let (mut sx, mut sz) = (gx / gl, gz / gl);
+                    let mut blocked = false;
+                    for dr in sim.drones.list.iter() {
+                        if !dr.present || dr.corpse || !dr.enabled || dr.kind_464 != 0x800 { continue; }
+                        let (rx, rz) = (p[0] - dr.pos[0], p[2] - dr.pos[2]);
+                        let r = (rx * rx + rz * rz).sqrt();
+                        if !(0.3..2.2).contains(&r) { continue; }
+                        blocked = true;
+                        let w = (2.2 - r) / 2.2 * 2.2;   // repulsion weight, full inside ~1.1
+                        if r > 0.01 { sx += rx / r * w; sz += rz / r * w; }
+                    }
+                    if blocked {
+                        let sl = (sx * sx + sz * sz).sqrt();
+                        if sl > 0.01 { aim = [p[0] + sx / sl * 4.0, p[2] + sz / sl * 4.0]; }
+                        crowd_slide = true;
+                    }
+                }
+            }
+            let desired = (aim[0] - p[0]).atan2(aim[1] - p[2]);
             let err = wrap_pi(desired - sim.bond.yaw);
             let mut input = Input {
                 turn: err.clamp(-0.07, 0.07),
                 forward: if d > 2.2 { 1.0 } else { 0.45 },
                 ..Default::default()
             };
-            if err.abs() > 1.2 { input.forward = 0.0; }
+            if err.abs() > 1.2 && !crowd_slide { input.forward = 0.0; }
             if self.sidestep != 0 {
                 // Pure lateral (no forward): the diagonal walk grinds into the same wall corner.
                 input.strafe = if self.sidestep > 0 { 1.0 } else { -1.0 };
@@ -985,6 +1036,40 @@ impl Walker {
                     // then let the swing finish. Anything else: sidestep, jump, then report.
                     // The door decision in its own scope (the immutable sim borrow must end
                     // before use_door's &mut self, and before the ladder's re-borrows).
+                    // drone-bump-collision-4, the doorway anti-trap (crowd_aware): an ARMED route
+                    // walker at its nav node just beyond a door (the 07 west mouth: node
+                    // (79.75,−50.45) [D the nav dump] vs door (80.0,−49.9)) and Bond's capsule
+                    // freeze EACH OTHER — the bot's state 0x16 walk (the civilian walk tuple
+                    // [M drone.rs 0x14..=0x16]) tests its move against Bond's capsule and stands
+                    // while Bond claims the doorway, while the Jointy push [M 0x1ec180:229-266]
+                    // pins Bond at the 0.95 contact inside the leaf's sweep cell. The player
+                    // steps BACK out of the cell, lets the bot walk its route leg (the walkreal
+                    // zone test proves the guests walk their kind-8 routes [M 0x1728c0 →
+                    // 0x154190 → 0x15d860]), then follows through behind it. Bounded: 3 trap
+                    // fires per leg, then the plain ladder runs.
+                    if self.crowd_aware && self.trap_fires < 3 {
+                        let bot_i = {
+                            let sim = self.scene.sim.as_ref().unwrap();
+                            let leaf = sim.drones.doors.list.iter().any(|d| dxz(d.pos, self.pos) < 1.7);
+                            let bot = sim.drones.list.iter().position(|d| d.present && !d.corpse
+                                && d.enabled && d.kind_464 == 0x800 && dxz(d.pos, self.pos) < 2.8);
+                            if leaf { bot } else { None }
+                        };
+                        if let Some(bi) = bot_i {
+                            self.trap_fires += 1;
+                            for _ in 0..70 { self.tick(Input { forward: -0.6, ..Default::default() }, false); }
+                            let b0 = self.scene.sim.as_ref().unwrap().drones.list[bi].pos;
+                            for _ in 0..900 {
+                                self.tick(Input::default(), false);
+                                let sim = self.scene.sim.as_ref().unwrap();
+                                let b1 = sim.drones.list[bi].pos;
+                                if dxz(b1, b0) > 1.0 || dxz(b1, self.pos) > 3.4 { break; }
+                            }
+                            self.stuck = 0;
+                            self.last_sample = self.pos;
+                            continue;
+                        }
+                    }
                     let door_i = {
                         let sim = self.scene.sim.as_ref().unwrap();
                         sim.drones.doors.list.iter().position(|d| {

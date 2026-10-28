@@ -68,6 +68,9 @@ fn open_doors_on_the_way(w: &mut Walker, target: [f32; 3]) {
 fn the_escort_holds_at_the_ally_wait_node_until_the_ambush_clears() {
     let iso = iso();
     let mut w = Walker::new(nf_view::load(&iso, "07000001.bin", false).expect("load 07000001"));
+    // drone-bump-collision-4: the crowd answer for the armed combat guards — step around the
+    // contact the way a player steers instead of wedging at it (see common/walker.rs).
+    w.crowd_aware = true;
     // The intro's contact-enable channel, then the tail that re-places Bond (the escort tests' setup).
     let mut enabled_at = None;
     for t in 0..4000u32 {

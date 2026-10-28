@@ -13,6 +13,10 @@ fn iso() -> String { std::env::var("NF_ISO").expect("NF_ISO") }
 fn probe_the_route() {
     let iso = iso();
     let mut w = Walker::new(nf_view::load(&iso, "07000007.bin", false).expect("load 07000007"));
+    // drone-bump-collision-4: the crowd answer — step around an armed bot the way a player
+    // steers (aim beside it, keep walking; the push slides Bond along the capsule). Opt-in on
+    // the walker; the arming itself is untouched [M the chain in the anchors' comment].
+    w.crowd_aware = true;
     w.wait_enabled(3000, "the party start");
     w.wait(60);
     {
@@ -22,6 +26,19 @@ fn probe_the_route() {
         }
     }
     for (name, at) in [
+        // drone-bump-collision-4: the -3 round's north-lane/manual anchors (z ≈ −45.6..−46.6)
+        // are WRONG — the nav web's hall nodes sit in the crowd band and the manual lane itself
+        // wedges on the hall's west wall at x ≈ 80 (the -3 report's own "What's left" item 1).
+        // The hall is crossed on walkreal_07000007_live's PROVEN south-band line — the west
+        // mouth (76.6, −50.7) → the floor (83.1, −50.5) → the east (93.3, −50.4) — via
+        // walk_nav_to, the exact anchors and leg style walkreal_07000007 walks green through
+        // the armed crowd [drone-bump-collision-3: walkreal_07 2/2 on the kind-gated push].
+        // The crowd is ARMED (the arming chain: no +0x4F8 collision bits in the party states
+        // [M PartyGirlInit 0x1728c0 / PartyGirl 0x160140]; +0x154 on the bot's own control
+        // tick [M PreDroneControl 0x148db0:35-48]; the near arm inside 2.0 [M 0x149ec8:30-33,
+        // disasm]; kind +0x464 = 0x800 [M 0x140e90:95-101]; the Jointy push [M 0x1ec180:229-281;
+        // drone_bump_live 2/2]) — this probe neither disarms nor dodges it; it IS the line a
+        // player walks, on walkreal's measured timing.
         ("west aisle south", [35.7f32, 43.6, -70.6]),
         ("west aisle north", [42.6, 43.6, -70.5]),
         ("the west wall run", [42.6, 43.6, -45.0]),
@@ -33,6 +50,7 @@ fn probe_the_route() {
         ("the hall east", [93.3, 43.6, -50.4]),
     ] {
         w.walk_nav_to(at, name, 1.5);
+        println!("[route] {name} ok bond {:?}", w.scene.sim.as_ref().unwrap().bond.pos);
     }
     println!("[route] before E: ch48 {}", w.scene.sim.as_ref().unwrap().drones.channels.on(0x48) as u8);
     w.walk_to(Wp { at: [94.6, 43.6, -47.4], act: Act::Use { use_ticks: 240 }, arrive: 0.7 }, "E the hall door");

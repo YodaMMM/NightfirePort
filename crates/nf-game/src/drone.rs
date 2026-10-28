@@ -1770,6 +1770,16 @@ pub struct Drone {
     /// `NDrone2_DoGravity` 0x141e58:12-15 returns 1 (gravity on) on it BEFORE every other gate —
     /// a corpse carrying it falls even with the collision bit 0x20 cleared [M].
     pub keeps_gravity: bool,
+    /// ext+0x464 (u16) — the hittest kind word the class-3 player query resolves through
+    /// [M Collide_Jointy 0x1ec180:203-209 demands 0x800 on BOTH sides]. `NDrone2_Collision`
+    /// 0x140e90:66-72/95-101 rewrites it EVERY control tick — 0x800 while that tick's own
+    /// `NDrone2_DoCollision` 0x149ec8 arms, 0 otherwise — from `NDrone2_ControlSTANDARD`
+    /// 0x1490f0:230, i.e. only on ticks the bot's control pass runs; `DefaultInit` 0x14b300:576
+    /// starts it 0x800 at spawn. `Drone_CollisionHandler` 0x140968:71-75 forces it 0 every tick
+    /// the drone system is frozen (`NPCGlobals == 0` or `Drone_bDisableSystem`), and the control
+    /// walk that would re-arm is gated off by the same flags [M Drone_Control 0x139268:39-42] —
+    /// so a frozen bot stays unarmed, and one whose control does not run keeps its last value.
+    pub kind_464: u16,
 }
 
 /// Normalise a vector (the grenade throw direction helper).
@@ -1960,6 +1970,8 @@ impl Drone {
             free_root: false, bounded: true, dtype: param(15) as u8, mode_normal: param(16) as u8, mode_alert: param(21) as u8, mode: 0, alt_mode: 0, team: 1, alt_state: 0, scared_radius: 20.0, screamed: false, scare_shouted: false, pending_shout: None,
             // `DroneFunc_NearPlayerCollision`'s source array:
             dist_to_player: [100000.0; 4],
+            // `DefaultInit` 0x14b300:576 — a fresh drone's kind word starts ARMED.
+            kind_464: 0x800,
             velocity: [0.0; 3], in_air: false, on_surface: true,
             // astronaut zero-G:
             thrust: false,
@@ -2288,6 +2300,68 @@ impl Drone {
     /// +0x570 nor the 0x4F8&0x20 special-physics fold, so the override is currently inert
     /// there; the probe and its per-tick source array are the port of the function.
     pub fn near_player_collision(&self) -> bool { self.dist_to_player.iter().any(|&x| x < 2.0) }
+
+    /// `NDrone2_DoCollision` 0x149ec8:11-44 (disasm-checked 0x149ec8-0x149f70) — the arming gate
+    /// `NDrone2_Collision` 0x140e90:66-72/95-101 resolves the kind word +0x464 through, on the
+    /// bot's own control tick. The chain, with the port's models:
+    /// - the flying bit +0x4F8 & 0x200 returns 0 unless `GameState == 0x700004a` [M :11-19] — the
+    ///   port's astronaut arm is `mode == 0x1D` (`NDrone2_Move`'s flying branch, 0x14eff8); the
+    ///   0700004a exemption is unmodelled [S — no ported level runs that GameState],
+    /// - the master arm +0x4F8 & 0x20 [M :16-19, the disasm `andi 0x20` 0x149f08] — `NDrone2_Enable`
+    ///   0x149dd0:12-14/24-27 keeps it in lockstep with the port's `enabled` (the documented fold),
+    /// - DSTATE 0xC / 0x13 return 1 [M :21-25] — the port's HOSTAGE_SAVED / CIVILIAN_HIDING,
+    /// - ext+0x538 != 0 returns 1 [M :27-29 `lw 0x538` 0x149f30] — the blend-out script word
+    ///   (anim-engine.md's "+0x538 == 0 (no blend-out)"), unmodelled: it reads 0 [S],
+    /// - `DroneFunc_NearPlayerCollision` 0x14b190 (any +0x154 slot < 2.0) returns 1 [M :30-33],
+    /// - obj+0xFC != 0 returns 1 [M :34-37 `lbu 0xfc` 0x149f50 — the drawn-grace counter,
+    ///   `control_init_object` 0x134630:16 starts it 2] — the port's `drawn_grace`,
+    /// - +0x570 & 2 returns 0 [M :38-41 `lw 0x570` 0x149f60] — the ANIM-INFO flag word
+    ///   (`DroneAnim_SetDAnimInternal` 0x13aee8:50 writes it from `Drone_AnimInfo[anim]`;
+    ///   bit 2 = the anim's no-player-collision marker), unmodelled: it reads clear [S],
+    /// - the fall-through returns 1 [M :42-44].
+    /// So with the two unmodelled words at their defaults the gate collapses to `enabled` on the
+    /// bot's control ticks — the DISCRIMINATOR is which ticks those are: `Drone_CollisionHandler`
+    /// 0x140968:71-75 zeroes +0x464 and `Drone_Control` 0x139268:39-42 skips the re-arm whenever
+    /// the system is frozen.
+    pub fn do_collision_arms(&self) -> bool {
+        if !self.enabled { return false; }
+        if matches!(self.state, state::HOSTAGE_SAVED | state::CIVILIAN_HIDING) { return true; }
+        if self.near_player_collision() { return true; }
+        if self.drawn_grace != 0 { return true; }
+        true
+    }
+
+    /// The kind-word refresh `NDrone2_Collision` 0x140e90:66-72 (the upright branch) /
+    /// :103-107 (the flying branch) writes from `NDrone2_ControlSTANDARD` 0x1490f0:230 — call it
+    /// on the bot's control tick only, after the state's move, exactly where the game calls
+    /// Collision. The flying branch arms unconditionally (0x140e90:103 `sh 0x800`).
+    pub fn arm_kind_464(&mut self) {
+        self.kind_464 = if self.mode == 0x1D || self.do_collision_arms() { 0x800 } else { 0 };
+    }
+
+    /// The per-tick actor-actor capsule [M NDrone2_Collision 0x140e90:59-124]: the two ends are
+    /// `pos + up·r` and `pos + up·(r − hip)`; `r = 0.3` when the down/asleep flag `+0x2F` is set
+    /// (both ends then coincide at `pos + up·(r − hip)` [M :76-88 — one VADD, identical stores]),
+    /// else `r = 0.4`, or `0.55` in DSTATE 0xC (`*(short*)(ext+0xd8) == 0xC` [M :91-94]). `hip`
+    /// is the anim height word ext+0xa0 [M :68 `fVar9 = *(float *)(iVar1 + 0xa0)` feeds the
+    /// bottom's `r − hip` on BOTH branches]: `DefaultInit` 0x14b300:48 starts it 1.0 and
+    /// `DroneAnim_PreTransCallback` 0x13b490:63-66 rewrites it per anim resolve as
+    /// `clamp(animObj+0x5C − 0.02, 0.2)` — the port's `hip_anim` (the sit paths carry the 0.2
+    /// clamp [L 05-truck.trace]; standing anims keep the 1.0 default). Upright walkers only (the
+    /// port's walkers keep up = (0,1,0); the flying/grabbed 0x200 arms are the documented
+    /// unmodelled edges). This is the capsule the class-2 collide consumer probes the player
+    /// with [M 0x140e90 feeds Collide_Update's pick through the enabled hittest, 0x1ea398
+    /// Phase B] and the shape `LadderCtx::bot_capsules` carries for the Jointy push.
+    pub fn bump_capsule(&self) -> (V3, V3, f32) {
+        if self.down {
+            let y = self.pos[1] + 0.3 - self.hip_anim;
+            ([self.pos[0], y, self.pos[2]], [self.pos[0], y, self.pos[2]], 0.3)
+        } else {
+            let r = if self.state == state::HOSTAGE_SAVED { 0.55 } else { 0.4 };
+            ([self.pos[0], self.pos[1] + r, self.pos[2]],
+             [self.pos[0], self.pos[1] + r - self.hip_anim, self.pos[2]], r)
+        }
+    }
 
     // ---- patrols and idling ------------------------------------------------------------------------------------
 
@@ -15560,6 +15634,15 @@ fn segment_hits_sphere(a: V3, b: V3, c: V3, r: f32) -> bool {
     }
 
     fn tick_inner(&mut self, d: &Data, player: &Player) {
+        // The frozen-system kind-word zero [M Drone_CollisionHandler 0x140968:71-75]: while
+        // `NPCGlobals == 0` (script event 5's `Drone_EnableAll(0)`) or `Drone_bDisableSystem` is
+        // set, the collision handler zeroes ext+0x464 EVERY tick and `Drone_Control` 0x139268:39-42
+        // skips the re-arm — a frozen bot never presents a kind-0x800 capsule to the class-3
+        // query. The game's handler runs in the collide pass; the port folds the zero here, at
+        // the tick head, over every present bot.
+        if !self.npc_enabled || self.npc_system_disabled {
+            for dr in self.list.iter_mut() { dr.kind_464 = 0; }
+        }
         // options-census: the health-pane fade alpha decays while the Advanced row (0x1000_023b,
         // PlayerSetting+0x0b) is set [M Player_Update 0x193600:414-429 — BLData+0x8bc loses
         // 0.0020833·FRAME_RATE_MUL per tick, clamped at 0; row 0 pins it to 1.0].
@@ -16077,11 +16160,11 @@ fn segment_hits_sphere(a: V3, b: V3, c: V3, r: f32) -> bool {
                         dr.opp_target = dr.pos;
                     }
                 }
-                // `NDrone2_PreDroneControl` 0x148db0:35-48: the +0x154 per-player distance fill
-                // (Vec_Dist3D of the two obj+0x30s; 100000.0 for a null slot). The port's single
-                // player is slot 0 [S one player]; slots 1..3 keep the empty-slot value.
-                let dx = dr.pos[0] - player.pos[0]; let dy = dr.pos[1] - player.pos[1]; let dz = dr.pos[2] - player.pos[2];
-                dr.dist_to_player = [(dx * dx + dy * dy + dz * dz).sqrt(), 100000.0, 100000.0, 100000.0]; }
+                // `NDrone2_PreDroneControl` 0x148db0:35-48's +0x154 per-player distance fill is
+                // NOT here — it rides the bot's own control pass below (the fill runs inside
+                // PreDroneControl, on the bot's control tick only, so a bot whose control does
+                // not run keeps its last slot value [M Drone_Control 0x139268's gate chain]).
+            }
         }
         { let _p = crate::prof::scope("phase: bullets"); self.breaks.frame = self.frame; self.update_player_bullets(d, player.pos); }
         // The locks' idle arm (`Lock_Update` 0x1ae3d8 case 0 kind 1's tail): the +1/tick refill of
@@ -17373,6 +17456,16 @@ fn segment_hits_sphere(a: V3, b: V3, c: V3, r: f32) -> bool {
             let dr = &mut self.list[index];
             if !dr.present { continue; }
             if dr.spawn_frame == frame { continue; }   // spawned this tick: the game's walk already passed it
+            // `NDrone2_PreDroneControl` 0x148db0:35-48 — the +0x154 per-player distance fill,
+            // run INSIDE the bot's own control pass (Drone_Control 0x139268 calls PreDroneControl
+            // before the state update): a bot whose control does not run keeps its last slot
+            // value, and the near arm of `NDrone2_DoCollision` 0x149ec8:30-33 reads exactly
+            // these. The port's single player is slot 0 [S one player]; slots 1..3 keep the
+            // empty-slot 100000.0.
+            {
+                let dx = dr.pos[0] - player.pos[0]; let dy = dr.pos[1] - player.pos[1]; let dz = dr.pos[2] - player.pos[2];
+                dr.dist_to_player = [(dx * dx + dy * dy + dz * dz).sqrt(), 100000.0, 100000.0, 100000.0];
+            }
             if dr.target.stamp != self.target.stamp { dr.target = self.target.clone(); }
             dr.channel_on = self.channels.on(dr.switch_channel as u32);
             dr.wait_channel_on = dr.wait_channel != 0 && self.channels.on(dr.wait_channel as u32);
@@ -17569,6 +17662,13 @@ fn segment_hits_sphere(a: V3, b: V3, c: V3, r: f32) -> bool {
             // target + the facing turn, before the collision pass (the game calls Move inside
             // ControlSTANDARD and Collision after it).
             if dr.mode == 0x1D { dr.move_flying(); }
+            // `NDrone2_ControlSTANDARD` 0x1490f0:230 → `NDrone2_Collision` 0x140e90:66-72/95-101 —
+            // the kind-word refresh, ON THE BOT'S CONTROL TICK (the game calls Collision from the
+            // control walk only, so a bot whose control does not run keeps its last +0x464, and
+            // `Drone_CollisionHandler` 0x140968:71-75 zeroes it every tick the system is frozen —
+            // the zeroing rides the tick's head below). `arm_kind_464` is DoCollision's
+            // disasm-checked port (see it); the capsule itself rides `bump_capsule`.
+            dr.arm_kind_464();
             // The route's door node dispatched inside the state machine: resolve the node → door
             // binding now (`Drones` owns the doors; the state machine cannot) — `ReachedDestNode`
             // stood the door in +0xBA8 before `DSTATE_OpenDoor`'s ENTER ran [M 0x153358].
@@ -18244,6 +18344,18 @@ fn segment_hits_sphere(a: V3, b: V3, c: V3, r: f32) -> bool {
                 }
             }
         }
+        // fix-drone-bump (drone-bump-collision): the class-2 collide consumer's player arm
+        // (NDrone2_DealWithObjHit 0x13fff0:108-125 — class-3 hitdata → Drone_Message(obj, 0x22,
+        // 0, 0) per contact; receivers CivilianMission 0x15d860:130-137 → SetState(0x17) and
+        // CivilianMissionWait 0x15dbb0:136-141 → the +2 s re-arm; the port's msg::WAIT_PAUSE
+        // handlers already port both) is IMPLEMENTED AND REVERTED: the naive always-on sender
+        // froze a 07000007 mission civilian inside Bond's path (probe_07_route's hall-door leg
+        // STUCK at (79.2, 44.4, -51.1), the frozen bot at (79.6, -50.3) in permanent 0.88
+        // contact) — the walkreal-1-4 lesson again. The unproven piece is the PICK-level gate:
+        // whether the drone's hittest seek config picks the class-3 player at all
+        // [Collide_PickObj 0x1eae80:83-87's seeker-class filters hint it may not]; a live
+        // gdbwatch of the contact list at a real bump settles it. The Jointy push (player.rs)
+        // is the decompile-backed half and stays. See docs/reports/drone-bump-collision.md.
         // `Doors_Calc` — the control pass's last act (0x1336f8's tail): the door groups sync, the busy markers
         // clear. (`switch_channels_prev` is snapshotted after `Trigger_Calc`, at the top of the tick — see above.)
         self.doors.calc();
@@ -19405,6 +19517,7 @@ mod tests {
             body_glow: None,
             gun_through_wall: false,
             dist_to_player: [100000.0; 4],
+            kind_464: 0x800,
             props: [0; 3], alert_props: None, sight_range: 0.0, half_fov: 0.0, engage_range: 0.0, combat_range: 0.0,
             accuracy: 0, aggression: 0, reaction: 0, los: false, seen: false, ever_seen: false, ever_seen_3c: false, bond_alive: true, visibility: 0.0,
             seen_ticks: 0, unseen_ticks: 0, vision_on: false, dist: 0.0, yaw_to_opp: 0.0,
