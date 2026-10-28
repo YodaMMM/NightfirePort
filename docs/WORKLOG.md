@@ -22,3 +22,15 @@ Plan:
   crossed only AFTER 0x85 opens it).
 - Iterate the walk on real input; then the full suite on the final tree;
   push; report; finish steps.
+
+Final (2026-10-28): `walk_the_infiltration_to_the_delta_exit` un-ignored and GREEN (70993
+ticks, 0 stuck, 0 falls). Three discoveries: (1) the 0x85 doorway seals completely — the
+"gap past the leaf" premise was refuted by the crossing probe (the leaves' plane x≈−52.35
+blocks both ways; the frame jambs seal z 38.6..38.9); (2) the Kiko scene's scripted body
+carries Bond WEST past the closed door (release (−55.49, 1.10, 42.02)) — the test stops
+steering at the touch and lets the scene deliver the west side; (3) the Laser left in hand
+from the cuts cannot kill Rook (198 bloodless point-blank taps) — the kill switches to the
+hand weapon 0x2 first. cut_fusebox now aims at the VISIBLE cable slab with the miss-feedback
+(the translation sits 1.5 m low) and picks the group-0 wire. Report:
+docs/reports/level-14-delta-exit-walk.md (the switch wall art + the M.Hatch indicator noted
+as undrawn, live checks listed).
