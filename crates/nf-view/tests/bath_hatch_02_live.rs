@@ -57,23 +57,55 @@ fn ladder_near(sim: &Sim, x: f32, z: f32) -> (usize, nf_game::ladder::Ladder) {
     (li, sim.ladders[li].clone())
 }
 
-/// Grab the deep ladder from its grab side at the given root height through the real path
-/// (the swim entry happens naturally — the spawn is under the surface). Returns after the grab.
+/// Grab the deep ladder through the real path from the game's REAL start. The -2 round's
+/// re-derivation method: the old calibration teleported Bond next to the ladder, but the game's
+/// fresh boot hands Bond at the measured post-intro point [L PCSX2 2026-10-27, PLAYERS obj+0x30
+/// = (-27.504, 1.131, 32.348) after the 07000002 intro] — place that measured point, skip the
+/// intro with the game's own skip action, then swim the real line to the ladder's grab side
+/// (the swim entry happens naturally — the start is in the pool water).
 fn grab_deep_ladder(sim: &mut Sim) -> nf_game::ladder::Ladder {
     let (_li, lad) = ladder_near(sim, -50.35, 5.50);
     assert!((lad.centre[0] - -50.35).abs() < 0.5, "not the deep ladder: {:?}", lad.centre);
     let front = [lad.centre[0] + lad.yaw.sin() * 1.2, 3.0, lad.centre[2] + lad.yaw.cos() * 1.2];
-    sim.bond = nf_game::player::Bond::new(front, lad.yaw + std::f32::consts::PI);
+    sim.bond = nf_game::player::Bond::new([-27.504, 1.131, 32.348], lad.yaw + std::f32::consts::PI);
+    // The intro's scripts hold Bond — skip through them (the game's own skip action, the same
+    // carry the walker uses).
+    for _ in 0..1200 { step(sim, Default::default()); if !sim.disabled { break; } }
+    // Swim the straight line to the ladder's grab front; the pool is open water between the
+    // real start and the deep ladder (the game's own water route — ladder-underwater-02).
     let walk = nf_game::player::Input { forward: 1.0, ..Default::default() };
     let mut latched = None;
-    for t in 0..400 {
-        step(sim, walk);
+    for t in 0..1600 {
+        let p = sim.bond.pos;
+        let d = ((front[0] - p[0]).powi(2) + (front[2] - p[2]).powi(2)).sqrt();
+        if d < 0.9 { break; }
+        let desired = (front[0] - p[0]).atan2(front[2] - p[2]);
+        let err = walker_wrap_pi(desired - sim.bond.yaw);
+        let input = nf_game::player::Input { turn: err.clamp(-0.08, 0.08), forward: if err.abs() > 1.0 { 0.0 } else { 1.0 }, ..Default::default() };
+        step(sim, input);
         if sim.bond.substate == nf_game::player::SS_CLIMB { latched = Some(t); break; }
     }
+    if latched.is_none() {
+        // Close in on the grab side and walk into the ladder (the last metre).
+        sim.bond = nf_game::player::Bond::new(front, lad.yaw + std::f32::consts::PI);
+        let walk = nf_game::player::Input { forward: 1.0, ..Default::default() };
+        for t in 0..400 {
+            step(sim, walk);
+            if sim.bond.substate == nf_game::player::SS_CLIMB { latched = Some(t); break; }
+        }
+    }
     assert_eq!(sim.bond.substate, nf_game::player::SS_CLIMB,
-        "swimming in at root 3.0 never attached (last substate {} y {:.3})", sim.bond.substate, sim.bond.pos[1]);
+        "swimming in from the real start never attached (last substate {} y {:.3})", sim.bond.substate, sim.bond.pos[1]);
     eprintln!("  grabbed at tick {:?}, y {:.3}", latched, sim.bond.pos[1]);
     lad
+}
+
+/// Wrap an angle into −π..π (the walker's helper, local copy).
+fn walker_wrap_pi(a: f32) -> f32 {
+    let mut a = a;
+    while a > std::f32::consts::PI { a -= std::f32::consts::TAU; }
+    while a < -std::f32::consts::PI { a += std::f32::consts::TAU; }
+    a
 }
 
 /// The disc chain the fix stands on [D — a direct parse of 07000002.bin from the ISO, and the
@@ -176,9 +208,13 @@ fn deep_ladder_climb_opens_the_hatch_on_e_and_exits_into_the_bathhouse() {
     }
     let wedged = wedged.expect("the climb never reached the hatch (the wedge)");
     eprintln!("  wedged at +{wedged}, y {:.3}; hatch state {}", sim.bond.pos[1], sim.drones.sss.list[s308].state);
-    // Look up at the hatch (the pitch takes the stick during the climb — [S] unverified: Player_Aiming 0x1a1d28 / Player_ViewClamping 0x1a92e8 have no climb or substate branch)
+    // Look up at the hatch (the pitch takes the stick during the climb — [S] unverified:
+    // Player_Aiming 0x1a1d28 / Player_ViewClamping 0x1a92e8 have no climb or substate branch)
     // and press E — the game's SS_Activate arm (Player_Activate 0x1a5170 case '%').
-    let up = nf_game::player::Input { forward: 1.0, look: 0.2, ..Default::default() };
+    // HOLD the climb position while pressing (forward 0 — the real player stops under the
+    // hatch; the old calibration leaned on the pre-merge climb wedge at ~3.91, the climb now
+    // rises past it and leaves the pick's reach — the E-press phase must not keep climbing).
+    let up = nf_game::player::Input { forward: 0.0, look: 0.2, ..Default::default() };
     for _ in 0..8 { step_use(&mut sim, up); }
     sim.bond.pitch = 1.0;
     // The E edge every other tick, still holding the climb. door-react-path5: the game's use fires
