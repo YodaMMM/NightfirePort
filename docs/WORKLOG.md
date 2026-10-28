@@ -59,3 +59,11 @@ at +0] — the test's same-tick read now polls 30 ticks with the [M 0x163a80:44-
 objective 4 pass. Remaining red in that test: leg 6 (to the Delta exit #944) wedges on WORLD geometry
 at (23.85,1.2,-24.72) (no bots within 3; segment hit t=0.12, cel 16) — next window's item. Suite
 running on the final tree; totals in the report.
+
+level-13-guards-start-alerted-8 start: branch = origin/s/level-13-guards-start-alerted-7 (b60674aa)
+merged with origin/master (8a966fa3). This round: walkreal_07000014_live's leg-6 wedge at the Delta
+exit — the RNG-shifted route steers into world geometry at (23.31, 1.14, −24.64) (cel 16,
+segment_to_target Some(0.1227), no bot within 3.0) that master's walk clears; diagnose cel 16's faces
+[D] and the route difference, fix the port if a collision rule is wrong [M Player_Collision], or give
+leg 6 the player's real approach with the cite. Cutoff 17:53 UTC; the suite runs foreground (this
+sandbox kills background jobs between tool calls).
