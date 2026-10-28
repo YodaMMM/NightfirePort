@@ -27,5 +27,5 @@ fn dump_07000001_mission_paths() {
     }
     assert!(any, "07000001 carries no kind-8 mission path");
     // The plate for reference (the AND-touch out 0x10).
-    // Path node 33 is the ally-wait node (the door hold) [task brief]; print its neighbours.
+    // Path node 33 is the ally-wait node (the door hold); print its neighbours.
 }
