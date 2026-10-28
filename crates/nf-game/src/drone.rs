@@ -11991,6 +11991,16 @@ impl crate::nis::World for Data<'_> {
     fn discrete0(&self, skin: u32, script: u32, frame: f32) -> Option<nf_formats::anim::Mat4> {
         self.discrete_parts(skin, script, frame).into_iter().next().map(|p| p.1)
     }
+    /// The anim object's root-track matrix at the frame: bone 0 of the posed skeleton (see
+    /// `World::anim_root`). The vent-drop hand-back's capture source — the player body skin
+    /// 0x0500005e has no discrete parts, so `discrete0` reads None for it.
+    fn anim_root(&self, skin: u32, script: u32, frame: f32) -> Option<nf_formats::anim::Mat4> {
+        let sk = self.skins.get(&skin)?;
+        let skel = self.skeletons.get(&sk.skeleton)?;
+        let (q, f) = crate::anim::script_frame(self.scripts.get(&script)?, frame)?;
+        let seq = self.sequences.get(&q).filter(|q| nf_formats::anim::fits(q, skel))?;
+        nf_formats::anim::world_pose(&nf_formats::anim::local_pose(seq, skel, sk, f as u32), sk).into_iter().next()
+    }
     /// The op-1 sounds of `script` with frame in `(from, to]`, in command order (`AnimProcessScriptCmds`
     /// 0x1c1b38 case 1 iterates the commands forward). The weapon-id remaps are skipped: they only apply when
     /// the anim object has a weapon parent (`obj+0x1c` ≠ 0, the view model / held-weapon case), which a script
@@ -12030,7 +12040,18 @@ impl Data<'_> {
         };
         // A sequence without a channel for every bone (cut-scene 0x06000997 on 0x0500002E: its sequence is not this
         // archive's full set) gives no parts.
-        pose().unwrap_or_default()
+        let out = pose().unwrap_or_default();
+        if out.is_empty() && std::env::var_os("NF_PARTS_DEBUG").is_some() {
+            let sk = self.skins.get(&skin).map(|s| s.skeleton);
+            let skel = sk.and_then(|k| self.skeletons.get(&k));
+            let q = self.scripts.get(&script).and_then(|s| crate::anim::script_frame(s, frame).map(|(q, _)| q));
+            let seq = q.and_then(|q| self.sequences.get(&q));
+            eprintln!("[parts] miss skin {skin:08x} script {script:08x} frame {frame}: skin_skel {sk:?} script_in {} seqs {} q {q:08x?} seq_in {} seq_skel {:?} fits {:?}",
+                self.scripts.contains_key(&script), self.sequences.len(),
+                seq.is_some(), seq.map(|s| s.skeleton),
+                seq.zip(skel).map(|(s, k)| nf_formats::anim::fits(s, k)));
+        }
+        out
     }
 }
 
