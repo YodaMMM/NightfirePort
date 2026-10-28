@@ -96,3 +96,16 @@ matched hash 2000367), the walked lock and terminal approaches, real input only,
 
 not visible to me — this sandbox exposes no token, context-window or cost figures for the session
 (no environment variable, file or tool output in this session carried them).
+
+## ntfy failed
+
+All three fallbacks ran, in order, and all three failed — the ntfy.sh daily message quota is
+exhausted (HTTP 429, the same wall the level-09 report recorded):
+
+1. `curl -sS -m 20 -H "Title: NightfirePort" -d "level-0b-every-objective-2: …" https://ntfy.sh/nightfire-yoda-8k3x`
+   → `{"code":42908,"http":429,"error":"limit reached: daily message quota reached; increase your limits with a paid plan, see https://ntfy.sh","link":"https://ntfy.sh/docs/publish/#limitations"}`
+2. `python3 -c "… urlopen(u.Request('https://ntfy.sh/nightfire-yoda-8k3x', data=b'level-0b-every-objective-2: done', headers={'Title':'NightfirePort'}), timeout=20)"`
+   → `urllib.error.HTTPError: HTTP Error 429: Too Many Requests`
+3. `wget -q -O- --post-data "level-0b-every-objective-2: done" https://ntfy.sh/nightfire-yoda-8k3x`
+   → empty output, exit status non-zero (the same 429 body suppressed by -q; the quota error is
+   the server's only response).
