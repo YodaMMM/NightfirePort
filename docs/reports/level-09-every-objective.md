@@ -92,3 +92,16 @@ My own session's token/context/cost figures are not visible to me (no such reado
 environment). The only figures I could read were the per-subagent turn readouts of the delegated
 shell runs (the main session's Bash wedged mid-session), e.g. the last one:
 `Tokens -> prompt:9347 completion:482` — per-call subagent counts, not session totals.
+
+## ntfy failed
+
+All three fallbacks failed at 21:36 UTC — ntfy.sh rejected every publish with the daily-quota 429
+(the report went out via the queue entry instead):
+
+```
+{"code":42908,"http":429,"error":"limit reached: daily message quota reached; increase your limits with a paid plan, see https://ntfy.sh","link":"https://ntfy.sh/docs/publish/#limitations"}
+```
+
+- curl: HTTP 429, the JSON above.
+- python3 urllib: `urllib.error.HTTPError: HTTP Error 429: Too Many Requests`
+- wget: empty output, same server-side 429.
