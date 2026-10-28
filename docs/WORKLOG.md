@@ -191,3 +191,15 @@ stays red, the port's collision unchanged. Green on this tree: party_door_lock 2
 1/0, walkreal_07000007 2/0. Suite: --only critical set partial (disk-full outage + the 10-min tool cap
 killed the full run) — 11 passed 1 failed (walkreal_07000001's contact test, the merge's RNG-shift
 suspect — bisect left). Report: docs/reports/drone-bump-collision-9.md with two live checks.
+
+## drone-bump-collision-10 (started 2026-10-28)
+
+- Branch s/drone-bump-collision-10 opened from origin/s/drone-bump-collision-9 2498dc78,
+  merged origin/master 9190eaa9 clean (no conflicts). Task: (1) on the merged tree
+  walkreal_07000001_live walk_from_the_spawn_to_the_exit_with_the_contact is red (the merge's
+  drone.rs state changes shift the shared-RNG stream) — find the game's move at the failing
+  step [M], fix the port or re-derive the fight with the cite; Double Cross Part 1 stays
+  finishable; (2) probe_07_route's post-E anchor walks Bond onto a level object's walkable rim
+  at (93.41, −46.32) (y 43.215 over the 43.0 floor) — identify the object [D placement +
+  footprint], re-anchor the route like a player walks. Never disarm the push. Full suite total
+  line to quote.
