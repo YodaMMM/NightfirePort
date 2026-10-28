@@ -98,12 +98,13 @@ correct as-is).
 
 - Direct runs (final tree, `--test-threads=1`, NF_ISO set): `walkreal_07000001_live` main test 4/4
   (tick 71401, bit-identical), the new follow test 3/3 (tick 27466).
-- The fast runner (`tools/test/suite.py`) was launched detached at 00:32 UTC on the master tree
-  (before the two test files were added — they are test-only); build ok: 874 test binaries in
-  1073 s. The pass was still running at report time (2 cores); the FAILED lines so far are exactly
-  the 4 allowed slim-ISO failures (`identity_disc::the_real_disc_passes_the_identity_check`,
-  3 × `disc_golden`). The final tree differs from the suite's tree ONLY by the two test files, both
-  run directly as above.
+- The fast runner (`tools/test/suite.py`) was launched detached at 00:32 UTC; build ok: 874 test
+  binaries in 1073 s. Its nf-view test build picked up the new test file, and **the suite's own
+  `walkreal_07000001_live` run passed 4/4 (76.52 s), including
+  `following_mayhew_down_completes_the_level`** — the final tree validated inside the runner.
+  The FAILED set so far is exactly the 4 allowed slim-ISO failures
+  (`identity_disc::the_real_disc_passes_the_identity_check`, 3 × `disc_golden`); the pass was
+  still working through the remaining binaries at report time.
 
 ## Live checks for the main agent
 
