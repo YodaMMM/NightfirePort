@@ -16853,14 +16853,22 @@ fn segment_hits_sphere(a: V3, b: V3, c: V3, r: f32) -> bool {
         // there [M Copter_Update 0x17dbb8:360-363].
         let explode_level = matches!(d.level, 0x0700_000b | 0x0700_0012);
         let paths = self.copter_paths.clone();
+        // copter-death-debris: case 6's `Explode_Create` positions — the game creates the blast
+        // INSIDE `Copter_Update` [M 0x17e120-0x17e168], so a copter whose case 6 dispatched this
+        // tick queues it below the loop (the loop's split borrows cannot call `spawn_blast`
+        // mid-iteration; the game's own walk order puts the creation at the copter's update
+        // either way, and the queued blast's first tick is the next frame's age-1 like every
+        // other blast's [M 0x134630 obj+0xEC = the creation time]).
+        let mut copter_death_blasts: Vec<V3> = Vec::new();
         for c in &mut self.copters {
             // copter-hitdata-damage: the slot-3 emitter's position (the gas branch's gate
             // `rec+0x3c != 0` + its obj+0x80) refreshes from the SP part targets each tick.
             let (targets, _) = self.scripts.copter_part_targets(c.placement, d);
             c.slot3_pos = targets[3].map(|(p, _)| p);
-            let (unhide, posed) = c.update(&paths, &mut self.channels, &mut self.gas, frame, explode_level, &mut self.rng);
+            let (unhide, posed, death_blast) = c.update(&paths, &mut self.channels, &mut self.gas, frame, explode_level, &mut self.rng);
             if unhide { self.scripts.unhide_sp(c.placement); }
             if posed { self.scripts.pose_copter_sp(c.placement, c.matrix); }
+            if let Some(p) = death_blast { copter_death_blasts.push(p); }
             // obj+0xFE bit 0 (`landed`: the +0x74 == 100 route end [M Copter_Move 0x17d628:63-65],
             // state 5's arrival and state 6 [M Copter_Update 0x17dbb8:255-275]) is the object
             // loop's delete flag [M control_movement_object_handler 0x1336f8:77-87 →
@@ -16870,6 +16878,20 @@ fn segment_hits_sphere(a: V3, b: V3, c: V3, r: f32) -> bool {
             // PlrStat_LogShotHitEnemy(0) [M 0x17dbb8:314-316, jal 0x199840]: the walk's roll is
             // per tick; the stats fold below counts it exactly once (the flag holds until the
             // next update overwrites it).
+        }
+        // copter-death-debris: the death blast queued into the shared pending_blasts slot — the
+        // game's exact `Explode_Create` call-site values [M 0x17e120-0x17e168, the DEATH_BLAST_*
+        // consts in copter.rs]: radius 10.0 (f13, EXPLODEINFO+0x2C + Camera_Shake), damage 69.4
+        // (f14, EXPLODEINFO+0x28), script 0x0600052 (a3), scale 10.0 (f12, SCRIPTINFO+0x94),
+        // debris kind 6 (the stack u16 → EXPLODEINFO+0x38 — `Explode_Update`'s arm 6 throws the
+        // MetalHash_132 debris [M 0x17c350:41-43]). The attacker is NULL at the call site
+        // (`move $t3, $zero` [M 0x17e168]) — `usize::MAX - 1` is the port's not-the-player,
+        // not-a-drone mark (the beam blasts' precedent, `run_beam_explodes`), so no drone in the
+        // falloff credits Bond.
+        for p in copter_death_blasts {
+            self.pending_blasts.push((p, crate::copter::DEATH_BLAST_RADIUS, crate::copter::DEATH_BLAST_DAMAGE,
+                usize::MAX - 1, 0, crate::copter::DEATH_BLAST_SCRIPT, crate::copter::DEATH_BLAST_RADIUS,
+                crate::copter::DEATH_BLAST_DEBRIS));
         }
         // Copter_Delete 0x17e568: LList_Remove(0x2a3830, rec) [M :9] — the deleted copters leave the list.
         self.copters.retain(|c| !c.landed);
