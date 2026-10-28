@@ -9,6 +9,25 @@ use walker::{Act, Walker, Wp};
 
 fn iso() -> String { std::env::var("NF_ISO").expect("NF_ISO") }
 
+fn dump_244(w: &Walker, tag: &str) {
+    let sim = w.scene.sim.as_ref().unwrap();
+    let i = sim.drones.doors.list.iter().position(|d| d.placement == 244);
+    match i {
+        Some(i) => {
+            let d = &sim.drones.doors.list[i];
+            let live = d.live_sph();
+            println!("[d244 {tag}] pos {:?} kind {} state {:#04x} flags {:#04x} ch_open {} ch_lock {} glist {:#x}",
+                d.pos, d.kind, d.state, d.flags, d.ch_open, d.ch_lock, d.glist);
+            println!("[d244 {tag}] closed sph centre {:?} r {:.3} dir {} swing {} approach {} pos01 {:.2}",
+                d.sph_centre, d.sph.1, d.dir, d.swing, d.approach, d.pos01);
+            println!("[d244 {tag}] live sph centre {:?} r {:.3} matrix row2 {:?}",
+                live.0, live.1, [d.matrix[0][2], d.matrix[1][2], d.matrix[2][2]]);
+        }
+        None => println!("[d244 {tag}] NO door #244 in the list ({})",
+            sim.drones.doors.list.iter().map(|d| d.placement).collect::<Vec<_>>().into_iter().take(30).collect::<Vec<_>>().len()),
+    }
+}
+
 #[test]
 fn probe_the_route() {
     let iso = iso();
@@ -19,6 +38,7 @@ fn probe_the_route() {
     w.crowd_aware = true;
     w.wait_enabled(3000, "the party start");
     w.wait(60);
+    dump_244(&w, "boot");
     {
         let sim = w.scene.sim.as_ref().unwrap();
         for t in sim.drones.triggers.iter().filter(|t| t.out == 0x48 || t.out == 0x47) {
@@ -54,6 +74,7 @@ fn probe_the_route() {
     }
     println!("[route] before E: ch48 {}", w.scene.sim.as_ref().unwrap().drones.channels.on(0x48) as u8);
     w.walk_to(Wp { at: [94.6, 43.6, -47.4], act: Act::Use { use_ticks: 240 }, arrive: 0.7 }, "E the hall door");
+    dump_244(&w, "after E");
     println!("[route] after E: bond {:?} ch48 {}", w.scene.sim.as_ref().unwrap().bond.pos,
         w.scene.sim.as_ref().unwrap().drones.channels.on(0x48) as u8);
     // Manual straight legs (no nav): hug x ≤ 92.8 west of the plate box (x 93.31..95.23).

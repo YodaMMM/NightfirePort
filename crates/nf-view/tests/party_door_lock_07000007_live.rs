@@ -241,14 +241,33 @@ fn sister_the_free_doors_still_open_after_the_lockout() {
     }
     // Back into the hall (the walkreal's post-scene anchors, re-routed north of the armed
     // crowd — the same drone-bump-collision-3 re-derivation as the walk up) to the free hall
-    // door #244: the old "the hall centre" leg dove into the crowd band (z −50.4) the armed
+    // door #244 — the old "the hall centre" leg dove into the crowd band (z −50.4) the armed
     // party bots shove Bond off of [M the arming chain, see the walk up].
+    //
+    // THE STAND POINT, re-derived (drone-bump-collision-9). The old spot (94.5, −47.6) stood
+    // 0.35 south of #244's closed face and the use key did NOTHING — the game's own swing arm
+    // swallows that press: [M Door_Activate 0x135be0's kind-0 arm (the RotPreTransVec block,
+    // LAB_00135e30)] an OPEN swing door (state & 0xc) E'd by an activator whose closed-frame
+    // z (± the 0.3 margin, sign by dir·swing) lands |f| < the door's world-sphere radius
+    // (obj+0x8C) returns with only the busy latch — no state change. #244's numbers [D the
+    // port's placement load, probe_07_route's d244 dump]: kind 0, closed sphere centre world
+    // (94.254, 44.125, −47.250) r 1.292, hinge (94.888, −47.25), local z → world −z, opened
+    // dir = +1 (south swing) — at (94.5, −47.6) the closed-frame z is −0.35 → |f| = 0.65 <
+    // 1.292: inside the band, the press is eaten. The game's use zone for the door is the
+    // doorway box its 0x48 walk-in plate #412 covers [D trigger bounds x 93.31..95.23,
+    // z −46.43..−45.41] — and [M Player_Activate 0x1a5170:100-108 + Collide_PickObj 0x1eae80's
+    // 0x101 sphere arm] the reach is the r-1.0 sphere at head + dir vs the door's LIVE world
+    // sphere (rebuilt by the moved pass [M 0x1336f8:209]): from the box centre (94.27, −45.92)
+    // aiming at the door the use point lands ~1.8 from the open leaf's live centre
+    // (94.888, 44.125, −47.884) — inside 1.0 + 1.292 — while the stand's closed-frame z −1.33
+    // → |f| = 1.63 > 1.292 clears the swing band and the E toggles the leaf. So: stand at the
+    // plate-box centre.
     for (name, at) in [
         ("the hall south node", [95.2f32, 43.6, -44.6]),
         ("the hall east lane", [94.0, 43.6, -46.2]),
-        ("against the free hall door", [94.5, 43.6, -47.6]),
+        ("the 0x48 plate-box centre", [94.27, 43.6, -45.92]),
     ] {
-        w.walk_nav_to(at, name, 1.4);
+        w.walk_nav_to(at, name, 0.8);
     }
     {
         let d = &w.scene.sim.as_ref().unwrap().drones.doors.list[door_i(&w, 244)];
