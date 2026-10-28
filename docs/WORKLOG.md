@@ -157,3 +157,12 @@ walker pathing (the crowd_aware steer still repulses off the guards — the same
 needs the steer exemption; the E use-zone is the 0x48 trigger at (94.3, 43.7, −45.9), not the
 door face). Next: the walker steer exemption + the E-leg use-zone re-derivation, then the
 remaining legs, then the full suite.
+
+drone-bump-collision-8 final (18:07 UTC): the steer exemption landed (walker.rs crowd repulsion
+skips the 0x31 at-post guards) — no change to the two remaining legs. Final counts on this
+tree: cutscene_timer_pause_live 1/0 GREEN, walkreal_07000007_live 2/0 GREEN, party_door_lock
+1/2 (the sister's #244 use-key assert — the 0x48 use-zone trigger sits at (94.3, 43.7, -45.9),
+~1.5 north of the door face), probe_07_route red at the post-E hover wedge ((93.40, 44.26,
+-46.32), grounded=false, floor 0.23 below — not a guard push). Report:
+docs/reports/drone-bump-collision-8.md — two live checks own the open arms (the at-post push
+killer; the east door's real use zone).

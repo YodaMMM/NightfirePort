@@ -1001,6 +1001,12 @@ impl Walker {
                     let mut blocked = false;
                     for dr in sim.drones.list.iter() {
                         if !dr.present || dr.corpse || !dr.enabled || dr.kind_464 != 0x800 { continue; }
+                        // drone-bump-collision-8 [L audits/live-07-eastdoor.txt via the driver]:
+                        // the at-post 0x31 door guards are inert to the player (Bond stands on
+                        // the E-spot 0.48 from d10's centre, 120 frames, no push) — the game's
+                        // player walks THROUGH them, so the steer must not repulse off them
+                        // either (the east-door pocket orbit).
+                        if dr.state == nf_game::drone::state::CIVILIAN_DOOR_GUARD { continue; }
                         let (rx, rz) = (p[0] - dr.pos[0], p[2] - dr.pos[2]);
                         let r = (rx * rx + rz * rz).sqrt();
                         if !(0.3..2.2).contains(&r) { continue; }
