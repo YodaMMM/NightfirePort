@@ -115,6 +115,15 @@ fn steer_fire_aligned(scene: &mut nf_view::scene::Scene, gi: usize, aim_dy: f32)
         (err.clamp(-0.08, 0.08), (perr).clamp(-0.08, 0.08), err.abs() < 0.02 && perr.abs() < 0.035)
     };
     scene.sim.as_mut().unwrap().step_bond(Input { turn, look, ..Default::default() }, aligned, false, false);
+    // The fight-back allowance (the walkreal harness's own rule): the guard's stand/aim states
+    // carry the game's sight bit on ENTER [M 0x1687c0:17 StandFiddle; the vision-bit census] and
+    // he engages at the 3.5 u setup distance — the test stand-in cannot fight back, so his fire
+    // cannot kill Bond here (the health top-up; the AI still runs).
+    let h = &mut scene.sim.as_mut().unwrap().drones.health;
+    // 1000, not 100: the SG5's point-blank blast can take a full 100-health bar in one step and
+    // the death, once started, runs to ch 0x62 regardless of a later top-up — the allowance must
+    // keep the bar above 0 THROUGH the step, not restore it after.
+    if h.health < 1000.0 { h.health = 1000.0; }
 }
 
 /// The tased guard who wakes re-arms with `ChangeWeapon(6)` — and his LATER death drops the
