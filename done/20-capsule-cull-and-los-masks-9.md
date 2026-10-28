@@ -25,3 +25,7 @@ claimed-by: sandbox5 at 2026-10-28T09:27Z
 ## Report (done, 2026-10-28T10:47Z)
 
 Closed by the driver: the report is on `s/capsule-cull-and-los-masks-9` (docs/reports/capsule-cull-and-los-masks-9.md); the worker didn't run finish.sh.
+
+---
+## Report from the worker (done, 2026-10-28T10:47Z)
+
