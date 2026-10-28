@@ -34,6 +34,16 @@ pub fn wrap_pi(a: f32) -> f32 {
 /// XZ distance.
 pub fn dxz(a: V3, b: V3) -> f32 { ((a[0] - b[0]).powi(2) + (a[2] - b[2]).powi(2)).sqrt() }
 
+/// XZ distance from point `p` to the from→to segment (clamped; drone-bump-collision-10's
+/// blocker-door arm: is the closed leaf ON the blocked walk line?).
+pub fn point_segment_dxz2(from: V3, to: V3, p: V3) -> f32 {
+    let (ax, az) = (to[0] - from[0], to[2] - from[2]);
+    let len2 = (ax * ax + az * az).max(1e-6);
+    let t = (((p[0] - from[0]) * ax + (p[2] - from[2]) * az) / len2).clamp(0.0, 1.0);
+    let (cx, cz) = (from[0] + ax * t, from[2] + az * t);
+    ((p[0] - cx).powi(2) + (p[2] - cz).powi(2)).sqrt()
+}
+
 fn walker_dx(a: V3, b: [f32; 3]) -> f32 { dxz(a, [b[0], b[1], b[2]]) }
 
 /// What to do once the waypoint is reached (or while approaching it).
@@ -1197,11 +1207,29 @@ impl Walker {
                     }
                     let door_i = {
                         let sim = self.scene.sim.as_ref().unwrap();
+                        // The blocker-door test, two arms. (1) The original: world geometry on the
+                        // hip line TO the door — the approach where the frame/wall around the leaf
+                        // intersects (angle-dependent: from 0.7 out the hip line to the leaf's own
+                        // centre can be clear, so the arm misses). (2) drone-bump-collision-10, the
+                        // 01 mid-stairwell auto-close: the double kind-2 doors (-33.1, 9.0) shut
+                        // again while Bond descends (the auto-close is 360 ticks [M Door_Update's
+                        // scan]), his hip line TO THE WALK TARGET hits at 7.8% — the leaf line —
+                        // and the door centre sits 0.63 off his spot with no wall between, so arm
+                        // (1) skipped it and the ladder burned 6×3000 ticks. The game's move there
+                        // is the E press: a closed idle ch_open-0 door opens for the player ONLY
+                        // through Player_Activate 0x1a5170:100-129 → Door_Activate 0x135be0
+                        // [M the opener census: the three Door_Activate callers; no contact opens a
+                        // closed idle leaf], and these doors are unlocked (ch_lock 0 [D dump]). So:
+                        // wedged (segment_to_target blocked) + a closed unlocked door in reach that
+                        // stands near the blocked line = the door IS the blocker → press E.
                         sim.drones.doors.list.iter().position(|d| {
                             dxz(d.pos, self.pos) < 2.8
                                 && (d.pos[1] - self.pos[1]).abs() < 2.5  // the door's own floor (the 15 crossing's lower gantry doors sit 17.6 below the lane)
                                 && !(d.ch_lock != 0 && !sim.drones.channels.on(d.ch_lock as u32))  // a LOCKED door: the E thuds, never opens (the 15 keypad doors)
-                                && sim.world.segment(self.pos, d.pos).is_some()
+                                && (sim.world.segment(self.pos, d.pos).is_some()
+                                    || (d.state & 0xc == 0
+                                        && sim.world.segment(self.pos, wp.at).is_some()
+                                        && point_segment_dxz2(self.pos, wp.at, d.pos) < 1.2))
                         })
                     };
                     let repeat = door_i.is_some() && last_door == door_i;

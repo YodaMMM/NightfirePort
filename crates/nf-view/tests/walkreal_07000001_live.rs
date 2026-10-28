@@ -409,7 +409,72 @@ fn walk_from_the_spawn_to_the_exit_with_the_contact() {
     drop(sim);
     // The player route descends the stairwell from the west hall's corner (the AI's own path
     // climbs over the top floor — the sister proved the descent through this anchor).
+    // drone-bump-collision-10: the head anchor keeps the 1.2 arrive — the pocket's walkable
+    // floor ends at z ≈ 14.2 (this run the leg parked at (−30.98, 14.29), 1.19 out, and a
+    // tighter 0.5 arrive burned its cap: the last stretch toward (−30.8, 13.1) is over the
+    // descending geometry, unwalkable straight). The descent itself works off the pocket's
+    // south gap on the plate leg's own line — the mid-stairwell doors are the real gate, see
+    // the walker's blocker-door arm.
     w.walk_nav_to([-30.8, 6.4, 13.1], "the stairwell head", 1.2);
+    // drone-bump-collision-10, re-derived order: the pocket guards FIRST. On the shifted stream
+    // (the merge's vision_on arms, +0x4F8 |= 0x10000 [M 0x16a2d0:15 et al.] — the starting
+    // guard's sight ack lands during his scripted walk and moves every later first-sight roll),
+    // an armed stepper holds the stairwell head's south gap and wedges BOTH walkers: the contact
+    // parks at route_idx 27 (−28.3, 14.3, this run's settle dump) and Bond's descent line gets
+    // repelled east by the crowd-aware steer until the −14.1 hall door. A player clears the
+    // stairs before descending — the same fight the recovery loop below runs (the kills are the
+    // real input; the game's own hide dance `NDrone2_FindRunToPoint` 0x15168 is the unported
+    // half), just moved ahead of the descent. The cleared set is shared, so the later loop
+    // re-verifies rather than re-fights.
+    {
+        let guards: Vec<usize> = {
+            let sim = w.scene.sim.as_ref().unwrap();
+            let cp = sim.drones.list[ci].pos;
+            (0..sim.drones.list.len()).filter(|&i| {
+                let d = &sim.drones.list[i];
+                i != ci && d.team == 1 && d.started && !d.corpse && d.enabled && d.health > 0.0
+                    && ((2..0x47).contains(&d.weapon) || (0x6a..=0x71).contains(&d.weapon))
+                    && walker::dxz(d.pos, cp) < 14.0 && !cleared.contains(&i)
+            }).collect()
+        };
+        for g in guards {
+            let (gpos, los_clear) = {
+                let sim = w.scene.sim.as_ref().unwrap();
+                let d = &sim.drones.list[g];
+                let bp = sim.bond.pos;
+                let eye = [bp[0], bp[1] + sim.bond.eye - sim.bond.crouch_drop, bp[2]];
+                (d.pos, sim.world.segment(eye, [d.pos[0], d.pos[1] + 0.3, d.pos[2]]).is_none())
+            };
+            let bpos = w.scene.sim.as_ref().unwrap().bond.pos;
+            if walker::dxz(gpos, bpos) > 9.0 || !los_clear {
+                w.walk_nav_to(gpos, &format!("approach pocket guard {g}"), 3.0);
+            }
+            {
+                let sim = w.scene.sim.as_ref().unwrap();
+                if sim.gun.clip + sim.gun.spare < 8 { drop(sim); w.resupply("ammo"); }
+            }
+            let ammo_now = w.scene.sim.as_ref().unwrap().gun.clip + w.scene.sim.as_ref().unwrap().gun.spare;
+            if ammo_now == 0 { eprintln!("[01] pocket guard {g}: skipped — dry"); continue; }
+            let mut killed = w.shoot(g, &format!("pocket guard {g}"));
+            if !killed {
+                if w.resupply("ammo retry") { killed = w.shoot(g, &format!("pocket guard {g}")); }
+            }
+            let dead = w.scene.sim.as_ref().unwrap().drones.list[g].corpse
+                || w.scene.sim.as_ref().unwrap().drones.list[g].health <= 0.0;
+            if killed || dead { cleared.insert(g); }
+        }
+    }
+    // drone-bump-collision-10: the mid-stairwell double doors (-33.1, 6.0/7.3, 9.0 [D the door
+    // dump]) auto-close 360 ticks after the contact's route opens them [M Door_Update's
+    // auto-close scan], and on the shifted stream Bond reaches the landing after they shut. The
+    // game's player move at a closed idle ch_open-0 unlocked door is the E press [M the opener
+    // census: Player_Activate 0x1a5170:100-129 → Door_Activate 0x135be0 is the only player
+    // route; no contact opens a closed idle leaf] — the same leg shape probe_07_route's
+    // "E the hall door" walks. The stand point is on Bond's side of the leaves' world spheres
+    // (the leaves' r ≈ 1.29 pins the capsule at x ≈ −31.8: this run's wedge (−31.44, 6.42, 8.99),
+    // 1.89 short of the door line), so the arrival happens and the E's head+dir·1.0 sphere
+    // reaches the leaf centre 1.66 away [M 0x1a5170:100-108].
+    w.walk_to(Wp { at: [-31.6, 6.4, 9.0], act: Act::Use { use_ticks: 240 }, arrive: 0.9 }, "the mid-landing doors");
     w.walk_nav_to(plate, "the plate", 1.2);
     let sim = w.scene.sim.as_ref().unwrap();
     let on_plate = sim.bond.pos[0] < -32.0 && sim.bond.pos[2] > 12.0;
@@ -484,7 +549,7 @@ fn walk_from_the_spawn_to_the_exit_with_the_contact() {
     if !exited && !on_plate(w.scene.sim.as_ref().unwrap().drones.list[ci].pos) {
         // The proven descent: the stairwell head anchor first (the direct nav to the plate from
         // the balcony side climbs over the top floor and never enters the stairwell — the sister
-        // proved the descent through this anchor).
+        // proved the descent through this anchor). The 1.2 arrive stands (see the main leg).
         w.walk_nav_to([-30.8, 6.4, 13.1], "the stairwell head", 1.2);
         w.walk_nav_to(plate, "the plate (lead the descent)", 1.2);
     }
