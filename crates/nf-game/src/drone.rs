@@ -15708,8 +15708,8 @@ fn segment_hits_sphere(a: V3, b: V3, c: V3, r: f32) -> bool {
         // and the present guards (the alive stand-in for the ext+0x4f8 flag/health filters —
         // the port's drone records don't carry those bits). The
         // per-candidate LOS (`Collide_LineOfSight` 0x17f9c8:271-278) runs below through
-        // `d.world.line_of_sight` with GT_Track's 0x72f filter (static segment until
-        // LOS_MASKS_ON flips).
+        // `d.world.line_of_sight` with GT_Track's 0x72f filter (the per-caller masks are
+        // unconditional now [M Collide_Intersect 0x1ebaa8:300-319]).
         {
             // Bond's candidate (alive, the game's health/targetable checks [M 0x17f9c8:99-110]);
             // the guards ride along as positions only — a facing-0 turret may track them

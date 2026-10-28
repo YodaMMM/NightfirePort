@@ -256,7 +256,7 @@ fn six_human_loopback_slot5_moves_hashes_agree_every_tick() {
 /// first capsule commit) already reads 0xbc5e_2155_a378_6e9c; with the cull's const
 /// flipped back OFF on that same tree the pin is GREEN again — the cull is the sole
 /// mover; the
-/// LOS masks (LOS_MASKS_ON, the same commit's other flip) are digest-inert here; the
+/// LOS masks (the same commit's other flip, unconditional now) are digest-inert here; the
 /// 4a155ddf merge's master-side content and its resolution are exonerated (4a155ddf^1 =
 /// ca2e7389, capsule-3 tip, reads the same 0xbc5e… before any of that content).
 /// First divergence: session t142, component bodies, slot 3 only — x +0.00122,
