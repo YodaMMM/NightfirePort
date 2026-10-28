@@ -73,3 +73,12 @@ Continuing the 07 west-mouth wedge: the goal is the game's kind-8 route dwell + 
 the mouth, then the player's real answer for the four red tests (party_door_lock_07000007_live x2,
 cutscene_timer_pause_live, probe_07_route) — wait the bot through, step aside, take the measured timing, with
 cites. The push stays. Full suite to land on the final tree.
+
+drone-bump-collision-5 research checkpoint: the west mouth is path3's RING [D links 0→6→7 door pair,
+0→11→12→13→14→10→9→8→1→2→3→4→5] with door-flag nodes 0/6 (flags 0x2) straddling the free door at
+(80.0,−49.9); dr22 boots on node7 east of the door, its kind-8 route = the 15-node ring [M InitAIPath
+0x153720 chain], opens door3 itself (0x02→0x04 [M OpenDoor 0x1681f8]) and crosses west — then the port
+freezes it at (79.48,−50.32) with the creep raced to leg 13→14: the probe_move stand-in [S drone.rs
+3225] blocks the body while Route::follow's creep keeps advancing (the game's body never blocks — root
+motion has no world gate, the only horizontal constraint is the bounds push [M 0x13b490/0x157bd0, see
+walls-990 note]). Scratch probe probe_drone5_mouth.rs holds the anatomy.
