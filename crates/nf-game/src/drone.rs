@@ -6872,7 +6872,12 @@ impl Drone {
             // fix-stunner-press: the taser family has no case 0x11/0x12 in the game (the 0x162b98/
             // 0x162eb0/0x1630b8 switches) — the shout is unhandled → GLOBAL → dropped, a tased guard
             // stays down. The stun-grenade family keeps the old route (its own standing behavior).
-            if matches!(s, state::TASER | state::STUNNED | state::STUNNED_RECOVER) { return true; }
+            // DSTATE_OpenDoor's switch (0x1681f8) has NO case 0x11/0x12 either — its only cases are
+            // 1/2/3/6-9/0x17-0x19/0xC/0x20/0x21 — so a door-working guard drops the shout through
+            // the msg-0 re-route [M 0x171df8:60-73 + 0x1681f8 case 0] and keeps working the door
+            // (level-14-guards-at-locked-door: the door-waiting guards were scream-pulled into
+            // the heard-noise family mid-sequence).
+            if matches!(s, state::TASER | state::STUNNED | state::STUNNED_RECOVER | state::OPEN_DOOR) { return true; }
             let hear = if m == msg::SCREAM { self.prop(d, 0x27) } else { self.prop(d, 0x28) };
             if !hear { return true; }
             let civilian = matches!(s, PARTY_GIRL | CIVILIAN | CIVILIAN_MISSION | CIVILIAN_MISSION_WAIT | CIVILIAN_PATROL | CIVILIAN_DOOR_GUARD | TRUCK_DRIVER_IDLE | CIVILIAN_SCARED | CIVILIAN_HIDING);
@@ -6888,6 +6893,14 @@ impl Drone {
         // (0x56 [M 0x15bf18:134, 0x15c248:102, 0x15c498:105, ...], HostageIdle 0x0E [M 0x15ce60:51], HostageHide 0
         // [M 0x15cfe0:48]); the fleeing family re-enters ConsiderExplosive with 0x88 [M 0x168d18 case 0x21]. The
         // armed states (UnderCoverFire 0x9C [M 0x16a3e0], AMBUSH_WAIT, GRENADE_THROW) keep their own arms.
+        // OpenDoor's own case 0x21 passes the CURRENT state as ConsiderExplosive's resume
+        // [M 0x1681f8 case 0x21: `DroneFunc_ConsiderExplosive(vars, msg obj, *(u16*)(SM + 4))`; the
+        // tail stamps +0x118 = the resume and lands in 0x86 (0x1431c0:191-195)] — a door-working
+        // guard who flees a seen explosive returns TO THE DOOR. And the send gate itself
+        // ([M 0x1435f0:37-44]) requires the guard to SEE the registered explosive — a guard behind
+        // the locked Door_Slide_11A/B sees nothing, so the cascade's blasts never reach him
+        // (level-14-guards-at-locked-door: the port's pre-dispatch used to pull the door waiters
+        // into ATTACK — resume 0x56 — and they never came back to the door).
         if m == msg::EXPLOSIVE && !matches!(s, UNDER_COVER_FIRE | UNDER_COVER_SNIPER_FIRE | UNDER_COVER_SNIPER_RELOAD | AMBUSH_WAIT | GRENADE_THROW
                 | TASER | STUNNED | STUNNED_RECOVER) {
             let resume = if matches!(s, RUN_AWAY_FROM_OBJECT | HIDE_FROM_SCARY_OBJECT) { RECOVER_FROM_SCARY_OBJECT }
@@ -6896,8 +6909,8 @@ impl Drone {
                 // The combat wrappers' 0x21 arms pass their OWN state as ConsiderExplosive's resume — a
                 // survived blast returns them to where they were [M 0x1643e8:127-131 (0x59), 0x164690:73-77
                 // (0x5a), 0x164838 (0x5c)]. AlertToPosition's is the constant 0x56 [M 0x165270:145-148],
-                // which the ATTACK fall-through already gives.
-                else if matches!(s, COMBAT_NO_MOVE | COMBAT_OUT_OF_RANGE | COMBAT_NO_SIGHT) { s }
+                // which the ATTACK fall-through already gives. OpenDoor's is its own state [M 0x1681f8 case 0x21].
+                else if matches!(s, COMBAT_NO_MOVE | COMBAT_OUT_OF_RANGE | COMBAT_NO_SIGHT | OPEN_DOOR) { s }
                 else { ATTACK };
             self.take_explosive_msg(d, frame, resume);
             return true;
@@ -9064,6 +9077,18 @@ impl Drone {
             // angles [M 0x1681f8:53-54, 0x1519e0]) — the port's route walk already carried the drone
             // to the node, so the ENTER plays the anim directly [S fold].
             (state::OPEN_DOOR, msg::ENTER) => {
+                // [M 0x1681f8 case 1, first statement: `*(uint *)(Drone + 0x4f8) |= 0x10000`] — the
+                // sight-processing busy bit (the port's `vision_on`): DroneVision_ProcessDroneSight
+                // runs its per-drone arm only for bit-set drones and the bit-set arm NEVER
+                // transitions the state — only DroneVision_SeekOpponentLOS (0x176ce8-0x176d08) and
+                // the HaveOpponentSight counters (0x176db8-0x176df4, the disasm's `lui s5,1` mask);
+                // every state change clears it [M 0x171df8:185 `& 0xfffeffff`, the port's send()
+                // epilogue]. A guard working a locked door therefore cannot be sight-interrupted
+                // out of OpenDoor — he stays until the door reaches state 4 and the tick restores
+                // +0x5A6. level-14-guards-at-locked-door: without this the cascade's noise pulled
+                // the door-waiting guards into combat and their own grenades (thrown at the
+                // half-open leaf) killed the whole cluster at the threshold.
+                self.vision_on = true;
                 if self.prop(d, 0x14) || self.prop(d, 0x15) || self.prop(d, 0x16) {
                     self.call_anim(d, 0x4e, 0, 0);
                 } else if self.alert < 1.0 {
