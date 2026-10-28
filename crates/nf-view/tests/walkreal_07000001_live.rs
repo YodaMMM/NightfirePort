@@ -775,7 +775,7 @@ fn following_mayhew_down_completes_the_level() {
             && sim.drones.list[ci].state != nf_game::drone::state::PLAYER_IN_WAY;
         drop(sim);
         if cleared == before && wedged {
-            // No guard to clear and he didn't move: close on him (the AllyLeadWait release band
+            // No guard to clear and the contact is holding: close on him (the AllyLeadWait release band
             // [M 0x15eda8 case 3] needs Bond within 5.0 straight-line when pd == 0.0).
             let cp = w.scene.sim.as_ref().unwrap().drones.list[ci].pos;
             w.walk_nav_to(cp, "close on the contact", 1.2);
