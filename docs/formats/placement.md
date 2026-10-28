@@ -13,7 +13,11 @@ handedness on screen is not yet confirmed against PCSX2 (U-023).
 +0x04 u32 hashcode: else an entity hashcode resolved with hashtable_getitem (another map's object)
 +0x08 u32 flags: 0x8000 = create a world cel now (`build_alloc_cel`); low 16 bits stored in cel+0x3C
 +0x0C f32[3] translation (cel+0x60)        +0x18 f32[3] rotation angles, radians (cel+0x70)
-+0x24..+0x47 not read here
++0x24 f32[4] quaternion (x, y, z, w) — not read by the static parser; the DYNAMIC dispatcher
+     `parsemap_create_dynamic_objects` 0x1d04f0 copies these four words into the `quaternion_tag`
+     it hands the creators that take one (0x27 `GT_Create`, 0x34 `GunImp_Create` 0x131f20:66-67,
+     0xf2's inline `Quat_QuatToMat` 0x1e3e80 at 0x1d04f0:474-478)
++0x34..+0x47 not read here (the dispatcher passes +0x34..+0x3C to some creators as a scale vector)
 +0x48 u32 n; +0x4C n × {u32 index, u32 value} parameters (parseentity_fixup_entity)
 size 0x4C + 8n; the block ends exactly at the last record in all 2,230 maps
 ```
