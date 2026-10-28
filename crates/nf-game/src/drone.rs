@@ -4830,7 +4830,7 @@ impl Drone {
             // PunchImpact 0x53 (0x172ee0): ENTER sets +0x4F8 |= 0x10000 (flag not modelled) and replays
             // `NDrone2_PunchImpact(…, resume 0, allow 1)`; update (case 3) is `NDrone2_SeenAndAttacking`
             // (face the opponent, like the grenade-throw state).
-            (PUNCH_IMPACT, msg::ENTER) => { self.punch_impact(d, rng, frame, 0, true); true }
+            (PUNCH_IMPACT, msg::ENTER) => { self.vision_on = true; self.punch_impact(d, rng, frame, 0, true); true } // `+0x4F8 |= 0x10000` [M 0x172ee0:16]
             (PUNCH_IMPACT, msg::UPDATE) => { self.desired_yaw = self.yaw_to_opp; true }
             (PUNCH_IMPACT, _) => true,
             _ => true,
@@ -6024,6 +6024,7 @@ impl Drone {
                 // the SP gate returns at once (`MPSettings+0x184 == 0`); SpeechSFX refuses in MP;
                 // docs/port-map/unreached.md] — the gate lives in `mp_chatter_talk` now.
                 self.mp_chatter_talk(d, rng, MpChatter::UnderCoverAim);
+                self.vision_on = true; // `+0x4F8 |= 0x10000` [M 0x16a2d0:15]
                 if !self.cover_anim(d, rng, 2, UNDER_COVER_FIRE) { self.set_state(UNDER_COVER_LEAVE_NOW) }
                 true
             }
@@ -6032,6 +6033,7 @@ impl Drone {
                 // level is before 0x0700000E, branch to the sniper-fire state (0x97) instead of firing at once. On
                 // later levels the sniper fires through `UnderCoverFire` directly.
                 if self.anim_set == 0x13 && d.level < 0x0700_000e { self.set_state(UNDER_COVER_SNIPER_FIRE); return Some(true); }
+                self.vision_on = true; // `+0x4F8 |= 0x10000` on the fire path [M 0x16a3e0:31 — after the sniper bail]
                 self.fire(d, rng, frame, true);
                 true
             }
@@ -6128,11 +6130,12 @@ impl Drone {
                 true
             }
             // `NDrone2_DSTATE_UnderCoverLeave` 0x173ac0 ENTER (case 1): seen bit, then 0x9c [M 0x173ac0].
-            (UNDER_COVER_LEAVE, msg::ENTER) => { self.set_state(UNDER_COVER_LEAVE_NOW); true }
+            (UNDER_COVER_LEAVE, msg::ENTER) => { self.vision_on = true; self.set_state(UNDER_COVER_LEAVE_NOW); true } // `+0x4F8 |= 0x10000` [M 0x173ac0:12]
             // `NDrone2_DSTATE_UnderCoverLeaveNow` 0x16ab38 (state 0x9c) — UnderCoverLeave SetStates it
             // [M 0x173ac0], the UnderCover impact/ignore group forwards HandleImpact(0x9c), and
             // UnderCoverIdle's goal/cover failures jump here [M 0x169e58].
             (UNDER_COVER_LEAVE_NOW, msg::ENTER) => {
+                self.vision_on = true; // `+0x4F8 |= 0x10000` [M 0x16ab38:15]
                 self.cover_leave |= 8;
                 self.disown_cover();
                 self.call_anim(d, anim_state::AIM_STAND, ATTACK, 0);
@@ -6227,6 +6230,7 @@ impl Drone {
                 if self.stun_kept_down() { self.timer_c = Some(frame + 300); true } else { self.set_state(STUN_GRENADE_RECOVER); true }
             }
             (STUN_GRENADE_RECOVER, msg::ENTER) => {
+                self.vision_on = true; // `+0x4F8 |= 0x10000` [M 0x163350:16]
                 self.timer_c = None;
                 self.call_anim(d, anim_state::STUN_GET_UP, ATTACK, 0);
                 true
@@ -6392,6 +6396,7 @@ impl Drone {
                 // (The game's skin-0x10 arm first flips +0x44 to 1 [M 0x1630b8:17-19] — not ported,
                 // not weapon handling.) The get-up anim 0x76 with follow-on
                 // Attack 0x56 for non-civilians [M 0x1630b8 case 1].
+                self.vision_on = true; // `+0x4F8 |= 0x10000` [M 0x1630b8:16]
                 if self.team == 1 { self.change_weapon(6); }
                 self.call_anim(d, anim_state::STUN_GET_UP, ATTACK, 0);
                 true
@@ -6518,6 +6523,7 @@ impl Drone {
                 // case 1: +0x4F8 |= 0x10000; the get-up 0x76 with the follow-on — `IsCivilian` is
                 // team != 1 [M 0x14aae0], so the CIVILIAN arm reads the impact resume (SMI+0x10) and
                 // only a team-1 guard wakes into Attack 0x56 [M 0x163700:19-29].
+                self.vision_on = true; // `+0x4F8 |= 0x10000` [M 0x163700:20]
                 let next = if self.team == 1 { ATTACK } else { self.impact_resume };
                 self.call_anim(d, anim_state::STUN_GET_UP, next, 0);
                 true
@@ -6645,6 +6651,7 @@ impl Drone {
             // their posts (the game's AssignAIPath nodes sit within 0.3 [M 00154190:68-96]), so the
             // hold position stands in for the completed route.
             (ASTRONAUT_LAUNCH, msg::ENTER) => {
+                self.vision_on = true; // `+0x4F8 |= 0x10000` [M 0x16dd28:17]
                 self.thrust = true;
                 self.velocity_damping = true;
                 self.fly_speed = 6.9; // 0x40dccccd [M 0x16dd28:23]
@@ -6661,6 +6668,7 @@ impl Drone {
             }
             // Combat ENTER [M 0x174458:12-18]: speed 0, thrust off, the hover anim 0x70.
             (ASTRONAUT_COMBAT, msg::ENTER) => {
+                self.vision_on = true; // `+0x4F8 |= 0x10000` [M 0x174458:16]
                 self.fly_speed = 0.0;
                 self.thrust = false;
                 self.call_anim(d, anim_state::ASTRONAUT_HOVER, 0, 0); // [M 0x174458:18]
@@ -6673,6 +6681,7 @@ impl Drone {
             }
             // CombatMove ENTER [M 0x174550:15-23]: strafe speed 2.0, the 5 s fallback timer.
             (ASTRONAUT_COMBAT_MOVE, msg::ENTER) => {
+                self.vision_on = true; // `+0x4F8 |= 0x10000` [M 0x174550:18]
                 self.fly_speed = 2.0; // 0x40000000
                 self.timer_c = Some(frame + 150); // FRAME_RATE_INT · 5 [M 0x174550:20]
                 true
@@ -6953,6 +6962,11 @@ impl Drone {
             // `NDrone2_SeenAndAttacking` (fix-ai-traces' live check 2: the game's guard alert never
             // reaches 1.0 in the PlayScript window — no [L] evidence it fires).
             (PLAY_SCRIPT, msg::ENTER) => {
+                // `+0x4F8 |= 0x10000 | 0x2000` [M 0x15ba68:24-25] — the scripted drone runs the sight
+                // pipeline while the script plays (the 0x2000 half is state::UNAWARE's `watching`, set
+                // centrally below; 0x10000 is per-arm). The 01 starting guard's sight ack lands DURING
+                // his scripted walk because of this bit (guard_first_shot_01_live).
+                self.vision_on = true;
                 let (st, follow) = match self.start_script {
                     0x6000_168 => (10, 0x32),
                     0x6000_169 => (5, 0x32),
@@ -7263,6 +7277,7 @@ impl Drone {
                 // weapon 1, anim set 0xC, clip 0, clip_max 0]. No civilian/anim-set gate here [M
                 // 0x1626a0 case 1] — unlike the taser/stun-grenade enters.
                 self.firing = false;
+                self.vision_on = true; // `+0x4F8 |= 0x10000` [M 0x1626a0:18]
                 self.call_anim(d, anim_state::SURRENDER, SURRENDERED, 0);
                 self.drop_weapon(d, rng);
                 self.change_weapon(1);
@@ -7276,10 +7291,10 @@ impl Drone {
             (SURRENDER_ANIM, msg::UPDATE) => { self.desired_yaw = self.yaw_to_opp + crate::trig::PI; true }
             (SURRENDER_ANIM, msg::TIMER_C) => { self.alert_bits |= 4; self.timer_c = Some(frame + 15); true }
             // Surrendered (0x162950): faces Bond once; hands up while Bond keeps him covered (`CheckUnsurrender`).
-            (SURRENDERED, msg::ENTER) => { self.desired_yaw = self.yaw_to_opp; true }
+            (SURRENDERED, msg::ENTER) => { self.vision_on = true; self.desired_yaw = self.yaw_to_opp; true } // `+0x4F8 |= 0x10000` [M 0x162950:20]
             (SURRENDERED, msg::UPDATE) => { if self.check_unsurrender(d) { self.set_state(UNSURRENDER_ANIM); } true }
             // Unsurrender_Anim (0x162a70): face Bond, aim-stand anim → Attack (which, unarmed, draws the sidearm).
-            (UNSURRENDER_ANIM, msg::ENTER) => { self.desired_yaw = self.yaw_to_opp; self.call_anim(d, anim_state::AIM_STAND, ATTACK, 0); true }
+            (UNSURRENDER_ANIM, msg::ENTER) => { self.vision_on = true; self.desired_yaw = self.yaw_to_opp; self.call_anim(d, anim_state::AIM_STAND, ATTACK, 0); true } // `+0x4F8 |= 0x10000` [M 0x162a70:15]
             (UNSURRENDER_ANIM, msg::UPDATE) => { self.desired_yaw = self.yaw_to_opp; true }
             // DrawWeapon (0x166000): anim 0x46 → follow = `+0x5A2` passed RAW — 0 means NO state
             // change when the anim completes (`DroneAnim_SetEndAIState` 0x13dd00:29-31 and
@@ -7297,6 +7312,8 @@ impl Drone {
                 // so the arming event (case 2) can never fire for it.
                 if self.weapon_swap < 2 { self.set_state(CIVILIAN_SCARED); }
                 else {
+                    // `+0x4F8 |= 0x10000` rides the draw path only [M 0x166000:23 — after the bail returns]
+                    self.vision_on = true;
                     // `CallAnim(0, 0x46, 0, +0x5A2, 0, 0)` — raw; 0 keeps the drone here [M 0x166000:25-26].
                     self.call_anim(d, anim_state::DRAW_WEAPON, self.return_state, 0);
                 }
@@ -7569,7 +7586,7 @@ impl Drone {
                 true
             }
             // `NDrone2_DSTATE_Combat` (0x1731b8, state 0x58): alert 1.0 on entry.
-            (COMBAT, msg::ENTER) => { self.alert = 1.0; true }
+            (COMBAT, msg::ENTER) => { self.alert = 1.0; self.vision_on = true; true } // `+0x4F8 |= 0x10000` [M 0x1731b8:16]
             (COMBAT_OUT_OF_RANGE | COMBAT_NO_SIGHT, msg::ENTER) => { self.alert = 1.0; self.vision_on = true; true }
             (COMBAT | COMBAT_OUT_OF_RANGE | COMBAT_NO_SIGHT, msg::UPDATE) => {
                 let n = self.combat_state(d, rng, frame, s);
@@ -7739,6 +7756,7 @@ impl Drone {
             // `NDrone2_DSTATE_CombatNewSighting` 0x173280 ENTER (case 1) [M]: seen bit, SeenPlayerTalk,
             // then crouch-capable guards ≥ 6 units flip Rand(2) to 0x70 AimCrouchFire, else 0x68 AimStandFire.
             (COMBAT_NEW_SIGHTING, msg::ENTER) => {
+                self.vision_on = true; // `+0x4F8 |= 0x10000` [M 0x173280:22]
                 self.seen_player_talk(d, rng);
                 let crouch = self.prop(d, 0x11) && self.can_do(d, anim_state::CROUCH_AIM) && self.dist >= 6.0 && rng.rand(2) != 0;
                 self.set_state(if crouch { AIM_CROUCH_FIRE } else { AIM_STAND_FIRE });
@@ -7859,6 +7877,7 @@ impl Drone {
             // with the same follow-on is a presentation variant [M 0x1666d8:21-27] — the port plays
             // RELOAD only.)
             (AIM_STAND_RELOAD | AIM_CROUCH_RELOAD, msg::ENTER) => {
+                self.vision_on = true; // `+0x4F8 |= 0x10000` [M 0x1666d8:16 / 0x167370:15]
                 self.firing = false;
                 self.clip = self.clip_max;
                 self.call_anim(d, anim_state::RELOAD, if s == AIM_STAND_RELOAD { AIM_STAND_FIRE } else { AIM_CROUCH_FIRE }, 0);
@@ -7870,6 +7889,7 @@ impl Drone {
             // status 1, then by mode byte — `+0xc5 == 0x11` (the cover-croucher type) SetStates
             // CrouchCover 0x6e instead of playing anim 5 with follow-on 0x70 [M 0x166f28:15-22].
             (AIM_CROUCH, msg::ENTER) => {
+                self.vision_on = true; // `+0x4F8 |= 0x10000` [M 0x166f28:16]
                 if self.mode == 0x11 { self.set_state(CROUCH_COVER); return true; }
                 self.call_anim(d, anim_state::CROUCH_AIM, AIM_CROUCH_FIRE, 0); true
             }
@@ -8284,6 +8304,7 @@ impl Drone {
             // message arms: 0x11/0x12/0x15/0x16/0x1e → EnemyAlerts, 0x1f forced attack, 0x21 explosive,
             // impacts resume 0x12 [M 0x161030:58-107].
             (TRUCK_DRIVER_MISSION, msg::ENTER) => {
+                self.vision_on = true; // `+0x4F8 |= 0x10000 | 0x2000` [M 0x161030:22-23]
                 self.call_anim(d, anim_state::WALK, 0, 0);
                 true
             }
@@ -8864,6 +8885,7 @@ impl Drone {
             // BondCombat and 0x28 AllyGoToGoalPosition (`lead_take_cover`). Msg 0x1b (→ Wait) is not
             // modelled by the port's message set.
             (ALLY_LEAD_INIT, msg::ENTER) => {
+                self.vision_on = true; // `+0x4F8 |= 0x10000` [M 0x15e4f0:24 — unconditional in case 1]
                 if self.prop(d, 0x1d) { self.assign_path(d, 8); } // [M 0x15e4f0 case 1: AssignAIPath(8)]
                 if self.route.is_none() {
                     // `+0x9F2 == 0`: no route → stand idle and stay [M 0x15e4f0 case 1]
@@ -8878,7 +8900,7 @@ impl Drone {
                 if self.dist < 3.0 { self.set_state(ALLY_LEAD_WAIT); }
                 true
             }
-            (ALLY_LEAD, msg::ENTER) => { self.call_anim(d, anim_state::RUN, 0, 0); true } // [M 0x15e698 case 1: 0x1e]
+            (ALLY_LEAD, msg::ENTER) => { self.vision_on = true; self.call_anim(d, anim_state::RUN, 0, 0); true } // [M 0x15e698 case 1: 0x1e; the bit 0x15e698:21]
             (ALLY_LEAD, msg::UPDATE) => {
                 // The game's case-3 order [M 0x15e698]: the armed-peer scan first, then the route,
                 // then the Bond checks.
@@ -8929,7 +8951,7 @@ impl Drone {
                 }
                 true
             }
-            (ALLY_LEAD_WAIT, msg::ENTER) => { self.call_anim(d, anim_state::ALERT_IDLE, 0, 0); true } // [M 0x15eda8 case 1: 0x21]
+            (ALLY_LEAD_WAIT, msg::ENTER) => { self.vision_on = true; self.call_anim(d, anim_state::ALERT_IDLE, 0, 0); true } // [M 0x15eda8 case 1: 0x21; the bit 0x15eda8:20]
             (ALLY_LEAD_WAIT, msg::UPDATE) => {
                 // [M 0x15eda8 case 3]: an armed hostile within 10 → cover (`lead_take_cover`, as
                 // Lead's arm; the flag-1 prop-0x50 gate applies here too, as in Lead [M
@@ -8947,7 +8969,7 @@ impl Drone {
             // started hostile within 10 (0x41200000) cowers the escort in LeadHide; Bond blocking the
             // route (the port's `route_blocked`, set by `update_mission_route`, with Bond within 3)
             // parks him in PlayerInWay.
-            (PLAYER_IN_WAY, msg::ENTER) => { self.call_anim(d, anim_state::ALERT_IDLE, 0, 0); true } // [M 0x15ea28 case 1: 0x21]
+            (PLAYER_IN_WAY, msg::ENTER) => { self.vision_on = true; self.call_anim(d, anim_state::ALERT_IDLE, 0, 0); true } // [M 0x15ea28 case 1: 0x21; the bit 0x15ea28:20]
             (PLAYER_IN_WAY, msg::UPDATE) => {
                 // An armed hostile within 10 → cover (`lead_take_cover`, as Lead's arm; the
                 // flag-1 prop-0x50 gate applies here too [M 0x15ea28:30 + 0x177420:57-61]);
@@ -8961,7 +8983,7 @@ impl Drone {
                 if !self.bond_band(3.5, 1.047_197_6) { self.set_state(ALLY_LEAD); }
                 true
             }
-            (LEAD_HIDE, msg::ENTER) => { self.call_anim(d, anim_state::COWER, 0, 0); true } // [M 0x15ec08 case 1: 0x19]
+            (LEAD_HIDE, msg::ENTER) => { self.vision_on = true; self.call_anim(d, anim_state::COWER, 0, 0); true } // [M 0x15ec08 case 1: 0x19; the bit 0x15ec08:18]
             (LEAD_HIDE, msg::UPDATE) => {
                 // No armed drone within 14 (0x41600000) → latch and return to Lead in 2 ticks
                 // [M 0x15ec08 case 3: +0xCD8 = 1, timer C = now + 2·FRAME_RATE_INT]. The exit read
@@ -8998,6 +9020,7 @@ impl Drone {
                 // The game latches `Drone+0x12C`, 0 → 0x99 [M 0x15efc8 case 1]. Drone+0x12C is init 0 by
                 // Drone_SM_InitObject 0x175838 and no decompiled function ever writes it, so in the game the
                 // 0x99 default always fires; the port models the field (`mission_wait_channel`) for fidelity.
+                self.vision_on = true; // `+0x4F8 |= 0x10000` [M 0x15efc8:24]
                 self.wait_channel = if self.mission_wait_channel != 0 { self.mission_wait_channel } else { 0x99 };
                 self.call_anim(d, anim_state::ALERT_IDLE, 0, 0);
                 true
@@ -9012,7 +9035,7 @@ impl Drone {
             // 0x177420:57-61]); else the path distance: < 0 (Bond still behind on the route) stays;
             // `DAT_00298f80 != 0` stays (no decomp writer — reads 0, docs/fields/
             // hitdata-spawner-ally.md §3); otherwise Lead.
-            (LEAD_BOND_COMBAT, msg::ENTER) => { self.call_anim(d, anim_state::ALERT_IDLE, 0, 0); true } // [M 0x15f120 case 1: 0x21]
+            (LEAD_BOND_COMBAT, msg::ENTER) => { self.vision_on = true; self.call_anim(d, anim_state::ALERT_IDLE, 0, 0); true } // [M 0x15f120 case 1: 0x21; the bit 0x15f120:19]
             (LEAD_BOND_COMBAT, msg::UPDATE) => {
                 if self.prop(d, 0x50) && self.armed_peer_dist <= 10.0 { self.lead_take_cover(d); return true; }
                 let pd = self.object_mission_path_distance(d, 5.0, self.player_pos);
@@ -9021,13 +9044,14 @@ impl Drone {
                 true
             }
             // ---- the AllyFollow chain (0x24–0x27, 0x15f3c8/0x15f4e0/0x15f6a0/0x15f858) -------------
-            (FOLLOW_INIT, msg::ENTER) => { self.call_anim(d, anim_state::ALERT_IDLE, 0, 0); true } // [M 0x15f3c8 case 1: 0x21]
+            (FOLLOW_INIT, msg::ENTER) => { self.vision_on = true; self.call_anim(d, anim_state::ALERT_IDLE, 0, 0); true } // [M 0x15f3c8 case 1: 0x21; the bit 0x15f3c8:16]
             (FOLLOW_INIT, msg::UPDATE) => {
                 // Bond visible (+0x228 & 4 — the port's `seen`) → AllyFollow [M 0x15f3c8 case 3].
                 if self.seen { self.set_state(FOLLOW); }
                 true
             }
-            (FOLLOW, msg::ENTER) => { self.call_anim(d, self.walk_anim(d), 0, 0); true }
+            (FOLLOW, msg::ENTER) => { self.vision_on = true; self.call_anim(d, self.walk_anim(d), 0, 0); true } // `+0x4F8 |= 0x10000` [M 0x15f4e0:21]
+            (FOLLOW_WAIT, msg::ENTER) => { self.vision_on = true; true } // `+0x4F8 |= 0x10000` [M 0x15f6a0:21]
             (FOLLOW, msg::UPDATE) => {
                 // Follow the mission band: beyond 8 walk at Bond, inside it stand (the game walks the
                 // route toward Bond's node; the game's band [M AllyLead 0x15e698:79-90]: with
@@ -9075,6 +9099,7 @@ impl Drone {
             // angles [M 0x1681f8:53-54, 0x1519e0]) — the port's route walk already carried the drone
             // to the node, so the ENTER plays the anim directly [S fold].
             (state::OPEN_DOOR, msg::ENTER) => {
+                self.vision_on = true; // `+0x4F8 |= 0x10000` [M 0x1681f8:19]
                 if self.prop(d, 0x14) || self.prop(d, 0x15) || self.prop(d, 0x16) {
                     self.call_anim(d, 0x4e, 0, 0);
                 } else if self.alert < 1.0 {
@@ -9109,9 +9134,10 @@ impl Drone {
             }
             // ---- fix-nav-remainder: the route's kick / action / fiddle nodes (G-027) ----
             // `NDrone2_DSTATE_KickObject` (0x1684c0) — state 0x82 [M 0x153358:146]. ENTER (case 1):
-            // the kick anim 0x4e (the `+0x4F8 |= 0x10000` "record opponent history" bit is not
-            // modelled — the port's BOT_* bookkeeping doesn't exist, same as DSTATE_OpenDoor's).
+            // the kick anim 0x4e; the ENTER also sets the sight bit (modelled in vision_on below).
+            // [was: "bit not modelled" — the 139-writer census puts 0x1684c0:15 on the list]
             (state::KICK_OBJECT, msg::ENTER) => {
+                self.vision_on = true; // `+0x4F8 |= 0x10000` [M 0x1684c0:15]
                 self.call_anim(d, 0x4e, 0, 0);
                 self.timer_c = Some(frame + 2); // [M 0x1684c0 case 0xc tail: +2·FRAME_RATE]
                 true
@@ -9139,6 +9165,7 @@ impl Drone {
             // play the drone's start script `+0x554` (`DroneAnim_SetScript(+0x554, 10, 0x32, 0x1e,
             // 0, 5, 0)` — anim state 10, follow-on 0x32, completion msg 5).
             (state::ACTION_ANIM, msg::ENTER) => {
+                self.vision_on = true; // `+0x4F8 |= 0x10000` [M 0x168628:16]
                 if self.start_script != 0 {
                     self.play_script(d, self.start_script, 10, 0x32, 0, msg::ANIM_DONE);
                 }
@@ -9154,6 +9181,7 @@ impl Drone {
             // `NDrone2_DSTATE_StandFiddle` (0x1687c0) — state 0x84 [M 0x153358:101]. ENTER (case 1):
             // the fiddle anim 0x23 and timer C at +5·FRAME_RATE.
             (state::STAND_FIDDLE, msg::ENTER) => {
+                self.vision_on = true; // `+0x4F8 |= 0x10000` [M 0x1687c0:17]
                 self.call_anim(d, 0x23, 0, 0);
                 self.timer_c = Some(frame + 5);
                 true
@@ -9583,8 +9611,14 @@ impl Drone {
                 self.vision_on = true;
                 if self.prop(d, 0x56) { self.set_state(crate::kiko::RUN_TO_ALARM); return true; }
                 let mut ret = ATTACK;
-                if matches!(d.level, 0x0700_0011 | 0x0700_0012 | 0x0700_0013 | 0x0700_0041) && !self.ever_seen {
-                    ret = if self.alert < 0.66 { IDLE } else { ALERT };
+                // [M 0x168910:24-31] the Tower-mission clause (0x41/0x11/0x12/0x13), gated on the
+                // 0x4000000 attack latch being CLEAR (`+0x4F8 & 0x4000000` — the port's `sighted`):
+                // `uVar2 = 4; if ((+0x50c < 0.66) || (uVar2 = 5, +0x50c < 1.0)) +0x5a2 = uVar2` —
+                // under 0.66 the resume is Idle 4, under 1.0 Alert 5, at full alertness the 0x56
+                // Attack write above (:23) STANDS (the clause only ever LOWERS it). The old
+                // `!ever_seen` gate read the wrong latch and the old value never kept ATTACK.
+                if matches!(d.level, 0x0700_0011 | 0x0700_0012 | 0x0700_0013 | 0x0700_0041) && !self.sighted {
+                    ret = if self.alert < 0.66 { IDLE } else if self.alert < 1.0 { ALERT } else { ATTACK };
                 }
                 self.return_state = ret;
                 if self.find_run_to_point(d) {
@@ -9610,6 +9644,7 @@ impl Drone {
             // no DroneTypeSettings row starts there — so the tests drive it directly. ENTER (case 1):
             // anim 0x21, find + open the elevator door (the class-0x1c door within 2.0), +0xcd8 = 0.
             (state::ELEVATOR_JUMPER, msg::ENTER) => {
+                self.vision_on = true; // `+0x4F8 |= 0x10000` [M 0x169488:16]
                 self.call_anim(d, anim_state::ALERT_IDLE, 0, 0);
                 self.elevator_scan = true;
                 self.door_attempt = true;
@@ -9636,6 +9671,7 @@ impl Drone {
             // Rand_Rand(60), +0xcc8 = 0, +0xcc0 = 1, +0x23 = 1, the rope point = the object position, +0xcd8 = 0
             // [M case 1].
             (state::ABSEIL_INIT, msg::ENTER) => {
+                self.vision_on = true; // `+0x4F8 |= 0x10000` [M 0x169610:19]
                 self.set_danim(d, 0xb, 0);
                 self.timer_c = Some(frame + rng.rand(60) as u32);
                 self.air = true;
@@ -9650,6 +9686,8 @@ impl Drone {
             // +0x50 = 0x40dccccd = 6.9 (the daily audit 2026-10-17: the old 6.5 contradicted the
             // store); mode 0x1b drops the rope point to −1000 (0xc47a0000) [M case 1].
             (state::ABSEIL_SLIDE, msg::ENTER) => {
+                self.vision_on = true; // `+0x4F8 |= 0x10000` [M 0x169730:19] — the sliding roper runs
+                // the sight pass (his `firing = los` mid-rope [M 0x169730:40-44] reads it)
                 self.call_anim(d, 3, 0, 0);
                 self.air = true;
                 self.descend_speed = 6.9;
@@ -9697,6 +9735,7 @@ impl Drone {
             // DCVars+0x1c = (int)Rand_FRand(1.0) = 0, +0x50 = 0 (the descent stops), DroneWeap_Fire(1)
             // [M case 1].
             (state::ABSEIL_HANG, msg::ENTER) => {
+                self.vision_on = true; // `+0x4F8 |= 0x10000` [M 0x169940:18]
                 self.call_anim(d, 2, 0, 0);
                 self.air = true;
                 self.hang_rand = 0;
@@ -9727,6 +9766,7 @@ impl Drone {
             // the saved anim set back, mode = +0xc4, the land anim 0x21 → 0x67 [M case 1]. UPDATE:
             // SeenAndAttacking, +0x3b = 0 [M case 3]. No decomp caller (like 0x8d).
             (state::ABSEIL_STEP_OFF, msg::ENTER) => {
+                self.vision_on = true; // `+0x4F8 |= 0x10000` [M 0x1738e0:16]
                 self.anim.state = 0;
                 self.air = false;
                 self.anim_set = self.saved_anim_set;
@@ -16169,7 +16209,11 @@ fn segment_hits_sphere(a: V3, b: V3, c: V3, r: f32) -> bool {
         // `NPCGlobals != 0` block [M 0x139520:124-284]: a cut-scene that fired event 5 freezes all of these.
         if self.npc_enabled {
         // Visibility every tick for drones with vision on; line of sight for one drone per tick (round robin).
-        for dr in &mut self.list { dr.visibility = if dr.present && !dr.corpse && (dr.vision_on || dr.alert >= 1.0) { dr.visibility() } else { 0.0 }; if dr.visibility < 0.7 { dr.los = false; } }
+        // [M 0x176a28 first loop] the visibility value is computed ONLY while the 0x10000 vision bit
+        // stands (set by the sight-capable states' ENTERs, cleared by RouteMsgDCV on every state
+        // change) — there is NO alertness bypass: a waiting (WaitSwitch/Enable(0)) or otherwise
+        // vision-off guard has no sight pipeline at all, whatever its +0x50c alertness.
+        for dr in &mut self.list { dr.visibility = if dr.present && !dr.corpse && dr.vision_on { dr.visibility() } else { 0.0 }; if dr.visibility < 0.7 { dr.los = false; } }
         let ln = self.llist.len();
         for k in 0..ln {
             let slot = (self.los_cursor + 1 + k) % ln.max(1);
