@@ -25,3 +25,7 @@ claimed-by: sandbox6 at 2026-10-28T06:57Z
 ## Report (done, 2026-10-28T09:08Z)
 
 Closed by the driver: the report is on `s/drone-bump-collision-4` (docs/reports/drone-bump-collision-4.md); the worker didn't run finish.sh.
+
+---
+## Report from the worker (done, 2026-10-28T09:16Z)
+
