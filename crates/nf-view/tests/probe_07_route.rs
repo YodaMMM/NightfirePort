@@ -77,7 +77,16 @@ fn probe_the_route() {
     dump_244(&w, "after E");
     println!("[route] after E: bond {:?} ch48 {}", w.scene.sim.as_ref().unwrap().bond.pos,
         w.scene.sim.as_ref().unwrap().drones.channels.on(0x48) as u8);
-    // Manual straight legs (no nav): hug x ≤ 92.8 west of the plate box (x 93.31..95.23).
+    // Post-E legs — drone-bump-collision-10 re-anchor. The old MANUAL straight legs hugged the
+    // hall's east furniture too tight and the capsule caught it [D the placement probe
+    // probe_07_rimobj]: the ChestOfDrawsSmall_6a/6b pair (world AABB x 90.68..92.32, y
+    // 42.89..44.00, z −46.39..−45.49 — the walkable rim at 43.215 the -9 capsule walk measured
+    // is the pair's east-face collision edge; a player does not walk the 0.2 ledge of a chest,
+    // she walks AROUND it) plus the OBJECT_BookCase (x 86.18..91.38, z −52.75..−48.26) sealing
+    // the south-west. The old first leg's line also scraped the pair's east face (x 92.5 line
+    // vs the face at 92.32 — 0.18 < the capsule 0.45). The nav web carries the lanes around the
+    // furniture (the same web walkreal_07's green crossing walks) — walk_nav_to the same
+    // anchors and let it route the gap between the chests and the plate box's west face.
     for (name, at) in [
         ("the hall's north-west corner", [92.6f32, 43.6, -47.5]),
         ("north past the plate's west edge", [92.5, 43.6, -45.3]),
@@ -85,7 +94,7 @@ fn probe_the_route() {
         ("the middle band west", [88.0, 43.6, -40.0]),
         ("#251's south side", [85.5, 43.6, -37.2]),
     ] {
-        w.walk_to(Wp::new(at[0], at[1], at[2]), name);
+        w.walk_nav_to(at, name, 1.2);
         println!("[route] {name} ok bond {:?} ch48 {} ch130 {}", w.scene.sim.as_ref().unwrap().bond.pos,
             w.scene.sim.as_ref().unwrap().drones.channels.on(0x48) as u8,
             w.scene.sim.as_ref().unwrap().drones.channels.on(130) as u8);
