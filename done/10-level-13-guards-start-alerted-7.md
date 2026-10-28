@@ -23,3 +23,8 @@ say so in the report. Never weaken a decompile-backed test to make code pass.
 
 ---
 claimed-by: sandbox6 at 2026-10-28T14:18Z
+
+---
+## Report (done, 2026-10-28T15:41Z)
+
+Closed by the driver: the report is on `s/level-13-guards-start-alerted-7` (docs/reports/level-13-guards-start-alerted-7.md); the worker didn't run finish.sh.
