@@ -13,3 +13,12 @@ The pick-level gate traced end to end (Collide_Pick's cel-straddle scoping 0x1eb
 Branch s/level-14-vent-drop-2 (from origin/s/level-14-vent-drop @ ed167832, merged origin/master). Task: implement the Countdown Part 1 vent drop that level-14-vent-drop decoded but never wrote (touch 0xd9 -> OR 0x7e -> the SP switch; the case-6 capture -> Script_Free's Player_Enable), scoped as that report says, then walk walkreal_07000014_live::walk_the_infiltration_to_the_delta_exit legs 2..6 to the exit on real input; un-ignore on green, else back to #[ignore] with the exact blocker.
 
 ### level-14-vent-drop-2 — outcome
+The event-6 body-root fallback landed (`World::anim_root` — bone 0 of the posed skeleton; the
+player skin 0x0500005e has NO discrete parts so `discrete0` reads None for it), `Obj::Anim.root`
+refreshed per interp, and the hand-back is pinned green un-ignored:
+`the_vent_drop_hands_bond_into_the_facility` (walkreal_07000014_live 3 passed, 1 ignored). The
+capture pose is the body's anim root at event time ≈ (30.09, 1.06, 38.73) — the -1 report's
+(27.60, 43.56) was the seq end, not the hand-back frame. The full delta walk stays `#[ignore]`:
+leg 2 wedges at the facility's west double door (-52.2, 1.2, 40.1, state 0x2, ch_open 0,
+ch_lock 0x85) — the next session's first question. Full suite did not fit the window (disk
+cleanup + foreground-only rebuilds); the touched binary ran green before the push.
