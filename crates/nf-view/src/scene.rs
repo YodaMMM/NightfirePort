@@ -6186,6 +6186,12 @@ pub struct Scene {
     /// (`misc_static_sweep` in `build`). Zero for a kind the census says the level carries means the
     /// model is missing (see docs/models/misc.md for the per-kind creator evidence).
     pub misc_drawn: BTreeMap<u8, usize>,
+    /// The drawn 0xe1 destroy leaves' (world centre, destroy placement) pairs — the per-frame
+    /// dead gate's input (`destroyed-glist swap's draw side`: a dead leaf's materials stop
+    /// drawing [M Destroy_Smash 0x12bb60's SetGList swap]; the C5 leaves swap to an undrawable
+    /// slot [D lod_word −1] and the doorway ends open [L]). Consumed by lib.rs's per-frame
+    /// `Renderer::destroy_dead` feed; the centre matches the material's cull sphere by bits.
+    pub destroy_centres: Vec<([f32; 3], usize)>,
     /// Per level object hashcode: whether its glist flags carry 0x800 (the character-lighting bit
     /// `Control_SetGList` 0x134960 merges into obj+0xF0). fix-render2: decides the ambient dim for
     /// the drawn script entities (the truck's nine objects carry 0x8880 [L ee_start_05.bin
@@ -7008,6 +7014,11 @@ pub fn build(level: &Level, cels_only: bool, skeletons: &HashMap<u8, Skeleton>, 
         let mut ladders_drawn = 0usize; // the sweep below counts the drawn ladder instances (fix-ladder2)
         let mut grapple_hooks_drawn = 0usize; // the sweep below counts the drawn grapple-point meshes (fix-grapple-hook)
         let mut misc_drawn: BTreeMap<u8, usize> = BTreeMap::new(); // models-misc static dynamic entities
+        // The drawn 0xe1 destroy leaves' (world centre, placement) pairs — the per-frame dead gate's
+        // input (destroyed-glist swap's draw side: the dead leaf's materials stop drawing; see the
+        // NOTE at the MISC_KINDS sweep). The centre is the exact float triple the group's cull sphere
+        // carries, so the draw filter matches it by bits.
+        let mut destroy_centres: Vec<([f32; 3], usize)> = Vec::new();
         // The level's room cels (see `Cel`): parsed before the draw so the static 0x800 world objects can snap
         // to their cel's ambient exactly as the game's link does at level start (`build_LinkToRoom` 0x1c9680 →
         // the snap in `control_link_object_to_cel` 0x1346b8; channels are all 0 here, so triple 1 reads).
@@ -8051,8 +8062,11 @@ pub fn build(level: &Level, cels_only: bool, skeletons: &HashMap<u8, Skeleton>, 
         //   sets obj+0xF0 bit 0x10 when facing away; reached whenever a level places type-0xd5 objects —
         //   07000041 does [D levels.md census]. The port's per-triangle backface cull of the placed glist
         //   is the same job at draw time) · 0xD8 RB_Create 0x1d6bf0:52 (rigid bodies evolve obj+0x90 once
-        //   disturbed; at rest = placement) · 0xE1 Destroy_Create 0x12c318:23 (death keeps the object drawn:
-        //   Destroy_Smash 0x12bb60 sets class 1 and only swaps to the block-0x27 LOD variant when one exists)
+        //   disturbed; at rest = placement) · 0xE1 Destroy_Create 0x12c318:23 (death hides the
+        //   mesh: Destroy_Smash 0x12bb60 swaps the glist to tag+0x00 — the LOD pointer or the
+        //   next 0x50 glist slot, undrawable for the C5 leaves [L]; see destroy_object_state
+        //   below — the pre-2026-10-28 "death keeps the object drawn" reading missed the swap's
+        //   always-nonzero argument [M 0x12bbb8 asm + 0x1d1b68])
         //   · 0xE3 Flicker_Create 0x1acb00:49 · 0xFA ThirdIcon_Create 0x197070:33 / 0xFD CamSubject_Create
         //   0x1bc5d8:17 / 0x4A Apocalypse_Create 0x18dcc0:20 — these attach whatever glist the placement
         //   carries; `psiDrawObjectMatrix` no-ops on an empty one, so only objects with gfx batches draw.
@@ -8139,7 +8153,7 @@ pub fn build(level: &Level, cels_only: bool, skeletons: &HashMap<u8, Skeleton>, 
             // choice. The vehicles draw only — the port's MP has no drivable car (docs/GAPS.md).
             let ctx_level = drones.map_or(0, |d| d.level_id);
             let mut car_rng = mp.map(|ms| nf_game::drone::Rng::new(ms.seed ^ 0x4341_5253));
-            for p in level.maps[m].placements.iter().filter(|p| MISC_KINDS.contains(&((p.flags & 0xff) as u8))) {
+            for (pi, p) in level.maps[m].placements.iter().enumerate().filter(|(_, p)| MISC_KINDS.contains(&((p.flags & 0xff) as u8))) {
                 let kind = (p.flags & 0xff) as u8;
                 let mut heli = false;
                 if let Some(ms) = mp {
@@ -8152,6 +8166,18 @@ pub fn build(level: &Level, cels_only: bool, skeletons: &HashMap<u8, Skeleton>, 
                 }
                 // 0x3B hidden-until-channel (DynamicObject_Create 0x18dbf8:31, param 0 = the s16 channel).
                 if kind == 0x3b && p.params.iter().find(|(i, _)| *i == 0).is_some_and(|(_, v)| *v != 0) { continue; }
+                // NOTE on the 0xe1 statics: they bake here (build time — nothing is dead yet), so the
+                // destroyed-glist swap's draw side is a PER-FRAME gate, not a build skip. [M
+                // Destroy_Smash 0x12bb60 → `Control_SetGList(obj, *(tag+0x00))` — the swap the sim
+                // models as `Destroy::dead`]: a dead leaf's object rides the destroyed glist entry —
+                // the block-0x27 LOD pointer when the disc word is set, else the parsemap fallback
+                // slot `pCelList + idx·0x50 + 0x50` [M 0x12bbb8 asm + 0x1d1b68]. The C5 leaves carry
+                // no LOD variant [D probe lod_word −1 for every 0d 0xe1], so the swap target has no
+                // batches and the doorway ends open [L]. The drawn 0xe1 instance's world centre is
+                // recorded below (the same `transform(matrix, obj.centre)` the group's cull sphere
+                // uses), and the per-frame draw filter (gpu.rs, over `Renderer::destroy_dead`) skips
+                // the dead leaf's materials. A leaf WITH a LOD variant would draw the LOD mesh here
+                // instead — no disc row on 0d needs it [S unverified].
                 let target = if p.by_hash() { level.by_hash.get(&p.hashcode).copied() }
                     else if (p.index as usize) < level.maps[m].objects.len() { Some((m, p.index as usize)) } else { None };
                 let Some((map, object)) = target else { continue };
@@ -8239,6 +8265,10 @@ pub fn build(level: &Level, cels_only: bool, skeletons: &HashMap<u8, Skeleton>, 
                 }
                 let inst = Instance { map, object, matrix: nf_formats::placement::object_matrix(p.rotation, p.translation), placement: p.clone() };
                 add_instance(level, &inst, Layer::World, None, &mut groups, Some(&mut bounds), None, None, None, mult, &room_cels, u32::MAX, u32::MAX);
+                // The 0xe1 destroy leaf's world centre for the per-frame dead gate (see the NOTE above):
+                // the same `transform(matrix, obj.centre)` add_instance bakes into the group's cull
+                // sphere, so the bits match the material's `centre` the draw filter reads.
+                if kind == 0xe1 { destroy_centres.push((transform(&inst.matrix, obj.centre), pi)); }
                 *misc_drawn.entry(kind).or_default() += 1;
                 // The car's two fixed-hashcode children (Car_InitBits 0x12fec8), drawn only with a car body.
                 if kind == 0xda {
@@ -8932,7 +8962,8 @@ pub fn build(level: &Level, cels_only: bool, skeletons: &HashMap<u8, Skeleton>, 
             }
         }
         Scene { shard_tex, cels: room_cels, cel_graph, streams: None, music_files: None, music_tables: None, sound_bank: None, sound_spares: Vec::new(), snow_texture, vertices, indices, materials, textures, hud_textures, woman: None, hud, script_billboards, view_models, mp_bodies, mp_body_weapons, mp_char_bodies, mp_anim_sets, fog, bounds, start, stats, characters, char_vertex_start, char_verts, sequences, attachments, sim, colliders, models_0x800, npc_pool, ladders_drawn, grapple_hooks_drawn, misc_drawn, lock_matrices, dynobj_matrices, rotor_placements, gunimp_placements,
-            door_scene_hidden }
+            door_scene_hidden,
+            destroy_centres }
     }
 
     /// Sequence index and frame a character shows after `ticks` 60 Hz updates: its start script (`choice = None`) or the

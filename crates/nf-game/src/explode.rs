@@ -261,8 +261,8 @@ pub struct Targets<'a> {
     /// objects; the copter itself is 0x3b and never matches case 0 [M Copter_Create 0x17d340
     /// sets obj+0xFF = 0x3b, the parts are the SP's class-0 entities]).
     pub copters: &'a [(usize, Vec<(V3, f32)>)],
-    /// Case 0x21 — the destroyables `(index, pos, hit radius, smashed already)`.
-    pub destroys: &'a [(usize, V3, f32, bool)],
+    /// Case 0x21 — the destroyables `(index, pos, hit radius, smashed already, tag+0x14 mask)`.
+    pub destroys: &'a [(usize, V3, f32, bool, u16)],
 }
 
 /// `Explode_Propagate` (0x17c518): a sphere of `radius` from `pos`; for every hit object
@@ -302,12 +302,15 @@ pub fn propagate(pos: V3, radius: f32, damage: f32, attacker: usize, t: &Targets
         sweep(p, r, &mut |a| d = a);
         if d > 0.0 { out.breaks.push((i, d)); }
     }
-    for &(i, p, r, smashed) in t.destroys {
+    for &(i, p, r, smashed, mask14) in t.destroys {
         if smashed { continue; }
         let mut d = 0.0f32;
         sweep(p, r, &mut |a| d = a);
-        // Case 0x21's own gate: the smash needs at least 1.0 [M 0x17c6a8].
-        if d >= 1.0 { out.destroys.push(i); }
+        // Case 0x21's own gate: the smash needs at least 1.0 [M 0x17c6a8], and the tag's
+        // bullet mask must open the 0x20 bit [M 0x17c518:170 — `*(u16*)(data+0x14) & 0x20 ==
+        // 0`]: the C5 doors' 0xFFEF keeps it set, so NO blast ever smashes them — the drain
+        // through `Destroy_CollisionHandler` is the only death.
+        if d >= 1.0 && mask14 & 0x20 == 0 { out.destroys.push(i); }
     }
     // Case 0 [M 0x17c518:86-105]: the class-0 part sweep — per matching part the amount adds to
     // both accumulators, so the copter's total is the SUM over its hit parts (the game adds per
@@ -377,13 +380,29 @@ mod tests {
         // integer truncation the amounts jump in damage/radius steps: damage 5, radius 10 → a target at
         // 9.5 (truncated 9) takes 5·(1−9/10) = 0.5 → no smash; at 4.5 (truncated 4) it takes 3 → smash.
         let far = Targets { drones: &[], player: [1000.0; 3], breaks: &[],
-            destroys: &[(0, [9.5, 0.0, 0.0], 0.0, false)], copters: &[] };
+            destroys: &[(0, [9.5, 0.0, 0.0], 0.0, false, 0)], copters: &[] };
         let h = propagate([0.0; 3], 10.0, 5.0, usize::MAX, &far);
         assert!(h.destroys.is_empty(), "0.5 damage must not smash");
         let near = Targets { drones: &[], player: [1000.0; 3], breaks: &[],
-            destroys: &[(0, [4.5, 0.0, 0.0], 0.0, false), (1, [4.5, 0.0, 0.0], 0.0, true)], copters: &[] };
+            destroys: &[(0, [4.5, 0.0, 0.0], 0.0, false, 0), (1, [4.5, 0.0, 0.0], 0.0, true, 0)], copters: &[] };
         let h = propagate([0.0; 3], 10.0, 5.0, usize::MAX, &near);
         assert_eq!(h.destroys, vec![0], "3 damage smashes the unsmashed one only");
+    }
+
+    #[test]
+    fn destroy_case_respects_the_0x20_mask_bit() {
+        // The second half of case 0x21's gate [M 0x17c518:170]: the smash needs
+        // `*(u16*)(data+0x14) & 0x20 == 0`. The C5 doors' tag+0x14 is 0xFFEF [D #93/#96 p4
+        // 0x10, M 0x12c318:47-52] — bit 0x20 set, so even a full-damage blast never smashes
+        // them; a mask-0 tag (every p4-0 destroyable) takes the blast.
+        let door = Targets { drones: &[], player: [1000.0; 3], breaks: &[],
+            destroys: &[(0, [0.5, 0.0, 0.0], 0.0, false, 0xffef)], copters: &[] };
+        let h = propagate([0.0; 3], 10.0, 100.0, usize::MAX, &door);
+        assert!(h.destroys.is_empty(), "0xFFEF & 0x20 ≠ 0 — the gate blocks the smash [M 0x17c518:170-176]");
+        let plain = Targets { drones: &[], player: [1000.0; 3], breaks: &[],
+            destroys: &[(0, [0.5, 0.0, 0.0], 0.0, false, 0), (1, [0.5, 0.0, 0.0], 0.0, false, 0xffdf)], copters: &[] };
+        let h = propagate([0.0; 3], 10.0, 100.0, usize::MAX, &plain);
+        assert_eq!(h.destroys, vec![0, 1], "mask 0 and 0xFFDF (0x20 clear) both smash; the C5-shaped 0xFFEF does not");
     }
 
     #[test]

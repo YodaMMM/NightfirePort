@@ -78,12 +78,16 @@ fn the_bunker_trio_shout_reaches_the_mixer_with_the_ambients_live() {
     for _ in 0..300 { let _ = tick(&mut scene, &mut snd); }
     assert!(!scene.sim.as_ref().unwrap().disabled, "Bond is free after the intro");
 
-    // The tunnel route's order: step on the bunker plate with ch 0x66 clear.
+    // The tunnel route's order: step on the bunker plate with ch 0x66 clear. Bond stands ON the
+    // plate (the AABB centre, inside [D placement 389's volume 5.34..6.73]) — the player's own
+    // walk-over posture; the old `-1.0` drop buried him below the stair lip and the trio camped in
+    // CombatNoSight 0x5c, where no shout site re-enters (FirstAttack / AimStandFire / CombatNoMove
+    // ENTERs [M 0x148010:94 / 0x13eac0's callers]) — no roll, no stream.
     let c = {
         let sim = scene.sim.as_mut().unwrap();
         let c = sim.drones.triggers.iter().find(|t| t.out == 0x81).unwrap().centre();
         assert!(!sim.drones.channels.on(0x66), "the wire-gap chain has not fired on this route");
-        [c[0], c[1] - 1.0, c[2]]
+        c
     };
     {
         let sim = scene.sim.as_mut().unwrap();
