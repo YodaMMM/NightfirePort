@@ -133,6 +133,58 @@ fn the_m_hatch_lights_spawn_at_load_and_the_console_states_match_the_disc() {
     // Static: gated on 0x5b, B=0 — hidden until 0x5b arms.
     let stat = dyns.iter().find(|d| d.ch_a == 0x5b).expect("CONSOLE_Electricity_Static (p0=0x5b)");
     assert!(stat.flags & 0x30 != 0, "the Static screen starts hidden, flags {:#x}", stat.flags);
+    // The show channel APPLIED: when the sabotage's 0x8c arms, the Active screen deletes (mode 0 +
+    // armed B → obj+0xFE bit 0 [M 0x18d3b8:26]) and the Inactive screen shows (A on → flags = base
+    // [M 0x18d3b8:16-18]) — the console's player-visible state flip.
+    let mut scene2 = nf_view::load_with_carry(&iso().expect("NF_ISO"), "07000014.bin", false, None).unwrap();
+    for _ in 0..6 {
+        let (c, l) = { let s = scene2.sim.as_ref().expect("sim"); (s.bond.pos, [s.bond.pos[0], s.bond.pos[1], s.bond.pos[2]]) };
+        scene2.sim.as_mut().expect("sim").step(c, l, false, false);
+    }
+    {
+        let fr = scene2.sim.as_ref().unwrap().drones.frame;
+        scene2.sim.as_mut().unwrap().drones.channels.set_script(0x8c, 1, fr);
+    }
+    for _ in 0..6 {
+        let (c, l) = { let s = scene2.sim.as_ref().expect("sim"); (s.bond.pos, [s.bond.pos[0], s.bond.pos[1], s.bond.pos[2]]) };
+        scene2.sim.as_mut().expect("sim").step(c, l, false, false);
+    }
+    let dyns2: Vec<_> = scene2.sim.as_ref().unwrap().drones.worldobjs.dynobjs.iter()
+        .filter(|d| (d.pos[0] - (-62.43)).abs() < 0.1 && (d.pos[2] - 38.59).abs() < 0.1).collect();
+    let active2 = dyns2.iter().find(|d| d.ch_a == 0 && d.ch_b == 0x8c);
+    assert!(active2.is_none(), "the Active screen deleted when 0x8c armed [M 0x18d3b8:26]");
+    let inactive2 = dyns2.iter().find(|d| d.ch_a == 0x8c).expect("the Inactive screen survives");
+    assert!(!inactive2.dead && inactive2.flags & 0x30 == 0, "the Inactive screen shows when 0x8c arms (flags = base [M 0x18d3b8:16-18]), flags {:#x}", inactive2.flags);
+}
+
+/// The switch band's player cue pinned: standing in the Hint Small Plate's sphere the port fires
+/// the same INFO-bar text the game binds (`Txt_BindLabel(0x100020c)` = "Power system safeguards
+/// operational" while 0x8c is off [D USATxt.dat], [M Hint_Update 0x1b3380:24-42]), and with the
+/// sabotage armed the second plate's text takes over ("Danger: safeguards offline. System
+/// critical", on-channel 0x8c [D placement 900]). The reach-a-spot hop is the tests' documented
+/// teleport allowance (the band is reachable on foot — the delta-exit walk ends here — the hop
+/// only skips the 70k-tick approach).
+#[test]
+fn the_switch_band_fires_the_safeguard_hints() {
+    let run = |arm: bool| -> bool {
+        let mut scene = nf_view::load_with_carry(&iso().expect("NF_ISO"), "07000014.bin", false, None).unwrap();
+        {
+            let sim = scene.sim.as_mut().unwrap();
+            for _ in 0..2000 {
+                sim.step_bond(Default::default(), false, false, false);
+                if !sim.disabled { break; }
+            }
+            if arm { sim.drones.channels.set_script(0x8c, 1, sim.drones.frame); }
+            sim.bond.pos = [-60.9, 0.9, 38.5];
+            sim.bond.yaw = -std::f32::consts::FRAC_PI_2;
+            for _ in 0..30 { sim.step_bond(Default::default(), false, false, false); }
+        }
+        // The fire pushes the label into info_labels; the HUD tick binds it (Lang::bind) and moves
+        // it to info_msgs — the pane's display state.
+        scene.sim.as_ref().unwrap().hud.info_msgs.iter().any(|m| m.label == if arm { 0x0100_020d } else { 0x0100_020c })
+    };
+    assert!(run(false), "the pre-sabotage hint 0x100020c fires at the band");
+    assert!(run(true), "the post-sabotage hint 0x100020d fires with 0x8c armed");
 }
 
 #[test]
@@ -280,5 +332,55 @@ fn dump_console_object_indices() {
         let ob = &lv.maps[mm].objects[p.index as usize];
         println!("#{pi} kind {:#04x} -> m54 object #{} name \"{}\" obj-hashcode {:08x} glist {:#x} centre {:?} r{:.2} yaw {:.3}",
             p.flags & 0xff, p.index, ob.name.trim(), ob.hashcode, ob.flags, ob.centre, ob.radius, p.rotation[1]);
+    }
+    // The switch's hint texts (the INFO bar the game shows at the band; the port's hint sim binds
+    // the same labels [M Hint_Update 0x1b3380 Text_AddMsg(Txt_BindLabel(p0))]).
+    let scene = nf_view::load_with_carry(&iso().expect("NF_ISO"), "07000014.bin", false, None).unwrap();
+    // The hint texts (the INFO bar the game shows at the band [M Hint_Update 0x1b3380
+    // Text_AddMsg(Text_AddMsg(…, Txt_BindLabel(p0), …))]) — bound from USATxt.dat like the viewer's
+    // Lang::parse (lib.rs read_files_bin(…, "USATxt.dat")).
+    let img = IsoImage::open(&iso().expect("NF_ISO")).expect("open iso");
+    let (entries, bin) = nf_formats::disc::files_bin_entries(&img).expect("FILES.BIN");
+    if let Some(fe) = entries.iter().find(|e| e.name.eq_ignore_ascii_case("USATxt.dat")) {
+        let data = img.read_bytes(bin.lba as u64 * 2048 + fe.offset as u64, fe.size as u64).expect("read");
+        if let Ok(lang) = nf_formats::hud::Lang::parse(&data) {
+            for id in [0x0100_020cu32, 0x0100_020d, 0x0200_0057, 0x0400_004b] {
+                println!("hint label {id:08x} = {:?}", lang.bind(id));
+            }
+            println!("(0x0400004b is the mission objective label the audit pins as binding — a control row)");
+        }
+    }
+}
+
+#[test]
+#[ignore = "debug; run with --ignored"]
+fn debug_hint_fire() {
+    let mut scene = nf_view::load_with_carry(&iso().expect("NF_ISO"), "07000014.bin", false, None).unwrap();
+    {
+        let sim = scene.sim.as_mut().unwrap();
+        for _ in 0..2000 {
+            sim.step_bond(Default::default(), false, false, false);
+            if !sim.disabled { break; }
+        }
+        println!("after wake: pos {:?} disabled {} substate {}", sim.bond.pos, sim.disabled, sim.bond.substate);
+        sim.bond.pos = [-60.9, 0.9, 38.5];
+        sim.bond.yaw = -std::f32::consts::FRAC_PI_2;
+    }
+    for k in 0..30 {
+        scene.sim.as_mut().unwrap().step_bond(Default::default(), false, false, false);
+        if k < 3 || k == 29 {
+            let sim = scene.sim.as_ref().unwrap();
+            println!("k{k}: pos {:?} disabled {} labels {:?} hint_fired {:?}",
+                sim.bond.pos, sim.disabled,
+                sim.hud.info_labels.iter().map(|l| l.0).collect::<Vec<_>>(),
+                sim.hint_fired);
+        }
+    }
+    let sim = scene.sim.as_ref().unwrap();
+    for (hi, h) in sim.hints.iter().enumerate() {
+        if (h.centre[0] - (-61.7)).abs() < 0.5 {
+            println!("hint[{hi}] label {:08x} centre {:?} r {:.2} on {} off {} cels {} fired {}",
+                h.label, h.centre, h.radius, h.on_channel, h.off_channel, sim.hint_cels[hi].len(), sim.hint_fired[hi]);
+        }
     }
 }
