@@ -12,7 +12,7 @@
 //! the housing stays, with the dark-lens variant on the head. No light re-lights afterwards: the
 //! state-3 arm reads the head's own on-byte, which the kill zeroed [M :399].
 //!
-//! What the renderer must do differently (the main agent's half, listed for the report): a
+//! What the renderer must do differently (the draw half, listed for the report): a
 //! lod_next head draws OBJECT_SearchLightBroken's mesh (the dark lens) at the head's matrix
 //! instead of OBJECT_SearchLight1's lit-lens mesh; the mount keeps its mesh; the
 //! spot/beam/corona stay collapsed. The sim side pins all of it below.
