@@ -252,3 +252,10 @@ Progress:
   channels / downstream SPs / door unlock channel; [M] Destroy_Smash 0x12bb60, the scripts'
   ops, explosion and door-unlock paths. Real-input test from the capture hand-back. Suite
   baseline starting; checkpoints every 20-30 min.
+
+- level-14-panel-sequence (2026-10-28): the sabotage chain decoded ([D] the census + [M]
+  0x12bb60/0x12c4f8/0x1b1fc8/0x1b2aa8/0x1363c8) — the panels #713/#714 remote-smash on the
+  fusebox group-1 words, the box→generator cascade to #729's death 0x85 = Door_Slide_11's lock
+  channel; FIXED channel_kills' missing death-channel write (newest-first, one link/tick); the
+  0x51 root arm (touch #725 mask 0x4) is data-dead per Trigger_Hit — live checks listed; the
+  real-input test green from the capture hand-back to the unlocked door + the escape 0x4A.
