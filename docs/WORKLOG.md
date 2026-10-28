@@ -268,3 +268,23 @@ Progress:
   the game does at that moment and fix the port or re-derive the test with a cite;
   plus the line_of_sight_masked double read-lock collapse and dropping
   tools/test/run_suite_resume.sh. Full suite before push; checkpoints every 20-30 min.
+
+## capsule-cull-and-los-masks-9 (2026-10-28, window complete)
+
+- Branch = -8 (78c435f7) + master 480aa3db. The five reds bisected with a 2×2 env-gate
+  matrix (NF_NO_CULL/NF_NO_MASKS, gates removed after): follow=cull, escort=masks,
+  early_out=masks, searchlight=cull, digest=both. The old walk_from_spawn test is
+  non-monotonic (green both-on, red under either alone).
+- Landed: line_of_sight_masked takes the dynamic read lock once (masked_scan owns it;
+  582 lib tests + the 0xbc5e mp_net digest pin hold); run_suite_resume.sh dropped;
+  mp_perf early_out re-derived to the like-for-like masked pairing [M 0x1ebaa8:300-319,
+  0x1ec690] and green — the old pairing vs the plain segment contradicted the
+  unconditional drops.
+- Searchlight root cause measured (instrumented, reverted): the game's f<0.5 skip arm
+  [M 0x109da0:302-322] keeps Bond in the under-croft the harness relied on the removed
+  push-up to leave; the lost counter [M 0x1cb900:251-263] carries ~86 ticks → back=815.
+  The port matches the decompile; the harness needs re-deriving.
+- Not done: the full suite (setup+bisect ate the window; no background runner survives
+  here), the digest re-pin (needs the named mover — per-tick hash diff method in the
+  report), the escort sight-gate trace, the follow wedge instrumentation. Report:
+  docs/reports/capsule-cull-and-los-masks-9.md
