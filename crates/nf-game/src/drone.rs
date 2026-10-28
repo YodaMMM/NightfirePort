@@ -13724,6 +13724,23 @@ fn segment_hits_sphere(a: V3, b: V3, c: V3, r: f32) -> bool {
             // The round's category word `weapon_data+0x10` [M 0x1ece30:26] — the destroy leaves'
             // `Collide_FilterBullets` mask reads it below, the fusebox's the same word further down.
             let weapon_word = d.weapons.records.get(b.weapon as usize).map_or(0u16, |r| u16::from_le_bytes([r[0x10], r[0x11]]));
+            // The destroy leaves are solid: the C5 doors carry a collision block [D] — the mount's
+            // own ray stops on them (the fire arm below does) and so does the round [M
+            // Bullet_CollisionHandler 0x12ce80's state-2 death on the first solid hit]. A filtered
+            // contact (`weapon_word & mask != 0` [M 0x1ece30:26-33]) is NO contact: the round
+            // passes through (handheld gunfire plinks the wall behind). The leaf's handler drain
+            // runs in the props pass right below; the death keeps it to ONE contact per round
+            // [L ~50/frame — one 50-damage 0x67 round a tick, not one per overlap tick].
+            let mut destroy_stop = false;
+            if !net_world {
+                for de in self.props.destroy.iter().filter(|x| !x.dead) {
+                    if weapon_word & de.mask != 0 { continue; }
+                    if crate::breakable::Breaks::seg_box_t(b.pos, end, de.lo, de.hi).is_some() {
+                        destroy_stop = true;
+                        break;
+                    }
+                }
+            }
             for (pos, radius, damage, kind) in if net_world { Vec::new() } else { self.props.bullet_hit(b.pos, end, b.weapon, weapon_word, b.damage, &mut self.channels, frame) } {
                 let script = match kind { 1 => 0x0600_0027, 2 => 0x0600_004f, _ => 0x0600_0052 };
                 // fix-blast-scripts2: Destroy_Smash's f12 reads the tag's +0x8c [M 0x12bcdc `lwc1
@@ -13733,6 +13750,10 @@ fn segment_hits_sphere(a: V3, b: V3, c: V3, r: f32) -> bool {
                 // explicit 0 — `sw $zero,($sp)` [M 0x12bcf8]; no destroyable blast spawns debris.
                 self.pending_blasts.push((pos, radius, damage, usize::MAX, 0, script, radius, 0));
             }
+            // The solid leaf took the round: it dies here, after the drain registered — the
+            // game's one contact per round [M Bullet_CollisionHandler 0x12ce80's state-2 death;
+            // the [D] collision note above].
+            if destroy_stop { b.dead = true; }
             // The fusebox wires see the bullet this tick (`Collide_Update` 0x1ea398 pushes the pick
             // onto the hit object's `obj+0xD0`; `FuseBox_Update` 0x1adfe8:88 filters the list with
             // `Collide_FilterBullets(list, 0xfffd)` — class-5 hitters whose category word
