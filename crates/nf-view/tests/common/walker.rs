@@ -130,6 +130,16 @@ pub struct Walker {
     /// steps off the line (the strafe) instead of shooting the escort. `None` = the old
     /// behaviour, every other caller unchanged.
     pub shield: Option<usize>,
+    /// drone-bump-collision-4 (opt-in; default false → every other caller bit-identical): the
+    /// crowd answer. While true, a leg whose line runs through an ARMED bot is walked the way a
+    /// player steers — aim at a point ~1.8 beside the bot and keep walking forward, so the
+    /// Jointy push [M 0x1ec180:229-281] slides Bond along the capsule instead of pinning him
+    /// at the 0.95 contact equilibrium (the stuck ladder's pure strafe cannot escape: the
+    /// push's radial arm re-centers Bond every tick — the -3 round's (79.19,−51.21) wedge).
+    /// Armed = the bot's kind word +0x464 reads 0x800 [M NDrone2_Collision 0x140e90:95-101
+    /// rewrites it every control tick; Drone_CollisionHandler 0x140968:71-75 zeroes it while
+    /// the drone system is frozen].
+    pub crowd_aware: bool,
 }
 
 /// The stuck dump, public for the walkreal tests' own aim loops (walkreal-b2).
@@ -182,6 +192,7 @@ impl Walker {
             drone_watch, watch_last,
             health_last: Vec::new(),
             shield: None,
+            crowd_aware: false,
         }
     }
 
@@ -957,7 +968,39 @@ impl Walker {
 
             // Steering: turn toward the target, walk forward. Stuck detection every 60 ticks.
             let sim = self.scene.sim.as_ref().unwrap();
-            let desired = (wp.at[0] - p[0]).atan2(wp.at[2] - p[2]);
+            let mut aim = [wp.at[0], wp.at[2]];
+            // drone-bump-collision-4: the crowd answer (opt-in `crowd_aware`). The nearest armed
+            // bot standing on the leg's line is stepped around: aim ~1.8 beside it on the open
+            // side and keep walking forward — the push slides Bond along the capsule (a player's
+            // steer-around), instead of the stuck ladder's pure strafe which the push's radial
+            // arm re-centers every tick. Armed = kind +0x464 == 0x800 [M 0x140e90:95-101; the
+            // freeze zero 0x140968:71-75]. Behind (ahead < 0.1) or already clear (lateral > 1.9)
+            // bots don't steer the leg.
+            if self.crowd_aware && sim.bond.grounded && d > 1.0 {
+                let (gx, gz) = (wp.at[0] - p[0], wp.at[2] - p[2]);
+                let gl = (gx * gx + gz * gz).sqrt();
+                if gl > 0.5 {
+                    let (ux, uz) = (gx / gl, gz / gl);
+                    let mut best: Option<([f32; 2], f32)> = None;
+                    for dr in sim.drones.list.iter() {
+                        if !dr.present || dr.corpse || !dr.enabled || dr.kind_464 != 0x800 { continue; }
+                        let (rx, rz) = (dr.pos[0] - p[0], dr.pos[2] - p[2]);
+                        let r = (rx * rx + rz * rz).sqrt();
+                        if !(0.5..3.4).contains(&r) { continue; }
+                        let ahead = (rx * ux + rz * uz) / r;
+                        let side = rx * -uz + rz * ux;
+                        if ahead < 0.1 || side.abs() > 1.9 { continue; }
+                        if best.map_or(true, |(_, br)| r < br) { best = Some(([dr.pos[0], dr.pos[2]], r)); }
+                    }
+                    if let Some((bp, _)) = best {
+                        let (rx, rz) = (bp[0] - p[0], bp[1] - p[2]);
+                        let side = rx * -uz + rz * ux;
+                        let s = if side >= 0.0 { -1.0f32 } else { 1.0f32 };
+                        aim = [bp[0] + -uz * s * 1.8, bp[1] + ux * s * 1.8];
+                    }
+                }
+            }
+            let desired = (aim[0] - p[0]).atan2(aim[1] - p[2]);
             let err = wrap_pi(desired - sim.bond.yaw);
             let mut input = Input {
                 turn: err.clamp(-0.07, 0.07),
