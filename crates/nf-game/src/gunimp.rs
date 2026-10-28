@@ -35,8 +35,12 @@
 //!   `TurretGuns[0xb]+0x14` (= 1.0 s), the heat `ext+0x90` += 2.0 (≥ 200 sets the hot byte
 //!   `ext+0x9c`), and `Bullet_init(slot, player, imp, weapon_data + 0x67·0x10c, muzzle, dir,
 //!   0xffff)` spawns the laser round [M 0x1320d8:271-331]. The muzzle is the barrel matrix
-//!   (base = the placement transform — #225's rotation is identity — composed RotY(yaw_s)·
-//!   RotX(pitch_s)) applied to `TurretGuns[0xb]`'s (0, 0, 1.71) offset; the direction its +Z.
+//!   (base = the placement transform — `Quat_QuatToMat` on the +0x24 quaternion with the
+//!   position via `Mat_SetTrans` [M 0x131f20:66-67], overwriting the created object's matrix at
+//!   `Control_CreateObjEx` 0x1343c8:18-23; #225's quat is the identity [D placements, and every
+//!   0x34 disc row is yaw-only with a quat-consistent euler — placement_rot_census] — composed
+//!   RotY(yaw_s)·RotX(pitch_s)) applied to `TurretGuns[0xb]`'s (0, 0, 1.71) offset; the
+//!   direction its +Z.
 //!   The bullet is the player's (the game passes the player object as the owner), so it flies
 //!   the player-bullet flight and its class-5 contacts damage the C5 `Destroy` leaves through
 //!   `Destroy_CollisionHandler` 0x12bd48 — the door death writes ch 0x1f (objective 6).
@@ -189,7 +193,9 @@ impl GunImp {
     /// The barrel matrix for the draw: base·RotY(yaw_s)·RotX(pitch_s) with the base
     /// translation [M 0x1320d8:165-172 — the gunimp object's matrix ← the stored base, ·RotY,
     /// copied to the barrel object, ·RotX]. Rows are the port's row-vector axes (row 2 = the
-    /// barrel forward, `barrel_dir`); the base is #225's identity-rotation placement, so the
+    /// barrel forward, `barrel_dir`); the base is #225's identity-quat placement [D placements;
+    /// every 0x34 disc row is yaw-only with a quat-consistent euler, so the composed yaw
+    /// `yaw_base + yaw_s` equals the quat base's yaw — placement_rot_census pins it per row], so the
     /// composed yaw is `yaw_base + yaw_s` [D placements; the general non-yaw-only base is not
     /// modelled — 0d carries exactly one mount].
     /// The base object's matrix: the placement turned by the smoothed yaw only [M GunImp_Update
