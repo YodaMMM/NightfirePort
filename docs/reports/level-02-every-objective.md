@@ -108,3 +108,13 @@ on-hardware confirmation):
 not visible to me (no token, cost or context-window figures are exposed to this session; the only
 proxies I can see are wall-clock — setup from a warm sandbox ~22:50 UTC, test pass 23:58 UTC —
 and the sub-agent report's own token line, which is not this session's usage).
+
+## ntfy failed
+
+All three fallbacks failed with the ntfy.sh daily-quota 429 (same as the level-0c window):
+
+1. `curl -sS -m 20 -H "Title: NightfirePort" -d "level-02-every-objective: ..." https://ntfy.sh/nightfire-yoda-8k3x`
+   → `{"code":42908,"http":429,"error":"limit reached: daily message quota reached; increase your limits with a paid plan, see https://ntfy.sh","link":"https://ntfy.sh/docs/publish/#limitations"}`
+2. python3 urllib → `urllib.error.HTTPError: HTTP Error 429: Too Many Requests`
+3. `wget -q -O- --post-data "level-02-every-objective: done" https://ntfy.sh/nightfire-yoda-8k3x`
+   → no output, exit code 8 (server error response).
