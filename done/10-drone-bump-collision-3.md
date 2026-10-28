@@ -20,3 +20,8 @@ say so in the report. Never weaken a decompile-backed test to make code pass.
 
 ---
 claimed-by: sandbox1 at 2026-10-28T05:02Z
+
+---
+## Report (done, 2026-10-28T06:23Z)
+
+Closed by the driver: the report is on `s/drone-bump-collision-3` (docs/reports/drone-bump-collision-3.md); the worker didn't run finish.sh.
