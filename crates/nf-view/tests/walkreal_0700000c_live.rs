@@ -248,7 +248,7 @@ fn walk_the_whole_mission_from_the_start_to_the_0d_handoff() {
     // wires' ends hang west of the walkway edge x 0 (#284 A (−1.50,−216.12), B (−11.60,−210.28);
     // #282 x 2.8 spans z −218.11..−228.20 [D]) and the winch SSs (#351/#364/#377) are contact-sway
     // props at z −115..−146 [D placements]. The game's crossing mechanism over THIS gap is not
-    // pinned by the port's data — filed for the main agent's live check.
+    // pinned by the port's data — filed as a live check.
     {
         let sim = w.scene.sim.as_mut().unwrap();
         // Sister: pin the gap so the stand-in never moves onto false floor.
