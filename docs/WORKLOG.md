@@ -85,3 +85,33 @@ gallery probe (probe_gallery06.rs committed) timed out under suite contention �
   objectives; (2) decode the level's objective records [D] + Mission_MonitorObjectives [M];
   (3) add walk legs for uncovered objectives; (4) full suite (fast runner started 22:52 UTC),
   total line before push.
+
+- level-02-every-objective: obj2 "Find door to servants quarters" (watch 0x4D) COMPLETED ON REAL
+  INPUT — the [S] 0x4D poke is gone. The writer is the ARC HAND-OFF on the disc: 07000003's
+  TouchOnce trigger #308 (0xEA, param 0 = 0x4D) at (−9.0, 6.0, −23.2), the entry right past 02's
+  exit, SoundTrigger #341 keyed on 0x4D beside it [D param sweep, walkreal_probe03handoff]. The
+  same shape one part back: 02's intro stream 7 writes 0x47 = part 0's watch [D 07800002
+  0x06000084]. The monitor's in-level computed writers ruled out on disc: both sensors'
+  `Monitor_Update` 0x1afcc8:170-174 channel (param 8) = 0, no SS carries 0x4D (p3 = 0/1/2 [D
+  probes; `SS_Update` 0x1a9948:21-23 raises SS p3]). walkreal_07000002_live now asserts, in
+  player order: intro 0x47 → geisha-1 rescue (0x49, deaths 0x29/2A/88, AND #397 → 0x3B) → 0x3C →
+  SEQ 0x35 → the mid-scene → bunker sensor 0x81 → computer 0x48 **+ mission.states[5][0]==4** →
+  geisha-2 (0x4A) → AND #303 → 0x4B → AND #480 → 0x4C **+ states[5][1]==4, states[5][2]==3** →
+  ch-100 NEGATIVE (the monitor's bVar9 AND spans all four mission parts [M 0x1827d8:22-38,119-123]
+  — the old step-7 "ch 0x64 did not close" warning could never pass and is replaced) → the real
+  exit E with the earned 0x4C → level_exit 0x07000003 → the viewer's next-level step into
+  07000003 → touch #308 raises 0x4D through the real Trigger path → **states[5][2]==4** +
+  07000003's obj0/obj1 revealed by the same 0x4D [L c07000003 enable 0x4D] + ch 100 still held.
+  1 passed (51.6 s). Docs corrected: 07000002.md, 07000002-audit.md ("writers of 0x49/0x4A/0x4D
+  are NOT on the disc" was a per-level-scan blind spot — 0x49/0x4A are the hostage drones'
+  param-6 rescue channels raised by `DroneFunc_HostageSaved` 0x1441c0 [M]; 0x4D is 07000003's
+  #308), 07000003.md Start. Suite: this sandbox kills background jobs between tool calls (the
+  0d lesson held — the suite.py daemon died silently at 22:52) and the 9.9 GB disk caps the
+  target dir (chunk_suite's build gate ENOSPCs on 4 unlinked binaries). Direct runs, all green:
+  walkreal_07000002_live 1/0, walk_07000002_live 2/0, destroy_channels_02_live 1/0, hurt_02_live
+  1/0, hostage_killer_07000002 5/0, hostage_save_07000002 2/0, walkreal_probe02mon 1/0,
+  walkreal_probe03handoff 3/0, nf-game lib 584/0 (5 ignored, incl. the mission-monitor suite),
+  nf-formats lib 92/0, nf-audio lib 23/0, nf-game sensor_live/sensor_radius_live/
+  nis_handback_census 3/0, nf-view music_triggers_live 1/0 — 719 passed / 0 failed. No full-suite
+  total line this window (disk + background-kill; the next message can run chunk_suite to ALL
+  DONE on a warmer disk).
