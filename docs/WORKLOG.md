@@ -47,3 +47,12 @@ Live checks for the main agent (carried from collision-2, now sharpened):
    (the push runs) or pass through? This settles the 07 reroute direction (the decompile says the push runs).
 3. mayhew: gdbwatch an ambush guard's ext+0x464 during the fight — expect 0x800 (then the escort test needs push-aware
    flank legs, not an arming change).
+
+## drone-bump-collision-4 (2026-10-28, in progress)
+
+Branch s/drone-bump-collision-4 from origin/s/drone-bump-collision-3 (ba85aadf) merged with origin/master
+(480aa3db). Task: the four remaining reds — party_door_lock x2, cutscene_timer_pause, probe_07_route (07 hall
+south band, walker wedges at the 0.95 contact against the armed party crowd), mayhew_hold_live (flank legs wedge
+on armed combat guards) — by giving the walker the real player's response to a crowd: wait for the line to clear,
+step around the contact, or take the west mouth on measured timing. Every bot assumption cited [M]; never disarm
+the bots. Suite total line to be quoted in the report.
