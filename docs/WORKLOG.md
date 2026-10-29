@@ -12,3 +12,8 @@ walkreal_07000015_live.rs already covers the single listed objective end-to-end 
 spawn reveal plate 0x4b → walk the silo → USE exit #445 → carried channels → 07000016 spawn plate
 #252 fires 0x8e → all states[21] == 4). Added the [D] row-21 citation and a
 states[21].len() == 1 shape pin. Suite + report to follow.
+
+Suite (this session): build clean (exit 0); 235/888 binaries recorded 825 passed / 2 failed
+(fix_0c_pylon_live ×2 = wgpu adapter NotFound, no GPU in sandbox) / 34 ignored; net/mp binaries
+that false-failed under parallel contention all pass in isolation. walkreal_07000015_live green
+(1 passed, 11.1 s). Report: docs/reports/level-15-every-objective.md.
