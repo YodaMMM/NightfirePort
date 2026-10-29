@@ -2258,8 +2258,13 @@ impl Sim {
     /// `trigger`: the fire button (action 9) held; `aiming`: aim mode (L1).
     pub fn step(&mut self, camera: [f32; 3], look: [f32; 3], trigger: bool, aiming: bool) {
         // mayhew-end-transition: the exit hold freezes the free-camera path too (the game's whole
-        // sim is paused [M 0x1c98c8:44-47]; docs/systems/exit-hold.md).
-        if self.drones.tick_exit_hold() { return; }
+        // sim is paused [M 0x1c98c8:44-47]; docs/systems/exit-hold.md) — but NOT Mission_Update:
+        // it sits at 0x1c9790:17, outside the GS_IsPaused gate (level-14-every-objective).
+        if self.drones.exit_hold.is_some() {
+            self.drones.tick_mission_during_hold(self.level);
+            self.drones.tick_exit_hold();
+            return;
+        }
         let floor = self.world.floor_below(camera, 4.0).unwrap_or(camera[1] - 1.6);
         self.first_person = false;
         let ground = [camera[0], floor + 0.4, camera[2]];
@@ -2309,10 +2314,17 @@ impl Sim {
         // `GameFlow_PushState(300.0f, 7, 0xff)` [M 0x1b2318:90-92]. While it stands the game's
         // clock stops [M 0x1c98c8:44-47], the player input dies [M `psiInput_MapInputs`
         // 0x10cd80:36] and the world sections of `Game_Run` are behind the pause gate
-        // [M 0x1c9790:30-38] — but the fade itself advances every frame [M 0x1c9790 tail].
-        // The port ticks the hold and skips the world (docs/systems/exit-hold.md); the host
-        // defers the level load until it clears.
-        if self.drones.tick_exit_hold() { return; }
+        // [M 0x1c9790:30-38] — but the fade itself advances every frame [M 0x1c9790 tail], and
+        // `Mission_Update` runs EVERY frame too: it sits at 0x1c9790:17, outside the pause gate
+        // (level-14-every-objective) — the monitor keeps reading the channels during the hold,
+        // which is where the exit trigger's fallback channel folds the last objective record
+        // [M 0x1827d8 case 3]. The port used to skip the whole sim here; now the hold runs the
+        // mission layer (mission first, then the fade tick — the game's per-frame order).
+        if self.drones.exit_hold.is_some() {
+            self.drones.tick_mission_during_hold(self.level);
+            self.drones.tick_exit_hold();
+            return;
+        }
         // level-1b-drake-fight: the zero-G entry — `C_CHCHZEROG_Handler` 0x216388 [M]: its msg-0x4b
         // arm queries the same control with msg 0x40 and folds
         // `Player_ChangeSubState(glb_players, 9 | 0)` — 9 on a nonzero answer, 0 on zero
@@ -6832,17 +6844,23 @@ impl Scene {
         let flash = if h.flashbang <= 0.0 || h.flash_total <= 0.0 { 0.0 }
             else if h.flashbang > h.flash_total * 0.5 { h.flash_alpha }
             else { h.flash_alpha * (h.flashbang / (h.flash_total * 0.5)) };
-        // level-exit-fade: the exit hold rides the same overlay as the script fade — in the game
-        // BOTH are the viewer's fade object (`Game_Draw` 0x1e6f50:203-209 draws one
-        // `psiFadeView(R+0x230, G+0x231, B+0x232, A+0x233)` per viewer), and `GameFlow_PushState`
-        // ABORTS a push while a fade is already in flight [M 0x1c9f88 `beqz $v0` → no push], so
-        // the two can never run at once: `view_fade` wins when a script owns the fade, the exit
-        // hold otherwise. doublecross-transitions: `Player_Init`'s entry fade arms the same ONE
-        // fade object on every spawn [M 0x1910f8:45] — the port keeps the three sources separate
-        // and chains them script → exit → entry (a script that fades during an intro wins, the
-        // same latest-writer-wins shape [S: the port's sources are separate, the game's object is
-        // one]).
-        let fade = sim.drones.view_fade.or_else(|| sim.drones.exit_fade_view()).or_else(|| sim.drones.spawn_fade_view());
+        // level-exit-fade: the exit hold rides the same overlay as the script fade. In the game
+        // the fade object is PER VIEWER (`Camera_SetFade` 0x1bbdd8 indexes `(&glb_viewer)[arg0]`;
+        // `Game_Draw` 0x1e6f50 draws one `psiFadeView(R+0x230, G+0x231, B+0x232, A+0x233)` per
+        // active viewer — pass 1 :188-209, pass 2 :316-356): the exit push arms VIEWER 6's object
+        // [M 0x1c9f38 disasm 0x1c9f7c: a0=6], the script op-0x13 fade arms viewer 4's [M 0x1db3d0]
+        // and the entry fade the player viewer's — separate objects that draw independently. A
+        // parked script fade (a fade-in ends at alpha byte 0 [M 0x1bada0 zeroes +0x233 when the
+        // fade is idle]) draws nothing and cannot cover the exit pane, so the port's single
+        // overlay chain puts the EXIT hold first, then the script fade, then the entry fade. The
+        // old script-first order let 07000001's parked intro/meet fade-in (alpha 0, never cleared
+        // — the hand-back only clears a viewer-0 fade) shadow the exit fade: the level-end fade
+        // never drew and the exit looked like a bare freeze + cut (the reported symptom). The
+        // push aborts only when the TARGET viewer's own object is a running mode-1 fade
+        // [M 0x1bbdd8 disasm 0x1bbe08-0x1bbe18: the refuse gate is mode(+0x234) != 0 AND
+        // active(+0x235) != 0] — viewer 6's object is idle unless a previous exit fade runs, so
+        // the exit fade can never be refused or covered by a script fade.
+        let fade = sim.drones.exit_fade_view().or_else(|| sim.drones.view_fade).or_else(|| sim.drones.spawn_fade_view());
         crate::hud::script_overlay(fade, sim.drones.letterbox, &sprites, &self.hud_textures, aspect, flash)
     }
 

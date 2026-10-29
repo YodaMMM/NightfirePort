@@ -867,6 +867,12 @@ fn walk_the_infiltration_to_the_delta_exit() {
     // fix-objective-banner: the monitor completes the objective the tick after the channel.
     for _ in 0..2 { w.tick(nf_game::player::Input::default(), false); }
     assert_eq!(w.scene.sim.as_ref().unwrap().drones.mission.states[20][3], 4, "objective 4 completes [M 0x1827d8]");
+    // The monitor's same tick announces the LAST objective: record 5's enable is 0x54 [D DEF],
+    // and `Mission_MonitorObjectives` 0x1827d8 case 1 (record state 1, `enable != 0/ff` and
+    // `switch_channels[enable] != 0`) binds the text and arms the record 3 — the banner the
+    // player sees standing over Rook ("Take the exit to Delta Sector" [D text 0x04000069]).
+    assert_eq!(w.scene.sim.as_ref().unwrap().drones.mission.states[20][4], 3,
+        "objective 5 announces on its enable 0x54 [M 0x1827d8 case 1; D DEF enable]");
 
     // Leg 6: to the Delta exit #944 — walked; E fires the fallback write + the load.
     //
@@ -895,6 +901,29 @@ fn walk_the_infiltration_to_the_delta_exit() {
             "E at the exit #944 loads 07000015 (EvilBase) [D]");
         assert!(sim.drones.channels.on(0xce), "the fallback arm wrote ch 0xCE (objective 5) [M 0x1b2318]");
     }
+    // The LAST objective folds during the exit hold: the trigger wrote 0xCE this tick's trigger
+    // pass, and the game's Mission_Update runs from Game_Run 0x1c9790:17 OUTSIDE the GS_IsPaused
+    // gate (:30-38 wraps only SSys_Monitor/Light_Update/control_movement_object_handler) — the
+    // 300-frame GS_PauseGame hold the exit pushes [M 0x1b2318:90-92] keeps ticking the monitor,
+    // whose case 3 (record 4, channel ON) shows the complete banner and arms the record 4
+    // [M 0x1827d8 case 3]. The port runs mission.update at the same pre-object point of every
+    // step, so the fold lands the tick after the E press.
+    let mut obj5 = 0u32;
+    for _ in 0..6 {
+        w.tick(nf_game::player::Input::default(), true);
+        obj5 = w.scene.sim.as_ref().unwrap().drones.mission.states[20][4];
+        if obj5 == 4 { break; }
+    }
+    assert_eq!(obj5, 4, "objective 5 completes during the exit hold [M 0x1827d8 case 3; M 0x1c9790:17 outside the pause gate; M 0x1b2318 fallback write]");
+    // The monitor's tail AND is NOT this level's five records alone: the record walk filters the
+    // rows by BaseMap [M 0x1827d8:26 — `(&DAT_002a4354)[row*10] == BaseMap`, the MISSION id], so
+    // the AND spans every part of mission 0x07000014 — part 1's ch 0x8E and part 2's 0x8F/0x90
+    // [D DEF c07000015/c07000016] are still off at this exit, the tail's `if (bVar9) does not
+    // fire, and the mission-complete ch 0x64 (100) stays DOWN [M 0x1827d8:119-123]. It belongs
+    // to the true mission end (part 2), not to a part exit; nothing else writes ch 100 here
+    // [D the packs' 0xd events: 47/48/4a/0e/11/10/b8/92/93/b7/8a; the SP outs 7E/8/9/85/54].
+    assert!(!w.scene.sim.as_ref().unwrap().drones.channels.on(0x64),
+        "ch 0x64 stays down at a part exit — the tail AND spans all three parts' records [M 0x1827d8:26+119-123; D DEFs 07000015 ch 0x8E, 07000016 ch 0x8F/0x90]");
     eprintln!("[014] walked out in {} ticks; stuck {}; falls {}", w.total_ticks, w.report.stuck_events.len(), w.report.falls.len());
 }
 

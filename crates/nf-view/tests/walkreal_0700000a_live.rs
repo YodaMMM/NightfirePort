@@ -271,53 +271,41 @@ fn walk_to_security_keyboard() -> Walker {
     // The whole loop by the AI graph's own nodes (the shaft wall x 5.9-7 spans z −2..22; the
     // graph's crossings are the south gap z ≈ −14 and the west halls [D nav dump]).
     assert!(w.follow_nav_route([pc[0] + 2.0, 0.4, pc[2] + 3.0], "to the Q-Worm PC"), "no nav route to the PC");
-    // THE CUBICLE BLOCKER — RESOLVED this round (probe_l0a2/b/c, scratch): the sight rays into
-    // the cubicle are blocked at every ring position [D the ring probes stand], BUT the install
-    // does not need sight — `PCQWorm_Update` 0x1aee20 waits for a class-5 BULLET (weapon 0x58)
-    // in the PC's contact list, and the port's BULLET ray (the pass-flag drop, world.rs's
-    // segment_bullet) passes OVER the east partition from the cubicle's east side: from the
-    // stand (−18.8, 1.2, −32.2) the bullet ray to the PC is clear [D probe] and the REAL
-    // install lands in 44 ticks [D probe_l0a2c]. The old desk-north stand's bullet ray is
-    // blocked even for bullets [D probe], and the test never equipped the gadget at all — the
-    // 112 blocked shots were fired with whatever the spawn loadout held.
-    // Equip the Q-Worm gadget through the real cycle path, then the real shots from the east
-    // stand [D probe]; the set_channel(0x48) stand-in is GONE — objective 4 completes on the
-    // PC's own writer.
-    {
-        let mut cycles = 0;
-        loop {
-            if w.scene.sim.as_ref().unwrap().gun.weapon == 0x58 { break; }
-            assert!(cycles < 20, "the gadget cycle never reached the Q-Worm 0x58 (weapon {:#x})",
-                w.scene.sim.as_ref().unwrap().gun.weapon);
-            w.tick(nf_game::player::Input { gadget_cycle: 1, ..Default::default() }, false);
-            for _ in 0..60 { w.tick(nf_game::player::Input::default(), false); }
-            cycles += 1;
-        }
-        eprintln!("[0a] the Q-Worm 0x58 equipped after {cycles} cycles");
+    // The cubicle's south side, walked (this round's route — probe_l0a3_install, all legs
+    // arrived): the office block's south wall runs z −25.2..−27.1 (north faces n (0.26,0,0.97),
+    // x −18..−6 [D probe rays]); the pocket south of it (the nav route's end (−14.88, ·, −29.15))
+    // is walled off from the band behind the cubicle by the diagonal wall whose north face
+    // (n (0.30,0,0.95)) spans x −18..−15 at z −29.8..−31.5 [D probe rays] — but its EAST END
+    // stops at x ≈ −15: the column at x −13.5 runs south into the band (northward rays from
+    // z −34.4 clear at x −13 and x −9 [D probe rays]; the prior round's grid stopped at x −15).
+    // The band's floor (y 1.10) holds the bullet-clear stands: from (−15.89, 1.10, −34.24) the
+    // Q-Worm BULLET reaches the PC clear [M PCQWorm_Update 0x1aee20's class-5 seg test; D probe:
+    // segment_bullet CLEAR from every stand x −16..−17.8, z −33.5..−34.4].
+    let _ = w.try_walk_to(Wp::new(-13.9, 0.4, -30.5).r(0.9), "pocket south-east");
+    let _ = w.try_walk_to(Wp::new(-13.5, 0.4, -32.5).r(0.9), "the x −13.5 column south");
+    let _ = w.try_walk_to(Wp::new(-13.5, 0.4, -34.0).r(0.9), "into the band");
+    let _ = w.try_walk_to(Wp::new(-15.5, 0.4, -34.3).r(0.9), "band west");
+    let _ = w.try_walk_to(Wp::new(-16.5, 0.4, -34.3).r(0.7), "the south stand");
+    // The REAL install: equip the Q-Worm through the real gadget cycle (mode-1 bounds 0x4A..0x5E,
+    // owned entries only [M player.rs Input::gadget_cycle / Gun_Update's cycle]) — the prior
+    // round proved the old legs' 112 blocked shots were the spawn loadout, never the gadget —
+    // then shoot the PC from the walked south stand. The writer is the PC's own: a weapon-0x58
+    // BULLET entering the PC's contact list writes switch_channels[0x48]
+    // [M PCQWorm_Update 0x1aee20]. No stand-in: the walked stand is bullet-clear and the shot
+    // lands (probe_l0a3_install: 1 shot → ch 0x48).
+    let mut cycles = 0;
+    loop {
+        if w.scene.sim.as_ref().unwrap().gun.weapon == 0x58 { break; }
+        assert!(cycles < 20, "the gadget cycle never reached the Q-Worm 0x58 (weapon {:#x})",
+            w.scene.sim.as_ref().unwrap().gun.weapon);
+        w.tick(nf_game::player::Input { gadget_cycle: 1, ..Default::default() }, false);
+        for _ in 0..60 { w.tick(nf_game::player::Input::default(), false); }
+        cycles += 1;
     }
-    // The approach: north of the cubicle first (the nav route ends north-east of it), then down
-    // the open x −18.8 lane to the stand (the first single-leg walk cut the cubicle's NE corner
-    // and ran to the corridor's west wall [D this round's run]).
-    // The walk-reachability gap (this round's probes): the east stand (−18.8, pc.z) is
-    // bullet-clear over the partition [D probe_l0a2b/c] but the WALK there is furniture-blocked
-    // (every south ray x −18..−20 from z −29 hits within 40% [D probe_l0a2c]), the desk-north
-    // band's bullet rays are desk-lip-blocked at every dz 1.9..2.8 and dx ±0.4 [D probe_l0a2c],
-    // and the south stand's (−16.9, −34.4, bullet-clear [D]) approach from the nav route's end
-    // is blocked at z −31.5 [D probe_l0a2c]. The real shots run best-effort from wherever the
-    // walk reached; until a walk-reachable bullet-clear stand is mapped (a live check: how the
-    // real player reaches the cubicle's south side), the documented stand-in still drives the
-    // channel — the install MECHANISM itself is probe-proven (44 ticks, probe_l0a2c).
-    let _ = w.try_walk_to(Wp::new(-18.8, 0.4, pc[2] + 3.2).r(1.0), "east of the cubicle, north");
-    let _ = w.try_walk_to(Wp::new(-18.8, 0.4, pc[2]).r(0.9), "the cubicle's east stand");
-    let shots = shoot_at(&mut w, [pc[0], pc[1] + 0.55, pc[2]], 2.4, 300, "the Q-Worm install (real, best-effort)", &|sim| sim.drones.channels.on(0x48));
-    w.wait(6);
-    if !w.scene.sim.as_ref().unwrap().drones.channels.on(0x48) {
-        eprintln!("[0a] the real install did not land from the walked stand (shots {shots}) — the documented stand-in drives ch 0x48");
-        w.scene.sim.as_mut().unwrap().drones.set_channel(0x48);
-    }
+    let shots = shoot_at(&mut w, [pc[0], pc[1] + 0.55, pc[2]], 3.0, 400, "the Q-Worm install (real, from the walked south stand)", &|sim| sim.drones.channels.on(0x48));
     w.wait(6);
     assert!(w.scene.sim.as_ref().unwrap().drones.channels.on(0x48),
-        "ch 0x48 (objective 4) on the PC's writer or the documented stand-in [M PCQWorm_Update 0x1aee20]");
+        "ch 0x48 (objective 4) from the REAL install: {shots} shots from the walked south stand [M PCQWorm_Update 0x1aee20]");
 
     // The security keyboard — the REAL use-key activation, replacing the old `set_channel(0x3a)`
     // stand-in (keyboard_0700000a_live proves this exact path on master): walk back east to the
@@ -329,7 +317,37 @@ fn walk_to_security_keyboard() -> Walker {
     // reaches it from the wedge (head+look ~0.94 from the centre vs the 1.0 + 0.66 pick radius)
     // and SP_Update 0x1dbda8's state-1 activation toggles the out channel on the PRESS — the
     // pulse stops once ch 0x3A reads on, the way the game's tap works [M].
-    assert!(w.follow_nav_route([-3.9, 0.0, 13.2], "back to the lobby"), "no nav route back to the lobby");
+    // The walk-back with the alarm-runner watch between the legs (the ring's own pattern): the
+    // corridor legs pass the alarm-panel mouth (the ring's "east past the alarm-panel corridor"
+    // at (−11.5, −13.5)), and a guard challenged en route runs for the panel while Bond walks on
+    // — without the per-leg catch his press landed mid-keyboard-leg this round (level_exit at
+    // +342 into "round the wall end", ch 0x61 still off at the walk-back's end) [M the runner
+    // 0x168ea8's follow].
+    let back = {
+        let sim = w.scene.sim.as_ref().unwrap();
+        walker::nav_route(sim, sim.bond.pos, [-3.9, 0.0, 13.2])
+    };
+    match back {
+        Some(nodes) => for (k, p) in nodes.iter().enumerate() {
+            let ok = walk_leg_watched(&mut w, *p, 1.3, &format!("back to the lobby node {k}"));
+            assert!(ok || w.scene.sim.as_ref().unwrap().drones.level_exit.is_none() || k + 1 == nodes.len(),
+                "the walk-back leg {k} never arrived and the mission did not end");
+        },
+        None => assert!(w.follow_nav_route([-3.9, 0.0, 13.2], "back to the lobby"), "no nav route back to the lobby"),
+    }
+    {
+        // The walk-back's state gate (this round): the corridor legs pass the alarm-panel mouth,
+        // and a guard challenged there runs for the panel while Bond finishes the walk — the
+        // press must NOT land. The same catch the ring legs use (watch_and_clear →
+        // clear_hostiles [M the alarm runner 0x168ea8's follow]): kill the runner before the
+        // keyboard legs; the mission graph's ch 0x61 must still be off here.
+        watch_and_clear(&mut w, 40.0);
+        let sim = w.scene.sim.as_ref().unwrap();
+        eprintln!("[0a] post-walkback: ch61 {} fail {} exit {:?} pos {:?}", sim.drones.channels.on(0x61),
+            sim.drones.mission.fail_label, sim.drones.level_exit, sim.bond.pos);
+        assert!(!sim.drones.channels.on(0x61), "the alarm runner from the walk-back corridor was not caught in time");
+        assert!(sim.drones.level_exit.is_none(), "the mission ended during the walk-back");
+    }
     w.walk_to(Wp::new(-3.2, 0.0, 9.4).r(1.0), "hug the cab east wall south end");
     let _ = w.try_walk_to(Wp::new(-2.55, 0.0, 8.1).r(1.0), "round the wall end");
     {
@@ -395,14 +413,19 @@ fn walk_to_security_keyboard() -> Walker {
 /// THIS ROUND'S LANDED LEG (2026-10-29): the office floor from the fresh load to objective 5 on
 /// real input — the arrival plate, the cab sweep, the walked PC loop, and the keyboard through the
 /// player's own use key (the old `set_channel(0x3a)` stand-in is gone; the mux settle waits pin
-/// the graph's own update order).
+/// the graph's own update order). This round the install became REAL too: the walked south-stand
+/// route (the diagonal wall's east end at x ≈ −15, the x −13.5 column, the band at y 1.10) plus
+/// the real gadget-cycle equip — no stand-in anywhere.
 #[test]
 fn walk_office_floor_to_the_security_keyboard() {
     let _w = walk_to_security_keyboard();
 }
 
-#[ignore = "UPDATED this round (probe_l0a2/b/c, scratch): BOTH prior blocker readings were wrong, and the real remaining gap is walk-reachability only. (1) The mouth's 'dynamic leaf of door #540' is DISPROVEN — the leaf E-opens to pos01 1.0 (state 0x4, swung −92° at x −14.17) and no mouth ray changes across the E [D probe]; the real blocker is a STATIC pillar block (south face z −13.10 spanning x −12.98..−10.9, west face x −12.79..−12.98, [D probe rays]) that leg 23's waypoint (−12.0, −12.8) sat INSIDE — the ring route now crosses the OPEN SOUTH to the ai node 130 (−8.52, −15.39) [D], every southward ray from the pocket clear [D probe]. (2) The Q-Worm install MECHANISM is proven real: with the gadget 0x58 actually equipped (the old test never equipped it — the 112 blocked shots were the spawn loadout), the bullet ray passes OVER the east partition from (−18.8, 1.2, −32.2) and ch 0x48 lands in 44 ticks [D probe_l0a2c]; the sight-ray blocker is irrelevant to the class-5 bullet contact [M PCQWorm_Update 0x1aee20]. LEFT: a WALK-reachable bullet-clear stand — the east stand's walk is furniture-blocked (south rays x −18..−20 hit within 40% of z −29 [D]), the desk-north band's bullets are desk-lip-blocked at every dz 1.9..2.8 / dx ±0.4 [D], the south stand's approach is blocked at z −31.5 [D]; live check: how the real player walks into the cubicle's south side. The mission walk beyond the install is UNTESTED past this point this round."]
+/// The full mission walk: the prologue (the REAL install from the walked south stand — no
+/// stand-in) is green this round; the RING's mouth crossing is the last blocker (re-ignored
+/// 2026-10-29 with this round's walked evidence — see the ignore reason).
 #[test]
+#[ignore = "the ring's mouth crossing (this round's WALKED legs, three routes tried, all wedge): (1) the -2 leg (−11.5, −13.5) hugs the pillar's south face (z −13.10 spans x −12.98..−10.9 [D probe rays]) — the r-0.55 capsule's north edge (z −12.95) overlaps the face; wedged at the 6000-tick cap on 'east past the alarm-panel corridor'. (2) The pocket crossing east along z −15: the NS wall's west face x −10.6955 runs CONTINUOUSLY z −17.5..−11.0 [D probe rays] — wedged on 'the ai node 130 south'. (3) Around the wall's south end at z −18.6 (legs (−12.0,−18.6)→(−8.5,−18.6)): wedged on 'across the wall line, south of its end' — the wall line extends past z −18.6 or another blocker sits there (unprobed). The prologue before the ring is green on real input this round INCLUDING the real install (walk_office_floor_to_the_security_keyboard): the walked south-band route (the diagonal wall's east end x ≈ −15, the x −13.5 column, the band at y 1.10), the real gadget-cycle equip, and 1 real shot → ch 0x48 [M PCQWorm_Update 0x1aee20] — the last stand-in is gone. Next round: probe the eastward rays at z −18.4..−19.5 x −12..−8 (the crossing around the wall's south end) and the pocket's southward columns x −11..−9, then re-derive the join to node 130."]
 fn walk_office_floor_qworm_keyboard_hatch() {
     let mut w = walk_to_security_keyboard();
 
@@ -420,7 +443,7 @@ fn walk_office_floor_qworm_keyboard_hatch() {
     // player's legal ring route: south through the west offices, the west corridor, the south
     // corridor, and up the east side to the hatch — the corners below, walked steadily (a real
     // player's stealth timing: no stops inside a civilian's reach).
-    let ring: [([f32; 3], &str); 42] = [
+    let ring: [([f32; 3], &str); 44] = [
         ([-7.5, 1.3, 14.5], "ring: the security centre's west door"),
         ([-7.5, 1.3, 16.5], "ring: the west hall north"),
         ([-20.5, 1.3, 16.5], "ring: the west offices' north corridor"),
@@ -455,19 +478,35 @@ fn walk_office_floor_qworm_keyboard_hatch() {
         ([-18.5, 1.3, -9.5], "ring: down 3"),
         ([-17.5, 1.3, -9.5], "ring: jink 5"),
         ([-17.5, 1.3, -13.5], "ring: the south-west corner approach"),
-        ([-11.5, 1.3, -13.5], "ring: east past the alarm-panel corridor"),
-    // The mouth re-derived THIS round (probe rays, scratch — probe_l0a2c): the "gap at
-    // z −13.0..−12.0" premise was WRONG — the passage north is a STATIC pillar block: its south
-    // face z −13.10 (normal (0,0,−1)) spans x −12.98..−10.9, its west face x −12.79..−12.98 spans
-    // z −13.0..−12.1 [D probe rays at y 1.0], and the NS wall's west face x −10.6955 runs
-    // continuously z −17.5..−11.0 (every eastward ray z −11..−17.5 hits it) — leg 23's waypoint
-    // (−12.0, −12.8) sat INSIDE that block, which wedged the walk at (−12.06, −13.65) exactly one
-    // capsule radius south of the face. The old "dynamic blocker (door #540's leaf)" reading is
-    // disproven: the leaf (door list 15, kind 0) E-opens to pos01 1.0 (state 0x4, matrix swung
-    // −92° along z at x −14.17) and NO mouth ray changes across the E [D probe]. The real
-    // crossing is the OPEN SOUTH: every southward ray from the pocket (x −12..−8.5, z −13.65 →
-    // −18.0) is clear [D probe rays] — the route joins the game's own N-S ai lane at node 130
-    // (−8.52, −15.39) [D 0700000a ai_network].
+        // The pillar crossing (this round's walk): the -2 leg (−11.5, −13.5) hugged the pillar's
+        // south face (z −13.10, x −12.98..−10.9 [D probe rays]) — the r-0.55 capsule's north
+        // edge (z −12.95) overlaps the face and the leg wedged at the 6000-tick cap. The crossing
+        // rides the pocket's open south instead: from the corner approach south-east to
+        // (−14.5, −15.0) — south of every pillar face — then east along the pocket to the game's
+        // N-S ai lane at node 130 (every southward ray from the pocket x −12..−8.5,
+        // z −13.65 → −18.0 clear [D probe rays]).
+        ([-14.5, 1.3, -15.0], "ring: south of the pillar, into the pocket"),
+        // The lane join (this round's walk): the NS wall's west face at x −10.6955 runs
+        // CONTINUOUSLY z −17.5..−11.0 [D probe rays] — no eastward crossing between z −11 and
+        // −17.5 — so the pocket joins the game's N-S ai lane AROUND the wall's south end: south
+        // to z −18.6, east across the wall line, then north up the lane to node 130.
+        ([-12.0, 1.3, -18.6], "ring: the pocket's south end"),
+        ([-8.5, 1.3, -18.6], "ring: across the wall line, south of its end"),
+        // The player's route south rides the game's N-S lane at x −8.5 (the ai nodes 132
+        // (−8.52, −18.47) / 130 (−8.52, −15.39) / 0 (−8.76, −21.55) [D]) — the mouth's guard
+        // slot east of the bridge is 0.5 wide (the jamb's corner at (−10.60, −18.66) [L the
+        // bridge-edge sister's segment probe]) and cannot take the player's 1.1 capsule.
+        // The mouth re-derived (the -2 round's probes, carried forward): the OLD mouth legs
+        // (−12.0,−12.8)→(−8.5,−14.8) are DELETED — leg 23's waypoint (−12.0, −12.8) sat INSIDE
+        // a STATIC pillar block whose south face is z −13.10 spanning x −12.98..−10.9 (hit
+        // normal (0,0,−1)) with a west face at x −12.79..−12.98 over z −13.0..−12.1 [D probe
+        // rays]; the NS wall's west face at x −10.6955 runs CONTINUOUSLY z −17.5..−11.0 (every
+        // eastward ray from z −11 to −17.5 hits it) [D probe rays]. Door #540 office_b_door
+        // (−14.18, −12.96) is NOT the blocker: it E-opens cleanly to pos01 1.0 (state 0x4, the
+        // leaf matrix swung −92° along z at x −14.17) and NO ray across the mouth changes across
+        // the E [D probe]. The crossing is the OPEN SOUTH: every southward ray from the pocket
+        // (x −12..−8.5, z −13.65 → −18.0) is clear [D probe rays], joining the game's own N-S ai
+        // lane at node 130 (−8.52, −15.39) [D 0700000a ai_network] — the legs below.
         ([-8.5, 1.3, -15.4], "ring: the ai node 130 south"),
         ([-8.5, 1.3, -18.5], "ring: the ai node 132 south"),
         ([-8.7, 1.3, -21.5], "ring: the ai node 0 into the south corridor"),
