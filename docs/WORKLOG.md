@@ -27,3 +27,17 @@ Sandbox reset then restored; fresh clone from origin/master (f40be760). Task: `w
 walks Countdown Part 1 to the Delta exit — list every objective the mission data lists [D / M 0x1827d8],
 add the missing ones on real input (no teleports, no channel pokes), incl. the capture cut-scene path and
 the sabotage cascade, ending on the exit. Setup (downloads, toolchain) running; this entry pushed first.
+
+## level-14-every-objective — 18:12 UTC 2026-10-29
+Census done: mission 0x07000014 part 0 lists 5 objectives (ch 0x47/0x48/0x4A/0x54/0xCE [D
+c07000014.rs / ee_start_05 @ 0x2a4260]); the walk asserted 1-4 complete, obj5 had NO completion
+assert. Added: obj5 announce (state 3) after Rook's death [M 0x1827d8 case 1] and the fold
+(state 4) during the exit hold [M 0x1827d8 case 3]. Port gap found and fixed: the exit hold
+skipped the whole sim, but Game_Run's Mission_Update sits at 0x1c9790:17 OUTSIDE the GS_IsPaused
+gate (:30-38) — the game keeps folding objectives through the 300-frame fade. Fix:
+Drones::tick_mission_during_hold on the scene hold paths. My first ch-0x64 assert contradicted
+the decompile (the tail AND spans all three parts [M 0x1827d8:26]; D DEFs 07000015/16) — test
+fixed to the negative pin. Capture (Kiko) path + sabotage cascade verified real-input in the
+walk. Walk binary 5/5 green; mayhew transition walks 01 (4), 02 (1), 05 (9) green. Suite:
+background killed (sandbox), foreground chunks 240/1/6 across 43/904 binaries (the 1 =
+probe_pylon_render, known no-GPU); state /home/z/suite14_state.json for the next session.
