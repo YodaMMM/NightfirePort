@@ -96,3 +96,25 @@ gallery probe (probe_gallery06.rs committed) timed out under suite contention �
   asserted complete, ending on the level exit firing; first list what the current test
   already covers, then add legs for the rest; blockers are port gaps to fix with [M/D]
   evidence or list for the main agent if draw-only.
+
+- level-03-every-objective: the three leaf writers found on the disc and driven real. obj1's
+  leaves ARE the servant placements' param 6 (= the game's Drone+0x135 rescue channel): #389
+  carries 0x4f, #388 0x50, #422 none [D probe via Drone::second_channel; 07000002's servants
+  carry 0x49/0x4A the same way [D]]. The chain is ported end to end [M]: the enable plate (p3)
+  starts the HOSTAGE cower (DroneTypeSettings row 5 start 0xa via dtype 0xe + prop 0x4e; M
+  0x14c938), the captor binds (nearest armed alive guard; M 0x144030), its death moves the
+  Hostage UPDATE to HostageSaved (M 0x15cb78:24-36) whose ENTER raises p6 via
+  DroneFunc_HostageSaved 0x1441c0:11-18 (also the save-count global + the 0x200004f/0x2000050
+  messages, levels 0x7000002/0x7000003 special-cased). obj0's leaf: the Dragon Safe key, spawned
+  by E on the case (SP #110, script 0x06000563 s1 Entity kind 2 +0x28 = 0x4e [D]) and written by
+  the take [M 0x18e650:330-333]. The old walkreal-a "no on-level writer" claim (file header +
+  audit GAP-2's leftover) is obsolete — 07000003.md's stale levels.md GAP line still needs the
+  same fix. walkreal_07000003_live rewritten: the full route drives BOTH servant rescues with
+  real kills (0x4f/0x50 rose, servants end 0x64/0x13, obj1 state 4 through the AND) but is still
+  RED at the end: (a) the plate/safe legs need nav polish (the 0x21 plates hang over the moat
+  rim — walk_nav_to routes through the garden door but parks on the ledge; walk_to straight
+  lines flank into the moat), and (b) the case E is edge-triggered — the aim-while-holding loop
+  pressed early facing wrong and the keycard never spawned (the items test's single press at the
+  converged repro spot is the working shape). File tally this sandbox: 3 passed / 1 failed
+  (walk_the_full_route_and_complete_every_objective). Next session: converge-then-press the case
+  E, approach #389's plate from the gate-plate lawn side, finish the exit leg, full suite.
