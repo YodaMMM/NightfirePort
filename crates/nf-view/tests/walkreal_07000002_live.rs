@@ -97,6 +97,20 @@ fn walk_the_castle_all_objectives_to_the_exit() {
     }
     assert!(revealed, "the intro cut-scene's stream 7 writes ch 0x47 [D 07800002 0x06000084 stream7]");
     assert!(ch_on(&w, 0x97), "the intro's other stream write (ch 0x97) also landed [D runtime]");
+    // The arc hand-off this write exists for: 07000001's obj0 "Escort Mayhew to bunker" (ch 0x47,
+    // enable 0 [D ee_start_05 @ 0x2a3eb8]) folds here, one part late — 07000001's own disc data
+    // has no 0x47 writer [D census] and no ACTION.ELF code writes ch 0x47 immediately [M-dis
+    // switch_channels census 2026-10-29] — through the REAL monitor (case 3: watch channel on →
+    // state 4 [M 0x1827d8]).
+    {
+        // The monitor folds on the tick AFTER the channel rises (the loop above breaks on the
+        // rise, before the next Mission_Update) — settle two ticks, then pin the fold.
+        w.tick(Default::default(), false);
+        w.tick(Default::default(), false);
+        let sim = w.scene.sim.as_ref().unwrap();
+        let m01 = nf_game::mission::LEVELS.iter().position(|l| l.level == 0x0700_0001).expect("07000001's LEVELS record");
+        assert_eq!(sim.drones.mission.states[m01][0], 4, "07000001's escort objective folds on the intro's ch 0x47 [M 0x1827d8 case 3; D 07800002 0x06000084 stream7]");
+    }
     w.skip_cutscenes = true;
 
     // 1. The secret-bunker room → ladder #114 (centre (−26.87, 2.54, 42.23), top 5.96) → the garden
