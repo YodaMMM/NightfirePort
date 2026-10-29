@@ -3174,30 +3174,34 @@ impl Drone {
                 for k in 0..3 { self.pos[k] += m[k]; self.special_spot[k] += m[k]; }
             } else if self.route.is_some()
                 && matches!(self.anim.state, anim_state::RUN | anim_state::ALERT_WALK | anim_state::WALK_AIM | anim_state::RUN_AIM | 0x37..=0x39) {
-                // drone-bump-collision-6: the route walk moves by the game's own constraint — the
-                // boundary-flag per-axis clamp on the OBJECT-LOCAL step (`boundary_clamp` below), then
-                // the world step applies with no further gate [M AnimFrameResolve 0x1c35f8:425-432 adds
-                // the callback's vector to obj+0x30 unconditionally]; the nav-bounds push (0x157bd0)
-                // runs post-tick in Drones::tick (the 0x140e90 fold below). The old probe_move reject
-                // parked the body whenever its 0.4-overshoot rays clipped world geometry the game
-                // never consults on this path — the 07 party hall's west mouth (dr22 wedged at
+                // drone-bump-collision-6: the route walk applies the root-motion step with no
+                // probe_move gate [M AnimFrameResolve 0x1c35f8:425-432 adds the callback's vector
+                // to obj+0x30 unconditionally]; the nav-bounds push (0x157bd0) runs post-tick in
+                // Drones::tick (the 0x140e90 fold below). The old probe_move reject parked the
+                // body whenever its 0.4-overshoot rays clipped world geometry the game never
+                // consults on this path — the 07 party hall's west mouth (dr22 wedged at
                 // (79.48,−50.32) while the creep ran on to leg 13→14; round-5's verdict).
-                let (clx, clz) = self.boundary_clamp(d, lx, lz);
-                if clx == lx && clz == lz {
-                    self.pos[0] += step[0];
-                    self.pos[2] += step[1];
-                    self.blocked_reach = 0.0;
-                } else if clx == 0.0 && clz == 0.0 {
-                    // Every component clamped: the body stays put and the whole step is the
-                    // absorbed measure — move_by's reject observable (breakable.rs drone_step).
-                    self.blocked_reach = (step[0] * step[0] + step[1] * step[1]).sqrt();
-                } else {
-                    // The differential slide [M 0x13b490:129-135]: the blocked components zero,
-                    // the clear ones carry the body along the wall.
-                    self.pos[0] += clx * c + clz * s;
-                    self.pos[2] += -clx * s + clz * c;
-                    self.blocked_reach = 0.0;
-                }
+                //
+                // drone-bump-collision-11: NO boundary-flag clamp here — the -6..-10 tree gated
+                // this arm through `boundary_clamp` (the 0x13b490:129-135 per-axis zeroing), but
+                // that clamp is DEAD in the shipped game: it runs only when `+0x4F8 & 1`
+                // [M 0x13b490:120; SetBoundryFlags 0x14f140 computes the +800 flag word under the
+                // same gate], and NO instruction sets that bit — DefaultInit clears it
+                // (`+0x4F8 = (+0x4F8 & 0xffea05e2) | 0x801e2`, bit 0 clear on both masks
+                // [M 0x14b300:60]), and a disassembly sweep of all 319 `sw .., 0x4F8(..)` sites in
+                // ACTION.ELF finds every read-modify-write ORing only bits >= 2 (the vision bit
+                // 0x10000 DroneVision_ConsiderAlerted+0x448, 0x2000 AstronautLaunch+0x494, bit 2
+                // AbseilDeath+0x69c; the `ori .., 0x7`-shaped hits are LEVEL-HASH constants
+                // 0x070000XX feeding a `bne`, not the stored register) and no SB/SH targets the
+                // word. The game's own probe geometry would pin a clamped bot whose route node
+                // sits in a nav pocket — the 07000006 truck driver's park spot is walled on
+                // three sides within 0.8 [D the parsed nav boundary walls] — yet the driver walks
+                // his whole mission route there [L 06-firstsight.trace 148014-148247]: bit 0 is
+                // clear for him, as it is for every bot. The old always-clamped gate pinned the
+                // driver at route idx 0 forever (blocked_reach 0.02/tick, never 0x34).
+                self.pos[0] += step[0];
+                self.pos[2] += step[1];
+                self.blocked_reach = 0.0;
             } else {
                 self.move_by(d, step);
             }
@@ -3254,39 +3258,6 @@ impl Drone {
         probe(self.pos[1]) && probe(self.pos[1] + 0.5)
     }
 
-    /// The route walk's boundary-flag clamp — `DroneAnim_PreTransCallback` 0x13b490:120-136 on the
-    /// OBJECT-LOCAL root step, the bits from `DroneMove_SetBoundryFlags` 0x14f140 (runs in
-    /// `NDrone2_ControlSTANDARD` 0x1490f0:202-206): four probes from the feet along the object-local
-    /// axes (0,0,±0.5)/(±0.5,0,0) tested by `NDrone2_MoveTest` 0x155330 — the distance/slope gates +
-    /// `AINetwork_BoundsTest`, nav boundaries ONLY, no collision-world LOS [M 0x155330; the port's
-    /// game-true shape is `nav::Network::node_scan_ok` — the [S] collision-LOS deviation lives only in
-    /// `nav::Network::move_test`'s stand-in and must not gate this]. Bits 2/4 = local ∓/±z (forward/
-    /// back), 8/0x10 = ±x (side); a blocked direction zeroes the step's component INTO it and keeps
-    /// the rest — the differential slide along the wall [M 0x13b490:129-135]. The whole clamp is
-    /// SKIPPED while the door target +0xBA8 stands [M 0x13b490:120 `&& *(int *)(iVar1 + 0xba8) == 0`;
-    /// the same skip in `Drone_Control` 0x139268:76 and `LinkCreep_Handler` 0x15a2c8:67] and when the
-    /// drone is unbounded (the `+0x4f8 & 1` gate — the port's `bounded`; the 0x23-skin band skips
-    /// `SetBoundryFlags` itself [M 0x1490f0:202-206, docs/systems/boundary-flags-fold.md]).
-    /// [S unverified: the 0.5 probe is used unscaled — 0x14f140 scales it by the mode-0x1E bot's
-    /// `BOT_getMovementSpeedMul`, not measured for these bots; 1.0 assumed.]
-    fn boundary_clamp(&self, d: &Data, lx: f32, lz: f32) -> (f32, f32) {
-        if !self.bounded || self.hit_door.is_some() {
-            return (lx, lz);
-        }
-        let (s, c) = (crate::trig::sinf(self.yaw), crate::trig::cosf(self.yaw));
-        let feet = self.feet();
-        // local axis → world with root_motion's rotation: +z → (s, c), +x → (c, −s).
-        let probe = |ax: f32, az: f32| {
-            let p = [feet[0] + ax * c + az * s, feet[1], feet[2] - ax * s + az * c];
-            d.nav.node_scan_ok(feet, p)
-        };
-        let (mut x, mut z) = (lx, lz);
-        if z > 0.0 && !probe(0.0, 0.5) { z = 0.0; }
-        if z < 0.0 && !probe(0.0, -0.5) { z = 0.0; }
-        if x > 0.0 && !probe(0.5, 0.0) { x = 0.0; }
-        if x < 0.0 && !probe(-0.5, 0.0) { x = 0.0; }
-        (x, z)
-    }
 
     // ---- damage and death (docs/systems/drone-damage.md) ---------------------------------------------------------
 
