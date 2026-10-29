@@ -359,7 +359,7 @@ fn dump_the_stairwell_impacts_vs_render() {
 ///    node+0x3c & 0x400000, which no parsemap static node kind carries [M parseentity_fixup_entity
 ///    0x1d00c0 + parsemap 0x1d1998:102 `cel+0x3c = flags & 0xffff`]), and the flight trace's
 ///    HITTEST+0x98 = 0 drops nothing in Collide_Intersect [M 0x12f040, disasm 0x1ebff0-0x1ec010].
-///    The main agent's render check (docs/reports/level-11-stairwell-bullet-holes-6.md "Live
+///    A render / PCSX2 check (docs/reports/level-11-stairwell-bullet-holes-6.md "Live
 ///    checks") decides the last word: the game should show the same floating hole at the repro spot.
 #[test]
 fn every_stairwell_impact_sits_on_drawn_geometry() {
