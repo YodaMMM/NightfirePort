@@ -139,8 +139,12 @@ fn truck_ride_finish_produces_the_results_rows() {
         "row 6's raw per the generic formula");
     // The time row (7): value = elapsed in 1/100 s, count = the par seconds [M 0x1984b0:104-139].
     // BOTH branches are ceil(max × par / max(elapsed_s, 1)) — under par the score RISES above max
-    // [M :118-170; the capture's 01:19/09:00 → 170,887].
-    let t = (f.stats.elapsed as f32 / 100.0).max(1.0);
+    // [M :118-170; the capture's 01:19/09:00 → 170,887]. mission-stats-rows: the game's
+    // denominator is INTEGER seconds — `*(int *)(rows+0x94) / 100` integer-divides BEFORE the
+    // float casts [M 0x1984b0:120; the max(·, 1) guard rides the same (float)(int) value, :125-131].
+    // This test's old expectation divided by the float seconds (elapsed 1461.36) — it contradicted
+    // the decompile and scored 146,136 where the game floors to 1461 s and scores 146,740.
+    let t = (f.stats.elapsed / 100).max(1) as f32;
     let x7 = f.rows[7].target as f32 * f.rows[7].count as f32 / t;
     let t7 = x7 as i32;
     let want7 = if x7 - t7 as f32 >= 1e-5 { (t7 + 1) as f32 } else { t7 as f32 };

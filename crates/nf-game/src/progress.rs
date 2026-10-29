@@ -641,8 +641,16 @@ impl Progress {
                 // by elapsed/par]. The PCSX2 capture's 01:19 / 09:00 → 170,887 =
                 // ceil(25000 × 540 / 79) is the proof (docs/systems/mission-stats.md). The ratio
                 // is the game's shared block [M :234-253]: round½↑(raw/max × 100) × 0.01 clamped.
+                // mission-stats-rows: the game's denominator is INTEGER seconds —
+                // `uVar2 = *(int *)(rows+0x94) / 100` integer-divides the 1/100-s tally BEFORE the
+                // float casts [M 0x1984b0:120], and the under-par arm's max(·, 1) guard rides that
+                // same (float)(int) value [M :125-131 `(int)fVar13 * (1.0 < fVar13) | (1.0 >=
+                // fVar13) * 1.0f`]. The port used to divide by the float seconds (elapsed 757 →
+                // 7.57) — a score shape (e.g. 25000·480/7.57 ≈ 1,585,205) the game cannot produce;
+                // its integer step floors every sub-second remainder (757 → 7).
                 7 => {
-                    let t = (r.value as f32 / 100.0).max(1.0);
+                    let secs = r.value / 100; // integer division [M 0x1984b0:120]
+                    let t = secs.max(1) as f32; // the max(elapsed_s, 1) guard [M :125-131]
                     r.raw = ceil_1e5(r.target as f32 * r.count as f32 / t);
                     r.ratio = if r.target != 0 {
                         ((r.raw / r.target as f32 * 100.0).round() * 0.01).clamp(0.0, 1.0)

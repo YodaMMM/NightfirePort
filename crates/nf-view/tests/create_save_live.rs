@@ -73,6 +73,7 @@ fn creating_bond_from_a_fresh_boot_saves_it_to_the_card() {
         dir: Some(dir.clone()),
         name: None,
         profile: None,
+        session_progress: None,
     }
     .apply_to(&mut fe);
 
@@ -112,6 +113,7 @@ fn the_saved_codename_is_offered_on_the_next_boot() {
         dir: Some(dir.clone()),
         name: None,
         profile: None,
+        session_progress: None,
     }
     .apply_to(&mut fe);
     walk_to_name_entry(&mut fe);
@@ -151,7 +153,7 @@ fn the_saved_codename_is_offered_on_the_next_boot() {
 fn typed_letters_reach_the_grid_and_the_name_saves() {
     let dir = temp_dir("typed");
     let mut fe = FrontEnd::new();
-    nf_view::menu::ProfileSession { dir: Some(dir.clone()), name: None, profile: None }
+    nf_view::menu::ProfileSession { dir: Some(dir.clone()), name: None, profile: None, session_progress: None }
         .apply_to(&mut fe);
     walk_to_name_entry(&mut fe);
     // The window's typing branch: the letter/digit keys map to grid cells [M 0x213a98:79-85]
@@ -204,7 +206,7 @@ fn typed_letters_reach_the_grid_and_the_name_saves() {
 fn finishing_a_mission_under_the_codename_saves_progress() {
     let dir = temp_dir("progress");
     let mut fe = FrontEnd::new();
-    nf_view::menu::ProfileSession { dir: Some(dir.clone()), name: None, profile: None }
+    nf_view::menu::ProfileSession { dir: Some(dir.clone()), name: None, profile: None, session_progress: None }
         .apply_to(&mut fe);
     walk_to_name_entry(&mut fe);
     assert!(act(&mut fe, Action::Confirm), "the ✓ creates BOND");
