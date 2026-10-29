@@ -24,6 +24,35 @@
 //! CivilianGuard 0x1603a8 case 3]), and after the auto-draw the walk cycles BACK to the fists
 //! (the player's own weapon cycle) so the armed-Bond scare [M 0x160140:44-76] and the bouncer
 //! attack range [M NearArmedPerson 0x1787c8] never trip while he crosses the party.
+//!
+//! ## The objective inventory (level-07-every-objective, all covered on the real-input path)
+//!
+//! The disc's MissionData row for 07000007 (mission 0x07000005 part 2) carries EXACTLY TWO
+//! objective records [L ee_start_05.bin @ 0x2a43a0 → table 0x2a3e58, count 2; re-verified byte
+//! for byte against the port's `crates/nf-game/src/mission/c07000007.rs`]:
+//!
+//! | # | objective [D text id] | completes on | revealed by | asserted where |
+//! |---|---|---|---|---|
+//! | 1 | "Rendezvous with undercover agents and maintain cover as party guest" (0x04000002) | ch 0x48 | ch 0x47 | state 3 after plate #411 (`obj07().0 == 3`); state 4 after plate #412 |
+//! | 2 | "Spy on secret meeting" (0x04000003) | ch 0x49 | ch 0x48 | state 4 after 07000008's intro plate #237 (`states[2][1] == 4`) |
+//!
+//! Both are covered by `walk_the_party_start_to_finish` end to end on real input; the
+//! "maintain cover" half of objective 1 is additionally pinned by
+//! `the_group_plate_wakes_the_walkers_and_the_guards_stay_calm` (no bouncer enters combat while
+//! Bond crosses unarmed [M 0x1603a8 case 3]). There is no third record to cover — the
+//! "photographs" objective has no disc evidence (docs/levels/07000007.md §2 [S]).
+//!
+//! ## The stand-ins the walk still carries (none is a poke; no channel/state writes anywhere)
+//!
+//! 1. **The P2K auto-draw is asserted, not worn.** The walk harness steps the Sim directly, and
+//!    the rising-edge auto-draw `Upgrade_Weapon(6)` is owned by the view loop, so across the
+//!    walk Bond keeps the fists the loadout gave him; the test asserts the LOCK LIFT on the real
+//!    path (the cycle request survives `weapon_lock_input` once ch 0x48 is on [M 0x1a24c8:243-246])
+//!    instead. The draw itself is pinned through the view loop by `level_carry_live`.
+//! 2. **The 07000007 → 07000008 hand-off is the game's own carry** (the exit trigger's
+//!    `level_exit` → RamSave + mission states [M 0x1b2318:111-116]) — the same load path a real
+//!    player's exit takes, not a teleport: the next Walker loads 07000008 fresh and Bond WALKS
+//!    from its start to plate #237 on real input.
 
 #[path = "common/walker.rs"]
 mod walker;
