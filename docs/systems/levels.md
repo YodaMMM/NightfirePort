@@ -543,10 +543,14 @@ destroy props. `NONE` = no writer found on the disc — the gap later tasks can 
   0xD for 0x4B on the disc [D decode]; the writer is the game's cable-car ride logic around
   `SP_Update` 0x1dbda8 that the port's ScriptPlayer-out hold does not reproduce. The mayhew
   walkthrough drives the channel (docs/levels/07000008.md).
-- **07000003 ch 0x4e** ("Retrieve Dragon Safe contents"): no trigger/mux/script writer in the
-  castle mission's data — the Dragon Safe's open chain (map-castle's doc covers the door flow, not
-  this channel). The writer would be the safe-object handler (the `DynamicObject_Create` 0x3b
-  family on 03, unported).
+- **07000003 ch 0x4e** ("Retrieve Dragon Safe contents"): RESOLVED (07000003-audit + the
+  disc's script decode) — the writer is the Dragon Safe key: E on the display case (SP #110,
+  script 0x06000563, mask 4 use-key [M SP_Activate 0x1dc338:82]) spawns the kind-2 pickup with
+  +0x28 = 0x4e (`Entity` obj_type 0xf0, params [2,0,0,0x4e,…] [D script stream 1];
+  `Pickup_Create` 0x18dda0 [M]) and the take writes `switch_channels[+0x28] = 1` [M
+  `Pickup_Handler` 0x18e650:330-333]. Downstream: AND trigger #435 out 0x52 = 0x4e AND 0x51 [D];
+  docs/levels/07000003.md §2. The old "no trigger/mux/script writer" line predated the script-
+  created-object scan (a placement-only scan misses script spawns).
 - **07000016 ch 0x90** ("Prevent Kiko from launching into space"): RESOLVED (kiko-16-defeat) —
   the writer is the KikoDeathButton switch #693 (kind 0x29, p0 = 0x90 [D]), Bond's E [M
   Switch_Activate 0x1b02a8]; docs/levels/07000016.md §6/§7.
