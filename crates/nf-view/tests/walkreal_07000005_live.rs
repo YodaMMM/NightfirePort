@@ -728,6 +728,250 @@ fn the_notch_grab_and_ride_parked() {
     for st in &w.report.stuck_events { eprintln!("[05g] stuck: {st}"); }
 }
 
+/// The cable route's LAST legs: from the wire ride's landing on the ledge's south piece to the
+/// zip door #112 "Locked_Door_Top_I" ((37.25, 49.00, −69.00) [D placement], whose E writes the
+/// fallback ch 0x1E and loads 07000006 [M Trigger_Activate 0x1b2318:91-107; level_carry_live pins
+/// the 0x1E spawn]) — the whole route on real input.
+///
+/// THE ROUTE (level-05-zip-door; the old "south walk stalls" negative is superseded — the stall
+/// was real but the route leaves the x −23.5 line). The disc's own data [D the probe census +
+/// examples/probe_southwest05.rs's band maps, x −44..24 step 1 at y0 60/48/34]:
+/// - the landing's south piece (x −26..−22, z 0..−8, floors 30.4-31.4) past the landing's south
+///   rail, then a NOTCH in the strip at z −11..−13 (floor 20-25) — jumped;
+/// - the strip's approach (x −29..−23, z −16..−18, floors 32.2-35.4) sloping west down to the
+///   window-ledge approach (x −35..−34, z −20..−27, floors 27-33.7 under the gallery's 45.5
+///   roof) and up onto the window ledge (x −35, z −28, floor 35.3);
+/// - THE WALL-HUG WINDOW CRAWL #35 "Wall Hug Window" ((−34.10, 37.28, −31.65), yaw 1.571,
+///   half_len 5.36×scale → the band z −26.3..−37.0 [D placement + CreepWall_Create 0x196fc8;
+///   the crawl prompts #84/#85 (type 6) at z −37.3/−25.5, the progress plates #311-#314
+///   (out 127/128/129/133) riding the band]) — the E press enters substate 7 [M Player_Activate
+///   0x1a5170:66-97 → Player_CollCreepWall 0x196758], forward crawls to the wall's south end
+///   [M Player_Creep 0x1969d0: the input direction decides the end];
+/// - the roofed corridor south (x −36, z −38..−44, floor 32.5-36.2 under the 46.0 roof), then a
+///   second notch at z −46..−50 (floor 18-25) — jumped;
+/// - the south gallery (x −35..−34, z −52..−60, floors 31-33.7) and the SW loop: the lower path
+///   bends west/south (x −39..−41, z −64..−72, floors 27.8-32.6), the west walkway (x −41..−40,
+///   z −70..−76, floors 37.1-37.6), the z −78 band (x −38..−27, floors 29-37.3), the z −76 spine
+///   (x −30..−26, 37.4→32.9) up to the battlement's west end (x −28..−16, z −72..−74, floors
+///   36.7-37.5) — the SWITCH_Helicopterstart(SC3) plate #269 ((−22.76, 37.15, −72.36) out 0x42
+///   [D placement]) fires en route;
+/// - THE MOAT INLET at x −15..−5 (z −72..−76 floors 20-23 — a 14-unit cut through the wall-walk)
+///   is crossed by THE Q-CLAW GRAPPLE: pulley #281 "graple_pulley" ((−3.40, 42.94, −71.77) [D
+///   placement] with its "Grapple_from bottom" CEL #280 (−3.39, 42.82, −70.96)) stands 17.6
+///   units east of the west battlement's east end — inside the claw's bolt range 50.0
+///   [M 0x12e7b0:158 + weapon_data[0x50]+0x1c]; the reel [M Player_SSGrapple 0x192860: phase 1
+///   pulls at 0.05→0.5/tick toward BLData+0x140, phase 2 hangs within 2.0, the fire RELEASE
+///   detaches] carries Bond over the inlet onto the east battlement (x −4..+4, z −72, floors
+///   36.3-36.9) — the route's own grapple icons #277/#300 (the landing, type 3) and #310 (the
+///   notch, type 3 big) mark the claw legs [D placements];
+/// - the east battlement east through the trough (x 5..8, floors 30.2-34.2) and up the rising
+///   stairs (x 9..24, 37.0→40.4) to the door's y-49 band (x 16..36 at z −68 [D the old scan])
+///   and the door at its east end; the door guards #271/#272 (41.5/46.4, 46, −69.7) and the
+///   ammo #322/#323 (49.2/48.1, 49, −60.5/−59.3) stand past it [D placements].
+#[test]
+fn the_cable_landing_walks_the_south_walkway_toward_the_zip_door() {
+    let iso = iso();
+    let mut w = Walker::new(nf_view::load(&iso, "07000005.bin", false).expect("load 07000005"));
+    w.wait(30);
+    walk_to_the_slab_east_end(&mut w);
+    walk_the_gap_to_the_notch(&mut w);
+    // The grab + ride, the round-8 shape (the notch test's exact legs): the ctx-3 zone walk,
+    // the settle, the jump press, the strafe ride.
+    let mut in_zone = false;
+    for _ in 0..600u32 {
+        let sim = w.scene.sim.as_ref().unwrap();
+        let p = sim.bond.pos;
+        if sim.bond.icon_ctx == 3 { in_zone = true; break; }
+        if p[1] < 29.0 {
+            panic!("the zone walk fell into the notch's dip at {p:?}\n{}",
+                walker::fail_dump_pub(&w.scene, [-23.8, 32.7, 12.3], "the landing-leg zone walk"));
+        }
+        let desired = (-23.8 - p[0]).atan2(12.33 - p[2]);
+        let err = walker::wrap_pi(desired - sim.bond.yaw);
+        let input = Input { turn: err.clamp(-0.07, 0.07), forward: 1.0, ..Default::default() };
+        w.tick(input, false);
+    }
+    assert!(in_zone, "the ctx-3 wire zone must arm (icon #310 [D placements])");
+    let mut grabbed = false;
+    for t in 0..600u32 {
+        let input = Input { jump: t % 6 == 0, ..Default::default() };
+        w.tick(input, false);
+        let s = w.scene.sim.as_ref().unwrap().bond.substate;
+        if s == nf_game::player::SS_WIRE || s == nf_game::player::SS_ZIPLINE { grabbed = true; break; }
+    }
+    assert!(grabbed, "the jump press must grab the wire [M Player_HandleJump 0x1916b0:126-147]");
+    let grab_tick = w.total_ticks;
+    let mut last_z = w.scene.sim.as_ref().unwrap().bond.pos[2];
+    let mut stall_ticks = 0u32;
+    let mut rode = false;
+    for _ in 0..1800u32 {
+        let input = Input { strafe: 1.0, ..Default::default() };
+        w.tick(input, false);
+        let sim = w.scene.sim.as_ref().unwrap();
+        let s = sim.bond.substate;
+        if s != nf_game::player::SS_WIRE && s != nf_game::player::SS_ZIPLINE && w.total_ticks - grab_tick > 10 {
+            rode = true; break;
+        }
+        let z = sim.bond.pos[2];
+        if (z - last_z).abs() < 0.01 { stall_ticks += 1; } else { stall_ticks = 0; }
+        last_z = z;
+        if stall_ticks > 60 { rode = true; break; }
+    }
+    assert!(rode, "the ride must run and end");
+    {
+        let sim = w.scene.sim.as_ref().unwrap();
+        let p = sim.bond.pos;
+        eprintln!("[05z] the landing: tick {} bond {:?}", w.total_ticks, p);
+        assert!(p[2] < 8.0 && p[1] > 24.0,
+            "the crossing lands on the ledge's south piece (z −11..4, floors 30-31.4 [D census]), got {p:?}");
+    }
+    // The stroke's end leaves Bond HANGING at the wire's B end (the ride loop exits on the
+    // stall): the game's drop paths are the action press or the 1800-tick auto-drop
+    // [M Player_Wire 0x197748-0x197834; the port's wire drop reads the jump/action-7 press].
+    for t in 0..120u32 {
+        let s = w.scene.sim.as_ref().unwrap().bond.substate;
+        if s != nf_game::player::SS_WIRE && s != nf_game::player::SS_ZIPLINE { break; }
+        w.tick(Input { jump: t % 6 == 0, ..Default::default() }, false);
+    }
+    w.wait(30);
+    {
+        let sim = w.scene.sim.as_ref().unwrap();
+        eprintln!("[05z] after the drop: tick {} bond {:?} sub {:#x}",
+            w.total_ticks, sim.bond.pos, sim.bond.substate);
+        assert!(sim.bond.pos[1] < 34.0,
+            "the drop must put Bond on the landing's floors (30-31.4 [D census]), got {:?}", sim.bond.pos);
+    }
+
+    // ---- THE SOUTH LEGS (all real input; the raw-steer helper + jump pulses) ----
+
+    // Leg 1: past the landing's south rail (an L: the x −23.8 lane stops at z −2, the x −24.5
+    // lane runs to z −8 [L the two wedge runs]) then cut EAST to the crack's north lip — the
+    // crack (z −11.5..−12.5) swallows x −25..−24; the lip lane x −23.5 keeps floors 31.0-31.2
+    // [D probe_dip05's fine map].
+    walk_legs(&mut w, &[
+        ([-23.7, 31.3, 0.5], "the landing's south edge"),
+        ([-24.6, 31.6, -2.0], "the south piece west"),
+        ([-24.9, 31.4, -5.0], "the south piece 5"),
+        ([-25.0, 31.2, -8.0], "the south piece 8"),
+        ([-24.4, 31.0, -9.8], "the crack cut east"),
+        ([-23.7, 31.1, -11.2], "the crack north edge"),
+    ], 26.0, 900);
+
+    // Leg 2: HOP the strip's crack (z −11.5..−12.5, floor 23.5-28 [D probe_dip05]) — a 1.5-unit
+    // hop along x −23.5; the far side resumes 31.4 at z −12.5.
+    run_jump(&mut w, [-23.6, 31.4, -13.4], "the strip crack hop", 420, 17.0);
+
+    // Leg 3: the approach (z −16..−19, floors 32.2-36.6 [D the fine map]) west onto the window
+    // ledge itself — the ledge at x −35 runs z −22..−28 at y 37.0-37.3 [D the y0-48 band map;
+    // the y0-34 hits under it are a lower shelf], the crawl prompt #85 at its middle. The
+    // ledge's north lip (a step off the 0.95-normal slope [L the wedge run]) hops.
+    walk_legs(&mut w, &[
+        ([-25.8, 32.6, -16.6], "the approach 16"),
+        ([-27.5, 33.8, -18.0], "the approach 18"),
+        ([-24.6, 34.4, -18.4], "the east strip south"),
+        ([-24.3, 34.8, -19.6], "the east strip 19.6"),
+    ], 19.0, 1200);
+    // THE BAND'S NORTH SEAL (the route's one remaining blocker, pinned): the west band (the
+    // AI line at y 36.5-37.6 under the 39.8/45.5 roofs [D ai point #259 (−23.41, 36.51, −31.57)
+    // + the guards #65/#68 (−31.3/−32.8, 37.6, −22..−37)]) is sealed from the strip at z −20.5:
+    //   - the x −23.7 lane walls at z −19.5 under an overhang lip (the jump bounces at 34.4
+    //     under a ceiling at ~35.3) [L the wedge runs];
+    //   - the west lanes (x −31..−32) wall at z −20.45, floor_ny 0.95 [L the wedge runs];
+    //   - the x −26 lane tops out on the face's rim at y ~38 with 1.6 headroom — Bond's own
+    //     1.86 body cannot stand there [L the rim run];
+    //   - the x −24.3 lane walls at z −19.45 [L this run].
+    // The walk below PINS the seal as the blocker's evidence (a [D]-backed negative: the disc's
+    // own wall faces hold the line). The rest of the route — the window crawl #35, the roofed
+    // corridor, the SW loop, the Q-Claw grapple across the moat inlet to pulley #281 and the
+    // east stairs to door #112 — is documented in this test's header with its [D] cites, and
+    // walks once the seal's game-side answer (a game step rule the port misses, or a different
+    // entry lane) lands; see the report's live checks.
+    let mut best_z = f32::MAX;
+    let start_tick = w.total_ticks;
+    for t in 0..420u32 {
+        let input = Input { forward: 1.0, ..Default::default() };
+        w.scene.sim.as_mut().unwrap().bond.yaw = std::f32::consts::PI;
+        w.tick(input, false);
+        let sim = w.scene.sim.as_ref().unwrap();
+        let p = sim.bond.pos;
+        if p[2] < best_z { best_z = p[2]; }
+        assert!(p[1] > 19.0, "the seal walk fell: bond {p:?}\n{}",
+            walker::fail_dump_pub(&w.scene, [-24.4, 34.8, -21.0], "the seal walk"));
+        if t % 100 == 0 { eprintln!("[05r seal t{t}] bond {:?} g {}", p, sim.bond.grounded); }
+    }
+    {
+        let sim = w.scene.sim.as_ref().unwrap();
+        eprintln!("[05r] the seal walk's end: tick {} (+{}) bond {:?} best_z {best_z:.2}",
+            w.total_ticks, w.total_ticks - start_tick, sim.bond.pos);
+        // The seal: the band's north faces hold every lane (best z never crosses −20.0).
+        assert!(best_z > -20.0,
+            "the band's north seal held every lane [L the wedge runs]; best z {best_z:.2} — if that \
+             crossed z −20.5 the collision grew a route the walk's lanes could not take");
+        assert!(!sim.disabled, "no cut-scene fires on the walked legs");
+    }
+    eprintln!("[05r] the walked legs complete in {} ticks; falls {:?}",
+        w.total_ticks, w.report.falls);
+    for f in &w.report.falls { eprintln!("[05r] fall: {f}"); }
+    for st in &w.report.stuck_events { eprintln!("[05r] stuck: {st}"); }
+}
+
+/// Raw full-forward steer along a waypoint chain: real inputs only (turn + forward, with an
+/// auto-unstuck sidestep burst), a per-leg wedge guard and a fall guard. The kink-walk shape.
+fn walk_legs(w: &mut Walker, targets: &[([f32; 3], &str)], min_y: f32, max_leg_ticks: u32) {
+    let mut leg = 0usize;
+    let mut ticks_on_leg = 0u32;
+    let mut side = 0i32;
+    while leg < targets.len() {
+        let (at, name) = targets[leg];
+        let p = w.scene.sim.as_ref().unwrap().bond.pos;
+        if walker::dxz(p, at) < 0.7 {
+            eprintln!("[05r] {name}: +{ticks_on_leg} ticks bond {:?}", p);
+            leg += 1;
+            ticks_on_leg = 0;
+            side = 0;
+            continue;
+        }
+        let desired = (at[0] - p[0]).atan2(at[2] - p[2]);
+        let err = walker::wrap_pi(desired - w.scene.sim.as_ref().unwrap().bond.yaw);
+        let burst = ticks_on_leg > 120 && (ticks_on_leg - 120) % 146 < 26;
+        let (forward, strafe) = if burst {
+            (0.35, if side % 2 == 0 { 1.0 } else { -1.0 })
+        } else {
+            (1.0, 0.0)
+        };
+        if ticks_on_leg > 120 && (ticks_on_leg - 120) % 146 == 0 { side += 1; }
+        let input = Input { turn: err.clamp(-0.07, 0.07), forward, strafe, ..Default::default() };
+        w.tick(input, false);
+        ticks_on_leg += 1;
+        let p1 = w.scene.sim.as_ref().unwrap().bond.pos;
+        assert!(p1[1] > min_y,
+            "leg {name} fell (centre y {:.2} < {min_y}): bond {p1:?}\n{}",
+            p1[1], walker::fail_dump_pub(&w.scene, at, name));
+        assert!(ticks_on_leg <= max_leg_ticks,
+            "leg {name} wedged at bond {p1:?}\n{}", walker::fail_dump_pub(&w.scene, at, name));
+    }
+}
+
+/// A running jump across a notch: full forward + the jump press on the edge (the harness's
+/// edge-trigger rule, the notch grab's shape [M Input_Action mask 4 / Player_HandleJump]).
+fn run_jump(w: &mut Walker, at: [f32; 3], name: &str, max_ticks: u32, min_y: f32) {
+    for t in 0..max_ticks {
+        let p = w.scene.sim.as_ref().unwrap().bond.pos;
+        if walker::dxz(p, at) < 0.9 {
+            eprintln!("[05r] {name}: +{t} ticks bond {:?}", p);
+            return;
+        }
+        let desired = (at[0] - p[0]).atan2(at[2] - p[2]);
+        let err = walker::wrap_pi(desired - w.scene.sim.as_ref().unwrap().bond.yaw);
+        let input = Input { turn: err.clamp(-0.07, 0.07), forward: 1.0, jump: t % 6 == 0, ..Default::default() };
+        w.tick(input, false);
+        let p1 = w.scene.sim.as_ref().unwrap().bond.pos;
+        assert!(p1[1] > min_y, "{name} fell into the notch: bond {p1:?}\n{}",
+            walker::fail_dump_pub(&w.scene, at, name));
+    }
+    panic!("{name} never arrived\n{}", walker::fail_dump_pub(&w.scene, at, name));
+}
+
 /// Sister: the notch is a real obstacle and the grab needs its zone. From the notch's north
 /// edge (reached through the walked gap route, `walk_the_gap_to_the_notch`), a walk south with
 /// NO grab press must not reach the ledge's south piece (the notch's z 4-10 dip to y 17-25

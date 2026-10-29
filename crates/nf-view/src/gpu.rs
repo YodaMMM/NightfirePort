@@ -114,6 +114,9 @@ fn morph_pos(p0: vec3<f32>, mtb: i32, mwb: u32, cnt: u32, tend: u32) -> vec3<f32
         // corona quads (the GS reads the byte as alpha/0x80; the ×255/128 rescale below reproduces it).
         c = vec4<f32>(c0.rgb * cols[sc].rgb, c0.a * cols[sc].a);
     }
+    // The hit-flash tweak (`Renderer::destroy_tint`): sel.z/.w carry the G/B multipliers minus 1
+    // (0 = untinted, the default every other draw keeps).
+    c = vec4<f32>(c.r, c.g * (1.0 + us[b + 4u].z), c.b * (1.0 + us[b + 4u].w), c.a);
     // The point lights (`Light_Create` + `Lights_CalcClosestLights` 0x1cb2e0 + `psiLight_SetLights`
     // 0x10e588; fix-lighting). The VU1 microcode's formula (.vutext 0x241c80, the point-light
     // program ~832-960), in world space: L = lightpos − pos, d² = |L|², 1/d² via DIV (VF0.w = 1),
@@ -336,6 +339,12 @@ pub struct Renderer {
     /// doorway ends open [L]). Fed by lib.rs each frame from `Scene::destroy_centres` + the sim's
     /// `props.destroy[..].dead`; empty until set (the loading screen and the pre-sim frames).
     pub destroy_dead: Vec<[u32; 3]>,
+    /// The Destroy leaves' hit-flash colour pair, per frame: (material centre bits, obj+0x104/0x105).
+    /// `View_SetupRenderModes_Tweak` 0x1e5888 multiplies the object's draw colour by its tweak
+    /// bytes; `Destroy_CollisionHandler` 0x12bd48:61-95 drops the pair 5 a tick under the laser
+    /// and recovers it 1 a tick [M], so the leaf flashes red (the live 00ff3b3b recovery [L]).
+    /// Only leaves whose pair is below white are listed.
+    pub destroy_tint: Vec<([u32; 3], [u8; 2])>,
     /// batch-draws: the world pass with every texture in one bound array (the draw's texture index
     /// rides its per-draw slot) and one `multi_draw_indexed_indirect` per run of equal pipelines, in
     /// the draw order — None = the per-draw path (no adapter support, or `NF_NOBINDLESS`).
@@ -738,7 +747,7 @@ impl Renderer {
             for ch in &cel_graph.chains { for &c in ch { if (c as usize) < n { reached[c as usize] = true; } } }
             reached.iter().map(|r| !r).collect()
         };
-        Renderer { shard_pipeline, shard_vbuf, shard_groups: Vec::new(), woman_tex, snow_pipeline, snow_vbuf, snow_bg, hud_pipeline, hud_add_pipeline, hud_sub_pipeline, hud_vbuf, hud_bgs, pipelines, fog, notex, nofog, uniform, uniform_bg, staged: Vec::new(), orphan_nodes, destroy_dead: Vec::new(), batch, vbuf, skin_buf, snow_skin, pal_buf, col_buf, wts_buf, mtg_buf, skin_layout, skin_pos: Default::default(), char_light_centre: Vec::new(), lights: Default::default(), screen_aspect: 0.0, ibuf, tex_bgs, tex_frames, draws, order: Vec::with_capacity(order_cap), cel_boxes, cel_graph, viewer_cel: Default::default(), last_vis: None, last_cell_vis: None, movie_tex: None, movie_bg: None, movie_size: None, movie_vbuf, hud_tbgl: tbgl, hud_sampler: sampler }
+        Renderer { shard_pipeline, shard_vbuf, shard_groups: Vec::new(), woman_tex, snow_pipeline, snow_vbuf, snow_bg, hud_pipeline, hud_add_pipeline, hud_sub_pipeline, hud_vbuf, hud_bgs, pipelines, fog, notex, nofog, uniform, uniform_bg, staged: Vec::new(), orphan_nodes, destroy_dead: Vec::new(), destroy_tint: Vec::new(), batch, vbuf, skin_buf, snow_skin, pal_buf, col_buf, wts_buf, mtg_buf, skin_layout, skin_pos: Default::default(), char_light_centre: Vec::new(), lights: Default::default(), screen_aspect: 0.0, ibuf, tex_bgs, tex_frames, draws, order: Vec::with_capacity(order_cap), cel_boxes, cel_graph, viewer_cel: Default::default(), last_vis: None, last_cell_vis: None, movie_tex: None, movie_bg: None, movie_size: None, movie_vbuf, hud_tbgl: tbgl, hud_sampler: sampler }
     }
 
     /// The game's depth-0 pyramid for the walk [M `Vision_Calculate_View_Fustrum` 0x1e7df8,
@@ -1168,6 +1177,13 @@ impl Renderer {
                     };
                     let (lp, lc) = self.lights.pick2([centre[0], centre[1], centre[2], dc.radius], dc.lflags as u32);
                     for (i, v) in lp.iter().chain(lc.iter()).enumerate() { s[i * 4..i * 4 + 4].copy_from_slice(v); }
+                    if dc.layer == Layer::World && !self.destroy_tint.is_empty() {
+                        let key = dc.centre.map(f32::to_bits);
+                        if let Some((_, c)) = self.destroy_tint.iter().find(|(k, _)| *k == key) {
+                            s[18] = c[0] as f32 / 255.0 - 1.0;
+                            s[19] = c[1] as f32 / 255.0 - 1.0;
+                        }
+                    }
                 }
                 drop(skin_pos);
                 queue.write_buffer(&self.uniform, 0, bytemuck::cast_slice(&staged));

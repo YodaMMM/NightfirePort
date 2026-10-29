@@ -634,7 +634,7 @@ impl Walker {
                             let eye = [bp[0], bp[1] + sim.bond.eye - sim.bond.crouch_drop, bp[2]];
                             let ds = dxz(sd.pos, eye);
                             let dtg = dxz(dp, eye).max(1e-3);
-                            if ds > dtg + 0.5 {
+                            if ds > 1.0 { // any depth past the muzzle: the contact between Bond and the target is hit too (the game's bullets hit ANY drone [M 0x140968:85-95]) — the 01 walk killed him standing between Bond and guard 5 (the chwatch 0x60 at frame 21225)
                                 let t = ds / dtg;
                                 let ex = eye[0] + (at[0] - eye[0]) * t;
                                 let ez = eye[2] + (at[2] - eye[2]) * t;

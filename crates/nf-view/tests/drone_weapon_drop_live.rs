@@ -98,23 +98,67 @@ fn stun_to_taser(scene: &mut nf_view::scene::Scene, gi: usize) {
 
 fn is_dead(s: u8) -> bool { matches!(s, state::DEAD | state::FADE | state::FADE_FAST | state::DEATH_ANIM) }
 
-/// Aim at `gi` and pull the trigger only on a converged tick — the combat guard dodges, and a
-/// trigger held through the sway never lands the second hit.
-fn steer_fire_aligned(scene: &mut nf_view::scene::Scene, gi: usize, aim_dy: f32) {
-    let (turn, look, aligned) = {
+/// The guard's bone-2 world position — the game's own auto-aim target point
+/// [M Check_AutoAim 0x1a73f8 `AnimGetBoneWorldTrans(param_2, 0x80000002, 0)`; the port's
+/// `auto_aim` reads the same palette bone]. None when the palette is not resolvable.
+fn bone2(scene: &nf_view::scene::Scene, gi: usize) -> Option<[f32; 3]> {
+    let sim = scene.sim.as_ref().unwrap();
+    let data = nf_game::drone::Data {
+        tables: &sim.tables, props: &sim.props, scripts: &sim.scripts, weapons: &sim.weapons,
+        world: &sim.world, level: sim.level, sequences: &sim.seqs, skins: &sim.skins,
+        skeletons: &sim.skeletons, nav: &sim.nav, covers: &sim.covers, tuning: &sim.tuning,
+        hitboxes: &sim.hitboxes, volumes: &sim.volumes, sfx: sim.sfx.as_ref(), models: &sim.models,
+        surfaces: sim.surfaces.as_ref(), voices: sim.voices.as_deref(), difficulty: sim.drones.difficulty,
+        ai_points: &sim.ai_points,
+    };
+    sim.drones.list[gi].palette(&data).and_then(|m| m.get(2).map(|r| [r[3][0], r[3][1], r[3][2]]))
+}
+
+/// Aim at `gi`'s body and pull the trigger on the every-9th-tick cadence while the raw aim sits
+/// inside the auto-aim capture — the game's player: the assist option is ON by default ([L]
+/// PlayerSetting+1 = 1 in the game; the scene's `auto_aim: false` default is the mouse-off
+/// D-001) and `Check_AutoAim` 0x1a73f8 bends each shot onto bone 2 within the H/V cones
+/// (weapon +0x14/100 · (1 − d/25) · difficulty, LOS-gated). The old stand-in (raw aim at the
+/// ROOT, fire only when pixel-aligned) stopped landing once the guard fought back from
+/// AimStandFire 0x68 [L ee_snapshot @0x29b4a0 → 0x166328 AimStandFire] at 4.7 u: the root sits
+/// below the body (the standing hit spheres are built on bones 5/0x37/0x33 [M NDrone2_Collision
+/// 0x140e90 else-branch]), outside the vertical cone, and the aligned gate never re-converged.
+fn steer_fire_aligned(scene: &mut nf_view::scene::Scene, gi: usize, aim_dy: f32, tick: u32) {
+    let target = bone2(scene, gi).unwrap_or_else(|| {
+        let g = scene.sim.as_ref().unwrap().drones.list[gi].pos;
+        [g[0], g[1] + aim_dy.max(1.1), g[2]]
+    });
+    let (turn, look, in_capture) = {
         let sim = scene.sim.as_ref().unwrap();
         let bp = sim.bond.pos;
-        let g = sim.drones.list[gi].pos;
-        let dx = g[0] - bp[0];
-        let dz = g[2] - bp[2];
-        let dy = (g[1] + aim_dy) - (bp[1] + sim.bond.eye - sim.bond.crouch_drop);
+        let dx = target[0] - bp[0];
+        let dz = target[2] - bp[2];
+        let dy = target[1] - (bp[1] + sim.bond.eye - sim.bond.crouch_drop);
         let desired = dx.atan2(dz);
         let err = desired - sim.bond.yaw;
-        let want_pitch = (dy / dxz(bp, g).max(0.5)).atan() / std::f32::consts::FRAC_PI_2;
+        let want_pitch = (dy / dxz(bp, target).max(0.5)).atan() / std::f32::consts::FRAC_PI_2;
         let perr = want_pitch - sim.bond.pitch;
-        (err.clamp(-0.08, 0.08), (perr).clamp(-0.08, 0.08), err.abs() < 0.02 && perr.abs() < 0.035)
+        // The capture window the assist actually catches, from the game's own formula: k =
+        // weapon +0x14/100 · (1 − d/25) · difficulty mul [M 0x1a73f8 LAB_001a7694]; fire only
+        // inside it (×0.9) so every trigger pull is bent onto bone 2, never a raw miss.
+        let dist = dxz(bp, target).max(0.5);
+        let wf = f32::from_le_bytes(sim.weapons.records.get(2).map(|r| r[0x14..0x18].try_into().unwrap()).unwrap_or([0u8; 4])) * 0.01;
+        let diff = match sim.drones.difficulty { 1 => sim.tuning.Autoaim_EasyMul, 3 | 4 => sim.tuning.Autoaim_HardMul, _ => sim.tuning.Autoaim_NormalMul };
+        let k = wf * (1.0 - dist / sim.tuning.Autoaim_Range).max(0.0) * diff;
+        (err.clamp(-0.08, 0.08), perr.clamp(-0.08, 0.08),
+         err.abs() < sim.tuning.Autoaim_Angle_H * k * 0.9 && perr.abs() < sim.tuning.Autoaim_Angle_V * k * 0.9)
     };
-    scene.sim.as_mut().unwrap().step_bond(Input { turn, look, ..Default::default() }, aligned, false, false);
+    let fire = tick % 9 == 0 && in_capture; // the raptor killer's cadence: each pull is a fresh semi-auto press
+    scene.sim.as_mut().unwrap().step_bond(Input { turn, look, ..Default::default() }, fire, false, false);
+    // The fight-back allowance (the walkreal harness's own rule): the guard's stand/aim states
+    // carry the game's sight bit on ENTER [M 0x1687c0:17 StandFiddle; the vision-bit census] and
+    // he engages at the 3.5 u setup distance — the test stand-in cannot fight back, so his fire
+    // cannot kill Bond here (the health top-up; the AI still runs).
+    let h = &mut scene.sim.as_mut().unwrap().drones.health;
+    // 1000, not 100: the SG5's point-blank blast can take a full 100-health bar in one step and
+    // the death, once started, runs to ch 0x62 regardless of a later top-up — the allowance must
+    // keep the bar above 0 THROUGH the step, not restore it after.
+    if h.health < 1000.0 { h.health = 1000.0; }
 }
 
 /// The tased guard who wakes re-arms with `ChangeWeapon(6)` — and his LATER death drops the
@@ -249,6 +293,10 @@ fn the_tased_guard_killed_while_down_drops_nothing() {
 fn killing_a_six_guard_drops_his_gun_with_the_game_rounds() {
     let iso = iso();
     let mut scene = nf_view::load(&iso, "07000006.bin", false).expect("load 07000006");
+    // The game's default options put the auto-aim assist ON ([L] PlayerSetting+1 = 1; the scene's
+    // `auto_aim: false` default is the mouse-off D-001) — the kill below shoots like that player:
+    // raw aim inside the cones, `Check_AutoAim` 0x1a73f8 bending each shot onto bone 2.
+    scene.sim.as_mut().unwrap().auto_aim = true;
     let gi = pick_start_guard(&scene);
     {
         let dr = &scene.sim.as_ref().unwrap().drones.list[gi];
@@ -259,8 +307,8 @@ fn killing_a_six_guard_drops_his_gun_with_the_game_rounds() {
     place_bond(&mut scene, gi, 3.5, true);
     let before = scene.sim.as_ref().unwrap().drones.pickups.len();
     let mut died_at = None;
-    for _ in 0..1500u32 {
-        steer_fire_aligned(&mut scene, gi, 0.0);
+    for t in 0..1500u32 {
+        steer_fire_aligned(&mut scene, gi, 0.0, t);
         if is_dead(scene.sim.as_ref().unwrap().drones.list[gi].state) { died_at = Some(()); break; }
     }
     died_at.expect("the 06 guard dies under P2K fire");

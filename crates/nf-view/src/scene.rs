@@ -2900,8 +2900,17 @@ impl Sim {
             // not read by the port — a live check item].
             let bot_capsules: Vec<([f32; 3], [f32; 3], f32)> = {
                 let bp = self.bond.pos;
+                // CORPSES NEVER COLLIDE: `SetAsDead` 0x14a2f0:9 sets +0x4F8&0x200 at death, and
+                // `NDrone2_DoCollision` 0x149ec8:11 returns 0 (collision OFF) whenever that bit is
+                // set — on every level but the special 0x700004a — and `NDrone2_Collision` 0x140e90:64
+                // gates the same bit (docs/fields/drone.md, the 0x4F8&0x200 row, census-verified).
+                // The game's dead bot presents no capsule for the player's Jointy query: Bond walks
+                // over bodies. Without this gate the walkreal_07000001 escort wedge reproduces —
+                // Bond lands on a fresh corpse's capsule top (pos+0.4), the push holds him airborne
+                // (grounded never settles), every nav leg dies at the cap, and the escort waits for
+                // a Bond who can no longer reach the [M 0x15eda8] release band.
                 self.drones.list.iter()
-                    .filter(|x| x.enabled && ((x.pos[0] - bp[0]).powi(2) + (x.pos[1] - bp[1]).powi(2) + (x.pos[2] - bp[2]).powi(2)) < 2.0 * 2.0)
+                    .filter(|x| x.enabled && !x.corpse && ((x.pos[0] - bp[0]).powi(2) + (x.pos[1] - bp[1]).powi(2) + (x.pos[2] - bp[2]).powi(2)) < 2.0 * 2.0)
                     .map(|x| ([x.pos[0], x.pos[1] + 0.4, x.pos[2]], [x.pos[0], x.pos[1] - 0.6, x.pos[2]], 0.4f32))
                     .collect()
             };
@@ -6209,6 +6218,9 @@ pub struct Scene {
     /// 0x1e5fb8:79) skip them: the placed doors are invisible during a cut-scene. Keyed by
     /// placement index; the palette pass collapses their slots while the script camera renders.
     pub door_scene_hidden: std::collections::HashSet<usize>,
+    /// Searchlight LOD slots: slot `parts.len() + k` draws the LOD (broken) mesh of part `sl_lod[k]`,
+    /// shown iff that part's `lod_next` (Control_NextLOD) is set.
+    pub sl_lod: Vec<u16>,
 }
 
 /// `psiPreGameRun` (0x11e2e8, read): per level the fog colour and `Ps2Far1`; `FogOn` only on these levels.
@@ -8298,6 +8310,7 @@ pub fn build(level: &Level, cels_only: bool, skeletons: &HashMap<u8, Skeleton>, 
         let mut rotor_placements: Vec<([f32; 3], [f32; 3])> = Vec::new();
         let mut gunimp_placements = 0usize;
         let mut door_scene_hidden = std::collections::HashSet::new();
+        let mut sl_lod: Vec<u16> = Vec::new();
         if let Some(m) = level.main_map() {
             for (pi, pl) in nf_game::searchlight::part_placements(&level.maps[m].placements).into_iter().enumerate() {
                 let p = &level.maps[m].placements[pl];
@@ -8307,6 +8320,23 @@ pub fn build(level: &Level, cels_only: bool, skeletons: &HashMap<u8, Skeleton>, 
                     let inst = Instance { map, object, matrix: nf_formats::placement::object_matrix(p.rotation, p.translation), placement: p.clone() };
                     add_instance(level, &inst, Layer::Character, None, &mut groups, None, Some(pi as u16), None, None, [1.0; 3], &room_cels, u32::MAX, u32::MAX);
                 }
+            }
+            // The off-kill's / break's `Control_NextLOD(head)` [M Searchlight_Update 0x1cb900:138, :454;
+            // Control_NextLOD 0x1349b0:8-12]: the head swaps to its block-0x27 LOD object (07000006:
+            // OBJECT_SearchLight1 -> OBJECT_SearchLightBroken [D]). Each part whose object carries a LOD
+            // target gets that mesh on its own slot after the parts (`sl_lod[k]` = the part it shadows);
+            // the palette shows it, and hides the part's own mesh, once the sim sets `lod_next`.
+            let sl_parts = nf_game::searchlight::part_placements(&level.maps[m].placements);
+            for (pi, &pl) in sl_parts.iter().enumerate() {
+                let p = &level.maps[m].placements[pl];
+                let target = if p.by_hash() { level.by_hash.get(&p.hashcode).copied() }
+                    else if (p.index as usize) < level.maps[m].objects.len() { Some((m, p.index as usize)) } else { None };
+                let Some((map, object)) = target else { continue };
+                let Some(lod) = level.maps[map].lod_target(object) else { continue };
+                let slot = (sl_parts.len() + sl_lod.len()) as u16;
+                let inst = Instance { map, object: lod, matrix: nf_formats::placement::object_matrix(p.rotation, p.translation), placement: p.clone() };
+                add_instance(level, &inst, Layer::Character, None, &mut groups, None, Some(slot), None, None, [1.0; 3], &room_cels, u32::MAX, u32::MAX);
+                sl_lod.push(pi as u16);
             }
             // Doors (`Door_Create`'s creation order = `door_placements`): each door's object as Character-layer
             // vertices posed by the simulation every tick (`Door_Interp`'s matrix at `obj+0x90`); the mesh is
@@ -8963,6 +8993,7 @@ pub fn build(level: &Level, cels_only: bool, skeletons: &HashMap<u8, Skeleton>, 
         }
         Scene { shard_tex, cels: room_cels, cel_graph, streams: None, music_files: None, music_tables: None, sound_bank: None, sound_spares: Vec::new(), snow_texture, vertices, indices, materials, textures, hud_textures, woman: None, hud, script_billboards, view_models, mp_bodies, mp_body_weapons, mp_char_bodies, mp_anim_sets, fog, bounds, start, stats, characters, char_vertex_start, char_verts, sequences, attachments, sim, colliders, models_0x800, npc_pool, ladders_drawn, grapple_hooks_drawn, misc_drawn, lock_matrices, dynobj_matrices, rotor_placements, gunimp_placements,
             door_scene_hidden,
+            sl_lod,
             destroy_centres }
     }
 
@@ -10056,8 +10087,13 @@ pub fn build(level: &Level, cels_only: bool, skeletons: &HashMap<u8, Skeleton>, 
             if let Some(sl) = v.searchlight {
                 const FAR: Mat4 = [[0.0; 4], [0.0; 4], [0.0; 4], [0.0, -10000.0, 0.0, 1.0]];
                 let Some(s) = self.sim.as_ref() else { return [0.0, -10000.0, 0.0] };
+                let n_parts = s.drones.searchlights.parts.len();
+                if sl as usize >= n_parts {
+                    let sp = self.sl_lod.get(sl as usize - n_parts).and_then(|&h| s.drones.searchlights.parts.get(h as usize));
+                    return match sp { Some(sp) if sp.drawn && sp.lod_next => transform(&sp.matrix, v.pos), _ => transform(&FAR, v.pos) };
+                }
                 let Some(p) = s.drones.searchlights.parts.get(sl as usize) else { return [0.0, -10000.0, 0.0] };
-                if !p.drawn { return transform(&FAR, v.pos); }
+                if !p.drawn || (p.lod_next && self.sl_lod.contains(&sl)) { return transform(&FAR, v.pos); }
                 if p.kind == 4 {
                     let m: Mat4 = [
                         [opts.right[0] * p.scale, opts.right[1] * p.scale, opts.right[2] * p.scale, 0.0],
@@ -10355,8 +10391,16 @@ pub fn build(level: &Level, cels_only: bool, skeletons: &HashMap<u8, Skeleton>, 
                     None => true,
                 };
                 if !keep { p[l.sl_base as usize + k] = FAR; continue; }
+                let n_parts = s.drones.searchlights.parts.len();
+                if k >= n_parts {
+                    // A LOD slot: the shadowed part's matrix once its head has swapped.
+                    let sp = self.sl_lod.get(k - n_parts).and_then(|&h| s.drones.searchlights.parts.get(h as usize));
+                    p[l.sl_base as usize + k] = match sp { Some(sp) if sp.drawn && sp.lod_next => sp.matrix, _ => FAR };
+                    continue;
+                }
                 p[l.sl_base as usize + k] = match s.drones.searchlights.parts.get(k) {
                     Some(sp) if !sp.drawn => FAR,
+                    Some(sp) if sp.lod_next && self.sl_lod.contains(&(k as u16)) => FAR,
                     Some(sp) if sp.kind == 4 => [
                         [opts.right[0] * sp.scale, opts.right[1] * sp.scale, opts.right[2] * sp.scale, 0.0],
                         [opts.up[0] * sp.scale, opts.up[1] * sp.scale, opts.up[2] * sp.scale, 0.0],
@@ -10431,9 +10475,14 @@ pub fn build(level: &Level, cels_only: bool, skeletons: &HashMap<u8, Skeleton>, 
             }
         }
         if has {
-            for (ci, m) in mults.iter().enumerate() { cols[ci] = rgb(*m); }
-            for (a, m) in attach_mult.iter().enumerate() { if let Some(c) = cols.get_mut((l.col_att + a as u32) as usize) { *c = rgb(*m); } }
-            for (pk, m) in pickup_mult.iter().enumerate() { if let Some(c) = cols.get_mut((l.col_pick + pk as u32) as usize) { *c = rgb(*m); } }
+            // Each run writes only its own section of the layout. Pickups created after the build (a
+            // dead guard's dropped gun) have no draw slot here (the drop draws as its attachment);
+            // writing them past `col_pick + n_pick` overwrote the searchlight slots and the shared
+            // `col_one` entry every door and interactable draws with, dimming them all to the
+            // drop's cel ambient.
+            for (ci, m) in mults.iter().enumerate().take(l.col_att as usize) { cols[ci] = rgb(*m); }
+            for (a, m) in attach_mult.iter().enumerate().take((l.col_pick - l.col_att) as usize) { cols[(l.col_att + a as u32) as usize] = rgb(*m); }
+            for (pk, m) in pickup_mult.iter().enumerate().take((l.col_sl - l.col_pick) as usize) { cols[(l.col_pick + pk as u32) as usize] = rgb(*m); }
         }
         // blood-puff-render: the gas puffs' draw colour IS the pool's live rgba — the game's
         // `View_SetupRenderModes_Tweak` 0x1e5888:46-49 feeds the gas object's obj+0x103..0x106 bytes

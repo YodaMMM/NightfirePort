@@ -229,6 +229,30 @@ pub const PART_BITS: [(u16, f32); 9] = [
     (0x0000, 0.0),
 ];
 
+/// The copter death blast's `Explode_Create` arguments — `Copter_Update` 0x17dbb8 case 6,
+/// disasm 0x17e120-0x17e168: `f12 = 10.0` (`mtc1 $at, $f12` with 0x41200000) and `f13 = f12`
+/// (`mov.s $f13, $f12`), `f14 = 67.4` (0x4286cccd), `a1 = obj+0x30` (the position),
+/// `a3 = 0x00600052` (`ori $a3, $a3, 0x52` — the blast script id `Script_Load` takes [M
+/// 0x17cc8c-0x17cc98]), the first stack arg = 6 (`sw $v0, ($sp)` with `$v0 = 6` — the u16
+/// `Explode_Create` reads with `lhu $s6, 0xd0($sp)` into EXPLODEINFO+0x38 [M 0x17cc2c,
+/// `sh $s6, 0x38($s0)`], the field `Explode_Update`'s switch arm 6 throws `MetalHash_132`
+/// for [M 0x17c350:41-43]), then `$t0/$t1 = 0xff, $t2 = 100, $t3 = 0` — the three u8s are
+/// the game's unread tail (`Explode_Create` never reads $t0/$t1/$t2 [M 0x17cbd0]) and $t3 is
+/// the attacker NULL: `Control_ObjectReferenced` is skipped [M 0x17cd68 `beqz $s3`]; the car's
+/// death site passes the car itself there [M 0x131ea0 `move $t3, $s2`].
+/// Field routing off the callee's disasm: f12 → SCRIPTINFO+0x94 (`swc1 $f22, 0x94($v0)` [M
+/// 0x17ccfc], the script's presentation scale), f13 → EXPLODEINFO+0x2C (`swc1 $f20, 0x2c($s0)`
+/// [M 0x17ccc4] — the radius: `Explode_Propagate`'s falloff divisor and `Camera_Shake(pos,
+/// f13)` [M 0x17cc28-0x17cc44]) and `obj+0xE8 = f13 · 1/15` [M 0x17cd40-0x17cd60], f14 →
+/// EXPLODEINFO+0x28 (`swc1 $f21, 0x28($s0)` [M 0x17cc9c] — the damage `Explode_Propagate`
+/// applies). The position is obj+0x30 — the walk syncs it from the flight matrix's
+/// translation row (`*(obj+0x30) ← *(obj+0xc0)` [M 0x1336f8:386-387]) and case 6 runs no
+/// `Copter_Move`, so it equals the port's `pos()`.
+pub const DEATH_BLAST_RADIUS: f32 = 10.0;
+pub const DEATH_BLAST_DAMAGE: f32 = 67.4;
+pub const DEATH_BLAST_SCRIPT: u32 = 0x0600_0052;
+pub const DEATH_BLAST_DEBRIS: u16 = 6;
+
 /// The per-difficulty health multiplier (`Copter_Create` 0x17d340:76-93): 2 -> 1.5, 3 -> 2.0,
 /// 4 -> 4.0, everything else (d1) -> 1.0 [M].
 pub fn copter_hp_mult(difficulty: u32) -> f32 {
@@ -335,11 +359,15 @@ impl Copter {
         (false, posed)
     }
 
-    /// `Copter_Update` 0x17dbb8 — one tick. Returns `(unhide, posed)`:
+    /// `Copter_Update` 0x17dbb8 — one tick. Returns `(unhide, posed, death_blast)`:
     /// - `unhide` — the gate's first ON tick: the caller runs `SP_HideObj(sp, 0)`
     ///   (`Scripts::unhide_sp`) — the game does it right here in the head, then zeroes +0x70 [M head];
     /// - `posed` — `SP_SetPosRot(sp, obj+0x90)` ran: the caller puts `self.matrix` on the SP
-    ///   player [M Copter_Move :115].
+    ///   player [M Copter_Move :115];
+    /// - `death_blast` — case 6's `Explode_Create` fired this tick [M 0x17e120-0x17e168]: the
+    ///   caller queues the death blast (the DEATH_BLAST_* args) at the copter's `pos()` — the
+    ///   game creates it inside `Copter_Update` at obj+0x30, then sets obj+0xFE bit 1 and the
+    ///   object loop deletes the copter [M 0x17e16c-0x17e178].
     pub fn update(
         &mut self,
         paths: &[CopterPath],
@@ -348,13 +376,13 @@ impl Copter {
         frame: u32,
         explode_level: bool,
         rng: &mut crate::drone::Rng,
-    ) -> (bool, bool) {
+    ) -> (bool, bool, Option<V3>) {
         // The gate: a non-zero gate channel that is off stops everything [M 0x17dbb8 head]; on the
         // first ON tick the head unhides the SP and zeroes the field — the copter then updates
         // unconditionally, even if the channel turns off mid-flight [M `+0x70 = 0`].
         let mut unhide = false;
         if self.gate != 0 {
-            if !ch.on(self.gate as u32) { return (false, false); }
+            if !ch.on(self.gate as u32) { return (false, false, None); }
             self.gate = 0;
             unhide = true;
         }
@@ -395,6 +423,7 @@ impl Copter {
                 let (_, p) = self.move_tick(paths, rng);
                 posed = p;
             }
+            // (cases 4/5/6 below return directly — they end in `(unhide, p/…, …)` of their own.)
             4 => {
                 // Case 4 [M :244-254]: finish the current path, then adopt the arrival path with
                 // t = 0 and write the arrival channel.
@@ -414,15 +443,18 @@ impl Copter {
                 if r {
                     if self.out != 0 { ch.set(self.out as u32, 1, frame); }
                     self.landed = true;
-                    return (unhide, p);
+                    return (unhide, p, None);
                 }
-                return (unhide, p);
+                return (unhide, p, None);
             }
             6 => {
-                // Case 6 [M :265-275]: the channel, the explosion (not ported), the flag.
+                // Case 6 [M :265-275]: the channel, `Explode_Create` [M 0x17e120-0x17e168 — the
+                // DEATH_BLAST_* args at `self.pos()` = obj+0x30], then obj+0xFE bit 1 [M
+                // 0x17e16c-0x17e178 `ori $v0, $v0, 1; sb $v0, 0xfe($s4)`]. The caller creates
+                // the blast object (the game creates it right here, inside `Copter_Update`).
                 if self.out != 0 { ch.set(self.out as u32, 1, frame); }
                 self.landed = true;
-                return (unhide, false);
+                return (unhide, false, Some(self.pos()));
             }
             _ => {}
         }
@@ -475,8 +507,11 @@ impl Copter {
         if !exempt && self.hp < self.damage {
             self.state = if explode_level { 6 } else { 4 };
             if self.out != 0 { ch.set(self.out as u32, 1, frame); }
+            // The death tail only SETS +0xF4 = 6 — the `Explode_Create` runs when the state
+            // machine dispatches case 6 on the NEXT update [M the decompile: the tail's stores
+            // then `return`; case 6 is a separate dispatch].
         }
-        (unhide, posed)
+        (unhide, posed, None)
     }
 
     /// The copter's world position (the matrix row 3) — the viewer's draw/cull helpers.
@@ -904,11 +939,11 @@ mod tests {
         let mut ch = Channels::default();
         let mut rng = crate::drone::Rng::default();
         // The gate off: nothing runs.
-        let (unhide, posed) = c.update(&paths, &mut ch, &mut gas, 1, false, &mut rng);
+        let (unhide, posed, _) = c.update(&paths, &mut ch, &mut gas, 1, false, &mut rng);
         assert!(!unhide && !posed, "gated off → nothing");
         assert_eq!(c.state, 0, "still state 0 behind the gate");
         ch.set(5, 1, 0);
-        let (unhide, _) = c.update(&paths, &mut ch, &mut gas, 2, false, &mut rng);
+        let (unhide, _, _) = c.update(&paths, &mut ch, &mut gas, 2, false, &mut rng);
         assert!(unhide, "the gate's first ON tick unhides [M head]");
         assert_eq!(c.gate, 0, "+0x70 zeroed [M head]");
         assert_eq!(c.state, 1, "case 0 ran this tick");
@@ -919,7 +954,7 @@ mod tests {
         c.t = 3.5; // past count 1
         let mut fired = false;
         for f in 3..10 {
-            let (_, _) = c.update(&paths, &mut ch, &mut gas, f, false, &mut rng);
+            let (_, _, _) = c.update(&paths, &mut ch, &mut gas, f, false, &mut rng);
             if ch.on(0x4b) { fired = true; break; }
         }
         assert!(fired, "case 4's transition writes rec+0x72 [M :249-252]");
@@ -943,7 +978,7 @@ mod tests {
         // State 5, the path just ended: the channel re-writes and obj+0xFE sets, every tick.
         c.state = 5;
         c.t = 3.5;
-        let (_, _) = c.update(&paths, &mut ch, &mut gas, 1, false, &mut rng);
+        let (_, _, _) = c.update(&paths, &mut ch, &mut gas, 1, false, &mut rng);
         assert!(c.landed, "obj+0xFE bit 1 [M LAB_0017e16c]");
         assert!(ch.on(0x4b), "the channel re-write [M :260-263]");
         // The death: state 1 with hp < damage → 4 (07000005-like), 6 on 0b/12.
@@ -951,14 +986,14 @@ mod tests {
         d.path = Some(0);
         d.hp = 299.0;
         d.damage = 300.0;
-        let (_, _) = d.update(&paths, &mut ch, &mut gas, 2, false, &mut rng);
+        let (_, _, _) = d.update(&paths, &mut ch, &mut gas, 2, false, &mut rng);
         assert_eq!(d.state, 4, "hp < damage outside states 4/5 → 4 [M disasm 0x17e3b8-0x17e3c0]");
         assert!(ch.on(0x4b), "the death writes the arrival channel [M disasm 0x17e3bc]");
         let mut e = copter();
         e.path = Some(0);
         e.hp = 299.0;
         e.damage = 300.0;
-        let (_, _) = e.update(&paths, &mut ch, &mut gas, 3, true, &mut rng);
+        let (_, _, _) = e.update(&paths, &mut ch, &mut gas, 3, true, &mut rng);
         assert_eq!(e.state, 6, "0x0700000b/0x07000012 explode instead [M :360-363]");
         // States 4/5 are exempt (sltiu(state-4, 2) skips, disasm 0x17e398-0x17e39c).
         let mut g = copter();
@@ -966,7 +1001,7 @@ mod tests {
         g.state = 4;
         g.hp = 299.0;
         g.damage = 300.0;
-        let (_, _) = g.update(&paths, &mut ch, &mut gas, 4, false, &mut rng);
+        let (_, _, _) = g.update(&paths, &mut ch, &mut gas, 4, false, &mut rng);
         assert_eq!(g.state, 4, "state 4 is exempt from the death");
     }
 
@@ -1149,5 +1184,62 @@ mod tests {
         assert!((c.damage - 298.0).abs() < 1e-4);
         assert_eq!(c.state, 1, "298 < 299: still flying");
         assert!(!ch.on(0x4b), "no arrival below hp");
+    }
+
+    // copter-death-debris [M 0x17e120-0x17e168] the call-site constants, read off the disassembly.
+    #[test]
+    fn the_death_blast_args_match_the_call_site() {
+        assert_eq!(DEATH_BLAST_RADIUS, f32::from_bits(0x4120_0000), "f12 = f13 = 0x41200000 [M 0x17e120-0x17e124, 0x17e150 mov.s]");
+        assert_eq!(DEATH_BLAST_DAMAGE, f32::from_bits(0x4286_cccd), "f14 = 0x4286cccd [M 0x17e134-0x17e13c]");
+        assert_eq!(DEATH_BLAST_SCRIPT, 0x0600_0052, "a3 = 0x00600052 [M 0x17e130 lui + 0x17e154 ori]");
+        assert_eq!(DEATH_BLAST_DEBRIS, 6, "the first stack arg = 6 [M 0x17e128 addiu $v0 + 0x17e144 sw ($sp)]");
+    }
+
+    // copter-death-debris [M Copter_Update 0x17dbb8 case 6, 0x17e0e0-0x17e178]: the state-6
+    // dispatch IS the Explode_Create — the copter reports the blast at obj+0x30 once (the
+    // caller queues it and the object loop deletes the record), sets obj+0xFE bit 1 and writes
+    // the arrival channel. The death tail itself only SETS +0xF4 = 6 — no blast on that tick.
+    #[test]
+    fn the_state6_dispatch_creates_the_death_blast_at_the_object_position() {
+        let mut gas = crate::gas::GasPool::default();
+        let mut ch = Channels::default();
+        let mut rng = crate::drone::Rng::default();
+        // The matrix stands in for the flight pose: the game's blast position is obj+0x30 —
+        // the walk's copy of the matrix translation row [M 0x1336f8:386-387] — and case 6 runs
+        // no Copt_Move [M the decompile: the arm is channel → Explode_Create → the flag].
+        let mut c = copter();
+        c.out = 0x66;
+        c.state = 6;
+        c.matrix[3] = [42.5, 58.25, -13.75, 1.0];
+        let (unhide, posed, blast) = c.update(&[], &mut ch, &mut gas, 10, true, &mut rng);
+        assert!(!unhide && !posed, "case 6 moves nothing [M the decompile — no Copter_Move call]");
+        assert_eq!(blast, Some([42.5, 58.25, -13.75]), "the blast position is obj+0x30 = the matrix row [M 0x17e14c addiu $a1, $s4, 0x30]");
+        assert!(c.landed, "obj+0xFE bit 1 set [M 0x17e16c-0x17e178]");
+        assert!(ch.on(0x66), "the arrival channel writes [M 0x17e0e0-0x17e11c]");
+        // The sister: the death tail's transition tick creates nothing yet — state 1 with hp <
+        // damage on an explode level → 6, and the flag/channel move, no blast.
+        let mut c = copter();
+        c.out = 0x66;
+        c.state = 1;
+        c.hp = 299.0;
+        c.damage = 300.0;
+        let (_, _, blast) = c.update(&[], &mut ch, &mut gas, 11, true, &mut rng);
+        assert_eq!(c.state, 6, "0x0700000b/0x07000012 → 6 [M 0x17e3b0-0x17e3b8]");
+        assert_eq!(blast, None, "the tail only stores +0xF4 [M the decompile — stores, then return]");
+        assert!(!c.landed, "the flag is case 6's [M 0x17e178]");
+        assert!(ch.on(0x66), "the death writes the channel too [M 0x17e3bc-0x17e3c8]");
+        // The next dispatch — the tick the caller queues the blast and deletes the record.
+        let (_, _, blast) = c.update(&[], &mut ch, &mut gas, 12, true, &mut rng);
+        assert!(blast.is_some(), "case 6 fires the Explode_Create on its dispatch [M 0x17e128]");
+        assert!(c.landed);
+        // And a non-explode level's death departs: state 4, no blast [M 0x17e3a4-0x17e3b8 —
+        // the 0x7000012/0x700000b test gates the 6].
+        let mut c = copter();
+        c.state = 1;
+        c.hp = 299.0;
+        c.damage = 300.0;
+        let (_, _, blast) = c.update(&[], &mut ch, &mut gas, 13, false, &mut rng);
+        assert_eq!(c.state, 4, "off 0b/12 the death departs [M 0x17e3a4]");
+        assert_eq!(blast, None, "no Explode_Create off the explode levels [M the case-6 gate]");
     }
 }

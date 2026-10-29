@@ -21,13 +21,21 @@
 //!   **0x4C** [D] — the disc's own chain the old "no path to 0x4C" scan missed → the Load Point
 //!   #206 (key gate ch 0x4C [M Trigger_Activate 0x1b2318:76-90]) → E → the level loads 07000003
 //!   through the real reload path [D param 0].
-//! obj2 "Find door to servants quarters" (0x4D): NO disc writer exists in any ported mechanism
-//! (all 35 triggers, doors, pickups, locks, the kind-7 scripts' events and the full decompile
-//! writer sweep — see the report). The remaining mechanism is the Monitor console (type 0x30,
-//! `Monitor_Update` 0x1afcc8 writes the target object's data+0x5C channel [M]) — the monitor's
-//! target-channel bind needs the un-ported object-data offsets, so the walk hands 0x4D the way
-//! that layer would (marked, not asserted as game behaviour) and the mission's all-objectives
-//! channel 0x64 closes [M 0x1827d8 bVar9 arm].
+//! obj2 "Find door to servants quarters" (watch 0x4D [L c07000002 row]): the writer is the ARC
+//! HAND-OFF, on the disc in 07000003 — TouchOnce trigger #308 (flags 0xEA, param 0 = 0x4D) at
+//! (−9.0, 6.0, −23.2), the level entry right past 07000002's own exit (−10.05, 6.75, −23.18),
+//! with SoundTrigger #341 (0xF9) keyed on 0x4D beside it [D 07000003 param sweep 2026-10-28].
+//! The same hand-off shape is proven one part back: 07000002's intro stream 7 writes 0x47,
+//! part 0's watch channel ("Escort Mayhew to bunker" [L c07000001]) — the intro asserted at step
+//! 0 [D 07800002 0x06000084 stream7]. The monitor's other computed writers were ruled out on the
+//! disc: `Monitor_Update` 0x1afcc8:170-174 raises the viewed sensor's param 8 — both 02 sensors
+//! carry param 8 = 0 [D probe], and no 02 SS carries 0x4D (p3 = 0/1/2 [D probe]; `SS_Update`
+//! 0x1a9948:21-23 raises SS p3). So the leg: exit 07000002 with the EARNED 0x4C, step into
+//! 07000003, the #308 touch raises 0x4D, `Mission_MonitorObjectives` 0x1827d8 case 3 folds part-1
+//! obj2 to state 4 — asserted through the real trigger path on the reloaded level. ch 0x64 (100)
+//! must NOT close: the monitor's `bVar9` AND spans all four parts of mission 0x07000001
+//! [M 0x1827d8:22-38,119-123; L c07000001/02/03/04 rows], and parts 2/3's watch channels
+//! (0x4E/0x51/0x53/0x54) are unwritten on this walk.
 
 #[path = "common/walker.rs"]
 mod walker;
@@ -37,6 +45,12 @@ use walker::{Act, Walker, Wp};
 fn iso() -> String { std::env::var("NF_ISO").expect("NF_ISO") }
 
 fn ch_on(w: &Walker, c: u8) -> bool { w.scene.sim.as_ref().unwrap().drones.channels.on(c as u32) }
+
+/// The MissionData row of a level [M mission::LEVELS = the 0x2a3ed0 table; the row-lookup
+/// idiom of walkreal_07000006_live].
+fn mission_row(level: u32) -> usize {
+    nf_game::mission::LEVELS.iter().position(|l| l.level == level).expect("the mission row")
+}
 
 fn geisha(w: &Walker, ch: u8) -> Option<usize> {
     w.scene.sim.as_ref().unwrap().drones.list.iter().position(|d| d.second_channel == ch)
@@ -186,6 +200,14 @@ fn walk_the_castle_all_objectives_to_the_exit() {
     let shot = w.shoot_point([-48.86, 6.44, -23.64], "Mayhew's computer", |sim| sim.drones.channels.on(0x48));
     assert!(ch_on(&w, 0x48), "the computer's destruction raises ch 0x48 [D pl[011] param 0; M 0x12bd48]");
     let _ = shot;
+    // The monitor folds the announced objective one tick after the watch channel rises
+    // [M 0x1827d8 case 3 reads the channel, then the next monitor pass folds 3 → 4].
+    let mut folded = false;
+    for _ in 0..120 {
+        if w.scene.sim.as_ref().unwrap().drones.mission.states[mission_row(0x0700_0002)][0] == 4 { folded = true; break; }
+        w.tick(Default::default(), false);
+    }
+    assert!(folded, "obj0 \"Destroy Mayhew's computer\" folds to state 4 [M 0x1827d8 case 3; L c07000002]");
     // The plates are locked by the ambush [D #385-387 lock 0x81] — the game's outcome stands.
     w.walk_nav_to([-59.0, 5.4, -26.0], "the bunker room far end", 1.6);
     {
@@ -224,20 +246,28 @@ fn walk_the_castle_all_objectives_to_the_exit() {
     assert!(ch_on(&w, 0x4a), "geisha 2 saved: ch 0x4A [M 0x1441c0]");
     assert!(ch_on(&w, 0x4b), "AND #303 (0x49, 0x4A) → 0x4B [D tr[001]]");
     assert!(ch_on(&w, 0x4c), "AND (0x48, 0x4B) → 0x4C [D tr[030]] — the disc's own chain");
+    {
+        let mut f1 = false;
+        let mut f2 = false;
+        for _ in 0..120 {
+            let st = &w.scene.sim.as_ref().unwrap().drones.mission.states[mission_row(0x0700_0002)];
+            f1 |= st[1] == 4;
+            f2 |= st[2] == 3;
+            if f1 && f2 { break; }
+            w.tick(Default::default(), false);
+        }
+        assert!(f1, "obj1 \"Rescue geisha girls\" folds to state 4 [M 0x1827d8 case 3; L c07000002]");
+        assert!(f2, "obj2 \"Find door to servants quarters\" is announced once its enable 0x4C fires [M 0x1827d8 case 1; L enable 0x4C]");
+    }
 
-    // 7. obj2's completion channel 0x4D has NO disc writer in any ported mechanism (the report's
-    //    sweep); the remaining mechanism is the un-ported Monitor console (type 0x30,
-    //    `Monitor_Update` 0x1afcc8 writes the target's data+0x5C channel [M]). Hand it the way
-    //    that layer would, then the mission's all-objectives channel closes [M 0x1827d8 bVar9 arm].
-    //    [S] stand-in — an open live check.
-    let sim = w.scene.sim.as_mut().unwrap();
-    sim.drones.channels.set(0x4d, 1, sim.drones.frame);
-    drop(sim);
-    for _ in 0..120 { w.tick(Default::default(), false); }
-    if !ch_on(&w, 0x64) {
-        // [S] the monitor's 0→3→4 state walk needs the mission layer ticked in this sim path —
-        // the port's Mission_MonitorObjectives run (scene.rs's events arm) is the live check.
-        eprintln!("[02] WARNING: ch 0x64 did not close on this pass (the mission monitor's tick path — live check)");
+    // 7. The mission-complete channel must NOT close here: `Mission_MonitorObjectives`'s `bVar9`
+    //    AND spans EVERY part of mission 0x07000001, and parts 2/3's watch channels (0x4E/0x51/
+    //    0x53/0x54) are unwritten on this walk [M 0x1827d8:22-38,119-123; L the four rows].
+    for _ in 0..60 { w.tick(Default::default(), false); }
+    {
+        let sim = w.scene.sim.as_ref().unwrap();
+        assert!(!sim.drones.channels.on(100), "part 1 of 4 cannot close ch 100 (0x64) [M 0x1827d8's all-parts AND]");
+        assert_eq!(sim.drones.mission.status(), 1, "Mission_Update stays in its monitor case [M 0x182c60 case 1]");
     }
 
     // 8. The Load Point #206: E with the key gate ch 0x4C REALLY on (no hand-set) — the level
@@ -250,6 +280,36 @@ fn walk_the_castle_all_objectives_to_the_exit() {
     {
         let sim = w.scene.sim.as_ref().unwrap();
         assert_eq!(sim.drones.level_exit, Some(0x0700_0003), "the exit loads 07000003 with the earned ch 0x4C [M 0x1b2318:76-90]");
+    }
+
+    // 9. obj2 completes through the arc hand-off: the viewer's next-level step (the game's own
+    //    reload — the viewer loads the next archive on level_exit, like walk_07000002_live) into
+    //    07000003. Bond spawns at the servants' quarters door; TouchOnce #308 (param 0 = 0x4D,
+    //    at (−9.0, 6.0, −23.2), the entry right past 02's exit) fires through the real
+    //    Trigger_Update/Hit path and `Mission_MonitorObjectives` case 3 folds part-1 obj2 to 4
+    //    [D 07000003 #308 param sweep; M 0x1b1fc8 + 0x1827d8:88-99]. SoundTrigger #341 keyed on
+    //    0x4D sits beside it [D]. No channel is hand-set anywhere in this leg.
+    let next = "07000003.bin";
+    let mut w3 = Walker::new(nf_view::load(&iso, next, false).expect("07000003 must load after the exit"));
+    w3.skip_cutscenes = false;
+    let mut handed = None;
+    for t in 0..900u32 {
+        if ch_on(&w3, 0x4d) { handed = Some(t); break; }
+        w3.tick(Default::default(), false);
+    }
+    assert!(handed.is_some(), "07000003's entry touch #308 raises ch 0x4D on the fresh load [D #308 param 0]");
+    let mut folded3 = false;
+    for _ in 0..240 {
+        if w3.scene.sim.as_ref().unwrap().drones.mission.states[mission_row(0x0700_0002)][2] == 4 { folded3 = true; break; }
+        w3.tick(Default::default(), false);
+    }
+    assert!(folded3, "obj2 \"Find door to servants quarters\" folds to state 4 on the 07000003 entry [M 0x1827d8 case 3]");
+    {
+        let sim = w3.scene.sim.as_ref().unwrap();
+        // The hand-off also REVEALS part 2's own objectives (enable 0x4D [L c07000003]):
+        assert_eq!(sim.drones.mission.states[mission_row(0x0700_0003)][0], 3, "07000003's obj0 revealed by the same 0x4D [M 0x1827d8 case 1; L enable 0x4D]");
+        assert_eq!(sim.drones.mission.states[mission_row(0x0700_0003)][1], 3, "07000003's obj1 revealed by the same 0x4D [M 0x1827d8 case 1; L enable 0x4D]");
+        assert!(!sim.drones.channels.on(100), "ch 100 still held: parts 2/3's watch channels are unwritten [M 0x1827d8's all-parts AND]");
     }
 
     eprintln!("[02] walked the full objective route in {} ticks; falls: {:?}", w.total_ticks, w.report.falls);

@@ -125,7 +125,7 @@ fn the_spot_ray_picks_bond_and_arms_the_light_from_his_sphere() {
             phase: 0.0, drawn: kind != 2, matrix: [[0.0; 4]; 4], state: 0, pitch, yaw, links: [None; 5],
             killed: false, light: None, alpha: 255, scale: 1.0, box_min: [0.0; 3], box_max: [0.0; 3],
             sph_centre: [0.0; 3], sph_radius: 0.0,
-            spawn_pos: pos, created: 0,
+            spawn_pos: pos, created: 0, lod_next: false,
         };
         let mut head = part(1, head_pos);
         head.links = [None, None, Some(1), None, None];

@@ -1,5 +1,7 @@
 //! walkreal-h: 07000008 (Mayhew D, the gondola) walked with the player's own movement — no
-//! teleports after the spawn. Route (docs/levels/07000008.md, the interactables census):
+//! teleports after the spawn, NO channel or state pokes in the walk: the whole mission from one
+//! fresh load, both objectives in player order, ending on the level exit firing
+//! (level-08-every-objective). Route (docs/levels/07000008.md, the interactables census):
 //!
 //! 1. the mountain-top station #0 (139.5, 50.5, −76.4) [D placements kind 0x24] → the intro plate
 //!    TouchOnce #237 (139.2, 49.5, −81.2) → **ch 0x49** (this completes 07000007's carried
@@ -27,8 +29,19 @@
 //!    Mission_Update ends the level into the DRIVING hand-off **0x0730008**
 //!    [M 0x182c60:85-116 — LevelToEndTo; no LOAD_LEVEL placement exists on this level [D]].
 //!
-//! The carried latches (05's 0x45/0x70, 06's 0x02, 07's 0x48) ride the RamSave in play
-//! [M Player_RamSave 0x195670]; a cold test load sets them exactly like walk_07000008_live does.
+//! The level's mission data lists exactly TWO objectives for 07000008
+//! [L ee_start_05.bin @ 0x2a3e88, 2 records; the states Mission_MonitorObjectives 0x1827d8 runs]:
+//! 1. "Retrieve guidance chip from Safe Room" (ch 0x4A, enabled by ch 0x49) — completes at the
+//!    briefcase take (leg 4);
+//! 2. "Escape with Zoe in gondola" (ch 0x4B, enabled by ch 0x4A) — completes at the Hind's
+//!    death tail (leg 6, the only ch-0x4B writer on this level [M Copter_Update's state-4 arm;
+//!    D the route dump: no kind-2 arrival path]).
+//!
+//! The carried latches (05's 0x45/0x70, 06's 0x02, 07's 0x48) are the mission's ENTRY state — in
+//! play they ride the RamSave [M Player_RamSave 0x195670 / Player_RamLoad 0x1957a8]; the cold
+//! test load sets them once at spawn (the same set the cold stand-in walk_07000008_live pins),
+//! never during the walk. The old separate ride test's ch-0x4A stand-in poke is gone: the real
+//! ch 0x4A from the briefcase take feeds mux #235 (level-08-every-objective).
 
 #[path = "common/walker.rs"]
 mod walker;
@@ -84,10 +97,11 @@ fn aim_and_fire_until(w: &mut Walker, target: [f32; 3], weapon: u8, fire_ticks: 
     }
 }
 
-/// The walked stretch that completes on the current tree: the intro, the fusebox, the safe, the
-/// briefcase (objective 1 → 4) — the descent continues in walk_the_gondola_ride_to_the_end.
+/// The whole mission on one fresh load: the intro, the fusebox, the safe, the briefcase
+/// (objective 1 → 4), the descent back down, the boarding, the ride, the cinematic, the Hind
+/// shoot-down on real aim and trigger (objective 2 → 4), and the mission end into 0x0730008.
 #[test]
-fn walk_the_gondola_to_the_briefcase_and_back() {
+fn walk_the_whole_mission_on_real_input() {
     let iso = iso();
     let mut w = Walker::new(nf_view::load(&iso, "07000008.bin", false).expect("load 07000008"));
     {
@@ -187,64 +201,20 @@ fn walk_the_gondola_to_the_briefcase_and_back() {
     }
     assert_eq!(obj08(&w).0, 4, "objective 'Retrieve guidance chip' completes on ch 0x4a [L record 3]");
 
-    eprintln!("[08] the walked stretch done in {} ticks; falls {:?}", w.total_ticks, w.report.falls);
-}
+    eprintln!("[08] the briefcase stretch done in {} ticks; falls {:?}", w.total_ticks, w.report.falls);
 
-/// The ride continuation: the WALKED route from the intro plate down the station and the walkway
-/// to the floor plate (no teleports after the spawn; the briefcase chain stands in as the ch 0x4A
-/// channel — walk_the_gondola_to_the_briefcase_and_back drives it through the real path), then the
-/// boarding, the ride, the cinematic, the copter, and the mission end.
-/// The cabin boards from the WEST: the east face carries the script-entity glass panes
-/// (obj_type 0x20 → Break_Create [M 0x1d8968:88-90] — the cabin's windows), the west doorway is
-/// open; the floor plate's box is x 111.10..112.92, y 26.77..29.21, z −128.10..−126.75 [D the
-/// trigger's tri bbox]. The carriage entities (44, all with collision shapes [D the shape probe])
-/// join set_dynamic, SP #295 is preloaded (state 1, mode 64 [D]) and the lib holds 0x0600004C.
-#[test]
-fn walk_the_gondola_ride_to_the_end() {
-    let iso = iso();
-    let mut w = Walker::new(nf_view::load(&iso, "07000008.bin", false).expect("load 07000008"));
-    {
-        let sim = w.scene.sim.as_mut().unwrap();
-        for ch in [0x45u32, 0x70, 0x02, 0x48] { sim.drones.channels.set(ch, 1, sim.drones.frame); }
-    }
-    w.wait_enabled(3000, "the station start");
-    // The briefcase chain is prerequisite for the ride (mux #235 ANDs ch 0x4A with the floor ch 4):
-    // the channel stands in for the walked chain (walk_the_gondola_to_the_briefcase_and_back
-    // drives it through the real path); the WALKED ROUTE below covers the descent and the boarding
-    // with no teleports: the intro plate → the station → the walkway → the lower landing, then the
-    // descent along path 2's link chain.
-    {
-        let sim = w.scene.sim.as_mut().unwrap();
-        let f = sim.drones.frame;
-        sim.drones.channels.set(0x4a, 1, f);
-    }
-    w.wait(30);
-    // The station stretch (the same legs the briefcase walk uses): the intro plate first.
-    w.walk_nav_to([139.2, 49.5, -81.2], "to the intro plate", 1.3);
-    {
-        let sim = w.scene.sim.as_ref().unwrap();
-        assert!(sim.drones.channels.on(0x49), "the intro plate #237 fired ch 0x49 [D placements]");
-    }
-    w.wait_enabled(4500, "the station-intro scene");
-    w.wait(60);
+    // ── back out of the secure room: the same waypoints in reverse, real walking ────────────
     for (name, at) in [
-        ("the station hall", [139.0f32, 49.5, -93.0]),
-        ("the station doors", [139.5, 49.5, -97.5]),
-        ("the walkway head", [144.0, 46.0, -105.0]),
-        ("the walkway mid", [145.5, 45.0, -108.6]),
+        ("before the safe", [160.0f32, 43.4, -117.0]),
+        ("the secure room door", [158.0, 43.0, -119.0]),
+        ("at the door west side", [154.6, 42.5, -121.0]),
+        ("by the fusebox", [153.0, 43.4, -118.5]),
         ("the lower landing", [150.0, 43.5, -116.0]),
     ] {
         w.walk_nav_to(at, name, 1.5);
     }
-    // Sister: the descent was WALKED — the walkway's zone plates (TouchOnces out 42/43/44, the
-    // ambush spawners' start channels [D placements; M Trigger_Hit 0x1b1fc8 walk-in mask 8])
-    // fired on the way down; a teleport to the landing would leave them off.
-    {
-        let sim = w.scene.sim.as_ref().unwrap();
-        assert!(sim.drones.channels.on(0x2a) || sim.drones.channels.on(0x2b) || sim.drones.channels.on(0x2c),
-            "the walked descent crossed the walkway ambush plates (42/43/44) [D]");
-    }
-    // ── the gondola: the descent to the floor plate ─────────────────────────────────────────────
+
+    // ── the gondola: the descent to the floor plate ─────────────────────────────────────────
     // The outbound descent follows path 2's own link chain ([D the path-2 dump]): the landing
     // east (147.3/149.3/151.2/153, y 42.4, z −120.5) → the north ramp (153.1, 41.15, −115.95) →
     // (153.16, 39.65, −111.63) → (148.29, 38.4, −110.84) → the mid level (143.32, 36.4, −111.43)
@@ -268,11 +238,19 @@ fn walk_the_gondola_ride_to_the_end() {
     ] {
         w.walk_nav_to(at, name, 1.5);
     }
+    // Sister: the descent was WALKED — the walkway's zone plates (TouchOnces out 42/43/44, the
+    // ambush spawners' start channels [D placements; M Trigger_Hit 0x1b1fc8 walk-in mask 8])
+    // fired on the way down; a teleport to the landing would leave them off.
+    {
+        let sim = w.scene.sim.as_ref().unwrap();
+        assert!(sim.drones.channels.on(0x2a) || sim.drones.channels.on(0x2b) || sim.drones.channels.on(0x2c),
+            "the walked descent crossed the walkway ambush plates (42/43/44) [D]");
+    }
     w.climb_stairs([107.25, 27.7, -119.5], "the stairwell down", 1.6, 4200);
     // The boarding ([D the floor probe]): the platform (y 27.25, z −121..−122.5) ends at the car
     // shaft — the middle (x 112) is open below (the cabin hangs there; its floor is the plate at
     // y 28, z −127.4), the side ledges (x 110/114) run south at y 26.75 past the parked cabin's
-    // mouth. Walk the east ledge south; the plate's volume (12 tris = its box) touches Bond's body.
+    // mouth. Walk the west ledge south; the plate's volume (12 tris = its box) touches Bond's body.
     for (name, at) in [
         ("the lower level east", [110.7f32, 27.7, -121.5]),
         ("the gondola mouth", [112.0, 27.4, -122.0]),
@@ -308,11 +286,11 @@ fn walk_the_gondola_ride_to_the_end() {
         let sim = w.scene.sim.as_ref().unwrap();
         eprintln!("[08 gondola] bond {:?} ch4 {} falls {:?} stuck {}", sim.bond.pos,
             sim.drones.channels.on(4) as u8, w.report.falls, w.report.stuck_events.len());
-        for s in w.report.stuck_events.iter().take(4) { eprintln!("[08 gondola stuck] {s}"); }
         assert!(sim.drones.channels.on(4), "the cable-car floor plate fired ch 4 [D #236 mask 8]");
     }
-    // mux #235 folds 0x4A AND 4 → ch 1 → SP #295 (the ride, 1420 ticks) starts. Watch the ride:
-    // the carriage carries Bond [M Control_InheritVelocity 0x133e88] and writes ch 83 at tick 1410.
+    // mux #235 folds the REAL ch 0x4A (the briefcase take above) AND 4 → ch 1 → SP #295 (the
+    // ride, 1420 ticks) starts. Watch the ride: the carriage carries Bond [M
+    // Control_InheritVelocity 0x133e88] and writes ch 83 at tick 1410.
     let mut ride_started = false;
     for _ in 0..600 {
         if w.scene.sim.as_ref().unwrap().drones.channels.on(1) { ride_started = true; break; }
@@ -348,9 +326,10 @@ fn walk_the_gondola_ride_to_the_end() {
     // The faithful machine writes the out channel (rec+0x72 = param 7 = ch 0x4B [D #45 p7; M
     // 0x17d4ac]) ONLY from the death tail — hp < damage → state 4, disasm 0x17e390-0x17e3c8 — or
     // cases 4/5/6, which only the death (or a kind-2 arrival path; none exists on 08 [D the route
-    // dump]) reaches. The old pin here — "the flight → ch 0x4B" — was the removed stand-in's
-    // behaviour; the walk now shoots the Hind down with REAL trigger pulls (the 9-part hit walk
-    // accumulates the weapon contact damage into rec+0x64 [M 0x17dbb8:277-353]), no damage pokes.
+    // dump]) reaches. The walk shoots the Hind down with REAL aim and trigger pulls: Bond stands
+    // where the cinematic left him, the aim tracks the machine's live position every tick (the
+    // real look input), the damage accumulates from the weapon contacts on the part spheres
+    // [M 0x17dbb8:277-353] — no position or damage pokes.
     let mut flying = false;
     for _ in 0..600 {
         if w.scene.sim.as_ref().unwrap().drones.copters.iter().any(|c| c.out == 0x4b && (1..=2).contains(&c.state)) { flying = true; break; }
@@ -360,29 +339,57 @@ fn walk_the_gondola_ride_to_the_end() {
     assert!(!w.scene.sim.as_ref().unwrap().drones.channels.on(0x4b), "no arrival while the route flies");
     let ci = w.scene.sim.as_ref().unwrap().drones.copters.iter().position(|c| c.out == 0x4b).unwrap();
     let hp = w.scene.sim.as_ref().unwrap().drones.copters[ci].hp;
+    // A real player fights the machine with a GUN, not the targeting laser (the walk arrives with
+    // the 0x4E laser equipped from the safe burn; its beam carries no bullet contact at the
+    // route's 24-37 u — the old test's point-blank re-stand hid that). Switch through the real
+    // weapon-cycle input to the first owned gun the carry has (the laser 0x4E and the fists stay
+    // out) — the cycle is unlocked by the carried ch 0x48 [M Player_Weapon 0x1a24c8:242-275].
+    {
+        let sim = w.scene.sim.as_ref().unwrap();
+        let inv = &sim.drones.inventory;
+        let own = |wid: u8| inv.owned.get(wid as usize).copied().unwrap_or(false);
+        let ammo = |wid: u8| inv.clip.get(wid as usize).copied().unwrap_or(0) > 0
+            || inv.carried.get(wid as usize).copied().unwrap_or(0) > 0;
+        let owned: Vec<u8> = (0x02u8..0x4e).filter(|&wid| own(wid)).collect();
+        eprintln!("[08] owned weapons at the fight: {owned:02x?} (current {:#x})", sim.gun.weapon);
+        let gun = owned.into_iter()
+            .find(|&wid| wid != 0x4e && wid != 0x01 && ammo(wid))
+            .expect("the carry owns at least one loaded gun for the Hind fight");
+        for _ in 0..240 {
+            if w.scene.sim.as_ref().unwrap().gun.weapon == gun { break; }
+            w.tick(Input { switch_to: Some(gun), ..Default::default() }, false);
+        }
+        assert_eq!(w.scene.sim.as_ref().unwrap().gun.weapon, gun, "the switch to {gun:#x} never landed");
+        eprintln!("[08] fighting the Hind with the gun {gun:#x}");
+    }
     let mut shots = 0u32;
     let mut ch4b = false;
-    for _ in 0..60000 {
+    for t in 0..40000u32 {
         if w.scene.sim.as_ref().unwrap().drones.channels.on(0x4b) { ch4b = true; break; }
-        // Press/release the semi-auto at the flying Hind: every press re-stands Bond 2.5 u from
-        // it and aims the view at its centre (the bullets cross the part spheres on the way — the
-        // copter's SP pose is one tick stale, the same lag the game's collide pass reads
-        // [M 0x1336f8:238]). The position stand-in is the harness's; the DAMAGE is the game's.
+        let sim = w.scene.sim.as_ref().unwrap();
+        let cp = sim.drones.copters[ci].pos();
+        let head = sim.bond.head();
+        let to = [cp[0] - head[0], cp[1] - head[1], cp[2] - head[2]];
+        let l = (to[0] * to[0] + to[1] * to[1] + to[2] * to[2]).sqrt();
+        let desired_yaw = to[0].atan2(to[2]);
+        let desired_pitch = (to[1] / l).asin() / std::f32::consts::FRAC_PI_2;
+        let yaw_err = walker::wrap_pi(desired_yaw - sim.bond.yaw);
+        let pitch_err = desired_pitch - sim.bond.pitch;
+        let input = Input {
+            turn: yaw_err.clamp(-0.08, 0.08),
+            look: pitch_err.clamp(-0.05, 0.05),
+            aiming: true,
+            ..Default::default()
+        };
+        // Press/release the trigger at the flying Hind (the old fight's cadence, the aim now the
+        // real tracked one).
         let press = w.total_ticks % 2 == 0;
-        if press {
-            let sim = w.scene.sim.as_mut().unwrap();
-            let p = sim.drones.copters[ci].pos();
-            sim.bond.pos = [p[0] + 2.5, p[1], p[2] + 1.0];
-            sim.bond.vel = [0.0; 3];
-            let d = [p[0] - sim.bond.pos[0], p[1] - (sim.bond.pos[1] + 1.0), p[2] - sim.bond.pos[2]];
-            let len = (d[0] * d[0] + d[1] * d[1] + d[2] * d[2]).sqrt();
-            if len > 1e-4 {
-                sim.bond.pitch = (d[1] / len).asin() / std::f32::consts::FRAC_PI_2;
-                sim.bond.yaw = d[0].atan2(d[2]);
-            }
+        if press { w.tick_fire(input); shots += 1; } else { w.tick(input, false); }
+        if t % 600 == 0 {
+            let sim = w.scene.sim.as_ref().unwrap();
+            eprintln!("[08 hind t{t}] dist {l:.1} damage {:.1} hp {hp} weapon {:#x} bond {:?} copter {:?} st {}",
+                sim.drones.copters[ci].damage, sim.gun.weapon, sim.bond.pos, cp, sim.drones.copters[ci].state);
         }
-        let input = Input { aiming: true, ..Default::default() };
-        if press { w.tick_fire(input); } else { w.tick(input, false); shots += 1; }
     }
     let damage = w.scene.sim.as_ref().unwrap().drones.copters[ci].damage;
     eprintln!("[08] the shoot-down: {shots} trigger pulls; damage {damage} vs hp {hp}");
@@ -404,7 +411,7 @@ fn walk_the_gondola_ride_to_the_end() {
         w.tick(Input::default(), false);
     }
     assert_eq!(end, (6, 0x0730_0008), "the mission completes into the driving hand-off 0x0730008 [M 0x182c60:85-116]");
-    eprintln!("[08] the gondola walked start to finish in {} ticks; falls {:?}", w.total_ticks, w.report.falls);
+    eprintln!("[08] the whole mission walked on real input in {} ticks; falls {:?}", w.total_ticks, w.report.falls);
 }
 
 /// The ally rule (Zoe once shot at Bond at the gondola): the dtype-0xC ally
