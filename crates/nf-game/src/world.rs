@@ -561,6 +561,83 @@ fn capsule_tri_contact(t: &[V3; 3], mat: u8, a: &mut V3, b: &mut V3, r: f32, gro
     true
 }
 
+/// The move-clip contact — `NF_WALK_CLIP=1`'s walk model (the walk-move-clip task's experiment;
+/// default OFF, measured against the whole walkreal battery before anything lands). Per triangle
+/// the game's contact test [M `Intersect_CylGeom` 0x109da0: the per-triangle plane-crossing query
+/// point f clamped 0..1, the closest triangle point, the `dist < r` contact gate] with the radial
+/// push tail left DEAD — its reference HITTEST+0x50 is the lifetime DeltaP accumulator [M
+/// `Collide_Intersect` 0x1ebaa8:353-373; [L] ee_start_* boots (0,0,0), ee_snapshot drifts ~15 m
+/// from the owner] so the tail never fires on a walked line — and the tick's move CLIPPED at the
+/// contact instead of pushing out. Port choices ([S] unverified, this flag is the measurement):
+/// - the clip retracts the tick's move so the closest spine point lands ON the contact face's
+///   plane (the spine-plane rest — the game's own glide rest holds the spine ~0.011 inside the
+///   wall plane [L fresh boot, the 16.29 line]; no radius skin);
+/// - only face-interior contacts clip: an edge or a side overlap never displaces (the game walks
+///   through the door[19] slab poke and the 0.88 funnel pinch the stand-ins pin — the dead tail);
+/// - the head-on cull runs with the GAME's own pairing [M 0x109da0:321-322 — skip when
+///   (n·d̂ > 0.999 ∧ f > 0.5) ∨ (n·d̂ < −0.999 ∧ f < 0.5); `capsule_tri_contact`'s
+///   HEAD_ON_CULL_ON copy has the arms flipped and stays off], so stair descents skip the step
+///   behind/above (f = 0 < 0.5 on a down spine) and a floor crossed in the spine's TOP half
+///   (f < 0.5) is jumped through from below — the walked settle's climb; the BOTTOM half is
+///   solid and clips (the landing).
+/// Returns true when this triangle clipped the move (a/b already pulled back along `move_v`);
+/// `walkable`/`pick` keep `capsule_tri_contact`'s contact signals.
+#[allow(clippy::too_many_arguments)]
+fn capsule_tri_clip(t: &[V3; 3], mat: u8, a: &mut V3, b: &mut V3, r: f32, grow: f32, move_v: V3, walkable: &mut bool, pick: &mut bool, top_guard: bool) -> bool {
+    let tl = [0, 1, 2].map(|k| t[0][k].min(t[1][k]).min(t[2][k]));
+    let th = [0, 1, 2].map(|k| t[0][k].max(t[1][k]).max(t[2][k]));
+    let (sl, sh) = ([0, 1, 2].map(|k| a[k].min(b[k]) - grow), [0, 1, 2].map(|k| a[k].max(b[k]) + grow));
+    if (0..3).any(|k| th[k] < sl[k] || tl[k] > sh[k]) { return false; }
+    // Water surfaces never collide the player (the cel scoping — see capsule_push).
+    if mat & 0x3f == 0xE { return false; }
+    let n = cross(sub(t[1], t[0]), sub(t[2], t[0]));
+    let nl = dot(n, n).sqrt();
+    if nl < 1e-12 { return false; }
+    let n = [n[0] / nl, n[1] / nl, n[2] / nl];
+    // The port's one-sided floor rule (the same skip set as the push — see capsule_tri_contact).
+    if n[1].abs() > 0.7 && dot(n, sub(*a, t[0])) < 0.0 { return false; }
+    let ab = sub(*b, *a);
+    let denom = dot(n, ab);
+    let mut f = 0.0f32;
+    if denom.abs() > 0.0002 {
+        f = (-(dot(n, sub(*a, t[0]))) / denom).clamp(0.0, 1.0);
+        let ab_len = dot(ab, ab).sqrt();
+        if ab_len > 1e-6 {
+            let nd = denom / ab_len;
+            // The game's own head-on pairing [M 0x109da0:321-322].
+            if (nd > 0.999 && f > 0.5) || (nd < -0.999 && f < 0.5) { return false; }
+        }
+    }
+    let mut p = if denom.abs() > 0.0002 {
+        [a[0] + ab[0] * f, a[1] + ab[1] * f, a[2] + ab[2] * f]
+    } else {
+        let c = [0, 1, 2].map(|k| (t[0][k] + t[1][k] + t[2][k]) / 3.0);
+        closest_on_segment(*a, *b, c)
+    };
+    let (q, on_edge) = closest_on_triangle(p, t);
+    if on_edge { p = closest_on_segment(*a, *b, q); }
+    let v = sub(p, q);
+    let dist = dot(v, v).sqrt();
+    if dist >= r { return false; }
+    if top_guard && n[1].abs() <= 0.7 && dot(sub(q, *a), sub(*b, *a)) <= 0.0 { return false; }
+    // The contact signals (capsule_tri_contact's rules — see the walkable/pick docs there).
+    if n[1] > 0.7 && q[1] < b[1] { *walkable = true; }
+    if n[1] > 0.7 { *pick = true; }
+    // THE CLIP: a face-interior contact whose face the move pushes INTO retracts the tick's move
+    // to the face plane. d(t) = d0 + t·dot(n, move_v) from the closest spine point p; the move
+    // fraction kept is t* = −d0/dot(n, move_v) ∈ [0, 1). Each clip applies before the next
+    // triangle (the game's shifted-segment per-triangle flow [M 0x109da0's A/B += push]).
+    if on_edge { return false; }
+    let md = dot(n, move_v);
+    if md > -1e-9 { return false; } // the move does not push into the face
+    let d0 = dot(n, sub(p, t[0]));
+    let s = (-d0 / md).clamp(0.0, 1.0);
+    if s >= 1.0 { return false; }
+    let dl = [move_v[0] * (s - 1.0), move_v[1] * (s - 1.0), move_v[2] * (s - 1.0)];
+    for k in 0..3 { a[k] += dl[k]; b[k] += dl[k]; }
+    true
+}
+
 /// The segment's AABB.
 fn box_of(from: V3, to: V3) -> (V3, V3) {
     ([from[0].min(to[0]), from[1].min(to[1]), from[2].min(to[2])], [from[0].max(to[0]), from[1].max(to[1]), from[2].max(to[2])])
@@ -1865,6 +1942,59 @@ impl CollisionWorld {
                 capsule_tri_contact(t, mat, &mut a, &mut b, r, grow, &mut total, &mut walkable, &mut pick, top_guard, ref_v);
         });
         (total, walkable)
+    }
+
+    /// The move-clip walk query (`NF_WALK_CLIP=1` — see `capsule_tri_clip`): the actor capsule
+    /// against the straddle cells' static geometry with the tick's move CLIPPED at the face
+    /// contacts instead of the two-sided depenetration push. Returns the pos correction (the
+    /// clipped move's remainder — what is LEFT of the tick's move) and the walkable signal.
+    /// Scoped like `capsule_push_scoped`; falls back to the flat world. `move_v` is the tick's
+    /// position delta (the move being clipped).
+    pub fn capsule_clip_scoped(&self, cell: Option<usize>, a: V3, b: V3, r: f32, top_guard: bool, move_v: V3) -> (V3, bool) {
+        let Some(cell) = cell else { return self.capsule_clip(a, b, r, top_guard, move_v) };
+        let Some(runs) = self.scoped_runs(cell, &mut Self::capsule_portal_hit(a, b, r)) else { return self.capsule_clip(a, b, r, top_guard, move_v) };
+        let dynamic = self.dynamic.read().unwrap();
+        let a0 = a;
+        let (mut a, mut b) = (a, b);
+        let mut walkable = false;
+        let mut pick = false;
+        let grow = r + 0.1;
+        let mut lo = [0f32; 3];
+        let mut hi = [0f32; 3];
+        for k in 0..3 { lo[k] = a[k].min(b[k]) - grow; hi[k] = a[k].max(b[k]) + grow; }
+        let stat = &self.stat;
+        let rad = r;
+        for run in runs {
+            let o = &stat.objects[run as usize];
+            if !(0..3).any(|k| o.hi[k] < lo[k] || o.lo[k] > hi[k]) {
+                for k in o.tris.clone() { capsule_tri_clip(&stat.tris[k], stat.mats[k], &mut a, &mut b, rad, grow, move_v, &mut walkable, &mut pick, top_guard); }
+            }
+        }
+        for g in [&dynamic.geo] {
+            for o in overlapping(g, lo, hi) {
+                for k in o.tris.clone() { capsule_tri_clip(&g.tris[k], g.mats[k], &mut a, &mut b, rad, grow, move_v, &mut walkable, &mut pick, top_guard); }
+            }
+        }
+        // The correction: what is LEFT of the tick's move after the clips (the pulled-back a is
+        // a_start + move_v·s_min; the caller's pos already integrated the full move, so the
+        // correction is the clipped-back remainder, negative along the clipped axis).
+        ([a[0] - a0[0], a[1] - a0[1], a[2] - a0[2]], walkable)
+    }
+
+    /// The flat-world `capsule_clip_scoped` (no cel scope).
+    pub fn capsule_clip(&self, a: V3, b: V3, r: f32, top_guard: bool, move_v: V3) -> (V3, bool) {
+        let a0 = a;
+        let (mut a, mut b) = (a, b);
+        let mut walkable = false;
+        let mut pick = false;
+        let grow = r + 0.1;
+        let mut lo = [0f32; 3];
+        let mut hi = [0f32; 3];
+        for k in 0..3 { lo[k] = a[k].min(b[k]) - grow; hi[k] = a[k].max(b[k]) + grow; }
+        self.near_actor(lo, hi, |t, mat| {
+                capsule_tri_clip(t, mat, &mut a, &mut b, r, grow, move_v, &mut walkable, &mut pick, top_guard);
+        });
+        ([a[0] - a0[0], a[1] - a0[1], a[2] - a0[2]], walkable)
     }
 
     /// Clear line between two points — the game's `Collide_LineOfSight` 0x1edf50 →

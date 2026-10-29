@@ -298,6 +298,18 @@ fn walk_ghost() -> bool {
     *ON.get_or_init(|| std::env::var("NF_WALK_GHOST").is_ok())
 }
 
+/// walk-move-clip experiment switch: `NF_WALK_CLIP=1` replaces the walk capsule's two-sided
+/// depenetration push with the game's move-clip model — the tick's move is CLIPPED at the
+/// capsule's face contacts (the radial push tail stays dead: its reference HITTEST+0x50 is the
+/// lifetime DeltaP accumulator [M Intersect_CylGeom 0x109da0:447's guard; M Collide_Intersect
+/// 0x1ebaa8:353-373; L ee_start_* boots (0,0,0), ee_snapshot drifts ~15 m]). See
+/// `world::capsule_tri_clip` for the per-triangle model and its [S] port choices. Default OFF —
+/// the main agent decides after a feel check; measured against the whole walkreal battery.
+fn walk_clip() -> bool {
+    static ON: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
+    *ON.get_or_init(|| std::env::var("NF_WALK_CLIP").is_ok())
+}
+
 #[derive(Clone, Debug)]
 pub struct Bond {
     /// `obj+0x30`.
@@ -1712,6 +1724,8 @@ self.local = [vs / k, vf / k];
             self.vel = [0.0; 3];
         }
         self.vel[1] = self.vel[1].clamp(-45.0, 45.0);
+        // The tick's move (the move the clip model truncates — captured before the integration).
+        let pre_move_pos = self.pos;
         if settle_release {
             // The ONE integration of the held velocity, in the game's op order (the VU mul then the
             // add [M 0x194df0:189-197]) — the shape the ee_start root reproduces bit-exactly. The
@@ -1736,6 +1750,16 @@ self.local = [vs / k, vf / k];
         // rounds [L]); the port's walk/NPC paths still depend on the unguarded through-push
         // (escort_follow_07000001_live regressed with it on) — a known port divergence.
         let (mut push, mut walkable) = world.capsule_push_scoped(self.cel, a, b, RADIUS, swimming, self.pick_ref);
+        // walk-move-clip EXPERIMENT (`NF_WALK_CLIP=1`): the game's move-clip walk model — the
+        // tick's move clipped at the capsule's face contacts, the radial push tail dead (see
+        // capsule_tri_clip). Replaces the push displacement AND the pick_ref feed (the game's
+        // +0x50 accumulator only ever sees DeltaP, which the dead tail never produces).
+        if walk_clip() {
+            let move_v = [self.pos[0] - pre_move_pos[0], self.pos[1] - pre_move_pos[1], self.pos[2] - pre_move_pos[2]];
+            let (cp, cw) = world.capsule_clip_scoped(self.cel, a, b, RADIUS, swimming, move_v);
+            push = cp;
+            walkable = cw;
+        } else if walk_ghost() { push = [0.0; 3]; }
         // level-0a-office-hatch-10 EXPERIMENT (`NF_WALK_GHOST=1`): the game's walk push tail is
         // dead [M Intersect_CylGeom 0x109da0:447 — the guard is |q − HITTEST+0x50| < radius with
         // +0x50 the lifetime DeltaP accumulator [M Collide_Intersect 0x1ebaa8:353-373]; [L
@@ -1769,8 +1793,13 @@ self.local = [vs / k, vf / k];
         // wall stays out of it.
         let mut pick = world.capsule_pick_contact_scoped(self.cel, a, b, RADIUS, self.pick_ref[1], self.pick_ref);
         if floor.is_none() {
-            let (fp, fw) = world.capsule_push(a, b, RADIUS, swimming, self.pick_ref);
-            push = if walk_ghost() { [0.0; 3] } else { fp };
+            let (fp, fw) = if walk_clip() {
+                let move_v = [self.pos[0] - pre_move_pos[0], self.pos[1] - pre_move_pos[1], self.pos[2] - pre_move_pos[2]];
+                world.capsule_clip(a, b, RADIUS, swimming, move_v)
+            } else {
+                world.capsule_push(a, b, RADIUS, swimming, self.pick_ref)
+            };
+            push = if walk_ghost() && !walk_clip() { [0.0; 3] } else { fp };
             walkable = fw;
             pick = world.capsule_pick_contact(a, b, RADIUS, self.pick_ref[1], self.pick_ref);
             floor = world.segment_hit(self.pos, to);
@@ -1827,7 +1856,9 @@ self.local = [vs / k, vf / k];
         // The DeltaP add-back [M Collide_Intersect 0x1ebaa8:353-373]: every applied push
         // accumulates into HITTEST+0x50 (+0x10 feeds the handler's obj+0x30 add at
         // 0x1949a8:136-140 — the port's `pos += push` — and +0x50 feeds the pick bit's dot2).
-        for k in 0..3 { self.pick_ref[k] += push[k]; }
+        // Under NF_WALK_CLIP the accumulator never sees the clip (the game's +0x50 only ever
+        // receives DeltaP, and the dead tail produces none) — pick_ref stays frozen.
+        if !walk_clip() { for k in 0..3 { self.pick_ref[k] += push[k]; } }
         // The actor-actor capsule push [M Collide_Jointy 0x1ec180:229-281 — the player's kind-0x800
         // query resolving against a live bot's own kind-0x800 capsule hittest]: the closest points
         // between the two spines by two rounds of alternating projection (:234-239), the overlap
