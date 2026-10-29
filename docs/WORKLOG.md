@@ -46,3 +46,16 @@ the -pose box walk; two rope_guard Player initializers gained crouched: false); 
 Next: read the -pose crouch diff (5da2b3aa), pick the fix shape (root offset → bond_boxes
 param, or the head() compensation fold), write the head() pin test, run the four named
 binaries + the chunked full suite.
+
+Progress (15:22 UTC): the fix landed — the toggle no longer moves pos (the -pose drop
+removed), bond_boxes shifts its root-local frame by 0.4847 [L 1.086/0.607] so the boxes stay
+crouched, head() is master's line unchanged. PROOF the view is master's: an identical probe
+(flat floor, crouch → 70-tick hold → stand-up) run on a master 1b2309ea worktree and on this
+tree produced BIT-IDENTICAL per-tick pos/cdrop/head/cc streams (111 samples ×2), and the
+committed pin test pins those 110 per-tick values as f32-bit literals (==, no epsilon).
+Greens: the pin test, fix_bond_damage_live 7/0 (the crouch round still misses the crouched
+head — the boxes ride the palette offset), anim_events_live 4+1ign, bond_boxes_every_level_live
+1/0, mp_perf_16_live 2/0 at the master-lineage digest 0x89cbfcb6ae45c2ac (the -pose 0xb270
+encoded the reverted root drop; reverting it is not a view-only re-pin — the sim returns to
+master's). Full suite: did not fit this window (setup + the two-worktree probe capture);
+the next message resumes with the chunked runner on a fresh state file.
