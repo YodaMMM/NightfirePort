@@ -9582,8 +9582,8 @@ pub fn menu_overlay(fe: &FrontEnd, font: &nf_formats::hud::Font, hfont: &nf_form
         // - the even-row stripes [M 0x2196e8 case 0x73 arms +0x548 = 0xf050580; 0x21a598's
         //   even-row plate 0x03000042] — the port's translucent plate stands in [S the look];
         // - the row pitch 16.7 [S — the pause tab's measured pitch; the game's stride is
-        //   Font_GetTextExtent(def size)·1.1, not measurable headlessly — the main agent's
-        //   render compares against PCSX2].
+        //   Font_GetTextExtent(def size)·1.1, not measurable headlessly — a
+        //   render compare against PCSX2 settles it].
         Page::Stats => {
             let bind = |id: u32| -> String { lang.and_then(|l| l.bind(id)).unwrap_or("").to_string() };
             let title = bind(0x2d1);
