@@ -38,3 +38,23 @@ Ran: the fast runner subset `--only nf_game,nf_formats,nf_audio,nf_view,mission_
 ## mission-stats-rows
 
 Branch s/mission-stats-rows (from origin/master @ b25b5f34, merged origin/s/menu-stats-page). Task: the Mission Stats rows show wrong values/targets/points (Double Cross Part 4: Time 00:08 -> 1,585,205 points; Opponents Dispatched target 45 with one assassin) and the Dossier Records page shows High Score / Bond Moves / Upgrades all 0 after finishing Double Cross — port the stats builders (PlrStat_* tallies, per-level target table, points formula) row by row, and the records writer for mission end, pinned by tests from a real 07000004 finish.
+
+### mission-stats-rows — outcome (the integer-seconds fix + the Records session table)
+
+Two fixes: (1) the time row's denominator is INTEGER seconds — `*(int *)(rows+0x94) / 100`
+integer-divides before the float casts [M 0x1984b0:120], the max(·,1) guard rides the same
+(float)(int) value [M :125-131] — the port's float division produced score shapes the game
+cannot reach (the reported 1,585,205-shape; 8.00 s of the 480 s par is 1,500,000 [M]).
+(2) The Dossier Records page reads the ONE BSS table [M C_RBDSRECORDS 0x20bf00:19-26], so it
+shows the finished mission's best/bond/medals with NO save in play — the port now carries
+`session_progress` (filled at the mission end, carried through ProfileSession) with the profile
+first. The Dispatched target 45 is the game's own static design row for the Double Cross base
+[L ee_start_05 entry 4] — pinned as the game's number, not a bug. Tests: every stats cell from a
+real 07000004 finish (walkreal_07000004_live), the integer-seconds + design-row unit pins
+(mission_stats_rows 9/0), and fix_scores_handoff_live's contradicting float expectation fixed to
+the decompile (146,740 [M 0x1984b0:120]). Suite: chunked fast runner 705/0/31 over 184/906
+binaries (mp_stress_explosives_live rc=−9 = the known OOM); direct on the final tree: nf-game
+949/0/9, nf-formats unit 92/0 (disc_golden 11/3 = the known slim-ISO trio), mission_stats_flow
+6/0, menus_flow 43/0, menu_graph_walk 2/0, create_save_live 4/0, fix_scores_handoff_live 1/0;
+walkreal_07000004_live 6/0. The remaining 722 binaries did not fit the window (the sandbox kills
+background jobs; each chunked call caps at ~9.5 min) — next window resumes from the branch.
