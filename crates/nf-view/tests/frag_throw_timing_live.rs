@@ -53,7 +53,7 @@ fn equip(sim: &mut nf_view::scene::Sim, id: usize) {
     let model = sim.weapons.model(id);
     let bounds = *sim.models.get(&model).unwrap_or(&nf_game::pickup::Model { centre: [0.0; 3], radius: 0.3 });
     let at = sim.bond.pos;
-    let p = nf_game::pickup::Pickup::create_placed(at, [0.0; 3], nf_game::pickup::kind::WEAPON, id as u16, 1, 0, 0xFFFF, 0, 0, model, bounds, &sim.weapons, &std::collections::HashMap::new())
+    let p = nf_game::pickup::Pickup::create_placed(at, [0.0; 3], nf_game::pickup::kind::WEAPON, id as u16, 1, 0, 0xFFFF, 0, 0, model, bounds, &sim.weapons, &std::collections::HashMap::new(), false)
         .expect("pickup builds");
     sim.drones.pickups.push(p);
     tick_idle(sim, 5);

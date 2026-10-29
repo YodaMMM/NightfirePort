@@ -86,3 +86,37 @@ fn probe_07000015_mine_objects() {
         } else { println!("mine UNRESOLVED hash {:08x}", p.hashcode); }
     }
 }
+
+#[test]
+#[ignore = "assertion-free census dump; run with --ignored"]
+fn dump_07000015_scripts() {
+    // The level's kind-7 scripts through the game's own loader filter (Level::parse keeps
+    // what Script_Load accepts) plus the raw LevelBin kind-7 census [D].
+    use nf_formats::levelbin::LevelBin;
+    use nf_formats::nis::{Cmd, Nis};
+    let Some(iso) = iso() else { eprintln!("NF_ISO not set"); return };
+    let data = read_archive(&iso, "07000015.bin");
+    let lb = LevelBin::parse(&data).expect("levelbin");
+    let kind7: Vec<_> = lb.entries.iter().filter(|e| e.kind == 7).collect();
+    println!("== 07000015.bin: {} entries, {} kind-7 scripts ==", lb.entries.len(), kind7.len());
+    for se in &kind7 {
+        match Nis::parse(se.hash(), lb.data(&data, se)) {
+            Ok(nis) => {
+                println!("script {:08x} len {} streams {}", nis.hashcode, nis.length, nis.streams.len());
+                for (si, s) in nis.streams.iter().enumerate() {
+                    println!(" stream {si}: keys {}..{}", s.first_key, s.last_key);
+                    for c in s.decode() {
+                        match c {
+                            Cmd::Entity { hash, parent, spline, obj_type, params } =>
+                                println!("   Entity glist {hash:08x} parent {parent:?} spline {spline} type {obj_type:02x} params {params:?}"),
+                            Cmd::Anim { skin, script, start } => println!("   Anim skin {skin:08x} script {script:08x} start {start}"),
+                            Cmd::Event { kind, params } => println!("   Event kind {kind:02x} params {params:?}"),
+                            other => println!("   {other:?}"),
+                        }
+                    }
+                }
+            }
+            Err(e) => println!("script {:08x}: parse failed {e}", se.hash()),
+        }
+    }
+}

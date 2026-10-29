@@ -67,7 +67,7 @@ fn ride_and_dump_the_window() {
             let deep = sim.world.segment_hit([p[0], p[1], p[2]], [p[0], p[1] - 6.0, p[2]]);
             eprintln!("deep ray down 6.0 from bond: {deep:?}");
             let (a, b) = sim.bond.capsule_seg();
-            let (push, walkable) = sim.world.capsule_push(a, b, 0.55, false);
+            let (push, walkable) = sim.world.capsule_push(a, b, 0.55, false, [1.0e9, 1.0e9, 1.0e9]);
             eprintln!("bond capsule a {a:.2?} b {b:.2?} push {push:.2?} walkable {walkable}");
         }
         if p[1] < y_board - 150.0 { eprintln!("FELL by t{t}"); break; }

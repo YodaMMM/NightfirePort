@@ -335,7 +335,8 @@ fn the_hub_destroyable_shatters_under_fire() {
 /// TEST was wrong, fixed 2026-10-23 with this address). Sister: resting before the walk.
 #[test]
 fn the_bonus_pickup_collects_on_the_walk_over() {
-    let mut w = load();
+    // The kind-6 bonus pickups exist only with the level's gold medal recorded [M Pickup_Create 0x18dda0:93]: load with every medal held.
+    let mut w = Walker::new(nf_view::load_with_carry_medals(&iso(), "0700001b.bin", false, None, 1, u64::MAX).unwrap());
     let (x, y, z) = {
         let sim = w.scene.sim.as_ref().unwrap();
         let p = &sim.drones.pickups[1];

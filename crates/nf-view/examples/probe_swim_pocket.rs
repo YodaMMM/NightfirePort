@@ -52,7 +52,7 @@ fn main() {
         if t >= 5 && t <= 60 {
             let b = &sim.bond;
             let (da, db) = b.capsule_seg();
-            let (dp, _) = sim.world.capsule_push_scoped(b.cel, da, db, nf_game::player::RADIUS, true);
+            let (dp, _) = sim.world.capsule_push_scoped(b.cel, da, db, nf_game::player::RADIUS, true, [1.0e9, 1.0e9, 1.0e9]);
             // horizontal rays at the sphere centres' heights, along the stroke and its neighbours
             let (s, c) = b.yaw.sin_cos();
             let mut faces = String::new();
@@ -73,8 +73,8 @@ fn main() {
         // DEFAULT arm (the re-landed swim capsule) and the OLD LOW arm, at the same pos.
         let (da, db) = b.capsule_seg();
         let (la, lb) = ([b.pos[0], b.pos[1] + (0.65 - b.cc), b.pos[2]], [b.pos[0], b.pos[1] + (0.45 - b.cc), b.pos[2]]);
-        let (dp, dw) = sim.world.capsule_push_scoped(b.cel, da, db, nf_game::player::RADIUS, true);
-        let (lp, lw) = sim.world.capsule_push_scoped(b.cel, la, lb, nf_game::player::RADIUS, false);
+        let (dp, dw) = sim.world.capsule_push_scoped(b.cel, da, db, nf_game::player::RADIUS, true, [1.0e9, 1.0e9, 1.0e9]);
+        let (lp, lw) = sim.world.capsule_push_scoped(b.cel, la, lb, nf_game::player::RADIUS, false, [1.0e9, 1.0e9, 1.0e9]);
         let floory = |from: [f32; 3], to: [f32; 3]| -> String {
             match sim.world.segment_hit_scoped(b.cel, from, to) {
                 Some((tt, n)) => format!("y {:6.3} n {:?}", from[1] + tt * (to[1] - from[1]), round(n)),

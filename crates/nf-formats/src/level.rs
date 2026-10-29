@@ -451,7 +451,15 @@ impl Level {
             let target = if p.by_hash() { self.by_hash.get(&p.hashcode).copied() } else { Some((m, p.index as usize)) };
             let Some((map, object)) = target else { continue };
             let follows_camera = self.maps[map].objects[object].flags & 2 != 0;
-            out.push((slot, Instance { map, object, matrix: placement::object_matrix(p.rotation, p.translation), placement: p.clone() }, follows_camera));
+            // 0x2a sky objects carry no creation matrix — View_DrawSky applies RotMatrix at draw
+            // time [M 0x1e5ad0:184,194]; the clouds (0xd4) are Cloud_Create objects, CCO(0) →
+            // View_RotTransMatrix [M 0x18d620:13].
+            let matrix = if p.flags & 0xff == 0xd4 {
+                placement::view_rot_trans_matrix(p.rotation, p.translation)
+            } else {
+                placement::object_matrix(p.rotation, p.translation)
+            };
+            out.push((slot, Instance { map, object, matrix, placement: p.clone() }, follows_camera));
         }
         out.sort_by_key(|(slot, _, _)| *slot);
         out.into_iter().map(|(_, i, c)| (i, c)).collect()
@@ -524,7 +532,31 @@ impl Level {
             if cels_only && !p.creates_cel() { continue; }
             let target = if p.by_hash() { self.by_hash.get(&p.hashcode).copied() } else if (p.index as usize) < self.maps[main].objects.len() { Some((main, p.index as usize)) } else { None };
             match target {
-                Some((map, object)) => out.push(Instance { map, object, matrix: placement::object_matrix(p.rotation, p.translation), placement: p.clone() }),
+                Some((map, object)) => {
+                    // The game's per-class matrix builder, pinned creator by creator: the 0x8000
+                    // static path keeps RotMatrix [M parseentity_transform_bounding_box
+                    // 0x1d0fb0:28-29], every dynamic dispatcher case with a live matrix build uses
+                    // View_RotTransMatrix (control_create_object's quaternion arg is 0 at all 91
+                    // call sites) [M 0x1344e0:26-29 + the per-case cites on
+                    // placement::object_matrix_for_class], with the pinned exceptions (0x26 MP
+                    // RotMatrix [M 0x185990:64-65], 0x2a sky draw-time RotMatrix [M
+                    // 0x1e5ad0:184,194], 0x0f/0xf1 identity, 0x34/0xf2 quaternion path, no-matrix
+                    // classes). The 0xd9-only switch this replaces was level-14-vent-grates'.
+                    // 0x0f drones specifically: Drone_Create passes NULL pos/rot to
+                    // control_create_object — the game's object matrix is the identity and the
+                    // placement vectors live in the drone ext [M 0x136be0:51-62, 0x14d7c8:10]; the
+                    // port's bind-pose draw at the placement transform is a port reconstruction,
+                    // kept on the RotMatrix reading (the class's disc rows are all yaw-only [D
+                    // placement_rot_census]).
+                    let matrix = placement::object_matrix_for_class(
+                        p.flags & 0xff,
+                        p.creates_cel(),
+                        p.rotation,
+                        p.translation,
+                        p.quaternion(),
+                    );
+                    out.push(Instance { map, object, matrix, placement: p.clone() })
+                }
                 None => missing += 1,
             }
         }

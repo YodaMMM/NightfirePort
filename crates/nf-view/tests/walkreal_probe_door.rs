@@ -42,7 +42,7 @@ fn probe_02_dock() {
         let mut x = -28.0f32;
         while x <= -13.0 {
             let (a, b) = ([x, 1.7, z], [x, 0.6, z]);
-            let (push, _) = world.capsule_push(a, b, 0.55, false);
+            let (push, _) = world.capsule_push(a, b, 0.55, false, [1.0e9, 1.0e9, 1.0e9]);
             let blocked = push.iter().any(|v| v.abs() > 0.05);
             row.push(if blocked { '#' } else { '.' });
             x += 1.0;

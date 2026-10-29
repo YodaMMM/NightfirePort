@@ -125,7 +125,7 @@ fn the_missile_cage_still_stops_bullets_but_never_the_capsule() {
         "sister: the west-bound ray is a back-face hit — the game's one-sided test lets it pass");
     // … and invisible to the actor capsule standing against it (the walk height band): pre-fix the
     // wall pushed the capsule +x (east, away from its west face); the floor's push is +y only.
-    let (push, _) = sim.world.capsule_push([135.5, 48.6, -101.0], [135.5, 48.0, -101.0], 0.55, false);
+    let (push, _) = sim.world.capsule_push([135.5, 48.6, -101.0], [135.5, 48.0, -101.0], 0.55, false, [1.0e9, 1.0e9, 1.0e9]);
     assert!(push[0] < 0.05, "the cage wall does not push the capsule (+x): {push:?}");
 }
 

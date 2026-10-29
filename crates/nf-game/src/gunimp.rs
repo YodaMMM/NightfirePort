@@ -13,11 +13,12 @@
 //!
 //! The turret hardware is the `TurretGuns` table [D ACTION.ELF @0x26f520, 12 × 0x1c bytes; LOAD
 //! vaddr 0x107100 = file 0x1000, so file 0x169420]: per entry a 12-byte muzzle offset, the gun
-//! art hash (+0x0c), the weapon id (+0x10), the fire interval in seconds as a float bit pattern
-//! (+0x14), the fire sound (+0x18). Entry 0xb is the laser: muzzle (0, 0, 1.71), art 0x02000b50,
-//! weapon **0x67**, interval 1.0, sound 1307. `GunImp_Create` picks the entry from MPSettings in
-//! the decompile — the single-player arm reads 0xb [M 0x131f20:52-63]; the port (single player
-//! only) hard-sets 0xb and pins the laser entry by hash.
+//! art hash (+0x0c), the weapon id (+0x10), the fire interval in TICKS as a float bit pattern
+//! (+0x14 — the update counts FRAME_RATE_MUL = 1.0 a tick down [M 0x1320d8:107-112, :324]), the
+//! fire sound (+0x18). Entry 0xb is the laser: muzzle (0, 0, 1.71), art
+//! 0x02000b50, weapon **0x67**, interval 1.0, sound 1307. `GunImp_Create` picks the entry from
+//! MPSettings in the decompile — the single-player arm reads 0xb [M 0x131f20:52-63]; the port
+//! (single player only) hard-sets 0xb and pins the laser entry by hash.
 //!
 //! Use (`Player_Activate` 0x1a5170's class walk reaching class 0x47 → `GunImp_Activate`
 //! 0x132f00): `Player_ChangeSubState(0xc)`, cam mode 0xe, `Player_Disable(player, 1)`,
@@ -34,17 +35,34 @@
 //!   `TurretGuns[0xb]+0x14` (= 1.0 s), the heat `ext+0x90` += 2.0 (≥ 200 sets the hot byte
 //!   `ext+0x9c`), and `Bullet_init(slot, player, imp, weapon_data + 0x67·0x10c, muzzle, dir,
 //!   0xffff)` spawns the laser round [M 0x1320d8:271-331]. The muzzle is the barrel matrix
-//!   (base = the placement transform — #225's rotation is identity — composed RotY(yaw_s)·
-//!   RotX(pitch_s)) applied to `TurretGuns[0xb]`'s (0, 0, 1.71) offset; the direction its +Z.
+//!   (base = the placement transform — `Quat_QuatToMat` on the +0x24 quaternion with the
+//!   position via `Mat_SetTrans` [M 0x131f20:66-67], overwriting the created object's matrix at
+//!   `Control_CreateObjEx` 0x1343c8:18-23; #225's quat is the identity [D placements, and every
+//!   0x34 disc row is yaw-only with a quat-consistent euler — placement_rot_census] — composed
+//!   RotY(yaw_s)·RotX(pitch_s)) applied to `TurretGuns[0xb]`'s (0, 0, 1.71) offset; the
+//!   direction its +Z.
 //!   The bullet is the player's (the game passes the player object as the owner), so it flies
 //!   the player-bullet flight and its class-5 contacts damage the C5 `Destroy` leaves through
 //!   `Destroy_CollisionHandler` 0x12bd48 — the door death writes ch 0x1f (objective 6).
 //!   Direct `Bullet_init` — no `PlrStat_LogShotFired` (that logs inside `Player_WeaponInitBullet`'s
 //!   pellet loop [M 0x1a4bf0:258], which this path never reaches) and no fire-mode bookkeeping.
 //!
-//! Beam visuals (the 0x20005cd quad `PositionBeam(muzzle → ray hit)`, the 0x200026e impact flare,
-//! `Explode_Propagate` at the hit for 0x67) are presentation: the port exposes the getters the
-//! draw code calls (`muzzle`, `barrel_dir`, `heat`, `hot`) — no drawing here.
+//! Beam visuals: the 0x20005cd quad `PositionBeam(muzzle → ray hit)` and the 0x200026e impact
+//! flare are presentation — the port exposes the getters the draw code calls (`muzzle`,
+//! `barrel_dir`, `heat`, `hot`) — no drawing here. The ray itself is NOT presentation: the fire
+//! arm casts the 1000-unit `Collide_RayIntersect` [M 0x1320d8:372-384], clamps the beam at the
+//! hit [M :385-387], and the 0x67 arm runs `Explode_Propagate(4.0, 5.0, hit, cel, the imp obj)`
+//! at it [M :433-436]. The sweep's case 0x21 smashes a destroyable it reaches with ≥ 1.0 damage
+//! ONLY when the leaf's tag+0x14 mask clears bit 0x20 [M 0x17c518:170] — the C5 doors' 0xFFEF
+//! [D p4 0x10, M 0x12c318:47-52] keeps it SET, so the blast never smashes them. The door's real
+//! death is the beam ROUND's drain: the 0x67 bullet (50 damage [D weapon_data+0x67·0x10c+0x0c])
+//! flies the player-bullet flight into `Destroy_CollisionHandler` 0x12bd48 — ~50 a contact tick,
+//! ~200 ticks for bigdoor02's 10000 [L PCSX2 2026-10-27: 10000 → 7100 → 4050 over two 60-frame
+//! bursts; the door's colour pair obj+0x104/0x105 drops to 00 and recovers ~3/display-frame
+//! after], then `Destroy_Smash` 0x12bb60 writes ch 0x1f (objective 6) and the trigger channel
+//! smashes bigdoor01 the SAME frame [M Destroy_Update 0x12c4f8:29-33]. The handheld guns can
+//! never start the drain: their category words (0x0008/0x0020 [D]) meet the doors' 0xFFEF in
+//! `Collide_FilterBullets` 0x1ece30 and drop (props.rs `bullet_hit`).
 //!
 //! Tags: [M] the addresses above, [D] the disc bytes, [L] the snapshot reads, [S] suggested.
 
@@ -59,7 +77,8 @@ pub struct TurretGun {
     pub art: u32,
     /// The weapon id (+0x10) — `weapon_data + w·0x10c` is the round's datum.
     pub weapon: u8,
-    /// The fire interval in seconds (+0x14, float bits).
+    /// The fire interval in ticks (+0x14, float bits — the update counts 1.0 a tick down
+    /// [M 0x1320d8:107-112, :324]).
     pub interval: f32,
     /// The fire sound (+0x18).
     pub sound: u32,
@@ -109,6 +128,10 @@ pub struct GunImp {
     pub cooldown: f32,
     /// `ext+0x9c` — the hot byte (200 heat reached).
     pub hot: bool,
+    /// The firing beam this shot leaves behind: `(muzzle, hit)` for the game's `0x20005cd` quad
+    /// (`PositionBeam(muzzle → ray hit)`, `GunImp_Update` 0x1320d8:394) and the `0x200026e` flare at
+    /// the hit. `Some` on the shot tick, `None` otherwise; the scene stretches the quad along it.
+    pub beam: Option<(V3, V3)>,
     /// `ext+0x9d` — the `TurretGuns` entry: 0xb in SP, the MP weapon set (Random: a `Rand_Rand(10)`
     /// pick) [M GunImp_Create 0x131f20:52-63,87].
     pub turret: u8,
@@ -125,27 +148,41 @@ pub struct GunImp {
     /// (`Control_BuildWorldSph` 0x133070:48 takes the glist bound radius × |scale|) — the use-key
     /// pick's candidate radius [M Collide_PickObj 0x1eae80:219-228, `1.0 + obj+0x8C`].
     pub radius: f32,
+    /// `ext+0x98` — the looped fire sound's handle: `Sound_Play3D(TurretGuns[+0x18], obj+0x30)`
+    /// stored the first fire tick while the trigger holds (0x67/0x70/0x61 arms), `Sound_Stop`ed
+    /// on release or overheat [M GunImp_Update 0x1320d8:261-269, :281-298], and on dismount
+    /// [M GunImp_Deactivate 0x132c18:62-63]. 0 = not playing.
+    pub fire_handle: u32,
 }
 
 impl GunImp {
-    /// The barrel matrix's +Z [M 0x1320d8:162-172 — RotY(yaw_s) after RotX(pitch_s) on the base].
+    /// The drawn barrel matrix's +Z [M GunImp_Update 0x1320d8:325 — `Mat_GetDir(dir, cel+0x90)`,
+    /// and Mat_GetDir 0x1e3398 reads the matrix's third row (+0x20..+0x28) un-negated — the
+    /// disassembly]. The cel is the matrix the aim drives and the draw poses
+    /// (`barrel_matrix`), so the fire direction reads from that same matrix.
     pub fn barrel_dir(&self) -> V3 {
-        let (sp, cp) = self.pitch_s.sin_cos();
-        let (sy, cy) = self.yaw_s.sin_cos();
-        // RotX(pitch)·(0,0,1) = (0, −sin p, cos p) in the game's matrix sense, then RotY(yaw):
-        // (sin y·cos p, −sin p, cos y·cos p) — the port's yaw convention matches Bond's
-        // (dx.atan2(dz), walker's aim loop).
-        [sy * cp, -sp, cy * cp]
+        let m = self.barrel_matrix();
+        let f = [m[2][0], m[2][1], m[2][2]];
+        let l = (f[0] * f[0] + f[1] * f[1] + f[2] * f[2]).sqrt().max(1e-9);
+        [f[0] / l, f[1] / l, f[2] / l]
     }
 
-    /// `TurretGuns[0xb]`'s muzzle offset through the barrel matrix, plus the placement origin
-    /// [M 0x1320d8:196-211 — the offset vector rotated by the gun object's matrix].
+    /// `TurretGuns[turret]`'s 12-byte muzzle offset through the drawn barrel matrix, plus its
+    /// translation [M GunImp_Update 0x1320d8:196-211 — the offset vector against the gun cel's
+    /// matrix rows (its +0x90/+0xA0/+0xB0) with the cel's +0xC0 translation added; :165-172
+    /// compose that cel as `base·RotY(yaw_s)·RotX(pitch_s)` — disassembly: `Concat(src, dst)`
+    /// writes `dst = src·dst` and `Mat_CopyRot` copies only rows 0-2, keeping the cel's own
+    /// translation row, so the cel rides the base translation]. The same matrix the draw uses
+    /// (`barrel_matrix`), so the beam and the bullet start on the drawn muzzle.
     pub fn muzzle(&self) -> V3 {
-        let d = self.barrel_dir();
-        let m = TURRET_GUNS[(self.turret as usize).min(TURRET_GUNS.len() - 1)].muzzle;
-        // The offset (0, 0, 1.71) is pure barrel-forward; the rotated form keeps the general shape.
-        let along = m[2];
-        [self.pos[0] + d[0] * along + m[0], self.pos[1] + d[1] * along + m[1], self.pos[2] + d[2] * along + m[2]]
+        let m = self.barrel_matrix();
+        let o = TURRET_GUNS[(self.turret as usize).min(TURRET_GUNS.len() - 1)].muzzle;
+        // The row-vector product o·M (columns of the rotation rows) + the translation row.
+        [
+            m[3][0] + m[0][0] * o[0] + m[1][0] * o[1] + m[2][0] * o[2],
+            m[3][1] + m[0][1] * o[0] + m[1][1] * o[1] + m[2][1] * o[2],
+            m[3][2] + m[0][2] * o[0] + m[1][2] * o[1] + m[2][2] * o[2],
+        ]
     }
 
     /// The mounted player pose the game writes every tick [M 0x1320d8:175-194]: the player
@@ -162,7 +199,9 @@ impl GunImp {
     /// The barrel matrix for the draw: base·RotY(yaw_s)·RotX(pitch_s) with the base
     /// translation [M 0x1320d8:165-172 — the gunimp object's matrix ← the stored base, ·RotY,
     /// copied to the barrel object, ·RotX]. Rows are the port's row-vector axes (row 2 = the
-    /// barrel forward, `barrel_dir`); the base is #225's identity-rotation placement, so the
+    /// barrel forward, `barrel_dir`); the base is #225's identity-quat placement [D placements;
+    /// every 0x34 disc row is yaw-only with a quat-consistent euler, so the composed yaw
+    /// `yaw_base + yaw_s` equals the quat base's yaw — placement_rot_census pins it per row], so the
     /// composed yaw is `yaw_base + yaw_s` [D placements; the general non-yaw-only base is not
     /// modelled — 0d carries exactly one mount].
     /// The base object's matrix: the placement turned by the smoothed yaw only [M GunImp_Update

@@ -472,14 +472,14 @@ pub fn load_mp(iso: &str, archive: &str, all: bool) -> Result<scene::Scene> {
 }
 
 fn load_inner(iso: &str, archive: &str, all: bool, mp: bool) -> Result<scene::Scene> {
-    load_impl(iso, archive, all, None, false, &[], mp, None, 1)
+    load_impl(iso, archive, all, None, false, &[], mp, None, 1, 0)
 }
 
 /// net-match-host: the ONLINE match load — the MP core from the negotiated settings (the host's
 /// choices + seed, equal on every machine) instead of the `--mp` default. The level build draws
 /// from the settings' seed (see `Scene::build`'s Rng note).
 pub fn load_mp_carry(iso: &str, archive: &str, all: bool, save: Option<&nf_game::player::RamSave>, settings: nf_game::mp::MpSettings) -> Result<scene::Scene> {
-    load_impl(iso, archive, all, save, false, &[], true, Some(settings), 1)
+    load_impl(iso, archive, all, save, false, &[], true, Some(settings), 1, 0)
 }
 
 /// mp-join-in-progress: the late joiner's headless fast-forward. Loads the
@@ -655,7 +655,7 @@ pub fn mp_late_join_catchup_joins(
 /// `--dev`: the same load with the dev view-model merge (folded 190-fix-dev2). Normal play never
 /// passes `dev = true`, so no extra archive is opened without the flag.
 pub fn load_dev(iso: &str, archive: &str, all: bool) -> Result<scene::Scene> {
-    load_impl(iso, archive, all, None, true, &[], false, None, 1)
+    load_impl(iso, archive, all, None, true, &[], false, None, 1, 0)
 }
 
 /// `load` pre-merged for the given weapon ids (`--give` at startup, the dev menu's lazy give):
@@ -663,7 +663,7 @@ pub fn load_dev(iso: &str, archive: &str, all: bool) -> Result<scene::Scene> {
 /// from their owning archive before the scene builds, so the weapon draws exactly as it does on a
 /// level that carries it (`weapon_assets::merge_weapon_assets`).
 pub fn load_weapons(iso: &str, archive: &str, all: bool, wids: &[u8]) -> Result<scene::Scene> {
-    load_impl(iso, archive, all, None, false, wids, false, None, 1)
+    load_impl(iso, archive, all, None, false, wids, false, None, 1, 0)
 }
 
 /// The sim catch-up cap (`NF_MAXTICKS`, default 4) — see the frame loop.
@@ -680,18 +680,18 @@ const NET_HASH_EVERY: u32 = 15;
 /// wrote, and `Player_InitWeapon` (0x1a7ef8) runs the per-level loadout switch over `Player_RamLoad`
 /// (0x1957a8). `None` = a cold load (the game's boot path; `Player_RamLoad`'s whole body is skipped).
 pub fn load_with_carry(iso: &str, archive: &str, all: bool, save: Option<&nf_game::player::RamSave>) -> Result<scene::Scene> {
-    load_impl(iso, archive, all, save, false, &[], false, None, 1)
+    load_impl(iso, archive, all, save, false, &[], false, None, 1, 0)
 }
 
 /// The carry-over load pre-merged for the given weapon ids (the dev menu's lazy give: the same
 /// warm reload the level transition runs, plus the given weapons' assets).
 pub fn load_with_carry_weapons(iso: &str, archive: &str, all: bool, save: Option<&nf_game::player::RamSave>, wids: &[u8]) -> Result<scene::Scene> {
-    load_impl(iso, archive, all, save, false, wids, false, None, 1)
+    load_impl(iso, archive, all, save, false, wids, false, None, 1, 0)
 }
 
 /// `--dev` level transition: the carry-over load with the dev view-model merge.
 pub fn load_with_carry_dev(iso: &str, archive: &str, all: bool, save: Option<&nf_game::player::RamSave>) -> Result<scene::Scene> {
-    load_impl(iso, archive, all, save, true, &[], false, None, 1)
+    load_impl(iso, archive, all, save, true, &[], false, None, 1, 0)
 }
 
 /// difficulty-effects: the front-end's launch path — the mission loads with the difficulty the
@@ -699,12 +699,21 @@ pub fn load_with_carry_dev(iso: &str, archive: &str, all: bool, save: Option<&nf
 /// [M C_SBNFDFCTY 0x216ca8:15, 0x1c7e78:25 boot default 2]). The plain `load*` wrappers keep 1
 /// (the old direct-load replay parity).
 pub fn load_with_carry_difficulty(iso: &str, archive: &str, all: bool, save: Option<&nf_game::player::RamSave>, difficulty: u32) -> Result<scene::Scene> {
-    load_impl(iso, archive, all, save, false, &[], false, None, difficulty)
+    load_impl(iso, archive, all, save, false, &[], false, None, difficulty, 0)
+}
+
+/// pickup-medal-gate: the campaign load with the `bonus[0]` word in play — the game's `bonus[]`
+/// global (`LS_LoadBonus` 0x1ce488 fills it from the save's BUNS block; nothing resets it per map
+/// [M Menu_SetBonus 0x1ff898's writers]) that `PlrStats_HasGoldMedal` 0x199a40 reads for
+/// `Pickup_Create`'s kind-6 gate [M 0x18dda0:93-95]. The front end passes the active profile's
+/// word; the plain `load*` wrappers keep 0 (the fresh-boot BSS state [L ee_start_05 0x2e1b88]).
+pub fn load_with_carry_medals(iso: &str, archive: &str, all: bool, save: Option<&nf_game::player::RamSave>, difficulty: u32, bonus: u64) -> Result<scene::Scene> {
+    load_impl(iso, archive, all, save, false, &[], false, None, difficulty, bonus)
 }
 
 /// difficulty-effects: the warm reload with a weapon-asset set at the selected difficulty.
 pub fn load_with_carry_weapons_difficulty(iso: &str, archive: &str, all: bool, save: Option<&nf_game::player::RamSave>, wids: &[u8], difficulty: u32) -> Result<scene::Scene> {
-    load_impl(iso, archive, all, save, false, wids, false, None, difficulty)
+    load_impl(iso, archive, all, save, false, wids, false, None, difficulty, 0)
 }
 
 /// The fail/death menu's Restart serve — the reload loop's `level_exit_restart` branch
@@ -803,7 +812,7 @@ pub fn warm_exit_save(sim: &scene::Sim) -> nf_game::player::RamSave {
         .with_tally(&sim.drones.progress)
 }
 
-fn load_impl(iso_path: &str, archive: &str, all: bool, save: Option<&nf_game::player::RamSave>, dev: bool, give: &[u8], mp: bool, mp_settings: Option<nf_game::mp::MpSettings>, difficulty: u32) -> Result<scene::Scene> {
+fn load_impl(iso_path: &str, archive: &str, all: bool, save: Option<&nf_game::player::RamSave>, dev: bool, give: &[u8], mp: bool, mp_settings: Option<nf_game::mp::MpSettings>, difficulty: u32, bonus: u64) -> Result<scene::Scene> {
     use nf_formats::{anim::Sequence, character, levelbin::LevelBin};
     use std::collections::HashMap;
     let mut t = std::time::Instant::now();
@@ -905,6 +914,61 @@ fn load_impl(iso_path: &str, archive: &str, all: bool, save: Option<&nf_game::pl
     // gadget lines — e.g. 0c's own EquipWeapon(0x58, 0) [M 0x1a8568] — own the Q-Worm on levels
     // whose session hashtable misses it). Snapshots: before the asset merge, after it, after g-021.
     let loadout_skins_pre_assets: std::collections::HashSet<u32> = level.skins.keys().copied().collect();
+    // cutscene-handback-sp-path: the level's cut-scene packs' ANIM SET. The game loads the pack a
+    // trigger names before its cut-scene: `LoadableLoad` 0x1d69e8 = AnimCacheDisable +
+    // `hashtable_delete_hashtype(0x4000000)` (the 0x04-top-byte sequences wipe) + `LoaderLoad(2,
+    // pack)` in a loop [M 0x1d69e8; LoaderProcess 0x1d4880 case 3 → AnimLoadFile 0x1bdf40:43-47
+    // registers first-wins, `hashtable_additem` only on a miss]. The pack sequences are where the
+    // cut-scene anims' root tracks live [D 06000501's windows 0x04000584/0x04000474 in 07900002.bin,
+    // 06000504's 0x04000477/0x04000551 in 07800002.bin, 060006d5's 0x040006f0/0x04000601 in
+    // 0790004a.bin — none of them in the level's 07F pack], so the runtime `Data`'s
+    // `anim_obj_matrix`/`anim_length` (drone.rs) resolve kind-2 cut-scene streams ONLY with these
+    // entries merged — without them the SP-path event-6 snapshot poses at the create identity.
+    // Merge rule = the census's `AnimWorld::for_level` (nis_handback_census.rs), the level's own
+    // entries first-wins (`or_insert` on every table); a pack sequence additionally skips any
+    // hashcode a bucket already holds, so an appended entry never shifts an existing bucket index
+    // or flips a `by_hash`/`seqs` resolution (Scene builds both after this). [S] unverified port
+    // choice where a hash would collide: the game wipes sequences and holds the PACK's during the
+    // scene (the 0x1d69e8 delete), the port keeps the union with the level's copy — no collision
+    // exists on the pinned rows [D]. Skins ride in AFTER the loadout snapshot above (the
+    // availability gate sees the level's own set only) and BEFORE the cut-scene-actor sweep below
+    // (a pack skin satisfies its ScriptPlayer placement locally — the pack IS the game's source
+    // for those actors). `share_datums` re-runs because the game's AnimPostLoadInit 0x1be1a8 runs
+    // per skin-file load (each pack's registration included).
+    let nn = &archive[3..8];
+    for pfx in ["078", "079", "07A"] {
+        let pack = format!("{pfx}{nn}.bin");
+        let Some(fe) = entries.iter().find(|e| e.name.eq_ignore_ascii_case(&pack)) else { continue };
+        let Ok(pd) = iso.read_bytes(bin.lba as u64 * 2048 + fe.offset as u64, fe.size as u64) else { continue };
+        let Ok(plb) = LevelBin::parse(&pd) else { continue };
+        for e in plb.entries.iter().filter(|e| e.kind == 6) {
+            if let Ok(s) = character::parse_skeleton(plb.data(&pd, e)) { skeletons.entry(s.id as u8).or_insert(s); }
+        }
+        for e in plb.entries.iter().filter(|e| e.kind == 5) {
+            if let Ok(s) = nf_formats::anim::Script::parse(plb.data(&pd, e)) { level_scripts.entry(s.hashcode).or_insert(s); }
+        }
+        for e in plb.entries.iter().filter(|e| e.kind == 4 && e.length >= 0x40) {
+            if let Ok(s) = Sequence::parse(plb.data(&pd, e)) {
+                if sequences.values().any(|v| v.iter().any(|q| q.hashcode == s.hashcode)) { continue; }
+                // The pack sequences ride the fix-cutscenes loader's SENTINEL key
+                // (`0x80 | skeleton`), NOT the gameplay bucket: the game's `LoadableLoad`
+                // 0x1d69e8 wipes the 0x4000000 hashtable and streams the pack's kind-4 rows,
+                // so they REPLACE the cache while the scene plays and NEVER join the level's
+                // per-skeleton sequence list — that list is order-sensitive gameplay data
+                // (`frame_of`'s `k % len` idle cycle, the skeleton-filtered `seq_index`). The
+                // sentinel key still reaches the by-hash map `Scene::seqs` (flattened over
+                // every bucket), the only reader a cut-scene's `Script_AnimStart` resolution
+                // and the kind-2 `anim_obj_matrix` pose use.
+                sequences.entry(s.skeleton | 0x80).or_default().push(s);
+            }
+        }
+        for e in plb.entries.iter().filter(|e| e.kind == 3) {
+            if let Ok(s) = character::parse_skin(plb.data(&pd, e), |id| skeletons.get(&id).map(|k| k.bones)) {
+                level.skins.entry(s.hashcode).or_insert(s);
+            }
+        }
+    }
+    nf_formats::level::share_datums(&mut level.skins);
     if weapon_wanted != weapon_assets::Wanted::None {
         // weapon_data once for the whole load (the EE initialiser run the merge needs is the same
         // one the DroneContext consumes below; `--dev` used to run it twice).
@@ -1307,6 +1371,8 @@ fn load_impl(iso_path: &str, archive: &str, all: bool, save: Option<&nf_game::pl
         // machine — the session's settings blob carries it); 0 keeps the pre-net constant.
         mp_seed: mp_settings.as_ref().map_or(0, |st| st.seed),
         mp_body_skins: std::array::from_fn(|slot| mp_settings.as_ref().map_or(0, |st| nf_game::mp::slot_skin(st, slot))),
+        // pickup-medal-gate: the `bonus[0]` word the kind-6 gate reads [M 0x199a40 → 0x18dda0:93-95].
+        bonus,
     };
     let mut scene = scene::Scene::build(&level, !all, &skeletons, sequences, Some(&drones), difficulty, mp_settings.as_ref());
     phase_mark("07 scene build (Scene::build)", t); t = std::time::Instant::now();
@@ -1961,6 +2027,31 @@ fn posed_vertices(scene: &scene::Scene, choice: Option<usize>, time: f32, opts: 
     scene.posed_vertices(choice, time, opts)
 }
 
+/// The destroyed-glist swap's draw side, per frame: the destroyed Destroy leaves' material centres
+/// as f32 bits (the draw filter's match key). The game's `Destroy_Smash` 0x12bb60 swaps the dead
+/// leaf's object onto the destroyed glist entry — the block-0x27 LOD pointer or the parsemap
+/// fallback slot [M 0x12bbb8 asm + 0x1d1b68]; the C5 leaves' fallback slot is undrawable [D
+/// lod_word −1] and the doorway ends open [L], so the dead leaf's static materials stop drawing.
+fn dead_destroy_centres(scene: &scene::Scene) -> Vec<[u32; 3]> {
+    let Some(sim) = scene.sim.as_ref() else { return Vec::new() };
+    scene.destroy_centres.iter()
+        // The pair carries the leaf's PLACEMENT index, not its slot in `props.destroy`.
+        .filter(|(_, pl)| sim.drones.props.destroy.iter().any(|d| d.placement == *pl && d.dead))
+        .map(|(c, _)| c.map(f32::to_bits))
+        .collect()
+}
+
+/// The hit-flash tweak's draw side: the live Destroy leaves whose colour pair is below white
+/// (`Renderer::destroy_tint`).
+fn destroy_tints(scene: &scene::Scene) -> Vec<([u32; 3], [u8; 2])> {
+    let Some(sim) = scene.sim.as_ref() else { return Vec::new() };
+    scene.destroy_centres.iter()
+        .filter_map(|(c, pl)| sim.drones.props.destroy.iter().find(|d| d.placement == *pl)
+            .filter(|d| !d.dead && d.colour != [0xff, 0xff])
+            .map(|d| (c.map(f32::to_bits), d.colour)))
+        .collect()
+}
+
 /// The snow quads facing the camera, plus the emitter particles (fix-world-fx: the same billboard
 /// pass — `Emitter_Draw` 0x17b708 path A draws both through `psiDrawParticleList`).
 fn snow_for(scene: &scene::Scene, cam: &Camera) -> Vec<scene::Vertex> {
@@ -2496,6 +2587,9 @@ fn shot(scene: &scene::Scene, cam: &Camera, out: &str, choice: Option<usize>, ti
     // spot the eye's cel walk doesn't resolve.
     let world = if std::env::var_os("NF_NO_PORTAL_CULL").is_some() { None } else { scene.sim.as_ref().map(|s| &s.world) };
     let vis_shot = r.cel_visibility(cam.pos.to_array(), vp_shot, world, door_closed.as_deref());
+    // The destroyed-glist swap's draw side: the dead Destroy leaves' centres (see Scene::destroy_centres).
+    r.destroy_dead = dead_destroy_centres(scene);
+    r.destroy_tint = destroy_tints(scene);
     // Objects are never room-culled (see the live path).
     r.update_skin(&queue, scene, choice, time, opts, None);
     r.set_char_light_centres(scene);
@@ -2654,6 +2748,12 @@ struct App {
     fe_clock: f32,
     /// The sim reported the mission's own end this frame (see `Drones::mission_end`).
     pending_mission_end: bool,
+    /// mission-results-page: the finished mission's progress layer, snapshotted at
+    /// `demo_results` — the results sub-pages' data source after the sim is gone (the game's
+    /// PlrMissionStats/ScoringTable are BSS globals the pages read until the next Mission_Init
+    /// [M 0x209938:36, 0x182270:65]). Consumed by the `menu_after` hook through
+    /// `FrontEnd::results_subpages_enter`.
+    results_progress: Option<nf_game::progress::Progress>,
     /// mp-match-end: the sim's MP machine reached the debriefing handover (`MP_Update` 0x184bd0
     /// case 4 → `MpGame::request_debriefing`): the finished match's debriefing board and its
     /// settings (`Sim::take_mp_debrief_request`), drained by `App::mp_results` after the tick.
@@ -3078,6 +3178,21 @@ impl App {
 
     /// After a menu action (key, click or hover): the page's sounds, the level it requested and its close.
     fn menu_after(&mut self) {
+        // mission-results-page: the results sub-pages' 0x4c builds — the game delivers the 0x44
+        // page change to the opened page, whose enter arm runs against the progress layer (the
+        // Stats page's GetScore(0) [M P_NFSTATS 0x209938:31-38]; the bonus page's
+        // Menu_GetLevelBonuses + the DAT_002e1c2c text gate [M P_NFBONUS 0x209670:14-18]). The
+        // port builds here, after the action, against the mission-end snapshot.
+        if self.results_progress.is_some() {
+            let sub = matches!(self.fe.as_ref().map(|fe| fe.page),
+                Some(menu::Page::Stats) | Some(menu::Page::NfBonus));
+            if sub {
+                let lang = self.lang.clone();
+                if let (Some(fe), Some(p)) = (self.fe.as_mut(), self.results_progress.as_mut()) {
+                    fe.results_subpages_enter(p, lang.as_ref());
+                }
+            }
+        }
         // profile-session: every action may move the session (a create, a codename load, a
         // results save) — keep the standing copy current so any manager drop hands it on.
         self.stash_profile_session();
@@ -3495,11 +3610,17 @@ impl App {
         // level load reads GameState+0x28; the direct-load wrappers keep the replay 1].
         let mp_settings = self.pending_mp_settings.take();
         let difficulty = self.selected_difficulty;
+        // pickup-medal-gate: the profile's `bonus[0]` word rides every front-end load — the game's
+        // `bonus[]` global is ONE store that survives every map load (only `LS_LoadBonus` 0x1ce488
+        // and the award path write it [M Menu_SetBonus 0x1ff898 callers]), so the kind-6 gate
+        // [M 0x18dda0:93-95] reads the save's medals on every level. No profile → the fresh-boot
+        // zero word [L ee_start_05 0x2e1b88].
+        let bonus = self.fe.as_ref().map_or(0, |fe| fe.bonus_bits());
         let job = async_load::Job::spawn(move || {
             if let Some(st) = mp_settings {
                 load_mp_carry(&iso, &name, all, save.as_ref(), st)
             } else if dev { load_with_carry_dev(&iso, &name, all, save.as_ref()) }
-            else { load_with_carry_difficulty(&iso, &name, all, save.as_ref(), difficulty) }
+            else { load_with_carry_medals(&iso, &name, all, save.as_ref(), difficulty, bonus) }
                 .map_err(|e| e.to_string())
         });
         self.async_load = Some(LevelLoad { job, next, ptp_return, ready: None });
@@ -3815,7 +3936,13 @@ impl App {
         // game's own commit runs at the page enter — the data lands before any page can read it).
         fe.flow.stack = vec![menu::ST_RUNNER];
         fe.flow.current_level = self.level_code;
-        fe.mission_ended(if complete { menu::Outcome::Complete } else { menu::Outcome::Failed }, menu::Stats::default());
+        // mission-results-page: the results data rides the mission's tracked tallies — the game's
+        // results page and its Stats sub-page read the live `PlrMissionStats` through GetScore's
+        // row refill [M 0x1984b0:66-84; P_NFRESULTS 0x208e78:77, P_NFSTATS 0x209938:36]. The old
+        // `menu::Stats::default()` zeroed the mission-end read.
+        let end_stats = self.scene.sim.as_ref().map(|s| mission_end_stats(&s.drones.progress));
+        fe.mission_ended(if complete { menu::Outcome::Complete } else { menu::Outcome::Failed },
+            end_stats.unwrap_or_default());
         // The completed page's enter runs against the live progress layer [M P_NFRESULTS 0x208e78
         // :77 GetScore(0) + :169 Menu_SetLevelBonus] — the fields the overlay draws
         // (front-end-chain). GameState+0x48 is BaseMap [M 0x182c60:68-70's clamp].
@@ -3834,6 +3961,13 @@ impl App {
                     // merge the sim's tally into the profile BEFORE the save prompt can run.
                     fe.sync_profile_progress(&sim.drones.progress);
                 }
+                // mission-results-page: the sub-pages' data source. The sim dies with the
+                // front-end load, but the game's PlrMissionStats/ScoringTable are BSS globals
+                // the pages keep reading (the Stats page's own GetScore(0) [M 0x209938:36]; the
+                // bonus page's Menu_GetLevelBonuses [M 0x209670:14]) until the next Mission_Init
+                // wipes them [M 0x182270:65]. The snapshot stands in; the menu_after hook builds
+                // the page the action opened through `FrontEnd::results_subpages_enter`.
+                self.results_progress = Some(sim.drones.progress.clone());
             }
         }
         self.fe = Some(fe);
@@ -3947,9 +4081,13 @@ impl App {
                     }
                 }
                 // psiMovieFinished [M 0x1082e8, polled by the page's 0x50]: while the real movie
-                // decodes the headless budget is held; its end is the finish.
-                match &self.movie {
+                // decodes the headless budget is held; its end is the finish. The no-decode
+                // player's BGFMVPlaying stand-in advances one frame per poll ([`Player::
+                // headless_advance`] — the opened PSS holds for its real length [M 0x1081a8 +
+                // 0x108060]).
+                match &mut self.movie {
                     Some(p) if p.code() == code && !p.is_looping() => {
+                        p.headless_advance();
                         if p.finished() { fe.intro_movie_finished(); } else { fe.intro_live = true; }
                     }
                     _ => {}
@@ -3992,7 +4130,13 @@ impl App {
                     }
                 }
             }
-            if self.movie.as_ref().is_some_and(|p| p.code() == code && p.finished()) {
+            // psiMovieFinished [M 0x1082e8]: the poll advances the no-decode stand-in one frame
+            // per call ([`Player::headless_advance`]).
+            let ended = match self.movie.as_mut() {
+                Some(p) if p.code() == code => { p.headless_advance(); p.finished() }
+                _ => false,
+            };
+            if ended {
                 // The 0x50 finish arm restarts the pair while it is down [M 0x20a1f0:34-39].
                 fe.music.movie_finished();
                 fe.attract_movie_finished();
@@ -5652,6 +5796,10 @@ impl App {
                 if scene_overlay_up(&self.scene, movie_frame.is_some()) { hud.append(&self.scene.script_overlay_hud(aspect)); }
                 g.renderer.lights = self.scene.frame_lights();
                 g.renderer.screen_aspect = g.config.width as f32 / g.config.height.max(1) as f32;
+                // The destroyed-glist swap's draw side: the dead Destroy leaves' centres
+                // (see Scene::destroy_centres) — the doorway ends open [L] once the leaf is dead.
+                g.renderer.destroy_dead = dead_destroy_centres(&self.scene);
+                g.renderer.destroy_tint = destroy_tints(&self.scene);
                 let fp_enc = std::time::Instant::now();
                 g.renderer.set_shards(&g.queue, &self.scene.shard_draws());
                 let enc = g.renderer.render(&g.device, &g.queue, &view, &g.depth, vp, vp_rot, draw_cam.pos.to_array(), self.anim_time as u32, &snow, &hud, movie_frame, if cutscene { Some(band) } else { None });
@@ -6015,6 +6163,7 @@ impl App {
             menu_clock: 0.0,
             fe_clock: 0.0,
             pending_mission_end: false,
+            results_progress: None,
             pending_mp_debrief: None,
             force_channel: None,
             cam_prev: None,
@@ -6513,6 +6662,21 @@ pub fn run() -> Result<()> {
             let shot_input = nf_game::player::Input { aiming: zoom_hold, zoom: zoom_hold, strafe: if strafe_hold { 1.0 } else { 0.0 }, ..Default::default() };
             // `--channels`: every switch channel on first (as K).
             if args.iter().any(|a| a == "--channels") { for c in 1..=255 { sim.drones.set_channel(c) } }
+            // `--set-channel N` (dev, headless too): raise one switch channel before the ticks — the window
+            // path raises it at frame 120; render checks of channel-driven draws need it here as well.
+            if let Some(c) = args.iter().position(|a| a == "--set-channel").and_then(|i| args.get(i + 1)).and_then(|v| v.parse::<u8>().ok()) { sim.drones.set_channel(c); }
+            // `--debris-probe x,y,z` (dev render aid): four blast-debris pieces (the MetalHash_132 meshes,
+            // `Debris_CreateEx` 0x1ac808's class-0x10 object) thrown up so they are back at that height on
+            // tick 60 under the debris gravity (`--frame 60`), so a shot shows their draw.
+            if let Some(v) = args.iter().position(|a| a == "--debris-probe").and_then(|i| args.get(i + 1)) {
+                let c: Vec<f32> = v.split(',').filter_map(|t| t.parse().ok()).collect();
+                if c.len() == 3 {
+                    for (k, &h) in nf_game::explode::METAL_HASH_132.iter().enumerate() {
+                        sim.drones.blast_debris.push(nf_game::shatter::Debris { model: h, pos: [c[0] + 0.3 * k as f32 - 0.45, c[1], c[2]],
+                            rot: [0.3 * k as f32, 0.5, 0.0], vel: [0.0, 0.0803, 0.0], spin: [0.0; 3], life: 100_000, fade: 0xff, e8: 1.0 });
+                    }
+                }
+            }
             // `--hold-npcs` (dev): guards freeze where they stand but stay shootable — aim render checks at them.
             if args.iter().any(|a| a == "--hold-npcs") { sim.drones.hold_npcs = true; }
             // `--bond x,y,z`: Bond starts exactly there (in the air he falls), instead of the level start.
@@ -6604,6 +6768,20 @@ pub fn run() -> Result<()> {
                 // channel on tick t (the state `Lock_Unlock` 0x1b0650 leaves), to render the swapped model.
                 if let Some((ut, uo)) = std::env::var("NF_UNLOCK_AT").ok().and_then(|v| v.split_once(':').and_then(|(a, b)| Some((a.parse::<u32>().ok()?, b.parse::<u16>().ok()?)))) {
                     if ut == t { for l in sim.drones.locks.iter_mut().filter(|l| l.out == uo) { l.unlocked = true; } }
+                }
+                // Render aid (destroy hit flash): `NF_DESTROY_COLOUR_AT=t:placement:byte` sets that Destroy
+                // leaf's colour pair on tick t (the state the laser's drain leaves), to render the flash;
+                // `t:placement:dead` marks the leaf dead (the destroyed-glist swap's draw side).
+                if let Some((dt, rest)) = std::env::var("NF_DESTROY_COLOUR_AT").ok().and_then(|v| v.split_once(':').map(|(a, b)| (a.to_string(), b.to_string()))) {
+                    if let (Ok(dt), Some((pl, by))) = (dt.parse::<u32>(), rest.split_once(':')) {
+                        if dt == t {
+                            if let Ok(pl) = pl.parse::<usize>() {
+                                for d in sim.drones.props.destroy.iter_mut().filter(|d| d.placement == pl) {
+                                    if by == "dead" { d.dead = true; } else if let Ok(by) = by.parse::<u8>() { d.colour = [by, by]; }
+                                }
+                            }
+                        }
+                    }
                 }
                 // Render aid (health-pane-fade): `NF_PANE_FADE=1` turns the pane-fade option on
                 // (`decay_gate`, PlayerSetting+0xB) from tick 1, so BL+0x8BC decays and the pane fades.
@@ -6991,6 +7169,30 @@ fn pause_stats(sim: &scene::Sim) -> menu::Stats {
     }
 }
 
+/// The mission's tracked tallies as the results page's stats (mission-results-page). The game's
+/// results screen and its Stats sub-page read the SAME counters through `PlrStat_GetScore`'s row
+/// refill [M 0x1984b0:66-84 — row0 +0x20 bond moments, row1 +0x0C dispatched, row2 +0x10
+/// disabled, row3 +0x14 surrendered, row5 +0x04/+0x08 shots, row7 +0x30 the 1/100-s elapsed,
+/// row8 +0x24 bonus pickups]. The accuracy percentage is the row-5 ratio the game rounds
+/// [M 0x1984b0's shared ratio block — round(min/count × 100)], full marks with no shots
+/// [M :74-78 — row+0x8 = row+0x0 when fired == 0].
+pub fn mission_end_stats(p: &nf_game::progress::Progress) -> menu::Stats {
+    let s = p.stats();
+    menu::Stats {
+        shots_fired: s.shots_fired,
+        shots_hit: s.shots_hit_enemy,
+        accuracy_pct: if s.shots_fired > 0 {
+            (s.shots_hit_enemy as f32 / s.shots_fired as f32 * 100.0).round() as u32
+        } else { 100 },
+        time_s: s.elapsed / 100, // +0x30 counts 1/100 s [M 0x1995a0:10-13]
+        bond_moves: s.bond_moments,
+        dispatched: s.dispatched,
+        subdued: s.disabled,
+        surrendered: s.surrendered,
+        bonus_pickups: s.bonus_pickups,
+    }
+}
+
 /// The mission-flow movie glue (the GameFlow state-6 briefing/outro and its decode-ahead), one call
 /// per redraw from `App::movie_tick` — a free function so the live tests drive the SAME code the
 /// window runs (the briefing once never showed, and no test ran this path). Returns false
@@ -7013,24 +7215,56 @@ pub fn mission_movie_glue(fe: &mut menu::FrontEnd, slot: &mut Option<movie::Play
         }
         match slot {
             Some(p) => {
-                // BGFMVPlaying follows the player: 1 while it decodes, 0 at the end of file —
-                // state 6 pops through the psiMovieFinished arm on the next main_tick
-                // [M 0x1082e8 + 0x1c98c8 case 6].
+                // BGFMVPlaying follows the player: 1 while the movie's frames are unconsumed,
+                // 0 once they are — state 6 pops through the psiMovieFinished arm on the next
+                // main_tick [M 0x1082e8 + 0x1c98c8 case 6]. On EVERY build the hold is the
+                // host's per-frame poll count to the movie's real length [M 0x1081a8's
+                // BGFMVPlaying = 1 + 0x108060's end-of-file clear; D the PSS's audio track]:
+                // the stand-in advances one frame per host call, then `finished` fires and the
+                // pop is the game's own — the `movies` feature's decoder thread only feeds the
+                // picture path and does not pace this decision (mission-outros-4).
+                // One player poll per flow tick (60 Hz), not per redraw: at 240 Hz the per-redraw poll
+                // ran the hold out in a quarter of the movie (the Double Cross outro cut out early).
+                while fe.flow.movie_polled < fe.flow.movie_clock {
+                    p.headless_advance();
+                    fe.flow.movie_polled += 1;
+                }
                 fe.flow.movie_playing = !p.finished();
             }
             None => {
                 let code = fe.flow.movie_code;
                 if code != 0 {
-                    match movie::Player::start(iso, code, movie_sfx_volume(fe)) {
-                        Ok(p) => {
-                            eprintln!("movie: playing {code:08x} (state 6)");
-                            fe.flow.movie_playing = true; // BGFMVPlaying = 1 [M 0x1081a8]
-                            *slot = Some(p);
+                    // mission-outros: the subtitle script rides the movie [M 0x1d6360's
+                    // SP_Create beside psiStartBackgroundMovie] — loaded once off 07000500.bin.
+                    if fe.flow.outro_subs.is_none() {
+                        fe.flow.outro_subs = menu::subtitle_track(iso, code);
+                        if let Some(t) = &fe.flow.outro_subs {
+                            eprintln!("movie: subtitle track {code:08x} → {} entries, length {}", t.entries.len(), t.length);
                         }
-                        Err(e) => {
-                            eprintln!("movie: {code:08x} not started: {e:?} — the headless countdown stands in");
-                            fe.flow.movie_playing = false; // an un-started movie: BGFMVPlaying == 0 [M 0x1082e8]
+                    }
+                    if !fe.flow.outro_hold_armed {
+                        match movie::Player::start(iso, code, movie_sfx_volume(fe)) {
+                            Ok(p) => {
+                                eprintln!("movie: playing {code:08x} (state 6)");
+                                fe.flow.movie_playing = true; // BGFMVPlaying = 1 [M 0x1081a8]
+                                *slot = Some(p);
+                            }
+                            Err(e) => {
+                                eprintln!("movie: {code:08x} not started: {e:?} — the headless countdown stands in");
+                                fe.flow.movie_playing = false; // an un-started movie: BGFMVPlaying == 0 [M 0x1082e8]
+                                // mission-outros: the no-movie hold runs the subtitle track's
+                                // length — the game holds state 6 on the retail PSS's life
+                                // [M 0x1082e8], and on a stubbed image (a test image's
+                                // /MOVIES/*.PSS are 0-byte [D]) it would pop at once; the
+                                // track's length keeps the outro up with its text. [S] the
+                                // stand-in duration — the retail timing (the track spans the
+                                // movie [D the parsed lengths 2695/2292]) — is the model.
+                                if let Some(t) = &fe.flow.outro_subs { fe.flow.movie_frames = t.length; }
+                                fe.flow.outro_hold_armed = true;
+                            }
                         }
+                    } else {
+                        fe.flow.movie_playing = false;
                     }
                 } else {
                     fe.flow.movie_playing = false;
@@ -7059,6 +7293,12 @@ pub fn mission_movie_glue(fe: &mut menu::FrontEnd, slot: &mut Option<movie::Play
             // (`briefing_plays_live`, bisected to the a2cdd771 merge).
             let code = fe.flow.level_to_load;
             if matches!((code >> 20) & 0xff, 0x71 | 0x73) {
+                // mission-outros: the subtitle script loads with the movie [M 0x1d6360's
+                // SP_Create beside psiStartBackgroundMovie — the early-started decoder still
+                // runs beside it].
+                if fe.flow.outro_subs.is_none() {
+                    fe.flow.outro_subs = menu::subtitle_track(iso, code);
+                }
                 match movie::Player::start(iso, code, movie_sfx_volume(fe)) {
                     Ok(p) => {
                         *slot = Some(p);

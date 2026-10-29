@@ -48,8 +48,8 @@ fn the_01_seam_scoped_pass_matches_the_flat_one() {
     let set = world.debug_straddle(root, a, b, nf_game::player::RADIUS);
     println!("root cel {root} straddle {set:?}");
     assert!(set.len() >= 2, "the seam's straddle set keeps the neighbouring cel too [M 0x1eac98's portal walk] (got {set:?})");
-    let (flat, flat_w) = world.capsule_push(a, b, nf_game::player::RADIUS, false);
-    let (scoped, scoped_w) = world.capsule_push_scoped(Some(root), a, b, nf_game::player::RADIUS, false);
+    let (flat, flat_w) = world.capsule_push(a, b, nf_game::player::RADIUS, false, [1.0e9, 1.0e9, 1.0e9]);
+    let (scoped, scoped_w) = world.capsule_push_scoped(Some(root), a, b, nf_game::player::RADIUS, false, [1.0e9, 1.0e9, 1.0e9]);
     // The per-component agreement: the game's per-cel pass resolves the same push the flat world
     // does when the straddle root is the game's relink (the order matches; the stray run the
     // coarse root tested first is out of the set).

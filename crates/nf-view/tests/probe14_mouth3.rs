@@ -34,7 +34,7 @@ fn probe14_mouth3_push_sweep() {
         while x <= 42.3 {
             let a = [x, 3.15, lane_z];
             let b = [x, 2.95, lane_z];
-            let (push, walkable) = world.capsule_push_scoped(None, a, b, 0.55, true);
+            let (push, walkable) = world.capsule_push_scoped(None, a, b, 0.55, true, [1.0e9, 1.0e9, 1.0e9]);
             if push[0].abs() > 1e-5 || push[1].abs() > 1e-5 || push[2].abs() > 1e-5 {
                 println!("x {x:5.2}: push [{:.5}, {:.5}, {:.5}] walkable {walkable}", push[0], push[1], push[2]);
             }
@@ -64,7 +64,7 @@ fn probe14_mouth3_push_sweep() {
         while x <= 42.3 {
             let a = [x, 3.15, 65.45];
             let b = [x, 2.95, 65.45];
-            let (push, _) = world.capsule_push_scoped(None, a, b, 0.55, true);
+            let (push, _) = world.capsule_push_scoped(None, a, b, 0.55, true, [1.0e9, 1.0e9, 1.0e9]);
             if push[0].abs() > 1e-5 || push[1].abs() > 1e-5 || push[2].abs() > 1e-5 {
                 if first_block.is_none() { first_block = Some(x); first_push = push; }
             }
@@ -142,7 +142,7 @@ fn probe14_who_blocks_6545() {
     let (instances, _) = lv.instances(false);
     let scene = nf_view::load(&iso, "07000014.bin", false).unwrap();
     let world = &scene.sim.as_ref().unwrap().world;
-    let (push, _) = world.capsule_push_scoped(None, [41.2, 3.15, 65.45], [41.2, 2.95, 65.45], 0.55, true);
+    let (push, _) = world.capsule_push_scoped(None, [41.2, 3.15, 65.45], [41.2, 2.95, 65.45], 0.55, true, [1.0e9, 1.0e9, 1.0e9]);
     println!("sim world push at (41.2, 65.45): {push:?}");
     drop(scene);
     println!("== per-instance push at (41.2, y 3.15/2.95, z 65.45), r 0.55 ==");
@@ -152,7 +152,7 @@ fn probe14_who_blocks_6545() {
         let tris: Vec<[[f32; 3]; 3]> = c.triangles().into_iter().map(|t| t.map(|p| transform(&m, p))).collect();
         if !tris.iter().any(|t| t.iter().any(|p| p[0] > 40.5 && p[0] < 42.5 && p[1] > 2.0 && p[1] < 4.5 && p[2] > 63.5 && p[2] < 67.0)) { continue; }
         let w = nf_game::world::CollisionWorld::from_triangles(tris.clone());
-        let (push, _) = w.capsule_push_scoped(None, [41.2, 3.15, 65.45], [41.2, 2.95, 65.45], 0.55, true);
+        let (push, _) = w.capsule_push_scoped(None, [41.2, 3.15, 65.45], [41.2, 2.95, 65.45], 0.55, true, [1.0e9, 1.0e9, 1.0e9]);
         if push[0].abs() > 1e-5 || push[1].abs() > 1e-5 || push[2].abs() > 1e-5 {
             let o = &lv.maps[inst.map].objects[inst.object];
             println!("pusher plc #{pi} \"{}\" kind {:#x} glist {:#x} push {push:?}", o.name.trim(), inst.placement.flags & 0xffff, o.flags);

@@ -107,11 +107,16 @@ fn the_under_bathhouse_guards_shout_lines_key_on_through_the_real_path() {
     }
 
     // The tunnel route's order: Bond reaches the yard plate with ch 0x66 still clear, steps on it.
+    // He stands ON the plate (the AABB centre, inside [D placement 389's volume 5.34..6.73]) — the
+    // player's own walk-over posture. The old `-1.0` drop buried him below the stair lip: the trio
+    // woke, hunted and camped in CombatNoSight 0x5c, where no shout site re-enters (the sites are
+    // the FirstAttack / AimStandFire / CombatNoMove ENTERs [M 0x148010:94 / 0x13eac0's callers]) —
+    // the shout never rolled regardless of the RNG stream position.
     let c = {
         let sim = scene.sim.as_mut().unwrap();
         let c = sim.drones.triggers.iter().find(|t| t.out == 0x81).unwrap().centre();
         assert!(!sim.drones.channels.on(0x66), "the wire-gap chain has not fired on this route");
-        [c[0], c[1] - 1.0, c[2]]
+        c
     };
     {
         let sim = scene.sim.as_mut().unwrap();
@@ -134,7 +139,10 @@ fn the_under_bathhouse_guards_shout_lines_key_on_through_the_real_path() {
     // are watched every tick (a shout node lives ~1 s).
     {
         let mut seen = std::collections::HashSet::new();
-        for _ in 0..600 {
+        // The trio's first shout roll lands ~550-800 ticks after the wake on the game-true
+        // timeline (the probe: plays at +552/+786 post-teleport [L 2026-10-28]); 600 closed
+        // before the roll on a shifted preamble.
+        for _ in 0..1200 {
             let sim = scene.sim.as_mut().unwrap();
             for id in sim.drones.audio.live_ids() { if (111..=115).contains(&id) && !pool_hits.contains(&id) { pool_hits.push(id); } }
             tick(&mut scene, &mut snd, &mut seen);
@@ -182,21 +190,54 @@ fn the_bathhouse_floor_guards_shout_lines_key_on_too() {
     }
     assert!(scene2.sim.as_ref().unwrap().drones.channels.on(0x15), "plate #341 raised ch 0x15");
     // The game's rule: the group's FIRST sight speaks the seen-line (entry 0x21 — silent for vt 1 on
-    // this level [M 0x13f1d0]); the shout fires on a LATER Attack enter. Walk Bond away (out of sight)
-    // and back every 300 frames so the guards re-engage.
+    // this level [M 0x13f1d0]); the shout fires at an Attack enter (FirstAttack / AimStandFire /
+    // CombatNoMove [M 0x13eac0's callers]). The old choreography parked Bond ON the plate and
+    // alternated him with the bunker plate — but the plate sits in a 0.5-visibility AI volume [L
+    // fresh-sim probe: Bond's +0x22C light factor reads 0.50 at the plate, 1.0 at the bunker plate]:
+    // a standing Bond computes OpponentVisibility 0.61 for the nearest guard (7.6 units, in cone:
+    // (0.7 − (7.6−16)/16)·cone·0.5) — the game zeroes his +0x230 when the fresh value is < 0.7 [M
+    // DroneVision_ProcessDroneSight 0x176a28: the `0.7 <= fresh → skip, else +0x230 = 0` arm] and
+    // SeekOpponentLOS returns before any ray [M 0x175cb8:18-20 `if (+0x230 < 0.7) return 0`] — the
+    // game's own guard does NOT spot a player standing on this plate. The player's play is to CLOSE
+    // on the guards: inside 2.0 units OpponentVisibility returns 1.0 through CanSeeObject [M
+    // 0x175af0:16-25 — the `+0x1a0 < 2.0` arm], the ray runs, the sight acks after the reaction
+    // window [M 0x176a28:216-223 + 0x175ef0] and the FirstAttack ENTER rolls the shout [M
+    // 0x148010's AttackTalk site]. So Bond closes on each of the five in turn (a player advancing
+    // into the ambush), standing with each long enough for the reaction window [L the port's
+    // reaction_time 59 ticks for these 05..0a-level guards].
     {
         let mut seen2 = std::collections::HashSet::new();
-        for k in 0..4 {
-            let far = k % 2 == 1;
+        'guards: for round in 0..5 {
+            let target = {
+                let sim = scene2.sim.as_ref().unwrap();
+                (0..sim.drones.list.len()).filter(|&i| {
+                    let d = &sim.drones.list[i];
+                    d.present && d.switch_channel == 0x15 && d.enabled && !d.corpse
+                }).min_by(|&a, &b| {
+                    let d2 = |i: usize| {
+                        let p = sim.drones.list[i].pos; let b = sim.bond.pos;
+                        (p[0] - b[0]) * (p[0] - b[0]) + (p[2] - b[2]) * (p[2] - b[2])
+                    };
+                    d2(a).total_cmp(&d2(b))
+                })
+            };
+            let Some(target) = target else { break 'guards };
             {
                 let sim = scene2.sim.as_mut().unwrap();
-                sim.bond.pos = if far { [-47.0, 6.0, -23.3] } else { c2 };
+                let gp = sim.drones.list[target].pos;
+                // 1.5 units off the guard at his floor height: inside the [M 0x175af0] 2.0 arm.
+                sim.bond.pos = [gp[0] + 1.5, gp[1], gp[2]];
             }
-            for _ in 0..300 {
-                let sim = scene2.sim.as_mut().unwrap();
+            // master's window [L probe: the roll can land +552/+786 after the wake; 450 closed
+            // early on a shifted preamble]: patience only — the loop breaks on the first hit.
+            for _ in 0..1200 {
+                let sim = scene2.sim.as_ref().unwrap();
                 for id in sim.drones.audio.live_ids() { if (111..=115).contains(&id) && !pool_hits2.contains(&id) { pool_hits2.push(id); } }
                 tick(&mut scene2, &mut snd2, &mut seen2);
+                if !pool_hits2.is_empty() { break 'guards; }
             }
+            eprintln!("[voices] round {round}: closed on guard {target}, no shout yet (states {:?})",
+                scene2.sim.as_ref().unwrap().drones.list.iter().filter(|d| d.present && d.switch_channel == 0x15).map(|d| d.state).collect::<Vec<_>>());
         }
     }
     assert!(!pool_hits2.is_empty(), "the bathhouse-floor guards also shout through the real path; hits {pool_hits2:?}");

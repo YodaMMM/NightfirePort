@@ -317,6 +317,27 @@ pub struct DroneContext {
     /// mp-character-data: the 16 animation-set descriptors (ACTION.ELF 0x2b91b0..0x2b9430) [D] —
     /// the ids `mp_body_pose` returns.
     pub mp_anims: Option<nf_formats::mpanim::MpAnimSets>,
+    /// pickup-medal-gate: the game's `bonus[0]` word (0x2e1b88, the player-0 u64 the save's BUNS
+    /// block carries [M LS_LoadBonus 0x1ce488 → Menu_SetBonus(…, 0)]) — the state
+    /// `PlrStats_HasGoldMedal` 0x199a40 reads for `Pickup_Create`'s kind-6 gate [M 0x18dda0:93-95].
+    /// The front end passes the active profile's word; 0 = the fresh-boot BSS state [L ee_start_05
+    /// 0x2e1b88 all zero].
+    pub bonus: u64,
+}
+
+impl DroneContext {
+    /// `Mission_BaseMapHCode()` 0x1830a0 + `PlrStats_HasGoldMedal` 0x199a40 for the build's level:
+    /// the `LEVELS` row's `mission` hash for `level_id` — the same lookup `Mission_Init` 0x182270
+    /// runs over the game's 24-record mission table (the port's `crate::mission::LEVELS` [L
+    /// ee_start_05.bin 0x2a4350], SP arm `MPSettings+0x384 == 0` → `BaseMap` [M 0x1830a0:3-5]) —
+    /// then the gold bit over `bonus`. A level with no row (the front end 0x07000048, the MP maps)
+    /// plays BaseMap −1 → no RewardsTable row → no medal → the gate stays shut, as the game's.
+    pub fn has_gold_medal(&self, level_id: u32) -> bool {
+        match nf_game::mission::LEVELS.iter().find(|l| l.level == level_id) {
+            Some(l) => nf_game::progress::has_gold_medal(self.bonus, l.mission),
+            None => false,
+        }
+    }
 }
 
 /// mp-combat-weapons: one released round as the local fire pipeline produced it — what the
@@ -2553,7 +2574,7 @@ impl Sim {
         // [M `GunImp_Update` 0x1320d8:119-131]. Bond stands — the port zeroes his input for the
         // rest of the tick (the game's disabled player runs only the imp).
         let (mut input, trigger, reload, use_key) = if self.drones.props.gunimps.iter().any(|g| g.active) {
-            self.drones.gunimp_tick(&self.weapons, input.look, input.turn, trigger || input.fire, use_key, &mut self.bond);
+            self.drones.gunimp_tick(&self.weapons, &self.world, input.look, input.turn, trigger || input.fire, use_key, &mut self.bond);
             // The dismount (`GunImp_Deactivate` 0x132c18): `AnimObj[99] = AnimObj[100]` — the
             // weapon saved by the mount's `Player_WeaponNone` is requested back (the climb
             // dismount's carry).
@@ -2879,8 +2900,17 @@ impl Sim {
             // not read by the port — a live check item].
             let bot_capsules: Vec<([f32; 3], [f32; 3], f32)> = {
                 let bp = self.bond.pos;
+                // CORPSES NEVER COLLIDE: `SetAsDead` 0x14a2f0:9 sets +0x4F8&0x200 at death, and
+                // `NDrone2_DoCollision` 0x149ec8:11 returns 0 (collision OFF) whenever that bit is
+                // set — on every level but the special 0x700004a — and `NDrone2_Collision` 0x140e90:64
+                // gates the same bit (docs/fields/drone.md, the 0x4F8&0x200 row, census-verified).
+                // The game's dead bot presents no capsule for the player's Jointy query: Bond walks
+                // over bodies. Without this gate the walkreal_07000001 escort wedge reproduces —
+                // Bond lands on a fresh corpse's capsule top (pos+0.4), the push holds him airborne
+                // (grounded never settles), every nav leg dies at the cap, and the escort waits for
+                // a Bond who can no longer reach the [M 0x15eda8] release band.
                 self.drones.list.iter()
-                    .filter(|x| x.enabled && ((x.pos[0] - bp[0]).powi(2) + (x.pos[1] - bp[1]).powi(2) + (x.pos[2] - bp[2]).powi(2)) < 2.0 * 2.0)
+                    .filter(|x| x.enabled && !x.corpse && ((x.pos[0] - bp[0]).powi(2) + (x.pos[1] - bp[1]).powi(2) + (x.pos[2] - bp[2]).powi(2)) < 2.0 * 2.0)
                     .map(|x| ([x.pos[0], x.pos[1] + 0.4, x.pos[2]], [x.pos[0], x.pos[1] - 0.6, x.pos[2]], 0.4f32))
                     .collect()
             };
@@ -5745,6 +5775,19 @@ impl Sim {
     }
 
 
+    /// The base matrix of the live animated script object from `src` on `skin` (its owning SP's matrix at
+    /// the start - see `Obj::Anim::base`); the same newest-first walk as `script_anim`.
+    pub fn script_anim_base(&self, src: (u32, u8), skin: u32) -> Option<Mat4> {
+        let hidden = self.drones.scripts.hidden_stream_objects();
+        self.drones.scripts.objects.list.iter().enumerate().rev().find_map(|(i, o)| {
+            if hidden.contains(&i) { return None; }
+            match o {
+                Some(nf_game::nis::Obj::Anim { skin: k, src: o, base, .. }) if *o == src && *k == skin => Some(*base),
+                _ => None,
+            }
+        })
+    }
+
     /// The world matrix of the live script entity `hash` from `src`.
     pub fn script_entity(&self, src: (u32, u8), hash: u32) -> Option<Mat4> { self.script_entity_k(src, hash, 0) }
 
@@ -6138,6 +6181,16 @@ pub struct Scene {
     /// The 0x2E locks' placement matrices (`Lock::create` order): where the keypads' posed slots
     /// draw the placed object or its LOD variant.
     pub lock_matrices: Vec<Mat4>,
+    /// The 0x3B gated dynamic objects' placement matrices (`WorldObjects::create` order — every
+    /// 0x3b placement, placement order): where the posed slots draw them, collapsed once the sim
+    /// deletes the object (`DynamicObject_Update` 0x18d3b8:26 mode-0 armed-B → obj+0xFE bit 0 →
+    /// the delete pass; 0700001b's control-room glass dies with ch 10, Drake's gate).
+    pub dynobj_matrices: Vec<Mat4>,
+    /// The rotors (0x71, `WorldObjects::create`'s order — every 0x71 placement): the placement
+    /// rotation and translation. `rotor_init` 0x18f4b8 creates the object at the placement ROT
+    /// (`control_create_object(0x20, pos, rot)`) and `rotor_update` 0x18f568 adds ROT·FRAME_RATE_MUL
+    /// to obj+0x50 each spinning tick, so the drawn rotation is the placement ROT + the sim's angle.
+    pub rotor_placements: Vec<([f32; 3], [f32; 3])>,
     /// The 0x34 placements the build gave posed slots (the camera slots follow them; the sim's
     /// gunimp list may be emptied by the MP Gun Emplacements setting, the slot layout is not).
     pub gunimp_placements: usize,
@@ -6151,6 +6204,12 @@ pub struct Scene {
     /// (`misc_static_sweep` in `build`). Zero for a kind the census says the level carries means the
     /// model is missing (see docs/models/misc.md for the per-kind creator evidence).
     pub misc_drawn: BTreeMap<u8, usize>,
+    /// The drawn 0xe1 destroy leaves' (world centre, destroy placement) pairs — the per-frame
+    /// dead gate's input (`destroyed-glist swap's draw side`: a dead leaf's materials stop
+    /// drawing [M Destroy_Smash 0x12bb60's SetGList swap]; the C5 leaves swap to an undrawable
+    /// slot [D lod_word −1] and the doorway ends open [L]). Consumed by lib.rs's per-frame
+    /// `Renderer::destroy_dead` feed; the centre matches the material's cull sphere by bits.
+    pub destroy_centres: Vec<([f32; 3], usize)>,
     /// Per level object hashcode: whether its glist flags carry 0x800 (the character-lighting bit
     /// `Control_SetGList` 0x134960 merges into obj+0xF0). fix-render2: decides the ambient dim for
     /// the drawn script entities (the truck's nine objects carry 0x8880 [L ee_start_05.bin
@@ -6160,6 +6219,17 @@ pub struct Scene {
     /// Bug 3 diagnostic: objects with collision, for the "name what I'm touching" overlay (`C` key). Each entry is
     /// the object's name and its world-space AABB (lo, hi), built from the instance matrix + the object's bounds.
     pub colliders: Vec<(String, [f32; 3], [f32; 3])>,
+    /// cutscene-door-dup: the main-map door placements whose object's glist flags (celglist+0x44 =
+    /// MapObject.flags) carry 0x40000 — `Control_SetGList` 0x134960 clears obj+0xF8's bit 0x10 for
+    /// such objects, and `Script_CameraStart` 0x1d9140 renders ONLY camera 4 while a scene runs
+    /// (viewer+0x28 = 4 → object_display_mask 0x10 [M View_CaptureScene 0x1e6df0 / build_alloc_viewer
+    /// 0x1c9378]), so both draw walks (View_AddObjects 0x1e62d8:33, View_AddForcedObjects
+    /// 0x1e5fb8:79) skip them: the placed doors are invisible during a cut-scene. Keyed by
+    /// placement index; the palette pass collapses their slots while the script camera renders.
+    pub door_scene_hidden: std::collections::HashSet<usize>,
+    /// Searchlight LOD slots: slot `parts.len() + k` draws the LOD (broken) mesh of part `sl_lod[k]`,
+    /// shown iff that part's `lod_next` (Control_NextLOD) is set.
+    pub sl_lod: Vec<u16>,
 }
 
 /// `psiPreGameRun` (0x11e2e8, read): per level the fog colour and `Ps2Far1`; `FogOn` only on these levels.
@@ -6240,7 +6310,7 @@ fn pool_replay(groups: &mut Groups, rec: &PoolRecord, attachment: Option<u32>) {
 /// this way [D the level-bin script; the parked 0xF0 placements sit 10 units east, inside the east
 /// wall]. Scans `level.nis` sorted by hashcode (deterministic); pack scripts (07x00008) are not in
 /// the level archive and fall back to the runtime's no-slot push (takeable, by-hash mesh).
-fn script_pickup_reservations(level: &Level, weapons: &nf_formats::weapon::WeaponData, models: &std::collections::HashMap<u32, nf_game::pickup::Model>, level_id: u32) -> (Vec<nf_game::pickup::Pickup>, Vec<((u32, u8), usize)>) {
+fn script_pickup_reservations(level: &Level, weapons: &nf_formats::weapon::WeaponData, models: &std::collections::HashMap<u32, nf_game::pickup::Model>, level_id: u32, has_gold_medal: bool) -> (Vec<nf_game::pickup::Pickup>, Vec<((u32, u8), usize)>) {
     let mut out = Vec::new();
     let mut slots = Vec::new();
     let mut hashes: Vec<u32> = level.nis.keys().copied().collect();
@@ -6260,7 +6330,7 @@ fn script_pickup_reservations(level: &Level, weapons: &nf_formats::weapon::Weapo
                 [key[0], key[1], key[2]], [0.0; 3], p(0) as u16, p(1) as u16,
                 nf_game::pickup::Pickup::create_rounds_override(level_id, p(1) as u16, p(2) as u16 as i16),
                 p(3) as u16, p(4) as u16, p(5) as u16, 0, obj_.hashcode,
-                nf_game::pickup::Model { centre: obj_.centre, radius: obj_.radius }, weapons, models) else { continue };
+                nf_game::pickup::Model { centre: obj_.centre, radius: obj_.radius }, weapons, models, has_gold_medal) else { continue };
             pk.label = 0; // [M 0x1d8c1c delay slot `sw $zero, 0x20($sp)`]: the SCRIPT arm passes label 0 —
                           // unlike the placements, Script_CreateEntity never reads record+0x44 (param 6).
                           // pickups-g029: the old p(6) stood in for the placement rule.
@@ -6756,6 +6826,7 @@ impl Scene {
     weapons: &nf_formats::weapon::WeaponData,
     level_id: u32,
     models: &std::collections::HashMap<u32, nf_game::pickup::Model>,
+    has_gold_medal: bool,
 ) -> Option<nf_game::pickup::Pickup> {
     let param = |idx: u32| -> u32 { p.params.iter().find(|(i, _)| *i == idx).map(|(_, v)| *v).unwrap_or(0) };
     let type_ = param(0) as u16;
@@ -6790,7 +6861,7 @@ impl Scene {
         }
         (false, _) => {
             let (model, bounds, obj) = obj?;
-            let mut p2 = nf_game::pickup::Pickup::create_placed(p.translation, p.rotation, type_, id, rounds, switch_channel, sound, respawn as u16, lifetime, model, bounds, weapons, models)?;
+            let mut p2 = nf_game::pickup::Pickup::create_placed(p.translation, p.rotation, type_, id, rounds, switch_channel, sound, respawn as u16, lifetime, model, bounds, weapons, models, has_gold_medal)?;
             p2.obj = Some(obj);
             p2
         }
@@ -6945,12 +7016,12 @@ pub fn build(level: &Level, cels_only: bool, skeletons: &HashMap<u8, Skeleton>, 
             let mp_row = mp.map(nf_game::mp::equip::weapon_row);
             let placed_pickups: Vec<nf_game::pickup::Pickup> = level.maps[mm].placements.iter()
                 .filter(|p| p.flags & 0xff == 0xf0)
-                .filter_map(|p| Self::placed_pickup_from_placement(level, p, mm, mp_row.as_ref(), &placed_weapons, drones.map(|d| d.level_id).unwrap_or(0), &hoist_models))
+                .filter_map(|p| Self::placed_pickup_from_placement(level, p, mm, mp_row.as_ref(), &placed_weapons, drones.map(|d| d.level_id).unwrap_or(0), &hoist_models, drones.map_or(false, |d| d.has_gold_medal(d.level_id))))
                 .collect();
             // fix-safe08: the scripts' obj_type-0xF0 Entity spawns reserve slots after the placed
             // pickups, in the SAME order the sim build appends them (the draw slot k must equal the
             // sim's pickups[k]).
-            let (reserved, _render_slots) = script_pickup_reservations(level, &placed_weapons, &hoist_models, drones.map(|d| d.level_id).unwrap_or(0));
+            let (reserved, _render_slots) = script_pickup_reservations(level, &placed_weapons, &hoist_models, drones.map(|d| d.level_id).unwrap_or(0), drones.map_or(false, |d| d.has_gold_medal(d.level_id)));
             let reserved_len = reserved.len();
             let mut placed_pickups = placed_pickups;
             placed_pickups.extend(reserved);
@@ -6964,6 +7035,11 @@ pub fn build(level: &Level, cels_only: bool, skeletons: &HashMap<u8, Skeleton>, 
         let mut ladders_drawn = 0usize; // the sweep below counts the drawn ladder instances (fix-ladder2)
         let mut grapple_hooks_drawn = 0usize; // the sweep below counts the drawn grapple-point meshes (fix-grapple-hook)
         let mut misc_drawn: BTreeMap<u8, usize> = BTreeMap::new(); // models-misc static dynamic entities
+        // The drawn 0xe1 destroy leaves' (world centre, placement) pairs — the per-frame dead gate's
+        // input (destroyed-glist swap's draw side: the dead leaf's materials stop drawing; see the
+        // NOTE at the MISC_KINDS sweep). The centre is the exact float triple the group's cull sphere
+        // carries, so the draw filter matches it by bits.
+        let mut destroy_centres: Vec<([f32; 3], usize)> = Vec::new();
         // The level's room cels (see `Cel`): parsed before the draw so the static 0x800 world objects can snap
         // to their cel's ambient exactly as the game's link does at level start (`build_LinkToRoom` 0x1c9680 →
         // the snap in `control_link_object_to_cel` 0x1346b8; channels are all 0 here, so triple 1 reads).
@@ -7692,7 +7768,12 @@ pub fn build(level: &Level, cels_only: bool, skeletons: &HashMap<u8, Skeleton>, 
                 // sg5-laser-draw: the weapon laser sight (`Player_LaserPointer` 0x1a65d8) — the beam
                 // sprite 0x2000133 and the red dot 0x2000132 [M ll. 189-205, the `Player_InitWeapon`
                 // 0x1a7ef8 objects]; both follow `Sim::laser_sight`.
-                (TRACER_SLOTS + 5, 0x0200_0133), (TRACER_SLOTS + 6, 0x0200_0132)] {
+                // gunimp-beam: the mounted laser's beam quad `lazer_Big` (0x20005cd) and its impact
+                // flare `taser_muzzle` (0x200026e) — the game's own draw for weapon 0x67
+                // [M GunImp_Update 0x1320d8:394-407 `PositionBeam(muzzle, ray hit)`; D 0700000d
+                // resolves both, the quad extending along -z like the watch laser's sprite].
+                (TRACER_SLOTS + 5, 0x0200_0133), (TRACER_SLOTS + 6, 0x0200_0132),
+                (TRACER_SLOTS + 7, 0x0200_05cd), (TRACER_SLOTS + 8, 0x0200_026e)] {
                 if drones.is_some() {
                     if let Some(&(bmap, bobj)) = level.by_hash.get(&hash) {
                         let binst = Instance { map: bmap, object: bobj, matrix: anim::quat_trans_to_mat([0.0, 0.0, 0.0, 1.0], [0.0; 3]), placement: level.maps[level.main_map().unwrap_or(0)].placements.first().cloned().unwrap_or_default() };
@@ -7786,6 +7867,9 @@ pub fn build(level: &Level, cels_only: bool, skeletons: &HashMap<u8, Skeleton>, 
                 // models from `EffectInfo[mat & 0x3f]+0x74` (nf_game::shatter::EFFECT_INFO) — they share
                 // the debris slots (slot k ≥ effects.debris.len() poses breaks.shatter.debris).
                 debris_meshes.extend(nf_game::shatter::EFFECT_INFO.iter().map(|e| e.model).filter(|m| *m != 0));
+                // The blast debris (`Explode_Update` 0x17c350 → `Debris_CreateEx` 0x1ac808, the same class-0x10
+                // object): `MetalHash_132` / `StoneHash_133` meshes; their slots follow the breakable pieces.
+                debris_meshes.extend(nf_game::explode::METAL_HASH_132.iter().chain(nf_game::explode::STONE_HASH_133.iter()).copied());
                 let mut casing_meshes: Vec<u32> = surf.ammo.casing_mesh.iter().copied().filter(|m| *m != 0).collect();
                 // The gas puffs (`Gas_Init` 0x1aacc8): one draw slot per pool index for each mesh a puff can carry —
                 // SMOKE_QUAD (muzzle smoke, searchlight smoke, trails) and every `EffectInfo` gas mesh (the impact
@@ -7999,8 +8083,11 @@ pub fn build(level: &Level, cels_only: bool, skeletons: &HashMap<u8, Skeleton>, 
         //   sets obj+0xF0 bit 0x10 when facing away; reached whenever a level places type-0xd5 objects —
         //   07000041 does [D levels.md census]. The port's per-triangle backface cull of the placed glist
         //   is the same job at draw time) · 0xD8 RB_Create 0x1d6bf0:52 (rigid bodies evolve obj+0x90 once
-        //   disturbed; at rest = placement) · 0xE1 Destroy_Create 0x12c318:23 (death keeps the object drawn:
-        //   Destroy_Smash 0x12bb60 sets class 1 and only swaps to the block-0x27 LOD variant when one exists)
+        //   disturbed; at rest = placement) · 0xE1 Destroy_Create 0x12c318:23 (death hides the
+        //   mesh: Destroy_Smash 0x12bb60 swaps the glist to tag+0x00 — the LOD pointer or the
+        //   next 0x50 glist slot, undrawable for the C5 leaves [L]; see destroy_object_state
+        //   below — the pre-2026-10-28 "death keeps the object drawn" reading missed the swap's
+        //   always-nonzero argument [M 0x12bbb8 asm + 0x1d1b68])
         //   · 0xE3 Flicker_Create 0x1acb00:49 · 0xFA ThirdIcon_Create 0x197070:33 / 0xFD CamSubject_Create
         //   0x1bc5d8:17 / 0x4A Apocalypse_Create 0x18dcc0:20 — these attach whatever glist the placement
         //   carries; `psiDrawObjectMatrix` no-ops on an empty one, so only objects with gfx batches draw.
@@ -8087,7 +8174,7 @@ pub fn build(level: &Level, cels_only: bool, skeletons: &HashMap<u8, Skeleton>, 
             // choice. The vehicles draw only — the port's MP has no drivable car (docs/GAPS.md).
             let ctx_level = drones.map_or(0, |d| d.level_id);
             let mut car_rng = mp.map(|ms| nf_game::drone::Rng::new(ms.seed ^ 0x4341_5253));
-            for p in level.maps[m].placements.iter().filter(|p| MISC_KINDS.contains(&((p.flags & 0xff) as u8))) {
+            for (pi, p) in level.maps[m].placements.iter().enumerate().filter(|(_, p)| MISC_KINDS.contains(&((p.flags & 0xff) as u8))) {
                 let kind = (p.flags & 0xff) as u8;
                 let mut heli = false;
                 if let Some(ms) = mp {
@@ -8100,6 +8187,18 @@ pub fn build(level: &Level, cels_only: bool, skeletons: &HashMap<u8, Skeleton>, 
                 }
                 // 0x3B hidden-until-channel (DynamicObject_Create 0x18dbf8:31, param 0 = the s16 channel).
                 if kind == 0x3b && p.params.iter().find(|(i, _)| *i == 0).is_some_and(|(_, v)| *v != 0) { continue; }
+                // NOTE on the 0xe1 statics: they bake here (build time — nothing is dead yet), so the
+                // destroyed-glist swap's draw side is a PER-FRAME gate, not a build skip. [M
+                // Destroy_Smash 0x12bb60 → `Control_SetGList(obj, *(tag+0x00))` — the swap the sim
+                // models as `Destroy::dead`]: a dead leaf's object rides the destroyed glist entry —
+                // the block-0x27 LOD pointer when the disc word is set, else the parsemap fallback
+                // slot `pCelList + idx·0x50 + 0x50` [M 0x12bbb8 asm + 0x1d1b68]. The C5 leaves carry
+                // no LOD variant [D probe lod_word −1 for every 0d 0xe1], so the swap target has no
+                // batches and the doorway ends open [L]. The drawn 0xe1 instance's world centre is
+                // recorded below (the same `transform(matrix, obj.centre)` the group's cull sphere
+                // uses), and the per-frame draw filter (gpu.rs, over `Renderer::destroy_dead`) skips
+                // the dead leaf's materials. A leaf WITH a LOD variant would draw the LOD mesh here
+                // instead — no disc row on 0d needs it [S unverified].
                 let target = if p.by_hash() { level.by_hash.get(&p.hashcode).copied() }
                     else if (p.index as usize) < level.maps[m].objects.len() { Some((m, p.index as usize)) } else { None };
                 let Some((map, object)) = target else { continue };
@@ -8151,6 +8250,15 @@ pub fn build(level: &Level, cels_only: bool, skeletons: &HashMap<u8, Skeleton>, 
                 if obj.flags & 0x10 != 0 && FLAGS_COPYING.contains(&kind) { continue; }
                 if !obj.gfx.leaves.iter().any(|l| !l.batches.is_empty()) || obj.flags & 0x400 != 0 { continue; }
                 if let Some(h) = &nf_hide { if h.split(',').any(|n| !n.is_empty() && obj.name.contains(n)) { continue; } }
+                // level-1b-audit: in the sim-posed build the gated dynamic object rides a posed slot
+                // below (after the sensors) instead of this static instance — the static draw never
+                // collapses when the sim deletes the object (`DynamicObject_Update` 0x18d3b8:26 mode-0
+                // armed-B → obj+0xFE bit 0 → the delete pass), so 0700001b's control-room glass kept
+                // rendering after ch 10 (Drake's gate) fired. In --all the static draw stays.
+                if kind == 0x3b && cels_only { *misc_drawn.entry(0x3b).or_default() += 1; continue; }
+                // The rotors spin on a posed slot below (after the dynamic objects): the static draw
+                // held the placement pose forever [M rotor_update 0x18f568 writes obj+0x50 every tick].
+                if kind == 0x71 && cels_only { *misc_drawn.entry(0x71).or_default() += 1; continue; }
                 // A lock whose object has a LOD variant (the keypads: "Lock - KeypadLocked" →
                 // "Lock - KeypadUnlocked" [D block 0x27]) rides the posed slot space below, so the
                 // unlock's `Control_NextLOD` can swap it.
@@ -8178,6 +8286,10 @@ pub fn build(level: &Level, cels_only: bool, skeletons: &HashMap<u8, Skeleton>, 
                 }
                 let inst = Instance { map, object, matrix: nf_formats::placement::object_matrix(p.rotation, p.translation), placement: p.clone() };
                 add_instance(level, &inst, Layer::World, None, &mut groups, Some(&mut bounds), None, None, None, mult, &room_cels, u32::MAX, u32::MAX);
+                // The 0xe1 destroy leaf's world centre for the per-frame dead gate (see the NOTE above):
+                // the same `transform(matrix, obj.centre)` add_instance bakes into the group's cull
+                // sphere, so the bits match the material's `centre` the draw filter reads.
+                if kind == 0xe1 { destroy_centres.push((transform(&inst.matrix, obj.centre), pi)); }
                 *misc_drawn.entry(kind).or_default() += 1;
                 // The car's two fixed-hashcode children (Car_InitBits 0x12fec8), drawn only with a car body.
                 if kind == 0xda {
@@ -8203,7 +8315,11 @@ pub fn build(level: &Level, cels_only: bool, skeletons: &HashMap<u8, Skeleton>, 
         // cone along the aim, the spot on its ray hit, the corona a camera billboard (docs/systems/world-objects.md).
         crate::phase_mark("b5f coronas/wires/ladders/misc", t); t = std::time::Instant::now();
         let mut lock_matrices: Vec<Mat4> = Vec::new();
+        let mut dynobj_matrices: Vec<Mat4> = Vec::new();
+        let mut rotor_placements: Vec<([f32; 3], [f32; 3])> = Vec::new();
         let mut gunimp_placements = 0usize;
+        let mut door_scene_hidden = std::collections::HashSet::new();
+        let mut sl_lod: Vec<u16> = Vec::new();
         if let Some(m) = level.main_map() {
             for (pi, pl) in nf_game::searchlight::part_placements(&level.maps[m].placements).into_iter().enumerate() {
                 let p = &level.maps[m].placements[pl];
@@ -8214,14 +8330,40 @@ pub fn build(level: &Level, cels_only: bool, skeletons: &HashMap<u8, Skeleton>, 
                     add_instance(level, &inst, Layer::Character, None, &mut groups, None, Some(pi as u16), None, None, [1.0; 3], &room_cels, u32::MAX, u32::MAX);
                 }
             }
+            // The off-kill's / break's `Control_NextLOD(head)` [M Searchlight_Update 0x1cb900:138, :454;
+            // Control_NextLOD 0x1349b0:8-12]: the head swaps to its block-0x27 LOD object (07000006:
+            // OBJECT_SearchLight1 -> OBJECT_SearchLightBroken [D]). Each part whose object carries a LOD
+            // target gets that mesh on its own slot after the parts (`sl_lod[k]` = the part it shadows);
+            // the palette shows it, and hides the part's own mesh, once the sim sets `lod_next`.
+            let sl_parts = nf_game::searchlight::part_placements(&level.maps[m].placements);
+            for (pi, &pl) in sl_parts.iter().enumerate() {
+                let p = &level.maps[m].placements[pl];
+                let target = if p.by_hash() { level.by_hash.get(&p.hashcode).copied() }
+                    else if (p.index as usize) < level.maps[m].objects.len() { Some((m, p.index as usize)) } else { None };
+                let Some((map, object)) = target else { continue };
+                let Some(lod) = level.maps[map].lod_target(object) else { continue };
+                let slot = (sl_parts.len() + sl_lod.len()) as u16;
+                let inst = Instance { map, object: lod, matrix: nf_formats::placement::object_matrix(p.rotation, p.translation), placement: p.clone() };
+                add_instance(level, &inst, Layer::Character, None, &mut groups, None, Some(slot), None, None, [1.0; 3], &room_cels, u32::MAX, u32::MAX);
+                sl_lod.push(pi as u16);
+            }
             // Doors (`Door_Create`'s creation order = `door_placements`): each door's object as Character-layer
             // vertices posed by the simulation every tick (`Door_Interp`'s matrix at `obj+0x90`); the mesh is
             // opaque, so the pass ordering is depth-correct against the world (docs/systems/world-objects.md).
+            // cutscene-door-dup: collect the door placements whose object's glist flags (celglist+0x44 =
+            // MapObject.flags) carry 0x40000: Control_SetGList 0x134960 clears obj+0xF8's channel-4 bit for
+            // them, and Script_CameraStart 0x1d9140 renders ONLY camera 4 while a scene runs (mask 0x10
+            // [M View_CaptureScene 0x1e6df0 / build_alloc_viewer 0x1c9378]), so both draw walks
+            // (View_AddObjects 0x1e62d8:33 / View_AddForcedObjects 0x1e5fb8:79) skip them: the placed doors
+            // hide during a cut-scene. 07000014's control-room pair rides the packs Door_Slide_3A/3B
+            // (entity-params block+8 = 0x00040000, idx 116/117 [D]); the scene's leaf hashes 0x02000891/92
+            // resolve to Elevator_Door_Slide_3A/3B (flags 0, map 010001c6 [D]) - one door, moving.
             for (di, pl) in nf_game::door::door_placements(&level.maps[m].placements).into_iter().enumerate() {
                 let p = &level.maps[m].placements[pl];
                 let target = if p.by_hash() { level.by_hash.get(&p.hashcode).copied() }
                     else if (p.index as usize) < level.maps[m].objects.len() { Some((m, p.index as usize)) } else { None };
                 let Some((map, object)) = target else { continue };
+                if level.maps[map].objects[object].flags & 0x40000 != 0 { door_scene_hidden.insert(pl); }
                 // `NF_HIDE` leaves the door out of the draw (the A/B check; the simulation still runs it).
                 if let Ok(h) = std::env::var("NF_HIDE") { if h.split(',').any(|n| !n.is_empty() && level.maps[map].objects[object].name.contains(n)) { continue; } }
                 let inst = Instance { map, object, matrix: nf_formats::placement::object_matrix(p.rotation, p.translation), placement: p.clone() };
@@ -8340,6 +8482,47 @@ pub fn build(level: &Level, cels_only: bool, skeletons: &HashMap<u8, Skeleton>, 
                         add_instance(level, &inst, Layer::Character, None, &mut groups, None, None, Some((cam_base + 3 * si + k) as u16), None, [1.0; 3], &room_cels, u32::MAX, u32::MAX);
                     }
                 }
+            }
+            // The gated dynamic objects (0x3B, `WorldObjects::create`'s order — every 0x3b placement,
+            // placement order), after the sensors: one slot each at the placement matrix, collapsed
+            // once the sim deletes the object (`DynamicObject_Update` 0x18d3b8:26 — mode 0 with armed
+            // B sets obj+0xFE bit 0, the movement pass's delete; 0700001b's GLASS_ControlRoom (p1 =
+            // ch 10, Drake's gate) is the level's one). The create-time hidden gate (p0 != 0 →
+            // obj+0xF0 = glist | 0x30... the draw excluded) matches the static loop's.
+            let n_sensors_build = level.maps[m].placements.iter().filter(|p| p.flags & 0xff == 0x28 && p.flags & 0xa000 == 0).count();
+            let dynobj_base = cam_base + 3 * n_sensors_build;
+            for (di, p) in level.maps[m].placements.iter().filter(|p| p.flags & 0xff == 0x3b).enumerate() {
+                let mx = nf_formats::placement::object_matrix(p.rotation, p.translation);
+                dynobj_matrices.push(mx);
+                if !cels_only { continue; }
+                // A p0-gated object is created hidden (|0x30) and shown when p0's channel rises — the
+                // slot carries it from load; the per-tick pose collapses it while hidden [M 0x18dbf8:27-29].
+                let target = if p.by_hash() { level.by_hash.get(&p.hashcode).copied() }
+                    else if (p.index as usize) < level.maps[m].objects.len() { Some((m, p.index as usize)) } else { None };
+                let Some((map, object)) = target else { continue };
+                let obj = &level.maps[map].objects[object];
+                // The static loop's gates: the glist's own no-draw bit 0x10 (a FLAGS_COPYING kind), the
+                // mirror-only 0x400, and an empty glist [M View_AddObjects 0x1e62d8:33,38-47].
+                if obj.flags & 0x410 != 0 || !obj.gfx.leaves.iter().any(|l| !l.batches.is_empty()) { continue; }
+                if let Ok(h) = std::env::var("NF_HIDE") { if h.split(',').any(|n| !n.is_empty() && level.maps[map].objects[object].name.contains(n)) { continue; } }
+                let inst = Instance { map, object, matrix: mx, placement: p.clone() };
+                add_instance(level, &inst, Layer::Character, None, &mut groups, None, None, Some((dynobj_base + di) as u16), None, [1.0; 3], &room_cels, u32::MAX, u32::MAX);
+            }
+            // The rotors (0x71, `WorldObjects::create`'s order), after the dynamic objects: one slot each,
+            // posed every tick at the placement ROT + the sim's accumulated spin [M 0x18f4b8, 0x18f568].
+            let rotor_base = dynobj_base + level.maps[m].placements.iter().filter(|p| p.flags & 0xff == 0x3b).count();
+            for (ri, p) in level.maps[m].placements.iter().filter(|p| p.flags & 0xff == 0x71).enumerate() {
+                rotor_placements.push((p.rotation, p.translation));
+                if !cels_only { continue; }
+                let target = if p.by_hash() { level.by_hash.get(&p.hashcode).copied() }
+                    else if (p.index as usize) < level.maps[m].objects.len() { Some((m, p.index as usize)) } else { None };
+                let Some((map, object)) = target else { continue };
+                let obj = &level.maps[map].objects[object];
+                if obj.flags & 0x410 != 0 || !obj.gfx.leaves.iter().any(|l| !l.batches.is_empty()) { continue; }
+                if let Ok(h) = std::env::var("NF_HIDE") { if h.split(',').any(|n| !n.is_empty() && level.maps[map].objects[object].name.contains(n)) { continue; } }
+                let mx = nf_formats::placement::object_matrix(p.rotation, p.translation);
+                let inst = Instance { map, object, matrix: mx, placement: p.clone() };
+                add_instance(level, &inst, Layer::Character, None, &mut groups, None, None, Some((rotor_base + ri) as u16), None, [1.0; 3], &room_cels, u32::MAX, u32::MAX);
             }
             // Level-placed pickups (`Pickup_Create` 0x18dda0): `View_DrawObjectGlist` 0x1e6780 draws
             // `obj+0xD8` at `obj+0x90` — the same object carries the glist the renderer draws [M], so the
@@ -8705,9 +8888,9 @@ pub fn build(level: &Level, cels_only: bool, skeletons: &HashMap<u8, Skeleton>, 
             // pickups[k] pair the draw slots and model the match's weapons.
             let placed_pickups: Vec<nf_game::pickup::Pickup> = level.maps[m].placements.iter()
                 .filter(|p| p.flags & 0xff == 0xf0)
-                .filter_map(|p| Self::placed_pickup_from_placement(level, p, m, mp_row.as_ref(), &weapons, d.level_id, &pickup_models))
+                .filter_map(|p| Self::placed_pickup_from_placement(level, p, m, mp_row.as_ref(), &weapons, d.level_id, &pickup_models, d.has_gold_medal(d.level_id)))
                 .collect();
-            let (reserved, sim_slots) = script_pickup_reservations(level, &weapons, &pickup_models, d.level_id);
+            let (reserved, sim_slots) = script_pickup_reservations(level, &weapons, &pickup_models, d.level_id, d.has_gold_medal(d.level_id));
             let placed_len = placed_pickups.len();
             drones.pickups.extend(placed_pickups);
             drones.pickups.extend(reserved);
@@ -8817,7 +9000,10 @@ pub fn build(level: &Level, cels_only: bool, skeletons: &HashMap<u8, Skeleton>, 
                 }
             }
         }
-        Scene { shard_tex, cels: room_cels, cel_graph, streams: None, music_files: None, music_tables: None, sound_bank: None, sound_spares: Vec::new(), snow_texture, vertices, indices, materials, textures, hud_textures, woman: None, hud, script_billboards, view_models, mp_bodies, mp_body_weapons, mp_char_bodies, mp_anim_sets, fog, bounds, start, stats, characters, char_vertex_start, char_verts, sequences, attachments, sim, colliders, models_0x800, npc_pool, ladders_drawn, grapple_hooks_drawn, misc_drawn, lock_matrices, gunimp_placements }
+        Scene { shard_tex, cels: room_cels, cel_graph, streams: None, music_files: None, music_tables: None, sound_bank: None, sound_spares: Vec::new(), snow_texture, vertices, indices, materials, textures, hud_textures, woman: None, hud, script_billboards, view_models, mp_bodies, mp_body_weapons, mp_char_bodies, mp_anim_sets, fog, bounds, start, stats, characters, char_vertex_start, char_verts, sequences, attachments, sim, colliders, models_0x800, npc_pool, ladders_drawn, grapple_hooks_drawn, misc_drawn, lock_matrices, dynobj_matrices, rotor_placements, gunimp_placements,
+            door_scene_hidden,
+            sl_lod,
+            destroy_centres }
     }
 
     /// Sequence index and frame a character shows after `ticks` 60 Hz updates: its start script (`choice = None`) or the
@@ -8905,6 +9091,10 @@ pub fn build(level: &Level, cels_only: bool, skeletons: &HashMap<u8, Skeleton>, 
                 // matrix, for the 07000002 intro the CAMERA (obj[0] trans == player[1] live trans
                 // [-27.25, 1.41, 34.39]) — which drew the actors inside the camera: a
                 // render showed the intro room with NO characters at all.
+                // NOT the SP base: most scenes' casts carry WORLD roots (07000014's control-room scene:
+                // roots near (26..34, 1.2, 48) beside the room, SP base (52.16, 2.64, 46.62) — composing
+                // it threw the cast ~50 units away, an empty cut-scene). 0700004a's ride pack is the
+                // exception (car-local roots; the cast stands in the car in PCSX2) — its mechanism is open.
                 return Some((anim::skin_matrices(&world, &c.skin), world, c.matrix));
             }
             // MP bodies (mp-body-anim): the PLAYER anim set the game's MP body runs, from the slot's
@@ -9067,6 +9257,28 @@ pub fn build(level: &Level, cels_only: bool, skeletons: &HashMap<u8, Skeleton>, 
                 // and 0x200026d "taser" [M 0x1a46a8]), and `Draw_LaserBeam`'s stretch is the beam
                 // object's own scale (obj+0xE8 = the muzzle→hit distance) with the yaw/pitch of
                 // muzzle→hit in obj+0x50 (the negated-yaw euler) [M 0x1a4560:44-62].
+                // gunimp-beam: the mounted laser's quad along `GunImp.beam` (muzzle, ray hit) — the
+                // game's `PositionBeam` [M 0x1320d8:394-407]. The sprite extends along -z and the
+                // object's +z points hit -> muzzle (the same tail as PositionBeam 0x1a9400), built
+                // with the gadget beam's matrix helper; the flare sits at the hit, unscaled.
+                if (slot as usize == TRACER_SLOTS + 7 || slot as usize == TRACER_SLOTS + 8) {
+                    // gunimp-beam-lifetime: only the MOUNTED imp's beam draws - a dismounted gun's last shot must not
+                // leave its quad hanging in the room (the sim clears eam while the imp is active).
+                let pair = self.sim.as_ref().and_then(|s| s.drones.props.gunimps.iter().find(|g| g.active).and_then(|g| g.beam));
+                    let Some((a, b)) = pair else { return [[0.0; 4], [0.0; 4], [0.0; 4], [0.0, -10000.0, 0.0, 1.0]] };
+                    if slot as usize == TRACER_SLOTS + 8 {
+                        return nf_game::aivolume::matrix([0.0, 0.0, 0.0], b);
+                    }
+                    let d = [b[0] - a[0], b[1] - a[1], b[2] - a[2]];
+                    let len = (d[0] * d[0] + d[1] * d[1] + d[2] * d[2]).sqrt();
+                    if len < 1e-4 { return [[0.0; 4], [0.0; 4], [0.0; 4], [0.0, -10000.0, 0.0, 1.0]]; }
+                    let v = [a[0] - b[0], a[1] - b[1], a[2] - b[2]];
+                    let yaw = v[0].atan2(v[2]);
+                    let pitch = -v[1].atan2((v[0] * v[0] + v[2] * v[2]).sqrt());
+                    let mut m = nf_game::aivolume::matrix([pitch, yaw, 0.0], a);
+                    for k in 0..3 { m[2][k] *= len; }
+                    return m;
+                }
                 if slot as usize >= TRACER_SLOTS + 5 {
                     // sg5-laser-draw: the laser sight [M Player_LaserPointer 0x1a65d8]. Slot +5 the
                     // beam, datum → end, stretched like the tripbomb beam below (the same −z mesh);
@@ -9322,7 +9534,17 @@ pub fn build(level: &Level, cels_only: bool, skeletons: &HashMap<u8, Skeleton>, 
                                 for r in 0..3 { for k in 0..3 { m[r][k] *= d.e8; } }
                                 m
                             }
-                            _ => far,
+                            Some(_) => far,
+                            // Past the breakable pieces: the blast debris — the same `Debris_Update` 0x1aac00
+                            // object and draw (euler `rot` at obj+0x30, scaled by obj+0xe8).
+                            None => match s.drones.blast_debris.get(slot - s.drones.effects.debris.len() - s.drones.breaks.shatter.debris.len()) {
+                                Some(d) if d.model == mesh => {
+                                    let mut m = nf_formats::placement::object_matrix(d.rot, d.pos);
+                                    for r in 0..3 { for k in 0..3 { m[r][k] *= d.e8; } }
+                                    m
+                                }
+                                _ => far,
+                            },
                         },
                     },
                     // fix-grenade-throw: the smoke grenade's cloud (`Occlude_Create` 0x17ea80) — a
@@ -9685,6 +9907,25 @@ pub fn build(level: &Level, cels_only: bool, skeletons: &HashMap<u8, Skeleton>, 
             // length axis [M 0x1af398:58,72,78 + 0x1af010:102; the Camera_Beam mesh's +z unit
             // length, D probe]. State 3 collapses it (the lens display mask cleared [M 0x1af618:248-250]).
             let c = g - GUNIMP_SLOTS * self.gunimp_placements;
+            // Past the sensors: the gated dynamic objects (0x3B, `WorldObjects::create`'s order), one
+            // slot each — the placement matrix until the sim deletes the object (`DynamicObject_Update`
+            // 0x18d3b8:26 mode-0 armed-B → obj+0xFE bit 0 → the delete pass), then collapsed.
+            if c >= 3 * s.drones.sensors.list.len() {
+                let di = c - 3 * s.drones.sensors.list.len();
+                if di >= self.dynobj_matrices.len() {
+                    let ri = di - self.dynobj_matrices.len();
+                    let (rot, trans) = *self.rotor_placements.get(ri)?;
+                    let a = s.drones.worldobjs.rotors.get(ri)?.angle;
+                    return Some(nf_formats::placement::object_matrix([rot[0] + a[0], rot[1] + a[1], rot[2] + a[2]], trans));
+                }
+                // The live object by its create slot (the delete pass drops dead ones from the list);
+                // gone, or hidden by the no-draw bits `View_AddObjects` 0x1e62d8:33 tests
+                // (`obj+0xF0 & 0x8010` — the create's |0x30 while p0's channel is off, mode != 0's
+                // |0x30 while B is armed [M 0x18dbf8:27-29, 0x18d3b8:34-36]) → collapsed.
+                let d = s.drones.worldobjs.dynobjs.iter().find(|d| d.slot as usize == di)?;
+                if d.dead || d.flags & 0x8010 != 0 { return None; }
+                return self.dynobj_matrices.get(di).copied();
+            }
             let sn = s.drones.sensors.list.get(c / 3)?;
             return match c % 3 {
                 0 => Some(sn.matrix),
@@ -9855,8 +10096,13 @@ pub fn build(level: &Level, cels_only: bool, skeletons: &HashMap<u8, Skeleton>, 
             if let Some(sl) = v.searchlight {
                 const FAR: Mat4 = [[0.0; 4], [0.0; 4], [0.0; 4], [0.0, -10000.0, 0.0, 1.0]];
                 let Some(s) = self.sim.as_ref() else { return [0.0, -10000.0, 0.0] };
+                let n_parts = s.drones.searchlights.parts.len();
+                if sl as usize >= n_parts {
+                    let sp = self.sl_lod.get(sl as usize - n_parts).and_then(|&h| s.drones.searchlights.parts.get(h as usize));
+                    return match sp { Some(sp) if sp.drawn && sp.lod_next => transform(&sp.matrix, v.pos), _ => transform(&FAR, v.pos) };
+                }
                 let Some(p) = s.drones.searchlights.parts.get(sl as usize) else { return [0.0, -10000.0, 0.0] };
-                if !p.drawn { return transform(&FAR, v.pos); }
+                if !p.drawn || (p.lod_next && self.sl_lod.contains(&sl)) { return transform(&FAR, v.pos); }
                 if p.kind == 4 {
                     let m: Mat4 = [
                         [opts.right[0] * p.scale, opts.right[1] * p.scale, opts.right[2] * p.scale, 0.0],
@@ -10154,8 +10400,16 @@ pub fn build(level: &Level, cels_only: bool, skeletons: &HashMap<u8, Skeleton>, 
                     None => true,
                 };
                 if !keep { p[l.sl_base as usize + k] = FAR; continue; }
+                let n_parts = s.drones.searchlights.parts.len();
+                if k >= n_parts {
+                    // A LOD slot: the shadowed part's matrix once its head has swapped.
+                    let sp = self.sl_lod.get(k - n_parts).and_then(|&h| s.drones.searchlights.parts.get(h as usize));
+                    p[l.sl_base as usize + k] = match sp { Some(sp) if sp.drawn && sp.lod_next => sp.matrix, _ => FAR };
+                    continue;
+                }
                 p[l.sl_base as usize + k] = match s.drones.searchlights.parts.get(k) {
                     Some(sp) if !sp.drawn => FAR,
+                    Some(sp) if sp.lod_next && self.sl_lod.contains(&(k as u16)) => FAR,
                     Some(sp) if sp.kind == 4 => [
                         [opts.right[0] * sp.scale, opts.right[1] * sp.scale, opts.right[2] * sp.scale, 0.0],
                         [opts.up[0] * sp.scale, opts.up[1] * sp.scale, opts.up[2] * sp.scale, 0.0],
@@ -10166,7 +10420,15 @@ pub fn build(level: &Level, cels_only: bool, skeletons: &HashMap<u8, Skeleton>, 
                     None => FAR,
                 };
             }
+            let scene_cam = s.script_camera().is_some();
             for k in 0..(l.pick_base - l.door_base) as usize {
+                // cutscene-door-dup: while the script camera renders (the scene's camera 4, object_display_mask
+                // 0x10), an object whose glist flags carry 0x40000 is invisible [M Control_SetGList 0x134960
+                // clears obj+0xF8's bit 0x10 for it; View_AddObjects 0x1e62d8:33 / View_AddForcedObjects
+                // 0x1e5fb8:79 gate first on obj+0xF8 & object_display_mask]. Collapse the placed door's slot
+                // (the port's FAR not-drawn state) so the static closed leaf stops drawing behind the scene's
+                // own leaf movers (07000014's control-room duplicate).
+                if scene_cam && s.drones.doors.list.get(k).is_some_and(|d| self.door_scene_hidden.contains(&d.placement)) { p[l.door_base as usize + k] = FAR; continue; }
                 // The door region also holds the SimpleScripts' matrices (map-tower2): the ss vertices
                 // index `n_doors + k`, and `pick_base − door_base` = max door-or-ss index + 1.
                 // After the SS slots: the breakables (`Breaks::create` order), alive → placement matrix.
@@ -10222,9 +10484,14 @@ pub fn build(level: &Level, cels_only: bool, skeletons: &HashMap<u8, Skeleton>, 
             }
         }
         if has {
-            for (ci, m) in mults.iter().enumerate() { cols[ci] = rgb(*m); }
-            for (a, m) in attach_mult.iter().enumerate() { if let Some(c) = cols.get_mut((l.col_att + a as u32) as usize) { *c = rgb(*m); } }
-            for (pk, m) in pickup_mult.iter().enumerate() { if let Some(c) = cols.get_mut((l.col_pick + pk as u32) as usize) { *c = rgb(*m); } }
+            // Each run writes only its own section of the layout. Pickups created after the build (a
+            // dead guard's dropped gun) have no draw slot here (the drop draws as its attachment);
+            // writing them past `col_pick + n_pick` overwrote the searchlight slots and the shared
+            // `col_one` entry every door and interactable draws with, dimming them all to the
+            // drop's cel ambient.
+            for (ci, m) in mults.iter().enumerate().take(l.col_att as usize) { cols[ci] = rgb(*m); }
+            for (a, m) in attach_mult.iter().enumerate().take((l.col_pick - l.col_att) as usize) { cols[(l.col_att + a as u32) as usize] = rgb(*m); }
+            for (pk, m) in pickup_mult.iter().enumerate().take((l.col_sl - l.col_pick) as usize) { cols[(l.col_pick + pk as u32) as usize] = rgb(*m); }
         }
         // blood-puff-render: the gas puffs' draw colour IS the pool's live rgba — the game's
         // `View_SetupRenderModes_Tweak` 0x1e5888:46-49 feeds the gas object's obj+0x103..0x106 bytes
@@ -11735,7 +12002,8 @@ impl Sim {
             let radius = (ext[0] * ext[0] + ext[1] * ext[1] + ext[2] * ext[2]).sqrt() * match kind { 1 => 4.0f32, 2 => 2.0, _ => 3.0 };
             let script = match kind { 1 => 0x0600_0027, 2 => 0x0600_004f, _ => 0x0600_0052 };
             // The look only (damage 0): the drones' blast pass plays the script next tick.
-            self.drones.pending_blasts.push((c, radius, 0.0, usize::MAX, 0, script, radius));
+            // explode-debris-spawn: Destroy_Smash's 12th arg is 0 [M 0x12bcf8].
+            self.drones.pending_blasts.push((c, radius, 0.0, usize::MAX, 0, script, radius, 0));
             let bots: Vec<(usize, [f32; 3], f32)> = self.mp.as_ref().map_or(Vec::new(), |m| m.bots.iter().enumerate()
                 .filter(|(_, b)| !b.dead).map(|(j, b)| (j, [b.brain.pos[0], b.brain.pos[1] - BOT_EYE, b.brain.pos[2]], 0.4)).collect());
             for slot in 0..nf_net::MAX_AGENTS {

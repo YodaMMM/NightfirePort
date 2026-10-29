@@ -133,6 +133,9 @@ pub struct DynObject {
     pub alpha: u8,
     /// obj+0xFE bit 0 (mode 0 + B armed → deleted by the movement pass that tick).
     pub dead: bool,
+    /// The create order among the level's 0x3b placements (the draw's posed slot; the delete pass
+    /// removes dead objects from the list, so the list index is not stable).
+    pub slot: u16,
 }
 
 impl DynObject {
@@ -369,8 +372,9 @@ impl WorldObjects {
                     w.inverters.push(Inverter { ch_in: param(0) as u16, ch_out: param(1) as u16 });
                 }
                 0xd2 => {
-                    // Shooter_Create 0x17d030: p0 → obj+0xF4, p1 → obj+0xF6.
-                    let m = nf_formats::placement::object_matrix(p.rotation, p.translation);
+                    // Shooter_Create 0x17d030: p0 → obj+0xF4, p1 → obj+0xF6. Its obj+0x90 comes
+                    // from CCO(0) → View_RotTransMatrix [M 0x17d030:10, 0x1344e0:26-29].
+                    let m = nf_formats::placement::view_rot_trans_matrix(p.rotation, p.translation);
                     w.shooters.push(Shooter {
                         pos: p.translation,
                         // Mat_GetDir(obj+0x90): the matrix's forward column (identity → +z).
@@ -384,8 +388,11 @@ impl WorldObjects {
                     // DynamicObject_Create 0x18dbf8: p0/p1 (u16), p2 (u16), p3 (u8); obj+0xF0 = the
                     // glist's +0x44 word (0x18dbf8:15-16), |0x30 when p0 != 0 (0x18dbf8:27-29).
                     let (base, centre) = glist(p);
-                    let m = nf_formats::placement::object_matrix(p.rotation, p.translation);
+                    // obj+0x90: CCO(0) → View_RotTransMatrix [M 0x18dbf8:13, 0x1344e0:26-29].
+                    let m = nf_formats::placement::view_rot_trans_matrix(p.rotation, p.translation);
+                    let slot = w.dynobjs.len() as u16;
                     w.dynobjs.push(DynObject {
+                        slot,
                         // obj+0x80 (the world sphere the fade distance reads): the matrix translation
                         // plus the rotated glist centre (Control_BuildWorldSph's steady state).
                         pos: nf_formats::placement::transform(&m, centre),
@@ -537,5 +544,30 @@ mod music_trigger_tests {
         }
         assert_eq!(w.music_triggers[0].countdown, 0, "the countdown expired at the game's tick");
         assert_eq!(last_fire, 6 + 28, "the event stops 0x1e ticks after the re-arm stops");
+    }
+}
+
+/// `rotor_update` 0x18f568: the object matrix rotation (obj+0x50) accumulates spin·FRAME_RATE_MUL
+/// every tick while the gate channel reads 0 (gate 0 = always spins), and freezes while it reads 1.
+/// The angle is the draw-side getter (07000011's three fans: #199/obj#128, #205/#206/obj#134).
+#[cfg(test)]
+mod rotor_tests {
+    use super::*;
+    use crate::triggers::Channels;
+
+    #[test]
+    fn rotor_tick_accumulates_and_gate_stops() {
+        let mut r = Rotor { spin: [0.25, 0.0, 0.0], gate: 7, angle: [0.0; 3] };
+        let mut ch = Channels::default();
+        r.tick(&ch);
+        r.tick(&ch);
+        assert!((r.angle[0] - 0.5).abs() < 1e-6, "two ticks add 2·spin: {}", r.angle[0]);
+        ch.set(7, 1, 1);
+        r.tick(&ch);
+        assert!((r.angle[0] - 0.5).abs() < 1e-6, "gate on: frozen at {}", r.angle[0]);
+        // Sister: gate 0 never freezes, even with a channel set.
+        let mut always = Rotor { spin: [0.0, 0.1, 0.0], gate: 0, angle: [0.0; 3] };
+        always.tick(&ch);
+        assert!((always.angle[1] - 0.1).abs() < 1e-6, "gate-0 rotor ignores the channels");
     }
 }

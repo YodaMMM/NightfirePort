@@ -492,6 +492,14 @@ pub struct Bond {
     /// 0x1bb828] — `Some` while cam_mode is 1, the GoldenEye-strike orbit (`MP_GoldenEyeUpdate`
     /// 0x187568:396-398 → `Player_SetCamMode` 0x195928 case 1, the game's only mode-1 writer).
     pub orbit: Option<OrbitCam>,
+    /// The hang's persisted drift lanes ([f32; 2] = strafe, forward) — the game's `BLData+0x20`
+    /// committed-velocity x/z during the grapple's phase 2 [M Player_SSGrapple 0x192860 tail
+    /// (LAB_00192a24) commits the +0x10 wish into +0x20 every held tick and Player_Move
+    /// 0x191dd0:111-141 eases that block toward the stick's 0.075/tick lanes; the +0x154 rope
+    /// block pins y, so the committed move is horizontal only]. Zeroed on the latch
+    /// (ChangeSubState 2 zeroes the velocity block [M Player_ChangeSubState 0x190630's
+    /// `*(obj+0x50) = 0` arm]) and on the release (the port's pinned no-momentum drop).
+    pub grapple_drift: [f32; 2],
 }
 
 impl Bond {
@@ -513,6 +521,7 @@ impl Bond {
             stabiliser: 0,
             settle_hold: 0,
             zero_g_active: false,
+            grapple_drift: [0.0; 2],
             // audit-sound-calls: the jump launch / head-bump sounds outbox (drained by the Sim
             // into `drones.audio`); `Player_HandleJump` 0x1916b0 plays 0xA3 at launch (:184) and
             // 0xA3/0x5FB at the head bump (:195-198).
@@ -689,18 +698,44 @@ impl Bond {
     /// triple the game's release arm copies into the +0x20 block [M Player_SSGrapple 0x192860:59-64,
     /// LAB_00192a24] is zero — the drop IS the game's behaviour. The reel ignores gravity [M the
     /// substate body writes obj+0x30 directly].
+    ///
+    /// The phase-2 HANG drift is ported (level-14-full-walk-2): `Player_Move(1.0)` 0x191dd0 runs at
+    /// the top of the substate and eases the stick's wish into the +0x20 block (the 0.075/tick
+    /// lanes, the 0.2 ease, the ±0.1 clamp [M 0x191dd0:111-141]); the tail (LAB_00192a24) commits
+    /// it every held tick, the engine's move pass applies it, and the +0x154 rope block pins y —
+    /// the hang drifts horizontally at the walk's speed, never vertically. The port eases the same
+    /// lanes in `grapple_drift`, moves pos by the walk's own axis add [M the walk's application of
+    /// the +0x10 quad] and holds y — the rope pin; no push rides the drift (the dead push tail).
     fn grapple_tick(&mut self, input: &Input) {
         let Some(st) = self.grapple.as_mut() else { self.substate = SS_WALK; return };
         let mut pos = self.pos;
         let fire = input.fire;
         let released = crate::gadget::grapple_tick(&mut pos, st, fire);
+        if !released && st.phase == 2 {
+            let ease = |v: f32, target: f32| -> f32 {
+                let nv = v + (target - v) * 0.2;
+                if (target - v) * (target - nv) < 0.0 { target } else { nv.clamp(-0.1, 0.1) }
+            };
+            self.grapple_drift[0] = ease(self.grapple_drift[0], input.strafe * 0.075);
+            self.grapple_drift[1] = ease(self.grapple_drift[1], input.forward * 0.075);
+            let (s, c) = (crate::trig::sinf(self.yaw), crate::trig::cosf(self.yaw));
+            let (vs, vf) = (self.grapple_drift[0], self.grapple_drift[1]);
+            pos[0] += c * vs + s * vf;
+            pos[2] += -s * vs + c * vf;
+        }
         self.pos = pos;
         self.vel = [0.0; 3];
         self.grounded = false;
         if released {
             self.grapple = None;
+            self.grapple_drift = [0.0; 2];
             self.substate = SS_WALK;
         }
+        // No capsule push on the drift: the game's push tail is dead for the player's own move
+        // pass [M Intersect_CylGeom 0x109da0:447 — the DeltaP guard kills every walk contact; the
+        // port's walk block keeps the contact only], and the same engine serves the grapple's
+        // move — Bond drifts the game's lines on the feet band alone [M Player_FeetOnPoint
+        // 0x194188:106], the rope pin holding y.
     }
 
     /// `Player_Update` case 3 [M 0x193958 case 3]: `Player_Move(1.0, …)` — the walk physics with the
@@ -959,7 +994,7 @@ impl Bond {
         // OWN list (`*(cel + 0x18)`) — walls hanging on other rooms' cels never block. `self.cel`
         // is that relink (obj+0x20; the Sim refreshes it off the position each tick, the
         // `build_LinkToRoom` 0x1c9680 order); `None` falls back to the flat world.
-        let (push, walkable) = world.capsule_push_scoped(self.cel, a, b, CLIMB_RADIUS, false);
+        let (push, walkable) = world.capsule_push_scoped(self.cel, a, b, CLIMB_RADIUS, false, self.pick_ref);
         // The pick-contact bit is measured but NOT gated into `grounded` (hatch-crouch-0c4):
         // `Player_FeetOnPoint` 0x194188 registers the stand-on contact on the ridden object's
         // `obj+0xD0` list through `Coll_AddHitToList` 0x1ede68 (dist forced 1.0, normal =
@@ -978,7 +1013,7 @@ impl Bond {
         // set — including the real walked route — is green WITHOUT the arm, so the grounded
         // rule stays as is until a live check pins the game's bit. See world.rs
         // `capsule_pick_contact_scoped`.
-        let pick = world.capsule_pick_contact_scoped(self.cel, a, b, CLIMB_RADIUS, self.pick_ref[1]);
+        let pick = world.capsule_pick_contact_scoped(self.cel, a, b, CLIMB_RADIUS, self.pick_ref[1], self.pick_ref);
         let _ = pick;
         self.head_bump = push[1] < -1e-4;
         for k in 0..3 { self.pos[k] += push[k]; }
@@ -1713,7 +1748,7 @@ self.local = [vs / k, vf / k];
         // (Intersect_CylGeom 0x109da0's `dot(q − A, B − A) > 0` gate + the 02 fin wedge the PS2
         // rounds [L]); the port's walk/NPC paths still depend on the unguarded through-push
         // (escort_follow_07000001_live regressed with it on) — a known port divergence.
-        let (mut push, mut walkable) = world.capsule_push_scoped(self.cel, a, b, RADIUS, swimming);
+        let (mut push, mut walkable) = world.capsule_push_scoped(self.cel, a, b, RADIUS, swimming, self.pick_ref);
         // level-0a-office-hatch-10 EXPERIMENT (`NF_WALK_GHOST=1`): the game's walk push tail is
         // dead [M Intersect_CylGeom 0x109da0:447 — the guard is |q − HITTEST+0x50| < radius with
         // +0x50 the lifetime DeltaP accumulator [M Collide_Intersect 0x1ebaa8:353-373]; [L
@@ -1745,12 +1780,12 @@ self.local = [vs / k, vf / k];
         // scoped pass always finds the room's own floor, so the redo never fires there: across
         // the fix-08-collision slab band the floor stays in the room's bucket while the exterior
         // wall stays out of it.
-        let mut pick = world.capsule_pick_contact_scoped(self.cel, a, b, RADIUS, self.pick_ref[1]);
+        let mut pick = world.capsule_pick_contact_scoped(self.cel, a, b, RADIUS, self.pick_ref[1], self.pick_ref);
         if floor.is_none() {
-            let (fp, fw) = world.capsule_push(a, b, RADIUS, swimming);
+            let (fp, fw) = world.capsule_push(a, b, RADIUS, swimming, self.pick_ref);
             push = if walk_ghost() { [0.0; 3] } else { fp };
             walkable = fw;
-            pick = world.capsule_pick_contact(a, b, RADIUS, self.pick_ref[1]);
+            pick = world.capsule_pick_contact(a, b, RADIUS, self.pick_ref[1], self.pick_ref);
             floor = world.segment_hit(self.pos, to);
         }
         let _ = pick;

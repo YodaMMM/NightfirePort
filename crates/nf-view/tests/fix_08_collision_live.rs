@@ -133,8 +133,8 @@ fn the_scoped_capsule_disagrees_with_the_flat_one_at_the_slab_face() {
     // x 157.5 (inside the room's x band, clear of the side walls).
     let a = [157.5, sim.bond.pos[1] + 0.9, -115.5];
     let b = [157.5, a[1], -121.0];
-    let (flat, _) = sim.world.capsule_push(a, b, 0.55, false);
-    let (scoped, _) = sim.world.capsule_push_scoped(Some(cell), a, b, 0.55, false);
+    let (flat, _) = sim.world.capsule_push(a, b, 0.55, false, [1.0e9, 1.0e9, 1.0e9]);
+    let (scoped, _) = sim.world.capsule_push_scoped(Some(cell), a, b, 0.55, false, [1.0e9, 1.0e9, 1.0e9]);
     eprintln!("flat push {:?} scoped push {:?}", flat, scoped);
     assert!(flat[2] > 0.01,
         "the shared world still carries the exterior slabs (the flat push shoves the capsule back \
@@ -146,7 +146,7 @@ fn the_scoped_capsule_disagrees_with_the_flat_one_at_the_slab_face() {
     // blanket cull.
     let wa = [157.5, a[1], -114.5];
     let wb = [153.8, a[1], -114.5];
-    let (wscop, _) = sim.world.capsule_push_scoped(Some(cell), wa, wb, 0.55, false);
+    let (wscop, _) = sim.world.capsule_push_scoped(Some(cell), wa, wb, 0.55, false, [1.0e9, 1.0e9, 1.0e9]);
     eprintln!("west scoped push {:?}", wscop);
     assert!(wscop[0] > 0.01,
         "the room's real west wall still collides through the scoped query (got {:?})", wscop);

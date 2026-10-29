@@ -150,7 +150,7 @@ fn probe1b_wall_and_mouths() {
     }
     println!("--- the capsule push at the float's stop (a=(5.3,0.64,-3.44) b below, r 0.55) ---");
     for x in [5.4f32, 5.3, 5.1, 4.98] {
-        let (push, hit) = sim.world.capsule_push([x, 0.64, -3.44], [x, 0.09, -3.44], 0.55, false);
+        let (push, hit) = sim.world.capsule_push([x, 0.64, -3.44], [x, 0.09, -3.44], 0.55, false, [1.0e9, 1.0e9, 1.0e9]);
         println!("x {x:+.2}: push ({:+.3},{:+.3},{:+.3}) hit {hit}", push[0], push[1], push[2]);
     }
     println!("--- cel graph: find_cel at the shaft's key points ---");

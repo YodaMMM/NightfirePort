@@ -81,7 +81,7 @@ fn main() {
         let dirs: [(&str, f32, f32); 4] = [("+x", 1.0, 0.0), ("-x", -1.0, 0.0), ("+z", 0.0, 1.0), ("-z", 0.0, -1.0)];
         for (name, dx, dz) in dirs {
             for (r, dy) in [(0.55, 0.0), (0.55, -0.5), (0.25, 0.0)] {
-                let (push, walked) = sim.world.capsule_push([spot[0], spot[1] + dy, spot[2]], [spot[0] + dx * 0.5, spot[1] + dy, spot[2] + dz * 0.5], r, false);
+                let (push, walked) = sim.world.capsule_push([spot[0], spot[1] + dy, spot[2]], [spot[0] + dx * 0.5, spot[1] + dy, spot[2] + dz * 0.5], r, false, [1.0e9, 1.0e9, 1.0e9]);
                 println!("capsule at spot dir {name} r {r} dy {dy}: push [{:.3} {:.3} {:.3}] walkable {walked}", push[0], push[1], push[2]);
             }
         }

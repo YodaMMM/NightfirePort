@@ -7,8 +7,8 @@
 //!
 //! Evidence: every field cites the couch page that sets the same word [M]; the port-only choices
 //! (row layout, the edit-refusal mapping) are [S]. The map wheel is NOT filtered per scenario —
-//! nothing in P_MPMAP 0x217468 / C_SBMPMAP 0x217538 reads MPSettings+0x1A4 [M; the task brief's
-//! "filtered by scenario" note loses to the decompile, see the report].
+//! nothing in P_MPMAP 0x217468 / C_SBMPMAP 0x217538 reads MPSettings+0x1A4 [M; an earlier
+//! "filtered by scenario" note loses to the decompile].
 
 use crate::menu::{
     Action, MpBot, MP_CHARACTERS, MP_MAP_ROWS, MP_RULES_DURATIONS, MP_RULES_POINTS,

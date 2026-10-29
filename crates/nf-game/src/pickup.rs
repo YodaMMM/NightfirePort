@@ -163,8 +163,15 @@ impl Pickup {
     /// Kinds 7–11 are intercepted by `Pickup_Create` → `Pickup_CreateFromSet` (0x18f1b0): a kind-0 pickup of the
     /// set weapon (`PickupMatrix[row][(kind-7)*2]`, the BASE id, `clip_size·2` rounds, the WEAPON's own glist —
     /// not the placement's object).
-    pub fn create_placed(translation: V3, rotation: [f32; 3], type_: u16, id: u16, rounds: i16, switch_channel: u16, sound: u16, respawn: u16, lifetime: u8, model: u32, bounds: Model, w: &WeaponData, models: &std::collections::HashMap<u32, Model>) -> Option<Pickup> {
+    /// `has_gold_medal` = `PlrStats_HasGoldMedal` 0x199a40 over the current `bonus[0]` word and the level's
+    /// BaseMap — the game's gate sits between the id check and the set intercept [M 0x18dda0:88-104:
+    /// `if ((uVar7 == 6) && (PlrStats_HasGoldMedal__Fv(), lVar3 == 0)) return 0;`] — a kind-6 (the '007'
+    /// bonus) with no gold medal for the level creates NOTHING.
+    pub fn create_placed(translation: V3, rotation: [f32; 3], type_: u16, id: u16, rounds: i16, switch_channel: u16, sound: u16, respawn: u16, lifetime: u8, model: u32, bounds: Model, w: &WeaponData, models: &std::collections::HashMap<u32, Model>, has_gold_medal: bool) -> Option<Pickup> {
         if id == 0xFFFF { return None; }
+        // The kind-6 gold-medal gate, in the game's order: after the id −1 check, BEFORE the
+        // 7..=11 set intercept [M 0x18dda0:89-104].
+        if type_ == kind::BOND_BONUS && !has_gold_medal { return None; }
         if (7..=11).contains(&type_) {
             return Self::create_from_set(translation, rotation, type_, w, models);
         }
@@ -173,7 +180,9 @@ impl Pickup {
         // Y by `radius - |centre.y|` (that's for DROPPED pickups that fall to the floor; level-placed
         // pickups are already at the correct height). Lowering puts the sphere centre below the floor,
         // causing the LOS test in `touches` to fail [bug fix C-12].
-        let m = nf_formats::placement::object_matrix(rotation, translation);
+        // Pickup_Create builds obj+0x90 with CCO(0) → View_RotTransMatrix; the Mat_Copy
+        // alternate is dead from the dispatcher (MATRIX* 0) [M 0x18dda0:108-113, 0x1d04f0:459-462].
+        let m = nf_formats::placement::view_rot_trans_matrix(rotation, translation);
         let p = Pickup {
             kind: type_, weapon: id, rounds, model, bounds, m,
             start: translation, vel: [0.0; 3], state: 1, lifetime: 0,
@@ -211,7 +220,7 @@ impl Pickup {
         let model = w.model(base as usize);
         let bounds = *models.get(&model)?;
         let rounds = (w.clip_size(base as usize) as i16).wrapping_mul(2);
-        let m = nf_formats::placement::object_matrix(rotation, translation);
+        let m = nf_formats::placement::view_rot_trans_matrix(rotation, translation); // [M 0x18dda0:108 CCO(0)]
         // The create call's stack arguments [M 0x18f1b0 disasm: `sw v1(0xF5),0(sp)` 0x18f24c →
         // param 9 sound, `sw s5(1),8(sp)` → param 10 rest, `sw s6(3),16(sp)` 0x18f25c → param 11,
         // `sw zero,24(sp)` → param 12; `Pickup_Create` 0x18dda0 stores param 11 → +0x2C (the

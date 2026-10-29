@@ -23,7 +23,29 @@ pub enum Obj {
     /// by `AnimObjectDraw` (0x1c4490:256-265) as `weapon_data[w]+0x80` mesh on datum `weapon_data[w]+0x50`.
     /// `ticked`: false until the stream's first `Script_Interp` runs — the game's fresh anim script has no previous
     /// time, so the start frame's own commands fire on that first interp (`AnimScriptTick`'s old time is 0).
-    Anim { skin: u32, script: u32, frame: f32, weapon: u8, src: (u32, u8), ticked: bool },
+    Anim { skin: u32, script: u32, frame: f32, weapon: u8, src: (u32, u8), ticked: bool,
+        /// The owning SP's matrix snapshot at `Script_AnimStart` [M 0x1d8f40's `self.matrix`]. NOT a
+        /// draw base: the game composes NO base onto script-anim objects — obj+0x30 IS the raw root
+        /// track [M AnimGetFirstTrans 0x1c7348 + AnimFrameResolve 0x1c35f8:428-432's delta add], the
+        /// kind-2 stream composes nothing [M 0x1d9a08 case-2 disasm 0x1d9e5c-0x1da02c], the
+        /// anim-start GetInterp output matrix is never read [M disasm 0x1d90f0-0x1d911c], and the
+        /// draw palette builds under obj+0x90 [M psiBuildMatrixPalette 0x111498:134-160] — identity
+        /// for script anims (control_create_object 0x1344e0 builds it at the origin). The cast draws
+        /// at the raw roots in every scene; 0700004a's ride pack 0x060006cf's roots are car-local
+        /// [D 0x040005fd/fe/ff] because the pack's op-0x0d turned its SCRIPTINFO base identity —
+        /// the ENTITY streams share that frame (nis.rs case 1's keys-alone rule). Kept as a
+        /// diagnostic snapshot; no reader applies it.
+        base: Mat4,
+        /// The object's live world matrix — the game's obj+0x90 [M]: `AnimObjectUpdate` 0x1befd8
+        /// rebuilds it through `Control_GetObjMatrix` 0x134210 = `View_RotTransMatrix(obj+0x50 rot,
+        /// obj+0x30 pos)` (0x1befd8:290; every consumer rebuilds it the same way —
+        /// `Control_BuildWorldSph` 0x133070:17), and obj+0x30 accumulates the animation's root track
+        /// [M AnimFrameResolve 0x1c35f8:~428-432 delta add] — for a script anim created at the origin,
+        /// the root track IS the world pose. `Script_EventHandler` case 6 snapshots the previous
+        /// stream's object's +0x90 for kinds {1, 2} alike [M 0x1d94c0:125-134], so the port carries
+        /// the root pose per tick (`World::anim_obj_matrix`); identity until the first ticked frame
+        /// resolves (control_create_object 0x1344e0 builds it at the origin [M]).
+        matrix: Mat4 },
     /// A cut-scene camera (`CAM_INFO`, `Script_CameraStart`): its world matrix (rows: right, up, forward, position)
     /// and vertical field of view in radians (key scale × `+0x114` = 4/3, `Camera_CalcViewAngles`).
     Camera { matrix: Mat4, fov: f32, src: (u32, u8) },
@@ -305,6 +327,16 @@ pub struct PendingPickup {
 pub trait World {
     fn anim_length(&self, script: u32) -> Option<u16>;
     fn discrete0(&self, skin: u32, script: u32, frame: f32) -> Option<Mat4>;
+    /// An animated object's own world matrix at `frame` — the game's obj+0x90 that
+    /// `Script_EventHandler` case 6 snapshots from the previous stream's object [M 0x1d94c0:125-134;
+    /// built by `AnimObjectUpdate` 0x1befd8:290 → `Control_GetObjMatrix` 0x134210 =
+    /// `View_RotTransMatrix(obj+0x50, obj+0x30)` with obj+0x30 carrying the animation's root track —
+    /// bone 0 of the posed skeleton, `AnimGetFirstTrans` 0x1c7348 seeding it and
+    /// `AnimFrameResolve` 0x1c35f8:428-432 adding the root's per-frame delta — 0x1c35f8:~428-432].
+    /// Unlike `discrete0` this does not go through the skin's discrete-part list (`sk.extra`),
+    /// which many skins (the player body 0x0500005e) do not have. `None` (the default): the data
+    /// is absent — the game's rebuild would not run either, and the object keeps its last matrix.
+    fn anim_obj_matrix(&self, skin: u32, script: u32, frame: f32) -> Option<Mat4> { let _ = (skin, script, frame); None }
     /// An animation script's op-1 sound ids with frame in `(from, to]` — the interval `AnimProcessScriptCmds`
     /// (0x1c1b38 case 1) fires, in command order. Empty default: only the runtime's `Data` holds the scripts.
     fn anim_ops1(&self, script: u32, from: i32, to: i32) -> Vec<u32> { let _ = (script, from, to); Vec::new() }
@@ -806,12 +838,36 @@ impl Script {
     }
 
     /// `Script_AnimStart` (0x1d8f40).
+    ///
+    /// The placement decode (level-4a-ride-cast-b): the object is created at the origin
+    /// (`control_create_object(0, 0x2d6200, 0x2d6200, 0)` [M 0x1d8f40:69 — 0x2d6200 is the origin
+    /// vector [L ACTION.ELF]]) and `AnimGetFirstTrans` seeds obj+0x30 with the SEQUENCE's root
+    /// translation at the start frame [M 0x1d8f40:94; 0x1c7348 — flag 0x800000 on the anim script,
+    /// which AnimScriptTick 0x1c2630:43 sets every tick]; `AnimFrameResolve` 0x1c35f8 then adds the
+    /// root track's per-frame delta to obj+0x30. `Script_Interp` case 2 (the anim stream's per-tick)
+    /// advances the frame and calls AnimObjectUpdate — it composes NO base and touches no matrix
+    /// [M 0x1d9a08:140-199], and Script_AnimStart's own `Script_GetInterp` call passes the SP-base
+    /// concat flag SET (the disasm's stack arg `sw a2,0(sp)` with a2=1 at 0x1d90b4/0x1d90d8 — the
+    /// callee's tail `if (base) Concat(SCRIPTINFO, out)` [M 0x1da158:195-197]) but its output
+    /// matrix is never read by this caller [M disasm 0x1d90f8-0x1d9118] — a dead call here.
+    /// The renderer builds the bone palette under the object's OWN matrix obj+0x90
+    /// [M psiBuildMatrixPalette 0x111498:134-160, root = obj+0x90..0xcc], which for script anims
+    /// nothing in the script path rewrites. The open question for the 0700004a ride pack (whose
+    /// sequence 0x040005fd roots are car-local [D (2.35, 0.85, -0.64)] while the game draws the
+    /// cast in the car [L ride frame 700]): the object hierarchy's parent pointer obj+0x1c
+    /// [M Control_CreateObjEx 0x1343c8:26 writes it; AnimProcessScriptCmds 0x1c1b38:282-301 composes
+    /// a placement against the parent's matrix rows +0x90/0xa0/0xb0 and position +0x30] is ZERO for
+    /// script-anim objects (control_create_object never sets it) — WHO links the ride cast to the
+    /// car (or what else composes the SP base into the draw) is the report's live check: a PCSX2
+    /// read of the guard's anim object obj+0x30 / obj+0x90 / obj+0x1c mid-ride decides between a
+    /// parent compose and a draw-side base.
     fn anim_start(&mut self, i: usize, subs: &mut Vec<Option<Script>>, script: u32, skin: u32, start: u32, objs: &mut Objects, w: &dyn World) {
         if self.streams[i].obj.is_some() { self.kill(i, subs, objs); }
         let len = w.anim_length(script).unwrap_or(1).max(1) as f32;
         let f = start as f32;
         let frame = if f < 1.0 || len < f { if f < 1.0 { 1.0 } else { len } } else { f };
-        objs.list.push(Some(Obj::Anim { skin, script, frame, weapon: 0, src: (self.nis.hashcode, i as u8), ticked: false }));
+        objs.list.push(Some(Obj::Anim { skin, script, frame, weapon: 0, src: (self.nis.hashcode, i as u8), ticked: false, base: self.matrix,
+            matrix: IDENT }));
         let s = &mut self.streams[i];
         s.obj = Some(objs.list.len() - 1);
         s.kind = 2;
@@ -893,6 +949,11 @@ impl Script {
         }
     }
 
+    /// Read-only probe accessor (the hand-back census): a stream's kind byte after the run — the
+    /// game's event-6 snapshot gate reads the same record's kind byte ∈ {1, 2}
+    /// [M Script_EventHandler 0x1d94c0:73-84].
+    pub fn stream_kind(&self, i: usize) -> Option<u8> { self.streams.get(i).map(|s| s.kind) }
+
     /// fix-final-blockers2 probe accessor: every stream's (kind, bound-object index, first/last key) —
     /// the probe pairs the obj index with `Scripts::objects.list` matrices. Read-only, no behaviour.
     pub fn stream_bindings(&self) -> Vec<(u8, Option<usize>, u16, u16)> {
@@ -913,19 +974,98 @@ impl Script {
         let g = |k: usize| p.get(k).copied().unwrap_or(0);
         match kind {
             3 => {
-                // `SCRIPTINFO+0x9C = p0 − 1` (the delay), then every stream's object gets
-                // `Vec_Copy2(obj+0xC0 → obj+0x30, obj+0x40)` — the position snapped to its matrix before the
-                // pause [M 0x1d94c0:98-117, port-check §6]. The port's streams hold no separate position:
-                // `Obj::Entity.matrix` IS the animated matrix, so the sync's invariant (position == matrix
-                // while paused) holds by construction.
-                self.delay = g(0) as i32 - 1
+                // `Script_EventHandler` 0x1d94c0:98-116, two halves [M]:
+                // (1) `SCRIPTINFO+0x9C = p0 − 1` — skipped while a skip is armed (+0xAB5 bit 0x1,
+                //     set by `Script_FFwd` 0x1dac78:56, cleared by `Script_Update`'s end block
+                //     0x1da998:109; the port's fade_flags bit 1 [M nis.rs ffwd]). 303 disc sites
+                //     [D the script_events_dump sweep]: 297 pass p0 = 0 → delay = −1 → the
+                //     negative-delay HOLD (`Script_Update` 0x1da998 runs the streams only while
+                //     the delay is 0; a negative delay holds without a decrement [M disasm
+                //     0x1da9c4-0x1da9dc]) until `SP_Activate` 0x1dc338:84 or `SP_UnPause`
+                //     0x1dca58:13 zeroes it — the shutters' and the lifts' hold; 6 pass p0 > 0
+                //     (06000048 s3 [500]×2, 060008bc s13 [120]×2, 06000a1f s1 [60], 0600091a s12
+                //     [10], 060007fd s1 [250] [D]) → a timed pause that counts down.
+                // (2) the spawn-transform bake: every stream's entity/anim object
+                //     (`Script_GetObj` 0x1db688 returns kinds 1/2 only) gets
+                //     `Vec_Copy2(obj+0xC0, obj+0x30, obj+0x40)` [M call-site disasm
+                //     0x1d95e0-0x1d9614; `Vec_Copy2` 0x1e2cf8 disasm: a0 is READ, a1 AND a2 are
+                //     WRITTEN] — the object's position (+0x30) and previous position (+0x40) snap
+                //     to its matrix translation row (+0xC0; obj-tag.md). The port's script objects
+                //     carry no separate +0x30/+0x40: `Obj::Entity.matrix` IS the animated matrix
+                //     (its translation row is exactly the game's +0xC0) and an `Obj::Anim`'s
+                //     position is derived per frame from the same anim data the game's matrix row
+                //     holds, so the bake's invariant (position == matrix translation) holds by
+                //     construction and there is no second store to make. `Script_EntityStart`'s
+                //     create-time tail runs the identical copy (a0=e+0xC0, a1=e+0x40, a2=e+0x30,
+                //     disasm 0x1d8f00-0x1d8f0c), so a fresh spawn is born baked — 06000959's
+                //     Event 3 (t0 and t16 [D script_events_dump], the same ticks as its two Entity
+                //     ops) then only re-asserts it: the disc's shutter keys are all identity
+                //     [D script_events_dump dump_06000959_keys_and_sp427], so the baked transform
+                //     IS the SP-base composed one, cel and bake alike.
+                if self.fade_flags & 1 == 0 {
+                    self.delay = g(0) as i32 - 1
+                }
             }
+            // Event 4 [M 0x1d94c0:118-121]: `Player_Disable(glb_players, 0)` +
+            // `PlarStat_LogTimerPause(0)`. `Player_Disable` 0x195f70 (param 0): `BL+0x94a = 0` —
+            // the byte `Player_Update` 0x193600:80 and `Player_CollisionHandler` 0x1949a8:24 gate
+            // on, i.e. input and the collision pass stop (the port's `disabled`, which zeroes the
+            // input every tick); the player obj's +0xF0 |= 0x10 (not drawn) and its AnimObject's
+            // (BL+0x7E8) likewise; BL+0x7D4 = 0 has no port model. The timer pause rides the same
+            // request on the view side (`log_timer_pause()`, slot 0 [M 0x199520:6-9]).
             4 => out.push(Request::PlayerDisable),
-            // Where the player comes back: the previous stream's entity (else where he is), applied by `Script_Free`.
+            // Where the player comes back: the previous stream's object — entity OR anim, the game's
+            // gate admits kinds {1, 2} and snapshots that object's +0x90 either way
+            // [M 0x1d94c0:73-84, 125-134] — else where he is, applied by `Script_Free`.
             6 => {
                 self.flags |= 0x100;
                 let prev = i.checked_sub(1).map(|j| &self.streams[j]).filter(|s| matches!(s.kind, 1 | 2)).and_then(|s| s.obj);
-                self.player_at = prev.and_then(|o| match objs.list.get(o) { Some(Some(Obj::Entity { matrix, .. })) => Some(*matrix), _ => None });
+                self.player_at = prev.and_then(|o| match objs.list.get(o) {
+                    Some(Some(Obj::Entity { matrix, .. })) => Some(*matrix),
+                    // The kind-2 arm: the anim object's live obj+0x90 (the carried root pose).
+                    Some(Some(Obj::Anim { matrix, .. })) => Some(*matrix),
+                    _ => None,
+                });
+                // The vent-drop hand-back (level-14-vent-drop): for 07000014's scene 0x06000833 the
+                // pack has NO marker entity stream — the previous stream (s13) is Wait/Marker only
+                // [D the pack's full stream dump], so the game's case-6 capture hits the
+                // `glb_players+0x90` fallback [M 0x1d94c0:73-84,125-134] — yet the game still
+                // carries Bond from the mezzanine into the facility (no walkable entry exists [D
+                // walk-4: the z 38.21 wall, nav None]). The one mover the disc data offers is the
+                // scripted Bond body (stream 18, script 0x06000857, the player's skin 0x0500005e
+                // [D]) whose world root ends inside the facility at (27.60, 0.98, 43.56) [D the
+                // root track]. Capture it the same way the Kiko precedent composes (nis.rs
+                // level-14-capture-placement): the body's live root IS the hand-back pose. The
+                // mover reads the GENERAL per-interp anim matrix (the kind-2 arm's field — the
+                // merge resolved master's `root` onto it). [S] unverified — the game-side
+                // discriminator (strict player-matrix fallback vs the body's root) is the report's
+                // live check 1; this arm only fires when the strict capture found nothing
+                // (player_at.is_none()), so packs WITH an entity keep the proven path.
+                if self.player_at.is_none() && self.nis.hashcode == 0x0600_0833 {
+                    match objs.list.iter().rev().flatten().next() {
+                        // A world that never resolves the matrix (no `anim_obj_matrix`) leaves the
+                        // seed IDENT: keep the strict fallback rather than handing Bond back at the
+                        // origin.
+                        Some(Obj::Anim { script: 0x0600_0857, matrix, .. }) if *matrix != IDENT => {
+                            if std::env::var("NF_SCRIPTLOG").is_ok_and(|v| v == "1") {
+                                eprintln!("[scriptlog] vent fallback: body root ({:.2},{:.2},{:.2})", matrix[3][0], matrix[3][1], matrix[3][2]);
+                            }
+                            self.player_at = Some(*matrix);
+                        }
+                        _ => {
+                            if std::env::var("NF_SCRIPTLOG").is_ok_and(|v| v == "1") {
+                                let n: Vec<String> = objs.list.iter().flatten().map(|o| match o {
+                                    Obj::Anim { script, skin, .. } => format!("anim {script:08x}/{skin:08x}"),
+                                    Obj::Entity { hash, .. } => format!("ent {hash:08x}"),
+                                    Obj::Camera { .. } => "cam".into(),
+                                    Obj::Sprite { hash, .. } => format!("spr {hash:08x}"),
+                                    Obj::Light { .. } => "light".into(),
+                                }).collect();
+                                eprintln!("[scriptlog] vent fallback: NO 06000857 anim; objects [{}]", n.join(", "));
+                            }
+                        }
+                    }
+                }
                 self.player_mode = g(0) as u8;
                 // fix-final-blockers2 diagnostic: which stream/object the snapshot came from (the game's iVar5
                 // = record(i−1)+0x10 gated on record(i−1)+0x24 kind ∈ {1,2}, fallback `glb_players+0x90`
@@ -1053,7 +1193,64 @@ impl Script {
                 // compose (a port choice: 07000001's intro 0x06000087 s5/s11 kind-0x31 and the
                 // hash-0 classes pin composed spots in the live walks — interact_07000001,
                 // walkreal_07000001 — and 0700004a's hash-0 0xff/0x19 markers pin theirs in 4a-lift-4).
-                let keys_alone = self.camera_started && ehash != 0 && ekind == 0xff && self.streams[i].parent < 0;
+                // cutscene-kind31-frame-2 — the GENERAL rule replaces the per-class/per-script
+                // scopes (the 0xff-hash arm and the 0x0600_062F arm this replaces): an unparented
+                // case-1 stream ALWAYS concats si+0x00 — the 10th arg to Script_GetInterp is
+                // `(stream+0x25 parent == -1)` stored at 0x1d9c0c [M 0x1d9a08 case-1 disasm; case 6
+                // the same at 0x1d9a98, case 7 at 0x1d9d6c; the ancestor calls pass 0 at
+                // 0x1d9cd4/0x1d9b30] — and GetInterp's tail runs `Concat(si+0x00, out)` on it
+                // [M 0x1da838-0x1da844]. si+0x00's VALUE is the lifecycle: View_RotTransMatrix of
+                // the SP placement at Script_Load [M 0x1d8248:148], then Mat_IdentityT(si) when
+                // Script_CameraStart (op 0x0d) decodes — binary-proven a0=si at 0x1d916c — and
+                // NEVER restored (Script_CameraEnd 0x1db348:9-13 doesn't touch it; the only other
+                // writers are Script_SetPosRot/SP_SetPosRot 0x1db920:10-19 and SubScriptStart's
+                // zero-vector load 0x1db050:28-38). So every unparented stream's keys (and the
+                // event-6 hand-back snapshot of its entity, Script_EventHandler 0x1d94c0 case 6
+                // Mat_Copy(obj+0x90 → si+0x40) → Script_Free 0x1da880:44-48 → Player_Enable
+                // 0x195498 player +0x30) land COMPOSED before the script's camera op and
+                // KEYS-ALONE after it — no per-kind or per-hash branch exists in the interp path
+                // [M Script_CreateEntity 0x1d8968:35-173: kind only selects the constructor]. The
+                // disc census (nf-formats/tests/nis_kind31_census.rs): every kind-0x31 stream in a
+                // camera script keys at/after its script's camera tick — 0x0600062F's s10 (op
+                // t1197) and 0x06000087's s5 alike — so the world-frame reading generalizes to
+                // the GFX-BOUND streams; frame-3 adds the hash-0 carve-out below.
+                // The hash-0 kind-0x19 marker skip above stays: its 4a-lift-4 pin is [L] and its
+                // scene's base state is not re-derived here.
+                // cutscene-kind31-frame-3 — the HASH-0 carve-out on frame-2's general rule: the
+                // general keys_alone (camera_started && parent < 0) holds for the GFX-BOUND
+                // streams (07000014's door leaves 0x02000891/92 key world-frame post-camera —
+                // the level-14-capture-placement pin), but the HASH-0 entity streams compose
+                // ALWAYS: the two disc hand-back anchors — 0x06000087 s11 (hash 0, obj_type 0x31,
+                // created op@2118 with ONE key at t2118 — keys[a..=b] INCLUSIVE, so the census's
+                // "first_key 3893 > last_key 3892 no-keys" read was the camera's exclusive
+                // convention misapplied) and 0x06000077 s15 (hash 0, obj_type 0xff, op@3870, ONE
+                // key) — each sits one tick before its script's event-6 hand-back
+                // (Script_EventHandler 0x1d94c0 case 6 snapshots the PREVIOUS stream's obj+0x90
+                // into si+0x40; Script_Free 0x1da880:44-48 Player_Enables the player at it), and
+                // the real-path tests pin the COMPOSED spot (mayhew_hold/escort_hide_findrun/
+                // walkreal_07000008/zoe_gondola all red when these go keys-alone, green composed;
+                // the NF_KA_CLASS bisect: hash-0 red, kind-0x31/0x19-with-hash green).
+                // The [M] mechanism for the carve-out is NOT derived: the case-1 own-key call
+                // passes the base flag (parent == -1) [M 0x1d9c0c] and GetInterp's tail
+                // Concat(si, out) prepends si+0x00 [M 0x1da1a4 sw a0=si to 0(sp), 0x1da840], and
+                // Script_CameraStart writes Mat_IdentityT(si) [M 0x1d916c disasm a0=si] — so
+                // si+0x00 should be the identity at the anchor tick, and the game's observed
+                // compose needs something to restore the placement base between the camera op
+                // (t0) and the anchor (t2118/t3870). No restorer found in the decompile
+                // (CameraEnd 0x1db348 doesn't touch si+0x00; SubScriptStart 0x1db050 bases the
+                // SUB's own si on the zero vector 0x2d6200 [L ee_snapshot]; SP_SetPosRot's only
+                // SP-mode caller is Copter_Move 0x17d628:115). The compose itself is the
+                // test-pinned behaviour; see the report's live check (a PCSX2 read of si+0x00 at
+                // the anchor tick settles the restorer).
+                let hash0_anchor = ehash == 0 && ekind != 0x19;
+                // 07000014's capture marker (0x0600062F s10, hash 0, kind 0x31) is a hash-0 anchor
+                // too, yet the game hands Bond back at its world-frame key [D (-55.49, 1.55, 42.02)
+                // inside the control center; composed it is the void]. What separates it from the
+                // 01/08 anchors is the same open restorer question as above, so its proven scope
+                // stays [S] until the live read of si+0x00 settles it (capture_placement_07000014_live
+                // and nis_handback_census pin it).
+                let keys_alone = self.camera_started && self.streams[i].parent < 0
+                    && (!hash0_anchor || self.nis.hashcode == 0x0600_062f);
                 if !hash0 && !keys_alone { m = mul(&m, &self.matrix); }
                 if let Some(Some(Obj::Entity { matrix, alpha: a, .. })) = objs.list.get_mut(o) { *matrix = m; *a = alpha; }
             }
@@ -1082,7 +1279,7 @@ impl Script {
                 let s = &self.streams[i];
                 let f = s.clock - s.start_clock + s.start_frame;
                 let o = s.obj;
-                if let Some(Some(Obj::Anim { script, frame, ticked, .. })) = o.and_then(|o| objs.list.get_mut(o)) {
+                if let Some(Some(Obj::Anim { skin, script, frame, ticked, matrix, .. })) = o.and_then(|o| objs.list.get_mut(o)) {
                     let len = w.anim_length(*script).unwrap_or(1).max(1) as f32;
                     // `Script_Interp` case 2 (0x1d9a08) writes the stream's frame into the anim script's time
                     // (+0x90) and zeroes its advance (+0x98), then runs `AnimObjectUpdate` → `AnimScriptTick` →
@@ -1093,6 +1290,12 @@ impl Script {
                     let from = if *ticked { *frame as i32 } else { 0 };
                     *frame = f.floor().clamp(1.0, len);
                     *ticked = true;
+                    // `AnimObjectUpdate` rebuilds the object's own matrix obj+0x90 from the anim's live
+                    // rot/pos — `Control_GetObjMatrix` 0x134210 `View_RotTransMatrix(obj+0x50, obj+0x30)`
+                    // [M 0x1befd8:290], obj+0x30 carrying the root track [M 0x1c35f8:~428-432]. The port
+                    // reads the World's root pose at the now-current frame; when the data is absent the
+                    // game's rebuild would not run either and obj+0x90 keeps its last value.
+                    if let Some(m) = w.anim_obj_matrix(*skin, *script, *frame) { *matrix = m; }
                     for id in w.anim_ops1(*script, from, *frame as i32) {
                         out.push(Request::AnimSound { id, at: o });
                     }
@@ -1106,6 +1309,9 @@ impl Script {
                     for (id, frames) in w.anim_ops1_precache(*script, *frame as i32 - 1, *frame as i32 + 50) {
                         out.push(Request::PreCache { id, frames });
                     }
+                    // The body's world root at the frame rides the SAME field: the per-interp
+                    // matrix IS obj+0x90's rebuild (the root track composed with the object's
+                    // static transform) — the event-6 fallback reads it above.
                 }
             }
             7 => {
@@ -1336,7 +1542,11 @@ impl Player {
     pub fn from_placement(index: usize, p: &Placement) -> Option<Player> {
         let g = |k: u32| p.params.iter().find(|x| x.0 == k).map_or(0, |x| x.1);
         if g(0) == 0 && g(1) == 0 { return None; }
-        let matrix = nf_formats::placement::object_matrix(p.rotation, p.translation);
+        // The SP's runtime object matrix is View_RotTransMatrix's product [M 0x1db9a8 →
+        // 0x1344e0 (param_4 == 0 arm); level-14-vent-grates] — the same builder the static
+        // draw uses for the 0xd9 family now (level.rs `instances`). The old RotMatrix reading
+        // placed pitched SP objects 1.44 units off their frames (the vent grates).
+        let matrix = nf_formats::placement::view_rot_trans_matrix(p.rotation, p.translation);
         let (modes, mask) = ([g(2) as u16, g(3) as u16], g(5) as u16);
         let state = if modes[0] == 1 { 7 } else if mask == 0 { 6 } else { 0 };
         Some(Player {
@@ -2268,7 +2478,8 @@ mod tests {
         script.streams[0].kind = 2;
         script.delay = 5; // HELD: the damage tail's gate
         let mut objs = Objects::default();
-        objs.list.push(Some(Obj::Anim { skin: 0x0500_003A, script: 0x0600_0001, frame: 1.0, weapon: 0, src: (0x0600_0086, 0), ticked: true }));
+        objs.list.push(Some(Obj::Anim { skin: 0x0500_003A, script: 0x0600_0001, frame: 1.0, weapon: 0, src: (0x0600_0086, 0), ticked: true, base: IDENT,
+            matrix: IDENT }));
         script.streams[0].obj = Some(0);
         let mut scripts = Scripts::default();
         scripts.objects = objs;

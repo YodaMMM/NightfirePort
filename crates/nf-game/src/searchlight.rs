@@ -10,12 +10,14 @@
 //!
 //! Not ported yet (G-033): the spot's dynamic light (illumination is renderer work) and `Gas_Init` smoke
 //! for broken lights (no particle system; its 6 RNG draws per puff are therefore not consumed either).
-//! `Control_NextLOD`'s damaged-model swap on kill/break (obj+0xD8 ← glist+0x40 [M 0x1cb900:138,454]) is
-//! visual — the port keeps the intact model (a renderer note).
+//! `Control_NextLOD`'s model swap on kill/break (obj+0xD8 ← *(glist+0x40) [M 0x1cb900:138,454 →
+//! 0x1349b0:8-12]; the block-0x27 chain, 07000006's heads → OBJECT_SearchLightBroken [D]) is pinned as
+//! `Part::lod_next` — drawing the swapped variant is the renderer's side (nf-view resolves
+//! `LevelMap::lod_target` from the part's placement).
 
 use crate::drone::{Data, Player, Rng};
 use crate::trig::{angle_difference, atan2_approx, sinf, PI, TAU};
-use nf_formats::placement::{object_matrix, Placement};
+use nf_formats::placement::{object_matrix, view_rot_trans_matrix, Placement};
 use nf_formats::ps2float::{add_noguard, mul};
 
 pub type V3 = [f32; 3];
@@ -92,6 +94,16 @@ pub struct Part {
     /// create (control_init_object 0x134630:15), the state-2 smoke's phase term
     /// `(GameState+52 + obj+0xEC) % 7 == 0` [M 0x1cb900:375]. The port creates at frame 0.
     pub created: u32,
+    /// Heads: the game ran `Control_NextLOD` on this object — the off-kill [M Searchlight_Update
+    /// 0x1cb900:138] and the bullet break [M :454] both call it, and `Control_NextLOD` 0x1349b0:8-12
+    /// swaps obj+0xD8 to `*(glist+0x40)` when nonzero. The runtime glist+0x40 is the block-0x27 LOD
+    /// chain target (`parsemap_block_LOD` 0x1d1f10:21 stores `pCelList + index·0x50`; the disc's
+    /// per-object first-dword index, −1 = none) — 07000006's four heads all resolve object 2
+    /// OBJECT_SearchLight1 → object 131 OBJECT_SearchLightBroken [D block 0x27], the dark-lens
+    /// variant the off light draws while its housing stays visible. The renderer draws the chain
+    /// target's mesh for the part when this is set (nf-view resolves `LevelMap::lod_target` from
+    /// the part's placement; the swap is a draw change — the sim only pins the state).
+    pub lod_next: bool,
 }
 
 /// All searchlight parts of a level, in placement (creation) order.
@@ -207,13 +219,16 @@ impl Searchlights {
                 placement: i, kind, pos: p.translation, base_yaw: p.rotation[1],
                 on: param(1) as u8, off: param(2) as u8, alarm: param(3) as u8,
                 half: 0.0, mid: 0.0, phase, drawn: kind < 2,
-                matrix: object_matrix(p.rotation, p.translation),
+                // Searchlight_Create builds obj+0x90 with CCO(0) → View_RotTransMatrix
+                // [M 0x1cb4f8:25, 0x1344e0:26-29].
+                matrix: view_rot_trans_matrix(p.rotation, p.translation),
                 state: if param(1) != 0 { 3 } else { 0 },
                 pitch: 0.0, yaw: p.rotation[1], links: [None; 5], killed: false,
                 light: None, alpha: 0xff, scale: 1.0, box_min, box_max,
                 sph_centre, sph_radius,
                 spawn_pos: p.translation,
                 created: 0,
+                lod_next: false,
             };
             let (half, mid) = half_mid(param(4), param(5));
             part.half = half;
@@ -253,6 +268,33 @@ impl Searchlights {
         s
     }
 
+    /// The off-channel kill [M Searchlight_Update 0x1cb900:92-138]: state 3, the SPOT/BEAM/CORONA
+    /// links deleted (`obj+0xFE |= 1` — the movement pass removes the objects, 0x1336f8:88-91) with
+    /// their link slots (data+0x28/2c/30) cleared, the spot's psiLight node freed, the on/off/alarm
+    /// channel bytes (data+0x34/35/36) zeroed, and `Control_NextLOD` on the head (the model swap).
+    /// The MOUNT link (data+0x20) and the head's own draw are untouched — the housing stays [M the
+    /// kill walk covers only psVar2+0x14/0x16/0x18]. After the kill the head can never re-light: its
+    /// own on-byte is 0 and the state-3 arm reads exactly that byte [M :399].
+    fn off_kill(&mut self, head: usize) {
+        let links = self.parts[head].links;
+        {
+            let h = &mut self.parts[head];
+            h.state = 3;
+            h.killed = true;
+            h.links[2] = None;
+            h.links[3] = None;
+            h.links[4] = None;
+            h.on = 0;
+            h.off = 0;
+            h.alarm = 0;
+            h.lod_next = true;
+        }
+        for p in [links[2], links[3], links[4]].into_iter().flatten() {
+            self.parts[p].drawn = false;
+            if self.parts[p].kind == 2 { self.parts[p].light = None; }
+        }
+    }
+
     /// `Searchlight_Update` for one head, in the control list's order (called from `Drones::tick`). Returns the
     /// `Sound_Play3D` events (id at position): 0xE5 the relay clunk when a channel re-lights the head, 0xE6 the
     /// glass break when a bullet kills it [M]. `shots` = this tick's flying player bullets (the class-5 contacts
@@ -264,22 +306,15 @@ impl Searchlights {
             let h = &self.parts[head];
             (h.pos, h.base_yaw, h.half, h.mid, h.on, h.off)
         };
-        // The kill check, any state [M]: the off-channel deletes the light, hides the parts for good and clears
-        // the links and channel bytes — the head can never re-light.
+        // The kill check, any state [M Searchlight_Update 0x1cb900:92-138]: state 3, the SPOT/BEAM/CORONA
+        // links deleted (`obj+0xFE |= 1` — the movement pass removes the objects, 0x1336f8:88-91) with
+        // their link slots (data+0x28/2c/30) cleared, the spot's psiLight node freed, the on/off/alarm
+        // channel bytes (data+0x34/35/36) zeroed, and `Control_NextLOD` on the head (the model swap).
+        // The MOUNT link (data+0x20) and the head's own draw are untouched — the housing stays [M the
+        // kill walk covers only psVar2+0x14/0x16/0x18]. After the kill the head can never re-light: its
+        // own on-byte is 0 and the state-3 arm reads exactly that byte [M :399].
         if off != 0 && channels.on(off as u32) {
-            let links = self.parts[head].links;
-            {
-                let h = &mut self.parts[head];
-                h.state = 3;
-                h.killed = true;
-                h.links = [None; 5];
-                h.on = 0;
-                h.off = 0;
-            }
-            for p in links.into_iter().flatten() {
-                self.parts[p].drawn = false;
-                if self.parts[p].kind == 2 { self.parts[p].light = None; }
-            }
+            self.off_kill(head);
             return sounds;
         }
         let state = self.parts[head].state;
@@ -565,6 +600,9 @@ impl Searchlights {
             // links[3] (the beam) and links[4] (the corona): delete + clear [M :440-453].
             if let Some(b) = links[3] { self.parts[b].drawn = false; self.parts[head].links[3] = None; }
             if let Some(c) = links[4] { self.parts[c].drawn = false; self.parts[head].links[4] = None; }
+            // The break swaps the head's model the same way the off-kill does [M Control_NextLOD at
+            // 0x1cb900:454; the chain is the block-0x27 target, 07000006: OBJECT_SearchLightBroken [D]].
+            self.parts[head].lod_next = true;
             // Control_NextLOD (the damaged model) is visual — see the module doc.
             sounds.push((0xe6, pos));
         }
@@ -716,7 +754,7 @@ mod tests {
             phase: 0.0, drawn: true, matrix: [[1.0, 0.0, 0.0, 0.0], [0.0, 1.0, 0.0, 0.0], [0.0, 0.0, 1.0, 0.0], [pos[0], pos[1], pos[2], 0.0]],
             state: 0, pitch: 0.0, yaw: 0.0, links: [None; 5], killed: false, light: None,
             alpha: 255, scale: 1.0, box_min: [-0.5; 3], box_max: [0.5; 3],
-            sph_centre: [0.0; 3], sph_radius: 1.0, spawn_pos: pos, created: 0,
+            sph_centre: [0.0; 3], sph_radius: 1.0, spawn_pos: pos, created: 0, lod_next: false,
         };
         sl.parts = vec![part(0, [0.0, -1.5, 0.0]), part(1, [0.0, 0.0, 0.0]), part(2, [0.0, -10000.0, 0.0]), part(3, [0.0, 0.0, 0.0]), part(4, [0.0, 0.4, 0.0])];
         sl.parts[1].links = [Some(0), None, Some(2), Some(3), Some(4)];
@@ -735,6 +773,41 @@ mod tests {
         // The mount survives: drawn, still linked [M 0x1cb900:438-453 never touches links[0]].
         assert!(sl.parts[0].drawn, "the mount is NOT deleted — the game keeps links[0]");
         assert_eq!(sl.parts[1].links[0], Some(0), "the mount link stays");
+        assert!(sl.parts[1].lod_next, "the break runs Control_NextLOD on the head [M 0x1cb900:454]");
+    }
+
+    /// The off-channel kill [M Searchlight_Update 0x1cb900:92-138]: state 3, the spot/beam/corona
+    /// objects deleted (obj+0xFE |= 1 — the movement pass removes them, 0x1336f8:88-91) with the link
+    /// slots cleared, the spot's psiLight node freed, the on/off/alarm channel bytes zeroed, and
+    /// `Control_NextLOD` on the head [M :138]. The MOUNT survives drawn and linked (the walk covers
+    /// only psVar2+0x14/0x16/0x18) — the housing stays. A later ON-channel pulse must NOT re-light:
+    /// the head's own on-byte was zeroed [M :399 reads psVar2+0x1a].
+    #[test]
+    fn the_off_channel_kill_matches_the_game_field_for_field() {
+        let mut sl = Searchlights::default();
+        let part = |kind: u8, pos: V3| Part {
+            placement: 0, kind, pos, base_yaw: 0.0, on: 64, off: 57, alarm: 55, half: 0.0, mid: 0.0,
+            phase: 0.0, drawn: kind < 2, matrix: [[1.0, 0.0, 0.0, 0.0], [0.0, 1.0, 0.0, 0.0], [0.0, 0.0, 1.0, 0.0], [pos[0], pos[1], pos[2], 0.0]],
+            state: 0, pitch: 0.0, yaw: 0.0, links: [None; 5], killed: false, light: None,
+            alpha: 255, scale: 1.0, box_min: [-0.5; 3], box_max: [0.5; 3],
+            sph_centre: [0.0; 3], sph_radius: 1.0, spawn_pos: pos, created: 0, lod_next: false,
+        };
+        sl.parts = vec![part(0, [0.0, -0.1, 0.0]), part(1, [0.0, 0.0, 0.0]), part(2, [0.0, -10000.0, 0.0]), part(3, [0.0, 0.0, 0.0]), part(4, [0.0, 0.4, 0.0])];
+        sl.parts[1].links = [Some(0), None, Some(2), Some(3), Some(4)];
+        sl.parts[2].light = Some(7);
+        sl.off_kill(1);
+        let h = &sl.parts[1];
+        assert_eq!(h.state, 3, "state 3 [M 0x1cb900:94]");
+        assert!(h.killed, "one-shot");
+        assert_eq!((h.on, h.off, h.alarm), (0, 0, 0), "data+0x34/35/36 zeroed [M :134-137]");
+        assert_eq!(h.links[0], Some(0), "the mount link survives [M the walk never touches data+0x20]");
+        assert_eq!(h.links[1..5], [None, None, None, None], "spot/beam/corona links cleared [M :114-133]");
+        assert!(h.lod_next, "Control_NextLOD ran on the head [M :138]");
+        assert!(h.drawn, "the head stays drawn — the housing is the swapped model");
+        assert!(sl.parts[0].drawn, "the mount stays drawn [M the kill never marks it]");
+        assert!(!sl.parts[2].drawn && !sl.parts[3].drawn && !sl.parts[4].drawn, "spot/beam/corona deleted [M :113-133]");
+        assert_eq!(sl.parts[2].light, None, "the psiLight node freed [M :105-110]");
+        assert_eq!(sl.parts[1].state, 3, "no re-light off a cleared on-byte [M :399]");
     }
 
     /// Sister of the break test: a shot through the MOUNT's volume but outside the head's sphere does NOT
@@ -749,7 +822,7 @@ mod tests {
             phase: 0.0, drawn: true, matrix: [[1.0, 0.0, 0.0, 0.0], [0.0, 1.0, 0.0, 0.0], [0.0, 0.0, 1.0, 0.0], [pos[0], pos[1], pos[2], 0.0]],
             state: 0, pitch: 0.0, yaw: 0.0, links: [None; 5], killed: false, light: None,
             alpha: 255, scale: 1.0, box_min: [-0.5; 3], box_max: [0.5; 3],
-            sph_centre: [0.0; 3], sph_radius: 1.0, spawn_pos: pos, created: 0,
+            sph_centre: [0.0; 3], sph_radius: 1.0, spawn_pos: pos, created: 0, lod_next: false,
         };
         sl.parts = vec![part(0, [0.0, -3.0, 0.0]), part(1, [0.0, 0.0, 0.0])];
         sl.parts[1].links = [Some(0), None, None, None, None];
@@ -773,7 +846,7 @@ mod tests {
             phase: 0.0, drawn: true, matrix: [[1.0, 0.0, 0.0, 0.0], [0.0, 1.0, 0.0, 0.0], [0.0, 0.0, 1.0, 0.0], [0.0, 0.0, 0.0, 0.0]],
             state: 0, pitch: 0.0, yaw: 0.0, links: [None; 5], killed: false, light: None,
             alpha: 255, scale: 1.0, box_min: [-0.5; 3], box_max: [0.5; 3],
-            sph_centre: [0.0; 3], sph_radius: 1.0, spawn_pos: [0.0; 3], created: 0,
+            sph_centre: [0.0; 3], sph_radius: 1.0, spawn_pos: [0.0; 3], created: 0, lod_next: false,
         };
         sl.parts = vec![part(1)];
         let through = Shot { from: [-3.0, 0.0, 0.0], to: [3.0, 0.0, 0.0], damage: 0.0, segment: true };
@@ -796,7 +869,7 @@ mod tests {
             phase: 0.0, drawn: true, matrix: [[1.0, 0.0, 0.0, 0.0], [0.0, 1.0, 0.0, 0.0], [0.0, 0.0, 1.0, 0.0], [0.0, 0.0, 0.0, 0.0]],
             state: 2, pitch: 0.4, yaw: 0.0, links: [None; 5], killed: false, light: None,
             alpha: 255, scale: 1.0, box_min: [-0.5; 3], box_max: [0.5; 3],
-            sph_centre: [0.0; 3], sph_radius: 1.0, spawn_pos: [0.0; 3], created: 0,
+            sph_centre: [0.0; 3], sph_radius: 1.0, spawn_pos: [0.0; 3], created: 0, lod_next: false,
         };
         sl.parts = vec![part(1)];
         let shot = Shot { from: [-3.0, 0.0, 0.0], to: [3.0, 0.0, 0.0], damage: 3.5, segment: true };
@@ -818,7 +891,7 @@ mod tests {
             phase: 0.0, drawn: true, matrix: [[1.0, 0.0, 0.0, 0.0], [0.0, 1.0, 0.0, 0.0], [0.0, 0.0, 1.0, 0.0], [0.0, 0.0, 0.0, 0.0]],
             state: 0, pitch: 0.0, yaw: 0.0, links: [None; 5], killed: false, light: None,
             alpha: 255, scale: 1.0, box_min: [-0.5; 3], box_max: [0.5; 3],
-            sph_centre: [0.0; 3], sph_radius: 1.0, spawn_pos: [0.0; 3], created: 0,
+            sph_centre: [0.0; 3], sph_radius: 1.0, spawn_pos: [0.0; 3], created: 0, lod_next: false,
         };
         sl.parts = vec![part(1)];
         // 1.2 from the centre: inside the 0.25 + 1.0 point margin, outside the 1.0 sphere.

@@ -101,6 +101,7 @@ fn escort_at_walking_speed_keeps_the_games_distance_and_the_exit_opens() {
     let mut checked = 0u32;
     let mut last_round = [0.0f32; 3];
     let mut last_bond: Option<[f32; 3]> = None;
+    let mut last_flee = 0u32;
     let settled = 'escort: {
         for round in 0..12 {
             let mp = w.scene.sim.as_ref().unwrap().drones.list[ci].pos;
@@ -124,17 +125,37 @@ fn escort_at_walking_speed_keeps_the_games_distance_and_the_exit_opens() {
                 let db = walker::dxz(bond, dpos);
                 // The distance asserts — the game's own bands, evaluated whenever the escort
                 // machine has computed the path value this tick (Lead/Wait update it).
+                // The bands hold outside the scare's grace: the recovery's SetState(0x20) carries no
+                // band [M 0x173658 case 1] and the re-anchor walk takes a moment, so within 600 ticks
+                // of the last flee sighting the resumed Wait may sit outside the -7/0 band [M
+                // 0x15eda8 case 3 pins the ALLY_LEAD-case-3 door, not the recovery's].
+                let grace = w.total_ticks.saturating_sub(last_flee) <= 600;
                 if matches!(dstate, state::ALLY_LEAD | state::ALLY_LEAD_WAIT) {
                     checked += 1;
                     if dstate == state::ALLY_LEAD {
                         assert!(pd >= -9.0, "the lead abandoned Bond: path {pd:.1} < -9.0 at ({:.1},{:.1},{:.1}) [M 0x15e698 case 3]", dpos[0], dpos[1], dpos[2]);
-                    } else {
+                    } else if !grace {
                         assert!(pd <= -7.0 || pd == 0.0,
                             "the lead resumed outside the game's band: path {pd:.1} in AllyLeadWait [M 0x15eda8 case 3]");
                     }
-                    assert!(db < 24.0, "the escort left Bond behind: {db:.1} straight-line at ({:.1},{:.1},{:.1})", dpos[0], dpos[1], dpos[2]);
+                    if !grace {
+                        assert!(db < 24.0, "the escort left Bond behind: {db:.1} straight-line at ({:.1},{:.1},{:.1})", dpos[0], dpos[1], dpos[2]);
+                    }
                 }
-                assert!(ESCORT_STATES.contains(&dstate), "the escort left the ally machine: state {dstate:#x}");
+                                // The grenade scare's flee chain is the game's own answer for the escorted contact:
+                // the ally states' case 0x21 arms call ConsiderExplosive [M 0x15e698:131 et al.] and
+                // Drone_SM_SetState(0x86) [M 0x1431c0:194-195] - the escort leaves the ally machine
+                // for the run-away/hide/recover chain and the recovery re-anchors the route and
+                // returns to AllyLeadWait [M 0x173658 case 1]. level-13-guards-7: the -6 corpse fix
+                // shifted the shared-RNG stream so the guard-15 fight's grenade now lands inside the
+                // escort's explosive scan. The resume is pinned below (the grace window + the round
+                // loop), not the absence of the scare.
+                if matches!(dstate, state::RUN_AWAY_FROM_OBJECT | state::HIDE_FROM_SCARY_OBJECT | state::RECOVER_FROM_SCARY_OBJECT) {
+                    last_flee = w.total_ticks;
+                }
+                assert!(ESCORT_STATES.contains(&dstate)
+                    || matches!(dstate, state::RUN_AWAY_FROM_OBJECT | state::HIDE_FROM_SCARY_OBJECT | state::RECOVER_FROM_SCARY_OBJECT),
+                    "the escort left the ally machine: state {dstate:#x}");
                 drop(sim);
                 still = if walker::dxz(dpos, last) < 0.0025 { still + 1 } else { 0 };
                 last = dpos;
@@ -159,6 +180,15 @@ fn escort_at_walking_speed_keeps_the_games_distance_and_the_exit_opens() {
             }
             // Stall recovery — the walkreal-a rules: clear armed started guards within 14, step
             // out of the way band, or walk past the wedged lead so he re-paths.
+            // The ally-wait hold ( ReachedDestNode 0x153358:85-94 parks the contact in 0x21 at the
+            // 0x20 node until ch 0x99) needs the corridor plate crossed first: the TOUCH plate at
+            // (6.79, 6.04, 8.91) raises ch 0x32 → the OUT mux mirrors 0x33 → SP #276 starts →
+            // 06000086 writes ch 0x0e → the ambush guards enable; their deaths raise 0x99 through
+            // the AND mux and the hold releases [D the 07000001 placements + lib dump]. The plate
+            // is ON the escort route between the hold and door #1 — the walking player crosses it.
+            if !w.scene.sim.as_ref().unwrap().drones.channels.on(0x33) {
+                w.walk_nav_to([6.79, 0.0, 8.91], "onto the corridor plate", 0.4);
+            }
             let (cstate, cp, cpd) = {
                 let sim = w.scene.sim.as_ref().unwrap();
                 let d = &sim.drones.list[ci];

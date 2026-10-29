@@ -66,6 +66,22 @@ fn burst(sim: &mut nf_view::scene::Sim, presses: usize) -> bool {
 #[test]
 fn the_no_shoot_crosshair_keys_on_the_held_weapon() {
     let Some(mut scene) = load_and_skip() else { return };
+    // The skip-path hand-back parks Bond at the FFwd end pose (-27.30, 1.23, 28.90) [L port
+    // NF_SCRIPTLOG run], from where the per-tick visibility ray to the civilian is blocked (the
+    // anim-prev-2 report). The player's own answer is to close the distance: walk toward the
+    // civilian (real step_bond input) until the ray clears [M drone.rs drawn = enabled &&
+    // visible_to(player, ...)] and the crosshair test is meaningful again.
+    {
+        let civ0 = scene.sim.as_ref().unwrap().drones.list[CIVILIAN].pos;
+        let mut sim = scene.sim.as_mut().unwrap();
+        for _ in 0..240 {
+            if sim.drones.list[CIVILIAN].drawn { break; }
+            let p = sim.bond.pos;
+            sim.bond.yaw = (civ0[0] - p[0]).atan2(civ0[2] - p[2]);
+            sim.step_bond(Input { forward: 1.0, ..Default::default() }, false, false, false);
+        }
+        assert!(sim.drones.list[CIVILIAN].drawn, "the civilian is visible once Bond closes the distance (from {:?})", sim.bond.pos);
+    }
     let sim = scene.sim.as_ref().unwrap();
     let civ = sim.drones.list[CIVILIAN].pos;
     let weapon = sim.gun.weapon;

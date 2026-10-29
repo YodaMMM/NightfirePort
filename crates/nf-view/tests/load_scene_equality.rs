@@ -33,13 +33,35 @@ fn iso() -> Option<String> { std::env::var("NF_ISO").ok() }
 // batch-1024a: the security cameras' body + mount posed slots (`Sensor_Create` 0x1af010 / `Sensor_SetBeam`
 // 0x1af398 — 01 ×1, 02, 14 ×14), 14's b1 drones on skin 0x0500008c (`NDrone2_DefaultInit` 0x14b300:82-95).
 const BASELINE: &[(&str, &str)] = &[
-    ("07000002.bin", "184995bc34f63bb4 4484117 9372399 5353 4346823 81 9825 205 28 25 8"),
-    ("07000005.bin", "57ab143029eee3f2 4387197 9170895 3614 4302856 73 9759 106 19 16 6"), // the two copter SPs + their script draw slots
+    // pickup-medal-gate re-pin: the fresh-boot loads now run `Pickup_Create`'s kind-6 gate
+    // [M 0x18dda0:93-95] — the 007 rows (kind 6) create only with the level's gold medal
+    // recorded, and these pins were captured with bonus[0] = 0 (the fresh-boot word [L
+    // ee_start_05 0x2e1b88]). Each drifted level lost exactly its kind-6 rows' meshes: −418
+    // verts / −314 indices / −1 material slot per token (07000002 −3, 07000005 −2, 0700000c −4,
+    // 07000001 −2 pickups; 07000014 places no kind-6 and is bit-identical).
+    // level-1b-audit re-pin (all four drifted levels carry a 0x3b gated dynamic object): the
+    // 0x3b draw moved from a build-time static World instance (which never collapsed when the
+    // sim deleted the object — DynamicObject_Update 0x18d3b8:26 mode-0 armed-B → obj+0xFE bit 0
+    // → the delete pass, control_delete_object 0x133178:16-17) to a posed Character-layer slot
+    // that collapses; the vertices/indices/materials/char_verts counts follow, [S port
+    // engineering] like every pin here.
+    // gunbeam-0d re-pin: two tracer slots for the mounted laser's beam quad 0x20005cd + flare 0x200026e (+60 verts, +2 slots per level).
+    // placement-matrix-classes re-pin (07000001/02/05/0c/14): the class builders follow their creators [M control_create_object 0x1344e0 -> View_RotTransMatrix 0x1e5168]; every count unchanged, the hash moves with the pitched rows and the one-ulp yaw-only cosine.
+    // cutscene-handback-anim-prev-4 re-pin: the loadable-pack sweep's sequences ride the
+    // fix-cutscenes loader's SENTINEL key (`0x80 | skeleton`) per the game's own lifetime —
+    // `LoadableLoad` 0x1d69e8 wipes the 0x4000000 hashtable before streaming a pack, so the
+    // pack rows never join the order-sensitive per-skeleton gameplay buckets (models_characters
+    // g021 pins that); they still reach the by-hash `Scene::seqs` the cut-scene resolution and
+    // the kind-2 `anim_obj_matrix` pose read. Every count unchanged; the hash moves with the
+    // sentinel-bucket flattening order in `Scene::seqs`. [S port engineering] like every pin
+    // here — the mover is named (the sentinel re-key), no game claim.
+    ("07000002.bin", "c7a5b7abe4577d7c 4515435 9444387 5350 4378448 81 10723 205 28 25 5"),
+    ("07000005.bin", "b28f7247c6c229a9 4420067 9246489 3616 4335726 73 10657 106 19 16 4"), // the two copter SPs + their script draw slots; re-pinned 10-26: the 0x3b dynamic objects ride posed slots [M View_AddObjects 0x1e62d8:33, DynamicObject_Update 0x18d3b8]; re-pinned 10-28: the searchlight heads' block-0x27 LOD meshes (OBJECT_SearchLightBroken) on their own slots [M Control_NextLOD 0x1349b0] (+1134 verts, +1 material)
     // lift-indicators-09 re-pin: one draw slot per `Script_SubScriptStart` op per running SP
     // [M 0x1db050] — 0700000c's multi-SP sub chains add 6 slots (+248 vertices, +576 indices,
     // +1 attachment); 07000014's vent-lid SPs are placed SPs (unchanged), the rest have no
     // multi-SP sub chains.
-    ("0700000c.bin", "22bb59aa786e1035 4872150 10242036 8182 4681326 96 11012 170 22 40 15"),
+    ("0700000c.bin", "f58836e391fc361f 4903050 10313148 8126 4714818 96 11910 170 22 40 11"), // re-pinned 10-26: 0x3b on posed slots
     // script-entity-copies: one draw slot per ScriptPlayer running a script — 14's nine
     // SPs on the vent-lid script 0x06000A3B (+ its other shared scripts) add 20 attachments, +1600 vertices.
     // The keypads' LOD pair in the posed slots (Lock_Unlock 0x1b0650 / case 1 `Control_NextLOD`: three
@@ -51,8 +73,10 @@ const BASELINE: &[(&str, &str)] = &[
     // +59235 indices, +105 materials, +50005 char_verts, +15 attachments over the old pin.
     // fusebox-draw-slots re-pin: 07000014's five fusebox placements (kind 0x31) now seed their
     // param-0 script 0x06000A1B, +20 script-entity slots (the cabinet and wire art) [M FuseBox_Create].
-    ("07000014.bin", "9e25e8e7f4e5bd74 7147319 14846157 6583 6994386 98 13526 173 41 37 32"),
-    ("07000001.bin", "3efd2cdd3e5616ab 4396377 9211989 3491 4323075 76 9839 101 11 20 6"),
+    // 07000014 places two kind-6 rows as well: −836 verts / −752 indices / −2 material slots,
+    // pickups 32 → 30 (same gate).
+    ("07000014.bin", "5a6cc1ad10022bad 7180663 14921637 6485 7029324 98 14424 173 41 37 30"), // re-pinned 10-26: p0-gated 0x3b instanced from load (created hidden [M 0x18dbf8:27-29])
+    ("07000001.bin", "a0541d5a15453d60 4428113 9284853 3488 4355134 76 10737 101 11 20 4"), // re-pinned 10-26: the radio-room rotors on posed slots [M rotor_update 0x18f568]
 ];
 
 #[test]

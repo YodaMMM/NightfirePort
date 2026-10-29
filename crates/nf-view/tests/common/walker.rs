@@ -281,17 +281,21 @@ impl Walker {
     }
 
     pub fn tick(&mut self, input: Input, use_key: bool) {
-        self.tick_inner(input, use_key, false);
+        self.tick_inner(input, use_key, false, false);
     }
 
     /// One tick with the trigger HELD (walkreal-b2): the gadget burns come from the held fire's refire
     /// [M Player_WeaponInitBullet 0x1a4bf0 → Player_MuzzleFlash 0x1a4298 → Draw_LaserBeam 0x1a4560; the
     /// held-fire loop 0x1a5460:601-694]; `Lock_Update` 0x1ae3d8:194 burns the lock the beam touches.
+    /// An empty clip with spare ammo reloads on this tick instead (the game's R; shoot_point's long
+    /// windows outlive one clip — the walkreal corridor shot emptied on the captors before the box).
     pub fn tick_fire(&mut self, input: Input) {
-        self.tick_inner(input, false, true);
+        let (clip, spare) = { let sim = self.scene.sim.as_ref().unwrap(); (sim.gun.clip, sim.gun.spare) };
+        let reload = clip == 0 && spare > 0;
+        self.tick_inner(input, false, true, reload);
     }
 
-    fn tick_inner(&mut self, input: Input, use_key: bool, fire: bool) {
+    fn tick_inner(&mut self, input: Input, use_key: bool, fire: bool, reload: bool) {
         for k in 0..self.keep_alive.len() {
             let i = self.keep_alive[k];
             if let Some(dr) = self.scene.sim.as_mut().unwrap().drones.list.get_mut(i) {
@@ -302,7 +306,7 @@ impl Walker {
             self.scene.sim.as_mut().unwrap().drones.scripts.skip_request = true;
         }
         let y_before = self.scene.sim.as_ref().unwrap().bond.pos[1];
-        self.scene.sim.as_mut().unwrap().step_bond(input, fire, false, use_key);
+        self.scene.sim.as_mut().unwrap().step_bond(input, fire, reload, use_key);
         let sim = self.scene.sim.as_ref().unwrap();
         self.total_ticks += 1;
         if !self.drone_watch.is_empty() {
@@ -569,8 +573,11 @@ impl Walker {
                     ..Default::default()
                 };
                 drop(sim);
-                self.tick_fire(input);
-                let _ = on_target;
+                // Tap only when the view is ON the point (the same discipline `shoot` uses): the
+                // aim wobbles ±0.05 rad while converging, which at the walkreal corridor shot's
+                // 6.5 m is a 0.33 m miss band over the 0.41 m-tall computer — the blind hold
+                // burned clips into the wall and never touched the box.
+                if on_target { self.tick_fire(input); } else { self.tick(input, false); }
             }
         }
         eprintln!("[walk] {label}: shoot_point cap");
@@ -614,7 +621,7 @@ impl Walker {
                             let eye = [bp[0], bp[1] + sim.bond.eye - sim.bond.crouch_drop, bp[2]];
                             let ds = dxz(sd.pos, eye);
                             let dtg = dxz(dp, eye).max(1e-3);
-                            if ds > dtg + 0.5 {
+                            if ds > 1.0 { // any depth past the muzzle: the contact between Bond and the target is hit too (the game's bullets hit ANY drone [M 0x140968:85-95]) — the 01 walk killed him standing between Bond and guard 5 (the chwatch 0x60 at frame 21225)
                                 let t = ds / dtg;
                                 let ex = eye[0] + (at[0] - eye[0]) * t;
                                 let ez = eye[2] + (at[2] - eye[2]) * t;
@@ -1276,4 +1283,31 @@ pub fn nav_route_global(sim: &nf_view::scene::Sim, start: V3, dest: V3) -> Optio
 /// The smallest-volume cel bbox containing `p` (the index, for probes).
 pub fn cel_of(cels: &[nf_view::scene::Cel], p: [f32; 3]) -> Option<usize> {
     nf_view::scene::find_cel(cels, p)
+}
+
+// ---- the 07000001 ambush helpers (level-01-mayhew-wait-2) -----------------------------------
+// The ally-wait hold (the kind-8 route's node 33, flag 0x20 [M NDrone2_ReachedDestNode
+// 0x153358:85-94]) releases only on ch 0x99 — the AND of the three ambush guards' death
+// channels 0x13/0x11/0x12 [D mux pl 318] — and the real trace holds the contact in 0x21 at
+// (2.94,7.22) for 1262 frames while the ambush runs [L tests/traces/01-doors.trace]. The
+// player clears it on foot. These are the two ladders the hall's own geometry demands: the
+// hall's south wall walls the resupply/approach nav off from the corridor (the wedged
+// resupply sat at segment t≈0.095 of every southward hop, the wedged guard approach at
+// ≈0.47 — both gave up at the 3000-tick cap).
+
+/// Back to the proven inside-the-hall stage point through the meet-room corridor. The
+/// guards hunt along the hall's south entry, and an approach from the courtyard side wedges
+/// on the hall's south wall; the meet-room hop crosses x≈1.9 south of the wall span
+/// (z 11.1–13.1 [D cels]) and the hall hop is the east-door route the stage already proved.
+pub fn hall_restage(w: &mut Walker, label: &str) {
+    w.walk_nav_to([6.5, 6.4, 8.2], &format!("{label}: the meet-room corridor"), 1.6);
+    w.walk_nav_to([2.9, 6.3, 16.3], &format!("{label}: the hall stage (east door)"), 3.0);
+}
+
+/// Dry inside the hall: a player steps out the door he came in by. East door (7.9,5.3,11.1)
+/// [D placement] → the corridor boxes (resupply's walked-path corridor) → back inside.
+pub fn hall_ammo_ladder(w: &mut Walker, label: &str) {
+    w.walk_nav_to([7.9, 5.3, 11.1], &format!("{label}: out the hall's east door"), 1.6);
+    w.resupply(label);
+    hall_restage(w, label);
 }

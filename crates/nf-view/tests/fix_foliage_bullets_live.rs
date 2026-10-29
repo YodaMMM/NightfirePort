@@ -11,16 +11,21 @@
 //! - The 07000005 tree objects (map 50, obj 96/98) carry glist flags 0x41 [D] — node-flagged —
 //!   and the leaf cards (obj 21/109/117/144, flags 0x10) carry the 0x40 surface byte [D]. The
 //!   separate wood core obj 97 (30 tris, mat 0x04, flags 0) is NOT flagged [D].
-//! - The bullets' FLIGHT, though, never runs that walk: a bullet's HITTEST stays inactive
-//!   (+0x94 = 0 [M 0x12c668 disasm]), so `Collide_Update`'s per-object walk never processes it,
-//!   and the live-pinned guard cover trace (`ai_live::guard_takes_cover_like_the_game`,
-//!   UnderCoverAim 37 ticks) pins the round stopping on the flagged tree's FIRST face — the pass
-//!   does not lift the flight stop. The port's first-hit flight already matches.
+//! - The bullets' FLIGHT runs the same pick+walk as every moving object: Bullet_update arms the
+//!   HITTEST every flying tick (+0x94 = 0x101/0x201, +0x9a = the surface mask 0x20 for guns
+//!   without weapon_data+0x6c & 0x800 [M 0x12e7b0 disasm 0x12f030-0x12f058, 0x12f134/0x12f154]),
+//!   and the sorted contact list is walked past every pass-flagged hit to the first solid one
+//!   [M Collide_Update 0x1ea398:216-229]. So a flagged TREE stops the round on its UNFLAGGED wood
+//!   core (obj 97, mat 0x04 [D]) — the shell itself never stops anything. (An earlier reading of
+//!   this file took the +0x94 = 0 at Bullet_init 0x12c668 as "the pick never arms" and pinned the
+//!   flight to the shell's first face; the flight's own per-tick mask writes settle it the other
+//!   way — the walk rule governs. The bulletproof LOOK is unchanged: the core's decals sit inside
+//!   the canopy where no player sees them.)
 //!
-//! So the round stops on the leaf shell (surface byte 0x13, class 19: the EffectInfo record has
-//! NO decal and NO gas — only debris chips [D EffectInfo class 19]), which reads as "bulletproof"
-//! next to every wall that shows a bullet hole. These tests pin that trace behaviour and the
-//! aim-trace family's drop, so the distinction survives.
+//! So the round stops INSIDE the tree, on the unflagged core, whose EffectInfo record has NO decal
+//! and NO gas — only debris chips [D EffectInfo] — and the canopy hides the impact from outside:
+//! it reads as "bulletproof" next to every wall that shows a bullet hole. These tests pin the
+//! flight's walk rule and the aim-trace family's drop, so the distinction survives.
 //!
 //! Run with: `NF_ISO=… cargo test -p nf-view --test fix_foliage_bullets_live`
 
@@ -34,13 +39,12 @@ const TREE_HI: [f32; 3] = [93.52, 30.72, 92.87];
 
 fn in_tree_span_x(x: f32) -> bool { x >= TREE_LO[0] - 0.2 && x <= TREE_HI[0] + 0.2 }
 
-/// The flight stops on the flagged tree's first face (the 0x13 shell) — the same surface the flat
-/// trace reports — while the aim/LOS family's trace (bit 0x8 [M 0x1ebff0-0x1ec010]) reports the
-/// unflagged wood core (obj 97, 0x04 [D]) behind the skipped shell. The fired round's impact lands
-/// on the shell, with the shell's class-19 record: no decal, no gas puff [D EffectInfo] — the
-/// "bulletproof" look.
+/// The flight drops the flagged shell and stops on the unflagged core (the walk rule [M
+/// 0x1ea398:216-229]); the aim/LOS family (bit 0x8 [M 0x1ebff0-0x1ec010]) drops it at the
+/// intersect — both report the core. The fired round's impact lands on the core, with the core's
+/// class-2 record — and the canopy hides it from outside (the "bulletproof" look).
 #[test]
-fn flight_stops_on_the_flagged_shell_while_the_aim_trace_skips_it() {
+fn the_flight_and_the_aim_trace_both_stop_on_the_core_behind_the_flagged_shell() {
     let Some(iso) = iso() else { eprintln!("NF_ISO not set — skipping"); return };
     let mut scene = nf_view::load(&iso, "07000005.bin", false).expect("load 07000005");
     {
@@ -57,8 +61,10 @@ fn flight_stops_on_the_flagged_shell_while_the_aim_trace_skips_it() {
         sim.bond.pitch = dir[1].clamp(-1.0, 1.0).asin() * 2.0 / std::f32::consts::PI;
         let w = &sim.world;
         let far = [eye[0] + dir[0] * 60.0, eye[1] + dir[1] * 60.0, eye[2] + dir[2] * 60.0];
-        // The flight/flat trace: the first hit is the shell's 0x13 face inside the tree span.
-        let (tf, _, mf) = w.segment_surface(eye, far, false).expect("the flight trace stops at the shell");
+        // The flat trace (the sight-class query, no drops for 0x13): the shell's 0x13 face inside
+        // the tree span. The FLIGHT and the aim family stop deeper, on the core (asserted below
+        // through the fired round).
+        let (tf, _, mf) = w.segment_surface(eye, far, false).expect("the flat trace stops at the shell");
         let pf = [eye[0] + (far[0] - eye[0]) * tf, eye[1] + (far[1] - eye[1]) * tf, eye[2] + (far[2] - eye[2]) * tf];
         assert!(in_tree_span_x(pf[0]), "flat: the first hit is inside the tree span ({pf:?})");
         assert_eq!(mf & 0x3f, 0x13, "flat: the hit surface byte is the shell's 0x13, got 0x{mf:02x}");
@@ -88,11 +94,13 @@ fn flight_stops_on_the_flagged_shell_while_the_aim_trace_skips_it() {
         if sim.drones.player_bullets.is_empty() && t > 0 { break; }
     }
     assert!(!impacts.is_empty(), "the round records a world impact (on the tree)");
-    // The impact lands ON the tree (the spread-perturbed ray meets one of its faces) and never
-    // reaches the terrain behind (the 0x0a wall at x≈61.8 the aim trace reports).
+    // The impact lands ON the tree (the flight walks past the flagged shell to the unflagged core
+    // [M 0x1ea398:216-229]) and never reaches the terrain behind (the 0x0a wall at x≈61.8 the aim
+    // trace reports).
     let sim = scene.sim.as_ref().unwrap();
     for p in &impacts {
         assert!(in_tree_span_x(p[0]), "the impact is the tree stop, inside the tree span ({p:?})");
+        assert!(p[0] < 92.0, "the flight passed the shell's first face (x >= 92) and stopped on the core behind it: {p:?}");
         let (_, _, m) = sim.world.segment_surface([p[0] + 1.5, p[1], p[2]], [p[0] - 1.5, p[1], p[2]], false)
             .expect("the impact surface is re-queryable");
         assert!(matches!(m & 0x3f, 0x13 | 0x03 | 0x04), "the impact's surface is the tree's 0x13/0x03/0x04, got 0x{m:02x}");
@@ -100,11 +108,12 @@ fn flight_stops_on_the_flagged_shell_while_the_aim_trace_skips_it() {
     eprintln!("[fire] world impacts on the tree: {impacts:?}");
 }
 
-/// Sister (the guard side): a drone-style `Bullet` flying the same ray dies on the shell (the
-/// flight keeps the first hit), and the flat sight trace stops on the same face (the guards'
-/// sight: flags 0x721, no bit 0x8 [M 0x18e148:214] — the foliage stays solid to sight).
+/// Sister (the guard side): a drone-style `Bullet` flying the same ray also walks past the flagged
+/// shell (the same armed pick + walk [M 0x12f058/0x12f134, 0x1ea398:216-229]) and dies on the core
+/// behind it; the flat sight trace stops on the shell face itself (the guards' sight: flags 0x721,
+/// no bit 0x8, no 0x20 [M 0x18e148:214] — the foliage stays solid to sight).
 #[test]
-fn guard_style_bullets_and_sight_stop_on_the_shell() {
+fn guard_style_bullets_stop_on_the_core_and_sight_on_the_shell() {
     let Some(iso) = iso() else { eprintln!("NF_ISO not set — skipping"); return };
     let mut scene = nf_view::load(&iso, "07000005.bin", false).expect("load 07000005");
     let (eye, dir) = {
@@ -131,8 +140,9 @@ fn guard_style_bullets_and_sight_stop_on_the_shell() {
         if b.state >= 2 { break; }
     }
     let dead = died_at.unwrap_or_else(|| { assert!(b.state >= 2 || b.travelled >= b.range, "the round ends this tick"); b.pos });
-    assert!(in_tree_span_x(dead[0]), "the guard round stops on the shell, inside the tree span ({dead:?})");
-    assert!(dead[0] >= 92.0, "the guard round stops on the FIRST face (x >= 92): {dead:?}");
+    assert!(in_tree_span_x(dead[0]), "the guard round stops inside the tree span ({dead:?})");
+    assert!(dead[0] < 92.0, "the guard round passed the flagged shell's first face (x >= 92) and \
+        stopped on the core behind it [M 0x1ea398:216-229 + 0x12f058/0x12f134]: {dead:?}");
     // Sight: the flat trace stops on the same shell face.
     let far = [eye[0] + dir[0] * 60.0, eye[1] + dir[1] * 60.0, eye[2] + dir[2] * 60.0];
     let t = sim.world.segment(eye, far).expect("sight still stops at the tree");

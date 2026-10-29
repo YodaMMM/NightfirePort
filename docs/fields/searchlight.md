@@ -121,13 +121,15 @@ flicker seed (`Rand_Rand(0)`) — one or two draws per part, in creation order (
 | +0xF0 | corona part's 0x2000 = LOS-clear bit (± set/clear per tick); +0x229 base from the glist | [M 001cb900:342,345] [L: 0x0022229 on lit parts, 0x000229 dark] |
 | +0xEC + GameState+52 | state-2 smoke phase: `(GameState+52 + obj+0xEC) % 7 == 0` → `Gas_Init` | [M 001cb900:375-384] |
 | +0xD0 | HITDATA contact list — the break walk (entries: next +4, other obj +0x58, damage f32 +0x8) | [M 001cb900:406-461] |
-| +0xD8/+0x20 | glist / cel: ray and LOS cel args; `Control_NextLOD` swaps +0xD8 ← glist+0x40 (the damaged model) on kill/break | [M 001cb900:207,338,138,454] |
+| +0xD8/+0x20 | glist / cel: ray and LOS cel args; `Control_NextLOD` swaps +0xD8 ← *(glist+0x40) on kill/break — the runtime glist+0x40 is the block-0x27 chain pointer (`parsemap_block_LOD` 0x1d1f10:21 stores `pCelList + index·0x50` from the disc's per-object first-dword, −1 = none). 07000006 [D]: head object 2 OBJECT_SearchLight1 → 131 OBJECT_SearchLightBroken; mounts/beams/coronas/spots −1 | [M 001cb900:207,338,138,454; 0x1349b0:8-12; 0x1d1f10:21] [D 07000006 block 0x27] |
 
 ## State machine [M 001cb900] (head only)
 
 - **kill gate (any state)** :92-138 — inst+0x35 raised: state 3; light node freed; links[2..4]
-  objects marked `+0xFE \|= 1` (deleted by the movement pass) and their link slots zeroed;
-  inst+0x34/35/36 = 0; `Control_NextLOD(head)`. links[0] (mount) untouched.
+  objects marked `+0xFE \|= 1` (deleted by the movement pass, 0x1336f8:88-91) and their link slots
+  zeroed; inst+0x34/35/36 = 0; `Control_NextLOD(head)` — the head's model swaps down the block-0x27
+  chain (07000006: OBJECT_SearchLight1 → OBJECT_SearchLightBroken, the dark-lens variant) while
+  head and mount KEEP drawing — the housing stays [D block 0x27]. links[0] (mount) untouched.
 - **0 sweep** :357-367 — polar = sinf(phase·0x3C567751)·half + mid; azimuth = sinf(phase·SWEEP +
   π/2)·half + inst+0x14; phase += FRAME_RATE_MUL (fmodf discarded). **The (−π,π] normalisation of
   both stores is not visible in the decompile** (Ghidra dropped block 0x1cbc74, WARNING line 3)
@@ -152,13 +154,19 @@ flicker seed (`Rand_Rand(0)`) — one or two draws per part, in creation order (
 
 ## Port mismatches (crates/nf-game/src/searchlight.rs — report only)
 
-1. **Kill path deletes the wrong parts** — game: links[2..4] objects marked for deletion
-   (`+0xFE |= 1`, gone from the list next tick), mount untouched. Port hides every link
-   **including the mount** and keeps the objects:
-   `for p in links.into_iter().flatten() { self.parts[p].drawn = false; … }` (searchlight.rs:218-221).
-   Visual: the port's mount vanishes on the channel kill; the game's stays.
-2. **Break path same deletion difference** — game deletes links[2..4] and calls `Control_NextLOD`
-   (damaged model) [M 001cb900:438-454]; port hides all links, no model swap (searchlight.rs:423-429).
+1. **[FIXED 2026-10-28, level-06-searchlight-state] Kill path deleted the wrong parts** — the port
+   hid every link **including the mount** (`for p in links.into_iter().flatten() { … drawn = false }`),
+   dropped the mount link slot, and never swapped the head's model. Now: the kill covers
+   links[2..4] only (the game's walk touches psVar2+0x14/0x16/0x18 [M 001cb900:113-135]), the
+   mount link (inst+0x20) survives drawn, the alarm byte is zeroed with the other two
+   [M :134-137], and the `Control_NextLOD` model swap is pinned as `Part::lod_next` [M :138] —
+   the block-0x27 chain target, 07000006's four heads → object 131 OBJECT_SearchLightBroken
+   [D]. Unit test `the_off_channel_kill_matches_the_game_field_for_field` + the real-path
+   `searchlight_off_07000006_live` pin it. The killed head must DRAW the chain target's mesh —
+   a renderer task (listed in the report).
+2. **Break path model swap [FIXED in the same pass]** — the break's deletion set was already
+   correct (links[2..4] individually, mount untouched [M :438-453]); the missing half was the
+   `Control_NextLOD` swap [M :454] — now pinned as `Part::lod_next` in `bullet_check`.
 3. **Break gate** — game breaks only when the contact entry's damage float > 0.0
    (`if (fVar16 < *(float *)(aiStack_d0[0] + 8))` 001cb900:417); the port's
    `for &(from, to) in bullets { … seg_box … }` (searchlight.rs:418-419) has no damage value — any
@@ -237,3 +245,10 @@ instance = `u32@obj+0xE0`. On 07000005 at start the dark head with the linked sp
 4. **Orphan adoption** — `poke 0x016e96c8 4 0x016e8ec0` (write the orphan spot into head
    016dfe70's links[2] at inst+0x28): within a tick the orphan's position (+0x30) should jump from
    −10000s onto the first ray hit — direct proof of the links[2]-is-the-ray-target reading.
+5. **Off-kill model swap** (07000006, the bright-lens report) — cut the fusebox (the green-wire
+   group-0 Laser cut, ch 57) and watch a courtyard head's obj+0xD8: on the kill tick it should
+   step from the placement's glist to the OBJECT_SearchLightBroken glist (Control_NextLOD
+   [M 001cb900:138]; the chain via glist+0x40 [M 0x1d1f10]) — the housing stays, the lens goes
+   dark, the beam/corona/spot vanish. Also `watch` the head obj+0xFE (never set — the head is not
+   deleted) and the mount obj+0xFE (never set). Predicted render: the housing draws the
+   Broken-variant mesh.

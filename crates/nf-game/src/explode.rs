@@ -59,6 +59,18 @@ pub struct Explosion {
     /// `drone.rs`'s tick on the weapon's own `+0x70` flags: & 0x2000 flash / & 0x20000 smoke [M
     /// 0x12dd60, 0x12e104]).
     pub weapon_type: u16,
+    /// `SCRIPTINFO+0x98`: the loaded script's id — `Explode_Update`'s debris arm plays only for
+    /// 0x0600052 [M 0x17c350:28]. 0 = no script loaded (the arm's script gate then passes — the
+    /// game reads `inst+0x34 != 0 &&` before the hash compare).
+    pub script_hash: u32,
+    /// `instance+0x00..0x0f`: the debris direction — `Mat_GetUp` reads the aligned script matrix's
+    /// up row into the block [M 0x17cbd0:96]. The port stores the aligned basis' up row [S: the
+    /// game's matrix is the SCRIPT's, aligned by `Mat_Align2Dir`; the port's `align2dir` builds
+    /// the same shape from the to-player vector].
+    pub debris_dir: V3,
+    /// `instance+0x10..0x1f`: the debris jitter — basisA + basisB of `Vec_MakeOrthonormalBasis`
+    /// over the normalised to-closest-player vector [M 0x17c930:118-131, 0x17cbd0].
+    pub debris_jitter: V3,
 }
 
 impl Explosion {
@@ -75,6 +87,9 @@ impl Explosion {
             propagated: false,
             age: 0,
             weapon_type,
+            script_hash: 0,
+            debris_dir: [0.0, 1.0, 0.0],
+            debris_jitter: [0.0; 3],
         }
     }
 
@@ -140,14 +155,76 @@ pub fn create_debris(
         for k in 0..3 {
             vel[k] = (mag * dir[k] + jitter[k] * rng.frand_half(speed)) * (1.0 / 60.0); // REC_FRAME_RATE [M 0x1ac808:33-38]
         }
-        // `Rand_FRandHalf_Vec(0x3e71463b, …)` [M 0x1ac808:40] — three half-range draws.
+        // `Rand_FRandHalf_Vec(0x3e71463b, …)` [M 0x1ac808:40] — three half-range draws. The
+        // constant is 0x3E71463B = 0.2356194704771042 (exact f32) [L ee_start_05.bin].
         for s in spin.iter_mut() {
-            *s = rng.frand_half(0.244_140_63);
+            *s = rng.frand_half(0.235_619_47);
         }
         let g = gfx[rng.rand(gfx.len() as u32 - 1) as usize];
         out.push(DebrisSpawn { vel, spin, life, scale, gfx: g, class: 0x10 });
     }
     out
+}
+
+/// `MetalHash_132` @0x2A3718 — the metal debris mesh hashes `Explode_Update` hands to
+/// `Debris_CreateEx` for kinds 5/6 [L ee_start_05.bin @0x2a3718, four u32s; symbol
+/// work/action-symtab.tsv `002a3718 MetalHash.132`].
+pub const METAL_HASH_132: [u32; 4] = [0x0200_0414, 0x0200_0415, 0x0200_0416, 0x0200_041b];
+
+/// `StoneHash_133` @0x2A3728 — the stone debris meshes, kinds 8/10/0xB, gated on level 0x0700008
+/// with switch channel 0x53 on [L ee_start_05.bin @0x2a3728; the 4th entry repeats the 1st].
+pub const STONE_HASH_133: [u32; 4] = [0x0200_0664, 0x0200_0665, 0x0200_0666, 0x0200_0664];
+
+/// The blast script 0x0600052's `SCRIPTINFO+0xAB0` u16 — the lifetime `Explode_Create` stores for
+/// a loaded script [M 0x17cd18], the window the debris arm may spawn in (first quarter: age ≤
+/// 41 [M 0x17c350:31]).
+pub const BLAST_SCRIPT_0x0600052: u32 = 0x0600_0052;
+pub const BLAST_SCRIPT_LIFETIME: u16 = 165;
+
+/// `Explode_Update` 0x17c350's debris arm, over the port's RNG. The gates in the game's order
+/// [M 0x17c350:21-67]: MPSettings == 1 → none (the port's sim is single-player, no MP branch to
+/// gate); debris kind == 0 → none WITHOUT a draw [M :25]; a loaded script whose +0x98 !=
+/// 0x0600052 → none WITHOUT a draw [M :28]; `lifetime >> 2 < age` → none WITHOUT a draw [M :31];
+/// then ONE `Rand_Rand(5)` draw, and `GameState_time % (r + 10) == 0` gates the spawn [M :34-38];
+/// kinds 5/6 → `MetalHash_132`, 8/10/0xB → `StoneHash_133` only on level 0x0700008 with switch
+/// channel 0x53 on, 7/9 and everything else → nothing [M :41-62]. A passing tick calls
+/// `Debris_CreateEx(2·radius, obj+0xC0, up, jitter, 180, 3, cel, hash, 4)` — 3 particles from the
+/// 180-tick life base [M :63-67, 0x1ac808]. `game_time` is the port's frame counter standing in
+/// for GameState+0x52 [S: the alignment of the two counters is a live check]. Returns the spawned
+/// particles (empty = nothing this tick); the draws happen exactly as in the game — consumed
+/// even when the modulo gate then fails.
+pub fn debris_arm(
+    e: &Explosion,
+    rng: &mut crate::drone::Rng,
+    game_time: u32,
+    level: u32,
+    stone_channel_on: bool,
+) -> Vec<DebrisSpawn> {
+    if e.debris == 0 {
+        return Vec::new();
+    }
+    if e.script_hash != 0 && e.script_hash != BLAST_SCRIPT_0x0600052 {
+        return Vec::new();
+    }
+    if (e.lifetime as u32) >> 2 < e.age {
+        return Vec::new();
+    }
+    let r = rng.rand(5);
+    if game_time % (r + 10) != 0 {
+        return Vec::new();
+    }
+    let gfx: &[u32] = match e.debris {
+        5 | 6 => &METAL_HASH_132,
+        8 | 10 | 0xb => {
+            if level != 0x0700_0008 || !stone_channel_on {
+                return Vec::new();
+            }
+            &STONE_HASH_133
+        }
+        _ => return Vec::new(),
+    };
+    create_debris(rng, e.radius + e.radius, e.debris_dir, e.debris_jitter,
+        (60.0f32 * 3.0) as u32, 3, gfx)
 }
 
 /// Who an explosion damaged, in the port's terms (`Explode_Propagate`'s per-case effects).
@@ -184,8 +261,8 @@ pub struct Targets<'a> {
     /// objects; the copter itself is 0x3b and never matches case 0 [M Copter_Create 0x17d340
     /// sets obj+0xFF = 0x3b, the parts are the SP's class-0 entities]).
     pub copters: &'a [(usize, Vec<(V3, f32)>)],
-    /// Case 0x21 — the destroyables `(index, pos, hit radius, smashed already)`.
-    pub destroys: &'a [(usize, V3, f32, bool)],
+    /// Case 0x21 — the destroyables `(index, pos, hit radius, smashed already, tag+0x14 mask)`.
+    pub destroys: &'a [(usize, V3, f32, bool, u16)],
 }
 
 /// `Explode_Propagate` (0x17c518): a sphere of `radius` from `pos`; for every hit object
@@ -225,12 +302,15 @@ pub fn propagate(pos: V3, radius: f32, damage: f32, attacker: usize, t: &Targets
         sweep(p, r, &mut |a| d = a);
         if d > 0.0 { out.breaks.push((i, d)); }
     }
-    for &(i, p, r, smashed) in t.destroys {
+    for &(i, p, r, smashed, mask14) in t.destroys {
         if smashed { continue; }
         let mut d = 0.0f32;
         sweep(p, r, &mut |a| d = a);
-        // Case 0x21's own gate: the smash needs at least 1.0 [M 0x17c6a8].
-        if d >= 1.0 { out.destroys.push(i); }
+        // Case 0x21's own gate: the smash needs at least 1.0 [M 0x17c6a8], and the tag's
+        // bullet mask must open the 0x20 bit [M 0x17c518:170 — `*(u16*)(data+0x14) & 0x20 ==
+        // 0`]: the C5 doors' 0xFFEF keeps it set, so NO blast ever smashes them — the drain
+        // through `Destroy_CollisionHandler` is the only death.
+        if d >= 1.0 && mask14 & 0x20 == 0 { out.destroys.push(i); }
     }
     // Case 0 [M 0x17c518:86-105]: the class-0 part sweep — per matching part the amount adds to
     // both accumulators, so the copter's total is the SUM over its hit parts (the game adds per
@@ -300,13 +380,29 @@ mod tests {
         // integer truncation the amounts jump in damage/radius steps: damage 5, radius 10 → a target at
         // 9.5 (truncated 9) takes 5·(1−9/10) = 0.5 → no smash; at 4.5 (truncated 4) it takes 3 → smash.
         let far = Targets { drones: &[], player: [1000.0; 3], breaks: &[],
-            destroys: &[(0, [9.5, 0.0, 0.0], 0.0, false)], copters: &[] };
+            destroys: &[(0, [9.5, 0.0, 0.0], 0.0, false, 0)], copters: &[] };
         let h = propagate([0.0; 3], 10.0, 5.0, usize::MAX, &far);
         assert!(h.destroys.is_empty(), "0.5 damage must not smash");
         let near = Targets { drones: &[], player: [1000.0; 3], breaks: &[],
-            destroys: &[(0, [4.5, 0.0, 0.0], 0.0, false), (1, [4.5, 0.0, 0.0], 0.0, true)], copters: &[] };
+            destroys: &[(0, [4.5, 0.0, 0.0], 0.0, false, 0), (1, [4.5, 0.0, 0.0], 0.0, true, 0)], copters: &[] };
         let h = propagate([0.0; 3], 10.0, 5.0, usize::MAX, &near);
         assert_eq!(h.destroys, vec![0], "3 damage smashes the unsmashed one only");
+    }
+
+    #[test]
+    fn destroy_case_respects_the_0x20_mask_bit() {
+        // The second half of case 0x21's gate [M 0x17c518:170]: the smash needs
+        // `*(u16*)(data+0x14) & 0x20 == 0`. The C5 doors' tag+0x14 is 0xFFEF [D #93/#96 p4
+        // 0x10, M 0x12c318:47-52] — bit 0x20 set, so even a full-damage blast never smashes
+        // them; a mask-0 tag (every p4-0 destroyable) takes the blast.
+        let door = Targets { drones: &[], player: [1000.0; 3], breaks: &[],
+            destroys: &[(0, [0.5, 0.0, 0.0], 0.0, false, 0xffef)], copters: &[] };
+        let h = propagate([0.0; 3], 10.0, 100.0, usize::MAX, &door);
+        assert!(h.destroys.is_empty(), "0xFFEF & 0x20 ≠ 0 — the gate blocks the smash [M 0x17c518:170-176]");
+        let plain = Targets { drones: &[], player: [1000.0; 3], breaks: &[],
+            destroys: &[(0, [0.5, 0.0, 0.0], 0.0, false, 0), (1, [0.5, 0.0, 0.0], 0.0, false, 0xffdf)], copters: &[] };
+        let h = propagate([0.0; 3], 10.0, 100.0, usize::MAX, &plain);
+        assert_eq!(h.destroys, vec![0, 1], "mask 0 and 0xFFDF (0x20 clear) both smash; the C5-shaped 0xFFEF does not");
     }
 
     #[test]
@@ -322,7 +418,8 @@ mod tests {
             assert!((30..60).contains(&p.life), "life = Rand(30) + 30, got {}", p.life);
             assert!(gfx.contains(&p.gfx));
             for s in p.spin {
-                assert!(s.abs() <= 0.244_140_63, "the spin is a half-range draw, got {s}");
+                // [M 0x1ac808:40] the spin constant is 0x3E71463B = 0.23561947… [L ee_start_05.bin].
+                assert!(s.abs() <= 0.235_619_47, "the spin is a half-range draw, got {s}");
             }
             // The velocity's y rides the blast direction (jitter only perturbs it around mag·dir).
             assert!(p.vel[1] > 0.0, "the direction term dominates on the y axis: {p:?}");
@@ -343,5 +440,141 @@ mod tests {
         let d = create_debris(&mut rng, 8.0, [0.0; 3], [0.0; 3], 2, 3, &[0x2000_009]);
         assert_eq!(d.len(), 3);
         assert!(d.iter().all(|p| p.gfx == 0x2000_009));
+    }
+
+    #[test]
+    fn the_debris_arm_spin_constant_is_the_games_word() {
+        // [M 0x1ac808:40 `Rand_FRandHalf_Vec(0x3e71463b, …)`; L ee_start_05.bin] the port's
+        // constant must be bit-equal to the game's word — the old 0.24414063 (0x3E7A0000) was not.
+        assert_eq!(0.235_619_47f32.to_bits(), 0x3e71_463b);
+    }
+
+    #[test]
+    fn the_hash_arrays_match_the_snapshot() {
+        // [L ee_start_05.bin @0x2a3718/@0x2a3728; symbols MetalHash.132/StoneHash.133].
+        assert_eq!(METAL_HASH_132, [0x0200_0414, 0x0200_0415, 0x0200_0416, 0x0200_041b]);
+        assert_eq!(STONE_HASH_133, [0x0200_0664, 0x0200_0665, 0x0200_0666, 0x0200_0664]);
+    }
+
+    fn blast(kind: u16, script: u32) -> Explosion {
+        Explosion { pos: [0.0; 3], radius: 10.0, damage: 80.0, attacker: usize::MAX,
+            lifetime: 165, script: script != 0, debris: kind, propagated: true, age: 1,
+            weapon_type: 0x34, script_hash: script, debris_dir: [0.0, 1.0, 0.0],
+            debris_jitter: [0.0; 3] }
+    }
+
+    #[test]
+    fn kind_zero_blasts_never_draw_or_spawn_debris() {
+        // The mine's inline Explode_Create stores kind 0 [M 0x17c930:128], Destroy_Smash's stack
+        // slot is an explicit 0 [M 0x12bcf8 sw $zero,($sp)], the fuse arm's too [M 0x12ce14] — and
+        // `Explode_Update` returns BEFORE the Rand_Rand(5) draw on kind == 0 [M 0x17c350:25-27].
+        // 07000015's mines and oil barrels blast through these calls: no debris, no draws, ever.
+        for kind in [0u16] {
+            let mut rng = crate::drone::Rng::new(3);
+            for age in 1..=41u32 {
+                let mut e = blast(kind, 0x0600_0052);
+                e.age = age;
+                let before = rng.draws;
+                assert!(debris_arm(&e, &mut rng, 1000 + age, 0x0700_0015, false).is_empty());
+                assert_eq!(rng.draws - before, 0, "kind 0 returns before the draw [M 0x17c350:25]");
+            }
+        }
+        // Sister (can fail): kind 6 DOES reach the draw.
+        let mut rng = crate::drone::Rng::new(3);
+        let e = blast(6, 0x0600_0052);
+        let before = rng.draws;
+        let _ = debris_arm(&e, &mut rng, 1000, 0x0700_0015, false);
+        assert_eq!(rng.draws - before, 1, "one Rand_Rand(5) draw per gated tick [M 0x17c350:34]");
+    }
+
+    #[test]
+    fn non_blast_script_blasts_never_draw_or_spawn_debris() {
+        // `inst+0x34 != 0 && SCRIPTINFO+0x98 != 0x6000052 → return` before the draw [M 0x17c350:28].
+        // The monitor blast (0x0600027) and the Samurai bolt's (0x06007c4) never spawn debris.
+        for script in [0x0600_0027u32, 0x0600_004f, 0x0600_07c4] {
+            let mut rng = crate::drone::Rng::new(5);
+            let e = blast(6, script);
+            let before = rng.draws;
+            assert!(debris_arm(&e, &mut rng, 1000, 0x0700_0015, false).is_empty());
+            assert_eq!(rng.draws - before, 0);
+        }
+        // Sister (can fail): the standard blast script passes the gate.
+        let mut rng = crate::drone::Rng::new(5);
+        let e = blast(6, 0x0600_0052);
+        let before = rng.draws;
+        let _ = debris_arm(&e, &mut rng, 1000, 0x0700_0015, false);
+        assert_eq!(rng.draws - before, 1);
+    }
+
+    #[test]
+    fn the_first_quarter_gate_and_the_modulo_gate() {
+        // lifetime>>2 < age → return before the draw [M 0x17c350:31]; with lifetime 165 the arm
+        // is dead from age 42 on [M 0x17cd18 the +0xAB0 u16]. The draw then happens EVERY gated
+        // tick — consumed even when the modulo fails [M 0x17c350:34-38] — and the passing tick
+        // spawns 3 particles whose 10 draws each ride the shared stream [M 0x1ac808 draws].
+        let mut rng = crate::drone::Rng::new(9);
+        for age in 42..=50u32 {
+            let mut e = blast(6, 0x0600_0052);
+            e.age = age;
+            let before = rng.draws;
+            assert!(debris_arm(&e, &mut rng, 7, 0x0700_0015, false).is_empty());
+            assert_eq!(rng.draws - before, 0, "age {} is past the first quarter", age);
+        }
+        // Find a passing game_time with this seed (fresh stream per probe), then pin the counts.
+        let mut passing = None;
+        for t in 1..200u32 {
+            let mut rng = crate::drone::Rng::new(11);
+            let e = blast(6, 0x0600_0052);
+            if !debris_arm(&e, &mut rng, t, 0x0700_0015, false).is_empty() { passing = Some(t); break; }
+        }
+        let t = passing.expect("a kind-6 blast must pass the modulo gate within 200 ticks");
+        let mut rng = crate::drone::Rng::new(11);
+        let e = blast(6, 0x0600_0052);
+        let d = debris_arm(&e, &mut rng, t, 0x0700_0015, false);
+        assert_eq!(d.len(), 3, "Debris_CreateEx count = 3 [M 0x17c350:66]");
+        assert_eq!(rng.draws, 1 + 3 * 10, "the gate draw + 10 draws per particle [M 0x1ac808:25-41]");
+        assert!(d.iter().all(|p| METAL_HASH_132.contains(&p.gfx)), "metal meshes for kind 6");
+        assert!(d.iter().all(|p| (90..180).contains(&p.life)), "life = Rand(90) + 90 [M 0x1ac808:29-31]");
+        // Sister (can fail): a different seed at the same tick — the draw stream differs, so the
+        // replay is not vacuous (the port's rand is the ledger-replayed primitive,
+        // tests/diff_calls.rs `Rand_Rand` 40 calls bit-exact).
+        let mut rng = crate::drone::Rng::new(12);
+        let e = blast(6, 0x0600_0052);
+        let before = rng.draws;
+        let d2 = debris_arm(&e, &mut rng, t, 0x0700_0015, false);
+        assert!(rng.draws - before >= 1);
+        let _ = d2;
+    }
+
+    #[test]
+    fn stone_kinds_are_gated_on_level_and_channel() {
+        // Kinds 8/10/0xB need GameState level 0x0700008 AND switch_channels[0x53] on [M 0x17c350:49-58];
+        // kinds 7/9 and the unlisted kinds fall through the switch to nothing (after the draw) [M :46-48].
+        for kind in [8u16, 10, 0xb] {
+            let mut rng = crate::drone::Rng::new(7);
+            let e = blast(kind, 0x0600_0052);
+            let before = rng.draws;
+            assert!(debris_arm(&e, &mut rng, 5, 0x0700_0015, true).is_empty(), "wrong level");
+            assert_eq!(rng.draws - before, 1, "the draw still happens (the level gate is post-draw)");
+            assert!(debris_arm(&e, &mut rng, 5, 0x0700_0008, false).is_empty(), "channel off");
+            // The stone meshes on the one level where they can fire.
+            let mut found = None;
+            for t in 1..200u32 {
+                let mut rng = crate::drone::Rng::new(21);
+                if !debris_arm(&e, &mut rng, t, 0x0700_0008, true).is_empty() { found = Some(t); break; }
+            }
+            let t = found.expect("stone debris must be reachable on 0x0700008 with ch 0x53");
+            let mut rng = crate::drone::Rng::new(21);
+            let d = debris_arm(&e, &mut rng, t, 0x0700_0008, true);
+            assert_eq!(d.len(), 3);
+            assert!(d.iter().all(|p| STONE_HASH_133.contains(&p.gfx)));
+        }
+        for kind in [7u16, 9, 1, 12] {
+            let mut rng = crate::drone::Rng::new(7);
+            let e = blast(kind, 0x0600_0052);
+            let before = rng.draws;
+            assert!(debris_arm(&e, &mut rng, 5, 0x0700_0008, true).is_empty());
+            assert_eq!(rng.draws - before, 1, "kind {} draws then falls through the switch", kind);
+        }
     }
 }

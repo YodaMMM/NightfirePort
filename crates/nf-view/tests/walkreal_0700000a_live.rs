@@ -224,7 +224,7 @@ fn walk_leg_watched(w: &mut Walker, to: [f32; 3], arrive: f32, label: &str) -> b
 }
 
 #[test]
-#[ignore = "the spawn settle is in (the sisters' notes) and this round's run walked the ring to 'east past the alarm-panel corridor' (+98 ticks) before wedging at 'the ai lane to the N-S corridor': Bond (−11.25, 1.14, −14.60) ungrounded, the segment to (−8.60, −14.20) hit at 0.21 [the run's STUCK dump] — the same south-leg wall the -2/-4 rounds met; the mouth's guard slot is 0.5 wide (the jamb corner (−10.60, −18.66) [L the bridge-edge sister]) and cannot take the player's 1.1 capsule, so the mouth crossing still needs either the guard-timing solution (walk the legs steadily, no wedges) or the route's south-leg geometry re-derived at the player's radius. The bridge-edge sister pins the band at a genuine ledge edge."]
+#[ignore = "the 2026-10-26 live checks name the wall stopper (the handler tail 0x194c70) and give the settled [L] heights (the doorway slide 1.1285, the corner slide 1.1159), but this round's ring run still stuck at the walker's cap (the lane leg + the jamb slide the port cannot reproduce with the spine-dir pushes; the radial-dir ports measured-and-reverted — see docs/reports/level-0a-band-settle-2.md) — the ring needs the game's real ref value (the live check in the report)"]
 fn walk_office_floor_qworm_keyboard_hatch() {
     let mut w = load_carry(None);
     {
@@ -498,7 +498,7 @@ fn the_spawn_height_matches_the_game_snapshot() {
 /// stuck panic) — the climb needs the game's per-tick push/step shape through the doorway (the
 /// live check in the report).
 #[test]
-#[ignore = "the port glides the settled 1.0891 (the spawn settle is in) but does not reproduce the doorway base climb's +0.0256 band settle [L 1.1147 fresh boot]; the port's capsule pushes off the base face (−8.604..−8.304, z 16.278 [D tris]) for +0.0036 only and the dead-on approach wedges — needs the game's climb shape (the live check)"]
+#[ignore = "the through-line route (landed here from settle-5's decode) now CROSSES the doorway at the game's rate with the landed settle-5 radial tail — 155 ticks to (-9.27,1.12,16.60) [L 2026-10-26, reproduced this round] — but the y pin still reads 1.1201 vs the settled 1.1285 [L 2026-10-26]: the hall glide's +0.0256 climb settle (the feet-band walked-dy growth, band-settle finding 1) is the separate mechanism still unported"]
 fn the_west_hall_glide_height_matches_the_game() {
     let mut w = load_carry(None);
     // Wait out the SS door sweep (the same guard the main walk runs).
@@ -511,19 +511,25 @@ fn the_west_hall_glide_height_matches_the_game() {
     }
     w.walk_to(Wp::new(-3.9, 0.0, 13.2), "out of the lift");
     w.walk_to(Wp::new(-3.9, 0.0, 15.5).r(1.2), "lobby south");
-    // The game's doorway line [L fresh boot: its walk brushed the doorway's wall base at
-    // x −8.304 and ended the glide at (−11.39, 16.29)] — the base pieces sit at z ≈ 16.28
-    // (the jamb tris (−8.604..−8.304, y 0..0.19) at z 16.278 [D port world tris]); the older
-    // straight (−10, 16.0) leg crossed x −8.3 at z ≈ 15.86, SOUTH of the base, and the port's
-    // capsule (bottom riding dy − cc = 0.054 above the floor) cleared it without a touch.
-    w.walk_to(Wp::new(-8.45, 0.4, 16.29).r(0.4), "the doorway base line");
-    w.walk_to(Wp::new(-10.0, 0.4, 16.29).r(0.8), "the west hall");
+    // The game's glide is ONE walk from the lobby through the doorway into the hall [L
+    // 2026-10-26: the fresh-boot glide crosses the doorway in 155 ticks, exiting at
+    // (-9.27, 1.12, 16.60) — the jamb slide around the base pieces at z ≈ 16.278 (the jamb tris
+    // (-8.604..-8.304, y 0..0.19) [D port world tris]) is part of the through-line, not a
+    // detour]. The old (-8.45, 16.29) stop sat INSIDE the jamb column's x-range and wedged the
+    // walker (the doorway slide's route is the through-line, decoded on settle-5).
+    w.walk_to(Wp::new(-10.0, 0.4, 16.29).r(0.8), "the west hall (the through-line)");
     // Read the glide y in the hall's steady window (x −9.5..−11.39 on the walked line).
     let p = w.scene.sim.as_ref().unwrap().bond.pos;
     assert!(p[0] < -9.0, "walked into the west hall, at {p:?}");
-    // The game's steady hall glide [L fresh boot]: 1.1147 within 0.003.
-    assert!((p[1] - 1.1147).abs() <= 0.003,
-        "the west hall glide must read the game's 1.1147 [L], got {:.4} at ({:.3},{:.3})",
+    // The game's steady hall glide, RE-PINNED to the 2026-10-26 probe trace [L fresh boot,
+    // probe-placed at 1.12, walked west from (-8.0, 1.12, 16.29)]: the settled y 1.1285 (the
+    // probe's frames 21/28/36 and the post-release rest all read 1.1285; the old 1.1147 came
+    // from a spawn-height walk and the driver pins the SETTLED values, not the first sample),
+    // z 16.8295 (the slide north around the jamb — the game is NOT stopped at x -8.304 [L]),
+    // passed x -9.0106 at frame 36. The port cannot reproduce the slide yet (the radial-dir
+    // experiments, see docs/reports/level-0a-band-settle-2.md) — the test stays ignored.
+    assert!((p[1] - 1.1285).abs() <= 0.003,
+        "the west hall glide must read the game's settled 1.1285 [L 2026-10-26], got {:.4} at ({:.3},{:.3})",
         p[1], p[0], p[2]);
 }
 
@@ -536,7 +542,7 @@ fn the_west_hall_glide_height_matches_the_game() {
 /// (1.0891 rest) but the hall glide's +0.0256 climb settle is not (the glide sister's note), so the
 /// corner still enters 0.02 under the game's 1.1147 line.
 #[test]
-#[ignore = "the port wedges at the corner (y dithers across the band edge 1.1347); the game walks through at y 1.127→1.120 [L fresh boot] — needs the hall glide's base-climb settle (the_west_hall_glide_height_matches_the_game's note, the live check) and the corner push landing re-derived (the -2 report's open item: Player_CollisionHandler 0x1949a8:136-140)"]
+#[ignore = "the corner now CROSSES with the below-B kill (NF_WALK_KILL=1) at 870 ticks vs the game's ~60 frames [L 2026-10-26], and the crossing still rides the spine-dir pushes (the radial-dir ports measured-and-reverted — see the report) — the exit-y pin is re-settled to 1.1159 [L 2026-10-26]; un-ignore once the crossing is walk-speed"]
 fn the_corner_crosses_like_the_game() {
     let mut w = load_carry(None);
     for _ in 0..150 {
@@ -565,8 +571,10 @@ fn the_corner_crosses_like_the_game() {
         w.scene.sim.as_ref().unwrap().bond.pos);
     assert!(w.total_ticks - start_ticks <= 300, "the crossing must be walk-speed, took {} ticks", w.total_ticks - start_ticks);
     let p = w.scene.sim.as_ref().unwrap().bond.pos;
-    // The game's exit y 1.120 within 0.01 [L fresh boot] (still settling toward the hall glide).
-    assert!((p[1] - 1.120).abs() <= 0.01, "the corner exit y must read the game's 1.120 [L], got {:.4}", p[1]);
+    // The game's settled exit y, RE-PINNED [L 2026-10-26 fresh boot: placed (-17.87, 1.12, 4.87),
+    // yaw 2.987, 60 frames forward — the xz path bends (a slide), y settles 1.1186 mid-path then
+    // 1.1159 at the end (-17.9715, 1.1159, -0.4162); the driver pins the settled values].
+    assert!((p[1] - 1.1159).abs() <= 0.005, "the corner exit y must read the game's settled 1.1159 [L 2026-10-26], got {:.4}", p[1]);
 }
 
 /// The task's repro (collision-0a-west-doorway-floor): walk the ring's west legs one by one and
@@ -712,4 +720,75 @@ fn west_doorway_wedge_dump() {
         }
     }
     eprintln!("[wedge] leg-6 budget out");
+}
+
+/// The HITTEST+0x50 lifetime accumulator (the port's `Bond.pick_ref`): the 2026-10-26
+/// fresh-boot reads [L, PCSX2, player obj 0x1b78640, BL 0x1b78750, HITTEST+0x50 = BL+0x790]:
+/// it boots (0,0,0), is NEVER reseeded on a walk, stays EXACTLY constant while Bond free-walks
+/// the west hall (frames 20-60+, x −8.93 → −17.1), grows by EXACTLY the per-tick push under the
+/// west hall wall press ((0.1, 0, 0) per contact tick, 0.27723 → 3.27709 over 30 ticks, y/z
+/// unchanged), and carries over a reload. The only writer is the DeltaP add-back [M Collide_Intersect
+/// 0x1ebaa8:353-373], which the port applies as `pick_ref += push` [M player.rs, the walk tick].
+#[test]
+fn the_pick_ref_accumulator_tracks_the_game_ref() {
+    let mut w = load_carry(None);
+    // Fresh load: the accumulator reads (0,0,0) [L ee_start_0700000a BL+0x790].
+    assert_eq!(w.scene.sim.as_ref().unwrap().bond.pick_ref, [0.0f32; 3],
+        "the accumulator boots (0,0,0) [L ee_start_0700000a BL+0x790]");
+
+    // The free walk: probe-placed at the game's own hall line (−8.0, 1.12, 16.29), yaw −1.5708 =
+    // west, stick forward [L 2026-10-26]. The first ticks ride the south wall's skin out to the
+    // equilibrium (the game's settled z 16.8288 [L]); after that the walk is push-free.
+    {
+        let sim = w.scene.sim.as_mut().unwrap();
+        sim.bond.pos = [-8.0, 1.12, 16.29];
+        sim.bond.vel = [0.0; 3];
+        sim.bond.yaw = -1.5708;
+        sim.bond.grounded = true;
+    }
+    w.wait(10);
+    for _ in 0..25 { w.tick(nf_game::player::Input { forward: 1.0, ..Default::default() }, false); }
+    let ref_free0 = w.scene.sim.as_ref().unwrap().bond.pick_ref;
+    let pos_free0 = w.scene.sim.as_ref().unwrap().bond.pos;
+    for _ in 0..40 { w.tick(nf_game::player::Input { forward: 1.0, ..Default::default() }, false); }
+    let sim = w.scene.sim.as_ref().unwrap();
+    let (ref_free1, pos_free1) = (sim.bond.pick_ref, sim.bond.pos);
+    // The [L] constancy is exact on the real game (its VU0 equilibrium arithmetic); the port's
+    // spine-arithmetic skin ride wobbles at the 1e-5 scale (measured: x exact, y 5e-11, z 3e-5
+    // over this window) — pinned 3 decades below the [L] 0.1-per-contact-tick push scale the
+    // press pins below.
+    for k in 0..3 {
+        assert!((ref_free1[k] - ref_free0[k]).abs() < 1e-3,
+            "the accumulator holds on the free hall walk [L 2026-10-26: frames 20-60+, x {:.2} -> {:.2}; \
+             axis {k} moved {} (ref0 {ref_free0:?} pos0 {pos_free0:?} ref1 {ref_free1:?} pos1 {pos_free1:?})]",
+            pos_free0[0], pos_free1[0], ref_free1[k] - ref_free0[k]);
+    }
+    assert!(pos_free1[0] < pos_free0[0] - 1.0, "Bond must actually be walking west ({} -> {})", pos_free0[0], pos_free1[0]);
+
+    // The wall press: out at the west end (the game's wall skin x −45.856/−45.956 [L]), stick
+    // forward into it. Every contact tick the push (0.1, 0, 0) adds back: the accumulator's x
+    // grows by ~0.1 per tick while y/z hold still.
+    {
+        let sim = w.scene.sim.as_mut().unwrap();
+        sim.bond.pos = [-40.0, 1.12, 16.83];
+        sim.bond.vel = [0.0; 3];
+        sim.bond.yaw = -1.5708;
+        sim.bond.grounded = true;
+        sim.bond.pick_ref = [0.0; 3]; // the [L] window's own baseline (the game's 0.27723 carried history)
+    }
+    w.wait(10);
+    let press0 = w.scene.sim.as_ref().unwrap().bond.pick_ref;
+    assert_eq!(press0, [0.0f32; 3], "the press window starts from the zeroed baseline");
+    let mut press_samples: Vec<(f32, f32, f32)> = Vec::new();
+    for _ in 0..80 { w.tick(nf_game::player::Input { forward: 1.0, ..Default::default() }, false); }
+    let sim = w.scene.sim.as_ref().unwrap();
+    let (ref_press, pos_press) = (sim.bond.pick_ref, sim.bond.pos);
+    let _ = press_samples;
+    // The 80-tick press reaches the wall (~59 ticks of 0.1 steps) and holds: the [L] press adds
+    // +0.1 per contact tick. The port's held press covers >= 15 contact ticks => x >= 1.5.
+    assert!(ref_press[0] >= 1.5, "the wall press must accumulate the +0.1 pushes [L 2026-10-26: \
+        0.27723 -> 3.27709 over 30 contact ticks], got {}", ref_press[0]);
+    assert!(ref_press[1].abs() < 1e-3 && (ref_press[2]).abs() < 1e-3,
+        "the press's pushes are x-only [L 2026-10-26: y 0.08088 and z −22.77985 unchanged], got {ref_press:?}");
+    assert!(pos_press[0] <= -45.0, "Bond reached the wall skin (x {:.3})", pos_press[0]);
 }

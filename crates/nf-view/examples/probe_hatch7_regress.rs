@@ -66,8 +66,8 @@ fn seam() {
     if let Some(root) = root {
         let world = &sim.world;
         let set = world.debug_straddle(root, a, b, nf_game::player::RADIUS);
-        let (flat, flat_w) = world.capsule_push(a, b, nf_game::player::RADIUS, false);
-        let (scoped, scoped_w) = world.capsule_push_scoped(Some(root), a, b, nf_game::player::RADIUS, false);
+        let (flat, flat_w) = world.capsule_push(a, b, nf_game::player::RADIUS, false, [1.0e9, 1.0e9, 1.0e9]);
+        let (scoped, scoped_w) = world.capsule_push_scoped(Some(root), a, b, nf_game::player::RADIUS, false, [1.0e9, 1.0e9, 1.0e9]);
         eprintln!("[push] straddle {set:?} flat {flat:?} scoped {scoped:?} walk {flat_w}/{scoped_w}");
     }
 }

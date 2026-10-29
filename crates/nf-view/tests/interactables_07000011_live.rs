@@ -15,6 +15,21 @@ fn load() -> nf_view::scene::Scene {
     nf_view::load(&iso(), "07000011.bin", false).expect("load 07000011")
 }
 
+/// The gold-medal `bonus[0]` word for `base_map` [M PlrStats_HasGoldMedal 0x199a40;
+/// Menu_SetLevelBonus 0x1ffa10 is the award arm]. pickup-medal-gate: without the level's gold
+/// medal the kind-6 '007' pickups are not created at all [M Pickup_Create 0x18dda0:93-95].
+fn gold_bits(base_map: u32) -> u64 {
+    let mut p = nf_game::progress::Progress::default();
+    p.set_level_bonus(base_map, 3, 0);
+    p.bonus[0]
+}
+
+/// The medal load: 07000011 plays under BaseMap 0x07000011 (the mission table [L ee_start_05
+/// 0x2a4350], the gold bit the 0x0700005/9/11 kind-4 group's rank 2 [L 0x2bc920 row 7; M 0x199210]).
+fn load_medaled() -> nf_view::scene::Scene {
+    nf_view::load_with_carry_medals(&iso(), "07000011.bin", false, None, 1, gold_bits(0x0700_0011)).expect("medal load 07000011")
+}
+
 /// The keypad lock (0x2E #177 "Lock - KeypadLocked", param 5 = out ch 0x12 [D]; param 6 = 1 = the
 /// Operative create-unlock tag [D]) sits UNLOCKED on Operative (`Lock_Create` 0x1ae1f8:67-69 →
 /// `Lock_Unlock`), and `Lock_Update` case 1 (0x1ae3d8) writes `switch_channels[u16[+8]] = 1` EVERY
@@ -255,7 +270,10 @@ fn storeroom_door_unlocks_from_its_touch_plate() {
 /// "Pickup 007" (#275, kind 6 [D]) is consumed. Sisters: armour 0 / the Spas un-owned before.
 #[test]
 fn pickups_taken_by_walking_over() {
-    let mut scene = load();
+    // pickup-medal-gate: the kind-6 row (#275) creates only with 07000011's gold medal recorded
+    // [M Pickup_Create 0x18dda0:93-95] — the medaled load below; the old plain load pinned the
+    // port's ungated create, which the decompile contradicts (the test was wrong, see the report).
+    let mut scene = load_medaled();
     {
         let sim = scene.sim.as_ref().unwrap();
         assert_eq!(sim.drones.health.armour, 0.0, "sister: no armour before");
@@ -289,6 +307,11 @@ fn pickups_taken_by_walking_over() {
     scene.sim.as_mut().unwrap().bond.vel = [0.0; 3];
     for _ in 0..40 { scene.sim.as_mut().unwrap().step_bond(Default::default(), false, false, false); }
     assert!(taken(&scene), "the BOND_BONUS is consumed on the walk-over [M 0x18e650:234-236]");
+    // The no-medal arm [M 0x18dda0:93-95]: the plain fresh-boot load creates no kind-6 at all —
+    // #275's spot holds nothing.
+    let bare = load();
+    assert!(bare.sim.as_ref().unwrap().drones.pickups.iter().all(|p| p.kind != nf_game::pickup::kind::BOND_BONUS),
+        "no gold medal → the kind-6 bonus is not created [M 0x18dda0:93-95]");
 }
 
 /// The Q-Claw grapple (0x3A #265 "GRAPPLEPOINT_SkyBridge" [D]; the level kit grants the claw 0x50

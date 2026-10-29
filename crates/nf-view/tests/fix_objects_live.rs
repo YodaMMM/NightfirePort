@@ -14,8 +14,20 @@ fn iso() -> Option<String> { std::env::var("NF_ISO").ok() }
 
 fn load(iso: &str, level: &str) -> nf_view::scene::Scene {
     let mut scene = nf_view::load(iso, level, false).expect("load");
-    // fix-cutscenes: 07000001/07000002 now play their level-start intro (Bond disabled, drones frozen). Skip it
-    // the game's way (hold the skip: `Script_FFwd` 0x1dac78), as fix_player2_live does, so the tests start in control.
+    skip_intro(&mut scene, level);
+    scene
+}
+
+/// The same load carrying a `bonus[0]` word (pickup-medal-gate: the kind-6 gate [M 0x18dda0:93-95]).
+fn load_medaled(iso: &str, level: &str, bits: u64) -> nf_view::scene::Scene {
+    let mut scene = nf_view::load_with_carry_medals(iso, level, false, None, 1, bits).expect("medal load");
+    skip_intro(&mut scene, level);
+    scene
+}
+
+/// fix-cutscenes: 07000001/07000002 now play their level-start intro (Bond disabled, drones frozen). Skip it
+/// the game's way (hold the skip: `Script_FFwd` 0x1dac78), as fix_player2_live does, so the tests start in control.
+fn skip_intro(scene: &mut nf_view::scene::Scene, level: &str) {
     let intro: &[u32] = match level { "07000001.bin" => &[0x0600_0087], "07000002.bin" => &[0x0600_0084], _ => &[] };
     if !intro.is_empty() {
         for t in 0..600u32 {
@@ -26,7 +38,6 @@ fn load(iso: &str, level: &str) -> nf_view::scene::Scene {
             sim.step_bond(Default::default(), false, false, false);
         }
     }
-    scene
 }
 
 fn tick_idle(sim: &mut nf_view::scene::Sim, n: u32) {
@@ -91,7 +102,11 @@ fn pickup_slots_keep_their_pickup_after_a_take() {
 fn placed_pickup_models_match_their_kind() {
     let Some(iso) = iso() else { eprintln!("NF_ISO not set — skipping"); return };
     for (level, min) in [("07000001.bin", 4), ("07000005.bin", 3)] {
-        let scene = load(&iso, level);
+        // pickup-medal-gate: the kind-6 rows count toward the minimums and create only with the
+        // level's gold medal recorded [M 0x18dda0:93-95] — the medaled load per level.
+        let mut medal = nf_game::progress::Progress::default();
+        medal.set_level_bonus(if level == "07000001.bin" { 0x0700_0001 } else { 0x0700_0005 }, 3, 0);
+        let scene = load_medaled(&iso, level, medal.bonus[0]);
         let sim = scene.sim.as_ref().unwrap();
         let level_arc = level_archive(&iso, level);
         let placed: Vec<&nf_game::pickup::Pickup> = sim.drones.pickups.iter()
@@ -284,7 +299,12 @@ fn a_death_draws_its_drop_and_nothing_else_moved() {
 #[test]
 fn taking_the_007_bonus_logs_and_plays_the_take_sound() {
     let Some(iso) = iso() else { eprintln!("NF_ISO not set — skipping"); return };
-    let mut scene = load(&iso, "07000001.bin");
+    // pickup-medal-gate: the kind-6 pile creates only with 07000001's gold medal recorded
+    // [M Pickup_Create 0x18dda0:93-95; BaseMap 0x07000001 per the mission table [L ee_start_05
+    // 0x2a4350], the gold bit the 0x0700001/1b group's rank 0 [L 0x2bc920 row 4]] — the medaled load.
+    let mut medal = nf_game::progress::Progress::default();
+    medal.set_level_bonus(0x0700_0001, 3, 0); // [M Menu_SetLevelBonus 0x1ffa10]
+    let mut scene = load_medaled(&iso, "07000001.bin", medal.bonus[0]);
     let sim = scene.sim.as_mut().unwrap();
     tick_idle(sim, 2);
     // The bonus pile at (−13.24, 5.63, 10.35) [D placement 315, kind 6 id 6, sound param 65535].

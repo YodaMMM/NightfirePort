@@ -122,7 +122,7 @@ fn probe_4a_ride_scrape() {
             if t == 1660 {
                 let b = &sim.bond;
                 let (a, c) = b.capsule_seg();
-                let (push, walkable) = sim.world.capsule_push(a, c, 0.4, false);
+                let (push, walkable) = sim.world.capsule_push(a, c, 0.4, false, [1.0e9, 1.0e9, 1.0e9]);
                 eprintln!("FROZEN probe: capsule a=({:.2},{:.2},{:.2}) c=({:.2},{:.2},{:.2}) push=({:.3},{:.3},{:.3}) walkable={}",
                     a[0], a[1], a[2], c[0], c[1], c[2], push[0], push[1], push[2], walkable);
                 eprintln!("floor_below 3: {:?}  floor_below 0.5: {:?}", sim.world.floor_below([p[0], p[1], p[2]], 3.0), sim.world.floor_below([p[0], p[1], p[2]], 0.5));

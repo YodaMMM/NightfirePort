@@ -152,8 +152,12 @@ fn smoke_grenade_guards_match_the_game_on_07000001() {
     // Guard A: activate his plate channel (what trigger 311/312 does) and engage him at his post.
     // [M] The sniper states never call `DroneWeap_CanThrowGrenade` — the throw decision exists only in
     // `DroneFunc_CombatState` 0x148338 (states 0x68/0x70).
-    sim.set_channel(0x26);
     let bond = bond_near(&l.world, ga.pos);
+    // The opening Yakuza's start-script dive shatters hall pane #130 first [L 2026-10-26, PCSX2 frame
+    // 2175]; in the game that happens at the intro's end, long before a plate wakes guard A. This
+    // harness has no intro, so let the dive play out before the plate.
+    for _ in 0..300 { sim.tick(&d, &bond); }
+    sim.set_channel(0x26);
     let mut fought = false;
     for t in 0..2400 {
         sim.tick(&d, &bond);

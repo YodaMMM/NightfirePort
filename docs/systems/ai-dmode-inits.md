@@ -124,3 +124,58 @@ shipped game) are unchanged.
    30 `PartyGirlLooker` 0x14e490 (0x12, 3), 31/32/34 fn = NULL, 33 `Bot` 0x14e568 (0x1e, team 2).
    Rows 1-34 are never dispatched: parameter 5 ∈ {0, 100} on every main-map placement and every
    coder/bot template [D census].
+
+## Appendix 2026-10-26 (dmode-inits-hud-panes): every `init_DMODE_*` body
+
+Per-init [M] summaries (sizes from the decompile headers; the property id is
+`behaviour_util_setProperty`'s first arg, value 1 unless noted; every call targets the drone's
+active props block `+0x4d8`). This is the whole family — 33 functions, the 35-row table's
+non-NULL slots. Grouped by body shape:
+
+**Pure tail-calls to `Defaults` 0x14d528 (6, 28 B each)** — Normal 0x14d958 (row 0),
+Guard 0x14d978 (row 1), Retreater 0x14d998 (row 2), Attacker 0x14dab0 (row 5),
+Assassin 0x14db18 (row 7), Interogator 0x14e238 (row 24). Their whole effect is Defaults'
+40-prop list.
+
+**`Defaults` + extras (6)** — Stealth 0x14da78 (row 4, 52 B) adds prop 0x25;
+RunToPoint 0x14dad0 (row 6, 68 B) adds 0x23 and 0x58; AlarmRaiser 0x14df98 (row 18, 68 B)
+adds 0x23 and 0x56; SearchLight 0x14dfe0 (row 19, 52 B) adds 0x40; Ambush 0x14e018
+(row 20, 52 B) adds 0x10; Zoe 0x14e050 (row 21, 68 B) adds 0x40=1 **and clears 0x21=0**
+(the family's only 0 write).
+
+**Standalone prop lists (15, no Defaults call)** — Sniper 0x14d9b8 (row 3, 192 B):
+{0x3c, 0x1f, 0x33, 0x32, 0x31, 0x43, 0x17, 0x39, 0x40, 0x5a}. HostageKiller 0x14db38
+(row 8, 224 B): {0x3c, 0x1f, 0x33, 0x32, 0x31, 0x29, 0x28, 0x27, 0x26, 0x43, 0x40, 0x22}.
+Hostage 0x14dc18 (row 9) and HostageTied 0x14dc88 (row 10) — identical bodies, 112 B each:
+{0x24, 0x3c, 0x1f, 0x40, 0x4e}. JustStand4Demo 0x14dcf8 (row 11, 36 B): {0x40}.
+Civilian 0x14dd28 (row 13, 288 B): {0x1d, 0x24, 0x3c, 0x1f, 0x29, 0x46, 0x32, 0x31, 0x27,
+0x26, 0x3b, 0x4c, 0x4f, 0x50, 0x51, 0x53}. CivilianScared 0x14de48 (row 14, 224 B):
+{0x3c, 0x1f, 0x32, 0x31, 0x27, 0x26, 0x3b, 0x4c, 0x4f, 0x50, 0x51, 0x53} (Civilian minus
+{0x1d, 0x24, 0x29, 0x46}). MissionFailer 0x14df28 (row 15, 64 B): {0x3c, 0x55}. Mayhew
+0x14df68 (row 16, 36 B) and TruckDriver 0x14e348 (row 26, 36 B) — identical bodies: {0x1d}.
+PartyGirl 0x14e098 (row 22, 192 B): {0x1d, 0x24, 0x3c, 0x1f, 0x46, 0x26, 0x27, 0x28, 0x29,
+0x51}. CivilianGuard 0x14e158 (row 23, 224 B): {0x1d, 0x24, 0x3c, 0x1f, 0x46, 0x26, 0x27,
+0x28, 0x29, 0x4f, 0x50, 0x51}. CivDoorGuard 0x14e258 (row 25, 240 B): {0x1d, 0x18, 6,
+0x3c, 0x1f, 0x46, 0x26, 0x27, 0x28, 0x29, 0x4f, 0x50, 0x51}. SniperAlert 0x14e3e0
+(row 29, 176 B): {0x3c, 0x1f, 0x33, 0x32, 0x31, 0x43, 0x17, 0x39, 0x40} (Sniper minus 0x5a).
+PartyGirlLooker 0x14e490 (row 30, 216 B): {0x1d, 0x24, 0x3c, 0x1f, 0x46, 0x47, 0x26, 0x27,
+0x28, 0x29, 0x51} **plus one direct store: `*(u16*)(drone+0x35c) = 2`** — the head-tracking
+weight `DoHeadTrackingBehaviour` 0x147578 reads (the only reader in the decompile).
+
+**`Defaults` + a direct store (2)** — CastleChatGuard1 0x14e370 (row 27, 44 B):
+`*(u8*)(drone+0x13d) = 0x19`. CastleChatGuard2 0x14e3a0 (row 28, 60 B): prop 0x1d=1 then
+`*(u8*)(drone+0x13d) = 0x11`. The +0x13d byte is the chat-dialogue phase the DSTATE
+`NDrone2_DSTATE_CastleChatGuard1` 0x1612e0 and `Player_Update` 0x193600 read; the family's
+only writes of it.
+
+**Empty bodies (3, 8 B `jr ra`)** — DeleteMe 0x14dd20 (row 12), Ninja 0x14df90 (row 17),
+Bot 0x14e568 (row 33): no writes at all (the decompiler's C shows none, and an 8-byte body
+holds exactly the return).
+
+Row bytes and the fn pointers above are pinned as a runnable test by
+`crates/nf-formats/tests/dmode_row_table.rs` ([D] the disc ELF's `DroneModeSettings` 0x29ad40
+read out of the ISO's ACTION.ELF). Reachability is unchanged — **rows 1-34 are never
+dispatched** (parameter 5 ∈ {0, 100} on every main-map placement and every coder/bot template
+[census above]); only row 0 (Normal → Defaults) runs, so the port's row-0 block in
+`nf-game/src/drone.rs` `init_properties` plus the NEW-path rebuild is the whole ported
+surface, and none of the 32 other bodies needs a port path.

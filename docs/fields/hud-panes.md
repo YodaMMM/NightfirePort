@@ -117,9 +117,12 @@ field layout plus 4 zero bytes at +0x2C. [L] the BSS dump matches the reconstruc
 
 **`TextMsgFormats` 0x2BF108** (56 B) = 7 × {u32 stylePtr, u16 maxWidth}: the status CREATE tags' widths are
 TextMsgFormats[type]·maxWidth (480/480/256) [L data; M the 0x19c310 family]. The status panes' secondary
-array: [0] = the TXT_MSG out-param, [1] = the state machine 0..2 [M 0x19c310:61,102,110,310,313], [2] =
-the TXTMSG_TYPE (3 mission / 2 objective / 1 info / 6 pickup) [S 0x1a1040-0x1a1140], [3] = 0x20 mission /
-0x10 objective-info-pickup — writer proven, reader not identified (honesty).
+array: [0] = the TXT_MSG out-param, [1] = the state machine 0..2 [M 0x19c310:61,102,110,310,313; create
+zeroes it, 0x1a1028:8 / 0x1a1070:8 / 0x1a10b8:8 / 0x1a1140:8], [2] =
+the TXTMSG_TYPE (3 mission / 2 objective / 1 info / 6 pickup) [M create writers 0x1a1028:9 (3),
+0x1a1070:9 (2), 0x1a10b8:9 (1), 0x1a1140:9 (6) — the four status create fns, was [S] until
+dmode-inits-hud-panes], [3] = 0x20 mission [M 0x1a1028:10] / 0x10 objective-info-pickup [M 0x1a1070:10 /
+0x1a10b8:10 / 0x1a1140:10] — writer proven, reader not identified (honesty).
 
 ## AmmoPane (0x2BCFB8) / MPAmmoPane (0x2BE698), 28 B each
 
@@ -155,3 +158,27 @@ pixels-per-round} [M 0x19a7f0:103,116-123,172,199,211,247,254-269,275,287,301].
 the expected accessors are HUD_Update (0x19a088), HUD_UpdateAmmoPane (0x19a7f0), HUD_UpdateHealthPane
 (0x19b9c8) and the crosshair path (0x19e6d0). A reader outside {0x19a088, 0x19a7f0, 0x19b9c8, 0x19e6d0,
 0x1a0e60, 0x1a0d38, 0x1afcc8, 0x191a70, 0x195928, 0x190bb0, 0x1ac2c8} means a missed accessor.
+
+## The four create fns the port audit (dmode-inits-hud-panes 2026-10-26)
+
+- **`HUD_CreateAmmoPane` 0x1a0ed8** (104 B): `HUD_CalcWidthHeight` then `HUD_CreateDefault` — nothing
+  else. The port's pane positions come from the same template + width math (the worked example above),
+  and the disc pins the create pointer [D `hud_pane_census.rs`].
+- **`HUD_CreateHealthPane` 0x1a0f40** (228 B): Calc+Default, then a 4-iteration loop over sprites
+  **0x14..0x17** writing rt `+0x24 = 0, +0x26 = 0, +0x2c = 0x200 (512), +0x2e = 0x1c0 (448)` each
+  [M 0x1a0f40:15-26], then `ThirdIconTimer = 0; CrouchIconTimer = 0` [M :27-28]. Sprites 20-23 are the
+  damage-glow quads, and their `HealthSprInfo` templates already carry exactly those values — x 0, y 0,
+  w 512, h 448, tex 0x0300018d (20/21) / 0x0300018e (22/23), layer 255, col ff0000ff [D disc ELF decode;
+  pinned by `nf-formats/tests/hud_pane_creators.rs`] — so the create loop is idempotent on the templates
+  the port reads, and the port's glow draw (`Anchor::Stretch` full-screen quad at SW×SH, nf-view/src/hud.rs
+  "Damage glow" block) IS the loop's result plus the per-frame repositioning of `HUD_UpdateHealthPane`
+  0x19b9c8:92-113. The two timer globals are boot-zero BSS [L ee_start snapshots], and create only ever
+  re-zeroes them, so the port needs no equivalent.
+- **`HUD_CreateMissionStatusPane` 0x1a1028 / `HUD_CreateObjectiveStatusPane` 0x1a1070 /
+  `HUD_CreateInfoStatusPane` 0x1a10b8 / `HUD_CreatePickupStatusPane` 0x1a1140** (68/68/132/132 B):
+  `HUD_CreateDefault` then three secondary-slot writes [1]=0, [2]=type, [3]=rate (see the array above);
+  the info/pickup pair adds the MP branch `MPSettings+0x180 != 0` → `HUD_FixMP(sprites, BLData+0x94e)`
+  and every sprite y += 0x48 [M 0x1a10b8:11-14, 0x1a1140:11-14]. The port's status-banner drawing
+  (nf-view's objective banner) reads the same BSS SprInfo tables reconstructed from 0x2FC2E0-0x2FC4C0;
+  the MP shift is MP-only and the port's SP path never needs it [S the port's MP status panes are
+  drawn by `mp_panes`, not these create fns].

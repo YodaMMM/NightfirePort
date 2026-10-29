@@ -31,7 +31,7 @@
 use crate::triggers::Channels;
 use crate::trig::sinf;
 use crate::world::CollisionWorld;
-use nf_formats::placement::{object_matrix, Placement};
+use nf_formats::placement::{view_rot_trans_matrix, Placement};
 
 pub type V3 = [f32; 3];
 /// Row-vector 4×4 (translation in row 3) — the same layout as the game's `MATRIX` at `obj+0x90` [L].
@@ -374,7 +374,9 @@ impl Doors {
             let index = (p.extra[8] & 0xffff) as usize;
             let keys = if count != 0 { path_blocks.get(index).map(|b| parse_keys(b)) } else { None };
             let (glist, centre, radius) = object(p).unwrap_or((0, p.translation, 0.0));
-            let m = object_matrix(p.rotation, p.translation);
+            // Door_Create's pre-spline seed matrix: CCO(0) → View_RotTransMatrix; the swing/sliding
+            // key paths overwrite obj+0x90 from Spline_Interp afterwards [M 0x136100:21,83-91].
+            let m = view_rot_trans_matrix(p.rotation, p.translation);
             let flags = (par(8) | par(9)) as u16;
             let mut d = Door {
                 placement: pi,
@@ -1280,6 +1282,34 @@ mod tests {
         doors3.prev_channels[200] = 1;
         doors3.update(0, &mut ch2, &[], 1);
         assert_eq!(doors3.list[0].ch_lock, 200);
+    }
+
+    /// The lock channel's rising edge, full law [M 0x1363c8:96-107]: the label (0x2000003,
+    /// 180 ticks — the level-gate half lives in the caller), then Door_Activate, then `+0x68 = 0`
+    /// and the `+0x70 |= 0x10` once-only latch — a second tick with the channel held must not
+    /// repeat any of it. Sister of `a_locked_slide_door_only_thuds`, which pins the ch_lock halves.
+    #[test]
+    fn a_lock_channel_rising_edge_labels_once_and_latches() {
+        let mut doors = Doors::default();
+        doors.list.push(Door {
+            placement: 0, kind: 2, group: 0, ch_open: 0, ch_lock: 0x12, straddle: false,
+            snd_open: 0xffff, snd_close: 0xffff, snd_hit: 320, flags: 0, approach: 0, locked_flag: 0,
+            keys: None, frames: 0xffff, state: CLOSED, pos01: 0.0, speed: 1.0 / 30.0,
+            dir: 0.0, swing: 0.0, timer: 0, open_timer: 0, msg_shown: false,
+            matrix: [[1.0, 0.0, 0.0, 0.0], [0.0, 1.0, 0.0, 0.0], [0.0, 0.0, 1.0, 0.0], [0.0, 0.0, 0.0, 1.0]],
+            inv_closed: [[0.0; 4]; 4], pos: [10.0, 0.0, 0.0], sph: ([10.0, 1.1, 0.0], 1.28), sph_centre: [10.0, 1.1, 0.0], glist: 8,
+        });
+        let mut ch = channels();
+        ch.set(0x12, 1, 1); // 07000011: Lock #177's burn / TouchOnce #283's out channel
+        let mut sounds: Vec<(u16, [f32; 3])> = Vec::new();
+        doors.update(0, &mut ch, &[], 1);
+        assert_eq!(doors.labels, vec![(LABEL_DOOR_UNLOCKED, 180.0)], "the unlock label, 180 ticks [M 0x1363c8:101-103]");
+        assert_eq!(doors.list[0].ch_lock, 0, "the lock channel consumed [M 0x1363c8:106]");
+        assert_ne!(doors.list[0].flags & 0x10, 0, "the once-only latch [M 0x1363c8:107]");
+        let labels_after_edge = doors.labels.len();
+        doors.update(0, &mut ch, &[], 2);
+        assert_eq!(doors.labels.len(), labels_after_edge, "held channel: the latch stops a second label [M 0x1363c8:96-98]");
+        assert_eq!(doors.list[0].ch_lock, 0);
     }
 
     /// A glist-0 door (the create fallback's `unwrap_or((0, translation, 0.0))` record) is E-DEAD:

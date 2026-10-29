@@ -14,7 +14,7 @@ fn load15() -> Walker {
     // create-unlock tag [M Lock_Create 0x1ae1f8 tail: tag+0x44 != 0 && GameState+0x28 == 1 →
     // Lock_Unlock] — and the burn leg pins the Agent+ behaviour, so the tests run past the
     // auto-unlock (the same choice walkreal_07000012 made).
-    let mut w = Walker::new(nf_view::load_with_carry_difficulty(&iso(), "07000015.bin", false, None, 3).unwrap());
+    let mut w = Walker::new(nf_view::load_with_carry_medals(&iso(), "07000015.bin", false, None, 3, u64::MAX /* kind-6 pickups need the gold medal [M 0x18dda0:93] */).unwrap());
     assert!(w.wait_enabled(3000, "the silo arrival"), "the intro releases Bond");
     w.wait(120);
     w
@@ -371,6 +371,54 @@ fn the_mine_explodes_when_bond_walks_into_its_beam() {
     let m = &sim.drones.mines[boom];
     assert!((m.radius - 10.0).abs() < 0.01 && (m.damage - 80.0).abs() < 0.01,
         "the blast carries the disc's radius 10 / damage 80 [D p1/p0]");
+}
+
+/// explode-debris-spawn: the mine's blast is a persistent object now, and it spawns NO debris.
+/// The game chain: `Mine_Update` 0x17c930 inlines `Explode_Create` and stores the u16 debris
+/// kind 0 [M 0x17c930:128], so `Explode_Update`'s debris arm returns BEFORE its Rand_Rand(5)
+/// draw on every tick [M 0x17c350:25-27] — mine blasts never spawn `Debris_CreateEx` particles
+/// and never touch the shared RNG stream. Same for the oil barrels: `Destroy_Smash`'s 12th arg
+/// is an explicit 0 [M 0x12bcf8 `sw $zero,($sp)`]. The blast object itself lives while its
+/// script plays: the standard blast script's `SCRIPTINFO+0xAB0` u16 is the lifetime [M 0x17cd18].
+#[test]
+fn the_mine_blast_is_a_persistent_object_that_spawns_no_debris() {
+    let mut w = load15();
+    w.scene.sim.as_mut().unwrap().bond.pos = [35.5, 41.5, 15.0];
+    w.scene.sim.as_mut().unwrap().bond.yaw = 0.0;
+    w.scene.sim.as_mut().unwrap().bond.vel = [0.0; 3];
+    w.wait(10);
+    let mut boom_tick = None;
+    for _ in 0..400 {
+        if w.scene.sim.as_ref().unwrap().drones.mines.iter().any(|m| m.exploded) { boom_tick = Some(true); break; }
+        let input = nf_game::player::Input { forward: 1.0, ..Default::default() };
+        w.tick(input, false);
+    }
+    assert!(boom_tick.is_some(), "the mine must explode for the blast object to exist");
+    // The blast object: kind 0, the standard blast script, the script's 165-tick lifetime.
+    {
+        let sim = w.scene.sim.as_ref().unwrap();
+        assert_eq!(sim.drones.blasts.len(), 1, "one persistent blast object [M 0x17cbd0's class-0x0F]");
+        let b = &sim.drones.blasts[0];
+        assert_eq!(b.debris, 0, "Mine_Update's inline store is kind 0 [M 0x17c930:128]");
+        assert_eq!(b.script_hash, 0x0600_0052, "the mine's p5 script [D p5; M 0x17c930's Script_Load]");
+        assert_eq!(b.lifetime, 165, "the blast script's +0xAB0 u16 [M 0x17cd18]");
+        assert_eq!(sim.drones.blast_debris.len(), 0, "no debris at birth [M 0x17c350:25]");
+        assert_eq!((b.radius - 10.0).abs() < 0.01, true, "the disc's radius [D p1]");
+    }
+    // Across the whole blast life (script end ≈ 165 ticks) plus margin: still no debris, and the
+    // record dies when the script ends. The sister below fails if the arm ever drew — a passing
+    // modulo tick with kind 0 would leave 3 particles for at least 90 ticks [M 0x1ac808:29-31].
+    let mut alive_ticks = 0u32;
+    for _ in 0..260 {
+        let sim = w.scene.sim.as_ref().unwrap();
+        if !sim.drones.blasts.is_empty() { alive_ticks += 1; }
+        assert!(sim.drones.blast_debris.is_empty(),
+            "a kind-0 blast must never spawn debris [M 0x17c930:128 + 0x17c350:25]");
+        let input = nf_game::player::Input { forward: 0.0, ..Default::default() };
+        w.tick(input, false);
+    }
+    assert!(w.scene.sim.as_ref().unwrap().drones.blasts.is_empty(), "the blast record is gone once the script ends [M 0x17c394-0x17c3a0]");
+    assert!(alive_ticks >= 100, "the blast persisted {alive_ticks} ticks, far past the 41-tick debris window");
 }
 
 /// The ladder: the east ladder #382-52 (84.53, 31.73, −2.29 [D]) is DEAD in the game's own pick

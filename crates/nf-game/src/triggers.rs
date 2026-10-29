@@ -5,7 +5,7 @@
 
 use crate::world::V3;
 use nf_formats::level::Level;
-use nf_formats::placement::{object_matrix, transform};
+use nf_formats::placement::{transform, view_rot_trans_matrix};
 
 pub mod kind {
     pub const TOUCH_ONCE: u8 = 1;
@@ -170,6 +170,19 @@ pub struct Toucher { pub a: V3, pub b: V3, pub r: f32, pub drone: bool, pub skin
 
 impl Toucher {
     /// Bond in the normal stance (`Player_Collision` 0x194DF0, hip height 1.035 read live).
+    /// level-0c-display-hatch-2 measured two tighter models against the full battery and
+    /// REVERTED both: the walk-capsule SPINE with r 0 (A = pos+0.275, B = pos−0.485 [M
+    /// 0x194df0's A/B arms]) reproduces the 0c [L] rest state (ch 27 = 0 at the bay-floor rest)
+    /// but breaks the master-green chain/gatehouse touches (the truck plate 27.036..27.071 vs
+    /// the spine top 26.93 never fires); the spine with r 0.55 still lights the 0c rest state
+    /// (the top reach 13.70 vs the parsed volume floor 13.63) AND broke
+    /// interactables_07000011_live (the disc-gate sound triggers) + the 07000006 party-touch
+    /// chain in the final-tree suite run. The box's extra top reach (pos+1.26 vs the capsule's
+    /// pos+0.275) is what those contacts need; the 0c [L] rest divergence (the game's ch 27 = 0
+    /// at the bay-floor rest, the box's reach 14.14 over the parsed volume floor 13.63) stays a
+    /// documented live check — the game's true contact is `Intersect_CylGeom` vs the trigger's
+    /// glist [M Trigger_Create 0x1b1720:92 stores the glist at obj+0xD8], whose ref-gate/extent
+    /// the port has not modelled.
     pub fn player(feet: V3) -> Toucher { Toucher { a: [feet[0], feet[1] + 0.55, feet[2]], b: [feet[0], feet[1] + 1.86, feet[2]], r: 0.55, drone: false, skin: 0, contain: true } }
 }
 
@@ -670,7 +683,9 @@ pub fn build(level: &Level) -> Vec<Trigger> {
         // p9=0 -> the mask defaults to 2 (class-5 bullets).
         let q = |k: u32| param(k);
         let target = if p.by_hash() { level.by_hash.get(&p.hashcode).copied() } else if (p.index as usize) < map.objects.len() { Some((m, p.index as usize)) } else { None };
-        let mx = object_matrix(p.rotation, p.translation);
+        // Trigger_Create builds obj+0x90 with control_create_object's quaternion-0 arm →
+        // View_RotTransMatrix [M 0x1b1720:52, 0x1344e0:26-29].
+        let mx = view_rot_trans_matrix(p.rotation, p.translation);
         let tris: Vec<[V3; 3]> = target.and_then(|(om, oi)| level.maps[om].objects[oi].collision.as_ref())
             .map(|c| c.triangles().into_iter().map(|t| t.map(|v| transform(&mx, v))).collect()).unwrap_or_default();
         // Touch triggers on channel 0x7D only work on level 0x07001500.

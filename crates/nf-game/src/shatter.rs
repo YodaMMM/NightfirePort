@@ -285,7 +285,14 @@ impl Shatter {
             }
         }
         self.shards.retain(|s| s.lifetime > 0.0);
-        for d in &mut self.debris {
+        Self::update_debris_list(&mut self.debris);
+    }
+
+    /// `Debris_Update` 0x1aac00 over one debris list, one fixed 60 Hz tick — shared by the
+    /// breakable path (`Shatter::update`) and the blast debris (class 0x10 objects the
+    /// explosion's `Debris_CreateEx` 0x1ac808 spawns; explode-debris-spawn).
+    pub fn update_debris_list(debris: &mut Vec<Debris>) {
+        for d in debris.iter_mut() {
             if d.life < 1 || d.fade <= 1 {
                 d.life = 0;
                 continue;
@@ -297,7 +304,7 @@ impl Shatter {
             d.vel = [d.vel[0] + WLD_GRAVITY[0] * g, d.vel[1] + WLD_GRAVITY[1] * g, d.vel[2] + WLD_GRAVITY[2] * g];
             d.rot = [d.rot[0] + d.spin[0], d.rot[1] + d.spin[1], d.rot[2] + d.spin[2]];
         }
-        self.debris.retain(|d| d.life >= 1);
+        debris.retain(|d| d.life >= 1);
     }
 
     /// `DrawAllShards` 0x12bef8:50-56 — the shard alpha the draw layer renders:

@@ -244,12 +244,16 @@ fn mouse_look_rounds_kill_p258_from_the_east_connector() {
         if g_h > 0 {
             if phase_before == state::ABSEIL_SLIDE { dmg_in_slide = true; }
             if phase_before == state::ABSEIL_HANG { dmg_in_hang = true; }
+            // AbseilInit 0x8e takes hits through the same HandleImpact arm (case 8, resume 0, allow 0
+            // [M 0x169610:48-50]); a round that reaches him at the top of the rope (room-scoped bullet
+            // pick [M Collide_Pick 0x1eb320:125]) is still a rope hit.
+            if phase_before == state::ABSEIL_INIT { dmg_in_slide = true; }
         }
         eprintln!("volley {v}: phase {:#x} fired {f} guard-hits {g_h} hp {}", phase_before, sim.drones.list[gi].health);
     }
     assert!(fired > 0, "the trigger produced shots");
     assert!(gh > 0, "mouse-look-aimed rounds reach the guard (impacts logged per volley)");
-    assert!(dmg_in_slide || dmg_in_hang, "the damage lands on the rope (the Slide/Hang case-8 arms [M 0x169730:68-70 / 0x169940:50-52])");
+    assert!(dmg_in_slide || dmg_in_hang, "the damage lands on the rope (the Init/Slide/Hang case-8 arms [M 0x169610:48-50 / 0x169730:68-70 / 0x169940:50-52])");
     assert!(sim.drones.list[gi].health < hp0, "the guard's health dropped");
     let mut died = false;
     for _ in 0..240 {

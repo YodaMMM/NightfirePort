@@ -169,10 +169,22 @@ fn cutscene_script_characters_dim_to_their_cel_ambient() {
 /// ee_start_05.bin] the placed sniper pickup obj 0x01382bc0 reads +0xF0 = 0x880, ambient
 /// (57, 70, 86). The slim ISO's 07000005 places only a kind-6 pickup, so the placed-pin here is the
 /// kind gate, and the dim itself is pinned on a guard's dropped weapon (the next test).
+/// The gold-medal `bonus[0]` word for `base_map` — the state `PlrStats_HasGoldMedal` 0x199a40
+/// reads [M Menu_HasMedal(BaseMapHCode, 3, 0)]; the award arm is `Menu_SetLevelBonus` 0x1ffa10.
+fn gold_bits(base_map: u32) -> u64 {
+    let mut p = nf_game::progress::Progress::default();
+    p.set_level_bonus(base_map, 3, 0);
+    p.bonus[0]
+}
+
 #[test]
 fn placed_pickups_follow_the_pickup_create_gate() {
     let Some(iso) = iso() else { eprintln!("NF_ISO not set — skipping"); return };
-    let scene = nf_view::load(&iso, "07000005.bin", false).expect("load");
+    // pickup-medal-gate: the kind-6 placement creates its pickup only with the level's gold medal
+    // recorded [M Pickup_Create 0x18dda0:93-95; 07000005 plays under BaseMap 0x07000005 — the
+    // mission table [L ee_start_05 0x2a4350] — whose gold bit is the 0x0700005/9/11 kind-4 group's
+    // rank 0 [L ee_start_05 0x2bc920 row 1; M 0x199210]]. The load carries the medal word.
+    let scene = nf_view::load_with_carry_medals(&iso, "07000005.bin", false, None, 1, gold_bits(0x0700_0005)).expect("load");
     step(&scene, 1);
     let sim = scene.sim.as_ref().unwrap();
     let posed = scene.posed_vertices(None, 0.0, Default::default());
@@ -197,6 +209,12 @@ fn placed_pickups_follow_the_pickup_create_gate() {
         eprintln!("placed pickup {pk} kind {} checked against the gate", p.kind);
     }
     assert!(checked > 0, "no placed pickup was checkable");
+    // Sister (the no-medal arm [M 0x18dda0:93-95]): the SAME level with the fresh-boot zero
+    // `bonus[0]` word creates NO kind-6 pickup at all — the level's only 0xF0 placement is the
+    // kind-6 [D], so the sim holds none.
+    let bare = nf_view::load(&iso, "07000005.bin", false).expect("load");
+    assert!(bare.sim.as_ref().unwrap().drones.pickups.iter().all(|p| p.kind != nf_game::pickup::kind::BOND_BONUS),
+        "no gold medal → Pickup_Create returns 0 for the kind-6 [M 0x18dda0:93-95]");
     // Sister: the gate is really the kind — the placed pickup here is a kind-6 007 bonus [D], the
     // branch the game exempts; a wrong always-dim port fails the assert above.
     let level = level_from_disc(&iso, "07000005.bin");

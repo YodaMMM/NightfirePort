@@ -90,3 +90,32 @@ fn hint_stage_gate_table() {
     // Sister: the old no-gate behaviour would return true for (6, 3) too.
     assert!(!g(6, 3));
 }
+
+/// `SoundTrigger_Create` 0x1b2628 (port sound.rs:128-153): param 6 gates the create — skip when
+/// `gate != 0 && gate < difficulty`, and 5/6/7 mean "exactly difficulty gate-4"
+/// (Operative/Agent/00-Agent). 07000011 rows: #231/#237/#238 carry p6=7, #289 p6=6, #279/#286 p6=0.
+#[test]
+fn soundtrigger_difficulty_gate_law() {
+    let mk = |gate: u32| placement(0xf9, &[(0, 0x7e), (2, 0x278), (6, gate)]);
+    // p6=0: no gate — created on every difficulty.
+    for d in [1u32, 2, 3, 4] {
+        assert_eq!(nf_game::sound::SoundTriggers::create(&[mk(0)], d).list.len(), 1, "p6=0 d{d}");
+    }
+    // p6=2 (a plain threshold): created while difficulty <= 2.
+    for (d, want) in [(1u32, 1), (2, 1), (3, 0), (4, 0)] {
+        assert_eq!(nf_game::sound::SoundTriggers::create(&[mk(2)], d).list.len(), want, "p6=2 d{d}");
+    }
+    // p6=6: Agent exactly (5/6/7 = Operative/Agent/00-Agent).
+    for (d, want) in [(1u32, 0), (2, 1), (3, 0), (4, 0)] {
+        assert_eq!(nf_game::sound::SoundTriggers::create(&[mk(6)], d).list.len(), want, "p6=6 d{d}");
+    }
+    // p6=7: 00-Agent exactly.
+    for (d, want) in [(1u32, 0), (2, 0), (3, 1), (4, 0)] {
+        assert_eq!(nf_game::sound::SoundTriggers::create(&[mk(7)], d).list.len(), want, "p6=7 d{d}");
+    }
+    // Sister: the same rows without param 6 at all are ungated on every difficulty.
+    for d in [1u32, 2, 3, 4] {
+        let plain = placement(0xf9, &[(0, 0x7e), (2, 0x278)]);
+        assert_eq!(nf_game::sound::SoundTriggers::create(&[plain], d).list.len(), 1, "no p6 d{d}");
+    }
+}
