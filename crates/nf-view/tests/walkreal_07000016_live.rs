@@ -458,6 +458,113 @@ fn door0_stays_locked_without_the_station_use() {
     }
 }
 
+/// level-16-security-station-use: the end-to-end leg the other two tests split in half.
+/// `dynobj_glass_live::the_16_screens_swap_with_their_channels` SETS ch 0x24 directly (no player);
+/// `door0_unlocks_from_the_security_station_use` above walks the real E but asserts only the
+/// channel + the door. This walks the SAME real route (the east ramp → the upper ring → the
+/// station, docs/levels/07000016.md §7) and asserts the whole downstream set the game does on the
+/// station's E — [D #597 "SecurityStation" params 0:0x24 1:0x4 (mask 4 = the activate dispatch)]
+/// reached by [M Player_Activate 0x1a5170:100-137 (the use sphere from the head along the look)
+/// → Trigger_Activate 0x1b2318:38-43 (type 2, `mask & 4` gate → `switch_channels[0x24] = 1`)]:
+///   1. ch 0x24 rises;
+///   2. the screens' 0x3b pair swaps — #682 Screen_door_unlocked (p0 = 0x24) hidden at create
+///      [M DynamicObject_Create 0x18dbf8:27-29 `|0x30 when p0 != 0`] becomes DRAWN (watch A ON
+///      restores the base flags [M DynamicObject_Update 0x18d3b8:32-33]) and #683
+///      Screen_door_locked (p1 = 0x24, mode 0) becomes DEAD [M 0x18d3b8:26] — in the sim AND in
+///      the draw palette (the GAP-16-1 per-tick re-sync the 1b glass task landed);
+///   3. door[0] unlocks on the rising edge and opens [M door.rs — Door_Activate on the edge].
+/// The screens sit at the disc's origin (0, 0.02, 0) [D the 07000016-audit kind-0x3b census] —
+/// the swap is asserted through their slots' sim flags and palette matrices, not a world spot.
+#[test]
+fn the_station_use_swaps_the_screens_end_to_end() {
+    let iso = iso();
+    let mut w = Walker::new(nf_view::load_with_carry(&iso, "07000016.bin", false, Some(&carry(&[0x47, 0x48, 0x4a, 0x54, 0xce, 0x4b]))).unwrap());
+    w.wait_enabled(3000, "the launch-centre arrival");
+    w.wait(100);
+    {
+        let sim = w.scene.sim.as_ref().unwrap();
+        assert!(!sim.drones.channels.on(0x24), "ch 0x24 starts cold [D the census: #597 is its only writer]");
+    }
+    let opts = || nf_view::scene::ViewOpts::default();
+    let (layout, _attrs) = w.scene.skin_layout();
+    let base = {
+        let sim = w.scene.sim.as_ref().unwrap();
+        sim.drones.doors.list.len() + sim.drones.sss.list.len() + sim.drones.breaks.list.len()
+            + 2 * sim.drones.locks.len()
+            + (1 + nf_game::gunimp::TURRET_ARTS.len()) * w.scene.gunimp_placements
+            + 3 * sim.drones.sensors.list.len()
+    };
+    // The two screens by their channel signature [D params]: #682 watches A = 0x24, #683 B = 0x24.
+    let sim = w.scene.sim.as_ref().unwrap();
+    let di_unlocked = sim.drones.worldobjs.dynobjs.iter().find(|d| d.ch_a == 0x24).map(|d| d.slot as usize)
+        .expect("#682 Screen_door_unlocked (p0 = 0x24) among the 0x3b rows");
+    let di_locked = sim.drones.worldobjs.dynobjs.iter().find(|d| d.ch_b == 0x24).map(|d| d.slot as usize)
+        .expect("#683 Screen_door_locked (p1 = 0x24) among the 0x3b rows");
+    let shown = |scene: &nf_view::scene::Scene, di: usize| -> bool {
+        let (pal, _cols) = scene.skin_palette(&layout, None, 240.0, opts(), None);
+        pal[layout.door_base as usize + base + di][3][1] > -9000.0
+    };
+    assert!(sim.drones.worldobjs.dynobjs[di_unlocked].flags & 0x30 != 0,
+        "#682 hidden at create [M 0x18dbf8:27-29 |0x30 when p0 != 0]");
+    assert!(!shown(&w.scene, di_unlocked), "#682 not drawn before the use (palette)");
+    assert!(shown(&w.scene, di_locked), "#683 drawn before the use (palette)");
+    drop(sim);
+
+    // The door[0]-unlock route (the same real walk the sister test pins): the corridor south,
+    // door[7], the east ramp, the upper ring west, the station — then the E press.
+    let route: &[(&str, walker::Wp)] = &[
+        ("the corridor south", walker::Wp::new(4.3, 0.6, -72.5).r(1.2)),
+        ("door[7] through", walker::Wp::new(4.9, -0.1, -78.0).r(1.2)),
+        ("the lane east", walker::Wp::new(10.0, 0.0, -82.0).r(1.3)),
+        ("the lane south", walker::Wp::new(12.0, 0.0, -88.0).r(1.3)),
+        ("the ramp foot", walker::Wp::new(13.8, 0.0, -90.8).r(1.1)),
+        ("the ramp 1", walker::Wp::new(14.5, 0.6, -87.5).r(1.2)),
+        ("the ramp 2", walker::Wp::new(14.5, 2.4, -84.5).r(1.2)),
+        ("the ramp 3", walker::Wp::new(14.5, 4.6, -81.5).r(1.2)),
+        ("the ring east", walker::Wp::new(14.5, 5.9, -79.0).r(1.2)),
+        ("the ring 1", walker::Wp::new(6.0, 5.9, -78.5).r(1.4)),
+        ("the ring 2", walker::Wp::new(-4.0, 5.9, -79.0).r(1.4)),
+        ("the ring 3", walker::Wp::new(-11.0, 5.9, -81.0).r(1.4)),
+        ("the ring 4", walker::Wp::new(-13.0, 5.9, -86.0).r(1.4)),
+        ("the station west", walker::Wp::new(-16.5, 5.9, -88.0).r(1.3)),
+        ("the station south", walker::Wp::new(-16.3, 5.9, -93.5).r(1.2)),
+        ("the station E", walker::Wp::at(-15.2, 5.9, -94.6, walker::Act::Use { use_ticks: 120 }).r(1.2)),
+    ];
+    for (label, wp) in route { w.walk_to(*wp, label); }
+
+    // The trigger writes ch 0x24 at Bond's turn in the object walk; the doors read it the next
+    // tick and the palette re-syncs per tick — settle a few real-input ticks.
+    for _ in 0..10 { w.tick(Input::default(), false); }
+    {
+        let sim = w.scene.sim.as_ref().unwrap();
+        assert!(sim.drones.channels.on(0x24),
+            "the station E fires ch 0x24 [D #597 params; M 0x1b2318:38-43]");
+        // The screens' sim state after the edge.
+        let un = sim.drones.worldobjs.dynobjs.iter().find(|d| d.slot as usize == di_unlocked)
+            .expect("#682 alive after the edge");
+        assert!(!un.dead && un.flags & 0x8010 == 0,
+            "#682 drawn after the edge [M 0x18d3b8:32-33 watch A restores the base]");
+        assert!(un.flags & 0x30 == 0, "#682's create-hide cleared [M 0x18dbf8:31 → 0x18d3b8:32]");
+        let locked_hidden = sim.drones.worldobjs.dynobjs.iter().find(|d| d.slot as usize == di_locked)
+            .map_or(true, |d| d.dead || d.flags & 0x8010 != 0);
+        assert!(locked_hidden,
+            "#683 not drawn after the edge [M 0x18d3b8:26 mode 0 + armed B → obj+0xFE |= 1]");
+        // The palette (the draw the player sees) swapped for both.
+        assert!(shown(&w.scene, di_unlocked), "#682 NOW drawn (palette re-sync)");
+        assert!(!shown(&w.scene, di_locked), "#683 NOW hidden (palette re-sync)");
+        // Downstream: door[0] unlocks on the rising edge and opens.
+        let d0 = sim.drones.doors.list.iter().find(|d| (d.pos[2] + 114.23).abs() < 0.5).expect("door[0]");
+        assert_eq!(d0.ch_lock, 0, "door[0] unlocks on the rising edge [M door.rs]");
+        assert!(d0.state & 0x6 != 0, "door[0] opened by the unlock's Door_Activate (state {:#x})", d0.state);
+        eprintln!("[draw-for-main-agent] the security-station E (07000016): \
+            1) the corridor screen pair swaps — #683 Screen_door_locked (watch B 0x24, at the \
+            disc's origin (0,0.02,0) [D census]) disappears and #682 Screen_door_unlocked \
+            (watch A 0x24) appears in its slot; 2) door[0] 'Door_1' at (1.84, −0.10, −114.23) \
+            slides open (state {:#x}, leaf {}); 3) nothing else draws — ch 0x24 has no other \
+            draw-side consumer [D the channel census]", d0.state, d0.pos01);
+    }
+}
+
 /// Task level-16-jetpack-escape-4 step 2: the launch chain run in the REAL mission order (the
 /// arrival → the spawn plate → the station/panels → the silo plate → the bridge touch, all walked)
 /// against the sister's teleported run (Bond placed on trigger #255). The disc data gives the
