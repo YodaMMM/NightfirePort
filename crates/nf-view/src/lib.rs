@@ -3129,7 +3129,13 @@ impl App {
             let sub = matches!(self.fe.as_ref().map(|fe| fe.page),
                 Some(menu::Page::Stats) | Some(menu::Page::NfBonus));
             if sub {
-                let lang = self.lang.clone();
+                // menu-stats-page: the SAME lang the draw uses — self.lang, falling back to the
+                // loaded mission's own bank (the draw sites' `self.lang.as_ref().or_else(…
+                // sim.lang)` pattern). The bare-mission app never boots the front end's
+                // USATxt.dat into `self.lang`, so the stats rows' `stats_enter` built every
+                // category as its raw id (`<0x165>`…) while the page labels around them bound
+                // fine off the sim's bank.
+                let lang = self.lang.clone().or_else(|| self.scene.sim.as_ref().and_then(|s| s.lang.clone()));
                 if let (Some(fe), Some(p)) = (self.fe.as_mut(), self.results_progress.as_mut()) {
                     fe.results_subpages_enter(p, lang.as_ref());
                 }
@@ -3910,6 +3916,11 @@ impl App {
                 // wipes them [M 0x182270:65]. The snapshot stands in; the menu_after hook builds
                 // the page the action opened through `FrontEnd::results_subpages_enter`.
                 self.results_progress = Some(sim.drones.progress.clone());
+                // mission-stats-rows: the same snapshot is the session's scoring-table layer —
+                // the game's BSS table the results commit updated in place [M 0x1984b0:301-315],
+                // which the Dossier Records page reads through PlrStats_GetLevelTotals even with
+                // no save in play [M C_RBDSRECORDS 0x20bf00:19-26].
+                fe.session_progress = self.results_progress.clone();
             }
         }
         self.fe = Some(fe);

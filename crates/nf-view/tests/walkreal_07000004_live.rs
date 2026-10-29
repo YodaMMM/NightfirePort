@@ -538,3 +538,158 @@ fn the_results_page_opens_stats_and_dossier_and_scores_the_real_tallies() {
         assert_eq!(fe.flow.page, nf_view::menu::PAGE_MISSION_SELECT);
     }
 }
+
+/// mission-stats-rows: EVERY Mission Stats cell of the real 07000004 finish — value, target and
+/// points, each computed inline with the game's own formulas and pinned against the rows the
+/// page builds — plus the Dossier Records row the finish writes. The walk is the same real-input
+/// route (the pickups, the kill, the end sequence) as the results test above.
+///
+/// Row sources [M PlrStat_GetScore 0x1984b0:66-84]; formulas [M :118-268]; formats [M
+/// Menu_AddRow 0x201c10 / Menu_AddRowPercentage 0x201df0 / SeparateNumber 0x1dec78 /
+/// Timer_Seconds2String 0x1deaa8]. Records reader [M C_RBDSRECORDS 0x20bf00:19-44].
+#[test]
+fn every_stats_row_matches_the_game_formulas_from_the_real_finish() {
+    let iso = iso();
+    let mut w = load_ready(&iso);
+    w.tick(Default::default(), false);
+    w.tick(Default::default(), false);
+    let (uzi, armour) = {
+        let sim = w.scene.sim.as_ref().unwrap();
+        let uzi = sim.drones.pickups.iter()
+            .find(|p| p.kind == 0 && p.weapon == 18 && !p.gone && (p.start[2] - 42.66).abs() < 1.0)
+            .or_else(|| sim.drones.pickups.iter().find(|p| p.kind == 0 && p.weapon == 18 && !p.gone))
+            .map(|p| p.start).expect("the StormUzi pickup");
+        let armour = sim.drones.pickups.iter().find(|p| p.kind == 3 && !p.gone).map(|p| p.start)
+            .expect("the BodyArmourHeavy pickup");
+        (uzi, armour)
+    };
+    w.walk_nav_to(uzi, "the StormUzi pickup", 0.4);
+    w.walk_nav_to(armour, "the armour pickup", 0.4);
+    let target_i = w.scene.sim.as_ref().unwrap().drones.list.iter()
+        .position(|d| d.skin == 0x0500_001e).expect("the target drone exists");
+    let killed = w.shoot(target_i, "the target");
+    assert!(killed || w.scene.sim.as_ref().unwrap().drones.list[target_i].corpse
+        || w.scene.sim.as_ref().unwrap().drones.list[target_i].health <= 0.0, "the target must die");
+    let mut ended = false;
+    for _ in 0..900u32 {
+        w.tick(Default::default(), false);
+        if w.scene.sim.as_ref().unwrap().drones.mission_end.is_some() { ended = true; break; }
+    }
+    assert!(ended, "case 4 must fire the level end [M 0x182c60:65-76]");
+
+    let (base, diff) = {
+        let sim = w.scene.sim.as_ref().unwrap();
+        (sim.drones.mission.base_map, sim.drones.progress.difficulty)
+    };
+    assert_eq!(base, 0x0700_0001, "part 4 scores under the Double Cross base [L mission table 0x2a4350 row 7; M Mission_Init 0x182270:52]");
+
+    // The results enter's commit (the game's results page 0x4c [M 0x208e78:77]) — the SAME
+    // progress object the stats page then re-commits against (P_NFSTATS 0x209938:36).
+    let mut fe = nf_view::menu::FrontEnd::new();
+    fe.flow.current_level = 0x0700_0004;
+    fe.flow.stack = vec![nf_view::menu::ST_RUNNER];
+    fe.mission_ended(nf_view::menu::Outcome::Complete, nf_view::menu::Stats::default());
+    {
+        let sim = w.scene.sim.as_mut().unwrap();
+        assert!(fe.results_enter(&mut sim.drones.progress, base, 6, diff, None),
+            "the results commit [M 0x208e78:77]");
+        // mission-stats-rows: the host's session layer (lib.rs end_mission) — the game's BSS
+        // table the Records page reads with no save in play [M C_RBDSRECORDS 0x20bf00:19-26].
+        fe.session_progress = Some(sim.drones.progress.clone());
+    }
+    let snap = fe.session_progress.clone().unwrap();
+    let idx = snap.table.iter().position(|e| e.hash == base).unwrap();
+    let e = snap.table[idx];
+    let s0 = &snap.stats[0]; // player 0's PlrMissionStats [M 0x2bcc20's port]
+
+    // The game's own cell build [M 0x209938:57-123 through Menu_AddRow 0x201c10]:
+    // ceil₁ₑ₋₅(f) = (int)f + (|f − (int)f| ≥ 1e-5) [M 0x1984b0:178-183];
+    // pct(f) = round½↑(f × 100) [M 0x209938:92/100/106].
+    let ceil_1e5 = |f: f32| { let i = f as i64; (i as f32 + ((f - i as f32).abs() >= 1e-5) as i64 as f32) as u32 };
+    let pct = |f: f32| format!("{}%", (f * 100.0 + 0.5) as u32);
+    let sep = nf_game::stats::separate_number;
+    let timer = nf_game::stats::timer_string;
+
+    // The tallies → each row's value [M 0x1984b0:66-84]; the static counts [L ee_start_05 entry 4].
+    let (bond, disp, sub, sur, det) = (s0.bond_moments, s0.dispatched, s0.disabled, s0.surrendered, s0.detected);
+    let (fired, hit) = (s0.shots_fired, s0.shots_hit_enemy);
+    let acc = if fired > 0 { e.rows[5].count as u64 * hit as u64 / fired as u64 } else { e.rows[5].count as u64 };
+    let health = s0.health as u32; // fptoui [M row 6]
+    let elapsed = s0.elapsed;
+    eprintln!("[04-rows] bond {bond} disp {disp} sub {sub} sur {sur} det {det} fired {fired} hit {hit} acc {acc} hp {health} elapsed {elapsed} diff {diff}");
+
+    // The per-row points [M 0x1984b0:118-268], on the entry's own design data.
+    let raw = [
+        ceil_1e5(e.rows[0].target as f32 * bond.min(e.rows[0].count) as f32 / e.rows[0].count as f32), // 0
+        ceil_1e5(e.rows[1].target as f32 * disp.min(e.rows[1].count) as f32 / e.rows[1].count as f32), // 1
+        ceil_1e5(e.rows[2].target as f32 * sub.min(e.rows[2].count) as f32 / e.rows[2].count as f32), // 2
+        ceil_1e5(e.rows[3].target as f32 * sur.min(e.rows[3].count) as f32 / e.rows[3].count as f32), // 3
+        if det > e.rows[4].count { // 4: the penalty ramp [M :201-224]
+            let pen = if e.penalty == 0.0 { 0.03 } else { e.penalty };
+            ceil_1e5(((1.0 - (det - e.rows[4].count) as f32 * pen).max(0.0)) * e.rows[4].target as f32)
+        } else { e.rows[4].target }, // within par: the full max [M :225-233]
+        ceil_1e5(e.rows[5].target as f32 * acc.min(e.rows[5].count as u64) as f32 / e.rows[5].count as f32), // 5
+        ceil_1e5(e.rows[6].target as f32 * health.min(e.rows[6].count) as f32 / e.rows[6].count as f32), // 6
+        ceil_1e5(e.rows[7].target as f32 * e.rows[7].count as f32 / (elapsed / 100).max(1) as f32), // 7: INTEGER seconds [M :120-131]
+        if e.rows[8].count <= s0.bonus_pickups { e.rows[8].target } else { 0 }, // 8: all-or-nothing [M :255-268]
+    ];
+    let base_u: f32 = raw.iter().map(|r| *r as f32).sum(); // the f32 accumulate [M :288-293]
+    let base_score = base_u as u32;
+    let mult = match diff { 1 => 0.0f32, 2 => 1.0, _ => 2.0 }; // ScoringTableDifMul [M :294-300]
+    let bonus = (base_u * mult) as u32;
+    let total = base_score + bonus; // [M :309-315]
+
+    let rows = nf_game::stats::stats_rows(&mut w.scene.sim.as_mut().unwrap().drones.progress, base, 6, diff, None)
+        .expect("the Double Cross base is a ScoringTable hash");
+    let find = |id: u32| rows.iter().find(|r| r.id == id).unwrap_or_else(|| panic!("row {id:#x} missing"));
+
+    // Row by row — current, target, TOTAL [M 0x209938:57-123].
+    assert_eq!(find(0x165).current, bond.to_string(), "Bond value [M :66 ← +0x20]");
+    assert_eq!(find(0x165).target, e.rows[0].count.to_string(), "Bond target = the static count [L entry 4 row 0]");
+    assert_eq!(find(0x165).total, sep(raw[0]), "Bond points [M 0x201c10:99-101]");
+    assert_eq!(find(0x15b).current, disp.to_string(), "Dispatched value [M :68]");
+    assert_eq!(find(0x15b).target, "45", "Dispatched target = the design 45 [L entry 4 row 1 — the game's own mission-wide value]");
+    assert_eq!(find(0x15b).total, sep(raw[1]), "Dispatched points [M :171-185]");
+    assert_eq!(find(0x15c).current, sub.to_string(), "Subdued value [M :70]");
+    assert_eq!(find(0x16e).current, sur.to_string(), "Surrendered value [M :72]");
+    assert_eq!(find(0x15d).current, pct(e.rows[4].ratio), "Stealth pct = fptoui(ratio·100+0.5) [M :84]");
+    assert_eq!(find(0x15d).target, "----", "Stealth's −1 target [M 0x201df0:78-88]");
+    assert_eq!(find(0x15d).total, sep(raw[4]), "Stealth points [M :201-233]");
+    assert_eq!(find(0x15e).current, format!("{}%", acc), "Accuracy = hit·par/fired [M :74-78]");
+    assert_eq!(find(0x15e).target, "100%", "the accuracy par [L entry 4 row 5]");
+    assert_eq!(find(0x15e).total, sep(raw[5]), "Accuracy points [M :171-185]");
+    assert_eq!(find(0x15f).current, pct(e.rows[6].ratio), "Health pct = fptoui(ratio·100+0.5) [M :92]");
+    assert_eq!(find(0x15f).target, "100%", "the literal [M :105-108]");
+    assert_eq!(find(0x15f).total, sep(raw[6]), "Health points [M :171-185]");
+    assert_eq!(find(0x160).current, timer(elapsed as i64), "Time current [M :103-108]");
+    assert_eq!(find(0x160).target, "08:00", "the 480 s par [L entry 4 row 7]");
+    assert_eq!(find(0x160).total, sep(raw[7]), "Time points = max·par/max(int seconds, 1) [M :118-170]");
+    assert_eq!(find(0x161).current, s0.bonus_pickups.to_string(), "Bonus value [M :110 ← +0x24]");
+    assert_eq!(find(0x161).target, "7", "Bonus target [L entry 4 row 8]");
+    assert_eq!(find(0x161).total, sep(raw[8]), "Bonus points [M :255-268]");
+    // The tail rows [M :117-123] and the commit [M :301-315].
+    assert_eq!(find(0x162).total, sep(base_score), "Subtotal = Σ raw (f32 accumulate, trunc) [M :288-293]");
+    assert_eq!(find(0x164).total, sep(bonus), "Difficulty Bonus = base × the multiplier [M :294-300]");
+    assert_eq!(find(0x163).total, sep(total), "TOTAL = base + bonus [M :309-315]");
+    assert_eq!(e.last, total, "the results commit stamped last [M :309-315]");
+    assert_eq!(e.best, total, "best = max(best, last) — the first finish stamps best [M :312-315]");
+
+    // ── The Dossier Records row (C_RBDSRECORDS 0x20bf00:19-44): the finished mission's values —
+    // the session layer (no profile), then the same through a profile (the save).
+    assert_eq!(fe.record_row(4), (total, bond as u32,
+        (1..=4u32).filter(|&k| snap.has_medal(base, k, 0)).count() as u32),
+        "High Score = entry+0x30, Bond Moves = rows[0].value, Upgrades = the medal census [M 0x20bf00:26-44]");
+    let medal = if total >= e.thresholds[3] { 4u32 } else if total >= e.thresholds[2] { 3 }
+        else if total >= e.thresholds[1] { 2 } else if total >= e.thresholds[0] { 1 } else { 5 };
+    let want = match medal { 4 => Some((0x307, 0x0300_013e)), 3 => Some((0x306, 0x0300_013f)),
+        2 => Some((0x308, 0x0300_0140)), 1 => Some((0x309, 0x0300_013d)), _ => None };
+    assert_eq!(fe.record_medal(4), want, "the medal chain follows the four bonus flags [M 0x20bf00:58-110]");
+    // The profile path: the save's restored table reads the same [M PlrStats_SetupScoreTable 0x1990e0].
+    let mut prof = nf_game::profile::Profile::default_codename("STATSROWS");
+    prof.progress = snap.clone();
+    fe.profile = Some(prof);
+    assert_eq!(fe.record_row(4).0, total, "the profile's restored table carries the same commit [M 0x1990e0]");
+    fe.profile = None;
+    fe.session_progress = None;
+    assert_eq!(fe.record_row(4), (0, 0, 0), "no save and no session → the fresh-boot zeros [M 0x1984b0's zeroed table]");
+}

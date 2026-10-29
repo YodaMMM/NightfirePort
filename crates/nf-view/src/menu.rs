@@ -2867,11 +2867,23 @@ pub struct FrontEnd {
     /// cheat_toggle_fly_substate`] is the substate argument.
     pub cheat_fly: bool,
     /// The cheat page's remaining toggle states, in [`FrontEnd::cheat_toggle_confirm`]'s order:
-    /// WEAP 0x100000e7, HEALTH 0x100000e8, DUMMY 0x100000bd, ALLOWFREEZE 0x100000c7,
+    /// WEAPONS 0x100000e7, HEALTH 0x100000e8, DUMMY 0x100000bd, ALLOWFREEZE 0x100000c7,
     /// DRAWALL 0x10000101, LOCKUP 0x10000169, BRIGHT 0x100001f7, UNLOCK 0x10000216,
     /// CONTROLS 0x1000021d. All ship on page 0x40000007 of every per-level def [D
     /// calltree_census.rs]; the drawing/application wiring stays on the draw side.
     pub cheat_misc: [bool; 9],
+    // ── mission-stats-rows: the session's scoring-table layer (each new field on its own line
+    // [WORKLOG lesson 4]) ──
+    /// The session's `ScoringTable`/bonus state for the Dossier Records page — the game's BSS
+    /// globals the page reads through `PlrStats_GetLevelTotals`/`Menu_GetLevelBonuses` [M
+    /// C_RBDSRECORDS 0x20bf00:19-26, 34-44]. The game has ONE table: the codename load restores
+    /// the save into it ([M `PlrStats_SetupScoreTable` 0x1990e0] — the LS_Load side) and the
+    /// results page's `GetScore(0)` commit updates it in place [M 0x1984b0:301-315], so the
+    /// Records page shows the finished mission's values even with no save in play. The port
+    /// mirrors that with this field: the host fills it from the sim's progress at the mission
+    /// end (the same clone `results_progress` takes) and `record_row`/`record_medal` read the
+    /// active profile's progress first (the save), falling back to this session layer.
+    pub session_progress: Option<nf_game::progress::Progress>,
 }
 
 impl FrontEnd {
@@ -3030,6 +3042,10 @@ pub struct ProfileSession {
     /// The loaded chain the save writes — the game's `InBufData` blocks around the session
     /// [M LS_Load 0x1cdfc0 / LS_Save 0x1cd698's buffers].
     pub profile: Option<nf_game::profile::Profile>,
+    /// mission-stats-rows: the session's scoring-table layer (see
+    /// `FrontEnd::session_progress`) — the game's BSS globals outlive every manager
+    /// [M C_RBDSRECORDS 0x20bf00:19-26 reads them after a fresh manager built].
+    pub session_progress: Option<nf_game::progress::Progress>,
 }
 
 impl ProfileSession {
@@ -3041,6 +3057,7 @@ impl ProfileSession {
             dir: fe.profile_dir.clone(),
             name: fe.active_profile.clone(),
             profile: fe.profile.clone(),
+            session_progress: fe.session_progress.clone(),
         }
     }
 
@@ -3052,6 +3069,7 @@ impl ProfileSession {
         }
         fe.active_profile = self.name.clone();
         fe.profile = self.profile.clone();
+        fe.session_progress = self.session_progress.clone();
     }
 }
 
@@ -3257,6 +3275,8 @@ impl FrontEnd {
             cheat_misc: [false; 9],
             // reward-after-outro (new field on its own line [WORKLOG lesson 4]).
             results_queued: false,
+            // mission-stats-rows (new field on its own line [WORKLOG lesson 4]).
+            session_progress: None,
         };
         // The boot opens P_START: the pair plays with `menu_movie` clear [M P_START 0x20a408:12-22;
         // the game's boot path P_INTRO → P_START replays it the same way — the intro movie end
@@ -4817,12 +4837,20 @@ impl FrontEnd {
 
     /// The Dossier Records' per-row values [M C_RBDSRECORDS 0x20bf00: the level's best score
     /// at ScoringTable+0x30, the moments value, the bonus count] for the records cursor —
-    /// from the ACTIVE profile (zeros without one, the pre-task behaviour).
+    /// the active profile's progress (the save), else the session layer (zeros without either,
+    /// the fresh-boot behaviour).
     pub fn record_row(&self, row: usize) -> (u32, u32, u32) {
-        let Some(profile) = self.profile.as_ref() else { return (0, 0, 0) };
-        let Some(entry) = profile.progress.table.get(row) else { return (0, 0, 0) };
+        // mission-stats-rows: the game's Records reader is `PlrStats_GetLevelTotals(hash)` — the
+        // ONE BSS table — so the read is the save's restored table when a codename is in play and
+        // the session's own table otherwise [M C_RBDSRECORDS 0x20bf00:19-26; the save restores
+        // into the table, `PlrStats_SetupScoreTable` 0x1990e0; the results commit updates it in
+        // place, 0x1984b0:301-315]. The port: the active profile's progress (the save) first,
+        // else the session layer the host fills at the mission end.
+        let progress = self.profile.as_ref().map(|p| &p.progress).or(self.session_progress.as_ref());
+        let Some(progress) = progress else { return (0, 0, 0) };
+        let Some(entry) = progress.table.get(row) else { return (0, 0, 0) };
         let hash = nf_game::progress::SP_LEVEL_HASHES.get(row).copied().unwrap_or(0);
-        let bonuses = (1..=4).filter(|&k| profile.progress.has_medal(hash, k, 0)).count() as u32;
+        let bonuses = (1..=4).filter(|&k| progress.has_medal(hash, k, 0)).count() as u32;
         (entry.best, entry.rows[0].value, bonuses)
     }
 
@@ -4830,9 +4858,11 @@ impl FrontEnd {
     /// C_RBDSRECORDS 0x20bf00:58-110 — the level's four bonus flags k1..k4 (Menu_GetLevelBonuses +4/+0x10/+0x1c/+0x28):
     /// all four → 0x307/0x300013e, k1..k3 → 0x306/0x300013f, k1+k2 → 0x308/0x3000140, k1 → 0x309/0x300013d].
     pub fn record_medal(&self, row: usize) -> Option<(u32, u32)> {
-        let profile = self.profile.as_ref()?;
+        // mission-stats-rows: the same one-table read as `record_row` — the save, else the
+        // session layer [M C_RBDSRECORDS 0x20bf00:34-44 — Menu_GetLevelBonuses' flags].
+        let progress = self.profile.as_ref().map(|p| &p.progress).or(self.session_progress.as_ref())?;
         let hash = nf_game::progress::SP_LEVEL_HASHES.get(row).copied()?;
-        let k = |n: u32| profile.progress.has_medal(hash, n, 0);
+        let k = |n: u32| progress.has_medal(hash, n, 0);
         if !k(1) { return None; }
         Some(if k(2) && k(3) && k(4) { (0x307, 0x0300_013e) } else if k(2) && k(3) { (0x306, 0x0300_013f) } else if k(2) { (0x308, 0x0300_0140) } else { (0x309, 0x0300_013d) })
     }
@@ -9529,23 +9559,84 @@ pub fn menu_overlay(fe: &FrontEnd, font: &nf_formats::hud::Font, hfont: &nf_form
         }
         Page::Pause => pause_page(&mut h, fe, font, lang, textures, cream, bright, dim),
         Page::Results => results_page(&mut h, fe, font, lang, textures, cream, bright, dim),
-        // nfstats-model: the Mission Stats page's DATA (no art yet). The rows from `stats_enter` in the game's order, the header quartet
-        // bound from STATS_HEADER; cells at the pause SCORE tab's column x's (the port's only
-        // measured Category/Current/Target table [L PCSX2 07000005 pause]).
+        // menu-stats-page: the Mission Stats page drawn from its OWN data [D 08000002 page
+        // 0x40000037's six controls] + the game's 0x4c build [M P_NFSTATS 0x209938:31-123] + the
+        // list widget's own draw math [M List_Update 0x21a598, List_SendMessage 0x2196e8]:
+        // - the page furniture [D the page's controls]: the title (50,40,376×17) LBL 0x2d1
+        //   "Mission Stats" [L Bank[721]], the hint (50,419,540×21) LBL 0x49d "~B Back" [L
+        //   Bank[1181]], the stamp 0x10000224 TEX 0x0300014c (340,198,255×255), the logo TEX
+        //   0x0300016d (434,38,156×43);
+        // - the list 0x10000022 (60,78,520×324) [D]: the build resets it (arm 0x17 → widths[0]
+        //   = 100% left [M 0x2196e8:224-233]), sets widths[0] = 0x23 = 35% (arm 0x28 [M :408-418])
+        //   and appends 21%/right, 21%/right, 24%/right (arms 0xe [M :81-97]) — four columns fed
+        //   by Menu_AddRow 0x201c10's "label|cur|tgt|total" split [M]; the header row is ROW 0 of
+        //   the list (arm 0x10 adds it with cell 0, arms 0x19 fill cells 1..3 [M :578-612,
+        //   :250-262]);
+        // - the columns land at [M 0x21a598's draw: x = list.x + comp6 + 2 +
+        //   Σ_{j<k} widths[j]·(w−16)·0.01, a right-aligned cell at + widths[k]·w·0.01 − ink]:
+        //   Category x 68 left, Current right edge 353.6, Target 459.4, TOTAL 580.9 (640 space);
+        // - the header labels [M 0x209938:54-61]: 0x01000204 → "Category", 0x010001e1 →
+        //   "Current", 0x010001e2 → "Target" [L ee_snapshot Bank[1516]/[1481]/[1482] (fixups[1]
+        //   = 1000)], 0x163 → "TOTAL" [D USATxt.dat bank 0]; the literals stand in when no bank
+        //   is loaded (the headless draw), the same convention the pause tab uses;
+        // - the even-row stripes [M 0x2196e8 case 0x73 arms +0x548 = 0xf050580; 0x21a598's
+        //   even-row plate 0x03000042] — the port's translucent plate stands in [S the look];
+        // - the row pitch 16.7 [S — the pause tab's measured pitch; the game's stride is
+        //   Font_GetTextExtent(def size)·1.1, not measurable headlessly — the main agent's
+        //   render compares against PCSX2].
         Page::Stats => {
             let bind = |id: u32| -> String { lang.and_then(|l| l.bind(id)).unwrap_or("").to_string() };
-            let (hc, hcu, ht, hto) = nf_game::stats::STATS_HEADER;
-            let put = |h: &mut Hud, k: usize, name: &str, cur: &str, tgt: &str, tot: &str, c: [f32; 4]| {
-                let y = my(157.0 + k as f32 * 16.7 + 6.0);
-                h.text(Anchor::Centre, font, -2, name, mx(100.0), y, false, c, false);
-                if !cur.is_empty() { h.text(Anchor::Centre, font, -2, cur, mx(421.0), y, true, c, false); }
-                if !tgt.is_empty() { h.text(Anchor::Centre, font, -2, tgt, mx(490.0), y, true, c, false); }
-                if !tot.is_empty() { h.text(Anchor::Centre, font, -2, tot, mx(560.0), y, true, c, false); }
+            let title = bind(0x2d1);
+            page_header(&mut h, hfont, if title.is_empty() { "Mission Stats" } else { &title });
+            if textures.iter().any(|(hash, _)| *hash == 0x0300_014c) {
+                quad640(&mut h, 0x0300_014c, 340.0, 198.0, 255.0, 255.0, [0.0, 0.0, 256.0, 256.0], gs(0x7f7f7f, 0xff));
+            }
+            logo_stamp(&mut h);
+            hint_bar(&mut h, font, &hint(0x49d, "~B Back"), 50.0, 419.0, cream);
+            // The list's column geometry [M 0x21a598; D the control rect].
+            let (lx, ly, lw) = (60.0f32, 78.0, 520.0f32);
+            let widths = [35.0f32, 21.0, 21.0, 24.0];
+            let inner = lw - 16.0;
+            let offs = [0.0f32,
+                widths[0] * inner * 0.01,
+                (widths[0] + widths[1]) * inner * 0.01,
+                (widths[0] + widths[1] + widths[2]) * inner * 0.01];
+            let boxes = [widths[0] * lw * 0.01, widths[1] * lw * 0.01, widths[2] * lw * 0.01, widths[3] * lw * 0.01];
+            let pitch = 16.7f32; // [S the pause tab's measured pitch]
+            let row_y = |k: usize| my(ly + 14.0 + k as f32 * pitch);
+            for k in (0..=14).step_by(2) {
+                plate(&mut h, lx, ly + 8.0 + k as f32 * pitch, lw, pitch, gs(0x7f7f7f, 0x14));
+            }
+            // Right-aligned cell [M 0x21a598 align 2: x += boxW − ink; the ink measure is the
+            // centred helper's own (the glyph quads span [p0.x, plast.x + gw)]).
+            let right_cell = |h: &mut Hud, k: usize, s: &str, y: f32, c: [f32; 4]| {
+                let (placed, _) = font.layout(s, 0.0, 0.0);
+                let w = match (placed.first(), placed.last()) {
+                    (Some(p0), Some(pl)) => pl.x + font.glyphs[pl.glyph].w as f32 - p0.x,
+                    _ => 0.0,
+                };
+                h.text(Anchor::Centre, font, -2, s, mx(lx + 8.0 + offs[k] + boxes[k] - w), y, false, c, false);
             };
-            put(&mut h, 0, &bind(hc), &bind(hcu), &bind(ht), &bind(hto), cream);
+            let left_cell = |h: &mut Hud, s: &str, y: f32, c: [f32; 4]| {
+                h.text(Anchor::Centre, font, -2, s, mx(lx + 8.0), y, false, c, false);
+            };
+            // The header row (row 0) [M 0x209938:54-61].
+            let hy = row_y(0);
+            let (h0, h1, h2, h3) = nf_game::stats::STATS_HEADER;
+            let (b0, b1, b2, b3) = (bind(h0), bind(h1), bind(h2), bind(h3));
+            left_cell(&mut h, if b0.is_empty() { "Category" } else { &b0 }, hy, cream);
+            right_cell(&mut h, 1, if b1.is_empty() { "Current" } else { &b1 }, hy, cream);
+            right_cell(&mut h, 2, if b2.is_empty() { "Target" } else { &b2 }, hy, cream);
+            right_cell(&mut h, 3, if b3.is_empty() { "TOTAL" } else { &b3 }, hy, cream);
+            // The data rows (rows 1..; the model's own binding — menu_after now feeds
+            // stats_enter the same bank the draw uses).
             for (k, r) in fe.mission_stats.iter().flatten().enumerate() {
+                let y = row_y(k + 1);
                 let name = if r.indented { format!("  {}", r.category) } else { r.category.clone() };
-                put(&mut h, k + 1, &name, &r.current, &r.target, &r.total, bright);
+                left_cell(&mut h, &name, y, bright);
+                if !r.current.is_empty() { right_cell(&mut h, 1, &r.current, y, bright); }
+                if !r.target.is_empty() { right_cell(&mut h, 2, &r.target, y, bright); }
+                if !r.total.is_empty() { right_cell(&mut h, 3, &r.total, y, bright); }
             }
         }
         // credits-data: the draw side draws the roll from fe.credits.visible() (the game's
@@ -9761,7 +9852,11 @@ fn pause_page(h: &mut Hud, fe: &FrontEnd, font: &nf_formats::hud::Font, lang: Op
                 if !cur.is_empty() { h.text(Anchor::Centre, font, -2, cur, mx(cx1), y, true, c, false); }
                 if !tgt.is_empty() { h.text(Anchor::Centre, font, -2, tgt, mx(cx2), y, true, c, false); }
             };
-            put(h, 0, &lbl(0x1000_0204, "Category"), &lbl(0x1000_01e1, "Current"), &lbl(0x1000_01e2, "Target"), cream);
+            // menu-stats-page: the header ids are 0x01000204/0x010001e1/0x010001e2 — bank 1 of
+            // USATxt.dat [L ee_snapshot Bank[1516]/[1481]/[1482]; M 0x204408:447-498's binds].
+            // The old 0x1000_0204… read bank 0x10 (a transcription slip) and always missed, so
+            // these fallbacks were the only thing on screen; now the bank's own strings bind.
+            put(h, 0, &lbl(0x0100_0204, "Category"), &lbl(0x0100_01e1, "Current"), &lbl(0x0100_01e2, "Target"), cream);
             let rows: [(u32, bool, String, String); 9] = [
                 // bonus-007: the counters read the LIVE progress layer (host-synced into fe.stats) —
                 // the port's old hardcoded "0"s hid every award the sim made.
