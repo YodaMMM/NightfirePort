@@ -50,3 +50,22 @@ and evidence. Full suite on the final tree.
 
 Plan: read the -3 report + ignore reason; decompile the mouth collision + capsule resolve; find
 the walked route; port fixes; walk the ring legs + hatch E on real input; full suite.
+
+### level-0a-every-objective-4 (final, 22:03 UTC)
+
+The mouth is the KEYPAD DOOR: the wall x −10.45..−10.70 seals the west offices from the atrium
+lane z −15.38..−23.70 [D coll-scan + probe rays] — the only opening is door #724's doorway
+(jambs z −18.04/−19.36), locked on ch 0x30 whose only writers are the kind-0 keypads #648/#732
+(p1 = 1, p5 = 48 [D]) at (−10.69/−10.45, 1.52, −17.46); the game's ai graph crosses exactly
+there (pocket → (−11.01,−18.60) → (−9.88,−18.62) → node 0 [D]). Ported the keypad E-path's sim
+side (the audit's GAP-1 machine): Lock.facing (the 0x3A use gate [M 0x1a5170:158-166]),
+Lock_Activate 0x1aed00's kind-0 arm (Drones.lock_use), Lock_Update case 3/4's Keypad tick +
+case 1's channel hold (already looped), C_KEYPAD_Handler 0x216810's digit handler
+(Drones::keypad_digit), KeyCodes (Locks_Init 0x1b0548 over a local stream; the walk test
+overrides with the snapshot's own table [L ee_start_0700000a.bin @0x2beff8 — code index 1 =
+"3078"]). The mission walk un-ignored and GREEN end-to-end on real input: the keypad E, the
+game's own digits, ch 0x30, the door's rising-edge unlock + auto-activate [M 0x1363c8:101-107],
+the doorway crossing (z −18.7, all rays clear at state 4 [D probe]), the ring legs, the hatch E
+→ 0700000b (15247 ticks, stuck 0, falls 0). walkreal_0700000a_live 7/0/2; nf-game 947/0/9;
+interactables 7/0/0; keyboard 1/0/0. The FULL suite's chunked sweep did not fit the window
+(the sandbox kills background jobs — the -3 report's finding); the next message runs it.
