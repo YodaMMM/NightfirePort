@@ -293,74 +293,183 @@ fn walk_the_whole_mission_from_the_start_to_the_0d_handoff() {
     w.walk_to(Wp::new(12.0, 11.1, -196.0).r(1.2), "the ring diagonal 2");
     w.walk_to(Wp::new(12.0, 11.1, -203.0).r(1.2), "the ring north-west corner");
     w.walk_to(Wp::new(4.0, 11.1, -207.5).r(1.2), "the ring west edge");
-    // STAND-IN 1 of 2 (the ring's west gap, pinned): the walkway floors end at z −208.x and the
-    // next floor south is (12..14, −218) [D probes] — z −210..−216 at x 0..14 is floorless.
-    // BLOCKER-4 FINDINGS (this session, [D] probes blk/blk2 — the stand-ins stay, the
-    // "no mechanism" reading is wrong): the game's crossings are the WIRES. Three type-0 wires
-    // span the gaps with ctx-3 grab icons at every end: icon #4 (−3.30, 12.36, −207.51) at the
-    // west edge marks `wire_firstsilo2mainsilos` #284 (grab A (−4.63, 13.67, −209.88) B (−8.47,
-    // 13.67, −216.52) [D probe blk]) whose B end has the west ledge (11.24-11.38, x −12..−8,
-    // z −216..−218 [D probe blk2 west map]) under it; icon #6/#7 (−1.54/7.21, −223.57) flank
-    // `wire_silosilo2` #282 (A (5.85, 14.11, −223.15) B (−0.25, 14.11, −223.15)) whose ends have
-    // the (−2..−1/4..8, −221..−226) ledges (11.24 [D]); icon #12 (28.42, 12.24, −218.43) at the
-    // arc's east end marks `wire_silo2turbine` #283 (A (29.58, 14.44, −216.96) B (35.89, 14.44,
-    // −209.44)) whose B end has the ring SE corner (11.09..11.17) under it — the body sphere-HIT
-    // at (28, 12.3, −217.5) is confirmed [D probe blk]. The ride mechanics are ported [M
-    // Player_CollWire 0x197130, Player_Wire 0x197658, Player_HandleJump 0x1916b0:118-147; the
-    // port's wire.rs + the jump grab] — the legs are WRITTEN on this branch's history (this
-    // commit's parent work) but timed out of this session's validation window; restore them
-    // from the report and validate next session.
-    {
-        let sim = w.scene.sim.as_mut().unwrap();
-        // Sister: pin the gap so the stand-in never moves onto false floor.
-        let gap = sim.world.segment_hit([6.0, 12.5, -213.0], [6.0, 8.0, -213.0]);
-        assert!(gap.is_none(), "the west gap gained floor; the stand-in could be dropped");
-        sim.bond.pos = [12.0, 12.2, -218.0];
-        sim.bond.vel = [0.0; 3];
+    // Leg 8b (REAL, blocker 4 replaced): the west-gap wire crossing. The disc's own mechanism
+    // [D probe blk/blk2]: the type-3 grab icon #4 (−3.30, 12.36, −207.51) sits at the west
+    // edge's south end; `wire_firstsilo2mainsilos` #284's grab segment A (−4.63, 13.67, −209.88)
+    // B (−8.47, 13.67, −216.52) spans the gap, and BOTH ends have landing floor: the west edge
+    // (11.1) at A's side and the west ledge (11.24-11.38, x −12..−8, z −216..−218) at B's side.
+    // The grab: the jump grab with the icon's ctx 3 [M Player_HandleJump 0x1916b0:118-147] or
+    // the body-contact grab [M Player_CollWire 0x197130]; the ride is the strafe tree [M
+    // Player_Wire 0x197658], the drop the action press [M 0x197758].
+    let grabbed = {
+        let mut got = false;
+        for t in 0..240u32 {
+            let sim = w.scene.sim.as_ref().unwrap();
+            if sim.bond.substate == nf_game::player::SS_WIRE { got = true; break; }
+            let (p, grounded) = (sim.bond.pos, sim.bond.grounded);
+            if !grounded && p[1] < 9.0 { break; }
+            let desired = (-4.6f32 - p[0]).atan2(-209.9f32 - p[2]);
+            let err = walker::wrap_pi(desired - sim.bond.yaw);
+            let input = nf_game::player::Input {
+                turn: err.clamp(-0.08, 0.08),
+                forward: if err.abs() > 0.6 { 0.0 } else { 1.0 },
+                jump: grounded && p[0] < 2.0 && t > 6,
+                strafe: if sim.bond.substate == nf_game::player::SS_WIRE { 1.0 } else { 0.0 },
+                ..Default::default()
+            };
+            w.scene.sim.as_mut().unwrap().step_bond(input, false, false, false);
+            w.total_ticks += 1;
+        }
+        got
+    };
+    assert!(grabbed, "the west-edge jump never grabbed wire #284 (icon ctx 3 [D #4] or the body sphere [D probe blk])");
+    // Ride to B (−8.47, −216.52): strafe +1 faces wire.yaw + 3π/2 = toward B [M Player_Wire's
+    // mode-7 facing]; drop with the action press inside 0.9 of B.
+    let dropped = {
+        let mut dropped = false;
+        for _ in 0..2400u32 {
+            let sim = w.scene.sim.as_ref().unwrap();
+            if sim.bond.substate != nf_game::player::SS_WIRE { dropped = true; break; }
+            let d = ((sim.bond.pos[0] + 8.47).powi(2) + (sim.bond.pos[2] + 216.52).powi(2)).sqrt();
+            let input = nf_game::player::Input { strafe: 1.0, jump: d < 0.9, ..Default::default() };
+            w.scene.sim.as_mut().unwrap().step_bond(input, false, false, false);
+            w.total_ticks += 1;
+        }
+        dropped
+    };
+    for _ in 0..200 {
+        if w.scene.sim.as_ref().unwrap().bond.grounded { break; }
+        w.scene.sim.as_mut().unwrap().step_bond(nf_game::player::Input::default(), false, false, false);
+        w.total_ticks += 1;
     }
-    w.wait(10);
-    eprintln!("[0c] the west-gap stand-in (the unpinned crossing) — the ring south-west arc");
-    w.walk_to(Wp::new(24.0, 11.3, -218.0).r(1.5), "the ring south-west arc");
-    // STAND-IN 2 of 2 (the ring's south gap, pinned): x 30..38 at z −214..−222 is floorless;
-    // the crossing is wire #283's ride (the findings above).
-    {
-        let sim = w.scene.sim.as_mut().unwrap();
-        let gap = sim.world.segment_hit([34.0, 12.5, -218.0], [34.0, 8.0, -218.0]);
-        assert!(gap.is_none(), "the south gap gained floor; the stand-in could be dropped");
-        sim.bond.pos = [40.0, 13.0, -218.0];
-        sim.bond.vel = [0.0; 3];
-    }
-    w.wait(10);
-    eprintln!("[0c] the south-gap stand-in (the unpinned crossing) — the ring south-east walkway");
-
-    // Leg 9 (REAL from the west ledge through the door): the district's true geometry [D, probe
-    // walkreal_probe0c_door2_live — all from the disc's collision tris]: the west ledge (11.61,
-    // x 38.55..39.55, z −222..−213), the 0.52 drop onto the 11.09 corridor, the E stance
-    // (39.0, 11.09, −210.8) with the live sphere (40.01, 12.57, −209.69) r 1.62 within the 2.62
-    // pick [M Collide_PickObj 0x1eae80's 0x101 arm], the corner (11.10..11.17, x ≤40.5,
-    // z −210..−208), the band resuming (43.4, 10.89)/(44.2, 11.17) at z −209.0 [D].
-    {
-        let sim = w.scene.sim.as_mut().unwrap();
-        let gap = sim.world.segment_hit([34.0, 12.5, -218.0], [34.0, 8.0, -218.0]);
-        assert!(gap.is_none(), "the south gap gained floor; the stand-in could be dropped");
-        let wall = sim.world.segment_hit([40.2, 13.0, -213.51], [40.2, 11.9, -213.51]);
-        assert!(wall.is_some(), "the slot end wall at z −213.51 (y 12.02..14.22 [D room_turbine01 tri 463]) vanished");
-        sim.bond.pos = [39.2, 12.85, -217.6];
-        sim.bond.vel = [0.0; 3];
-    }
-    w.wait(14);
-    eprintln!("[0c] the south-gap stand-in (the unpinned #283 wire ride) — dropped onto the west ledge");
     {
         let sim = w.scene.sim.as_ref().unwrap();
         let p = sim.bond.pos;
-        assert!(sim.bond.grounded && (p[1] - 12.64).abs() < 0.5,
-            "Bond stands on the west ledge (11.61 [D] + body half-height), got {:?}", p);
+        assert!(dropped && sim.bond.grounded && p[0] < -6.5 && p[0] > -13.0 && p[2] < -214.5 && p[2] > -219.5
+            && (p[1] - 12.4).abs() < 0.8,
+            "the #284 ride must drop onto the west ledge (11.24-11.38 [D probe blk2 west map]), got {p:?} dropped {dropped}");
     }
-    // REAL: the ledge north (the shelf is its z −214.5..−213.0 stretch), then the corridor.
-    w.walk_to(Wp::new(39.1, 11.6, -215.0).r(0.9), "the ledge north 1");
-    w.walk_to(Wp::new(38.9, 11.6, -213.3).r(0.9), "the ledge north 2 (the shelf)");
-    w.walk_to(Wp::new(38.7, 11.1, -212.2).r(0.9), "the 0.52 drop onto the corridor");
-    w.walk_to(Wp::new(38.9, 11.1, -210.8).r(0.7), "the corridor to the door mouth");
+    eprintln!("[0c] the west gap crossed on wire #284 — landed {:?}", w.scene.sim.as_ref().unwrap().bond.pos);
+    // The diagonal ledges south-east to icon #6 [D probe blk2 west map].
+    w.walk_to(Wp::new(-6.0, 12.4, -219.6).r(1.5), "the west ledge diagonal");
+    w.walk_to(Wp::new(-4.5, 12.4, -221.5).r(1.5), "the west ledge diagonal 2");
+    w.walk_to(Wp::new(-2.5, 12.4, -222.8).r(1.4), "the west ledge diagonal 3");
+    w.walk_to(Wp::new(-1.4, 12.4, -223.6).r(1.0), "icon #6 at wire #282's B end");
+    // REAL: grab wire #282 (`wire_silosilo2`, A (5.85, 14.11, −223.15) B (−0.25, 14.11, −223.15)
+    // [D probe blk]) — the standing body at (−1.4, −223.6) is inside the wire's world sphere
+    // (centre (2.80, 14.11, −223.15) r 5.05 [D probe blk]), so the walk-east contact grab fires
+    // [M Player_CollWire 0x197130]; the jump grab at icon #6 (ctx 3 [D]) is the fallback.
+    let grabbed = {
+        let mut got = false;
+        for _ in 0..240u32 {
+            let sim = w.scene.sim.as_ref().unwrap();
+            if sim.bond.substate == nf_game::player::SS_WIRE { got = true; break; }
+            let grounded = sim.bond.grounded;
+            let input = nf_game::player::Input {
+                forward: 1.0,
+                jump: grounded,
+                strafe: if sim.bond.substate == nf_game::player::SS_WIRE { -1.0 } else { 0.0 },
+                ..Default::default()
+            };
+            w.scene.sim.as_mut().unwrap().step_bond(input, false, false, false);
+            w.total_ticks += 1;
+        }
+        got
+    };
+    assert!(grabbed, "walking east at wire #282's B end never grabbed it (sphere r 5.05 [D probe blk])");
+    // Ride EAST to A (5.85, −223.15): strafe −1 (mode 8 faces wire.yaw + π/2 = +X toward A) [M
+    // Player_Wire's mode-8 facing]; drop inside 0.9 of A.
+    let dropped = {
+        let mut dropped = false;
+        for _ in 0..2400u32 {
+            let sim = w.scene.sim.as_ref().unwrap();
+            if sim.bond.substate != nf_game::player::SS_WIRE { dropped = true; break; }
+            let d = ((sim.bond.pos[0] - 5.85).powi(2) + (sim.bond.pos[2] + 223.15).powi(2)).sqrt();
+            let input = nf_game::player::Input { strafe: -1.0, jump: d < 0.9, ..Default::default() };
+            w.scene.sim.as_mut().unwrap().step_bond(input, false, false, false);
+            w.total_ticks += 1;
+        }
+        dropped
+    };
+    for _ in 0..200 {
+        if w.scene.sim.as_ref().unwrap().bond.grounded { break; }
+        w.scene.sim.as_mut().unwrap().step_bond(nf_game::player::Input::default(), false, false, false);
+        w.total_ticks += 1;
+    }
+    {
+        let sim = w.scene.sim.as_ref().unwrap();
+        let p = sim.bond.pos;
+        assert!(dropped && sim.bond.grounded && p[0] > 3.0 && p[0] < 9.0 && p[2] < -220.0 && p[2] > -227.0
+            && (p[1] - 12.4).abs() < 0.8,
+            "the #282 ride must drop onto the (4..8, −221..−226) ledge (11.24 [D probe blk2]), got {p:?} dropped {dropped}");
+    }
+    eprintln!("[0c] wire #282 ridden east — landed {:?}", w.scene.sim.as_ref().unwrap().bond.pos);
+    // The SW arc: the ledge to the arc's west end and east along it [D probes].
+    w.walk_to(Wp::new(8.0, 12.4, -222.0).r(1.0), "the ledge to the arc");
+    w.walk_to(Wp::new(13.0, 12.4, -218.5).r(1.2), "the arc west end");
+    w.walk_to(Wp::new(24.0, 12.4, -218.0).r(1.5), "the ring south-west arc");
+    // REAL: grab wire #283 (`wire_silo2turbine`, A (29.58, 14.44, −216.96) B (35.89, 14.44,
+    // −209.44) [D probe blk]) at the arc's east end — the body sphere-HIT is confirmed at
+    // (28, 12.3, −217.5) [D probe blk]; icon #12 (28.42, 12.24, −218.43, ctx 3 [D]) marks it.
+    let grabbed = {
+        let mut got = false;
+        for _ in 0..240u32 {
+            let sim = w.scene.sim.as_ref().unwrap();
+            if sim.bond.substate == nf_game::player::SS_WIRE { got = true; break; }
+            let grounded = sim.bond.grounded;
+            let input = nf_game::player::Input {
+                forward: 1.0,
+                jump: grounded,
+                strafe: if sim.bond.substate == nf_game::player::SS_WIRE { 1.0 } else { 0.0 },
+                ..Default::default()
+            };
+            w.scene.sim.as_mut().unwrap().step_bond(input, false, false, false);
+            w.total_ticks += 1;
+        }
+        got
+    };
+    assert!(grabbed, "walking east at the arc's end never grabbed wire #283 (the sphere HIT [D probe blk])");
+    // Ride to B (35.89, −209.44): strafe +1 (mode 7 faces wire.yaw + 3π/2 = north-east toward B)
+    // [M Player_Wire]; drop inside 0.9 of B onto the SE corner.
+    let dropped = {
+        let mut dropped = false;
+        for _ in 0..2400u32 {
+            let sim = w.scene.sim.as_ref().unwrap();
+            if sim.bond.substate != nf_game::player::SS_WIRE { dropped = true; break; }
+            let d = ((sim.bond.pos[0] - 35.89).powi(2) + (sim.bond.pos[2] + 209.44).powi(2)).sqrt();
+            let input = nf_game::player::Input { strafe: 1.0, jump: d < 0.9, ..Default::default() };
+            w.scene.sim.as_mut().unwrap().step_bond(input, false, false, false);
+            w.total_ticks += 1;
+        }
+        dropped
+    };
+    for _ in 0..200 {
+        if w.scene.sim.as_ref().unwrap().bond.grounded { break; }
+        w.scene.sim.as_mut().unwrap().step_bond(nf_game::player::Input::default(), false, false, false);
+        w.total_ticks += 1;
+    }
+    {
+        let sim = w.scene.sim.as_ref().unwrap();
+        let p = sim.bond.pos;
+        assert!(dropped && sim.bond.grounded && p[0] > 33.5 && p[0] < 40.5 && p[2] < -207.0 && p[2] > -211.5
+            && (p[1] - 12.2).abs() < 0.8,
+            "the #283 ride must drop onto the ring SE corner (11.09..11.17 [D probe door2]), got {p:?} dropped {dropped}");
+    }
+    eprintln!("[0c] the south gap crossed on wire #283 — landed {:?}", w.scene.sim.as_ref().unwrap().bond.pos);
+
+    // Leg 9 (REAL from the SE corner through the door): the district's true geometry [D, probe
+    // walkreal_probe0c_door2_live]: the corner (11.10..11.17, x ≤40.5, z −210..−208) is where
+    // #283's B end drops Bond; the corridor (11.09, x 38.05..39.55, z −212.75..−212) runs to
+    // door2turbine #281's mouth; the E stance (39.0, 11.09, −210.8) — the live sphere (40.01,
+    // 12.57, −209.69) r 1.62 within the 2.62 pick [M Collide_PickObj 0x1eae80's 0x101 arm].
+    {
+        let sim = w.scene.sim.as_ref().unwrap();
+        let wall = sim.world.segment_hit([40.2, 13.0, -213.51], [40.2, 11.9, -213.51]);
+        assert!(wall.is_some(), "the slot end wall at z −213.51 (y 12.02..14.22 [D room_turbine01 tri 463]) vanished");
+    }
+    // The corner to the door stance (the port's kind-0xDB doors carry no leaf collision [M
+    // build_LinkToRoom 0x1c9680:63-66, Collide_Pick 0x1eb320:369-375]).
+    w.walk_to(Wp::new(38.9, 11.1, -210.8).r(0.7), "the corner to the door stance");
     {
         let sim = w.scene.sim.as_ref().unwrap();
         // Sister: pin the door closed right before the E press — if a fix opens it early, this
