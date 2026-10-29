@@ -87,6 +87,10 @@ fn walk_the_party_start_to_finish() {
         assert_eq!(sim.gun.weapon, 1, "Bond holds the fists once the draw settles [M 0x1a7ef8]");
         assert!(sim.drones.channels.on(0x47), "the spawn plate #411 fired ch 0x47 [D placements]");
         assert_eq!(obj07(&w).0, 3, "objective 1 announced by ch 0x47 (state 3 = announced [M mission.rs states])");
+        // Objective 2 "Spy on secret meeting" (enable 0x48 [L ee_start_05 record 2]) waits ARMED
+        // but unannounced: Mission_Init set it to state 1 [M 0x182270:98-105 (port mission.rs
+        // init: enable != 0 → 1)].
+        assert_eq!(obj07(&w).1, 1, "objective 2 armed-unannounced from the load [M 0x182270:98-105]");
     }
 
     // ── the hall walk-in: ch 0x48 + the control-taking scene ────────────────────────────────────
@@ -161,6 +165,9 @@ fn walk_the_party_start_to_finish() {
         w.tick(Input::default(), false);
     }
     assert_eq!(done, 4, "objective 1 completes on ch 0x48 [L ee_start_05 record 2]");
+    // Objective 2's reveal is the SAME channel: enable 0x48 [L ee_start_05 record 2] fires → the
+    // monitor announces it (state 1 → 3) [M 0x1827d8:55-67 (port mission.rs monitor case 1)].
+    assert_eq!(obj07(&w).1, 3, "objective 2 announced by the same ch 0x48 (enable 0x48) [M 0x1827d8:55-67]");
     // The scene holds Bond (the game's own disable); the walker's tick carries the game's skip
     // action [M nis.rs skip_request = Input_Action(−1, 0x19, 1)], then Bond hands back at the
     // stream-6 entity's key-498 spot [D fix_cutscene_actors_live].
