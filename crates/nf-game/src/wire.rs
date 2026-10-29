@@ -302,7 +302,7 @@ mod tests {
     /// The segment geometry against the game's own numbers [L ee_start_05.bin 016dc430 + atlas snapshot
     /// check]: 07000005's wire — centre (−23.4855, 34.4676, 6.26292), yaw −1.5708, radius 4.04, pitch 0.
     fn wire05() -> Wire {
-        Wire { centre: [-23.4855, 34.4676, 6.26292], radius: 4.039, yaw: -1.5708, pitch: 0.0, wire_type: 0, param0: 2, param2: 0, channel: 0 }
+        Wire { centre: [-23.4855, 34.4676, 6.26292], origin: [-23.4855, 34.4676, 6.26292], radius: 4.039, yaw: -1.5708, pitch: 0.0, wire_type: 0, param0: 2, param2: 0, channel: 0 }
     }
 
     #[test]
