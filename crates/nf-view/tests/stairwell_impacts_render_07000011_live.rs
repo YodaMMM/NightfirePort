@@ -174,8 +174,8 @@ struct ImpactRow {
 
 fn aim_dir(yaw: f32, pitch: f32) -> [f32; 3] {
     let p = pitch * std::f32::consts::FRAC_PI_2;
-    let (sp, cp) = p.sin(), p.cos();
-    let (sy, cy) = yaw.sin(), yaw.cos();
+    let (sp, cp) = (p.sin(), p.cos());
+    let (sy, cy) = (yaw.sin(), yaw.cos());
     [cp * sy, sp, cp * cy]
 }
 
@@ -197,12 +197,21 @@ fn fire_and_collect(
         sim.gun.fire_state = false;
         sim.gun.clip = 12;
         sim.gun.pending = 0;
+        // The clip/spare live in Bond's inventory and re-sync into gun.clip every tick
+        // [M the BLData +0x1B8/+0x170 slots, scene.rs's per-tick sync] — refill every slot so
+        // the 160-shot fan never dries the magazine (harness ammo, not a sim rule).
+        for c in sim.drones.inventory.clip.iter_mut() { *c = 12; }
+        for c in sim.drones.inventory.carried.iter_mut() { *c = 48; }
     }
     let mut input = nf_game::player::Input::default();
     input.fire = true;
+    let bullets_at_fire = scene.sim.as_ref().unwrap().drones.player_bullets.len();
     scene.sim.as_mut().unwrap().step_bond(input, true, false, false);
+    let spawned = scene.sim.as_ref().unwrap().drones.player_bullets.len() > bullets_at_fire;
     let mut rows = Vec::new();
+    let mut max_bullets = 0usize;
     for _ in 0..60u32 {
+        max_bullets = max_bullets.max(scene.sim.as_ref().unwrap().drones.player_bullets.len());
         let impacts: Vec<[f32; 3]> = {
             let sim = scene.sim.as_ref().unwrap();
             sim.drones
@@ -251,6 +260,14 @@ fn fire_and_collect(
         }
         scene.sim.as_mut().unwrap().step_bond(Default::default(), false, false, false);
     }
+    // Settle: clear the gun's fire interval so the NEXT press isn't eaten by it.
+    for _ in 0..25 { scene.sim.as_mut().unwrap().step_bond(Default::default(), false, false, false); }
+    let sim = scene.sim.as_ref().unwrap();
+    eprintln!(
+        "[fire] {} yaw {:+.2} pitch {:+.2} spawned {} maxb {} clip {} pending {} reload {} mode {} mission {:?} impacts {}",
+        spot_name, yaw, pitch, spawned, max_bullets, sim.gun.clip, sim.gun.pending,
+        sim.gun.reload_state, sim.bond.mode, sim.drones.mission.status(), rows.len()
+    );
     rows
 }
 
