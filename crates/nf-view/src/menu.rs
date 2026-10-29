@@ -2867,11 +2867,23 @@ pub struct FrontEnd {
     /// cheat_toggle_fly_substate`] is the substate argument.
     pub cheat_fly: bool,
     /// The cheat page's remaining toggle states, in [`FrontEnd::cheat_toggle_confirm`]'s order:
-    /// WEAP 0x100000e7, HEALTH 0x100000e8, DUMMY 0x100000bd, ALLOWFREEZE 0x100000c7,
+    /// WEAPONS 0x100000e7, HEALTH 0x100000e8, DUMMY 0x100000bd, ALLOWFREEZE 0x100000c7,
     /// DRAWALL 0x10000101, LOCKUP 0x10000169, BRIGHT 0x100001f7, UNLOCK 0x10000216,
     /// CONTROLS 0x1000021d. All ship on page 0x40000007 of every per-level def [D
     /// calltree_census.rs]; the drawing/application wiring stays on the draw side.
     pub cheat_misc: [bool; 9],
+    // ── mission-stats-rows: the session's scoring-table layer (each new field on its own line
+    // [WORKLOG lesson 4]) ──
+    /// The session's `ScoringTable`/bonus state for the Dossier Records page — the game's BSS
+    /// globals the page reads through `PlrStats_GetLevelTotals`/`Menu_GetLevelBonuses` [M
+    /// C_RBDSRECORDS 0x20bf00:19-26, 34-44]. The game has ONE table: the codename load restores
+    /// the save into it ([M `PlrStats_SetupScoreTable` 0x1990e0] — the LS_Load side) and the
+    /// results page's `GetScore(0)` commit updates it in place [M 0x1984b0:301-315], so the
+    /// Records page shows the finished mission's values even with no save in play. The port
+    /// mirrors that with this field: the host fills it from the sim's progress at the mission
+    /// end (the same clone `results_progress` takes) and `record_row`/`record_medal` read the
+    /// active profile's progress first (the save), falling back to this session layer.
+    pub session_progress: Option<nf_game::progress::Progress>,
 }
 
 impl FrontEnd {
@@ -3030,6 +3042,10 @@ pub struct ProfileSession {
     /// The loaded chain the save writes — the game's `InBufData` blocks around the session
     /// [M LS_Load 0x1cdfc0 / LS_Save 0x1cd698's buffers].
     pub profile: Option<nf_game::profile::Profile>,
+    /// mission-stats-rows: the session's scoring-table layer (see
+    /// `FrontEnd::session_progress`) — the game's BSS globals outlive every manager
+    /// [M C_RBDSRECORDS 0x20bf00:19-26 reads them after a fresh manager built].
+    pub session_progress: Option<nf_game::progress::Progress>,
 }
 
 impl ProfileSession {
@@ -3041,6 +3057,7 @@ impl ProfileSession {
             dir: fe.profile_dir.clone(),
             name: fe.active_profile.clone(),
             profile: fe.profile.clone(),
+            session_progress: fe.session_progress.clone(),
         }
     }
 
@@ -3052,6 +3069,7 @@ impl ProfileSession {
         }
         fe.active_profile = self.name.clone();
         fe.profile = self.profile.clone();
+        fe.session_progress = self.session_progress.clone();
     }
 }
 
@@ -3257,6 +3275,8 @@ impl FrontEnd {
             cheat_misc: [false; 9],
             // reward-after-outro (new field on its own line [WORKLOG lesson 4]).
             results_queued: false,
+            // mission-stats-rows (new field on its own line [WORKLOG lesson 4]).
+            session_progress: None,
         };
         // The boot opens P_START: the pair plays with `menu_movie` clear [M P_START 0x20a408:12-22;
         // the game's boot path P_INTRO → P_START replays it the same way — the intro movie end
@@ -4817,12 +4837,20 @@ impl FrontEnd {
 
     /// The Dossier Records' per-row values [M C_RBDSRECORDS 0x20bf00: the level's best score
     /// at ScoringTable+0x30, the moments value, the bonus count] for the records cursor —
-    /// from the ACTIVE profile (zeros without one, the pre-task behaviour).
+    /// the active profile's progress (the save), else the session layer (zeros without either,
+    /// the fresh-boot behaviour).
     pub fn record_row(&self, row: usize) -> (u32, u32, u32) {
-        let Some(profile) = self.profile.as_ref() else { return (0, 0, 0) };
-        let Some(entry) = profile.progress.table.get(row) else { return (0, 0, 0) };
+        // mission-stats-rows: the game's Records reader is `PlrStats_GetLevelTotals(hash)` — the
+        // ONE BSS table — so the read is the save's restored table when a codename is in play and
+        // the session's own table otherwise [M C_RBDSRECORDS 0x20bf00:19-26; the save restores
+        // into the table, `PlrStats_SetupScoreTable` 0x1990e0; the results commit updates it in
+        // place, 0x1984b0:301-315]. The port: the active profile's progress (the save) first,
+        // else the session layer the host fills at the mission end.
+        let progress = self.profile.as_ref().map(|p| &p.progress).or(self.session_progress.as_ref());
+        let Some(progress) = progress else { return (0, 0, 0) };
+        let Some(entry) = progress.table.get(row) else { return (0, 0, 0) };
         let hash = nf_game::progress::SP_LEVEL_HASHES.get(row).copied().unwrap_or(0);
-        let bonuses = (1..=4).filter(|&k| profile.progress.has_medal(hash, k, 0)).count() as u32;
+        let bonuses = (1..=4).filter(|&k| progress.has_medal(hash, k, 0)).count() as u32;
         (entry.best, entry.rows[0].value, bonuses)
     }
 
@@ -4830,9 +4858,11 @@ impl FrontEnd {
     /// C_RBDSRECORDS 0x20bf00:58-110 — the level's four bonus flags k1..k4 (Menu_GetLevelBonuses +4/+0x10/+0x1c/+0x28):
     /// all four → 0x307/0x300013e, k1..k3 → 0x306/0x300013f, k1+k2 → 0x308/0x3000140, k1 → 0x309/0x300013d].
     pub fn record_medal(&self, row: usize) -> Option<(u32, u32)> {
-        let profile = self.profile.as_ref()?;
+        // mission-stats-rows: the same one-table read as `record_row` — the save, else the
+        // session layer [M C_RBDSRECORDS 0x20bf00:34-44 — Menu_GetLevelBonuses' flags].
+        let progress = self.profile.as_ref().map(|p| &p.progress).or(self.session_progress.as_ref())?;
         let hash = nf_game::progress::SP_LEVEL_HASHES.get(row).copied()?;
-        let k = |n: u32| profile.progress.has_medal(hash, n, 0);
+        let k = |n: u32| progress.has_medal(hash, n, 0);
         if !k(1) { return None; }
         Some(if k(2) && k(3) && k(4) { (0x307, 0x0300_013e) } else if k(2) && k(3) { (0x306, 0x0300_013f) } else if k(2) { (0x308, 0x0300_0140) } else { (0x309, 0x0300_013d) })
     }

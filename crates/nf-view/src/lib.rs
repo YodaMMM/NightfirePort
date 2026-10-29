@@ -3916,6 +3916,11 @@ impl App {
                 // wipes them [M 0x182270:65]. The snapshot stands in; the menu_after hook builds
                 // the page the action opened through `FrontEnd::results_subpages_enter`.
                 self.results_progress = Some(sim.drones.progress.clone());
+                // mission-stats-rows: the same snapshot is the session's scoring-table layer —
+                // the game's BSS table the results commit updated in place [M 0x1984b0:301-315],
+                // which the Dossier Records page reads through PlrStats_GetLevelTotals even with
+                // no save in play [M C_RBDSRECORDS 0x20bf00:19-26].
+                fe.session_progress = self.results_progress.clone();
             }
         }
         self.fe = Some(fe);
