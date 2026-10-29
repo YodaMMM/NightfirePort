@@ -425,3 +425,19 @@ stand-in): every eye ray to the PC is blocked in the port — find why and fix [
 Progress (15:22 UTC): sandbox survived the walk-move-clip window (toolchain + work/ + ISO + the
 nf-view test binaries warm). Branch cut, WORKLOG restored from s/walk-move-clip's chain. Next:
 read the level-0a report + the test's ignore site, then the door-leaf collision decompile.
+
+## level-0a-every-objective-2 (progress 16:47 UTC 2026-10-29)
+
+Both blocker readings corrected by probe (scratch probe_l0a2/b/c): the mouth's "dynamic leaf" is
+disproven (door #540 E-opens clean, no mouth ray changes — the real blocker is a STATIC pillar
+block, south face z −13.10 spanning x −12.98..−10.9, that the old leg-23 waypoint sat inside;
+the ring route now crosses the open south to the ai node 130), and the Q-Worm install never had
+the gadget equipped (with 0x58 via the real cycle the bullet ray passes over the east partition
+and ch 0x48 lands in 44 ticks from the east stand [D probe]). The remaining gap is
+walk-reachability of a bullet-clear stand (the vent crawl is the game's route — unported), so
+the mission test stays ignored with the corrected evidence and the shared active test runs the
+real shots best-effort before the documented stand-in. walkreal_0700000a_live 6/0/3. Suite
+chunked foreground (background dies here; the sandbox restarted mid-task): 425/907 recorded,
+1392 passed / 2 failed (the 0c pylon GPU-adapter pair) / 134 ignored at 16:45 UTC; mp_online_
+failures CRASHes on the sandbox's socket hang (exit 137). Report: docs/reports/level-0a-every-
+objective-2.md.
