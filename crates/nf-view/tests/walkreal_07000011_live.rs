@@ -13,11 +13,13 @@
 //! - 0x04000035 "Escape from the tower" (ch 0x64 = 100, the mission-success AND [M 0x1827d8:119-123])
 //!   announces at load and completes only on 07000013, where the AND over the whole mission first
 //!   fires [D docs/levels/07000011.md §2] — asserted announced (3) here, never complete.
-//! - 0x04000036 "Gain access to lower office floor" (ch 0x48) announces at load; NO writer exists
-//!   on 07000011 [D §2's writer enumeration], so it cannot complete on this level — the walk
-//!   asserts it still announced at the exit, then follows the exit's own next level to 07000012,
-//!   where the spawn stands inside TouchOnce #679's tile (21.48, 0.23, 18.64)–(23.59, 1.21, 19.62
-//!   [D]) and ch 0x48 fires under Bond's feet — the record asserts COMPLETE (state 4) there
+//! - 0x04000036 "Gain access to lower office floor" (ch 0x48) announces at load; the writer hunt
+//!   (level-11-every-objective-2, docs/reports/level-11-every-objective-2.md) found no writer on
+//!   07000011 — that absence is [S] unverified (an assertion may not rest on a missing writer;
+//!   the port may simply lack it), so the walk does NOT assert it: it logs the channel each leg
+//!   and asserts the [M]-backed monitor states instead. The writer on 07000012 is TouchOnce
+//!   #679 [D]: the spawn stands inside its tile (21.48, 0.23, 18.64)–(23.59, 1.21, 19.62 [D])
+//!   and ch 0x48 fires under Bond's feet — the record asserts COMPLETE (state 4) there
 //!   [M 0x1827d8 case 3].
 
 #[path = "common/walker_b2.rs"]
@@ -151,7 +153,10 @@ fn walk_spawn_to_the_lower_floor_load_point() {
         let y = sim.bond.pos[1];
         assert!(y < 17.2, "the descent never reached the lower floor (y {y}) [D 15.0 probe + the 1.09 standing offset]");
         assert!(!sim.drones.channels.on(0x7c), "the descent never crossed the atrium plates (ch 0x7C) [D §4]");
-        assert!(!sim.drones.channels.on(0x48), "ch 0x48 still off at the stairwell bottom — no lower-floor writer on this level [D §2]");
+        // [S] unverified — NOT a pass/fail assert: "no 0x48 writer on this level" rests on a
+        // missing writer, and the port may simply lack it (level-11-every-objective-2). The
+        // mission-state asserts below are the [M]-backed pins.
+        eprintln!("[011] [S] unverified: ch 0x48 off at the stairwell bottom (expected: no lower-floor writer on this level)", );
         assert!(!sim.drones.channels.on(100), "no mission success on this level [D §2; M 0x1827d8:119-123]");
         assert_eq!(sim.drones.mission.states[15], [3, 3],
             "both records still announced at the stairwell bottom [M 0x1827d8 case 3]");
@@ -171,7 +176,10 @@ fn walk_spawn_to_the_lower_floor_load_point() {
     // 07000012 (#679's spawn tile) and on 07000013 (the whole-mission AND) [D §2].
     {
         let sim = w.scene.sim.as_ref().unwrap();
-        assert!(!sim.drones.channels.on(0x48), "ch 0x48 never fired on 07000011 — no writer exists [D §2's writer enumeration]");
+        // [S] unverified — NOT a pass/fail assert: "no 0x48 writer exists" rests on a missing
+        // writer, and the port may simply lack it (level-11-every-objective-2). The hunt is in
+        // docs/reports/level-11-every-objective-2.md.
+        eprintln!("[011] [S] unverified: ch 0x48 never fired on 07000011 (expected: no writer exists)", );
         assert!(!sim.drones.channels.on(100), "no mission success on this level [D §2; M 0x1827d8:119-123]");
         assert_eq!(sim.drones.mission.states[15], [3, 3],
             "both records announced (not complete) at the exit [M 0x1827d8 case 3]");
