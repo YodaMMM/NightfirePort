@@ -58,3 +58,12 @@ binaries (mp_stress_explosives_live rc=−9 = the known OOM); direct on the fina
 6/0, menus_flow 43/0, menu_graph_walk 2/0, create_save_live 4/0, fix_scores_handoff_live 1/0;
 walkreal_07000004_live 6/0. The remaining 722 binaries did not fit the window (the sandbox kills
 background jobs; each chunked call caps at ~9.5 min) — next window resumes from the branch.
+
+## level-04-stats-ninja-rows — 20:55 UTC 2026-10-29
+Branch from origin/master (02e306a6) merged with origin/s/mission-stats-rows (c8e5db7e — the
+integer-seconds Time row fix [M 0x1984b0:120], the Records session layer, the cell-by-cell
+walkreal test). Task: pin the WHOLE Mission Stats page of a real-input 07000004 finish cell by
+cell against the game's formulas [M PlrStat_GetScore 0x1984b0, the base-map design rows L
+ee_start_05 @0x2bc080] — Bond Moves, Subdued/Surrendered, Stealth, Accuracy, Health, Time, 007
+Bonus, subtotal, difficulty bonus, total — and the Records page; fix any cell the port shows
+differently; run the FULL suite and quote the total line. Deadline ~22:46 UTC, stop 22:26.
