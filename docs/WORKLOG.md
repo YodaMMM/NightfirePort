@@ -240,3 +240,9 @@ calibrations only with evidence. Full suite on the final tree, quote its total l
 Plan: branch created from origin/s/drone-bump-collision-10 + origin/master merged (clean);
 next: push, reproduce the reds on this tree, diff the -1..-10 chain against master for the
 four named change classes.
+
+Update (14:26 UTC): root-caused the driver-family reds — the boundary clamp is dead code in
+the game (+0x4F8 bit 0 never set: DefaultInit clears it, the 319-store disassembly sweep shows
+bits >= 2 only); route walks unclamped now, 3 named reds green, 07 stays green. The grounded
+bot-push y zero added (its own accumulator). pickups08/escort/walkreds remain — diagnosed,
+fix next window. Report: docs/reports/drone-bump-collision-11.md.
