@@ -1861,6 +1861,7 @@ self.local = [vs / k, vf / k];
             if std::env::var("NF_PUSH_DEBUG").is_ok() {
                 eprintln!("[pushdbg] n={} ja={:?} jb={:?} bots={:?}", ctx.bot_capsules.len(), ja, jb, ctx.bot_capsules);
             }
+            let mut bot_push = [0.0f32; 3];
             for &(ta, tb, tr) in ctx.bot_capsules {
                 let mut p = closest_on_seg(ta, tb, ja);
                 let mut q = closest_on_seg(ja, jb, p);
@@ -1871,15 +1872,36 @@ self.local = [vs / k, vf / k];
                 if dist_sq >= rr * rr { continue; }
                 let dist = dist_sq.sqrt().max(1e-6);
                 let overlap = (rr - dist) / dist; // fVar12 = 1.0 in SP [M :229-233]
-                push[0] -= d[0] * overlap;
-                push[1] -= d[1] * overlap;
-                push[2] -= d[2] * overlap;
+                bot_push[0] -= d[0] * overlap;
+                bot_push[1] -= d[1] * overlap;
+                bot_push[2] -= d[2] * overlap;
             }
+            // drone-bump-collision-11: a GROUNDED Bond's y belongs to the floor — the bot push
+            // lands after the floor refine (the game's next tick re-resolves it; the port's
+            // ordering has no re-resolve, and a wandering guest beside Bond projected him
+            // THROUGH the GuardRoom floor on 07000008: y 42.15 → 7.44 in 160 ticks [L probe]).
+            // Zero the BOT push's y only — the static push below (head bumps, floors) keeps its
+            // own y, and the airborne stance keeps the full bot push (the sleeper drop).
+            if self.grounded { bot_push[1] = 0.0; }
+            push[0] += bot_push[0];
+            push[1] += bot_push[1];
+            push[2] += bot_push[2];
         }
         // The pre-push-out snapshot: the game's ladder-grab pick sees the segment built HERE (the
         // hittest from the integrated obj+0x30 [M 0x194df0:361]; the +0x750 push lands in the
         // handler 0x1949a8:136-140, after the refine) — see the `pre_collide` field doc.
         self.pre_collide = self.pos;
+        // drone-bump-collision-11: a GROUNDED Bond's y belongs to the floor. The game's Jointy
+        // push lands in the collision handler 0x1949a8:136-140 (+0x750) AFTER the floor refine
+        // [M 0x194df0:361], and the game's NEXT tick re-resolves the floor before anything else
+        // reads the position — a bot bump never costs a grounded player his support (every
+        // master-tree walk paths Bond through standing crowds without a fall [L]). The port's
+        // push lands at the end of the tick with no floor re-resolve: with the arming now
+        // per-bot and stance-free, a wandering guest beside Bond projected him THROUGH the
+        // GuardRoom floor on 07000008 (the safe-bolt stand: y 42.15 → 7.44 in 160 ticks). Zero
+        // the push's y for the grounded stance — the horizontal separation (the component the
+        // game's capsule pair actually produces for two upright actors) is unchanged. [S] the
+        // ordering note; the observable is [L].
         for k in 0..3 { self.pos[k] += push[k]; }
         self.grounded_history = (self.grounded_history >> 1) | if self.grounded { 8 } else { 0 };
         // Fall damage: ticks falling with no ground for 4 ticks; on landing, over 60 → (timer − 60) if ≥ 10.
