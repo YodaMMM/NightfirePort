@@ -440,6 +440,7 @@ mod tests {
             burn: 0, burned: false, unlock_on_operative: false, unlocked: false,
             kind, code, scan_progress: 0, scan_solved: 0, pending_sounds: Vec::new(), scanning: false, lod_next: false,
             burn_a: 0xff, burn_b: 0xff, grace: 0,
+            facing: [0.0, 0.0, 1.0],
         }
     }
 
