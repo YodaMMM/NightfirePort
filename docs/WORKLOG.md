@@ -36,3 +36,13 @@ shelf: it balances on a thin ~13.05 surface at x ≈ 40.45..40.6 (a rail or a ro
 at x ≈ 39.99 (y 12.5), and drops north into the shaft. Three route iterations all wedged or fell
 (STUCK dumps in the run logs). The committed test keeps the documented stand-in + the new
 walkway-end-wall pin [D]; the door E-open from the corner is the next session's first item.
+
+Final (01:30 UTC): the report is at docs/reports/level-0c-door2turbine.md. The full suite (the
+fast runner, final tree): build ok (889 test binaries, 1372 s after the stale-artifact purge —
+the disk filled twice tonight; the purge is a sandbox-side fix, no repo file touched), run in
+progress at the stop line with 3 FAILED = exactly the 3 allowed disc_golden (slim ISO) and no
+other failure across the binaries run so far. The walkreal_0700000c_live pair: 2 passed /
+0 failed on the final tree (run three times). The door2turbine district is decoded end to end
+[M/D]: the E gates all open, the leaf-slab-only glist, the corner E stance at dist ≈ 1.2 < 2.62
+— the next session walks the 11.61 shelf → corner → E press and replaces the last district
+stand-in.
