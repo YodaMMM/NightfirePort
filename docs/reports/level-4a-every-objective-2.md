@@ -48,7 +48,11 @@ nf_game 588p/0F, nf_formats 92p/0F, nf_audio 23p/0F, interact_0700004a_live **8p
 un-parked fire leg, the group-2 pin, the spawner release, the sisters),
 stairwell_bullets_07000011_live 2p/0F, fix_foliage_bullets_live 3p/0F,
 searchlight_bullet_07000006_live 2p/0F, portal_eyecel_live 1p/0F, bullet_range_live 3p/0F,
-civilian_first_sighting_alert_live 4p/0F, walkreal_0700004a_live 1p/0F.
+civilian_first_sighting_alert_live 4p/0F (a P2K hit path), walkreal_0700004a_live 1p/0F,
+fix_bond_damage_live 6p/0F (drone-fired rounds at Bond — the `Bullet::update` change),
+fix_autoaim_elevator_live 1p/0F, fix_stunner_press_live 3p/0F, bathhouse_armed_girl_live 2p/0F,
+fix_grenade_throw_live 4p/0F, camera_beam_satchel_wreck_live 3p/0F. The level docs' fire-leg
+rows (docs/levels/0700004a.md + the audit) were resolved to this outcome on the branch.
 fix_0c_pylon_live ×2 FAILED = the no-GPU wgpu adapter class (request_adapter NotFound,
 Backends 0x0) — the -1 report's environment classification, pre-existing on master, not this
 branch's diff.
@@ -60,8 +64,7 @@ branch's diff.
   phase exceeded a 540 s foreground window. The touched-crate evidence above stands in for this
   window; the next message can start `NF_ISO=<abs> nohup python3 tools/test/suite.py > suite.out
   2>&1 &` first thing and quote the total.
-- The level doc (docs/levels/0700004a.md §7) still carries the -1 park wording for the fire leg
-  and the audit's GAP row — update on the next message together with the suite total.
+
 
 ## Live checks for the main agent
 

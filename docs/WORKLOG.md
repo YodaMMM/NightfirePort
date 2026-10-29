@@ -85,3 +85,8 @@ searchlight_bullet_07000006_live 2p/0F, portal_eyecel_live 1p/0F, bullet_range_l
 civilian_first_sighting_alert_live 4p/0F (the P2K fire path), walkreal_0700004a_live 1p/0F.
 fix_0c_pylon_live ×2 FAILED = the no-GPU wgpu adapter class (NotFound, Backends 0x0) — the -1's
 env classification, pre-existing, not this branch.
+
+More touched-path bins green (21:1x UTC): fix_bond_damage_live 6p/0F (the drone-fired rounds —
+the Bullet::update scoped change), fix_autoaim_elevator_live 1p/0F, fix_stunner_press_live 3p/0F,
+bathhouse_armed_girl_live 2p/0F, fix_grenade_throw_live 4p/0F, camera_beam_satchel_wreck_live
+3p/0F. The level docs' fire-leg rows resolved on the branch (0700004a.md + the audit).
