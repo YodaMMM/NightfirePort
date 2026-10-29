@@ -126,3 +126,15 @@ gallery probe (probe_gallery06.rs committed) timed out under suite contention �
   the ISO; setup skipped where done. Goal: finish the RED walk_the_full_route_and_complete_every_objective
   — case-E edge trigger (converge view, one use tick, take), the #389 0x21 plate approach,
   the 0x52/obj2/no-fail asserts + exit leg, the stale docs/systems/levels.md 0x4e line, full suite.
+- level-03-every-objective-2: both blockers fixed with real input, walk_the_full_route_and_complete_every_objective
+  GREEN. (1) the 0x21 enable fires on the WEST twin (footprint x 7.3..10.7, z −35.0..−33.7 [D trigger lo/hi]):
+  the west lane's approach legs to the gate-plate lawn stand inside it at (9.8, 6.37, −34.67) and ch 0x21 rises —
+  probe-verified this sandbox; the east twin (14.3, −33.3) stays unreachable (straight walk burns the 6000-tick
+  cap on the moat). Servants #389/#388 rescued after the plate fires, 0x4f/0x50/0x51 real. (2) the Dragon Safe
+  case E: the view converges with NO use (turn/look inputs), then ONE press tick — the press edge [M 0x1a5460:395-403,
+  the use block fires on Input_Action(p,0xe,4)'s edge; a held E activates once] is spent AT the converged view
+  (the doublecross_items_live repro shape), keycard spawns, back-step take writes 0x4e, obj0/obj1/obj2 states +
+  the no-fail asserts + the 07000004 exit all pass. docs/systems/levels.md's stale "07000003 ch 0x4e → NONE GAP"
+  line rewritten to the script-spawned key take (the old line predated the script-created-object scan).
+  walkreal_07000003_live file tally: 4 passed / 0 failed. Full suite restarted on the final tree (probe scratch
+  deleted); total line to quote in the report.
