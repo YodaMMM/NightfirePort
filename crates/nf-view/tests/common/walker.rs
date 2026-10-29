@@ -776,6 +776,82 @@ impl Walker {
         r.is_ok()
     }
 
+    /// The pack flight on real input (level-16-jetpack-flight): the toggle edge once (the game's
+    /// `Input_Action(3, 39, 4)` → `debug_scanmode ^= 1` → ChangeSubState(5) [M Player_Update
+    /// 0x193600:142-158]), then the held lift (the (action 7 − action 8) thrust, 3.0/60 world-Y
+    /// per tick [M Player_SSScanMode 0x193098:121-124]) up to `ty`, then the eased forward thrust
+    /// steered by yaw (the pitch-0 body's matrix rows [M 0x193600:284-295]) to (`tx`,`tz`), then
+    /// the toggle off and the landing wait. NO pos writes anywhere: every tick is `Input` through
+    /// `step_bond`; the motion is the substate's own. Returns true when Bond lands grounded
+    /// within `r` of the target xz.
+    pub fn fly_to(&mut self, tx: f32, ty: f32, tz: f32, r: f32, max: u32, label: &str) -> bool {
+        let mut toggled = false;
+        let mut off_sent = false;
+        for t in 0..max {
+            if self.scene.sim.as_ref().unwrap().disabled {
+                self.tick(Input::default(), false);
+                continue;
+            }
+            let (x, y, z, yaw, pitch) = {
+                let b = &self.scene.sim.as_ref().unwrap().bond;
+                (b.pos[0], b.pos[1], b.pos[2], b.yaw, b.pitch)
+            };
+            if off_sent {
+                // The toggle-off landed him back in the walk; wait for the grounded settle.
+                let (grounded, d) = {
+                    let b = &self.scene.sim.as_ref().unwrap().bond;
+                    (b.grounded, ((x - tx).powi(2) + (z - tz).powi(2)).sqrt())
+                };
+                if grounded && d < r {
+                    eprintln!("[fly] {label}: landed at ({x:.2},{y:.2},{z:.2}) +{t} ticks");
+                    return true;
+                }
+                self.tick(Input::default(), false);
+                continue;
+            }
+            let flying = self.scene.sim.as_ref().unwrap().bond.substate == nf_game::player::SS_FLY;
+            if !toggled {
+                let mut input = Input::default();
+                input.fly_toggle = true; // the one edge
+                toggled = true;
+                self.tick(input, false);
+                continue;
+            }
+            if !flying {
+                // The toggle tick is still in flight (the substate flips next tick).
+                self.tick(Input::default(), false);
+                continue;
+            }
+            let mut input = Input::default();
+            if y < ty {
+                // RISE: the held vertical thrust; yaw eases toward the target while climbing.
+                let desired = (tx - x).atan2(tz - z);
+                input.turn = wrap_pi(desired - yaw).clamp(-0.07, 0.07);
+                input.lift = 1.0;
+            } else {
+                let d = ((x - tx).powi(2) + (z - tz).powi(2)).sqrt();
+                if d < r {
+                    // Over the target: the toggle off (the look re-derive + ChangeSubState(0)
+                    // [M 0x193600:146-156]); the walk tail's floor ray re-grounds him.
+                    input.fly_toggle = true;
+                    off_sent = true;
+                } else {
+                    // CRUISE: the eased forward thrust, pitch levelled, yaw steered.
+                    let desired = (tx - x).atan2(tz - z);
+                    input.turn = wrap_pi(desired - yaw).clamp(-0.07, 0.07);
+                    input.look = (0.0 - pitch).clamp(-0.02, 0.02);
+                    input.forward = 1.0;
+                }
+            }
+            self.tick(input, false);
+        }
+        eprintln!("[fly] {label}: {max}-tick cap (pos ({:.2},{:.2},{:.2}))",
+            self.scene.sim.as_ref().unwrap().bond.pos[0],
+            self.scene.sim.as_ref().unwrap().bond.pos[1],
+            self.scene.sim.as_ref().unwrap().bond.pos[2]);
+        false
+    }
+
     /// Walk to a target THROUGH the nav graph (the guard approaches and resupply runs cross rooms;
     /// the direct steer wedges on walls between them). `final_arrive`: the last leg's radius.
     pub fn walk_nav_to(&mut self, target: V3, label: &str, final_arrive: f32) {

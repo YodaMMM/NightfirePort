@@ -41,6 +41,75 @@ fn carry(on: &[u32]) -> RamSave {
     RamSave::capture(&Default::default(), 0, &nf_game::pickup::Inventory::level_start(0x73, 34), &ch)
 }
 
+fn wrap_pi(a: f32) -> f32 {
+    const TAU: f32 = std::f32::consts::TAU;
+    (a + std::f32::consts::PI).rem_euclid(TAU) - std::f32::consts::PI
+}
+
+/// The pack flight on real input (level-16-jetpack-flight), the walker-less shape of the walkreal
+/// `fly_to`: the toggle edge once (the game's `Input_Action(3, 39, 4)` → `debug_scanmode ^= 1` →
+/// ChangeSubState(5) [M Player_Update 0x193600:142-158]), the held (action 7 − action 8) thrust
+/// to `ty` [M Player_SSScanMode 0x193098:121-124], the eased forward cruise to (`tx`,`tz`)
+/// [M :64-110 + the 0x193600:284-295 integration], the toggle off, the landing wait. Every tick
+/// is `Input` through `step_bond` — no pos writes; the motion is the substate's own.
+fn fly_to(scene: &mut nf_view::Scene, tx: f32, ty: f32, tz: f32, r: f32, max: u32, label: &str) -> bool {
+    let mut toggled = false;
+    let mut off_sent = false;
+    for t in 0..max {
+        if scene.sim.as_ref().unwrap().disabled {
+            scene.sim.as_mut().unwrap().step_bond(Input::default(), false, false, false);
+            continue;
+        }
+        if off_sent {
+            let (grounded, d) = {
+                let b = &scene.sim.as_ref().unwrap().bond;
+                (b.grounded, ((b.pos[0] - tx).powi(2) + (b.pos[2] - tz).powi(2)).sqrt())
+            };
+            if grounded && d < r {
+                let p = scene.sim.as_ref().unwrap().bond.pos;
+                eprintln!("[fly] {label}: landed at ({:.2},{:.2},{:.2}) +{t} ticks", p[0], p[1], p[2]);
+                return true;
+            }
+            scene.sim.as_mut().unwrap().step_bond(Input::default(), false, false, false);
+            continue;
+        }
+        let (x, y, z, yaw, pitch, sub) = {
+            let b = &scene.sim.as_ref().unwrap().bond;
+            (b.pos[0], b.pos[1], b.pos[2], b.yaw, b.pitch, b.substate)
+        };
+        if !toggled {
+            let mut input = Input::default();
+            input.fly_toggle = true; // the one edge
+            toggled = true;
+            scene.sim.as_mut().unwrap().step_bond(input, false, false, false);
+            continue;
+        }
+        if sub != nf_game::player::SS_FLY {
+            scene.sim.as_mut().unwrap().step_bond(Input::default(), false, false, false);
+            continue;
+        }
+        let mut input = Input::default();
+        if y < ty {
+            input.turn = wrap_pi((tx - x).atan2(tz - z) - yaw).clamp(-0.07, 0.07);
+            input.lift = 1.0;
+        } else {
+            let d = ((x - tx).powi(2) + (z - tz).powi(2)).sqrt();
+            if d < r {
+                input.fly_toggle = true; // the toggle off: the look re-derive + ChangeSubState(0) [M]
+                off_sent = true;
+            } else {
+                input.turn = wrap_pi((tx - x).atan2(tz - z) - yaw).clamp(-0.07, 0.07);
+                input.look = (0.0 - pitch).clamp(-0.02, 0.02);
+                input.forward = 1.0;
+            }
+        }
+        scene.sim.as_mut().unwrap().step_bond(input, false, false, false);
+    }
+    let p = scene.sim.as_ref().unwrap().bond.pos;
+    eprintln!("[fly] {label}: {max}-tick cap at ({:.2},{:.2},{:.2})", p[0], p[1], p[2]);
+    false
+}
+
 /// 07000016, the real defeat → objective path (kiko-16-defeat): the launch chain spawns the
 /// chaser (Kiko, #261 — skin 0x0500001e, dtype 0xf, death channel param 12 = 0 [D]) and Bond
 /// kills her: her death raises NOTHING (she is not the objective's writer — the pre-2026-10-20
@@ -78,25 +147,31 @@ fn the_07000016_kiko_death_button_defeat_completes_the_final_mission() {
     // [D]) — the chaser fight never overlaps it — and the mission can only complete from a live
     // Bond (Mission_Update 0x182c60 case 1 folds ch 100 → state 6, but its ch-0x62 fail arm —
     // Player_SetHealth(0), MissionState 3, LevelToEndTo 0x7000048 [M 0x182c60:21-43] — outranks
-    // it). So the game's player leaves the pit during the launch; the test walks the same route:
-    // once the cinema hands control back, Bond is re-seated on the upper floor the descent came
-    // from, outside the volume, for the rest of the chain. U-051 ANSWERED (docs/systems/
-    // hurt-volumes.md §U-051): the game's re-enable is the pit floor — the cinema's stream-8
-    // single key (3.57, −22.76, −179.55) [D pack_cinema_16_live] teleported by Player_Enable
-    // 0x195498 [M] — and the survival is the PACK FLIGHT in the 861-tick window (the pit door's
-    // ch 0xf0 opens at 2180, after the pulse [D]). The port has no jetpack substate; this re-seat
-    // is the documented stand-in for that flight [S], needed only because the test fires ch 0x81
-    // from the upper floor instead of walking Bond to the pack.
+    // it). U-051 ANSWERED (docs/systems/hurt-volumes.md §U-051): the game's re-enable is the pit
+    // floor — the cinema's stream-8 single key (3.57, −22.76, −179.55) [D pack_cinema_16_live]
+    // teleported by Player_Enable 0x195498 [M] — and the survival is the PACK FLIGHT in the
+    // 861-tick window. level-16-jetpack-flight ported the flight (the fly substate 5,
+    // `Player_SSScanMode` 0x193098's bit-0-clear arm [M]): the test now FLIES the escape on real
+    // input — the toggle edge, the held thrust out of the #309 stack, the eased cruise to the
+    // silo plate, the toggle off — and the old documented [S] re-seat (2.5, 1.2, −153.9) is
+    // REPLACED. The test still fires ch 0x81 from the upper floor instead of walking Bond to the
+    // pack (the walkreal walk covers the walked reach).
+    let mut ch243_y: Option<f32> = None;
     let chaser = {
         let mut found = None;
-        let mut re_seated = false;
-        for _ in 0..4000u32 {
+        let mut flown = false;
+        for _ in 0..6000u32 {
             scene.sim.as_mut().unwrap().step_bond(Input::default(), false, false, false);
-            if !re_seated && !scene.sim.as_ref().unwrap().disabled {
-                re_seated = true;
-                scene.sim.as_mut().unwrap().bond.pos = [2.5, 1.2, -153.9];
+            if !flown && !scene.sim.as_ref().unwrap().disabled {
+                // The PACK FLIGHT on real input: out of the #309 stack, over to the silo plate,
+                // landed — the re-seat stand-in's replacement (no pos writes in the flight).
+                flown = fly_to(&mut scene, 2.5, 2.2, -153.9, 1.2, 2600, "the pack flight out of the pit");
+                assert!(flown, "the pack flight clears the pit and reaches the silo plate on real input (no pos writes) [M SS_FLY]");
             }
             let sim = scene.sim.as_ref().unwrap();
+            if ch243_y.is_none() && sim.drones.channels.on(243) {
+                ch243_y = Some(sim.bond.pos[1]);
+            }
             // The chaser is the skin-0x1e dtype-0xf drone NOT in the death-ch 23..26 pit squad
             // (#294–297 [D]) — her param 12 is 0 [D #261], so this finds her with or without the
             // (removed) stand-in, which had made it 0x90.
@@ -105,6 +180,10 @@ fn the_07000016_kiko_death_button_defeat_completes_the_final_mission() {
                 break;
             }
         }
+        assert!(flown, "the flight ran");
+        let y = ch243_y.expect("ch 0xf3 (243) rose in the launch chain [D 0x0600090a s6]");
+        assert!(y > -21.3, "Bond flew above the #309 stack before the pulse (y {y:.2} at the ch-0xf3 rise)");
+        assert!(scene.sim.as_ref().unwrap().drones.mission.status() != 3, "the flight survived the launch pulse (no MissionState 3)");
         found.expect("the launch chain spawns the chaser (spawner #257, group 6 [D])")
     };
     // Sister first: a non-chaser drone's death (the pit squad's ch 23..26 [D]) never raises ch 0x90

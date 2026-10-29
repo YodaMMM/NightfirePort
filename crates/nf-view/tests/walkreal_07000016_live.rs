@@ -349,8 +349,18 @@ fn the_pit_pulse_kills_an_idle_bond_about_450_ticks_later_like_the_game() {
 /// ~194 ticks before the touch trigger's ch 0x81, something else starts it — that starter is the
 /// missing escape. gdbwatch on switch_channels[0x81] (0x26fc90+129·4) and Bond's obj+0x30 from
 /// the south-room approach through the cinema, FRESH boot.
+///
+/// level-16-jetpack-flight UN-IGNORED this: the escape is the PACK FLIGHT — the port's fly
+/// substate 5 (`SS_FLY`, `Player_SSScanMode` 0x193098's bit-0-clear arm [M the dispatch case 5,
+/// the controls, the (action 7 − action 8) thrust, the gravity skip, the toggle end condition]),
+/// entered on real input through the game's own toggle path (`Input_Action(3, 39, 4)` →
+/// `debug_scanmode ^= 1` → ChangeSubState(5) [M 0x193600:142-158]; the port's `Input::fly_toggle`).
+/// The re-enable leaves Bond INSIDE the #309 stack (y −24.08..−21.32 [D]); the held thrust rises
+/// him out of it well before ch 0xf3 rises (the pulse at script tick 1611 [D]) — asserted below —
+/// and the chaser fight runs from the hover. The pulse-1 survival census above stands as the
+/// proof that NO WALKING/door/lift escape exists [D]; the flight is the game's own remaining
+/// mechanism, now ported and flown on real input (no pos writes, no channel pokes).
 #[test]
-#[ignore = "pulse-1 survival has no disc-visible real-input escape (re-derived): the six-band hurt stack tiles the whole pit with overlapping quads [D], the blast rooms are sealed by static BlockingPolys with unreachable roofs [D], the lift (the only spot above the stack, low point −21.22 vs band top −21.32) is script-summoned at 2240 — 630 ticks into the 559-tick pulse [D + the ch-80 writer census] — and no pickup/substate/Bond stream exists [D+M]; the round-2 '~863 ticks after re-enable' line was an arithmetic error, the model (1611−1 ≈ 1610) matches the live 1591 [L]; the kill/fail timing is pinned by the un-ignored sister. The one open lead is the live ch-0x81→re-enable 553-vs-747 gap (the report's live checks)"]
 fn walk_the_chasers_defeat_completes_the_mission() {
     let iso = iso();
     let mut w = Walker::new(nf_view::load_with_carry(&iso, "07000016.bin", false, Some(&carry(&[0x47, 0x48, 0x4a, 0x54, 0xce, 0x4b]))).unwrap());
@@ -361,11 +371,32 @@ fn walk_the_chasers_defeat_completes_the_mission() {
     w.walk_to(walker::Wp::new(2.5, 1.0, -169.0).r(1.3), "door[4] through");
     w.walk_to(walker::Wp::new(2.4, 1.0, -175.0).r(1.2), "the south room");
     w.skip_cutscenes = false;
+    // THE PACK FLIGHT (real input, the un-ignore): on the first enabled tick after the cinema's
+    // hand-back at the pit floor (3.57, −23.18, −179.55) the toggle edge enters SS_FLY; the held
+    // (action 7 − action 8) thrust rises 3.0/60 per tick [M 0x193098:121-124] out of the #309
+    // stack's top band (y −21.32 [D]) and then Bond HOVERS (the fly zeroes BL+0x50 every tick
+    // [M :126] — no fall, no gravity) through the ch-0xf3 pulse and the chaser's spawn. No pos
+    // writes; the y at the pulse is asserted below.
+    let mut flown = false;
+    let mut cleared = false;
+    let mut ch243_y: Option<f32> = None;
     let chaser = {
         let mut found = None;
-        for _ in 0..6000u32 {
-            w.tick(Input::default(), false);
+        for _ in 0..8000u32 {
+            let enabled = !w.scene.sim.as_ref().unwrap().disabled;
+            let mut input = Input::default();
+            if enabled && !flown {
+                input.fly_toggle = true; // the one edge: debug_scanmode ^= 1 → ChangeSubState(5) [M]
+                flown = true;
+            } else if flown && !cleared {
+                let y = w.scene.sim.as_ref().unwrap().bond.pos[1];
+                if y > -19.0 { cleared = true; } else { input.lift = 1.0; }
+            }
+            w.tick(input, false);
             let sim = w.scene.sim.as_ref().unwrap();
+            if ch243_y.is_none() && sim.drones.channels.on(243) {
+                ch243_y = Some(sim.bond.pos[1]);
+            }
             // The chaser is the skin-0x1e dtype-0xf drone NOT in the death-ch 23..26 pit squad
             // (#294–297 [D]) — her param 12 is 0 [D #261] (the old 0x90 init stand-in is gone).
             if let Some(i) = sim.drones.list.iter().position(|d| d.present && !d.corpse && d.skin & 0xffff == 0x1e && d.dtype == 0xf && !matches!(d.death_channel, 23..=26)) {
@@ -376,8 +407,14 @@ fn walk_the_chasers_defeat_completes_the_mission() {
         w.skip_cutscenes = true;
         found.expect("the launch chain spawns the chaser (spawner #257, group 6 [D])")
     };
-    let cpos = w.scene.sim.as_ref().unwrap().drones.list[chaser].pos;
-    let _ = w.try_walk_to(walker::Wp::new(cpos[0], cpos[1] + 6.0, cpos[2] + 4.0).r(2.0), "the chaser's rim");
+    assert!(flown && cleared, "the pack flight rose out of the #309 stack on real input [M SS_FLY]");
+    {
+        let y = ch243_y.expect("ch 0xf3 (243) rose in the launch chain [D 0x0600090a s6]");
+        assert!(y > -21.3, "Bond hovered above the stack when ch 0xf3 rose (y {y:.2})");
+        assert!(w.scene.sim.as_ref().unwrap().drones.mission.status() != 3, "the flight survived the pulse (no MissionState 3)");
+    }
+    // The REAL fire leg from the hover: the chaser spawns pit-side, straight down the shaft —
+    // the walker's aim + fire through the game's own weapon path.
     assert!(w.shoot(chaser, "the chaser"), "the chaser dies to Bond's fire");
 
     // The REAL rule (kiko-16-defeat): her death raises nothing — ch 0x90's writer is the

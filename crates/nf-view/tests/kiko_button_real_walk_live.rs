@@ -1,8 +1,9 @@
 //! kiko-button-real-walk: the KikoDeathButton #693 reached ON FOOT from the chaser's spawn — the
-//! real walk (`Sim::step_bond` + `Input` only, no `bond.pos` writes after the documented
-//! pack-flight re-seat), the E press through the game's own dispatch, and the gate answer.
+//! real walk (`Sim::step_bond` + `Input` only, NO `bond.pos` writes after the documented
+//! pack-flight stand-in was replaced), the E press through the game's own dispatch, and the gate
+//! answer.
 //!
-//! What the walk proves (new evidence, this task):
+//! What the walk proves:
 //! - **the tower room is walkable**: from the silo plate the west lane (x 5.2..6.3) passes the
 //!   tower-base wall — the diagonal collision ramp the fix-finale probe read as a "slab leak" at
 //!   (7.41, −153.78) [D collision: the southward/eastward ray scans; the wall's blocked cells
@@ -13,10 +14,13 @@
 //!   holds to z ≈ −174 and the ch-0x81 slab's stretch (z −178.50..−174.32, y 0..2.07 [D trigger
 //!   bbox]) is open — Bond drops through its airspace, the touch fires, and the pack cinema's
 //!   stream-8 key re-enables him on the pit floor [D pack_cinema_16_live; M Player_Enable
-//!   0x195498]. The real player falls too; the escape is the pack flight, which the port has no
-//!   jetpack substate for [M the substate list; hurt-volumes-16b], so the documented [S] re-seat
-//!   (fix_finale's (2.5, 1.2, −153.9), outside the ch-0xf3 volume) stands between the cinema and
-//!   the walk. No other pos write happens anywhere in this test.
+//!   0x195498]. The real player falls too; and the escape is now the PACK FLIGHT ITSELF: the
+//!   port's fly substate 5 (`SS_FLY`, `Player_SSScanMode` 0x193098's bit-0-clear arm [M — the
+//!   controls, the thrust, the gravity skip and the end toggle are the decompile's own]) flies
+//!   Bond out of the pit on real input — the toggle edge, the held (action 7 − action 8) thrust
+//!   and the eased forward lanes, the collision pass skipped as the game's `debug_scanmode`
+//!   early return does [M 0x1949a8:30-32]. The old documented [S] re-seat (fix_finale's
+//!   (2.5, 1.2, −153.9)) is REPLACED; no pos write happens anywhere in this test.
 //! - **the gate ch 0x8d arms on the unavoidable corridor crossing and nothing on the disc clears
 //!   it**: touch #616 is a flags-0xEA TouchOnce (latching [M the class-dispatcher update +
 //!   0x1b1900's disassembly — Trigger_Calc updates type-2 only, the dispatcher all classes]),
@@ -150,22 +154,28 @@ fn the_07000016_real_walk_reaches_the_kiko_death_button_and_the_gate_arms_on_the
     }
 
     // The launch chain plays out (no skip): the cinema re-enables Bond on the pit floor [D
-    // pack_cinema_16_live stream 8; M Player_Enable 0x195498]. The port has no jetpack substate
-    // [M], and the ch-0xf3 pulse (script ticks 1611..2170 [D 0x0600090a s6]) kills pit-floor Bond,
-    // so the documented [S] re-seat stands in for the pack flight on the first enabled tick — the
-    // fix_finale spot, outside the volume (y −24.1..−21.3). This is the test's ONLY pos write.
+    // pack_cinema_16_live stream 8; M Player_Enable 0x195498], and the PACK FLIGHT — the port's
+    // fly substate 5, `Player_SSScanMode` 0x193098's bit-0-clear arm [M] — flies him out on real
+    // input: the toggle edge, the held (action 7 − action 8) thrust out of the HurtPoly
+    // #309 stack (y −24.08..−21.32 [D]), the eased forward cruise to the silo plate, the toggle
+    // off. The old documented [S] re-seat (2.5, 1.2, −153.9) is REPLACED — no pos write below.
+    // The ch-0xf3 pulse (script ticks 1611..2170 [D 0x0600090a s6]) fires long after the flight
+    // has cleared the stack; the flight's own y at the pulse is asserted.
     w.skip_cutscenes = false;
+    let mut flown = false;
+    let mut ch243_y: Option<f32> = None;
     let chaser = {
         let mut found = None;
-        let mut re_seated = false;
-        for _ in 0..7000u32 {
-            w.scene.sim.as_mut().unwrap().step_bond(Input::default(), false, false, false);
-            if !re_seated && !w.scene.sim.as_ref().unwrap().disabled {
-                re_seated = true;
-                w.scene.sim.as_mut().unwrap().bond.pos = [2.5, 1.2, -153.9];
-                w.scene.sim.as_mut().unwrap().bond.vel = [0.0; 3];
+        for _ in 0..9000u32 {
+            if !flown && !w.scene.sim.as_ref().unwrap().disabled {
+                flown = w.fly_to(2.5, 2.2, -153.9, 1.2, 2600, "the pack flight out of the pit");
+                assert!(flown, "the pack flight clears the pit and reaches the silo plate on real input (no pos writes) [M SS_FLY]");
             }
+            w.tick(Input::default(), false);
             let sim = w.scene.sim.as_ref().unwrap();
+            if ch243_y.is_none() && sim.drones.channels.on(243) {
+                ch243_y = Some(sim.bond.pos[1]);
+            }
             if let Some(i) = sim.drones.list.iter().position(|d| d.present && !d.corpse && d.skin & 0xffff == 0x1e && d.dtype == 0xf && !matches!(d.death_channel, 23..=26)) {
                 found = Some(i);
                 break;
@@ -174,6 +184,15 @@ fn the_07000016_real_walk_reaches_the_kiko_death_button_and_the_gate_arms_on_the
         w.skip_cutscenes = true;
         found.expect("the launch chain spawns the chaser (spawner #257 group 6 [D])")
     };
+    assert!(flown, "the flight ran");
+    // THE ESCAPE, machine-pinned: when ch 0xf3 (243) rose, Bond was ABOVE the hurt stack's top
+    // band (y −21.32 [D]) — the pulse never touched him — and the mission did not fail (the
+    // death-sequence window [M 0x19a6a8 RED_FADE_TICKS 448] never ran).
+    {
+        let y = ch243_y.expect("ch 0xf3 (243) rose in the launch chain [D 0x0600090a s6]");
+        assert!(y > -21.3, "Bond flew above the #309 stack before the pulse (y {y:.2} at the ch-0xf3 rise)");
+        assert!(w.scene.sim.as_ref().unwrap().drones.mission.status() != 3, "the flight survived the launch pulse (no MissionState 3)");
+    }
     {
         let sim = w.scene.sim.as_ref().unwrap();
         assert!(sim.drones.list[chaser].present, "the chaser lives");
