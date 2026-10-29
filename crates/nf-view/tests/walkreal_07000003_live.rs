@@ -146,14 +146,18 @@ fn walk_the_full_route_and_complete_every_objective() {
     //    the guards sharing the channel [D], the servant starts the HOSTAGE cower (DroneTypeSettings
     //    row 5 start 0xa) and the captor binds. Killing the captor completes the save: Hostage
     //    UPDATE → HostageSaved ENTER → DroneFunc_HostageSaved writes switch_channels[+0x135 = p6]
-    //    [M 0x15cb78:24-36, 0x15ccf0 case 1, 0x1441c0:11-18]. The 0x21 plate for #389 sits on the
-    //    gate approach's lawn side (the (14.3, −33.3) one — the (9.0, −34.4) twin hangs over the
-    //    moat rim the walker can't stand on [D the two plate centres; the stuck dump]).
+    //    [M 0x15cb78:24-36, 0x15ccf0 case 1, 0x1441c0:11-18].
+    //    The enable channel 0x21 hangs off TWO kind-1 plates [D two out-0x21 placements]. The east
+    //    twin (centre 14.3, −33.3; footprint x 13.1..15.4, z −35.2..−31.5 [D the trigger lo/hi])
+    //    is cut off from every standable lane by the garden moat ditch: the straight walk from the
+    //    gate-plate lawn burns the 6000-tick cap and the nav route parks on the ledge above (y
+    //    9.37 — the prior session's stuck dump). The WEST twin (centre 8.98, −34.35; footprint x
+    //    7.27..10.69, z −35.05..−33.65 [D the trigger lo/hi]) IS crossed on real input: the west
+    //    lane's approach to the gate-plate lawn stands inside it at (9.8, 6.37, −34.67) and ch 0x21
+    //    fires (this sandbox's zz_probe03_plate run, same legs as below). So the plate is fired
+    //    BEFORE the servant walk — #389 is already HOSTAGE with its captor bound when Bond arrives
+    //    [M 0x144030's bind at the HOSTAGE entering tick].
     let sim = w.scene.sim.as_ref().unwrap();
-    let plate0x21 = sim.drones.triggers.iter()
-        .filter(|t| t.kind == walker::trigger_kind::TOUCH_ONCE && t.out == 0x21)
-        .map(|t| t.centre()).min_by(|a, b| a[0].partial_cmp(&b[0]).unwrap().reverse())
-        .expect("servant #389's enable plate");
     let plate0x25 = sim.drones.triggers.iter()
         .find(|t| t.kind == walker::trigger_kind::TOUCH_ONCE && t.out == 0x25).map(|t| t.centre())
         .expect("servant #388's enable plate");
@@ -165,10 +169,29 @@ fn walk_the_full_route_and_complete_every_objective() {
     };
     assert_eq!(servants.len(), 3, "three protected servants [D the dump]");
     drop(sim);
-    for (plate, want_ch) in [(plate0x21, 0x4fu8), (plate0x25, 0x50u8)] {
+    // The 0x21 enable: the west lane to the gate-plate lawn (each leg [D the plate lo/hi] — the
+    // last one's nav node stands inside the west twin's footprint).
+    for (name, at) in [
+        ("west lawn", [0.0f32, 5.9, -30.0]),
+        ("the west lane", [1.0, 5.9, -33.0]),
+        ("along the moat", [8.0, 5.9, -36.0]),
+        ("gate plate lawn", [11.0, 5.9, -35.0]),
+    ] {
+        w.walk_nav_to(at, name, 1.6);
+    }
+    {
+        let sim = w.scene.sim.as_ref().unwrap();
+        assert!(sim.drones.channels.on(0x21),
+            "the west-lane approach stands inside the west 0x21 plate's footprint [D lo/hi x 7.3..10.7 z −35.0..−33.7]");
+    }
+    w.walk_nav_to([13.0, 5.9, -18.0], "back across the courtyard", 1.6);
+    for (plate, want_ch) in [(None, 0x4fu8), (Some(plate0x25), 0x50u8)] {
         let (si, at, rescue_ch) = *servants.iter().find(|(_, _, ch)| *ch == want_ch)
             .unwrap_or_else(|| panic!("the servant carrying {want_ch:#x} [D p6]"));
-        w.walk_nav_to(plate, &format!("onto the {want_ch:#x}-servant's enable plate"), 1.8);
+        // #389's 0x21 plate already fired on the lane approach; #388's 0x25 plate is walked here.
+        if let Some(plate) = plate {
+            w.walk_nav_to(plate, &format!("onto the {want_ch:#x}-servant's enable plate"), 1.8);
+        }
         w.wait(10);
         w.walk_nav_to([at[0], at[1] - 0.3, at[2]], &format!("servant {si}"), 1.7);
         let sim = w.scene.sim.as_ref().unwrap();
