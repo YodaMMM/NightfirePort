@@ -378,3 +378,11 @@ family's msg-0x21 resume [M 0x15e4f0/0x15e698/0x15eda8/0x15ec08] + RECOVER's mis
 arm) — the lead no longer wedges mid-descent, so no test-leg re-derivation was needed; the
 -11 legs already were the main walk's proven shape. Full suite chunking on the merged tree
 (state /home/z/suite12_state.json) for the total line.
+
+Progress (14:05 UTC): suite chunks 2-4 (295/896 recorded, 1037 passed / 3 failed / 95
+ignored). One new red surfaced: walkreal_07000002 walk_the_castle_all_objectives_to_the_exit
+— geisha 2's captor (drone 16) survives four clip loads so ch 0x4A never rises (the [M
+0x1441c0] monitor assert is fine; the kill is the blocker — the -9 §6/7 cull-settle class,
+bisect next window). The walkreal_07000011 hair-band red was FIXED in this window (the
+flight-C approach leg now reaches the authored waypoint; the band untouched). Report at
+docs/reports/capsule-cull-and-los-masks-12.md; finishing.
