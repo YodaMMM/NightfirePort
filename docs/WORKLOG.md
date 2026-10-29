@@ -21,3 +21,6 @@ Progress log:
   ambush, resupply on dry clips). Root cause of the remaining failure found with NF_ALARM_TRACE:
   the nav-10 wedge is guard g3's BODY-BLOCK (d 0.8, 0x74→0x68→0x60 at t4137-4184); the fail chain
   auto-restarts ~+1462 into it. Test ignored with the exact blocker; pokes stay gone.
+- 23:10 loot loop added (walk to the nearest live pickup, arrive 0.4, cycle weapons). The walk
+  reaches the same wedge dry: 48 start rounds vs ~13 armed guards; drops untaken (one at y 0.0,
+  through the floor — run08). Test stays ignored with both blockers; pokes stay gone.

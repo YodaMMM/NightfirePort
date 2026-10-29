@@ -80,6 +80,30 @@ fn clear_captors(w: &mut Walker, around: [f32; 3], label: &str) {
     }
 }
 
+/// Walk to the nearest live pickup (a guard drop or a placed box) through the real path and take
+/// it — Bond's own feet, no grants. Then cycle the wheel to a firearm with ammo (the drops are
+/// the guards' weapons [L drops]; `switch_to_armed` is the game's own weapon cycle).
+fn loot(w: &mut Walker, label: &str) {
+    for k in 0..3 {
+        let dry = {
+            let sim = w.scene.sim.as_ref().unwrap();
+            sim.gun.clip + sim.gun.spare == 0
+        };
+        if !dry { break; }
+        let bp = w.scene.sim.as_ref().unwrap().bond.pos;
+        let target = w.scene.sim.as_ref().unwrap().drones.pickups.iter()
+            .filter(|p| !p.gone)
+            .map(|p| [p.m[3][0], p.m[3][1], p.m[3][2]])
+            .min_by(|a, b| dxz(*a, bp).total_cmp(&dxz(*b, bp)));
+        let Some(target) = target else { eprintln!("[02] {label}: nothing to loot"); return; };
+        eprintln!("[02] {label}: looting ({:.1},{:.1},{:.1}) (d {:.1})", target[0], target[1], target[2], dxz(target, bp));
+        // arrive 0.4: the take needs Bond's capsule ON the pickup (the 1.2 stop left it untaken,
+        // first loot run 2026-10-29).
+        w.walk_nav_to(target, &format!("{label} loot {k}"), 0.4);
+        let _ = w.switch_to_armed(label);
+    }
+}
+
 /// Kill every armed guard within `radius` of BOND through the real input path (walk to a vantage
 /// 3 u from the guard on the Bond→guard line, then fire). The pursuit set: the ch-0x15 garden
 /// group (5 guards [D]) chases the walk across the south hall, and the ch-0x81 ambush group
@@ -104,9 +128,12 @@ fn clear_pursuers(w: &mut Walker, radius: f32, label: &str) {
         let stand = [at[0] - dx / len * 3.0, at[1], at[2] - dz / len * 3.0];
         w.walk_nav_to(stand, &format!("{label} pursuer {round} approach"), 1.0);
         if !w.shoot(di, &format!("{label} pursuer {round}")) {
-            // The fight's own loot: drop pickups, then the same guard again (round budget allows).
-            eprintln!("[02] {label}: pursuer {round} (drone {di}) survived — resupplying and retrying");
-            if w.resupply(&format!("{label} pursuer {round}")) {
+            // The fight's own loot: the dead guards' drops and the placed boxes — the nearest
+            // live pickup, walked to for real (the corridor rule in `resupply` blocks the
+            // off-path boxes; a player mid-firefight grabs what dropped). Then the same guard.
+            eprintln!("[02] {label}: pursuer {round} (drone {di}) survived — looting and retrying");
+            loot(w, &format!("{label} pursuer {round}"));
+            if w.scene.sim.as_ref().unwrap().gun.clip + w.scene.sim.as_ref().unwrap().gun.spare > 0 {
                 w.walk_nav_to(stand, &format!("{label} pursuer {round} again"), 1.0);
                 let _ = w.shoot(di, &format!("{label} pursuer {round} retry"));
             }
@@ -123,7 +150,7 @@ fn clear_pursuers(w: &mut Walker, radius: f32, label: &str) {
 /// the leg — he closes from beyond the 24 u sweep during it). All three channel pokes ARE gone and
 /// the port fires all three quads on a real body [L probe02quads TELE]; the legs themselves are
 /// real throughout.
-#[ignore = "real-health blocker: guard g3 body-blocks the south-hall-west nav-10 wedge (d 0.8, state 0x60 at t4184) and the fail chain auto-restarts ~+1462 — the stuck ladder needs a drone-body-block response"]
+#[ignore = "real-health blockers: (1) guard g3 body-blocks the south-hall-west nav-10 wedge (d 0.8, state 0x74->0x68->0x60 at t4137-4184) and the fail chain auto-restarts ~+1462 into it; (2) the ammo economy — 48 start rounds vs ~13 armed guards, the fight drops go untaken (one rests at y 0.0, through the floor [L run08 looting line]) — loot()+resupply cannot keep the pistol fed. The stuck ladder needs a drone-body-block response and the drop placement needs a look; then un-ignore"]
 #[test]
 fn walk_the_castle_all_objectives_to_the_exit() {
     let iso = iso();
