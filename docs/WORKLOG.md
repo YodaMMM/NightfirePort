@@ -73,3 +73,15 @@ rays leave through it). The GROUP-2 leg pinned UNREACHABLE by
 eye→drone ray under BOTH the flat and the scoped sets (the probe: the scoped first-hit EQUALS
 the flat first-hit at every sampled pose; the BFS floods 1-3 cells that include the blocker;
 the 110-pose grid across the car footprint 0 flat-clear). Game-side live checks in the report.
+
+Suite evidence (21:0x-21:15 UTC): the FULL suite could not run in this window — the nohup'd
+`python3 tools/test/suite.py` died between tool calls (verified: pid gone, empty suite.out) and
+the runner's own build phase exceeded the 540s foreground timeout — the sandbox kills background
+jobs. The touched-crate evidence, all --test-threads=1 on the final tree (merged with
+origin/master 02e306a6 at e17debbf): nf_game 588p/0F, nf_formats 92p/0F, nf_audio 23p/0F,
+interact_0700004a_live 8p/0F (the un-parked fire leg + the group-2 pin + the sisters),
+stairwell_bullets_07000011_live 2p/0F (the scoped-flight pin), fix_foliage_bullets_live 3p/0F,
+searchlight_bullet_07000006_live 2p/0F, portal_eyecel_live 1p/0F, bullet_range_live 3p/0F,
+civilian_first_sighting_alert_live 4p/0F (the P2K fire path), walkreal_0700004a_live 1p/0F.
+fix_0c_pylon_live ×2 FAILED = the no-GPU wgpu adapter class (NotFound, Backends 0x0) — the -1's
+env classification, pre-existing, not this branch.
