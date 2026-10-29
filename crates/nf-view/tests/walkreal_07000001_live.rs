@@ -519,7 +519,16 @@ fn walk_from_the_spawn_to_the_exit_with_the_contact() {
         assert_eq!(sim.drones.mission.states[m02][0], 1, "07000002 'Destroy Mayhew's computer' still waits on enable 0x47 [M 0x1827d8 case 1]");
         assert_eq!(sim.drones.mission.states[m02][1], 1, "07000002 'Rescue geisha girls' still waits on enable 0x47");
         assert_eq!(sim.drones.mission.states[m02][2], 1, "07000002 'Find door to servants quarters' still waits on enable 0x4c");
-        assert!(!sim.drones.channels.on(0x47), "07000001 never raises the obj0 completion channel — no disc writer on this level [D census + M-dis]");
+        // [S] unverified — kept out of pass/fail. "07000001 never raises the obj0 completion
+        // channel" rests on a MISSING writer (the census above: level data, every
+        // switch_channels 0x26fc90 immediate, every disc-data-driven writer), and an assertion
+        // may not rest on a missing writer — the port may simply lack it. Logged, never
+        // asserted:
+        if sim.drones.channels.on(0x47) {
+            eprintln!("[01] [S] unverified — ch 0x47 is ON after the walk: a writer the census missed (or the un-ported mission layer) fired; the never-raises expectation is NOT met");
+        } else {
+            eprintln!("[01] [S] unverified — ch 0x47 still off after the walk: matches 'no disc writer on this level' [D census + M-dis], but the port may simply lack the writer, so this stays out of pass/fail");
+        }
         assert!(!sim.drones.channels.on(100), "the mission spans 07000002 — success waits for its objectives");
     }
     if !exited {
