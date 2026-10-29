@@ -154,7 +154,7 @@ fn walk_the_full_route_and_complete_every_objective() {
     //    9.37 — the prior session's stuck dump). The WEST twin (centre 8.98, −34.35; footprint x
     //    7.27..10.69, z −35.05..−33.65 [D the trigger lo/hi]) IS crossed on real input: the west
     //    lane's approach to the gate-plate lawn stands inside it at (9.8, 6.37, −34.67) and ch 0x21
-    //    fires (this sandbox's zz_probe03_plate run, same legs as below). So the plate is fired
+    //    fires (a plate probe run on the same legs as below). So the plate is fired
     //    BEFORE the servant walk — #389 is already HOSTAGE with its captor bound when Bond arrives
     //    [M 0x144030's bind at the HOSTAGE entering tick].
     let sim = w.scene.sim.as_ref().unwrap();
