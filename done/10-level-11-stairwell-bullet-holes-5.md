@@ -25,3 +25,7 @@ claimed-by: sandbox3 at 2026-10-29T00:10Z
 ## Report (done, 2026-10-29T01:35Z)
 
 Closed by the driver: the report is on `s/level-11-stairwell-bullet-holes-5` (docs/reports/level-11-stairwell-bullet-holes-5.md); the worker didn't run finish.sh.
+
+---
+## Report from the worker (done, 2026-10-29T01:35Z)
+
