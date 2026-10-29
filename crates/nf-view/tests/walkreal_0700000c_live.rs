@@ -1,7 +1,7 @@
 //! walkreal-c: 0700000c (Chain Reaction, part 1 — the power station) walked with the player's own
 //! movement — `step_bond` input only: no channel or state pokes, and the only position writes are
-//! the two documented ring-gap stand-ins at the end (the west and south patrol-circle gaps, the
-//! exact probe evidence below). Route: the ST-1 walkway start #1 (8.98, 15.07, −149.65 [D]) → the
+//! the three documented stand-ins (the west and south patrol-circle gaps, and the gate-band
+//! crossing x 55.5..67 — each with its exact probe evidence below). Route: the ST-1 walkway start #1 (8.98, 15.07, −149.65 [D]) → the
 //! walkway NORTH end plate #274 (4.63–6.95, 13.63–14.56, −112.08..−110.12 [D]) → ch 0x1b
 //! (objective 1) → the stairwell descent at the walkway's z −131..−133 opening onto the lower
 //! walkway (11.84 z −154..−111 [D coll-floor]) → the pad plate #506 (4.67–7.00, 12.73–13.67,
@@ -24,8 +24,16 @@
 //! `wire_silo2turbine` #283's B end (38.03,−217.64) hangs at the FAR side) → the ring south-east
 //! walkway (40,−214..−222, 12.0) → the ring SE corner (36-40,−208..−210, 11.1) → the REAL jump
 //! over the x 41..43 slot (the floor resumes at (44,−209) 11.2 [D probes]) onto the gate band →
-//! the band TouchOnce #0xb4 (45.68..46.66, 10.34..11.32, −208.63..−206.52 [D]) → the band east
-//! (floor 10.3 at x 46..96 [D probes]) → the gate → E → level_exit 0x0700000d ([M Player_Activate
+//! the band TouchOnce #0xb4 (45.68..46.66, 10.34..11.32, −208.63..−206.52 [D]) → the band east to
+//! its true end x 55.0 [D probe door4 fine map] → STAND-IN over the gate-band crossing (x 55.5..67
+//! at band height is void in the disc's own collision: the pit floor 6.17 spans x 55..63.5, the
+//! 7.19 shelf x 64..64.5, then void to the resume x 67.5 [D probe door4 pit map]; the 10.85 strip
+//! z −206.1..−205.2 has a 6.5-unit gap x 53.5..60 [D probe door4 0.25 map]; NO SS mover touches
+//! the box, no wire serves it, no ladder exists in the east half, no drone moves there in 300
+//! ticks, and the type-2 zipline y 17.85 has no floor at either end [D probes door3/5/6]; the
+//! game's own nav path17 links (49.69, 10.74, −207.29)↔(63.06, 10.74, −207.54) ACROSS the void
+//! but the per-path A* rejects it [D probe door4]) → the resumed band (10.34 x 67.5+ [D]) → the
+//! gate → E → level_exit 0x0700000d ([M Player_Activate
 //! 0x1a5170 case 0x1d → Trigger_Activate 0x1b2318:111], the key gate ch 0x1c on) → the warm RamSave
 //! carry into 0700000d → the spawn TouchOnce #436 (179.53, 11.58, −205.40, out 0x23 [D 0d]) fires
 //! → objective 3 completes and 0d's own objective reveals ([M Mission_Init 0x182270:92-121 carries
@@ -273,43 +281,194 @@ fn walk_the_whole_mission_from_the_start_to_the_0d_handoff() {
     w.wait(10);
     eprintln!("[0c] the south-gap stand-in (the unpinned crossing) — the ring south-east walkway");
 
-    // Leg 9 (REAL to the door district, then the DOCUMENTED stand-in over it): the south-east
-    // walkway north to the ring's SE corner district — where `door2turbine` #281 (40.0, 12.6,
-    // −210.4 [D]) bars the crossing onto the gate band. This session's census settled the
-    // district [D, probe walkreal_probe0c_door_live — all from the disc's collision tris]:
-    // the walkway top strip (x 39.98..40.41, y 12.02, z −218.69..−213.51) ends in a wall (y
-    // 12.02..14.22) at z −213.51; the door's 78-tri glist is the LEAF slab only (x 38.49..40.02,
-    // y 11.15..14.00, z −210.56..−210.36, live sphere (40.01,12.57,−209.69) r 1.62) — no stoop;
-    // an 11.61 shelf (x 38.8..39.3, z −214.5..−213.0) and an 11.09 corridor (x 38.3..39.3, z
-    // −212.5..−210.5) lead into the ring SE corner (11.06..11.14, x 36..40.5, z −210..−208),
-    // where the use sphere reaches the leaf at dist ≈ 1.2 < 2.62 [M Collide_PickObj 0x1eae80's
-    // 0x101 arm]; the shaft void (bottom 6.17) fills x 40.5..41.7, z −214.5..−211; a thin rail
-    // (top ≈ 13.05, x ≈ 40.45..40.6, z −218..−214) rides the walkway's east edge — the walker
-    // balances on it and can step neither west (a wall at x ≈ 39.99 at y 12.5) nor north (the
-    // shaft). The door's E gates are ALL open [M Door_Activate 0x135be0: ch_lock 0, lock_flag 0,
-    // approach 0, kind 0 closed → the swing arm's SetState(8)]; nothing writes its ch_open 5
-    // (the trigger/SS sweep is empty [D]) — the E press is the only opener. The prior session's
-    // "state holds 0x2" was the ROUTE (the walker wedged south-west of the leaf, out of the
-    // sphere's reach), not the door code. The real-input leg through the 11.61 shelf → the
-    // corner → the E press is the next session's item; the band arrival keeps the older
-    // walkthrough's stand-in.
-    w.walk_to(Wp::new(40.5, 11.5, -211.5).r(1.5), "the SE walkway to the turbine door");
+    // Leg 9 (REAL from the west ledge through the door): the district's true geometry [D, probe
+    // walkreal_probe0c_door2_live — all from the disc's collision tris]:
+    //  • the SE "walkway" strip x 39.98..40.41 is a 0.43-wide CEILINGED slot (floor 12.02, west
+    //    face x 39.99 up to y 14.24, ceiling 14.22 [D room_turbine01 tris 446-473]), built as TWO
+    //    boxes (z −224.98..−219.80 and −218.69..−213.51) with a 1.11 gap between (z
+    //    −219.80..−218.69) and a full end wall at z −213.51 (y 12.02..14.22) — the north box is a
+    //    dead end (open east into the shaft void only). The old route's "≈13.05 balance surface"
+    //    does not exist: down rays y 15→11 at x 40.45..41.4 find nothing — it was Bond's body
+    //    centre standing on the 12.02 slot floor (12.02 + half-height ≈ 13.05).
+    //  • the walkable route is the WEST LEDGE: floor 11.61, x 38.55..39.55, running the whole
+    //    z −222..−213.0 [D map]; room_ex10's east wall (x 39.71..39.98, y 11.61..14.57) separates
+    //    it from the slot only for z −219.26..−213.25 — SOUTH of −219.26 the ledge is open to the
+    //    slot's south box (a 0.41 step down west).
+    //  • the ledge's north end drops 0.52 onto the 11.09 corridor (x 38.05..39.55, z
+    //    −212.75..−212.0), which runs to door2turbine #281's mouth (leaf x 38.49..40.02, z
+    //    −210.56..−210.36 [D]): the E stance (39.0, 11.09, −210.8) — use point to the live sphere
+    //    (40.01, 12.57, −209.69) r 1.62 is ≈ 1.2 < 2.62 [M Collide_PickObj 0x1eae80's 0x101 arm].
+    //  • the corner (11.10..11.17, x ≤40.5, z −210..−208) → the x 40.8..43.3 void → the band
+    //    resumes (43.4, 10.89) / (44.2, 11.17) at z −209.0 [D map] — the running jump east.
+    // The prior stand-in landed INSIDE the dead-end north box (40, 13, −218); it moves onto the
+    // ledge — the wire #283's B end (38.03, −217.64) hangs at this ledge's west edge [D], so the
+    // game's own south-gap crossing is the wire ride (blocker 4, still unpinned: the stand-in
+    // stays, relocated onto the route the game continues on).
     {
         let sim = w.scene.sim.as_mut().unwrap();
-        // Sister: pin the door closed at this point — if a fix opens it, this stand-in must go.
-        let door = sim.drones.doors.list.iter().find(|d| (d.pos[0] - 40.0).abs() < 0.5 && (d.pos[2] + 210.4).abs() < 0.5)
-            .expect("the door2turbine #281 [D]");
-        assert_eq!(door.state, 0x2, "door2turbine opened — replace the band stand-in with the real walk-through");
-        // Sister (level-0c-door2turbine): pin the disc's walkway-end wall — the route's [D] shape.
+        // Sister: pin the gap so the stand-in never moves onto false floor.
+        let gap = sim.world.segment_hit([34.0, 12.5, -218.0], [34.0, 8.0, -218.0]);
+        assert!(gap.is_none(), "the south gap gained floor; the stand-in could be dropped");
+        // Sister: pin the disc's slot end wall — the district's [D] shape (the dead end the old
+        // route died in).
         let wall = sim.world.segment_hit([40.2, 13.0, -213.51], [40.2, 11.9, -213.51]);
-        assert!(wall.is_some(), "the walkway end wall at z −213.51 (y 12.02..14.22 [D room_turbine01]) vanished — the ledge approach may have changed");
-        sim.bond.pos = [90.0, 11.6, -208.8];
+        assert!(wall.is_some(), "the slot end wall at z −213.51 (y 12.02..14.22 [D room_turbine01 tri 463]) vanished");
+        sim.bond.pos = [39.2, 12.85, -217.6];
         sim.bond.vel = [0.0; 3];
     }
-    w.wait(10);
-    eprintln!("[0c] the door2turbine stand-in (the E-open gap) — the gate band east piece");
+    w.wait(14);
+    eprintln!("[0c] the south-gap stand-in (the unpinned #283 wire ride) — dropped onto the west ledge");
+    {
+        let sim = w.scene.sim.as_ref().unwrap();
+        let p = sim.bond.pos;
+        // bond.pos is the body centre: standing on the 11.61 ledge puts it at ≈ 12.64 (the pad
+        // stand-in's 12.93 over the 11.84 pad floor is the same shape).
+        assert!(sim.bond.grounded && (p[1] - 12.64).abs() < 0.5,
+            "Bond stands on the west ledge (11.61 [D] + body half-height), got {:?}", p);
+    }
+    // REAL: the ledge north (the shelf is its z −214.5..−213.0 stretch), then the corridor.
+    w.walk_to(Wp::new(39.1, 11.6, -215.0).r(0.9), "the ledge north 1");
+    w.walk_to(Wp::new(38.9, 11.6, -213.3).r(0.9), "the ledge north 2 (the shelf)");
+    w.walk_to(Wp::new(38.7, 11.1, -212.2).r(0.9), "the 0.52 drop onto the corridor");
+    w.walk_to(Wp::new(38.9, 11.1, -210.8).r(0.7), "the corridor to the door mouth");
+    {
+        let sim = w.scene.sim.as_ref().unwrap();
+        // Sister: pin the door closed right before the E press — if a fix opens it early, this
+        // leg must change.
+        let door = sim.drones.doors.list.iter().find(|d| (d.pos[0] - 40.0).abs() < 0.5 && (d.pos[2] + 210.4).abs() < 0.5)
+            .expect("the door2turbine #281 [D]");
+        assert_eq!(door.state, 0x2, "door2turbine opened before the E press");
+    }
+    // The REAL E press at the door mouth: face the leaf, pulse E every 6 ticks.
+    // [M 0x135be0: info+0x68 (ch_lock) == 0 skips the channel gate; kind 0 (obj+0xf6) closed
+    //  (obj+0xf4 & 0x12 == 0) → Door_SetState(obj, 8); M 0x135618: stores obj+0xf4 = 8 and
+    //  writes switch_channels[info+0x66] = (8 & 0xc != 0) → the door's ch_open 5 turns on.]
+    let mut opened = false;
+    for t in 0..90u32 {
+        let turn = {
+            let sim = w.scene.sim.as_ref().unwrap();
+            let b = &sim.bond;
+            let desired = (40.0f32 - b.pos[0]).atan2(-210.4f32 - b.pos[2]);
+            walker::wrap_pi(desired - b.yaw).clamp(-0.08, 0.08)
+        };
+        w.tick(nf_game::player::Input { turn, ..Default::default() }, t % 6 == 0);
+        if t % 6 == 0 {
+            let sim = w.scene.sim.as_ref().unwrap();
+            if let Some(d) = sim.drones.doors.list.iter().find(|d| (d.pos[0] - 40.0).abs() < 0.5 && (d.pos[2] + 210.4).abs() < 0.5) {
+                if d.state != 0x2 { opened = true; break; }
+            }
+        }
+    }
+    {
+        let sim = w.scene.sim.as_ref().unwrap();
+        let door = sim.drones.doors.list.iter().find(|d| (d.pos[0] - 40.0).abs() < 0.5 && (d.pos[2] + 210.4).abs() < 0.5)
+            .expect("the door2turbine #281 [D]");
+        assert!(opened, "the E press at the corridor mouth never moved door2turbine (state {})", door.state);
+    }
+    eprintln!("[0c] door2turbine moved on the real E press (the swing-open arm)");
+    // The channel write lands on the transitions where the OLD state's 0xc bits are set [M
+    // 0x135618's switch_channels store]: the E press's OPENING (8) write happens with the old
+    // CLOSED (2) → stays off; the channel turns ON exactly when the swing completes
+    // (set_state(OPEN=4) with the old OPENING=8). Poll for that completion.
+    let mut open_settled = false;
+    for _ in 0..300 {
+        w.tick(nf_game::player::Input::default(), false);
+        if w.scene.sim.as_ref().unwrap().drones.channels.on(5) { open_settled = true; break; }
+    }
+    {
+        let sim = w.scene.sim.as_ref().unwrap();
+        let door = sim.drones.doors.list.iter().find(|d| (d.pos[0] - 40.0).abs() < 0.5 && (d.pos[2] + 210.4).abs() < 0.5)
+            .expect("the door2turbine #281 [D]");
+        assert!(open_settled, "the door never completed its swing with ch_open 5 on [M 0x135618 via the OPEN transition], state {:#x}", door.state);
+        // The ch5-on observable PROVES the OPEN transition ran (the channel only turns on from
+        // an old state with the 0xc bits [M 0x135618]); the door's auto-close [D audit: #281
+        // auto-close] may already have moved it to CLOSING by the time the poll breaks.
+        assert!(door.state == nf_game::door::OPEN || door.state == nf_game::door::CLOSING,
+            "the door state after the swing [M 0x135618], got {:#x}", door.state);
+        assert!(sim.drones.channels.on(5), "the door's OPEN wrote its ch_open 5 [M 0x135618's switch_channels store]");
+    }
+    eprintln!("[0c] door2turbine opened on the real E press (state OPEN, ch 5 on)");
+    // REAL: through the doorway (the port's kind-0xDB doors carry no leaf collision — the game
+    // picks them through the ForcedList [M build_LinkToRoom 0x1c9680:63-66, Collide_Pick
+    // 0x1eb320:369-375]) onto the corner.
+    w.walk_to(Wp::new(39.4, 11.1, -209.6).r(0.9), "through the doorway onto the corner");
+    // The corner's east boundary is a wall (x 40.01..40.37) with a 1.52-wide doorway tunnel
+    // (z −208.93..−210.45, floor 11.10, ceiling 13.96 [D room_turbine01 tris 478-485 — no
+    // x-face tris: open along x]); the band's west lip exists only at z ≥ −209.0 [(43.4, 10.89)
+    // / (44.2, 11.17) [D map]]. Run up west of the wall, THROUGH the tunnel, and jump east of it.
+    w.walk_to(Wp::new(38.6, 11.1, -209.7).r(0.5), "the jump run-up start");
+    let mut jumped = false;
+    for t in 0..300u32 {
+        let (p, grounded) = {
+            let sim = w.scene.sim.as_ref().unwrap();
+            let b = &sim.bond;
+            (b.pos, b.grounded)
+        };
+        // Land (after a real airborne phase) → the assert judges where.
+        if jumped && grounded && t > 20 { break; }
+        // Still falling deep below the band's lip → the shaft; the assert reports it.
+        if !grounded && jumped && p[1] < 9.0 { break; }
+        let (turn, forward) = {
+            let sim = w.scene.sim.as_ref().unwrap();
+            let b = &sim.bond;
+            let desired = (44.5f32 - b.pos[0]).atan2(-208.8f32 - b.pos[2]);
+            let err = walker::wrap_pi(desired - b.yaw);
+            (err.clamp(-0.08, 0.08), if err.abs() > 0.6 { 0.0 } else { 1.0 })
+        };
+        // Fire the jump while grounded just EAST of the wall's east face (x 40.37 [D]) — full
+        // run speed through the 1.8-unit run-up and the tunnel.
+        let jump = !jumped && grounded && p[0] >= 40.42;
+        if jump { jumped = true; }
+        w.tick(nf_game::player::Input { turn, forward, jump, ..Default::default() }, false);
+    }
+    {
+        let sim = w.scene.sim.as_ref().unwrap();
+        let p = sim.bond.pos;
+        let under = sim.world.segment_hit([p[0], p[1], p[2]], [p[0], p[1] - 3.0, p[2]])
+            .map(|(t, _)| p[1] - 3.0 * t);
+        assert!(sim.bond.grounded && p[0] > 42.6 && under.map_or(false, |y| (10.2..11.7).contains(&y)),
+            "the slot jump must land on the band (10.89..11.17 floor at x 43.4+ [D]), got pos {p:?} under {under:?}");
+    }
+    eprintln!("[0c] the slot jump landed on the band at {:?}", w.scene.sim.as_ref().unwrap().bond.pos);
 
-    // Leg 10 (REAL): the band east to the gate plane (floor 10.3 at x 46..96 [D probes]).
+    // Leg 10 (REAL): the band east to its true end. The disc's band floor 10.34 runs x 44..55.0
+    // (z −208.5..−206.5) — the -2 session's "x 44..53" under-measured it; x 55.5..67 at band
+    // height is VOID, floored only by the 6.17 pit (x 55..63.5) and the 7.19 shelf (x 64..64.5)
+    // [D probe walkreal_probe0c_door4_live's pit map]. The 10.85 strip (z −206.1..−205.2) spans
+    // x 47.5..53.5 and ~60..70 with a 6.5-unit gap x 53.5..60 [D probe door4's 0.25 map] — the
+    // -2 session's measured run-jump carry is 4.42 units (the slot jump), short of it. Nothing
+    // bridges it: no SS mover touches the box (the level's only movers are the case lid and the
+    // ch-0x54 vent), no wire serves it, no ladder exists in the east half, no drone moves in the
+    // box across 300 ticks, the zipline (type 2, y 17.85) has no floor at either end, and the
+    // 15.73 plane at z −206.0 (x 42..76) has no found access [D probes door3/5/6]. The game's
+    // own nav graph links band-height nodes ACROSS the void (path17 n0 (63.06, 10.74, −207.54)
+    // ↔ n1 (49.69, 10.74, −207.29) [D probe door4]) yet the per-path A* rejects it — the
+    // crossing mechanism is UNPINNED (live check 1 below); the walk uses the third stand-in.
+    w.walk_to(Wp::new(50.0, 11.0, -207.6).r(1.5), "the band east 1");
+    w.walk_to(Wp::new(54.5, 11.0, -207.6).r(0.8), "the band east to its true end x 55.0 [D probe door4]");
+    // STAND-IN 3 of 3 (the gate-band crossing, pinned): the evidence block above. The game's
+    // crossing mechanism over x 55.5..67 at band height is not pinned by the port's data —
+    // filed as a live check; the stand-in drops Bond onto the resumed band (10.34 x 67.5+ [D]).
+    {
+        let sim = w.scene.sim.as_mut().unwrap();
+        // Sister: pin the void so the stand-in never moves onto false floor: the pit (floor
+        // 6.17 [D probe door4]) must stay BELOW band height at (59, −207.5), and the resume's
+        // west edge must keep its floor.
+        let gap = sim.world.segment_hit([59.0, 12.0, -207.5], [59.0, 8.0, -207.5]);
+        assert!(gap.is_none(), "the band crossing gained floor at band height; the stand-in could be dropped");
+        sim.bond.pos = [68.0, 11.4, -207.9];
+        sim.bond.vel = [0.0; 3];
+    }
+    w.wait(14);
+    {
+        let sim = w.scene.sim.as_ref().unwrap();
+        let p = sim.bond.pos;
+        let under = sim.world.segment_hit([p[0], p[1], p[2]], [p[0], p[1] - 3.0, p[2]])
+            .map(|(t, _)| p[1] - 3.0 * t);
+        assert!(sim.bond.grounded && under.map_or(false, |y| (10.2..10.6).contains(&y)),
+            "the crossing stand-in must land on the resumed band (10.34 x 67.5+ [D probe door4]), got pos {p:?} under {under:?}");
+    }
+    eprintln!("[0c] the band-crossing stand-in (the unpinned crossing) — the resumed band east");
     w.walk_to(Wp::new(70.0, 11.2, -208.0).r(2.5), "the band east");
     w.walk_to(Wp::new(90.0, 11.2, -208.8).r(1.2), "the gate approach");
     w.walk_to(Wp::new(96.0, 11.2, -209.3).r(1.0), "the gate plane");
