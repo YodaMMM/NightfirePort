@@ -3,9 +3,9 @@
 //! (−3.93, 0, 10.40; the arrival plate #58 → ch 0x47 = objective 3) → the corridor loop to the
 //! Q-Worm PC (−16.9, 1.2, −32.2) → equip the Q-Worm gadget (0x58) and fire at the PC through the
 //! real trigger path [M PCQWorm_Update 0x1aee20] → ch 0x48 (objective 4) → the security keyboard
-//! (SP #60 — its activation writer is the level's documented placement-transform blocker, ch 0x3A
-//! driven as docs/levels/0700000a.md records) → ch 0x49 (objective 5) → AND #742 → ch 0x4A → the
-//! hatch exit (21.72, 1.12, 19.79), E through its key gate → 0700000b.
+//! (SP #60, the mode-64 preload entity) through the REAL use key — the pulse stops once ch 0x3A
+//! reads on [M SP_Activate 0x1dc338 + SP_Update 0x1dbda8 state 1] → ch 0x49 (objective 5) →
+//! AND #742 → ch 0x4A → the hatch exit (21.72, 1.12, 19.79), E through its key gate → 0700000b.
 
 #[path = "common/walker_b2.rs"]
 mod walker;
@@ -223,9 +223,12 @@ fn walk_leg_watched(w: &mut Walker, to: [f32; 3], arrive: f32, label: &str) -> b
     false
 }
 
-#[test]
-#[ignore = "the 2026-10-26 live checks name the wall stopper (the handler tail 0x194c70) and give the settled [L] heights (the doorway slide 1.1285, the corner slide 1.1159), but this round's ring run still stuck at the walker's cap (the lane leg + the jamb slide the port cannot reproduce with the spine-dir pushes; the radial-dir ports measured-and-reverted — see docs/reports/level-0a-band-settle-2.md) — the ring needs the game's real ref value (the live check in the report)"]
-fn walk_office_floor_qworm_keyboard_hatch() {
+/// The office-floor walk from the fresh load on real input: the arrival plate (obj 3), the lift-cab
+/// sweep, the corridor loop to the Q-Worm PC (the documented cubicle blocker — the install
+/// channel hand-driven there), back to the security keyboard, the REAL use-key activation
+/// ([M] SP_Activate 0x1dc338 + SP_Update 0x1dbda8 state 1), and the AND-mux chain 0x49 → 0x4A.
+/// Everything here is walked (step_bond only); ends after objective 5's channel settles.
+fn walk_to_security_keyboard() -> Walker {
     let mut w = load_carry(None);
     {
         let sim = w.scene.sim.as_ref().unwrap();
@@ -293,21 +296,92 @@ fn walk_office_floor_qworm_keyboard_hatch() {
     assert!(w.scene.sim.as_ref().unwrap().drones.channels.on(0x48),
         "ch 0x48 (objective 4) driven at the documented blocker");
 
-    // The security keyboard: the REAL E activation is proven by keyboard_0700000a_live — the
-    // mode-64 preload's keyboard entity (0x020005E1, baked-absolute at (−1.54, 1.33, 8.48) r 0.66
-    // [M 0x1db9a8's load beat + 0x133070]) is E-able from the corridor wedge at (−3.00, 9.68) and
-    // the activation writes ch 0x3A [M SP_Activate 0x1dc338 + SP_Update 0x1dbda8 state 1]. The
-    // walk keeps the direct channel drive because the SP-write → AND-mux #741 (0x49) follow did
-    // not fire in the session's probe within 6 ticks (the same write via set_channel does fire
-    // it — an open item); the route shape is unchanged.
-    assert!(w.follow_nav_route([-6.0, 1.3, 14.0], "to the security centre"), "no nav route to the keyboard");
-    w.scene.sim.as_mut().unwrap().drones.set_channel(0x3a);
-    w.wait(6);
+    // The security keyboard — the REAL use-key activation, replacing the old `set_channel(0x3a)`
+    // stand-in (keyboard_0700000a_live proves this exact path on master): walk back east to the
+    // corridor wedge in front of the keyboard nook (the cab east wall x ≈ −2.0, z 8.5–12.5 [D
+    // probe segments] stops the direct walk — the keyboard test's hug legs), then pulse the use
+    // key aimed at the keyboard's mode-64 preload entity sphere (−1.54, 1.33, 8.48) r 0.66
+    // [M SP_CreateScriptPlayer 0x1db9a8's load beat + Control_BuildWorldSph 0x133070]. The E pick
+    // (Player_Activate 0x1a5170's class-0 +0xE4 dispatch → SP_Activate 0x1dc338's ext+0x2C = 1)
+    // reaches it from the wedge (head+look ~0.94 from the centre vs the 1.0 + 0.66 pick radius)
+    // and SP_Update 0x1dbda8's state-1 activation toggles the out channel on the PRESS — the
+    // pulse stops once ch 0x3A reads on, the way the game's tap works [M].
+    assert!(w.follow_nav_route([-3.9, 0.0, 13.2], "back to the lobby"), "no nav route back to the lobby");
+    w.walk_to(Wp::new(-3.2, 0.0, 9.4).r(1.0), "hug the cab east wall south end");
+    let _ = w.try_walk_to(Wp::new(-2.55, 0.0, 8.1).r(1.0), "round the wall end");
+    {
+        let sim = w.scene.sim.as_ref().unwrap();
+        let p = sim.bond.pos;
+        assert!((p[0] + 3.0).abs() < 0.3 && (p[2] - 9.68).abs() < 0.3,
+            "the corridor wedge in front of the keyboard nook, got {p:?}");
+    }
+    let kb: [f32; 3] = [-1.54, 1.33, 8.48];
+    let mut kb_fired = false;
+    'kb: for _cycle in 0..12u32 {
+        for t in 0..40u32 {
+            {
+                let sim = w.scene.sim.as_ref().unwrap();
+                if sim.drones.channels.on(0x3a) { kb_fired = true; break 'kb; }
+                let bp = sim.bond.pos;
+                let eye = bp[1] + sim.bond.eye - sim.bond.crouch_drop;
+                let dx = kb[0] - bp[0];
+                let dz = kb[2] - bp[2];
+                let dy = kb[1] - eye;
+                let desired = dx.atan2(dz);
+                let err = walker::wrap_pi(desired - sim.bond.yaw);
+                let perr = (dy / walker::dxz(bp, kb).max(0.5)).atan() / std::f32::consts::FRAC_PI_2 - sim.bond.pitch;
+                let input = nf_game::player::Input {
+                    turn: err.clamp(-0.05, 0.05),
+                    look: perr.clamp(-0.05, 0.05),
+                    ..Default::default()
+                };
+                let hold = t < 3 && err.abs() < 0.06;
+                w.scene.sim.as_mut().unwrap().step_bond(input, false, false, hold);
+            }
+            w.total_ticks += 1;
+        }
+    }
+    assert!(kb_fired, "the keyboard SP's E activation writes ch 0x3A \
+        [M SP_Activate 0x1dc338 + SP_Update 0x1dbda8 state 1]");
+    // The AND mux #741 follows on the mission graph's own update — wait it out (the old probe's
+    // 6-tick window never saw the follow fire; the mux is a mission node, not a same-tick write).
+    let mut mux49 = false;
+    for _ in 0..180 {
+        if w.scene.sim.as_ref().unwrap().drones.channels.on(0x49) { mux49 = true; break; }
+        w.wait(1);
+    }
+    assert!(mux49, "AND mux #741: ch 0x3A → ch 0x49 (objective 5) [D]");
+    // #742 reads (0x48, 0x49) on the mission graph's own update — one settle tick behind #741's
+    // write (the graph samples its inputs before the same-tick mux writes land), so wait it out
+    // the same bounded way (the old 6-tick wait covered both muxes; this loop breaks on 0x49's
+    // first tick, so #742's follow needs its own window).
+    let mut mux4a = false;
+    for _ in 0..30 {
+        if w.scene.sim.as_ref().unwrap().drones.channels.on(0x4a) { mux4a = true; break; }
+        w.wait(1);
+    }
+    assert!(mux4a, "AND mux #742: 0x48+0x49 → the exit's key ch 0x4A [D]");
     {
         let sim = w.scene.sim.as_ref().unwrap();
         assert!(sim.drones.channels.on(0x49), "AND mux #741: ch 0x3A → ch 0x49 (objective 5) [D]");
         assert!(sim.drones.channels.on(0x4a), "AND mux #742: 0x48+0x49 → the exit's key ch 0x4A [D]");
     }
+    w
+}
+
+/// THIS ROUND'S LANDED LEG (2026-10-29): the office floor from the fresh load to objective 5 on
+/// real input — the arrival plate, the cab sweep, the walked PC loop, and the keyboard through the
+/// player's own use key (the old `set_channel(0x3a)` stand-in is gone; the mux settle waits pin
+/// the graph's own update order).
+#[test]
+fn walk_office_floor_to_the_security_keyboard() {
+    let _w = walk_to_security_keyboard();
+}
+
+#[test]
+#[ignore = "the ring's mouth (this round's probe rays, 2026-10-29): the west-facing static wall at x −10.70 spans z −16..−13.1 at every height — the old direct legs (−8.6, −14.2) pushed into it and wedged at (−11.25, −14.03); the passage east is the gap at z −13.0..−12.0 (eastward rays clear), but the walked approach through the gap is then stopped at (−12.06, −13.65) heading north where EVERY static ray is clear — a dynamic blocker: the live leaf of door #540 office_b_door (−14.2, −13.0), which the walker's stuck-toggle E'd open (state 0x2 → 0x10) right before the wedge. The port's door-leaf collision vs the game's slide through an open door zone is the missing mechanic (needs the game's ref value — the live check in the report). Everything BEFORE the ring is green on real input this round (walk_office_floor_to_the_security_keyboard)"]
+fn walk_office_floor_qworm_keyboard_hatch() {
+    let mut w = walk_to_security_keyboard();
 
     // ai-sight-drawn-gate-5 route re-derivation (the ring route, BFS-derived): the old route
     // crossed the LOCKED office door (−10.6, −19.3, ch 0x30) by force-driving the channel — no
@@ -323,7 +397,7 @@ fn walk_office_floor_qworm_keyboard_hatch() {
     // player's legal ring route: south through the west offices, the west corridor, the south
     // corridor, and up the east side to the hatch — the corners below, walked steadily (a real
     // player's stealth timing: no stops inside a civilian's reach).
-    let ring: [([f32; 3], &str); 43] = [
+    let ring: [([f32; 3], &str); 46] = [
         ([-7.5, 1.3, 14.5], "ring: the security centre's west door"),
         ([-7.5, 1.3, 16.5], "ring: the west hall north"),
         ([-20.5, 1.3, 16.5], "ring: the west offices' north corridor"),
@@ -363,7 +437,15 @@ fn walk_office_floor_qworm_keyboard_hatch() {
         // (−8.52, −18.47) / 130 (−8.52, −15.39) / 0 (−8.76, −21.55) [D]) — the mouth's guard
         // slot east of the bridge is 0.5 wide (the jamb's corner at (−10.60, −18.66) [L the
         // bridge-edge sister's segment probe]) and cannot take the player's 1.1 capsule.
-        ([-8.6, 1.3, -14.2], "ring: the ai lane to the N-S corridor"),
+        // The mouth re-derived this round (probe rays, scratch): the west-facing wall at
+        // x −10.70 spans z −16..−13.2 at every height (0.35/1.0/1.9) — the old direct legs
+        // (−8.6, −14.2) pushed INTO it and wedged at (−11.25, −14.03). The passage east is the
+        // gap north of its corner: eastward rays clear from z −13.0 through −12.0, and the lane
+        // at x −8.5 is open south from the gap (southward rays clear z −12..−17 at x −9.8..−8.3).
+        ([-12.0, 1.3, -12.8], "ring: north of the mouth wall (the wall face x −10.70 spans z −16..−13.2 [D probe rays])"),
+        ([-9.6, 1.3, -12.5], "ring: east through the mouth gap"),
+        ([-8.6, 1.3, -12.6], "ring: the lane's north end"),
+        ([-8.5, 1.3, -14.8], "ring: into the ai lane"),
         ([-8.5, 1.3, -15.4], "ring: the ai node 130 south"),
         ([-8.5, 1.3, -18.5], "ring: the ai node 132 south"),
         ([-8.7, 1.3, -21.5], "ring: the ai node 0 into the south corridor"),

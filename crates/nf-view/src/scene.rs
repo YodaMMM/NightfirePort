@@ -7616,11 +7616,18 @@ pub fn build(level: &Level, cels_only: bool, skeletons: &HashMap<u8, Skeleton>, 
             // only the newest match — one cab's plates drew, the other cab's never did. Accumulated in the
             // sub walk (parents may pop after their subs), read in the Entity arm below.
             let mut sub_copies: std::collections::HashMap<u32, usize> = std::collections::HashMap::new();
+            // The blast scripts run on no placed SP: the sim spawns one player per explosion
+            // (`Explode_Create` 0x17cbd0 → the effect script), so several can be live at once (two
+            // grenades, a chain of boxes). With one slot set only the newest blast drew — a
+            // same-tick second blast hid the first. BLAST_COPIES slot sets per blast script (and its
+            // subs) let that many concurrent blasts draw; `Sim::script_entity_k` serves the newest.
+            const BLAST_ROOTS: [u32; 4] = [0x0600_0052, 0x0600_0027, 0x0600_004f, 0x0600_07c4];
+            const BLAST_COPIES: usize = 4;
             let mut order: Vec<u32> = Vec::new();
             while let Some(h) = hashes.pop() {
                 order.push(h);
                 let Some(nis) = level.nis.get(&h) else { continue };
-                let running = players.iter().filter(|p| p.scripts.contains(&h)).count().clamp(1, 16);
+                let running = if BLAST_ROOTS.contains(&h) { BLAST_COPIES } else { players.iter().filter(|p| p.scripts.contains(&h)).count().clamp(1, 16) };
                 for st in nis.streams.iter() {
                     for cmd in st.decode() {
                         if let nf_formats::nis::Cmd::SubScript { hash: sub, .. } = cmd {
@@ -7703,7 +7710,7 @@ pub fn build(level: &Level, cels_only: bool, skeletons: &HashMap<u8, Skeleton>, 
                                 // placed SP's does.
                                 let boxes = fusebox_scripts.iter().filter(|&&v| v == h).count();
                                 let copies = sub_copies.get(&h).copied()
-                                    .unwrap_or_else(|| players.iter().filter(|p| p.scripts.contains(&h)).count() + boxes)
+                                    .unwrap_or_else(|| if BLAST_ROOTS.contains(&h) { BLAST_COPIES } else { players.iter().filter(|p| p.scripts.contains(&h)).count() + boxes })
                                     .clamp(1, 16);
                                 let inst = Instance { map, object, matrix: ident, placement: placement.clone() };
                                 for k in 0..copies {
