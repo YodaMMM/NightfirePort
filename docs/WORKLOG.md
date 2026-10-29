@@ -29,3 +29,20 @@
   (verified by base-tree runs) — pre-existing, not this branch's.
 - Coverage: 187/823 suite binaries run this session (0 new failures); the rest is the next
   session's first move. Report: docs/reports/bond-hitbox-pose.md.
+
+## bond-hitbox-pose-2 (started 14:03 UTC 2026-10-29)
+
+Task: the -pose branch's crouch toggle moves bond.pos[1] down 0.4847 (ROOT_HEIGHT −
+CROUCH_ROOT_HEIGHT) INSTANTLY on top of the eased crouch_drop (0..0.45) head() already
+subtracts — the camera reads head(), so a crouch drops the view ~0.93 in one tick instead of
+master's eased 0.45. Keep the view EXACTLY as master (head() per tick), keep the crouched
+hit-box posing, keep fix_bond_damage_live / anim_events_live / bond_boxes_every_level_live
+green, and the mp_perf_16 digest pin must not need another re-pin. Add a head()-per-tick pin
+test against master's values.
+
+Plan: branch from origin/s/bond-hitbox-pose (f9bb4420) + origin/master (1b2309ea) merged
+(82ccda59; bullet.rs conflict resolved: master's segment_bullet world trace [M 0x12e7b0] +
+the -pose box walk; two rope_guard Player initializers gained crouched: false); build green.
+Next: read the -pose crouch diff (5da2b3aa), pick the fix shape (root offset → bond_boxes
+param, or the head() compensation fold), write the head() pin test, run the four named
+binaries + the chunked full suite.
