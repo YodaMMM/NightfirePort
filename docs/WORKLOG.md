@@ -227,3 +227,16 @@ suspect — bisect left). Report: docs/reports/drone-bump-collision-9.md with tw
   (this tree): nf_view 96/0 recorded, 3/892 binaries — the full 892-binary sweep does not fit
   the 2 h window (background jobs die between tool calls; the chunk build alone ~25 min after
   the walker.rs edit relinks ~200 nf-view bins).
+
+## drone-bump-collision-11 (started 12:52 UTC 2026-10-29)
+
+Task: land the bot-capsule arming without breaking the other levels. -10 merged with master
+makes 12 named tests red (all green on master). Continue from -10 (origin/master merged);
+for each red find which of -10's changes moves it (route-walk boundary clamp replacing
+probe_move, push in every stance, kind-word arming, door-zone opponent gate) and what the
+game does at that step [M/D/L]; fix real regressions in the port, re-derive test-only
+calibrations only with evidence. Full suite on the final tree, quote its total line.
+
+Plan: branch created from origin/s/drone-bump-collision-10 + origin/master merged (clean);
+next: push, reproduce the reds on this tree, diff the -1..-10 chain against master for the
+four named change classes.
