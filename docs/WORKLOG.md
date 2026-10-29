@@ -39,3 +39,18 @@ Plan: branch cut from origin/s/level-0c-door2turbine-2 (61855c02), origin/master
 clean (3-file props/walkreal conflict-free), pushed now. Next: p7zip, work-slim + ISO
 downloads, read the -2 report and the level-0c-every-objective report, reproduce the band
 RED on real input, probe the disc for the crossing.
+
+Progress (09:22 UTC): the crossing mapped by six committed probes (walkreal_probe0c_door3/4/5/6_live).
+Findings [D, all from the port's disc-built world]: the band floor 10.34 runs x 44..55.0 (the -2
+"44..53" under-measured); x 55.5..67 at band height is void — the 6.17 pit (x 55..63.5) + the 7.19
+shelf (x 64..64.5) + void to the resume x 67.5; the 10.85 strip (z −206.1..−205.2) spans x 47.5..53.5
+and ~60..70 with a 6.5-unit gap x 53.5..60 (the measured run-jump carry is 4.42 — the slot jump);
+NO SS mover touches the box, no wire serves it, no ladder in the east half, no drone moves there in
+300 ticks, the type-2 zipline (y 17.85, x 33..60.5) has no floor at either end, the 15.73 plane
+(z −206.0, x 42..76) has no found access; the game's own nav path17 links band-height nodes ACROSS
+the void ((49.69,10.74,−207.29)↔(63.06,10.74,−207.54)) but per-path A* rejects it. The crossing
+mechanism is UNPINNED — the walkreal's band-east wedge is now STAND-IN 3 of 3 (sister assert pins
+the band-height void at (59,−207.5); Bond dropped onto the resumed band 10.34 x 67.5+, grounded +
+floor asserted), and the real-input band walk extends to the true east end x 55.0. walkreal
+2 passed / 0 failed (0c 4308 ticks + 0d 838 ticks). Next session: the crossing's live check
+(the real game's route over x 55.5..67), then blockers 2-5 of level-0c-every-objective.

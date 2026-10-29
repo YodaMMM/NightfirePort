@@ -1,7 +1,7 @@
 //! walkreal-c: 0700000c (Chain Reaction, part 1 — the power station) walked with the player's own
 //! movement — `step_bond` input only: no channel or state pokes, and the only position writes are
-//! the two documented ring-gap stand-ins at the end (the west and south patrol-circle gaps, the
-//! exact probe evidence below). Route: the ST-1 walkway start #1 (8.98, 15.07, −149.65 [D]) → the
+//! the three documented stand-ins (the west and south patrol-circle gaps, and the gate-band
+//! crossing x 55.5..67 — each with its exact probe evidence below). Route: the ST-1 walkway start #1 (8.98, 15.07, −149.65 [D]) → the
 //! walkway NORTH end plate #274 (4.63–6.95, 13.63–14.56, −112.08..−110.12 [D]) → ch 0x1b
 //! (objective 1) → the stairwell descent at the walkway's z −131..−133 opening onto the lower
 //! walkway (11.84 z −154..−111 [D coll-floor]) → the pad plate #506 (4.67–7.00, 12.73–13.67,
@@ -24,8 +24,16 @@
 //! `wire_silo2turbine` #283's B end (38.03,−217.64) hangs at the FAR side) → the ring south-east
 //! walkway (40,−214..−222, 12.0) → the ring SE corner (36-40,−208..−210, 11.1) → the REAL jump
 //! over the x 41..43 slot (the floor resumes at (44,−209) 11.2 [D probes]) onto the gate band →
-//! the band TouchOnce #0xb4 (45.68..46.66, 10.34..11.32, −208.63..−206.52 [D]) → the band east
-//! (floor 10.3 at x 46..96 [D probes]) → the gate → E → level_exit 0x0700000d ([M Player_Activate
+//! the band TouchOnce #0xb4 (45.68..46.66, 10.34..11.32, −208.63..−206.52 [D]) → the band east to
+//! its true end x 55.0 [D probe door4 fine map] → STAND-IN over the gate-band crossing (x 55.5..67
+//! at band height is void in the disc's own collision: the pit floor 6.17 spans x 55..63.5, the
+//! 7.19 shelf x 64..64.5, then void to the resume x 67.5 [D probe door4 pit map]; the 10.85 strip
+//! z −206.1..−205.2 has a 6.5-unit gap x 53.5..60 [D probe door4 0.25 map]; NO SS mover touches
+//! the box, no wire serves it, no ladder exists in the east half, no drone moves there in 300
+//! ticks, and the type-2 zipline y 17.85 has no floor at either end [D probes door3/5/6]; the
+//! game's own nav path17 links (49.69, 10.74, −207.29)↔(63.06, 10.74, −207.54) ACROSS the void
+//! but the per-path A* rejects it [D probe door4]) → the resumed band (10.34 x 67.5+ [D]) → the
+//! gate → E → level_exit 0x0700000d ([M Player_Activate
 //! 0x1a5170 case 0x1d → Trigger_Activate 0x1b2318:111], the key gate ch 0x1c on) → the warm RamSave
 //! carry into 0700000d → the spawn TouchOnce #436 (179.53, 11.58, −205.40, out 0x23 [D 0d]) fires
 //! → objective 3 completes and 0d's own objective reveals ([M Mission_Init 0x182270:92-121 carries
@@ -423,11 +431,44 @@ fn walk_the_whole_mission_from_the_start_to_the_0d_handoff() {
     }
     eprintln!("[0c] the slot jump landed on the band at {:?}", w.scene.sim.as_ref().unwrap().bond.pos);
 
-    // Leg 10 (REAL): the band east to the gate plane (floor 10.3 at x 46..96 [D probes]; the
-    // west section x 44..70 hugs z −207.5..−207.6 — the probed 10.34 rows [D slot map]).
+    // Leg 10 (REAL): the band east to its true end. The disc's band floor 10.34 runs x 44..55.0
+    // (z −208.5..−206.5) — the -2 session's "x 44..53" under-measured it; x 55.5..67 at band
+    // height is VOID, floored only by the 6.17 pit (x 55..63.5) and the 7.19 shelf (x 64..64.5)
+    // [D probe walkreal_probe0c_door4_live's pit map]. The 10.85 strip (z −206.1..−205.2) spans
+    // x 47.5..53.5 and ~60..70 with a 6.5-unit gap x 53.5..60 [D probe door4's 0.25 map] — the
+    // -2 session's measured run-jump carry is 4.42 units (the slot jump), short of it. Nothing
+    // bridges it: no SS mover touches the box (the level's only movers are the case lid and the
+    // ch-0x54 vent), no wire serves it, no ladder exists in the east half, no drone moves in the
+    // box across 300 ticks, the zipline (type 2, y 17.85) has no floor at either end, and the
+    // 15.73 plane at z −206.0 (x 42..76) has no found access [D probes door3/5/6]. The game's
+    // own nav graph links band-height nodes ACROSS the void (path17 n0 (63.06, 10.74, −207.54)
+    // ↔ n1 (49.69, 10.74, −207.29) [D probe door4]) yet the per-path A* rejects it — the
+    // crossing mechanism is UNPINNED (live check 1 below); the walk uses the third stand-in.
     w.walk_to(Wp::new(50.0, 11.0, -207.6).r(1.5), "the band east 1");
-    w.walk_to(Wp::new(58.0, 11.0, -207.6).r(1.5), "the band east 2");
-    w.walk_to(Wp::new(66.0, 11.0, -207.6).r(1.5), "the band east 3");
+    w.walk_to(Wp::new(54.5, 11.0, -207.6).r(0.8), "the band east to its true end x 55.0 [D probe door4]");
+    // STAND-IN 3 of 3 (the gate-band crossing, pinned): the evidence block above. The game's
+    // crossing mechanism over x 55.5..67 at band height is not pinned by the port's data —
+    // filed as a live check; the stand-in drops Bond onto the resumed band (10.34 x 67.5+ [D]).
+    {
+        let sim = w.scene.sim.as_mut().unwrap();
+        // Sister: pin the void so the stand-in never moves onto false floor: the pit (floor
+        // 6.17 [D probe door4]) must stay BELOW band height at (59, −207.5), and the resume's
+        // west edge must keep its floor.
+        let gap = sim.world.segment_hit([59.0, 12.0, -207.5], [59.0, 8.0, -207.5]);
+        assert!(gap.is_none(), "the band crossing gained floor at band height; the stand-in could be dropped");
+        sim.bond.pos = [68.0, 11.4, -207.9];
+        sim.bond.vel = [0.0; 3];
+    }
+    w.wait(14);
+    {
+        let sim = w.scene.sim.as_ref().unwrap();
+        let p = sim.bond.pos;
+        let under = sim.world.segment_hit([p[0], p[1], p[2]], [p[0], p[1] - 3.0, p[2]])
+            .map(|(t, _)| p[1] - 3.0 * t);
+        assert!(sim.bond.grounded && under.map_or(false, |y| (10.2..10.6).contains(&y)),
+            "the crossing stand-in must land on the resumed band (10.34 x 67.5+ [D probe door4]), got pos {p:?} under {under:?}");
+    }
+    eprintln!("[0c] the band-crossing stand-in (the unpinned crossing) — the resumed band east");
     w.walk_to(Wp::new(70.0, 11.2, -208.0).r(2.5), "the band east");
     w.walk_to(Wp::new(90.0, 11.2, -208.8).r(1.2), "the gate approach");
     w.walk_to(Wp::new(96.0, 11.2, -209.3).r(1.0), "the gate plane");
