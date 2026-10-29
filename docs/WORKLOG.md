@@ -90,3 +90,7 @@ More touched-path bins green (21:1x UTC): fix_bond_damage_live 6p/0F (the drone-
 the Bullet::update scoped change), fix_autoaim_elevator_live 1p/0F, fix_stunner_press_live 3p/0F,
 bathhouse_armed_girl_live 2p/0F, fix_grenade_throw_live 4p/0F, camera_beam_satchel_wreck_live
 3p/0F. The level docs' fire-leg rows resolved on the branch (0700004a.md + the audit).
+
+4a chain bins green (21:2x UTC): fix_landing_matrix_live 1p/0F, fix_finale_live 4p/0F (the lift
+ride completes end-to-end with the scoped flight in tree), walk_0700004a_live 1p/0F,
+walk_07000013_live 2p/0F (the cross-level chain).
