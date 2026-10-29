@@ -624,9 +624,18 @@ fn walk_office_floor_qworm_keyboard_hatch() {
     ];
     for (wp, label) in ring2 {
         // The alarm guard's cone covers the south corridor mouth (the route note above) — the
-        // watch between the legs catches his run the way walk_leg_watched does below.
+        // LONG runs walk in segments with the watch BETWEEN them (the east-side boundary-only
+        // watch let a runner past the 40-unit band: the press landed mid-leg at +446); the short
+        // doorway/jink legs keep the precise r-0.8 walk_to (a 1.2-arrive stall here stands Bond
+        // in the open for 1200 ticks — exactly what invites the runner).
         watch_and_clear(&mut w, 16.0);
-        w.walk_to(Wp::new(wp[0], wp[1], wp[2]).r(0.8), label);
+        let here = w.scene.sim.as_ref().unwrap().bond.pos;
+        let dist = walker::dxz(here, wp);
+        if dist > 5.0 {
+            let _ = walk_leg_watched(&mut w, wp, 1.3, label);
+        } else {
+            w.walk_to(Wp::new(wp[0], wp[1], wp[2]).r(0.8), label);
+        }
         assert!(w.scene.sim.as_ref().unwrap().drones.level_exit.is_none(), "the mission failed at '{label}'");
     }
     // Diagnostic (this task): the office floor's LOAD_LEVEL triggers — the reload (next == this
