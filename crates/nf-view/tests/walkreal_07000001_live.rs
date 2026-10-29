@@ -488,51 +488,38 @@ fn walk_from_the_spawn_to_the_exit_with_the_contact() {
         w.walk_nav_to([-30.8, 6.4, 13.1], "the stairwell head", 1.2);
         w.walk_nav_to(plate, "the plate (lead the descent)", 1.2);
     }
-    // obj0 "Escort Mayhew to bunker" (text 0x04000006) watches ch 0x47 [L mission::c07000001,
-    // ee_start_05 @ 0x2a3eb8]. The disc carries NO ch-0x47 writer — the same census as ch 0x33:
-    // every placement, trigger, mux, script and pickup scanned, the only 0xD writes are 0xB and
-    // 0xE [D walkreal_probe01] — the un-ported mission/dialogue layer owns the write. The walk
-    // hands it at the level's own beat — Mayhew reached the bunker plate — and pins the REAL
-    // monitor's consequences [M 0x1827d8].
+    // obj0 "Escort Mayhew to bunker" (text 0x04000006) watches ch 0x47 [D mission::c07000001,
+    // ee_start_05 @ 0x2a3eb8: text 0x04000006, ch 0x47, enable 0, flags 0]. The objective does
+    // NOT complete on this level, and this walk now pins that instead of standing in for it:
+    //   * no 07000001 disc data writes 0x47 — the level census found the only script-0xD writes
+    //     0xB and 0xE, and no trigger/mux/lock/pickup carries 0x47 [D walkreal_probe01];
+    //   * no ACTION.ELF code writes ch 0x47 immediately either — this session's disassembly
+    //     census of every switch_channels (0x26fc90) store (lui 0x27/-0x370 base idiom, tracked
+    //     through addiu/addu to sb/sh/sw) shows the only immediate channels are 0x2d, 0x5e, 0x62,
+    //     0x63, 0x64, 0x6f, 0x97, 0x98, 0x9b, 0xfd [M-dis work/elf/ACTION.ELF]; every other
+    //     writer (Trigger/SP/Script_EventHandler/DroneFunc_HostageSaved/Pickup/Door/...) takes
+    //     its channel from disc data;
+    //   * the real writer is the NEXT level's story hand-off: 07000002's level-start cut-scene
+    //     SP #400, script 0x06000084 (pack 07800002, mode 1), stream 7 writes ch 0x47 = 1
+    //     [D 07800002 0x06000084 stream 7] — the same one-part-late shape as 0x4D, which
+    //     07000003's TouchOnce #308 writes for 07000002's obj2 [D 07000003 param sweep].
+    // walkreal_07000002_live pins that write and the resulting fold live; here the game's own
+    // monitor state on THIS level is pinned: obj0 announced and active, everything else waiting
+    // [M 0x1827d8 case 0 announces when MissionData row level <= GameState; case 1 waits on the
+    // enable channel; case 3 folds only when the watch channel rises].
     // The record indexes resolve from the LEVELS table, not hardcoded: the table mirrors the
     // game's .data order and the mission-05..08 records sit in FRONT of 01's [M 0x1827d8 walks
     // LEVELS in table order; a hardcoded [0][0] named 01's record before those landed].
-    // ORDER MATTERS: once the AND fires (both on the plate), the exit-hold freezes the world
-    // (docs/systems/exit-hold.md — step_bond returns before Drones::tick), so the hand and the
-    // monitor's complete/announce land BEFORE Bond takes the last step onto the plate — the game's
-    // own order (the banner shows during Mayhew's arrival, the load follows the fade).
     let m01 = nf_game::mission::LEVELS.iter().position(|l| l.level == 0x0700_0001).expect("07000001's LEVELS record");
     let m02 = nf_game::mission::LEVELS.iter().position(|l| l.level == 0x0700_0002).expect("07000002's LEVELS record");
-    {
-        let sim = w.scene.sim.as_ref().unwrap();
-        assert_eq!(sim.drones.mission.states[m01][0], 3, "obj0 announced (immediate reveal, enable 0) [M 0x1827d8 case 0]");
-    }
-    if !exited {
-        let sim = w.scene.sim.as_mut().unwrap();
-        let frame = sim.drones.frame;
-        sim.drones.channels.set(0x47, 1, frame);
-    }
     w.wait(30);
-    // The exit can race the hand (the recovery's follow can carry Bond onto the plate right behind
-    // the contact): if the world froze mid-wait, the same monitor over the same channels, called
-    // once for the frozen window, performs the identical transitions [*suggested* stand-in — the
-    // game's Mission_Update keeps running through the fade; the port's hold skips it].
-    if !exited && w.scene.sim.as_ref().unwrap().drones.mission.states[m01][0] != 4 {
-        let mut sim = w.scene.sim.as_mut().unwrap();
-        let (lvl, fr) = (sim.level, sim.drones.frame);
-        let mut ev = vec![];
-        sim.drones.mission.update(&mut sim.drones.channels, fr, lvl, false, &mut ev);
-        eprintln!("[01] the exit raced the hand — the frozen-window monitor call ran ({} events)", ev.len());
-    }
     {
-        // The monitor's transitions, whichever window ran them: obj0 completes (case 3),
-        // 07000002's first two objectives announce on the 0x47 enable (case 1 has no level gate
-        // [L mission::c07000002]).
         let sim = w.scene.sim.as_ref().unwrap();
-        assert_eq!(sim.drones.mission.states[m01][0], 4, "obj0 completes through the real monitor [M 0x1827d8 case 3]");
-        assert_eq!(sim.drones.mission.states[m02][0], 3, "07000002 'Destroy Mayhew's computer' announces on the 0x47 enable [M 0x1827d8 case 1]");
-        assert_eq!(sim.drones.mission.states[m02][1], 3, "07000002 'Rescue geisha girls' announces on the 0x47 enable");
+        assert_eq!(sim.drones.mission.states[m01][0], 3, "obj0 announced (immediate reveal, enable 0) and still active — the fold belongs to 07000002's intro stream 7 [M 0x1827d8 case 0; D 07800002 0x06000084]");
+        assert_eq!(sim.drones.mission.states[m02][0], 1, "07000002 'Destroy Mayhew's computer' still waits on enable 0x47 [M 0x1827d8 case 1]");
+        assert_eq!(sim.drones.mission.states[m02][1], 1, "07000002 'Rescue geisha girls' still waits on enable 0x47");
         assert_eq!(sim.drones.mission.states[m02][2], 1, "07000002 'Find door to servants quarters' still waits on enable 0x4c");
+        assert!(!sim.drones.channels.on(0x47), "07000001 never raises the obj0 completion channel — no disc writer on this level [D census + M-dis]");
         assert!(!sim.drones.channels.on(100), "the mission spans 07000002 — success waits for its objectives");
     }
     if !exited {
