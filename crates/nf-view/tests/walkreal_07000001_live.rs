@@ -16,10 +16,12 @@ use nf_game::world::V3;
 
 fn iso() -> String { std::env::var("NF_ISO").expect("NF_ISO") }
 
-#[test]
-fn walk_from_the_spawn_to_the_exit_with_the_contact() {
-    let iso = iso();
-    let mut w = Walker::new(nf_view::load(&iso, "07000001.bin", false).expect("load 07000001"));
+/// The walked route to the exit (shared by the walk test and the exit-fade pin below): the real
+/// input path from spawn #0 to the exit plate, stopping AT the fire tick — `level_exit` is
+/// posted and `exit_hold` still has all 300 frames (the game's fade level is 0 on the fire tick;
+/// `Camera_UpdateGlbVars` advances it on the frames after [M 0x1bada0:16-20]).
+fn walk_to_the_exit(iso: &str, stop_at_fire: bool) -> Walker {
+    let mut w = Walker::new(nf_view::load(iso, "07000001.bin", false).expect("load 07000001"));
     {
         let sim = w.scene.sim.as_ref().unwrap();
         let p = sim.bond.pos;
@@ -488,6 +490,9 @@ fn walk_from_the_spawn_to_the_exit_with_the_contact() {
         w.walk_nav_to([-30.8, 6.4, 13.1], "the stairwell head", 1.2);
         w.walk_nav_to(plate, "the plate (lead the descent)", 1.2);
     }
+    // level-01-end-fade: the pin path stops AT the fire — the mission-monitor block below waits
+    // 30 ticks that would burn into the fade's 300 before the read (the walk path keeps them).
+    if stop_at_fire && w.scene.sim.as_ref().unwrap().drones.level_exit.is_some() { return w; }
     // obj0 "Escort Mayhew to bunker" (text 0x04000006) watches ch 0x47 [D mission::c07000001,
     // ee_start_05 @ 0x2a3eb8: text 0x04000006, ch 0x47, enable 0, flags 0]. The objective does
     // NOT complete on this level, and this walk now pins that instead of standing in for it:
@@ -512,7 +517,12 @@ fn walk_from_the_spawn_to_the_exit_with_the_contact() {
     // LEVELS in table order; a hardcoded [0][0] named 01's record before those landed].
     let m01 = nf_game::mission::LEVELS.iter().position(|l| l.level == 0x0700_0001).expect("07000001's LEVELS record");
     let m02 = nf_game::mission::LEVELS.iter().position(|l| l.level == 0x0700_0002).expect("07000002's LEVELS record");
-    w.wait(30);
+    // The monitor settles; fire-aware so the pin's read stays on the fire tick (identical 30
+    // ticks when !stop_at_fire).
+    for _ in 0..30 {
+        if stop_at_fire && w.scene.sim.as_ref().unwrap().drones.level_exit.is_some() { break; }
+        w.tick(Default::default(), false);
+    }
     {
         let sim = w.scene.sim.as_ref().unwrap();
         assert_eq!(sim.drones.mission.states[m01][0], 3, "obj0 announced (immediate reveal, enable 0) and still active — the fold belongs to 07000002's intro stream 7 [M 0x1827d8 case 0; D 07800002 0x06000084]");
@@ -560,13 +570,33 @@ fn walk_from_the_spawn_to_the_exit_with_the_contact() {
                 w.walk_nav_to(plate, "the plate (re-take)", 1.2);
             }
             if w.scene.sim.as_ref().unwrap().drones.channels.on(0x10) { break; }
-            w.wait(60);
+            // level-01-end-fade: the wait breaks AT the fire — the pin below reads the hold with
+            // all 300 frames left on the exit tick itself (the countdown begins the next tick
+            // [M 0x1bada0:16-20 advances the fade on the frames after the SetFade stores level 0]).
+            for _ in 0..60 {
+                if w.scene.sim.as_ref().unwrap().drones.level_exit.is_some() { break; }
+                w.tick(Default::default(), false);
+            }
         }
     }
     let sim = w.scene.sim.as_ref().unwrap();
     assert!(sim.drones.channels.on(0x10), "the AND-touch must fire with Bond AND the contact on the plate (contact at {:?})",
         sim.drones.list[ci].pos);
     drop(sim);
+    // The exit fires the same tick ch 0x10 rises (the LOAD_LEVEL trigger's gate IS 0x10 — the
+    // case-10 arm fires on the channel, no proximity check [M Trigger_Update 0x1b1a78:162-166]) —
+    // stop at the fire tick; the walk test and the fade pin both resume here.
+    for _ in 0..60u32 {
+        if w.scene.sim.as_ref().unwrap().drones.level_exit.is_some() { return w; }
+        w.tick(Default::default(), false);
+    }
+    panic!("the exit must fire within 60 ticks of the AND-touch (level_exit posted)");
+}
+
+#[test]
+fn walk_from_the_spawn_to_the_exit_with_the_contact() {
+    let iso = iso();
+    let w = walk_to_the_exit(&iso, false);
     assert_eq!(w.scene.sim.as_ref().unwrap().drones.level_exit, Some(0x0700_0002), "the exit fires to 07000002");
     eprintln!("[01] level_exit to 07000002 at tick {} — walked {} ticks total", w.total_ticks, w.total_ticks);
     for f in &w.report.falls { eprintln!("[01] fall: {f}"); }
@@ -914,4 +944,86 @@ fn following_mayhew_down_completes_the_level() {
     assert_eq!(w.scene.sim.as_ref().unwrap().drones.level_exit, Some(0x0700_0002), "the exit fires to 07000002");
     eprintln!("[01f] level_exit to 07000002 at tick {} (follow route)", w.total_ticks);
     for f in &w.report.falls { eprintln!("[01f] fall: {f}"); }
+}
+
+/// level-01-end-fade: the level-end screen fade, pinned on the walked exit above. The game's
+/// exit path [M]: the AND-touch raises ch 0x10 and `Trigger_Update`'s case-10 arm fires the
+/// LOAD_LEVEL trigger (0x1b1a78:162-166 — no proximity check); `Trigger_Activate`'s type-10
+/// tail runs `Music_Event(3,1)` + `GS_PauseGame(1)` + `ResetMap_LevelToLoad(next,1,0)` +
+/// `GameFlow_PushState(300.0f, 7, 0xff)` [M 0x1b2318:89-92, disasm 0x1b24b8-0x1b24ec]. The push
+/// converts state 7 → 8 through `Camera_SetFade(6, 300.0, 0xff, 1)` [M 0x1c9f38 disasm
+/// 0x1c9f7c-0x1c9f84: a0=6, f12/a1 pass through, a2=1], arming the viewer fade: level 0, rate
+/// (1/300)·(0xff/255), colour bytes R=G=B=0 — black [M 0x1bbdd8 disasm 0x1bbe20-0x1bbe54].
+/// `Game_Draw` draws psiFadeView(R,G,B,level·255) while the fade is active [M 0x1e6f50:203-209];
+/// `Camera_UpdateGlbVars` advances the level every frame and clamps the byte [M 0x1bada0:16-27];
+/// when the fade ends, state 8 pops onto state 3 (`ResetMap_Load`) and the level loads
+/// [M 0x1c98c8:173-189].
+#[test]
+fn the_exit_fade_starts_on_the_exit_tick_runs_the_games_300_frames_then_the_level_loads() {
+    let iso = iso();
+    let mut w = walk_to_the_exit(&iso, true);
+    // The exit tick: the hold stands with the full count, the fade level is 0, the request rides.
+    {
+        let sim = w.scene.sim.as_ref().unwrap();
+        let h = sim.drones.exit_hold
+            .expect("the exit posts GS_PauseGame(1) + GameFlow_PushState(300.0f, 7, 0xff) [M 0x1b2318:89-92]");
+        assert_eq!(h.next, 0x0700_0002, "the hold carries the exit's next level [D placement p0; M 0x1b2318:91]");
+        assert_eq!(h.total, 300, "the push carried 300.0f [M 0x1b2318:92 — 0x43960000]");
+        assert_eq!(h.fade_frames, 300, "all 300 frames left at the fire tick");
+        assert_eq!(sim.drones.level_exit, Some(0x0700_0002),
+            "the exit request is posted; the host drains it only after the hold clears [M 0x1c98c8 case 8]");
+        assert_eq!(sim.drones.exit_fade_view().unwrap().alpha, 0.0,
+            "the fade's level starts at 0 [M 0x1bbdd8: level = 0 · (0xff/255)]");
+    }
+    // The world freezes under the fade while it runs [M 0x1c98c8:44-47 the clock stops;
+    // 0x1c9790:30-38 the world sections sit behind the pause gate; 0x10cd80:36 the input dies].
+    let (bond0, anchor0, frame0) = {
+        let sim = w.scene.sim.as_ref().unwrap();
+        (sim.bond.pos, sim.drones.player_pos, sim.drones.frame)
+    };
+    for _ in 0..100 { w.tick(Default::default(), false); }
+    {
+        let sim = w.scene.sim.as_ref().unwrap();
+        assert_eq!(sim.bond.pos, bond0, "the world is frozen under the fade");
+        assert_eq!(sim.drones.player_pos, anchor0, "the player anchor is frozen under the fade");
+        assert_eq!(sim.drones.frame, frame0, "the game clock stops while paused [M 0x1c98c8:44-47]");
+        let h = sim.drones.exit_hold.expect("the hold still runs at fire+100");
+        assert_eq!(h.fade_frames, 200, "100 of the 300 frames burned [M 0x1bbdd8 rate · 0x1bada0 advance]");
+        let a = sim.drones.exit_fade_view().unwrap().alpha;
+        assert!((a - 100.0 / 300.0).abs() < 1e-6,
+            "the fade alpha is the burned fraction of the push (got {a}) [M 0x1bada0:16-20]");
+        // The visible pane: the game draws psiFadeView(0,0,0, level·255) — black at the faded
+        // alpha [M 0x1bbdd8 colour bytes, 0x1e6f50:203-209]. The port's overlay quad matches.
+        let hud = w.scene.script_overlay_hud(4.0 / 3.0);
+        assert!(hud.v.iter().any(|v| v.c[0] == 0.0 && v.c[1] == 0.0 && v.c[2] == 0.0
+                && (v.c[3] - 100.0 / 300.0).abs() < 1e-3),
+            "the fade pane draws black at the faded alpha [M 0x1bbdd8 + 0x1e6f50 psiFadeView]");
+    }
+    // The rest of the count: the hold clears at exactly 300 with the request intact
+    // [M 0x1c98c8:173-189 — state 8 pops onto state 3].
+    for _ in 0..300 {
+        w.tick(Default::default(), false);
+        if w.scene.sim.as_ref().unwrap().drones.exit_hold.is_none() { break; }
+    }
+    {
+        let sim = w.scene.sim.as_ref().unwrap();
+        assert!(sim.drones.exit_hold.is_none(), "the hold cleared at 300 frames [M 0x1c98c8:173-189]");
+        assert_eq!(sim.drones.level_exit, Some(0x0700_0002), "the loader waited under the fade — the request is intact");
+    }
+    // The load AFTER the fade: the host captures the RamSave (the game saves at the fire
+    // [M 0x1b2318:96]; the world is frozen between) and loads warm [M 0x1d3800 → 0x1d6360].
+    let save = {
+        let sim = w.scene.sim.as_ref().unwrap();
+        nf_game::player::RamSave::capture(&sim.drones.health, sim.gun.switch_request, &sim.drones.inventory, &sim.drones.channels)
+    };
+    drop(w);
+    let next = nf_view::load_with_carry(&iso, "07000002.bin", false, Some(&save)).expect("load 07000002 warm");
+    {
+        let sim = next.sim.as_ref().unwrap();
+        assert_eq!(sim.level, 0x0700_0002, "the next level loaded after the fade [M 0x1c98c8:173-189]");
+        assert!(sim.drones.exit_hold.is_none(), "the fresh level carries no hold");
+        let p = sim.bond.pos;
+        assert!((p[0] - -27.17).abs() < 2.0 && (p[2] - 29.80).abs() < 2.0,
+            "start #0 (gate 0) — entry from 07000001's single exit route [D docs/levels/07000002.md], got {p:?}");
+    }
 }
