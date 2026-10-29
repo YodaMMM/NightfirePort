@@ -395,3 +395,18 @@ target/ present, release/ (2.1G scratch build) deleted for 2.2G free. Branch s/w
 from origin/master (1b2309ea), WORKLOG.md restored from the newest chain
 (origin/s/capsule-cull-and-los-masks-12) and this entry appended. Next: read the level-12 report
 blockers + 0x109da0 / 0x1ebaa8 decompiles, then implement the flag.
+
+## walk-move-clip (continued 14:36 UTC 2026-10-29, second window)
+
+The sandbox reset between windows (repo/work/ISO/toolchain gone; the first window's implementation
+was re-typed and pushed as bd9580cc). The walkreal tallies below are THIS window's binaries, built
+from the pushed tree — the first window's chunk-1 ON numbers mixed stale links and are discarded.
+
+Battery (scripts/walkreal_battery.sh, the nf-view walkreal_* live binaries, --test-threads=1,
+NF_SILENT=1; the slow 03/05/06/07/0b/0c tail not re-run this window): **flag OFF 61 passed /
+0 failed / 1 ignored across the 17-binary set; flag ON 28 passed / 21 failed** — the model walks
+the castle/stairwell/41/satchel routes green (02, 11, 11_route, 41, 4a_satchel) and loses
+precision aim/fire legs (12/13's beam-burn, 08's fusebox/noise plate) plus head-on wall stops
+(1b's boundary-wall float) where the clip's spine-plane rest shifts Bond off the pinned lines or
+lets the float through. No stand-in could be replaced: 07000012 fails BEFORE its two stand-ins
+(the beam-burn at tower2.rs:47). Default stays OFF. Full detail: docs/reports/walk-move-clip.md.
