@@ -12289,6 +12289,40 @@ impl Drones {
         true
     }
 
+    /// The exit hold's mission layer (level-14-every-objective). `Game_Run` still calls
+    /// `Mission_Update` every frame while the exit's `GS_PauseGame(1)` stands — it sits at
+    /// 0x1c9790:17, OUTSIDE the `GS_IsPaused` gate whose :30-38 arm freezes only
+    /// `SSys_Monitor`/`Light_Update`/`control_movement_object_handler` — so the monitor keeps
+    /// reading the channels through the 300-frame fade, which is where the exit trigger's own
+    /// fallback channel folds the final objective record ([M 0x1827d8 case 3]; the port used to
+    /// skip the whole sim during the hold, so the record never folded before the load). The
+    /// clock itself is stopped while paused (`GameFlow_Main` advances the game clock only
+    /// unpaused [M 0x1c98c8:44-47]), so this runs on the CURRENT `self.frame` without the
+    /// `tick_inner` advance. The mission's own success pulses ride the same block as
+    /// `tick_inner` [M 0x182c60:23-28]; the LevelEnd hold never stacks on the trigger's
+    /// (level-exit-fade's `exit_hold.is_none()` guard).
+    pub fn tick_mission_during_hold(&mut self, level: u32) {
+        let frame = self.frame;
+        // `Mission_Update` reads the DEATH CHANNEL, not health [M 0x182c60:21].
+        let dead = self.channels.on(0x62);
+        let mut events = std::mem::take(&mut self.mission_events);
+        // [M 0x182c60:16-18] the MP master gate, as in tick_inner.
+        if self.mp_master == 0 {
+            self.mission.update(&mut self.channels, frame, level, dead, &mut events);
+        }
+        if events.iter().any(|e| matches!(e, crate::mission::Event::MissionFailed)) { self.music.event(7, 1); }
+        if events.iter().any(|e| matches!(e, crate::mission::Event::MissionComplete { .. })) { self.music.event(8, 1); }
+        if self.exit_hold.is_none() {
+            if let Some(next) = events.iter().find_map(|e| match e {
+                crate::mission::Event::LevelEnd { next } if next & 0xffff_0000 == 0x0700_0000 && *next != 0x0700_0048 => Some(*next),
+                _ => None,
+            }) {
+                self.exit_hold = Some(ExitHold { next, fade_frames: 60, total: 60 });
+            }
+        }
+        self.mission_events = events;
+    }
+
     /// The draw code's fade read: `(frames_left, total)` while the exit fade runs — the black
     /// overlay's alpha is `1 − left/total` (linear, the rate `Camera_SetFade` stored
     /// [M 0x1bbdd8:11-33]). `None` = no hold (the scene draws normally).
