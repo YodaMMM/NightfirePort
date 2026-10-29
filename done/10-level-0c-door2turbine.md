@@ -20,3 +20,8 @@ say so in the report. Never weaken a decompile-backed test to make code pass.
 
 ---
 claimed-by: sandbox1 at 2026-10-28T23:53Z
+
+---
+## Report (done, 2026-10-29T01:28Z)
+
+Closed by the driver: the report is on `s/level-0c-door2turbine` (docs/reports/level-0c-door2turbine.md); the worker didn't run finish.sh.
