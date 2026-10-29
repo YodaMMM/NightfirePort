@@ -1762,6 +1762,89 @@ impl CollisionWorld {
         best
     }
 
+    /// The flush's re-query with the game's candidate set: `segment_surface_flags` MINUS every
+    /// static triangle outside the straddle cells — `Collide_Pick` 0x1eb320:125 takes the flight
+    /// trace's candidate nodes ONLY from `Collide_StraddleCels` 0x1eac98 (the BFS from the query's
+    /// cel through the portals the segment crosses), and the flying bullet re-feeds that start cel
+    /// every tick [M Bullet_update 0x12e7b0 disasm 0x12f0cc-0x12f0d8]. Pass faces are KEPT (both
+    /// the glist-0x40 node flag and the surface byte ride in the result): the flight trace's
+    /// HITTEST+0x98 = 0 [M 0x12f040] clears every fraction-1e8 drop in `Collide_Intersect`
+    /// 0x1ebaa8 (the 0x40 byte drop needs +0x98 bit 0x800, the node-flag drop bit 0x8 — disasm
+    /// 0x1ebff0-0x1ec010), so pass-flagged faces are HITDATA the handler's walk decides about
+    /// [M Bullet_CollisionHandler 0x12ce80's pass rules, 0x12cee0..0x12cfb8]. The missile cage and
+    /// the dynamic set stay in (the pick's per-cel object walk runs when HITTEST+0x98 bit 0x10 is
+    /// clear — the bullet's is [M 0x12f040]). Falls back to the flat `segment_surface_flags` when
+    /// there is no scope or the cell is unknown — the caller's safety net, same as the scoped
+    /// bullet query. level-11-stairwell-bullet-holes-6.
+    pub fn segment_surface_flags_scoped(&self, cell: Option<usize>, from: V3, to: V3) -> Option<(f32, V3, u8, bool)> {
+        let Some(cell) = cell else { return self.segment_surface_flags(from, to, false) };
+        // An out-of-range cell is a caller bug: the flat answer is the conservative fallback (the
+        // scoped actor queries instead test nothing — their callers keep a valid `bond.cel`).
+        let in_range = self.scope.as_ref().is_some_and(|sc| cell < sc.graph.cells.len());
+        if !in_range { return self.segment_surface_flags(from, to, false); }
+        let Some(runs) = self.scoped_runs(cell, &mut Self::ray_portal_hit(from, to)) else { return self.segment_surface_flags(from, to, false); };
+        let d = sub(to, from);
+        let mut best = None::<(f32, V3, u8, bool)>;
+        {
+            let stat = &self.stat;
+            for r in &runs {
+                let o = &stat.objects[*r as usize];
+                for k in o.tris.clone() {
+                    let node_pass = stat.pass[k];
+                    let mat = stat.mats[k];
+                    let t = &stat.tris[k];
+                    let (e1, e2) = (sub(t[1], t[0]), sub(t[2], t[0]));
+                    let n = cross(e1, e2);
+                    if dot(n, d) >= 0.0 { continue; } // back face [M 0x10a8c8:168]
+                    let p = cross(d, e2);
+                    let det = dot(e1, p);
+                    if det.abs() < 1e-12 { continue; }
+                    let inv = 1.0 / det;
+                    let s = sub(from, t[0]);
+                    let u = dot(s, p) * inv;
+                    if !(0.0..=1.0).contains(&u) { continue; }
+                    let q = cross(s, e1);
+                    let v = dot(d, q) * inv;
+                    if v < 0.0 || u + v > 1.0 { continue; }
+                    let tt = dot(e2, q) * inv;
+                    if (0.0..=1.0).contains(&tt) && best.is_none_or(|b| tt < b.0) {
+                        let l = dot(n, n).sqrt().max(1e-12);
+                        best = Some((tt, [n[0] / l, n[1] / l, n[2] / l], mat, node_pass));
+                    }
+                }
+            }
+        }
+        let dynamic = self.dynamic.read().unwrap();
+        for g in [&self.missile, &dynamic.geo] {
+            for o in along(g, from, to) {
+                for k in o.tris.clone() {
+                    let node_pass = g.pass[k];
+                    let mat = g.mats[k];
+                    let t = &g.tris[k];
+                    let (e1, e2) = (sub(t[1], t[0]), sub(t[2], t[0]));
+                    let n = cross(e1, e2);
+                    if dot(n, d) >= 0.0 { continue; } // back face [M 0x10a8c8:168]
+                    let p = cross(d, e2);
+                    let det = dot(e1, p);
+                    if det.abs() < 1e-12 { continue; }
+                    let inv = 1.0 / det;
+                    let s = sub(from, t[0]);
+                    let u = dot(s, p) * inv;
+                    if !(0.0..=1.0).contains(&u) { continue; }
+                    let q = cross(s, e1);
+                    let v = dot(d, q) * inv;
+                    if v < 0.0 || u + v > 1.0 { continue; }
+                    let tt = dot(e2, q) * inv;
+                    if (0.0..=1.0).contains(&tt) && best.is_none_or(|b| tt < b.0) {
+                        let l = dot(n, n).sqrt().max(1e-12);
+                        best = Some((tt, [n[0] / l, n[1] / l, n[2] / l], mat, node_pass));
+                    }
+                }
+            }
+        }
+        best
+    }
+
     fn segment_surface_impl(&self, from: V3, to: V3, no_water: bool, drop_pass: bool) -> Option<(f32, V3, u8)> {
         let d = sub(to, from);
         let (mut best, mut lo, mut hi) = (None::<(f32, V3, u8)>, [0f32; 3], [0f32; 3]);
