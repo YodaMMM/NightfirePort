@@ -651,7 +651,18 @@ fn every_stats_row_matches_the_game_formulas_from_the_real_finish() {
     assert_eq!(find(0x15b).target, "45", "Dispatched target = the design 45 [L entry 4 row 1 — the game's own mission-wide value]");
     assert_eq!(find(0x15b).total, sep(raw[1]), "Dispatched points [M :171-185]");
     assert_eq!(find(0x15c).current, sub.to_string(), "Subdued value [M :70]");
+    assert_eq!(find(0x15c).target, e.rows[2].count.to_string(),
+        "Subdued target = the design count 3 [L entry 4 row 2; M 0x209938:77 — the builder passes rows+0x30 (row2.count) as the target arg, same shape as Dispatched]");
+    assert_eq!(find(0x15c).total, sep(raw[2]), "Subdued points = fptoui(row2.raw) [M 0x209938:77-79]");
     assert_eq!(find(0x16e).current, sur.to_string(), "Surrendered value [M :72]");
+    assert_eq!(find(0x16e).target, e.rows[3].count.to_string(),
+        "Surrendered target = the design count 3 [L entry 4 row 3; M 0x209938:82 — rows+0x44 (row3.count) as the target arg]");
+    assert_eq!(find(0x16e).total, sep(raw[3]), "Surrendered points = fptoui(row3.raw) [M 0x209938:82-84]");
+    // Sister: the Subdued/Surrendered/Stealth rows are CONDITIONAL on the entry's new_scores
+    // flag (0 for the 0x09 maps) [M 0x209938:74-86 `if (*(char *)(score_table + 0x38) != 0)`;
+    // the flag GetScore set at 0x1984b0:38-43] — 07000001 sets it, so all three show.
+    assert!(rows.iter().any(|r| r.id == 0x15c) && rows.iter().any(|r| r.id == 0x16e) && rows.iter().any(|r| r.id == 0x15d),
+        "the SP flag shows the Subdued/Surrendered/Stealth rows [M 0x209938:74]");
     assert_eq!(find(0x15d).current, pct(e.rows[4].ratio), "Stealth pct = fptoui(ratio·100+0.5) [M :84]");
     assert_eq!(find(0x15d).target, "----", "Stealth's −1 target [M 0x201df0:78-88]");
     assert_eq!(find(0x15d).total, sep(raw[4]), "Stealth points [M :201-233]");
