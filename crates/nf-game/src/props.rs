@@ -45,6 +45,13 @@ pub struct CamSubject {
 #[derive(Clone, Debug)]
 pub struct Destroy {
     pub placement: usize,
+    /// The placement's translation — the object's obj+0x30, where `Destroy_Smash` 0x12bb60 sets
+    /// off its blast. A leaf with no collision bounds (0700000d's bigdoor01) blasts here.
+    pub pos: V3,
+    /// The object's glist sphere radius (the level object's `radius`, the same value the doors'
+    /// sphere fields carry) — the blast's size base. 0 when the object has none (the box
+    /// half-diagonal stands in then).
+    pub sphere: f32,
     pub lo: V3,
     pub hi: V3,
     /// `tag+0x12` — the channel the death writes [M 0x12c318:35].
@@ -97,6 +104,13 @@ pub struct Props {
 /// One placement's target object's bounds placed by the placement transform (the game's contact
 /// is against the placed glist), in placement order. Objects whose gfx bounds are unset (anim-only
 /// meshes: min/max stay at the parser's ±1e7 sentinel) fall back to their collision triangles.
+/// The placement object's glist sphere radius (0 when it has no object).
+fn object_radius(level: &Level, m: usize, p: &nf_formats::placement::Placement) -> f32 {
+    let obj = if p.by_hash() { level.by_hash.get(&p.hashcode).map(|&(map, object)| &level.maps[map].objects[object]) }
+        else { level.maps[m].objects.get(p.index as usize) };
+    obj.map_or(0.0, |o| if o.radius.is_finite() && o.radius > 0.0 { o.radius } else { 0.0 })
+}
+
 pub fn bounds(level: &Level, m: usize, p: &nf_formats::placement::Placement) -> (V3, V3) {
     let obj = if p.by_hash() { level.by_hash.get(&p.hashcode).map(|&(map, object)| &level.maps[map].objects[object]) }
         else { level.maps[m].objects.get(p.index as usize) };
@@ -154,7 +168,7 @@ impl Props {
                 // param 2's low byte, tag+0x08 (smash blast damage) = param 5, tag+0x14 (the
                 // bullet mask) = ~param 4 with 0 staying 0 [M 0x12c318:47-52 disasm]. The colour
                 // pair starts white (recovery clamps at 255 [M 0x12bd48:62-68]).
-                0xe1 => props.destroy.push(Destroy { placement: i, lo, hi, channel: param(0) as u8, health: param(3) as f32, dead: false, kind: (param(2) & 0xff) as u8, blast_damage: param(5) as f32 * 0.01,
+                0xe1 => props.destroy.push(Destroy { placement: i, pos: p.translation, sphere: object_radius(level, m, p), lo, hi, channel: param(0) as u8, health: param(3) as f32, dead: false, kind: (param(2) & 0xff) as u8, blast_damage: param(5) as f32 * 0.01,
                     kill_channel: param(1) as u16,
                     mask: (param(4) == 0).then_some(0).unwrap_or(!(param(4) as u16)),
                     colour: [0xff, 0xff], hit67: false }),
@@ -267,9 +281,16 @@ impl Props {
         d.dead = true;
         ch.set(d.channel as u32, 1, frame);
         if d.kind == 0 { return None; }
-        let c = [(d.lo[0] + d.hi[0]) / 2.0, (d.lo[1] + d.hi[1]) / 2.0, (d.lo[2] + d.hi[2]) / 2.0];
+        // The box centre stands in for the object's position; a leaf without bounds (the C5
+        // pair's bigdoor01) has none, so it blasts at its placement — at the box's (0,0,0) its
+        // fireball was set off at the world origin.
+        let c = if d.lo == d.hi { d.pos } else { [(d.lo[0] + d.hi[0]) / 2.0, (d.lo[1] + d.hi[1]) / 2.0, (d.lo[2] + d.hi[2]) / 2.0] };
         let ext = [(d.hi[0] - d.lo[0]) / 2.0, (d.hi[1] - d.lo[1]) / 2.0, (d.hi[2] - d.lo[2]) / 2.0];
-        let sphere = (ext[0] * ext[0] + ext[1] * ext[1] + ext[2] * ext[2]).sqrt();
+        let sphere = if d.sphere > 0.0 { d.sphere } else { (ext[0] * ext[0] + ext[1] * ext[1] + ext[2] * ext[2]).sqrt() };
+        // A (near-)zero sphere makes a zero blast: radius ~0 reaches nothing and the script plays at
+        // scale 0 [M 0x12bb60: radius and scale both from tag+0x8c]. Not spawned — the draw shows
+        // the newest blast of a script, so a same-tick empty one hid the C5 fireball.
+        if sphere < 0.05 { return None; }
         let mult = match d.kind { 1 => 4.0f32, 2 => 2.0, _ => 3.0 };
         Some((c, sphere * mult, d.blast_damage, d.kind))
     }
@@ -355,7 +376,7 @@ mod tests {
     fn box_props() -> Props {
         Props {
             subjects: vec![CamSubject { placement: 0, lo: [4.0, 7.0, -111.0], hi: [6.0, 9.0, -109.0], channel: 0x1c, hit: false }],
-            destroy: vec![Destroy { placement: 1, lo: [133.0, 4.0, -270.0], hi: [137.0, 7.0, -268.0], channel: 0x1f, health: 100.0, dead: false,
+            destroy: vec![Destroy { placement: 1, pos: [0.0; 3], sphere: 0.0, lo: [133.0, 4.0, -270.0], hi: [137.0, 7.0, -268.0], channel: 0x1f, health: 100.0, dead: false,
             kind: 1, blast_damage: 100.0, kill_channel: 0, mask: 0xffef, colour: [0xff, 0xff], hit67: false }],
             gunimps: Vec::new(),
         }
@@ -512,8 +533,8 @@ mod tests {
         let mut p = Props::default();
         // Two tags: placement 0 kills on ch 5 and dies writing ch 6; placement 1 (newer) kills on
         // ch 6 and dies writing ch 7. A single pass after ch 5 rises smashes only the OLDER tag.
-        p.destroy.push(Destroy { placement: 0, lo: [0.0; 3], hi: [1.0; 3], channel: 6, health: 1.0, dead: false, kind: 0, blast_damage: 0.0, kill_channel: 5, mask: 0, colour: [0xff, 0xff], hit67: false });
-        p.destroy.push(Destroy { placement: 1, lo: [2.0; 3], hi: [3.0; 3], channel: 7, health: 1.0, dead: false, kind: 0, blast_damage: 0.0, kill_channel: 6, mask: 0, colour: [0xff, 0xff], hit67: false });
+        p.destroy.push(Destroy { placement: 0, pos: [0.0; 3], sphere: 0.0, lo: [0.0; 3], hi: [1.0; 3], channel: 6, health: 1.0, dead: false, kind: 0, blast_damage: 0.0, kill_channel: 5, mask: 0, colour: [0xff, 0xff], hit67: false });
+        p.destroy.push(Destroy { placement: 1, pos: [0.0; 3], sphere: 0.0, lo: [2.0; 3], hi: [3.0; 3], channel: 7, health: 1.0, dead: false, kind: 0, blast_damage: 0.0, kill_channel: 6, mask: 0, colour: [0xff, 0xff], hit67: false });
         let mut ch = Channels::default();
         ch.set(5, 1, 1);
         let s = p.channel_kills(&mut ch, 1);

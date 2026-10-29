@@ -1975,8 +1975,20 @@ fn posed_vertices(scene: &scene::Scene, choice: Option<usize>, time: f32, opts: 
 fn dead_destroy_centres(scene: &scene::Scene) -> Vec<[u32; 3]> {
     let Some(sim) = scene.sim.as_ref() else { return Vec::new() };
     scene.destroy_centres.iter()
-        .filter(|(_, pi)| sim.drones.props.destroy.get(*pi).is_some_and(|d| d.dead))
+        // The pair carries the leaf's PLACEMENT index, not its slot in `props.destroy`.
+        .filter(|(_, pl)| sim.drones.props.destroy.iter().any(|d| d.placement == *pl && d.dead))
         .map(|(c, _)| c.map(f32::to_bits))
+        .collect()
+}
+
+/// The hit-flash tweak's draw side: the live Destroy leaves whose colour pair is below white
+/// (`Renderer::destroy_tint`).
+fn destroy_tints(scene: &scene::Scene) -> Vec<([u32; 3], [u8; 2])> {
+    let Some(sim) = scene.sim.as_ref() else { return Vec::new() };
+    scene.destroy_centres.iter()
+        .filter_map(|(c, pl)| sim.drones.props.destroy.iter().find(|d| d.placement == *pl)
+            .filter(|d| !d.dead && d.colour != [0xff, 0xff])
+            .map(|d| (c.map(f32::to_bits), d.colour)))
         .collect()
 }
 
@@ -2517,6 +2529,7 @@ fn shot(scene: &scene::Scene, cam: &Camera, out: &str, choice: Option<usize>, ti
     let vis_shot = r.cel_visibility(cam.pos.to_array(), vp_shot, world, door_closed.as_deref());
     // The destroyed-glist swap's draw side: the dead Destroy leaves' centres (see Scene::destroy_centres).
     r.destroy_dead = dead_destroy_centres(scene);
+    r.destroy_tint = destroy_tints(scene);
     // Objects are never room-culled (see the live path).
     r.update_skin(&queue, scene, choice, time, opts, None);
     r.set_char_light_centres(scene);
@@ -5726,6 +5739,7 @@ impl App {
                 // The destroyed-glist swap's draw side: the dead Destroy leaves' centres
                 // (see Scene::destroy_centres) — the doorway ends open [L] once the leaf is dead.
                 g.renderer.destroy_dead = dead_destroy_centres(&self.scene);
+                g.renderer.destroy_tint = destroy_tints(&self.scene);
                 let fp_enc = std::time::Instant::now();
                 g.renderer.set_shards(&g.queue, &self.scene.shard_draws());
                 let enc = g.renderer.render(&g.device, &g.queue, &view, &g.depth, vp, vp_rot, draw_cam.pos.to_array(), self.anim_time as u32, &snow, &hud, movie_frame, if cutscene { Some(band) } else { None });
@@ -6694,6 +6708,20 @@ pub fn run() -> Result<()> {
                 // channel on tick t (the state `Lock_Unlock` 0x1b0650 leaves), to render the swapped model.
                 if let Some((ut, uo)) = std::env::var("NF_UNLOCK_AT").ok().and_then(|v| v.split_once(':').and_then(|(a, b)| Some((a.parse::<u32>().ok()?, b.parse::<u16>().ok()?)))) {
                     if ut == t { for l in sim.drones.locks.iter_mut().filter(|l| l.out == uo) { l.unlocked = true; } }
+                }
+                // Render aid (destroy hit flash): `NF_DESTROY_COLOUR_AT=t:placement:byte` sets that Destroy
+                // leaf's colour pair on tick t (the state the laser's drain leaves), to render the flash;
+                // `t:placement:dead` marks the leaf dead (the destroyed-glist swap's draw side).
+                if let Some((dt, rest)) = std::env::var("NF_DESTROY_COLOUR_AT").ok().and_then(|v| v.split_once(':').map(|(a, b)| (a.to_string(), b.to_string()))) {
+                    if let (Ok(dt), Some((pl, by))) = (dt.parse::<u32>(), rest.split_once(':')) {
+                        if dt == t {
+                            if let Ok(pl) = pl.parse::<usize>() {
+                                for d in sim.drones.props.destroy.iter_mut().filter(|d| d.placement == pl) {
+                                    if by == "dead" { d.dead = true; } else if let Ok(by) = by.parse::<u8>() { d.colour = [by, by]; }
+                                }
+                            }
+                        }
+                    }
                 }
                 // Render aid (health-pane-fade): `NF_PANE_FADE=1` turns the pane-fade option on
                 // (`decay_gate`, PlayerSetting+0xB) from tick 1, so BL+0x8BC decays and the pane fades.
