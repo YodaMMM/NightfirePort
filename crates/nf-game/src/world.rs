@@ -1101,6 +1101,73 @@ impl CollisionWorld {
         }).collect())
     }
 
+    /// Diagnostic (level-4a-every-objective-2): which candidate half stops the ray — the straddle
+    /// cells' static runs, the always remainder, the missile cage, the dynamic set — with the flood
+    /// size, so a probe can tell a cel-flooded block from an always-tested-set block. Read-only;
+    /// mirrors `segment_bullet_scoped`'s halves without being a behaviour pin.
+    pub fn probe_segment_sets(&self, cell: Option<usize>, from: V3, to: V3)
+        -> (usize, usize, Option<f32>, Option<f32>, Option<f32>, Option<f32>) {
+        let d = sub(to, from);
+        let mut stat_scoped = None::<f32>;
+        let (flood, always_n) = match (cell, self.scope.as_ref()) {
+            (Some(c), Some(sc)) if c < sc.graph.cells.len() => {
+                let cells = self.straddle(c, &mut Self::ray_portal_hit(from, to));
+                let mut taken = vec![false; self.stat.objects.len()];
+                let mut runs = Vec::new();
+                for c in &cells {
+                    for &r in &sc.cells[*c] { if !taken[r as usize] { taken[r as usize] = true; runs.push(r); } }
+                }
+                let always_n = sc.always.len();
+                for r in &sc.always { if !taken[*r as usize] { taken[*r as usize] = true; runs.push(*r); } }
+                let stat = &self.stat;
+                for r in &runs {
+                    let o = &stat.objects[*r as usize];
+                    for k in o.tris.clone() {
+                        if stat.bullet_pass(k) { continue; }
+                        if let Some(tt) = ray_tri_t(from, d, &stat.tris[k]) {
+                            if stat_scoped.is_none_or(|b| tt < b) { stat_scoped = Some(tt); }
+                        }
+                    }
+                }
+                (cells.len(), always_n)
+            }
+            _ => (0, 0),
+        };
+        let mut stat_flat = None::<f32>;
+        let stat = &self.stat;
+        for o in along(stat, from, to) {
+            for k in o.tris.clone() {
+                if stat.bullet_pass(k) { continue; }
+                if let Some(tt) = ray_tri_t(from, d, &stat.tris[k]) {
+                    if stat_flat.is_none_or(|b| tt < b) { stat_flat = Some(tt); }
+                }
+            }
+        }
+        let dynamic = self.dynamic.read().unwrap();
+        let mut missile_hit = None::<f32>;
+        for o in along(&self.missile, from, to) {
+            for k in o.tris.clone() {
+                if self.missile.bullet_pass(k) { continue; }
+                if let Some(tt) = ray_tri_t(from, d, &self.missile.tris[k]) {
+                    if missile_hit.is_none_or(|b| tt < b) { missile_hit = Some(tt); }
+                }
+            }
+        }
+        let mut dynamic_hit = None::<f32>;
+        for (oi, o) in along(&dynamic.geo, from, to).enumerate() {
+            for k in o.tris.clone() {
+                let pass = dynamic.geo.bullet_pass(k);
+                if let Some(tt) = ray_tri_t(from, d, &dynamic.geo.tris[k]) {
+                    if dynamic_hit.is_none_or(|b| tt < b) {
+                        dynamic_hit = Some(tt);
+                        eprintln!("PROBE_SETS: dynamic object {oi} tri {k} pass_flag={pass} t={tt}");
+                    }
+                }
+            }
+        }
+        (flood, always_n, stat_scoped, stat_flat, missile_hit, dynamic_hit)
+    }
+
     /// The bullet-family segment over the game's cel-scoped pick: `segment_bullet` MINUS every
     /// static triangle outside the straddle cells — `Collide_Pick` 0x1eb320:125 takes its candidate
     /// nodes ONLY from `Collide_StraddleCels` 0x1eac98 (the BFS from the query's cel through the

@@ -49,3 +49,27 @@ clear eye→drone rays from the ride line; group-2 spots behind the shaft core x
 census]). Plan: read the port's bullet/LOS path vs the game's Collide_LineOfSight and the
 bullet pick's cel walk [M]; whether the shaft core is portal-crossable in the bullet's
 candidate set decides fix-vs-pin.
+
+Progress (20:10-21:40 UTC): the fire leg SOLVED on the real loadout — the parked body's forced
+P2K was a DRY gun (4a's fresh kit is the watch 0x10 + 7 rounds + the grapple, no handgun [M
+Player_InitWeapon 0x1a7ef8 case 0x700004a → the 0x7000011 kit; the port's load: clip slot 2 = 0,
+every carried pool 0 — the state-2 flush reads the empty slot on the switch tick]). The watch is
+a real bullet-spawner (damage 10.0, range 99.0, fire_anim_len 0, clip 7 [L ee_start_05.bin
+weapon_data + 0x10·0x10C]); the ride's turn/look inputs work (a pegged ride swept the yaw 34.9
+rad — the earlier frozen-dyaw reading was the aimed probe's target alternation). The un-parked
+`a_spawned_drone_takes_the_riders_fire_across_the_shaft` now rides the line, aims at the
+enabled garrison chest whose eye→chest ray is clear under the game's cel-scoped pick [M
+Collide_Pick 0x1eb320:125 → Collide_StraddleCels 0x1eac98; Bullet_update 0x12e7b0 disasm
+0x12f0cc-0x12f0d8], presses on the converged ticks (semi-auto: one round per press edge [M the
+held gate 0x1a5460]) and lands it: 17 presses, clip 7→4, a garrison drone takes the fire
+(probe end-to-end: #30 10.0 → −5.0 at t817). GREEN + the no-fire health sister. The bullet
+flight now walks the game's cel-scoped candidate set (`segment_bullet_scoped(find_cel(b.pos))`,
+bullet.rs — the same walk the PlayerBullet flight next door runs) and the port's dynamic
+node_pass=false was checked against the disc: the lift car's glist flags 0x00040000 carry no
+0x40 bullet-pass bit [D map41 obj42 "SCRIPTPLAYER_Lift" 838 collision tris; M Collide_Intersect
+0x1ebaa8:143-145] — the car is bullet-SOLID in the game too (its shaft side is open; the clear
+rays leave through it). The GROUP-2 leg pinned UNREACHABLE by
+`the_group2_spots_stay_out_of_the_riders_fire_line` (GREEN): 0/2400 ride ticks with a clear
+eye→drone ray under BOTH the flat and the scoped sets (the probe: the scoped first-hit EQUALS
+the flat first-hit at every sampled pose; the BFS floods 1-3 cells that include the blocker;
+the 110-pose grid across the car footprint 0 flat-clear). Game-side live checks in the report.

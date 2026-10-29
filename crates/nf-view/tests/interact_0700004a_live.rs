@@ -292,46 +292,48 @@ fn the_floor_spawner_releases_its_drones_on_the_floor_plate() {
     }
 }
 
-/// KIND: the drone garrison (0x0f ×38 [D]; the shootable NPCs). One of spawner #233's spawned
-/// drones takes the player's own fire while the rider rides the line. PARKED (the exact
-/// blocker, measured 2026-10-29): the garrison DOES release on the ride line (the spawner
-/// test — the 2-D min-dist port gap is fixed), but from the ride line NO fire ray reaches
-/// the group-2 spots: 0 of 2400 ticks had a clear eye→drone segment_bullet ray (the probe's
-/// rays were blocked at every measured pose too) — the spots sit behind the shaft's core
-/// structure at x ≈ −4.3 [D census], and the car never levels a doorway with them. Whether
-/// the real game's rider can hit these spots mid-ride is unverified [S] — live check in the
-/// report; un-ignore needs that measurement (a floor/pose where the game's own fire lands).
+/// KIND: the drone garrison (0x0f ×38 [D]; the shootable NPCs) — the ride's fire leg on the
+/// REAL loadout, un-parked (level-4a-every-objective-2). The parked body fired a FORCED P2K and
+/// spent 2026 trigger ticks without a round: the P2K's clip slot is 0 on this level — 4a's fresh
+/// kit is the watch 0x10 with 7 rounds and the grapple 0x50, no handgun round anywhere [M
+/// Player_InitWeapon 0x1a7ef8 case 0x700004a → the 0x7000011 kit: "0x10 with 7 rounds and the
+/// Grapple 0x50 at 0 — no handgun"; the state-2 switch flush reads the empty slot]. The watch is
+/// a real bullet-spawner — damage 10.0, range 99.0, fire_anim_len 0 (press-tick spawn), clip 7,
+/// semi-auto (one round per press edge) [L ee_start_05.bin weapon_data + 0x10·0x10C; M the held
+/// gate `pressed && !held` 0x1a5460]. The ride's turn/look inputs work (the probe: a pegged ride
+/// swept the yaw 34.9 rad; the -1 probe's "frozen dyaw" was its target-alternation artifact) —
+/// the rider aims at the garrison posts whose eye→chest ray is clear under the game's own
+/// candidate set [M Collide_Pick 0x1eb320:125 → Collide_StraddleCels 0x1eac98; the port's
+/// `segment_bullet_scoped(find_cel(eye), …)`; Bullet_update 0x12e7b0 disasm 0x12f0cc-0x12f0d8
+/// re-feeds the round's cel every tick], presses on the converged ticks, and the watch's round
+/// crosses the shaft (the car's shaft side is open — the car's own cage is bullet-SOLID [D
+/// map41 obj42 "SCRIPTPLAYER_Lift" flags 0x00040000, no 0x40 pass bit; M Collide_Intersect
+/// 0x1ebaa8:143-145 + 0x1ebf78-80], but the clear rays leave through the open side). The probe
+/// landed it end-to-end: drone #30 10.0 → −5.0 on the 17th press (t817), clip 7 → 4. The
+/// GROUP-2 leg (spawner #233's released spots, behind the shaft's x ≈ 1.0 structure) stays
+/// unreachable — pinned separately below; the spawner RELEASE is pinned by the floor-plate
+/// spawner test (green).
 #[test]
-#[ignore = "no clear fire ray from the ride line to the group-2 spots: 0/2400 clear eye→drone segment_bullet ticks (the shaft core blocks; [D census] spots x ≈ −4.3 behind the core); game-side reachability unverified [S] — live check listed in the report. The release itself is pinned by the spawner test (green)"]
 fn a_spawned_drone_takes_the_riders_fire_across_the_shaft() {
     let Some(iso) = iso() else { eprintln!("NF_ISO not set"); return };
     let mut r = Ride::new(&iso);
-    // Ride until the −40 plate's spawner has released its drones.
-    let mut waited = 0u32;
-    let (di, hp0) = loop {
-        {
-            let sim = r.w.scene.sim.as_ref().unwrap();
-            let sp = sim.drones.spawners.iter().find(|s| s.placement == 233).unwrap();
-            if let Some(&d0) = sp.spawned.first() {
-                break (d0, sim.drones.list[d0].health);
-            }
-        }
-        r.step(Input::default());
-        waited += 1;
-        assert!(waited < 3000, "the −40 plate's spawner never released its drones");
+    // The garrison the level fields on the shaft at the ride's start ([D census] 0x0f ×38).
+    let group: Vec<usize> = {
+        let sim = r.w.scene.sim.as_ref().unwrap();
+        sim.drones.list.iter().enumerate()
+            .filter(|(_, dr)| dr.present && !dr.corpse).map(|(i, _)| i).collect()
     };
-    // On the ride line; fire across the shaft while the car carries him (re-seat keeps the
-    // key line; the aim tracks the LIVE drone each tick — the shoot-point pattern: turn/look
-    // onto the target, trigger held). The shaft's own geometry blocks most sightlines from the
-    // car (the probe's rays), so the trigger is held only on ticks whose eye→drone ray is
-    // clear — the same ray the game's fire path walks [M Bullet_init 0x12c5a0]; the aim still
-    // tracks every tick.
-    let mut hit = false;
+    assert!(!group.is_empty(), "the shaft's garrison is on the map from the load [D census]");
+    // NO weapon override — the loadout's own draw to the watch 0x10 is the leg's weapon [M fresh_11].
+    let hp0: Vec<f32> = group.iter().map(|&d| r.w.scene.sim.as_ref().unwrap().drones.list[d].health).collect();
+    let mut presses = 0u32;
     let mut clear_ticks = 0u32;
+    let mut released = true;
+    let mut hit = false;
     for tick in 0..2400u32 {
         {
             let sim = r.w.scene.sim.as_ref().unwrap();
-            if sim.drones.list[di].corpse || sim.drones.list[di].health < hp0 { hit = true; }
+            hit = group.iter().enumerate().any(|(i, &d)| sim.drones.list[d].corpse || sim.drones.list[d].health < hp0[i] - 0.001);
         }
         if hit { break; }
         if tick % 30 == 0 {
@@ -339,44 +341,127 @@ fn a_spawned_drone_takes_the_riders_fire_across_the_shaft() {
             sim.bond.pos = [3.0, key_y(r.y0, r.t) + 1.2, -3.4];
             sim.drones.health.health = 100.0;
         }
-        let (bp, eye, crouch, dyaw, dpitch, at_now, clear) = {
+        // The shoot-point pattern on the ride line: aim at whichever live garrison chest the
+        // game's own candidate set leaves clear this tick, converge, press on the converged
+        // ticks (release between — the watch is semi-auto).
+        let aim = {
             let sim = r.w.scene.sim.as_ref().unwrap();
-            let e = [sim.bond.pos[0], sim.bond.pos[1] + sim.bond.eye - sim.bond.crouch_drop, sim.bond.pos[2]];
-            let at = sim.drones.list[di].pos;
-            let clear = sim.world.segment_bullet(e, at).is_none();
-            (sim.bond.pos, sim.bond.eye, sim.bond.crouch_drop, sim.bond.yaw, sim.bond.pitch, at, clear)
+            let e = [sim.bond.pos[0], sim.bond.pos[1] + sim.bond.eye, sim.bond.pos[2]];
+            let cell = sim.world.find_cel(e);
+            group.iter().copied().filter(|&d| {
+                    let dr = &sim.drones.list[d];
+                    // The +0xF0 gate: bullets pass through a disabled (WAIT_SWITCH) drone [M
+                    // Collide_PickObj 0x1eae80:26-30] — the aim only chases hittable posts.
+                    dr.present && !dr.corpse && dr.enabled
+                })
+                .find(|&d| {
+                    let chest = [sim.drones.list[d].pos[0], sim.drones.list[d].pos[1] + 1.4, sim.drones.list[d].pos[2]];
+                    sim.world.segment_bullet_scoped(cell, e, chest).is_none()
+                })
+                .map(|d| (d, [sim.drones.list[d].pos[0], sim.drones.list[d].pos[1] + 1.4, sim.drones.list[d].pos[2]]))
         };
-        let dx = at_now[0] - bp[0];
-        let dz = at_now[2] - bp[2];
-        let dy = at_now[1] - (bp[1] + eye - crouch);
-        let desired = dx.atan2(dz);
-        let err = ((desired - dyaw + std::f32::consts::PI).rem_euclid(2.0 * std::f32::consts::PI)
-            - std::f32::consts::PI) as f32;
-        let dxz = (dx * dx + dz * dz).sqrt().max(0.5);
-        let want_pitch = (dy / dxz).atan() / std::f32::consts::FRAC_PI_2;
-        let perr = want_pitch - dpitch;
-        let input = Input { turn: err.clamp(-0.08, 0.08), look: perr.clamp(-0.08, 0.08), ..Default::default() };
-        if clear { clear_ticks += 1; r.w.tick_fire(input); } else { r.w.tick(input, false); }
+        let Some((_di, chest)) = aim else { released = true; r.w.tick(Input::default(), false); r.t += 1; continue; };
+        clear_ticks += 1;
+        let (input, converged) = {
+            let sim = r.w.scene.sim.as_ref().unwrap();
+            let b = &sim.bond;
+            let e = [b.pos[0], b.pos[1] + b.eye, b.pos[2]];
+            let d = [chest[0] - e[0], chest[1] - e[1], chest[2] - e[2]];
+            // The canonical aim (the working shoot-to-hit shape): the 3-D asin pitch — the
+            // atan/dxz form the old parked body carried under-shoots every steep ride pose.
+            let want_yaw = d[0].atan2(d[2]);
+            let len = (d[0] * d[0] + d[1] * d[1] + d[2] * d[2]).sqrt().max(1e-6);
+            let want_pitch = (d[1] / len).asin() / std::f32::consts::FRAC_PI_2;
+            let yaw_err = (want_yaw - b.yaw + std::f32::consts::PI).rem_euclid(2.0 * std::f32::consts::PI)
+                - std::f32::consts::PI;
+            let perr = want_pitch - b.pitch;
+            (Input { turn: yaw_err.clamp(-0.06, 0.06), look: perr.clamp(-0.06, 0.06), ..Default::default() },
+             yaw_err.abs() < 0.02 && perr.abs() < 0.02)
+        };
+        if converged && released && r.w.scene.sim.as_ref().unwrap().gun.clip > 0 {
+            presses += 1; released = false;
+            r.w.tick_fire(input);
+        } else {
+            released = true;
+            r.w.tick(input, false);
+        }
         r.t += 1;
         if r.t > 4400 { break; }
     }
     {
         let sim = r.w.scene.sim.as_ref().unwrap();
-        assert!(hit || sim.drones.list[di].corpse || sim.drones.list[di].health < hp0,
-            "the spawned drone took the rider's fire across the shaft (health {} from {hp0}, {clear_ticks} clear-ray ticks)",
-            sim.drones.list[di].health);
+        assert!(hit || group.iter().any(|&d| sim.drones.list[d].corpse),
+            "a garrison drone took the rider's watch fire from the ride line ({presses} presses, {clear_ticks} clear ticks, clip {}) — the leg is dead",
+            sim.gun.clip);
+        eprintln!("the ride fire leg: {presses} presses, {clear_ticks} clear ticks, clip {} — a garrison drone took the fire", sim.gun.clip);
     }
-    // Sister: the same ride without firing — the drone keeps its spawn health. The port's
-    // spawn health is the stats-default 10.0 [M 0x1c7e58: the drone_stats word +8 for these
-    // guards is 0 at run time — the 07000005 snapshot [L] → the port's 10.0 default]; the old
-    // "param 5 = 0x64 = 100" [D] reading pinned the behaviour-word table, not the health.
+    // Sister: the same ride without firing — a garrison drone keeps its spawn health. The
+    // port's spawn health is the stats-default 10.0 [M 0x1c7e58: the drone_stats word +8 for
+    // these guards is 0 at run time — the 07000005 snapshot [L] → the port's 10.0 default].
+    drop(r);
     let mut r2 = Ride::new(&iso);
-    for _ in 0..2600 { r2.step(Input::default()); }
+    let (d2, hp02) = {
+        let sim = r2.w.scene.sim.as_ref().unwrap();
+        let d0 = sim.drones.list.iter().enumerate()
+            .find(|(_, dr)| dr.present && !dr.corpse).map(|(i, _)| i).expect("a garrison drone at the load");
+        (d0, sim.drones.list[d0].health)
+    };
+    for _ in 0..600 { r2.step(Input::default()); }
     let sim = r2.w.scene.sim.as_ref().unwrap();
-    let sp = sim.drones.spawners.iter().find(|s| s.placement == 233).unwrap();
-    if let Some(&di2) = sp.spawned.first() {
-        assert!((sim.drones.list[di2].health - 10.0).abs() < 0.01,
-            "no fire → the drone keeps its spawn health (the stats-default 10.0 [M 0x1c7e58; L 07000005]) (got {})",
-            sim.drones.list[di2].health);
+    assert!((sim.drones.list[d2].health - hp02).abs() < 0.01 && hp02 > 0.0,
+        "no fire → the drone keeps its spawn health (the stats-default 10.0 [M 0x1c7e58; L 07000005]) (got {} from {hp02})",
+        sim.drones.list[d2].health);
+}
+
+/// KIND: the drone garrison, the GROUP-2 leg (spawner #233's spots, x ≈ −4.3 behind the shaft's
+/// structure) — the leg the -1 task parked, now pinned: NOTHING on the ride line reaches those
+/// spots, and the game's own ray cannot either. The blocker sits INSIDE the game's candidate
+/// set: the fire ray's candidates are `Collide_Pick` 0x1eb320:125's — ONLY `Collide_StraddleCels`
+/// 0x1eac98's BFS from the query's cel through the portals the ray crosses — and the BFS from
+/// the rider's cel floods 1–3 cells that include the blocking triangles (the probe measured the
+/// scoped first-hit EQUAL to the flat every-triangle first-hit at every sampled pose: the stat
+/// wall at [1.0, y, −2.5] for every ride height, plus the platform's own dynamic geometry as
+/// the near hit). Measured 2026-10-29 (probe_4a_fire_scoped, this branch): 0 of 2400 ride ticks
+/// had a clear eye→drone ray to #233's first spawned drone — flat (every triangle) AND scoped
+/// (the game's set) — and a 110-pose grid across the car footprint (x 0.5..5.0, z −5.5..−0.5 at
+/// the ride eye) had 0 flat-clear rays at every sampled tick (the scoped-only clears were BFS
+/// artifacts from the wall's far side, not openings). So the port's bullet/LOS path needs no
+/// fix for this leg: the rider's fire lands on #227's group instead (the test above); group 2
+/// is a floor-plate job — the garrison's own routes reach it (NDrone_InitDoorNodes 0x139a70).
+#[test]
+fn the_group2_spots_stay_out_of_the_riders_fire_line() {
+    let Some(iso) = iso() else { eprintln!("NF_ISO not set"); return };
+    let mut r = Ride::new(&iso);
+    let (di, _hp0) = loop {
+        {
+            let sim = r.w.scene.sim.as_ref().unwrap();
+            let sp = sim.drones.spawners.iter().find(|s| s.placement == 233).unwrap();
+            if let Some(&d0) = sp.spawned.first() { break (d0, sim.drones.list[d0].health); }
+        }
+        r.step(Input::default());
+        assert!(r.t < 3000, "the −40 plate's spawner never released its drones");
+    };
+    for tick in 0..2400u32 {
+        {
+            let sim = r.w.scene.sim.as_ref().unwrap();
+            let dr = &sim.drones.list[di];
+            if dr.present && !dr.corpse {
+                let e = [sim.bond.pos[0], sim.bond.pos[1] + sim.bond.eye - sim.bond.crouch_drop, sim.bond.pos[2]];
+                let cell = sim.world.find_cel(e);
+                let scoped = sim.world.segment_bullet_scoped(cell, e, dr.pos);
+                let flat = sim.world.segment_bullet(e, dr.pos);
+                assert!(scoped.is_some() && flat.is_some(),
+                    "tick {tick} pose {:?} drone {:?}: a clear fire ray appeared (scoped {scoped:?}, flat {flat:?}) — the pin is dead",
+                    sim.bond.pos, dr.pos);
+            }
+        }
+        if tick % 30 == 0 {
+            let sim = r.w.scene.sim.as_mut().unwrap();
+            sim.bond.pos = [3.0, key_y(r.y0, r.t) + 1.2, -3.4];
+            sim.drones.health.health = 100.0;
+        }
+        r.w.tick(Input::default(), false);
+        r.t += 1;
+        if r.t > 4400 { break; }
     }
 }
