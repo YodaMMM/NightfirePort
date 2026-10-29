@@ -236,6 +236,71 @@ fn probe_door2turbine_e_path() {
         }
         eprintln!("=== scan done ===");
     }
+    // The FINE ledge map: x 40.2..41.7 step 0.3, z −214.5..−209.5 step 0.5, ray y 13 -> 6.
+    {
+        let sim = w.scene.sim.as_ref().unwrap();
+        eprintln!("=== fine ledge map ===");
+        for z in [-214.5f32, -214.0, -213.5, -213.0, -212.5, -212.0, -211.5, -211.0, -210.5, -210.0, -209.5] {
+            let mut row = format!("z {z:7.1}: ");
+            let mut x = 40.2f32;
+            while x <= 41.71 {
+                let hit = sim.world.segment_hit([x, 13.0, z], [x, 6.0, z]);
+                match hit {
+                    Some((t, _)) => { let y = 13.0 - 7.0 * t; row.push_str(&format!("{y:5.2} ")); }
+                    None => row.push_str("  --  "),
+                }
+                x += 0.3;
+            }
+            eprintln!("{row}");
+        }
+        eprintln!("(x cols: 40.2 40.5 40.8 41.1 41.4 41.7)");
+    }
+    // The approach gap: x 36.8..40.3, z −214.5..−210.5 — how the corner connects south.
+    {
+        let sim = w.scene.sim.as_ref().unwrap();
+        eprintln!("=== approach gap map (x 36.8..40.3) ===");
+        for z in [-214.5f32, -214.0, -213.5, -213.0, -212.5, -212.0, -211.5, -211.0, -210.5] {
+            let mut row = format!("z {z:7.1}: ");
+            let mut x = 36.8f32;
+            while x <= 40.31 {
+                let hit = sim.world.segment_hit([x, 13.0, z], [x, 6.0, z]);
+                match hit {
+                    Some((t, _)) => { let y = 13.0 - 7.0 * t; row.push_str(&format!("{y:5.2} ")); }
+                    None => row.push_str("  --  "),
+                }
+                x += 0.5;
+            }
+            eprintln!("{row}");
+        }
+        eprintln!("(x cols: 36.8 37.3 37.8 38.3 38.8 39.3 39.8 40.3)");
+    }
+    // The parapet's west face: east->west rays at y 12.5, find the gaps.
+    {
+        let sim = w.scene.sim.as_ref().unwrap();
+        eprintln!("=== parapet west face rays (y 12.5, x 40.6 -> 38.0) ===");
+        let mut z = -218.0f32;
+        while z <= -213.9 {
+            let hit = sim.world.segment_hit([40.6, 12.5, z], [38.0, 12.5, z]);
+            let s = match hit { Some((t, _)) => format!("hit t={t:.2} x={:.2}", 40.6 - 2.6 * t), None => "clear".to_string() };
+            eprintln!("z {z:7.1}: {s}");
+            z += 0.5;
+        }
+        eprintln!("=== parapet top map (x 40.2..41.4, z −218..−213.5, ray 14->11) ===");
+        for z in [-218.0f32, -217.0, -216.0, -215.0, -214.5, -214.0] {
+            let mut row = format!("z {z:7.1}: ");
+            let mut x = 40.2f32;
+            while x <= 41.41 {
+                let hit = sim.world.segment_hit([x, 14.0, z], [x, 11.0, z]);
+                match hit {
+                    Some((t, _)) => { let y = 14.0 - 3.0 * t; row.push_str(&format!("{y:5.2} ")); }
+                    None => row.push_str("  --  "),
+                }
+                x += 0.3;
+            }
+            eprintln!("{row}");
+        }
+        eprintln!("(x cols: 40.2 40.5 40.8 41.1 41.4)");
+    }
     // The plate #274 blockers: what stands in the cell (5.79, 14.1, -111.1)?
     {
         let sim = w.scene.sim.as_ref().unwrap();

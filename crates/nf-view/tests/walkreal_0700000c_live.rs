@@ -273,24 +273,26 @@ fn walk_the_whole_mission_from_the_start_to_the_0d_handoff() {
     w.wait(10);
     eprintln!("[0c] the south-gap stand-in (the unpinned crossing) — the ring south-east walkway");
 
-    // Leg 9 (REAL to the door district, then the DOCUMENTED stand-in over the slot): the
-    // south-east walkway north to the ring's SE corner district — where `door2turbine` #281
-    // (40.0, 12.6, −210.4 [D]) bars the crossing onto the gate band. This session's disc census
-    // [D] (probe walkreal_probe0c_door_live): the walkway's own floor strip (y 12.02, x
-    // 39.98..40.41) ends in a wall (y 12.02..14.22) at z −213.51 (room_turbine01's collision);
-    // the door's 78-tri glist is the LEAF slab only (x 38.49..40.02, y 11.15..14.00, z
-    // −210.56..−210.36) — no stoop; a small 10.17 ledge patch and a 9.11 step sit east (x
-    // 40.37..41.54) with the shaft void (down to 6.17) north of −212.5-ish; the corner floors
-    // (11.06..11.14, x 36..40.5, z −210..−208) and the band ((44,−209) 11.17 / (44,−208) 10.34)
-    // are all in the port. The door's E gates are ALL open [M Door_Activate 0x135be0: ch_lock 0,
-    // lock_flag 0, approach 0, kind 0 closed → the swing arm SetState(8)]; nothing writes its
-    // ch_open 5 (the trigger/SS sweep is empty [D]) — the E press is the only opener, and the
-    // use sphere from the 10.17 ledge patch (head (40.9, 10.87, −211.3)) reaches the leaf's
-    // sphere (40.01, 12.57, −209.69) r 1.62 at dist ≈ 2.51 < 2.62 [M Collide_PickObj 0x1eae80's
-    // 0x101 arm]. The walker still cannot REACH that stance on real input: the walkway end's
-    // drop lands at 9.13 (z −213.68) and the 10.17 patch is too small to walk north from (the
-    // walker fell into the shaft at z −212.0 twice). The real-input leg + the exact stance are
-    // the next session's item; the band arrival keeps the older walkthrough's stand-in.
+    // Leg 9 (REAL to the door district, then the DOCUMENTED stand-in over it): the south-east
+    // walkway north to the ring's SE corner district — where `door2turbine` #281 (40.0, 12.6,
+    // −210.4 [D]) bars the crossing onto the gate band. This session's census settled the
+    // district [D, probe walkreal_probe0c_door_live — all from the disc's collision tris]:
+    // the walkway top strip (x 39.98..40.41, y 12.02, z −218.69..−213.51) ends in a wall (y
+    // 12.02..14.22) at z −213.51; the door's 78-tri glist is the LEAF slab only (x 38.49..40.02,
+    // y 11.15..14.00, z −210.56..−210.36, live sphere (40.01,12.57,−209.69) r 1.62) — no stoop;
+    // an 11.61 shelf (x 38.8..39.3, z −214.5..−213.0) and an 11.09 corridor (x 38.3..39.3, z
+    // −212.5..−210.5) lead into the ring SE corner (11.06..11.14, x 36..40.5, z −210..−208),
+    // where the use sphere reaches the leaf at dist ≈ 1.2 < 2.62 [M Collide_PickObj 0x1eae80's
+    // 0x101 arm]; the shaft void (bottom 6.17) fills x 40.5..41.7, z −214.5..−211; a thin rail
+    // (top ≈ 13.05, x ≈ 40.45..40.6, z −218..−214) rides the walkway's east edge — the walker
+    // balances on it and can step neither west (a wall at x ≈ 39.99 at y 12.5) nor north (the
+    // shaft). The door's E gates are ALL open [M Door_Activate 0x135be0: ch_lock 0, lock_flag 0,
+    // approach 0, kind 0 closed → the swing arm's SetState(8)]; nothing writes its ch_open 5
+    // (the trigger/SS sweep is empty [D]) — the E press is the only opener. The prior session's
+    // "state holds 0x2" was the ROUTE (the walker wedged south-west of the leaf, out of the
+    // sphere's reach), not the door code. The real-input leg through the 11.61 shelf → the
+    // corner → the E press is the next session's item; the band arrival keeps the older
+    // walkthrough's stand-in.
     w.walk_to(Wp::new(40.5, 11.5, -211.5).r(1.5), "the SE walkway to the turbine door");
     {
         let sim = w.scene.sim.as_mut().unwrap();

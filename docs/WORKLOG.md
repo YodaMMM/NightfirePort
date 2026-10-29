@@ -23,3 +23,16 @@ east (x 40.37..41.54) with the shaft void below (6.17); the corner (11.06..11.14
 of the sphere's reach (use_point dist 3.1+ vs reach 2.62 [M Collide_PickObj 0x1eae80's 0x101 arm]).
 The E stance from the 10.17 ledge patch computes to dist ≈ 2.51 < 2.62 — the real-input leg is
 being routed; the walkreal keeps its green shape (2 passed) with the walkway-end wall pinned.
+
+Progress (00:40 UTC): the real-input leg attempt — the disc floor map now covers the whole
+approach: the walkway top strip (x 39.98..40.41, y 12.02, z −218.69..−213.51) ends in the end
+wall (y 12.02..14.22, z −213.51); an 11.61 shelf (x 38.8..39.3, z −214.5..−213.0) and an 11.09
+corridor (x 38.3..39.3, z −212.5..−210.5) lead into the ring SE corner (11.06..11.14, x 36..40.5,
+z −210..−208) — where the use sphere reaches the leaf's live sphere (40.01,12.57,−209.69) r 1.62
+at dist ≈ 1.2 < 2.62 [M Collide_PickObj 0x1eae80's 0x101 arm]: the E stance EXISTS in the port.
+The shaft void (bottom 6.17) fills x 40.5..41.7, z −214.5..−211. The walker could not reach the
+shelf: it balances on a thin ~13.05 surface at x ≈ 40.45..40.6 (a rail or a roof slab over the
+12.02 channel — its owner is not in the static census; possibly a drone under Bond), walls west
+at x ≈ 39.99 (y 12.5), and drops north into the shaft. Three route iterations all wedged or fell
+(STUCK dumps in the run logs). The committed test keeps the documented stand-in + the new
+walkway-end-wall pin [D]; the door E-open from the corner is the next session's first item.
