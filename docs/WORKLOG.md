@@ -12,3 +12,6 @@ exit firing.
 
 ## level-01-every-objective — 06:45 UTC 2026-10-29
 Sandbox reset mid-task; re-setup (clone, work-slim, ISO, user-prefix ALSA with pkg-config libdir fix, rustup). Merged origin/master (a213e841) so the suite runs on the final tree. Test fixes from d9c51ceb stand: walkreal_07000001_live pins obj0 announced-but-not-folded (fold belongs to 07000002 intro stream 7 [D 07800002 0x06000084]); walkreal_07000002_live asserts the cross-level fold after two settle ticks [M 0x1827d8 case 3]. Next: full suite on this tree, then report.
+
+## level-01-every-objective — 08:25 UTC 2026-10-29
+Final tree (merged origin/master at a213e841): walkreal_07000001_live 4 passed / 0 failed (33.1s), walkreal_07000002_live 1 passed / 0 failed (50.6s, cross-level obj0 fold pinned). Chunked suite (sandbox kills background jobs): 265/895 binaries, 975 passed / 0 failed / 89 ignored, zero real failures; mp_stress_explosives_live SIGKILL is a sandbox resource kill (reproduced standalone, 3.5G free). Remaining 630 binaries need ~10 chunk-hours — next session reruns tools/test/chunk_suite.py from scratch on this tree. Report: docs/reports/level-01-every-objective.md.
