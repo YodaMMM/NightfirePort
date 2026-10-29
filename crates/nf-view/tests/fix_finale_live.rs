@@ -52,7 +52,7 @@ fn wrap_pi(a: f32) -> f32 {
 /// to `ty` [M Player_SSScanMode 0x193098:121-124], the eased forward cruise to (`tx`,`tz`)
 /// [M :64-110 + the 0x193600:284-295 integration], the toggle off, the landing wait. Every tick
 /// is `Input` through `step_bond` — no pos writes; the motion is the substate's own.
-fn fly_to(scene: &mut nf_view::Scene, tx: f32, ty: f32, tz: f32, r: f32, max: u32, label: &str) -> bool {
+fn fly_to(scene: &mut nf_view::scene::Scene, tx: f32, ty: f32, tz: f32, r: f32, max: u32, label: &str) -> bool {
     let mut toggled = false;
     let mut off_sent = false;
     for t in 0..max {
