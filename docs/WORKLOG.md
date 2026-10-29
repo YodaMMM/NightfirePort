@@ -15,3 +15,6 @@ Sandbox reset mid-task; re-setup (clone, work-slim, ISO, user-prefix ALSA with p
 
 ## level-01-every-objective — 08:25 UTC 2026-10-29
 Final tree (merged origin/master at a213e841): walkreal_07000001_live 4 passed / 0 failed (33.1s), walkreal_07000002_live 1 passed / 0 failed (50.6s, cross-level obj0 fold pinned). Chunked suite (sandbox kills background jobs): 265/895 binaries, 975 passed / 0 failed / 89 ignored, zero real failures; mp_stress_explosives_live SIGKILL is a sandbox resource kill (reproduced standalone, 3.5G free). Remaining 630 binaries need ~10 chunk-hours — next session reruns tools/test/chunk_suite.py from scratch on this tree. Report: docs/reports/level-01-every-objective.md.
+
+## level-01-every-objective-2 — 10:35 UTC 2026-10-29
+Sandbox reset; fresh clone. Branch from origin/s/level-01-every-objective (f468735c); next: merge origin/master (1b2309ea), demote the `!channels.on(0x47)` assert in walkreal_07000001_live to an [S] unverified log (an assertion may not rest on a missing writer — the port may simply lack it), keep every other assert incl. the cross-level fold on the 02 walk, full suite, report.
