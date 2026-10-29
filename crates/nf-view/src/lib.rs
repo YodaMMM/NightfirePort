@@ -4995,6 +4995,10 @@ impl App {
                                     // 0x1a2cc0 has none either], so a port-only key would draw an
                                     // item Bond does not carry.
                                     goggles_action: false,
+                                    // The pack-flight toggle (the game's dev action-39 edge): a
+                                    // debug key, not a shipped control-style bind — the window
+                                    // exposes it on F (the walker drives it like any action edge).
+                                    fly_toggle: self.just.remove(&KeyCode::KeyF),
                                 };
                                 (input, self.trigger, self.just.remove(&KeyCode::KeyR), self.just.remove(&KeyCode::KeyE))
                             };

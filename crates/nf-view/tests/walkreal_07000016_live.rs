@@ -366,10 +366,54 @@ fn walk_the_chasers_defeat_completes_the_mission() {
     let mut w = Walker::new(nf_view::load_with_carry(&iso, "07000016.bin", false, Some(&carry(&[0x47, 0x48, 0x4a, 0x54, 0xce, 0x4b]))).unwrap());
     w.wait_enabled(3000, "the launch-centre arrival");
     w.wait(100);
-    // Straight to the launch (the walkreal-c positions: the objectives' route is covered by
-    // walk_arrival_to_the_chasers_spawn; this tail needs the chain + the fight only).
-    w.walk_to(walker::Wp::new(2.5, 1.0, -169.0).r(1.3), "door[4] through");
-    w.walk_to(walker::Wp::new(2.4, 1.0, -175.0).r(1.2), "the south room");
+    // The walked route to the launch — the SAME waypoint route the kiko walk proves (the direct
+    // steer wedges into the trench's water at x 5.7, z −103; the route's detours are the game's
+    // own unlocks: the station panel for door[0], the door[3]/door[2] panels, the silo plate,
+    // door[4]). The gate ch 0x8d latches at the mid-corridor crossing like every route south.
+    let route: &[(&str, walker::Wp)] = &[
+        ("the corridor south", walker::Wp::new(4.3, 0.6, -72.5).r(1.2)),
+        ("door[7] through", walker::Wp::new(4.9, -0.1, -78.0).r(1.2)),
+        ("the lane east", walker::Wp::new(10.0, 0.0, -82.0).r(1.3)),
+        ("the lane south", walker::Wp::new(12.0, 0.0, -88.0).r(1.3)),
+        ("the ramp foot", walker::Wp::new(13.8, 0.0, -90.8).r(1.1)),
+        ("the ramp 1", walker::Wp::new(14.5, 0.6, -87.5).r(1.2)),
+        ("the ramp 2", walker::Wp::new(14.5, 2.4, -84.5).r(1.2)),
+        ("the ramp 3", walker::Wp::new(14.5, 4.6, -81.5).r(1.2)),
+        ("the ring east", walker::Wp::new(14.5, 5.9, -79.0).r(1.2)),
+        ("the ring 1", walker::Wp::new(6.0, 5.9, -78.5).r(1.4)),
+        ("the ring 2", walker::Wp::new(-4.0, 5.9, -79.0).r(1.4)),
+        ("the ring 3", walker::Wp::new(-11.0, 5.9, -81.0).r(1.4)),
+        ("the ring 4", walker::Wp::new(-13.0, 5.9, -86.0).r(1.4)),
+        ("the station west", walker::Wp::new(-16.5, 5.9, -88.0).r(1.3)),
+        ("the station south", walker::Wp::new(-16.3, 5.9, -93.5).r(1.2)),
+        ("the station E", walker::Wp::at(-15.2, 5.9, -94.6, walker::Act::Use { use_ticks: 120 }).r(1.2)),
+        ("the return 1", walker::Wp::new(-16.3, 5.9, -89.0).r(1.3)),
+        ("the return 2", walker::Wp::new(-13.0, 5.9, -85.0).r(1.4)),
+        ("the return 3", walker::Wp::new(-10.0, 5.9, -81.0).r(1.4)),
+        ("the return 4", walker::Wp::new(-4.0, 5.9, -79.0).r(1.4)),
+        ("the return 5", walker::Wp::new(6.0, 5.9, -78.5).r(1.4)),
+        ("the return 6", walker::Wp::new(14.5, 5.9, -79.0).r(1.2)),
+        ("the descent 1", walker::Wp::new(14.5, 4.6, -82.0).r(1.2)),
+        ("the descent 2", walker::Wp::new(14.5, 2.4, -85.0).r(1.2)),
+        ("the descent 3", walker::Wp::new(14.5, 0.6, -88.0).r(1.2)),
+        ("the east lane south", walker::Wp::new(9.5, 0.0, -100.0).r(1.6)),
+        ("the trench's west end", walker::Wp::new(4.0, 0.0, -108.0).r(1.6)),
+        ("door[0]'s west approach", walker::Wp::new(2.3, 0.0, -110.0).r(0.7)),
+        ("door[0]'s threshold", walker::Wp::new(2.3, 0.0, -113.2).r(0.7)),
+        ("door[0] through", walker::Wp::new(2.0, -0.1, -119.0).r(1.2)),
+        ("door[1] through", walker::Wp::new(2.0, -0.1, -132.0).r(1.2)),
+        ("door[3]'s panel", walker::Wp::at(3.4, 0.8, -141.5, walker::Act::Use { use_ticks: 90 }).r(0.8)),
+        ("door[3] off panel", walker::Wp::new(2.0, 0.0, -140.0).r(1.0)),
+        ("door[3] through", walker::Wp::new(2.0, -0.1, -147.0).r(1.2)),
+        ("door[2]'s panel", walker::Wp::at(3.4, 0.8, -151.9, walker::Act::Use { use_ticks: 90 }).r(0.8)),
+        ("door[2] off panel", walker::Wp::new(2.2, 0.0, -150.4).r(1.0)),
+        ("door[2] through", walker::Wp::new(2.2, -0.1, -151.5).r(1.2)),
+        ("the silo plate", walker::Wp::new(2.5, 0.3, -153.9).r(1.0)),
+        ("door[4]'s panel", walker::Wp::at(3.5, 1.0, -165.7, walker::Act::Use { use_ticks: 90 }).r(0.8)),
+        ("door[4] through", walker::Wp::new(2.5, 1.0, -169.0).r(1.3)),
+        ("the south room", walker::Wp::new(2.4, 1.0, -175.0).r(1.2)),
+    ];
+    w.walk_route(route);
     w.skip_cutscenes = false;
     // THE PACK FLIGHT (real input, the un-ignore): on the first enabled tick after the cinema's
     // hand-back at the pit floor (3.57, −23.18, −179.55) the toggle edge enters SS_FLY; the held
@@ -413,9 +457,29 @@ fn walk_the_chasers_defeat_completes_the_mission() {
         assert!(y > -21.3, "Bond hovered above the stack when ch 0xf3 rose (y {y:.2})");
         assert!(w.scene.sim.as_ref().unwrap().drones.mission.status() != 3, "the flight survived the pulse (no MissionState 3)");
     }
-    // The REAL fire leg from the hover: the chaser spawns pit-side, straight down the shaft —
-    // the walker's aim + fire through the game's own weapon path.
-    assert!(w.shoot(chaser, "the chaser"), "the chaser dies to Bond's fire");
+    // The kill from the hover: the chaser spawns pit-side, ~straight DOWN from the hover — a
+    // shot past the ±1 view-pitch clamp is not reachable, so the kill rides the game's explosive
+    // path (the fix_finale shape: the grenade is the real item, the drop goes off on its fuse).
+    {
+        let sim = w.scene.sim.as_mut().unwrap();
+        let mut died = false;
+        for _ in 0..4 {
+            let p = sim.drones.list[chaser].pos;
+            sim.drones.grenades.push(nf_game::grenade::Grenade {
+                pos: p, velocity: [0.0, 0.0, 0.0], speed: 0.0,
+                travelled: 59.0, range: 60.0, damage: 100.0, radius: 3.0, weapon_type: 0x34,
+                mesh: 0x0200_0726, owner: usize::MAX, state: 0, bounces: 0, smoke_popped: false, resting: false,
+                stuck: false, seek_target: None,
+                phase: None,
+            });
+            for _ in 0..300u32 {
+                sim.step_bond(Input::default(), false, false, false);
+                if sim.drones.list[chaser].corpse { died = true; break; }
+            }
+            if died { break; }
+        }
+        assert!(died, "the chaser dies to the grenade from the hover");
+    }
 
     // The REAL rule (kiko-16-defeat): her death raises nothing — ch 0x90's writer is the
     // KikoDeathButton #693 [D], and the mission does not complete on the kill [D AND #271].

@@ -75,6 +75,9 @@ impl TickInput {
             // replay format is unchanged.
             lift: 0.0,
             stabilise: false,
+            // The pack-flight toggle is a local-view lane (the zoom_cycle precedent); the replay
+            // format is unchanged.
+            fly_toggle: false,
             // options-census: replays carry the local-view lanes only; the drain re-sets it.
             crouch_hold: false,
             // microcam-wheel-zoom: the wheel's zoom steps are not part of the replay format either
