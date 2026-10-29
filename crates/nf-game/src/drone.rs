@@ -14314,7 +14314,17 @@ fn segment_hits_sphere(a: V3, b: V3, c: V3, r: f32) -> bool {
             let mut first_world = true;
             let mut pierced_last = false;
             for _ in 0..8 {
-                let Some((t, n, m)) = d.world.segment_surface(cur, end, false) else { break };
+                // The game's re-query is the cel-scoped pick: the candidates come ONLY from
+                // `Collide_StraddleCels` from the bullet's CURRENT cel [M Collide_Pick 0x1eb320:125],
+                // re-fed every tick [M Bullet_update 0x12e7b0 disasm 0x12f0cc-0x12f0d8] — the first
+                // hop's cell is the segment start (the game's tick-start cel), a pierce hop re-feeds
+                // from just past the exit face (the game walks the SAME tick's remaining HITDATA
+                // list instead of re-querying; the re-query from the moved position mirrors the
+                // next tick's re-feed) — [S] unverified for the within-tick hop, the list walk has
+                // no port-side record. Pass faces are kept: the flight trace's HITTEST+0x98 = 0
+                // [M 0x12f040] drops nothing in Collide_Intersect 0x1ebaa8, the walk decides.
+                let cell = d.world.find_cel(cur);
+                let Some((t, n, m, node_pass)) = d.world.segment_surface_flags_scoped(cell, cur, end) else { break };
                 let seg = [end[0] - cur[0], end[1] - cur[1], end[2] - cur[2]];
                 let hit = [cur[0] + seg[0] * t, cur[1] + seg[1] * t, cur[2] + seg[2] * t];
                 let flags6c_w = d.weapons.records.get(weapon as usize)
@@ -14322,8 +14332,10 @@ fn segment_hits_sphere(a: V3, b: V3, c: V3, r: f32) -> bool {
                 // THE PENETRATION ROLL [M 0x12cee0..0x12cfb8] — the game computes the pass here,
                 // before any effect of this hit (the flags, `Effect_Create`, the explode arms);
                 // `flags6c_w` gates the glass rule (material 0x10 passes unless +0x6c & 0x800,
-                // fix-rocket-glass-08).
-                let pierce = crate::effect::penetration_roll(&mut self.rng, m, weapon, flags6c_w);
+                // fix-rocket-glass-08). The hit's node pass flag (the glist-0x40 rule) rides the
+                // scoped query's 4th field — `Collide_Intersect` 0x1ebaa8:143-145 ORs it into
+                // HITDATA+0x51 bit 1 and the walk's base pass reads that bit [M 0x12cea0..0x12cea8].
+                let pierce = crate::effect::penetration_roll_node(&mut self.rng, m, weapon, node_pass, flags6c_w);
                 if first_world {
                     self.player_impacts.push(PlayerImpact::World(hit));
                     // `PlrStat_LogShotHitScenery(0)` 0x198408 (SP_Update 0x1dbda8:261; Destroy_Smash
