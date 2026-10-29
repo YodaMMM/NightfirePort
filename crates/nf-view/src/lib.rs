@@ -293,6 +293,8 @@ fn view_model_entries(scene: &scene::Scene, l: &scene::SkinLayout) -> Option<Vec
     // `Player_PositionCamera` 0x18f5d8 case 0xb: `View_SetDrawInNoViews(BLData+0x7e8)`; the entry
     // holsters the weapon, `Player_WeaponNone` 0x196758:114].
     if s.bond.substate == nf_game::player::SS_CREEP { return None; }
+    // cable-3p: the wire's third-person camera hides it the same way [M 0x18f5d8 case 0xb :229].
+    if s.wire_camera().is_some() { return None; }
     // nis-event9-cnis: the event-9 cut-scene orbit hides the view model with the same call [M
     // `Player_PositionCamera` 0x18f5d8 case 2: `View_SetDrawInNoViews(BLData+0x7e8)`, :148].
     if s.bond.cam_mode == 2 { return None; }
@@ -5431,6 +5433,11 @@ impl App {
                             if let Some((p, yaw, pitch, fov)) = sim.creep_camera() {
                                 self.cam = Camera { pos: Vec3::new(p[0], p[1], p[2]), yaw, pitch, fov: GAME_FOV / fov };
                             }
+                            // cable-3p [M `Player_PositionCamera` 0x18f5d8 case 0xb -> `camera_tracking` 0x1ba5e0's
+                            // wire branch]: on a wire or zipline the view is the third-person tracking camera.
+                            if let Some((p, yaw, pitch, fov)) = sim.wire_camera() {
+                                self.cam = Camera { pos: Vec3::new(p[0], p[1], p[2]), yaw, pitch, fov: GAME_FOV / fov };
+                            }
                             // nis-event9-cnis [M `Player_PositionCamera` 0x18f5d8 case 2]: NIS event
                             // 9's behind-Bond cut-scene orbit (`Player_Cam2Mode` 0x195fc8 mode 3 →
                             // `Player_SetCamMode(BL, 2)`) — 10 units behind on the XZ plane at Bond's
@@ -6688,6 +6695,8 @@ pub fn run() -> Result<()> {
                 Some((a.parse().ok()?, b.parse().ok()?, val))
             };
             let use_at: Option<u32> = std::env::var("NF_USE_AT").ok().and_then(|v| v.parse().ok());
+            // Render aid (cable-3p): `NF_JUMP_AT=t` presses jump on tick t (the wire jump-grab).
+            let jump_at: Option<u32> = std::env::var("NF_JUMP_AT").ok().and_then(|v| v.parse().ok());
             // Render aid (break-debris draw): `NF_LIST_BREAKS=1` prints every breakable's index, kind
             // and box centre (pick a spot to shoot one from).
             if std::env::var_os("NF_LIST_BREAKS").is_some() {
@@ -6747,6 +6756,7 @@ pub fn run() -> Result<()> {
                 let mode_now = modes.contains(&t);
                 let mut inp = nf_game::player::Input { mode_switch: mode_now, ..shot_input };
                 if let Some((a, b, v)) = fwd { if (a..=b).contains(&t) { inp.forward = v; } }
+                if jump_at == Some(t) { inp.jump = true; }
                 if let Some((a, b, v)) = turn { if (a..=b).contains(&t) { inp.turn = v; } }
                 if walk { sim.step_bond(inp, pulls.contains(&t), false, use_at == Some(t)); } else { sim.step([cam.pos.x, cam.pos.y, cam.pos.z], cam.dir().to_array(), pulls.contains(&t), false); }
             }
@@ -6760,6 +6770,7 @@ pub fn run() -> Result<()> {
             }
             if walk { let h = sim.bond.head(); cam = Camera { pos: Vec3::new(h[0], h[1], h[2]), yaw: sim.bond.yaw, pitch: sim.bond.pitch * std::f32::consts::FRAC_PI_2, fov: GAME_FOV / sim.zoom }; }
             if walk { if let Some((p, yaw, pitch, fov)) = sim.script_camera() { cam = Camera { pos: Vec3::new(p[0], p[1], p[2]), yaw, pitch, fov }; } }
+            if walk { if let Some((p, yaw, pitch, fov)) = sim.wire_camera() { cam = Camera { pos: Vec3::new(p[0], p[1], p[2]), yaw, pitch, fov: GAME_FOV / fov }; } }
             eprintln!("Bond at {:?}{}, health {}", sim.bond.pos, if sim.disabled { " (disabled by a script)" } else { "" }, sim.drones.health.health);
             for u in sim.unposed(&scene.characters) { eprintln!("unposed: {u}"); }
             for p in &sim.drones.pickups { eprintln!("pickup: weapon {:#x}, {} rounds at {:?}", p.weapon, p.rounds, &p.m[3][..3]); }

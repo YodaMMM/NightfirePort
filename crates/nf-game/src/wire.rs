@@ -26,6 +26,9 @@ pub struct Wire {
     /// `obj+0x80..0x8C`: the world-sphere centre (`Control_BuildWorldSph` 0x133070 over the placement's
     /// object bounds, like `Ladder::create`). All three segments derive from it at grab/ride time [M].
     pub centre: V3,
+    /// `obj+0x30`: the object's own position (the placement translation). `camera_tracking`
+    /// 0x1ba5e0:83-95 builds the third-person camera's line from THIS, not the sphere centre [M].
+    pub origin: V3,
     /// `obj+0x8C`: the world-sphere radius (4.039 on 07000005's "Wire_Cable" [L ee_start_05.bin 016dc430]).
     pub radius: f32,
     /// `obj+0x54`: the yaw from the object matrix (the placement's yaw). The grab/travel/ride directions
@@ -73,6 +76,7 @@ impl Wire {
         let pitch = -p.rotation[2];
         Some(Wire {
             centre,
+            origin: p.translation,
             radius: o.radius * s_max,
             yaw,
             pitch,

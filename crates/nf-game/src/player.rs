@@ -57,6 +57,19 @@ pub const SS_CREEP: u8 = 7;
 /// `Player_Zipline` 0x197f50 — the zipline ride (wire type 2) [M dispatch case 0xF].
 pub const SS_ZIPLINE: u8 = 0xf;
 
+/// The player's skin hash, per level — `Player_Init` 0x1910f8:94-108's switch on the level id
+/// (`GameState+0x12`), the value handed to `AnimObjectNew` [M]: 0x0500009 on 07000001-07000004,
+/// 0x050000d on 07000007/07000008, 0x050007c on 0700001b, 0x0500007 everywhere else [D each in its
+/// levels' own archives].
+pub fn player_skin_hash(level: u32) -> u32 {
+    match level {
+        0x0700_0001..=0x0700_0004 => 0x0500_0009,
+        0x0700_0007 | 0x0700_0008 => 0x0500_000d,
+        0x0700_001b => 0x0500_007c,
+        _ => 0x0500_0007,
+    }
+}
+
 /// The zero-g substates (dispatch cases 8/9 share the `Player_ZeroG` 0x192ab0 body [M 0x193600:
 /// 238-241]). 9 is the one the game ever sets: the 0700001b spacewalk's script handler answers its
 /// 0x4b event with `ChangeSubState(glb_players, 9 | 0)` [M C_CHCHZEROG 0x216388 — 9 when its msg

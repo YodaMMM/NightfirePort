@@ -158,7 +158,7 @@ fn zipline_rides_down_and_dismounts_at_the_lower_end() {
     let world = nf_game::world::CollisionWorld::from_triangles(Vec::new());
     // A sloped wire: yaw −π/2 → the segment runs along Z; pitch 0.3 tilts it.
     let wire = nf_game::wire::Wire {
-        centre: [0.0, 10.0, 0.0], radius: 8.0, yaw: -std::f32::consts::FRAC_PI_2, pitch: 0.3,
+        centre: [0.0, 10.0, 0.0], origin: [0.0, 10.0, 0.0], radius: 8.0, yaw: -std::f32::consts::FRAC_PI_2, pitch: 0.3,
         wire_type: 2, param0: 0, param2: 0, channel: 0,
     };
     let (a, b) = wire.zipline_segment();

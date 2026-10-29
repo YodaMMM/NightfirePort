@@ -3510,6 +3510,61 @@ impl Sim {
         Some((cam, yaw, pitch, 1.0))
     }
 
+    /// cable-3p: the wire's third-person tracking camera (`Player_PositionCamera` 0x18f5d8 case 0xb ->
+    /// `camera_tracking` 0x1ba5e0, the wire branch), Some while Bond hangs on a wire or rides a zipline
+    /// in cam mode 0xB (`Player_CollWire` 0x197130 sets it with viewer+0x1F0 = 4.0; the drops set 0
+    /// [M]). Position, yaw, pitch (the window's Camera convention) and the FOV factor 1.0. Per tick
+    /// [M 0x1ba5e0]:
+    /// 1. the line: obj+0x30 +- `Vec_Spherical_2_Cartesian(obj+0x8C, obj+0x54 + pi/2, obj+0x58)`,
+    ///    both ends' Y -1.0 (+1.0 only for wire type 1, which no grab accepts) [:83-108];
+    /// 2. the tracked point = the closest point of that line to Bond (obj+0x30), and
+    ///    t = Dist2D(start, closest) / Dist2D(start, end) [:109-113];
+    /// 3. the pitch pi - t*pi/6, the yaw obj+0x54, +-pi/4 by the move-mode byte (7 -> +, 8 -> -) [:114-148];
+    /// 4. the camera at `closest - Cartesian(4.0, yaw, -pitch)` [:149-154];
+    /// 5. a wire whose instance[1] (placement param 0) is non-zero takes the position from
+    ///    `ThirdPersonCameras[param0]` at t (`ThirdCam_GetPos` 0x1bc590), and that camera's flag byte
+    ///    (ThirdCam param 1) picks the view: 0 = the spline matrix as is, else the look-at [:171-182];
+    /// 6. otherwise the look at the tracked point [:185-202].
+    pub fn wire_camera(&self) -> Option<([f32; 3], f32, f32, f32)> {
+        use nf_game::player::{SS_WIRE, SS_ZIPLINE};
+        if self.disabled || self.bond.cam_mode != 0xB || !matches!(self.bond.substate, SS_WIRE | SS_ZIPLINE) { return None; }
+        let w = self.wires.get(self.bond.wire?)?;
+        let off = nf_game::searchlight::spherical(w.radius, w.yaw + std::f32::consts::FRAC_PI_2, w.pitch);
+        let lift = if w.wire_type == 1 { 1.0 } else { -1.0 };
+        let o = w.origin;
+        let a = [o[0] + off[0], o[1] + off[1] + lift, o[2] + off[2]];
+        let b = [o[0] - off[0], o[1] - off[1] + lift, o[2] - off[2]];
+        let closest = nf_game::wire::Wire::closest_point(a, b, self.bond.pos);
+        let d2 = |p: [f32; 3], q: [f32; 3]| ((p[0] - q[0]).powi(2) + (p[2] - q[2]).powi(2)).sqrt();
+        let t = d2(a, closest) / d2(a, b).max(1e-6);
+        let pitch = std::f32::consts::PI - t * 0.523_598_8;
+        let mut yaw = w.yaw;
+        if self.bond.mode == 7 { yaw += std::f32::consts::FRAC_PI_4; }
+        if self.bond.mode == 8 { yaw -= std::f32::consts::FRAC_PI_4; }
+        // `Vec_Spherical_2_Cartesian` with the game's height sign (−r·sin φ — the creep camera's resolved
+        // convention, see `creep_camera`): at pitch π − t·π/6 the camera rises above the tracked point,
+        // looking down on Bond [L PCSX2 07000005 cable, audits/render-1029-cable p-stand].
+        let c = nf_game::searchlight::spherical(4.0, yaw, -pitch);
+        let c = [c[0], -c[1], c[2]];
+        let mut cam = [closest[0] - c[0], closest[1] - c[1], closest[2] - c[2]];
+        if w.param0 != 0 {
+            if let Some(tc) = self.drones.worldobjs.thirdcams.iter().find(|tc| tc.cam_id == w.param0) {
+                if let Some(m) = tc.get_pos(t) {
+                    cam = [m[3][0], m[3][1], m[3][2]];
+                    if tc.flag == 0 {
+                        // The spline matrix as the view: its forward row.
+                        let f = m[2];
+                        let l = (f[0] * f[0] + f[1] * f[1] + f[2] * f[2]).sqrt().max(1e-6);
+                        return Some((cam, f[0].atan2(f[2]), (f[1] / l).clamp(-1.0, 1.0).asin(), 1.0));
+                    }
+                }
+            }
+        }
+        let d = [closest[0] - cam[0], closest[1] - cam[1], closest[2] - cam[2]];
+        let horiz = (d[0] * d[0] + d[2] * d[2]).sqrt();
+        Some((cam, d[0].atan2(d[2]), d[1].atan2(horiz.max(1e-4)), 1.0))
+    }
+
     /// nis-event9-cnis: NIS event 9's cut-scene camera (`Player_PositionCamera` 0x18f5d8 case 2),
     /// Some while `BL+0x950 == 2` — the mode `Player_Cam2Mode` 0x195fc8's mode-3 arm set. The game,
     /// per tick [M 0x18f5d8 case 2:145-156]:
@@ -6118,6 +6173,9 @@ pub struct Scene {
     pub view_models: HashMap<u8, usize>,
     /// The MP bodies: (player slot, character index) — see `Scene::build`'s MP-body block.
     pub mp_bodies: Vec<(usize, usize)>,
+    /// cable-3p: Bond's own third-person body character (single player) - drawn only while a
+    /// third-person camera mode runs (`Sim::wire_camera`).
+    pub bond_body: Option<usize>,
     /// The MP bodies' weapon attachments: attachment index → (slot, weapon id).
     pub mp_body_weapons: HashMap<u32, (usize, u8)>,
     /// The snow flake texture (`DrawDrops`: 0x03000045).
@@ -7547,6 +7605,38 @@ pub fn build(level: &Level, cels_only: bool, skeletons: &HashMap<u8, Skeleton>, 
             }
             if d.mp_body_skins.iter().any(|&s| s != 0) {
                 eprintln!("mp: bodies {:?} (slot, character) from skins {:x?}", mp_bodies, d.mp_body_skins);
+            }
+        }
+        // cable-3p: Bond's own third-person body (single player). `Player_Init` 0x1910f8:94-108 builds
+        // the player's anim object from the per-level skin [M]; first person never draws it, but the
+        // third-person camera modes do (`Player_PositionCamera` 0x18f5d8 case 0xb:
+        // `View_SetDrawInAllViews(obj)` + `View_SetDrawInNoViews(BLData+0x7e8)` [M :228-229]). Built
+        // hidden; `frame_state_for` poses it while the wire camera runs.
+        let mut bond_body: Option<usize> = None;
+        if let Some(d) = drones.filter(|d| d.mp_body_skins.iter().all(|&s| s == 0)) {
+            let sh = nf_game::player::player_skin_hash(d.level_id);
+            if let (Some(skin), Some(skeleton)) = (level.skins.get(&sh), level.skins.get(&sh).and_then(|k| skeletons.get(&k.skeleton))) {
+                let ident = anim::quat_trans_to_mat([0.0, 0.0, 0.0, 1.0], [0.0; 3]);
+                let placement = level.maps[level.main_map().unwrap_or(0)].placements.first().cloned().unwrap_or_default();
+                let ci = characters.len() as u32;
+                let mut slot_bones = Vec::new();
+                let mut morph = None;
+                for &mh in skin.main.iter().flatten() {
+                    let Some(&(map, object)) = level.by_hash.get(&mh) else { continue };
+                    let inst = Instance { map, object, matrix: ident, placement: placement.clone() };
+                    add_instance(level, &inst, Layer::Character, Some((ci, None)), &mut groups, None, None, None, None, [1.0; 3], &room_cels, u32::MAX, u32::MAX);
+                    slot_bones = level.maps[map].objects[object].gfx.slot_bones.clone();
+                    morph = level.maps[map].objects[object].morph_targets.clone();
+                }
+                for &(bone, part) in &skin.extra {
+                    let Some(&(map, object)) = part.and_then(|ph| level.by_hash.get(&ph)) else { continue };
+                    let pinst = Instance { map, object, matrix: ident, placement: placement.clone() };
+                    add_instance(level, &pinst, Layer::Character, Some((ci, Some(attachments.len() as u32))), &mut groups, None, None, None, None, [1.0; 3], &room_cels, u32::MAX, u32::MAX);
+                    attachments.push(Attachment { character: ci, bone: bone as usize, local: ident, flash: None, tracer: None, dropped: false, aims_light: None, projectile: None, script: None, gas: None, effect: None, silencer: false, quiver_bolt: None, swap_piece: false, watch_hand: None, pda_digit: None });
+                }
+                char_placements.push(None);
+                characters.push(Character { matrix: ident, skin: skin.clone(), skeleton: skeleton.clone(), slot_bones, start: None, role: drone::SpawnRole::Placed, floor: None, script: None, morph_targets: morph });
+                bond_body = Some(ci as usize);
             }
         }
         // Script objects (docs/systems/script-player.md): every animation and drawn entity the main map's script players
@@ -8998,7 +9088,7 @@ pub fn build(level: &Level, cels_only: bool, skeletons: &HashMap<u8, Skeleton>, 
                 }
             }
         }
-        Scene { shard_tex, cels: room_cels, cel_graph, streams: None, music_files: None, music_tables: None, sound_bank: None, sound_spares: Vec::new(), snow_texture, vertices, indices, materials, textures, hud_textures, woman: None, hud, script_billboards, view_models, mp_bodies, mp_body_weapons, mp_char_bodies, mp_anim_sets, fog, bounds, start, stats, characters, char_vertex_start, char_verts, sequences, attachments, sim, colliders, models_0x800, npc_pool, ladders_drawn, grapple_hooks_drawn, misc_drawn, lock_matrices, dynobj_matrices, rotor_placements, gunimp_placements,
+        Scene { shard_tex, cels: room_cels, cel_graph, streams: None, music_files: None, music_tables: None, sound_bank: None, sound_spares: Vec::new(), snow_texture, vertices, indices, materials, textures, hud_textures, woman: None, hud, script_billboards, view_models, mp_bodies, bond_body, mp_body_weapons, mp_char_bodies, mp_anim_sets, fog, bounds, start, stats, characters, char_vertex_start, char_verts, sequences, attachments, sim, colliders, models_0x800, npc_pool, ladders_drawn, grapple_hooks_drawn, misc_drawn, lock_matrices, dynobj_matrices, rotor_placements, gunimp_placements,
             door_scene_hidden,
             sl_lod,
             destroy_centres }
@@ -9069,6 +9159,22 @@ pub fn build(level: &Level, cels_only: bool, skeletons: &HashMap<u8, Skeleton>, 
                 let dr = &s.drones.list[di];
                 let (world, hip) = dr.object_pose(&s.data())?;
                 let m = nf_formats::placement::object_matrix([0.0, dr.yaw, 0.0], [dr.pos[0], dr.draw_y(hip), dr.pos[2]]);
+                return Some((anim::skin_matrices(&world, &c.skin), world, m));
+            }
+            // cable-3p: Bond's body on the wire - the playing wire anim (`Player_Wire`/`Player_Zipline`'s
+            // AnimScriptAdd scripts, the sim's `wire_anim` at `wire_anim_time`) on the player object's
+            // matrix (obj+0x30 at the hang point, the yaw the grab set [M Player_CollWire 0x197130]).
+            if self.bond_body == Some(ci) {
+                let s = self.sim.as_ref()?;
+                s.wire_camera()?;
+                let local = nf_game::anim::script_pose_drone(&s.scripts, &s.seqs, &c.skeleton, &c.skin, s.bond.wire_anim, s.bond.wire_anim_time.max(0.0))?;
+                // The player object (obj+0x30) IS the hip: the anim's root height comes off so the root
+                // bone sits at the object [the grab's 1.0207 hang offset then puts the hands on the cable -
+                // L PCSX2 07000005 cable, audits/render-1029-cable p-stand].
+                let hip = local.first().map_or(0.0, |r| r.0[1]);
+                let world = anim::world_pose(&local, &c.skin);
+                let p = s.bond.pos;
+                let m = nf_formats::placement::object_matrix([0.0, s.bond.yaw, 0.0], [p[0], p[1] - hip, p[2]]);
                 return Some((anim::skin_matrices(&world, &c.skin), world, m));
             }
             // Script animations: the object's frame, the root kept (the object sits at the origin).
@@ -9953,6 +10059,7 @@ pub fn build(level: &Level, cels_only: bool, skeletons: &HashMap<u8, Skeleton>, 
         if let Some(&(slot, _)) = self.mp_bodies.iter().find(|(_, c)| *c == ci) {
             return s.mp_body_state(slot).is_none() && s.mp_body_death(slot).is_none();
         }
+        if self.bond_body == Some(ci) { return s.wire_camera().is_none(); }
         let c = &self.characters[ci];
         // mp-character-data: a parked MP body is hidden — the draw moves the Character matrix to
         // the slot's live position to reveal it (the sentinel is the NPC-pool scale).
