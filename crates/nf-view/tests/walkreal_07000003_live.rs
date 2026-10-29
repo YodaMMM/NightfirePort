@@ -268,35 +268,47 @@ fn walk_the_full_route_and_complete_every_objective() {
     //    back clears the take's line of sight — the take writes ch 0x4e [M 0x18e650:330-333; L
     //    PCSX2 2026-10-22: the first back-step took it].
     //    The items test's repro spot faces the display case; walking there through the real path.
-    w.walk_nav_to([5.90, 5.9, -42.41], "to the dragon safe", 0.8);
+    w.walk_nav_to([5.90, 5.9, -42.41], "to the dragon safe", 0.35);
     {
         // Aim at the case (SP #110's body at (6.7, 6.1, −42.6) [D the SP dump]) with the real view
-        // (turn/look inputs) and hold E — SP_Activate's use-key bit [M 0x1dc338:82].
+        // (turn/look inputs). The use is EDGE-triggered — the world-use block fires on the action
+        // bits' press edge, `Input_Action(p, 0xe, 4)`, and a held E activates the world ONCE [M
+        // 0x1a5460:395-403; the action machine 0x17ee88 latches per press] — so the view converges
+        // FIRST with no use (the earlier hold-E loop spent its one edge while still facing away:
+        // no spawn), then ONE press tick at the converged view: the proven doublecross_items_live
+        // shape [L PCSX2 2026-10-22: (5.90,5.97,−42.41) yaw 1.710 pitch −0.458, one E press → the
+        // card].
         let case = [6.7f32, 6.1, -42.6];
-        let mut fired = false;
-        for t in 0..240u32 {
-            {
-                let sim = w.scene.sim.as_ref().unwrap();
-                if sim.drones.pickups.iter().any(|p| p.kind == 2 && !p.gone) { fired = true; break; }
-                let bp = sim.bond.pos;
-                let dx = case[0] - bp[0];
-                let dz = case[2] - bp[2];
-                let dy = case[1] - (bp[1] + sim.bond.eye - sim.bond.crouch_drop);
-                let desired = dx.atan2(dz);
-                let err = walker::wrap_pi(desired - sim.bond.yaw);
-                let want_pitch = (dy / walker::dxz(bp, case).max(0.5)).atan() / std::f32::consts::FRAC_PI_2;
-                let perr = want_pitch - sim.bond.pitch;
-                let input = nf_game::player::Input {
-                    turn: err.clamp(-0.08, 0.08),
-                    look: perr.clamp(-0.08, 0.08),
-                    ..Default::default()
-                };
-                drop(sim);
-                w.tick(input, true); // hold E while the view converges
-                let _ = t;
-            }
+        for _ in 0..240u32 {
+            let sim = w.scene.sim.as_ref().unwrap();
+            if sim.drones.pickups.iter().any(|p| p.kind == 2 && !p.gone) { break; }
+            let bp = sim.bond.pos;
+            let dx = case[0] - bp[0];
+            let dz = case[2] - bp[2];
+            let dy = case[1] - (bp[1] + sim.bond.eye - sim.bond.crouch_drop);
+            let desired = dx.atan2(dz);
+            let err = walker::wrap_pi(desired - sim.bond.yaw);
+            let want_pitch = (dy / walker::dxz(bp, case).max(0.5)).atan() / std::f32::consts::FRAC_PI_2;
+            let perr = want_pitch - sim.bond.pitch;
+            let settled = err.abs() < 0.02 && perr.abs() < 0.02;
+            let input = nf_game::player::Input {
+                turn: if settled { 0.0 } else { err.clamp(-0.08, 0.08) },
+                look: if settled { 0.0 } else { perr.clamp(-0.08, 0.08) },
+                ..Default::default()
+            };
+            drop(sim);
+            w.tick(input, false); // converge the view only — the edge is NOT spent yet
+            if settled { break; }
         }
-        assert!(fired, "E on the case spawned the key pickup [D script 0x06000563 s1]");
+        // The single press at the converged view (one tick = one edge, the repro's shape).
+        w.tick(Default::default(), true);
+        // The stream reaches the Entity command within a couple of seconds [M 0x1d8968's 0xF0 arm].
+        let mut live = false;
+        for _ in 0..120 {
+            w.tick(Default::default(), false);
+            if w.scene.sim.as_ref().unwrap().drones.pickups.iter().any(|p| p.kind == 2 && !p.gone) { live = true; break; }
+        }
+        assert!(live, "the converged single E press spawned the key pickup [D script 0x06000563 s1]");
     }
     for _ in 0..130 { w.tick(Default::default(), false); } // the reveal plays; the card lifts
     {
