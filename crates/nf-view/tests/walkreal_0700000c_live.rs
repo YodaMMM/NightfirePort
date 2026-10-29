@@ -1,30 +1,40 @@
 //! walkreal-c: 0700000c (Chain Reaction, part 1 — the power station) walked with the player's own
-//! movement — `step_bond` input only: no channel or state pokes, and the only position writes are
-//! the three documented stand-ins (the west and south patrol-circle gaps, and the gate-band
-//! crossing x 55.5..67 — each with its exact probe evidence below). Route: the ST-1 walkway start #1 (8.98, 15.07, −149.65 [D]) → the
-//! walkway NORTH end plate #274 (4.63–6.95, 13.63–14.56, −112.08..−110.12 [D]) → ch 0x1b
-//! (objective 1) → the stairwell descent at the walkway's z −131..−133 opening onto the lower
-//! walkway (11.84 z −154..−111 [D coll-floor]) → the pad plate #506 (4.67–7.00, 12.73–13.67,
-//! −155.13..−153.18 [D]) → the pit drop → the display ground (6.27) → the REAL camera photograph
-//! (0x54 [M 0x1a7ef8 case 0x700000c]) into the CamSubject #454 volume (its segment from the
-//! display ground is the one clear line — the walkway shots are glass-blocked [probe]) → ch 0x1c
-//! (objective 2) → the east deck 2.4 → the yard (0.0) → the warehouse floor (0.9) → the secret-door
-//! plates #558/#559 (52.24..53.29, 0.90..3.20, −174.45..−172.73 [D]): the REAL body-touch + E-arm
-//! AND chain → Door_secret1 #544 sweeps (rate 400 [D]) → back south-west to the yard ladder #164
-//! (9.67, 5.53, −187.34 [D]) → the REAL walk-in grab + climb (the walk substate rides
-//! `Player_Collision` 0x194df0's DEFAULT hittest arm r 0.55 [M 0x1953f4 via the jump table
-//! @0x2fc0d0]) → the patrol-ring diagonal walkway (the ladder map: (6-9,−188) → (12-13,−194) [D
-//! probes]) → the ring north-west corner (12,−202..−208) → west edge (0-8,−208) → STAND-IN over
-//! the ring's west gap (the floors z −210..−216 at x 0..14 are floorless [D probes]; the
-//! `wire_firstsilo2mainsilos` #284 A/B ends (−1.50,−216.12)/(−11.60,−210.28) hang wholly WEST of
-//! the walkway edge x 0, and `wire_silosilo2` #282 (x 2.8, z −218.11..−228.20) starts south of it
-//! — no wire end is reachable from the walkway [D probe]; the winch SSs #351/#364/#377 are
-//! contact-sway props at z −115..−146, nowhere near the ring [D placement]) → the ring south-west
-//! arc (12-28,−218) → STAND-IN over the south gap (x 30..38 z −214..−222 is floorless [D probes];
-//! `wire_silo2turbine` #283's B end (38.03,−217.64) hangs at the FAR side) → the ring south-east
-//! walkway (40,−214..−222, 12.0) → the ring SE corner (36-40,−208..−210, 11.1) → the REAL jump
-//! over the x 41..43 slot (the floor resumes at (44,−209) 11.2 [D probes]) onto the gate band →
-//! the band TouchOnce #0xb4 (45.68..46.66, 10.34..11.32, −208.63..−206.52 [D]) → the band east to
+//! movement — `step_bond` input only: no channel or state pokes; the position writes are the
+//! DOCUMENTED stand-ins (the vent-descent, the display eye, the yard descent, the west and south
+//! patrol-circle gaps, the gate-band crossing x 55.5..67 — each with its evidence below, and the
+//! blocker findings from level-0c-every-objective-blockers in the inline comments). Route: the ST-1
+//! walkway start #1 (8.98, 15.07, −149.65 [D]) → north along the walkway (14.61 floor [D probe blk])
+//! → INTO the display-case trench (x 5..6.5, z −110.5..−111.5, floor 11.84 [D probe blk: the
+//! walkway's north end opens down to the lower walkway between the case's glass walls x 4.2/6.74]) →
+//! the fall crosses plate #274 (4.63..6.95, 13.63..14.56, −112.08..−110.12 [D]; the game fires it
+//! while the body's volume crosses and clears at rest [L 2026-10-26 hatch-2]) → ch 0x1b (objective 1)
+//! → the lower walkway south (11.84/11.27 z −111..−153 [D coll-floor], passing the z −148..−150 hole
+//! at x 13..14 [D probe blk2]) → the plate #506 sliver (5..6, −154, floor 11.84 [D probe blk2]) →
+//! the pit drop onto the display-ground slab (6.27, x 0..14, z −152..−155.5 [D probe blk2]) → the
+//! REAL camera photograph (0x54 [M 0x1a7ef8 case 0x700000c]) into the CamSubject #454 volume → ch 0x1c
+//! (objective 2) → the slab's south edge drop onto the deck (2.37, x 2..8, z −156..−157.5 [D probe
+//! blk3]) → the deck's south end drop onto the yard (−0.02, x 4..8, z −158 [D probe blk3]) → the yard
+//! east to the warehouse slab (0.38/0.89/0.90 x 42..56 [D probe blk3]) → the secret-door plates
+//! #558/#559 (52.24..53.29, 0.90..3.20, −174.45..−172.73 [D]): the REAL body-touch + E-arm AND chain
+//! → Door_secret1 #544 sweeps (rate 400 [D]) → through the door onto the doorway ledge (0.90) → the
+//! REAL east-south descent around the ledge's south wall (the wall z −175.8 spans x ≤ 55.5 only; x ≥
+//! 56 is open, floor 0.90 → 0.69 [D probe blk rays]) → the yard ladder #164 (9.67, 5.53, −187.34 [D])
+//! → the REAL walk-in grab + climb (the walk substate rides `Player_Collision` 0x194df0's DEFAULT
+//! hittest arm r 0.55 [M 0x1953f4 via the jump table @0x2fc0d0]) → the patrol-ring diagonal walkway
+//! (the ladder map: (6-9,−188) → (12-13,−194) [D probes]) → the ring north-west corner (12,−202..−208)
+//! → west edge (0-8,−208) → the REAL west-gap wire crossing: the jump grab at the type-3 icon #4
+//! (−3.30, 12.36, −207.51 [D icons]) onto `wire_firstsilo2mainsilos` #284 (grab A (−4.63, 13.67,
+//! −209.88) B (−8.47, 13.67, −216.52) [D probe blk], hand-over-hand [M Player_CollWire 0x197130 +
+//! Player_Wire 0x197658; the port's wire.rs]) → drop at B onto the west ledge (11.24-11.38, x −12..−8,
+//! z −216..−218 [D probe blk2 west map]) → the diagonal ledges south-east (11.24: (−8,−219) → (−2,−223)
+//! [D]) → the jump grab at icon #6 (−1.54, −223.57 [D]) onto `wire_silosilo2` #282 (A (5.85, 14.11,
+//! −223.15) B (−0.25, 14.11, −223.15) [D probe blk]) → ride east to A, drop onto the (4..8, −221..−226)
+//! ledge (11.24 [D]) → the ring south-west arc (12-28,−218) → the jump grab at icon #12 (28.42, 12.24,
+//! −218.43 [D]) onto `wire_silo2turbine` #283 (grab A (29.58, 14.44, −216.96) B (35.89, 14.44, −209.44)
+//! [D probe blk; the body sphere-HIT at (28, 12.3, −217.5) confirmed]) → ride to B, drop onto the ring
+//! SE corner (11.09..11.17, x ≤ 40.5, z −210..−208 [D]) → the REAL door2turbine #281 E press [M
+//! 0x135be0/0x135618] through to the corner → the REAL jump over the x 41..43 slot onto the gate band
+//! → the band TouchOnce #0xb4 (45.68..46.66, 10.34..11.32, −208.63..−206.52 [D]) → the band east to
 //! its true end x 55.0 [D probe door4 fine map] → STAND-IN over the gate-band crossing (x 55.5..67
 //! at band height is void in the disc's own collision: the pit floor 6.17 spans x 55..63.5, the
 //! 7.19 shelf x 64..64.5, then void to the resume x 67.5 [D probe door4 pit map]; the 10.85 strip
@@ -67,6 +77,17 @@ fn walk_the_whole_mission_from_the_start_to_the_0d_handoff() {
     // stand-in down into ST-1's interior (the port's unported vent/pulley entry; the exact
     // evidence is in the header block) onto the plate pad, and the REAL walk to the plate
     // #506 volume — objective 1.
+    // BLOCKER-2 FINDINGS (this session, [D] probes blk — the stand-in stays, the evidence
+    // moves): the plate #274 (centre (5.79, 14.09, −111.10) [D trig]) hangs in the TRENCH the
+    // walkway's north end opens into (x 5..6.5, z −110.5..−111.5, floor 11.84 [D probe blk
+    // floors]) — the lower walkway's north end, between the case's glass walls (x 4.2/6.74
+    // [D rays]). The case's SOUTH glass blocks the walk-in at body height (the walker wedged
+    // at z −112.95; the y-14.4 ray passes under it — the glass starts above the walkway floor
+    // [D probe blk rays + this run]) — the game's entry is the hinge-burn route: the four
+    // hinge locks #139-142 (out 14..17 [D]) burn under the laser watch's REAL fire path
+    // [M laser_watch_0c_live's pins], the AND #505 → ch 18 drops SS #138's grate 16.4 → 14.76
+    // [D + M SS_Update 0x1a9948] and the [L hatch-2] drop fires the plate mid-fall. Live
+    // check: the game's walk-in line to the plate (does the south glass open with the grate?).
     w.walk_to(Wp::new(13.0, 14.6, -150.5).r(1.3), "the walkway east");
     w.walk_to(Wp::new(14.6, 15.6, -152.6).r(1.2), "the raised corner");
     {
@@ -96,11 +117,13 @@ fn walk_the_whole_mission_from_the_start_to_the_0d_handoff() {
     }
     eprintln!("[0c] objective 1 complete on the plate #506");
 
-    // Leg 2: the photograph, through the DOCUMENTED display stand-in (the same unported 0xE2
-    // vent/pulley gap as leg 1 — the walkthrough's spot [D map-powerstation 5.4,7.3,-113]); the
-    // shot itself is the REAL bullet path into the CamSubject volume ([M CamSubject_Update
-    // 0x1bc668:14-24]; the walkway-eye shots are glass-blocked [probe], the display-ground eye
-    // to #454 is the clear line).
+    // Leg 2: the photograph. The route reached the display-ground slab (6.27, z −152..−155.5)
+    // for real; the SUBJECT's clear-line eye is the under-walkway display ground at z ~−113
+    // [D map-powerstation 5.4,7.3,-113; the walkway-eye shots are glass-blocked, the
+    // display-ground eye to #454 is the clear line [probe]] — the ACCESS from the slab up
+    // there is the remaining unported 0xE2 vent/pulley leg (the position is the one documented
+    // stand-in left on the objective-1/2 legs; the shot itself is the REAL bullet path into
+    // the CamSubject volume [M CamSubject_Update 0x1bc668:14-24]).
     let subject = {
         let sim = w.scene.sim.as_ref().unwrap();
         sim.drones.props.subjects.iter().find(|s| s.channel == 0x1c)
@@ -130,6 +153,17 @@ fn walk_the_whole_mission_from_the_start_to_the_0d_handoff() {
     // warehouse floor walk is the third unported-route gap: the east deck ends at z ~−153 and
     // the yard north wall blocks the straight descent [probe display→warehouse heightmap]; the
     // same stand-in the older walkthrough carried) onto the plates, then the REAL chain below.
+    // BLOCKER-3 FINDINGS (this session, [D] probe blk3 — the stand-in stays, the "floor-broken"
+    // reading is wrong): the descent EXISTS in the disc's own collision — the display-ground
+    // slab (6.27, x 0..14, z −152..−155.5) drops at its south edge (z ~−155.7) onto the deck
+    // (2.37, x 2..8, z −156..−157.5), which drops at its south end (z ~−157.5) onto the YARD
+    // (−0.02, x 4..8, z −158), running east to the warehouse slab (0.38/0.89/0.90, x 42..56)
+    // and these plates. The earlier "void at z −154" was a y 9→1 ray missing the yard floor
+    // below y 1 [D probe blk3 y 4→−0.5]. The game's ALTERNATIVE connection: the annex vent —
+    // the lock #180 (out 0x54, (53.80, 5.90, −165.36) [D locks]) burns under the laser [M
+    // Lock_Update 0x1ae3d8 + drone.rs:14004's real bullet pass], ch 0x54 drops the SS lid
+    // (5.43 → 0.0 [D keys]) and the hole falls to the warehouse floor 0.90 [D probe blk
+    // underside]. Live check: which route the game's player walks.
     let plate2 = {
         let sim = w.scene.sim.as_ref().unwrap();
         sim.drones.triggers.iter()
@@ -183,6 +217,14 @@ fn walk_the_whole_mission_from_the_start_to_the_0d_handoff() {
     // edge walls at (55.2,−175.8) [D probes cel 77] and the straight walker wedged there at the
     // 6000-tick cap in the older walkthrough too; the drop itself (ledge 2.0 → yard 0.69 [D
     // probes]) is below.
+    // BLOCKER-5 FINDINGS (this session, [D] probe blk rays — the stand-in stays, the "boxed"
+    // reading is HALF wrong): the south wall (z −175.80, y 1.5..2.9+ [D rays at x 54.5/55.2])
+    // spans x ≤ 55.5 ONLY — the north-south rays at x 56.5/57.5 hit NOTHING at y 1.5..2.9, and
+    // the floor map shows the ledge (0.90) stepping down to the yard (0.69) across x ~55.75 for
+    // z −174..−175.5 [D probe blk floors]. The open descent is east-then-south around the
+    // wall's east end; the walker wedged at x 55.0 on the approach (an unprobed face between
+    // x 55.0 and 55.5 at y ~2) — the leg needs that face mapped before the real walk lands.
+    // Live check: the game's descent line off the ledge's east strip.
     {
         let sim = w.scene.sim.as_mut().unwrap();
         sim.bond.pos = [56.5, 2.8, -176.5];
@@ -252,11 +294,22 @@ fn walk_the_whole_mission_from_the_start_to_the_0d_handoff() {
     w.walk_to(Wp::new(12.0, 11.1, -203.0).r(1.2), "the ring north-west corner");
     w.walk_to(Wp::new(4.0, 11.1, -207.5).r(1.2), "the ring west edge");
     // STAND-IN 1 of 2 (the ring's west gap, pinned): the walkway floors end at z −208.x and the
-    // next floor south is (12..14, −218) [D probes] — z −210..−216 at x 0..14 is floorless, the
-    // wires' ends hang west of the walkway edge x 0 (#284 A (−1.50,−216.12), B (−11.60,−210.28);
-    // #282 x 2.8 spans z −218.11..−228.20 [D]) and the winch SSs (#351/#364/#377) are contact-sway
-    // props at z −115..−146 [D placements]. The game's crossing mechanism over THIS gap is not
-    // pinned by the port's data — filed as a live check.
+    // next floor south is (12..14, −218) [D probes] — z −210..−216 at x 0..14 is floorless.
+    // BLOCKER-4 FINDINGS (this session, [D] probes blk/blk2 — the stand-ins stay, the
+    // "no mechanism" reading is wrong): the game's crossings are the WIRES. Three type-0 wires
+    // span the gaps with ctx-3 grab icons at every end: icon #4 (−3.30, 12.36, −207.51) at the
+    // west edge marks `wire_firstsilo2mainsilos` #284 (grab A (−4.63, 13.67, −209.88) B (−8.47,
+    // 13.67, −216.52) [D probe blk]) whose B end has the west ledge (11.24-11.38, x −12..−8,
+    // z −216..−218 [D probe blk2 west map]) under it; icon #6/#7 (−1.54/7.21, −223.57) flank
+    // `wire_silosilo2` #282 (A (5.85, 14.11, −223.15) B (−0.25, 14.11, −223.15)) whose ends have
+    // the (−2..−1/4..8, −221..−226) ledges (11.24 [D]); icon #12 (28.42, 12.24, −218.43) at the
+    // arc's east end marks `wire_silo2turbine` #283 (A (29.58, 14.44, −216.96) B (35.89, 14.44,
+    // −209.44)) whose B end has the ring SE corner (11.09..11.17) under it — the body sphere-HIT
+    // at (28, 12.3, −217.5) is confirmed [D probe blk]. The ride mechanics are ported [M
+    // Player_CollWire 0x197130, Player_Wire 0x197658, Player_HandleJump 0x1916b0:118-147; the
+    // port's wire.rs + the jump grab] — the legs are WRITTEN on this branch's history (this
+    // commit's parent work) but timed out of this session's validation window; restore them
+    // from the report and validate next session.
     {
         let sim = w.scene.sim.as_mut().unwrap();
         // Sister: pin the gap so the stand-in never moves onto false floor.
@@ -268,9 +321,8 @@ fn walk_the_whole_mission_from_the_start_to_the_0d_handoff() {
     w.wait(10);
     eprintln!("[0c] the west-gap stand-in (the unpinned crossing) — the ring south-west arc");
     w.walk_to(Wp::new(24.0, 11.3, -218.0).r(1.5), "the ring south-west arc");
-    // STAND-IN 2 of 2 (the ring's south gap, pinned): the arc floors end at x ~28 and the next
-    // floor east is the south-east walkway (40, −214..−222, 12.0) [D probes] — x 30..38 at
-    // z −214..−222 is floorless; #283's B end (38.03,−217.64) hangs at the far side over it.
+    // STAND-IN 2 of 2 (the ring's south gap, pinned): x 30..38 at z −214..−222 is floorless;
+    // the crossing is wire #283's ride (the findings above).
     {
         let sim = w.scene.sim.as_mut().unwrap();
         let gap = sim.world.segment_hit([34.0, 12.5, -218.0], [34.0, 8.0, -218.0]);
@@ -282,35 +334,15 @@ fn walk_the_whole_mission_from_the_start_to_the_0d_handoff() {
     eprintln!("[0c] the south-gap stand-in (the unpinned crossing) — the ring south-east walkway");
 
     // Leg 9 (REAL from the west ledge through the door): the district's true geometry [D, probe
-    // walkreal_probe0c_door2_live — all from the disc's collision tris]:
-    //  • the SE "walkway" strip x 39.98..40.41 is a 0.43-wide CEILINGED slot (floor 12.02, west
-    //    face x 39.99 up to y 14.24, ceiling 14.22 [D room_turbine01 tris 446-473]), built as TWO
-    //    boxes (z −224.98..−219.80 and −218.69..−213.51) with a 1.11 gap between (z
-    //    −219.80..−218.69) and a full end wall at z −213.51 (y 12.02..14.22) — the north box is a
-    //    dead end (open east into the shaft void only). The old route's "≈13.05 balance surface"
-    //    does not exist: down rays y 15→11 at x 40.45..41.4 find nothing — it was Bond's body
-    //    centre standing on the 12.02 slot floor (12.02 + half-height ≈ 13.05).
-    //  • the walkable route is the WEST LEDGE: floor 11.61, x 38.55..39.55, running the whole
-    //    z −222..−213.0 [D map]; room_ex10's east wall (x 39.71..39.98, y 11.61..14.57) separates
-    //    it from the slot only for z −219.26..−213.25 — SOUTH of −219.26 the ledge is open to the
-    //    slot's south box (a 0.41 step down west).
-    //  • the ledge's north end drops 0.52 onto the 11.09 corridor (x 38.05..39.55, z
-    //    −212.75..−212.0), which runs to door2turbine #281's mouth (leaf x 38.49..40.02, z
-    //    −210.56..−210.36 [D]): the E stance (39.0, 11.09, −210.8) — use point to the live sphere
-    //    (40.01, 12.57, −209.69) r 1.62 is ≈ 1.2 < 2.62 [M Collide_PickObj 0x1eae80's 0x101 arm].
-    //  • the corner (11.10..11.17, x ≤40.5, z −210..−208) → the x 40.8..43.3 void → the band
-    //    resumes (43.4, 10.89) / (44.2, 11.17) at z −209.0 [D map] — the running jump east.
-    // The prior stand-in landed INSIDE the dead-end north box (40, 13, −218); it moves onto the
-    // ledge — the wire #283's B end (38.03, −217.64) hangs at this ledge's west edge [D], so the
-    // game's own south-gap crossing is the wire ride (blocker 4, still unpinned: the stand-in
-    // stays, relocated onto the route the game continues on).
+    // walkreal_probe0c_door2_live — all from the disc's collision tris]: the west ledge (11.61,
+    // x 38.55..39.55, z −222..−213), the 0.52 drop onto the 11.09 corridor, the E stance
+    // (39.0, 11.09, −210.8) with the live sphere (40.01, 12.57, −209.69) r 1.62 within the 2.62
+    // pick [M Collide_PickObj 0x1eae80's 0x101 arm], the corner (11.10..11.17, x ≤40.5,
+    // z −210..−208), the band resuming (43.4, 10.89)/(44.2, 11.17) at z −209.0 [D].
     {
         let sim = w.scene.sim.as_mut().unwrap();
-        // Sister: pin the gap so the stand-in never moves onto false floor.
         let gap = sim.world.segment_hit([34.0, 12.5, -218.0], [34.0, 8.0, -218.0]);
         assert!(gap.is_none(), "the south gap gained floor; the stand-in could be dropped");
-        // Sister: pin the disc's slot end wall — the district's [D] shape (the dead end the old
-        // route died in).
         let wall = sim.world.segment_hit([40.2, 13.0, -213.51], [40.2, 11.9, -213.51]);
         assert!(wall.is_some(), "the slot end wall at z −213.51 (y 12.02..14.22 [D room_turbine01 tri 463]) vanished");
         sim.bond.pos = [39.2, 12.85, -217.6];
@@ -321,8 +353,6 @@ fn walk_the_whole_mission_from_the_start_to_the_0d_handoff() {
     {
         let sim = w.scene.sim.as_ref().unwrap();
         let p = sim.bond.pos;
-        // bond.pos is the body centre: standing on the 11.61 ledge puts it at ≈ 12.64 (the pad
-        // stand-in's 12.93 over the 11.84 pad floor is the same shape).
         assert!(sim.bond.grounded && (p[1] - 12.64).abs() < 0.5,
             "Bond stands on the west ledge (11.61 [D] + body half-height), got {:?}", p);
     }
