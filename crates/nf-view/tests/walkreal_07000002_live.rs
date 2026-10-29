@@ -56,7 +56,10 @@ fn geisha(w: &Walker, ch: u8) -> Option<usize> {
     w.scene.sim.as_ref().unwrap().drones.list.iter().position(|d| d.second_channel == ch)
 }
 
-/// Kill every armed guard near `around` (the geisha's captor set) through the real fire path.
+/// Kill every armed guard near `around` (the geisha's captor set) through the real input path:
+/// walk to a vantage 3 u from the captor on the Bond→captor line (the nav graph handles the
+/// rooms), then fire — no position write anywhere. The captors stand at the geisha's floor
+/// (health 10–20 [L baseline log]); the `shoot` loop's aim + tap is the game's own fire path.
 fn clear_captors(w: &mut Walker, around: [f32; 3], label: &str) {
     for round in 0..8 {
         let target = {
@@ -66,11 +69,11 @@ fn clear_captors(w: &mut Walker, around: [f32; 3], label: &str) {
         };
         let Some(di) = target else { return };
         let at = w.scene.sim.as_ref().unwrap().drones.list[di].pos;
-        // Test setup: stand Bond beside the guard (a straight walk crosses rooms; the shot is real).
-        let sim = w.scene.sim.as_mut().unwrap();
-        sim.bond.pos = [at[0] + 2.5, at[1], at[2] + 0.4];
-        drop(sim);
-        w.wait(30);
+        let bp = w.scene.sim.as_ref().unwrap().bond.pos;
+        let (dx, dz) = (at[0] - bp[0], at[2] - bp[2]);
+        let len = (dx * dx + dz * dz).sqrt().max(0.001);
+        let stand = [at[0] - dx / len * 3.0, at[1], at[2] - dz / len * 3.0];
+        w.walk_nav_to(stand, &format!("{label} captor {round} approach"), 1.0);
         if !w.shoot(di, &format!("{label} captor {round}")) {
             eprintln!("[02] {label}: captor {round} (drone {di}) survived the clip");
         }
@@ -81,6 +84,8 @@ fn clear_captors(w: &mut Walker, around: [f32; 3], label: &str) {
 fn walk_the_castle_all_objectives_to_the_exit() {
     let iso = iso();
     let mut w = Walker::new(nf_view::load(&iso, "07000002.bin", false).expect("load 07000002"));
+    // Real health: no walker top-up — the walk takes the guards' fire through the real pipeline.
+    w.top_up_health = false;
     {
         let sim = w.scene.sim.as_ref().unwrap();
         let p = sim.bond.pos;
@@ -129,28 +134,22 @@ fn walk_the_castle_all_objectives_to_the_exit() {
     if !ch_on(&w, 0x15) { eprintln!("[02] WARNING: ch 0x15 (the garden touch) did not fire on this pass — the guards it enables are not on the objective chain"); }
 
     // 2. Cross to the west wing (the AI path's own way [L path dump]) and enable the geisha group:
-    //    the ch-0x17 plate tr[003] (−35.2, 6.5, 5.05). The walker's approach to the plate quad is
-    //    geometry-bound (the west-wing slope wedges the direct leg), so the plate's raise is driven
-    //    the way the touch would when the real approach doesn't cross it — the TouchOnce machinery
-    //    itself is proven on this level by #341 above; the RESCUE path under test is real throughout.
+    //    the ch-0x17 plate tr[003] (−35.2, 6.5, 5.05), quad x −35.91..−34.52 / z 3.26..6.85 at
+    //    y 6.52 [L probe02quads tris]. The real leg walks THROUGH the quad from its north side:
+    //    the north line (−35.2, 6.5, 8.0)→centre is unobstructed [L probe02quads SEG None], while
+    //    the old west-wing-south diagonal is geometry-bound (blocked at t=0.53 [L same probe]).
+    //    Standing on the quad raises 0x17 through the real Trigger path [L probe02quads TELE].
     for (name, at) in [
         ("garden path", [-22.2f32, 5.9, 34.1]),
         ("south hall", [-23.3, 5.9, 27.6]),
         ("south hall west", [-31.2, 5.9, 22.1]),
-        ("west wing south", [-37.4, 5.9, 8.0]),
+        ("north of the ch-0x17 plate", [-35.2, 6.5, 8.2]),
     ] {
         w.walk_nav_to(at, name, 1.6);
     }
     w.lenient = true;
-    w.walk_to(Wp { at: [-35.2, 6.5, 5.05], act: Act::Wait(10), arrive: 1.2 }, "the ch-0x17 plate");
+    w.walk_to(Wp { at: [-35.2, 6.5, 4.6], act: Act::Wait(10), arrive: 0.9 }, "the ch-0x17 plate");
     w.lenient = false;
-    if !ch_on(&w, 0x17) {
-        eprintln!("[02] the ch-0x17 plate raise driven (the walker can't cross its quad)");
-        let sim = w.scene.sim.as_mut().unwrap();
-        sim.drones.channels.set(0x17, 1, sim.drones.frame);
-        drop(sim);
-        w.wait(30);
-    }
     assert!(ch_on(&w, 0x17), "the geisha group is enabled [D tr[003] out 0x17]");
     {
         let sim = w.scene.sim.as_ref().unwrap();
@@ -174,17 +173,13 @@ fn walk_the_castle_all_objectives_to_the_exit() {
     assert!(ch_on(&w, 0x3b), "AND #397 (0x29,0x2A,0x88,0x49) → 0x3B [D tr[017]]");
 
     // 4. The touch zone at geisha 1 → 0x3C; SEQ_AND (0x3B then 0x3C) → 0x35 → the mid-level
-    //    cut-scene SP #399 starts on its own out-channel gate [M SP_Update flags bit 1].
-    w.lenient = true;
-    w.walk_to(Wp { at: [-45.4, 5.74, 11.7], act: Act::Wait(10), arrive: 1.2 }, "the geisha-1 touch zone");
-    w.lenient = false;
-    if !ch_on(&w, 0x3c) {
-        eprintln!("[02] the 0x3C touch-zone raise driven (the walker can't cross its quad)");
-        let sim = w.scene.sim.as_mut().unwrap();
-        sim.drones.channels.set(0x3c, 1, sim.drones.frame);
-        drop(sim);
-        w.wait(10);
-    }
+    //    cut-scene SP #399 starts on its own out-channel gate [M SP_Update flags bit 1]. The zone
+    //    is the bathhouse kind-0x2 repeating volume [D #495; L probe02quads tris] — the real leg
+    //    walks to the measured centre (−45.4, 5.9, 11.7), where standing raises 0x3C through the
+    //    real Trigger_Calc path [L probe02quads TELE; the Calc clear-then-set loop is
+    //    M Trigger_Calc 0x1b1900 + the port's calc()].
+    w.walk_nav_to([-45.4, 5.9, 11.7], "the geisha-1 touch zone", 0.6);
+    w.wait(30);
     assert!(ch_on(&w, 0x3c), "the geisha-1 zone touch [D tr[032] out 0x3C]");
     assert!(ch_on(&w, 0x35), "SEQ_AND (0x3B, 0x3C) → 0x35 [D tr[033]]");
 
@@ -234,16 +229,13 @@ fn walk_the_castle_all_objectives_to_the_exit() {
     //    same rescue path, then AND tr[001] → 0x4B, AND tr[030] (0x48, 0x4B) → 0x4C [D].
     w.walk_nav_to([-46.1, 5.9, -23.2], "back through the doorway", 1.6);
     w.walk_nav_to([-30.0, 5.9, -21.5], "the east courtyard", 1.6);
+    // The ch-0x19 plate tr[009] sits in the doorway (quad x −27.58..−26.19, z −22.08..−18.49 at
+    // y 6.04 [L probe02quads tris]; the door at (−27.8, 6.6, −20.3) is its west edge [L base log]).
+    // The real leg walks THROUGH the doorway into the quad — the old arrive-1.2 stop at x −28.09
+    // stood 0.5 short of the quad's west edge [L base log]; the west line is clear [L probe02quads].
     w.lenient = true;
-    w.walk_to(Wp { at: [-26.9, 6.0, -20.3], act: Act::Wait(10), arrive: 1.2 }, "the ch-0x19 plate");
+    w.walk_to(Wp { at: [-26.3, 6.0, -20.3], act: Act::None, arrive: 0.7 }, "the ch-0x19 plate");
     w.lenient = false;
-    if !ch_on(&w, 0x19) {
-        eprintln!("[02] the ch-0x19 plate raise driven (the walker can't cross its quad)");
-        let sim = w.scene.sim.as_mut().unwrap();
-        sim.drones.channels.set(0x19, 1, sim.drones.frame);
-        drop(sim);
-        w.wait(30);
-    }
     assert!(ch_on(&w, 0x19), "geisha 2's group enabled [D tr[009] out 0x19]");
     {
         let sim = w.scene.sim.as_ref().unwrap();
@@ -305,6 +297,7 @@ fn walk_the_castle_all_objectives_to_the_exit() {
     //    0x4D sits beside it [D]. No channel is hand-set anywhere in this leg.
     let next = "07000003.bin";
     let mut w3 = Walker::new(nf_view::load(&iso, next, false).expect("07000003 must load after the exit"));
+    w3.top_up_health = false;
     w3.skip_cutscenes = false;
     let mut handed = None;
     for t in 0..900u32 {

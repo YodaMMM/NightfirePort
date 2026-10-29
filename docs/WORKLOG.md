@@ -7,3 +7,13 @@ real-input leg, fixing any port gap the real leg hits [M/D]. The walk must stay 
 
 Progress log:
 - 22:00 setup started; branch pushed with this entry.
+- 22:05 setup: repo + work/ + slim ISO + queue worktree + rustup (ALSA headers needed a user prefix:
+  libasound2-dev extracted to /home/z/alsa with a fixed alsa.pc prefix + a libasound.so symlink to the
+  system runtime — the stock dev .pc points at /usr and the .so symlink was dangling).
+- 22:45 full four-crate release test build green (target-cache ~3.6 GB; 3.7 GB disk left).
+- 22:50 baseline walkreal_07000002_live green in 50.66 s / 32107 ticks. Stand-in inventory written up.
+- 23:15 probe02quads: the three quads' tris + SEG/NAV + TELE — the port fires ALL THREE when Bond
+  really stands on them; the pokes were harness routing (wedge / arrive-radius short), not port gaps.
+- 23:20 real legs landed: no channel pokes, no bond.pos writes, top_up_health=false. Walk now FAILS
+  honestly: Bond (real health) dies to the garden guards' fire during the south-hall-west nav-10 wedge
+  (1836 ticks exposed) → fail restart → level_exit. The next window adds the fight-through legs.
