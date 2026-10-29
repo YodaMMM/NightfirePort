@@ -565,7 +565,12 @@ impl Bond {
         self.settle_hold = 4;
     }
 
-    /// `Player_GetHeadPos`: the eye.
+    /// `Player_GetHeadPos`: the eye — `pos[1] + EYE − crouch_drop`, the view drop the eased
+    /// `crouch_drop` ALONE (±0.0225/tick to 0.45 [M the ease at the walk tick; EYE 0.7]). The
+    /// crouched BODY pose (the root drop to floor + cc + 0.051 [L 1.086 → 0.607]) lives in the
+    /// hit-box palette, NOT in `pos` — bond-hitbox-pose-2 removed the -pose branch's instant
+    /// `pos[1]` move so the camera reads exactly master's height every tick of a crouch and a
+    /// stand-up (see the crouch toggle's note and bond_boxes).
     pub fn head(&self) -> V3 { [self.pos[0], self.pos[1] + self.eye - self.crouch_drop, self.pos[2]] }
 
     /// The player's world-sphere centre (`obj+0x80`, `Control_BuildWorldSph` 0x133070): the local sphere
@@ -1548,15 +1553,14 @@ impl Bond {
         } else if !self.crouched && self.jump == 0 && input.crouch && self.lockout == 0 {
             self.crouched = true;
             self.cc = CROUCH_ROOT_HEIGHT;
-            // The root follows the stance: the game's settled obj+0x30 rides floor + cc + 0.051 —
-            // standing 1.086 [L 07000005 start + the stand_at assert], crouched 0.607 [L the truck
-            // ride, player.rs's CROUCH_ROOT_HEIGHT note] — a drop of ROOT_HEIGHT −
-            // CROUCH_ROOT_HEIGHT = 0.4847. The port runs no Bond body anims (the crouch anim's root
-            // motion is unparsed — the creep doc), so the toggle applies the settled drop directly;
-            // the 60-tick lockout above models the transition window the game spends blending.
-            if self.grounded {
-                self.pos[1] -= ROOT_HEIGHT - CROUCH_ROOT_HEIGHT;
-            }
+            // The crouched BODY pose's settled root (floor + cc + 0.051 = 0.607 [L the truck
+            // ride] vs the standing 1.086) is NOT a `pos` move: moving pos dropped the CAMERA
+            // 0.4847 instantly on top of head()'s eased crouch_drop (a ~0.93 one-tick view
+            // change — bond-hitbox-pose-2's symptom) and re-seated the walk's floor rest. The
+            // root offset rides where the game's own crouch pose puts it — the hit-box palette
+            // (`bond_boxes` shifts its root-local frame by ROOT_HEIGHT − CROUCH_ROOT_HEIGHT
+            // [L 1.086/0.607]) — while `pos`, the capsule and head() stay exactly master's
+            // [M master's toggle writes crouched + cc only].
             self.lockout = 60;
         } else if self.crouched && self.lockout == 0 && !self.head_bump && headroom(world)
             // options-census: the stand condition follows the Crouch option [M Player_SSCrouch
@@ -1565,10 +1569,8 @@ impl Bond {
             && (if !input.crouch_hold { input.crouch || input.jump } else { !input.crouch }) {
             self.crouched = false;
             self.cc = ROOT_HEIGHT;
-            // The stand-up mirrors the crouch drop (the same settled-root arithmetic, reversed).
-            if self.grounded {
-                self.pos[1] += ROOT_HEIGHT - CROUCH_ROOT_HEIGHT;
-            }
+            // The stand-up mirrors nothing in `pos` (see the crouch arm's note — the root offset
+            // lives in the hit-box palette, bond-hitbox-pose-2).
             self.lockout = 60;
         } else if !self.crouched && self.jump == 0 && input.jump && self.grounded_history != 0 && !self.head_bump && headroom(world) {
             // `Player_HandleJump` 0x1916b0:118-147 — the jump grab: with the third-icon context 3 (the
@@ -2782,7 +2784,111 @@ mod tests {
         assert!(b.local[0] != 0.0);
     }
 
+    /// bond-hitbox-pose-2: the CAMERA contract — through a real-input crouch, a hold past the
+    /// toggle's 60-tick lockout, and the stand-up press, `head()[1]` reads EXACTLY master's
+    /// per-tick values and the sim's root follows master's own fall-and-rest. The -pose branch's
+    /// instant `pos[1]` drop (the camera reading ~0.93 lower in one tick on top of the eased
+    /// crouch_drop) is removed; the crouched root offset lives in the hit-box palette
+    /// (`bond_boxes`). The literals are the capture of the identical probe run (a flat floor,
+    /// 30 settle ticks, one crouch press, 70 hold ticks, one stand press, 40 ticks) on
+    /// origin/master 1b2309ea in a throwaway worktree, diffed BIT-IDENTICAL against this tree
+    /// (the probe was scratch, deleted; the report carries the method). Master's per-tick
+    /// values, by its own code paths:
+    ///   - the toggle writes `crouched` + `cc` only [M master's Player_HandleJump; cc 0.55 [L
+    ///     AnimObj+0xCC crouched]] — the stance UNGROUNDS on this floor (the band
+    ///     `hit − 0.1 <= cc` [M Player_FeetOnPoint 0x194188:106] fails at the standing root) and
+    ///     gravity walks the root down to the crouch rest 0x3f266667 ≈ 0.65 (= cc + 0.1, the
+    ///     band's 1-ulp edge [M 0x194df0's rest-contact note]);
+    ///   - the view drop is the eased `crouch_drop` ±0.0225/tick to 0.45 [M the ease at the
+    ///     walk tick; EYE 0.7] and `head() = pos[1] + EYE − crouch_drop` [M] — the pinned head
+    ///     bits are master's own eye line, fall and all;
+    ///   - the stand-up re-grounds (the band catches at the standing cc), the root parks at the
+    ///     standing rest the collision settles (0x3f8471a6), and the view eases home.
     #[test]
+    fn crouch_view_height_matches_master_per_tick() {
+        const M_POS: [u32; 70] = [
+            0x3f8cccce, 0x3f8c739a, 0x3f8bc133, 0x3f8ab598, 0x3f8950c9, 0x3f8792c7, 0x3f857b91, 0x3f830b27,
+            0x3f80418a, 0x3f7a3d72, 0x3f734569, 0x3f6b9af9, 0x3f633e21, 0x3f5a2ee2, 0x3f506d3c, 0x3f45f92e,
+            0x3f3ad2b9, 0x3f2ef9dd, 0x3f266666, 0x3f266667, 0x3f266667, 0x3f266667, 0x3f266667, 0x3f266667,
+            0x3f266667, 0x3f266667, 0x3f266667, 0x3f266667, 0x3f266667, 0x3f266667, 0x3f266667, 0x3f266667,
+            0x3f266667, 0x3f266667, 0x3f266667, 0x3f266667, 0x3f266667, 0x3f266667, 0x3f266667, 0x3f266667,
+            0x3f266667, 0x3f266667, 0x3f266667, 0x3f266667, 0x3f266667, 0x3f266667, 0x3f266667, 0x3f266667,
+            0x3f266667, 0x3f266667, 0x3f266667, 0x3f266667, 0x3f266667, 0x3f266667, 0x3f266667, 0x3f266667,
+            0x3f266667, 0x3f266667, 0x3f266667, 0x3f266667, 0x3f266667, 0x3f266667, 0x3f266667, 0x3f266667,
+            0x3f266667, 0x3f266667, 0x3f266667, 0x3f266667, 0x3f266667, 0x3f266667,
+        ]; // pos[1] bits, crouch ticks 0..70
+        const M_CDROP: [u32; 70] = [
+            0x3cb851ec, 0x3d3851ec, 0x3d8a3d71, 0x3db851ec, 0x3de66667, 0x3e0a3d71, 0x3e2147ae, 0x3e3851ec,
+            0x3e4f5c2a, 0x3e666668, 0x3e7d70a6, 0x3e8a3d72, 0x3e95c291, 0x3ea147b0, 0x3eaccccf, 0x3eb851ee,
+            0x3ec3d70d, 0x3ecf5c2c, 0x3edae14b, 0x3ee66666, 0x3ee66666, 0x3ee66666, 0x3ee66666, 0x3ee66666,
+            0x3ee66666, 0x3ee66666, 0x3ee66666, 0x3ee66666, 0x3ee66666, 0x3ee66666, 0x3ee66666, 0x3ee66666,
+            0x3ee66666, 0x3ee66666, 0x3ee66666, 0x3ee66666, 0x3ee66666, 0x3ee66666, 0x3ee66666, 0x3ee66666,
+            0x3ee66666, 0x3ee66666, 0x3ee66666, 0x3ee66666, 0x3ee66666, 0x3ee66666, 0x3ee66666, 0x3ee66666,
+            0x3ee66666, 0x3ee66666, 0x3ee66666, 0x3ee66666, 0x3ee66666, 0x3ee66666, 0x3ee66666, 0x3ee66666,
+            0x3ee66666, 0x3ee66666, 0x3ee66666, 0x3ee66666, 0x3ee66666, 0x3ee66666, 0x3ee66666, 0x3ee66666,
+            0x3ee66666, 0x3ee66666, 0x3ee66666, 0x3ee66666, 0x3ee66666, 0x3ee66666,
+        ]; // crouch_drop bits
+        const M_HEAD: [u32; 70] = [
+            0x3fe38520, 0x3fe04aa5, 0x3fdcb6f5, 0x3fd8ca13, 0x3fd483fc, 0x3fcfe4b2, 0x3fcaec34, 0x3fc59a82,
+            0x3fbfef9f, 0x3fb9eb85, 0x3fb38e39, 0x3facd7ba, 0x3fa5c806, 0x3f9e5f1e, 0x3f969d04, 0x3f8e81b4,
+            0x3f860d33, 0x3f7a7efa, 0x3f6c28f2, 0x3f666667, 0x3f666667, 0x3f666667, 0x3f666667, 0x3f666667,
+            0x3f666667, 0x3f666667, 0x3f666667, 0x3f666667, 0x3f666667, 0x3f666667, 0x3f666667, 0x3f666667,
+            0x3f666667, 0x3f666667, 0x3f666667, 0x3f666667, 0x3f666667, 0x3f666667, 0x3f666667, 0x3f666667,
+            0x3f666667, 0x3f666667, 0x3f666667, 0x3f666667, 0x3f666667, 0x3f666667, 0x3f666667, 0x3f666667,
+            0x3f666667, 0x3f666667, 0x3f666667, 0x3f666667, 0x3f666667, 0x3f666667, 0x3f666667, 0x3f666667,
+            0x3f666667, 0x3f666667, 0x3f666667, 0x3f666667, 0x3f666667, 0x3f666667, 0x3f666667, 0x3f666667,
+            0x3f666667, 0x3f666667, 0x3f666667, 0x3f666667, 0x3f666667, 0x3f666667,
+        ]; // head()[1] bits — the pin
+        const S_POS: [u32; 40] = [
+            0x3f8471a6, 0x3f8471a6, 0x3f8471a6, 0x3f8471a6, 0x3f8471a6, 0x3f8471a6, 0x3f8471a6, 0x3f8471a6,
+            0x3f8471a6, 0x3f8471a6, 0x3f8471a6, 0x3f8471a6, 0x3f8471a6, 0x3f8471a6, 0x3f8471a6, 0x3f8471a6,
+            0x3f8471a6, 0x3f8471a6, 0x3f8471a6, 0x3f8471a6, 0x3f8471a6, 0x3f8471a6, 0x3f8471a6, 0x3f8471a6,
+            0x3f8471a6, 0x3f8471a6, 0x3f8471a6, 0x3f8471a6, 0x3f8471a6, 0x3f8471a6, 0x3f8471a6, 0x3f8471a6,
+            0x3f8471a6, 0x3f8471a6, 0x3f8471a6, 0x3f8471a6, 0x3f8471a6, 0x3f8471a6, 0x3f8471a6, 0x3f8471a6,
+        ]; // stand-up pos[1] bits, ticks 0..40
+        const S_CDROP: [u32; 40] = [
+            0x3edae147, 0x3ecf5c28, 0x3ec3d709, 0x3eb851ea, 0x3eaccccb, 0x3ea147ac, 0x3e95c28d, 0x3e8a3d6e,
+            0x3e7d709e, 0x3e666660, 0x3e4f5c22, 0x3e3851e4, 0x3e2147a6, 0x3e0a3d68, 0x3de66655, 0x3db851da,
+            0x3d8a3d5f, 0x3d3851c8, 0x3cb851a4, 0x0, 0x0, 0x0, 0x0, 0x0,
+            0x0, 0x0, 0x0, 0x0, 0x0, 0x0, 0x0, 0x0,
+            0x0, 0x0, 0x0, 0x0, 0x0, 0x0, 0x0, 0x0,
+        ]; // stand-up crouch_drop bits
+        const S_HEAD: [u32; 40] = [
+            0x3fa752ee, 0x3faa3436, 0x3fad157e, 0x3faff6c6, 0x3fb2d80d, 0x3fb5b955, 0x3fb89a9d, 0x3fbb7be4,
+            0x3fbe5d2c, 0x3fc13e74, 0x3fc41fbc, 0x3fc70104, 0x3fc9e24b, 0x3fccc393, 0x3fcfa4db, 0x3fd28622,
+            0x3fd5676a, 0x3fd848b2, 0x3fdb29f9, 0x3fde0b40, 0x3fde0b40, 0x3fde0b40, 0x3fde0b40, 0x3fde0b40,
+            0x3fde0b40, 0x3fde0b40, 0x3fde0b40, 0x3fde0b40, 0x3fde0b40, 0x3fde0b40, 0x3fde0b40, 0x3fde0b40,
+            0x3fde0b40, 0x3fde0b40, 0x3fde0b40, 0x3fde0b40, 0x3fde0b40, 0x3fde0b40, 0x3fde0b40, 0x3fde0b40,
+        ]; // stand-up head()[1] bits — the pin
+        let w = room();
+        let mut b = Bond::stand_at(&w, [0.0, 0.0, 0.0], 0.0);
+        for _ in 0..30 { b.tick(&w, &Input::default()); }
+        assert!(b.grounded && b.crouch_drop == 0.0, "settled standing");
+        // THE CROUCH: one real press edge, then 69 held ticks (past the 60-tick lockout [M the
+        // toggle's lockout]). Every pin is `==` on the f32 bits — no epsilon anywhere.
+        b.tick(&w, &Input { crouch: true, ..Default::default() });
+        for t in 0..70 {
+            if t > 0 { b.tick(&w, &Input::default()); }
+            assert!(b.crouched, "crouch tick {t}: still crouched");
+            assert!(b.pos[1].to_bits() == M_POS[t], "crouch tick {t}: pos[1] bits {} vs master's {:x}", b.pos[1], M_POS[t]);
+            assert!(b.crouch_drop.to_bits() == M_CDROP[t], "crouch tick {t}: crouch_drop bits {} vs master's {:x}", b.crouch_drop, M_CDROP[t]);
+            assert!(b.head()[1].to_bits() == M_HEAD[t], "crouch tick {t}: head()[1] bits {} vs master's {:x} — the view must be master's every tick",
+                b.head()[1], M_HEAD[t]);
+        }
+        assert!(b.crouch_drop == 0.45, "the eased drop settled at 0.45 [M]");
+        // THE STAND-UP: one press edge (lockout 0 by then [M]), 39 more ticks.
+        b.tick(&w, &Input { crouch: true, ..Default::default() });
+        for t in 0..40 {
+            if t > 0 { b.tick(&w, &Input::default()); }
+            assert!(b.pos[1].to_bits() == S_POS[t], "stand tick {t}: pos[1] bits {} vs master's {:x}", b.pos[1], S_POS[t]);
+            assert!(b.crouch_drop.to_bits() == S_CDROP[t], "stand tick {t}: crouch_drop bits {} vs master's {:x}", b.crouch_drop, S_CDROP[t]);
+            assert!(b.head()[1].to_bits() == S_HEAD[t], "stand tick {t}: head()[1] bits {} vs master's {:x}", b.head()[1], S_HEAD[t]);
+        }
+        assert!(b.crouch_drop == 0.0 && !b.crouched, "back standing, the view eased home [M]");
+        assert!(b.head()[1].to_bits() == S_HEAD[39] && b.pos[1].to_bits() == S_POS[39],
+            "the standing rest and eye line restored bit-exactly ({} vs {:x})", b.head()[1], S_HEAD[39]);
+    }
+
     fn zero_g_thrusts_along_the_look_and_glides_when_the_thruster_stops() {
         let w = room();
         let mut b = Bond::stand_at(&w, [0.0, 0.0, -14.0], 0.0);

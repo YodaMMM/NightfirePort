@@ -173,6 +173,18 @@ pub fn bond_boxes(d: &Data<'_>, yaw: f32, pos: V3, crouch: bool) -> Vec<HitBox> 
     let sk = player_skin_hash(d.level);
     let Some(skin) = d.skins.get(&sk) else { return Vec::new() };
     let table = d.hitboxes.for_skin(sk);
+    // bond-hitbox-pose-2: the crouch pose's root-local frame assumes the game's SETTLED CROUCHED
+    // root — floor + cc + 0.051 = 0.607 [L the truck ride] vs the standing 1.086 — so the
+    // palette rides ROOT_HEIGHT − CROUCH_ROOT_HEIGHT = 0.4847 below `pos`. The -pose branch
+    // carried it by moving Bond::pos; that dropped the CAMERA 0.4847 instantly on top of
+    // head()'s eased crouch_drop (~0.93 in one tick) and re-seated the walk's floor rest, so
+    // the offset lives HERE: `pos`, the capsule and head() stay exactly master's [M master's
+    // toggle writes crouched + cc only; the ease ±0.0225 → 0.45 is the whole view change].
+    let pos = if crouch {
+        [pos[0], pos[1] - (crate::player::ROOT_HEIGHT - crate::player::CROUCH_ROOT_HEIGHT), pos[2]]
+    } else {
+        pos
+    };
     let om = nf_formats::placement::object_matrix([0.0, yaw, 0.0], pos);
     // The yaw matrix's 3×3 (row-vector rows; object_matrix's rows 0..2, the translation is row 3).
     let ry = [[om[0][0], om[0][1], om[0][2]], [om[1][0], om[1][1], om[1][2]], [om[2][0], om[2][1], om[2][2]]];
