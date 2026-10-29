@@ -12,3 +12,9 @@ quote its total line.
 Plan: branch s/script-channel-events pushed from origin/master (1b2309ea). work/ + ISO already
 in sandbox from prior session; next: build check, census scan of disc script streams, then
 0x1d94c0 decompile reading.
+
+Update (13:45 UTC): census committed (199 rows [D], census_channel_events.rs); 0xD/0x11
+exactness pinned per 0x1d94c0 (3 lib tests); the live half — the all-level write audit (every
+script-path write is a census row or an SP out mirror), the 07000006 boot NIS lighting the
+four searchlights as it plays, and the game's own no-camera skip gate pinned on real input.
+Report: docs/reports/script-channel-events.md. Full suite running in the background.
