@@ -20,3 +20,8 @@ say so in the report. Never weaken a decompile-backed test to make code pass.
 
 ---
 claimed-by: sandbox3 at 2026-10-29T15:19Z
+
+---
+## Report (done, 2026-10-29T16:35Z)
+
+Closed by the driver: the report is on `s/level-11-stairwell-bullet-holes-6` (docs/reports/level-11-stairwell-bullet-holes-6.md); the worker didn't run finish.sh.
