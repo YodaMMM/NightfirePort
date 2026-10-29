@@ -12000,6 +12000,18 @@ pub struct Drones {
     /// `DroneSpawner_Control` 0x137e68:216/:224). The port increments it at the team-2 pick's
     /// probes; the other consumers are not instrumented yet (open in the report).
     pub los_probes: u16,
+    /// `Locks_Init` 0x1b0548's keypad-code table — the game generates it during boot with the
+    /// SHARED stream (`Rand_Random` per digit, warmup `GameState+0x34·10 & 0x1ff` [M 0x1b0548]),
+    /// draws that sit BEFORE the level-start snapshots' capture point, so the port generates on a
+    /// LOCAL stream (deterministic [S]; the boot digits themselves differ from any given game
+    /// boot) and a test can override the field with the snapshot's own bytes [L]. The keypad
+    /// match reads it at arm time (`Lock_Update` case 3's 5-byte copy [M 0x1ae3d8:176-190]).
+    pub key_codes: crate::lock::KeyCodes,
+    /// The armed keypad mini-game (`Lock_Update` case 3/4) with its lock index: armed by the
+    /// class-0x3A use arm (`Lock_Activate` 0x1aed00's kind-0 no-key branch → state 3), ticked in
+    /// the lock pass (the match fires `Lock_Unlock` 0x1b0650 → the hold loop's channel). `None`
+    /// = no keypad open (the game's state 0/1/2/5 locks refuse the E).
+    pub keypad: Option<(usize, crate::lock::Keypad)>,
 }
 
 /// mp-world-sync (agent 9): one body as the online shared world sees it (see `Drones::net_bodies`).
@@ -12273,8 +12285,29 @@ impl Drones {
             spawn_fade: Some((45, 45)),
             // 987-mission-stats-carry: no tally on the load until the RamSave seeds it.
             tally_carry: None,
+            // Locks_Init 0x1b0548's codes over a LOCAL stream (the shared stream's boot draws are
+            // pre-consumed by the snapshots — see the field); warmup 0 [S — the game's
+            // GameState+0x34 is session state the port's fresh load does not model]. A test can
+            // override with the snapshot's own table [L].
+            key_codes: crate::lock::KeyCodes::init(&mut Rng::new(0x1b0548), 0),
+            keypad: None,
     };
         drones
+    }
+
+    /// A keypad digit press — `C_KEYPAD_Handler` 0x216810's msg 0x4b (the digit button's
+    /// control+0x20 value) [M: the wrap at the cap, `typed[count] = '0' + d`, count++] — the
+    /// handler the keypad menu's digit controls dispatch; the cursor/page UI is the view's
+    /// presentation (the port's Keypad machine is the game's own logic, lock.rs).
+    pub fn keypad_digit(&mut self, d: u32) {
+        if let Some((_, kp)) = self.keypad.as_mut() {
+            kp.digit(d);
+        }
+    }
+
+    /// The armed keypad's display (the menu's label control text) — for tests/renders.
+    pub fn keypad_display(&self) -> Option<String> {
+        self.keypad.as_ref().map(|(_, kp)| kp.display())
     }
 
     /// mayhew-end-transition: one tick of the exit hold — the fade counts down (the game advances
@@ -15019,6 +15052,40 @@ fn segment_hits_sphere(a: V3, b: V3, c: V3, r: f32) -> bool {
         // `body` = the player object's obj+0xC0
         // (the body position) — `SP_Activate` 0x1dc338:51-53's facing-dot input (use-pick-sp-standins).
         self.useobjs.player_activate(&mut self.scripts, &mut self.channels, sp_head, look, frame, d, body);
+        // `Player_Activate`'s class-0x3A lock path (`Lock_Activate` 0x1aed00): the pick is the same
+        // use sphere (radius 1.0 at head + 1×look, sphere-vs-sphere against the lock's world sphere
+        // [M 0x1a5170:101-108 + Control_BuildWorldSph's obj+0x80/+0x8C]), with the case-0x3A facing
+        // gate — `Mat_GetDir(lock+0x90) · (user+0xC0 − lock+0xC0) < 0` refuses (behind the panel)
+        // [M 0x1a5170:158-166]. `Lock_Activate`'s gates [M 0x1aed00 disasm]: no pause manager (the
+        // sim is never paused — the structural gate lock.rs documents), user class 3 (the port's
+        // use path is always the player), the lock state ∈ {0, 5} (the port: not unlocked/burned —
+        // states 1/2 — and not scanning — state 5 — and no keypad already armed — states 3/4); then
+        // kind 0 with an EMPTY key-ring slot → state 3 (arm the keypad). The port's lock side does
+        // not consult the key ring (the recorded gap, lock.rs header — `Lock_ReLock`'s clear is the
+        // only writer there), so the slot reads empty [S, same documented limitation].
+        // Kind 1 (the laser-burn locks) E-plays the hit sound only — presentation, skipped.
+        {
+            let use_point = [head[0] + look[0], head[1] + look[1], head[2] + look[2]];
+            let in_sphere = |c: V3, r: f32| {
+                let d = (use_point[0] - c[0]).powi(2) + (use_point[1] - c[1]).powi(2) + (use_point[2] - c[2]).powi(2);
+                d <= (1.0 + r) * (1.0 + r)
+            };
+            for (li, l) in self.locks.iter().enumerate() {
+                if l.kind != 0 || l.unlocked || l.burned || l.scanning { continue; }
+                if self.keypad.as_ref().is_some_and(|(cur, _)| *cur == li) { continue; } // state 3/4 [M 0x1aed00's state gate]
+                if !in_sphere(l.pos, l.radius) { continue; }
+                // The facing gate [M 0x1a5170:158-166] — the OBJECT translations (+0xC0).
+                let to = [body[0] - l.pos[0], body[1] - l.pos[1], body[2] - l.pos[2]];
+                if l.facing[0] * to[0] + l.facing[1] * to[1] + l.facing[2] * to[2] < 0.0 { continue; }
+                // Kind-0, no key → state := 3, GlobalVars/user saved [M 0x1aed00:001aed7c-90]:
+                // the keypad arms with `Lock_Update` case 3's data — the code copy happens there
+                // (the port's Keypad::arm takes the table's entry directly — the same bytes).
+                let code = self.key_codes.code(l.code);
+                let shown = self.key_codes.shown(l.code);
+                self.keypad = Some((li, crate::lock::Keypad::arm(code, shown)));
+                break;
+            }
+        }
         // `Player_Activate`'s class-0x38 monitor path (`Monitor_Activate` 0x1b0058): the use
         // sphere's nearest monitor within reach activates (or, while viewing, the same 0xE edge
         // cycles/exits). Reach: the door rule (head+look sphere 1.0 vs the object's sphere) —
@@ -16009,6 +16076,23 @@ fn segment_hits_sphere(a: V3, b: V3, c: V3, r: f32) -> bool {
         // it every frame; the port does the same here (the object-handler slot, after Env_Update).
         for l in self.locks.iter().filter(|l| (l.unlocked || l.burned) && l.out != 0) {
             self.channels.set(l.out as u32, 1, frame);
+        }
+        // The armed keypad's tick (`Lock_Update` 0x1ae3d8 case 4 [M :262-296]): the full typed
+        // buffer matching the code with the count at the cap fires `Lock_Unlock` — the lock's
+        // state := 1 (the port's `unlocked`), the manager deleted, the unlock sound (record
+        // u16[+4] — param 2, 0xffff-less; 0 on 0a's keypads = the game's Sound id 0, skipped) —
+        // and the NEXT tick's case 1 holds the out channel (the hold loop above; the game's
+        // channel write lands one tick after the solve the same way). The page closed without a
+        // match → state 0, re-armable (the Keypad::close arm — the view owns the close; the sim
+        // keeps the page until solved).
+        if let Some((li, kp)) = self.keypad.as_mut() {
+            if kp.tick() {
+                // The unlock sound (record u16[+4] = placement param 2) — the port's Lock carries
+                // no param-2 word and 0a's keypads read 0 there [D placements #648/#732] (the
+                // game's Sound id 0), so the play is skipped, not approximated.
+                self.locks[*li].unlocked = true;
+                self.keypad = None;
+            }
         }
         // The presentation FX tick (ripples/flicker/clouds/apocalypse/emitters, fix-world-fx): the
         // game's object handler updates them per frame in the same control pass. The impact

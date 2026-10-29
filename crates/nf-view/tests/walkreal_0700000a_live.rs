@@ -21,7 +21,22 @@ fn load_carry(save: Option<&nf_game::player::RamSave>) -> Walker {
         let sim = cold.sim.as_ref().unwrap();
         nf_game::player::RamSave::capture(&sim.drones.health, sim.gun.switch_request, &sim.drones.inventory, &sim.drones.channels)
     });
-    Walker::new(nf_view::load_with_carry(&iso(), "0700000a.bin", false, Some(&save)).expect("load 0700000a warm"))
+    let mut w = Walker::new(nf_view::load_with_carry(&iso(), "0700000a.bin", false, Some(&save)).expect("load 0700000a warm"));
+    // The keypad codes: the game's own boot table over the port's local-stream default
+    // [L ee_start_0700000a.bin @0x2beff8 — KeyCodes, 0x33·5 bytes; code index 1 reads
+    // "3078", shown 0] — the same load-path ground truth the level doc's switch_channels
+    // read uses [L @0x26fc90]. The port's Locks_Init stand-in generates on a local stream
+    // (the game's boot draws predate the snapshot's capture point); this override pins the
+    // digits to the snapshot boot's, so the walked keypad entry types the game's own code.
+    if let Ok(snap) = std::fs::read("../../work/ee_start_0700000a.bin") {
+        let mut rows = [[0u8; 5]; 0x33];
+        for (r, row) in rows.iter_mut().enumerate() {
+            let off = 0x2beff8 + r * 5;
+            if off + 5 <= snap.len() { row.copy_from_slice(&snap[off..off + 5]); }
+        }
+        w.scene.sim.as_mut().unwrap().drones.key_codes = nf_game::lock::KeyCodes(rows);
+    }
+    w
 }
 
 /// Fire the held weapon at a static point through the real trigger path: turn+look the view onto
@@ -421,11 +436,25 @@ fn walk_office_floor_to_the_security_keyboard() {
     let _w = walk_to_security_keyboard();
 }
 
-/// The full mission walk: the prologue (the REAL install from the walked south stand — no
-/// stand-in) is green this round; the RING's mouth crossing is the last blocker (re-ignored
-/// 2026-10-29 with this round's walked evidence — see the ignore reason).
+/// The full mission walk, GREEN end-to-end this round (2026-10-29): the prologue (the REAL
+/// install from the walked south stand) → the keyboard → the RING through the game's own mouth —
+/// the locked keypad door #724. The wall x −10.45..−10.70 seals the west offices from the atrium
+/// lane from z −15.38 to −23.70 [D coll-scan: Room-L-atrium_top's west face x −10.45 spans
+/// z −17.96..−15.38 and −21.62..−19.30 and −23.70..−21.62; the -3 round's probe rays] — the ONLY
+/// opening is door #724's doorway (the jamb faces z −18.04/−19.36 [D], 1.32 wide) with the door
+/// locked on ch 0x30, whose only writers are the kind-0 keypads #648/#732 (p1 = 1, p5 = 48
+/// [D placements]) mounted at (−10.69/−10.45, 1.52, −17.46) facing the pocket [D rotations ±π/2].
+/// The game's own ai graph crosses exactly there: the pocket → (−11.01,−18.60) → (−9.88,−18.62)
+/// → node 0 (−8.76,−21.55) [D 0700000a ai_network]. The player's route, all real input: E the
+/// keypad [M Player_Activate 0x1a5170 case 0x3A's facing gate → Lock_Activate 0x1aed00: class 3,
+/// state 0/5, no pause manager → kind-0 no-key → state 3], type the 4 digits [M Lock_Update
+/// 0x1ae3d8 case 4's match + C_KEYPAD_Handler 0x216810's digit handler], the match fires
+/// `Lock_Unlock` 0x1b0650 → `Lock_Update` case 1 holds switch_channels[0x30] [M 0x1ae3d8 case 1]
+/// → the door's rising-edge unlock + auto-activate [M 0x1363c8:101-107] → walk the doorway
+/// (z −18.7, the capsule r 0.55 clears the 1.32 jamb gap by 0.11 a side [D rays]; the open leaf
+/// parks clear — every eastward ray z −18.3..−19.15 clear with state 4 [D probe]) → the ai lane
+/// south → the south corridor → the hatch E.
 #[test]
-#[ignore = "the ring's mouth crossing (this round's WALKED legs, three routes tried, all wedge): (1) the -2 leg (−11.5, −13.5) hugs the pillar's south face (z −13.10 spans x −12.98..−10.9 [D probe rays]) — the r-0.55 capsule's north edge (z −12.95) overlaps the face; wedged at the 6000-tick cap on 'east past the alarm-panel corridor'. (2) The pocket crossing east along z −15: the NS wall's west face x −10.6955 runs CONTINUOUSLY z −17.5..−11.0 [D probe rays] — wedged on 'the ai node 130 south'. (3) Around the wall's south end at z −18.6 (legs (−12.0,−18.6)→(−8.5,−18.6)): wedged on 'across the wall line, south of its end' — the wall line extends past z −18.6 or another blocker sits there (unprobed). The prologue before the ring is green on real input this round INCLUDING the real install (walk_office_floor_to_the_security_keyboard): the walked south-band route (the diagonal wall's east end x ≈ −15, the x −13.5 column, the band at y 1.10), the real gadget-cycle equip, and 1 real shot → ch 0x48 [M PCQWorm_Update 0x1aee20] — the last stand-in is gone. Next round: probe the eastward rays at z −18.4..−19.5 x −12..−8 (the crossing around the wall's south end) and the pocket's southward columns x −11..−9, then re-derive the join to node 130."]
 fn walk_office_floor_qworm_keyboard_hatch() {
     let mut w = walk_to_security_keyboard();
 
@@ -443,7 +472,7 @@ fn walk_office_floor_qworm_keyboard_hatch() {
     // player's legal ring route: south through the west offices, the west corridor, the south
     // corridor, and up the east side to the hatch — the corners below, walked steadily (a real
     // player's stealth timing: no stops inside a civilian's reach).
-    let ring: [([f32; 3], &str); 44] = [
+    let ring: [([f32; 3], &str); 23] = [
         ([-7.5, 1.3, 14.5], "ring: the security centre's west door"),
         ([-7.5, 1.3, 16.5], "ring: the west hall north"),
         ([-20.5, 1.3, 16.5], "ring: the west offices' north corridor"),
@@ -486,28 +515,93 @@ fn walk_office_floor_qworm_keyboard_hatch() {
         // N-S ai lane at node 130 (every southward ray from the pocket x −12..−8.5,
         // z −13.65 → −18.0 clear [D probe rays]).
         ([-14.5, 1.3, -15.0], "ring: south of the pillar, into the pocket"),
-        // The lane join (this round's walk): the NS wall's west face at x −10.6955 runs
-        // CONTINUOUSLY z −17.5..−11.0 [D probe rays] — no eastward crossing between z −11 and
-        // −17.5 — so the pocket joins the game's N-S ai lane AROUND the wall's south end: south
-        // to z −18.6, east across the wall line, then north up the lane to node 130.
-        ([-12.0, 1.3, -18.6], "ring: the pocket's south end"),
-        ([-8.5, 1.3, -18.6], "ring: across the wall line, south of its end"),
+        // The keypad approach (this round's walk): the mouth is the locked door #724's doorway —
+        // see the test doc. The keypad #648 (−10.69, 1.52, −17.46 [D]) faces the pocket
+        // (facing (−1,0,0) [D rotation −π/2]); the stand (−11.9,−17.5) is 1.2 west of it (the
+        // wall's west face x −10.45 [D]) and inside the E reach (the use sphere 1.0 + the lock's
+        // 0.13 world sphere [M 0x1a5170:101-108]).
+        ([-11.9, 1.3, -17.5], "ring: the keypad's wall"),
+    ];
+    for (wp, label) in ring {
+        // The alarm guard's cone covers the south corridor mouth (the route note above) — the
+        // watch between the legs catches his run the way walk_leg_watched does below.
+        watch_and_clear(&mut w, 16.0);
+        w.walk_to(Wp::new(wp[0], wp[1], wp[2]).r(0.8), label);
+        assert!(w.scene.sim.as_ref().unwrap().drones.level_exit.is_none(), "the mission failed at '{label}'");
+    }
+    // THE MOUTH, through the game's own writer chain (all real input — see the test doc):
+    // aim the view at the keypad's world sphere and pulse the use key — the class-0x3A arm's
+    // facing gate + sphere pick arm the keypad (state 3) [M 0x1a5170:158-166 + 0x1aed00].
+    let kp: [f32; 3] = {
+        let sim = w.scene.sim.as_ref().unwrap();
+        let l = sim.drones.locks.iter().find(|l| l.placement == 648).expect("keypad #648 [D]");
+        l.pos
+    };
+    let mut armed = false;
+    'kp: for _cycle in 0..8u32 {
+        for t in 0..30u32 {
+            {
+                let sim = w.scene.sim.as_ref().unwrap();
+                if sim.drones.keypad.is_some() { armed = true; break 'kp; }
+                let bp = sim.bond.pos;
+                let eye = bp[1] + sim.bond.eye - sim.bond.crouch_drop;
+                let dx = kp[0] - bp[0];
+                let dz = kp[2] - bp[2];
+                let dy = kp[1] - eye;
+                let desired = dx.atan2(dz);
+                let err = walker::wrap_pi(desired - sim.bond.yaw);
+                let perr = (dy / walker::dxz(bp, kp).max(0.5)).atan() / std::f32::consts::FRAC_PI_2 - sim.bond.pitch;
+                let input = nf_game::player::Input {
+                    turn: err.clamp(-0.05, 0.05),
+                    look: perr.clamp(-0.05, 0.05),
+                    ..Default::default()
+                };
+                let hold = t == 15 && err.abs() < 0.2;
+                w.scene.sim.as_mut().unwrap().step_bond(input, false, false, hold);
+            }
+            w.total_ticks += 1;
+        }
+    }
+    assert!(armed, "the keypad #648 E arms the mini-game (state 3) [M 0x1aed00's kind-0 no-key branch]");
+    // The 4 digits [M C_KEYPAD_Handler 0x216810 msg 0x4b — the handler the keypad menu's digit
+    // controls dispatch; the cursor/page UI is the view's presentation (GAP-1's UI half, the
+    // audit §5)]. The code is the game's own boot table [L ee_start_0700000a.bin @0x2beff8 —
+    // KeyCodes, code index 1 = the locks' p1], loaded over the port's local-stream default in
+    // `load_carry`.
+    let code = {
+        let sim = w.scene.sim.as_ref().unwrap();
+        let idx = sim.drones.locks.iter().find(|l| l.placement == 648).expect("keypad #648").code;
+        sim.drones.key_codes.code(idx)
+    };
+    for d in code {
+        assert!(d >= b'0' && d <= b'9', "the snapshot code digits are ASCII [L 0x2beff8]");
+        w.scene.sim.as_mut().unwrap().drones.keypad_digit((d - b'0') as u32);
+        w.wait(1);
+    }
+    // The match fires Lock_Unlock [M 0x1ae3d8 case 4] and the NEXT case-1 tick holds
+    // switch_channels[0x30] [M case 1] — the door's rising-edge unlock + auto-activate
+    // [M 0x1363c8:101-107]. Wait the door's sweep out (state 4), the walked crossing rides the
+    // open doorway (every eastward ray z −18.3..−19.15 clear at state 4 [D probe]).
+    {
+        let mut ok = false;
+        for _ in 0..120 {
+            let sim = w.scene.sim.as_ref().unwrap();
+            let d = &sim.drones.doors.list.iter().find(|d| d.placement == 724).expect("door #724 [D]");
+            if sim.drones.channels.on(0x30) && d.state == 4 { ok = true; break; }
+            w.wait(1);
+        }
+        let sim = w.scene.sim.as_ref().unwrap();
+        assert!(ok, "the code match unlocks ch 0x30 [M 0x1ae3d8 case 4 → case 1] and the door auto-opens [M 0x1363c8:101-107]");
+        assert!(sim.drones.locks.iter().filter(|l| l.placement == 648).all(|l| l.unlocked), "the used lock's state 1 [M 0x1b0650]");
+    }
+    // The crossing + the lane south (this round's walked legs):
+    let ring2: [([f32; 3], &str); 21] = [
+        ([-11.0, 1.3, -18.7], "ring: the doorway west"),
+        ([-9.6, 1.3, -18.7], "ring: through the doorway, the atrium lane"),
         // The player's route south rides the game's N-S lane at x −8.5 (the ai nodes 132
-        // (−8.52, −18.47) / 130 (−8.52, −15.39) / 0 (−8.76, −21.55) [D]) — the mouth's guard
+        // (−8.52, −18.47) / 0 (−8.76, −21.55) [D 0700000a ai_network]) — the mouth's guard
         // slot east of the bridge is 0.5 wide (the jamb's corner at (−10.60, −18.66) [L the
         // bridge-edge sister's segment probe]) and cannot take the player's 1.1 capsule.
-        // The mouth re-derived (the -2 round's probes, carried forward): the OLD mouth legs
-        // (−12.0,−12.8)→(−8.5,−14.8) are DELETED — leg 23's waypoint (−12.0, −12.8) sat INSIDE
-        // a STATIC pillar block whose south face is z −13.10 spanning x −12.98..−10.9 (hit
-        // normal (0,0,−1)) with a west face at x −12.79..−12.98 over z −13.0..−12.1 [D probe
-        // rays]; the NS wall's west face at x −10.6955 runs CONTINUOUSLY z −17.5..−11.0 (every
-        // eastward ray from z −11 to −17.5 hits it) [D probe rays]. Door #540 office_b_door
-        // (−14.18, −12.96) is NOT the blocker: it E-opens cleanly to pos01 1.0 (state 0x4, the
-        // leaf matrix swung −92° along z at x −14.17) and NO ray across the mouth changes across
-        // the E [D probe]. The crossing is the OPEN SOUTH: every southward ray from the pocket
-        // (x −12..−8.5, z −13.65 → −18.0) is clear [D probe rays], joining the game's own N-S ai
-        // lane at node 130 (−8.52, −15.39) [D 0700000a ai_network] — the legs below.
-        ([-8.5, 1.3, -15.4], "ring: the ai node 130 south"),
         ([-8.5, 1.3, -18.5], "ring: the ai node 132 south"),
         ([-8.7, 1.3, -21.5], "ring: the ai node 0 into the south corridor"),
         ([-6.5, 1.3, -22.5], "ring: the south corridor"),
@@ -528,7 +622,7 @@ fn walk_office_floor_qworm_keyboard_hatch() {
         ([21.5, 1.3, 16.5], "ring: the anteroom east"),
         ([21.5, 1.3, 19.4], "ring: the hatch mouth"),
     ];
-    for (wp, label) in ring {
+    for (wp, label) in ring2 {
         // The alarm guard's cone covers the south corridor mouth (the route note above) — the
         // watch between the legs catches his run the way walk_leg_watched does below.
         watch_and_clear(&mut w, 16.0);
