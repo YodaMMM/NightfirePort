@@ -350,3 +350,20 @@ mp_perf_16_live 2 passed / 0 failed on the branch tree. Hazard note: a master wo
 against a SHARED CARGO_TARGET_DIR overwrites the branch's rlibs while the branch fingerprints
 say fresh — the next branch build must `touch crates/nf-game/src/lib.rs crates/nf-view/src/lib.rs`
 first (cost this session: one false "branch" run that reproduced master's digest).
+
+## capsule-cull-and-los-masks-12 (started 12:46 UTC 2026-10-29)
+
+Task: continue -11 (merge origin/master — the vision-bit census + ally fixes are on it;
+mp_perf_16 closed there). The one red left: walkreal_07000001
+following_mayhew_down_completes_the_level jams at (−33.44, 4.72, 12.03) on the plate descent.
+The -11 decompile reading says the port's walk-down (the 0.1 glue band [M Player_FeetOnPoint
+0x194188:106], gravity per riser, the soffit cull arm) matches the game on every cited term —
+the jam is the TEST's approach line into the stairwell, not a port rule. Re-derive the follow
+leg's descent on the main walk's proven hall-corner + stairwell-head shape (the line
+walk_from_the_spawn_to_the_exit_with_the_contact walks green), with the cite; Mayhew still
+parks on the plate and the level ends. Full suite on the merged tree, quote the total line.
+
+Plan: branch created from origin/s/capsule-cull-and-los-masks-11 (a16ab2a4), origin/master
+(1b2309ea) merged clean (48f58a2f); next: reproduce the jam, read the main walk's proven
+stairwell-head waypoints, re-derive the follow leg's descent on that shape, then the full
+suite (chunked — background jobs die between tool calls in this sandbox).
