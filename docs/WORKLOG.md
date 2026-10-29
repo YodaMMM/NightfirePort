@@ -54,3 +54,14 @@ the band-height void at (59,−207.5); Bond dropped onto the resumed band 10.34 
 floor asserted), and the real-input band walk extends to the true east end x 55.0. walkreal
 2 passed / 0 failed (0c 4308 ticks + 0d 838 ticks). Next session: the crossing's live check
 (the real game's route over x 55.5..67), then blockers 2-5 of level-0c-every-objective.
+
+Progress (11:05 UTC, session 2): origin/master merged (84f8cabd, comment-only batch-1029a);
+walkreal re-verified green on the merged tree (2 passed / 0 failed, 9.7 s). The FULL suite ran
+to completion in 10 foreground chunks (the sandbox kills background jobs between tool calls;
+per-binary limit 90 s): 3502 passed, 18 failed, 142 ignored — every failure the documented
+allowances (disc_golden x3 + identity_disc = the slim ISO; fix_0c_pylon x2 + probe_pylon_render
+= the no-GPU sandbox) or environment (90 s cap kills on slow walks/soaks: campaign_flow,
+fix_npc_doors, frame_cost, levels_sweep, net_soak, rook_door_06, pss_vag_golden,
+walkreal_07000008, walkreal_07000003, weapon_matrix; OOM CRASH -9: mp_stress_explosives,
+mp_online_failures under 3 GB). Report at docs/reports/level-0c-door2turbine-3.md next;
+blockers 2-5 remain the next session's item.
