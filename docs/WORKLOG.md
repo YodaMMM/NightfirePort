@@ -18,3 +18,23 @@ Plan: push this branch first, start tools/test/suite.py in the background, then 
 stairwell bullet-impact measurement test (real fire path) and run it on master and on
 s/capsule-cull-and-los-masks-11; compare impact faces against render geometry; fix only
 what the measurement proves broken.
+
+## level-11-stairwell-bullet-holes-5 (2026-10-29)
+
+Measured 07000011's stairwell bullet impacts vs the render geometry on master AND on
+s/capsule-cull-and-los-masks-11 with a new fan test (4 spots x 8 yaws x 5 pitches through the
+real input path; impacts + decals measured against the drawn World triangles). Identical
+numbers on both trees: 101 world impacts / 5 mid-air impact records (all on mat-0x40
+pass-flagged faces — invisible: mat&0x3f==0 blocks Effect_Create [M 0x1ce6f8], no render
+consumer for player_impacts) and 1 VISIBLE mid-air decal at (23.20, 28.22, 5.77), 0.40 from
+the nearest drawn triangle, from the frame2944 spot yaw +0.79 pitch -0.50 ricochet chain —
+the 10-25 symptom reproduced [L]. Tried the [M]-grounded scoped flush re-query
+(Collide_Pick 0x1eb320:125's StraddleCels-only candidates): the numbers did not move — the
+faces are IN the straddle set — so the surviving hole may be game-true (undrawn collision
+planes with real material bytes in this declared-fudge stairwell); needs the main agent's
+render check (report's "Live checks"). The scoped re-query implementation is described in the
+report for the next session to land after a full suite (RNG-stream blast radius). The pin
+runs ignored-RED with the numbers. FULL SUITE NOT RUN: this sandbox's 10 GB disk filled twice
+during the rebuild churn (ld signal 7 Bus error); pruned 3.9 GB of stale test executables but
+the window did not fit the relink+run. Next session: the live check decides the rule; the
+scoped flush lands after a full suite.
