@@ -135,7 +135,11 @@ fn walk_spawn_to_the_lower_floor_load_point() {
     w.walk_to(Wp::new(15.2, 35.6, 6.0).r(1.0), "the south run down (39.1→35.2)");
     w.walk_to(Wp::new(14.8, 35.4, 5.0).r(0.9), "the south-west landing 35.2");
     band(&w, 34.6, 36.6, "the SW landing");
-    w.walk_to(Wp::new(14.8, 31.4, -2.6).r(1.0), "the west flight C down (35.2→31.1)");
+    // The arrival radius 0.5 (was 1.0): the XZ stop 1.0 short of the flight-bottom waypoint sat
+    // ~1.1 above the 31.1 tread and GRAZED the band's 32.5 top (32.5039) once the merged tree's
+    // walk-contact settle shifted ~4 mm (the -9 §7 class — the harness stopped early, the band
+    // reads the flight's bottom). The band itself is untouched; the leg now reaches it.
+    w.walk_to(Wp::new(14.8, 31.4, -2.6).r(0.5), "the west flight C down (35.2→31.1)");
     band(&w, 30.4, 32.5, "flight C's bottom");
     w.walk_to(Wp::new(22.4, 31.3, -3.0).r(1.0), "the north strip 31.1 east");
     w.walk_to(Wp::new(23.0, 27.4, 3.8).r(1.0), "the east connector down (31.1→27.1)");
