@@ -15,3 +15,11 @@ quote its total line.
 Plan: push this branch, start tools/test/suite.py in the background now, inventory the
 disc objective records for 07000007 and the current test's coverage/stand-ins, then add
 the missing legs on the real input path; fix port gaps the walk proves broken.
+
+Progress (05:34 UTC): the objective-2 reveal chain is committed and pushed (91927210) and
+re-verified on the rebuilt binary — `walkreal_07000007_live` 2 passed / 0 failed / 14.40 s
+directly, both new assert messages confirmed in the binary; `walkreal_07000008_live` passed
+inside the suite (3 passed, 94.12 s). The full-suite runner is grinding in the background
+(329/892 binaries, interim 1134 passed / 2 env-only failed / 86 ignored, 2 OOM CRASHes at
+last read; it needs longer than the sandbox window). Report drafted at
+docs/reports/level-07-every-objective.md.
