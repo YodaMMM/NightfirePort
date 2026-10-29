@@ -54,7 +54,7 @@
 use crate::drone::Rng;
 use crate::triggers::Channels;
 use crate::world::V3;
-use nf_formats::placement::Placement;
+use nf_formats::placement::{view_rot_trans_matrix, Placement};
 
 #[derive(Clone, Debug)]
 pub struct Lock {
@@ -113,6 +113,10 @@ pub struct Lock {
     /// chain ends at the variant (its +0x40 is null), so a re-lock's NextLOD [M 0x1b0750] is a no-op
     /// and the variant stays. The draw shows the variant from the first unlock on.
     pub lod_next: bool,
+    /// `Mat_GetDir(obj+0x90)` — the lock's facing (the placement rotation's matrix row 2), the
+    /// use-pick facing gate's direction: `Player_Activate` 0x1a5170's class-0x3A arm refuses the
+    /// activation when `dir · (user+0xC0 − lock+0xC0) < 0` (behind the panel) [M 0x1a5170:158-166].
+    pub facing: V3,
 }
 
 impl Lock {
@@ -124,6 +128,8 @@ impl Lock {
             if p.flags & 0xff != 0x2e { continue; }
             let param = |k: u32| p.params.iter().find(|(j, _)| *j == k).map_or(0, |&(_, v)| v);
             let (centre, radius) = object(p).unwrap_or((p.translation, 1.0));
+            // The placement's object matrix (translation unused for the direction) [M 0x1a5170:158].
+            let m = view_rot_trans_matrix(p.rotation, [0.0; 3]);
             out.push(Lock {
                 placement: i,
                 pos: [p.translation[0] + centre[0], p.translation[1] + centre[1], p.translation[2] + centre[2]],
@@ -144,6 +150,7 @@ impl Lock {
                 pending_sounds: Vec::new(),
                 scanning: false,
                 lod_next: false,
+                facing: [m[2][0], m[2][1], m[2][2]],
             });
         }
         out
@@ -433,6 +440,7 @@ mod tests {
             burn: 0, burned: false, unlock_on_operative: false, unlocked: false,
             kind, code, scan_progress: 0, scan_solved: 0, pending_sounds: Vec::new(), scanning: false, lod_next: false,
             burn_a: 0xff, burn_b: 0xff, grace: 0,
+            facing: [0.0, 0.0, 1.0],
         }
     }
 

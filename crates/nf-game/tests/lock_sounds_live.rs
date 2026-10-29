@@ -32,6 +32,7 @@ fn lock() -> Lock {
         pending_sounds: Vec::new(),
         scanning: false,
         lod_next: false,
+        facing: [0.0, 0.0, 1.0],
     }
 }
 
