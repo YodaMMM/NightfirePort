@@ -304,7 +304,7 @@ fn walk_ghost() -> bool {
 /// lifetime DeltaP accumulator [M Intersect_CylGeom 0x109da0:447's guard; M Collide_Intersect
 /// 0x1ebaa8:353-373; L ee_start_* boots (0,0,0), ee_snapshot drifts ~15 m]). See
 /// `world::capsule_tri_clip` for the per-triangle model and its [S] port choices. Default OFF —
-/// the main agent decides after a feel check; measured against the whole walkreal battery.
+/// it stays off until a feel check; measured against the whole walkreal battery.
 fn walk_clip() -> bool {
     static ON: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
     *ON.get_or_init(|| std::env::var("NF_WALK_CLIP").is_ok())
