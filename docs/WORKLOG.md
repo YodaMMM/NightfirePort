@@ -30,3 +30,12 @@ behaviour words, test fixed per the discipline). The fire-across-the-shaft leg R
 with the new exact blocker: 0/2400 clear eye→drone rays from the ride line (the shaft core
 blocks the x ≈ −4.3 spots [D census]); game-side reachability unverified [S] — live check
 in the report. walkreal + satchel re-run green with the garrison live (6.6s / 10.2s).
+
+Progress (17:05 UTC): DONE — the suite chunks ran in the foreground (background dies between
+tool calls in this sandbox): all 893 binaries started, aggregate 3433 passed / 7 failed /
+197 ignored / 17 binary-timeouts. Failures classified: 3 disc_golden + identity_disc (the
+slim-ISO class), fix_0c_pylon_live ×2 re-run GREEN-check FAILED on the pre-fix drone.rs
+(master-preexisting), probe_render_pylon_only passes direct with both trees (env). Timeouts:
+walkreal_07000003 4p/387s, walkreal_07000008 3p/94.8s, weapon_matrix 6p/133s uncapped (slow,
+not broken); the rest the sandbox hang class. Level docs updated (0700004a.md §7 spawner row
++ live checks; audit GAP-1 → RESOLVED). Report at docs/reports/level-4a-every-objective.md.
