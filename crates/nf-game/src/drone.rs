@@ -13814,7 +13814,11 @@ fn segment_hits_sphere(a: V3, b: V3, c: V3, r: f32) -> bool {
                 // contradiction surfaced; the green destroy test pins the script, not the scale).
                 // explode-debris-spawn: Destroy_Smash's 12th arg (the u16 debris kind) is an
                 // explicit 0 — `sw $zero,($sp)` [M 0x12bcf8]; no destroyable blast spawns debris.
-                self.pending_blasts.push((pos, radius, damage, usize::MAX, 0, script, radius, 0));
+                // Destroy_Smash's script scale is the tag's +0x8c [M 0x12bcdc `lwc1 $f12, 140($16)`] while
+                // the blast radius is +0x8c times the type multiplier — the box-sphere stand-in
+                // is radius / mult (×3 for 5/6): at scale = radius the C5 fireball overflowed the
+                // hall up to the roof.
+                self.pending_blasts.push((pos, radius, damage, usize::MAX, 0, script, radius / match kind { 1 => 4.0, 2 => 2.0, _ => 3.0 }, 0));
             }
             // The solid leaf took the round: it dies here, after the drain registered — the
             // game's one contact per round [M Bullet_CollisionHandler 0x12ce80's state-2 death;
@@ -14893,7 +14897,7 @@ fn segment_hits_sphere(a: V3, b: V3, c: V3, r: f32) -> bool {
             for i in hits.destroys {
                 if let Some((c, r, dmg, kind)) = self.props.smash(i, &mut self.channels, frame) {
                     let script = match kind { 1 => 0x0600_0027, 2 => 0x0600_004f, _ => 0x0600_0052 };
-                    self.pending_blasts.push((c, r, dmg, owner, 0, script, r, 0));
+                    self.pending_blasts.push((c, r, dmg, owner, 0, script, r / match kind { 1 => 4.0, 2 => 2.0, _ => 3.0 }, 0));
                 }
             }
             // case 0x20 → `Break_ApplyDamage` [M 0x17c518:163-167 — hitdata+8 = the amount;
@@ -17156,7 +17160,11 @@ fn segment_hits_sphere(a: V3, b: V3, c: V3, r: f32) -> bool {
         for (pos, radius, damage, kind) in self.props.channel_kills(&mut self.channels, frame) {
             let script = match kind { 1 => 0x0600_0027, 2 => 0x0600_004f, _ => 0x0600_0052 };
             // explode-debris-spawn: kind 0 — the same Destroy_Smash call as the bullet path [M 0x12bcf8].
-            self.pending_blasts.push((pos, radius, damage, usize::MAX, 0, script, radius, 0));
+            // Destroy_Smash's script scale is the tag's +0x8c [M 0x12bcdc `lwc1 $f12, 140($16)`] while
+                // the blast radius is +0x8c times the type multiplier — the box-sphere stand-in
+                // is radius / mult (×3 for 5/6): at scale = radius the C5 fireball overflowed the
+                // hall up to the roof.
+                self.pending_blasts.push((pos, radius, damage, usize::MAX, 0, script, radius / match kind { 1 => 4.0, 2 => 2.0, _ => 3.0 }, 0));
         }
         // The destroy leaves' colour pair steps once per tick — the tail of every non-death
         // `Destroy_CollisionHandler` call [M 0x12bd48:61-95]: the beam-contact leaves flash
