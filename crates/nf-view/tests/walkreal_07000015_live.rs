@@ -9,8 +9,13 @@
 //! east bridge; the z 4..0 split on the east lane) → door[49] → the USE exit #445 at
 //! (0.0, 41.3, −24.8) ([M Player_Activate 0x1a5170 case 0x1d → Trigger_Activate 0x1b2318];
 //! `Trigger_Update` case 10 never self-fires with gate 0 [M 0x1b1a78:162-166]) → the load into
-//! 07000016. The objective (record 21 #1 "Find the exit to Omega Sector", complete ch 0x8e [L
-//! record 21]) completes on 07000016's spawn plate #252 [D 07000016], so the walk carries its own
+//! 07000016. The objective — MissionData row 21's ONLY record (level-15-every-objective [D
+//! work/elf/ACTION.ELF MissionData vaddr 0x2a4350, row 21 @ 0x2a42d8: level 0x07000015, count 1;
+//! obj 0: text 0x0400004d, fail 0xffffffff (none), hint 0x04000054, ch 0x8e, init 0, enable
+//! 0x4b, flags 0 — byte-for-byte the port's c07000015::DEF]) — is "Find the exit to Omega
+//! Sector" (complete ch 0x8e [D row 21; L ee_start_05 @ 0x2a42d8]). Mission_MonitorObjectives
+//! folds state 3 → 4 (complete) only on the record's channel [M 0x1827d8 case 3], and it
+//! completes on 07000016's spawn plate #252 [D 07000016], so the walk carries its own
 //! live channels into the fresh 07000016 load and finishes on that plate (the game's own
 //! arrival spot — the spawn (5.17, 0.90, −65.30) stands inside the plate's box). No cut-scene
 //! holds the route: the level's only script holders are the guards' own scripts; every trigger
@@ -43,8 +48,10 @@ fn walk_spawn_to_the_omega_sector_exit() {
     w.wait(120);
     {
         let sim = w.scene.sim.as_ref().unwrap();
-        assert!(sim.drones.channels.on(0x4b), "the spawn plate #484 fires ch 0x4b [D]");
-        assert_eq!(sim.drones.mission.states[21][0], 3, "'Find the exit to Omega Sector' announces [L record 15]");
+        assert!(sim.drones.channels.on(0x4b), "the spawn plate #484 fires the record's enable ch 0x4b [D row 21 enable 0x4b]");
+        assert_eq!(sim.drones.mission.states[21].len(), 1,
+            "the mission data lists exactly ONE objective for 07000015 [D MissionData row 21 count 1]");
+        assert_eq!(sim.drones.mission.states[21][0], 3, "'Find the exit to Omega Sector' announces [M 0x1827d8 case 1 → 3 on enable ch 0x4b; L record 15]");
     }
 
     // The route: the spawn gantry west, then the NAV GRAPH's own route to the exit hall (the

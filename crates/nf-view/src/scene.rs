@@ -10532,9 +10532,14 @@ pub fn build(level: &Level, cels_only: bool, skeletons: &HashMap<u8, Skeleton>, 
             }
         }
         if has {
-            for (ci, m) in mults.iter().enumerate() { cols[ci] = rgb(*m); }
-            for (a, m) in attach_mult.iter().enumerate() { if let Some(c) = cols.get_mut((l.col_att + a as u32) as usize) { *c = rgb(*m); } }
-            for (pk, m) in pickup_mult.iter().enumerate() { if let Some(c) = cols.get_mut((l.col_pick + pk as u32) as usize) { *c = rgb(*m); } }
+            // Each run writes only its own section of the layout. Pickups created after the build (a
+            // dead guard's dropped gun) have no draw slot here (the drop draws as its attachment);
+            // writing them past `col_pick + n_pick` overwrote the searchlight slots and the shared
+            // `col_one` entry every door and interactable draws with, dimming them all to the
+            // drop's cel ambient.
+            for (ci, m) in mults.iter().enumerate().take(l.col_att as usize) { cols[ci] = rgb(*m); }
+            for (a, m) in attach_mult.iter().enumerate().take((l.col_pick - l.col_att) as usize) { cols[(l.col_att + a as u32) as usize] = rgb(*m); }
+            for (pk, m) in pickup_mult.iter().enumerate().take((l.col_sl - l.col_pick) as usize) { cols[(l.col_pick + pk as u32) as usize] = rgb(*m); }
         }
         // blood-puff-render: the gas puffs' draw colour IS the pool's live rgba — the game's
         // `View_SetupRenderModes_Tweak` 0x1e5888:46-49 feeds the gas object's obj+0x103..0x106 bytes

@@ -12,9 +12,14 @@
 //! writes ch 0x50 (the objective completes) → the success touches #73/#164/#165 write ch 0x64
 //! (=100) and with every part's channel on (0x48, 0x49, 0x4D, 0x4A, 0x50) the monitor raises
 //! MISSION SUCCESS [M 0x1827d8:119-123] → "Mission Complete" → LevelToEndTo 0x07300013 (the
-//! driving interlude; the port logs and skips driving codes [M 0x182c60]) → E at the level's own
-//! exit #72 (−12.79, −367.97, 68.25) requests 0x07300013 with its gate 0x4E off (the E arm falls
-//! through [M 0x1b2318 case 10]; dead data — ch 0x4E has no writer on this disc [D]).
+//! driving interlude; the port logs and skips driving codes [M 0x182c60]) → the mission_end
+//! latch = the level exit firing. The mission's four objectives [L ee_start_05.bin @
+//! 0x2a41b8/0x2a41e8/0x2a4200 — 2+1+1 records; docs/formats/mission-data.md], asserted in
+//! player order: "Activate elevator override control in security center" (ch 0x49 →
+//! states[16][0] == 4, tower2's console E), "Escape through the elevator shaft" (ch 0x4D →
+//! states[16][1] == 4, the 4A spawn drop), "Gain access to lobby" (ch 0x4A → states[17][0]
+//! == 4, the 13 spawn touch), "Raise security gate and escape through front entrance" (ch
+//! 0x50 → states[18][0] 3→4, the panel E + the entrance touch).
 //!
 //! The fake lift (SP #161, trigger ch 0x23) has no writer on the disc [D §4] — dead data; the
 //! route out is the front entrance, not the lift.
@@ -196,10 +201,34 @@ fn walk_the_warm_chain_to_the_front_entrance_and_out() {
     assert!(success, "the AND raises mission success at the entrance [M 0x1827d8]");
     assert!(w.scene.sim.as_ref().unwrap().drones.channels.on(0x64), "the success touches wrote ch 0x64 [D]");
 
+    // THE LEVEL EXIT: MissionState 6's own sequence — case 6's "Mission Complete" banner with
+    // LevelToEndTo 0x07300013 → case 7's 240-tick hold → case 4's ResetMap_LevelToLoad
+    // [M 0x182c60:85-122, 65-76]. 0x07300013 is a driving interlude code → the port's end
+    // sequence arrives as the viewer's `mission_end` latch (the 04 walkreal's pattern; the
+    // walker's ticks drain the layer's events through the scene's real hud path [M scene.rs]).
+    // The level's own exit #72 (−12.79, −367.97, 68.25; the E-load fallback) is DEAD DATA —
+    // its gate ch 0x4E has no writer on the disc [D §3] and the walked probe wedges at x ≈ −9.1
+    // — so the game's real exit IS this mission-complete hand-off, and the E-arm itself is
+    // covered by walk_07000013_live.
+    let mut ended = false;
+    for _ in 0..500u32 {
+        w.tick(nf_game::player::Input::default(), false);
+        if w.scene.sim.as_ref().unwrap().drones.mission_end.is_some() { ended = true; break; }
+    }
+    assert!(ended, "the mission-complete sequence must land (case 6 banner → case 4 ResetMap) [M 0x182c60]");
+    {
+        let sim = w.scene.sim.as_ref().unwrap();
+        assert_eq!(sim.drones.mission_end, Some(0x0730_0013),
+            "LevelEnd 0x07300013 → the end sequence with LevelToEndTo 0x07300013 [M 0x182c60:89-90]");
+        assert_eq!(sim.drones.mission.to_end, 0x0730_0013, "LevelToEndTo [M 0x182c60:89-90]");
+        assert_eq!(sim.drones.mission.state, 6, "MissionState 6 = complete [M 0x182c60:88]");
+        assert_eq!(sim.drones.mission.states[18][0], 4, "the entrance objective stays complete");
+    }
+
     // LevelToEndTo 0x07300013 (the driving interlude) is the mission end's own hand-off [M
     // 0x182c60 case 6] — latched above. The level's own exit #72 (−12.79, −367.97, 68.25; the
     // E-load fallback) sits beyond the entrance's west wall (the walked probe wedges at x ≈ −9.1
     // [D]) and is DEAD DATA anyway (gate ch 0x4E has no writer on the disc [D §3]) — the walkreal
-    // route ends at the mission latch; the E-arm itself is covered by walk_07000013_live.
+    // route ends at the level exit; the E-arm itself is covered by walk_07000013_live.
     eprintln!("[013] walked out in {} ticks; stuck {}; falls {}", w.total_ticks, w.report.stuck_events.len(), w.report.falls.len());
 }

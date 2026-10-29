@@ -12,6 +12,13 @@
 //!   tick banner → case 4 hands `ResetMap_LevelToLoad(0x0730004)` [M 0x182c60:65-76] — the level's
 //!   own exit (no 0xE8 trigger exists on this level [D placement probe]).
 //! level-04-complete: the walk now carries the mission layer to the banner end and pins the events.
+//! every-objective: the level's mission data lists EXACTLY ONE objective record — obj0 0x0400000d
+//! "Defeat the assassin", fail none, hint 0x04000015, condition ch 0x54, enable ch 0x53, flags 0
+//! [L ee_snapshot.bin 0x2a4350 + row 7*40 (level 07000004) → objective table 0x2a3f60, count 1;
+//! matches MissionData symbol MissionData[7] [M ACTION.ELF 0x2a4350]]. So the objective list the
+//! current tests already cover is {obj0}, covered COMPLETE by walk_the_full_mission_start_to_finish
+//! (announced state 3 → the pickups → the kill → state 4 → the banner → the level's exit firing);
+//! there are no further objectives to leg. That test now pins the record count itself.
 
 #[path = "common/walker.rs"]
 mod walker;
@@ -74,6 +81,10 @@ fn walk_the_full_mission_start_to_finish() {
     let iso = iso();
     let mut w = load_ready(&iso);
     let row = mission_row(0x0700_0004);
+    // The WHOLE objective list the mission data lists [L ee_snapshot.bin 0x2a4350 row 7 → table
+    // 0x2a3f60 count 1]: one record, obj0. Completing it completes every objective of the level.
+    assert_eq!(mission::LEVELS[row].objectives.len(), 1,
+        "07000004's mission data lists exactly one objective record [L ee_snapshot.bin 0x2a4350 row 7 → 0x2a3f60 count 1]");
     // The monitor's enable arm: ch 0x53 (the story hand-off) is ON → obj0 announces once [M
     // 0x1827d8:55-67]. Two ticks so the fold's own tick has run.
     w.tick(Default::default(), false);

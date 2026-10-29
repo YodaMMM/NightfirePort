@@ -17,6 +17,21 @@
 //! objective 2 "Escape through the elevator shaft" completes (the late AND — its writer is on
 //! 0700004A [D census §2]).
 
+//! every-objective: the level's mission data lists EXACTLY TWO objective records — decoded from
+//! the EE snapshot [L ee_snapshot.bin 0x2a4350 + row 16*40 (level 07000012, mission 07000011,
+//! part 1) → objective table 0x2a41b8, count 2]:
+//!   obj0 text 0x04000037 "Activate elevator override control in security center", fail none,
+//!        hint 0x0400003d, condition ch 0x49, enable ch 0x48, flags 0;
+//!   obj1 text 0x04000038 "Escape through the elevator shaft", fail none, hint 0x0400003e,
+//!        condition ch 0x4D, enable ch 0x49, flags 0.
+//! The test below covers BOTH, in the order a player does them: obj0 announced at the spawn
+//! (the enable ch 0x48 fires under Bond's feet [D #679]) and completed at the console E
+//! (tower2::walk_12 asserts states[16][0] 3 → 4 with ch 0x49); obj1 announced at the console
+//! (states[16][1] == 3) and completed through the REAL exit load — the level's own 0xE8 exit
+//! fires into 0700004A and its spawn touch #277 writes ch 0x4D (the late AND — obj1's writer
+//! lives on 0700004A [D census §2]), asserted states[16][1] == 4 with obj0 still 4. Nothing
+//! else to leg.
+
 #[path = "common/walker_b2.rs"]
 mod walker;
 #[path = "common/tower2.rs"]
@@ -26,9 +41,21 @@ use walker::Walker;
 
 fn iso() -> String { std::env::var("NF_ISO").expect("NF_ISO") }
 
+/// The mission-table index of THIS level's record, with the whole objective list pinned [L
+/// ee_snapshot.bin 0x2a4350 row 16 → table 0x2a41b8 count 2].
+fn mission_row_12() -> usize {
+    let row = nf_game::mission::LEVELS.iter().position(|l| l.level == 0x0700_0012)
+        .expect("the level's mission record");
+    assert_eq!(nf_game::mission::LEVELS[row].objectives.len(), 2,
+        "07000012's mission data lists exactly two objective records [L ee_snapshot.bin 0x2a4350 row 16 → 0x2a41b8 count 2]");
+    row
+}
+
 #[test]
 fn walk_spawn_to_the_shaft_exit() {
     let iso = iso();
+    let row12 = mission_row_12();
+    assert_eq!(row12, 16, "the record's row in the port's LEVELS table [L row 16]");
     // The keypad locks (placements 656/694) carry param 6 = 1: Lock_Create auto-unlocks them at
     // difficulty 1 [M 0x1ae1f8 tail: level_tag+0x44 != 0 && GameState+0x28 == 1 -> Lock_Unlock],
     // so the Q-Decryptor keypad burn this route walks is the Agent+ behavior; the load is 00 Agent
@@ -67,9 +94,9 @@ fn walk_spawn_to_the_shaft_exit() {
     for _ in 0..30 { w.tick(nf_game::player::Input::default(), false); }
     {
         let sim = w.scene.sim.as_ref().unwrap();
-        assert_eq!(sim.drones.mission.states[16][1], 4,
+        assert_eq!(sim.drones.mission.states[row12][1], 4,
             "12's 'Escape through the elevator shaft' completes through the real exit load (the late AND) [M 0x1827d8]");
-        assert_eq!(sim.drones.mission.states[16][0], 4,
+        assert_eq!(sim.drones.mission.states[row12][0], 4,
             "12's 'Activate elevator override control' stays complete [M 0x182270 keeps previous parts]");
     }
 }
