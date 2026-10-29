@@ -367,3 +367,14 @@ Plan: branch created from origin/s/capsule-cull-and-los-masks-11 (a16ab2a4), ori
 (1b2309ea) merged clean (48f58a2f); next: reproduce the jam, read the main walk's proven
 stairwell-head waypoints, re-derive the follow leg's descent on that shape, then the full
 suite (chunked — background jobs die between tool calls in this sandbox).
+
+Progress (13:16 UTC): the merged tree (48f58a2f) walks the -11 red GREEN as-is —
+following_mayhew_down_completes_the_level passed end to end (20.8 s; full binary 4/4 in
+56.5 s): the intro, the meet, the hall AND 0x99, the follow down, Mayhew parked on the plate
+(−33.06, 3.54, 13.54, touched_by=true), ch 0x10 → level_exit 07000002. The unjam rides
+master's ally-lead fixes the task ordered into the merge: 74f68a47 (the vision bit on the
+ally lead/follow chain's ENTER arms, the 137-writer census) + 1c75fa29 (the ally-lead
+family's msg-0x21 resume [M 0x15e4f0/0x15e698/0x15eda8/0x15ec08] + RECOVER's mission-lead
+arm) — the lead no longer wedges mid-descent, so no test-leg re-derivation was needed; the
+-11 legs already were the main walk's proven shape. Full suite chunking on the merged tree
+(state /home/z/suite12_state.json) for the total line.
