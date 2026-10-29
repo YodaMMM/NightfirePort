@@ -24,6 +24,35 @@
 //! CivilianGuard 0x1603a8 case 3]), and after the auto-draw the walk cycles BACK to the fists
 //! (the player's own weapon cycle) so the armed-Bond scare [M 0x160140:44-76] and the bouncer
 //! attack range [M NearArmedPerson 0x1787c8] never trip while he crosses the party.
+//!
+//! ## The objective inventory (level-07-every-objective, all covered on the real-input path)
+//!
+//! The disc's MissionData row for 07000007 (mission 0x07000005 part 2) carries EXACTLY TWO
+//! objective records [L ee_start_05.bin @ 0x2a43a0 → table 0x2a3e58, count 2; re-verified byte
+//! for byte against the port's `crates/nf-game/src/mission/c07000007.rs`]:
+//!
+//! | # | objective [D text id] | completes on | revealed by | asserted where |
+//! |---|---|---|---|---|
+//! | 1 | "Rendezvous with undercover agents and maintain cover as party guest" (0x04000002) | ch 0x48 | ch 0x47 | state 3 after plate #411 (`obj07().0 == 3`); state 4 after plate #412 |
+//! | 2 | "Spy on secret meeting" (0x04000003) | ch 0x49 | ch 0x48 | state 4 after 07000008's intro plate #237 (`states[2][1] == 4`) |
+//!
+//! Both are covered by `walk_the_party_start_to_finish` end to end on real input; the
+//! "maintain cover" half of objective 1 is additionally pinned by
+//! `the_group_plate_wakes_the_walkers_and_the_guards_stay_calm` (no bouncer enters combat while
+//! Bond crosses unarmed [M 0x1603a8 case 3]). There is no third record to cover — the
+//! "photographs" objective has no disc evidence (docs/levels/07000007.md §2 [S]).
+//!
+//! ## The stand-ins the walk still carries (none is a poke; no channel/state writes anywhere)
+//!
+//! 1. **The P2K auto-draw is asserted, not worn.** The walk harness steps the Sim directly, and
+//!    the rising-edge auto-draw `Upgrade_Weapon(6)` is owned by the view loop, so across the
+//!    walk Bond keeps the fists the loadout gave him; the test asserts the LOCK LIFT on the real
+//!    path (the cycle request survives `weapon_lock_input` once ch 0x48 is on [M 0x1a24c8:243-246])
+//!    instead. The draw itself is pinned through the view loop by `level_carry_live`.
+//! 2. **The 07000007 → 07000008 hand-off is the game's own carry** (the exit trigger's
+//!    `level_exit` → RamSave + mission states [M 0x1b2318:111-116]) — the same load path a real
+//!    player's exit takes, not a teleport: the next Walker loads 07000008 fresh and Bond WALKS
+//!    from its start to plate #237 on real input.
 
 #[path = "common/walker.rs"]
 mod walker;
@@ -58,6 +87,10 @@ fn walk_the_party_start_to_finish() {
         assert_eq!(sim.gun.weapon, 1, "Bond holds the fists once the draw settles [M 0x1a7ef8]");
         assert!(sim.drones.channels.on(0x47), "the spawn plate #411 fired ch 0x47 [D placements]");
         assert_eq!(obj07(&w).0, 3, "objective 1 announced by ch 0x47 (state 3 = announced [M mission.rs states])");
+        // Objective 2 "Spy on secret meeting" (enable 0x48 [L ee_start_05 record 2]) waits ARMED
+        // but unannounced: Mission_Init set it to state 1 [M 0x182270:98-105 (port mission.rs
+        // init: enable != 0 → 1)].
+        assert_eq!(obj07(&w).1, 1, "objective 2 armed-unannounced from the load [M 0x182270:98-105]");
     }
 
     // ── the hall walk-in: ch 0x48 + the control-taking scene ────────────────────────────────────
@@ -132,6 +165,9 @@ fn walk_the_party_start_to_finish() {
         w.tick(Input::default(), false);
     }
     assert_eq!(done, 4, "objective 1 completes on ch 0x48 [L ee_start_05 record 2]");
+    // Objective 2's reveal is the SAME channel: enable 0x48 [L ee_start_05 record 2] fires → the
+    // monitor announces it (state 1 → 3) [M 0x1827d8:55-67 (port mission.rs monitor case 1)].
+    assert_eq!(obj07(&w).1, 3, "objective 2 announced by the same ch 0x48 (enable 0x48) [M 0x1827d8:55-67]");
     // The scene holds Bond (the game's own disable); the walker's tick carries the game's skip
     // action [M nis.rs skip_request = Input_Action(−1, 0x19, 1)], then Bond hands back at the
     // stream-6 entity's key-498 spot [D fix_cutscene_actors_live].
