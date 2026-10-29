@@ -34,7 +34,7 @@
 #[path = "common/walker_b2.rs"]
 mod walker;
 
-use walker::{Walker, Wp};
+use walker::{Act, Walker, Wp};
 
 fn iso() -> String { std::env::var("NF_ISO").expect("NF_ISO") }
 
@@ -273,13 +273,24 @@ fn walk_the_whole_mission_from_the_start_to_the_0d_handoff() {
     w.wait(10);
     eprintln!("[0c] the south-gap stand-in (the unpinned crossing) — the ring south-east walkway");
 
-    // Leg 9 (REAL to the door, then the DOCUMENTED stand-in over it): the south-east walkway
-    // north to the ring's SE corner — where `door2turbine` #281 (40.0, 12.6, −210.4 [D]) bars
-    // the crossing onto the gate band. The game opens it with the use key ([M Player_Activate
-    // 0x1a5170 case 0x1C]; kind 0xDB E-opens) — the real E path above does not open it in the
-    // port (the door's state holds 0x2 through the walker's E pulses): a NEW port gap this task
-    // found (the older walkthrough teleported past this whole district). The band arrival keeps
-    // the older walkthrough's documented stand-in; the door is the top live check in the report.
+    // Leg 9 (REAL to the door district, then the DOCUMENTED stand-in over the slot): the
+    // south-east walkway north to the ring's SE corner district — where `door2turbine` #281
+    // (40.0, 12.6, −210.4 [D]) bars the crossing onto the gate band. This session's disc census
+    // [D] (probe walkreal_probe0c_door_live): the walkway's own floor strip (y 12.02, x
+    // 39.98..40.41) ends in a wall (y 12.02..14.22) at z −213.51 (room_turbine01's collision);
+    // the door's 78-tri glist is the LEAF slab only (x 38.49..40.02, y 11.15..14.00, z
+    // −210.56..−210.36) — no stoop; a small 10.17 ledge patch and a 9.11 step sit east (x
+    // 40.37..41.54) with the shaft void (down to 6.17) north of −212.5-ish; the corner floors
+    // (11.06..11.14, x 36..40.5, z −210..−208) and the band ((44,−209) 11.17 / (44,−208) 10.34)
+    // are all in the port. The door's E gates are ALL open [M Door_Activate 0x135be0: ch_lock 0,
+    // lock_flag 0, approach 0, kind 0 closed → the swing arm SetState(8)]; nothing writes its
+    // ch_open 5 (the trigger/SS sweep is empty [D]) — the E press is the only opener, and the
+    // use sphere from the 10.17 ledge patch (head (40.9, 10.87, −211.3)) reaches the leaf's
+    // sphere (40.01, 12.57, −209.69) r 1.62 at dist ≈ 2.51 < 2.62 [M Collide_PickObj 0x1eae80's
+    // 0x101 arm]. The walker still cannot REACH that stance on real input: the walkway end's
+    // drop lands at 9.13 (z −213.68) and the 10.17 patch is too small to walk north from (the
+    // walker fell into the shaft at z −212.0 twice). The real-input leg + the exact stance are
+    // the next session's item; the band arrival keeps the older walkthrough's stand-in.
     w.walk_to(Wp::new(40.5, 11.5, -211.5).r(1.5), "the SE walkway to the turbine door");
     {
         let sim = w.scene.sim.as_mut().unwrap();
@@ -287,6 +298,9 @@ fn walk_the_whole_mission_from_the_start_to_the_0d_handoff() {
         let door = sim.drones.doors.list.iter().find(|d| (d.pos[0] - 40.0).abs() < 0.5 && (d.pos[2] + 210.4).abs() < 0.5)
             .expect("the door2turbine #281 [D]");
         assert_eq!(door.state, 0x2, "door2turbine opened — replace the band stand-in with the real walk-through");
+        // Sister (level-0c-door2turbine): pin the disc's walkway-end wall — the route's [D] shape.
+        let wall = sim.world.segment_hit([40.2, 13.0, -213.51], [40.2, 11.9, -213.51]);
+        assert!(wall.is_some(), "the walkway end wall at z −213.51 (y 12.02..14.22 [D room_turbine01]) vanished — the ledge approach may have changed");
         sim.bond.pos = [90.0, 11.6, -208.8];
         sim.bond.vel = [0.0; 3];
     }
