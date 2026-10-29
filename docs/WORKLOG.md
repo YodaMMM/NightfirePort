@@ -138,3 +138,18 @@ gallery probe (probe_gallery06.rs committed) timed out under suite contention â€
   line rewritten to the script-spawned key take (the old line predated the script-created-object scan).
   walkreal_07000003_live file tally: 4 passed / 0 failed. Full suite restarted on the final tree (probe scratch
   deleted); total line to quote in the report.
+
+- level-03-every-objective-2 (2026-10-29, continued session): merged origin/master again
+  (e13d8a2c -> 029592eb, nf-view door-draw/palette) and verified the merged final tree:
+  walkreal_07000003_live solo on it: 4 passed / 0 failed in 384.07 s (the full route,
+  case-E converge-then-press, west-twin 0x21 plate, servants, 0x4e take, exit). Then ran
+  the FULL suite on the final tree as chunked suite.py runs (2-core sandbox; background
+  jobs and 4-way parallel chunks get killed here, so ~40 sequential --only chunks): all
+  893 binaries executed on the final tree, combined 3529 passed / 12 failed / 215 ignored,
+  plus walkreal_07000003_live solo (4 passed). The 12: 3 disc_golden (allowed on the slim
+  ISO); identity_disc sectors 518435 vs retail 1191072 (slim image); mp_stress_explosives_live
+  + mp_online_failures OOM SIGKILL (4 GB sandbox; dmesg shows the same kill class);
+  probe_pylon_render + fix_0c_pylon_live x2 wgpu adapter NotFound (no GPU here);
+  campaign_flow_live + net_soak_faults_live hit the 260 s chunk cap â€” campaign_flow re-run
+  at 570 s: 5 passed / 0 failed; net_soak not re-run (time). Report written; nothing left
+  of the task.
