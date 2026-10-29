@@ -67,3 +67,12 @@ cell against the game's formulas [M PlrStat_GetScore 0x1984b0, the base-map desi
 ee_start_05 @0x2bc080] — Bond Moves, Subdued/Surrendered, Stealth, Accuracy, Health, Time, 007
 Bonus, subtotal, difficulty bonus, total — and the Records page; fix any cell the port shows
 differently; run the FULL suite and quote the total line. Deadline ~22:46 UTC, stop 22:26.
+
+## level-04-stats-ninja-rows — 22:15 UTC 2026-10-29
+The audit done: the design rows re-verified from the disc ([L] 0x2bc080 = entry 4, all 9 (count,
+target) pairs match the port's transcription), the builder [M 0x209938:57-123] re-mapped cell by
+cell — two holes found: the Subdued (0x15c) / Surrendered (0x16e) TARGET+POINTS cells were
+unpinned; added the four asserts + the new_scores-conditional sister [M 0x209938:74]. No port-code
+deviation found (the base merge's formulas all match the decompile). walkreal_07000004_live 6/0;
+the touched binaries all green; the FULL suite chunked to 331/908 (1076 passed / 0 failed / 76
+ignored; the one chunk-FAILED line = mp_online_failures, the known sandbox OOM).
