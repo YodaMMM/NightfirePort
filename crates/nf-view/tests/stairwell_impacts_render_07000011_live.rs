@@ -180,10 +180,11 @@ fn aim_dir(yaw: f32, pitch: f32) -> [f32; 3] {
 }
 
 /// Fire one round from `spot_name`'s position at (yaw, pitch) through the real input path and
-/// return the world impacts it produced, each with its collision-face and render attribution.
+/// return the world impacts it produced (with collision-face attribution) plus the raw decal
+/// points — the visible holes — for the caller's render measurement.
 fn fire_and_collect(
     scene: &mut Scene, spot_name: &'static str, pos: [f32; 3], yaw: f32, pitch: f32,
-) -> Vec<ImpactRow> {
+) -> (Vec<ImpactRow>, Vec<[f32; 3]>) {
     {
         let sim = scene.sim.as_mut().unwrap();
         sim.bond.pos = pos;
@@ -206,6 +207,7 @@ fn fire_and_collect(
     let mut input = nf_game::player::Input::default();
     input.fire = true;
     let bullets_at_fire = scene.sim.as_ref().unwrap().drones.player_bullets.len();
+    let decals_at_fire = scene.sim.as_ref().unwrap().drones.effects.decals.len();
     scene.sim.as_mut().unwrap().step_bond(input, true, false, false);
     let spawned = scene.sim.as_ref().unwrap().drones.player_bullets.len() > bullets_at_fire;
     let mut rows = Vec::new();
@@ -264,11 +266,18 @@ fn fire_and_collect(
     for _ in 0..25 { scene.sim.as_mut().unwrap().step_bond(Default::default(), false, false, false); }
     let sim = scene.sim.as_ref().unwrap();
     eprintln!(
-        "[fire] {} yaw {:+.2} pitch {:+.2} spawned {} maxb {} clip {} pending {} reload {} mode {} mission {:?} impacts {}",
+        "[fire] {} yaw {:+.2} pitch {:+.2} spawned {} maxb {} clip {} pending {} reload {} mode {} mission {:?} impacts {} decals {}",
         spot_name, yaw, pitch, spawned, max_bullets, sim.gun.clip, sim.gun.pending,
-        sim.gun.reload_state, sim.bond.mode, sim.drones.mission.status(), rows.len()
+        sim.gun.reload_state, sim.bond.mode, sim.drones.mission.status(), rows.len(),
+        sim.drones.effects.decals.len() - decals_at_fire
     );
-    rows
+    // The DECAL is the visible hole: report the new ones with their positions so the caller
+    // can measure them against the render mesh too.
+    let new_decals: Vec<[f32; 3]> = scene.sim.as_ref().unwrap().drones.effects.decals
+        [decals_at_fire.min(scene.sim.as_ref().unwrap().drones.effects.decals.len())..]
+        .iter().map(|d| d.pos).collect();
+    for p in &new_decals { eprintln!("[decal] {} yaw {:+.2} pitch {:+.2} p ({:.3},{:.3},{:.3})", spot_name, yaw, pitch, p[0], p[1], p[2]); }
+    (rows, new_decals)
 }
 
 /// THE MEASUREMENT (assertion-free): fire the fan from every reported spot — across the well
@@ -286,14 +295,15 @@ fn dump_the_stairwell_impacts_vs_render() {
         render.grid.len()
     );
     let mut all: Vec<ImpactRow> = Vec::new();
+    let mut all_decals: Vec<[f32; 3]> = Vec::new();
     let pitches: [f32; 5] = [0.9, 0.5, 0.0, -0.5, -0.9];
     for (name, pos) in SPOTS {
         for k in 0..8u32 {
             let yaw = k as f32 * std::f32::consts::FRAC_PI_4;
             for &pitch in &pitches {
-                for r in fire_and_collect(&mut scene, name, pos, yaw, pitch) {
-                    all.push(r);
-                }
+                let (rs, ds) = fire_and_collect(&mut scene, name, pos, yaw, pitch);
+                all.extend(rs);
+                all_decals.extend(ds);
             }
         }
     }
@@ -304,6 +314,15 @@ fn dump_the_stairwell_impacts_vs_render() {
         if r.render_dist > HOLE_ON_SURFACE_MAX { mid_air += 1; }
     }
     eprintln!("[impacts] {} world impacts, {} mid-air (> {HOLE_ON_SURFACE_MAX} from any drawn triangle)", all.len(), mid_air);
+    let mut mid_air_decals = 0usize;
+    for p in &all_decals {
+        let d = render.dist(*p);
+        if d > HOLE_ON_SURFACE_MAX {
+            mid_air_decals += 1;
+            eprintln!("[decals] MID-AIR hole p ({:.3},{:.3},{:.3}) render_dist {:.3}", p[0], p[1], p[2], d);
+        }
+    }
+    eprintln!("[decals] {} decals total, {} mid-air", all_decals.len(), mid_air_decals);
     for r in &all {
         eprintln!(
             "[impacts] {} yaw {:+.2} pitch {:+.2} p ({:.3},{:.3},{:.3}) mat {:#04x} node_pass {} n ({:.2},{:.2},{:.2}) face_t {:.2} render_dist {:.3}{}",
@@ -328,7 +347,8 @@ fn every_stairwell_impact_sits_on_drawn_geometry() {
         for k in 0..8u32 {
             let yaw = k as f32 * std::f32::consts::FRAC_PI_4;
             for &pitch in &pitches {
-                rows.extend(fire_and_collect(&mut scene, name, pos, yaw, pitch));
+                let (rs, _) = fire_and_collect(&mut scene, name, pos, yaw, pitch);
+                rows.extend(rs);
             }
         }
     }
