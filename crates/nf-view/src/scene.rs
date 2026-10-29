@@ -2258,8 +2258,13 @@ impl Sim {
     /// `trigger`: the fire button (action 9) held; `aiming`: aim mode (L1).
     pub fn step(&mut self, camera: [f32; 3], look: [f32; 3], trigger: bool, aiming: bool) {
         // mayhew-end-transition: the exit hold freezes the free-camera path too (the game's whole
-        // sim is paused [M 0x1c98c8:44-47]; docs/systems/exit-hold.md).
-        if self.drones.tick_exit_hold() { return; }
+        // sim is paused [M 0x1c98c8:44-47]; docs/systems/exit-hold.md) — but NOT Mission_Update:
+        // it sits at 0x1c9790:17, outside the GS_IsPaused gate (level-14-every-objective).
+        if self.drones.exit_hold.is_some() {
+            self.drones.tick_mission_during_hold(self.level);
+            self.drones.tick_exit_hold();
+            return;
+        }
         let floor = self.world.floor_below(camera, 4.0).unwrap_or(camera[1] - 1.6);
         self.first_person = false;
         let ground = [camera[0], floor + 0.4, camera[2]];
@@ -2309,10 +2314,17 @@ impl Sim {
         // `GameFlow_PushState(300.0f, 7, 0xff)` [M 0x1b2318:90-92]. While it stands the game's
         // clock stops [M 0x1c98c8:44-47], the player input dies [M `psiInput_MapInputs`
         // 0x10cd80:36] and the world sections of `Game_Run` are behind the pause gate
-        // [M 0x1c9790:30-38] — but the fade itself advances every frame [M 0x1c9790 tail].
-        // The port ticks the hold and skips the world (docs/systems/exit-hold.md); the host
-        // defers the level load until it clears.
-        if self.drones.tick_exit_hold() { return; }
+        // [M 0x1c9790:30-38] — but the fade itself advances every frame [M 0x1c9790 tail], and
+        // `Mission_Update` runs EVERY frame too: it sits at 0x1c9790:17, outside the pause gate
+        // (level-14-every-objective) — the monitor keeps reading the channels during the hold,
+        // which is where the exit trigger's fallback channel folds the last objective record
+        // [M 0x1827d8 case 3]. The port used to skip the whole sim here; now the hold runs the
+        // mission layer (mission first, then the fade tick — the game's per-frame order).
+        if self.drones.exit_hold.is_some() {
+            self.drones.tick_mission_during_hold(self.level);
+            self.drones.tick_exit_hold();
+            return;
+        }
         // level-1b-drake-fight: the zero-G entry — `C_CHCHZEROG_Handler` 0x216388 [M]: its msg-0x4b
         // arm queries the same control with msg 0x40 and folds
         // `Player_ChangeSubState(glb_players, 9 | 0)` — 9 on a nonzero answer, 0 on zero
