@@ -17395,9 +17395,15 @@ fn segment_hits_sphere(a: V3, b: V3, c: V3, r: f32) -> bool {
                 // the last frame — see the snapshot above), plus the level id for the cleanup's split.
                 let action = self.spawners[index].update(&mut self.channels, frame, d.level,
                     |i| list[i].present, |i| drawn_prev[i],
-                    // Pre-selection usability: the spot at least `min_dist` from the player
-                    // [M 0x137cb0:30 — usable templates are skipped without consuming the draw].
-                    |i, min| { let q = list[i].pos; let dd = ((q[0] - player.pos[0]).powi(2) + (q[2] - player.pos[2]).powi(2)).sqrt();
+                    // Pre-selection usability: the spot at least `min_dist` from the player — the
+                    // game's compare is `Vec_SqDist3D(player+0x30, spot) >= min*min` [M 0x137cb0:28-31:
+                    // `Vec_SqDist3D` is the 3-D squared distance, usable templates are skipped without
+                    // consuming the draw; the default 10.0 is 0x1378d0:35-37's p8==0 → 0x41200000]. The
+                    // 2-D (x/z) metric a rider never outgrows — on the 0700004a ride the spots sit 7.7
+                    // away in x/z for the whole descent, so the screen rejected every template forever
+                    // (level-4a-every-objective probe: armed on ch 0x17, d 7.6-7.7, rays blocked, no
+                    // spawn); in 3-D the descending rider leaves the sphere and the garrison releases.
+                    |i, min| { let q = list[i].pos; let dd = ((q[0] - player.pos[0]).powi(2) + (q[1] - player.pos[1]).powi(2) + (q[2] - player.pos[2]).powi(2)).sqrt();
                         dd >= min },
                     // Post-selection abort: the picked spot visible to Bond fails the attempt
                     // [M 0x137cb0:43 — the slot persists and retries next tick]. The game's test is
