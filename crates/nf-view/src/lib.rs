@@ -3129,7 +3129,13 @@ impl App {
             let sub = matches!(self.fe.as_ref().map(|fe| fe.page),
                 Some(menu::Page::Stats) | Some(menu::Page::NfBonus));
             if sub {
-                let lang = self.lang.clone();
+                // menu-stats-page: the SAME lang the draw uses — self.lang, falling back to the
+                // loaded mission's own bank (the draw sites' `self.lang.as_ref().or_else(…
+                // sim.lang)` pattern). The bare-mission app never boots the front end's
+                // USATxt.dat into `self.lang`, so the stats rows' `stats_enter` built every
+                // category as its raw id (`<0x165>`…) while the page labels around them bound
+                // fine off the sim's bank.
+                let lang = self.lang.clone().or_else(|| self.scene.sim.as_ref().and_then(|s| s.lang.clone()));
                 if let (Some(fe), Some(p)) = (self.fe.as_mut(), self.results_progress.as_mut()) {
                     fe.results_subpages_enter(p, lang.as_ref());
                 }
