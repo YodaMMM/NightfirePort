@@ -276,7 +276,7 @@ fn probe_walkway_shelf_connection() {
         let sim = w.scene.sim.as_ref().unwrap();
         eprintln!("=== band west map (down rays y 12 -> 8) ===");
         let xs = [44.0f32, 45.0, 46.0, 47.5, 49.0, 51.0, 53.0, 55.0, 57.0, 59.0, 61.0, 63.0, 65.0, 67.0, 69.0];
-        let zs = [-209.5f32, -209.0, -208.5, -208.0, -207.5, -207.0, -206.5, -206.0];
+        let zs = [-206.0f32, -205.25, -204.5, -203.75, -202.0, -201.25, -199.5, -198.75];
         for z in zs {
             let mut row = format!("z {z:7.1}: ");
             for x in xs {
@@ -287,7 +287,7 @@ fn probe_walkway_shelf_connection() {
             }
             eprintln!("{row}");
         }
-        eprintln!("(x cols: 44 45 46 47.5 49 51 53 55 57 59 61 63 65 67 69)");
+        eprintln!("(x cols: 44 45 46 47.5 49 51 53 55 57 59 61 63 65 67 69) — north sweep");
     }
     eprintln!("ok");
 }
