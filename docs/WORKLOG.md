@@ -17,3 +17,7 @@ Progress log:
 - 23:20 real legs landed: no channel pokes, no bond.pos writes, top_up_health=false. Walk now FAILS
   honestly: Bond (real health) dies to the garden guards' fire during the south-hall-west nav-10 wedge
   (1836 ticks exposed) → fail restart → level_exit. The next window adds the fight-through legs.
+- 23:00 fight-through legs added (clear_pursuers: real walk+fire vs the 0x15 pursuers, the 0x81
+  ambush, resupply on dry clips). Root cause of the remaining failure found with NF_ALARM_TRACE:
+  the nav-10 wedge is guard g3's BODY-BLOCK (d 0.8, 0x74→0x68→0x60 at t4137-4184); the fail chain
+  auto-restarts ~+1462 into it. Test ignored with the exact blocker; pokes stay gone.
