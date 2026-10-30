@@ -30,3 +30,15 @@ link is UNRESOLVED: the y-49 terrace's every face is 5.5+ tall off the stairs' 4
 8-12] — parked with a probe-grade door-chain test (E at #112 → ch 0x1E → 07000006) + a live
 check. Legs written into walkreal_07000005_live (corridor/spine/loop/#269/grapple/stairs) —
 build+run pending (alsa link fix: LIBRARY_PATH).
+
+### level-05-every-objective-4 (start, 03:58 UTC, 2026-10-30)
+
+Task: land the 05 walk extension. Base: origin/s/level-05-every-objective-3 (9dc521bc),
+merging origin/master (f82fa6cc) into it. The -3 test
+walkreal_07000005_live::the_door_band_exit_chains_to_07000006_climb_parked FAILS on
+master's tree: "the terrace placement stands on the y-49 band [D the band maps], got
+[21.805223, 50.035336, -68.09826]" (walkreal_07000005_live.rs:1361). Find what Bond
+stands on at y 50.04 at (21.8, -68.1) [D the collision], fix the test's spot or the
+port with evidence, then continue the remaining legs from the -3 report (the east
+stairs, door #112's E -> 07000006). Every test in walkreal_07000005_live green; run
+the touched binaries, quote totals.
