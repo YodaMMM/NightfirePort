@@ -155,3 +155,13 @@ per-tick hashes still agree every tick). NOT a decompile-backed weakening.
    by this window's 14 stair-climb repro).
 
 ## ntfy
+Sent successfully: curl, HTTP 200, id jrEEFdjtmIG8 (2026-10-30 ~15:39 UTC), message
+"capsule-cull-and-los-masks-16: faithful raw-denom cull landed [M 0x109da0 disasm closure] —
+02/03/08/fix_npc_doors/npc_doors/mp_perf_16 green (npc_doors' -15 red fixed, digest
+re-pinned); 01/14 = the substitute-tail gap (the feet band is the next work); gates removed".
+finish.sh: "OK done 20-capsule-cull-and-los-masks-16" (the report attached to the queue's
+done entry, pushed).
+
+## Usage
+
+not visible to me (this CLI session exposes no token/credit/context-window readout).
