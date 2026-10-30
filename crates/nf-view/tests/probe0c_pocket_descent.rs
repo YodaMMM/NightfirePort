@@ -296,6 +296,18 @@ fn probe_the_pocket_to_yard_descent_candidates() {
     log_pos(&w, "L2 placed at the walkway's north end (z −112)");
     raw_walk(&mut w, -8.0, -106.0, 200, &|sim| !sim.bond.grounded);
     log_pos(&w, "L2 walked north past the walkway's north end (z −110.36)");
+    // L3: continue the walkway's north walk further (L2's 200 ticks ran out mid-walk).
+    raw_walk(&mut w, -8.0, -100.0, 400, &|sim| !sim.bond.grounded);
+    log_pos(&w, "L3 the walkway's north walk continued (z −100?)");
+    // L4: from the display floor at z −111.5, jump WEST onto the walkway (the 0.65 step up).
+    {
+        let sim = w.scene.sim.as_mut().unwrap();
+        sim.bond.pos = [-4.6, 7.4, -111.5];
+        sim.bond.vel = [0.0; 3];
+    }
+    w.wait(20);
+    log_pos(&w, "L4 placed on the display floor's west edge (x −4.6, z −111.5)");
+    jump_off(&mut w, -7.5, -111.5, 300, "L4 the west jump onto the walkway (6.27→6.92)");
     {
         let sim = w.scene.sim.as_mut().unwrap();
         sim.bond.pos = [-15.0, 5.6, -152.5];
@@ -320,4 +332,107 @@ fn probe_the_pocket_to_yard_descent_candidates() {
     log_pos(&w, "F4 the ramp's north end");
     w.walk_to(Wp::new(-15.0, 5.3, -126.0).r(1.2), "F5 past the ramp's north end (z −126)");
     log_pos(&w, "F5 past the ramp north end");
+}
+
+/// The FULL route, real input end to end: the walk's leg-3 end state (the display eye) → west
+/// along the display ground → the west-edge hop onto the 6.92 walkway (L4) → south to the
+/// cross-wall gap (K1) → the south part → the west-edge drop onto the room_sk3 ramp (K2/D4) →
+/// down the ramp to the y≈0 yard (F2) → south-east across the yard, the bridge and the corridor
+/// → the warehouse east arm → the pit → the plates' body touch (ch 2) → the E arm → ch 8 [D
+/// #560]. No teleports after the leg-3 placement.
+#[test]
+#[ignore = "route record: the full display-ground→plates walk (the leg-4 candidate)"]
+fn probe_the_full_display_ground_to_plates_walk() {
+    let iso = iso();
+    let mut w = Walker::new(nf_view::load(&iso, "0700000c.bin", false).unwrap());
+    // The walk's leg-3 end state (the display eye, the staircase-routed spot).
+    {
+        let sim = w.scene.sim.as_mut().unwrap();
+        sim.bond.pos = [5.4, 7.35, -113.0];
+        sim.bond.vel = [0.0; 3];
+    }
+    w.wait(10);
+    // 1-2. West-north along the display ground, then the jump up onto the 7.24 platform's wide
+    //      part (room_storage01, x −5.05..−2.04, z −108.67..−109.80 [D scan_westentry]; 0.97
+    //      above the 6.27 floor — the E1-class rise).
+    for (x, z, l) in [(3.5f32, -112.5f32, "west 1"), (1.5, -111.5, "west 2"), (0.0, -110.5, "west 3"), (-1.2, -109.8, "west 4")] {
+        if !w.try_walk_to(Wp::new(x, 7.4, z).r(0.9), &format!("the display ground {l}")) {
+            eprintln!("[desc] the {l} hop wedged");
+        }
+        log_pos(&w, &format!("1 {l}"));
+    }
+    jump_off(&mut w, -4.0, -108.9, 300, "2 the jump onto the 7.24 platform");
+    // 3. South-west along the platform to the rib's north end (the rib x −4.54..−4.37,
+    //    z −109.80..−116.47 [D scan_westentry]) and the west jump onto the 6.92 walkway
+    //    (drop 0.32, gap ~1.2 [D the walkway's east edge x −5.65]).
+    w.walk_to(Wp::new(-4.45, 8.35, -110.4).r(0.5), "the rib's north end");
+    // The walkway's east portion starts at z −111.86 [D scan_rampne] — walk the rib south past
+    // it, then the west jump (the rib 7.24 → the walkway 6.92, drop 0.32).
+    raw_walk(&mut w, -4.45, -113.0, 200, &|sim| sim.bond.pos[2] < -112.6);
+    log_pos(&w, "3a mid-rib");
+    jump_off(&mut w, -7.0, -112.8, 300, "3b the rib→walkway west jump");
+    // 4. South along the walkway's north part to the cross-wall's gap lane (x −9).
+    w.walk_to(Wp::new(-8.5, 8.1, -116.0).r(1.2), "the walkway south 1");
+    w.walk_to(Wp::new(-9.0, 8.1, -128.0).r(1.2), "the walkway south 2");
+    w.walk_to(Wp::new(-9.0, 8.1, -143.0).r(1.2), "the walkway south 3 (the gap lane)");
+    raw_walk(&mut w, -9.0, -152.0, 260, &|sim| sim.bond.pos[2] < -149.5);
+    log_pos(&w, "3 through the cross-wall gap (x −9)");
+    w.walk_to(Wp::new(-9.3, 8.1, -152.0).r(1.0), "the walkway's south part");
+    // 4. West off the walkway's west edge (x −10.03) onto the ramp decks (4.52..4.83).
+    raw_walk(&mut w, -11.5, -152.0, 160, &|sim| sim.bond.pos[0] < -10.6);
+    for _ in 0..120 {
+        if w.scene.sim.as_ref().unwrap().bond.grounded { break; }
+        w.tick(nf_game::player::Input::default(), false);
+    }
+    log_pos(&w, "4 dropped onto the ramp");
+    {
+        let sim = w.scene.sim.as_ref().unwrap();
+        assert!(sim.bond.grounded && sim.bond.pos[1] < 6.5,
+            "the west drop must land on the ramp decks (4.52..4.83 [D]), got {:?} grounded {}",
+            sim.bond.pos, sim.bond.grounded);
+    }
+    // 5. South-west down the ramp and off its south edge onto the y≈0 yard (F2).
+    w.walk_to(Wp::new(-14.5, 5.4, -155.0).r(1.2), "the ramp south-west");
+    raw_walk(&mut w, -15.0, -158.5, 150, &|sim| sim.bond.grounded && sim.bond.pos[1] < 2.0);
+    log_pos(&w, "5 on the yard (y≈0)");
+    {
+        let sim = w.scene.sim.as_ref().unwrap();
+        assert!(sim.bond.grounded && sim.bond.pos[1] < 2.0,
+            "the ramp's south walk-off must land the yard (y≈0 [D]), got {:?}", sim.bond.pos);
+    }
+    // 6. The yard: south-east to the bridge, east over it, the corridor to the strip.
+    w.walk_to(Wp::new(-10.0, 1.1, -163.0).r(1.5), "the yard south-east 1");
+    w.walk_to(Wp::new(-4.0, 1.0, -167.0).r(1.5), "the yard south-east 2");
+    w.walk_to(Wp::new(1.5, 0.9, -172.0).r(1.5), "the yard south 3");
+    w.walk_to(Wp::new(4.0, 0.9, -179.5).r(1.2), "the yard south-east");
+    w.walk_to(Wp::new(8.5, 0.9, -179.0).r(1.2), "the bridge west");
+    w.walk_to(Wp::new(14.5, 0.9, -175.0).r(1.2), "the bridge east");
+    for (x, y, z, label) in [
+        (20.0f32, 0.9f32, -174.0f32, "the corridor 1"),
+        (27.0, 0.9, -174.0, "the corridor 2"),
+        (34.0, 0.9, -174.0, "the corridor 3"),
+        (41.0, 1.2, -174.0, "the corridor 4 (the 0.38 step)"),
+        (47.0, 1.2, -174.0, "the corridor 5"),
+        (50.5, 1.5, -173.8, "the strip approach"),
+        (51.6, 1.5, -173.6, "the strip at the door"),
+    ] {
+        w.walk_to(Wp::new(x, y, z).r(0.9), label);
+    }
+    log_pos(&w, "6 on the strip");
+    // 7. East into the plates' box (the body touch, ch 2 [D #559]).
+    w.walk_to(Wp::new(52.7, 1.7, -173.5).r(0.5), "into the plates' box");
+    {
+        let sim = w.scene.sim.as_ref().unwrap();
+        eprintln!("[desc] 7 in the box: pos {:?} ch2 {} ch3 {} ch8 {}", sim.bond.pos,
+            sim.drones.channels.on(2), sim.drones.channels.on(3), sim.drones.channels.on(8));
+        assert!(sim.drones.channels.on(2), "the body-touch plate fires ch 2 under Bond [D #559]");
+    }
+    // 8. The E arm (the walk's leg-5 shape) → the AND → ch 8.
+    let mut and_at = None;
+    for _ in 0..120 {
+        w.tick(nf_game::player::Input::default(), true);
+        if and_at.is_none() && w.scene.sim.as_ref().unwrap().drones.channels.on(8) { and_at = Some(w.total_ticks); break; }
+    }
+    assert!(and_at.is_some(), "E on the plate never raised ch 8 (the AND [D #560]) within 120 ticks");
+    eprintln!("[desc] 8 ch 8 rose at +{:?} — the plates reached by real input end to end", and_at);
 }

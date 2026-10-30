@@ -32,3 +32,17 @@
   spine 7.40 grounded) and the walkway continues north past z −110.36 (L2 grounded at
   (−7.94, 8.06, −110.91)); the 0.65 step-up / junction spot is next. Leg 4 UNCHANGED this
   window (the stand-in stays); the walkreal walk is untouched and green (inherited).
+
+- (15:40 UTC, 10-30) The full-route probe iterated (probe0c_pocket_descent::
+  probe_the_full_display_ground_to_plates_walk, committed): the display ground walks west to
+  (−0.53, 7.38, −110.35) [1 west 1-4 measured], the standing jump up onto the 7.24 platform's
+  wide part LANDS (−4.48, 8.36, −109.22) [D room_storage01 7.24 floor, x −5.05..−2.04,
+  z −108.67..−116.47], the platform's south rib (x −4.54..−4.37, z −109.80..−116.47 [D]) is
+  walked to z −112.6 — and the rib→walkway crossing is BLOCKED in the sim: a parapet at
+  x −4.84..−4.79 tops 8.67 (z −112.21..−116.70 [D scan_westentry]) walls the rib's west side;
+  the west jumps bounce back onto the rib (3b × 3 measured); north of the parapet's end
+  (z −112.21) the room_sk3 7.24 strip (x −5.65..−5.06) stops at z −112.24 and the walkway's
+  east portion starts at z −111.86. SO CLOSE: the route is open from the display eye to the
+  rib, and from the walkway south through the gap/west-drop/ramp to the yard — ONE bridge hop
+  (the parapet at x −4.8) is unsolved in the port's sim. The leg-4 stand-in stays; the walk is
+  untouched and green.
