@@ -214,7 +214,6 @@ fn safe_bolts_burn_mux_folds_and_the_safe_door_sweeps() {
 /// 10000 pool and its param-1 kill channel make it the fusebox's demolition charge — the
 /// fusebox test pins that arm).
 #[test]
-#[ignore = "the P2K's live fire in this scenario spawns no bullet contact — BLOCKED on the port's weapon-record mode decode: [L probe] the draw gates the trigger ~17 ticks (switch_state 1→3), the swap then dumps the clip 7→1, and the fired tick carries the melee signature (fire_state+latch set, NO clip spend, timer=interval 30) where the disc record is spp 1 [L ee_start_05 weapon_data @0x2bf150+2·0x10C +0x28]; [L probe] the shot LOS to the #211 box centre is clear (segment_bullet None from −3/−2/+3) and the pool is 0 [D param 3 absent; M 0x12c318:36], so the first real round contact smashes it — the fix is the primary-mode param plumbing, the next message's work; the walkreal Hind fight's cadence (press every 2 ticks, 2000 ticks) drains nothing"]
 fn shooting_a_destroyable_kills_it_and_spawns_the_blast() {
     let mut w = load();
     // The live destroyables with a finite bullet pool (param 3 present and < 1000): the census
@@ -240,16 +239,20 @@ fn shooting_a_destroyable_kills_it_and_spawns_the_blast() {
     // The P2K is semi-automatic: ONE shot per trigger PULL (spp 1 [L ee_start_05.bin weapon_data
     // @ 0x2bf150 + 2·0x10C, the u16 at +0x28]; the pull re-arms on the press edge only [M
     // Player_WeaponFiring 0x1a5460 — gun.rs's `one_shot_per_press_at_most_every_interval` pin]).
-    // The drive is the walkreal Hind fight's proven cadence: wait out the holster/draw cycle
-    // (the trigger is blocked behind it [M can_fire: switch_state 0]), aim to convergence, then
-    // press/release every other tick — the reloads take their own release ticks. #211's pool is
-    // 0 [D param 3 absent → health 0; M 0x12c318:36], so the first contact smashes it [M
-    // Destroy_CollisionHandler 0x12bd48:44-48].
-    for _ in 0..240 {
-        if w.scene.sim.as_ref().unwrap().gun.switch_state == 0 { break; }
-        w.tick(Input::default(), false);
+    // The switch must ride OUT the loadout's own pending draw: the 08 loadout's request (weapon
+    // 1, clip 1 + 41 carried [L the inventory dump]) races a one-shot switch_to — the swap then
+    // applies weapon 1's record (interval 30, ammo_type 0 [L]) and no round can spend. Keep the
+    // request alive every tick until weapon 2 is BOTH drawn and idle.
+    for _ in 0..400 {
+        let sim = w.scene.sim.as_ref().unwrap();
+        if sim.gun.weapon == 2 && sim.gun.switch_state == 0 { break; }
+        w.tick(Input { switch_to: Some(2), ..Default::default() }, false);
     }
-    assert_eq!(w.scene.sim.as_ref().unwrap().gun.switch_state, 0, "the P2K draw finished");
+    {
+        let sim = w.scene.sim.as_ref().unwrap();
+        assert_eq!(sim.gun.weapon, 2, "the P2K draw landed");
+        assert_eq!(sim.gun.switch_state, 0, "the P2K draw finished (idle)");
+    }
     let mut dead = false;
     for t in 0..2000u32 {
         if w.scene.sim.as_ref().unwrap().drones.props.destroy.iter()
