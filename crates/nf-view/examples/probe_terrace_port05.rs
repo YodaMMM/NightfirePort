@@ -52,11 +52,48 @@ fn main() {
     }
     println!("find_cel(settle) {:?}", sim.world.find_cel(p));
     println!("find_cel(placed) {:?}", sim.world.find_cel([22.0, 49.2, -68.0]));
+    // The port's trigger list: the LOAD_LEVEL (0xE8 kind 10) records and their bounds —
+    // the use reach is the AABB test vs (head+look) ± 1.0.
+    for (i, t) in sim.drones.triggers.iter().enumerate() {
+        if t.kind == 10 || (t.lo[0] - 37.0).abs() < 8.0 && (t.lo[2] + 69.0).abs() < 8.0 {
+            println!("trigger #{i} kind {} placement {} out {} gate {} key_gate {} fallback {} success {} next {:#x} tris {} lo {:?} hi {:?}",
+                t.kind, t.placement, t.out, t.gate, t.key_gate, t.fallback, t.success, t.next_level, t.tris.len(), t.lo, t.hi);
+        }
+    }
     // Neighbouring columns through the port's own world.
     for (x, z) in [(22.0f32, -68.0f32), (21.8, -68.1), (23.0, -68.0), (25.0, -68.0), (21.0, -68.0)] {
         let hi = [x, 55.0, z];
         let lo = [x, 30.0, z];
         let h = sim.world.segment_hit(hi, lo).map(|(t, n)| (55.0 + t * (30.0 - 55.0), n));
         println!("port col ({x}, {z}): {:?}", h.map(|(y, n)| (y, n[1])));
+    }
+
+    // ---- THE WALK EAST + THE E PRESS (real input: turn/forward then the use key) ----
+    // Face east, hold forward until the x stops (the wall / the doorway), then press E.
+    sim.bond.pos = [22.0, 50.1, -68.0];
+    sim.bond.vel = [0.0; 3];
+    sim.bond.yaw = std::f32::consts::FRAC_PI_2;
+    let mut last_x = sim.bond.pos[0];
+    let mut stalled = 0u32;
+    for k in 0..600u32 {
+        let input = Input { forward: 1.0, ..Default::default() };
+        sim.step_bond(input, false, false, false);
+        if k % 20 == 0 { println!("walk t{k}: pos {:?}", sim.bond.pos); }
+        if (sim.bond.pos[0] - last_x).abs() < 0.005 { stalled += 1; } else { stalled = 0; }
+        last_x = sim.bond.pos[0];
+        if stalled > 30 { println!("stalled east at t{k}: pos {:?}", sim.bond.pos); break; }
+        if sim.bond.pos[0] >= 37.0 { println!("at the doorway t{k}: pos {:?}", sim.bond.pos); break; }
+        if sim.drones.level_exit.is_some() { println!("exit during walk at t{k}"); break; }
+    }
+    println!("walk end: pos {:?} grounded {}", sim.bond.pos, sim.bond.grounded);
+    // The use press: edge-triggered pulses (the walker's 1-in-6 rule).
+    for k in 0..120u32 {
+        let press = k % 6 == 0;
+        sim.step_bond(Input::default(), false, false, press);
+        if k % 12 == 0 || sim.drones.channels.on(0x1e) || sim.drones.level_exit.is_some() {
+            println!("use t{k}: pos {:?} ch 0x1e {} exit {:?}", sim.bond.pos,
+                sim.drones.channels.on(0x1e) as u8, sim.drones.level_exit);
+        }
+        if sim.drones.level_exit.is_some() { break; }
     }
 }
