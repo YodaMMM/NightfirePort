@@ -783,27 +783,32 @@ fn the_west_hall_glide_height_matches_the_game() {
 
 /// the corner crossing. The game, placed at (−17.87, 4.87) fresh-boot and
 /// holding forward toward (−17.5, 2.5), walks straight through to (−17.78, 1.120, 2.92) in about 25
-/// frames, y 1.127 then 1.120 — no dither, no wedge [L fresh boot]. The port's same leg
-/// wedges: its y dithers across the band edge 1.1347 (the -2 session's 1.1336↔1.2019; this
-/// session's repro 1.1297 → 1.1957 at (−17.87, 4.87)) because the below-B edge lifts (+0.0165/tick
-/// [L the -2 per-tick probe]) unhooks the band at its entry height. The spawn settle is now ported
-/// (1.0891 rest) but the hall glide's +0.0256 climb settle is not (the glide sister's note), so the
-/// corner still enters 0.02 under the game's 1.1147 line.
+/// frames, y 1.127 then 1.120 — no dither, no wedge [L fresh boot]; the 60-frame hold bends west
+/// (x −17.9715 at the end) and y settles 1.1186 mid-path then 1.1159 [L 2026-10-26].
 ///
-/// 2026-10-30 session: the mechanism is the game's MOVE CLIP, not a push. With NF_WALK_CLIP=1 the
-/// corner CROSSES at +76 ticks, arrived (−17.56, 1.09, 2.83) — the walk-speed crossing, no kill
-/// switch [L measured this session; the game's ~60 frames]. The exit-y pin still reads 1.0891 vs
-/// the settled 1.1159 — the 0.0268 gap is the west-hall leg's unported +0.0256 climb settle (the
-/// glide sister's mechanism), not the corner. Decompile side: the cyl push tail v = p −
-/// HITTEST+0x50 [M 0x109da0:419-457] cannot sustain the walk's wall response (p is spine-clamped,
-/// so for a vertical walk spine any on-spine ref gives a purely vertical v whose dot(v,n) > 0 gate
-/// kills vertical-wall pushes; an ELF-wide store sweep finds no BLData+0x790/0x7a0 writer at all
-/// beyond the add-back 0x1ebaa8:353-373), and the clip's spine-plane rest matches the game's
-/// ~0.011-inside-the-plane glide rest [L fresh boot]. The flip is not landed: under the flag
-/// the_pick_ref_accumulator_tracks_the_game_ref, walk_office_floor_qworm_keyboard_hatch and
-/// walk_office_floor_to_the_security_keyboard go red (master: 7 passed / 0 failed / 2 ignored).
+/// 2026-10-31 session (level-0a-corner-push-model): the wedge mechanism is FOUND and FIXED. The
+/// wedge's four per-tick contacts are ALL Dist2Tri edge contacts — the counter slab's west strips
+/// (x −17.5, q at the strip mid-height) and the swung-open door #4 leaf's tip (x −18.4, its
+/// below-B tip edge pushing y +0.0165) — whose port fallback pushes sum exactly anti-parallel to
+/// the walk's move ((−0.0156, +0.0159, +0.0988)/tick vs the move (0.0154, −0.0985)) [cap trace].
+/// The game routes edge contacts through the REF re-aim ([M 0x109da0:333-368]) whose tail push
+/// (v = p − HITTEST+0x50 [M 0x109da0:419-457]) is not a (p−q) skin depenetration; for a below-B
+/// edge the re-aim clamps p to the spine bottom and the port's fallback lift has no game
+/// counterpart on a walked line. world.rs now drops the fallback displacement for below-B edge
+/// contacts on the walk path (the walkable/pick signals stay): the remaining three contacts
+/// DEFLECT west-south — the game's own bend — and the corner CROSSES at +76 ticks (this branch's
+/// probe; the game's ~60 frames [L 2026-10-26]; the NF_WALK_CLIP probe measured the same +76).
+/// The certified hall-wall rest contact is face-interior (edge=false [cap trace; [L 2026-10-30]
+/// the game rests z 15.5904 = master's push model]) — the fix never touches it. The 0a file is
+/// 7 passed / 0 failed / 2 ignored with the fix (the master baseline).
+///
+/// The test stays ignored on ONE remaining pin: the exit y. The port crosses at y 1.0891 (the
+/// spawn settle) where the game settles 1.1159 — the 0.0268 gap is the west-hall leg's unported
+/// +0.0256..0.0268 climb settle (the glide sister's mechanism, level-0a-hall-glide-settle), not
+/// the corner: the corner's floors are y 0.00 on both sides [D the corner tri dump]. Un-ignore
+/// once the climb settle lands.
 #[test]
-#[ignore = "the crossing mechanism is found: the game's move-CLIP — with NF_WALK_CLIP=1 the corner CROSSES at +76 ticks vs the game's ~60 frames [L measured 2026-10-30], no kill switch; but the walk-model flip is not landed (under the flag the_pick_ref_accumulator_tracks_the_game_ref, walk_office_floor_qworm_keyboard_hatch and walk_office_floor_to_the_security_keyboard go red) and the exit-y reads 1.0891 vs the settled 1.1159 [L 2026-10-26] — the 0.0268 gap is the west-hall leg's unported +0.0256 climb settle (the glide sister's mechanism); un-ignore once the clip is the walk default and the settle lands"]
+#[ignore = "the crossing is FIXED without the kill switch or the clip: the below-B edge-contact skip (world.rs, [M 0x109da0:333-368 the REF re-aim]) lets the corner cross at +76 ticks [measured 2026-10-31, the probe on this branch] and the 0a file is 7/0/2; the remaining pin is the exit y — the port reads 1.0891 vs the settled 1.1159 [L 2026-10-26], the 0.0268 west-hall climb settle (the glide sister's mechanism, unported); un-ignore once it lands"]
 fn the_corner_crosses_like_the_game() {
     let mut w = load_carry(None);
     for _ in 0..150 {
