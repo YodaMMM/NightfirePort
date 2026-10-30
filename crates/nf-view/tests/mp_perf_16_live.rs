@@ -28,6 +28,12 @@ fn iso() -> Option<String> {
 // follower is the game's `FollowRoute` link creep now (bots.rs `steer_to`/`follow_route`
 // [M 0x15b110/0x159810/0x159f28/0x15a2c8]) — routes end at different ticks, bots die differently;
 // the two machines' hashes still agree every tick.
+// Re-pinned for capsule-cull-and-los-masks-16 (0x5a28_4ff1_a217_bdfa, this window's run): the
+// faithful raw-denom head-on cull [M Intersect_CylGeom 0x109da0 disasm 0x10a1f0/0x10a278-8e8]
+// + the landed flags-99 behind-plane skip changed the local capsule's contacts on purpose —
+// the same intended change that flipped walkreal_07000002/07000003 and npc_doors' 06-guard
+// green this window (see docs/reports/capsule-cull-and-los-masks-16.md). NOT a bot, net or RNG
+// divergence: the two machines' per-tick hashes still agree every tick on this tree.
 // Re-pinned for net-desync-detail (700w2): the state hash is now the fixed-order fold of named component
 // hashes, so its value changed while the simulation did not (the same run: kills 90, as bot-nav-pit-ramp's
 // pin; repeatable).
@@ -59,7 +65,7 @@ fn iso() -> Option<String> {
 // the local player's own capsule move — NOT a bot, a net or an RNG divergence (the two machines'
 // per-tick hashes still agree every tick on this tree). Streams: /tmp of the session, reproduced
 // twice (0xfd4fcbf81586b3f1 both runs).
-const PINNED_DIGEST: u64 = 0xfd4f_cbf8_1586_b3f1;
+const PINNED_DIGEST: u64 = 0x5a28_4ff1_a217_bdfa;
 
 const TICKS: u32 = 3600;
 
