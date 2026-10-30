@@ -14172,6 +14172,47 @@ fn segment_hits_sphere(a: V3, b: V3, c: V3, r: f32) -> bool {
                     }
                 }
             }
+            // rigid-body-bullet: the game's collision pass appends the round's contact to the
+            // kind-0xD8 body's `obj+0xD0` chain (the bullet is class 5) and `RB_CollisionHandler`
+            // 0x1d7a80 walks the chain into `RB_RestingContactRot` 0x1d73a0's per-hit arm — the
+            // same math the blast route carries [M 0x1d7428-0x1d74c8: impulse = hit_vel·(scale·0.5)
+            // into +0x40, (point − translation) × impulse into +0x50; the port's
+            // `rb_explosion_hit_arm`]. The contact test: the game's picker runs the body's world
+            // sphere (Control_BuildWorldSph 0x133070 over its glist — the port's `st.s13c` radius,
+            // `st.trans` centre) against the round's segment. The bullet's record: the unit flight
+            // direction as hit_vel and scale 1.0 [S — the game's per-bullet HITDATA+0x8 float for
+            // an RB contact is not pinned from the decompile; the report's live check asks gdbwatch
+            // for it]. The round stops on the body (the solid-prop default — the same walk rule
+            // that ends the flight on the world's first solid hit).
+            if !self.rbodies.list.is_empty() {
+                let seg = [end[0] - b.pos[0], end[1] - b.pos[1], end[2] - b.pos[2]];
+                let seg2 = seg[0] * seg[0] + seg[1] * seg[1] + seg[2] * seg[2];
+                let mag = if seg2 > 1e-9 { seg2.sqrt() } else { 1.0 };
+                let udir = [seg[0] / mag, seg[1] / mag, seg[2] / mag];
+                for rbo in self.rbodies.list.iter_mut() {
+                    let c = rbo.st.trans;
+                    let r = rbo.st.s13c;
+                    // The segment-vs-sphere hit parameter (the same test segment_hits_sphere makes).
+                    let oc = [b.pos[0] - c[0], b.pos[1] - c[1], b.pos[2] - c[2]];
+                    let bq = oc[0] * seg[0] + oc[1] * seg[1] + oc[2] * seg[2];
+                    let cc = oc[0] * oc[0] + oc[1] * oc[1] + oc[2] * oc[2] - r * r;
+                    let disc = bq * bq - cc * seg2;
+                    if disc < 0.0 { continue; }
+                    let t = (-bq - disc.sqrt()) / seg2;
+                    if t < 0.0 || t > 1.0 { continue; }
+                    let point = [b.pos[0] + seg[0] * t, b.pos[1] + seg[1] * t, b.pos[2] + seg[2] * t];
+                    rbo.hits.push(crate::rigid_body::RbHit {
+                        scale: 1.0,
+                        normal: [-udir[0], -udir[1], -udir[2]],
+                        vel: udir,
+                        point,
+                        other_class: 5,
+                        other_pos: b.pos,
+                    });
+                    b.dead = true;
+                    break;
+                }
+            }
             self.bullet_path_weapons.push(b.weapon);
             // The flight trace drops the pass-flagged hits (segment_bullet): the game's flying
             // bullet ARMS its HITTEST pick every tick (+0x94 = 0x101/0x201, +0x9a = the surface
