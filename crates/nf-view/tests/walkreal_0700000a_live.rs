@@ -807,11 +807,11 @@ fn the_west_hall_glide_height_matches_the_game() {
 /// so for a vertical walk spine any on-spine ref gives a purely vertical v whose dot(v,n) > 0 gate
 /// kills vertical-wall pushes; an ELF-wide store sweep finds no BLData+0x790/0x7a0 writer at all
 /// beyond the add-back 0x1ebaa8:353-373), and the clip's spine-plane rest matches the game's
-/// ~0.011-inside-the-plane glide rest [L fresh boot]. The flip is not landed: under the flag
-/// the_pick_ref_accumulator_tracks_the_game_ref, walk_office_floor_qworm_keyboard_hatch and
-/// walk_office_floor_to_the_security_keyboard go red (master: 7 passed / 0 failed / 2 ignored).
+/// ~0.011-inside-the-plane glide rest [L fresh boot]. The flip IS landed in
+/// level-0a-walk-clip-flip-2 (the clip is the walk's default; the three flag-red tests reconciled),
+/// so the flag qualifier below is historical.
 #[test]
-#[ignore = "the crossing mechanism is found: the game's move-CLIP — with NF_WALK_CLIP=1 the corner CROSSES at +76 ticks vs the game's ~60 frames [L measured 2026-10-30], no kill switch; but the walk-model flip is not landed (under the flag the_pick_ref_accumulator_tracks_the_game_ref, walk_office_floor_qworm_keyboard_hatch and walk_office_floor_to_the_security_keyboard go red) and the exit-y reads 1.0891 vs the settled 1.1159 [L 2026-10-26] — the 0.0268 gap is the west-hall leg's unported +0.0256 climb settle (the glide sister's mechanism); un-ignore once the clip is the walk default and the settle lands"]
+#[ignore = "the crossing mechanism is found: the game's move-CLIP (now the walk's default response — the flip landed in level-0a-walk-clip-flip-2, the three flag-red tests reconciled there): the corner CROSSES at +76 ticks vs the game's ~60 frames [L measured 2026-10-30], no kill switch; but the exit-y reads 1.0891 vs the settled 1.1159 [L 2026-10-26] — the 0.0268 gap is the west-hall leg's unported +0.0256 climb settle (the glide sister's mechanism); un-ignore once the settle lands"]
 fn the_corner_crosses_like_the_game() {
     let mut w = load_carry(None);
     for _ in 0..150 {

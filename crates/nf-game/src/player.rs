@@ -1507,13 +1507,14 @@ impl Bond {
     /// gravity (`Player_Collision`'s water path skips `WldGravity` [M]).
     fn physics_tick(&mut self, world: &CollisionWorld, ctx: &LadderCtx, input: &Input, swimming: bool, zero_g: bool) {
         let prev = self.pos;
-        // The tick's move (the move the clip model truncates): pos − prev, the WHOLE positional
-        // delta this tick applies — the walk's matrix·(vs, vf) add, the swim dir add, zero-g's
-        // thruster add AND the gravity integration. (An earlier draft captured it after the walk's
-        // x/z add — move_v then never carried the walk's horizontal move, the clip saw
-        // (0, gravity, 0) every walked tick and never fired on any wall press: measured in
+        // The clip's move vector = pos − pre_move_pos, the WHOLE positional delta this tick
+        // applies — the walk's matrix·(vs, vf) add, the swim dir add, zero-g's thruster add AND
+        // the gravity integration — computed AT THE COLLISION BLOCK below (after those adds),
+        // from the pre-move capture here. (An earlier draft captured it after the walk's x/z add
+        // — move_v then never carried the walk's horizontal move, the clip saw (0, gravity, 0)
+        // every walked tick and never fired on any wall press: measured in
         // level-0a-walk-clip-flip, the west-hall press walked through the wall.)
-        let move_v = [self.pos[0] - prev[0], self.pos[1] - prev[1], self.pos[2] - prev[2]];
+        let pre_move_pos = prev;
         self.fall_damage = None;
         // The spawn arrival settle (the `settle_hold` field doc): the boot holds the placed root
         // while the fall velocity accumulates; the release tick integrates the held velocity ONCE
@@ -1763,6 +1764,7 @@ self.local = [vs / k, vf / k];
         // 0x109da0:447's guard; M Collide_Intersect 0x1ebaa8:353-373; L ee_start_* boots (0,0,0),
         // ee_snapshot drifts ~15 m], so no walk contact ever passes the guard and no push lands.
         // The pick_ref feed below takes the clip's retraction (the [L] accumulator match).
+        let move_v = [self.pos[0] - pre_move_pos[0], self.pos[1] - pre_move_pos[1], self.pos[2] - pre_move_pos[2]];
         let (mut push, mut walkable) = world.capsule_clip_scoped(self.cel, a, b, RADIUS, swimming, move_v);
         // level-0a-office-hatch-10 EXPERIMENT (`NF_WALK_GHOST=1`): the game's walk push tail is
         // dead [M Intersect_CylGeom 0x109da0:447 — the guard is |q − HITTEST+0x50| < radius with
