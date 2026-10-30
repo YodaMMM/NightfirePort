@@ -116,6 +116,11 @@ fn fail_dump(scene: &Scene, target: V3, label: &str) -> String {
             d.ch_lock != 0 && sim.drones.channels.on(d.ch_lock as u32)))
         .collect();
     s.push_str(&format!("doors nearby: {}\n", if doors.is_empty() { "none".into() } else { doors.join("; ") }));
+    let drones: Vec<String> = sim.drones.list.iter().enumerate()
+        .filter(|(_, d)| d.health > 0.0 && dxz(d.pos, p) < 4.0)
+        .map(|(i, d)| format!("#{i} state={:#x} ({:.2},{:.2},{:.2}) d={:.2}", d.state, d.pos[0], d.pos[1], d.pos[2], dxz(d.pos, p)))
+        .collect();
+    s.push_str(&format!("drones nearby: {}\n", if drones.is_empty() { "none".into() } else { drones.join("; ") }));
     let trigs: Vec<String> = sim.drones.triggers.iter()
         .filter(|t| !t.tris.is_empty() && dxz(t.centre(), p) < 4.0 && !t.gone)
         .map(|t| format!("trig kind={} out={:#x} mask={:#x} at({:.1},{:.1},{:.1})", t.kind, t.out, t.mask, t.centre()[0], t.centre()[1], t.centre()[2]))
@@ -843,7 +848,7 @@ pub fn nav_route(sim: &nf_view::scene::Sim, start: V3, dest: V3) -> Option<Vec<V
         if sim.nav.paths[pi].nodes.is_empty() { continue; }
         let goal = sim.nav.target_nodes(&sim.world, pi, dest, 0.0);
         let used = vec![0u16; sim.nav.paths[pi].links.len()];
-        if let Ok((_, route)) = nf_game::nav::Route::to_position(&sim.nav, &sim.world, Some(pi), start, dest, &goal, &used) {
+        if let Ok((_, route)) = nf_game::nav::Route::to_position(&sim.nav, &sim.world, Some(pi), start, dest, &goal, &used, &|_, _| false) {
             let pts: Vec<V3> = route.nodes.iter().map(|&n| sim.nav.paths[pi].nodes[n as usize].pos).collect();
             if pts.len() > 2 { return Some(pts[1..pts.len() - 1].to_vec()); }
         }

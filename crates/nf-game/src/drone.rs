@@ -1065,6 +1065,10 @@ pub struct Drone {
     pub links_used: Vec<Vec<u16>>,
     /// This frame's link flag halfwords per path (`MAPLINK+4`), lent by `Drones::tick` like `links_used`.
     pub link_flags: crate::nav::LinkFlags,
+    /// This frame's door nodes whose bound door is locked, (nav path, node) — the A* door-link
+    /// gate's `Door_IsLocked` answer [M AINetwork_DoAStarPath 0x1571b0:262-271], lent by
+    /// `Drones::tick` like `links_used`.
+    pub locked_door_nodes: std::collections::HashSet<(usize, u16)>,
     /// Switch channel the drone waits for (`+0x134`, placement parameter 3; 0 = none), whether that channel is on
     /// this tick (`switch_channels`, lent by `Drones::tick`), and whether the drone is enabled (`NDrone2_Enable`:
     /// disabled drones have object flags 0x30 — not drawn — and no vision).
@@ -1917,7 +1921,7 @@ impl Drone {
             hip_anim: 1.0,
             route: None, last_wait: None, idle_timeout: None, delayed: None, sm_id: 0, stand_until: 0,
             croute: None, nav_path: None, move_quad: 0, yaw_offset: 0.0, no_route_odd: false, target: PlayerTarget::default(), links_used: Vec::new(),
-            link_flags: Vec::new(),
+            link_flags: Vec::new(), locked_door_nodes: Default::default(),
             switch_channel: param(3) as u8, channel_on: false, placement: 0, spawn_seq: 0, spawn_frame: 0, group: param(4), present: true, started: false, drawn: true, enabled: true, index: 0, exiting_to: 0, self_msg: None,
             cover: None, cover_side: 0, cover_type: 0, cover_leave: 0, cover_point: pos, goal: None, cover_claimed: false, has_cover: false, cover_tries: 0,
             cover_rt: Vec::new(), others: Vec::new(), peers: Vec::new(), return_state: 0, second_channel: param(6) as u8, second_tag: param(8),
@@ -5615,7 +5619,8 @@ impl Drone {
         if !self.croute.as_ref().is_some_and(|r| r.stamp == u32::MAX) {
             let nodes = path.map(|p| d.nav.target_nodes(d.world, p, goal, 0.0)).unwrap_or_default();
             let used: &[u16] = path.and_then(|p| self.links_used.get(p)).map_or(&[], |v| v.as_slice());
-            match crate::nav::Route::to_position(d.nav, d.world, path, feet, goal, &nodes, used) {
+            let locked = |p: usize, n: u16| self.locked_door_nodes.contains(&(p, n));
+            match crate::nav::Route::to_position(d.nav, d.world, path, feet, goal, &nodes, used, &locked) {
                 Ok((_, mut r)) => { r.stamp = u32::MAX; self.croute = Some(r) }
                 Err(code) => { self.croute = None; return code }
             }
@@ -10380,7 +10385,8 @@ impl Drone {
         if !self.croute.as_ref().is_some_and(|r| r.stamp == self.target.stamp) {
             let goal = path.and_then(|p| self.target.nodes.get(p).copied()).unwrap_or_default();
             let used: &[u16] = path.and_then(|p| self.links_used.get(p)).map_or(&[], |v| v.as_slice());
-            match crate::nav::Route::to_position(d.nav, d.world, path, feet, self.target.pos, &goal, used) {
+            let locked = |p: usize, n: u16| self.locked_door_nodes.contains(&(p, n));
+            match crate::nav::Route::to_position(d.nav, d.world, path, feet, self.target.pos, &goal, used, &locked) {
                 Ok((_, mut r)) => { r.stamp = self.target.stamp; self.croute = Some(r) }
                 Err(code) => { self.croute = None; return code }
             }
@@ -11505,6 +11511,8 @@ pub struct Drones {
     /// InitComms cycle (`AINetwork_ClearLinkFlags` 0x15b498 + `Drone_BuildDynamicAwarePoints`
     /// 0x138b10), lent into the active drone like `used`.
     link_flags: crate::nav::LinkFlags,
+    /// This tick's locked door nodes (see `Drone::locked_door_nodes`).
+    locked_door_nodes: std::collections::HashSet<(usize, u16)>,
     /// `0x298FA8`/`0x298FA9`: the NewSight/LostSight global latches — `DroneVision_ProcessDroneSight`
     /// 0x176a28 sets fa8 (sighted) after a 60+-frame sight and fa9 (lost) after a 120+-frame loss
     /// with nobody having seen the opponent last frame; each clears the other (speech.md §2.3).
@@ -12201,7 +12209,7 @@ impl Drones {
             if let Some(g) = &mut dr.body_glow { g.owner = i; }
         }
         let llist = (0..list.len()).collect();
-        let mut drones = Drones { list, frame: 0, los_cursor: 0, llist, rng, lights: Default::default(), player_pos: [0.0; 3], bullets: Vec::new(), grenades: Vec::new(), explosions: Vec::new(), shake: 0.0, health: Default::default(), player_hits: Vec::new(), impacts: Vec::new(), prev_player: None, moved_since: None, target: PlayerTarget::default(), used: Vec::new(), link_flags: Vec::new(), channels: Default::default(), triggers: Vec::new(), spawners: Vec::new(), cover_rt: Vec::new(), sounds: Vec::new(), cover_cursor: 0, cover_counter: 0, player_bullets: Vec::new(), net_no_self_hurt: false, player_impacts: Vec::new(), last_flinch: None, bond_aiming: false, level_exit: None, mission_end: None, bond_weapon: 2, env: None, sun_vector: [0.0; 3], env_pending: None, mp_master: 0, fill_rng: Rng::new(0x5eed), last_alarm: None, alarm_sent: false, party_loud: false, iop_section: 0, hud_frozen: false, aim_target: None, aim_offset: [0.0; 2],
+        let mut drones = Drones { list, frame: 0, los_cursor: 0, llist, rng, lights: Default::default(), player_pos: [0.0; 3], bullets: Vec::new(), grenades: Vec::new(), explosions: Vec::new(), shake: 0.0, health: Default::default(), player_hits: Vec::new(), impacts: Vec::new(), prev_player: None, moved_since: None, target: PlayerTarget::default(), used: Vec::new(), link_flags: Vec::new(), locked_door_nodes: Default::default(), channels: Default::default(), triggers: Vec::new(), spawners: Vec::new(), cover_rt: Vec::new(), sounds: Vec::new(), cover_cursor: 0, cover_counter: 0, player_bullets: Vec::new(), net_no_self_hurt: false, player_impacts: Vec::new(), last_flinch: None, bond_aiming: false, level_exit: None, mission_end: None, bond_weapon: 2, env: None, sun_vector: [0.0; 3], env_pending: None, mp_master: 0, fill_rng: Rng::new(0x5eed), last_alarm: None, alarm_sent: false, party_loud: false, iop_section: 0, hud_frozen: false, aim_target: None, aim_offset: [0.0; 2],
             // The game's `DAT_00299092` (the shared LOS-probe counter; see the field) — zeroed
             // here as `Drone_LevelReset`'s memset zeroes it at level reset [M 0x13a5bc-cc].
             los_probes: 0,
@@ -13270,13 +13278,62 @@ fn segment_hits_sphere(a: V3, b: V3, c: V3, r: f32) -> bool {
             let a = crate::mp::combat::blast_falloff(pos, radius, damage, c, r);
             if a > 0.0 { self.site_blast_hits.push((a, owner)); }
         }
+        let destroys: Vec<(usize, V3, f32, bool, u16)> = self.props.destroy.iter().enumerate()
+            .filter(|(_, x)| !x.dead)
+            .map(|(i, x)| {
+                let ext = [(x.hi[0] - x.lo[0]) / 2.0, (x.hi[1] - x.lo[1]) / 2.0, (x.hi[2] - x.lo[2]) / 2.0];
+                (i, [(x.lo[0] + x.hi[0]) / 2.0, (x.lo[1] + x.hi[1]) / 2.0, (x.lo[2] + x.hi[2]) / 2.0],
+                 (ext[0] * ext[0] + ext[1] * ext[1] + ext[2] * ext[2]).sqrt(), false, x.mask)
+            }).collect();
+        let breaks_t: Vec<(usize, V3, f32)> = self.breaks.list.iter().enumerate()
+            .filter(|(_, x)| !x.dead)
+            .map(|(i, x)| {
+                let ext = [(x.hi[0] - x.lo[0]) / 2.0, (x.hi[1] - x.lo[1]) / 2.0, (x.hi[2] - x.lo[2]) / 2.0];
+                (i, [(x.lo[0] + x.hi[0]) / 2.0, (x.lo[1] + x.hi[1]) / 2.0, (x.lo[2] + x.hi[2]) / 2.0],
+                 (ext[0] * ext[0] + ext[1] * ext[1] + ext[2] * ext[2]).sqrt())
+            }).collect();
+        // level-06-interactables: the chain sweep — the same live-list candidates
+        // `run_beam_explodes` passes. `Explode_Propagate`'s case 0x21 smashes every reached
+        // destroyable whose falloff ≥ 1.0 and whose tag+0x14 mask opens the 0x20 bit [M
+        // 0x17c518:168-176 — the gates live in `propagate`]: the oil barrels' p4 0xf8 (mask
+        // 0xFF07) opens it, so a barrel's blast takes its 0.82 m twin [D 07000006 #321/#322
+        // params; M Destroy_Create 0x12c318:41-47]. The smash queues the twin's own blast
+        // (script by the type byte), which drains next tick — the game's frame order (the
+        // explosion object's contact runs on its first update [M Explode_CollisionHandler
+        // 0x17cde0's one-shot latch]).
         let hits = crate::explode::propagate(pos, radius, damage, owner,
-            &crate::explode::Targets { drones: &drones, player: player_pos, breaks: &[], destroys: &[],
+            &crate::explode::Targets { drones: &drones, player: player_pos, breaks: &breaks_t,
+                destroys: &destroys,
                 // copter-hitdata-damage: the blast sweeps the copter's parts — Explode_Propagate's
                 // case 0 adds the falloff straight into rec+0x64 and rec+0x6c, no Bits scaling,
                 // no filter [M 0x17c518:86-105]. The parts are the class-0 script entities, so
                 // the sweep is over the SP part targets' spheres.
                 copters: &copter_parts });
+        // case 0x21 → `Destroy_Smash` [M 0x17c518:141-177 → 0x12bb60]: the channel write is the
+        // smash's, the twin's blast queued like the beam path's (script by the type byte, owner
+        // the blast's owner).
+        for i in hits.destroys {
+            if let Some((c, r, dmg, kind)) = self.props.smash(i, &mut self.channels, frame) {
+                let script = match kind { 1 => 0x0600_0027, 2 => 0x0600_004f, _ => 0x0600_0052 };
+                self.pending_blasts.push((c, r, dmg, owner, 0, script, r, 0));
+            }
+        }
+        // case 0x20 → `Break_ApplyDamage` [M 0x17c518:163-167 — hitdata+8 = the amount; the same
+        // subtract `Break_Update` 0x12bfd8:37 makes], the kill the bullet walk's.
+        for (i, dmg) in hits.breaks {
+            self.breaks.list[i].health -= dmg;
+            if self.breaks.list[i].health < 0.0 {
+                if let Some(k) = self.breaks.kill(i, pos, pos, &mut self.rng) {
+                    self.break_kills.push((k.placement, k.kind, k.sound));
+                    let id = u32::from(k.sound);
+                    self.audio.play3d(id, k.pos, None);
+                    if let Some(t) = d.sfx {
+                        let e = t.get(id);
+                        if !e.looped { self.sounds.push(Sound { id, pos: k.pos, inner: e.inner, outer: e.outer, weight: e.weight }); }
+                    }
+                }
+            }
+        }
         // Bond: `Player_Hurt` (the difficulty factor is applied in `explode_propagate`).
         if let Some(ph) = hits.player.filter(|_| !self.net_no_self_hurt) {
             let before = self.health.health;
@@ -15877,6 +15934,12 @@ fn segment_hits_sphere(a: V3, b: V3, c: V3, r: f32) -> bool {
             }
             self.node_doors = Some(m);
         }
+        // The A* door-link gate's lock answers for this tick [M 0x1571b0:262-271 → Door_IsLocked
+        // 0x136810]: every door node whose bound door reads locked.
+        self.locked_door_nodes.clear();
+        if let Some(m) = self.node_doors.as_ref() {
+            for (&k, &di) in m { if self.doors.is_locked(di, &self.channels) { self.locked_door_nodes.insert(k); } }
+        }
         // The gas puffs (`gases_smoke` 0x1ab2d0 runs in the object handler every frame).
         self.gas.update();
         self.update_swooshes();
@@ -17697,6 +17760,7 @@ fn segment_hits_sphere(a: V3, b: V3, c: V3, r: f32) -> bool {
             { let _p = crate::prof::scope("drone: visible_to (drawn ray)"); dr.drawn = dr.enabled && visible_to(player, d.world, dr.pos, dr.head()); }
             dr.links_used = std::mem::take(&mut self.used);
             dr.link_flags = std::mem::take(&mut self.link_flags);
+            dr.locked_door_nodes = std::mem::take(&mut self.locked_door_nodes);
             dr.cover_rt = std::mem::take(&mut self.cover_rt);
             let _pc = crate::prof::scope("drone: clones + misc");
             dr.others = positions.clone();
@@ -18103,6 +18167,7 @@ fn segment_hits_sphere(a: V3, b: V3, c: V3, r: f32) -> bool {
             if !talks.is_empty() { talk_queue.push((index, talks)); }
             self.used = std::mem::take(&mut dr.links_used);
             self.link_flags = std::mem::take(&mut dr.link_flags);
+            self.locked_door_nodes = std::mem::take(&mut dr.locked_door_nodes);
             self.cover_rt = std::mem::take(&mut dr.cover_rt);
             // NDrone2_Steer: exponential turn toward the desired yaw, 0.1 per tick, with the anim's yaw offset added
             // (`Drone_Control` 0x139268 ends with `NDrone2_PostDroneControl` 0x14aff8 [M
@@ -19741,7 +19806,7 @@ mod tests {
             damage_mul: 1.0, alert_bits: 0, light: 1.0, attack_frame: 0, alerted_by_drone: false, watching: false,
             route: None, last_wait: None, idle_timeout: None, delayed: None, sm_id: 0, stand_until: 0,
             croute: None, nav_path: None, move_quad: 0, yaw_offset: 0.0, no_route_odd: false, target: PlayerTarget::default(), links_used: Vec::new(),
-            link_flags: Vec::new(),
+            link_flags: Vec::new(), locked_door_nodes: Default::default(),
             switch_channel: 0, channel_on: false, placement: 0, spawn_seq: 0, spawn_frame: 0, group: 0, present: true, started: false, drawn: true, enabled: true, index: 0, exiting_to: 0, self_msg: None,
             cover: None, cover_side: 0, cover_type: 0, cover_leave: 0, cover_point: pos, goal: None, cover_claimed: false, has_cover: false, cover_tries: 0,
             cover_rt: Vec::new(), others: Vec::new(), peers: Vec::new(), return_state: 0, second_channel: 0, second_tag: 0,
