@@ -63,7 +63,7 @@ fn probe15_manual_e() {
         let b = pos(&w);
         let floor = sim.world.segment_hit([b[0], b[1] + 0.5, b[2]], [b[0], b[1] - 30.0, b[2]])
             .map(|(t, _)| b[1] + 0.5 - (b[1] + 0.5 - (b[1] - 30.0)) * t);
-        eprintln!("[probe15] swing k{} rot {:?} bond {:?} floor {:?} sp {}",
+        eprintln!("[probe15] swing k{} rot {:?} bond {:?} floor {:?} sp {:?}",
             k * 20, m.map(|m| [m[0][0], m[0][2], m[2][0], m[2][2]]), b, floor,
             sim.drones.scripts.players.iter().find(|p| p.placement == 492).map(|p| p.state));
     }
