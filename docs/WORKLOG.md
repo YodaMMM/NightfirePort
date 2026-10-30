@@ -27,3 +27,12 @@ leg 5b wedged at x 55.0 on an unprobed face, the wire rides unvalidated. The wal
 the master stand-in shapes (GREEN 2/0) with all findings inline; the legs' code is quoted in the
 report. Probes + walkreal comments pushed. Suite: the walkreal binary 2/0 + the three probes green;
 the FULL suite did not fit the window (sandbox expiry ~22:03).
+
+## level-0c-every-objective-blockers-2 — 00:06 UTC 2026-10-30
+Branch from origin/s/level-0c-every-objective-blockers (a0cdf6dc WIP), merged origin/master
+(21fbeed3: the cable third-person work + the scoped bullet re-query). Task: the merged
+walk_the_whole_mission_from_the_start_to_the_0d_handoff goes RED at the #283 ride — "must drop
+onto the ring SE corner (11.09..11.17), got [35.15, 13.55, -209.95] dropped true"
+(walkreal_0700000c_live.rs:454). Find what moved the drop (the face Bond stands on at y 13.55,
+the drop timing, the wire's end) [D/M], fix the port or re-derive the leg, keep the walk green.
+FULL suite on the final tree; quote the total line. Deadline ~02:02 UTC, stop 01:42 UTC.
