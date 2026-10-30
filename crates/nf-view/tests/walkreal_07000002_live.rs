@@ -57,6 +57,10 @@ fn geisha(w: &Walker, ch: u8) -> Option<usize> {
 }
 
 /// Kill every armed guard near `around` (the geisha's captor set) through the real fire path.
+/// The approach is real input too — NO bond.pos writes after the spawn: walk the nav web into
+/// the captor room (round 0 aims at the geisha's spot, later rounds at the guard's current pos —
+/// the AI moves), then fire through the real trigger path [the walker's `shoot` = the player's
+/// own step_bond aim/reposition/flank loop, incl. the nav-graph flank when pinned 9 s].
 fn clear_captors(w: &mut Walker, around: [f32; 3], label: &str) {
     for round in 0..8 {
         let target = {
@@ -65,12 +69,9 @@ fn clear_captors(w: &mut Walker, around: [f32; 3], label: &str) {
                 && d.pos.iter().zip(around).map(|(a, b)| (a - b).powi(2)).sum::<f32>() < 64.0)
         };
         let Some(di) = target else { return };
-        let at = w.scene.sim.as_ref().unwrap().drones.list[di].pos;
-        // Test setup: stand Bond beside the guard (a straight walk crosses rooms; the shot is real).
-        let sim = w.scene.sim.as_mut().unwrap();
-        sim.bond.pos = [at[0] + 2.5, at[1], at[2] + 0.4];
-        drop(sim);
-        w.wait(30);
+        let dest = if round == 0 { around }
+            else { w.scene.sim.as_ref().unwrap().drones.list[di].pos };
+        w.walk_nav_to(dest, &format!("{label} captor {round} approach"), 3.5);
         if !w.shoot(di, &format!("{label} captor {round}")) {
             eprintln!("[02] {label}: captor {round} (drone {di}) survived the clip");
         }
