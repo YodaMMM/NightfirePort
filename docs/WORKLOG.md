@@ -386,3 +386,17 @@ ignored). One new red surfaced: walkreal_07000002 walk_the_castle_all_objectives
 bisect next window). The walkreal_07000011 hair-band red was FIXED in this window (the
 flight-C approach leg now reaches the authored waypoint; the band untouched). Report at
 docs/reports/capsule-cull-and-los-masks-12.md; finishing.
+
+### capsule-cull-and-los-masks-13 (start, 01:05 UTC, 2026-10-30)
+
+Task: the -12 merge with master (8dc61a92 in master's history; tip 21fbeed3) turns 4 tests RED
+reproducibly when re-run alone (green on master): walkreal_07000002_live::walk_the_castle_
+all_objectives_to_the_exit, walkreal_07000003_live::walk_the_full_route_and_complete_every_
+objective, fix_npc_doors_live::the_escort_opens_the_interior_doors_on_his_route,
+walkreal_07000014_live::walk_the_infiltration_to_the_delta_exit. Split the two -12 changes
+(the head-on capsule cull with the corrected direction test; the LOS masks / masked_scan),
+find which moves each red, what the game does at that step [M Intersect_CylGeom /
+Collide_Intersect 0x1ebaa8; L if needed], fix the port where wrong, re-derive tests only with
+evidence. Land only what keeps the full suite free of new reds. FULL suite total line quoted.
+
+Base: s/13 = origin/master (21fbeed3) + merge origin/s/capsule-cull-and-los-masks-12 (20270f58).
