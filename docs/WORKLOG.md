@@ -61,3 +61,16 @@ player.rs/world.rs edits (02e306a6..21fbeed3 touches drone/lock/gadget/nis/progr
 Suite: the fast runner (tools/test/suite.py) launched 00:05 UTC, build ok 923 binaries in
 1168 s, sweep running on the final tree (the 0c binary re-linked with the fix before its turn);
 the sweep cannot finish inside this window — the total line is reported as far as it got.
+
+## level-0c-real-crossings-2 (started 03:05 UTC 2026-10-30)
+
+Task: blockers-2 (merging now) made the whole 0c walk green with the #283 ride re-derived.
+origin/s/level-0c-real-crossings made the hinge-burn leg REAL (the hinge locks burned through
+held fire, the trench drop fires plate #274) but its #283 landing went red. Port the
+real-crossings hinge-burn leg onto master+blockers-2, then the remaining wire crossings
+(#284, #282) and descents on real input, keeping blockers-2's #283 leg. The walk stays green.
+FULL suite, quote its total line.
+
+Plan: branch from origin/master + merge blockers-2 (done, fast-forward 6082a67a); then port
+3b52d8e8's hinge-burn leg + ab29c2ba's #284/#282 rides + 29b43fa9's FIRE-action wire drops;
+run the walk green; suite; report.
