@@ -94,3 +94,19 @@ bathhouse_armed_girl_live 2p/0F, fix_grenade_throw_live 4p/0F, camera_beam_satch
 4a chain bins green (21:2x UTC): fix_landing_matrix_live 1p/0F, fix_finale_live 4p/0F (the lift
 ride completes end-to-end with the scoped flight in tree), walk_0700004a_live 1p/0F,
 walk_07000013_live 2p/0F (the cross-level chain).
+
+## level-4a-every-objective-3 (started 00:57 UTC 2026-10-30)
+
+Task: the scoped drone-bullet flight (the -2 branch's `Bullet::update` querying
+`segment_bullet_scoped(find_cel(pos))` + the world.rs additions) makes
+`walkreal_07000008_live::walk_the_whole_mission_on_real_input` RED at "shooting the fusebox
+wires raises ch 137 [D #219 group-0; M FuseBox_Update 0x1adfe8]" — green on master and on
+master + level-0a-every-objective-4. Find why the fusebox-wire shot stops landing and what the
+game does there [M Bullet_update 0x12e7b0, Collide_Pick 0x1eb320, the wires' cel/candidate
+set]; fix so both the 4a ride fire leg and the 08 fusebox walk are green; FULL suite + total
+line, no new reds.
+
+Progress log:
+- 00:56 branch s/level-4a-every-objective-3 created from origin/s/level-4a-every-objective-2
+  (d5d604a0) and merged with origin/master (48696227); setup checked (repo, work/, ISO,
+  target-cache, nf-queue all present).
