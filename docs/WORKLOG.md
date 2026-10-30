@@ -11,3 +11,11 @@
   repro test (3000 ticks, no drone in 0x81/0x5a, the two 0x1b guards stop by the door).
   Repo/ISO/work/target kept from the guard-opponent-pointer-2 session; suite runner to
   start in the background next.
+
+- (16:05 UTC, 10-30) Checkpoint: the repro is on the branch (door_guards_hold_07000014_live,
+  1 passed) and the port symptom is fully traced — the 0x1b→combat flip is the ENEMY_MISSION
+  arrival path [M 0x15e1e8 case 3] firing early because Route::follow returns ARRIVED at
+  radius 2.0 while the body is ~1.5 short (the game's walkers stop AT their route ends and
+  never get code 3), plus the group-9 clones spawning at alert 1.0 (template prop decode
+  unsettled). The 0x96 alarm OR#323 fires but carries no msg at the flip. Report:
+  docs/reports/level-14-door-guards-combat.md. Fix not landed; next session continues.
