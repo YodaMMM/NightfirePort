@@ -684,15 +684,23 @@ impl Rbodies {
     pub fn create(level: &nf_formats::level::Level) -> Rbodies {
         let mut list = Vec::new();
         let Some(m) = level.main_map() else { return Rbodies { list } };
-        for p in &level.maps[m].placements {
+        for (pi, p) in level.maps[m].placements.iter().enumerate() {
             if p.flags & 0xff != 0xd8 { continue; }
             // The placement → object resolve, the doors' `object(p)` convention: by-hash through
             // the level's table, else the placement's own index.
             let resolved = if p.by_hash() { level.by_hash.get(&p.hashcode).copied() } else { Some((m, p.index as usize)) };
             let Some((map, object)) = resolved else { continue };
             let Some(o) = level.maps[map].objects.get(object) else { continue };
-            let ty = (p.extra[4] & 0xffff) as u16 as i16;
-            let mass_word = p.extra[2];
+            // The record words: `RB_Create` reads the mass at rec+0x2c and the type halfword at
+            // rec+0x34 [M 0x1d6bf0:52-56]. The placement's param words are the (slot, value)
+            // pairs the parse carries (`Placement.params`, slot k = the record word +0x24+4k —
+            // the same words `extra` mirrors; the parse leaves `extra` zeroed on these rows, so
+            // the read goes through `params`). Slot 2 = +0x2c (the mass word), slot 4 = +0x34
+            // (the type halfword): 07000004's lamps carry (2,1) and (4,65535) [D], 07000006's
+            // barrels (0,8) and (4,65535) [D].
+            let pv = |k: u32| p.params.iter().find(|(j, _)| *j == k).map(|&(_, v)| v).unwrap_or(0);
+            let ty = (pv(4) & 0xffff) as u16 as i16;
+            let mass_word = pv(2);
             let mass = if mass_word == 0 { 3.0 }
                 else if mass_word & 0x8000_0000 != 0 { mass_word as f32 }
                 else { (mass_word as i32) as f32 };
@@ -715,12 +723,12 @@ impl Rbodies {
             let (s_aa, s13c) = rb_create_tail(ty, ext);
             if let Some(v) = s13c { st.s13c = v; }
             list.push(RbObj {
-                placement: p.index,
+                placement: pi as u16,
                 glist: o.hashcode,
                 flags: 0x44,
                 s_aa,
-                s154: (p.extra[5] & 0xff) as u8,
-                s158: if p.extra[6] == 0 { 0xffff } else { p.extra[6] },
+                s154: (pv(5) & 0xff) as u8,
+                s158: if pv(6) == 0 { 0xffff } else { pv(6) },
                 rb,
                 st,
                 hits: Vec::new(),

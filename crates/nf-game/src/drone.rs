@@ -17612,6 +17612,15 @@ fn segment_hits_sphere(a: V3, b: V3, c: V3, r: f32) -> bool {
                 // where its hits were armed (spawn_blast's class-5 arm — the game's
                 // Collide_Update is post-walk, 0x1336f8:238, and the next update applies the
                 // accumulated impulses).
+                // rigid-body-bullet: the dispatch pair's SECOND member runs per tick over the
+                // body's `obj+0xD0` chain [M RB_CollisionHandler 0x1d7a80] — the contacts the
+                // collide pass appended, the bullets' class-5 hits among them
+                // (`update_player_bullets`' rigid-body-bullet arm). Consumed here; the NEXT
+                // tick's RB_Update applies the accumulators (the same one-tick shape
+                // spawn_blast's arm rides).
+                let mut rb_sounds = Vec::new();
+                self.rbodies.handle_collisions(&mut rb_sounds);
+                for (id, pos) in rb_sounds { self.audio.play3d(id, pos, None); }
                 self.rbodies.tick(self.level_current & 0xf, &mut self.rng);
                 continue;
             }
