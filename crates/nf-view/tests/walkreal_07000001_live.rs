@@ -16,10 +16,12 @@ use nf_game::world::V3;
 
 fn iso() -> String { std::env::var("NF_ISO").expect("NF_ISO") }
 
-#[test]
-fn walk_from_the_spawn_to_the_exit_with_the_contact() {
-    let iso = iso();
-    let mut w = Walker::new(nf_view::load(&iso, "07000001.bin", false).expect("load 07000001"));
+/// The walked route to the exit (shared by the walk test and the exit-fade pin below): the real
+/// input path from spawn #0 to the exit plate, stopping AT the fire tick — `level_exit` is
+/// posted and `exit_hold` still has all 300 frames (the game's fade level is 0 on the fire tick;
+/// `Camera_UpdateGlbVars` advances it on the frames after [M 0x1bada0:16-20]).
+fn walk_to_the_exit(iso: &str, stop_at_fire: bool) -> Walker {
+    let mut w = Walker::new(nf_view::load(iso, "07000001.bin", false).expect("load 07000001"));
     {
         let sim = w.scene.sim.as_ref().unwrap();
         let p = sim.bond.pos;
@@ -553,51 +555,55 @@ fn walk_from_the_spawn_to_the_exit_with_the_contact() {
         w.walk_nav_to([-30.8, 6.4, 13.1], "the stairwell head", 1.2);
         w.walk_nav_to(plate, "the plate (lead the descent)", 1.2);
     }
-    // obj0 "Escort Mayhew to bunker" (text 0x04000006) watches ch 0x47 [L mission::c07000001,
-    // ee_start_05 @ 0x2a3eb8]. The disc carries NO ch-0x47 writer — the same census as ch 0x33:
-    // every placement, trigger, mux, script and pickup scanned, the only 0xD writes are 0xB and
-    // 0xE [D walkreal_probe01] — the un-ported mission/dialogue layer owns the write. The walk
-    // hands it at the level's own beat — Mayhew reached the bunker plate — and pins the REAL
-    // monitor's consequences [M 0x1827d8].
+    // level-01-end-fade: the pin path stops AT the fire — the mission-monitor block below waits
+    // 30 ticks that would burn into the fade's 300 before the read (the walk path keeps them).
+    if stop_at_fire && w.scene.sim.as_ref().unwrap().drones.level_exit.is_some() { return w; }
+    // obj0 "Escort Mayhew to bunker" (text 0x04000006) watches ch 0x47 [D mission::c07000001,
+    // ee_start_05 @ 0x2a3eb8: text 0x04000006, ch 0x47, enable 0, flags 0]. The objective does
+    // NOT complete on this level, and this walk now pins that instead of standing in for it:
+    //   * no 07000001 disc data writes 0x47 — the level census found the only script-0xD writes
+    //     0xB and 0xE, and no trigger/mux/lock/pickup carries 0x47 [D walkreal_probe01];
+    //   * no ACTION.ELF code writes ch 0x47 immediately either — this session's disassembly
+    //     census of every switch_channels (0x26fc90) store (lui 0x27/-0x370 base idiom, tracked
+    //     through addiu/addu to sb/sh/sw) shows the only immediate channels are 0x2d, 0x5e, 0x62,
+    //     0x63, 0x64, 0x6f, 0x97, 0x98, 0x9b, 0xfd [M-dis work/elf/ACTION.ELF]; every other
+    //     writer (Trigger/SP/Script_EventHandler/DroneFunc_HostageSaved/Pickup/Door/...) takes
+    //     its channel from disc data;
+    //   * the real writer is the NEXT level's story hand-off: 07000002's level-start cut-scene
+    //     SP #400, script 0x06000084 (pack 07800002, mode 1), stream 7 writes ch 0x47 = 1
+    //     [D 07800002 0x06000084 stream 7] — the same one-part-late shape as 0x4D, which
+    //     07000003's TouchOnce #308 writes for 07000002's obj2 [D 07000003 param sweep].
+    // walkreal_07000002_live pins that write and the resulting fold live; here the game's own
+    // monitor state on THIS level is pinned: obj0 announced and active, everything else waiting
+    // [M 0x1827d8 case 0 announces when MissionData row level <= GameState; case 1 waits on the
+    // enable channel; case 3 folds only when the watch channel rises].
     // The record indexes resolve from the LEVELS table, not hardcoded: the table mirrors the
     // game's .data order and the mission-05..08 records sit in FRONT of 01's [M 0x1827d8 walks
     // LEVELS in table order; a hardcoded [0][0] named 01's record before those landed].
-    // ORDER MATTERS: once the AND fires (both on the plate), the exit-hold freezes the world
-    // (docs/systems/exit-hold.md — step_bond returns before Drones::tick), so the hand and the
-    // monitor's complete/announce land BEFORE Bond takes the last step onto the plate — the game's
-    // own order (the banner shows during Mayhew's arrival, the load follows the fade).
     let m01 = nf_game::mission::LEVELS.iter().position(|l| l.level == 0x0700_0001).expect("07000001's LEVELS record");
     let m02 = nf_game::mission::LEVELS.iter().position(|l| l.level == 0x0700_0002).expect("07000002's LEVELS record");
-    {
-        let sim = w.scene.sim.as_ref().unwrap();
-        assert_eq!(sim.drones.mission.states[m01][0], 3, "obj0 announced (immediate reveal, enable 0) [M 0x1827d8 case 0]");
-    }
-    if !exited {
-        let sim = w.scene.sim.as_mut().unwrap();
-        let frame = sim.drones.frame;
-        sim.drones.channels.set(0x47, 1, frame);
-    }
-    w.wait(30);
-    // The exit can race the hand (the recovery's follow can carry Bond onto the plate right behind
-    // the contact): if the world froze mid-wait, the same monitor over the same channels, called
-    // once for the frozen window, performs the identical transitions [*suggested* stand-in — the
-    // game's Mission_Update keeps running through the fade; the port's hold skips it].
-    if !exited && w.scene.sim.as_ref().unwrap().drones.mission.states[m01][0] != 4 {
-        let mut sim = w.scene.sim.as_mut().unwrap();
-        let (lvl, fr) = (sim.level, sim.drones.frame);
-        let mut ev = vec![];
-        sim.drones.mission.update(&mut sim.drones.channels, fr, lvl, false, &mut ev);
-        eprintln!("[01] the exit raced the hand — the frozen-window monitor call ran ({} events)", ev.len());
+    // The monitor settles; fire-aware so the pin's read stays on the fire tick (identical 30
+    // ticks when !stop_at_fire).
+    for _ in 0..30 {
+        if stop_at_fire && w.scene.sim.as_ref().unwrap().drones.level_exit.is_some() { break; }
+        w.tick(Default::default(), false);
     }
     {
-        // The monitor's transitions, whichever window ran them: obj0 completes (case 3),
-        // 07000002's first two objectives announce on the 0x47 enable (case 1 has no level gate
-        // [L mission::c07000002]).
         let sim = w.scene.sim.as_ref().unwrap();
-        assert_eq!(sim.drones.mission.states[m01][0], 4, "obj0 completes through the real monitor [M 0x1827d8 case 3]");
-        assert_eq!(sim.drones.mission.states[m02][0], 3, "07000002 'Destroy Mayhew's computer' announces on the 0x47 enable [M 0x1827d8 case 1]");
-        assert_eq!(sim.drones.mission.states[m02][1], 3, "07000002 'Rescue geisha girls' announces on the 0x47 enable");
+        assert_eq!(sim.drones.mission.states[m01][0], 3, "obj0 announced (immediate reveal, enable 0) and still active — the fold belongs to 07000002's intro stream 7 [M 0x1827d8 case 0; D 07800002 0x06000084]");
+        assert_eq!(sim.drones.mission.states[m02][0], 1, "07000002 'Destroy Mayhew's computer' still waits on enable 0x47 [M 0x1827d8 case 1]");
+        assert_eq!(sim.drones.mission.states[m02][1], 1, "07000002 'Rescue geisha girls' still waits on enable 0x47");
         assert_eq!(sim.drones.mission.states[m02][2], 1, "07000002 'Find door to servants quarters' still waits on enable 0x4c");
+        // [S] unverified — kept out of pass/fail. "07000001 never raises the obj0 completion
+        // channel" rests on a MISSING writer (the census above: level data, every
+        // switch_channels 0x26fc90 immediate, every disc-data-driven writer), and an assertion
+        // may not rest on a missing writer — the port may simply lack it. Logged, never
+        // asserted:
+        if sim.drones.channels.on(0x47) {
+            eprintln!("[01] [S] unverified — ch 0x47 is ON after the walk: a writer the census missed (or the un-ported mission layer) fired; the never-raises expectation is NOT met");
+        } else {
+            eprintln!("[01] [S] unverified — ch 0x47 still off after the walk: matches 'no disc writer on this level' [D census + M-dis], but the port may simply lack the writer, so this stays out of pass/fail");
+        }
         assert!(!sim.drones.channels.on(100), "the mission spans 07000002 — success waits for its objectives");
     }
     if !exited {
@@ -629,13 +635,33 @@ fn walk_from_the_spawn_to_the_exit_with_the_contact() {
                 w.walk_nav_to(plate, "the plate (re-take)", 1.2);
             }
             if w.scene.sim.as_ref().unwrap().drones.channels.on(0x10) { break; }
-            w.wait(60);
+            // level-01-end-fade: the wait breaks AT the fire — the pin below reads the hold with
+            // all 300 frames left on the exit tick itself (the countdown begins the next tick
+            // [M 0x1bada0:16-20 advances the fade on the frames after the SetFade stores level 0]).
+            for _ in 0..60 {
+                if w.scene.sim.as_ref().unwrap().drones.level_exit.is_some() { break; }
+                w.tick(Default::default(), false);
+            }
         }
     }
     let sim = w.scene.sim.as_ref().unwrap();
     assert!(sim.drones.channels.on(0x10), "the AND-touch must fire with Bond AND the contact on the plate (contact at {:?})",
         sim.drones.list[ci].pos);
     drop(sim);
+    // The exit fires the same tick ch 0x10 rises (the LOAD_LEVEL trigger's gate IS 0x10 — the
+    // case-10 arm fires on the channel, no proximity check [M Trigger_Update 0x1b1a78:162-166]) —
+    // stop at the fire tick; the walk test and the fade pin both resume here.
+    for _ in 0..60u32 {
+        if w.scene.sim.as_ref().unwrap().drones.level_exit.is_some() { return w; }
+        w.tick(Default::default(), false);
+    }
+    panic!("the exit must fire within 60 ticks of the AND-touch (level_exit posted)");
+}
+
+#[test]
+fn walk_from_the_spawn_to_the_exit_with_the_contact() {
+    let iso = iso();
+    let w = walk_to_the_exit(&iso, false);
     assert_eq!(w.scene.sim.as_ref().unwrap().drones.level_exit, Some(0x0700_0002), "the exit fires to 07000002");
     eprintln!("[01] level_exit to 07000002 at tick {} — walked {} ticks total", w.total_ticks, w.total_ticks);
     for f in &w.report.falls { eprintln!("[01] fall: {f}"); }
@@ -983,4 +1009,86 @@ fn following_mayhew_down_completes_the_level() {
     assert_eq!(w.scene.sim.as_ref().unwrap().drones.level_exit, Some(0x0700_0002), "the exit fires to 07000002");
     eprintln!("[01f] level_exit to 07000002 at tick {} (follow route)", w.total_ticks);
     for f in &w.report.falls { eprintln!("[01f] fall: {f}"); }
+}
+
+/// level-01-end-fade: the level-end screen fade, pinned on the walked exit above. The game's
+/// exit path [M]: the AND-touch raises ch 0x10 and `Trigger_Update`'s case-10 arm fires the
+/// LOAD_LEVEL trigger (0x1b1a78:162-166 — no proximity check); `Trigger_Activate`'s type-10
+/// tail runs `Music_Event(3,1)` + `GS_PauseGame(1)` + `ResetMap_LevelToLoad(next,1,0)` +
+/// `GameFlow_PushState(300.0f, 7, 0xff)` [M 0x1b2318:89-92, disasm 0x1b24b8-0x1b24ec]. The push
+/// converts state 7 → 8 through `Camera_SetFade(6, 300.0, 0xff, 1)` [M 0x1c9f38 disasm
+/// 0x1c9f7c-0x1c9f84: a0=6, f12/a1 pass through, a2=1], arming the viewer fade: level 0, rate
+/// (1/300)·(0xff/255), colour bytes R=G=B=0 — black [M 0x1bbdd8 disasm 0x1bbe20-0x1bbe54].
+/// `Game_Draw` draws psiFadeView(R,G,B,level·255) while the fade is active [M 0x1e6f50:203-209];
+/// `Camera_UpdateGlbVars` advances the level every frame and clamps the byte [M 0x1bada0:16-27];
+/// when the fade ends, state 8 pops onto state 3 (`ResetMap_Load`) and the level loads
+/// [M 0x1c98c8:173-189].
+#[test]
+fn the_exit_fade_starts_on_the_exit_tick_runs_the_games_300_frames_then_the_level_loads() {
+    let iso = iso();
+    let mut w = walk_to_the_exit(&iso, true);
+    // The exit tick: the hold stands with the full count, the fade level is 0, the request rides.
+    {
+        let sim = w.scene.sim.as_ref().unwrap();
+        let h = sim.drones.exit_hold
+            .expect("the exit posts GS_PauseGame(1) + GameFlow_PushState(300.0f, 7, 0xff) [M 0x1b2318:89-92]");
+        assert_eq!(h.next, 0x0700_0002, "the hold carries the exit's next level [D placement p0; M 0x1b2318:91]");
+        assert_eq!(h.total, 300, "the push carried 300.0f [M 0x1b2318:92 — 0x43960000]");
+        assert_eq!(h.fade_frames, 300, "all 300 frames left at the fire tick");
+        assert_eq!(sim.drones.level_exit, Some(0x0700_0002),
+            "the exit request is posted; the host drains it only after the hold clears [M 0x1c98c8 case 8]");
+        assert_eq!(sim.drones.exit_fade_view().unwrap().alpha, 0.0,
+            "the fade's level starts at 0 [M 0x1bbdd8: level = 0 · (0xff/255)]");
+    }
+    // The world freezes under the fade while it runs [M 0x1c98c8:44-47 the clock stops;
+    // 0x1c9790:30-38 the world sections sit behind the pause gate; 0x10cd80:36 the input dies].
+    let (bond0, anchor0, frame0) = {
+        let sim = w.scene.sim.as_ref().unwrap();
+        (sim.bond.pos, sim.drones.player_pos, sim.drones.frame)
+    };
+    for _ in 0..100 { w.tick(Default::default(), false); }
+    {
+        let sim = w.scene.sim.as_ref().unwrap();
+        assert_eq!(sim.bond.pos, bond0, "the world is frozen under the fade");
+        assert_eq!(sim.drones.player_pos, anchor0, "the player anchor is frozen under the fade");
+        assert_eq!(sim.drones.frame, frame0, "the game clock stops while paused [M 0x1c98c8:44-47]");
+        let h = sim.drones.exit_hold.expect("the hold still runs at fire+100");
+        assert_eq!(h.fade_frames, 200, "100 of the 300 frames burned [M 0x1bbdd8 rate · 0x1bada0 advance]");
+        let a = sim.drones.exit_fade_view().unwrap().alpha;
+        assert!((a - 100.0 / 300.0).abs() < 1e-6,
+            "the fade alpha is the burned fraction of the push (got {a}) [M 0x1bada0:16-20]");
+        // The visible pane: the game draws psiFadeView(0,0,0, level·255) — black at the faded
+        // alpha [M 0x1bbdd8 colour bytes, 0x1e6f50:203-209]. The port's overlay quad matches.
+        let hud = w.scene.script_overlay_hud(4.0 / 3.0);
+        assert!(hud.v.iter().any(|v| v.c[0] == 0.0 && v.c[1] == 0.0 && v.c[2] == 0.0
+                && (v.c[3] - 100.0 / 300.0).abs() < 1e-3),
+            "the fade pane draws black at the faded alpha [M 0x1bbdd8 + 0x1e6f50 psiFadeView]");
+    }
+    // The rest of the count: the hold clears at exactly 300 with the request intact
+    // [M 0x1c98c8:173-189 — state 8 pops onto state 3].
+    for _ in 0..300 {
+        w.tick(Default::default(), false);
+        if w.scene.sim.as_ref().unwrap().drones.exit_hold.is_none() { break; }
+    }
+    {
+        let sim = w.scene.sim.as_ref().unwrap();
+        assert!(sim.drones.exit_hold.is_none(), "the hold cleared at 300 frames [M 0x1c98c8:173-189]");
+        assert_eq!(sim.drones.level_exit, Some(0x0700_0002), "the loader waited under the fade — the request is intact");
+    }
+    // The load AFTER the fade: the host captures the RamSave (the game saves at the fire
+    // [M 0x1b2318:96]; the world is frozen between) and loads warm [M 0x1d3800 → 0x1d6360].
+    let save = {
+        let sim = w.scene.sim.as_ref().unwrap();
+        nf_game::player::RamSave::capture(&sim.drones.health, sim.gun.switch_request, &sim.drones.inventory, &sim.drones.channels)
+    };
+    drop(w);
+    let next = nf_view::load_with_carry(&iso, "07000002.bin", false, Some(&save)).expect("load 07000002 warm");
+    {
+        let sim = next.sim.as_ref().unwrap();
+        assert_eq!(sim.level, 0x0700_0002, "the next level loaded after the fade [M 0x1c98c8:173-189]");
+        assert!(sim.drones.exit_hold.is_none(), "the fresh level carries no hold");
+        let p = sim.bond.pos;
+        assert!((p[0] - -27.17).abs() < 2.0 && (p[2] - 29.80).abs() < 2.0,
+            "start #0 (gate 0) — entry from 07000001's single exit route [D docs/levels/07000002.md], got {p:?}");
+    }
 }

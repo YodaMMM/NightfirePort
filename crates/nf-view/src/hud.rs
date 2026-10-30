@@ -401,7 +401,10 @@ pub fn overlay(scene: &crate::scene::Scene, aspect: f32) -> HudFrame {
     // LAB_0019e9c8 (layer 0xff = not drawn) whenever the weapon is scoped — the zoom overlay replaces it.
     // fix-sentinel-camera-play: the guided ride hides it too ("no view model, no crosshair" [L PCSX2],
     // the substate-10 view [M 0x193600:242-256]).
-    let zoomed = sim.map_or(false, |s| s.zoom_target > 1.0) || sim.map_or(false, |s| s.missile_cam.is_some());
+    let zoomed = sim.map_or(false, |s| s.zoom_target > 1.0) || sim.map_or(false, |s| s.missile_cam.is_some())
+        // cable-3p: any non-first-person camera mode hides it - `HUD_UpdateCrossHair` 0x19e6d0 ends at
+        // LAB_0019e9c8 (not drawn) when BLData+0x950 != 0 [M :97-100] (the wire/creep 0xB, the orbit 1/2).
+        || sim.map_or(false, |s| s.bond.cam_mode != 0);
     // options-census: the Crosshairs row (Advanced 0x1000_0124 → PlayerSetting+0x08) hides the
     // sprite — HUD_UpdateCrossHair 0x19e6d0:96 sets +0x38 = 0xff (not drawn) when the byte is 0.
     let crosshair_on = sim.map_or(true, |s| s.drones.crosshair);
@@ -787,6 +790,22 @@ pub fn overlay(scene: &crate::scene::Scene, aspect: f32) -> HudFrame {
     // bar's width is `air·2 + 28` of the 256-wide track, its colour 0x68D6B1 fully submerged (mode 6) /
     // 0x68B1D6 swimming (mode 3); the bubble icon is additive, bright under water (0xFF) and 0x1F at the
     // surface, with the bar at 0x1E/0x1F [M 0x1a11c8].
+    // cable-3p: on the wire the same pane is the grip meter - `HUD_UpdateAirPane` 0x1a11c8 reads
+    // `100 − BL+0x8CC` (the auto-drop timer) when the player object's +0xF6 is 6 (the wire substate),
+    // colours the fill 0x68D6B1 and shows the icon sprite [M :17-33] - the hand and green bar over
+    // Bond hanging [L PCSX2 07000005 cable, audits/render-1029-cable p-stand].
+    if s.bond.substate == nf_game::player::SS_WIRE {
+        let grip = (100.0 - s.bond.auto_drop).clamp(0.0, 100.0);
+        if t.air.len() >= 2 {
+            let (bar, fill) = (&t.air[0], &t.air[1]);
+            let w = (grip * 2.0 + 28.0).clamp(1.0, 256.0);
+            h.sprite(Anchor::Left, (0.0, 0.0), bar, gs(bar.colour >> 8, 0xFF));
+            h.quad(Anchor::Left, fill.layer as i32, fill.texture, 0, fill.x as f32, fill.y as f32, w, fill.h as f32, [fill.uv[0] as f32, fill.uv[1] as f32, w, fill.uv[3] as f32], (false, false), gs(0x68d6b1, 0xFF));
+        }
+        if let Some(icon) = t.air.get(2) {
+            h.sprite(Anchor::Left, (0.0, 0.0), icon, gs(icon.colour >> 8, 0xFF));
+        }
+    } else
     {
         let under = s.bond.underwater;
         if under || s.bond.air < 100.0 {

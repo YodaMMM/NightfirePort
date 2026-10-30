@@ -1026,46 +1026,27 @@ impl Script {
                     Some(Some(Obj::Anim { matrix, .. })) => Some(*matrix),
                     _ => None,
                 });
-                // The vent-drop hand-back (level-14-vent-drop): for 07000014's scene 0x06000833 the
-                // pack has NO marker entity stream — the previous stream (s13) is Wait/Marker only
-                // [D the pack's full stream dump], so the game's case-6 capture hits the
-                // `glb_players+0x90` fallback [M 0x1d94c0:73-84,125-134] — yet the game still
-                // carries Bond from the mezzanine into the facility (no walkable entry exists [D
-                // walk-4: the z 38.21 wall, nav None]). The one mover the disc data offers is the
-                // scripted Bond body (stream 18, script 0x06000857, the player's skin 0x0500005e
-                // [D]) whose world root ends inside the facility at (27.60, 0.98, 43.56) [D the
-                // root track]. Capture it the same way the Kiko precedent composes (nis.rs
-                // level-14-capture-placement): the body's live root IS the hand-back pose. The
-                // mover reads the GENERAL per-interp anim matrix (the kind-2 arm's field — the
-                // merge resolved master's `root` onto it). [S] unverified — the game-side
-                // discriminator (strict player-matrix fallback vs the body's root) is the report's
-                // live check 1; this arm only fires when the strict capture found nothing
-                // (player_at.is_none()), so packs WITH an entity keep the proven path.
-                if self.player_at.is_none() && self.nis.hashcode == 0x0600_0833 {
-                    match objs.list.iter().rev().flatten().next() {
-                        // A world that never resolves the matrix (no `anim_obj_matrix`) leaves the
-                        // seed IDENT: keep the strict fallback rather than handing Bond back at the
-                        // origin.
-                        Some(Obj::Anim { script: 0x0600_0857, matrix, .. }) if *matrix != IDENT => {
-                            if std::env::var("NF_SCRIPTLOG").is_ok_and(|v| v == "1") {
-                                eprintln!("[scriptlog] vent fallback: body root ({:.2},{:.2},{:.2})", matrix[3][0], matrix[3][1], matrix[3][2]);
-                            }
-                            self.player_at = Some(*matrix);
-                        }
-                        _ => {
-                            if std::env::var("NF_SCRIPTLOG").is_ok_and(|v| v == "1") {
-                                let n: Vec<String> = objs.list.iter().flatten().map(|o| match o {
-                                    Obj::Anim { script, skin, .. } => format!("anim {script:08x}/{skin:08x}"),
-                                    Obj::Entity { hash, .. } => format!("ent {hash:08x}"),
-                                    Obj::Camera { .. } => "cam".into(),
-                                    Obj::Sprite { hash, .. } => format!("spr {hash:08x}"),
-                                    Obj::Light { .. } => "light".into(),
-                                }).collect();
-                                eprintln!("[scriptlog] vent fallback: NO 06000857 anim; objects [{}]", n.join(", "));
-                            }
-                        }
-                    }
-                }
+                // level-14-skip-handback: the level-14-vent-drop [S] arm is GONE. It scanned for the
+                // scripted Bond body (0x06000857) and captured its matrix whenever the strict
+                // capture found nothing, on the "no walkable entry exists [D walk-4]" inference.
+                // The inference and the arm both fail against the decompile:
+                //   - [M 0x1d94c0:73-84,125-134] case 6's capture is EXACTLY: the previous stream's
+                //     object (kinds 1|2) at obj+0x90, ELSE `glb_players+0x90` — the player's own
+                //     matrix. There is no third arm; Script_Free 0x1da880:44-48 then Player_Enables
+                //     si+0x40 verbatim [M 0x195498:38-52]. For 0x06000833 the previous stream (s13,
+                //     Wait/Marker only [D the pack dump]) has kind 0 → the game captures Bond's OWN
+                //     matrix — on the natural end AND on a skip alike (the skip's catch-up
+                //     0x1da998:19-100 still runs every op 0x12, and the case-2/4 freeze 0x1d9a08:146,205
+                //     changes nothing for a pack with no prev entity).
+                //   - On a skip the [S] arm captured the FROZEN body matrix (the case-2 freeze stops
+                //     `anim_obj_matrix` updates at the fade-end tick — for a press before t294 the
+                //     body's spawn pose): the real play's in-wall landing (26.70, 1.03, 36.27,
+                //     yaw 2.122 @frame 3046 — the walkreal probe reproduces (27.84, 1.10, 49.96)
+                //     for a press at scene t3). The arm's natural-end capture also drifted with
+                //     every composition change ((30.09, 38.73) at vent-drop-2 → (27.60, 43.56)
+                //     after the camera-base reset) — the signature of a stand-in, not a rule.
+                // The [M] fallback is `player_at = None` → the PlayerEnable drain leaves Bond
+                // where he is (his own matrix, the same thing the game copies around).
                 self.player_mode = g(0) as u8;
                 // fix-final-blockers2 diagnostic: which stream/object the snapshot came from (the game's iVar5
                 // = record(i−1)+0x10 gated on record(i−1)+0x24 kind ∈ {1,2}, fallback `glb_players+0x90`
@@ -2822,5 +2803,177 @@ mod tests {
             let s = p2.info[0].as_ref().unwrap();
             assert!(s.clock > 1.0, "a zero delay runs the streams again (clock {})", s.clock);
         }
+    }
+
+    /// script-channel-events: event 0xD (`Script_EventHandler` 0x1d94c0 case 0xd :178-186) —
+    /// set channel, params [ch, value]. The game: ch == 0 → return before ANY write
+    /// [:179-181]; `switch_channels[ch] = (u8)value` [:182]; the time stamp fires only when
+    /// the VALUE is nonzero [joined_r0x001d9798 :201-204], the same nonzero-write stamp the
+    /// trigger path uses [M 0x1b1a78:87,107,188-189].
+    #[test]
+    fn event_0xd_writes_the_channel_with_the_games_time_stamp_rule() {
+        let ev = |ch: u32, val: u32| {
+            let mut v = vec![0x12, 0x02, 0x0d];
+            v.extend(ch.to_le_bytes());
+            v.extend(val.to_le_bytes());
+            v.push(0);
+            v
+        };
+        // Three events in one stream, waits between them so each fires on its own frame:
+        // [0x1d,1] at t2 (on + stamp), [0x1e,0] at t4 (a 0 write, NO stamp), [0,1] at t6
+        // (ch 0 → the game's early return).
+        let wait = |t: u16| vec![0x05, (t & 0xff) as u8, (t >> 8) as u8, 0];
+        let cmds = { let mut v = wait(2); v.extend(ev(0x1d, 1)); v.extend(wait(4)); v.extend(ev(0x1e, 0)); v.extend(wait(6)); v.extend(ev(0, 1)); v };
+        let nis = Arc::new(Nis {
+            hashcode: 0x0600_0001, camera: false, loop_start: 0, length: 100,
+            streams: vec![NisStream { first_key: 0, last_key: 0, commands: cmds }],
+            keys: Vec::new(),
+        });
+        let mut script = Script::load(nis, IDENT, 1.0);
+        script.start(false);
+        let mut objs = Objects::default();
+        let mut ch = Channels::default();
+        // Pre-set ch 0 to 7: the game's early return must leave it alone.
+        ch.set(0, 7, 0);
+        let world = TestWorld;
+        let mut out = Vec::new();
+        for frame in 0..8 {
+            let mut subs = Vec::new();
+            script.update(&mut subs, &Default::default(), &mut objs, &mut ch, &world, frame, &mut out);
+        }
+        assert!(ch.on(0x1d), "event 0xD [0x1d,1] set switch_channels[0x1d]");
+        assert_eq!(ch.v[0x1e], 0, "event 0xD [0x1e,0] wrote the 0 (the write happens, value 0)");
+        assert_eq!(ch.time[0x1d], 2, "the nonzero write stamped switch_channels_time[0x1d] with the event's frame [M 0x1d94c0 joined_r0x001d9798]");
+        assert_eq!(ch.time[0x1e], 0, "a zero-value write does NOT stamp the time [M 0x1d94c0 :201-204 — the stamp is inside `if (iStack_b4 != 0)`]");
+        assert_eq!(ch.v[0], 7, "event 0xD [0,1] returned before writing: ch 0 keeps its value [M 0x1d94c0 :179-181]");
+        assert!(!ch.script_channels.contains(&0), "the early return never registers ch 0 as script-written");
+        assert!(ch.script_channels.contains(&0x1d) && ch.script_channels.contains(&0x1e));
+    }
+
+    /// script-channel-events: event 0x11 (`Script_EventHandler` 0x1d94c0 case 0x11 :201-211) —
+    /// conditional set, params [test, dest_if_nonzero, dest_if_zero, value]. The game:
+    /// `if (switch_channels[test] == 0) dest = p2` [:202-204] — p1 is the destination when the
+    /// test channel reads NONZERO, p2 replaces it when it reads zero; dest == 0 → return
+    /// [:205-207]; `switch_channels[dest] = (u8)p3` [:208] + the nonzero time stamp on dest.
+    #[test]
+    fn event_0x11_selects_the_destination_by_the_test_channel() {
+        let ev11 = |t: u32, on: u32, off: u32, val: u32| {
+            let mut v = vec![0x12, 0x04, 0x11];
+            v.extend(t.to_le_bytes());
+            v.extend(on.to_le_bytes());
+            v.extend(off.to_le_bytes());
+            v.extend(val.to_le_bytes());
+            v.push(0);
+            v
+        };
+        let evd = |ch: u32, val: u32| {
+            let mut v = vec![0x12, 0x02, 0x0d];
+            v.extend(ch.to_le_bytes());
+            v.extend(val.to_le_bytes());
+            v.push(0);
+            v
+        };
+        // One stream, in order (waits separate the frames the stamps land on):
+        //   t2:  0xD [5,1]        — raise the test channel.
+        //   t2:  0x11 [5,50,4c,1] — test ON  → dest p1 = 0x50 (time[0x50] = 2).
+        //   t4:  0xD [5,0]        — clear it.
+        //   t4:  0x11 [5,50,4c,1] — test OFF → dest p2 = 0x4c (time[0x4c] = 4).
+        //   t4:  0x11 [6,0,51,1]  — test 6 OFF → dest p2 = 0x51 (time[0x51] = 4).
+        //   t6:  0xD [6,1]; 0x11 [6,0,51,1] — test ON, dest p1 = 0 → the game returns;
+        //       time[0x51] keeps its t4 stamp.
+        let wait = |t: u16| vec![0x05, (t & 0xff) as u8, (t >> 8) as u8, 0];
+        let cmds = {
+            let mut v = wait(2);
+            v.extend(evd(5, 1));
+            v.extend(ev11(5, 0x50, 0x4c, 1));
+            v.extend(wait(4));
+            v.extend(evd(5, 0));
+            v.extend(ev11(5, 0x50, 0x4c, 1));
+            v.extend(ev11(6, 0, 0x51, 1));
+            v.extend(wait(6));
+            v.extend(evd(6, 1));
+            v.extend(ev11(6, 0, 0x51, 1));
+            v
+        };
+        let nis = Arc::new(Nis {
+            hashcode: 0x0600_0002, camera: false, loop_start: 0, length: 100,
+            streams: vec![NisStream { first_key: 0, last_key: 0, commands: cmds }],
+            keys: Vec::new(),
+        });
+        let mut script = Script::load(nis, IDENT, 1.0);
+        script.start(false);
+        let mut objs = Objects::default();
+        let mut ch = Channels::default();
+        let world = TestWorld;
+        let mut out = Vec::new();
+        for frame in 0..8 {
+            let mut subs = Vec::new();
+            script.update(&mut subs, &Default::default(), &mut objs, &mut ch, &world, frame, &mut out);
+        }
+        assert!(ch.on(0x50), "with the test channel ON the destination is p1 (0x50) [M 0x1d94c0 :202-204]");
+        assert!(ch.on(0x4c), "with the test channel OFF the destination is p2 (0x4c)");
+        assert!(ch.on(0x51), "test 6 OFF → dest p2 = 0x51 written");
+        assert_eq!(ch.time[0x50], 2, "the 0x11 write stamps time[dest] on a nonzero value [M 0x1d94c0 :209-211]");
+        assert_eq!(ch.time[0x4c], 4, "the t4 write stamped its own frame");
+        // The last 0x11 (test 6 ON, dest p1 = 0): the game's `if (iStack_bc == 0) return` arm —
+        // nothing was written, and 0x51's t4 write stands.
+        assert_eq!(ch.time[0x51], 4, "the dest-0 event wrote nothing: 0x51 keeps its t4 stamp");
+        assert!(ch.script_channels.contains(&0x50) && ch.script_channels.contains(&0x4c) && ch.script_channels.contains(&0x51));
+    }
+
+    /// script-channel-events: the skip path. `SP_Update`'s skip (`Input_Action(-1, 0x19, 1)`
+    /// [M 0x1dbda8:129-141]) arms `Script_FFwd` [M 0x1dac78]; `Script_Update`'s catch-up
+    /// do-while then re-runs every stream's `Script_Run` until the script finishes
+    /// [M 0x1da998:19-100] — every op 0x12 fires, so a SKIPPED cut-scene still writes what the
+    /// game writes on skip. Only event 3's delay half is gated on the skip latch
+    /// [M 0x1d94c0:100-104]; 0xD/0x11 carry no such gate.
+    #[test]
+    fn event_0xd_writes_through_the_skip_catchup() {
+        // A camera script (the skip needs the camera-active flag, `Script_FFwd`'s +0xAB5 bit-4
+        // gate [M 0x1dac78:7-22; the port sets it in CameraStart]) whose stream waits to t50,
+        // then event 0xD [0x40, 1], then the done marker.
+        let mut cmds = vec![0x0d, 0, 0, 0, 63, 0, 0]; // camera, keys 0..63
+        cmds.extend([0x05, 0, 50, 0]);                // wait until 50
+        cmds.extend([0x12, 0x02, 0x0d]);              // event 0xD
+        cmds.extend(0x40u32.to_le_bytes());           // ch 0x40
+        cmds.extend(1u32.to_le_bytes());              // value 1
+        cmds.push(0);                                 // event pad
+        cmds.extend([0x06, 0x64, 0x00, 0x00]);        // done: length (100) <= clock → play |= 2
+        cmds.extend([0x04, 0xff, 0xff]);              // stream end (held)
+        let nis = Arc::new(Nis {
+            hashcode: 0x0600_0430, camera: true, loop_start: 0, length: 100,
+            streams: vec![NisStream { first_key: 0, last_key: 0, commands: cmds }],
+            keys: Vec::new(),
+        });
+        let mut lib = HashMap::new();
+        lib.insert(0x0600_0430u32, nis);
+        let mut p = Player { placement: 0, scripts: [0x0600_0430, 0], modes: [1, 0], stay: false, mask: 0, out: 0, gate: 0, scale: 1.0, matrix: IDENT, cur: 0, state: 0, activated: false, countdown: 0, info: [None, None], deleted: false,
+            live_matrix: IDENT,
+            subs: Vec::new(),
+            hit_points: 0.0,
+            damage: 0.0,
+            tick_damage: 0.0,
+            hidden: false,
+            bullet_filter: 0,
+            bullet_hits: Vec::new(),
+            tick_bullet_hits: Vec::new(),
+        };
+        let mut objs = Objects::default();
+        let mut ch = Channels::default();
+        let world = TestWorld;
+        let mut out = Vec::new();
+        p.load(&lib, &mut objs, &mut ch, &world, 0, &mut out);
+        p.state = 2;
+        if let Some(s) = p.info[0].as_mut() { s.start(false); }
+        // Mash the skip from tick 0: the fade runs its ≤45-tick length, then the catch-up
+        // fast-forwards the remaining script — the event 0xD past the skip point fires.
+        for frame in 0..140 { p.update(&lib, &mut objs, &mut ch, &world, frame, &mut out, true, crate::nis::SpStart::default()); }
+        {
+            let s = p.info[0].as_ref().unwrap();
+            assert_eq!(s.play & 2, 2, "the skipped script reached its done bit");
+        }
+        assert!(ch.on(0x40), "the SKIPPED cut-scene still wrote ch 0x40 = 1 [M 0x1da998:19-100 catch-up + 0x1d94c0 case 0xd]");
+        assert!(ch.time[0x40] != 0, "the catch-up's write stamped switch_channels_time[0x40]");
+        assert!(ch.script_channels.contains(&0x40));
     }
 }

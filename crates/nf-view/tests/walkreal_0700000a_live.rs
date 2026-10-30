@@ -3,9 +3,9 @@
 //! (−3.93, 0, 10.40; the arrival plate #58 → ch 0x47 = objective 3) → the corridor loop to the
 //! Q-Worm PC (−16.9, 1.2, −32.2) → equip the Q-Worm gadget (0x58) and fire at the PC through the
 //! real trigger path [M PCQWorm_Update 0x1aee20] → ch 0x48 (objective 4) → the security keyboard
-//! (SP #60 — its activation writer is the level's documented placement-transform blocker, ch 0x3A
-//! driven as docs/levels/0700000a.md records) → ch 0x49 (objective 5) → AND #742 → ch 0x4A → the
-//! hatch exit (21.72, 1.12, 19.79), E through its key gate → 0700000b.
+//! (SP #60, the mode-64 preload entity) through the REAL use key — the pulse stops once ch 0x3A
+//! reads on [M SP_Activate 0x1dc338 + SP_Update 0x1dbda8 state 1] → ch 0x49 (objective 5) →
+//! AND #742 → ch 0x4A → the hatch exit (21.72, 1.12, 19.79), E through its key gate → 0700000b.
 
 #[path = "common/walker_b2.rs"]
 mod walker;
@@ -21,7 +21,22 @@ fn load_carry(save: Option<&nf_game::player::RamSave>) -> Walker {
         let sim = cold.sim.as_ref().unwrap();
         nf_game::player::RamSave::capture(&sim.drones.health, sim.gun.switch_request, &sim.drones.inventory, &sim.drones.channels)
     });
-    Walker::new(nf_view::load_with_carry(&iso(), "0700000a.bin", false, Some(&save)).expect("load 0700000a warm"))
+    let mut w = Walker::new(nf_view::load_with_carry(&iso(), "0700000a.bin", false, Some(&save)).expect("load 0700000a warm"));
+    // The keypad codes: the game's own boot table over the port's local-stream default
+    // [L ee_start_0700000a.bin @0x2beff8 — KeyCodes, 0x33·5 bytes; code index 1 reads
+    // "3078", shown 0] — the same load-path ground truth the level doc's switch_channels
+    // read uses [L @0x26fc90]. The port's Locks_Init stand-in generates on a local stream
+    // (the game's boot draws predate the snapshot's capture point); this override pins the
+    // digits to the snapshot boot's, so the walked keypad entry types the game's own code.
+    if let Ok(snap) = std::fs::read("../../work/ee_start_0700000a.bin") {
+        let mut rows = [[0u8; 5]; 0x33];
+        for (r, row) in rows.iter_mut().enumerate() {
+            let off = 0x2beff8 + r * 5;
+            if off + 5 <= snap.len() { row.copy_from_slice(&snap[off..off + 5]); }
+        }
+        w.scene.sim.as_mut().unwrap().drones.key_codes = nf_game::lock::KeyCodes(rows);
+    }
+    w
 }
 
 /// Fire the held weapon at a static point through the real trigger path: turn+look the view onto
@@ -223,9 +238,12 @@ fn walk_leg_watched(w: &mut Walker, to: [f32; 3], arrive: f32, label: &str) -> b
     false
 }
 
-#[test]
-#[ignore = "the 2026-10-26 live checks name the wall stopper (the handler tail 0x194c70) and give the settled [L] heights (the doorway slide 1.1285, the corner slide 1.1159), but this round's ring run still stuck at the walker's cap (the lane leg + the jamb slide the port cannot reproduce with the spine-dir pushes; the radial-dir ports measured-and-reverted — see docs/reports/level-0a-band-settle-2.md) — the ring needs the game's real ref value (the live check in the report)"]
-fn walk_office_floor_qworm_keyboard_hatch() {
+/// The office-floor walk from the fresh load on real input: the arrival plate (obj 3), the lift-cab
+/// sweep, the corridor loop to the Q-Worm PC (the documented cubicle blocker — the install
+/// channel hand-driven there), back to the security keyboard, the REAL use-key activation
+/// ([M] SP_Activate 0x1dc338 + SP_Update 0x1dbda8 state 1), and the AND-mux chain 0x49 → 0x4A.
+/// Everything here is walked (step_bond only); ends after objective 5's channel settles.
+fn walk_to_security_keyboard() -> Walker {
     let mut w = load_carry(None);
     {
         let sim = w.scene.sim.as_ref().unwrap();
@@ -268,46 +286,177 @@ fn walk_office_floor_qworm_keyboard_hatch() {
     // The whole loop by the AI graph's own nodes (the shaft wall x 5.9-7 spans z −2..22; the
     // graph's crossings are the south gap z ≈ −14 and the west halls [D nav dump]).
     assert!(w.follow_nav_route([pc[0] + 2.0, 0.4, pc[2] + 3.0], "to the Q-Worm PC"), "no nav route to the PC");
-    // The final walk-in: point-blank at the desk (the bullet's own reach [D weapon_data 0x58
-    // +0x1C = 2] needs Bond against it; the lenient walk ends wedged at the desk — what the real
-    // player does — at ≈1.2 from the PC).
-    // Due north of the PC (the cubicle opens over the desk on the north side; the side partitions
-    // at y ≈ 1.75 clip any diagonal ray [D ring probe]).
-    let _ = w.try_walk_to(Wp::new(pc[0], 0.4, pc[2] + 1.5).r(0.8), "the desk's north edge");
-    // Shoot from the walked spot (the desk blocks the closer approach; the bullet's own reach
-    // [D weapon_data 0x58 +0x1C = 2] plus the PC's box covers the gap).
-    // THE LEVEL'S BLOCKER (pinned, not silently skipped): the PC sits in a cubicle the port's
-    // collision walls off at every height — every eye-ray from every walked ring position is
-    // blocked [D the ring/due-north probes], the walk wedges at the desk ~1.9 out, and 112 aim-
-    // mode shots from the wedge spawn bullets that never reach the r-0.7 install sphere
-    // [M PCQWorm_Update 0x1aee20's seg test]. The game's own walkthrough (walk_0700000a_live)
-    // hand-places Bond INSIDE the cubicle at 0.71 — unreachable by walking. docs/levels/
-    // 0700000a.md's route says the vent shortcut is the way in; the port has no vent crawl.
-    // Open live check: in PCSX2 walk to Q-WORM_PC_1 on 0700000a and see whether
-    // the real game lets Bond inside the cubicle (if yes, the port's collision for this office
-    // cell is the bug; the fix belongs to the collision owner).
-    let shots = shoot_at(&mut w, [pc[0], pc[1] + 0.55, pc[2]], 2.2, 900, "the Q-Worm shot (documented blocker)", &|sim| sim.drones.channels.on(0x48));
-    eprintln!("[0a] the install shots landed: {shots} (the cubicle blocker above)");
-    w.scene.sim.as_mut().unwrap().drones.set_channel(0x48);
+    // The cubicle's south side, walked (this round's route — probe_l0a3_install, all legs
+    // arrived): the office block's south wall runs z −25.2..−27.1 (north faces n (0.26,0,0.97),
+    // x −18..−6 [D probe rays]); the pocket south of it (the nav route's end (−14.88, ·, −29.15))
+    // is walled off from the band behind the cubicle by the diagonal wall whose north face
+    // (n (0.30,0,0.95)) spans x −18..−15 at z −29.8..−31.5 [D probe rays] — but its EAST END
+    // stops at x ≈ −15: the column at x −13.5 runs south into the band (northward rays from
+    // z −34.4 clear at x −13 and x −9 [D probe rays]; the prior round's grid stopped at x −15).
+    // The band's floor (y 1.10) holds the bullet-clear stands: from (−15.89, 1.10, −34.24) the
+    // Q-Worm BULLET reaches the PC clear [M PCQWorm_Update 0x1aee20's class-5 seg test; D probe:
+    // segment_bullet CLEAR from every stand x −16..−17.8, z −33.5..−34.4].
+    let _ = w.try_walk_to(Wp::new(-13.9, 0.4, -30.5).r(0.9), "pocket south-east");
+    let _ = w.try_walk_to(Wp::new(-13.5, 0.4, -32.5).r(0.9), "the x −13.5 column south");
+    let _ = w.try_walk_to(Wp::new(-13.5, 0.4, -34.0).r(0.9), "into the band");
+    let _ = w.try_walk_to(Wp::new(-15.5, 0.4, -34.3).r(0.9), "band west");
+    let _ = w.try_walk_to(Wp::new(-16.5, 0.4, -34.3).r(0.7), "the south stand");
+    // The REAL install: equip the Q-Worm through the real gadget cycle (mode-1 bounds 0x4A..0x5E,
+    // owned entries only [M player.rs Input::gadget_cycle / Gun_Update's cycle]) — the prior
+    // round proved the old legs' 112 blocked shots were the spawn loadout, never the gadget —
+    // then shoot the PC from the walked south stand. The writer is the PC's own: a weapon-0x58
+    // BULLET entering the PC's contact list writes switch_channels[0x48]
+    // [M PCQWorm_Update 0x1aee20]. No stand-in: the walked stand is bullet-clear and the shot
+    // lands (probe_l0a3_install: 1 shot → ch 0x48).
+    let mut cycles = 0;
+    loop {
+        if w.scene.sim.as_ref().unwrap().gun.weapon == 0x58 { break; }
+        assert!(cycles < 20, "the gadget cycle never reached the Q-Worm 0x58 (weapon {:#x})",
+            w.scene.sim.as_ref().unwrap().gun.weapon);
+        w.tick(nf_game::player::Input { gadget_cycle: 1, ..Default::default() }, false);
+        for _ in 0..60 { w.tick(nf_game::player::Input::default(), false); }
+        cycles += 1;
+    }
+    let shots = shoot_at(&mut w, [pc[0], pc[1] + 0.55, pc[2]], 3.0, 400, "the Q-Worm install (real, from the walked south stand)", &|sim| sim.drones.channels.on(0x48));
     w.wait(6);
     assert!(w.scene.sim.as_ref().unwrap().drones.channels.on(0x48),
-        "ch 0x48 (objective 4) driven at the documented blocker");
+        "ch 0x48 (objective 4) from the REAL install: {shots} shots from the walked south stand [M PCQWorm_Update 0x1aee20]");
 
-    // The security keyboard: the REAL E activation is proven by keyboard_0700000a_live — the
-    // mode-64 preload's keyboard entity (0x020005E1, baked-absolute at (−1.54, 1.33, 8.48) r 0.66
-    // [M 0x1db9a8's load beat + 0x133070]) is E-able from the corridor wedge at (−3.00, 9.68) and
-    // the activation writes ch 0x3A [M SP_Activate 0x1dc338 + SP_Update 0x1dbda8 state 1]. The
-    // walk keeps the direct channel drive because the SP-write → AND-mux #741 (0x49) follow did
-    // not fire in the session's probe within 6 ticks (the same write via set_channel does fire
-    // it — an open item); the route shape is unchanged.
-    assert!(w.follow_nav_route([-6.0, 1.3, 14.0], "to the security centre"), "no nav route to the keyboard");
-    w.scene.sim.as_mut().unwrap().drones.set_channel(0x3a);
-    w.wait(6);
+    // The security keyboard — the REAL use-key activation, replacing the old `set_channel(0x3a)`
+    // stand-in (keyboard_0700000a_live proves this exact path on master): walk back east to the
+    // corridor wedge in front of the keyboard nook (the cab east wall x ≈ −2.0, z 8.5–12.5 [D
+    // probe segments] stops the direct walk — the keyboard test's hug legs), then pulse the use
+    // key aimed at the keyboard's mode-64 preload entity sphere (−1.54, 1.33, 8.48) r 0.66
+    // [M SP_CreateScriptPlayer 0x1db9a8's load beat + Control_BuildWorldSph 0x133070]. The E pick
+    // (Player_Activate 0x1a5170's class-0 +0xE4 dispatch → SP_Activate 0x1dc338's ext+0x2C = 1)
+    // reaches it from the wedge (head+look ~0.94 from the centre vs the 1.0 + 0.66 pick radius)
+    // and SP_Update 0x1dbda8's state-1 activation toggles the out channel on the PRESS — the
+    // pulse stops once ch 0x3A reads on, the way the game's tap works [M].
+    // The walk-back with the alarm-runner watch between the legs (the ring's own pattern): the
+    // corridor legs pass the alarm-panel mouth (the ring's "east past the alarm-panel corridor"
+    // at (−11.5, −13.5)), and a guard challenged en route runs for the panel while Bond walks on
+    // — without the per-leg catch his press landed mid-keyboard-leg this round (level_exit at
+    // +342 into "round the wall end", ch 0x61 still off at the walk-back's end) [M the runner
+    // 0x168ea8's follow].
+    let back = {
+        let sim = w.scene.sim.as_ref().unwrap();
+        walker::nav_route(sim, sim.bond.pos, [-3.9, 0.0, 13.2])
+    };
+    match back {
+        Some(nodes) => for (k, p) in nodes.iter().enumerate() {
+            let ok = walk_leg_watched(&mut w, *p, 1.3, &format!("back to the lobby node {k}"));
+            assert!(ok || w.scene.sim.as_ref().unwrap().drones.level_exit.is_none() || k + 1 == nodes.len(),
+                "the walk-back leg {k} never arrived and the mission did not end");
+        },
+        None => assert!(w.follow_nav_route([-3.9, 0.0, 13.2], "back to the lobby"), "no nav route back to the lobby"),
+    }
+    {
+        // The walk-back's state gate (this round): the corridor legs pass the alarm-panel mouth,
+        // and a guard challenged there runs for the panel while Bond finishes the walk — the
+        // press must NOT land. The same catch the ring legs use (watch_and_clear →
+        // clear_hostiles [M the alarm runner 0x168ea8's follow]): kill the runner before the
+        // keyboard legs; the mission graph's ch 0x61 must still be off here.
+        watch_and_clear(&mut w, 40.0);
+        let sim = w.scene.sim.as_ref().unwrap();
+        eprintln!("[0a] post-walkback: ch61 {} fail {} exit {:?} pos {:?}", sim.drones.channels.on(0x61),
+            sim.drones.mission.fail_label, sim.drones.level_exit, sim.bond.pos);
+        assert!(!sim.drones.channels.on(0x61), "the alarm runner from the walk-back corridor was not caught in time");
+        assert!(sim.drones.level_exit.is_none(), "the mission ended during the walk-back");
+    }
+    w.walk_to(Wp::new(-3.2, 0.0, 9.4).r(1.0), "hug the cab east wall south end");
+    let _ = w.try_walk_to(Wp::new(-2.55, 0.0, 8.1).r(1.0), "round the wall end");
+    {
+        let sim = w.scene.sim.as_ref().unwrap();
+        let p = sim.bond.pos;
+        assert!((p[0] + 3.0).abs() < 0.3 && (p[2] - 9.68).abs() < 0.3,
+            "the corridor wedge in front of the keyboard nook, got {p:?}");
+    }
+    let kb: [f32; 3] = [-1.54, 1.33, 8.48];
+    let mut kb_fired = false;
+    'kb: for _cycle in 0..12u32 {
+        for t in 0..40u32 {
+            {
+                let sim = w.scene.sim.as_ref().unwrap();
+                if sim.drones.channels.on(0x3a) { kb_fired = true; break 'kb; }
+                let bp = sim.bond.pos;
+                let eye = bp[1] + sim.bond.eye - sim.bond.crouch_drop;
+                let dx = kb[0] - bp[0];
+                let dz = kb[2] - bp[2];
+                let dy = kb[1] - eye;
+                let desired = dx.atan2(dz);
+                let err = walker::wrap_pi(desired - sim.bond.yaw);
+                let perr = (dy / walker::dxz(bp, kb).max(0.5)).atan() / std::f32::consts::FRAC_PI_2 - sim.bond.pitch;
+                let input = nf_game::player::Input {
+                    turn: err.clamp(-0.05, 0.05),
+                    look: perr.clamp(-0.05, 0.05),
+                    ..Default::default()
+                };
+                let hold = t < 3 && err.abs() < 0.06;
+                w.scene.sim.as_mut().unwrap().step_bond(input, false, false, hold);
+            }
+            w.total_ticks += 1;
+        }
+    }
+    assert!(kb_fired, "the keyboard SP's E activation writes ch 0x3A \
+        [M SP_Activate 0x1dc338 + SP_Update 0x1dbda8 state 1]");
+    // The AND mux #741 follows on the mission graph's own update — wait it out (the old probe's
+    // 6-tick window never saw the follow fire; the mux is a mission node, not a same-tick write).
+    let mut mux49 = false;
+    for _ in 0..180 {
+        if w.scene.sim.as_ref().unwrap().drones.channels.on(0x49) { mux49 = true; break; }
+        w.wait(1);
+    }
+    assert!(mux49, "AND mux #741: ch 0x3A → ch 0x49 (objective 5) [D]");
+    // #742 reads (0x48, 0x49) on the mission graph's own update — one settle tick behind #741's
+    // write (the graph samples its inputs before the same-tick mux writes land), so wait it out
+    // the same bounded way (the old 6-tick wait covered both muxes; this loop breaks on 0x49's
+    // first tick, so #742's follow needs its own window).
+    let mut mux4a = false;
+    for _ in 0..30 {
+        if w.scene.sim.as_ref().unwrap().drones.channels.on(0x4a) { mux4a = true; break; }
+        w.wait(1);
+    }
+    assert!(mux4a, "AND mux #742: 0x48+0x49 → the exit's key ch 0x4A [D]");
     {
         let sim = w.scene.sim.as_ref().unwrap();
         assert!(sim.drones.channels.on(0x49), "AND mux #741: ch 0x3A → ch 0x49 (objective 5) [D]");
         assert!(sim.drones.channels.on(0x4a), "AND mux #742: 0x48+0x49 → the exit's key ch 0x4A [D]");
     }
+    w
+}
+
+/// THIS ROUND'S LANDED LEG (2026-10-29): the office floor from the fresh load to objective 5 on
+/// real input — the arrival plate, the cab sweep, the walked PC loop, and the keyboard through the
+/// player's own use key (the old `set_channel(0x3a)` stand-in is gone; the mux settle waits pin
+/// the graph's own update order). This round the install became REAL too: the walked south-stand
+/// route (the diagonal wall's east end at x ≈ −15, the x −13.5 column, the band at y 1.10) plus
+/// the real gadget-cycle equip — no stand-in anywhere.
+#[test]
+fn walk_office_floor_to_the_security_keyboard() {
+    let _w = walk_to_security_keyboard();
+}
+
+/// The full mission walk, GREEN end-to-end this round (2026-10-29): the prologue (the REAL
+/// install from the walked south stand) → the keyboard → the RING through the game's own mouth —
+/// the locked keypad door #724. The wall x −10.45..−10.70 seals the west offices from the atrium
+/// lane from z −15.38 to −23.70 [D coll-scan: Room-L-atrium_top's west face x −10.45 spans
+/// z −17.96..−15.38 and −21.62..−19.30 and −23.70..−21.62; the -3 round's probe rays] — the ONLY
+/// opening is door #724's doorway (the jamb faces z −18.04/−19.36 [D], 1.32 wide) with the door
+/// locked on ch 0x30, whose only writers are the kind-0 keypads #648/#732 (p1 = 1, p5 = 48
+/// [D placements]) mounted at (−10.69/−10.45, 1.52, −17.46) facing the pocket [D rotations ±π/2].
+/// The game's own ai graph crosses exactly there: the pocket → (−11.01,−18.60) → (−9.88,−18.62)
+/// → node 0 (−8.76,−21.55) [D 0700000a ai_network]. The player's route, all real input: E the
+/// keypad [M Player_Activate 0x1a5170 case 0x3A's facing gate → Lock_Activate 0x1aed00: class 3,
+/// state 0/5, no pause manager → kind-0 no-key → state 3], type the 4 digits [M Lock_Update
+/// 0x1ae3d8 case 4's match + C_KEYPAD_Handler 0x216810's digit handler], the match fires
+/// `Lock_Unlock` 0x1b0650 → `Lock_Update` case 1 holds switch_channels[0x30] [M 0x1ae3d8 case 1]
+/// → the door's rising-edge unlock + auto-activate [M 0x1363c8:101-107] → walk the doorway
+/// (z −18.7, the capsule r 0.55 clears the 1.32 jamb gap by 0.11 a side [D rays]; the open leaf
+/// parks clear — every eastward ray z −18.3..−19.15 clear with state 4 [D probe]) → the ai lane
+/// south → the south corridor → the hatch E.
+#[test]
+fn walk_office_floor_qworm_keyboard_hatch() {
+    let mut w = walk_to_security_keyboard();
 
     // ai-sight-drawn-gate-5 route re-derivation (the ring route, BFS-derived): the old route
     // crossed the LOCKED office door (−10.6, −19.3, ch 0x30) by force-driving the channel — no
@@ -323,7 +472,7 @@ fn walk_office_floor_qworm_keyboard_hatch() {
     // player's legal ring route: south through the west offices, the west corridor, the south
     // corridor, and up the east side to the hatch — the corners below, walked steadily (a real
     // player's stealth timing: no stops inside a civilian's reach).
-    let ring: [([f32; 3], &str); 43] = [
+    let ring: [([f32; 3], &str); 23] = [
         ([-7.5, 1.3, 14.5], "ring: the security centre's west door"),
         ([-7.5, 1.3, 16.5], "ring: the west hall north"),
         ([-20.5, 1.3, 16.5], "ring: the west offices' north corridor"),
@@ -358,13 +507,101 @@ fn walk_office_floor_qworm_keyboard_hatch() {
         ([-18.5, 1.3, -9.5], "ring: down 3"),
         ([-17.5, 1.3, -9.5], "ring: jink 5"),
         ([-17.5, 1.3, -13.5], "ring: the south-west corner approach"),
-        ([-11.5, 1.3, -13.5], "ring: east past the alarm-panel corridor"),
+        // The pillar crossing (this round's walk): the -2 leg (−11.5, −13.5) hugged the pillar's
+        // south face (z −13.10, x −12.98..−10.9 [D probe rays]) — the r-0.55 capsule's north
+        // edge (z −12.95) overlaps the face and the leg wedged at the 6000-tick cap. The crossing
+        // rides the pocket's open south instead: from the corner approach south-east to
+        // (−14.5, −15.0) — south of every pillar face — then east along the pocket to the game's
+        // N-S ai lane at node 130 (every southward ray from the pocket x −12..−8.5,
+        // z −13.65 → −18.0 clear [D probe rays]).
+        ([-14.5, 1.3, -15.0], "ring: south of the pillar, into the pocket"),
+        // The keypad approach (this round's walk): the mouth is the locked door #724's doorway —
+        // see the test doc. The keypad #648 (−10.69, 1.52, −17.46 [D]) faces the pocket
+        // (facing (−1,0,0) [D rotation −π/2]); the stand (−11.9,−17.5) is 1.2 west of it (the
+        // wall's west face x −10.45 [D]) and inside the E reach (the use sphere 1.0 + the lock's
+        // 0.13 world sphere [M 0x1a5170:101-108]).
+        ([-11.9, 1.3, -17.5], "ring: the keypad's wall"),
+    ];
+    for (wp, label) in ring {
+        // The alarm guard's cone covers the south corridor mouth (the route note above) — the
+        // watch between the legs catches his run the way walk_leg_watched does below.
+        watch_and_clear(&mut w, 16.0);
+        w.walk_to(Wp::new(wp[0], wp[1], wp[2]).r(0.8), label);
+        assert!(w.scene.sim.as_ref().unwrap().drones.level_exit.is_none(), "the mission failed at '{label}'");
+    }
+    // THE MOUTH, through the game's own writer chain (all real input — see the test doc):
+    // aim the view at the keypad's world sphere and pulse the use key — the class-0x3A arm's
+    // facing gate + sphere pick arm the keypad (state 3) [M 0x1a5170:158-166 + 0x1aed00].
+    let kp: [f32; 3] = {
+        let sim = w.scene.sim.as_ref().unwrap();
+        let l = sim.drones.locks.iter().find(|l| l.placement == 648).expect("keypad #648 [D]");
+        l.pos
+    };
+    let mut armed = false;
+    'kp: for _cycle in 0..8u32 {
+        for t in 0..30u32 {
+            {
+                let sim = w.scene.sim.as_ref().unwrap();
+                if sim.drones.keypad.is_some() { armed = true; break 'kp; }
+                let bp = sim.bond.pos;
+                let eye = bp[1] + sim.bond.eye - sim.bond.crouch_drop;
+                let dx = kp[0] - bp[0];
+                let dz = kp[2] - bp[2];
+                let dy = kp[1] - eye;
+                let desired = dx.atan2(dz);
+                let err = walker::wrap_pi(desired - sim.bond.yaw);
+                let perr = (dy / walker::dxz(bp, kp).max(0.5)).atan() / std::f32::consts::FRAC_PI_2 - sim.bond.pitch;
+                let input = nf_game::player::Input {
+                    turn: err.clamp(-0.05, 0.05),
+                    look: perr.clamp(-0.05, 0.05),
+                    ..Default::default()
+                };
+                let hold = t == 15 && err.abs() < 0.2;
+                w.scene.sim.as_mut().unwrap().step_bond(input, false, false, hold);
+            }
+            w.total_ticks += 1;
+        }
+    }
+    assert!(armed, "the keypad #648 E arms the mini-game (state 3) [M 0x1aed00's kind-0 no-key branch]");
+    // The 4 digits [M C_KEYPAD_Handler 0x216810 msg 0x4b — the handler the keypad menu's digit
+    // controls dispatch; the cursor/page UI is the view's presentation (GAP-1's UI half, the
+    // audit §5)]. The code is the game's own boot table [L ee_start_0700000a.bin @0x2beff8 —
+    // KeyCodes, code index 1 = the locks' p1], loaded over the port's local-stream default in
+    // `load_carry`.
+    let code = {
+        let sim = w.scene.sim.as_ref().unwrap();
+        let idx = sim.drones.locks.iter().find(|l| l.placement == 648).expect("keypad #648").code;
+        sim.drones.key_codes.code(idx)
+    };
+    for d in code {
+        assert!(d >= b'0' && d <= b'9', "the snapshot code digits are ASCII [L 0x2beff8]");
+        w.scene.sim.as_mut().unwrap().drones.keypad_digit((d - b'0') as u32);
+        w.wait(1);
+    }
+    // The match fires Lock_Unlock [M 0x1ae3d8 case 4] and the NEXT case-1 tick holds
+    // switch_channels[0x30] [M case 1] — the door's rising-edge unlock + auto-activate
+    // [M 0x1363c8:101-107]. Wait the door's sweep out (state 4), the walked crossing rides the
+    // open doorway (every eastward ray z −18.3..−19.15 clear at state 4 [D probe]).
+    {
+        let mut ok = false;
+        for _ in 0..120 {
+            let sim = w.scene.sim.as_ref().unwrap();
+            let d = &sim.drones.doors.list.iter().find(|d| d.placement == 724).expect("door #724 [D]");
+            if sim.drones.channels.on(0x30) && d.state == 4 { ok = true; break; }
+            w.wait(1);
+        }
+        let sim = w.scene.sim.as_ref().unwrap();
+        assert!(ok, "the code match unlocks ch 0x30 [M 0x1ae3d8 case 4 → case 1] and the door auto-opens [M 0x1363c8:101-107]");
+        assert!(sim.drones.locks.iter().filter(|l| l.placement == 648).all(|l| l.unlocked), "the used lock's state 1 [M 0x1b0650]");
+    }
+    // The crossing + the lane south (this round's walked legs):
+    let ring2: [([f32; 3], &str); 21] = [
+        ([-11.0, 1.3, -18.7], "ring: the doorway west"),
+        ([-9.6, 1.3, -18.7], "ring: through the doorway, the atrium lane"),
         // The player's route south rides the game's N-S lane at x −8.5 (the ai nodes 132
-        // (−8.52, −18.47) / 130 (−8.52, −15.39) / 0 (−8.76, −21.55) [D]) — the mouth's guard
+        // (−8.52, −18.47) / 0 (−8.76, −21.55) [D 0700000a ai_network]) — the mouth's guard
         // slot east of the bridge is 0.5 wide (the jamb's corner at (−10.60, −18.66) [L the
         // bridge-edge sister's segment probe]) and cannot take the player's 1.1 capsule.
-        ([-8.6, 1.3, -14.2], "ring: the ai lane to the N-S corridor"),
-        ([-8.5, 1.3, -15.4], "ring: the ai node 130 south"),
         ([-8.5, 1.3, -18.5], "ring: the ai node 132 south"),
         ([-8.7, 1.3, -21.5], "ring: the ai node 0 into the south corridor"),
         ([-6.5, 1.3, -22.5], "ring: the south corridor"),
@@ -385,11 +622,20 @@ fn walk_office_floor_qworm_keyboard_hatch() {
         ([21.5, 1.3, 16.5], "ring: the anteroom east"),
         ([21.5, 1.3, 19.4], "ring: the hatch mouth"),
     ];
-    for (wp, label) in ring {
+    for (wp, label) in ring2 {
         // The alarm guard's cone covers the south corridor mouth (the route note above) — the
-        // watch between the legs catches his run the way walk_leg_watched does below.
+        // LONG runs walk in segments with the watch BETWEEN them (the east-side boundary-only
+        // watch let a runner past the 40-unit band: the press landed mid-leg at +446); the short
+        // doorway/jink legs keep the precise r-0.8 walk_to (a 1.2-arrive stall here stands Bond
+        // in the open for 1200 ticks — exactly what invites the runner).
         watch_and_clear(&mut w, 16.0);
-        w.walk_to(Wp::new(wp[0], wp[1], wp[2]).r(0.8), label);
+        let here = w.scene.sim.as_ref().unwrap().bond.pos;
+        let dist = walker::dxz(here, wp);
+        if dist > 5.0 {
+            let _ = walk_leg_watched(&mut w, wp, 1.3, label);
+        } else {
+            w.walk_to(Wp::new(wp[0], wp[1], wp[2]).r(0.8), label);
+        }
         assert!(w.scene.sim.as_ref().unwrap().drones.level_exit.is_none(), "the mission failed at '{label}'");
     }
     // Diagnostic (this task): the office floor's LOAD_LEVEL triggers — the reload (next == this

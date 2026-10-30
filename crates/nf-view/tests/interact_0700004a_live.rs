@@ -239,15 +239,21 @@ fn the_hint_marker_fires_as_the_car_passes_it() {
 
 /// KIND: the floor spawners (0xf1 ×6 [D]; M DroneSpawner_Create 0x1378d0 / Control 0x137e68).
 /// Spawner #233 arms on ch 0x17 (plate #234's channel — param 4 is the START channel [D #233;
-/// M 0x137aa0's start = param 4]) and releases its group's templates when the floor channel is
-/// on AND the template spot passes the spawn screens (min-dist 10 [D p8 = 0] and NOT visible to
-/// Bond [M Drone_PositionVisible 0x13a7a0 through 0x137cb0:43-47]). The real ride encloses the
-/// rider in the lift car, whose walls block the game's LOS to the spots; the port's car interior
-/// does not block the LOS stand-in (a port gap — see the sister), so the test parks the rider
-/// aside during the pass, the not-visible condition the enclosed car produces in the game [S —
-/// the workaround is the harness's, the gate is the game's].
+/// M 0x137aa0's start = param 4]) and releases its group's templates once the group's own
+/// screens pass: a usable template is one whose 3-D distance from the player is at least the
+/// min-dist [M 0x137cb0:28-31 — the compare is `Vec_SqDist3D(player+0x30, spot) >= min*min`;
+/// the 10.0 default when p8 = 0 is 0x1378d0:35-37's 0x41200000] and the SELECTED spot is not
+/// visible to Bond [M 0x137cb0:43 → Drone_PositionVisible 0x13a7a0]. The rider on the ride
+/// line arms the spawner by walking the plate, and as the car carries him down past the
+/// group's spots (x ≈ −4.3, z −0.55, y −43..−59 [D census]) the 3-D distance outgrows 10
+/// while the shaft's own geometry keeps the visibility rays blocked — the garrison releases
+/// DURING the ride, on the ride line, with no park and no poke beyond the Ride re-seat. (The
+/// 2-D x/z min-dist metric the port carried before never outgrows on a vertical ride — the
+/// spots sit 7.6–7.7 away in x/z for the whole descent, so every template was rejected
+/// forever; that was the port gap, fixed to the game's 3-D compare. The aside-park this test
+/// once used left every plate's volume, so the arm itself never fired — the probe measured
+/// ch 0x17 false for the whole park.)
 #[test]
-#[ignore = "PORT GAP finding (fix-finale-blockers class): with the rider on the ride line the port's spawner never releases the floor garrison — the car interior's walls do not block the Drone_PositionVisible stand-in [M 0x13a7a0; drone.rs:7743], so the not-visible gate never opens; the game's enclosed car spawns them [S]. An aside-park (z −12.4, the probe's) satisfies the gate and the garrison spawns — the harness workaround, kept out of pass/fail until the LOS stand-in sees the car walls"]
 fn the_floor_spawner_releases_its_drones_on_the_floor_plate() {
     let Some(iso) = iso() else { eprintln!("NF_ISO not set"); return };
     let mut r = Ride::new(&iso);
@@ -255,14 +261,6 @@ fn the_floor_spawner_releases_its_drones_on_the_floor_plate() {
         let sim = r.w.scene.sim.as_ref().unwrap();
         let sp = sim.drones.spawners.iter().find(|s| s.placement == 233).expect("spawner #233");
         assert_eq!(sp.start, 0x17, "spawner #233 arms on ch 0x17 (param 4 = the start channel [D #233])");
-    }
-    // Park the rider aside of the shaft (the enclosed car's not-visible stand-in) while the car
-    // passes the −40 floor.
-    r.z = -12.4;
-    for _ in 0..700 { r.step(Input::default()); } // t 700
-    {
-        let sim = r.w.scene.sim.as_ref().unwrap();
-        let sp = sim.drones.spawners.iter().find(|s| s.placement == 233).unwrap();
         assert!(sp.spawned.is_empty(), "no group drones before the plate — the temporal sister");
     }
     let mut waited = 0u32;
@@ -278,29 +276,36 @@ fn the_floor_spawner_releases_its_drones_on_the_floor_plate() {
         let sim = r.w.scene.sim.as_ref().unwrap();
         assert!(sim.drones.channels.on(0x17), "the plate fired [D #234]");
     }
-    // Sister (the documented port gap): the rider kept INSIDE the car — the port's LOS stand-in
-    // sees the spots past the car's walls, so the not-visible gate never opens and the garrison
-    // never spawns. In the game the enclosed rider's LOS is blocked and the garrison spawns [S].
+    // Sister: the same ride without firing — a released drone keeps its spawn health. The
+    // port's spawn health is the stats-default 10.0 [M 0x1c7e58: the drone_stats word +8 for
+    // these guards is 0 at run time — the 07000005 snapshot [L] → the port's 10.0 default];
+    // the old "param 5 = 0x64 = 100" [D] reading pinned the behaviour-word table, not the
+    // health.
     let mut r2 = Ride::new(&iso);
-    for _ in 0..2400 { r2.step(Input::default()); }
+    for _ in 0..2600 { r2.step(Input::default()); }
     let sim = r2.w.scene.sim.as_ref().unwrap();
     let sp = sim.drones.spawners.iter().find(|s| s.placement == 233).unwrap();
-    assert!(sp.spawned.is_empty(),
-        "PORT GAP (documented, not a game pin): inside the car the port's spawner LOS never clears — \
-         the car interior's walls do not block the Drone_PositionVisible stand-in [M 0x13a7a0; drone.rs:7743]");
+    if let Some(&di2) = sp.spawned.first() {
+        assert!((sim.drones.list[di2].health - 10.0).abs() < 0.01,
+            "no fire → the drone keeps its spawn health (the stats-default 10.0 [M 0x1c7e58; L 07000005]) (got {})",
+            sim.drones.list[di2].health);
+    }
 }
 
 /// KIND: the drone garrison (0x0f ×38 [D]; the shootable NPCs). One of spawner #233's spawned
-/// drones takes the player's own fire: the rider parks aside for the spawn (the car-enclosure
-/// stand-in, see the spawner test), returns to the ride line, and fires across the shaft with
-/// the live aim — health drops or it dies. Sister: the same ride without firing leaves the
-/// drone unwounded (its param-5 health byte is 0x64 = 100 [D]).
+/// drones takes the player's own fire while the rider rides the line. PARKED (the exact
+/// blocker, measured 2026-10-29): the garrison DOES release on the ride line (the spawner
+/// test — the 2-D min-dist port gap is fixed), but from the ride line NO fire ray reaches
+/// the group-2 spots: 0 of 2400 ticks had a clear eye→drone segment_bullet ray (the probe's
+/// rays were blocked at every measured pose too) — the spots sit behind the shaft's core
+/// structure at x ≈ −4.3 [D census], and the car never levels a doorway with them. Whether
+/// the real game's rider can hit these spots mid-ride is unverified [S] — live check in the
+/// report; un-ignore needs that measurement (a floor/pose where the game's own fire lands).
 #[test]
-#[ignore = "depends on the spawner's aside-park (see the spawner test's ignore note) — the garrison does not spawn for a rider on the ride line (the port's car walls do not block the spawner LOS stand-in)"]
+#[ignore = "no clear fire ray from the ride line to the group-2 spots: 0/2400 clear eye→drone segment_bullet ticks (the shaft core blocks; [D census] spots x ≈ −4.3 behind the core); game-side reachability unverified [S] — live check listed in the report. The release itself is pinned by the spawner test (green)"]
 fn a_spawned_drone_takes_the_riders_fire_across_the_shaft() {
     let Some(iso) = iso() else { eprintln!("NF_ISO not set"); return };
     let mut r = Ride::new(&iso);
-    r.z = -12.4;
     // Ride until the −40 plate's spawner has released its drones.
     let mut waited = 0u32;
     let (di, hp0) = loop {
@@ -315,11 +320,14 @@ fn a_spawned_drone_takes_the_riders_fire_across_the_shaft() {
         waited += 1;
         assert!(waited < 3000, "the −40 plate's spawner never released its drones");
     };
-    // Back to the ride line; fire across the shaft while the car carries him (re-seat keeps the
+    // On the ride line; fire across the shaft while the car carries him (re-seat keeps the
     // key line; the aim tracks the LIVE drone each tick — the shoot-point pattern: turn/look
-    // onto the target, trigger held).
-    r.z = -3.4;
+    // onto the target, trigger held). The shaft's own geometry blocks most sightlines from the
+    // car (the probe's rays), so the trigger is held only on ticks whose eye→drone ray is
+    // clear — the same ray the game's fire path walks [M Bullet_init 0x12c5a0]; the aim still
+    // tracks every tick.
     let mut hit = false;
+    let mut clear_ticks = 0u32;
     for tick in 0..2400u32 {
         {
             let sim = r.w.scene.sim.as_ref().unwrap();
@@ -331,10 +339,12 @@ fn a_spawned_drone_takes_the_riders_fire_across_the_shaft() {
             sim.bond.pos = [3.0, key_y(r.y0, r.t) + 1.2, -3.4];
             sim.drones.health.health = 100.0;
         }
-        let (bp, eye, crouch, dyaw, dpitch, at_now) = {
+        let (bp, eye, crouch, dyaw, dpitch, at_now, clear) = {
             let sim = r.w.scene.sim.as_ref().unwrap();
-            (sim.bond.pos, sim.bond.eye, sim.bond.crouch_drop, sim.bond.yaw, sim.bond.pitch,
-             sim.drones.list[di].pos)
+            let e = [sim.bond.pos[0], sim.bond.pos[1] + sim.bond.eye - sim.bond.crouch_drop, sim.bond.pos[2]];
+            let at = sim.drones.list[di].pos;
+            let clear = sim.world.segment_bullet(e, at).is_none();
+            (sim.bond.pos, sim.bond.eye, sim.bond.crouch_drop, sim.bond.yaw, sim.bond.pitch, at, clear)
         };
         let dx = at_now[0] - bp[0];
         let dz = at_now[2] - bp[2];
@@ -346,24 +356,27 @@ fn a_spawned_drone_takes_the_riders_fire_across_the_shaft() {
         let want_pitch = (dy / dxz).atan() / std::f32::consts::FRAC_PI_2;
         let perr = want_pitch - dpitch;
         let input = Input { turn: err.clamp(-0.08, 0.08), look: perr.clamp(-0.08, 0.08), ..Default::default() };
-        r.w.tick_fire(input);
+        if clear { clear_ticks += 1; r.w.tick_fire(input); } else { r.w.tick(input, false); }
         r.t += 1;
         if r.t > 4400 { break; }
     }
     {
         let sim = r.w.scene.sim.as_ref().unwrap();
         assert!(hit || sim.drones.list[di].corpse || sim.drones.list[di].health < hp0,
-            "the spawned drone took the rider's fire across the shaft (health {} from {hp0})",
+            "the spawned drone took the rider's fire across the shaft (health {} from {hp0}, {clear_ticks} clear-ray ticks)",
             sim.drones.list[di].health);
     }
-    // Sister: the same ride without firing — the drone keeps its 0x64 spawn health.
+    // Sister: the same ride without firing — the drone keeps its spawn health. The port's
+    // spawn health is the stats-default 10.0 [M 0x1c7e58: the drone_stats word +8 for these
+    // guards is 0 at run time — the 07000005 snapshot [L] → the port's 10.0 default]; the old
+    // "param 5 = 0x64 = 100" [D] reading pinned the behaviour-word table, not the health.
     let mut r2 = Ride::new(&iso);
     for _ in 0..2600 { r2.step(Input::default()); }
     let sim = r2.w.scene.sim.as_ref().unwrap();
     let sp = sim.drones.spawners.iter().find(|s| s.placement == 233).unwrap();
     if let Some(&di2) = sp.spawned.first() {
-        assert!((sim.drones.list[di2].health - 100.0).abs() < 0.01,
-            "no fire → the drone keeps its 0x64 spawn health [D drone param 5] (got {})",
+        assert!((sim.drones.list[di2].health - 10.0).abs() < 0.01,
+            "no fire → the drone keeps its spawn health (the stats-default 10.0 [M 0x1c7e58; L 07000005]) (got {})",
             sim.drones.list[di2].health);
     }
 }

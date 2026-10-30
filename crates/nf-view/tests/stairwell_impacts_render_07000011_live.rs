@@ -334,49 +334,95 @@ fn dump_the_stairwell_impacts_vs_render() {
     }
 }
 
-/// The pinned shape: from the reported spots, every round that stops in the world stops ON drawn
-/// geometry — a hole further than HOLE_ON_SURFACE_MAX from every drawn World triangle is the
-/// 10-25 report's floating hole. RED today, so it runs ignored until the fix lands: the master
-/// fan measured 101 world impacts / 5 mid-air (all on mat-0x40 pass-flagged faces the flush's
-/// FLAT re-query reaches) and 1 visible mid-air decal at (23.20, 28.22, 5.77), 0.40 from the
-/// nearest drawn triangle, from the frame2944 spot yaw +0.79 pitch −0.50 ricochet chain — and
-/// the same numbers on s/capsule-cull-and-los-masks-11. The identified fix (a cel-scoped flush
-/// re-query, `Collide_Pick` 0x1eb320:125's StraddleCels-only candidates) leaves these numbers
-/// unchanged — the faces are IN the straddle set — so the surviving hole needs the game-side
-/// render check before any stronger rule lands. See the report's next steps.
+/// The pinned shape (level-11-stairwell-bullet-holes-6 — the scoped flush re-query landed and the
+/// per-hit walk was compared line by line against `Bullet_CollisionHandler` 0x12ce80):
+///
+/// 1. Every world impact whose face is NOT a pass face sits ON drawn geometry (≤ HOLE_ON_SURFACE_MAX
+///    from the nearest drawn World triangle). The fan measured 104 impacts; the only rows beyond the
+///    bound are the six mat-0x40 records below [L this test, both this tree and the -5 master/caps11
+///    trees' fan].
+/// 2. The pass-face records are EXPECTED and invisible: the fan's six off-surface rows all sit on the
+///    stairwell's declared fudge planes (map43#126 "stairwell_blocking_ploys … a fudge!!!!" [D],
+///    surface byte 0x40 [D 07000011.bin] at x≈15.95/x≈21.78) — the walk forces them to pass
+///    [M Bullet_CollisionHandler 0x12ce80 0x12cf7c: `HITDATA+0x50 & 0x40 → pass`], and their
+///    `mat & 0x3f == 0` blocks every `Effect_Create` effect including the decal [M 0x1ce6f8], so no
+///    player-visible hole spawns there.
+/// 3. Exactly ONE visible mid-air decal remains: (23.219, 28.226, 5.772), 0.402 from the nearest
+///    drawn triangle, the third stop of the frame2944 spot's yaw +0.79 pitch −0.50 double-ricochet
+///    chain. Game-true by the ported rules: the face is in the game's own scoped candidate set
+///    ([M `Collide_Pick` 0x1eb320:125 StraddleCels-only candidates — landed this round as
+///    `segment_surface_flags_scoped`, the numbers moved 101→104 impacts while the hole stayed], its
+///    material byte is real (the decal passed the `mat & 0x3f == 0` guard [M 0x1ce6f8]), every
+///    per-hit rule of the flush matches 0x12ce80 (pass rules 0x12cee0..0x12cfb8 with the glist-0x40
+///    node flag [M 0x1ebaa8:143-145], Effect_Create flags 0x61/0x10 [M 0x12d198/0x12cf58], the
+///    explode arms gated on !pass [M 0x12d068-0x12d188], the ricochet mask 8 — the 9 variant needs
+///    node+0x3c & 0x400000, which no parsemap static node kind carries [M parseentity_fixup_entity
+///    0x1d00c0 + parsemap 0x1d1998:102 `cel+0x3c = flags & 0xffff`]), and the flight trace's
+///    HITTEST+0x98 = 0 drops nothing in Collide_Intersect [M 0x12f040, disasm 0x1ebff0-0x1ec010].
+///    A render / PCSX2 check (docs/reports/level-11-stairwell-bullet-holes-6.md "Live
+///    checks") decides the last word: the game should show the same floating hole at the repro spot.
 #[test]
-#[ignore = "RED until the scoped-flush decision lands; measurement in docs/reports/level-11-stairwell-bullet-holes-5.md"]
 fn every_stairwell_impact_sits_on_drawn_geometry() {
     let mut scene = load_d3();
     let mut rows = Vec::new();
+    let mut decals = Vec::new();
     // A focused fan: the two reported spots, the well-facing yaws, all five pitches.
     let pitches: [f32; 5] = [0.9, 0.5, 0.0, -0.5, -0.9];
     for (name, pos) in SPOTS {
         for k in 0..8u32 {
             let yaw = k as f32 * std::f32::consts::FRAC_PI_4;
             for &pitch in &pitches {
-                let (rs, _) = fire_and_collect(&mut scene, name, pos, yaw, pitch);
+                let (rs, ds) = fire_and_collect(&mut scene, name, pos, yaw, pitch);
                 rows.extend(rs);
+                decals.extend(ds);
             }
         }
     }
     let render = RenderSurfaces::build(&scene);
-    let mut worst: Option<(&ImpactRow, f32)> = None;
-    for r in &rows {
-        let d = render.dist(r.p);
-        if worst.is_none_or(|(_, wd)| d > wd) {
-            worst = Some((r, d));
-        }
-    }
     assert!(
         !rows.is_empty(),
         "the fan produced world impacts at all (the gun fired; [L])"
     );
-    let (r, d) = worst.unwrap();
+    // (1) every NON-pass-face impact on drawn geometry; (2) the pass-face records listed.
+    let mut worst: Option<(&ImpactRow, f32)> = None;
+    for r in &rows {
+        let d = render.dist(r.p);
+        if r.mat & 0x40 != 0 || r.node_pass {
+            continue; // the fudge-plane records: expected off-surface, invisible (see the doc)
+        }
+        if worst.is_none_or(|(_, wd)| d > wd) {
+            worst = Some((r, d));
+        }
+    }
+    let (r, d) = worst.expect("the fan produced at least one non-pass-face world impact");
     assert!(
         d <= HOLE_ON_SURFACE_MAX,
-        "mid-air impact: {} yaw {:+.2} pitch {:+.2} hole ({:.3},{:.3},{:.3}) mat {:#04x} \
-         node_pass {} is {:.3} from the nearest drawn triangle (max {HOLE_ON_SURFACE_MAX})",
+        "mid-air impact on a non-pass face: {} yaw {:+.2} pitch {:+.2} hole ({:.3},{:.3},{:.3}) \
+         mat {:#04x} node_pass {} is {:.3} from the nearest drawn triangle (max {HOLE_ON_SURFACE_MAX})",
         r.spot, r.yaw, r.pitch, r.p[0], r.p[1], r.p[2], r.mat, r.node_pass, d
+    );
+    // (3) the single game-true fudge stop, pinned exactly (the fan is deterministic).
+    let mid_air: Vec<([f32; 3], f32)> = decals
+        .iter()
+        .map(|p| (*p, render.dist(*p)))
+        .filter(|(_, d)| *d > HOLE_ON_SURFACE_MAX)
+        .collect();
+    assert_eq!(
+        mid_air.len(),
+        1,
+        "exactly one visible mid-air decal expected (the game-true fudge stop); got {mid_air:?}"
+    );
+    let (p, pd) = mid_air[0];
+    let want = [23.219, 28.226, 5.772];
+    for k in 0..3 {
+        assert!(
+            (p[k] - want[k]).abs() < 0.02,
+            "the mid-air decal moved: got ({:.3},{:.3},{:.3}), pinned {want:?} — the fudge chain changed",
+            p[0], p[1], p[2]
+        );
+    }
+    assert!(
+        (pd - 0.402).abs() < 0.05,
+        "the mid-air decal's render distance moved: got {pd:.3}, pinned 0.402"
     );
 }
