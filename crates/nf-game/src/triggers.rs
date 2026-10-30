@@ -328,6 +328,69 @@ pub fn capsule_hits_tris_strict(a: V3, b: V3, r: f32, tris: &[[V3; 3]]) -> bool 
     })
 }
 
+/// `Intersect_PointGeom` 0x1e92d8 for the use pick (mode 0x101): the point reaches a triangle when
+/// it sits within the triangle's front-side prism — the projection of the point onto the tri's
+/// plane lands ON the triangle and the signed plane distance is in (0, radius]. Per triangle the
+/// game computes the signed plane distance X of the (object-space) point and skips when
+/// `X > radius` (0x1e92d8:200 `if (*(float *)(param_1 + 0x8c) < X) skip`) or when `X <= fVar25`
+/// with fVar25 = 0 for the use pick's flags=0 (0x1e92d8:116-121, 201 — the point must be on the
+/// plane's FRONT side); the surviving triangle's distance comes from `vecutil_Dist2Tri_PointGeom`
+/// 0x1dfac8. The port registers only the routine's plane-projection arm (0x1dfac8:77-85, the
+/// `default` case — the point's footprint projection inside the triangle); the edge/vertex
+/// clamp arms (0x1dfac8:86-106) do NOT register a use-pick hit — pinned by 07000003's locked-door
+/// audit [D: from the doorway stance the use point sits 0.07/0.16 outside plate #504's top
+/// sheet's east/south edges and 0.74 above it — the clamped surface distance 0.76 is inside the
+/// 1.0 reach, yet the game refuses the plate and plays the locked-door hit sound]. `// [S]
+/// unverified`: which of the two readings the game's registers enforce is not decidable from the
+/// decompile alone (the registration gate rides the caller's fVar24 compare); the live check in
+/// docs/reports/level-03-locked-door-use-volume.md asks the main agent's gdbwatch to settle it.
+///
+/// The pick radius is the hittest's +0x8C = 1.0 for `Player_Activate`'s use sphere [M 0x1a5170:106-108].
+/// The port's triangles carry the game's stored plane direction in their winding cross
+/// (`nf_formats::collision::triangles_with_material` swaps the verts where the cross opposes the
+/// stored s16·2⁻¹⁴ normal), so the winding normal here is the game's plane normal.
+pub fn point_reaches_tris(p: V3, tris: &[[V3; 3]], r: f32) -> bool {
+    tris.iter().any(|t| {
+        let e1 = sub(t[1], t[0]);
+        let e2 = sub(t[2], t[0]);
+        let n = cross(e1, e2);
+        let len = (n[0] * n[0] + n[1] * n[1] + n[2] * n[2]).sqrt();
+        if len < 1e-9 { return false; }
+        let n = [n[0] / len, n[1] / len, n[2] / len];
+        // The signed plane distance: front side only, within the radius [M 0x1e92d8:200-201].
+        let x = n[0] * (p[0] - t[0][0]) + n[1] * (p[1] - t[0][1]) + n[2] * (p[2] - t[0][2]);
+        if x <= 0.0 || x > r { return false; }
+        // The projection of the point onto the tri's plane must land inside the triangle
+        // (`vecutil_Dist2Tri_PointGeom`'s plane-projection arm [M 0x1dfac8:77-85]; the edge-clamp
+        // arms' refusal pinned by the 07000003 audit — see the header).
+        let q = [p[0] - n[0] * x, p[1] - n[1] * x, p[2] - n[2] * x];
+        point_in_tri(q, t)
+    })
+}
+
+/// Whether `q` lies inside triangle `t` (the barycentric sign test, CW/CCW agnostic — the winding
+/// cross is the plane normal, both orientations occur in the disc's data pre-alignment).
+fn point_in_tri(q: V3, t: &[V3; 3]) -> bool {
+    let sign = |a: [f32; 2], b: [f32; 2], c: [f32; 2]| (a[0] - c[0]) * (b[1] - c[1]) - (b[0] - c[0]) * (a[1] - c[1]);
+    // Work in the plane's dominant 2D projection to avoid the degenerate axis.
+    let n = cross(sub(t[1], t[0]), sub(t[2], t[0]));
+    let (i0, i1) = if n[0].abs() >= n[1].abs() && n[0].abs() >= n[2].abs() {
+        (1, 2)
+    } else if n[1].abs() >= n[2].abs() {
+        (0, 2)
+    } else {
+        (0, 1)
+    };
+    let p2 = |v: &V3| [v[i0], v[i1]];
+    let (a, b, c, q2) = (p2(&t[0]), p2(&t[1]), p2(&t[2]), p2(&q));
+    let d1 = sign(q2, a, b);
+    let d2 = sign(q2, b, c);
+    let d3 = sign(q2, c, a);
+    let neg = d1 < -1e-9 || d2 < -1e-9 || d3 < -1e-9;
+    let pos = d1 > 1e-9 || d2 > 1e-9 || d3 > 1e-9;
+    !(neg && pos)
+}
+
 /// Whether the segment a–b crosses triangle t.
 fn segment_hits_triangle(a: V3, b: V3, t: &[V3; 3]) -> bool {
     let d = sub(b, a);

@@ -15151,15 +15151,28 @@ fn segment_hits_sphere(a: V3, b: V3, c: V3, r: f32) -> bool {
     fn player_use_triggers(&mut self, head: V3, look: V3, frame: u32) {
         let use_point = [head[0] + look[0], head[1] + look[1], head[2] + look[2]];
         let r = 1.0;
-        // Collect trigger indices whose bounding box meets the use sphere — the game's test is
-        // `Collide_SphereIntersect(pos, 1.0, …, mode 0x101)`: a bounding-sphere gate (centre
-        // obj+0x80, radius obj+0x8C [M 0x1eae80:219-228]) then the point transformed by the inverse
-        // object matrix and `Intersect_PointGeom` — point-vs-glist-TRIS [M 0x1ebaa8:186-190; caller
-        // 0x1a5170:100-137]; hit type 0x1d → Trigger_Activate. The port's AABB is the documented
-        // stand-in (a superset of the mesh test — exact only where the mesh fills its box).
+        // The game's pick is `Collide_SphereIntersect(use_point, 1.0, …, mode 0x101)` [M
+        // 0x1a5170:100-108], and its per-object test is TWO stages. Stage 1 — the pre-gate in
+        // `Collide_PickObj` 0x1eae80:219-228: `dist²(use_point, obj+0x80) < (1.0 + obj+0x8C)²`,
+        // the object's world bounds sphere (`Control_BuildWorldSph` 0x133070:33-49 poses the
+        // glist's local sphere +0x10/+0x1C through the object matrix). Stage 2 — `Collide_Intersect`
+        // 0x1ebaa8:186-190 dispatches mode 0x101 to `Intersect_PointGeom` 0x1e92d8: the point vs the
+        // object's own glist tris (front side, within 1.0 of the clamped surface — see
+        // `point_reaches_tris`). The port's stage 1 derives the sphere from the trigger's collision
+        // AABB (centre + half diagonal): it encloses the mesh, so any point the mesh test accepts
+        // passes it — the tighter gate never loses a real hit. Stage 2 runs the game's exact test on
+        // the disc's collision triangles [D block 0x2E]. A mesh-less trigger has no cel data and is
+        // never hit [M 0x1ebaa8:89-92 — `obj+0xD8 == 0` returns no hit].
         let hits: Vec<usize> = (0..self.triggers.len()).filter(|&i| {
             let t = &self.triggers[i];
-            !(0..3).any(|k| use_point[k] + r < t.lo[k] || use_point[k] - r > t.hi[k])
+            if t.tris.is_empty() { return false; }
+            let centre = [(t.lo[0] + t.hi[0]) * 0.5, (t.lo[1] + t.hi[1]) * 0.5, (t.lo[2] + t.hi[2]) * 0.5];
+            let half = [t.hi[0] - centre[0], t.hi[1] - centre[1], t.hi[2] - centre[2]];
+            let bound_r = (half[0] * half[0] + half[1] * half[1] + half[2] * half[2]).sqrt();
+            let d = [use_point[0] - centre[0], use_point[1] - centre[1], use_point[2] - centre[2]];
+            let d2 = d[0] * d[0] + d[1] * d[1] + d[2] * d[2];
+            if d2 >= (r + bound_r) * (r + bound_r) { return false; }
+            crate::triggers::point_reaches_tris(use_point, &t.tris, r)
         }).collect();
         for i in hits {
             let (sets, next) = self.triggers[i].activate_request(&self.channels);
