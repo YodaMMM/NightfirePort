@@ -97,12 +97,12 @@ is not observable in this sandbox. Listed as a live check below.
 - The touched test binary, on the final tree:
   `NF_ISO=$NF_ISO cargo test --offline --release -j2 -p nf-view --test interactables_0700000c_live -- --test-threads=1`
   → **5 passed; 0 failed; 0 ignored** (11.3 s).
-- The full suite with the fast runner, started in the background per the task and re-run to the
-  final tree: see the line below (filled from `suite.out`).
-
-```
-<pending: the suite total line>
-```
+- The full suite with the fast runner was started in the background per the task (twice, at
+  22:18 and 22:48 UTC), but this sandbox's session rotation killed the runner before it printed
+  a total (empty `suite.out`, no build line). The full-suite total line is therefore **not
+  available from this session**; the touched binaries' totals are quoted above, and the branch
+  was pushed from a tree whose only changes are the new test file + the two docs (no
+  `nf-game`/`nf-formats`/`nf-audio` source touched), so the suite risk is the new file itself.
 
 - Every game claim in the tests and this report cites [M] a decompile address, [D] the disc
   parse (placements-all + triggers dumps over 0700000c.bin, taken 2026-10-30) or [L] the
