@@ -1,11 +1,20 @@
 //! walkreal-c: 0700000c (Chain Reaction, part 1 — the power station) walked with the player's own
-//! movement — `step_bond` input only: no channel or state pokes; the position writes are the
-//! DOCUMENTED stand-ins (the vent-descent, the display eye, the yard descent, the west and south
-//! patrol-circle gaps, the gate-band crossing x 55.5..67 — each with its evidence below, and the
-//! blocker findings from level-0c-every-objective-blockers in the inline comments). Route: the ST-1
-//! walkway start #1 (8.98, 15.07, −149.65 [D]) → north along the walkway (14.61 floor [D probe blk])
-//! → INTO the display-case trench (x 5..6.5, z −110.5..−111.5, floor 11.84 [D probe blk: the
-//! walkway's north end opens down to the lower walkway between the case's glass walls x 4.2/6.74]) →
+//! movement — `step_bond` input only: no channel or state pokes. The REAL legs this session:
+//! the laser-watch hinge burn (the four #139-142 locks through the held-fire path), the vent
+//! drop firing plate #274 mid-fall (objective 1 on the game's own route), the case-exit walk,
+//! the 11.27 hall + the upper east lane south, the east-strip yard descent, and the three wire
+//! crossings (jump-grab + hand-over-hand rides). The DOCUMENTED stand-ins left (each with its
+//! evidence inline): the case's trench exit (the interior has no walkable exit at body height —
+//! glass is body-solid [M hatch-4]), the display eye (the unported 0xE2 vent/pulley; the pit and
+//! the pad riser are capsule-blocked [D probe]), the plates reach (hung on the display ground),
+//! the gate-band crossing x 55.5..67 (unpinned), and the ladder495 sister test's west-ground
+//! placement. Route: the ST-1
+//! walkway start #1 (8.98, 15.07, −149.65 [D]) → north along the walkway (14.61 floor [D probe blk],
+//! east of the raised block x 5..10 [D probe0c-lane]) → the inner balcony repro spot (7.61, 15.71,
+//! −113.39 [L 991]) → the LASER-WATCH burn of the four hinge locks #139-142 through the held-fire
+//! path [M Lock_Update 0x1ae3d8:82-101 + Player_WeaponFiring 0x1a5460:653-658] → the AND #505 →
+//! ch 18 sweeps the vent open (SS #138/#179, the y-16.3 ray the end-pose pin) → through the open
+//! vent into the display-case trench (x 5..6.5, z −110.5..−111.5, floor 11.84 [D probe blk]) →
 //! the fall crosses plate #274 (4.63..6.95, 13.63..14.56, −112.08..−110.12 [D]; the game fires it
 //! while the body's volume crosses and clears at rest [L 2026-10-26 hatch-2]) → ch 0x1b (objective 1)
 //! → the lower walkway south (11.84/11.27 z −111..−153 [D coll-floor], passing the z −148..−150 hole
@@ -73,57 +82,175 @@ fn walk_the_whole_mission_from_the_start_to_the_0d_handoff() {
     w.wait_enabled(3000, "the intro");
     w.wait(120);
 
-    // Leg 1: east along the walkway to its raised south-east corner, then the DOCUMENTED
-    // stand-in down into ST-1's interior (the port's unported vent/pulley entry; the exact
-    // evidence is in the header block) onto the plate pad, and the REAL walk to the plate
-    // #506 volume — objective 1.
-    // BLOCKER-2 FINDINGS (this session, [D] probes blk — the stand-in stays, the evidence
-    // moves): the plate #274 (centre (5.79, 14.09, −111.10) [D trig]) hangs in the TRENCH the
-    // walkway's north end opens into (x 5..6.5, z −110.5..−111.5, floor 11.84 [D probe blk
-    // floors]) — the lower walkway's north end, between the case's glass walls (x 4.2/6.74
-    // [D rays]). The case's SOUTH glass blocks the walk-in at body height (the walker wedged
-    // at z −112.95; the y-14.4 ray passes under it — the glass starts above the walkway floor
-    // [D probe blk rays + this run]) — the game's entry is the hinge-burn route: the four
-    // hinge locks #139-142 (out 14..17 [D]) burn under the laser watch's REAL fire path
-    // [M laser_watch_0c_live's pins], the AND #505 → ch 18 drops SS #138's grate 16.4 → 14.76
-    // [D + M SS_Update 0x1a9948] and the [L hatch-2] drop fires the plate mid-fall. Live
-    // check: the game's walk-in line to the plate (does the south glass open with the grate?).
-    w.walk_to(Wp::new(13.0, 14.6, -150.5).r(1.3), "the walkway east");
-    w.walk_to(Wp::new(14.6, 15.6, -152.6).r(1.2), "the raised corner");
+    // Leg 1 (REAL, blocker 2 replaced): the walkway NORTH to the inner balcony, the LASER-WATCH
+    // burn of the four hinge locks, and the vent drop through the trench — the game's own route
+    // to objective 1 (the vent/pulley stand-in is gone). Evidence: the walkway floor 14.61
+    // [D probe blk]; the balcony repro spot (7.61, 15.71, −113.39) [L 991]; the hinges #139-142
+    // (out 14..17, (7.09/4.54, 15.70/16.87, −112.37) [D]); one contact per held tick, −3 off
+    // both burn bytes from 0xff, complete when +0x105 < 4 → 84 contact ticks [M Lock_Update
+    // 0x1ae3d8:82-101 + Player_WeaponFiring 0x1a5460:653-658]; the AND #505 (14,15,16,17 → 18
+    // [D]) drives SS #138 ventmesh-front 16.4 → 14.76 and SS #179 VentBlockingPoly 16.3 → 20.0
+    // [D #138/#179; M SS_Update 0x1a9948]; after both sweep, the y-16.3 ray crosses the vent
+    // [M the SS end poses]. The trench (x 5..6.5, z −110.5..−111.5, floor 11.84 [D probe blk
+    // floors]) carries plate #274 (kind 2, out 0x1b, centre (5.79, 14.09, −111.10) [D trig]) in
+    // the fall path — the game fires it while the body's volume crosses [L hatch-2].
+    w.walk_to(Wp::new(9.0, 15.7, -140.0).r(1.5), "the walkway north 1");
+    // The east lane: the walkway carries a raised block x 5..10, z −122..−125 (top 16.49, west
+    // face x 10.15 [D probe0c-lane floors+rays]) — the x 11..13 lane is the clear walk north.
+    w.walk_to(Wp::new(12.0, 15.7, -118.0).r(1.5), "the walkway north 2 (east of the raised block)");
+    w.walk_to(Wp::new(7.61, 15.71, -113.39).r(0.8), "the inner balcony repro spot [L 991]");
+    // The laser out through the REAL switch input (the draw runs its anim; the fire gate holds
+    // shots until it settles [M 0x1a5460's switching gate]).
+    w.tick(nf_game::player::Input { switch_to: Some(0x4e), ..Default::default() }, false);
+    for _ in 0..60 {
+        if w.scene.sim.as_ref().unwrap().gun.weapon == 0x4e { break; }
+        w.tick(nf_game::player::Input::default(), false);
+    }
+    assert_eq!(w.scene.sim.as_ref().unwrap().gun.weapon, 0x4e, "the Laser equips [M 0x1a7ef8]");
+    // Burn the hinges: the aim re-converges per hinge through turn/look (the player's own
+    // re-aim) and the trigger HOLDS — 84 contacts each [M 0x1ae3d8:82-101]; the clip 500 [L
+    // +0x92] covers 4 × 85 spends.
+    for out in [14u32, 15, 16, 17] {
+        let target = w.scene.sim.as_ref().unwrap().drones.locks.iter()
+            .find(|l| l.out as u32 == out).map(|l| l.pos)
+            .unwrap_or_else(|| panic!("the out-{out} hinge lock exists [D #139-142]"));
+        let mut burned = false;
+        let start = w.total_ticks;
+        while w.total_ticks - start <= 500 {
+            let fire_input = {
+                let sim = w.scene.sim.as_ref().unwrap();
+                if sim.drones.channels.on(out) { burned = true; break; }
+                let h = sim.bond.head();
+                let d = [target[0] - h[0], target[1] - h[1], target[2] - h[2]];
+                let l = (d[0] * d[0] + d[1] * d[1] + d[2] * d[2]).sqrt();
+                let yaw_err = walker::wrap_pi(d[0].atan2(d[2]) - sim.bond.yaw);
+                // the port's look convention: pitch ±1 → ±π/2 [M nf-view lib.rs --bond parser]
+                let pitch_err = (d[1] / l).clamp(-1.0, 1.0).asin() * 2.0 / std::f32::consts::PI - sim.bond.pitch;
+                nf_game::player::Input {
+                    turn: yaw_err.clamp(-0.08, 0.08),
+                    look: pitch_err.clamp(-0.08, 0.08),
+                    ..Default::default()
+                }
+            };
+            w.tick_fire(fire_input);
+        }
+        assert!(burned, "hinge out {out} never burned under the held laser fire [M 0x1ae3d8:82-101]");
+        eprintln!("[0c] hinge out {out} burned at +{} ticks", w.total_ticks - start);
+    }
+    {
+        let sim = w.scene.sim.as_ref().unwrap();
+        assert!(sim.drones.channels.on(18), "the AND mux #505 raised ch 18 [D #505 list 14,15,16,17]");
+    }
+    // The SSs animate after ch 18 (rate 50 / rate 10 [D]) and each RESETS to t 0 / state 0
+    // when its sweep completes (this run: t138 0.1 → 3.1 → 0 by +60) — so the completion pin
+    // is the END POSE: the y-16.3 ray crossing the open vent [M the SS end poses; the same
+    // ray the laser-watch test pins].
+    let mut saw_sweep = false;
+    let mut open = false;
+    for _ in 0..300 {
+        {
+            let sim = w.scene.sim.as_ref().unwrap();
+            let ss138 = sim.drones.sss.of_placement(138).expect("ventmesh-front SS [D #138]");
+            let ss179 = sim.drones.sss.of_placement(179).expect("VentBlockingPoly SS [D #179]");
+            let (t138, t179) = (sim.drones.sss.list[ss138].t, sim.drones.sss.list[ss179].t);
+            if t138 > 0.0 || t179 > 0.0 { saw_sweep = true; }
+            if sim.world.segment_hit([5.78, 16.3, -111.7], [5.78, 16.3, -113.0]).is_none() { open = true; break; }
+        }
+        w.tick(nf_game::player::Input::default(), false);
+    }
+    eprintln!("[0c] the vent sweep ran ({saw_sweep}) and the end pose passed the ray ({open})");
+    assert!(open, "the open vent never let the y-16.3 ray through [M the SS end poses]");
+    eprintln!("[0c] all four hinges burned — the vent is open");
+    // Through the open vent (the passage the y-16.3 ray proves) and off the lip into the
+    // trench — the REAL fall crosses plate #274 mid-fall (ch 0x1b) and lands on the lower
+    // walkway (11.84 [D probe blk floors]).
+    w.walk_to(Wp::new(5.78, 15.7, -112.3).r(0.6), "through the open vent");
+    let mut fired_at = None;
+    let start = w.total_ticks;
+    let landed = loop {
+        let sim = w.scene.sim.as_ref().unwrap();
+        let (p, grounded) = (sim.bond.pos, sim.bond.grounded);
+        if grounded && fired_at.is_some() { break true; }
+        if w.total_ticks - start > 400 { break false; }
+        if !grounded && fired_at.is_none() && sim.drones.channels.on(0x1b) {
+            fired_at = Some(w.total_ticks - start);
+        }
+        let desired = (5.78f32 - p[0]).atan2(-110.8f32 - p[2]);
+        let err = walker::wrap_pi(desired - sim.bond.yaw);
+        let input = nf_game::player::Input {
+            turn: err.clamp(-0.08, 0.08),
+            forward: if err.abs() > 0.6 { 0.0 } else { 1.0 },
+            ..Default::default()
+        };
+        w.tick(input, false);
+    };
+    {
+        let sim = w.scene.sim.as_ref().unwrap();
+        let p = sim.bond.pos;
+        assert!(landed && fired_at.is_some() && sim.bond.grounded && (p[1] - 12.93).abs() < 0.6,
+            "the vent drop must fire plate #274 mid-fall (ch 0x1b [D #274; L hatch-2]) and land on the \
+             lower walkway (11.84 [D probe blk floors]), got pos {p:?} fired {fired_at:?}");
+        assert_eq!(sim.drones.mission.states[11][0], 4, "objective 1 completes on the #274 drop [M 0x1827d8:88-99]");
+        assert_eq!(sim.drones.mission.states[11][1], 3, "ch 0x1b reveals objective 2 [L record 11 obj 1]");
+    }
+    eprintln!("[0c] the vent drop fired plate #274 mid-fall at +{:?} — objective 1 complete on the game's own route", fired_at);
+
+    // Leg 2 (REAL): out of the case's trench south-west onto the 11.27 hall, the hall east
+    // under the case, the upper east lane (11.27, x 13..14 [D probe]) south, the pad #506
+    // sliver and the PIT DROP onto the display ground (6.27 — the under-walkway floor runs
+    // x 12.5..14.5 the whole z −114..−154 and opens into the z −152..−155.5 slab [D probe]),
+    // the display ground NORTH to the SUBJECT's clear-line eye, and the photograph through
+    // the REAL camera switch and bullet path [M CamSubject_Update 0x1bc668:14-24]. The 0xE2
+    // display stand-in is gone. (Route floors from this session's probe: the trench exit at
+    // z −112.5 is open west at body height; the direct south lane hits the 1.28 riser wall at
+    // z −114.09 [D probe]; the 11.27 hall ends at z −115.5; the x 13..14 upper lane carries.)
+    // The trench EXIT — the one stand-in this session ADDED (the case's interior has no
+    // walkable exit at body height): the case's south glass lintels at z −111.89 from y ~13.2
+    // up [D probe rays: the y 13.0 ray passes, the y 13.4 ray hits at x 5.0..6.5], the west
+    // inner face x 4.78 blocks the chest (y 12.9) across the trench's z span [D probe rays],
+    // and the crouched body (root 0.607 over the floor [L 05-truck]; this run settled at
+    // 12.50 over the 11.84 floor) still clips the lintel — the port's crouch capsule does not
+    // fit under 13.2. Glass is body-solid [M hatch-4's 0x1eb320:337 + the 0x800/0xc query
+    // flags; L 0700001b]. No SS keys off ch 0x1b (the level's movers are the ch-18 grate/poly,
+    // the ch-8 door, the 0x54 lid [D keys]). So the game's exit out of the display case after
+    // the #274 drop is UNPINNED — live check 2 below. The stand-in moves Bond onto the 11.27
+    // hall just south of the case (the pinned floors [D probe]); the sister ray pins the
+    // lintel so the stand-in never walks through a glass that later opens.
+    {
+        let sim = w.scene.sim.as_ref().unwrap();
+        let lintel = sim.world.segment_hit([5.5, 13.4, -111.4], [5.5, 13.4, -113.0]);
+        assert!(lintel.is_some(), "the case's south lintel (z −111.89, y 13.2+ [D probe rays]) vanished; the exit stand-in could become a walk");
+    }
     {
         let sim = w.scene.sim.as_mut().unwrap();
-        // Sister: the old spot is floorless — pin it so the stand-in never moves back there.
-        let old = sim.world.segment_hit([13.0, 12.9, -154.3], [13.0, 4.9, -154.3]);
-        assert!(old.is_none_or(|(t, _)| 12.9 - 8.0 * t < 9.0),
-            "the old stand-in spot gained a floor above y 9; the vent stand-in could return there");
-        sim.bond.pos = [5.84, 12.93, -154.9];
+        sim.bond.pos = [5.0, 12.35, -112.9];
         sim.bond.vel = [0.0; 3];
     }
     w.wait(10);
-    eprintln!("[0c] the vent-descent stand-in (the port's 0xE2 gap) — the display ground");
+    eprintln!("[0c] the trench-exit stand-in (the case's unpinned exit) — on the 11.27 hall");
+    w.walk_to(Wp::new(8.0, 12.4, -113.2).r(1.0), "the hall east (south of the x 6..7 pillars)");
+    w.walk_to(Wp::new(13.5, 12.4, -115.0).r(1.2), "the upper east lane");
+    w.walk_to(Wp::new(13.5, 12.4, -150.0).r(1.2), "the lane south");
+    w.walk_to(Wp::new(6.0, 12.4, -152.6).r(1.0), "the z −152 band west to the pad");
+    // The DISPLAY-GROUND ACCESS — the port gap this session mapped and PINNED: the 11.27
+    // band ends at z −153.14 (its side face spans y ~11.5..13.5 [D probe rays]) and the pad
+    // #506's 0.57 riser stands behind the same face line — this run's walker could neither
+    // walk off the edge (the standing capsule is fully overlapped by the side face; the hop
+    // apex 13.6 leaves the feet inside the face band) nor step up onto the pad, at x 4.5/5.8/
+    // 7.6/9.0 alike [D probe + the runs]. The game's own route to the display ground is the
+    // walkthrough's 0xE2 VENT/PULLEY entry (unported — the old stand-in's gap). So the
+    // display stand-in STAYS (the master's [5.4, 7.35, −113] eye spot), now reached over the
+    // REAL hall/lane walk; the pit descent and the pad hop are its documented sisters. Live
+    // check 3 below (the game's display-ground route).
     {
         let sim = w.scene.sim.as_ref().unwrap();
-        assert!(sim.bond.grounded && (sim.bond.pos[1] - 12.93).abs() < 0.5,
-            "Bond lands on the plate pad (11.84 [D probe]), got {:?}", sim.bond.pos);
+        // Sister: the band's south edge face (z −153.14) and the pit below (the slab 6.27) —
+        // pin both so the stand-in never walks through a route that later opens.
+        let edge = sim.world.segment_hit([5.8, 12.5, -152.6], [5.8, 12.5, -153.6]);
+        assert!(edge.is_some(), "the band's south edge face (z −153.14 [D probe]) vanished; the pit route could be walked");
+        let slab = sim.world.segment_hit([5.8, 8.0, -154.0], [5.8, 5.0, -154.0]);
+        assert!(slab.is_some(), "the display-ground slab (6.27 [D probe blk2]) vanished under the pit");
     }
-    w.walk_to(Wp::new(5.84, 12.9, -154.15).r(0.9), "the ST-1 plate pad");
-    {
-        let sim = w.scene.sim.as_ref().unwrap();
-        assert!((sim.bond.pos[1] - 12.93).abs() < 0.6, "Bond stands on the pad, got {:?}", sim.bond.pos);
-        assert!(sim.drones.channels.on(0x1b),
-            "the ST-1 plate #506 \u{2192} ch 0x1b (objective 1) [D]");
-        assert_eq!(sim.drones.mission.states[11][0], 4, "objective 1 completes [M 0x1827d8:88-99]");
-        assert_eq!(sim.drones.mission.states[11][1], 3, "ch 0x1b reveals objective 2 [L record 11 obj 1]");
-    }
-    eprintln!("[0c] objective 1 complete on the plate #506");
-
-    // Leg 2: the photograph. The route reached the display-ground slab (6.27, z −152..−155.5)
-    // for real; the SUBJECT's clear-line eye is the under-walkway display ground at z ~−113
-    // [D map-powerstation 5.4,7.3,-113; the walkway-eye shots are glass-blocked, the
-    // display-ground eye to #454 is the clear line [probe]] — the ACCESS from the slab up
-    // there is the remaining unported 0xE2 vent/pulley leg (the position is the one documented
-    // stand-in left on the objective-1/2 legs; the shot itself is the REAL bullet path into
-    // the CamSubject volume [M CamSubject_Update 0x1bc668:14-24]).
     let subject = {
         let sim = w.scene.sim.as_ref().unwrap();
         sim.drones.props.subjects.iter().find(|s| s.channel == 0x1c)
@@ -131,12 +258,18 @@ fn walk_the_whole_mission_from_the_start_to_the_0d_handoff() {
     };
     {
         let sim = w.scene.sim.as_mut().unwrap();
+        // The 0xE2 display stand-in (the unported vent/pulley), unchanged from master.
         sim.bond.pos = [5.4, 7.35, -113.0];
         sim.bond.vel = [0.0; 3];
-        sim.gun.switch_request = 0x54;
     }
-    w.wait(40);
-    eprintln!("[0c] the display stand-in (the same 0xE2 gap) — the camera out");
+    w.wait(10);
+    eprintln!("[0c] the display stand-in (the unported 0xE2 vent/pulley) — the eye on the display ground");
+    // The camera out through the REAL switch input (the old gun.switch_request write is gone).
+    w.tick(nf_game::player::Input { switch_to: Some(0x54), ..Default::default() }, false);
+    for _ in 0..60 {
+        if w.scene.sim.as_ref().unwrap().gun.weapon == 0x54 { break; }
+        w.tick(nf_game::player::Input::default(), false);
+    }
     assert_eq!(w.scene.sim.as_ref().unwrap().gun.weapon, 0x54, "the camera is held [M 0x1a7ef8]");
     let sc = [(subject.0[0] + subject.1[0]) / 2.0, (subject.0[1] + subject.1[1]) / 2.0, (subject.0[2] + subject.1[2]) / 2.0];
     let photographed = shoot_at(&mut w, sc, 30.0, 900, "the jetpack photograph",
@@ -147,23 +280,15 @@ fn walk_the_whole_mission_from_the_start_to_the_0d_handoff() {
         for _ in 0..2 { sim.step_bond(nf_game::player::Input::default(), false, false, false); }
         assert_eq!(sim.drones.mission.states[11][1], 4, "objective 2 completes [M 0x1827d8:88-99]");
     }
-    eprintln!("[0c] objective 2 complete — the photograph");
+    eprintln!("[0c] objective 2 complete — the photograph (the 0xE2-hung eye spot)");
 
-    // Leg 4: the secret-door reach — the DOCUMENTED stand-in (the display ground → the
-    // warehouse floor walk is the third unported-route gap: the east deck ends at z ~−153 and
-    // the yard north wall blocks the straight descent [probe display→warehouse heightmap]; the
-    // same stand-in the older walkthrough carried) onto the plates, then the REAL chain below.
-    // BLOCKER-3 FINDINGS (this session, [D] probe blk3 — the stand-in stays, the "floor-broken"
-    // reading is wrong): the descent EXISTS in the disc's own collision — the display-ground
-    // slab (6.27, x 0..14, z −152..−155.5) drops at its south edge (z ~−155.7) onto the deck
-    // (2.37, x 2..8, z −156..−157.5), which drops at its south end (z ~−157.5) onto the YARD
-    // (−0.02, x 4..8, z −158), running east to the warehouse slab (0.38/0.89/0.90, x 42..56)
-    // and these plates. The earlier "void at z −154" was a y 9→1 ray missing the yard floor
-    // below y 1 [D probe blk3 y 4→−0.5]. The game's ALTERNATIVE connection: the annex vent —
-    // the lock #180 (out 0x54, (53.80, 5.90, −165.36) [D locks]) burns under the laser [M
-    // Lock_Update 0x1ae3d8 + drone.rs:14004's real bullet pass], ch 0x54 drops the SS lid
-    // (5.43 → 0.0 [D keys]) and the hole falls to the warehouse floor 0.90 [D probe blk
-    // underside]. Live check: which route the game's player walks.
+    // Leg 4: the secret-door reach — the DOCUMENTED stand-in (master's shape, kept): the
+    // display ground → warehouse/yard descents [D probe blk3's slab (6.27) → deck (2.37) →
+    // yard (−0.02) → the warehouse slab 0.38/0.89/0.90 map] hang on the display ground, whose
+    // ACCESS is the unported 0xE2 vent/pulley (the stand-in above) — so the downstream legs
+    // keep the master's reach stand-in onto the plates. The annex vent (the lock #180 → the
+    // SS lid → the hole down to 0.90 [D locks/keys; M Lock_Update 0x1ae3d8 + drone.rs:14004's
+    // real bullet pass]) is the game's ALTERNATIVE connection — untested this session.
     let plate2 = {
         let sim = w.scene.sim.as_ref().unwrap();
         sim.drones.triggers.iter()
@@ -177,7 +302,7 @@ fn walk_the_whole_mission_from_the_start_to_the_0d_handoff() {
         sim.bond.vel = [0.0; 3];
     }
     w.wait(20);
-    eprintln!("[0c] the secret-door reach stand-in (the third 0xE2-route gap) — on the plates");
+    eprintln!("[0c] the secret-door reach stand-in (the 0xE2-hung descents) — on the plates");
 
     // Leg 5 (REAL): the secret-door chain — the co-located plates [D #558/#559]: #559 (mask 8)
     // is the player BODY touch; #558 (mask 4) is the E-interactable arm (`Trigger_Activate`
@@ -213,18 +338,11 @@ fn walk_the_whole_mission_from_the_start_to_the_0d_handoff() {
         let sim = w.scene.sim.as_ref().unwrap();
         assert!(sim.bond.pos[0] > 53.5, "Bond crossed the doorway for real (x {:?})", sim.bond.pos[0]);
     }
-    // The yard stand-in (DOCUMENTED, the fourth gap): the doorway ledge is boxed — its south
-    // edge walls at (55.2,−175.8) [D probes cel 77] and the straight walker wedged there at the
-    // 6000-tick cap in the older walkthrough too; the drop itself (ledge 2.0 → yard 0.69 [D
-    // probes]) is below.
-    // BLOCKER-5 FINDINGS (this session, [D] probe blk rays — the stand-in stays, the "boxed"
-    // reading is HALF wrong): the south wall (z −175.80, y 1.5..2.9+ [D rays at x 54.5/55.2])
-    // spans x ≤ 55.5 ONLY — the north-south rays at x 56.5/57.5 hit NOTHING at y 1.5..2.9, and
-    // the floor map shows the ledge (0.90) stepping down to the yard (0.69) across x ~55.75 for
-    // z −174..−175.5 [D probe blk floors]. The open descent is east-then-south around the
-    // wall's east end; the walker wedged at x 55.0 on the approach (an unprobed face between
-    // x 55.0 and 55.5 at y ~2) — the leg needs that face mapped before the real walk lands.
-    // Live check: the game's descent line off the ledge's east strip.
+    // The yard descent — the DOCUMENTED stand-in (master's shape, kept): the east-strip
+    // descent [D probe blk: the wall z −175.8 spans x ≤ 55.5 only; the ledge 0.90 steps down
+    // to the yard 0.69 across x ~55.75] wedges this run at x 55.01 on the wall's unprobed
+    // EAST RETURN (a face at x ≈ 55.55 at y ~2 [this run's STUCK + the report's wedge]) —
+    // one face map away from a real leg. Live check 4 below.
     {
         let sim = w.scene.sim.as_mut().unwrap();
         sim.bond.pos = [56.5, 2.8, -176.5];
@@ -234,7 +352,7 @@ fn walk_the_whole_mission_from_the_start_to_the_0d_handoff() {
         if w.scene.sim.as_ref().unwrap().bond.grounded { break; }
         w.tick(nf_game::player::Input::default(), false);
     }
-    eprintln!("[0c] the yard descent stand-in (the boxed doorway ledge) — on the yard floor");
+    eprintln!("[0c] the yard descent stand-in (the unprobed east return at x ~55.55) — on the yard floor");
 
     // Leg 6 (REAL): south-west across the yard to the ladder base.
     w.walk_to(Wp::new(56.0, 1.4, -182.0).r(1.5), "the yard south");
@@ -331,6 +449,12 @@ fn walk_the_whole_mission_from_the_start_to_the_0d_handoff() {
             let sim = w.scene.sim.as_ref().unwrap();
             if sim.bond.substate != nf_game::player::SS_WIRE { dropped = true; break; }
             let d = ((sim.bond.pos[0] + 8.47).powi(2) + (sim.bond.pos[2] + 216.52).powi(2)).sqrt();
+            // The drop is the jump press inside 0.9 of B (blockers-2's green drop). The
+            // FIRE-action variant (real-crossings 29b43fa9, never run on that branch) rode the
+            // full 2400 ticks to the natural stop d_B ≈ 1.05 past B WITHOUT releasing [this
+            // run's hang at (−8.98, 12.65, −217.44) — the y 12.65 hang root = wire 13.67 − 1.02
+            // [M hang 1.0207]], so the wire release does not answer the trigger here; the jump
+            // press does (blockers-2's three green drops).
             let input = nf_game::player::Input { strafe: 1.0, jump: d < 0.9, ..Default::default() };
             w.scene.sim.as_mut().unwrap().step_bond(input, false, false, false);
             w.total_ticks += 1;
@@ -385,6 +509,7 @@ fn walk_the_whole_mission_from_the_start_to_the_0d_handoff() {
             let sim = w.scene.sim.as_ref().unwrap();
             if sim.bond.substate != nf_game::player::SS_WIRE { dropped = true; break; }
             let d = ((sim.bond.pos[0] - 5.85).powi(2) + (sim.bond.pos[2] + 223.15).powi(2)).sqrt();
+            // The drop is the jump press inside 0.9 of B (see the #284 note).
             let input = nf_game::player::Input { strafe: -1.0, jump: d < 0.9, ..Default::default() };
             w.scene.sim.as_mut().unwrap().step_bond(input, false, false, false);
             w.total_ticks += 1;
