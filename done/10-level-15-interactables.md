@@ -20,3 +20,8 @@ say so in the report. Never weaken a decompile-backed test to make code pass.
 
 ---
 claimed-by: sandbox5 at 2026-10-30T21:26Z
+
+---
+## Report (done, 2026-10-30T22:11Z)
+
+Closed by the driver: the report is on `s/level-15-interactables` (docs/reports/level-15-interactables.md); the worker didn't run finish.sh.
