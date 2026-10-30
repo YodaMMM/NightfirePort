@@ -168,7 +168,16 @@ fn the_bathhouse_floor_guards_shout_reaches_the_mixer_too() {
         [0x15u8, 0x81, 0x17, 0x18, 0x19, 0x08].iter().filter_map(|&o| {
             sim.drones.triggers.iter().find(|t| t.out == o).map(|t| {
                 let c = t.centre();
-                ([c[0], c[1] - 1.0, c[2]], o)
+                // The plate-centre stand (the bunker test's fix): the old `c[1] - 1.0` drop buried
+                // Bond below the floor/water line mid-walk and he drowned there (the death at frame
+                // 2143 of this run — health 0.00). A dead player holds no pointer for any guard:
+                // `NDrone2_FindOpponent` zeroes +0x170 on the dead-class arms [M 0x1424e0:111-114],
+                // the visible-sight branch then never acks [M DroneVision_ProcessDroneSight
+                // 0x176a28:222-231 — `+0x170 == 0` falls to the lost-sight arm] and no AttackTalk
+                // site [M 0x13eac0's callers: FirstAttack 0x148010, AimStandFire 0x166328,
+                // CombatNoMove 0x1643e8] can fire — the game's own guards stay silent on a run
+                // whose player is dead. The walk must keep him alive to pin the shout chain.
+                ([c[0], c[1], c[2]], o)
             })
         }).collect()
     };

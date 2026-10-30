@@ -227,8 +227,20 @@ fn guard_decides_to_throw_grenade_unforced() {
         eprintln!("[scenario] WARNING: no clear LOS found — Bond at ({:.1}, {:.1}, {:.1})", bond.pos[0], bond.pos[1], bond.pos[2]);
     }
 
-    // Enable all switch channels so the guard starts.
-    for c in 1..=255u8 { sim.set_channel(c); }
+    // Enable the switch channels EXCEPT the mission's own. The old blanket `1..=255` also set the
+    // standing fail-hook channels 0x60/0x61 [M `Mission_MonitorObjectives` 0x1827d8:98-117 — each
+    // sets ch 99] and the mission-internal channels 99/100 [M `Mission_Update` 0x182c60:23-33], so
+    // Mission_Status left the in-mission range within a tick; `PlrStat_OkToUpdate` then failed
+    // [M 0x1993e0 — SP: Mission_Status < 2], `NDrone2_FindOpponent` zeroed +0x170 every tick
+    // [M 0x1424e0:106-108], the combat router's head returned NoOpponent 0x60 [M 0x148338:20-31]
+    // and `DroneWeap_CanThrowGrenade`'s own +0x170 gate [M 0x17a798:16] could never pass: the
+    // harness itself ended the mission, and a guard holds no player opponent on a mission that is
+    // over. The level's objective channels 0x48/0x4b/0x4d announce but do not move Mission_Status
+    // [L ee_start_05.bin 0x2a3ed0 — three complete-armed records, flags 0], so they and the
+    // guards' wake channels stay enabled.
+    for c in 1..=255u8 {
+        if !matches!(c, 0x60 | 0x61 | 0x62 | 99 | 100) { sim.set_channel(c); }
+    }
 
     // Run 1800 ticks (30 s). The guard should see Bond, enter combat, and eventually throw.
     let mut threw = false;
@@ -260,7 +272,13 @@ fn guard_decides_to_throw_grenade_unforced() {
     let floor_y2 = l.world.floor_below([g2[0] + 30.0, g2[1], g2[2]], 4.0).unwrap_or(g2[1] - 1.0) + 1.0;
     let bond_far = bond_at([g2[0] + 30.0, floor_y2, g2[2]]);
     let gc_before2 = sim2.list[gi2].grenade_count;
-    for c in 1..=255u8 { sim2.set_channel(c); }
+    // The sister runs under the same harness rule: the mission's own channels stay off (see the
+    // unforced test's blanket comment — the fail hooks 0x60/0x61 [M 0x1827d8:98-117] and 99/100
+    // [M 0x182c60:23-33] would end the mission and the pointer fold [M 0x1424e0:106-108] would
+    // zero +0x170, masking the range pin with a no-opponent park).
+    for c in 1..=255u8 {
+        if !matches!(c, 0x60 | 0x61 | 0x62 | 99 | 100) { sim2.set_channel(c); }
+    }
     for _ in 0..1800 { sim2.tick(&d, &bond_far); }
     assert!(sim2.list[gi2].grenade_count == gc_before2,
         "guard out of range (30 m) did not throw — grenades {} == {}", sim2.list[gi2].grenade_count, gc_before2);
