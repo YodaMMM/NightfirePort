@@ -199,7 +199,15 @@ impl Bullet {
         // Collide_Update 0x1ea398:216-229 walks the sorted contact list past every pass-flagged
         // hit (glist node 0x40 / surface byte 0x40, Collide_Intersect disasm 0x1ebf78-0x1ebf80)
         // to the first solid one]. Drone-fired rounds run the same Bullet_update.
-        let tw = world.segment_bullet(self.pos, end);
+        // The candidate set is the game's cel-scoped pick, not the whole world: the bullet is
+        // cel-linked at spawn (obj+0x20 = build_LinkToRoom 0x1c9680 [M Bullet_init disasm
+        // 0x12c8d0-0x12c8d8]) and the flight query seeds Collide_RayIntersect with that cel,
+        // re-fed from the live position every tick [M Bullet_update disasm 0x12ef04
+        // `lw $a2,0x20($s5)` + 0x12f0cc-0x12f0d8] — geometry outside the straddle cells is never
+        // a candidate [M Collide_Pick 0x1eb320:125 → Collide_StraddleCels 0x1eac98]. The port
+        // re-derives the cel with build_FindCel 0x1c8cb0 each tick, exactly like the PlayerBullet
+        // flight next door; the no-scope fallback is the flat ray.
+        let tw = world.segment_bullet_scoped(world.find_cel(self.pos), self.pos, end);
         let tp = segment_cylinder(self.pos, end, player);
         let at = |t: f32| [self.pos[0] + (end[0] - self.pos[0]) * t, self.pos[1] + (end[1] - self.pos[1]) * t, self.pos[2] + (end[2] - self.pos[2]) * t];
         // CompHitData 0x1d33c0 [M] — QuickSort comparator id 2 (Collide_Update 0x1ea398 / Collide_RayIntersect 0x1ec690 / Collide_SphereIntersect 0x1ec940 / Collide_CylinderIntersect 0x1ecc00 / Collide_FilterBullets 0x1ece30 sort their hit lists by the f32 at HITDATA+0xc, ascending); the port keeps no hit list — the nearest-of comparison below replaces the sort.
