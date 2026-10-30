@@ -20,3 +20,8 @@ say so in the report. Never weaken a decompile-backed test to make code pass.
 
 ---
 claimed-by: sandbox5 at 2026-10-30T22:51Z
+
+---
+## Report (done, 2026-10-30T23:34Z)
+
+Closed by the driver: the report is on `s/level-0d-jib-rim-gap` (docs/reports/level-0d-jib-rim-gap.md); the worker didn't run finish.sh.
