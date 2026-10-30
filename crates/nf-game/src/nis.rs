@@ -1074,12 +1074,36 @@ impl Script {
                 if let Some(o) = prev { self.pending_weapon.push((o, w)); }
             }
             0xc => self.flags |= 0x10,
-            0xd => if g(0) != 0 { ch.set_script(g(0), g(1) as u8, frame); ch.script_channels.insert(g(0) as u8); },
+            // Event 0xD [M Script_EventHandler 0x1d94c0 case 0xd :161-168 + disasm 0x1d973c-0x1d9764]:
+            // p0 == 0 → return (0x1d9740 beqz); **p1 == 0 (u32) → return TOO** (0x1d9758
+            // `beqz $v1` fires BEFORE the `sb` store at 0x1d975c — the raw words
+            // `8fa30004 10600034 a0440000`; the decompiled C drops this return and shows the
+            // write unguarded). The script events can SET a channel, never CLEAR one: a zero
+            // value leaves switch_channels[ch] and its time stamp untouched. Else
+            // switch_channels[p0] = (byte)p1 [M 0x1d975c] + switch_channels_time[p0] =
+            // GameState._52_4_ [M 0x1d97a4-0x1d97bc join — unconditional behind the p1 gate].
+            0xd => {
+                let (c, v) = (g(0), g(1));
+                if c != 0 && v != 0 {
+                    ch.set_script(c, v as u8, frame);
+                    ch.script_channels.insert(c as u8);
+                }
+            }
             0xe => self.streams[i].flags |= 1,
             0x10 => self.flags |= 0x20,
+            // Event 0x11 [M Script_EventHandler 0x1d94c0 case 0x11 :179-192 + disasm
+            // 0x1d9768-0x1d97bc]: dest = p1 when switch_channels[p0] reads nonzero, p2 when zero
+            // (0x1d977c-0x1d9784); dest == 0 → return (0x1d9788 beqz); **p3 == 0 (u32) → return
+            // TOO** (0x1d9798 `beqz $a0` before the `sb` at 0x1d979c — raw words
+            // `10800024 a0620000`; the C drops this return) — never a clear. Else
+            // switch_channels[dest] = (byte)p3 + the time stamp on dest [M 0x1d97a4 join].
             0x11 => {
-                let (c, v) = if ch.on(g(0)) { (g(1), g(3)) } else { (g(2), g(3)) };
-                if c != 0 { ch.set_script(c, v as u8, frame); ch.script_channels.insert(c as u8); }
+                let dest = if ch.on(g(0)) { g(1) } else { g(2) };
+                let v = g(3);
+                if dest != 0 && v != 0 {
+                    ch.set_script(dest, v as u8, frame);
+                    ch.script_channels.insert(dest as u8);
+                }
             }
             // Event 0x12: `ResetMap_LevelToLoad(level, 1, 0)` — the script-driven level transition (e.g. the truck
             // parking at the end of 07000005) [M Script_EventHandler 0x1d94c0:189-199]. `g(0)` is the next level's
@@ -2833,8 +2857,10 @@ mod tests {
         script.start(false);
         let mut objs = Objects::default();
         let mut ch = Channels::default();
-        // Pre-set ch 0 to 7: the game's early return must leave it alone.
+        // Pre-set ch 0 to 7 (the game's early return must leave it alone) and ch 0x1e to 9 —
+        // the zero-value event must leave THAT alone too.
         ch.set(0, 7, 0);
+        ch.set(0x1e, 9, 0);
         let world = TestWorld;
         let mut out = Vec::new();
         for frame in 0..8 {
@@ -2842,12 +2868,18 @@ mod tests {
             script.update(&mut subs, &Default::default(), &mut objs, &mut ch, &world, frame, &mut out);
         }
         assert!(ch.on(0x1d), "event 0xD [0x1d,1] set switch_channels[0x1d]");
-        assert_eq!(ch.v[0x1e], 0, "event 0xD [0x1e,0] wrote the 0 (the write happens, value 0)");
-        assert_eq!(ch.time[0x1d], 2, "the nonzero write stamped switch_channels_time[0x1d] with the event's frame [M 0x1d94c0 joined_r0x001d9798]");
-        assert_eq!(ch.time[0x1e], 0, "a zero-value write does NOT stamp the time [M 0x1d94c0 :201-204 — the stamp is inside `if (iStack_b4 != 0)`]");
-        assert_eq!(ch.v[0], 7, "event 0xD [0,1] returned before writing: ch 0 keeps its value [M 0x1d94c0 :179-181]");
+        // script-event-channel-writes correction: [0x1e,0] writes NOTHING. The game's case 0xD
+        // returns on a zero value BEFORE the store — disasm 0x1d9758 `beqz $v1` → 0x1d982c, the
+        // `sb` at 0x1d975c unreached (raw words 8fa30004 10600034 a0440000); the decompiled C at
+        // 0x1d94c0:165 drops this return and shows the write unguarded, which the old pin here
+        // ("the write happens, value 0") followed. The script events can never CLEAR a channel.
+        assert_eq!(ch.v[0x1e], 9, "event 0xD [0x1e,0] left the channel's prior value alone [M 0x1d94c0 case 0xd disasm 0x1d9758 beqz before the 0x1d975c sb]");
+        assert_eq!(ch.time[0x1d], 2, "the nonzero write stamped switch_channels_time[0x1d] with the event's frame [M 0x1d94c0 joined_r0x001d9798 / disasm 0x1d97a4-0x1d97bc]");
+        assert_eq!(ch.time[0x1e], 0, "the zero-value return never stamps the time [M 0x1d9758 — the return precedes the join]");
+        assert_eq!(ch.v[0], 7, "event 0xD [0,1] returned before writing: ch 0 keeps its value [M 0x1d94c0 case 0xd disasm 0x1d9740 beqz]");
         assert!(!ch.script_channels.contains(&0), "the early return never registers ch 0 as script-written");
-        assert!(ch.script_channels.contains(&0x1d) && ch.script_channels.contains(&0x1e));
+        assert!(ch.script_channels.contains(&0x1d));
+        assert!(!ch.script_channels.contains(&0x1e), "the zero-value return never registers the channel as script-written (nothing was written)");
     }
 
     /// script-channel-events: event 0x11 (`Script_EventHandler` 0x1d94c0 case 0x11 :201-211) —
@@ -2876,11 +2908,14 @@ mod tests {
         // One stream, in order (waits separate the frames the stamps land on):
         //   t2:  0xD [5,1]        — raise the test channel.
         //   t2:  0x11 [5,50,4c,1] — test ON  → dest p1 = 0x50 (time[0x50] = 2).
-        //   t4:  0xD [5,0]        — clear it.
-        //   t4:  0x11 [5,50,4c,1] — test OFF → dest p2 = 0x4c (time[0x4c] = 4).
+        //   t4:  0xD [5,0]        — writes NOTHING now (the game returns on a zero value; ch 5
+        //                         stays 1 — pinned by the 0xD test above).
+        //   t4:  0x11 [8,50,4c,1] — test 8 never raised (OFF) → dest p2 = 0x4c (time[0x4c] = 4).
         //   t4:  0x11 [6,0,51,1]  — test 6 OFF → dest p2 = 0x51 (time[0x51] = 4).
         //   t6:  0xD [6,1]; 0x11 [6,0,51,1] — test ON, dest p1 = 0 → the game returns;
         //       time[0x51] keeps its t4 stamp.
+        //   t8:  0xD [7,1]; 0x11 [7,52,53,0] — p3 = 0 → the game returns BEFORE the store
+        //       [M 0x1d9798 beqz]: pre-set 0x52 keeps 5, no stamp, no registration.
         let wait = |t: u16| vec![0x05, (t & 0xff) as u8, (t >> 8) as u8, 0];
         let cmds = {
             let mut v = wait(2);
@@ -2888,11 +2923,14 @@ mod tests {
             v.extend(ev11(5, 0x50, 0x4c, 1));
             v.extend(wait(4));
             v.extend(evd(5, 0));
-            v.extend(ev11(5, 0x50, 0x4c, 1));
+            v.extend(ev11(8, 0x50, 0x4c, 1));
             v.extend(ev11(6, 0, 0x51, 1));
             v.extend(wait(6));
             v.extend(evd(6, 1));
             v.extend(ev11(6, 0, 0x51, 1));
+            v.extend(wait(8));
+            v.extend(evd(7, 1));
+            v.extend(ev11(7, 0x52, 0x53, 0));
             v
         };
         let nis = Arc::new(Nis {
@@ -2904,21 +2942,28 @@ mod tests {
         script.start(false);
         let mut objs = Objects::default();
         let mut ch = Channels::default();
+        ch.set(0x52, 5, 0); // the p3==0 event must leave this alone
         let world = TestWorld;
         let mut out = Vec::new();
-        for frame in 0..8 {
+        for frame in 0..10 {
             let mut subs = Vec::new();
             script.update(&mut subs, &Default::default(), &mut objs, &mut ch, &world, frame, &mut out);
         }
         assert!(ch.on(0x50), "with the test channel ON the destination is p1 (0x50) [M 0x1d94c0 :202-204]");
         assert!(ch.on(0x4c), "with the test channel OFF the destination is p2 (0x4c)");
         assert!(ch.on(0x51), "test 6 OFF → dest p2 = 0x51 written");
-        assert_eq!(ch.time[0x50], 2, "the 0x11 write stamps time[dest] on a nonzero value [M 0x1d94c0 :209-211]");
+        assert_eq!(ch.time[0x50], 2, "the 0x11 write stamps time[dest] on a nonzero value [M 0x1d94c0 :209-211 / disasm 0x1d97a4]");
         assert_eq!(ch.time[0x4c], 4, "the t4 write stamped its own frame");
         // The last 0x11 (test 6 ON, dest p1 = 0): the game's `if (iStack_bc == 0) return` arm —
         // nothing was written, and 0x51's t4 write stands.
         assert_eq!(ch.time[0x51], 4, "the dest-0 event wrote nothing: 0x51 keeps its t4 stamp");
+        // script-event-channel-writes: the p3==0 case (test 7 ON, dest 0x52, value 0) — the
+        // game's 0x1d9798 `beqz $a0` returns BEFORE the `sb` (raw words 8fa4000c 10800024
+        // a0620000; the C drops this return): pre-set 0x52 keeps 5, no stamp, no registration.
+        assert_eq!(ch.v[0x52], 5, "the p3==0 0x11 left the destination's prior value alone [M 0x1d94c0 case 0x11 disasm 0x1d9798 beqz before the 0x1d979c sb]");
+        assert_eq!(ch.time[0x52], 0, "the p3==0 return never stamps the time");
         assert!(ch.script_channels.contains(&0x50) && ch.script_channels.contains(&0x4c) && ch.script_channels.contains(&0x51));
+        assert!(!ch.script_channels.contains(&0x52), "the p3==0 return never registers the destination as script-written");
     }
 
     /// script-channel-events: the skip path. `SP_Update`'s skip (`Input_Action(-1, 0x19, 1)`
