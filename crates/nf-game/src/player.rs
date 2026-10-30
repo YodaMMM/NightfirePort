@@ -1518,6 +1518,13 @@ impl Bond {
     /// gravity (`Player_Collision`'s water path skips `WldGravity` [M]).
     fn physics_tick(&mut self, world: &CollisionWorld, ctx: &LadderCtx, input: &Input, swimming: bool, zero_g: bool) {
         let prev = self.pos;
+        // The tick's move (the move the clip model truncates): pos − prev, the WHOLE positional
+        // delta this tick applies — the walk's matrix·(vs, vf) add, the swim dir add, zero-g's
+        // thruster add AND the gravity integration. (A earlier draft captured it after the walk's
+        // x/z add — move_v then never carried the walk's horizontal move, the clip saw
+        // (0, gravity, 0) every walked tick and never fired on any wall press: measured this
+        // session, the west-hall press walked through the wall.)
+        let pre_move_pos = prev;
         self.fall_damage = None;
         // The spawn arrival settle (the `settle_hold` field doc): the boot holds the placed root
         // while the fall velocity accumulates; the release tick integrates the held velocity ONCE
@@ -1737,8 +1744,6 @@ self.local = [vs / k, vf / k];
             self.vel = [0.0; 3];
         }
         self.vel[1] = self.vel[1].clamp(-45.0, 45.0);
-        // The tick's move (the move the clip model truncates — captured before the integration).
-        let pre_move_pos = self.pos;
         if settle_release {
             // The ONE integration of the held velocity, in the game's op order (the VU mul then the
             // add [M 0x194df0:189-197]) — the shape the ee_start root reproduces bit-exactly. The
@@ -1764,9 +1769,9 @@ self.local = [vs / k, vf / k];
         // (escort_follow_07000001_live regressed with it on) — a known port divergence.
         let (mut push, mut walkable) = world.capsule_push_scoped(self.cel, a, b, RADIUS, swimming, self.pick_ref);
         // walk-move-clip EXPERIMENT (`NF_WALK_CLIP=1`): the game's move-clip walk model — the
-        // tick's move clipped at the capsule's face contacts, the radial push tail dead (see
-        // capsule_tri_clip). Replaces the push displacement AND the pick_ref feed (the game's
-        // +0x50 accumulator only ever sees DeltaP, which the dead tail never produces).
+        // tick's move clipped at the capsule's contacts (the r-skin radial retraction — see
+        // capsule_tri_clip), the decoded push tail dead. Replaces the push displacement; the
+        // pick_ref feed below takes the clip's retraction (the [L] accumulator match).
         if walk_clip() {
             let move_v = [self.pos[0] - pre_move_pos[0], self.pos[1] - pre_move_pos[1], self.pos[2] - pre_move_pos[2]];
             let (cp, cw) = world.capsule_clip_scoped(self.cel, a, b, RADIUS, swimming, move_v);
@@ -1869,9 +1874,14 @@ self.local = [vs / k, vf / k];
         // The DeltaP add-back [M Collide_Intersect 0x1ebaa8:353-373]: every applied push
         // accumulates into HITTEST+0x50 (+0x10 feeds the handler's obj+0x30 add at
         // 0x1949a8:136-140 — the port's `pos += push` — and +0x50 feeds the pick bit's dot2).
-        // Under NF_WALK_CLIP the accumulator never sees the clip (the game's +0x50 only ever
-        // receives DeltaP, and the dead tail produces none) — pick_ref stays frozen.
-        if !walk_clip() { for k in 0..3 { self.pick_ref[k] += push[k]; } }
+        // Under the walk clip the applied displacement is the CLIP's retraction (the tick's move
+        // clipped at the contact — capsule_clip_scoped's correction), so the accumulator feeds
+        // from that same correction: the [L 2026-10-26 fresh boot] west-hall wall press reads
+        // +0.1/contact-tick into HITTEST+0x50 (0.27723 -> 3.27709 over 30 contact ticks, y/z
+        // unchanged) — exactly the per-tick clipped-into-the-wall move the clip model retracts —
+        // and the accumulator holds EXACTLY constant on the push-free hall walk (frames 20-60+),
+        // where the clip applies nothing. the_pick_ref_accumulator_tracks_the_game_ref pins both.
+        for k in 0..3 { self.pick_ref[k] += push[k]; }
         // The actor-actor capsule push [M Collide_Jointy 0x1ec180:229-281 — the player's kind-0x800
         // query resolving against a live bot's own kind-0x800 capsule hittest]: the closest points
         // between the two spines by two rounds of alternating projection (:234-239), the overlap

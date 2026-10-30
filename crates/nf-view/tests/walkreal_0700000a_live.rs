@@ -503,7 +503,13 @@ fn walk_office_floor_qworm_keyboard_hatch() {
         ([-19.5, 1.3, -1.5], "ring: down 2"),
         ([-21.5, 1.3, -1.5], "ring: the west corridor jink 3"),
         ([-21.5, 1.3, -6.5], "ring: down the south-west offices"),
-        ([-18.5, 1.3, -6.5], "ring: jink 4"),
+        // The clip walk's jink 4 (the walk-model flip's route note): the leg east passes the
+        // door @(−20.7, 1.1, −5.4)'s open leaf — master's push leaked through the thin-leaf
+        // poke (the alternating side flips), the clip holds the spine at the leaf's skin [L the
+        // west-hall press rest] and the dead-on press has no tangential escape (the wedged
+        // 6000-tick cap). The route bends a half-step south of the leaf's swing before the
+        // eastward run — the helper route is a port-choice stand-in, not a game pin.
+        ([-18.5, 1.3, -7.3], "ring: jink 4 (south of the door leaf)"),
         ([-18.5, 1.3, -9.5], "ring: down 3"),
         ([-17.5, 1.3, -9.5], "ring: jink 5"),
         ([-17.5, 1.3, -13.5], "ring: the south-west corner approach"),

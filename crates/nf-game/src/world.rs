@@ -623,17 +623,36 @@ fn capsule_tri_clip(t: &[V3; 3], mat: u8, a: &mut V3, b: &mut V3, r: f32, grow: 
     // The contact signals (capsule_tri_contact's rules — see the walkable/pick docs there).
     if n[1] > 0.7 && q[1] < b[1] { *walkable = true; }
     if n[1] > 0.7 { *pick = true; }
-    // THE CLIP: a face-interior contact whose face the move pushes INTO retracts the tick's move
-    // to the face plane. d(t) = d0 + t·dot(n, move_v) from the closest spine point p; the move
-    // fraction kept is t* = −d0/dot(n, move_v) ∈ [0, 1). Each clip applies before the next
-    // triangle (the game's shifted-segment per-triangle flow [M 0x109da0's A/B += push]).
+    // THE CLIP: the tick's move clipped at the CONTACT (the r-skin) — the move's approach along
+    // the contact radial v̂ = (p − q)/dist is retracted so the post-clip distance to the contact
+    // is r; the tangential component carries untouched (the corner slide). Each clip applies
+    // before the next triangle (the game's shifted-segment per-triangle flow [M 0x109da0's
+    // A/B += push]).
+    //
+    // Evidence for the r-skin (NOT the face plane): the [L 2026-10-26 fresh boot] west-hall wall
+    // press rests the game's spine at face+0.45/+0.55 — the pre/post-clip phases of exactly this
+    // retraction (the tick's 0.1 step presses dist to r − 0.1, the clip restores r) — and
+    // HITTEST+0x50 grows +0.1 per contact tick (the clipped step; the add-back [M Collide_Intersect
+    // 0x1ebaa8:353-373] feeds the accumulator from the applied displacement), constant on the
+    // push-free walk. The earlier face-plane variant retracts only actual plane crossings, and the
+    // press never crosses the plane within r — measured this session it walked straight through
+    // the west end wall (x −48). [S] as code: the game's clip writer is unpinned (the decoded
+    // tail's ref = the lifetime accumulator is dead on walked lines [L ee_snapshot ≈15 m drift]);
+    // this models the measured responses. The head-on cull and the walkable/pick signals above
+    // keep the RAW face normal ([M 0x109da0:321-322's n·d̂ pairing; the up-facing dot1 gate]).
     if on_edge { return false; }
-    let md = dot(n, move_v);
-    if md > -1e-9 { return false; } // the move does not push into the face
-    let d0 = dot(n, sub(p, t[0]));
-    let s = (-d0 / md).clamp(0.0, 1.0);
-    if s >= 1.0 { return false; }
-    let dl = [move_v[0] * (s - 1.0), move_v[1] * (s - 1.0), move_v[2] * (s - 1.0)];
+    let md_raw = dot(n, move_v);
+    let vhat = if dist > 1e-6 {
+        [v[0] / dist, v[1] / dist, v[2] / dist]
+    } else {
+        // Degenerate (the spine ON the contact): fall back to the face normal oriented against
+        // the move, the same two-sided orientation the radial path needs nowhere else.
+        if md_raw > 0.0 { [-n[0], -n[1], -n[2]] } else if md_raw < 0.0 { n } else { return false }
+    };
+    let mrad = dot(move_v, vhat);
+    if mrad >= -1e-9 { return false; } // the move does not approach the contact — tangential carries
+    let mag = r - dist; // ≥ 0 here: retract the approach to the skin
+    let dl = [vhat[0] * mag, vhat[1] * mag, vhat[2] * mag];
     for k in 0..3 { a[k] += dl[k]; b[k] += dl[k]; }
     true
 }
