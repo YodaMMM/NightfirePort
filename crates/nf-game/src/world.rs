@@ -106,13 +106,11 @@ static WALK_KILL: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
 /// REVERTED to the settle-3 merged shape (the 20 non-01 levels' green state); the tail operand
 /// decode [M 0x10a53c-0x10a61c] and the feet-band port stay open work — see
 /// docs/reports/level-0a-band-settle-6-c.md.
-/// HELD BACK (env-gated, default off): the Dist2Tri flags-99 behind-plane skip on the FIRST
-/// query [M 0x109770 + 0x10a33c `beq v1,99`]. It is [M]-faithful, but its landing wedges the
-/// 01 escort walk: after guard 6 dried the gun, every nav leg out of (5.48, 6.67, 11.60) gave
-/// up at the 3000-tick cap with segment_to_target=Some on all targets (the resupply pocket —
-/// the push shape that used to carry Bond out of it is a behind-plane face the game skips).
-/// Set NF_CAPS_D2 to measure it; the next round re-derives the 01 harness pins against it.
-static CAPS_D2: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
+/// (capsule-cull-and-los-masks-16): the Dist2Tri flags-99 behind-plane skip on the FIRST
+/// query [M 0x109770 + 0x10a33c `beq v1,99`] is LANDED unconditionally — with the faithful
+/// raw-denom cull the walk-leg head-on cull is inert, so this rule is the game's only
+/// per-face skip on a walk leg. (The -6-c note — its landing wedged the 01 escort walk's
+/// resupply pocket — was measured UNDER the normalized cull; re-measured this window.)
 
 #[derive(Default)]
 struct Geo {
@@ -395,53 +393,36 @@ fn capsule_tri_contact(t: &[V3; 3], mat: u8, a: &mut V3, b: &mut V3, r: f32, gro
     if nl < 1e-12 { return false; }
     let n = [n[0] / nl, n[1] / nl, n[2] / nl];
     // The game's head-on cull [M Intersect_CylGeom 0x109da0:302-322, inside the |n·d| > 0.0002
-    // branch]: the 0.999 compare is unit-scale, and the spine is NORMALIZED before the triangle
-    // loop [M the Vec_Normalise 0x1e3000 call at 0x109f74, immediately before the per-box walk;
-    // on the raw walk spine |d| = 0.7597 [L ee_start_05 BL 0x16cf0f0: HITTEST+0x30 − +0x20 =
-    // −0.7597198] a raw-dot 0.999 threshold is unreachable — and the raw reading is refuted on
-    // the real path: with it the walk cannot descend the 07000001 stairwell (exit_aim_01_live:
-    // Bond floats at the stairwell head, the step behind/above pushing him down, grounded=false
-    // oscillation — the game obviously walks stairs). Direction: the normalized vector points
-    // DOWN (B − A; the UP normalisation feeds the walkable/pick gate at :473, and an UP cull dot
-    // would cull the floor underfoot), f is the plane-crossing fraction along the raw B − A from
-    // A = param_1[2] (clamped :310-320; scale-invariant), and the face is skipped when
-    // (n·d̂ > 0.999 ∧ f > 0.5) ∨ (n·d̂ < −0.999 ∧ f < 0.5) (:321-322). The port's `a`/`b` ARE the
-    // game's A/B in that order: walk A = HITTEST+0x20 = BLData+0x760 = pos + up·0.275 (the TOP),
-    // B = HITTEST+0x30 = BLData+0x770 = pos + up·(0.55 − cc) [M Player_Collision 0x194df0 disasm
+    // branch; see the faithful rule below]. The port's `a`/`b` ARE the game's A/B in that
+    // order: walk A = HITTEST+0x20 = BLData+0x760 = pos + up·0.275 (the TOP), B = HITTEST+0x30
+    // = BLData+0x770 = pos + up·(0.55 − cc) [M Player_Collision 0x194df0 disasm
     // 0x195444/0x195464], climb A = pos+up·0.55, B = pos+up·(0.275−cc) [M 0x194df0 case 0/6,
-    // |d| = 1.3097183] — f means the game's fraction from the top end. The cull therefore lives
-    // for faces within ~2.6° of horizontal (|n·ŷ| > 0.999): a step behind/above (f = 0 < 0.5) is
-    // skipped — stairs descend; a floor crossed in the spine's TOP half (f < 0.5) is jumped
-    // through from below; the same face crossed in the BOTTOM half (f > 0.5) is solid. Faces the
-    // old |n·y| > 0.7 + top-end-side rule culled in the 0.70-0.763 band (≈45-77° slopes above the
-    // capsule) are TESTED here, exactly as the game tests them.
+    // |d| = 1.3097183] — f means the game's fraction from the top end along the raw B − A.
+    // Faces the old |n·y| > 0.7 + top-end-side rule culled in the 0.70-0.763 band (≈45-77°
+    // slopes above the capsule) are TESTED here, exactly as the game tests them.
     let ab = sub(*b, *a);
     let denom = dot(n, ab);
     let mut f = 0.0f32;
     if denom.abs() > 0.0002 {
         f = (-(dot(n, sub(*a, t[0]))) / denom).clamp(0.0, 1.0);
-        let ab_len = dot(ab, ab).sqrt();
-        if ab_len > 1e-6 {
-            let nd = denom / ab_len;
-            // The game's cull dot is against the normalized spine A − B: the disasm loads
-            // +0x20 (A) into vf1 and +0x30 (B) into vf2 and runs VSUB vf1 = vf1 − vf2 before
-            // Vec_Normalise 0x1e3000 [M disasm 0x109f60/0x109f68/0x109f70/0x109f74], so nd
-            // here is negated vs the earlier B − A dot — the decompile's own skip conditions
-            // (:321-322) are applied to the A − B dot. (The old B − A reading inverted the
-            // f-halves and was the bisected mover of the walkreal_07000002/07000003 reds
-            // [L this window's NF_NO_CULL/NF_CULL_UP runs].)
-            // The -15 measurements make this contact copy the OPEN divergence: with it ON
-            // (UP, the f = clamp(frac, 0, 1) clamp matching the disasm's constant f20 = 1.0 /
-            // f23 = 0.0 pair at 0x10a028/0x10a01c — never updated within the query [M disasm
-            // grep]) walkreal_01/02 are green but 03/08 stay red; with it OFF 03/08 go green
-            // but walkreal_01's stairwell class breaks 2/3 [L this window's runs]. NF_NO_CULL
-            // stays as the live bisect tool; the structural question (the game's ONE cylinder
-            // query vs the port's push/clip split — which arm the game's cull really serves)
-            // is the report's next-window item.
-            let no_cull = std::env::var("NF_NO_CULL").is_ok();
-            let nd_up = if std::env::var("NF_CULL_UP").is_ok() { -nd } else { nd };
-            if !no_cull && ((nd_up > 0.999 && f > 0.5) || (nd_up < -0.999 && f < 0.5)) { return false; }
-        }
+        // The game's head-on cull, faithful [M Intersect_CylGeom 0x109da0 — decompile :291-322
+        // + disasm 0x10a1f0/0x10a278-0x10a2e8]: the cull's compared value is f2 = [sp+128]
+        // loaded at 0x10a1f0 — the SAME register the f-clamp divides by (div.s f0,f0,f2 at
+        // 0x10a22c/0x10a244/0x10a260) — i.e. the RAW denom = dot(plane_n, B−A), NOT normalized
+        // and NOT negated; the skip is (denom > 0.999 ∧ f > 0.5) ∨ (denom < −0.999 ∧ f < 0.5),
+        // branching to the tri-loop tail 0x10a7b8. The normalized spine (the Vec_Normalise
+        // 0x1e3000 call at 0x109f74 of A−B into sp+48) is NOT the cull's input: it feeds the
+        // 0.7 walkable-face gate [M decompile :473, the sVar1==0 block]. Consequence
+        // [M |denom| ≤ |B−A| for unit plane normals]: on the walk spine (|B−A| = 0.7597
+        // [L ee_start_05 BL 0x16cf0f0]) the cull is INERT for every face; on the climb spine
+        // (|B−A| = 1.3097 [M Player_Collision 0x194df0 case 0/6]) it fires for faces within
+        // ~2.6° of spine-parallel. The -13/-15 reading (the normalized A−B dot) inverted this:
+        // it culled walk-leg floors — the bisected mover of the walkreal_07000002/07000003 reds
+        // [L the -15 matrix; this window's merged-tree baseline: 02 RED, 03 RED 3/1 at DOWN].
+        // (NF_CULL_UP / NF_NO_CULL removed — the faithful rule replaces the bisect switches;
+        // the -15 matrix's contradictory rows were this split: 03/08's OFF-greens are the
+        // game's own inert-walk-cull behaviour, 02's UP-green the normalized artifact.)
+        if (denom > 0.999 && f > 0.5) || (denom < -0.999 && f < 0.5) { return false; }
     }
     let mut p = if denom.abs() > 0.0002 {
         [a[0] + ab[0] * f, a[1] + ab[1] * f, a[2] + ab[2] * f]
@@ -449,13 +430,18 @@ fn capsule_tri_contact(t: &[V3; 3], mat: u8, a: &mut V3, b: &mut V3, r: f32, gro
         let c = [0, 1, 2].map(|k| (t[0][k] + t[1][k] + t[2][k]) / 3.0);
         closest_on_segment(*a, *b, c)
     };
-    // Delta 2 — HELD BACK, env-gated (see the CAPS_D2 doc above): Dist2Tri's flags-99 arm on
-    // the first query [M 0x109770 — the signed plane distance `dot(p, plane) + w < 0` returns
-    // flags 99 with the out-pointer NEVER written; the caller skips it outright at 0x10a33c
-    // `beq v1,v0(99)` → 0x10a508]: the query strictly behind the face plane never pushes.
-    if *CAPS_D2.get_or_init(|| std::env::var("NF_CAPS_D2").is_ok()) && dot(sub(p, t[0]), n) < 0.0 {
-        return false;
-    }
+    // Delta 2 — the Dist2Tri flags-99 arm on the first query [M 0x109770 — the signed plane
+    // distance `dot(p, plane) + w < 0` returns flags 99 with the out-pointer NEVER written;
+    // the caller skips it outright at 0x10a33c `beq v1,v0(99)` → 0x10a508; the decompile's
+    // line-419 gate `0.0 <= fVar30 && flags != 99` excludes it from the push AND the best-hit]:
+    // the query strictly behind the face plane never pushes. LANDED NOW (was env-gated
+    // NF_CAPS_D2): with the faithful raw-denom cull the walk-leg cull is inert [M the
+    // disasm pin in the head-on cull above], so the game's only per-face skip on a walk leg
+    // IS this rule — the step behind/above (the crossing clamped to f=0, p = A below the
+    // step top → flags 99) is skipped here, which is what the old normalized cull was
+    // accidentally emulating for the stairwell. (The -6-c wedge note — the 01 escort
+    // resupply pocket — was measured UNDER the normalized cull; the interaction differs
+    // with the faithful rule.)
     let (q, on_edge) = closest_on_triangle(p, t);
     // level-0a-band-settle-6-c: the settle-6-b Delta 3 (the on-edge second query, the tail's
     // Q = Q2 [M 0x10a344-0x10a4fc] with the caller's flags-99 gate on the re-run
