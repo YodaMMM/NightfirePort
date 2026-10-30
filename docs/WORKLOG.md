@@ -445,3 +445,12 @@ walkreal_07000008_live's new red captured (laser-wire cut at :204, ch 137 never 
 second shot-path red on the fixed cull). Chunked suite partial: 139/935, 465 passed / 5 failed
 / 38 ignored, state /home/z/suite_c14_state.json (resume with the chunk runner; CARGO_TARGET_DIR
 must point at the repo target/). Full report: docs/reports/capsule-cull-and-los-masks-14.md.
+
+### capsule-cull-and-los-masks-15 (start, 11:24 UTC, 2026-10-30)
+
+Branch s/capsule-cull-and-los-masks-15 = origin/s/capsule-cull-and-los-masks-14 + merge
+origin/master (64abcb78), clean. Task: root-cause the SECOND cull divergence (the -14 bisect:
+NF_NO_CULL=1 greens the 07000003 captor-kill red 147.7 s, NF_NO_MASKS=1 does not, 91.8 s) [M
+Intersect_CylGeom 0x109da0, Collide_Intersect 0x1ebaa8]; bisect walkreal_07000008's fusebox red
+the same way; capture + fix mp_perf_16_live and npc_doors_live; REMOVE the gates; land with
+every touched binary green + walkreal 02/03/08/14 green; quote the totals.
