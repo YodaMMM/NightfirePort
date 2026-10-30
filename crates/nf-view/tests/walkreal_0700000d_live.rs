@@ -152,11 +152,19 @@ fn walk_arrival_to_the_c5_door() {
     eprintln!("[0d] the crane chain walked: the drop, the ground, the ladder, the wire, the deck, the E, the swing — at {:?}",
         bond_pos(&w));
 
-    // BLOCKER (pinned, documented): the remainder of the crossing — the jib walk out of the
-    // deck's rim (the ray-down shows a surface gap at r≈5 along the jib line [probe16]), the
-    // tip→dock delivery (the swing's tip passes over the dock's north edge at mid-rotation
-    // [D keys; probe16's map]), the dock E #460, the shipping-beam boarding and the west ride —
-    // is the next window's work. The documented stand-in now covers only that remainder.
+    // BLOCKER (pinned, documented, probes 16-19): the remainder of the crossing — the jib walk
+    // out of the deck's rim (the rim gap r≈4-6.5 along the jib line [probe16]; the walk-off
+    // reaches r 7.4 mid-fall but misses the walkway strip's edge by ~0.13 m [probe17]), the
+    // tip→dock delivery, the dock E #460, the shipping-beam boarding and the west ride — is the
+    // next window's work. The documented stand-in now covers only that remainder. The probes'
+    // findings (crane17/18/19, committed): the swing is the cut-scene's beat — the walkway's
+    // 12.13 collision is a STATIC map object at the jib's rest spot (probe19's end-pose rays:
+    // nothing at r 6.5-8 after the swing, while the deck's collision does rotate [probe18]); the
+    // deck's swing carries the rider [probe17's hold prints]; and the game's jump is VERTICAL-ONLY
+    // — `Player_HandleJump` 0x1916b0 zeroes the velocity (Vec_Zero) then adds a fixed
+    // WldGravity-derived impulse (the caller 0x192310:69 passes WldGravity @0x2d8890 [D ELF
+    // symtab]), so the port's `vel = [0, −GRAVITY·0.4, 0]` is faithful and the rim gap needs the
+    // walk-off, not a jump.
     {
         let sim = w.scene.sim.as_mut().unwrap();
         sim.bond.pos = [140.0, 5.5, -276.0];
