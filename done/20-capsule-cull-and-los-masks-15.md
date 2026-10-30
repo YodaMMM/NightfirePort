@@ -24,3 +24,8 @@ claimed-by: sandbox1 at 2026-10-30T11:18Z
 ---
 ## Report (done, 2026-10-30T12:25Z)
 
+
+---
+## Report from the worker (done, 2026-10-30T12:25Z)
+
+Closed by the driver: the report is on `s/capsule-cull-and-los-masks-15` (docs/reports/capsule-cull-and-los-masks-15.md); the worker didn't run finish.sh.
