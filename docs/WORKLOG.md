@@ -50,3 +50,26 @@ Task: continue the move-clip flip — fix the qworm ring alarm leg under NF_WALK
 with cites), then flip the default (walk_clip() -> true, remove NF_WALK_CLIP and the dead push-walk
 branch), run every walkreal_* binary plus nf-game's collision/player tests, quote totals, list walks
 whose route changed.
+
+Outcome 13:45 UTC: the flip LANDED and the qworm ring reconciled. The trace (NF_ALARM_TRACE) read
+the ring's end-to-end story: the east-side civilian spawner draws g3 (spot (9.8, 1.00, 21.3),
+patrol to (9.9, 9.4)) under the clip walk where master's timing draws g19 (spot (15.3, 5.1)) —
+the shared RNG's state at the draw differs because the walked lines differ (the install taps'
+spread draws, the spawner's per-tick abort draws [M spawners.rs:194]) — both legitimate; g3's
+spot+patrol sit inside the ring's east L, his unalerted sight (rng 12, half-fov π/2 [L roster])
+catches Bond at t14589 d 6.9, the challenge's combat sight (rng 17, fov 0 all-around [M
+FirstSightState]) never loses him in the open corridor, and the chain completes: 0x8a press at
+t15149, the fail at t15429 (280 ticks [L]). He is PROTECTED (props 0x53/0x54 [L roster]; a
+team-3 protected kill is fail reason 3 → ch 0x60 [M ally.rs]) — unkillable, so the player's
+answer at the hatch mouth is to LEAVE: the final watch_and_clear removed, the E races the press,
+the first level_exit write wins and the fail write is is_none-gated [M drone.rs:15145] —
+measured: the walk ends t15179 with ch 0x63 FALSE, ~230 ticks of margin [L]. The flip: walk_clip()
+and NF_WALK_CLIP removed, capsule_clip_scoped/capsule_clip unconditional, the dead push-walk
+branches deleted (capsule_push* stays for the ladder climb [M player.rs:1022] and the swim/NPC
+semantics). The first flip draft hoisted move_v to the tick top — (0,0,0) there, the clip never
+fired, the 0a battery went 4/3/2 (the install walks died at the ch-0x48 assert) — fixed the same
+hour: capture pre_move_pos at the tick top, compute move_v at the COLLISION BLOCK (after the
+walk add + the gravity integration). walkreal_0700000a_live on the flipped default: 7 passed /
+0 failed / 2 ignored = master's old default total; the qworm walk 15179 ticks vs the push walk's
+15258 [L]. Full walkreal battery + collision/player tests via the fast suite runner on the final
+tree — totals in the report.
