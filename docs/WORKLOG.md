@@ -42,3 +42,26 @@ stands on at y 50.04 at (21.8, -68.1) [D the collision], fix the test's spot or 
 port with evidence, then continue the remaining legs from the -3 report (the east
 stairs, door #112's E -> 07000006). Every test in walkreal_07000005_live green; run
 the touched binaries, quote totals.
+
+### level-05-every-objective-4 (done, 04:45 UTC, 2026-10-30)
+
+The -3 door test's two failures were both TEST bugs, fixed with evidence; the file is 10/10
+green. (1) The terrace placement asserted the capsule CENTRE against the floor band: the
+disc floor at (21.805, −68.098) is 49.001 [D probe_terrace05], the game parks the centre
+1.086 over the floor [L ee_start_05 boot 24.9633 / floor 23.877; player.rs "standing live
+1.086"], the port's rest is floor + cc = 50.035 [M 0x194df0 capsule arms] — the -3 draft
+also buried the capsule 0.83 into the floor (the push = the west drift to 21.805). Placed at
+the rest height, asserted the feet-band window. (2) The door #112 wp (35.4) stopped Bond at
+x 34.88 — the use sphere (r 1.0 at head + look [M 0x1a5170:100-108]) reached 36.88, 0.24
+short of the 0xE8's glist face (37.12). The arch wp (37.0, 50.1, −68.4) fires: E → fallback
+ch 0x1E [M Trigger_Create 0x1b1720 p3→+0x2a; Trigger_Activate 0x1b2318:91-107] → exit
+07000006. walkreal_07000005_live: 10 passed; 0 failed (99.31 s, slim ISO).
+
+The ch 0x42 window decoded deeper: SP #284 (kind 0xD9, 0x06000952) runs the 100-frame camera
+NIS — ev4 disables at its frame 8757, ev0xD sets script ch 0x62=1 at clock 93, the script
+reaches done — and NO event 6 exists in 06000952/06000046/06000047, no placement consumes
+ch 0x62, and the game's own SP_Update case 2 (0x1dbda8:143-154) ends a stay=0 player in
+state 3 with no Script_Free: the hand-back mechanism is a live check (report §Live checks).
+The east-stairs legs stay green-parked at the window. Suite (fast runner) still running at
+wrap-up: only the slim-ISO artifacts failed (3 disc_golden + identity_disc's full-disc
+sector assert). Report: docs/reports/level-05-every-objective-4.md.
