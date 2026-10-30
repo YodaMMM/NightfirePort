@@ -236,12 +236,34 @@ fn shooting_a_destroyable_kills_it_and_spawns_the_blast() {
     w.scene.sim.as_mut().unwrap().bond.pos = [target.1[0] - 3.0, target.1[1], target.1[2]];
     w.scene.sim.as_mut().unwrap().bond.vel = [0.0; 3];
     w.wait(10);
-    aim_and_fire_until(&mut w, target.1, 2, 600, |s| {
-        s.drones.props.destroy.iter().find(|d| d.placement == target.0).map(|d| d.dead).unwrap_or(true)
-    });
+    // The P2K is semi-automatic: ONE shot per trigger PULL, the pull re-arms on the press edge
+    // only [M Player_WeaponFiring 0x1a5460's press-edge law — gun.rs's `one_shot_per_press_at_
+    // most_every_interval` pin; fix_06_fire_live]. A held trigger is one pull — the drive TAPS
+    // the trigger (fire 1 tick in 8, the record's refire interval) while the aim converges, the
+    // way the player works the trigger. #211's pool is 0 [D param 3 absent → health 0; M
+    // 0x12c318:36], so the first contact smashes it [M Destroy_CollisionHandler 0x12bd48:44-48].
+    let mut dead = false;
+    for t in 0..600u32 {
+        if w.scene.sim.as_ref().unwrap().drones.props.destroy.iter()
+            .find(|d| d.placement == target.0).map(|d| d.dead).unwrap_or(true) { dead = true; break; }
+        let sim = w.scene.sim.as_ref().unwrap();
+        let head = sim.bond.head();
+        let to = [target.1[0] - head[0], target.1[1] - head[1], target.1[2] - head[2]];
+        let l = (to[0] * to[0] + to[1] * to[1] + to[2] * to[2]).sqrt().max(1e-4);
+        let desired_yaw = to[0].atan2(to[2]);
+        let desired_pitch = (to[1] / l).asin() / std::f32::consts::FRAC_PI_2;
+        let input = Input {
+            turn: walker::wrap_pi(desired_yaw - sim.bond.yaw).clamp(-0.08, 0.08),
+            look: (desired_pitch - sim.bond.pitch).clamp(-0.05, 0.05),
+            ..Default::default()
+        };
+        // The tap: fire on ONE tick in 8 (the press edge + the record's refire interval), the
+        // trigger up between taps — a second tick of fire would still be the same pull.
+        if t % 8 == 0 { w.tick_fire(input); } else { w.tick(input, false); }
+    }
     let sim = w.scene.sim.as_ref().unwrap();
     let d = sim.drones.props.destroy.iter().find(|d| d.placement == target.0).expect("the destroyable");
-    assert!(d.dead, "the gunfire killed the destroyable [M Destroy_Update 0x12c4f8's pool arm; D health {}]", target.2);
+    assert!(d.dead || dead, "the gunfire killed the destroyable [M Destroy_Update 0x12c4f8's pool arm; D health {}]", target.2);
 }
 
 // ── LoadPointScript (0xeb) + the boarding mux ───────────────────────────────────────────────
@@ -310,14 +332,17 @@ fn touchonce_plates_fire_on_the_walk_in() {
 
     // The walkway ambush plate #80 (out 43) at (145.79, 45.98, −105.31) [D] — the stand-in
     // transit reaches the walkway (the station descent is walkreal's pinned route), the walk-in
-    // is real. The start sits OUTSIDE the plate's own AABB (read live) so the sister is honest.
+    // is real. The start is the free-door #123 spot the door test stands on [D #123 (145.02,
+    // 45.00, −108.61)], 1.2 m SOUTH of the plate's own south face (live lo.z −106.41) so the
+    // sister is honest — the plate's north side is NOT deck (a stand-in there dropped Bond off
+    // the walkway to the lower level and the nav walked him away from the plate).
     let t80 = w.scene.sim.as_ref().unwrap().drones.triggers.iter()
         .find(|t| t.out == 43).map(|t| (t.centre(), t.lo, t.hi)).expect("the walkway plate #80 [D]");
-    w.scene.sim.as_mut().unwrap().bond.pos = [t80.0[0] - 1.0, t80.0[1] + 0.5, t80.2[2] + 2.5];
+    w.scene.sim.as_mut().unwrap().bond.pos = [145.0, 45.3, -107.6];
     w.scene.sim.as_mut().unwrap().bond.vel = [0.0; 3];
     w.wait(10);
     assert!(!w.scene.sim.as_ref().unwrap().drones.channels.on(43), "sister: ch 43 off before the walkway plate");
-    w.walk_nav_to(t80.0, "into the walkway ambush plate", 1.2);
+    w.walk_to(Wp::new(t80.0[0], t80.0[1] - 0.6, t80.0[2]).r(0.6), "into the walkway ambush plate");
     assert!(w.scene.sim.as_ref().unwrap().drones.channels.on(43),
         "the walkway plate fired ch 43 on the walk-in [D #80; M Trigger_Hit 0x1b1fc8]");
 }
@@ -370,31 +395,52 @@ fn spawner_wave_releases_on_its_start_channel() {
 // ── sound trigger (0xf9) fed by the music plates + the mux ──────────────────────────────────
 
 /// The west-walkway music plates (TouchOnces out 90/91/92 [D]) mux into the map-sound trigger
-/// #106: mux #102 (out 0x68 = 90|91|92 [D]) and the sound trigger's ON gate is 0x68, id 0x14D
-/// [D #106; M SoundTrigger_Update 0x1b2790]. Sisters: ch 90 and the voice are quiet before.
+/// #106: mux #102 is the 0xEC AND-mux (out 0x68 = 90 AND 91 AND 92 [D params 0x68/0x5a/0x5b/0x5c;
+/// M 0x1b2c68:15 type 3]) and the sound trigger's ON gate is 0x68, id 0x14D
+/// [D #106; M SoundTrigger_Update 0x1b2790]. Sisters: the channels and the voice are quiet before.
 #[test]
 fn music_plates_mux_into_the_map_sound() {
     let mut w = load();
     // The west walkway deck near plate #100 (130.78, 48.89, −101.22) [D]: the stand-in transit
     // reaches the deck (the walkway is walkreal's pinned route family), the walk-in is real.
     // The start sits OUTSIDE the plate's own AABB (read live) so the sister is honest.
+    // Mux #102 is a 0xEC placement → `Trigger_MultiplexIn` 0x1b2c68 writes TYPE 3 = the AND
+    // fold [M 0x1b2c68:15 `*(iVar4 + 0x2c) = 3`; Trigger_Update 0x1b1a78 case 3 accumulator
+    // starts 1 and every listed input must be on] — out 0x68 needs ALL THREE plates 90 AND 91
+    // AND 92 [D #102 params 0x68, 0x5a, 0x5b, 0x5c], so the walk covers the deck's three music
+    // plates in order. (The census's "90|91|92" notation named the input list, not an OR — the
+    // 0xEF OR wrapper 0x1b2d38 writes type 0xc, and no 0xEF sits on 08.)
     let t100 = w.scene.sim.as_ref().unwrap().drones.triggers.iter()
         .find(|t| t.out == 90).map(|t| (t.centre(), t.lo, t.hi)).expect("the music plate #100 [D]");
     w.scene.sim.as_mut().unwrap().bond.pos = [t100.0[0] + 0.5, t100.0[1] + 0.8, t100.1[2] - 2.5];
     w.scene.sim.as_mut().unwrap().bond.vel = [0.0; 3];
     w.wait(10);
     assert!(!w.scene.sim.as_ref().unwrap().drones.channels.on(90), "sister: ch 90 off before the plate");
+    assert!(!w.scene.sim.as_ref().unwrap().drones.channels.on(0x68),
+        "sister: the AND fold 0x68 off before any plate [D #102 = 90 AND 91 AND 92]");
     assert!(!w.scene.sim.as_ref().unwrap().drones.sound_triggers.playing(0x14d),
         "sister: the map sound is quiet before the plate [D #106 id 0x14D]");
     w.walk_nav_to(t100.0, "into the music plate #100", 1.2);
     assert!(w.scene.sim.as_ref().unwrap().drones.channels.on(90),
         "the music plate fired ch 90 [D #100; M Trigger_Hit 0x1b1fc8]");
+    // Plate #99 (out 91) at (124.98, 47.59, −101.07) [D] — 5.7 m west along the same deck.
+    let t99 = w.scene.sim.as_ref().unwrap().drones.triggers.iter()
+        .find(|t| t.out == 91).map(|t| (t.centre(), t.lo, t.hi)).expect("the music plate #99 [D]");
+    w.walk_nav_to(t99.0, "into the music plate #99", 1.2);
+    assert!(w.scene.sim.as_ref().unwrap().drones.channels.on(91),
+        "the music plate fired ch 91 [D #99; M Trigger_Hit 0x1b1fc8]");
+    // Plate #101 (out 92) at (117.81, 46.10, −101.02) [D] — 7.2 m further west.
+    let t101 = w.scene.sim.as_ref().unwrap().drones.triggers.iter()
+        .find(|t| t.out == 92).map(|t| (t.centre(), t.lo, t.hi)).expect("the music plate #101 [D]");
+    w.walk_nav_to(t101.0, "into the music plate #101", 1.2);
+    assert!(w.scene.sim.as_ref().unwrap().drones.channels.on(92),
+        "the music plate fired ch 92 [D #101; M Trigger_Hit 0x1b1fc8]");
     let mut muxed = false;
     for _ in 0..120 {
         if w.scene.sim.as_ref().unwrap().drones.channels.on(0x68) { muxed = true; break; }
         w.scene.sim.as_mut().unwrap().step_bond(Input::default(), false, false, false);
     }
-    assert!(muxed, "mux #102 folded the plate channels into ch 0x68 [D #102; M 0x1b2c68]");
+    assert!(muxed, "mux #102 AND-folded the three plate channels into ch 0x68 [D #102 0xec; M 0x1b2c68:15 type 3]");
     // The trigger holds a voice while the sound runs (the test-facing read, SFXIsSFXPlaying's
     // view [M sound.rs playing()]).
     assert!(w.scene.sim.as_ref().unwrap().drones.sound_triggers.playing(0x14d),
@@ -555,7 +601,11 @@ fn pickups_take_on_the_walk_over() {
     w.scene.sim.as_mut().unwrap().bond.pos = [nine.1[0], nine.2 + 1.03, nine.1[2] - 1.6];
     w.scene.sim.as_mut().unwrap().bond.vel = [0.0; 3];
     w.wait(10);
-    w.walk_to(Wp::new(nine.1[0], nine.2 + 0.6, nine.1[2]).r(1.0), "onto the 9mm ammo");
+    // r(0.2): Bond's standing height keeps him ~1.0 above the pickup's centre plane (the disc
+    // spot y 45.90 vs the floor 45.90 [D #292; the floor read live]) — the take radius is
+    // bounds.radius + 1.1 [M 0x18e148:203-214], so the walk must stop within ~0.45 in xz for
+    // the 3D distance to clear it (the r(1.0) stop left the take 0.3 out of reach).
+    w.walk_to(Wp::new(nine.1[0], nine.2 + 0.6, nine.1[2]).r(0.2), "onto the 9mm ammo");
     w.wait(20);
     assert!(gone_at(&w, nine.0), "the 9mm is consumed on the walk-over [M 0x18e650]");
 
@@ -571,7 +621,8 @@ fn pickups_take_on_the_walk_over() {
         wm.scene.sim.as_mut().unwrap().bond.pos = [bonus[0], floor + 1.03, bonus[2] - 1.6];
         wm.scene.sim.as_mut().unwrap().bond.vel = [0.0; 3];
         wm.wait(10);
-        wm.walk_to(Wp::new(bonus[0], floor + 0.6, bonus[2]).r(1.0), "onto the Pickup 007");
+        // r(0.2): the same standing-height law as the 9mm walk above.
+        wm.walk_to(Wp::new(bonus[0], floor + 0.6, bonus[2]).r(0.2), "onto the Pickup 007");
         wm.wait(20);
         assert!(wm.scene.sim.as_ref().unwrap().drones.pickups.iter()
             .filter(|p| p.kind == nf_game::pickup::kind::BOND_BONUS)
