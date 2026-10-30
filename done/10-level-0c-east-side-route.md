@@ -20,3 +20,8 @@ say so in the report. Never weaken a decompile-backed test to make code pass.
 
 ---
 claimed-by: sandbox3 at 2026-10-30T17:13Z
+
+---
+## Report (done, 2026-10-30T17:54Z)
+
+Closed by the driver: the report is on `s/level-0c-east-side-route` (docs/reports/level-0c-east-side-route.md); the worker didn't run finish.sh.
