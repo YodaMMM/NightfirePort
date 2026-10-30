@@ -720,12 +720,22 @@ fn walk_the_whole_mission_from_the_start_to_the_0d_handoff() {
     // [D band2 probe's tri dump]); x 56.1..66.3 at band height is VOID — the 6.17 pit (x 55..63.5),
     // the 7.19 shelf (x 60..64 at z −209.0 only), then a floor-less chasm x 64..66.5 down past
     // y 2 [D eastclimb probe's 0.5 map], to the resumed band 10.34 at x 67.5+ (obj_turb3_walkway04
-    // [D]). The 10.85/10.17 strip (z −206.33..−205.12) is NO ROUTE: its west part x 49.3..53.57
-    // ends in a 4-unit wall at x 53.57 (y 10.85..14.85 [D lipline probe's tris]) — a cul-de-sac —
-    // and the east slope's west tip (x 58.86 at 10.17 [D]) recedes to x 61.5 at the flight's z
-    // −205.7 (the tri (58.86,−205.12)|(62.19,−205.34)|(63.32,−206.08) [D]): a 7.98-unit gap
-    // against the engine's 5.2-unit drop-jump carry (3.92 m/s up, 9.8 gravity [M player.rs],
-    // 5.5 run — the -2 session measured 4.42 flat) — IMPOSSIBLE. Nothing carries across: the
+    // [D]; the pit floor itself is obj_turb2_walkway04 plc28 x 49.29..63.66, y 6.16..7.19,
+    // z −209.06..−205.12 [D band9 probe's placed extents], continuing east as the sliver
+    // obj_turb3_walkway03 plc33 x 63.66..64.05 (y 6.17..7.19) — then the chasm x 64.05..66.27
+    // down past y 2, and the resume sits 10.16+ — +3.2 ABOVE the pit floor: the pit route
+    // dead-ends, no jump crosses up [D band9 extents vs the 5.2-unit carry]. The staircases are
+    // symmetric FLANKS, not a crossing: turb2's rise 2.97→11.17 at x 49.29..58.73 and turb4's
+    // 0.16→11.20 at x 78.14..87.59 (both z −208.96..−211.67, SOUTH of the band) — they connect
+    // the yards and the gate ground to the band heights, nothing spans x 59..78 [D band9
+    // extents]. The supportbeams are columns (turb2 pair x 53.57..54.57 y 14.25..18.03; turb3
+    // #30 x 68.02..68.82 y 6.08..17.24 — 0.8 wide, no deck [D band9]). The 10.85/10.17 strip
+    // (z −206.33..−205.12) is NO ROUTE: its west part x 49.3..53.57 ends in a 4-unit wall at
+    // x 53.57 (y 10.85..14.85 [D lipline probe's tris]) — a cul-de-sac — and the east slope's
+    // west tip (x 58.86 at 10.17 [D]) recedes to x 61.5 at the flight's z −205.7 (the tri
+    // (58.86,−205.12)|(62.19,−205.34)|(63.32,−206.08) [D]): a 7.98-unit gap against the
+    // engine's 5.2-unit drop-jump carry (3.92 m/s up, 9.8 gravity [M player.rs], 5.5 run — the
+    // -2 session measured 4.42 flat) — IMPOSSIBLE. Nothing carries across: the
     // full leaf-coverage audit decodes EVERY triangle the disc declares (0 gaps in all 46 maps
     // [D collaudit probe]) and none lands at band height over the void; no SS (all 9 listed:
     // two display vents, two warehouse vents, three storeroom pulleys, Door_secret1, and the
@@ -740,12 +750,18 @@ fn walk_the_whole_mission_from_the_start_to_the_0d_handoff() {
     // the (−6.4, −177.4) one [D]). The game's own nav graph links band-height nodes ACROSS the
     // void (path17 n0 (63.06, 10.74, −207.54) ↔ n1 (49.69, 10.74, −207.29) [D probe door4]) and
     // a guard is PLACED mid-void at band height ((62.99, 11.42, −207.43) plc60 [D]) — the game's
-    // own data insists the band is continuous — yet the game's AI is per-path
-    // (NDrone2_AssignAIPath assigns ONE path per drone [M 00154190]; AINetwork_CalcRoute walks
-    // the assigned path's nodes [M 00156ba8]) and rejects it, and the port's static world equals
-    // the disc's declared collision exactly. The crossing mechanism is UNPINNED by everything
-    // the port parses (live check 1 below — the fresh-boot PCSX2 watch decides); the walk uses
-    // the third stand-in.
+    // own data places a guard spawn mid-void — but the link is NOT floor evidence: the game's
+    // node-to-node move test sweeps the body from node to node [M NDrone2_MoveTest 0x155330,
+    // the port's mirror `nav::move_test`; its gates are |dy| ≤ 4 and the room boundary
+    // [M 0x155330 via drone.rs] — and the game's AI is per-path (NDrone2_AssignAIPath assigns
+    // ONE path per drone [M 00154190]; AINetwork_CalcRoute walks the assigned path's nodes
+    // [M 00156ba8])], and a horizontal sweep across a HOLE hits no wall and no floor — it
+    // passes trivially. A designer-linked pair over a pit tests clean; the guard plc60 spawn
+    // (62.99, 11.42, −207.43 [D band8 probe]) pins a placement, not a walkable surface. The
+    // port's static world equals the disc's declared collision exactly [D collaudit probe], so
+    // the port side has nothing to fix in the parse: the crossing mechanism stays UNPINNED by
+    // everything the disc declares (live check 1 below — the fresh-boot PCSX2 watch decides);
+    // the walk uses the third stand-in.
     w.walk_to(Wp::new(50.0, 11.0, -207.6).r(1.5), "the band east 1");
     w.walk_to(Wp::new(54.5, 11.0, -207.6).r(0.8), "the band east to its true end x 55.0 [D probe door4]");
     // STAND-IN 3 of 3 (the gate-band crossing, pinned): the evidence block above. The game's
@@ -763,6 +779,18 @@ fn walk_the_whole_mission_from_the_start_to_the_0d_handoff() {
         // evidence block is stale. (A horizontal ray — the wall is an x-constant plane.)
         let wall = sim.world.segment_hit([53.0, 12.0, -205.7], [54.2, 12.0, -205.7]);
         assert!(wall.is_some(), "the strip's east wall (x 53.57 [D lipline]) vanished; re-check the crossing route");
+        // Sister 3: the pit floor's presence and height (obj_turb2_walkway04 plc28 x 49.29..63.66,
+        // y 6.16..7.19 [D band9 extents]) — the negative evidence's dead-end leg. If the pit
+        // floor ever rises to band height the pit route reopens and this stand-in's block is
+        // stale; if it vanishes the fall hazard note changes.
+        let pit = sim.world.segment_hit([59.0, 8.0, -207.5], [59.0, 5.5, -207.5]).map(|(t, _)| 8.0 - 2.5 * t);
+        assert!(pit.map_or(false, |y| (5.8..7.6).contains(&y)),
+            "the pit floor at (59, −207.5) moved (expected 6.16..7.19 [D band9 plc28]), got {pit:?}");
+        // Sister 4: the pit's east sliver (obj_turb3_walkway03 plc33 x 63.66..64.05, y 6.17..7.19
+        // [D band9 extents]) — the pit route's far end before the chasm x 64.05..66.27.
+        let sliver = sim.world.segment_hit([63.9, 8.5, -207.5], [63.9, 5.5, -207.5]).map(|(t, _)| 8.5 - 3.0 * t);
+        assert!(sliver.map_or(false, |y| (6.0..7.5).contains(&y)),
+            "the pit's east sliver at (63.9, −207.5) moved (expected 6.17..7.19 [D band9 plc33]), got {sliver:?}");
         sim.bond.pos = [68.0, 11.4, -207.9];
         sim.bond.vel = [0.0; 3];
     }
