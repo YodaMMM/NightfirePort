@@ -4850,13 +4850,26 @@ impl FrontEnd {
         let Some(progress) = progress else { return (0, 0, 0) };
         let Some(entry) = progress.table.get(row) else { return (0, 0, 0) };
         let hash = nf_game::progress::SP_LEVEL_HASHES.get(row).copied().unwrap_or(0);
-        let bonuses = (1..=4).filter(|&k| progress.has_medal(hash, k, 0)).count() as u32;
-        (entry.best, entry.rows[0].value, bonuses)
+        // records-medal: the game's census counts the counters 1..4 whose descriptor KIND is 4
+        // (the upgrade group) AND whose own bit stands [M C_RBDSRECORDS 0x20bf00:34-44 — the
+        // `if ((cStack_94 != '\0') && (aiStack_a0[0] == 4))` arm; every RewardsTable row keeps
+        // its kind-4 descriptor at counter 3 [L ee_start_05.bin 0x2bc920]]. The port counted
+        // EVERY earned medal — after a platinum finish it showed 4 where the game shows 1.
+        let upgrades = (1..=4u32).filter(|&k| {
+            progress.has_medal(hash, k, 0)
+                && nf_game::progress::REWARDS_TABLE.iter().find(|e| e.hash == hash)
+                    .is_some_and(|e| e.desc[k as usize].kind == 4)
+        }).count() as u32;
+        (entry.best, entry.rows[0].value, upgrades)
     }
 
     /// The Records page's medal for campaign row `row`: `(label, emblem texture)` or None when no medal is earned [M
     /// C_RBDSRECORDS 0x20bf00:58-110 — the level's four bonus flags k1..k4 (Menu_GetLevelBonuses +4/+0x10/+0x1c/+0x28):
-    /// all four → 0x307/0x300013e, k1..k3 → 0x306/0x300013f, k1+k2 → 0x308/0x3000140, k1 → 0x309/0x300013d].
+    /// all four → 0x306/0x300013f, k1..k3 → 0x307/0x300013e, k1+k2 → 0x308/0x3000140, k1 → 0x309/0x300013d
+    /// [M disasm 0x20c0e4-0x20c154: the all-four arm loads `addiu r17, 0x306; ori r16, 0x013f`, the
+    /// k1..k3 arm `addiu r17, 0x307; ori r16, 0x013e` — the port had the two arms swapped, showing
+    /// the gold emblem (0x300013e, the results page's gold texture [M 0x208e78:127-133]) after a
+    /// platinum finish and vice versa; fixed 2026-10-30 records-medal].
     pub fn record_medal(&self, row: usize) -> Option<(u32, u32)> {
         // mission-stats-rows: the same one-table read as `record_row` — the save, else the
         // session layer [M C_RBDSRECORDS 0x20bf00:34-44 — Menu_GetLevelBonuses' flags].
@@ -4864,7 +4877,7 @@ impl FrontEnd {
         let hash = nf_game::progress::SP_LEVEL_HASHES.get(row).copied()?;
         let k = |n: u32| progress.has_medal(hash, n, 0);
         if !k(1) { return None; }
-        Some(if k(2) && k(3) && k(4) { (0x307, 0x0300_013e) } else if k(2) && k(3) { (0x306, 0x0300_013f) } else if k(2) { (0x308, 0x0300_0140) } else { (0x309, 0x0300_013d) })
+        Some(if k(2) && k(3) && k(4) { (0x306, 0x0300_013f) } else if k(2) && k(3) { (0x307, 0x0300_013e) } else if k(2) { (0x308, 0x0300_0140) } else { (0x309, 0x0300_013d) })
     }
 
     /// One Dossier wheel row's page — the C_SBDOSSIER 0x216eb0:12-31 map the Confirm action walks.
@@ -9330,7 +9343,7 @@ pub fn menu_overlay(fe: &FrontEnd, font: &nf_formats::hud::Font, hfont: &nf_form
                 h.text_scaled(Anchor::Centre, font, -2, &v.to_string(), mx(560.0), yc, true, cream, true, REC_SCALE);
             }
             // The medal: shown only once earned [M C_RBDSRECORDS 0x20bf00:58-110 — the level's four bonus flags pick
-            // 0x307/0x300013e, 0x306/0x300013f, 0x308/0x3000140 or 0x309/0x300013d; none → both controls hidden].
+            // 0x306/0x300013f (all four), 0x307/0x300013e (k1..k3), 0x308/0x3000140 (k1+k2) or 0x309/0x300013d (k1); none → both controls hidden].
             if let Some((lbl_id, tex)) = fe.record_medal(m) {
                 quad640(&mut h, tex, 435.0, 282.0, 128.0, 64.0, [0.0, 0.0, 255.0, 127.0], gs(0x7f7f7f, 0xff));
                 label(&mut h, font, &bind(lbl_id), 76.0, 306.0, 240.0, 16.0, cream, true, REC_SCALE);

@@ -9185,14 +9185,16 @@ pub fn build(level: &Level, cels_only: bool, skeletons: &HashMap<u8, Skeleton>, 
             if self.bond_body == Some(ci) {
                 let s = self.sim.as_ref()?;
                 s.wire_camera()?;
-                let local = nf_game::anim::script_pose_drone(&s.scripts, &s.seqs, &c.skeleton, &c.skin, s.bond.wire_anim, s.bond.wire_anim_time.max(0.0))?;
-                // The player object (obj+0x30) IS the hip: the anim's root height comes off so the root
-                // bone sits at the object [the grab's 1.0207 hang offset then puts the hands on the cable -
-                // L PCSX2 07000005 cable, audits/render-1029-cable p-stand].
-                let hip = local.first().map_or(0.0, |r| r.0[1]);
+                let mut local = nf_game::anim::script_pose_drone(&s.scripts, &s.seqs, &c.skeleton, &c.skin, s.bond.wire_anim, s.bond.wire_anim_time.max(0.0))?;
+                // The player object (obj+0x30) IS the root: the sim already integrates the wire anims'
+                // root motion into Bond's position (`RootTrack`, `AnimFrameResolve` 0x1c35f8 adds the root
+                // delta to obj+0x30), so the root bone draws at the object - zeroed like a drone's. Drawing
+                // the clip's own root offset on top doubled it and snapped the body ~1.1 at every clip
+                // switch (the turn -> move hand-over-hand). The grab's 1.0207 hang offset puts the hands on
+                // the cable [L PCSX2 07000005 cable, audits/render-1029-cable p-stand].
+                if let Some(r) = local.first_mut() { r.0 = [0.0; 3]; }
                 let world = anim::world_pose(&local, &c.skin);
-                let p = s.bond.pos;
-                let m = nf_formats::placement::object_matrix([0.0, s.bond.yaw, 0.0], [p[0], p[1] - hip, p[2]]);
+                let m = nf_formats::placement::object_matrix([0.0, s.bond.yaw, 0.0], s.bond.pos);
                 return Some((anim::skin_matrices(&world, &c.skin), world, m));
             }
             // Script animations: the object's frame, the root kept (the object sits at the origin).
