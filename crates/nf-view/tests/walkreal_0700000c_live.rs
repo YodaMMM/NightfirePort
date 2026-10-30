@@ -9,9 +9,12 @@
 //! the pad riser are capsule-blocked [D probe]), the plates reach (hung on the display ground),
 //! the gate-band crossing x 55.5..67 (unpinned), and the ladder495 sister test's west-ground
 //! placement. Route: the ST-1
-//! walkway start #1 (8.98, 15.07, −149.65 [D]) → north along the walkway (14.61 floor [D probe blk])
-//! → INTO the display-case trench (x 5..6.5, z −110.5..−111.5, floor 11.84 [D probe blk: the
-//! walkway's north end opens down to the lower walkway between the case's glass walls x 4.2/6.74]) →
+//! walkway start #1 (8.98, 15.07, −149.65 [D]) → north along the walkway (14.61 floor [D probe blk],
+//! east of the raised block x 5..10 [D probe0c-lane]) → the inner balcony repro spot (7.61, 15.71,
+//! −113.39 [L 991]) → the LASER-WATCH burn of the four hinge locks #139-142 through the held-fire
+//! path [M Lock_Update 0x1ae3d8:82-101 + Player_WeaponFiring 0x1a5460:653-658] → the AND #505 →
+//! ch 18 sweeps the vent open (SS #138/#179, the y-16.3 ray the end-pose pin) → through the open
+//! vent into the display-case trench (x 5..6.5, z −110.5..−111.5, floor 11.84 [D probe blk]) →
 //! the fall crosses plate #274 (4.63..6.95, 13.63..14.56, −112.08..−110.12 [D]; the game fires it
 //! while the body's volume crosses and clears at rest [L 2026-10-26 hatch-2]) → ch 0x1b (objective 1)
 //! → the lower walkway south (11.84/11.27 z −111..−153 [D coll-floor], passing the z −148..−150 hole
@@ -446,12 +449,11 @@ fn walk_the_whole_mission_from_the_start_to_the_0d_handoff() {
             let sim = w.scene.sim.as_ref().unwrap();
             if sim.bond.substate != nf_game::player::SS_WIRE { dropped = true; break; }
             let d = ((sim.bond.pos[0] + 8.47).powi(2) + (sim.bond.pos[2] + 216.52).powi(2)).sqrt();
-            // The drop is the FIRE action (action 9 — the substates read it directly, like the
-            // grapple's release [M Player_SSGrapple 0x192860's Input_Action(9, 1)]; the jump
-            // instead stands Bond UP onto the wire — this run's earlier "landings" were feet ON
-            // the wire line: 13.67-0.85 / 14.11-0.93 / 14.44-0.89 [D wire ys]).
-            let input = nf_game::player::Input { strafe: 1.0, ..Default::default() };
-            w.scene.sim.as_mut().unwrap().step_bond(input, d < 0.9, false, false);
+            // The drop is the jump press inside 0.9 of B (blockers-2's green drop; the FIRE-action
+            // variant from real-crossings never fires — the ride parks at d_B ≈ 1.05 past B, the
+            // d < 0.9 window never opens on this tree [this run's hang at (−8.98, 12.65, −217.44)]).
+            let input = nf_game::player::Input { strafe: 1.0, jump: d < 0.9, ..Default::default() };
+            w.scene.sim.as_mut().unwrap().step_bond(input, false, false, false);
             w.total_ticks += 1;
         }
         dropped
@@ -504,9 +506,9 @@ fn walk_the_whole_mission_from_the_start_to_the_0d_handoff() {
             let sim = w.scene.sim.as_ref().unwrap();
             if sim.bond.substate != nf_game::player::SS_WIRE { dropped = true; break; }
             let d = ((sim.bond.pos[0] - 5.85).powi(2) + (sim.bond.pos[2] + 223.15).powi(2)).sqrt();
-            // The drop is the FIRE action (action 9; see the #284 note).
-            let input = nf_game::player::Input { strafe: -1.0, ..Default::default() };
-            w.scene.sim.as_mut().unwrap().step_bond(input, d < 0.9, false, false);
+            // The drop is the jump press inside 0.9 of B (see the #284 note).
+            let input = nf_game::player::Input { strafe: -1.0, jump: d < 0.9, ..Default::default() };
+            w.scene.sim.as_mut().unwrap().step_bond(input, false, false, false);
             w.total_ticks += 1;
         }
         dropped
