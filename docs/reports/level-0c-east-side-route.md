@@ -70,6 +70,17 @@ level_exit), so the walk's east legs still need band level. **The walk test's st
   window. The touched binaries are quoted above; the next session should run the full suite on
   the merged tree.
 
+## The catwalk (this session's refinement)
+
+The "catwalk" is the turbine ROOMS' own upper floors: up-facing tris at y 15.0..16.5 belong to
+room_turbine01 (x 40.7..48.6), room_turbine02 (x 50.9..63.1), room_turbine03 (x 65.2..71.6) and
+room_turbine04 (x 73.8..79.6) [D the catwalk probe's tri census] — a continuous 15.5-level
+walkway along the band's z strip, ABOVE both bands. room_turbine01's upper floor reaches west to
+x 40.5 (z -206.5..-213.5, a 15.53 ledge hanging over the slot-jump shaft; the band floor below
+it starts x 43.2), and a 15.73 strip crosses z -206.0 over the north strip. The zipline #512's
+top platform sits at (46.8, 24.6, -207.0) [D plc512]. The stair from the band (10.85) / the
+corridor (11.09) up to the 15.5 level is still unpinned — see the live checks.
+
 ## Live checks for the main agent
 
 1. **The east climb (the decider).** Fresh boot, level 0700000c, put Bond on the east ground
@@ -79,10 +90,19 @@ level_exit), so the walk's east legs still need band level. **The walk test's st
    the band's south rail), `--bond 93.8,7.3,-228.0,0.0,0.0` (walkway02's south end and the
    crates4). If the game shows a staircase/ladder the port's parse misses, gdbwatch the contact
    cel (HITDATA+0x54) to name it.
-2. **The catwalk access.** The catwalk (15.53..15.96) spans x 40.7..79.6 [D catwalk probe] with
-   no found access. Screenshots from the turbine room's upper lane and the display-ground east
-   return would settle whether the game reaches the east band via the catwalk instead of the
-   ground.
+2. **The catwalk access (now the top candidate).** The catwalk is the turbine rooms' upper
+   floors (15.0..16.5, x 40.7..79.6 [D]; room_turbine01's 15.53 ledge hangs over the slot-jump
+   shaft at x 40.5..43.5). Fresh-boot screenshots from `--bond 39.0,12.0,-210.8,1.57,0.2` (from
+   the door2turbine stance, looking into the room's west part) and `--bond 44.0,11.0,-207.0,3.14,
+   0.3` (from the band west, looking west-up at the ledge) should show the stair/steps from the
+   corridor or the band up to the 15.5 level. If found, the game's route is: band west -> the
+   stair -> the 15.5 catwalk east (turbine01..04) -> the 5.2 drop onto the east band at x ~79 —
+   and the walk's teleport can be replaced by real legs end to end.
+3. **The zipline #512's top platform** (46.8, 24.6, -207.0 [D]): what surface is the player
+   standing on to grab it — the display complex's upper level? A screenshot from
+   `--bond 46.8,25.5,-207.0,0.0,0.0` names it; if it is reachable from the walked route, the
+   zipline ride down to the north yard (11.6 at z -182.7) is another west->east connection the
+   walk could take.
 
 ## What's left
 
