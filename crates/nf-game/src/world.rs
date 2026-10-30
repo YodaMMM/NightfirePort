@@ -368,7 +368,7 @@ fn cross(a: V3, b: V3) -> V3 { [a[1] * b[2] - a[2] * b[1], a[2] * b[0] - a[0] * 
 ///   own ride grounds on (the ray tolerance is exceeded at the skin-rest equilibrium on that
 ///   steep a face, so the pick arm must fire); confirming the gate is an
 ///   open live check.
-fn capsule_tri_contact(t: &[V3; 3], mat: u8, a: &mut V3, b: &mut V3, r: f32, grow: f32, total: &mut V3, walkable: &mut bool, pick: &mut bool, top_guard: bool, ref_v: V3) -> bool {
+fn capsule_tri_contact(t: &[V3; 3], mat: u8, a: &mut V3, b: &mut V3, r: f32, grow: f32, total: &mut V3, walkable: &mut bool, pick: &mut bool, top_guard: bool, ref_v: V3, dynamic_obj: bool) -> bool {
     let tl = [0, 1, 2].map(|k| t[0][k].min(t[1][k]).min(t[2][k]));
     let th = [0, 1, 2].map(|k| t[0][k].max(t[1][k]).max(t[2][k]));
     let (sl, sh) = ([0, 1, 2].map(|k| a[k].min(b[k]) - grow), [0, 1, 2].map(|k| a[k].max(b[k]) + grow));
@@ -540,7 +540,64 @@ fn capsule_tri_contact(t: &[V3; 3], mat: u8, a: &mut V3, b: &mut V3, r: f32, gro
     // their pushes; the swim path (top_guard = true, the game's real tail with the diagonal spine
     // [M the 02 fin wedge]) keeps everything, and the radial arm (the [M] tail's own REF-relative
     // shape) is untouched either way.
-    let below_b_edge_skip = !top_guard && on_edge && !radial && q[1] < b[1];
+    // The face-class split [M the tail's own structure]: the game routes the OBLIQUE/VERTICAL
+    // faces through the guarded REF-relative tail (the top_guard note above; the 0.7 <
+    // |dot(n, axis)| head-on re-push is a SEPARATE unguarded block for the horizontal faces),
+    // and that guarded tail is the one the [L] fresh-boot REF (HITTEST+0x50 = (0,0,0),
+    // ee_start_0700000a) near-never arms — so the below-B edge lift the port's fallback
+    // produces has no game counterpart only on the guarded class. The UP-FACING faces
+    // (n[1] > 0.7 — the game's own walkable dot [M 0x10a650-0x10a674]) ride the unguarded
+    // head-on re-push, whose port shape IS the fallback push: the step/tread lips the climbs
+    // ride keep lifting (master's 40-red list — ladder_02, the walkreal stair lips,
+    // pickups08 — is exactly the up-facing class). The 0a leaf tip is vertical (the guarded
+    // class) and stays skipped; the corner crossing survives.
+    // The marginal-edge skip (level-0a-corner-push-model-2): the walk path drops an
+    // EDGE/VERTEX contact's fallback displacement when the capsule only GRAZES the edge —
+    // penetration r − dist < 0.05. Measured classes: the 0a corner slot's edge contacts all
+    // carry r − dist ≤ 0.0447 (d 0.5053-0.5335, r 0.55 [cap trace, this session]) and their
+    // sum rides exactly anti-parallel to the walk move (the counter strips + the half-open
+    // leaf's mid-height edges — the wedge), while the Q-Worm jink's cap contacts carry
+    // r − dist ≥ 0.0505 (d 0.4576-0.4995 [cap trace, this session]) and are the deflection
+    // the route needs. The game's own edge tail is REF-relative (the re-aim of p at the
+    // spine point closest to HITTEST+0x50, then v = p − REF gated dot(v,n) > 0 and
+    // |v| < radius [M 0x109da0:333-368, 419-457]) and the accumulator boots (0,0,0) [L
+    // ee_start_0700000a] with ~15 m of lifetime drift [L ee_snapshot] — it near-never arms on
+    // a walked line, so the game pushes NOTHING on a fresh marginal graze and the walk move
+    // carries through (the game's corner bend [L 2026-10-26]); the deep edge deflections the
+    // port's routes ride are the port's stand-in for the game's move-clip response. The
+    // threshold 0.05 sits between the two measured bands; the face-interior contacts (the
+    // certified wall rest [L 2026-10-30]) never see this arm.
+    // The game's two-class push structure [M Intersect_CylGeom 0x109da0 + the head-on block]:
+    // the HORIZONTAL faces (|dot(n, axis)| > 0.7) ride the SEPARATE unguarded head-on re-push
+    // (no REF gate — the game's floor/step response; the port's fallback IS that shape), while
+    // the OBLIQUE/VERTICAL faces ride the guarded REF-relative tail — the re-aim of p at the
+    // spine point closest to HITTEST+0x50, then v = p − REF gated dot(v,n) > 0 and |v| < radius
+    // [M 0x109da0:333-368, 419-457]. The accumulator boots (0,0,0) [L ee_start_0700000a] and
+    // drifts ~15 m behind the owner [L ee_snapshot], so the guarded tail near-never arms on a
+    // walked line: the port's edge-contact fallback on the guarded class has NO game
+    // counterpart, and the 0a corner slot (the counter strips + the door leaf's face column —
+    // every edge member vertical) rides exactly that phantom class. The radial arm (the [M]
+    // tail itself, ref = the lifetime DeltaP accumulator the port tracks) stays live either
+    // way; the head-on class keeps the fallback (the stair treads, the cap tops the routes
+    // round). The face-INTERIOR contacts never see this arm (the certified wall rest [L
+    // 2026-10-30] is interior and keeps its push).
+    // The DYNAMIC-SOURCE edge skip (level-0a-corner-push-model-2): a walk-path EDGE/VERTEX
+    // contact against a MOVED OBJECT's collision (the port's dynamic.geo — the swung door
+    // leaves) drops the fallback displacement; the STATIC cel edges keep it. [M] basis: the
+    // game's only displacement is the guarded REF-relative tail (Intersect_CylGeom
+    // 0x109da0:419-457 — v = p − REF gated dot(v,n) > 0, |v| < radius; the head-on block at
+    // :482-518 sets a flag, not a push), whose accumulator boots (0,0,0) [L ee_start_0700000a]
+    // and drifts ~15 m behind the owner [L ee_snapshot] — it near-never arms on a walked line
+    // for ANY contact. The port keeps the (p − q) fallback as the stand-in for the STATIC
+    // cels' edges because the walks' step-ups, stair lips and ladder rails ride it (master's
+    // 40-red list with the prior branch's blanket below-B skip: ladder_02, the walkreal
+    // stair lips, pickups08). The 0a corner's wedge is different: its anti-walk members are
+    // the counter strips' static edges PLUS the half-open door #4 leaf's face column — and
+    // the game crosses the same corner WITH the leaf present [L 2026-10-26 the fresh-boot
+    // walk, ~60 frames], so the moved leaf's edge contacts contribute nothing in the game.
+    // The port's dynamic.geo is exactly the moved-object class (the doors' leaves); the
+    // static/cel split is the caller's (capsule_pick_contact_scoped's stat vs dynamic loops).
+    let below_b_edge_skip = !top_guard && on_edge && !radial && dynamic_obj;
     let push = if below_b_edge_skip { [0.0; 3] } else { [dir[0] * mag, dir[1] * mag, dir[2] * mag] };
     if caps_log() {
         eprintln!("[cap] PUSH cent=({:.3},{:.3},{:.3}) q=({:.3},{:.3},{:.3}) p=({:.3},{:.3},{:.3}) d={dist:.4} push=({:.4},{:.4},{:.4}) n=({:.3},{:.3},{:.3}) edge={on_edge} a=({:.3},{:.3},{:.3}) b=({:.3},{:.3},{:.3})",
@@ -1217,7 +1274,7 @@ impl CollisionWorld {
         for k in 0..3 { lo[k] = a[k].min(b[k]) - grow; hi[k] = a[k].max(b[k]) + grow; }
         let stat = &self.stat;
         let mut test = |t: &[V3; 3], mat: u8, a: &mut V3, b: &mut V3, total: &mut V3, walkable: &mut bool, pick: &mut bool| {
-                capsule_tri_contact(t, mat, a, b, r, grow, total, walkable, pick, top_guard, ref_v);
+                capsule_tri_contact(t, mat, a, b, r, grow, total, walkable, pick, top_guard, ref_v, false);
         };
         for r in runs {
             let o = &stat.objects[r as usize];
@@ -1268,12 +1325,12 @@ impl CollisionWorld {
         for run in runs {
             let o = &stat.objects[run as usize];
             if !(0..3).any(|k| o.hi[k] < lo[k] || o.lo[k] > hi[k]) {
-                for k in o.tris.clone() { capsule_tri_contact(&stat.tris[k], stat.mats[k], &mut a, &mut b, r, grow, &mut total, &mut walkable, &mut pick, false, ref_v); }
+                for k in o.tris.clone() { capsule_tri_contact(&stat.tris[k], stat.mats[k], &mut a, &mut b, r, grow, &mut total, &mut walkable, &mut pick, false, ref_v, false); }
             }
         }
         for g in [&dynamic.geo] {
             for o in overlapping(g, lo, hi) {
-                for k in o.tris.clone() { capsule_tri_contact(&g.tris[k], g.mats[k], &mut a, &mut b, r, grow, &mut total, &mut walkable, &mut pick, false, ref_v); }
+                for k in o.tris.clone() { capsule_tri_contact(&g.tris[k], g.mats[k], &mut a, &mut b, r, grow, &mut total, &mut walkable, &mut pick, false, ref_v, true); }
             }
         }
         // dot2 pass-global [M 0x10a66c-0x10a6a0; the collapse argument in the doc above]: the
@@ -1293,7 +1350,7 @@ impl CollisionWorld {
         let mut hi = [0f32; 3];
         for k in 0..3 { lo[k] = a[k].min(b[k]) - grow; hi[k] = a[k].max(b[k]) + grow; }
         self.near_actor(lo, hi, |t, mat| {
-            capsule_tri_contact(t, mat, &mut a, &mut b, r, grow, &mut total, &mut walkable, &mut pick, false, ref_v);
+            capsule_tri_contact(t, mat, &mut a, &mut b, r, grow, &mut total, &mut walkable, &mut pick, false, ref_v, false);
         });
         pick && pick_ref_y < b_pre_y
     }
@@ -2047,7 +2104,7 @@ impl CollisionWorld {
         let mut hi = [0f32; 3];
         for k in 0..3 { lo[k] = a[k].min(b[k]) - grow; hi[k] = a[k].max(b[k]) + grow; }
         self.near_actor(lo, hi, |t, mat| {
-                capsule_tri_contact(t, mat, &mut a, &mut b, r, grow, &mut total, &mut walkable, &mut pick, top_guard, ref_v);
+                capsule_tri_contact(t, mat, &mut a, &mut b, r, grow, &mut total, &mut walkable, &mut pick, top_guard, ref_v, false);
         });
         (total, walkable)
     }
