@@ -2187,6 +2187,12 @@ impl Drone {
 
     pub fn prop(&self, d: &Data, id: usize) -> bool { d.props.get(id, &self.props) != 0 }
 
+    /// The raw behaviour property value (`behaviour_util_getProperty` 0x1c7d98) — the test and
+    /// diagnostic accessor (the in-sim `prop` needs a `Data` the tests cannot build).
+    pub fn prop_value(&self, tables: &nf_formats::drone::PropertyTables, id: usize) -> u32 {
+        tables.get(id, &self.props)
+    }
+
     /// "Stays put": `+0x4F8 & 0x10` or property 0x40, tested together throughout the decomp (`DroneFunc_CombatState`,
     /// `ChooseCombatMove`, CombatNoRoute, AimStandFire, HeardNoiseSuspect / Alert, …).
     fn stays(&self, d: &Data) -> bool { self.stationary || self.prop(d, 0x40) }
@@ -10135,10 +10141,17 @@ impl Drone {
             let order = if rng.rand(2) != 0 { [(l, dist), (r, -dist)] } else { [(r, -dist), (l, dist)] };
             order.iter().find(|(_, x)| {
                 let (side_bit, anim) = if *x > 0.0 { (8, l_anim) } else { (0x10, r_anim) };
-                // The choice consults the MOVER's test (probe_move), not the knee/chest stand-in:
-                // a step the mover will reject must not be picked (the frozen STEP_AIM wall,
-                // stuck-guard-combat-sweep). The world step of local (x, 0) is [x·c, −x·s]
-                // (can_move's own transform).
+                // The game's probe ends in `NDrone2_MoveTest` (dist ≤ 30, |dy| ≤ 4, the slope
+                // band, AINetwork_BoundsTest) [M 0x14f640:92 and the whole Can* family], but
+                // conjuncting the port's nav.move_test here (tried: the boundary + dist gates +
+                // its +1.0 LOS ray) regressed walkreal_07000014_live (the corridor door-wait leg
+                // wedges — a combat guard's choice shifted mid-fight); the choice keeps the
+                // MOVER's test (probe_move, stuck-guard-combat-sweep) — the port's consistency
+                // requirement. The real 07000014 divergence is NOT the probe geometry: the
+                // game's Can* refuse on the +0x31C side bits that DroneMove_NoBunching 0x150ad0
+                // stamps every tick [M via ControlSTANDARD 0x1490f0:202-226] and the port's
+                // mirror is inert (NB_SCAN_LIVE) — see the door_guards_locked_door test's
+                // blocker note. The world step of local (x, 0) is [x·c, −x·s].
                 let (s, c) = (crate::trig::sinf(me.yaw), crate::trig::cosf(me.yaw));
                 me.no_bunching & side_bit == 0 && me.can_do(d, anim) && me.probe_move(d, [x * c, -x * s])
             }).map(|(s, _)| *s).unwrap_or(0)
