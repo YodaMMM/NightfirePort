@@ -20,3 +20,8 @@ say so in the report. Never weaken a decompile-backed test to make code pass.
 
 ---
 claimed-by: sandbox1 at 2026-10-30T10:32Z
+
+---
+## Report (done, 2026-10-30T11:17Z)
+
+Closed by the driver: the report is on `s/level-0c-plates-reach` (docs/reports/level-0c-plates-reach.md); the worker didn't run finish.sh.
