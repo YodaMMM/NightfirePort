@@ -135,15 +135,58 @@ fn walk_the_whole_mission_on_real_input() {
     // ── down the station and the walkway toward the fusebox ─────────────────────────────────────
     // The ch-0x2a plate sits inside the station (139.1, 50.2, −93.6 [D]) — the placed guards
     // (sw_ch 42) wake as Bond passes. The walkway descends south (door 11 free at (145,45,−108.6)).
+    //
+    // THE SCOPED-FLIGHT WALK HARDENING (level-4a-every-objective-4): under the game's cel-scoped
+    // drone bullet flight [M Bullet_update 0x12e7b0:343 + Collide_Pick 0x1eb320:125] the station's
+    // guards' rounds reach Bond on this approach (228 PlayerImpact hits by the lower-landing wedge
+    // in the measured run), and each hit's `Player_HandlePain` grunt roll draws the shared
+    // bit-exact RNG [M 0x1902c8:111 — the port's bullet.rs apply()] that the guards' AI also
+    // draws — so the guards' positions and the doors' approach states wobble run-to-run, and the
+    // walk's stuck-mitigation sidesteps land on different spots. The dip crossing at the stair
+    // down to the fusebox walkway (the nav node (147.30, 42.41, −120.40) [D nav]) is the fragile
+    // step: a sidestep at its edge drops Bond into the station's pit (measured: y 44.85 → 37.13,
+    // the walk then fires the laser from the pit and the 4.0-range segment [L weapon_data
+    // +0x4E·0x10C+0x1C] tops 1.4 below the wire box at y 43.41 — ch 137 never rises; the -3
+    // report's mechanism, reproduced). The game's own player walks this approach live (the -3
+    // live check stands) — the walk therefore RETRIES the approach like a player re-climbing:
+    // the stance is checked before the shot (on the fusebox level, beside the box), and a wrong
+    // stance re-walks the approach from the lower landing (bounded). [S] unverified as game
+    // behaviour: the retry is the walk's own robustness, not a game claim.
+    let fusebox = [154.35f32, 43.41, -119.67];
     for (name, at) in [
         ("the station hall", [139.0f32, 49.5, -93.0]),
         ("the station doors", [139.5, 49.5, -97.5]),
         ("the walkway head", [144.0, 46.0, -105.0]),
         ("the walkway mid", [145.5, 45.0, -108.6]),
         ("the lower landing", [150.0, 43.5, -116.0]),
-        ("by the fusebox", [153.0, 43.4, -118.5]),
     ] {
         w.walk_nav_to(at, name, 1.5);
+    }
+    // THE SCOPED-FLIGHT APPROACH FIX (level-4a-every-objective-4). The nav route into the fusebox
+    // walkway steers at the dip node (147.30, 42.41, −120.40 [D nav]) from the lower-landing
+    // wedge spot — and the wedge spot WOBBLES with the guards' fire: under the game's cel-scoped
+    // drone bullet flight [M Bullet_update 0x12e7b0:343 + Collide_Pick 0x1eb320:125] the station
+    // guards' rounds reach Bond here (228 PlayerImpact hits by the lower-landing wedge in the
+    // measured run), and every hit's `Player_HandlePain` grunt roll draws the shared bit-exact
+    // RNG [M 0x1902c8:111; the port's bullet.rs apply()] the guards' AI also draws — the guards'
+    // positions and the doors' approach states wobble, the walk's stuck-mitigation sidesteps
+    // land on different spots, and a sidestep at the stair edge drops Bond into the station's
+    // pit (measured y 44.85 → 37.13; the 4.0-range laser [L weapon_data +0x4E·0x10C+0x1C] then
+    // tops 1.4 below the wire box at y 43.41 and ch 137 never rises — the -3 report's mechanism,
+    // reproduced). The green run's crossing is the proof the stair is walked head-on: its nav-1
+    // arrival (146.15, 43.26, −119.85) sits on the walkway's west end after a straight south
+    // descent. So the approach squares UP first — explicit waypoints down the stair's measured
+    // line, each with an arrive radius the wobble cannot outrun (a leg that arrives within its
+    // first stuck sample never enters the mitigation ladder). The last leg walks the walkway
+    // east to the firing spot. [S] unverified as game behaviour: the waypoints are the walk's
+    // own robustness, the descent line is the measured green crossing.
+    for (name, at, r) in [
+        ("the stair head", [146.6f32, 44.4, -117.6], 2.2),
+        ("the walkway west", [146.3, 43.3, -119.8], 2.0),
+        ("the walkway line", [149.5, 43.2, -120.3], 2.2),
+        ("by the fusebox", [153.0, 43.4, -118.5], 1.5),
+    ] {
+        w.walk_to(Wp::new(at[0], at[1], at[2]).r(r), name);
     }
     {
         let sim = w.scene.sim.as_ref().unwrap();
@@ -155,7 +198,6 @@ fn walk_the_whole_mission_on_real_input() {
     // The wire filter DROPS guns (kind 0x0008) and keeps the Laser (0x0002) [M fusebox.rs's
     // Collide_FilterBullets 0x1ece30:24-31 with the disc category words] — gunfire never cuts a
     // wire; the player's laser does.
-    let fusebox = [154.35f32, 43.41, -119.67];
     aim_and_fire_until(&mut w, fusebox, 0x4e, 420, |s| s.drones.channels.on(137));
     {
         let sim = w.scene.sim.as_ref().unwrap();

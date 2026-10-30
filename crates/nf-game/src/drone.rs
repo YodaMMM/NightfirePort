@@ -6564,6 +6564,13 @@ impl Drone {
                 | HIDE_FROM_SCARY_OBJECT | RUN_FOR_COVER | UNDER_COVER_INIT | UNDER_COVER_IDLE | UNDER_COVER_AIM
                 | UNDER_COVER_FIRE | UNDER_COVER_SNIPER_FIRE | UNDER_COVER_SNIPER_RELOAD | UNDER_COVER_RETURN
                 | UNDER_COVER_LEAVE_NOW | HEARD_NOISE_AWARE | HEARD_NOISE_SUSPECT | HEARD_NOISE_ALERT | ALT_ATTACK
+                // level-09-live-guards-walk: CivilianChallenge 0x162558's group {7, 9, 0x17, 0x18,
+                // 0x19} forwards to `DroneFunc_HandleImpact(…, 0x89, 1)` [M 0x162558:40-46] — case
+                // 0x19 runs the dart sleep (the challenging guard FALLS ASLEEP to a K5 dart, no
+                // damage — the dart route never reaches HitDamage [M 0x13fff0:269-306]). The old
+                // whitelist dropped the dart here (unhandled → GLOBAL → nothing): the 09
+                // challenge-state pinch guard shrugged 15 darts with no flinch and no sleep.
+                | CIVILIAN_CHALLENGE
                 | state::ENEMY_MISSION) {
             return false;
         }
