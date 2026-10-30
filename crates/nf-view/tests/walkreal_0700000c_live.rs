@@ -715,19 +715,37 @@ fn walk_the_whole_mission_from_the_start_to_the_0d_handoff() {
     }
     eprintln!("[0c] the slot jump landed on the band at {:?}", w.scene.sim.as_ref().unwrap().bond.pos);
 
-    // Leg 10 (REAL): the band east to its true end. The disc's band floor 10.34 runs x 44..55.0
-    // (z −208.5..−206.5) — the -2 session's "x 44..53" under-measured it; x 55.5..67 at band
-    // height is VOID, floored only by the 6.17 pit (x 55..63.5) and the 7.19 shelf (x 64..64.5)
-    // [D probe walkreal_probe0c_door4_live's pit map]. The 10.85 strip (z −206.1..−205.2) spans
-    // x 47.5..53.5 and ~60..70 with a 6.5-unit gap x 53.5..60 [D probe door4's 0.25 map] — the
-    // -2 session's measured run-jump carry is 4.42 units (the slot jump), short of it. Nothing
-    // bridges it: no SS mover touches the box (the level's only movers are the case lid and the
-    // ch-0x54 vent), no wire serves it, no ladder exists in the east half, no drone moves in the
-    // box across 300 ticks, the zipline (type 2, y 17.85) has no floor at either end, and the
-    // 15.73 plane at z −206.0 (x 42..76) has no found access [D probes door3/5/6]. The game's
-    // own nav graph links band-height nodes ACROSS the void (path17 n0 (63.06, 10.74, −207.54)
-    // ↔ n1 (49.69, 10.74, −207.29) [D probe door4]) yet the per-path A* rejects it — the
-    // crossing mechanism is UNPINNED (live check 1 below); the walk uses the third stand-in.
+    // Leg 10 (REAL): the band east to its true end. The disc's band floor 10.34 runs x 44..55.6
+    // (z −209.06..−206.31: obj_turb1_walkway01 x 43.2..49.3 + obj_turb2_walkway01 x 49.3..56.1
+    // [D band2 probe's tri dump]); x 56.1..66.3 at band height is VOID — the 6.17 pit (x 55..63.5),
+    // the 7.19 shelf (x 60..64 at z −209.0 only), then a floor-less chasm x 64..66.5 down past
+    // y 2 [D eastclimb probe's 0.5 map], to the resumed band 10.34 at x 67.5+ (obj_turb3_walkway04
+    // [D]). The 10.85/10.17 strip (z −206.33..−205.12) is NO ROUTE: its west part x 49.3..53.57
+    // ends in a 4-unit wall at x 53.57 (y 10.85..14.85 [D lipline probe's tris]) — a cul-de-sac —
+    // and the east slope's west tip (x 58.86 at 10.17 [D]) recedes to x 61.5 at the flight's z
+    // −205.7 (the tri (58.86,−205.12)|(62.19,−205.34)|(63.32,−206.08) [D]): a 7.98-unit gap
+    // against the engine's 5.2-unit drop-jump carry (3.92 m/s up, 9.8 gravity [M player.rs],
+    // 5.5 run — the -2 session measured 4.42 flat) — IMPOSSIBLE. Nothing carries across: the
+    // full leaf-coverage audit decodes EVERY triangle the disc declares (0 gaps in all 46 maps
+    // [D collaudit probe]) and none lands at band height over the void; no SS (all 9 listed:
+    // two display vents, two warehouse vents, three storeroom pulleys, Door_secret1, and the
+    // VentmeshBlockingPloy [D band7 probe]), no wire (4 total: three ring wires #282/#283/#284
+    // + the type-2 zipline x 46.79 y 24.6→11.6 z −207.0→−182.7 — a NORTH-yard ride [D band7/
+    // grapple probes]), no grapple point (5 total, none over the void: the near one gp4 is at
+    // (54.27, 15.35, −237.02) — the south yard [D grapple probe]), no script object (the
+    // PhoenixForkLift SP #341 script 06000762 drives the yard at y 0, x 21..72.25, z −205..−181
+    // [D band6 probe's 2400-tick track]), no door, no drone movement in the box. The catwalk
+    // (15.53..15.96) is CONTINUOUS x 40.7..79.6 [D catwalk probe] but has no found access (no
+    // ladder within 40 units — the level's three ladders are the origin junk, the yard #164 and
+    // the (−6.4, −177.4) one [D]). The game's own nav graph links band-height nodes ACROSS the
+    // void (path17 n0 (63.06, 10.74, −207.54) ↔ n1 (49.69, 10.74, −207.29) [D probe door4]) and
+    // a guard is PLACED mid-void at band height ((62.99, 11.42, −207.43) plc60 [D]) — the game's
+    // own data insists the band is continuous — yet the game's AI is per-path
+    // (NDrone2_AssignAIPath assigns ONE path per drone [M 00154190]; AINetwork_CalcRoute walks
+    // the assigned path's nodes [M 00156ba8]) and rejects it, and the port's static world equals
+    // the disc's declared collision exactly. The crossing mechanism is UNPINNED by everything
+    // the port parses (live check 1 below — the fresh-boot PCSX2 watch decides); the walk uses
+    // the third stand-in.
     w.walk_to(Wp::new(50.0, 11.0, -207.6).r(1.5), "the band east 1");
     w.walk_to(Wp::new(54.5, 11.0, -207.6).r(0.8), "the band east to its true end x 55.0 [D probe door4]");
     // STAND-IN 3 of 3 (the gate-band crossing, pinned): the evidence block above. The game's
@@ -740,6 +758,11 @@ fn walk_the_whole_mission_from_the_start_to_the_0d_handoff() {
         // west edge must keep its floor.
         let gap = sim.world.segment_hit([59.0, 12.0, -207.5], [59.0, 8.0, -207.5]);
         assert!(gap.is_none(), "the band crossing gained floor at band height; the stand-in could be dropped");
+        // Sister 2: the strip cul-de-sac wall (x 53.57, y 10.85..14.85, z −206.33..−205.12 [D
+        // lipline]) must stand — if it ever vanishes the strip route reopens and this stand-in's
+        // evidence block is stale. (A horizontal ray — the wall is an x-constant plane.)
+        let wall = sim.world.segment_hit([53.0, 12.0, -205.7], [54.2, 12.0, -205.7]);
+        assert!(wall.is_some(), "the strip's east wall (x 53.57 [D lipline]) vanished; re-check the crossing route");
         sim.bond.pos = [68.0, 11.4, -207.9];
         sim.bond.vel = [0.0; 3];
     }
