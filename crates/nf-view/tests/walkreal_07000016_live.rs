@@ -574,7 +574,11 @@ fn the_station_use_swaps_the_screens_end_to_end() {
 /// — and the four keypad SPs it also arms play display anims that write no channels [D 06000999].
 /// This pins that in the port: both orders re-enable Bond at the [D] stream-8 pit-floor pose and
 /// raise ch 243 on the same clock. The ONE channel-state difference the order makes — the cinema's
-/// stream 13 clears ch 180 (0xb4, door[4]'s panel channel) at its t747 [D 06000631 s13 EV0x0d] —
+/// stream 13 carries EV0x0d [180, 0] at its t747 [D 06000631 s13] — which writes NOTHING: the
+/// game's event 0xD returns on a zero value BEFORE the store [M Script_EventHandler 0x1d94c0
+/// case 0xd disasm 0x1d9758 `beqz $v1` → 0x1d982c, the `sb` at 0x1d975c unreached; the
+/// decompiled C drops this return], so a script event can never CLEAR a channel and ch 0xb4
+/// (door[4]'s panel channel, set by trigger #270 [D]) stays on through the cinema —
 /// is asserted per phase.
 #[test]
 fn the_real_order_launch_chain_matches_the_teleported_one() {
@@ -684,7 +688,12 @@ fn the_real_order_launch_chain_matches_the_teleported_one() {
     let delta_a = t243 - t_reenable;
     {
         let sim = w.scene.sim.as_ref().unwrap();
-        assert!(!sim.drones.channels.on(0xb4), "the cinema's stream-13 t747 write cleared ch 0xb4 [D 06000631 s13 EV0x0d[180,0]]");
+        // script-event-channel-writes correction: the old pin asserted the clear ("the cinema's
+        // stream-13 t747 write cleared ch 0xb4") — the disc event is [180, 0] [D 06000631 s13],
+        // and the game's 0xD returns on a zero value BEFORE the store [M 0x1d94c0 case 0xd
+        // disasm 0x1d9758 beqz, the 0x1d975c sb unreached; raw words 8fa30004 10600034 a0440000
+        // — the decompiled C drops the return], so ch 0xb4 keeps door[4]'s panel value [D #270].
+        assert!(sim.drones.channels.on(0xb4), "the cinema's [180,0] wrote NOTHING (the game's 0xD can't clear) — ch 0xb4 stays on [M 0x1d9758 beqz + D #270]");
     }
 
     // ---- phase B: the teleported run (the sister's own setup: placed on trigger #255, no input) ----
