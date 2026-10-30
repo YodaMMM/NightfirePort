@@ -197,3 +197,57 @@ fn an_unknown_hash_draws_nothing() {
     let mut p = Progress::default();
     assert!(stats_rows(&mut p, 0x0700_0048, 6, 1, None).is_none());
 }
+
+/// mission-stats-rows: the time row's denominator is INTEGER seconds —
+/// `uVar2 = *(int *)(rows+0x94) / 100` integer-divides the 1/100-s tally before the float casts
+/// [M 0x1984b0:120], and the under-par arm's max(·, 1) guard rides that (float)(int) value [M
+/// :125-131]. Two pins the old float-seconds port failed: 7950/100 floors to 79 (the float 79.5
+/// scored 169,812), and a sub-10-second tally floors hard (8.00 s of the 480 s par is 8, not
+/// 8.0 — the game scores 25000·480/8 = 1,500,000, not the float's 1,585,205-shape).
+#[test]
+fn the_time_row_divides_by_integer_seconds() {
+    let mut p = Progress::default();
+    p.reset_for_mission();
+    for _ in 0..10 {
+        p.log_shot_fired(1);
+        p.log_shot_hit_enemy(1);
+    }
+    p.log_health(1, 100.0);
+    p.log_update_elapsed(7950); // 79.50 s — the integer step floors to 79 [M 0x1984b0:120]
+    let rows = stats_rows(&mut p, 0x0700_0005, 6, 1, None).unwrap();
+    let cell = |id: u32| rows.iter().find(|r| r.id == id).unwrap();
+    assert_eq!(cell(0x160).current, "01:20", "the current rounds the 79.50 s display [M Timer_Seconds2String 0x1deaa8]");
+    assert_eq!(cell(0x160).total, "170,887", "ceil(25000·540/79) — the integer step, the capture's own score [M 0x1984b0:120]");
+
+    // The Double Cross base (07000001, par 480 s, time max 25,000 [L ee_start_05 entry 4]):
+    // an 8.00-second tally scores 25000·480/max(8, 1) = 1,500,000 [M :118-170].
+    let mut p = Progress::default();
+    p.reset_for_mission();
+    p.log_update_elapsed(800);
+    let rows = stats_rows(&mut p, 0x0700_0001, 6, 1, None).unwrap();
+    let cell = |id: u32| rows.iter().find(|r| r.id == id).unwrap();
+    assert_eq!(cell(0x160).current, "00:08");
+    assert_eq!(cell(0x160).target, "08:00", "the 480 s par through the timer format [M 0x209938:103-108]");
+    assert_eq!(cell(0x160).total, "1,500,000", "the integer 8 s denominator [M 0x1984b0:120-131]");
+}
+
+/// mission-stats-rows: the per-level target table — the Double Cross base's static rows
+/// ([L] ee_start_05.bin entry 4 at 0x2bc790, rows 0x2bc080) carry Dispatched count 45 and the
+/// mission-wide design values; the stats page shows them on EVERY Double Cross part (the base
+/// map, [M Mission_Init 0x182270:52 + the mission table 0x2a4350 row 7: 07000004 → 07000001]).
+#[test]
+fn the_double_cross_base_rows_are_the_static_design() {
+    let mut p = Progress::default();
+    let rows = stats_rows(&mut p, 0x0700_0001, 6, 1, None).unwrap();
+    let cell = |id: u32| rows.iter().find(|r| r.id == id).unwrap();
+    assert_eq!(cell(0x165).target, "2", "Bond moments [L entry 4 row 0]");
+    assert_eq!(cell(0x15b).target, "45", "Dispatched — the game's own design value [L entry 4 row 1: count 45, points 50000]");
+    assert_eq!(cell(0x15c).target, "3", "Subdued [L entry 4 row 2]");
+    assert_eq!(cell(0x16e).target, "3", "Surrendered [L entry 4 row 3]");
+    assert_eq!(cell(0x15d).target, "----", "Stealth: −1 target [M 0x201df0] — the allowed count is 38 [L entry 4 row 4]");
+    assert_eq!(cell(0x15e).target, "100%", "Accuracy par [L entry 4 row 5]");
+    assert_eq!(cell(0x15f).target, "100%", "Health literal [M 0x209938:105-108]");
+    assert_eq!(cell(0x160).target, "08:00", "the 480 s par [L entry 4 row 7]");
+    assert_eq!(cell(0x161).target, "7", "007 Bonus pickups [L entry 4 row 8]");
+    assert_eq!(cell(0x164).total, "0", "Agent/Operative ×0.0 difficulty multiplier [M 0x1984b0:294-300]");
+}

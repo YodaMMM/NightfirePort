@@ -181,3 +181,68 @@ fn the_pad_edges_carry_the_results_arms() {
     assert_eq!(pad_menu_action(0x800, &mut prev), None);
     assert_eq!(pad_menu_action(0, &mut prev), None);
 }
+
+/// menu-stats-page: the page's labels resolve through the game's own string lookup. The header
+/// quartet is [M P_NFSTATS 0x209938:54-61 — `Txt_BindLabel(0x1000204)` as the header row's cell
+/// 0, then arms 0x19 with cells 1/2/3]: 0x1000204 = 0x01000204 (bank 1 — SEVEN hex digits; the
+/// port's old 0x1000_0204 read 0x10000204 = bank 0x10, past USATxt.dat's 7 fixups [D the file's
+/// NumFixups 7], so every header bind failed). The strings themselves: [L ee_snapshot
+/// FixupTable 0x1f9b200 (fixups[1] = 0x3e8), Bank[1516] = "Category", Bank[1481] = "Current",
+/// Bank[1482] = "Target", Bank[721] = "Mission Stats", Bank[1181] = "~B Back"] + [D USATxt.dat
+/// bank 0: 0x163 = "TOTAL", 0x165 = "Bond Moves", 0x15a = "Opponents", 0x15b = "Dispatched",
+/// 0x15c = "Subdued", 0x16e = "Surrendered", 0x15d = "Stealth Rating", 0x15e = "Accuracy
+/// Rating", 0x15f = "Health Remaining", 0x160 = "Time", 0x161 = "007 Bonus", 0x162 =
+/// "Subtotal", 0x164 = "Difficulty Bonus"]. The row labels bind at `stats_enter` — the same
+/// lookup the draw's page furniture uses (menu-stats-page: menu_after feeds stats_enter the
+/// sim's bank when the bare-mission app has no front-end lang).
+#[test]
+fn the_stats_page_resolves_its_labels_from_the_language_bank() {
+    let Some(iso) = std::env::var("NF_ISO").ok().filter(|_| true) else { return };
+    let Ok(iso) = nf_formats::iso9660::IsoImage::open(&iso) else { return };
+    let Ok((entries, bin)) = nf_formats::disc::files_bin_entries(&iso) else { return };
+    let Some(fe_entry) = entries.iter().find(|e| e.name.eq_ignore_ascii_case("USATxt.dat")) else { return };
+    let Ok(bytes) = iso.read_bytes(bin.lba as u64 * 2048 + fe_entry.offset as u64, fe_entry.size as u64) else { return };
+    let lang = nf_formats::hud::Lang::parse(&bytes).expect("USATxt.dat parses [M Txt_LoadLanguage 0x1caad0's FNames[SelLang]]");
+
+    // The header quartet, through the port's own const (nf_game::stats::STATS_HEADER).
+    let (h0, h1, h2, h3) = nf_game::stats::STATS_HEADER;
+    assert_eq!(h0, 0x0100_0204, "the decompile's 0x1000204 is bank 1, not 0x10 [M 0x209938:54]");
+    assert_eq!(lang.bind(h0), Some("Category"), "[L ee_snapshot Bank[1516]]");
+    assert_eq!(lang.bind(h1), Some("Current"), "[L ee_snapshot Bank[1481]]");
+    assert_eq!(lang.bind(h2), Some("Target"), "[L ee_snapshot Bank[1482]]");
+    assert_eq!(lang.bind(h3), Some("TOTAL"), "[D USATxt.dat 0x163]");
+    // The page's furniture labels [D 08000002 page 0x40000037's title/hint controls].
+    assert_eq!(lang.bind(0x2d1), Some("Mission Stats"), "[L ee_snapshot Bank[721]]");
+    assert_eq!(lang.bind(0x49d), Some("~B Back"), "[L ee_snapshot Bank[1181]]");
+
+    // The rows bind at stats_enter (the same bank), so no category prints as its raw id.
+    let mut fe = FrontEnd::new();
+    let mut progress = nf_game::progress::Progress::default();
+    progress.reset_for_mission();
+    assert!(fe.stats_enter(&mut progress, 0x0700_0005, 6, 1, Some(&lang)), "07000005 builds the rows [M 0x209938:36-40]");
+    let rows = fe.mission_stats.as_ref().unwrap();
+    let cat = |id: u32| rows.iter().find(|r| r.id == id).map(|r| r.category.clone()).unwrap_or_default();
+    assert_eq!(cat(0x165), "Bond Moves");
+    assert_eq!(cat(0x15a), "Opponents");
+    assert_eq!(cat(0x15b), "Dispatched");
+    assert_eq!(cat(0x15c), "Subdued");
+    assert_eq!(cat(0x16e), "Surrendered");
+    assert_eq!(cat(0x15d), "Stealth Rating");
+    assert_eq!(cat(0x15e), "Accuracy Rating");
+    assert_eq!(cat(0x15f), "Health Remaining");
+    assert_eq!(cat(0x160), "Time");
+    assert_eq!(cat(0x161), "007 Bonus");
+    assert_eq!(cat(0x162), "Subtotal");
+    assert_eq!(cat(0x164), "Difficulty Bonus");
+    assert_eq!(cat(0x163), "TOTAL");
+    for r in rows.iter() {
+        assert!(!r.category.starts_with('<'), "no raw id remains: row {:#x} = {:?}", r.id, r.category);
+    }
+    // The draw takes the bound rows without panic (the page furniture renders too).
+    let font = test_font();
+    let hfont = test_font();
+    let textures: Vec<(u32, nf_view::scene::TextureImage)> =
+        nf_view::menu::MENU_TEXTURES.iter().map(|&h| (h, crate_texture(h))).collect();
+    let frame = menu_overlay(&fe, &font, &hfont, Some(&lang), &textures, 4.0 / 3.0);
+    let _ = frame;
+}
