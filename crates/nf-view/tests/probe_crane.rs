@@ -36,6 +36,32 @@ fn teleport(w: &mut Walker, x: f32, y: f32, z: f32) {
 }
 
 #[test]
+#[ignore = "probe: the ride-carry check; run with --ignored --nocapture"]
+fn probe_the_ride_carry() {
+    let mut w = load_warm();
+    teleport(&mut w, 189.0, 10.0, -287.6);
+    let used = w.try_walk_to(Wp::at(189.0, 9.9, -288.7, Act::Use { use_ticks: 240 }), "E #460");
+    w.wait(5);
+    eprintln!("[probe] E ok {used} ch {}", w.scene.sim.as_ref().unwrap().drones.channels.on(0x2b));
+    // The beam heads east for ~1300 ticks, then west. Board the westbound rail at t ~1550:
+    // rail 1 runs at origin-x − 2.54, top y = 11.33 + 2.99 = 14.32.
+    w.wait(1540);
+    let sim = w.scene.sim.as_ref().unwrap();
+    let m = sim.drones.scripts.entity_matrix((0x0600_09ef, 1)).unwrap();
+    let ox = m[3][0];
+    eprintln!("[probe] board: beam origin x {ox:.2}");
+    teleport(&mut w, ox - 2.54, 15.0, -280.0);
+    w.wait(20);
+    eprintln!("[probe] boarded at {:?}", pos(&w));
+    for k in 0..13 {
+        w.wait(120);
+        let sim = w.scene.sim.as_ref().unwrap();
+        let ox = sim.drones.scripts.entity_matrix((0x0600_09ef, 1)).map(|m| m[3][0]).unwrap_or(-1.0);
+        eprintln!("[probe] ride t{} origin {ox:.2} bond {:?}", (k + 1) * 120, pos(&w));
+    }
+}
+
+#[test]
 #[ignore = "probe: the beam surfaces and the ledge ride; run with --ignored --nocapture"]
 fn probe_the_beam_and_ledge() {
     let mut w = load_warm();

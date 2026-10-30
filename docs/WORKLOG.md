@@ -46,3 +46,12 @@ Progress 03:03-04:20 UTC:
   west → drop into the yard at x ~137, and remove the 0x1b/0x1c set_channel if the
   crane path raises them.
 - checkpoint pushed before the 04:41 stop-new-work line.
+- the carry MECHANISM verified (probe_the_ride_carry): boarded onto the westbound rail
+  (origin x − 2.54, top y 14.32) and Bond was carried the whole ride — his x holds a
+  constant ~1.9 offset from the beam origin through the west apex (137.55) and back east
+  when the beam reverses; `CollisionWorld::ground_motion` (Player_FeetOnPoint 0x194188 →
+  Control_InheritVelocity) carries the rider. The only open leg is the real-input BOARD
+  (dock y 9.5 / ledges y 9.0/8.1 → the rail top 14.32 is 5-6 m up; the beam's bottom
+  flange 8.35 passes 0.25 over the ledge but the ledge-watch showed the standing player
+  is not pushed — the game's boarding move is still to find: [S] candidates are the
+  wire #271 (p0 gate 0xa) or a rotate-crane step, both unmapped).
