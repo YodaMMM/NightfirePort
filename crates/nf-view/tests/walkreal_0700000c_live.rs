@@ -449,9 +449,12 @@ fn walk_the_whole_mission_from_the_start_to_the_0d_handoff() {
             let sim = w.scene.sim.as_ref().unwrap();
             if sim.bond.substate != nf_game::player::SS_WIRE { dropped = true; break; }
             let d = ((sim.bond.pos[0] + 8.47).powi(2) + (sim.bond.pos[2] + 216.52).powi(2)).sqrt();
-            // The drop is the jump press inside 0.9 of B (blockers-2's green drop; the FIRE-action
-            // variant from real-crossings never fires — the ride parks at d_B ≈ 1.05 past B, the
-            // d < 0.9 window never opens on this tree [this run's hang at (−8.98, 12.65, −217.44)]).
+            // The drop is the jump press inside 0.9 of B (blockers-2's green drop). The
+            // FIRE-action variant (real-crossings 29b43fa9, never run on that branch) rode the
+            // full 2400 ticks to the natural stop d_B ≈ 1.05 past B WITHOUT releasing [this
+            // run's hang at (−8.98, 12.65, −217.44) — the y 12.65 hang root = wire 13.67 − 1.02
+            // [M hang 1.0207]], so the wire release does not answer the trigger here; the jump
+            // press does (blockers-2's three green drops).
             let input = nf_game::player::Input { strafe: 1.0, jump: d < 0.9, ..Default::default() };
             w.scene.sim.as_mut().unwrap().step_bond(input, false, false, false);
             w.total_ticks += 1;
