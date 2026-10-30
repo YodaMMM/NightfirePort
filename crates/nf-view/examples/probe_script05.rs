@@ -35,7 +35,7 @@ fn main() {
         }
     }
 
-    for h in [0x0600_0952u32] {
+    for h in [0x0600_0952u32, 0x0600_0046u32, 0x0600_0047u32] {
         let Some(n) = level.nis.get(&h) else { println!("nis {h:08x} NOT in the level set"); continue };
         println!("== nis {h:08x}: camera {} len {} streams {} ==", n.camera as u8, n.length, n.streams.len());
         for (si, st) in n.streams.iter().enumerate() {
@@ -74,6 +74,7 @@ fn main() {
                 }
             }
             println!("  stream {si}: len {} keys {}..{} events:{events}", c.len(), st.first_key, st.last_key);
+            if events.contains("ev0x6") || events.contains("ev0x11") { println!("    ^^^ HAS the player-return/enable event"); }
         }
     }
 }
