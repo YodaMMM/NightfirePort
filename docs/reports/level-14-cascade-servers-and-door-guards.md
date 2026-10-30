@@ -123,6 +123,11 @@ the hit before the switch], and dmg-0 blasts produce no msg 9 at all.
 
 ## What's left
 
+Status at the sandbox cutoff (03:33 UTC, expiry ~03:54): part 1 is complete and pinned; part 2
+needs one more session (the crossing bisect via the live checks; the FULL-suite total line on this
+tree). This dispatch marks the queue entry blocked for that reason only — the branch carries all
+two commits of fixes, both pin tests, the probe harness and this report.
+
 1. The door-guard crossing (the live checks above; the probe harness is committed for the bisect).
 2. The FULL suite total line on this final tree.
 3. Optional: the satellite boxes' smash plays its explosion + channel write (the sim already does;
