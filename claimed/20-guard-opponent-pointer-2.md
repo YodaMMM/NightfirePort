@@ -20,3 +20,6 @@ say so in the report. Never weaken a decompile-backed test to make code pass.
   is on your branch: merge `origin/master` first). Read `tail -1 suite.out` and its FAILED/TIMEOUT lines before you push, and
   run it once more on your final tree (merged with `origin/master`). Report the total line.
 
+
+---
+claimed-by: sandbox7 at 2026-10-30T11:32Z
