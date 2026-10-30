@@ -36,3 +36,28 @@ onto the ring SE corner (11.09..11.17), got [35.15, 13.55, -209.95] dropped true
 (walkreal_0700000c_live.rs:454). Find what moved the drop (the face Bond stands on at y 13.55,
 the drop timing, the wire's end) [D/M], fix the port or re-derive the leg, keep the walk green.
 FULL suite on the final tree; quote the total line. Deadline ~02:02 UTC, stop 01:42 UTC.
+
+## level-0c-every-objective-blockers-2 — 01:00 UTC (final for this window)
+
+The #283 ride's drop was NOT moved by the merge — the leg was never validated (the WIP said so)
+and its drop timing was wrong. Evidence: the corner floor's west edge is x ≈ 35.8 (a 10.89/10.69
+step at z −210..−209.8, the 11.06..11.09 corner east of it [D ray maps]; the 11.93 lip at
+(35.8, −209.6..−208.8)), while the old `jump at d < 0.9` fired the FIRST tick inside 0.9 of B
+(35.89, −209.44) — at (35.15, −209.95), 0.65 WEST of the edge, where the port has NO face at all
+(y 15..8 under the point: empty [D rays]) — Bond fell to the yard (root 1.41 in the probe). The
+RED's [35.15, 13.55, −209.95] is the HANG pose (wire y 14.44 − the 1.0207 hang offset [M
+wire_tick 0x1976dc's `hang`]), snapshotted because the settle loop's `if grounded break` breaks
+on the exit tick's STALE grounded flag — wire_tick's drop path zeroes vel and returns; the flag
+clears the next tick [M 0x197758's exit arm]. The ride itself reaches past B: the strafe zero
+rule parks the input at d_B ≈ 0.5 [M 0x1977c0] but the playing mode-7 move anim finishes its
+root motion and overshoots to d_B ≈ 1.1 PAST B — (36.70, 13.41, −208.66), over the 11.06 corner
+floor [probe trace]. Fix (test-only): ride to the natural stop (d no longer shrinking for 90
+ticks) and jump there; settle waits air-then-ground. The landing [37.28, 12.10, −208.45] —
+root 12.10 on the 11.06 corner — inside every [D]-backed band of the existing assert, which is
+unchanged. walkreal_0700000c_live 2 passed / 0 failed (the whole mission 6366 ticks, stuck 0,
+falls 0; the 0d handoff fires objective 3). No port code changed — the merge brought no
+player.rs/world.rs edits (02e306a6..21fbeed3 touches drone/lock/gadget/nis/progress/stats only).
+
+Suite: the fast runner (tools/test/suite.py) launched 00:05 UTC, build ok 923 binaries in
+1168 s, sweep running on the final tree (the 0c binary re-linked with the fix before its turn);
+the sweep cannot finish inside this window — the total line is reported as far as it got.
