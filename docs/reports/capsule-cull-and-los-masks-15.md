@@ -96,9 +96,12 @@ default and deletes the gate code as the task demands).
 4. **The full suite** on the final tree merged with origin/master; quote the total line.
 5. Only then remove the two remaining bisect switches (NF_CULL_UP / NF_NO_CULL) and land.
 
-## ntfy failed
+## ntfy
 
-(filled after the finish attempt below)
+Sent successfully: curl, HTTP 200, id ZNBRkLgsug3I (2026-10-30 ~12:28 UTC), message
+"capsule-cull-and-los-masks-15: matrix landed — no single cull state greens all five walks
+(02 UP, 14 DOWN, 03/08 OFF, 01 any); landing = master's DOWN default (08 flips green), masks
+gates removed, disasm pinned; report on branch".
 
 ## Usage
 
