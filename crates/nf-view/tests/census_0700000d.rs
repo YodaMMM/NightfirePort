@@ -84,3 +84,30 @@ fn dump_0700000d_scripts() {
         }
     }
 }
+
+/// The crane scripts' entity-stream KEY poses (0x060009ef stream 1/2 = the shipping crane and its
+/// child; 0x06000a08 = the crane rotate). Opt-in NF_ISO; prints only.
+#[test]
+#[ignore = "assertion-free key dump; run with --ignored"]
+fn dump_0700000d_crane_keys() {
+    use nf_formats::levelbin::LevelBin;
+    use nf_formats::nis::Nis;
+    let Some(iso) = iso() else { eprintln!("NF_ISO not set"); return };
+    let data = read_archive(&iso, "0700000d.bin");
+    let lb = LevelBin::parse(&data).expect("levelbin");
+    for want in [0x0600_09efu32, 0x0600_0a08] {
+        let Some(se) = lb.entries.iter().find(|e| e.kind == 7 && e.hash() == want) else { println!("script {want:08x}: missing"); continue };
+        let nis = Nis::parse(se.hash(), lb.data(&data, se)).expect("nis");
+        println!("script {:08x} len {} streams {} keys {}", nis.hashcode, nis.length, nis.streams.len(), nis.keys.len());
+        for (si, s) in nis.streams.iter().enumerate() {
+            if s.last_key < s.first_key { continue; }
+            println!(" stream {si}: keys {}..{}", s.first_key, s.last_key);
+            for k in s.first_key..=s.last_key {
+                if k as usize >= nis.keys.len() { break; } // stream-0 0..65535 = "no keys" in some dumps
+                let key = &nis.keys[k as usize];
+                println!("   key {k}: p({:.2},{:.2},{:.2}) q({:.3},{:.3},{:.3},{:.3}) s {:.2} t {:.0}",
+                    key.pos[0], key.pos[1], key.pos[2], key.quat[0], key.quat[1], key.quat[2], key.quat[3], key.scale, key.time);
+            }
+        }
+    }
+}

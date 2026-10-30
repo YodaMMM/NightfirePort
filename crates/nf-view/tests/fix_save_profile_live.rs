@@ -108,13 +108,18 @@ fn codename_page_loads_the_game_chain() {
     assert!(fe.unlocked.iter().all(|&u| u), "the snapshot's profile has all 12 missions unlocked [L MSSN ff 0f 00 00]");
 
     // The Records values come from the loaded profile [M 0x20bf00 reads ScoringTable+0x30 etc.].
+    // The census: the game counts the counters whose descriptor KIND is 4 with the bit standing
+    // [M C_RBDSRECORDS 0x20bf00:34-44 — the `aiStack_a0[0] == 4` arm; the pre-records-medal
+    // census counted every earned medal, fixed per the decompile].
     let direct = nf_game::profile::Profile::load_file(&nf_game::profile::Profile::path_in(&dir, "SNAP")).unwrap();
     for row in 0..12 {
         assert_eq!(
             fe.record_row(row),
             (direct.progress.table[row].best, direct.progress.table[row].rows[0].value, {
                 let hash = nf_game::progress::SP_LEVEL_HASHES[row];
-                (1..=4).filter(|&k| direct.progress.has_medal(hash, k, 0)).count() as u32
+                (1..=4).filter(|&k| direct.progress.has_medal(hash, k, 0)
+                    && nf_game::progress::REWARDS_TABLE.iter().find(|e| e.hash == hash)
+                        .is_some_and(|e| e.desc[k as usize].kind == 4)).count() as u32
             }),
             "the Records page reads the profile's progress for row {row}"
         );

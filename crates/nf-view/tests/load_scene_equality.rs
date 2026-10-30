@@ -60,13 +60,14 @@ const BASELINE: &[(&str, &str)] = &[
     // Re-pinned 10-29 (concurrent blasts): the blast effect scripts carry four slot sets each
     // instead of one (+327 attachments, +4026 vertices, +8154 indices on every level - the same
     // set on all five), so several live explosions draw at once.
-    ("07000002.bin", "cea9a5ea72635e17 4522810 9459888 5357 4385823 82 11050 205 28 25 5"),
+    // destroy-wreck re-pin (10-29): the 0xe1 leaves' destroyed glists are baked at the leaf (drawn only once dead) [M Destroy_Create 0x12c318:25-30, Destroy_Smash 0x12bb60] - more vertices/materials on 01/02/0c/14, same characters/attachments.
+    ("07000002.bin", "8fd7df29bf234775 4523624 9461472 5391 4385823 82 11050 205 28 25 5"),
     ("07000005.bin", "c18ce5ee4f22d3cf 4426865 9260541 3624 4342524 74 10984 106 19 16 4"), // the two copter SPs + their script draw slots; re-pinned 10-26: the 0x3b dynamic objects ride posed slots [M View_AddObjects 0x1e62d8:33, DynamicObject_Update 0x18d3b8]; re-pinned 10-28: the searchlight heads' block-0x27 LOD meshes (OBJECT_SearchLightBroken) on their own slots [M Control_NextLOD 0x1349b0] (+1134 verts, +1 material)
     // lift-indicators-09 re-pin: one draw slot per `Script_SubScriptStart` op per running SP
     // [M 0x1db050] — 0700000c's multi-SP sub chains add 6 slots (+248 vertices, +576 indices,
     // +1 attachment); 07000014's vent-lid SPs are placed SPs (unchanged), the rest have no
     // multi-SP sub chains.
-    ("0700000c.bin", "d45c630a2910ef2a 4909848 10327200 8134 4721616 97 12237 170 22 40 11"), // re-pinned 10-26: 0x3b on posed slots
+    ("0700000c.bin", "cdb588bea7be0a4c 4921536 10345704 8400 4721616 97 12237 170 22 40 11"), // re-pinned 10-26: 0x3b on posed slots
     // script-entity-copies: one draw slot per ScriptPlayer running a script — 14's nine
     // SPs on the vent-lid script 0x06000A3B (+ its other shared scripts) add 20 attachments, +1600 vertices.
     // The keypads' LOD pair in the posed slots (Lock_Unlock 0x1b0650 / case 1 `Control_NextLOD`: three
@@ -80,8 +81,8 @@ const BASELINE: &[(&str, &str)] = &[
     // param-0 script 0x06000A1B, +20 script-entity slots (the cabinet and wire art) [M FuseBox_Create].
     // 07000014 places two kind-6 rows as well: −836 verts / −752 indices / −2 material slots,
     // pickups 32 → 30 (same gate).
-    ("07000014.bin", "c0740f06aa7d7500 7187461 14935689 6493 7036122 99 14751 173 41 37 30"), // re-pinned 10-26: p0-gated 0x3b instanced from load (created hidden [M 0x18dbf8:27-29])
-    ("07000001.bin", "9a685f92d6ba67c5 4435488 9300354 3495 4362509 77 11064 101 11 20 4"), // re-pinned 10-26: the radio-room rotors on posed slots [M rotor_update 0x18f568]
+    ("07000014.bin", "e535884775727d1c 7197909 14957277 6835 7036122 99 14751 173 41 37 30"), // re-pinned 10-26: p0-gated 0x3b instanced from load (created hidden [M 0x18dbf8:27-29])
+    ("07000001.bin", "c9c93688ca91203e 4436539 9302259 3546 4362509 77 11064 101 11 20 4"), // re-pinned 10-26: the radio-room rotors on posed slots [M rotor_update 0x18f568]
 ];
 
 #[test]

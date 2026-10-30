@@ -339,6 +339,19 @@ pub struct Renderer {
     /// doorway ends open [L]). Fed by lib.rs each frame from `Scene::destroy_centres` + the sim's
     /// `props.destroy[..].dead`; empty until set (the loading screen and the pre-sim frames).
     pub destroy_dead: Vec<[u32; 3]>,
+    /// The swap's WRECK draws, per frame: the baked wreck instances' material centres (f32
+    /// bits) whose Destroy leaf is dead — the only wreck draws that render ([M Destroy_Smash
+    /// 0x12bb60's `Control_SetGList(obj, tag[0])` swap: the dead object rides the destroyed
+    /// glist — the block-0x27 LOD-next or the parsemap fallback slot]). Fed by lib.rs each
+    /// frame from `Scene::destroy_wrecks` + the sim's `props.destroy[..].dead`; matched
+    /// against `destroy_wreck_all` below by bits.
+    pub destroy_wreck_draw: Vec<[u32; 3]>,
+    /// The build-time set of every baked wreck draw's centre bits (from `Scene::destroy_wrecks`,
+    /// set in `Renderer::new`): a World draw whose centre is in this set renders ONLY while its
+    /// centre is also in `destroy_wreck_draw` — before the smash the wreck is undrawn (the live
+    /// glist is the intact one), after it the intact materials drop via `destroy_dead` and the
+    /// wreck shows.
+    pub destroy_wreck_all: Vec<[u32; 3]>,
     /// The Destroy leaves' hit-flash colour pair, per frame: (material centre bits, obj+0x104/0x105).
     /// `View_SetupRenderModes_Tweak` 0x1e5888 multiplies the object's draw colour by its tweak
     /// bytes; `Destroy_CollisionHandler` 0x12bd48:61-95 drops the pair 5 a tick under the laser
@@ -747,7 +760,7 @@ impl Renderer {
             for ch in &cel_graph.chains { for &c in ch { if (c as usize) < n { reached[c as usize] = true; } } }
             reached.iter().map(|r| !r).collect()
         };
-        Renderer { shard_pipeline, shard_vbuf, shard_groups: Vec::new(), woman_tex, snow_pipeline, snow_vbuf, snow_bg, hud_pipeline, hud_add_pipeline, hud_sub_pipeline, hud_vbuf, hud_bgs, pipelines, fog, notex, nofog, uniform, uniform_bg, staged: Vec::new(), orphan_nodes, destroy_dead: Vec::new(), destroy_tint: Vec::new(), batch, vbuf, skin_buf, snow_skin, pal_buf, col_buf, wts_buf, mtg_buf, skin_layout, skin_pos: Default::default(), char_light_centre: Vec::new(), lights: Default::default(), screen_aspect: 0.0, ibuf, tex_bgs, tex_frames, draws, order: Vec::with_capacity(order_cap), cel_boxes, cel_graph, viewer_cel: Default::default(), last_vis: None, last_cell_vis: None, movie_tex: None, movie_bg: None, movie_size: None, movie_vbuf, hud_tbgl: tbgl, hud_sampler: sampler }
+        Renderer { shard_pipeline, shard_vbuf, shard_groups: Vec::new(), woman_tex, snow_pipeline, snow_vbuf, snow_bg, hud_pipeline, hud_add_pipeline, hud_sub_pipeline, hud_vbuf, hud_bgs, pipelines, fog, notex, nofog, uniform, uniform_bg, staged: Vec::new(), orphan_nodes, destroy_dead: Vec::new(), destroy_wreck_draw: Vec::new(), destroy_wreck_all: scene.destroy_wrecks.iter().map(|(c, _)| c.map(f32::to_bits)).collect(), destroy_tint: Vec::new(), batch, vbuf, skin_buf, snow_skin, pal_buf, col_buf, wts_buf, mtg_buf, skin_layout, skin_pos: Default::default(), char_light_centre: Vec::new(), lights: Default::default(), screen_aspect: 0.0, ibuf, tex_bgs, tex_frames, draws, order: Vec::with_capacity(order_cap), cel_boxes, cel_graph, viewer_cel: Default::default(), last_vis: None, last_cell_vis: None, movie_tex: None, movie_bg: None, movie_size: None, movie_vbuf, hud_tbgl: tbgl, hud_sampler: sampler }
     }
 
     /// The game's depth-0 pyramid for the walk [M `Vision_Calculate_View_Fustrum` 0x1e7df8,
@@ -1026,12 +1039,19 @@ impl Renderer {
             // The destroyed-glist swap's draw side (see the field doc): a dead Destroy leaf's
             // materials — matched by the build-time centre bits — drop out of the frame.
             let destroy_dead = &self.destroy_dead;
+            // The swap's wreck side: a baked wreck draw renders only while its leaf is dead (see
+            // the field docs — before the smash the object's live glist is the intact one).
+            let wreck_all = &self.destroy_wreck_all;
+            let wreck_draw = &self.destroy_wreck_draw;
             let parked_pos = self.skin_pos.borrow();
             let layout = &self.skin_layout;
             self.order.extend(draws.iter().enumerate().filter(|&(k, dc)| {
                 if skip.contains(&k) { return false; }
                 if !destroy_dead.is_empty() && dc.layer == Layer::World
                     && destroy_dead.contains(&dc.centre.map(f32::to_bits)) { return false; }
+                if !wreck_all.is_empty() && dc.layer == Layer::World
+                    && wreck_all.contains(&dc.centre.map(f32::to_bits))
+                    && !wreck_draw.contains(&dc.centre.map(f32::to_bits)) { return false; }
                 // perf-240: a skinned draw whose owner slot holds the FAR park matrix (an empty effect /
                 // projectile pool slot, a room-culled character — `skin_palette`'s FAR: zero 3×3,
                 // 10000 below the world) draws only a degenerate point far under the map: skip it.
