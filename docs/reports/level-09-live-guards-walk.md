@@ -75,7 +75,11 @@ takedown chain the level stages.
   behaviour, and the whole 09 family stays green with the live-guard walk in.
 - The full suite (the fast runner) restarted on the final merged tree after the merge
   (build ok: 915 test binaries in 1109 s); it needs ~2–3 h here and ran on past the report —
-  its `suite.out` total line is the next session's first read.
+  its `suite.out` total line is the next session's first read. Two early CRASH lines
+  (`mp_remote_fx_live`, `mp_16_slots_live`, exit -9 = SIGKILL) landed while the touched
+  slice above ran CONCURRENTLY with the suite — memory pressure from the second cargo run,
+  not a code failure; both are MP tests unrelated to the dart path. Re-run those two binaries
+  (and the tail) on a quiet tree first.
 - Evidence discipline: every game-behaviour assertion in the new test code carries its [M]
   decompile address; the two [L] facts (the loadout dump, the scratch kills) are marked as
   live runs in comments; the walk's stealth tuning choices (the dart-first order, the bubble
