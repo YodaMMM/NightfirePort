@@ -110,3 +110,23 @@ Progress log:
 - 00:56 branch s/level-4a-every-objective-3 created from origin/s/level-4a-every-objective-2
   (d5d604a0) and merged with origin/master (48696227); setup checked (repo, work/, ISO,
   target-cache, nf-queue all present).
+- 00:59-01:13 the 08 fusebox repro on the merged tree: the walk reaches the fusebox but the
+  fire never raises ch 137 (the assert red, 2p/1F). The one-line revert experiment (the drone
+  Bullet::update scoped query -> the flat segment_bullet) turns the walk GREEN (3p/0F) — the
+  -2 change is the delta, confirmed.
+- 01:14-01:45 the mechanism chased with temporary probes (removed from the tree): the fusebox
+  wire state is IDENTICAL on both trees (1 wire, obj43, hash 020008b9, wire_geo present,
+  matrix (154.35,43.41,-119.67) constant through the fire window); the laser's spread is 0.0
+  [L ee_snapshot weapon_data +0x4e*0x10C +0x24] and its rounds live ONE tick with a 4.0
+  clamped segment [M the +0x1C boundary clamp 0x12f014-0x12f02c]. THE DIVERGENCE: on the
+  scoped tree the walk's upper route gives up (the station doors nav 10, the lower landing
+  nav 1, by-the-fusebox nav 1/3 — all at the 3000-tick caps) and Bond fires from the LOWER
+  level (bond y 37.35, muzzle y 38.26, the segment tops at y 42.00) while the wire box hangs
+  at y 43.41 — the shot cannot reach; on the flat tree the walk reaches the upper level
+  (muzzle y 43.70, the wires at 43.41 — hit). The guards' rounds fly differently under the
+  cel-scoped candidate set [M Bullet_update 0x12e7b0:343 seeds Collide_RayIntersect from
+  obj+0x20; Collide_Pick 0x1eb320:125 -> Collide_StraddleCels 0x1eac98 — the port's -2 query
+  matches the game's shape] and the hotter approach diverges the AI/door states the walk's
+  route rides. The walk hardening (the climb retry) is the next session's first move; the
+  candidate set's own semantics checked clean against 0x1eac98 (the BFS cap 0x7e, the stamp
+  visit, the portal-intersection gate — the port's straddle mirrors it).
