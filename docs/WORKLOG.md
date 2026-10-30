@@ -41,3 +41,12 @@ default (remove the env gate), and run every walkreal_* binary plus the collisio
 report any walk that changes with the leg and the position delta.
 
 Outcome 13:36 UTC: the clip's mechanism corrected and two of the three flip-red tests reconciled; the flip not landed. The face-plane clip (master's env-gated model) never engages on a wall press — the press never crosses the face plane within r — and Bond walked THROUGH the west end wall (x −48, measured). The game's own press response is the r-skin: [L 2026-10-26] the spine rests face+0.45/+0.55 (the pre/post phases of one retraction) and HITTEST+0x50 grows +0.1/contact-tick — capsule_tri_clip now retracts the move's approach along the contact radial v̂=(p−q)/|p−q| to dist r (tangential carries; the corner slide preserved). Root cause of the dead clip: pre_move_pos was captured AFTER the walk's matrix·(vs,vf) x/z add, so move_v was (0, gravity, 0) every walked tick — the capture now reads physics_tick's own prev (the pre-move pos); the accumulator feed is unconditional (the clip's retraction IS the applied displacement the [M] add-back 0x1ebaa8:353-373 accumulates). walkreal_0700000a_live under NF_WALK_CLIP=1: 6 passed / 1 failed / 2 ignored (was 4/3/2) — the_pick_ref_accumulator_tracks_the_game_ref and walk_office_floor_to_the_security_keyboard GREEN, walk_office_floor_qworm_keyboard_hatch still red (the ring's alarm-runner watch missed during the south corridor; the jink-4 door-leaf wedge was fixed by a route nudge, the alarm beat the walk). Default (no env) unchanged: 7/0/2. nf-game lib: 588/0/5. Left: the qworm ring reconciliation, the flip (remove the env gate), the whole-battery run. Report: docs/reports/level-0a-walk-clip-flip.md.
+
+## level-0a-walk-clip-flip-2 (branch s/level-0a-walk-clip-flip-2)
+
+Start: 2026-10-30 12:50 UTC, branch from origin/s/level-0a-walk-clip-flip eac2888a (master dca2f368 is its base).
+
+Task: continue the move-clip flip — fix the qworm ring alarm leg under NF_WALK_CLIP=1 (port or test,
+with cites), then flip the default (walk_clip() -> true, remove NF_WALK_CLIP and the dead push-walk
+branch), run every walkreal_* binary plus nf-game's collision/player tests, quote totals, list walks
+whose route changed.
