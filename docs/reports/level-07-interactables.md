@@ -64,7 +64,7 @@ part 3: the party), modelled on `interactables_0700000b_live.rs`, in
   the slim ISO is documented to fail (identity_disc + the 3 disc_golden) and
   `fix_0c_pylon_live`'s two view checks (pre-existing on master, not touched by this task — this
   branch is master + this task's files only). The runner cannot finish its ~943 binaries inside
-  the sandbox window; its `tail -1 suite.out` at push time is the commit's last suite line.
+  the sandbox window; at push time (19:57 UTC) its output is: `FAILED fix_0c_pylon_live::the_0c_pylon_is_on_screen_at_the_user_spot` with 6 FAILED lines total (identity_disc, 3× disc_golden, 2× fix_0c_pylon — the first four documented slim-ISO failures, the last two pre-existing on master).
 
 ## What's left
 
