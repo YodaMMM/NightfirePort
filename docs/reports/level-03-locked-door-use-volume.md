@@ -98,7 +98,21 @@ No pass/fail assertion rests on either [S] alone: the sister test's assertions a
 
 ## Suite
 
-The fast runner (`tools/test/suite.py`) on the final tree: `total: SUITE_TOTAL`.
+The fast runner (`tools/test/suite.py`) on the final tree did not complete inside the session
+window: the first start (18:04) was killed for running the pre-fix binaries, and the restart
+(18:17) had its cargo build invalidated mid-build by the branch switch to the next task (the
+runner died with a transient `probe1b_nis211` compile error that does not reproduce on the final
+tree — the file builds clean alone). What ran, quoted individually (release, --test-threads=1,
+NF_ISO on the slim ISO):
+
+- `interactables_07000003_live` 9 passed / 0 failed / 0 ignored (96.40 s, the final two-sided law);
+- `walk_07000015_live` 2 / 0 / 0 (4.43 s); `interactables_0700000d_live` 11 / 0 / 0 (21.81 s);
+- the interact files: 01 10/0/0, 04 10/0/0, 05 11/0/0, 06 9/0/0, 07 7/0/0, 09 16/0/0,
+  0700000c 9/0/0; `interact_0700004a_live` timed out at 500 s (a pre-existing hang to
+  investigate — not touched by this fix's binaries).
+
+The next session should start the runner FIRST on this tree, verify `suite.out` grows, and report
+the total line.
 
 ## Live checks for the main agent
 
