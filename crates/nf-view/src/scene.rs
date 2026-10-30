@@ -6271,6 +6271,19 @@ pub struct Scene {
     /// slot [D lod_word −1] and the doorway ends open [L]). Consumed by lib.rs's per-frame
     /// `Renderer::destroy_dead` feed; the centre matches the material's cull sphere by bits.
     pub destroy_centres: Vec<([f32; 3], usize)>,
+    /// The destroyed-glist swap's WRECK side, per drawn 0xe1 leaf that resolves a drawable
+    /// destroyed glist: the baked wreck instance's (world centre, destroy placement). The
+    /// target is `Destroy_Create` 0x12c318:25-30's tag[0] — `*(glist+0x40)` (the block-0x27
+    /// LOD-next) when the disc word stands, else the parsemap fallback slot `pCelList +
+    /// idx*0x50 + 0x50` [M 0x1d1b68 computes it unconditionally; pCelList is one 0x50-byte
+    /// record per main-map entity, `parsemap_block_LOD` 0x1d1f10 writes `cel+0x40 = index*0x50
+    /// + pCelList`] — drawn only while the leaf is dead (the swap replaces the glist
+    /// wholesale; the intact materials keep dropping via `Renderer::destroy_dead`). A wreck
+    /// whose object has no batches or carries the no-draw bit 0x10 is not baked (an
+    /// undrawable slot vanishes [M the FLAGS_COPYING gate — View_AddObjects 0x1e62d8:33's
+    /// `(obj+0xF0 & 0x8010) == 0`]). Consumed by lib.rs's per-frame `Renderer::destroy_wreck_draw`
+    /// feed; the centre matches the wreck materials' cull spheres by bits.
+    pub destroy_wrecks: Vec<([f32; 3], usize)>,
     /// Per level object hashcode: whether its glist flags carry 0x800 (the character-lighting bit
     /// `Control_SetGList` 0x134960 merges into obj+0xF0). fix-render2: decides the ambient dim for
     /// the drawn script entities (the truck's nine objects carry 0x8880 [L ee_start_05.bin
@@ -7107,6 +7120,9 @@ pub fn build(level: &Level, cels_only: bool, skeletons: &HashMap<u8, Skeleton>, 
         // NOTE at the MISC_KINDS sweep). The centre is the exact float triple the group's cull sphere
         // carries, so the draw filter matches it by bits.
         let mut destroy_centres: Vec<([f32; 3], usize)> = Vec::new();
+        // The swap's wreck side (see the field doc): the baked wreck instances' (world centre,
+        // placement) — drawn only while the leaf is dead (lib.rs's `Renderer::destroy_wreck_draw`).
+        let mut destroy_wrecks: Vec<([f32; 3], usize)> = Vec::new();
         // The level's room cels (see `Cel`): parsed before the draw so the static 0x800 world objects can snap
         // to their cel's ambient exactly as the game's link does at level start (`build_LinkToRoom` 0x1c9680 →
         // the snap in `control_link_object_to_cel` 0x1346b8; channels are all 0 here, so triple 1 reads).
@@ -8395,7 +8411,35 @@ pub fn build(level: &Level, cels_only: bool, skeletons: &HashMap<u8, Skeleton>, 
                 // The 0xe1 destroy leaf's world centre for the per-frame dead gate (see the NOTE above):
                 // the same `transform(matrix, obj.centre)` add_instance bakes into the group's cull
                 // sphere, so the bits match the material's `centre` the draw filter reads.
-                if kind == 0xe1 { destroy_centres.push((transform(&inst.matrix, obj.centre), pi)); }
+                if kind == 0xe1 {
+                    destroy_centres.push((transform(&inst.matrix, obj.centre), pi));
+                    // The destroyed-glist swap's WRECK side. `Destroy_Create` 0x12c318:25-30 stores
+                    // tag[0] = `*(glist+0x40)` when the block-0x27 LOD-next word stands, else the
+                    // parsemap fallback slot `pCelList + idx*0x50 + 0x50` [M 0x1d1b68 computes it
+                    // unconditionally; `parsemap_block_LOD` 0x1d1f10 writes `cel+0x40 = index*0x50 +
+                    // pCelList`, so the fallback record is the NEXT main-map entity's glist];
+                    // `Destroy_Smash` 0x12bb60's `Control_SetGList(obj, tag[0])` swaps it in (the
+                    // disassembly 0x12bbb8 `lw a1,0(s1)` + 0x12bbc4 — the decomp dropped the arg).
+                    // The port resolves the same two targets and bakes the wreck at the LEAF's own
+                    // matrix (the swap changes only the glist; obj+0x90 stands). An undrawable slot
+                    // (no batches, or the no-draw bit 0x10 — `View_AddObjects` 0x1e62d8:33's
+                    // `(obj+0xF0 & 0x8010) == 0` gate, the FLAGS_COPYING evidence) is not baked: the
+                    // leaf just vanishes. The wreck's ambient dim follows the swapped-in glist's own
+                    // 0x800 flags (obj+0xF0 is the glist's flags copy [M Control_SetGList 0x134960]).
+                    let wreck = level.maps[map].lod_target(object)
+                        .map(|o| (map, o))
+                        .or_else(|| (p.index as usize + 1 < level.maps[map].objects.len()).then_some((map, p.index as usize + 1)));
+                    if let Some((wm, wo)) = wreck {
+                        let wobj = &level.maps[wm].objects[wo];
+                        if wobj.flags & 0x10 == 0 && wobj.gfx.leaves.iter().any(|l| !l.batches.is_empty()) {
+                            let wmult = if wobj.flags & 0x800 != 0 {
+                                mul_bytes(cel_ambient(&room_cels, transform(&inst.matrix, wobj.centre), 0).unwrap_or([0xff; 3]))
+                            } else { [1.0; 3] };
+                            add_instance(level, &Instance { map: wm, object: wo, matrix: inst.matrix, placement: p.clone() }, Layer::World, None, &mut groups, Some(&mut bounds), None, None, None, wmult, &room_cels, u32::MAX, u32::MAX);
+                            destroy_wrecks.push((transform(&inst.matrix, wobj.centre), pi));
+                        }
+                    }
+                }
                 *misc_drawn.entry(kind).or_default() += 1;
                 // The car's two fixed-hashcode children (Car_InitBits 0x12fec8), drawn only with a car body.
                 if kind == 0xda {
@@ -9109,7 +9153,8 @@ pub fn build(level: &Level, cels_only: bool, skeletons: &HashMap<u8, Skeleton>, 
         Scene { shard_tex, cels: room_cels, cel_graph, streams: None, music_files: None, music_tables: None, sound_bank: None, sound_spares: Vec::new(), snow_texture, vertices, indices, materials, textures, hud_textures, woman: None, hud, script_billboards, view_models, mp_bodies, bond_body, mp_body_weapons, mp_char_bodies, mp_anim_sets, fog, bounds, start, stats, characters, char_vertex_start, char_verts, sequences, attachments, sim, colliders, models_0x800, npc_pool, ladders_drawn, grapple_hooks_drawn, misc_drawn, lock_matrices, dynobj_matrices, rotor_placements, gunimp_placements,
             door_scene_hidden,
             sl_lod,
-            destroy_centres }
+            destroy_centres,
+            destroy_wrecks }
     }
 
     /// Sequence index and frame a character shows after `ticks` 60 Hz updates: its start script (`choice = None`) or the
