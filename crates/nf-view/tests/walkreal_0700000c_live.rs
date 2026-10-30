@@ -9,9 +9,10 @@
 //! inline): the case's trench exit (the interior has no walkable exit at body height — glass is
 //! body-solid [M hatch-4]), the plates reach (every walking route off the display-ground
 //! complex is closed — the slab's south face leaves a 0.23..0.4 slot above the 2.37 deck [D
-//! probe rays]; the game's own connection is the annex vent #180/#182/#184 [D census]), the
-//! gate-band crossing x 55.5..67 (unpinned), and the ladder495 sister test's west-ground
-//! placement. Route: the ST-1
+//! probe rays]; the game's own connection is the annex vent #180/#182/#184 [D census]), the east
+//! climb ground→band (unpinned — the disc's own collision connects nothing: staircase01's bottom
+//! 9.52 floats over the 6.35 under-stairs [D eastclimb3/4 this session]; the stand-in lifts Bond
+//! onto the band at the gate), and the ladder495 sister test's west-ground placement. Route: the ST-1
 //! walkway start #1 (8.98, 15.07, −149.65 [D]) → north along the walkway (14.61 floor [D probe blk],
 //! east of the raised block x 5..10 [D probe0c-lane]) → the inner balcony repro spot (7.61, 15.71,
 //! −113.39 [L 991]) → the LASER-WATCH burn of the four hinge locks #139-142 through the held-fire
@@ -49,15 +50,16 @@
 //! SE corner (11.09..11.17, x ≤ 40.5, z −210..−208 [D]) → the REAL door2turbine #281 E press [M
 //! 0x135be0/0x135618] through to the corner → the REAL jump over the x 41..43 slot onto the gate band
 //! → the band TouchOnce #0xb4 (45.68..46.66, 10.34..11.32, −208.63..−206.52 [D]) → the band east to
-//! its true end x 55.0 [D probe door4 fine map] → STAND-IN over the gate-band crossing (x 55.5..67
-//! at band height is void in the disc's own collision: the pit floor 6.17 spans x 55..63.5, the
-//! 7.19 shelf x 64..64.5, then void to the resume x 67.5 [D probe door4 pit map]; the 10.85 strip
-//! z −206.1..−205.2 has a 6.5-unit gap x 53.5..60 [D probe door4 0.25 map]; NO SS mover touches
-//! the box, no wire serves it, no ladder exists in the east half, no drone moves there in 300
-//! ticks, and the type-2 zipline y 17.85 has no floor at either end [D probes door3/5/6]; the
-//! game's own nav path17 links (49.69, 10.74, −207.29)↔(63.06, 10.74, −207.54) ACROSS the void
-//! but the per-path A* rejects it [D probe door4]) → the resumed band (10.34 x 67.5+ [D]) → the
-//! gate → E → level_exit 0x0700000d ([M Player_Activate
+//! its true end x 55.0 [D probe door4 fine map] → the band crossing is REPLACED by the game's
+//! own ground route, walked on real input (the eastroute legs, green on master): turb2's
+//! staircase flights down [D band9 plc20-22], the y-0 yard east under the chasm [D the nav
+//! kind-0x202 ring path], the running jump onto the turb4 lower ramp [D the 0.25-grid step
+//! scan], up to the east ground 6.17 [D plc42] — the straight crossing is dead ([L 2026-10-30
+//! fresh boot: Bond drops into the pit] + the void sisters below) → the east climb STAND-IN (the
+//! only unproven link: the disc's collision connects nothing — staircase01's bottom step 9.52
+//! floats over the 6.35 under-stairs at x 84.5 [D eastclimb3/4], the band's south rail 11.17
+//! walls the deck [D eastclimb3], the 0.78 jump apex [M player.rs]) lifting Bond onto the band
+//! at (95, −209.5), deck 10.34 [D plc44] → the gate steps → E → level_exit 0x0700000d ([M Player_Activate
 //! 0x1a5170 case 0x1d → Trigger_Activate 0x1b2318:111], the key gate ch 0x1c on) → the warm RamSave
 //! carry into 0700000d → the spawn TouchOnce #436 (179.53, 11.58, −205.40, out 0x23 [D 0d]) fires
 //! → objective 3 completes and 0d's own objective reveals ([M Mission_Init 0x182270:92-121 carries
@@ -824,37 +826,140 @@ fn walk_the_whole_mission_from_the_start_to_the_0d_handoff() {
     // port's static world equals the disc's declared collision exactly [D collaudit probe], so
     // the port side has nothing to fix in the parse: the crossing mechanism stays UNPINNED by
     // everything the disc declares (live check 1 below — the fresh-boot PCSX2 watch decides);
-    // the walk uses the third stand-in.
+    // the walk takes the game's own ground route around (the legs below).
     w.walk_to(Wp::new(50.0, 11.0, -207.6).r(1.5), "the band east 1");
     w.walk_to(Wp::new(54.5, 11.0, -207.6).r(0.8), "the band east to its true end x 55.0 [D probe door4]");
-    // STAND-IN 3 of 3 (the gate-band crossing, pinned): the evidence block above. The game's
-    // crossing mechanism over x 55.5..67 at band height is not pinned by the port's data —
-    // filed as a live check; the stand-in drops Bond onto the resumed band (10.34 x 67.5+ [D]).
+    // THE CROSSING IS REPLACED (level-0c-whole-walk-east-route): the sisters below keep the
+    // crossing's negative evidence fresh (the straight crossing is dead — [L 2026-10-30 fresh
+    // boot: Bond drops into the pit] — so the walk takes the game's own ground route around);
+    // then the proven ground-route legs (the walkreal_0700000c_eastroute_live legs, green on
+    // master), then the ONLY stand-in left: the east climb ground→band.
     {
-        let sim = w.scene.sim.as_mut().unwrap();
-        // Sister: pin the void so the stand-in never moves onto false floor: the pit (floor
-        // 6.17 [D probe door4]) must stay BELOW band height at (59, −207.5), and the resume's
-        // west edge must keep its floor.
+        let sim = w.scene.sim.as_ref().unwrap();
+        // Sister 1: the band-height void over the pit/chasm (the pit floor 6.17 [D probe door4])
+        // must stay BELOW band height at (59, −207.5).
         let gap = sim.world.segment_hit([59.0, 12.0, -207.5], [59.0, 8.0, -207.5]);
-        assert!(gap.is_none(), "the band crossing gained floor at band height; the stand-in could be dropped");
+        assert!(gap.is_none(), "the band crossing gained floor at band height; the ground route's reason vanished");
         // Sister 2: the strip cul-de-sac wall (x 53.57, y 10.85..14.85, z −206.33..−205.12 [D
-        // lipline]) must stand — if it ever vanishes the strip route reopens and this stand-in's
-        // evidence block is stale. (A horizontal ray — the wall is an x-constant plane.)
+        // lipline]) must stand — if it ever vanishes the strip route reopens and the route map
+        // changes. (A horizontal ray — the wall is an x-constant plane.)
         let wall = sim.world.segment_hit([53.0, 12.0, -205.7], [54.2, 12.0, -205.7]);
         assert!(wall.is_some(), "the strip's east wall (x 53.57 [D lipline]) vanished; re-check the crossing route");
         // Sister 3: the pit floor's presence and height (obj_turb2_walkway04 plc28 x 49.29..63.66,
-        // y 6.16..7.19 [D band9 extents]) — the negative evidence's dead-end leg. If the pit
-        // floor ever rises to band height the pit route reopens and this stand-in's block is
-        // stale; if it vanishes the fall hazard note changes.
+        // y 6.16..7.19 [D band9 extents]) — the walked descent's landing floor (the flight's
+        // south end). If it moves the descent legs re-derive.
         let pit = sim.world.segment_hit([59.0, 8.0, -207.5], [59.0, 5.5, -207.5]).map(|(t, _)| 8.0 - 2.5 * t);
         assert!(pit.map_or(false, |y| (5.8..7.6).contains(&y)),
             "the pit floor at (59, −207.5) moved (expected 6.16..7.19 [D band9 plc28]), got {pit:?}");
         // Sister 4: the pit's east sliver (obj_turb3_walkway03 plc33 x 63.66..64.05, y 6.17..7.19
-        // [D band9 extents]) — the pit route's far end before the chasm x 64.05..66.27.
+        // [D band9 extents]) — the pit's far end before the chasm x 64.05..66.27.
         let sliver = sim.world.segment_hit([63.9, 8.5, -207.5], [63.9, 5.5, -207.5]).map(|(t, _)| 8.5 - 3.0 * t);
         assert!(sliver.map_or(false, |y| (6.0..7.5).contains(&y)),
             "the pit's east sliver at (63.9, −207.5) moved (expected 6.17..7.19 [D band9 plc33]), got {sliver:?}");
-        sim.bond.pos = [68.0, 11.4, -207.9];
+    }
+    eprintln!("[0c] the crossing sisters hold — taking the game's own ground route around the band");
+    // The ground route (the eastroute legs on the walk's own arrival):
+    // 1. The staircase descent (the turb2 flights, real walk legs [D band9 plc20-22]).
+    w.walk_to(Wp::new(51.5, 11.0, -209.6).r(1.2), "onto the turb2 staircase top");
+    w.walk_to(Wp::new(51.5, 4.0, -211.4).r(1.2), "down the turb2 flight");
+    {
+        let sim = w.scene.sim.as_ref().unwrap();
+        let p = sim.bond.pos;
+        assert!(p[0] > 49.0 && p[0] < 54.0 && p[2] < -210.5,
+            "the descent must reach the flight's south end, got {p:?}");
+    }
+    // 2. The crate field / y-0 yard east (the nav ring's level [D kind 0x202 path]).
+    w.walk_to(Wp::new(62.0, 4.0, -212.0).r(1.5), "east along the south");
+    w.walk_to(Wp::new(70.0, 2.0, -212.0).r(1.5), "into the crate field");
+    w.walk_to(Wp::new(76.0, 1.2, -210.0).r(1.5), "the yard east");
+    w.walk_to(Wp::new(77.0, 1.2, -210.2).r(1.0), "the yard south of the ramp's west landing");
+    w.walk_to(Wp::new(79.6, 1.1, -210.2).r(0.5), "the due-east run-up under the ramp's west landing (the eastroute jump start)");
+    {
+        let sim = w.scene.sim.as_ref().unwrap();
+        let p = sim.bond.pos;
+        let f = sim.world.segment_hit([p[0], p[1], p[2]], [p[0], p[1] - 20.0, p[2]])
+            .map(|(t, _)| p[1] - 20.0 * t);
+        assert!(p[0] > 77.0 && p[0] < 80.0 && f.map_or(false, |y| y < 0.5),
+            "the yard trunk must reach the ramp's west side at the y-0 floor, got {p:?} under {f:?}");
+    }
+    // 3. The jump-hops onto the east ramp (1.75 at x 81.5, under-steps 0.75..1.55 at x
+    // 80.2..81.2 [D the step scan]) — the player's own idiom: hold forward, jump every time the
+    // body is grounded below the exposed steps, stop on them (the walk's slot-jump family).
+    let mut hops = 0u32;
+    for _t in 0..300u32 {
+        let (p, grounded, f) = {
+            let sim = w.scene.sim.as_ref().unwrap();
+            let (p, grounded) = (sim.bond.pos, sim.bond.grounded);
+            let f = if grounded {
+                sim.world.segment_hit([p[0], p[1], p[2]], [p[0], p[1] - 3.0, p[2]])
+                    .map(|(tt, _)| p[1] - 3.0 * tt)
+            } else { None };
+            (p, grounded, f)
+        };
+        if grounded && p[0] > 80.3 && f.map_or(false, |y| y > 1.0) { break; }
+        let jump = grounded && p[0] >= 80.0 && !f.map_or(false, |y| y > 1.0);
+        if jump { hops += 1; }
+        w.tick(nf_game::player::Input { forward: 1.0, jump, ..Default::default() }, false);
+    }
+    assert!(hops > 0, "the ramp jump never fired");
+    {
+        let sim = w.scene.sim.as_ref().unwrap();
+        let p = sim.bond.pos;
+        let f = sim.world.segment_hit([p[0], p[1], p[2]], [p[0], p[1] - 20.0, p[2]])
+            .map(|(t, _)| p[1] - 20.0 * t);
+        assert!(p[0] > 80.3 && f.map_or(false, |y| y > 1.0),
+            "the jump must land on the ramp's lower steps (1.75+ [D]), got {p:?} under {f:?}");
+    }
+    // 4. Up the ramp (0.2 steps) to the east ground (obj_turb4_walkway03 y 6.16..7.19 [D plc42]).
+    w.walk_to(Wp::new(84.0, 4.5, -210.2).r(1.0), "up the ramp");
+    w.walk_to(Wp::new(87.0, 7.0, -209.8).r(1.0), "the ramp top");
+    {
+        let sim = w.scene.sim.as_ref().unwrap();
+        let p = sim.bond.pos;
+        let f = sim.world.segment_hit([p[0], p[1], p[2]], [p[0], p[1] - 20.0, p[2]])
+            .map(|(t, _)| p[1] - 20.0 * t);
+        assert!(f.map_or(false, |y| (5.5..7.4).contains(&y)),
+            "the ramp top must stand on the east ground level (6.16..7.19 [D plc42]), got {p:?} under {f:?}");
+    }
+    // The east side reached: west along the east ground past the chasm's east edge (the
+    // eastroute test's closing leg), then east under the band to the gate's ground spot.
+    w.walk_to(Wp::new(86.0, 7.4, -208.2).r(1.0), "the east ground west");
+    w.walk_to(Wp::new(78.0, 7.4, -208.2).r(1.2), "the east ground at the chasm's east");
+    {
+        let sim = w.scene.sim.as_ref().unwrap();
+        let p = sim.bond.pos;
+        let f = sim.world.segment_hit([p[0], p[1], p[2]], [p[0], p[1] - 20.0, p[2]])
+            .map(|(t, _)| p[1] - 20.0 * t);
+        assert!(sim.bond.grounded && p[0] > 76.0 && f.map_or(false, |y| (6.0..7.4).contains(&y)),
+            "the east ground leg must hold (6.17 [D]), got {p:?} under {f:?}");
+    }
+    // Sister 5 (the east climb's negative, at the climb zone): the upper flight's bottom step
+    // FLOATS — obj_turb4_staircase01's extents y 9.00..11.20, x 83.47..87.59 [D plc35]; the
+    // all-surfaces scan gives its bottom 9.52..9.68 at x 84.2..84.5 over the under-stair steps'
+    // 6.35 top at x 87.0 [D eastclimb3/4 this session]; nothing spans 6.35..9.52 and the jump
+    // apex is 0.78 [M player.rs 3.92 m/s up]. A floor appearing in the gap reopens the climb.
+    {
+        let sim = w.scene.sim.as_ref().unwrap();
+        let under = sim.world.segment_hit([84.5, 8.7, -210.25], [84.5, 6.7, -210.25]);
+        assert!(under.is_none(), "a floor appeared under staircase01's west end (8.7..6.7 at (84.5, −210.25)); the east climb reopened");
+        let bottom = sim.world.segment_hit([84.5, 11.4, -210.25], [84.5, 8.7, -210.25]).map(|(t, _)| 11.4 - 2.7 * t);
+        assert!(bottom.map_or(false, |y| (9.3..9.9).contains(&y)),
+            "staircase01's bottom step moved (expected 9.52..9.68 [D eastclimb3]), got {bottom:?}");
+    }
+    w.walk_to(Wp::new(95.0, 7.3, -209.5).r(1.2), "the gate's ground spot under the band");
+    // Sister 6: the gate does NOT fire from the ground (the east-route report's probe: Bond at
+    // (95.0, 7.3, −209.5), 120 use pulses — no level_exit): the trigger quad is at y 11.25..13.98
+    // [D plc556]; 120 real E pulses pin the negative on this tree.
+    for _ in 0..120 { w.tick(nf_game::player::Input::default(), true); }
+    assert!(w.scene.sim.as_ref().unwrap().drones.level_exit.is_none(),
+        "the gate #556 fired from the ground — the climb stand-in's evidence changed");
+    // STAND-IN (now ONLY the east climb): lift Bond from the east ground onto the band deck
+    // above the same spot — obj_turb5_walkway02's deck 10.34 at (95, −209.5) [D plc44 x
+    // 92.38..95.31, y 10.16..11.17, z −227.26..−206.31; the scan z −209.5 x 95.0 = 10.34 [D
+    // eastclimb3]]. The unpinned link is the climb itself — live check in the report.
+    {
+        let sim = w.scene.sim.as_mut().unwrap();
+        sim.bond.pos = [95.0, 11.3, -209.5];
         sim.bond.vel = [0.0; 3];
     }
     w.wait(14);
@@ -864,11 +969,9 @@ fn walk_the_whole_mission_from_the_start_to_the_0d_handoff() {
         let under = sim.world.segment_hit([p[0], p[1], p[2]], [p[0], p[1] - 3.0, p[2]])
             .map(|(t, _)| p[1] - 3.0 * t);
         assert!(sim.bond.grounded && under.map_or(false, |y| (10.2..10.6).contains(&y)),
-            "the crossing stand-in must land on the resumed band (10.34 x 67.5+ [D probe door4]), got pos {p:?} under {under:?}");
+            "the climb stand-in must land on the band deck at (95, −209.5) (10.34 [D plc44]), got pos {p:?} under {under:?}");
     }
-    eprintln!("[0c] the band-crossing stand-in (the unpinned crossing) — the resumed band east");
-    w.walk_to(Wp::new(70.0, 11.2, -208.0).r(2.5), "the band east");
-    w.walk_to(Wp::new(90.0, 11.2, -208.8).r(1.2), "the gate approach");
+    eprintln!("[0c] the ground route walked + the climb stand-in — on the band at the gate steps");
     w.walk_to(Wp::new(96.0, 11.2, -209.3).r(1.0), "the gate plane");
     // The E press: USE-activated LOAD_LEVEL [M 0x1a5170 case 0x1d → 0x1b2318:111].
     let mut loaded = false;
