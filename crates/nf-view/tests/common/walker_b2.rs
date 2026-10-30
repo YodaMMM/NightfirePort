@@ -317,11 +317,30 @@ impl Walker {
     /// boxes). The port's semi-autos fire once per trigger press [M the fire script gates
     /// Player_WeaponFiring], so the trigger pulses; an empty clip pulses the reload key (the game's R).
     pub fn shoot(&mut self, di: usize, label: &str) -> bool {
+        self.shoot_bounded(di, label, 10800)
+    }
+
+    /// `shoot` with a caller tick cap — the live-guard clears bound each attempt so one wedged
+    /// line cannot eat minutes of the walk. Same loop, the caller's cap; false on give-up.
+    /// (level-09-live-guards-walk; behaviour-identical for the 10800 callers.)
+    pub fn shoot_bounded(&mut self, di: usize, label: &str, cap: u32) -> bool {
+        self.shoot_gated(di, label, cap, 0.02, 0.028)
+    }
+
+    /// `shoot_bounded` with the aim gate LOOSENED (±0.07 yaw / ±0.10 pitch ≈ the torso box at
+    /// point blank) — a PATROLLING guard keeps walking during the takedown, and at ~2u he
+    /// sweeps ±0.1+ rad between ticks: the tight gate never settles and the taps stop (the
+    /// first run's 15-dart miss at 1.8u). The loose gate trades spray for rate at close range.
+    pub fn shoot_loose(&mut self, di: usize, label: &str, cap: u32) -> bool {
+        self.shoot_gated(di, label, cap, 0.07, 0.10)
+    }
+
+    fn shoot_gated(&mut self, di: usize, label: &str, cap: u32, err_tol: f32, perr_tol: f32) -> bool {
         let mut hp0 = self.scene.sim.as_ref().unwrap().drones.list[di].health;
         let mut repositions = 0i32;
         let mut last_progress = 0u32;
         let mut last_tap = 0u32;
-        for t in 0..10800u32 {
+        for t in 0..cap {
             {
                 let sim = self.scene.sim.as_ref().unwrap();
                 if sim.drones.list[di].corpse || sim.drones.list[di].health <= 0.0 { return true; }
@@ -337,8 +356,9 @@ impl Walker {
                 let out_of_ammo = sim.gun.clip == 0 && sim.gun.spare == 0;
                 let reload = clip_empty && t % 20 == 0;
                 // Tap only when the view is ON the torso (the boxes are ~0.3 wide; the fixed-period
-                // taps sprayed ammo at a drifting aim).
-                let on_target = err.abs() < 0.02 && perr.abs() < 0.028 && t.saturating_sub(last_tap) > 15;
+                // taps sprayed ammo at a drifting aim). The caller's gate widths (the loose
+                // point-blank variant trades precision for rate on a moving close guard).
+                let on_target = err.abs() < err_tol && perr.abs() < perr_tol && t.saturating_sub(last_tap) > 15;
                 let trigger = !clip_empty && on_target;
                 if trigger { last_tap = t; }
                 let input = Input {
@@ -374,7 +394,7 @@ impl Walker {
             }
         }
         let sim = self.scene.sim.as_ref().unwrap();
-        eprintln!("[walk] {label}: drone {di} still alive after 10800 ticks (health {:.0})", sim.drones.list[di].health);
+        eprintln!("[walk] {label}: drone {di} still alive after {cap} ticks (health {:.0})", sim.drones.list[di].health);
         false
     }
 
