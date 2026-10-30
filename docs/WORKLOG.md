@@ -429,3 +429,11 @@ fix_npc_doors + walkreal_07000014 on the fixed tree, the FULL-suite verdict. Pla
 07000003 with the NF_NO_CULL / NF_NO_MASKS gates on the fixed cull, fix against [M
 Collide_Intersect 0x1ebaa8, Intersect_CylGeom 0x109da0], REMOVE the gates, land only with a
 FULL suite free of new reds (quote the total line).
+
+The gated bisect on the FIXED cull (this window, 10:22-10:30 UTC): walk_the_full_route +
+NF_NO_MASKS=1 → FAILED 91.8 s (masks are NOT the mover); NF_NO_CULL=1 → ok 147.7 s → the cull
+STILL moves the servant-0 captor-kill red after the -13 direction fix (a second cull-side
+divergence, not the masks). Full-suite chunked state: /home/z/suite_c14_state.json, 139/935
+recorded at 10:20 UTC, reds so far: walkreal_07000008_live (1, not in the -13 list — new on
+this tree), mp_online_failures CRASH (no output, 8 s). Gates stay until the second cull
+divergence is fixed (removing them now would kill the bisect tooling the next message needs).
