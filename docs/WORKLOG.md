@@ -11,3 +11,9 @@ the port, or pin the stand-in with evidence. Full suite, quote the total line.
 
 Plan: branch from origin/master (21fbeed3); next: push, read the test + the -2 report, probe
 the nav routes, then the walks.
+
+Update (04:40 UTC): the nav probe walked every exec-floor route (one ring path, 89 legs OK) and
+mapped the waiting-room trap; the test's two transit stand-ins, the plate-#163 fallback and the
+ch-9 drive are replaced with real walks + the real walked E (ch 9 green [M 0x1b02a8]); ONE
+stand-in remains (the waiting-room exit transit) with the wedge/fall map as evidence.
+walkreal_0700000b_live 2/0 (22.76 s). Report: docs/reports/level-0b-every-objective-3.md.
