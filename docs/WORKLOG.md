@@ -437,3 +437,11 @@ divergence, not the masks). Full-suite chunked state: /home/z/suite_c14_state.js
 recorded at 10:20 UTC, reds so far: walkreal_07000008_live (1, not in the -13 list — new on
 this tree), mp_online_failures CRASH (no output, 8 s). Gates stay until the second cull
 divergence is fixed (removing them now would kill the bisect tooling the next message needs).
+
+This window's results (10:20-10:30 UTC): fix_npc_doors_live GREEN solo (58.5 s — the -13 cull
+fix repaired it); walkreal_07000002 green in the suite run (1/0, 102 s); walkreal_07000014's
+#[ignore] reviewed (the door-E wedge at :323-327 predates the family — the ignore stands);
+walkreal_07000008_live's new red captured (laser-wire cut at :204, ch 137 never raises — a
+second shot-path red on the fixed cull). Chunked suite partial: 139/935, 465 passed / 5 failed
+/ 38 ignored, state /home/z/suite_c14_state.json (resume with the chunk runner; CARGO_TARGET_DIR
+must point at the repo target/). Full report: docs/reports/capsule-cull-and-los-masks-14.md.
