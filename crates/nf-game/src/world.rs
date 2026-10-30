@@ -45,20 +45,18 @@ pub const LOS_PLAYER_HEADROOM: u32 = 0xd; // Player_SSCrouch 0x1924c0:100-101 / 
 pub const LOS_PROBE_8: u32 = 0xc; // mask 8 | 4 — Player_SSGrapple 0x192860:86-88, Searchlight_Update 0x1cb900:338-340, Sensor_SetBeam 0x1af398:73-75, Bullet_homing 0x12f358:92-93
 pub const LOS_SENSOR: u32 = 0xe; // Sensor_InCone 0x1af4f0:84-86 / Check_AutoAim 0x1a73f8:164-165 / Bullet_DoTrails flash 0x12d890:343-345 mask 0xa | 4
 pub const LOS_TURRET_TRACK: u32 = 0x72f; // GT_Track 0x17f9c8:258 — the target scan's per-candidate `Collide_LineOfSight(from, cand+0x80, level, obj, cand, 0x72f)` filter (already includes the wrapper's | 4)
-/// The per-caller masks are not applied yet [S]: with them on, guard cover, turret shots and
-/// several real-path walks broke; `line_of_sight` keeps the static-world segment test until then.
-pub const LOS_MASKS_ON: bool = false;
-/// The normalized-spine head-on cull [M Intersect_CylGeom 0x109da0:302-322]. level-0a-office-hatch-9
-/// measured the arms' orientation: the game skips the horizontal face BELOW the spine (the
-/// corner walk's y-0.19 floor-band lifter — the port dithered 1.13→1.21 on it while the game
-/// crosses 1.127→1.120 [L fresh boot]) and keeps the one above/behind (the stair-step climb).
-/// With f the A-from crossing fraction, a below-spine plane clamps to f=1 and an above-spine
-/// one to f=0, so the skip arms are (up-face ∧ f>0.5) ∨ (down-face ∧ f<0.5) — the previous
-/// arms had the f halves swapped. Still OFF: with the corrected arms the corner walk's
-/// wedge MOVES (the try_walk_to line stalls at (−18.05, 5.22), 6000 ticks) — the global flip
-/// needs the full real-path battery this window cannot run; the arms finding is pinned here
-/// and in the report.
-pub const HEAD_ON_CULL_ON: bool = false;
+/// Both capsule features are UNCONDITIONAL on this tree (the old `LOS_MASKS_ON` /
+/// `HEAD_ON_CULL_ON` gates are gone — nothing read them):
+/// - The per-caller LOS masks apply in every `line_of_sight` caller
+///   [M Collide_Intersect 0x1ebaa8:300-319, Collide_Pick 0x1eb320:140-152]; the masks const
+///   family above is that port.
+/// - The normalized-spine head-on cull [M Intersect_CylGeom 0x109da0:302-322] runs in
+///   `capsule_tri_contact`. level-0a-office-hatch-9 measured the arms' orientation: the game
+///   skips the horizontal face BELOW the spine (the corner walk's y-0.19 floor-band lifter —
+///   the port dithered 1.13→1.21 on it while the game crosses 1.127→1.120 [L fresh boot]) and
+///   keeps the one above/behind (the stair-step climb). With f the A-from crossing fraction, a
+///   below-spine plane clamps to f=1 and an above-spine one to f=0, so the skip arms are
+///   (up-face ∧ f>0.5) ∨ (down-face ∧ f<0.5) — the first-cut arms had the f halves swapped.
 
 /// Scratch diagnostics gate (level-0a-office-hatch-9): `NF_CAPS_LOG=1` makes
 /// `capsule_tri_contact` print every applied push (and every head-on-cull skip) as one
@@ -417,8 +415,6 @@ fn capsule_tri_contact(t: &[V3; 3], mat: u8, a: &mut V3, b: &mut V3, r: f32, gro
     // through from below; the same face crossed in the BOTTOM half (f > 0.5) is solid. Faces the
     // old |n·y| > 0.7 + top-end-side rule culled in the 0.70-0.763 band (≈45-77° slopes above the
     // capsule) are TESTED here, exactly as the game tests them.
-    // The previous one-sided rule stays in force until the game's cull is on (HEAD_ON_CULL_ON).
-    if !HEAD_ON_CULL_ON && n[1].abs() > 0.7 && dot(n, sub(*a, t[0])) < 0.0 { return false; }
     let ab = sub(*b, *a);
     let denom = dot(n, ab);
     let mut f = 0.0f32;
@@ -427,13 +423,7 @@ fn capsule_tri_contact(t: &[V3; 3], mat: u8, a: &mut V3, b: &mut V3, r: f32, gro
         let ab_len = dot(ab, ab).sqrt();
         if ab_len > 1e-6 {
             let nd = denom / ab_len;
-            if HEAD_ON_CULL_ON && ((nd > 0.999 && f < 0.5) || (nd < -0.999 && f > 0.5)) {
-                if caps_log() {
-                    eprintln!("[cap] CULL cent=({:.3},{:.3},{:.3}) n=({:.3},{:.3},{:.3}) nd={nd:.4} f={f:.3} a=({:.3},{:.3},{:.3})",
-                        (t[0][0]+t[1][0]+t[2][0])/3.0, (t[0][1]+t[1][1]+t[2][1])/3.0, (t[0][2]+t[1][2]+t[2][2])/3.0, n[0], n[1], n[2], a[0], a[1], a[2]);
-                }
-                return false;
-            }
+            if (nd > 0.999 && f > 0.5) || (nd < -0.999 && f < 0.5) { return false; }
         }
     }
     let mut p = if denom.abs() > 0.0002 {
@@ -551,6 +541,19 @@ fn capsule_tri_contact(t: &[V3; 3], mat: u8, a: &mut V3, b: &mut V3, r: f32, gro
     // underside at 07000014 y ~3.5 froze the release fall 1.1 above the lane — a contact the
     // game's gate never sets walkable). Same sign discipline as the pick bit below.
     if n[1] > 0.7 && q[1] < b[1] { *walkable = true; }
+    // capsule-cull-and-los-masks-4: NF_PUSH_TRACE (env-gated, additive — the NF_WALK_TRACE
+    // pattern; a OnceLock bool so the hot per-face path pays one relaxed load): every
+    // contributing face whose push is deeper than 0.05 (a real overlap — the resting ground's
+    // hair-pushes stay silent) prints its vertices, mat, normal, distance and push, so a walk
+    // stall at a doorway names the face the port pushes and the game does not. Trace only.
+    {
+        static PUSHDBG: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
+        if *PUSHDBG.get_or_init(|| std::env::var_os("NF_PUSH_TRACE").is_some()) && r - dist > 0.05 {
+            eprintln!("[push] tri ({:.3},{:.3},{:.3}) ({:.3},{:.3},{:.3}) ({:.3},{:.3},{:.3}) mat{:#04x} n=({:.2},{:.2},{:.2}) dist{:.3} push=({:.3},{:.3},{:.3})",
+                t[0][0], t[0][1], t[0][2], t[1][0], t[1][1], t[1][2], t[2][0], t[2][1], t[2][2],
+                mat, n[0], n[1], n[2], dist, push[0], push[1], push[2]);
+        }
+    }
     // The pick bit's dot1 gate [M Intersect_CylGeom 0x109da0 disasm 0x10a650-0x10a674: the bit
     // block requires `dot(face normal, capsule axis) > 0.7` — up-facing faces only; a wall's
     // horizontal normal and a ceiling's down normal never set the bit]. The dot2 gate
@@ -2090,7 +2093,6 @@ impl CollisionWorld {
     /// the wrapper's own `| 4` [M disasm 0x176fec/0x1770b0 — docs/systems/drone-armed-peer.md].
     /// Each caller passes the mask its game call site passes — see the `LOS_*` constants.
     pub fn line_of_sight(&self, a: V3, b: V3, mask: u32) -> bool {
-        if !LOS_MASKS_ON { let _ = mask; return self.segment_clear(a, b); }
         self.line_of_sight_masked(a, b, mask)
     }
 
@@ -2102,9 +2104,14 @@ impl CollisionWorld {
     /// surface byte's 0x40/0x80 bits OR in (:305-309)** — so a 0xa-mask sensor ray (Check_AutoAim
     /// 0x1a73f8:164-165) passes the stairwell's 0x40-material well panes that a plain segment
     /// test blocks; mask 0x20 skips the 0x1000-flagged nodes (the port's missile cage).
-    /// (`line_of_sight` keeps the global `LOS_MASKS_ON` gate — the masked semantics stay
-    /// opt-in until the parked per-caller flip is safe.)
     pub fn line_of_sight_masked(&self, a: V3, b: V3, mask: u32) -> bool {
+        // One call, one read lock: `masked_scan` takes `self.dynamic` itself — the old body took
+        // the same read lock here a second time on the calling thread before delegating (a writer
+        // arriving between the two acquisitions could deadlock the read-read re-entry).
+        Self::masked_scan(self, a, b, mask)
+    }
+
+    fn masked_scan(&self, a: V3, b: V3, mask: u32) -> bool {
         let d = sub(b, a);
         let dynamic = self.dynamic.read().unwrap();
         let skip_cage = mask & 0x20 != 0;
@@ -2525,7 +2532,6 @@ mod tests {
     /// side-keyed on the top end's position: a ~43° slope face (n·y = 0.73) above the capsule was
     /// skipped outright; the game's |n·d̂| = 0.73 < 0.999 does not cull it — the capsule pushes.
     #[test]
-    #[ignore = "HEAD_ON_CULL_ON is off until the cull keeps the real-path walks green"]
     fn head_on_cull_uses_the_raw_spine_dot_and_the_crossing_half() {
         // Up-facing floor at y = 0 (wound so cross(e1,e2) = +y), 20×20.
         let floor = vec![
@@ -2563,7 +2569,6 @@ mod tests {
     /// TESTED and pushes; a FLAT floor crossed in the spine's TOP half (f < 0.5) IS culled — the
     /// game's jump-through, which the old top-end-side rule refused (a above the plane → push).
     #[test]
-    #[ignore = "HEAD_ON_CULL_ON is off until the cull keeps the real-path walks green"]
     fn walk_spine_culls_only_near_flat_faces() {
         // Flat floor crossed at f = 0.4 of the walk spine: culled — pass-through from below.
         let floor = vec![
@@ -2594,16 +2599,24 @@ mod tests {
     /// the 0x1000 cage... (0xa27 DOES carry bit 0x20 — the cage is skipped); the crouch/jump
     /// headroom 0xd (9|4) drops node-flagged cels and the classes but NOT surface-0x40.
     #[test]
-    #[ignore = "LOS_MASKS_ON is off until the masks keep guard cover and the 08 escort green"]
     fn line_of_sight_applies_the_callers_game_mask() {
         let face = |m: u8| [[2.0, 0.0, -1.0], [2.0, 2.0, 1.0], [2.0, 2.0, -1.0]];
         // A surface-0x40 card between the endpoints: guard vision (0x800) sees through it,
-        // the crouch headroom (no 0x800 bit) does not.
+        // and so does the headroom mask (its bit 0x8 drops the ORed-in pass bit — see below).
         let w = CollisionWorld::from_triangles_flags(vec![(face(0x04), 0x44, false)]);
         assert!(w.line_of_sight([0.0, 1.0, 0.0], [4.0, 1.0, 0.0], LOS_GUARD_VISION),
             "guard vision drops the surface-0x40 card [M 0x1ebaa8:300-302]");
-        assert!(!w.line_of_sight([0.0, 1.0, 0.0], [4.0, 1.0, 0.0], LOS_PLAYER_HEADROOM),
-            "the headroom mask (9|4) has no 0x800 bit — the surface-0x40 card blocks");
+        // TEST FIXED against the decompile (was: "the headroom mask has no 0x800 bit — the card
+        // blocks"): the surface byte's 0x40 ORs into HITDATA+0x51 bit 1 [M 0x1ebaa8:305-309],
+        // and mask bit 0x8 drops every hit carrying that bit [M 0x1ebaa8:317-319] — the headroom
+        // mask 0xd (9|4) DOES carry bit 0x8, so it passes the surface-0x40 card too. 0x800 and
+        // 0x8 differ only on the node-flagged cel flag (which 0x800 does not drop).
+        assert!(w.line_of_sight([0.0, 1.0, 0.0], [4.0, 1.0, 0.0], LOS_PLAYER_HEADROOM),
+            "the headroom mask's bit 0x8 drops the surface-0x40 card [M 0x1ebaa8:305-309/:317-319]");
+        // The true contrast: a mask with NEITHER 0x800 NOR 0x8 (the plain wrapper bit 0x4) —
+        // nothing drops the card, it blocks.
+        assert!(!w.line_of_sight([0.0, 1.0, 0.0], [4.0, 1.0, 0.0], 0x4),
+            "no 0x800 and no 0x8 bit — the surface-0x40 card blocks [M 0x1ebaa8:300-319]");
         // A NODE-flagged card (the placement glist bit 0x40): the headroom mask's bit 0x8 drops
         // it; guard vision (0xa27 has NO bit 0x8) does NOT — the card blocks.
         let w = CollisionWorld::from_triangles_flags(vec![(face(0x04), 0x04, true)]);

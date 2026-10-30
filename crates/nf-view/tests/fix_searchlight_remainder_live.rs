@@ -130,8 +130,7 @@ fn the_broken_head_smoke_uses_the_game_stream_and_life() {
 fn a_courtyard_head_tracks_bond_until_the_lost_limit() {
     let Some(iso) = iso() else { eprintln!("NF_ISO not set — skipping"); return };
     let mut scene = load_and_light(&iso);
-    // Ride a sweep: teleport Bond onto the first landed linked spot each tick until the head arms
-    // (the 0→1 test is spot-only [M 0x1cb900:251-263]).
+    // Find a sweeping head with a linked spot (the 0→1 arm test is spot-only [M 0x1cb900:251-263]).
     let head = loop {
         let sim = scene.sim.as_mut().unwrap();
         sim.step_bond(Default::default(), false, false, false);
@@ -142,32 +141,42 @@ fn a_courtyard_head_tracks_bond_until_the_lost_limit() {
             None => continue,
         }
     };
+    // Start Bond where the game's player stands: the courtyard floor at the housing's base (the
+    // under-croft start is where he SPAWNS — he walks out onto this floor; the harness's
+    // reach-a-spot hop). The probe-measured spot: the capsule settles at y 42.07 and HOLDS through
+    // 240 idle ticks, the sweep's spot lands on his sphere (min dist 0.95) and the head ARMS from
+    // it. The old harness teleported Bond onto the spot's LANDING (y 41.01) — a surface the
+    // capsule falls through from above (the game's head-on cull [M Intersect_CylGeom
+    // 0x109da0:302-322] is what makes it non-standing; the old un-culled push held him there) —
+    // and the fall pre-loaded the game's lost counter [M 0x1cb900:251-263], returning the head at
+    // 804-815 instead of the 900 limit. The game's player stands on the floor, the spot lands on
+    // his sphere, and the machine runs from stillness.
+    let housing = scene.sim.as_ref().unwrap().drones.searchlights.parts[head].spawn_pos;
+    {
+        let sim = scene.sim.as_mut().unwrap();
+        sim.bond.pos = [housing[0] + 2.0, housing[1], housing[2]];
+        sim.bond.yaw = 0.0;
+    }
     let mut armed_at = None;
     for t in 0..900u32 {
-        let sim = scene.sim.as_mut().unwrap();
-        let spot = sim.drones.searchlights.parts[head].links[2].unwrap();
-        let sp = sim.drones.searchlights.parts[spot].clone();
-        if sp.drawn { sim.bond.pos = sp.pos; sim.bond.yaw = 0.0; }
-        sim.step_bond(Default::default(), false, false, false);
-        if sim.drones.searchlights.parts[head].state == 1 { armed_at = Some(t); break; }
+        scene.sim.as_mut().unwrap().step_bond(Default::default(), false, false, false);
+        if scene.sim.as_ref().unwrap().drones.searchlights.parts[head].state == 1 { armed_at = Some(t); break; }
     }
-    armed_at.expect("riding the spot arms the head (state 1)");
+    armed_at.expect("the sweep's spot passes Bond's standing spot and arms the head (state 1)");
 
-    // The head now steers at Bond; walk him slowly and the spot follows (the searchlight-tracks-bond
-    // behaviour, re-added — G-036 closed).
+    // The head now steers at Bond; the game's track ray lands the spot ON BOND'S SPHERE (the
+    // hit normal is the player sphere's [M 0x1cb900 hit branch — the spot pos = the sphere hit +
+    // n·0.01]), so dist(spot, player) ≤ 2 holds while Bond simply STANDS. The old harness chased
+    // the landing — teleporting his feet onto the sphere hit (or the non-standing 41.01 floor)
+    // lifts/drops him and pre-loads the lost counter [M 0x1cb900:251-263]. The game's player
+    // stands in the beam; the harness does the same: no input, no chase.
     let mut tracked = 0;
     for _ in 0..120u32 {
         let sim = scene.sim.as_mut().unwrap();
-        let spot = sim.drones.searchlights.parts[head].links[2].unwrap();
-        {
-            let sp = &sim.drones.searchlights.parts[spot];
-            let d = ((sp.pos[0] - sim.bond.pos[0]).powi(2) + (sp.pos[2] - sim.bond.pos[2]).powi(2)).sqrt();
-            if d > 1.2 { sim.bond.pos = [sp.pos[0], sim.bond.pos[1], sp.pos[2]]; }
-        }
         sim.step_bond(Default::default(), false, false, false);
         if sim.drones.searchlights.parts[head].state == 1 { tracked += 1; }
     }
-    assert_eq!(tracked, 120, "the head holds state 1 while Bond walks with the spot (tracking)");
+    assert_eq!(tracked, 120, "the head holds state 1 while Bond stands in the beam (tracking)");
 
     // The corona alpha byte reaches the colour table: searchlight part vertices stopped sharing one
     // 1.0 slot (pre-fix every part used `col_one`). The expected alpha is read from the part at the

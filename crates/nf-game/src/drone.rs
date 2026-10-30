@@ -12795,6 +12795,30 @@ impl Drones {
                 // that load failure.
                 if !self.scripts.lib.contains_key(&t.script_a) || !self.scripts.lib.contains_key(&t.script_b) { continue; }
                 t.pos = p.translation;
+                // ext+0xd0 = the script-A union model bbox max.z × 1.5 [M GT_Create 0x17ffa0:118-140 —
+                // the Script_GetObj walk 0x1db688 unions each created object's glist bounds
+                // (obj+0xd8 → celglist, min +0x20 / max +0x30) and stores fStack_a8 (max.z) × 1.5].
+                // The port's script VM gap leaves the create-time object table unbuilt, so the union
+                // walks script A's static Entity commands and resolves each hash through the level's
+                // glist table: the 0700000a wall gun's union max.z 1.3243483 × 1.5 = 1.9865224 = the
+                // live ext+0xd0 [L ee_start_0700000a.bin ext 0x1b9e400+0xd0; D the three GunSamuri
+                // glist objects 0x020005a9/a8/ab]. Verified for every script whose created set is its
+                // full static set; a script that creates objects later would union them at the game's
+                // create beat only — none on the disc's 41 turret placements ([S] that general case).
+                if let Some(nis) = level.nis.get(&t.script_a) {
+                    let mut maxz: Option<f32> = None;
+                    for st in nis.streams.iter() {
+                        for c in st.decode() {
+                            if let nf_formats::nis::Cmd::Entity { hash, .. } = c {
+                                if let Some(&(m, o)) = level.by_hash.get(&hash) {
+                                    let z = level.maps[m].objects[o].max[2];
+                                    maxz = Some(maxz.map_or(z, |z0: f32| z0.max(z)));
+                                }
+                            }
+                        }
+                    }
+                    t.muzzle_offset = maxz.unwrap_or(0.0) * 1.5;
+                }
                 // ext+0x80: the create-time fire direction [M 0017ffa0:141-147] — facing 0
                 // reads `Mat_GetDir(obj+0x90)` (the matrix's forward row), else `Mat_GetUp`
                 // negated (the up row, negated).
@@ -14030,9 +14054,32 @@ fn segment_hits_sphere(a: V3, b: V3, c: V3, r: f32) -> bool {
             // 0.5 floor was a stand-in.
             if matches!(b.weapon, 0x4e | 0x4f) {
                 let amount = if b.weapon == 0x4e { 3u8 } else { 10u8 }; // [M 0x1ae3d8:60-66]
+                // capsule-cull-and-los-masks-4: the burn trace (env-gated, additive — the
+                // NF_WALK_TRACE pattern): per held laser tick, every lock whose centre lies within
+                // 8 units of the segment prints the muzzle, the segment end, the lock's pos/radius
+                // and the closest segment→centre distance, so a stance stall (Bond never gets the
+                // bolt into reach) separates from a contact miss (in reach but the sphere test
+                // fails). Trace only — no behaviour.
+                let burn_trace = std::env::var_os("NF_BURN_TRACE").is_some();
                 let hits: Vec<usize> = self.locks.iter().enumerate()
                     .filter(|(_, lk)| !lk.burned && Self::segment_hits_sphere(b.pos, end, lk.pos, lk.radius))
                     .map(|(k, _)| k).collect();
+                if burn_trace {
+                    for (k, lk) in self.locks.iter().enumerate() {
+                        if lk.burned { continue; }
+                        let ab = [end[0] - b.pos[0], end[1] - b.pos[1], end[2] - b.pos[2]];
+                        let ac = [lk.pos[0] - b.pos[0], lk.pos[1] - b.pos[1], lk.pos[2] - b.pos[2]];
+                        let len2 = ab[0] * ab[0] + ab[1] * ab[1] + ab[2] * ab[2];
+                        let t = if len2 <= 0.0 { 0.0 } else { (ac[0] * ab[0] + ac[1] * ab[1] + ac[2] * ab[2]) / len2 }.clamp(0.0, 1.0);
+                        let dd = [ac[0] - ab[0] * t, ac[1] - ab[1] * t, ac[2] - ab[2] * t];
+                        let dist = (dd[0] * dd[0] + dd[1] * dd[1] + dd[2] * dd[2]).sqrt();
+                        if dist < 8.0 {
+                            eprintln!("[burn] f{} w{:#x} muzzle=({:.2},{:.2},{:.2}) end=({:.2},{:.2},{:.2}) lock{} pos=({:.2},{:.2},{:.2}) r{:.3} dist{:.3} hit{}",
+                                frame, b.weapon, b.pos[0], b.pos[1], b.pos[2], end[0], end[1], end[2],
+                                k, lk.pos[0], lk.pos[1], lk.pos[2], lk.radius, dist, hits.contains(&k) as u8);
+                        }
+                    }
+                }
                 for k in hits {
                     if self.locks[k].burn(amount, &mut self.channels, frame) {
                         // The burn-through sound: `Lock_Update` 0x1ae3d8:90-99 plays 0x249 (the
@@ -15874,8 +15921,8 @@ fn segment_hits_sphere(a: V3, b: V3, c: V3, r: f32) -> bool {
         // and the present guards (the alive stand-in for the ext+0x4f8 flag/health filters —
         // the port's drone records don't carry those bits). The
         // per-candidate LOS (`Collide_LineOfSight` 0x17f9c8:271-278) runs below through
-        // `d.world.line_of_sight` with GT_Track's 0x72f filter (static segment until
-        // LOS_MASKS_ON flips).
+        // `d.world.line_of_sight` with GT_Track's 0x72f filter (the per-caller masks are
+        // unconditional now [M Collide_Intersect 0x1ebaa8:300-319]).
         {
             // Bond's candidate (alive, the game's health/targetable checks [M 0x17f9c8:99-110]);
             // the guards ride along as positions only — a facing-0 turret may track them
@@ -15884,11 +15931,13 @@ fn segment_hits_sphere(a: V3, b: V3, c: V3, r: f32) -> bool {
             // world — a candidate behind geometry is not trackable.
             let mut cands: Vec<crate::gt::TrackCand> = Vec::new();
             if self.health.health > 0.0 {
-                cands.push(crate::gt::TrackCand { obj: u32::MAX, pos: player.pos, copter: false, los_ok: true });
+                cands.push(crate::gt::TrackCand { obj: u32::MAX, pos: player.pos, copter: false, los_ok: true, sph: player.sph });
             }
             for (i, dr) in self.list.iter().enumerate() {
                 if dr.present && !dr.corpse {
-                    cands.push(crate::gt::TrackCand { obj: i as u32, pos: dr.pos, copter: false, los_ok: true });
+                    // [S] the guards' obj+0x80 centre is not carried — the feet position stands in
+                    // for both fields until the drone records build the world sphere.
+                    cands.push(crate::gt::TrackCand { obj: i as u32, pos: dr.pos, copter: false, los_ok: true, sph: dr.pos });
                 }
             }
             let chans = &self.channels;
@@ -15897,12 +15946,25 @@ fn segment_hits_sphere(a: V3, b: V3, c: V3, r: f32) -> bool {
                 if t.delete_flag { continue; }
                 // The per-candidate LOS walk [M 0x17f9c8:271-278 — one
                 // `Collide_LineOfSight(from, cand+0x80, level, obj, cand, 0x72f)` per scanned
-                // target]. The from-point is the turret's position (obj+0x30; the decompile
-                // reads `*(ext+0xb0)+0x30`, the mounted script's subject transform, which for
-                // these turret rigs is the turret body [S unverified stand-in]). The masked
-                // drop semantics stay behind LOS_MASKS_ON like every other caller.
+                // target]. The from-point is the game's muzzle push [M 0x17f9c8:232-242 — the
+                // ray starts at the barrel transform pos + the barrel dir · ext+0xd0; the port's
+                // stand-in is t.pos + fire_dir · muzzle_offset, the script VM gap documented at
+                // gt.rs]: with the [L] 1.9865224 the wall gun's ray starts ≈0.29 above the deck,
+                // below the mount — the unpushed ray clips the mount/deck and never arms.
+                // The end-point is the candidate's obj+0x80 world-sphere centre [M
+                // 0x17f9c8:271-278] — NOT the obj+0x30 feet the range gates read: the sphere
+                // centre rides at/above the deck top for a standing target, so the deck face
+                // under a candidate never blocks the track ray (the game's t-window is
+                // inclusive 0..1 [M Intersect_RayGeom 0x10a8c8:171-172], an exact endpoint
+                // touch WOULD count). The masked drop semantics are unconditional since
+                // capsule-cull-and-los-masks.
+                let gt_from = [
+                    t.pos[0] + t.fire_dir[0] * t.muzzle_offset,
+                    t.pos[1] + t.fire_dir[1] * t.muzzle_offset,
+                    t.pos[2] + t.fire_dir[2] * t.muzzle_offset,
+                ];
                 for c in cands.iter_mut() {
-                    c.los_ok = d.world.line_of_sight(t.pos, c.pos, crate::world::LOS_TURRET_TRACK);
+                    c.los_ok = d.world.line_of_sight(gt_from, c.sph, crate::world::LOS_TURRET_TRACK);
                 }
                 // GT_Update's top ticks BOTH scripts then reads their +0x9c [M 0x180498:111-112,
                 // 232-233]. The port's script players tick later in the control walk (they are
@@ -15956,6 +16018,15 @@ fn segment_hits_sphere(a: V3, b: V3, c: V3, r: f32) -> bool {
                         self.audio.play3d(sound, muzzle, None);
                         if let Some(w) = d.weapons.records.get(crate::gt::TURRET_WEAPON_RECORD) {
                             let f32_at = |o: usize| f32::from_le_bytes(w[o..o + 4].try_into().unwrap());
+                            // `Bullet_init`'s in-body spread cone [M 0x12c5a0:160-180 — the
+                            // weapon+0x24 cone (× the 0x40000-flag gate) through
+                            // FRand_MVar2(2s) → FRand(2π) → FRand(π) →
+                            // Vec_Spherical_2_Cartesian, added x/z/y then normalised twice] —
+                            // the same 3 draws every shooter's `Bullet_init` makes (the drone
+                            // arms at 10712/12828/12955/14467); the GT arm skipped them, so the
+                            // port's turret shots never spent the game's RNG stream.
+                            let flags68 = u32::from_le_bytes(w[0x68..0x6c].try_into().unwrap());
+                            let dir = crate::bullet::spread(dir, f32_at(0x24), flags68, &mut self.rng);
                             let mut b = crate::bullet::Bullet {
                                 pos: muzzle, dir, speed: f32_at(0x20), travelled: 0.0, range: f32_at(0x1c),
                                 damage: f32_at(0x0c), owner: usize::MAX, state: 0,

@@ -30,8 +30,16 @@ fn load_09(iso: &str) -> nf_view::scene::Scene {
 /// Settle Bond at a spot (a teleport TO the observation point; everything after is real input).
 fn settle_near(scene: &mut nf_view::scene::Scene, spot: [f32; 3]) {
     let sim = scene.sim.as_mut().unwrap();
-    let floor = sim.world.segment(spot, [spot[0], spot[1] - 30.0, spot[2]]).map(|t| spot[1] - 30.0 * t);
-    if let Some(f) = floor { sim.bond.pos = [spot[0], f + 0.1, spot[2]]; } else { sim.bond.pos = spot; }
+    // Cast 0.05 above the spot (the game places objects ON the surface + normal offset [M
+    // Collide_PlaceObject 0x1ecfb8 tail]; the armour-spot y −368.9 sits 0.37 UNDER the walkable
+    // floor top −368.53 [D probe] and the old start-from-spot cast landed Bond beneath it; 0.5
+    // covers that gap). The teleport stands him at the game's standing height — the floor point
+    // + 1.1 [M Player_StandAtNewPosition 0x190d88:0x190ee0-0x190f18]: the old floor + 0.1 put the
+    // root a metre under the stance, from where the ground probe never recovers — measured here,
+    // Bond sank to −372.9 within the 60 settle ticks (and kept falling on the walk, y −488 after
+    // 240 forward ticks), 4.98 from the armour, outside its 1.58 take gate forever.
+    let floor = sim.world.segment([spot[0], spot[1] + 0.5, spot[2]], [spot[0], spot[1] - 30.0, spot[2]]).map(|t| spot[1] + 0.5 - 30.0 * t);
+    if let Some(f) = floor { sim.bond.pos = [spot[0], f + 1.1, spot[2]]; } else { sim.bond.pos = spot; }
     for _ in 0..60 { sim.step_bond(Input::default(), false, false, false); }
 }
 
@@ -332,7 +340,11 @@ fn walking_over_the_body_armour_takes_it() {
 fn standing_short_leaves_the_armour() {
     let Some(iso) = iso() else { eprintln!("NF_ISO not set — skipping"); return };
     let mut scene = load_09(&iso);
-    settle_near(&mut scene, [-21.2, -369.0, 24.86]);
+    // Parked outside the take gate: the game's gate is the armour's world-sphere radius + 1.1
+    // [M 0x18e148:203-210]; the armour's radius reads 0.4767 [D probe] → r = 1.577. The old park
+    // (−21.2) sits 1.47 from the centre — INSIDE the gate, and at the game's standing height the
+    // gate+LOS both pass, so the take fires; a real short park is 2+ units out.
+    settle_near(&mut scene, [-20.4, -369.0, 24.86]);
     face(&mut scene, [-22.57, -368.46, 24.86]);
     for _ in 0..240 { scene.sim.as_mut().unwrap().step_bond(Input::default(), false, false, false); }
     let sim = scene.sim.as_ref().unwrap();

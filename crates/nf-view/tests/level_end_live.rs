@@ -30,7 +30,16 @@ fn tick(scene: &mut nf_view::scene::Scene, n: u32) {
 /// Place Bond at `pos` with `yaw` (radians; 0 = +Z forward), tick once with `use_key`.
 fn step_at(scene: &mut nf_view::scene::Scene, pos: [f32; 3], yaw: f32, use_key: bool) {
     if let Some(sim) = scene.sim.as_mut() {
-        sim.bond.pos = pos;
+        // Stand at the game's stance: the floor point + 1.1 [M Player_StandAtNewPosition
+        // 0x190d88:0x190ee0-0x190f18]. The raw teleport leaves the root wherever the caller's y
+        // says — on 07000016's arrival walkway that is ~1.0 under the stance (measured: the
+        // walkway top −0.197, the teleported root −0.103), the corrected head-on cull
+        // [M Intersect_CylGeom 0x109da0:302-322] no longer pushes a flat top crossed in the
+        // spine's top half, and the sunk head's use sphere then falls 0.38 short of the open
+        // leaf's live sphere (dist 2.670 vs 1+r 2.292) — the E could never reach. At the game's
+        // stance the use point lands inside (|to| 3.006 → dist 2.006).
+        let floor = sim.world.segment([pos[0], pos[1] + 0.5, pos[2]], [pos[0], pos[1] - 30.0, pos[2]]);
+        sim.bond.pos = floor.map_or(pos, |t| [pos[0], pos[1] + 0.5 - 30.0 * t + 1.1, pos[2]]);
         sim.bond.yaw = yaw;
         sim.bond.pitch = 0.0;
         sim.step_bond(Default::default(), false, false, use_key);
@@ -255,6 +264,19 @@ fn the_walkin_leaves_a_closing_straddle_door_alone_on_07000016() {
         };
         scene.sim.as_mut().unwrap().step_bond(nf_game::player::Input { turn, look, ..Default::default() }, false, false, false);
         if on { break; }
+    }
+    {
+        let sim = scene.sim.as_ref().unwrap();
+        let (c, r) = sim.drones.doors.list[door_idx].live_sph();
+        let head = sim.bond.head();
+        let look = sim.bond.look();
+        let up = [head[0] + look[0], head[1] + look[1], head[2] + look[2]];
+        let d = ((up[0] - c[0]).powi(2) + (up[1] - c[1]).powi(2) + (up[2] - c[2]).powi(2)).sqrt();
+        let fl = sim.world.segment([sim.bond.pos[0], sim.bond.pos[1], sim.bond.pos[2]], [sim.bond.pos[0], sim.bond.pos[1] - 10.0, sim.bond.pos[2]]);
+        let fl2 = sim.world.segment([sim.bond.pos[0], sim.bond.pos[1] + 2.0, sim.bond.pos[2]], [sim.bond.pos[0], sim.bond.pos[1] - 10.0, sim.bond.pos[2]]);
+        eprintln!("[door16-dbg] bond=({:.3},{:.3},{:.3}) head_y={:.3} sph=({:.3},{:.3},{:.3}) r={:.3} dist(use,sph)={:.3} vs 1+r={:.3} pitch={:.3} floor(from pos)={:?} floor(from pos+2)={:?}",
+            sim.bond.pos[0], sim.bond.pos[1], sim.bond.pos[2], head[1], c[0], c[1], c[2], r, d, 1.0 + r, sim.bond.pitch,
+            fl.map(|t| sim.bond.pos[1] - 10.0 * t), fl2.map(|t| sim.bond.pos[1] + 2.0 - 12.0 * t));
     }
     scene.sim.as_mut().unwrap().step_bond(Default::default(), false, false, true);
     scene.sim.as_mut().unwrap().step_bond(Default::default(), false, false, false);

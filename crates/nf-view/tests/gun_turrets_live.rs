@@ -70,11 +70,39 @@ fn raising_ch18_deploys_the_wall_gun_and_its_shots_wound_bond() {
     let sim = scene.sim.as_mut().unwrap();
     let ti = wall_gun(sim);
     let gun_pos = sim.drones.gt_turrets[ti].pos;
-    // Stand the tester in the gun's front cone, inside its 50-unit track range, on the floor
-    // below the mount (the create-time fire direction is −up of the placement matrix — the
-    // floor level is in the cone [M 0017ffa0:144-146, 0x17f9c8:252-257]).
+    // Stand the tester OFF the mount column, inside the gun's front cone (the create-time fire
+    // direction is −up of the placement matrix — every floor point qualifies, dot = +1.19/dist
+    // [M 0017ffa0:144-146, 0x17f9c8:252-257]), within the 50-unit track range, and LOS-clear from
+    // the muzzle [M 0x17f9c8:232-242 — the ray starts at t.pos + fire_dir · ext+0xd0, the [L]
+    // 1.9865224]. Directly beneath the mount the game's own shot geometry can never wound: the
+    // aim matrix looks from obj+0x30 AT the target's obj+0x30 [M 0x180498 case 4 Mat_LookAt
+    // 0x180498:262-263], so for a same-column target the muzzle sits 0.29 above the deck and the
+    // bullet dies in the deck top face — the game's shots only reach a target the muzzle ray
+    // reaches diagonally. Standing height = the floor point + 1.1 [M 0x190d88:0x190ee0-0x190f18]
+    // (a teleport to the bare floor point falls out of the world — measured y = −569.8).
     let fd = sim.drones.gt_turrets[ti].fire_dir;
-    sim.bond.pos = [gun_pos[0] + fd[0] * 12.0, 0.0, gun_pos[2] + fd[2] * 12.0];
+    let muzzle = [gun_pos[0] + fd[0] * sim.drones.gt_turrets[ti].muzzle_offset,
+                  gun_pos[1] + fd[1] * sim.drones.gt_turrets[ti].muzzle_offset,
+                  gun_pos[2] + fd[2] * sim.drones.gt_turrets[ti].muzzle_offset];
+    let mut spot = None;
+    'outer: for ox in [12.0f32, -12.0, 8.0, -8.0, 6.0, -6.0, 4.0, -4.0, 16.0, -16.0, 20.0, -20.0, 28.0, -28.0] {
+        for oz in [10.0f32, -10.0, 6.0, -6.0, 3.0, -3.0, 0.0] {
+            let (x, z) = (gun_pos[0] + ox, gun_pos[2] + oz);
+            let a = [x, gun_pos[1] - 0.3, z];
+            let b = [x, gun_pos[1] - 40.0, z];
+            let Some(y) = sim.world.line_of_sight_hit(a, b, 0).map(|f| a[1] + (b[1] - a[1]) * f + 1.1) else { continue };
+            let d = [x - gun_pos[0], y - gun_pos[1], z - gun_pos[2]];
+            let m = (d[0] * d[0] + d[1] * d[1] + d[2] * d[2]).sqrt();
+            if m < 3.0 || m > 45.0 { continue; }
+            let dot = fd[0] * d[0] / m + fd[1] * d[1] / m + fd[2] * d[2] / m;
+            if dot < 0.01 { continue; } // the front-cone gate [M 0x17f9c8:252-257]
+            let sph = nf_game::player::Bond::sphere_centre_at([x, y, z], sim.bond.yaw);
+            if !sim.world.line_of_sight(muzzle, sph, nf_game::world::LOS_TURRET_TRACK) { continue; }
+            spot = Some([x, y, z]);
+            break 'outer;
+        }
+    }
+    sim.bond.pos = spot.expect("a standing in-cone spot near the wall gun");
     // The real channel path (the game's switch/script write — `switch_channels[18] = 1`).
     let frame = sim.drones.frame;
     sim.drones.channels.set(18, 1, frame);
@@ -82,6 +110,7 @@ fn raising_ch18_deploys_the_wall_gun_and_its_shots_wound_bond() {
     // [M 0x180498:205-238]; the script loop is 180 ticks (0x06000041's length [D]).
     let mut reached_combat = false;
     let mut hp_at_combat = 0u16;
+    let mut min_hp = u16::MAX;
     for _ in 0..900 {
         sim.step_bond(Input::default(), false, false, false);
         let t = &sim.drones.gt_turrets[ti];
@@ -89,14 +118,19 @@ fn raising_ch18_deploys_the_wall_gun_and_its_shots_wound_bond() {
             reached_combat = true;
             hp_at_combat = t.hp;
         }
+        min_hp = min_hp.min(t.hp);
     }
     let sim = scene.sim.as_ref().unwrap();
     assert!(reached_combat, "the wall gun reached COMBAT within 15 s of ch 18 — state {}",
         sim.drones.gt_turrets[ti].state);
     // The shots: the 0.1 s cadence fires 6/second while the target holds [M 0x180498:317-348].
-    assert!(sim.drones.gt_turrets[ti].hp < hp_at_combat,
+    // The counter is read as the run's minimum: the cycle does not necessarily end in COMBAT —
+    // a dead target (the shots ARE lethal here) drops the candidate, the gun re-holsters and,
+    // facing 1, drops its 0x52 pickup and deletes itself [M 0x180498:246-257] — the fixed `ti`
+    // then names the next ch-18 gun (#637), whose untouched 0xffff would mask #636's spent shots.
+    assert!(min_hp < hp_at_combat,
         "the ammo counter decremented per shot [M 0x180498:321-323] ({} → {})",
-        hp_at_combat, sim.drones.gt_turrets[ti].hp);
+        hp_at_combat, min_hp);
     assert!(sim.drones.health.health < 100.0, "the turret's shots reached Bond through the bullet path (health {:.1})",
         sim.drones.health.health);
 }

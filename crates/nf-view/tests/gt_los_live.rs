@@ -8,6 +8,16 @@
 //! a spot in the gun's front cone but behind a wall must hold the gun DORMANT (no deploy, no
 //! shots); the open front spot must still deploy it into COMBAT (the pre-existing real path).
 //!
+//! The ray the game casts starts at the muzzle: barrel-transform pos + barrel dir · ext+0xd0
+//! [M 0x17f9c8:232-242], ext+0xd0 = 1.9865224 on this gun [L ee_start_0700000a.bin ext
+//! 0x1b9e400+0xd0] (= the script-A union glist bbox max.z 1.3243483 × 1.5 [M GT_Create
+//! 0x17ffa0:118-140; D the GunSamuri glist objects]) — the port fills `muzzle_offset` with that
+//! same value, so the sampler below casts the game's ray. The candidate teleports use the game's
+//! standing height (the floor point + 1.1, `Player_StandAtNewPosition` 0x190d88 [M 0x190ee0-0x190f18]):
+//! a teleport to the bare floor point sits 1.1 below standing, from where the ground probe never
+//! recovers and Bond falls out of the world (measured: y = −569.8 after 900 ticks on the old
+//! y = 0.0 fixture).
+//!
 //! Opt-in: `NF_ISO`. NF_SILENT everywhere.
 
 use nf_game::player::Input;
@@ -25,34 +35,47 @@ fn wall_gun(sim: &nf_view::scene::Sim) -> usize {
         .expect("the fixture wall gun (ch 18, facing 1)")
 }
 
+/// The game's standing height over the floor at (x, z): the floor top through a down-ray that
+/// starts below the mount (the gun pos rides under the sky-bridge deck, so a ray from just under
+/// it reads the lower floor, not the bridge) + the game's 1.1 [M 0x190d88:0x190ee0-0x190f18].
+fn standing_y(sim: &nf_view::scene::Sim, x: f32, z: f32, gun_y: f32) -> Option<f32> {
+    let a = [x, gun_y - 0.3, z];
+    let b = [x, gun_y - 40.0, z];
+    sim.world.line_of_sight_hit(a, b, 0).map(|f| a[1] + (b[1] - a[1]) * f + 1.1)
+}
+
 /// The candidate sampling grid. The wall guns' create-time fire direction (ext+0x80) is
 /// **straight down** — facing 1 negates the placement's up row [M 0017ffa0:141-147; D the
-/// placements' identity-rot matrices] — so the front cone is the deck below the mount. The
-/// clear spot is the proven open one (directly beneath the gun — the pre-existing live test
-/// fires from there); the blocked spot is the first sampled deck point whose view ray hits
-/// the bridge structure (the x ≈ −10 region is walled off from gun #636 [D the level]).
+/// placements' identity-rot matrices] — so the front cone is the deck below the mount. Both
+/// spots stand Bond at the game's standing height (floor + 1.1 [M 0x190d88]); the blocked spot
+/// is the first sampled standing deck point whose view ray FROM THE MUZZLE [M 0x17f9c8:232-242]
+/// hits the bridge structure (the x ≈ −10 region is walled off from gun #636 [D the level]);
+/// the clear spot is the proven open one (directly beneath the gun — the pre-existing live test
+/// fires from there).
 fn sample_spots(sim: &nf_view::scene::Sim, gun: usize) -> ([f32; 3], [f32; 3]) {
     let t = &sim.drones.gt_turrets[gun];
     let (p, fd) = (t.pos, t.fire_dir);
-    let clear = [p[0], 0.0, p[2]];
+    let muzzle = [p[0] + fd[0] * t.muzzle_offset, p[1] + fd[1] * t.muzzle_offset, p[2] + fd[2] * t.muzzle_offset];
+    let clear_y = standing_y(sim, p[0], p[2], p[1]).expect("a floor under the mount");
+    let clear = [p[0], clear_y, p[2]];
     let mut blocked = None;
     'outer: for ox in [-20.0f32, -14.0, -8.0, -3.0, 3.0, 8.0, 14.0, 20.0] {
         for oz in [-14.0f32, -6.0, 0.0, 6.0, 14.0] {
-            for y in [0.0f32, -4.0, -8.0] {
-                let q = [p[0] + ox, y, p[2] + oz];
-                let d = [q[0] - p[0], q[1] - p[1], q[2] - p[2]];
-                let m = (d[0] * d[0] + d[1] * d[1] + d[2] * d[2]).sqrt();
-                if m < 3.0 || m > 45.0 { continue; }
-                let dot = fd[0] * d[0] / m + fd[1] * d[1] / m + fd[2] * d[2] / m;
-                if dot < 0.05 { continue; } // inside the front-cone gate [M 0x17f9c8:252-257]
-                if !sim.world.line_of_sight(p, q, nf_game::world::LOS_TURRET_TRACK) {
-                    blocked = Some(q);
-                    break 'outer;
-                }
+            let q0 = [p[0] + ox, 0.0, p[2] + oz];
+            let d = [q0[0] - p[0], -p[1], q0[2] - p[2]];
+            let m = (d[0] * d[0] + d[1] * d[1] + d[2] * d[2]).sqrt();
+            if m < 3.0 || m > 45.0 { continue; }
+            let dot = fd[0] * d[0] / m + fd[1] * d[1] / m + fd[2] * d[2] / m;
+            if dot < 0.05 { continue; } // inside the front-cone gate [M 0x17f9c8:252-257]
+            let Some(y) = standing_y(sim, q0[0], q0[2], p[1]) else { continue };
+            let sph = nf_game::player::Bond::sphere_centre_at([q0[0], y, q0[2]], sim.bond.yaw);
+            if !sim.world.line_of_sight(muzzle, sph, nf_game::world::LOS_TURRET_TRACK) {
+                blocked = Some([q0[0], y, q0[2]]);
+                break 'outer;
             }
         }
     }
-    (blocked.expect("a blocked in-cone deck spot exists on the sky bridge — adjust the grid"), clear)
+    (blocked.expect("a blocked in-cone standing deck spot exists on the sky bridge — adjust the grid"), clear)
 }
 
 #[test]

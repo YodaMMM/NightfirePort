@@ -149,7 +149,7 @@ fn zoe_rides_the_carriage_and_never_targets_bond() {
 
     // Per-ally-round record: the fire tick, the muzzle, the aim ray's closest approach to Bond's
     // head, and whether it hit (the sim's player_hits carry the shooter index).
-    struct Round { tick: u32, from: [f32; 3], to_bond: f32, hit: bool }
+    struct Round { tick: u32, from: [f32; 3], to_bond: f32, hit: bool, opp: Option<usize> }
     let mut rounds: Vec<Round> = Vec::new();
     // Per-tick riding trace: (tick, carriage origin, ally pos, ally state, in-volume?).
     let mut left_volume_at: Option<(u32, [f32; 3], [f32; 3], u8)> = None;
@@ -189,8 +189,10 @@ fn zoe_rides_the_carriage_and_never_targets_bond() {
                     b.dir[0] * d[1] - b.dir[1] * d[0],
                 ];
                 let perp = if l > 1e-6 { (cross[0] * cross[0] + cross[1] * cross[1] + cross[2] * cross[2]).sqrt() / l } else { 0.0 };
-                eprintln!("[zoe shot t{t}] muzzle {:?} dir {:?} perp_to_bond {perp:.2}", b.pos, b.dir);
-                rounds.push(Round { tick: t, from: b.pos, to_bond: perp, hit: false });
+                let ot = sim.drones.list[ai].opp_target;
+                let opd = sim.drones.list[ai].opp_drone;
+                eprintln!("[zoe shot t{t}] muzzle {:?} dir {:?} perp_to_bond {perp:.2} opp_target {ot:?} opp_drone {opd:?} bond_head {:?}", b.pos, b.dir, sim.bond.head());
+                rounds.push(Round { tick: t, from: b.pos, to_bond: perp, hit: false, opp: sim.drones.list[ai].opp_drone });
             }
             let zoe_now = sim.drones.list[ai].shots.len();
             if zoe_now > zoe_shots0 { eprintln!("[zoe fired t{t}] +{} round(s)", zoe_now - zoe_shots0); }
@@ -244,9 +246,19 @@ fn zoe_rides_the_carriage_and_never_targets_bond() {
     //     half only; see the stream evidence that
     //     keeps the model out of this batch.
     assert!(ally_hits == 0, "the ally's round hit Bond {ally_hits} times — team 2 never takes the player [M 0x1424e0:101; the fix is the team-2 opponent model]");
+    // The game's pin is the OPPONENT identity, not the round's miss distance: team 2's opponent
+    // comes from the drone-list walk and is never the player [M 0x1424e0:101-121], and every shot
+    // re-aims at that opponent [M 0x179d40:130]. The old perp > 2.0 proxy contradicted the game's
+    // own geometry: the descent's guards ambush AT Bond, so a round correctly aimed at guard
+    // 19/20/24 passes within 2.0 of his head (measured opp_targets on this harness: guards, e.g.
+    // t82 opp (100.87, 28.25, -122.15) vs his head (111.02, 28.33, -127.46) — 11 apart — while the
+    // line's perp is 0.99).
     for r in &rounds {
-        assert!(r.to_bond > 2.0, "an ally-fired round at t{} was aimed at Bond (perp {:.2} from his head) [M 0x1424e0:101]",
-            r.tick, r.to_bond);
+        // A None pick is the game's own no-opponent arm (SetOpponent(0) — the aim degenerates to
+        // the drone's own position [M 0x1422d0:25-29]); what team 2 never has is a PLAYER opponent.
+        let ok = r.opp.map_or(true, |i| end.drones.list[i].team == 1);
+        assert!(ok, "an ally-fired round at t{} had a non-team-1 opponent (opp {:?}) — team 2 never takes the player [M 0x1424e0:101-121]",
+            r.tick, r.opp);
     }
     let _ = obj08(&w);
 }

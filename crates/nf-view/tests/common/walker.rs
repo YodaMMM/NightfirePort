@@ -337,6 +337,19 @@ impl Walker {
                 self.total_ticks, sim.bond.pos[0], sim.bond.pos[1], sim.bond.pos[2],
                 sim.bond.grounded, sim.bond.substate, sim.bond.crouched);
         }
+        // capsule-cull-and-los-masks-4 (NF_DOOR_TRACE, additive — the NF_WALK_TRACE pattern):
+        // the doors within 4 units of Bond every 60 ticks, so a walk stall at a doorway names
+        // its blocker (the door's state: 2 closed, 4 open, 8 opening, 0x10 closing [M door.rs
+        // states — the game's obj+0xF4]). Trace only.
+        if std::env::var_os("NF_DOOR_TRACE").is_some() && self.total_ticks % 60 == 0 {
+            for (i, dr) in sim.drones.doors.list.iter().enumerate() {
+                let (c, r) = dr.live_sph();
+                if dxz(c, sim.bond.pos) < 4.0 {
+                    eprintln!("[door] t{} d{} state={:#x} r{:.2} at=({:.2},{:.2},{:.2})",
+                        self.total_ticks, i, dr.state, r, c[0], c[1], c[2]);
+                }
+            }
+        }
         // ai-sight-drawn-gate-4 (NF_ALARM_TRACE, additive — the NF_WALK_TRACE pattern): the
         // alarm-chain trace. Every live team-1 guard's state is diffed against `alarm_last`; a
         // transition prints (idx, from -> to, dist to Bond), a 50-tick digest prints the live

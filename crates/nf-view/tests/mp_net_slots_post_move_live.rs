@@ -241,12 +241,34 @@ fn six_human_loopback_slot5_moves_hashes_agree_every_tick() {
 /// while the 16-slot rule is (re)proved around it. Pinned on the pre-task tree
 /// (master e5638828); a mismatch means the 4-human path moved: re-pin consciously,
 /// with the reason in the report.
+///
+/// RE-PINNED (capsule-cull-and-los-masks-6): the final digest moved when the game's
+/// head-on cull went unconditional [M Intersect_CylGeom 0x109da0:321-322 — the skip
+/// `((0.999 < n·d̂) && (0.5 < f)) || ((n·d̂ < -0.999) && (f < 0.5))`, f the plane-crossing
+/// fraction from A clamped :310-320, the spine NORMALIZED before the loop :109f74
+/// Vec_Normalise 0x1e3000, walk A = HITTEST+0x20 = BLData+0x760 = pos + up·0.275 (the TOP),
+/// B = HITTEST+0x30 = BLData+0x770 = pos + up·(0.55 − cc) [M Player_Collision 0x194df0
+/// decompile :301/:333]]. The old final (0xfb7b…) was pinned on a tree whose capsule
+/// contact LACKED that cull — the pre-cull tree pushed bodies the game passes through,
+/// so the old expectation baked in a non-game rule and the TEST was wrong (fixed here,
+/// per the task rule, with the address). Bisect evidence (mp_net_slots_post_move_live
+/// runs, NF_NET_HASHDBG): 82362142 (batch-1026d) GREEN; 24af5915 (the cull's flag flip,
+/// first capsule commit) already reads 0xbc5e_2155_a378_6e9c; with the cull's const
+/// flipped back OFF on that same tree the pin is GREEN again — the cull is the sole
+/// mover; the
+/// LOS masks (the same commit's other flip, unconditional now) are digest-inert here; the
+/// 4a155ddf merge's master-side content and its resolution are exonerated (4a155ddf^1 =
+/// ca2e7389, capsule-3 tip, reads the same 0xbc5e… before any of that content).
+/// First divergence: session t142, component bodies, slot 3 only — x +0.00122,
+/// y −0.00235, z/yaw/pitch/substate/crouched identical (slot 3 is airborne off the
+/// t134 scripted jump, pressed against the z −206.70874 wall); tick0 is UNCHANGED.
 #[test]
 fn four_human_session_digest_is_pinned() {
     let Some(path) = iso() else { eprintln!("skip: NF_ISO not set"); return };
-    // The measured digests (this tree, master e5638828 + the test — see the report).
+    // The measured digests: tick0 unchanged from the original pin (master e5638828);
+    // final re-pinned for the head-on cull (see the block above).
     const PINNED_TICK0: u64 = 0x5c0b_b60a_8cdf_8938;
-    const PINNED_FINAL: u64 = 0xfb7b_58f7_3e34_0ec3;
+    const PINNED_FINAL: u64 = 0xbc5e_2155_a378_6e9c;
     const HUMANS: usize = 4;
     let (_s, mut peers, mut simmed) = bring_up(&path, PORT_4, HUMANS, &[0, 2]);
     let mut ms: u64 = 0;

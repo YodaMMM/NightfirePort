@@ -703,23 +703,36 @@ impl Walker {
                     } else if self.stuck == 2 {
                         self.sidestep = -40; // nudge left
                     } else if self.stuck == 3 {
-                        // jump once
-                        let sim = self.scene.sim.as_mut().unwrap();
-                        let j = sim.bond.grounded;
-                        if j { self.tick(Input { jump: true, ..Default::default() }, false); }
+                        // jump once — only with headroom: under a soffit the jump launches the
+                        // capsule's head INTO the ceiling (head_bump) and the fall re-pins him on
+                        // the same edge, so the jump cycle becomes the jam (the 01 stairwell
+                        // throat, capsule-cull-and-los-masks-10). The real player doesn't jump
+                        // with the ceiling ~1.4 over his feet.
+                        let sim = self.scene.sim.as_ref().unwrap();
+                        let headroom = sim.world.segment(sim.bond.pos, [sim.bond.pos[0], sim.bond.pos[1] + 2.2, sim.bond.pos[2]]);
+                        let grounded = sim.bond.grounded;
+                        drop(sim);
+                        if grounded && headroom.is_none() { self.tick(Input { jump: true, ..Default::default() }, false); }
                     } else if self.stuck == 4 {
-                        // back up, sidestep, and jump (crate-top pickups need the hop)
+                        // back up, sidestep, and jump (crate-top pickups need the hop; the same
+                        // headroom guard — no jumps under a soffit)
                         self.tick(Input { forward: -0.6, ..Default::default() }, false);
                         self.tick(Input { forward: -0.6, ..Default::default() }, false);
                         self.sidestep = 40;
-                        let sim = self.scene.sim.as_mut().unwrap();
-                        if sim.bond.grounded { self.tick(Input { jump: true, forward: 1.0, ..Default::default() }, false); }
+                        let sim = self.scene.sim.as_ref().unwrap();
+                        let headroom = sim.world.segment(sim.bond.pos, [sim.bond.pos[0], sim.bond.pos[1] + 2.2, sim.bond.pos[2]]);
+                        let grounded = sim.bond.grounded;
+                        drop(sim);
+                        if grounded && headroom.is_none() { self.tick(Input { jump: true, forward: 1.0, ..Default::default() }, false); }
                     } else if self.stuck == 5 {
                         self.tick(Input { forward: -0.6, ..Default::default() }, false);
                         self.tick(Input { forward: -0.6, ..Default::default() }, false);
                         self.sidestep = -40;
-                        let sim = self.scene.sim.as_mut().unwrap();
-                        if sim.bond.grounded { self.tick(Input { jump: true, forward: 1.0, ..Default::default() }, false); }
+                        let sim = self.scene.sim.as_ref().unwrap();
+                        let headroom = sim.world.segment(sim.bond.pos, [sim.bond.pos[0], sim.bond.pos[1] + 2.2, sim.bond.pos[2]]);
+                        let grounded = sim.bond.grounded;
+                        drop(sim);
+                        if grounded && headroom.is_none() { self.tick(Input { jump: true, forward: 1.0, ..Default::default() }, false); }
                     } else {
                         let dump = fail_dump(&self.scene, wp.at, label);
                         self.note_stuck(dump.clone());

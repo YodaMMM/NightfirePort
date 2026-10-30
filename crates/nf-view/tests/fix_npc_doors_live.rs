@@ -181,7 +181,11 @@ fn the_escort_opens_the_interior_doors_on_his_route() {
                 let d = walker::dxz(sim.bond.pos, target);
                 let input = nf_game::player::Input {
                     turn: err.clamp(-0.07, 0.07),
-                    forward: if d > 5.0 { 1.0 } else if d > 4.0 { 0.45 } else { 0.0 },
+                    // Back off inside 3.6: the escort's PlayerInWay stay band is the 60° cone AND
+                    // 3.5 [M 0x15ea28:32-51] — the escort walks INTO a parked follower (the lead
+                    // runs west into him) and then waits forever for the player to clear his cone.
+                    // The real player steps back; the harness does the same (real reverse input).
+                    forward: if d > 5.0 { 1.0 } else if d > 4.0 { 0.45 } else if d > 3.6 { 0.0 } else { -0.5 },
                     ..Default::default()
                 };
                 drop(sim);
@@ -228,8 +232,28 @@ fn the_escort_opens_the_interior_doors_on_his_route() {
             if !w.scene.sim.as_ref().unwrap().drones.channels.on(0x33) {
                 w.walk_nav_to([6.79, 0.0, 8.91], "onto the corridor plate", 0.4);
             }
-            let cpos = w.scene.sim.as_ref().unwrap().drones.list[ci].pos;
-            w.walk_nav_to(cpos, "close on the contact", 4.0);
+            let (cpos, cstate) = {
+                let sim = w.scene.sim.as_ref().unwrap();
+                (sim.drones.list[ci].pos, sim.drones.list[ci].state)
+            };
+            if cstate == nf_game::drone::state::PLAYER_IN_WAY {
+                // The escort is waiting for the player to clear his path cone [M 0x15ea28 case 3 —
+                // the stay band is the 1.0472 rad cone AND 3.5]. The old harness closed to 4.0 and
+                // stood INSIDE the band (Bond coasted to 1.27 while the lead ran into him), so the
+                // escort waited forever — the game-true move is to back OUT of the band (real
+                // walk input to a point 4.6 away, along the Bond→contact line reversed).
+                let (b, target) = {
+                    let sim = w.scene.sim.as_ref().unwrap();
+                    let b = sim.bond.pos;
+                    let dx = b[0] - cpos[0];
+                    let dz = b[2] - cpos[2];
+                    let l = (dx * dx + dz * dz).sqrt().max(1e-4);
+                    (b, [cpos[0] + dx / l * 4.6, b[1], cpos[2] + dz / l * 4.6])
+                };
+                w.walk_to(Wp::new(target[0], target[1], target[2]).r(0.4), "back out of the escort's path cone");
+            } else {
+                w.walk_nav_to(cpos, "close on the contact", 4.0);
+            }
             continue;
         }
         eprintln!("[01] round: the contact stalled at ({:.1},{:.1},{:.1}) — clearing guards {:?}",

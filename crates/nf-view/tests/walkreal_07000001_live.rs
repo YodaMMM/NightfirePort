@@ -915,7 +915,20 @@ fn following_mayhew_down_completes_the_level() {
             }
         }
     }
-    // Bond takes the plate (the player's final step — the AND needs him in the volume).
+    // Bond takes the plate (the player's final step — the AND needs him in the volume). The
+    // direct nav steer wedges on the stairwell's riser corner at (−32.7..−33.5, 4.71, 12.00):
+    // the capsule straddles the z-11 tread's edge (the riser top at 4.7) with his head in the
+    // z-12 soffit [D probe: the flight descends 4.7 → 0.7 over z 10..16, treads ny 1.00,
+    // ceilings 6.1..7.4; a capsule teleported to the jam spot is pinned — head in the soffit,
+    // feet on the tread edge] — the head-on cull [M Intersect_CylGeom 0x109da0:302-322]
+    // correctly skips the step behind/above, so the corner no longer pushes him off, and the
+    // mid-air tread walk jams where it used to slide. The main test's proven descent (green on
+    // this tree) walks the hall's south-west corner first, then the stairwell head anchor, and
+    // takes the plate from there — the mirror below walks the same corner side so the nav route
+    // matches the proven one (a north-side arrival gets a different node chain that funnels
+    // back through the throat).
+    w.walk_to(Wp::new(-32.0, 6.4, 12.9).r(1.0), "the hall's south-west corner");
+    w.walk_nav_to([-30.8, 6.4, 13.1], "the stairwell head", 1.2);
     w.walk_nav_to(plate, "Bond onto the plate", 0.8);
     // The AND needs BOTH touchers inside the volume for a beat [M Trigger_Hit 0x1b1fc8]; wait for it.
     let mut fired = None;

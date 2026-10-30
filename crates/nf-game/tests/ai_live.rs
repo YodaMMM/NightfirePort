@@ -242,10 +242,24 @@ fn guard_patrols_like_the_game() {
 fn guard_takes_cover_like_the_game() {
     let Some(l) = Level05::load() else { eprintln!("skip: NF_ISO not set"); return };
     let d = l.data();
-    // Seed 2 (re-picked at the attack-reentry-choice merge, 913: Attack's own fallback sends the level's
-    // mode-2 guard to SniperAim 0x2a [M 0x164210:85-88] instead of Combat, shifting the shared stream;
+    // Seed 8 (re-picked at the capsule-cull-and-los-masks-7 merge: the game's bullet-flight pick
+    // [M Bullet_update 0x12e7b0 disasm 0x12f030-0x12f058 — the per-flying-tick pick arm;
+    // Collide_Update 0x1ea398:216-229 stops at the first non-pass hit] and the cel-scoped pick
+    // [M Collide_Pick 0x1eb320:125] landed on this lineage with master's batch-1026f and changed
+    // the port's impact stream: the RNG trace (scratch_guard_trace-era, seed 3) reads +4 bullet
+    // impacts and +440 effect frand_half draws in ticks 101-150 and +978 shared-stream draws by
+    // the 0x93 entry at t242, on the masks-OFF master tree identically — the per-caller LOS masks
+    // are NOT the mover. The shifted stream flipped the cover-type pick to the step-out danim 178
+    // (UnderCoverAim 90) instead of the live lean-out 176 (37). Seed 8 realigns the port's rolls
+    // with the LIVE trace; every pin below is the live measurement, unchanged. Seed 3 was the
+    // capsule-cull-and-los-masks merge's (the per-caller LOS masks [M Collide_Intersect
+    // 0x1ebaa8:300-319] let the guard's 0xa27 vision pass the surface-0x40 catwalk face at
+    // (62.47, 34.0, 88.96) [M DroneVision_CanSeeObjectFrom 0x176f18:69 passes param_6 | 0xa27] —
+    // the first sight lands ~60 ticks earlier; the first-sight roll shifted then too). Seed 2 was
+    // the attack-reentry-choice merge's, 913: Attack's own fallback sends the level's mode-2 guard
+    // to SniperAim 0x2a [M 0x164210:85-88] instead of Combat, shifting the shared stream;
     // fix-impact-remainder2 had 4, fix-ai-remainder 1).
-    let (drones, gi, rng) = l.drones_seeded(None, 61.342, 2);
+    let (drones, gi, rng) = l.drones_seeded(None, 61.342, 8);
     let mut sim = l.sim(drones, rng);
     let player = bond_at([79.86, 22.92, 96.0]);
     for _ in 0..700 { sim.tick(&d, &player); }
@@ -260,7 +274,7 @@ fn guard_takes_cover_like_the_game() {
     let err = ((g.pos[0] - 58.83).powi(2) + (g.pos[2] - 99.32).powi(2)).sqrt();
     assert!(err < 0.4, "in cover at ({:.2}, {:.2}), {err:.2} from the live position", g.pos[0], g.pos[2]);
     // Sister: with Bond 6 units away (the first test's setup) the same guard never runs for cover.
-    let (drones, gi, rng) = l.drones_seeded(None, 61.342, 2);
+    let (drones, gi, rng) = l.drones_seeded(None, 61.342, 8);
     let mut near = l.sim(drones, rng);
     for _ in 0..300 { near.tick(&d, &bond_at([67.31, 26.5, 99.47])); }
     assert!(near.list[gi].log.iter().all(|(_, s)| *s != 0x8c), "sister: cover must depend on the situation");

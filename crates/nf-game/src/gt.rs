@@ -111,9 +111,11 @@ pub struct GTurret {
     /// ext+0xd4/d8: the barrel spin angle and velocity [M 00180498 case 4/7].
     pub spin: f32,
     pub spin_vel: f32,
-    /// ext+0xd0: the muzzle offset along the barrel (GT_Create's script bbox max.z × 1.5 —
-    /// the port's script VM is the tracked gap, so it stays a settable 0.0 from placements)
-    /// [M 0017ffa0:155-158].
+    /// ext+0xd0: the muzzle offset along the barrel (GT_Create's script bbox max.z × 1.5
+    /// [M 0017ffa0:118-140]). The port's script VM cannot enumerate the script objects' models,
+    /// so `Drones::attach_level_id` fills it from script A's static Entity commands resolved
+    /// through the level's glist bounds — the 0700000a wall gun reads 1.9865224, the live value
+    /// [L ee_start_0700000a.bin ext 0x1b9e400+0xd0].
     pub muzzle_offset: f32,
     /// The two scripts' per-object done flag (obj+0x9c on each `Script_GetObj` record): the
     /// game's script VM sets it; the port's script VM is the tracked gap (gt.rs module doc),
@@ -233,6 +235,11 @@ pub struct TrackCand {
     /// `Collide_LineOfSight(muzzle, cand+0x80, level, obj, cand, 0x72f) != 0`
     /// [M 0x17f9c8:271-278] — the tick's LOS walk.
     pub los_ok: bool,
+    /// The candidate's world-sphere centre (`obj+0x80`) — the LOS ray's END point, distinct from
+    /// the obj+0x30 feet position the range gates read [M 0x17f9c8:271-278 loads `*piVar6 + 0x80`;
+    /// the centre is `Control_BuildWorldSph` 0x133070's, which floats at/above the deck top for a
+    /// standing target, so the deck face under a candidate never blocks the track ray].
+    pub sph: [f32; 3],
 }
 
 /// Everything one `GT_Update` tick reads beyond the record itself.
@@ -770,7 +777,7 @@ mod tests {
         }
         assert!(moved.is_some_and(|f| f >= 29), "e8 OFF → > 0.5 s → state 2 [M :415-421], got {moved:?}");
         // A tracked frame zeroes the timer: 20 idle frames, one tracked, 20 idle → still COMBAT.
-        let bond = [TrackCand { obj: u32::MAX, pos: [0.0, 0.0, 5.0], copter: false, los_ok: true }];
+        let bond = [TrackCand { obj: u32::MAX, pos: [0.0, 0.0, 5.0], copter: false, los_ok: true, sph: [0.0; 3] }];
         let mut t3 = GTurret { state: gt_state::COMBAT, facing: 1, param4: 18, param5: 0, ..GTurret::default() };
         for f in 0..41u32 {
             let c: &[TrackCand] = if f == 20 { &bond } else { &none };
@@ -798,8 +805,8 @@ mod tests {
         // front-cone test rejects everything [M 0x17f9c8:252-257].
         t.fire_dir = [1.0, 0.0, 0.0];
         let far = [60.0, 0.0, 0.0]; // beyond the SP range (dist² 3600 > 2500) [M 0x17f9c8:92]
-        let cand_far = TrackCand { obj: 7, pos: far, copter: false, los_ok: true };
-        let cand_near = TrackCand { obj: 7, pos: [10.0, 0.0, 0.0], copter: false, los_ok: true }; // inside the 50-unit SP range
+        let cand_far = TrackCand { obj: 7, pos: far, copter: false, los_ok: true, sph: [0.0; 3] };
+        let cand_near = TrackCand { obj: 7, pos: [10.0, 0.0, 0.0], copter: false, los_ok: true, sph: [0.0; 3] }; // inside the 50-unit SP range
         // out of range: no target, no fire, no sting
         let ev = step(&mut t, &ch, &[cand_far], &mut rng);
         assert!(ev.is_empty(), "out-of-range candidate → no events");
@@ -837,28 +844,28 @@ mod tests {
         t.fire_dir = [1.0, 0.0, 0.0];
         // The game compares SQUARED distance to 2500 (SP) → 50 units [M 0x17f9c8:92-99].
         // A copter at 80: 6400 × 0.25 = 1600 < 2500 → in; a ground candidate at 52 (2704) → out.
-        let copter = TrackCand { obj: 3, pos: [80.0, 0.0, 0.0], copter: true, los_ok: true };
-        let guard = TrackCand { obj: 5, pos: [52.0, 0.0, 0.0], copter: false, los_ok: true };
+        let copter = TrackCand { obj: 3, pos: [80.0, 0.0, 0.0], copter: true, los_ok: true, sph: [0.0; 3] };
+        let guard = TrackCand { obj: 5, pos: [52.0, 0.0, 0.0], copter: false, los_ok: true, sph: [0.0; 3] };
         assert_eq!(t.track(&[guard, copter], false), Some(3), "copter dist² ×0.25 inside 2500 [M :158-166]");
         // Sister: 48 units (2304) is in range, 52 (2704) is not.
-        let g2 = TrackCand { obj: 6, pos: [48.0, 0.0, 0.0], copter: false, los_ok: true };
+        let g2 = TrackCand { obj: 6, pos: [48.0, 0.0, 0.0], copter: false, los_ok: true, sph: [0.0; 3] };
         t.target = 0;
         assert_eq!(t.track(&[guard, g2], false), Some(6), "48 in, 52 out — the 50-unit SP range");
         // MP: squared distance under 500 → 22.36 units; 25 (625) is out, 20 (400) in [M :178].
         t.target = 0;
-        assert_eq!(t.track(&[TrackCand { obj: 9, pos: [25.0, 0.0, 0.0], copter: false, los_ok: true }], true), None, "MP 25 units out");
-        assert_eq!(t.track(&[TrackCand { obj: 9, pos: [20.0, 0.0, 0.0], copter: false, los_ok: true }], true), Some(9), "MP 20 units in");
+        assert_eq!(t.track(&[TrackCand { obj: 9, pos: [25.0, 0.0, 0.0], copter: false, los_ok: true, sph: [0.0; 3] }], true), None, "MP 25 units out");
+        assert_eq!(t.track(&[TrackCand { obj: 9, pos: [20.0, 0.0, 0.0], copter: false, los_ok: true, sph: [0.0; 3] }], true), Some(9), "MP 20 units in");
         // Facing-1 (wall) turrets track Bond only — drones are candidates for facing 0 alone [M :101].
         let mut w = GTurret { state: 4, facing: 1, fire_dir: [1.0, 0.0, 0.0], ..GTurret::default() };
-        let near_guard = TrackCand { obj: 4, pos: [5.0, 0.0, 0.0], copter: false, los_ok: true };
+        let near_guard = TrackCand { obj: 4, pos: [5.0, 0.0, 0.0], copter: false, los_ok: true, sph: [0.0; 3] };
         assert_eq!(w.track(&[near_guard], false), None, "a wall gun ignores guards");
-        let bond = TrackCand { obj: u32::MAX, pos: [10.0, 0.0, 0.0], copter: false, los_ok: true };
+        let bond = TrackCand { obj: u32::MAX, pos: [10.0, 0.0, 0.0], copter: false, los_ok: true, sph: [0.0; 3] };
         assert_eq!(w.track(&[near_guard, bond], false), Some(u32::MAX), "and takes Bond");
         // prefer-current [M :246-300]: the walk remembers the first TWO candidates WITH LOS
         // and keeps the current target while it is one of them — even a farther current.
-        let a = TrackCand { obj: 1, pos: [10.0, 0.0, 0.0], copter: false, los_ok: true };
-        let b = TrackCand { obj: 2, pos: [20.0, 0.0, 0.0], copter: false, los_ok: false };
-        let c3 = TrackCand { obj: 3, pos: [30.0, 0.0, 0.0], copter: false, los_ok: true };
+        let a = TrackCand { obj: 1, pos: [10.0, 0.0, 0.0], copter: false, los_ok: true, sph: [0.0; 3] };
+        let b = TrackCand { obj: 2, pos: [20.0, 0.0, 0.0], copter: false, los_ok: false, sph: [0.0; 3] };
+        let c3 = TrackCand { obj: 3, pos: [30.0, 0.0, 0.0], copter: false, los_ok: true, sph: [0.0; 3] };
         t.target = 3;
         assert_eq!(t.track(&[a, b, c3], false), Some(3), "current is the second LOS candidate → kept");
         t.target = 2;
