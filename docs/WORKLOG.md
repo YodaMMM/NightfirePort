@@ -258,3 +258,12 @@ re-derive tests only with evidence. Land only what keeps the full suite free of 
 Plan: branch created from origin/s/drone-bump-collision-11 + origin/master merged (clean);
 next: push, reproduce the reds on this tree in foreground chunks (background jobs die between
 tool calls), map red -> change group, evidence pass, fix or drop per group.
+
+Update (03:35 UTC): the 08 family (7 of 14 reds) mapped to the every-stance Jointy push —
+restoring only the airborne gate (`&& !self.grounded`) greens fix_party_mission 9/0,
+fix_safe08 5/0, pickups08 5/0; the probe shows the failing stand ejects bond with NO bot
+within 5 m, so the shove's game-truth is unresolved (live check stands). spots_07000008's ray
+blocker is static world geometry on the branch tree (segment_hit_static t=0.418, eye-shift
+insensitive) and greens on master's port code. Landing: master's port code + master test
+calibrations restored (b35ccece); eight binaries re-run green on the final tree covering all
+in-binary named reds. Report: docs/reports/drone-bump-collision-12.md.
