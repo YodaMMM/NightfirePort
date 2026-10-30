@@ -991,6 +991,178 @@ fn the_cable_landing_walks_the_south_walkway_toward_the_zip_door() {
         w.total_ticks, w.report.falls);
     for f in &w.report.falls { eprintln!("[05r] fall: {f}"); }
     for st in &w.report.stuck_events { eprintln!("[05r] stuck: {st}"); }
+
+    // ---- THE CORRIDOR + THE SPINE (level-05-every-objective-3, all real input) ----
+    // The disc's own lane south of the crawl exit [D probe_corridor05's fine maps over the disc's
+    // tri set]: the roofed corridor runs SOUTH along x −36..−34.25 (floors 36.0→37.8, the mouth
+    // faces south at the crawl exit), and the x −35.5..−34.25 spine (37.0-37.8) is CONTINUOUS
+    // through the "second crack" (z −46..−50 — the crack cuts x −36..−34.25 to floors 18-25, but
+    // the spine holds) and down the gallery (z −52..−64, the spine 37.4 with the gallery floor
+    // 4-6 below on both sides) to the widening at z −65 (x −37..−35: 37-38).
+    walk_legs(&mut w, &[
+        ([-34.9, 37.0, -37.5], "the corridor 37.5"),
+        ([-34.9, 37.2, -39.5], "the corridor 39.5"),
+        ([-34.9, 37.4, -41.5], "the corridor 41.5"),
+        ([-34.9, 37.6, -43.5], "the corridor 43.5"),
+        ([-34.9, 37.6, -45.5], "the spine at the crack"),
+        ([-34.9, 37.6, -48.0], "the spine mid-crack"),
+        ([-34.9, 37.5, -50.5], "the spine past the crack"),
+        ([-34.9, 37.5, -53.0], "the gallery spine 53"),
+        ([-34.9, 37.4, -58.0], "the gallery spine 58"),
+        ([-34.9, 37.4, -62.0], "the gallery spine 62"),
+        ([-35.6, 37.6, -64.3], "the spine's south end"),
+    ], 34.0, 900);
+
+    // ---- THE SW LOOP (the disc's west walkway chain [D probe_corridor05 MAP 2/6]) ----
+    // z −65: x −37..−35 (37-38) → z −66: x −38 (37.4) → z −67: x −39.5 (37.2) → z −68:
+    // x −40 (37.3) → z −69.5..−72: x −41..−40.5 (37.0-37.5) → z −73..−74: x −40 (37.4) →
+    // z −75: x −39 (37.4) → z −76: x −38.5 (37.2) → z −77: x −37..−36 (37.3) → z −77.6..−78:
+    // x −35..−33 (37.1-37.3).
+    walk_legs(&mut w, &[
+        ([-36.6, 37.7, -65.5], "the widening"),
+        ([-37.8, 37.5, -66.2], "the loop west 1"),
+        ([-39.3, 37.3, -67.0], "the loop west 2"),
+        ([-40.0, 37.2, -67.8], "the loop west 3"),
+        ([-40.5, 37.2, -68.6], "the loop south 1"),
+        ([-41.0, 37.1, -69.6], "the loop south 2"),
+        ([-40.8, 37.3, -70.8], "the walkway 70.8"),
+        ([-40.8, 37.3, -72.0], "the walkway 72"),
+        ([-40.2, 37.4, -73.2], "the walkway 73.2"),
+        ([-39.6, 37.4, -74.6], "the walkway 74.6"),
+        ([-39.0, 37.3, -75.4], "the walkway 75.4"),
+        ([-38.3, 37.3, -76.2], "the walkway 76.2"),
+        ([-37.0, 37.3, -77.0], "the band 77"),
+        ([-35.5, 37.3, -77.6], "the band 77.6"),
+        ([-34.0, 37.2, -78.0], "the band 78"),
+    ], 34.0, 900);
+
+    // ---- THE BATTLEMENT + THE SWITCH PLATE #269 [D placements: SWITCH_Helicopterstart(SC3)
+    // (−22.76, 37.15, −72.36) out 0x42] ----
+    // The z −77 band runs east (x −33..−29.5: 37-38), rises through the z −76/−75 spine
+    // (x −30.5..−27: 37) onto the battlement lane (z −73.5..−72.5: x −28.5..−16 at 37). The
+    // plate sits on the lane at x −22.76 — the walk fires it.
+    walk_legs(&mut w, &[
+        ([-32.8, 37.4, -77.4], "the band east 1"),
+        ([-31.0, 37.2, -76.8], "the band east 2"),
+        ([-30.0, 37.0, -76.3], "the spine north 1"),
+        ([-29.0, 37.0, -75.4], "the spine north 2"),
+        ([-28.0, 37.0, -74.4], "the spine north 3"),
+        ([-26.5, 37.0, -73.6], "the battlement west"),
+        ([-23.0, 37.0, -73.2], "the battlement at the switch"),
+        ([-20.0, 37.0, -72.6], "the battlement east 1"),
+        ([-17.0, 37.0, -72.4], "the battlement east 2"),
+        ([-15.8, 37.0, -72.4], "the battlement's east end"),
+    ], 34.0, 900);
+    {
+        let sim = w.scene.sim.as_ref().unwrap();
+        eprintln!("[05r] the battlement's end: tick {} bond {:?} ch 0x42 {}",
+            w.total_ticks, sim.bond.pos, sim.drones.channels.on(0x42) as u8);
+        assert!(sim.drones.channels.on(0x42),
+            "the walk over the SWITCH plate #269 must raise its out ch 0x42 [D placement p0=0x42]");
+    }
+
+    // ---- THE Q-CLAW GRAPPLE OVER THE MOAT INLET [M/D] ----
+    // The inlet (x −15..−5, z −71..−73, floors 20-25 [D the band maps]) is crossed by the
+    // grapple: pulley #281 "graple_pulley" ((−3.40, 42.94, −71.77) [D placement] with its
+    // "Grapple_from bottom" CEL #280 (−3.39, 42.82, −70.96)) stands ~12.4 units east of the
+    // battlement's east end — inside the claw's bolt range 50.0 [M 0x12e7b0:158 +
+    // weapon_data[0x50]+0x1c; L ee_start_05.bin]. The reel [M Player_SSGrapple 0x192860: phase 1
+    // pulls at 0.05→1.5/tick toward BLData+0x140, phase 2 hangs within 2.0, the fire RELEASE
+    // detaches] carries Bond over the inlet onto the east battlement (x −5..−1, z −73..−71,
+    // floors 36-37 [D]).
+    {
+        // Draw the claw through the real number-key switch path [M Input.switch_to →
+        // Player_WeaponChange].
+        let mut equipped = false;
+        for _ in 0..180u32 {
+            w.tick(Input { switch_to: Some(0x50), ..Default::default() }, false);
+            if w.scene.sim.as_ref().unwrap().gun.weapon == 0x50 { equipped = true; break; }
+        }
+        assert!(equipped, "the claw (0x50) must draw through the switch input [L owned at level start]");
+        // Aim at the pulley (real look input), then HOLD the fire: the bolt hits the class-0x51
+        // point, Player_SetGrapplePoint 0x195da0 enters the substate 2 phase 1.
+        let target = [-3.40f32, 42.94, -71.77];
+        for _ in 0..240u32 {
+            let sim = w.scene.sim.as_ref().unwrap();
+            let bp = sim.bond.pos;
+            let dx = target[0] - bp[0];
+            let dz = target[2] - bp[2];
+            let dy = target[1] - (bp[1] + sim.bond.eye - sim.bond.crouch_drop);
+            let desired = dx.atan2(dz);
+            let err = walker::wrap_pi(desired - sim.bond.yaw);
+            let want_pitch = (dy / walker::dxz(bp, target).max(0.5)).atan() / std::f32::consts::FRAC_PI_2;
+            let input = Input { turn: err.clamp(-0.08, 0.08), look: (want_pitch - sim.bond.pitch).clamp(-0.08, 0.08), ..Default::default() };
+            w.tick(input, false);
+        }
+        let mut hung = false;
+        for t in 0..1500u32 {
+            let sim = w.scene.sim.as_ref().unwrap();
+            let bp = sim.bond.pos;
+            let dx = target[0] - bp[0];
+            let dz = target[2] - bp[2];
+            let dy = target[1] - (bp[1] + sim.bond.eye - sim.bond.crouch_drop);
+            let desired = dx.atan2(dz);
+            let err = walker::wrap_pi(desired - sim.bond.yaw);
+            let want_pitch = (dy / walker::dxz(bp, target).max(0.5)).atan() / std::f32::consts::FRAC_PI_2;
+            let input = Input { turn: err.clamp(-0.08, 0.08), look: (want_pitch - sim.bond.pitch).clamp(-0.08, 0.08), ..Default::default() };
+            w.tick_fire(input);
+            let sim = w.scene.sim.as_ref().unwrap();
+            if sim.bond.substate == nf_game::player::SS_GRAPPLE
+                && sim.bond.grapple.as_ref().map(|g| g.phase) == Some(2) { hung = true; break; }
+            if t % 200 == 0 { eprintln!("[05r grapple t{t}] bond {:?} sub {:#x} phase {:?} gun {:#x}",
+                sim.bond.pos, sim.bond.substate, sim.bond.grapple.as_ref().map(|g| g.phase), sim.gun.weapon); }
+            assert!(sim.bond.pos[1] > 20.0, "the grapple attempt must not drop Bond into the moat: {:?}",
+                sim.bond.pos);
+        }
+        let sim = w.scene.sim.as_ref().unwrap();
+        eprintln!("[05r] the hang: tick {} bond {:?} phase {:?} sub {:#x}", w.total_ticks,
+            sim.bond.pos, sim.bond.grapple.as_ref().map(|g| g.phase), sim.bond.substate);
+        assert!(hung, "the reel must hang Bond at pulley #281 [M Player_SSGrapple 0x192860; D placement]");
+        // RELEASE (the fire's release detaches [M 0x192860:64-66]) and ride the fall EAST onto
+        // the battlement: face east, hold forward through the drop.
+        w.tick(Input::default(), false);
+        let mut landed = false;
+        for t in 0..300u32 {
+            let sim = w.scene.sim.as_ref().unwrap();
+            let p = sim.bond.pos;
+            let desired = (0.0f32 - p[0]).atan2(-72.0 - p[2]);
+            let err = walker::wrap_pi(desired - sim.bond.yaw);
+            let input = Input { turn: err.clamp(-0.07, 0.07), forward: 1.0, ..Default::default() };
+            w.tick(input, false);
+            let sim = w.scene.sim.as_ref().unwrap();
+            if sim.bond.grounded && sim.bond.pos[1] < 39.5 && sim.bond.pos[0] > -5.5 { landed = true; break; }
+            if t % 60 == 0 { eprintln!("[05r drop t{t}] bond {:?} g {}", sim.bond.pos, sim.bond.grounded); }
+            assert!(sim.bond.pos[1] > 20.0, "the release drop must not fall into the moat: {:?}",
+                sim.bond.pos);
+        }
+        let sim = w.scene.sim.as_ref().unwrap();
+        eprintln!("[05r] the grapple landed: tick {} bond {:?} sub {:#x}", w.total_ticks, sim.bond.pos, sim.bond.substate);
+        assert!(landed, "the release must land Bond on the east battlement (x −5..−1, z −73..−71, \
+            floors 36-37 [D]), got {:?}", sim.bond.pos);
+        assert_eq!(sim.bond.substate, nf_game::player::SS_WALK, "the drop returns Bond to the walk substate");
+    }
+
+    // ---- THE EAST LANE + THE RISING STAIRS (the disc's own lane [D probe_corridor05]) ----
+    // The east battlement lane runs east at z −71.5 (x −4..9 at 36-37; the z −71 row's x-10 hole
+    // is passed on the lane's z −71.5 centre), then the covered staircase rises eastward from
+    // x 14 (37.1) to x 35.5 (43.4) under the y-49 terrace overhang.
+    walk_legs(&mut w, &[
+        ([-3.0, 37.0, -71.8], "the east battlement 1"),
+        ([0.0, 37.0, -71.6], "the east battlement 2"),
+        ([4.0, 37.0, -71.5], "the east battlement 3"),
+        ([8.0, 37.0, -71.5], "the east battlement 4"),
+        ([12.0, 37.0, -71.5], "the lane's east end"),
+        ([16.0, 37.5, -71.6], "the stairs 16"),
+        ([20.0, 38.5, -71.7], "the stairs 20"),
+        ([24.0, 40.0, -71.7], "the stairs 24"),
+        ([28.0, 41.4, -71.6], "the stairs 28"),
+        ([32.0, 42.5, -71.5], "the stairs 32"),
+        ([35.0, 43.3, -71.4], "the stairs' top"),
+    ], 34.0, 900);
+    eprintln!("[05r] the corridor→stairs legs complete in {} ticks; falls {:?}",
+        w.total_ticks, w.report.falls);
+    for f in &w.report.falls { eprintln!("[05r] fall: {f}"); }
+    for st in &w.report.stuck_events { eprintln!("[05r] stuck: {st}"); }
 }
 
 /// Raw full-forward steer along a waypoint chain: real inputs only (turn + forward, with an
@@ -1086,4 +1258,57 @@ fn the_notch_holds_the_walk_and_the_grab_needs_its_zone() {
     // The jump press here IS in the icon zone (#310's reach covers the notch edge) — the grab
     // fires; the sister pins the WALK claim above, so stop before riding.
     eprintln!("[05s] the notch sister done at tick {} bond {:?}", w.total_ticks, w.scene.sim.as_ref().unwrap().bond.pos);
+}
+
+/// The door #112's exit chain, PINNED but with the climb PARKED: the walk's real legs end on the
+/// covered staircase's top (35.0, 43.3, −71.4), and the disc's collision shows NO walkable link
+/// from the stairs' 43.4-44.0 top to the y-49 terrace (the terrace's south face runs z −71.0,
+/// 5-6 above the stairs' top; its west face x ~14; its east face abuts the building; its north
+/// edge z −65.0 is a drop) — every face 5.5+ tall [D probe_corridor05 MAP 8/9/10/11/12 fine
+/// scans, 0.25-0.5 resolution, y0 47/50/55]. The real game's link is a live check for the main
+/// agent (fresh boot, walk the stairs, watch the climb). THE CHAIN ITSELF is pinned here from a
+/// probe-grade placement ON the terrace: the E press at door #112 "Locked_Door_Top_I"
+/// ((37.25, 49.00, −69.00), p0=0x7000006, p3=0x1e [D placement]) writes the fallback ch 0x1E
+/// [M Trigger_Activate 0x1b2318:91-107] and ends the level into 07000006.
+#[test]
+fn the_door_band_exit_chains_to_07000006_climb_parked() {
+    let iso = iso();
+    let mut w = Walker::new(nf_view::load(&iso, "07000005.bin", false).expect("load 07000005"));
+    w.wait(30);
+    // PROBE-GRADE placement on the terrace (the climb is the parked gap; see the doc above).
+    {
+        let sim = w.scene.sim.as_mut().unwrap();
+        sim.bond.pos = [22.0, 49.2, -68.0];
+        sim.bond.vel = [0.0; 3];
+        sim.bond.yaw = std::f32::consts::FRAC_PI_2; // face +x east, at the door
+    }
+    w.wait(10);
+    {
+        let sim = w.scene.sim.as_ref().unwrap();
+        assert!(sim.bond.grounded && (sim.bond.pos[1] - 49.0).abs() < 1.0,
+            "the terrace placement stands on the y-49 band [D the band maps], got {:?}", sim.bond.pos);
+    }
+    // Walk east to the door's threshold and press E (the walker's Use: face the point, pulse the
+    // key — the game's Activate is edge-triggered [M Input_Action mask 4]).
+    w.walk_to(walker::Wp {
+        at: [35.4, 49.0, -69.0],
+        act: walker::Act::Use { use_ticks: 120 },
+        arrive: 0.6,
+    }, "door #112's threshold");
+    // The chain: ch 0x1E on [D placement p3=0x1e; M Trigger_Activate 0x1b2318:91-107] → the level
+    // exit 07000006.
+    let mut exited = false;
+    for _ in 0..300u32 {
+        w.tick(Input::default(), false);
+        if w.scene.sim.as_ref().unwrap().drones.level_exit.is_some() { exited = true; break; }
+    }
+    {
+        let sim = w.scene.sim.as_ref().unwrap();
+        eprintln!("[05d] the door: tick {} bond {:?} ch 0x1e {} exit {:?}",
+            w.total_ticks, sim.bond.pos, sim.drones.channels.on(0x1e) as u8, sim.drones.level_exit);
+        assert!(sim.drones.channels.on(0x1e),
+            "the door #112's E must write its fallback ch 0x1E [D placement p3=0x1e; M Trigger_Activate 0x1b2318]");
+        assert!(exited && sim.drones.level_exit == Some(0x0700_0006),
+            "the door chain must end the level into 07000006 [D placement p0=0x7000006], got {:?}", sim.drones.level_exit);
+    }
 }
