@@ -1,6 +1,6 @@
-## Your task: `level-0b-spawn-to-end-walk`, 0b from a fresh spawn to the end
+## Your task: `level-0c-gate-band-crossing`, what carries Bond across x 55.5..67 on 0c
 
-`walkreal_0700000b_live::walk_balcony_to_the_roof_jump` starts from `load_warm()` (a mid-mission state). Add one walk that starts from a FRESH load of 0b and reaches the mission's end on real input, every objective set by the game's own writers (no channel pokes; reuse the existing legs' routes). Fix any port gap it hits with evidence [D/M]. Every test in the file green. Run the touched binaries and quote their totals.
+The 0c whole walk crosses the gate band x 55.5..67 on a stand-in: the port's disc collision is void there [D probe door4 pit map], yet the game's nav path17 links (49.69, 10.74, -207.29) <-> (63.06, 10.74, -207.54) across it [D]. Find what carries the player across in the game (a mover, a wire, a collision the port mis-reads) [D the placements/collision over the band; M the class code], fix the port side, and replace the stand-in with a real-input leg. The walk must stay green. Run the touched binaries and quote their totals.
 
 **Tests pin only proven behaviour.** Every assertion about what the game does cites its evidence: [M] a decompile
 address that actually says it, [D] disc bytes, or [L] a live PCSX2 measurement from a FRESH boot (a save-state resume
@@ -10,7 +10,7 @@ say so in the report. Never weaken a decompile-backed test to make code pass.
 
 **Run the crates your tests touch before pushing**, and report what you ran.
 
-**Branch:** `s/level-0b-spawn-to-end-walk`.
+**Branch:** `s/level-0c-gate-band-crossing`.
 
 - **Run the full suite with the fast runner, started in the background in your first minutes** (it fits the 2-hour window):
   `NF_ISO=<abs path> nohup python3 tools/test/suite.py > suite.out 2>&1 &` (docs/tools/test-suite.md; once `tools/test/suite.py`
