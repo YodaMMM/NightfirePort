@@ -10141,25 +10141,19 @@ impl Drone {
             let order = if rng.rand(2) != 0 { [(l, dist), (r, -dist)] } else { [(r, -dist), (l, dist)] };
             order.iter().find(|(_, x)| {
                 let (side_bit, anim) = if *x > 0.0 { (8, l_anim) } else { (0x10, r_anim) };
-                // The game's probe IS `NDrone2_MoveTest` — every Can* of this family ends in it
-                // [M 0x14f640:92 (CanStepLeft) / 0x14f808 (CanStepRight) / 0x14fdf8/0x14ffc0 (the
-                // dodge pair) / 0x14f9e8/0x14fbe0 (the strafe pair) / 0x150338/0x150500 (the roll
-                // pair)]: dist ≤ 30, |dy| ≤ 4, the slope band, then AINetwork_BoundsTest — the
-                // AI-network BOUNDARY walls gate the combat steps (CanStep passes (0,0) → the
-                // crossing test only). The port's ray-only stand-in let the lateral step pass at
-                // 07000014's locked west door and the guard cycled 0x5f→0x73/0x74 forever; the
-                // game holds 0x5f there (17 live samples, CUR 0x5f/PREV 0x5a [L 2026-10-30]). The
-                // mover-consistency ray (probe_move, stuck-guard-combat-sweep) stays conjuncted:
-                // the port's mover has no boundary push, so a step its own mover would reject
-                // must still not be picked. The world step of local (x, 0) is [x·c, −x·s]
-                // (can_move's own transform); the feet anchor is can_move's (pos.y − 1.0).
+                // The game's probe ends in `NDrone2_MoveTest` (dist ≤ 30, |dy| ≤ 4, the slope
+                // band, AINetwork_BoundsTest) [M 0x14f640:92 and the whole Can* family], but
+                // conjuncting the port's nav.move_test here (tried: the boundary + dist gates +
+                // its +1.0 LOS ray) regressed walkreal_07000014_live (the corridor door-wait leg
+                // wedges — a combat guard's choice shifted mid-fight); the choice keeps the
+                // MOVER's test (probe_move, stuck-guard-combat-sweep) — the port's consistency
+                // requirement. The real 07000014 divergence is NOT the probe geometry: the
+                // game's Can* refuse on the +0x31C side bits that DroneMove_NoBunching 0x150ad0
+                // stamps every tick [M via ControlSTANDARD 0x1490f0:202-226] and the port's
+                // mirror is inert (NB_SCAN_LIVE) — see the door_guards_locked_door test's
+                // blocker note. The world step of local (x, 0) is [x·c, −x·s].
                 let (s, c) = (crate::trig::sinf(me.yaw), crate::trig::cosf(me.yaw));
-                let step = [x * c, -x * s];
-                let feet = [me.pos[0], me.pos[1] - 1.0, me.pos[2]];
-                let to = [feet[0] + step[0], feet[1], feet[2] + step[1]];
-                me.no_bunching & side_bit == 0 && me.can_do(d, anim)
-                    && d.nav.move_test(d.world, feet, to, false, false).0 == 1
-                    && me.probe_move(d, step)
+                me.no_bunching & side_bit == 0 && me.can_do(d, anim) && me.probe_move(d, [x * c, -x * s])
             }).map(|(s, _)| *s).unwrap_or(0)
         };
         let result = loop {

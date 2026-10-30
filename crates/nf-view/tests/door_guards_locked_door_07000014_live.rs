@@ -68,6 +68,15 @@ fn released_guards_do_not_work_the_locked_west_door() {
     assert!(came, "the released guards reach the door side [L: two guards stop at (-51.6,41.2) / (-51.2,38.8)]");
     eprintln!("[014] guards near the door (max at once): {at_door_max}; states sampled at the door: {:?}",
         seen_states.iter().map(|s| format!("{s:#04x}")).collect::<Vec<_>>());
+    {
+        let sim = scene.sim.as_ref().unwrap();
+        for (i, d) in sim.drones.list.iter().enumerate() {
+            if d.health > 0.0 && d.enabled && (d.pos[0] + 51.5).powi(2) + (d.pos[2] - 40.0).powi(2) < 400.0 {
+                eprintln!("[014] released guard {i}: ({:.2},{:.2},{:.2}) state {:#04x} no_bunching {:#06x} bunched {}",
+                    d.pos[0], d.pos[1], d.pos[2], d.state, d.no_bunching, d.bunched);
+            }
+        }
+    }
 }
 
 /// The game's hold, pinned only when the port can run the same scan. The game's door guards sit
@@ -78,7 +87,7 @@ fn released_guards_do_not_work_the_locked_west_door() {
 /// const). Un-ignore when that scan lands and its 01 regression is re-pinned; the assert below
 /// is the game's behaviour and must not be weakened.
 #[test]
-#[ignore = "the port's NoBunching mirror is inert (NB_SCAN_LIVE) — the game's +0x31C side bits never set, so the guard cycles 0x5f→0x73/0x74 instead of holding; landing the scan regresses walkreal_07000001_live's escort fight (the documented blocker at the const) and needs that re-pin first [L 2026-10-30: the game holds 0x5f over 17 samples]"]
+#[ignore = "TWO named blockers, both evidence-backed: (1) the port's NoBunching mirror is inert (NB_SCAN_LIVE = false in drone.rs) so the game's +0x31C side bits [M 0x150ad0:42-55] never stamp — proven live-flippable (walkreal_07000001_live passes 5/0 with it on; the const's 01 blocker note is stale) but left off pending the full suite; (2) with the scan flipped on the pairing STILL never bites because only ONE released guard reaches the door (the port's #25 at (-50.1,41.7) cycling; #18/#19/#20 stay at 0x38 by (-51.3,32.4)/(-47.9,33.5)/(-40.2,25.2)) while the game's two guards stop 2.4 apart at (-51.6,41.2)/(-51.2,38.8) [L 2026-10-30] — the release-to-door divergence must land first so the scan has a neighbor to pair"]
 fn the_door_guards_hold_combat_no_route_like_the_game() {
     let mut scene = nf_view::load(&iso(), "07000014.bin", false).expect("load 07000014");
     for _ in 0..400 {
