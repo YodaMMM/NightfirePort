@@ -644,49 +644,72 @@ fn the_vent_drop_hands_bond_into_the_facility() {
     walk_infiltration_to_handback(&mut w);
 }
 
-/// #[ignore] (level-14-skip-handback): the [M] hand-back stands Bond on the mezzanine where the
-/// scene grabbed him, and this walk's route into the facility was the REMOVED [S] arm's teleport —
-/// the mezzanine descent has no proven real-input path yet: the mezzanine's west face is a static
-/// wall (x ≈ 31.5, rays blocked knee-to-head z 38.4..40.8 [D lip probe]), the floor edge south of
-/// z ≈ 38.4 at x 32..34 has no walkable strip (down-rays NaN), and every steer (west, south-west,
-/// the walker's own avoidance) wedges at (32.06, 2.70, 39.2..39.7). The nav web has no route from
-/// the mezzanine to the facility floor either ("no nav route — the direct chain"). The pre-fix
-/// route's "(30.09, 1.07, 38.73)" was reached FROM the [S] arm's (27.60, 43.56), not by a fall.
-/// The next session needs the player's actual descent (a live check is in the report).
+/// UN-IGNORED (level-14-mezzanine-descent-2): the descent is WALKED on real input. The route the
+/// level-14-mezzanine-descent window mapped (the pad west + the 1.72 landing) continues west off
+/// the landing onto the low machine floor (ray height 0.80, x 31.5..33.5, z 33..35.5 [D rays]),
+/// then down onto the facility corridor floor (0.0 [D rays]; the corridor's own nav lane nodes
+/// 57/58/257-265 at x 27.3..28.3, disc y 0.0 [D nav]) and south to the leg-2 start — the probe
+/// walked the whole chain green (scratch_l14d l14d_door834, landed (29.99, 0.61, 38.00), inside
+/// this test's descent assert box). The unlocked door #834 (32.01, 2.14, 35.81 [D]; sim kind 2,
+/// ch_lock 0 [D params]) sits at the landing's south-west corner; the walked route passes west of
+/// its wall run (the leaf x 32.00..32.65 + the fusebox column #833 x 31.93..32.65 [D]) — the leaf
+/// plane is never crossed (the role question is the report's live check).
 #[test]
-#[ignore = "level-14-skip-handback: the mezzanine descent after the [M] hand-back has no proven real-input path — the wall at x 31.5 (z 38.4..40.8) + the floor edge south of z 38.4 wedge every steer at (32.06, 2.70, 39.4); the old route rode the removed [S] teleport"]
 fn walk_the_infiltration_to_the_delta_exit() {
     let iso = iso();
     let mut w = Walker::new(nf_view::load_with_carry(&iso, "07000014.bin", false, None).unwrap());
     walk_infiltration_to_handback(&mut w);
-    // The descent (level-14-skip-handback): the [M] hand-back stands Bond on the mezzanine where
-    // the scene grabbed him (his own matrix [M 0x1d94c0 case 6 fallback]) — the route south runs
-    // off the mezzanine's WEST edge onto the facility floor, the drop this route's own crossing
-    // made when the old cap burned ((30.09, 1.07, 38.73) — the same spot the pre-fix port's [S]
-    // eject used to land). Real input: the walker's own steering past the x≈32 lip, then a jump
-    // cadence if the lip needs it.
+    // The descent (level-14-mezzanine-descent-2): the [M] hand-back stands Bond on the mezzanine
+    // where the scene grabbed him (his own matrix [M 0x1d94c0 case 6 fallback]). The WALKED route:
+    // the pad west ((34.63, 2.80, 37.94) [L walked, level-14-mezzanine-descent]) → south
+    // ((34.57, 2.80, 37.18)) → the 0.43 step down onto the 1.72 landing ((33.09, 2.37, 35.38)
+    // grounded [L walked]) → west off the landing's edge onto the low machine floor (ray height
+    // 0.80, x 31.5..33.5, z 33..35.5 [D rays]) → down onto the facility corridor floor (0.0
+    // [D rays]; the corridor's own nav lane runs nodes 57/58/257-265 at x 27.3..28.3, disc y 0.0
+    // [D nav]) → south to the leg-2 start. Each drop leg walks over the edge and the next resumes
+    // mid-fall (the probe's chain, scratch_l14d l14d_door834, landed (29.99, 0.61, 38.00)).
     {
-        let _ = w.try_walk_to(Wp::new(30.5, 1.0, 37.8).r(1.5), "the mezzanine's south-west gap drop");
-        if w.scene.sim.as_ref().unwrap().bond.pos[1] > 1.5 {
-            for i in 0..400 {
+        w.walk_to(Wp::new(34.63, 2.80, 37.94).r(1.0), "the pad west");
+        w.walk_to(Wp::new(34.57, 2.80, 37.18).r(0.9), "the pad's south-west step head");
+        w.walk_to(Wp::new(33.09, 2.37, 35.38).r(0.8), "the 1.72 landing");
+        // The drop west: the low floor's east margin sits under the landing slab's overhang (the
+        // slab top is the 1.72 landing; the walk's grounded wedge at (33.68, 1.15, 35.20) with a
+        // clear segment to the target is the overhang catch), so the westing is the player's own
+        // push: steer south-west around the slab's corner, hop when grounded (the walker's wedge
+        // recovery), until clear of the overhang zone on the low floor.
+        {
+            let start = w.total_ticks;
+            loop {
+                assert!(w.total_ticks - start < 2400,
+                    "the landing's west drop never cleared the overhang\n{}",
+                    walker::fail_dump_pub(&w.scene, [31.8, 1.0, 34.0], "the landing west drop"));
                 {
                     let sim = w.scene.sim.as_ref().unwrap();
                     let p = sim.bond.pos;
-                    if p[1] < 1.5 && sim.bond.grounded && p[0] < 34.0 { break; }
+                    if p[0] < 32.6 && p[1] < 1.4 && sim.bond.grounded { break; }
                 }
-                let b = &w.scene.sim.as_ref().unwrap().bond;
+                let sim = w.scene.sim.as_ref().unwrap();
+                let b = &sim.bond;
                 let inp = nf_game::player::Input {
-                    forward: 1.0, jump: b.grounded && i % 20 == 0,
-                    turn: wrap_pi((-std::f32::consts::FRAC_PI_2) - b.yaw).clamp(-0.08, 0.08),
+                    forward: 1.0,
+                    jump: b.grounded && (w.total_ticks - start) % 30 == 0,
+                    turn: wrap_pi((31.8f32 - b.pos[0]).atan2(34.0 - b.pos[2]) - b.yaw).clamp(-0.08, 0.08),
                     ..Default::default()
                 };
                 w.tick(inp, false);
             }
+            eprintln!("[014] the low floor west reached {:?}", w.scene.sim.as_ref().unwrap().bond.pos);
         }
+        let _ = w.try_walk_to(Wp::new(30.4, 1.1, 34.9).r(0.8), "down onto the corridor floor (0.0)");
+        // The door wall's west jamb bars the direct south steer at x ≥ 30.3 (the segment hit
+        // 0.17 along from (30.33, 0.55, 35.44)); the corridor lane west of it (x ≈ 29.7) is the
+        // crossing the probe walked ((29.99, 0.61, 38.00) grounded).
+        let _ = w.try_walk_to(Wp::new(29.7, 0.8, 34.7).r(0.9), "the corridor west of the door wall");
+        w.walk_to(Wp::new(30.09, 0.65, 38.73).r(1.2), "the corridor south to the leg-2 spot");
         {
             let p = w.scene.sim.as_ref().unwrap().bond.pos;
             assert!((27.0..33.5).contains(&p[0]) && p[1] > 0.5 && p[1] < 1.6 && (36.5..40.5).contains(&p[2]),
-                "the mezzanine's west edge drops onto the facility floor (the route's own fall to (30.09, 1.07, 38.73)), got {p:?}");
+                "the descent lands on the facility corridor floor at the leg-2 start (the walked route, probe landing (29.99, 0.61, 38.00)), got {p:?}");
             eprintln!("[014] the descent landed {p:?}");
         }
     }
