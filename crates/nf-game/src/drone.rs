@@ -6896,7 +6896,11 @@ impl Drone {
             // fix-stunner-press: the taser family has no case 0x11/0x12 in the game (the 0x162b98/
             // 0x162eb0/0x1630b8 switches) — the shout is unhandled → GLOBAL → dropped, a tased guard
             // stays down. The stun-grenade family keeps the old route (its own standing behavior).
-            if matches!(s, state::TASER | state::STUNNED | state::STUNNED_RECOVER) { return true; }
+            // fix-14-door-guards: DSTATE_OpenDoor's switch has NO case 0x11/0x12 either [M
+            // 0x1681f8 — the whole switch read: cases 0/1/2/3/6/7/8/9/0x17/0x18/0x19/0xC/0x20/0x21
+            // only] → the msg-0 re-route lands in case 0 and drops [M 0x171df8 + 0x1681f8 case 0]:
+            // a door-waiting guard ignores screams and shouts, whatever their share.
+            if matches!(s, state::TASER | state::STUNNED | state::STUNNED_RECOVER | state::OPEN_DOOR) { return true; }
             let hear = if m == msg::SCREAM { self.prop(d, 0x27) } else { self.prop(d, 0x28) };
             if !hear { return true; }
             let civilian = matches!(s, PARTY_GIRL | CIVILIAN | CIVILIAN_MISSION | CIVILIAN_MISSION_WAIT | CIVILIAN_PATROL | CIVILIAN_DOOR_GUARD | TRUCK_DRIVER_IDLE | CIVILIAN_SCARED | CIVILIAN_HIDING);
@@ -6920,7 +6924,11 @@ impl Drone {
                 // The combat wrappers' 0x21 arms pass their OWN state as ConsiderExplosive's resume — a
                 // survived blast returns them to where they were [M 0x1643e8:127-131 (0x59), 0x164690:73-77
                 // (0x5a), 0x164838 (0x5c)]. AlertToPosition's is the constant 0x56 [M 0x165270:145-148],
-                // which the ATTACK fall-through already gives.
+                // which the ATTACK fall-through already gives. fix-14-door-guards: DSTATE_OpenDoor's own
+                // case 0x21 passes `*(u16*)(SM+4)` — the CURRENT state — so a door-waiting guard flees
+                // the blast AND RETURNS TO THE DOOR [M 0x1681f8 case 0x21], not into ATTACK (the old
+                // fall-through turned every scared door-waiter into a combat guard at the threshold).
+                else if s == state::OPEN_DOOR { state::OPEN_DOOR }
                 else if matches!(s, COMBAT_NO_MOVE | COMBAT_OUT_OF_RANGE | COMBAT_NO_SIGHT) { s }
                 // The ally-lead family's case-0x21 arms: ConsiderExplosive with the state's own resume —
                 // ALLY_LEAD_INIT passes 0 [M 0x15e4f0:64], every other lead state its own state
