@@ -2187,6 +2187,12 @@ impl Drone {
 
     pub fn prop(&self, d: &Data, id: usize) -> bool { d.props.get(id, &self.props) != 0 }
 
+    /// The raw behaviour property value (`behaviour_util_getProperty` 0x1c7d98) — the test and
+    /// diagnostic accessor (the in-sim `prop` needs a `Data` the tests cannot build).
+    pub fn prop_value(&self, tables: &nf_formats::drone::PropertyTables, id: usize) -> u32 {
+        tables.get(id, &self.props)
+    }
+
     /// "Stays put": `+0x4F8 & 0x10` or property 0x40, tested together throughout the decomp (`DroneFunc_CombatState`,
     /// `ChooseCombatMove`, CombatNoRoute, AimStandFire, HeardNoiseSuspect / Alert, …).
     fn stays(&self, d: &Data) -> bool { self.stationary || self.prop(d, 0x40) }
@@ -10135,12 +10141,25 @@ impl Drone {
             let order = if rng.rand(2) != 0 { [(l, dist), (r, -dist)] } else { [(r, -dist), (l, dist)] };
             order.iter().find(|(_, x)| {
                 let (side_bit, anim) = if *x > 0.0 { (8, l_anim) } else { (0x10, r_anim) };
-                // The choice consults the MOVER's test (probe_move), not the knee/chest stand-in:
-                // a step the mover will reject must not be picked (the frozen STEP_AIM wall,
-                // stuck-guard-combat-sweep). The world step of local (x, 0) is [x·c, −x·s]
-                // (can_move's own transform).
+                // The game's probe IS `NDrone2_MoveTest` — every Can* of this family ends in it
+                // [M 0x14f640:92 (CanStepLeft) / 0x14f808 (CanStepRight) / 0x14fdf8/0x14ffc0 (the
+                // dodge pair) / 0x14f9e8/0x14fbe0 (the strafe pair) / 0x150338/0x150500 (the roll
+                // pair)]: dist ≤ 30, |dy| ≤ 4, the slope band, then AINetwork_BoundsTest — the
+                // AI-network BOUNDARY walls gate the combat steps (CanStep passes (0,0) → the
+                // crossing test only). The port's ray-only stand-in let the lateral step pass at
+                // 07000014's locked west door and the guard cycled 0x5f→0x73/0x74 forever; the
+                // game holds 0x5f there (17 live samples, CUR 0x5f/PREV 0x5a [L 2026-10-30]). The
+                // mover-consistency ray (probe_move, stuck-guard-combat-sweep) stays conjuncted:
+                // the port's mover has no boundary push, so a step its own mover would reject
+                // must still not be picked. The world step of local (x, 0) is [x·c, −x·s]
+                // (can_move's own transform); the feet anchor is can_move's (pos.y − 1.0).
                 let (s, c) = (crate::trig::sinf(me.yaw), crate::trig::cosf(me.yaw));
-                me.no_bunching & side_bit == 0 && me.can_do(d, anim) && me.probe_move(d, [x * c, -x * s])
+                let step = [x * c, -x * s];
+                let feet = [me.pos[0], me.pos[1] - 1.0, me.pos[2]];
+                let to = [feet[0] + step[0], feet[1], feet[2] + step[1]];
+                me.no_bunching & side_bit == 0 && me.can_do(d, anim)
+                    && d.nav.move_test(d.world, feet, to, false, false).0 == 1
+                    && me.probe_move(d, step)
             }).map(|(s, _)| *s).unwrap_or(0)
         };
         let result = loop {
