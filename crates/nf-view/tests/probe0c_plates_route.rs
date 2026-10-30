@@ -80,16 +80,27 @@ fn probe_the_low_route_to_the_plates() {
     //    the slab face spans x 2.5..15.25 only, so at x ≈ 1.2 the pocket ends in the drop to
     //    the yard).
     w.walk_to(Wp::new(1.2, 2.6, -153.5).r(1.0), "the pocket south 1");
-    w.walk_to(Wp::new(1.2, 0.5, -158.5).r(1.0), "off the pocket edge (the drop)");
-    for _ in 0..180 {
-        if w.scene.sim.as_ref().unwrap().bond.grounded { break; }
-        w.tick(nf_game::player::Input::default(), false);
-    }
+    // 4b. THE DESCENT TRY: run west off the pocket's west edge (x −1.8) with a jump — the
+    //     yard floor (y ≈ 0) spans x −5.65..−0.34 at z −158.5..−162.17 [D coll-scan]; the
+    //     fall needs ~4 units of south drift. Print where the body actually lands.
     {
+        w.walk_to(Wp::new(-1.3, 3.4, -154.0).r(0.6), "the pocket's west edge");
         let sim = w.scene.sim.as_ref().unwrap();
-        eprintln!("[probe] after the yard drop: grounded {} pos {:?} fall_damage {:?}",
-            sim.bond.grounded, sim.bond.pos, sim.bond.fall_damage);
-        assert!(sim.bond.grounded && sim.bond.pos[1] < 1.5, "landed on the yard floor (y≈0), got {:?}", sim.bond.pos);
+        let yaw = (-4.5f32 - sim.bond.pos[0]).atan2(-159.5f32 - sim.bond.pos[2]);
+        let err = walker::wrap_pi(yaw - sim.bond.yaw);
+        drop(sim);
+        w.tick(nf_game::player::Input { turn: err.clamp(-0.08, 0.08), ..Default::default() }, false);
+        let mut landed = None;
+        for i in 0..300 {
+            w.tick(nf_game::player::Input { forward: 1.0, jump: if i == 6 { true } else { false }, ..Default::default() }, false);
+            let sim = w.scene.sim.as_ref().unwrap();
+            if sim.bond.grounded && sim.bond.pos[1] < 3.0 {
+                landed = Some((sim.bond.pos, sim.bond.fall_damage));
+                break;
+            }
+        }
+        eprintln!("[probe] the west-edge jump-off landed at {:?} (fall_damage {:?})",
+            landed.as_ref().map(|(p, _)| *p), landed.as_ref().map(|(_, d)| *d));
     }
     // 5. The yard: south then east over the bridge into the corridor.
     w.walk_to(Wp::new(1.5, 0.9, -163.0).r(1.2), "the yard south 1");
