@@ -18,7 +18,7 @@
 #[path = "common/walker_b2.rs"]
 mod walker;
 
-use walker::{Act, Walker, Wp};
+use walker::{Walker, Wp};
 
 fn iso() -> String { std::env::var("NF_ISO").expect("NF_ISO") }
 
