@@ -1349,17 +1349,34 @@ fn the_door_band_exit_chains_to_07000006_climb_parked() {
     let mut w = Walker::new(nf_view::load(&iso, "07000005.bin", false).expect("load 07000005"));
     w.wait(30);
     // PROBE-GRADE placement on the terrace (the climb is the parked gap; see the doc above).
+    // Placed at the REST height, not at the floor band: a standing upright capsule's centre
+    // rides ~1.03-1.13 ABOVE the floor it stands on — the capsule's bottom sphere (B =
+    // pos + up·(0.55 − cc), r 0.55 [M Player_Collision 0x194df0]) touches it, lowest point =
+    // pos.y − cc [M], and the live game parks Bond 1.086 over his floor (boot: obj+0x30
+    // 24.9633 over the disc floor 23.877 at (104.954, 108.825) [L ee_start_05 @0x2d88e0 →
+    // obj+0x30 + probe_terrace05 col; the 05-truck trace "standing live 1.086, cc 1.0347"
+    // player.rs ROOT_HEIGHT doc]). The -3 draft placed 49.2 and expected the centre ~49.0 —
+    // it buried the capsule (B 0.83 under the floor; the push lifted AND shoved him west to
+    // 21.805) and asserted the centre against the floor band, wrong on the port and the game
+    // alike. The terrace floor under the spot is 49.001 [D probe_terrace05 col (21.8, −68.1):
+    // instance 20, map 50, object 38, mat 12].
     {
         let sim = w.scene.sim.as_mut().unwrap();
-        sim.bond.pos = [22.0, 49.2, -68.0];
+        sim.bond.pos = [22.0, 50.1, -68.0];
         sim.bond.vel = [0.0; 3];
         sim.bond.yaw = std::f32::consts::FRAC_PI_2; // face +x east, at the door
     }
     w.wait(10);
     {
         let sim = w.scene.sim.as_ref().unwrap();
-        assert!(sim.bond.grounded && (sim.bond.pos[1] - 49.0).abs() < 1.0,
-            "the terrace placement stands on the y-49 band [D the band maps], got {:?}", sim.bond.pos);
+        // Grounded on the y-49 terrace: the disc floor 49.001 under the spot [D probe_terrace05],
+        // the centre in the feet-band rest above it — the port's band rest [M Player_FeetOnPoint
+        // 0x194188:106 `hit − 0.1 <= cc`] parks the fall inside cc..cc+0.1 over the floor (this
+        // run: 50.089 = floor + 1.089; the game's live rest floor + 1.086 [L ee_start_05]).
+        assert!(sim.bond.grounded && sim.bond.pos[1] > 49.9 && sim.bond.pos[1] < 50.4,
+            "the terrace placement rests on the y-49 band's feet-band window (floor 49.001 [D \
+             probe_terrace05]; centre floor+1.03..1.13 [M 0x194188:106; L live 1.086]), got {:?}",
+            sim.bond.pos);
     }
     // Walk east to the door's threshold and press E (the walker's Use: face the point, pulse the
     // key — the game's Activate is edge-triggered [M Input_Action mask 4]).
