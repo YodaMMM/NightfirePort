@@ -3,11 +3,14 @@
 //! the laser-watch hinge burn (the four #139-142 locks through the held-fire path), the vent
 //! drop firing plate #274 mid-fall (objective 1 on the game's own route), the case-exit walk,
 //! the 11.27 hall + the upper east lane south, the east-strip yard descent, and the three wire
-//! crossings (jump-grab + hand-over-hand rides). The DOCUMENTED stand-ins left (each with its
-//! evidence inline): the case's trench exit (the interior has no walkable exit at body height —
-//! glass is body-solid [M hatch-4]), the display eye (the unported 0xE2 vent/pulley; the pit and
-//! the pad riser are capsule-blocked [D probe]), the plates reach (hung on the display ground),
-//! the gate-band crossing x 55.5..67 (unpinned), and the ladder495 sister test's west-ground
+//! crossings (jump-grab + hand-over-hand rides), and the STAIRCASE descent to the display
+//! ground (the hall floor's own opening over `obj_stor2_staircase01` #359's ramp [D] — the
+//! display eye reached by real input). The DOCUMENTED stand-ins left (each with its evidence
+//! inline): the case's trench exit (the interior has no walkable exit at body height — glass is
+//! body-solid [M hatch-4]), the plates reach (every walking route off the display-ground
+//! complex is closed — the slab's south face leaves a 0.23..0.4 slot above the 2.37 deck [D
+//! probe rays]; the game's own connection is the annex vent #180/#182/#184 [D census]), the
+//! gate-band crossing x 55.5..67 (unpinned), and the ladder495 sister test's west-ground
 //! placement. Route: the ST-1
 //! walkway start #1 (8.98, 15.07, −149.65 [D]) → north along the walkway (14.61 floor [D probe blk],
 //! east of the raised block x 5..10 [D probe0c-lane]) → the inner balcony repro spot (7.61, 15.71,
@@ -17,13 +20,15 @@
 //! vent into the display-case trench (x 5..6.5, z −110.5..−111.5, floor 11.84 [D probe blk]) →
 //! the fall crosses plate #274 (4.63..6.95, 13.63..14.56, −112.08..−110.12 [D]; the game fires it
 //! while the body's volume crosses and clears at rest [L 2026-10-26 hatch-2]) → ch 0x1b (objective 1)
-//! → the lower walkway south (11.84/11.27 z −111..−153 [D coll-floor], passing the z −148..−150 hole
-//! at x 13..14 [D probe blk2]) → the plate #506 sliver (5..6, −154, floor 11.84 [D probe blk2]) →
-//! the pit drop onto the display-ground slab (6.27, x 0..14, z −152..−155.5 [D probe blk2]) → the
-//! REAL camera photograph (0x54 [M 0x1a7ef8 case 0x700000c]) into the CamSubject #454 volume → ch 0x1c
-//! (objective 2) → the slab's south edge drop onto the deck (2.37, x 2..8, z −156..−157.5 [D probe
-//! blk3]) → the deck's south end drop onto the yard (−0.02, x 4..8, z −158 [D probe blk3]) → the yard
-//! east to the warehouse slab (0.38/0.89/0.90 x 42..56 [D probe blk3]) → the secret-door plates
+//! → the lower hall east lane south to the STAIRCASE HEAD — the hall floor's own opening
+//! (x 9..12.4, z −115.5..−131.5 [D probe rays]) crossed by `obj_stor2_staircase01` #359's ramp
+//! (the landing 11.12..11.29 at z −127..−128, down to 6.29 at z −120 [D probe rays; the kind-0x19
+//! mesh bounds x 9.97..12.29, y 6.13..12.14, z −127.5..−117.1]) → the ramp descent to the
+//! display-ground level (6.29 bottom, x 10.5..12.3, z −119.5..−121) → the south ledge (6.27,
+//! x 12.6..14.5 [D probe rays]) north to the display pocket → the REAL camera photograph (0x54
+//! [M 0x1a7ef8 case 0x700000c]) into the CamSubject #454 volume → ch 0x1c (objective 2) → the
+//! DOCUMENTED plates-reach stand-in (the walking routes off the display-ground complex are
+//! all closed — see Leg 4) onto the secret-door plates
 //! #558/#559 (52.24..53.29, 0.90..3.20, −174.45..−172.73 [D]): the REAL body-touch + E-arm AND chain
 //! → Door_secret1 #544 sweeps (rate 400 [D]) → through the door onto the doorway ledge (0.90) → the
 //! REAL east-south descent around the ledge's south wall (the wall z −175.8 spans x ≤ 55.5 only; x ≥
@@ -196,14 +201,12 @@ fn walk_the_whole_mission_from_the_start_to_the_0d_handoff() {
     eprintln!("[0c] the vent drop fired plate #274 mid-fall at +{:?} — objective 1 complete on the game's own route", fired_at);
 
     // Leg 2 (REAL): out of the case's trench south-west onto the 11.27 hall, the hall east
-    // under the case, the upper east lane (11.27, x 13..14 [D probe]) south, the pad #506
-    // sliver and the PIT DROP onto the display ground (6.27 — the under-walkway floor runs
-    // x 12.5..14.5 the whole z −114..−154 and opens into the z −152..−155.5 slab [D probe]),
-    // the display ground NORTH to the SUBJECT's clear-line eye, and the photograph through
-    // the REAL camera switch and bullet path [M CamSubject_Update 0x1bc668:14-24]. The 0xE2
-    // display stand-in is gone. (Route floors from this session's probe: the trench exit at
-    // z −112.5 is open west at body height; the direct south lane hits the 1.28 riser wall at
-    // z −114.09 [D probe]; the 11.27 hall ends at z −115.5; the x 13..14 upper lane carries.)
+    // under the case, the upper east lane (11.27, x 13..14 [D probe]) south to the STAIRCASE
+    // HEAD, the ramp descent to the display ground (6.27), the ledge north to the SUBJECT's
+    // clear-line eye, and the photograph through the REAL camera switch and bullet path [M
+    // CamSubject_Update 0x1bc668:14-24]. (Route floors from the crossings session's probe: the
+    // trench exit at z −112.5 is open west at body height; the direct south lane hits the 1.28
+    // riser wall at z −114.09 [D probe]; the x 13..14 upper lane carries.)
     // The trench EXIT — the one stand-in this session ADDED (the case's interior has no
     // walkable exit at body height): the case's south glass lintels at z −111.89 from y ~13.2
     // up [D probe rays: the y 13.0 ray passes, the y 13.4 ray hits at x 5.0..6.5], the west
@@ -230,40 +233,89 @@ fn walk_the_whole_mission_from_the_start_to_the_0d_handoff() {
     eprintln!("[0c] the trench-exit stand-in (the case's unpinned exit) — on the 11.27 hall");
     w.walk_to(Wp::new(8.0, 12.4, -113.2).r(1.0), "the hall east (south of the x 6..7 pillars)");
     w.walk_to(Wp::new(13.5, 12.4, -115.0).r(1.2), "the upper east lane");
-    w.walk_to(Wp::new(13.5, 12.4, -150.0).r(1.2), "the lane south");
-    w.walk_to(Wp::new(6.0, 12.4, -152.6).r(1.0), "the z −152 band west to the pad");
-    // The DISPLAY-GROUND ACCESS — the port gap this session mapped and PINNED: the 11.27
-    // band ends at z −153.14 (its side face spans y ~11.5..13.5 [D probe rays]) and the pad
-    // #506's 0.57 riser stands behind the same face line — this run's walker could neither
-    // walk off the edge (the standing capsule is fully overlapped by the side face; the hop
-    // apex 13.6 leaves the feet inside the face band) nor step up onto the pad, at x 4.5/5.8/
-    // 7.6/9.0 alike [D probe + the runs]. The game's own route to the display ground is the
-    // walkthrough's 0xE2 VENT/PULLEY entry (unported — the old stand-in's gap). So the
-    // display stand-in STAYS (the master's [5.4, 7.35, −113] eye spot), now reached over the
-    // REAL hall/lane walk; the pit descent and the pad hop are its documented sisters. Live
-    // check 3 below (the game's display-ground route).
+    // The STAIRCASE descent — the game's own route to the display ground, no class port
+    // needed: the 0xE2 SS class is fully ported (SS_Create 0x1a9c58 / SS_Update 0x1a9948 /
+    // SS_Operate 0x1a9df8 / SS_Activate 0x1a9ea8 = crates/nf-game/src/ss.rs create/tick/
+    // activate), and the level's 0xE2 census [D] has NO travel lift: the obj_stor*_pully*
+    // winches #351/#364/#377 carry four SAME-position keys (a ±0.026-rad wheel sway, mask 0x2
+    // = the bullet contact class [M 0x1a9df8:35-37]) — dead props, not rides. The walkable
+    // descent is the hall floor's own opening (the floor is MISSING at x 9..12.4 for
+    // z −115.5..−131.5 [D probe rays]) crossed by the static `obj_stor2_staircase01` #359
+    // (kind 0x19, bounds x 9.97..12.29, y 6.13..12.14, z −127.5..−117.1 [D placement]): the
+    // landing at 11.12..11.29 (z −127..−128, level with the 11.27 hall floor) and the ramp
+    // down to 6.29 at z −120 [D probe rays]. The lane walk stays EAST of x 12.5 (the shaft
+    // is open to the 2.18 deep floor); the descent lands on the south ledge (6.27,
+    // x 12.6..14.5 [D probe rays]) whose north end joins the display ground at z −113.5
+    // (the 6.27 floor spans x 1..14.5 there [D probe rays]).
     {
         let sim = w.scene.sim.as_ref().unwrap();
-        // Sister: the band's south edge face (z −153.14) and the pit below (the slab 6.27) —
-        // pin both so the stand-in never walks through a route that later opens.
-        let edge = sim.world.segment_hit([5.8, 12.5, -152.6], [5.8, 12.5, -153.6]);
-        assert!(edge.is_some(), "the band's south edge face (z −153.14 [D probe]) vanished; the pit route could be walked");
-        let slab = sim.world.segment_hit([5.8, 8.0, -154.0], [5.8, 5.0, -154.0]);
-        assert!(slab.is_some(), "the display-ground slab (6.27 [D probe blk2]) vanished under the pit");
+        // Sisters pinning the route's real geometry: the shaft hole east of the lane, the
+        // landing Bond is about to walk onto, and the ramp's mid surface.
+        let shaft = sim.world.segment_hit([11.0, 12.0, -122.0], [11.0, 10.6, -122.0]);
+        assert!(shaft.is_none(), "the stair shaft gained hall-height floor at (11, −122); the lane walk could cross it [D probe rays]");
+        let landing = sim.world.segment_hit([11.2, 13.0, -128.0], [11.2, 10.6, -128.0]);
+        assert!(landing.is_some(), "the stair landing (11.29 at z −128 [D probe rays]) vanished; the descent has no head");
+        let ramp = sim.world.segment_hit([11.2, 12.0, -124.0], [11.2, 7.0, -124.0]);
+        assert!(ramp.is_some(), "the ramp's mid surface (~8.52 at z −124 [D probe rays]) vanished; the descent would free-fall");
     }
+    w.walk_to(Wp::new(13.2, 12.4, -124.0).r(1.0), "the lane south to the stair head");
+    w.walk_to(Wp::new(13.0, 12.4, -128.2).r(0.8), "the stair approach");
+    // West onto the landing (z −128: the hall floor 11.27 at x 12.5+, the landing 11.29..11.32
+    // at x 10.5..12 — level [D probe rays]).
+    w.walk_to(Wp::new(11.2, 12.35, -128.1).r(0.6), "west onto the stair landing");
+    {
+        let sim = w.scene.sim.as_ref().unwrap();
+        assert!(sim.bond.grounded && (sim.bond.pos[1] - 12.35).abs() < 0.4,
+            "Bond stands on the stair landing (11.29 [D probe rays]), got {:?} grounded {}", sim.bond.pos, sim.bond.grounded);
+    }
+    // Down the ramp (south, ~0.8 y per z [D probe rays]): targets every ~1.5 z keep the
+    // steering on the surface; the body rides the slope with short airborne hops.
+    for (x, z, label) in [
+        (11.2f32, -126.5f32, "the ramp 1"),
+        (11.2, -125.0, "the ramp 2"),
+        (11.2, -123.5, "the ramp 3"),
+        (11.3, -122.0, "the ramp 4"),
+        (11.4, -120.8, "the ramp 5"),
+    ] {
+        w.walk_to(Wp::new(x, 7.0, z).r(0.9), label);
+    }
+    {
+        let sim = w.scene.sim.as_ref().unwrap();
+        assert!(sim.bond.pos[1] < 9.0 && sim.bond.pos[2] > -122.0,
+            "the ramp descent reaches the bottom landing (6.29 at z −120 [D probe rays]), got {:?}", sim.bond.pos);
+    }
+    // East onto the south ledge (the bottom 6.29..6.32 joins the ledge 6.27 at x 12.6 [D
+    // probe rays]), then NORTH along it to the display pocket — the ledge's west edge is the
+    // shaft (x 11.5..12.3 open to 2.18 at z −114..−117 [D probe rays]), so the west turn
+    // happens at z −113.5 where the 6.27 floor spans the full width.
+    w.walk_to(Wp::new(12.2, 7.4, -120.3).r(0.7), "the stair bottom east");
+    w.walk_to(Wp::new(13.2, 7.4, -120.0).r(0.8), "onto the ledge");
+    {
+        let sim = w.scene.sim.as_ref().unwrap();
+        assert!(sim.bond.grounded && (sim.bond.pos[1] - 7.41).abs() < 0.5,
+            "Bond stands on the south ledge (6.27 [D probe rays]), got {:?} grounded {}", sim.bond.pos, sim.bond.grounded);
+        let hole = sim.world.segment_hit([11.8, 8.0, -115.5], [11.8, 1.4, -115.5]);
+        let hole_y = hole.map(|(t, _)| 8.0 + t * (1.4 - 8.0));
+        assert!(hole_y.map_or(false, |y| y < 3.0), "the ledge's west shaft (x 11.8, z −115.5 open to 2.18 [D probe rays]) gained floor: {hole_y:?}");
+    }
+    w.walk_to(Wp::new(13.2, 7.4, -116.0).r(0.9), "the ledge north 1");
+    w.walk_to(Wp::new(13.2, 7.4, -113.4).r(0.8), "the ledge north 2");
+    w.walk_to(Wp::new(10.5, 7.4, -113.4).r(0.9), "the display ground west");
+    w.walk_to(Wp::new(5.4, 7.35, -113.0).r(0.7), "the display eye");
+    {
+        let sim = w.scene.sim.as_ref().unwrap();
+        assert!(sim.bond.grounded && (sim.bond.pos[1] - 7.41).abs() < 0.5,
+            "Bond stands on the display ground at the eye spot (6.27 floor [D probe rays]), got {:?} grounded {}",
+            sim.bond.pos, sim.bond.grounded);
+    }
+    eprintln!("[0c] the staircase descent walked for real — the eye on the display ground at {:?}",
+        w.scene.sim.as_ref().unwrap().bond.pos);
     let subject = {
         let sim = w.scene.sim.as_ref().unwrap();
         sim.drones.props.subjects.iter().find(|s| s.channel == 0x1c)
             .map(|s| (s.lo, s.hi)).expect("the jetpack subjects [D #414/#454]")
     };
-    {
-        let sim = w.scene.sim.as_mut().unwrap();
-        // The 0xE2 display stand-in (the unported vent/pulley), unchanged from master.
-        sim.bond.pos = [5.4, 7.35, -113.0];
-        sim.bond.vel = [0.0; 3];
-    }
-    w.wait(10);
-    eprintln!("[0c] the display stand-in (the unported 0xE2 vent/pulley) — the eye on the display ground");
+    eprintln!("[0c] the display eye (the staircase-routed spot) — the camera next");
     // The camera out through the REAL switch input (the old gun.switch_request write is gone).
     w.tick(nf_game::player::Input { switch_to: Some(0x54), ..Default::default() }, false);
     for _ in 0..60 {
@@ -280,15 +332,24 @@ fn walk_the_whole_mission_from_the_start_to_the_0d_handoff() {
         for _ in 0..2 { sim.step_bond(nf_game::player::Input::default(), false, false, false); }
         assert_eq!(sim.drones.mission.states[11][1], 4, "objective 2 completes [M 0x1827d8:88-99]");
     }
-    eprintln!("[0c] objective 2 complete — the photograph (the 0xE2-hung eye spot)");
+    eprintln!("[0c] objective 2 complete — the photograph (the staircase-routed eye spot)");
 
-    // Leg 4: the secret-door reach — the DOCUMENTED stand-in (master's shape, kept): the
-    // display ground → warehouse/yard descents [D probe blk3's slab (6.27) → deck (2.37) →
-    // yard (−0.02) → the warehouse slab 0.38/0.89/0.90 map] hang on the display ground, whose
-    // ACCESS is the unported 0xE2 vent/pulley (the stand-in above) — so the downstream legs
-    // keep the master's reach stand-in onto the plates. The annex vent (the lock #180 → the
-    // SS lid → the hole down to 0.90 [D locks/keys; M Lock_Update 0x1ae3d8 + drone.rs:14004's
-    // real bullet pass]) is the game's ALTERNATIVE connection — untested this session.
+    // Leg 4: the secret-door reach — the DOCUMENTED stand-in (master's shape), because this
+    // session's probes closed every walking route off the display-ground complex toward the
+    // yard/warehouse: the slab's south face stands at z −155.77..−156.26 from y ~2.5 up
+    // (x 2.5..15.25 [probe rays]), leaving only a 0.23..0.4 slot above the 2.37 deck — no
+    // standing or crouched capsule passes [D probe rays]; the raw south walk stops at the
+    // edge z −155.04 standing AND crouched [probe runs]; the 2.18 deep-floor lane (x 8.5..12.2,
+    // the shaft's bottom) runs south only to z ~−150 and steps up onto the same 2.37 deck
+    // pocket, wall-closed south at x ≥ 10.5 [D probe rays]; and the east deck pocket (2.37,
+    // x 12.5..15.4, z −154..−155.5) is closed south by the same face [D probe rays]. The
+    // game's own connection from here is the ANNEX VENT — the 0xE2 SS lid #180 "ventmesh"
+    // (53.80, 5.50, −163.59, ch 0x54, 6 keys rate 50, the lid swings up around +X), its
+    // VentLatch #182 (53.80, 5.90, −165.36, kind 0x2e) and the blocker #184 (keys 2 rate 10,
+    // sinks y 5.43 → 0) [D census] — but the annex floor (~5.44..5.99, x 52.5..55.5) hangs
+    // unreachable from the display ground too (open air over void at x 15..45, faces at
+    // x 14.9/31.7/45.2 at y 6.3 [D probe rays]); it is the warehouse-side connection, for a
+    // future leg. So the plates reach keeps the master's reach stand-in onto the plates.
     let plate2 = {
         let sim = w.scene.sim.as_ref().unwrap();
         sim.drones.triggers.iter()
@@ -298,11 +359,13 @@ fn walk_the_whole_mission_from_the_start_to_the_0d_handoff() {
     };
     {
         let sim = w.scene.sim.as_mut().unwrap();
+        // The plates-reach stand-in, unchanged from master (see Leg 4's comment for the
+        // probe evidence closing the walking routes).
         sim.bond.pos = [plate2.1[0], plate2.1[1] + 0.6, plate2.1[2]];
         sim.bond.vel = [0.0; 3];
     }
     w.wait(20);
-    eprintln!("[0c] the secret-door reach stand-in (the 0xE2-hung descents) — on the plates");
+    eprintln!("[0c] the secret-door reach stand-in (the closed display-ground descents) — on the plates");
 
     // Leg 5 (REAL): the secret-door chain — the co-located plates [D #558/#559]: #559 (mask 8)
     // is the player BODY touch; #558 (mask 4) is the E-interactable arm (`Trigger_Activate`
