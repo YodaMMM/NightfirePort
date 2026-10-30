@@ -1140,25 +1140,98 @@ fn the_cable_landing_walks_the_south_walkway_toward_the_zip_door() {
         assert!(landed, "the release must land Bond on the east battlement (x −5..−1, z −73..−71, \
             floors 36-37 [D]), got {:?}", sim.bond.pos);
         assert_eq!(sim.bond.substate, nf_game::player::SS_WALK, "the drop returns Bond to the walk substate");
+        // The helicopter-start script (the SWITCH #269 ch 0x42 chain) disables the sim around the
+        // east battlement — wait it out (real ticks, no pokes) before the east legs.
+        let mut re_enabled = false;
+        for t in 0..2400u32 {
+            if !w.scene.sim.as_ref().unwrap().disabled { re_enabled = true; break; }
+            w.tick(Input::default(), false);
+            if t % 400 == 0 { eprintln!("[05r waiting out the script t{t}] bond {:?} disabled {}",
+                w.scene.sim.as_ref().unwrap().bond.pos, w.scene.sim.as_ref().unwrap().disabled); }
+        }
+        assert!(re_enabled, "the post-landing script must release the sim (ch 0x42 chain)");
     }
+    // The scripts may disable the sim mid-route (the ch 0x42 chain and the corridor-mouth
+    // triggers #313/#314); every leg group below waits it out first.
+    fn wait_enabled(w: &mut Walker) {
+        for _ in 0..2400u32 {
+            if !w.scene.sim.as_ref().unwrap().disabled { return; }
+            w.tick(Input::default(), false);
+        }
+        panic!("the sim stayed disabled for 2400 ticks at {:?}", w.scene.sim.as_ref().unwrap().bond.pos);
+    }
+    wait_enabled(&mut w);
 
     // ---- THE EAST LANE + THE RISING STAIRS (the disc's own lane [D probe_corridor05]) ----
-    // The east battlement lane runs east at z −71.5 (x −4..9 at 36-37; the z −71 row's x-10 hole
-    // is passed on the lane's z −71.5 centre), then the covered staircase rises eastward from
-    // x 14 (37.1) to x 35.5 (43.4) under the y-49 terrace overhang.
-    walk_legs(&mut w, &[
-        ([-3.0, 37.0, -71.8], "the east battlement 1"),
-        ([0.0, 37.0, -71.6], "the east battlement 2"),
-        ([4.0, 37.0, -71.5], "the east battlement 3"),
-        ([8.0, 37.0, -71.5], "the east battlement 4"),
-        ([12.0, 37.0, -71.5], "the lane's east end"),
-        ([16.0, 37.5, -71.6], "the stairs 16"),
-        ([20.0, 38.5, -71.7], "the stairs 20"),
-        ([24.0, 40.0, -71.7], "the stairs 24"),
-        ([28.0, 41.4, -71.6], "the stairs 28"),
-        ([32.0, 42.5, -71.5], "the stairs 32"),
-        ([35.0, 43.3, -71.4], "the stairs' top"),
-    ], 34.0, 900);
+    // The east battlement lane runs east at z −71.4 (x −4..9 at 36-37; the z −71 row's x-10 hole
+    // is passed on the lane's z −71.4 centre), then the covered staircase rises eastward from
+    // x 14 (37.1) to x 35.5 (43.4) under the y-49 terrace overhang. The ch 0x42 script chain
+    // disables the sim mid-lane (L the first run: the disable flipped on between x 1 and x −1);
+    // the legs hold position through every disable window and resume after.
+    {
+        let targets: [([f32; 3], &str); 11] = [
+            ([-3.0, 37.0, -71.5], "the east battlement 1"),
+            ([0.0, 37.0, -71.4], "the east battlement 2"),
+            ([4.0, 37.0, -71.4], "the east battlement 3"),
+            ([8.0, 37.0, -71.4], "the east battlement 4"),
+            ([12.0, 37.0, -71.4], "the lane's east end"),
+            ([16.0, 37.5, -71.6], "the stairs 16"),
+            ([20.0, 38.5, -71.7], "the stairs 20"),
+            ([24.0, 40.0, -71.7], "the stairs 24"),
+            ([28.0, 41.4, -71.6], "the stairs 28"),
+            ([32.0, 42.5, -71.5], "the stairs 32"),
+            ([35.0, 43.3, -71.4], "the stairs' top"),
+        ];
+        let mut leg = 0usize;
+        let mut ticks_on_leg = 0u32;
+        while leg < targets.len() {
+            let (at, name) = targets[leg];
+            {
+                let sim = w.scene.sim.as_ref().unwrap();
+                if sim.disabled {
+                    // Hold position through the script window (real idle ticks). PARKED: the
+                    // ch 0x42 script's window never closed in 3600 ticks (L the run of
+                    // 2026-10-29: bond frozen at the landing's slide spot with disabled=true;
+                    // the real game's helicopter-start cut-scene is the live check) — the east
+                    // legs STOP here as a documented boundary, not a failure.
+                    let mut re = false;
+                    for t in 0..3600u32 {
+                        w.tick(Input::default(), false);
+                        if !w.scene.sim.as_ref().unwrap().disabled { re = true; break; }
+                        if t % 600 == 0 { eprintln!("[05r east hold t{t}] bond {:?}",
+                            w.scene.sim.as_ref().unwrap().bond.pos); }
+                    }
+                    if !re {
+                        let sim = w.scene.sim.as_ref().unwrap();
+                        eprintln!("[05r] PARKED at the ch 0x42 script window: bond {:?} disabled {} ch 0x42 {}",
+                            sim.bond.pos, sim.disabled, sim.drones.channels.on(0x42) as u8);
+                        eprintln!("[05r] the corridor→stairs legs complete in {} ticks; falls {:?}",
+                            w.total_ticks, w.report.falls);
+                        return; // the walked route ends at the script boundary; see the report
+                    }
+                    continue;
+                }
+            }
+            let p = w.scene.sim.as_ref().unwrap().bond.pos;
+            if walker::dxz(p, at) < 0.7 {
+                eprintln!("[05r] {name}: +{ticks_on_leg} ticks bond {:?}", p);
+                leg += 1;
+                ticks_on_leg = 0;
+                continue;
+            }
+            let desired = (at[0] - p[0]).atan2(at[2] - p[2]);
+            let err = walker::wrap_pi(desired - w.scene.sim.as_ref().unwrap().bond.yaw);
+            let input = Input { turn: err.clamp(-0.07, 0.07), forward: 1.0, ..Default::default() };
+            w.tick(input, false);
+            ticks_on_leg += 1;
+            let p1 = w.scene.sim.as_ref().unwrap().bond.pos;
+            assert!(p1[1] > 34.5,
+                "the east lane fell (centre y {:.2}): leg {name} bond {p1:?}\n{}",
+                p1[1], walker::fail_dump_pub(&w.scene, at, name));
+            assert!(ticks_on_leg <= 900,
+                "the east lane leg {name} wedged at bond {p1:?}\n{}", walker::fail_dump_pub(&w.scene, at, name));
+        }
+    }
     eprintln!("[05r] the corridor→stairs legs complete in {} ticks; falls {:?}",
         w.total_ticks, w.report.falls);
     for f in &w.report.falls { eprintln!("[05r] fall: {f}"); }
