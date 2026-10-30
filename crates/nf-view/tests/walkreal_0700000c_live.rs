@@ -446,8 +446,12 @@ fn walk_the_whole_mission_from_the_start_to_the_0d_handoff() {
             let sim = w.scene.sim.as_ref().unwrap();
             if sim.bond.substate != nf_game::player::SS_WIRE { dropped = true; break; }
             let d = ((sim.bond.pos[0] + 8.47).powi(2) + (sim.bond.pos[2] + 216.52).powi(2)).sqrt();
-            let input = nf_game::player::Input { strafe: 1.0, jump: d < 0.9, ..Default::default() };
-            w.scene.sim.as_mut().unwrap().step_bond(input, false, false, false);
+            // The drop is the FIRE action (action 9 — the substates read it directly, like the
+            // grapple's release [M Player_SSGrapple 0x192860's Input_Action(9, 1)]; the jump
+            // instead stands Bond UP onto the wire — this run's earlier "landings" were feet ON
+            // the wire line: 13.67-0.85 / 14.11-0.93 / 14.44-0.89 [D wire ys]).
+            let input = nf_game::player::Input { strafe: 1.0, ..Default::default() };
+            w.scene.sim.as_mut().unwrap().step_bond(input, d < 0.9, false, false);
             w.total_ticks += 1;
         }
         dropped
@@ -500,8 +504,9 @@ fn walk_the_whole_mission_from_the_start_to_the_0d_handoff() {
             let sim = w.scene.sim.as_ref().unwrap();
             if sim.bond.substate != nf_game::player::SS_WIRE { dropped = true; break; }
             let d = ((sim.bond.pos[0] - 5.85).powi(2) + (sim.bond.pos[2] + 223.15).powi(2)).sqrt();
-            let input = nf_game::player::Input { strafe: -1.0, jump: d < 0.9, ..Default::default() };
-            w.scene.sim.as_mut().unwrap().step_bond(input, false, false, false);
+            // The drop is the FIRE action (action 9; see the #284 note).
+            let input = nf_game::player::Input { strafe: -1.0, ..Default::default() };
+            w.scene.sim.as_mut().unwrap().step_bond(input, d < 0.9, false, false);
             w.total_ticks += 1;
         }
         dropped
@@ -559,8 +564,12 @@ fn walk_the_whole_mission_from_the_start_to_the_0d_handoff() {
                 (sim.bond.substate == nf_game::player::SS_WIRE, sim.bond.grounded,
                  ((p[0] - 35.89).powi(2) + (p[2] + 209.44).powi(2)).sqrt())
             };
-            let input = nf_game::player::Input { strafe: 1.0, jump: d < 0.9, ..Default::default() };
-            w.scene.sim.as_mut().unwrap().step_bond(input, false, false, false);
+            // The drop is the FIRE action (action 9 — the substates read it directly, like the
+            // grapple's release [M Player_SSGrapple 0x192860's Input_Action(9, 1)]; the jump
+            // instead stands Bond UP onto the wire — this run's earlier "landings" were feet ON
+            // the wire line: 13.67-0.85 / 14.11-0.93 / 14.44-0.89 [D wire ys]).
+            let input = nf_game::player::Input { strafe: 1.0, ..Default::default() };
+            w.scene.sim.as_mut().unwrap().step_bond(input, d < 0.9, false, false);
             w.total_ticks += 1;
             if !on_wire && grounded { dropped = true; break; }
         }
