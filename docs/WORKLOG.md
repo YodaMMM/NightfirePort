@@ -472,3 +472,11 @@ The landing: default DOWN (master's state — 08 flips green here, a -15 win), t
 behind NF_CULL_UP and the off behind NF_NO_CULL as the documented bisect tools; the
 NF_NO_MASKS gates ARE removed (the drop filters unconditional). nf-game --lib 591/0 on the
 final tree. 01 5/0, 02 1 red, 03 1 red, 08 3/0, 14 5/1 at the default.
+
+## capsule-cull-and-los-masks-16 (2026-10-30)
+
+Branch `s/capsule-cull-and-los-masks-16` = origin/s/capsule-cull-and-los-masks-15 + merge
+origin/master (a19be699). Task: port the game's ONE cylinder query faithfully
+([M] Intersect_CylGeom 0x109da0 whole fn; Collide_Intersect 0x1ebaa8) for the paths that use
+it, so a single cull rule serves all of them; remove NF_CULL_UP / NF_NO_CULL. Landing bar:
+walkreal 02, 03, 08, 14, fix_npc_doors, npc_doors, mp_perf_16 and every touched binary green.
