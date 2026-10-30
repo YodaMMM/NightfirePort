@@ -561,17 +561,19 @@ fn capsule_tri_contact(t: &[V3; 3], mat: u8, a: &mut V3, b: &mut V3, r: f32, gro
     true
 }
 
-/// The move-clip contact — `NF_WALK_CLIP=1`'s walk model (the walk-move-clip task's experiment;
-/// default OFF, measured against the whole walkreal battery before anything lands). Per triangle
+/// The move-clip contact — the walk's DEFAULT wall response since the walk-model flip
+/// (level-0a-walk-clip-flip; the decoded push tail is dead — see below). Per triangle
 /// the game's contact test [M `Intersect_CylGeom` 0x109da0: the per-triangle plane-crossing query
 /// point f clamped 0..1, the closest triangle point, the `dist < r` contact gate] with the radial
 /// push tail left DEAD — its reference HITTEST+0x50 is the lifetime DeltaP accumulator [M
 /// `Collide_Intersect` 0x1ebaa8:353-373; [L] ee_start_* boots (0,0,0), ee_snapshot drifts ~15 m
 /// from the owner] so the tail never fires on a walked line — and the tick's move CLIPPED at the
-/// contact instead of pushing out. Port choices ([S] unverified, this flag is the measurement):
-/// - the clip retracts the tick's move so the closest spine point lands ON the contact face's
-///   plane (the spine-plane rest — the game's own glide rest holds the spine ~0.011 inside the
-///   wall plane [L fresh boot, the 16.29 line]; no radius skin);
+/// contact instead of pushing out. Port choices ([S] unverified, measured against the whole
+/// walkreal battery):
+/// - the clip retracts the tick's move's approach along the contact radial so the post-clip
+///   distance to the contact is r (the r-skin — the [L 2026-10-26 fresh boot] west-hall press
+///   rests the spine at face+0.45/+0.55, the two phases of exactly this retraction; the earlier
+///   spine-plane variant walked through the wall — see the clip block below);
 /// - only face-interior contacts clip: an edge or a side overlap never displaces (the game walks
 ///   through the door[19] slab poke and the 0.88 funnel pinch the stand-ins pin — the dead tail);
 /// - the head-on cull runs with the GAME's own pairing [M 0x109da0:321-322 — skip when
@@ -2046,7 +2048,8 @@ impl CollisionWorld {
         (total, walkable)
     }
 
-    /// The move-clip walk query (`NF_WALK_CLIP=1` — see `capsule_tri_clip`): the actor capsule
+    /// The move-clip walk query (the walk's DEFAULT collision response since the walk-model flip —
+    /// see `capsule_tri_clip`): the actor capsule
     /// against the straddle cells' static geometry with the tick's move CLIPPED at the face
     /// contacts instead of the two-sided depenetration push. Returns the pos correction (the
     /// clipped move's remainder — what is LEFT of the tick's move) and the walkable signal.

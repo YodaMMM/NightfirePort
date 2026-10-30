@@ -677,10 +677,14 @@ fn walk_office_floor_qworm_keyboard_hatch() {
         assert!(w.scene.sim.as_ref().unwrap().drones.level_exit.is_none() || k + 1 == route.len(),
             "the mission failed mid-route at node {k} (an alarm the clear missed)");
     }
-    watch_and_clear(&mut w, 16.0);
+    // NO final hostile sweep here: the hatch is the walk's last point, and the east-side civilian
+    // the spawner can draw (g3, spot (9.8, 21.3) [L trace 2026-10-30]) may already be mid-press —
+    // he is PROTECTED (props 0x53/0x54 [L the trace roster print]; killing him is fail reason 3 →
+    // ch 0x60 [M ally.rs on_init_death]), so the player's own answer at the hatch mouth is to
+    // LEAVE: the exit fires the level load and the first level_exit write wins [M drone.rs:15145's
+    // is_none gate — the press's fail write is gated the same way], while hunting him burns the
+    // press timer (0x8a → the fail in 280 ticks [L this trace: 0x8a at t15149, ch 0x63 at t15429]).
     {
-        // Diagnostic (this task): what failed the mission mid-route (the exit to 0x0700000a is
-        // the fail menu's auto-restart [M 0x216618] — ch 0x63 = the fail channel [M mission.rs]).
         let sim = w.scene.sim.as_ref().unwrap();
         eprintln!("[0a] ch63 {} fail_label {} menu_open {}", sim.drones.channels.on(0x63), sim.drones.mission.fail_label, sim.drones.mission.menu_open);
         for (oi, st) in sim.drones.mission.states.iter().enumerate() {
