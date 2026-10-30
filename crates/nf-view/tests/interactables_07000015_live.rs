@@ -635,7 +635,7 @@ fn the_oil_barrel_dies_to_the_gunshot_and_writes_its_death_channel() {
         let b = barrel(&sim);
         assert!(!b.dead && (b.health - 10.0).abs() < 0.5, "sister: the barrel stands at health 10 [D param 3]");
         assert!(walker::dxz(b.pos, [0.65, 40.30, 28.99]) < 1.0, "sister: it is the great-hall tag [D census translation]");
-        assert!(!sim.drones.channels.on(0xfd), "sister: ch 0xfd off before the shot [D no writer]");
+        assert!(!sim.drones.channels.on(0xfd), "sister: ch 0xfd is off before the shot (the initial state)");
     }
     // Reach: the proven hall-south lane spot (the walkreal/pickups route's hall south leg).
     w.scene.sim.as_mut().unwrap().bond.pos = [2.0, 41.5, 30.0];
