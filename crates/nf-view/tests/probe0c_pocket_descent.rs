@@ -371,6 +371,53 @@ fn probe_the_full_display_ground_to_plates_walk() {
     raw_walk(&mut w, -4.45, -113.0, 200, &|sim| sim.bond.pos[2] < -112.6);
     log_pos(&w, "3a mid-rib");
     jump_off(&mut w, -7.0, -112.8, 300, "3b the rib→walkway west jump");
+    // 3c: the L4 landing (−6.79, 7.70, −111.20) — a ~6.6 floor north of the parapet
+    //     (z −112.21 [D scan_westentry]). From the rib at z −111.0 walk WEST off the rib onto
+    //     it (a 0.6 drop), then south-west onto the walkway.
+    // 3f: the RUNNING west jump off the display floor (a real run-up, the jump fires mid-run
+    //     at x ≈ −3.4, aimed at the L4 landing zone (−6.8, 7.70, −111.2)).
+    {
+        let sim = w.scene.sim.as_mut().unwrap();
+        sim.bond.pos = [-1.0, 7.4, -111.5];
+        sim.bond.vel = [0.0; 3];
+    }
+    w.wait(20);
+    {
+        let sim = w.scene.sim.as_ref().unwrap();
+        let yaw = (-7.0f32 - sim.bond.pos[0]).atan2(-111.5f32 - sim.bond.pos[2]);
+        let err = walker::wrap_pi(yaw - sim.bond.yaw);
+        drop(sim);
+        w.tick(nf_game::player::Input { turn: err.clamp(-0.08, 0.08), ..Default::default() }, false);
+    }
+    for _ in 0..60 {
+        let sim = w.scene.sim.as_ref().unwrap();
+        let yaw = (-7.0f32 - sim.bond.pos[0]).atan2(-111.5f32 - sim.bond.pos[2]);
+        let err = walker::wrap_pi(yaw - sim.bond.yaw);
+        let x = sim.bond.pos[0];
+        drop(sim);
+        w.tick(nf_game::player::Input {
+            turn: err.clamp(-0.08, 0.08),
+            forward: 1.0,
+            jump: x > -3.4 && x < -3.3,
+            ..Default::default()
+        }, false);
+        if x <= -3.4 { break; }
+    }
+    let mut landed = None;
+    for _ in 0..300 {
+        w.tick(nf_game::player::Input { forward: 1.0, ..Default::default() }, false);
+        let sim = w.scene.sim.as_ref().unwrap();
+        if sim.bond.grounded && w.total_ticks > 0 {
+            landed = Some((sim.bond.pos, sim.bond.fall_damage));
+            break;
+        }
+    }
+    match landed {
+        Some((p, d)) => eprintln!("[desc] 3f the running west jump: LANDED ({:.2}, {:.2}, {:.2}) fall_damage {d:?}", p[0], p[1], p[2]),
+        None => log_pos(&w, "3f never re-grounded"),
+    }
+    w.walk_to(Wp::new(-7.5, 8.1, -114.0).r(1.0), "3d the walkway south-west");
+    w.walk_to(Wp::new(-7.5, 8.1, -114.0).r(1.0), "3d the walkway south-west");
     // 4. South along the walkway's north part to the cross-wall's gap lane (x −9).
     w.walk_to(Wp::new(-8.5, 8.1, -116.0).r(1.2), "the walkway south 1");
     w.walk_to(Wp::new(-9.0, 8.1, -128.0).r(1.2), "the walkway south 2");
