@@ -246,3 +246,15 @@ the game (+0x4F8 bit 0 never set: DefaultInit clears it, the 319-store disassemb
 bits >= 2 only); route walks unclamped now, 3 named reds green, 07 stays green. The grounded
 bot-push y zero added (its own accumulator). pickups08/escort/walkreds remain — diagnosed,
 fix next window. Report: docs/reports/drone-bump-collision-11.md.
+
+## drone-bump-collision-12 (started 02:12 UTC 2026-10-30)
+
+Task: -11 merged with master still turns 14 named tests red (green on master). Continue from
+-11 (origin/master merged); split the branch's changes (kind-word arming + every-stance Jointy
+push, straddled-cel pick filter, door-zone opponent gate, boundary-clamp removal), find which
+one moves each red, what the game does at that step [M/D/L]; fix the port where wrong,
+re-derive tests only with evidence. Land only what keeps the full suite free of new reds.
+
+Plan: branch created from origin/s/drone-bump-collision-11 + origin/master merged (clean);
+next: push, reproduce the reds on this tree in foreground chunks (background jobs die between
+tool calls), map red -> change group, evidence pass, fix or drop per group.
