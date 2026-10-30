@@ -843,7 +843,7 @@ pub fn nav_route(sim: &nf_view::scene::Sim, start: V3, dest: V3) -> Option<Vec<V
         if sim.nav.paths[pi].nodes.is_empty() { continue; }
         let goal = sim.nav.target_nodes(&sim.world, pi, dest, 0.0);
         let used = vec![0u16; sim.nav.paths[pi].links.len()];
-        if let Ok((_, route)) = nf_game::nav::Route::to_position(&sim.nav, &sim.world, Some(pi), start, dest, &goal, &used) {
+        if let Ok((_, route)) = nf_game::nav::Route::to_position(&sim.nav, &sim.world, Some(pi), start, dest, &goal, &used, &|_, _| false) {
             let pts: Vec<V3> = route.nodes.iter().map(|&n| sim.nav.paths[pi].nodes[n as usize].pos).collect();
             if pts.len() > 2 { return Some(pts[1..pts.len() - 1].to_vec()); }
         }
