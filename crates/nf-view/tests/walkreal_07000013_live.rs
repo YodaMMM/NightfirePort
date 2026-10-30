@@ -21,6 +21,16 @@
 //! == 4, the 13 spawn touch), "Raise security gate and escape through front entrance" (ch
 //! 0x50 → states[18][0] 3→4, the panel E + the entrance touch).
 //!
+//! THE CLOSING PIN (level-13-spawn-to-end-walk): part 0's records ride the same warm chain and
+//! fold only here — 0x04000036 "Gain access to lower office floor" (ch 0x48) completes on the
+//! chain's first monitor tick after 07000012's spawn touch #679 writes ch 0x48 [D; M 0x1827d8
+//! case 3], and 0x04000035 "Escape from the tower" (ch 0x64 = 100 [L c07000011.rs]) — announced
+//! on 07000011 and pinned announced-only by walkreal_07000011_live — is STILL announced (3) when
+//! 13 loads: its writer is the whole-mission AND ch 100 [M 0x1827d8:119-123], which first fires
+//! HERE, the tick the success touches #73/#164/#165 write ch 0x64. The same tick the monitor's
+//! case 3 folds it 3 → 4 and the all-AND raises ch 100 → internal 6 [M 0x182c60:23-28] — no
+//! channel pokes anywhere; every objective's condition is written by the game's own objects.
+//!
 //! The fake lift (SP #161, trigger ch 0x23) has no writer on the disc [D §4] — dead data; the
 //! route out is the front entrance, not the lift.
 
@@ -85,6 +95,14 @@ fn walk_the_warm_chain_to_the_front_entrance_and_out() {
         assert!(sim.drones.channels.on(0x4a), "the spawn touch #153 fires ch 0x4A [D]");
         assert_eq!(sim.drones.mission.states[17][0], 4, "4A's 'Gain access to lobby' completes (the late AND) [M]");
         assert_eq!(sim.drones.mission.states[18][0], 3, "'Raise security gate…' announces (enable 0x4A) [L]");
+        // Part 0's rows at the carried load [M 0x182270 leaves previous parts alone]: 0x04000036
+        // folded on the chain (12's spawn touch #679 wrote ch 0x48 [D]); 0x04000035 still announced
+        // — its writer is the whole-mission AND that first fires on THIS level [M 0x1827d8:119-123].
+        assert_eq!(sim.drones.mission.states[15][1], 4,
+            "11's 'Gain access to lower office floor' folded on the warm chain (ch 0x48, written by 12's spawn touch #679 [D]; M 0x1827d8 case 3)");
+        assert_eq!(sim.drones.mission.states[15][0], 3,
+            "0x04000035 'Escape from the tower' still announced at 13's load [L c07000011.rs; M 0x1827d8:119-123 — its AND writer first fires here]");
+        assert!(!sim.drones.channels.on(100), "ch 100 is off at 13's load — the success touches are its first writer [D]");
     }
 
     // THE SECURITY GATE: the "Shutters2" SimpleScript #149 (out ch 0x23 [D param 3]) is the
@@ -223,6 +241,16 @@ fn walk_the_warm_chain_to_the_front_entrance_and_out() {
         assert_eq!(sim.drones.mission.to_end, 0x0730_0013, "LevelToEndTo [M 0x182c60:89-90]");
         assert_eq!(sim.drones.mission.state, 6, "MissionState 6 = complete [M 0x182c60:88]");
         assert_eq!(sim.drones.mission.states[18][0], 4, "the entrance objective stays complete");
+        // THE CLOSING PIN: the whole-mission AND over every part's condition [M 0x1827d8:119-123]
+        // folded 0x04000035 the tick the success touches wrote ch 0x64 = 100 [D] — the record
+        // walkreal_07000011_live could only pin as announced.
+        assert_eq!(sim.drones.mission.states[15][0], 4,
+            "0x04000035 'Escape from the tower' COMPLETE: the success touches wrote ch 0x64 = 100 and the whole-mission AND folded it [M 0x1827d8:119-123 case 3; D]");
+        assert!(sim.drones.channels.on(100), "the monitor's all-AND raised ch 100 [M 0x1827d8:119-123]");
+        assert_eq!(sim.drones.mission.states[15][1], 4, "11's office-floor objective stays complete");
+        assert_eq!(sim.drones.mission.states[16][0], 4, "12's console objective stays complete");
+        assert_eq!(sim.drones.mission.states[16][1], 4, "12's shaft objective stays complete");
+        assert_eq!(sim.drones.mission.states[17][0], 4, "4A's lobby objective stays complete");
     }
 
     // LevelToEndTo 0x07300013 (the driving interlude) is the mission end's own hand-off [M
