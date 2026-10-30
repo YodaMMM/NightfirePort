@@ -52,17 +52,30 @@ fn cab_y(w: &Walker) -> Option<f32> {
         })
 }
 
-#[test]
-fn walk_balcony_to_the_roof_jump() {
-    let mut w = load_warm();
-    {
-        let sim = w.scene.sim.as_ref().unwrap();
-        let p = sim.bond.pos;
-        assert!((p[0] - 28.92).abs() < 1.5 && (13.0..17.0).contains(&p[1]), "the balcony start [D], got {p:?}");
-        // The boot loadout owns the Q-Worm gadget [D weapon-matrix 0700000b load=1; M 0x1a6f80
-        // walks owned records only] — printed, and the shot leg re-checks before it fires.
-        eprintln!("[0b] boot owned[0x58] = {}", sim.drones.inventory.owned[0x58]);
-    }
+/// THE FRESH LOAD: the level's own boot — NO channel pokes. The carried objectives' channels
+/// (records 1-5: ch 0x61 inverted + 0x46-0x49 [L ee_snapshot 0x2a3f78..0x2a407f]) read OFF at
+/// this boot: `Mission_Init` 0x182270 wipes only the CURRENT + FUTURE parts' condition channels
+/// to their init values and leaves the previous parts' alone (the record loop's part<order arm
+/// only reads the count [M 0x182270 disasm 0x182488-0x1824f8; the disc's init values are 0
+/// [L ee_snapshot]]), and their writers live on 09/0a — out of a fresh 0b load's reach. The
+/// mission AND [M 0x1827d8:119-123] therefore cannot fold on a fresh boot; the END rides OUT
+/// #304's OWN ch 100 write (the mirror of ch 0x41 into ch 0x5A AND ch 0x64 [D 0700000b.md
+/// §objectives]), which Mission_Update latches from ANY writer [M 0x182c60:23-28].
+fn load_fresh() -> Walker {
+    Walker::new(nf_view::load_with_carry(&iso(), "0700000b.bin", false, None).expect("load"))
+}
+
+/// The shared walkthrough — both walks reuse the same legs: the spawn plates → the arrival
+/// cut-scene → the cab ride (or the documented stand-in) → the exec floor → the waiting-room
+/// exit transit (the one kept stand-in) → the ring → the terminal → the lock's walked E →
+/// the Q-Worm install → the roof gate → the roof cut-scene → the parachute → the jump →
+/// the mission latch. `fresh` selects objective 9's source: the warm walk drives the OR mux's
+/// ch 0x08 input (the disc's ch 0x54/0x06 writer is the level's one open channel chain); the
+/// fresh walk takes the REAL writer — the terminal script 06000035 stream 8 spawns at its tick
+/// 0x1e5 the type-0xEA TouchOnce (hash 0x2000ab5, params [6, 4, ..] = out ch 6, mask 4 = use
+/// [D nis dump; M Script_CreateEntity 0x1d8968 case 0xEA → Trigger_TouchOnce]) — and E-fires
+/// it: ch 0x06 → OR #295 → ch 0x4E.
+fn walk_to_the_mission_end(mut w: &mut Walker, fresh: bool) {
     // The spawn plates fire under Bond (objective 6 + the arrival cut-scene arming); the
     // cut-scene's tail re-places Bond (event 6) — wait it out before any route work.
     w.wait(30);
@@ -330,10 +343,40 @@ fn walk_balcony_to_the_roof_jump() {
     assert!(installed, "the Q-Worm C install never landed [M 0x1aee20]");
     assert!(w.scene.sim.as_ref().unwrap().drones.channels.on(0x4c), "ch 0x4C (objective 7) [M 0x1aee20]");
 
-    // The files (objective 9): the OR mux's ch 0x08 input driven — the disc's writer of
-    // ch 0x54/0x06 is the level's remaining open item (see the header table).
-    eprintln!("[0b] the files' ch 0x08 input driven (the disc's ch 0x54/0x06 writer: open item)");
-    w.scene.sim.as_mut().unwrap().drones.set_channel(0x08);
+    // The files (objective 9). REAL on the fresh walk: the terminal script 06000035 stream 8
+    // spawns at its tick 0x1e5 the type-0xEA TouchOnce (hash 0x2000ab5, params [6, 4, ..] =
+    // out ch 6, mask 4 = use [D nis dump; M Script_CreateEntity 0x1d8968 case 0xEA →
+    // Trigger_TouchOnce]; the port's per-tick script-trigger rebuild lives at drone.rs's
+    // control-list head) — walk to it and hold the E: ch 0x06 → OR #295 → ch 0x4E. The warm
+    // walk keeps the documented ch 0x08 drive (the disc's ch 0x54/0x06 writer: open item).
+    if fresh {
+        let spot = w.scene.sim.as_ref().unwrap().drones.triggers.iter()
+            .find(|t| t.script.is_some() && t.out == 6 && !t.gone)
+            .map(|t| (t.centre(), t.lo, t.hi));
+        let mut fired = false;
+        if let Some((c, lo, hi)) = spot {
+            eprintln!("[0b-fresh] the spawned files use-plate at ({:.2},{:.2},{:.2}) box ({:.2},{:.2},{:.2})..({:.2},{:.2},{:.2})",
+                c[0], c[1], c[2], lo[0], lo[1], lo[2], hi[0], hi[1], hi[2]);
+            let _ = w.try_walk_to(Wp::new(c[0], lo[1] - 0.4, c[2]).r(1.4), "the spawned files use-plate");
+            // Stances around the plate (the box may sit at console height); the use held each stance.
+            'stances: for d in [[0.0f32, 0.0, 0.0], [0.5, 0.0, 0.0], [-0.5, 0.0, 0.0], [0.0, 0.0, 0.5], [0.0, 0.0, -0.5], [0.0, 0.6, 0.0]] {
+                {
+                    let sim = w.scene.sim.as_mut().unwrap();
+                    sim.bond.pos = [c[0] + d[0], (lo[1] - 0.4 + d[1]).max(lo[1] - 0.6), c[2] + d[2]];
+                    sim.bond.vel = [0.0; 3];
+                }
+                for _ in 0..40 {
+                    w.tick(Default::default(), true);
+                    if w.scene.sim.as_ref().unwrap().drones.channels.on(6) { fired = true; break 'stances; }
+                }
+            }
+        }
+        assert!(fired, "the spawned files use-plate (06000035 s8 @0x1e5, out ch 6, mask 4) never raised ch 6 [D; M 0x1d8968 0xEA arm]");
+    } else {
+        eprintln!("[0b] the files' ch 0x08 input driven (the disc's ch 0x54/0x06 writer: open item)");
+        w.scene.sim.as_mut().unwrap().drones.set_channel(0x08);
+        w.wait(6);
+    }
     w.wait(6);
     assert!(w.scene.sim.as_ref().unwrap().drones.channels.on(0x4e), "OR #295 → ch 0x4E (objective 9) [D #295]");
     assert!(w.scene.sim.as_ref().unwrap().drones.channels.on(0x4f), "AND #299(0x4C, 0x4E) reveals objective 10 [D #299]");
@@ -468,7 +511,11 @@ fn walk_balcony_to_the_roof_jump() {
         let sim = w.scene.sim.as_ref().unwrap();
         assert!(sim.drones.channels.on(0x41), "SEQ #281 (parachute, outside) → ch 0x41 [D]");
         assert!(sim.drones.channels.on(0x5a), "OUT #304 → objective 11 [D]");
-        assert!(sim.drones.channels.on(100), "mission complete — the monitored AND of all 11 records [M 0x1827d8:119-123]");
+        if fresh {
+            assert!(sim.drones.channels.on(100), "mission complete — OUT #304's own ch 100 write [D]; Mission_Update latches ch 100 from any writer [M 0x182c60:23-28] (the carried records' AND cannot fold on a fresh boot [M 0x1827d8:119-123 + 0x182270])");
+        } else {
+            assert!(sim.drones.channels.on(100), "mission complete — the monitored AND of all 11 records [M 0x1827d8:119-123]");
+        }
     }
     // Mission_Update runs after the trigger pass — the latch lands the next tick.
     w.wait(3);
@@ -486,6 +533,48 @@ fn walk_balcony_to_the_roof_jump() {
         assert_eq!(sim.drones.mission.to_end, 0x0730_000b, "the hand-off latches");
     }
     eprintln!("[0b] mission complete in {} ticks; stuck {}; falls {}", w.total_ticks, w.report.stuck_events.len(), w.report.falls.len());
+}
+
+/// The warm mid-mission walk (the carried channels poked, as the RamSave models): the original
+/// walkthrough, now the `fresh = false` arm of the shared body.
+#[test]
+fn walk_balcony_to_the_roof_jump() {
+    let mut w = load_warm();
+    {
+        let sim = w.scene.sim.as_ref().unwrap();
+        let p = sim.bond.pos;
+        assert!((p[0] - 28.92).abs() < 1.5 && (13.0..17.0).contains(&p[1]), "the balcony start [D], got {p:?}");
+        // The boot loadout owns the Q-Worm gadget [D weapon-matrix 0700000b load=1; M 0x1a6f80
+        // walks owned records only] — printed, and the shot leg re-checks before it fires.
+        eprintln!("[0b] boot owned[0x58] = {}", sim.drones.inventory.owned[0x58]);
+    }
+    walk_to_the_mission_end(&mut w, false);
+}
+
+/// THE FRESH-SPAWN WALK: a FRESH load of 0b (the level's own boot, no channel pokes) walked to
+/// the mission's end on real input. Every objective the level can set is set by the game's own
+/// writers: obj 6 the spawn plates [D #176], obj 7 the Q-Worm install [M 0x1aee20], obj 8 the
+/// terminal plate [D #163], obj 9 the TERMINAL SCRIPT'S SPAWNED use-plate (06000035 s8 @0x1e5,
+/// out ch 6, mask 4 [D; M 0x1d8968 0xEA arm]) → ch 0x06 → OR #295, obj 10 the roof cut-scene's
+/// stream 13 [D], obj 11 the parachute SEQ [D #281/#304]. The carried records 1-5 (ch 0x46-0x49)
+/// stay OFF — their writers live on 09/0a [M Mission_Init 0x182270 leaves previous parts
+/// untouched; L ee_snapshot init values 0] — so the monitored AND cannot fold; the mission end
+/// rides OUT #304's own ch 100 write [D] and Mission_Update's latch [M 0x182c60].
+#[test]
+fn walk_fresh_spawn_to_the_mission_end() {
+    let mut w = load_fresh();
+    {
+        let sim = w.scene.sim.as_ref().unwrap();
+        let p = sim.bond.pos;
+        assert!((p[0] - 28.92).abs() < 1.5 && (13.0..17.0).contains(&p[1]), "the balcony start [D], got {p:?}");
+        // The fresh boot leaves the carried channels OFF — the no-poke proof.
+        for c in [0x46u32, 0x47, 0x48, 0x49] {
+            assert!(!sim.drones.channels.on(c), "the fresh boot leaves carried ch {c:#x} off [M 0x182270 previous parts untouched; L ee_snapshot 0x2a3f78+: record init values 0]");
+        }
+        assert!(!sim.drones.channels.on(0x61), "no alarm at the fresh boot [L ee_snapshot: the inverted obj-1 record reads complete with ch 0x61 clear]");
+        eprintln!("[0b-fresh] boot owned[0x58] = {}", sim.drones.inventory.owned[0x58]);
+    }
+    walk_to_the_mission_end(&mut w, true);
 }
 
 /// The roof cut-scene's channel tail, alone: the disc's writer of objective 10's ch 0x59, the
@@ -583,3 +672,4 @@ fn shoot_at(w: &mut Walker, target: [f32; 3], range: f32, max_ticks: u32, label:
 
 /// XZ distance for the return-chain checks.
 fn dxz_w(a: [f32; 3], b: [f32; 3]) -> f32 { ((a[0] - b[0]).powi(2) + (a[2] - b[2]).powi(2)).sqrt() }
+
