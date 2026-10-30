@@ -744,7 +744,7 @@ fn the_spawn_height_matches_the_game_snapshot() {
 /// stuck panic) — the climb needs the game's per-tick push/step shape through the doorway (the
 /// live check in the report).
 #[test]
-#[ignore = "the through-line route (landed here from settle-5's decode) now CROSSES the doorway at the game's rate with the landed settle-5 radial tail — 155 ticks to (-9.27,1.12,16.60) [L 2026-10-26, reproduced this round] — but the y pin still reads 1.1201 vs the settled 1.1285 [L 2026-10-26]: the hall glide's +0.0256 climb settle (the feet-band walked-dy growth, band-settle finding 1) is the separate mechanism still unported"]
+#[ignore = "the through-line crosses the doorway on every measured tree, but the settled y never reaches the game's 1.1285 [L 2026-10-26]: 1.1201 on the settle-5 radial-tail tree, 1.0905 on master (the press-y is 0.0000 there — every doorway contact pushes horizontally, NF_CAPS_LOG trace this round). The walked-dy growth is NOT any statically-pinned writer: the walk move is yaw-only (Player_Move 0x191dd0 writes +0x10/+0x18, the walk matrix RotMatrix(BL+0x30) reads the pitch lane ZEROED at Player_Update 0x193600:134 — the look writes +0x40/+0x8a8 [M]); the SP body anim set is the static 2-frame stub (set 0x2b91b0 = all 0x06000a00 → seq 0x84f, 2 frames [D ACTION.ELF @0x2b91b0 + the script dump]) so no anim bob rides the walk; gravity is band-gated off [M 0x194df0:104]. The remaining writer is the radial tail's ref (HITTEST+0x50 = the lifetime DeltaP accumulator [M 0x1ebaa8:353-373], _DeltaP zeroed per Intersect_CylGeom call 0x109da0:136): its live walked value — which decides the press's y — is the open live check (the 2026-10-26 frames: climb +0.004/tick to 1.1402 @f5, peak 1.1465, band-catch descent to the settled 1.1285). Level-0a-hall-glide-settle round: the mechanism stays unported, the note re-pinned"]
 fn the_west_hall_glide_height_matches_the_game() {
     let mut w = load_carry(None);
     // Wait out the SS door sweep (the same guard the main walk runs).
@@ -772,8 +772,10 @@ fn the_west_hall_glide_height_matches_the_game() {
     // probe's frames 21/28/36 and the post-release rest all read 1.1285; the old 1.1147 came
     // from a spawn-height walk and the driver pins the SETTLED values, not the first sample),
     // z 16.8295 (the slide north around the jamb — the game is NOT stopped at x -8.304 [L]),
-    // passed x -9.0106 at frame 36. The port cannot reproduce the slide yet (the radial-dir
-    // experiments, see docs/reports/level-0a-band-settle-2.md) — the test stays ignored.
+    // passed x -9.0106 at frame 36. The slide itself crosses on master too (230 ticks to
+    // (-9.93, 17.08), the [L] rate); the settled y stays short (the ignore note carries the
+    // ruled-out writers and the open ref live check, level-0a-hall-glide-settle) — the test
+    // stays ignored.
     assert!((p[1] - 1.1285).abs() <= 0.003,
         "the west hall glide must read the game's settled 1.1285 [L 2026-10-26], got {:.4} at ({:.3},{:.3})",
         p[1], p[0], p[2]);
@@ -787,8 +789,21 @@ fn the_west_hall_glide_height_matches_the_game() {
 /// [L the -2 per-tick probe]) unhooks the band at its entry height. The spawn settle is now ported
 /// (1.0891 rest) but the hall glide's +0.0256 climb settle is not (the glide sister's note), so the
 /// corner still enters 0.02 under the game's 1.1147 line.
+///
+/// 2026-10-30 session: the mechanism is the game's MOVE CLIP, not a push. With NF_WALK_CLIP=1 the
+/// corner CROSSES at +76 ticks, arrived (−17.56, 1.09, 2.83) — the walk-speed crossing, no kill
+/// switch [L measured this session; the game's ~60 frames]. The exit-y pin still reads 1.0891 vs
+/// the settled 1.1159 — the 0.0268 gap is the west-hall leg's unported +0.0256 climb settle (the
+/// glide sister's mechanism), not the corner. Decompile side: the cyl push tail v = p −
+/// HITTEST+0x50 [M 0x109da0:419-457] cannot sustain the walk's wall response (p is spine-clamped,
+/// so for a vertical walk spine any on-spine ref gives a purely vertical v whose dot(v,n) > 0 gate
+/// kills vertical-wall pushes; an ELF-wide store sweep finds no BLData+0x790/0x7a0 writer at all
+/// beyond the add-back 0x1ebaa8:353-373), and the clip's spine-plane rest matches the game's
+/// ~0.011-inside-the-plane glide rest [L fresh boot]. The flip is not landed: under the flag
+/// the_pick_ref_accumulator_tracks_the_game_ref, walk_office_floor_qworm_keyboard_hatch and
+/// walk_office_floor_to_the_security_keyboard go red (master: 7 passed / 0 failed / 2 ignored).
 #[test]
-#[ignore = "the corner now CROSSES with the below-B kill (NF_WALK_KILL=1) at 870 ticks vs the game's ~60 frames [L 2026-10-26], and the crossing still rides the spine-dir pushes (the radial-dir ports measured-and-reverted — see the report) — the exit-y pin is re-settled to 1.1159 [L 2026-10-26]; un-ignore once the crossing is walk-speed"]
+#[ignore = "the crossing mechanism is found: the game's move-CLIP — with NF_WALK_CLIP=1 the corner CROSSES at +76 ticks vs the game's ~60 frames [L measured 2026-10-30], no kill switch; but the walk-model flip is not landed (under the flag the_pick_ref_accumulator_tracks_the_game_ref, walk_office_floor_qworm_keyboard_hatch and walk_office_floor_to_the_security_keyboard go red) and the exit-y reads 1.0891 vs the settled 1.1159 [L 2026-10-26] — the 0.0268 gap is the west-hall leg's unported +0.0256 climb settle (the glide sister's mechanism); un-ignore once the clip is the walk default and the settle lands"]
 fn the_corner_crosses_like_the_game() {
     let mut w = load_carry(None);
     for _ in 0..150 {
