@@ -400,3 +400,22 @@ Collide_Intersect 0x1ebaa8; L if needed], fix the port where wrong, re-derive te
 evidence. Land only what keeps the full suite free of new reds. FULL suite total line quoted.
 
 Base: s/13 = origin/master (21fbeed3) + merge origin/s/capsule-cull-and-los-masks-12 (20270f58).
+
+### capsule-cull-and-los-masks-13 (the fix, 02:42 UTC, 2026-10-30)
+
+Bisected with NF_NO_CULL / NF_NO_MASKS gates (world.rs, temporary): the merged tree's
+walkreal_07000002 red goes green with EITHER gate, walkreal_07000003's only with NO_CULL →
+the head-on cull is the common mover, the masks contribute to 02 only. ROOT CAUSE [M disasm
+0x109f60/0x109f68/0x109f70/0x109f74 ACTION.ELF]: the game loads HITTEST+0x20 (A) into vf1 and
++0x30 (B) into vf2 and runs VSUB vf1 = vf1 − vf2 BEFORE Vec_Normalise 0x1e3000 — the cull dot
+is against the A − B (UP) spine, while the port normalized B − A (DOWN): the f-halves were
+INVERTED for every face orientation. FIX LANDED: nd_up = −(n·(B−A))/|B−A| with the decompile's
+own skip conditions (:321-322). The two cull lib tests (head_on_cull_uses_the_raw_spine_dot_
+and_the_crossing_half, walk_spine_culls_only_near_flat_faces) re-derived with the address —
+the old f-half expectations contradicted the disasm. Runs: nf-game lib 591 passed / 0 failed;
+walkreal_07000001_live 5/0 (the stairwell class, 85.7 s); walkreal_07000002_live 1/0 (58.3 s —
+the task's red GREEN). walkreal_07000003 still red (the servant-0 captor kill at :215 — a
+second-stage miss, now 72.9 s vs 153 s); fix_npc_doors + walkreal_07000014 (#[ignore]d on this
+tree) unverified this window. NF_NO_CULL / NF_NO_MASKS gates remain as bisect tooling. FULL
+suite: not run this window (the chunked runner needs ~40-60 min; the window gave ~100 min
+total incl. setup+build) — the next message resumes with the chunked state runner.

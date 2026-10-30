@@ -423,7 +423,16 @@ fn capsule_tri_contact(t: &[V3; 3], mat: u8, a: &mut V3, b: &mut V3, r: f32, gro
         let ab_len = dot(ab, ab).sqrt();
         if ab_len > 1e-6 {
             let nd = denom / ab_len;
-            if (nd > 0.999 && f > 0.5) || (nd < -0.999 && f < 0.5) { return false; }
+            // The game's cull dot is against the normalized spine A − B: the disasm loads
+            // +0x20 (A) into vf1 and +0x30 (B) into vf2 and runs VSUB vf1 = vf1 − vf2 before
+            // Vec_Normalise 0x1e3000 [M disasm 0x109f60/0x109f68/0x109f70/0x109f74], so nd
+            // here is negated vs the earlier B − A dot — the decompile's own skip conditions
+            // (:321-322) are applied to the A − B dot. (The old B − A reading inverted the
+            // f-halves and was the bisected mover of the walkreal_07000002/07000003 reds
+            // [L this window's NF_NO_CULL/NF_CULL_UP runs].)
+            let no_cull = std::env::var("NF_NO_CULL").is_ok();
+            let nd_up = -nd;
+            if !no_cull && ((nd_up > 0.999 && f > 0.5) || (nd_up < -0.999 && f < 0.5)) { return false; }
         }
     }
     let mut p = if denom.abs() > 0.0002 {
@@ -2115,8 +2124,12 @@ impl CollisionWorld {
         let d = sub(b, a);
         let dynamic = self.dynamic.read().unwrap();
         let skip_cage = mask & 0x20 != 0;
+        // TEMP bisect gate (capsule-cull-and-los-masks-13): NF_NO_MASKS=1 disables the per-caller
+        // drop filters to bisect which family change moves the four walkreal reds.
+        let no_masks = std::env::var("NF_NO_MASKS").is_ok();
         let (drop_node, drop_surface, drop_de, drop_10) =
-            (mask & 0x8 != 0, mask & 0x800 != 0, mask & 0x1 != 0, mask & 0x2 != 0);
+            (!no_masks && mask & 0x8 != 0, !no_masks && mask & 0x800 != 0,
+             !no_masks && mask & 0x1 != 0, !no_masks && mask & 0x2 != 0);
         let sets: [Option<&Geo>; 3] = [Some(&self.stat), (!skip_cage).then_some(&self.missile), Some(&dynamic.geo)];
         for g in sets.into_iter().flatten() {
             for o in along(g, a, b) {
@@ -2153,8 +2166,10 @@ impl CollisionWorld {
         let d = sub(b, a);
         let dynamic = self.dynamic.read().unwrap();
         let skip_cage = mask & 0x20 != 0;
+        let no_masks = std::env::var("NF_NO_MASKS").is_ok();
         let (drop_node, drop_surface, drop_de, drop_10) =
-            (mask & 0x8 != 0, mask & 0x800 != 0, mask & 0x1 != 0, mask & 0x2 != 0);
+            (!no_masks && mask & 0x8 != 0, !no_masks && mask & 0x800 != 0,
+             !no_masks && mask & 0x1 != 0, !no_masks && mask & 0x2 != 0);
         let sets: [Option<&Geo>; 3] = [Some(&self.stat), (!skip_cage).then_some(&self.missile), Some(&dynamic.geo)];
         let mut best = None::<f32>;
         for g in sets.into_iter().flatten() {
@@ -2522,15 +2537,16 @@ mod tests {
     }
 
     /// capsule-headon-cull-redo: the head-on cull is the game's exact rule [M Intersect_CylGeom
-    /// 0x109da0:302-322] — |n·d̂| > 0.999 on the NORMALIZED spine [M the Vec_Normalise at
-    /// 0x109f74 before the tri loop; the raw-dot reading is refuted by the stairwell
-    /// (exit_aim_01_live) — see the capsule_tri_contact note], skip on the crossing-fraction
-    /// half. This test feeds the 1.31-long CLIMB spine directly. A spine crossing an up-facing
-    /// floor near its TOP end (f < 0.5) passes through — the jump-through case the old
-    /// top-end-side rule also passed; the same face crossed near the BOTTOM end (f > 0.5) is
-    /// solid. The old stand-in keyed the cull on |n·y| > 0.7, one band WIDER (0.70-0.763) and
-    /// side-keyed on the top end's position: a ~43° slope face (n·y = 0.73) above the capsule was
-    /// skipped outright; the game's |n·d̂| = 0.73 < 0.999 does not cull it — the capsule pushes.
+    /// 0x109da0:302-322] — |n·d̂| > 0.999 on the NORMALIZED spine, and the spine the game
+    /// normalizes is A − B = param_1[2] − param_1[3] [M disasm 0x109f70: VSUB vf1 = vf1(=+0x20)
+    /// − vf2(=+0x30) before the Vec_Normalise 0x1e3000 call at 0x109f74] — the TOP minus the
+    /// BOTTOM, i.e. the cull dot points UP. Skip on the crossing-fraction half with the
+    /// decompile's own conditions (:321-322). This test feeds the 1.31-long CLIMB spine
+    /// directly. With the UP dot: an up-facing floor crossed near the BOTTOM end (f > 0.5) is
+    /// skipped — the game's underfoot support comes from the feet ray, not this query; the same
+    /// face crossed near the TOP end (f < 0.5) is solid (the jump-through case BLOCKS — the
+    /// f-halves are the inverse of the old B − A reading, which was the bisected mover of the
+    /// walkreal_07000002/07000003 reds [L this window's gate runs]).
     #[test]
     fn head_on_cull_uses_the_raw_spine_dot_and_the_crossing_half() {
         // Up-facing floor at y = 0 (wound so cross(e1,e2) = +y), 20×20.
@@ -2540,12 +2556,15 @@ mod tests {
         ];
         let w = world(floor);
         // The climb spine: 1.31 long, vertical. Crossing at f = a_y / 1.31.
-        // f = 0.4 (crossing near the top): the game's cull skips — pass-through from below.
+        // f = 0.4 (crossing near the top): the game's cull does NOT skip — the face is solid
+        // [M the A − B normalization at 0x109f70 flips the halves vs the old B − A reading].
         let (push, _) = w.capsule_push([0.0, 0.524, 0.0], [0.0, 0.524 - 1.31, 0.0], 0.55, false, [1.0e9, 1.0e9, 1.0e9]);
-        assert_eq!(push, [0.0; 3], "f=0.4: the up-floor is jumped through from below (push {push:?})");
-        // Sister (can fail): f = 0.6 (crossing near the bottom end): solid — pushed up onto the floor.
+        assert!(push[1] > 0.3, "f=0.4: the up-floor crossed in the spine's top half is solid (push {push:?})");
+        // Sister: f = 0.6 (crossing near the bottom end): the game's cull SKIPS it — the feet
+        // ray carries the underfoot support [M 0x109f70; the 07000002/07000003 reds went green
+        // with this reading [L this window's gate runs]].
         let (push, _) = w.capsule_push([0.0, 0.786, 0.0], [0.0, 0.786 - 1.31, 0.0], 0.55, false, [1.0e9, 1.0e9, 1.0e9]);
-        assert!(push[1] > 0.3, "f=0.6: the up-floor is solid underfoot (push {push:?})");
+        assert_eq!(push, [0.0; 3], "f=0.6: the up-floor crossed in the spine's bottom half is skipped (push {push:?})");
         // The 0.70-0.763 band the old stand-in over-culled: an UP-facing face with n_y = +0.73
         // (≈43°) hanging above the capsule. The game's raw dot 0.73·1.31 = 0.956 < 0.999 does not
         // cull it — the capsule below (on the face's back side) is pushed down off the underside.
@@ -2564,23 +2583,24 @@ mod tests {
     }
 
     /// capsule-headon-cull-redo: the walk spine (0.7597 [L ee_start_05 BL 0x16cf0f0]) culls ONLY
-    /// within the ~2.6° horizontal cone (|n·ŷ| > 0.999 on the normalized spine) — a 43° slope
-    /// face above the capsule (n·y = 0.73, the old stand-in's 0.70-0.763 over-cull band) is
-    /// TESTED and pushes; a FLAT floor crossed in the spine's TOP half (f < 0.5) IS culled — the
-    /// game's jump-through, which the old top-end-side rule refused (a above the plane → push).
+    /// within the ~2.6° horizontal cone (|n·d̂| > 0.999 on the normalized A − B spine [M disasm
+    /// 0x109f70]) — a 43° slope face above the capsule (n·y = 0.73) is TESTED and pushes; a FLAT
+    /// floor crossed in the spine's BOTTOM half (f > 0.5) IS culled [M the A − B direction
+    /// flips the halves vs the old B − A reading] — the game's underfoot support is the feet
+    /// ray's, not this query's; the same floor crossed in the TOP half (f < 0.5) is solid.
     #[test]
     fn walk_spine_culls_only_near_flat_faces() {
-        // Flat floor crossed at f = 0.4 of the walk spine: culled — pass-through from below.
+        // Flat floor crossed at f = 0.4 of the walk spine: NOT culled — solid.
         let floor = vec![
             [[-10.0, 0.0, -10.0], [-10.0, 0.0, 10.0], [10.0, 0.0, 10.0]],
             [[-10.0, 0.0, -10.0], [10.0, 0.0, 10.0], [10.0, 0.0, -10.0]],
         ];
         let w = world(floor);
         let (push, _) = w.capsule_push([0.0, 0.30388, 0.0], [0.0, 0.30388 - 0.7597, 0.0], 0.55, false, [1.0e9, 1.0e9, 1.0e9]);
-        assert_eq!(push, [0.0; 3], "walk spine, flat floor at f=0.4: the game's cull skips it (push {push:?})");
-        // Sister (can fail): the same floor crossed in the BOTTOM half (f = 0.6): solid.
+        assert!(push[1] > 0.3, "walk spine, flat floor at f=0.4: solid [M 0x109f70 the A − B dot] (push {push:?})");
+        // Sister: the same floor crossed in the BOTTOM half (f = 0.6): the game's cull skips it.
         let (push, _) = w.capsule_push([0.0, 0.4558, 0.0], [0.0, 0.4558 - 0.7597, 0.0], 0.55, false, [1.0e9, 1.0e9, 1.0e9]);
-        assert!(push[1] > 0.3, "walk spine, flat floor at f=0.6: solid underfoot (push {push:?})");
+        assert_eq!(push, [0.0; 3], "walk spine, flat floor at f=0.6: the game's cull skips it [M 0x109f70] (push {push:?})");
         // The 43° slope above the capsule: n·d̂ = 0.73 < 0.999 — NOT culled (the old |n·y| > 0.7
         // rule skipped it outright); the capsule below is pushed off the underside.
         let slope = vec![[
