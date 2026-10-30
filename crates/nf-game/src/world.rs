@@ -430,8 +430,16 @@ fn capsule_tri_contact(t: &[V3; 3], mat: u8, a: &mut V3, b: &mut V3, r: f32, gro
             // (:321-322) are applied to the A − B dot. (The old B − A reading inverted the
             // f-halves and was the bisected mover of the walkreal_07000002/07000003 reds
             // [L this window's NF_NO_CULL/NF_CULL_UP runs].)
+            // The -15 measurements make this contact copy the OPEN divergence: with it ON
+            // (UP, the f = clamp(frac, 0, 1) clamp matching the disasm's constant f20 = 1.0 /
+            // f23 = 0.0 pair at 0x10a028/0x10a01c — never updated within the query [M disasm
+            // grep]) walkreal_01/02 are green but 03/08 stay red; with it OFF 03/08 go green
+            // but walkreal_01's stairwell class breaks 2/3 [L this window's runs]. NF_NO_CULL
+            // stays as the live bisect tool; the structural question (the game's ONE cylinder
+            // query vs the port's push/clip split — which arm the game's cull really serves)
+            // is the report's next-window item.
             let no_cull = std::env::var("NF_NO_CULL").is_ok();
-            let nd_up = -nd;
+            let nd_up = if std::env::var("NF_CULL_UP").is_ok() { -nd } else { nd };
             if !no_cull && ((nd_up > 0.999 && f > 0.5) || (nd_up < -0.999 && f < 0.5)) { return false; }
         }
     }
@@ -616,7 +624,12 @@ fn capsule_tri_clip(t: &[V3; 3], mat: u8, a: &mut V3, b: &mut V3, r: f32, grow: 
         let ab_len = dot(ab, ab).sqrt();
         if ab_len > 1e-6 {
             let nd = denom / ab_len;
-            // The game's own head-on pairing [M 0x109da0:321-322].
+            // The game's own head-on pairing [M 0x109da0:321-322]. The clip's copy keeps the
+            // B − A (DOWN) dot: the -15 UP-flip experiment broke master's new
+            // walkreal_07000014 tests (the pit-band approach wedges at x 42.3 — [L the -15
+            // runs: contact UP + clip UP = 4 red, contact OFF + clip UP = 3 red, the clip
+            // flipped back below]) while measuring neutral on 01/02/03. The two copies'
+            // direction disagreement stands as the documented open divergence.
             if (nd > 0.999 && f > 0.5) || (nd < -0.999 && f < 0.5) { return false; }
         }
     }
@@ -2124,12 +2137,10 @@ impl CollisionWorld {
         let d = sub(b, a);
         let dynamic = self.dynamic.read().unwrap();
         let skip_cage = mask & 0x20 != 0;
-        // TEMP bisect gate (capsule-cull-and-los-masks-13): NF_NO_MASKS=1 disables the per-caller
-        // drop filters to bisect which family change moves the four walkreal reds.
-        let no_masks = std::env::var("NF_NO_MASKS").is_ok();
+        // The per-caller drop filters, unconditional (the -13/-14 bisect gates removed on
+        // landing: capsule-cull-and-los-masks-15).
         let (drop_node, drop_surface, drop_de, drop_10) =
-            (!no_masks && mask & 0x8 != 0, !no_masks && mask & 0x800 != 0,
-             !no_masks && mask & 0x1 != 0, !no_masks && mask & 0x2 != 0);
+            (mask & 0x8 != 0, mask & 0x800 != 0, mask & 0x1 != 0, mask & 0x2 != 0);
         let sets: [Option<&Geo>; 3] = [Some(&self.stat), (!skip_cage).then_some(&self.missile), Some(&dynamic.geo)];
         for g in sets.into_iter().flatten() {
             for o in along(g, a, b) {
@@ -2166,10 +2177,8 @@ impl CollisionWorld {
         let d = sub(b, a);
         let dynamic = self.dynamic.read().unwrap();
         let skip_cage = mask & 0x20 != 0;
-        let no_masks = std::env::var("NF_NO_MASKS").is_ok();
         let (drop_node, drop_surface, drop_de, drop_10) =
-            (!no_masks && mask & 0x8 != 0, !no_masks && mask & 0x800 != 0,
-             !no_masks && mask & 0x1 != 0, !no_masks && mask & 0x2 != 0);
+            (mask & 0x8 != 0, mask & 0x800 != 0, mask & 0x1 != 0, mask & 0x2 != 0);
         let sets: [Option<&Geo>; 3] = [Some(&self.stat), (!skip_cage).then_some(&self.missile), Some(&dynamic.geo)];
         let mut best = None::<f32>;
         for g in sets.into_iter().flatten() {

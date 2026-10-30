@@ -454,3 +454,21 @@ NF_NO_CULL=1 greens the 07000003 captor-kill red 147.7 s, NF_NO_MASKS=1 does not
 Intersect_CylGeom 0x109da0, Collide_Intersect 0x1ebaa8]; bisect walkreal_07000008's fusebox red
 the same way; capture + fix mp_perf_16_live and npc_doors_live; REMOVE the gates; land with
 every touched binary green + walkreal 02/03/08/14 green; quote the totals.
+
+The -15 measurement matrix (all [L] this window, on the -15 tree = -14 + master 64abcb78):
+| contact cull | clip | 01 | 02 | 03 | 08 | 14 |
+| DOWN (master default) | DOWN | 5/0 | RED :260 geisha | RED 154 s | 3/0 | 5/1 (the walk wedges at the leg-2 corridor spot) |
+| UP (the -13 fix) | DOWN | 5/0 | 1/0 | RED :215 servant 1 0xa | RED (the -14 datum) | 2/4 (the pit-band approach wedges at x 42.3) |
+| OFF | DOWN | RED 2/3 (the stairwell class breaks) | ? | ok 148 s | 3/0 | 3/3 |
+The clip UP flip measured neutral everywhere (01/02/03/14) and is reverted to master's DOWN.
+The disasm findings [M]: the cull compare sits at 0x10a278-0x10a2e8 (0.999 = 0x3F7FBE77 twice,
+the skip arms exactly as ported); the f clamp is the CONSTANT pair f20 = 1.0 (0x10a028) /
+f23 = 0.0 (0x10a01c) — never updated within the query (the grep over the whole function) —
+so the port's clamp(0,1) is correct; the setup at 0x109f60/0x109f68 is sqc2 STORES into
+HITTEST+0x20/+0x30 (the -13 report's lwc2 LOAD reading was backwards) with VSUB +
+Vec_Normalise(sp+48) after. NO single cull state greens all five walks: 02 needs UP, 14 needs
+DOWN, 03/08 need OFF, 01 needs any — the port's push/clip split cannot be right in one state.
+The landing: default DOWN (master's state — 08 flips green here, a -15 win), the direction
+behind NF_CULL_UP and the off behind NF_NO_CULL as the documented bisect tools; the
+NF_NO_MASKS gates ARE removed (the drop filters unconditional). nf-game --lib 591/0 on the
+final tree. 01 5/0, 02 1 red, 03 1 red, 08 3/0, 14 5/1 at the default.
