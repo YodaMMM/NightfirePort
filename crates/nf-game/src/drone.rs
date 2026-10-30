@@ -13278,13 +13278,62 @@ fn segment_hits_sphere(a: V3, b: V3, c: V3, r: f32) -> bool {
             let a = crate::mp::combat::blast_falloff(pos, radius, damage, c, r);
             if a > 0.0 { self.site_blast_hits.push((a, owner)); }
         }
+        let destroys: Vec<(usize, V3, f32, bool, u16)> = self.props.destroy.iter().enumerate()
+            .filter(|(_, x)| !x.dead)
+            .map(|(i, x)| {
+                let ext = [(x.hi[0] - x.lo[0]) / 2.0, (x.hi[1] - x.lo[1]) / 2.0, (x.hi[2] - x.lo[2]) / 2.0];
+                (i, [(x.lo[0] + x.hi[0]) / 2.0, (x.lo[1] + x.hi[1]) / 2.0, (x.lo[2] + x.hi[2]) / 2.0],
+                 (ext[0] * ext[0] + ext[1] * ext[1] + ext[2] * ext[2]).sqrt(), false, x.mask)
+            }).collect();
+        let breaks_t: Vec<(usize, V3, f32)> = self.breaks.list.iter().enumerate()
+            .filter(|(_, x)| !x.dead)
+            .map(|(i, x)| {
+                let ext = [(x.hi[0] - x.lo[0]) / 2.0, (x.hi[1] - x.lo[1]) / 2.0, (x.hi[2] - x.lo[2]) / 2.0];
+                (i, [(x.lo[0] + x.hi[0]) / 2.0, (x.lo[1] + x.hi[1]) / 2.0, (x.lo[2] + x.hi[2]) / 2.0],
+                 (ext[0] * ext[0] + ext[1] * ext[1] + ext[2] * ext[2]).sqrt())
+            }).collect();
+        // level-06-interactables: the chain sweep — the same live-list candidates
+        // `run_beam_explodes` passes. `Explode_Propagate`'s case 0x21 smashes every reached
+        // destroyable whose falloff ≥ 1.0 and whose tag+0x14 mask opens the 0x20 bit [M
+        // 0x17c518:168-176 — the gates live in `propagate`]: the oil barrels' p4 0xf8 (mask
+        // 0xFF07) opens it, so a barrel's blast takes its 0.82 m twin [D 07000006 #321/#322
+        // params; M Destroy_Create 0x12c318:41-47]. The smash queues the twin's own blast
+        // (script by the type byte), which drains next tick — the game's frame order (the
+        // explosion object's contact runs on its first update [M Explode_CollisionHandler
+        // 0x17cde0's one-shot latch]).
         let hits = crate::explode::propagate(pos, radius, damage, owner,
-            &crate::explode::Targets { drones: &drones, player: player_pos, breaks: &[], destroys: &[],
+            &crate::explode::Targets { drones: &drones, player: player_pos, breaks: &breaks_t,
+                destroys: &destroys,
                 // copter-hitdata-damage: the blast sweeps the copter's parts — Explode_Propagate's
                 // case 0 adds the falloff straight into rec+0x64 and rec+0x6c, no Bits scaling,
                 // no filter [M 0x17c518:86-105]. The parts are the class-0 script entities, so
                 // the sweep is over the SP part targets' spheres.
                 copters: &copter_parts });
+        // case 0x21 → `Destroy_Smash` [M 0x17c518:141-177 → 0x12bb60]: the channel write is the
+        // smash's, the twin's blast queued like the beam path's (script by the type byte, owner
+        // the blast's owner).
+        for i in hits.destroys {
+            if let Some((c, r, dmg, kind)) = self.props.smash(i, &mut self.channels, frame) {
+                let script = match kind { 1 => 0x0600_0027, 2 => 0x0600_004f, _ => 0x0600_0052 };
+                self.pending_blasts.push((c, r, dmg, owner, 0, script, r, 0));
+            }
+        }
+        // case 0x20 → `Break_ApplyDamage` [M 0x17c518:163-167 — hitdata+8 = the amount; the same
+        // subtract `Break_Update` 0x12bfd8:37 makes], the kill the bullet walk's.
+        for (i, dmg) in hits.breaks {
+            self.breaks.list[i].health -= dmg;
+            if self.breaks.list[i].health < 0.0 {
+                if let Some(k) = self.breaks.kill(i, pos, pos, &mut self.rng) {
+                    self.break_kills.push((k.placement, k.kind, k.sound));
+                    let id = u32::from(k.sound);
+                    self.audio.play3d(id, k.pos, None);
+                    if let Some(t) = d.sfx {
+                        let e = t.get(id);
+                        if !e.looped { self.sounds.push(Sound { id, pos: k.pos, inner: e.inner, outer: e.outer, weight: e.weight }); }
+                    }
+                }
+            }
+        }
         // Bond: `Player_Hurt` (the difficulty factor is applied in `explode_propagate`).
         if let Some(ph) = hits.player.filter(|_| !self.net_no_self_hurt) {
             let before = self.health.health;
