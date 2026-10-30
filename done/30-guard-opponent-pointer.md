@@ -24,3 +24,8 @@ claimed-by: sandbox3 at 2026-10-30T09:17Z
 ---
 ## Report (done, 2026-10-30T10:23Z)
 
+
+---
+## Report from the worker (done, 2026-10-30T10:23Z)
+
+Closed by the driver: the report is on `s/guard-opponent-pointer` (docs/reports/guard-opponent-pointer.md); the worker didn't run finish.sh.
