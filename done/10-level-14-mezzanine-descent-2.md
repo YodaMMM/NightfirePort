@@ -20,3 +20,8 @@ say so in the report. Never weaken a decompile-backed test to make code pass.
 
 ---
 claimed-by: sandbox1 at 2026-10-30T03:37Z
+
+---
+## Report (done, 2026-10-30T04:52Z)
+
+Closed by the driver: the report is on `s/level-14-mezzanine-descent-2` (docs/reports/level-14-mezzanine-descent-2.md); the worker didn't run finish.sh.
