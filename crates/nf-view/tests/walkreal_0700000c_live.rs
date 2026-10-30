@@ -430,21 +430,41 @@ fn walk_the_whole_mission_from_the_start_to_the_0d_handoff() {
     };
     assert!(grabbed, "walking east at the arc's end never grabbed wire #283 (the sphere HIT [D probe blk])");
     // Ride to B (35.89, −209.44): strafe +1 (mode 7 faces wire.yaw + 3π/2 = north-east toward B)
-    // [M Player_Wire]; drop inside 0.9 of B onto the SE corner.
+    // [M Player_Wire]. The ride must run to the wire's END before the jump: the corner floor's
+    // west edge is x ≈ 35.8 (10.89 step at z −210..−209.8, the 11.06..11.09 corner east of it
+    // [D scratch probe rays; the corner 11.09..11.17 at x ≤ 40.5, z −210..−208 D probe door2]),
+    // so the old `jump at d < 0.9` dropped Bond at x ≈ 35.15 — 0.65 WEST of the edge, over the
+    // void (no face y 15..8 under (35.15, −209.95) [D rays]) and he fell to the yard. The
+    // strafe zero rule parks the idle at d_B ≈ 0.5 [M 0x1977c0's `d_b <= 0.5`], but the playing
+    // mode-7 move anim finishes its root motion and overshoots to d_B ≈ 1.1 PAST B — x ≈ 36.7,
+    // over the 11.06 corner floor. Jump there (the ride's natural stop, d no longer shrinking).
     let dropped = {
         let mut dropped = false;
-        for _ in 0..2400u32 {
+        let mut best_d = f32::MAX;
+        let mut still = 0u32;
+        for _t in 0..2400u32 {
             let sim = w.scene.sim.as_ref().unwrap();
             if sim.bond.substate != nf_game::player::SS_WIRE { dropped = true; break; }
             let d = ((sim.bond.pos[0] - 35.89).powi(2) + (sim.bond.pos[2] + 209.44).powi(2)).sqrt();
-            let input = nf_game::player::Input { strafe: 1.0, jump: d < 0.9, ..Default::default() };
+            // Hold the jump one tick past the stop so the exit reads the overshoot pose.
+            let at_stop = still >= 90;
+            if d < best_d - 1e-4 { best_d = d; still = 0; } else { still += 1; }
+            let input = nf_game::player::Input { strafe: 1.0, jump: at_stop, ..Default::default() };
             w.scene.sim.as_mut().unwrap().step_bond(input, false, false, false);
             w.total_ticks += 1;
         }
         dropped
     };
-    for _ in 0..200 {
-        if w.scene.sim.as_ref().unwrap().bond.grounded { break; }
+    // Settle through the REAL fall: the wire ride leaves `grounded` stale-true on the exit tick
+    // (wire_tick zeroes vel and returns; the flag clears the next tick [M wire_tick 0x197758's
+    // exit]), so the old `if grounded break` snapped the assert onto the HANG pose — the merge
+    // RED's [35.15, 13.55, −209.95] is exactly the hang root (wire y 14.44 − 1.02 [M hang
+    // 1.0207]). Wait for air, then ground.
+    let mut saw_air = false;
+    for _ in 0..300 {
+        let sim = w.scene.sim.as_ref().unwrap();
+        if sim.bond.grounded && saw_air { break; }
+        if !sim.bond.grounded { saw_air = true; }
         w.scene.sim.as_mut().unwrap().step_bond(nf_game::player::Input::default(), false, false, false);
         w.total_ticks += 1;
     }
