@@ -6607,6 +6607,11 @@ impl Drone {
     /// `Drone_SM_RouteMsg` 0x172128 is its obj-level wrapper (`Drone_DCVfromOBJ` 0x13a0a0 resolves
     /// the object first); the port's obj half is `Drones::tick`.
     pub fn send(&mut self, d: &Data, rng: &mut Rng, frame: u32, m: u8) {
+        // TEMP trace (level-14 door guards): every msg for the spawner clones / walkers.
+        if std::env::var_os("NF_MSGTRACE").is_some() && self.index >= 23 && self.index <= 25 {
+            eprintln!("[msgtrace] t{frame} guard {} st {:#x} msg {:#x} alert {:.3} share {:.3} bits {:#x} pend {:#x}",
+                self.index, self.state, m, self.alert, self.sound_share, self.alert_bits, self.alert_pending);
+        }
         // The unaware-state ENTER arms set `+0x4F8 & 0x2000` (may-notice) [M each DSTATE case 1 —
         // state::UNAWARE]; a direct ENTER to the current state (the first enter, Drones::tick's
         // `started` arm) reaches here without a transition. The port folds the arms' set into the
