@@ -320,13 +320,17 @@ fn the_east_duct_route_reaches_the_stairwell_slot() {
 // the game still carries Bond in [D walk-4 walls/nav]) and Script_Free's Player_Enable lands him
 // inside the facility at the body's event-time root. [S] unverified game-side (the live check in
 // docs/reports/level-14-vent-drop.md).
-// STILL #[ignore]: the hand-back is green but leg 2 wedges at the facility's west double door
-// (-52.2, 1.2, 40.1) (kind 2, state 0x2, pos01 0.00, ch_open 0, ch_lock 0x85, lock_flag 0,
-// approach 0 — two records at the same spot): the walker's "opening door" interaction does not
-// move it, Bond stands (-52.79, 1.14, 39.33) with the target (-49.0, 1.0, 38.4) 3.90 away, and
-// walk_to hits the 6000-tick cap. Whether the game opens it from a switch channel, the approach
-// side, or an interaction the port lacks is the next session's first question (the #381 band x
-// −51.97…−46.39 [D] sits just east of it).
+// NOT ignored — the "STILL #[ignore]" note below was STALE (fixed level-14-walk-to-the-level-end):
+// this helper is no test and carries no #[ignore]; both tests that share it
+// (the_vent_drop_hands_bond_into_the_facility, walk_the_infiltration_to_the_delta_exit) are
+// un-ignored and green. The old leg-2 wedge at the facility's west double door (−52.2, 1.2, 40.1;
+// two records, ch_lock 0x85) was the walk's own wrong premise, not a port gap: Door_Slide_11A/B
+// (plc 151/152, ch_lock 0x85 [D placements 151/152]) is SEALED until the sabotage cascade's death
+// channel 0x85 unlocks it (auto-open on the rising edge [M 0x1363c8:88-107]), and the game reaches
+// the west wing its own way — the SOUTH loop (the nav web's west corridor, which never crosses the
+// 0x85 plane [D nav path 0]) to the Kiko touch #381, whose cut-scene 0x0600062F carries Bond west
+// past the closed leaves; the 0x85 doorway is crossed only AFTER the cascade unlocks it
+// (the delta-exit walk's legs 2-4).
 /// Legs 1a..1f walked on real input (the spawn → the crossing → the trench/corridor/stairwell →
 /// the shaft Q-Claw reel → the vent lane → the mezzanine connector), then the #301 touch → the SP
 /// #276 vent cut-scene (0x06000833) → the ch 0x47 wait → the disabled tail → the hand-back assert.
@@ -654,6 +658,14 @@ fn the_vent_drop_hands_bond_into_the_facility() {
 /// ch_lock 0 [D params]) sits at the landing's south-west corner; the walked route passes west of
 /// its wall run (the leaf x 32.00..32.65 + the fusebox column #833 x 31.93..32.65 [D]) — the leaf
 /// plane is never crossed (the role question is the report's live check).
+///
+/// Extended (level-14-walk-to-the-level-end): past the delta exit the walk now drains the exit
+/// hold the game's own way (the 300-frame fade [M 0x1b2318:90-92 + 0x1c98c8:173-189]) and serves
+/// the NEXT LEVEL's load — `warm_exit_save` (Trigger_Activate's `Player_RamSave` [M 0x1b2318:97-116])
+/// into `load_with_carry("07000015.bin", Some(&save))` — then pins the arrival: the silo gantry
+/// spawn [D #1], the restored player state [M 0x1957a8], the carried channels [M 0x195670:13],
+/// part 1's records untouched [M 0x182270:68-129], and "Find the exit to Omega Sector" announcing
+/// off the spawn plate #484's 0x4b [D row 21; M 0x1827d8 case 1].
 #[test]
 fn walk_the_infiltration_to_the_delta_exit() {
     let iso = iso();
@@ -997,7 +1009,67 @@ fn walk_the_infiltration_to_the_delta_exit() {
     // [D the packs' 0xd events: 47/48/4a/0e/11/10/b8/92/93/b7/8a; the SP outs 7E/8/9/85/54].
     assert!(!w.scene.sim.as_ref().unwrap().drones.channels.on(0x64),
         "ch 0x64 stays down at a part exit — the tail AND spans all three parts' records [M 0x1827d8:26+119-123; D DEFs 07000015 ch 0x8E, 07000016 ch 0x8F/0x90]");
-    eprintln!("[014] walked out in {} ticks; stuck {}; falls {}", w.total_ticks, w.report.stuck_events.len(), w.report.falls.len());
+
+    // ---- The level's END: the exit hold runs out and the NEXT LEVEL LOADS — the game's own
+    // sequence, not a poke. The E-press pushed `GS_PauseGame(1)` +
+    // `GameFlow_PushState(300.0f, 7, 0xff)` [M 0x1b2318:90-92]: the world freezes while the fade
+    // advances every frame [M 0x1c9790 tail]; when state 8 pops, state 3 (`ResetMap_Load`) runs
+    // and the host drains `level_exit` [M 0x1c98c8:173-189], captures `Trigger_Activate`'s
+    // `Player_RamSave` [M 0x1b2318:97-116] and serves the warm load (start_async_load's campaign
+    // arm → `warm_exit_save`). The walk drains it the same way: tick out the hold, capture, load
+    // 07000015 with the carry.
+    while w.scene.sim.as_ref().unwrap().drones.exit_hold.is_some() {
+        w.tick(nf_game::player::Input::default(), false);
+    }
+    let exit_pos = w.scene.sim.as_ref().unwrap().bond.pos;
+    let (exit_health, exit_req) = {
+        let sim = w.scene.sim.as_ref().unwrap();
+        (sim.drones.health.health, sim.gun.switch_request)
+    };
+    let exit_states20 = w.scene.sim.as_ref().unwrap().drones.mission.states[20].clone();
+    {
+        let sim = w.scene.sim.as_ref().unwrap();
+        assert!(!sim.drones.channels.on(0x4b),
+            "part 2's enable 0x4b never fired in part 1 (the walk's own channel state) — the silo's spawn plate owns it [D row 21 enable 0x4b]");
+    }
+    let save = nf_view::warm_exit_save(w.scene.sim.as_ref().unwrap());
+    assert_eq!(save.weapon, exit_req,
+        "the save's weapon byte is M_CONTROL+0x63 as of the drain [M 0x195670:18-19]");
+    let mut w15 = Walker::new(nf_view::load_with_carry(&iso, "07000015.bin", false, Some(&save)).unwrap());
+    {
+        let sim = w15.scene.sim.as_ref().unwrap();
+        let p = sim.bond.pos;
+        assert!(p[0] > 93.0 && p[0] < 96.0 && p[1] > 40.0 && p[1] < 43.0 && p[2] > -2.0 && p[2] < 2.0,
+            "the warm arrival spawns on the silo gantry start #1 — the level's own start, warm changes only the player state [M 0x1957a8:9 arm; D spawn #1], got {p:?}");
+        assert_eq!(sim.gun.switch_request, exit_req,
+            "Player_RamLoad restores the saved weapon as the switch request [M 0x1a7ef8 case 0x07000015 'request = the saved weapon'; M 0x1957a8]");
+        assert!((sim.drones.health.health - exit_health).abs() < 0.01,
+            "Player_RamLoad restores the carried health (the warm arm passes boost 0 [M 0x1a7ef8's eight 0-arg calls]) [M 0x195670:16 + 0x1957a8]");
+        assert!(sim.drones.inventory.owned.get(2usize).copied().unwrap_or(false)
+            && sim.drones.inventory.owned.get(0x11usize).copied().unwrap_or(false)
+            && sim.drones.inventory.owned.get(0x4eusize).copied().unwrap_or(false),
+            "the owned weapons ride the save (P2K — the gate that skips the fresh-14 kit [M 0x1a7ef8 case 0x07000015] — the crossbow, the laser) [M 0x195670:7 + 0x1957a8]");
+        for &c in &[0x54u32, 0x85, 0x8c, 0xce] {
+            assert!(sim.drones.channels.on(c),
+                "the carried switch channel {c:#x} stays on across the load [M 0x195670:13 + 0x1957a8]");
+        }
+    }
+    w15.wait_enabled(3000, "the silo arrival");
+    w15.wait(120);
+    {
+        let sim = w15.scene.sim.as_ref().unwrap();
+        assert!(sim.drones.channels.on(0x4b),
+            "the spawn plate #484 fires ch 0x4b under the arrived Bond [D 07000015]");
+        assert_eq!(sim.drones.mission.states[21].len(), 1,
+            "MissionData row 21 lists exactly ONE record for the loaded part [D MissionData vaddr 0x2a42d8: level 0x07000015, count 1]");
+        assert_eq!(sim.drones.mission.states[21][0], 3,
+            "'Find the exit to Omega Sector' announces off the carried load's own spawn plate [M 0x1827d8 case 1; D row 21 enable 0x4b]");
+        assert_eq!(sim.drones.mission.states[20], exit_states20,
+            "part 1's records ride the load untouched — Mission_Init resets only the current + future parts [M 0x182270:68-129]");
+    }
+    eprintln!("[014] walked out in {} ticks; stuck {}; falls {}; the exit hold drained at {exit_pos:?} and 07000015 loaded warm, arrival {:?}",
+        w.total_ticks, w.report.stuck_events.len(), w.report.falls.len(),
+        w15.scene.sim.as_ref().unwrap().bond.pos);
 }
 
 /// The grill sister, REWRITTEN (level-14-vent-grate): the old version pinned the crawl THROUGH the
