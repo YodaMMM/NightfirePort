@@ -419,3 +419,13 @@ second-stage miss, now 72.9 s vs 153 s); fix_npc_doors + walkreal_07000014 (#[ig
 tree) unverified this window. NF_NO_CULL / NF_NO_MASKS gates remain as bisect tooling. FULL
 suite: not run this window (the chunked runner needs ~40-60 min; the window gave ~100 min
 total incl. setup+build) — the next message resumes with the chunked state runner.
+
+### capsule-cull-and-los-masks-14 (the last reds, 09:12 UTC, 2026-10-30)
+
+Branch s/capsule-cull-and-los-masks-14 = origin/s/capsule-cull-and-los-masks-13 + merge
+origin/master (04820075), merged clean, no conflicts. Inherited from -13: the cull direction
+fix (nd_up, 0x109f60-f74) is in; open = walkreal_07000003's servant-0 captor kill red,
+fix_npc_doors + walkreal_07000014 on the fixed tree, the FULL-suite verdict. Plan: bisect
+07000003 with the NF_NO_CULL / NF_NO_MASKS gates on the fixed cull, fix against [M
+Collide_Intersect 0x1ebaa8, Intersect_CylGeom 0x109da0], REMOVE the gates, land only with a
+FULL suite free of new reds (quote the total line).
