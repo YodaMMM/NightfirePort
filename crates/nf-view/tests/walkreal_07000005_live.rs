@@ -1378,15 +1378,23 @@ fn the_door_band_exit_chains_to_07000006_climb_parked() {
              probe_terrace05]; centre floor+1.03..1.13 [M 0x194188:106; L live 1.086]), got {:?}",
             sim.bond.pos);
     }
-    // Walk east to the door's threshold and press E (the walker's Use: face the point, pulse the
-    // key — the game's Activate is edge-triggered [M Input_Action mask 4]).
+    // Walk east INTO the doorway arch and press E (the walker's Use: face the point, pulse the
+    // key — the game's Activate is edge-triggered [M Input_Action mask 4]). The reach is the
+    // game's use sphere: radius 1.0 at head + 1×view dir, sphere vs the trigger's glist [M
+    // Player_Activate 0x1a5170:100-108,134-137]; the port's AABB stand-in over the 0xE8's glist
+    // bounds spans x 37.12..37.38, y 49.0..51.25, z −69.0..−67.75 (the port's own trigger dump).
+    // The -3 draft's threshold wp (35.4) stopped Bond at x 34.88 — its use sphere reached only
+    // x 36.88, 0.24 short of the trigger face: no fire. The arch itself is the target; the
+    // doorway is open floor (the walk crosses it unblocked — there is no solid door object on
+    // this arch, "Locked_Door_Top_I" names the level-exit TRIGGER [D placement kind 0xE8]).
     w.walk_to(walker::Wp {
-        at: [35.4, 49.0, -69.0],
+        at: [37.0, 50.1, -68.4],
         act: walker::Act::Use { use_ticks: 120 },
         arrive: 0.6,
-    }, "door #112's threshold");
-    // The chain: ch 0x1E on [D placement p3=0x1e; M Trigger_Activate 0x1b2318:91-107] → the level
-    // exit 07000006.
+    }, "door #112's arch");
+    // The chain: ch 0x1E on [D placement p3=0x1e = the fallback slot ext+0x2a via Trigger_Create
+    // 0x1b1720:71; M Trigger_Activate 0x1b2318:91-107 — key gate p1=0 (unlocked), gate p2=0 (no
+    // auto-fire), so the E press falls to the +0x2a fallback write] → the level exit 07000006.
     let mut exited = false;
     for _ in 0..300u32 {
         w.tick(Input::default(), false);
