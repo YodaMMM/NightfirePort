@@ -329,21 +329,23 @@ pub fn capsule_hits_tris_strict(a: V3, b: V3, r: f32, tris: &[[V3; 3]]) -> bool 
 }
 
 /// `Intersect_PointGeom` 0x1e92d8 for the use pick (mode 0x101): the point reaches a triangle when
-/// it sits within the triangle's front-side prism — the projection of the point onto the tri's
-/// plane lands ON the triangle and the signed plane distance is in (0, radius]. Per triangle the
-/// game computes the signed plane distance X of the (object-space) point and skips when
-/// `X > radius` (0x1e92d8:200 `if (*(float *)(param_1 + 0x8c) < X) skip`) or when `X <= fVar25`
-/// with fVar25 = 0 for the use pick's flags=0 (0x1e92d8:116-121, 201 — the point must be on the
-/// plane's FRONT side); the surviving triangle's distance comes from `vecutil_Dist2Tri_PointGeom`
-/// 0x1dfac8. The port registers only the routine's plane-projection arm (0x1dfac8:77-85, the
-/// `default` case — the point's footprint projection inside the triangle); the edge/vertex
-/// clamp arms (0x1dfac8:86-106) do NOT register a use-pick hit — pinned by 07000003's locked-door
-/// audit [D: from the doorway stance the use point sits 0.07/0.16 outside plate #504's top
-/// sheet's east/south edges and 0.74 above it — the clamped surface distance 0.76 is inside the
-/// 1.0 reach, yet the game refuses the plate and plays the locked-door hit sound]. `// [S]
-/// unverified`: which of the two readings the game's registers enforce is not decidable from the
-/// decompile alone (the registration gate rides the caller's fVar24 compare); the live check in
-/// docs/reports/level-03-locked-door-use-volume.md asks the main agent's gdbwatch to settle it.
+/// it sits within the triangle's plane window AND the projection of the point onto the tri's plane
+/// lands ON the triangle. The plane window is two-sided [−radius, +radius] (see the comment at the
+/// gate — the exit planes pin the behind-side admission); the projection-inside requirement is
+/// pinned by 07000003's locked-door audit (see below). Per triangle the game computes the signed
+/// plane distance X of the (object-space) point and skips when `X > radius` (0x1e92d8:200) or when
+/// `X < fVar25` (0x1e92d8:227 — fVar25 = 0 for a flags-clear pick, −radius with flags bit 8,
+/// 0x1e92d8:116-121); the surviving triangle's distance comes from
+/// `vecutil_Dist2Tri_PointGeom` 0x1dfac8. The port registers only the routine's plane-projection
+/// arm (0x1dfac8:77-85, the `default` case — the point's footprint projection inside the
+/// triangle); the edge/vertex clamp arms (0x1dfac8:86-106) do NOT register a use-pick hit —
+/// pinned by 07000003's locked-door audit [D: from the doorway stance the use point sits 0.07/0.16
+/// outside plate #504's top sheet's east/south edges and 0.74 above it — the clamped surface
+/// distance 0.76 is inside the 1.0 reach, yet the game refuses the plate and plays the locked-door
+/// hit sound]. `// [S] unverified`: which of the two readings the game's registers enforce is not
+/// decidable from the decompile alone (the registration gate rides the caller's fVar24 compare);
+/// the live check in docs/reports/level-03-locked-door-use-volume.md asks the main agent's
+/// gdbwatch to settle it.
 ///
 /// The pick radius is the hittest's +0x8C = 1.0 for `Player_Activate`'s use sphere [M 0x1a5170:106-108].
 /// The port's triangles carry the game's stored plane direction in their winding cross
@@ -357,9 +359,19 @@ pub fn point_reaches_tris(p: V3, tris: &[[V3; 3]], r: f32) -> bool {
         let len = (n[0] * n[0] + n[1] * n[1] + n[2] * n[2]).sqrt();
         if len < 1e-9 { return false; }
         let n = [n[0] / len, n[1] / len, n[2] / len];
-        // The signed plane distance: front side only, within the radius [M 0x1e92d8:200-201].
         let x = n[0] * (p[0] - t[0][0]) + n[1] * (p[1] - t[0][1]) + n[2] * (p[2] - t[0][2]);
-        if x <= 0.0 || x > r { return false; }
+        // The signed plane distance window. `Intersect_PointGeom` skips a triangle when
+        // `X > radius` [M 0x1e92d8:200] and when `X < fVar25` [M 0x1e92d8:227], where fVar25 = 0
+        // for a flags-clear pick and −radius when the hittest flags carry bit 8
+        // [M 0x1e92d8:116-121]. The use pick's call site drops the fourth constant
+        // (`0,0,0` for the three trailing args the decompile shows); the game's behaviour pins
+        // the two-sided window: 07000015's exit planes all face +z and the walking player's use
+        // point sits up to 0.45 BEHIND them when the E loads the level [D walk_07000015_live's
+        // gate planes at z −24.60..−24.96, normals +z, the stop ~0.55 short], which only
+        // fVar25 = −radius admits. [S] unverified: the flags value itself is not readable from
+        // the decompile (the dropped argument) — the live check in the report asks gdbwatch to
+        // confirm; no test asserts the flags directly.
+        if x < -r || x > r { return false; }
         // The projection of the point onto the tri's plane must land inside the triangle
         // (`vecutil_Dist2Tri_PointGeom`'s plane-projection arm [M 0x1dfac8:77-85]; the edge-clamp
         // arms' refusal pinned by the 07000003 audit — see the header).
