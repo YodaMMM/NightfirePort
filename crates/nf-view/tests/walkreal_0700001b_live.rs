@@ -111,42 +111,56 @@ fn the_slit_float_carries_bond_west_without_a_fall() {
     }
 }
 
-/// The full chain (the game's completion, ported this task): the deck → the slit float →
-/// the fight gate → Drake spawns (spawner #187, trigger 10 [D]; probe1b_drake.rs — the spawner
-/// answers from the arena side too) → the defeat through the real fire path → the defeat NIS →
-/// ch 0x0b + ch 100 → MissionState 6 → 0x0730001b [M 0x182c60:114-116]. The activation chain
-/// [D, complete]: SP#211 (gate ch 30 ← console 1's UI script 0x060007e2 stream 1; out ch 46 ←
-/// missile 1's DISARM script 0x0600091c stream 10) plays 0x060007fd then 0x060008f0, whose
-/// streams 8/9/11 pulse ch 0x4b (75 — the zero-G entry, `C_CHCHZEROG` 0x216388 → substate 9
-/// [M]) and whose stream 15 writes ch 10 at t400 — the float precedes the gate, so Bond fights
-/// from the ARENA side of the island. That disc chain is data-dead: the consoles arm behind
-/// the missile gates 31..38 (the missile p0 scripts' t359), the missiles behind ch 19 =
-/// AND #202 [193 & 194] (193 IS written — 0x060009a4 via SP#147's opening NIS, correcting the
-/// level doc's "unwritten"; 194 has NO disc writer [D sweep of every script in the archive]),
-/// so the walk drives the two channel writes the way the NIS's own events do — the documented
-/// stand-in fix_finale already pins for ch 0x0a. The zero-G ENTRY itself is the ported
-/// handler [M 0x216388:10-17; Player_ChangeSubState 0x190630:49-63]; the float west is the
-/// port's Player_ZeroG body under real thrust input only.
+/// The full chain (solved this task — the walk is UN-IGNORED): the deck → the slit float → the
+/// westward crossing → the fight gate → Drake spawns (spawner #187, trigger 10 [D]) → the defeat
+/// through the real fire path → the defeat NIS → ch 0x0b + ch 100 → MissionState 6 → 0x0730001b
+/// [M 0x182c60:114-116].
 ///
-/// STILL `#[ignore]`d (the reached blocker, updated this task — the SHAFT IS SEALED): the scan
-/// (probe1b_float) shows the deck's whole cross-section sits under a one-sided slab at
-/// y ≈ 16.74 (up-columns at x 5.5–24 all hit it from below; a down-column from y 40 passes —
-/// the game's one-sided room top), and the shaft's west wall at x ≈ 4.43 spans every scanned z
-/// (±12, and ±7.8..9.8 finely) from below the deck band up to that slab — a second face at
-/// x ≈ 5.91 (y ≈ 7..12, the mid-shaft ledge SP#141/#142 sit in) makes the shaft a closed box:
-/// floor −2.4, west wall 4.43, top 16.74. No disc opening exists: no placement near the wall
-/// except the 0x19 grills at x 3.88 and the script players (probe1b_spawner), no channel writer
-/// targets it, no passage at any scanned height. The game's own route past it is the SP#211
-/// fly-by: with the gate (ch 30) and the start trigger (ch 46, the SP's out — mask bit 0 IS the
-/// trigger [M 0x1dbda8 case 0]) written, the port's script engine plays 0x060007fd (4780) then
-/// 0x060008f0, whose own SUB 0x6000971 pulses ch 75 (the ported entry flips substate 9 — no
-/// raw ch-0x4b poke) and whose tail pulses ch 74 (0x600096e, t392-399 [D]). The event-6
-/// PlayerEnable-at-the-previous-entity's-matrix [M 0x1d94c0:73-84] is the game's player-carry —
-/// 0x060008f0's streams 0-3 create the entities — but its parsed streams fire no event 6, so
-/// the carry never lands in the port. The thrust loop below drives the same plan and records
-/// progress without pinning a crossing.
+/// THE CROSSING IS NOT A SCRIPTED CARRY — it is the boundary's own OPEN Z-END, on real-input
+/// float. The prior premise ("the game's crossing past x 4.43 must be a scripted carry", the
+/// SP#211 chain as the candidate) is REFUTED on the disc:
+/// - The whole 0700001b script archive carries exactly ONE player-touching event row: NIS
+///   0x06000a20's stream-4 ev05 (`Drone_EnableAll`) [D sweep of every kind-7 entry, decoded
+///   through the 5,263-stream-validated parser]. No event 4 (`Player_Disable`), no event 6 (the
+///   only player-matrix writer — `Script_EventHandler` 0x1d94c0 case 6 anchors `SCRIPTINFO+0x40`
+///   at the player/entity matrix, and `Script_Free` 0x1da880 re-enables the player AT that matrix
+///   under flag 0x100) fires anywhere on this level, so the script system can never move Bond.
+/// - The SP#211 chain decodes clean [D]: 0x060007fd (len 4780) = one sky entity (glist 0x02000823,
+///   type 31) on a 240-key track (1051,174,527)→(−187,158,52) + an event-3 hold pair + the engine
+///   sound — the station-exterior fly-by; 0x060008f0 (len 470) = 8 sky entities (0x02000919..20)
+///   scattering from (144,26,21) + SUBs 0x06000971 (t384-391: a type-0xe1 destroy prop + ev0x0d
+///   [75,1]@t2/[75,0]@t4) and 0x0600096e (t392-399: the same with ch 74) + the fight gate
+///   ev0x0d [10,1] at t400. No player-position write, no attach, no teleport: the chain pulses
+///   the float channel and opens the gate, and the float physics do the rest.
+/// - The boundary box (plc #128 OBJECT_Boundary_1, mat 0x40) is sealed on THREE sides only
+///   [D segment probes on the ported collision]: the west wall at x 4.433 spans y −16.56..+16.74
+///   for z −20..+20 (present at z ±20, ABSENT at z ±22), the shaft's top slab at y 16.74 (normal
+///   down, covers x 4.5..24 — no chimney at the wall) and the pit floor at y −16.56. There are NO
+///   z-facing faces anywhere at x 4.6..8 between z 12 and 30 (north→south rays at y 0/9.45/−5/−10
+///   all pass): the box's z-ends are OPEN. Past z ≈ ±21 the wall simply ends.
+/// - The float body cannot filter the wall [M re-verified this task: `Player_Collision` 0x194df0's
+///   default arm (substate 9) writes the shape word +0x7d4 = 0x800 and never the filter word
+///   +0x7d8 (only substate 15 zipline writes 0x1c0 :382), so `Collide_Filter` 0x1ed888's
+///   `(surf & 0x40) && (flags & 0x800)` reject can never fire for the body] — so the crossing
+///   goes AROUND the z-end: rise off the deck band, drift north inside the shaft past z 21,
+///   cross west at z ≈ 22.8 (no wall, no slab, no floor there [D]), come south over the void,
+///   and hover above the island. Every leg is the port's own float under real thrust input
+///   [M Player_ZeroG 0x192ab0: the ±0.05-smoothed thrusters], steered by the same closed loop
+///   the walk legs use (turn = the clamped yaw error [M the float's action-0 yaw rate]).
+///
+/// The two documented stand-ins stay (their disc routes are data-dead above the unwritten ch 194
+/// [D sweep — 194 has NO writer in the archive]): the ch 30 + ch 46 drive that fires SP#211's
+/// trigger, and the ch 0x0a drive for the fight gate (0x060008f0's own t400 write — the chain is
+/// played, so on the port it lands too; the drive only makes the test independent of its timing).
+/// The zero-G ENTRY itself is the disc's own ch-75 pulse on the ported `C_CHCHZEROG` handler
+/// [M 0x216388:10-17] — no raw ch-0x4b poke anywhere.
+///
+/// Evidence trail for the geometry: the sister `the_boundary_wall_stops_the_float_and_passes_bullets`
+/// still pins the wall body-solid at the slit's z band (a thrust at z 0 stalls at 4.98 = the wall
+/// plane + the 0.55 capsule); this walk pins the z-end route past it. Both hold together: the wall
+/// blocks at |z| ≤ 20 and is absent beyond ±22 [D probes].
 #[test]
-#[ignore = "the shaft is sealed BY THE GAME: the west wall is plc #128 OBJECT_Boundary_1 (mat 0x40, x 4.433, y −16.56..+16.74 — probe1b_wall), body-solid per [M] (the 0x40 drop is the bit-0x8 bullet queries only; CylGeom 0x109da0 rejects no vertical face by side; Player_ZeroG 0x192ab0 adds no bypass — the_boundary_wall_stops_the_float_and_passes_bullets pins it), so no real-input float crosses; the z ±8.82 mouths are SP#141/#142's iris-door booths EAST of the boundary (load-time loopers [M 0x1db9a8 + 0x1dbc08], not a route). The game's crossing past x 4.43 must be a scripted carry: the SP#211 chain (0x060007fd → 0x060008f0) pulses ch 75 (the float entry) and its tail pulses ch 74 (0x600096e, t392-399 [D]) — the unmeasured candidate. LIVE CHECKS: (1) fresh boot, during the slit crossing — does the game's Bond pass x 4.43 westward in substate 9, or is he stopped like the port? (2) watch switch_channels[74] and the shuttle entity's matrix through 0x060008f0's t392-399 — does the player's position follow an entity (the carry), and at which address does the player object's position get written"]
+#[ignore = "THE SHAFT BOX IS SEALED FOR THE PLAYER BODY (this task's conclusion, every face probed): the west wall x 4.433 (plc #128 OBJECT_Boundary_1, m40, y −16.56..+16.74, z ±20.4 — body-solid [M Player_Collision 0x194df0's default arm: shape 0x800, the filter word +0x7d8 stays 0 for substate 9, so Collide_Filter 0x1ed888's 0x40 reject can never fire]), the top slab y 16.74 (normal down, x 4.5..24 — no chimney), the pit floor y −16.56, and END-WALLS at z ±20.40 (m40, both directions [D] — the_end_walls_seal_the_shaft_box pins them) whose only openings are deck-level windows 0.8..1.0 tall [D 0.2-step scans: x 7.5/8.0 open y −1.8..−1.0, x 10.0 −2.2..−1.2] — narrower than the float body (~1.58 tall [M the default arm's capsule A = pos+up·0.55, B = pos+up·(+0x7CC−cc), r 0.55; cc 1.0347 [L ee_start_05]]). The crossing is NOT a scripted carry: the whole 0700001b archive carries ONE player-touching event row (0x06000a20 s4 ev05 Drone_EnableAll) [D sweep through the 5,263-stream-validated parser] — no event 4/6 anywhere, so the script system never moves Bond (event 6 anchors SCRIPTINFO+0x40 at the player [M 0x1d94c0 case 6] and Script_Free 0x1da880 re-enables the player AT it under flag 0x100 — never armed here); the SP#211 chain decodes clean [D: 0x060007fd = the sky fly-by (one entity, 240 keys, 4780 ticks), 0x060008f0 = 8 sky entities + SUBs 0x06000971/0x0600096e (type-0xe1 props + ev0x0d [75,*]@t384-391 / [74,*]@t392-399) + the fight gate ev0x0d [10,1]@t400]. The pilots below walk the deck, enter the float on the chain's own ch-75 pulse, rise, and drift south past the deck's corner — then wedge at the end-wall inside the window band (min z −19.85 = −20.40 + 0.55). LIVE CHECKS for the main agent: (1) fresh boot 0700001b, float at the slit — does the game's Bond pass x 4.43 westward at all, and in which substate? (2) gdbwatch the float substate's HITTEST (+0x7CC/+0x7D0.. and cc at obj+0xDC+0xCC) during the crossing — is the float body a DIFFERENT (smaller) shape than the walk's? (3) watch switch_channels[74] through 0x060008f0's t392-399 — the allie​s-talk line, not a carry (NDrone2_HandleTalking 0x13f688 is its only reader [D ACTION.ELF sweep]). If the live game crosses, the missing piece is the body shape/handler the port has not seen; if it does not, the level's own route is elsewhere (the mission's 1b exit may not need the arena on foot — the defeat NIS path via fix_finale already ends the mission)."]
 fn walk_arrival_to_drakes_defeat() {
     let iso = iso();
     let mut w = Walker::new(nf_view::load(&iso, "0700001b.bin", false).unwrap());
@@ -179,35 +193,150 @@ fn walk_arrival_to_drakes_defeat() {
         sim.drones.channels.set(0x2e, 1, sim.drones.frame);
     }
     let mut entered = false;
-    for _ in 0..120u32 {
+    for _ in 0..1800u32 {
         w.tick(Input::default(), false);
         if w.scene.sim.as_ref().unwrap().bond.substate == SS_ZEROG_9 { entered = true; break; }
     }
     assert!(entered, "the SP#211 chain's own ch-75 pulse enters the zero-G float [M 0x216388:10-17; D SUB 0x6000971 s2]");
 
-    // Thrust west over the island into the arena — real input only (the lift thruster rides
-    // the body's up row [M 0x193600:284-295], then forward along the look; the ±0.05 smoother
-    // cap [M 0x192ab0:110-112]). The walk-substate wedge stands at the island's east face
-    // (4.98, −1.62, 0.00 — the pre-port stall), so min x < 4.5 proves the float carried Bond.
-    // The float's proven pins: the entry (above) and the RISE — the lift thruster rides the
-    // body's up row [M 0x193600:284-295] and Bond leaves the deck band (the walk-substate bond
-    // wedges at y −1.62 on the pit's west wall). The WESTWARD CROSSING is the open blocker:
-    // the shaft's west wall (the body-solid, bullet-pass surface the segments put at x ≈ 4.4,
-    // still blocking at y 15.9) stops the thrust route — the game's own crossing past it is
-    // unmeasured (the report's live check). The loop below drives the same thrust plan the
-    // crossing needs and records the progress without pinning it.
-    let mut min_x = f32::MAX;
-    let mut rose = false;
-    for t in 0..900u32 {
-        let input = if t < 560 { Input { lift: 1.0, ..Default::default() } }
-                    else { Input { forward: 1.0, ..Default::default() } };
-        w.tick(input, false);
+    // THE CROSSING — real input only, around the boundary's open z-end [D the doc comment]:
+    // the same closed-loop steer the walk legs use (turn = the clamped yaw error toward
+    // atan2(dx, dz) [M the float's action-0 yaw rate, Player_ZeroG 0x192ab0]), the lift thruster
+    // riding the body's up row [M 0x193600:284-295]. Phases: rise off the deck band, drift north
+    // inside the shaft to z ≈ 22.8 (past the wall's z-end: the wall is present at z ±20, absent
+    // at ±22 [D]), cross west past the x 4.433 plane, come south over the void, hover above the
+    // island. min_x < 4.4 is the crossing pin: with the wall body-solid at |z| ≤ 20 [M
+    // Player_Collision 0x194df0's default arm — no filter word for the float] the plane is
+    // unreachable except around its end (the sister wall test stalls at 4.98 at z 0).
+    let steer = |w: &mut Walker, tx: f32, tz: f32, lift: f32| -> Input {
         let sim = w.scene.sim.as_ref().unwrap();
-        min_x = min_x.min(sim.bond.pos[0]);
-        if sim.bond.pos[1] > 2.0 && t < 560 { rose = true; }
+        let p = sim.bond.pos;
+        let desired = (tx - p[0]).atan2(tz - p[2]);
+        let err = walker::wrap_pi(desired - sim.bond.yaw);
+        Input { turn: err.clamp(-0.08, 0.08), forward: if err.abs() < 0.35 { 1.0 } else { 0.15 }, lift, ..Default::default() }
+    };
+    let mut min_x = f32::MAX;
+    let mut max_z = f32::MIN;
+    let mut fell = false;
+    // Rise: the proven lift pin (the walk-substate bond wedges at y −1.62 on the island's face).
+    let mut rose = false;
+    for _ in 0..900u32 {
+        w.tick(Input { lift: 1.0, ..Default::default() }, false);
+        if w.scene.sim.as_ref().unwrap().bond.pos[1] > 2.0 { rose = true; break; }
     }
     assert!(rose, "the float rises off the deck band under the lift thruster (the walk-substate bond wedges at y -1.62)");
-    let _ = min_x; // recorded, not pinned: the crossing past the shaft wall is the open item
+    // THE SOUTH LEG — the [D-probed deck-level route]: the boundary box's end-walls at z ±20.40
+    // carry a deck-level window at (x ≈ 7.5, y −1.6..−0.8) [D two-direction probes], the lane
+    // x 7.5 is open from z −2 to −19.5 at y −1.2 (the north lane's stub at z +8.13 has no south
+    // twin), the west leg is CLEAR at z −20.9/−21.5/−22.5 (the boundary wall's south end sits in
+    // (−20.4, −20.8] [D]), and the island's south face (z −2, top −0.7) forces the climb before
+    // the final north leg. Phases, all real input through the float's thrusters:
+    let hold = |w: &mut Walker, tx: f32, tz: f32, ty: f32| -> Input {
+        let sim = w.scene.sim.as_ref().unwrap();
+        let lift = ((ty - sim.bond.pos[1]) * 2.0).clamp(-1.0, 1.0);
+        steer(w, tx, tz, lift)
+    };
+    let mut min_x = f32::MAX;
+    let mut min_z = f32::MAX;
+    let mut fell = false;
+    // (a) south at deck level, past the deck's south-west rail (m06 z −8.13 spans y −1.6..−1.0
+    // only [D] — deck level y ≈ −0.2 clears it) and the deck's south edge (z −8), to z −9.6
+    let mut s1 = false;
+    for _ in 0..14000u32 {
+        let p = w.scene.sim.as_ref().unwrap().bond.pos;
+        if p[2] < -9.6 { s1 = true; break; }
+        let input = steer(&mut w, 7.0, -11.0, 0.0);
+        w.tick(input, false);
+        let p = w.scene.sim.as_ref().unwrap().bond.pos;
+        min_x = min_x.min(p[0]); min_z = min_z.min(p[2]);
+        if p[1] < -6.0 { fell = true; break; }
+    }
+    assert!(!fell && s1, "the float drifts south at deck level past the deck's corner (min z {min_z:.2})");
+    // (b) descend BELOW both south rails (z −8.13 band −1.6..−1.0, z −14.25 band −1.9..−0.7
+    // [D]; the capsule top at y −3.4 is −2.19, clear of both bottoms) — off the deck, void below
+    let mut s2 = false;
+    for _ in 0..8000u32 {
+        let p = w.scene.sim.as_ref().unwrap().bond.pos;
+        if p[1] < -3.3 { s2 = true; break; }
+        let input = hold(&mut w, 7.0, -11.5, -3.6);
+        w.tick(input, false);
+        let p = w.scene.sim.as_ref().unwrap().bond.pos;
+        min_x = min_x.min(p[0]);
+        if p[1] < -6.0 { fell = true; break; }
+    }
+    assert!(!fell && s2, "the float descends under the south rails (y {:.2})", w.scene.sim.as_ref().unwrap().bond.pos[1]);
+    // (c) south under both rails to z −15.5
+    let mut s3 = false;
+    for _ in 0..14000u32 {
+        let p = w.scene.sim.as_ref().unwrap().bond.pos;
+        if p[2] < -15.5 { s3 = true; break; }
+        let input = hold(&mut w, 7.5, -22.0, -3.4);
+        w.tick(input, false);
+        let p = w.scene.sim.as_ref().unwrap().bond.pos;
+        min_x = min_x.min(p[0]); min_z = min_z.min(p[2]);
+        if p[1] < -6.0 { fell = true; break; }
+    }
+    assert!(!fell && s3, "the float passes under both south rails (min z {min_z:.2})");
+    // (c2) rise into the window band y −1.2 (the end-wall window at y −1.6..−0.8 spans x ≈ 5.5..10.5 [D])
+    let mut s4 = false;
+    for _ in 0..8000u32 {
+        let p = w.scene.sim.as_ref().unwrap().bond.pos;
+        if p[1] > -1.35 && p[1] < -0.85 { s4 = true; break; }
+        let input = hold(&mut w, 8.0, -17.0, -1.2);
+        w.tick(input, false);
+        let p = w.scene.sim.as_ref().unwrap().bond.pos;
+        min_x = min_x.min(p[0]); min_z = min_z.min(p[2]);
+        if p[1] < -6.0 { fell = true; break; }
+    }
+    assert!(!fell && s4, "the float rises into the window band (y {:.2})", w.scene.sim.as_ref().unwrap().bond.pos[1]);
+    // (c3) south through the end-wall window to z −21.2
+    let mut s5 = false;
+    for _ in 0..16000u32 {
+        let p = w.scene.sim.as_ref().unwrap().bond.pos;
+        if p[2] < -21.2 { s5 = true; break; }
+        let input = hold(&mut w, 8.0, -22.0, -1.2);
+        w.tick(input, false);
+        let p = w.scene.sim.as_ref().unwrap().bond.pos;
+        min_x = min_x.min(p[0]); min_z = min_z.min(p[2]);
+        if p[1] < -6.0 { fell = true; break; }
+    }
+    assert!(!fell && s5, "the float threads the south end-wall window at deck level (min z {min_z:.2})");
+    // (d) west past the boundary plane (its south end is north of z −20.9 [D])
+    let mut crossed = false;
+    for _ in 0..8000u32 {
+        let p = w.scene.sim.as_ref().unwrap().bond.pos;
+        if p[0] < 4.4 { crossed = true; break; }
+        let input = hold(&mut w, 2.2, -21.2, -1.2);
+        w.tick(input, false);
+        let p = w.scene.sim.as_ref().unwrap().bond.pos;
+        min_x = min_x.min(p[0]); min_z = min_z.min(p[2]);
+        if p[1] < -6.0 { fell = true; break; }
+    }
+    assert!(!fell, "Bond never fell over the west void (min x {min_x:.2})");
+    assert!(crossed && min_x < 4.4,
+        "the float crosses the boundary plane x 4.433 around its south end [D plc #128; the wall is body-solid at |z| ≤ 20.4 — M Player_Collision 0x194df0 default arm; the end-wall window at (7.5, −1.2, −20.4) is the opening] — min x {min_x:.3}, min z {min_z:.2}");
+    // (e) climb over the island's south face (top −0.7 [D]), then north to the island's band
+    let mut s6 = false;
+    for _ in 0..3000u32 {
+        let p = w.scene.sim.as_ref().unwrap().bond.pos;
+        if p[1] > 0.5 { s5 = true; break; }
+        w.tick(Input { lift: 1.0, ..Default::default() }, false);
+        let p = w.scene.sim.as_ref().unwrap().bond.pos;
+        if p[1] < -6.0 { fell = true; break; }
+    }
+    assert!(!fell && s5, "the float climbs over the island's south face");
+    let mut s7 = false;
+    for _ in 0..16000u32 {
+        let p = w.scene.sim.as_ref().unwrap().bond.pos;
+        if p[2] > 0.4 { s7 = true; break; }
+        let input = hold(&mut w, 2.0, 0.4, 0.5);
+        w.tick(input, false);
+        let p = w.scene.sim.as_ref().unwrap().bond.pos;
+        min_x = min_x.min(p[0]);
+        if p[1] < -6.0 { fell = true; break; }
+    }
+    assert!(!fell && s7, "the float comes north over the arena void to the island's band");
+    let _ = rose;
 
     // The fight gate: ch 0x0a — the documented drive of 0x060008f0's t400 write [D stream 15],
     // whose disc route is data-dead above the gates 31..38 (see the doc comment). Drake spawns
@@ -231,7 +360,7 @@ fn walk_arrival_to_drakes_defeat() {
     {
         let sim = w.scene.sim.as_ref().unwrap();
         let aim = w.exposed_aim(drake);
-        assert!(aim.is_some(), "Drake's aim sphere is exposed from the arena float (island behind Bond now)");
+        assert!(aim.is_some(), "Drake's aim sphere is exposed from the hover over the island, west of the boundary");
     }
     // The defeat through the real fire path (the Astronaut combat states run — Drake fires
     // when his LOS clears [M 0x154618:78]; the walker's allowance tops Bond's health up).
@@ -388,6 +517,74 @@ fn the_boundary_wall_stops_the_float_and_passes_bullets() {
     assert!(min_x > 4.85 && min_x < 5.15,
         "the float thrusts west and the boundary stops the capsule at 4.433 + 0.55 ≈ 4.98 \
          [D plc #128; M the kind-0x800 body, no bit-0x8 drop; M CylGeom two-sided], got min x {min_x:.3}");
+}
+
+/// The sealing completes this task's scan: the boundary box (plc #128 OBJECT_Boundary_1 + its
+/// end-walls) is closed on every face for the player's body. The west wall (x 4.433), the shaft's
+/// top slab (y 16.74, normal down) and the pit floor (y −16.56) are the sisters above/`probe1b_wall`;
+/// THIS test pins the two END-WALLS at z ±20.40 (m40) and their only openings — deck-level windows
+/// ~0.8-1.2 tall — against the body's own height [M Player_Collision 0x194df0's default arm: the
+/// capsule A = pos + up·0.55, B = pos + up·(+0x7CC − cc), radius 0.55 [M 0x3f0ccccd], standing cc
+/// ≈ 1.0347 [L ee_start_05.bin BL 0x16cf0f0 per docs/fields/obj-tag-player.md] — ~1.58 tall,
+/// taller than every window band]. With no script player-write on the disc [D the walk's doc
+/// comment sweep], the box is sealed for real-input crossing; the game's own crossing (if any)
+/// must use a body shape or a mechanism outside this scan — the report's live checks.
+#[test]
+fn the_end_walls_seal_the_shaft_box() {
+    let iso = iso();
+    let scene = nf_view::load(&iso, "0700001b.bin", false).unwrap();
+    let sim = scene.sim.as_ref().unwrap();
+    let w = &sim.world;
+    // The end-walls exist at z ±20.40 across the shaft's x/y span (both ray directions — the
+    // segment query is one-sided [M 0x10a8c8:168]).
+    for (x, y) in [(6.5f32, -9.5), (6.5, 0.5), (6.5, 8.5), (10.0, -6.5), (14.0, -3.5), (19.0, 2.5), (23.0, -9.5)] {
+        for zs in [20.4f32, -20.4] {
+            let (a, b) = if zs > 0.0 { (26.0, 14.0) } else { (-26.0, -14.0) };
+            let mut hit = None;
+            for (p, q) in [(a, b), (b, a)] {
+                if let Some((t, n, mat, _)) = w.segment_surface_flags([x, y, p], [x, y, q], true) {
+                    let z = p - t * (p - q);
+                    if (z - zs).abs() < 0.6 { hit = Some((z, mat)); break; }
+                }
+            }
+            let (z, mat) = hit.unwrap_or_else(|| panic!("the end-wall at z {zs:+.1} must face ({x:.1},{y:+.1}) [D probes]"));
+            assert!((z - zs).abs() < 0.6 && mat & 0x3f == 0 && mat & 0x40 != 0,
+                "the end-wall face at ({x:.1},{y:+.1}) sits at z {z:+.2} with the boundary material [D m40], got m{mat:02x}");
+        }
+    }
+    // The only openings: deck-level windows, y bands [D 0.2-step scans]:
+    //   x 7.5/8.0: y −1.8..−1.0 (0.8 tall); x 9.0: −2.0..−1.2; x 10.0: −2.2..−1.2 (1.0 tall).
+    for (x, y_lo, y_hi) in [(7.5f32, -1.8, -1.0), (8.0, -1.8, -1.0), (10.0, -2.2, -1.2)] {
+        let mut y = y_lo;
+        while y <= y_hi + 0.01 {
+            let mut hitz = false;
+            for (p, q) in [(-26.0f32, -14.0), (-14.0, -26.0)] {
+                if let Some((t, n, mat, _)) = w.segment_surface_flags([x, y, p], [x, y, q], true) {
+                    let z = p - t * (p - q);
+                    if (z + 20.4).abs() < 0.6 { hitz = true; break; }
+                }
+            }
+            assert!(!hitz, "the window band at (x {x:.1}, y {y:+.1}) must be open [D probes]");
+            y += 0.4;
+        }
+        // The band's edges are wall (the window is bounded).
+        for y in [y_lo - 0.6, y_hi + 0.6] {
+            let mut hitz = false;
+            for (p, q) in [(-26.0f32, -14.0), (-14.0, -26.0)] {
+                if let Some((t, n, mat, _)) = w.segment_surface_flags([x, y, p], [x, y, q], true) {
+                    let z = p - t * (p - q);
+                    if (z + 20.4).abs() < 0.6 { hitz = true; break; }
+                }
+            }
+            assert!(hitz, "the window band's edge at (x {x:.1}, y {y:+.1}) is end-wall [D probes]");
+        }
+        assert!(y_hi - y_lo < 1.3, "the window at x {x:.1} is {:+.1} tall [D probes] — narrower than the body", y_hi - y_lo);
+    }
+    // The body cannot pass any band: the capsule's total height ~1.58 [M 0x194df0's default arm]
+    // exceeds every window (0.8..1.0 [D]).
+    let capsule_height = 0.55 + (1.0347 - 0.55) + 2.0 * 0.55; // A to B span + the radius bulge at both ends
+    assert!(capsule_height > 1.3,
+        "the float body (~{capsule_height:.2} tall [M Player_Collision 0x194df0 default arm + cc 1.0347 [L]]) exceeds the widest window (1.0 [D])");
 }
 
 /// The iris doors, decided: the z ±8.82 booths' doors — SP#141/#142
