@@ -106,3 +106,15 @@ Progress log:
   tree, its run killed by the sandbox boundary — next session reruns it. #283's landing assert
   red (standing on the wire at y 13.55, no static floor [D probe]). Report + branch pushed;
   the FULL suite did not fit the window (the background runner dies at the tool-call boundary).
+
+Progress (04:35 UTC): the branch = master 21fbeed3 + blockers-2 6082a67a + the real-crossings
+merge 21831436 (the conflict resolution keeps blockers-2's #283 leg; both WORKLOG entries kept).
+The hinge-burn leg REAL and green on the merged tree (all four #139-142 hinges burned through
+the held laser fire +85..144 ticks [M 0x1ae3d8:82-101], the AND sweep, the #274 mid-fall drop
++37 → objective 1). The fire-variant wire drop (real-crossings 29b43fa9, never run there) ran
+here and does NOT release: the #284 ride hung at d_B 1.05 for the full 2400 ticks — the jump
+press drops (blockers-2's three green drops kept). The whole walk GREEN 2/0: 8347 ticks,
+0 stuck, 0 falls, objectives 1-3 through the 0d handoff. No crates/ src change vs master.
+FULL suite PARTIAL: 446/911 binaries, 1409 passed, 2 failed (fix_0c_pylon_live ×2 = the no-GPU
+adapter NotFound, environmental, reproduces on master), 82 ignored; ~465 binaries remain.
+Report: docs/reports/level-0c-real-crossings-2.md.
