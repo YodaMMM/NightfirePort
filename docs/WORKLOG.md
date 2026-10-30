@@ -29,3 +29,16 @@ Root cause of the challenge-state zero-damage open item, three layers:
 
 Walk work continues: cycle to the P2K, clear each live guard (ever_seen/challenge/attack/run/
 press) per nav node, resupply on dry; walkreal_07000009_live loses hold_npcs.
+
+## level-09-live-guards-walk result (06:20 UTC)
+
+The walk PASSES without hold_npcs on real input: 4/4 green on the merged tree (master
+0c90eba8 merged in before the final push) — the exit fired 28 ticks into the cab walk,
+216,228 ticks start-to-finish, 0 stuck, 0 falls, no alarm channel ever. The dart whitelist
+fix (CIVILIAN_CHALLENGE) verified by the new file pin (challenge → dart → sleep 0x51, hp
+unchanged). The takedown shape that survived: silent K5 dart sleeps via nav-graph approaches
+(the stair geometry eats from-below lines), the heard-noise investigators prioritized, the
+loose point-blank aim gate, the P2K only as the dry fallback. Slice (touched binaries,
+final tree): 625 passed, 0 failed, 7 ignored (4 min) — zero FAILED/TIMEOUT/CRASH. The full
+suite restarted on the final tree (build ok 915 in 1109 s); its tail is the next session's
+first read. Report: docs/reports/level-09-live-guards-walk.md.
