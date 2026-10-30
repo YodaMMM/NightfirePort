@@ -23,3 +23,14 @@ not sight [M 0x1416d8:9-11]. Touched binaries 20 passed / 0 failed (door_guard_l
 states_live 9, find_opponent_live 3, vision_bit_census 1, walkreal_07000007_live 2); the full
 suite did not fit — this sandbox kills background processes (verified), suite.py survives only in
 ≤10-min foreground chunks. Report: docs/reports/guard-opponent-pointer.md.
+
+## guard-opponent-pointer-2 (branch s/guard-opponent-pointer-2)
+
+Start: 2026-10-30 12:37 UTC, branch from origin/s/guard-opponent-pointer merged with origin/master dca2f368.
+
+Task: the merged -1 branch turns two tests red (both green on master, both red alone):
+grenade_live::guard_decides_to_throw_grenade_unforced (can_throw_grenade never passes within 1800
+ticks) and bathhouse_shout_mixer_live::the_bathhouse_floor_guards_shout_reaches_the_mixer_too (no
+wake-group guard shouts). Find which reader of the pointer/grace changed each path [M], fix the
+reader or the test (with the decompile cite), un-break, full-file greens + guard/drone/alarm/shout
+binaries + walkreal 03/09/0b/13.
