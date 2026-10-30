@@ -210,6 +210,128 @@ fn probe_the_underpass_pop_mechanics() {
         a.0, a.1, w.scene.sim.as_ref().unwrap().bond.pos);
 }
 
+/// The chain attempt past the drone: the display eye → the proven west hops + the E1 jump onto
+/// the 7.24 platform's wide part → south-west onto the wide part's west strip (7.24, x
+/// −5.03..−4.54, z −108.67..−111.14 [D scan_npar hits 17-18]) → the south-east jump off the
+/// strip's south end onto the 6.22 display piece (x −4.41..−2.93, z −112.41..−117.07 [D
+/// scan_spar]) — WEST of the drone's x −3.82 line → west across the 0.07 step onto the slab →
+/// the under-pass pop [proven by probe_the_underpass_pop_mechanics] → the walkway south → the
+/// gap lane → the west drop → the ramp → the yard. Real input after the leg-3 placement.
+#[test]
+#[ignore = "route record: the strip-end jump past the drone, walked and logged"]
+fn probe_the_strip_jump_past_the_drone_to_the_yard() {
+    let iso = iso();
+    let mut w = Walker::new(nf_view::load(&iso, "0700000c.bin", false).unwrap());
+    {
+        let sim = w.scene.sim.as_mut().unwrap();
+        sim.bond.pos = [5.4, 7.35, -113.0];
+        sim.bond.vel = [0.0; 3];
+    }
+    w.wait(10);
+    // The proven display hops + the E1 jump onto the wide part (the full-route probe's 1-2).
+    for (x, z, l) in [(3.5f32, -112.5f32, "west 1"), (1.5, -111.5, "west 2"), (0.0, -110.5, "west 3"), (-1.2, -109.8, "west 4")] {
+        if !w.try_walk_to(Wp::new(x, 7.4, z).r(0.9), &format!("the display ground {l}")) {
+            eprintln!("[parapet] the {l} hop wedged");
+        }
+    }
+    log_pos(&w, "S1 the display west 4");
+    jump_off_probe(&mut w, -4.0, -108.9, "S2 the jump onto the 7.24 platform");
+    // South-west along the wide part onto its west strip (7.24), then south to its end.
+    w.try_walk_to(Wp::new(-4.8, 8.3, -110.6).r(0.8), "S3 the west strip");
+    log_pos(&w, "S3 the west strip");
+    raw_walk_log(&mut w, -4.8, -111.2, 160, &|sim| sim.bond.pos[2] < -111.0, "S4 the strip south to its end");
+    // The south-east jump onto the 6.22 piece (target (−4.1, −112.8)).
+    jump_off_probe(&mut w, -4.1, -112.8, "S5 the strip-end jump to the 6.22 piece");
+    // West across the 0.07 step onto the slab — with wait-and-retry cycles: the dynamic
+    // blocker (the patrolling oDrone) walls x −3.82 for a stretch of z; if it patrols on,
+    // the lane opens. Wait 400 idle ticks per cycle, up to 4 cycles.
+    let mut on_slab = false;
+    'west: for cycle in 0..4 {
+        raw_walk_log(&mut w, -6.0, -113.0, 300, &|sim| sim.bond.pos[0] < -5.0, &format!("S6 c{cycle} west onto the slab"));
+        if w.scene.sim.as_ref().unwrap().bond.pos[0] < -5.0 { on_slab = true; break 'west; }
+        eprintln!("[parapet] S6 c{cycle}: wedged at {:?} — waiting 400 ticks for the patrol",
+            w.scene.sim.as_ref().unwrap().bond.pos);
+        for _ in 0..400 { w.tick(nf_game::player::Input::default(), false); }
+        for _ in 0..40 {
+            let sim = w.scene.sim.as_ref().unwrap();
+            let yaw = (-6.0f32 - sim.bond.pos[0]).atan2(-113.0f32 - sim.bond.pos[2]);
+            let err = walker::wrap_pi(yaw - sim.bond.yaw);
+            drop(sim);
+            w.tick(nf_game::player::Input { turn: err.clamp(-0.08, 0.08), ..Default::default() }, false);
+            if err.abs() < 0.05 { break; }
+        }
+    }
+    if !on_slab {
+        eprintln!("[parapet] S6 verdict: the west lane never opened (the blocker holds x −3.82)");
+    }
+    for i in 0..150 {
+        w.tick(nf_game::player::Input::default(), false);
+        let sim = w.scene.sim.as_ref().unwrap();
+        if sim.bond.grounded && sim.bond.pos[1] > 7.7 { break; }
+        let _ = i;
+    }
+    log_pos(&w, "S7 the under-pass settle");
+    {
+        let sim = w.scene.sim.as_ref().unwrap();
+        if !(sim.bond.grounded && sim.bond.pos[1] > 7.7 && sim.bond.pos[0] < -5.0) {
+            eprintln!("[parapet] S7 verdict: NOT on the walkway — grounded {:?} pos {:?}",
+                sim.bond.grounded, sim.bond.pos);
+            return;
+        }
+    }
+    eprintln!("[parapet] S7 verdict: ON the walkway — the chain past the drone works");
+    // The walkway south → the gap lane → the west drop → the ramp → the yard (the proven legs).
+    raw_walk_log(&mut w, -8.5, -117.0, 400, &|sim| sim.bond.pos[2] < -116.0, "S8 the walkway south 1");
+    w.walk_to(Wp::new(-9.0, 8.1, -128.0).r(1.2), "S9 the walkway south 2");
+    w.walk_to(Wp::new(-9.0, 8.1, -143.0).r(1.2), "S10 the gap lane");
+    raw_walk_log(&mut w, -9.0, -152.0, 300, &|sim| sim.bond.pos[2] < -149.5, "S11 through the gap lane");
+    raw_walk_log(&mut w, -11.5, -152.0, 200, &|sim| sim.bond.pos[0] < -10.6, "S12 the west drop");
+    for _ in 0..120 {
+        if w.scene.sim.as_ref().unwrap().bond.grounded { break; }
+        w.tick(nf_game::player::Input::default(), false);
+    }
+    {
+        let sim = w.scene.sim.as_ref().unwrap();
+        assert!(sim.bond.grounded && sim.bond.pos[1] < 6.5,
+            "the west drop must land the ramp decks, got {:?}", sim.bond.pos);
+    }
+    log_pos(&w, "S13 on the ramp");
+    w.walk_to(Wp::new(-14.5, 5.4, -155.0).r(1.2), "S14 the ramp south-west");
+    raw_walk_log(&mut w, -15.0, -158.5, 200, &|sim| sim.bond.grounded && sim.bond.pos[1] < 2.0, "S15 the ramp walk-off");
+    {
+        let sim = w.scene.sim.as_ref().unwrap();
+        assert!(sim.bond.grounded && sim.bond.pos[1] < 2.0,
+            "the ramp walk-off must land the yard, got {:?}", sim.bond.pos);
+    }
+    eprintln!("[parapet] S16 the CHAIN IS COMPLETE — display eye → … → the yard, all real input");
+}
+
+/// jump_off (the pocket_descent helper shape), local to this probe.
+fn jump_off_probe(w: &mut Walker, tx: f32, tz: f32, label: &str) {
+    for _ in 0..60 {
+        let sim = w.scene.sim.as_ref().unwrap();
+        let yaw = (tx - sim.bond.pos[0]).atan2(tz - sim.bond.pos[2]);
+        let err = walker::wrap_pi(yaw - sim.bond.yaw);
+        drop(sim);
+        w.tick(nf_game::player::Input { turn: err.clamp(-0.08, 0.08), ..Default::default() }, false);
+        if err.abs() < 0.04 { break; }
+    }
+    let mut landed = None;
+    for i in 0..300 {
+        w.tick(nf_game::player::Input { forward: 1.0, jump: i == 6, ..Default::default() }, false);
+        let sim = w.scene.sim.as_ref().unwrap();
+        if i > 30 && sim.bond.grounded {
+            landed = Some((sim.bond.pos, sim.bond.fall_damage));
+            break;
+        }
+    }
+    match landed {
+        Some((p, d)) => eprintln!("[parapet] {label}: LANDED ({:.2}, {:.2}, {:.2}) fall_damage {d:?}",
+            p[0], p[1], p[2]),
+        None => log_pos(w, &format!("{label}: never re-grounded")),
+    }
+}
+
 /// The rib side for the record: walk the rib south past the blade's north end and log every
 /// west attempt (the blade walls them all [D]); then the wide part's west strip south edge.
 #[test]
