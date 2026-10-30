@@ -35,23 +35,6 @@ fn walk_to_the_story_point(w: &mut Walker) {
     w.wait_enabled(3000, "the party start");
     w.wait(60);
     for (name, at) in [
-        // drone-bump-collision-4: the -3 round's north-lane anchors (z ≈ −46.6) are WRONG —
-        // the nav web's hall nodes sit in the crowd band and the lane itself wedges on the
-        // hall's west wall at x ≈ 80 (the -3 report's own "What's left" item 1). The hall is
-        // crossed on walkreal_07000007_live's PROVEN south-band line — the west mouth
-        // (76.6, −50.7) → the floor (83.1, −50.5) → the east (93.3, −50.4) — the exact anchors
-        // walkreal_07000007 walks green through the armed crowd [drone-bump-collision-3:
-        // walkreal_07 2/2 on the kind-gated push]. The crowd is ARMED: enabled bots with
-        // running control (the party states write no +0x4F8 collision bits [M PartyGirlInit
-        // 0x1728c0 / PartyGirl 0x160140]) fill +0x154 on their own control tick [M
-        // PreDroneControl 0x148db0:35-48], so DoCollision's near arm fires inside 2.0 [M
-        // 0x149ec8:30-33, disasm] and NDrone2_Collision writes kind +0x464 = 0x800 [M
-        // 0x140e90:95-101] → the Jointy push runs at capsule contact [M 0x1ec180:229-281;
-        // drone_bump_live 2/2] — this walk neither disarms nor dodges it; it IS the line a
-        // player walks, on walkreal's measured timing (the pre-hall anchors are identical to
-        // walkreal's, so Bond's tick phase at the mouth matches the proven walk). The main
-        // agent's live check (does the game's crowd stop Bond mid-floor?) is listed in
-        // docs/reports/drone-bump-collision-3.md.
         ("west aisle south", [35.7f32, 43.6, -70.6]),
         ("west aisle north", [42.6, 43.6, -70.5]),
         ("the west wall run", [42.6, 43.6, -45.0]),
@@ -87,10 +70,6 @@ fn walk_to_the_story_point(w: &mut Walker) {
 fn the_control_scene_freezes_the_mission_clock_until_the_hand_back() {
     let iso = iso();
     let mut w = Walker::new(nf_view::load(&iso, "07000007.bin", false).expect("load 07000007"));
-    // drone-bump-collision-4: the crowd answer — step around an armed bot the way a player
-    // steers (aim beside it, keep walking; the push slides Bond along the capsule). Opt-in on
-    // the walker; the arming itself is untouched [M the chain in the anchors' comment].
-    w.crowd_aware = true;
     w.skip_cutscenes = false; // watch the real window (the walker's default skips it)
 
     // Baseline: the clock runs while Bond is in control [M 0x1995a0 — no pause byte set outside

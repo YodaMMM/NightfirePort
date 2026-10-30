@@ -79,21 +79,6 @@ fn walk_to_the_story_point(w: &mut Walker) {
 
     // The party's own route to the hall (the walkreal anchors).
     for (name, at) in [
-        // drone-bump-collision-4: the -3 round's north-lane anchors (z ≈ −46.6) are WRONG —
-        // the nav web's hall nodes sit in the crowd band and the lane itself wedges on the
-        // hall's west wall at x ≈ 80 (the -3 report's own "What's left" item 1). The hall is
-        // crossed on walkreal_07000007_live's PROVEN south-band line — the west mouth
-        // (76.6, −50.7) → the floor (83.1, −50.5) → the east (93.3, −50.4) — the exact anchors
-        // walkreal_07000007 walks green through the armed crowd [drone-bump-collision-3:
-        // walkreal_07 2/2 on the kind-gated push]. The crowd is ARMED (enabled bots with
-        // running control — the party states write no +0x4F8 collision bits [M PartyGirlInit
-        // 0x1728c0 / PartyGirl 0x160140]; +0x154 filled on the bot's own control tick [M
-        // PreDroneControl 0x148db0:35-48]; DoCollision's near arm fires inside 2.0 [M
-        // 0x149ec8:30-33, disasm]; NDrone2_Collision writes kind +0x464 = 0x800 [M
-        // 0x140e90:95-101] → the Jointy push at capsule contact [M 0x1ec180:229-281;
-        // drone_bump_live 2/2]) — this walk neither disarms nor dodges it; it IS the line a
-        // player walks, on walkreal's measured timing (the pre-hall anchors are identical to
-        // walkreal's, so Bond's tick phase at the mouth matches the proven walk).
         ("west aisle south", [35.7f32, 43.6, -70.6]),
         ("west aisle north", [42.6, 43.6, -70.5]),
         ("the west wall run", [42.6, 43.6, -45.0]),
@@ -163,10 +148,6 @@ fn walk_to_the_story_point(w: &mut Walker) {
 fn the_party_corridor_door_locks_at_the_control_scene() {
     let iso = iso();
     let mut w = Walker::new(nf_view::load(&iso, "07000007.bin", false).expect("load 07000007"));
-    // drone-bump-collision-4: the crowd answer — step around an armed bot the way a player
-    // steers (aim beside it, keep walking; the push slides Bond along the capsule). Opt-in on
-    // the walker; the arming itself is untouched [M the chain in the anchors' comment].
-    w.crowd_aware = true;
     walk_to_the_story_point(&mut w);
     // The close takes ticks: Door_SetState mirrors the OLD state's motion bits to the open
     // channel (leaving OPEN writes 1 [M 0x135618:26]) until the leaf arrives at CLOSED. Wait out
@@ -239,35 +220,13 @@ fn sister_the_free_doors_still_open_after_the_lockout() {
         assert!(!sim.drones.channels.on(130), "the story point's channel write reached the sister's walk too");
         assert!(sim.drones.channels.on(0x48), "the hall walk-in fired (the sister shares the route)");
     }
-    // Back into the hall (the walkreal's post-scene anchors, re-routed north of the armed
-    // crowd — the same drone-bump-collision-3 re-derivation as the walk up) to the free hall
-    // door #244 — the old "the hall centre" leg dove into the crowd band (z −50.4) the armed
-    // party bots shove Bond off of [M the arming chain, see the walk up].
-    //
-    // THE STAND POINT, re-derived (drone-bump-collision-9). The old spot (94.5, −47.6) stood
-    // 0.35 south of #244's closed face and the use key did NOTHING — the game's own swing arm
-    // swallows that press: [M Door_Activate 0x135be0's kind-0 arm (the RotPreTransVec block,
-    // LAB_00135e30)] an OPEN swing door (state & 0xc) E'd by an activator whose closed-frame
-    // z (± the 0.3 margin, sign by dir·swing) lands |f| < the door's world-sphere radius
-    // (obj+0x8C) returns with only the busy latch — no state change. #244's numbers [D the
-    // port's placement load, probe_07_route's d244 dump]: kind 0, closed sphere centre world
-    // (94.254, 44.125, −47.250) r 1.292, hinge (94.888, −47.25), local z → world −z, opened
-    // dir = +1 (south swing) — at (94.5, −47.6) the closed-frame z is −0.35 → |f| = 0.65 <
-    // 1.292: inside the band, the press is eaten. The game's use zone for the door is the
-    // doorway box its 0x48 walk-in plate #412 covers [D trigger bounds x 93.31..95.23,
-    // z −46.43..−45.41] — and [M Player_Activate 0x1a5170:100-108 + Collide_PickObj 0x1eae80's
-    // 0x101 sphere arm] the reach is the r-1.0 sphere at head + dir vs the door's LIVE world
-    // sphere (rebuilt by the moved pass [M 0x1336f8:209]): from the box centre (94.27, −45.92)
-    // aiming at the door the use point lands ~1.8 from the open leaf's live centre
-    // (94.888, 44.125, −47.884) — inside 1.0 + 1.292 — while the stand's closed-frame z −1.33
-    // → |f| = 1.63 > 1.292 clears the swing band and the E toggles the leaf. So: stand at the
-    // plate-box centre.
+    // Back south into the hall (the walkreal's post-scene anchors) to the free hall door #244.
     for (name, at) in [
         ("the hall south node", [95.2f32, 43.6, -44.6]),
-        ("the hall east lane", [94.0, 43.6, -46.2]),
-        ("the 0x48 plate-box centre", [94.27, 43.6, -45.92]),
+        ("the hall centre", [93.3, 43.6, -50.4]),
+        ("against the free hall door", [94.5, 43.6, -47.6]),
     ] {
-        w.walk_nav_to(at, name, 0.8);
+        w.walk_nav_to(at, name, 1.4);
     }
     {
         let d = &w.scene.sim.as_ref().unwrap().drones.doors.list[door_i(&w, 244)];
