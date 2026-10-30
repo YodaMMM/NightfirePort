@@ -149,7 +149,13 @@ pub fn stats_rows(
     Some(out)
 }
 
-/// The page's header cells [M 0x209938:44-56 — the 0x1000204 bind, then cells 1/2/3 =
-/// 0x10001e1/0x10001e2/0x163]: (Category, Current, Target, TOTAL). The same quartet the pause
-/// SCORE tab binds [M 0x204408:447-498].
-pub const STATS_HEADER: (u32, u32, u32, u32) = (0x1000_0204, 0x1000_01e1, 0x1000_01e2, 0x163);
+/// The page's header cells [M 0x209938:54-61 — `Txt_BindLabel(0x1000204)` as the header row's
+/// cell 0, then arms 0x19 with cells 1/2/3 = 0x10001e1/0x10001e2/0x163]: (Category, Current,
+/// Target, TOTAL). The ids are SEVEN-digit hex: 0x1000204 = 0x01000204, **bank 1** of
+/// USATxt.dat — 0x01000204 → "Category", 0x010001e1 → "Current", 0x010001e2 → "Target" [L
+/// ee_snapshot Bank[1516]/[1481]/[1482] (FixupTable 0x1f9b200: fixups[1] = 1000; BankData
+/// 0x1f9de00)], 0x163 → "TOTAL" [D USATxt.dat bank 0]. The old consts here (0x1000_0204…) read
+/// 0x10000204 — bank 0x10, a transcription slip of the decompile's digit run; bank 0x10 is past
+/// USATxt.dat's 7 fixups [D the file's NumFixups 7] so every bind failed and the page drew no
+/// headers. The same quartet the pause SCORE tab binds [M 0x204408:447-498].
+pub const STATS_HEADER: (u32, u32, u32, u32) = (0x0100_0204, 0x0100_01e1, 0x0100_01e2, 0x163);

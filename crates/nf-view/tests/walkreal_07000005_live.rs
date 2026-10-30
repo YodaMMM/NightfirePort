@@ -755,6 +755,13 @@ fn the_notch_grab_and_ride_parked() {
 ///   (x −30..−26, 37.4→32.9) up to the battlement's west end (x −28..−16, z −72..−74, floors
 ///   36.7-37.5) — the SWITCH_Helicopterstart(SC3) plate #269 ((−22.76, 37.15, −72.36) out 0x42
 ///   [D placement]) fires en route;
+///
+/// WALKED NOW (level-05-every-objective-2): the approach → the WINDOW LEDGE (x −35, the
+/// disc's own floors 36.0-36.43 running z −19..−25.5 [D probe_sealtris05]) → the wall-hug
+/// window crawl #35 (the real E at the prompt #85 zone, the forward crawl south to the band's
+/// end z ~−36). The band's north seal (the negative below) is REAL but OFF-ROUTE: the player's
+/// lane leaves west over the ledge — the seal's tri anatomy (the notches closed by their
+/// pillars, the piers) is cited on the negative's comment.
 /// - THE MOAT INLET at x −15..−5 (z −72..−76 floors 20-23 — a 14-unit cut through the wall-walk)
 ///   is crossed by THE Q-CLAW GRAPPLE: pulley #281 "graple_pulley" ((−3.40, 42.94, −71.77) [D
 ///   placement] with its "Grapple_from bottom" CEL #280 (−3.39, 42.82, −70.96)) stands 17.6
@@ -871,21 +878,24 @@ fn the_cable_landing_walks_the_south_walkway_toward_the_zip_door() {
         ([-24.6, 34.4, -18.4], "the east strip south"),
         ([-24.3, 34.8, -19.6], "the east strip 19.6"),
     ], 19.0, 1200);
-    // THE BAND'S NORTH SEAL (the route's one remaining blocker, pinned): the west band (the
-    // AI line at y 36.5-37.6 under the 39.8/45.5 roofs [D ai point #259 (−23.41, 36.51, −31.57)
-    // + the guards #65/#68 (−31.3/−32.8, 37.6, −22..−37)]) is sealed from the strip at z −20.5:
+    // THE BAND'S NORTH SEAL (a [D]-backed negative, kept): the west band (the AI line at
+    // y 36.5-37.6 under the 39.8/45.5 roofs [D ai point #259 (−23.41, 36.51, −31.57) + the
+    // guards #65/#68 (−31.3/−32.8, 37.6, −22..−37)]) is sealed from the strip at z −20.5:
     //   - the x −23.7 lane walls at z −19.5 under an overhang lip (the jump bounces at 34.4
     //     under a ceiling at ~35.3) [L the wedge runs];
-    //   - the west lanes (x −31..−32) wall at z −20.45, floor_ny 0.95 [L the wedge runs];
+    //   - the west lanes (x −31..−32) wall at z −20.45, floor_ny 0.95 [L the wedge runs + the
+    //     sealwalk probe: the x −31.44 capsule wedges on the ramp (n 0.09,0.86,0.50 [D]) against
+    //     the x −31.75..−31.51 pier (36.55..38.0 [D])];
     //   - the x −26 lane tops out on the face's rim at y ~38 with 1.6 headroom — Bond's own
-    //     1.86 body cannot stand there [L the rim run];
-    //   - the x −24.3 lane walls at z −19.45 [L this run].
-    // The walk below PINS the seal as the blocker's evidence (a [D]-backed negative: the disc's
-    // own wall faces hold the line). The rest of the route — the window crawl #35, the roofed
-    // corridor, the SW loop, the Q-Claw grapple across the moat inlet to pulley #281 and the
-    // east stairs to door #112 — is documented in this test's header with its [D] cites, and
-    // walks once the seal's game-side answer (a game step rule the port misses, or a different
-    // entry lane) lands; see the report's live checks.
+    //     1.86 body cannot stand there [L the rim run]; the east lane x −26 walls at z −19.45
+    //     on the disc's own face (34.20..34.98 at z −20.0 [D probe_sealtris05]);
+    //   - the band's north notches (x −31.75..−30.25 and −26.5..−25.24, tops 36.86 [D]) are
+    //     closed by their pillars (x −31.38..−30.63 / −26.38..−25.62, 37.0..38.78 at z −21.24
+    //     [D]) — the clear sub-lanes are 0.12-0.38 wide against the capsule's 1.1 diameter.
+    // The walk below PINS the seal as a [D]-backed negative (the disc's own wall faces hold
+    // the line). IT IS NOT THE ROUTE: the player's lane leaves WEST over the window ledge —
+    // the legs below (the ledge walk + the wall-hug window crawl #35) continue the mission;
+    // see the report's "the seal is off-route".
     let mut best_z = f32::MAX;
     let start_tick = w.total_ticks;
     for t in 0..420u32 {
@@ -908,6 +918,74 @@ fn the_cable_landing_walks_the_south_walkway_toward_the_zip_door() {
             "the band's north seal held every lane [L the wedge runs]; best z {best_z:.2} — if that \
              crossed z −20.5 the collision grew a route the walk's lanes could not take");
         assert!(!sim.disabled, "no cut-scene fires on the walked legs");
+    }
+
+    // ---- THE WINDOW-LEDGE BYPASS + THE WALL-HUG WINDOW CRAWL #35 (the mission's real route,
+    // all real input) ----
+    // The disc's own chain [D probe_sealtris05 + probe_ledgewalk05/probe_crawl05 over the
+    // disc's tri set]: the approach's west end (x −35..−34, z −19.5, floors 35.9-36.1) runs
+    // onto the window ledge (x −36.26..−34, floors 36.0-36.43, n(0,0.99,−0.15)) — the ledge's
+    // z −20 rise is the 45° slope (37.0..38.0, n(0,0.71,0.71) at x −35..−33) whose north edge
+    // sits 0.57 over the ledge floor and rides; the ledge continues south (36.0-36.27 to
+    // z −25.5) to the crawl prompt #85 zone (the crawl #35 "Wall Hug Window" at (−34.10,
+    // 37.28, −31.65), band z −26.3..−37.0, prompts #84/#85 at z −37.3/−25.5 [D placements]).
+    walk_legs(&mut w, &[
+        ([-34.6, 36.0, -18.6], "the approach west end"),
+        ([-35.2, 36.1, -20.6], "the ledge lip"),
+        ([-35.3, 36.1, -22.2], "the ledge south 1"),
+        ([-35.3, 36.0, -24.0], "the ledge south 2"),
+        ([-34.78, 36.0, -24.85], "the prompt 85 zone"),
+    ], 26.0, 900);
+    // The E press enters the crawl substate 7 [M Player_Activate 0x1a5170:66-97 →
+    // Player_CollCreepWall 0x196758; the type-6 prompt ctx 0x6 arms along the ledge's south
+    // end [L probe_crawl05: ctx 0x6 from (−35.03, −24.25) through (−34.78, −24.845)]]. The
+    // press shape is the probe's: Bond faces ALONG the crawl axis (yaw π, −z — the #35 band's
+    // run [D yaw 1.571]) and the use key pulses one edge per 6 (the game's Activate is
+    // edge-triggered [M Input_Action mask 4]). Two walk_to::Use attempts were REFUSED with ctx
+    // armed (sub stayed 0) — the act faces the target point, which turned Bond north, off the
+    // wall axis; the crawl entry needs the player's facing on the band's axis [L this file's
+    // first two runs vs probe_crawl05's yaw-π press].
+    w.scene.sim.as_mut().unwrap().bond.yaw = std::f32::consts::PI;
+    {
+        let mut crawling = false;
+        for t in 0..180u32 {
+            w.tick(Input::default(), t % 6 == 0);
+            let sim = w.scene.sim.as_ref().unwrap();
+            if sim.bond.substate == nf_game::player::SS_CREEP {
+                crawling = true;
+                eprintln!("[05r] the window crawl entered at tick {} bond {:?}", w.total_ticks, sim.bond.pos);
+                break;
+            }
+        }
+        let sim = w.scene.sim.as_ref().unwrap();
+        eprintln!("[05r] after the E: tick {} bond {:?} sub {:#x} ctx {:#x}",
+            w.total_ticks, sim.bond.pos, sim.bond.substate, sim.bond.icon_ctx);
+        assert!(crawling, "the E press at the prompt #85 zone must enter the window crawl substate 7 \
+            [M Player_Activate 0x1a5170 → Player_CollCreepWall 0x196758], bond {:?} sub {:#x}",
+            sim.bond.pos, sim.bond.substate);
+    }
+    // Forward crawls SOUTH to the wall's A end [M Player_Creep 0x1969d0: the input direction
+    // decides the end; the crawl rides the #35 band z −26.3..−37.0 [D placements]]. The
+    // probe's shape: 0.02/tick, entered at z −26.29, exited at z −36.07 [L probe_crawl05].
+    let crawl_tick = w.total_ticks;
+    let mut exited = false;
+    for t in 0..2400u32 {
+        w.tick(Input { forward: 1.0, ..Default::default() }, false);
+        let sim = w.scene.sim.as_ref().unwrap();
+        if sim.bond.substate != nf_game::player::SS_CREEP && w.total_ticks - crawl_tick > 10 {
+            exited = true;
+            eprintln!("[05r] the window crawl exited at +{} ticks bond {:?}",
+                w.total_ticks - crawl_tick, sim.bond.pos);
+            break;
+        }
+        if t % 200 == 0 { eprintln!("[05r crawl t{t}] bond {:?} sub {:#x}", sim.bond.pos, sim.bond.substate); }
+    }
+    {
+        let sim = w.scene.sim.as_ref().unwrap();
+        assert!(exited, "the window crawl must exit at the wall's south end [M Player_Creep 0x1969d0], bond {:?}", sim.bond.pos);
+        assert!(sim.bond.pos[2] < -35.0 && sim.bond.pos[1] > 34.0 && sim.bond.pos[1] < 39.0,
+            "the crawl must carry Bond south along the #35 band (z −26.3..−37.0 [D placements], \
+             the exit stands at the band's south end z ~−36 [L probe_crawl05]), got {:?}", sim.bond.pos);
     }
     eprintln!("[05r] the walked legs complete in {} ticks; falls {:?}",
         w.total_ticks, w.report.falls);
