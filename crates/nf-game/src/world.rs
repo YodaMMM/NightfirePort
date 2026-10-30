@@ -511,12 +511,32 @@ fn capsule_tri_contact(t: &[V3; 3], mat: u8, a: &mut V3, b: &mut V3, r: f32, gro
     let spine_dir = if dist > 1e-6 { [v[0] / dist, v[1] / dist, v[2] / dist] } else if dot(n, sub(*a, q)) >= 0.0 { n } else { [-n[0], -n[1], -n[2]] };
     let vr = sub(q, ref_v);
     let dist_r = dot(vr, vr).sqrt();
-    let (dir, mag) = if dist_r > 1e-6 && dist_r < r && dot(vr, n) > 0.0 {
+    let radial = dist_r > 1e-6 && dist_r < r && dot(vr, n) > 0.0;
+    let (dir, mag) = if radial {
         ([vr[0] / dist_r, vr[1] / dist_r, vr[2] / dist_r], r - dist_r)
     } else {
         (spine_dir, r - dist)
     };
-    let push = [dir[0] * mag, dir[1] * mag, dir[2] * mag];
+    // level-0a-corner-push-model: the walk's EDGE-contact displacement skip. The game's edge/vertex
+    // contacts (Dist2Tri flags 1/2, [M 0x109da0:333-368]) RE-AIM the probe p at the spine point
+    // closest to the REF (HITTEST+0x50) before the tail; the tail's push is then REF-relative
+    // (v = p − REF, gated dot(v,n) > 0 and |v| < radius [M 0x109da0:419-457]) — it is NOT the
+    // (p − q) skin depenetration the port's fallback produces. On the walked line (the vertical
+    // spine, the REF the lifetime accumulator [L ee_start_0700000a boots (0,0,0), drifting with the
+    // add-back 0x1ebaa8:353-373]) that REF-relative push never reproduces a wall stop, so the
+    // port's fallback push for an EDGE contact is the port's invention ([S] unverified) — and it
+    // wedges the 0a corner: all four of the wedge's per-tick contacts there are edge contacts
+    // (the counter slab's west strips at x −17.5 and the swung-open door #4 leaf's tip at x −18.4
+    // [cap trace, this branch]), whose small pushes sum exactly anti-parallel to the walk's move
+    // (−0.0156, +0.0159, +0.0988/tick vs the move (0.0154, −0.0985)); the certified hall-wall rest
+    // contact is FACE-INTERIOR (edge=false, the big z 15.04 wall tri [cap trace; [L 2026-10-30]
+    // the game rests z 15.5904 = this push model]). The walk path (top_guard = false) therefore
+    // keeps an edge contact's SIGNALS (walkable/pick below) but drops the fallback DISPLACEMENT;
+    // the swim path (top_guard = true, the game's real tail with the diagonal spine [M the 02 fin
+    // wedge]) keeps everything, and the radial arm (the [M] tail's own REF-relative shape) is
+    // untouched either way.
+    let edge_walk_skip = !top_guard && on_edge && !radial;
+    let push = if edge_walk_skip { [0.0; 3] } else { [dir[0] * mag, dir[1] * mag, dir[2] * mag] };
     if caps_log() {
         eprintln!("[cap] PUSH cent=({:.3},{:.3},{:.3}) q=({:.3},{:.3},{:.3}) p=({:.3},{:.3},{:.3}) d={dist:.4} push=({:.4},{:.4},{:.4}) n=({:.3},{:.3},{:.3}) edge={on_edge} a=({:.3},{:.3},{:.3}) b=({:.3},{:.3},{:.3})",
             (t[0][0]+t[1][0]+t[2][0])/3.0, (t[0][1]+t[1][1]+t[2][1])/3.0, (t[0][2]+t[1][2]+t[2][2])/3.0,
