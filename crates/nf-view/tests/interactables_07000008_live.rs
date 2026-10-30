@@ -406,66 +406,140 @@ fn spawner_wave_releases_on_its_start_channel() {
 
 // ── sound trigger (0xf9) fed by the music plates + the mux ──────────────────────────────────
 
-/// The west-walkway music plates (TouchOnces out 90/91/92 [D]) mux into the map-sound trigger
-/// #106: mux #102 is the 0xEC AND-mux (out 0x68 = 90 AND 91 AND 92 [D params 0x68/0x5a/0x5b/0x5c;
-/// M 0x1b2c68:15 type 3]) and the sound trigger's ON gate is 0x68, id 0x14D
-/// [D #106; M SoundTrigger_Update 0x1b2790]. Sisters: the channels and the voice are quiet before.
+/// The roofline music plates (TouchOnces out 90/91/92 [D #100/#99/#101]) fire from the ZIP LINE
+/// ride, and mux #102 (0xEC) AND-folds them into the map-sound trigger #106's gate
+/// [D #102 params 0x68/0x5a/0x5b/0x5c; M Trigger_MultiplexIn 0x1b2c68:15 type 3; M
+/// Trigger_Update 0x1b1a78 case 3; D #106 gate 0x68 id 0x14D; M SoundTrigger_Update 0x1b2790].
+///
+/// The game's route (all real input below; the spawn is the load's own gate-0 start [D #0]):
+///  1. the station's south shutters #49-52 (free doors, p3 = 0 [D]; E opens [M Door_Update
+///     0x136550]) let the walk out onto the station's y 48.0 south floor (x 134..143,
+///     z −96.75..−100 [D coll-scan obj 27]);
+///  2. that floor's west edge is a sloped roof descending to (131, 46.0) (the (131,46)→(134,48)
+///     quads, z −96.75..−105 [D coll-scan mat 0x12]); its west end carries the third icon #105
+///     ("Hand_Over_Hand", 0xFA → `ThirdIcon_Create` [M 0x1d04f0:511-517], ctx param 3, r 1.164
+///     [D #105]) — standing in its cel set arms `BLData+0x95F` = 3, the wire-grab context
+///     [M build_LinkToRoom 0x1c9680's straddle + Player_HandleJump's context read];
+///  3. the jump press grabs the NEAREST wire instead of jumping [M Player_HandleJump
+///     0x1916b0:118-147] — zipline #19 ("OBJECT_Zip_Line_1", 0x3E → `Wire_Create` 0x1981d8,
+///     param 1 = 2 = the zipline type [D #19; M 0x1d04f0 case 0x3e; M Player_CollWire 0x197130's
+///     port in wire.rs]). Its ride segment is centre ± spherical(radius, yaw+π/2, pitch)
+///     [M Player_Zipline 0x197ff0 + Vec_Spherical_2_Cartesian 0x1e3948] = (110.50, 44.44) ..
+///     (134.02, 49.43) [D the parsed centre/radius/yaw/pitch (122.26, 46.93, −101.10), r 12.025,
+///     yaw π, pitch −0.2094]. `Wire_Create` NEGATES the placement's rot.z before building the
+///     object matrix [M 0x1981d8:14], so the game's drawn cable and the analytic segment both run
+///     west-LOW/east-HIGH; a raw placement-matrix dump of the drawn mesh tilts the other way
+///     (the dump convention, not the game's).
+///  4. The ride tracks the closest point on that segment 1.17363 BELOW it, toward the LOW (west)
+///     end [M Player_Zipline 0x197f50's tail: the closest-point store at obj+0x30/34/38 with the
+///     −1.17363 on +0x34; the low-end target pick; the +0x18 += FRAME_RATE_MUL·0.15 accumulator].
+///     The player's trigger capsule (feet+0.55..feet+1.86, r 0.55 [M triggers.rs
+///     `Toucher::player`; drone.rs's pos−0.6 delivery]) then crosses all three plate volumes:
+///     #100 (y 48.40..49.38 [D]) under the x 130.3-131.3 pass (rider y ≈ 47.6, capsule top
+///     ≈ 48.8), #99 (47.10..48.08 [D]) at x 124.5-125.5 (rider ≈ 46.3, top ≈ 47.6), #101
+///     (45.61..46.59 [D]) at x 117.3-118.3 (rider ≈ 44.8, top ≈ 46.1) — the [D] volumes × the
+///     [M] ride law = the overlap arithmetic. The exact in-game channel firing during a live ride
+///     is the report's live check; every fixed quantity above is pinned.
 #[test]
 fn music_plates_mux_into_the_map_sound() {
     let mut w = load();
-    // The west walkway deck near plate #100 (130.78, 48.89, −101.22) [D]: the stand-in transit
-    // reaches the deck (the walkway is walkreal's pinned route family), the walk-in is real.
-    // The start sits OUTSIDE the plate's own AABB (read live) so the sister is honest.
-    // Mux #102 is a 0xEC placement → `Trigger_MultiplexIn` 0x1b2c68 writes TYPE 3 = the AND
-    // fold [M 0x1b2c68:15 `*(iVar4 + 0x2c) = 3`; Trigger_Update 0x1b1a78 case 3 accumulator
-    // starts 1 and every listed input must be on] — out 0x68 needs ALL THREE plates 90 AND 91
-    // AND 92 [D #102 params 0x68, 0x5a, 0x5b, 0x5c], so the walk covers the deck's three music
-    // plates in order. (The census's "90|91|92" notation named the input list, not an OR — the
-    // 0xEF OR wrapper 0x1b2d38 writes type 0xc, and no 0xEF sits on 08.)
-    let t100 = w.scene.sim.as_ref().unwrap().drones.triggers.iter()
-        .find(|t| t.out == 90).map(|t| (t.centre(), t.lo, t.hi)).expect("the music plate #100 [D]");
-    w.scene.sim.as_mut().unwrap().bond.pos = [t100.0[0] + 0.5, t100.0[1] + 0.8, t100.1[2] - 2.5];
-    w.scene.sim.as_mut().unwrap().bond.vel = [0.0; 3];
-    w.wait(10);
-    assert!(!w.scene.sim.as_ref().unwrap().drones.channels.on(90), "sister: ch 90 off before the plate");
-    assert!(!w.scene.sim.as_ref().unwrap().drones.channels.on(0x68),
-        "sister: the AND fold 0x68 off before any plate [D #102 = 90 AND 91 AND 92]");
-    assert!(!w.scene.sim.as_ref().unwrap().drones.sound_triggers.playing(0x14d),
-        "sister: the map sound is quiet before the plate [D #106 id 0x14D]");
-    w.walk_nav_to(t100.0, "into the music plate #100", 1.2);
-    assert!(w.scene.sim.as_ref().unwrap().drones.channels.on(90),
-        "the music plate fired ch 90 [D #100; M Trigger_Hit 0x1b1fc8]");
-    // Plate #99 (out 91) at (124.98, 47.59, −101.07) [D] — 5.7 m west along the same deck.
-    // The deck is the station roofline grate descending westward: Bond STANDS on its platforms
-    // (the live capsule — 45.88 at x 128.5, 46.07 at #99, 44.67 at #101 [L the grate probe])
-    // but the nav mesh lacks it (a nav leg walked the edge and fell to y 39.9), the single-point
-    // floor ray misses the grate, and the walking capsule drops through the platform gaps
-    // (46.7 → 45.7 → 43.7 across the hop stages [L]) — the player path that touches #99/#101
-    // (the gondola ride?) is unproven; the fold's remaining inputs need a live PCSX2 ride
-    // check. Below: the walk drives #100 (the reachable plate) and pins the AND law against
-    // the live record + the one-input sister.
-    let mut muxed = false;
-    for _ in 0..120 {
-        if w.scene.sim.as_ref().unwrap().drones.channels.on(0x68) { muxed = true; break; }
-        w.scene.sim.as_mut().unwrap().step_bond(Input::default(), false, false, false);
+    // Sisters before the route: every plate channel, the fold and the voice are quiet [D the
+    // placements' mask-8 walk-in outs; D #106's gate].
+    {
+        let s = w.scene.sim.as_ref().unwrap();
+        assert!(!s.drones.channels.on(90) && !s.drones.channels.on(91) && !s.drones.channels.on(92),
+            "sister: the plate channels are quiet at the spawn [D #100/#99/#101]");
+        assert!(!s.drones.channels.on(0x68), "sister: the AND fold 0x68 is off before any plate [D #102]");
+        assert!(!s.drones.sound_triggers.playing(0x14d),
+            "sister: the map sound is quiet before the plates [D #106 id 0x14D]");
+        let mux = s.drones.triggers.iter().find(|t| t.out == 0x68).expect("mux #102");
+        assert_eq!(mux.kind, 3, "mux #102 decodes as the AND type [D 0xec; M 0x1b2c68:15]");
+        assert_eq!(&mux.list[..3], &[90u32, 91, 92], "mux #102's input prefix is the three music plates [D params 0x5a/0x5b/0x5c]");
     }
-    // The AND law's observable with only ch 90 driven: 0x68 stays OFF (one input of three —
-    // the old OR reading would have folded here).
-    assert!(!muxed, "sister: one plate alone must NOT fold the AND mux 0x68 [D #102 0xec = 90 AND 91 AND 92; M 0x1b2c68:15 type 3]");
-    // The fold + the map sound need ch 91 AND 92 too. The plates' volumes hang over the
-    // westward grate chain, whose gaps the walking capsule drops through [L the grate probes:
-    // bond stands AT #99 (46.07) but descends 46.7 → 45.7 → 43.7 walking the stages]; the
-    // player path that touches them (the gondola ride?) is unproven — the reach needs a live
-    // PCSX2 ride check, not a port change (the fold arm is the port's pinned AND law).
-    // The live record is the decode pin: kind 3 (the AND type the 0xec wrapper writes [M
-    // 0x1b2c68:15]), out 0x68, the input prefix 90/91/92 [D params].
-    let mux = w.scene.sim.as_ref().unwrap().drones.triggers.iter().find(|t| t.out == 0x68).expect("mux #102");
-    assert_eq!(mux.kind, 3, "mux #102 decodes as the AND type [D 0xec; M 0x1b2c68:15]");
-    assert_eq!(&mux.list[..3], &[90u32, 91, 92], "mux #102's input prefix is the three music plates [D params 0x5a/0x5b/0x5c]");
-    // The sound trigger's ON gate is 0x68, id 0x14D [D #106] — the voice is quiet while the
-    // fold is off (the map-sound path's pin).
-    assert!(!w.scene.sim.as_ref().unwrap().drones.sound_triggers.playing(0x14d),
-        "the map sound 0x14D is quiet while the AND fold is off [D #106 gate 0x68; M SoundTrigger_Update 0x1b2790]");
+    // ── the walk to the boarding spot (real input; the same legs probe08_plates_route records) ──
+    w.walk_nav_to([139.2, 49.5, -81.2], "to the intro plate", 1.3);
+    w.wait_enabled(4500, "the station-intro scene");
+    w.wait(60);
+    w.walk_nav_to([139.0, 49.5, -93.0], "the station hall", 1.5);
+    w.walk_to(walker::Wp::at(139.5, 49.5, -95.9, walker::Act::Use { use_ticks: 150 }).r(1.1), "the south shutters #49-52 [D]");
+    for (name, target, cap) in [
+        ("through the shutter doorway onto the y 48.0 floor [D obj 27]", [139.5f32, 48.0, -98.6], 400),
+        ("the floor west 1", [136.5, 48.0, -98.9], 500),
+        ("the floor west 2", [134.6, 48.0, -99.0], 500),
+        ("the sloped roof head [D (131,46)→(134,48) quads]", [133.6, 47.7, -100.6], 500),
+        ("the icon #105 stand [D #105]", [133.4, 47.6, -101.2], 400),
+    ] {
+        let mut last = [0.0f32; 2];
+        let mut still = 0u32;
+        let mut ok = false;
+        for _ in 0..cap {
+            let p = w.scene.sim.as_ref().unwrap().bond.pos;
+            if ((p[0] - target[0]).powi(2) + (p[2] - target[2]).powi(2)).sqrt() < 0.55 { ok = true; break; }
+            let use_key = if (p[0] - last[0]).abs() < 0.01 && (p[2] - last[1]).abs() < 0.01 {
+                still += 1; still % 30 == 0
+            } else { still = 0; last = [p[0], p[2]]; false };
+            let desired = (target[0] - p[0]).atan2(target[2] - p[2]);
+            let err = walker::wrap_pi(desired - w.scene.sim.as_ref().unwrap().bond.yaw);
+            w.tick(nf_game::player::Input {
+                turn: err.clamp(-0.08, 0.08),
+                forward: if err.abs() > 1.0 { 0.0 } else { 1.0 },
+                ..Default::default()
+            }, use_key);
+        }
+        let s = w.scene.sim.as_ref().unwrap();
+        assert!(ok, "the walk leg '{name}' never arrived (bond {:?})", s.bond.pos);
+    }
+    assert_eq!(w.scene.sim.as_ref().unwrap().bond.icon_ctx, 3,
+        "the wire-grab context arms on the roof stand [D #105 ctx 3; M 0x1c9680 straddle]");
+    // ── the jump-grab [M Player_HandleJump 0x1916b0:118-147] and the ride ───────────────────────
+    let mut grabbed = false;
+    for t in 0..240u32 {
+        w.tick(nf_game::player::Input { jump: t % 20 == 0, ..Default::default() }, false);
+        let s = w.scene.sim.as_ref().unwrap();
+        if s.bond.substate == nf_game::player::SS_ZIPLINE || s.bond.substate == nf_game::player::SS_WIRE {
+            grabbed = true; break;
+        }
+    }
+    assert!(grabbed, "the jump press in the icon's context grabbed the zipline [M 0x1916b0:118-147; D #19 type 2]");
+    assert_eq!(w.scene.sim.as_ref().unwrap().bond.wire, Some(0), "the grabbed wire is #19, the level's only 0x3E placement [D #19]");
+    // The ride west: the plate channels rise in the pass order (#100 → #99 → #101 [D the volumes'
+    // x over the westward ride; M the low-end target]); the AND fold fires ONLY on the third
+    // (the in-ride one- and two-input sisters of the AND law [M 0x1b2c68:15 type 3; 0x1b1a78
+    // case 3]), and the map sound plays only on the fold [D #106 gate 0x68].
+    let mut seen90 = None; let mut seen91 = None; let mut seen92 = None; let mut folded = None;
+    for t in 0..1200u32 {
+        w.tick(nf_game::player::Input::default(), false);
+        let s = w.scene.sim.as_ref().unwrap();
+        if seen90.is_none() && s.drones.channels.on(90) {
+            seen90 = Some(t);
+            assert!(!s.drones.channels.on(91) && !s.drones.channels.on(92) && !s.drones.channels.on(0x68)
+                && !s.drones.sound_triggers.playing(0x14d),
+                "sister: ONE plate alone must not fold the AND mux or start the sound [D #102 = 90 AND 91 AND 92; M 0x1b2c68:15 type 3]");
+        }
+        if seen90.is_some() && seen91.is_none() && s.drones.channels.on(91) {
+            seen91 = Some(t);
+            assert!(t >= seen90.unwrap(), "the ride passes #100 before #99 [D the volumes' x; M the westward ride]");
+            assert!(!s.drones.channels.on(92) && !s.drones.channels.on(0x68)
+                && !s.drones.sound_triggers.playing(0x14d),
+                "sister: TWO plates must not fold the AND mux [D #102; M 0x1b1a78 case 3 every input on]");
+        }
+        if seen91.is_some() && seen92.is_none() && s.drones.channels.on(92) { seen92 = Some(t); }
+        if seen92.is_some() && folded.is_none() && s.drones.channels.on(0x68) { folded = Some(t); }
+        if folded.is_some() { break; }
+    }
+    let t90 = seen90.expect("the ride crossed plate #100's volume and fired ch 90 [D #100; M the ride law]");
+    let t91 = seen91.expect("the ride crossed plate #99's volume and fired ch 91 [D #99; M the ride law]");
+    let t92 = seen92.expect("the ride crossed plate #101's volume and fired ch 92 [D #101; M the ride law]");
+    let t68 = folded.expect("the AND fold 0x68 latched on the third plate [D #102; M 0x1b2c68:15 type 3]");
+    assert!(t90 < t91 && t91 < t92 && t92 <= t68, "the westward ride fired 90 → 91 → 92, then the fold [D the volumes' x]");
+    assert!(t68 - t92 <= 30, "the fold latched within 30 ticks of the third plate (the mux's per-tick update [M 0x1b1a78 case 3])");
+    // The map sound [D #106 gate 0x68 id 0x14D; M SoundTrigger_Update 0x1b2790].
+    let mut sounded = false;
+    for _ in 0..60 {
+        if w.scene.sim.as_ref().unwrap().drones.sound_triggers.playing(0x14d) { sounded = true; break; }
+        w.tick(nf_game::player::Input::default(), false);
+    }
+    assert!(sounded, "the map sound 0x14D plays on the muxed gate [D #106; M SoundTrigger_Update 0x1b2790]");
 }
 
 // ── ladders (0x22) ──────────────────────────────────────────────────────────────────────────
