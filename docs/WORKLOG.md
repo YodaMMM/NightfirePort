@@ -480,3 +480,12 @@ origin/master (a19be699). Task: port the game's ONE cylinder query faithfully
 ([M] Intersect_CylGeom 0x109da0 whole fn; Collide_Intersect 0x1ebaa8) for the paths that use
 it, so a single cull rule serves all of them; remove NF_CULL_UP / NF_NO_CULL. Landing bar:
 walkreal 02, 03, 08, 14, fix_npc_doors, npc_doors, mp_perf_16 and every touched binary green.
+The faithful cull landed: the head-on skip compares the RAW denom dot(plane_n, B−A)
+[M 0x109da0 disasm 0x10a1f0/0x10a278-8e8 — f2 = the f-clamp's own divisor], not a
+normalized-spine dot (that feeds the 0.7 walkable gate :473); walk-leg cull inert, climb live;
+D2 flags-99 skip landed; NF_CULL_UP/NF_NO_CULL/NF_CAPS_D2 removed. Named set: 02 1/0, 03 4/0,
+08 3/0, fix_npc_doors 1/0, npc_doors 6/0+1i (the -15 06-guard red fixed), mp_perf_16 2/0
+(digest re-pinned); 01 2/3 + 14 3/3 = the substitute-tail gap (the game's tail is dead on
+walked lines [M + L drift]; the feet band is the missing vertical — the next work). nf-game
+lib 591/0/2i; the two lib pins rewritten to the faithful rule. See
+docs/reports/capsule-cull-and-los-masks-16.md.
