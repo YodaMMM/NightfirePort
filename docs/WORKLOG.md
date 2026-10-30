@@ -34,3 +34,20 @@ ticks) and bathhouse_shout_mixer_live::the_bathhouse_floor_guards_shout_reaches_
 wake-group guard shouts). Find which reader of the pointer/grace changed each path [M], fix the
 reader or the test (with the decompile cite), un-break, full-file greens + guard/drone/alarm/shout
 binaries + walkreal 03/09/0b/13.
+
+Outcome 13:40 UTC: both reds are HARNESS ARTIFACTS pinning master's stand-in behaviour — the -1
+branch's port readers are the game's own and no source change is needed. (1) grenade_live's
+blanket `set_channel(1..=255)` set the standing fail-hook channels 0x60/0x61 [M 0x1827d8:98-117]
+and the internal 99/100 [M 0x182c60:23-33] → Mission_Status ≥ 2 within a tick →
+`PlrStat_OkToUpdate` 0 [M 0x1993e0] → FindOpponent zeroed +0x170 every tick [M 0x1424e0:106-108]
+→ the router head parked the guard in 0x60 forever [M 0x148338:20-31] and CanThrowGrenade's own
++0x170 gate [M 0x17a798:16] could never pass — the probe run printed stat_ok=false with
+bond_alive=true. The harness now leaves {0x60,0x61,0x62,99,100} off (the objective channels
+0x48/0x4b/0x4d announce but do not move Mission_Status [L ee_start_05.bin 0x2a3ed0]). (2) the
+bathhouse floor walk buried Bond at plate centre y−1.0 (the drop the bunker sibling's comment
+already calls out) and he drowned mid-walk (death frame 2143, health 0.00 — probed) → ch 0x62
+[M 0x182c60:21] → Mission_Status 3 → the pointer zeroed on the dead-class arms [M 0x1424e0:111-114]
+→ the visible-sight branch never acks [M 0x176a28:222-231] → no AttackTalk site [M 0x13eac0's
+callers] fires; master passed the same run by acking sight on a dead Bond (no pointer gate). The
+walk now stands on the plate centres like the bunker test. grenade_live 2/2,
+bathhouse_shout_mixer_live 2/2; the full final-tree suite is running (totals to the report).
