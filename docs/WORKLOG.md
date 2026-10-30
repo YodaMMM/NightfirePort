@@ -14,3 +14,14 @@ load — its writer is the whole-mission AND ch 100 [M 0x1827d8:119-123] that fi
 then COMPLETE (4) after the success touches write ch 0x64 = 100, plus ch 100 raised by the
 monitor's all-AND and all six mission records complete at the latch. No port change yet — the
 monitor already ANDs every record and writes ch 100 [M 0x1827d8:119-123]; the test run decides.
+
+Outcome 09:15 UTC: the extended walk is GREEN —
+`walkreal_07000013_live::walk_the_warm_chain_to_the_front_entrance_and_out` 1 passed / 0 failed
+(8.05 s, re-verified twice). The pin held with NO port change: the port's
+`Mission_MonitorObjectives` already ANDs every record and writes ch 100 [M 0x1827d8:119-123],
+so once 07000013's success touches #73/#164/#165 write ch 0x64 = 100 the whole-mission AND folds
+0x04000035 3 → 4 the same tick. Full-suite run incomplete at the sandbox deadline (see the
+report): 664/915 binaries recorded, 1510 passed, 3 failed (2 documented no-GPU pylon env
+failures + net_internet_live), 173 ignored, ~160 OOM kills from 4-way parallelism (my runner's
+fault, not the tree's), ~250 unrecorded. State: /home/z/suite13_state.json (persists for the
+next session; rerun the rc=-9/124 entries solo).
