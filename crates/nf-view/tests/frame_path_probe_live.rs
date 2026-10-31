@@ -299,6 +299,8 @@ fn probe_gpu_timestamps() {
         }
         let mut r = nf_view::gpu::Renderer::new(&device, &queue, format, &scene, false, false);
         r.pass_timestamps = Some(qs.clone());
+        // NF_PROBE_NOSPLIT=1: the effect-pool draws submitted whole (the pre-split GPU load).
+        r.split_runs = std::env::var_os("NF_PROBE_NOSPLIT").is_none();
         let (layout, _) = scene.skin_layout();
         let hf = nf_view::hud::overlay(&scene, 16.0 / 9.0);
         let mut worst = 0.0f64;
