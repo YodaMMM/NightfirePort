@@ -880,37 +880,28 @@ fn west_doorway_repro() {
 /// again (the instances fix's regression pin).
 ///
 /// The reach, all real input (this round — the old REACH teleport onto (−11.35, 1.12, −18.6) is
-/// deleted): the game's route to the bridge is the ai graph's own ring through the west offices
-/// [D 0700000a ai_network; the same legs walked green end-to-end in
-/// walk_office_floor_qworm_keyboard_hatch] — out of the lift cab, the lobby south, the west hall
-/// (the through-line), the west offices' north corridor, down the west office block, the west
-/// corridor jinks, the south-west offices, south of the pillar into the pocket, the keypad's
-/// wall stand (−11.9, −17.5) [D keypad #648 at (−10.69, 1.52, −17.46)], then south-east onto
-/// the bridge's west end. The mouth legs the old note called wedging were the pillar crossing —
-/// the main walk re-routed it south of the pillar and is green end-to-end, so the walk stands.
-/// The strip's west edge x −11.43 [D] and the wall's west face x −10.70 [D] stay east of the
-/// path; the closed door #724's leaf sits in the gap (x −10.70..−10.45, z −18.04..−19.36 [D])
-/// and is never crossed — the bridge's west half is pocket-side floor.
+/// deleted): the game's route to the bridge is the player's own ring through the west offices to
+/// the pocket — the SAME walked timeline as walk_office_floor_qworm_keyboard_hatch (the Q-Worm
+/// PC detour included, green end-to-end), verbatim to the keypad's wall stand (−11.9, −17.5)
+/// [D keypad #648 at (−10.69, 1.52, −17.46)], then south-east onto the bridge's west end. The
+/// timeline must be bit-identical to the main walk's up to the divergence: civilian g8 patrols
+/// the desk lane itself (his loop (−14.8, 8.3) ↔ (−18.7, 5.4), rng 16 fov 1.57 [L the
+/// NF_ALARM_TRACE roster dump]) and a fresh-state crossing meets him head-on (d 0.5, seen →
+/// challenge 0x3e → the alarm press → fail 0x4000032 [L this round's trace runs]) — the main
+/// walk's phase (the PC detour delays the lane crossing) keeps him out of sight the whole way,
+/// so the shared timeline is the honest walk. The strip's west edge x −11.43 [D] and the wall's
+/// west face x −10.70 [D] stay east of the final leg; the closed door #724's leaf sits in the
+/// gap (x −10.70..−10.45, z −18.04..−19.36 [D]) and is never crossed — the bridge's west half
+/// is pocket-side floor, walled off from the corridor-mouth civilian g15 [D the coll-scan wall,
+/// the line to (−11.35, −18.6) crosses x −10.70 inside the wall's z −15.38..−17.96 span].
 #[test]
 fn bond_stands_at_the_mouth_bridge_edge() {
-    let mut w = load_carry(None);
-    // The cab-mouth SS lift doors sweep OPEN at create (75 ticks [M 0x1a9c58:51]) — the walk out
-    // of the cab pins at z 12.4 if this regressed (the prologue's own guard).
-    w.wait(30);
-    for _ in 0..150 {
-        let done = w.scene.sim.as_ref().unwrap().drones.sss.list.iter()
-            .filter(|s| s.placement == 524 || s.placement == 525)
-            .all(|s| s.state == 0 || s.state == 0x40);
-        if done { break; }
-        w.wait(5);
-    }
-    // Out of the cab and the corridor loop west (the prologue's own anchors).
-    w.walk_to(Wp::new(-3.9, 0.0, 13.2), "out of the lift");
-    w.walk_to(Wp::new(-3.9, 0.0, 15.5).r(1.2), "lobby south");
-    w.walk_to(Wp::new(-10.0, 0.4, 16.0).r(1.2), "the west hall");
-    // The ai graph's ring to the pocket (the main walk's legs, green end-to-end), the watch
-    // between the legs (the alarm runner's press [M 0x168ea8] must not land mid-route).
-    let ring: [([f32; 3], &str); 21] = [
+    // The main walk's own prologue + ring, bit-identical (the objectives 3-5 chain included —
+    // the timeline is the phase-setter for the desk lane's patroller).
+    let mut w = walk_to_security_keyboard();
+    let ring: [([f32; 3], &str); 23] = [
+        ([-7.5, 1.3, 14.5], "ring: the security centre's west door"),
+        ([-7.5, 1.3, 16.5], "ring: the west hall north"),
         ([-20.5, 1.3, 16.5], "ring: the west offices' north corridor"),
         ([-20.5, 1.3, 5.5], "ring: down the west office block"),
         ([-17.6, 1.3, 5.5], "ring: the ai node 17 east of the door"),
