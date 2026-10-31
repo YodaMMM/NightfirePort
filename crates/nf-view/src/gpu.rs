@@ -229,6 +229,51 @@ const SHARD_GROUPS: usize = 16;
 /// Most overlay vertices per frame.
 const HUD_MAX: usize = 16384;
 
+/// perf-240f: `Renderer::sub_runs` — per material, its triangles in index order grouped into runs
+/// of one palette slot (see the field doc). Only the unskinned-material Character/Effect draws (the
+/// effect pools, the attachment draws) with at least `MIN` indices are split, and only when that
+/// gives more than one run.
+fn sub_runs_for(scene: &Scene, attrs: &[crate::scene::SkinAttr], verts: &[crate::scene::Vertex]) -> Vec<Vec<[u32; 3]>> {
+    const MIN: u32 = 768;
+    let slot_of = |v: u32| -> u32 {
+        match (attrs.get(v as usize), verts.get(v as usize)) {
+            (Some(a), Some(x)) if a.a != u32::MAX && a.a == a.b && (a.w == 1.0 || a.w == 0.0) && a.mtb < 0
+                && x.pos.iter().all(|c| c.is_finite()) => a.a,
+            _ => u32::MAX,
+        }
+    };
+    scene.materials.iter().map(|m| {
+        if m.skin.is_some() || m.layer == crate::scene::Layer::World || m.index_count < MIN || m.index_count % 3 != 0 { return Vec::new(); }
+        let (f, n) = (m.first_index as usize, m.index_count as usize);
+        let Some(ix) = scene.indices.get(f..f + n) else { return Vec::new() };
+        let mut runs: Vec<[u32; 3]> = Vec::new();
+        for (t, tri) in ix.chunks_exact(3).enumerate() {
+            let s = slot_of(tri[0]);
+            let s = if s != u32::MAX && slot_of(tri[1]) == s && slot_of(tri[2]) == s { s } else { u32::MAX };
+            match runs.last_mut() {
+                Some(r) if r[2] == s => r[1] += 3,
+                _ => runs.push([(f + t * 3) as u32, 3, s]),
+            }
+        }
+        if runs.len() <= 1 { Vec::new() } else { runs }
+    }).collect()
+}
+
+/// perf-240f: the index ranges a draw submits — the whole `[first, first + count)` when it is not
+/// split, else its runs minus those whose slot is collapsed, adjacent kept runs merged into one range.
+fn live_ranges(runs: &[[u32; 3]], collapsed: &[bool], first: u32, count: u32, mut emit: impl FnMut(u32, u32)) {
+    if runs.is_empty() { emit(first, count); return; }
+    let mut cur: Option<(u32, u32)> = None;
+    for r in runs {
+        if r[2] != u32::MAX && collapsed.get(r[2] as usize).copied().unwrap_or(false) { continue; }
+        cur = match cur {
+            Some((f, n)) if f + n == r[0] => Some((f, n + r[1])),
+            Some((f, n)) => { emit(f, n); Some((r[0], r[1])) }
+            None => Some((r[0], r[1])),
+        };
+    }
+    if let Some((f, n)) = cur { emit(f, n); }
+}
 /// Extract the 6 frustum planes from a column-major `view_proj` (Gribb-Hartmann). Each plane is `(a, b, c, d)` with
 /// `a·x + b·y + c·z + d ≥ 0` inside the frustum, normalised so a sphere of radius `r` centred at `p` is fully outside
 /// when `a·p.x + b·p.y + c·p.z + d < −r`.
@@ -294,7 +339,9 @@ pub fn alpha_shaped(rgba: &[u8]) -> bool {
 /// batch-draws: the bindless world bind group, the snow texture's index in it, the indirect-args
 /// buffer and its per-frame staging (5 u32 per draw: index_count, instance_count, first_index,
 /// base_vertex, first_instance).
-struct Batch { bg: wgpu::BindGroup, snow_tex: u32, indirect: wgpu::Buffer, args: Vec<u32> }
+struct Batch { bg: wgpu::BindGroup, snow_tex: u32, indirect: wgpu::Buffer, args: Vec<u32>,
+    /// perf-240f: per run of equal pipelines, (pipeline, first arg, end arg) into `args`.
+    segs: Vec<(usize, u32, u32)> }
 
 #[derive(Clone, Copy)]
 struct DrawCall { layer: crate::scene::Layer, pass: u8, pipeline: usize, tex: usize, first: u32, count: u32, centre: [f32; 3], radius: f32, cel: Option<u16>, chain: u32, node: u32, lflags: u16, skin: Option<(u32, Option<u32>)> }
@@ -371,6 +418,19 @@ pub struct Renderer {
     /// The last uploaded palette's translations — a skinned draw's live world position for its light
     /// pick (`DrawCall::skin`; the game's obj+0x80 sphere follows the object [M 0x1e69a0:73-81]).
     skin_pos: std::cell::RefCell<Vec<[f32; 3]>>,
+    /// perf-240f: per palette entry of the last upload, whether its 3×3 is exactly zero (the
+    /// `skin_palette` FAR park / the hidden-character collapse) — every vertex skinned by that entry
+    /// alone lands exactly on its translation.
+    skin_collapsed: std::cell::RefCell<Vec<bool>>,
+    /// perf-240f: per draw (material index), its triangles split into runs `[first, count, slot]`
+    /// in index order — `slot` = the one palette entry every vertex of the run is skinned by alone
+    /// (a == b, weight 0 or 1, no morph, finite bind position), u32::MAX = anything else. Empty =
+    /// the draw is not split (static draws, small draws, single-run draws). A run whose slot is
+    /// collapsed puts all its vertices on one point: zero-area triangles that rasterize no sample,
+    /// so leaving it out of the frame draws exactly the same pixels. The effect pools (thousands
+    /// of parked decal/casing/debris slots in one draw, ~1M indices each) were ~90% of the world
+    /// pass's GPU time on 0700001b / 07000016 / 07000007.
+    sub_runs: Vec<Vec<[u32; 3]>>,
     /// Per character: the light-pick centre when the palette's root slot is not where the
     /// character is drawn (`Scene::char_light_centres` — the script actors, whose object sits at
     /// the origin while the sequence root carries the body). Set with each palette build.
@@ -441,6 +501,12 @@ pub struct Renderer {
     movie_bg: Option<wgpu::BindGroup>,
     movie_size: Option<(u32, u32)>,
     movie_vbuf: wgpu::Buffer,
+    /// Measurement aid: a 2-entry timestamp query set the world pass writes at its start and end
+    /// (the pass's timestamp_writes in render). None everywhere but the GPU-timing probes.
+    pub pass_timestamps: Option<wgpu::QuerySet>,
+    /// Measurement aid: draws (material indices) flagged true are left out of the frame. Empty
+    /// everywhere but the GPU-cost bisection probe.
+    pub probe_skip: Vec<bool>,
 }
 
 impl Renderer {
@@ -718,6 +784,7 @@ impl Renderer {
         let skin_buf = device.create_buffer_init(&wgpu::util::BufferInitDescriptor { label: Some("skin attrs"), contents: bytemuck::cast_slice(&attrs), usage: wgpu::BufferUsages::VERTEX });
         let snow_skin = device.create_buffer_init(&wgpu::util::BufferInitDescriptor { label: Some("snow attrs"), contents: bytemuck::cast_slice(&vec![stat; SNOW_MAX]), usage: wgpu::BufferUsages::VERTEX });
         let ibuf = device.create_buffer_init(&wgpu::util::BufferInitDescriptor { label: None, contents: bytemuck::cast_slice(&scene.indices), usage: wgpu::BufferUsages::INDEX });
+        let sub_runs = sub_runs_for(scene, &attrs, &verts);
         // Draw order (docs/systems/render.md): sky before the world, list 0, characters, list 1 (alpha), sky after the fog
         // pass, effects; the vertex buffer keeps its layout (the character tail stays contiguous).
         // List 0 order per `View_DrawObjList` (0x1e69a0) + `View_AddCels` (0x1e6ba0): the viewer's per-list array holds
@@ -748,8 +815,8 @@ impl Renderer {
                 label: Some("world textures (bindless)"), layout: l,
                 entries: &[wgpu::BindGroupEntry { binding: 0, resource: wgpu::BindingResource::TextureViewArray(&refs) }, wgpu::BindGroupEntry { binding: 1, resource: wgpu::BindingResource::Sampler(&sampler) }],
             });
-            let indirect = device.create_buffer(&wgpu::BufferDescriptor { label: Some("draw args"), size: 20 * (scene.materials.len() as u64 + 1), usage: wgpu::BufferUsages::INDIRECT | wgpu::BufferUsages::COPY_DST, mapped_at_creation: false });
-            Batch { bg, snow_tex, indirect, args: Vec::new() }
+            let indirect = device.create_buffer(&wgpu::BufferDescriptor { label: Some("draw args"), size: 20 * (sub_runs.iter().map(|r| r.len().max(1) as u64).sum::<u64>() + 1), usage: wgpu::BufferUsages::INDIRECT | wgpu::BufferUsages::COPY_DST, mapped_at_creation: false });
+            Batch { bg, snow_tex, indirect, args: Vec::new(), segs: Vec::new() }
         });
         let order_cap = draws.len();
         let cel_boxes = scene.cels.iter().map(|c| (c.min, c.max)).collect();
@@ -780,7 +847,7 @@ impl Renderer {
             for ch in &cel_graph.chains { for &c in ch { if (c as usize) < n { reached[c as usize] = true; } } }
             reached.iter().map(|r| !r).collect()
         };
-        Renderer { shard_pipeline, shard_vbuf, shard_groups: Vec::new(), woman_tex, snow_pipeline, snow_vbuf, snow_bg, hud_pipeline, hud_add_pipeline, hud_sub_pipeline, hud_vbuf, hud_bgs, pipelines, fog, notex, nofog, uniform, uniform_bg, staged: Vec::new(), orphan_nodes, destroy_dead: Vec::new(), destroy_wreck_draw: Vec::new(), destroy_wreck_all: scene.destroy_wrecks.iter().map(|(c, _)| c.map(f32::to_bits)).collect(), destroy_tint: Vec::new(), batch, vbuf, skin_buf, snow_skin, pal_buf, col_buf, wts_buf, mtg_buf, skin_layout, skin_pos: Default::default(), char_light_centre: Vec::new(), lights: Default::default(), light_memo: Vec::new(), light_memo_gen: 1, light_memo_lights: Default::default(), los_memo: Vec::new(), los_memo_world: (0, 0), wreck_of: Vec::new(), wreck_of_src: Vec::new(), dead_sorted: Vec::new(), screen_aspect: 0.0, ibuf, tex_bgs, tex_frames, draws, order: Vec::with_capacity(order_cap), cel_boxes, cel_graph, viewer_cel: Default::default(), last_vis: None, last_cell_vis: None, movie_tex: None, movie_bg: None, movie_size: None, movie_vbuf, hud_tbgl: tbgl, hud_sampler: sampler }
+        Renderer { shard_pipeline, shard_vbuf, shard_groups: Vec::new(), woman_tex, snow_pipeline, snow_vbuf, snow_bg, hud_pipeline, hud_add_pipeline, hud_sub_pipeline, hud_vbuf, hud_bgs, pipelines, fog, notex, nofog, uniform, uniform_bg, staged: Vec::new(), orphan_nodes, destroy_dead: Vec::new(), destroy_wreck_draw: Vec::new(), destroy_wreck_all: scene.destroy_wrecks.iter().map(|(c, _)| c.map(f32::to_bits)).collect(), destroy_tint: Vec::new(), batch, vbuf, skin_buf, snow_skin, pal_buf, col_buf, wts_buf, mtg_buf, skin_layout, skin_pos: Default::default(), skin_collapsed: Default::default(), sub_runs, char_light_centre: Vec::new(), lights: Default::default(), light_memo: Vec::new(), light_memo_gen: 1, light_memo_lights: Default::default(), los_memo: Vec::new(), los_memo_world: (0, 0), wreck_of: Vec::new(), wreck_of_src: Vec::new(), dead_sorted: Vec::new(), screen_aspect: 0.0, ibuf, tex_bgs, tex_frames, draws, order: Vec::with_capacity(order_cap), cel_boxes, cel_graph, viewer_cel: Default::default(), last_vis: None, last_cell_vis: None, movie_tex: None, movie_bg: None, movie_size: None, movie_vbuf, hud_tbgl: tbgl, hud_sampler: sampler, pass_timestamps: None, probe_skip: Vec::new() }
     }
 
     /// The game's depth-0 pyramid for the walk [M `Vision_Calculate_View_Fustrum` 0x1e7df8,
@@ -879,12 +946,16 @@ impl Renderer {
     /// The last `render`'s submitted draw count (measurement aid).
     pub fn order_len(&self) -> usize { self.order.len() }
 
+    /// The last `render`'s submitted draws (material indices, in draw order; measurement aid).
+    pub fn order_draws(&self) -> Vec<usize> { self.order.iter().map(|o| o.2).collect() }
+
     /// G-043: upload one frame's skinning palette and colour table (replaces re-uploading every posed vertex).
     /// `vis`: the frame's room visibility mask (see `Scene::skin_palette`).
     pub fn update_skin(&self, queue: &wgpu::Queue, scene: &Scene, choice: Option<usize>, time: f32, opts: crate::scene::ViewOpts, vis: Option<&[bool]>) {
         let (pal, cols) = scene.skin_palette(&self.skin_layout, choice, time, opts, vis);
         if !pal.is_empty() { queue.write_buffer(&self.pal_buf, 0, bytemuck::cast_slice(&pal)); }
         *self.skin_pos.borrow_mut() = pal.iter().map(|m| [m[3][0], m[3][1], m[3][2]]).collect();
+        self.note_collapsed(&pal);
         queue.write_buffer(&self.col_buf, 0, bytemuck::cast_slice(&cols));
         self.upload_morph_weights(queue, scene);
     }
@@ -899,10 +970,18 @@ impl Renderer {
         if !wts.is_empty() { queue.write_buffer(&self.wts_buf, 0, bytemuck::cast_slice(&wts)); }
     }
 
+    /// perf-240f: skin_collapsed for the palette just uploaded (3×3 exactly zero).
+    fn note_collapsed(&self, pal: &[nf_formats::anim::Mat4]) {
+        let mut c = self.skin_collapsed.borrow_mut();
+        c.clear();
+        c.extend(pal.iter().map(|m| m[..3].iter().all(|col| col[0] == 0.0 && col[1] == 0.0 && col[2] == 0.0)));
+    }
+
     /// Upload an already-built (possibly interpolated) palette and colour table.
     pub fn upload_skin(&self, queue: &wgpu::Queue, pal: &[nf_formats::anim::Mat4], cols: &[[f32; 4]]) {
         if !pal.is_empty() { queue.write_buffer(&self.pal_buf, 0, bytemuck::cast_slice(pal)); }
         { let mut sp = self.skin_pos.borrow_mut(); sp.clear(); sp.extend(pal.iter().map(|m| [m[3][0], m[3][1], m[3][2]])); }
+        self.note_collapsed(pal);
         if !cols.is_empty() { queue.write_buffer(&self.col_buf, 0, bytemuck::cast_slice(cols)); }
     }
 
@@ -973,7 +1052,8 @@ impl Renderer {
                     // sprite (TEST_1 0x32001, AFAIL ZB_ONLY) chained by psiClearZ 0x10b9a0; here the pass clear.
                     view: depth, depth_ops: Some(wgpu::Operations { load: wgpu::LoadOp::Clear(1.0), store: wgpu::StoreOp::Discard }), stencil_ops: None,
                 }),
-                timestamp_writes: None, occlusion_query_set: None, multiview_mask: None,
+                timestamp_writes: self.pass_timestamps.as_ref().map(|q| wgpu::RenderPassTimestampWrites { query_set: q, beginning_of_pass_write_index: Some(0), end_of_pass_write_index: Some(1) }),
+                occlusion_query_set: None, multiview_mask: None,
             });
             if let Some([x, y, w, h]) = pillar.filter(|_| movie.is_none()) {
                 pass.set_viewport(x, y, w, h, 0.0, 1.0);
@@ -1088,8 +1168,10 @@ impl Renderer {
             let wreck_draw = &self.destroy_wreck_draw;
             let parked_pos = self.skin_pos.borrow();
             let layout = &self.skin_layout;
+            let probe_skip = &self.probe_skip;
             self.order.extend(draws.iter().enumerate().filter(|&(k, dc)| {
                 if skip.contains(&k) { return false; }
+                if probe_skip.get(k).copied().unwrap_or(false) { return false; }
                 if !destroy_dead.is_empty() && dc.layer == Layer::World
                     && destroy_dead.binary_search(&dc.centre.map(f32::to_bits)).is_ok() { return false; }
                 if !wreck_all.is_empty() && wreck_of[k]
@@ -1277,20 +1359,30 @@ impl Renderer {
                 // ONE indirect multi-draw whose per-draw first_instance selects the uniform slot.
                 pass.set_bind_group(1, &b.bg, &[]);
                 b.args.clear();
+                b.segs.clear();
+                // perf-240f: a split draw (`sub_runs`) contributes only its live runs — the same
+                // uniform slot (first_instance) for each, so the drawn triangles keep their order.
+                let collapsed = self.skin_collapsed.borrow();
                 for (j, &(_, _, k)) in self.order.iter().enumerate() {
                     let dc = &self.draws[k];
-                    b.args.extend_from_slice(&[dc.count, 1, dc.first, 0, j as u32 + 1]);
+                    let at = (b.args.len() / 5) as u32;
+                    match b.segs.last_mut() {
+                        Some(s) if s.0 == dc.pipeline => {}
+                        _ => b.segs.push((dc.pipeline, at, at)),
+                    }
+                    let args = &mut b.args;
+                    live_ranges(self.sub_runs.get(k).map_or(&[][..], |r| &r[..]), &collapsed, dc.first, dc.count, |first, count| {
+                        args.extend_from_slice(&[count, 1, first, 0, j as u32 + 1]);
+                    });
+                    if let Some(s) = b.segs.last_mut() { s.2 = (b.args.len() / 5) as u32; }
                 }
+                drop(collapsed);
                 if !b.args.is_empty() { queue.write_buffer(&b.indirect, 0, bytemuck::cast_slice(&b.args)); }
-                let mut start = 0usize;
-                while start < self.order.len() {
-                    let pl = self.draws[self.order[start].2].pipeline;
-                    let mut end = start + 1;
-                    while end < self.order.len() && self.draws[self.order[end].2].pipeline == pl { end += 1; }
+                for &(pl, s, e) in &b.segs {
+                    if e == s { continue; }
                     pass.set_pipeline(&self.pipelines[pl].1);
-                    pass.multi_draw_indexed_indirect(&b.indirect, start as u64 * 20, (end - start) as u32);
+                    pass.multi_draw_indexed_indirect(&b.indirect, s as u64 * 20, e - s);
                     if trace { __pipe_sw += 1; }
-                    start = end;
                 }
                 if trace { submitted = self.order.len(); }
             } else {
@@ -1311,7 +1403,8 @@ impl Renderer {
                         pass.set_bind_group(1, &self.tex_bgs[tbg], &[]);
                         last_tex = Some(tbg);
                     }
-                    pass.draw_indexed(first..first + count, 0, (j as u32 + 1)..(j as u32 + 2));
+                    let collapsed = self.skin_collapsed.borrow();
+                    live_ranges(self.sub_runs.get(k).map_or(&[][..], |r| &r[..]), &collapsed, first, count, |f, n| pass.draw_indexed(f..f + n, 0, (j as u32 + 1)..(j as u32 + 2)));
                 }
             }
             if trace {
