@@ -128,6 +128,33 @@ the mission banner's fail label has no blink.
 - Micro-Camera (pane 11): sprite 0, the full-screen subtractive white 0x03000002 at layer 0x28, for 10 frames from
   the muzzle latch `BL+0x95B` — a black shutter frame per photo (`HUD_UpdateCameraPane` 0x1a12d8:16-36).
 
+## Audit pass (fix-hud) [M]
+
+- Text drop shadow: sprite flag 0x20 → font flag 0x1000 → ONE copy at (x + 1, y + 1) in the sprite's
+  shadow colour (+0x14) [View_DrawSprites 0x1e5290:171-172; Font_DrawText 0x1eee48:96-98]; sprite flag
+  0x2000 keeps the 4-way outline (0x4000), 0x4000 → a (−1, −1) highlight (0x2000). The port had drifted to
+  1.5 px (`hud::text_shadow_offset`). The shadow's alpha is its own: the status panes' fades rewrite only
+  +0x10, and the flash branch zeroes +0x14 explicitly [0x19c310 case 3] — so during a fade the game's
+  shadow stays at 0xff while the text fades. The port still fades the shadow with its text (not changed:
+  needs a PCSX2 frame of a fading message to confirm the look).
+- Damage glow alpha `BL+0x968` is a byte: `(char)(int)(old + min(d·21.333334, 128))`, cap 255
+  [Player_HandlePain 0x1902c8:126-130] (`PlayerHealth::pain_glow`).
+- Mounted gun (substate 0xc): the ammo pane swaps in the imp's heat — kind 0x1f, max 100, value
+  `min((int)(ext+0x90·0.5), 100)`, strip row BulletImg[0x1f] = (58, 121, w 1, 1 px) ×16 (max > 87) →
+  a 16×100 gauge at x 480..496, bottom 394 [HUD_UpdateAmmoPane 0x19a7f0:137-145, :254, :282]. The count
+  text is blank (WeaponNone 0x47's +0x68 has 0x20). Substate 0xb (car) and 0x10 are the driving/other
+  vehicle arms (not ported).
+- INFO pane sources added: the locked exit 0x2000021 "Warning: Not all objectives completed" with the
+  180-tick ext+0x3C cooldown [Trigger_Activate 0x1b2318:79-87, Trigger_Update 0x1b1a78:26-28]; the
+  once-per-level hints 0x1000216 (Micro-Camera 0x54) / 0x10002dc (Remote Mine 0x37) with the view model
+  idle [Player_WeaponFiring 0x1a5460:223-232, :385-390; latches cleared by Player_InitWeapon
+  0x1a7ef8:124-125].
+- Health pane hide set: panes 9, 10, 11, 16, 17, 18 enabled → sprites 0..15 hidden [0x19b9c8:127-138]
+  (the port covers 9, 11, 17; 10 car / 16 sec-cam / 18 have no port pane yet).
+- Status pane templates re-read from `ee_start_05.bin`: pickup CREATE (128, 364) w 256 flags 0x18, text
+  template (128, 16) → (256, 380); objective CREATE (128, 0); mission (0, 156) 512 × 103 — the port's
+  geometry matches.
+
 ## Fonts [M; font 2 checked]
 
 `FontTable` 0x2dd8b0; font 2 = `FONTSerpLight` (texture 0x03000003, 512 × 64): first / last char 33 / 255, 149
