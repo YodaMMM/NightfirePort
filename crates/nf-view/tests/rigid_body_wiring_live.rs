@@ -37,30 +37,50 @@ fn snap(sim: &nf_view::scene::Sim) -> Vec<(u16, [u8; 132])> {
     }).collect()
 }
 
-/// A resting body is bit-identical over the sim: the type-1 barrel never integrates
-/// (EulerEvolve's pos arm is type-0 only [M 0x1d796c]), zero omega skips apply_omega [M
-/// 0x1d79ac gate], and no hit list ever arms (no blast) — so every slot keeps its create-time
-/// bits. The RB tick draws from the shared RNG only under the heat gate [M 0x1d6e88]; the
-/// port's per-object cel is absent, so the gate is closed every tick (the unit suite pins the
-/// gate's draw counts; here the barrels' slots must not move at all).
+/// A resting body under the cel wind is NOT bit-identical any more: `RB_ApplyWind` 0x1d7c78
+/// lands the force AT A POINT for type != 0 → torque, the body's only per-frame torque when
+/// nothing hits it. The 07000006 barrel (#65) shares room cel #29 with the SNOW_gen 0xDF #1
+/// (p3 = 6 → gust target 0.6 [D the port's level parse; Env_Create 0x17b968 stores p3·0.1
+/// into W+0x30/+0x34]), so the game's own barrel takes the same gust torque every tick. The
+/// old "bit-identical rest" premise predates the wind port and contradicted that chain —
+/// fixed (see the report; the TEST was wrong, the port model follows 0x1d6e38 → 0x1d7c78 →
+/// 0x17c048). The buoyancy gate stays shut (the cel's water surface is the −500 default [M
+/// build_alloc_cel 0x1c93f8]; the closure would panic on any draw), the Rot body still never
+/// translates [M 0x1d7810's type-0-only position arm], and the drift is BOUNDED — the heavy
+/// barrel's tilt stays under 0.5° over the window (its moments are ~20× the lamp's).
 #[test]
-fn resting_barrels_stay_bit_identical_over_the_sim() {
+fn resting_barrel_drifts_in_the_cel_wind_but_stays_bounded() {
     let Some(mut scene) = load() else { eprintln!("skip: NF_ISO not set"); return };
     {
         let sim = scene.sim.as_mut().unwrap();
         assert!(!sim.drones.rbodies.list.is_empty(), "07000006 places kind-0xD8 bodies [D docs/systems/levels.md RB rows]");
+        assert!(!sim.drones.rbodies.winds.is_empty(), "the SNOW_gen 0xDF builds the cel wind [M Env_Create 0x17b968]");
         for _ in 0..400 { sim.step_bond(Input::default(), false, false, false); if !sim.disabled { break; } }
     }
     let before = { let sim = scene.sim.as_ref().unwrap(); snap(sim) };
     for _ in 0..600 {
         scene.sim.as_mut().unwrap().step_bond(Input::default(), false, false, false);
     }
-    let after = { let sim = scene.sim.as_ref().unwrap(); snap(sim) };
+    let (after, tilt_max) = {
+        let sim = scene.sim.as_ref().unwrap();
+        let up = sim.drones.rbodies.list[0].st.matrix[1];
+        let tilt = (up[0] * up[0] + up[2] * up[2]).sqrt().atan2(up[1]) * 57.29578;
+        (snap(sim), tilt)
+    };
     assert_eq!(before.len(), after.len());
+    let mut any_moved = false;
     for (b, a) in before.iter().zip(after.iter()) {
         assert_eq!(b.0, a.0, "the placement list is stable");
-        assert_eq!(b.1, a.1, "barrel at placement {} moved while resting — a resting body is bit-identical [M 0x1d6e38 type!=0: no linear arm; 0x1d79ac: zero omega skips apply_omega]", b.0);
+        if b.1 != a.1 { any_moved = true; }
+        // The Rot body never translates and the buoyancy gate never opens: the position slot
+        // and the linear impulse stay at the create bits [M 0x1d7810 type-0-only; 0x1d6e88
+        // gate: obj_y < −500 is false].
+        let (bt, at) = (&b.1[72..84], &a.1[72..84]);
+        assert_eq!(bt, at, "barrel at placement {} must not translate while resting", b.0);
+        assert_eq!(&b.1[48..60], &a.1[48..60], "no buoyancy draw opens on this level (lin_impulse still) [M 0x1d6e88]");
     }
+    assert!(any_moved, "the barrel's rotation state never changed — the cel wind did not reach the body (the 0xDF/cel chain broke)");
+    assert!(tilt_max < 0.5, "the gust-driven tilt must stay bounded, got {tilt_max}°");
 }
 
 /// A blast next to a barrel changes its matrix the game's way: the explode sweep + the shared
@@ -126,9 +146,21 @@ fn blast_next_to_a_barrel_changes_its_matrix_the_games_way() {
     let rec = nf_game::rigid_body::RbHit { scale: falloff, normal: [-vel[0], -vel[1], -vel[2]], vel, point, other_class: 5, other_pos: blast_pos };
     nf_game::rigid_body::rb_resting_contact_rot(&expect.rb, &mut expect.st, &[rec], &mut Vec::new());
     let obj_y = expect.st.trans[1];
-    nf_game::rigid_body::rb_update(&mut expect.rb, &mut expect.st, None, obj_y, 0x6, |_| panic!("a resting apply draws nothing"));
-    assert_eq!(post.st.matrix, expect.st.matrix, "the matrix must equal the arm's evolution [M 0x1d7238-0x1d72e4]");
-    assert_eq!(post.st.omega, expect.st.omega, "the omega must equal the arm's [M 0x1d6ff8: the torque arm]");
+    // The replay now carries the cel wind the sim's tick used: the barrel's wind cell read at
+    // the post point (one gust tick apart — the gust's per-tick drift is ~0.3%, absorbed by
+    // the 1e-3 tolerances below; the blast impulse dominates by 100×) [M 0x1d7c78's
+    // Env_GetWindVel call].
+    let wind = {
+        let sim = scene.sim.as_ref().unwrap();
+        nf_game::rigid_body::env_get_wind_vel(&sim.drones.rbodies.winds[0], pre.st.trans)
+    };
+    nf_game::rigid_body::rb_update(&mut expect.rb, &mut expect.st, None, obj_y, 0x6, wind, pre.st.trans, |_| panic!("a resting apply draws nothing"));
+    for (c, e) in post.st.matrix.iter().flatten().zip(expect.st.matrix.iter().flatten()) {
+        assert!((c - e).abs() < 1.0e-3, "the matrix must equal the arm's evolution [M 0x1d7238-0x1d72e4]: {c} vs {e}");
+    }
+    for (c, e) in post.st.omega.iter().zip(expect.st.omega.iter()) {
+        assert!((c - e).abs() < 1.0e-3, "the omega must equal the arm's [M 0x1d6ff8: the torque arm]: {c} vs {e}");
+    }
     // The 600-tick sister: after the kick the body keeps evolving or rests — either way the
     // slots stay finite (no NaN poisoning from the impulse path).
     for _ in 0..600 { scene.sim.as_mut().unwrap().step_bond(Input::default(), false, false, false); }

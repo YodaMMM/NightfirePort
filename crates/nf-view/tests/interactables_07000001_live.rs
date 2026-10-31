@@ -107,8 +107,18 @@ fn the_redlamp_rigid_body_takes_the_bullets_impulse() {
         (rb.st.trans, rb.st.s13c)
     };
     assert!(radius > 0.3 && radius < 2.0, "the glist world sphere is the lamp's own [M 0x133070], got {radius}");
-    assert_eq!(w.scene.sim.as_ref().unwrap().drones.rbodies.list[0].rb.quat, [1.0, 0.0, 0.0, 0.0],
-        "sister: the lamp rests at the identity rotation [M RB_SetState 0x1d7da0]");
+    // The pre-shot rest sister is now the WIND sister: 07000001 carries 0xDF #279 (rain,
+    // param3 = 6 [D params]) whose wind lands in room cel #0 — the same cel `build_FindCel`
+    // 0x1c8cb0 picks for all four lamps — so the game's own lamps here drift too (the
+    // identity-rest premise predates the wind port and contradicted 0x1d6e38 → 0x1d7c78 →
+    // 0x17c048; fixed, see the report). The lamp still HANGS near rest: the gust-driven tilt
+    // stays under 15° (the port's measured band; lamp_wind_live pins the full curve).
+    let tilt_of = |s: &nf_view::scene::Sim| {
+        let up = s.drones.rbodies.list[0].st.matrix[1];
+        (up[0] * up[0] + up[2] * up[2]).sqrt().atan2(up[1]) * (180.0 / std::f32::consts::PI)
+    };
+    assert!(tilt_of(w.scene.sim.as_ref().unwrap()) < 15.0,
+        "the unshot lamp hangs near rest under the cel wind (0xDF #279 → cel #0 [D; M 0x17b968/0x1c8cb0])");
 
     // Into the entry hall (the sliding-door test's proven stand, then closer under the lamp):
     // walk there through the nav, arm, and aim a fifth-unit BELOW the mount — the body's
@@ -122,16 +132,21 @@ fn the_redlamp_rigid_body_takes_the_bullets_impulse() {
     eprintln!("[lamp] stand {:?} centre {centre:?} r {radius}", w.scene.sim.as_ref().unwrap().bond.pos);
     assert!(w.switch_to_armed("armed for the lamp"), "an armed gun for the shot");
     let target = [centre[0], centre[1] - 0.22, centre[2]];
-    let quat_now = |s: &nf_view::scene::Sim| s.drones.rbodies.list[0].rb.quat;
+    // The tip detector is the PER-TICK tilt jump: the cel wind drifts the lamp at ≲0.15°/tick
+    // (the gust rate, lamp_wind_live's curve), a bullet's class-5 impulse tips >1.5° in the
+    // landing tick [M RB_RestingContactRot 0x1d73a0's impulse = hit_vel·(scale·0.5)].
+    let mut prev_tilt = tilt_of(w.scene.sim.as_ref().unwrap());
     let mut dbg = 0u32;
     let tipped = face_and_fire(&mut w, target.into(), "the red lamp", |s| {
-        let q = quat_now(s);
+        let t = tilt_of(s);
+        let jump = (t - prev_tilt).abs();
+        prev_tilt = t;
         dbg += 1;
         if dbg % 60 == 0 {
-            eprintln!("[lamp] t{dbg} quat {q:?} clips {} spare {} paths {} hits {}",
+            eprintln!("[lamp] t{dbg} tilt {t}° clips {} spare {} paths {} hits {}",
                 s.gun.clip, s.gun.spare, s.drones.bullet_paths().0.len(), s.drones.rbodies.list[0].hits.len());
         }
-        q[0] < 0.9999 || q[1].abs() > 1.0e-3 || q[2].abs() > 1.0e-3 || q[3].abs() > 1.0e-3
+        jump > 1.5
     });
     {
         let s = w.scene.sim.as_ref().unwrap();
@@ -143,12 +158,15 @@ fn the_redlamp_rigid_body_takes_the_bullets_impulse() {
             "the sphere body's translation stays (no linear arm for type != 0 [M 0x1d7124]), trans {:?}",
             rb.st.trans);
     }
-    // Sister: a fresh load, nobody shoots — the lamp rests at the identity forever.
+    // Sister: a fresh load, nobody shoots — the lamp hangs near rest under the cel wind (the
+    // identity-rest sister is dead: 07000001's 0xDF #279 feeds the lamps' cel [D; M
+    // 0x1d6e38 → 0x1d7c78 → 0x17c048] — the bounded-drift pin replaces it; the bit-still
+    // zero-wind sister lives in lamp_wind_live::zero_wind_keeps_the_lamps_bit_still).
     let mut w2 = Walker::new(nf_view::load(&iso, "07000001.bin", false).expect("reload"));
     past_intro(&mut w2);
     w2.wait(240);
-    assert_eq!(w2.scene.sim.as_ref().unwrap().drones.rbodies.list[0].rb.quat, [1.0, 0.0, 0.0, 0.0],
-        "the unshot lamp rests (the sister) [M the type-0-only arm — rigid_body.rs rest pin]");
+    assert!(tilt_of(w2.scene.sim.as_ref().unwrap()) < 15.0,
+        "the unshot lamp hangs near rest (the wind sister) [M 0x1d79f4's spring vs the gust torque]");
 }
 
 /// The comms-room screen (0xE1 Destroy #107 "room_communication_tv2", p2 = 1 = the ×4 blast
