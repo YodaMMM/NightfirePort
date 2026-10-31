@@ -121,17 +121,18 @@ fn the_redlamp_rigid_body_takes_the_bullets_impulse() {
         "the unshot lamp hangs near rest under the cel wind (0xDF #279 → cel #0 [D; M 0x17b968/0x1c8cb0])");
 
     // Into the entry hall (the sliding-door test's proven stand, then closer under the lamp):
-    // walk there through the nav, arm, and aim a fifth-unit BELOW the mount — the body's
-    // world sphere is the glist's r≈0.33 ball at the mount [M Control_BuildWorldSph 0x133070's
-    // +0x10/+0x1C sphere; D the object's glist radius], so the shot must pass inside it, but
-    // off-axis: the entry point then sits ρ≈0.2 from the translation and the game's
-    // r×impulse torque (|cross| ≈ scale·0.5·ρ) is non-zero — a dead-centre hit is parallel
-    // and tips nothing.
+    // walk there through the nav, arm, and aim one unit BELOW the mount, at the shade. The
+    // round lands only on the glist's triangles [M Collide_Intersect 0x1ebaa8 →
+    // Intersect_RayGeom 0x10a8c8]: the lamp's collision shape is a cord (radius ~0.003) down to
+    // y ≈ −0.35, then the shade at −0.4..−0.5 and −0.9..−1.35 (radius up to 0.25) [D the shape
+    // index's triangles] — a shot a fifth-unit below the mount crosses the world sphere but,
+    // past the thin cord, no triangle, so it lands nothing (this stand's earlier aim). The shade hit sits ~1.0 below the translation, so the
+    // game's r×impulse torque (|cross| ≈ scale·0.5·1.0 for a level shot) tips the lamp.
     w.walk_nav_to([7.89, 5.35, 4.47], "into the entry hall", 1.6);
     w.walk_nav_to([3.6, 5.4, 3.6], "under the lamp", 1.2);
     eprintln!("[lamp] stand {:?} centre {centre:?} r {radius}", w.scene.sim.as_ref().unwrap().bond.pos);
     assert!(w.switch_to_armed("armed for the lamp"), "an armed gun for the shot");
-    let target = [centre[0], centre[1] - 0.22, centre[2]];
+    let target = [centre[0], centre[1] - 1.0, centre[2]];
     // The tip detector is the PER-TICK tilt jump: the cel wind drifts the lamp at ≲0.15°/tick
     // (the gust rate, lamp_wind_live's curve), a bullet's class-5 impulse tips >1.5° in the
     // landing tick [M RB_RestingContactRot 0x1d73a0's impulse = hit_vel·(scale·0.5)].
