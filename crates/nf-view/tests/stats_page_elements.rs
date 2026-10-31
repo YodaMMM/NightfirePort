@@ -140,7 +140,7 @@ fn the_stats_page_draws_the_list_widgets_rows() {
     // The corner stamp at its own rect in the 512×448 screen [L the capture fit].
     let stamp = quads_of(&frame, &tex, 0x0300_014c);
     assert_eq!(stamp.len(), 1);
-    assert!((stamp[0].0 - 340.0).abs() < 0.01 && (stamp[0].1 - 198.0).abs() < 0.01 && (stamp[0].2 - 595.0).abs() < 0.01, "stamp {:?}", stamp[0]);
+    assert!((stamp[0].0 - 340.0).abs() < 0.01 && (stamp[0].1 - 198.0).abs() < 0.01 && (stamp[0].2 - 512.0).abs() < 0.01, "stamp {:?} (clipped at the 512-wide screen's edge)", stamp[0]);
     // The highlight colour is on the second row's glyphs only: the font quads in 0x7f7f7f.
     let font_slot = tex.iter().position(|(h, _)| *h == 0x0300_0003).unwrap() + 1;
     let white: usize = frame.runs.iter().filter(|r| r.0 == font_slot).map(|&(_, _, first, count)| {

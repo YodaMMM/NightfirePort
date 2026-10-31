@@ -10170,8 +10170,11 @@ fn stats_list(h: &mut Hud, font: &nf_formats::hud::Font, rows: &[(String, String
 /// 2026-10-31], and the list pages' (539,393) copy is off-screen there — PCSX2 shows nothing on those
 /// pages [L m06/m10/m12]. Why this control skips the 640→512 scale is open (docs/UNKNOWNS.md). Layer
 /// f1 0x2d: behind the list plates (0x28) and the text.
+/// Only the part inside the 512-wide screen is drawn: on PS2 the rest is off-screen, and the wide
+/// window would otherwise show the curve running on past the backdrop's right edge.
 fn corner_stamp(h: &mut Hud) {
-    h.quad(Anchor::Centre, 3, 0x0300_014c, 0, 340.0, 198.0, 255.0, 255.0, [1.0, 1.0, 255.0, 255.0], (false, false), gs(0x7f7f7f, 0xff));
+    let w = SW - 340.0; // 172 of the 255 texels
+    h.quad(Anchor::Centre, 3, 0x0300_014c, 0, 340.0, 198.0, w, 255.0, [1.0, 1.0, w, 255.0], (false, false), gs(0x7f7f7f, 0xff));
 }
 
 /// The medal text box's line layout [L PCSX2 07000004 finish: line middles 274 / 304 of 480 = 9.3 below
