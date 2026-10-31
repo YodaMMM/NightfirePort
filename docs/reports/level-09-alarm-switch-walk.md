@@ -88,4 +88,4 @@ not visible to me — no token, credit or context-window figures are exposed to 
 The only proxies visible are the shell's wall-clock timestamps: branch + setup reuse
 10:55-11:00 UTC, the test edit + the three walked-run iterations (the clear-drag and the
 under-the-switch findings) 11:00-11:12, the 09 binary runs 11:13-11:20, suite chunks 1-5
-11:21-12:00, the report 12:00-12:15 UTC 2026-10-31.
+11:21-12:00, the report 11:50-11:55 UTC 2026-10-31.
