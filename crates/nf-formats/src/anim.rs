@@ -283,14 +283,32 @@ fn local_pose_bones_with(seq: &Sequence, skel: &Skeleton, skin: &Skin, frame: u3
         Arith::Ps2 => (pf::mul, |a, b| pf::add_noguard(a, b, true), |a, b| pf::add_noguard(a, -b, true), f32::sqrt),
         Arith::Nearest => (|a, b| a * b, |a, b| a + b, |a, b| a - b, f32::sqrt),
     };
+    // rook-cutscene-14: the skin scale multiplies every bone's LOCAL translation — but NOT the
+    // root's. `AnimFrameCopy` 0x1c5668 writes the translation channels scaled (cases 3/4/5 ×
+    // Glb_SkinScale/DAT_00319d84/DAT_00319d88 [M :170-177]) and then UNSCALES the buffer's FIRST
+    // translation record with the inverse-scale vector (`Vec_Mul(param_2, 0x319d90)` [M :536] —
+    // Glb_InvSkinScale/DAT_00319d94/DAT_00319d98, set per skin in `AnimObjectUpdate` 0x1befd8:119-124).
+    // That record is the root's: it is the VECTOR `AnimGetFirstTrans` 0x1c7348 copies into
+    // obj+0x30 and the record `AnimFrameResolve` 0x1c35f8:429-432 delta-adds — the root track is
+    // a WORLD position (the cut-scene actors) or a world-frame motion (the gameplay root track,
+    // read raw by `root_translation_at`), never a skeleton-local offset, and scaling it threw
+    // 07000014's escape-scene Rook (skin 0x05000066, scale 1.1 [D the skin record]) to
+    // 1.1 × his body track's world root — behind the Delta Sector door, out of the shot.
+    let mut root_record = true;
     let mut ch = 0;
     let mut out = Vec::with_capacity(skel.bones as usize);
     for bone in 0..bones.min(skel.bones as usize) {
         let t = if skel.has_translation(bone) {
-            let t = [0, 1, 2].map(|k| mul(seq.value_with(ch + k, frame, arith), skin.scale[k]));
+            let is_root = root_record;
+            root_record = false;
+            let t = [0, 1, 2].map(|k| {
+                let v = seq.value_with(ch + k, frame, arith);
+                if is_root { v } else { mul(v, skin.scale[k]) }
+            });
             ch += 3;
             t
         } else {
+            root_record = false;
             [0, 1, 2].map(|k| mul(skel.offsets[bone][k], skin.scale[k]))
         };
         let v = |k: usize| seq.value_with(ch + k, frame, arith);
