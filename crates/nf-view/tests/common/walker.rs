@@ -32,6 +32,23 @@ pub fn wrap_pi(a: f32) -> f32 {
 }
 
 /// XZ distance.
+/// The zero-g aim: in the spacewalk substates the view is the body matrix's forward row and
+/// the scalar pitch is dead [M Player_ZeroG 0x192ab0:74], so the turn/look errors come from the
+/// target direction in the body frame — the yaw error about the body up (turn rotates forward
+/// toward the right row), the pitch error about the body right, the latter in look units (one
+/// unit = π/2 rad, the port's rot_matrix argument). `None` outside zero-g.
+pub fn zero_g_errs(sim: &nf_view::scene::Sim, at: V3) -> Option<(f32, f32)> {
+    if !sim.bond.zero_g_active { return None; }
+    let e = sim.bond.head();
+    let d = [at[0] - e[0], at[1] - e[1], at[2] - e[2]];
+    let m = sim.bond.zero_g_rot;
+    let dot = |a: [f32; 3]| a[0] * d[0] + a[1] * d[1] + a[2] * d[2];
+    let (r, u, f) = (dot(m[0]), dot(m[1]), dot(m[2]));
+    let yaw = r.atan2(f);
+    let pitch = u.atan2(r.hypot(f));
+    Some((yaw, pitch / std::f32::consts::FRAC_PI_2))
+}
+
 pub fn dxz(a: V3, b: V3) -> f32 { ((a[0] - b[0]).powi(2) + (a[2] - b[2]).powi(2)).sqrt() }
 
 fn walker_dx(a: V3, b: [f32; 3]) -> f32 { dxz(a, [b[0], b[1], b[2]]) }
@@ -597,6 +614,7 @@ impl Walker {
                 let err = wrap_pi(desired - sim.bond.yaw);
                 let want_pitch = (dy / dxz(bp, at).max(0.5)).atan() / std::f32::consts::FRAC_PI_2;
                 let perr = want_pitch - sim.bond.pitch;
+                let (err, perr) = zero_g_errs(sim, at).unwrap_or((err, perr));
                 let on_target = err.abs() < 0.02 && perr.abs() < 0.028 && t % 16 == 0;
                 let input = Input {
                     turn: err.clamp(-0.08, 0.08),
@@ -689,6 +707,7 @@ impl Walker {
                 let err = wrap_pi(desired - sim.bond.yaw);
                 let want_pitch = (dy / dxz(bp, dp).max(0.5)).atan() / std::f32::consts::FRAC_PI_2;
                 let perr = want_pitch - sim.bond.pitch;
+                let (err, perr) = zero_g_errs(sim, at).unwrap_or((err, perr));
                 let clip_empty = sim.gun.clip == 0 && sim.gun.spare > 0;
                 let reload = clip_empty && t % 20 == 0;
                 let blocked = aim.is_none() || shield_block;
