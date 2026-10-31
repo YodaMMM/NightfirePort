@@ -162,7 +162,7 @@ pub struct HudTables {
     /// sends the NAME tag as msg 0x23, Label_SendMessage 0x218890:100-104 applies it].
     pub font_header: Font,
     /// Font 3 (`FONTMedium`, texture 0x030000d8) [L FontTable 0x2dd8b0[2] = {tex 0x030000d8, ptr
-    /// 0x305a78}, read live 2026-10-31]: the format code "�" selects it [M Font_ParseFormat
+    /// 0x305a78}, read live 2026-10-31]: the format code "ÿ" selects it [M Font_ParseFormat
     /// 0x1ee3e0 case 5: FontTable[n − 1]]. The results page's score labels/numbers carry it in
     /// their NAME tags [D page 0x40000036] and P_NFRESULTS 0x208e78:159 sends it to the medal text
     /// box; the 007 Bonus page's text list (msg 0x23 with 0x30d348 [M P_NFBONUS 0x209670:15]) and

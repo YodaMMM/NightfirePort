@@ -8710,7 +8710,7 @@ pub fn menu_overlay_fonts(fe: &FrontEnd, font: &nf_formats::hud::Font, hfont: &n
     // frame (no `movies` feature, a stubbed image) the plate stands in, like the intro.
     if fe.page == Page::WinGame {
         if !fe.backdrop_live { plate(&mut h, 0.0, 0.0, MW, MH, gs(0x180c08, 0xff)); }
-        draw_page_elems(&mut h, &crate::fe_pages::wingame_elems(), [h[font, font, mfont.unwrap_or(font)], textures);
+        draw_page_elems(&mut h, &crate::fe_pages::wingame_elems(), [hfont, font, mfont.unwrap_or(font)], textures);
         return h.finish();
     }
     // The backdrop: the pages' aux FMVs are the real background — parsed from the menu-def's PAGE
@@ -9681,7 +9681,7 @@ pub fn menu_overlay_fonts(fe: &FrontEnd, font: &nf_formats::hud::Font, hfont: &n
             for e in &elems {
                 match &e.what {
                     crate::fe_pages::ElemWhat::Text { label: Some(0x67b), .. } => hint_bar(&mut h, font, &hint(0x67b, "~A Confirm  ~B Cancel"), 50.0, 419.0, cream),
-                    _ => draw_page_elems(&mut h, std::slice::from_ref(e), [h[font, font, mfont.unwrap_or(font)], textures),
+                    _ => draw_page_elems(&mut h, std::slice::from_ref(e), [hfont, font, mfont.unwrap_or(font)], textures),
                 }
             }
         }
@@ -9717,7 +9717,7 @@ pub fn menu_overlay_fonts(fe: &FrontEnd, font: &nf_formats::hud::Font, hfont: &n
         // crate::fe_pages::credits_elems builds the list from fe.credits (the handler's statics).
         Page::Credits => {
             let elems = crate::fe_pages::credits_elems(&fe.credits, &bind);
-            draw_page_elems(&mut h, &elems, [h[font, font, mfont.unwrap_or(font)], textures);
+            draw_page_elems(&mut h, &elems, [hfont, font, mfont.unwrap_or(font)], textures);
         }
         // P_INTRO / P_ESTHERO draw only the plate (above). P_PARISENUM [D page 0x4000004a +
         // the card box page 0x4000002a; M P_PARISENUM 0x20a648, PS2_DoCardFlow 0x217bd8,
@@ -9726,7 +9726,7 @@ pub fn menu_overlay_fonts(fe: &FrontEnd, font: &nf_formats::hud::Font, hfont: &n
         Page::ParisEnum => {
             let view = paris_box_view(fe, font, lang);
             let elems = crate::fe_pages::parisenum_elems(fe.paris_dialog, view.as_ref());
-            draw_page_elems(&mut h, &elems, [h[font, font, mfont.unwrap_or(font)], textures);
+            draw_page_elems(&mut h, &elems, [hfont, font, mfont.unwrap_or(font)], textures);
         }
         Page::Intro | Page::EstHero => {}
         // The 007 Bonus page [D menu-def page 0x40000038; M P_NFBONUS 0x209670]: the element list
@@ -9740,7 +9740,7 @@ pub fn menu_overlay_fonts(fe: &FrontEnd, font: &nf_formats::hud::Font, hfont: &n
                 match &e.what {
                     crate::fe_pages::ElemWhat::Text { label: Some(0x2c5), s, .. } => page_header(&mut h, hfont, s),
                     crate::fe_pages::ElemWhat::Text { label: Some(0x2d0), .. } => hint_bar(&mut h, font, &hint(0x2d0, "~A Continue"), 50.0, 419.0, cream),
-                    _ => draw_page_elems(&mut h, std::slice::from_ref(e), [h[font, font, mfont.unwrap_or(font)], textures),
+                    _ => draw_page_elems(&mut h, std::slice::from_ref(e), [hfont, font, mfont.unwrap_or(font)], textures),
                 }
             }
         }
@@ -9748,7 +9748,7 @@ pub fn menu_overlay_fonts(fe: &FrontEnd, font: &nf_formats::hud::Font, hfont: &n
         // frame and scroll arrows — crate::fe_pages::cheatmedal_elems.
         Page::CheatMedal => {
             let elems = crate::fe_pages::cheatmedal_elems(fe.menu_alpha_get());
-            draw_page_elems(&mut h, &elems, [h[font, font, mfont.unwrap_or(font)], textures);
+            draw_page_elems(&mut h, &elems, [hfont, font, mfont.unwrap_or(font)], textures);
         }
         Page::WinGame => {}
     }
