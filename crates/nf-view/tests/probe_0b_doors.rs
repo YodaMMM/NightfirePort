@@ -8,7 +8,7 @@
 #[path = "common/walker_b2.rs"]
 mod walker;
 
-use walker::Walker;
+use walker::{Walker, Wp};
 
 fn iso() -> String { std::env::var("NF_ISO").expect("NF_ISO") }
 
@@ -45,6 +45,24 @@ fn probe_0b_waiting_room_doors() {
         sim.bond.vel = [0.0; 3];
     }
     w.wait(20);
+    // The waiting room's floor grid (ray down from y 49): where the holes/pit/furniture are.
+    eprintln!("--- waiting-room floor grid (y at each x/z) ---");
+    for zi in 0..26 {
+        let z = 28.5 - 0.5 * zi as f32;
+        let mut row = String::new();
+        for xi in 0..17 {
+            let x = 1.5 + 0.5 * xi as f32;
+            let y = w.scene.sim.as_ref().unwrap().world.segment([x, 49.0, z], [x, 40.0, z])
+                .map(|t| 49.0 + t * -9.0);
+            match y {
+                Some(y) if y > 46.8 => row.push_str(&format!("{y:5.1}")),
+                Some(y) => row.push_str(&format!("({y:4.1})")),
+                None => row.push_str("  .. "),
+            }
+        }
+        eprintln!("z{z:5.1} {row}");
+    }
+    eprintln!("(cols x 1.5..9.5 step 0.5; parens = below the 47.5 floor = holes/pit)");
 
     // 1. The exec-floor doors: identity + params + pose state.
     eprintln!("--- doors near the exec floor (|y-47.5|<5) ---");
@@ -127,8 +145,13 @@ fn probe_0b_waiting_room_doors() {
             let p = sim.drones.doors.list[i].pos;
             (p, format!("door #{i}"))
         };
-        // Bond stands 1.2 m north of the door (the waiting-room/east-room side per the door's z).
-        let stand = [dpos[0], dpos[1] + 0.6, dpos[2] + 1.2];
+        // The stand spot on the activating side: north of door #3 (the waiting room), east of
+        // door #0 (the east room — the passage is east-west).
+        let stand = if (dpos[2] - 7.09).abs() < 0.5 {
+            [dpos[0] + 1.3, dpos[1] + 0.6, dpos[2] - 0.5]
+        } else {
+            [dpos[0], dpos[1] + 0.6, dpos[2] + 1.2]
+        };
         {
             let sim = w.scene.sim.as_mut().unwrap();
             sim.disabled = false;
@@ -137,6 +160,22 @@ fn probe_0b_waiting_room_doors() {
         }
         w.wait(8);
         w.use_door(i, &label);
+        // The walk-through during the swing (the game's own flow — the player never stands at
+        // the E spot waiting for state 4). The through axis follows the leaf: door #0's leaf
+        // spans z 5.86..7.10 at x 13.8 (the passage is east-west), door #3's is the diagonal
+        // (the passage is mostly −z).
+        let through = if (dpos[2] - 7.09).abs() < 0.5 {
+            [dpos[0] - 2.2, 46.8, dpos[2]]
+        } else {
+            [dpos[0], 46.8, dpos[2] - 2.2]
+        };
+        let through_ok = w.try_walk_to(Wp::new(through[0], through[1], through[2]).r(1.0), &format!("{label} walk-through"));
+        {
+            let sim = w.scene.sim.as_ref().unwrap();
+            let d = &sim.drones.doors.list[i];
+            eprintln!("{label} walk-through: ok {through_ok} bond ({:.2},{:.2},{:.2}) door state {:#x} pos01 {:.3} dir {:.1}",
+                sim.bond.pos[0], sim.bond.pos[1], sim.bond.pos[2], d.state, d.pos01, d.dir);
+        }
         for k in 0..20 {
             w.wait(6);
             let sim = w.scene.sim.as_ref().unwrap();

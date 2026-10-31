@@ -37,3 +37,18 @@ interactables_0700000b_live 9/0, all 15 *door* binaries 35 passed / 0 failed / 2
   anti-crush condition and its local.z sign [M 0x135980], or the post-E stand [M Door_Activate
   0x135be0]); fix with evidence; resume the walked rewrite (f3873e62) and delete the stand-in.
   Run walkreal_0700000b_live, interactables_0700000b_live and every *door* binary.
+- the pick REVERTED to the game's 0x800 arm `1.5·r_door + r_pick` [M Collide_PickObj 0x1eae80:152-168 —
+  the prior branch's radius-alone law is the 0x200/0x201 arm :91-107; the player's mode word
+  BL+0x7D4 = hittest+0x94 = 0x800 on every Player_Collision arm and r_pick = hittest+0x8C = 0.55
+  walk / 0.275 climb]. The real difference found: the port's law WAS faithful — the wedge is
+  `Door_ReactToHit`'s anti-crush [M 0x135980:85-97] hitting its geometry: Bond's live-frame lz
+  crosses zero mid-swing (the NF_DOORTRACE capture: lz +0.353 → −0.028 as pos01 0.48 → 0.34,
+  swing −1), so the E-activated away-swing reverses at the crossing and the closing arm reverses
+  back — a 3-tick limit cycle (0.3448 ↔ 0.3966) that holds the leaf near-closed while he stands
+  at the E spot. The game's flow never waits it out: the player walks THROUGH the swinging
+  doorway. probe_0b_doors now proves both crossings walk (+70/+73 ticks; both leaves complete to
+  1.000/0.000 once Bond is through). The walked transit is IN walkreal_0700000b_live: door #3
+  through +62 ticks, the east-room nav lane, door #0 through +67 ticks, ring n11 — the big
+  stand-in is GONE; kept: the ~6 m dock→east-approach hop (the waiting room's floor maze: the
+  dock band is an island — the pit x 3-8, the x 2-3.5 hole, the dome hole; the main floor's
+  x 4.5-6.5 barrier — the floor grid in probe_0b_doors carries it). walkreal_0700000b 3/3.
