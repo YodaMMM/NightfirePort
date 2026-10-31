@@ -4613,16 +4613,15 @@ impl FrontEnd {
             // silver (≥ +8): target +0xc, name 0x2c9, label 0x2cd, emblem 0x3000140 [M :119-125];
             // bronze (≥ +4): target +8, name 0x2ca, label 0x2ce, emblem 0x300013d [M :111-117];
             // none: target +4, name 0x10001fd (composed), label 0x2cf, emblem 0x300019a [M :104-110].
-            let (medal_label, target, target_label, emblem, medal) = if s.last >= th[3] {
-                (0x2c7u32, th[3], 0x2ccu32, 0x0300_013fu32, 4u32)
-            } else if s.last >= th[2] {
-                (0x2c8, th[3], 0x2cc, 0x0300_013e, 3)
-            } else if s.last >= th[1] {
-                (0x2c9, th[2], 0x2cd, 0x0300_0140, 2)
-            } else if s.last >= th[0] {
-                (0x2ca, th[1], 0x2ce, 0x0300_013d, 1)
-            } else {
-                (0x100_01fd, th[0], 0x2cf, 0x0300_019a, 5)
+            // The tier is the shared compare chain (nf_game::progress::results_medal), so the
+            // page, GetScore's port and the level-end hand-off cannot disagree.
+            let medal = nf_game::progress::results_medal(s.last, th);
+            let (medal_label, target, target_label, emblem) = match medal {
+                4 => (0x2c7u32, th[3], 0x2ccu32, 0x0300_013fu32),
+                3 => (0x2c8, th[3], 0x2cc, 0x0300_013e),
+                2 => (0x2c9, th[2], 0x2cd, 0x0300_0140),
+                1 => (0x2ca, th[1], 0x2ce, 0x0300_013d),
+                _ => (0x100_01fd, th[0], 0x2cf, 0x0300_019a),
             };
             // The medal plate's text [M :144-158]: a real medal binds its name; the no-medal line
             // is a FORMAT string (Txt 0x10001fd, "%s") filled with the codename when the buffer
