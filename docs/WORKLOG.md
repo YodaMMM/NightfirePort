@@ -52,3 +52,12 @@ interactables_0700000b_live 9/0, all 15 *door* binaries 35 passed / 0 failed / 2
   stand-in is GONE; kept: the ~6 m dock→east-approach hop (the waiting room's floor maze: the
   dock band is an island — the pit x 3-8, the x 2-3.5 hole, the dome hole; the main floor's
   x 4.5-6.5 barrier — the floor grid in probe_0b_doors carries it). walkreal_0700000b 3/3.
+- finish (2026-10-31): the pick law reverted to master's 0x800 arm; the anti-crush limit cycle
+  diagnosed (the port matches the decompile; the game's flow walks through the swing); the
+  walked two-door transit in walkreal_0700000b (the stand-in deleted except the ~6 m dock hop,
+  the floor maze pinned in probe_0b_doors' grid). Touched binaries green: walkreal_0700000b
+  3/3, interactables_0700000b 9/9, 33 door binaries 56 passed / 0 failed / 3 ignored. Suite
+  (resumable foreground protocol): 465/976 binaries, 1496 passed, 7 failed (3 disc_golden
+  allowed, 2 the GPU-less 0c pylon pair, 1 campaign_flow 240 s cap, 1 identity_disc — all
+  pre-existing/environmental), 84 ignored, 0 CRASH. Report:
+  docs/reports/level-0b-waiting-room-doors-2.md.
