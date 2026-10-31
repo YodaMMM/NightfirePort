@@ -730,7 +730,12 @@ impl Walker {
                 // clipped the lip, run3 2026-10-31 — Bond took his fire standing in the open and
                 // died at +1088): the player's own move is to STEP BACK first — distance opens
                 // the vertical angle over the lip — before any arc around him.
-                let close_buried = aim.is_none() && len < 3.0;
+                // OPT-IN with the body-block response: master's walker FLANKS here, and the
+                // step-back reroutes every flag-off fight — on the npc-doors escort route the
+                // stepped-back fights diverged into resupply wedges and a walk off the map
+                // (fix_npc_doors_live red on this branch only, level-02-every-objective-5
+                // 2026-10-31). Master's fights keep the flank; the 02 walk keeps the step-back.
+                let close_buried = self.body_block_response && aim.is_none() && len < 3.0;
                 let fp = if close_buried {
                     [bp[0] - vx / len * dist, bp[1], bp[2] - vz / len * dist]
                 } else {
