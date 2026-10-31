@@ -371,6 +371,34 @@ fn walk_onto_the_slab(w: &mut Walker) {
     panic!("the walked step south never touched #255 (ch 0x81) at {:?}", w.scene.sim.as_ref().unwrap().bond.pos);
 }
 
+/// SISTER for the placed order: with ch 0xb4 cold, tower_door1 #392 (2.46, 1.04, −166.38; lock
+/// 0xb4 [D params]) stays shut under a walked Bond's forward press (no E) — the locked leaf is
+/// solid [M Door lock 0x136810:10-16] — so #255 (ch 0x81) cannot be reached without the panel
+/// #617's E. Bond must actually reach the leaf (z < −164.6) for the hold to count.
+fn tower_door1_holds_without_its_panel(w: &mut Walker) {
+    let di = {
+        let sim = w.scene.sim.as_ref().unwrap();
+        assert!(!sim.drones.channels.on(0xb4), "0xb4 is cold before the panel");
+        let di = sim.drones.doors.list.iter().position(|d| (d.pos[2] + 166.38).abs() < 0.5 && (d.pos[0] - 2.46).abs() < 0.5)
+            .expect("tower_door1 #392");
+        assert_eq!(sim.drones.doors.list[di].ch_lock, 0xb4, "tower_door1's lock is 0xb4 [D]");
+        di
+    };
+    let mut min_z = f32::MAX;
+    for _ in 0..360u32 {
+        w.scene.sim.as_mut().unwrap().bond.yaw = std::f32::consts::PI;
+        w.tick(Input { forward: 1.0, ..Default::default() }, false);
+        min_z = min_z.min(w.scene.sim.as_ref().unwrap().bond.pos[2]);
+    }
+    let sim = w.scene.sim.as_ref().unwrap();
+    let d = &sim.drones.doors.list[di];
+    eprintln!("[sister] tower_door1 state {:#x} pos01 {:.3}, Bond min z {min_z:.2}", d.state, d.pos01);
+    assert!(min_z < -164.6, "the walk reached the leaf (min z {min_z:.2})");
+    assert!(min_z > -167.0, "the locked leaf held Bond north of it (min z {min_z:.2})");
+    assert!(d.pos01 < 0.05 && !sim.drones.channels.on(0xb4) && !sim.drones.channels.on(0x81),
+        "no E → no 0xb4 → the leaf stays shut and #255 untouched (state {:#x}, pos01 {:.3})", d.state, d.pos01);
+}
+
 /// From the pit floor into the west blast room (blast_room_shelter_16_live: the room is outside
 /// HurtPoly-ShuttleLaunch's polygon [D], its door leaves shut over both pulses [D 0600090a
 /// streams 17/18]).
@@ -784,7 +812,10 @@ fn the_real_order_launch_chain_matches_the_teleported_one() {
         // the cinema mid-leg.
         ("the slab's north edge", walker::Wp::new(2.4, 1.0, -172.0).r(0.8)),
     ];
-    w.walk_route(route);
+    let panel = route.iter().position(|(n, _)| *n == "door[4]'s panel").expect("the route presses #617");
+    w.walk_route(&route[..panel]);
+    tower_door1_holds_without_its_panel(&mut w);
+    w.walk_route(&route[panel..]);
     // Manual real-time approach: face south (yaw π = atan2(0, −1)) and walk into the slab, so the
     // touch tick, the cinema's player-disable, the hand-back and ch 243 are all observed from this
     // loop (walk_to is opaque and its legs tick through the disable).
@@ -841,7 +872,14 @@ fn the_real_order_launch_chain_matches_the_teleported_one() {
         assert!(!sim.drones.channels.on(0xb4), "the cinema's stream-13 t747 write cleared ch 0xb4 [D 06000631 s13 EV0x0d[180,0]]");
     }
 
-    // ---- phase B: the teleported run (the sister's own setup: placed on trigger #255, no input) ----
+    // ---- phase B: the teleported run (the live session's own setup: placed on trigger #255, no input) ----
+    // KEPT WRITE: this phase IS the placed order — #255 touched with 0x24/0x27/0x28/0xb4 all
+    // cold — and no real input reaches it: tower_door1 #392 (lock 0xb4, writer only the panel
+    // #617 [D census]) is the south room's only way in, and phase A's sister
+    // `tower_door1_holds_without_its_panel` pins that the leaf holds a walked Bond until the E.
+    // The PCSX2 check that would retire it: a fresh-boot walked run of the same route, watching
+    // switch_channels[243] (0x26fc90+243) against the hand-back's re-enable — if that delta
+    // matches the placed run's 1591 [L], the placed live measurement needs no placed port twin.
     let mut w = Walker::new(nf_view::load_with_carry(&iso, "07000016.bin", false, Some(&carry(&[0x47, 0x48, 0x4a, 0x54, 0xce, 0x4b]))).unwrap());
     w.top_up_health = false;
     w.skip_cutscenes = false;
