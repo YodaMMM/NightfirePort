@@ -148,7 +148,7 @@ fn clear_pursuers(w: &mut Walker, radius: f32, label: &str) {
 /// the leg — he closes from beyond the 24 u sweep during it). All three channel pokes ARE gone and
 /// the port fires all three quads on a real body [L probe02quads TELE]; the legs themselves are
 /// real throughout.
-#[ignore = "real-health blockers: (1) guard g3 body-blocks the south-hall-west nav-10 wedge (d 0.8, state 0x74->0x68->0x60 at t4137-4184) and the fail chain auto-restarts ~+1462 into it; (2) the ammo economy — 48 start rounds vs ~13 armed guards, the fight drops go untaken (one rests at y 0.0, through the floor [L run08 looting line]) — loot()+resupply cannot keep the pistol fed. The stuck ladder needs a drone-body-block response and the drop placement needs a look; then un-ignore"]
+#[ignore = "real-health blocker: the west-wing lip fight — a late-closing ch-0x15 guard (drone 4) stands ~1.4 u off the lane with NO exposed part (every part's eye segment clips the stair lip [L run3/run4 2026-10-31]); the step-back/flank walks wedge at the 3000-tick lenient caps (the nav routes over the south-hall arch) and Bond took ~70 damage standing in the open (health 29.5, run4). The g3 nav-10 body-block IS fixed (the walker's hostile-body-block arm, 2026-10-31 — the walk passes it deterministically) and the real takes WORK ([take] tick 3474 weapon 0x12 rounds 11, tick 6722 weapon 0x1c rounds 7 [L run2]). Next blocker after the lip: assert 241 — geisha 1 left HOSTAGE during the nearby fight (runs 3-5, no fail-restart involved); see the report's live checks"]
 #[test]
 fn walk_the_castle_all_objectives_to_the_exit() {
     let iso = iso();

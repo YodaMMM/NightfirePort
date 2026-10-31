@@ -38,3 +38,17 @@ Progress log:
 - 06:45 branch created (merge above; clear_captors conflict — master's fd649f0f real-approach
   walk is the newer, dedicated follow-up, it wins; e2's loot/clear_pursuers kept). Branch pushed
   with this entry.
+- 07:00 reproduced blocker 1 deterministically (run1): level_exit at +1462 into south-hall-west
+  nav 10 — the fail chain auto-restart e2 documented. Walker fix landed: the stuck ladder now
+  answers a hostile BODY-BLOCK through the real fire path (different-floor approach, step-back
+  when no part is exposed at body range, loot on a dry clip, recursion guard). The walk passes
+  the nav-10 wedge in every run since (runs 2–5).
+- 07:30 the real takes WORK on this tree ([take] tick 3474 weapon 0x12 rounds 11; tick 6722
+  weapon 0x1c rounds 7, NF_PICKUPLOG) — e2's "take did not grant" half of blocker 2 does not
+  reproduce. The y 0.0 drop did not reappear (e2's run08 ran after the fail-restart).
+- 08:00 the walk is still honestly ignored: the west-wing lip fight (drone 4, no exposed part at
+  1.4 u, the step-back/flank nav walks wedge) plus the NEW assert-241 question (geisha 1 left
+  HOSTAGE during the nearby fight, no fail-restart involved — live checks in the report).
+  Totals: walkreal --ignored 0/1, interactables_07000002_live 16/0, nf-game 953/0/9. Full suite:
+  chunk_suite on the final tree 3/983 recorded (100/0) — the sandbox kills background jobs; the
+  report has the resume command. Report: docs/reports/level-02-every-objective-3.md.
