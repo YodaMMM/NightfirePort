@@ -548,6 +548,7 @@ pub fn rb_resting_contact(
     st: &mut RbState,
     s_aa: u16,
     hits: &[RbHit],
+    sound: u32,
     sounds: &mut Vec<(u32, [f32; 3])>,
 ) {
     for hit in hits {
@@ -558,8 +559,9 @@ pub fn rb_resting_contact(
             5 => {
                 rb_explosion_hit_arm(st, hit.vel, hit.scale, hit.point);
                 // `Sound_Play3D(100.0, −1.0, −1.0, *(rb+0x158), obj+0xC0, …)` [M 0x1d7220] —
-                // the caller maps the collected code onto the port's sound pool.
-                sounds.push((0x42c8_0000, st.trans));
+                // the body's own sound id (rb+0x158), collected for the caller's pool. (The
+                // first argument, 0x42c80000, is the 100.0f volume, not the id.)
+                sounds.push((sound, st.trans));
             }
             3 => {}
             0x1a => {}
@@ -582,6 +584,7 @@ pub fn rb_resting_contact_rot(
     rb: &RigidBody,
     st: &mut RbState,
     hits: &[RbHit],
+    sound: u32,
     sounds: &mut Vec<(u32, [f32; 3])>,
 ) {
     for hit in hits {
@@ -599,7 +602,9 @@ pub fn rb_resting_contact_rot(
                 st.tor_impulse[i] += masked[i];
                 st.lin_impulse[i] += imp[i];
             }
-            sounds.push((0x42c8_0000, st.trans));
+            // `Sound_Play3D(100.0, −1.0, −1.0, *(rb+0x158), obj+0xC0, …)` [M 0x1d74b8 disasm,
+            // decompile 0x1d73a0:121-123].
+            sounds.push((sound, st.trans));
         }
     }
 }
@@ -611,12 +616,13 @@ pub fn rb_collision_handler(
     st: &mut RbState,
     s_aa: u16,
     hits: &[RbHit],
+    sound: u32,
     sounds: &mut Vec<(u32, [f32; 3])>,
 ) {
     if rb.ty == 0 {
-        rb_resting_contact(rb, st, s_aa, hits, sounds);
+        rb_resting_contact(rb, st, s_aa, hits, sound, sounds);
     } else {
-        rb_resting_contact_rot(rb, st, hits, sounds);
+        rb_resting_contact_rot(rb, st, hits, sound, sounds);
     }
 }
 
@@ -635,7 +641,8 @@ pub struct RbObj {
     pub flags: u16,
     /// rb+0xAA: 0x101 default, 0 for types 2/3/4/others per RB_Create's tail [M 0x1d6bf0:80-96].
     pub s_aa: u16,
-    /// rb+0x154 / rb+0x158 (the light flag byte, the sound-volume param word) [M :100-104].
+    /// rb+0x154 / rb+0x158 (the light flag byte; the sound id the class-5 contact arm plays —
+    /// placement param 6, 0 → 0xFFFF = none) [M :100-104, 0x1d7168:111-112].
     pub s154: u8,
     pub s158: u32,
     /// obj+0xE0 → the RIGIDBODY: the init/build fields and the runtime slots.
@@ -728,7 +735,10 @@ impl Rbodies {
                 flags: 0x44,
                 s_aa,
                 s154: (pv(5) & 0xff) as u8,
-                s158: if pv(6) == 0 { 0xffff } else { pv(6) },
+                // rb+0x158 = level_tag+0x3c (0 → 0xFFFF) [M 0x1d6bf0:108-112] — placement param 4
+                // in the +0x2c+4k layout the sensors/locks/searchlights pin [D]; 65535 (none) on
+                // every disc 0xD8 placement (07000001/02/03/04/06/0d/41 swept [D]).
+                s158: if pv(4) == 0 { 0xffff } else { pv(4) },
                 rb,
                 st,
                 hits: Vec::new(),
@@ -756,7 +766,7 @@ impl Rbodies {
         for o in &mut self.list {
             if o.hits.is_empty() { continue; }
             let hits = std::mem::take(&mut o.hits);
-            rb_collision_handler(&o.rb, &mut o.st, o.s_aa, &hits, sounds);
+            rb_collision_handler(&o.rb, &mut o.st, o.s_aa, &hits, o.s158, sounds);
             o.flags |= 0x20;
         }
     }
@@ -844,6 +854,23 @@ mod evolve_tests {
     /// A census-shaped barrel: type halfword 0xFFFF (the sphere-type placements on 07000006 /
     /// 0700000d [D docs/systems/levels.md §RB rows]), mass 3 (the RB_Create default when
     /// rec+0x2c is 0 [M 0x1d6bf0:60-64]), cuboid moments of a 2×3×4 box.
+    /// The class-5 contact sound [M RB_RestingContact 0x1d7168:111-112 / RB_RestingContactRot
+    /// 0x1d73a0:121-123]: `Sound_Play3D(100.0, …, *(rb+0x158), obj+0xC0)` — the body's own id
+    /// at its translation, once per class-5 hit (both arms). Sister: a class-3 hit is silent.
+    #[test]
+    fn class5_contact_collects_the_bodys_sound_id() {
+        let hit = |class: u8| RbHit { scale: 1.0, normal: [0.0, 1.0, 0.0], vel: [0.1, 0.0, 0.0], point: [10.0, 1.5, 20.0], other_class: class, other_pos: [0.0; 3] };
+        for ty in [0i16, -1] {
+            let (mut rb, mut st) = barrel();
+            rb.ty = ty;
+            let mut sounds = Vec::new();
+            rb_collision_handler(&rb, &mut st, 0x101, &[hit(5), hit(3)], 0x123, &mut sounds);
+            assert_eq!(sounds.len(), 1, "type {ty}: one sound for the one class-5 hit");
+            assert_eq!(sounds[0].0, 0x123, "type {ty}: the id is rb+0x158, not the 100.0f volume word");
+            assert_eq!(sounds[0].1, st.trans, "type {ty}: at the body's translation");
+        }
+    }
+
     fn barrel() -> (RigidBody, RbState) {
         let mut rb = rb_init(-1i16); // 0xFFFF
         assert!(rb_build(&mut rb, 3.0, SPHERE_VERTS, rb_cuboid_moments_of_inertia(3.0, 2.0, 3.0, 4.0)));
