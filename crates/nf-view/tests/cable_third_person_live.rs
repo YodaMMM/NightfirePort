@@ -95,3 +95,37 @@ fn hand_over_hand_moves_without_snapping() {
     assert!(anims.len() >= 2, "the ride switches clips (got {anims:x?})");
     assert!(worst < 0.15, "the body never snaps between ticks: worst root step {worst}");
 }
+
+/// cable-bond-light: Bond's third-person body is the PLAYER object (flags 0x880), so
+/// `Lights_CalcAmbientLight` 0x1cb178 ramps its obj+0x100..0x102 toward the player's linked cel and
+/// `View_SetupRenderModes_Tweak` 0x1e5888 multiplies the draw by (tint 0xff × ambient) >> 8 [M].
+/// [L PCSX2 07000005 on the castle cable, player object 0x16cefe0: obj+0xF0 = 0x880,
+/// obj+0x100..0x105 = 57,70,86,255,255,255, the linked cel's +0x9a/+0x9c/+0x9e = 57,70,86, switch
+/// shift 0.] The body had kept the 0xff init sentinel and drew at full brightness.
+#[test]
+fn the_cable_body_takes_the_cel_ambient_like_the_game() {
+    let Some(scene) = hang() else { return };
+    let sim = scene.sim.as_ref().unwrap();
+    assert_eq!(sim.bond.substate, nf_game::player::SS_WIRE, "Bond hangs on the cable");
+    let ci = scene.bond_body.unwrap();
+    assert_eq!(sim.bond_body_char, Some(ci), "the Sim knows which character is Bond's body");
+    assert_eq!(sim.char_ambient[ci], [57, 70, 86], "the player object's obj+0x100..0x102 on the cable [L PCSX2]");
+    let m = sim.char_multiplier(ci);
+    // (0xff tint × ambient) >> 8, as the byte the VU1 takes over 255 [M 0x1e5888 tail].
+    let want = [57u32, 70, 86].map(|a| ((0xff * a) >> 8) as f32 / 255.0);
+    for k in 0..3 { assert!((m[k] - want[k]).abs() < 1e-6, "the draw's TAmbient multiplier {m:?} vs {want:?}"); }
+}
+
+/// Sister: without the body's link to Bond's cel (the old behaviour) the ramp never touches it and it
+/// stays at the 0xff sentinel — full brightness, which the game never draws on the cable.
+#[test]
+fn sister_an_unlinked_body_stays_at_full_brightness() {
+    let Some(mut scene) = hang() else { return };
+    let ci = scene.bond_body.unwrap();
+    let sim = scene.sim.as_mut().unwrap();
+    sim.bond_body_char = None;
+    sim.char_ambient[ci] = [0xff; 3];
+    for _ in 0..30 { sim.step_bond(Input::default(), false, false, false); }
+    assert_eq!(sim.char_ambient[ci], [0xff; 3], "the old path keeps the sentinel");
+    assert_ne!(sim.char_ambient[ci], [57, 70, 86], "so the [L] comparison above can fail");
+}
