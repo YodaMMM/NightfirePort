@@ -18747,7 +18747,16 @@ fn segment_hits_sphere(a: V3, b: V3, c: V3, r: f32) -> bool {
         // (`Player_HandlePain`); the hit flash fades by 1 per tick (HUD). `Bullet_DoTrails` fly-by (sound 0x1dc) is
         // checked inside `Bullet::update` in the game's RNG order (Rand_FRand → Rand_Rand(5)).
         self.impacts.clear();
-        let vol = crate::bullet::PlayerVolume { feet: [player.pos[0], player.pos[1] - 0.4, player.pos[2]], height: 1.8, radius: 0.25 };
+        // Bond's hit volume spans his body boxes: the game tests his `HumanCollisionBones` boxes
+        // (`Collide_Intersect` 0x1ebaa8 → `Collide_Jointy` for `obj+0xFA & 8`, set on the player
+        // [L ee_start_05/0700000a/07000001: obj+0xFA = 8, the anim palette live +200 & 1]). A standing
+        // human's boxes reach from 1.03 below obj+0x30 (the foot boxes, 0x34/0x38) to 0.87 above it
+        // (the head box 5: centre +0.76, half 0.11) [D the port's AnimGetCollData boxes on 07000002's
+        // idle guards]; the top follows the eye (+0.70 standing) so a crouch lowers it. The old
+        // cylinder ran from 0.4 below to 1.4 above — missing the legs and catching shots 0.5 over the head.
+        let feet_y = player.pos[1] - 1.03;
+        let eye_y = if player.eye == [0.0; 3] { player.pos[1] + 0.7 } else { player.eye[1] }; // fixtures without an eye
+        let vol = crate::bullet::PlayerVolume { feet: [player.pos[0], feet_y, player.pos[2]], height: (eye_y + 0.17 - feet_y).max(0.5), radius: 0.25 };
         let viewer = player.pos;
         for b in &mut self.bullets {
             let (from, dir) = (b.pos, b.dir);

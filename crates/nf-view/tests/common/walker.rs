@@ -185,7 +185,8 @@ impl Walker {
             .map(|s| s.split(',').filter_map(|x| x.trim().parse().ok()).collect()).unwrap_or_default();
         let watch_last = vec![(0u8, [0.0f32; 3]); drone_watch.len()];
         Walker {
-            scene, top_up_health: true, keep_alive: Vec::new(), stop_on_exit: true, skip_cutscenes: true,
+            // NF_WALK_NO_TOPUP: run with real damage (Bond's health is not restored each tick).
+            scene, top_up_health: std::env::var_os("NF_WALK_NO_TOPUP").is_none(), keep_alive: Vec::new(), stop_on_exit: true, skip_cutscenes: true,
             report: Report { legs: Vec::new(), stuck_events: Vec::new(), falls: Vec::new() },
             total_ticks: 0, pos, last_sample: pos, sample_tick: 0, stuck: 0, stuck_cycles: 0,
             sidestep: 0, max_y: pos[1], lenient: false,
@@ -411,6 +412,10 @@ impl Walker {
         if self.top_up_health {
             let h = &mut self.scene.sim.as_mut().unwrap().drones.health;
             h.health = 100.0;
+        } else if std::env::var_os("NF_WALK_NO_TOPUP").is_some() && self.total_ticks % 300 == 0 {
+            let sim = self.scene.sim.as_ref().unwrap();
+            eprintln!("[walk-health] tick {} health {:.1} armour {:.1} pos ({:.1},{:.1},{:.1})", self.total_ticks,
+                sim.drones.health.health, sim.drones.health.armour, sim.bond.pos[0], sim.bond.pos[1], sim.bond.pos[2]);
         }
     }
 
