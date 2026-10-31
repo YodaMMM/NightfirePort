@@ -94,8 +94,9 @@ fn rot_matrix(pitch_x: f32, yaw_y: f32, roll_z: f32) -> [[f32; 3]; 3] {
     ]
 }
 
-/// `Concat(a, ab)` 0x1e4a90 ⇒ ab := a·ab [M 0x1e4a90:13-49] — Player_ZeroG calls it as
-/// `Concat(obj+0x90, R)`, so each tick's look rotation lands in the BODY frame.
+/// The row-axis 3×3 product a·b (out[i] = Σ_k a[i][k]·b[k]). `Concat(a, b)` 0x1e4a90 computes
+/// b := b·a [M 0x1e4a90:13-49]; Player_ZeroG's `Concat(obj+0x90, R)` + copy-back is therefore
+/// obj := R·obj = `mat3_mul(&r, &obj)` — the look rotation in the BODY frame.
 fn mat3_mul(a: &[[f32; 3]; 3], b: &[[f32; 3]; 3]) -> [[f32; 3]; 3] {
     let mut out = [[0.0f32; 3]; 3];
     for i in 0..3 {
@@ -1627,13 +1628,19 @@ impl Bond {
             // dead here (`Bond::look` returns the matrix's forward row instead).
             self.vel = [0.0; 3];
             // The look rates [M :76-90]: the pitch action → the x angle, the turn action → the y
-            // angle, roll 0 — `RotMatrix` then `Concat(obj, R)` ⇒ m := m·R [M 0x1e4a90:13-49],
-            // the BODY frame (a pitched yaw drifts the up — what the auto-stabiliser repairs).
+            // angle, roll 0 — `RotMatrix` then `Concat(obj+0x90, R)` + `Mat_CopyRot(R, obj+0x90)`.
+            // Concat(a, b) writes b[i] := b[i].x·a[0] + b[i].y·a[1] + b[i].z·a[2] — b := b·a in the
+            // row-axis convention [M 0x1e4a90:13-49, the VU broadcast lanes ride b's rows] — so the
+            // copied-back matrix is m := R·m [M 0x192ab0:162-164; Mat_CopyRot 0x1e3370 = memcpy(dst
+            // = arg 2)]: each row is a mix of the BODY axes, the rotation lands in the body frame
+            // (look pitches about the body right row at every heading; a pitched yaw drifts the up —
+            // what the auto-stabiliser repairs). m·R would rotate the rows about the WORLD axes —
+            // facing ±x the look then barely tilts the view.
             // The port's `turn`/`look` are already per-tick deltas (mouse-direct, pad-ramped,
             // D-002); the game's own pad constant is 1.2566371·REC_FRAME_RATE rad/tick, `look`
             // riding in π/2 units.
             let r = rot_matrix(-input.look * std::f32::consts::FRAC_PI_2, turn, 0.0);
-            self.zero_g_rot = mat3_mul(&self.zero_g_rot, &r);
+            self.zero_g_rot = mat3_mul(&r, &self.zero_g_rot);
             // The thruster smoothers [M :92-159]: targets strafe = action 1·0.1, forward =
             // action 2·0.1, vertical = (action 7 − action 8)·0.1; each eases
             // `v += (target − v)·FRAME_RATE_MUL·0.04` (FRAME_RATE_MUL = 1.0 at 60 Hz [M .sdata
@@ -2844,6 +2851,41 @@ mod tests {
         let step2 = dist3_sq(b.pos, p1).sqrt();
         assert!(step2 > 0.01, "still gliding: {}", step2);
         assert!(step2 < step, "decaying: {} < {}", step2, step);
+    }
+
+    /// The look rotation lands in the BODY frame at every heading: Player_ZeroG's
+    /// `Concat(obj+0x90, R)` + copy-back is obj := R·obj [M 0x1e4a90:13-49, 0x192ab0:162-164].
+    /// Facing west (−x), one look tick pitches the view by look·π/2 about the body's right row.
+    /// Sister: the world-frame product (m·R) barely tilts it at that heading (only the forward
+    /// row's z lane rotates about world x), so the pin can fail.
+    #[test]
+    fn zero_g_look_pitches_about_the_body_right_at_any_heading() {
+        let w = room();
+        let mut b = Bond::stand_at(&w, [0.0, 0.0, -14.0], -std::f32::consts::FRAC_PI_2);
+        b.substate = SS_ZEROG_9;
+        b.tick(&w, &Input::default()); // the entry matrix is live (level, facing −x)
+        let f0 = b.look();
+        assert!(f0[0] < -0.999, "facing west: {:?}", f0);
+        let m0 = b.zero_g_rot;
+        b.tick(&w, &Input { look: 0.1, ..Default::default() });
+        let f1 = b.look();
+        let want = (0.1f32 * std::f32::consts::FRAC_PI_2).sin();
+        assert!((f1[1] - want).abs() < 1e-3, "body-frame pitch: fwd.y {} vs sin(0.1·π/2) {}", f1[1], want);
+        assert!(f1[2].abs() < 1e-3, "the pitch stays in the heading plane: {:?}", f1);
+        // Sister: the world-frame composition at the same heading.
+        let r = rot_matrix(-0.1 * std::f32::consts::FRAC_PI_2, 0.0, 0.0);
+        let world = mat3_mul(&m0, &r);
+        assert!(world[2][1].abs() < 0.01, "sister: m·R barely tilts a west-facing view ({})", world[2][1]);
+        // A yaw after the pitch turns about the BODY up (the pitched body's up row): the forward
+        // swings toward the level right row, so its elevation shrinks by cos(turn) — a world-up
+        // yaw would keep it exactly.
+        b.tick(&w, &Input { turn: 0.2, ..Default::default() });
+        let m = b.zero_g_rot;
+        let dot = m[1][0] * m[2][0] + m[1][1] * m[2][1] + m[1][2] * m[2][2];
+        assert!(dot.abs() < 1e-3, "the body stays orthonormal: up·fwd {}", dot);
+        let want_y = 0.2f32.cos() * f1[1];
+        assert!((b.look()[1] - want_y).abs() < 2e-4 && (b.look()[1] - f1[1]).abs() > 2e-3,
+            "a body-up yaw scales the elevation by cos(turn): {} vs {} (world-up would keep {})", b.look()[1], want_y, f1[1]);
     }
 
     #[test]
