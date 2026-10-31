@@ -69,6 +69,37 @@ pub struct Effects {
     pub evicted: u32,
 }
 
+/// The decal pool's node count (`DList_Init(0x3496e0, 0x60, 200)` [M Effect_InitLists 0x1cf268]).
+pub const DECAL_POOL: usize = 200;
+
+impl Effects {
+    /// The pool node a live decal occupies. The game's nodes never move: `Effect_Bullet` takes a
+    /// free node, and with none free it unlinks the oldest in-use node and takes THAT node again
+    /// [M 0x1cea20..0x1cea58] — so a hole keeps its node for life and only the evicted hole's node
+    /// changes hands. `decals` is kept oldest-first (the eviction removes index 0), so the k-th
+    /// decal ever made (k = `evicted` + its index) sits in node k mod 200 — the order the nodes
+    /// were first handed out, then reused oldest-first.
+    pub fn decal_node(&self, index: usize) -> usize { (self.evicted as usize + index) % DECAL_POOL }
+
+    /// The live decal in pool node `node`, if any (the inverse of `decal_node`).
+    pub fn decal_in_node(&self, node: usize) -> Option<&Decal> {
+        if node >= DECAL_POOL { return None; }
+        let index = (node + DECAL_POOL - self.evicted as usize % DECAL_POOL) % DECAL_POOL;
+        self.decals.get(index)
+    }
+
+    /// The pool nodes handed to a new hole since the count of evictions was `prev_evicted`: a
+    /// reused node is rewritten whole before it draws again [M 0x1ce9f0..0x1cea9c], so it must
+    /// not be drawn sliding from the evicted hole to the new one.
+    pub fn decal_nodes_reused_since(&self, prev_evicted: u32) -> Vec<usize> {
+        let n = self.evicted.saturating_sub(prev_evicted) as usize;
+        if n >= DECAL_POOL { return (0..DECAL_POOL).collect(); }
+        // The holes made after `prev_evicted` evictions into a full pool: decal numbers
+        // prev_evicted + 200 .. evicted + 200, each landing in its number's node.
+        (0..n).map(|k| (prev_evicted as usize + DECAL_POOL + k) % DECAL_POOL).collect()
+    }
+}
+
 /// `Rand_FRandHalf(max)` 0x1e3810: one FRand draw, minus `max·0.5` — the signed half-range.
 pub fn frand_half(rng: &mut Rng, max: f32) -> f32 {
     nf_formats::ps2float::sub(rng.frand(max), max * 0.5)
@@ -250,7 +281,7 @@ impl Effects {
             // in use [M 0x1cea20..0x1cea58]; `Mat_Align2Dir` + `hit + normal·0.01` [M 0x1ce9f0]. No RNG.
             if rec.decal != 0 {
                 let d = Decal { pos: [pos[0] + n[0] * DECAL_OFFSET, pos[1] + n[1] * DECAL_OFFSET, pos[2] + n[2] * DECAL_OFFSET], normal: n, mesh: rec.decal };
-                if self.decals.len() >= 200 { self.decals.remove(0); self.evicted += 1; }
+                if self.decals.len() >= DECAL_POOL { self.decals.remove(0); self.evicted += 1; }
                 self.decals.push(d);
             }
         }
@@ -358,6 +389,36 @@ mod tests {
         assert_eq!(e.decals[0].pos[0], 1.0, "the first decal (k=0) was evicted");
         assert_eq!(e.decals[199].pos[0], 200.0, "the 201st (k=200) is the newest tail");
         assert_eq!(e.evicted, 1);
+    }
+
+    /// A hole keeps its pool node for life: the 201st hole takes the evicted first hole's node 0,
+    /// every other live hole stays in its node, and only node 0 is reported reused [M Effect_Bullet
+    /// 0x1cea20..0x1cea58 — the oldest in-use node is unlinked and taken again].
+    #[test]
+    fn a_hole_keeps_its_pool_node_and_only_the_evicted_node_is_reused() {
+        let mut e = Effects::new();
+        let mut gas = crate::gas::GasPool::default();
+        let surf = table(rec(0x0200_0126, 0));
+        let mut rng = Rng::new(7);
+        let shoot = |e: &mut Effects, rng: &mut Rng, gas: &mut crate::gas::GasPool, k: usize| {
+            e.bullet_impact(rng, Some(&surf), gas, &mut fx(), [k as f32, 0.0, 0.0], [0.0, 1.0, 0.0], 10, [0.0, -1.0, 0.0], 0x2, 0, true, 8);
+        };
+        for k in 0..200 { shoot(&mut e, &mut rng, &mut gas, k); }
+        let before: Vec<f32> = (0..DECAL_POOL).map(|n| e.decal_in_node(n).unwrap().pos[0]).collect();
+        assert_eq!(before[7], 7.0, "before any eviction node n holds the n-th hole");
+        shoot(&mut e, &mut rng, &mut gas, 200);
+        assert_eq!(e.decal_in_node(0).unwrap().pos[0], 200.0, "the new hole took the evicted hole's node");
+        for n in 1..DECAL_POOL {
+            assert_eq!(e.decal_in_node(n).unwrap().pos[0], before[n], "node {n} kept its hole");
+        }
+        assert_eq!(e.decal_nodes_reused_since(0), vec![0], "only node 0 changed hands");
+        assert_eq!(e.decal_node(e.decals.len() - 1), 0, "the newest hole's node");
+        // Sister: the Vec index the draw slots used to follow DOES move every hole.
+        assert_ne!(e.decals[7].pos[0], before[7], "the Vec index shifted (the old slot mapping)");
+        shoot(&mut e, &mut rng, &mut gas, 201);
+        shoot(&mut e, &mut rng, &mut gas, 202);
+        assert_eq!(e.decal_nodes_reused_since(1), vec![1, 2]);
+        assert_eq!(e.decal_in_node(2).unwrap().pos[0], 202.0);
     }
 
     /// `Debris_Create` 0x1aaa00's draw count and physics: count = Rand_Rand(5)+1, per particle 5 draws
