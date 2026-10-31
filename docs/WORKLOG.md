@@ -556,3 +556,11 @@ perch bounce fixed (fall_timer 140→76-tick model). Remaining red: walkreal_070
 approach is skipped; the game holds [L hatch-3] — the live check settles the query detail),
 :775 the #283 wire ride never drops (`dropped false`, fails with flags-99 OFF = the -18 state).
 Battery quoted on the final tree: 23 walkreal + 6 other binaries green, totals in the report.
+
+## capsule-cull-and-los-masks-20 (2026-10-31, s/capsule-cull-and-los-masks-20)
+
+Branch from origin/s/capsule-cull-and-los-masks-19 (a2040251) merged with origin/master (21bfe192).
+Task: land the last red — re-derive the 0c :308 crouch leg from the faithful rule (the f-clamp
+lower bound settled [M 0x10a01c/0x10a024/0x10a028 + 0x10a22c-0x10a274]; the standing stop −111.39
+[L 2026-10-31 fresh boot] as the sister) and settle :775's #283 wire release from the wire class
+[M Player_CollWire 0x197130, the wire end test]. Land with all 13 and every walkreal_* binary green.
