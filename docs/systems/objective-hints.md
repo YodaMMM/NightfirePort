@@ -75,8 +75,8 @@ button [M 0x205934-0x20595c: the arm switches on `param_2->0x20` (the activated 
    - the box text page 0x1000011f gets `Txt_BindLabel(hint)` (msg 0x18) [M 0x1f9608:23];
    - ok_only → ONE list row, label **0x266** (the "continue" text), row id 3 [M 0x1f9608:33-42 — `param_5 == 0 →
      0x266`, `Menu_Send(0x10000120, 0x10, label, 3)`];
-   - the memo box (multi-page: Memo_Update 0x1f9608:67) sizes itself from the text — long hints page through
-     ("~H Next" while reading) [S — the memo's paging is the memo box's generic behaviour; no pause-specific code];
+   - the memo draws EVERY wrapped line (Memo_Update's visible count grows with each line, so nothing pages and the
+     memo's scroll hides [M 0x21e490:121-160]); the box height comes from the memo's line count — see §2b;
    - the modal page 0x4000002f pushes over the pause (manager msg 0x44) [M 0x1f9608:45], and the box page 0x10000120
      is re-tinted 0x645a4cff [M 0x205c14-0x205c2c].
 5. **Dismiss**: the box's OK row (0x4b on the box → `option_return = the row's value` [M C_LBMSGOPTIONS_Handler
@@ -89,6 +89,44 @@ button [M 0x205934-0x20595c: the arm switches on `param_2->0x20` (the activated 
    comes back with its rows and selection intact (they were only hidden, never cleared). The port models the box
    as `FrontEnd::pause_hint: Option<u32>` — set on ✕, cleared on Confirm/Back (both pops), every other action
    swallowed while it is up (modal), the row state untouched underneath.
+
+## 2b. The box as drawn and driven (pause-hint)
+
+The page's controls [D the 08000001 menu defs of 0700000A / 07000005 / 07000009, identical]: the button 0x1000011e
+(75,171,490×121) SET 0xb, layer 0x19, LBL 2 in colour 0; the memo 0x1000011f (80,181,480×103) SET 2, layer 0x12,
+colours 0x645a49ff; the list 0x10000120 (68,296,505×92) SET 2, layer 0x12, column 0 at 100 %, colours 0x645a49ff,
+selection mode 1. SET 0xb COMPONENT 0 is one instance — texel (32,19) of 0x03000042 stretched over the rect in
+0x0000007f; every SET 2 component is empty (no memo / list frame, no highlight bar, no scroll arrows, insets 0).
+
+- **Geometry** [M Menu_CreateOptionBox 0x1f9608:51-63]: text = memo lines (msg 0x65) × the pitch's integer byte;
+  button h = text + rows·0x15 + 0x36 (rows = 1), y = (448 − h)/2; memo y = y + 10; list y = y + text + 0x1e. The
+  memo pitch is the face's extent × 0.01f × 100 (msg 0x75 100) and the EE `mul.s` chops: 18 → 17.999998, so the
+  integer pitch is 17 [M 0x21e108 case 0x75, disasm 0x21e34c-0x21e364].
+- **Which line count**: msg 0x65 is read BEFORE the box's own Memo_Update. The text's msg 0x18 runs Memo_Update only
+  when the box page has a focused control and is not hidden: the first box of a pause finds +0xac = 0 (Page_Init
+  [M 0x21f1c0]), every later one finds the page's +0x7a = 1 left by the previous close (the 0x44 back to the pause
+  page [M 0x21c858 case 0x44]); the 0x44 that pushes the box plays the window's 0x4c script (slot 0 = 0x2000000f)
+  instead of a Page_Update [M Script_PlayDefault 0x220350]. So the box is sized for the PREVIOUS box's lines in
+  this pause, and the first box of each pause (a fresh manager, Memo_Init's count 0) for 0 lines: 75 tall, with the
+  hint's lines running past its bottom and the OK row at y + 30 among them. A PCSX2 look should confirm this.
+- **Memo lines** [M Memo_Update 0x21e490:121-152]: wrapped at w − 16 in FONTSerpLight, x = memo.x + trunc((w −
+  extent)/2) + 2, baseline trunc(k·pitch + memo.y + trunc(pitch)) (chopped adds), no vertical centring (msg 0x66 0),
+  the −1,−1 shadow pass, colour 0x645a49ff.
+- **The OK row** [M List_Update 0x21a598:300-484; disasm 0x21ae00-0x21ae5c]: Txt 0x266 "Press ~A to Continue",
+  centred (msg 0x59 (0,3)) in column 0's box at list.x + 2, 403 wide (404 · 0.01 · 100 chopped), baseline list.y +
+  19 (the list pitch 19.799999's integer part); the selected row's colour +0x540 = 0x645a4cff (the handler's msg
+  0x29); no shadow (the 0x2000 flag needs msg 0x62, never sent). The port draws ~A as its PC key.
+- **Layers**: the box page is pushed at +0x78 = 5 and the pause page parked at 0xfffb [M 0x21c858 case 0x44] — the
+  box draws over the whole pause page; the pause page stays drawn (its controls only lose the focus), with control
+  8 (the objectives list) hidden.
+- **Input and sounds** [M Scroll_Update 0x221b20, the list's embedded scroll; Menu_PlaySound 0x1f3278]: ✕ →
+  MENU_SOUND 0 (gate: the box page's `Menu_EnableSounds` 9 → 0x1da) + msg 0x4b; △ → MENU_SOUND 9 (no sound) + msg
+  0x6d — the manager's △ buzz never runs (the push set +0x1d3); ~V on the one-row list wraps onto the same row with
+  MENU_SOUND 3 (0x1d8) / 4 (0x1d9). The close returns the gates to the pause page's 0xb.
+
+The port: `fe_pages::{SETB_BUTTON, HINTBOX_*, hintbox_rects, hintbox_memo_stride, hintbox_list_stride, HintBoxView,
+hintbox_elems}`, `FrontEnd::{open_objective_hint, close_objective_hint, pause_hint_sized, pause_hint_last}`,
+`menu::pause_hint_view` + `draw_hint_box` (pause_page's tail).
 
 ### Selection state
 
@@ -121,8 +159,9 @@ The draw puts the yellow cursor at it (the port's old code pinned the cursor to 
 - `FrontEnd::action()` Page::Pause: tab 1's Up/Down move the selection, ✕ (Confirm) opens the box with the selected
   row's hint (the −1 → 0x31d fallback [M 0x205bd0-bdc]), Confirm/Back close it, other input idles while it is up;
   entering the tab re-selects the last row.
-- The host's render path pre-opens the box for screenshots: `--page pause --pause-tab 1 --pause-hint` sets
-  `pause_hint` from the cursor row after the objectives fill (crates/nf-view/src/lib.rs).
+- The host's render path pre-opens the box for screenshots: `--page pause --pause-tab 1 --pause-hint` opens it
+  through `open_objective_hint` after the objectives fill (the first box of a pause); `--pause-hint-again` opens,
+  closes and re-opens it (a box sized by the previous one) (crates/nf-view/src/lib.rs).
 
 ## 5. Tests
 
@@ -130,7 +169,9 @@ The draw puts the yellow cursor at it (the port's old code pinned the cursor to 
 parts included, the part stop, text/hint passthrough, the −1 sentinel untouched here). `crates/nf-view/tests/
 objective_hints_flow.rs` — the flow (the last-row initial selection, ✕ on row N opens row N's hint, the 0x31d
 fallback, the modal, Back closing, the re-selection on tab entry; one NF_ISO-gated check binds 0x202/0x31d/0x266
-from the disc's USATxt.dat). Each has a sister assertion that can fail.
+from the disc's USATxt.dat). `crates/nf-view/tests/pause_hint_box.rs` — the box (§2b): the disc's page controls
+and SETs, the chopped geometry, the element list, the input / sound flow, the sizing bookkeeping, the overlay, and
+the Controls page's cream Y-Axis row. Each has a sister assertion that can fail.
 
 ## 6. Live checks (open)
 

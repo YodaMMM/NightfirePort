@@ -2465,6 +2465,13 @@ pub struct FrontEnd {
     /// `option_return`, set by C_LBMSGOPTIONS's 0x4b/0x6d arms) — the port's modal state IS the
     /// option_return [docs/systems/menu-alpha-text-messages.md].
     pub pause_hint: Option<u32>,
+    /// pause-hint: the label whose wrapped line count sized the open box — the memo's line count
+    /// as the PREVIOUS box of this pause left it (None = 0 lines, the first box of a pause)
+    /// [M Menu_CreateOptionBox 0x1f9608:51-58 reads msg 0x65 before its own Memo_Update; see
+    /// `fe_pages::HintBoxView::size_lines`].
+    pub pause_hint_sized: Option<u32>,
+    /// pause-hint: the last hint label a box showed in this pause (the memo's text).
+    pub pause_hint_last: Option<u32>,
     /// fix-save-profile: the port's memory card — the profiles dir next to the port's config,
     /// one file per codename [M Menu_UpdateMessageBox 0x1f7de8:19/28 passes the codename buffer
     /// 0x2e1ae8 to LS_Load/LS_Save as the file name]. The host points it at the dir; None keeps
@@ -3138,6 +3145,9 @@ impl FrontEnd {
             // objective-hints (each new field on its own line [WORKLOG lesson 4]).
             pause_objectives_sel: 0,
             pause_hint: None,
+            // pause-hint (each new field on its own line [WORKLOG lesson 4]).
+            pause_hint_sized: None,
+            pause_hint_last: None,
             // fix-save-profile (each new field on its own line [WORKLOG lesson 4]).
             profile_dir: None,
             profiles: Vec::new(),
@@ -4517,9 +4527,46 @@ impl FrontEnd {
             // objective-hints: a fresh pause has no hint box up and the objectives list's
             // selection comes from the tab's populate (per-entry reset [M 0x204840-0x204850]).
             self.pause_hint = None;
+            // pause-hint: the manager is new, so the box page's memo is too (Memo_Init's line
+            // count 0 [M 0x21df38]) — the first box of this pause is sized for 0 lines.
+            self.pause_hint_sized = None;
+            self.pause_hint_last = None;
             self.pause_objectives_sel = 0;
             true
         } else { false }
+    }
+
+    /// pause-hint: ✕ on the OBJECTIVES tab — `C_GCPAUSE_Handler` 0x204408's control-1 0x4b arm
+    /// [M 0x205b98-0x205c34]: the selected row's record hint (−1 → 0x31d), control 8 hidden, then
+    /// `Menu_CreateOptionBox(player, hint, 10, 1, 0)` pushes page 0x4000002f over the pause
+    /// (msg 0x44 arg 2 keeps the pause page drawn beneath [M Manager_SendMessage 0x21c858 case
+    /// 0x44: bit 2 parks it in +0x1c0, still updated each frame [M MenuManager_Update
+    /// 0x21c3d8]]) and re-keys the sound gates to the box page's (`Menu_EnableSounds` → 9
+    /// [M 0x1f31f0 default arm]). The box is sized for the memo's previous line count
+    /// (`fe_pages::HintBoxView::size_lines`). Returns false with no rows.
+    pub fn open_objective_hint(&mut self) -> bool {
+        let n = self.pause_objectives.len();
+        if n == 0 { return false; }
+        let hint = self.pause_objectives[self.pause_objectives_sel.min(n - 1)].hint;
+        // No-hint records (−1 = 0xffffffff) show label 0x31d [M 0x204408 `if (iStack_304 == -1)
+        // iStack_304 = 0x31d`].
+        let hint = if hint == 0xffff_ffff { 0x31d } else { hint };
+        self.pause_hint_sized = self.pause_hint_last;
+        self.pause_hint_last = Some(hint);
+        self.pause_hint = Some(hint);
+        self.enabled_sound_flags = menu_enable_sounds(crate::fe_pages::HINTBOX_PAGE);
+        true
+    }
+
+    /// pause-hint: the box closes — its OK row (✕, msg 0x4b: option_return = the row's value 3)
+    /// or a cancel (△, msg 0x6d: option_return 4) both send the manager msg 0x5f [M
+    /// C_LBMSGOPTIONS_Handler 0x2022a0], whose stack pop sends 0x44 back to the pause page
+    /// (`Menu_EnableSounds(0x4000004b)` → 0xb [M 0x21c858 case 0x5f → case 0x44]); the pause
+    /// page's next 0x50 sees the non-zero option_return and re-shows control 8 [M P_PAUSE_Handler
+    /// 0x203c28:19-24].
+    pub fn close_objective_hint(&mut self) {
+        self.pause_hint = None;
+        self.enabled_sound_flags = menu_enable_sounds(PAGE_PAUSE);
     }
 
     /// A mission ended [M Mission_Update 0x182c60]. Cases 2/3 (failed) and 6 (complete) only set
@@ -5683,7 +5730,11 @@ impl FrontEnd {
         // row reading; the ScreenAdjust bars select nothing]. The host drains `sfx_out`.
         match a {
             Action::Confirm if self.sfx_selectable() => self.sfx(MENU_SOUND_SELECT, SFX_MENU_TICK),
-            Action::Back => self.sfx(MENU_SOUND_BACK, SFX_MENU_VAL_INC),
+            // pause-hint: under the hint box the △ never reaches the manager's buzz — the box was
+            // pushed with msg 0x44 bit 2 (+0x1d3 = 1 skips MenuManager_Update's pop arm [M
+            // 0x21c3d8:78-105]); the focused list's scroll takes it with MENU_SOUND 9, silence
+            // [M Scroll_Update 0x221b20:455-458].
+            Action::Back if !(self.page == Page::Pause && self.pause_hint.is_some()) => self.sfx(MENU_SOUND_BACK, SFX_MENU_VAL_INC),
             Action::Side if self.sfx_selectable() => self.sfx(MENU_SOUND_SIDE_CIRCLE, SFX_MENU_TICK),
             _ => {}
         }
@@ -6375,15 +6426,23 @@ impl FrontEnd {
                 // cancel (0x6d) pops it [M C_LBMSGOPTIONS_Handler 0x2022a0]; the page handler
                 // then re-shows the list on msg 0x50 [M P_PAUSE_Handler 0x203c28:19-24 —
                 // option_return != 0 → control 8 0x2b(0); the ok-only box returns 3 on OK and 4
-                // on cancel, both non-zero] — the port just clears the field. Everything else
-                // idles. The game's box is the authored TYPE-6 list control 0x10000120 on that
+                // on cancel, both non-zero] — the port closes the box (`close_objective_hint`). The game's box is the authored TYPE-6 list control 0x10000120 on that
                 // page [D census]: Menu_CreateOptionBox fills its row text via
                 // `List_SendMessage` 0x2196e8 arm 0x10 (:27-41) and calls `List_Update`
                 // 0x21a598 directly (:68) — the port's `ListState` + this modal stand in for
                 // that flow.
+                // pause-hint: the box's input is the focused list's embedded scroll [M
+                // Scroll_Update 0x221b20, run from List_Update]: ✕ plays MENU_SOUND 0 (the gate
+                // is the box page's 9 → 0x1da, played above) and sends 0x4b; △ plays MENU_SOUND 9
+                // (silence) and sends 0x6d; ~V steps the one-row range 0..0, which wraps (+0x144 =
+                // 1 from Scroll_Init 0x2214f0's init arm) onto the same row with MENU_SOUND 3 (up,
+                // 0x1d8) / 4 (down, 0x1d9) and a msg 0x49 nothing handles [M :188-204]. Nothing
+                // else reaches the pause page (its controls test the focus, which is the box's).
                 if self.pause_hint.is_some() {
                     match a {
-                        Action::Confirm | Action::Back => { self.pause_hint = None; return true; }
+                        Action::Confirm | Action::Back => { self.close_objective_hint(); return true; }
+                        Action::Up => { self.sfx(MENU_SOUND_VAL_DEC, SFX_MENU_VAL_DEC); return false; }
+                        Action::Down => { self.sfx(MENU_SOUND_VAL_INC, SFX_MENU_VAL_INC); return false; }
                         _ => return false,
                     }
                 }
@@ -6393,15 +6452,7 @@ impl FrontEnd {
                 if self.pause_tab == 1 {
                     let n = self.pause_objectives.len();
                     match a {
-                        Action::Confirm => {
-                            if n == 0 { return false; }
-                            let sel = self.pause_objectives_sel.min(n - 1);
-                            let hint = self.pause_objectives[sel].hint;
-                            // No-hint records (−1 = 0xffffffff) show label 0x31d instead
-                            // [M 0x204408 `if (iStack_304 == -1) iStack_304 = 0x31d`].
-                            self.pause_hint = Some(if hint == 0xffff_ffff { 0x31d } else { hint });
-                            return true;
-                        }
+                        Action::Confirm => return self.open_objective_hint(),
                         Action::Up if n > 0 => { if self.pause_objectives_sel > 0 { self.pause_objectives_sel -= 1; } return true; }
                         Action::Down if n > 0 => { if self.pause_objectives_sel + 1 < n { self.pause_objectives_sel += 1; } return true; }
                         _ => {}
@@ -10079,8 +10130,10 @@ fn pause_page(h: &mut Hud, fe: &FrontEnd, font: &nf_formats::hud::Font, lang: Op
             // (PCSX2 m22, 2026-10-15: "• Breach the castle walls", the bullet at x 137, the text at 149, middle y 159);
             // the list's selection starts on the LAST row [M :271 msg 0x1d = count−1] and moves with ~V — the
             // yellow arrow follows fe.pause_objectives_sel (objective-hints).
-            let n = fe.pause_objectives.len().min(8);
-            for (i, o) in fe.pause_objectives.iter().enumerate().take(8) {
+            // pause-hint: the hint box hides the list (control 8 msg 0x2b 1 before the box opens
+            // [M 0x204408 0x205bf0]; msg 0x50 re-shows it after the close [M 0x203c28:19-24]).
+            let n = if fe.pause_hint.is_some() { 0 } else { fe.pause_objectives.len().min(8) };
+            for (i, o) in fe.pause_objectives.iter().enumerate().take(n) {
                 let y = 159.0 + i as f32 * 22.0;
                 let marker = if o.done { "~J" } else { "~I" };
                 glyph_row(h, font, &format!("{marker} {}", lbl(o.text, "(objective)")), 135.0, y - 9.0, bright);
@@ -10143,6 +10196,71 @@ fn pause_page(h: &mut Hud, fe: &FrontEnd, font: &nf_formats::hud::Font, lang: Op
     // PC: the CONTROLS tab's hint is the keyboard's (the pad's "○ Invert" has no meaning here).
     let hint_text = if tab == 2 && !(fe.confirming_restart || fe.confirming_quit) { "~H Next  ~B Back".to_string() } else { hint_wrap(lang, hint_id, hint_fb) };
     hint_row_s(h, font, &hint_text, 45.0, 341.0 + 2.5, gs(0x0d0904, 0xff), None, false); // middle 352 (m21–m27)
+    // pause-hint: the objective-hint option box over the page (fe_pages::hintbox_elems).
+    if let Some(view) = pause_hint_view(fe, font, lang) {
+        draw_hint_box(h, &crate::fe_pages::hintbox_elems(&view), font, textures);
+    }
+}
+
+/// pause-hint: the hint box's view this frame — the open hint's text wrapped at memo w − 16 in
+/// FONTSerpLight (the pause page's `font`), the size count from the previous box of this pause
+/// (`FrontEnd::pause_hint_sized`, wrapped the same way; 0 lines for none), the two pitches from
+/// the face's extent height and the OK row (Txt 0x266). None while no box is up.
+pub fn pause_hint_view(fe: &FrontEnd, font: &nf_formats::hud::Font, lang: Option<&Lang>) -> Option<crate::fe_pages::HintBoxView> {
+    use crate::fe_pages::{hintbox_list_stride, hintbox_memo_stride, HintBoxView, HINTBOX_MEMO, HINTBOX_OK_LABEL};
+    let hint = fe.pause_hint?;
+    let bind = |id: u32| -> String { lang.and_then(|l| l.bind(id)).unwrap_or("").to_string() };
+    let m = crate::fe_pages::control_rect(HINTBOX_MEMO.0, 200, HINTBOX_MEMO.1, HINTBOX_MEMO.2, HINTBOX_MEMO.3, HINTBOX_MEMO.4);
+    let wrap = |s: &str| -> Vec<(String, f32)> {
+        // Font_WordWrapString hands back nothing for an empty string [M Memo_Update 0x21e490:108-116].
+        if s.is_empty() { return Vec::new(); }
+        wrap_px(s, font, (m[2] - 16) as f32).into_iter().map(|l| { let w = font.layout(&l, 0.0, 0.0).1; (l, w) }).collect()
+    };
+    let lines = wrap(&bind(hint));
+    let size_lines = fe.pause_hint_sized.map_or(0, |id| wrap(&bind(id)).len() as u32);
+    let ok = bind(HINTBOX_OK_LABEL);
+    let okw = font.layout(&ok, 0.0, 0.0).1;
+    let fh = font.line_height();
+    Some(HintBoxView { lines, size_lines, memo_stride: hintbox_memo_stride(fh), list_stride: hintbox_list_stride(fh), ok: (ok, okw) })
+}
+
+/// pause-hint: draws the box's elements above the pause page — the game pushes the box page at
+/// layer 5 and parks the pause page at −5 [M Manager_SendMessage 0x21c858 case 0x44: the new
+/// page's +0x78 = 5, the old one's 0xfffb], so the whole box is on top: the fill under its own
+/// text, both under nothing of the pause page's (lower HUD layers draw later).
+fn draw_hint_box(h: &mut Hud, elems: &[crate::fe_pages::PageElem], font: &nf_formats::hud::Font, textures: &[(u32, crate::scene::TextureImage)]) {
+    use crate::fe_pages::ElemWhat;
+    for e in elems {
+        let [x, y, w, hh] = e.rect.map(|v| v as f32);
+        let c = word_colour(e.colour);
+        if c[3] <= 0.0 { continue; }
+        match &e.what {
+            ElemWhat::Tex { tex, uv } => {
+                if textures.iter().any(|(t, _)| t == tex) {
+                    h.quad(Anchor::Centre, -6, *tex, 0, x, y, w, hh, *uv, (false, false), c);
+                } else {
+                    let (a, b) = (h.ndc(Anchor::Centre, x, y), h.ndc(Anchor::Centre, x + w, y + hh));
+                    let p = |q: [f32; 2]| HudVertex { p: q, uv: [0.0, 0.0], c };
+                    h.ndc_solid(-6, [p([a[0], a[1]]), p([b[0], a[1]]), p([b[0], b[1]]), p([a[0], a[1]]), p([b[0], b[1]]), p([a[0], b[1]])], c);
+                }
+            }
+            ElemWhat::Pen { s, shadow, .. } if s.contains('~') => {
+                // A line with a button token (the OK row's Txt 0x266 "Press ~A to Continue"): the
+                // menu text renderer draws the token through `specialchar` [M Font_DrawText's ~
+                // codes]; the port's hint-row path shows the PC key for it (`pc_key`). Centred on the
+                // line's own centre; its quads move under the box's layers.
+                let n0 = h.quads.len();
+                hint_row_s(h, font, s, (x + w * 0.5) * MW / SW - 270.0, y * MH / SH - 15.0, c, None, *shadow);
+                for q in &mut h.quads[n0..] { q.layer -= 6; }
+            }
+            ElemWhat::Pen { s, shadow, .. } => {
+                if s.trim().is_empty() { continue; }
+                let x0 = font.layout(s, 0.0, 0.0).0.first().map(|p| p.x).unwrap_or(0.0);
+                h.text_scaled_tex(Anchor::Centre, font, -7, 0x0300_0003, s, x - x0, y, false, c, *shadow, 1.0);
+            }
+            _ => {}
+        }
+    }
 }
 
 /// fix-pause-menu2: a menu-space text row with the specialchar glyphs inline (the "~A Label" rows of
@@ -10585,9 +10703,13 @@ fn cn_controls_rows(h: &mut Hud, fe: &FrontEnd, font: &nf_formats::hud::Font, la
     let mid0 = 109.0 + 12.0;
     centred(h, font, -2, &value_txt(0), mx(60.0 + 158.0), my(mid0 + 6.0), if sel0 { on } else { off }, true, sc);
     if sel0 { arrow(h, 70.0, mid0, true); arrow(h, 356.0, mid0, false); }
-    // The Y-Axis label and its value control.
+    // The Y-Axis label and its value control. Both are cream whatever the focus: the label
+    // 0x10000001 LBL 0x492 (376,113,83×16) and the button 0x100000c9's label carry 0x645a49ff in
+    // both msg 0x1b and 0x1c [D page 0x40000022], and P_CNCONTROLS_Handler sends them no colour
+    // [M 0x213cd0 — only the value text (0x3bd / 0x206) via msg 0x18]. The option-row pair
+    // (cream / 0x73330fc0) is the style list 0x10000025's own [D its msg 0x1b / 0x1c].
     let mid1 = 109.0 + 12.5;
-    let c1 = if sel1 { on } else { off };
+    let c1 = on;
     if let Some(r) = rows.get(1) { left_text(h, font, &bind(r.label), mx(376.0), my(mid1 + 6.0), c1, true, sc); }
     centred(h, font, -2, &value_txt(1), mx(461.0 + 49.5), my(mid1 + 6.0), c1, true, sc);
     if sel1 { arrow(h, 455.0, mid1, true); arrow(h, 566.0, mid1, false); }

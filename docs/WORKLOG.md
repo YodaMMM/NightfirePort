@@ -37,6 +37,24 @@ test binary and the full suite (tools/test/suite.py); quote every total.
 - Pushed checkpoints after every step: 431f721a (branch+WORKLOG), 63709075 (stats merge),
   23cdee53 (fe-pages-2 merge), ade69a7f (the compile fixes).
 
+## pause-hint (2026-10-31) — the objective-hint box drawn and driven
+
+- The pause OBJECTIVES tab's ✕ box (option-box page 0x4000002f) is now drawn: SET 0xb's one fill
+  (texel (32,19) of 0x03000042, 0x0000007f) over the button rect, the hint's memo lines and the OK row
+  (Txt 0x266) in 0x645a4cff; the objectives list hides under it [D the 08000001 menu defs; M 0x1f9608,
+  0x21e490, 0x21a598, 0x204408 0x205b98-0x205c34]. Before, only the input was modal and nothing showed.
+- The pitch arithmetic is the EE's chopped `mul.s`: 18 · 0.01f · 100 = 17.999998, integer 17 — plain f32
+  maths gives 18 and a box 7 units taller at 7 lines (`nf_formats::ps2float`).
+- Read-order finding: msg 0x65 (the memo's line count) is read before the box's own Memo_Update, and the
+  text's msg 0x18 cannot update the memo (first box: no focus; later boxes: the page is still hidden from
+  the last close). So each box is sized for the previous box's text, the first of a pause for 0 lines.
+  Implemented as the decompile reads; no PCSX2 capture yet (GAPS G-054 (4)).
+- Input / sounds from Scroll_Update: ✕ 0x1da under the box page's gates (9), △ silent (MENU_SOUND 9; the
+  manager's buzz is skipped because the push set +0x1d3), ~V 0x1d8 / 0x1d9 on the one-row wrap.
+- Controls page 0x40000022: the Y-Axis label and value now always draw cream 0x645a49ff (their msg 0x1b
+  and 0x1c are both cream; the handler sends no colour).
+- tests/pause_hint_box.rs (7 tests, sisters included); render aid `--pause-hint-again`.
+
 ## page-titles (2026-10-31) — the shared title placement and the 007 Bonus corner stamp
 
 - Every header control in menu-def 08000002 is (50,40,376×17) (0x40000012 y 39; 0x4000001d /

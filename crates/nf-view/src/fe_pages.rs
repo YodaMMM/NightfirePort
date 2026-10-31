@@ -332,6 +332,12 @@ pub const SETC_BUTTON: [CompInst; 6] = [
     ci([8, 8, 8, 24, 76, 103, 8, 24], 0x7f7f_7fff, 0xf0, 1.0, 0.0),
 ];
 
+/// SET 0xb COMPONENT 0 — the mission menu defs' option-box frame (the objective-hint box's
+/// button 0x1000011e): one instance, the white texel (32,19) of [`ATLAS_BUTTONS`] stretched over
+/// the whole rect (fractions 1, 1) in 0x0000007f, every state mask [D the 08000001 menu defs of
+/// 0700000A / 07000005 / 07000009 â€” identical].
+pub const SETB_BUTTON: [CompInst; 1] = [ci([0, 0, 8, 8, 32, 19, 1, 1], 0x0000_007f, 0xfc, 1.0, 1.0)];
+
 /// A type-1 button's sprite set: the instances of COMPONENT 0 of the SET its NEW_CONTROL+0x14
 /// word names (`Button_Init` 0x1efc90:38 handle = set << 16 | 0 [M]; the CONTROL record's `f2`
 /// word is that +0x14 [M MenuManager_Create 0x21b908:262-266]) and the atlas it draws from.
@@ -344,6 +350,7 @@ pub fn button_component(set: u16) -> Option<(&'static [CompInst], u32)> {
         2 => Some((&[], ATLAS_BUTTONS)),
         7 => Some((&SET7_BUTTON, ATLAS_FRAMES)),
         8 => Some((&SET8_BUTTON, ATLAS_FRAMES)),
+        0xb => Some((&SETB_BUTTON, ATLAS_BUTTONS)),
         0xc => Some((&SETC_BUTTON, ATLAS_SETC)),
         0xe => Some((&SETE_BUTTON, ATLAS_BOX)),
         _ => None,
@@ -601,5 +608,127 @@ pub fn cheatmedal_elems(alpha: i16) -> Vec<PageElem> {
     let r = control_rect(id, 6, x, y, w, h);
     let mut out = component_elems(id, &SET3_LIST_FRAME, ATLAS_BUTTONS, 0x20, [r[0], r[1], r[2] - 16, r[3]], alpha);
     out.extend(component_elems(id, &SET3_SCROLL_V, ATLAS_BUTTONS, 0x20, [r[0] + r[2] - 16, r[1], 16, r[3]], alpha));
+    out
+}
+
+// ── The objective-hint box: option-box page 0x4000002f (the mission menu defs) ────────────────
+
+/// The pause OBJECTIVES tab's ✕ opens the mission defs' option-box page over the pause page:
+/// `C_GCPAUSE_Handler` 0x204408's control-1 0x4b arm reads control 8's row, takes the record's
+/// hint label (−1 → 0x31d), hides control 8 (msg 0x2b 1), calls `Menu_CreateOptionBox(player,
+/// hint, 10, ok_only 1, 0)` and recolours the box's list with msg 0x29 0x645a4cff [M 0x205b98-
+/// 0x205c34]. The page's controls [D the 08000001 menu defs of 0700000A / 07000005 / 07000009,
+/// identical]: the button 0x1000011e (75,171,490×121) SET 0xb, layer 0x19, LBL 2 in colour 0 (its
+/// text is invisible); the memo 0x1000011f (80,181,480×103) SET 2, layer 0x12, colours 0x645a49ff;
+/// the list 0x10000120 (68,296,505×92) SET 2, layer 0x12, column 0 at 100 %, colours 0x645a49ff,
+/// selection mode (record byte 4) 1. Every SET 2 component of the mission defs is empty, so the
+/// memo and the list draw no frame, no highlight bar and no scroll arrows — only their text.
+pub const HINTBOX_PAGE: u32 = 0x4000_002f;
+pub const HINTBOX_BUTTON: (u32, i32, i32, i32, i32) = (0x1000_011e, 75, 171, 490, 121);
+pub const HINTBOX_MEMO: (u32, i32, i32, i32, i32) = (0x1000_011f, 80, 181, 480, 103);
+pub const HINTBOX_LIST: (u32, i32, i32, i32, i32) = (0x1000_0120, 68, 296, 505, 92);
+/// The memo's line colour: msg 0x1b / 0x1c 0x645a49ff, the line sprites take +0x274 / +0x278 by
+/// focus [M Memo_Update 0x21e950/0x21e954] — the same word either way.
+pub const HINTBOX_TEXT: u32 = CREAM;
+/// The OK row's colour: the selected row takes +0x540 [M List_Update 0x21a598:466-484, mode 1],
+/// which the pause handler's msg 0x29 sets right after the box opens [M 0x204408 0x205c20].
+pub const HINTBOX_OK_COLOUR: u32 = 0x645a_4cff;
+/// The ok-only box's one row: Txt 0x266 (option arg 0) with value 3 [M Menu_CreateOptionBox
+/// 0x1f9608:34-41].
+pub const HINTBOX_OK_LABEL: u32 = 0x266;
+/// The row count msg 0x33 returns for the ok-only box [M 0x1f9608:23-41 — msg 0x17 empties the
+/// list, one msg 0x10 adds the row].
+pub const HINTBOX_ROWS: u32 = 1;
+
+/// The memo's line pitch after `Menu_CreateOptionBox`'s msg 0x75 100: (the face's extent height
+/// × 0.01f) × 100 [M Memo_SendMessage 0x21e108 case 0x75; disasm 0x21e34c-0x21e364: two
+/// `mul.s` against 0x3c23d70a and the int → float 100] (the memo font is +0x1e0 = 0x30d628,
+/// FONTSerpLight [M Memo_Init 0x21df38]). The EE FPU's `mul.s` chops (rounds toward zero —
+/// `nf_formats::ps2float::mul`), so an 18-unit face gives 17.999998, whose integer part 17 is
+/// what the box height and the line baselines use.
+pub fn hintbox_memo_stride(face_h: f32) -> f32 {
+    use nf_formats::ps2float::mul;
+    mul(mul(face_h, 0.01), 100.0)
+}
+
+/// The list's row pitch: the face's extent height × 1.1 [M List_Init 0x219488:75] (a chopped
+/// `mul.s`); the box sends no msg 0x75 to the list.
+pub fn hintbox_list_stride(face_h: f32) -> f32 {
+    nf_formats::ps2float::mul(face_h, 1.1)
+}
+
+/// `Menu_CreateOptionBox` 0x1f9608:51-63's geometry, in the 512×448 space: `text` = the memo's
+/// line count (msg 0x65, read BEFORE the box's own Memo_Update — see [`HintBoxView::size_lines`])
+/// × the pitch's integer byte; `rows` = 1. The button gets h = text + rows·0x15 + 0x36 and
+/// y = (448 − h)·0.5; the memo y = button y + 10; the list y = button y + text + 0x1e. The x / w
+/// (and the memo / list heights) stay the controls' fixed-up rects ([`control_rect`]).
+/// Returns (button, memo, list).
+pub fn hintbox_rects(size_lines: u32, memo_stride: f32) -> ([i32; 4], [i32; 4], [i32; 4]) {
+    let (bi, bx, by, bw, bh) = HINTBOX_BUTTON;
+    let (mi, mx, my, mw, mh) = HINTBOX_MEMO;
+    let (li, lx, ly, lw, lh) = HINTBOX_LIST;
+    let b = control_rect(bi, 1, bx, by, bw, bh);
+    let m = control_rect(mi, 200, mx, my, mw, mh);
+    let l = control_rect(li, 6, lx, ly, lw, lh);
+    let text = ((size_lines & 0xff) * ((memo_stride as i32 as u16 as u32) & 0xff)) as i16 as i32;
+    let rows = (HINTBOX_ROWS & 0xff) as i32;
+    let s2 = text + rows * 0x15;
+    let h = (if rows == 0 { s2 + 0x1c } else { s2 + 0x36 }) as i16 as i32;
+    let y = ((448.0 - h as f32) * 0.5) as i32 as i16 as i32;
+    ([b[0], y, b[2], h], [m[0], y + 10, m[2], m[3]], [l[0], y + text + 0x1e, l[2], l[3]])
+}
+
+/// What the hint box shows this frame.
+#[derive(Clone, Debug, PartialEq)]
+pub struct HintBoxView {
+    /// The hint wrapped at memo w − 16 with FONTSerpLight, with each line's extent width
+    /// [M Memo_Update 0x21e490:110-114 — the SET 2 insets are 0]. Empty text → no lines.
+    pub lines: Vec<(String, f32)>,
+    /// The memo's line count when the box opened — the box height reads msg 0x65 before the
+    /// box's own Memo_Update [M 0x1f9608:51-58 then :62]. The text's msg 0x18 updates the memo
+    /// only when the memo's page has a focused control (page+0xac) and is not hidden (page
+    /// +0x7a & 5) [M Memo_SendMessage 0x21e108 case 0x18; Memo_Update :67]: the first box of a
+    /// pause has no focus yet (Page_Init zeroes +0xac [M 0x21f1c0]) and every later one finds
+    /// the page hidden from the previous close (the 0x44 back to the pause page sets the box
+    /// page's +0x7a = 1 [M Manager_SendMessage 0x21c858 case 0x44]). So the count is the
+    /// PREVIOUS box's lines in this pause, 0 for the first (a fresh `MenuManager_Create` per
+    /// pause, Memo_Init's +0x281 = 0 [M 0x21df38]).
+    pub size_lines: u32,
+    pub memo_stride: f32,
+    pub list_stride: f32,
+    /// The OK row's text (Txt 0x266) and its extent width.
+    pub ok: (String, f32),
+}
+
+/// The hint box's element list, back to front: the button's SET 0xb fill (unfocused, mask 0x10
+/// [M Button_Update 0x1ef948:56-87] — the page focuses the list [M 0x1f9608:65]), the memo's
+/// lines and the OK row.
+/// - Memo lines [M Memo_Update 0x21e490:121-152]: x = memo.x + trunc((w − extent)·0.5) + 2
+///   (+0x280 = 1, centred), baseline y = trunc(k·pitch + memo.y + trunc(pitch)); no vertical
+///   centring (msg 0x66 0 clears +0x282); the sprite flag 0x2000 (the −1,−1 second pass).
+/// - The OK row [M List_Update 0x21a598:300-415]: column 0's box is list.x + 2 and
+///   w·0.01·100 wide; alignment 3 (msg 0x59 (0, 3)) centres it: x = trunc(x0 + (box −
+///   extent)·0.5); baseline y = trunc(list.y + trunc(pitch)); no shadow (the 0x2000 flag needs
+///   the list's +0x567, msg 0x62, which the box never sends [M disasm 0x21ae48-0x21ae5c]).
+pub fn hintbox_elems(v: &HintBoxView) -> Vec<PageElem> {
+    use nf_formats::ps2float::{add, mul, sub};
+    let (b, m, l) = hintbox_rects(v.size_lines, v.memo_stride);
+    let mut out = button_elems(HINTBOX_BUTTON.0, 0xb, b, 0, BUTTON_IDLE, 0);
+    let ms = v.memo_stride;
+    for (k, (s, wd)) in v.lines.iter().enumerate() {
+        // The EE's chopped float ops in the game's order [M 0x21e490:139-152].
+        let x = m[0] + mul(sub(m[2] as f32, *wd), 0.5) as i32 + 2;
+        let y = add(add(mul(k as f32, ms), m[1] as f32), (ms as i32) as f32) as i32;
+        out.push(PageElem { ctrl: HINTBOX_MEMO.0, rect: [x, y, *wd as i32, ms as i32], colour: HINTBOX_TEXT, what: ElemWhat::Pen { s: s.clone(), face: 2, shadow: true } });
+    }
+    let (s, wd) = &v.ok;
+    if !s.is_empty() {
+        // Column 0's box: (float)w · 0.01 · 100 (chopped: 404 → 403) [M 0x21a598:360-371].
+        let col = mul(mul(l[2] as f32, 0.01), 100.0) as i32 as i16 as i32;
+        let x0 = l[0] + 2;
+        let x = add(x0 as f32, mul(sub(col as f32, *wd), 0.5)) as i32;
+        let y = (l[1] as f32 + (v.list_stride as i32) as f32) as i32;
+        out.push(PageElem { ctrl: HINTBOX_LIST.0, rect: [x, y, *wd as i32, v.list_stride as i32], colour: HINTBOX_OK_COLOUR, what: ElemWhat::Pen { s: s.clone(), face: 2, shadow: false } });
+    }
     out
 }
