@@ -42,3 +42,7 @@ Progress log:
   NEXT: why Drones::attach_level/the level parse drops the three oDrone placements (group-d
   attach → templates), fix the attach, then pin (guard count at the door, their states), run
   door_guards_locked_door_07000014_live + every 07000014 binary + the suite.
+- 09:15 the report: docs/reports/level-14-door-guard-release.md (the refuted premise with the
+  full [M] chain, the missing-template finding with the probe dump, what's left, two live
+  checks, the chunk_suite resume command). Fix + pin test + 07000014 binaries + suite left to
+  the next message; branch is current.
