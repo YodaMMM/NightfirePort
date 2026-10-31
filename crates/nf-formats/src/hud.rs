@@ -162,9 +162,11 @@ pub struct HudTables {
     /// sends the NAME tag as msg 0x23, Label_SendMessage 0x218890:100-104 applies it].
     pub font_header: Font,
     /// Font 3 (`FONTMedium`, texture 0x030000d8) [L FontTable 0x2dd8b0[2] = {tex 0x030000d8, ptr
-    /// 0x305a78}, read live 2026-10-31]: the format code "ÿ" selects it [M Font_ParseFormat
-    /// 0x1ee3e0 case 5: FontTable[n − 1]] — the results page's score labels/numbers carry it in their
-    /// NAME tags [D page 0x40000036] and P_NFRESULTS 0x208e78:159 sends it to the medal text box.
+    /// 0x305a78}, read live 2026-10-31]: the format code "�" selects it [M Font_ParseFormat
+    /// 0x1ee3e0 case 5: FontTable[n − 1]]. The results page's score labels/numbers carry it in
+    /// their NAME tags [D page 0x40000036] and P_NFRESULTS 0x208e78:159 sends it to the medal text
+    /// box; the 007 Bonus page's text list (msg 0x23 with 0x30d348 [M P_NFBONUS 0x209670:15]) and
+    /// the credits' kind-2 lines (0x30d568 [M P_CREDITS 0x2152b0:122-147]) carry it too.
     pub font_medium: Font,
     /// `PdaDigits` (0x2bedb8, 10 words): the entity hashcodes of the decryptor screen's digit meshes
     /// '0'..'9'; `Player_WeaponFiring` 0x1a5460:155-194 sets them on the view model's anim datums

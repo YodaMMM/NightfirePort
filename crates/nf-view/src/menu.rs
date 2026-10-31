@@ -224,11 +224,15 @@ pub const PAGE_NF_BONUS: u32 = 0x4000_0038;
 /// [M 0x208e78:46, 0x209670:50-57]; on the movie's end it sends msg 0x44 → 0x40000030 (credits)
 /// with arg 1 [M 0x215100:48].
 pub const PAGE_WIN_GAME: u32 = 0x4000_0053;
-/// The cheat-medal page [M the page table 0x2029e0:511-513 → P_CHEATMEDAL_Handler 0x2086b0]. NOT
-/// in the front-end menu-def and no static code route reaches it [L the menu-def dump: 56 pages,
-/// no PAGE 0x4000004c; the whole-decompile grep: no msg 0x44 carries 0x4000004c] — the port models
-/// the handler's own behaviour; its reachability in the shipped game is an open question.
+/// The cheat-medal page [M the page table 0x2029e0:511-513 → P_CHEATMEDAL_Handler 0x2086b0]. Not
+/// in the front-end menu-def: its PAGE record (file hash 0x80000002, one list control
+/// 0x1000021c) lives in every mission def's 08000001 next to the pause page [D the 2026-10-31
+/// scan of every archive's kind-8 entries]; no static code route reaches it [the whole-decompile
+/// grep: no msg 0x44 carries 0x4000004c] — the port models the handler's own behaviour.
 pub const PAGE_CHEAT_MEDAL: u32 = 0x4000_004c;
+/// How many page ticks a Screen Adjust press keeps its arrow lit (the port's press-edge stand-in
+/// for the game's while-held +0x142 [S]).
+pub const SCREEN_ADJUST_HELD_TICKS: u8 = 6;
 
 // ── mp-menu-flow: the multiplayer front-end pages ─────────────────────────────────────────────
 // All 13 PAGE records verified in the disc's menu-def (08000002 in 07000048.bin, parsed 2026-10-15 —
@@ -2560,6 +2564,27 @@ pub struct FrontEnd {
     /// 0x214818:29/135], restored by the page's Back (msg 0x4d) [M :79-85].
     pub screen_av_saved_x: i32,
     pub screen_av_saved_y: i32,
+    /// The Screen Adjust bars' held-direction words (each scroll's +0x142: 0 none, 0x40 ◀/▲,
+    /// 0x80 ▶/▼ [M Scroll_Update 0x221b20:74-77, :116-118]) — [0] the horizontal, [1] the
+    /// vertical. The port's menu input is press edges, so a press lights its arrow for
+    /// [`SCREEN_ADJUST_HELD_TICKS`] page ticks [S — the game keeps it while the pad holds].
+    pub screen_adjust_held: [u16; 2],
+    /// Page ticks left on `screen_adjust_held`.
+    pub screen_adjust_held_ticks: u8,
+    /// P_PARISENUM's card box page 0x4000002a stands: PS2_DoCardFlow opens it on the first
+    /// frame a flow message stands (`dialog_open_124` [M 0x217bd8:150-158]) and closes it with
+    /// the flow's end (msg 0x5f [M :42-45]).
+    pub paris_dialog: bool,
+    /// The frames a card-flow message has stood on P_PARISENUM (the memo's line count feeds the
+    /// box height from the second such frame on [M 0x217bd8:186-202]).
+    pub paris_msg_ticks: u32,
+    /// The cheat-medal list's row values (`LIST_ROW+0x2c4`, what msg 0x35 returns for the
+    /// selected row [M List_SendMessage 0x2196e8:463-470]). The page's 0x4c resets the list
+    /// (msg 0x17 [M P_CHEATMEDAL 0x2086b0:14-16]) and nothing adds a row, so it stays empty.
+    pub cheat_medal_rows: Vec<u32>,
+    /// The channel P_CHEATMEDAL's ✕ raised: 99 (`switch_channels[99]`, the fail arm) or 100
+    /// (`switch_channels[100]`, the grant arms) [M 0x2086b0:22-44]; 0 before any ✕.
+    pub cheat_medal_channel: u8,
     /// unlock-popups: the level the results page scored (`base_map` from [`FrontEnd::results_enter`]
     /// — the game re-reads GameState+0x48 inside the bonus page's handler [M 0x209670:14]).
     pub results_level: u32,
@@ -2581,6 +2606,9 @@ pub struct FrontEnd {
     /// P_WINGAME's captured `SFXGetVolume()` [M 0x215100:19-20], reused at the credits open
     /// [M :48 → open_credits's volume].
     pub win_movie_vol: i32,
+    /// The host's last psiMovieFinished poll of the win movie, as a `flow.ticks` value (one poll
+    /// per page tick).
+    pub win_movie_polled: u32,
     // ── mp-menu-flow: the multiplayer front end (each new field on its own line [WORKLOG lesson 4]) ──
     /// The four Join-Game panels [M mpjoin 0x2dee68 (4 × 0x10: +0x00 joined, +0x01 ready,
     /// +0x04 team, +0x08 skin) and mp_stuff+0x360+slot·4 (the per-slot state: 0 = press ✕ to
@@ -3146,6 +3174,12 @@ impl FrontEnd {
             screen_saved_y: 0,
             screen_av_saved_x: 0,
             screen_av_saved_y: 0,
+            screen_adjust_held: [0; 2],
+            screen_adjust_held_ticks: 0,
+            paris_dialog: false,
+            paris_msg_ticks: 0,
+            cheat_medal_rows: Vec::new(),
+            cheat_medal_channel: 0,
             // front-end-chain (each new field on its own line [WORKLOG lesson 4]).
             results: None,
             just_completed: false,
@@ -3157,6 +3191,7 @@ impl FrontEnd {
             cheat_medal_sel: 0,
             medal_from_cheat: 0,
             win_movie_vol: 0,
+            win_movie_polled: 0,
             // mp-menu-flow (each new field on its own line [WORKLOG lesson 4]).
             mp_join: std::array::from_fn(|_| MpJoinAgent::default()),
             mp_scenario: 1,
@@ -3315,6 +3350,12 @@ impl FrontEnd {
     /// into the pair-playing pages (Start/Main/MissionSelect/Results/MpDebriefing — the port's
     /// stand-ins for the game's restart handlers [M the SFXStart(0x1d7) caller list]; the credits
     /// is the swap, handled below and in `MenuMusic::page_enter`).
+    /// [`Self::enter_page`] for the tests and render aids: a page change with the page's own 0x4c
+    /// enter work (the cheat-medal list reset, the Screen Adjust held words, the card box state).
+    pub fn enter_page_for_test(&mut self, p: Page) {
+        self.enter_page(p);
+    }
+
     fn enter_page(&mut self, p: Page) {
         self.page = p;
         self.page_open = true; // [M 0x21c858 case 0x44 — manager+0x1bc = the new page]
@@ -3340,6 +3381,20 @@ impl FrontEnd {
             // [M 0x217348:24-25 Menu_SelectItemInControl(…, 0x2df508, 0xd, MPSettings._420_4_)] —
             // boot's 1 and Quick Game's 1 both land on Arena (row 1).
             if let Some(r) = MP_SCENARIO_ROWS.iter().position(|row| row.3 == self.mp_scenario) { self.mp_scenario_row = r; }
+        }
+        if p == Page::ScreenAdjust {
+            self.screen_adjust_held = [0; 2];
+            self.screen_adjust_held_ticks = 0;
+        }
+        if p == Page::CheatMedal {
+            // P_CHEATMEDAL's 0x4c: msg 0x39 fetches the list, msg 0x17 resets it — no rows, no
+            // selected row [M 0x2086b0:14-16; List_SendMessage 0x2196e8:169-240 zeroes +0x560].
+            self.cheat_medal_rows.clear();
+            self.cheat_medal_sel = 0;
+        }
+        if p == Page::ParisEnum {
+            self.paris_dialog = false;
+            self.paris_msg_ticks = 0;
         }
         if matches!(p, Page::Codename | Page::CnSelect) {
             // The 0x4c open runs Menu_SelectCodenameInControl 0x2028d8 against the codename list
@@ -3464,12 +3519,14 @@ impl FrontEnd {
     }
 
     /// Whether the cursor sits on a control the widget layer would blip for ✕/○: the rowed pages'
-    /// row, the letter grids' cell. The Screen Adjust bars carry no select [L page 0x40000047's
-    /// controls — two slider bars, the picture and the hint; S the no-blip reading].
+    /// row, the letter grids' cell. The Screen Adjust bars blip: a focused scroll's ✕ plays
+    /// MENU_SOUND 0 and sends 0x4b to the page [M Scroll_Update 0x221b20:400-405] (both bars
+    /// share the focused id; the port plays the one blip [S — whether the second bar's update
+    /// still runs after the first's 0x4b closed the page is not pinned]).
     fn sfx_selectable(&self) -> bool {
         match self.page {
             Page::CnName => true,
-            Page::ScreenAdjust => false,
+            Page::ScreenAdjust => true,
             _ => self.cursor < self.rows(),
         }
     }
@@ -3543,10 +3600,13 @@ impl FrontEnd {
             // P_WINGAME 0x215100 have no cursor code]; the cheat-medal list has 6 rows
             // [M 0x2086b0's switch over the selection 0..5].
             Page::NfBonus | Page::WinGame => 0,
-            Page::CheatMedal => 6,
-            // The Screen Adjust page's two sliders (the vertical and the horizontal bar) [L page
-            // 0x40000047's two 0x100001eb controls, d1 0 = vertical / 1 = horizontal].
-            Page::ScreenAdjust => 2,
+            // The cheat-medal list's rows — none: the 0x4c resets the list and nothing adds one
+            // [M P_CHEATMEDAL 0x2086b0:14-16].
+            Page::CheatMedal => self.cheat_medal_rows.len(),
+            // The Screen Adjust page has no cursor to walk: its two scrolls share the focused id
+            // 0x100001eb [D page 0x40000047], so both take their own axis at once [M
+            // Scroll_Update 0x221b20:42-43's id test].
+            Page::ScreenAdjust => 0,
             // The MISSION tab's rows [L page 0x4000004b's d1=6 list (153,183,334×120) binds labels
             // 0x16a CONTINUE / 0x16b RESTART / 0x16c QUIT via its m0x11 messages].
             Page::Pause => 3,
@@ -3829,12 +3889,9 @@ impl FrontEnd {
                 }
             }
             Page::Pause => {}
-            // The two slider bars [L page 0x40000047: vertical (304,176,32×128) d1 0, horizontal
-            // (256,224,128×32) d1 1]: hovering a bar picks it — the keyboard's ~V.
-            Page::ScreenAdjust => {
-                if (304.0..336.0).contains(&x) && (176.0..304.0).contains(&y) { self.cursor = 0; }
-                else if (256.0..384.0).contains(&x) && (224.0..256.0).contains(&y) { self.cursor = 1; }
-            }
+            // The two scroll bars share the focused id [D page 0x40000047]: there is no bar to
+            // pick, so a hover changes nothing.
+            Page::ScreenAdjust => {}
             Page::Results if self.outcome == Outcome::Failed => {
                 if let Some(i) = pick(&[(200.0, 235.0), (235.0, 273.0)], 197.0, 443.0) { self.cursor = i; }
             }
@@ -3971,9 +4028,9 @@ impl FrontEnd {
             }
             // The letter grid and the MP setup panels keep the keyboard (typing / the per-agent steps).
             Page::CnName | Page::MpSetup => {}
-            // The cheat-medal list draws no rows yet (the overlay's arm is empty — the drawing task
-            // owns the page's look): no drawn row to hit, so a click does nothing; the keyboard's
-            // selection and ✕ stay the only toggle.
+            // The cheat-medal list is empty on the shipped page (the 0x4c resets it [M 0x2086b0:
+            // 14-16]): no drawn row to hit, so a click does nothing; the keyboard's ✕ stays the
+            // only press (the empty list's value 0 → the fail arm).
             Page::CheatMedal => {}
             // Single-action pages (the title, the results page, the credits, the summary): a click is ✕.
             _ => return self.action(Action::Confirm),
@@ -4170,6 +4227,11 @@ impl FrontEnd {
     pub fn tick(&mut self) {
         self.flow.main_tick();
         if !self.flow.load_tick() { return; }
+        // The Screen Adjust press's lit arrow runs out (see SCREEN_ADJUST_HELD_TICKS).
+        if self.screen_adjust_held_ticks > 0 {
+            self.screen_adjust_held_ticks -= 1;
+            if self.screen_adjust_held_ticks == 0 { self.screen_adjust_held = [0; 2]; }
+        }
         // memcard-save-flow: the card flow pumps per frame, the way HandlePS2CardState 0x110b98
         // runs from the game's page handlers [M P_CNMENU 0x213288:14-16's 0x50 pump].
         self.card_tick();
@@ -4312,7 +4374,14 @@ impl FrontEnd {
             Page::ParisEnum => {
                 self.paris_card.tick();
                 self.paris_card.enum_step();
+                // PS2_DoCardFlow's box side [M 0x217bd8:144-175]: the first frame a message stands
+                // opens the box page; each message frame counts toward the memo's line-count lag.
+                if self.paris_card.flow_msg != 0 && !self.paris_card.flow_done() {
+                    self.paris_dialog = true;
+                    self.paris_msg_ticks = self.paris_msg_ticks.saturating_add(1);
+                }
                 if self.paris_card.flow_done() {
+                    self.paris_dialog = false; // the flow's end closes the box (0x5f) [M :42-45]
                     // PS2_DoCardFlow 0x217bd8 state 8: the card-dialog teardown runs
                     // Menu_ClearDelayedMessages 0x1f3508 before the flow's queued page opens
                     // [M 0x218470 — Clear + state[2] = 0].
@@ -4653,13 +4722,18 @@ impl FrontEnd {
     /// `switch_channels[100]` + the level at 0x270320 (rows 1..5 → 999/1/2/3/4 — the mission-PASS
     /// channel [M :24-44]). The port records both; the caller decides what a simulated mission end
     /// does (the page itself has no route into the shipped flow [M the doc on PAGE_CHEAT_MEDAL]).
+    /// The value is the selected row's +0x2c4 word, 0 with no selected row [M List_SendMessage
+    /// 0x2196e8:463-470] — so the shipped page's empty list always takes the fail arm.
     pub fn cheat_medal_confirm(&mut self) {
-        self.medal_from_cheat = match self.cheat_medal_sel {
-            0 => 0, // row 0: the fail-channel arm — no medal grant [M :22-25]
-            1 => 999,
-            row @ 2..=5 => (row - 1) as i32,
-            _ => 0,
-        };
+        let value = self.cheat_medal_rows.get(self.cheat_medal_sel).copied().unwrap_or(0);
+        match value {
+            0 => self.cheat_medal_channel = 99, // [M :22-25] no grant
+            1..=5 => {
+                self.medal_from_cheat = [999, 1, 2, 3, 4][value as usize - 1];
+                self.cheat_medal_channel = 100; // [M :41-43]
+            }
+            _ => {} // [M the switch's default: nothing]
+        }
     }
 
     /// P_NFSTATS_Handler 0x209938's page enter — the Mission Stats rows against the LIVE progress
@@ -5844,19 +5918,29 @@ impl FrontEnd {
             // psiAdjustScreenPos with the −1..1 value (X step 12, Y step 4); ✕ keeps (Manager 0x5f(1)
             // skips the restore notification [M 0x21c858 case 0x5f]) and ○/Back restores the enter
             // snapshot (the msg 0x6b path, the page hint's "Cancel" [L 0x67b]).
+            // Both scrolls share the focused id, so each takes its own axis at any time [M
+            // Scroll_Update 0x221b20:42-43]: the vertical ▲/▼ (actions 0x1a/0x1b), the horizontal
+            // ◀/▶ (0x1c/0x1d) [M :50-140]. A press moves the scroll's value 0 → ∓1 (range −1..1
+            // from C_SBSCREEN's 0x51 [M 0x217b08:22-24]), plays MENU_SOUND 3 / 4, and the 0x49
+            // runs psiAdjustScreenPos with it, then msg 0x2e puts the value back to 0 [M
+            // 0x217b08:9-20]. The manager's direction walk only moves its cursor sprite
+            // (Menu_FindControl 0x1f16d8:170-181 writes mgr+0x94's sprite, not the focus).
             Page::ScreenAdjust => {
+                let step = |fe: &mut FrontEnd, bar: usize, dir: i32| {
+                    if bar == 1 { fe.screen_adjust(0, dir); } else { fe.screen_adjust(dir, 0); }
+                    fe.screen_adjust_held[bar] = if dir < 0 { 0x40 } else { 0x80 };
+                    fe.screen_adjust_held_ticks = SCREEN_ADJUST_HELD_TICKS;
+                    fe.sfx(if dir < 0 { MENU_SOUND_VAL_DEC } else { MENU_SOUND_VAL_INC },
+                           if dir < 0 { SFX_MENU_VAL_DEC } else { SFX_MENU_VAL_INC });
+                    true
+                };
                 match a {
-                    Action::Up if self.cursor > 0 => { self.cursor -= 1; return self.focus_moved(); }
-                    Action::Down if self.cursor + 1 < self.rows() => { self.cursor += 1; return self.focus_moved(); }
-                    Action::Left => {
-                        if self.cursor == 0 { self.screen_adjust(0, -1); } else { self.screen_adjust(-1, 0); }
-                        return true;
-                    }
-                    Action::Right => {
-                        if self.cursor == 0 { self.screen_adjust(0, 1); } else { self.screen_adjust(1, 0); }
-                        return true;
-                    }
+                    Action::Up => return step(self, 1, -1),
+                    Action::Down => return step(self, 1, 1),
+                    Action::Left => return step(self, 0, -1),
+                    Action::Right => return step(self, 0, 1),
                     Action::Confirm => {
+                        self.screen_adjust_held = [0; 2];
                         self.av_screen_snapshot();   // the AV page's re-enter re-snapshots [M 0x214818:135]
                         self.enter_page(Page::CnAv);
                         self.cursor = 6;             // the Screen Adjust row [L page data y=256 is the 7th row]
@@ -7040,9 +7124,10 @@ impl FrontEnd {
             Page::WinGame => if a == Action::Confirm { return self.win_movie_finished(); },
             // P_CHEATMEDAL 0x2086b0 — the list is control 0x1000021c; Up/Down move the selection
             // (the list's msg-0x11 walk), Confirm is the handler's 0x4b case [M :19-45].
+            // The walk stays inside the list's rows — none on the shipped page [M 0x2086b0:14-16].
             Page::CheatMedal => match a {
-                Action::Up => { self.cheat_medal_sel = (self.cheat_medal_sel + 5) % 6; return true; }
-                Action::Down => { self.cheat_medal_sel = (self.cheat_medal_sel + 1) % 6; return true; }
+                Action::Up if self.cheat_medal_sel > 0 => { self.cheat_medal_sel -= 1; return true; }
+                Action::Down if self.cheat_medal_sel + 1 < self.cheat_medal_rows.len() => { self.cheat_medal_sel += 1; return true; }
                 Action::Confirm => { self.cheat_medal_confirm(); return true; }
                 _ => {}
             }
@@ -8591,7 +8676,12 @@ pub fn menu_overlay(fe: &FrontEnd, font: &nf_formats::hud::Font, hfont: &nf_form
 
 /// `menu_overlay` with the third menu face, `FONTMedium` (`HudTables::font_medium`, the "\xff\x03"
 /// format code) — the results page's score lines and medal text use it [D page 0x40000036's NAME
-/// tags; M P_NFRESULTS 0x208e78:159]. Without it those lines fall back to the SerpLight face.
+/// tags; M P_NFRESULTS 0x208e78:159]. Without it (`None`) those lines fall back to the SerpLight
+/// face. All three menu faces: `font` FONTSerpLight (face 2), `hfont` FONTNFont2 (face 1), `mfont`
+/// FONTMedium (face 3) [L FontTable 0x2dd8b0] — the 007 Bonus page's text list (msg 0x23 with
+/// 0x30d348 [M P_NFBONUS 0x209670:15]) and the credits' kind-2 lines (0x30d568 [M P_CREDITS
+/// 0x2152b0:122-147]) carry face 3. `menu_overlay` passes SerpLight for face 3 (the callers
+/// without the third face).
 #[allow(clippy::too_many_arguments)]
 pub fn menu_overlay_fonts(fe: &FrontEnd, font: &nf_formats::hud::Font, hfont: &nf_formats::hud::Font, mfont: Option<&nf_formats::hud::Font>, lang: Option<&Lang>, textures: &[(u32, crate::scene::TextureImage)], aspect: f32) -> HudFrame {
     let mut h = Hud { quads: Vec::new(), aspect, textures };
@@ -8614,6 +8704,15 @@ pub fn menu_overlay_fonts(fe: &FrontEnd, font: &nf_formats::hud::Font, hfont: &n
         plate(&mut h, 0.0, 0.0, MW, MH, gs(0x180c08, 0xff));
         return h.finish();
     }
+    // The win page 0x40000053 is the same shape: its PAGE record is the bare root window and the
+    // 0x4c starts the background movie 0x073f0048 [D the record; M P_WINGAME 0x215100:20] — the
+    // movie plane is the whole picture (crate::fe_pages::wingame_elems is empty). With no live
+    // frame (no `movies` feature, a stubbed image) the plate stands in, like the intro.
+    if fe.page == Page::WinGame {
+        if !fe.backdrop_live { plate(&mut h, 0.0, 0.0, MW, MH, gs(0x180c08, 0xff)); }
+        draw_page_elems(&mut h, &crate::fe_pages::wingame_elems(), [h[font, font, mfont.unwrap_or(font)], textures);
+        return h.finish();
+    }
     // The backdrop: the pages' aux FMVs are the real background — parsed from the menu-def's PAGE
     // records (aux_movie_for: the main menu's 0x07330048, the boot/list/results pages' 0x07350048;
     // `Manager_SendMessage` 0x21c858:338 plays the page's aux code as a LOOPING background movie
@@ -8626,7 +8725,9 @@ pub fn menu_overlay_fonts(fe: &FrontEnd, font: &nf_formats::hud::Font, hfont: &n
     // fix-pause-menu: the IN-GAME pages (pause 0x4000004b, fail menu 0x40000042) draw OVER THE PAUSED
     // FRAME — the game dims nothing full-screen; their own backdrop plate (45,107,550×266, TEX 0x03000070
     // [L the pages' 0x10000001 control]) carries the menu.
-    if !(aux != 0 && fe.backdrop_live) && !matches!(fe.page, Page::Pause | Page::Results) {
+    // The cheat-medal page is an in-game page too (the mission defs' 08000001 [D]) with no
+    // full-screen control: the list draws over the frame beneath.
+    if !(aux != 0 && fe.backdrop_live) && !matches!(fe.page, Page::Pause | Page::Results | Page::CheatMedal) {
         plate(&mut h, 0.0, 0.0, MW, MH, gs(0x180c08, 0xff));
     }
     match fe.page {
@@ -9570,18 +9671,19 @@ pub fn menu_overlay_fonts(fe: &FrontEnd, font: &nf_formats::hud::Font, hfont: &n
             hint_bar(&mut h, font, &hint(0x497, "~A Confirm  ~H Change  ~B Back"), 50.0, 419.0, cream);
             logo_stamp(&mut h);
         }
+        // The Screen Adjust page [D menu-def page 0x40000047; M P_SCREENADJUST 0x217a58 +
+        // C_SBSCREEN 0x217b08 + Scroll_Update 0x221b20]: crate::fe_pages::screenadjust_elems —
+        // the reference picture, the 24 corner brackets, the hint (the shared hint bar draws its
+        // button glyphs) and the two scroll controls' SET 3 arrows, both focused (one shared id),
+        // the held direction bright.
         Page::ScreenAdjust => {
-            // The Screen Adjust page's own controls [L page 0x40000047 walk 2026-10-15]: the
-            // fullscreen reference picture TEX 0x3000074 (the msg-0x24 control (0,0,640,480)); the
-            // two slider bars — vertical (304,176,32,128) d1 0, horizontal (256,224,128,32) d1 1,
-            // both named 0x100001eb; the hint bar (50,419) LBL 0x67b. To compare
-            // against PCSX2 — the bars here are the page data's plates with the focused one bright.
-            quad640(&mut h, 0x0300_0074, 0.0, 0.0, MW, MH, [0.0, 0.0, 512.0, 512.0], gs(0x7f7f7f, 0xff));
-            let (bar_v, bar_h) = (gs(0x73330f, 0xc0), gs(0x73330f, 0xc0));
-            let hot = cream;
-            plate(&mut h, 304.0, 176.0, 32.0, 128.0, if fe.cursor == 0 { hot } else { bar_v });
-            plate(&mut h, 256.0, 224.0, 128.0, 32.0, if fe.cursor == 1 { hot } else { bar_h });
-            hint_bar(&mut h, font, &hint(0x67b, "~A Confirm  ~B Cancel"), 50.0, 419.0, cream);
+            let elems = crate::fe_pages::screenadjust_elems(fe.screen_adjust_held[0], fe.screen_adjust_held[1], fe.menu_alpha_get(), &bind);
+            for e in &elems {
+                match &e.what {
+                    crate::fe_pages::ElemWhat::Text { label: Some(0x67b), .. } => hint_bar(&mut h, font, &hint(0x67b, "~A Confirm  ~B Cancel"), 50.0, 419.0, cream),
+                    _ => draw_page_elems(&mut h, std::slice::from_ref(e), [h[font, font, mfont.unwrap_or(font)], textures),
+                }
+            }
         }
         Page::Pause => pause_page(&mut h, fe, font, lang, textures, cream, bright, dim),
         Page::Results => results_page(&mut h, fe, font, hfont, mfont, lang, textures, cream, bright, dim),
@@ -9610,40 +9712,45 @@ pub fn menu_overlay_fonts(fe: &FrontEnd, font: &nf_formats::hud::Font, hfont: &n
             }
             stats_list(&mut h, font, &rows);
         }
-        // credits-data: the draw side draws the roll from fe.credits.visible() (the game's
-        // own line list + y positions) — nothing here yet.
-        Page::Credits => {}
-        // The intro run draws only the plate (above); P_PARISENUM's card box is not drawn [S].
-        Page::Intro | Page::ParisEnum | Page::EstHero => {}
-        // unlock-popups: the draw side draws these from the model — NFBONUS from fe.bonus
-        // (the tier lines + the composed text; the page's own layout is header Txt 0x2c5, hint
-        // 0x2d0, texture control 0x100001cf at (89,112,171×256), text list 0x100001d0 at
-        // (268,94,284×292) [L the menu-def dump]), WINGAME is the movie page only, CHEATMEDAL
-        // has no page data (nothing static to draw).
-        // The 007 Bonus page, drawn from its page data [D menu-def page 0x40000038, dumped
-        // 2026-10-21]: header (50,40) LBL 0x2c5; the reward picture 0x100001cf (89,112,171×256) —
-        // the tier-1 texture when that line stands [M P_NFBONUS 0x209670:22-26], else the static
-        // TEX 0x03000134 (uv 0,0 173×257 from msg 0x2d); the text list 0x100001d0 (268,94,284×292)
-        // — the composed tier text [M :22-41]; the focus box 0x10000165 (62,372,61×59, b=1); the
-        // hint (50,419) LBL 0x2d0; the stamp 0x10000224 at the forced (539,393) like the results
-        // page; the logo. Open: the animation is not drawn yet.
+        // The credits roll [D page 0x40000030; M P_CREDITS_Handler 0x2152b0]: the background
+        // label, the 26-slot left/right lists the 0x50 tick fills and scrolls, the exit fade —
+        // crate::fe_pages::credits_elems builds the list from fe.credits (the handler's statics).
+        Page::Credits => {
+            let elems = crate::fe_pages::credits_elems(&fe.credits, &bind);
+            draw_page_elems(&mut h, &elems, [h[font, font, mfont.unwrap_or(font)], textures);
+        }
+        // P_INTRO / P_ESTHERO draw only the plate (above). P_PARISENUM [D page 0x4000004a +
+        // the card box page 0x4000002a; M P_PARISENUM 0x20a648, PS2_DoCardFlow 0x217bd8,
+        // Memo_Update 0x21e490]: its black plate, and while the card flow's message stands the
+        // box — crate::fe_pages::parisenum_elems.
+        Page::ParisEnum => {
+            let view = paris_box_view(fe, font, lang);
+            let elems = crate::fe_pages::parisenum_elems(fe.paris_dialog, view.as_ref());
+            draw_page_elems(&mut h, &elems, [h[font, font, mfont.unwrap_or(font)], textures);
+        }
+        Page::Intro | Page::EstHero => {}
+        // The 007 Bonus page [D menu-def page 0x40000038; M P_NFBONUS 0x209670]: the element list
+        // (crate::fe_pages::nfbonus_elems) — the header and hint ride the shared header / hint-bar
+        // drawers every page uses, the rest draws generically. The page animates nothing (its one
+        // script focuses the button [D]); the 007 flash that goes with the bonus sound is the
+        // HUD's health-pane sprite (hud.rs bond_moment_flash).
         Page::NfBonus => {
-            page_header(&mut h, hfont, &bind(0x2c5));
-            let pic = fe.bonus.as_ref().and_then(|b| b.texture).unwrap_or(0x0300_0134);
-            quad640(&mut h, pic, 89.0, 112.0, 171.0, 256.0, [0.0, 0.0, 173.0, 257.0], gs(0x7f7f7f, 0xff));
-            if let Some(b) = fe.bonus.as_ref().filter(|b| b.has_text) {
-                let text = b.text_labels.iter().map(|&l| bind(l)).filter(|t| !t.trim().is_empty()).collect::<Vec<_>>().join("
-");
-                for (i, line) in wrap_px(&text, font, mx(284.0)).iter().take(17).enumerate() {
-                    h.text(Anchor::Centre, font, -2, line, mx(268.0), my(94.0 + 8.0 + i as f32 * 17.0), false, cream, true);
+            let elems = crate::fe_pages::nfbonus_elems(fe.bonus.as_ref(), &bind);
+            for e in &elems {
+                match &e.what {
+                    crate::fe_pages::ElemWhat::Text { label: Some(0x2c5), s, .. } => page_header(&mut h, hfont, s),
+                    crate::fe_pages::ElemWhat::Text { label: Some(0x2d0), .. } => hint_bar(&mut h, font, &hint(0x2d0, "~A Continue"), 50.0, 419.0, cream),
+                    _ => draw_page_elems(&mut h, std::slice::from_ref(e), [h[font, font, mfont.unwrap_or(font)], textures),
                 }
             }
-            frame640(&mut h, 62.0, 372.0, 61.0, 59.0);
-            quad640(&mut h, 0x0300_014c, 539.0, 393.0, 255.0, 255.0, [0.0, 0.0, 256.0, 256.0], gs(0x7f7f7f, 0xff));
-            hint_bar(&mut h, font, &hint(0x2d0, "~A Continue"), 50.0, 419.0, cream);
-            logo_stamp(&mut h);
         }
-        Page::WinGame | Page::CheatMedal => {}
+        // P_CHEATMEDAL [D the mission defs' page 0x4000004c; M 0x2086b0]: the emptied list's
+        // frame and scroll arrows — crate::fe_pages::cheatmedal_elems.
+        Page::CheatMedal => {
+            let elems = crate::fe_pages::cheatmedal_elems(fe.menu_alpha_get());
+            draw_page_elems(&mut h, &elems, [h[font, font, mfont.unwrap_or(font)], textures);
+        }
+        Page::WinGame => {}
     }
     // The port's message box over whatever page is up (the option-box plate the MP pages use).
     // The MP start checks' refusal [M C_SBMPOPTIONS 0x20e818:50-130]: the game's label, with a
@@ -9683,6 +9790,111 @@ pub fn menu_overlay_fonts(fe: &FrontEnd, font: &nf_formats::hud::Font, hfont: &n
         centred(&mut h, font, -12, "Press Enter", mx(320.0), my(282.0), dim, true, 1.0);
     }
     h.finish()
+}
+
+/// A game colour word 0xRRGGBBAA as the overlay's colour: the channels over 0x80 = 1.0 and the
+/// alpha byte clamped to 0x80 [M Label_Update 0x218cb8:116-121].
+fn word_colour(c: u32) -> [f32; 4] {
+    [(c >> 24) as f32 / 128.0, ((c >> 16) & 0xff) as f32 / 128.0, ((c >> 8) & 0xff) as f32 / 128.0, ((c & 0xff).min(0x80)) as f32 / 128.0]
+}
+
+/// Draw a page's element list (crate::fe_pages) — rects in the 512×448 space, which is the HUD's.
+/// `fonts` = [face 1 FONTNFont2, face 2 FONTSerpLight, face 3 FONTMedium].
+/// A text label's pen follows Label_Update 0x218cb8:157-200: x = ctrl.x (left) or ctrl.x + w/2
+/// with `__Font_DrawText`'s half-width shift (centred); y = trunc(ctrl.y + (h>>1) + lh/2 − 1)
+/// for one line, trunc(ctrl.y + (h>>1) − 1) when the text holds a newline (the extent term is
+/// dropped [M :186-193]), lh = the face's line advance (Font_GetTextExtent's height). Lines
+/// advance by lh [M __Font_DrawText 0x1ee598:65-71]; Menu_ClipString 0x1f2e70 keeps the
+/// characters until the widest line passes w (the rest of the string is dropped).
+fn draw_page_elems(h: &mut Hud, elems: &[crate::fe_pages::PageElem], fonts: [&nf_formats::hud::Font; 3], textures: &[(u32, crate::scene::TextureImage)]) {
+    use crate::fe_pages::{Align, ElemWhat};
+    const FACE_TEX: [u32; 3] = [0x0300_0005, 0x0300_0003, 0x0300_00d8];
+    for e in elems {
+        let [x, y, w, hh] = e.rect.map(|v| v as f32);
+        let c = word_colour(e.colour);
+        match &e.what {
+            ElemWhat::Tex { tex, uv } => {
+                if c[3] <= 0.0 { continue; }
+                if textures.iter().any(|(t, _)| t == tex) {
+                    quad_uv(h, *tex, x, y, w, hh, *uv, c);
+                } else {
+                    // An unloaded texture: the colour alone (the credits' black background).
+                    let (a, b) = (h.ndc(Anchor::Centre, x, y), h.ndc(Anchor::Centre, x + w, y + hh));
+                    let p = |q: [f32; 2]| HudVertex { p: q, uv: [0.0, 0.0], c };
+                    h.ndc_solid(0, [p([a[0], a[1]]), p([b[0], a[1]]), p([b[0], b[1]]), p([a[0], a[1]]), p([b[0], b[1]]), p([a[0], b[1]])], c);
+                }
+            }
+            ElemWhat::Fill => {
+                if c[3] <= 0.0 { continue; }
+                let (a, b) = (h.ndc(Anchor::Centre, x, y), h.ndc(Anchor::Centre, x + w, y + hh));
+                let p = |q: [f32; 2]| HudVertex { p: q, uv: [0.0, 0.0], c };
+                h.ndc_solid(-12, [p([a[0], a[1]]), p([b[0], a[1]]), p([b[0], b[1]]), p([a[0], a[1]]), p([b[0], b[1]]), p([a[0], b[1]])], c);
+            }
+            ElemWhat::Frame => frame640(h, x * MW / SW, y * MH / SH, w * MW / SW, hh * MH / SH),
+            ElemWhat::Pen { s, face, shadow } => {
+                if s.trim().is_empty() || c[3] <= 0.0 { continue; }
+                let fi = (*face as usize).clamp(1, 3) - 1;
+                let (font, tex) = (fonts[fi], FACE_TEX[fi]);
+                let x0 = font.layout(s, 0.0, 0.0).0.first().map(|p| p.x).unwrap_or(0.0);
+                h.text_scaled_tex(Anchor::Centre, font, -2, tex, s, x - x0, y, false, c, *shadow, 1.0);
+            }
+            ElemWhat::Text { s, face, align, shadow, .. } => {
+                if s.trim().is_empty() || c[3] <= 0.0 { continue; }
+                let fi = (*face as usize).clamp(1, 3) - 1;
+                let (font, tex) = (fonts[fi], FACE_TEX[fi]);
+                let lh = font.line_height();
+                let multi = s.contains('\n');
+                let pen_y = if multi { (y + (e.rect[3] >> 1) as f32 - 1.0).trunc() } else { (y + (e.rect[3] >> 1) as f32 + lh * 0.5 - 1.0).trunc() };
+                for (k, line) in clip_lines(s, font, w).iter().enumerate() {
+                    if line.is_empty() { continue; }
+                    let ly = pen_y + k as f32 * lh;
+                    match align {
+                        Align::Centre => centred_tex(h, font, tex, -2, line, x + w / 2.0, ly, c, *shadow, 1.0),
+                        Align::Left => {
+                            let x0 = font.layout(line, 0.0, 0.0).0.first().map(|p| p.x).unwrap_or(0.0);
+                            h.text_scaled_tex(Anchor::Centre, font, -2, tex, line, x - x0, ly, false, c, *shadow, 1.0);
+                        }
+                    }
+                }
+            }
+        }
+    }
+}
+
+/// The card box's view on P_PARISENUM this frame: the flow's message text (DAT_002462d4 0xb →
+/// `sprintf(Txt 0x277, slot_type[MultitapPresent])` — "1", the port has no multitap [M
+/// PS2_DoCardFlow 0x217bd8:119-121, :161-163; D slot_type.121 0x30d588 = "1", "1-A"]) wrapped at
+/// memo w − 16 with FONTSerpLight, the memo's previous line count (the box height's one-frame
+/// lag) and the line pitch (the face's extent ×1.5 [M Memo_Init 0x21df38:70]). None while no
+/// message stands.
+fn paris_box_view(fe: &FrontEnd, font: &nf_formats::hud::Font, lang: Option<&Lang>) -> Option<crate::fe_pages::CardBoxView> {
+    if fe.paris_card.flow_msg != 0xb || fe.paris_card.done { return None; }
+    let fmt = lang.and_then(|l| l.bind(0x277)).unwrap_or("Checking memory card (PS2) in slot %s");
+    let text = fmt.replacen("%s", "1", 1);
+    let m = crate::fe_pages::cardbox_rects(0).1;
+    let lines: Vec<(String, f32)> = wrap_px(&text, font, (m[2] - 16) as f32).into_iter().map(|l| { let w = font.layout(&l, 0.0, 0.0).1; (l, w) }).collect();
+    let prev = if fe.paris_msg_ticks > 1 { lines.len() as u32 } else { 0 };
+    Some(crate::fe_pages::CardBoxView { lines, prev_lines: prev, stride: font.line_height() * 1.5 })
+}
+
+/// Menu_ClipString 0x1f2e70 over a (possibly multi-line) label: Font_GetTextCountExtent counts the
+/// characters while the widest line so far stays within `w` [M __Font_DrawText 0x1ee598:272-279],
+/// so the line that first passes `w` is cut there and the lines after it are gone.
+fn clip_lines(s: &str, font: &nf_formats::hud::Font, w: f32) -> Vec<String> {
+    let mut out = Vec::new();
+    for line in s.split('\n') {
+        if font.layout(line, 0.0, 0.0).1 <= w { out.push(line.to_string()); continue; }
+        let mut cut = String::new();
+        for ch in line.chars() {
+            let mut t = cut.clone();
+            t.push(ch);
+            if font.layout(&t, 0.0, 0.0).1 > w { break; }
+            cut = t;
+        }
+        out.push(cut);
+        break;
+    }
+    out
 }
 
 /// A textured 640-space quad; when the texture isn't loaded draws the dim plate the pages fade from
@@ -10265,6 +10477,11 @@ pub fn mp_textures() -> &'static [u32] {
             // The 007 Bonus page's reward pictures (REWARD_TEXT's tier textures, msg 0x24 into
             // 0x100001cf [M P_NFBONUS 0x209670:23]) — never loaded before, so the page drew no card.
             .chain(nf_game::progress::REWARD_TEXT.iter().flat_map(|r| r.iter().map(|t| t.1)))
+            // The FONTMedium atlas (face 3 [L FontTable 0x2dd8b0[2]]) and the credits' background
+            // label TEX 0x03000129 [D page 0x40000030 control 0x1000023c].
+            .chain([0x0300_00d8u32, crate::fe_pages::CREDITS_BG_TEX])
+            // The card box's frame atlas (SET 0xe [D 08000002]) — P_PARISENUM's box.
+            .chain([crate::fe_pages::ATLAS_BOX])
             .filter(|h| *h != 0 && !MENU_TEXTURES.contains(h)).collect();
         v.sort_unstable(); v.dedup(); v
     })

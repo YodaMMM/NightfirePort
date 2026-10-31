@@ -24,6 +24,7 @@ pub mod dev;
 pub mod devwin;
 pub mod hud;
 pub mod credits;
+pub mod fe_pages;
 pub mod menu;
 pub mod menu_engine;
 pub mod mp_lobby;
@@ -2251,6 +2252,45 @@ fn front_end_menu(args: &[String], scene: &scene::Scene, front_end: bool, iso_pa
                 fe.bonus = Some(menu::BonusFields { level: 0x0700_0005, lines, texture: Some(lines[0].texture), text_labels, has_text: true });
                 menu::Page::NfBonus
             }
+            // Render aid: the credits roll opened from AV Options, `--roll N` frames in (default
+            // 1200); NF_CREDITS_BONUS=1 raises the GameState[0x52] flag (the dimmed backdrop).
+            "credits" => {
+                fe.open_credits(crate::credits::PAGE_CN_AV, 100, std::env::var_os("NF_CREDITS_BONUS").is_some());
+                let n: u32 = args.iter().position(|a| a == "--roll").and_then(|i| args.get(i + 1)).and_then(|v| v.parse().ok()).unwrap_or(1200);
+                for _ in 0..n { fe.credits.tick(); }
+                menu::Page::Credits
+            }
+            // Render aid: the end-of-campaign win page (P_WINGAME's 0x4c raised the movie).
+            "wingame" => { fe.just_completed = true; fe.win_enter(); menu::Page::WinGame }
+            // Render aid: AV Options → Screen Adjust. NF_SA_HELD=h-|h+|v-|v+ lights that bar's
+            // held arrow (the scroll's +0x142 0x40 / 0x80).
+            "screenadjust" => {
+                fe.screen_adjust_open();
+                match std::env::var("NF_SA_HELD").as_deref() {
+                    Ok("h-") => fe.screen_adjust_held[0] = 0x40,
+                    Ok("h+") => fe.screen_adjust_held[0] = 0x80,
+                    Ok("v-") => fe.screen_adjust_held[1] = 0x40,
+                    Ok("v+") => fe.screen_adjust_held[1] = 0x80,
+                    _ => {}
+                }
+                menu::Page::ScreenAdjust
+            }
+            // Render aid: P_PARISENUM with the card box up — the boot card walk run until its
+            // 0xb message stands ("Checking memory card…"), the box past its first frame
+            // (NF_PARIS_FIRST=1 shows the first frame's height lag instead).
+            "parisenum" => {
+                for _ in 0..16 {
+                    fe.paris_card.tick();
+                    fe.paris_card.enum_step();
+                    if fe.paris_card.flow_msg == 0xb { break; }
+                }
+                fe.paris_dialog = true;
+                fe.paris_msg_ticks = if std::env::var_os("NF_PARIS_FIRST").is_some() { 1 } else { 2 };
+                menu::Page::ParisEnum
+            }
+            // Render aid: the in-game cheat-medal page (mission defs' 0x4000004c), its list emptied
+            // by the page's 0x4c.
+            "cheatmedal" => { fe.cheat_medal_rows.clear(); menu::Page::CheatMedal }
             "cnmenu" => { fe.cn_name = "Default".into(); menu::Page::CnMenu }
             "advanced" => menu::Page::CnAdvanced,
             "mpoptions" => menu::Page::CnMp,
@@ -2373,6 +2413,9 @@ fn front_end_menu(args: &[String], scene: &scene::Scene, front_end: bool, iso_pa
         let frame_n: usize = args.iter().position(|a| a == "--movie-frame").and_then(|i| args.get(i + 1)).and_then(|v| v.parse().ok()).unwrap_or(12);
         let want = if intro {
             Some(menu::INTRO_MOVIES[args.iter().position(|a| a == "--intro").and_then(|i| args.get(i + 1)).and_then(|v| v.parse::<usize>().ok()).unwrap_or(0).min(menu::INTRO_MOVIES.len() - 1)])
+        } else if fe.page == menu::Page::WinGame {
+            // The win page's own movie [M P_WINGAME 0x215100:20].
+            Some(crate::credits::WINGAME_MOVIE)
         } else {
             let aux = menu::aux_movie_for(fe.page_id());
             (aux != 0).then_some(aux)
@@ -4107,6 +4150,35 @@ impl App {
                 fe.music.movie_finished();
                 fe.attract_movie_finished();
             }
+        } else if fe.page == menu::Page::WinGame && fe.win_movie {
+            // P_WINGAME: the 0x4c started 0x073f0048 on the ONE BGFMV slot after removing the
+            // menu-music pair (menu_movie = 0) [M 0x215100:16-21]; each 0x50 polls
+            // psiMovieFinished and the first finish restarts the pair and opens the credits
+            // [M :23-48]. A declined start is BGFMVPlaying == 0: finished at once [M 0x1082e8].
+            let code = crate::credits::WINGAME_MOVIE;
+            let wrong = match &self.movie { Some(p) => p.code() != code || p.is_looping(), None => true };
+            let mut ended = false;
+            if wrong {
+                if let Some(p) = self.movie.take() { p.stop(); }
+                fe.win_movie_polled = fe.flow.ticks;
+                match movie::Player::start(&movie_iso, code, movie_sfx_volume(fe)) {
+                    Ok(p) => { self.movie = Some(p); eprintln!("movie: playing {code:08x} (win page)"); fe.music.movie_started(); }
+                    Err(e) => { eprintln!("movie: {code:08x} not started: {e:?} — the win page goes straight to the credits"); ended = true; }
+                }
+            }
+            if let Some(p) = self.movie.as_mut().filter(|p| p.code() == code) {
+                // One psiMovieFinished poll per page tick (60 Hz), not per redraw.
+                while fe.win_movie_polled != fe.flow.ticks {
+                    p.headless_advance();
+                    fe.win_movie_polled = fe.win_movie_polled.wrapping_add(1);
+                }
+                ended |= p.finished();
+            }
+            if ended {
+                if let Some(p) = self.movie.take().filter(|p| p.code() == code) { p.stop(); }
+                fe.music.movie_finished();
+                fe.win_movie_finished();
+            }
         } else if mission_movie_glue(fe, &mut self.movie, &movie_iso) {
         } else {
             // The page's aux loop [M 0x21c858:338]: stop when the page has no aux, (re)start when
@@ -5531,10 +5603,11 @@ impl App {
         let state6 = self.fe.as_ref().is_some_and(|fe| fe.flow.get_state() == menu::ST_MOVIE);
         let intro_up = self.fe.as_ref().is_some_and(|fe| fe.intro_playing);
         let attract_up = self.fe.as_ref().is_some_and(|fe| fe.attract_playing);
+        let win_up = self.fe.as_ref().is_some_and(|fe| fe.page == menu::Page::WinGame && fe.win_movie);
         let flow_up = state6 && !intro_up && self.movie.is_some();
         let aux_up = self.movie.as_ref().is_some_and(|p| p.is_looping())
             && !self.fe.as_ref().is_some_and(|fe| fe.flow.movie_pending);
-        intro_up || flow_up || aux_up || attract_up
+        intro_up || flow_up || aux_up || attract_up || win_up
     }
 
     /// The RedrawRequested draw half (everything after `frame` that needs the GPU):
@@ -5683,12 +5756,14 @@ impl App {
                 // attract page has no controls [L the menu-def's 0x40000035 record], the movie
                 // plane IS the page [M P_ATTRACT_Handler 0x20a1f0's psiStartBackgroundMovie].
                 let attract_up = self.fe.as_ref().is_some_and(|fe| fe.attract_playing);
+                // The win page's movie owns the screen the same way (its PAGE record is bare [D]).
+                let win_up = self.fe.as_ref().is_some_and(|fe| fe.page == menu::Page::WinGame && fe.win_movie);
                 let flow_up = state6 && !intro_up && self.movie.is_some();
                 // The looping page player is the backdrop under the overlay; the early-started
                 // briefing player (non-looping, held through ST_MAPLOAD) is not.
                 let aux_up = self.movie.as_ref().is_some_and(|p| p.is_looping())
                     && !self.fe.as_ref().is_some_and(|fe| fe.flow.movie_pending);
-                let movie_up = intro_up || flow_up || aux_up || attract_up;
+                let movie_up = intro_up || flow_up || aux_up || attract_up || win_up;
                 let movie_frame = if movie_up { self.movie.as_mut().and_then(|p| p.present()) } else { None };
                 // The MP standings keep a constant on-screen text size (the lobby's view_h rule).
                 hud::set_view_h(g.config.height as f32);
@@ -5697,7 +5772,7 @@ impl App {
                         // fe-60hz: the front end's 60 Hz tick moved into `frame` (the draw half
                         // consumed the same post-tick state — headless-app-harness).
                     fe.backdrop_live = aux_up && movie_frame.is_some();
-                    if flow_up || (intro_up && movie_frame.is_some()) || (attract_up && movie_frame.is_some()) || fe.results_queued {
+                    if flow_up || (intro_up && movie_frame.is_some()) || (attract_up && movie_frame.is_some()) || (win_up && movie_frame.is_some()) || fe.results_queued {
                         // The movie plane replaces the overlay: the state-6 briefing blits over the
                         // empty backdrop and the fog pass is suppressed while a movie plays [M
                         // DecodeBGFMVFrame 0x108550 + PS2UploadBGMImage 0x108740, psiDrawFogPass

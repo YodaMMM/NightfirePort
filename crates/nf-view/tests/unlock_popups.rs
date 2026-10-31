@@ -106,23 +106,25 @@ fn a_skip_ends_the_win_movie_and_opens_the_credits() {
     assert_eq!(g.page, Page::WinGame);
 }
 
-/// P_CHEATMEDAL case 0x4b [M 0x2086b0:19-45]: the press reads the row's 0x35 VALUE
-/// (`__Menu_Send(param_1, 0x1000021c, 0x35, 0, 0)` [M :19-21]) and switches on it — row value 0
-/// the fail-channel arm (no grant), values 1..5 grant 999/1/2/3/4 into `medal_from_cheat`
-/// 0x30cc74 [M :22-43]. The DISC carries no row values: the mission def 08000001's page
-/// 0x4000004c binds control 0x1000021c with NO msg-0x11 rows [D — walked 2026-10-17], so the
-/// port's value == index mapping is an assumption, not disc data [S unverified].
+/// P_CHEATMEDAL case 0x4b [M 0x2086b0:19-45]: the press reads the selected row's 0x35 VALUE
+/// (`__Menu_Send(param_1, 0x1000021c, 0x35, 0, 0)` [M :19-21] → `LIST_ROW+0x2c4`, 0 with no
+/// selected row [M List_SendMessage 0x2196e8:463-470]) and switches on it — value 0 the
+/// fail-channel arm (switch_channels[99], no grant), values 1..5 grant 999/1/2/3/4 into
+/// `medal_from_cheat` 0x30cc74 and raise switch_channels[100] [M :22-44]. The shipped list has
+/// no rows (the 0x4c resets it [M :14-16]); the value switch is pinned here over hand-filled rows.
 #[test]
 fn cheat_medal_rows_grant_the_game_medal_values() {
     let mut f = fe();
     f.page = Page::CheatMedal;
+    f.cheat_medal_rows = vec![0, 1, 2, 3, 4, 5];
     f.cheat_medal_sel = 0;
+    f.medal_from_cheat = 7;
     f.action(Action::Confirm);
-    assert_eq!(f.medal_from_cheat, 0);
+    assert_eq!((f.medal_from_cheat, f.cheat_medal_channel), (7, 99), "value 0: the fail arm writes no medal");
 
     f.cheat_medal_sel = 1;
     f.action(Action::Confirm);
-    assert_eq!(f.medal_from_cheat, 999);
+    assert_eq!((f.medal_from_cheat, f.cheat_medal_channel), (999, 100));
 
     for (row, medal) in [(2, 1), (3, 2), (4, 3), (5, 4)] {
         f.cheat_medal_sel = row;
@@ -131,19 +133,26 @@ fn cheat_medal_rows_grant_the_game_medal_values() {
     }
 }
 
-/// The list walks 6 rows with wrap. The 6 rows come from the handler's six value arms 0..5 [M
-/// 0x2086b0:21-43]; the wrap is the port's list-control semantics — the handler has none and the
-/// disc data has no rows to pin it [S unverified].
+/// The shipped page's list is EMPTY: the 0x4c sends msg 0x39 (fetch the list) then msg 0x17 (reset
+/// its rows, zero the selected-row pointer) and nothing adds a row [M P_CHEATMEDAL 0x2086b0:14-16;
+/// List_SendMessage 0x2196e8:169-240; D the mission defs' page 0x4000004c has no rows]. So ▲/▼
+/// walk nothing and ✕ reads value 0 — the fail arm. Sister: with rows the walk moves.
 #[test]
-fn cheat_medal_selection_wraps() {
+fn the_shipped_cheat_medal_list_is_empty_and_confirm_takes_the_fail_arm() {
     let mut f = fe();
+    f.cheat_medal_rows = vec![1, 2];
     f.page = Page::CheatMedal;
-    f.cheat_medal_sel = 0;
-    f.action(Action::Up);
-    assert_eq!(f.cheat_medal_sel, 5);
-    f.action(Action::Down);
-    assert_eq!(f.cheat_medal_sel, 0);
-    assert_eq!(f.rows(), 6);
+    assert!(f.action(Action::Down), "the walk moves inside filled rows");
+    assert_eq!(f.cheat_medal_sel, 1);
+    // The real entry runs the 0x4c reset.
+    let mut g = fe();
+    g.enter_page_for_test(Page::CheatMedal);
+    assert_eq!(g.rows(), 0, "the 0x4c emptied the list");
+    assert!(!g.action(Action::Up) && !g.action(Action::Down), "no row to walk to");
+    assert_eq!(g.cheat_medal_sel, 0);
+    g.medal_from_cheat = 0;
+    assert!(g.action(Action::Confirm));
+    assert_eq!((g.cheat_medal_channel, g.medal_from_cheat), (99, 0), "value 0 → switch_channels[99], no grant");
 }
 
 /// P_NFBONUS case 0x4c [M 0x209670:13-43] against the live Progress: the tier lines come from

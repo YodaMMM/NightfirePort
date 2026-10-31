@@ -101,10 +101,32 @@ report — lowers it and opens the credits through `open_credits(PAGE_WIN_GAME, 
 just_completed)` [M :48's arg-1 send]. The audio restart (0x1d7/0x470) is the host's; the model
 keeps the flow. Tests: `win_movie_end_opens_credits_from_the_win_page`.
 
+### The draw (crates/nf-view/src/fe_pages.rs)
+
+- 007 Bonus: `nfbonus_elems(bonus, bind)` — the record's seven drawn controls at their runtime
+  rects (`control_rect`: FixupResolution 0x21b610, and the forced (340,198) of 0x10000224). The
+  text list 0x100001d0 takes msg 0x23 with 0x30d348 = `ff 03`: FONTMedium with no `fe` tag, so it
+  is left-aligned at the control's x, and its first line's pen sits on the box's middle − 1
+  (Label_Update drops the extent term when the text holds a newline [M 0x218cb8:186-193]). The
+  text is the handler's composition — tier 1 with format 0x30d350 (`%s` + newline), then tiers 4,
+  3, 2 each with 0x30d358 (`%s` newline `%s`) over `buf.276` 0x34d048 — so a blank line follows
+  tier 1; Menu_ClipString cuts it at the control's width. The page animates nothing: its one
+  script (the page's own) has a single keyframe that focuses 0x10000165 [D]; the 007 flash that
+  goes with the bonus sound is the HUD's health-pane sprite.
+- Win page: `wingame_elems()` is empty (the bare record). The host plays 0x073f0048 on the movie
+  plane while `win_movie` stands (one psiMovieFinished poll per page tick); at the end it restarts
+  the menu-music pair and calls `win_movie_finished` (a declined start finishes at once — the
+  game's BGFMVPlaying == 0). The overlay draws nothing while the movie frame is up, the dark
+  plate stand-in otherwise. `--page wingame` / `--page nfbonus` render them.
+
 ## 4. P_CHEATMEDAL 0x4000004c — the cheat/medal grant page (an open question)
 
-The dispatcher handles the page id [M :511-513] but **no PAGE record exists in the front-end
-menu-def** [L the 56-page walk — every other 0x400000xx page is there] and **no static code
+The dispatcher handles the page id [M :511-513]. **Its PAGE record is not in the front-end
+menu-def but in every mission def** (entry 08000001 of each level archive, file hash 0x80000002,
+next to the pause page) [D the 2026-10-31 scan of every archive's kind-8 entries]: the root
+window (a script whose one keyframe focuses 0x1000021c) and ONE control, the list **0x1000021c**
+(type 6, (207,109,226×262), SET 3, colours 0x645a49ff / 0x73330fc0, column 0 at 100%, no rows).
+**No static code
 route opens it** [M the whole-decompile grep: no `Manager_SendMessage(0x44, 0x4000004c)`, no
 `MenuManager_Create` with it, and no control of any page carries a data-driven 0x44 into it
 (L the MGRMSG/KMSG scan in `unlock_popups_live.rs`)]. Reachability in the shipped game is
@@ -127,15 +149,26 @@ What the handler does [M 0x2086b0:11-47]:
   ACTION.ELF code reads them back [M the whole-decompile grep; DRIVING.ELF/SLUS have no
   reference either]. `medal_from_cheat` is likewise write-only in ACTION.ELF [M].
 
-The port: `Page::CheatMedal` with a 6-row list (`rows()` = 6), Up/Down wrap the selection,
-Confirm calls `cheat_medal_confirm()` which records `medal_from_cheat` (0 / 999 / 1 / 2 / 3 / 4
-per the switch). The caller decides what a simulated mission end does — the port does not fire
-the mission-end path from it.
+The 0x4c's msg 0x39 returns the list itself and msg 0x17 resets it (rows freed, the selected
+row pointer +0x560 zeroed) [M List_SendMessage 0x2196e8:169-240, :471-473], and nothing adds a
+row — so the shipped page shows an EMPTY list, and ✕'s msg 0x35 returns 0 (no selected row
+[M :463-470]): the fail arm, always.
+
+What it draws [M List_Update 0x21a598 + Scroll_Update 0x221b20]: the list's frame (SET 3
+COMPONENT 3, a translucent 9-slice on 0x03000042) over (x, y, w − 16, h) under mask 0x20 (the
+focused list; the corners pulse with Menu_AlphaGet), and the embedded vertical scroll's ▲ / ▼
+(SET 3 COMPONENT 7, mask 0x20) at (x + w − 16, y, 16, h). Runtime rect (166,102,180×244).
+
+The port: `Page::CheatMedal` draws `fe_pages::cheatmedal_elems` over the frame beneath (an
+in-game page — no plate); `cheat_medal_rows` holds the list's row values (emptied by the page
+enter), ▲/▼ walk only inside them, and `cheat_medal_confirm()` switches on the selected row's
+value (0 with none): 0 → `cheat_medal_channel` 99, 1..5 → `medal_from_cheat` 999/1/2/3/4 and
+channel 100. The caller decides what a simulated mission end does — the port does not fire the
+mission-end path from it. Tests: `fe_pages_draw2.rs`, `unlock_popups.rs`.
 
 ## 5. What is NOT ported / open questions
 
-- The draw pass for all three pages ( NFBONUS's geometry + label ids are pinned
-  in the live test and the draw-arm comment).
+- The page opener (no code route reaches 0x4000004c — above).
 - `medal_from_cheat`'s consumer and the 0x27031c/0x270320 readers — write-only in ACTION.ELF [M];
   the CHEATMEDAL page's opener, likewise. Live checks (open): on a PCSX2 run, watch
   `switch_channels[99]/[100]` (0x26fc90+0x18c/0x190) AND `switch_channels_time[99]/[100]`
