@@ -1,7 +1,10 @@
 //! walkreal-b: 07000014 (Drake's underground facility → Delta Sector) walked with the player's
 //! own movement — the infiltration, the sabotage and the kill are the REAL interaction paths; the
 //! only teleports are the reach-a-spot hops into the cut-scene bands the walk cannot enter
-//! (documented per leg). Route (level-14-full-walk; the east route + this file's [D] tags):
+//! (documented per leg). level-14-hall-walk-in: the cascade test's last placement ([-60.3, 0.9,
+//! 38.4] + the seeded 0x87/0x88) is REPLACED by the walked route — the shared
+//! walk_the_west_route_to_the_switch_band raises the AND's inputs through the walk's own laser
+//! cuts and stands Bond in the switch band on foot. Route (level-14-full-walk; the east route + this file's [D] tags):
 //! the vent start #666/#667 (40.81, 2.40, 65.08 [D]) → the SkyBridge Q-Claw crossing (the
 //! GRAPPLEPOINT_SkyBridge #658 (45.29, 5.10, 62.94) [D]; M Bullet_Delete 0x12e660:50-55 +
 //! Player_SSGrapple 0x192860) → the open walkway gap drop → the trench floor (-0.60, nav lane
@@ -635,42 +638,16 @@ fn walk_infiltration_to_handback(w: &mut Walker) {
     }
 }
 
-/// The vent-drop hand-back PINNED (level-14-vent-drop-2, re-pinned by level-14-skip-handback):
-/// the walked infiltration ends in the SP #276 cut-scene and Script_Free's Player_Enable stands
-/// Bond at the event-6 capture — for this pack the `glb_players+0x90` fallback, Bond's own matrix
-/// [M 0x1d94c0:73-84,125-134; 0x1da880:44-48; 0x195498:38-52] — the #301 grab spot on the
-/// mezzanine. The old [S] body-root arm ("inside the facility") contradicted the decompile and
-/// on a SKIP captured the frozen body matrix — the real play's in-wall landing; it is removed.
-#[test]
-fn the_vent_drop_hands_bond_into_the_facility() {
-    let iso = iso();
-    let mut w = Walker::new(nf_view::load_with_carry(&iso, "07000014.bin", false, None).unwrap());
-    walk_infiltration_to_handback(&mut w);
-}
-
-/// UN-IGNORED (level-14-mezzanine-descent-2): the descent is WALKED on real input. The route the
-/// level-14-mezzanine-descent window mapped (the pad west + the 1.72 landing) continues west off
-/// the landing onto the low machine floor (ray height 0.80, x 31.5..33.5, z 33..35.5 [D rays]),
-/// then down onto the facility corridor floor (0.0 [D rays]; the corridor's own nav lane nodes
-/// 57/58/257-265 at x 27.3..28.3, disc y 0.0 [D nav]) and south to the leg-2 start — the probe
-/// walked the whole chain green (scratch_l14d l14d_door834, landed (29.99, 0.61, 38.00), inside
-/// this test's descent assert box). The unlocked door #834 (32.01, 2.14, 35.81 [D]; sim kind 2,
-/// ch_lock 0 [D params]) sits at the landing's south-west corner; the walked route passes west of
-/// its wall run (the leaf x 32.00..32.65 + the fusebox column #833 x 31.93..32.65 [D]) — the leaf
-/// plane is never crossed (the role question is the report's live check).
-///
-/// Extended (level-14-walk-to-the-level-end): past the delta exit the walk now drains the exit
-/// hold the game's own way (the 300-frame fade [M 0x1b2318:90-92 + 0x1c98c8:173-189]) and serves
-/// the NEXT LEVEL's load — `warm_exit_save` (Trigger_Activate's `Player_RamSave` [M 0x1b2318:97-116])
-/// into `load_with_carry("07000015.bin", Some(&save))` — then pins the arrival: the silo gantry
-/// spawn [D #1], the restored player state [M 0x1957a8], the carried channels [M 0x195670:13],
-/// part 1's records untouched [M 0x182270:68-129], and "Find the exit to Omega Sector" announcing
-/// off the spawn plate #484's 0x4b [D row 21; M 0x1827d8 case 1].
-#[test]
-fn walk_the_infiltration_to_the_delta_exit() {
-    let iso = iso();
-    let mut w = Walker::new(nf_view::load_with_carry(&iso, "07000014.bin", false, None).unwrap());
-    walk_infiltration_to_handback(&mut w);
+/// The walked west route from the SP #276 hand-back to the west switch band (level-14-hall-walk-in):
+/// shared by the full walk and the cascade test — the descent to the facility corridor, leg 2 (the
+/// SOUTH loop [D nav nodes 94-97/150/591-600; it never crosses the closed 0x85 door plane [D
+/// probe]] to the #381 band, the Kiko scene delivering Bond west past the closed door), leg 3a
+/// (the generator room, nav nodes 613/614/625/615/623/628/631/663/654/653 [D]), leg 3b (the two
+/// fuseboxes burned through the REAL Laser path [M FuseBox_Update 0x1adfe8]: #383 p1 0x87, #385
+/// p1 0x88 [D placements]; AND #391 raises 0x8C [D]) and leg 3c's arrival walk into the E-use
+/// switch band (oDroneTrigger1b, out 0xA0 mask 4 [D placement 399]) — WITHOUT the E press (the
+/// callers own the aim + press).
+fn walk_the_west_route_to_the_switch_band(mut w: &mut Walker) {
     // The descent (level-14-mezzanine-descent-2): the [M] hand-back stands Bond on the mezzanine
     // where the scene grabbed him (his own matrix [M 0x1d94c0 case 6 fallback]). The WALKED route:
     // the pad west ((34.63, 2.80, 37.94) [L walked, level-14-mezzanine-descent]) → south
@@ -837,6 +814,45 @@ fn walk_the_infiltration_to_the_delta_exit() {
     w.walk_to(Wp::new(-60.5, 0.05, 43.79).r(1.0), "the corridor south (node 618)");
     w.walk_to(Wp::new(-60.5, 0.05, 40.77).r(1.0), "the corridor south to the switch band (node 626)");
     w.walk_to(Wp::new(-60.3, 0.6, 38.4).r(0.6), "into the switch band (the E-use spot)");
+}
+
+/// The vent-drop hand-back PINNED (level-14-vent-drop-2, re-pinned by level-14-skip-handback):
+/// the walked infiltration ends in the SP #276 cut-scene and Script_Free's Player_Enable stands
+/// Bond at the event-6 capture — for this pack the `glb_players+0x90` fallback, Bond's own matrix
+/// [M 0x1d94c0:73-84,125-134; 0x1da880:44-48; 0x195498:38-52] — the #301 grab spot on the
+/// mezzanine. The old [S] body-root arm ("inside the facility") contradicted the decompile and
+/// on a SKIP captured the frozen body matrix — the real play's in-wall landing; it is removed.
+#[test]
+fn the_vent_drop_hands_bond_into_the_facility() {
+    let iso = iso();
+    let mut w = Walker::new(nf_view::load_with_carry(&iso, "07000014.bin", false, None).unwrap());
+    walk_infiltration_to_handback(&mut w);
+}
+
+/// UN-IGNORED (level-14-mezzanine-descent-2): the descent is WALKED on real input. The route the
+/// level-14-mezzanine-descent window mapped (the pad west + the 1.72 landing) continues west off
+/// the landing onto the low machine floor (ray height 0.80, x 31.5..33.5, z 33..35.5 [D rays]),
+/// then down onto the facility corridor floor (0.0 [D rays]; the corridor's own nav lane nodes
+/// 57/58/257-265 at x 27.3..28.3, disc y 0.0 [D nav]) and south to the leg-2 start — the probe
+/// walked the whole chain green (scratch_l14d l14d_door834, landed (29.99, 0.61, 38.00), inside
+/// this test's descent assert box). The unlocked door #834 (32.01, 2.14, 35.81 [D]; sim kind 2,
+/// ch_lock 0 [D params]) sits at the landing's south-west corner; the walked route passes west of
+/// its wall run (the leaf x 32.00..32.65 + the fusebox column #833 x 31.93..32.65 [D]) — the leaf
+/// plane is never crossed (the role question is the report's live check).
+///
+/// Extended (level-14-walk-to-the-level-end): past the delta exit the walk now drains the exit
+/// hold the game's own way (the 300-frame fade [M 0x1b2318:90-92 + 0x1c98c8:173-189]) and serves
+/// the NEXT LEVEL's load — `warm_exit_save` (Trigger_Activate's `Player_RamSave` [M 0x1b2318:97-116])
+/// into `load_with_carry("07000015.bin", Some(&save))` — then pins the arrival: the silo gantry
+/// spawn [D #1], the restored player state [M 0x1957a8], the carried channels [M 0x195670:13],
+/// part 1's records untouched [M 0x182270:68-129], and "Find the exit to Omega Sector" announcing
+/// off the spawn plate #484's 0x4b [D row 21; M 0x1827d8 case 1].
+#[test]
+fn walk_the_infiltration_to_the_delta_exit() {
+    let iso = iso();
+    let mut w = Walker::new(nf_view::load_with_carry(&iso, "07000014.bin", false, None).unwrap());
+    walk_infiltration_to_handback(&mut w);
+    walk_the_west_route_to_the_switch_band(&mut w);
     // The E press through the REAL Player_Activate use path (the walk's own input): aim at the
     // touch's volume centre with turn/look steering (the cut_fusebox aim convention), then hold
     // E — the green the_e_use_switch_fires_the_sabotage_cascade_and_opens_the_west_door's press
@@ -1140,17 +1156,22 @@ fn the_vent_grill_blocks_the_west_duct_per_the_game() {
 /// up, the E press raises 0xA0 → SEQ_AND (map 54 placement 393) [0x8C, 0xA0] → 0x51 [D] → the
 /// kill cascade → box death 0x85 [D pairs] → Door_Slide_11A/B (map 54 placements 151/152,
 /// p3 = 0x85) unlock on the rising edge and auto-open [M Door_Update 0x1363c8:88-107].
+///
+/// level-14-hall-walk-in: the last placement is gone — the sabotage AND's inputs are NOT seeded
+/// and Bond is NOT placed: the REAL walked route (walk_infiltration_to_handback + the shared
+/// walk_the_west_route_to_the_switch_band) raises 0x87/0x88 through the walk's OWN laser cuts
+/// [M FuseBox_Update 0x1adfe8; D placements 383/385] and stands him in the switch band on foot
+/// (the south loop + the Kiko scene's west delivery; the closed 0x85 pair is never crossed [D
+/// probe]) — the classes the route uses: Walker (Wp walk_to / follow_nav_route / climb_stairs),
+/// the 0xEB TOUCH wrapper (Trigger_Touch 0x1b2aa8 / Trigger_Create 0x1b1720), Player_Activate
+/// 0x1a5170, FuseBox_Update 0x1adfe8, Trigger_Activate 0x1b2318, Door_Update 0x1363c8.
 #[test]
 fn the_e_use_switch_fires_the_sabotage_cascade_and_opens_the_west_door() {
     let iso = iso();
-    let mut scene = nf_view::load(&iso, "07000014.bin", false).expect("load 07000014");
-    for _ in 0..400 {
-        if !scene.sim.as_ref().unwrap().disabled { break; }
-        scene.sim.as_mut().unwrap().step_bond(nf_game::player::Input::default(), false, false, false);
-    }
+    let mut w = Walker::new(nf_view::load_with_carry(&iso, "07000014.bin", false, None).unwrap());
     // The touch exists with the disc's fields [D placement 399].
     let t_centre = {
-        let sim = scene.sim.as_ref().unwrap();
+        let sim = w.scene.sim.as_ref().unwrap();
         let i = sim.drones.triggers.iter()
             .position(|t| t.out == 0xa0 && t.mask & 4 != 0 && t.kind == nf_game::triggers::kind::TOUCH)
             .expect("the 0xA0 E-use touch (mask 4, kind 0xEB TOUCH) exists [D placement 399]");
@@ -1160,43 +1181,49 @@ fn the_e_use_switch_fires_the_sabotage_cascade_and_opens_the_west_door() {
         [(t.lo[0] + t.hi[0]) * 0.5, (t.lo[1] + t.hi[1]) * 0.5, (t.lo[2] + t.hi[2]) * 0.5]
     };
     // The door starts locked; nothing has armed [M 0x1363c8:93-96].
-    let door = scene.sim.as_ref().unwrap().drones.doors.list.iter()
+    let door = w.scene.sim.as_ref().unwrap().drones.doors.list.iter()
         .position(|d| d.ch_lock == 0x85)
         .expect("Door_Slide_11A/B with lock ch 0x85 exists [D placements 151/152]");
     {
-        let sim = scene.sim.as_ref().unwrap();
+        let sim = w.scene.sim.as_ref().unwrap();
         assert!(sim.drones.doors.is_locked(door, &sim.drones.channels), "the door starts locked");
         assert!(!sim.drones.channels.on(0x51) && !sim.drones.channels.on(0x85) && !sim.drones.channels.on(0xa0),
             "nothing armed at load [D]");
     }
-    // The fusebox words (the real laser cut is the walk's leg 3 and the panel tests' pin);
-    // seeding both raises 0x8C through the REAL AND mux [D AND plc (0x87,0x88)→0x8C].
-    scene.sim.as_mut().unwrap().drones.channels.set(0x87, 1, 1);
-    scene.sim.as_mut().unwrap().drones.channels.set(0x88, 1, 1);
-    scene.sim.as_mut().unwrap().bond.pos = [-60.3, 0.9, 38.4];
-    for _ in 0..60 { scene.sim.as_mut().unwrap().step_bond(nf_game::player::Input::default(), false, false, false); }
+    // The walk-in (level-14-hall-walk-in): the REAL route from the vent start to the switch band.
+    // The AND's inputs come from the walk's own fusebox cuts (leg 3b), not a seed write; the
+    // arrival stands in the band on foot, no placement.
+    walk_infiltration_to_handback(&mut w);
+    walk_the_west_route_to_the_switch_band(&mut w);
     {
-        let sim = scene.sim.as_ref().unwrap();
-        assert!(sim.drones.channels.on(0x8c), "AND [0x87, 0x88] raises 0x8C [D]");
+        let sim = w.scene.sim.as_ref().unwrap();
+        assert!(sim.drones.channels.on(0x87) && sim.drones.channels.on(0x88),
+            "both fusebox group channels are the walk's own cuts' writes [M 0x1adfe8; D placements 383/385]");
+        assert!(sim.drones.channels.on(0x8c), "AND [0x87, 0x88] raised 0x8C through the REAL mux [D AND plc]");
         assert!(!sim.drones.channels.on(0xa0) && !sim.drones.channels.on(0x51),
             "standing in the touch's volume without E fires nothing [M 0x1b1fc8 mask 0x4]");
+        eprintln!("[014] the walked arrival in the switch band: {:?}", sim.bond.pos);
     }
     // Aim at the touch's volume centre and press E through the REAL Player_Activate path
-    // (the use sphere head + 1×look [M 0x1a5170:100-108]; the port's AABB stand-in).
-    {
-        let sim = scene.sim.as_ref().unwrap();
+    // (the use sphere head + 1×look [M 0x1a5170:100-108]) — the walk's turn/look steering
+    // (the main walk's leg-3c convention), no teleport-aim.
+    for _ in 0..60 {
+        let sim = w.scene.sim.as_ref().unwrap();
         let head = sim.bond.head();
         let d = [t_centre[0] - head[0], t_centre[1] - head[1], t_centre[2] - head[2]];
         let l = (d[0] * d[0] + d[1] * d[1] + d[2] * d[2]).sqrt().max(1e-4);
-        let sim = scene.sim.as_mut().unwrap();
-        sim.bond.yaw = d[0].atan2(d[2]);
-        sim.bond.pitch = (d[1] / l).asin() / std::f32::consts::FRAC_PI_2; // look() units [M BL+0x8a8·π/2]
-        eprintln!("[014] aiming at the touch: head {head:?} centre {t_centre:?} yaw {:.2} pitch {:.2}", sim.bond.yaw, sim.bond.pitch);
+        let b = &sim.bond;
+        let inp = nf_game::player::Input {
+            turn: (d[0].atan2(d[2]) - b.yaw).clamp(-0.08, 0.08),
+            look: (((d[1] / l).atan() / std::f32::consts::FRAC_PI_2) - b.pitch).clamp(-0.08, 0.08),
+            ..Default::default()
+        };
+        w.tick(inp, false);
     }
     let mut fired = false;
     for _ in 0..12 {
-        scene.sim.as_mut().unwrap().step_bond(nf_game::player::Input::default(), false, false, true);
-        if scene.sim.as_ref().unwrap().drones.channels.on(0xa0) { fired = true; break; }
+        w.tick(nf_game::player::Input::default(), true);
+        if w.scene.sim.as_ref().unwrap().drones.channels.on(0xa0) { fired = true; break; }
     }
     assert!(fired, "the E press fires the mask-4 touch → 0xA0 [M 0x1b2318:23-33; D placement 399]");
     // The SEQ_AND's write is a LEVEL write recomputed per tick while its inputs hold — but the
@@ -1204,29 +1231,22 @@ fn the_e_use_switch_fires_the_sabotage_cascade_and_opens_the_west_door() {
     // pulses too; the cascade's first link reads it inside the pulse window and the rest ride
     // the death channels (never cleared). Track "ever on" for the pulse links, level for 0x85.
     let (mut seen51, mut ch85) = (false, false);
-    for k in 0..300u32 {
+    for _k in 0..300u32 {
         {
-            let sim = scene.sim.as_ref().unwrap();
+            let sim = w.scene.sim.as_ref().unwrap();
             let ch = &sim.drones.channels;
             if ch.on(0x51) { seen51 = true; }
             if ch.on(0x85) { ch85 = true; }
-            if k % 25 == 0 {
-                eprintln!("[014] cascade tick {k}: a0 {} 51{} 52 {} 4e {} 53 {} 85 {}",
-                    ch.on(0xa0), seen51 as u8, ch.on(0x52), ch.on(0x4e), ch.on(0x53), ch.on(0x85));
-            }
         }
-        {
-            let sim = scene.sim.as_mut().unwrap();
-            sim.drones.health.health = 100.0;
-            sim.step_bond(nf_game::player::Input::default(), false, false, false);
-        }
+        // The walker's own tick tops the health up (the harness's enemies-disabled allowance).
+        w.tick(nf_game::player::Input::default(), false);
         if ch85 { break; }
     }
     assert!(seen51, "SEQ_AND [0x8C, 0xA0] raised 0x51 (the 1-tick pulse) [D placement 393]");
     assert!(ch85, "the cascade ends at box #729's death 0x85 [D the kill→death pairs]");
     // The door unlocked for good and AUTO-OPENED on the rising edge [M 0x1363c8:88-107].
     {
-        let sim = scene.sim.as_ref().unwrap();
+        let sim = w.scene.sim.as_ref().unwrap();
         assert!(!sim.drones.doors.is_locked(door, &sim.drones.channels),
             "Door_Slide_11A/B unlocks on the 0x85 rising edge [M 0x1363c8:88-107]");
         assert_eq!(sim.drones.doors.list[door].ch_lock, 0, "the lock field cleared [M 0x1363c8:106]");
@@ -1234,12 +1254,14 @@ fn the_e_use_switch_fires_the_sabotage_cascade_and_opens_the_west_door() {
             "the unlock edge OPENS the door (state {:?} pos01 {})",
             sim.drones.doors.list[door].state, sim.drones.doors.list[door].pos01);
     }
-    for _ in 0..120 { scene.sim.as_mut().unwrap().step_bond(nf_game::player::Input::default(), false, false, false); }
+    for _ in 0..120 { w.tick(nf_game::player::Input::default(), false); }
     {
-        let sim = scene.sim.as_ref().unwrap();
+        let sim = w.scene.sim.as_ref().unwrap();
         assert!(sim.drones.doors.list[door].pos01 > 0.5,
             "the door slides open (pos01 {:.2})", sim.drones.doors.list[door].pos01);
     }
+    eprintln!("[014] the cascade test's walked run: {} ticks; stuck {}; falls {}",
+        w.total_ticks, w.report.stuck_events.len(), w.report.falls.len());
 }
 
 /// The infiltration route to the SP #276 grab, with the harness holding the scene OPEN: the
