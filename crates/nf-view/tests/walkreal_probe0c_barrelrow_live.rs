@@ -1,4 +1,4 @@
-//! walkreal probe (level-0c-secret-door-reach-3): the barrel-row stop. The main agent's fresh-boot
+//! walkreal probe (level-0c-secret-door-reach-3): the barrel-row stop. The fresh-boot
 //! live run [L 2026-10-31]: walking SOUTH into the corridor (x 53.0..55.6) stops at z −150.23 in
 //! every lane (a barrel row; running jumps fail), while the west walk opens at z −146/−141 (Bond
 //! reaches x 50.4). This probe walks the same lanes on real input in the PORT and prints where each
