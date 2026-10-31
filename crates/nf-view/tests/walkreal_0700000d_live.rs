@@ -245,13 +245,10 @@ fn walk_arrival_to_the_c5_door() {
     // — the eased yaw (ladder.yaw + π = south) carries Bond onto the roof on the hold [M the
     // yaw ease].
     w.lenient = true;
-    {
-        // Stand on the catwalk's west end facing west-southwest.
-        let sim = w.scene.sim.as_mut().unwrap();
-        sim.bond.pos = [157.6, 12.73, -265.6];
-        sim.bond.vel = [0.0; 3];
-        sim.bond.yaw = -2.5;
-    }
+    // Walked onto the catwalk's west end and turned west-southwest with the stick (the former
+    // pos/yaw placement — a 2.4 m hop plus a facing write — is gone).
+    w.walk_to(Wp::new(157.6, 13.2, -265.6).r(0.35), "the catwalk's west edge");
+    turn_to(&mut w, -2.5);
     w.wait(5);
     let mut grabbed = false;
     for _ in 0..400 {
@@ -295,10 +292,7 @@ fn walk_arrival_to_the_c5_door() {
     // East off the roof's east edge into the annex: a short push clears the edge (~x 197), then
     // the hold-input drop lands on the annex with minimal carry (a full walk's 9.1 m-fall carry
     // overshoots the annex east into the 3.42 pit [probe0d floor map]).
-    {
-        let sim = w.scene.sim.as_mut().unwrap();
-        sim.bond.yaw = std::f32::consts::FRAC_PI_2; // face east
-    }
+    turn_to(&mut w, std::f32::consts::FRAC_PI_2); // face east (the stick, not a yaw write)
     // Push off every ledge edge (the roof 18.58, an unscanned parapet at 19.44) until the
     // annex floor (9.42-9.45) catches him.
     for _cycle in 0..4 {
@@ -449,10 +443,7 @@ fn walk_arrival_to_the_c5_door() {
     // slot), release, fall ~9.5 m — survivable [M 0x1949a8:117-126: 9.1 m ≈ 24 damage]. The
     // jump is a PLAIN jump: the icon context re-arms from proximity every tick [M 0x1949a8:22
     // clears BL+0x95F; scene.rs's per-tick icon arm] and the wire icon #297 is ~75 m away.
-    {
-        let sim = w.scene.sim.as_mut().unwrap();
-        sim.bond.yaw = std::f32::consts::FRAC_PI_2; // face east, into the slot
-    }
+    turn_to(&mut w, std::f32::consts::FRAC_PI_2); // face east, into the slot (the stick)
     let mut landed = false;
     for k in 0..300u32 {
         let input = if k == 0 {
@@ -584,6 +575,18 @@ fn walk_arrival_to_the_c5_door() {
     assert_eq!(sim.drones.mission.states[12][1], 4, "objective 5 complete");
     assert_eq!(sim.drones.mission.states[12][2], 4, "objective 6 complete");
     eprintln!("[0d] the full mission walked + completed in {} ticks; stuck {}; falls {}", w.total_ticks, w.report.stuck_events.len(), w.report.falls.len());
+}
+
+/// Turn Bond to `yaw` with the stick alone (`Input::turn` adds to the yaw each tick [port
+/// player.rs; the walker's own clamp]), capped at 200 ticks.
+fn turn_to(w: &mut Walker, yaw: f32) {
+    for _ in 0..200 {
+        let err = walker::wrap_pi(yaw - w.scene.sim.as_ref().unwrap().bond.yaw);
+        if err.abs() < 0.01 { return; }
+        w.scene.sim.as_mut().unwrap().step_bond(nf_game::player::Input { turn: err.clamp(-0.08, 0.08), ..Default::default() }, false, false, false);
+        w.total_ticks += 1;
+    }
+    panic!("the stick turn never reached yaw {yaw}");
 }
 
 /// Fire the held weapon at a static point through the real trigger path (the walker's aim loop;
