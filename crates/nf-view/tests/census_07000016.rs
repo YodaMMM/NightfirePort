@@ -95,7 +95,7 @@ fn dump_07000016_scripts() {
     use nf_formats::levelbin::LevelBin;
     use nf_formats::nis::{Cmd, Nis};
     let Some(iso) = iso() else { eprintln!("NF_ISO not set"); return };
-    for archive in ["07000016.bin", "07800016.bin"] {
+    for archive in ["07000016.bin", "07800016.bin", "07900016.bin", "07a00016.bin"] {
         let data = read_archive(&iso, archive);
         let lb = LevelBin::parse(&data).expect("levelbin");
         let kind7: Vec<_> = lb.entries.iter().filter(|e| e.kind == 7).collect();
