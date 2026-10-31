@@ -5,11 +5,12 @@
 //! walkreal_07000007_live.rs.
 //!
 //! Covered elsewhere (the census → pin map): the 0x20 breakables (vase/window/statue), the 0xF0
-//! pickups (armour +50, the kind-6 medal-gated bonuses), the 0xDB doors (free #245 / locked-200
+//! armour (+50) and the kind-6 medal CREATION gate, the 0xDB doors (free #245 / locked-200
 //! #253 / the story door #251) and the 0xE8 exit — all in interact_07000007_live.rs,
 //! party_door_lock_07000007_live.rs and walk_07000007_live.rs. This file adds the remaining
-//! player-touchable kinds: the 0xEA walk-over TouchOnce plates, the 0xEB Touch plate, and the
-//! player side of the 0x10 drone-only mask.
+//! player-touchable kinds: the 0xEA walk-over TouchOnce plates, the 0xEB Touch plate, the
+//! player side of the 0x10 drone-only mask, and the kind-6 BOND_BONUS walk-over TAKE (07's own
+//! rows — the creation gate lives in interact_07000007_live, the take arm only lived on 09).
 //!
 //! Evidence tags: [M] the decompile address, [D] the disc bytes. A teleport to reach a spot is
 //! used only where the walk there is documented (the probe notes at each site); the operation
@@ -168,4 +169,66 @@ fn the_drone_mask_plate_refuses_the_player() {
     assert!(crossed, "Bond walked into the plate's band");
     assert!(!w.scene.sim.as_ref().unwrap().drones.channels.on(9),
         "the drone-only plate never answers the player [D #497 mask 0x10; M Trigger_Hit 0x1b1fc8]");
+}
+
+// ---------------------------------------------------------------------------
+// KIND 0xF0, the kind-6 BOND_BONUS walk-over TAKE (07's own rows): #502 at (113.3, 43.0, −83.9)
+// and #503 at (88.2, 43.3, −44.6), id 6, respawn 0 (delete on take), label 353 [D the census
+// dump, placements #502/#503]. The CREATION gate (the BaseMap 0x07000005 gold medal, rank 0
+// [L 0x2bc920 row 1; M 0x199210]; M Pickup_Create 0x18dda0:93-95) is pinned by
+// interact_07000007_live's armour test; the kind's TAKE arm on THIS level lived only on 09 —
+// this pins it here: the real walk-over consumes the row [M Pickup_Handler 0x18e650:234-236,
+// the kind-6 arm] and only the touched row goes (respawn 0 = delete, not respawn [D]).
+// ---------------------------------------------------------------------------
+
+/// With 07's gold medal word loaded, both bonuses exist at their disc spots; the real walk-over
+/// takes #503 and the west-terrace #502 still sits after it (sister).
+#[test]
+fn the_kind6_bonus_takes_on_the_walk_over_and_the_other_sits() {
+    let iso = iso();
+    let mut p = nf_game::progress::Progress::default();
+    p.set_level_bonus(0x0700_0005, 3, 0); // [M Menu_SetLevelBonus 0x1ffa10; the 07 BaseMap's rank-0 gold bit, L 0x2bc920 row 1]
+    let scene = nf_view::load_with_carry_medals(&iso, "07000007.bin", false, None, 1, p.bonus[0])
+        .expect("load 07000007 with the medal word");
+    let mut w = Walker::new(scene);
+    w.wait_enabled(4000, "the intro");
+    // Both rows exist at their disc spots [D #502/#503, the census dump].
+    {
+        let sim = w.scene.sim.as_ref().unwrap();
+        let at = |x: f32, z: f32| sim.drones.pickups.iter()
+            .find(|pk| pk.kind == nf_game::pickup::kind::BOND_BONUS
+                && (pk.m[3][0] - x).abs() < 0.5 && (pk.m[3][2] - z).abs() < 0.5);
+        assert!(at(113.3, -83.9).is_some(), "the west-terrace bonus #502 exists at its disc spot [D]");
+        assert!(at(88.2, -44.6).is_some(), "the fireplace-hall bonus #503 exists at its disc spot [D]");
+    }
+    // The stand-in transit: settle on the hall floor ~1.7 north of #503 (the fireplace hall the
+    // battery's other tests stand in; no route pins this approach — the walk onto the pickup is
+    // the real input). The floor ray derives the stand height from the disc geometry [D].
+    {
+        let mut sim = w.scene.sim.as_mut().unwrap();
+        let spot = [88.2f32, 44.0, -42.9];
+        let floor = sim.world.segment(spot, [spot[0], spot[1] - 30.0, spot[2]])
+            .map(|t| spot[1] - 30.0 * t);
+        sim.bond.pos = [spot[0], floor.map_or(spot[1], |f| f + 0.1), spot[2]];
+        sim.bond.vel = [0.0; 3];
+    }
+    w.wait(30);
+    w.scene.sim.as_mut().unwrap().bond.yaw = std::f32::consts::PI; // face −z, the bonus
+    let mut taken = false;
+    for _ in 0..300 {
+        w.tick(Input { forward: 1.0, ..Default::default() }, false);
+        let sim = w.scene.sim.as_ref().unwrap();
+        if sim.drones.pickups.iter()
+            .any(|pk| pk.kind == nf_game::pickup::kind::BOND_BONUS
+                && (pk.m[3][0] - 88.2).abs() < 0.5 && pk.gone) {
+            taken = true;
+            break;
+        }
+    }
+    assert!(taken, "the walk-over takes the fireplace-hall bonus #503 [M 0x18e650:234-236]");
+    let sim = w.scene.sim.as_ref().unwrap();
+    assert!(sim.drones.pickups.iter()
+        .any(|pk| pk.kind == nf_game::pickup::kind::BOND_BONUS
+            && (pk.m[3][0] - 113.3).abs() < 0.5 && !pk.gone && !pk.hidden),
+        "sister: the west-terrace bonus #502 still sits after the take [D #502]");
 }
