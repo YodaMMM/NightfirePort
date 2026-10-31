@@ -10937,15 +10937,17 @@ fn seg_point_dist2(a: V3, b: V3, p: V3) -> f32 {
 /// `Explode_Create(weapon+0x08 radius, weapon+0x0C damage, script 0x6000052, f12 scale =
 /// radius)` [M 0x12df3c region — the `+0x70 & 0x2000` flash arm and the `& 0x20000` smoke arm
 /// are both clear on the satchel's 0x300 [L ee_start_05.bin], so the plain blast runs]. The
-/// burned-out charge never reaches the decrement (the game re-randomizes its fuse every tick
-/// [M 0x12e3cc-0x12e40c]; the port's `defused` latch — see `Bullet::defused`).
+/// burned-out charge still takes the decrement, then the 0x3b tail redraws its fuse to
+/// `Rand_Rand(0x1518) + 0x3c` every tick [M 0x12d890:424-433, 0x12e3cc-0x12e40c] — it never
+/// reaches `fuse < 0` (see `Bullet::defused`).
 fn tick_charge_fuse(
     weapons: &nf_formats::weapon::WeaponData,
     b: &mut crate::bullet::Bullet,
     out: &mut Vec<(V3, f32, f32, usize, u16, u32, f32, u16)>,
     beeps: &mut Vec<V3>,
+    rng: &mut Rng,
 ) {
-    if !b.fuse_ticks || b.defused { return; }
+    if !b.fuse_ticks { return; }
     // The decrement [M 0x12d890 0x12dcc4-0x12dd2c]: families 0x59/0x5b never decrement; 0x37
     // decrements unless its fuse holds the 7777.0 sentinel; every family then takes the < 0 test.
     let fam = b.family(weapons);
@@ -10977,6 +10979,15 @@ fn tick_charge_fuse(
         let sec = (b.fuse * 0.016_666_668) as i32;
         let s = sec.max(0);
         b.digits = Some(((s / 10) as u8, (s % 10) as u8));
+        // The burned-out charge (`BU+0x102 < 1` [M 0x12d890:424]): the fuse is redrawn to
+        // `Rand_Rand(0x1518) + 0x3c` and the beep/contact block is skipped (`goto LAB_0012e41c`,
+        // :425-433) — the digits above were already taken from the fuse BEFORE the redraw
+        // (`iVar16` :422), so from the tick after the burn-out the display shows the previous
+        // tick's random 59..5458-tick fuse in seconds, a new number every tick.
+        if b.defused {
+            b.fuse = (rng.rand(0x1518) + 0x3c) as f32;
+            return;
+        }
         if qs != b.last_qs {
             b.last_qs = qs;
             if (qs & 3) == 0 || ((qs & 1) == 0 && sec < 10) || sec < 5 {
@@ -11291,7 +11302,7 @@ pub fn visible_to(player: &Player, world: &CollisionWorld, pos: V3, head: V3) ->
     let side = if l > 1e-6 { [-v[2] / l * 0.5, 0.0, v[0] / l * 0.5] } else { [0.0; 3] };
     let pts = [head, pos, [pos[0] + side[0], pos[1] + side[1], pos[2] + side[2]], [pos[0] - side[0], pos[1] - side[1], pos[2] - side[2]], [pos[0], pos[1] - 0.8, pos[2]]];
     in_view(player.eye, pos, DRONE_DRAWN_SLACK, &frustum_sides(player.aim))
-        && pts.iter().any(|&q| world.segment_bullet(player.eye, q).is_none())
+        && pts.iter().any(|&q| world.segment_bullet_clear(player.eye, q))
 }
 
 /// The spawner's own "player can see the spot" gate — the game's `Drone_PositionVisible`
@@ -11320,7 +11331,7 @@ pub fn drone_position_visible(player: &Player, world: &CollisionWorld, pos: V3) 
     let side = if l > 1e-6 { [-v[2] / l * 0.5, 0.0, v[0] / l * 0.5] } else { [0.0; 3] };
     let pts = [pos, [pos[0] + side[0], pos[1], pos[2] + side[2]], [pos[0] - side[0], pos[1], pos[2] - side[2]], [pos[0], pos[1] - 0.8, pos[2]]];
     in_view(player.eye, pos, 2.0, &frustum_sides(player.aim))
-        && pts.iter().any(|&q| world.segment_bullet(player.eye, q).is_none())        // the cel byte +0xa0
+        && pts.iter().any(|&q| world.segment_bullet_clear(player.eye, q))        // the cel byte +0xa0
         && world.segment_actor(player.eye, pos).is_none()                           // the game's 0xa27 ray
 }
 
@@ -14178,7 +14189,8 @@ fn segment_hits_sphere(a: V3, b: V3, c: V3, r: f32) -> bool {
             // (obj+0xD0) holds this tick's class-5 hitters; a 0x4E round takes 1/tick
             // (FRAME_RATE_MUL) off `BU+0x102`, the 0x4F takes 10 (`FRAME_RATE_MUL * 10.0`).
             // At ≤ 0 the game re-randomizes the charge's fuse every tick [M 0x12e3cc-0x12e40c]
-            // — it never explodes; the port latches `defused` (see `Bullet::defused`). One
+            // — it never explodes; `defused` marks it and `tick_charge_fuse` redraws (see
+            // `Bullet::defused`). One
             // contact per laser round per tick, the same shape as the lock walk above. The
             // burn sparks are `Emitter_Create(0xc00000a, hit point, …)` [M 0x12e37c] —
             // draw-side; the port's emitter set has no charge-spark shape (not ported).
@@ -14451,7 +14463,7 @@ fn segment_hits_sphere(a: V3, b: V3, c: V3, r: f32) -> bool {
                         // The homing LOS is the game's ONE bit-0x8 DROP trace (`Collide_LineOfSight
                         // (…, 8)` [M 0x12f358:92]) — pass-flagged hits (foliage) don't block the
                         // lock — the port's `segment_bullet`, not the flight `segment`.
-                        if d.world.segment_bullet(b.pos, dr.pos).is_some() { continue; }
+                        if !d.world.segment_bullet_clear(b.pos, dr.pos) { continue; }
                         best = Some((i, dist));
                     }
                     target = best.map(|(i, _)| i);
@@ -14526,7 +14538,7 @@ fn segment_hits_sphere(a: V3, b: V3, c: V3, r: f32) -> bool {
                 // no port-side record. Pass faces are kept: the flight trace's HITTEST+0x98 = 0
                 // [M 0x12f040] drops nothing in Collide_Intersect 0x1ebaa8, the walk decides.
                 let cell = d.world.find_cel(cur);
-                let Some((t, n, m, node_pass)) = d.world.segment_surface_flags_scoped(cell, cur, end) else { break };
+                let Some((t, n, m, node_pass, host)) = d.world.segment_surface_host_scoped(cell, cur, end) else { break };
                 let seg = [end[0] - cur[0], end[1] - cur[1], end[2] - cur[2]];
                 let hit = [cur[0] + seg[0] * t, cur[1] + seg[1] * t, cur[2] + seg[2] * t];
                 let flags6c_w = d.weapons.records.get(weapon as usize)
@@ -14579,7 +14591,7 @@ fn segment_hits_sphere(a: V3, b: V3, c: V3, r: f32) -> bool {
                     if mesh != 0 {
                         self.gas.init_ex(mesh, hit, 0.0, [0.0; 3], 2.0, 3.0, 5, [0x7f, 0x7f, 0x64, 0xff], 0, 8.0);
                     }
-                } else if let Some(nd) = self.effects.bullet_impact(&mut self.rng, d.surfaces, &mut self.gas, &mut self.fx, hit, n, m, dir, flags70, bounces, true, if pierce { 0 } else { 8 }) {
+                } else if let Some(nd) = self.effects.bullet_impact_on(&mut self.rng, d.surfaces, &mut self.gas, &mut self.fx, hit, n, m, dir, flags70, bounces, true, if pierce { 0 } else { 8 }, host) {
                     ricochet = Some((hit, nd));
                 }
                 // fix-weapon-effects / fix-blast-scripts2: the impact explode arms run per
@@ -17434,6 +17446,7 @@ fn segment_hits_sphere(a: V3, b: V3, c: V3, r: f32) -> bool {
                     life: p.life as i32,
                     fade: 0xff, // obj+0x106 = 0xff at create [M 0x1ac808:27]
                     e8: p.scale,
+                    draw: Default::default(),
                 });
             }
         }
@@ -18616,6 +18629,9 @@ fn segment_hits_sphere(a: V3, b: V3, c: V3, r: f32) -> bool {
         }
         { let parts = { let _p = crate::prof::scope("drones: set_dynamic parts"); script_parts(self, d) };
           let _p = crate::prof::scope("drones: set_dynamic"); d.world.set_dynamic(&parts); }
+        // The holes on moving objects take the objects' new matrices (the game composes
+        // `node+0x20 · obj+0x90` at every draw [M View_DrawObjectGlist 0x1e6780:66-74]).
+        self.effects.follow_hosts(|id| d.world.dynamic_matrix(id));
         // The killer monitor's step-2 clear of the hostage's finished `+0x4D0` [M 0x144340:53]:
         // flagged during the walk (the borrow can't reach the hostage) and applied here, before
         // the speech pass — `speech()`'s non-forced gate refuses a line while any voice is
@@ -18749,7 +18765,7 @@ fn segment_hits_sphere(a: V3, b: V3, c: V3, r: f32) -> bool {
                 }
                 // Bullet_DoTrails' fuse tick [M 0x12d890 0x12dcc4-0x12dd5c] — the landed
                 // charge's ONLY per-tick work (Bullet_update case 3 runs DoTrails and stops).
-                tick_charge_fuse(&d.weapons, b, &mut self.pending_blasts, &mut self.pending_beeps);
+                tick_charge_fuse(&d.weapons, b, &mut self.pending_blasts, &mut self.pending_beeps, &mut self.rng);
                 continue;
             }
             if let Some(ev) = b.update(d.world, &vol, viewer, &mut self.rng) {
@@ -18773,7 +18789,7 @@ fn segment_hits_sphere(a: V3, b: V3, c: V3, r: f32) -> bool {
                             self.audio.play3d(0x4a7, p, None);
                             // The landing tick's DoTrails runs too [M: the handler sets state 3,
                             // Bullet_update's tail then calls DoTrails].
-                            tick_charge_fuse(&d.weapons, b, &mut self.pending_blasts, &mut self.pending_beeps);
+                            tick_charge_fuse(&d.weapons, b, &mut self.pending_blasts, &mut self.pending_beeps, &mut self.rng);
                         } else {
                         let end = [p[0] + dir[0] * 0.1, p[1] + dir[1] * 0.1, p[2] + dir[2] * 0.1];
                         if let (Some(s), Some((_, n, m))) = (d.surfaces, d.world.segment_surface(from, end, false)) {
@@ -18804,9 +18820,11 @@ fn segment_hits_sphere(a: V3, b: V3, c: V3, r: f32) -> bool {
                             let mut cur = p;
                             let mut hit_n = n;
                             let mut hit_m = m;
+                            // The decal host of each hit (the cel or the moving object it struck).
+                            let mut hit_host = d.world.segment_surface_host(from, end, false).map_or(crate::world::HitHost::Cel(None), |h| h.4);
                             let mut ricochet_nd: Option<V3> = None;
                             loop {
-                                if let Some(nd) = self.effects.bullet_impact(&mut self.rng, d.surfaces, &mut self.gas, &mut self.fx, cur, hit_n, hit_m, b.dir, flags70, b.bounces, false, if pierce { 0 } else { 8 }) {
+                                if let Some(nd) = self.effects.bullet_impact_on(&mut self.rng, d.surfaces, &mut self.gas, &mut self.fx, cur, hit_n, hit_m, b.dir, flags70, b.bounces, false, if pierce { 0 } else { 8 }, hit_host) {
                                     ricochet_nd = Some(nd);
                                     break;
                                 }
@@ -18817,6 +18835,7 @@ fn segment_hits_sphere(a: V3, b: V3, c: V3, r: f32) -> bool {
                                 let Some((t2, n2, m2)) = d.world.segment_surface(nxt, far, false) else { break };
                                 cur = [nxt[0] + dir[0] * t2, nxt[1] + dir[1] * t2, nxt[2] + dir[2] * t2];
                                 hit_n = n2; hit_m = m2;
+                                hit_host = d.world.segment_surface_host(nxt, far, false).map_or(crate::world::HitHost::Cel(None), |h| h.4);
                                 pierce = crate::effect::penetration_roll(&mut self.rng, m2, b.weapon, flags6c_d);
                                 if flags70 & 2 != 0 {
                                     if let Some(id) = nf_formats::sfx::SurfaceSounds::get(&s.impact, m2) { self.audio.play3d(id, cur, None); }
@@ -18932,7 +18951,7 @@ fn segment_hits_sphere(a: V3, b: V3, c: V3, r: f32) -> bool {
             // uses, so the game's Explode_Create order holds. Landed charges ticked in their
             // own arms above (the loop head / the landing arm); dead rounds have no DoTrails.
             if !b.landed && b.state < 2 {
-                tick_charge_fuse(&d.weapons, b, &mut self.pending_blasts, &mut self.pending_beeps);
+                tick_charge_fuse(&d.weapons, b, &mut self.pending_blasts, &mut self.pending_beeps, &mut self.rng);
             }
         }
         self.bullets.retain(|b| b.state < 2);
@@ -19562,6 +19581,8 @@ fn segment_hits_sphere(a: V3, b: V3, c: V3, r: f32) -> bool {
         // the frame loop, paused-gated — the Sim has no pause) and `Debris_Update` 0x1aac00 in
         // the object walk. docs/systems/break-debris.md.
         self.breaks.shatter.update();
+        // Every debris piece made this tick takes its draw slot (it keeps it until it dies).
+        self.effects.assign_debris_slots(&mut self.breaks.shatter.debris, &mut self.blast_debris);
     }
 }
 

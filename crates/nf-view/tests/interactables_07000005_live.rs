@@ -8,7 +8,14 @@
 //!   OR #270 → ch 164 (0xA4, the alarm) → SoundTrigger #83 (ch 164 → sound 329 [D audit row]);
 //! - the **lock-gated TouchOnce 0xEA** — #301 "WallHug_touchplate" (out 67 = SP #298's watch,
 //!   lock 179) with `Trigger_Locked` 0x1b2fc8's gate, and the ScriptPlayer 0xD9 #298 it starts
-//!   (the ledge NIS 0x06000994 [D audit row #298]).
+//!   (the ledge NIS 0x06000994 [D audit row #298]);
+//! - the **plunge walk-off death chain** — the 13 PlungeTrigger TouchOnces (#285-#297, out
+//!   0xBE) → SP #284's death NIS 0x06000952 → its event 0xD mission fail (the `-2` task);
+//! - the **wall-hug window ledge run** — the TouchOnce plates #311-#314 (the locks 164/111)
+//!   over AND mux #80 → ch 105 → sound 332, with `Trigger_Calc` 0x1b1900's alarm→0x6F engine
+//!   latch making #314 a one-shot (the `-2` task);
+//! - the **blocked ch-0x7D cut-scene Touch** #70 — `Trigger_Update` 0x1b1a78:80-82's
+//!   GameState gate writes nothing on 05, and SP #71's script is absent [D] (the `-2` task).
 //!
 //! Trigger boxes are the port's resolved glists over the disc's own data [D `nf-extract
 //! triggers 07000005.bin`]. Every game claim cites its evidence: [M] the decompile function +
@@ -284,4 +291,261 @@ fn the_lock_gated_touchonce_fires_the_ledge_nis_until_locked() {
     let sim = w.scene.sim.as_ref().unwrap();
     assert!(!sim.drones.channels.on(67),
         "the locked plate must not fire [M Trigger_Locked 0x1b2fc8:24-29]");
+}
+
+/// KIND: the plunge walk-off death chain — the 13 PlungeTrigger TouchOnces (#285-#297, out
+/// 0xBE = 190, mask 8 [D audit rows; the resolved boxes: #287 x −20.28..59.71, y −2.13..10.18,
+/// z 50.22..144.68 over the east valley]) → ScriptPlayer #284 (script 0x06000952, watch 190
+/// [D SP row]) → the death NIS's stream-8 event 0xD [98,1] writes ch 98 = 0x62 = mission fail
+/// [D the script dump; M 0x1827d8's ch-0x62 arm]. Driven by the real valley walk the hurt
+/// test's stand proved walkable-and-alive (63.5, 6.5, 57.9): west down the basin crosses
+/// #287's box, the shell fires, the NIS takes control (the player disable, event 4/5 [D]) and
+/// the mission fails — the health stays 100 because the who-1 hurt planes are configured-inert
+/// [M 0x17e5d0:51-104; the audit's hurt row]. Sister: a fresh load keeps the chain dark.
+#[test]
+fn the_valley_walkoff_runs_the_plunge_death_nis_chain() {
+    let iso = iso();
+    // Sister: a fresh load — no shell fired, no fail, Bond in control and whole.
+    {
+        let w = load(&iso);
+        let sim = w.scene.sim.as_ref().unwrap();
+        assert!(!sim.drones.channels.on(0xbe), "sister: ch 0xBE (190) off on a fresh load");
+        assert!(!sim.drones.channels.on(0x62), "sister: no mission fail on a fresh load");
+        assert!(sim.drones.health.health > 0.0 && !sim.disabled, "sister: alive and in control");
+    }
+    let mut w = load(&iso);
+    {
+        let sim = w.scene.sim.as_mut().unwrap();
+        // The valley floor east stand — walkable and alive (the hurt test's proven spot).
+        sim.bond.pos = [63.5, 6.5, 57.9];
+        sim.bond.vel = [0.0; 3];
+    }
+    w.wait(60);
+    // West down the basin, into #287's box — the real walk (the hurt test's route).
+    let mut fired = false;
+    for t in 0..4000u32 {
+        {
+            let sim = w.scene.sim.as_mut().unwrap();
+            let p = sim.bond.pos;
+            let to = [-10.0 - p[0], 0.0, 60.0 - p[2]];
+            sim.bond.yaw = to[0].atan2(to[2]);
+        }
+        w.tick(Input { forward: 1.0, ..Default::default() }, false);
+        if w.scene.sim.as_ref().unwrap().drones.channels.on(0xbe) { fired = true; break; }
+    }
+    let sim = w.scene.sim.as_ref().unwrap();
+    eprintln!("[05i] plunge: fired {fired} at bond {:?}", sim.bond.pos);
+    assert!(fired, "the basin walk must cross a plunge shell (ch 190) [D #285-297 out 0xBE mask 8]");
+    assert!(sim.disabled,
+        "the death NIS takes control (SP #284's event-4 player disable [D 0x06000952 s6])");
+    let playing = sim.drones.scripts.players.iter().any(|p| p.scripts.contains(&0x0600_0952)
+        && (matches!(p.state, 1 | 2 | 7)
+            || p.info.get(p.cur).and_then(|s| s.as_ref()).is_some_and(|s| s.play & 1 != 0)));
+    assert!(playing, "SP #284 plays the plunge NIS 0x06000952 [D SP row; M SP_Update 0x1dbda8]");
+    assert_eq!(sim.drones.health.health, 100.0,
+        "the kill is the NIS, not damage — the who-1 hurt planes are inert [M 0x17e5d0:51-104]");
+    // The NIS's stream-8 event 0xD [98,1] lands within the NIS's own first beats.
+    let mut failed = false;
+    for _ in 0..400u32 {
+        w.tick(Input::default(), false);
+        if w.scene.sim.as_ref().unwrap().drones.channels.on(0x62) { failed = true; break; }
+    }
+    assert!(failed, "the NIS's event 0xD [98,1] writes ch 0x62 = mission fail [D 0x06000952 s8; M 0x1827d8]");
+}
+
+/// KIND: the lock-gated TouchOnce run along the wall-hug window ledge — #311/#312/#313 (out
+/// 127/128/129, lock 164) and #314 (out 133, lock 111 = 0x6F) [D audit rows; the resolved
+/// boxes strung z −28.0/−31.45/−35.0/−37.4 at y 36.73..37.75 over the ledge], feeding AND mux
+/// #80 (out 105 = 0x69 ← {127, 128, 129, 133} [D row]) whose consumer chain is SoundTrigger
+/// #81 (ch 105 → sample 332, 2D [D row]) and the alarm sound #83's STOP channel (p4 = 0x69
+/// [D row]). The engine latch `Trigger_Calc` 0x1b1900:21-23 sets switch_channels[0x6F] = 1
+/// while the alarm (0xA4) is on — #314's lock — so the ledge run is the game's one-shot: all
+/// four fire only BEFORE any alarm; once the alarm has fired, #314 is locked forever
+/// [M Trigger_Locked 0x1b2fc8:24-29]. The TouchOnce outs latch (no glist 0x10 → never cleared
+/// [M 0x1b1d78-0x1b1d90; the Touch pass clears kind-2 outs only — calc:753]). The positive run
+/// completes the AND: ch 105 plays sound 332 [M SoundTrigger_Update 0x1b2790]. Sisters: a
+/// fresh load keeps every out and ch 105 dark. The inter-plate walk wedges at (−35.45, 35.63,
+/// −30.97) ungrounded (this task's probe: the walk stalls there, the boxes' own x band holds),
+/// so the transit between boxes is the documented stand-in teleport; every firing itself is
+/// the real walk through the box.
+#[test]
+fn the_quiet_window_ledge_run_fires_all_four_plates_and_the_dead_and_stays_dead() {
+    let iso = iso();
+    // Sisters on a fresh load: every out, the AND and the engine latch dark.
+    {
+        let w = load(&iso);
+        let sim = w.scene.sim.as_ref().unwrap();
+        for ch in [127u32, 128, 129, 133, 105, 0x6f] {
+            assert!(!sim.drones.channels.on(ch), "sister: ch {ch} off on a fresh load");
+        }
+        assert!(!sim.drones.sound_triggers.playing(332), "sister: sound 332 silent");
+    }
+    // The positive: the quiet run. No approach walk — the west-wall guards wait on ch 0x22
+    // [D p3 = 0x22], so no patrol can raise the alarm mid-run.
+    let mut w = load(&iso);
+    {
+        let sim = w.scene.sim.as_mut().unwrap();
+        // The window ledge (the interactables' proven stand; the walkreal west-lane chain is
+        // the real route — separately documented). #60's and #311's boxes overlap at z −28.
+        sim.bond.pos = [-35.1, 37.9, -25.5];
+        sim.bond.vel = [0.0; 3];
+    }
+    w.wait(30);
+    assert!(!w.scene.sim.as_ref().unwrap().drones.channels.on(0xa4),
+        "the ledge stand alone raises no alarm [D the pair needs both lines]");
+    // The run: drop onto each box's EAST side (the ledge's walked surface there is the disc's
+    // own 36.98..37.29 floors — the west side slopes off the icon ledge's edge and dips Bond to
+    // y 35.4, inside plunge shell #291's top 35.47, which fires the death NIS — the census's
+    // open item, re-measured this task), settle, then walk south 1.4 through the box — the real
+    // crossing input. The TouchOnce outs latch, so each assert survives the transit.
+    for (label, spot, zto, out) in [
+        ("#311", [-34.7f32, 37.9, -28.0], -29.4, 127u32),
+        ("#312", [-34.7, 37.9, -31.45], -32.8, 128),
+        ("#313", [-34.7, 37.9, -35.0], -36.3, 129),
+        ("#314", [-34.7, 37.9, -37.4], -38.7, 133),
+    ] {
+        {
+            let sim = w.scene.sim.as_mut().unwrap();
+            sim.bond.pos = spot;
+            sim.bond.vel = [0.0; 3];
+        }
+        w.wait(60);
+        for _ in 0..300u32 {
+            {
+                let sim = w.scene.sim.as_mut().unwrap();
+                let p = sim.bond.pos;
+                let to = [-34.7 - p[0], 0.0, zto - p[2]];
+                sim.bond.yaw = to[0].atan2(to[2]);
+            }
+            w.tick(Input { forward: 1.0, ..Default::default() }, false);
+        }
+        let sim = w.scene.sim.as_ref().unwrap();
+        eprintln!("[05i] {label}: bond {:?} {} {} 190 {}", sim.bond.pos, out,
+            sim.drones.channels.on(out) as u8, sim.drones.channels.on(0xbe) as u8);
+        assert!(sim.drones.channels.on(out), "{label} fires its out {out} on the quiet crossing [D row]");
+        assert!(!sim.drones.channels.on(0xbe), "the quiet crossing must not fire the plunge shells");
+    }
+    {
+        let sim = w.scene.sim.as_ref().unwrap();
+        assert!(!sim.drones.channels.on(0xa4), "the quiet run keeps the alarm off");
+    }
+    // The AND completes: #80 latches ch 105 (the four TouchOnce outs hold) → sound 332.
+    w.wait(10);
+    {
+        let sim = w.scene.sim.as_ref().unwrap();
+        assert!(sim.drones.channels.on(105),
+            "mux #80's AND {{127,128,129,133}} completes on the latched outs [D row; M Trigger_MultiplexIn]");
+        assert!(sim.drones.sound_triggers.playing(332),
+            "SoundTrigger #81 plays sample 332 on ch 105 [D row; M SoundTrigger_Update 0x1b2790]");
+        assert!(!sim.drones.channels.on(0x6f),
+            "no alarm ever fired → the engine latch never set the lock [M 0x1b1900:21-23]");
+    }
+    // The negative: the SAME ledge after an alarm. The pair route raises ch 164 (the pair
+    // test's proven walk), the engine latch sets 0x6F, and a fresh #314 crossing is refused.
+    let mut w = load(&iso);
+    w.walk_nav_to([60.1, 28.4, 96.4], "approach plate #21 (the pair test's walk)", 1.2);
+    assert!(w.scene.sim.as_ref().unwrap().drones.channels.on(0x22),
+        "the approach walk raises ch 0x22 [D out 34]");
+    let mut guard_crossed = false;
+    for _ in 0..2400u32 {
+        w.tick(Input::default(), false);
+        if w.scene.sim.as_ref().unwrap().drones.channels.on(84) { guard_crossed = true; break; }
+    }
+    assert!(guard_crossed, "a patrolling west-wall guard must cross #57 (ch 84) [D mask 0x18]");
+    {
+        let sim = w.scene.sim.as_mut().unwrap();
+        sim.bond.pos = [-35.1, 37.9, -25.5];
+        sim.bond.vel = [0.0; 3];
+    }
+    w.wait(30);
+    {
+        let sim = w.scene.sim.as_mut().unwrap();
+        // The pair test's own second drop — right on #60's box, so the walk across is short and
+        // the end stand holds 85 (the AND's live input) while the asserts run.
+        sim.bond.pos = [-35.12, 38.0, -27.98];
+        sim.bond.vel = [0.0; 3];
+    }
+    w.wait(30);
+    w.walk_to(walker::Wp::new(-35.12, 37.3, -27.0).r(0.5), "the walk across #60 (the pair test's)");
+    {
+        let sim = w.scene.sim.as_ref().unwrap();
+        eprintln!("[05i] pair end: 84 {} 85 {} 161 {} 164 {} 0x6f {}",
+            sim.drones.channels.on(84) as u8, sim.drones.channels.on(85) as u8,
+            sim.drones.channels.on(161) as u8, sim.drones.channels.on(0xa4) as u8,
+            sim.drones.channels.on(0x6f) as u8);
+        assert!(sim.drones.channels.on(0xa4), "the pair raises the alarm [D mux rows]");
+        assert!(sim.drones.channels.on(0x6f),
+            "the engine latch sets switch_channels[0x6F] while the alarm is on [M 0x1b1900:21-23]");
+    }
+    // A fresh #314 (this load never fired it) is now LOCKED: the crossing writes nothing
+    // (the same east-side drop + south walk the positive run uses).
+    {
+        let sim = w.scene.sim.as_mut().unwrap();
+        sim.bond.pos = [-34.7, 37.9, -37.4];
+        sim.bond.vel = [0.0; 3];
+    }
+    w.wait(60);
+    for _ in 0..300u32 {
+        {
+            let sim = w.scene.sim.as_mut().unwrap();
+            let p = sim.bond.pos;
+            let to = [-34.7 - p[0], 0.0, -38.7 - p[2]];
+            sim.bond.yaw = to[0].atan2(to[2]);
+        }
+        w.tick(Input { forward: 1.0, ..Default::default() }, false);
+    }
+    w.wait(10);
+    let sim = w.scene.sim.as_ref().unwrap();
+    assert!(!sim.drones.channels.on(133),
+        "the post-alarm #314 is locked (lock 0x6F latched) and must not fire [M Trigger_Locked 0x1b2fc8:24-29]");
+    assert!(!sim.drones.channels.on(105), "ch 105 stays dark without the full AND [M Trigger_MultiplexIn]");
+}
+
+/// KIND: the ch-0x7D cut-scene Touch that is BLOCKED on this level — Touch #70 (105.51, 26.16,
+/// 108.37, out 125 = 0x7D, mask 8 [D audit row]) sits under the cold start, but
+/// `Trigger_Update` 0x1b1a78:80-82 gates the ch-0x7D write on GameState+0x12 == 0x7001500 —
+/// dead on 05 [M] — and SP #71 (its only consumer, watch 125) carries a script that is ABSENT
+/// from the archive [D the kind-7 list], doubly dead content. The port models the trigger None
+/// (triggers.rs:382) and builds the SP inert. The walk across #70's spot must write nothing:
+/// ch 125 stays off and SP #71 never plays — while the toucher pass demonstrably runs (the
+/// spawn plate #36's ch 0x45 reveal is on [D row; L the boot channel]). Sister: a fresh load
+/// reads ch 125 off and the SP idle.
+#[test]
+fn the_blocked_ch7d_cutscene_touch_writes_nothing() {
+    let iso = iso();
+    let mut w = load(&iso);
+    {
+        let sim = w.scene.sim.as_ref().unwrap();
+        assert!(!sim.drones.channels.on(125), "sister: ch 0x7D (125) off on a fresh load");
+        assert!(sim.drones.channels.on(0x45),
+            "the toucher pass runs — the spawn plate #36 already fired its reveal [D row; L ee_start_05 0x26fc90]");
+    }
+    // Walk the truck park across #70's spot (the spawn is on it; the park is the walkreal
+    // ride's flat).
+    {
+        let sim = w.scene.sim.as_mut().unwrap();
+        sim.bond.pos = [103.5, 26.0, 108.0];
+        sim.bond.vel = [0.0; 3];
+    }
+    w.wait(30);
+    for t in 0..300u32 {
+        {
+            let sim = w.scene.sim.as_mut().unwrap();
+            let p = sim.bond.pos;
+            let to = [107.5 - p[0], 0.0, 108.4 - p[2]];
+            sim.bond.yaw = to[0].atan2(to[2]);
+        }
+        w.tick(Input { forward: 1.0, ..Default::default() }, false);
+        let sim = w.scene.sim.as_ref().unwrap();
+        assert!(!sim.drones.channels.on(125),
+            "ch 0x7D must never fire on 05 [M 0x1b1a78:80-82 — the 0x7001500 gate], t{t}");
+    }
+    let sim = w.scene.sim.as_ref().unwrap();
+    eprintln!("[05i] #70 walk end: bond {:?}", sim.bond.pos);
+    let sp71 = sim.drones.scripts.players.iter()
+        .find(|p| p.scripts.contains(&0x0600_0074));
+    if let Some(p) = sp71 {
+        assert!(!matches!(p.state, 1 | 2 | 7),
+            "SP #71 never plays (its script is absent from the archive [D the kind-7 list])");
+    }
 }

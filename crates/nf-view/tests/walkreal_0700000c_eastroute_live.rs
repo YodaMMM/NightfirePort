@@ -21,11 +21,17 @@
 //! dead-ends (staircase01's 9.0..9.34 west face over the under-stair void, walkway02's south
 //! face at z -227.26, the crates4 tops 8.31, the band's south rail 11.17) — live check in the
 //! report. Opt-in via NF_ISO.
+//!
+//! The old `bond.pos` writes are GONE: the start spot (the band west end) is reached by
+//! REPLAYING the main walk's own route (common/walkreal0c.rs `walk_spawn_to_the_band` - the
+//! spawn-to-band legs 1-9c moved verbatim from walkreal_0700000c_live, same ticks), then the
+//! band-east leg to (52.0, -207.6); the jump start (79.6, 1.1, -210.2) is the main walk's own
+//! due-east run-up legs walked for real, with the yaw faced east on real turn input.
 
-#[path = "common/walker_b2.rs"]
+#[path = "common/walkreal0c.rs"]
 mod walker;
 
-use walker::{Walker, Wp};
+use walker::{walk_spawn_to_the_band, Walker, Wp};
 
 fn iso() -> String { std::env::var("NF_ISO").expect("NF_ISO") }
 
@@ -37,21 +43,20 @@ fn floor_at(w: &Walker, x: f32, y: f32, z: f32) -> Option<f32> {
 #[test]
 fn the_ground_route_crosses_to_the_east_side() {
     let iso = iso();
-    let mut w = Walker::new(nf_view::load_with_carry(&iso, "0700000c.bin", false, None).unwrap());
-    w.wait_enabled(3000, "the intro");
-    w.wait(30);
-    // Start: the band west end (the whole walk's leg-10 spot, floor 10.34 [D probe door4]).
-    {
-        let sim = w.scene.sim.as_mut().unwrap();
-        sim.bond.pos = [52.0, 11.4, -207.6];
-        sim.bond.vel = [0.0; 3];
-    }
-    w.wait(30);
+    // Start: the band west end (the whole walk's leg-10 spot, floor 10.34 [D probe door4]) -
+    // REACHED by the game's own route on real input: the shared prologue replays the main
+    // walk's legs 1-9c verbatim (spawn -> the laser hinge burn -> the vent drop -> the
+    // staircase descent -> the photograph -> the secret door -> the yard ladder -> the wires
+    // -> the slot jump's band landing), then this leg walks the band east to the spot. No
+    // pose writes.
+    let mut w = walk_spawn_to_the_band(&iso);
+    w.walk_to(Wp::new(52.0, 11.4, -207.6).r(0.8), "the band west end (the whole walk's leg-10 spot)");
     {
         let sim = w.scene.sim.as_ref().unwrap();
         let p = sim.bond.pos;
         let f = floor_at(&w, p[0], p[1], p[2]);
-        assert!(sim.bond.grounded && f.map_or(false, |y| (10.2..10.6).contains(&y)),
+        assert!(sim.bond.grounded && p[0] > 50.0 && p[0] < 54.0
+            && f.map_or(false, |y| (10.2..10.6).contains(&y)),
             "Bond must start grounded on the band west (10.34 [D]), got {p:?} under {f:?}");
     }
     // 1. The staircase descent (the turb2 flights, real walk legs).
@@ -67,7 +72,8 @@ fn the_ground_route_crosses_to_the_east_side() {
     w.walk_to(Wp::new(62.0, 4.0, -212.0).r(1.5), "east along the south");
     w.walk_to(Wp::new(70.0, 2.0, -212.0).r(1.5), "into the crate field");
     w.walk_to(Wp::new(76.0, 1.2, -210.0).r(1.5), "the yard east");
-    w.walk_to(Wp::new(79.0, 1.2, -209.0).r(0.8), "the ramp's west approach");
+    w.walk_to(Wp::new(77.0, 1.2, -210.2).r(1.0), "the yard south of the ramp's west landing");
+    w.walk_to(Wp::new(79.6, 1.1, -210.2).r(0.5), "the due-east run-up under the ramp's west landing (the jump start)");
     {
         let sim = w.scene.sim.as_ref().unwrap();
         let p = sim.bond.pos;
@@ -76,30 +82,42 @@ fn the_ground_route_crosses_to_the_east_side() {
             "the yard trunk must reach the ramp's west side at the y-0 floor, got {p:?} under {f:?}");
     }
     // 3. The running jump onto the east ramp's first step (1.75 at x 81.25..81.5 [D the step
-    // scan]) — the walk test's own jump idiom (the slot jump, leg 9).
-    {
-        let sim = w.scene.sim.as_mut().unwrap();
-        sim.bond.pos = [79.6, 1.1, -210.2];
-        sim.bond.vel = [0.0; 3];
-        sim.bond.yaw = std::f32::consts::FRAC_PI_2; // face +x (east)
-    }
-    w.wait(20);
-    let mut jumped = false;
-    for t in 0..300u32 {
-        let (p, grounded) = {
+    // scan]) — the walk test's own jump idiom (the slot jump, leg 9). The yaw faces +x (east)
+    // on REAL turn input (the jump loop keys on the ground state and x, not the pose).
+    for _ in 0..120 {
+        let yaw_err = {
             let sim = w.scene.sim.as_ref().unwrap();
-            (sim.bond.pos, sim.bond.grounded)
+            walker::wrap_pi(std::f32::consts::FRAC_PI_2 - sim.bond.yaw)
         };
-        if jumped && grounded && t > 20 { break; }
-        let jump = !jumped && grounded && p[0] >= 80.0;
-        if jump { jumped = true; }
+        if yaw_err.abs() < 0.02 { break; }
+        w.tick(nf_game::player::Input { turn: yaw_err.clamp(-0.08, 0.08), ..Default::default() }, false);
+    }
+    // The main walk's own hop idiom (walkreal_0700000c_live's ground-route legs): hold
+    // forward, jump every time the body is grounded below the exposed steps, stop on them —
+    // the under-steps 0.75..1.55 at x 80.2..81.2 then the first step 1.75 at x 81.5 [D the
+    // step scan]. (The old single jump only worked from the teleported pose.)
+    let mut hops = 0u32;
+    for _t in 0..300u32 {
+        let (p, grounded, f) = {
+            let sim = w.scene.sim.as_ref().unwrap();
+            let (p, grounded) = (sim.bond.pos, sim.bond.grounded);
+            let f = if grounded {
+                sim.world.segment_hit([p[0], p[1], p[2]], [p[0], p[1] - 3.0, p[2]])
+                    .map(|(tt, _)| p[1] - 3.0 * tt)
+            } else { None };
+            (p, grounded, f)
+        };
+        if grounded && p[0] > 80.3 && f.map_or(false, |y| y > 1.0) { break; }
+        let jump = grounded && p[0] >= 80.0 && !f.map_or(false, |y| y > 1.0);
+        if jump { hops += 1; }
         w.tick(nf_game::player::Input { forward: 1.0, jump, ..Default::default() }, false);
     }
-    assert!(jumped, "the ramp jump never fired");
+    assert!(hops > 0, "the ramp jump never fired");
     {
         let sim = w.scene.sim.as_ref().unwrap();
         let p = sim.bond.pos;
-        let f = floor_at(&w, p[0], p[1], p[2]);
+        let f = sim.world.segment_hit([p[0], p[1], p[2]], [p[0], p[1] - 3.0, p[2]])
+            .map(|(tt, _)| p[1] - 3.0 * tt);
         assert!(p[0] > 80.3 && f.map_or(false, |y| y > 1.0),
             "the jump must land on the ramp's lower steps (1.75+ [D]), got {p:?} under {f:?}");
     }

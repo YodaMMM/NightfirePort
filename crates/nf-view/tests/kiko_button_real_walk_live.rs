@@ -13,8 +13,8 @@
 //!   holds to z ≈ −174 and the ch-0x81 slab's stretch (z −178.50..−174.32, y 0..2.07 [D trigger
 //!   bbox]) is open — Bond drops through its airspace, the touch fires, and the pack cinema's
 //!   stream-8 key re-enables him on the pit floor [D pack_cinema_16_live; M Player_Enable
-//!   0x195498]. The real player falls too; the escape is the pack flight, which the port has no
-//!   jetpack substate for [M the substate list; hurt-volumes-16b], so the documented [S] re-seat
+//!   0x195498]. The real player falls too; the escape is the blast-room shelter (blast_room_shelter_16_live);
+//!   this test skips that leg and the pit squad, so a test-only re-seat
 //!   (fix_finale's (2.5, 1.2, −153.9), outside the ch-0xf3 volume) stands between the cinema and
 //!   the walk. No other pos write happens anywhere in this test.
 //! - **the gate ch 0x8d arms on the unavoidable corridor crossing and nothing on the disc clears
@@ -150,9 +150,9 @@ fn the_07000016_real_walk_reaches_the_kiko_death_button_and_the_gate_arms_on_the
     }
 
     // The launch chain plays out (no skip): the cinema re-enables Bond on the pit floor [D
-    // pack_cinema_16_live stream 8; M Player_Enable 0x195498]. The port has no jetpack substate
-    // [M], and the ch-0xf3 pulse (script ticks 1611..2170 [D 0x0600090a s6]) kills pit-floor Bond,
-    // so the documented [S] re-seat stands in for the pack flight on the first enabled tick — the
+    // pack_cinema_16_live stream 8; M Player_Enable 0x195498]; the ch-0xf3 pulse kills a pit-floor
+    // Bond who skips the blast-room shelter (blast_room_shelter_16_live; the full walk is
+    // walkreal_07000016_live), so a test-only re-seat on the first enabled tick stands in — the
     // fix_finale spot, outside the volume (y −24.1..−21.3). This is the test's ONLY pos write.
     w.skip_cutscenes = false;
     let chaser = {
@@ -225,10 +225,11 @@ fn the_07000016_real_walk_reaches_the_kiko_death_button_and_the_gate_arms_on_the
             |sim| sim.drones.channels.on(0x90));
         let sim = w.scene.sim.as_ref().unwrap();
         assert!(sim.drones.channels.on(0x8d), "the gate is still armed at the press [D #616 latch]");
-        // [S] unverified — NOT a game claim: the shipped game completes this mission, so something
-        // clears ch 0x8d (or never arms it) on the real route; the port has not found that writer
-        // (the "no writer on the disc" census). Logged, kept out of pass/fail, so the
-        // test does not pin the port's blocked finale as correct.
+        // The gate is armed here because this test skips the finale between the spawn and the
+        // press: the clear is pack cinema 0x06000632 stream 16 (ch 141 = 0 at t1056 [D]), which
+        // runs only after the group-7 pit squad dies and the launch script ends (mux #633 → ch 0x82
+        // [D]) — walkreal_07000016_live::walk_the_chasers_defeat_completes_the_mission walks it.
+        // Logged, kept out of pass/fail.
         eprintln!("[S] walked press: pressed={pressed} ch90={} status={} — the gate 0x8d blocks it in the port",
             sim.drones.channels.on(0x90), sim.drones.mission.status());
     }
