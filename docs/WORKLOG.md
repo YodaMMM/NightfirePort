@@ -17,6 +17,13 @@
   walked return through the burned doorway (n26→n25→n22→n21→n20→n16) or the proven terminal lane
   (n14→n15→n16, the fresh walk's position). Kept: the waiting-room exit transit (#246 — the
   documented stand-in: door #0's E opens it but the open leaf's pose still blocks the passage at
-  t 0.41; live check listed), the deck→parachute wedge transit (#459 — walk attempted first,
-  sister assert pins the pickup; live check listed), and the two stance loops (#365/#474 —
-  interaction measurement spots, not route transits, justified in-file). walkreal_0700000b 3/3.
+  t 0.41; live check listed) and the two stance loops (#365/#474 — interaction measurement
+  spots, not route transits, justified in-file); the deck→parachute transit (#459) ALSO fell —
+  the deck walk arrives (+471 ticks, both walks, hard-asserted) and only the parachute's stance
+  sweep remains (the helicopter body's volume blocks the walk 2.4 m short [D the run dump cel
+  189], the walk-over drive inside the sweep is real input). walkreal_0700000b 3/3.
+- suite (2026-10-31, the final tree): the runner's run phase was stopped at the deadline —
+  286/971 binaries done, 958 passed, 3 failed (the two GPU-less wgpu render binaries — adapter
+  NotFound in this sandbox, untouched by this test-only change), 0 TIMEOUT/CRASH. Touched
+  binaries green: walkreal_0700000b 3/3 (twice), interactables_0700000b 9/9. Report:
+  docs/reports/level-0b-teleports-to-walks.md.

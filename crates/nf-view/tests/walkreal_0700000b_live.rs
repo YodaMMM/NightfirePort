@@ -23,8 +23,9 @@
 //! the burned keypad's door (the Laser watch 0x4E on Lock #178 → ch 0x2F → door #151 [M
 //! 0x1ae3d8 case 0; D #178/#151]) — the ONE kept movement stand-in is the waiting-room exit
 //! transit (the walked doorway gap the probe maps: door #0's E opens it, the open leaf's pose
-//! still blocks the passage at t 0.41 — the report's live check); the deck→parachute leg keeps
-//! its wedge transit with the walk attempted first (the report's live check), and the files-plate
+//! still blocks the passage at t 0.41 — the report's live check); the deck→parachute leg walks
+//! for real (the arrival hard-asserted) and only the parachute's stance sweep remains (the
+//! helicopter body's volume shadows the walk-over — the report's live check), and the files-plate
 //! / parachute-stance placements are interaction measurement spots, not route transits.
 
 #[path = "common/walker_b2.rs"]
@@ -505,7 +506,8 @@ fn walk_to_the_mission_end(mut w: &mut Walker, fresh: bool) {
 
     // The parachute + the jump are the REAL object paths. Bond walks the deck east from the
     // re-place point toward the pickup (the guards' fire is suppressed by the walker's
-    // top_up_health); the stances loop finishes the approach around the helicopter body.
+    // top_up_health); the walked under-pickup attempt + the stance sweep finish the approach
+    // around the helicopter body (the walk cannot reach the touch band — the body's volume).
     let parachute = w.scene.sim.as_ref().unwrap().drones.pickups.iter()
         .find(|p| p.switch_channel == 0x3f).expect("OBJECT_Parachute (0xF0, ch 0x3F)").clone();
     let pp = [parachute.m[3][0], parachute.m[3][1], parachute.m[3][2]];
