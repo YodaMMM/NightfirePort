@@ -17,11 +17,15 @@
 //! ch 100 fires when the monitored AND of ALL 11 records holds [M 0x1827d8:119-123] → MissionState 6
 //! + `LevelToEndTo(0x0700000b)` = 0x0730000b [M Mission_Update 0x182c60:85-122]. The carried
 //! channels 0x46-0x4a model the 0a exit's RamSave carry [M Player_RamSave 0x195670 — the full
-//! 256-byte switch_channels block rides the save]. The balcony→exec lift ride uses the port's real
-//! ride machinery (`ground_motion`, the script-entity collision set — the paternoster cab 0x2000367
-//! rides pinned [M 0x194188 → Control_InheritVelocity 0x133e88]); if the boarding fails the
-//! documented stand-in transit fires and says so in the log — the ride attempt itself is printed,
-//! not pinned.
+//! 256-byte switch_channels block rides the save]. The balcony→exec lift ride is the game's own
+//! route on real input (the boarding hop, the carry on the script-entity collision set [M
+//! 0x194188 → Control_InheritVelocity 0x133e88], the step-off) and the exec office goes through
+//! the burned keypad's door (the Laser watch 0x4E on Lock #178 → ch 0x2F → door #151 [M
+//! 0x1ae3d8 case 0; D #178/#151]) — the ONE kept movement stand-in is the waiting-room exit
+//! transit (the walked doorway gap the probe maps: door #0's E opens it, the open leaf's pose
+//! still blocks the passage at t 0.41 — the report's live check); the deck→parachute leg keeps
+//! its wedge transit with the walk attempted first (the report's live check), and the files-plate
+//! / parachute-stance placements are interaction measurement spots, not route transits.
 
 #[path = "common/walker_b2.rs"]
 mod walker;
@@ -213,20 +217,12 @@ fn walk_to_the_mission_end(mut w: &mut Walker, fresh: bool) {
         eprintln!("[0b] diag: post-poll disabled {} ch7b {} boarded->rode {}",
             w.scene.sim.as_ref().unwrap().disabled, w.scene.sim.as_ref().unwrap().drones.channels.on(0x7b), rode);
     }
-    if !rode {
-        // The documented stand-in (the port gap the report carries): the exec floor below.
-        // Everything after is input-only either way.
-        {
-            let sim = w.scene.sim.as_mut().unwrap();
-            sim.bond.pos = [8.0, 46.8, 24.8];
-            sim.bond.vel = [0.0; 3];
-        }
-        eprintln!("[0b] the lift ride stand-in (boarding failed — the report carries the exact gap)");
-    }
+    // No stand-in: the cab ride IS the game's route (the boarding hop, the carry on the
+    // script-entity collision set, the step-off east — all real input above). The fixed 60 Hz
+    // + the bit-exact RNG make the boarding deterministic: once green, always green.
+    assert!(rode, "the paternoster cab ride must board and step off on real input [M 0x194188 → Control_InheritVelocity 0x133e88; D the cab keys y 11.0 → 48.44]");
     w.stop_on_exit = true;
-    if rode {
-        w.walk_to(Wp::new(8.0, 46.8, 24.8).r(1.3), "the exec floor");
-    }
+    w.walk_to(Wp::new(8.0, 46.8, 24.8).r(1.3), "the exec floor");
 
     // The exec floor: the waiting room (the lift landing) has NO walker exit — the nav probe
     // (probe_0b_execfloor_nav, --ignored) wedged or fell on every outbound line: the dome hole
@@ -281,28 +277,63 @@ fn walk_to_the_mission_end(mut w: &mut Walker, fresh: bool) {
     assert!(w.scene.sim.as_ref().unwrap().drones.channels.on(10), "the bridge script → ch 10 [D]");
     assert!(w.scene.sim.as_ref().unwrap().drones.channels.on(11), "the terminal script → ch 11 [D]");
 
-    // The Q-Worm C install: the real shot at the PC from the WALKED desk approach — back along
-    // the ring's proven legs (probe: terminal→n14 112 ticks, n16→n20 the north-west lane, the
-    // west-wing ring legs, ring n26↔desk 24-47 ticks). The legs are lenient: the n25 doorway
-    // (locked door #5, ch_lock 47 [D]) wedges the port's walker in the post-lock state (the
-    // probe's fresh-boot run passed it; the run's own print carries the outcome), and the
-    // documented desk stand-in fires only if the walk cannot arrive.
+    // The Q-Worm C install: the real shot at the PC from the WALKED desk approach. The game's
+    // route into the exec office (the desk's room) is the keypad: the ring's west wing ends at
+    // n22 (−21.14, 15.75), ~1.0 m from the keypad Lock #178 "Lock - KeypadLocked" (−22.17, 48.12,
+    // 15.44 [D]) — the Laser watch's beam (weapon 0x4E) burns it: `Lock_Update` 0x1ae3d8 case 0
+    // advances the burn on the laser-family hit (0x4E −3, 0x4F −10 per hit) and Lock_Unlock writes
+    // `switch_channels[47] = 1` [M 0x1ae3d8 case 0 + :194-195] — which unlocks door #151
+    // "door_waitingroom_exec_office" (ch_lock 47 [D #151]; door.rs `is_locked` = the channel OFF
+    // [M 0x136810:10-16]). The E at the doorway is the walker's own stuck reaction (the game's
+    // 1.0-sphere pick [M Player_Activate 0x1a5170] → Door_Activate).
     for (label, wp) in [
         ("ring n14 (back)", Wp::new(-1.45, 47.18, 3.74).r(1.0)),
         ("ring n15", Wp::new(-1.33, 47.18, 6.82).r(1.0)),
         ("ring n16", Wp::new(-13.67, 47.18, 6.40).r(1.0)),
         ("ring n20 (north-west lane)", Wp::new(-14.30, 47.18, 15.79).r(1.0)),
         ("ring n21", Wp::new(-15.83, 47.18, 15.75).r(1.0)),
-        ("ring n22", Wp::new(-21.14, 47.18, 15.75).r(1.0)),
+        ("ring n22 (the keypad side)", Wp::new(-21.14, 47.18, 15.75).r(1.0)),
+    ] {
+        w.walk_to(wp, label);
+    }
+    // THE KEYPAD BURN — the Laser watch 0x4E through the real fire path (the interactables_0700000b
+    // keypad test's pattern): switch via the game's own switch request, aim the head at the lock,
+    // hold the trigger until `Lock_Unlock` lands ch 0x2F.
+    let lk = w.scene.sim.as_ref().unwrap().drones.locks.iter().position(|l| l.out == 47)
+        .expect("the keypad lock (0x2E, out ch 0x2F)");
+    let lp = w.scene.sim.as_ref().unwrap().drones.locks[lk].pos;
+    {
+        let input = nf_game::player::Input { switch_to: Some(0x4e), ..Default::default() };
+        for _ in 0..40 { w.scene.sim.as_mut().unwrap().step_bond(input, false, false, false); }
+    }
+    let mut burned = false;
+    for _ in 0..240 {
+        if w.scene.sim.as_ref().unwrap().drones.locks[lk].burned { burned = true; break; }
+        let (head, target) = { let sim = w.scene.sim.as_ref().unwrap(); (sim.bond.head(), lp) };
+        let dir = [target[0] - head[0], target[1] - head[1], target[2] - head[2]];
+        let l = (dir[0] * dir[0] + dir[1] * dir[1] + dir[2] * dir[2]).sqrt().max(1e-4);
+        {
+            let sim = w.scene.sim.as_mut().unwrap();
+            sim.bond.yaw = dir[0].atan2(dir[2]);
+            sim.bond.pitch = (dir[1] / l).asin() / std::f32::consts::FRAC_PI_2;
+        }
+        w.scene.sim.as_mut().unwrap().step_bond(Default::default(), true, false, false);
+    }
+    assert!(burned, "the Laser watch burns the keypad [M Lock_Update 0x1ae3d8 case 0]");
+    w.wait(5);
+    assert!(w.scene.sim.as_ref().unwrap().drones.channels.on(0x2f),
+        "the open writes switch_channels[47] [M 0x1ae3d8:194-195]");
+    eprintln!("[0b] the keypad burned — ch 0x2F up, door #151 unlocked [M 0x1ae3d8]");
+    // Through the burned keypad's doorway to the desk: the E fires through the walker's own
+    // stuck reaction, then the flat ring legs to the office.
+    for (label, wp) in [
         ("ring n23", Wp::new(-18.41, 47.18, 15.84).r(1.0)),
         ("ring n24", Wp::new(-17.46, 47.18, 18.25).r(1.0)),
-        ("ring n25", Wp::new(-22.18, 47.18, 16.58).r(1.0)),
+        ("ring n25 (the exec-office doorway)", Wp::new(-22.18, 47.18, 16.58).r(1.0)),
         ("ring n26", Wp::new(-19.64, 47.18, 31.64).r(1.0)),
         ("the Q-Worm C desk (walked)", Wp::new(pc[0] + 0.6, pc[1] - 0.5, pc[2] + 0.9).r(1.0)),
     ] {
-        if !w.try_walk_to(wp, label) {
-            eprintln!("[0b] {label} wedged (the locked door #5 leaf / the walker's doorway gap — the report carries it)");
-        }
+        w.walk_to(wp, label);
         {
             let sim = w.scene.sim.as_ref().unwrap();
             if dxz_w(sim.bond.pos, [pc[0] + 0.6, pc[1], pc[2] + 0.9]) < 1.3 { break; }
@@ -310,13 +341,9 @@ fn walk_to_the_mission_end(mut w: &mut Walker, fresh: bool) {
     }
     {
         let p = w.scene.sim.as_ref().unwrap().bond.pos;
-        if dxz_w(p, [pc[0] + 0.6, pc[1], pc[2] + 0.9]) >= 1.3 {
-            let sim = w.scene.sim.as_mut().unwrap();
-            sim.bond.pos = [pc[0] + 0.6, 48.8, pc[2] + 0.9];
-            eprintln!("[0b] the desk stand-in fired after the walked return (the n25 doorway wedge) — documented");
-        } else {
-            eprintln!("[0b] the desk approach arrived WALKED at ({:.2},{:.2},{:.2})", p[0], p[1], p[2]);
-        }
+        assert!(dxz_w(p, [pc[0] + 0.6, pc[1], pc[2] + 0.9]) < 1.3,
+            "the desk approach must be the walked route: the burned keypad's door #151 → n25 → n26 [M 0x1ae3d8; D #151/#178], got {p:?}");
+        eprintln!("[0b] the desk approach arrived WALKED at ({:.2},{:.2},{:.2})", p[0], p[1], p[2]);
     }
     {
         let sim = w.scene.sim.as_ref().unwrap();
@@ -359,6 +386,12 @@ fn walk_to_the_mission_end(mut w: &mut Walker, fresh: bool) {
                 c[0], c[1], c[2], lo[0], lo[1], lo[2], hi[0], hi[1], hi[2]);
             let _ = w.try_walk_to(Wp::new(c[0], lo[1] - 0.4, c[2]).r(1.4), "the spawned files use-plate");
             // Stances around the plate (the box may sit at console height); the use held each stance.
+            // KEPT test-setup placement (not a route transit): the walked approach already
+            // arrived at the spawned use-plate (try_walk_to above); these stances enumerate
+            // interaction positions AROUND the plate for the E hold (the plate's box may sit at
+            // console height — the y clamp keeps Bond in the touch band), so the subject is the
+            // use-plate's channel law, not movement. The route (the walked ring to the room) is
+            // asserted by the walked legs above.
             'stances: for d in [[0.0f32, 0.0, 0.0], [0.5, 0.0, 0.0], [-0.5, 0.0, 0.0], [0.0, 0.0, 0.5], [0.0, 0.0, -0.5], [0.0, 0.6, 0.0]] {
                 {
                     let sim = w.scene.sim.as_mut().unwrap();
@@ -382,14 +415,40 @@ fn walk_to_the_mission_end(mut w: &mut Walker, fresh: bool) {
     assert!(w.scene.sim.as_ref().unwrap().drones.channels.on(0x4f), "AND #299(0x4C, 0x4E) reveals objective 10 [D #299]");
     assert!(w.scene.sim.as_ref().unwrap().drones.channels.on(0x36), "AND #303(0x4F) → ch 0x36 [D #303]");
 
-    // THE ROOF GATE — the REAL chain, no drive: E-plate #166 (mask 4 = use, box
-    // [-14.82, 46.78, 5.39]-[-13.75, 48.96, 7.58] [D]) → ch 0x35 → SEQ #252(0x36, 0x35) →
-    // ch 0x34 → Trigger_Calc 0x1b1900's 0700000b copy → ch 0x2D → the roof cut-scene SP #177.
+    // THE ROOF GATE — the REAL chain, no drive: walk BACK from the desk through the burned
+    // keypad's doorway (the door auto-closes after 360 ticks [M Door_Update], so the walker's
+    // stuck reaction E's it open again) and along the ring's proven legs to E-plate #166
+    // (mask 4 = use, box [-14.82, 46.78, 5.39]-[-13.75, 48.96, 7.58] [D]) → ch 0x35 →
+    // SEQ #252(0x36, 0x35) → ch 0x34 → Trigger_Calc 0x1b1900's 0700000b copy → ch 0x2D →
+    // the roof cut-scene SP #177.
     let mut ch35_real = false;
     {
-        let sim = w.scene.sim.as_mut().unwrap();
-        sim.bond.pos = [-14.3, 47.8, 6.5];
-        sim.bond.vel = [0.0; 3];
+        // Two walked returns: the warm walk ends at the desk (the office side), the fresh walk
+        // at the spawned files' plate by the terminal. From the desk: n26 → the doorway n25 →
+        // the corridor n22 → n21 → n20 → n16 — the n24 side-loop is skipped (the direct n25→n24
+        // line crosses the wall corner at x ≈ −19.6 the ring's corridor z 15.8 lane threads
+        // [D the run dump: cel 7 at 27 %]). From the terminal: the proven n14 → n15 → n16 lane.
+        let p0 = w.scene.sim.as_ref().unwrap().bond.pos;
+        let from_desk = dxz_w(p0, [pc[0] + 0.6, pc[1], pc[2] + 0.9]) < 4.0;
+        let ret: Vec<(&str, Wp)> = if from_desk {
+            vec![
+                ("return n26→n25 (the doorway)", Wp::new(-22.18, 47.18, 16.58).r(1.1)),
+                ("return n25→n22 (the keypad corner)", Wp::new(-21.14, 47.18, 15.75).r(1.0)),
+                ("return n22→n21 (the corridor)", Wp::new(-15.83, 47.18, 15.75).r(1.0)),
+                ("return n20", Wp::new(-14.30, 47.18, 15.79).r(1.0)),
+                ("return n16", Wp::new(-13.67, 47.18, 6.40).r(1.0)),
+            ]
+        } else {
+            vec![
+                ("return n14", Wp::new(-1.45, 47.18, 3.74).r(1.0)),
+                ("return n15", Wp::new(-1.33, 47.18, 6.82).r(1.0)),
+                ("return n16", Wp::new(-13.67, 47.18, 6.40).r(1.0)),
+            ]
+        };
+        for (label, wp) in ret {
+            w.walk_to(wp, label);
+        }
+        w.walk_to(Wp::new(-14.3, 47.4, 6.5).r(1.0), "E-plate #166 side (walked)");
     }
     eprintln!("[0b] at E-plate #166 — the real use");
     for _ in 0..80 {
@@ -450,8 +509,15 @@ fn walk_to_the_mission_end(mut w: &mut Walker, fresh: bool) {
     let parachute = w.scene.sim.as_ref().unwrap().drones.pickups.iter()
         .find(|p| p.switch_channel == 0x3f).expect("OBJECT_Parachute (0xF0, ch 0x3F)").clone();
     let pp = [parachute.m[3][0], parachute.m[3][1], parachute.m[3][2]];
-    // Walk the deck east from the re-place point; on a wedge, the documented transit (the
-    // helicopter's blocking volume — the report's open item) and the INTERACTIONS stay real.
+    // Walk the deck east from the re-place point — the game's route to the pickup; on a wedge,
+    // the kept stand-in transit (the deck walk's blocker is the open item — the parachute-side
+    // INTERACTIONS below stay real either way, and the sister assert pins the pickup itself:
+    // `taken || ch 0x3F` below). Live check that settles it: a fresh-boot PCSX2 run, Bond on the
+    // helipad deck at the re-place key [−14.71, 58.00, −2.06], walk east toward the parachute at
+    // (2.53, 58.45, 42.34) [D #280] and record the deck's collision under the walk line (x −14 →
+    // 2, z −2 → 37) — whether the disc deck is continuous floor (the port's wedge is a port gap
+    // to fix) or the helicopter body's volume really walls the direct line (then the route is the
+    // detour the guard positions imply, and the walker needs the detour waypoints).
     w.lenient = true;
     let leg = w.walk_to(Wp::new(pp[0], pp[1] - 1.4, pp[2] - 5.0).r(1.6), "the deck below the parachute");
     if leg == u32::MAX {
@@ -463,7 +529,11 @@ fn walk_to_the_mission_end(mut w: &mut Walker, fresh: bool) {
     w.lenient = false;
     w.wait(10);
     // Take the parachute: the real pickup touch (stances around it; the helicopter's blocking
-    // volume may need the offset — the teleport test's own approach).
+    // volume may need the offset — the teleport test's own approach). KEPT test-setup placement
+    // (not a route transit): the route (the deck walk) is the leg above; these stances enumerate
+    // walk-over touch positions around the pickup (it hangs at pickup height — pp[1] − 1.2 puts
+    // Bond's feet in the touch band), so the subject is the pickup's walk-over law
+    // [M Pickup_Handler 0x18e650], not movement. The per-stance drive (forward 0.4) is real input.
     let mut taken = false;
     'stances: for c in [[0.0f32, 0.0, 0.0], [0.6, 0.0, 0.6], [-0.6, 0.0, 0.6], [0.6, 0.0, -0.6], [-0.6, 0.0, -0.6], [0.0, 0.6, 0.0], [0.0, 1.2, 0.0]] {
         for _ in 0..40 {
