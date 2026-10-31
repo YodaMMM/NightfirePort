@@ -25,3 +25,7 @@ claimed-by: sandbox3 at 2026-10-31T12:00Z
 ## Report (done, 2026-10-31T12:54Z)
 
 Closed by the driver: the report is on `s/boot-loadout-qworm` (docs/reports/boot-loadout-qworm.md); the worker didn't run finish.sh.
+
+---
+## Report from the worker (done, 2026-10-31T12:58Z)
+
