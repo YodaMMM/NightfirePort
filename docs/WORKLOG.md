@@ -28,3 +28,9 @@ jump, the icon context re-arms from proximity [M 0x1949a8:22]). walkreal_0700000
 **1 passed / 0 failed (51.8 s)**; interactables_0700000d_live **11 passed / 0 failed (42.2 s)**.
 The suite runner's OOM-crashed binaries (mp_stress_explosives_live, worldobj_live) need a re-run
 on a quieter box; the disc_golden trio is the expected slim-ISO set.
+
+**level-0d-beam-boarding outcome (16:22 UTC): DONE within the window's limits** — the ride and
+the drop are real input; the stand-in is the ONE boarding placement ([S] unverified, the live
+check filed with the exact addresses in the report). walkreal 1/0, interactables 11/0; the
+suite runner was mid-run at the window's end (5 inherited failures + 2 OOM crashes logged in
+the report; the touched binaries re-run green by hand on the final tree).
