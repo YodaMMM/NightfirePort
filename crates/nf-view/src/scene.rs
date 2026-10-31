@@ -5959,6 +5959,42 @@ impl Sim {
     }
 }
 
+/// The satchel countdown's local offsets — `Bullet_DoTrails`' 0x3b tail stores them on the stack
+/// before the two `control_create_object(0x40, …)` calls [M 0x12d890:485-493, disasm
+/// 0x12e41c-0x12e4a4: `swc1` to sp+0x40/44/48 (tens) and sp+0x50/54/58 (units)]:
+/// tens (0x3dbfe246, 0xbb15e052, 0xbdfb5d03), units (0x3d03cf48, 0xbb15e052, 0xbdfb5d03).
+pub const SATCHEL_DIGIT_OFFSETS: [[u32; 3]; 2] = [
+    [0x3dbf_e246, 0xbb15_e052, 0xbdfb_5d03],
+    [0x3d03_cf48, 0xbb15_e052, 0xbdfb_5d03],
+];
+
+/// The digit mesh's own turn inside the satchel, `RotMatrix((π/2, 0, π))` [M 0x12d890:494-495:
+/// sp+0x30/34/38 = 0x3fc90fdb, 0, 0x40490fdb, then `RotMatrix` 0x1e2368].
+pub const SATCHEL_DIGIT_ROT: [u32; 3] = [0x3fc9_0fdb, 0, 0x4049_0fdb];
+
+/// One countdown digit's world matrix, exactly as `Bullet_DoTrails` builds it for the two
+/// kind-0x40 objects it spawns every tick in every state < 2 [M 0x12d890:485-553]:
+/// - translation = `obj+0x30` + the local offset through the satchel's OWN rows —
+///   `vmulax ACC, vf5(obj+0x90), off.x; vmadday ACC, vf4(obj+0xa0), off.y; vmaddz vf3, vf2(obj+0xb0),
+///   off.z; vadd` [M disasm 0x12e4c8-0x12e4dc tens, 0x12e58c-0x12e59c units];
+/// - rotation = `MulMatrix0(obj+0x90, RotMatrix((π/2, 0, π)), digit+0x90)` [M :514, :542], whose rows
+///   are `Σ_k R[i][k] · satchel_row_k` [M MulMatrix0 0x1e2820: out[4i+j] = Σ_k a[4k+j]·b[4i+k]] —
+///   the digit frame turned first, then carried by the satchel (`R · S` in row-vector order);
+/// - `Mat_SetTrans` [M :515, :543] writes the translation.
+/// `satchel` is the satchel's drawn matrix (its obj+0x90 rows; row 3 ignored) and `pos` its obj+0x30.
+pub fn satchel_digit_matrix(satchel: &Mat4, pos: [f32; 3], tens: bool) -> Mat4 {
+    let r = SATCHEL_DIGIT_ROT.map(f32::from_bits);
+    let rot = nf_formats::placement::object_matrix(r, [0.0; 3]);
+    let mut s = *satchel;
+    s[3] = [0.0, 0.0, 0.0, 1.0];
+    let mut m = anim::mul(&rot, &s);
+    let o = SATCHEL_DIGIT_OFFSETS[if tens { 0 } else { 1 }].map(f32::from_bits);
+    let mut t = [0.0f32; 3];
+    for c in 0..3 { t[c] = pos[c] + ((s[0][c] * o[0] + s[1][c] * o[1]) + s[2][c] * o[2]); }
+    m[3] = [t[0], t[1], t[2], 1.0];
+    m
+}
+
 /// `FlashMod` (Check_Target 0x1a7810:95-97): `FlashMod = (int)GameState+0x76 · 0.01`, then
 /// `((PS2Sinf(FlashMod·2π + π/2) + 1)·0.5 + 1)·0.5` — a 1 Hz sine shimmer in [0.5, 1.0], quantized
 /// to the integer 100ths clock (the sine's phase steps in 0.01 s units). GameState+0x76 is
@@ -9781,37 +9817,40 @@ pub fn build(level: &Level, cels_only: bool, skeletons: &HashMap<u8, Skeleton>, 
                         None => far,
                     },
                     // fix-satchel-tripbomb: the satchel's countdown digits (kinds 4 = tens, 5 = units)
-                    // — the meshes SatchelDigits[sec/10]/[sec%10] [L 0x2bed90], drawn at the stuck
-                    // satchel's matrix (aligned to −normal [M 0x12ce80:266]) offset along its own
-                    // axes [*suggested*: the game offsets by its own small rotation/translation pair
-                    // 0x12d890:486-511 — the port's (±0.03, 0.032, 0.06) is cosmetic].
+                    // — the meshes SatchelDigits[sec/10]/[sec%10] [L 0x2bed90], posed exactly as
+                    // `Bullet_DoTrails` poses its two kind-0x40 objects (`satchel_digit_matrix`
+                    // [M 0x12d890:485-553]) on the satchel's OWN matrix — the same matrix its mesh
+                    // draws with, so the numbers sit on the charge's face in every pose.
                     4 | 5 => {
                         // satchel-stick2: NO `stuck` gate — `Bullet_DoTrails`' 0x3b tail spawns the
                         // two digit objects EVERY tick in every state < 2 [M 0x12d890:418-553; the
                         // sim writes `digits` in flight too — grenade.rs's tail runs before the
-                        // stuck early-out], so the numbers ride the satchel from the throw. In flight the thrown one's
-                        // `phase.normal` is the spawn's [0, 1, 0] placeholder (the stick overwrites it with the
-                        // surface normal), so the flight digits stand upright on the satchel [S —
-                        // the game aligns them to the bullet's own matrix].
+                        // stuck early-out], so the numbers ride the satchel from the throw.
                         // camera-beam-satchel-draw: the source covers BOTH satchel carriers — the
                         // thrown grenades AND the drone-fired 0x3b bullets (the 4a lift shooters
                         // [D cameras-turrets.md §3 #286/#287 weapon 0x3d → family 0x3b]) whose
                         // `Bullet::digits` the sim's DoTrails tail writes every tick [M 0x12d890:418-553].
+                        // The digits read the bullet's obj+0x90 unconditionally [M :496-498, :514,
+                        // :542], so each carrier's base is the direction its projectile slot draws
+                        // the satchel mesh with (the grenade/bullet arms of the projectile pose
+                        // above): stuck/landed → −normal [M 0x12ce80:256-266]; a flying grenade its
+                        // velocity, a flying bullet its spawn direction (`Mat_Align2Dir(dir, up)`
+                        // [M 0x12c5a0:185]).
+                        let normv = |v: [f32; 3]| { let l = (v[0] * v[0] + v[1] * v[1] + v[2] * v[2]).sqrt(); if l > 1e-9 { [v[0] / l, v[1] / l, v[2] / l] } else { [0.0, 1.0, 0.0] } };
                         let mut satchels: Vec<([f32; 3], [f32; 3], Option<(u8, u8)>)> = s.drones.grenades.iter()
                             .filter(|g| g.weapon_type == 0x3b && g.state < 2 && g.phase.is_some())
                             .map(|g| {
                                 let p = g.phase.as_ref().unwrap();
-                                (g.pos, [-p.normal[0], -p.normal[1], -p.normal[2]], p.digits)
+                                let dir = if g.stuck { [-p.normal[0], -p.normal[1], -p.normal[2]] } else { normv(g.velocity) };
+                                (g.pos, dir, p.digits)
                             })
                             .collect();
                         for b in s.drones.bullets.iter()
                             .filter(|b| b.state < 2 && b.digits.is_some() && b.family(&s.weapons) == 0x3b)
                         {
-                            // A landed charge aligns to its stick normal; a flying one keeps the
-                            // upright placeholder the thrown arm uses [S as above].
                             let dir = match (b.landed, b.stick_normal) {
                                 (true, Some(n)) => [-n[0], -n[1], -n[2]],
-                                _ => [0.0, 1.0, 0.0],
+                                _ => b.dir,
                             };
                             satchels.push((b.pos, dir, b.digits));
                         }
@@ -9819,16 +9858,8 @@ pub fn build(level: &Level, cels_only: bool, skeletons: &HashMap<u8, Skeleton>, 
                         let Some((tens, units)) = digits else { return far };
                         let digit = if kind == 4 { tens } else { units };
                         if mesh != 0x0200_0791 + *digit as u32 { return far; }
-                        let mut m = nf_game::searchlight::align2dir(*align, [0.0, 1.0, 0.0], [1.0, 0.0, 0.0]);
-                        let (x, y, z) = (m[0], m[1], m[2]);
-                        let (lx, ly, lz) = if kind == 4 { (-0.03f32, 0.032f32, 0.06f32) } else { (0.03, 0.032, 0.06) };
-                        m[3] = [
-                            pos[0] + x[0] * lx + y[0] * ly + z[0] * lz,
-                            pos[1] + x[1] * lx + y[1] * ly + z[1] * lz,
-                            pos[2] + x[2] * lx + y[2] * ly + z[2] * lz,
-                            1.0,
-                        ];
-                        m
+                        let base = nf_game::searchlight::align2dir(*align, [0.0, 1.0, 0.0], [1.0, 0.0, 0.0]);
+                        satchel_digit_matrix(&base, *pos, kind == 4)
                     }
                     _ => far,
                 };
@@ -10838,6 +10869,15 @@ pub fn build(level: &Level, cels_only: bool, skeletons: &HashMap<u8, Skeleton>, 
                         // 0x12e7b0] — so the rocket's own orange light saturates it to the PS2's white flare
                         // (the cel-ambient dim left the blue low: a yellow star). Grenade slots unchanged.
                         if a.projectile.is_some_and(|(slot, _)| (slot as usize) >= GRENADE_SLOTS) { return one(); }
+                        // The satchel countdown digits keep the white tweak: `control_create_object`
+                        // runs `control_init_object` (tint bytes obj+0x103..0x106 = 0xFF [M
+                        // 0x1344e0:19, 0x134630:18-21]) and `Bullet_DoTrails` never writes them [M
+                        // 0x12d890:513-553]; their glist flags 0x20a0 [D OBJECT_LED_0..9] carry no
+                        // 0x800, so `View_SetupRenderModes_Tweak` passes the 0xFF bytes as-is [M
+                        // 0x1e5888:46-49] (reached from `View_DrawObjList` 0x1e69a0:77) — full-bright
+                        // green LEDs (texture 11, solid green). The character-0 ambient ramp drew them
+                        // near-black on the red display.
+                        if matches!(a.effect, Some((4 | 5, _, _))) { return one(); }
                         if a.dropped {
                             // The dropped gun is a pickup object (`DroneWeap_DropWeapon` → `Pickup_Create`
                             // 0x18dda0, the same forced 0x840): the ambient dim at its drop matrix.

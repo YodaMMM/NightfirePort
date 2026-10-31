@@ -10937,15 +10937,17 @@ fn seg_point_dist2(a: V3, b: V3, p: V3) -> f32 {
 /// `Explode_Create(weapon+0x08 radius, weapon+0x0C damage, script 0x6000052, f12 scale =
 /// radius)` [M 0x12df3c region — the `+0x70 & 0x2000` flash arm and the `& 0x20000` smoke arm
 /// are both clear on the satchel's 0x300 [L ee_start_05.bin], so the plain blast runs]. The
-/// burned-out charge never reaches the decrement (the game re-randomizes its fuse every tick
-/// [M 0x12e3cc-0x12e40c]; the port's `defused` latch — see `Bullet::defused`).
+/// burned-out charge still takes the decrement, then the 0x3b tail redraws its fuse to
+/// `Rand_Rand(0x1518) + 0x3c` every tick [M 0x12d890:424-433, 0x12e3cc-0x12e40c] — it never
+/// reaches `fuse < 0` (see `Bullet::defused`).
 fn tick_charge_fuse(
     weapons: &nf_formats::weapon::WeaponData,
     b: &mut crate::bullet::Bullet,
     out: &mut Vec<(V3, f32, f32, usize, u16, u32, f32, u16)>,
     beeps: &mut Vec<V3>,
+    rng: &mut Rng,
 ) {
-    if !b.fuse_ticks || b.defused { return; }
+    if !b.fuse_ticks { return; }
     // The decrement [M 0x12d890 0x12dcc4-0x12dd2c]: families 0x59/0x5b never decrement; 0x37
     // decrements unless its fuse holds the 7777.0 sentinel; every family then takes the < 0 test.
     let fam = b.family(weapons);
@@ -10977,6 +10979,15 @@ fn tick_charge_fuse(
         let sec = (b.fuse * 0.016_666_668) as i32;
         let s = sec.max(0);
         b.digits = Some(((s / 10) as u8, (s % 10) as u8));
+        // The burned-out charge (`BU+0x102 < 1` [M 0x12d890:424]): the fuse is redrawn to
+        // `Rand_Rand(0x1518) + 0x3c` and the beep/contact block is skipped (`goto LAB_0012e41c`,
+        // :425-433) — the digits above were already taken from the fuse BEFORE the redraw
+        // (`iVar16` :422), so from the tick after the burn-out the display shows the previous
+        // tick's random 59..5458-tick fuse in seconds, a new number every tick.
+        if b.defused {
+            b.fuse = (rng.rand(0x1518) + 0x3c) as f32;
+            return;
+        }
         if qs != b.last_qs {
             b.last_qs = qs;
             if (qs & 3) == 0 || ((qs & 1) == 0 && sec < 10) || sec < 5 {
@@ -14165,7 +14176,8 @@ fn segment_hits_sphere(a: V3, b: V3, c: V3, r: f32) -> bool {
             // (obj+0xD0) holds this tick's class-5 hitters; a 0x4E round takes 1/tick
             // (FRAME_RATE_MUL) off `BU+0x102`, the 0x4F takes 10 (`FRAME_RATE_MUL * 10.0`).
             // At ≤ 0 the game re-randomizes the charge's fuse every tick [M 0x12e3cc-0x12e40c]
-            // — it never explodes; the port latches `defused` (see `Bullet::defused`). One
+            // — it never explodes; `defused` marks it and `tick_charge_fuse` redraws (see
+            // `Bullet::defused`). One
             // contact per laser round per tick, the same shape as the lock walk above. The
             // burn sparks are `Emitter_Create(0xc00000a, hit point, …)` [M 0x12e37c] —
             // draw-side; the port's emitter set has no charge-spark shape (not ported).
@@ -18730,7 +18742,7 @@ fn segment_hits_sphere(a: V3, b: V3, c: V3, r: f32) -> bool {
                 }
                 // Bullet_DoTrails' fuse tick [M 0x12d890 0x12dcc4-0x12dd5c] — the landed
                 // charge's ONLY per-tick work (Bullet_update case 3 runs DoTrails and stops).
-                tick_charge_fuse(&d.weapons, b, &mut self.pending_blasts, &mut self.pending_beeps);
+                tick_charge_fuse(&d.weapons, b, &mut self.pending_blasts, &mut self.pending_beeps, &mut self.rng);
                 continue;
             }
             if let Some(ev) = b.update(d.world, &vol, viewer, &mut self.rng) {
@@ -18754,7 +18766,7 @@ fn segment_hits_sphere(a: V3, b: V3, c: V3, r: f32) -> bool {
                             self.audio.play3d(0x4a7, p, None);
                             // The landing tick's DoTrails runs too [M: the handler sets state 3,
                             // Bullet_update's tail then calls DoTrails].
-                            tick_charge_fuse(&d.weapons, b, &mut self.pending_blasts, &mut self.pending_beeps);
+                            tick_charge_fuse(&d.weapons, b, &mut self.pending_blasts, &mut self.pending_beeps, &mut self.rng);
                         } else {
                         let end = [p[0] + dir[0] * 0.1, p[1] + dir[1] * 0.1, p[2] + dir[2] * 0.1];
                         if let (Some(s), Some((_, n, m))) = (d.surfaces, d.world.segment_surface(from, end, false)) {
@@ -18913,7 +18925,7 @@ fn segment_hits_sphere(a: V3, b: V3, c: V3, r: f32) -> bool {
             // uses, so the game's Explode_Create order holds. Landed charges ticked in their
             // own arms above (the loop head / the landing arm); dead rounds have no DoTrails.
             if !b.landed && b.state < 2 {
-                tick_charge_fuse(&d.weapons, b, &mut self.pending_blasts, &mut self.pending_beeps);
+                tick_charge_fuse(&d.weapons, b, &mut self.pending_blasts, &mut self.pending_beeps, &mut self.rng);
             }
         }
         self.bullets.retain(|b| b.state < 2);
