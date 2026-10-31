@@ -65,7 +65,7 @@ fn clear_captors(w: &mut Walker, around: [f32; 3], label: &str) {
     for round in 0..8 {
         let target = {
             let sim = w.scene.sim.as_ref().unwrap();
-            sim.drones.list.iter().position(|d| d.team == 1 && d.health > 0.0 && !d.corpse && d.enabled
+            sim.drones.list.iter().position(|d| d.team == 1 && d.health > 0.0 && !d.corpse
                 && d.pos.iter().zip(around).map(|(a, b)| (a - b).powi(2)).sum::<f32>() < 64.0)
         };
         let Some(di) = target else { return };
@@ -75,6 +75,35 @@ fn clear_captors(w: &mut Walker, around: [f32; 3], label: &str) {
         if !w.shoot(di, &format!("{label} captor {round}")) {
             eprintln!("[02] {label}: captor {round} (drone {di}) survived the clip");
         }
+    }
+}
+
+/// The real-health walk's captor fight: the same kill set as `clear_captors`, played the way a
+/// player does under real fire — enabled guards only, shot from range when a part is exposed,
+/// approached node by node until one is, the gun cycled/looted when it runs dry.
+fn clear_captors_real(w: &mut Walker, around: [f32; 3], label: &str) {
+    for round in 0..8 {
+        let target = {
+            let sim = w.scene.sim.as_ref().unwrap();
+            sim.drones.list.iter().position(|d| d.team == 1 && d.health > 0.0 && !d.corpse && d.enabled
+                && d.pos.iter().zip(around).map(|(a, b)| (a - b).powi(2)).sum::<f32>() < 64.0)
+        };
+        let Some(di) = target else { return };
+        // From range first: a captor Bond can already see a part of is shot from where he
+        // stands. Walking into the room put Bond 1.1-1.3 u from three shotgun captors (weapon
+        // 0x1c [L probe]) and cost ~95 of his 150 health+armour there (run12 2026-10-31); the
+        // pellets' spread is what range buys a player.
+        if !hold_for_sight(w, di, 240) {
+            let dest = if round == 0 { around }
+                else { w.scene.sim.as_ref().unwrap().drones.list[di].pos };
+            approach_until_seen(w, di, dest, &format!("{label} captor {round} approach"), 3.5);
+        }
+        let _ = w.switch_to_armed(&format!("{label} captor {round}"));
+        if !w.shoot(di, &format!("{label} captor {round}")) {
+            eprintln!("[02] {label}: captor {round} (drone {di}) survived the clip");
+            loot(w, &format!("{label} captor {round}"), 1);
+        }
+        status(w, &format!("{label} captor {round}"));
     }
 }
 
@@ -107,7 +136,15 @@ fn leg_to(w: &mut Walker, at: [f32; 3], name: &str, arrive: f32) {
             w.lenient = true;
             w.walk_to(Wp::new(p[0], p[1], p[2]).r(1.3), &format!("{name} nav {k}"));
             w.lenient = false;
-            engage_in_view(w, 14.0, &format!("{name} nav {k}"));
+            if engage_in_view(w, 14.0, &format!("{name} nav {k}")) {
+                // The fight moves Bond (the shoot loop's strafes and flanks): back to the node
+                // before the next stretch — the bunker-door fight left Bond outside the door and
+                // the straight steer to the next node wedged him on the door jamb between the two
+                // bunker doors (y 7.1 airborne at (−45.4, −22.15), 3 × 3000 ticks, runs 13/j97).
+                w.lenient = true;
+                w.walk_to(Wp::new(p[0], p[1], p[2]).r(1.3), &format!("{name} nav {k} again"));
+                w.lenient = false;
+            }
         }
     }
     w.lenient = true;
@@ -118,7 +155,8 @@ fn leg_to(w: &mut Walker, at: [f32; 3], name: &str, arrive: f32) {
 
 /// Fight every enabled hostile within `radius` that Bond can see a part of right now (the walker's
 /// bullet-rule `exposed_aim`), nearest first; the unseen are left to the route's sweeps.
-fn engage_in_view(w: &mut Walker, radius: f32, label: &str) {
+fn engage_in_view(w: &mut Walker, radius: f32, label: &str) -> bool {
+    let mut fought = false;
     for k in 0..6 {
         let target = {
             let sim = w.scene.sim.as_ref().unwrap();
@@ -130,13 +168,18 @@ fn engage_in_view(w: &mut Walker, radius: f32, label: &str) {
             c.sort_by(|a, b| a.0.total_cmp(&b.0));
             c.into_iter().map(|(_, i)| i).find(|&i| w.exposed_aim(i).is_some())
         };
-        let Some(di) = target else { return };
+        let Some(di) = target else { return fought };
+        fought = true;
         let _ = w.switch_to_armed(label);
         if !w.shoot(di, &format!("{label} in view {k}")) {
             loot(w, &format!("{label} in view {k}"), 1);
         }
+        // The kill's drop lies at the fight floor: a player low on rounds grabs it before walking
+        // on (the geisha-2 captors outlived a 9-round shotgun, run j97 2026-10-31).
+        loot(w, &format!("{label} in view {k} drop"), 12);
         status(w, &format!("{label} in view {k}"));
     }
+    fought
 }
 
 /// The game's own weapon cycle to the carried firearm holding the most rounds (clip + spare) —
@@ -169,6 +212,38 @@ fn arm_fullest(w: &mut Walker, label: &str) {
     }
     let (id, n) = read(w);
     eprintln!("[02] {label}: armed the fullest gun {id:#x} ({n} rounds; carried {:?})", seen);
+    reload_full(w);
+}
+
+/// The game's R between fights: a player tops the clip up from the spare before walking into the
+/// next contact (the P99 armed with clip 1 reloaded mid-fight 2.5 u from drone 10 and Bond lost
+/// 66 health there, run b-j60 2026-10-31). One reload press through `step_bond`'s reload input,
+/// then the reload's own wait.
+fn reload_full(w: &mut Walker) {
+    let spare = w.scene.sim.as_ref().unwrap().gun.spare;
+    if spare == 0 { return; }
+    w.scene.sim.as_mut().unwrap().step_bond(Default::default(), false, true, false);
+    for _ in 0..90 { w.tick(Default::default(), false); }
+}
+
+/// Close on guard `di` the way a player rounds a corner: node by node along the nav web toward
+/// `dest`, stopping at the first node from which a part of him is exposed within 15 u (instead
+/// of a blind walk to 3.5 u — the geisha-1 room's first captor, drone 5, was met at 0.6 u that
+/// way and cost 17-95 health, runs b-j0..j200 2026-10-31).
+fn approach_until_seen(w: &mut Walker, di: usize, dest: [f32; 3], label: &str, arrive: f32) {
+    let pts = { let sim = w.scene.sim.as_ref().unwrap(); walker::leg(sim, sim.bond.pos, dest) };
+    let seen = |w: &Walker| {
+        let sim = w.scene.sim.as_ref().unwrap();
+        let d = &sim.drones.list[di];
+        d.corpse || d.health <= 0.0 || (dxz(d.pos, sim.bond.pos) < 15.0 && w.exposed_aim(di).is_some())
+    };
+    w.lenient = true;
+    for (k, p) in pts.iter().enumerate().skip(1).take(pts.len().saturating_sub(2)) {
+        if seen(w) { w.lenient = false; return; }
+        w.walk_to(Wp::new(p[0], p[1], p[2]).r(1.3), &format!("{label} nav {k}"));
+    }
+    if !seen(w) { w.walk_to(Wp { at: dest, act: Act::None, arrive }, label); }
+    w.lenient = false;
 }
 
 /// Face guard `di` and hold still up to `ticks` until a part of him is exposed to Bond's eye
@@ -271,7 +346,7 @@ fn clear_pursuers(w: &mut Walker, radius: f32, label: &str) {
                 passed.push(di);
                 continue;
             }
-            w.walk_nav_to(at, &format!("{label} pursuer {round} approach"), 3.0);
+            approach_until_seen(w, di, at, &format!("{label} pursuer {round} approach"), 3.0);
         }
         let _ = w.switch_to_armed(&format!("{label} pursuer {round}"));
         let stand = w.scene.sim.as_ref().unwrap().bond.pos;
@@ -301,16 +376,16 @@ fn clear_pursuers(w: &mut Walker, radius: f32, label: &str) {
     }
 }
 
-/// IGNORED with its blocker: on real health (no top-up) the walk dies deterministically at the
-/// south-hall-west nav-10 wedge — that wedge is a guard BODY-BLOCK, not geometry: g3 stands 0.8 u
-/// from Bond at (−28.6, 6.34, 18.3) and runs 0x74 → 0x68 → 0x60 at t4137-4184 (NF_ALARM_TRACE,
-/// run06 2026-10-29); ~1462 ticks into the wedge level_exit fires (the auto-restart of the fail
-/// chain) in every real-health run (1836/1462/1462). The walker's stuck ladder sidesteps walls and
-/// opens doors but has no drone-body-block response; the next window adds it (or clears g3 before
-/// the leg — he closes from beyond the 24 u sweep during it). All three channel pokes ARE gone and
-/// the port fires all three quads on a real body [L probe02quads TELE]; the legs themselves are
-/// real throughout.
-#[ignore = "real-health blocker: the west-wing lip fight — a late-closing ch-0x15 guard (drone 4) stands ~1.4 u off the lane with NO exposed part (every part's eye segment clips the stair lip [L run3/run4 2026-10-31]); the step-back/flank walks wedge at the 3000-tick lenient caps (the nav routes over the south-hall arch) and Bond took ~70 damage standing in the open (health 29.5, run4). The g3 nav-10 body-block IS fixed (the walker's hostile-body-block arm, 2026-10-31 — the walk passes it deterministically) and the real takes WORK ([take] tick 3474 weapon 0x12 rounds 11, tick 6722 weapon 0x1c rounds 7 [L run2]). Next blocker after the lip: assert 241 — geisha 1 left HOSTAGE during the nearby fight (runs 3-5, no fail-restart involved); see the report's live checks"]
+/// The whole route on real health (no top-up), real input, no position or channel writes. The
+/// walk plays the level the way a player does: Auto Aim on (the game's profile default), the
+/// spawn-room body armour taken, every hostile in view fought while walking (`leg_to` /
+/// `engage_in_view`), unseen pursuers held for rather than chased off the route, approaches that
+/// stop where a part is exposed, captors shot from range, and the fullest gun reloaded before each
+/// known contact (the geisha rooms, the ch-0x81 bunker ambush). The earlier blockers — the
+/// south-hall-west nav-10 body-block (g3) and the west-wing lip fight (drone 4 with no exposed
+/// part) — were both the walker's own route: the AI-path detour over the upper floor and the chase
+/// of an unseen guard. Robustness: green with 0..400 idle ticks inserted after the armour take
+/// (20 offsets, 2026-10-31).
 #[test]
 fn walk_the_castle_all_objectives_real_health() {
     let iso = iso();
@@ -364,10 +439,17 @@ fn walk_the_castle_all_objectives_real_health() {
     //     health [M 0x1902c8:84-104] — 50 points of the garden/west-wing fire a player never
     //     takes on his health. Walked to and taken through Bond's own capsule.
     w.scene.sim.as_mut().unwrap().auto_aim = true;
-    // Straight across the room (the nav web routed this 4 u walk up toward the garden and
-    // wedged 3000 ticks against the bunker wall, 2026-10-31 run3).
+    // Across the room and up onto the raised floor the armour lies on (y 1.67 [L run3 2026-10-31];
+    // the nav web routed this 4 u walk toward the garden and the straight steer from the spawn
+    // wedged under the platform edge, 3000 ticks each, runs 3/4).
     w.lenient = true;
-    w.walk_to(Wp { at: [-24.6, 1.05, 34.2], act: Act::None, arrive: 0.4 }, "the spawn-room body armour");
+    for (name, at, arrive) in [
+        ("the spawn-room floor", [-26.6f32, 1.05, 31.3], 0.8),
+        ("the armour platform", [-25.3, 1.67, 34.2], 0.8),
+        ("the spawn-room body armour", [-24.6, 1.67, 34.2], 0.3),
+    ] {
+        w.walk_to(Wp { at, act: Act::None, arrive }, name);
+    }
     w.lenient = false;
     assert!(w.scene.sim.as_ref().unwrap().drones.health.armour >= 50.0,
         "the spawn-room armour is taken [M Pickup_Handler 0x18e650:220-225]");
@@ -416,6 +498,7 @@ fn walk_the_castle_all_objectives_real_health() {
             clear_pursuers(&mut w, 24.0, "south hall west second pass");
         }
     }
+    arm_fullest(&mut w, "before the geisha-1 room");
     w.lenient = true;
     w.walk_to(Wp { at: [-35.2, 6.5, 4.6], act: Act::Wait(10), arrive: 0.9 }, "the ch-0x17 plate");
     w.lenient = false;
@@ -449,7 +532,7 @@ fn walk_the_castle_all_objectives_real_health() {
     //    fires through the real fire path, AND #397 closes 0x3B [D tr[017]].
     let g1 = geisha(&w, 0x49).unwrap();
     let at = w.scene.sim.as_ref().unwrap().drones.list[g1].pos;
-    clear_captors(&mut w, at, "geisha 1");
+    clear_captors_real(&mut w, at, "geisha 1");
     for _ in 0..240 {
         if ch_on(&w, 0x49) { break; }
         w.tick(Default::default(), false);
@@ -524,6 +607,11 @@ fn walk_the_castle_all_objectives_real_health() {
     leg_to(&mut w, [-46.1, 5.9, -23.2], "back through the doorway", 1.6);
     leg_to(&mut w, [-30.0, 5.9, -21.5], "the east courtyard", 1.6);
     clear_pursuers(&mut w, 16.0, "east courtyard");
+    // Back to the doorway's west approach after the fight: the plate walk below is a straight
+    // steer, and from a fight's end spot north of the door it wedged on the doorframe (3000 ticks
+    // at (−28.7, 7.19, −18.3), run11 2026-10-31).
+    leg_to(&mut w, [-30.0, 5.9, -21.5], "the east courtyard again", 1.6);
+    arm_fullest(&mut w, "before the geisha-2 room");
     // The ch-0x19 plate tr[009] sits in the doorway (quad x −27.58..−26.19, z −22.08..−18.49 at
     // y 6.04 [L probe02quads tris]; the door at (−27.8, 6.6, −20.3) is its west edge [L base log]).
     // The real leg walks THROUGH the doorway into the quad — the old arrive-1.2 stop at x −28.09
@@ -551,7 +639,7 @@ fn walk_the_castle_all_objectives_real_health() {
     }
     let g2 = geisha(&w, 0x4a).unwrap();
     let at = w.scene.sim.as_ref().unwrap().drones.list[g2].pos;
-    clear_captors(&mut w, at, "geisha 2");
+    clear_captors_real(&mut w, at, "geisha 2");
     for _ in 0..240 {
         if ch_on(&w, 0x4a) { break; }
         w.tick(Default::default(), false);
