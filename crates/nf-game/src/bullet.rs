@@ -84,6 +84,13 @@ pub struct Bullet {
     /// sec = fuse/60 [M 0x12d890:421-422, 485-553 — the digit objects spawn EVERY tick in every
     /// state < 2]). None until the first 0x3b DoTrails tick.
     pub digits: Option<(u8, u8)>,
+    /// The satchel charge's matrix alignment in flight (draw-side): `Bullet_init` aligns obj+0x90
+    /// ONCE to the spawn direction (`Mat_Align2Dir(obj+0x90, BU+0x00, …)` [M 0x12c5a0:185]) and
+    /// `Bullet_update` case 1's gravity arm rewrites only BU+0x00 (the flight direction), never
+    /// obj+0x90 — the satchel record's +0x6C (0xc08) has neither the 0x8000 spin nor the 0x4 guided
+    /// rewrite [M 0x12e7b0:163-217, 246-265; L ee_start_05.bin weapon_data 0x3b]. `dir` follows the
+    /// arc; the mesh and the countdown digits keep this. Set for the 0x3b family by `init_fuse`.
+    pub spawn_dir: Option<V3>,
 }
 
 impl Bullet {
@@ -94,7 +101,7 @@ impl Bullet {
         pos: [0.0; 3], dir: [0.0; 3], speed: 0.0, travelled: 0.0, range: 0.0, damage: 0.0,
         owner: 0, state: 0, weapon: 0, flyby: false, bounces: 0,
         fuse: 210.0, fuse_ticks: false, burn: 0, defused: false, landed: false,
-        stick_normal: None, last_qs: 0, digits: None,
+        stick_normal: None, last_qs: 0, digits: None, spawn_dir: None,
     };
 
     /// `Bullet_init` 0x12c5a0's fuse block (the tail of the initializer, after the velocity
@@ -115,6 +122,8 @@ impl Bullet {
             // kind 0x3b → 300, 0x3c → 600, 0x3d → 900 … 0x40 → 1800; kind 0x6c → 900.0.
             self.fuse = if kind == 0x6c { 900.0 } else { (((kind - 0x3b) as u32 * 5 + 5) * 0x3c) as f32 };
             self.burn = 100; // [M 0x12c5a0:211]
+            // The spawn alignment the charge's pose keeps through the arc [M 0x12c5a0:185].
+            self.spawn_dir = Some(self.dir);
         }
         self.fuse_ticks = flags70 & 0x200 != 0; // [M Bullet_DoTrails 0x12dcc4]
     }
