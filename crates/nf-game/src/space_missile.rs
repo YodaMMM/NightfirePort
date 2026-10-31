@@ -67,8 +67,9 @@
 //! (= 170+p4) @t(L−60) [D decode 2026-10-22, re-derived with probe_980_missile_scripts
 //! 2026-10-23 — 06000a30 has 2 streams: ch 192 @t1 + the exit only]. Gate 34's writer is
 //! 06000928 @t359 (SP #200's script) [D]; SP #200
-//! waits on ch 191 (SP #199's out) whose own gate 190 has **no writer** in the level's 77 scripts
-//! [D sweep] — missile 4's console chain therefore never runs from disc data alone. The p1
+//! waits on ch 191 (also SP #199's out), which the arrival script 0x0600085c writes itself (stream
+//! 6, with SP #199's gate ch 190 on stream 9 [D]) — missile 4's console chain runs from the level
+//! start (the older "gate 190 has no writer" sweep missed 0x0600085c). The p1
 //! scripts (060007c6 for missiles 1/3/5/7, 060007e1 for 2/4/6/8 [D]) end at **1200** and write
 //! ch 99 = 1 @t1000 [D]; the p2 scripts are per-missile (0600091c/06000920/06000921/06000922/
 //! 0600091b/06000923/06000924/06000925 [D]) ending at **1710/1170/1230/1610/1710/1410/1610/1170**
