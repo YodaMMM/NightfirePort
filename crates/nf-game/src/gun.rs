@@ -64,6 +64,13 @@ pub struct Gun {
     /// The anim-script toggle (`AnimProcessScriptCmds` 0x1c1b38 case 1) can flip it outside the
     /// draw path — the port does not port that command (no scripted user known); [S] noted.
     pub laser_on: bool,
+    /// weapon-handling: the running reload was started by the reload key (branch A — +0xA4 from
+    /// frame 0) rather than by the empty-clip auto-reload (branch B — frame 6 for +0x68 & 0x1000).
+    pub reload_by_key: bool,
+    /// weapon-handling: the caller's view-state gate for this tick (`Player_WeaponFiring`
+    /// 0x1a5460:631-648 — state 9 with `+0x68 & 0x8000`, or a state outside {0, 9, 0xB}): the
+    /// countdown runs, the shot does not.
+    pub refire_blocked: bool,
 }
 
 impl Gun {
@@ -379,6 +386,10 @@ pub struct GunParams {
     pub clip: u32,
     pub ammo_per_shot: u32,
     pub reload_ticks: u32,       // legacy: total reload time for non-shotgun weapons
+    /// weapon-handling: the reload KEY's time (branch A, `Player_WeaponFiring` disasm 0x1a5fb0-0x1a5fdc):
+    /// +0xA4 at 1.35× from frame 0 — the frame-6 start of +0x68 & 0x1000 is the auto-reload's
+    /// alone (branch B, 0x1a62e4-0x1a631c). Equal to `reload_ticks` for every other record.
+    pub reload_key_ticks: u32,
     pub one_at_a_time: bool,
     pub reload_start_ticks: u32, // state 5: +0xA8 script length (0 if no start script)
     pub reload_loop_ticks: u32,  // state 6: +0xA4 script length per shell
@@ -418,6 +429,7 @@ impl GunParams {
             // and refused the detonator's fire outright (the F family: sounds, no shot tick).
             ammo_per_shot: w[0x91] as u32,
             reload_ticks: reload_ticks(start_h, reload_h, flags68, &script_len),
+            reload_key_ticks: reload_ticks(start_h, reload_h, flags68 & !0x1000, &script_len),
             one_at_a_time: flags68 & 0x100 != 0,
             reload_start_ticks: len_of(start_h),
             reload_loop_ticks: len_of(reload_h),
@@ -445,7 +457,7 @@ pub fn reload_ticks(start: u32, reload: u32, flags68: u32, script_len: &impl Fn(
 
 impl Gun {
     /// Bond's start on 07000005 (`Player_InitWeapon`): weapon 2 with 7 in the clip and 41 spare [L].
-    pub fn new(weapon: u8, clip: u32, spare: u32) -> Gun { Gun { weapon, clip, spare, timer: 0.0, pending: 0, held: false, reload_state: 0, reload_ticks: 0, reload_loop_restarted: false, switch_request: weapon, saved_weapon: weapon, prev_weapon: 0, prev_gadget: 0, switch_state: 0, fire_state: false, latch: false, alt_fire_toggle: 0, twin_skip: vec![0i8; 0x72], laser_on: false } }
+    pub fn new(weapon: u8, clip: u32, spare: u32) -> Gun { Gun { weapon, clip, spare, timer: 0.0, pending: 0, held: false, reload_state: 0, reload_ticks: 0, reload_loop_restarted: false, switch_request: weapon, saved_weapon: weapon, prev_weapon: 0, prev_gadget: 0, switch_state: 0, fire_state: false, latch: false, alt_fire_toggle: 0, twin_skip: vec![0i8; 0x72], laser_on: false, reload_by_key: false, refire_blocked: false } }
 
     /// One tick with the trigger (action 9) `pressed` (no reload key, gun idle).
     pub fn update(&mut self, pressed: bool, p: GunParams) -> bool { self.update_with(pressed, false, false, p) }
@@ -486,15 +498,28 @@ impl Gun {
             // With a +0xA8 start script it sets state 5 instead and queues +0xA8 at 1.0 [M 0x1a6260-0x1a626c];
             // case 5 then queues +0xA4 at 1.0 for the full length (0x1a2e38 case 5).
             self.reload_state = if p.reload_start_ticks > 0 { 5 } else { 6 };
-            self.reload_ticks = if p.reload_start_ticks > 0 { p.reload_start_ticks.max(1) } else { p.reload_ticks.max(1) };
+            // weapon-handling [M disasm 0x1a5fb0-0x1a5fdc vs 0x1a62e4-0x1a631c]: the key's reload
+            // plays +0xA4 from frame 0; only the auto-reload skips to frame 6 (+0x68 & 0x1000).
+            self.reload_by_key = reload;
+            let loop_ticks = if reload { p.reload_key_ticks } else { p.reload_ticks };
+            self.reload_ticks = if p.reload_start_ticks > 0 { p.reload_start_ticks.max(1) } else { loop_ticks.max(1) };
             self.pending = 0;
             self.held = pressed;
             return false;
         }
         if !pressed { self.pending = 0; }
-        if pressed && !self.held && self.timer <= 0.0 { self.pending = p.shots_per_pull; self.timer = 1.0; }
+        let fresh = pressed && !self.held;
+        if fresh && self.timer <= 0.0 { self.pending = p.shots_per_pull; self.timer = 1.0; }
         self.held = pressed;
+        // weapon-handling [M 0x1a5460:601-629]: without a fresh press a run-out timer RETURNS before
+        // the countdown — a held trigger whose timer ran out on a refused tick (the state gate below)
+        // never refires until the next press.
+        if !fresh && self.timer <= 0.0 { return false; }
         self.timer -= 1.0;
+        // weapon-handling [M 0x1a5460:631-648]: the view-state gate after the countdown — a fire
+        // script still playing (state 9) refuses the shot for `+0x68 & 0x8000` records (the pump
+        // Frinesi 0x1c, the snipers 0x1e-0x29: their fire scripts outlast +0x40 [D 07000005 scripts]).
+        if self.refire_blocked { return false; }
         let mut fired = false;
         if self.timer <= 0.0 {
             self.pending -= 1;
@@ -584,7 +609,7 @@ mod tests {
     /// 0x3E7, the tick count at +0x40 = 6].
     #[test]
     fn held_automatic_fires_at_the_record_rate() {
-        let p = GunParams { shots_per_pull: 999, interval: 6.0, clip: 30, ammo_per_shot: 1, reload_ticks: 0, one_at_a_time: false, reload_start_ticks: 0, reload_loop_ticks: 0, reload_end_ticks: 0, ammo_type: 1, fire_anim_len: 0, fire_script: 0x0600_0900, fire_last: 0 };
+        let p = GunParams { shots_per_pull: 999, interval: 6.0, clip: 30, ammo_per_shot: 1, reload_ticks: 0, reload_key_ticks: 0, one_at_a_time: false, reload_start_ticks: 0, reload_loop_ticks: 0, reload_end_ticks: 0, ammo_type: 1, fire_anim_len: 0, fire_script: 0x0600_0900, fire_last: 0 };
         let mut g = Gun::new(0x12, 30, 60);
         let shots: Vec<usize> = (0..37).filter(|&t| g.update(true, p)).collect();
         assert_eq!(shots, [0, 6, 12, 18, 24, 30, 36], "held fire → the record's interval [M 0x1a5460:601-655; L weapon 0x12: spp 999, interval 6]");
@@ -594,7 +619,7 @@ mod tests {
 
     #[test]
     fn one_shot_per_press_at_most_every_interval() {
-        let p = GunParams { shots_per_pull: 1, interval: 8.0, clip: 7, ammo_per_shot: 1, reload_ticks: reload_ticks(0, 0x0600_0827, 0x1004, &|_| Some(155)), one_at_a_time: false, reload_start_ticks: 0, reload_loop_ticks: 111, reload_end_ticks: 0, ammo_type: 1, fire_anim_len: 0, fire_script: 0x0600_0823, fire_last: 0 };
+        let p = GunParams { shots_per_pull: 1, interval: 8.0, clip: 7, ammo_per_shot: 1, reload_ticks: reload_ticks(0, 0x0600_0827, 0x1004, &|_| Some(155)), reload_key_ticks: reload_ticks(0, 0x0600_0827, 0x04, &|_| Some(155)), one_at_a_time: false, reload_start_ticks: 0, reload_loop_ticks: 111, reload_end_ticks: 0, ammo_type: 1, fire_anim_len: 0, fire_script: 0x0600_0823, fire_last: 0 };
         assert_eq!(p.reload_ticks, 111);
         let mut g = Gun::new(2, 7, 41);
         // Holding the trigger fires once.

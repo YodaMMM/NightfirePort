@@ -4190,6 +4190,11 @@ impl Sim {
             // refire countdown, no auto-reload. The 0x2 records [L weapon_data 0x2bf150]: the fists
             // 0x01, the Torpedo Launcher 0x30, the watch laser 0x4e/0x4f, the stunner twins 0x4b/0x4d.
             let under_block = trigger && self.bond.underwater && rd0(0x68) & 0x2 == 0;
+            // weapon-handling [M Player_WeaponFiring 0x1a5460:631-636]: in view state 9 (a fire script
+            // still playing) a `+0x68 & 0x8000` record takes no shot — the pump Frinesi 0x1c (fire
+            // script 80 ticks vs +0x40 = 60) and the snipers (130 vs 120) refire only once the script
+            // ends [D 07000005 first-person scripts; L weapon_data +0x40/+0x68].
+            self.gun.refire_blocked = self.gun.fire_state && rd0(0x68) & 0x8000 != 0;
             let fired = if under_block { false } else { self.gun.update_with(trigger, reload, busy, params) };
             // fix-gadgets-live: the AIMS-20's idle timer (`BLData+0x93a`): the game increments it while
             // the view anim is idle and resets on any fire/reload/switch anim [M Player_SetWeaponAnimObj
@@ -4290,7 +4295,9 @@ impl Sim {
                     (self.view_time, self.view_speed) = (0.0, 1.0);
                 } else {
                     self.view_script = rd(0xa4);
-                    (self.view_time, self.view_speed) = (if flags & 0x1000 != 0 { 5.0 } else { 0.0 }, 1.35);
+                    // weapon-handling: the frame-6 start is the auto-reload's only [M disasm 0x1a62e4-0x1a631c];
+                    // the reload key queues +0xA4 from frame 0 [M 0x1a5fb0-0x1a5fdc].
+                    (self.view_time, self.view_speed) = (if flags & 0x1000 != 0 && !self.gun.reload_by_key { 5.0 } else { 0.0 }, 1.35);
                 }
             } else if self.gun.reload_loop_restarted {
                 // The shell loop continued: restart +0xA4 from frame 0 (matching `AnimScriptAdd(+0xA4)` in
