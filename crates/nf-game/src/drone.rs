@@ -10649,19 +10649,27 @@ impl Drone {
         self.next_shot = (self.last_shot + i).max(frame);
     }
 
-    /// `DroneWeap_Ready2Fire`: aiming class, close enough, or the gun within 20° of the target.
+    /// `DroneWeap_Ready2Fire` 0x178c48 (single player): the danim class `+0x568` 4 (the state-0x58
+    /// recoil/fire danims 0x31, 0x5C, 0xDF, 0xEA, 0x198 [D the danim info table]) is ready at once
+    /// [M :47 `if (cVar7 != 4) … else uVar5 = 1`]; any other class but 2 refuses [M :49-51], as does
+    /// a running blend-out `+0x538` [M :52-54]; under 2.0 the shot is ready [M :55-57]; else the gun
+    /// within 20° of the target, 30° in mode 0xD [M :124-127 `0.34906587` / `0.5235988`]. The game
+    /// compares the gun bone's 3D direction; the port compares the aimed yaw.
     fn ready_to_fire(&self) -> bool {
+        if self.anim.class == 4 { return true; }
         if self.anim.class != 2 { return false; }
+        if !self.anim.outgoing.is_empty() { return false; }
         if self.dist < 2.0 { return true; }
-        angle_difference(self.yaw + self.aim_yaw, self.yaw_to_opp).abs() < 0.349
+        let tol = if self.mode == 0xd { 0.523_598_8 } else { 0.349_065_87 };
+        angle_difference(self.yaw + self.aim_yaw, self.yaw_to_opp).abs() < tol
     }
 
     /// `DroneWeap_HandleFiring` → `DoFiring` → `FireWeapon`.
-    fn handle_firing(&mut self, d: &Data, rng: &mut Rng, frame: u32, p: &Player, motion: (bool, bool), owner: usize, lights: &mut crate::light::LightList) -> Option<crate::bullet::Bullet> {
-        if !self.firing { return None; }
+    fn handle_firing(&mut self, d: &Data, rng: &mut Rng, frame: u32, p: &Player, motion: Motion, owner: usize, lights: &mut crate::light::LightList) -> Vec<crate::bullet::Bullet> {
+        if !self.firing { return Vec::new(); }
         self.burst_done = false;
         let mut more = false;
-        let mut bullet = None;
+        let mut bullet = Vec::new();
         if self.burst == 0 { self.next_bullet_time(d, rng, frame, true); }
         if self.unseen_ticks < 0x10 || self.prop(d, 0x17) {
             more = true;
@@ -10687,7 +10695,7 @@ impl Drone {
                     if id != 0x5ef && id != 0 { self.anim_sounds.push(id); }
                 }
                 self.shots.push(frame);
-                self.shot_aims.push((frame, bullet.as_ref().map(|b| b.pos).unwrap_or(self.muzzle(d)), self.opp_target));
+                self.shot_aims.push((frame, bullet.first().map(|b| b.pos).unwrap_or(self.muzzle(d)), self.opp_target));
                 self.last_shot = frame;
                 self.clip -= 1;
                 self.burst -= 1;
@@ -10774,7 +10782,7 @@ impl Drone {
 
     /// `DroneWeap_FireWeapon` + `DoBulletAccuracy`: hit roll, the miss wobble, the cone (`Bullet_init`), damage
     /// (`Drone_ModBulletDamage`: the ×2 under TooClose lands at the hit site, × `+0x100` here).
-    fn fire_weapon(&mut self, d: &Data, rng: &mut Rng, frame: u32, p: &Player, (moving, first_moved): (bool, bool), owner: usize, lights: &mut crate::light::LightList) -> Option<crate::bullet::Bullet> {
+    fn fire_weapon(&mut self, d: &Data, rng: &mut Rng, frame: u32, _p: &Player, m: Motion, owner: usize, lights: &mut crate::light::LightList) -> Vec<crate::bullet::Bullet> {
         // `DroneWeap_FireWeapon` 0x178f68:92-145: before any accuracy draw, the mounted-minigun
         // deploy branch — the guard's weapon datum char (BOT_vars+0x768) == 'R', combat state
         // type 4, weapon id not 0xdd/0xde, `AmmoInGun >= 1`, not `tooCloseForWeapon` (+0x170
@@ -10785,25 +10793,18 @@ impl Drone {
         // branch cannot select here; the deploy position math is ported
         // (`crate::gt::deploy_position`, unit-tested) and the turret record it creates is
         // `crate::gt::GTurret` (the minigun glist 0x2000359, the Collide_PlaceObject radii).
-        let w = d.weapons.records.get(self.weapon as usize)?;
+        let Some(w) = d.weapons.records.get(self.weapon as usize) else { return Vec::new() };
         let f32_at = |o: usize| f32::from_le_bytes(w[o..o + 4].try_into().unwrap());
-        // Hit chance: p = 100 − 5·accuracy, ×2 under TooClose ([0x30cb14] — `close_threshold`), ×0.25
-        // first moved, ×0.75 moving, × level difficulty accuracy (07000005–08: 0.8 / 0.9 / 1.3;
-        // difficulty 1 as read live), ×2 again under TooClose. The hard always-hit cut is a separate
-        // literal 3.0 [M 0x179914-0x17992c].
-        let mut pct = 100.0 - 5.0 * self.accuracy as f32;
-        let close = self.dist < close_threshold(d.level);
-        if close { pct *= 2.0 }
-        if first_moved { pct *= 0.25 }
-        if moving { pct *= 0.75 }
-        pct *= level_accuracy(d.level, d.difficulty);
-        if close { pct *= 2.0 }
+        let pct = hit_chance(d.tuning, d.level, d.difficulty, self.accuracy, self.dist, m, self.anim_set);
+        let close = self.dist < d.tuning.DroneFiring_TooClose_Distance;
         let mut hit = rng.frand(100.0) < pct;
         // The raw roll, exposed for the tests (see `shot_rolls`): the model quantity is the
         // roll itself, not the bullet's landing — a rolled miss still flies the wobble-offset
         // bullet and can clip Bond's bounds.
         self.shot_rolls.push(hit);
-        if !close { hit &= self.seen_ticks >= 120 && !self.lost_sight; }
+        // Beyond TooClose the hit also needs `+0x270 ≥ fptoui(NewSighting_TimeToHit · FRAME_RATE)`
+        // (2.0 · 60 = 120 on every campaign group) and `+0x41 == 0` [M 0x179740:93-99].
+        if !close { hit &= self.seen_ticks >= (d.tuning.DroneFiring_NewSighting_TimeToHit * 60.0) as u32 && !self.lost_sight; }
         if self.dist < 3.0 { hit = true; }
         self.lost_sight = false;
         // Miss: deterministic wobble (0.5 sin a, 1.5 sin(a + π/2), 1.5 sin 0.02t), a = 0.01t, t = frame + obj+0xEC,
@@ -10831,7 +10832,6 @@ impl Drone {
         // A live check settles the object-create side with gdbwatch.
         let aim = [self.opp_target[0] + off[0] - muzzle[0], self.opp_target[1] + off[1] - muzzle[1], self.opp_target[2] + off[2] - muzzle[2]];
         let flags68 = u32::from_le_bytes(w[0x68..0x6c].try_into().unwrap());
-        let dir = crate::bullet::spread(aim, f32_at(0x24), flags68, rng);
         // The raw damage: weapon_data+0x0C. `Drone+0x100` (the ×mul) is applied at HIT time by
         // `Drone_ModBulletDamage` — weapons 0x63-0x66 skip EVERY modifier there (0x139f98-0x139fa8),
         // so they must not carry the multiplier in the bullet either.
@@ -10843,10 +10843,16 @@ impl Drone {
         // does not feed the sim's RNG; consuming it here shifted every later sim draw off the
         // live-calibrated stream (two test failures). Open: whether the game's sim stream
         // really carries it is not yet confirmed live.
-        let mut b = crate::bullet::Bullet { pos: muzzle, dir, speed: f32_at(0x20), travelled: 0.0, range: f32_at(0x1c), damage, owner, state: 0,
-            weapon: self.weapon as u16, flyby: d.weapons.flyby(self.weapon as usize), bounces: 0, ..crate::bullet::Bullet::TAIL };
-        b.init_fuse(w);
-        Some(b)
+        // `weapon_data+0x18` rounds per shot, each its own `Bullet_init` (its own cone draws) along the
+        // same aim [M 0x178f68:233-241 — the loop runs while i < (u8)weapon_data[+0x18], none for 0];
+        // the shotgun records 0x1C / 0x1D carry 8 [D weapon_data 0x2bf150 +0x18].
+        (0..w[0x18]).map(|_| {
+            let dir = crate::bullet::spread(aim, f32_at(0x24), flags68, rng);
+            let mut b = crate::bullet::Bullet { pos: muzzle, dir, speed: f32_at(0x20), travelled: 0.0, range: f32_at(0x1c), damage, owner, state: 0,
+                weapon: self.weapon as u16, flyby: d.weapons.flyby(self.weapon as usize), bounces: 0, ..crate::bullet::Bullet::TAIL };
+            b.init_fuse(w);
+            b
+        }).collect()
     }
 
     // ---- per tick -----------------------------------------------------------------------------------------------
@@ -11392,34 +11398,55 @@ pub fn level_drones(d: &Data, level: &nf_formats::level::Level, rng: &mut Rng, l
     }).collect()
 }
 
-/// Per-level accuracy factors by difficulty (`ReadTuningVars` 0x1d3a80). The difficulty itself is
-/// `Drones::difficulty` — `GameState+0x28` (0x2a3790): BOTH the accuracy switch (`DroneWeap_DoBulletAccuracy`
-/// 0x179848: `lw a0,40(v0)` off GameState 0x2a3768) and the pain switch (`Player_HandlePain` 0x19040c) read
-/// +0x28, and the difficulty page writes it there (`C_SBNFDFCTY_Handler` 0x216dc4: `sw v0,0x3790(t0)`);
-/// the snapshot has +0x28 = 1 at 07000005 start while the scored +0x40 (0x2a37a8) = 0 [L ee_start_05.bin].
-pub fn level_accuracy(level: u32, difficulty: u32) -> f32 {
-    let (e, n, h) = match level & 0xff {
-        0x01..=0x04 | 0x14..=0x16 => (0.5, 0.7, 1.0),
-        0x05..=0x08 => (0.8, 0.9, 1.3),
-        0x09..=0x0b => (0.8, 1.0, 1.0),
-        0x0c | 0x0d | 0x1b => (0.6, 0.8, 1.2),
-        0x11..=0x13 | 0x4a => (0.7, 0.8, 1.0),
-        0x21..=0x29 | 0x4b | 0x4c => (0.8, 1.0, 1.5),
-        _ => (0.5, 1.0, 2.0),
+/// Bond's motion as the firing drones read it (`DroneWeap_DoOpponentTargetting` 0x179a48): `moving` =
+/// `+0x1DC` (the opponent's horizontal velocity is non-zero [M :31-37]); `first_moved` = `+0x1DD`, set when
+/// he starts moving and cleared once `stamp + fptoui(TargetFirstMoved_TimeToHit · FRAME_RATE) < now`
+/// [M :54-63]; `first_stopped` = `+0x1DF`, the same for the stop with `TargetFirstStopped_TimeToHit`
+/// [M :41-52]. Both share the `+0x224` stamp.
+#[derive(Clone, Copy, Debug, Default, PartialEq)]
+pub struct Motion { pub moving: bool, pub first_moved: bool, pub first_stopped: bool }
+
+/// `DroneWeap_DoBulletAccuracy` 0x179740's hit percentage (compared against `Rand_FRand(100)`), every
+/// factor from the level's tuning globals (`ReadTuningVars` 0x1d3a80, `d.tuning`):
+/// `p = 100 − 5·accuracy` (`+0xB4`) [M :48]; × `TooClose_Accuracy` when `dist < TooClose_Distance` [M :49-51];
+/// × `TargetFirstMoved_Accuracy` (`+0x1DD`) [M :52-54]; × `TargetFirstStopped_Accuracy` (`+0x1DF`) only on
+/// 0x0700000C/0x0700000D for the anim set `+0xDA` 0x13 [M :55-70]; × `TargetMoving_Accuracy` (`+0x1DC`)
+/// [M :71-73]; × the difficulty factor on `GameState+0x28` — 1 Easy, 3/4 Hard, 0/2/≥5 Normal [M :74-88];
+/// × `TooClose_Accuracy` again [M :90-92].
+pub fn hit_chance(t: &nf_formats::tuning::Tuning, level: u32, difficulty: u32, accuracy: u8, dist: f32, m: Motion, anim_set: u16) -> f32 {
+    let close = dist < t.DroneFiring_TooClose_Distance;
+    let mut p = 100.0 - accuracy as f32 * 5.0;
+    if close { p *= t.DroneFiring_TooClose_Accuracy; }
+    if m.first_moved { p *= t.DroneFiring_TargetFirstMoved_Accuracy; }
+    if m.first_stopped && (0x0700_000c..0x0700_000e).contains(&level) && anim_set == 0x13 {
+        p *= t.DroneFiring_TargetFirstStopped_Accuracy;
+    }
+    if m.moving { p *= t.DroneFiring_TargetMoving_Accuracy; }
+    p *= match difficulty {
+        1 => t.DroneFiring_Accuracy_Easy,
+        3 | 4 => t.DroneFiring_Accuracy_Hard,
+        _ => t.DroneFiring_Accuracy_Normal,
     };
-    match difficulty { 1 => e, 3 | 4 => h, _ => n }
+    if close { p *= t.DroneFiring_TooClose_Accuracy; }
+    p
 }
 
-/// The "too close" tuning variable `DroneAcc_TooClose` (0x30cb14, written per level group by
-/// `ReadTuningVars`): the threshold for the ×2 accuracy bonus and the ×2 hit damage
-/// (`Drone_ModBulletDamage` 0x139fb4: `c.4.s f1, [0x30cb14]`). The groups write 3.0 (01–1B campaign
-/// groups + 4A); 21–29+4B+4C write 4.0; every unlisted level keeps the ELF static 4.0. NOT the 4.0
-/// the port hardcoded before — on 07000005 the game's threshold is 3.0 [L ee_start_05.bin: 3.0].
-pub fn close_threshold(level: u32) -> f32 {
-    match level & 0xff {
-        0x01..=0x0d | 0x11..=0x16 | 0x1b | 0x4a => 3.0,
-        _ => 4.0,
+/// `Drone_ModBulletDamage` 0x139f50 on a drone round hitting Bond, from the raw `weapon_data+0x0C`
+/// (the bullet already carries `× Drone+0x100`): `Drone+0xD8 == 0xC` → 0 [M :14-16]; weapons 0x63–0x66
+/// untouched [M :17-20]; × `TooClose_Damage` when the shooter's `+0x1A0 < TooClose_Distance` [M :21-23];
+/// × `PlayerBackShot_Damage` when the shooter's mode `+0xC5` is neither 2 nor 0x19, its anim set `+0xDA`
+/// is 0x12 (NOT the weapon id), the level is not 0x0700001B, and the bullet's travel yaw is within
+/// 90° of Bond's facing (obj+0x54) [M :24-48].
+pub fn player_hit_damage(t: &nf_formats::tuning::Tuning, level: u32, raw: f32, weapon: u16, voice_type: u16, shooter_dist: f32, mode: u8, anim_set: u16, bullet_yaw: f32, bond_yaw: f32) -> f32 {
+    if raw == 0.0 || voice_type == 0xc { return 0.0; }
+    if (0x63..=0x66).contains(&(weapon as u32)) { return raw; }
+    let mut dmg = raw;
+    if shooter_dist < t.DroneFiring_TooClose_Distance { dmg *= t.DroneFiring_TooClose_Damage; }
+    if mode != 2 && mode != 0x19 && anim_set == 0x12 && level != 0x0700_001b
+        && angle_difference(bullet_yaw, bond_yaw).abs() < 1.570_796_4 {
+        dmg *= t.DroneFiring_PlayerBackShot_Damage;
     }
+    dmg
 }
 
 /// All drones of a level plus the round-robin line-of-sight cursor.
@@ -11517,6 +11544,8 @@ pub struct Drones {
     /// Bond's previous position and the tick he started moving (`DoOpponentTargetting` +0x1DC / +0x1DD).
     prev_player: Option<V3>,
     moved_since: Option<u32>,
+    /// The tick Bond stopped (`+0x1DF`'s stamp, `DoOpponentTargetting` 0x179a48:41-52).
+    stopped_since: Option<u32>,
     /// The player as an AI target and this frame's link used-counts per path.
     pub target: PlayerTarget,
     used: Vec<Vec<u16>>,
@@ -12222,7 +12251,7 @@ impl Drones {
             if let Some(g) = &mut dr.body_glow { g.owner = i; }
         }
         let llist = (0..list.len()).collect();
-        let mut drones = Drones { list, frame: 0, los_cursor: 0, llist, rng, lights: Default::default(), player_pos: [0.0; 3], bullets: Vec::new(), grenades: Vec::new(), explosions: Vec::new(), shake: 0.0, health: Default::default(), player_hits: Vec::new(), impacts: Vec::new(), prev_player: None, moved_since: None, target: PlayerTarget::default(), used: Vec::new(), link_flags: Vec::new(), locked_door_nodes: Default::default(), channels: Default::default(), triggers: Vec::new(), spawners: Vec::new(), cover_rt: Vec::new(), sounds: Vec::new(), cover_cursor: 0, cover_counter: 0, player_bullets: Vec::new(), net_no_self_hurt: false, player_impacts: Vec::new(), last_flinch: None, bond_aiming: false, level_exit: None, mission_end: None, bond_weapon: 2, env: None, sun_vector: [0.0; 3], env_pending: None, mp_master: 0, fill_rng: Rng::new(0x5eed), last_alarm: None, alarm_sent: false, party_loud: false, iop_section: 0, hud_frozen: false, aim_target: None, aim_offset: [0.0; 2],
+        let mut drones = Drones { list, frame: 0, los_cursor: 0, llist, rng, lights: Default::default(), player_pos: [0.0; 3], bullets: Vec::new(), grenades: Vec::new(), explosions: Vec::new(), shake: 0.0, health: Default::default(), player_hits: Vec::new(), impacts: Vec::new(), prev_player: None, moved_since: None, stopped_since: None, target: PlayerTarget::default(), used: Vec::new(), link_flags: Vec::new(), locked_door_nodes: Default::default(), channels: Default::default(), triggers: Vec::new(), spawners: Vec::new(), cover_rt: Vec::new(), sounds: Vec::new(), cover_cursor: 0, cover_counter: 0, player_bullets: Vec::new(), net_no_self_hurt: false, player_impacts: Vec::new(), last_flinch: None, bond_aiming: false, level_exit: None, mission_end: None, bond_weapon: 2, env: None, sun_vector: [0.0; 3], env_pending: None, mp_master: 0, fill_rng: Rng::new(0x5eed), last_alarm: None, alarm_sent: false, party_loud: false, iop_section: 0, hud_frozen: false, aim_target: None, aim_offset: [0.0; 2],
             // The game's `DAT_00299092` (the shared LOS-probe counter; see the field) — zeroed
             // here as `Drone_LevelReset`'s memset zeroes it at level reset [M 0x13a5bc-cc].
             los_probes: 0,
@@ -16914,11 +16943,20 @@ fn segment_hits_sphere(a: V3, b: V3, c: V3, r: f32) -> bool {
             }
         }
         } // end `NPCGlobals` shared-pass block
-        // Bond's motion (`DroneWeap_DoOpponentTargetting`): moving, and "first moved" for 2 s after he starts.
+        // Bond's motion (`DroneWeap_DoOpponentTargetting` 0x179a48): moving, "first moved" from the start
+        // of a move and "first stopped" from the start of a stop, each until `stamp + fptoui(T · 60) < now`
+        // (the strict compare keeps the flag on the boundary tick) [M :41-63]; T = the level's
+        // TargetFirstMoved / TargetFirstStopped_TimeToHit (2.0 s; 1.0 s for the stop on 0C/0D).
         let moving = self.prev_player.is_some_and(|q| (q[0] - player.pos[0]).abs() + (q[2] - player.pos[2]).abs() > 1e-4);
-        if moving && self.moved_since.is_none() { self.moved_since = Some(frame) }
-        if !moving { self.moved_since = None }
-        let first_moved = self.moved_since.is_some_and(|f| frame < f + 120);
+        if moving { self.stopped_since = None; if self.moved_since.is_none() { self.moved_since = Some(frame) } }
+        else { self.moved_since = None; if self.stopped_since.is_none() { self.stopped_since = Some(frame) } }
+        let t_moved = (d.tuning.DroneFiring_TargetFirstMoved_TimeToHit * 60.0) as u32;
+        let t_stopped = (d.tuning.DroneFiring_TargetFirstStopped_TimeToHit * 60.0) as u32;
+        let motion = Motion {
+            moving,
+            first_moved: self.moved_since.is_some_and(|f| frame <= f + t_moved),
+            first_stopped: self.stopped_since.is_some_and(|f| frame <= f + t_stopped),
+        };
         self.prev_player = Some(player.pos);
         // `NDrone2_NavNodeCache` / `BuildAITarget`: the player's goal nodes per navigation path, rebuilt when he has
         // moved 2.0 or more (search radius 6 = min(engage range, 6) for these guards); `AINetwork_ClearLinkFlags`.
@@ -18331,7 +18369,7 @@ fn segment_hits_sphere(a: V3, b: V3, c: V3, r: f32) -> bool {
                 dr.head_yaw = rotate_to_bearing(dr.head_yaw, 0.0, 0.07, crate::trig::PI);
                 dr.head_pitch = rotate_to_bearing(dr.head_pitch, 0.0, 0.07, crate::trig::PI);
             }
-            if !dr.corpse { let _pf = crate::prof::scope("drone: handle_firing"); let b = { let lights = &mut self.lights; dr.handle_firing(d, rng, frame, player, (moving, first_moved), index, lights) }; if let Some(b) = b {
+            if !dr.corpse { let _pf = crate::prof::scope("drone: handle_firing"); let bs = { let lights = &mut self.lights; dr.handle_firing(d, rng, frame, player, motion, index, lights) }; if let Some(b) = bs.first().cloned() {
                 // `DroneWeap_FireWeapon` 0x178f68:264 → `Bullet_init_casing`: the guard's shell eject.
                 // The basis is the game's guard arm of `Bullet_init_casing_ex` 0x12f678:102-114: the
                 // weapon datum's bone world matrix (datum base+2 when the skin carries the eject port,
@@ -18354,8 +18392,8 @@ fn segment_hits_sphere(a: V3, b: V3, c: V3, r: f32) -> bool {
                     // it each expiry tick, as the game re-poses.
                     self.casings.reserve(&d.surfaces.map(|s| &s.ammo).unwrap_or(&Default::default()), w, Some(index));
                 }
-                self.bullets.push(b);
-            } }
+                let _ = b;
+            } self.bullets.extend(bs); }
             // `ControlSTANDARD`'s door check (0x1490f0:232-248): a door standing in +0xBA8, 60 ticks
             // after the last attempt (+0xBB0 + 60 < GameState): beyond 2.0 (Vec_Dist3D of the obj
             // positions) the drone forgets it; else `NDrone2_DoorIsOpen` false → `NDrone2_OpenDoor`.
@@ -18837,27 +18875,19 @@ fn segment_hits_sphere(a: V3, b: V3, c: V3, r: f32) -> bool {
                         // 2. weapons 0x63-0x66 return the raw damage untouched [M 0x139f98-0x139fa8];
                         // 3. `Drone+0x1A0` (the shooter's tracked distance) < the level's TooClose
                         //    [0x30cb14] → ×[0x30cb1c] `DroneFiring_TooClose_Damage` (2.0)
-                        //    [M 0x139fac-0x139fc8] — `close_threshold`;
+                        //    [M 0x139fac-0x139fc8] — `player_hit_damage`;
                         // 4. ×`Drone+0x100` [M 0x139fcc-0x139fdc] (the bullet already carries it);
                         // 5. the BACKSHOT ×[0x30cb20] `DroneFiring_PlayerBackShot_Damage` (2.0)
                         //    [M 0x139fd4-0x13a080]: the shooter's mode (+0xC5) is neither 2 nor 0x19,
-                        //    its weapon (+0xDA) is 0x12, the level is not 0x700001b, and the angle
+                        //    its ANIM SET (+0xDA, `anim_set` — not the weapon id) is 0x12, the level is not 0x700001b, and the angle
                         //    between the bullet's travel yaw (ATAN2 of HITDATA+0x30/+0x38) and Bond's
                         //    facing (obj+0x54) is under 1.5707964 — the shot into his back.
                         // No distance falloff anywhere in the chain [M 0x19455c-0x194588:
                         // `HIT+8 + Hurt_GetDamage`; the only distance term is this binary TooClose ×2].
                         let mut damage = damage;
-                        let special_weapon = (0x63..=0x66).contains(&(b.weapon as u32));
                         if let Some(sh) = self.list.get(b.owner).filter(|x| x.present) {
-                            if sh.voice_type == 0xC { damage = 0.0; }
-                            else if !special_weapon {
-                                if sh.dist < close_threshold(d.level) { damage *= 2.0; }
-                                if b.weapon as u32 == 0x12 && sh.mode != 2 && sh.mode != 0x19 && d.level != 0x700001b {
-                                    let bullet_yaw = atan2_approx(b.dir[0], b.dir[2]);
-                                    let bond_yaw = atan2_approx(player.aim[0], player.aim[2]);
-                                    if angle_difference(bullet_yaw, bond_yaw).abs() < 1.5707964 { damage *= 2.0; }
-                                }
-                            }
+                            damage = player_hit_damage(d.tuning, d.level, damage, b.weapon, sh.voice_type, sh.dist, sh.mode, sh.anim_set,
+                                atan2_approx(b.dir[0], b.dir[2]), atan2_approx(player.aim[0], player.aim[2]));
                         }
                         // `Player_DealWithObjHit` 0x194458:201-226: the direction bits from the ATTACKER's position
                         // (HITDATA+0x30 = the shooter) in the viewer's frame.
