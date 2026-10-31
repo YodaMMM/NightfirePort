@@ -31,7 +31,8 @@ fn night_sight_pane_rows() {
         (0x007f_00ff, 31, 0x0100, 108, 48, 0, 0, [0, 0, 0, 0], 0x0300_017e),
     ];
     for (k, w) in want.iter().enumerate() { assert_eq!(row(&t.nightsight[k]), *w, "NightSightSprInfo[{k}]"); }
-    // The port's jitter range constant reads sprite 0's v extent.
+    // Sprite 0's v extent is 255 — NOT the jitter range: the pane rolls v under the runtime
+    // +0x2a word, the texture's height (64), not the template's dv [M 0x1ca3d8, 0x1de3d8].
     assert_eq!(t.nightsight[0].uv[3], 255);
     // Sister (can fail): sprite 2 is the SUBTRACTIVE one (0x200), not additive.
     assert_ne!(t.nightsight[2].flags & 0x200, 0);

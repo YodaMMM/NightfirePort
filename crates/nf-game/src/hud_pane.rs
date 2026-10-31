@@ -449,9 +449,10 @@ pub struct NightPaneOut {
 impl GogglePanes {
     /// `HUD_UpdateNightSightPane` 0x19d218, one frame. `enable` is the pane's +0x1c byte
     /// (`MonitorNightSight::night_pane_on`); a mode other than 1 clears it and draws nothing
-    /// [M :33-36, :66-68]. `sprite_h` is sprite 0's height word the jitter range reads (rt+0x2a;
-    /// the port passes the template's v extent, the redeemer pane's idiom — [S] the exact
-    /// runtime word). `mp` skips the light [M :48].
+    /// [M :33-36, :66-68]. `sprite_h` is sprite 0's height word the jitter range reads: rt+0x2a,
+    /// the TEXTURE's height — `hashtable_set_sprite` 0x1ca3d8 writes +0x28/+0x2a from the texture
+    /// record, and `Sprite_Create2` 0x1de3d8 puts the template's h/dv at +0x2e/+0x36, never at
+    /// +0x2a [M]. `mp` skips the light [M :48].
     pub fn night_update(&mut self, enable: &mut bool, mode: u16, battery: f32, sprite_h: u16, mp: bool, rng: &mut crate::drone::Rng) -> NightPaneOut {
         let mut out = NightPaneOut::default();
         if !*enable { return out; }
@@ -789,27 +790,28 @@ mod goggle_pane_tests {
         let mut p = GogglePanes::default();
         let mut rng = Rng::new(7);
         let mut on = true;
-        let out = p.night_update(&mut on, 1, 1800.0, 255, false, &mut rng);
+        let out = p.night_update(&mut on, 1, 1800.0, 64, false, &mut rng);
         assert!(on && out.light);
         assert_eq!(p.night_colour >> 8, 0x00ff00, "0x00ff00AA: green, alpha 7..30");
         assert!((7..7 + 0x18).contains(&(p.night_colour & 0xff)));
         assert_eq!(p.night_bar, Some(228));
         assert_eq!(rng.draws, 1, "parity 0: tint only");
-        p.night_update(&mut on, 1, 900.0, 255, false, &mut rng);
+        p.night_update(&mut on, 1, 900.0, 64, false, &mut rng);
         assert_eq!(rng.draws, 3, "parity 1: tint + the v jitter");
-        assert!(p.night_v < 254);
+        // Rand(texH - 1): the 64-tall noise texture rolls v in 0..=62 [M 0x19d218:43-47; rt+0x2a].
+        assert!(p.night_v < 63);
         assert_eq!(p.night_bar, Some(128));
         // MP: no light, the bar still written [M :48].
-        let out = p.night_update(&mut on, 1, 0.0, 255, true, &mut rng);
+        let out = p.night_update(&mut on, 1, 0.0, 64, true, &mut rng);
         assert!(!out.light);
         assert_eq!(p.night_bar, Some(28));
         // Sister (can fail): any other mode clears the enable and draws nothing.
         let before = rng.draws;
-        let out = p.night_update(&mut on, 2, 1800.0, 255, false, &mut rng);
+        let out = p.night_update(&mut on, 2, 1800.0, 64, false, &mut rng);
         assert!(!on && !out.light);
         assert_eq!(rng.draws, before);
         // A disabled pane does nothing at all, mode 1 included.
-        let out = p.night_update(&mut on, 1, 1800.0, 255, false, &mut rng);
+        let out = p.night_update(&mut on, 1, 1800.0, 64, false, &mut rng);
         assert!(!out.light);
         assert_eq!(rng.draws, before);
     }

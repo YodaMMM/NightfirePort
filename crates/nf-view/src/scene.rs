@@ -823,9 +823,13 @@ impl Msg {
 }
 
 /// The night pane's sprite-0 height word the scanline jitter rolls under (`Rand(h − 1)`
-/// [M HUD_UpdateNightSightPane 0x19d218:43-47]): the template's v extent, 255 [D
-/// NightSightSprInfo[0] uv (0, 0, 127, 255); nf-formats tests/goggles_panes.rs pins it].
-pub const GOGGLE_NIGHT_SPRITE0_H: u16 = 255;
+/// [M HUD_UpdateNightSightPane 0x19d218:43-47]): the runtime sprite's +0x2a, which is the
+/// texture's height — `hashtable_set_sprite` 0x1ca3d8 copies the texture record's width/height
+/// to +0x28/+0x2a, and `Sprite_Create2` 0x1de3d8 puts the template's h at +0x2e and dv at +0x36
+/// [M]. Sprite 0's texture 0x0300004A is 64×64 [D every SP archive; nf-view
+/// tests/goggles_render_live.rs pins it], so the v jitter is `Rand(63)`, not the template's v
+/// extent (255).
+pub const GOGGLE_NIGHT_SPRITE0_H: u16 = 64;
 
 /// The HUD state the port keeps in Sim (the game keeps it in BLData / the TXTMSG list / pane structs).
 #[derive(Clone, Debug, Default)]

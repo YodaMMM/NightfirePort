@@ -55,7 +55,8 @@ While the held weapon's id byte (`player+0xDC` weapon block +0x62) is 0x5D (']')
 ## The input path — the goggles key [M :74-152]
 
 `Input_Action(player, 0xD, 4)` — action 13, the press edge (pad: style-table action 13, e.g.
-L2 in style 0 / d-pad-right in styles 2-3 [D styles_gen]; keyboard: N, the port's bind).
+L2 in style 0 / d-pad-right in styles 2-3 [D styles_gen]; keyboard: V, the port's bind — the
+pause CONTROLS tab lists it under the game's own label 0x10001b3 "Vision Mode" [D USATxt.dat]).
 
 - action 0 or the aim bit set (`weapon+0x60 & 1` — the aim-mode bit, action 19's toggle [M
   `Player_Weapon` 0x1a24c8:47-67]; `Player_WeaponChange` refuses switches while it is up) →
@@ -116,14 +117,14 @@ drawing an unowned 0x5D) is **open** — see the live checks below.
 | weapon block +0x62 / +0x63 / +0x64 | `gun.weapon` / `gun.switch_request` / `gun.saved_weapon` (now written at every switch start) |
 | view-model anim +0xF4 | `gun.switch_state != 0 \|\| gun.fire_state \|\| gun.reload_state != 0` |
 | weapon+0x60 bit 0 | `self.aiming` |
-| `Input_Action(p, 0xd, 4)` | `Input::goggles_action` (pad action 13 edge via `PadDriver::tick`'s `mask_of`; no keyboard key — the disc grants the goggles nowhere) — stashed to `HudState::goggles_press` in `step_bond`, consumed in `hud_tick` |
+| `Input_Action(p, 0xd, 4)` | `Input::goggles_action` (pad action 13 edge via `PadDriver::tick`'s `mask_of`, ORed in by the gamepad merge; the keyboard's V press edge in lib.rs) — stashed to `HudState::goggles_press` in `step_bond`, consumed in `hud_tick` |
 | `Player_SetCamMode`/`Camera_Reset` clears | the `nis::Request::PlayerDisable` arm clears mode + pane enables |
 
 Not net-encoded (the `stabilise` precedent — the wire has no lane; MP is gated anyway [M :28]).
 
 Port behaviour today: the switch machine applies the 0x5D request like any other (no owned
 check, matching the decompile), so the pad's action-13 key arms night sight on every on-foot
-SP level. The keyboard has no bind (unchanged decision, lib.rs).
+SP level, and so does the keyboard's V (the same press edge).
 
 ## Sounds
 
@@ -140,7 +141,10 @@ All gated on viewer+0x236 (`Sim::goggle_mode()`); the panes additionally on thei
 - Pane 7 (`NightSightSprInfo` 0x2bd7b0, 6 sprites [D; nf-formats tests/goggles_panes.rs]):
   sprite 0 = the 64×64 noise 0x0300004A over 512×448, additive, colour word
   `(Rand(0x18)+7) | 0xff0000` (green, alpha 7..30) and v = `Rand(h−1)` on every other frame
-  (`Scrl_247` parity); sprite 1 = 0x03000002 white 0xffffff7f additive; sprite 2 = 0x03000002
+  (`Scrl_247` parity) — h is the runtime sprite's +0x2a, the TEXTURE's height (64):
+  `hashtable_set_sprite` 0x1ca3d8 writes +0x28/+0x2a from the texture record and
+  `Sprite_Create2` 0x1de3d8 puts the template's h/dv at +0x2e/+0x36 [M], so v ∈ 0..62 (not
+  the template's dv, 255); sprite 1 = 0x03000002 white 0xffffff7f additive; sprite 2 = 0x03000002
   magenta 0xff00ffff SUBTRACTIVE (flags 0x200) — red and blue out: the green image; sprites
   3/4/5 = the battery bar back (0x0300017F row 0), the bar (row 16) at width/uv-width
   `max(1, (int)(battery/1800·200 + 28))`, the icon 0x0300017E at (108, 48)
@@ -193,6 +197,29 @@ All gated on viewer+0x236 (`Sim::goggle_mode()`); the panes additionally on thei
 
 Render aid: `nf-view <iso> <level> --frame N --goggles 1|2 --shot out.png` presses the real
 goggles key in the shot's second half until the mode reads 1/2.
+
+## How bright night sight is (the overlay's arithmetic)
+
+The pane's draw state, all [M `psiDrawSprites` 0x120e68 + `FillSpriteData` 0x120cf8]:
+TEX0 TCC 1 / TFX 0 (MODULATE: Cs = min(Ct·Cv/0x80, 0xff), As = At·Av/0x80); RGBAQ alpha =
+the colour's A >> 1; ALPHA_1 0x48 for flag 0x100, 0x42 for 0x200, 0x44 otherwise; TEST_1 0xd
+and ZBUF ZMSK (no Z test, no Z write — `psiStartSprites` 0x1213d8). The white add (sprite 1,
+0xffffff7f over the 32×32 all-0xff texture 0x03000002 [D]) therefore adds Cs·As = 255·0x3f/0x80
+≈ +0.49 of full scale to every channel, the magenta subtract removes 255·0x7f/0x80 from red and
+blue, and the noise adds ≤ 15/128 of its texel. The display copy then scales the whole frame by
+`SqueezeColourIn`/0x80 = 1.133 (`CreateSqueezeFrame` 0x11b140, built by the next frame's
+`psiPreDraw` 0x121590 — after the HUD), so the green channel is lifted by ≈ 0.56 everywhere.
+
+Measured in the port (07000005 level start, same state with mode 0 and mode 1): the far field
+(sky, castle wall) lands on that prediction from the mode-0 frame (sky G 0.214 → 0.718, the GS
+equations predict 0.771; wall 0.125 → 0.633 vs 0.683 — the remaining gap was the gain applied
+before the clamp, fixed by `gpu.rs` `fs_ps2`). The near field is brighter than the overlay alone
+explains (foreground snow G 0.219 → 1.0 vs 0.776 predicted): that is the night lamp
+(`Light_Create(32.0, 2.5, eye)`, TColor 255·2.5 with 1/r² = 1/1024 through the point-light
+formula — within a few metres the add reaches the vertex colour's byte clamp). So a bright or
+lit scene saturates the green channel under night sight by the game's own arithmetic; the
+port-side open question is only whether the lamp's reach on the world cels matches the PS2,
+which needs a PCSX2 frame at the same spot.
 
 ## Tests
 

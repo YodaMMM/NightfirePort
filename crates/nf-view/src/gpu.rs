@@ -198,6 +198,21 @@ struct HO { @builtin(position) p: vec4<f32>, @location(0) uv: vec2<f32>, @locati
     let t = textureSample(tex, samp, i.uv);
     return vec4<f32>(min(t.rgb * i.c.rgb * 1.1328125, vec3<f32>(1.0)), min(t.a * i.c.a, 1.0));
 }
+// The game's HUD sprites (`View_DrawSprites` 0x1e5290 → `psiDrawSprites` 0x120e68 → `FillSpriteData`
+// 0x120cf8). The GS order: the texture function MODULATE clamps Cs = min(Ct·Cv/0x80, 0xff) and
+// As = At·Av/0x80 (TEX0 TCC 1, TFX 0); the ALPHA_1 equation blends into the frame (0x44 / 0x48 /
+// 0x42) and COLCLAMP clamps the sum; the display copy's gain (`SqueezeColourIn` / 0x80,
+// `CreateSqueezeFrame` 0x11b140 built by the NEXT frame's `psiPreDraw` 0x121590) then scales the
+// finished frame — the HUD included, AFTER the blend. The frame target here already holds
+// gain·Cd, so the sprite's term is gain·Cs·As: emitted premultiplied (rgb = Cs·As·gain) for the
+// One-factor pipelines. Equal to the GS result wherever it is below 1.0; where gain·Cs·As ≥ 1 the
+// target's own clamp gives the same 1.0 (or 0.0 for the subtract).
+@fragment fn fs_ps2(i: HO) -> @location(0) vec4<f32> {
+    if (i.uv.x < 0.0) { let a = clamp(i.c.a, 0.0, 1.0); return vec4<f32>(min(i.c.rgb, vec3<f32>(1.0)) * a * 1.1328125, a); }
+    let t = textureSample(tex, samp, i.uv);
+    let a = min(t.a * i.c.a, 1.0);
+    return vec4<f32>(min(t.rgb * i.c.rgb, vec3<f32>(1.0)) * a * 1.1328125, a);
+}
 "#;
 
 /// One overlay vertex: NDC position (x right, y up) and RGBA (0–1).
@@ -536,7 +551,7 @@ impl Renderer {
         };
         let hud_shader = device.create_shader_module(wgpu::ShaderModuleDescriptor { label: Some("nf-view hud"), source: wgpu::ShaderSource::Wgsl(HUD_SHADER.into()) });
         let hud_layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor { label: None, bind_group_layouts: &[Some(&tbgl)], immediate_size: 0 });
-        let make_hud = |blend: wgpu::BlendState| device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
+        let make_hud = |blend: wgpu::BlendState, fs: &str| device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
             label: Some("nf-view hud"),
             layout: Some(&hud_layout),
             vertex: wgpu::VertexState {
@@ -554,22 +569,29 @@ impl Renderer {
             }),
             multisample: Default::default(),
             fragment: Some(wgpu::FragmentState {
-                module: &hud_shader, entry_point: Some("fs"), compilation_options: Default::default(),
+                module: &hud_shader, entry_point: Some(fs), compilation_options: Default::default(),
                 targets: &[Some(wgpu::ColorTargetState { format, blend: Some(blend), write_mask: wgpu::ColorWrites::ALL })],
             }),
             multiview_mask: None,
             cache: None,
         });
-        // GS ALPHA 0x44 (normal), 0x48 (Cs·As + Cd: sprite flag 0x100), and 0x42 (Cd - Cs·As: sprite flag 0x200, subtractive).
-        let hud_pipeline = make_hud(wgpu::BlendState::ALPHA_BLENDING);
+        // GS ALPHA 0x44 (normal (Cs − Cd)·As + Cd), 0x48 (Cs·As + Cd: sprite flag 0x100) and 0x42
+        // (Cd − Cs·As: sprite flag 0x200, subtractive) [M psiDrawSprites 0x120e68: AddDMAChainRegSet
+        // (0x44 / 0x48 / 0x42, ALPHA_1)]. `fs_ps2` emits the sprite's term premultiplied
+        // (gain·Cs·As), so every equation takes a One source factor.
+        let hud_alpha = wgpu::BlendComponent { src_factor: wgpu::BlendFactor::Zero, dst_factor: wgpu::BlendFactor::One, operation: wgpu::BlendOperation::Add };
+        let hud_pipeline = make_hud(wgpu::BlendState {
+            color: wgpu::BlendComponent { src_factor: wgpu::BlendFactor::One, dst_factor: wgpu::BlendFactor::OneMinusSrcAlpha, operation: wgpu::BlendOperation::Add },
+            alpha: wgpu::BlendComponent { src_factor: wgpu::BlendFactor::One, dst_factor: wgpu::BlendFactor::OneMinusSrcAlpha, operation: wgpu::BlendOperation::Add },
+        }, "fs_ps2");
         let hud_add_pipeline = make_hud(wgpu::BlendState {
-            color: wgpu::BlendComponent { src_factor: wgpu::BlendFactor::SrcAlpha, dst_factor: wgpu::BlendFactor::One, operation: wgpu::BlendOperation::Add },
-            alpha: wgpu::BlendComponent { src_factor: wgpu::BlendFactor::Zero, dst_factor: wgpu::BlendFactor::One, operation: wgpu::BlendOperation::Add },
-        });
+            color: wgpu::BlendComponent { src_factor: wgpu::BlendFactor::One, dst_factor: wgpu::BlendFactor::One, operation: wgpu::BlendOperation::Add },
+            alpha: hud_alpha,
+        }, "fs_ps2");
         let hud_sub_pipeline = make_hud(wgpu::BlendState {
-            color: wgpu::BlendComponent { src_factor: wgpu::BlendFactor::SrcAlpha, dst_factor: wgpu::BlendFactor::One, operation: wgpu::BlendOperation::ReverseSubtract },
-            alpha: wgpu::BlendComponent { src_factor: wgpu::BlendFactor::Zero, dst_factor: wgpu::BlendFactor::One, operation: wgpu::BlendOperation::Add },
-        });
+            color: wgpu::BlendComponent { src_factor: wgpu::BlendFactor::One, dst_factor: wgpu::BlendFactor::One, operation: wgpu::BlendOperation::ReverseSubtract },
+            alpha: hud_alpha,
+        }, "fs_ps2");
         let hud_vbuf = device.create_buffer(&wgpu::BufferDescriptor { label: None, size: (HUD_MAX * std::mem::size_of::<HudVertex>()) as u64, usage: wgpu::BufferUsages::VERTEX | wgpu::BufferUsages::COPY_DST, mapped_at_creation: false });
         let mut pipelines: Vec<(Draw, wgpu::RenderPipeline)> = Vec::new();
         for m in &scene.materials { if !pipelines.iter().any(|(d, _)| *d == m.draw) { pipelines.push((m.draw, make_pipeline(m.draw))); } }

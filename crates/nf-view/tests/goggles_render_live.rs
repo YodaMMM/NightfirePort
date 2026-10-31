@@ -92,6 +92,29 @@ fn night_sight_raises_pane_7_and_the_viewer_lamp() {
     assert!(with >= without + 24, "the night pane adds its quads ({with} vs {without})");
 }
 
+/// The night noise's v jitter rolls under the runtime sprite's +0x2a word — the texture's height
+/// (`hashtable_set_sprite` 0x1ca3d8), not the template's dv [M HUD_UpdateNightSightPane
+/// 0x19d218:43-47; Sprite_Create2 0x1de3d8]. 0x0300004A is 64 tall on the disc [D], so v ∈ 0..63.
+#[test]
+fn night_noise_jitter_rolls_under_the_texture_height() {
+    let Some(iso) = iso() else { eprintln!("NF_ISO not set - skipping"); return };
+    let mut scene = loaded(&iso, "07000005.bin");
+    let tex = scene.hud_textures.iter().find(|(h, _)| *h == 0x0300_004a).map(|(_, t)| (t.width, t.height));
+    assert_eq!(tex, Some((64, 64)), "the night noise texture 0x0300004A is 64x64 [D]");
+    assert_eq!(nf_view::scene::GOGGLE_NIGHT_SPRITE0_H as u32, tex.unwrap().1, "the jitter range word is the texture height");
+    press_to(&mut scene, 1);
+    let mut seen = std::collections::BTreeSet::new();
+    for _ in 0..400 {
+        step(&mut scene, 1);
+        seen.insert(scene.sim.as_ref().unwrap().goggle_panes().2.night_v);
+    }
+    let max = *seen.iter().max().unwrap();
+    assert!(max < 63, "v = Rand(64 − 1) stays below 63 (max {max})");
+    // Sister (can fail): the rolls really vary over the range — not stuck at 0, and past the
+    // half (the old range 255 would spread them up to 253).
+    assert!(seen.len() > 20 && max > 31, "the jitter spreads over 0..63 ({} values, max {max})", seen.len());
+}
+
 /// X-ray: the glow pool fills with the nearest guard inside 10.0, at the game's alpha, its parts
 /// posed on the guard's bones; outside 10.0 or in night sight the pool stays empty.
 #[test]
