@@ -23,3 +23,9 @@
   timeline: the launch 0600090a pulse 1 = ch 0xf3 1611..2170, ch 0xf4 @1610 arms the ported
   Apocalypse (world_fx.rs; the doc's row was right — my round-1 "unported" read was wrong),
   ch 0x50 (the lift) @2240, pulse 2 6810..7320. Report: docs/reports/level-16-finale-pit-3.md.
+
+## level-16-finale-pit-4 (branch s/level-16-finale-pit-4)
+
+- start (master b44ac857; merged s/level-16-finale-pit-3 2ed06a3a for its mechanism chain and
+  report). Task: continue pit-3 — the walk must press the re-armed KikoDeathButton through the
+  launch chain and complete the mission on real input; un-ignore the tail walk.
