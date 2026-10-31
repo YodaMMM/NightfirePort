@@ -18,6 +18,11 @@
 //! - explodeables (0xE1 → `Destroy_Create`): NO 06 live test existed — THIS file's first test
 //!   (the 0c twin is interact_0700000c_live's barrel, 20+ units from its sister; the 06 pair
 //!   #321/#322 stands 0.82 m apart, which is what exposes the chain).
+//! - the breakable window (0x20 → `Break_Create`): THIS file's fourth test — the pane takes the
+//!   player round (p2 0xf8 → filter 0xFF07 admits the gun word, unlike 07000014's blast-only
+//!   p2-0x20 pane). No 06 window test existed before.
+//! - the kind-1 AMMO pickups (0xF0): THIS file's fifth test — the walk-over credits the pool
+//!   and consumes the box (the armour #755 is the sibling's, the medal gate this file's third).
 //!
 //! Kinds NOT player-touchable on this level (no test): room/key cels, sky-lights, snow, AI
 //! furniture (cover nodes, AI volumes/points), spawners (channel-driven), starts, sound triggers
@@ -353,3 +358,102 @@ fn the_007_tokens_need_the_gold_medal_and_the_walk_over_takes_one() {
     input.forward = 0.0;
     assert!(taken(&w), "the walk-over takes the medal token [M 0x18e650's take path]");
 }
+
+/// KIND breakable window (0x20): the placed pane takes the PLAYER ROUND. The disc row [D #376
+/// Window_Securityroom params [0:0x2, 1:0x0, 2:0xf8]]: param 0 → tag+0x00 kind 2, param 1 → the
+/// health word 0.0, param 2 → tag+0x08 = ~0xf8 = 0xFF07 [M Break_Create 0x12c230:21-39] — the
+/// SAME mask the oil barrels carry [D #321 p4 0xf8 → 0xff07], whose admission of the disc guns'
+/// weapon word 0x0008 this file's first test proves green. The pane's killer is therefore the
+/// real gunshot [M Break_Update 0x12bfd8:13 + Collide_FilterBullets 0x1ece30:24-33 — a contact
+/// whose weapon word meets the filter kills], not the 07000014 security-room pane's blast-only
+/// fate (that disc row carries p2 0x20 → ~0x20 | 0x106 drops the gun word). Sister: the pane
+/// stands before the shot; the miss window bounds the fire loop.
+#[test]
+fn the_securityroom_window_breaks_on_the_gunshot() {
+    let mut w = load_06();
+    let (bi, centre) = {
+        let sim = w.scene.sim.as_ref().unwrap();
+        let i = sim.drones.breaks.list.iter()
+            .position(|b| b.kind == 2 && b.script_obj.is_none() && b.placement == 376)
+            .unwrap_or_else(|| panic!("the 0x20 pane #376 exists among the placed breaks [D census]"));
+        let b = &sim.drones.breaks.list[i];
+        assert_eq!(b.filter, 0xff07u16,
+            "the pane's filter is ~p2 [M 0x12c230:31-39; D #376 p2 0xf8]");
+        assert!(!b.dead, "sister: the pane stands before the shot [M Break_Kill 0x12b970]");
+        (i, [(b.lo[0] + b.hi[0]) * 0.5, (b.lo[1] + b.hi[1]) * 0.5, (b.lo[2] + b.hi[2]) * 0.5])
+    };
+    eprintln!("[06-window] pane centre {centre:?}");
+    // A stance with a clean line: probe the four side offsets for an unblocked eye→centre
+    // segment (the world's own collision is the judge), then drop (the documented stand-in
+    // transit — the security room is off walkreal's legs) and shoot through the real trigger
+    // path.
+    let mut stood = false;
+    for c in [[2.6f32, 0.0, 0.0], [-2.6, 0.0, 0.0], [0.0, 0.0, 2.6], [0.0, 0.0, -2.6]] {
+        let spot = [centre[0] + c[0], centre[1], centre[2] + c[2]];
+        let eye = [spot[0], spot[1] + 1.5, spot[2]];
+        if w.scene.sim.as_ref().unwrap().world.segment(eye, centre).is_some() { continue; }
+        drop_at(&mut w, spot[0], spot[1] + 1.2, spot[2]);
+        stood = true;
+        break;
+    }
+    assert!(stood, "a stance with a clean line to the pane exists");
+    { let sim = w.scene.sim.as_mut().unwrap(); sim.gun.switch_request = 2; }
+    w.wait(60);
+    let broke = fire_until(&mut w, centre, 900, |sim| sim.drones.breaks.list[bi].dead);
+    assert!(broke, "the gunshot never reached the pane at {centre:?}");
+    assert!(w.scene.sim.as_ref().unwrap().drones.breaks.list[bi].dead,
+        "the player round breaks the Window_Securityroom pane [M Break_Update 0x12bfd8:13 + 0x1ece30:24-33; \
+         D #376 p2 0xf8 → filter 0xFF07 — the guns' word 0x0008 meets it]");
+}
+
+/// KIND ammo pickup (0xF0, the kind-1 AMMO arm): the walk-over credits the weapon's ammo and
+/// consumes the box [M Pickup_Update 0x18e148's contact → Pickup_Handler 0x18e650 case 1 →
+/// Player_EquipAmmo 0x1a8d18; D #679 OBJECT_AmmoPickUp_7_65mm @(92.09, 34.95, 40.92) params
+/// [0:0x1, 1:0x2, 2:0x23] — kind 1 AMMO, weapon 0x2 (the P2K), 35 rounds]. The credit lands
+/// through the clip-first arm when the weapon carries the 0x10 flag [M Player_EquipAmmo's clip
+/// fill — the port's equip_ammo], so the assert reads carried+clip together. Sisters: the box
+/// stands and the pools are flat before the walk. (The census's other kind-1 box #666 is a
+/// script RESERVED slot — "oOBJECT_" — whose live activation sits inside the player's touch at
+/// tick 2; the plain placed box is the kind's pin.)
+#[test]
+fn an_ammo_pickup_walkover_credits_the_pool_and_consumes_the_box() {
+    let mut w = load_06();
+    let near = |p: &nf_game::pickup::Pickup, x: f32, z: f32| (p.m[3][0] - x).abs() < 0.8 && (p.m[3][2] - z).abs() < 0.8;
+    let pi = {
+        let sim = w.scene.sim.as_ref().unwrap();
+        sim.drones.pickups.iter().position(|p| p.kind == 1 && p.weapon == 0x2 && near(p, 92.09, 40.92))
+            .unwrap_or_else(|| panic!("the 7.65mm ammo box #679 exists in the pickup list [D census]"))
+    };
+    let (spot, before) = {
+        let sim = w.scene.sim.as_ref().unwrap();
+        let p = &sim.drones.pickups[pi];
+        assert_eq!((p.kind, p.weapon), (1, 0x2), "the disc row [D #679 params 0/1]");
+        assert_eq!(p.rounds, 35, "the disc row's round count [D #679 param 2:0x23]");
+        assert!(!p.gone && !p.hidden, "sister: the box stands before the walk");
+        ([p.m[3][0], p.m[3][1], p.m[3][2]],
+         sim.drones.inventory.carried.iter().sum::<i16>() + sim.drones.inventory.clip.iter().sum::<i16>())
+    };
+    // The stand-in transit (the east tower base is off walkreal's legs): the drop lands Bond
+    // ON the box and the take is the game's own contact path [M 0x18e148 — the touch scan runs
+    // every tick against the player sphere].
+    drop_at(&mut w, spot[0], spot[1] + 1.2, spot[2]);
+    let taken = |w: &Walker| w.scene.sim.as_ref().unwrap().drones.pickups[pi].gone
+        || w.scene.sim.as_ref().unwrap().drones.pickups[pi].hidden;
+    let mut input = nf_game::player::Input { forward: 0.4, ..Default::default() };
+    let mut got = false;
+    for _ in 0..240 {
+        w.tick(input, false);
+        if taken(&w) { got = true; break; }
+    }
+    input.forward = 0.0;
+    assert!(got, "the walk-over takes the ammo box [M 0x18e148 → 0x18e650 case 1]");
+    {
+        let sim = w.scene.sim.as_ref().unwrap();
+        let after = sim.drones.inventory.carried.iter().sum::<i16>()
+            + sim.drones.inventory.clip.iter().sum::<i16>();
+        assert!(after > before,
+            "the take credits the ammo [M Pickup_Handler 0x18e650 case 1 → Player_EquipAmmo 0x1a8d18 \
+             — the 0x10-flag clip fill then the carried pool; D #679 p2 0x23], rounds {before} → {after}");
+    }
+}
+
