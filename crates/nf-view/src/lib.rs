@@ -2393,11 +2393,11 @@ fn front_end_menu(args: &[String], scene: &scene::Scene, front_end: bool, iso_pa
         // The intro FMV owns the screen — no controls, no plate [M 0x209e88]; the movie plane is
         // the whole picture. Without movie data the headless plate stands in.
         let hud = if movie.is_some() { None }
-            else { Some(menu::menu_overlay(&fe, &tables.font, &tables.font_header, lang.as_ref(), &scene.hud_textures, 1280.0 / 720.0)) };
+            else { Some(menu::menu_overlay_fonts(&fe, &tables.font, &tables.font_header, Some(&tables.font_medium), lang.as_ref(), &scene.hud_textures, 1280.0 / 720.0)) };
         return (hud, movie);
     }
     fe.backdrop_live = movie.is_some();
-    (Some(menu::menu_overlay(&fe, &tables.font, &tables.font_header, lang.as_ref(), &scene.hud_textures, 1280.0 / 720.0)), movie)
+    (Some(menu::menu_overlay_fonts(&fe, &tables.font, &tables.font_header, Some(&tables.font_medium), lang.as_ref(), &scene.hud_textures, 1280.0 / 720.0)), movie)
 }
 
 /// The ISO path for `read_files_bin` (the NF_ISO env or the default image name).
@@ -4228,7 +4228,7 @@ impl App {
         } else {
             self.fe.as_ref().and_then(|fe| self.scene.hud.as_ref().map(|t| {
                 let lang = self.lang.as_ref().or_else(|| self.scene.sim.as_ref().and_then(|s| s.lang.as_ref()));
-                menu::menu_overlay(fe, &t.font, &t.font_header, lang, &self.scene.hud_textures, 1280.0 / 720.0)
+                menu::menu_overlay_fonts(fe, &t.font, &t.font_header, Some(&t.font_medium), lang, &self.scene.hud_textures, 1280.0 / 720.0)
             }))
         };
         shot(&self.scene, &self.cam, &png.to_string_lossy(), self.choice, self.anim_time, self.opts, self.notex, self.nofog, fe_menu.as_ref(), movie_owned.as_ref())
@@ -5733,7 +5733,7 @@ impl App {
                         }
                         fe.view_h = g.config.height as f32;
                         let mut f = match &self.scene.hud {
-                            Some(tables) => menu::menu_overlay(fe, &tables.font, &tables.font_header, lang, &self.scene.hud_textures, aspect),
+                            Some(tables) => menu::menu_overlay_fonts(fe, &tables.font, &tables.font_header, Some(&tables.font_medium), lang, &self.scene.hud_textures, aspect),
                             None => overlay_for(&self.scene, aspect),
                         };
                         // fix-pause-menu2: the in-game HUD stays visible under the pause page —

@@ -187,9 +187,11 @@ impl MenuDef {
                         if *c == 0 { end = i; break; }
                     }
                     let name = String::from_utf8_lossy(&data[p.pos..p.pos + end]).into_owned();
+                    let raw = data[p.pos..p.pos + 32].to_vec();
                     p.pos += 32;
                     if let (Some(pg), Some(ct)) = (page, ctrl) {
                         def.pages[pg].controls[ct].name = Some(name);
+                        def.pages[pg].controls[ct].name_raw = Some(raw);
                     }
                 }
                 -0x09 => {
@@ -419,6 +421,11 @@ pub struct ControlDef {
     pub d2: u32,
     pub d3: u32,
     pub name: Option<String>,
+    /// The NAME tag's 32 raw bytes — the msg-0x23 format string as the game stores it (`name` is
+    /// the lossy UTF-8 view up to the first NUL, which turns the 0xff font-select byte into U+FFFD).
+    /// `Font_ParseFormat` 0x1ee3e0 reads these codes: 0xff n = font FontTable[n − 1], 0xfe n =
+    /// alignment, 0xfc/0xfb n = scale, 0xfa = colour [M].
+    pub name_raw: Option<Vec<u8>>,
     pub label: Option<u32>,
     pub texture: Option<u32>,
     pub colour: Option<u32>,
