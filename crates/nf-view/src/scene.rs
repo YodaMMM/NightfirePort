@@ -10904,7 +10904,7 @@ pub fn build(level: &Level, cels_only: bool, skeletons: &HashMap<u8, Skeleton>, 
         }
         for (a, m) in fs.attach.iter().enumerate() { p[l.attach_base as usize + a] = *m; }
         ATTACH_SCRATCH.with(|c| *c.borrow_mut() = std::mem::take(&mut fs.attach));
-        if let Some(v) = vis { let e = self.decal_cell_entries(l); self.hide_unseen_decals(&mut p, &e, v); }
+        if let Some(v) = vis { let e = self.decal_cell_entries(l); self.hide_unseen_decals(p, &e, v); }
         if let Some(s) = self.sim.as_ref() {
             for k in 0..(l.door_base - l.sl_base) as usize {
                 let keep = match s.drones.searchlights.parts.get(k) {
