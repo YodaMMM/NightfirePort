@@ -31,3 +31,9 @@ Progress log:
   Un-ignored; interactables_0700001b_live 7/7, fix_finale_live 4/4, probe1b_blockers 5/5,
   probe1b_drake 1/1, walkreal 9/9 (+1 ignored), probe1b_route 3/3, probe1b_rover 1/1,
   interactables probes 1/1 + 5/5. Port code untouched — the fix is test-side only.
+- 10:32 FINISH: report written to docs/reports/level-1b-drake-walker-kill.md (the stale-note
+  finding, the [D] SP#198 dump, the [M] case-3 re-arm chain, the test fix, the partial suite
+  totals 340/983 with the 3 pre-existing failing binaries, the live check, what's left). The
+  suite ran as foreground chunks — this sandbox kills background jobs between tool calls, so
+  tools/test/suite.py (nohup, then setsid) died twice with an empty suite.out; the resumable
+  fg_runner1b.py (state /home/z/suite1b_state.json) carries the partial for the next message.
