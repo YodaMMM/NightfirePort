@@ -1200,6 +1200,9 @@ fn the_e_use_switch_fires_the_sabotage_cascade_and_opens_the_west_door() {
         assert!(sim.drones.channels.on(0x87) && sim.drones.channels.on(0x88),
             "both fusebox group channels are the walk's own cuts' writes [M 0x1adfe8; D placements 383/385]");
         assert!(sim.drones.channels.on(0x8c), "AND [0x87, 0x88] raised 0x8C through the REAL mux [D AND plc]");
+        assert!(sim.drones.doors.is_locked(door, &sim.drones.channels),
+            "the 0x85 pair is STILL locked at the walked arrival — the route reaches the switch band \
+             from the west without raising its lock or crossing its plane [M 0x1363c8:93-96; D placements 151/152]");
         assert!(!sim.drones.channels.on(0xa0) && !sim.drones.channels.on(0x51),
             "standing in the touch's volume without E fires nothing [M 0x1b1fc8 mask 0x4]");
         eprintln!("[014] the walked arrival in the switch band: {:?}", sim.bond.pos);
