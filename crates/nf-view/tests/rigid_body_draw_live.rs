@@ -172,9 +172,9 @@ fn the_07000004_lamp_swings_back_toward_rest_after_one_shot() {
 /// swing back bottoms out at −9.94° at frame 78. The port gets the same record (its bullet
 /// pass now carries the round's damage as the scale) on the same pre-hit body and must trace the
 /// same first swing. Past the first swing the live lamp is held off rest by a wind torque
-/// (`RB_ApplyWind` 0x1d7c78 — the port's Env_GetWindVel feed is zero), so only the first
-/// period is pinned. Sister (can fail): the old 1.0 placeholder scale on the same record peaks
-/// far below the live swing.
+/// (`RB_ApplyWind` 0x1d7c78), so only the first period is pinned (the replay runs the body
+/// without its cel wind, see below). Sister (can fail): the old 1.0 placeholder scale on the same
+/// record peaks far below the live swing.
 #[test]
 fn the_07000004_lamp_traces_the_live_swing_after_one_p99_round() {
     let Ok(_) = std::env::var("NF_ISO") else { eprintln!("NF_ISO not set — skipping"); return };
@@ -192,6 +192,13 @@ fn the_07000004_lamp_traces_the_live_swing_after_one_p99_round() {
         if nf_game::rigid_body::rb_set_state(&o.rb)[1][2] < 0.0 { q[1] = -q[1]; o.rb.quat = q; }
         o.st.matrix = nf_game::rigid_body::rb_set_state(&o.rb);
         o.st.omega = [-0.00826, 0.0, 0.0];
+        // The hit response alone: the record's gust state was never captured, and the port's cel
+        // wind one tick after the load sits in its first grow arm (K doubles past the 0.6 target
+        // [M Env_Update 0x17bc88]) — a push the record does not show (its pre-hit lamp sat 2.99°
+        // off rest with omega −0.008 rad/s [L]). The body's cel wind is detached for the replay;
+        // the live curve's own ~2° wind offset is inside the pins below. The wind itself is
+        // pinned in lamp_wind_live.
+        o.wind = None;
         o.hits.push(nf_game::rigid_body::RbHit {
             scale,
             normal: [-0.0015930, 0.0000629, 0.9999987],
@@ -214,21 +221,19 @@ fn the_07000004_lamp_traces_the_live_swing_after_one_p99_round() {
     };
     let (tr, first) = run(3.5);
     let (pk_i, pk) = tr.iter().enumerate().fold((0, f32::MIN), |a, (i, &v)| if v > a.1 { (i, v) } else { a });
-    // The zero crossing is no longer a pin (the replay's wind phase differs from the
-    // recording's [S]) — compute it only when it happens, for the trace line.
-    let zero = tr.iter().enumerate().skip(pk_i).find(|(_, &v)| v <= 0.0).map(|(i, _)| i);
-    let (tr_i, trough) = zero.map(|z| tr.iter().enumerate().skip(z).take(40).fold((0, f32::MAX), |a, (i, &v)| if v < a.1 { (i, v) } else { a })).unwrap_or((0, f32::NAN));
-    eprintln!("[lamp-live] omega t1 {first:?} peak {pk:.2}° at t{} zero at {:?} trough {trough:.2}° at t{}", pk_i + 1, zero.map(|z| z + 1), tr_i + 1);
-    assert!((first[0] - 3.834).abs() < 0.15, "omega right after the hit {first:?} (live 3.834 — the ±4 clamp ×0.96; the replay tick also carries the cel wind's own omega step, whose phase at the record moment is unknown [S])");
-    assert!(pk > 44.24 && pk < 56.0, "first-swing peak {pk:.2}° (live 44.24°; the replay's own gust adds on top — the port's wind torque at the replay exceeds the recording's by the amplitude gap listed in the report's live checks [S])");
-    assert!(((pk_i + 1) as i32 - 27).abs() <= 5, "peak at t{} (live t23; the wind's push delays it [S])", pk_i + 1);
-    // The swing-back pins (live: zero at t61, trough −9.94°, span 54.18°) were recorded under
-    // the recording's own wind phase; the replay's gust phase differs (the record's gust state
-    // was never captured [S]), so the zero crossing and trough are not phase-free pins. The
-    // phase-free form: the spring wins — the tilt falls over 20° from the peak inside the
-    // window (the wind's steady band tops ~7.7° [M 0x1d7c78 vs the 0x1d79f4 spring]).
-    let min_after_peak = tr.iter().skip(pk_i).cloned().fold(f32::MAX, f32::min);
-    assert!(pk - min_after_peak > 20.0, "the swing back runs {pk:.2}° down to {min_after_peak:.2}° (the spring beats the wind) [M 0x1d79f4]");
+    let zero = tr.iter().enumerate().skip(pk_i).find(|(_, &v)| v <= 0.0).map(|(i, _)| i).unwrap();
+    let (tr_i, trough) = tr.iter().enumerate().skip(zero).take(40).fold((0, f32::MAX), |a, (i, &v)| if v < a.1 { (i, v) } else { a });
+    eprintln!("[lamp-live] omega t1 {first:?} peak {pk:.2}° at t{} zero at t{} trough {trough:.2}° at t{}", pk_i + 1, zero + 1, tr_i + 1);
+    assert!((first[0] - 3.834).abs() < 0.05, "omega right after the hit {first:?} (live 3.834 — the ±4 clamp ×0.96)");
+    assert!((pk - 44.24).abs() < 2.0, "first-swing peak {pk:.2}° (live 44.24°)");
+    assert!(((pk_i + 1) as i32 - 23).abs() <= 2, "peak at t{} (live: 22 frames after the first post-hit frame)", pk_i + 1);
+    assert!(((zero + 1) as i32 - 62).abs() <= 3, "back through rest at t{} (live t61)", zero + 1);
+    // The live swing back is shallower (−9.94°) because the live wind torque holds the lamp
+    // ~2° toward +x (its rest sat at 2-4° before the shot); the peak-to-trough span is free
+    // of that offset: live 44.24 − (−9.94) = 54.18°.
+    assert!(trough < -8.0 && trough > -15.0, "the swing back bottoms at {trough:.2}° (live −9.94° with the wind offset)");
+    assert!((pk - trough - 54.18).abs() < 2.5, "peak-to-trough span {:.2}° (live 54.18°)", pk - trough);
+    assert!(((tr_i + 1) as i32 - 79).abs() <= 3, "trough at t{} (live: frame 78 after the first post-hit frame)", tr_i + 1);
     // Sister: the old 1.0 placeholder scale on the same record.
     let (tr1, _) = run(1.0);
     let pk1 = tr1.iter().cloned().fold(f32::MIN, f32::max);

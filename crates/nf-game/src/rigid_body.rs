@@ -782,6 +782,10 @@ pub struct RbObj {
     pub placement: u16,
     /// obj+0xD8: the placement's glist (the draw/collide shape).
     pub glist: u32,
+    /// The `CollisionWorld::shape` key of obj+0xD8's collision triangles (the hashcode, or the
+    /// synthetic `0x8000_0000 | map << 16 | object` key of an anonymous object) — the geometry
+    /// `Collide_Intersect` 0x1ebaa8 hands `Intersect_RayGeom` 0x10a8c8 for a bullet contact.
+    pub shape_key: u32,
     /// obj+0xFA: 0x44 at create [M RB_Create :56], |= 0x20 per update/handler [M RB_Update tail].
     pub flags: u16,
     /// rb+0xAA: 0x101 default, 0 for types 2/3/4/others per RB_Create's tail [M 0x1d6bf0:80-96].
@@ -825,6 +829,52 @@ impl RbObj {
         (w, self.sph_radius)
     }
 
+}
+
+/// The narrow phase of a round's contact on a body: `Collide_Intersect` 0x1ebaa8 moves the
+/// segment `a → b` into object space by the inverse of the live obj+0x90 (rows `st.matrix`, the
+/// translation row `st.trans`; the rows are a unit quaternion's, so the inverse is the transpose)
+/// and `Intersect_RayGeom` 0x10a8c8 walks the glist's triangles: a triangle whose plane faces
+/// along the ray (n·dir ≥ 0) is skipped, a hit fraction outside [0, 1] is refused [M :150-172].
+/// Returns the nearest fraction along `a → b` (object space preserves it), or None.
+pub fn segment_hits_body(o: &RbObj, tris: &[[[f32; 3]; 3]], a: [f32; 3], b: [f32; 3]) -> Option<f32> {
+    let m = &o.st.matrix;
+    let t = o.st.trans;
+    // local = (world − trans) · Mᵀ for row-vector world = local · M + trans.
+    let to_local = |p: [f32; 3]| {
+        let d = [p[0] - t[0], p[1] - t[1], p[2] - t[2]];
+        [
+            d[0] * m[0][0] + d[1] * m[0][1] + d[2] * m[0][2],
+            d[0] * m[1][0] + d[1] * m[1][1] + d[2] * m[1][2],
+            d[0] * m[2][0] + d[1] * m[2][1] + d[2] * m[2][2],
+        ]
+    };
+    let sub = |x: [f32; 3], y: [f32; 3]| [x[0] - y[0], x[1] - y[1], x[2] - y[2]];
+    let dot = |x: [f32; 3], y: [f32; 3]| x[0] * y[0] + x[1] * y[1] + x[2] * y[2];
+    let cross = |x: [f32; 3], y: [f32; 3]| [x[1] * y[2] - x[2] * y[1], x[2] * y[0] - x[0] * y[2], x[0] * y[1] - x[1] * y[0]];
+    let la = to_local(a);
+    let seg = sub(to_local(b), la);
+    let mut best: Option<f32> = None;
+    for tri in tris {
+        let (e1, e2) = (sub(tri[1], tri[0]), sub(tri[2], tri[0]));
+        if dot(cross(e1, e2), seg) >= 0.0 { continue; } // back face [M 0x10a8c8:168]
+        let p = cross(seg, e2);
+        let det = dot(e1, p);
+        if det.abs() < 1e-12 { continue; }
+        let inv = 1.0 / det;
+        let s = sub(la, tri[0]);
+        let u = dot(s, p) * inv;
+        if !(0.0..=1.0).contains(&u) { continue; }
+        let q = cross(s, e1);
+        let v = dot(seg, q) * inv;
+        if v < 0.0 || u + v > 1.0 { continue; }
+        let tt = dot(e2, q) * inv;
+        if (0.0..=1.0).contains(&tt) && best.is_none_or(|bt| tt < bt) { best = Some(tt); }
+    }
+    best
+}
+
+impl RbObj {
     /// obj+0x90: the drawn/collided matrix — the quaternion rows (`rb_set_state`/EulerEvolve)
     /// with the +0x30 translation row = `st.trans` [M RB_SetState 0x1d7da0, EulerEvolve :96].
     pub fn matrix(&self) -> nf_formats::anim::Mat4 {
@@ -987,6 +1037,9 @@ impl Rbodies {
             list.push(RbObj {
                 placement: pi as u16,
                 glist: o.hashcode,
+                // The collision-shape key: the hashcode, or the synthetic (map, object) key the
+                // shape index carries for anonymous (hashcode u32::MAX) objects [world.rs's index].
+                shape_key: if o.hashcode == u32::MAX { 0x8000_0000 | ((map as u32) << 16) | object as u32 } else { o.hashcode },
                 flags: 0x44,
                 s_aa,
                 s154: (pv(3) & 0xff) as u8,
@@ -1448,6 +1501,42 @@ mod evolve_tests {
         let mut s0 = RbState::zeroed();
         rb_euler_evolve(&mut r0, &mut s0, 1, 0.0);
         assert_eq!(s0.tor_impulse, [0.0; 3], "type 0 has no up-righting tail [M 0x1d79f8 gate]");
+    }
+
+    /// [M Collide_Intersect 0x1ebaa8 + Intersect_RayGeom 0x10a8c8:150-172] A round's contact on a
+    /// body lands only on the glist's triangles, tested in object space at the live pose: a line
+    /// through the world sphere that misses the triangles lands nothing; the back face lands
+    /// nothing; a rotated body moves the hit with its pose.
+    #[test]
+    fn bullet_contact_needs_the_bodys_triangles() {
+        let (rb, mut st) = barrel();
+        st.trans = [10.0, 5.0, 20.0];
+        st.matrix = [[1.0, 0.0, 0.0], [0.0, 1.0, 0.0], [0.0, 0.0, 1.0]];
+        let o = RbObj {
+            placement: 0, glist: 0, shape_key: 0, flags: 0x44, s_aa: 0, s154: 0, s158: 0xffff,
+            rb, st, hits: Vec::new(), sph_centre: [0.0, -1.0, 0.0], sph_radius: 4.0, wind: None, buoy: None,
+        };
+        // One unit quad's lower triangle in the z = 0 plane of object space, wound to face +z.
+        let tris = [[[-0.5, -0.5, 0.0], [0.5, -0.5, 0.0], [0.5, 0.5, 0.0]]];
+        // Flying −z through x = 10.2, y = 4.8 (object (0.2, −0.2)): inside the triangle, t = 0.5.
+        let t = segment_hits_body(&o, &tris, [10.2, 4.8, 22.0], [10.2, 4.8, 18.0]).expect("the face is hit");
+        assert!((t - 0.5).abs() < 1e-5, "t {t}");
+        // Sister (can fail): the same line 2 units to the side still runs inside the 4-unit world
+        // sphere — the broad phase admits it — but misses the triangle: no contact.
+        let (c, r) = o.world_sphere();
+        let side = [12.2, 4.8, 20.0];
+        let dd = [side[0] - c[0], side[1] - c[1], side[2] - c[2]];
+        assert!(dd[0] * dd[0] + dd[1] * dd[1] + dd[2] * dd[2] < r * r, "the line passes inside the sphere");
+        assert_eq!(segment_hits_body(&o, &tris, [12.2, 4.8, 22.0], [12.2, 4.8, 18.0]), None);
+        // The back face: flying +z through the same point is skipped (n·dir ≥ 0).
+        assert_eq!(segment_hits_body(&o, &tris, [10.2, 4.8, 18.0], [10.2, 4.8, 22.0]), None);
+        // The live pose: yaw the body 90° about +y (row-vector rows: x → −z, z → +x); the face now
+        // lies in the world x = 10 plane facing +x, so a −x flight lands and the old −z one misses.
+        let mut o2 = o.clone();
+        o2.st.matrix = [[0.0, 0.0, -1.0], [0.0, 1.0, 0.0], [1.0, 0.0, 0.0]];
+        assert_eq!(segment_hits_body(&o2, &tris, [10.2, 4.8, 22.0], [10.2, 4.8, 18.0]), None);
+        let t2 = segment_hits_body(&o2, &tris, [12.0, 4.8, 19.8], [8.0, 4.8, 19.8]).expect("the yawed face is hit");
+        assert!((t2 - 0.5).abs() < 1e-5, "t {t2}");
     }
 
     /// [M disasm 0x1d753c-0x1d757c, 0x1d7580] The Rot class-5 arm's lane masks per type, and no

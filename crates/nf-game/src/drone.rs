@@ -14201,21 +14201,30 @@ fn segment_hits_sphere(a: V3, b: V3, c: V3, r: f32) -> bool {
             // kind-0xD8 body's `obj+0xD0` chain (the bullet is class 5) and `RB_CollisionHandler`
             // 0x1d7a80 walks the chain into `RB_RestingContactRot` 0x1d73a0's per-hit arm
             // [M 0x1d74dc-0x1d758c: impulse = hit+0x30·(hit+0x8·0.5), (hit+0x40 − translation) ×
-            // impulse into +0x50]. The contact test: the game's picker runs the body's world sphere
-            // (obj+0x80/obj+0x8C — the glist centre posed by the live matrix and the glist radius,
-            // `Control_BuildWorldSph` 0x133070) against the round's segment, the closest point on
-            // the query line vs the sphere [M Collide_PickObj 0x1eae80]; the RB props carry no
-            // collision triangles of their own (no 0x2E block on the rb_* glists [D]), so the port
-            // takes that closest point as the contact point [S — the game's +0x40 for this contact
-            // sat 0.17 nearer the shooter along the ray in the one live sample; the torque's
-            // dominant term (r.y·imp.z for a level shot) is unchanged by a shift along the ray].
+            // impulse into +0x50]. The contact test is two-stage, like every object contact of the
+            // round's pick [M Collide_Update 0x1ea398]:
+            //   1. the broad phase — `Collide_PickObj` 0x1eae80 runs the body's world sphere
+            //      (obj+0x80/obj+0x8C: the glist centre posed by the live matrix and the glist
+            //      radius, `Control_BuildWorldSph` 0x133070) against the round's line, the closest
+            //      point vs the sphere (HITTEST+0x94 = 0x201 [M Bullet_update 0x12e7b0]); it only
+            //      admits objects whose glist carries collision geometry (obj+0xD8 → +8 ≠ 0, the
+            //      body's obj+0xFA has no 0x8) [M 0x1eae80 gate];
+            //   2. the narrow phase — `Collide_Intersect` 0x1ebaa8 sets the contact's distance to
+            //      1e8, moves the segment into the body's object space by the inverse of the live
+            //      obj+0x90 and runs `Intersect_RayGeom` 0x10a8c8 over the glist's triangles
+            //      (one-sided: n·dir ≥ 0 skipped; t in [0, 1]); a contact still at 1e8 is freed
+            //      [M Collide_Update :0x1ea508 loop]. hit+0x40 = the triangle hit point posed back
+            //      to world space; hit+0x30 = the normalised HITTEST+0x40 (the flight direction).
+            // So the sphere alone never lands a hit: a round through the sphere that misses the
+            // body's triangles flies on (0700000d's lamp beside the mounted gun: its 3.79 sphere
+            // covers the beam's line to the C5 door, its triangles do not).
             // The record: the unit flight direction as hit+0x30 and the round's damage as hit+0x8
             // (HITTEST+0x90 = weapon_definition+0x0C, the float the drone path reads) [L 07000004
             // lamp #40, a break at the class-5 arm 0x1d74dc: hit+0x8 = 3.5 (the P99 round),
             // hit+0x30 = (0.0016, −0.00006, −1.0); rb+0x50 after the arm = (hit+0x40 − trans) ×
             // (hit+0x8·0.5·hit+0x30) with the type-1 y lane zeroed, exactly]. The round stops on
-            // the body (the solid-prop default — the same walk rule that ends the flight on the
-            // world's first solid hit).
+            // the nearest body contact (`Bullet_CollisionHandler` 0x12ce80: state 2 on the first
+            // sorted contact unless it passes — obj+0xF0 & 0x60; no RB_* function writes obj+0xF0 [M]).
             if !self.rbodies.list.is_empty() {
                 let seg = [end[0] - b.pos[0], end[1] - b.pos[1], end[2] - b.pos[2]];
                 let seg2 = seg[0] * seg[0] + seg[1] * seg[1] + seg[2] * seg[2];
@@ -14223,13 +14232,18 @@ fn segment_hits_sphere(a: V3, b: V3, c: V3, r: f32) -> bool {
                 let udir = [seg[0] / mag, seg[1] / mag, seg[2] / mag];
                 let mut best: Option<(f32, usize, [f32; 3])> = None;
                 for (k, rbo) in self.rbodies.list.iter().enumerate() {
+                    // 1. The broad phase: the closest point on the line vs the world sphere.
                     let (c, r) = rbo.world_sphere();
                     let ac = [c[0] - b.pos[0], c[1] - b.pos[1], c[2] - b.pos[2]];
                     let t = if seg2 > 1e-9 { ((ac[0] * seg[0] + ac[1] * seg[1] + ac[2] * seg[2]) / seg2).clamp(0.0, 1.0) } else { 0.0 };
-                    let point = [b.pos[0] + seg[0] * t, b.pos[1] + seg[1] * t, b.pos[2] + seg[2] * t];
-                    let d = [point[0] - c[0], point[1] - c[1], point[2] - c[2]];
-                    if d[0] * d[0] + d[1] * d[1] + d[2] * d[2] >= r * r { continue; }
-                    if best.is_none_or(|(bt, _, _)| t < bt) { best = Some((t, k, point)); }
+                    let q = [b.pos[0] + seg[0] * t - c[0], b.pos[1] + seg[1] * t - c[1], b.pos[2] + seg[2] * t - c[2]];
+                    if q[0] * q[0] + q[1] * q[1] + q[2] * q[2] >= r * r { continue; }
+                    // 2. The narrow phase: the glist's triangles in object space. No geometry →
+                    // the broad phase never admitted the body.
+                    let Some(tris) = d.world.shape(rbo.shape_key) else { continue };
+                    let Some(tt) = crate::rigid_body::segment_hits_body(rbo, tris, b.pos, end) else { continue };
+                    let point = [b.pos[0] + seg[0] * tt, b.pos[1] + seg[1] * tt, b.pos[2] + seg[2] * tt];
+                    if best.is_none_or(|(bt, _, _)| tt < bt) { best = Some((tt, k, point)); }
                 }
                 if let Some((_, k, point)) = best {
                     self.rbodies.list[k].hits.push(crate::rigid_body::RbHit {
