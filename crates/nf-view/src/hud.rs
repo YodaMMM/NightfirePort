@@ -35,8 +35,10 @@ const SH: f32 = 448.0;
 /// the table's other four ids never resolve in `hashtable_set_sprite` and the icon stays hidden].
 /// fix-space-pane added the 0700001b missile-status pane's five (0x03000177..7B [M SpaceSprInfo 0x2be3b0 +
 /// `HUD_UpdateSpacePane` 0x19d3b8; D 0700001b.bin entry 61 sub 0..4]).
-pub const TEXTURES: [u32; 33] = [0x0300_005b, 0x0300_005a, 0x0300_0026, 0x0300_007a, 0x0300_0128, 0x0300_018d, 0x0300_018e, 0x0300_0003, 0x0300_0034, 0x0300_0002, 0x0300_0173, 0x0300_0174, 0x0300_017f, 0x0300_017d, 0x0300_0055, 0x0300_0056, 0x0300_0057, 0x0300_0090, 0x0300_0141, 0x0300_0066, 0x0300_0067, 0x0300_006a, 0x0300_005e, 0x0300_004a, 0x0300_005f, 0x0300_005c, 0x0300_005d, 0x0300_0059,
-    0x0300_0177, 0x0300_0178, 0x0300_0179, 0x0300_017a, 0x0300_017b];
+/// goggles: the x-ray noise 0x03000098 (32×32) and the battery icon 0x0300017E (16×16) of the
+/// two goggles panes [D NightSightSprInfo / XraySprInfo; every SP archive carries both].
+pub const TEXTURES: [u32; 35] = [0x0300_005b, 0x0300_005a, 0x0300_0026, 0x0300_007a, 0x0300_0128, 0x0300_018d, 0x0300_018e, 0x0300_0003, 0x0300_0034, 0x0300_0002, 0x0300_0173, 0x0300_0174, 0x0300_017f, 0x0300_017d, 0x0300_0055, 0x0300_0056, 0x0300_0057, 0x0300_0090, 0x0300_0141, 0x0300_0066, 0x0300_0067, 0x0300_006a, 0x0300_005e, 0x0300_004a, 0x0300_005f, 0x0300_005c, 0x0300_005d, 0x0300_0059,
+    0x0300_0177, 0x0300_0178, 0x0300_0179, 0x0300_017a, 0x0300_017b, 0x0300_0098, 0x0300_017e];
 
 /// The 0700001b missile-status pane (pane 20: `SpacePane` 0x2be598 = {x 0, y 0, flags 0, create
 /// `HUD_CreateDefault`, update `HUD_UpdateSpacePane` 0x19d3b8, `SpaceSprInfo` 0x2be3b0, 11 sprites}
@@ -162,6 +164,41 @@ pub(crate) struct Hud<'a> { pub(crate) quads: Vec<Quad>, pub(crate) aspect: f32,
 /// 0x19a6a8 [M] grows both by 1 px per tick from the top of the 448-line view: sprite 1 (the solid fill
 /// 0x03000002) is `d` tall from the top (:27); sprite 0 (the drip edge 0x0300005a, 512×32) sits at
 /// `y = d` and is `d` tall too (:26, :37) — in MP capped at the distance left to the bottom (:31-35).
+fn goggle_panes(h: &mut Hud, s: &crate::scene::Sim, t: &nf_formats::hud::HudTables) {
+    // The goggles' panes 7 (`NightSightSprInfo` 0x2bd7b0, 6 sprites) and 15 (`XraySprInfo`
+    // 0x2bddb0, 5) [D ACTION.ELF; nf-formats tests/goggles_panes.rs pins them]. A pane draws
+    // while its enable byte is set (`HUD_Update` 0x19a088:22-55 parks a disabled pane on layer
+    // 0xff), each sprite at its template layer, colour and blend (flags 0x100 additive, 0x200
+    // subtractive — `tiled_quad`), with the fields the pane update wrote this tick:
+    // - night: sprite 0 (the 64×64 noise 0x0300004A, 512×448, additive) takes the
+    //   `(Rand(0x18)+7) | 0xff0000` word (green, alpha 7..30) and the jittered v; sprite 1 adds
+    //   white 0xffffff7f over the screen, sprite 2 subtracts magenta 0xff00ffff (red and blue
+    //   out — the green image); sprite 3 the battery bar's back (0x0300017F row 0), sprite 4
+    //   the bar (row 16) at the battery width, sprite 5 the battery icon 0x0300017E
+    //   [M HUD_UpdateNightSightPane 0x19d218];
+    // - x-ray: sprite 0 (the 32×32 noise 0x03000098, additive) takes `(Rand(0x18)+7) |
+    //   0xffffff00` (white, alpha 7..30) and the v ramp; sprite 1 adds blue 0x0000ffff; sprites
+    //   2..4 the bar back, the bar (battery width), the icon [M HUD_UpdateXRayPane 0x1a1410].
+    // Full-screen sprites stretch with the window; the bar keeps the 4:3 centre (pane x 128).
+    let (night_on, xray_on, p) = s.goggle_panes();
+    let anchor = |sp: &SpriteInfo| if sp.w as i32 >= 0x200 { Anchor::Stretch } else { Anchor::Centre };
+    let draw = |h: &mut Hud, tab: &[SpriteInfo], noise: (u32, u16), bar_k: usize, bar: Option<u16>| {
+        for (k, sp) in tab.iter().enumerate() {
+            let mut sp = *sp;
+            let mut colour = sp.colour;
+            if k == 0 { colour = noise.0; sp.uv[1] = noise.1 as i16; }
+            if k == bar_k { if let Some(w) = bar { sp.w = w as i16; sp.uv[2] = w as i16; } }
+            h.sprite(anchor(&sp), (0.0, 0.0), &sp, gs(colour >> 8, colour & 0xff));
+        }
+    };
+    if night_on && s.goggle_mode() == 1 && t.nightsight.len() >= 6 {
+        draw(h, &t.nightsight[..6], (p.night_colour, p.night_v), 4, p.night_bar);
+    }
+    if xray_on && s.goggle_mode() == 2 && t.xray.len() >= 5 {
+        draw(h, &t.xray[..5], (p.xray_colour, p.xray_v), 3, p.xray_bar);
+    }
+}
+
 fn blood_pane(h: &mut Hud, d: f32, mp: bool) {
     if d <= 0.0 { return; }
     let c = gs(0x007f7f, 0xff);
@@ -409,10 +446,13 @@ pub fn overlay(scene: &crate::scene::Scene, aspect: f32) -> HudFrame {
     // sprite — HUD_UpdateCrossHair 0x19e6d0:96 sets +0x38 = 0xff (not drawn) when the byte is 0.
     let crosshair_on = sim.map_or(true, |s| s.drones.crosshair);
     if !zoomed && crosshair_on {
-        h.quad(Anchor::Centre, 49, CROSS_TEX, 0, SW / 2.0 * (1.0 + cx) - w / 2.0, SH / 2.0 * (1.0 - cy) - hh / 2.0, w, hh, [u, v, w, hh], (false, false), gs(0xff0000, 0xff));
+        // goggles: green while night sight is up [M HUD_UpdateCrossHair 0x19e6d0:80-85].
+        let cc = nf_game::hud_pane::crosshair_colour(sim.map_or(0, |s| s.goggle_mode()));
+        h.quad(Anchor::Centre, 49, CROSS_TEX, 0, SW / 2.0 * (1.0 + cx) - w / 2.0, SH / 2.0 * (1.0 - cy) - hh / 2.0, w, hh, [u, v, w, hh], (false, false), gs(cc >> 8, cc & 0xff));
     }
     let (Some(s), Some(t)) = (sim, scene.hud.as_ref()) else { return h.finish() };
     let frame = s.drones.frame;
+    goggle_panes(&mut h, s, t);
     // The guided-missile camera's pane 9 (`HUD_CreateRedeemer` 0x19dec0 + `HUD_UpdateRedeemerPane` 0x19e178,
     // `RedeemerSprInfo` 0x2bda30 [L ACTION.ELF]; colours are 0xRRGGBBAA): sprite 0 the centre ring, 3..8 the
     // bracket pieces (flag 0x40 mirrors the right-hand ones), 9 the full-screen red wash (0x300000ff) — all at

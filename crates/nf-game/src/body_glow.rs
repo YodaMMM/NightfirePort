@@ -71,6 +71,23 @@ pub struct BodyGlow {
     pub owner: usize,
     /// The child-sprite count the do-while creates [M 001ac158: 0..0xe].
     pub children: u16,
+    /// ext+0x40 (`piVar2[0x10]`), the fade count: 0x100 at create, −1 per tick while the owner's
+    /// health gate fails (a dead guard), the glow deleted below 1 [M 0x1ac158 / 0x1ac2c8:96-136].
+    /// The alpha byte scales with it. Ticked by [`BodyGlow::tick`].
+    pub count: u16,
+}
+
+impl BodyGlow {
+    /// The per-tick count step of `BodyGlow_Update` 0x1ac2c8:96-128 for a guard owner (class 2):
+    /// `owner health <= 0` decrements the count once (unless the owner object is being deleted —
+    /// `obj+0xFE & 1`, the port's `deleting`). Returns false when the count ran out: the game then
+    /// calls `BodyGlow_Delete` and clears the owner's glow pointer (DIVars+0x10) [M :129-136].
+    pub fn tick(&mut self, health: f32, deleting: bool) -> bool {
+        if !deleting && health <= 0.0 {
+            self.count = self.count.wrapping_sub(1);
+        }
+        (self.count as i16) >= 1
+    }
 }
 
 /// `BodyGlow_Create` 0x1ac158 on the shipped path: `no_drones` is the global
@@ -80,7 +97,7 @@ pub fn create(owner: usize, no_drones: bool) -> Option<BodyGlow> {
     if no_drones {
         return None;
     }
-    Some(BodyGlow { owner, children: 15 })
+    Some(BodyGlow { owner, children: 15, count: EXT_LINK_U16 })
 }
 
 /// `GlowBones` 0x2beed0 — the 15 bone indices the update hangs its child sprites on
@@ -353,6 +370,22 @@ mod review_tests {
         let g = g.unwrap();
         assert_eq!(g.bones[14].1, 14.0);
         assert_eq!(g.bones[13].1, 13.0);
+    }
+
+    // [M 0x1ac2c8:96-136] a dead guard's glow counts down from 0x100 and deletes below 1.
+    #[test]
+    fn a_dead_owner_fades_the_glow_out_over_256_ticks() {
+        let mut g = create(0, false).unwrap();
+        assert_eq!(g.count, 0x100);
+        for _ in 0..10 { assert!(g.tick(50.0, false)); }
+        assert_eq!(g.count, 0x100, "a live owner holds the count");
+        for k in 1..0x100u16 { assert!(g.tick(0.0, false), "tick {k}"); }
+        assert_eq!(g.count, 1);
+        assert!(!g.tick(-3.0, false), "the 256th dead tick deletes");
+        // Sister (can fail): an owner being deleted skips the decrement.
+        let mut g = create(0, false).unwrap();
+        assert!(g.tick(0.0, true));
+        assert_eq!(g.count, 0x100);
     }
 
     // [M 0x1ac2c8:233-237] bone 0 measures against bone 4; the rest against the skin parent.

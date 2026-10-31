@@ -295,6 +295,9 @@ impl MonitorNightSight {
             }
             self.mode = 1;
             self.was_goggles = true;
+            // The arm writes the night pane's enable pair (+0x104 = 1, +0x102 = 0) [M 0x19e9d8:
+            // 55-62] — the state, not only this tick's output (the pane stayed dark after an arm).
+            self.night_pane_on = true;
             out.mode = 1;
             out.night_pane_on = true;
             out.armed = true;
@@ -836,6 +839,19 @@ mod goggle_pane_tests {
         assert_eq!(crosshair_colour(1), 0x2080_20ff);
         assert_eq!(crosshair_colour(0), 0xff00_00ff);
         assert_ne!(crosshair_colour(2), crosshair_colour(1), "sister: x-ray keeps the red cross");
+    }
+
+    /// [M 0x19e9d8:50-62] the arm path writes the night pane's enable byte into the state.
+    #[test]
+    fn the_arm_enables_the_night_pane() {
+        let mut m = MonitorNightSight::default();
+        let i = MonitorInputs { hud_active: true, viewer_state: 1, goggles_equipped: true, ..Default::default() };
+        m.tick(&i);
+        assert!(m.night_pane_on && m.mode == 1 && m.was_goggles);
+        // Sister (can fail): a view-model anim up blocks the whole arm.
+        let mut m = MonitorNightSight::default();
+        m.tick(&MonitorInputs { zoom_pane_on: true, ..i });
+        assert!(!m.night_pane_on && m.mode == 0 && !m.was_goggles);
     }
 
     /// [M disasm 0x19ec68 MIN.S] the battery's +3 caps on the GROWN value: 1799 → 1800, not 1802.
