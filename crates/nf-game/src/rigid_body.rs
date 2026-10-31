@@ -361,10 +361,45 @@ fn wld_gravity() -> [f32; 3] {
     crate::grenade::WLD_GRAVITY
 }
 
-/// `RB_EulerEvolve 0x1d7810` [M disasm 0x1d7810-0x1d7a60], core path. flag != 0 skips the
-/// impulse application (the game's second evolve entry); dt = REC_FRAME_RATE from `RB_Update`.
-/// The type != 0 up-righting tail (0x1d79f4+, the Mat_GetUp omega correction) is the remainder —
-/// it only runs on tipped bodies, which need the contact port first.
+/// `FRAME_RATE_MUL` @0x30d0d8 = 1.0 (NTSC) [L ee_start_05.bin; the up-righting tail loads it
+/// at 0x1d7a20-0x1d7a24 (lui 0x31 / lwc1 −0x2f28)].
+const FRAME_RATE_MUL: f32 = 1.0;
+
+/// The angular damping of `RB_EulerEvolve` [M disasm 0x1d7864-0x1d78dc]: avg = (I0+I1+I2)·0.333
+/// (0x3eaa7efa); e = expf((−(avg/+0xa4)/avg)·dt); k = −((1 − e)/dt); then the VU pair
+/// `VMULx.xyz vf3, vf2, vf1x` / `VADD vf2, vf2, vf3` (0x4bc110d8 / 0x4be310a8) — omega += omega·k,
+/// i.e. omega *= 1 − (1 − e^(−dt/a))/dt. At dt = 1/60 and +0xa4 = 25 that is ×0.96 per tick
+/// (the rate (1−e)/dt ≈ 1/a per tick, NOT the e^(−dt/a) ≈ ×0.99933 a plain exponential gives).
+fn rb_damp_omega(rb: &RigidBody, omega: &mut [f32; 3], dt: f32) {
+    let avg = (rb.moments[0] + rb.moments[1] + rb.moments[2]) * f32::from_bits(0x3eaa_7efa);
+    let e = ((-(avg / rb.sa4) / avg) * dt).exp();
+    let k = -((1.0 - e) / dt);
+    for o in omega.iter_mut() {
+        *o += *o * k;
+    }
+}
+
+/// The type != 0 up-righting tail of `RB_EulerEvolve` [M disasm 0x1d79f4-0x1d7a58]: after the
+/// matrix rebuild, up = `Mat_GetUp` (row 1, +0x10..+0x18 [M 0x1e33b8]); the torque slot +0x50
+/// += (−up.z·(+0x84)·FRAME_RATE_MUL, 0, up.x·(+0x84)·FRAME_RATE_MUL) (VADD 0x4be110a8; the w
+/// lane is stack junk, not ported — the slots are 3-wide) — the up × (0,1,0) spring that the
+/// NEXT tick's `RB_ApplyImpulses` turns into omega, pulling the body back to its rest rotation.
+/// The game then rebuilds the matrix again from the unchanged quat (0x1d7a54).
+fn rb_upright_tail(rb: &RigidBody, st: &mut RbState) {
+    if rb.ty == 0 {
+        return;
+    }
+    let up = st.matrix[1];
+    let i1 = rb.moments[1]; // +0x84 [M 0x1d7a14]
+    st.tor_impulse[0] += -up[2] * i1 * FRAME_RATE_MUL;
+    st.tor_impulse[1] += 0.0;
+    st.tor_impulse[2] += up[0] * i1 * FRAME_RATE_MUL;
+}
+
+/// `RB_EulerEvolve 0x1d7810` [M disasm 0x1d7810-0x1d7a78]. flag != 0 skips the impulse
+/// application (the game's second evolve entry); dt = REC_FRAME_RATE from `RB_Update`. dt == 0
+/// branches straight to the matrix rebuild (0x1d785c → 0x1d79e8) — the up-righting tail still
+/// runs on that path.
 pub fn rb_euler_evolve(rb: &mut RigidBody, st: &mut RbState, flag: i32, dt: f32) {
     if flag == 0 {
         rb_apply_impulses(rb, st);
@@ -373,15 +408,12 @@ pub fn rb_euler_evolve(rb: &mut RigidBody, st: &mut RbState, flag: i32, dt: f32)
     }
     if dt == 0.0 {
         st.matrix = crate::player::quat_to_matrix(&rb.quat);
+        rb_upright_tail(rb, st);
         return;
     }
-    // Angular damping [M 0x1d7864-0x1d78dc]: the game's (sum·⅓)/a/(sum·³) arithmetic cancels
-    // to omega *= expf(−dt/+0xa4).
+    // Angular damping, gated on 0 < +0xa4 [M 0x1d7864-0x1d7870].
     if rb.sa4 > 0.0 {
-        let f = (-(dt / rb.sa4)).exp();
-        for o in &mut st.omega {
-            *o *= f;
-        }
+        rb_damp_omega(rb, &mut st.omega, dt);
     }
     if rb.ty == 0 {
         if rb.sa0 > 0.0 {
@@ -411,6 +443,7 @@ pub fn rb_euler_evolve(rb: &mut RigidBody, st: &mut RbState, flag: i32, dt: f32)
         rb.quat = q;
     }
     st.matrix = crate::player::quat_to_matrix(&rb.quat); // [M 0x1d79e8-0x1d79f0]
+    rb_upright_tail(rb, st);
 }
 
 /// `RB_ApplyWind 0x1d7c78` [M]: wind = `Env_GetWindVel(cel, pos)` (the caller's value); scaled
@@ -570,10 +603,9 @@ pub fn rb_resting_contact(
 
 /// `RB_RestingContactRot` 0x1d73a0 [M], the type != 0 hit-list walk — the arm the census
 /// barrels (type 0xFFFF) take. Per hit, class 5 only [M 0x1d7428-0x1d74c8]: Sound_Play3D
-/// (collected, not played), impulse = (hit+0x8)·0.5·vel, +0x40 += impulse and +0x50 +=
-/// r×impulse with the PER-TYPE masking of the cross lanes: type 3 zeroes the xyz lanes,
-/// type 4 zeroes more, type 1 zeroes the second lane; every other type (incl. 0xFFFF/−1)
-/// adds the full cross. Other classes fall through — Rot has NO position-correction arm
+/// (collected, not played), impulse = (hit+0x8)·0.5·vel, +0x50 += r×impulse (no +0x40 write)
+/// with the PER-TYPE masking of the cross lanes: type 2 keeps x, type 3 keeps y, type 4 keeps
+/// z, type 1 zeroes y; every other type (incl. 0xFFFF/−1) adds the full cross. Other classes fall through — Rot has NO position-correction arm
 /// [M the decompile's only else arm walks to the next hit]. The cylinder interior (the
 /// +0xD0/+0xE0/+0x100 test points, the `Collide_CylinderIntersect` sweep and its
 /// uprighting tail) is the documented remainder: it needs the port's cylinder sweep (the
@@ -590,14 +622,20 @@ pub fn rb_resting_contact_rot(
             let imp = [hit.vel[0] * k, hit.vel[1] * k, hit.vel[2] * k];
             let r = [hit.point[0] - st.trans[0], hit.point[1] - st.trans[1], hit.point[2] - st.trans[2]];
             let cross = cross3(r, imp);
+            // The per-type lane masks on the cross at sp+0x20/+0x24/+0x28 [M disasm
+            // 0x1d753c-0x1d757c]: type 2 zeroes y,z; type 3 zeroes z,x; type 4 zeroes y,x;
+            // type 1 zeroes y; every other type (0xFFFF lamps/barrels) keeps the full cross.
             let masked = match rb.ty {
-                3 | 4 => [0.0f32; 3], // the lane masks zero the whole vector [M 0x1d7478+]
-                1 => [cross[0], 0.0, cross[2]], // the second lane zeroed [M auStack_120._4_4_ = 0]
+                2 => [cross[0], 0.0, 0.0],
+                3 => [0.0, cross[1], 0.0],
+                4 => [0.0, 0.0, cross[2]],
+                1 => [cross[0], 0.0, cross[2]],
                 _ => cross,
             };
+            // Only the torque slot is written (VADD into +0x50 at 0x1d7580-0x1d758c); Rot never
+            // touches the +0x40 linear accumulator [M disasm 0x1d74dc-0x1d758c].
             for i in 0..3 {
                 st.tor_impulse[i] += masked[i];
-                st.lin_impulse[i] += imp[i];
             }
             sounds.push((0x42c8_0000, st.trans));
         }
@@ -889,8 +927,12 @@ mod evolve_tests {
         // omega += ToWorld(clamp(ToBody(t)·(1/I0,1/I2,1/I1))) — identity matrix → the body
         // frame is the world frame: (0·½, 0·¼, 10·⅓) = (0, 0, 10/3) [M 0x1d7044-0x1d711c].
         let dt = crate::ssys::REC_FRAME_RATE;
-        // z scales by 1/I1 (+0x94) [M 0x1d705c-0x1d7068]: 10·(1/5) = 2.0, then the +0xa4=25 damping.
-        let expect_z = 10.0 * rb.inv_moments[1] * (-(dt / 25.0)).exp();
+        // z scales by 1/I1 (+0x94) [M 0x1d705c-0x1d7068]: 10·(1/5) = 2.0, then the +0xa4=25
+        // damping omega += omega·(−(1−e)/dt) [M 0x1d78b0-0x1d78dc].
+        let avg = (rb.moments[0] + rb.moments[1] + rb.moments[2]) * f32::from_bits(0x3eaa_7efa);
+        let e = ((-(avg / 25.0) / avg) * dt).exp();
+        let w0 = 10.0 * rb.inv_moments[1];
+        let expect_z = w0 + w0 * -((1.0 - e) / dt);
         assert!((st.omega[2] - expect_z).abs() < 1.0e-6, "omega.z {} vs {}", st.omega[2], expect_z);
         assert_eq!(st.omega[0], 0.0);
         assert_eq!(st.omega[1], 0.0);
@@ -900,7 +942,7 @@ mod evolve_tests {
         assert!((rb.quat[1]).abs() < 1.0e-6 && (rb.quat[2]).abs() < 1.0e-6, "pure z rotation {:?}", rb.quat);
         assert!(rb.quat[0] > 0.99 && rb.quat[3] > 0.0, "w≈cos(half), a small positive z turn");
         assert_eq!(st.matrix[2][0], 0.0);
-        assert_eq!(st.matrix[2][2], 1.0, "z rotation leaves the z row [M quat_to_matrix]");
+        assert!((st.matrix[2][2] - 1.0).abs() < 1.0e-6, "z rotation leaves the z row [M quat_to_matrix]");
         assert!(st.matrix[1][0].abs() > 1.0e-4, "the rotation left the identity [M 0x1d79e8-0x1d79f0]");
     }
 
@@ -1008,6 +1050,64 @@ mod evolve_tests {
         let w2 = rb_to_world(v, &m);
         let b2 = rb_to_body(v, &m);
         assert!(w2.iter().zip(b2.iter()).any(|(a, c)| (a - c).abs() > 1.0e-4));
+    }
+
+    /// [M disasm 0x1d7864-0x1d78dc] The angular damping is omega += omega·(−(1 − e^(−dt/a))/dt):
+    /// ×0.96 per tick at +0xa4 = 25 (type 0xFFFF). Sister (can fail): the plain e^(−dt/a)
+    /// form (×0.99933 per tick) is far weaker.
+    #[test]
+    fn angular_damping_is_the_games_rate_form() {
+        let (mut rb, mut st) = barrel();
+        st.omega = [1.0, 0.0, 0.0];
+        rb_euler_evolve(&mut rb, &mut st, 1, crate::ssys::REC_FRAME_RATE);
+        let f = st.omega[0];
+        assert!((f - 0.96).abs() < 2.0e-4, "per-tick factor {f} (the game's 1 − (1−e)/dt ≈ 0.96)");
+        assert!(f < (-(crate::ssys::REC_FRAME_RATE / 25.0f32)).exp() - 0.03, "sister: not the plain exponential");
+    }
+
+    /// [M disasm 0x1d79f4-0x1d7a58] The type != 0 tail: a body tilted about x by θ gets
+    /// +0x50 += (−up.z·I1, 0, up.x·I1) — the restoring torque; type 0 gets none.
+    #[test]
+    fn upright_tail_restores_a_tilted_body() {
+        let (mut rb, mut st) = barrel();
+        let th = 0.2f32;
+        rb.quat = [(th * 0.5).cos(), (th * 0.5).sin(), 0.0, 0.0];
+        rb_euler_evolve(&mut rb, &mut st, 1, crate::ssys::REC_FRAME_RATE);
+        let up = st.matrix[1];
+        assert!((up[2] - th.sin()).abs() < 1.0e-5, "row 1 = Mat_GetUp tilts toward +z, {up:?}");
+        let i1 = rb.moments[1];
+        assert!((st.tor_impulse[0] + th.sin() * i1).abs() < 1.0e-5, "x torque −up.z·I1, got {:?}", st.tor_impulse);
+        assert_eq!(st.tor_impulse[1], 0.0);
+        assert!(st.tor_impulse[2].abs() < 1.0e-6);
+        // The next evolve turns it into omega opposing the tilt (θ shrinks).
+        rb_euler_evolve(&mut rb, &mut st, 0, crate::ssys::REC_FRAME_RATE);
+        assert!(st.omega[0] < 0.0, "the spring drives the tilt back, omega {:?}", st.omega);
+        // Sister (can fail): a type-0 body never gets the tail.
+        let mut r0 = rb_init(0);
+        assert!(rb_build(&mut r0, 3.0, BOX_VERTS, rb_cuboid_moments_of_inertia(3.0, 2.0, 3.0, 4.0)));
+        r0.quat = rb.quat;
+        let mut s0 = RbState::zeroed();
+        rb_euler_evolve(&mut r0, &mut s0, 1, 0.0);
+        assert_eq!(s0.tor_impulse, [0.0; 3], "type 0 has no up-righting tail [M 0x1d79f8 gate]");
+    }
+
+    /// [M disasm 0x1d753c-0x1d757c, 0x1d7580] The Rot class-5 arm's lane masks per type, and no
+    /// +0x40 write.
+    #[test]
+    fn rot_arm_lane_masks() {
+        let hit = RbHit { scale: 2.0, normal: [0.0; 3], vel: [0.0, 1.0, 1.0], point: [11.0, 2.0, 20.0],
+            other_class: 5, other_pos: [0.0; 3] };
+        // r = (1, 1, 0), imp = (0, 1, 1) → r×imp = (1, −1, 1).
+        let full = [1.0f32, -1.0, 1.0];
+        for (ty, want) in [(-1i16, full), (1, [1.0, 0.0, 1.0]), (2, [1.0, 0.0, 0.0]), (3, [0.0, -1.0, 0.0]), (4, [0.0, 0.0, 1.0])] {
+            let (mut rb, mut st) = barrel();
+            rb.ty = ty;
+            let mut snd = Vec::new();
+            rb_resting_contact_rot(&rb, &mut st, std::slice::from_ref(&hit), &mut snd);
+            assert_eq!(st.tor_impulse, want, "type {ty}");
+            assert_eq!(st.lin_impulse, [0.0; 3], "Rot never writes +0x40 (type {ty})");
+            assert_eq!(snd.len(), 1);
+        }
     }
 
     /// [M 0x1d8038 disasm] out = f·(a − b·c), three components.
