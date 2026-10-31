@@ -9236,6 +9236,12 @@ pub fn menu_overlay_fonts(fe: &FrontEnd, font: &nf_formats::hud::Font, hfont: &n
             // More than the game's 4 columns (16-player matches): a ranked table, one line per
             // participant, sized so every line fits above the result plate [S port layout].
             let all_rows = fe.mp_debriefing.as_ref().map_or(0, |b| b.rows.len());
+            // The frame buttons [D page 0x40000033: SET 7 — the four participant columns 0x1000015d and
+            // the result box]: a column's box stands only for a participant [M P_MPDEBRIEFING
+            // 0x212198:148-150, :206-207]; the ranked table (more than four) shows none.
+            // Drawn first: the boxes sit behind the portraits and text (layer 0x1a against their 0x19).
+            let cols = if all_rows > 4 { 0 } else { fe.mp_debriefing_rows().len() };
+            draw_page_elems(&mut h, &crate::fe_pages::debrief_frame_elems(cols), [hfont, font, mfont.unwrap_or(font)], textures);
             if all_rows > 4 {
                 let board = fe.mp_debriefing.as_ref().unwrap();
                 let (top, avail) = (112.0f32, 232.0f32);
@@ -9283,7 +9289,6 @@ pub fn menu_overlay_fonts(fe: &FrontEnd, font: &nf_formats::hud::Font, hfont: &n
             const PORTRAIT_PLACEHOLDER: [u32; 4] = [0x0300_015d, 0x0300_015c, 0x0300_0156, 0x0300_016b];
             for (i, (rank, name, tex, points, victories, deaths, total)) in fe.mp_debriefing_rows().iter().enumerate() {
                 let dx = i as f32 * 104.0;
-                plate(&mut h, mx(176.0 + dx), my(94.0), mx(96.0), my(253.0), gs(0x1e1210, 0x60));
                 let ptex = if *tex != 0 { *tex } else { PORTRAIT_PLACEHOLDER[i] };
                 tex_quad_or_plate(&mut h, textures, ptex, 184.0 + dx, 102.0, 81.0, 81.0, [32.0, 0.0, 64.0, 64.0], gs(0x7f7f7f, 0xff));
                 left_text(&mut h, font, &bind(*rank), mx(187.0 + dx), my(103.0 + 8.5 + 6.0), bright, true, 1.0);
@@ -9298,7 +9303,6 @@ pub fn menu_overlay_fonts(fe: &FrontEnd, font: &nf_formats::hud::Font, hfont: &n
                 }
             }
             }
-            plate(&mut h, mx(176.0), my(355.0), mx(408.0), my(52.0), gs(0x1e1210, 0x60));
             let (rl, mut rarg) = fe.mp_debriefing_result();
             // A bot winner has no codename in the settings: its name cell's caption stands in
             // (the line read "%s wins the match." when the Guard bot won the two-window match) [S].
@@ -9456,11 +9460,9 @@ pub fn menu_overlay_fonts(fe: &FrontEnd, font: &nf_formats::hud::Font, hfont: &n
             // binds (the level's own high score / best / upgrades) — headless has no save data, so
             // the values draw as 0.]
             page_header(&mut h, hfont, &bind(0x280));
-            // The three framed boxes [L the b0=1 frame controls (68,120,505×34), (68,162,505×113), (68,285,505×60)]:
-            // translucent black with a thin dark border (PCSX2 07000048 Records, 2026-10-13). No ring art.
-            for (x, y, w, hh) in [(68.0f32, 120.0f32, 505.0f32, 34.0f32), (68.0, 162.0, 505.0, 113.0), (68.0, 285.0, 505.0, 60.0)] {
-                frame640(&mut h, x, y, w, hh);
-            }
+            // The three frame buttons [D page 0x4000003a: type 1, SET 0xc at (68,120,505×34), SET 7 at
+            // (68,162,505×113) and (68,285,505×60)] draw their sprite sets (crate::fe_pages::FRAME_BUTTONS).
+            draw_page_elems(&mut h, &crate::fe_pages::page_frame_elems(PAGE_RECORDS), [hfont, font, mfont.unwrap_or(font)], textures);
             let m = fe.cursor.min(CAMPAIGN.len() - 1);
             // The spinner 0x10000174 (132,124,376×16): the mission name centred, a yellow ◀ ▶ at its ends (PCSX2:
             // x 144 / 497) [M P_DSRECORDS 0x217248:11-13 fills it from sp_level].
@@ -9500,6 +9502,10 @@ pub fn menu_overlay_fonts(fe: &FrontEnd, font: &nf_formats::hud::Font, hfont: &n
             // RewardsTable+0x30..+0x3c, caption msg 0x18 from +0x1c..+0x28, hidden until their
             // cumulative medal chain); the logo. The stamp UVs are the draw pass's to verify.]
             page_header(&mut h, hfont, &bind(0x281));
+            // The five frame buttons [D page 0x4000003b: type 1, SET 7 — the spinner box (68,84,505×34)
+            // and the reward rows 0x100001da..dd (68,121/193/265/337,505×69)]; every one stays shown
+            // (C_RBDSREWARDS hides the stamps and captions, not the boxes [M 0x20c248]).
+            draw_page_elems(&mut h, &crate::fe_pages::page_frame_elems(PAGE_REWARDS), [hfont, font, mfont.unwrap_or(font)], textures);
             let m = fe.cursor.min(CAMPAIGN.len() - 1);
             label(&mut h, font, &bind(CAMPAIGN[m].1), 132.0, 93.0, 376.0, 16.0, bright, true, 1.0);
             for (i, (shown, cap, tex)) in fe.reward_rows(m).into_iter().enumerate() {
@@ -9655,8 +9661,7 @@ pub fn menu_overlay_fonts(fe: &FrontEnd, font: &nf_formats::hud::Font, hfont: &n
                 (fe.secret.typed.as_str(), Some(fe.secret.cursor))
             };
             page_header(&mut h, hfont, &bind(title));
-            frame640(&mut h, 117.0, 126.0, 406.0, 42.0);
-            frame640(&mut h, 117.0, 161.0, 407.0, 191.0);
+            draw_page_elems(&mut h, &crate::fe_pages::page_frame_elems(PAGE_CN_NAME), [hfont, font, mfont.unwrap_or(font)], textures);
             centred(&mut h, font, -2, typed, mx(117.0 + 203.0), my(135.0 + 8.0 + 3.0), cream, true, 1.0);
             let off = gs(0x73330f, 0x80);
             for (i, &(x, y, w, hh)) in CNNAME_CELLS.iter().enumerate() {
@@ -9692,6 +9697,9 @@ pub fn menu_overlay_fonts(fe: &FrontEnd, font: &nf_formats::hud::Font, hfont: &n
         // draw pass's.
         Page::CnControls => {
             page_header(&mut h, hfont, &bind(0x1f3));
+            // The page's frame buttons [D page 0x40000022: the style band (53,104,535×32) SET 0xc and
+            // the Y-axis button 0x100000c9 (461,109,99×25) SET 7].
+            draw_page_elems(&mut h, &crate::fe_pages::page_frame_elems(PAGE_CN_CONTROLS), [hfont, font, mfont.unwrap_or(font)], textures);
             cn_controls_rows(&mut h, fe, font, lang);
             hint_bar(&mut h, font, &hint(0x497, "~A Confirm  ~H Change  ~B Back"), 50.0, 419.0, cream);
             logo_stamp(&mut h);
@@ -9858,7 +9866,6 @@ fn draw_page_elems(h: &mut Hud, elems: &[crate::fe_pages::PageElem], fonts: [&nf
                 let p = |q: [f32; 2]| HudVertex { p: q, uv: [0.0, 0.0], c };
                 h.ndc_solid(-12, [p([a[0], a[1]]), p([b[0], a[1]]), p([b[0], b[1]]), p([a[0], a[1]]), p([b[0], b[1]]), p([a[0], b[1]])], c);
             }
-            ElemWhat::Frame => frame640(h, x * MW / SW, y * MH / SH, w * MW / SW, hh * MH / SH),
             ElemWhat::Pen { s, face, shadow } => {
                 if s.trim().is_empty() || c[3] <= 0.0 { continue; }
                 let fi = (*face as usize).clamp(1, 3) - 1;
@@ -10513,6 +10520,8 @@ pub fn mp_textures() -> &'static [u32] {
             .chain([0x0300_00d8u32, crate::fe_pages::CREDITS_BG_TEX])
             // The card box's frame atlas (SET 0xe [D 08000002]) — P_PARISENUM's box.
             .chain([crate::fe_pages::ATLAS_BOX])
+            // SET 0xc's atlas — the Records / Controls title band [D 08000002].
+            .chain([crate::fe_pages::ATLAS_SETC])
             .filter(|h| *h != 0 && !MENU_TEXTURES.contains(h)).collect();
         v.sort_unstable(); v.dedup(); v
     })
@@ -11090,23 +11099,6 @@ fn quad_uv(h: &mut Hud, tex: u32, x: f32, y: f32, w: f32, hh: f32, uv: [f32; 4],
 
 /// A flat coloured plate (the menu backdrop / the confirm box), inside the centred 4:3 band — see
 /// `quad640` [L PCSX2 captures].
-/// A 640-space framed box: a translucent black fill and a thin dark border (the b0=1 frame controls, PCSX2 07000048
-/// Records 2026-10-13).
-fn frame640(h: &mut Hud, x: f32, y: f32, w: f32, hh: f32) {
-    let rect = |h: &mut Hud, x0: f32, y0: f32, x1: f32, y1: f32, layer: i32, c: [f32; 4]| {
-        let (a, b) = (h.ndc(Anchor::Centre, mx(x0), my(y0)), h.ndc(Anchor::Centre, mx(x1), my(y1)));
-        let q = |p: [f32; 2]| HudVertex { p, uv: [0.0, 0.0], c };
-        let v = [q([a[0], a[1]]), q([b[0], a[1]]), q([b[0], b[1]]), q([a[0], a[1]]), q([b[0], b[1]]), q([a[0], b[1]])];
-        h.ndc_solid(layer, v, c);
-    };
-    rect(h, x, y, x + w, y + hh, -1, [0.0, 0.0, 0.0, 0.55]);
-    let e = [0.04, 0.02, 0.01, 0.9];
-    rect(h, x, y, x + w, y + 1.5, -1, e);
-    rect(h, x, y + hh - 1.5, x + w, y + hh, -1, e);
-    rect(h, x, y, x + 1.5, y + hh, -1, e);
-    rect(h, x + w - 1.5, y, x + w, y + hh, -1, e);
-}
-
 fn plate(h: &mut Hud, x: f32, y: f32, w: f32, hh: f32, c: [f32; 4]) {
     let (a, b) = (h.ndc(Anchor::Centre, x, y), h.ndc(Anchor::Centre, x + w, y + hh));
     let p = |q: [f32; 2]| HudVertex { p: q, uv: [0.03, 0.03], c };
