@@ -6252,6 +6252,9 @@ pub struct Scene {
     /// (`control_create_object(0x20, pos, rot)`) and `rotor_update` 0x18f568 adds ROT·FRAME_RATE_MUL
     /// to obj+0x50 each spinning tick, so the drawn rotation is the placement ROT + the sim's angle.
     pub rotor_placements: Vec<([f32; 3], [f32; 3])>,
+    /// The rigid bodies' placement indices (0xD8, placement order): slot `bi` past the rotors draws
+    /// the body whose `RbObj::placement` is `rbody_placements[bi]` at its live obj+0x90.
+    pub rbody_placements: Vec<u16>,
     /// The 0x34 placements the build gave posed slots (the camera slots follow them; the sim's
     /// gunimp list may be emptied by the MP Gun Emplacements setting, the slot layout is not).
     pub gunimp_placements: usize,
@@ -8381,6 +8384,10 @@ pub fn build(level: &Level, cels_only: bool, skeletons: &HashMap<u8, Skeleton>, 
                 // The rotors spin on a posed slot below (after the dynamic objects): the static draw
                 // held the placement pose forever [M rotor_update 0x18f568 writes obj+0x50 every tick].
                 if kind == 0x71 && cels_only { *misc_drawn.entry(0x71).or_default() += 1; continue; }
+                // The rigid bodies ride a posed slot below (after the rotors): `RB_EulerEvolve` rewrites
+                // obj+0x90 once a body is disturbed [M 0x1d7810:0x1d796c-0x1d7994], so the static draw
+                // left a shot lamp hanging still while its body swung.
+                if kind == 0xd8 && cels_only { *misc_drawn.entry(0xd8).or_default() += 1; continue; }
                 // A lock whose object has a LOD variant (the keypads: "Lock - KeypadLocked" →
                 // "Lock - KeypadUnlocked" [D block 0x27]) rides the posed slot space below, so the
                 // unlock's `Control_NextLOD` can swap it.
@@ -8467,6 +8474,7 @@ pub fn build(level: &Level, cels_only: bool, skeletons: &HashMap<u8, Skeleton>, 
         let mut lock_matrices: Vec<Mat4> = Vec::new();
         let mut dynobj_matrices: Vec<Mat4> = Vec::new();
         let mut rotor_placements: Vec<([f32; 3], [f32; 3])> = Vec::new();
+        let mut rbody_placements: Vec<u16> = Vec::new();
         let mut gunimp_placements = 0usize;
         let mut door_scene_hidden = std::collections::HashSet::new();
         let mut sl_lod: Vec<u16> = Vec::new();
@@ -8673,6 +8681,22 @@ pub fn build(level: &Level, cels_only: bool, skeletons: &HashMap<u8, Skeleton>, 
                 let mx = nf_formats::placement::object_matrix(p.rotation, p.translation);
                 let inst = Instance { map, object, matrix: mx, placement: p.clone() };
                 add_instance(level, &inst, Layer::Character, None, &mut groups, None, None, Some((rotor_base + ri) as u16), None, [1.0; 3], &room_cels, u32::MAX, u32::MAX);
+            }
+            // The rigid bodies (0xD8, placement order — `Rbodies::create`'s), after the rotors: one slot
+            // each, posed every tick at the body's obj+0x90 (rotation rows + the +0x30 translation)
+            // [M RB_Create 0x1d6bf0:53, RB_EulerEvolve 0x1d7810]. RB_Create keeps no obj+0xF0 copy, so
+            // a 0x10-flagged glist still draws (the non-copying kinds above).
+            let rbody_base = rotor_base + level.maps[m].placements.iter().filter(|p| p.flags & 0xff == 0x71).count();
+            for (bi, (pi, p)) in level.maps[m].placements.iter().enumerate().filter(|(_, p)| p.flags & 0xff == 0xd8).enumerate() {
+                rbody_placements.push(pi as u16);
+                if !cels_only { continue; }
+                let target = if p.by_hash() { level.by_hash.get(&p.hashcode).copied() }
+                    else if (p.index as usize) < level.maps[m].objects.len() { Some((m, p.index as usize)) } else { None };
+                let Some((map, object)) = target else { continue };
+                if !level.maps[map].objects[object].gfx.leaves.iter().any(|l| !l.batches.is_empty()) { continue; }
+                if let Ok(h) = std::env::var("NF_HIDE") { if h.split(',').any(|n| !n.is_empty() && level.maps[map].objects[object].name.contains(n)) { continue; } }
+                let inst = Instance { map, object, matrix: nf_formats::placement::object_matrix(p.rotation, p.translation), placement: p.clone() };
+                add_instance(level, &inst, Layer::Character, None, &mut groups, None, None, Some((rbody_base + bi) as u16), None, [1.0; 3], &room_cels, u32::MAX, u32::MAX);
             }
             // Level-placed pickups (`Pickup_Create` 0x18dda0): `View_DrawObjectGlist` 0x1e6780 draws
             // `obj+0xD8` at `obj+0x90` — the same object carries the glist the renderer draws [M], so the
@@ -9150,7 +9174,7 @@ pub fn build(level: &Level, cels_only: bool, skeletons: &HashMap<u8, Skeleton>, 
                 }
             }
         }
-        Scene { shard_tex, cels: room_cels, cel_graph, streams: None, music_files: None, music_tables: None, sound_bank: None, sound_spares: Vec::new(), snow_texture, vertices, indices, materials, textures, hud_textures, woman: None, hud, script_billboards, view_models, mp_bodies, bond_body, mp_body_weapons, mp_char_bodies, mp_anim_sets, fog, bounds, start, stats, characters, char_vertex_start, char_verts, sequences, attachments, sim, colliders, models_0x800, npc_pool, ladders_drawn, grapple_hooks_drawn, misc_drawn, lock_matrices, dynobj_matrices, rotor_placements, gunimp_placements,
+        Scene { shard_tex, cels: room_cels, cel_graph, streams: None, music_files: None, music_tables: None, sound_bank: None, sound_spares: Vec::new(), snow_texture, vertices, indices, materials, textures, hud_textures, woman: None, hud, script_billboards, view_models, mp_bodies, bond_body, mp_body_weapons, mp_char_bodies, mp_anim_sets, fog, bounds, start, stats, characters, char_vertex_start, char_verts, sequences, attachments, sim, colliders, models_0x800, npc_pool, ladders_drawn, grapple_hooks_drawn, misc_drawn, lock_matrices, dynobj_matrices, rotor_placements, rbody_placements, gunimp_placements,
             door_scene_hidden,
             sl_lod,
             destroy_centres,
@@ -10083,6 +10107,14 @@ pub fn build(level: &Level, cels_only: bool, skeletons: &HashMap<u8, Skeleton>, 
                 let di = c - 3 * s.drones.sensors.list.len();
                 if di >= self.dynobj_matrices.len() {
                     let ri = di - self.dynobj_matrices.len();
+                    if ri >= self.rotor_placements.len() {
+                        // Past the rotors: the rigid bodies at their live obj+0x90 [M RB_EulerEvolve 0x1d7810].
+                        let pi = *self.rbody_placements.get(ri - self.rotor_placements.len())?;
+                        let st = &s.drones.rbodies.list.iter().find(|o| o.placement == pi)?.st;
+                        let r = st.matrix;
+                        return Some([[r[0][0], r[0][1], r[0][2], 0.0], [r[1][0], r[1][1], r[1][2], 0.0],
+                            [r[2][0], r[2][1], r[2][2], 0.0], [st.trans[0], st.trans[1], st.trans[2], 1.0]]);
+                    }
                     let (rot, trans) = *self.rotor_placements.get(ri)?;
                     let a = s.drones.worldobjs.rotors.get(ri)?.angle;
                     return Some(nf_formats::placement::object_matrix([rot[0] + a[0], rot[1] + a[1], rot[2] + a[2]], trans));
