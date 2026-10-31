@@ -84,6 +84,10 @@ pub struct MenuDef {
     /// Every PAGE tag seen, including ones skipped by hash/kind (the game's 56-page count
     /// counts these [D the 2026-10-13 census]; `pages` holds only the registered ones).
     pub pages_seen: usize,
+    /// Every SET record in file order, whichever page (or none) it falls under — the game's
+    /// `Component_AddSet` 0x1f1060 registers each one on the manager's set list, keyed by its id
+    /// (a control's NEW_CONTROL+0x14 word names its set [M Scroll_Init 0x2214f0:33,38]).
+    pub sets: Vec<SpriteSet>,
 }
 
 impl MenuDef {
@@ -307,9 +311,10 @@ impl MenuDef {
               // engine's allocations are tagged Menu_Malloc 0x1f3008 (Mem_Malloc(size, 0x3104, 0))
               // / Menu_Free 0x1f3028 — this port's Vec storage is that job (see
               // nf-view/src/menu_engine.rs MENU_MALLOC_TAG);
-                    let _n = p.word();
+                    let n = p.word();
+                    def.sets.push(SpriteSet { id: n, ..Default::default() });
                     if let Some(pg) = page {
-                        def.pages[pg].sets.push(SpriteSet::default());
+                        def.pages[pg].sets.push(SpriteSet { id: n, ..Default::default() });
                     }
                 }
                 -0x04 => {
@@ -323,8 +328,9 @@ impl MenuDef {
                     let b = p.word();
                     let c = p.word();
                     let d = p.word();
+                    def.sets.last_mut().map(|s| s.components.push(ComponentDef { count, hash, a, b, c, d, sprites: Vec::new() }));
                     if let Some(pg) = page {
-                        def.pages[pg].sets.last_mut().map(|s| s.components.push(ComponentDef { count, hash, a, b, c, d }));
+                        def.pages[pg].sets.last_mut().map(|s| s.components.push(ComponentDef { count, hash, a, b, c, d, sprites: Vec::new() }));
                     }
                 }
                 -0x05 => {
@@ -333,8 +339,17 @@ impl MenuDef {
                     for v in w.iter_mut() { *v = p.word(); }
                     let d1 = p.dword();
                     let d2 = p.dword();
-                    let f1 = f32::from_bits(p.dword());
-                    let f2 = f32::from_bits(p.dword());
+                    // The two fraction words are INTEGERS the game converts to float
+                    // (`(float)(int)v`, or the unsigned convert when the top bit is set) before
+                    // Component_InitInstance stores them at +0x2c/+0x30 [M MenuManager_Create
+                    // 0x21b908:342-357] — the disc's 9-slice edges carry 1, i.e. 1.0 (fill).
+                    let f1 = p.dword() as f32;
+                    let f2 = p.dword() as f32;
+                    // The record lands in the LATEST component's instance array at the running
+                    // index the COMPONENT tag reset [M 0x21b908:358 `iStack_bc + uStack_ac·0x38`,
+                    // :363 uStack_ac = 0 at -0x04].
+                    def.sets.last_mut().and_then(|s| s.components.last_mut()).map(|c| c.sprites.push(SpriteDef { w, d1, d2, f1, f2 }));
+                    def.sets.last_mut().map(|s| s.sprites.push(SpriteDef { w, d1, d2, f1, f2 }));
                     if let Some(pg) = page {
                         def.pages[pg].sets.last_mut().map(|s| s.sprites.push(SpriteDef { w, d1, d2, f1, f2 }));
                     }
@@ -469,6 +484,8 @@ pub struct KfMsg {
 
 #[derive(Debug, Default, Clone)]
 pub struct SpriteSet {
+    /// The SET record's u16 id (the handle's high half [M Component_GetHandle 0x1f1268]).
+    pub id: u16,
     pub components: Vec<ComponentDef>,
     pub sprites: Vec<SpriteDef>,
 }
@@ -481,8 +498,15 @@ pub struct ComponentDef {
     pub b: u16,
     pub c: u16,
     pub d: u16,
+    /// The SPRITE records that followed this COMPONENT tag — its instances, in order (the game's
+    /// `count`-sized array the -0x05 records fill [M 0x21b908:358-363]).
+    pub sprites: Vec<SpriteDef>,
 }
 
+/// One component instance as the disc authors it — `Component_InitInstance` 0x1f1200's inputs:
+/// `w` = dx, dy, w, h, u, v, uw, vh (+0x0c..+0x1a); `d1` = the instance's +0x00 word (the sprite
+/// colour 0xRRGGBBAA); `d2` = the +0x34 flags (visibility mask bits 0x10/0x20/0x40/0x80, anchors
+/// 1/2/4/8); `f1`/`f2` = the width / height fractions (+0x2c/+0x30) [M 0x1f1200 field-for-field].
 #[derive(Debug, Default, Clone)]
 pub struct SpriteDef {
     pub w: [u16; 8],
