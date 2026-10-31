@@ -12056,7 +12056,7 @@ impl Sim {
         self.mp_hp[slot] = (self.mp_hp[slot] - (d - absorbed)).max(0.0);
         if slot == self.mp_local_slot {
             // The pain flash (presentation; `Player_HandlePain`'s +0x968 write).
-            self.drones.health.flash = (self.drones.health.flash + (d * 21.333).min(128.0)).min(255.0);
+            self.drones.health.flash = nf_game::bullet::PlayerHealth::pain_glow(self.drones.health.flash, d);
         }
         if self.mp_hp[slot] <= 0.0 {
             self.mp_dead_ticks[slot] = 1;
@@ -12458,7 +12458,7 @@ impl Sim {
             // The local HUD's flash and hit-direction glow (`BL+0x968` / `+0x967` [M 0x1902c8:120-134;
             // 0x194458:199-232 — the hit direction in the viewer's frame]) — this machine's view only.
             let hl = &mut self.drones.health;
-            hl.flash = (hl.flash + (d * 21.333).min(128.0)).min(255.0);
+            hl.flash = nf_game::bullet::PlayerHealth::pain_glow(hl.flash, d);
             hl.dir_bits = 0xC;
             if located {
                 // The source side: back along the round's travel direction.

@@ -302,7 +302,10 @@ impl Hud<'_> {
         let (placed, native_w) = font.layout(s, 0.0, y);
         let width = native_w * scale;
         let x0 = if right { x - width } else { x };
-        let sh = 1.5 * scale;
+        // The drop shadow (sprite flag 0x20 → font flag 0x1000) is one copy at (+1, +1) in the
+        // shadow colour [M View_DrawSprites 0x1e5290:171-172; Font_DrawText 0x1eee48:96-98
+        // `__Font_DrawText(x + 1.0, y + 1.0, …, shadow colour, …)`]. It had drifted to 1.5 px.
+        let sh = text_shadow_offset(scale);
         // The shadow fades with its text (a dim label, the pickup text's fade-out); an opaque shadow under a
         // faint label left a dark smudge [S: not yet checked against a PCSX2 frame].
         let shade = { let mut s = gs(0, 0xff); s[3] = s[3].min(c[3]); s };
@@ -364,6 +367,18 @@ impl Hud<'_> {
 /// sprite (`clip_size · hpr`). The game itself can't reach this state: pickups and reloads both cap the clip
 /// at its size [M pickup.rs `Inventory::give` / the reload paths] — the clamp is the HUD standing safe.
 pub fn strip_clip(clip: f32, clip_size: f32) -> f32 { clip.min(clip_size.max(1.0)) }
+
+/// The ammo pane's strip (filled, full) on a mounted gun: the substate-0xc arm sets max 100 and the
+/// value `(int)(heat · 0.5) & 0xffff`, clamped to 100 (unsigned compare) [M HUD_UpdateAmmoPane
+/// 0x19a7f0:137-145]; the strip rows then read BulletImg[0x1f] (`uStack_c8 · 0x10` [M :254, :282]).
+pub fn mounted_heat_strip(heat: f32) -> (f32, f32) {
+    let v = ((heat * 0.5) as i32 as u32) & 0xffff;
+    (v.min(100) as f32, 100.0)
+}
+
+/// The HUD text drop-shadow offset (both axes) at a text scale: `Font_DrawText` 0x1eee48:96-98
+/// draws the flag-0x1000 shadow once at (x + 1.0, y + 1.0) [M]; scaled text keeps the proportion.
+pub fn text_shadow_offset(scale: f32) -> f32 { scale }
 
 /// The crosshair sprite's top-left in the 512×448 frame for the smoothed offset (cx, cy) and the
 /// cell's w × h: `HUD_UpdateCrossHair` 0x19e6d0:89-90 stores `(short)(int)(256·cx + 256)` /
@@ -635,14 +650,22 @@ pub fn overlay(scene: &crate::scene::Scene, aspect: f32) -> HudFrame {
         } };
         h.text(Anchor::Right, &t.font, sp.layer as i32, &txt, ammo_at.0 + sp.x as f32, ammo_at.1 + sp.y as f32, true, gs(sp.colour >> 8, sp.colour & 0xff), sp.flags & 0x20 != 0);
     }
-    if let (false, false, Some(&[bu, bv, bw, hpr])) = (mp, switching, t.bullets.get(ammo_type)) {
+    // The mounted gun (substate 0xc, `GunImp_Activate` 0x132f00): the pane swaps in the imp's heat —
+    // kind 0x1f, max 100, value min((int)(ext+0x90 · 0.5), 100) [M HUD_UpdateAmmoPane 0x19a7f0:137-145]
+    // — so the rounds strip becomes BulletImg[0x1f]'s heat gauge (`mounted_heat_strip`). The count
+    // text stays blank: the held weapon is WeaponNone 0x47, whose +0x68 carries 0x20 [D weapon_data].
+    let mount_heat = s.drones.props.gunimps.iter().find(|g| g.active).map(|g| g.heat);
+    let strip_kind = if mount_heat.is_some() { 0x1f } else { ammo_type };
+    if let (false, false, Some(&[bu, bv, bw, hpr])) = (mp, switching, t.bullets.get(strip_kind)) {
         // The strips draw the same transformed clip'/max' for kind 0x1f [M 0x19a7f0:129-136 flows into
         // :254-269]: the filled height = clip'·px/round of the full max'·px/round column, and the filled
         // strip's v starts (max'−clip')·px/round down the bullet texture.
         // fix-laser-watch-look: the held laser's strip shows the charge of 100 (the pane's second
         // value reads the same instance's f32 [M 0x19a7f0:172]; the sprite layout's exact gauge is a
         // render live check).
-        let (clip_n, max_n) = if laser_held {
+        let (clip_n, max_n) = if let Some(heat) = mount_heat {
+            mounted_heat_strip(heat)
+        } else if laser_held {
             (s.laser_charge, 100.0)
         } else if ammo_type as u8 == 0x1f {
             let mx = (clip_size as u32).saturating_sub(12);

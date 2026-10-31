@@ -283,6 +283,15 @@ impl Default for PlayerHealth {
 }
 
 impl PlayerHealth {
+    /// The damage-glow alpha `BL+0x968` after a hit of `d`: the byte + min(d · 21.333334, 128),
+    /// capped at 255 and stored through `(char)(int)` — an integer, the fraction dropped
+    /// [M Player_HandlePain 0x1902c8:126-130]. The HUD draws the glow at this alpha and takes 1
+    /// off per tick [M HUD_UpdateHealthPane 0x19b9c8:108-110].
+    pub fn pain_glow(flash: f32, d: f32) -> f32 {
+        let add = (d * 21.333_334).min(128.0);
+        ((flash as u8 as f32 + add).min(255.0) as i32) as f32
+    }
+
     /// `Player_HandlePain` (single player, damage type 0): × the level's damage factor for the difficulty
     /// (`Plr_DMod_*`, `ReadTuningVars`; 4 → ×2), armour absorbs first, health floors at 0 (below 1 → 0);
     /// flash += min(d · 21.333, 128), capped at 255. [L] 07000005 at difficulty 1: SG5 hits cost 1.65 = 2.75 × 0.6.
@@ -305,7 +314,7 @@ impl PlayerHealth {
         self.armour -= absorbed;
         self.health = (self.health - (d - absorbed)).max(0.0);
         let grunt = rng.rand(4) == 0; // Rand_Rand(4) [M 0x1902c8:111]
-        self.flash = (self.flash + (d * 21.333).min(128.0)).min(255.0);
+        self.flash = Self::pain_glow(self.flash, d);
         grunt
     }
 
@@ -483,7 +492,21 @@ mod tests {
         let mut rng = crate::drone::Rng::new(0);
         h.pain(&mut rng, 2.75, 1, 0x0700_0005);
         assert!((h.health - (100.0 - 1.65)).abs() < 1e-4, "live: 1.65 per SG5 hit");
-        assert!((h.flash - 1.65 * 21.333).abs() < 1e-3);
+        // The +0x968 byte: (int)(0 + 1.65 · 21.333334) = 35 — the fraction (35.2) is dropped
+        // [M 0x1902c8:126-130 `(char)(int)`].
+        assert_eq!(h.flash, 35.0);
+    }
+
+    /// `pain_glow` = the game's byte store: truncated sum, the 128 per-hit cap, the 255 total cap.
+    /// Sister: the old float sum (35.2 + 35.2 = 70.4) differs from the byte path (35 + 35 = 70).
+    #[test]
+    fn pain_glow_is_a_byte() {
+        assert_eq!(PlayerHealth::pain_glow(0.0, 1.65), 35.0);
+        assert_eq!(PlayerHealth::pain_glow(35.0, 1.65), 70.0);
+        assert_ne!(PlayerHealth::pain_glow(35.0, 1.65), 2.0 * 1.65 * 21.333_334);
+        assert_eq!(PlayerHealth::pain_glow(0.0, 100.0), 128.0, "one hit adds at most 128");
+        assert_eq!(PlayerHealth::pain_glow(200.0, 100.0), 255.0, "the byte caps at 255");
+        assert_eq!(PlayerHealth::pain_glow(10.5, 0.0), 10.0, "a stored byte has no fraction");
     }
 
     /// `Bullet_DoTrails` fly-by (0x12d890): a bullet passing within 3 units of the viewer on a 1-in-5 roll plays
