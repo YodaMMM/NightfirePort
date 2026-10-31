@@ -37,7 +37,7 @@ fn snap(sim: &nf_view::scene::Sim) -> Vec<(u16, [u8; 132])> {
     }).collect()
 }
 
-/// A resting body is bit-identical over the sim: the type-0xFFFF barrels never integrate
+/// A resting body is bit-identical over the sim: the type-1 barrel never integrates
 /// (EulerEvolve's pos arm is type-0 only [M 0x1d796c]), zero omega skips apply_omega [M
 /// 0x1d79ac gate], and no hit list ever arms (no blast) — so every slot keeps its create-time
 /// bits. The RB tick draws from the shared RNG only under the heat gate [M 0x1d6e88]; the
@@ -66,7 +66,7 @@ fn resting_barrels_stay_bit_identical_over_the_sim() {
 /// A blast next to a barrel changes its matrix the game's way: the explode sweep + the shared
 /// falloff (Collide_SphereIntersect 0x17c518:67, the falloff :78-81) arm the class-5 hit; the
 /// arm (impulse = (hit+0x8)·0.5·vel into +0x40, r×impulse into +0x50 [M 0x1d7238-0x1d72e4 —
-/// the Rot twin at 0x1d7428 for the type-0xFFFF barrels]) lands in the accumulators and the
+/// the Rot twin at 0x1d7428 for the type-1 barrel, its cross's y lane masked]) lands in the accumulators and the
 /// NEXT tick's RB_Update applies them (EulerEvolve) — the quat steps and the drawn obj+0x90
 /// rows leave identity. The hit record's velocity/point construction is the port's stand-in
 /// [S — the game's explosion-object contact record is unported]; this test pins the routing:
@@ -119,7 +119,12 @@ fn blast_next_to_a_barrel_changes_its_matrix_the_games_way() {
         centre[2] + vel[2] * pre.st.s13c + tangent[2],
     ];
     let mut expect = pre.clone();
-    nf_game::rigid_body::rb_explosion_hit_arm(&mut expect.st, vel, falloff, point);
+    // The barrel is type 1 (param 2 [D]; level_tag+0x34 [M 0x1d1b68:74]), so the hit walks
+    // `RB_RestingContactRot`'s class-5 arm with the type-1 lane mask (the cross's y zeroed
+    // [M disasm 0x1d753c-0x1d757c]).
+    assert_eq!(expect.rb.ty, 1, "the 07000006 barrel's type halfword is param 2 = 1");
+    let rec = nf_game::rigid_body::RbHit { scale: falloff, normal: [-vel[0], -vel[1], -vel[2]], vel, point, other_class: 5, other_pos: blast_pos };
+    nf_game::rigid_body::rb_resting_contact_rot(&expect.rb, &mut expect.st, &[rec], &mut Vec::new());
     let obj_y = expect.st.trans[1];
     nf_game::rigid_body::rb_update(&mut expect.rb, &mut expect.st, None, obj_y, 0x6, |_| panic!("a resting apply draws nothing"));
     assert_eq!(post.st.matrix, expect.st.matrix, "the matrix must equal the arm's evolution [M 0x1d7238-0x1d72e4]");
