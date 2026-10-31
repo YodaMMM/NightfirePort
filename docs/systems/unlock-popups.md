@@ -101,6 +101,24 @@ report — lowers it and opens the credits through `open_credits(PAGE_WIN_GAME, 
 just_completed)` [M :48's arg-1 send]. The audio restart (0x1d7/0x470) is the host's; the model
 keeps the flow. Tests: `win_movie_end_opens_credits_from_the_win_page`.
 
+### The draw (crates/nf-view/src/fe_pages.rs)
+
+- 007 Bonus: `nfbonus_elems(bonus, bind)` — the record's seven drawn controls at their runtime
+  rects (`control_rect`: FixupResolution 0x21b610, and the forced (340,198) of 0x10000224). The
+  text list 0x100001d0 takes msg 0x23 with 0x30d348 = `ff 03`: FONTMedium with no `fe` tag, so it
+  is left-aligned at the control's x, and its first line's pen sits on the box's middle − 1
+  (Label_Update drops the extent term when the text holds a newline [M 0x218cb8:186-193]). The
+  text is the handler's composition — tier 1 with format 0x30d350 (`%s` + newline), then tiers 4,
+  3, 2 each with 0x30d358 (`%s` newline `%s`) over `buf.276` 0x34d048 — so a blank line follows
+  tier 1; Menu_ClipString cuts it at the control's width. The page animates nothing: its one
+  script (the page's own) has a single keyframe that focuses 0x10000165 [D]; the 007 flash that
+  goes with the bonus sound is the HUD's health-pane sprite.
+- Win page: `wingame_elems()` is empty (the bare record). The host plays 0x073f0048 on the movie
+  plane while `win_movie` stands (one psiMovieFinished poll per page tick); at the end it restarts
+  the menu-music pair and calls `win_movie_finished` (a declined start finishes at once — the
+  game's BGFMVPlaying == 0). The overlay draws nothing while the movie frame is up, the dark
+  plate stand-in otherwise. `--page wingame` / `--page nfbonus` render them.
+
 ## 4. P_CHEATMEDAL 0x4000004c — the cheat/medal grant page (an open question)
 
 The dispatcher handles the page id [M :511-513] but **no PAGE record exists in the front-end

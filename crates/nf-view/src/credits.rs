@@ -1,5 +1,5 @@
 //! The credits roll's content and timing — `P_CREDITS_Handler` 0x2152b0 (page 0x40000030) and
-//! `Menu_SetupCredits` 0x1f9a88. State + getters only: the draw side draws it.
+//! `Menu_SetupCredits` 0x1f9a88. State + getters only: `crate::fe_pages::credits_elems` draws it.
 //!
 //! Opened from AV Options (page 0x40000031, its Credits action row) or from the end-of-game win
 //! page `P_WINGAME_Handler` 0x215100 (page 0x40000053: it plays the background movie 0x073f0048
