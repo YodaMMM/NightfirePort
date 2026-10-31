@@ -14,9 +14,15 @@
 //! walking route off the display-ground complex is closed — the slab's south face leaves a
 //! 0.23..0.4 slot above the 2.37 deck [D probe rays]; the game's own connection is the
 //! warehouse-side corridor/annex, a live check), the east
-//! climb ground→band (unpinned — the disc's own collision connects nothing: staircase01's bottom
-//! 9.52 floats over the 6.35 under-stairs [D eastclimb3/4 this session]; the stand-in lifts Bond
-//! onto the band at the gate), and the ladder495 sister test's west-ground placement. Route: the ST-1
+//! climb ground→band (PINNED an island, level-0c-east-climb: the disc's own collision connects
+//! NOTHING to the band deck — staircase01's bottom 9.52 floats over the 6.35 under-stairs [D
+//! eastclimb3/4], the turb4 stair chain's slot x 81.5..83.7 is EMPTY 6.5..9.3 [D eastclimb5/6],
+//! the band strip gaps 10.4 m over the chasm, the north-strip mezzanine breaks at x 54..64.5,
+//! the crates4 gap is 3.1 m + 2.06 [D eastclimb6/7]; the deck is unreachable in the flood-fill
+//! at step law 0.55 AND 0.80 [D eastclimb7]; no lift kind, no east-side mover, west-only
+//! ladders/grapples [D kind census]; the nav patrols G3/G4 are separate [D nav dump]; the
+//! stand-in lifts Bond onto the band at the gate — the live checks decide whether the real
+//! game has a dynamic the parse cannot see), and the ladder495 sister test's west-ground placement. Route: the ST-1
 //! walkway start #1 (8.98, 15.07, −149.65 [D]) → north along the walkway (14.61 floor [D probe blk],
 //! east of the raised block x 5..10 [D probe0c-lane]) → the inner balcony repro spot (7.61, 15.71,
 //! −113.39 [L 991]) → the LASER-WATCH burn of the four hinge locks #139-142 through the held-fire
@@ -61,9 +67,11 @@
 //! kind-0x202 ring path], the running jump onto the turb4 lower ramp [D the 0.25-grid step
 //! scan], up to the east ground 6.17 [D plc42] — the straight crossing is dead ([L 2026-10-30
 //! fresh boot: Bond drops into the pit] + the void sisters below) → the east climb STAND-IN (the
-//! only unproven link: the disc's collision connects nothing — staircase01's bottom step 9.52
-//! floats over the 6.35 under-stairs at x 84.5 [D eastclimb3/4], the band's south rail 11.17
-//! walls the deck [D eastclimb3], the 0.78 jump apex [M player.rs]) lifting Bond onto the band
+//! only unproven link: the deck is a collision ISLAND — the disc's static data connects nothing;
+//! staircase01's bottom step 9.52 floats over the 6.35 under-stairs at x 84.5 [D eastclimb3/4],
+//! the stair slot x 81.5..83.7 is empty 6.5..9.3 [D eastclimb5/6], the band's south rail 11.17
+//! walls the deck [D eastclimb3], the 0.78 jump apex [M player.rs]; sisters 5b/5c pin the slot
+//! and the three remaining crossing attempts) lifting Bond onto the band
 //! at (95, −209.5), deck 10.34 [D plc44] → the gate steps → E → level_exit 0x0700000d ([M Player_Activate
 //! 0x1a5170 case 0x1d → Trigger_Activate 0x1b2318:111], the key gate ch 0x1c on) → the warm RamSave
 //! carry into 0700000d → the spawn TouchOnce #436 (179.53, 11.58, −205.40, out 0x23 [D 0d]) fires
@@ -1049,6 +1057,57 @@ fn walk_the_whole_mission_from_the_start_to_the_0d_handoff() {
         assert!(bottom.map_or(false, |y| (9.3..9.9).contains(&y)),
             "staircase01's bottom step moved (expected 9.52..9.68 [D eastclimb3]), got {bottom:?}");
     }
+    // Sister 5b (level-0c-east-climb: the stair SLOT — the decisive missing link of the climb
+    // chain). The turb4 flights are horizontally disjoint: staircase02 (plc36) tops at 8.10 at
+    // x 81.3..81.4 and staircase01 (plc35) starts at 9.45 at x 83.8..84.4 [D the eastclimb5
+    // level census this session]; between them (x 81.5..83.7, z −211..−209.5) the slot is EMPTY
+    // down to the lower flight's steps 1.75..3.75 [D the eastclimb6 fine map]. Crossing needs a
+    // 2.4 m jump that GAINS 1.35 — beyond the 0.78 apex [M player.rs]. A surface appearing in
+    // the slot band reopens the climb.
+    {
+        let sim = w.scene.sim.as_ref().unwrap();
+        for x in [81.75f32, 82.25, 82.75, 83.25] {
+            let slot = sim.world.segment_hit([x, 9.3, -210.0], [x, 6.5, -210.0]);
+            assert!(slot.is_none(), "a surface appeared in the stair slot at ({x}, −210.0) 9.3..6.5; the east climb reopened");
+        }
+        let top36 = sim.world.segment_hit([81.35, 8.5, -211.25], [81.35, 7.6, -211.25]).map(|(t, _)| 8.5 - 0.9 * t);
+        assert!(top36.map_or(false, |y| (7.9..8.3).contains(&y)),
+            "staircase02's top step moved (expected 8.10 [D eastclimb5]), got {top36:?}");
+    }
+    // Sister 5c (the band deck is an ISLAND — the flood-fill over the sim's own collision, 0.25
+    // grid, directed edges, step law 0.55 AND 0.80 [S the law itself; the island holds at both]):
+    // the gate deck + staircase01's deck form one component unreachable from the east ground, the
+    // yard, the west band, the corridor, the gallery and the catwalks [D eastclimb7 this
+    // session]. The remaining crossing attempts, each beyond the pinned apex:
+    // (a) the west band's east end 56.08 → turb3_walkway04's deck 66.5 — 10.4 m at deck height
+    //     (the [L 2026-10-30 fresh boot] drop at x 63.4 already pinned the walk-off);
+    // (b) the north-strip mezzanine (10.85, z −206.0..−205.1) breaks at x 54..64.5 [D eastclimb6
+    //     row −206.0: 6.17 ground, no 10.85 floor];
+    // (c) crates4 (tops 7.31/8.31) → walkway02's dead south end 10.37 — 3.1 m + 2.06 up.
+    {
+        let sim = w.scene.sim.as_ref().unwrap();
+        // (a) widened: the whole band-height strip over the chasm's west half.
+        for x in [57.0f32, 59.0, 61.0, 63.0, 65.0] {
+            let gap = sim.world.segment_hit([x, 11.9, -207.5], [x, 8.0, -207.5]);
+            assert!(gap.is_none(), "band-height floor appeared over the chasm at ({x}, −207.5); the east climb reopened");
+        }
+        // (b) the north strip's break: the west mezzanine's 10.85 ends at x 53.5 and the next
+        //     north-strip surface is room02's isolated 10.17 sliver [58.9..63.3, −206.1..−205.1
+        //     [D eastclimb5 plc9]] — nothing spans x 55..58.5 at 9.5..11.5, so the north route
+        //     never bridges the chasm (the sliver itself is an island: 5+ m to the west patch,
+        //     and the flood at 0.80 leaves it unconnected [D eastclimb7]).
+        for x in [55.0f32, 56.5, 58.0] {
+            let gap = sim.world.segment_hit([x, 11.5, -205.7], [x, 9.5, -205.7]);
+            assert!(gap.is_none(), "north-strip mezzanine floor appeared at ({x}, −205.7) 9.5..11.5; the east climb reopened");
+        }
+        // (c) the crates4 air gap: no floor 9.4..10.2 at z −229.0/−228.0, x 93..95.
+        for z in [-229.0f32, -228.0] {
+            for x in [93.0f32, 94.0, 95.0] {
+                let gap = sim.world.segment_hit([x, 10.2, z], [x, 9.4, z]);
+                assert!(gap.is_none(), "a surface appeared in the crates4 air gap at ({x}, {z}) 9.4..10.2; the east climb reopened");
+            }
+        }
+    }
     w.walk_to(Wp::new(95.0, 7.3, -209.5).r(1.2), "the gate's ground spot under the band");
     // Sister 6: the gate does NOT fire from the ground (the east-route report's probe: Bond at
     // (95.0, 7.3, −209.5), 120 use pulses — no level_exit): the trigger quad is at y 11.25..13.98
@@ -1059,7 +1118,15 @@ fn walk_the_whole_mission_from_the_start_to_the_0d_handoff() {
     // STAND-IN (now ONLY the east climb): lift Bond from the east ground onto the band deck
     // above the same spot — obj_turb5_walkway02's deck 10.34 at (95, −209.5) [D plc44 x
     // 92.38..95.31, y 10.16..11.17, z −227.26..−206.31; the scan z −209.5 x 95.0 = 10.34 [D
-    // eastclimb3]]. The unpinned link is the climb itself — live check in the report.
+    // eastclimb3]]. The deck is a COLLISION ISLAND pinned by sisters 5b/5c: the disc's own
+    // static data connects NOTHING to it (the turb4 stair flights are disjoint with an empty
+    // slot between; the band strip gaps 10.4 m over the chasm; the mezzanine strips break; the
+    // crates4 gap is 3.1 m + 2.06), no mover serves it (no lift kind on 0c [D kind census]; the
+    // 8 SSs, 2 doors, 2 ScriptPlayers are west-side [D audit §6]; ladders #164/#495 west [D];
+    // the five graple_pulley points elsewhere [D #308/346/500/508/511]), and the game's own nav
+    // patrols the east band (G3, 10.34) and the east ground (G4, 6.17) as SEPARATE paths with
+    // no links [D the 0c nav dump]. Live checks in the report settle whether the REAL game has
+    // a dynamic the parse cannot see.
     {
         let sim = w.scene.sim.as_mut().unwrap();
         sim.bond.pos = [95.0, 11.3, -209.5];
