@@ -109,6 +109,7 @@ impl Backend {
         input.aiming |= p.aiming;
         input.fire |= p.fire;
         input.zoom |= p.zoom;
+        if p.zoom_axis != 0.0 { input.zoom_axis = p.zoom_axis; }
         if input.weapon_cycle == 0 { input.weapon_cycle = p.weapon_cycle; }
         if input.gadget_cycle == 0 { input.gadget_cycle = p.gadget_cycle; }
         if input.switch_to.is_none() { input.switch_to = p.switch_to; }

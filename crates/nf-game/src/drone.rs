@@ -11784,6 +11784,11 @@ pub struct Drones {
     /// Auto-aim: the last target (`BL+0x114`) and the crosshair offset as (yaw, pitch) radians (`BL+0x120` / `+0x124`,
     /// screen units in the game; *approximation*: small angles).
     pub aim_target: Option<usize>,
+    /// weapon-handling: the next `fire_player` shot's player-owner spread scale
+    /// (`bullet::player_spread` — `Bullet_init` 0x12c5a0:139-170's class-3 arm: the pull bloom and
+    /// the aimed-sniper gate), set by the shot's caller and consumed by the shot. `None` keeps the
+    /// record's plain `+0x24` through the drones' 0x400000 gate (direct callers).
+    pub player_spread: Option<f32>,
     pub aim_offset: [f32; 2],
     pub alarm_sent: bool,
     pub bond_aiming: bool,
@@ -12356,7 +12361,7 @@ impl Drones {
             if let Some(g) = &mut dr.body_glow { g.owner = i; }
         }
         let llist = (0..list.len()).collect();
-        let mut drones = Drones { list, frame: 0, los_cursor: 0, llist, rng, lights: Default::default(), player_pos: [0.0; 3], bullets: Vec::new(), grenades: Vec::new(), explosions: Vec::new(), shake: 0.0, health: Default::default(), player_hits: Vec::new(), impacts: Vec::new(), prev_player: None, moved_since: None, stopped_since: None, player_move_local: None, target_motion: (false, false), target: PlayerTarget::default(), used: Vec::new(), link_flags: Vec::new(), locked_door_nodes: Default::default(), channels: Default::default(), triggers: Vec::new(), spawners: Vec::new(), cover_rt: Vec::new(), sounds: Vec::new(), cover_cursor: 0, cover_counter: 0, player_bullets: Vec::new(), net_no_self_hurt: false, player_impacts: Vec::new(), last_flinch: None, bond_aiming: false, level_exit: None, mission_end: None, bond_weapon: 2, env: None, sun_vector: [0.0; 3], env_pending: None, mp_master: 0, fill_rng: Rng::new(0x5eed), last_alarm: None, alarm_sent: false, party_loud: false, iop_section: 0, hud_frozen: false, aim_target: None, aim_offset: [0.0; 2],
+        let mut drones = Drones { list, frame: 0, los_cursor: 0, llist, rng, lights: Default::default(), player_pos: [0.0; 3], bullets: Vec::new(), grenades: Vec::new(), explosions: Vec::new(), shake: 0.0, player_spread: None, health: Default::default(), player_hits: Vec::new(), impacts: Vec::new(), prev_player: None, moved_since: None, stopped_since: None, player_move_local: None, target_motion: (false, false), target: PlayerTarget::default(), used: Vec::new(), link_flags: Vec::new(), locked_door_nodes: Default::default(), channels: Default::default(), triggers: Vec::new(), spawners: Vec::new(), cover_rt: Vec::new(), sounds: Vec::new(), cover_cursor: 0, cover_counter: 0, player_bullets: Vec::new(), net_no_self_hurt: false, player_impacts: Vec::new(), last_flinch: None, bond_aiming: false, level_exit: None, mission_end: None, bond_weapon: 2, env: None, sun_vector: [0.0; 3], env_pending: None, mp_master: 0, fill_rng: Rng::new(0x5eed), last_alarm: None, alarm_sent: false, party_loud: false, iop_section: 0, hud_frozen: false, aim_target: None, aim_offset: [0.0; 2],
             // The game's `DAT_00299092` (the shared LOS-probe counter; see the field) — zeroed
             // here as `Drone_LevelReset`'s memset zeroes it at level reset [M 0x13a5bc-cc].
             los_probes: 0,
@@ -13213,6 +13218,7 @@ fn segment_hits_sphere(a: V3, b: V3, c: V3, r: f32) -> bool {
         let whoosh = if w[0x90] == 0x0e { self.audio.play3d(0x10e, from, None) } else { 0 };
         let f = |o: usize| f32::from_le_bytes(w[o..o + 4].try_into().unwrap());
         let flags68 = u32::from_le_bytes(w[0x68..0x6c].try_into().unwrap());
+        let player_spread = self.player_spread.take();
         for _ in 0..u32::from_le_bytes(w[0x18..0x1c].try_into().unwrap()).clamp(1, 16) {
             // `PlrStat_LogShotFired(0)` 0x1998d8 per bullet spawned (Player_WeaponInitBullet
             // 0x1a4bf0:258 runs inside the per-pellet loop) — fix-progress.
@@ -13221,7 +13227,10 @@ fn segment_hits_sphere(a: V3, b: V3, c: V3, r: f32) -> bool {
             // 2-D `Sound_Play(100, 0xec)` per bullet, inside the same pellet loop
             // [M Player_WeaponInitBullet 0x1a4bf0:261-263, disasm `$a0` 0xec at 0x1a5050].
             if u16::from_le_bytes([w[2], w[3]]) == MICRO_CAMERA_BASE { self.audio.play(MICRO_CAMERA_SHUTTER_SFX); }
-            let dir = crate::bullet::spread(dir, f(0x24), flags68, &mut self.rng);
+            let dir = match player_spread {
+                Some(s) => crate::bullet::cone(dir, s, &mut self.rng),
+                None => crate::bullet::spread(dir, f(0x24), flags68, &mut self.rng),
+            };
             // fix-fire-modes3 [M Bullet_init 0x12c5a0:188-190]: `+0x6C & 0x200` spawns the round at
             // QUARTER speed (`fVar17 = +0x20; if (+0x6C & 0x200) fVar17 *= 0.25`) — the Torpedo
             // Launcher 0x30's slow glowing ball (speed 0.1 → 0.025 u/tick) and the Korsakov K5 dart
@@ -14836,7 +14845,31 @@ fn segment_hits_sphere(a: V3, b: V3, c: V3, r: f32) -> bool {
             d.weapons.records.get(weapon as usize).map_or(t.Autoaim_Range, |w| f32::from_le_bytes(w[0x1c..0x20].try_into().unwrap()))
         } else { t.Autoaim_Range };
         let mut found = None;
+        // weapon-handling [M Player_AutoAim 0x1a7c98:63-78]: the Q-Claw (0x50/0x51) scans ONLY the
+        // class-'Q' objects (the grapple points, `Grapple_Create` 0x198298) — never the drones —
+        // with k forced to 1 [M Check_AutoAim 0x1a73f8:150-152] and the object position (`obj+0x30`
+        // for a class other than 2/3 [M :113-120]); the port's point is the placement plus its
+        // object's sphere centre [S — the centre offset, not obj+0x30]. Grapple points carry an
+        // index past `GRAPPLE_AIM` in `aim_target` (the lock-on ×1.4 memory).
+        const GRAPPLE_AIM: usize = 1 << 20;
+        if matches!(weapon, 0x50 | 0x51) {
+            for (gi, g) in self.grapple_points.iter().enumerate() {
+                let p = g.pos;
+                let dv = [p[0] - head[0], p[1] - head[1], p[2] - head[2]];
+                let dist = (dv[0] * dv[0] + dv[1] * dv[1] + dv[2] * dv[2]).sqrt();
+                if dist > best || dist <= 0.0 { continue; }
+                let (mut h, mut v) = (t.Autoaim_Angle_H, t.Autoaim_Angle_V);
+                if self.aim_target == Some(GRAPPLE_AIM + gi) { h *= t.Autoaim_LockOnMul; v *= t.Autoaim_LockOnMul; }
+                let dyaw = angle_difference(yaw, dv[0].atan2(dv[2]));
+                if dyaw.abs() >= h { continue; }
+                let dpitch = angle_difference(pitch, (dv[1] / dist).clamp(-1.0, 1.0).asin());
+                if dpitch.abs() >= v || !d.world.line_of_sight_masked(head, p, crate::world::LOS_SENSOR) { continue; }
+                best = dist;
+                found = Some((GRAPPLE_AIM + gi, dyaw, dpitch));
+            }
+        }
         for (i, dr) in self.list.iter().enumerate() {
+            if matches!(weapon, 0x50 | 0x51) { break; }
             // `Check_AutoAim` (0x1a73f8): skip drawn==0 (`obj+0xFC`), dead (`+0xAC <= 0`), voice set 0xB (`+0xD8`),
             // the Disabled state (`obj+0xF4 == 1`, covered by `enabled`), and — single player — **every non-enemy
             // team** (`+0x44 != 1` → skip; the MP build checks `MP_areObjectsOnSameTeam` instead, not modelled).

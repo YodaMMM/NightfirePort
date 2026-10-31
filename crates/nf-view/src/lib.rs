@@ -5151,6 +5151,9 @@ impl App {
                                     weapon_cycle: std::mem::take(&mut self.weapon_cycle),
                                     gadget_cycle: std::mem::take(&mut self.gadget_cycle),
                                     zoom_cycle: std::mem::take(&mut self.zoom_cycle),
+                                    // weapon-handling: the mouse's held right button is the zoom-in axis
+                                    // (the scene maps a held `zoom` to −1); the pad merge writes its own.
+                                    zoom_axis: 0.0,
                                     switch_to: self.weapon_switch_to.take(),
                                     fire: self.trigger,
                                     zoom: self.zoom,

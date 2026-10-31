@@ -98,3 +98,31 @@ Grenade-mode-count records 0x60/0x61 [L count 2]: the only mode-BYTE cyclers.
 - `crates/nf-view/src/scene.rs`: `Sim.missile_cam` (+ `view_override()`), the substate-10 input
   zeroing + the restore countdown, the grenade spawn's flag feed and the fuse gate (`+0x70 & 0x200`).
 - Tests: `crates/nf-view/tests/fix_weapon_fire_modes_live.rs`.
+
+## Handling (refire, spread, zoom, reload)
+
+- **Refire** [M `Player_WeaponFiring` 0x1a5460:601-663]: a fresh press with the timer run out arms
+  `spp[mode]` (+0x28 + 2·mode) shots and sets the timer to 1; the timer falls by `FRAME_RATE_MUL`;
+  a shot needs the timer at ≤ 0 after the fall and re-arms it to max(+0x40, 1). Without a fresh
+  press a run-out timer returns before the fall (:627-629). View state 9 with `+0x68 & 0x8000`
+  takes no shot (:631-636) — the pump Frinesi 0x1c, the snipers and the Delta Repeater 0x11 refire
+  at their fire script's end (80 / 130 / 80 frames [D 07000005]), not at +0x40.
+- **Spread, player owner** [M `Bullet_init` 0x12c5a0:139-172]: s = (+0x24 + bloom) · mul, bloom =
+  trunc(min(spp[mode] − `BL+0x936`, +0x92) · +0x98) (the shot's place in the pull), mul = 0 only for
+  `+0x68 & 0x400000` with the aim bit set; the cone radius is (FRand(2s) − s) · 0.0014. No movement or
+  crouch term: `Player_WeaponInitBullet` 0x1a4bf0 aims head → `Player_GetAimingPoint` 0x1a4a98.
+  Port: `nf_game::bullet::player_spread` / `cone`.
+- **Zoom** [M `Player_Zoom` 0x1a1a70]: the zoom axis (action 6, aim bit only; the pad's d-pad up −1 /
+  down +1) scales target and current ×1.025/tick (÷ for +), the current then becomes the target and
+  the base record's remembered zoom (`BL+0x1B4 + base·0xC`); the idle axis eases the current ×1.15/tick
+  onto the target; the target is clamped to [1, min(+0x88, 50)]. The aim rise restores the remembered
+  zoom (sqrt(+0x88) at level start [M 0x1a17f8:51]; PlayerSetting+6 = 1 [M 0x17edd8:22]), the fall
+  sets 1.0 [M `Player_Weapon` 0x1a24c8:156-187]. No scope-flag gate in the game (the mouse reaches the
+  aim bit on +0x68 & 0x40 records only — the port's design). Port: `nf_game::gun::zoom_tick`.
+- **Reload time**: the key (branch A, disasm 0x1a5fb0-0x1a5fdc) plays +0xA4 at 1.35× from frame 0; the
+  auto-reload (branch B, 0x1a62e4-0x1a631c) starts flag-0x1000 records at frame 6.
+- **Under water** [M 0x1a5460:503-506]: `surfaced == 0` refuses the held trigger unless `+0x68 & 2`
+  (fists, Torpedo Launcher, laser, stunner twins).
+- **Q-Claw aim assist** [M `Player_AutoAim` 0x1a7c98:63-78]: scans class 'Q' grapple points only.
+- Tests: `crates/nf-view/tests/weapon_handling_live.rs` (every weapon's cadence/clip/reload/zoom from
+  the disc, the 0x8000 gate through the Sim), unit tests in `gun.rs` / `bullet.rs`.
