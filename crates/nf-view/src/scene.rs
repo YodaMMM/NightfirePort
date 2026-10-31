@@ -10937,12 +10937,16 @@ pub fn build(level: &Level, cels_only: bool, skeletons: &HashMap<u8, Skeleton>, 
         // render — the one that draws — never faded the puff (the CPU `posed_vertices`' gas_rgba
         // did). The shader multiplies c0.rgb/α by cols.rgb/α, which is exactly the game's tweak.
         // Free slots keep the ambient value: their matrix is FAR, nothing draws.
+        // night-alpha: every puff carries obj+0xF0 0x20000 (`Gas_Init` 0x1aacc8:83 ORs 0x20020120),
+        // and the Tweak quarters the alpha byte while the viewer is in night sight
+        // [M View_SetupRenderModes_Tweak 0x1e5888:12-17, viewer+0x236 == 1] (`Gas::tweak_alpha`).
         if let Some(s) = self.sim.as_ref() {
+            let mode = s.goggle_mode();
             for (a, att) in self.attachments.iter().enumerate() {
                 let Some((gi, gm)) = att.gas else { continue };
                 let Some(c) = cols.get_mut((l.col_att + a as u32) as usize) else { continue };
                 if let Some(g) = s.drones.gas.puffs.get(gi as usize).filter(|g| g.mesh == gm) {
-                    *c = [g.rgba[0] / 255.0, g.rgba[1] / 255.0, g.rgba[2] / 255.0, g.rgba[3] / 255.0];
+                    *c = [g.rgba[0] / 255.0, g.rgba[1] / 255.0, g.rgba[2] / 255.0, g.tweak_alpha(mode)];
                 }
             }
         }
@@ -11114,8 +11118,13 @@ pub fn build(level: &Level, cels_only: bool, skeletons: &HashMap<u8, Skeleton>, 
         // The gas puffs' live rgba (the object's obj+0x103..0x106 bytes the draw reads [M 0x1ab2d0 tail]):
         // read straight from the pool — the alpha byte fades the quad out.
         let gas_rgba: Vec<Option<[u8; 4]>> = self.attachments.iter().map(|a| {
-            a.gas.and_then(|(gi, gm)| self.sim.as_ref().and_then(|s| s.drones.gas.puffs.get(gi as usize).filter(|g| g.mesh == gm))
-                .map(|g| g.rgba.map(|c| c.round().clamp(0.0, 255.0) as u8)))
+            a.gas.and_then(|(gi, gm)| self.sim.as_ref().and_then(|s| s.drones.gas.puffs.get(gi as usize).filter(|g| g.mesh == gm)
+                .map(|g| {
+                    // night-alpha: the night-sight quarter on the alpha byte (`Gas::tweak_alpha`).
+                    let mut c = g.rgba.map(|c| c.round().clamp(0.0, 255.0) as u8);
+                    if s.goggle_mode() == 1 { c[3] = (g.tweak_alpha(1) * 255.0).round() as u8; }
+                    c
+                })))
         }).collect();
         // The corpse fade (fix-ai-remainder; G-026): the game's `NDrone2_FadeOut` 0x172dd8 decays the
         // drone object's alpha byte obj+0x106 (0.6 per tick in Fade 0x48, 8.0 in FadeFast 0x49) and the

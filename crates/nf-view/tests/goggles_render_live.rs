@@ -260,3 +260,53 @@ fn night_sight_swaps_the_laser_sight_beam_sprite() {
     // Sister (can fail): the ordinary beam parks in night sight.
     assert!(fs.attach[day][3][1] <= FAR_Y, "mode 1: 0x2000133 parks");
 }
+
+/// night-alpha: night sight quarters a gas puff's alpha byte. Every `Gas_Init` 0x1aacc8 puff
+/// carries obj+0xF0 0x20000 (`|= 0x20020120` at :83), and `View_SetupRenderModes_Tweak`
+/// 0x1e5888:12-17 hands `obj+0x106 >> 2` to `psiSetTweakARGB` while viewer+0x236 == 1. The puff's
+/// GPU colour slot (the shader's alpha factor) and its CPU vertex alpha both carry it; x-ray and
+/// off keep the full byte.
+#[test]
+fn night_sight_quarters_the_gas_puff_alpha() {
+    let Some(iso) = iso() else { eprintln!("NF_ISO not set - skipping"); return };
+    unsafe { std::env::set_var("NF_SILENT", "1"); }
+    let mut scene = loaded(&iso, "07000005.bin");
+    // A long-lived white puff 2 units ahead of Bond (kind 0: damped, no drift), alpha 0xc8.
+    {
+        let sim = scene.sim.as_mut().unwrap();
+        let yaw = sim.bond.yaw;
+        let p = [sim.bond.pos[0] + yaw.sin() * 2.0, sim.bond.head()[1], sim.bond.pos[2] + yaw.cos() * 2.0];
+        sim.drones.gas.init(p, 0.0, [0.0; 3], 0.5, 0.5, 0, [0xff, 0xff, 0xff, 0xc8], 6000.0);
+    }
+    // (the attachment index, the pool's alpha byte, the GPU colour slot alpha, the CPU vertex alpha)
+    let read = |scene: &Scene| -> (u8, f32, u8) {
+        let sim = scene.sim.as_ref().unwrap();
+        let pi = sim.drones.gas.puffs.iter().position(|g| g.life > 3000.0).expect("the test puff lives");
+        let g = &sim.drones.gas.puffs[pi];
+        let ai = scene.attachments.iter().position(|a| a.gas == Some((pi as u16, g.mesh))).expect("a gas draw slot reads the puff");
+        let (layout, _) = scene.skin_layout();
+        let (_, cols) = scene.skin_palette(&layout, None, 240.0, opts(), None);
+        let gpu = cols[(layout.col_att + ai as u32) as usize][3];
+        let posed = scene.posed_vertices(None, 240.0, opts());
+        let cpu: Vec<u8> = scene.char_verts.iter().enumerate()
+            .filter(|(_, cv)| cv.attachment == Some(ai as u32)).map(|(i, _)| posed[i].rgba[3]).collect();
+        assert!(!cpu.is_empty(), "the puff's slot has vertices");
+        assert!(cpu.iter().all(|&a| a == cpu[0]));
+        (g.alpha_byte(), gpu, cpu[0])
+    };
+    let (b0, gpu0, cpu0) = read(&scene);
+    assert!(b0 > 0xc0, "the puff's alpha is still near its 0xc8 seed: {b0:#x}");
+    assert!((gpu0 - b0 as f32 / 255.0).abs() < 1.5 / 255.0, "mode 0: full alpha, got {gpu0}");
+    assert!((cpu0 as i32 - b0 as i32).abs() <= 1, "mode 0: CPU full alpha, got {cpu0}");
+
+    press_to(&mut scene, 1);
+    let (b1, gpu1, cpu1) = read(&scene);
+    assert_eq!(gpu1, (b1 >> 2) as f32 / 255.0, "night sight: the GPU alpha factor is obj+0x106 >> 2");
+    assert_eq!(cpu1, b1 >> 2, "night sight: the CPU vertex alpha is obj+0x106 >> 2");
+    // Sister (can fail): the quarter is far from the full byte, so the old code's full alpha fails above.
+    assert!(gpu1 < b1 as f32 / 255.0 * 0.3, "night sight must not keep the full alpha ({gpu1} vs {})", b1 as f32 / 255.0);
+
+    press_to(&mut scene, 2);
+    let (b2, gpu2, _) = read(&scene);
+    assert!((gpu2 - b2 as f32 / 255.0).abs() < 1.5 / 255.0, "x-ray keeps the full alpha (the gate is mode 1 only), got {gpu2}");
+}

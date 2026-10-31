@@ -83,6 +83,35 @@ pub struct Gas {
     pub billboard: bool,
 }
 
+/// The obj+0xF0 bits `Gas_Init` ORs into every puff after `hashtable_set_object_to_entity_gfx` has
+/// copied the glist flags in [M 0x1aacc8:83 `*(obj+0xf0) |= 0x20020120`]. It is the only writer of
+/// bit 0x20000 in ACTION.ELF [M grep of every obj+0xF0 store], and no glist on the disc carries it in
+/// its +0x44 flags [D nf-formats tests/night_quarter_alpha_census.rs].
+pub const GAS_OBJ_FLAGS: u32 = 0x2002_0120;
+
+/// The obj+0xF0 bit `View_SetupRenderModes_Tweak` 0x1e5888:12-17 tests: with it set and the viewer
+/// in night sight (viewer+0x236 == 1), the alpha byte handed to `psiSetTweakARGB` is obj+0x106 >> 2.
+pub const NIGHT_QUARTER_ALPHA: u32 = 0x2_0000;
+
+impl Gas {
+    /// obj+0x106 as `gases_smoke` 0x1ab2d0's tail writes it: `(int)a` clamped to 0..255.
+    pub fn alpha_byte(&self) -> u8 {
+        let a = self.rgba[3];
+        if a >= 255.0 { 255 } else if a > 0.0 { a as u8 } else { 0 }
+    }
+
+    /// The draw's alpha factor (byte/255) for a viewer in goggle mode `mode`: the night-sight
+    /// quarter [M View_SetupRenderModes_Tweak 0x1e5888:12-17, `bVar3 = obj+0x106 >> 2`], and the
+    /// pool's live alpha otherwise (the unchanged mode-0/2 path).
+    pub fn tweak_alpha(&self, mode: u16) -> f32 {
+        if mode == 1 && GAS_OBJ_FLAGS & NIGHT_QUARTER_ALPHA != 0 {
+            (self.alpha_byte() >> 2) as f32 / 255.0
+        } else {
+            self.rgba[3] / 255.0
+        }
+    }
+}
+
 #[derive(Default)]
 pub struct GasPool {
     pub puffs: Vec<Gas>,
@@ -355,6 +384,26 @@ fn mul_ee(a: f32, b: f32) -> f32 { nf_formats::ps2float::mul(a, b) }
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn night_sight_quarters_the_alpha_byte() {
+        // [M Gas_Init 0x1aacc8:83 |= 0x20020120; View_SetupRenderModes_Tweak 0x1e5888:12-17 >> 2 in mode 1;
+        // gases_smoke 0x1ab2d0 tail: (int) clamp 0..255]
+        assert_ne!(GAS_OBJ_FLAGS & NIGHT_QUARTER_ALPHA, 0);
+        let mut pool = GasPool::default();
+        pool.init([0.0; 3], 0.0, [0.0; 3], 0.5, 0.5, 0, [0xff, 0xff, 0xff, 0xc8], 60.0);
+        let g = &mut pool.puffs[0];
+        g.rgba[3] = 199.9;
+        assert_eq!(g.alpha_byte(), 199);
+        assert_eq!(g.tweak_alpha(1), (199u8 >> 2) as f32 / 255.0);
+        // Sister (can fail): off and x-ray keep the live alpha.
+        assert_eq!(g.tweak_alpha(0), 199.9 / 255.0);
+        assert_eq!(g.tweak_alpha(2), 199.9 / 255.0);
+        g.rgba[3] = 300.0;
+        assert_eq!(g.alpha_byte(), 255);
+        g.rgba[3] = -4.0;
+        assert_eq!(g.alpha_byte(), 0);
+    }
 
     #[test]
     fn searchlight_smoke_consumes_six_shared_draws_in_order() {
