@@ -87,6 +87,7 @@ fn nfbonus_elements_follow_page_0x40000038() {
             }
             ElemWhat::Frame => assert_eq!(id, 0x1000_0165),
             ElemWhat::Fill => panic!("the bonus page has no fill"),
+            ElemWhat::Pen { .. } => panic!("the bonus page has no laid-out pen lines"),
         }
     }
     // Sister: a shifted rect is not on the disc page (the matcher can miss).
