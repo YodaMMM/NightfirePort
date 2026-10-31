@@ -896,6 +896,8 @@ pub struct Drone {
     pub accuracy: u8,
     pub aggression: u8,
     pub reaction: u8,
+    /// `+0xB9` — the recover stat (`DroneFunc_RecoverTime` 0x147188's `200 − +0xB9`), from `drone_stats`.
+    pub recover: u8,
     // Vision (`+0x228` bits 2 = line of sight, 4 = seen this tick, 8 = ever seen; `+0x230`, `+0x270`, `+0x274`).
     pub los: bool,
     pub seen: bool,
@@ -1828,7 +1830,18 @@ pub fn quat_quat_to_mat(q: [f32; 4]) -> nf_formats::anim::Mat4 {
 
 impl Drone {
     /// From a placement (parameters by index) after `NDrone2_DefaultInit` / `DoModeSettingsNEW`.
+    /// The stats come from the placement's own behaviour words only (`behaviour_util_get` into a fresh
+    /// table); `level_drones` threads the level's shared `drone_stats` table through `new_with_stats`.
     pub fn new(d: &Data, pos: V3, yaw: f32, param: impl Fn(u32) -> u32, rng: &mut Rng) -> Drone {
+        let mut table = nf_formats::drone::DroneStatsTable::default();
+        let ty = table.behaviour_get(&param);
+        let stats = table.stats(ty);
+        Self::new_with_stats(d, pos, yaw, param, rng, stats)
+    }
+
+    /// `stats` = `behaviour_util_getStats(+0xC7, 1)` after this placement's `behaviour_util_get`
+    /// (`NDrone2_DoModeSettingsNEW` 0x14c600:70-107).
+    pub fn new_with_stats(d: &Data, pos: V3, yaw: f32, param: impl Fn(u32) -> u32, rng: &mut Rng, stats: nf_formats::drone::DroneStats) -> Drone {
         // The 07000014 skin rewrite [M 0x14b300:82-95]: with GameState+12 == 0x07000014 a param-0
         // skin 0x050000b1 is rewritten to 0x0500008c BEFORE the `Drone+0xe0` store — the kind
         // switch, the captain block and the `AnimObjectNew` handoff ([M 0x14b300:563-565] reads
@@ -1884,10 +1897,12 @@ impl Drone {
         let mut dr = Drone {
             skin, anim_set, weapon, pos, yaw, desired_yaw: yaw, aim_yaw: 0.0, alert, alert_floor: alert, props: normal, alert_props,
             sight_range: e8, half_fov: crate::trig::HALF_PI, engage_range: f0, combat_range: fc,
-            // `drone_stats` for the guards' type is all zero at run time (07000005 snapshot) → defaults.
-            // (The lookup is `behaviour_util_getStats` 0x1c7e58 — `drone_stats + type·0x60 + kind·0x20`,
-            // driven by `NDrone2_DoModeSettingsNEW` 0x14c600:81; its word +8 is the health [M].)
-            accuracy: 5, aggression: 0, reaction: 0,
+            // `+0xB4`/`+0xB5`/`+0xB8` from `drone_stats[+0xC7][1]` (`NDrone2_DoModeSettingsNEW`
+            // 0x14c600:81-107; defaults 5/0/0 when its health word is 0). [L] 07000005's guards are
+            // type 1 (no record) → 5/0/0; 07000001/02's type-2 guards read 8/1/80 (ee_start_07000001.bin,
+            // ee_02b.bin) — the old fixed 5/0/0 made those guards 25% more accurate (75 vs 60 base),
+            // their bursts longer (×1.66 vs ×1.33 delay) and their reaction 59 ticks instead of 36.
+            accuracy: stats.accuracy, aggression: stats.aggression, reaction: stats.reaction, recover: stats.recover,
             los: false, seen: false, ever_seen: false, ever_seen_3c: false, bond_alive: true, visibility: 0.0, seen_ticks: 0, unseen_ticks: 0, vision_on: false,
             dist: 0.0, yaw_to_opp: 0.0,
             state: state::GLOBAL, prev_state: 0, next_state: None, entered: 0, timer_c: None, timer_d: None,
@@ -1928,8 +1943,10 @@ impl Drone {
             captor: None, hostage_searched: false,
             hostage_target: None, killer_searched: false, msg_out: Vec::new(), msg_now: Vec::new(),
             loudness: 0.0, sound_share: 0.0, heard_frame: 0, heard_peak: 0.0, sound_pos: pos, noise_level: 0, investigating: false, turned: false, resume_state: 0, home: pos,
-            // `drone_stats[type]+8` is 0 for these guards → 10 (captains, difficulty ≥ 2 only, are not modelled).
-            health: 10.0, max_health: 10.0, damage_taken: 1.0, damageable: !matches!(skin, 0x0500_003b | 0x0500_003c | 0x0500_0053), kind: setup.kind,
+            // `+0xAC` = `drone_stats[type][1]` word 2 when non-zero, else 10 [M 0x14c600:81-95]; the
+            // captain ×`DroneCaptain_Mod_Health` follows in `captain_setup` ([L] ee_02b.bin: type-2
+            // guards 12, their captains 24).
+            health: stats.health as f32, max_health: stats.health as f32, damage_taken: 1.0, damageable: !matches!(skin, 0x0500_003b | 0x0500_003c | 0x0500_0053), kind: setup.kind,
             last_damage: 0.0, silent_kill: false, big_hit: false, flinch_at: None, hit: None, impact_resume: 0, hits_taken: 0, attack_entry_talks: 0,
             blast: None,
             global_flinch: None, bond_aiming: false, cull: false, bond_armed: true, stat_ok: true, opp_facing: 0.0, opp_target: [0.0; 3], sighted: false, own_sight: false, first_attack_done: false,
@@ -2023,6 +2040,11 @@ impl Drone {
             // Drone+0x1e — the gun-through-wall flag (SeekOpponentLOS refreshes it on sight ticks).
             gun_through_wall: false,
         };
+        // `NDrone2_DefaultInit`'s held-weapon switch: the pistol class {2, 6, 0xA, 0xB, 0xE, 0x10,
+        // 0x3B..0x40} writes `+0x100 = 2.0` beside its anim set 4 and clip 12 [M 0x14b300:267-293];
+        // the captain block later overwrites it with `DroneCaptain_Mod_BulletDamage` [M :559].
+        // [L] ee_02b.bin / ee_start_07000001.bin: every non-captain weapon-0xE guard reads +0x100 = 2.0.
+        if matches!(weapon, 2 | 6 | 0xa | 0xb | 0xe | 0x10 | 0x3b..=0x40) { dr.damage_mul = 2.0; }
         dr.init_properties(d, &param);
         // `DroneInit_Collision` 0x14b1e8 (DefaultInit 0x14b300:775): not MP, `+0xBD4`/`+0x23` clear,
         // `+0xD8 != 0x13`, `+0xC5 != 0x17` — a 25-unit ray down from obj+1.0 moves the spawn to the
@@ -6224,7 +6246,7 @@ impl Drone {
                 // = 18·(200−0) = 3600 ticks at the stats default +0xB9 = 0 (BOT_stats[8], zero at run time
                 // [L 07000005]) [M 0x147188 + 0x172bb0]. The old 7200 read the switch's DEFAULT arm — twice
                 // the game's stun for a stun bullet.
-                self.stun_until = frame + 3600;
+                self.stun_until = frame + self.recover_time(30);
                 // fix-guard-drops-flashbang [M 0x172bb0:15-18, the state's own case 1]: the flashed
                 // guard DROPS the held gun and takes the fists — `if (+0xda != 4) { DropWeapon;
                 // ChangeWeapon(1) }` — whatever route stunned him (the flash broadcast, a stunned
@@ -6324,7 +6346,7 @@ impl Drone {
                 // byte [M 0x162b98:27-34, the `lhu/slti` on 0xda]; ChangeWeapon(1) is the full table
                 // arm: weapon 1, anim set 0xC, clip 0, clip_max 0 [M 0x17a72c→0x17a714]. The drop rolls
                 // the shared stream here, BEFORE the anim draw, in the game's case-1 order.
-                self.tase_recover = 1200;
+                self.tase_recover = self.recover_time(10);
                 if self.team == 1 && self.anim_set != 4 {
                     self.drop_weapon(d, rng);
                     self.change_weapon(1);
@@ -6477,7 +6499,15 @@ impl Drone {
             0x4a | 0x4c => 10,
             _ => 60,
         };
-        120 * k
+        self.recover_time(k)
+    }
+
+    /// `DroneFunc_RecoverTime` 0x147188's tail: `fptoui(FRAME_RATE_INT·k · 0.01 · (200 − +0xB9))`
+    /// [M :44-46], each product an EE `mul.s`. `+0xB9` = 0 → 120·k; the 01–04 type-2 guards' 80
+    /// ([L] ee_02b.bin) → 72·k.
+    fn recover_time(&self, k: u32) -> u32 {
+        use nf_formats::ps2float::mul;
+        mul(mul((60 * k) as f32, 0.01), (200 - self.recover as i32) as f32) as u32
     }
 
     /// The dart's ENTER weapon drop band, `+0xDA ∈ {5, 6, 9}` [M 0x163430:20-27, dis
@@ -11376,6 +11406,10 @@ pub fn level_drones(d: &Data, level: &nf_formats::level::Level, rng: &mut Rng, l
     // The map parse's ambient radiators precede every dynamic-object create [M parsemap_handle_block_id 0x1d1020].
     crate::light::level_lights(level, rng, lights);
     let Some(m) = level.main_map() else { return Vec::new() };
+    // The run-time `drone_stats` table: `behaviour_util_get` 0x1c7a98 writes a type's records from the
+    // first placement that carries the stats section, and every later drone of that type reads them
+    // (`DoModeSettingsNEW` 0x14c600:70-107). Gated-out placements never reach `Drone_Create`'s body.
+    let mut stats = nf_formats::drone::DroneStatsTable::default();
     level.maps[m].placements.iter().enumerate().filter_map(|(i, p)| {
         // The drones (0x0F) and the type-0x4E lights are created by the same
         // `parsemap_create_dynamic_objects` pass in placement order, so their RNG draws interleave here.
@@ -11388,7 +11422,9 @@ pub fn level_drones(d: &Data, level: &nf_formats::level::Level, rng: &mut Rng, l
         // `Drone_Create`'s body). docs/fields/level-tag.md's "spawn frame" name is a misread.
         if param(2) > d.difficulty { return None; }
         let floor = d.world.floor_below(p.translation, 3.0).unwrap_or(p.translation[1] - 1.0);
-        let mut dr = Drone::new(d, [p.translation[0], floor + 1.0, p.translation[2]], p.rotation[1], param, rng);
+        let ty = stats.behaviour_get(&param);
+        let st = stats.stats(ty);
+        let mut dr = Drone::new_with_stats(d, [p.translation[0], floor + 1.0, p.translation[2]], p.rotation[1], param, rng, st);
         dr.placement = i;
         // `NDrone2_PostLoad_Init` 0x14d890:18-22: every drone's nav path (+0x954) is
         // `AINetwork_NavPathForPosition(drone pos)` at level load — the path `ClosestAIPoint`
@@ -19891,7 +19927,7 @@ mod tests {
             gun_through_wall: false,
             dist_to_player: [100000.0; 4],
             props: [0; 3], alert_props: None, sight_range: 0.0, half_fov: 0.0, engage_range: 0.0, combat_range: 0.0,
-            accuracy: 0, aggression: 0, reaction: 0, los: false, seen: false, ever_seen: false, ever_seen_3c: false, bond_alive: true, visibility: 0.0,
+            accuracy: 0, aggression: 0, reaction: 0, recover: 0, los: false, seen: false, ever_seen: false, ever_seen_3c: false, bond_alive: true, visibility: 0.0,
             seen_ticks: 0, unseen_ticks: 0, vision_on: false, dist: 0.0, yaw_to_opp: 0.0,
             state: 0, prev_state: 0, next_state: None, entered: 0, timer_c: None, timer_d: None,
             alarm_yaw: 0.0, alarm_run: false, timer_c_payload: 0, alarm_patrol: 0, alarm_point: None,

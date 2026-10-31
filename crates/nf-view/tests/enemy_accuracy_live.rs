@@ -31,6 +31,9 @@ pub struct Tally {
     pub end_dist: f32,
     pub weapon: u32,
     pub accuracy: u8,
+    pub aggression: u8,
+    /// The frames of every counted shot, relative to the first.
+    pub shot_frames: Vec<u32>,
 }
 
 impl Tally {
@@ -128,6 +131,8 @@ pub fn measure(archive: &str, difficulty: u32, dist: f32, ticks: u32, skip: usiz
     let dr = &sim.drones.list[g];
     if first.is_none() { eprintln!("[acc] drone {g} never fired (dist now {:.1}, state {:#x}, seen {} los {} vis {:.2} alert {:.2})", dr.dist, dr.state, dr.seen, dr.los, dr.visibility, dr.alert); return None; }
     t.shots = dr.shots.len() - shots0;
+    t.aggression = dr.aggression;
+    t.shot_frames = dr.shots[shots0..].iter().map(|&f| f - dr.shots[shots0]).collect();
     t.rolled = dr.shot_rolls[rolls0..].iter().filter(|&&r| r).count();
     t.end_dist = dr.dist;
     Some(t)
@@ -136,6 +141,7 @@ pub fn measure(archive: &str, difficulty: u32, dist: f32, ticks: u32, skip: usiz
 fn report(label: &str, t: &Tally) {
     eprintln!("[acc] {label}: weapon {:#x} acc {} dist {:.1}->{:.1}: shots {} rolled {} hits {} per-hit {:.2} total {:.1} /10s",
         t.weapon, t.accuracy, t.start_dist, t.end_dist, t.shots, t.rolled, t.hits, t.per_hit(), t.damage.iter().sum::<f32>());
+    if std::env::var_os("NF_ACC_FRAMES").is_some() { eprintln!("[acc]   aggression {} shot frames {:?}", t.aggression, t.shot_frames); }
 }
 
 /// Exploration: `NF_ACC_LEVEL` (default 07000002.bin), every difficulty × 5/10/20 u, printed.
@@ -184,6 +190,21 @@ fn print_guard_box_envelope() {
             eprintln!("[acc] drone {i} part {} centre-rel ({:.2},{:.2},{:.2}) half {:?}", b.part, c[0] - dr.pos[0], c[1] - dr.pos[1], c[2] - dr.pos[2], b.half);
         }
         eprintln!("[acc] drone {i} pos {:?} floor {:?} danim {:#x}", dr.pos, floor, dr.anim.danim);
+    }
+}
+
+#[test]
+#[ignore = "exploration printout"]
+fn print_weapon_fire_fields() {
+    let Some(iso) = iso() else { return };
+    let scene = nf_view::load(&iso, "07000002.bin", false).expect("load");
+    let sim = scene.sim.as_ref().unwrap();
+    let d = sim.data();
+    for w in [0x0eusize, 0x12, 0x1c, 0x6a] {
+        let r = &d.weapons.records[w];
+        let f = |o: usize| f32::from_le_bytes(r[o..o + 4].try_into().unwrap());
+        let h = |o: usize| u16::from_le_bytes([r[o], r[o + 1]]);
+        eprintln!("[acc] weapon {w:#x}: dmg {} rounds {} speed {} range {} spread {} burst {} interval {}", f(0x0c), r[0x18], f(0x20), f(0x1c), f(0x24), h(0x2c), h(0x40) as i16);
     }
 }
 

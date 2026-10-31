@@ -94,3 +94,49 @@ fn a_hit_leaving_under_one_point_kills() {
     h2.pain(&mut rng, 1.0, 1, 0x0700_0005);
     assert!((h2.health - 1.4).abs() < 1e-5, "1.4 left survives, got {}", h2.health);
 }
+
+/// `behaviour_util_get` 0x1c7a98's stats section: 07000002 placement #442's parameters 15..32 [D the
+/// level census] decode to the type-2 records the live table holds ([L] ee_02b.bin `drone_stats` 0x31aa30:
+/// kind 0 = 9/0/12/60/2/60/60/0, kind 1 = 8/1/12/80/3/80/80/1, kind 2 = 7/2/12/100/3/100/100/0), and a later
+/// placement without the section reads the record the first one wrote. Sister: the old fixed stats
+/// (accuracy 5, aggression 0, health 10, reaction 0) are not what a type-2 guard gets.
+#[test]
+fn the_stats_section_fills_the_shared_table() {
+    use nf_formats::drone::{DroneStats, DroneStatsTable};
+    let p442: [(u32, u32); 18] = [(15, 2), (16, 0), (17, 0x5b0003), (18, 0xa196958e), (19, 0xecf327e5), (20, 0x40291660), (21, 0),
+        (22, 0x5b0003), (23, 0xa196948e), (24, 0xecf327e5), (25, 0x40291660), (26, 0x80010006), (27, 0x11e06009), (28, 0x3c3c),
+        (29, 0x1a806108), (30, 0x15050), (31, 0x1b206207), (32, 0x6464)];
+    let p443: [(u32, u32); 11] = [(15, 2), (16, 0), (17, 0x5b0003), (18, 0xa196948e), (19, 0xecf327e6), (20, 0x40291660), (21, 0),
+        (22, 0x5b0003), (23, 0xa196948e), (24, 0xecf327e7), (25, 0x40291660)];
+    let get = |ps: &[(u32, u32)], k: u32| ps.iter().find(|(i, _)| *i == k).map_or(0, |&(_, v)| v);
+    let mut t = DroneStatsTable::default();
+    let ty = t.behaviour_get(|k| get(&p442, k));
+    assert_eq!(ty, 2);
+    assert_eq!(t.0[2][0], [9, 0, 12, 60, 2, 60, 60, 0]);
+    assert_eq!(t.0[2][1], [8, 1, 12, 80, 3, 80, 80, 1]);
+    assert_eq!(t.0[2][2], [7, 2, 12, 100, 3, 100, 100, 0]);
+    let want = DroneStats { accuracy: 8, aggression: 1, health: 12, b6: 80, b7: 3, reaction: 80, recover: 80, ba: 1 };
+    // #443 carries no section: it reads #442's record.
+    let ty2 = t.behaviour_get(|k| get(&p443, k));
+    assert_eq!(t.stats(ty2), want);
+    // A fresh table (the drone alone): the defaults.
+    let mut fresh = DroneStatsTable::default();
+    let ty3 = fresh.behaviour_get(|k| get(&p443, k));
+    let def = fresh.stats(ty3);
+    assert_eq!(def, DroneStats { accuracy: 5, health: 10, ..Default::default() });
+    assert_ne!(def, want, "sister: the defaults are not the type-2 record");
+}
+
+/// What the type-2 stats change in the firing chain [M 0x179740 / 0x179d40 / 0x179ba8 / 0x126468]: accuracy 8
+/// → base 60 (not 75); aggression 1 → the 12-round 0x12 burst × 0.5 = 6 (not × 0.3 = 3) and the burst delay
+/// 45 × 1.33 (not × 1.66).
+#[test]
+fn type_2_guards_fire_at_the_stats_chance() {
+    let t = tuning(0x0700_0002);
+    // Normal 0.7: (100 − 5·8) × 0.7 = 42; the old acc-5 value 52.5 fails.
+    assert!((hit_chance(&t, 0x0700_0002, 2, 8, 10.0, STILL, 0) - 42.0).abs() < 1e-3);
+    assert!((hit_chance(&t, 0x0700_0002, 2, 5, 10.0, STILL, 0) - 42.0).abs() > 5.0);
+    // Easy 0.5 → 30, Hard 1.0 → 60.
+    assert!((hit_chance(&t, 0x0700_0002, 1, 8, 10.0, STILL, 0) - 30.0).abs() < 1e-3);
+    assert!((hit_chance(&t, 0x0700_0002, 3, 8, 10.0, STILL, 0) - 60.0).abs() < 1e-3);
+}
