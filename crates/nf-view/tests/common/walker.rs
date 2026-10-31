@@ -113,6 +113,14 @@ pub struct Walker {
     /// own nested walks): the nested stuck ladders must fall through to the plain sidestep ladder
     /// instead of re-triggering the arm (the run-2 recursion: nav 5 flank 1 nav 1 flank 1 …).
     fighting_blocker: bool,
+    /// The stuck ladder's hostile-body-block response, OPT-IN (the 02 real-health walk is the
+    /// only setter). Default OFF: the shared walker must behave as master's everywhere else —
+    /// "team 1" is every non-civilian dtype [M drone.rs:2147], so the ungated arm shot a
+    /// cover guard at the 07 party (shooting fails the mission → level_exit mid-walk), and in
+    /// the 16 launch centre it engaged an unkillable blocker for 10800 ticks, which the
+    /// enclosing leg's 6000-tick give-up cap then charged as a wedge (walker.rs:853 panic) —
+    /// 6 suite tests red across 4 binaries (level-02-every-objective-5 2026-10-31).
+    pub body_block_response: bool,
     /// The walked path: a coarse breadcrumb of ground Bond actually covered (pushed in
     /// tick_inner, ~2 u resolution, 512 points). The resupply rule draws its corridor from it —
     /// see `resupply` for why the harness must not take off-path ammo detours.
@@ -187,6 +195,7 @@ impl Walker {
             health_last: Vec::new(),
             shield: None,
             fighting_blocker: false,
+            body_block_response: false,
         }
     }
 
@@ -831,7 +840,11 @@ impl Walker {
     /// Steer Bond to one waypoint; returns the ticks it took. Panics with a dump when genuinely
     /// wedged (3 stuck-mitigation cycles without progress).
     pub fn walk_to(&mut self, wp: Wp, label: &str) -> u32 {
-        let start_ticks = self.total_ticks;
+        // mut: the opt-in body-block response adds its own fight ticks to the budget — the
+        // fight is the RESPONSE's cost, not the leg's wedge (a 10800-tick engagement must not
+        // trip the 6000-tick give-up cap on the way out; the 16 chasers walk died exactly
+        // there, walker.rs:853, level-02-every-objective-5 2026-10-31).
+        let mut start_ticks = self.total_ticks;
         let mut use_left = 0u32;
         let mut ladder = false;
         let mut riding = false;
@@ -1060,6 +1073,12 @@ impl Walker {
                     // the real fire path (aim/expose/flank), then walk on. Hostiles only (team 1 —
                     // the same filter the walkreal fights use), within a body's reach on Bond's
                     // own floor.
+                    // OPT-IN (body_block_response): the shared default stays master's plain
+                    // sidestep ladder — team 1 is every non-civilian dtype [M drone.rs:2147],
+                    // so the ungated arm shot a cover guard at the 07 party (level_exit mid-walk,
+                    // the guest walk's !scared assert) and burned the 16 chasers walk's give-up
+                    // cap on an unkillable blocker. Only the 02 real-health walk sets the flag.
+                    if self.body_block_response {
                     let blocker = (!self.fighting_blocker).then(|| {
                         let sim = self.scene.sim.as_ref().unwrap();
                         sim.drones.list.iter().enumerate().position(|(i, d)| d.team == 1 && d.health > 0.0
@@ -1094,6 +1113,7 @@ impl Walker {
                         if bdy > 0.7 {
                             self.walk_nav_to(bpos, &format!("{label} blocker {bi} floor"), 2.5);
                         }
+                        let fight_started = self.total_ticks;
                         let killed = self.shoot(bi, label);
                         if !killed {
                             // Out of ammo: the fight's own loot (the drops land at the fight
@@ -1102,9 +1122,15 @@ impl Walker {
                         }
                         self.fighting_blocker = false;
                         self.lenient = was_lenient;
+                        // The fight is the response's own budget: move the leg's start forward
+                        // so the give-up cap judges the WALKING, not the engagement (the arm's
+                        // shoot alone can run 10800 ticks — the 16 chasers walks panicked at the
+                        // 6000-tick cap right after a legitimate response).
+                        start_ticks += self.total_ticks - fight_started;
                         self.stuck = 0;
                         continue;
                     }
+                    } // body_block_response
                     if self.stuck == 1 {
                         // No world wall on the hip line: a knee-high rail — hop first.
                         let rail = self.scene.sim.as_ref().unwrap().world.segment([self.pos[0], self.pos[1] - 0.7, self.pos[2]], [wp.at[0], wp.at[1] - 0.7, wp.at[2]]).is_some();

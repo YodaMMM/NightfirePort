@@ -172,6 +172,12 @@ fn walk_the_castle_all_objectives_real_health() {
     let mut w = Walker::new(nf_view::load(&iso, "07000002.bin", false).expect("load 07000002"));
     // Real health: no walker top-up — the walk takes the guards' fire through the real pipeline.
     w.top_up_health = false;
+    // The hostile-body-block arm is OPT-IN and this walk is its only setter: the shared walker's
+    // default stays master's plain sidestep ladder (the ungated arm shot a cover guard at the 07
+    // party and burned the 16 launch-centre walks' give-up caps — 6 suite tests red,
+    // level-02-every-objective-5 2026-10-31). This walk keeps it for the g3 nav-10 body-block
+    // (Bond took his fire for ~1400 ticks there until the fail chain restarted — the arm's reason).
+    w.body_block_response = true;
     {
         let sim = w.scene.sim.as_ref().unwrap();
         let p = sim.bond.pos;
