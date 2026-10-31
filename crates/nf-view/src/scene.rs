@@ -1639,7 +1639,7 @@ pub fn los_ray_clear(world: &nf_game::world::CollisionWorld, eye: [f32; 3], targ
     let dir = [target[0] - eye[0], target[1] - eye[1], target[2] - eye[2]];
     let shrink = if d > LOS_SHORT { (d - LOS_SHORT) / d } else { 1.0 };
     let to = [eye[0] + dir[0] * shrink, eye[1] + dir[1] * shrink, eye[2] + dir[2] * shrink];
-    world.segment_hit_static(eye, to).is_none()
+    !world.segment_blocked_static(eye, to)
 }
 
 /// The near-LOS rescue (fix-portal-sweep): 07000005
@@ -1664,6 +1664,20 @@ pub fn near_los_rescue(
     graph: &CelGraph, mask: &mut [bool], eye: [f32; 3], sides: &[[f32; 4]; 4],
     world: &nf_game::world::CollisionWorld, max_dist: f32,
 ) -> usize {
+    near_los_rescue_memo(graph, mask, eye, sides, world, max_dist, &mut Vec::new())
+}
+
+/// `near_los_rescue` with a per-cell memo of the line-of-sight ray (perf-240): the ray's answer
+/// depends only on the eye and the cell's bbox (the target is the bbox point closest to the eye)
+/// against the STATIC collision (`segment_hit_static` — built once, never changed), so an entry
+/// `(eye bits, clear)` is reused while the eye has not moved (standing and turning: the frustum
+/// test runs every frame, the ray does not). The caller keeps one memo per collision world.
+pub fn near_los_rescue_memo(
+    graph: &CelGraph, mask: &mut [bool], eye: [f32; 3], sides: &[[f32; 4]; 4],
+    world: &nf_game::world::CollisionWorld, max_dist: f32, memo: &mut Vec<Option<([u32; 3], bool)>>,
+) -> usize {
+    if memo.len() != graph.cells.len() { memo.clear(); memo.resize(graph.cells.len(), None); }
+    let eye_bits = eye.map(f32::to_bits);
     let mut rescued = 0usize;
     for (i, c) in graph.cells.iter().enumerate() {
         if mask[i] { continue; }
@@ -1678,7 +1692,11 @@ pub fn near_los_rescue(
         for k in 0..3 { tp[k] = eye[k].clamp(c.min[k], c.max[k]); }
         let d = ((tp[0] - eye[0]).powi(2) + (tp[1] - eye[1]).powi(2) + (tp[2] - eye[2]).powi(2)).sqrt();
         if d > max_dist { continue; }
-        if !los_ray_clear(world, eye, tp, d) { continue; }
+        let clear = match memo[i] {
+            Some((k, c)) if k == eye_bits => c,
+            _ => { let c = los_ray_clear(world, eye, tp, d); memo[i] = Some((eye_bits, c)); c }
+        };
+        if !clear { continue; }
         mask[i] = true;
         rescued += 1;
     }
@@ -6115,6 +6133,11 @@ pub struct SkinLayout { pub char_base: Vec<u32>, pub attach_base: u32, pub sl_ba
     pub n_tgt: u32 }
 
 /// One frame's pose state (`Scene::frame_state`).
+thread_local! {
+    /// perf-240: the recycled attachment-matrix buffer of `frame_state_for` (see there).
+    static ATTACH_SCRATCH: std::cell::RefCell<Vec<Mat4>> = const { std::cell::RefCell::new(Vec::new()) };
+}
+
 pub struct FrameState {
     pub posed: Vec<Option<(Vec<Mat4>, Vec<Mat4>, Mat4)>>,
     pub attach: Vec<Mat4>,
@@ -10046,7 +10069,13 @@ pub fn build(level: &Level, cels_only: bool, skeletons: &HashMap<u8, Skeleton>, 
             if !opts.firing || tick % 8 >= 2 { return collapse(&datum); }
             muzzle_flash_matrix(&datum, (tick / 8) ^ (k as u32).wrapping_mul(0x9e37_79b9))
         };
-        let attach: Vec<Mat4> = self.attachments.iter().enumerate().map(|(k, a)| att_one(k, a)).collect();
+        let prof_att = nf_game::prof::scope("fs: attachments");
+        // perf-240: the attachment matrices fill a recycled buffer (`skin_palette` hands it back)
+        // — a fresh ~0.8 MB Vec per palette build cost its page faults every tick.
+        let mut attach: Vec<Mat4> = ATTACH_SCRATCH.with(|c| std::mem::take(&mut *c.borrow_mut()));
+        attach.clear();
+        attach.extend(self.attachments.iter().enumerate().map(|(k, a)| att_one(k, a)));
+        drop(prof_att);
         let mut hidden: Vec<bool> = self.characters.iter().enumerate().map(|(ci, c)| hidden(c, ci)).collect();
         // fix-sentinel-camera-play: the guided ride draws no view model — the game's player
         // substate 10 cleared the anim set [M `Player_ChangeSubState(10)`, `Player_Update`
@@ -10539,9 +10568,18 @@ pub fn build(level: &Level, cels_only: bool, skeletons: &HashMap<u8, Skeleton>, 
 
 
     pub fn skin_palette(&self, l: &SkinLayout, choice: Option<usize>, time: f32, opts: ViewOpts, vis: Option<&[bool]>) -> (Vec<Mat4>, Vec<[f32; 4]>) {
+        let (mut p, mut cols) = (Vec::new(), Vec::new());
+        self.skin_palette_into(l, choice, time, opts, vis, &mut p, &mut cols);
+        (p, cols)
+    }
+
+    /// `skin_palette` into caller-owned buffers (perf-240: the window recycles the previous
+    /// tick's pair, so the ~1 MB palette is not freshly allocated — and page-faulted — every tick).
+    /// Both are overwritten whole; the result is identical to `skin_palette`'s.
+    pub fn skin_palette_into(&self, l: &SkinLayout, choice: Option<usize>, time: f32, opts: ViewOpts, vis: Option<&[bool]>, p: &mut Vec<Mat4>, cols: &mut Vec<[f32; 4]>) {
         const FAR: Mat4 = [[0.0; 4], [0.0; 4], [0.0; 4], [0.0, -10000.0, 0.0, 1.0]];
         let prof_fs = nf_game::prof::scope("pal: frame_state_for");
-        let fs = self.frame_state_for(choice, time, opts, true);
+        let mut fs = self.frame_state_for(choice, time, opts, true);
         drop(prof_fs);
         let _prof_rest = nf_game::prof::scope("pal: palette fill");
         let collapse = |at: &Mat4| -> Mat4 { [[0.0; 4], [0.0; 4], [0.0; 4], [at[3][0], at[3][1], at[3][2], 1.0]] };
@@ -10568,7 +10606,10 @@ pub fn build(level: &Level, cels_only: bool, skeletons: &HashMap<u8, Skeleton>, 
         let vis_room = |pos: [f32; 3]| -> bool {
             vis.map_or(true, |v| self.cel_index_at(pos).map_or(true, |r| v.get(r).copied().unwrap_or(true)))
         };
-        let mut p = vec![FAR; l.n_mats as usize];
+        let palloc = nf_game::prof::scope("pal: alloc");
+        p.clear();
+        p.resize(l.n_mats as usize, FAR);
+        drop(palloc);
         let pch = nf_game::prof::scope("pal: chars+attach+objects");
         for (ci, c) in self.characters.iter().enumerate() {
             // A character added after the layout was built (the dev spawn) has no palette slots
@@ -10595,6 +10636,7 @@ pub fn build(level: &Level, cels_only: bool, skeletons: &HashMap<u8, Skeleton>, 
             }
         }
         for (a, m) in fs.attach.iter().enumerate() { p[l.attach_base as usize + a] = *m; }
+        ATTACH_SCRATCH.with(|c| *c.borrow_mut() = std::mem::take(&mut fs.attach));
         if let Some(s) = self.sim.as_ref() {
             for k in 0..(l.door_base - l.sl_base) as usize {
                 let keep = match s.drones.searchlights.parts.get(k) {
@@ -10672,7 +10714,9 @@ pub fn build(level: &Level, cels_only: bool, skeletons: &HashMap<u8, Skeleton>, 
         let pcm = nf_game::prof::scope("pal: colour_mults");
         let (mults, pickup_mult, attach_mult) = self.colour_mults_dense();
         drop(pcm);
-        let mut cols = vec![[1.0f32; 4]; l.col_one as usize + 1];
+        let _prof_tail = nf_game::prof::scope("pal: cols tail");
+        cols.clear();
+        cols.resize(l.col_one as usize + 1, [1.0f32; 4]);
         let has = !mults.is_empty();
         let rgb = |m: [f32; 3]| [m[0], m[1], m[2], 1.0];
         // fix-searchlight-remainder: the per-part alpha slot — kind-4 coronas carry obj+0x106/255 in
@@ -10753,7 +10797,6 @@ pub fn build(level: &Level, cels_only: bool, skeletons: &HashMap<u8, Skeleton>, 
         // per ticked frame. `colour_attach_map_covers_every_slot_on_the_lag_levels` pins the
         // invariant (every slot present), so a change that would make the fallback reachable
         // fails a test instead of silently changing the palette's colours.
-        (p, cols)
     }
 
     /// The per-object colour multipliers of one frame (`View_SetupRenderModes_Tweak`'s TAmbient): per character,

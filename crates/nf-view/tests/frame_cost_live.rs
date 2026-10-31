@@ -83,7 +83,12 @@ fn headless_device() -> Option<(wgpu::Device, wgpu::Queue)> {
         Ok(a) => a,
         Err(e) => { eprintln!("[enc] no GPU adapter ({e}) — the encode budgets are skipped (CI)"); return None }
     };
-    match pollster::block_on(adapter.request_device(&Default::default())) {
+    // The window's device recipe (lib.rs `device`): the bindless/indirect features where the adapter
+    // has them, so the encode timed below is the batched world pass the window runs — a default
+    // device has neither and times the per-draw fallback instead.
+    let want = wgpu::Features::TEXTURE_BINDING_ARRAY | wgpu::Features::SAMPLED_TEXTURE_AND_STORAGE_BUFFER_ARRAY_NON_UNIFORM_INDEXING | wgpu::Features::INDIRECT_FIRST_INSTANCE;
+    let desc = wgpu::DeviceDescriptor { required_features: adapter.features() & want, required_limits: adapter.limits(), ..Default::default() };
+    match pollster::block_on(adapter.request_device(&desc)) {
         Ok(dq) => Some(dq),
         Err(e) => { eprintln!("[enc] no wgpu device ({e}) — the encode budgets are skipped"); None }
     }

@@ -1751,6 +1751,33 @@ impl CollisionWorld {
     /// `Vision_InView` (0x1e89e0) consults no collision at all (a pure frustum test); this ray is
     /// the port-side unocclusion guard only, so it reads the static world like the level's own
     /// glists do.
+    /// Whether `segment_hit_static(from, to)` is `Some` — the same per-triangle tests, stopping at
+    /// the first triangle that passes them instead of ranking every hit (a line-of-sight query
+    /// needs only the yes/no).
+    pub fn segment_blocked_static(&self, from: V3, to: V3) -> bool {
+        let d = sub(to, from);
+        for o in along(&self.stat, from, to) {
+            for k in o.tris.clone() {
+                let t = &self.stat.tris[k];
+                let (e1, e2) = (sub(t[1], t[0]), sub(t[2], t[0]));
+                if dot(cross(e1, e2), d) >= 0.0 { continue; }
+                let p = cross(d, e2);
+                let det = dot(e1, p);
+                if det.abs() < 1e-12 { continue; }
+                let inv = 1.0 / det;
+                let s = sub(from, t[0]);
+                let u = dot(s, p) * inv;
+                if !(0.0..=1.0).contains(&u) { continue; }
+                let q = cross(s, e1);
+                let v = dot(d, q) * inv;
+                if v < 0.0 || u + v > 1.0 { continue; }
+                let tt = dot(e2, q) * inv;
+                if (0.0..=1.0).contains(&tt) { return true; }
+            }
+        }
+        false
+    }
+
     pub fn segment_hit_static(&self, from: V3, to: V3) -> Option<(f32, V3)> {
         let d = sub(to, from);
         let mut best: Option<(f32, V3)> = None;
