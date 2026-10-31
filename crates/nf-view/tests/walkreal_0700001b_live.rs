@@ -16,7 +16,8 @@
 //! mission route.
 //!
 //! Enemies are DISABLED for the walk only in the walkreal sense: damage is suppressed
-//! (top_up_health, the walker's allowance). Opt-in via NF_ISO (the slim ISO is enough).
+//! (top_up_health, the walker's allowance) — except `walk_arrival_to_drakes_defeat_on_real_health`,
+//! which plays the same route on real health. Opt-in via NF_ISO (the slim ISO is enough).
 
 #[path = "common/walker.rs"]
 mod walker;
@@ -284,10 +285,9 @@ fn the_first_wave_kill_raises_the_launch_order() {
 ///    (SP#198) writes ch 0x0b [D 0x06000a20], the monitor's ch 9 & 0x0b → ch 100 → MissionState
 ///    6 → 0x0730001b [M 0x182c60:114-116].
 ///
-/// The walker's health allowance stays on (damage suppressed — the walkreal convention): the
-/// later waves (spawners #165-181, ch 116-120 from the missile scripts [D]) keep firing while
-/// the rifle's recharge paces the console shots, and the port's astronaut accuracy is
-/// unmeasured against the game.
+/// The walker's health allowance stays on (damage suppressed — the walkreal convention); the
+/// real-health run of the same route, with the later waves (spawners #165-181, ch 116-120 from
+/// the missile scripts [D]) fought, is `walk_arrival_to_drakes_defeat_on_real_health`.
 #[test]
 fn walk_arrival_to_drakes_defeat() {
     let iso = iso();
