@@ -517,3 +517,18 @@ fix_death_restart, fix_level_chain, urn_break, frame_cost) across the LOS masks 
 flags-99 skip / turret muzzle-sphere change, find the remaining divergence from the game, land
 green. The two -17 capsule rules stay (raw denom ±0.999 at 0x10a1f0, flags 0/99 skip at
 0x10a330/0x10a33c). Work in progress.
+
+## capsule-cull-and-los-masks-18 (2026-10-31) — window outcome
+
+Bisect started, not landed. The 14 east_duct red reproduced (rest y 0.173 vs the assert's
+<0.0 at the stairwell foot, x/z inside the landing box). Three env gates (NF_B_NO_CULL /
+NF_B_NO_MASKS / NF_B_NO_TURRET, added-measured-removed): ALL THREE EXCLUDED — the red persists
+with each and with all three off. The flags-99 skip is not a delta (master carries it env-gated
+default-off; the -17 tree deleted the lines while its comment claims LANDED — the comment is
+wrong about the code). walker_b2's master-side headroom-guard jump change: EXCLUDED by revert +
+rebuild (east_duct still FAILED). scene.rs/door.rs/walker.rs deltas: draw/trace-only. Remaining
+candidates: the un-gated world.rs remainder (the walkable-gate sign discipline, the pick dot2
+pass-global) — the next window's first work. Sandbox notes: the tool-output path eats the bytes
+`[m` (phantom-corruption chase cost ~50 min; hex disproof recorded in the report), background
+runners die between tool calls (suite.py died twice with an empty suite.out), everything ran
+foreground. No code change landed; tree = the 0701a932 merge state.
