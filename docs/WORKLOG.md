@@ -541,3 +541,18 @@ measured matrix; the remaining candidate is the un-gated world.rs capsule delta 
 sign discipline n[1] > 0.7 + q[1] < b[1], the pick bit's dot2 pass-global, the pick-contact ref
 changes). Extend the gate set, run the 13-red matrix, fix what differs from the game with
 [M]/[D]/fresh-boot [L] evidence, land with the 13 and every walkreal_* binary green.
+
+## capsule-cull-and-los-masks-19 progress (2026-10-31)
+
+12 of the 13 reds fixed with two rules: (1) the Dist2Tri flags-99 behind-plane skip actually
+LANDED (the -16/-17 comment had NO code — verified line-by-line [M 0x109770 + 0x109da0:331 the
+query IS the clamped crossing p; 0x10a33c the caller skip]) — 11 reds green (walkreal_07000014 ×3,
+walkreal_0700000a ×2, interactables_07000011 ×2, fix_level_chain, interactables_07000014,
+urn_break, frame_cost); (2) the FLAT-band horizontal skip (|n·y| > 0.999 [M 0x10a288] ∧
+dot(n, a−t0) < 0 — the game never carries the capsule on a flat face behind the spine top:
+flags-99 approach + the radial arm dead [L hatch-10] + unwalkable [M :473]) — the death_restart
+perch bounce fixed (fall_timer 140→76-tick model). Remaining red: walkreal_0700000c
+(the whole-mission walk) — :308 the crouch slab stop fails WITH flags-99 (the sloped slab's
+approach is skipped; the game holds [L hatch-3] — the live check settles the query detail),
+:775 the #283 wire ride never drops (`dropped false`, fails with flags-99 OFF = the -18 state).
+Battery quoted on the final tree: 23 walkreal + 6 other binaries green, totals in the report.
