@@ -97,6 +97,24 @@ pub struct StuckGadget {
     /// 485-553; L SatchelDigits @0x2bed90 = 0x2000791..0x200079a]. (tens, units), `None` before the
     /// first tail tick.
     pub digits: Option<(u8, u8)>,
+    /// The direction the bullet's matrix (obj+0x90) is aligned to — what the mesh and the countdown
+    /// digits draw with. `Bullet_init` aligns it ONCE to the spawn direction (`Mat_Align2Dir(obj+0x90,
+    /// BU+0x00, …)` [M 0x12c5a0:180-185], BU+0x00 = the normalised throw direction + its spread);
+    /// in flight `Bullet_update` case 1 rewrites obj+0x90 only for `+0x6C & 0x8000` (the spin) or
+    /// the `+0x6C & 0x4` guided arm [M 0x12e7b0:163-217] and the satchel/tripbomb records carry
+    /// neither (+0x6C = 0xc08 [L ee_start_05.bin weapon_data 0x3a/0x3b]), so the gravity arc never
+    /// turns the pose. The stick re-aligns it to −normal [M 0x12ce80:256-266].
+    pub align: V3,
+}
+
+impl StuckGadget {
+    /// The in-flight gadget box a throw spawns: the placeholder normal (the stick overwrites it), the
+    /// matrix aligned to the normalised spawn direction `dir` (see `align`).
+    pub fn thrown(dir: V3) -> StuckGadget {
+        let l = (dir[0] * dir[0] + dir[1] * dir[1] + dir[2] * dir[2]).sqrt();
+        let align = if l > 1e-9 { [dir[0] / l, dir[1] / l, dir[2] / l] } else { [0.0, 1.0, 0.0] };
+        StuckGadget { normal: [0.0, 1.0, 0.0], arm: 0.0, armed: false, last_qs: 0, digits: None, align }
+    }
 }
 
 /// What a grenade did this tick.
@@ -399,6 +417,8 @@ impl Grenade {
                         armed: false,
                         last_qs,
                         digits,
+                        // The stick's `Mat_Align2Dir(obj+0x90, −normal, …)` [M 0x12ce80:256-266].
+                        align: [-normal[0], -normal[1], -normal[2]],
                     }));
                     return Some(GrenadeEvent::Stick(stuck_at));
                 }

@@ -344,9 +344,7 @@ impl MpCombat {
                 mesh: wd.projectile_mesh(weapon as usize),
                 owner, state: 0, bounces: 0, smoke_popped: false, resting: false,
                 stuck: false, seek_target: None,
-                phase: matches!(weapon as u16, 0x3a | 0x3b).then(|| {
-                    Box::new(StuckGadget { normal: [0.0, 1.0, 0.0], arm: 0.0, armed: false, last_qs: 0, digits: None })
-                }),
+                phase: matches!(weapon as u16, 0x3a | 0x3b).then(|| Box::new(StuckGadget::thrown(sdir))),
             });
             return;
         }

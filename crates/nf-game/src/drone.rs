@@ -10599,9 +10599,9 @@ impl Drone {
             stuck: false, seek_target: None,
             // fix-satchel-tripbomb: the gadget phase box exists from the spawn for the 0x3a/0x3b ids
             // (the DoTrails 0x3b tail's beep latch ticks from the throw [M 0x12d890:418+]).
-            phase: matches!(weapon_type, 0x3a | 0x3b).then(|| {
-                Box::new(crate::grenade::StuckGadget { normal: [0.0, 1.0, 0.0], arm: 0.0, armed: false, last_qs: 0, digits: None })
-            }),
+            // The box carries the spawn alignment (`Bullet_init`'s `Mat_Align2Dir(obj+0x90, BU+0x00)`
+            // [M 0x12c5a0:185]) the flight pose keeps.
+            phase: matches!(weapon_type, 0x3a | 0x3b).then(|| Box::new(crate::grenade::StuckGadget::thrown(dir))),
         })
     }
 

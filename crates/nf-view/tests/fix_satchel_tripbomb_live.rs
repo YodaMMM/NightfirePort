@@ -86,7 +86,7 @@ fn thrown(sim: &nf_view::scene::Sim, hit: [f32; 3], normal: [f32; 3], id: u16) -
         damage: f32_at(0x0c), radius: f32_at(0x08), weapon_type: id,
         mesh: sim.weapons.projectile_mesh(id as usize), owner: usize::MAX, state: 0,
         bounces: 0, smoke_popped: false, resting: false, stuck: false, seek_target: None,
-        phase: Some(Box::new(nf_game::grenade::StuckGadget { normal: [0.0, 1.0, 0.0], arm: 0.0, armed: false, last_qs: 0, digits: None })),
+        phase: Some(Box::new(nf_game::grenade::StuckGadget::thrown([-normal[0], -normal[1], -normal[2]]))),
     }
 }
 
@@ -262,7 +262,7 @@ fn the_sixth_tripbomb_evicts_the_oldest() {
         g.velocity = [0.0; 3];
         g.stuck = true;
         g.state = 1;
-        g.phase = Some(Box::new(nf_game::grenade::StuckGadget { normal, arm: 0.0, armed: true, last_qs: 0, digits: None }));
+        g.phase = Some(Box::new(nf_game::grenade::StuckGadget { normal, arm: 0.0, armed: true, last_qs: 0, digits: None, align: [-normal[0], -normal[1], -normal[2]] }));
         sim.drones.grenades.push(g);
     }
     for _ in 0..3 { sim.step_bond(Input::default(), false, false, false); }
@@ -294,7 +294,7 @@ fn five_tripbombs_and_one_mine_all_stay() {
         g.velocity = [0.0; 3];
         g.stuck = true;
         g.state = 1;
-        g.phase = Some(Box::new(nf_game::grenade::StuckGadget { normal, arm: 0.0, armed: true, last_qs: 0, digits: None }));
+        g.phase = Some(Box::new(nf_game::grenade::StuckGadget { normal, arm: 0.0, armed: true, last_qs: 0, digits: None, align: [-normal[0], -normal[1], -normal[2]] }));
         sim.drones.grenades.push(g);
     }
     let mut m = thrown(sim, base, normal, 0x37);
@@ -302,7 +302,7 @@ fn five_tripbombs_and_one_mine_all_stay() {
     m.velocity = [0.0; 3];
     m.stuck = true;
     m.state = 1;
-    m.phase = Some(Box::new(nf_game::grenade::StuckGadget { normal, arm: 0.0, armed: true, last_qs: 0, digits: None }));
+    m.phase = Some(Box::new(nf_game::grenade::StuckGadget { normal, arm: 0.0, armed: true, last_qs: 0, digits: None, align: [-normal[0], -normal[1], -normal[2]] }));
     sim.drones.grenades.push(m);
     for _ in 0..3 { sim.step_bond(Input::default(), false, false, false); }
     let trips = sim.drones.grenades.iter().filter(|g| g.weapon_type == 0x3a && g.stuck && g.state < 2).count();

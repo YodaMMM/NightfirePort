@@ -4790,8 +4790,10 @@ impl Sim {
                         // satchel/tripbomb ids — `Bullet_DoTrails`' 0x3b tail (the beeps/digits) runs
                         // in EVERY state [M 0x12d890:418+], so the quarter-second latch (BU+0x100)
                         // must tick from the throw; the stick overwrites it with the surface state.
+                        // It carries the spawn alignment the flight pose keeps (`Bullet_init`'s
+                        // `Mat_Align2Dir(obj+0x90, BU+0x00)` on the spread direction [M 0x12c5a0:180-185]).
                         phase: matches!(self.gun.weapon as u16, 0x3a | 0x3b).then(|| {
-                            Box::new(nf_game::grenade::StuckGadget { normal: [0.0, 1.0, 0.0], arm: 0.0, armed: false, last_qs: 0, digits: None })
+                            Box::new(nf_game::grenade::StuckGadget::thrown(sdir))
                         }),
                     });
                 } else {
@@ -9690,9 +9692,11 @@ pub fn build(level: &Level, cels_only: bool, skeletons: &HashMap<u8, Skeleton>, 
                             // NEGATED surface normal (the stick arm's `Mat_Align2Dir(obj+0x90,
                             // −normal, …)` [M 0x12ce80:256-266]) instead of the flight direction.
                             match &g.phase {
-                                // Only a STUCK gadget's normal draws (a flying 0x3a/0x3b carries the
-                                // placeholder phase box for the beep latch — the stick overwrites it).
-                                Some(p) if g.stuck => (g.pos, [-p.normal[0], -p.normal[1], -p.normal[2]], g.mesh),
+                                // A 0x3a/0x3b gadget draws with its matrix's own alignment
+                                // (`StuckGadget::align`): the spawn direction in flight — `Bullet_init`
+                                // aligns obj+0x90 once [M 0x12c5a0:185] and their +0x6C (0xc08) has no
+                                // spin/guided rewrite [M 0x12e7b0:163-217] — and −normal once stuck.
+                                Some(p) => (g.pos, p.align, g.mesh),
                                 _ => (g.pos, norm(g.velocity), g.mesh),
                             }
                         }
@@ -9708,7 +9712,9 @@ pub fn build(level: &Level, cels_only: bool, skeletons: &HashMap<u8, Skeleton>, 
                         Some(b) if b.state == 1 => {
                             let dir = match (b.landed, b.stick_normal) {
                                 (true, Some(n)) => [-n[0], -n[1], -n[2]],
-                                _ => b.dir,
+                                // In flight the satchel keeps `Bullet_init`'s spawn alignment
+                                // (`Bullet::spawn_dir` [M 0x12c5a0:185]); `dir` follows the arc.
+                                _ => b.spawn_dir.unwrap_or(b.dir),
                             };
                             (b.pos, dir, s.weapons.projectile_mesh(b.weapon as usize))
                         }
@@ -9849,16 +9855,14 @@ pub fn build(level: &Level, cels_only: bool, skeletons: &HashMap<u8, Skeleton>, 
                         // The digits read the bullet's obj+0x90 unconditionally [M :496-498, :514,
                         // :542], so each carrier's base is the direction its projectile slot draws
                         // the satchel mesh with (the grenade/bullet arms of the projectile pose
-                        // above): stuck/landed → −normal [M 0x12ce80:256-266]; a flying grenade its
-                        // velocity, a flying bullet its spawn direction (`Mat_Align2Dir(dir, up)`
-                        // [M 0x12c5a0:185]).
-                        let normv = |v: [f32; 3]| { let l = (v[0] * v[0] + v[1] * v[1] + v[2] * v[2]).sqrt(); if l > 1e-9 { [v[0] / l, v[1] / l, v[2] / l] } else { [0.0, 1.0, 0.0] } };
+                        // above): stuck/landed → −normal [M 0x12ce80:256-266]; a flying one the spawn
+                        // direction (`Mat_Align2Dir(obj+0x90, BU+0x00, …)` [M 0x12c5a0:185] — the
+                        // thrown grenade's `StuckGadget::align`, the bullet's `dir`).
                         let mut satchels: Vec<([f32; 3], [f32; 3], Option<(u8, u8)>)> = s.drones.grenades.iter()
                             .filter(|g| g.weapon_type == 0x3b && g.state < 2 && g.phase.is_some())
                             .map(|g| {
                                 let p = g.phase.as_ref().unwrap();
-                                let dir = if g.stuck { [-p.normal[0], -p.normal[1], -p.normal[2]] } else { normv(g.velocity) };
-                                (g.pos, dir, p.digits)
+                                (g.pos, p.align, p.digits)
                             })
                             .collect();
                         for b in s.drones.bullets.iter()
@@ -9866,7 +9870,9 @@ pub fn build(level: &Level, cels_only: bool, skeletons: &HashMap<u8, Skeleton>, 
                         {
                             let dir = match (b.landed, b.stick_normal) {
                                 (true, Some(n)) => [-n[0], -n[1], -n[2]],
-                                _ => b.dir,
+                                // In flight the satchel keeps `Bullet_init`'s spawn alignment
+                                // (`Bullet::spawn_dir` [M 0x12c5a0:185]); `dir` follows the arc.
+                                _ => b.spawn_dir.unwrap_or(b.dir),
                             };
                             satchels.push((b.pos, dir, b.digits));
                         }
