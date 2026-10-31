@@ -68,7 +68,10 @@ fn the_office_floor_route_reaches_the_07000012_exit() {
         assert!(nav_route(sim, [2.2, 47.4, 6.6], [10.22, 47.4, -3.6]).is_some(),
             "the ledge's west end → the stairwell door IS nav-linked (the west bridge) [D nav]");
     }
-    assert!(!w.try_walk_to(Wp::new(10.22, 47.4, -3.6).r(1.2), "the corridor's direct northward leg (the pinned wedge)"),
+    w.lenient = true;
+    let direct = w.walk_to(Wp::new(10.22, 47.4, -3.6).r(1.2), "the corridor's direct northward leg (the pinned wedge)");
+    w.lenient = false;
+    assert_eq!(direct, u32::MAX,
         "the direct leg must wedge on the machinery row [D collision z≈5.15; the old stand-in's cause]");
     // The game's own route west: the ledge to its west end (nav n10 → n11 [D]), the west bridge
     // south (the office floor is continuous z −2..7 only at x ~1 — the nav's own bridge crossing
