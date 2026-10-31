@@ -1,15 +1,17 @@
 //! walkreal-c: 0700000c (Chain Reaction, part 1 — the power station) walked with the player's own
 //! movement — `step_bond` input only: no channel or state pokes. The REAL legs this session:
 //! the laser-watch hinge burn (the four #139-142 locks through the held-fire path), the vent
-//! drop firing plate #274 mid-fall (objective 1 on the game's own route), the case-exit walk,
-//! the 11.27 hall + the upper east lane south, the east-strip yard descent, and the three wire
+//! drop firing plate #274 mid-fall (objective 1 on the game's own route), the 11.27 hall +
+//! the upper east lane south, the yard reached WEST through the open secret door, and the three wire
 //! crossings (jump-grab + hand-over-hand rides), and the STAIRCASE descent to the display
 //! ground (the hall floor's own opening over `obj_stor2_staircase01` #359's ramp [D] — the
 //! display eye reached by real input). The DOCUMENTED stand-ins left (each with its evidence
-//! inline): the case's trench exit (the interior has no walkable exit at body height — glass is
-//! body-solid [M hatch-4]), the plates reach (every walking route off the display-ground
-//! complex is closed — the slab's south face leaves a 0.23..0.4 slot above the 2.37 deck [D
-//! probe rays]; the game's own connection is the annex vent #180/#182/#184 [D census]), the east
+//! inline): the case's trench exit (the south wall's solid base panel up to ~12.45 + the 0.91
+//! window slot seal the pocket — [D this session's fine scans + the placement probe]; the real
+//! game's case exit is the vent duct's own descent, a live check), the plates reach (every
+//! walking route off the display-ground complex is closed — the slab's south face leaves a
+//! 0.23..0.4 slot above the 2.37 deck [D probe rays]; the game's own connection is the
+//! warehouse-side corridor/annex, a live check), the east
 //! climb ground→band (unpinned — the disc's own collision connects nothing: staircase01's bottom
 //! 9.52 floats over the 6.35 under-stairs [D eastclimb3/4 this session]; the stand-in lifts Bond
 //! onto the band at the gate), and the ladder495 sister test's west-ground placement. Route: the ST-1
@@ -29,11 +31,12 @@
 //! x 12.6..14.5 [D probe rays]) north to the display pocket → the REAL camera photograph (0x54
 //! [M 0x1a7ef8 case 0x700000c]) into the CamSubject #454 volume → ch 0x1c (objective 2) → the
 //! DOCUMENTED plates-reach stand-in (the walking routes off the display-ground complex are
-//! all closed — see Leg 4) onto the secret-door plates
+//! all closed — see Leg 4; this session also mapped the far side: the plates stand in a
+//! ground-level corridor (0.90) running north under the warehouse mezzanine, whose only
+//! proven entrances are the secret door and an unproven north end) onto the secret-door plates
 //! #558/#559 (52.24..53.29, 0.90..3.20, −174.45..−172.73 [D]): the REAL body-touch + E-arm AND chain
-//! → Door_secret1 #544 sweeps (rate 400 [D]) → through the door onto the doorway ledge (0.90) → the
-//! REAL east-south descent around the ledge's south wall (the wall z −175.8 spans x ≤ 55.5 only; x ≥
-//! 56 is open, floor 0.90 → 0.69 [D probe blk rays]) → the yard ladder #164 (9.67, 5.53, −187.34 [D])
+//! → Door_secret1 #544 sweeps (rate 400 [D]) → through the open door WEST for real onto the
+//! yard (0.69 [D this session's scan]) — the master's yard-descent stand-in is GONE — → the yard ladder #164 (9.67, 5.53, −187.34 [D])
 //! → the REAL walk-in grab + climb (the walk substate rides `Player_Collision` 0x194df0's DEFAULT
 //! hittest arm r 0.55 [M 0x1953f4 via the jump table @0x2fc0d0]) → the patrol-ring diagonal walkway
 //! (the ladder map: (6-9,−188) → (12-13,−194) [D probes]) → the ring north-west corner (12,−202..−208)
@@ -209,22 +212,30 @@ fn walk_the_whole_mission_from_the_start_to_the_0d_handoff() {
     // CamSubject_Update 0x1bc668:14-24]. (Route floors from the crossings session's probe: the
     // trench exit at z −112.5 is open west at body height; the direct south lane hits the 1.28
     // riser wall at z −114.09 [D probe]; the x 13..14 upper lane carries.)
-    // The trench EXIT — the one stand-in this session ADDED (the case's interior has no
-    // walkable exit at body height): the case's south glass lintels at z −111.89 from y ~13.2
-    // up [D probe rays: the y 13.0 ray passes, the y 13.4 ray hits at x 5.0..6.5], the west
-    // inner face x 4.78 blocks the chest (y 12.9) across the trench's z span [D probe rays],
-    // and the crouched body (root 0.607 over the floor [L 05-truck]; this run settled at
-    // 12.50 over the 11.84 floor) still clips the lintel — the port's crouch capsule does not
-    // fit under 13.2. Glass is body-solid [M hatch-4's 0x1eb320:337 + the 0x800/0xc query
-    // flags; L 0700001b]. No SS keys off ch 0x1b (the level's movers are the ch-18 grate/poly,
-    // the ch-8 door, the 0x54 lid [D keys]). So the game's exit out of the display case after
-    // the #274 drop is UNPINNED — live check 2 below. The stand-in moves Bond onto the 11.27
-    // hall just south of the case (the pinned floors [D probe]); the sister ray pins the
-    // lintel so the stand-in never walks through a glass that later opens.
+    // The trench EXIT — a DOCUMENTED stand-in (this session re-probed it fine): the case's
+    // south wall at z −111.89 is glass only from y 13.36 up [D fine ray scan: y 13.0..13.3
+    // clear, 13.5 hits, x 4.8..6.5; the prior "13.2" was the bracket's mid], so the lintel
+    // alone would pass the crouch capsule (top = root + 0.65 ≈ 13.16 over the 11.84 floor [M
+    // Player_Collision 0x194df0 case 3]) — BUT the crouch exit walk STALLS at z −111.81
+    // [this session's run: three x starts all stop at the same z, grounded false, with the
+    // south rays CLEAR at y 12.51..13.13 and crouch placements at z −111.95/−112.2 pushed
+    // back north to the same stall] — no ray at y ≥ 11.9 finds any geometry in
+    // z −112.0..−113.0 at x 4.9..6.9, so the stall's geometry is BELOW ray height or is a
+    // port-side push-out on the case-floor seam (UNPINNED). The north/east/west sides are
+    // glass from y ≤ 11.9 up [D ray scans — solid at body height]; glass is body-solid [M
+    // hatch-4's 0x1eb320:337 + the 0x800/0xc query flags; L 0700001b]. No SS keys off ch
+    // 0x1b (the level's movers are the ch-18 grate/poly, the ch-8 door, the 0x54 lid [D
+    // keys]) and no breakable-glass kind exists on this map [D census]. The real game's way
+    // out of the case after the #274 drop is the VENT DUCT's own descent (the duct delivers
+    // Bond INTO the case interior ~7.3 per the hatch sessions' map) — the port's drop
+    // through the vent hole lands in the trench instead. Live check 1 (the report) settles
+    // the real landing + exit. The stand-in moves Bond onto the 11.27 hall just south of the
+    // case (the pinned floors [D probe]); the sister pins the lintel so the stand-in never
+    // becomes a walk through glass that later opens.
     {
         let sim = w.scene.sim.as_ref().unwrap();
-        let lintel = sim.world.segment_hit([5.5, 13.4, -111.4], [5.5, 13.4, -113.0]);
-        assert!(lintel.is_some(), "the case's south lintel (z −111.89, y 13.2+ [D probe rays]) vanished; the exit stand-in could become a walk");
+        let lintel = sim.world.segment_hit([5.5, 13.5, -111.4], [5.5, 13.5, -113.0]);
+        assert!(lintel.is_some(), "the case's south lintel (z −111.89, from y 13.36 [D fine scan]) vanished; the exit stand-in could become a walk");
     }
     {
         let sim = w.scene.sim.as_mut().unwrap();
@@ -344,14 +355,17 @@ fn walk_the_whole_mission_from_the_start_to_the_0d_handoff() {
     // edge z −155.04 standing AND crouched [probe runs]; the 2.18 deep-floor lane (x 8.5..12.2,
     // the shaft's bottom) runs south only to z ~−150 and steps up onto the same 2.37 deck
     // pocket, wall-closed south at x ≥ 10.5 [D probe rays]; and the east deck pocket (2.37,
-    // x 12.5..15.4, z −154..−155.5) is closed south by the same face [D probe rays]. The
-    // game's own connection from here is the ANNEX VENT — the 0xE2 SS lid #180 "ventmesh"
-    // (53.80, 5.50, −163.59, ch 0x54, 6 keys rate 50, the lid swings up around +X), its
-    // VentLatch #182 (53.80, 5.90, −165.36, kind 0x2e) and the blocker #184 (keys 2 rate 10,
-    // sinks y 5.43 → 0) [D census] — but the annex floor (~5.44..5.99, x 52.5..55.5) hangs
-    // unreachable from the display ground too (open air over void at x 15..45, faces at
-    // x 14.9/31.7/45.2 at y 6.3 [D probe rays]); it is the warehouse-side connection, for a
-    // future leg. So the plates reach keeps the master's reach stand-in onto the plates.
+    // x 12.5..15.4, z −154..−155.5) is closed south by the same face [D probe rays]; east of
+    // ST-1 the void span x 15..45 has faces at x 14.9/31.7/45.2 at y 6.3 and nothing above
+    // body height to walk [D probe rays]. THIS session also mapped the far side: the plates
+    // #558/#559 stand in a ground-level corridor (floor 0.90, x 52.5..55.5) that runs NORTH
+    // under the warehouse mezzanine (5.44..6.00 [D this session's under-mezzanine scan]) with
+    // the vent plug #184 hanging in it at z −165..−164, and the corridor's only proven
+    // entrances are the secret door (west, z −174.3..−173.1) and that unproven north end. The
+    // mezzanine's annex vent (#180/#182/#184, ch 0x54) is the warehouse-side link, for a
+    // future leg. So the plates reach keeps the master's reach stand-in onto the plates; the
+    // corridor walk after it is REAL (leg 5), and the door's west side gives the REAL yard
+    // descent (leg 5b) — the master's yard-descent stand-in is GONE.
     let plate2 = {
         let sim = w.scene.sim.as_ref().unwrap();
         sim.drones.triggers.iter()
@@ -362,11 +376,25 @@ fn walk_the_whole_mission_from_the_start_to_the_0d_handoff() {
     {
         let sim = w.scene.sim.as_mut().unwrap();
         // The plates-reach stand-in, unchanged from master (see Leg 4's comment for the
-        // probe evidence closing the walking routes).
+        // probe evidence closing the walking routes). Sisters below pin the corridor's own
+        // geometry so the stand-in's landing stays on the disc's floor.
         sim.bond.pos = [plate2.1[0], plate2.1[1] + 0.6, plate2.1[2]];
         sim.bond.vel = [0.0; 3];
     }
     w.wait(20);
+    {
+        let sim = w.scene.sim.as_ref().unwrap();
+        // Sister: the corridor floor under the plates (0.90 [D this session's scan]) holds.
+        let floor = sim.world.segment_hit([52.76, 3.4, -173.59], [52.76, -1.0, -173.59]).map(|(t, _)| 3.4 - 4.4 * t);
+        assert!(floor.map_or(false, |y| (0.6..1.2).contains(&y)),
+            "the secret-door corridor floor under the plates moved (expected 0.90 [D this session]), got {floor:?}");
+        // Sister: the corridor's SOUTH end is the 2.07 step (z −176.0, x 52.0..55.6 [D this
+        // session's scan]; its north face slopes 2.07 → ~1.71 over z −176.0..−175.9) —
+        // pinning why the descent goes WEST through the door instead.
+        let step = sim.world.segment_hit([53.8, 4.0, -176.0], [53.8, -1.0, -176.0]).map(|(t, _)| 4.0 - 5.0 * t);
+        assert!(step.map_or(false, |y| (1.8..2.3).contains(&y)),
+            "the corridor's south step moved (expected 2.07 [D this session]), got {step:?}");
+    }
     eprintln!("[0c] the secret-door reach stand-in (the closed display-ground descents) — on the plates");
 
     // Leg 5 (REAL): the secret-door chain — the co-located plates [D #558/#559]: #559 (mask 8)
@@ -396,31 +424,26 @@ fn walk_the_whole_mission_from_the_start_to_the_0d_handoff() {
     assert!(open_at.is_some(), "the door never reached its spent (wrap-1 [D #544]) open pose — state {:?}",
         w.scene.sim.as_ref().unwrap().drones.sss.list.iter().find(|s| s.channel == 8).map(|s| (s.state, s.t)));
     eprintln!("[0c] the secret door swept spent open at +{:?}", open_at.map(|(t, _)| t));
-    // Walk through the spent door for real (the doorway is east of the plates — Bond crosses
-    // the door slab's plane x ≈ 51.9 [D #544]) and drop back onto the warehouse floor.
-    w.walk_to(Wp::new(55.0, 2.1, -175.2).r(0.9), "through the secret door");
+    // Walk WEST through the spent door for real (the doorway is in the corridor's west wall —
+    // the closed leaf sat at x ≈ 52.0 spanning z −174.3..−173.1 [D this session's x-rays]) and
+    // step down onto the warehouse yard (0.69) — the REAL descent the master's stand-in
+    // replaced. The opening's top clears the standing body (the frame's top surfaces ≥ 3.0
+    // [D this session's scan]; the standing capsule tops at root + 0.825 ≈ 2.76 [M
+    // Player_Collision 0x194df0 default arm]).
+    w.walk_to(Wp::new(50.4, 1.7, -174.2).r(0.55), "west through the open secret door onto the yard");
     {
         let sim = w.scene.sim.as_ref().unwrap();
-        assert!(sim.bond.pos[0] > 53.5, "Bond crossed the doorway for real (x {:?})", sim.bond.pos[0]);
+        let under = sim.world.segment_hit([sim.bond.pos[0], sim.bond.pos[1], sim.bond.pos[2]],
+            [sim.bond.pos[0], sim.bond.pos[1] - 3.0, sim.bond.pos[2]]).map(|(t, _)| sim.bond.pos[1] - 3.0 * t);
+        assert!(sim.bond.grounded && sim.bond.pos[0] < 51.5 && under.map_or(false, |y| (0.4..1.0).contains(&y)),
+            "Bond must walk west through the open secret door onto the yard (0.69 [D this session's scan]), got pos {:?} under {under:?}",
+            sim.bond.pos);
     }
-    // The yard descent — the DOCUMENTED stand-in (master's shape, kept): the east-strip
-    // descent [D probe blk: the wall z −175.8 spans x ≤ 55.5 only; the ledge 0.90 steps down
-    // to the yard 0.69 across x ~55.75] wedges this run at x 55.01 on the wall's unprobed
-    // EAST RETURN (a face at x ≈ 55.55 at y ~2 [this run's STUCK + the report's wedge]) —
-    // one face map away from a real leg. Live check 4 below.
-    {
-        let sim = w.scene.sim.as_mut().unwrap();
-        sim.bond.pos = [56.5, 2.8, -176.5];
-        sim.bond.vel = [0.0; 3];
-    }
-    for _ in 0..200 {
-        if w.scene.sim.as_ref().unwrap().bond.grounded { break; }
-        w.tick(nf_game::player::Input::default(), false);
-    }
-    eprintln!("[0c] the yard descent stand-in (the unprobed east return at x ~55.55) — on the yard floor");
+    eprintln!("[0c] the yard reached for real through the open secret door — on the yard floor at {:?}",
+        w.scene.sim.as_ref().unwrap().bond.pos);
 
     // Leg 6 (REAL): south-west across the yard to the ladder base.
-    w.walk_to(Wp::new(56.0, 1.4, -182.0).r(1.5), "the yard south");
+    w.walk_to(Wp::new(48.0, 1.4, -179.0).r(1.5), "the yard south of the door");
     w.walk_to(Wp::new(40.0, 1.4, -184.5).r(2.0), "the yard west");
     w.walk_to(Wp::new(20.0, 1.4, -184.5).r(1.5), "the yard west 2");
     w.walk_to(Wp::new(11.6, 1.2, -186.6).r(1.2), "the ladder base");
@@ -1050,9 +1073,12 @@ fn shoot_at(w: &mut Walker, target: [f32; 3], range: f32, max_ticks: u32, _label
 /// Sister (ladder-0c): the 0c's OTHER ladder, #495 `Ladder` (−6.42, 1.0, −177.39, yaw −0.2618,
 /// mesh bounds x ±0.204 / y 0..2.0 / z degenerate [D placement #495 + its map object]) — the same
 /// walk-in grab + climb through the real input path, on the flat west ground (floor ~0.0 [D
-/// probes]; the small 1.936 ledge sits ~0.9 east of the plane). The stand-in: Bond placed on the
-/// west ground — the ported route never crosses the yard's west edge (the walkreal's route stand-
-/// ins are all documented in the header) — the walk and the climb after it are real input.
+/// probes]; the small 1.936 ledge sits ~0.9 east of the plane). The placement below is a
+/// MEASUREMENT SPOT, not a route stand-in: the test's subject is the ladder grab/climb classes
+/// ([M 0x1953f4's DEFAULT arm + 0x196118/0x196310]) at #495's own plane, not the route to the
+/// ladder — the walkreal route never crosses the yard's west edge (the walkreal's route stand-ins
+/// are all documented in the header), so the only honest setup is Bond on the west ground beside
+/// the ladder; the walk-in and the climb after it are real input.
 #[test]
 fn ladder495_walk_grab_and_climb_to_the_top() {
     let iso = iso();
