@@ -872,24 +872,78 @@ fn west_doorway_repro() {
     }
 }
 
-/// The band-edge sister: Bond walks onto the south-corridor mouth's floor bridge (the map37
+/// The band-edge sister: Bond WALKS onto the south-corridor mouth's floor bridge (the map37
 /// mesh strip the instances fix folded in — x −11.43..−10.39, z −19.36..−18.03 [D the disc tri
 /// dump]) and stands AT its west edge. The floor band [M Player_FeetOnPoint 0x194188:106] holds
 /// him grounded at the edge — the honest edge case the floating wedge was not: no box grazes, the
 /// band passes, and he stays put. CAN FAIL if the band constants drift or the bridge drops out
 /// again (the instances fix's regression pin).
+///
+/// The reach, all real input (this round — the old REACH teleport onto (−11.35, 1.12, −18.6) is
+/// deleted): the game's route to the bridge is the ai graph's own ring through the west offices
+/// [D 0700000a ai_network; the same legs walked green end-to-end in
+/// walk_office_floor_qworm_keyboard_hatch] — out of the lift cab, the lobby south, the west hall
+/// (the through-line), the west offices' north corridor, down the west office block, the west
+/// corridor jinks, the south-west offices, south of the pillar into the pocket, the keypad's
+/// wall stand (−11.9, −17.5) [D keypad #648 at (−10.69, 1.52, −17.46)], then south-east onto
+/// the bridge's west end. The mouth legs the old note called wedging were the pillar crossing —
+/// the main walk re-routed it south of the pillar and is green end-to-end, so the walk stands.
+/// The strip's west edge x −11.43 [D] and the wall's west face x −10.70 [D] stay east of the
+/// path; the closed door #724's leaf sits in the gap (x −10.70..−10.45, z −18.04..−19.36 [D])
+/// and is never crossed — the bridge's west half is pocket-side floor.
 #[test]
 fn bond_stands_at_the_mouth_bridge_edge() {
     let mut w = load_carry(None);
-    // Reach: a REACH teleport onto the bridge's west end (the walk there crosses the wedging
-    // mouth legs — see the walk test's ignore note); the standing itself is the real input.
-    {
-        let sim = w.scene.sim.as_mut().unwrap();
-        sim.bond.pos = [-11.35, 1.12, -18.6];
-        sim.bond.vel = [0.0; 3];
-        sim.bond.yaw = std::f32::consts::FRAC_PI_2;
-        sim.bond.grounded = true;
+    // The cab-mouth SS lift doors sweep OPEN at create (75 ticks [M 0x1a9c58:51]) — the walk out
+    // of the cab pins at z 12.4 if this regressed (the prologue's own guard).
+    w.wait(30);
+    for _ in 0..150 {
+        let done = w.scene.sim.as_ref().unwrap().drones.sss.list.iter()
+            .filter(|s| s.placement == 524 || s.placement == 525)
+            .all(|s| s.state == 0 || s.state == 0x40);
+        if done { break; }
+        w.wait(5);
     }
+    // Out of the cab and the corridor loop west (the prologue's own anchors).
+    w.walk_to(Wp::new(-3.9, 0.0, 13.2), "out of the lift");
+    w.walk_to(Wp::new(-3.9, 0.0, 15.5).r(1.2), "lobby south");
+    w.walk_to(Wp::new(-10.0, 0.4, 16.0).r(1.2), "the west hall");
+    // The ai graph's ring to the pocket (the main walk's legs, green end-to-end), the watch
+    // between the legs (the alarm runner's press [M 0x168ea8] must not land mid-route).
+    let ring: [([f32; 3], &str); 21] = [
+        ([-20.5, 1.3, 16.5], "ring: the west offices' north corridor"),
+        ([-20.5, 1.3, 5.5], "ring: down the west office block"),
+        ([-17.6, 1.3, 5.5], "ring: the ai node 17 east of the door"),
+        ([-16.2, 1.3, 5.8], "ring: the ai node 27 east"),
+        ([-15.0, 1.3, 5.7], "ring: the ai node 26 east"),
+        ([-14.8, 1.3, 4.0], "ring: the ai node 32 south"),
+        ([-14.8, 1.3, 2.9], "ring: the ai node 33 south"),
+        ([-14.5, 1.3, 2.4], "ring: the ai node 34 south"),
+        ([-17.5, 1.3, 2.5], "ring: down past the west door"),
+        ([-18.5, 1.3, 2.5], "ring: the door jink west"),
+        ([-18.5, 1.3, 0.5], "ring: down"),
+        ([-19.5, 1.3, 0.5], "ring: the west corridor jink 2"),
+        ([-19.5, 1.3, -1.5], "ring: down 2"),
+        ([-21.5, 1.3, -1.5], "ring: the west corridor jink 3"),
+        ([-21.5, 1.3, -6.5], "ring: down the south-west offices"),
+        ([-18.5, 1.3, -6.5], "ring: jink 4"),
+        ([-18.5, 1.3, -9.5], "ring: down 3"),
+        ([-17.5, 1.3, -9.5], "ring: jink 5"),
+        ([-17.5, 1.3, -13.5], "ring: the south-west corner approach"),
+        ([-14.5, 1.3, -15.0], "ring: south of the pillar, into the pocket"),
+        ([-11.9, 1.3, -17.5], "ring: the keypad's wall"),
+    ];
+    for (wp, label) in ring {
+        watch_and_clear(&mut w, 16.0);
+        w.walk_to(Wp::new(wp[0], wp[1], wp[2]).r(0.8), label);
+        assert!(w.scene.sim.as_ref().unwrap().drones.level_exit.is_none(), "the mission failed at '{label}'");
+    }
+    // The bridge's west end, walked: south-east from the keypad's wall across the pocket's
+    // floor onto the strip (the target is the old teleport's own spot; the arrive r 0.3 keeps
+    // the root east of the strip's west edge x −11.43 [D] without touching the wall's west
+    // face x −10.70 [D] — the capsule's east edge at the root x −11.35 still clears it).
+    watch_and_clear(&mut w, 16.0);
+    w.walk_to(Wp::new(-11.35, 1.12, -18.6).r(0.3), "the bridge's west end");
     w.wait(10);
     {
         let sim = w.scene.sim.as_ref().unwrap();
@@ -997,15 +1051,37 @@ fn the_pick_ref_accumulator_tracks_the_game_ref() {
     assert_eq!(w.scene.sim.as_ref().unwrap().bond.pick_ref, [0.0f32; 3],
         "the accumulator boots (0,0,0) [L ee_start_0700000a BL+0x790]");
 
-    // The free walk: probe-placed at the game's own hall line (−8.0, 1.12, 16.29), yaw −1.5708 =
-    // west, stick forward [L 2026-10-26]. The first ticks ride the south wall's skin out to the
-    // equilibrium (the game's settled z 16.8288 [L]); after that the walk is push-free.
-    {
-        let sim = w.scene.sim.as_mut().unwrap();
-        sim.bond.pos = [-8.0, 1.12, 16.29];
-        sim.bond.vel = [0.0; 3];
-        sim.bond.yaw = -1.5708;
-        sim.bond.grounded = true;
+    // The free walk: the game's own hall line, reached ON REAL INPUT (this round — the old
+    // probe placement write to (−8.0, 1.12, 16.29) is deleted). The route is the game's own:
+    // the through-line THROUGH the doorway into the west hall (the glide leg, green on master —
+    // the jamb slide around the base pieces at z ≈ 16.278 [D port world tris] is part of the
+    // through-line), then back east along the hall to the spot. The straight lobby approach
+    // (lobby south → the spot) was tried this round and WEDGES where the game does not: its
+    // diagonal runs z 16.16 at the column's x, south of the base course, and the raw forward
+    // hold pins on the column's south-east corner (root −7.75, z slid 16.21 → 16.02, the
+    // accumulator +0.1/tick — the capsule pressed on the column's east face x −8.304). The
+    // game's route enters the hall through the doorway, not the south pocket.
+    w.wait(30);
+    for _ in 0..150 {
+        let done = w.scene.sim.as_ref().unwrap().drones.sss.list.iter()
+            .filter(|s| s.placement == 524 || s.placement == 525)
+            .all(|s| s.state == 0 || s.state == 0x40);
+        if done { break; }
+        w.wait(5);
+    }
+    w.walk_to(Wp::new(-3.9, 0.0, 13.2), "out of the lift");
+    w.walk_to(Wp::new(-3.9, 0.0, 15.5).r(1.2), "lobby south");
+    w.walk_to(Wp::new(-10.0, 0.4, 16.29).r(0.8), "the through-line into the west hall");
+    w.walk_to(Wp::new(-8.0, 1.12, 16.29).r(0.3), "the game's hall line");
+    // Face west (the [L] window's own yaw −1.5708) with real turn input.
+    let mut turn_ticks = 0u32;
+    loop {
+        let err = walker::wrap_pi(-1.5708 - w.scene.sim.as_ref().unwrap().bond.yaw);
+        if err.abs() < 0.02 { break; }
+        assert!(turn_ticks < 600, "the west turn never settled (yaw {})",
+            w.scene.sim.as_ref().unwrap().bond.yaw);
+        w.tick(nf_game::player::Input { turn: err.clamp(-0.08, 0.08), ..Default::default() }, false);
+        turn_ticks += 1;
     }
     w.wait(10);
     for _ in 0..25 { w.tick(nf_game::player::Input { forward: 1.0, ..Default::default() }, false); }
