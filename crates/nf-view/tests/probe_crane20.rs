@@ -635,3 +635,225 @@ fn probe20_west_scan() {
         }
     }
 }
+
+#[test]
+#[ignore = "print-only route scan for the 0d stand-ins (the bay exit + the beam boarding) — level-0d-last-two-standins"]
+fn probe0d_route_scan() {
+    let mut w = load_real();
+    w.wait(30);
+    let sim = w.scene.sim.as_ref().unwrap();
+    // 1. The ladder census east of x 120 (the dock side) [M placement type 0x22, class 0x2D].
+    eprintln!("[0d] ladders east of x 120:");
+    for (i, l) in sim.ladders.iter().enumerate() {
+        if l.centre[0] > 120.0 {
+            eprintln!("[0d] ladder {i}: centre ({:.2},{:.2},{:.2}) r {:.2} yaw {:+.3}", l.centre[0], l.centre[1], l.centre[2], l.radius, l.yaw);
+        }
+    }
+    // 2. The drones census in the dock volume (the crates/dynamics candidates).
+    eprintln!("[0d] drones in x 130..210, y 0..22, z -260..-310:");
+    for (i, d) in sim.drones.list.iter().enumerate() {
+        if d.pos[0] > 130.0 && d.pos[0] < 210.0 && d.pos[1] < 22.0 && d.pos[2] > -310.0 && d.pos[2] < -260.0 && d.present {
+            eprintln!("[0d] drone {i}: dtype {:#04x} pos ({:.2},{:.2},{:.2})", d.dtype, d.pos[0], d.pos[1], d.pos[2]);
+        }
+    }
+    // 3. The full floor map: every downward hit per column from y 18.5.
+    for z in [-264.0f32, -266.0, -267.0, -268.0, -269.0, -270.0, -272.0, -274.0, -276.0, -278.0, -280.0, -282.0, -284.0, -286.0, -288.0, -290.0, -292.0, -294.0, -296.0, -300.0, -304.0] {
+        let mut row = String::new();
+        let mut x = 156.0f32;
+        while x <= 202.0 {
+            let mut hits: Vec<String> = Vec::new();
+            let mut y = 18.5f32;
+            while y > 0.5 {
+                if let Some((t, _)) = sim.world.segment_hit([x, y, z], [x, y - 2.0, z]) {
+                    let hy = y - 2.0 * t;
+                    let s = format!("{hy:.2}");
+                    if hits.last().map(|h| h.as_str() != s.as_str()).unwrap_or(true) { hits.push(s); }
+                    y = hy - 0.05;
+                } else { y -= 2.0; }
+            }
+            if !hits.is_empty() { row.push_str(&format!("x{x:.0}[{}] ", hits.join(" "))); }
+            x += 1.0;
+        }
+        eprintln!("[0d] floor z{z}: {row}");
+    }
+    // 4. The overhead map at bay height: what is above each bay column (the mezzanine's
+    //    underside vs openings), from y 9.7 up to 18.
+    for z in [-272.0f32, -276.0, -280.0, -284.0, -288.0] {
+        let mut row = String::new();
+        let mut x = 168.0f32;
+        while x <= 198.0 {
+            let hit = sim.world.segment_hit([x, 9.7, z], [x, 18.0, z]).map(|(t, _)| 9.7 + 8.3 * t);
+            row.push_str(&format!("x{x:.0}:{hit:>5.1?} "));
+            x += 2.0;
+        }
+        eprintln!("[0d] above z{z}: {row}");
+    }
+    // 5. The yard drop zone under the beam's west extreme.
+    for z in [-270.0f32, -276.0, -282.0, -288.0, -294.0, -300.0] {
+        let mut row = String::new();
+        let mut x = 130.0f32;
+        while x <= 148.0 {
+            let hit = sim.world.segment_hit([x, 18.0, z], [x, 0.0, z]).map(|(t, _)| 18.0 - 18.0 * t);
+            row.push_str(&format!("x{x:.0}:{hit:>5.1?} "));
+            x += 2.0;
+        }
+        eprintln!("[0d] west z{z}: {row}");
+    }
+}
+
+#[test]
+#[ignore = "print-only: the roof map + the west-end ladder grab attempt — level-0d-last-two-standins"]
+fn probe0d_ladder_try() {
+    let mut w = load_real();
+    w.wait(30);
+    // The roof map: downward hits from y 20.5 (the roof ~18.58 [report; the squad 19.7 = roof + pos]).
+    {
+        let sim = w.scene.sim.as_ref().unwrap();
+        for z in [-264.0f32, -266.0, -268.0, -271.0, -274.0, -277.0, -280.0, -283.0, -286.0, -289.0, -292.0, -295.0, -298.0, -301.0, -304.0] {
+            let mut row = String::new();
+            let mut x = 148.0f32;
+            while x <= 202.0 {
+                let hit = sim.world.segment_hit([x, 20.5, z], [x, 14.0, z]).map(|(t, _)| 20.5 - 6.5 * t);
+                if let Some(h) = hit { row.push_str(&format!("x{x:.0}:{h:.2} ")); }
+                x += 2.0;
+            }
+            eprintln!("[0d] roof z{z}: {row}");
+        }
+        // The south face's wall top: rays south from the catwalk edge at fine y steps (x 170, 180).
+        for x in [165.0f32, 172.0, 180.0, 188.0] {
+            for y in [12.2f32, 12.6, 13.0, 13.4, 13.8, 14.2] {
+                let hit = sim.world.segment([x, y, -265.9], [x, y, -269.0]);
+                if hit.is_some() { eprintln!("[0d] southface x{x} y{y}: BLOCKED"); }
+            }
+        }
+    }
+    // The ladder grab attempt: stand on the catwalk at x 158, face west, hold forward into the
+    // ladder (155.6, r 4.39 — the sphere covers the catwalk level).
+    {
+        let sim = w.scene.sim.as_mut().unwrap();
+        sim.bond.pos = [158.0, 12.73, -265.8];
+        sim.bond.vel = [0.0; 3];
+        sim.bond.yaw = -std::f32::consts::FRAC_PI_2; // face -x (west: forward = (sin yaw, cos yaw))
+    }
+    w.wait(5);
+    for k in 0..300 {
+        let sim = w.scene.sim.as_mut().unwrap();
+        sim.step_bond(nf_game::player::Input { forward: 1.0, ..Default::default() }, false, false, false);
+        w.total_ticks += 1;
+        if k % 15 == 0 {
+            let sim = w.scene.sim.as_ref().unwrap();
+            eprintln!("[0d] press t{k}: pos ({:.2},{:.2},{:.2}) substate {} grounded {}", sim.bond.pos[0], sim.bond.pos[1], sim.bond.pos[2], sim.bond.substate, sim.bond.grounded);
+        }
+        if w.scene.sim.as_ref().unwrap().bond.substate == nf_game::player::SS_CLIMB { break; }
+    }
+    let sim = w.scene.sim.as_ref().unwrap();
+    eprintln!("[0d] after press: pos {:?} substate {}", sim.bond.pos, sim.bond.substate);
+    // The island jump: from the catwalk at x 188.5 facing south, run + jump the 2.5 m slot onto
+    // the staircase island (12.67, x 188..189.5, z -268.75..-269 [D floor map]).
+    {
+        let sim = w.scene.sim.as_mut().unwrap();
+        sim.bond.pos = [187.0, 12.73, -265.6];
+        sim.bond.vel = [0.0; 3];
+        sim.bond.yaw = std::f32::consts::PI; // face south
+    }
+    w.wait(5);
+    // Run south 12 ticks then jump, keep holding.
+    for k in 0..12 {
+        let sim = w.scene.sim.as_mut().unwrap();
+        sim.step_bond(nf_game::player::Input { forward: 1.0, ..Default::default() }, false, false, false);
+        w.total_ticks += 1;
+    }
+    let mut jumped = false;
+    for k in 0..240 {
+        let jump = !jumped && k == 0;
+        if jump { jumped = true; }
+        let sim = w.scene.sim.as_mut().unwrap();
+        sim.step_bond(nf_game::player::Input { forward: 1.0, jump, ..Default::default() }, false, false, false);
+        w.total_ticks += 1;
+        if k % 20 == 0 {
+            let sim = w.scene.sim.as_ref().unwrap();
+            eprintln!("[0d] jump t{k}: pos ({:.2},{:.2},{:.2}) grounded {}", sim.bond.pos[0], sim.bond.pos[1], sim.bond.pos[2], sim.bond.grounded);
+        }
+        if jumped && k > 20 && w.scene.sim.as_ref().unwrap().bond.grounded { break; }
+    }
+    let sim = w.scene.sim.as_ref().unwrap();
+    eprintln!("[0d] jump end: pos {:?} grounded {}", sim.bond.pos, sim.bond.grounded);
+    // THE FULL ROOF DESCENT: ladder up -> roof lane south -> east -> the pad -> the bay.
+    // First the ladder: face south on the catwalk at the west end and press in.
+    {
+        let sim = w.scene.sim.as_mut().unwrap();
+        sim.bond.pos = [157.6, 12.73, -265.6];
+        sim.bond.vel = [0.0; 3];
+        sim.bond.yaw = -2.5; // west-southwest: |diff| = 2.5 > pi/2, the drift carries toward the ladder's z
+    }
+    w.wait(5);
+    for k in 0..400 {
+        let sim = w.scene.sim.as_mut().unwrap();
+        sim.step_bond(nf_game::player::Input { forward: 1.0, ..Default::default() }, false, false, false);
+        w.total_ticks += 1;
+        if k % 40 == 0 {
+            let sim = w.scene.sim.as_ref().unwrap();
+            eprintln!("[0d] ladder t{k}: pos ({:.2},{:.2},{:.2}) sub {}", sim.bond.pos[0], sim.bond.pos[1], sim.bond.pos[2], sim.bond.substate);
+        }
+        if w.scene.sim.as_ref().unwrap().bond.substate == nf_game::player::SS_CLIMB && k > 0 { break; }
+    }
+    let climbing = w.scene.sim.as_ref().unwrap().bond.substate == nf_game::player::SS_CLIMB;
+    eprintln!("[0d] ladder grabbed: {}", climbing);
+    if climbing {
+        // Hold forward to the top (the lunge dismounts at the ladder's top).
+        for k in 0..900 {
+            let sim = w.scene.sim.as_mut().unwrap();
+            sim.step_bond(nf_game::player::Input { forward: 1.0, ..Default::default() }, false, false, false);
+            w.total_ticks += 1;
+            if k % 60 == 0 {
+                let sim = w.scene.sim.as_ref().unwrap();
+                eprintln!("[0d] climb t{k}: pos ({:.2},{:.2},{:.2}) sub {}", sim.bond.pos[0], sim.bond.pos[1], sim.bond.pos[2], sim.bond.substate);
+            }
+            if w.scene.sim.as_ref().unwrap().bond.substate != nf_game::player::SS_CLIMB && k > 30 { break; }
+        }
+        let sim = w.scene.sim.as_ref().unwrap();
+        eprintln!("[0d] climb end: pos {:?} sub {} grounded {}", sim.bond.pos, sim.bond.substate, sim.bond.grounded);
+        // The dismount is airborne north of the roof's north edge (z -267.5): carry south with the
+        // eased yaw (the climb eased it toward ladder.yaw + pi = south [M Player_Climb]) until grounded.
+        for k in 0..80 {
+            let sim = w.scene.sim.as_mut().unwrap();
+            sim.step_bond(nf_game::player::Input { forward: 1.0, ..Default::default() }, false, false, false);
+            w.total_ticks += 1;
+            if w.scene.sim.as_ref().unwrap().bond.grounded { break; }
+        }
+        let sim = w.scene.sim.as_ref().unwrap();
+        eprintln!("[0d] roof land: pos ({:.2},{:.2},{:.2}) grounded {}", sim.bond.pos[0], sim.bond.pos[1], sim.bond.pos[2], sim.bond.grounded);
+    }
+    // The roof walk: the west lane south, the south band east, the x196 lane north, then the pad.
+    w.lenient = true;
+    let _ = w.walk_to(crate::walker::Wp::new(158.0, 19.65, -268.7).r(1.4), "roof east a");
+    let _ = w.walk_to(crate::walker::Wp::new(172.0, 19.65, -268.7).r(1.4), "roof east b");
+    let _ = w.walk_to(crate::walker::Wp::new(190.0, 19.65, -268.7).r(1.4), "roof east c");
+    let _ = w.walk_to(crate::walker::Wp::new(196.3, 19.65, -269.0).r(0.4), "roof lane ne");
+    let _ = w.walk_to(crate::walker::Wp::new(196.3, 19.65, -280.0).r(1.2), "roof lane south");
+    let _ = w.walk_to(crate::walker::Wp::new(194.0, 15.8, -281.0).r(1.2), "pad drop");
+    let _ = w.walk_to(crate::walker::Wp::new(190.0, 15.8, -290.0).r(1.4), "pad south");
+    let _ = w.walk_to(crate::walker::Wp::new(190.0, 10.6, -291.5).r(1.4), "bay drop");
+    let _ = w.walk_to(crate::walker::Wp::new(189.0, 10.6, -288.7).r(1.2), "bay corner");
+    w.lenient = false;
+    let sim = w.scene.sim.as_ref().unwrap();
+    eprintln!("[0d] descent end: pos {:?} grounded {} health {:.1}", sim.bond.pos, sim.bond.grounded, sim.drones.health.health);
+    // If climbing, keep holding forward and watch the rise.
+    if sim.bond.substate == nf_game::player::SS_CLIMB {
+        for k in 0..600 {
+            let sim = w.scene.sim.as_mut().unwrap();
+            sim.step_bond(nf_game::player::Input { forward: 1.0, ..Default::default() }, false, false, false);
+            w.total_ticks += 1;
+            if k % 60 == 0 {
+                let sim = w.scene.sim.as_ref().unwrap();
+                eprintln!("[0d] climb t{k}: pos {:?}", sim.bond.pos);
+            }
+            if w.scene.sim.as_ref().unwrap().bond.grounded && k > 30 { break; }
+        }
+        let sim = w.scene.sim.as_ref().unwrap();
+        eprintln!("[0d] climb end: pos {:?} substate {} grounded {}", sim.bond.pos, sim.bond.substate, sim.bond.grounded);
+    }
+}
+
+fn bond_pos(w: &Walker) -> [f32; 3] { w.scene.sim.as_ref().unwrap().bond.pos }
+fn substate(w: &Walker) -> u8 { w.scene.sim.as_ref().unwrap().bond.substate }
