@@ -102,12 +102,12 @@ fn the_screen_adjust_page_keeps_on_confirm_and_restores_on_back() {
     assert_eq!(fe.page, Page::ScreenAdjust);
     assert_eq!(fe.page.id(), PAGE_SCREEN_ADJUST);
     assert_eq!(PAGE_SCREEN_ADJUST, 0x4000_0047, "the page id is the menu-def's [L]");
-    assert_eq!(fe.rows(), 2, "the page's two sliders (d1 0 vertical, d1 1 horizontal [L])");
+    assert_eq!(fe.rows(), 0, "no cursor: the two scrolls share the focused id 0x100001eb [D page 0x40000047; M Scroll_Update 0x221b20:42-43]");
     assert_eq!(fe.screen_saved_x, 0, "the enter snapshot (psiGetScreenPos → PS2OldX) [M 0x217a58:8-10]");
     // Nudge both bars, then ✕: the values KEEP (Manager 0x5f(1) skips the 0x6b restore [M 0x21c858]).
-    assert!(fe.action(Action::Right), "the vertical bar steps");
-    assert!(fe.action(Action::Down), "cursor to the horizontal bar");
-    assert!(fe.action(Action::Right));
+    // ▶ is the horizontal scroll's own axis, ▼ the vertical's [M Scroll_Update 0x221b20:50-140].
+    assert!(fe.action(Action::Right), "the horizontal bar steps");
+    assert!(fe.action(Action::Down), "the vertical bar steps");
     assert_eq!((fe.screen_x, fe.screen_y), (12, 4));
     assert!(fe.action(Action::Confirm), "✕ Confirm");
     assert_eq!(fe.page, Page::CnAv, "✕ pops back to the AV page");
@@ -118,7 +118,6 @@ fn the_screen_adjust_page_keeps_on_confirm_and_restores_on_back() {
     assert_eq!(fe.page, Page::ScreenAdjust);
     assert!(fe.action(Action::Right));
     assert!(fe.action(Action::Down));
-    assert!(fe.action(Action::Right));
     assert_eq!((fe.screen_x, fe.screen_y), (24, 8));
     assert!(fe.action(Action::Back), "the hint's ~B Cancel [L 0x67b]");
     assert_eq!(fe.page, Page::CnAv);
@@ -136,9 +135,8 @@ fn the_av_page_snapshots_restores_and_re_snapshots_the_offset() {
     // Edit the offset through the subscreen and ✕ out.
     fe.cursor = 6;
     fe.action(Action::Confirm);
-    fe.action(Action::Right); // Y += 4
-    fe.action(Action::Down);
-    fe.action(Action::Right); // X += 12
+    fe.action(Action::Down);  // Y += 4 (the vertical scroll's ▼)
+    fe.action(Action::Right); // X += 12 (the horizontal scroll's ▶)
     fe.action(Action::Confirm);
     assert_eq!((fe.screen_x, fe.screen_y), (12, 4));
     assert_eq!((fe.screen_av_saved_x, fe.screen_av_saved_y), (12, 4), "the re-enter re-snapshot [M 0x214818:135]");
