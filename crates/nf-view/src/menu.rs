@@ -8845,7 +8845,8 @@ pub fn menu_overlay_fonts(fe: &FrontEnd, font: &nf_formats::hud::Font, hfont: &n
                 _ => (0x294, MP_CHARACTERS.len(), fe.mp_bot_char),
             };
             let cur = cur.min(n - 1);
-            page_header(&mut h, hfont, &bind(hdr));
+            // Scenario Options' header control is authored one unit higher (y 39) [D page 0x40000012].
+            page_header_y(&mut h, hfont, &bind(hdr), if fe.page == Page::MpOptions { 39 } else { HEADER_RECT.1 });
             panel(&mut h);
             let c = if fe.mp_row_locked(cur) { gs(0x7f7f7f, 0x60) } else { gs(0x7f7f7f, 0xff) };
             emblem_col(&mut h, fe.mp_row_preview(cur), 0x0300_00bf, c, c);
@@ -9764,6 +9765,9 @@ pub fn menu_overlay_fonts(fe: &FrontEnd, font: &nf_formats::hud::Font, hfont: &n
                 match &e.what {
                     crate::fe_pages::ElemWhat::Text { label: Some(0x2c5), s, .. } => page_header(&mut h, hfont, s),
                     crate::fe_pages::ElemWhat::Text { label: Some(0x2d0), .. } => hint_bar(&mut h, font, &hint(0x2d0, "~A Continue"), 50.0, 419.0, cream),
+                    // The corner stamp: the stats/results pages' draw (its forced unscaled
+                    // (340,198) rect clipped at the 512-wide screen, behind the text).
+                    _ if e.ctrl == 0x1000_0224 => corner_stamp(&mut h),
                     _ => draw_page_elems(&mut h, std::slice::from_ref(e), [hfont, font, mfont.unwrap_or(font)], textures),
                 }
             }
@@ -10404,8 +10408,11 @@ fn stats_list(h: &mut Hud, font: &nf_formats::hud::Font, rows: &[(String, String
 /// lands UNSCALED in the 512×448 screen: the capture's edge points (500,412)…(630,376) of 640×480
 /// fit the texture's curve drawn 1:1 at (340,198) of 512×448 within ±3 units [L PCSX2 07000004 finish,
 /// 2026-10-31], and the list pages' (539,393) copy is off-screen there — PCSX2 shows nothing on those
-/// pages [L m06/m10/m12]. Why this control skips the 640→512 scale is open (docs/UNKNOWNS.md). Layer
-/// f1 0x2d: behind the list plates (0x28) and the text.
+/// pages [L m06/m10/m12]. It skips the 640→512 scale because `MenuManager_Create`'s placement arms
+/// are an if / else-if chain: the id-0x10000224 arm writes (0x154, 0xc6) and so never reaches the
+/// `FixupResolution` arm, and its 255×255 size stays authored [M 0x21b908:305-314] (U-052, settled).
+/// The results/stats pages and the 007 Bonus page (same control, same data) share this draw.
+/// Layer f1 0x2d: behind the list plates (0x28) and the text.
 /// Only the part inside the 512-wide screen is drawn: on PS2 the rest is off-screen, and the wide
 /// window would otherwise show the curve running on past the backdrop's right edge.
 fn corner_stamp(h: &mut Hud) {
@@ -10712,10 +10719,33 @@ fn centred_tex(h: &mut Hud, font: &nf_formats::hud::Font, tex: u32, layer: i32, 
 /// NAME = ff 00 01 00 00 00 …]. FontTable[0] = {tex 0x03000005, FONTNFont2 0x305a58} [L
 /// ee_snapshot 0x2dd8b0].]
 fn page_header(h: &mut Hud, hfont: &nf_formats::hud::Font, s: &str) {
-    // Left-aligned at the control's x 50 at the face's own size, middle on y 48.5 (PCSX2 07000048: every header's ink
-    // starts at x 51; "Select Codename" measures 261 units).
+    page_header_y(h, hfont, s, HEADER_RECT.1);
+}
+
+/// The header control's authored rect: (50,40,376×17) on every page that has one, bar the MP
+/// Scenario Options page 0x40000012's y 39 and the 540-wide copies on 0x4000001d / 0x40000020
+/// (same x, y and h, so the same pen) [D menu-def 08000002; tests/page_titles.rs pins it].
+pub const HEADER_RECT: (i32, i32, i32, i32) = (50, 40, 376, 17);
+
+/// The header's pen (x, baseline y) in the 512×448 screen for an authored header y:
+/// `MenuManager_Create` puts the type-5 control through `FixupResolution` (50,40,376×17 → 40,37,
+/// 300×15) [M 0x21b908:305-314, 0x21b610], then `Label_Update` (no `fe` tag → left, x = ctrl.x)
+/// sets the sprite's y = (short)(ctrl.y + h/2 + extent_h·0.5 + page.y − 1), the extent height being
+/// the face's line advance (FONTNFont2: 13 + 6 + 1 = 20) [M 0x218cb8:178-205; Font_GetTextExtent
+/// 0x1ef588 → 0x1ee598:65-71]. With the page at 0: (40, 53) — the old fixed 54.5·448/480 = 50.9
+/// drew every title about 2.5 units of 480 high against the PCSX2 stats/results captures.
+pub fn page_header_pen(hfont: &nf_formats::hud::Font, y640: i32) -> (f32, f32) {
+    let [x, y, _, hh] = crate::fe_pages::control_rect(0x1000_0001, 5, HEADER_RECT.0, y640, HEADER_RECT.2, HEADER_RECT.3);
+    (x as f32, (y as f32 + (hh >> 1) as f32 + hfont.line_height() * 0.5 - 1.0).trunc())
+}
+
+/// `page_header` for a page whose header control sits at authored y `y640`.
+fn page_header_y(h: &mut Hud, hfont: &nf_formats::hud::Font, s: &str, y640: i32) {
+    // The pen at the control's x; the ink starts at the first glyph's own offset from it, as every
+    // left-aligned label draws (draw_page_elems).
+    let (px, py) = page_header_pen(hfont, y640);
     let x0 = hfont.layout(s, 0.0, 0.0).0.first().map(|p| p.x).unwrap_or(0.0);
-    h.text_scaled_tex(Anchor::Centre, hfont, -1, 0x0300_0005, s, mx(50.0) - x0, my(48.5 + 6.0), false, gs(CREAM, 0xff), true, 1.0);
+    h.text_scaled_tex(Anchor::Centre, hfont, -1, 0x0300_0005, s, px - x0, py, false, gs(CREAM, 0xff), true, 1.0);
 }
 
 /// The panel behind the rows [M pages 0x40000025/0x40000023/0x4000001c/0x4000002b control (50,53,590×295)
