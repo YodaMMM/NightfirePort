@@ -57,3 +57,17 @@ write the walk legs on real input (yard -> warehouse ground -> the corridor nort
 to the plates), open the secret door #544 through the plates (body touch #559 + E #558 -> AND
 #560 -> ch 8), walk out through it, and delete the `[plate2 + 0.6]` placement in
 `walkreal_0700000c_live`. Then walkreal_0700000c_live + interactables_0700000c_live totals.
+
+### level-0c-secret-door-reach-2 (progress, 10:30 UTC, 2026-10-31)
+
+The rehearsal probe `walkreal_probe0c_northend_live.rs` landed three facts: (1) the photograph
+(ch 0x1c) fires from the STAIR APPROACH (13.0, 12.4, −128.2) through the staircase opening — the
+sealed display basin is bypassed entirely; (2) the lane south extension is a dead end (the 12.3
+floor ends at z ~−153 onto an 11.27 shelf, wall 0.117 ahead; the (17, −158) 12.3 pocket is
+isolated — the deck lip 1.0 vs the 0.78 apex [M player.rs]); (3) the deck chain hangs off the
+WALKWAY south end (the steps 14.6/13.5 → the deck 13.3 → the 9.24 patch → the east ramp → the
+pit jump → the strip → the warehouse ground → the corridor's north end → the plates). One
+blocker left: the walkway's south lip hangs the body at (13.24, 15.77, −153.65) — run through it
+at speed or jump before the edge; the probe's B–E legs behind it are already written. The
+walkreal is untouched this session (binary green: 2 passed / 5 passed); the `[plate2 + 0.6]`
+placement dies in the next session's edit (the full recipe in the report).
