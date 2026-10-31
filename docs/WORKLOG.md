@@ -9,3 +9,14 @@
   Pickup_Handler 0x18e650, the player step-up in Player_Collision 0x194df0], fix any port gap
   with evidence, and replace the stance sweep with a walked take. Run walkreal_0700000b_live and
   any *pickup* binary; quote the totals.
+- outcome (2026-10-31): the stance sweep is GONE — the take is WALKED. The blocker was never the
+  helicopter: the copter flies its route away from the pad (state 1, (66, 57, 64) at +3600 ticks,
+  probe on this tree) and the wedge at (3.61, 58.07, 41.34) ("cel 189") is the disc's own static
+  geometry — the pickup's low box (top ≈57.92) + the housing's south wall east of x ≈ 2.8. The
+  game's touch law [M Pickup_Update 0x18e148:202-220: dist(root) < radius+1.1 (0.69+1.1 [D model
+  bounds]) AND Collide_LineOfSight(sphere centre → pickup, 0x721; one-sided rays [M 0x10a8c8:168])]
+  passes from the deck slot x 2.0-2.5, z 41.0-41.5 where the housing's south face is open above the
+  box; the old walk target (z +1.2 north) ground Bond east along the box into the wall. The test now
+  walks the slot (arrived +77 ticks at (2.20, 58.07, 40.34), both walks) and hard-asserts ch 0x3F —
+  no teleports. No nf-game source changed (the port's touch model already matched the decompile).
+  walkreal_0700000b 3/3 (warm 15296 ticks, fresh 21056, both `stuck 0`).

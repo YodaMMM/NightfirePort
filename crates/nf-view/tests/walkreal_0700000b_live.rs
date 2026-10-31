@@ -24,9 +24,10 @@
 //! 0x1ae3d8 case 0; D #178/#151]) — the ONE kept movement stand-in is the waiting-room exit
 //! transit (the walked doorway gap the probe maps: door #0's E opens it, the open leaf's pose
 //! still blocks the passage at t 0.41 — the report's live check); the deck→parachute leg walks
-//! for real (the arrival hard-asserted) and only the parachute's stance sweep remains (the
-//! helicopter body's volume shadows the walk-over — the report's live check), and the files-plate
-//! / parachute-stance placements are interaction measurement spots, not route transits.
+//! for real and the take is WALKED: the game's reach is the deck slot south-west of the
+//! pickup's housing (the take-ray threads the housing's open south face [D disc tris; M
+//! Pickup_Update 0x18e148:202-220]), and the files-plate placements are interaction
+//! measurement spots, not route transits.
 
 #[path = "common/walker_b2.rs"]
 mod walker;
@@ -506,8 +507,7 @@ fn walk_to_the_mission_end(mut w: &mut Walker, fresh: bool) {
 
     // The parachute + the jump are the REAL object paths. Bond walks the deck east from the
     // re-place point toward the pickup (the guards' fire is suppressed by the walker's
-    // top_up_health); the walked under-pickup attempt + the stance sweep finish the approach
-    // around the helicopter body (the walk cannot reach the touch band — the body's volume).
+    // top_up_health); the take is the walked slot below.
     let parachute = w.scene.sim.as_ref().unwrap().drones.pickups.iter()
         .find(|p| p.switch_channel == 0x3f).expect("OBJECT_Parachute (0xF0, ch 0x3F)").clone();
     let pp = [parachute.m[3][0], parachute.m[3][1], parachute.m[3][2]];
@@ -517,38 +517,34 @@ fn walk_to_the_mission_end(mut w: &mut Walker, fresh: bool) {
     // transit is gone; the deck's full extent was never a blocker on this tree.)
     w.walk_to(Wp::new(pp[0], pp[1] - 1.4, pp[2] - 5.0).r(1.6), "the deck below the parachute");
     w.wait(10);
-    // Take the parachute: the WALKED approach to the pickup's touch band, then the real
-    // walk-over drive (the pickup hangs at pickup height — pp[1] − 1.2 puts Bond's feet in the
-    // touch band [M Pickup_Handler 0x18e650's walk-over]). The sister assert (`taken || ch 0x3F`
-    // below) pins the pickup itself.
-    let mut taken = false;
-    if w.try_walk_to(Wp::new(pp[0], pp[1] - 1.2, pp[2] + 1.2).r(1.2), "under the parachute (walked)") {
-        for _ in 0..120 {
-            w.tick(nf_game::player::Input { forward: 0.4, ..Default::default() }, false);
-            if w.scene.sim.as_ref().unwrap().drones.channels.on(0x3f) { taken = true; break; }
-        }
+    // Take the parachute: the WALKED slot. The game's reach is NOT the north side (the old
+    // target z +1.2 ground Bond EAST along the pickup's low box — the run dump's wedge at
+    // (3.61, 58.07, 41.34), 1.1 m east of the take zone, mis-read at the time as "the
+    // helicopter body's volume": the copter never parks here — it flies its route away from
+    // the pad (state 1, (66, 57, 64) at +3600 ticks [D probe on this tree])). The disc's own
+    // geometry [D the level's collision triangles]: the pickup #280 (2.53, 58.45, 42.34) hangs
+    // over a low box (top ≈57.92, x 2.2-3.8, z 42.6-43.2) inside an open-fronted housing
+    // (roof ~59.3-60.9, east wall z 44.04); the housing's south face is OPEN at x ≤ ~2.8
+    // above the box, so from the deck at x 2.0-2.5, z 41.0-41.5 the take-ray threads the open
+    // face to the pickup centre. The game's touch law [M Pickup_Update 0x18e148:202-220]:
+    // `Vec_SqDist3D(pickup+0x80, player+0x30) < (radius+1.1)²` (radius 0.69 [D model bounds]
+    // → 1.79) AND `Collide_LineOfSight(player+0x80 → pickup+0x80, 0x721)` — one-sided rays
+    // [M Intersect_RayGeom 0x10a8c8:168], surface classes 0xd/0xe skipped. The walk into the
+    // slot passes both gates on real input; the take raises ch 0x3F [M Pickup_Handler
+    // 0x18e650:330-333 writes switch_channels[param 3] = 1; D #280 p3 = 0x3F].
+    w.walk_to(Wp::new(pp[0] - 0.3, pp[1] - 1.4, pp[2] - 1.0).r(1.0), "the parachute take slot (walked)");
+    let mut taken = w.scene.sim.as_ref().unwrap().drones.channels.on(0x3f);
+    for _ in 0..120 {
+        if taken { break; }
+        w.tick(nf_game::player::Input { forward: 0.4, ..Default::default() }, false);
+        taken = w.scene.sim.as_ref().unwrap().drones.channels.on(0x3f);
     }
-    if !taken {
-        // The stance sweep — KEPT test-setup placements (interaction measurement spots, not a
-        // route transit): each stance is a touch position around the pickup the walk-over needs
-        // when the helicopter body's volume shadows one side; the drive between them is real
-        // forward input.
-        'stances: for c in [[0.0f32, 0.0, 0.0], [0.6, 0.0, 0.6], [-0.6, 0.0, 0.6], [0.6, 0.0, -0.6], [-0.6, 0.0, -0.6], [0.0, 0.6, 0.0], [0.0, 1.2, 0.0]] {
-            for _ in 0..40 {
-                w.tick(nf_game::player::Input { forward: 0.4, ..Default::default() }, false);
-                if w.scene.sim.as_ref().unwrap().drones.channels.on(0x3f) { taken = true; break 'stances; }
-            }
-            let sim = w.scene.sim.as_mut().unwrap();
-            sim.bond.pos = [pp[0] + c[0], pp[1] + c[1] - 1.2, pp[2] + c[2]];
-            sim.bond.vel = [0.0; 3];
-        }
-    }
-    assert!(taken || w.scene.sim.as_ref().unwrap().drones.channels.on(0x3f),
-        "the parachute pickup must raise ch 0x3F [D pickup param 3]");
-    // Jump: into the roof-outside band (ch 0x40) — drive OFF the helicopter deck with the real
+    assert!(taken,
+        "the walked take from the deck slot must raise ch 0x3F [D #280 p3; M 0x18e148:202-220 + 0x18e650:330-333]");
+    // Jump: into the roof-outside band (ch 0x40) — drive OFF the deck with the real
     // input and let the fall cross the band (y 49.7-53.7 [D]; TOUCH fires on volume ENTRY).
-    // South is blocked by the helicopter body (floor 57.92 vs the deck 57.03 at z 42-44 [D
-    // probe]); EAST is open — the deck ends x ≈ 10-13 and the fall fires ch 0x40 at +143 [D
+    // South is blocked by the pickup's housing (the low box top 57.92 vs the deck 57.03 at
+    // z 42-44 [D probe]); EAST is open — the deck ends x ≈ 10-13 and the fall fires ch 0x40 at +143 [D
     // probe walkreal_probe0b.rs]. The SEQ's window is lower-bound only (no upper bound
     // [M 0x1b1e04; triggers.rs seq_and_window_is_lower_bound_only]), so the walk cannot void it.
     let mut done = w.scene.sim.as_ref().unwrap().drones.channels.on(0x40);
