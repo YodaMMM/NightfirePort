@@ -62,3 +62,18 @@ stays green with the walker body-block change, then chase the two e3 blockers: (
 lip fight — drone 4 no exposed part at 1.4-2.7 u, check what the game's auto-aim/body parts
 allow [M Check_AutoAim 0x1a73f8]; (2) the enabled geisha leaving Hostage 0x0A during nearby
 combat — port hostage/captor DSTATE handlers vs the game [M 0x144030/0x1441c0].
+
+## level-02-every-objective-4 progress (2026-10-31)
+
+Split done: master's green walk restored verbatim (passes 1/0 on this tree, 25.49s + 25.26s),
+the real-health walk in its own ignored test. Blocker 2 RESOLVED: the port matches the game —
+the Hostage tick frees her only on captor death (0x15cb78:25-36 → 0x15ccf0:42-43 → 0x165a68:30-32
+→ hide 14); gunfire does nothing else to a hostage in state 10; the e3 asserts pinned a play
+order, now they pin the game's gate (both geishas pass in runs rh2-rh4). Blocker 1 half-fixed:
+exposed_aim was doubly stricter than the game (raw segment + centre-line) — now the bullet's own
+rule (ray_box entry-t vs segment_bullet_scoped, Collide_Jointy 0x1ec180 + 0x1ea398:216-229);
+drone 4 still unexposed (solid lip — live check stands). The body-block now spares hostage
+captors. New frontier: the fight economy (drops land on the guards' floor below the lane; Bond
+died dry at the bunker in rh1, walked 6.5 u down a floor to a box in rh4, found nothing at his
+feet in rh5). Totals: walkreal_07000001 5/0, walkreal_07000002 master walk 1/0; 03-05 cut
+mid-batch, 06+ not run this window. Report: docs/reports/level-02-every-objective-4.md.
