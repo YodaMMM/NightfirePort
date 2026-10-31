@@ -133,7 +133,8 @@ marked 640×480 (the page data's authored space; controls are scaled 0.8 / 0.933
   Text colour 0x645a49 (msg 0x1b); the row after the cursor row (the header) — "Bond Moves" — is drawn in
   the highlight colour 0x7f7f7f [L capture; the live cursor is row 0].
 - **Corner stamp** 0x10000224 (TEX 0x0300014c, uv (1,1)+(255,255)): drawn 1:1 at (340,198) of the
-  512×448 screen — not scaled like the other controls (UNKNOWNS U-052). The port's edge matches the
+  512×448 screen — not scaled like the other controls: its forced-position arm in `MenuManager_Create`
+  skips `FixupResolution` [M 0x21b908:305-314] (UNKNOWNS U-052, closed). The 007 Bonus page draws the same stamp. The port's edge matches the
   capture's within 1 unit of 640×480 at x 500–630.
 - **Results text**: the score labels/numbers and the medal text use FONTMedium (texture 0x030000d8,
   `HudTables::font_medium`); label y = ctrl.y + h/2 + extent height/2 − 1 [M Label_Update 0x218cb8].

@@ -107,6 +107,11 @@ was and what fixed it:
    (167,262/294/326,306×28) — the port's text rows are the page data's own.
 4. **Headers** — the page data says LBL text (0x1f2/0x1f8/0x14c at (50,40,376×17)), not images; the
    stylised look in the captures is the game's menu font, which the port has not parsed (reported).
+   Placement: every header control is (50,40,376×17) (0x40000012: y 39; 0x4000001d/0x40000020: 540
+   wide) [D]. `FixupResolution` makes it (40,37,300×15) in the 512×448 screen, and `Label_Update` puts
+   the left-aligned pen at x = ctrl.x, y = (short)(ctrl.y + h/2 + extent_h/2 − 1) with extent_h the
+   FONTNFont2 line advance 20 → (40,53) [M 0x21b610; 0x218cb8:178-205]. `menu::page_header_pen`;
+   the PCSX2 stats/results title ink rows 43.1–56.8 of 480 match.
 5. **Hint icons** — the game draws the ~A/~B/~X/~Y/... tokens through the `specialchar` table
    (0x2dd8d8, 17 × 0x18 bytes: texture 0x03000075, u0, v0, w, h, advance) [M symtab + table bytes].
    The port's 64×64-atlas 0x03000042 tiles and the letter-X fallback for ✕ are gone; the table's own
