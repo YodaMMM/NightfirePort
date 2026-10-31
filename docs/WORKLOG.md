@@ -508,3 +508,12 @@ HITTEST+0x98 = 0x1C0 [M disasm 0x1951b0 — the decompiler dropped it in the def
 push tail's exact v operand (accumulator-relative per the decompile :421-431 vs the 6-b
 "query − Q" read) stays the open live-check; the empirical walk-model measurements are this
 window's work. See docs/reports/capsule-cull-and-los-masks-17.md.
+
+## capsule-cull-and-los-masks-18 (2026-10-31)
+
+Started: branch = origin/s/capsule-cull-and-los-masks-17 + merge origin/master (7d0091a0), clean.
+Task: bisect the 13 reds the merged full suite went to (walkreal 0a/0c/014, interactables 011/014,
+fix_death_restart, fix_level_chain, urn_break, frame_cost) across the LOS masks / head-on cull /
+flags-99 skip / turret muzzle-sphere change, find the remaining divergence from the game, land
+green. The two -17 capsule rules stay (raw denom ±0.999 at 0x10a1f0, flags 0/99 skip at
+0x10a330/0x10a33c). Work in progress.
