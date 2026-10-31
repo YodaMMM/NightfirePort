@@ -97,14 +97,15 @@ fn shoot_console_screen(w: &mut Walker, hash: u32, ch: u32, label: &str) -> bool
 
 /// The SpaceMissile chain on the real fire path — and the launch branch's fail, which lands on
 /// ch 99 BEFORE any disarm completes: the launch order (ch 19 — the AND(0xc1,0xc2) trigger's out
-/// [D PL#109]; its two input writers are absent from all 77 scripts [D decode 2026-10-18], so
-/// the test drives it the documented way, the walkreal ch-0x0a precedent) starts missile 1's
+/// [D PL#109]; its inputs are SP#148's ch 193 and spawner #163's done channel 194, written when
+/// the first wave is dead [D] — walkreal_0700001b_live::the_first_wave_kill_raises_the_launch_order;
+/// this test drives ch 19 to isolate the console mechanics from that fight) starts missile 1's
 /// state 0 [M 0x1aa1c8]; its p0 script 0x0600092a writes the console-1 gate ch 31 at t359 [D
 /// decode]; SP#128's 0x060007e2 (gate 31 [D param 9]) plays and holds at t650 — Bond SHOOTS the
 /// screens (the real fire path; SP_Update's damage tail unpauses [M 0x1dc1c0-0x1dc330]) and the
 /// console scripts write ch 1 (console 7's 0x060007e6 → ch 7) at their t682 [D decode]. But the
-/// consoles the test does not reach leave missiles 3/4/5 on the LAUNCH branch: missile 4 has no
-/// gate writer at all (its 06000a30 writes ch 192 @t1 [D]) and consoles 3/5 are never shot —
+/// consoles the test does not reach leave missiles 3/4/5 on the LAUNCH branch: missile 4's gate 34
+/// comes from SP#200's 0x06000928 [D], not its own 06000a30, and consoles 3/4/5 are never shot —
 /// their p0 ends at state-1 tick 1799 [D L−1] take the launch branch (ch 3/4/5 clear [M
 /// 0x1aa25c-338], missiles 6/8 follow at 2399), and their shared p1 scripts write
 /// `ch 99 = 1` @p1-t1000 [D 060007c6/060007e1 stream 14] — armed+2799. ch 99 is the game's
@@ -130,8 +131,8 @@ fn missile_console_shots_latch_and_the_launch_fails_on_ch_99() {
         assert!(!sim.drones.channels.on(0x09), "sister: objective 1's channel is off [D §2]");
         assert!(!sim.drones.channels.on(199), "sister: no abort channel [D §3]");
     }
-    // The launch order: ch 19 (the AND(0xc1,0xc2) trigger's out [D PL#109]; no disc writer
-    // [D decode 2026-10-18 — see the header]).
+    // The launch order: ch 19 (the AND(0xc1,0xc2) trigger's out [D PL#109]) — driven here; the
+    // real writer is the first wave's death (see the header).
     let frame = w.scene.sim.as_ref().unwrap().drones.frame;
     w.scene.sim.as_mut().unwrap().drones.channels.set(19, 1, frame);
     // The gates arrive at the missiles' t359 (31/32/37 — consoles 1/2/7 [D P0_GATE]); the
@@ -167,7 +168,7 @@ fn missile_console_shots_latch_and_the_launch_fails_on_ch_99() {
         assert_eq!(sim.drones.mission.status(), 2, "MissionState 2 on ch 99 [M 0x182c60:45-57]");
         assert_eq!(sim.drones.mission.fail_label, 0,
             "FailLabel stays the init sentinel — the monitor only runs in internal 1 [M 0x182c60:22, 0x182270:27]");
-        assert_eq!(sim.drones.missile_deploy[3], 3, "missile 4 (no gate writer [D]) took the LAUNCH branch [M 0x1aa31c]");
+        assert_eq!(sim.drones.missile_deploy[3], 3, "missile 4 (console 4 unshot; its gate 34 comes from SP#200's 0x06000928 [D]) took the LAUNCH branch [M 0x1aa31c]");
         assert_eq!(sim.drones.missile_deploy[2], 3, "missile 3 (console 3 unshot) launched too [M 0x1aa31c]");
         let m1 = &sim.drones.space_missiles[0];
         assert_eq!(m1.state, 1, "missile 1 is still in state 1 at the fail (its p0 ends at 3299 > 2799) [D]");
@@ -216,12 +217,10 @@ fn missile_console_shots_latch_and_the_launch_fails_on_ch_99() {
 /// AstronautDeath 0xbf with ch 0x0e ON, and the chain completes (ch 0x0b at the NIS's t600,
 /// MissionState 6 at the t720, to_end 0x0730001b). The end-of-chain `channels.on(0x0e)` assert
 /// this test used to make was the contradiction — the game's own case-3 write turns ch 0x0e
-/// off; the raise is now asserted AT the kill and the clear AT the chain's end. Route note
-/// (level-1b-drake-3): the teleport approach stays the documented stand-in — the west crossing
-/// is sealed by the game's own boundary (plc #128 OBJECT_Boundary_1 at x 4.433, body-solid per
-/// [M]; walkreal_0700001b_live::the_boundary_wall_stops_the_float_and_passes_bullets), so the
-/// on-foot route to the arena needs the scripted carry (the live checks in walkreal's ignored
-/// chain test). Sister: the unfought gate leaves Drake unspawned and the mission running.
+/// off; the raise is now asserted AT the kill and the clear AT the chain's end. Route note: this
+/// test isolates the kill (the gate driven, Bond placed in the arena basin); the real-input route
+/// is walkreal_0700001b_live::walk_arrival_to_drakes_defeat, where Drake closes in through the
+/// float and no crossing is needed. Sister: the unfought gate leaves Drake unspawned and the mission running.
 #[test]
 fn drake_defeat_by_real_fire_ends_the_mission() {
     // The arrival NIS is CUT here (the probe1b_blockers::probe_drake_death shape — the same
