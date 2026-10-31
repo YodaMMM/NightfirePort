@@ -2262,6 +2262,35 @@ fn front_end_menu(args: &[String], scene: &scene::Scene, front_end: bool, iso_pa
             }
             // Render aid: the end-of-campaign win page (P_WINGAME's 0x4c raised the movie).
             "wingame" => { fe.just_completed = true; fe.win_enter(); menu::Page::WinGame }
+            // Render aid: AV Options → Screen Adjust. NF_SA_HELD=h-|h+|v-|v+ lights that bar's
+            // held arrow (the scroll's +0x142 0x40 / 0x80).
+            "screenadjust" => {
+                fe.screen_adjust_open();
+                match std::env::var("NF_SA_HELD").as_deref() {
+                    Ok("h-") => fe.screen_adjust_held[0] = 0x40,
+                    Ok("h+") => fe.screen_adjust_held[0] = 0x80,
+                    Ok("v-") => fe.screen_adjust_held[1] = 0x40,
+                    Ok("v+") => fe.screen_adjust_held[1] = 0x80,
+                    _ => {}
+                }
+                menu::Page::ScreenAdjust
+            }
+            // Render aid: P_PARISENUM with the card box up — the boot card walk run until its
+            // 0xb message stands ("Checking memory card…"), the box past its first frame
+            // (NF_PARIS_FIRST=1 shows the first frame's height lag instead).
+            "parisenum" => {
+                for _ in 0..16 {
+                    fe.paris_card.tick();
+                    fe.paris_card.enum_step();
+                    if fe.paris_card.flow_msg == 0xb { break; }
+                }
+                fe.paris_dialog = true;
+                fe.paris_msg_ticks = if std::env::var_os("NF_PARIS_FIRST").is_some() { 1 } else { 2 };
+                menu::Page::ParisEnum
+            }
+            // Render aid: the in-game cheat-medal page (mission defs' 0x4000004c), its list emptied
+            // by the page's 0x4c.
+            "cheatmedal" => { fe.cheat_medal_rows.clear(); menu::Page::CheatMedal }
             "cnmenu" => { fe.cn_name = "Default".into(); menu::Page::CnMenu }
             "advanced" => menu::Page::CnAdvanced,
             "mpoptions" => menu::Page::CnMp,
