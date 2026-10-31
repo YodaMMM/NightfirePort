@@ -154,7 +154,12 @@ All gated on viewer+0x236 (`Sim::goggle_mode()`); the panes additionally on thei
   beam's alpha flicker (`(a + 0x3f + FRand(128))/2` here, `a + Rand(9) − 4` in [0x10, 0x30]
   otherwise) is not modelled in either mode (pre-existing, sg5-laser-draw).
 - `View_SetupRenderModes_Tweak` 0x1e5888:13-20 quarters the alpha of objects with obj+0xF0 &
-  0x20000 in mode 1 — not ported (no port draw carries that object bit yet).
+  0x20000 in mode 1 (`alpha = obj+0x106 >> 2`; disasm 0x1e588c `lui v1, 2`, 0x1e58b8 `lhu
+  +0x236`, 0x1e58d8 `srl s1, 2`) [M]. The bit's only source is the glist flags word
+  (`celglist+0x44` → obj+0xF0 by `Control_SetGList` 0x134960 and the creators); no ACTION.ELF
+  store ORs it in [M grep of every `+ 0xf0) =` store] and no glist in the 99 FILES.BIN
+  archives carries it [D nf-formats tests/night_quarter_census.rs] — on this disc no object
+  draws differently. Port: `nf_game::view::tweak_alpha` (unit-tested); no draw site needs it.
 
 **X-ray (2)**
 - Pane 15 (`XraySprInfo` 0x2bddb0, 5 sprites): sprite 0 = the 32×32 noise 0x03000098,
@@ -181,15 +186,35 @@ All gated on viewer+0x236 (`Sim::goggle_mode()`); the panes additionally on thei
   tests/xray_only_census.rs]: 07000003 "HOTOBJECT" (kind 0x20 breakable), 0700000a "laserbeam"
   ×10 and 0700000b "laserbeam-large" ×8 (kind 0xeb triggers), 07000014 "laserbeam" ×8 (0xea) —
   tripwire beams only the goggles show. Port: one slot each (`XRAY_SLOT_BASE` + placement
-  index) at the placement matrix; a breakable hides when dead, a trigger when deleted or its
-  lock channel fired with the hide byte set (`Trigger_Update` 0x1b1a78:47-55's |= 0x30). Not
-  modelled: a trigger's spline motion (ext+0xC frames). The "IR FootPrint Left/Right" pair
+  index) at obj+0x90 — `View_RotTransMatrix` for the 0x20 breakable and the trigger family
+  (`object_matrix_for_class`); a breakable hides when dead, a trigger when deleted or its
+  lock channel fired with the hide byte set (`Trigger_Update` 0x1b1a78:47-55's |= 0x30).
+  The keyed triggers move: `Trigger_Create` 0x1b1720:56-87 stores the 0x19 key list
+  (`m_paths[extra[8]]`), last = count − 1 and the step last/rate (`extra[7]` = count | rate<<16),
+  and every `Trigger_Update` after the lock return poses obj+0x90 with `Spline_Interp(t, keys,
+  0, last, obj+0x90, 0, 2)`, then `t += step`, `t = 0` once `(float)last < t` [M 0x1b1a78:60-70]
+  — one pass every `rate` ticks; a Touch updates inside `Trigger_Calc`'s ProcessTouch window
+  [M 0x1b1900:50-71], so it moves too. On the disc [D night_quarter_census]: 0700000a 3 of the
+  10 beams (#606/#614/#625, rate 240), 0700000b all 8 (rates 150-420), 07000014 all 8 (rate
+  480), each a 3-key list whose key 0 is the placement pose. Port: `triggers::Motion` — the
+  volume (`set_tris`) and the x-ray draw follow the pose. The "IR FootPrint Left/Right" pair
   (0x2000567/0x2000568, flags 0x721) sits on 0x2000-skipped placements in every archive and
   has no creator in ACTION.ELF (neither hash nor name in the decompile) — unspawned.
-- `Env_Breath` 0x17be00 spawns its x-ray puff variant (gas +0xF0 |= 0x400) only in mode 2 —
-  the breath itself is not wired into the port's ticks yet (docs/systems/env-breath-ripple.md).
-- `AnimObjectDraw` 0x1c4490:296's mode-1 gfx pick (0x2000131 vs 0x2000133) is the guards'
-  weapon-0x18 laser ray — not drawn by the port in either mode.
+- Breath: `Env_Breath` 0x17be00 spawns its x-ray puff variant (gas +0xF0 |= 0x400 → drawn
+  only in mode 2) whenever its env gate holds — `GlobalEnv == 0 || GlobalEnv+0x4b != 0 ||
+  cel+0x3c & 0x10000000`, where +0x4b is the Env_Create drop type (0 = snow). So off the
+  snow levels the guards breathe ONLY in x-ray; on 07000005-08 (drop type 0) the plain puff
+  shows in every mode, the x-ray one only in underwater cels. Wired from the guard pass
+  (`Sim::guard_breath`, docs/systems/env-breath-ripple.md); `Gas::xray_only` gates the draw.
+- The guards' laser ray (`AnimObjectDraw` 0x1c4490:259-311 [M]): a drawn anim object whose
+  held byte (obj+0xDC → +0x62) is 0x18 gets `AnimGetBoneWorldTrans(obj, 8, 3)` — datum 8+3 —
+  as the start, start + (−100, 0, 0)·datum rows as the far end, `Collide_RayIntersect(…, 8)`
+  clamps it to the first hit, and `View_DrawGlist(gfx, start, spherical(start − end), (1, 1,
+  |start − end|))` draws gfx 0x2000131 when the DRAWING viewer's +0x236 == 1, else 0x2000133.
+  Carriers [D goggles_draws_live]: weapon 0x19 on 0700000b/11/12/13 (10/10/10/4 guards, skins
+  0x5000004/6/8, datum 11 on bone 23); the 0x19 → 0x18 swap is the captains' (Attack 0x164210 /
+  AimStand 0x166178 / AimStandFire 0x166328) — 2 on 0b, 3 on 12. Port: `Scene::guard_beams`,
+  pooled `GUARD_BEAM_BASE` slots (GUARD_BEAMS = 4 rays × the two sprites).
 
 Render aid: `nf-view <iso> <level> --frame N --goggles 1|2 --shot out.png` presses the real
 goggles key in the shot's second half until the mode reads 1/2.
@@ -214,6 +239,8 @@ goggle_pane_tests (the pane updates' shared-stream draws, the crosshair colour, 
 on the grown value, the arm's pane enable), `body_glow` (the count-down, the child matrix, the
 parent pick). nf-formats: `goggles_panes` (both SprInfo tables, numbers) and
 `xray_only_census` (the 0x400 placements + the assets in all 21 SP archives).
+
+`crates/nf-view/tests/goggles_draws_live.rs` (NF_ISO opt-in): the snow-level plain breath in mode 0 (spawn alpha 128, static 0.05, at the head; dead guards make none), the x-ray-only breath off the snow levels (none in mode 0; alpha 200, growing, drawn only in mode 2), the 0x19 carrier/captain census, a captain's real 0x19 → 0x18 swap and its ray (datum 11 start, −X row, ≤ 100, sprite swap in mode 1; a 0x19 holder draws none), the keyed tripwires (step last/rate, key 0 = the placement, the volume and the x-ray draw follow, the wrap; 0a 3 / 0b 8 / 14 8). nf-formats `night_quarter_census` (no glist carries 0x20000; the 0xDF drop types; the keyed trigger placements). Unit tests: env breath variants/origin, `view::tweak_alpha`, `triggers` motion + lock hold.
 
 ## Live checks (open)
 

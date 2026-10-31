@@ -41,10 +41,29 @@ cam-mode read and the `+0xf0 |= 0x400` flag are wiring points for the draw side 
 flag is the same class of draw-flag the port's `Gas` does not model — the blood puff's
 `+0xf0 |= 8` deviation, gas.rs).
 
-Wiring points: `Player_Update`'s call needs the port's bond tick (nf-view `step_bond`
-owns Bond) with the cel's `+0xa0` zone byte and `BLData+0x254`; the guard call needs the
-AI pass's cel + `obj+0xEC + (obj & 0xfff)·0x80` phase. Neither tick currently carries the
-breath inputs — recorded as the follow-up with this function ready.
+Corrections (goggles-draws):
+- `cel+0xa0` is not a "breath zone": it is the portal walk's visited flag for the last view
+  capture — `View_CaptureScene` 0x1e6df0 clears it over the cel chain, `Vision_Portal_Recurse`
+  0x1e86e8 / `Vision_Recurse` 0x1e82e0 / `Vision_AddCelToDraw` 0x1e8908 set it [M]. A breather
+  only puffs while its cel was in view.
+- The player gate is `BLData+0x950 != 0` (disasm 0x193e6c `lbu v0, 0x950(s2)`), the camera
+  mode — the decompile's `puVar2 + 0x254` is a word-pointer offset (0x254·4). Bond breathes
+  only in a non-first-person camera mode.
+- `GlobalEnv+0x4b` is the Env_Create record's drop type (`pauVar8[4][0xb] = level_tag+0x2c`,
+  the `InitDrops` argument [M 0x17b968:66-68,112-114]); drop type 0 is snow. The env gate is
+  therefore false only under a snow env, and variant B (the plain puff, any mode) is the snow
+  levels' breath; everywhere else breath is the x-ray-only variant A. `cel+0x3c & 0x10000000`
+  is the cel's underwater bit (`Cel::underwater`).
+- The 0xff01 end colour and the life are as above; the x-ray puff's +0xF0 |= 0x400 is now
+  carried (`Gas::xray_only`) and the draw honours it.
+
+Wiring (goggles-draws): the guard call runs in `Sim::guard_breath` after the tick's AI pass —
+gate `drawn_grace != 0` (obj+0xFC) and health > 0 [M 0x1490f0:168], the head from
+`Drone::object_pose` bone 5 (`env::guard_breath_origin`: dir = its z row, pos + dir·0.12),
+the env gate from `env::breath_env_gate(drop type)`, the cel's underwater bit, the goggle
+mode. Stand-ins [S]: the cel-visited byte reads as `drawn_grace != 0`; `obj & 0xfff` (a heap
+address) as the drone's list index. Bond's call is not wired: the port's on-foot play has no
+non-first-person camera mode outside the cut-scenes `BLData+0x94b` already excludes.
 
 ## Env_WaterRipple 0x17c118 (148 B) — ported `env::env_water_ripple`
 
