@@ -159,3 +159,13 @@ big-archive tests, reproduced standalone; not test failures). nf-game lib ran in
 ## Usage
 
 not visible to me (this CLI session exposes no token/credit/context-window readout).
+
+## ntfy
+Sent successfully: curl, HTTP 200, id WKr6fNxwdgi0 (2026-10-31 ~02:22 UTC), message
+"capsule-cull-and-los-masks-17: done — 01/14 green on the merged tree (master's test-route
+fixes; walk spine unchanged); all 27 walkreal binaries green, every total quoted; feet-band
+decompile pass (Collide_Update +0x9c per-tick zero, the dropped 0x1C0 store); suite
+2926/7/209i over 708 + foreground completion; the 7 fails = 3 sanctioned disc_golden +
+slim-ISO + no-GPU". finish.sh: "OK done 20-capsule-cull-and-los-masks-17" (the first run's
+report cat missed — relative path after the script's cd; the body attached to the queue's
+done entry in a follow-up push).
