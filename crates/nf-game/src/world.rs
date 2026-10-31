@@ -135,6 +135,189 @@ struct Geo {
     /// Static only (`chunk`): for each chunked run, the pushed object (instance) it came from — the
     /// cel-scope bucketing key (fix-safe08b). One entry per `objects` entry after `chunk`.
     owners: Vec<u32>,
+    /// Static only (`chunk`): the uniform-grid index `along` reads its candidates from (perf-240e).
+    /// `None` = the linear group scan.
+    grid: Option<ObjGrid>,
+}
+
+/// perf-240e: a uniform 3-D grid over a chunked geometry set's objects — a candidate filter in
+/// FRONT of `along`'s own box tests, never instead of them. Every object is listed in every cell its
+/// bounds (padded by `GRID_PAD`) overlap; a segment query gathers the cells its sub-segments' boxes
+/// (padded by `GRID_PAD` again) overlap, sorts and dedups the object indices, and then applies the
+/// SAME two `seg_box` tests `along` applies (the object's group, then the object). An object that
+/// passes `seg_box` (padding 1e-3) has a point of the segment within 1e-3 of its box, so its padded
+/// box shares a cell with that point's sub-segment box — the candidate set is a superset of the
+/// scan's set, the filter cuts it to exactly that set, and the ascending sort reproduces the scan's
+/// order (groups ascending, objects ascending inside each). So every ray query sees the same
+/// objects in the same order: the same hits, the same nearest, the same tie-breaks. Objects with
+/// non-finite bounds or covering more than `GRID_BIG` cells sit on `always` (every query);
+/// non-finite or huge query segments fall back to the scan. `NF_GRID_VERIFY` checks every query
+/// against the scan and panics on any difference.
+struct ObjGrid {
+    origin: V3,
+    cell: f32,
+    dims: [usize; 3],
+    /// CSR: cell `c`'s objects are `items[start[c]..start[c + 1]]`, ascending.
+    start: Vec<u32>,
+    items: Vec<u32>,
+    always: Vec<u32>,
+}
+
+const GRID_PAD: f32 = 0.05;
+const GRID_BIG: usize = 4096;
+const GRID_GROUP: usize = 32;
+/// `along`'s grid path: segments whose largest axis span is at most this (units).
+const GRID_SHORT: f32 = 6.0;
+
+static GRID_VERIFY: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
+fn grid_verify() -> bool { *GRID_VERIFY.get_or_init(|| std::env::var_os("NF_GRID_VERIFY").is_some()) }
+
+impl ObjGrid {
+    fn build(objects: &[Object]) -> Option<ObjGrid> {
+        let finite = |o: &Object| (0..3).all(|k| o.lo[k].is_finite() && o.hi[k].is_finite() && o.lo[k] <= o.hi[k]);
+        let (mut lo, mut hi) = ([f32::INFINITY; 3], [f32::NEG_INFINITY; 3]);
+        for o in objects.iter().filter(|o| finite(o)) {
+            for k in 0..3 { lo[k] = lo[k].min(o.lo[k]); hi[k] = hi[k].max(o.hi[k]); }
+        }
+        if !(0..3).all(|k| lo[k].is_finite() && hi[k].is_finite()) { return None; }
+        let origin = [lo[0] - 2.0 * GRID_PAD, lo[1] - 2.0 * GRID_PAD, lo[2] - 2.0 * GRID_PAD];
+        let ext = [0, 1, 2].map(|k| (hi[k] - lo[k]) as f64 + 4.0 * GRID_PAD as f64);
+        let cell = ((ext[0] * ext[1] * ext[2] / 262_144.0).cbrt() as f32).max(2.0);
+        let dims = [0, 1, 2].map(|k| ((ext[k] / cell as f64).ceil() as usize).max(1));
+        let ncell = dims[0] * dims[1] * dims[2];
+        let mut g = ObjGrid { origin, cell, dims, start: vec![0; ncell + 1], items: Vec::new(), always: Vec::new() };
+        let mut ranges: Vec<Option<([usize; 3], [usize; 3])>> = Vec::with_capacity(objects.len());
+        for (i, o) in objects.iter().enumerate() {
+            let r = if finite(o) {
+                let a = [o.lo[0] - GRID_PAD, o.lo[1] - GRID_PAD, o.lo[2] - GRID_PAD];
+                let b = [o.hi[0] + GRID_PAD, o.hi[1] + GRID_PAD, o.hi[2] + GRID_PAD];
+                g.range(a, b)
+            } else { None };
+            match r {
+                Some((a, b)) if (b[0] - a[0] + 1) * (b[1] - a[1] + 1) * (b[2] - a[2] + 1) <= GRID_BIG => {
+                    for z in a[2]..=b[2] { for y in a[1]..=b[1] { for x in a[0]..=b[0] { let c = g.idx(x, y, z); g.start[c + 1] += 1; } } }
+                    ranges.push(Some((a, b)));
+                }
+                _ => { g.always.push(i as u32); ranges.push(None); }
+            }
+        }
+        for c in 0..ncell { g.start[c + 1] += g.start[c]; }
+        let mut fill = g.start.clone();
+        g.items = vec![0; g.start[ncell] as usize];
+        for (i, r) in ranges.iter().enumerate() {
+            let Some((a, b)) = r else { continue };
+            for z in a[2]..=b[2] { for y in a[1]..=b[1] { for x in a[0]..=b[0] {
+                let c = g.idx(x, y, z);
+                g.items[fill[c] as usize] = i as u32;
+                fill[c] += 1;
+            } } }
+        }
+        Some(g)
+    }
+
+    fn idx(&self, x: usize, y: usize, z: usize) -> usize { (z * self.dims[1] + y) * self.dims[0] + x }
+
+    /// The clamped cell range of the box `a..b`; `None` when the box misses the grid.
+    fn range(&self, a: V3, b: V3) -> Option<([usize; 3], [usize; 3])> {
+        let (mut ra, mut rb) = ([0usize; 3], [0usize; 3]);
+        for k in 0..3 {
+            let fa = ((a[k] - self.origin[k]) / self.cell).floor();
+            let fb = ((b[k] - self.origin[k]) / self.cell).floor();
+            if fb < 0.0 || fa >= self.dims[k] as f32 { return None; }
+            ra[k] = fa.max(0.0) as usize;
+            rb[k] = (fb as usize).min(self.dims[k] - 1);
+        }
+        Some((ra, rb))
+    }
+
+    /// Visits the grid cells the segment crosses, near to far (the DDA walk `candidates`
+    /// documents), handing each cell's object list to `visit`; `visit` returning true stops the
+    /// walk. Returns `None` (nothing visited) when the segment is non-finite, huge, or the walk
+    /// would exceed its step cap — the caller then scans.
+    fn walk(&self, from: V3, to: V3, mut visit: impl FnMut(&[u32]) -> bool) -> Option<bool> {
+        if !(0..3).all(|k| from[k].is_finite() && to[k].is_finite() && from[k].abs() < 1e6 && to[k].abs() < 1e6) { return None; }
+        let cell = self.cell as f64;
+        let f = [0, 1, 2].map(|k| (from[k] as f64 - self.origin[k] as f64) / cell);
+        let dd = [0, 1, 2].map(|k| (to[k] as f64 - from[k] as f64) / cell);
+        // The step cap: the cells a segment can cross is at most the sum of its per-axis spans + 3.
+        if dd.iter().map(|v| v.abs()).sum::<f64>() > 8000.0 { return None; }
+        let mut c = [0, 1, 2].map(|k| f[k].floor() as i64);
+        let step = [0, 1, 2].map(|k| if dd[k] > 0.0 { 1i64 } else if dd[k] < 0.0 { -1 } else { 0 });
+        let tdelta = [0, 1, 2].map(|k| if dd[k] != 0.0 { 1.0 / dd[k].abs() } else { f64::INFINITY });
+        let mut tmax = [0, 1, 2].map(|k| {
+            if dd[k] > 0.0 { ((c[k] + 1) as f64 - f[k]) / dd[k] } else if dd[k] < 0.0 { (c[k] as f64 - f[k]) / dd[k] } else { f64::INFINITY }
+        });
+        let dims = self.dims.map(|n| n as i64);
+        loop {
+            if (0..3).all(|k| c[k] >= 0 && c[k] < dims[k]) {
+                let ci = self.idx(c[0] as usize, c[1] as usize, c[2] as usize);
+                if visit(&self.items[self.start[ci] as usize..self.start[ci + 1] as usize]) { return Some(true); }
+            }
+            let k = if tmax[0] <= tmax[1] && tmax[0] <= tmax[2] { 0 } else if tmax[1] <= tmax[2] { 1 } else { 2 };
+            if tmax[k] > 1.0 + 1e-6 { break; }
+            c[k] += step[k];
+            tmax[k] += tdelta[k];
+        }
+        Some(visit(&self.always))
+    }
+
+    /// The candidate objects of `from → to`, ascending and unique; `None` = use the scan.
+    ///
+    /// The cells come from a 3-D DDA walk (Amanatides–Woo) of the segment in f64. A point of the
+    /// segment within 1e-3 of an object's box (what `seg_box` accepts) lies in a cell the walk
+    /// visits or, where rounding skips a corner sliver, within ~1e-9 of one; every cell holding a
+    /// point within `GRID_PAD` − 1e-3 of the box lists the object (its bounds were padded by
+    /// `GRID_PAD` at insertion), so the object is a candidate. The walk runs to t = 1 + a margin
+    /// (extra cells only add candidates).
+    fn candidates(&self, from: V3, to: V3) -> Option<Vec<u32>> {
+        let mut out: Vec<u32> = Vec::with_capacity(64);
+        self.walk(from, to, |items| { out.extend_from_slice(items); false })?;
+        out.sort_unstable();
+        out.dedup();
+        Some(out)
+    }
+}
+
+thread_local! {
+    /// `Geo::any_hit`'s per-object visit stamps (epoch, stamp per object index).
+    static ANY_STAMP: std::cell::RefCell<(u32, Vec<u32>)> = const { std::cell::RefCell::new((0, Vec::new())) };
+}
+
+impl Geo {
+    /// perf-240e: whether any object of `along(self, from, to)` satisfies `hit` (its triangle
+    /// test) — for the yes/no queries, whose answer does not depend on the order objects are
+    /// tested in. Walks the grid near to far (an occluder near the start ends it early), tests
+    /// each object once (a stamp per object), through the same two `seg_box` tests `along`
+    /// applies, so the objects tested are exactly `along`'s set (see `ObjGrid`). `None` = no grid
+    /// or an unwalkable segment: the caller scans. `NF_GRID_VERIFY` re-runs the scan and compares.
+    fn any_hit(&self, from: V3, to: V3, hit: &mut dyn FnMut(&Object) -> bool) -> Option<bool> {
+        let grid = self.grid.as_ref().filter(|_| !self.groups.is_empty())?;
+        let d = sub(to, from);
+        let r = ANY_STAMP.with(|s| {
+            let mut s = s.borrow_mut();
+            let (epoch, stamps) = &mut *s;
+            if stamps.len() < self.objects.len() { stamps.clear(); stamps.resize(self.objects.len(), 0); *epoch = 0; }
+            *epoch = epoch.wrapping_add(1);
+            if *epoch == 0 { stamps.iter_mut().for_each(|v| *v = 0); *epoch = 1; }
+            let e = *epoch;
+            grid.walk(from, to, |items| {
+                for &i in items {
+                    let iu = i as usize;
+                    if stamps[iu] == e { continue; }
+                    stamps[iu] = e;
+                    let gr = &self.groups[iu / GRID_GROUP];
+                    let o = &self.objects[iu];
+                    if seg_box(from, d, gr.lo, gr.hi) && seg_box(from, d, o.lo, o.hi) && hit(o) { return true; }
+                }
+                false
+            })
+        })?;
+        if grid_verify() {
+            let scan = along_scan(self, from, to).any(|o| hit(o));
+            assert_eq!(r, scan, "grid any-hit differs from the scan for {from:?} -> {to:?}");
+        }
+        Some(r)
+    }
 }
 
 impl Geo {
@@ -199,12 +382,14 @@ impl Geo {
         self.groups.clear();
         let mut s = 0;
         while s < self.objects.len() {
-            let e = (s + 32).min(self.objects.len());
+            let e = (s + GRID_GROUP).min(self.objects.len());
             let (mut lo, mut hi) = ([f32::INFINITY; 3], [f32::NEG_INFINITY; 3]);
             for o in &self.objects[s..e] { for k in 0..3 { lo[k] = lo[k].min(o.lo[k]); hi[k] = hi[k].max(o.hi[k]); } }
             self.groups.push(Object { lo, hi, tris: s..e });
             s = e;
         }
+        debug_assert!(self.groups.iter().enumerate().all(|(j, gr)| gr.tris.start == j * GRID_GROUP));
+        self.grid = ObjGrid::build(&self.objects);
     }
 }
 
@@ -289,7 +474,33 @@ fn seg_box(from: V3, d: V3, lo: V3, hi: V3) -> bool {
 }
 
 /// The objects the segment `from → to` passes through the bounds of (through `groups` when present).
-fn along<'a>(g: &'a Geo, from: V3, to: V3) -> impl Iterator<Item = &'a Object> + 'a {
+fn along<'a>(g: &'a Geo, from: V3, to: V3) -> Box<dyn Iterator<Item = &'a Object> + 'a> {
+    let d = sub(to, from);
+    // perf-240e: the grid's candidates through the same two box tests, in the scan's order (see
+    // `ObjGrid`); `NF_GRID_VERIFY` compares every query's object sequence with the scan's.
+    // Ordered queries take the grid for short segments only (the floor/feet rays): a long ray's
+    // sorted candidate list costs more than the group scan it replaces, while the yes/no queries
+    // walk the grid lazily instead (`Geo::any_hit`).
+    let short = d[0].abs().max(d[1].abs()).max(d[2].abs()) <= GRID_SHORT;
+    if let (Some(grid), false, true) = (g.grid.as_ref(), g.groups.is_empty(), short) {
+        if let Some(cand) = grid.candidates(from, to) {
+            let picked: Vec<u32> = cand.into_iter().filter(|&i| {
+                let i = i as usize;
+                seg_box(from, d, g.groups[i / GRID_GROUP].lo, g.groups[i / GRID_GROUP].hi) && seg_box(from, d, g.objects[i].lo, g.objects[i].hi)
+            }).collect();
+            if grid_verify() {
+                let base = g.objects.as_ptr();
+                let scan: Vec<u32> = along_scan(g, from, to).map(|o| ((o as *const Object as usize - base as usize) / std::mem::size_of::<Object>()) as u32).collect();
+                assert_eq!(picked, scan, "grid candidates differ from the scan for {from:?} -> {to:?}");
+            }
+            return Box::new(picked.into_iter().map(move |i| &g.objects[i as usize]));
+        }
+    }
+    Box::new(along_scan(g, from, to))
+}
+
+/// `along`'s linear scan (the groups' boxes, then the objects').
+fn along_scan<'a>(g: &'a Geo, from: V3, to: V3) -> impl Iterator<Item = &'a Object> + 'a {
     let d = sub(to, from);
     let all: Box<dyn Iterator<Item = &'a Object>> = if g.groups.is_empty() { Box::new(g.objects.iter()) } else {
         Box::new(g.groups.iter().filter(move |gr| seg_box(from, d, gr.lo, gr.hi)).flat_map(move |gr| g.objects[gr.tris.clone()].iter()))
@@ -314,13 +525,28 @@ fn overlapping<'a>(g: &'a Geo, lo: V3, hi: V3) -> impl Iterator<Item = &'a Objec
 
 /// First hit of `from → to` in one geometry set (fraction).
 fn segment_in(g: &Geo, from: V3, to: V3) -> Option<f32> {
+    for k in 0..3 { if from[k].min(to[k]).is_nan() { return None; } }
+    let mut best = None::<f32>;
+    for o in along(g, from, to) {
+        if let Some(tt) = segment_in_tris(&g.tris[o.tris.clone()], from, to) { if best.is_none_or(|b| tt < b) { best = Some(tt); } }
+    }
+    best
+}
+
+/// `segment_in` over a set holding the one object `o` (its triangles in `tris`): the NaN gate, the
+/// object's box test, the same triangle loop.
+fn segment_in_obj(tris: &[[V3; 3]], o: &Object, from: V3, to: V3) -> Option<f32> {
+    for k in 0..3 { if from[k].min(to[k]).is_nan() { return None; } }
+    if !seg_box(from, sub(to, from), o.lo, o.hi) { return None; }
+    segment_in_tris(&tris[o.tris.clone()], from, to)
+}
+
+/// The nearest two-sided hit of `from → to` over `tris` (the `segment_in` triangle loop).
+fn segment_in_tris(tris: &[[V3; 3]], from: V3, to: V3) -> Option<f32> {
     let d = sub(to, from);
     let mut best = None::<f32>;
-    for k in 0..3 { if from[k].min(to[k]).is_nan() { return None; } }
-    let (lo, hi): (V3, V3) = ([from[0].min(to[0]), from[1].min(to[1]), from[2].min(to[2])], [from[0].max(to[0]), from[1].max(to[1]), from[2].max(to[2])]);
-    let _ = (lo, hi);
-    for o in along(g, from, to) {
-        for t in &g.tris[o.tris.clone()] {
+    {
+        for t in tris {
             let (e1, e2) = (sub(t[1], t[0]), sub(t[2], t[0]));
             let p = cross(d, e2);
             let det = dot(e1, p);
@@ -337,6 +563,31 @@ fn segment_in(g: &Geo, from: V3, to: V3) -> Option<f32> {
         }
     }
     best
+}
+
+/// Whether any triangle of `o` blocks `from → from + d` — the one-sided Möller–Trumbore test
+/// the yes/no segment queries run per triangle (`segment_blocked`, `segment_blocked_static`),
+/// with the bullet family's pass drop when `drop_pass`.
+fn obj_blocks(g: &Geo, o: &Object, from: V3, d: V3, drop_pass: bool) -> bool {
+    for k in o.tris.clone() {
+        if drop_pass && g.bullet_pass(k) { continue; }
+        let t = &g.tris[k];
+        let (e1, e2) = (sub(t[1], t[0]), sub(t[2], t[0]));
+        if dot(cross(e1, e2), d) >= 0.0 { continue; } // back face [M 0x10a8c8:168]
+        let p = cross(d, e2);
+        let det = dot(e1, p);
+        if det.abs() < 1e-12 { continue; }
+        let inv = 1.0 / det;
+        let s = sub(from, t[0]);
+        let u = dot(s, p) * inv;
+        if !(0.0..=1.0).contains(&u) { continue; }
+        let q = cross(s, e1);
+        let v = dot(d, q) * inv;
+        if v < 0.0 || u + v > 1.0 { continue; }
+        let tt = dot(e2, q) * inv;
+        if (0.0..=1.0).contains(&tt) { return true; }
+    }
+    false
 }
 
 fn sub(a: V3, b: V3) -> V3 { [a[0] - b[0], a[1] - b[1], a[2] - b[2]] }
@@ -982,15 +1233,16 @@ impl CollisionWorld {
     /// When the first collision surface along `from → to` belongs to a moving object, how that object moved over the
     /// last tick (`Player_FeetOnPoint` 0x194188 → `Control_InheritVelocity`).
     pub fn ground_motion(&self, from: V3, to: V3) -> Option<GroundMotion> {
-        let stat = self.stat_segment(from, to);
+        // perf-240e: each moving object tested in place (`segment_in_obj` = `segment_in` over a
+        // one-object set, the copy the old per-object `Geo` built), and the static ray only when a
+        // moving object was hit — without one the answer is `None` whatever the static ray says.
         let d = self.dynamic.read().unwrap();
         let mut best: Option<(f32, usize)> = None;
         for (i, o) in d.geo.objects.iter().enumerate() {
-            let g = Geo { tris: d.geo.tris[o.tris.clone()].to_vec(), mats: d.geo.mats[o.tris.clone()].to_vec(), objects: vec![Object { lo: o.lo, hi: o.hi, tris: 0..o.tris.len() }], groups: Vec::new(), owners: Vec::new(),
-                pass: d.geo.pass[o.tris.clone()].to_vec(), };
-            if let Some(t) = segment_in(&g, from, to) { if best.is_none_or(|b| t < b.0) { best = Some((t, i)); } }
+            if let Some(t) = segment_in_obj(&d.geo.tris, o, from, to) { if best.is_none_or(|b| t < b.0) { best = Some((t, i)); } }
         }
         let (t, i) = best?;
+        let stat = self.stat_segment(from, to);
         if stat.is_some_and(|s| s < t) { return None; }
         let (_, prev, cur) = d.movers[i];
         let heading = |m: &Mat4| m[2][0].atan2(m[2][2]);
@@ -1705,25 +1957,12 @@ impl CollisionWorld {
         let dynamic = self.dynamic.read().unwrap();
         let sets: [Option<&Geo>; 3] = [Some(&self.stat), with_missile.then_some(&self.missile), Some(&dynamic.geo)];
         for g in sets.into_iter().flatten() {
-            for o in along(g, from, to) {
-                for k in o.tris.clone() {
-                    if drop_pass && g.bullet_pass(k) { continue; }
-                    let t = &g.tris[k];
-                    let (e1, e2) = (sub(t[1], t[0]), sub(t[2], t[0]));
-                    if dot(cross(e1, e2), d) >= 0.0 { continue; } // back face [M 0x10a8c8:168]
-                    let p = cross(d, e2);
-                    let det = dot(e1, p);
-                    if det.abs() < 1e-12 { continue; }
-                    let inv = 1.0 / det;
-                    let s = sub(from, t[0]);
-                    let u = dot(s, p) * inv;
-                    if !(0.0..=1.0).contains(&u) { continue; }
-                    let q = cross(s, e1);
-                    let v = dot(d, q) * inv;
-                    if v < 0.0 || u + v > 1.0 { continue; }
-                    let tt = dot(e2, q) * inv;
-                    if (0.0..=1.0).contains(&tt) { return true; }
-                }
+            // perf-240e: the grid's lazy near-to-far walk where the set has one (the same object
+            // set, the answer independent of the order — `Geo::any_hit`), the scan otherwise.
+            match g.any_hit(from, to, &mut |o| obj_blocks(g, o, from, d, drop_pass)) {
+                Some(true) => return true,
+                Some(false) => {}
+                None => { for o in along(g, from, to) { if obj_blocks(g, o, from, d, drop_pass) { return true; } } }
             }
         }
         false
@@ -1756,26 +1995,11 @@ impl CollisionWorld {
     /// needs only the yes/no).
     pub fn segment_blocked_static(&self, from: V3, to: V3) -> bool {
         let d = sub(to, from);
-        for o in along(&self.stat, from, to) {
-            for k in o.tris.clone() {
-                let t = &self.stat.tris[k];
-                let (e1, e2) = (sub(t[1], t[0]), sub(t[2], t[0]));
-                if dot(cross(e1, e2), d) >= 0.0 { continue; }
-                let p = cross(d, e2);
-                let det = dot(e1, p);
-                if det.abs() < 1e-12 { continue; }
-                let inv = 1.0 / det;
-                let s = sub(from, t[0]);
-                let u = dot(s, p) * inv;
-                if !(0.0..=1.0).contains(&u) { continue; }
-                let q = cross(s, e1);
-                let v = dot(d, q) * inv;
-                if v < 0.0 || u + v > 1.0 { continue; }
-                let tt = dot(e2, q) * inv;
-                if (0.0..=1.0).contains(&tt) { return true; }
-            }
+        let g = &self.stat;
+        match g.any_hit(from, to, &mut |o| obj_blocks(g, o, from, d, false)) {
+            Some(r) => r,
+            None => along(g, from, to).any(|o| obj_blocks(g, o, from, d, false)),
         }
-        false
     }
 
     pub fn segment_hit_static(&self, from: V3, to: V3) -> Option<(f32, V3)> {
@@ -2207,6 +2431,21 @@ impl CollisionWorld {
         best
     }
 
+    /// perf-240e measurement: the static set's sizes and its grid's shape, one line.
+    pub fn grid_stats(&self) -> String {
+        let g = &self.stat;
+        match g.grid.as_ref() {
+            Some(gr) => {
+                let ncell = gr.dims[0] * gr.dims[1] * gr.dims[2];
+                let filled = (0..ncell).filter(|&c| gr.start[c + 1] > gr.start[c]).count();
+                format!("tris {} objects {} groups {} grid {:?} cell {:.2} items {} filled {} (avg {:.1}/filled) always {}",
+                    g.tris.len(), g.objects.len(), g.groups.len(), gr.dims, gr.cell, gr.items.len(), filled,
+                    gr.items.len() as f64 / filled.max(1) as f64, gr.always.len())
+            }
+            None => format!("tris {} objects {} groups {} no grid", g.tris.len(), g.objects.len(), g.groups.len()),
+        }
+    }
+
     /// walls-990 debug: the static objects whose bounds contain `p` (expanded 0.05), as
     /// `(min, max)` pairs — a probe hit's owner candidates, printed by the stairwell-walls test
     /// to name the invisible wall the guards stop against. Static set only (the moving set's
@@ -2277,9 +2516,80 @@ fn closest_on_triangle(p: V3, t: &[V3; 3]) -> (V3, bool) {
 mod tests {
     use super::*;
 
+    /// perf-240e: the grid's object sequence equals the linear scan's for every query — random
+    /// triangles of mixed sizes (incl. one spanning the whole set → `always`), random segments of
+    /// every length (vertical floor rays, long sight lines, zero-length, axis-parallel). The sister
+    /// half proves the comparison can fail: a grid with one cell's list emptied drops an object.
+    #[test]
+    fn grid_candidates_equal_the_scan() {
+        let mut s = 0x1234_5678u32;
+        let mut rnd = move || { s ^= s << 13; s ^= s >> 17; s ^= s << 5; (s as f32 / u32::MAX as f32) * 2.0 - 1.0 };
+        let mut g = Geo::default();
+        for i in 0..3000 {
+            let c = [rnd() * 120.0, rnd() * 20.0, rnd() * 120.0];
+            let r = if i % 97 == 0 { 30.0 } else { 0.2 + rnd().abs() * 3.0 };
+            let tri = [c, [c[0] + rnd() * r, c[1] + rnd() * r, c[2] + rnd() * r], [c[0] + rnd() * r, c[1] + rnd() * r, c[2] + rnd() * r]];
+            g.push(std::iter::once((tri, 0u8)));
+        }
+        g.push(std::iter::once(([[-500.0, 0.0, -500.0], [500.0, 0.0, -500.0], [0.0, 0.0, 500.0]], 0u8)));
+        g.chunk(16);
+        let grid = g.grid.as_ref().expect("grid built");
+        assert!(!grid.always.is_empty(), "the map-wide triangle sits on the always list");
+        let idx = |o: &Object| ((o as *const Object as usize - g.objects.as_ptr() as usize) / std::mem::size_of::<Object>()) as u32;
+        let (mut nonempty, mut blocked) = (0, 0);
+        for q in 0..20000 {
+            let a = [rnd() * 130.0, rnd() * 25.0, rnd() * 130.0];
+            let b = match q % 5 {
+                0 => [a[0], a[1] - 1.6 - rnd().abs(), a[2]],
+                1 => [a[0] + rnd() * 40.0, a[1] + rnd() * 5.0, a[2] + rnd() * 40.0],
+                2 => a,
+                3 => [a[0] + rnd() * 3.0, a[1], a[2]],
+                _ => [rnd() * 130.0, rnd() * 25.0, rnd() * 130.0],
+            };
+            let fast: Vec<u32> = along(&g, a, b).map(idx).collect();
+            let scan: Vec<u32> = along_scan(&g, a, b).map(idx).collect();
+            assert_eq!(fast, scan, "query {q}: {a:?} -> {b:?}");
+            if !scan.is_empty() { nonempty += 1; }
+            // The lazy yes/no walk: the same answer as the scan, and the same object set.
+            let d = sub(b, a);
+            let any = g.any_hit(a, b, &mut |o| obj_blocks(&g, o, a, d, false)).expect("walkable");
+            assert_eq!(any, along_scan(&g, a, b).any(|o| obj_blocks(&g, o, a, d, false)), "any-hit query {q}");
+            let mut seen: Vec<u32> = Vec::new();
+            assert!(!g.any_hit(a, b, &mut |o| { seen.push(idx(o)); false }).unwrap());
+            seen.sort_unstable();
+            let mut all_scan: Vec<u32> = along_scan(&g, a, b).map(idx).collect();
+            all_scan.sort_unstable();
+            assert_eq!(seen, all_scan, "any-hit object set, query {q}");
+            if any { blocked += 1; }
+        }
+        assert!(nonempty > 5000, "the queries reach geometry ({nonempty})");
+        assert!(blocked > 1000, "the yes/no queries see hits ({blocked})");
+        // Sister: break one populated cell; some query through it must now differ from the scan.
+        let grid = g.grid.as_mut().unwrap();
+        let c = (0..grid.start.len() - 1).max_by_key(|&c| grid.start[c + 1] - grid.start[c]).unwrap();
+        let (lo, hi) = (grid.start[c] as usize, grid.start[c + 1] as usize);
+        let removed: Vec<u32> = grid.items[lo..hi].to_vec();
+        for v in &mut grid.items[lo..hi] { *v = u32::MAX; }
+        let (cell, origin, dims) = (grid.cell, grid.origin, grid.dims);
+        let (x, y, z) = (c % dims[0], (c / dims[0]) % dims[1], c / (dims[0] * dims[1]));
+        let centre = [origin[0] + (x as f32 + 0.5) * cell, origin[1] + (y as f32 + 0.5) * cell, origin[2] + (z as f32 + 0.5) * cell];
+        let mut differs = false;
+        for o in &removed {
+            let ob = &g.objects[*o as usize];
+            let (ilo, ihi) = ([0, 1, 2].map(|k| ob.lo[k].max(centre[k] - 0.4 * cell)), [0, 1, 2].map(|k| ob.hi[k].min(centre[k] + 0.4 * cell)));
+            if (0..3).any(|k| ilo[k] > ihi[k]) { continue; }
+            let m = [0, 1, 2].map(|k| (ilo[k] + ihi[k]) * 0.5);
+            let (a, b) = ([m[0], m[1] + 0.01, m[2]], [m[0], m[1] - 0.01, m[2]]);
+            let cand = g.grid.as_ref().unwrap().candidates(a, b).unwrap();
+            let scan: Vec<u32> = along_scan(&g, a, b).map(idx).collect();
+            if scan.iter().any(|s| !cand.contains(s)) { differs = true; break; }
+        }
+        assert!(differs, "a grid missing one cell's objects is caught by the comparison");
+    }
+
     fn world(tris: Vec<[V3; 3]>) -> CollisionWorld {
         let n = tris.len();
-        let stat = Geo { mats: vec![0; n], tris, objects: vec![Object { lo: [-10.0; 3], hi: [10.0; 3], tris: 0..n }], groups: Vec::new(), owners: Vec::new(),
+        let stat = Geo { mats: vec![0; n], tris, objects: vec![Object { lo: [-10.0; 3], hi: [10.0; 3], tris: 0..n }], groups: Vec::new(), owners: Vec::new(), grid: None,
             pass: vec![false; n] };
         CollisionWorld { stat, missile: Geo::default(), dynamic: Default::default(), shapes: Default::default(), shape_mats: Default::default(), scope: None }
     }
@@ -2320,7 +2630,7 @@ mod tests {
             }
         }
         let mk = |graph: ScopeGraph, cells: Vec<Vec<u32>>| CollisionWorld {
-            stat: Geo { tris: stat.tris.clone(), mats: stat.mats.clone(), objects: stat.objects.clone(), groups: Vec::new(), owners: Vec::new(), pass: stat.pass.clone() },
+            stat: Geo { tris: stat.tris.clone(), mats: stat.mats.clone(), objects: stat.objects.clone(), groups: Vec::new(), owners: Vec::new(), grid: None, pass: stat.pass.clone() },
             missile: Geo::default(), dynamic: Default::default(), shapes: Default::default(), shape_mats: Default::default(),
             scope: Some(ScopeData { graph, cells, always: always.clone() }),
         };
@@ -2386,7 +2696,7 @@ mod tests {
             }
         }
         let mk = |graph: ScopeGraph, cells: Vec<Vec<u32>>| CollisionWorld {
-            stat: Geo { tris: stat.tris.clone(), mats: stat.mats.clone(), objects: stat.objects.clone(), groups: Vec::new(), owners: Vec::new(), pass: stat.pass.clone() },
+            stat: Geo { tris: stat.tris.clone(), mats: stat.mats.clone(), objects: stat.objects.clone(), groups: Vec::new(), owners: Vec::new(), grid: None, pass: stat.pass.clone() },
             missile: Geo::default(), dynamic: Default::default(), shapes: Default::default(), shape_mats: Default::default(),
             scope: Some(ScopeData { graph, cells, always: always.clone() }),
         };

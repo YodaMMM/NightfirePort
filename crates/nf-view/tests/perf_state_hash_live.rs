@@ -36,6 +36,7 @@ fn perf_state_hash_per_level() {
         let name = format!("{}.bin", lv.trim());
         let mut scene = match nf_view::load(&iso, &name, false) { Ok(s) => s, Err(e) => { eprintln!("[state-hash] {name} not loadable: {e}"); continue } };
         let (layout, _) = scene.skin_layout();
+        if let Some(sim) = scene.sim.as_ref() { eprintln!("[grid] {name} {}", sim.world.grid_stats()); }
         let mut h = 0xcbf2_9ce4_8422_2325u64;
         let mut pal_h = 0xcbf2_9ce4_8422_2325u64;
         let t0 = std::time::Instant::now();
