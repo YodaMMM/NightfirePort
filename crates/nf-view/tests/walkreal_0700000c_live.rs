@@ -922,7 +922,9 @@ fn walk_the_whole_mission_from_the_start_to_the_0d_handoff() {
         let p = sim.bond.pos;
         assert!(dropped && sim.bond.grounded && p[0] > 33.5 && p[0] < 40.5 && p[2] < -207.0 && p[2] > -211.5
             && (p[1] - 12.2).abs() < 0.8,
-            "the #283 ride must drop onto the ring SE corner (11.09..11.17 [D probe door2]), got {p:?} dropped {dropped}");
+            "the #283 ride must drop onto the ring SE corner (11.09..11.17 [D probe door2]), got {p:?} dropped {dropped} \
+             (death.active {} hp {} — a dead Bond is skipped by Sim::step_bond [M Player_Update 0x193600:316-319])",
+            sim.drones.death.active, sim.drones.health.health);
     }
     eprintln!("[0c] the south gap crossed on wire #283 — landed {:?}", w.scene.sim.as_ref().unwrap().bond.pos);
 
