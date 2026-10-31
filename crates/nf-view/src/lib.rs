@@ -77,7 +77,20 @@ use winit::keyboard::{KeyCode, PhysicalKey};
 use winit::window::{CursorGrabMode, Window, WindowId};
 
 /// Radians per mouse count. Mouse deltas go straight into yaw/pitch (docs/systems/input.md §8).
-const MOUSE_SENSITIVITY: f32 = 0.0025;
+/// Pub for the headless look-rate tests (mouse_look_rate_live.rs).
+pub const MOUSE_SENSITIVITY: f32 = 0.0025;
+
+/// One raw mouse motion event into the pending look (the `DeviceEvent::MouseMotion` arm of
+/// `device_event`): `turn` in radians, `look` in the sim's pitch units (π/2 per 1.0). The deltas
+/// ACCUMULATE between ticks and each sim tick takes the whole sum once (`std::mem::take` in the
+/// tick loop), so the look rate is a function of mouse counts only — never of the render rate.
+/// When scoped, the sensitivity is divided by the zoom factor (the scope zooms the view, so the
+/// same mouse delta turns less) [M Player_Zoom: the zoom affects the view]. Pub for the headless
+/// look-rate tests, which drive this exact arithmetic at several frame rates.
+pub fn mouse_look_add(turn: &mut f32, look: &mut f32, dx: f64, dy: f64, zoom: f32) {
+    *turn -= dx as f32 * MOUSE_SENSITIVITY / zoom;
+    *look -= dy as f32 * MOUSE_SENSITIVITY / zoom / std::f32::consts::FRAC_PI_2;
+}
 
 /// The game's vertical field of view in play (60°, docs/systems/player.md).
 const GAME_FOV: f32 = std::f32::consts::FRAC_PI_3;
@@ -6240,12 +6253,10 @@ impl ApplicationHandler for App {
                     self.cam.yaw -= dx as f32 * MOUSE_SENSITIVITY;
                     self.cam.pitch = (self.cam.pitch - dy as f32 * MOUSE_SENSITIVITY).clamp(-1.55, 1.55);
                 } else {
-                    // Mouse look (PLAN.md): raw deltas straight into Bond's yaw / pitch at the next tick.
-                    // When scoped, the sensitivity is divided by the zoom factor (the scope zooms the view,
-                    // so the same mouse delta should turn less) [M Player_Zoom: the zoom affects the view].
+                    // Mouse look (PLAN.md): raw deltas straight into Bond's yaw / pitch at the next tick
+                    // (`mouse_look_add`: accumulated here, taken once per tick).
                     let zoom = self.scene.sim.as_ref().map_or(1.0, |s| s.zoom);
-                    self.turn -= dx as f32 * MOUSE_SENSITIVITY / zoom;
-                    self.look -= dy as f32 * MOUSE_SENSITIVITY / zoom / std::f32::consts::FRAC_PI_2;
+                    mouse_look_add(&mut self.turn, &mut self.look, dx, dy, zoom);
                 }
             }
         }
