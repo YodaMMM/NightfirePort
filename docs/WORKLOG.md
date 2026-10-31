@@ -489,3 +489,22 @@ D2 flags-99 skip landed; NF_CULL_UP/NF_NO_CULL/NF_CAPS_D2 removed. Named set: 02
 walked lines [M + L drift]; the feet band is the missing vertical — the next work). nf-game
 lib 591/0/2i; the two lib pins rewritten to the faithful rule. See
 docs/reports/capsule-cull-and-los-masks-16.md.
+
+## capsule-cull-and-los-masks-17 (2026-10-31)
+
+The feet-band port the faithful cull needs. Branch = origin/s/capsule-cull-and-los-masks-16 +
+merge origin/master (fd24fbf4), clean. This window so far: the merged tree's walk spine is
+byte-identical to -16 (world.rs/player.rs unchanged by the master merges — the 01/14 reds
+-me16 moved only through master's test-route fixes). Decompiled the feet band end-to-end:
+Player_FeetOnPoint 0x194188 (the ray from obj+0x30 to B − up·(cc+0.6) [M :89-98], the band
+|from−hit| − 0.1 <= cc [M :106 with Intersect_RayGeom 0x10a8c8:312-325 = the ABSOLUTE
+distance], *BL+0x110 = the band hit's Q14 plane-normal y [M :85/:108 with 0x10a8c8:326-337],
+the shadow copy into PD[0..0x60] [M :187-192], the inherit/riding block [M :124-155]), its
+caller Player_CollisionHandler 0x1949a8 (pos += HITTEST+0x10 DeltaP [M :136-140], grounded →
+Vec_Zero BL+0x50 [M :168-175]) and the engine loop Collide_Update 0x1ea398 (HITTEST+0x9c = 0
+per tick [M], then Collide_Pick + the per-node Collide_Intersect with the +0x9a mask) —
+grounded = (+0x9c != 0 || band hit) [M FeetOnPoint 0x1943a8 lhu +0x9c]. The walk case sets
+HITTEST+0x98 = 0x1C0 [M disasm 0x1951b0 — the decompiler dropped it in the default arm]. The
+push tail's exact v operand (accumulator-relative per the decompile :421-431 vs the 6-b
+"query − Q" read) stays the open live-check; the empirical walk-model measurements are this
+window's work. See docs/reports/capsule-cull-and-los-masks-17.md.
