@@ -16231,7 +16231,10 @@ fn segment_hits_sphere(a: V3, b: V3, c: V3, r: f32) -> bool {
         // env draw precedes every object-side draw, the impact emitters' burst included).
         if let Some((kind, boxes)) = self.env_pending.take() { self.env = Some(crate::env::Drops::new(kind, boxes, d.level, &mut Rng::new(0x5eed_0001))); }
         if let Some(env) = self.env.as_mut() {
-            self.rng.rand(20000);
+            let gust = self.rng.rand(20000);
+            // The cel wind steps INSIDE Env_Update's cel walk, before UpdateDrops [M 0x17bc88:
+            // the draw, then the cel walk, then UpdateDrops].
+            self.rbodies.tick_winds(gust);
             env.update(&mut self.rng, &mut self.fill_rng, player.eye, atan2_approx(player.aim[0], player.aim[2]));
         }
         // objective-77: `Lock_Update` case 1 (0x1ae3d8:192-196 — `case 1:

@@ -464,30 +464,142 @@ pub fn rb_apply_wind(rb: &mut RigidBody, st: &mut RbState, wind: [f32; 3], obj_p
     }
 }
 
-/// `RB_Update 0x1d6e38` [M disasm], the sim-reachable part: the heat-puff impulse (cel +0x90
-/// above the body's obj+0xc4 y, gated on `GameState & 0xf != 0` — the level's low nibble, true
+/// `RB_Update 0x1d6e38` [M disasm], the sim-reachable part: the buoyancy puff (cel +0x90 above
+/// the body's obj+0xc4 y, gated on `GameState & 0xf != 0` — the level's low nibble, true
 /// on every census level [M GameState == the level code, ssys.rs]), then wind, then the evolve.
-/// The game's puff force is (0, |obj+0xc4 − cel+0x54|·(+0x78 mass)·0.4 + Rand_FRand(0.15), 0)
-/// with the shared-RNG draw ONLY when the gate passes [M 0x1d6e38:0x1d6e88-0x1d6eb0]; the
-/// Gas_Init smoke is the effect layer (the port's effect module owns it, not the sim).
+///
+/// The force block is BUOYANCY, not heat: cel+0x90 is the water surface (`build_alloc_cel`
+/// 0x1c93f8 defaults it to −500.0 = 0xc3fa0000; `parseentity_fixup_entity` 0x1d00c0 sets
+/// cel+0x90 = cel+0x54 for room class 0xC023 — the port's verified fix-ladder doc), and the
+/// puff `(0, |obj_y − cel+0x54|·(+0x78 mass)·0.4 + Rand_FRand(0.15), 0)` grows with the depth
+/// below that surface (cel+0x90 == cel+0x54 for a water cel), with the `Gas_Init` bubbles as
+/// the effect layer [M 0x1d6e38:0x1d6e88-0x1d6eb0; the shared-RNG draw ONLY when the gate
+/// passes]. It is inert for the hanging lamps: the linear impulse is consumed only by the
+/// type-0 arm of `RB_ApplyImpulses` 0x1d6ff8.
+///
+/// The lamp mover is the wind: `RB_ApplyWind` 0x1d7c78 lands the force AT A POINT for
+/// type != 0 (obj+0xc0 x, obj+0xc4 + rb+0x9c − rb+0x13c y, obj+0xc8 z) — torque, the only
+/// per-frame torque a freely hanging Rot body gets.
 pub fn rb_update(
     rb: &mut RigidBody,
     st: &mut RbState,
-    heat: Option<(f32, f32)>, // (cel+0x90, cel+0x54) when the cel is set
+    buoy: Option<(f32, f32)>, // (cel+0x90 water surface, cel+0x54 glist bbox max y) when the cel is set
     obj_y: f32,
     level_low_nibble: u32,
+    wind: [f32; 3],    // the caller's `Env_GetWindVel(cel, obj+0xc0)` [M 0x1d7c78]
+    obj_pos: [f32; 3], // obj+0xc0 (the wind's application point base)
     frand: impl FnOnce(f32) -> f32,
 ) {
-    if let Some((heat_h, heat_ref)) = heat {
-        if obj_y < heat_h && level_low_nibble != 0 {
-            let f = (obj_y - heat_ref).abs() * rb.mass * 0.4 + frand(0.15);
+    if let Some((surface, top)) = buoy {
+        if obj_y < surface && level_low_nibble != 0 {
+            let f = (obj_y - top).abs() * rb.mass * 0.4 + frand(0.15);
             rb_add_impulsive_force(st, [0.0, f, 0.0]);
         }
     }
-    // RB_ApplyWind runs from the caller's Env_GetWindVel; rb_update itself passes it through
-    // (the port's cel plumbing supplies the wind — zero on the census levels' cels unless a
-    // wind zone exists, see the report).
+    rb_apply_wind(rb, st, wind, obj_pos);
     rb_euler_evolve(rb, st, 0, crate::ssys::REC_FRAME_RATE);
+}
+
+// ============================================================================
+// The cel wind (`Env_Create` 0x17b968 / `Env_Update` 0x17bc88 / `Env_GetWindVel` 0x17c048).
+// One wind struct W per room cel (`cel+0x2c`), written by placement kind 0xDF and animated
+// once per frame. `RB_ApplyWind` 0x1d7c78 is the only rigid-body consumer [M decompile grep:
+// `Env_GetWindVel` appears in RB_ApplyWind and Gas_Init's record only].
+// ============================================================================
+
+/// The game's wind struct W (the 0x50-byte `Env_Create` allocation) — the fields the RB path
+/// reads, plus the cel-side wind origin. [M 0x17b968 (create), 0x17bc88 (update), 0x17c048 (read).]
+#[derive(Clone, Debug, PartialEq)]
+pub struct EnvWind {
+    /// W+0x00: the wind direction — `RotMatrix(placement rotation)` 0x1e2368's dir row
+    /// (`Mat_GetDir` 0x1e3398 = the +0x20 row): `(sin ry, −sin rx·cos ry, cos rx·cos ry)`,
+    /// roll-independent, unit.
+    pub dir: [f32; 3],
+    /// cel+0x80: the cel's world sphere centre — the wind origin the falloff measures from
+    /// [M Env_GetWindVel 0x17c048 `_vsub(pos, cel+0x80)`; parseentity_transform_bounding_box
+    /// 0x1d0fb0, the port's verified CelNode.sphere centre].
+    pub centre: [f32; 3],
+    /// W+0x30: the gust strength (animated). W+0x34: the target (Env_Create sets both to
+    /// `param3·0.1`; 0 = no wind, the whole cel skipped).
+    pub strength: f32,
+    pub target: f32,
+    /// W+0x38: the gust phase, −1..1 (Env_Create starts it at −1 = 0xbf800000).
+    pub phase: f32,
+    /// W+0x44: `1/(pCelList record+0x1c radius)` — the cel's own glist sphere radius [M 0x17b968].
+    pub falloff: f32,
+    /// W+0x4d: the grow/decay latch, starts 1 [M 0x17b968 `pauVar8[4][0xd] = 1`].
+    pub grow: u8,
+}
+
+/// `Env_Create` 0x17b968's wind half [M]: strength = target = `param3·0.1` (the u32 param read
+/// `*(uint *)(level_tag+0x38)`, ×0.1); phase = −1.0; grow = 1; falloff = `1/(record+0x1c)`
+/// (the caller resolves the cel's glist radius); dir = the placement rotation's dir row
+/// [M RotMatrix 0x1e2368 + Mat_GetDir 0x1e3398]. The drop-side bytes (W+0x4b..0x4e from params
+/// 0/1/2, the W+0x48..0x4a bytes, W+0x3c/W+0x40 floats from params 7/8) are the weather layer
+/// the port's `env::Drops` owns — not carried here.
+pub fn env_wind_create(params: &[(u32, u32)], rot: [f32; 3], falloff: f32) -> EnvWind {
+    let pv = |k: u32| params.iter().find(|(i, _)| *i == k).map_or(0u32, |&(_, v)| v);
+    let s = (pv(3) as f32) * 0.1;
+    let (rx, ry) = (rot[0], rot[1]);
+    // RotMatrix 0x1e2368's dir row: PS2Sinf3(rx+π/2, rx, ry+π/2) then the second triple; the
+    // dir row = (sin ry, −sin rx·cos ry, cos rx·cos ry) [M param_2[8..10] stores]. The port's
+    // bit-exact sinf (the game's PS2 sinf) and the same π/2 literal 1.5707964.
+    let half = f32::from_bits(0x3fc9_0fdb);
+    let sx = nf_formats::anim::sinf(rx);
+    let cx = nf_formats::anim::sinf(rx + half);
+    let sy = nf_formats::anim::sinf(ry);
+    let cy = nf_formats::anim::sinf(ry + half);
+    EnvWind {
+        dir: [sy, -sx * cy, cx * cy],
+        centre: [0.0; 3],
+        strength: s,
+        target: s,
+        phase: -1.0,
+        falloff,
+        grow: 1,
+    }
+}
+
+/// `Env_Update` 0x17bc88's per-cel gust step [M]: with `fVar4 = Rand_Rand(20000)·REC_FRAME_RATE
+/// ·1.5384616e-05` (ONE draw per frame for all cels — the game draws it before the cel walk):
+/// phase += fVar4·REC_FRAME_RATE, reset to −1.0 past 1.0; then the strength cycle — grow latch
+/// set: `K += K + fVar4` (doubling) until K > target → latch 0; latch clear: `K *= 1 − fVar4`
+/// until K < target·0.25 → latch 1. Target 0 cels are skipped by the walk [M the decompile's
+/// `+0x34 == 0.0` branch].
+pub fn env_update_gust(w: &mut EnvWind, gust: u32) {
+    if w.target == 0.0 {
+        return;
+    }
+    let f = gust as f32 * crate::ssys::REC_FRAME_RATE * 1.538_461_6e-5;
+    w.phase += f * crate::ssys::REC_FRAME_RATE;
+    if w.phase > 1.0 {
+        w.phase = -1.0;
+    }
+    if w.grow == 0 {
+        w.strength *= 1.0 - f;
+        if w.strength < w.target * 0.25 {
+            w.grow = 1;
+        }
+    } else {
+        w.strength += w.strength + f;
+        if w.strength > w.target {
+            w.grow = 0;
+        }
+    }
+}
+
+/// `Env_GetWindVel` 0x17c048 [M]: zero when the cel carries no wind or the target is 0
+/// (`Vec_Zero`); else `out = dir · (K · (dot(pos − cel+0x80, dir)·falloff + 1) · |phase| · 0.5)`
+/// — the dot over the unit dir, the falloff from the cel's own sphere radius, no clamp (the
+/// decompile has none; the term can go negative behind the origin).
+pub fn env_get_wind_vel(w: &EnvWind, pos: [f32; 3]) -> [f32; 3] {
+    if w.target == 0.0 {
+        return [0.0; 3];
+    }
+    let d = [pos[0] - w.centre[0], pos[1] - w.centre[1], pos[2] - w.centre[2]];
+    let dot = d[0] * w.dir[0] + d[1] * w.dir[1] + d[2] * w.dir[2];
+    let s = w.strength * (dot * w.falloff + 1.0) * w.phase.abs() * 0.5;
+    [w.dir[0] * s, w.dir[1] * s, w.dir[2] * s]
 }
 
 // ============================================================================
@@ -687,6 +799,16 @@ pub struct RbObj {
     /// keeps the radius at obj+0x8C — the sphere `Collide_PickObj` 0x1eae80 tests [M].
     pub sph_centre: [f32; 3],
     pub sph_radius: f32,
+    /// obj+0x20: the room cel — `build_LinkToRoom` 0x1c9680 at create. The port resolves the
+    /// room cel whose glist bbox holds the placement translation once at load and keeps it
+    /// (the lamps' cel never changes: a Rot body never translates [M EulerEvolve's type-0
+    /// position arm]; a walking-body re-eval is the unported remainder) [S the static pick].
+    /// `wind`: the cel's `Env_Create` wind (Rbodies::winds index) — None = no wind struct.
+    pub wind: Option<usize>,
+    /// The cel's buoyancy fields: (cel+0x90 water surface, cel+0x54 glist bbox max y) — None =
+    /// no cel resolved [M parseentity_fixup_entity 0x1d00c0 / parsemap_block_map_data_static
+    /// 0x1d1998 via the port's verified fix-ladder doc].
+    pub buoy: Option<(f32, f32)>,
 }
 
 impl RbObj {
@@ -719,10 +841,13 @@ impl RbObj {
 #[derive(Clone)]
 /// All kind-0xD8 bodies of the main map, in placement order (`parsemap_create_dynamic_objects`
 /// 0x1d04f0 case 0xD8 — the main map's placements only, the parsemap-epilogue rule the port's
-/// other creators follow).
+/// other creators follow), plus the room cels' wind structs (`Env_Create` 0x17b968 — placement
+/// kind 0xDF, one per cel, animated once per frame).
 #[derive(Default)]
 pub struct Rbodies {
     pub list: Vec<RbObj>,
+    /// The cels' wind structs, in 0xDF placement order; `RbObj::wind` indexes here.
+    pub winds: Vec<EnvWind>,
 }
 
 impl Rbodies {
@@ -740,7 +865,76 @@ impl Rbodies {
     /// placement on the disc fails the check).
     pub fn create(level: &nf_formats::level::Level) -> Rbodies {
         let mut list = Vec::new();
-        let Some(m) = level.main_map() else { return Rbodies { list } };
+        let Some(m) = level.main_map() else { return Rbodies { list, winds: Vec::new() } };
+        // The room cels + their wind: the main map's cel placements (the parse_cel_graph room
+        // half — flags16 0xc023/0xc047, the object's raw glist bbox = the cel's +0x40..0x58 [M
+        // parsemap_block_map_data_static 0x1d1998; build_FindCel 0x1c8cb0 tests this box]), the
+        // water surface (cel+0x90: the bbox max y for 0xC023, −500.0 otherwise [M
+        // parseentity_fixup_entity 0x1d00c0, the port's verified fix-ladder doc]) and the world
+        // sphere centre (cel+0x80: the bbox corners through the placement matrix, then the AABB
+        // centre [M parseentity_transform_bounding_box 0x1d0fb0]). The 0xDF placements build the
+        // wind structs in placement order; a cel already carrying one is skipped (Env_Create's
+        // `cel+0x2c != 0` early-out [M 0x17b968]).
+        struct WindCel {
+            min: [f32; 3],
+            max: [f32; 3],
+            water: f32,
+            wind: Option<usize>,
+        }
+        let mut cels: Vec<WindCel> = Vec::new();
+        let mut winds: Vec<EnvWind> = Vec::new();
+        for p in &level.maps[m].placements {
+            if !p.creates_cel() { continue; }
+            let flags16 = (p.flags & 0xffff) as u16;
+            if !matches!(flags16, 0xc023 | 0xc047) { continue; }
+            let resolved = if p.by_hash() { level.by_hash.get(&p.hashcode).copied() } else { Some((m, p.index as usize)) };
+            let Some((map, object)) = resolved else { continue };
+            let Some(o) = level.maps[map].objects.get(object) else { continue };
+            cels.push(WindCel { min: o.min, max: o.max, water: if flags16 == 0xc023 { o.max[1] } else { -500.0 }, wind: None });
+        }
+        for p in level.maps[m].placements.iter().filter(|p| p.flags & 0xff == 0xdf) {
+            let hit = cels.iter_mut().position(|c| c.min[0] <= p.translation[0] && p.translation[0] <= c.max[0]
+                && c.min[1] <= p.translation[1] && p.translation[1] <= c.max[1]
+                && c.min[2] <= p.translation[2] && p.translation[2] <= c.max[2]);
+            let Some(ci) = hit else { continue };
+            if cels[ci].wind.is_some() { continue; }
+            // The falloff = 1/(pCelList record+0x1c) — the WIND CEL's glist sphere radius [M
+            // 0x17b968 reads `*(cel+0x38) + 0x1c` — cel+0x38 is the record the CEL placement
+            // bound at 0x1d1998, not the 0xDF's own object]. The record's sphere is the cel
+            // object's glist sphere (the port's Object::radius — the same source RB_Create's
+            // +0x13c copies [M Control_BuildWorldSph 0x133070]); the wind origin (cel+0x80)
+            // is the placement matrix through the cel bbox (the AABB centre, CelNode.sphere's
+            // rule). The cel object re-resolves: the cel the 0xDF lands in is the `ci`-th
+            // room cel — its placement is the matching cel placement.
+            let mut cel_obj = None;
+            let mut k = 0usize;
+            for q in &level.maps[m].placements {
+                if !q.creates_cel() { continue; }
+                let flags16 = (q.flags & 0xffff) as u16;
+                if !matches!(flags16, 0xc023 | 0xc047) { continue; }
+                let resolved = if q.by_hash() { level.by_hash.get(&q.hashcode).copied() } else { Some((m, q.index as usize)) };
+                if let Some((map, object)) = resolved {
+                    if let Some(o) = level.maps[map].objects.get(object) {
+                        if k == ci { cel_obj = Some((q.rotation, q.translation, o.min, o.max, o.radius)); break; }
+                        k += 1;
+                    }
+                }
+            }
+            let Some((rot, ctrans, cmin, cmax, cradius)) = cel_obj else { continue };
+            if !(cradius > 0.0) { continue; }
+            let mtx = nf_formats::placement::object_matrix(rot, ctrans);
+            let mut lo = [f32::MAX; 3];
+            let mut hi = [f32::MIN; 3];
+            for cx in [cmin[0], cmax[0]] { for cy in [cmin[1], cmax[1]] { for cz in [cmin[2], cmax[2]] {
+                let w = nf_formats::placement::transform(&mtx, [cx, cy, cz]);
+                for a in 0..3 { lo[a] = lo[a].min(w[a]); hi[a] = hi[a].max(w[a]); }
+            } } }
+            let centre = [(lo[0] + hi[0]) * 0.5, (lo[1] + hi[1]) * 0.5, (lo[2] + hi[2]) * 0.5];
+            let mut w = crate::rigid_body::env_wind_create(&p.params, p.rotation, 1.0 / cradius);
+            w.centre = centre;
+            cels[ci].wind = Some(winds.len());
+            winds.push(w);
+        }
         for (pi, p) in level.maps[m].placements.iter().enumerate() {
             if p.flags & 0xff != 0xd8 { continue; }
             // The placement → object resolve, the doors' `object(p)` convention: by-hash through
@@ -781,6 +975,15 @@ impl Rbodies {
             // rb+0xAA + the +0x13c overrides [M 0x1d6bf0:80-96]
             let (s_aa, s13c) = rb_create_tail(ty, ext);
             if let Some(v) = s13c { st.s13c = v; }
+            // obj+0x20: the room cel holding the placement translation (build_LinkToRoom
+            // 0x1c9680's create-time pick; build_FindCel 0x1c8cb0's bbox test over the room
+            // cels' raw glist bbox [M 0x1c8cb0: the +0x40..0x58 test]). Multiple matches: the
+            // game's collision-ray tie-break is not ported — the first parse-order room cel
+            // wins [S unverified tie-break; 07000004/06/01 resolve uniquely (the wind probe)].
+            let hit = cels.iter().position(|c| c.min[0] <= st.pos[0] && st.pos[0] <= c.max[0]
+                && c.min[1] <= st.pos[1] && st.pos[1] <= c.max[1]
+                && c.min[2] <= st.pos[2] && st.pos[2] <= c.max[2]);
+            let (wind, buoy) = hit.map(|ci| (cels[ci].wind, Some((cels[ci].water, cels[ci].max[1])))).unwrap_or((None, None));
             list.push(RbObj {
                 placement: pi as u16,
                 glist: o.hashcode,
@@ -793,16 +996,27 @@ impl Rbodies {
                 hits: Vec::new(),
                 sph_centre: o.centre,
                 sph_radius: o.radius,
+                wind,
+                buoy,
             });
         }
-        Rbodies { list }
+        Rbodies { list, winds }
     }
 
-    /// `RB_Update` 0x1d6e38 [M] per body: the heat-puff gate (the port passes no cel — the
-    /// port has no per-object room cel yet [S], so no draw and no puff), zero wind (the
-    /// `Env_GetWindVel` census is open [S]), the evolve, and the flags/light bookkeeping the
-    /// sim reads (obj+0xFA |= 0x20 [M :tail]; the +0x100 light-position sync is the visual
-    /// layer — not ported).
+    /// `Env_Update` 0x17bc88's cel walk [M]: every wind cel steps once per frame from the ONE
+    /// `Rand_Rand(20000)` the frame drew (no extra draws). Called at the env slot of the tick
+    /// (the game's `Game_Run` order: `Env_Update` before the object handler).
+    pub fn tick_winds(&mut self, gust: u32) {
+        for w in &mut self.winds {
+            crate::rigid_body::env_update_gust(w, gust);
+        }
+    }
+
+    /// `RB_Update` 0x1d6e38 [M] per body: the buoyancy gate (the body's own cel's water
+    /// surface, `None` when the cel did not resolve), the cel wind (`Env_GetWindVel` 0x17c048
+    /// — zero without a wind cel), the evolve, and the flags bookkeeping the sim reads
+    /// (obj+0xFA |= 0x20 [M :tail]; the +0x100 light-position sync is the visual layer —
+    /// not ported).
     pub fn tick(&mut self, level_low_nibble: u32, rng: &mut crate::drone::Rng) {
         for j in 0..self.list.len() {
             self.tick_one(j, level_low_nibble, rng);
@@ -813,8 +1027,17 @@ impl Rbodies {
     /// its own update once per frame (the dispatch pair at 0x26f9c8 is per object [M]).
     pub fn tick_one(&mut self, j: usize, level_low_nibble: u32, rng: &mut crate::drone::Rng) {
         let Some(o) = self.list.get_mut(j) else { return };
+        // Env_GetWindVel(cel, obj+0xc0) [M 0x1d7c78] — obj+0xc0 is the object's world position;
+        // the port's stand-in is the drawn translation (identical for the Rot census bodies,
+        // which never translate [M EulerEvolve]) [S].
+        let wind = match o.wind {
+            Some(wi) => crate::rigid_body::env_get_wind_vel(&self.winds[wi], o.st.trans),
+            None => [0.0; 3],
+        };
         let obj_y = o.st.trans[1];
-        crate::rigid_body::rb_update(&mut o.rb, &mut o.st, None, obj_y, level_low_nibble, |m| rng.frand(m));
+        let buoy = o.buoy;
+        let obj_pos = o.st.trans;
+        crate::rigid_body::rb_update(&mut o.rb, &mut o.st, buoy, obj_y, level_low_nibble, wind, obj_pos, |m| rng.frand(m));
         o.flags |= 0x20;
     }
 
@@ -937,7 +1160,7 @@ mod evolve_tests {
         let (mut rb, mut st) = barrel();
         let (p0, q0, m0, t0) = (st.pos, rb.quat, st.matrix, st.trans);
         for _ in 0..600 {
-            rb_update(&mut rb, &mut st, None, 1.0, 1, |_| panic!("no rng draw at rest"));
+            rb_update(&mut rb, &mut st, None, 1.0, 1, [0.0; 3], [0.0; 3], |_| panic!("no rng draw at rest"));
         }
         assert_eq!(st.pos, p0);
         assert_eq!(st.trans, t0);
@@ -1041,11 +1264,14 @@ mod evolve_tests {
             "r×f about z when the point rides below [M 0x1d7d58]");
     }
 
-    /// [M 0x1d6e38:0x1d6e88-0x1d6eb0] The heat puff: gate = the cel set, obj+0xc4 below
-    /// cel+0x90, and GameState&0xf != 0; force = (0, |obj_y − cel+0x54|·mass·0.4 + frand(0.15), 0);
-    /// the shared-RNG draw happens ONLY when the gate passes.
+    /// [M 0x1d6e38:0x1d6e88-0x1d6eb0] The buoyancy puff: gate = the cel set, obj+0xc4 below
+    /// cel+0x90 (the water surface — build_alloc_cel 0x1c93f8 defaults −500.0;
+    /// parseentity_fixup_entity 0x1d00c0 sets it to cel+0x54 for room class 0xC023), and
+    /// GameState&0xf != 0; force = (0, |obj_y − cel+0x54|·mass·0.4 + frand(0.15), 0) — the
+    /// depth-proportional lift with the Gas_Init bubbles; the shared-RNG draw happens ONLY
+    /// when the gate passes.
     #[test]
-    fn heat_puff_gate() {
+    fn buoyancy_puff_gate() {
         // The puff's impulse lands in +0x40 and the same tick's evolve applies it to the
         // position for type 0 (for type != 0 the game's ApplyImpulses drops it — the smoke is
         // the visible effect). Use a type-0 body and assert the displacement.
@@ -1053,7 +1279,7 @@ mod evolve_tests {
         assert!(rb_build(&mut rb, 3.0, BOX_VERTS, rb_cuboid_moments_of_inertia(3.0, 2.0, 3.0, 4.0)));
         let mut st = RbState::zeroed();
         st.matrix = rb_set_state(&rb);
-        rb_update(&mut rb, &mut st, Some((5.0, 1.0)), 2.0, 1, |lim| lim * 0.5);
+        rb_update(&mut rb, &mut st, Some((5.0, 1.0)), 2.0, 1, [0.0; 3], [0.0; 3], |lim| lim * 0.5);
         // The impulse arm lifts y by (1.275/3); then vel = f·(pos − WldGravity·1) integrates
         // the same tick [M 0x1d7124 + 0x1d78ec-0x1d7944 + 0x1d796c-0x1d7994].
         let dt = crate::ssys::REC_FRAME_RATE;
@@ -1063,12 +1289,109 @@ mod evolve_tests {
         assert!((st.pos[1] - want).abs() < 1.0e-5, "pos.y {} vs {}", st.pos[1], want);
         // The closed gate draws nothing (the closure would panic).
         let (_, mut st2) = barrel();
-        rb_update(&mut rb, &mut st2, Some((5.0, 1.0)), 2.0, 0, |_| panic!("no draw on a closed gate"));
+        rb_update(&mut rb, &mut st2, Some((5.0, 1.0)), 2.0, 0, [0.0; 3], [0.0; 3], |_| panic!("no draw on a closed gate"));
         assert_eq!(st2.lin_impulse, [0.0; 3]);
         // Nibble non-zero but the body above the heat: no draw, no force.
         let (_, mut st3) = barrel();
-        rb_update(&mut rb, &mut st3, Some((5.0, 1.0)), 6.0, 1, |_| panic!("no draw above the heat"));
+        rb_update(&mut rb, &mut st3, Some((5.0, 1.0)), 6.0, 1, [0.0; 3], [0.0; 3], |_| panic!("no draw above the heat"));
         assert_eq!(st3.lin_impulse, [0.0; 3]);
+    }
+
+    /// [M 0x17b968 + 0x1e2368 + 0x1e3398] Env_Create's wind half: strength = target = p3·0.1,
+    /// phase −1, grow 1, and the dir row of RotMatrix(rotation) — for a zero rotation the
+    /// dir row is (0, 0, 1) (sin 0 = 0, cos 0 = 1).
+    #[test]
+    fn env_wind_create_parses_the_placement() {
+        let w = env_wind_create(&[(0, 1), (1, 1), (2, 4), (3, 6)], [0.0; 3], 0.033);
+        assert_eq!(w.strength, 0.6);
+        assert_eq!(w.target, 0.6, "Env_Create stores the SAME p3·0.1 into +0x30 and +0x34 [M 0x17b968]");
+        assert_eq!(w.phase, -1.0, "the phase literal 0xbf800000 [M 0x17b968]");
+        assert_eq!(w.grow, 1);
+        assert_eq!(w.falloff, 0.033);
+        // The PS2 sinf's cos(0) lands at 1.0000002 — the game's RotMatrix reads the same
+        // value from PS2Sinf3, so the dir row is NOT an exact unit vector [M 0x1e2368 + the
+        // port's bit-exact sinf].
+        assert_eq!(w.dir[0], 0.0);
+        assert_eq!(w.dir[1], 0.0);
+        assert!((w.dir[2] - 1.0).abs() < 1.0e-5, "the zero rotation's dir row [M RotMatrix 0x1e2368], got {:?}", w.dir);
+        // Sister (can fail): a yaw-only rotation swings the dir row's x (sin ry).
+        let wy = env_wind_create(&[], [0.0, 1.5707964, 0.0], 1.0);
+        assert!(wy.dir[0] > 0.99, "dir.x = sin(ry) at yaw π/2, got {:?}", wy.dir);
+        assert!(wy.dir[2].abs() < 1.0e-3);
+    }
+
+    /// [M 0x17bc88] The gust cycle: the phase sweeps up (rand-scaled), resets to −1 past 1.0;
+    /// the strength doubles while growing (K = 2K + f) past the target into the decay
+    /// (K ×= 1 − f) until 0.25×target re-arms the grow. The zero-target wind never moves.
+    #[test]
+    fn gust_cycle_grows_and_decays() {
+        let mut w = env_wind_create(&[(3, 6)], [0.0; 3], 1.0);
+        // The grow arm: from 0.6 one doubling lands above the target → latch 0.
+        env_update_gust(&mut w, 20000);
+        assert!(w.strength > 0.6, "2K + f past the target, got {}", w.strength);
+        assert_eq!(w.grow, 0, "K > target latches decay [M 0x17bc88]");
+        // The decay arm: many small steps pull K below 0.25×target → latch 1 again.
+        let mut steps = 0;
+        while w.grow == 0 && steps < 20000 {
+            env_update_gust(&mut w, 20000);
+            steps += 1;
+        }
+        assert_eq!(w.grow, 1, "decay re-arms the grow below 0.25×target after {} steps", steps);
+        assert!(w.strength < 0.15 + 1.0e-3);
+        // The phase: f·REC_FRAME_RATE per step; the reset lands at −1.0 exactly.
+        let mut w2 = env_wind_create(&[(3, 6)], [0.0; 3], 1.0);
+        let f = 20000.0f32 * crate::ssys::REC_FRAME_RATE * 1.538_461_6e-5;
+        let per = f * crate::ssys::REC_FRAME_RATE;
+        let steps = ((2.0 / per) as u32) + 1;
+        for _ in 0..steps { env_update_gust(&mut w2, 20000); }
+        assert_eq!(w2.phase, -1.0, "the phase reset [M 0x17bc88's 0xbf800000 store]");
+        // Sister (can fail): the zero-target wind is skipped by the walk entirely.
+        let mut w0 = EnvWind { dir: [0.0, 0.0, 1.0], centre: [0.0; 3], strength: 0.0, target: 0.0, phase: -1.0, falloff: 1.0, grow: 1 };
+        env_update_gust(&mut w0, 20000);
+        assert_eq!(w0.strength, 0.0);
+        assert_eq!(w0.phase, -1.0);
+    }
+
+    /// [M 0x17c048] Env_GetWindVel: zero without a target; else dir · (K·(dot·falloff + 1)
+    /// ·|phase|·0.5) with the dot over (pos − cel+0x80).
+    #[test]
+    fn wind_velocity_formula() {
+        let mut w = env_wind_create(&[(3, 6)], [0.0; 3], 0.1);
+        w.centre = [10.0, 0.0, 0.0];
+        w.phase = 1.0;
+        // pos 10 ahead of the centre along +z: dot = 5 → K·(0.5 + 1)·1·0.5 along +z.
+        let v = env_get_wind_vel(&w, [10.0, 0.0, 5.0]);
+        let want = 0.6 * (5.0 * 0.1 + 1.0) * 0.5;
+        assert!((v[2] - want).abs() < 1.0e-6, "wind.z {} vs {}", v[2], want);
+        assert_eq!(v[0], 0.0);
+        assert_eq!(v[1], 0.0);
+        // Sister (can fail): behind the origin past the falloff the factor goes negative —
+        // the game does not clamp [M 0x17c048 has no max].
+        let vb = env_get_wind_vel(&w, [10.0, 0.0, -15.0]);
+        assert!(vb[2] < 0.0, "dot = −1.5 → the bracket −0.15+1 stays positive; at −25 it flips");
+        let vb2 = env_get_wind_vel(&w, [10.0, 0.0, -25.0]);
+        assert!(vb2[2] < 0.0, "dot·falloff = −2.5 → the bracket is negative [M no clamp]");
+        // The zero-target cel reads zero.
+        w.target = 0.0;
+        assert_eq!(env_get_wind_vel(&w, [10.0, 0.0, 5.0]), [0.0; 3]);
+    }
+
+    /// [M 0x1d6e38 order] The buoyancy puff, then RB_ApplyWind, then the evolve — the wind
+    /// torque reaches a type-1 body through rb_update's wind argument (the lamp path).
+    #[test]
+    fn update_applies_the_wind_before_the_evolve() {
+        let (mut rb, mut st) = barrel();
+        rb.ty = 1;
+        st.s13c = 1.0; // the wind point y = obj_y + 0 − 1 = 0 → r = (0, −1, 0) [M 0x1d7c78's point]
+        rb_update(&mut rb, &mut st, None, 1.0, 1, [3.0, 0.0, 0.0], [10.0, 1.0, 20.0], |_| panic!("no rng draw without buoyancy"));
+        // The at-point arm put r×f into +0x50 and the evolve consumed it (the accumulator
+        // drains [M EulerEvolve flag 0]); the up-righting tail then leaves the NEXT tick's
+        // spring torque in +0x50 [M 0x1d79f4-0x1d7a58] — tiny after one tick.
+        assert_eq!(st.lin_impulse, [0.0; 3], "the evolve drains +0x40");
+        assert!(st.tor_impulse[0].abs() < 1.0e-3 && st.tor_impulse[1] == 0.0 && st.tor_impulse[2].abs() < 1.0e-3,
+            "only the spring's residue stays, {:?}", st.tor_impulse);
+        assert!(st.omega[0] != 0.0 || st.omega[2] != 0.0, "a horizontal wind at a point offset tips the body");
+        assert!(rb.quat != [1.0, 0.0, 0.0, 0.0], "the lamp's quat left rest");
     }
 
     /// [M 0x1d7e18/0x1d7eb8] ToBody is ToWorld with the transposed matrix; the pair round-trips.
