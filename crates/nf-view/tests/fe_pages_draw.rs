@@ -67,13 +67,20 @@ fn nfbonus_elements_follow_page_0x40000038() {
     let page = md.page(0x4000_0038).expect("page 0x40000038");
     let bind = |id: u32| format!("<{id:x}>");
     let elems = nfbonus_elems(None, &bind);
-    assert_eq!(elems.len(), NFBONUS_CONTROLS.len(), "one element per drawn control");
+    // One element per drawn control: all but the SET-2 button 0x10000165, which draws nothing
+    // (its label is colour 0, its set's COMPONENT 0 is empty — fe_frame_buttons.rs).
+    assert_eq!(elems.len(), NFBONUS_CONTROLS.len() - 1, "one element per drawn control");
     for &(id, ty, x, y, w, h) in NFBONUS_CONTROLS.iter() {
         let c = find(page, id, (x, y, w, h)).unwrap_or_else(|| panic!("{id:08x} ({x},{y},{w},{h}) is not on the disc page"));
         assert_eq!(ctype(c), ty, "{id:08x}: the type byte");
+        if id == 0x1000_0165 {
+            assert_eq!(c.f2, 2, "the button's set");
+            assert!(elems.iter().all(|e| e.ctrl != id), "no element for the SET-2 button");
+            continue;
+        }
         let want = control_rect(id, ctype(c), c.x as i32, c.y as i32, c.w as i32, c.h as i32);
         let e = elems.iter().find(|e| e.ctrl == id && e.rect == want).unwrap_or_else(|| panic!("{id:08x}: no element at {want:?}"));
-        if let Some((col, _)) = msg(c, 0x1b) { if id != 0x1000_0165 { assert_eq!(e.colour, col, "{id:08x}: the msg-0x1b colour"); } }
+        if let Some((col, _)) = msg(c, 0x1b) { assert_eq!(e.colour, col, "{id:08x}: the msg-0x1b colour"); }
         match &e.what {
             ElemWhat::Tex { tex, uv } => {
                 assert_eq!(Some(*tex), c.texture, "{id:08x}: the msg-0x24 texture (no reward line stands)");
@@ -85,7 +92,6 @@ fn nfbonus_elements_follow_page_0x40000038() {
                 assert_eq!((*face, *align), (3, Align::Left), "the text list's 0x30d348 format: ff 03, no fe");
                 assert_eq!(s, " ", "no reward text: msg 0x18 with 0 → the blank string");
             }
-            ElemWhat::Frame => assert_eq!(id, 0x1000_0165),
             ElemWhat::Fill => panic!("the bonus page has no fill"),
             ElemWhat::Pen { .. } => panic!("the bonus page has no laid-out pen lines"),
         }

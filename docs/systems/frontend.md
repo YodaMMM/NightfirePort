@@ -41,6 +41,30 @@ Parsed 2026-10-13: 56 pages, 1003 controls, clean END with 19 spare bytes. Coord
 space** (each page's root control is (0,0,640,480)); `FixupResolution` scales per output resolution — the
 port maps ×512/640, ×448/480 onto the game's 512 × 448 screen.
 
+**The CONTROL record's two bytes.** The first byte is the widget TYPE (0x21b908 copies it to
+NEW_CONTROL+0x21 and tests it for 5 / 0xa / 0xd in the placement arms); the second is the create
+KIND (0 or 3 → `Manager_SendMessage 0x42`) [M 0x21b908:240-300]. `ControlDef::b` / `ctype` hold
+them in that order. The record's `f1` word lands in NEW_CONTROL+0x16 (the layer), `f2` in +0x14
+(the component SET id), `d1` in +0xc, `d2` in +0x4, `d3` in +0x8 [M :262-266].
+
+**Type-1 buttons draw their SET.** `Button_Init` 0x1efc90:38 sets the handle to (+0x14 << 16) | 0;
+`Button_Update` 0x1ef948 lays COMPONENT 0 of that SET over the button's rect under the state mask
+(0x10 idle; focused 0x20 / 0x80, 0x40 while ✕ is held) and frees the sprites while `+0x7a & 1`
+(msg 0x2b bit 0, the button or its page) [M :31-38, :56-87]; `Component_SetupInstance` returns
+before creating any sprite when the record's count is 0 [M 0x1f0950]. On the disc [D 08000002]:
+
+| SET | COMPONENT 0 | buttons |
+|---|---|---|
+| 2 | no instances — draws nothing | the 007 Bonus / Results / MP-summary ✕ targets 0x10000165, the main-menu rows, the codename grid cells, the language flags, the AV rows |
+| 7 | 9-slice on 0x03000075, 4-texel corners (uv 123..131, 51..59) | the Records / Rewards / Controls / Debriefing / MP-summary boxes, the codename grid box |
+| 8 | 23×23 right cap + stretched fill on 0x03000075 | the codename entry's typed-name field |
+| 0xc | end caps, a 32×32 right badge and two runs on 0x0300014b; instance 0 focus-only (0x20) | the Records title band, the Controls style band |
+| 0xe | 9-slice on 0x0300019d | the card box 0x100000fd, the confirm box on 0x40000015 |
+
+The mission defs' buttons name SET 2 (the pause tabs, the 0x40000007 rows) and SET 0xb (the
+objective-hint box 0x1000011e: one 0x0000007f fill instance). Port: `fe_pages::button_component`,
+`button_elems`, `FRAME_BUTTONS`; pinned in `crates/nf-view/tests/fe_frame_buttons.rs`.
+
 ## The pages the port draws (all cited at the use site in `crates/nf-view/src/menu.rs`)
 
 | page | identity [M] | key controls (640×480) |

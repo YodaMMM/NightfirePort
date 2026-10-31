@@ -36,8 +36,6 @@ pub enum ElemWhat {
     Text { label: Option<u32>, s: String, face: u8, align: Align, shadow: bool },
     /// A full-rect fill in the element colour (the fade plate's single-texel quad).
     Fill,
-    /// A type-1 button's frame (its component sprite set) [S the look].
-    Frame,
     /// One already-laid-out text line: the pen's left x at `rect[0]`, the baseline at `rect[1]`
     /// (what a memo line's sprite carries [M Memo_Update 0x21e490:139-152]); `face` as in
     /// [`ElemWhat::Text`]; `shadow` = sprite flag 0x2000 (the -1,-1 second pass).
@@ -95,7 +93,8 @@ pub const GREY: u32 = 0x7f7f_7fff;
 /// The 007 Bonus page's authored controls [D menu-def page 0x40000038]: (id, type, x, y, w, h).
 /// Header LBL 0x2c5 (NAME "\xff\x01"), hint LBL 0x2d0, the reward picture 0x100001cf TEX
 /// 0x03000134 uv (0,0,172,256), the type-1 button 0x10000165 LBL 2 (colour 0 — its text is
-/// invisible; the page script's msg 0x22 focuses it so ✕ is its 0x4b), the text list 0x100001d0,
+/// invisible; SET 2, whose COMPONENT 0 has no instances, so it draws no frame either; the page
+/// script's msg 0x22 focuses it so ✕ is its 0x4b), the text list 0x100001d0,
 /// the stamp 0x10000224 TEX 0x0300014c uv (1,1,255,255), the logo TEX 0x0300016d uv (0,0,255,127).
 pub const NFBONUS_CONTROLS: [(u32, u8, i32, i32, i32, i32); 7] = [
     (0x1000_0001, 5, 50, 40, 376, 17),
@@ -127,14 +126,15 @@ pub fn nfbonus_text(bonus: Option<&crate::menu::BonusFields>, bind: &dyn Fn(u32)
 /// sends — msg 0x24 of tier 1's texture into 0x100001cf when that line stands [M :22-26], msg
 /// 0x23 "\xff\x03" (0x30d348, FONTMedium, no `fe` tag → left-aligned) and msg 0x18 with the
 /// composed text into 0x100001d0 [M :15, :43]. The page has no animated control: its only
-/// script is the page's own 0x2000000f whose single keyframe focuses 0x10000165 [D].
+/// script is the page's own 0x2000000f whose single keyframe focuses 0x10000165 [D]. That
+/// button contributes nothing: its label is colour 0 and its sprite set is SET 2's empty
+/// COMPONENT 0 ([`button_elems`]) — the game draws no box at (62,372).
 pub fn nfbonus_elems(bonus: Option<&crate::menu::BonusFields>, bind: &dyn Fn(u32) -> String) -> Vec<PageElem> {
     let r = |i: usize| { let c = NFBONUS_CONTROLS[i]; control_rect(c.0, c.1, c.2, c.3, c.4, c.5) };
     let pic = bonus.and_then(|b| b.texture).unwrap_or(0x0300_0134);
     vec![
         PageElem { ctrl: 0x1000_0001, rect: r(0), colour: CREAM, what: ElemWhat::Text { label: Some(0x2c5), s: bind(0x2c5), face: 1, align: Align::Left, shadow: true } },
         PageElem { ctrl: 0x1000_01cf, rect: r(2), colour: GREY, what: ElemWhat::Tex { tex: pic, uv: [0.0, 0.0, 172.0, 256.0] } },
-        PageElem { ctrl: 0x1000_0165, rect: r(3), colour: 0, what: ElemWhat::Frame },
         PageElem { ctrl: 0x1000_01d0, rect: r(4), colour: CREAM, what: ElemWhat::Text { label: None, s: nfbonus_text(bonus, bind), face: 3, align: Align::Left, shadow: true } },
         PageElem { ctrl: 0x1000_0224, rect: r(5), colour: GREY, what: ElemWhat::Tex { tex: 0x0300_014c, uv: [1.0, 1.0, 255.0, 255.0] } },
         PageElem { ctrl: 0x1000_0001, rect: r(6), colour: GREY, what: ElemWhat::Tex { tex: 0x0300_016d, uv: [0.0, 0.0, 255.0, 127.0] } },
@@ -291,6 +291,142 @@ pub const SETE_BUTTON: [CompInst; 9] = [
     ci([0, 0, 8, 16, 16, 0, 1, 16], 0x7f7f_7fff, 0xf4, 1.0, 0.0),
     ci([0, 0, 8, 8, 16, 14, 2, 2], 0x7f7f_7fff, 0xfc, 1.0, 1.0),
 ];
+
+/// The frame atlas SET 7 / SET 8 name (COMPONENT hash 0x03000075 [D 08000002]) — the codename
+/// grid's glyph texture too.
+pub const ATLAS_FRAMES: u32 = 0x0300_0075;
+/// The atlas SET 0xc names (COMPONENT hash 0x0300014b [D 08000002]).
+pub const ATLAS_SETC: u32 = 0x0300_014b;
+
+/// SET 7 COMPONENT 0 — the page boxes (the Records / Rewards / Controls / Debriefing / Confirm
+/// frames and the codename grid's box): an opaque 9-slice on [`ATLAS_FRAMES`] with 4-texel
+/// corners, every instance in all four state masks [D 08000002].
+pub const SET7_BUTTON: [CompInst; 9] = [
+    ci([0, 0, 4, 4, 123, 51, 4, 4], 0x7f7f_7fff, 0xf0, 0.0, 0.0),
+    ci([0, 0, 4, 4, 127, 51, 4, 4], 0x7f7f_7fff, 0xf2, 0.0, 0.0),
+    ci([0, 0, 4, 4, 123, 55, 4, 4], 0x7f7f_7fff, 0xf1, 0.0, 0.0),
+    ci([0, 0, 4, 4, 127, 55, 4, 4], 0x7f7f_7fff, 0xf3, 0.0, 0.0),
+    ci([0, 0, 8, 4, 126, 51, 2, 4], 0x7f7f_7fff, 0xf4, 1.0, 0.0),
+    ci([0, 0, 8, 4, 126, 55, 2, 4], 0x7f7f_7fff, 0xf5, 1.0, 0.0),
+    ci([0, 0, 4, 8, 123, 54, 4, 2], 0x7f7f_7fff, 0xf8, 0.0, 1.0),
+    ci([0, 0, 4, 8, 127, 54, 4, 2], 0x7f7f_7fff, 0xfa, 0.0, 1.0),
+    ci([0, 0, 8, 8, 126, 54, 2, 2], 0x7f7f_7fff, 0xfc, 1.0, 1.0),
+];
+
+/// SET 8 COMPONENT 0 — the codename entry's typed-name field: a 23×23 right cap and the fill
+/// stretched over the rest of the width (the cap's u-span 28 squeezed into 23) [D 08000002].
+pub const SET8_BUTTON: [CompInst; 2] = [
+    ci([0, 0, 23, 23, 104, 25, 28, 23], 0x7f7f_7fff, 0xfa, 0.0, 0.0),
+    ci([0, 0, 8, 23, 113, 37, 2, 2], 0x7f7f_7fff, 0xf8, 1.0, 0.0),
+];
+
+/// SET 0xc COMPONENT 0 — the Records / Controls title band [D 08000002]: an end-cap pair, a
+/// 32×32 right badge and the top / lower runs stretched between; instance 0 carries only the
+/// focused mask 0x20, so an unfocused band draws the other five.
+pub const SETC_BUTTON: [CompInst; 6] = [
+    ci([0, 0, 8, 8, 0, 0, 8, 8], 0x7f7f_7fff, 0x20, 0.0, 0.0),
+    ci([0, 0, 8, 8, 55, 80, 8, 8], 0x7f7f_7fff, 0xf0, 0.0, 0.0),
+    ci([0, 8, 8, 24, 55, 103, 8, 24], 0x7f7f_7fff, 0xf0, 0.0, 0.0),
+    ci([0, 0, 32, 32, 25, 80, 24, 24], 0x7f7f_7fff, 0xf2, 0.0, 0.0),
+    ci([8, 0, 8, 8, 75, 80, 8, 8], 0x7f7f_7fff, 0xf0, 1.0, 0.0),
+    ci([8, 8, 8, 24, 76, 103, 8, 24], 0x7f7f_7fff, 0xf0, 1.0, 0.0),
+];
+
+/// A type-1 button's sprite set: the instances of COMPONENT 0 of the SET its NEW_CONTROL+0x14
+/// word names (`Button_Init` 0x1efc90:38 handle = set << 16 | 0 [M]; the CONTROL record's `f2`
+/// word is that +0x14 [M MenuManager_Create 0x21b908:262-266]) and the atlas it draws from.
+/// SET 2's COMPONENT 0 has no instances [D 08000002], so a SET-2 button draws no sprite —
+/// `Component_SetupInstance` returns before creating any when the record's count is 0
+/// [M 0x1f0950 `if (*(ushort *)(piVar15 + 1) == 0) return`]. None for a set the front end does
+/// not carry.
+pub fn button_component(set: u16) -> Option<(&'static [CompInst], u32)> {
+    match set {
+        2 => Some((&[], ATLAS_BUTTONS)),
+        7 => Some((&SET7_BUTTON, ATLAS_FRAMES)),
+        8 => Some((&SET8_BUTTON, ATLAS_FRAMES)),
+        0xc => Some((&SETC_BUTTON, ATLAS_SETC)),
+        0xe => Some((&SETE_BUTTON, ATLAS_BOX)),
+        _ => None,
+    }
+}
+
+/// `Button_Update` 0x1ef948's state mask [M :56-87]: an unfocused button 0x10; the focused one
+/// (page+0xac's id == the button's id) 0x20 when its +0x20 word differs from the focused
+/// control's, else 0x80, or 0x40 while ✕ is held.
+pub const BUTTON_IDLE: u32 = 0x10;
+
+/// What a type-1 button's sprite set draws this frame [M Button_Update 0x1ef948]: nothing while
+/// it (or its page) is hidden — the `(+0x7a & 1)` arm frees the component sprites [M :31-38]
+/// (`flags_7a` = the msg-0x2b byte [M Button_SendMessage 0x1ef7a0 case 0x2b]); otherwise its
+/// set's COMPONENT 0 laid over the runtime rect under `mask`.
+pub fn button_elems(ctrl: u32, set: u16, rect: [i32; 4], flags_7a: u8, mask: u32, alpha: i16) -> Vec<PageElem> {
+    if flags_7a & 1 != 0 { return Vec::new(); }
+    match button_component(set) {
+        Some((insts, tex)) if !insts.is_empty() => component_elems(ctrl, insts, tex, mask, rect, alpha),
+        _ => Vec::new(),
+    }
+}
+
+/// The front-end pages' frame buttons [D menu-def 08000002]: (page, control id, SET, authored
+/// x, y, w, h). Every one carries LBL 2 in colour 0 (or 0x7d6d5900, alpha 0) — the label draws
+/// nothing; the box is the sprite set. msg 0x2b 6 or 4 (visible) on each.
+pub const FRAME_BUTTONS: [(u32, u32, u16, i32, i32, i32, i32); 19] = [
+    // Records 0x4000003a: the title band, the score box, the medal box.
+    (0x4000_003a, 0x1000_0001, 0xc, 68, 120, 505, 34),
+    (0x4000_003a, 0x1000_0001, 7, 68, 285, 505, 60),
+    (0x4000_003a, 0x1000_0001, 7, 68, 162, 505, 113),
+    // Rewards 0x4000003b: the spinner box and the four reward rows.
+    (0x4000_003b, 0x1000_0001, 7, 68, 84, 505, 34),
+    (0x4000_003b, 0x1000_01da, 7, 68, 121, 505, 69),
+    (0x4000_003b, 0x1000_01db, 7, 68, 193, 505, 69),
+    (0x4000_003b, 0x1000_01dc, 7, 68, 265, 505, 69),
+    (0x4000_003b, 0x1000_01dd, 7, 68, 337, 505, 69),
+    // Codename entry 0x40000020: the grid box and the typed-name field.
+    (0x4000_0020, 0x1000_0001, 7, 117, 161, 407, 191),
+    (0x4000_0020, 0x1000_0001, 8, 117, 126, 406, 42),
+    // Controls 0x40000022: the style band and the Y-axis button.
+    (0x4000_0022, 0x1000_0001, 0xc, 53, 104, 535, 32),
+    (0x4000_0022, 0x1000_00c9, 7, 461, 109, 99, 25),
+    // MP match summary 0x40000049: the settings band and the two team columns.
+    (0x4000_0049, 0x1000_0001, 7, 49, 82, 542, 78),
+    (0x4000_0049, 0x1000_0001, 7, 52, 167, 264, 242),
+    (0x4000_0049, 0x1000_023e, 7, 324, 167, 265, 242),
+    // MP debriefing 0x40000033: the four participant columns (d1 0..3) and the result box.
+    (0x4000_0033, 0x1000_015d, 7, 176, 94, 96, 253),
+    (0x4000_0033, 0x1000_015d, 7, 280, 94, 96, 253),
+    (0x4000_0033, 0x1000_015d, 7, 384, 94, 96, 253),
+    (0x4000_0033, 0x1000_015d, 7, 488, 94, 96, 253),
+];
+
+/// The debriefing's result box (176,355,408×52) SET 7 [D page 0x40000033].
+pub const DEBRIEF_RESULT_BOX: (u32, u16, i32, i32, i32, i32) = (0x1000_0001, 7, 176, 355, 408, 52);
+
+/// One frame button's elements, idle (none of these ids is a page's focus target [D the
+/// pages' msg-0x22 keyframes]).
+pub fn frame_button_elems(b: (u32, u32, u16, i32, i32, i32, i32)) -> Vec<PageElem> {
+    let (_, id, set, x, y, w, h) = b;
+    button_elems(id, set, control_rect(id, 1, x, y, w, h), 0, BUTTON_IDLE, 0)
+}
+
+/// Every frame button a page carries, in page order (the debriefing's columns go through
+/// [`debrief_frame_elems`]: the handler shows them per participant).
+pub fn page_frame_elems(page: u32) -> Vec<PageElem> {
+    FRAME_BUTTONS.iter().filter(|b| b.0 == page && page != 0x4000_0033).flat_map(|&b| frame_button_elems(b)).collect()
+}
+
+/// The debriefing's frames: column i's box shows while i < the participant count (msg 0x2b 0)
+/// and is hidden past it (msg 0x2b 1) [M P_MPDEBRIEFING 0x212198:148-150, :206-207]; the result
+/// box always.
+pub fn debrief_frame_elems(participants: usize) -> Vec<PageElem> {
+    let mut out = Vec::new();
+    for (i, &(_, id, set, x, y, w, h)) in FRAME_BUTTONS.iter().filter(|b| b.0 == 0x4000_0033).enumerate() {
+        let flags = if i < participants { 0 } else { 1 };
+        out.extend(button_elems(id, set, control_rect(id, 1, x, y, w, h), flags, BUTTON_IDLE, 0));
+    }
+    let (id, set, x, y, w, h) = DEBRIEF_RESULT_BOX;
+    out.extend(frame_button_elems((0x4000_0033, id, set, x, y, w, h)));
+    out
+}
 
 /// `Component_SetupInstance` 0x1f0950's colour under `Menu_AlphaGet`: the alpha word is added to
 /// the R, G and B bytes one by one, the alpha byte kept [M 0x1f0dc4-0x1f0e08: `srl` 24/16/8,
