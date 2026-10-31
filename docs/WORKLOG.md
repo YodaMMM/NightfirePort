@@ -87,3 +87,16 @@ panicking at walker.rs:853, fix_guest_reactions_live :278, the 07000016 kiko-dea
 Narrow the arm to true hostile blockers only (never escorts, civilians, guests, allies) or move
 it into the 02 test's own helper. Land only with those 6 green and every binary that includes
 common/walker.rs green, plus walkreal_07000002_live.
+
+## level-02-every-objective-5 progress (2026-10-31)
+
+FIXED: the shared walker's 02 deltas are now OPT-IN behind `body_block_response` (default OFF =
+master's walker everywhere; only walkreal_07000002_live's real-health walk sets it) — the arm
+fired on any team-1 drone [M drone.rs:2147: every non-civilian dtype], shooting a cover guard
+at the 07 party (level_exit mid-walk) and burning the 16 launch-centre legs' give-up caps on an
+unkillable blocker (10800-tick fight → walker.rs:853 panic ×3), and the step-back flank
+(close_buried) rerouted the npc-doors escort's guard-5 fight into resupply wedges + a walk off
+the map (y −55557). The fight's ticks now extend the leg's budget instead of charging it. The 6
+red tests green; fix_npc_doors red→green (348s→147s) with the step-back gated. Quoted on the
+final tree: 42 walker-including binaries, 134/0/6 — every level-walk walkreal binary green.
+Report: docs/reports/level-02-every-objective-5.md.
