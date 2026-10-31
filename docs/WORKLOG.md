@@ -77,3 +77,13 @@ captors. New frontier: the fight economy (drops land on the guards' floor below 
 died dry at the bunker in rh1, walked 6.5 u down a floor to a box in rh4, found nothing at his
 feet in rh5). Totals: walkreal_07000001 5/0, walkreal_07000002 master walk 1/0; 03-05 cut
 mid-batch, 06+ not run this window. Report: docs/reports/level-02-every-objective-4.md.
+
+## level-02-every-objective-5 (2026-10-31, s/level-02-every-objective-5)
+
+Branch from origin/s/level-02-every-objective-4 (b5a45d6f) merged with origin/master (b44ac857).
+Task: fix the body-block response in common/walker.rs — the 02 walker change turned 6 tests red
+(walkreal_07000008_live::walk_the_whole_mission_on_real_input :331, the three 07000016 walks
+panicking at walker.rs:853, fix_guest_reactions_live :278, the 07000016 kiko-death-button walk).
+Narrow the arm to true hostile blockers only (never escorts, civilians, guests, allies) or move
+it into the 02 test's own helper. Land only with those 6 green and every binary that includes
+common/walker.rs green, plus walkreal_07000002_live.
