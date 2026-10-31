@@ -9471,7 +9471,9 @@ pub fn build(level: &Level, cels_only: bool, skeletons: &HashMap<u8, Skeleton>, 
                 let Some(di) = s.char_drone[ci] else { continue };
                 if skip_hidden && hidden(c, ci) { continue; }
                 let dr = &s.drones.list[di];
-                let op = dr.object_pose_cached(&data, &mut cache);
+                // `NF_NO_DRONE_MEMO=1`: the direct path (A/B timing; the same pose either way).
+                static NO_MEMO: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
+                let op = if *NO_MEMO.get_or_init(|| std::env::var_os("NF_NO_DRONE_MEMO").is_some()) { dr.object_pose(&data) } else { dr.object_pose_cached(&data, &mut cache) };
                 let r = op.map(|(world, hip)| {
                     let m = nf_formats::placement::object_matrix([0.0, dr.yaw, 0.0], [dr.pos[0], dr.draw_y(hip), dr.pos[2]]);
                     (anim::skin_matrices(&world, &c.skin), world, m)

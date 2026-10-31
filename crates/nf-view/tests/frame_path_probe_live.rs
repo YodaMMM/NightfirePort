@@ -351,6 +351,34 @@ fn probe_gpu_timestamps() {
     }
 }
 
+/// The palette build the way the window runs it: once per sim tick, 240 ticks of a scripted walk
+/// (so the drones' sample memo sees each tick's new frames), median and worst per level.
+/// Measurement only; `NF_PROBE_LEVELS` narrows the levels.
+#[test]
+#[ignore]
+#[cfg(not(debug_assertions))]
+fn probe_palette_per_tick() {
+    let Some(iso_path) = std::env::var("NF_ISO").ok() else { return };
+    let mut levels = on_foot_levels(&iso_path);
+    if let Ok(o) = std::env::var("NF_PROBE_LEVELS") { levels.retain(|l| o.split(',').any(|x| l.starts_with(x.trim()))); }
+    for name in &levels {
+        let Ok(mut scene) = nf_view::load(&iso_path, name, false) else { continue };
+        let (layout, _) = scene.skin_layout();
+        let (mut p, mut c) = (Vec::new(), Vec::new());
+        let mut v = Vec::new();
+        for t in 0..300u32 {
+            let mut i = nf_game::player::Input::default();
+            match (t / 60) % 3 { 0 => i.forward = 1.0, 1 => i.turn = 0.5, _ => i.strafe = 1.0 }
+            if let Some(sim) = scene.sim.as_mut() { sim.step_bond(i, false, false, false); }
+            let t0 = std::time::Instant::now();
+            scene.skin_palette_into(&layout, None, t as f32, ViewOpts::default(), None, &mut p, &mut c);
+            if t >= 60 { v.push(t0.elapsed().as_secs_f64() * 1e3); }
+        }
+        v.sort_by(|a, b| a.partial_cmp(b).unwrap());
+        eprintln!("[pal-tick] {name} median {:.3} p90 {:.3} max {:.3}", v[v.len() / 2], v[v.len() * 9 / 10], v[v.len() - 1]);
+    }
+}
+
 /// The world pass's GPU time split by draw class: the full frame, then the same frame with one class
 /// left out (`Renderer::probe_skip`), at 1280x720 and at 128x72 (a vertex-bound pass keeps its time
 /// at the small target). Measurement only; `NF_PROBE_LEVELS` narrows the levels.
