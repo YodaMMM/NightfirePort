@@ -11959,6 +11959,14 @@ pub struct Drones {
     /// The world presentation FX (0x21 ripples, 0xe3 flicker, 0xd4 cloud drift, 0x4a apocalypse,
     /// 0xf2 emitters — crates/nf-game/src/world_fx.rs, fix-world-fx).
     pub fx: crate::world_fx::WorldFx,
+    /// The sky's lightning timers (`View_DrawSky` 0x1e5ad0's per-slot +0x40..+0x48), ticked once
+    /// per sim frame for the thunder sound. The flash swap and the globals the 0x2c bolts read
+    /// (`fx.lightning`) are the renderer's to adopt; this copy only voices the thunder.
+    pub sky: crate::sky::Sky,
+    /// The stream the sky's `Rand_Rand` draws come from. *Deviation*: the game draws them from
+    /// the shared `Rand_Rand` stream inside `Game_Draw`; the port keeps them off the sim's stream
+    /// (`rng`) so the AI's draw order is untouched — the thunder's timing is random either way.
+    pub sky_rng: Rng,
     /// The mines (placement 0xFE → `Mine_Create` 0x17ce28, class 0x4B; crate::worldobj::Mine —
     /// the floating laser tripbombs, 07000015's nine `Tripbomb_3rd_*` cels). Created in
     /// `attach_level`, ticked in `tick` (the bob + the contact explode).
@@ -12307,6 +12315,8 @@ impl Drones {
             worldobjs: Default::default(),
             // fix-world-fx: the presentation FX.
             fx: Default::default(),
+            sky: Default::default(),
+            sky_rng: Rng::new(0x1e5a_d0),
             // level-15-interactables: the mines.
             mines: Vec::new(),
             pending_world_impacts: Vec::new(),
@@ -12823,6 +12833,8 @@ impl Drones {
         // The presentation FX (0x21/0xe3/0xd4/0x4a/0xf2 placements, fix-world-fx): the same
         // placement-order walk `parsemap_create_dynamic_objects` 0x1d04f0 runs.
         self.fx = crate::world_fx::WorldFx::attach_level(level, level_hash);
+        // The sky slots (type 0x2A, `View_AddSkyObj` 0x1e79a0) for the lightning/thunder timers.
+        self.sky = level.main_map().map_or_else(Default::default, |m| crate::sky::Sky::from_placements(&level.maps[m].placements));
         // The SpaceMissiles (0700001b): the kind-0x39 placements, the same placement walk
         // `parsemap_create_dynamic_objects` 0x1d04f0 runs for the dynamic creators [M 0x1d1b68].
         self.space_missiles.clear();
@@ -15836,9 +15848,21 @@ fn segment_hits_sphere(a: V3, b: V3, c: V3, r: f32) -> bool {
             self.hold_active = false;
             // Dev-only: a script's event 5 during a held tick is not kept (the hold already freezes them).
             self.npc_enabled = true;
+            self.sky_frame();
             return;
         }
         self.tick_inner(d, player);
+        self.sky_frame();
+    }
+
+    /// The frame's `View_DrawSky` pair (Game_Draw, after the update): the thunder countdowns —
+    /// a 2-D `Sound_Play(100, 0x5d)` (0x5e after a reflicker roll) when one leaves 1
+    /// [M 0x1e5ad0:100-109]. Only slots with a flash variant run the timers (0700000a/0700000b's
+    /// slot 3 on the disc [D]).
+    fn sky_frame(&mut self) {
+        for th in self.sky.frame_thunder(0, false, &mut self.sky_rng) {
+            self.audio.play(th.id());
+        }
     }
 
     /// `NDrone2_FindOpponent` 0x1424e0's team-2 arm, per tick (the ControlSTANDARD 0x1490f0:167

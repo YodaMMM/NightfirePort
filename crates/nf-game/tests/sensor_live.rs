@@ -207,3 +207,60 @@ fn sensors_hum_and_the_tracking_one_beeps() {
     assert!(beeps164 >= 5, "the tracking sensor beeps (alert + every ≤ 0.5 s): {beeps164}");
     assert_eq!(beeps172, 0, "sister: sensor 172 never sees Bond, never beeps");
 }
+
+/// The thunder [M View_DrawSky 0x1e5ad0:100-158]: 0700000b's sky slot 3 is a flash variant
+/// (interval 30 s, flash 10 ticks [D placement params]); over a long run the sim plays the 2-D
+/// thunder 0x5D (or 0x5E after a reflicker roll) a short delay after each flash start — 10 ticks
+/// for a reflicker, 30..150 ticks (FRAME_RATE·0.5 + Rand(2·FRAME_RATE)) otherwise. Sister: a
+/// level whose sky has no flash variant (0700000c [D]) never thunders over the same run.
+#[test]
+fn the_lightning_slot_thunders_and_a_still_sky_does_not() {
+    let Some(l) = Level0b::load() else { eprintln!("skip: NF_ISO not set"); return };
+    let d = l.data();
+    let mut rng = Rng::new(0x1234_5678);
+    let mut lights = nf_game::light::LightList::default();
+    let drones = nf_game::drone::level_drones(&d, &l.level, &mut rng, &mut lights);
+    let mut sim = Drones::new(drones, rng);
+    sim.attach_level_id(&l.level, 0x0700_000b);
+    sim.npc_enabled = false;
+    let s3 = sim.sky.slots[3];
+    assert!(s3.flash_glist != 0 && s3.interval == 1800 && s3.flash_len == 10 && s3.skyid == 0,
+        "0700000b slot 3: flash variant, 30·60 interval, 10-tick flash, group 0 [D]: {s3:?}");
+    let bond = Player { pos: [40.0, 30.0, 40.0], sph: [40.0, 30.9, 40.0], target: [40.0, 30.0, 40.0], ..Default::default() };
+    let mut flash_starts = Vec::new();
+    let mut thunders = Vec::new();
+    let mut was_flashing = false;
+    for t in 0..8000u32 {
+        sim.tick(&d, &bond);
+        let flashing = sim.sky.slots[3].flash > 0;
+        if flashing && !was_flashing { flash_starts.push(t); }
+        was_flashing = flashing;
+        sim.audio.update(None, ([0.0; 3], [1.0, 0.0, 0.0], [0.0, 1.0, 0.0], [0.0, 0.0, 1.0]), &|_| true);
+        for c in sim.audio.take_commands() {
+            if let nf_game::sound::Cmd::Start { id, pos, .. } = c {
+                if id == 0x5d || id == 0x5e {
+                    assert!(pos.is_none(), "the thunder is 2-D (`Sound_Play`)");
+                    thunders.push((t, id));
+                }
+            }
+        }
+    }
+    assert!(thunders.len() >= 2, "several storms in 8000 ticks: {thunders:?} (flashes {flash_starts:?})");
+    for &(t, id) in &thunders {
+        let start = *flash_starts.iter().filter(|&&f| f <= t).last().expect("a flash before every thunder");
+        let lag = t - start;
+        if id == 0x5e { assert_eq!(lag, 10, "reflicker thunder: FRAME_RATE/6 = 10 ticks after the flash start"); }
+        else { assert!((30..=150).contains(&lag), "thunder {lag} ticks after the flash start (30..150)"); }
+    }
+
+    // Sister: 0700000c's sky (no flash-variant placement [D]) — the same frames, no thunder.
+    let iso = IsoImage::open(std::env::var_os("NF_ISO").unwrap()).unwrap();
+    let (entries, bin) = disc::files_bin_entries(&iso).unwrap();
+    let fe = entries.iter().find(|e| e.name.eq_ignore_ascii_case("0700000c.bin")).unwrap();
+    let data = iso.read_bytes(bin.lba as u64 * 2048 + fe.offset as u64, fe.size as u64).unwrap();
+    let lc = Level::parse(&data).unwrap();
+    let mut sky = nf_game::sky::Sky::from_placements(&lc.maps[lc.main_map().unwrap()].placements);
+    let mut r = Rng::new(7);
+    let quiet: usize = (0..8000).map(|_| sky.frame_thunder(0, false, &mut r).len()).sum();
+    assert_eq!(quiet, 0, "a sky without a flash variant never thunders");
+}
