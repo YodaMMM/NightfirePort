@@ -86,7 +86,7 @@ fn probe_the_frame_path_per_level() {
             let mut agg: Vec<(&str, f64)> = Vec::new();
             for (nm, ns) in &ts { match agg.iter_mut().find(|e| e.0 == *nm) { Some(e) => e.1 += *ns as f64 / 1e6 / 32.0, None => agg.push((nm, *ns as f64 / 1e6 / 32.0)) } }
             agg.sort_by(|a, b| b.1.partial_cmp(&a.1).unwrap());
-            let top: Vec<String> = agg.iter().take(8).map(|(n, v)| format!("{n}={v:.3}")).collect();
+            let top: Vec<String> = agg.iter().take(16).map(|(n, v)| format!("{n}={v:.3}")).collect();
             eprintln!("[probe-tick] {name} {}", top.join(" "));
         }
         let t = 152.0f32;

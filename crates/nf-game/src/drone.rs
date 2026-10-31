@@ -5796,7 +5796,9 @@ impl Drone {
         // AbseilDeath's feet probe [M 0x169b28 case 3]; the death-drift 0x156008 is the astronaut's
         // own move). The port's `bounded` stands for & 0x20; gravity always runs when bounded — the
         // old `corpse` short-circuit here froze shot abseilers on the rope.
+        let pf = crate::prof::scope("ch: feet ray");
         let on_surface = self.feet_on_point(world);
+        drop(pf);
         self.on_surface = on_surface.is_some();
         if let Some(floor) = on_surface {
             // The ride (994): `Drone_FeetOnPoint` 0x140660:134-153 calls `Control_InheritVelocity`
@@ -5815,7 +5817,10 @@ impl Drone {
             let hip = self.hip();
             let from = [self.pos[0], self.pos[1], self.pos[2]];
             let to = [self.pos[0], self.pos[1] - (hip + 0.6), self.pos[2]];
-            if let Some(g) = world.ground_motion(from, to) {
+            let pg = crate::prof::scope("ch: ground_motion");
+            let gm = world.ground_motion(from, to);
+            drop(pg);
+            if let Some(g) = gm {
                 let p = self.pos;
                 let (sn, cs) = g.turn.sin_cos();
                 let (x, z) = (p[0] + g.delta[0] - g.pivot[0], p[2] + g.delta[2] - g.pivot[2]);
@@ -18394,6 +18399,8 @@ fn segment_hits_sphere(a: V3, b: V3, c: V3, r: f32) -> bool {
                 dr.set_state(next_ai);
                 if done_msg != 0 || next_ai != 0 { dr.send(d, rng, frame, done_msg); }
             }
+            drop(_pa);
+            let _pt = crate::prof::scope("drone: anim events + sounds");
             // `DroneAnim_EventFunc` datum 1 (the grenade-throw release): `DroneWeap_ThrowGrenade` creates a
             // projectile (WORKLOG 0080). rocket-sound-leak: the 0x5EF this used to play here is a LOOPED
             // id ([L ACTION.ELF SFXOutputData entry 0x5ef: looped 1, weight 0]) entered fire-and-forget —
@@ -18480,6 +18487,7 @@ fn segment_hits_sphere(a: V3, b: V3, c: V3, r: f32) -> bool {
             for mut p in dr.drops.drain(..) { p.from = Some(index); self.pickups.push(p); }
             // `Drone_CollisionHandler` (0x140968, WORKLOG 0078): the feet-sphere down-ray + gravity, before the
             // AI-boundary push-out (the game's `AINetwork_GetBoundsPushVectorForSphere` runs last in the handler).
+            drop(_pt);
             { let _p = crate::prof::scope("drone: collision_handler"); dr.abseil_move(); dr.collision_handler(d.world); }
             // `NDrone2_Collision` 0x140e90:170-172: the feet sphere (r 0.4, mask drone+0xba4) is pushed
             // out of the AI-network boundaries — `AINetwork_GetBoundsPushVectorForSphere` 0x157bd0
