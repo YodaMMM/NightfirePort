@@ -16,3 +16,10 @@
   locks/monitors/fuseboxes/SimpleScripts — matches the 2026-10-17 table. Two unpinned pickup-kind
   behaviours added to interactables_07000004_live.rs: the state-2 respawn re-arm (60·2·10 = 1200
   ticks [M 0x18e148:182-189; D uzi param 5 = 2]) and the armour-cap refusal [M 0x18e650:220-225].
+
+- 19:57 UTC: the armour-refusal test caught test-design exposure, not a port gap — the take log
+  [NF_PICKUPLOG=1] shows Some(Armour): the assassination target (3.5 units from the post-settle
+  stand) drops the poked +0x8B0 below 50 with his rounds during the walk, so the take legitimately
+  grants [M 0x18e650:220 reads the live armour]. Fix: the kill through the real fire path first
+  (the mission's own step), then the refusal holds. interactables_07000004_live: 4/4 green
+  (2 lamps + uzi respawn re-arm + armour-cap refusal).

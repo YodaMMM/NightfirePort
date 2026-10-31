@@ -233,11 +233,25 @@ fn the_uzi_respawn_rearms_after_the_state2_wait() {
 /// stays visible and takeable — and otherwise hard-sets 50.0. Bond arrives with the cap poked
 /// (the stand-in for a campaign's carried armour): the walk-over must be refused. Then the cap
 /// cleared, the SAME standing contact takes it (respawn 0 → deleted [M :338-341]) — the paired
-/// sister proving the refusal was the cap arm and not a dead walker.
+/// sister proving the refusal was the cap arm and not a dead walker. The assassination target
+/// (0x0F #1, 3.5 units from the post-settle stand [D (−2.64, 5.50, 30.08)]) is killed through the
+/// real fire path FIRST — his rounds would drop the poked armour and the take would legitimately
+/// grant (the take reads the live `+0x8B0` [M 0x18e650:220]).
 #[test]
 fn the_armour_refuses_the_take_at_the_cap_then_takes() {
     let iso = iso();
     let mut w = load_ready(&iso);
+    // The target dies to the real fire path (the mission's own step — his death raises ch 0x54
+    // [M DroneFunc_SetDeathChannel 0x13e660]); the wait lets his in-flight rounds land before the
+    // poke, so nothing damages Bond during the armour beats.
+    let target_i = w.scene.sim.as_ref().unwrap().drones.list.iter()
+        .position(|d| d.skin == 0x0500_001e).expect("the target drone exists");
+    w.shoot(target_i, "the target");
+    for _ in 0..900u32 {
+        w.tick(Default::default(), false);
+        if w.scene.sim.as_ref().unwrap().drones.channels.on(0x54) { break; }
+    }
+    assert!(w.scene.sim.as_ref().unwrap().drones.channels.on(0x54), "the kill raised ch 0x54 [M 0x13e660]");
     let at = w.scene.sim.as_ref().unwrap().drones.pickups.iter()
         .find(|p| p.kind == 3 && !p.gone).map(|p| p.start)
         .expect("the BodyArmourHeavy pickup #9 [D]");
