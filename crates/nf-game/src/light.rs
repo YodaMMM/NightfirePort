@@ -242,13 +242,35 @@ pub struct ResolvedLight {
 }
 
 impl ResolvedLights {
+    /// Bit-for-bit equality of two resolved lists (every field, f32s by their bits): two equal
+    /// lists give every `closest`/`pick2` query the same answer, so a renderer may reuse picks
+    /// computed against either.
+    pub fn same_bits(&self, other: &ResolvedLights) -> bool {
+        let b4 = |a: &[f32; 4], b: &[f32; 4]| a.iter().zip(b).all(|(x, y)| x.to_bits() == y.to_bits());
+        self.lights.len() == other.lights.len() && self.lights.iter().zip(&other.lights).all(|(a, b)| {
+            b4(&a.pos, &b.pos) && b4(&a.track_pos, &b.track_pos)
+                && a.rgb.iter().zip(&b.rgb).all(|(x, y)| x.to_bits() == y.to_bits())
+                && a.intensity.to_bits() == b.intensity.to_bits() && a.inv_r2.to_bits() == b.inv_r2.to_bits()
+                && a.kind == b.kind && a.active == b.active && a.track == b.track
+        })
+    }
+
     /// `Lights_CalcClosestLights` 0x1cb2e0: the accepted light indices with their falloffs,
     /// sorted ascending by the falloff (the comparator at 0x1d3350), max 30 entries.
     /// `sphere` = (x, y, z, radius); `flags` = the object's display flags word (obj+0xF0 /
     /// cel+0x94). Ties keep the list order ([S] the game's QuickSort is not stable; a tie needs
     /// equal falloffs).
     pub fn closest(&self, sphere: [f32; 4], flags: u32) -> Vec<(usize, f32)> {
-        let mut out: Vec<(usize, f32)> = Vec::new();
+        let mut buf = [(0usize, 0.0f32); 30];
+        let n = self.closest_into(sphere, flags, &mut buf);
+        buf[..n].to_vec()
+    }
+
+    /// `closest` into a fixed 30-entry buffer (the walk's cap): the same accepted entries in the
+    /// same order, sorted by the same comparator, without a heap allocation per call. Returns the
+    /// accepted count.
+    pub fn closest_into(&self, sphere: [f32; 4], flags: u32, buf: &mut [(usize, f32); 30]) -> usize {
+        let mut n = 0usize;
         for (i, l) in self.lights.iter().enumerate() {
             if !l.active { continue; }
             // Kind 2 measures against the LIVE tracked position (the spot object); every upload reads
@@ -280,15 +302,16 @@ impl ResolvedLights {
             };
             // The falloff `d / (radius · 0.5)` [M 0x1cb448/0x1cb44c]; radius = 1/sqrt(inv_r2).
             let radius = l.inv_r2.recip().sqrt();
-            out.push((i, d / (radius * 0.5)));
+            buf[n] = (i, d / (radius * 0.5));
+            n += 1;
             // The walk stops once 30 are accepted (`0x1d < count` [M 0x1cb2e0:68]).
-            if out.len() >= 30 { break; }
+            if n >= 30 { break; }
         }
         // The game orders the list with `QuickSort` 0x1d30a8 (comparator 0x1d3350 on light+0x38), whose
         // byte-wise element exchange is `Swap` 0x1d3518 [M — Swap's only caller]; `sort_by` is the port's
         // QuickSort+Swap.
-        out.sort_by(|a, b| a.1.partial_cmp(&b.1).unwrap_or(std::cmp::Ordering::Equal));
-        out
+        buf[..n].sort_by(|a, b| a.1.partial_cmp(&b.1).unwrap_or(std::cmp::Ordering::Equal));
+        n
     }
 
     /// `psiLight_SetLights` 0x10e588: at most the two closest lights as
@@ -298,7 +321,9 @@ impl ResolvedLights {
     pub fn pick2(&self, sphere: [f32; 4], flags: u32) -> ([[f32; 4]; 2], [[f32; 4]; 2]) {
         let mut lp = [[0.0f32; 4]; 2];
         let mut lc = [[0.0f32; 4]; 2];
-        for (slot, (i, _falloff)) in self.closest(sphere, flags).into_iter().take(2).enumerate() {
+        let mut buf = [(0usize, 0.0f32); 30];
+        let n = self.closest_into(sphere, flags, &mut buf);
+        for (slot, &(i, _falloff)) in buf[..n].iter().take(2).enumerate() {
             let l = &self.lights[i];
             lp[slot] = l.pos;
             // The kind-2 intensity uses the RAW 2D distance from the LIVE spot [M 0x1cb400], not the falloff.

@@ -5570,7 +5570,11 @@ impl App {
                     // Culling applies to map geometry only — characters, doors, pickups and props are never room-culled; only the
                     // World draws take the room/portal cull (render()).
                     let fp_pal = std::time::Instant::now();
-                    let new = self.scene.skin_palette(&g.renderer.skin_layout, self.choice, self.anim_time, self.opts, None);
+                    // perf-240: the tick before last's buffers are refilled (skin_palette_into overwrites
+                    // them whole) instead of a fresh ~1 MB allocation every tick.
+                    let (mut np, mut nc) = self.pal_prev.take().unwrap_or_default();
+                    self.scene.skin_palette_into(&g.renderer.skin_layout, self.choice, self.anim_time, self.opts, None, &mut np, &mut nc);
+                    let new = (np, nc);
                     frame_part(3, fp_pal.elapsed());
                     g.renderer.char_light_centre = self.scene.char_light_centres();
                     self.pal_prev = self.pal_cur.take();

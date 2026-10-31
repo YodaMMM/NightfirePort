@@ -383,6 +383,26 @@ pub struct Renderer {
     /// picks the ≤2 closest within the draw's bounding sphere (`Lights_CalcClosestLights`
     /// 0x1cb2e0 / `psiLight_SetLights` 0x10e588) into the draw's uniform slot.
     pub lights: nf_game::light::ResolvedLights,
+    /// The light-pick memo (perf-240): per draw (index = draw, the last slot = the eye's own
+    /// snow-pass pick) the query `(sphere bits, flags)` and its `pick2` answer, valid while the
+    /// entry's generation matches `light_memo_gen`. The generation advances whenever `lights`
+    /// differs bit-for-bit from `light_memo_lights` (the list the memo was computed against), so a
+    /// hit returns exactly what `pick2` would: same list, same query. Between sim ticks the lights
+    /// do not change, and a static draw's query never does.
+    light_memo: Vec<(u32, [u32; 5], [[f32; 4]; 4])>,
+    light_memo_gen: u32,
+    light_memo_lights: nf_game::light::ResolvedLights,
+    /// The near-LOS rescue's per-cell ray memo (`scene::near_los_rescue_memo`) and the collision
+    /// world it belongs to (address, static triangle count).
+    los_memo: Vec<Option<([u32; 3], bool)>>,
+    los_memo_world: (usize, usize),
+    /// perf-240: per draw, whether its centre bits are in `destroy_wreck_all` (`wreck_of_src` = the
+    /// set it was computed from — recomputed if that set changes), and the frame's
+    /// `destroy_dead` sorted for a binary search. The per-World-draw linear scans of both sets
+    /// ran every frame on the levels with wrecks.
+    wreck_of: Vec<bool>,
+    wreck_of_src: Vec<[u32; 3]>,
+    dead_sorted: Vec<[u32; 3]>,
     /// The target's width / height: the movie plane keeps the game's 4:3 screen centred in it (every movie and the
     /// loading picture fill the PS2's 4:3 picture [M DecodeBGFMVFrame 0x108550 — 512×448 centred]; stretched to a
     /// 16:9 window they were a third too wide). 0 = fill the target.
@@ -760,7 +780,7 @@ impl Renderer {
             for ch in &cel_graph.chains { for &c in ch { if (c as usize) < n { reached[c as usize] = true; } } }
             reached.iter().map(|r| !r).collect()
         };
-        Renderer { shard_pipeline, shard_vbuf, shard_groups: Vec::new(), woman_tex, snow_pipeline, snow_vbuf, snow_bg, hud_pipeline, hud_add_pipeline, hud_sub_pipeline, hud_vbuf, hud_bgs, pipelines, fog, notex, nofog, uniform, uniform_bg, staged: Vec::new(), orphan_nodes, destroy_dead: Vec::new(), destroy_wreck_draw: Vec::new(), destroy_wreck_all: scene.destroy_wrecks.iter().map(|(c, _)| c.map(f32::to_bits)).collect(), destroy_tint: Vec::new(), batch, vbuf, skin_buf, snow_skin, pal_buf, col_buf, wts_buf, mtg_buf, skin_layout, skin_pos: Default::default(), char_light_centre: Vec::new(), lights: Default::default(), screen_aspect: 0.0, ibuf, tex_bgs, tex_frames, draws, order: Vec::with_capacity(order_cap), cel_boxes, cel_graph, viewer_cel: Default::default(), last_vis: None, last_cell_vis: None, movie_tex: None, movie_bg: None, movie_size: None, movie_vbuf, hud_tbgl: tbgl, hud_sampler: sampler }
+        Renderer { shard_pipeline, shard_vbuf, shard_groups: Vec::new(), woman_tex, snow_pipeline, snow_vbuf, snow_bg, hud_pipeline, hud_add_pipeline, hud_sub_pipeline, hud_vbuf, hud_bgs, pipelines, fog, notex, nofog, uniform, uniform_bg, staged: Vec::new(), orphan_nodes, destroy_dead: Vec::new(), destroy_wreck_draw: Vec::new(), destroy_wreck_all: scene.destroy_wrecks.iter().map(|(c, _)| c.map(f32::to_bits)).collect(), destroy_tint: Vec::new(), batch, vbuf, skin_buf, snow_skin, pal_buf, col_buf, wts_buf, mtg_buf, skin_layout, skin_pos: Default::default(), char_light_centre: Vec::new(), lights: Default::default(), light_memo: Vec::new(), light_memo_gen: 1, light_memo_lights: Default::default(), los_memo: Vec::new(), los_memo_world: (0, 0), wreck_of: Vec::new(), wreck_of_src: Vec::new(), dead_sorted: Vec::new(), screen_aspect: 0.0, ibuf, tex_bgs, tex_frames, draws, order: Vec::with_capacity(order_cap), cel_boxes, cel_graph, viewer_cel: Default::default(), last_vis: None, last_cell_vis: None, movie_tex: None, movie_bg: None, movie_size: None, movie_vbuf, hud_tbgl: tbgl, hud_sampler: sampler }
     }
 
     /// The game's depth-0 pyramid for the walk [M `Vision_Calculate_View_Fustrum` 0x1e7df8,
@@ -803,19 +823,31 @@ impl Renderer {
         let (cell_vis, strict_vis) = if portal_enabled && !self.cel_graph.portals.is_empty() {
             let depth0 = Self::depth0_game(&planes, eye);
             let sides = [planes[0], planes[1], planes[2], planes[3]];
-            match crate::scene::eye_cell(&self.cel_graph, &mut self.viewer_cel, eye, world) {
+            let pe = nf_game::prof::scope("vis: eye cell");
+            let eye_cell = crate::scene::eye_cell(&self.cel_graph, &mut self.viewer_cel, eye, world);
+            drop(pe);
+            match eye_cell {
                 Some(cell) => {
+                    let pw = nf_game::prof::scope("vis: game walk");
                     let mut game = crate::scene::portal_visible_cels_game_from_cell_doors(&self.cel_graph, cell, eye, &depth0, &sides, doors);
+                    drop(pw);
+                    let _pr = nf_game::prof::scope("vis: rescue");
                     // fix-portal-sweep: the near-LOS rescue (scene::near_los_rescue) — the game-mask
                     // pass restores the near unoccluded generics the walk drops where the port's
                     // per-cel attribution approximation (the FindCel 0x1c8cb0 tie-break input)
                     // disagrees with the game's. No-op without a collision world.
                     if let (Some(m), Some(w)) = (game.as_mut(), world) {
-                        let rescued = crate::scene::near_los_rescue(&self.cel_graph, m, eye, &sides, w, 30.0);
+                        // perf-240: the rescue's rays memoised per cell while the eye stays put (one
+                        // memo per collision world: a new world — another level — starts it over).
+                        let wkey = (w as *const nf_game::world::CollisionWorld as usize, w.triangle_count());
+                        if self.los_memo_world != wkey { self.los_memo.clear(); self.los_memo_world = wkey; }
+                        let rescued = crate::scene::near_los_rescue_memo(&self.cel_graph, m, eye, &sides, w, 30.0, &mut self.los_memo);
                         if rescued > 0 && std::env::var_os("NF_PORTAL_DEBUG").is_some() {
                             eprintln!("[rescue] eye cell {cell}: {rescued} near cels restored");
                         }
                     }
+                    drop(_pr);
+                    let _ps = nf_game::prof::scope("vis: strict walk");
                     (game, crate::scene::portal_visible_cels_from_cell_doors(&self.cel_graph, cell, eye, &depth0, doors))
                 }
                 None => (None, None),
@@ -843,6 +875,9 @@ impl Renderer {
         self.last_vis = Some(vis.clone());
         Some(vis)
     }
+
+    /// The last `render`'s submitted draw count (measurement aid).
+    pub fn order_len(&self) -> usize { self.order.len() }
 
     /// G-043: upload one frame's skinning palette and colour table (replaces re-uploading every posed vertex).
     /// `vis`: the frame's room visibility mask (see `Scene::skin_palette`).
@@ -1035,10 +1070,18 @@ impl Renderer {
             // frame-240: the cull runs BEFORE the sort and the uniform staging, so the per-frame
             // work (light picks, uniform slots, the sort) scales with the submitted draws, not with
             // every draw the level owns (the effect pools alone are thousands of parked slots).
+            if self.wreck_of.len() != self.draws.len() || self.wreck_of_src != self.destroy_wreck_all {
+                self.wreck_of = self.draws.iter().map(|dc| dc.layer == Layer::World && self.destroy_wreck_all.contains(&dc.centre.map(f32::to_bits))).collect();
+                self.wreck_of_src = self.destroy_wreck_all.clone();
+            }
+            self.dead_sorted.clear();
+            self.dead_sorted.extend_from_slice(&self.destroy_dead);
+            self.dead_sorted.sort_unstable();
+            let wreck_of = &self.wreck_of;
             let draws = &self.draws;
             // The destroyed-glist swap's draw side (see the field doc): a dead Destroy leaf's
             // materials — matched by the build-time centre bits — drop out of the frame.
-            let destroy_dead = &self.destroy_dead;
+            let destroy_dead = &self.dead_sorted;
             // The swap's wreck side: a baked wreck draw renders only while its leaf is dead (see
             // the field docs — before the smash the object's live glist is the intact one).
             let wreck_all = &self.destroy_wreck_all;
@@ -1048,9 +1091,8 @@ impl Renderer {
             self.order.extend(draws.iter().enumerate().filter(|&(k, dc)| {
                 if skip.contains(&k) { return false; }
                 if !destroy_dead.is_empty() && dc.layer == Layer::World
-                    && destroy_dead.contains(&dc.centre.map(f32::to_bits)) { return false; }
-                if !wreck_all.is_empty() && dc.layer == Layer::World
-                    && wreck_all.contains(&dc.centre.map(f32::to_bits))
+                    && destroy_dead.binary_search(&dc.centre.map(f32::to_bits)).is_ok() { return false; }
+                if !wreck_all.is_empty() && wreck_of[k]
                     && !wreck_draw.contains(&dc.centre.map(f32::to_bits)) { return false; }
                 // perf-240: a skinned draw whose owner slot holds the FAR park matrix (an empty effect /
                 // projectile pool slot, a room-culled character — `skin_palette`'s FAR: zero 3×3,
@@ -1145,11 +1187,28 @@ impl Renderer {
                 }
                 for c in 0..4 { staged[c * 4..c * 4 + 4].copy_from_slice(&view_proj[c]); staged[16 + c * 4..20 + c * 4].copy_from_slice(&view_proj_rot[c]); }
                 staged[32..40].copy_from_slice(&extra);
+                // perf-240: the light-pick memo (see the field doc) — invalidated when the list changed.
+                if !self.lights.same_bits(&self.light_memo_lights) {
+                    self.light_memo_gen = self.light_memo_gen.wrapping_add(1).max(1);
+                    self.light_memo_lights = self.lights.clone();
+                }
+                if self.light_memo.len() != self.draws.len() + 1 { self.light_memo = vec![(0, [0; 5], [[0.0; 4]; 4]); self.draws.len() + 1]; }
+                let (lights, memo, gen) = (&self.lights, &mut self.light_memo, self.light_memo_gen);
+                let mut pick = |slot: usize, sphere: [f32; 4], flags: u32| -> ([[f32; 4]; 2], [[f32; 4]; 2]) {
+                    let key = [sphere[0].to_bits(), sphere[1].to_bits(), sphere[2].to_bits(), sphere[3].to_bits(), flags];
+                    let e = &mut memo[slot];
+                    if e.0 != gen || e.1 != key {
+                        let (lp, lc) = lights.pick2(sphere, flags);
+                        *e = (gen, key, [lp[0], lp[1], lc[0], lc[1]]);
+                    }
+                    ([e.2[0], e.2[1]], [e.2[2], e.2[3]])
+                };
+                let eye_slot = self.draws.len();
                 {
                     let s = &mut staged[HEAD..HEAD + SLOT];
                     // batch-draws: slot 0 (the snow pass) samples the snow texture from the array.
                     s[17] = self.batch.as_ref().map_or(0.0, |b| b.snow_tex as f32);
-                    let (lp, lc) = self.lights.pick2([eye[0], eye[1], eye[2], 2.0], 0x80);
+                    let (lp, lc) = pick(eye_slot, [eye[0], eye[1], eye[2], 2.0], 0x80);
                     for (i, v) in lp.iter().chain(lc.iter()).enumerate() { s[i * 4..i * 4 + 4].copy_from_slice(v); }
                 }
                 let skin_pos = self.skin_pos.borrow();
@@ -1170,7 +1229,7 @@ impl Renderer {
                     // radius 2.0 [M 0x1e7908:28-36]. The hands and gun sit at the eye either way — the
                     // pick centres on the eye, radius 2.0, with the draw's own flags word.
                     if dc.node == crate::scene::VIEW_MODEL_NODE && dc.layer != Layer::World {
-                        let (lp, lc) = self.lights.pick2([eye[0], eye[1], eye[2], 2.0], dc.lflags as u32);
+                        let (lp, lc) = pick(k, [eye[0], eye[1], eye[2], 2.0], dc.lflags as u32);
                         for (i, v) in lp.iter().chain(lc.iter()).enumerate() { s[i * 4..i * 4 + 4].copy_from_slice(v); }
                         continue;
                     }
@@ -1195,7 +1254,7 @@ impl Renderer {
                         }
                         None => dc.centre,
                     };
-                    let (lp, lc) = self.lights.pick2([centre[0], centre[1], centre[2], dc.radius], dc.lflags as u32);
+                    let (lp, lc) = pick(k, [centre[0], centre[1], centre[2], dc.radius], dc.lflags as u32);
                     for (i, v) in lp.iter().chain(lc.iter()).enumerate() { s[i * 4..i * 4 + 4].copy_from_slice(v); }
                     if dc.layer == Layer::World && !self.destroy_tint.is_empty() {
                         let key = dc.centre.map(f32::to_bits);

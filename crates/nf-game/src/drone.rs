@@ -11291,7 +11291,7 @@ pub fn visible_to(player: &Player, world: &CollisionWorld, pos: V3, head: V3) ->
     let side = if l > 1e-6 { [-v[2] / l * 0.5, 0.0, v[0] / l * 0.5] } else { [0.0; 3] };
     let pts = [head, pos, [pos[0] + side[0], pos[1] + side[1], pos[2] + side[2]], [pos[0] - side[0], pos[1] - side[1], pos[2] - side[2]], [pos[0], pos[1] - 0.8, pos[2]]];
     in_view(player.eye, pos, DRONE_DRAWN_SLACK, &frustum_sides(player.aim))
-        && pts.iter().any(|&q| world.segment_bullet(player.eye, q).is_none())
+        && pts.iter().any(|&q| world.segment_bullet_clear(player.eye, q))
 }
 
 /// The spawner's own "player can see the spot" gate — the game's `Drone_PositionVisible`
@@ -11320,7 +11320,7 @@ pub fn drone_position_visible(player: &Player, world: &CollisionWorld, pos: V3) 
     let side = if l > 1e-6 { [-v[2] / l * 0.5, 0.0, v[0] / l * 0.5] } else { [0.0; 3] };
     let pts = [pos, [pos[0] + side[0], pos[1], pos[2] + side[2]], [pos[0] - side[0], pos[1], pos[2] - side[2]], [pos[0], pos[1] - 0.8, pos[2]]];
     in_view(player.eye, pos, 2.0, &frustum_sides(player.aim))
-        && pts.iter().any(|&q| world.segment_bullet(player.eye, q).is_none())        // the cel byte +0xa0
+        && pts.iter().any(|&q| world.segment_bullet_clear(player.eye, q))        // the cel byte +0xa0
         && world.segment_actor(player.eye, pos).is_none()                           // the game's 0xa27 ray
 }
 
@@ -14438,7 +14438,7 @@ fn segment_hits_sphere(a: V3, b: V3, c: V3, r: f32) -> bool {
                         // The homing LOS is the game's ONE bit-0x8 DROP trace (`Collide_LineOfSight
                         // (…, 8)` [M 0x12f358:92]) — pass-flagged hits (foliage) don't block the
                         // lock — the port's `segment_bullet`, not the flight `segment`.
-                        if d.world.segment_bullet(b.pos, dr.pos).is_some() { continue; }
+                        if !d.world.segment_bullet_clear(b.pos, dr.pos) { continue; }
                         best = Some((i, dist));
                     }
                     target = best.map(|(i, _)| i);
