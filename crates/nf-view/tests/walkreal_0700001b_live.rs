@@ -878,7 +878,7 @@ fn walk_arrival_to_drakes_defeat_on_real_health() {
         assert_eq!(sim.bond.substate, SS_ZEROG_8, "the station starts in the zero-g substate [M Player_Init 0x1910f8 :160-165]");
         assert_eq!(sim.drones.difficulty, 1, "the harness load's difficulty (GameState+0x28 = 1)");
         assert_eq!(nf_game::bullet::damage_factor(sim.level, 1), 0.6, "1b's Plr_DMod_Easy [M 0x1d3a80 case 0x700001b]");
-        assert_eq!(nf_game::drone::level_accuracy(sim.level, 1), 0.6, "1b's DroneFiring_Accuracy_Easy [M 0x1d3a80 case 0x700001b]");
+        assert_eq!(sim.tuning.DroneFiring_Accuracy_Easy, 0.6, "1b's DroneFiring_Accuracy_Easy [M 0x1d3a80 case 0x700001b]");
         let rec = &sim.weapons.records[0x6a];
         assert_eq!(f32::from_le_bytes(rec[0x0c..0x10].try_into().unwrap()), 5.0, "the astronauts' weapon 0x6a hits for 5.0 [D weapon_data +0x0c]");
     }
@@ -968,4 +968,85 @@ fn the_zero_g_float_reads_moving_while_its_thrusters_decay() {
     assert!(sim.bond.local[1] != 0.0, "the eased forward smoother never reaches 0 [M 0x192ab0:116-135]");
     assert!(sim.drones.target_motion.0, "the float still reads MOVING for the hit roll [M 0x179a48:34-41]");
     assert!(!sim.drones.target_motion.1, "the first-moved window (2 s) is long over [M 0x179a48:70-73]");
+}
+
+/// The float against the shaft's south end-wall (z −20.40 [D the_end_walls_seal_the_shaft_box])
+/// at the deck-level window (x 8, y −1.2) — real input from the level start, no position,
+/// substate or channel write. The capsule rests at −20.40 + 0.55 (the body radius [M
+/// Player_Collision 0x194df0's default arm, 0x3f0ccccd]) and the push-out keeps the tangential
+/// part of the thruster move (`pos += local·rows` [M 0x193600:284-295], then the per-triangle
+/// push along the separation [M Intersect_CylGeom 0x109da0]), so a float pressed into the wall
+/// slides along it in x and y and backs off freely. Sister: thrust straight into the wall holds
+/// Bond still at the rest line, never through the window (0.8..1.0 tall, narrower than the
+/// ~1.58 body [D]) — the hold an older walk read as a wedge while it steered at (8, −1.2, −22),
+/// a point behind the closed wall.
+#[test]
+fn the_float_slides_along_the_south_end_wall() {
+    let iso = iso();
+    let mut w = Walker::new(nf_view::load(&iso, "0700001b.bin", false).unwrap());
+    w.wait_enabled(3000, "the shuttle arrival");
+    w.wait(120);
+    assert_eq!(w.scene.sim.as_ref().unwrap().bond.substate, SS_ZEROG_8, "the station floats from the start [M Player_Init 0x1910f8 :160-165]");
+    // Body-axis thrust toward a point (the walk's `thrust_to` at a firmer gain).
+    let thrust = |sim: &nf_view::scene::Sim, at: [f32; 3]| -> Input {
+        let p = sim.bond.pos;
+        let d = [at[0] - p[0], at[1] - p[1], at[2] - p[2]];
+        let m = sim.bond.zero_g_rot;
+        let dot = |a: [f32; 3]| a[0] * d[0] + a[1] * d[1] + a[2] * d[2];
+        Input { strafe: (dot(m[0]) * 0.6).clamp(-1.0, 1.0), lift: (dot(m[1]) * 0.6).clamp(-1.0, 1.0), forward: (dot(m[2]) * 0.6).clamp(-1.0, 1.0), ..Default::default() }
+    };
+    // Yaw-steered forward thrust (turn toward the point, lift for the height).
+    let steer = |sim: &nf_view::scene::Sim, at: [f32; 3]| -> Input {
+        let p = sim.bond.pos;
+        let err = walker::wrap_pi((at[0] - p[0]).atan2(at[2] - p[2]) - sim.bond.yaw);
+        Input { turn: err.clamp(-0.08, 0.08), forward: if err.abs() < 0.35 { 1.0 } else { 0.15 },
+            lift: ((at[1] - p[1]) * 2.0).clamp(-1.0, 1.0), ..Default::default() }
+    };
+    let rest = -20.40f32 + 0.55;
+    let fly = |w: &mut Walker, at: [f32; 3], n: u32, yaw: bool| -> ([f32; 3], [f32; 3], f32) {
+        let (mut lo, mut hi) = ([f32::MAX; 3], [f32::MIN; 3]);
+        let mut last_step = 0.0f32;
+        for _ in 0..n {
+            let input = { let sim = w.scene.sim.as_ref().unwrap(); if yaw { steer(sim, at) } else { thrust(sim, at) } };
+            let p0 = w.scene.sim.as_ref().unwrap().bond.pos;
+            w.tick(input, false);
+            let p = w.scene.sim.as_ref().unwrap().bond.pos;
+            last_step = ((p[0] - p0[0]).powi(2) + (p[1] - p0[1]).powi(2) + (p[2] - p0[2]).powi(2)).sqrt();
+            for k in 0..3 { lo[k] = lo[k].min(p[k]); hi[k] = hi[k].max(p[k]); }
+        }
+        (lo, hi, last_step)
+    };
+    // The route down to the window: off the deck, under the south rails (z −8.13 / −14.25 [D]),
+    // back up into the window band at z −17.
+    for at in [[20.0f32, 0.0, 1.0], [8.0, 0.0, -1.0], [7.0, 0.0, -9.6], [7.0, -3.6, -11.5], [7.5, -3.4, -15.5], [8.0, -1.2, -17.0]] {
+        fly(&mut w, at, 700, false);
+    }
+    let p = w.scene.sim.as_ref().unwrap().bond.pos;
+    assert!((p[0] - 8.0).abs() < 0.2 && (p[1] + 1.2).abs() < 0.2 && (p[2] + 17.0).abs() < 0.2,
+        "the float reaches the window approach (8, −1.2, −17), at ({:.2},{:.2},{:.2})", p[0], p[1], p[2]);
+
+    // Sister: straight into the wall — Bond holds at the rest line, never through the window.
+    let (lo, _, step) = fly(&mut w, [8.0, -1.2, -22.0], 700, false);
+    let p = w.scene.sim.as_ref().unwrap().bond.pos;
+    assert!(lo[2] > rest - 0.01, "the end-wall holds the capsule at z {rest:.2} (min z {:.3}) [D m40 + M the body radius]", lo[2]);
+    assert!((p[2] - rest).abs() < 0.01 && step < 1e-3,
+        "sister: pressed head-on, the float rests on the wall (z {:.3}, last step {step:.5}) — the window is narrower than the body [D]", p[2]);
+
+    // Pressed in AND thrusting east: the tangential move survives the push-out.
+    let (lo, _, _) = fly(&mut w, [16.0, -1.2, -28.0], 900, false);
+    let p = w.scene.sim.as_ref().unwrap().bond.pos;
+    assert!(p[0] > 15.5 && lo[2] > rest - 0.01 && (p[2] - rest).abs() < 0.01,
+        "the float slides east along the wall (x 8 → {:.2}, z {:.3})", p[0], p[2]);
+    // West and down a little, pressed in (yaw-steered, the forward thruster into the wall).
+    let (lo, _, _) = fly(&mut w, [6.0, -1.6, -28.0], 1500, true);
+    let p = w.scene.sim.as_ref().unwrap().bond.pos;
+    assert!(p[0] < 6.3 && (p[1] + 1.6).abs() < 0.1 && lo[2] > rest - 0.01,
+        "yaw-steered, the float slides west and down along the wall to ({:.2},{:.2},{:.3})", p[0], p[1], p[2]);
+    // Up the wall face.
+    let (_, hi, _) = fly(&mut w, [8.0, 1.0, -25.0], 900, false);
+    assert!(hi[1] > 0.9, "the float rises along the wall (max y {:.2})", hi[1]);
+    // And off it.
+    fly(&mut w, [8.0, -1.2, -17.0], 900, false);
+    let p = w.scene.sim.as_ref().unwrap().bond.pos;
+    assert!(p[2] > -17.3, "the float backs off the wall freely (z {:.2})", p[2]);
 }
