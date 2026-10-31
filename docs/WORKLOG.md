@@ -15,7 +15,7 @@ the test), un-ignore the test, keep the teleport approach as documented. Branch
 Progress log:
 - 09:06 branch created from origin/master b44ac857 (sandbox reused from the level-14 session:
   repo, work/, ISO, nf-queue, cargo all present). Branch pushed with this entry.
-- 09:47 THE BLOCKER RESOLVED — the ignore note was stale; the test's own ch-0x0e end assert was
+- 09:28 THE BLOCKER RESOLVED — the ignore note was stale; the test's own ch-0x0e end assert was
   the contradiction. Trace (NF_KILL_TRACE added to Walker::shoot, env-gated, the file's
   NF_HEALTH_TRACE pattern): the walker kill enters AstronautDeath 0xbf at +130 with ch 0x0e ON
   (corpse same tick), the defeat NIS plays out, ch 0x0b lands at the NIS's t600, MissionState 6
