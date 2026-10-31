@@ -356,7 +356,8 @@ impl KeyCodes {
 /// The view draws: the keypad page's 24 controls as laid out in the level def —
 /// the digit grid, and the display label 0x10000075 bound to [`Self::display`]; when
 /// `code_shown` the hint line shows the code (`Lock_Update` case 3 binds the sprintf'd
-/// "%d%d%d%d" through Txt_BindLabel 0x2000014 + Text_AddMsg 0xb4 [M 0x1ae3d8:249-258]).
+/// code chars through Txt_BindLabel 0x2000014 — "Obtained Lock Keycode %c%c%c%c" [D USATxt] —
+/// + Text_AddMsg 0xb4 [M 0x1ae3d8:249-258]; the Drones post it as an INFO message).
 #[derive(Clone, Debug)]
 pub struct Keypad {
     /// The code being typed against (0x2a37d8..dc).
@@ -400,7 +401,7 @@ impl Keypad {
         String::from_utf8_lossy(&self.typed[..n]).into_owned()
     }
 
-    /// The Q-Worm hint line — `sprintf("%d%d%d%d", …)` bound through Txt_BindLabel 0x2000014
+    /// The revealed code's four chars — the `%c%c%c%c` arguments of label 0x2000014
     /// [M 0x1ae3d8:249-258]. Empty unless the code is revealed.
     pub fn hint(&self) -> String {
         if !self.code_shown { return String::new(); }

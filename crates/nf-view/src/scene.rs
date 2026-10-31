@@ -2315,7 +2315,25 @@ impl Sim {
     /// the missile's `obj+0x90`; `View_SetDrawInOtherViewsOnly(BLData+0x878)` keeps the rocket body
     /// out of its own view]. `None` = Bond's own view.
     pub fn view_override(&self) -> Option<([f32; 3], [f32; 3])> {
-        self.missile_cam.map(|c| (c.pos, c.dir))
+        // The security-camera view: `Monitor_Update` 0x1afcc8:155 copies the watched camera's
+        // obj+0x90 into the viewer's matrix (viewer+0x120) every tick, the viewer's own updator
+        // cleared (`Camera_SetUpdator(viewer, player, 0)` [M 0x1b0058:43]) — the view IS the
+        // camera's pose: its translation and `Mat_GetDir` (row 2).
+        self.missile_cam.map(|c| (c.pos, c.dir)).or_else(|| {
+            let s = &self.drones.sensors.list[self.sec_cam()?];
+            Some((s.pos, [s.matrix[2][0], s.matrix[2][1], s.matrix[2][2]]))
+        })
+    }
+
+    /// The security camera being watched through a monitor console (pane 16), as an index into
+    /// `drones.sensors.list` — `Monitor_Activate` 0x1b0058 → state 2 until `Monitor_Update`
+    /// 0x1afcc8's exit (crate nf-game `Monitors::viewing`). While it is up the player is disabled
+    /// (`Player_Disable(player, 0)` [M 0x1b0058:45]: BL+0x94a = 0, the player and its view-model
+    /// objects' obj+0xF0 |= 0x10 [M Player_Disable 0x195f70:14-20]), the HUD runs pane 16 with the
+    /// ammo and health panes off [M 0x1b0058:47-49] and the crosshair hidden [M
+    /// HUD_UpdateCrossHair 0x19e6d0:24].
+    pub fn sec_cam(&self) -> Option<usize> {
+        self.drones.monitors.viewing().map(|(_, si)| si).filter(|&si| si < self.drones.sensors.list.len())
     }
 
     /// mp-match-end: the host's end-of-match poll — `MP_Update` 0x184bd0 case 4's handover
@@ -2624,6 +2642,18 @@ impl Sim {
                 self.gun.switch_request = self.gun.saved_weapon;
             }
             (Default::default(), false, false, false)
+        } else { (input, trigger, reload, use_key) };
+        // The security-camera view (pane 16): the disabled player runs no input arm — only
+        // `Monitor_Update` 0x1afcc8 reads the pad, its action-0xE fresh press (mask 4) cycling to
+        // the next camera or ending the view [M :105-147]. The edge is taken here and the use
+        // key's previous state recorded, so the same press reaches nothing else this tick
+        // (`Player_Enable` 0x195498 ends with `Input_ClearAllActions` [M :74] on the exit).
+        let (mut input, trigger, reload, use_key) = if let Some((mi, _)) = self.drones.monitors.viewing() {
+            if use_key && !self.use_key_prev {
+                self.drones.monitors.cycle(mi, &self.drones.sensors);
+            }
+            self.use_key_prev = use_key;
+            (Default::default(), false, false, use_key)
         } else { (input, trigger, reload, use_key) };
         // fix-aim-raise: the aim BIT, not the raw button — a raise-script weapon defers it to the
         // raise's last tick. fix-aim-raise2: aim_gate owns the bit and the raise/lower advance+
@@ -5452,6 +5482,10 @@ impl Sim {
                     nf_game::hud_pane::MonitorNightSight::clamp_item_class(self.gun.saved_weapon);
             }
         }
+        // `HUD_UpdateSecCamPane` 0x1a1538:9-10: while pane 16 is enabled (the security-camera
+        // view) it writes viewer+0x236 = 0 every frame, after `HUD_MonitorNightSight` — the
+        // goggles' view mode is off in the camera's picture (the battery is untouched).
+        if self.sec_cam().is_some() { self.hud.goggles.mode = 0; }
         // The weapon-name timer (`HUD_UpdateAmmoPane` 0x19a7f0:212-217): while a switch request
         // differs from the current weapon (drone+0x63 vs +0x62) and the two records' +2 words
         // differ, the timer is RE-SET to FRAME_RATE (60) every pending frame — the name covers the
@@ -5524,6 +5558,19 @@ impl Sim {
             if !text.is_empty() {
                 let mut m = Msg::new(text, time);
                 m.label = label;
+                self.hud.info_msgs.push_back(m);
+            }
+        }
+        // The keycode messages (`PCQWorm_Update` 0x1aee20:24-29, `Lock_Update` 0x1ae3d8:246-257):
+        // `sprintf(Txt_BindLabel(0x2000014), KeyCodes[i][0..4])` — "Obtained Lock Keycode
+        // %c%c%c%c" [D USATxt] — posted as type 1 for 0xb4 ticks [M]; bound at post time like
+        // the label drain above.
+        for (code, time) in std::mem::take(&mut self.drones.info_codes) {
+            let args: Vec<String> = code.iter().map(|&c| (c as char).to_string()).collect();
+            let text = lang.as_ref().map(|l| l.format(0x200_0014, &args)).unwrap_or_default().trim().to_string();
+            if !text.is_empty() {
+                let mut m = Msg::new(text, time);
+                m.label = 0x200_0014;
                 self.hud.info_msgs.push_back(m);
             }
         }
@@ -10107,7 +10154,10 @@ pub fn build(level: &Level, cels_only: bool, skeletons: &HashMap<u8, Skeleton>, 
         // substate 10 cleared the anim set [M `Player_ChangeSubState(10)`, `Player_Update`
         // 0x193600:242-256; L PCSX2 "no view model, no crosshair"] — the palette collapse (the
         // port's established not-drawn state) does it, and it restores when the ride ends.
-        if self.sim.as_ref().is_some_and(|s| s.missile_cam.is_some()) {
+        // The security-camera view hides it too: `Player_Disable(player, 0)` sets the view-model
+        // object's (BL+0x7e8) obj+0xF0 bit 0x10 [M 0x195f70:17-20; caller Monitor_Activate
+        // 0x1b0058:45], cleared again by `Player_Enable` [M 0x195498:69-72].
+        if self.sim.as_ref().is_some_and(|s| s.missile_cam.is_some() || s.sec_cam().is_some()) {
             if let Some(s) = self.sim.as_ref() {
                 if let Some(&vm) = self.view_models.get(&s.gun.weapon) {
                     if let Some(h) = hidden.get_mut(vm) { *h = true; }
