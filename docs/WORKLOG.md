@@ -20,3 +20,10 @@
   walks the slot (arrived +77 ticks at (2.20, 58.07, 40.34), both walks) and hard-asserts ch 0x3F —
   no teleports. No nf-game source changed (the port's touch model already matched the decompile).
   walkreal_0700000b 3/3 (warm 15296 ticks, fresh 21056, both `stuck 0`).
+- finish (2026-10-31): merged origin/master 20624c8c clean; the final tree's touched binaries all
+  green (walkreal_0700000b 3/3, pickup_live 1/1, pickups08_live 5/5, fix_pickups_remainder 1/1,
+  interactables_0700000b 9/9, walk_0700000b 4/4, models_sweep_0700000b 2/2, walkreal_07000011_route
+  1/1). Suite (resumable foreground protocol — the sandbox kills every background job between tool
+  calls): 279/976 binaries done, 812 passed, 6 failed (3 disc_golden allowed on the slim ISO, 2 the
+  GPU-less 0c pylon pair, 1 campaign_flow_live 240 s cap), 53 ignored, 0 CRASH. Report:
+  docs/reports/level-0b-parachute-step-up.md.
