@@ -167,6 +167,21 @@ fn lerp_entry(x: &nf_formats::anim::Mat4, y: &nf_formats::anim::Mat4, t: f32) ->
     blend_pose(x, y, t)
 }
 
+/// `NF_INTERP_SHOT`'s blended palette, consumed by the next headless `shot` in place of its own.
+static SHOT_PALETTE: std::sync::Mutex<Option<Vec<nf_formats::anim::Mat4>>> = std::sync::Mutex::new(None);
+
+/// The palette entries the presented frames blend between two ticks: every entry that differs,
+/// minus `snap` — entries whose draw changed hands between the ticks (a decal pool node reused
+/// for a new hole, `Scene::decal_reused_entries`), which show the newer tick at once instead of
+/// sliding from the old thing to the new one. Pub for the headless interpolation tests.
+pub fn moving_entries(prev: &[nf_formats::anim::Mat4], cur: &[nf_formats::anim::Mat4], snap: &[u32]) -> Vec<u32> {
+    if prev.len() != cur.len() { return Vec::new(); }
+    prev.iter().zip(cur).enumerate()
+        .filter(|(i, (x, y))| x != y && !snap.contains(&(*i as u32)))
+        .map(|(i, _)| i as u32)
+        .collect()
+}
+
 /// perf-240: the per-frame blend touches only the entries that differ between the two ticks.
 /// `out` holds the newer tick's palette (set once per tick, `moving` = the differing indices);
 /// each presented frame rewrites just those (and `extra`, the view-model entries the camera
@@ -2547,6 +2562,7 @@ fn shot(scene: &scene::Scene, cam: &Camera, out: &str, choice: Option<usize>, ti
     r.destroy_tint = destroy_tints(scene);
     // Objects are never room-culled (see the live path).
     r.update_skin(&queue, scene, choice, time, opts, None);
+    if let Some(p) = SHOT_PALETTE.lock().unwrap().take() { r.upload_palette(&queue, &p); }
     r.set_char_light_centres(scene);
     r.lights = scene.frame_lights();
     r.screen_aspect = w as f32 / h as f32;
@@ -2723,6 +2739,9 @@ struct App {
     /// perf-240: the presented-frame palette (seeded per tick) and the entries that move between the two ticks.
     pal_blend: Vec<nf_formats::anim::Mat4>,
     pal_moving: Vec<u32>,
+    /// The decal pool's eviction count at the last palette rebuild — the reused pool nodes since
+    /// then snap instead of blending (`Scene::decal_reused_entries`).
+    decal_evicted: Option<u32>,
     /// The gadget-beam palette entries (`Scene::beam_entries`), refreshed when the palette is
     /// rebuilt.
     beam_entries: Vec<usize>,
@@ -5577,10 +5596,14 @@ impl App {
                     // perf-240: the entries that move between the two ticks, and the blend buffer seeded
                     // with the newer tick (every other entry blends to it).
                     self.pal_moving.clear();
+                    // A decal pool node reused for a new hole this tick shows the new hole at once
+                    // (the game rewrites the node whole [M Effect_Bullet 0x1ce9f0..0x1cea9c]); blending
+                    // it would slide the hole through mid-air from the evicted one.
+                    let evicted = self.scene.sim.as_ref().map_or(0, |s| s.drones.effects.evicted);
+                    let snap = self.scene.decal_reused_entries(&g.renderer.skin_layout, self.decal_evicted.unwrap_or(evicted));
+                    self.decal_evicted = Some(evicted);
                     if let Some((pp, _)) = &self.pal_prev {
-                        if pp.len() == new.0.len() {
-                            self.pal_moving.extend(pp.iter().zip(&new.0).enumerate().filter(|(_, (x, y))| x != y).map(|(i, _)| i as u32));
-                        }
+                        self.pal_moving.extend(moving_entries(pp, &new.0, &snap));
                     }
                     self.pal_blend.clear();
                     self.pal_blend.extend_from_slice(&new.0);
@@ -6144,6 +6167,7 @@ impl App {
             pal_cur: None,
             pal_blend: Vec::new(),
             pal_moving: Vec::new(),
+            decal_evicted: None,
             beam_entries: Vec::new(),
             fps_cap: None,
             fps_meter: FpsMeter::default(),
@@ -6731,6 +6755,9 @@ pub fn run() -> Result<()> {
                 }
             }
             let (fwd, turn) = (range("NF_FWD"), range("NF_TURN"));
+            let aim_sweep: Option<(f32, f32)> = std::env::var("NF_AIM_SWEEP").ok()
+                .and_then(|v| v.split_once(':').and_then(|(a, b)| Some((a.parse().ok()?, b.parse().ok()?))));
+            let aim0 = (sim.bond.yaw, sim.bond.pitch);
             for t in 1..=time as u32 {
                 if kill_at == Some(t) { let (h, r) = (&mut sim.drones.health, &mut sim.drones.rng); h.pain_generic(r, 500.0, 1, 0x0700_0005, 0); }
                 // Render aid (copter-script-draw): `NF_CH_AT=t:ch` sets switch channel `ch` on tick t
@@ -6783,8 +6810,23 @@ pub fn run() -> Result<()> {
                 if let Some((a, b, v)) = fwd { if (a..=b).contains(&t) { inp.forward = v; } }
                 if jump_at == Some(t) { inp.jump = true; }
                 if let Some((a, b, v)) = turn { if (a..=b).contains(&t) { inp.turn = v; } }
+                // Render aid (stairwell decals): `NF_AIM_SWEEP=yaw_span:pitch_span` spreads the `--pull`
+                // shots over a 9x5 yaw/pitch grid centred on the starting aim (each pull takes the
+                // next grid cell), then restores the starting aim before the render — the frame shows
+                // where a sprayed burst leaves its holes from one fixed view.
+                if let Some((ys, ps)) = aim_sweep {
+                    if let Some(k) = pulls.iter().position(|&p| p == t) {
+                        let (gx, gy) = ((k % 9) as f32 / 8.0 - 0.5, ((k / 9) % 5) as f32 / 4.0 - 0.5);
+                        sim.bond.yaw = aim0.0 + gx * ys;
+                        sim.bond.pitch = aim0.1 + gy * ps;
+                        // Bottomless ammo for the sweep (a long spray fills the 200-hole pool).
+                        for c in sim.drones.inventory.clip.iter_mut() { if *c == 0 { *c = 30; } }
+                        for c in sim.drones.inventory.carried.iter_mut() { *c = (*c).max(90); }
+                    }
+                }
                 if walk { sim.step_bond(inp, pulls.contains(&t), false, use_at == Some(t)); } else { sim.step([cam.pos.x, cam.pos.y, cam.pos.z], cam.dir().to_array(), pulls.contains(&t), false); }
             }
+            if aim_sweep.is_some() { sim.bond.yaw = aim0.0; sim.bond.pitch = aim0.1; }
             // With `--skip-cutscenes`, a skipped cut-scene's hand-back moves Bond: put him back on the `--bond` spot (and
             // let one tick settle) so the image pair matches the real game's placement.
             if skip_cuts {
@@ -6802,6 +6844,35 @@ pub fn run() -> Result<()> {
             if let Some(dr) = sim.drones.list.iter().find(|d| !d.shots.is_empty() || d.state != 4) {
                 eprintln!("AI: a drone in state {:#x}, {} shots, clip {}", dr.state, dr.shots.len(), dr.clip);
             }
+        }
+        // Render aid (stairwell decals): `NF_INTERP_SHOT=frac` renders a presented frame BETWEEN two
+        // ticks the way the window does (G-043): the palette of the last tick and of one more
+        // held-trigger tick, blended at `frac` through `moving_entries` + `lerp_palette_moving`
+        // (the reused decal nodes snap). Headless shots are otherwise whole-tick frames, which never
+        // show what the tick blend draws while a full decal pool keeps taking new holes.
+        if let Some(frac) = std::env::var("NF_INTERP_SHOT").ok().and_then(|v| v.parse::<f32>().ok()) {
+            let (l, _) = scene.skin_layout();
+            // The pair: the tick that hands a pool node to a new hole (the shot's flight can take a
+            // few ticks), up to 12 ticks after one more trigger press.
+            let mut ev0 = scene.sim.as_ref().map_or(0, |s| s.drones.effects.evicted);
+            let mut p0 = scene.skin_palette(&l, choice, time, opts, None).0;
+            let mut p1 = p0.clone();
+            for k in 0..12 {
+                ev0 = scene.sim.as_ref().map_or(0, |s| s.drones.effects.evicted);
+                p0 = if k == 0 { p0 } else { p1.clone() };
+                if let Some(sim) = scene.sim.as_mut() {
+                    sim.step_bond(nf_game::player::Input { fire: k == 0, ..Default::default() }, k == 0, false, false);
+                }
+                p1 = scene.skin_palette(&l, choice, time, opts, None).0;
+                if scene.sim.as_ref().map_or(0, |s| s.drones.effects.evicted) != ev0 { break; }
+            }
+            let snap = scene.decal_reused_entries(&l, ev0);
+            let moving = moving_entries(&p0, &p1, &snap);
+            let mut blended = p1.clone();
+            lerp_palette_moving(&mut blended, &p0, &p1, &moving, &[], frac);
+            eprintln!("NF_INTERP_SHOT {frac}: {} holes, evicted {ev0} -> {}, {} moving entries, {} snapped", scene.sim.as_ref().map_or(0, |s| s.drones.effects.decals.len()),
+                scene.sim.as_ref().map_or(0, |s| s.drones.effects.evicted), moving.len(), snap.len());
+            *SHOT_PALETTE.lock().unwrap() = Some(blended);
         }
         // fix-armour-ring: `--armour <n>` writes BLData+0x8b0 after the ticks (the pane's armour — the
         // same write the dev panel's armour row and cheats.py's god make every frame), so the health

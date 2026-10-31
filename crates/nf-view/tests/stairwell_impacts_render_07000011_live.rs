@@ -347,20 +347,14 @@ fn dump_the_stairwell_impacts_vs_render() {
 ///    [M Bullet_CollisionHandler 0x12ce80 0x12cf7c: `HITDATA+0x50 & 0x40 → pass`], and their
 ///    `mat & 0x3f == 0` blocks every `Effect_Create` effect including the decal [M 0x1ce6f8], so no
 ///    player-visible hole spawns there.
-/// 3. Exactly ONE visible mid-air decal remains: (23.219, 28.226, 5.772), 0.402 from the nearest
-///    drawn triangle, the third stop of the frame2944 spot's yaw +0.79 pitch −0.50 double-ricochet
-///    chain. Game-true by the ported rules: the face is in the game's own scoped candidate set
-///    ([M `Collide_Pick` 0x1eb320:125 StraddleCels-only candidates — landed this round as
-///    `segment_surface_flags_scoped`, the numbers moved 101→104 impacts while the hole stayed], its
-///    material byte is real (the decal passed the `mat & 0x3f == 0` guard [M 0x1ce6f8]), every
-///    per-hit rule of the flush matches 0x12ce80 (pass rules 0x12cee0..0x12cfb8 with the glist-0x40
-///    node flag [M 0x1ebaa8:143-145], Effect_Create flags 0x61/0x10 [M 0x12d198/0x12cf58], the
-///    explode arms gated on !pass [M 0x12d068-0x12d188], the ricochet mask 8 — the 9 variant needs
-///    node+0x3c & 0x400000, which no parsemap static node kind carries [M parseentity_fixup_entity
-///    0x1d00c0 + parsemap 0x1d1998:102 `cel+0x3c = flags & 0xffff`]), and the flight trace's
-///    HITTEST+0x98 = 0 drops nothing in Collide_Intersect [M 0x12f040, disasm 0x1ebff0-0x1ec010].
-///    A render / PCSX2 check (docs/reports/level-11-stairwell-bullet-holes-6.md "Live
-///    checks") decides the last word: the game should show the same floating hole at the repro spot.
+/// 3. Exactly ONE decal lies off the STATIC drawn mesh: (23.219, 28.226, 5.772), 0.402 from the
+///    nearest static World triangle, the third stop of the frame2944 spot's yaw +0.79 pitch −0.50
+///    double-ricochet chain. It is not in mid-air: the face it sits on is door #196's leaf
+///    (DOOR_Stairwell_1, the slide door locked by ch 200 [D], dynamic collision id door 7 — its
+///    z = 5.7816 face, the decal 0.010 off it [L stairwell_decal_probe]), and the door is drawn
+///    there (a door draw, not a static World triangle, so this measure cannot see it; a headless
+///    render from that landing shows the holes on the drawn leaf). The pin stays as the
+///    deterministic fan's fingerprint.
 #[test]
 fn every_stairwell_impact_sits_on_drawn_geometry() {
     let mut scene = load_d3();
@@ -401,7 +395,7 @@ fn every_stairwell_impact_sits_on_drawn_geometry() {
          mat {:#04x} node_pass {} is {:.3} from the nearest drawn triangle (max {HOLE_ON_SURFACE_MAX})",
         r.spot, r.yaw, r.pitch, r.p[0], r.p[1], r.p[2], r.mat, r.node_pass, d
     );
-    // (3) the single game-true fudge stop, pinned exactly (the fan is deterministic).
+    // (3) the single hole on door #196's drawn leaf (off the static mesh), pinned exactly.
     let mid_air: Vec<([f32; 3], f32)> = decals
         .iter()
         .map(|p| (*p, render.dist(*p)))
@@ -410,14 +404,14 @@ fn every_stairwell_impact_sits_on_drawn_geometry() {
     assert_eq!(
         mid_air.len(),
         1,
-        "exactly one visible mid-air decal expected (the game-true fudge stop); got {mid_air:?}"
+        "exactly one hole off the static mesh expected (the one on door #196); got {mid_air:?}"
     );
     let (p, pd) = mid_air[0];
     let want = [23.219, 28.226, 5.772];
     for k in 0..3 {
         assert!(
             (p[k] - want[k]).abs() < 0.02,
-            "the mid-air decal moved: got ({:.3},{:.3},{:.3}), pinned {want:?} — the fudge chain changed",
+            "the mid-air decal moved: got ({:.3},{:.3},{:.3}), pinned {want:?} — the ricochet chain changed",
             p[0], p[1], p[2]
         );
     }

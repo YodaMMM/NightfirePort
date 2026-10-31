@@ -20,7 +20,13 @@ normal, (0,1,0) @0x2d6210, (1,0,0) @0x2d6220)` 0x1df2a8, `pos = hit + normal·0.
 `hashtable_set_sub_object_to_entity_gfx(node, EffectInfo+4)` 0x1ce9c8. The node rides the host's
 sub-object list (static hits the cel, dynamic the obj — matrix made object-local via
 `Mat_Inverse(obj+0x90)` [M 0x1ce8a8:166-186]; the port keeps only the world-space result — no marks on
-moving hosts yet). The ricochet: weapon flag +0x10, bounces < 3, `Effect_RicochetProb` 0x1cf290's
+moving hosts yet). A node never moves: with no free node the oldest in-use node is unlinked and
+taken again [M 0x1cea20..0x1cea58], so a live hole keeps its node until that node is reused. The
+port's draw slot IS the node (`Effects::decal_in_node`: the k-th hole ever made sits in node
+k mod 200), and the window's tick blend (G-043) snaps a reused node (`Effects::
+decal_nodes_reused_since` → `Scene::decal_reused_entries` → `moving_entries`); the old Vec-index slot
+moved every live hole one slot per eviction, so with a full pool every slot slid between two holes
+through mid-air on the presented frames between ticks. The ricochet: weapon flag +0x10, bounces < 3, `Effect_RicochetProb` 0x1cf290's
 `Rand_Rand(N) & 8`, reflect by the raw-bits restitution at EffectInfo+0x1c [M 0x12d704..0x12d7b8].
 
 Casings: `Bullet_InitCasingLists` 0x12fd48 pre-creates 32 class-0x40 objects (ShellCasings 0x26f498,

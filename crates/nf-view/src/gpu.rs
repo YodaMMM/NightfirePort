@@ -854,6 +854,13 @@ impl Renderer {
         self.upload_morph_weights(queue, scene);
     }
 
+    /// A ready palette in place of the one `update_skin` built (the headless `NF_INTERP_SHOT`
+    /// render aid's between-ticks blend).
+    pub fn upload_palette(&self, queue: &wgpu::Queue, pal: &[nf_formats::anim::Mat4]) {
+        if !pal.is_empty() { queue.write_buffer(&self.pal_buf, 0, bytemuck::cast_slice(pal)); }
+        *self.skin_pos.borrow_mut() = pal.iter().map(|m| [m[3][0], m[3][1], m[3][2]]).collect();
+    }
+
     /// The shot path's companion to `update_skin` (it takes `&self`): the per-character light centres.
     pub fn set_char_light_centres(&mut self, scene: &Scene) { self.char_light_centre = scene.char_light_centres(); }
 

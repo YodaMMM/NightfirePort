@@ -9689,7 +9689,12 @@ pub fn build(level: &Level, cels_only: bool, skeletons: &HashMap<u8, Skeleton>, 
                     // 0x1df2a8 with the translation `hit + normal·0.01` stored at node+0x50 [M 0x1ce9f0]; drawn
                     // by `View_DrawObjectGlist`/`View_DrawCelGlist`'s `psiDrawObjectMatrix(node+0x10, node+0x20)`
                     // (0x1e6780/0x1e6538). No scale — the quad size lives in the mesh [M 0x1e6780:58-65].
-                    0 => match s.drones.effects.decals.get(slot) {
+                    // The slot IS the pool node (`Effects::decal_in_node`): a live hole keeps its node
+                    // for life [M 0x1cea20..0x1cea58], so the window's tick blend never carries a slot
+                    // from one hole to another (the old Vec-index slot moved every live hole one slot
+                    // per eviction — every slot slid between two holes, through mid-air, while a full
+                    // pool kept taking new holes).
+                    0 => match s.drones.effects.decal_in_node(slot) {
                         Some(d) if d.mesh == mesh => {
                             let mut m = nf_game::searchlight::align2dir(d.normal, [0.0, 1.0, 0.0], [1.0, 0.0, 0.0]);
                             m[3] = [d.pos[0], d.pos[1], d.pos[2], 1.0];
@@ -10537,6 +10542,21 @@ pub fn build(level: &Level, cels_only: bool, skeletons: &HashMap<u8, Skeleton>, 
             .map(|(k, _)| att + k).collect()
     }
 
+
+    /// The palette entries of the decal draw slots whose pool node was handed to a new hole since
+    /// the pool's eviction count was `prev_evicted` (`Effects::decal_nodes_reused_since`) — every
+    /// mesh row's slot for that node. The window shows these at the newer tick instead of blending
+    /// (`moving_entries`): a reused node is rewritten whole before it draws [M Effect_Bullet
+    /// 0x1ce9f0..0x1cea9c], it never slides from the evicted hole to the new one.
+    pub fn decal_reused_entries(&self, l: &SkinLayout, prev_evicted: u32) -> Vec<u32> {
+        let Some(s) = self.sim.as_ref() else { return Vec::new() };
+        let nodes = s.drones.effects.decal_nodes_reused_since(prev_evicted);
+        if nodes.is_empty() { return Vec::new(); }
+        self.attachments.iter().enumerate()
+            .filter(|(_, a)| matches!(a.effect, Some((0, slot, _)) if nodes.contains(&slot)))
+            .map(|(k, _)| l.attach_base + k as u32)
+            .collect()
+    }
 
     pub fn skin_palette(&self, l: &SkinLayout, choice: Option<usize>, time: f32, opts: ViewOpts, vis: Option<&[bool]>) -> (Vec<Mat4>, Vec<[f32; 4]>) {
         const FAR: Mat4 = [[0.0; 4], [0.0; 4], [0.0; 4], [0.0, -10000.0, 0.0, 1.0]];
