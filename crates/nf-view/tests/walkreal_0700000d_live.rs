@@ -226,20 +226,112 @@ fn walk_arrival_to_the_c5_door() {
     w.walk_to(Wp::new(160.0, 13.2, -265.7).r(1.2), "the catwalk west end");
     eprintln!("[0d] the catwalk walked west — at {:?}", bond_pos(&w));
 
-    // STAND-IN 1 of 2 (narrowed, documented): the catwalk's exit down to the dock bay. The
-    // catwalk is sealed at walk height: the south face wall z −266.26 runs x 156..196 [probe20
-    // southwall rays], the west end walls at x ~153.5-157, the floor slit is 2 cm, and the
-    // bay-side exits (the steps island 12.7 at z −269, the 14.7 pad x 186..192.5 over the bay's
-    // north strip) sit across the bottomless slot z −266.5..−267.5 [probe20 slot scan]. The
-    // game's own exit (likely through the building's interior — the 3.48/7.98 surfaces at x 186
-    // under the bay [probe20 interior scan] — or a roof route; the roof 18.58 carries the
-    // y ≈ 19.7 catwalk squad [D census]) is the next window's work. The stand-in drops Bond at
-    // the E-proven bay approach.
+    // THE REAL DESCENT (level-0d-last-two-standins: stand-in 1 DELETED): the catwalk's exit is
+    // the LADDER at its west end [D placement type 0x22 ladder 2: centre (155.60, 14.25, −266.18),
+    // r 4.39 — the only ladder east of x 120; the pick sphere spans y 9.86..18.64] climbing to the
+    // ROOF (18.58 [probe0d roof map]), then the roof's east band (the z −268.5 lane is open all
+    // x — the 20.19 rooftop structures start at z −269.4 [probe0d roof map + the lane's stuck
+    // dump]), the building's east lane (x 196.3, strict L around the shed's NE corner at
+    // (195.2, −269.4)), and EAST off the roof's east edge into the annex (9.42-9.45, x 197..202,
+    // z −272..−290 [probe0d floor map]) — the bay (9.53) is CONTINUOUS with the annex at
+    // z −276..−282 where the pad's east edge leaves x 196..197 open [probe0d floor map x 196:
+    // 9.53, x 197: 9.45]. The grab: the walk off the catwalk's west edge with yaw −2.5 (west-
+    // southwest) — the facing gate needs |wrap(ladder.yaw − player.yaw)| > π/2 [M Player_CollLadder
+    // 0x196118: the strict 1.5707964 < |diff|; west-facing = exactly π/2 = rejected, measured]
+    // and the fall-through crosses the ladder's pick box [M Ladder::capsule_hits_default →
+    // pick_hit: the sphere gate r·1.5 + cap, then the mesh-box prefilter + the tri refine].
+    // The climb runs to the ladder's top and lunges [M Player_Climb 0x196310: pos.y > top →
+    // +0x18 += 0.6 dismount]; the dismount is airborne north of the roof's north edge (z −267.5)
+    // — the eased yaw (ladder.yaw + π = south) carries Bond onto the roof on the hold [M the
+    // yaw ease].
+    w.lenient = true;
+    {
+        // Stand on the catwalk's west end facing west-southwest.
+        let sim = w.scene.sim.as_mut().unwrap();
+        sim.bond.pos = [157.6, 12.73, -265.6];
+        sim.bond.vel = [0.0; 3];
+        sim.bond.yaw = -2.5;
+    }
+    w.wait(5);
+    let mut grabbed = false;
+    for _ in 0..400 {
+        let sim = w.scene.sim.as_mut().unwrap();
+        sim.step_bond(nf_game::player::Input { forward: 1.0, ..Default::default() }, false, false, false);
+        w.total_ticks += 1;
+        if w.scene.sim.as_ref().unwrap().bond.substate == nf_game::player::SS_CLIMB { grabbed = true; break; }
+    }
+    assert!(grabbed, "the ladder grab must fire off the catwalk's west edge (yaw −2.5) [M 0x196118]");
+    for _ in 0..900 {
+        let sim = w.scene.sim.as_mut().unwrap();
+        sim.step_bond(nf_game::player::Input { forward: 1.0, ..Default::default() }, false, false, false);
+        w.total_ticks += 1;
+        if w.scene.sim.as_ref().unwrap().bond.substate != nf_game::player::SS_CLIMB { break; }
+    }
+    // The dismount carry south onto the roof.
+    for _ in 0..80 {
+        let sim = w.scene.sim.as_mut().unwrap();
+        sim.step_bond(nf_game::player::Input { forward: 1.0, ..Default::default() }, false, false, false);
+        w.total_ticks += 1;
+        if w.scene.sim.as_ref().unwrap().bond.grounded { break; }
+    }
+    {
+        let sim = w.scene.sim.as_ref().unwrap();
+        let p = sim.bond.pos;
+        assert!(sim.bond.grounded && p[1] > 19.0 && p[0] > 153.0 && p[0] < 158.0,
+            "the ladder must top out on the roof platform (18.58 + the pos offset), got {p:?} grounded {}", sim.bond.grounded);
+    }
+    // The roof's east band (open at z −268.5), the strict L around the shed's NE corner, the lane.
+    let _ = w.walk_to(Wp::new(158.0, 19.65, -268.7).r(1.4), "roof east a");
+    let _ = w.walk_to(Wp::new(172.0, 19.65, -268.7).r(1.4), "roof east b");
+    let _ = w.walk_to(Wp::new(190.0, 19.65, -268.7).r(1.4), "roof east c");
+    let _ = w.walk_to(Wp::new(196.3, 19.65, -269.0).r(0.4), "roof lane ne");
+    let _ = w.walk_to(Wp::new(196.3, 19.65, -280.0).r(1.2), "roof lane south");
+    {
+        let sim = w.scene.sim.as_ref().unwrap();
+        let p = sim.bond.pos;
+        assert!(p[0] > 195.0 && p[2] < -276.0 && p[2] > -282.0 && p[1] > 19.0,
+            "the lane must reach the roof's east strip at z −278..−282, got {p:?}");
+    }
+    // East off the roof's east edge into the annex: a short push clears the edge (~x 197), then
+    // the hold-input drop lands on the annex with minimal carry (a full walk's 9.1 m-fall carry
+    // overshoots the annex east into the 3.42 pit [probe0d floor map]).
     {
         let sim = w.scene.sim.as_mut().unwrap();
-        sim.bond.pos = [189.0, 10.6, -287.6];
-        sim.bond.vel = [0.0; 3];
+        sim.bond.yaw = std::f32::consts::FRAC_PI_2; // face east
     }
+    // Push off every ledge edge (the roof 18.58, an unscanned parapet at 19.44) until the
+    // annex floor (9.42-9.45) catches him.
+    for _cycle in 0..4 {
+        if w.scene.sim.as_ref().unwrap().bond.pos[1] < 12.0 && w.scene.sim.as_ref().unwrap().bond.grounded { break; }
+        for _ in 0..40 {
+            let sim = w.scene.sim.as_mut().unwrap();
+            sim.step_bond(nf_game::player::Input { forward: 1.0, ..Default::default() }, false, false, false);
+            w.total_ticks += 1;
+            if !w.scene.sim.as_ref().unwrap().bond.grounded { break; }
+        }
+        for _ in 0..160 {
+            let sim = w.scene.sim.as_mut().unwrap();
+            sim.step_bond(nf_game::player::Input::default(), false, false, false);
+            w.total_ticks += 1;
+            if w.scene.sim.as_ref().unwrap().bond.grounded { break; }
+        }
+    }
+    {
+        let sim = w.scene.sim.as_ref().unwrap();
+        let p = sim.bond.pos;
+        eprintln!("[0d] annex landed: ({:.2},{:.2},{:.2}) grounded {}", p[0], p[1], p[2], sim.bond.grounded);
+        assert!(sim.bond.grounded && p[1] > 9.8 && p[1] < 11.2,
+            "the drop must land on the annex (9.42-9.45 + the pos offset), got {p:?}");
+    }
+    let _ = w.walk_to(Wp::new(194.0, 10.6, -282.0).r(1.4), "bay enter");
+    w.lenient = false;
+    {
+        let sim = w.scene.sim.as_ref().unwrap();
+        let p = sim.bond.pos;
+        assert!(sim.bond.grounded && p[1] > 9.8 && p[1] < 11.2 && p[0] > 185.0 && p[0] < 197.0,
+            "Bond must stand on the bay/annex floor (9.42-9.53 + the pos offset), got {p:?}");
+    }
+    eprintln!("[0d] the real descent walked: the ladder, the roof, the annex, the bay — at {:?}", bond_pos(&w));
     w.wait(20);
     // The dock E, real input: the control corner E-plate #460 `Overhead Crane_touchplate`
     // (189.02, 9.72, −288.92 [D]) — the proven E (interactables_0700000d_live
@@ -258,11 +350,17 @@ fn walk_arrival_to_the_c5_door() {
     // (script 0x060009EF entities 0x0200_0a80/0x0200_0a81, origin y 11.33, z −287.11, top
     // 13.47-14.32 [probe20 shape bounds ±4.17/±2.98/±17.01]) shuttles x-only — y never changes
     // [probe20 beam watch] — so the bay floor (9.5) is 4 m under its top and the boarding
-    // surface is not the bay. The 14.7 pad (x 186..192.5, z −269..−273 [probe20]) matches the
-    // trolley's top (11.33+2.95 = 14.28 [D shape 0x0200_0a81]) but the shuttle's east limit
-    // x 177.22 never brings it under the pad; the 16.9 mezzanine (x 178..183, z −270..−283) and
-    // the roof (18.58) overhang the beam's east-extreme position — the player's boarding climb
-    // (the roof's access) is the next window's work. The stand-in covers only the ride+drop.
+    // surface is not the bay. The boarding surfaces over the beam's path: the 16.8 mezzanine
+    // (x 169..183, z −271..−283 [probe0d scans]) at the east extreme, and a 17.2 STRUCTURE at
+    // x 134..136, z −276 [probe0d west scan] over the beam's PARKED west position — but neither
+    // is reachable on the port's statics: the catwalk is sealed south (the face wall ≥ 14.2
+    // [probe0d southface rays]), the slot jump to the staircase island is blocked by that wall,
+    // the mezzanine has no roof access (the roof 18.58 lane at x 196.3 is outside the shed
+    // x 180..195.2 whose east wall stops the lane walk), the bay has no ladder (the only
+    // ladders are #0/#1 at x 212..218 and #2 at the catwalk's west end [probe0d census]) and no
+    // crates (the dock drone census: 2 guards only), and the bay's floor links (the 3.98 pit
+    // → the yard 4.0 → the 17.2 tower) need a +13.2 climb with no step/ladder evidence. The
+    // game's way needs the live check (the report's #2). The stand-in covers only the ride+drop.
     {
         let sim = w.scene.sim.as_mut().unwrap();
         sim.bond.pos = [140.0, 5.5, -276.0];
