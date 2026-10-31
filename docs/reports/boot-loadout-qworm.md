@@ -69,8 +69,8 @@ that fails on a missing gadget).
   `the_island_loadout_grants_the_q_worm`), `qworm_not_on_0c_live` 3/0, `level_carry_live` 8/0
   (incl. `cold_07000005_loadout_matches_the_snapshot`), `fix_dev_panel_live` 6/0 (incl.
   `level_kit_grants_the_games_loadout`), `portal_live` 4/0 (incl.
-  `cold_loadout_arms_bond_on_every_story_level`). Targeted total: **61 passed, 0 failed**
-  across 14 binaries.
+  `cold_loadout_arms_bond_on_every_story_level`), `probe_gadget` 1/0. Targeted total:
+  **62 passed, 0 failed** across 15 binaries.
 - No *inventory*-named binary exists; the inventory surface is covered by the above
   (fix_start_loadouts' warm-carry test + gadget_carry's loadout rows). nf-game itself: the
   crate's lib unit tests (the gadget families, the pickup/inventory arithmetic, the draw
