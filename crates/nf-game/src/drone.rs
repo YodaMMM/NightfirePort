@@ -11409,12 +11409,31 @@ pub fn level_drones(d: &Data, level: &nf_formats::level::Level, rng: &mut Rng, l
     // The run-time `drone_stats` table: `behaviour_util_get` 0x1c7a98 writes a type's records from the
     // first placement that carries the stats section, and every later drone of that type reads them
     // (`DoModeSettingsNEW` 0x14c600:70-107). Gated-out placements never reach `Drone_Create`'s body.
+    // A spawner template runs its `DoModeSettingsNEW` only when `DroneSpawner_SpawnDrone` 0x137cb0
+    // creates it, so its section does not reach the drones placed at load: 07000005's only section
+    // sits on template #3 (type 1, group 2) [D] and the level-start guards read the defaults ([L]
+    // ee_start_05.bin: type-1 record empty, acc 5 / aggression 0 / health 10). A template takes its
+    // own section over the load-time table (the record it writes is the one it reads).
+    let roles: Vec<nf_formats::drone::SpawnRole> = {
+        let list: Vec<(u32, Vec<(u32, u32)>)> = level.maps[m].placements.iter().map(|p| (p.flags & 0xff, p.params.clone())).collect();
+        nf_formats::drone::spawn_roles(&list)
+    };
     let mut stats = nf_formats::drone::DroneStatsTable::default();
+    for (k, p) in level.maps[m].placements.iter().filter(|p| p.flags & 0xff == 0x0f).enumerate() {
+        let param = |j: u32| p.params.iter().find(|(i, _)| *i == j).map(|&(_, v)| v).unwrap_or(0);
+        if param(2) > d.difficulty || roles.get(k) != Some(&nf_formats::drone::SpawnRole::Placed) { continue; }
+        stats.behaviour_get(param);
+    }
+    let load_stats = stats.clone();
+    let mut stats = nf_formats::drone::DroneStatsTable::default();
+    let mut drone_k = 0usize;
     level.maps[m].placements.iter().enumerate().filter_map(|(i, p)| {
         // The drones (0x0F) and the type-0x4E lights are created by the same
         // `parsemap_create_dynamic_objects` pass in placement order, so their RNG draws interleave here.
         if p.flags & 0xff == 0x4e { crate::light::placement_light(level, m, i, rng, lights); return None; }
         if p.flags & 0xff != 0x0f { return None; }
+        let role = roles.get(drone_k).copied();
+        drone_k += 1;
         let param = |k: u32| p.params.iter().find(|(j, _)| *j == k).map(|&(_, v)| v).unwrap_or(0);
         // Drone_Create's difficulty gate [M 0x136be0:49]: level_tag+0x34 (param 2) is the
         // placement's MINIMUM-difficulty tag — the drone spawns iff `param2 <= difficulty`
@@ -11422,8 +11441,14 @@ pub fn level_drones(d: &Data, level: &nf_formats::level::Level, rng: &mut Rng, l
         // `Drone_Create`'s body). docs/fields/level-tag.md's "spawn frame" name is a misread.
         if param(2) > d.difficulty { return None; }
         let floor = d.world.floor_below(p.translation, 3.0).unwrap_or(p.translation[1] - 1.0);
-        let ty = stats.behaviour_get(&param);
-        let st = stats.stats(ty);
+        let st = if role == Some(nf_formats::drone::SpawnRole::Placed) {
+            let ty = stats.behaviour_get(&param);
+            stats.stats(ty)
+        } else {
+            let mut t = load_stats.clone();
+            let ty = t.behaviour_get(&param);
+            t.stats(ty)
+        };
         let mut dr = Drone::new_with_stats(d, [p.translation[0], floor + 1.0, p.translation[2]], p.rotation[1], param, rng, st);
         dr.placement = i;
         // `NDrone2_PostLoad_Init` 0x14d890:18-22: every drone's nav path (+0x954) is

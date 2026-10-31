@@ -327,3 +327,52 @@ fn bond_is_hit_at_the_shins_not_over_the_head() {
     assert!(shoot(&mut scene, 0.6) > 0.0, "a head-high round hits Bond");
     assert_eq!(shoot(&mut scene, 1.2), 0.0, "a round 0.5 over the head misses");
 }
+
+/// A non-captain shooter of `weapon` (the captains' ×2 / ½-accuracy would mix two models in one cell);
+/// up to 12 candidates, so the 10 u cell finds an open corridor.
+fn measured_regular(level: &str, diff: u32, dist: f32, weapon: u32) -> Option<Tally> {
+    let p = |d: &nf_game::drone::Drone| d.team == 1 && d.weapon == weapon && !d.captain;
+    (0..12).find_map(|k| measure(level, diff, dist, 600, k, &p))
+}
+
+/// The pinned matrix: landed hits on Bond in the 10 s after a regular guard's first shot and the damage
+/// of each, at 5 / 10 / 20 u and every difficulty — 07000002's rifle guard (0x12: 1.5 a round, bursts of
+/// 6 at interval 6 for aggression 1) and pistol guard (0x0E: 5.0 × `+0x100` 2.0), 0700001B's astronaut
+/// (0x6A: 5.0, interval 180). Per hit = `weapon_data+0x0C × Drone+0x100 × Plr_DMod` exactly [M
+/// 0x139f50 + 0x1902c8; D weapon_data]; the hit counts follow `DoBulletAccuracy`'s p with the type's
+/// stats [M 0x179740; L drone_stats] and are pinned at the measured deterministic value ± max(2, 20%).
+/// Sister: the old chain (accuracy 5, aggression 0, the pistol at ×1) — its 0x12 cells landed
+/// 8/2/7/11/16/16 at 5/20 u (60 in all) and its 0x0E hits cost half — fails the totals and the per-hit.
+#[test]
+fn hits_per_10s_and_damage_per_hit_are_pinned() {
+    if iso().is_none() { eprintln!("NF_ISO not set — skipping"); return; }
+    // (archive, level, weapon, raw × +0x100, diff, dist, pinned hits / 10 s)
+    const PINS: &[(&str, u32, u32, f32, u32, f32, usize)] = &[
+        ("07000002.bin", 0x0700_0002, 0x12, 1.5, 1, 5.0, 15), ("07000002.bin", 0x0700_0002, 0x12, 1.5, 1, 10.0, 0), ("07000002.bin", 0x0700_0002, 0x12, 1.5, 1, 20.0, 9),
+        ("07000002.bin", 0x0700_0002, 0x12, 1.5, 2, 5.0, 17), ("07000002.bin", 0x0700_0002, 0x12, 1.5, 2, 10.0, 0), ("07000002.bin", 0x0700_0002, 0x12, 1.5, 2, 20.0, 10),
+        ("07000002.bin", 0x0700_0002, 0x12, 1.5, 3, 5.0, 32), ("07000002.bin", 0x0700_0002, 0x12, 1.5, 3, 10.0, 0), ("07000002.bin", 0x0700_0002, 0x12, 1.5, 3, 20.0, 20),
+        ("07000002.bin", 0x0700_0002, 0x0e, 10.0, 1, 5.0, 0), ("07000002.bin", 0x0700_0002, 0x0e, 10.0, 2, 5.0, 0), ("07000002.bin", 0x0700_0002, 0x0e, 10.0, 3, 5.0, 0),
+        ("0700001b.bin", 0x0700_001b, 0x6a, 5.0, 1, 5.0, 0), ("0700001b.bin", 0x0700_001b, 0x6a, 5.0, 1, 10.0, 1), ("0700001b.bin", 0x0700_001b, 0x6a, 5.0, 1, 20.0, 0),
+        ("0700001b.bin", 0x0700_001b, 0x6a, 5.0, 2, 5.0, 0), ("0700001b.bin", 0x0700_001b, 0x6a, 5.0, 2, 10.0, 1), ("0700001b.bin", 0x0700_001b, 0x6a, 5.0, 2, 20.0, 0),
+        ("0700001b.bin", 0x0700_001b, 0x6a, 5.0, 3, 5.0, 0), ("0700001b.bin", 0x0700_001b, 0x6a, 5.0, 3, 10.0, 2), ("0700001b.bin", 0x0700_001b, 0x6a, 5.0, 3, 20.0, 1),
+    ];
+    let mut bad = Vec::new();
+    let mut total_12 = 0usize;
+    for &(arc, level, weapon, raw, diff, dist, want) in PINS {
+        let label = format!("{arc} {weapon:#x} diff {diff} d {dist}");
+        let Some(t) = measured_regular(arc, diff, dist, weapon) else { bad.push(format!("{label}: no measurement")); continue };
+        report(&label, &t);
+        let per = raw * dmod(&tuning(level), diff);
+        // The pool round-trip (the hit is read off 100 − health, see fix_guard_weapons_live).
+        let pool = 100.0_f32 - (100.0_f32 - per);
+        if let Some(d) = t.damage.iter().find(|&&d| (d - pool).abs() > 1e-4 && (d - 100.0_f32 + (100.0_f32 - per * 2.0)).abs() > 1e-4) {
+            bad.push(format!("{label}: a hit cost {d}, the chain gives {per} (x2 under TooClose / back-shot)"));
+        }
+        let tol = (want / 5).max(2);
+        if t.hits.abs_diff(want) > tol { bad.push(format!("{label}: {} hits in 10 s, pinned {want} ± {tol}", t.hits)); }
+        if weapon == 0x12 && dist != 10.0 { total_12 += t.hits; }
+    }
+    eprintln!("[acc] 0x12 hits at 5/20 u, all difficulties: {total_12} (the old chain: 60)");
+    if total_12 * 10 < 60 * 13 { bad.push(format!("sister: the 0x12 total {total_12} is within 30% of the old chain's 60")); }
+    assert!(bad.is_empty(), "{bad:#?}");
+}
