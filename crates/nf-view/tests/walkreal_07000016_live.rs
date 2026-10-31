@@ -266,18 +266,14 @@ fn walk_arrival_to_the_chasers_spawn() {
 fn the_pit_pulse_kills_an_idle_bond_about_450_ticks_later_like_the_game() {
     let iso = iso();
     let mut w = Walker::new(nf_view::load_with_carry(&iso, "07000016.bin", false, Some(&carry(&[0x47, 0x48, 0x4a, 0x54, 0xce, 0x4b]))).unwrap());
-    // The sister pins the death/fail TIMING, so the walkreal allowances are off: the hurt contact
-    // must land (no top-up) and the pack cinema must play out (no skip) — the live session's own
-    // shape [L no input].
-    w.top_up_health = false;
-    w.skip_cutscenes = false;
-    {
-        let sim = w.scene.sim.as_mut().unwrap();
-        for _ in 0..600 { sim.step_bond(Input::default(), false, false, false); }
-        // The live session's own setup [L]: Bond placed on the bridge trigger #255, no input —
-        // the touch fires the chain head (ch 0x81), the pack cinema drops him at the pit floor.
-        sim.bond.pos = [2.4, 1.2, -175.5];
-    }
+    // The port walks the game's own route onto #255 (APPROACH: the corridor, the station E for
+    // door[0]'s 0x24, the panels #684/#685/#617 for 0x27/0x28/0xb4 — tower_door1 #392's lock is
+    // 0xb4, the south room's only way in [D placements]) and steps onto the slab in real time.
+    // The live session placed Bond on #255 instead [L]; the_real_order_launch_chain_matches_the_teleported_one
+    // pins that the two orders run the chain on the same clock.
+    w.wait_enabled(3000, "the launch-centre arrival");
+    w.wait(200);
+    walk_onto_the_slab(&mut w);
     let (mut t_reenable, mut t243, mut t_dead, mut t_fail) = (None, None, None, None);
     for t in 0..4200u32 {
         w.tick(Input::default(), false);
@@ -357,6 +353,23 @@ const APPROACH: &[(&str, walker::Wp)] = &[
     ("door[4] through", walker::Wp { at: [2.5, 1.0, -169.0], act: walker::Act::None, arrive: 1.3 }),
     ("the bridge slab #255", walker::Wp { at: [2.4, 1.0, -176.8], act: walker::Act::None, arrive: 1.2 }),
 ];
+
+/// APPROACH up to the staging point north of the ch-0x81 slab (its z span −178.50..−174.32 [D
+/// trigger bbox]), then a real-time step south onto it with the walkreal allowances OFF: the pack
+/// cinema plays out (no skip) and the hurt contact lands (no top-up) — the sisters pin the chain's
+/// TIMING from the touch on. Returns with ch 0x81 just raised and Bond's input otherwise idle.
+fn walk_onto_the_slab(w: &mut Walker) {
+    w.walk_route(&APPROACH[..APPROACH.len() - 1]);
+    w.walk_route(&[("the slab's north edge", walker::Wp::new(2.4, 1.0, -172.0).r(0.8))]);
+    w.top_up_health = false;
+    w.skip_cutscenes = false;
+    for _ in 0..900u32 {
+        if w.scene.sim.as_ref().unwrap().drones.channels.on(0x81) { return; }
+        w.scene.sim.as_mut().unwrap().bond.yaw = std::f32::consts::PI;
+        w.tick(Input { forward: 1.0, ..Default::default() }, false);
+    }
+    panic!("the walked step south never touched #255 (ch 0x81) at {:?}", w.scene.sim.as_ref().unwrap().bond.pos);
+}
 
 /// From the pit floor into the west blast room (blast_room_shelter_16_live: the room is outside
 /// HurtPoly-ShuttleLaunch's polygon [D], its door leaves shut over both pulses [D 0600090a
