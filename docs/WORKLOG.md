@@ -52,3 +52,13 @@ Progress log:
   Totals: walkreal --ignored 0/1, interactables_07000002_live 16/0, nf-game 953/0/9. Full suite:
   chunk_suite on the final tree 3/983 recorded (100/0) — the sandbox kills background jobs; the
   report has the resume command. Report: docs/reports/level-02-every-objective-3.md.
+
+## level-02-every-objective-4 (2026-10-31, s/level-02-every-objective-4)
+
+Branch from origin/s/level-02-every-objective-3 (0400eefe) merged with origin/master (c32c53c6).
+Task: keep master's green `walk_the_castle_all_objectives_to_the_exit` un-ignored (re-split the
+e3 ignore), keep the real-health walk in its OWN ignored test, verify every walkreal_* binary
+stays green with the walker body-block change, then chase the two e3 blockers: (1) the west-wing
+lip fight — drone 4 no exposed part at 1.4-2.7 u, check what the game's auto-aim/body parts
+allow [M Check_AutoAim 0x1a73f8]; (2) the enabled geisha leaving Hostage 0x0A during nearby
+combat — port hostage/captor DSTATE handlers vs the game [M 0x144030/0x1441c0].
