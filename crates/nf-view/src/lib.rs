@@ -6856,6 +6856,18 @@ pub fn run() -> Result<()> {
             eprintln!("--mp-look: slot {slot} body at {p:?} yaw {:.2} held {}", st.1, scene.sim.as_ref().map_or(0, |s| s.mp_held[slot]));
             return shot(&scene, &cam, args.get(i + 1).context("--shot needs a file name")?, choice, time, opts, notex, nofog, menu_frame.as_ref(), movie_frame.as_ref());
         }
+        // Render aid (`--shot-cam x,y,z,yaw,pitch`): the ticks run Bond's own eye as usual (so a
+        // lift ride or a cut-scene plays exactly as without the flag); only the rendered frame's
+        // camera is replaced — close-ups of something the eye's view leaves out of frame.
+        if let Some(ci) = args.iter().position(|a| a == "--shot-cam") {
+            let v: Vec<f32> = args.get(ci + 1).context("--shot-cam needs x,y,z,yaw,pitch")?.split(',').map(|t| t.trim().parse()).collect::<Result<_, _>>()?;
+            anyhow::ensure!(v.len() == 5, "--shot-cam needs x,y,z,yaw,pitch");
+            let cam = Camera { pos: Vec3::new(v[0], v[1], v[2]), yaw: v[3], pitch: v[4], fov: GAME_FOV };
+            // The first-person gun is posed at Bond's eye; away from it, it would float in the frame.
+            let mut scene = scene;
+            if let Some(s) = scene.sim.as_mut() { s.first_person = false; }
+            return shot(&scene, &cam, args.get(i + 1).context("--shot needs a file name")?, choice, time, opts, notex, nofog, menu_frame.as_ref(), movie_frame.as_ref());
+        }
         // Render aid (NF_SHOT_AT_PICKUP=k): frame pickup k from its DRAWN matrix (`Pickup::m`, what the renderer
         // places), 1.8 units out on x and z and 1.2 up — no coordinate guessing.
         if let Some(k) = std::env::var("NF_SHOT_AT_PICKUP").ok().and_then(|v| v.parse::<usize>().ok()) {
