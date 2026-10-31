@@ -16,7 +16,8 @@
 //! mission route.
 //!
 //! Enemies are DISABLED for the walk only in the walkreal sense: damage is suppressed
-//! (top_up_health, the walker's allowance). Opt-in via NF_ISO (the slim ISO is enough).
+//! (top_up_health, the walker's allowance) — except `walk_arrival_to_drakes_defeat_on_real_health`,
+//! which plays the same route on real health. Opt-in via NF_ISO (the slim ISO is enough).
 
 #[path = "common/walker.rs"]
 mod walker;
@@ -284,10 +285,9 @@ fn the_first_wave_kill_raises_the_launch_order() {
 ///    (SP#198) writes ch 0x0b [D 0x06000a20], the monitor's ch 9 & 0x0b → ch 100 → MissionState
 ///    6 → 0x0730001b [M 0x182c60:114-116].
 ///
-/// The walker's health allowance stays on (damage suppressed — the walkreal convention): the
-/// later waves (spawners #165-181, ch 116-120 from the missile scripts [D]) keep firing while
-/// the rifle's recharge paces the console shots, and the port's astronaut accuracy is
-/// unmeasured against the game.
+/// The walker's health allowance stays on (damage suppressed — the walkreal convention); the
+/// real-health run of the same route, with the later waves (spawners #165-181, ch 116-120 from
+/// the missile scripts [D]) fought, is `walk_arrival_to_drakes_defeat_on_real_health`.
 #[test]
 fn walk_arrival_to_drakes_defeat() {
     let iso = iso();
@@ -728,4 +728,325 @@ fn the_sp211_chain_enters_the_float_and_spawns_drake() {
     let i = drake.expect("the chain reaches the fight gate: Drake spawns (spawner #187 [D])");
     assert!(w.scene.sim.as_ref().unwrap().drones.list[i].enabled,
         "the gate enables Drake (wait-switch 10 [D])");
+}
+
+/// The live astronauts (skin 0x05000078) Bond can hurt: present, enabled, not a corpse.
+fn live_astronauts(sim: &nf_view::scene::Sim) -> Vec<usize> {
+    sim.drones.list.iter().enumerate()
+        .filter(|(_, d)| d.present && !d.corpse && d.enabled && d.health > 0.0 && d.skin & 0xffff == 0x78)
+        .map(|(i, _)| i).collect()
+}
+
+/// A player's zero-g fight: hold the float station `hold` on the thrusters, turn to the nearest
+/// astronaut whose body a bullet can reach (`exposed_aim` — the game's own box-entry rule), and
+/// tap the rifle when the view is on him; auto-aim (the app's default, applied every frame)
+/// pulls the round onto his torso bone. Returns at `done` or the tick cap.
+fn fight_astronauts(w: &mut Walker, hold: [f32; 3], done: impl Fn(&nf_view::scene::Sim) -> bool, cap: u32) {
+    fight(w, hold, None, done, cap)
+}
+
+/// `fight_astronauts` with an optional priority target (Drake, skin 0x050000BA): while he is
+/// alive and a bullet can reach him he is the one aimed at.
+fn fight(w: &mut Walker, hold: [f32; 3], prio: Option<usize>, done: impl Fn(&nf_view::scene::Sim) -> bool, cap: u32) {
+    let mut last_tap = 0u32;
+    let mut target: Option<(usize, [f32; 3])> = None;
+    let mut recharging = false;
+    let mut spot = hold;
+    for t in 0..cap {
+        // Ammo management + cover: the rifle's clip only recharges (12 rounds a shot, no spare —
+        // the gun_1b probe), so a dry clip sends Bond to the nearby float point the fewest
+        // astronauts can shoot (a bullet segment from each one's head to his eye) and away from
+        // any within 3 u (the always-hit, double-damage TooClose band [M DoBulletAccuracy
+        // 0x179740:113-115; Drone_ModBulletDamage 0x139fac-0x139fc8]); losing sight resets a
+        // shooter's 2-s new-sighting clock [M 0x179740:103-105] — then back out at 60 rounds.
+        {
+            let sim = w.scene.sim.as_ref().unwrap();
+            if sim.gun.clip < 12 { recharging = true; }
+            if sim.gun.clip >= 60 { recharging = false; }
+            if !recharging { spot = hold; }
+            else if t % 30 == 0 {
+                let live = live_astronauts(sim);
+                let eye_off = sim.bond.head()[1] - sim.bond.pos[1];
+                let score = |c: [f32; 3]| -> f32 {
+                    let e = [c[0], c[1] + eye_off, c[2]];
+                    let mut sc = 0.0;
+                    for &i in &live {
+                        let d = &sim.drones.list[i];
+                        let h = [d.pos[0], d.pos[1] + 0.6, d.pos[2]];
+                        let r = ((h[0] - e[0]).powi(2) + (h[1] - e[1]).powi(2) + (h[2] - e[2]).powi(2)).sqrt();
+                        if r > 40.0 { continue; }
+                        if r < 3.5 { sc += 4.0; }
+                        if sim.world.segment_bullet(h, e).is_none() { sc += 1.0; }
+                    }
+                    sc
+                };
+                let p = sim.bond.pos;
+                let mut best = (score(p), p);
+                for r in [2.5f32, 5.0] {
+                    for o in [[r, 0.0, 0.0], [-r, 0.0, 0.0], [0.0, r, 0.0], [0.0, -r, 0.0], [0.0, 0.0, r], [0.0, 0.0, -r]] {
+                        let c = [hold[0] + o[0], hold[1] + o[1], hold[2] + o[2]];
+                        // Reachable: a clear body segment from where he floats.
+                        if sim.world.segment(p, c).is_some() { continue; }
+                        let sc = score(c) + 0.05 * r;
+                        if sc < best.0 { best = (sc, c); }
+                    }
+                }
+                spot = best.1;
+            }
+        }
+        if done(w.scene.sim.as_ref().unwrap()) { return; }
+        if t % 10 == 0 || target.is_some_and(|(i, _)| {
+            let d = &w.scene.sim.as_ref().unwrap().drones.list[i];
+            d.corpse || d.health <= 0.0
+        }) {
+            let sim = w.scene.sim.as_ref().unwrap();
+            let e = sim.bond.head();
+            let mut best: Option<(f32, usize, [f32; 3])> = None;
+            let mut cands = live_astronauts(sim);
+            if let Some(p) = prio {
+                let d = &sim.drones.list[p];
+                if d.present && !d.corpse && d.health > 0.0 {
+                    if let Some(a) = w.exposed_aim(p) { cands.clear(); best = Some((0.0, p, a)); }
+                }
+            }
+            for i in cands {
+                let d = &sim.drones.list[i];
+                let r = ((d.pos[0] - e[0]).powi(2) + (d.pos[1] - e[1]).powi(2) + (d.pos[2] - e[2]).powi(2)).sqrt();
+                if r > 40.0 { continue; }
+                if let Some(a) = w.exposed_aim(i) {
+                    if best.map_or(true, |b| r < b.0) { best = Some((r, i, a)); }
+                }
+            }
+            target = best.map(|b| (b.1, b.2));
+        }
+        let (input, fire) = {
+            let sim = w.scene.sim.as_ref().unwrap();
+            let mut inp = thrust_to(sim, spot);
+            let mut fire = false;
+            if let Some((_, a)) = target {
+                if let Some((e, pe)) = walker::zero_g_errs(sim, a) {
+                    inp.turn = e.clamp(-0.08, 0.08);
+                    inp.look = pe.clamp(-0.08, 0.08);
+                    fire = e.abs() < 0.03 && pe.abs() < 0.03 && sim.gun.clip >= 12 && t.saturating_sub(last_tap) >= 12;
+                }
+            }
+            (inp, fire)
+        };
+        let nh = w.scene.sim.as_ref().unwrap().drones.player_hits.len();
+        if fire { last_tap = t; w.tick_fire(input); } else { w.tick(input, false); }
+        if std::env::var_os("NF_1B_TRACE").is_some() {
+            let sim = w.scene.sim.as_ref().unwrap();
+            for h in &sim.drones.player_hits[nh..] {
+                let d = &sim.drones.list[h.1.min(sim.drones.list.len() - 1)];
+                eprintln!("[hit] f{} d{} lost {:.1} dist {:.1} seen {} st {:#x} armour {:.0} motion {:?}", h.0, h.1, h.2, d.dist, d.seen_ticks, d.state, sim.drones.health.armour, sim.drones.target_motion);
+            }
+        }
+        if std::env::var_os("NF_1B_TRACE").is_some() && t % 100 == 0 {
+            let sim = w.scene.sim.as_ref().unwrap();
+            let live = live_astronauts(sim);
+            let near: Vec<String> = live.iter().map(|&i| { let d = &sim.drones.list[i];
+                format!("d{i}@{:.0} st{:#x} hp{:.0}", walker::dxz(d.pos, sim.bond.pos), d.state, d.health) }).collect();
+            eprintln!("[fight] f{} hp {:.0} ar {:.0} clip {} pos ({:.1},{:.1},{:.1}) tgt {:?} live {}: {}", sim.drones.frame, sim.drones.health.health, sim.drones.health.armour,
+                sim.gun.clip, sim.bond.pos[0], sim.bond.pos[1], sim.bond.pos[2], target.map(|x| x.0), live.len(), near.join(" "));
+        }
+    }
+}
+
+/// The whole mission on REAL health — no top-up, no position, substate or channel write after
+/// the load — played the way a player plays it: auto-aim on (the app's default; `drain_options`
+/// writes `sim.auto_aim` from the option every frame), the console order and the rifle's burst
+/// discipline of the walk above, and the waves FOUGHT instead of waited out: after the eight
+/// screens Bond holds the float station and kills astronauts (`fight`), dropping to the
+/// least-exposed nearby float point while the clip recharges, then kills Drake the same way.
+///
+/// The damage he takes is the game's model, pinned [M]: weapon 0x6a's 5.0 [D weapon_data +0x0c]
+/// × `Plr_DMod_Easy` 0.6 at the load's difficulty 1 (1b's group [M ReadTuningVars 0x1d3a80
+/// case 0x700001b: 0x3f19999a]; the switch on GameState+0x28 [M Player_HandlePain 0x1902c8:28-49])
+/// = 3.0 a hit, armour first [M :100-105]; the hit roll `100 − 5·acc` × `DroneFiring_Accuracy_Easy`
+/// 0.6 [M 0x1d3a80 / DoBulletAccuracy 0x179740:52-99] × `TargetMoving` 0.75 while the float's
+/// thruster pair is live [M 0x179a48:34-41 — `Drones::player_move_local`].
+#[test]
+fn walk_arrival_to_drakes_defeat_on_real_health() {
+    let iso = iso();
+    let mut w = Walker::new(nf_view::load(&iso, "0700001b.bin", false).unwrap());
+    w.top_up_health = false;
+    w.wait_enabled(3000, "the shuttle arrival");
+    w.scene.sim.as_mut().unwrap().auto_aim = true;
+    w.wait(120);
+    {
+        let sim = w.scene.sim.as_ref().unwrap();
+        assert_eq!(sim.bond.substate, SS_ZEROG_8, "the station starts in the zero-g substate [M Player_Init 0x1910f8 :160-165]");
+        assert_eq!(sim.drones.difficulty, 1, "the harness load's difficulty (GameState+0x28 = 1)");
+        assert_eq!(nf_game::bullet::damage_factor(sim.level, 1), 0.6, "1b's Plr_DMod_Easy [M 0x1d3a80 case 0x700001b]");
+        assert_eq!(sim.tuning.DroneFiring_Accuracy_Easy, 0.6, "1b's DroneFiring_Accuracy_Easy [M 0x1d3a80 case 0x700001b]");
+        let rec = &sim.weapons.records[0x6a];
+        assert_eq!(f32::from_le_bytes(rec[0x0c..0x10].try_into().unwrap()), 5.0, "the astronauts' weapon 0x6a hits for 5.0 [D weapon_data +0x0c]");
+    }
+    let dead = |s: &nf_view::scene::Sim| s.drones.health.health <= 0.0;
+    let drake_of = |s: &nf_view::scene::Sim| s.drones.list.iter().position(|d| d.present && !d.corpse && d.skin & 0xffff == 0xba);
+
+    // 1. The first wave → the launch order (the walk's own fight).
+    kill_astronauts(&mut w, [32.0, -1.7, 0.0], |s| s.drones.channels.on(19) || dead(s), 4000);
+    assert!(!dead(w.scene.sim.as_ref().unwrap()), "Bond survives the first wave");
+    assert!(w.scene.sim.as_ref().unwrap().drones.channels.on(19), "the first wave's death raises the launch order ch 19 [D]");
+
+    // 2. The consoles, in deadline order (the screens before the astronauts: the last one
+    //    latches ~190 ticks before its missile's deadline, no rifle charge to spare).
+    let latched = shoot_consoles(&mut w);
+    eprintln!("[1b-rh] consoles latched (console, frame): {latched:?}; health {:.1}", w.scene.sim.as_ref().unwrap().drones.health.health);
+    for k in 1..=8u32 {
+        assert!(w.scene.sim.as_ref().unwrap().drones.channels.on(k), "console {k} latched by the real shot");
+    }
+    assert!(!dead(w.scene.sim.as_ref().unwrap()), "Bond survives the console run");
+
+    // 3. The waves until the fight gate spawns Drake: fought, not waited out.
+    fight_astronauts(&mut w, [32.0, -1.7, 0.0], |s| drake_of(s).is_some() || dead(s), 4000);
+    let drake = {
+        let sim = w.scene.sim.as_ref().unwrap();
+        assert!(!dead(sim), "Bond survives the later waves to the fly-by (health {:.1})", sim.drones.health.health);
+        assert!(sim.drones.missile_deploy.iter().all(|&d| d == 2), "every missile took the DISARM branch: {:?}", sim.drones.missile_deploy);
+        drake_of(sim).expect("the fight gate spawns Drake (spawner #187, trigger 10 [D])")
+    };
+    eprintln!("[1b-rh] Drake spawned at frame {}; health {:.1}", w.scene.sim.as_ref().unwrap().drones.frame, w.scene.sim.as_ref().unwrap().drones.health.health);
+
+    // 4. Drake, then the defeat NIS plays out (no skip, so its channel writes land).
+    w.skip_cutscenes = false;
+    fight(&mut w, [32.0, -1.7, 0.0], Some(drake), |s| s.drones.list[drake].corpse || s.drones.list[drake].health <= 0.0 || dead(s), 6000);
+    {
+        let sim = w.scene.sim.as_ref().unwrap();
+        assert!(!dead(sim), "Bond survives Drake's fight (health {:.1})", sim.drones.health.health);
+        assert!(sim.drones.list[drake].health <= 0.0, "Drake dies to Bond's fire in the float");
+    }
+    let mut ended = false;
+    for _ in 0..2400u32 {
+        w.tick(Default::default(), false);
+        let sim = w.scene.sim.as_ref().unwrap();
+        if sim.drones.mission.status() == 6 || dead(sim) { ended = sim.drones.mission.status() == 6; break; }
+    }
+    w.skip_cutscenes = true;
+    let sim = w.scene.sim.as_ref().unwrap();
+    let lost: f32 = sim.drones.player_hits.iter().map(|h| h.2).sum();
+    eprintln!("[1b-rh] end frame {} health {:.1} armour {:.1} hits {} health lost {lost:.1}",
+        sim.drones.frame, sim.drones.health.health, sim.drones.health.armour, sim.drones.player_hits.len());
+    assert!(ended, "the mission ends (MissionState 6) with Bond alive [M 0x182c60] (health {:.1})", sim.drones.health.health);
+    assert_eq!(sim.drones.mission.to_end, 0x0730_001b, "the station's own end code [M 0x182c60:114-116]");
+    // Sister: the damage path ran for real — the waves' rounds cost health (no top-up).
+    assert!(lost >= 30.0 && sim.drones.player_hits.len() >= 20,
+        "the waves really hurt Bond on the way ({} hits, {lost:.1} health) — no allowance", sim.drones.player_hits.len());
+    assert!(sim.drones.health.health < 100.0, "health is never topped up");
+}
+
+/// The zero-g "moving" byte the hit roll reads is the float's thruster pair, not a position
+/// change [M DroneWeap_DoOpponentTargetting 0x179a48:34-41 reads |(BL+0x10, 0, BL+0x18)| != 0;
+/// Player_Update 0x193600:131-133 zeroes the quad each tick; Player_ZeroG 0x192ab0:113,135 adds
+/// the 0.04-eased smoothers +0x20/+0x28 into it, with no dead-zone]. A burst of forward thrust
+/// then release: the pair decays by 0.96 a tick and never reaches 0, so 300 ticks later the float
+/// still reads moving (×TargetMoving 0.75 [M 0x179740:78-80]) although its position change per
+/// tick is under the on-foot test's 1e-4. Sister: a float that never thrusted reads still.
+#[test]
+fn the_zero_g_float_reads_moving_while_its_thrusters_decay() {
+    let iso = iso();
+    let mut w = Walker::new(nf_view::load(&iso, "0700001b.bin", false).unwrap());
+    w.wait_enabled(3000, "the shuttle arrival");
+    w.wait(30);
+    {
+        let sim = w.scene.sim.as_ref().unwrap();
+        assert_eq!(sim.bond.substate, SS_ZEROG_8, "the float substate [M 0x1910f8 :160-165]");
+        assert_eq!(sim.bond.local, [0.0, 0.0], "no thrust yet");
+        assert_eq!(sim.drones.player_move_local, Some([0.0, 0.0]), "the viewer hands the drones the pair in zero-g");
+        assert!(!sim.drones.target_motion.0, "sister: a float that never thrusted reads still");
+    }
+    for _ in 0..20u32 { w.tick(Input { forward: 1.0, ..Default::default() }, false); }
+    assert!(w.scene.sim.as_ref().unwrap().drones.target_motion.0, "thrusting reads moving");
+    for _ in 0..300u32 { w.tick(Input::default(), false); }
+    let p0 = w.scene.sim.as_ref().unwrap().bond.pos;
+    w.tick(Input::default(), false);
+    let sim = w.scene.sim.as_ref().unwrap();
+    let p1 = sim.bond.pos;
+    let step = (p1[0] - p0[0]).abs() + (p1[2] - p0[2]).abs();
+    assert!(step < 1e-4, "the decayed drift moves under the on-foot 1e-4 test ({step:e})");
+    assert!(sim.bond.local[1] != 0.0, "the eased forward smoother never reaches 0 [M 0x192ab0:116-135]");
+    assert!(sim.drones.target_motion.0, "the float still reads MOVING for the hit roll [M 0x179a48:34-41]");
+    assert!(!sim.drones.target_motion.1, "the first-moved window (2 s) is long over [M 0x179a48:70-73]");
+}
+
+/// The float against the shaft's south end-wall (z −20.40 [D the_end_walls_seal_the_shaft_box])
+/// at the deck-level window (x 8, y −1.2) — real input from the level start, no position,
+/// substate or channel write. The capsule rests at −20.40 + 0.55 (the body radius [M
+/// Player_Collision 0x194df0's default arm, 0x3f0ccccd]) and the push-out keeps the tangential
+/// part of the thruster move (`pos += local·rows` [M 0x193600:284-295], then the per-triangle
+/// push along the separation [M Intersect_CylGeom 0x109da0]), so a float pressed into the wall
+/// slides along it in x and y and backs off freely. Sister: thrust straight into the wall holds
+/// Bond still at the rest line, never through the window (0.8..1.0 tall, narrower than the
+/// ~1.58 body [D]) — the hold an older walk read as a wedge while it steered at (8, −1.2, −22),
+/// a point behind the closed wall.
+#[test]
+fn the_float_slides_along_the_south_end_wall() {
+    let iso = iso();
+    let mut w = Walker::new(nf_view::load(&iso, "0700001b.bin", false).unwrap());
+    w.wait_enabled(3000, "the shuttle arrival");
+    w.wait(120);
+    assert_eq!(w.scene.sim.as_ref().unwrap().bond.substate, SS_ZEROG_8, "the station floats from the start [M Player_Init 0x1910f8 :160-165]");
+    // Body-axis thrust toward a point (the walk's `thrust_to` at a firmer gain).
+    let thrust = |sim: &nf_view::scene::Sim, at: [f32; 3]| -> Input {
+        let p = sim.bond.pos;
+        let d = [at[0] - p[0], at[1] - p[1], at[2] - p[2]];
+        let m = sim.bond.zero_g_rot;
+        let dot = |a: [f32; 3]| a[0] * d[0] + a[1] * d[1] + a[2] * d[2];
+        Input { strafe: (dot(m[0]) * 0.6).clamp(-1.0, 1.0), lift: (dot(m[1]) * 0.6).clamp(-1.0, 1.0), forward: (dot(m[2]) * 0.6).clamp(-1.0, 1.0), ..Default::default() }
+    };
+    // Yaw-steered forward thrust (turn toward the point, lift for the height).
+    let steer = |sim: &nf_view::scene::Sim, at: [f32; 3]| -> Input {
+        let p = sim.bond.pos;
+        let err = walker::wrap_pi((at[0] - p[0]).atan2(at[2] - p[2]) - sim.bond.yaw);
+        Input { turn: err.clamp(-0.08, 0.08), forward: if err.abs() < 0.35 { 1.0 } else { 0.15 },
+            lift: ((at[1] - p[1]) * 2.0).clamp(-1.0, 1.0), ..Default::default() }
+    };
+    let rest = -20.40f32 + 0.55;
+    let fly = |w: &mut Walker, at: [f32; 3], n: u32, yaw: bool| -> ([f32; 3], [f32; 3], f32) {
+        let (mut lo, mut hi) = ([f32::MAX; 3], [f32::MIN; 3]);
+        let mut last_step = 0.0f32;
+        for _ in 0..n {
+            let input = { let sim = w.scene.sim.as_ref().unwrap(); if yaw { steer(sim, at) } else { thrust(sim, at) } };
+            let p0 = w.scene.sim.as_ref().unwrap().bond.pos;
+            w.tick(input, false);
+            let p = w.scene.sim.as_ref().unwrap().bond.pos;
+            last_step = ((p[0] - p0[0]).powi(2) + (p[1] - p0[1]).powi(2) + (p[2] - p0[2]).powi(2)).sqrt();
+            for k in 0..3 { lo[k] = lo[k].min(p[k]); hi[k] = hi[k].max(p[k]); }
+        }
+        (lo, hi, last_step)
+    };
+    // The route down to the window: off the deck, under the south rails (z −8.13 / −14.25 [D]),
+    // back up into the window band at z −17.
+    for at in [[20.0f32, 0.0, 1.0], [8.0, 0.0, -1.0], [7.0, 0.0, -9.6], [7.0, -3.6, -11.5], [7.5, -3.4, -15.5], [8.0, -1.2, -17.0]] {
+        fly(&mut w, at, 700, false);
+    }
+    let p = w.scene.sim.as_ref().unwrap().bond.pos;
+    assert!((p[0] - 8.0).abs() < 0.2 && (p[1] + 1.2).abs() < 0.2 && (p[2] + 17.0).abs() < 0.2,
+        "the float reaches the window approach (8, −1.2, −17), at ({:.2},{:.2},{:.2})", p[0], p[1], p[2]);
+
+    // Sister: straight into the wall — Bond holds at the rest line, never through the window.
+    let (lo, _, step) = fly(&mut w, [8.0, -1.2, -22.0], 700, false);
+    let p = w.scene.sim.as_ref().unwrap().bond.pos;
+    assert!(lo[2] > rest - 0.01, "the end-wall holds the capsule at z {rest:.2} (min z {:.3}) [D m40 + M the body radius]", lo[2]);
+    assert!((p[2] - rest).abs() < 0.01 && step < 1e-3,
+        "sister: pressed head-on, the float rests on the wall (z {:.3}, last step {step:.5}) — the window is narrower than the body [D]", p[2]);
+
+    // Pressed in AND thrusting east: the tangential move survives the push-out.
+    let (lo, _, _) = fly(&mut w, [16.0, -1.2, -28.0], 900, false);
+    let p = w.scene.sim.as_ref().unwrap().bond.pos;
+    assert!(p[0] > 15.5 && lo[2] > rest - 0.01 && (p[2] - rest).abs() < 0.01,
+        "the float slides east along the wall (x 8 → {:.2}, z {:.3})", p[0], p[2]);
+    // West and down a little, pressed in (yaw-steered, the forward thruster into the wall).
+    let (lo, _, _) = fly(&mut w, [6.0, -1.6, -28.0], 1500, true);
+    let p = w.scene.sim.as_ref().unwrap().bond.pos;
+    assert!(p[0] < 6.3 && (p[1] + 1.6).abs() < 0.1 && lo[2] > rest - 0.01,
+        "yaw-steered, the float slides west and down along the wall to ({:.2},{:.2},{:.3})", p[0], p[1], p[2]);
+    // Up the wall face.
+    let (_, hi, _) = fly(&mut w, [8.0, 1.0, -25.0], 900, false);
+    assert!(hi[1] > 0.9, "the float rises along the wall (max y {:.2})", hi[1]);
+    // And off it.
+    fly(&mut w, [8.0, -1.2, -17.0], 900, false);
+    let p = w.scene.sim.as_ref().unwrap().bond.pos;
+    assert!(p[2] > -17.3, "the float backs off the wall freely (z {:.2})", p[2]);
 }
