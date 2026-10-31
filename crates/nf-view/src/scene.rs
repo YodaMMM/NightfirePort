@@ -710,6 +710,9 @@ pub struct Sim {
     /// mp-body-look: the MP bodies (slot, scene character index) — `Scene::mp_bodies`, so the
     /// ambient ramp links each body to the cel it stands in like any other drawn object.
     pub mp_body_chars: Vec<(usize, usize)>,
+    /// cable-bond-light: the scene character of Bond's own third-person body (`Scene::bond_body`) —
+    /// the PLAYER object itself (flags 0x880), so its ambient ramps toward Bond's linked cel.
+    pub bond_body_char: Option<usize>,
     /// mp-body-anim: per slot, the body's script list and clocks (`nf_game::mp::body_anim` — the
     /// game's `AnimSetUpdate` 0x1c0938 / `Player_ChangeSubState` 0x190630 list: idle, the
     /// distance-driven walk/run, the strafe overlay, the stance transitions, the death, the aim
@@ -2169,6 +2172,19 @@ impl Sim {
             // own body 0x880 does not).
             if self.sun_seen {
                 if let Some(a) = t.as_mut() { for k in 0..3 { a[k] = (a[k] as u32 * 2).min(0xff) as u8; } }
+            }
+        }
+        // cable-bond-light: Bond's third-person body IS the player object (0x16cefe0 on 07000005,
+        // obj+0xF0 = 0x880 [L PCSX2 on the castle cable]), so `Lights_CalcAmbientLight` 0x1cb178 ramps
+        // its obj+0x100..0x102 toward the player's linked cel (obj+0x20) every tick like any 0x800
+        // object — on the cable (57,70,86) == that cel's +0x9a/+0x9c/+0x9e bytes, tint 0xff [L]. No
+        // 0x10000 bit, so no doubled sun target. Without this the body kept the 0xff sentinel and
+        // drew at full brightness. Ramped in every view (the game does; first person just hides it).
+        if let (Some(bb), Some(r)) = (self.bond_body_char, bond_room) {
+            if let Some(t) = targets.get_mut(bb) {
+                let c = &self.cels[r];
+                let off = *self.drones.channels.v.get(c.zone as usize).unwrap_or(&0);
+                *t = Some(c.ambient[(off as usize).min(1)]);
             }
         }
         for (ci, amb) in self.char_ambient.iter_mut().enumerate() {
@@ -9118,7 +9134,7 @@ pub fn build(level: &Level, cels_only: bool, skeletons: &HashMap<u8, Skeleton>, 
             // The difficulty was set before the creates above (the game's GameState+0x28 pick);
             // the old direct-load hardcode `= 1` moved into the build parameter so replay loads
             // pass 1 and the front-end path passes the menu's pick.
-            Some(Sim { drones, tables: d.tables.clone(), props, scripts: d.scripts.clone(), weapons, world, level: d.level_id, char_drone, char_script, char_script_skin, seq_index, seqs, skins: level.skins.clone(), skeletons: skeletons.clone(), nav, covers, ai_points, tuning: d.tuning.clone(), hitboxes, sfx: d.sfx.clone(), volumes, glist_bounds, models, gun: nf_game::gun::Gun::new(2, 7, 41), bond, cursor: [0.0; 2], cross: [0.0; 2], view_script: 0, first_person: false, last_shot: None, shot_tick: false, view_time: 0.0, view_speed: 1.0, bob: [0.0; 2], aiming: false, free_aim: false, auto_aim: false, rapid_fire: false, zoom: 1.0, zoom_target: 1.0, disabled: false, surfaces: d.surfaces.clone(), voices: d.voices.clone(), step_dist: 0.0, wires, creepwalls, creeping: false, wire_anims, wire_channel: 0, ladders, icons, view_model_ids: std::collections::HashSet::new(), cross_state: 2, cels: sim_cels, char_ambient, view_model_chars: Vec::new(), mp_body_chars: Vec::new(), mp_last_held: [2; nf_net::MAX_AGENTS], mp_weapon_loaded: Vec::new(), ambient_lookups: std::cell::Cell::new(0), mp_draw_cache: Default::default(), mp_anim: (0..nf_net::MAX_AGENTS).map(|_| nf_game::mp::body_anim::MpBodyAnim::new()).collect(), mp_anim_sets: d.mp_anims.as_ref().map(|a| nf_formats::mpanim::MpAnimSets { sets: a.sets }), sun_seen: false, lang: None, hud: Default::default(), smoke: Vec::new(), room_cell: cel_graph.room_to_cell.clone(), prev_trigger: false,
+            Some(Sim { drones, tables: d.tables.clone(), props, scripts: d.scripts.clone(), weapons, world, level: d.level_id, char_drone, char_script, char_script_skin, seq_index, seqs, skins: level.skins.clone(), skeletons: skeletons.clone(), nav, covers, ai_points, tuning: d.tuning.clone(), hitboxes, sfx: d.sfx.clone(), volumes, glist_bounds, models, gun: nf_game::gun::Gun::new(2, 7, 41), bond, cursor: [0.0; 2], cross: [0.0; 2], view_script: 0, first_person: false, last_shot: None, shot_tick: false, view_time: 0.0, view_speed: 1.0, bob: [0.0; 2], aiming: false, free_aim: false, auto_aim: false, rapid_fire: false, zoom: 1.0, zoom_target: 1.0, disabled: false, surfaces: d.surfaces.clone(), voices: d.voices.clone(), step_dist: 0.0, wires, creepwalls, creeping: false, wire_anims, wire_channel: 0, ladders, icons, view_model_ids: std::collections::HashSet::new(), cross_state: 2, cels: sim_cels, char_ambient, view_model_chars: Vec::new(), mp_body_chars: Vec::new(), bond_body_char: None, mp_last_held: [2; nf_net::MAX_AGENTS], mp_weapon_loaded: Vec::new(), ambient_lookups: std::cell::Cell::new(0), mp_draw_cache: Default::default(), mp_anim: (0..nf_net::MAX_AGENTS).map(|_| nf_game::mp::body_anim::MpBodyAnim::new()).collect(), mp_anim_sets: d.mp_anims.as_ref().map(|a| nf_formats::mpanim::MpAnimSets { sets: a.sets }), sun_seen: false, lang: None, hud: Default::default(), smoke: Vec::new(), room_cell: cel_graph.room_to_cell.clone(), prev_trigger: false,
             mp_bonds: [const { None }; nf_net::MAX_AGENTS],
             mp_local_slot: 0,
             mp_body_speed: [0.0; nf_net::MAX_AGENTS],
@@ -9186,7 +9202,7 @@ pub fn build(level: &Level, cels_only: bool, skeletons: &HashMap<u8, Skeleton>, 
             // index-pairing away from a real divergence.
             sim.view_model_chars = (1..=0x72u8).filter_map(|wid| view_models.get(&wid).copied()).collect();
         }
-        if let Some(sim) = sim.as_mut() { sim.mp_body_chars = mp_bodies.clone(); }
+        if let Some(sim) = sim.as_mut() { sim.mp_body_chars = mp_bodies.clone(); sim.bond_body_char = bond_body; }
         let models_0x800: HashMap<u32, bool> = level.maps.iter()
             .flat_map(|m| m.objects.iter().map(|o| (o.hashcode, o.flags & 0x800 != 0))).collect();
         // fix-portal4: sim-less loads never built a world — the chains fall back to the
