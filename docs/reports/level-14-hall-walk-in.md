@@ -60,8 +60,11 @@ origin/master b3d86a03), suite-style runs (`--test-threads=1`):
   ignored pin is the pre-existing, evidence-named blocker (the inert NoBunching mirror + the
   release-to-door divergence), untouched by this task.
 - `interactables_07000014_live` — **9 passed / 0 failed / 0 ignored** (18.68 s).
-- Full suite (fast runner, 996 binaries built in 865 s, running on the final tree): SEE THE TOTAL
-  LINE BELOW — a partial if the sandbox window closed first; FAILED/TIMEOUT/CRASH lines quoted.
+- Full suite (fast runner, 996 binaries built in 865 s, run on the final tree a20d6f5b): the
+  sandbox window closed mid-run — the partial at 131/996 binaries is **476 passed / 0 failed /
+  40 ignored**, no TIMEOUT, no CRASH, no FAILED line (suite14.out carried only the build line);
+  the three task binaries above were also re-run suite-style on the final tree and are quoted
+  green.
 
 ## What's left
 
