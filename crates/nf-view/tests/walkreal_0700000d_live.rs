@@ -346,28 +346,133 @@ fn walk_arrival_to_the_c5_door() {
         "the E fires the plate's out ch 0x2b [D #460 p0]");
     eprintln!("[0d] E #460 walked — the shipping SP #115 armed; the beam shuttles x 137.54 → 177.22 → 137.54 over 3000 ticks [D]");
 
-    // STAND-IN 2 of 2 (narrowed, documented): the shipping-beam ride into the yard. The beam
-    // (script 0x060009EF entities 0x0200_0a80/0x0200_0a81, origin y 11.33, z −287.11, top
-    // 13.47-14.32 [probe20 shape bounds ±4.17/±2.98/±17.01]) shuttles x-only — y never changes
-    // [probe20 beam watch] — so the bay floor (9.5) is 4 m under its top and the boarding
-    // surface is not the bay. The boarding surfaces over the beam's path: the 16.8 mezzanine
-    // (x 169..183, z −271..−283 [probe0d scans]) at the east extreme, and a 17.2 STRUCTURE at
-    // x 134..136, z −276 [probe0d west scan] over the beam's PARKED west position — but neither
-    // is reachable on the port's statics: the catwalk is sealed south (the face wall ≥ 14.2
-    // [probe0d southface rays]), the slot jump to the staircase island is blocked by that wall,
-    // the mezzanine has no roof access (the roof 18.58 lane at x 196.3 is outside the shed
-    // x 180..195.2 whose east wall stops the lane walk), the bay has no ladder (the only
-    // ladders are #0/#1 at x 212..218 and #2 at the catwalk's west end [probe0d census]) and no
-    // crates (the dock drone census: 2 guards only), and the bay's floor links (the 3.98 pit
-    // → the yard 4.0 → the 17.2 tower) need a +13.2 climb with no step/ladder evidence. The
-    // game's way needs the live check (the report's #2). The stand-in covers only the ride+drop.
+    // THE BOARDING QUESTION, pinned from the disc data (level-0d-beam-boarding). The mover is
+    // script 0x060009EF entity 1: a 1643-tri TWIN-GIRDER gantry [D shape 0x0200_0a80 bounds
+    // (±4.17, −2.98..+2.98, ±17.01) local] — at the rest origin (137.538, 11.334, −287.108) the
+    // two girders run z −270.1..−304.1 with their top surface ~13.5 and the inner runway Bond
+    // rides at 13.51 (the ride's own floor read: pos 14.545 − the 1.035 root), the slot between
+    // the girders OPEN to the yard below (the at-rest rays at x 137/138, z −280..−300 fall to
+    // 4.0 [D fine-map rays]). The riding 0x0200_0a81 is a 2-tri FLAT TRIGGER plane at +2.95 (y
+    // 14.28, x ±2.44, z ±16.80 — a 0xEA volume, not a walkable car). The origin sweeps east to
+    // ~177.22 (t ≈ 1230 of the SP's 3000 ticks) and back to ~137.59 (t ≈ 2760), then re-sweeps
+    // [D the key trace]. The boarding candidates over its path: the 16.8 mezzanine (x 168..183),
+    // the 13.8 ledge (x 184) and the 14.7 pad (x 185..194) [D the roofup/pad rays] — but the
+    // gantry's east face never passes x 181.4 (origin max + 4.17), 2.6 m west of the ledge with
+    // its top ABOVE the ledge top, and the jump is VERTICAL-ONLY [M Player_HandleJump 0x1916b0
+    // zeroes the velocity] so no 2.6 m gap is crossable onto a higher surface; the bay floor
+    // (9.5) is 4 m under the ride floor with no stairs or ladder up (the ladder census: #0/#1 at
+    // x 212..218, #2 at the catwalk's west end [D probe0d census]), and the gantry's own frame
+    // rises 9.5 m from the yard 4.0 with no access either. So the game's boarding surface is
+    // NOT settled by the port's statics: the sister asserts below pin the measured closure, the
+    // exact question goes to the report's live check, and the ONE documented write below is the
+    // stand-in — everything after it (the whole ride and the drop) is real input.
+    {
+        let sim = w.scene.sim.as_ref().unwrap();
+        // [D] the east-side closure over the beam's max reach: at z −272 the ledge and the pad
+        // stand east of x 183.5, and between the gantry's max east face (181.4) and the ledge
+        // the column is open down to the pit (the rays walk UP like the probes' scans — the
+        // port's segment test is winding-sensitive).
+        let ups = |x: f32| {
+            let mut hits = Vec::new();
+            let mut bot = 0.0f32;
+            for _ in 0..6 {
+                match sim.world.segment_hit([x, bot, -272.0], [x, 16.0, -272.0]) {
+                    Some((f, _)) => { let y = bot + (16.0 - bot) * f; hits.push(y); bot = y + 0.05; }
+                    None => break,
+                }
+            }
+            hits
+        };
+        let ledge = ups(184.0); let pad = ups(187.5); let gap = ups(182.3);
+        assert!(ledge.iter().any(|y| (13.4..=14.2).contains(y)), "the 13.76 step at x 184 [D interior scan], got {ledge:?}");
+        assert!(pad.iter().any(|y| (14.4..=15.0).contains(y)), "the 14.7 pad at x 186..194 [D pad rays], got {pad:?}");
+        assert!(!gap.iter().any(|y| (10.0..=16.0).contains(y)), "no floor near the ledge height between the beam's max face and the ledge [D], got {gap:?}");
+    }
+    // The east leg plays out under Bond's feet [D the keys]: sample the origin to its east
+    // extreme, then keep sampling to the westbound leg's start.
+    let mut max_ox = 0.0f32;
+    for k in 0..2350u32 {
+        w.scene.sim.as_mut().unwrap().step_bond(nf_game::player::Input::default(), false, false, false);
+        w.total_ticks += 1;
+        if k % 8 == 0 {
+            if let Some(m) = w.scene.sim.as_ref().unwrap().drones.scripts.entity_matrix((0x0600_09ef, 1)) {
+                max_ox = max_ox.max(m[3][0]);
+            }
+        }
+    }
+    assert!(max_ox > 176.5, "the gantry's east extreme ~177.22 [D the key trace], got {max_ox:.2}");
+    // THE BOARDING STAND-IN (the one remaining pos write, [S] unverified): place Bond over the
+    // WEST girder at the westbound leg's start — he settles onto the inner runway where
+    // probe_the_ride_carry rode (probe_crane.rs: the same placement, the carry held it whole
+    // ride). The game's own boarding path needs the live check (the report's live check 1);
+    // the ride and the drop below are the game's rules.
+    let ox = w.scene.sim.as_ref().unwrap().drones.scripts.entity_matrix((0x0600_09ef, 1)).unwrap()[3][0];
     {
         let sim = w.scene.sim.as_mut().unwrap();
-        sim.bond.pos = [140.0, 5.5, -276.0];
+        sim.bond.pos = [ox - 2.54, 15.5, -280.0];
         sim.bond.vel = [0.0; 3];
     }
-    w.wait(20);
-    eprintln!("[0d] the stand-in (the beam boarding + ride) — the ST-3 yard");
+    w.wait(10);
+    // THE RIDE, real input: the carry [M Player_FeetOnPoint 0x194188 → Control_InheritVelocity
+    // 0x133e88, the port's ground_motion] holds Bond at a constant offset on the runway
+    // through the west apex — probe_the_ride_carry's proven carry, now asserted.
+    let mut off0 = None;
+    let mut apex = None;
+    for k in 0..1000u32 {
+        w.scene.sim.as_mut().unwrap().step_bond(nf_game::player::Input::default(), false, false, false);
+        w.total_ticks += 1;
+        let sim = w.scene.sim.as_ref().unwrap();
+        let Some(m) = sim.drones.scripts.entity_matrix((0x0600_09ef, 1)) else { continue };
+        let ox = m[3][0];
+        if sim.bond.grounded && k > 20 && off0.is_none() {
+            off0 = Some(sim.bond.pos[0] - (ox - 2.54));
+        }
+        if ox < 138.2 {
+            let drift = off0.map(|o0| (sim.bond.pos[0] - (ox - 2.54)) - o0);
+            apex = Some((ox, drift));
+            break;
+        }
+    }
+    let (ox_apex, drift) = apex.expect("the beam must reach its west park (~137.59) with Bond aboard");
+    assert!((137.3..=138.2).contains(&ox_apex), "the west apex ~137.59 [D the key trace], got {ox_apex:.2}");
+    assert!(off0.unwrap().abs() < 0.8, "Bond rides the runway (placed at origin −2.54), got off {:.2}", off0.unwrap());
+    assert!(drift.is_some_and(|d| d.abs() < 0.75), "the carry must hold the offset (the ease-out lag only) [M 0x194188 → 0x133e88], got {drift:?}");
+    eprintln!("[0d] the ride walked: boarded at offset {:.2}, the apex at {ox_apex:.2} — at {:?}", off0.unwrap(), bond_pos(&w));
+    // THE DROP, real input: the ride stands on the WEST girder (top ~13.42-13.47, x 135.1..136.5
+    // at rest [D the deck probe's up/down column pairs at z −280]); the slot between the girders
+    // (x 136.5..138.6) is OPEN to the yard 4.0 [D the same probe: both ray directions empty;
+    // the fine-map down-rays read 4.0], and the girder edges WALL the walk (measured: the held
+    // walk input yields no displacement across an edge — the capsule's bottom sphere meets the
+    // edge face below the top). The game's way off is the JUMP [M Player_HandleJump 0x1916b0 —
+    // the vertical-only launch] + the walk's own air drift [M Player_Move runs every walk tick]:
+    // jump at the park, hold east ~20 ticks (the smoother's ~1.7 m drift centres him in the
+    // slot), release, fall ~9.5 m — survivable [M 0x1949a8:117-126: 9.1 m ≈ 24 damage]. The
+    // jump is a PLAIN jump: the icon context re-arms from proximity every tick [M 0x1949a8:22
+    // clears BL+0x95F; scene.rs's per-tick icon arm] and the wire icon #297 is ~75 m away.
+    {
+        let sim = w.scene.sim.as_mut().unwrap();
+        sim.bond.yaw = std::f32::consts::FRAC_PI_2; // face east, into the slot
+    }
+    let mut landed = false;
+    for k in 0..300u32 {
+        let input = if k == 0 {
+            nf_game::player::Input { jump: true, ..Default::default() }
+        } else if k <= 20 {
+            nf_game::player::Input { forward: 1.0, ..Default::default() }
+        } else {
+            nf_game::player::Input::default()
+        };
+        w.scene.sim.as_mut().unwrap().step_bond(input, false, false, false);
+        w.total_ticks += 1;
+        let sim = w.scene.sim.as_ref().unwrap();
+        if sim.bond.grounded && sim.bond.pos[1] < 7.0 && sim.bond.pos[0] > 136.0 && sim.bond.pos[0] < 139.2 { landed = true; break; }
+    }
+    assert!(landed, "the jump-drift must drop Bond through the slot into the yard, got {:?}", bond_pos(&w));
+    {
+        let sim = w.scene.sim.as_ref().unwrap();
+        assert!(sim.drones.health.health > 40.0, "the ~10 m fall is survivable [M 0x1949a8], got {}", sim.drones.health.health);
+    }
+    eprintln!("[0d] the drop landed in the yard — at {:?}", bond_pos(&w));
     // Leg 2: the yard south to the ST-3 plate (the nav web [D path 7]) — walked.
     w.walk_to(Wp::new(136.5, 4.5, -290.0).r(2.0), "the yard south 1");
     w.walk_to(Wp::new(136.0, 4.5, -308.5).r(1.2), "the plate");

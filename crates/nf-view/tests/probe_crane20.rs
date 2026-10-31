@@ -857,3 +857,38 @@ fn probe0d_ladder_try() {
 
 fn bond_pos(w: &Walker) -> [f32; 3] { w.scene.sim.as_ref().unwrap().bond.pos }
 fn substate(w: &Walker) -> u8 { w.scene.sim.as_ref().unwrap().bond.substate }
+
+#[test]
+#[ignore = "probe20: the gantry deck's cross-section + the ends (level-0d-beam-boarding); run with --ignored --nocapture"]
+fn probe20_beam_deck() {
+    let mut w = load_real();
+    w.wait(30);
+    let sim = w.scene.sim.as_ref().unwrap();
+    // Up/down column pairs along z −280 (the deck's cross-section at rest, ox 137.54).
+    let ups = |x: f32, z: f32, y0: f32, y1: f32| {
+        let mut hits = Vec::new();
+        let mut bot = y0;
+        for _ in 0..7 {
+            match sim.world.segment_hit([x, bot, z], [x, y1, z]) {
+                Some((f, _)) => { let y = bot + (y1 - bot) * f; hits.push(y); bot = y + 0.05; }
+                None => break,
+            }
+        }
+        hits
+    };
+    let mut x = 132.8f32;
+    while x <= 142.8 {
+        eprintln!("[p20] deck x{x:.1} z-280: up {:?} down {:?}", ups(x, -280.0, 8.4, 17.4), ups(x, -280.0, 17.4, 8.4));
+        x += 0.5;
+    }
+    // The z profile along the deck at x 139 (the ends: z −270.1 / −304.1).
+    let mut z = -269.0f32;
+    while z >= -305.5 {
+        eprintln!("[p20] deck z{z:.1} x139: up {:?} down {:?}", ups(139.0, z, 8.4, 17.4), ups(139.0, z, 17.4, 8.4));
+        z -= 2.0;
+    }
+    // What's below the deck's north face at z −270.5..−272 (the 8.0 ledge?) and the yard west.
+    for (xx, zz) in [(135.6f32, -270.5), (139.0, -270.5), (135.6, -271.5), (133.0, -276.0), (132.0, -280.0), (135.6, -304.5), (139.0, -304.5)] {
+        eprintln!("[p20] below ({xx},{zz}): up {:?}", ups(xx, zz, 0.0, 13.0));
+    }
+}
