@@ -320,13 +320,17 @@ fn the_east_duct_route_reaches_the_stairwell_slot() {
 // the game still carries Bond in [D walk-4 walls/nav]) and Script_Free's Player_Enable lands him
 // inside the facility at the body's event-time root. [S] unverified game-side (the live check in
 // docs/reports/level-14-vent-drop.md).
-// STILL #[ignore]: the hand-back is green but leg 2 wedges at the facility's west double door
-// (-52.2, 1.2, 40.1) (kind 2, state 0x2, pos01 0.00, ch_open 0, ch_lock 0x85, lock_flag 0,
-// approach 0 — two records at the same spot): the walker's "opening door" interaction does not
-// move it, Bond stands (-52.79, 1.14, 39.33) with the target (-49.0, 1.0, 38.4) 3.90 away, and
-// walk_to hits the 6000-tick cap. Whether the game opens it from a switch channel, the approach
-// side, or an interaction the port lacks is the next session's first question (the #381 band x
-// −51.97…−46.39 [D] sits just east of it).
+// NOT ignored — the "STILL #[ignore]" note below was STALE (fixed level-14-walk-to-the-level-end):
+// this helper is no test and carries no #[ignore]; both tests that share it
+// (the_vent_drop_hands_bond_into_the_facility, walk_the_infiltration_to_the_delta_exit) are
+// un-ignored and green. The old leg-2 wedge at the facility's west double door (−52.2, 1.2, 40.1;
+// two records, ch_lock 0x85) was the walk's own wrong premise, not a port gap: Door_Slide_11A/B
+// (plc 151/152, ch_lock 0x85 [D placements 151/152]) is SEALED until the sabotage cascade's death
+// channel 0x85 unlocks it (auto-open on the rising edge [M 0x1363c8:88-107]), and the game reaches
+// the west wing its own way — the SOUTH loop (the nav web's west corridor, which never crosses the
+// 0x85 plane [D nav path 0]) to the Kiko touch #381, whose cut-scene 0x0600062F carries Bond west
+// past the closed leaves; the 0x85 doorway is crossed only AFTER the cascade unlocks it
+// (the delta-exit walk's legs 2-4).
 /// Legs 1a..1f walked on real input (the spawn → the crossing → the trench/corridor/stairwell →
 /// the shaft Q-Claw reel → the vent lane → the mezzanine connector), then the #301 touch → the SP
 /// #276 vent cut-scene (0x06000833) → the ch 0x47 wait → the disabled tail → the hand-back assert.
@@ -644,49 +648,80 @@ fn the_vent_drop_hands_bond_into_the_facility() {
     walk_infiltration_to_handback(&mut w);
 }
 
-/// #[ignore] (level-14-skip-handback): the [M] hand-back stands Bond on the mezzanine where the
-/// scene grabbed him, and this walk's route into the facility was the REMOVED [S] arm's teleport —
-/// the mezzanine descent has no proven real-input path yet: the mezzanine's west face is a static
-/// wall (x ≈ 31.5, rays blocked knee-to-head z 38.4..40.8 [D lip probe]), the floor edge south of
-/// z ≈ 38.4 at x 32..34 has no walkable strip (down-rays NaN), and every steer (west, south-west,
-/// the walker's own avoidance) wedges at (32.06, 2.70, 39.2..39.7). The nav web has no route from
-/// the mezzanine to the facility floor either ("no nav route — the direct chain"). The pre-fix
-/// route's "(30.09, 1.07, 38.73)" was reached FROM the [S] arm's (27.60, 43.56), not by a fall.
-/// The next session needs the player's actual descent (a live check is in the report).
+/// UN-IGNORED (level-14-mezzanine-descent-2): the descent is WALKED on real input. The route the
+/// level-14-mezzanine-descent window mapped (the pad west + the 1.72 landing) continues west off
+/// the landing onto the low machine floor (ray height 0.80, x 31.5..33.5, z 33..35.5 [D rays]),
+/// then down onto the facility corridor floor (0.0 [D rays]; the corridor's own nav lane nodes
+/// 57/58/257-265 at x 27.3..28.3, disc y 0.0 [D nav]) and south to the leg-2 start — the probe
+/// walked the whole chain green (scratch_l14d l14d_door834, landed (29.99, 0.61, 38.00), inside
+/// this test's descent assert box). The unlocked door #834 (32.01, 2.14, 35.81 [D]; sim kind 2,
+/// ch_lock 0 [D params]) sits at the landing's south-west corner; the walked route passes west of
+/// its wall run (the leaf x 32.00..32.65 + the fusebox column #833 x 31.93..32.65 [D]) — the leaf
+/// plane is never crossed (the role question is the report's live check).
+///
+/// Extended (level-14-walk-to-the-level-end): past the delta exit the walk now drains the exit
+/// hold the game's own way (the 300-frame fade [M 0x1b2318:90-92 + 0x1c98c8:173-189]) and serves
+/// the NEXT LEVEL's load — `warm_exit_save` (Trigger_Activate's `Player_RamSave` [M 0x1b2318:97-116])
+/// into `load_with_carry("07000015.bin", Some(&save))` — then pins the arrival: the silo gantry
+/// spawn [D #1], the restored player state [M 0x1957a8], the carried channels [M 0x195670:13],
+/// part 1's records untouched [M 0x182270:68-129], and "Find the exit to Omega Sector" announcing
+/// off the spawn plate #484's 0x4b [D row 21; M 0x1827d8 case 1].
 #[test]
-#[ignore = "level-14-skip-handback: the mezzanine descent after the [M] hand-back has no proven real-input path — the wall at x 31.5 (z 38.4..40.8) + the floor edge south of z 38.4 wedge every steer at (32.06, 2.70, 39.4); the old route rode the removed [S] teleport"]
 fn walk_the_infiltration_to_the_delta_exit() {
     let iso = iso();
     let mut w = Walker::new(nf_view::load_with_carry(&iso, "07000014.bin", false, None).unwrap());
     walk_infiltration_to_handback(&mut w);
-    // The descent (level-14-skip-handback): the [M] hand-back stands Bond on the mezzanine where
-    // the scene grabbed him (his own matrix [M 0x1d94c0 case 6 fallback]) — the route south runs
-    // off the mezzanine's WEST edge onto the facility floor, the drop this route's own crossing
-    // made when the old cap burned ((30.09, 1.07, 38.73) — the same spot the pre-fix port's [S]
-    // eject used to land). Real input: the walker's own steering past the x≈32 lip, then a jump
-    // cadence if the lip needs it.
+    // The descent (level-14-mezzanine-descent-2): the [M] hand-back stands Bond on the mezzanine
+    // where the scene grabbed him (his own matrix [M 0x1d94c0 case 6 fallback]). The WALKED route:
+    // the pad west ((34.63, 2.80, 37.94) [L walked, level-14-mezzanine-descent]) → south
+    // ((34.57, 2.80, 37.18)) → the 0.43 step down onto the 1.72 landing ((33.09, 2.37, 35.38)
+    // grounded [L walked]) → west off the landing's edge onto the low machine floor (ray height
+    // 0.80, x 31.5..33.5, z 33..35.5 [D rays]) → down onto the facility corridor floor (0.0
+    // [D rays]; the corridor's own nav lane runs nodes 57/58/257-265 at x 27.3..28.3, disc y 0.0
+    // [D nav]) → south to the leg-2 start. Each drop leg walks over the edge and the next resumes
+    // mid-fall (the probe's chain, scratch_l14d l14d_door834, landed (29.99, 0.61, 38.00)).
     {
-        let _ = w.try_walk_to(Wp::new(30.5, 1.0, 37.8).r(1.5), "the mezzanine's south-west gap drop");
-        if w.scene.sim.as_ref().unwrap().bond.pos[1] > 1.5 {
-            for i in 0..400 {
+        w.walk_to(Wp::new(34.63, 2.80, 37.94).r(1.0), "the pad west");
+        w.walk_to(Wp::new(34.57, 2.80, 37.18).r(0.9), "the pad's south-west step head");
+        w.walk_to(Wp::new(33.09, 2.37, 35.38).r(0.8), "the 1.72 landing");
+        // The drop west: the low floor's east margin sits under the landing slab's overhang (the
+        // slab top is the 1.72 landing; the walk's grounded wedge at (33.68, 1.15, 35.20) with a
+        // clear segment to the target is the overhang catch), so the westing is the player's own
+        // push: steer south-west around the slab's corner, hop when grounded (the walker's wedge
+        // recovery), until clear of the overhang zone on the low floor.
+        {
+            let start = w.total_ticks;
+            loop {
+                assert!(w.total_ticks - start < 2400,
+                    "the landing's west drop never cleared the overhang\n{}",
+                    walker::fail_dump_pub(&w.scene, [31.8, 1.0, 34.0], "the landing west drop"));
                 {
                     let sim = w.scene.sim.as_ref().unwrap();
                     let p = sim.bond.pos;
-                    if p[1] < 1.5 && sim.bond.grounded && p[0] < 34.0 { break; }
+                    if p[0] < 32.6 && p[1] < 1.4 && sim.bond.grounded { break; }
                 }
-                let b = &w.scene.sim.as_ref().unwrap().bond;
+                let sim = w.scene.sim.as_ref().unwrap();
+                let b = &sim.bond;
                 let inp = nf_game::player::Input {
-                    forward: 1.0, jump: b.grounded && i % 20 == 0,
-                    turn: wrap_pi((-std::f32::consts::FRAC_PI_2) - b.yaw).clamp(-0.08, 0.08),
+                    forward: 1.0,
+                    jump: b.grounded && (w.total_ticks - start) % 30 == 0,
+                    turn: wrap_pi((31.8f32 - b.pos[0]).atan2(34.0 - b.pos[2]) - b.yaw).clamp(-0.08, 0.08),
                     ..Default::default()
                 };
                 w.tick(inp, false);
             }
+            eprintln!("[014] the low floor west reached {:?}", w.scene.sim.as_ref().unwrap().bond.pos);
         }
+        let _ = w.try_walk_to(Wp::new(30.4, 1.1, 34.9).r(0.8), "down onto the corridor floor (0.0)");
+        // The door wall's west jamb bars the direct south steer at x ≥ 30.3 (the segment hit
+        // 0.17 along from (30.33, 0.55, 35.44)); the corridor lane west of it (x ≈ 29.7) is the
+        // crossing the probe walked ((29.99, 0.61, 38.00) grounded).
+        let _ = w.try_walk_to(Wp::new(29.7, 0.8, 34.7).r(0.9), "the corridor west of the door wall");
+        w.walk_to(Wp::new(30.09, 0.65, 38.73).r(1.2), "the corridor south to the leg-2 spot");
         {
             let p = w.scene.sim.as_ref().unwrap().bond.pos;
             assert!((27.0..33.5).contains(&p[0]) && p[1] > 0.5 && p[1] < 1.6 && (36.5..40.5).contains(&p[2]),
-                "the mezzanine's west edge drops onto the facility floor (the route's own fall to (30.09, 1.07, 38.73)), got {p:?}");
+                "the descent lands on the facility corridor floor at the leg-2 start (the walked route, probe landing (29.99, 0.61, 38.00)), got {p:?}");
             eprintln!("[014] the descent landed {p:?}");
         }
     }
@@ -937,6 +972,9 @@ fn walk_the_infiltration_to_the_delta_exit() {
     // (23.31,1.14,−24.64) — master's unshifted route slipped the doorway diagonally; the three
     // legs below are the approach the probe walked green from BOTH the leg-6 start and the wedge
     // spot itself (E reacted, the exit leg arrived at +137 ticks).
+    // Arriving from the north (the west door at (27.8, -19.6)), the straight line to the approach
+    // spot catches the wall west of (25.5, -18.7); square up south first.
+    w.walk_to(Wp::new(26.0, 1.0, -22.0).r(1.0), "the delta doorway east");
     w.walk_to(Wp::new(22.9, 1.0, -22.8).r(1.2), "the delta doorway approach");
     w.walk_to(Wp { at: [24.0, 1.2, -22.8], act: Act::Use { use_ticks: 240 }, arrive: 1.1 }, "E the delta slides");
     w.walk_to(Wp::new(27.79, 1.28, -25.32).r(1.0), "to the Delta exit #944");
@@ -974,7 +1012,67 @@ fn walk_the_infiltration_to_the_delta_exit() {
     // [D the packs' 0xd events: 47/48/4a/0e/11/10/b8/92/93/b7/8a; the SP outs 7E/8/9/85/54].
     assert!(!w.scene.sim.as_ref().unwrap().drones.channels.on(0x64),
         "ch 0x64 stays down at a part exit — the tail AND spans all three parts' records [M 0x1827d8:26+119-123; D DEFs 07000015 ch 0x8E, 07000016 ch 0x8F/0x90]");
-    eprintln!("[014] walked out in {} ticks; stuck {}; falls {}", w.total_ticks, w.report.stuck_events.len(), w.report.falls.len());
+
+    // ---- The level's END: the exit hold runs out and the NEXT LEVEL LOADS — the game's own
+    // sequence, not a poke. The E-press pushed `GS_PauseGame(1)` +
+    // `GameFlow_PushState(300.0f, 7, 0xff)` [M 0x1b2318:90-92]: the world freezes while the fade
+    // advances every frame [M 0x1c9790 tail]; when state 8 pops, state 3 (`ResetMap_Load`) runs
+    // and the host drains `level_exit` [M 0x1c98c8:173-189], captures `Trigger_Activate`'s
+    // `Player_RamSave` [M 0x1b2318:97-116] and serves the warm load (start_async_load's campaign
+    // arm → `warm_exit_save`). The walk drains it the same way: tick out the hold, capture, load
+    // 07000015 with the carry.
+    while w.scene.sim.as_ref().unwrap().drones.exit_hold.is_some() {
+        w.tick(nf_game::player::Input::default(), false);
+    }
+    let exit_pos = w.scene.sim.as_ref().unwrap().bond.pos;
+    let (exit_health, exit_req) = {
+        let sim = w.scene.sim.as_ref().unwrap();
+        (sim.drones.health.health, sim.gun.switch_request)
+    };
+    let exit_states20 = w.scene.sim.as_ref().unwrap().drones.mission.states[20].clone();
+    {
+        let sim = w.scene.sim.as_ref().unwrap();
+        assert!(!sim.drones.channels.on(0x4b),
+            "part 2's enable 0x4b never fired in part 1 (the walk's own channel state) — the silo's spawn plate owns it [D row 21 enable 0x4b]");
+    }
+    let save = nf_view::warm_exit_save(w.scene.sim.as_ref().unwrap());
+    assert_eq!(save.weapon, exit_req,
+        "the save's weapon byte is M_CONTROL+0x63 as of the drain [M 0x195670:18-19]");
+    let mut w15 = Walker::new(nf_view::load_with_carry(&iso, "07000015.bin", false, Some(&save)).unwrap());
+    {
+        let sim = w15.scene.sim.as_ref().unwrap();
+        let p = sim.bond.pos;
+        assert!(p[0] > 93.0 && p[0] < 96.0 && p[1] > 40.0 && p[1] < 43.0 && p[2] > -2.0 && p[2] < 2.0,
+            "the warm arrival spawns on the silo gantry start #1 — the level's own start, warm changes only the player state [M 0x1957a8:9 arm; D spawn #1], got {p:?}");
+        assert_eq!(sim.gun.switch_request, exit_req,
+            "Player_RamLoad restores the saved weapon as the switch request [M 0x1a7ef8 case 0x07000015 'request = the saved weapon'; M 0x1957a8]");
+        assert!((sim.drones.health.health - exit_health).abs() < 0.01,
+            "Player_RamLoad restores the carried health (the warm arm passes boost 0 [M 0x1a7ef8's eight 0-arg calls]) [M 0x195670:16 + 0x1957a8]");
+        assert!(sim.drones.inventory.owned.get(2usize).copied().unwrap_or(false)
+            && sim.drones.inventory.owned.get(0x11usize).copied().unwrap_or(false)
+            && sim.drones.inventory.owned.get(0x4eusize).copied().unwrap_or(false),
+            "the owned weapons ride the save (P2K — the gate that skips the fresh-14 kit [M 0x1a7ef8 case 0x07000015] — the crossbow, the laser) [M 0x195670:7 + 0x1957a8]");
+        for &c in &[0x54u32, 0x85, 0x8c, 0xce] {
+            assert!(sim.drones.channels.on(c),
+                "the carried switch channel {c:#x} stays on across the load [M 0x195670:13 + 0x1957a8]");
+        }
+    }
+    w15.wait_enabled(3000, "the silo arrival");
+    w15.wait(120);
+    {
+        let sim = w15.scene.sim.as_ref().unwrap();
+        assert!(sim.drones.channels.on(0x4b),
+            "the spawn plate #484 fires ch 0x4b under the arrived Bond [D 07000015]");
+        assert_eq!(sim.drones.mission.states[21].len(), 1,
+            "MissionData row 21 lists exactly ONE record for the loaded part [D MissionData vaddr 0x2a42d8: level 0x07000015, count 1]");
+        assert_eq!(sim.drones.mission.states[21][0], 3,
+            "'Find the exit to Omega Sector' announces off the carried load's own spawn plate [M 0x1827d8 case 1; D row 21 enable 0x4b]");
+        assert_eq!(sim.drones.mission.states[20], exit_states20,
+            "part 1's records ride the load untouched — Mission_Init resets only the current + future parts [M 0x182270:68-129]");
+    }
+    eprintln!("[014] walked out in {} ticks; stuck {}; falls {}; the exit hold drained at {exit_pos:?} and 07000015 loaded warm, arrival {:?}",
+        w.total_ticks, w.report.stuck_events.len(), w.report.falls.len(),
+        w15.scene.sim.as_ref().unwrap().bond.pos);
 }
 
 /// The grill sister, REWRITTEN (level-14-vent-grate): the old version pinned the crawl THROUGH the

@@ -56,10 +56,11 @@ fn geisha(w: &Walker, ch: u8) -> Option<usize> {
     w.scene.sim.as_ref().unwrap().drones.list.iter().position(|d| d.second_channel == ch)
 }
 
-/// Kill every armed guard near `around` (the geisha's captor set) through the real input path:
-/// walk to a vantage 3 u from the captor on the Bond→captor line (the nav graph handles the
-/// rooms), then fire — no position write anywhere. The captors stand at the geisha's floor
-/// (health 10–20 [L baseline log]); the `shoot` loop's aim + tap is the game's own fire path.
+/// Kill every armed guard near `around` (the geisha's captor set) through the real fire path.
+/// The approach is real input too — NO bond.pos writes after the spawn: walk the nav web into
+/// the captor room (round 0 aims at the geisha's spot, later rounds at the guard's current pos —
+/// the AI moves), then fire through the real trigger path [the walker's `shoot` = the player's
+/// own step_bond aim/reposition/flank loop, incl. the nav-graph flank when pinned 9 s].
 fn clear_captors(w: &mut Walker, around: [f32; 3], label: &str) {
     for round in 0..8 {
         let target = {
@@ -68,12 +69,9 @@ fn clear_captors(w: &mut Walker, around: [f32; 3], label: &str) {
                 && d.pos.iter().zip(around).map(|(a, b)| (a - b).powi(2)).sum::<f32>() < 64.0)
         };
         let Some(di) = target else { return };
-        let at = w.scene.sim.as_ref().unwrap().drones.list[di].pos;
-        let bp = w.scene.sim.as_ref().unwrap().bond.pos;
-        let (dx, dz) = (at[0] - bp[0], at[2] - bp[2]);
-        let len = (dx * dx + dz * dz).sqrt().max(0.001);
-        let stand = [at[0] - dx / len * 3.0, at[1], at[2] - dz / len * 3.0];
-        w.walk_nav_to(stand, &format!("{label} captor {round} approach"), 1.0);
+        let dest = if round == 0 { around }
+            else { w.scene.sim.as_ref().unwrap().drones.list[di].pos };
+        w.walk_nav_to(dest, &format!("{label} captor {round} approach"), 3.5);
         if !w.shoot(di, &format!("{label} captor {round}")) {
             eprintln!("[02] {label}: captor {round} (drone {di}) survived the clip");
         }

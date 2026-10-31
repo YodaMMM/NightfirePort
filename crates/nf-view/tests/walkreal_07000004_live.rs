@@ -35,9 +35,12 @@ fn mission_row(level: u32) -> usize {
 
 /// Load and skip the intro + story cut-scenes the way the player does (the game's own skip action)
 /// until the AI re-enables and ch 0x53 (the castle-C hand-off [D script 0x06000082 stream 9]) is
-/// written. Returns the settled walker.
-fn load_ready(iso: &str) -> Walker {
-    let mut w = Walker::new(nf_view::load(iso, "07000004.bin", false).expect("load 07000004"));
+/// written. Returns the settled walker. `difficulty` = the difficulty select's value (1 agent
+/// default; 3 = 007), riding the front end's launch path [M load_with_carry_difficulty →
+/// load_impl's difficulty slot].
+fn load_ready_at(iso: &str, difficulty: u32) -> Walker {
+    let mut w = Walker::new(nf_view::load_with_carry_difficulty(iso, "07000004.bin", false, None, difficulty)
+        .expect("load 07000004"));
     {
         let sim = w.scene.sim.as_ref().unwrap();
         assert_eq!(sim.level, 0x0700_0004);
@@ -62,6 +65,9 @@ fn load_ready(iso: &str) -> Walker {
     }
     w
 }
+
+/// The pre-existing agent-difficulty settle (the older tests' entry point).
+fn load_ready(iso: &str) -> Walker { load_ready_at(iso, 1) }
 
 /// The OUT trigger #46's placement box (print helper) [D]. Unbounded (no collision mesh) — the
 /// mux needs none [M 0x1b1a78 case 5].
@@ -651,7 +657,18 @@ fn every_stats_row_matches_the_game_formulas_from_the_real_finish() {
     assert_eq!(find(0x15b).target, "45", "Dispatched target = the design 45 [L entry 4 row 1 — the game's own mission-wide value]");
     assert_eq!(find(0x15b).total, sep(raw[1]), "Dispatched points [M :171-185]");
     assert_eq!(find(0x15c).current, sub.to_string(), "Subdued value [M :70]");
+    assert_eq!(find(0x15c).target, e.rows[2].count.to_string(),
+        "Subdued target = the design count 3 [L entry 4 row 2; M 0x209938:77 — the builder passes rows+0x30 (row2.count) as the target arg, same shape as Dispatched]");
+    assert_eq!(find(0x15c).total, sep(raw[2]), "Subdued points = fptoui(row2.raw) [M 0x209938:77-79]");
     assert_eq!(find(0x16e).current, sur.to_string(), "Surrendered value [M :72]");
+    assert_eq!(find(0x16e).target, e.rows[3].count.to_string(),
+        "Surrendered target = the design count 3 [L entry 4 row 3; M 0x209938:82 — rows+0x44 (row3.count) as the target arg]");
+    assert_eq!(find(0x16e).total, sep(raw[3]), "Surrendered points = fptoui(row3.raw) [M 0x209938:82-84]");
+    // Sister: the Subdued/Surrendered/Stealth rows are CONDITIONAL on the entry's new_scores
+    // flag (0 for the 0x09 maps) [M 0x209938:74-86 `if (*(char *)(score_table + 0x38) != 0)`;
+    // the flag GetScore set at 0x1984b0:38-43] — 07000001 sets it, so all three show.
+    assert!(rows.iter().any(|r| r.id == 0x15c) && rows.iter().any(|r| r.id == 0x16e) && rows.iter().any(|r| r.id == 0x15d),
+        "the SP flag shows the Subdued/Surrendered/Stealth rows [M 0x209938:74]");
     assert_eq!(find(0x15d).current, pct(e.rows[4].ratio), "Stealth pct = fptoui(ratio·100+0.5) [M :84]");
     assert_eq!(find(0x15d).target, "----", "Stealth's −1 target [M 0x201df0:78-88]");
     assert_eq!(find(0x15d).total, sep(raw[4]), "Stealth points [M :201-233]");
@@ -675,13 +692,23 @@ fn every_stats_row_matches_the_game_formulas_from_the_real_finish() {
     assert_eq!(e.best, total, "best = max(best, last) — the first finish stamps best [M :312-315]");
 
     // ── The Dossier Records row (C_RBDSRECORDS 0x20bf00:19-44): the finished mission's values —
-    // the session layer (no profile), then the same through a profile (the save).
+    // the session layer (no profile), then the same through a profile (the save). The census:
+    // the game counts the counters whose descriptor KIND is 4 (the upgrade group) with the bit
+    // standing [M 0x20bf00:34-44 — the `aiStack_a0[0] == 4` arm; the old census counted every
+    // earned medal, the records-medal task fixed it per the decompile].
     assert_eq!(fe.record_row(4), (total, bond as u32,
-        (1..=4u32).filter(|&k| snap.has_medal(base, k, 0)).count() as u32),
-        "High Score = entry+0x30, Bond Moves = rows[0].value, Upgrades = the medal census [M 0x20bf00:26-44]");
+        (1..=4u32).filter(|&k| snap.has_medal(base, k, 0)
+            && nf_game::progress::REWARDS_TABLE.iter().find(|e| e.hash == base)
+                .is_some_and(|e| e.desc[k as usize].kind == 4)).count() as u32),
+        "High Score = entry+0x30, Bond Moves = rows[0].value, Upgrades = the kind-4 census [M 0x20bf00:26-44]");
     let medal = if total >= e.thresholds[3] { 4u32 } else if total >= e.thresholds[2] { 3 }
         else if total >= e.thresholds[1] { 2 } else if total >= e.thresholds[0] { 1 } else { 5 };
-    let want = match medal { 4 => Some((0x307, 0x0300_013e)), 3 => Some((0x306, 0x0300_013f)),
+    // [M C_RBDSRECORDS 0x20bf00:58-110 + disasm 0x20c0e4-0x20c154 — the all-four arm loads
+    // 0x306/0x300013f, the k1..k3 arm 0x307/0x300013e; the results page's platinum emblem is
+    // 0x300013f and its gold emblem 0x300013e [M 0x208e78:109-139]. The test previously expected
+    // the two arms swapped — the records-medal task fixed the TEST (the decompile always said
+    // 0x306 first: the old `want` contradicted 0x20bf00 and the game).]
+    let want = match medal { 4 => Some((0x306, 0x0300_013f)), 3 => Some((0x307, 0x0300_013e)),
         2 => Some((0x308, 0x0300_0140)), 1 => Some((0x309, 0x0300_013d)), _ => None };
     assert_eq!(fe.record_medal(4), want, "the medal chain follows the four bonus flags [M 0x20bf00:58-110]");
     // The profile path: the save's restored table reads the same [M PlrStats_SetupScoreTable 0x1990e0].
@@ -692,4 +719,110 @@ fn every_stats_row_matches_the_game_formulas_from_the_real_finish() {
     fe.profile = None;
     fe.session_progress = None;
     assert_eq!(fe.record_row(4), (0, 0, 0), "no save and no session → the fresh-boot zeros [M 0x1984b0's zeroed table]");
+}
+
+/// records-medal: the reported symptom pinned END TO END through the real input path — a 07000004
+/// finish at PLATINUM shows the platinum emblem on the Dossier Records page, not gold. The chain:
+/// the difficulty select's 007 launch (difficulty 3, ScoringTableDifMul 2.0 [M 0x1984b0:294-300])
+/// → the real walk (the same route as
+/// `every_stats_row_matches_the_game_formulas_from_the_real_finish`) → the results commit
+/// (`PlrStat_GetScore(0)` [M 0x208e78:77] + `Menu_SetLevelBonus(GameState+0x48, 4, 0)`
+/// [M :169 → 0x1ffa10]) → the Records medal chain [M C_RBDSRECORDS 0x20bf00:58-110 + disasm
+/// 0x20c0e4-0x20c154]. The port's `record_medal` had the 0x306 and 0x307 arms swapped (all four
+/// tiers → the GOLD emblem 0x300013e — the reported gold-after-platinum), fixed here.
+#[test]
+fn the_platinum_finish_shows_platinum_on_records() {
+    let iso = iso();
+    let mut w = load_ready_at(&iso, 3);
+    {
+        let sim = w.scene.sim.as_ref().unwrap();
+        assert_eq!(sim.drones.progress.difficulty, 3, "the 007 difficulty rode the launch path");
+    }
+    w.tick(Default::default(), false);
+    w.tick(Default::default(), false);
+    let (uzi, armour) = {
+        let sim = w.scene.sim.as_ref().unwrap();
+        let uzi = sim.drones.pickups.iter()
+            .find(|p| p.kind == 0 && p.weapon == 18 && !p.gone && (p.start[2] - 42.66).abs() < 1.0)
+            .or_else(|| sim.drones.pickups.iter().find(|p| p.kind == 0 && p.weapon == 18 && !p.gone))
+            .map(|p| p.start).expect("the StormUzi pickup");
+        let armour = sim.drones.pickups.iter().find(|p| p.kind == 3 && !p.gone).map(|p| p.start)
+            .expect("the BodyArmourHeavy pickup");
+        (uzi, armour)
+    };
+    w.walk_nav_to(uzi, "the StormUzi pickup", 0.4);
+    w.walk_nav_to(armour, "the armour pickup", 0.4);
+    let target_i = w.scene.sim.as_ref().unwrap().drones.list.iter()
+        .position(|d| d.skin == 0x0500_001e).expect("the target drone exists");
+    // 007 drops the autoaim assist [M Check_AutoAim 0x1a73f8:127-149 — Autoaim_HardMul at
+    // difficulty 3], so the same tap discipline lands fewer hits per magazine. The level ships
+    // THREE StormUzi placements with respawn 2 (#6/#7/#8 [D 07000004.md pickups 0xF0]) — the
+    // real player's resupply: walk back to a live Uzi, re-arm, keep shooting.
+    let mut killed = w.shoot(target_i, "the target");
+    for round in 1..8 {
+        let sim = w.scene.sim.as_ref().unwrap();
+        if sim.drones.list[target_i].corpse || sim.drones.list[target_i].health <= 0.0 { killed = true; break; }
+        let ammo = sim.gun.clip + sim.gun.spare;
+        let live = sim.drones.pickups.iter().find(|p| p.kind == 0 && p.weapon == 18 && !p.gone).map(|p| p.start);
+        drop(sim);
+        let Some(p) = live else {
+            eprintln!("[04-platinum] round {round}: no live Uzi pickup (ammo {ammo}) — pushing on");
+            continue;
+        };
+        eprintln!("[04-platinum] round {round}: resupply at ({:.2},{:.2},{:.2}) with ammo {ammo}", p[0], p[1], p[2]);
+        w.walk_nav_to(p, &format!("the StormUzi resupply {round}"), 0.4);
+        killed = w.shoot(target_i, "the target");
+    }
+    assert!(killed || w.scene.sim.as_ref().unwrap().drones.list[target_i].corpse
+        || w.scene.sim.as_ref().unwrap().drones.list[target_i].health <= 0.0, "the target must die");
+    let mut ended = false;
+    for _ in 0..900u32 {
+        w.tick(Default::default(), false);
+        if w.scene.sim.as_ref().unwrap().drones.mission_end.is_some() { ended = true; break; }
+    }
+    assert!(ended, "case 4 must fire the level end [M 0x182c60:65-76]");
+
+    let (base, diff) = {
+        let sim = w.scene.sim.as_ref().unwrap();
+        (sim.drones.mission.base_map, sim.drones.progress.difficulty)
+    };
+    assert_eq!(base, 0x0700_0001, "part 4 scores under the Double Cross base [L mission table 0x2a4350 row 7]");
+    assert_eq!(diff, 3, "the finish carries the 007 difficulty");
+
+    // The results page's enter (P_NFRESULTS 0x208e78 case 0x4c): the commit + the award.
+    let mut fe = nf_view::menu::FrontEnd::new();
+    fe.flow.current_level = 0x0700_0004;
+    fe.flow.stack = vec![nf_view::menu::ST_RUNNER];
+    fe.mission_ended(nf_view::menu::Outcome::Complete, nf_view::menu::Stats::default());
+    {
+        let sim = w.scene.sim.as_mut().unwrap();
+        assert!(fe.results_enter(&mut sim.drones.progress, base, 6, diff, None),
+            "the results commit [M 0x208e78:77]");
+        fe.session_progress = Some(sim.drones.progress.clone());
+    }
+    let snap = fe.session_progress.clone().unwrap();
+    let idx = snap.table.iter().position(|e| e.hash == base).unwrap();
+    let e = snap.table[idx];
+    eprintln!("[04-platinum] committed {} vs thresholds {:?} → medal {}",
+        e.last, e.thresholds, fe.results.as_ref().unwrap().medal);
+
+    // The results page itself awards platinum [M 0x208e78:135-141 — score ≥ th[3] → name 0x2c7,
+    // emblem 0x300013f]: the port's fields pair the same.
+    let rf = fe.results.as_ref().expect("the results fields");
+    assert!(rf.score >= e.thresholds[3], "the 007 finish scores at least the platinum threshold");
+    assert_eq!(rf.medal, 4, "the results award is platinum [M 0x208e78:135-141]");
+    assert_eq!(rf.emblem, 0x0300_013f, "the results platinum emblem [M 0x208e78:139]");
+    // The award set all four tier bits [M Menu_SetLevelBonus 0x1ffa10:71-82 — the loop runs
+    // medal..1 and sets every not-yet-standing bit].
+    assert!((1..=4).all(|k| snap.has_medal(base, k, 0)), "all four tiers stand after platinum");
+
+    // The Records page shows the SAME medal [M C_RBDSRECORDS 0x20bf00:58-110 + disasm
+    // 0x20c0e4-0x20c154 — the all-four arm loads label 0x306 / emblem 0x300013f]: the platinum
+    // emblem, not the gold 0x307/0x300013e the port's swapped arms produced.
+    assert_eq!(fe.record_medal(4), Some((0x306, 0x0300_013f)),
+        "Records shows the platinum emblem after the platinum finish [M 0x20bf00:58-110; M 0x20c0e4-0x20c0f0]");
+    // The Upgrades census: the game counts only the kind-4 (upgrade-group) counter with its bit
+    // standing [M 0x20bf00:34-44 — the `aiStack_a0[0] == 4` arm] — 1 here (the gold-group bit),
+    // not the four earned medals.
+    assert_eq!(fe.record_row(4).2, 1, "the Upgrades census is the kind-4 count [M 0x20bf00:34-44]");
 }

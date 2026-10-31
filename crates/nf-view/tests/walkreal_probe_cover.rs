@@ -45,7 +45,7 @@ fn dump_cover_wedge() {
     eprintln!("nav_path_for(a) = {path:?}");
     let nodes = path.map(|p| nav.target_nodes(&sim.world, p, b, 0.0)).unwrap_or_default();
     eprintln!("target_nodes = {nodes:?}");
-    match nf_game::nav::Route::to_position(nav, &sim.world, path, a, b, &nodes, &[]) {
+    match nf_game::nav::Route::to_position(nav, &sim.world, path, a, b, &nodes, &[], &|_, _| false) {
         Ok((code, r)) => {
             let d = r.distance(nav, a);
             eprintln!("to_position: code {code} nodes {:?} index {} dest ({:.2},{:.2},{:.2}) dist(a) {d:.3}",
@@ -58,7 +58,7 @@ fn dump_cover_wedge() {
     let c: [f32; 3] = [-30.0, 6.0, 13.0];
     let pathc = nav.nav_path_for(c);
     let nodesc = pathc.map(|p| nav.target_nodes(&sim.world, p, b, 0.0)).unwrap_or_default();
-    match nf_game::nav::Route::to_position(nav, &sim.world, pathc, c, b, &nodesc, &[]) {
+    match nf_game::nav::Route::to_position(nav, &sim.world, pathc, c, b, &nodesc, &[], &|_, _| false) {
         Ok((code, r)) => {
             let d = r.distance(nav, c);
             eprintln!("c->b: code {code} nodes {:?} dist {d:.3}", r.nodes);

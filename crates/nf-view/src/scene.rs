@@ -6252,6 +6252,9 @@ pub struct Scene {
     /// (`control_create_object(0x20, pos, rot)`) and `rotor_update` 0x18f568 adds ROT·FRAME_RATE_MUL
     /// to obj+0x50 each spinning tick, so the drawn rotation is the placement ROT + the sim's angle.
     pub rotor_placements: Vec<([f32; 3], [f32; 3])>,
+    /// The rigid bodies' placement indices (0xD8, placement order): slot `bi` past the rotors draws
+    /// the body whose `RbObj::placement` is `rbody_placements[bi]` at its live obj+0x90.
+    pub rbody_placements: Vec<u16>,
     /// The 0x34 placements the build gave posed slots (the camera slots follow them; the sim's
     /// gunimp list may be emptied by the MP Gun Emplacements setting, the slot layout is not).
     pub gunimp_placements: usize,
@@ -6271,6 +6274,19 @@ pub struct Scene {
     /// slot [D lod_word −1] and the doorway ends open [L]). Consumed by lib.rs's per-frame
     /// `Renderer::destroy_dead` feed; the centre matches the material's cull sphere by bits.
     pub destroy_centres: Vec<([f32; 3], usize)>,
+    /// The destroyed-glist swap's WRECK side, per drawn 0xe1 leaf that resolves a drawable
+    /// destroyed glist: the baked wreck instance's (world centre, destroy placement). The
+    /// target is `Destroy_Create` 0x12c318:25-30's tag[0] — `*(glist+0x40)` (the block-0x27
+    /// LOD-next) when the disc word stands, else the parsemap fallback slot `pCelList +
+    /// idx*0x50 + 0x50` [M 0x1d1b68 computes it unconditionally; pCelList is one 0x50-byte
+    /// record per main-map entity, `parsemap_block_LOD` 0x1d1f10 writes `cel+0x40 = index*0x50
+    /// + pCelList`] — drawn only while the leaf is dead (the swap replaces the glist
+    /// wholesale; the intact materials keep dropping via `Renderer::destroy_dead`). A wreck
+    /// whose object has no batches or carries the no-draw bit 0x10 is not baked (an
+    /// undrawable slot vanishes [M the FLAGS_COPYING gate — View_AddObjects 0x1e62d8:33's
+    /// `(obj+0xF0 & 0x8010) == 0`]). Consumed by lib.rs's per-frame `Renderer::destroy_wreck_draw`
+    /// feed; the centre matches the wreck materials' cull spheres by bits.
+    pub destroy_wrecks: Vec<([f32; 3], usize)>,
     /// Per level object hashcode: whether its glist flags carry 0x800 (the character-lighting bit
     /// `Control_SetGList` 0x134960 merges into obj+0xF0). fix-render2: decides the ambient dim for
     /// the drawn script entities (the truck's nine objects carry 0x8880 [L ee_start_05.bin
@@ -7107,6 +7123,9 @@ pub fn build(level: &Level, cels_only: bool, skeletons: &HashMap<u8, Skeleton>, 
         // NOTE at the MISC_KINDS sweep). The centre is the exact float triple the group's cull sphere
         // carries, so the draw filter matches it by bits.
         let mut destroy_centres: Vec<([f32; 3], usize)> = Vec::new();
+        // The swap's wreck side (see the field doc): the baked wreck instances' (world centre,
+        // placement) — drawn only while the leaf is dead (lib.rs's `Renderer::destroy_wreck_draw`).
+        let mut destroy_wrecks: Vec<([f32; 3], usize)> = Vec::new();
         // The level's room cels (see `Cel`): parsed before the draw so the static 0x800 world objects can snap
         // to their cel's ambient exactly as the game's link does at level start (`build_LinkToRoom` 0x1c9680 →
         // the snap in `control_link_object_to_cel` 0x1346b8; channels are all 0 here, so triple 1 reads).
@@ -8365,6 +8384,10 @@ pub fn build(level: &Level, cels_only: bool, skeletons: &HashMap<u8, Skeleton>, 
                 // The rotors spin on a posed slot below (after the dynamic objects): the static draw
                 // held the placement pose forever [M rotor_update 0x18f568 writes obj+0x50 every tick].
                 if kind == 0x71 && cels_only { *misc_drawn.entry(0x71).or_default() += 1; continue; }
+                // The rigid bodies ride a posed slot below (after the rotors): `RB_EulerEvolve` rewrites
+                // obj+0x90 once a body is disturbed [M 0x1d7810:0x1d796c-0x1d7994], so the static draw
+                // left a shot lamp hanging still while its body swung.
+                if kind == 0xd8 && cels_only { *misc_drawn.entry(0xd8).or_default() += 1; continue; }
                 // A lock whose object has a LOD variant (the keypads: "Lock - KeypadLocked" →
                 // "Lock - KeypadUnlocked" [D block 0x27]) rides the posed slot space below, so the
                 // unlock's `Control_NextLOD` can swap it.
@@ -8395,7 +8418,35 @@ pub fn build(level: &Level, cels_only: bool, skeletons: &HashMap<u8, Skeleton>, 
                 // The 0xe1 destroy leaf's world centre for the per-frame dead gate (see the NOTE above):
                 // the same `transform(matrix, obj.centre)` add_instance bakes into the group's cull
                 // sphere, so the bits match the material's `centre` the draw filter reads.
-                if kind == 0xe1 { destroy_centres.push((transform(&inst.matrix, obj.centre), pi)); }
+                if kind == 0xe1 {
+                    destroy_centres.push((transform(&inst.matrix, obj.centre), pi));
+                    // The destroyed-glist swap's WRECK side. `Destroy_Create` 0x12c318:25-30 stores
+                    // tag[0] = `*(glist+0x40)` when the block-0x27 LOD-next word stands, else the
+                    // parsemap fallback slot `pCelList + idx*0x50 + 0x50` [M 0x1d1b68 computes it
+                    // unconditionally; `parsemap_block_LOD` 0x1d1f10 writes `cel+0x40 = index*0x50 +
+                    // pCelList`, so the fallback record is the NEXT main-map entity's glist];
+                    // `Destroy_Smash` 0x12bb60's `Control_SetGList(obj, tag[0])` swaps it in (the
+                    // disassembly 0x12bbb8 `lw a1,0(s1)` + 0x12bbc4 — the decomp dropped the arg).
+                    // The port resolves the same two targets and bakes the wreck at the LEAF's own
+                    // matrix (the swap changes only the glist; obj+0x90 stands). An undrawable slot
+                    // (no batches, or the no-draw bit 0x10 — `View_AddObjects` 0x1e62d8:33's
+                    // `(obj+0xF0 & 0x8010) == 0` gate, the FLAGS_COPYING evidence) is not baked: the
+                    // leaf just vanishes. The wreck's ambient dim follows the swapped-in glist's own
+                    // 0x800 flags (obj+0xF0 is the glist's flags copy [M Control_SetGList 0x134960]).
+                    let wreck = level.maps[map].lod_target(object)
+                        .map(|o| (map, o))
+                        .or_else(|| (p.index as usize + 1 < level.maps[map].objects.len()).then_some((map, p.index as usize + 1)));
+                    if let Some((wm, wo)) = wreck {
+                        let wobj = &level.maps[wm].objects[wo];
+                        if wobj.flags & 0x10 == 0 && wobj.gfx.leaves.iter().any(|l| !l.batches.is_empty()) {
+                            let wmult = if wobj.flags & 0x800 != 0 {
+                                mul_bytes(cel_ambient(&room_cels, transform(&inst.matrix, wobj.centre), 0).unwrap_or([0xff; 3]))
+                            } else { [1.0; 3] };
+                            add_instance(level, &Instance { map: wm, object: wo, matrix: inst.matrix, placement: p.clone() }, Layer::World, None, &mut groups, Some(&mut bounds), None, None, None, wmult, &room_cels, u32::MAX, u32::MAX);
+                            destroy_wrecks.push((transform(&inst.matrix, wobj.centre), pi));
+                        }
+                    }
+                }
                 *misc_drawn.entry(kind).or_default() += 1;
                 // The car's two fixed-hashcode children (Car_InitBits 0x12fec8), drawn only with a car body.
                 if kind == 0xda {
@@ -8423,6 +8474,7 @@ pub fn build(level: &Level, cels_only: bool, skeletons: &HashMap<u8, Skeleton>, 
         let mut lock_matrices: Vec<Mat4> = Vec::new();
         let mut dynobj_matrices: Vec<Mat4> = Vec::new();
         let mut rotor_placements: Vec<([f32; 3], [f32; 3])> = Vec::new();
+        let mut rbody_placements: Vec<u16> = Vec::new();
         let mut gunimp_placements = 0usize;
         let mut door_scene_hidden = std::collections::HashSet::new();
         let mut sl_lod: Vec<u16> = Vec::new();
@@ -8629,6 +8681,22 @@ pub fn build(level: &Level, cels_only: bool, skeletons: &HashMap<u8, Skeleton>, 
                 let mx = nf_formats::placement::object_matrix(p.rotation, p.translation);
                 let inst = Instance { map, object, matrix: mx, placement: p.clone() };
                 add_instance(level, &inst, Layer::Character, None, &mut groups, None, None, Some((rotor_base + ri) as u16), None, [1.0; 3], &room_cels, u32::MAX, u32::MAX);
+            }
+            // The rigid bodies (0xD8, placement order — `Rbodies::create`'s), after the rotors: one slot
+            // each, posed every tick at the body's obj+0x90 (rotation rows + the +0x30 translation)
+            // [M RB_Create 0x1d6bf0:53, RB_EulerEvolve 0x1d7810]. RB_Create keeps no obj+0xF0 copy, so
+            // a 0x10-flagged glist still draws (the non-copying kinds above).
+            let rbody_base = rotor_base + level.maps[m].placements.iter().filter(|p| p.flags & 0xff == 0x71).count();
+            for (bi, (pi, p)) in level.maps[m].placements.iter().enumerate().filter(|(_, p)| p.flags & 0xff == 0xd8).enumerate() {
+                rbody_placements.push(pi as u16);
+                if !cels_only { continue; }
+                let target = if p.by_hash() { level.by_hash.get(&p.hashcode).copied() }
+                    else if (p.index as usize) < level.maps[m].objects.len() { Some((m, p.index as usize)) } else { None };
+                let Some((map, object)) = target else { continue };
+                if !level.maps[map].objects[object].gfx.leaves.iter().any(|l| !l.batches.is_empty()) { continue; }
+                if let Ok(h) = std::env::var("NF_HIDE") { if h.split(',').any(|n| !n.is_empty() && level.maps[map].objects[object].name.contains(n)) { continue; } }
+                let inst = Instance { map, object, matrix: nf_formats::placement::object_matrix(p.rotation, p.translation), placement: p.clone() };
+                add_instance(level, &inst, Layer::Character, None, &mut groups, None, None, Some((rbody_base + bi) as u16), None, [1.0; 3], &room_cels, u32::MAX, u32::MAX);
             }
             // Level-placed pickups (`Pickup_Create` 0x18dda0): `View_DrawObjectGlist` 0x1e6780 draws
             // `obj+0xD8` at `obj+0x90` — the same object carries the glist the renderer draws [M], so the
@@ -9106,10 +9174,11 @@ pub fn build(level: &Level, cels_only: bool, skeletons: &HashMap<u8, Skeleton>, 
                 }
             }
         }
-        Scene { shard_tex, cels: room_cels, cel_graph, streams: None, music_files: None, music_tables: None, sound_bank: None, sound_spares: Vec::new(), snow_texture, vertices, indices, materials, textures, hud_textures, woman: None, hud, script_billboards, view_models, mp_bodies, bond_body, mp_body_weapons, mp_char_bodies, mp_anim_sets, fog, bounds, start, stats, characters, char_vertex_start, char_verts, sequences, attachments, sim, colliders, models_0x800, npc_pool, ladders_drawn, grapple_hooks_drawn, misc_drawn, lock_matrices, dynobj_matrices, rotor_placements, gunimp_placements,
+        Scene { shard_tex, cels: room_cels, cel_graph, streams: None, music_files: None, music_tables: None, sound_bank: None, sound_spares: Vec::new(), snow_texture, vertices, indices, materials, textures, hud_textures, woman: None, hud, script_billboards, view_models, mp_bodies, bond_body, mp_body_weapons, mp_char_bodies, mp_anim_sets, fog, bounds, start, stats, characters, char_vertex_start, char_verts, sequences, attachments, sim, colliders, models_0x800, npc_pool, ladders_drawn, grapple_hooks_drawn, misc_drawn, lock_matrices, dynobj_matrices, rotor_placements, rbody_placements, gunimp_placements,
             door_scene_hidden,
             sl_lod,
-            destroy_centres }
+            destroy_centres,
+            destroy_wrecks }
     }
 
     /// Sequence index and frame a character shows after `ticks` 60 Hz updates: its start script (`choice = None`) or the
@@ -9185,14 +9254,16 @@ pub fn build(level: &Level, cels_only: bool, skeletons: &HashMap<u8, Skeleton>, 
             if self.bond_body == Some(ci) {
                 let s = self.sim.as_ref()?;
                 s.wire_camera()?;
-                let local = nf_game::anim::script_pose_drone(&s.scripts, &s.seqs, &c.skeleton, &c.skin, s.bond.wire_anim, s.bond.wire_anim_time.max(0.0))?;
-                // The player object (obj+0x30) IS the hip: the anim's root height comes off so the root
-                // bone sits at the object [the grab's 1.0207 hang offset then puts the hands on the cable -
-                // L PCSX2 07000005 cable, audits/render-1029-cable p-stand].
-                let hip = local.first().map_or(0.0, |r| r.0[1]);
+                let mut local = nf_game::anim::script_pose_drone(&s.scripts, &s.seqs, &c.skeleton, &c.skin, s.bond.wire_anim, s.bond.wire_anim_time.max(0.0))?;
+                // The player object (obj+0x30) IS the root: the sim already integrates the wire anims'
+                // root motion into Bond's position (`RootTrack`, `AnimFrameResolve` 0x1c35f8 adds the root
+                // delta to obj+0x30), so the root bone draws at the object - zeroed like a drone's. Drawing
+                // the clip's own root offset on top doubled it and snapped the body ~1.1 at every clip
+                // switch (the turn -> move hand-over-hand). The grab's 1.0207 hang offset puts the hands on
+                // the cable [L PCSX2 07000005 cable, audits/render-1029-cable p-stand].
+                if let Some(r) = local.first_mut() { r.0 = [0.0; 3]; }
                 let world = anim::world_pose(&local, &c.skin);
-                let p = s.bond.pos;
-                let m = nf_formats::placement::object_matrix([0.0, s.bond.yaw, 0.0], [p[0], p[1] - hip, p[2]]);
+                let m = nf_formats::placement::object_matrix([0.0, s.bond.yaw, 0.0], s.bond.pos);
                 return Some((anim::skin_matrices(&world, &c.skin), world, m));
             }
             // Script animations: the object's frame, the root kept (the object sits at the origin).
@@ -10036,6 +10107,14 @@ pub fn build(level: &Level, cels_only: bool, skeletons: &HashMap<u8, Skeleton>, 
                 let di = c - 3 * s.drones.sensors.list.len();
                 if di >= self.dynobj_matrices.len() {
                     let ri = di - self.dynobj_matrices.len();
+                    if ri >= self.rotor_placements.len() {
+                        // Past the rotors: the rigid bodies at their live obj+0x90 [M RB_EulerEvolve 0x1d7810].
+                        let pi = *self.rbody_placements.get(ri - self.rotor_placements.len())?;
+                        let st = &s.drones.rbodies.list.iter().find(|o| o.placement == pi)?.st;
+                        let r = st.matrix;
+                        return Some([[r[0][0], r[0][1], r[0][2], 0.0], [r[1][0], r[1][1], r[1][2], 0.0],
+                            [r[2][0], r[2][1], r[2][2], 0.0], [st.trans[0], st.trans[1], st.trans[2], 1.0]]);
+                    }
                     let (rot, trans) = *self.rotor_placements.get(ri)?;
                     let a = s.drones.worldobjs.rotors.get(ri)?.angle;
                     return Some(nf_formats::placement::object_matrix([rot[0] + a[0], rot[1] + a[1], rot[2] + a[2]], trans));

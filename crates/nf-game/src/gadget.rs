@@ -200,6 +200,7 @@ mod tests {
             placement: 0, pos: [x, y, 0.0], radius: 1.0, out, key_channels: [0xffff; 2], burn: 0, burned: false, unlock_on_operative: false, unlocked: false,
             kind: 1, code: 0, scan_progress: 0, scan_solved: 0, scanning: false, lod_next: false,
             burn_a: 0xff, burn_b: 0xff, grace: 0, pending_sounds: Vec::new(),
+            facing: [0.0, 0.0, 1.0],
         }
     }
 
@@ -292,6 +293,7 @@ mod tests {
             burn: 0, burned: false, unlock_on_operative: false, unlocked: false,
             kind, code: 7, scan_progress: 0, scan_solved: 0, scanning: false, lod_next: false,
             burn_a: 0xff, burn_b: 0xff, grace: 0, pending_sounds: Vec::new(),
+            facing: [0.0, 0.0, 1.0],
         }
     }
 

@@ -301,3 +301,55 @@ fn combat_wait_holds_then_reconsiders_at_the_three_second_timer() {
         "CombatState at timer C: a new state, or CombatWait re-armed [M 0x164960:76-86]; state {s:#x}");
 }
 
+
+/// guard-opponent-pointer: a combat guard that LOSES SIGHT of Bond never parks in NoOpponent
+/// 0x60 while Bond lives. The router head's gate is the +0x170 pointer and the +0x238 stamp
+/// [M DroneFunc_CombatState 0x148338:19-31 — no sight read], and the pointer is the per-tick
+/// FindOpponent fold [M 0x1424e0:100-121] — "Bond alive", not "Bond seen" — so sight loss
+/// alone cannot fire it. (The pre-port sight-based head parked unseening guards in 0x60.)
+#[test]
+fn a_sight_lost_guard_stays_out_of_no_opponent_while_bond_lives() {
+    let Some(l) = LevelX::load(L05) else { eprintln!("skip: NF_ISO not set"); return };
+    let d = l.data(L05);
+    let (mut sim, gi) = guard_sim(&l);
+    let near = bond_near(&sim, gi, 4.0);
+    let far = bond_far();
+    enter(&mut sim, &d, gi, state::COMBAT, &near);
+    for _ in 0..150 {
+        sim.tick(&d, &far);
+        assert_ne!(sim.list[gi].state, state::NO_OPPONENT,
+            "a sight-lost guard with a living Bond must never reach 0x60 (the head is the pointer/stamp gate [M 0x148338:19-31]); log {:x?}",
+            sim.list[gi].log.iter().map(|&(_, x)| x).collect::<Vec<_>>());
+    }
+}
+
+/// guard-opponent-pointer: the same guard over Bond's DEATH — the pointer zeroes that tick
+/// [M 0x1424e0:111-114] but the +0x238 stamp (refreshed on every sighted tick behind the
+/// reaction gate [M 0x175ef0:66-68 from 0x176a28:222-231]) keeps `HasOpponent` — the router
+/// head's gate [M 0x148338:19-31] — true for its 30-tick window [M 0x14ad58:11-14], so 0x60
+/// must NOT land in the grace and must land once the stamp goes stale.
+#[test]
+fn the_router_holds_through_the_stamp_grace_after_bonds_death() {
+    let Some(l) = LevelX::load(L05) else { eprintln!("skip: NF_ISO not set"); return };
+    let d = l.data(L05);
+    let (mut sim, gi) = guard_sim(&l);
+    let near = bond_near(&sim, gi, 4.0);
+    let far = bond_far();
+    enter(&mut sim, &d, gi, state::COMBAT, &near);
+    // sighted ticks past the reaction gate stamp +0x238 [M 0x175ef0:33-36, 66-68]
+    for _ in 0..5 { sim.tick(&d, &near); }
+    sim.health.health = 0.0;
+    let mut held = 0;
+    for t in 0..150u32 {
+        sim.health.health = 0.0;
+        sim.tick(&d, &far);
+        if sim.list[gi].state == state::NO_OPPONENT { break; }
+        held = t + 1;
+    }
+    // The head's gate is the pointer OR the stamp [M 0x148338:19-31]: through the 30-tick
+    // window the fresh stamp keeps the guard out of 0x60. (The eventual 0x60 after the stamp
+    // goes stale is the head's own [M 0x148338:19-31 → 0x60] — its observability here depends
+    // on whether the guard's wander keeps him in the combat family, which the decompile does
+    // not pin; the 0x60 arm itself is pinned by no_opponent_waits_then_attacks_when_one_exists.)
+    assert!(held >= 15, "0x60 landed at tick {held} — before the 30-tick stamp grace [M 0x14ad58:11-14] could hold the head (state {:#x})", sim.list[gi].state);
+}

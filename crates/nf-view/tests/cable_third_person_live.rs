@@ -70,3 +70,28 @@ fn on_foot_the_body_stays_hidden_and_the_view_is_first_person() {
     let ci = scene.bond_body.expect("the body character exists");
     assert!(scene.char_hidden(ci, Default::default()), "the body is hidden in first person");
 }
+
+/// Moving along the cable never snaps the body: the root bone draws at the player object (the sim
+/// already carries the anims' root motion in Bond's position [M AnimFrameResolve 0x1c35f8]), so a
+/// clip switch (turn -> hand-over-hand move) does not jump. Drawing the clip's own root offset on top
+/// snapped the body 1.14 in one tick at the switch.
+#[test]
+fn hand_over_hand_moves_without_snapping() {
+    let Some(mut scene) = hang() else { return };
+    let ci = scene.bond_body.unwrap();
+    let mut prev: Option<[f32; 3]> = None;
+    let mut worst = 0.0f32;
+    let mut anims = std::collections::BTreeSet::new();
+    for _ in 0..200 {
+        scene.sim.as_mut().unwrap().step_bond(Input { strafe: 1.0, ..Default::default() }, false, false, false);
+        anims.insert(scene.sim.as_ref().unwrap().bond.wire_anim);
+        let fs = scene.frame_state_for(None, 0.0, Default::default(), true);
+        let (_, world, m) = fs.posed[ci].clone().expect("posed on the cable");
+        let p = [world[0][3][0], world[0][3][1], world[0][3][2]];
+        let root = [p[0] * m[0][0] + p[1] * m[1][0] + p[2] * m[2][0] + m[3][0], p[0] * m[0][1] + p[1] * m[1][1] + p[2] * m[2][1] + m[3][1], p[0] * m[0][2] + p[1] * m[1][2] + p[2] * m[2][2] + m[3][2]];
+        if let Some(q) = prev { worst = worst.max(((root[0] - q[0]).powi(2) + (root[1] - q[1]).powi(2) + (root[2] - q[2]).powi(2)).sqrt()); }
+        prev = Some(root);
+    }
+    assert!(anims.len() >= 2, "the ride switches clips (got {anims:x?})");
+    assert!(worst < 0.15, "the body never snaps between ticks: worst root step {worst}");
+}

@@ -1983,6 +1983,18 @@ fn dead_destroy_centres(scene: &scene::Scene) -> Vec<[u32; 3]> {
         .collect()
 }
 
+/// The destroyed-glist swap's WRECK side, per frame: the baked wreck draws (`Scene::destroy_wrecks`)
+/// whose Destroy leaf is dead — the only wreck draws that render (the game's `Destroy_Smash`
+/// 0x12bb60 swaps the dead leaf's object onto the destroyed glist; the live object never shows
+/// it). Consumed as `Renderer::destroy_wreck_draw`, matched against `Renderer::destroy_wreck_all`.
+fn wreck_draw_centres(scene: &scene::Scene) -> Vec<[u32; 3]> {
+    let Some(sim) = scene.sim.as_ref() else { return Vec::new() };
+    scene.destroy_wrecks.iter()
+        .filter(|(_, pl)| sim.drones.props.destroy.iter().any(|d| d.placement == *pl && d.dead))
+        .map(|(c, _)| c.map(f32::to_bits))
+        .collect()
+}
+
 /// The hit-flash tweak's draw side: the live Destroy leaves whose colour pair is below white
 /// (`Renderer::destroy_tint`).
 fn destroy_tints(scene: &scene::Scene) -> Vec<([u32; 3], [u8; 2])> {
@@ -2531,6 +2543,7 @@ fn shot(scene: &scene::Scene, cam: &Camera, out: &str, choice: Option<usize>, ti
     let vis_shot = r.cel_visibility(cam.pos.to_array(), vp_shot, world, door_closed.as_deref());
     // The destroyed-glist swap's draw side: the dead Destroy leaves' centres (see Scene::destroy_centres).
     r.destroy_dead = dead_destroy_centres(scene);
+    r.destroy_wreck_draw = wreck_draw_centres(scene);
     r.destroy_tint = destroy_tints(scene);
     // Objects are never room-culled (see the live path).
     r.update_skin(&queue, scene, choice, time, opts, None);
@@ -5757,6 +5770,7 @@ impl App {
                 // The destroyed-glist swap's draw side: the dead Destroy leaves' centres
                 // (see Scene::destroy_centres) — the doorway ends open [L] once the leaf is dead.
                 g.renderer.destroy_dead = dead_destroy_centres(&self.scene);
+                g.renderer.destroy_wreck_draw = wreck_draw_centres(&self.scene);
                 g.renderer.destroy_tint = destroy_tints(&self.scene);
                 let fp_enc = std::time::Instant::now();
                 g.renderer.set_shards(&g.queue, &self.scene.shard_draws());

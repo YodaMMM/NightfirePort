@@ -9,6 +9,17 @@
 //! (14.58, 16.41, −3.94 [D]) → E → level_exit 0x07000012 ([M Trigger_Activate 0x1b2318 — the E
 //! arm falls through with the gate off]).
 //!
+//! THE EXTENSION (level-11-every-objective-3): after the 07000012 spawn stand the walk CONTINUES
+//! on real input through every remaining objective of mission 0x07000011 to the mission's end —
+//! the next level's load: the override console E (#731 → ch 0x49 completes 0x04000037), the lift
+//! call, the shaft entrance (#683 → ch 0x1F), the gated exit #669 auto-firing into 0700004A
+//! ([M Trigger_Update 0x1b1a78 case 10]), then the carried load's spawn drop into 0700004A's
+//! touch #277 (ch 0x4D completes 0x04000038 — its writer lives one level ahead [D]). The route on
+//! 07000012 is tower2's, shared with walkreal_07000012_live; its TWO documented stand-ins (the
+//! door[19] corner pincer and the north-wall funnel — both measured, probes 12/12b/12c/12d, the
+//! game passes them on the same key data) are carried over with it and listed in the report's
+//! live checks. Everything else on both levels is walked input.
+//!
 //! THE MISSION ROWS ON THE WALK [D c07000011.rs; M 0x1827d8's machine]:
 //! - 0x04000035 "Escape from the tower" (ch 0x64 = 100, the mission-success AND [M 0x1827d8:119-123])
 //!   announces at load and completes only on 07000013, where the AND over the whole mission first
@@ -24,6 +35,8 @@
 
 #[path = "common/walker_b2.rs"]
 mod walker;
+#[path = "common/tower2.rs"]
+mod tower2;
 
 use walker::{Walker, Wp};
 
@@ -190,7 +203,10 @@ fn walk_spawn_to_the_lower_floor_load_point() {
     // ch 0x48 fires under Bond's feet and the monitor completes the carried "Gain access to
     // lower office floor" [M 0x1827d8 case 3 → state 4]. "Escape from the tower" stays
     // announced: its writer is the whole-mission AND, which first fires on 07000013 [D §2].
-    let scene2 = nf_view::load_with_carry(&iso, "07000012.bin", false, None)
+    // (level-11-every-objective-3: the load is the difficulty-3 front-end path — the exact call
+    // walkreal_07000012_live calibrates tower2's route on; the spawn pins here are
+    // difficulty-independent [M the 0x1827d8 announce + #679's contact write].)
+    let scene2 = nf_view::load_with_carry_difficulty(&iso, "07000012.bin", false, None, 3)
         .expect("07000012 loads after the exit");
     let mut w2 = Walker::new(scene2);
     w2.wait_enabled(3000, "07000012's intro");
@@ -204,6 +220,52 @@ fn walk_spawn_to_the_lower_floor_load_point() {
             "'Gain access to lower office floor' COMPLETE on the next level's spawn [M 0x1827d8 case 3]");
         assert_eq!(sim.drones.mission.states[15][0], 3,
             "'Escape from the tower' still announced (completes on 07000013) [D §2]");
+    }
+    // THE EXTENSION (level-11-every-objective-3): every remaining objective on real input, to the
+    // mission's end — the next level's load. The ch 0x48 writer is TouchOnce #679 (pinned above;
+    // the port has it — triggers.rs). Next, 0x04000037 "Activate elevator override control in
+    // security center" completes on ch 0x49 at the console E (#731 [D 07000012.md §2; M
+    // Trigger_Activate 0x1b2318 type 1]); the lift call #699 (ch 0x58) and the shaft entrance
+    // (#683 holds ch 0x1F) arm the gated exit #669, whose auto-fire [M Trigger_Update 0x1b1a78
+    // case 10] loads 0700004A — the next level's load. The route is tower2's (shared with
+    // walkreal_07000012_live; its two measured stand-ins carried over — see the header);
+    // tower2's opening block re-pins the spawn states on this same walker.
+    tower2::walk_12(&mut w2);
+    tower2::walk_12_exit(&mut w2);
+    // The mission's last reachable objective: 0x04000038 "Escape through the elevator shaft"
+    // (ch 0x4D) has NO writer on 07000012 [D 07000012.md §2] — its writer is TouchOnce #277 on
+    // 0700004A (the shaft's first plate, y −9.87…−7.65 [D 0700004a.md §2]). The game carries the
+    // RamSave through the real load [M Player_RamLoad 0x1957a8]; 4A's start #43 (4.26, −7.71,
+    // −4.76 [D]) drops Bond INTO #277's volume, ch 0x4D fires, and the monitor completes the
+    // record the next frame (it runs before the object handler [M 0x182c60 from 0x1c9790:17]).
+    // 0x04000035 "Escape from the tower" stays announced: its writer is the whole-mission AND
+    // (ch 100 [M 0x1827d8:119-123]), which first fires on 07000013 [D §2] — the mission's
+    // remaining part, beyond this walk's endpoint.
+    let save = {
+        let sim = w2.scene.sim.as_ref().unwrap();
+        nf_game::player::RamSave::capture(&sim.drones.health, sim.gun.switch_request,
+            &sim.drones.inventory, &sim.drones.channels).with_mission(&sim.drones.mission)
+    };
+    let mut w3 = Walker::new(nf_view::load_with_carry(&iso, "0700004a.bin", false, Some(&save))
+        .expect("0700004A loads after 07000012's exit"));
+    w3.wait_enabled(3000, "the 4A intro");
+    let mut landed = false;
+    for _ in 0..600 {
+        w3.tick(nf_game::player::Input::default(), false);
+        if w3.scene.sim.as_ref().unwrap().drones.channels.on(0x4d) { landed = true; break; }
+    }
+    assert!(landed, "4A: the start #43 drops Bond into touch #277 → ch 0x4D [D]");
+    for _ in 0..30 { w3.tick(nf_game::player::Input::default(), false); }
+    {
+        let sim = w3.scene.sim.as_ref().unwrap();
+        assert_eq!(sim.drones.mission.states[15][1], 4,
+            "row 15: 'Gain access to lower office floor' stays complete (the RamSave carries it) [M 0x182270]");
+        assert_eq!(sim.drones.mission.states[16][1], 4,
+            "'Escape through the elevator shaft' completes through the real exit load (the late AND) [M 0x1827d8]");
+        assert_eq!(sim.drones.mission.states[16][0], 4,
+            "'Activate elevator override control' stays complete [M 0x182270 keeps previous parts]");
+        assert_eq!(sim.drones.mission.states[15][0], 3,
+            "'Escape from the tower' still announced (its writer is 07000013's whole-mission AND) [D §2]");
     }
     eprintln!("[011] walked out in {} ticks; stuck {}; falls {}", w.total_ticks, w.report.stuck_events.len(), w.report.falls.len());
 }
