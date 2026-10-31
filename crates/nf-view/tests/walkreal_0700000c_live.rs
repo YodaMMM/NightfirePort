@@ -236,9 +236,13 @@ fn walk_the_whole_mission_from_the_start_to_the_0d_handoff() {
     //     z −112.34..−112.363 whose outer face spans y 11.62..13.57, x 4.56..6.96 [D];
     //   - the crouch capsule (A = pos + 0.1 − (cc − 0.55), B = pos + 0.45 − cc, r 0.55 [M
     //     Player_Collision 0x194df0 case 3; cc 0.556 [L 05-truck]]) FITS the pocket (top =
-    //     floor + 1.251 = 13.09 < 13.34) and walks in — and stops ON the slab: contact face
-    //     −112.363 + r 0.55 = −111.813, the stall pinned deterministically below (the prior
-    //     session's three x starts all stalled at the same z −111.81 [probe runs]);
+    //     floor + 1.251 = 13.09 < 13.34) and walks in past the mouth; the game's STANDING body
+    //     stops at the pocket-entrance wall — face −111.89 + the capsule radius = −111.39 [L
+    //     2026-10-31 fresh boot, from (5.6, 12.9, −111.2) facing south] — pinned below as the
+    //     standing sister; the game's CROUCH stop was never live-measured: the old −111.813
+    //     pin here was derived from the port's own former behaviour, not the game, so the leg
+    //     below pins only the faithful rule's deterministic stall ([S] for the exact z; the
+    //     hold itself is [L 2026-10-26 hatch-3]);
     //   - the body-height rays CANNOT see the slab: at capsule height the slab's north face
     //     does not exist (its face pieces sit only below the floor 11.62..11.84 and above the
     //     pocket ceiling 13.34..13.57 [D]) and the outer face points away from a north ray
@@ -258,8 +262,8 @@ fn walk_the_whole_mission_from_the_start_to_the_0d_handoff() {
     //     port's drop MATCHES the game (the landing assert above).
     //   - What would settle the real post-drop flow is live check 1 (the report): whether the
     //     real game ever moves the body out of the shaft (a script, a checkpoint nudge, an
-    //     exit the static data hides), and whether its capsule stops at −111.813 like the
-    //     port's.
+    //     exit the static data hides), and where its crouch capsule stalls (the standing stop
+    //     is measured: −111.39 [L 2026-10-31 fresh boot]; the crouch stop is not).
     // The stand-in moves Bond onto the 11.27 hall just south of the case (the pinned floors
     // [D probe]) — across the disc's own south seal, documented here; the sisters pin the
     // pocket's geometry so the stand-in never silently becomes a walk.
@@ -278,11 +282,35 @@ fn walk_the_whole_mission_from_the_start_to_the_0d_handoff() {
         assert!(sim.world.segment_hit([5.5, 12.5, -111.7], [5.5, 12.5, -113.0]).is_none(),
             "the south slab grew a ray-visible north face at capsule height; re-probe the exit");
     }
-    // The REAL crouch walk into the pocket and onto the disc's own stall: crouch once (the
-    // game's toggle [M Player_SSCrouch 0x1924c0:84-105]) and hold south — the body advances to
-    // the slab contact and stops at −111.813 (−112.363 + 0.55) with the bay floor still under
-    // it. This is the deterministic pin the old "stalls at z −111.81 … UNPINNED" note asked
-    // for.
+    // The REAL standing approach first: the game's own stop, on real input. [L 2026-10-31
+    // fresh boot] a STANDING body walking south from (5.6, 12.9, −111.2) stops at z −111.39 —
+    // the pocket-entrance wall's face (z −111.89 [D block dump]) plus the capsule radius
+    // [M Player_Collision 0x194df0]. Real input: turn south and walk into the stop from the
+    // vent-drop landing (the hatch-2 rest (5.42, 12.88, −111.38) is already at the wall).
+    {
+        for _ in 0..150 {
+            {
+                let sim = w.scene.sim.as_ref().unwrap();
+                let desired = std::f32::consts::PI; // south (−z), the vent-drop loop's yaw sense
+                let err = walker::wrap_pi(desired - sim.bond.yaw);
+                let input = nf_game::player::Input {
+                    turn: err.clamp(-0.08, 0.08),
+                    forward: if err.abs() > 0.6 { 0.0 } else { 1.0 },
+                    ..Default::default()
+                };
+                w.tick(input, false);
+            }
+        }
+        let z = w.scene.sim.as_ref().unwrap().bond.pos[2];
+        assert!((z - -111.39).abs() <= 0.1,
+            "the standing south walk must stop at the game's −111.39 [L 2026-10-31 fresh boot] (the pocket-entrance wall −111.89 + the capsule radius [M 0x194df0; D block dump]): stopped at z {z}");
+    }
+    // The REAL crouch walk into the pocket: crouch once (the game's toggle [M Player_SSCrouch
+    // 0x1924c0:84-105]) and hold south — the crawl passes the standing stop under the wall
+    // (the wall spans y 13.34..14.6, above the crawl) and advances into the pocket; the
+    // game's crouch body is IN the pocket and held [L 2026-10-26 hatch-3]. The exact stall z
+    // of the port's faithful rule is the port's own result [S] unverified — the game's crouch
+    // stop was never live-measured — so the pin is the deterministic stall, not a game number.
     {
         let mut held_z = None;
         for t in 0..420 {
@@ -304,9 +332,7 @@ fn walk_the_whole_mission_from_the_start_to_the_0d_handoff() {
         let sim = w.scene.sim.as_ref().unwrap();
         let z = sim.bond.pos[2];
         assert!(sim.bond.crouched, "the crouch toggle did not hold through the pocket walk");
-        assert!(z < -111.7, "the crouch walk never reached the pocket mouth (z {z}); the shaft's south changed");
-        assert!((z - -111.813).abs() <= 0.02,
-            "the crouch walk did not stop on the south slab contact (−112.363 + 0.55 = −111.813 [M 0x194df0 case 3; D the slab]): stopped at z {z}");
+        assert!(z < -111.7, "the crouch walk never passed the pocket mouth under the wall (z {z}); the shaft's south changed");
         let held = held_z.expect("held_z sampled");
         assert!((held - z).abs() <= 0.02, "the stall is not deterministic: z {held:.4} at t 330 vs {z:.4} at t 420 while still pressing south");
         // The bay floor is still under the stalled body (the prior session's "grounded false"
@@ -860,6 +886,7 @@ fn walk_the_whole_mission_from_the_start_to_the_0d_handoff() {
             // Hold the jump one tick past the stop so the exit reads the overshoot pose.
             let at_stop = still >= 90;
             if d < best_d - 1e-4 { best_d = d; still = 0; } else { still += 1; }
+            if _t % 60 == 0 { eprintln!("[0c wire283] t {_t} sub {} mode {} regrab {} auto {:.2} d {d:.3} best {best_d:.3} still {still} jump {at_stop} pos {:?}", sim.bond.substate, sim.bond.mode, sim.bond.regrab, sim.bond.auto_drop, sim.bond.pos); }
             let input = nf_game::player::Input { strafe: 1.0, jump: at_stop, ..Default::default() };
             w.scene.sim.as_mut().unwrap().step_bond(input, false, false, false);
             w.total_ticks += 1;
