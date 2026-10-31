@@ -987,6 +987,14 @@ pub struct Drone {
     /// state for the 0x36/0x37/0x2A-object cases [M 0x1431c0:81-176]) and `+0x324` (the flee deadline,
     /// now + 10·FRAME_RATE_INT, 2·FRAME_RATE_INT for the grenade weapons [M 0x1431c0:82, 101-119]).
     pub scared: bool,
+    /// `+0x4F8 & 0x400000` — deaf to sound alerts (`HandleSoundAlerts` 0x148a30:44, `AlertSound`
+    /// 0x177800:21). Set by the ENTER arms of GoToGoalPosition 0x165640:23, RunAwayFromObject
+    /// 0x168aa8:22, ActionAnim 0x168628:20, CivilianScared 0x15d3a0:28 and Attack's no-pick
+    /// fallback 0x164210:66; cleared only by the GoToGoal / RunAway EXIT arms (0x165640:27,
+    /// 0x168aa8:34) and ActionAnim's script-done arm (0x168628:32). `Drone_SM_RouteMsgDCV`
+    /// clears just 0x10000/0x2000 on a change [M 0x171df8:182-183], so the Attack and
+    /// CivilianScared sets outlive the state.
+    pub deaf: bool,
     pub flee_return: u8,
     pub flee_deadline: Option<u32>,
     /// The msg-0x21 payload `DroneFunc_HandleExplosives` (0x1435f0:51 SendMsgSelf) delivers: (position, run
@@ -1999,7 +2007,7 @@ impl Drone {
             facial_state: 0, facial_timer: 0, facial_reappend: false, facial_idle: None, facial_blink: None, last_tick: 0,
             alert_block: alert_props.map_or(0.0, |w| nf_formats::drone::ALERTNESS_LEVELS[d.props.get(0x20, &w) as usize & 3]),
             // fix-cover-remainder: the scary-object flee family.
-            scared: false, flee_return: 0, flee_deadline: None, explosive_msg: None,
+            scared: false, deaf: false, flee_return: 0, flee_deadline: None, explosive_msg: None,
             // fix-anim-events: the EventFunc outboxes, and `+0x3E` (the anim datum's weapon byte
             // 0x1C / 0x1D, DefaultInit 0x14b300:801-811; the port keys it on the drone's weapon id —
             // the datum byte's id space).
@@ -6640,12 +6648,15 @@ impl Drone {
         // `started` arm) reaches here without a transition. The port folds the arms' set into the
         // ENTER delivery.
         if m == msg::ENTER && state::UNAWARE.contains(&self.state) { self.watching = true; }
+        if m == msg::ENTER && matches!(self.state, state::GO_TO_GOAL | state::RUN_AWAY_FROM_OBJECT | state::ACTION_ANIM | state::CIVILIAN_SCARED) { self.deaf = true; }
         if !self.handle(d, rng, frame, self.state, m) { self.handle(d, rng, frame, state::GLOBAL, m); }
         if let Some(m2) = self.self_msg.take() { self.send(d, rng, frame, m2); }
         let mut guard = 0;
         while let Some(n) = self.next_state.take() {
             self.exiting_to = n;
             self.handle(d, rng, frame, self.state, msg::EXIT);
+            // The deaf bit's EXIT clears [M 0x165640:27, 0x168aa8:34].
+            if matches!(self.state, state::GO_TO_GOAL | state::RUN_AWAY_FROM_OBJECT) { self.deaf = false; }
             self.prev_state = self.state;
             self.state = n;
             self.vision_on = false; // RouteMsgDCV clears 0x4f8 0x10000 on every change
@@ -6668,6 +6679,10 @@ impl Drone {
             self.entered = frame;
             self.log.push((frame, n));
             if state::UNAWARE.contains(&n) { self.watching = true; } // the new state's ENTER arm re-sets it [M case 1]
+            // The deaf bit's ENTER sets [M 0x165640:23, 0x168aa8:22, 0x168628:20, 0x15d3a0:28] —
+            // before the arm's own work, so an arm that leaves at once still exits through the
+            // clears above.
+            if matches!(n, state::GO_TO_GOAL | state::RUN_AWAY_FROM_OBJECT | state::ACTION_ANIM | state::CIVILIAN_SCARED) { self.deaf = true; }
             self.handle(d, rng, frame, n, msg::ENTER);
             if let Some(m2) = self.self_msg.take() { self.send(d, rng, frame, m2); }
             guard += 1;
@@ -7614,8 +7629,8 @@ impl Drone {
                 // `+0x50C = 1.0` (alertness) and `Drone_AlertStatusSet(1)` (the status byte +0x51C
                 // only — no port reader [M 0x13a8d8]); `DroneFunc_AttackNoWeapon` (the port's
                 // weapon-≤1 arm above takes the unarmed drone first; an armed one gets 0); a captain
-                // (+0x19) holding weapon 0x19 swaps to 0x18 [M :31-52]; `+0x4F8 |= 0x400000` (no
-                // port reader). Then non-snipers (mode +0xC5 ∉ {2, 0x19}): vision on (`+0x4F8 |=
+                // (+0x19) holding weapon 0x19 swaps to 0x18 [M :31-52]; `+0x4F8 |= 0x400000` (the
+                // `deaf` bit — hearing off from here on). Then non-snipers (mode +0xC5 ∉ {2, 0x19}): vision on (`+0x4F8 |=
                 // 0x10000`), `NDrone2_InvalidateAttackRoute` 0x155020 (+0x854 = 0, the goal route
                 // +0x860 invalidated); prop 0x18 within the engage range `+0xF0` → `+0x5A2` = 0x68
                 // and AimStand 0x67 (`NDrone2_DroneInSights` 0x14a800 is a size-8 stub returning 0
@@ -7624,6 +7639,7 @@ impl Drone {
                 // stamped `+0x5A2` = 0x56 for every pick [*suggested*].)
                 self.alert = 1.0;
                 if self.captain && self.weapon == 0x19 { self.weapon = 0x18; }
+                self.deaf = true; // `+0x4F8 |= 0x400000` [M 0x164210:66] — never cleared by a state change
                 if self.mode != 2 && self.mode != 0x19 {
                     self.vision_on = true;
                     self.croute = None;
@@ -7713,7 +7729,7 @@ impl Drone {
             }
             // GoToGoalPosition 0x63 (`NDrone2_DSTATE_GoToGoalPosition` 0x165640): run to the goal (`+0x710`), looking for
             // the opponent on the way; blocked → aim or look about; arrived or failed → DeleteMe (prop 0x59) or the
-            // return state `+0x5A2`. Deaf meanwhile (`+0x4F8` 0x400000; hearing is not ported).
+            // return state `+0x5A2`. Deaf meanwhile (`+0x4F8` 0x400000 — `deaf`, set/cleared in `send`).
             (GO_TO_GOAL, msg::ENTER) => { self.vision_on = true; true } // guard 0x63 (fix-actors had renamed it to the ally's 0x28)
             (GO_TO_GOAL, msg::UPDATE) => {
                 if self.seen && !(self.ever_seen && self.dist >= self.engage_range) {
@@ -9229,9 +9245,9 @@ impl Drone {
                 }
                 true
             }
-            // Case 5 (the script's done): clear +0x4F8's 0x400000 (not modelled) and → 0x6f
+            // Case 5 (the script's done): clear +0x4F8's 0x400000 (`deaf`) and → 0x6f
             // [M 0x168628 case 5: `Drone_SM_SetState(0x6f)`].
-            (state::ACTION_ANIM, msg::ANIM_DONE) => { self.set_state(state::AIM_CROUCH); true }
+            (state::ACTION_ANIM, msg::ANIM_DONE) => { self.deaf = false; self.set_state(state::AIM_CROUCH); true }
             // Msg 0x20 (case 0x20): back to the saved state `+0x5A6`.
             (state::ACTION_ANIM, msg::DOOR) => { self.set_state(self.door_return); true }
             // Timer C (case 0xc): re-arm at +2 (nothing else).
@@ -10899,7 +10915,10 @@ impl Drone {
             // ((1 − alertness) × 30) × 0.01 × (200 − stat), each multiply chopped (EE FPU): 59 for these guards
             // (nearest rounding would give 60).
             use nf_formats::ps2float::{add_noguard, mul};
-            if self.ever_seen || self.alert >= 1.0 { 0 } else {
+            // The zero arm is `+0x228 & 8` [M 0x14ac60:15-17] — the prop-0x3c-gated sight bit
+            // (`ever_seen_3c`), not the plain sight ack: a guard without prop 0x3c pays the
+            // reaction time again on every new sighting.
+            if self.ever_seen_3c || self.alert >= 1.0 { 0 } else {
                 let k = mul(mul(mul(add_noguard(1.0, -self.alert, true), 30.0), 0.01), add_noguard(200.0, -(self.reaction as f32), true));
                 k as u32
             }
@@ -11664,6 +11683,14 @@ pub struct Drones {
     pub aim_offset: [f32; 2],
     pub alarm_sent: bool,
     pub bond_aiming: bool,
+    /// Bond in the crouch substate (player `obj+0xF6 == 4`, the port's crouched walk): set by the
+    /// caller before `tick`. `Drone_ProcessOpponents` 0x1390c0:40-42 multiplies Bond's visibility
+    /// factor `+0x22C` by 0.75 while it holds.
+    pub bond_crouched: bool,
+    /// `DAT_00298FBC`: the frame `Drone_EnableAll(1)` re-enabled the drones (0x1383e8:28). The
+    /// whole `DroneVision_ProcessDroneSight` pass waits 15 frames after it and after the post-load
+    /// frame `DAT_00298FB8` [M 0x176a28:56-57]; the port's drone frame starts at 0 on the load.
+    pub vision_enable_frame: u32,
     /// The pending level-exit request: when a `LOAD_LEVEL` (0xE8) trigger fires, the next level's hashcode
     /// (`Trigger_Activate` 0x1b2318 → `ResetMap_LevelToLoad` 0x1d3800). The main loop reads this to reload [M].
     pub level_exit: Option<u32>,
@@ -12222,7 +12249,7 @@ impl Drones {
             if let Some(g) = &mut dr.body_glow { g.owner = i; }
         }
         let llist = (0..list.len()).collect();
-        let mut drones = Drones { list, frame: 0, los_cursor: 0, llist, rng, lights: Default::default(), player_pos: [0.0; 3], bullets: Vec::new(), grenades: Vec::new(), explosions: Vec::new(), shake: 0.0, health: Default::default(), player_hits: Vec::new(), impacts: Vec::new(), prev_player: None, moved_since: None, target: PlayerTarget::default(), used: Vec::new(), link_flags: Vec::new(), locked_door_nodes: Default::default(), channels: Default::default(), triggers: Vec::new(), spawners: Vec::new(), cover_rt: Vec::new(), sounds: Vec::new(), cover_cursor: 0, cover_counter: 0, player_bullets: Vec::new(), net_no_self_hurt: false, player_impacts: Vec::new(), last_flinch: None, bond_aiming: false, level_exit: None, mission_end: None, bond_weapon: 2, env: None, sun_vector: [0.0; 3], env_pending: None, mp_master: 0, fill_rng: Rng::new(0x5eed), last_alarm: None, alarm_sent: false, party_loud: false, iop_section: 0, hud_frozen: false, aim_target: None, aim_offset: [0.0; 2],
+        let mut drones = Drones { list, frame: 0, los_cursor: 0, llist, rng, lights: Default::default(), player_pos: [0.0; 3], bullets: Vec::new(), grenades: Vec::new(), explosions: Vec::new(), shake: 0.0, health: Default::default(), player_hits: Vec::new(), impacts: Vec::new(), prev_player: None, moved_since: None, target: PlayerTarget::default(), used: Vec::new(), link_flags: Vec::new(), locked_door_nodes: Default::default(), channels: Default::default(), triggers: Vec::new(), spawners: Vec::new(), cover_rt: Vec::new(), sounds: Vec::new(), cover_cursor: 0, cover_counter: 0, player_bullets: Vec::new(), net_no_self_hurt: false, player_impacts: Vec::new(), last_flinch: None, bond_aiming: false, bond_crouched: false, vision_enable_frame: 0, level_exit: None, mission_end: None, bond_weapon: 2, env: None, sun_vector: [0.0; 3], env_pending: None, mp_master: 0, fill_rng: Rng::new(0x5eed), last_alarm: None, alarm_sent: false, party_loud: false, iop_section: 0, hud_frozen: false, aim_target: None, aim_offset: [0.0; 2],
             // The game's `DAT_00299092` (the shared LOS-probe counter; see the field) — zeroed
             // here as `Drone_LevelReset`'s memset zeroes it at level reset [M 0x13a5bc-cc].
             los_probes: 0,
@@ -15326,6 +15353,9 @@ fn segment_hits_sphere(a: V3, b: V3, c: V3, r: f32) -> bool {
                 // freeze mirrors per drone exactly.
                 crate::nis::Request::DroneEnable { on } => {
                     self.npc_enabled = on;
+                    // `Drone_EnableAll(1)` stamps `DAT_00298FBC = GameState+0x34` [M 0x1383e8:28]: the
+                    // sight pass then waits 15 frames [M 0x176a28:57].
+                    if on { self.vision_enable_frame = self.frame; }
                     for dr in self.list.iter_mut().filter(|d| d.present) {
                         if !on {
                             // `NDrone2_Enable(0)` 0x149dd0:8-15: hide everyone (the anim clock write
@@ -16427,13 +16457,17 @@ fn segment_hits_sphere(a: V3, b: V3, c: V3, r: f32) -> bool {
                 }
             }
         }
-        // `Drone_ProcessOpponents` (0x1390c0): Bond's visibility factor from the AI volumes holding him (crouching
-        // ×0.75 is not modelled: the port's Bond does not crouch), then each drone's opponent info. The player
+        // `Drone_ProcessOpponents` (0x1390c0): Bond's visibility factor from the AI volumes holding him, ×0.75 while
+        // he is in the crouch substate (`obj+0xF6 == 4` [M 0x1390c0:40-42]; the caller's `bond_crouched`), then each
+        // drone's opponent info. The player
         // object itself is `NDrone2_Player` 0x149768's pick (`glb_players`, or the MP active-player global
         // `DAT_00298fb4` behind `DAT_00298fb0` [M 0x149768]) — the port has one Bond, passed here. Inside
         // `Drone_InitComms`' `NPCGlobals != 0` block [M 0x139520:124-284] — frozen drones keep their last state.
+        // The 15-frame vision wait of `DroneVision_ProcessDroneSight` [M 0x176a28:56-57]: no sight pass at all
+        // until 15 frames after the load (the port's frame 0) and after the last `Drone_EnableAll(1)`.
+        let vision_open = frame >= 15 && frame >= self.vision_enable_frame.saturating_add(15);
         if self.npc_enabled {
-            let light = crate::aivolume::visibility_factor(d.volumes, player.pos, false);
+            let light = crate::aivolume::visibility_factor(d.volumes, player.pos, self.bond_crouched);
             let armed = (2..0x47).contains(&self.bond_weapon) || (0x6a..=0x71).contains(&self.bond_weapon);
             // `PlrStat_OkToUpdate` 0x1993e0: MP master → 1; else Mission_Status < 2 (0 or 1) → 1 [M 0x1993e0].
             let stat_ok = self.mp_master != 0 || self.mission.status() < 2;
@@ -16442,7 +16476,7 @@ fn segment_hits_sphere(a: V3, b: V3, c: V3, r: f32) -> bool {
             // — its opponent is the drone-list walk's pick (docs/systems/ally-heard-noise.md §1).
             let (team2_picks, team2_cursors) = self.team2_opponent_picks(d);
             for (i, dr) in self.list.iter_mut().enumerate().filter(|(_, x)| x.present) {
-                dr.light = light; dr.opponent_info(player); dr.player_pos = player.pos; dr.seen = false; dr.bond_armed = armed; dr.stat_ok = stat_ok;
+                dr.light = light; dr.opponent_info(player); dr.player_pos = player.pos; if vision_open { dr.seen = false; } dr.bond_armed = armed; dr.stat_ok = stat_ok;
                 if dr.team == 2 {
                     // Apply the pick: the guard feeds the opponent-derived fields; no pick is
                     // `SetOpponent(0)` — the aim offset zeroes (the aim position degenerates to
@@ -16565,8 +16599,12 @@ fn segment_hits_sphere(a: V3, b: V3, c: V3, r: f32) -> bool {
         // stands (set by the sight-capable states' ENTERs, cleared by RouteMsgDCV on every state
         // change) — there is NO alertness bypass: a waiting (WaitSwitch/Enable(0)) or otherwise
         // vision-off guard has no sight pipeline at all, whatever its +0x50c alertness.
-        for dr in &mut self.list { dr.visibility = if dr.present && !dr.corpse && dr.vision_on { dr.visibility() } else { 0.0 }; if dr.visibility < 0.7 { dr.los = false; } }
-        let ln = self.llist.len();
+        // Inside the 15-frame wait the whole pass is skipped: the sight flags and the +0x270/+0x274
+        // counters keep their values [M 0x176a28:56-57].
+        if vision_open {
+            for dr in &mut self.list { dr.visibility = if dr.present && !dr.corpse && dr.vision_on { dr.visibility() } else { 0.0 }; if dr.visibility < 0.7 { dr.los = false; } }
+        }
+        let ln = if vision_open { self.llist.len() } else { 0 };
         for k in 0..ln {
             let slot = (self.los_cursor + 1 + k) % ln.max(1);
             let dr = &mut self.list[self.llist[slot]];
@@ -16599,6 +16637,7 @@ fn segment_hits_sphere(a: V3, b: V3, c: V3, r: f32) -> bool {
             // never takes the player (:101) — its pointer is the scan pick in `opp_drone`.
             dr.opp_bond = dr.team != 2 && dr.stat_ok && dr.bond_alive;
             if dr.team == 2 { continue; } // the team-2 sight state is the opponent fold below
+            if !vision_open { continue; } // the 15-frame wait [M 0x176a28:56-57]
             // The game's visible branch requires the opponent pointer too: `(+0x170 == 0) ||
             // (flags & 2) == 0` falls to the lost-sight arm [M 0x176a28:222-231] — a pointerless
             // tick (Bond dead) counts as unseen even with a clear ray, so `HaveOpponentSight`
@@ -16693,7 +16732,7 @@ fn segment_hits_sphere(a: V3, b: V3, c: V3, r: f32) -> bool {
         // included) refuses — no shot can leave a team-2 drone without a drone opponent [S
         // safety fold, the frozen-counter case].
         for dr in &mut self.list {
-            if !dr.present || dr.team != 2 { continue; }
+            if !vision_open || !dr.present || dr.team != 2 { continue; }
             if dr.opp_drone.is_some() {
                 dr.seen_ticks += 1;
                 dr.unseen_ticks = 0;
@@ -16743,7 +16782,9 @@ fn segment_hits_sphere(a: V3, b: V3, c: V3, r: f32) -> bool {
         // (:199-208) apply INLINE, so a drone latched this frame cannot re-qualify for a later
         // pair (the game's mid-scan latch order).
         let mut sight_passes = 0usize;
-        'pairs: for oi in 0..self.list.len() {
+        // `FindAlertedDrones` runs inside the same vision wait [M 0x176a28:56-58].
+        let pair_n = if vision_open { self.list.len() } else { 0 };
+        'pairs: for oi in 0..pair_n {
             // ---- the observer gates. DetermineAlertCheck needs the observer NOT to qualify, and
             // with the ConsiderAlerted gates below holding (not-latched, enabled, team ≠ 2) that
             // reduces to its own +0x4FC being 0 [M 0x1766f8:19,30].
@@ -16856,7 +16897,10 @@ fn segment_hits_sphere(a: V3, b: V3, c: V3, r: f32) -> bool {
         // `Sound_ZeroAlertness`: each sound alerts once.
         if !sounds.is_empty() {
             for dr in self.list.iter_mut().filter(|x| x.present && x.enabled && !x.corpse) {
-                if !dr.prop(d, 0x1f) || dr.state == state::GO_TO_GOAL { continue; }
+                if !dr.prop(d, 0x1f) || dr.deaf { continue; } // [M 0x148a30:43-44]
+                // 07000007 only: an unarmed drone hears nothing (`NDrone2_ObjectIsArmed` 0x178768 —
+                // weapon 2..0x46 or 0x6a..0x71 [M 0x148a30:46-50]).
+                if d.level == 0x0700_0007 && !matches!(dr.weapon, 2..=0x46 | 0x6a..=0x71) { continue; }
                 // `Sound_Alertness` (0x1ddc48, read in the disassembly): per sound with weight within the outer radius
                 // (squared distances compared), weight × (1 inside the inner radius, else (outer − d) / (outer − inner)),
                 // summed; id 0x248 counts as weight 10 everywhere inside its outer radius; ids 0x11C / 0x11D are
@@ -17998,6 +18042,10 @@ fn segment_hits_sphere(a: V3, b: V3, c: V3, r: f32) -> bool {
             if let Some(t) = dr.timer_d { if frame >= t { dr.timer_d = None; dr.send(d, rng, frame, msg::TIMER_D); } }
             if let Some(t) = dr.idle_timeout { if frame >= t { dr.idle_timeout = None; dr.send(d, rng, frame, msg::IDLE_TIMEOUT); } }
             if let Some((t, m)) = dr.delayed { if frame >= t { dr.delayed = None; dr.send(d, rng, frame, m); } }
+            // `NDrone2_ControlSTANDARD` 0x1490f0:65-67: alertness above 1 clamps to 1 first (the
+            // sound shares add unclamped [M 0x148a30:62]), so the sight range never grows past
+            // ×3 [M 0x175af0:56].
+            if dr.alert > 1.0 { dr.alert = 1.0; }
             if dr.alert < 1.0 && dr.alert > dr.alert_floor { dr.alert -= 1.0 / (60.0 * 50.0); }
             if dr.alert < dr.alert_floor { dr.alert = dr.alert_floor; }
             // `NDrone2_PreDroneControl` 0x148db0:24-34: +0x2C8 counts while +0x2A is set and
@@ -18173,9 +18221,9 @@ fn segment_hits_sphere(a: V3, b: V3, c: V3, r: f32) -> bool {
                     self.sight_latch = true;
                     self.lost_latch = false;
                     dr.new_sight_talk(d.level, rng);
-                } else if dr.ever_seen && !self.lost_latch && dr.unseen_ticks > 120 && !self.saw_opp_last_frame {
+                } else if dr.ever_seen_3c && !self.lost_latch && dr.unseen_ticks > 120 && !self.saw_opp_last_frame {
                     // review fix: the lost arm needs the sight record (`+0x228 & 8`, the port's
-                    // `ever_seen`) [M 0x176a28:204] — a guard that never saw Bond does not latch.
+                    // `ever_seen_3c`) [M 0x176a28:204] — a guard that never saw Bond does not latch.
                     self.lost_latch = true;
                     self.sight_latch = false;
                     // `*(obj+0xc)+0x20 == player+0x20`: the drone stands in Bond's cel [M 0x13f550:41;
@@ -19947,7 +19995,7 @@ mod tests {
             elevator_scan: false,
             elevator_latch: false,
             // fix-cover-remainder: the scary-object flee family.
-            scared: false, flee_return: 0, flee_deadline: None, explosive_msg: None,
+            scared: false, deaf: false, flee_return: 0, flee_deadline: None, explosive_msg: None,
             scripted_move: false,
             blocked_reach: 0.0,
             // +0x174 — the shared target registry slot.
