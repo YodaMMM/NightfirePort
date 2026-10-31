@@ -161,6 +161,13 @@ pub struct Trigger {
     /// Movie trigger: case 0xd fired this tick (its input channel was armed and on — the channel clear
     /// already applied). The control-list walk drains it into `Drones::movie_request` [M 0x1b1f24-0x1b1f78].
     pub movie_fired: bool,
+    /// ext+0x3C: the locked-exit message cooldown — `Trigger_Activate` 0x1b2318:81-86 posts label
+    /// 0x2000021 only while it is 0 and re-arms it to 3·FRAME_RATE_INT (180); `Trigger_Update`
+    /// 0x1b1a78:26-28 takes 1 off per tick [M].
+    pub lock_msg_timer: u16,
+    /// The locked message posted this tick (the caller drains it into the INFO pane, TXTMSG type 1,
+    /// life 0xb4 [M 0x1b2318:84-85]).
+    pub lock_msg: bool,
 }
 
 /// A body that can touch triggers: capsule axis from `a` to `b`, radius, drone (true) or Bond, drone skin hash.
@@ -381,7 +388,7 @@ impl Trigger {
         let mask = if mask == 0 { 2 } else { mask };
         if matches!(kind, kind::TOUCH | kind::TOUCH_ONCE) && out_ch == 0x7d { return None; }
         let filter_gate = if matches!(kind, kind::TOUCH | kind::TOUCH_ONCE) { list.get(4).copied().unwrap_or(0) as u8 } else { 0 };
-        let mut t = Trigger { placement, kind, out: out_ch as u8, mask, list, lock: lock as u8, hide, glist_0x10: true, filter_gate, tris: Vec::new(), lo: [0.0; 3], hi: [0.0; 3], gone: false, script: None, next_level, gate, key_gate, success, fallback, movie_code: 0, movie_fired: false };
+        let mut t = Trigger { placement, kind, out: out_ch as u8, mask, list, lock: lock as u8, hide, glist_0x10: true, filter_gate, tris: Vec::new(), lo: [0.0; 3], hi: [0.0; 3], gone: false, script: None, next_level, gate, key_gate, success, fallback, movie_code: 0, movie_fired: false, lock_msg_timer: 0, lock_msg: false };
         if kind == kind::MOVIE { t.movie_code = out_ch; }
         t.set_tris(tris);
         Some(t)
@@ -524,6 +531,24 @@ impl Trigger {
         }
     }
 
+    /// `Trigger_Activate` 0x1b2318:79-87's locked arm for a LOAD_LEVEL trigger whose key gate is off:
+    /// with the cooldown at 0 it posts label 0x2000021 (`lock_msg`) and re-arms the cooldown to
+    /// `(FRAME_RATE_INT << 1) + FRAME_RATE_INT` = 180; otherwise nothing [M].
+    pub fn locked_message(&mut self) {
+        if self.lock_msg_timer != 0 { return; }
+        self.lock_msg = true;
+        self.lock_msg_timer = 180;
+    }
+
+    /// The use-key path's locked check (`Player_Activate` → `Trigger_Activate`): the type-10 arm
+    /// returns on any cancel channel 0x60..0x63 BEFORE the key gate [M 0x1b2318:64-75], then the
+    /// locked message (`locked_message`). No-op for the other families.
+    pub fn activate_locked_message(&mut self, ch: &Channels) {
+        if self.kind != kind::LOAD_LEVEL || self.gone { return; }
+        if (0x60..=0x63).any(|c| ch.on(c)) { return; }
+        if self.locked(ch) { self.locked_message(); }
+    }
+
     /// `Trigger_Activate` (0x1b2318): fires the trigger immediately from `Player_Activate`'s E-key path (routes
     /// b and c on 07000005 — the on-foot gate door and the zip-wire exit). Returns the channel writes to apply
     /// and `Some(next_level)` if a level load is requested. Does NOT mutate — the caller applies the writes
@@ -539,7 +564,7 @@ impl Trigger {
                 if (0x60..=0x63).any(|c| ch.on(c)) { return (Vec::new(), None); }
                 // Key gate [M 0x1b2318:76-90 — `Trigger_Locked` 0x1b2fc8's type-10 arm]: if non-zero and off,
                 // the trigger is locked — locked message (label
-                // 0x2000021) + ext+0x3C cooldown (no text system in the port), NO channel write, NO load.
+                // 0x2000021) + ext+0x3C cooldown (`activate_locked_message`), NO channel write, NO load.
                 if self.locked(ch) { return (Vec::new(), None); }
                 // Auto channel [M 0x1b2318:96-108]: gate (+0x28) on → the success write (+0x2C); gate off →
                 // the fallback write (+0x2A) — and BOTH branches fall through to the level load @0x1b24b8.
@@ -575,6 +600,8 @@ impl Trigger {
     /// as a PREFIX — a zero slot ends the list (a mid-list 0 hides everything after it) [M 0x1b1a78 case 3/4/0xC
     /// loops: `while input[k] != 0`].
     pub fn update(&mut self, ch: &mut Channels, touchers: &[Toucher], bullets: &[BulletContact], frame: u32) {
+        // The locked-message cooldown runs first, before every other test [M 0x1b1a78:26-28].
+        self.lock_msg_timer = self.lock_msg_timer.saturating_sub(1);
         if self.gone || (self.lock != 0 && ch.on(self.lock as u32)) { return; }
         match self.kind {
             kind::TOUCH_ONCE => {
@@ -627,7 +654,7 @@ impl Trigger {
                 if self.gone || self.gate == 0 { return; }
                 if !ch.on(self.gate as u32) { return; }
                 if (0x60..=0x63).any(|c| ch.on(c)) { return; }
-                if self.locked(ch) { return; } // the key gate [M 0x1b2318:76-90, `Trigger_Locked` 0x1b2fc8 type-10 arm]
+                if self.locked(ch) { self.locked_message(); return; } // the key gate [M 0x1b2318:76-90, `Trigger_Locked` 0x1b2fc8 type-10 arm]
                 if self.success != 0 { ch.set(self.success as u32, 1, frame); }
                 self.gone = true;
             }
@@ -762,7 +789,7 @@ mod tests {
     fn plate(kind: u8, out: u8, mask: u32, list: Vec<u32>) -> Trigger {
         // A 2 × 2 horizontal quad at y = 0 around the origin.
         let (a, b, c, d) = ([-1.0, 0.0, -1.0], [1.0, 0.0, -1.0], [1.0, 0.0, 1.0], [-1.0, 0.0, 1.0]);
-        Trigger { placement: 0, kind, out, mask, list, lock: 0, hide: false, glist_0x10: true, filter_gate: 0, tris: vec![[a, b, c], [a, c, d]], lo: [-1.0, 0.0, -1.0], hi: [1.0, 0.0, 1.0], gone: false, script: None, next_level: 0, gate: 0, key_gate: 0, success: 0, fallback: 0, movie_code: 0, movie_fired: false }
+        Trigger { placement: 0, kind, out, mask, list, lock: 0, hide: false, glist_0x10: true, filter_gate: 0, tris: vec![[a, b, c], [a, c, d]], lo: [-1.0, 0.0, -1.0], hi: [1.0, 0.0, 1.0], gone: false, script: None, next_level: 0, gate: 0, key_gate: 0, success: 0, fallback: 0, movie_code: 0, movie_fired: false, lock_msg_timer: 0, lock_msg: false }
     }
 
     #[test]
@@ -965,6 +992,38 @@ mod tests {
     /// returns before any write [M 0x1b2318:23-25] — holding E on the plate can never raise the
     /// exit's gate channel. Sister: the same plate with bit 4 set fires the out write (the gate is
     /// the deciding bit, not the plate's presence).
+    /// The locked exit's message [M Trigger_Activate 0x1b2318:79-87 + Trigger_Update 0x1b1a78:26-28]:
+    /// a key-gated LOAD_LEVEL with the key off posts 0x2000021 once, then not again until the
+    /// 180-tick cooldown has run out under `update`. Sisters: an open key gate and a cancel channel
+    /// post nothing.
+    #[test]
+    fn locked_exit_posts_its_message_on_a_cooldown() {
+        let ch = Channels::default();
+        let mut exit = Trigger { kind: kind::LOAD_LEVEL, next_level: 0x0700_0066, key_gate: 0x30, ..plate(kind::LOAD_LEVEL, 0, 8, vec![]) };
+        exit.activate_locked_message(&ch);
+        assert!(std::mem::take(&mut exit.lock_msg), "the first press posts the locked message");
+        assert_eq!(exit.lock_msg_timer, 180);
+        exit.activate_locked_message(&ch);
+        assert!(!exit.lock_msg, "inside the cooldown: no second message");
+        let mut chm = Channels::default();
+        for f in 0..180 { exit.update(&mut chm, &[], &[], f); }
+        assert_eq!(exit.lock_msg_timer, 0, "Trigger_Update takes 1 per tick");
+        exit.activate_locked_message(&ch);
+        assert!(exit.lock_msg, "after the cooldown the message posts again");
+        // Sister: key on → not locked, no message.
+        let mut key = Channels::default();
+        key.set(0x30, 1, 1);
+        let mut open = Trigger { lock_msg_timer: 0, lock_msg: false, ..exit.clone() };
+        open.activate_locked_message(&key);
+        assert!(!open.lock_msg, "an open key gate posts nothing");
+        // Sister: a cancel channel returns before the key gate [M 0x1b2318:64-75].
+        let mut cancel = Channels::default();
+        cancel.set(0x61, 1, 1);
+        let mut c = Trigger { lock_msg_timer: 0, lock_msg: false, ..exit.clone() };
+        c.activate_locked_message(&cancel);
+        assert!(!c.lock_msg, "an alarm channel blocks the arm entirely");
+    }
+
     #[test]
     fn e_on_the_loadpointactivator_shape_is_refused() {
         let ch = Channels::default();

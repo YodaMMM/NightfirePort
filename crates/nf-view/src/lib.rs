@@ -6998,6 +6998,39 @@ pub fn run() -> Result<()> {
                     if v.len() >= 3 { sim.bond = nf_game::player::Bond::new([v[0], v[1], v[2]], v.get(3).copied().unwrap_or(sim.bond.yaw)); if let Some(&pt) = v.get(4) { sim.bond.pitch = pt; } sim.step_bond(shot_input, false, false, false); }
                 }
             }
+            // Render aid (fix-hud-parity): `NF_HUD_PROBE=k=v,…` sets HUD-facing state after the ticks so
+            // one --shot shows a HUD situation: `dmg=<bits>:<alpha>` (BL+0x967 / +0x968), `hp=<n>`,
+            // `armour=<n>`, `clip=<n>`, `swim=<air>` (substate 3, head under), `shutter=<n>` (the
+            // camera pane's slot), `ctx=<n>` (BL+0x95F), `objtime=<t>` (the head objective's remaining life).
+            if let Ok(spec) = std::env::var("NF_HUD_PROBE") {
+                for kv in spec.split(',') {
+                    let (k, v) = kv.split_once('=').unwrap_or((kv, ""));
+                    let f = |s: &str| s.parse::<f32>().unwrap_or(0.0);
+                    match k {
+                        "dmg" => { let (b, a) = v.split_once(':').unwrap_or((v, "200")); sim.drones.health.dir_bits = f(b) as u8; sim.drones.health.flash = f(a); }
+                        "hp" => sim.drones.health.health = f(v),
+                        "armour" => sim.drones.health.armour = f(v),
+                        "clip" => sim.gun.clip = f(v) as u32,
+                        "swim" => { sim.bond.substate = nf_game::player::SS_SWIM; sim.bond.underwater = true; sim.bond.air = f(v); }
+                        "shutter" => sim.hud.camera_shutter = f(v) as u8,
+                        "ctx" => sim.bond.icon_ctx = f(v) as u8,
+                        "objtime" => { if let Some(m) = sim.hud.objective_msgs.front_mut() { m.time = f(v); } }
+                        // `mount=<heat>`: the first mounted gun active with that heat, WeaponNone held.
+                        "mount" => { if let Some(g) = sim.drones.props.gunimps.first_mut() { g.active = true; g.heat = f(v); sim.gun.weapon = 0x47; sim.hud.weapon_label_timer = 0; } }
+                        // `info=<label hex>[:<time>]` / `pickup=<label hex>[:<time>]`: a bound message
+                        // straight into the INFO / pickup pane.
+                        "info" | "pickup" => {
+                            let (l, t) = v.split_once(':').unwrap_or((v, "120"));
+                            let id = u32::from_str_radix(l.trim_start_matches("0x"), 16).unwrap_or(0);
+                            if let Some(txt) = sim.lang.as_ref().and_then(|g| g.bind(id)).map(|s| s.trim().to_string()) {
+                                let m = crate::scene::Msg::new(txt, f(t));
+                                if k == "info" { sim.hud.info_msgs.push_back(m); } else { sim.hud.msgs.push_back(m); }
+                            }
+                        }
+                        _ => eprintln!("NF_HUD_PROBE: unknown key {k:?}"),
+                    }
+                }
+            }
             if walk { let h = sim.bond.head(); cam = Camera { pos: Vec3::new(h[0], h[1], h[2]), yaw: sim.bond.yaw, pitch: sim.bond.pitch * std::f32::consts::FRAC_PI_2, fov: GAME_FOV / sim.zoom }; }
             if walk { if let Some((p, yaw, pitch, fov)) = sim.script_camera() { cam = Camera { pos: Vec3::new(p[0], p[1], p[2]), yaw, pitch, fov }; } }
             if walk { if let Some((p, yaw, pitch, fov)) = sim.wire_camera() { cam = Camera { pos: Vec3::new(p[0], p[1], p[2]), yaw, pitch, fov: GAME_FOV / fov }; } }
