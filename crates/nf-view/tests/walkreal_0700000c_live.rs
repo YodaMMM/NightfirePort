@@ -6,9 +6,11 @@
 //! crossings (jump-grab + hand-over-hand rides), and the STAIRCASE descent to the display
 //! ground (the hall floor's own opening over `obj_stor2_staircase01` #359's ramp [D] — the
 //! display eye reached by real input). The DOCUMENTED stand-ins left (each with its evidence
-//! inline): the case's trench exit (the south wall's solid base panel up to ~12.45 + the 0.91
-//! window slot seal the pocket — [D this session's fine scans + the placement probe]; the real
-//! game's case exit is the vent duct's own descent, a live check), the plates reach (every
+//! inline): the case's trench exit (the vent shaft is a ONE-WAY DROP in the disc's own data:
+//! the south crawl pocket is sealed by the wall slab z −112.34..−112.363 and the crouch
+//! capsule stops ON it at −111.813 [D this session's block dump + M 0x194df0 case 3]; the
+//! game holds the body too [L 2026-10-26 hatch-3]; no breakable glass exists [D census]), the
+//! plates reach (every
 //! walking route off the display-ground complex is closed — the slab's south face leaves a
 //! 0.23..0.4 slot above the 2.37 deck [D probe rays]; the game's own connection is the
 //! warehouse-side corridor/annex, a live check), the east
@@ -210,32 +212,110 @@ fn walk_the_whole_mission_from_the_start_to_the_0d_handoff() {
     // HEAD, the ramp descent to the display ground (6.27), the ledge north to the SUBJECT's
     // clear-line eye, and the photograph through the REAL camera switch and bullet path [M
     // CamSubject_Update 0x1bc668:14-24]. (Route floors from the crossings session's probe: the
-    // trench exit at z −112.5 is open west at body height; the direct south lane hits the 1.28
+    // direct south lane hits the 1.28
     // riser wall at z −114.09 [D probe]; the x 13..14 upper lane carries.)
-    // The trench EXIT — a DOCUMENTED stand-in (this session re-probed it fine): the case's
-    // south wall at z −111.89 is glass only from y 13.36 up [D fine ray scan: y 13.0..13.3
-    // clear, 13.5 hits, x 4.8..6.5; the prior "13.2" was the bracket's mid], so the lintel
-    // alone would pass the crouch capsule (top = root + 0.65 ≈ 13.16 over the 11.84 floor [M
-    // Player_Collision 0x194df0 case 3]) — BUT the crouch exit walk STALLS at z −111.81
-    // [this session's run: three x starts all stop at the same z, grounded false, with the
-    // south rays CLEAR at y 12.51..13.13 and crouch placements at z −111.95/−112.2 pushed
-    // back north to the same stall] — no ray at y ≥ 11.9 finds any geometry in
-    // z −112.0..−113.0 at x 4.9..6.9, so the stall's geometry is BELOW ray height or is a
-    // port-side push-out on the case-floor seam (UNPINNED). The north/east/west sides are
-    // glass from y ≤ 11.9 up [D ray scans — solid at body height]; glass is body-solid [M
-    // hatch-4's 0x1eb320:337 + the 0x800/0xc query flags; L 0700001b]. No SS keys off ch
-    // 0x1b (the level's movers are the ch-18 grate/poly, the ch-8 door, the 0x54 lid [D
-    // keys]) and no breakable-glass kind exists on this map [D census]. The real game's way
-    // out of the case after the #274 drop is the VENT DUCT's own descent (the duct delivers
-    // Bond INTO the case interior ~7.3 per the hatch sessions' map) — the port's drop
-    // through the vent hole lands in the trench instead. Live check 1 (the report) settles
-    // the real landing + exit. The stand-in moves Bond onto the 11.27 hall just south of the
-    // case (the pinned floors [D probe]); the sister pins the lintel so the stand-in never
-    // becomes a walk through glass that later opens.
+    // The trench EXIT — the stand-in stays, and this session PINNED why it must: the "bay" is
+    // the display case's vent SHAFT (floor 11.84 = the case's glass roof over the jetpack
+    // display, case ground 6.27 below [D this session's tri dump]), a one-way drop in the
+    // disc's own data:
+    //   - the shaft is closed E/W (x 4.78/6.74, walls to 14.6 and up to 15.86), N (z −110.39)
+    //     and by the roof 17.05..17.26 over z −111.97..−110.39 [D]; the only opening is the
+    //     vent hole 15.03..17.42 at the south wall top — 3.2 over the floor, unjumpable (the
+    //     0.78 apex [M player.rs]) and ladderless (the level's ladders are the yard #164/#495
+    //     only [D]);
+    //   - the south end z −111.89..−112.34 is a CRAWL POCKET (floor 11.84, ceiling 13.34 [D the
+    //     down-facing quad]) under the sill stack (14.81/15.03), closed south by the wall slab
+    //     z −112.34..−112.363 whose outer face spans y 11.62..13.57, x 4.56..6.96 [D];
+    //   - the crouch capsule (A = pos + 0.1 − (cc − 0.55), B = pos + 0.45 − cc, r 0.55 [M
+    //     Player_Collision 0x194df0 case 3; cc 0.556 [L 05-truck]]) FITS the pocket (top =
+    //     floor + 1.251 = 13.09 < 13.34) and walks in — and stops ON the slab: contact face
+    //     −112.363 + r 0.55 = −111.813, the stall pinned deterministically below (the prior
+    //     session's three x starts all stalled at the same z −111.81 [probe runs]);
+    //   - the body-height rays CANNOT see the slab: at capsule height the slab's north face
+    //     does not exist (its face pieces sit only below the floor 11.62..11.84 and above the
+    //     pocket ceiling 13.34..13.57 [D]) and the outer face points away from a north ray
+    //     (the rays are front-face only [M 0x10a8c8:168]) — "every ray at y ≥ 11.9 clear" was
+    //     honest and the block is still real: the CAPSULE touches the slab double-sided;
+    //   - the game seals it the same way: [L 2026-10-26 hatch-3, fresh boot] the game HOLDS a
+    //     south-walking body on the bay floor; and no glass exit exists ([D census, this
+    //     session: 0x20 Break placements in 0700000c = 0; the glass-shatter path runs only
+    //     through Break_Kill on 0x20 kind 2 [M 0x12b970; psiCreateBreakableData 0x117418's
+    //     only caller is parsemap 0x20 kind 2, 0x1d04f0:70-73]]);
+    //   - the OLD comment's escape story is REFUTED: "the real game's way out is the vent
+    //     duct's own descent into the case interior (~7.3) per the hatch sessions' map"
+    //     misread those sessions — the ~7.3 was hatch-1's UNMAPPED-leg question, not a
+    //     finding; the hatch sessions' [L]-backed map says the case interior (root 7.31 =
+    //     6.27 + 1.04) is entered from the east floor only, and the drop rests on the bay
+    //     floor 11.84 ([L 2026-10-26 hatch-2] fresh-boot rest (5.42, 12.8773, −111.38)) — the
+    //     port's drop MATCHES the game (the landing assert above).
+    //   - What would settle the real post-drop flow is live check 1 (the report): whether the
+    //     real game ever moves the body out of the shaft (a script, a checkpoint nudge, an
+    //     exit the static data hides), and whether its capsule stops at −111.813 like the
+    //     port's.
+    // The stand-in moves Bond onto the 11.27 hall just south of the case (the pinned floors
+    // [D probe]) — across the disc's own south seal, documented here; the sisters pin the
+    // pocket's geometry so the stand-in never silently becomes a walk.
     {
         let sim = w.scene.sim.as_ref().unwrap();
-        let lintel = sim.world.segment_hit([5.5, 13.5, -111.4], [5.5, 13.5, -113.0]);
-        assert!(lintel.is_some(), "the case's south lintel (z −111.89, from y 13.36 [D fine scan]) vanished; the exit stand-in could become a walk");
+        // The pocket-entrance wall (z −111.89, y 13.34..14.6): the hit the old "lintel" sister
+        // found is THIS wall's face, not a glass lintel above 13.36.
+        let wall = sim.world.segment_hit([5.5, 13.5, -111.4], [5.5, 13.5, -113.0]);
+        assert!(wall.is_some(), "the pocket-entrance wall (z −111.89, y 13.34..14.6 [D block dump]) vanished; the exit stand-in's landmark moved");
+        // The pocket ceiling 13.34 over the crawl (a ray up from inside the pocket hits its
+        // underside).
+        let ceil = sim.world.segment_hit([5.5, 12.0, -112.1], [5.5, 14.0, -112.1]);
+        assert!(ceil.is_some(), "the pocket ceiling (13.34 over z −111.89..−112.34 [D block dump]) vanished; the crawl story moved");
+        // The ray-blindness pin: at capsule height the south slab is ray-invisible (the
+        // mechanism above). If a face ever appears here, the exit story must be re-probed.
+        assert!(sim.world.segment_hit([5.5, 12.5, -111.7], [5.5, 12.5, -113.0]).is_none(),
+            "the south slab grew a ray-visible north face at capsule height; re-probe the exit");
+    }
+    // The REAL crouch walk into the pocket and onto the disc's own stall: crouch once (the
+    // game's toggle [M Player_SSCrouch 0x1924c0:84-105]) and hold south — the body advances to
+    // the slab contact and stops at −111.813 (−112.363 + 0.55) with the bay floor still under
+    // it. This is the deterministic pin the old "stalls at z −111.81 … UNPINNED" note asked
+    // for.
+    {
+        let mut held_z = None;
+        for t in 0..420 {
+            {
+                let sim = w.scene.sim.as_ref().unwrap();
+                let desired = std::f32::consts::PI; // south (−z), the vent-drop loop's yaw sense
+                let err = walker::wrap_pi(desired - sim.bond.yaw);
+                let input = nf_game::player::Input {
+                    crouch: t < 2, // the toggle press; the 60-tick lockout eats the repeat [M 0x1924c0]
+                    turn: err.clamp(-0.08, 0.08),
+                    forward: if err.abs() > 0.6 { 0.0 } else { 1.0 },
+                    ..Default::default()
+                };
+                w.tick(input, false);
+            }
+            let sim = w.scene.sim.as_ref().unwrap();
+            if t == 329 { held_z = Some(sim.bond.pos[2]); }
+        }
+        let sim = w.scene.sim.as_ref().unwrap();
+        let z = sim.bond.pos[2];
+        assert!(sim.bond.crouched, "the crouch toggle did not hold through the pocket walk");
+        assert!(z < -111.7, "the crouch walk never reached the pocket mouth (z {z}); the shaft's south changed");
+        assert!((z - -111.813).abs() <= 0.02,
+            "the crouch walk did not stop on the south slab contact (−112.363 + 0.55 = −111.813 [M 0x194df0 case 3; D the slab]): stopped at z {z}");
+        let held = held_z.expect("held_z sampled");
+        assert!((held - z).abs() <= 0.02, "the stall is not deterministic: z {held:.4} at t 330 vs {z:.4} at t 420 while still pressing south");
+        // The bay floor is still under the stalled body (the prior session's "grounded false"
+        // read the walker's push dither, not a hole): the take ray down from the capsule's B
+        // end hits the 11.84 floor.
+        let p = sim.bond.pos;
+        let floor = sim.world.segment_hit([p[0], p[1] - 0.106, p[2]], [p[0], 11.0, p[2]]);
+        assert!(floor.is_some(), "the bay floor vanished under the stalled body at {p:?}");
+        // Stand back up (the toggle's stand arm [M Player_SSCrouch 0x1924c0:84-105]) so the
+        // walk continues from the stand-in standing, as the pre-pin route did.
+        for _ in 0..3 {
+            w.tick(nf_game::player::Input { crouch: true, ..Default::default() }, false);
+        }
+        for _ in 0..40 {
+            w.tick(nf_game::player::Input::default(), false);
+        }
+        assert!(!w.scene.sim.as_ref().unwrap().bond.crouched, "the stand-up toggle failed after the pocket stall");
     }
     {
         let sim = w.scene.sim.as_mut().unwrap();
@@ -243,7 +323,7 @@ fn walk_the_whole_mission_from_the_start_to_the_0d_handoff() {
         sim.bond.vel = [0.0; 3];
     }
     w.wait(10);
-    eprintln!("[0c] the trench-exit stand-in (the case's unpinned exit) — on the 11.27 hall");
+    eprintln!("[0c] the trench-exit stand-in (the disc's own south seal — the shaft is a one-way drop) — on the 11.27 hall");
     w.walk_to(Wp::new(8.0, 12.4, -113.2).r(1.0), "the hall east (south of the x 6..7 pillars)");
     w.walk_to(Wp::new(13.5, 12.4, -115.0).r(1.2), "the upper east lane");
     // The STAIRCASE descent — the game's own route to the display ground, no class port
