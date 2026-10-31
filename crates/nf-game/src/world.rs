@@ -442,6 +442,13 @@ fn capsule_tri_contact(t: &[V3; 3], mat: u8, a: &mut V3, b: &mut V3, r: f32, gro
     // accidentally emulating for the stairwell. (The -6-c wedge note — the 01 escort
     // resupply pocket — was measured UNDER the normalized cull; the interaction differs
     // with the faithful rule.)
+    // The code, actually landed this time (capsule-cull-and-los-masks-19: the -16/-17 tree
+    // carried this comment with the rule's lines MISSING — the merged suite's east-duct reds
+    // repro'd on the gap: Bond rested ~1.08 above the 07000014 stairwell's -0.91 landing on
+    // the throat rim the game skips): the query strictly behind the face plane (the signed
+    // distance dot(p − t0, n) < 0 — the decompile's `dot(p, plane) + w < 0` with w = −dot(t0, n))
+    // returns flags 99 and never pushes.
+    if dot(sub(p, t[0]), n) < 0.0 { return false; }
     let (q, on_edge) = closest_on_triangle(p, t);
     // level-0a-band-settle-6-c: the settle-6-b Delta 3 (the on-edge second query, the tail's
     // Q = Q2 [M 0x10a344-0x10a4fc] with the caller's flags-99 gate on the re-run
