@@ -6525,7 +6525,10 @@ fn add_instance(level: &Level, inst: &Instance, layer: Layer, character: Option<
         // `View_AddObjects` 0x1e62d8:57-59 routes an object with glist flag 0x2000 to sort list 2, which
         // `Game_Draw` 0x1e6f50:162-175 draws after `psiClearZ` — over the whole world. Only the Micro-Camera's
         // DroneScan (0x02000832, flags 0x2128 [D]) takes it here; the other 0x2000 effect meshes are unverified.
-        Layer::Effect => if obj.hashcode == DRONE_SCAN && obj.flags & 0x2000 != 0 { (6, 0) } else { (5, 0) },
+        // goggles: the body glow's parts take the same list through their OBJECT flags (obj+0xF0 |=
+        // 0x2408 / 0x2400 [M BodyGlow_Create 0x1ac158]) — their builder passes LIST2_NODE: the
+        // glow paints over the world, the x-ray look through walls.
+        Layer::Effect => if (obj.hashcode == DRONE_SCAN && obj.flags & 0x2000 != 0) || node == LIST2_NODE { (6, 0) } else { (5, 0) },
     };
     // view-model-last: the first-person gun and its flash are `Game_Draw` 0x1e6f50:162-175's list 2, drawn
     // after `psiClearZ` — over everything the world and its effects drew [M]. Pass 7 draws after every
@@ -6750,6 +6753,10 @@ fn casing_matrix(c: &nf_game::casing::Casing) -> Mat4 {
 /// re-uploads lights [M View_DrawObjList 0x1e69a0:75-98] — so the gun takes NO point lights. The renderer
 /// zeroes them for these draws; `node` is otherwise read only for World cel culling.
 pub const VIEW_MODEL_NODE: u32 = u32::MAX - 1;
+/// An Effect-layer draw whose object sits in `Game_Draw`'s list 2 by its object flags
+/// (obj+0xF0 & 0x2000), not its glist's: drawn after `psiClearZ`, over the world (pass 6)
+/// [M Game_Draw 0x1e6f50:157-176; View_AddObjects 0x1e62d8:57-59]. The body glow's builder.
+pub const LIST2_NODE: u32 = u32::MAX - 2;
 /// Posed slots per gun emplacement: the base object, then one per `gunimp::TURRET_ARTS` gun child.
 const GUNIMP_SLOTS: usize = 1 + nf_game::gunimp::TURRET_ARTS.len();
 
@@ -8017,7 +8024,7 @@ pub fn build(level: &Level, cels_only: bool, skeletons: &HashMap<u8, Skeleton>, 
                     for part in 0..16usize {
                         let (map, object) = if part == 0 { (mm, mo) } else { (cm, co) };
                         let inst = Instance { map, object, matrix: ident, placement: pl0.clone() };
-                        add_instance(level, &inst, Layer::Effect, Some((0, Some(attachments.len() as u32))), &mut groups, None, None, None, None, [1.0; 3], &room_cels, u32::MAX, u32::MAX);
+                        add_instance(level, &inst, Layer::Effect, Some((0, Some(attachments.len() as u32))), &mut groups, None, None, None, None, [1.0; 3], &room_cels, u32::MAX, LIST2_NODE);
                         attachments.push(Attachment { character: 0, bone: 0, local: ident, flash: None, tracer: Some(GLOW_SLOT_BASE + g * 16 + part), dropped: false, aims_light: None, projectile: None, script: None, gas: None, effect: None, silencer: false, quiver_bolt: None, swap_piece: false, watch_hand: None, pda_digit: None });
                     }
                 }
@@ -8393,8 +8400,9 @@ pub fn build(level: &Level, cels_only: bool, skeletons: &HashMap<u8, Skeleton>, 
         // resolved object (the `graple_pulley` entity, handed over as the glist argument — the chain
         // documented at the fix-gadgets2 correction above), drawn once at the placement transform.
         // Gate: `psiDrawObjectMatrix` 0x124708 no-ops when the glist's box chain is empty, so objects
-        // with no batches stay undrawn (the creep walls' case); a 0x400 mirror-only object has no
-        // mirror viewer here. The 0x3A placements never carry 0x8000 CREATE_CEL [D placements], so
+        // with no batches stay undrawn (the creep walls' case); a 0x400 object is x-ray-only (drawn
+        // while viewer+0x236 == 2 [M View_AddObjects 0x1e62d8:38-47]) — no grapple glist carries it
+        // [D xray_only_census]. The 0x3A placements never carry 0x8000 CREATE_CEL [D placements], so
         // the static instance loop skips them and this sweep is the only draw — in --all the generic
         // instance loop covers them (debug view), hence the cels_only gate.
         // fix-striped-boxes: also the game's no-draw bit — `View_AddObjects`
@@ -8466,8 +8474,9 @@ pub fn build(level: &Level, cels_only: bool, skeletons: &HashMap<u8, Skeleton>, 
                     else if (p.index as usize) < level.maps[m].objects.len() { Some((m, p.index as usize)) } else { None };
                 let Some((map, object)) = target else { continue };
                 let obj = &level.maps[map].objects[object];
-                // Empty glists draw nothing (`View_DrawObjectGlist`'s psiDrawObjectMatrix no-ops), and a
-                // mirror-only object (glist flags 0x400, View_AddObjects 0x1e62d8:38-47) has no mirror viewer here.
+                // Empty glists draw nothing (`View_DrawObjectGlist`'s psiDrawObjectMatrix no-ops), and an
+                // x-ray-only object (glist flags 0x400, View_AddObjects 0x1e62d8:38-47 — drawn only while
+                // viewer+0x236 == 2) is not a static draw; no MISC kind carries one [D xray_only_census].
                 // fix-striped-boxes: the game's no-draw bit 0x10 — `View_AddObjects` 0x1e62d8:33 submits a
                 // dynamic object to the viewer draw lists only when `(obj+0xF0 & 0x8010) == 0` (obj+0xF0 is
                 // the creators' copy of `celglist+0x44`, i.e. MapObject.flags) — but only where a creator
@@ -8798,7 +8807,7 @@ pub fn build(level: &Level, cels_only: bool, skeletons: &HashMap<u8, Skeleton>, 
                 let Some((map, object)) = target else { continue };
                 let obj = &level.maps[map].objects[object];
                 // The static loop's gates: the glist's own no-draw bit 0x10 (a FLAGS_COPYING kind), the
-                // mirror-only 0x400, and an empty glist [M View_AddObjects 0x1e62d8:33,38-47].
+                // x-ray-only 0x400, and an empty glist [M View_AddObjects 0x1e62d8:33,38-47].
                 if obj.flags & 0x410 != 0 || !obj.gfx.leaves.iter().any(|l| !l.batches.is_empty()) { continue; }
                 if let Ok(h) = std::env::var("NF_HIDE") { if h.split(',').any(|n| !n.is_empty() && level.maps[map].objects[object].name.contains(n)) { continue; } }
                 let inst = Instance { map, object, matrix: mx, placement: p.clone() };

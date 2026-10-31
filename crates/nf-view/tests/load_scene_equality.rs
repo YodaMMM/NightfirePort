@@ -32,6 +32,9 @@ fn iso() -> Option<String> { std::env::var("NF_ISO").ok() }
 // camera-beam-satchel-draw: the cameras' third posed slot (the lens beam, Sensor_SetBeam 0x1af398) — 14's beams add vertices; 02's slot layout shifts.
 // batch-1024a: the security cameras' body + mount posed slots (`Sensor_Create` 0x1af010 / `Sensor_SetBeam`
 // 0x1af398 — 01 ×1, 02, 14 ×14), 14's b1 drones on skin 0x0500008c (`NDrone2_DefaultInit` 0x14b300:82-95).
+// goggles re-pin (10-31): the body-glow pool (8 guards x 16 parts, BodyGlow_Create 0x1ac158's meshes
+// 0x200025f/0x200055a) + the night-sight beam slot (0x2000131, Player_LaserPointer 0x1a65d8) on every level
+// (+129 attachments, +2 materials, +1584 verts); 07000014 adds its 8 x-ray-only laserbeam triggers (+8).
 const BASELINE: &[(&str, &str)] = &[
     // pickup-medal-gate re-pin: the fresh-boot loads now run `Pickup_Create`'s kind-6 gate
     // [M 0x18dda0:93-95] — the 007 rows (kind 6) create only with the level's gold medal
@@ -61,13 +64,13 @@ const BASELINE: &[(&str, &str)] = &[
     // instead of one (+327 attachments, +4026 vertices, +8154 indices on every level - the same
     // set on all five), so several live explosions draw at once.
     // destroy-wreck re-pin (10-29): the 0xe1 leaves' destroyed glists are baked at the leaf (drawn only once dead) [M Destroy_Create 0x12c318:25-30, Destroy_Smash 0x12bb60] - more vertices/materials on 01/02/0c/14, same characters/attachments.
-    ("07000002.bin", "894fd8767d700eca 4523624 9461472 5281 4390315 82 11050 205 28 25 5"), // re-pinned 10-30: the rigid bodies (0xD8) on posed slots [M RB_EulerEvolve 0x1d7810]
-    ("07000005.bin", "c18ce5ee4f22d3cf 4426865 9260541 3624 4342524 74 10984 106 19 16 4"), // the two copter SPs + their script draw slots; re-pinned 10-26: the 0x3b dynamic objects ride posed slots [M View_AddObjects 0x1e62d8:33, DynamicObject_Update 0x18d3b8]; re-pinned 10-28: the searchlight heads' block-0x27 LOD meshes (OBJECT_SearchLightBroken) on their own slots [M Control_NextLOD 0x1349b0] (+1134 verts, +1 material)
+    ("07000002.bin", "ac38e27e6f509dec 4525208 9464640 5283 4391899 82 11179 205 28 25 5"), // re-pinned 10-30: the rigid bodies (0xD8) on posed slots [M RB_EulerEvolve 0x1d7810]
+    ("07000005.bin", "23cf39bda88868eb 4428449 9263709 3626 4344108 74 11113 106 19 16 4"), // the two copter SPs + their script draw slots; re-pinned 10-26: the 0x3b dynamic objects ride posed slots [M View_AddObjects 0x1e62d8:33, DynamicObject_Update 0x18d3b8]; re-pinned 10-28: the searchlight heads' block-0x27 LOD meshes (OBJECT_SearchLightBroken) on their own slots [M Control_NextLOD 0x1349b0] (+1134 verts, +1 material)
     // lift-indicators-09 re-pin: one draw slot per `Script_SubScriptStart` op per running SP
     // [M 0x1db050] — 0700000c's multi-SP sub chains add 6 slots (+248 vertices, +576 indices,
     // +1 attachment); 07000014's vent-lid SPs are placed SPs (unchanged), the rest have no
     // multi-SP sub chains.
-    ("0700000c.bin", "cdb588bea7be0a4c 4921536 10345704 8400 4721616 97 12237 170 22 40 11"), // re-pinned 10-26: 0x3b on posed slots
+    ("0700000c.bin", "0ea1fa2fe9e0fbdd 4923120 10348872 8402 4723200 97 12366 170 22 40 11"), // re-pinned 10-26: 0x3b on posed slots
     // script-entity-copies: one draw slot per ScriptPlayer running a script — 14's nine
     // SPs on the vent-lid script 0x06000A3B (+ its other shared scripts) add 20 attachments, +1600 vertices.
     // The keypads' LOD pair in the posed slots (Lock_Unlock 0x1b0650 / case 1 `Control_NextLOD`: three
@@ -81,8 +84,8 @@ const BASELINE: &[(&str, &str)] = &[
     // param-0 script 0x06000A1B, +20 script-entity slots (the cabinet and wire art) [M FuseBox_Create].
     // 07000014 places two kind-6 rows as well: −836 verts / −752 indices / −2 material slots,
     // pickups 32 → 30 (same gate).
-    ("07000014.bin", "e535884775727d1c 7197909 14957277 6835 7036122 99 14751 173 41 37 30"), // re-pinned 10-26: p0-gated 0x3b instanced from load (created hidden [M 0x18dbf8:27-29])
-    ("07000001.bin", "037dff1d6d0057b3 4436539 9302259 3532 4363357 77 11064 101 11 20 4"), // re-pinned 10-30: the rigid bodies (0xD8) on posed slots [M RB_EulerEvolve 0x1d7810]
+    ("07000014.bin", "ddfa2a06f7d28b5e 7200125 14961429 6840 7038338 99 14888 173 41 37 30"), // re-pinned 10-26: p0-gated 0x3b instanced from load (created hidden [M 0x18dbf8:27-29])
+    ("07000001.bin", "2c050e172ce4a1e2 4438123 9305427 3534 4364941 77 11193 101 11 20 4"), // re-pinned 10-30: the rigid bodies (0xD8) on posed slots [M RB_EulerEvolve 0x1d7810]
 ];
 
 #[test]
