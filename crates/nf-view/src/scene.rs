@@ -6740,6 +6740,13 @@ const SWOOSH_SLOT_BASE: u16 = 0x8000;
 /// class-0x40 object per particle, ≤ 6 per impact, ≤ ~54 ticks) — the port caps the draw slots.
 const DECAL_SLOTS: usize = 200;
 const DEBRIS_SLOTS: usize = 128;
+/// The falling-leaf mesh "Leaf" (`Leaf_Create` 0x1abc88's `hashtable_set_object_to_entity_gfx(obj,
+/// 0x20002ca)` [M]; every level archive carries it [D]).
+pub const LEAF_MESH: u32 = 0x0200_02ca;
+/// Draw slots per leaf generator. The game caps nothing (one object per spawn); a generator spawns
+/// on `Rand_Rand(30) == 0` and a leaf lives 256 ticks (`Leaf_Update` 0x1abee0's countdown, cost-0
+/// budget), ≈ 8.5 alive on average — 32 covers the port's spawn stream (the live test pins the peak).
+pub const LEAF_SLOTS: usize = 32;
 
 /// The drone's height state after `DroneAnim_PreTransCallback` (0x13b490): `Drone+0xA0` = hip height − 0.02, at least
 /// 0.2 (it starts at 1.0 and keeps its value while the hip height is 0).
@@ -8104,6 +8111,39 @@ pub fn build(level: &Level, cels_only: bool, skeletons: &HashMap<u8, Skeleton>, 
                     let rinst = Instance { map: m, object: o, matrix: ident, placement: rplacement.clone() };
                     add_instance(level, &rinst, Layer::Effect, Some((0, Some(attachments.len() as u32))), &mut groups, None, None, None, None, [1.0; 3], &room_cels, u32::MAX, u32::MAX);
                     attachments.push(Attachment { character: 0, bone: 0, local: rinst.matrix, flash: None, tracer: None, dropped: false, aims_light: None, projectile: None, script: None, gas: None, effect: Some((kind, slot, mesh)), silencer: false, quiver_bolt: None, swap_piece: false, watch_hand: None, pda_digit: None });
+                }
+            }
+        }
+        // Falling leaves (`Leaf_Create` 0x1abc88): each leaf is a class-0x40 object with gfx
+        // "Leaf" 0x020002ca (`hashtable_set_object_to_entity_gfx` → `Control_SetGList` 0x134960:
+        // obj+0xf0 = glist+0x44 = 0xaa1 [D every level archive's Leaf]), then +0xf0 |= 0x20000020.
+        // Bit 0x20000000 makes `build_LinkToRoom` 0x1c9680 take the forced arm (+0xf0 |= 0x10008000,
+        // LList 0x270590), so the cel walk `View_AddObjects` 0x1e62d8 skips it (+0xf0 & 0x8010) and
+        // `View_AddForcedObjects` 0x1e5fb8 adds it — glist bit 0x1 → sort list 1 (the alpha list,
+        // `View_DrawObjList` 0x1e69a0 → `View_DrawObjectGlist` 0x1e6780 at the cached obj+0x90, no
+        // billboard/jitter bits 0x8/0x4 in 0xaa1). The leaf then links to its generator's cel
+        // (`control_link_object_to_cel(leaf, gen+0x20)` 0x1346b8): obj+0x100..0x102 start 0xff
+        // (`control_init_object` 0x134630) and so snap to that cel's ambient, and the 0x800 bit picks
+        // `View_SetupRenderModes_Tweak` 0x1e5888's dim branch (0xff·amb >> 8 = `mul_bytes`, alpha
+        // obj+0x106 = 0xff, which `Leaf_Update` spends at cost 0). One Effect pool per 0x2b
+        // generator (its cel fixes the tint), `LEAF_SLOTS` slots each; only levels that place a
+        // generator get one (07000004 ×2, 07000041 ×1 [D main-map 0x2b placements]).
+        if drones.is_some() {
+            if let (Some(mm), Some(&(lm, lo))) = (level.main_map(), level.by_hash.get(&LEAF_MESH)) {
+                let lident = anim::quat_trans_to_mat([0.0, 0.0, 0.0, 1.0], [0.0; 3]);
+                let lplacement = level.maps[mm].placements.first().cloned().unwrap_or_default();
+                let gens = level.maps[mm].placements.iter().filter(|p| p.flags & 0xff == 0x2b).count();
+                for g in 0..gens {
+                    // The tint rides the colour slot (`colour_mults_dense`: the generator cel's
+                    // ambient), not the vertices — the build bakes 1.0.
+                    let linst = Instance { map: lm, object: lo, matrix: lident, placement: lplacement.clone() };
+                    let before = pool_snapshot(&groups);
+                    add_instance(level, &linst, Layer::Effect, Some((0, Some(attachments.len() as u32))), &mut groups, None, None, None, None, [1.0; 3], &room_cels, u32::MAX, u32::MAX);
+                    let rec = pool_record(&groups, &before);
+                    for k in 0..LEAF_SLOTS {
+                        if k > 0 { pool_replay(&mut groups, &rec, Some(attachments.len() as u32)); }
+                        attachments.push(Attachment { character: 0, bone: 0, local: lident, flash: None, tracer: None, dropped: false, aims_light: None, projectile: None, script: None, gas: None, effect: Some((9, g * LEAF_SLOTS + k, LEAF_MESH)), silencer: false, quiver_bolt: None, swap_piece: false, watch_hand: None, pda_digit: None });
+                    }
                 }
             }
         }
@@ -9740,6 +9780,21 @@ pub fn build(level: &Level, cels_only: bool, skeletons: &HashMap<u8, Skeleton>, 
                             },
                         },
                     },
+                    // A falling leaf (`Leaf_Update` 0x1abee0): slot = generator · LEAF_SLOTS + k poses
+                    // that generator's k-th live leaf at `Control_GetObjMatrix` 0x134210's
+                    // `View_RotTransMatrix(obj+0x50, obj+0x30)`, scale obj+0xe8 = 1 (control_init_object
+                    // 0x134630; no write after). A leaf on its spawn tick has not drawn yet: it is created
+                    // mid-walk with its world sphere unbuilt (memset obj+0x80/0x8c), so
+                    // `View_AddForcedObjects` 0x1e5fb8's `Vision_InView` drops it until the next
+                    // movement pass builds it (`control_movement_object_handler` 0x1336f8:78-81) — the
+                    // port's leaf has then ticked once (frames_left < 256).
+                    9 => {
+                        let (g, k) = (slot / LEAF_SLOTS, slot % LEAF_SLOTS);
+                        match s.drones.fx.leaves.iter().filter(|l| l.gen as usize == g && l.frames_left < 256).nth(k) {
+                            Some(l) => nf_formats::placement::object_matrix(l.rot, l.pos),
+                            None => far,
+                        }
+                    }
                     // fix-grenade-throw: the smoke grenade's cloud (`Occlude_Create` 0x17ea80) — a
                     // static object at `obj+0x30`, no rotation (`Occlude_Update` 0x17eba0 only counts
                     // down; `Control_GetObjMatrix` 0x134210 has no euler write on this class).
@@ -10838,6 +10893,15 @@ pub fn build(level: &Level, cels_only: bool, skeletons: &HashMap<u8, Skeleton>, 
                         // 0x12e7b0] — so the rocket's own orange light saturates it to the PS2's white flare
                         // (the cel-ambient dim left the blue low: a yellow star). Grenade slots unchanged.
                         if a.projectile.is_some_and(|(slot, _)| (slot as usize) >= GRENADE_SLOTS) { return one(); }
+                        // A falling leaf's tint: obj+0x100..0x102 snap to its generator's cel ambient
+                        // at the link (`control_link_object_to_cel` 0x1346b8, the leaf's glist 0x800
+                        // bit → `View_SetupRenderModes_Tweak` 0x1e5888's dim branch, 0xff·amb >> 8).
+                        if let Some((9, slot, _)) = a.effect {
+                            return match s.drones.fx.leafgens.get(slot / LEAF_SLOTS) {
+                                Some(g) => s.ambient_at(g.pos).map(mul_bytes).unwrap_or_else(one),
+                                None => one(),
+                            };
+                        }
                         if a.dropped {
                             // The dropped gun is a pickup object (`DroneWeap_DropWeapon` → `Pickup_Create`
                             // 0x18dda0, the same forced 0x840): the ambient dim at its drop matrix.
