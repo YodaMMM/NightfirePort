@@ -80,11 +80,12 @@ fn gold_bits(base_map: u32) -> u64 {
     p.bonus[0]
 }
 
-/// The kind-0xD8 rigid bodies (four `rb_redlamp` placements #9-#12 [D census], type halfword
-/// 0xFFFF = the sphere body, mass word 1 [D params (2,1)/(4,65535)]) take a bullet's class-5
+/// The kind-0xD8 rigid bodies (four `rb_redlamp` placements #9-#12 [D census], type halfword 1
+/// = a sphere body, mass word 1 [D params (0,1) (2,1) (3,1) (4,65535); param k = level_tag+0x2C+4k
+/// M 0x1d1b68:74]) take a bullet's class-5
 /// contact: `RB_RestingContactRot` 0x1d73a0 adds impulse = hit_vel·(scale·0.5) and
 /// (point − translation)×impulse to the torque slot, and `RB_EulerEvolve` 0x1d7810 turns the
-/// torque into omega (the per-type mask keeps the full cross for 0xFFFF) — the body TIPS
+/// torque into omega (the type-1 mask zeroes the cross's y lane) — the body TIPS
 /// while its translation stays (no linear arm for type != 0 [M 0x1d7124 gate]). The bullet
 /// pass appends the contact through the body's world sphere [M Control_BuildWorldSph
 /// 0x133070; D the bullet reach]. Sister: an unshot lamp rests forever [M the type-0-only
@@ -102,7 +103,7 @@ fn the_redlamp_rigid_body_takes_the_bullets_impulse() {
         let s = w.scene.sim.as_ref().unwrap();
         let rb = &s.drones.rbodies.list[0];
         assert_eq!(rb.placement, 9, "the first lamp is placement #9 [D]");
-        assert_eq!(rb.rb.ty, -1, "the 0xFFFF type halfword = the sphere body [D params (4,65535)]");
+        assert_eq!(rb.rb.ty, 1, "the type halfword = param 2 = 1 [D; M level_tag+0x34; L the same rb_* params on 07000004 read rb+0xa8 = 1]");
         (rb.st.trans, rb.st.s13c)
     };
     assert!(radius > 0.3 && radius < 2.0, "the glist world sphere is the lamp's own [M 0x133070], got {radius}");
