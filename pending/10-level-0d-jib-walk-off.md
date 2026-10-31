@@ -1,6 +1,6 @@
-## Your task: `level-11-route-teleports-to-walks`, replace 07000011's walk stand-in teleports with real input
+## Your task: `level-0d-jib-walk-off`, 0d: the crane deck to the yard on real input, the last legs
 
-`walkreal_07000011_route_live.rs` still moves Bond with three `bond.pos` writes (around lines 51, 65, 74). For each: read its comment (why it was a stand-in), find the game's own route there [D collision/placements/nav; M any class the route uses: doors, lifts, ladders, wires, movers], walk it on real input, and delete the write. Where the data shows no route, keep the write but pin the gap with a sister assert and say exactly what live check would settle it. Test-setup placements whose subject is not the route (a measurement spot) may stay — say which and why. Every test in the file green. Run the touched binaries and quote their totals.
+level-0d-jib-rim-gap (merged; read its report and `probe_crane17/18/19`) mapped the deck -> yard route and found the port's jump and the script-entity collision posing faithful [M Player_HandleJump 0x1916b0; Player_SSWalk 0x192310:69]. A mid-swing walk-off reached the walkway strip's r band but landed ~0.13 m outside its width. Finish the chain on real input: (1) the walk-off — a deck-edge bearing whose lateral offset lies inside the strip, or the roof-side edge (18.58); (2) the dock walk + E #460 in-route; (3) the beam boarding via the north steps and the roof/catwalk onto SP #115's westward pass, the ride west and the drop into the yard. Replace the remaining teleport in `walkreal_0700000d_live::walk_arrival_to_the_c5_door`. If a leg needs a port fix, cite the class [M]. Every test in the file green; run walkreal_0700000d_live and interactables_0700000d_live and quote the totals.
 
 **Tests pin only proven behaviour.** Every assertion about what the game does cites its evidence: [M] a decompile
 address that actually says it, [D] disc bytes, or [L] a live PCSX2 measurement from a FRESH boot (a save-state resume
@@ -10,7 +10,7 @@ say so in the report. Never weaken a decompile-backed test to make code pass.
 
 **Run the crates your tests touch before pushing**, and report what you ran.
 
-**Branch:** `s/level-11-route-teleports-to-walks`.
+**Branch:** `s/level-0d-jib-walk-off`.
 
 - **Run the full suite with the fast runner, started in the background in your first minutes** (it fits the 2-hour window):
   `NF_ISO=<abs path> nohup python3 tools/test/suite.py > suite.out 2>&1 &` (docs/tools/test-suite.md; once `tools/test/suite.py`

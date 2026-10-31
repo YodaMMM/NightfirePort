@@ -1,6 +1,6 @@
-## Your task: `level-0b-teleports-to-walks`, replace 0700000b's walk stand-in teleports with real input
+## Your task: `boot-loadout-qworm`, the level-start gadgets match the disc
 
-`walkreal_0700000b_live.rs` still moves Bond with seven `bond.pos` writes (around lines 221, 246, 315, 365, 391, 459, 474). For each: read its comment (why it was a stand-in), find the game's own route there [D collision/placements/nav; M any class the route uses: doors, lifts, ladders, wires, movers], walk it on real input, and delete the write. Where the data shows no route, keep the write but pin the gap with a sister assert and say exactly what live check would settle it. Test-setup placements whose subject is not the route (a measurement spot) may stay — say which and why. Every test in the file green. Run the touched binaries and quote their totals.
+level-0b-teleports-to-walks found the disc's level load owns the Q-Worm (`owned[0x58]`, load=1) on 0700000b while the port's boot loadout misses it. Find how the game builds the level-start inventory [M the loadout/inventory init the level load runs; D each level's loadout rows], fix the port so every on-foot level starts with the disc's gadgets and weapons (Q-Worm included where the data grants it), and pin it per level with a test that reads the disc rows (and a sister that fails on a missing gadget). Run nf-game, every *loadout*/*inventory*/*gadget* binary and walkreal_0700000b_live; quote the totals.
 
 **Tests pin only proven behaviour.** Every assertion about what the game does cites its evidence: [M] a decompile
 address that actually says it, [D] disc bytes, or [L] a live PCSX2 measurement from a FRESH boot (a save-state resume
@@ -10,7 +10,7 @@ say so in the report. Never weaken a decompile-backed test to make code pass.
 
 **Run the crates your tests touch before pushing**, and report what you ran.
 
-**Branch:** `s/level-0b-teleports-to-walks`.
+**Branch:** `s/boot-loadout-qworm`.
 
 - **Run the full suite with the fast runner, started in the background in your first minutes** (it fits the 2-hour window):
   `NF_ISO=<abs path> nohup python3 tools/test/suite.py > suite.out 2>&1 &` (docs/tools/test-suite.md; once `tools/test/suite.py`
