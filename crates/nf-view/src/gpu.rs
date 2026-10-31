@@ -274,6 +274,30 @@ fn live_ranges(runs: &[[u32; 3]], collapsed: &[bool], first: u32, count: u32, mu
     }
     if let Some((f, n)) = cur { emit(f, n); }
 }
+#[cfg(test)]
+mod live_ranges_tests {
+    use super::live_ranges;
+    fn ranges(runs: &[[u32; 3]], collapsed: &[bool], first: u32, count: u32) -> Vec<(u32, u32)> {
+        let mut v = Vec::new();
+        live_ranges(runs, collapsed, first, count, |f, n| v.push((f, n)));
+        v
+    }
+    #[test]
+    fn unsplit_draws_whole_and_collapsed_runs_drop_out() {
+        assert_eq!(ranges(&[], &[], 30, 12), vec![(30, 12)]);
+        let runs = [[0, 6, 0], [6, 3, 1], [9, 3, u32::MAX], [12, 6, 2], [18, 3, 1]];
+        // Nothing collapsed: one merged range, the whole draw.
+        assert_eq!(ranges(&runs, &[false, false, false], 0, 21), vec![(0, 21)]);
+        // Slot 1 collapsed: its two runs leave, the neighbours stay in order; the u32::MAX run always draws.
+        assert_eq!(ranges(&runs, &[false, true, false], 0, 21), vec![(0, 6), (9, 9)]);
+        // Sister: every slot collapsed leaves only the unkeyed run — so the filter can fail an all-drawn frame.
+        assert_eq!(ranges(&runs, &[true, true, true], 0, 21), vec![(9, 3)]);
+        assert_ne!(ranges(&runs, &[true, true, true], 0, 21), ranges(&runs, &[false, false, false], 0, 21));
+        // A slot past the collapsed list (a palette shorter than the layout) is drawn.
+        assert_eq!(ranges(&runs, &[], 0, 21), vec![(0, 21)]);
+    }
+}
+
 /// Extract the 6 frustum planes from a column-major `view_proj` (Gribb-Hartmann). Each plane is `(a, b, c, d)` with
 /// `a·x + b·y + c·z + d ≥ 0` inside the frustum, normalised so a sphere of radius `r` centred at `p` is fully outside
 /// when `a·p.x + b·p.y + c·p.z + d < −r`.
@@ -422,6 +446,8 @@ pub struct Renderer {
     /// `skin_palette` FAR park / the hidden-character collapse) — every vertex skinned by that entry
     /// alone lands exactly on its translation.
     skin_collapsed: std::cell::RefCell<Vec<bool>>,
+    /// perf-240f: a copy of what pal_buf holds (see write_pal).
+    pal_shadow: std::cell::RefCell<Vec<nf_formats::anim::Mat4>>,
     /// perf-240f: per draw (material index), its triangles split into runs `[first, count, slot]`
     /// in index order — `slot` = the one palette entry every vertex of the run is skinned by alone
     /// (a == b, weight 0 or 1, no morph, finite bind position), u32::MAX = anything else. Empty =
@@ -431,6 +457,10 @@ pub struct Renderer {
     /// of parked decal/casing/debris slots in one draw, ~1M indices each) were ~90% of the world
     /// pass's GPU time on 0700001b / 07000016 / 07000007.
     sub_runs: Vec<Vec<[u32; 3]>>,
+    /// perf-240f: false submits every split draw whole (the identity test's reference frame).
+    pub split_runs: bool,
+    /// perf-240f: the last `render`'s submitted world-pass index count (measurement / test aid).
+    pub last_indices: u64,
     /// Per character: the light-pick centre when the palette's root slot is not where the
     /// character is drawn (`Scene::char_light_centres` — the script actors, whose object sits at
     /// the origin while the sequence root carries the body). Set with each palette build.
@@ -847,7 +877,7 @@ impl Renderer {
             for ch in &cel_graph.chains { for &c in ch { if (c as usize) < n { reached[c as usize] = true; } } }
             reached.iter().map(|r| !r).collect()
         };
-        Renderer { shard_pipeline, shard_vbuf, shard_groups: Vec::new(), woman_tex, snow_pipeline, snow_vbuf, snow_bg, hud_pipeline, hud_add_pipeline, hud_sub_pipeline, hud_vbuf, hud_bgs, pipelines, fog, notex, nofog, uniform, uniform_bg, staged: Vec::new(), orphan_nodes, destroy_dead: Vec::new(), destroy_wreck_draw: Vec::new(), destroy_wreck_all: scene.destroy_wrecks.iter().map(|(c, _)| c.map(f32::to_bits)).collect(), destroy_tint: Vec::new(), batch, vbuf, skin_buf, snow_skin, pal_buf, col_buf, wts_buf, mtg_buf, skin_layout, skin_pos: Default::default(), skin_collapsed: Default::default(), sub_runs, char_light_centre: Vec::new(), lights: Default::default(), light_memo: Vec::new(), light_memo_gen: 1, light_memo_lights: Default::default(), los_memo: Vec::new(), los_memo_world: (0, 0), wreck_of: Vec::new(), wreck_of_src: Vec::new(), dead_sorted: Vec::new(), screen_aspect: 0.0, ibuf, tex_bgs, tex_frames, draws, order: Vec::with_capacity(order_cap), cel_boxes, cel_graph, viewer_cel: Default::default(), last_vis: None, last_cell_vis: None, movie_tex: None, movie_bg: None, movie_size: None, movie_vbuf, hud_tbgl: tbgl, hud_sampler: sampler, pass_timestamps: None, probe_skip: Vec::new() }
+        Renderer { shard_pipeline, shard_vbuf, shard_groups: Vec::new(), woman_tex, snow_pipeline, snow_vbuf, snow_bg, hud_pipeline, hud_add_pipeline, hud_sub_pipeline, hud_vbuf, hud_bgs, pipelines, fog, notex, nofog, uniform, uniform_bg, staged: Vec::new(), orphan_nodes, destroy_dead: Vec::new(), destroy_wreck_draw: Vec::new(), destroy_wreck_all: scene.destroy_wrecks.iter().map(|(c, _)| c.map(f32::to_bits)).collect(), destroy_tint: Vec::new(), batch, vbuf, skin_buf, snow_skin, pal_buf, col_buf, wts_buf, mtg_buf, skin_layout, skin_pos: Default::default(), skin_collapsed: Default::default(), pal_shadow: Default::default(), sub_runs, split_runs: true, last_indices: 0, char_light_centre: Vec::new(), lights: Default::default(), light_memo: Vec::new(), light_memo_gen: 1, light_memo_lights: Default::default(), los_memo: Vec::new(), los_memo_world: (0, 0), wreck_of: Vec::new(), wreck_of_src: Vec::new(), dead_sorted: Vec::new(), screen_aspect: 0.0, ibuf, tex_bgs, tex_frames, draws, order: Vec::with_capacity(order_cap), cel_boxes, cel_graph, viewer_cel: Default::default(), last_vis: None, last_cell_vis: None, movie_tex: None, movie_bg: None, movie_size: None, movie_vbuf, hud_tbgl: tbgl, hud_sampler: sampler, pass_timestamps: None, probe_skip: Vec::new() }
     }
 
     /// The game's depth-0 pyramid for the walk [M `Vision_Calculate_View_Fustrum` 0x1e7df8,
@@ -953,7 +983,7 @@ impl Renderer {
     /// `vis`: the frame's room visibility mask (see `Scene::skin_palette`).
     pub fn update_skin(&self, queue: &wgpu::Queue, scene: &Scene, choice: Option<usize>, time: f32, opts: crate::scene::ViewOpts, vis: Option<&[bool]>) {
         let (pal, cols) = scene.skin_palette(&self.skin_layout, choice, time, opts, vis);
-        if !pal.is_empty() { queue.write_buffer(&self.pal_buf, 0, bytemuck::cast_slice(&pal)); }
+        self.write_pal(queue, &pal);
         *self.skin_pos.borrow_mut() = pal.iter().map(|m| [m[3][0], m[3][1], m[3][2]]).collect();
         self.note_collapsed(&pal);
         queue.write_buffer(&self.col_buf, 0, bytemuck::cast_slice(&cols));
@@ -970,6 +1000,38 @@ impl Renderer {
         if !wts.is_empty() { queue.write_buffer(&self.wts_buf, 0, bytemuck::cast_slice(&wts)); }
     }
 
+    /// perf-240f: the palette into pal_buf, writing only the 256-entry blocks whose bytes differ
+    /// from the last upload (pal_shadow mirrors the buffer: every write to it goes through here),
+    /// adjacent dirty blocks in one write. The buffer ends up holding exactly pal either way; most
+    /// of a level's palette is parked pool slots that never change, so a tick rewrote ~1 MB to
+    /// change a few hundred entries.
+    fn write_pal(&self, queue: &wgpu::Queue, pal: &[nf_formats::anim::Mat4]) {
+        if pal.is_empty() { return; }
+        let mut sh = self.pal_shadow.borrow_mut();
+        if sh.len() != pal.len() {
+            queue.write_buffer(&self.pal_buf, 0, bytemuck::cast_slice(pal));
+            sh.clear();
+            sh.extend_from_slice(pal);
+            return;
+        }
+        const BLOCK: usize = 256;
+        let mut run: Option<(usize, usize)> = None;
+        let mut flush = |r: Option<(usize, usize)>, sh: &mut Vec<nf_formats::anim::Mat4>| if let Some((s, e)) = r {
+            queue.write_buffer(&self.pal_buf, (s * 64) as u64, bytemuck::cast_slice(&pal[s..e]));
+            sh[s..e].copy_from_slice(&pal[s..e]);
+        };
+        for s in (0..pal.len()).step_by(BLOCK) {
+            let e = (s + BLOCK).min(pal.len());
+            let same = bytemuck::cast_slice::<_, u8>(&pal[s..e]) == bytemuck::cast_slice::<_, u8>(&sh[s..e]);
+            run = match (run, same) {
+                (Some((rs, _)), false) => Some((rs, e)),
+                (None, false) => Some((s, e)),
+                (r, true) => { flush(r, &mut sh); None }
+            };
+        }
+        flush(run, &mut sh);
+    }
+
     /// perf-240f: skin_collapsed for the palette just uploaded (3×3 exactly zero).
     fn note_collapsed(&self, pal: &[nf_formats::anim::Mat4]) {
         let mut c = self.skin_collapsed.borrow_mut();
@@ -979,7 +1041,7 @@ impl Renderer {
 
     /// Upload an already-built (possibly interpolated) palette and colour table.
     pub fn upload_skin(&self, queue: &wgpu::Queue, pal: &[nf_formats::anim::Mat4], cols: &[[f32; 4]]) {
-        if !pal.is_empty() { queue.write_buffer(&self.pal_buf, 0, bytemuck::cast_slice(pal)); }
+        self.write_pal(queue, pal);
         { let mut sp = self.skin_pos.borrow_mut(); sp.clear(); sp.extend(pal.iter().map(|m| [m[3][0], m[3][1], m[3][2]])); }
         self.note_collapsed(pal);
         if !cols.is_empty() { queue.write_buffer(&self.col_buf, 0, bytemuck::cast_slice(cols)); }
@@ -1146,6 +1208,7 @@ impl Renderer {
             let skip = SKIP.get_or_init(|| std::env::var("NF_SKIP_MAT").map(|v| v.split(',').filter_map(|t| t.trim().parse().ok()).collect()).unwrap_or_default());
             // Reuse the cached `order` Vec (A-11e): clear + refill, no per-frame alloc.
             self.order.clear();
+            self.last_indices = 0;
             let prof_cull = nf_game::prof::scope("enc: cull filter");
             // frame-240: the cull runs BEFORE the sort and the uniform staging, so the per-frame
             // work (light picks, uniform slots, the sort) scales with the submitted draws, not with
@@ -1371,8 +1434,11 @@ impl Renderer {
                         _ => b.segs.push((dc.pipeline, at, at)),
                     }
                     let args = &mut b.args;
-                    live_ranges(self.sub_runs.get(k).map_or(&[][..], |r| &r[..]), &collapsed, dc.first, dc.count, |first, count| {
+                    let runs = if self.split_runs { self.sub_runs.get(k).map_or(&[][..], |r| &r[..]) } else { &[][..] };
+                    let total = &mut self.last_indices;
+                    live_ranges(runs, &collapsed, dc.first, dc.count, |first, count| {
                         args.extend_from_slice(&[count, 1, first, 0, j as u32 + 1]);
+                        *total += count as u64;
                     });
                     if let Some(s) = b.segs.last_mut() { s.2 = (b.args.len() / 5) as u32; }
                 }
@@ -1404,7 +1470,9 @@ impl Renderer {
                         last_tex = Some(tbg);
                     }
                     let collapsed = self.skin_collapsed.borrow();
-                    live_ranges(self.sub_runs.get(k).map_or(&[][..], |r| &r[..]), &collapsed, first, count, |f, n| pass.draw_indexed(f..f + n, 0, (j as u32 + 1)..(j as u32 + 2)));
+                    let runs = if self.split_runs { self.sub_runs.get(k).map_or(&[][..], |r| &r[..]) } else { &[][..] };
+                    let total = &mut self.last_indices;
+                    live_ranges(runs, &collapsed, first, count, |f, n| { *total += n as u64; pass.draw_indexed(f..f + n, 0, (j as u32 + 1)..(j as u32 + 2)) });
                 }
             }
             if trace {

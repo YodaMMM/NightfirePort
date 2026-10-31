@@ -4865,12 +4865,22 @@ impl Drone {
     /// The local pose shown now: the playing script at its fractional time, blended with the scripts fading out
     /// (docs/systems/anim-engine.md). Root translation kept.
     pub fn local_pose(&self, d: &Data) -> Option<crate::anim::Pose> {
+        self.local_pose_with(d, None)
+    }
+
+    /// `local_pose` with the script samples taken through `cache` when given
+    /// (`crate::anim::script_pose_drone_cached` — the identical pose; perf-240f, the render's palette).
+    fn local_pose_with(&self, d: &Data, mut cache: Option<&mut crate::anim::PoseSampleCache>) -> Option<crate::anim::Pose> {
         let skin = d.skins.get(&self.skin)?;
         let skel = d.skeletons.get(&skin.skeleton)?;
-        let cur = crate::anim::script_pose_drone(d.scripts, d.sequences, skel, skin, self.anim.script?, 1.0 + self.anim.ftime)?;
+        let mut pose = |hash: u32, time: f32| match cache.as_deref_mut() {
+            Some(c) => crate::anim::script_pose_drone_cached(d.scripts, d.sequences, skel, skin, hash, time, c),
+            None => crate::anim::script_pose_drone(d.scripts, d.sequences, skel, skin, hash, time),
+        };
+        let cur = pose(self.anim.script?, 1.0 + self.anim.ftime)?;
         let outs: Vec<(crate::anim::Pose, f32)> = self.anim.outgoing.iter()
             .filter_map(|o| {
-                let mut p = crate::anim::script_pose_drone(d.scripts, d.sequences, skel, skin, o.script, o.time)?;
+                let mut p = pose(o.script, o.time)?;
                 if o.unyaw != 0.0 { if let Some(r) = p.first_mut() { r.1 = crate::anim::unyaw(r.1, o.unyaw); } }
                 Some((p, o.weight()))
             }).collect();
@@ -4886,15 +4896,22 @@ impl Drone {
     /// the head's right axis, premultiplied `q_yaw ⊗ q_pitch ⊗ q_bone`; *approximation*: the port's axes are the
     /// model's), and the hip height. Drawing and hit boxes both use it.
     pub fn object_pose(&self, d: &Data) -> Option<(Vec<nf_formats::anim::Mat4>, f32)> {
-        self.object_pose_inner(d, true)
+        self.object_pose_inner(d, true, None)
+    }
+
+    /// `object_pose` with the script samples memoised in `cache` (perf-240f: the render's palette
+    /// build re-samples the same integer frames tick after tick; a sample is a pure function of its
+    /// key, so the pose is the identical pose — see `crate::anim::PoseSampleCache`).
+    pub fn object_pose_cached(&self, d: &Data, cache: &mut crate::anim::PoseSampleCache) -> Option<(Vec<nf_formats::anim::Mat4>, f32)> {
+        self.object_pose_inner(d, true, Some(cache))
     }
 
     /// `track = false` gives the pose WITHOUT the head-track rotation — the palette the game's
     /// `AnimObjectHeadTrack` 0x1bf618 itself receives (psiBuildMatrixPalette rebuilds it from the
     /// anim every tick, so the stored rotation is never in the axes it measures from).
-    fn object_pose_inner(&self, d: &Data, track: bool) -> Option<(Vec<nf_formats::anim::Mat4>, f32)> {
+    fn object_pose_inner(&self, d: &Data, track: bool, cache: Option<&mut crate::anim::PoseSampleCache>) -> Option<(Vec<nf_formats::anim::Mat4>, f32)> {
         let skin = d.skins.get(&self.skin)?;
-        let mut local = self.local_pose(d)?;
+        let mut local = self.local_pose_with(d, cache)?;
         let hip = local.first().map_or(0.0, |r| r.0[1]);
         if let Some(r) = local.first_mut() { r.0 = [0.0; 3]; }
         let mut world = nf_formats::anim::world_pose(&local, skin);
@@ -4982,7 +4999,7 @@ impl Drone {
     /// position (sAnimObject+0x104 = 5 [docs/fields/animobject.md [L-read]]; the port stands in
     /// the AI's player eye snapshot).
     pub fn head_track_want(&self, d: &Data, target: [f32; 3]) -> Option<(f32, f32)> {
-        let (world, hip) = self.object_pose_inner(d, false)?;
+        let (world, hip) = self.object_pose_inner(d, false, None)?;
         if world.len() <= 5 { return None; }
         // The port's pose is OBJECT-space (the game's palette is world; the port factors the
         // placement into palette()'s object matrix) — take the tracked point into the same frame:

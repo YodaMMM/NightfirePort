@@ -384,6 +384,13 @@ fn probe_gpu_bisect() {
         r.pass_timestamps = Some(qs.clone());
         let (layout, _) = scene.skin_layout();
         let hf = nf_view::gpu::HudFrame::default();
+        {
+            let a = &scene.attachments;
+            let cnt = |f: &dyn Fn(&nf_view::scene::Attachment) -> bool| a.iter().filter(|x| f(x)).count();
+            eprintln!("[gbis-att] {name} attachments {} effect {} gas {} tracer {} projectile {} flash {} script {} dropped {} chars {} drones {}", a.len(),
+                cnt(&|x| x.effect.is_some()), cnt(&|x| x.gas.is_some()), cnt(&|x| x.tracer.is_some()), cnt(&|x| x.projectile.is_some()),
+                cnt(&|x| x.flash.is_some()), cnt(&|x| x.script.is_some()), cnt(&|x| x.dropped), scene.characters.len(), scene.sim.as_ref().map_or(0, |s| s.drones.list.len()));
+        }
         let n = scene.materials.len();
         let class = |k: usize| -> &'static str {
             let m = &scene.materials[k];

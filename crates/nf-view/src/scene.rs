@@ -738,6 +738,9 @@ pub struct Sim {
     /// (`nf_game::anim::PoseSampleCache`) and the walk scripts' distance tables (built once per
     /// walk sequence instead of per body per ticked frame). Draw-only, never read by the sim.
     pub mp_draw_cache: std::cell::RefCell<(nf_game::anim::PoseSampleCache, HashMap<u32, Option<nf_game::anim::DistanceTable>>)>,
+    /// perf-240f: the drone characters' draw memo (the palette's `Drone::object_pose_cached`):
+    /// whole-frame bone samples, draw-only, never read by the sim.
+    pub drone_draw_cache: std::cell::RefCell<nf_game::anim::PoseSampleCache>,
     /// light-sun: BLData+0x962 — Bond's head sees the sun this tick (`ramp_char_ambient`).
     pub sun_seen: bool,
     /// The language string table (`USATxt.dat`, the NTSC-U default `FNames[SelLang]`) — the source of the
@@ -5895,6 +5898,20 @@ impl Sim {
             }
         }).nth(k)
     }
+
+    /// perf-240f: every live script entity's matrix by (src, hash) in `script_entity_k`'s order
+    /// (newest first, the hidden SPs' stream objects left out), so `script_entity_k(src, hash, k)`
+    /// is `index.get(&(src, hash)).and_then(|v| v.get(k))` — one walk of the object list for a
+    /// whole palette build instead of one per script attachment.
+    pub fn script_entity_index(&self) -> HashMap<((u32, u8), u32), Vec<Mat4>> {
+        let hidden = self.drones.scripts.hidden_stream_objects();
+        let mut out: HashMap<((u32, u8), u32), Vec<Mat4>> = HashMap::new();
+        for (i, o) in self.drones.scripts.objects.list.iter().enumerate().rev() {
+            if hidden.contains(&i) { continue; }
+            if let Some(nf_game::nis::Obj::Entity { hash, matrix, src, .. }) = o { out.entry((*src, *hash)).or_default().push(*matrix); }
+        }
+        out
+    }
     /// The game data the simulation consults, borrowed from this Sim.
     pub fn data(&self) -> nf_game::drone::Data<'_> {
         nf_game::drone::Data { tables: &self.tables, props: &self.props, scripts: &self.scripts, weapons: &self.weapons, world: &self.world, level: self.level, sequences: &self.seqs, skins: &self.skins, skeletons: &self.skeletons, nav: &self.nav, covers: &self.covers, tuning: &self.tuning, hitboxes: &self.hitboxes, volumes: &self.volumes, sfx: self.sfx.as_ref(), models: &self.models , surfaces: self.surfaces.as_ref(), voices: self.voices.as_deref(), difficulty: self.drones.difficulty,
@@ -9121,7 +9138,7 @@ pub fn build(level: &Level, cels_only: bool, skeletons: &HashMap<u8, Skeleton>, 
             // The difficulty was set before the creates above (the game's GameState+0x28 pick);
             // the old direct-load hardcode `= 1` moved into the build parameter so replay loads
             // pass 1 and the front-end path passes the menu's pick.
-            Some(Sim { drones, tables: d.tables.clone(), props, scripts: d.scripts.clone(), weapons, world, level: d.level_id, char_drone, char_script, char_script_skin, seq_index, seqs, skins: level.skins.clone(), skeletons: skeletons.clone(), nav, covers, ai_points, tuning: d.tuning.clone(), hitboxes, sfx: d.sfx.clone(), volumes, glist_bounds, models, gun: nf_game::gun::Gun::new(2, 7, 41), bond, cursor: [0.0; 2], cross: [0.0; 2], view_script: 0, first_person: false, last_shot: None, shot_tick: false, view_time: 0.0, view_speed: 1.0, bob: [0.0; 2], aiming: false, free_aim: false, auto_aim: false, rapid_fire: false, zoom: 1.0, zoom_target: 1.0, disabled: false, surfaces: d.surfaces.clone(), voices: d.voices.clone(), step_dist: 0.0, wires, creepwalls, creeping: false, wire_anims, wire_channel: 0, ladders, icons, view_model_ids: std::collections::HashSet::new(), cross_state: 2, cels: sim_cels, char_ambient, view_model_chars: Vec::new(), mp_body_chars: Vec::new(), bond_body_char: None, mp_last_held: [2; nf_net::MAX_AGENTS], mp_weapon_loaded: Vec::new(), ambient_lookups: std::cell::Cell::new(0), mp_draw_cache: Default::default(), mp_anim: (0..nf_net::MAX_AGENTS).map(|_| nf_game::mp::body_anim::MpBodyAnim::new()).collect(), mp_anim_sets: d.mp_anims.as_ref().map(|a| nf_formats::mpanim::MpAnimSets { sets: a.sets }), sun_seen: false, lang: None, hud: Default::default(), smoke: Vec::new(), room_cell: cel_graph.room_to_cell.clone(), prev_trigger: false,
+            Some(Sim { drones, tables: d.tables.clone(), props, scripts: d.scripts.clone(), weapons, world, level: d.level_id, char_drone, char_script, char_script_skin, seq_index, seqs, skins: level.skins.clone(), skeletons: skeletons.clone(), nav, covers, ai_points, tuning: d.tuning.clone(), hitboxes, sfx: d.sfx.clone(), volumes, glist_bounds, models, gun: nf_game::gun::Gun::new(2, 7, 41), bond, cursor: [0.0; 2], cross: [0.0; 2], view_script: 0, first_person: false, last_shot: None, shot_tick: false, view_time: 0.0, view_speed: 1.0, bob: [0.0; 2], aiming: false, free_aim: false, auto_aim: false, rapid_fire: false, zoom: 1.0, zoom_target: 1.0, disabled: false, surfaces: d.surfaces.clone(), voices: d.voices.clone(), step_dist: 0.0, wires, creepwalls, creeping: false, wire_anims, wire_channel: 0, ladders, icons, view_model_ids: std::collections::HashSet::new(), cross_state: 2, cels: sim_cels, char_ambient, view_model_chars: Vec::new(), mp_body_chars: Vec::new(), bond_body_char: None, mp_last_held: [2; nf_net::MAX_AGENTS], mp_weapon_loaded: Vec::new(), ambient_lookups: std::cell::Cell::new(0), mp_draw_cache: Default::default(), drone_draw_cache: Default::default(), mp_anim: (0..nf_net::MAX_AGENTS).map(|_| nf_game::mp::body_anim::MpBodyAnim::new()).collect(), mp_anim_sets: d.mp_anims.as_ref().map(|a| nf_formats::mpanim::MpAnimSets { sets: a.sets }), sun_seen: false, lang: None, hud: Default::default(), smoke: Vec::new(), room_cell: cel_graph.room_to_cell.clone(), prev_trigger: false,
             mp_bonds: [const { None }; nf_net::MAX_AGENTS],
             mp_local_slot: 0,
             mp_body_speed: [0.0; nf_net::MAX_AGENTS],
@@ -9440,7 +9457,31 @@ pub fn build(level: &Level, cels_only: bool, skeletons: &HashMap<u8, Skeleton>, 
         // One memo across the characters: the crowds share (mesh, sequence, frame) poses.
         let mut cache = HashMap::new();
         let prof_pose = nf_game::prof::scope("fs: pose characters");
-        let posed: Vec<Option<(Vec<Mat4>, Vec<Mat4>, Mat4)>> = self.characters.iter().enumerate().map(|(ci, c)| pose_one(ci, c, &mut cache)).collect();
+        // perf-240f: the drone-backed characters' poses (`pose_one`'s drone arm) go through the
+        // Sim's draw-only sample memo (`Drone::object_pose_cached`): the drones re-sample the same
+        // integer frames tick after tick, and a sample is a pure function of its key, so each
+        // pose is the identical pose. Every other character keeps `pose_one`, and the hidden gate
+        // runs first here as it does there.
+        let mut pre: Vec<Option<Option<(Vec<Mat4>, Vec<Mat4>, Mat4)>>> = Vec::new();
+        if let (None, Some(s)) = (choice, self.sim.as_ref()) {
+            let _pd = nf_game::prof::scope("fs: drone pose");
+            let data = s.data();
+            let mut cache = s.drone_draw_cache.borrow_mut();
+            for (ci, c) in self.characters.iter().enumerate() {
+                let Some(di) = s.char_drone[ci] else { continue };
+                if skip_hidden && hidden(c, ci) { continue; }
+                let dr = &s.drones.list[di];
+                let op = dr.object_pose_cached(&data, &mut cache);
+                let r = op.map(|(world, hip)| {
+                    let m = nf_formats::placement::object_matrix([0.0, dr.yaw, 0.0], [dr.pos[0], dr.draw_y(hip), dr.pos[2]]);
+                    (anim::skin_matrices(&world, &c.skin), world, m)
+                });
+                if pre.is_empty() { pre.resize_with(self.characters.len(), || None); }
+                pre[ci] = Some(r);
+            }
+        }
+        let posed: Vec<Option<(Vec<Mat4>, Vec<Mat4>, Mat4)>> = self.characters.iter().enumerate()
+            .map(|(ci, c)| match pre.get_mut(ci).and_then(Option::take) { Some(r) => r, None => pose_one(ci, c, &mut cache) }).collect();
         drop(prof_pose);
         // Held back: spawner reinforcements and drones disabled while they wait for a switch channel (object flags
         // 0x30, `NDrone2_Enable(0)`); R shows them. The inspect path (`choice`) pins a drone-backed
@@ -9448,6 +9489,8 @@ pub fn build(level: &Level, cels_only: bool, skeletons: &HashMap<u8, Skeleton>, 
         // A matrix that collapses a mesh to one point: its triangles become degenerate and draw nothing.
         let collapse = |at: &Mat4| -> Mat4 { [[0.0; 4], [0.0; 4], [0.0; 4], [at[3][0], at[3][1], at[3][2], 1.0]] };
         // Attached meshes: datum local · bone world · object (bind world when the character has no animation).
+        // perf-240f: the script entities looked up once per build (`Sim::script_entity_index`).
+        let ent_index = self.sim.as_ref().filter(|_| self.attachments.iter().any(|a| a.script.is_some())).map(|s| s.script_entity_index());
         let att_one = |k: usize, a: &Attachment| -> Mat4 {
             // The gas puffs: a camera billboard with the puff's scale and spin (the game's draw path is
             // `View_DrawObjectGlist`'s obj+0xF0 & 8 billboard: viewer rotation · the object's angles, scaled
@@ -9883,7 +9926,7 @@ pub fn build(level: &Level, cels_only: bool, skeletons: &HashMap<u8, Skeleton>, 
                         if p.model == hash && (p.gone || p.hidden) { return far; }
                     }
                 }
-                return self.sim.as_ref().and_then(|s| s.script_entity_k((h, si), hash, k as usize)).map(|m| {
+                return ent_index.as_ref().and_then(|ix| ix.get(&((h, si), hash))).and_then(|v| v.get(k as usize).copied()).map(|m| {
                     // The billboard entities (`View_DrawObjectGlist` 0x1e6780:43-65): the glist flags
                     // bit 0x8 (reached via `Control_SetGList` 0x134960's `obj+0xF0 = glist+0x44`)
                     // replaces the drawn ROTATION with the viewer's — `Mat_CopyRot(viewer+0x1a0)` —
@@ -10883,6 +10926,7 @@ pub fn build(level: &Level, cels_only: bool, skeletons: &HashMap<u8, Skeleton>, 
             }
             drop(pp);
             let _pa = nf_game::prof::scope("cm: attachments");
+            let ent_index = self.attachments.iter().any(|a| a.script.is_some()).then(|| s.script_entity_index());
             for ai in 0..self.attachments.len() as u32 {
                 {
                     attach_mult.push((|| {
@@ -10911,7 +10955,7 @@ pub fn build(level: &Level, cels_only: bool, skeletons: &HashMap<u8, Skeleton>, 
                             // A script entity is its own object (the truck: nine 0x8880 objects [L]):
                             // 0x800-glist entities dim by the ambient at their live matrix; the others
                             // (coronas, triggers) draw untinted — not character 0's ambient.
-                            return match s.script_entity_k((h, si), hash, k as usize).map(|m4| amb_at(s, &m4)) {
+                            return match ent_index.as_ref().and_then(|ix| ix.get(&((h, si), hash))).and_then(|v| v.get(k as usize)).map(|m4| amb_at(s, m4)) {
                                 Some(m) if self.models_0x800.get(&hash).copied().unwrap_or(false) => m,
                                 _ => one(),
                             };
