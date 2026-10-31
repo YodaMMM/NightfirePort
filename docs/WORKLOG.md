@@ -46,3 +46,13 @@ Progress log:
   full [M] chain, the missing-template finding with the probe dump, what's left, two live
   checks, the chunk_suite resume command). Fix + pin test + 07000014 binaries + suite left to
   the next message; branch is current.
+
+## level-14-missing-group-guards — started (in progress)
+
+- 09:55 UTC branch s/level-14-missing-group-guards created from origin/master b44ac857 and
+  merged s/level-14-door-guard-release (continue from its report: #723/#784/#785 absent from
+  the port's drones.list). NEXT: first rule out Drone_Create 0x136be0's difficulty gate
+  (parameter 2 = level tag vs GameState+0x40; port mirror ghost-guards-990) on the three
+  placements' [D] rows; if gated, pin present-at-higher/absent-at-lower; else fix the
+  parse/attach drop; then pin the release in door_guards_locked_door_07000014_live and run it
+  + every 07000014 binary + nf-game.
