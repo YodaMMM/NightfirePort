@@ -29,3 +29,26 @@
 - start (master b44ac857; merged s/level-16-finale-pit-3 2ed06a3a for its mechanism chain and
   report). Task: continue pit-3 — the walk must press the re-armed KikoDeathButton through the
   launch chain and complete the mission on real input; un-ignore the tail walk.
+- outcome (2026-10-31, round 2): the survival-window mechanism is [M]-COMPLETE and the
+  contradiction is sharpened to ONE link. NEW [M]: the who-mask is a START gate only
+  (Hurt_Update 0x17e5d0:51-104 — gated → uVar5 = the channel byte, 1 != 0 → state 1; no
+  per-victim filter); the victim pass is ungated (Player_DealWithObjHit 0x194458:95-102;
+  Player_CollisionHandler 0x1949a8:24 gates only on the enabled byte); the collide candidate
+  law ACCEPTS the volume while the gate is high (Collide_PickObj 0x1eae80:82-90 — mode 0x100
+  short-circuits the +0xFA clause; +0xF0 0x20 gate-low reject clears on the rise; Hurt_Create
+  0x17e870 sets no other skip bit) — the shipped game REALLY deals the 1000 damage on contact.
+  NEW [M] hand-back chain: event 6 snapshots record(i−1) (0x1d94c0:73-84; Script_Update
+  0x1da998:29-31 increments +0xab3 AFTER Script_Run → record(0x80+i·0x28) = the previous
+  stream); 06000631's stream 8 Entity (t747, hash 0, obj_type 31 → Script_CreateEntity
+  0x1d8968's model-less generic tail) sets kind 1 and poses the dummy AT CREATE
+  (Script_EntityStart 0x1d8d78:111 calls Script_Interp) from key 204 = (3.57,−22.76,−179.55)
+  [D]; Script_Free 0x1da880:44-48 → Player_Enable 0x195498:54-68 teleports Bond there — the
+  shipped Bond re-enables INSIDE the volume box 1611 t before the pulse (door 9 t after it
+  drops, lift 70 after — [D]). NEW [D]: ch 0xc0's writer = 0600090a stream 20 @t7840; 07900016.bin
+  holds ONLY 06000632 (its [8d,0] @420 is the only 0x8d-clear in the packs) — the button-first
+  route is dead. OPEN LINK (the report's live checks): Script_Interp 0x1d9a08 mode-0 for a
+  one-key track — the create-time interp either applies key 204 (pit-floor hand-back, the
+  port's reading) or leaves the create pose (the ORIGIN). Port code: NONE changed — every
+  stage the port implements matches the decompile; the walkreal's ignored citation now carries
+  the full chain. walkreal_07000016_live 8/0/1-ignored (42.10 s), interactables_07000016_live
+  8/0 (42.98 s), nf-game 588/0/5. Report: docs/reports/level-16-finale-pit-4.md.
