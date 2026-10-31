@@ -36,3 +36,24 @@ tools/test/suite.py and quote every total.
   root → AnimObject+0xcc ride, the +0.0256 candidate). Neither test un-ignorable without it.
 - Named binaries (default path, post-fix): interactables_0700000a_live 7 passed / 0 failed /
   0 ignored; walkreal_0700000a_live 7 passed / 0 failed / 2 ignored.
+
+## Outcome (2026-10-31, ~22:41 UTC)
+
+- DONE: the decompile read of both ignored-test spots (no clip/wall-stop/step-up in the walk
+  path [M 0x193600:284-295, 0x1949a8:131-140, 0x109da0:321-322, 0x194188:106]; the push tail
+  dead on 0a fresh boot [L ee_start_0700000a 0x1b78ee0 BL+0x790 = 00×16, _DeltaP zeroed per
+  call 0x109da0:136, add-back only 0x1ebaa8:353-373]); the move_v port-gap fix in player.rs
+  (pre_move_pos hoisted before every position move — the flag path's clip had never engaged and
+  the 2026-10-30 crossing reading was ghosting); both ignore notes re-pinned with the addresses
+  and two named live checks (BL+0x790 doorway dump; walk-anim root → AnimObject+0xcc ride, the
+  +0.0256 candidate). Neither test un-ignorable: both assert driver-pinned settled [L] values
+  (1.1285 / 1.1159) that need the unported climb-settle mechanism.
+- Named binaries (suite state, post-fix tree): interactables_0700000a_live 7 passed / 0 failed /
+  0 ignored; walkreal_0700000a_live 7 passed / 0 failed / 2 ignored; nf_game 588 / 0 / 5.
+- Suite (tools/test/chunk_par_tmp.py, the sandbox kills true background jobs — chunked
+  foreground, 2 workers, fresh state): 332/996 binaries recorded by the 22:45 stop line =
+  1572 passed / 0 failed / 99 ignored, ZERO failures. Remaining 664 binaries NOT RUN (deadline) —
+  the tree is final; the next message can resume the tally from the same state.
+- The flag-on re-measure: NF_WALK_CLIP=1 (now live) wedges the west-hall through-line at the
+  doorway (STUCK (−8.28, 1.03, 15.83)) and reads 1/6/2 on the 0a battery — the clip model is not
+  the game's mechanism; the flip stays unlanded.
