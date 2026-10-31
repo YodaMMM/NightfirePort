@@ -22,6 +22,7 @@ use nf_game::player::Input;
 fn iso() -> String { std::env::var("NF_ISO").expect("NF_ISO") }
 
 #[test]
+#[ignore = "probe: the walkway-lip route, sealed in the game [L 2026-10-31] and in the port"]
 fn probe_north_end_route() {
     let isopath = iso();
     let mut w = Walker::new(nf_view::load_with_carry(&isopath, "0700000c.bin", false, None).unwrap());
