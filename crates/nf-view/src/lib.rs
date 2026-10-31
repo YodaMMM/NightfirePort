@@ -2251,6 +2251,16 @@ fn front_end_menu(args: &[String], scene: &scene::Scene, front_end: bool, iso_pa
                 fe.bonus = Some(menu::BonusFields { level: 0x0700_0005, lines, texture: Some(lines[0].texture), text_labels, has_text: true });
                 menu::Page::NfBonus
             }
+            // Render aid: the credits roll opened from AV Options, `--roll N` frames in (default
+            // 1200); NF_CREDITS_BONUS=1 raises the GameState[0x52] flag (the dimmed backdrop).
+            "credits" => {
+                fe.open_credits(crate::credits::PAGE_CN_AV, 100, std::env::var_os("NF_CREDITS_BONUS").is_some());
+                let n: u32 = args.iter().position(|a| a == "--roll").and_then(|i| args.get(i + 1)).and_then(|v| v.parse().ok()).unwrap_or(1200);
+                for _ in 0..n { fe.credits.tick(); }
+                menu::Page::Credits
+            }
+            // Render aid: the end-of-campaign win page (P_WINGAME's 0x4c raised the movie).
+            "wingame" => { fe.just_completed = true; fe.win_enter(); menu::Page::WinGame }
             "cnmenu" => { fe.cn_name = "Default".into(); menu::Page::CnMenu }
             "advanced" => menu::Page::CnAdvanced,
             "mpoptions" => menu::Page::CnMp,
