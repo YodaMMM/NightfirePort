@@ -2562,7 +2562,15 @@ fn shot(scene: &scene::Scene, cam: &Camera, out: &str, choice: Option<usize>, ti
     r.destroy_tint = destroy_tints(scene);
     // Objects are never room-culled (see the live path).
     r.update_skin(&queue, scene, choice, time, opts, None);
-    if let Some(p) = SHOT_PALETTE.lock().unwrap().take() { r.upload_palette(&queue, &p); }
+    // The holes of the cels this shot does not draw are hidden (`View_DrawCelGlist` 0x1e6538 draws a
+    // cel's hole nodes with the cel only) — the window does the same per frame.
+    let shot_pal = SHOT_PALETTE.lock().unwrap().take();
+    let decal_cells = scene.decal_cell_entries(&r.skin_layout);
+    if shot_pal.is_some() || (vis_shot.is_some() && !decal_cells.is_empty()) {
+        let mut p = shot_pal.unwrap_or_else(|| scene.skin_palette(&r.skin_layout, choice, time, opts, None).0);
+        if let Some(v) = vis_shot.as_deref() { scene.hide_unseen_decals(&mut p, &decal_cells, v); }
+        r.upload_palette(&queue, &p);
+    }
     r.set_char_light_centres(scene);
     r.lights = scene.frame_lights();
     r.screen_aspect = w as f32 / h as f32;
@@ -2739,9 +2747,15 @@ struct App {
     /// perf-240: the presented-frame palette (seeded per tick) and the entries that move between the two ticks.
     pal_blend: Vec<nf_formats::anim::Mat4>,
     pal_moving: Vec<u32>,
-    /// The decal pool's eviction count at the last palette rebuild — the reused pool nodes since
-    /// then snap instead of blending (`Scene::decal_reused_entries`).
-    decal_evicted: Option<u32>,
+    /// The decal pool's made count and the debris slots' handed-out count at the last palette
+    /// rebuild — the nodes/slots taken since then snap instead of blending
+    /// (`Scene::decal_reused_entries` / `Scene::debris_reused_entries`).
+    fx_made: Option<(u32, u32)>,
+    /// The cel-hosted holes' palette entries and cels (`Scene::decal_cell_entries`), refreshed
+    /// with the palette; each frame hides those whose cel the frame does not draw.
+    decal_cells: Vec<(u32, u32)>,
+    /// The entries the last frame hid (restored from the tick palette before the next blend).
+    pal_hidden: Vec<u32>,
     /// The gadget-beam palette entries (`Scene::beam_entries`), refreshed when the palette is
     /// rebuilt.
     beam_entries: Vec<usize>,
@@ -5599,9 +5613,13 @@ impl App {
                     // A decal pool node reused for a new hole this tick shows the new hole at once
                     // (the game rewrites the node whole [M Effect_Bullet 0x1ce9f0..0x1cea9c]); blending
                     // it would slide the hole through mid-air from the evicted one.
-                    let evicted = self.scene.sim.as_ref().map_or(0, |s| s.drones.effects.evicted);
-                    let snap = self.scene.decal_reused_entries(&g.renderer.skin_layout, self.decal_evicted.unwrap_or(evicted));
-                    self.decal_evicted = Some(evicted);
+                    // The same for a debris slot handed to a new piece.
+                    let made = self.scene.sim.as_ref().map_or((0, 0), |s| (s.drones.effects.made, s.drones.effects.debris_made));
+                    let prev = self.fx_made.unwrap_or(made);
+                    let mut snap = self.scene.decal_reused_entries(&g.renderer.skin_layout, prev.0);
+                    snap.extend(self.scene.debris_reused_entries(&g.renderer.skin_layout, prev.1));
+                    self.fx_made = Some(made);
+                    self.decal_cells = self.scene.decal_cell_entries(&g.renderer.skin_layout);
                     if let Some((pp, _)) = &self.pal_prev {
                         self.pal_moving.extend(moving_entries(pp, &new.0, &snap));
                     }
@@ -5637,6 +5655,14 @@ impl App {
                 let alpha = alpha0;
                 let fp_blend = std::time::Instant::now();
                 if let Some((pal, cols)) = &self.pal_cur {
+                    // The holes in cels this frame does not draw (`View_DrawCelGlist` 0x1e6538
+                    // draws a cel's hole nodes with the cel only): the entries hidden last frame
+                    // come back from the tick palette first, then this frame's are collapsed.
+                    if self.pal_blend.len() == pal.len() {
+                        for &e in &self.pal_hidden { if let Some(m) = pal.get(e as usize) { self.pal_blend[e as usize] = *m; } }
+                    }
+                    self.pal_hidden.clear();
+                    let hide_any = vis.is_some() && !self.decal_cells.is_empty();
                     match &self.pal_prev {
                         Some((pp, _)) if interp => {
                             let vm_entries = view_model_entries(&self.scene, &g.renderer.skin_layout);
@@ -5659,7 +5685,16 @@ impl App {
                                     reattach_beams(blended, pp, pal, alpha, &cp, &cc, &draw_cam, &self.beam_entries);
                                 }
                             }
+                            if let (true, Some(v)) = (hide_any, vis.as_deref()) {
+                                self.pal_hidden = self.scene.hide_unseen_decals(blended, &self.decal_cells, v);
+                            }
                             g.renderer.upload_skin(&g.queue, blended, cols);
+                        }
+                        _ if hide_any && self.pal_blend.len() == pal.len() => {
+                            // Not blending: the tick palette with the unseen holes collapsed.
+                            self.pal_blend.copy_from_slice(pal);
+                            if let Some(v) = vis.as_deref() { self.scene.hide_unseen_decals(&mut self.pal_blend, &self.decal_cells, v); }
+                            g.renderer.upload_skin(&g.queue, &self.pal_blend, cols);
                         }
                         _ => g.renderer.upload_skin(&g.queue, pal, cols),
                     }
@@ -6167,7 +6202,9 @@ impl App {
             pal_cur: None,
             pal_blend: Vec::new(),
             pal_moving: Vec::new(),
-            decal_evicted: None,
+            fx_made: None,
+            decal_cells: Vec::new(),
+            pal_hidden: Vec::new(),
             beam_entries: Vec::new(),
             fps_cap: None,
             fps_meter: FpsMeter::default(),
@@ -6669,7 +6706,7 @@ pub fn run() -> Result<()> {
                 if c.len() == 3 {
                     for (k, &h) in nf_game::explode::METAL_HASH_132.iter().enumerate() {
                         sim.drones.blast_debris.push(nf_game::shatter::Debris { model: h, pos: [c[0] + 0.3 * k as f32 - 0.45, c[1], c[2]],
-                            rot: [0.3 * k as f32, 0.5, 0.0], vel: [0.0, 0.0803, 0.0], spin: [0.0; 3], life: 100_000, fade: 0xff, e8: 1.0 });
+                            rot: [0.3 * k as f32, 0.5, 0.0], vel: [0.0, 0.0803, 0.0], spin: [0.0; 3], life: 100_000, fade: 0xff, e8: 1.0, draw: Default::default() });
                     }
                 }
             }
@@ -6854,23 +6891,28 @@ pub fn run() -> Result<()> {
             let (l, _) = scene.skin_layout();
             // The pair: the tick that hands a pool node to a new hole (the shot's flight can take a
             // few ticks), up to 12 ticks after one more trigger press.
-            let mut ev0 = scene.sim.as_ref().map_or(0, |s| s.drones.effects.evicted);
+            // `NF_INTERP_PLAIN=1`: the pair is the current tick and ONE more plain tick (no trigger
+            // press) — a between-ticks frame of whatever moves (flying debris, a swinging door).
+            let plain = std::env::var_os("NF_INTERP_PLAIN").is_some();
+            let made = |scene: &scene::Scene| scene.sim.as_ref().map_or((0, 0, 0), |s| (s.drones.effects.evicted, s.drones.effects.made, s.drones.effects.debris_made));
+            let mut ev0 = made(&scene);
             let mut p0 = scene.skin_palette(&l, choice, time, opts, None).0;
             let mut p1 = p0.clone();
-            for k in 0..12 {
-                ev0 = scene.sim.as_ref().map_or(0, |s| s.drones.effects.evicted);
+            for k in 0..if plain { 1 } else { 12 } {
+                ev0 = made(&scene);
                 p0 = if k == 0 { p0 } else { p1.clone() };
                 if let Some(sim) = scene.sim.as_mut() {
-                    sim.step_bond(nf_game::player::Input { fire: k == 0, ..Default::default() }, k == 0, false, false);
+                    sim.step_bond(nf_game::player::Input { fire: k == 0 && !plain, ..Default::default() }, k == 0 && !plain, false, false);
                 }
                 p1 = scene.skin_palette(&l, choice, time, opts, None).0;
-                if scene.sim.as_ref().map_or(0, |s| s.drones.effects.evicted) != ev0 { break; }
+                if made(&scene).0 != ev0.0 { break; }
             }
-            let snap = scene.decal_reused_entries(&l, ev0);
+            let mut snap = scene.decal_reused_entries(&l, ev0.1);
+            snap.extend(scene.debris_reused_entries(&l, ev0.2));
             let moving = moving_entries(&p0, &p1, &snap);
             let mut blended = p1.clone();
             lerp_palette_moving(&mut blended, &p0, &p1, &moving, &[], frac);
-            eprintln!("NF_INTERP_SHOT {frac}: {} holes, evicted {ev0} -> {}, {} moving entries, {} snapped", scene.sim.as_ref().map_or(0, |s| s.drones.effects.decals.len()),
+            eprintln!("NF_INTERP_SHOT {frac}: {} holes, evicted {} -> {}, {} moving entries, {} snapped", scene.sim.as_ref().map_or(0, |s| s.drones.effects.decals.len()), ev0.0,
                 scene.sim.as_ref().map_or(0, |s| s.drones.effects.evicted), moving.len(), snap.len());
             *SHOT_PALETTE.lock().unwrap() = Some(blended);
         }

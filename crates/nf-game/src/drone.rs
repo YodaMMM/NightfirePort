@@ -14513,7 +14513,7 @@ fn segment_hits_sphere(a: V3, b: V3, c: V3, r: f32) -> bool {
                 // no port-side record. Pass faces are kept: the flight trace's HITTEST+0x98 = 0
                 // [M 0x12f040] drops nothing in Collide_Intersect 0x1ebaa8, the walk decides.
                 let cell = d.world.find_cel(cur);
-                let Some((t, n, m, node_pass)) = d.world.segment_surface_flags_scoped(cell, cur, end) else { break };
+                let Some((t, n, m, node_pass, host)) = d.world.segment_surface_host_scoped(cell, cur, end) else { break };
                 let seg = [end[0] - cur[0], end[1] - cur[1], end[2] - cur[2]];
                 let hit = [cur[0] + seg[0] * t, cur[1] + seg[1] * t, cur[2] + seg[2] * t];
                 let flags6c_w = d.weapons.records.get(weapon as usize)
@@ -14566,7 +14566,7 @@ fn segment_hits_sphere(a: V3, b: V3, c: V3, r: f32) -> bool {
                     if mesh != 0 {
                         self.gas.init_ex(mesh, hit, 0.0, [0.0; 3], 2.0, 3.0, 5, [0x7f, 0x7f, 0x64, 0xff], 0, 8.0);
                     }
-                } else if let Some(nd) = self.effects.bullet_impact(&mut self.rng, d.surfaces, &mut self.gas, &mut self.fx, hit, n, m, dir, flags70, bounces, true, if pierce { 0 } else { 8 }) {
+                } else if let Some(nd) = self.effects.bullet_impact_on(&mut self.rng, d.surfaces, &mut self.gas, &mut self.fx, hit, n, m, dir, flags70, bounces, true, if pierce { 0 } else { 8 }, host) {
                     ricochet = Some((hit, nd));
                 }
                 // fix-weapon-effects / fix-blast-scripts2: the impact explode arms run per
@@ -17415,6 +17415,7 @@ fn segment_hits_sphere(a: V3, b: V3, c: V3, r: f32) -> bool {
                     life: p.life as i32,
                     fade: 0xff, // obj+0x106 = 0xff at create [M 0x1ac808:27]
                     e8: p.scale,
+                    draw: Default::default(),
                 });
             }
         }
@@ -18597,6 +18598,9 @@ fn segment_hits_sphere(a: V3, b: V3, c: V3, r: f32) -> bool {
         }
         { let parts = { let _p = crate::prof::scope("drones: set_dynamic parts"); script_parts(self, d) };
           let _p = crate::prof::scope("drones: set_dynamic"); d.world.set_dynamic(&parts); }
+        // The holes on moving objects take the objects' new matrices (the game composes
+        // `node+0x20 · obj+0x90` at every draw [M View_DrawObjectGlist 0x1e6780:66-74]).
+        self.effects.follow_hosts(|id| d.world.dynamic_matrix(id));
         // The killer monitor's step-2 clear of the hostage's finished `+0x4D0` [M 0x144340:53]:
         // flagged during the walk (the borrow can't reach the hostage) and applied here, before
         // the speech pass — `speech()`'s non-forced gate refuses a line while any voice is
@@ -18785,9 +18789,11 @@ fn segment_hits_sphere(a: V3, b: V3, c: V3, r: f32) -> bool {
                             let mut cur = p;
                             let mut hit_n = n;
                             let mut hit_m = m;
+                            // The decal host of each hit (the cel or the moving object it struck).
+                            let mut hit_host = d.world.segment_surface_host(from, end, false).map_or(crate::world::HitHost::Cel(None), |h| h.4);
                             let mut ricochet_nd: Option<V3> = None;
                             loop {
-                                if let Some(nd) = self.effects.bullet_impact(&mut self.rng, d.surfaces, &mut self.gas, &mut self.fx, cur, hit_n, hit_m, b.dir, flags70, b.bounces, false, if pierce { 0 } else { 8 }) {
+                                if let Some(nd) = self.effects.bullet_impact_on(&mut self.rng, d.surfaces, &mut self.gas, &mut self.fx, cur, hit_n, hit_m, b.dir, flags70, b.bounces, false, if pierce { 0 } else { 8 }, hit_host) {
                                     ricochet_nd = Some(nd);
                                     break;
                                 }
@@ -18798,6 +18804,7 @@ fn segment_hits_sphere(a: V3, b: V3, c: V3, r: f32) -> bool {
                                 let Some((t2, n2, m2)) = d.world.segment_surface(nxt, far, false) else { break };
                                 cur = [nxt[0] + dir[0] * t2, nxt[1] + dir[1] * t2, nxt[2] + dir[2] * t2];
                                 hit_n = n2; hit_m = m2;
+                                hit_host = d.world.segment_surface_host(nxt, far, false).map_or(crate::world::HitHost::Cel(None), |h| h.4);
                                 pierce = crate::effect::penetration_roll(&mut self.rng, m2, b.weapon, flags6c_d);
                                 if flags70 & 2 != 0 {
                                     if let Some(id) = nf_formats::sfx::SurfaceSounds::get(&s.impact, m2) { self.audio.play3d(id, cur, None); }
@@ -19543,6 +19550,8 @@ fn segment_hits_sphere(a: V3, b: V3, c: V3, r: f32) -> bool {
         // the frame loop, paused-gated — the Sim has no pause) and `Debris_Update` 0x1aac00 in
         // the object walk. docs/systems/break-debris.md.
         self.breaks.shatter.update();
+        // Every debris piece made this tick takes its draw slot (it keeps it until it dies).
+        self.effects.assign_debris_slots(&mut self.breaks.shatter.debris, &mut self.blast_debris);
     }
 }
 

@@ -145,6 +145,8 @@ pub struct Debris {
     /// obj+0xE8 — `Rand_FRand(0.1) + 0.4` [M 0x1aaa00:30-33]; not read by the sim update, kept
     /// for the draw layer.
     pub e8: f32,
+    /// The view's debris draw slot (`effect::Effects::assign_debris_slots`).
+    pub draw: crate::effect::DrawSlot,
 }
 
 /// The kill pieces of every breakable this session, oldest first. The draw layer reads
@@ -265,7 +267,7 @@ impl Shatter {
             let s = info.spread * 0.5 * REC_FRAME_RATE;
             let vel = [r.n[0] * s, r.n[1] * s, r.n[2] * s];
             let spin = [rng.frand_half(info.spin), rng.frand_half(info.spin), rng.frand_half(info.spin)];
-            self.debris.push(Debris { model: info.model, pos: centre, rot: [0.0; 3], vel, spin, life: life as i32, fade: 0xff, e8 });
+            self.debris.push(Debris { model: info.model, pos: centre, rot: [0.0; 3], vel, spin, life: life as i32, fade: 0xff, e8, draw: Default::default() });
         }
     }
 

@@ -245,6 +245,16 @@ struct ScopeData {
     always: Vec<u32>,
 }
 
+/// What a surface hit belongs to — `HITDATA+0x54` (the cel of a static hit) / `+0x58` (the
+/// object of a dynamic hit) [M Effect_Create 0x1ce688:64-66, Effect_Bullet 0x1ce8a8:160-200].
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub enum HitHost {
+    /// A static hit: the cel-scope bucket index of the hit run (`None` when unknown).
+    Cel(Option<u32>),
+    /// A dynamic part (`set_dynamic` id) and its world matrix at the hit.
+    Object(u64, Mat4),
+}
+
 /// Static geometry, plus moving objects (script animations' discrete parts: docs/systems/script-player.md) placed each
 /// tick with `set_dynamic` — `Collide_PickObj` (0x1eae80) tests any object linked into a cel with collision data
 /// (`obj+0xD8`) whatever moves it.
@@ -1803,40 +1813,97 @@ impl CollisionWorld {
     /// `Bullet_CollisionHandler` 0x12ce80 sets state 1 past them), so the caller's walk needs to
     /// know which hits to carry the round past. fix-foliage-bullets.
     pub fn segment_surface_flags(&self, from: V3, to: V3, no_water: bool) -> Option<(f32, V3, u8, bool)> {
+        self.segment_surface_host(from, to, no_water).map(|(t, n, m, p, _)| (t, n, m, p))
+    }
+
+    /// `segment_surface_flags` with the hit's host (`HitHost`): the cel of a static hit (the
+    /// cel-scope bucket that holds the hit run; `None` without a scope or for the missile cage)
+    /// or the dynamic part and its matrix — what `Effect_Bullet` 0x1ce8a8 links a decal node to
+    /// (`HITDATA+0x54` cel / `+0x58` object [M 0x1ce8a8:160-200]).
+    pub fn segment_surface_host(&self, from: V3, to: V3, no_water: bool) -> Option<(f32, V3, u8, bool, HitHost)> {
         let d = sub(to, from);
-        let (mut best, mut lo, mut hi) = (None::<(f32, V3, u8, bool)>, [0f32; 3], [0f32; 3]);
-        for k in 0..3 { lo[k] = from[k].min(to[k]); hi[k] = from[k].max(to[k]); }
-        let _ = (lo, hi);
-        let dynamic = self.dynamic.read().unwrap();
-        for g in [&self.stat, &self.missile, &dynamic.geo] {
-            for o in along(g, from, to) {
-                for k in o.tris.clone() {
-                    let node_pass = g.pass[k];
-                    let mat = g.mats[k];
-                    if no_water && mat & 0x3f == 0xE { continue; }
-                    let t = &g.tris[k];
-                    let (e1, e2) = (sub(t[1], t[0]), sub(t[2], t[0]));
-                    let n = cross(e1, e2);
-                    if dot(n, d) >= 0.0 { continue; } // back face [M 0x10a8c8:168]
-                    let p = cross(d, e2);
-                    let det = dot(e1, p);
-                    if det.abs() < 1e-12 { continue; }
-                    let inv = 1.0 / det;
-                    let s = sub(from, t[0]);
-                    let u = dot(s, p) * inv;
-                    if !(0.0..=1.0).contains(&u) { continue; }
-                    let q = cross(s, e1);
-                    let v = dot(d, q) * inv;
-                    if v < 0.0 || u + v > 1.0 { continue; }
-                    let tt = dot(e2, q) * inv;
-                    if (0.0..=1.0).contains(&tt) && best.is_none_or(|b| tt < b.0) {
-                        let l = dot(n, n).sqrt().max(1e-12);
-                        best = Some((tt, [n[0] / l, n[1] / l, n[2] / l], mat, node_pass));
-                    }
-                }
+        let mut best = None::<(f32, V3, u8, bool, HitHost)>;
+        let base = self.stat.objects.as_ptr() as usize;
+        for o in along(&self.stat, from, to) {
+            let run = (o as *const Object as usize - base) / std::mem::size_of::<Object>();
+            if let Some((tt, n, mat, pass)) = Self::tri_walk(&self.stat, o, from, d, no_water, best.map(|b| b.0)) {
+                best = Some((tt, n, mat, pass, HitHost::Cel(Some(u32::MAX - run as u32))));
             }
         }
-        best
+        for o in along(&self.missile, from, to) {
+            if let Some((tt, n, mat, pass)) = Self::tri_walk(&self.missile, o, from, d, no_water, best.map(|b| b.0)) {
+                best = Some((tt, n, mat, pass, HitHost::Cel(None)));
+            }
+        }
+        self.dynamic_walk(from, to, no_water, &mut best);
+        best.map(|b| self.resolve_run(b))
+    }
+
+    /// The static candidates carry `u32::MAX − run` until the walk ends; the winner's run is then
+    /// looked up once.
+    fn resolve_run(&self, b: (f32, V3, u8, bool, HitHost)) -> (f32, V3, u8, bool, HitHost) {
+        match b.4 {
+            HitHost::Cel(Some(k)) => (b.0, b.1, b.2, b.3, HitHost::Cel(self.run_cell((u32::MAX - k) as usize))),
+            _ => b,
+        }
+    }
+
+    /// One object's triangles against `from + t·d` (the one-sided ray test of
+    /// `Intersect_RayGeom` 0x10a8c8 [M :150-168]): the nearest front-face hit closer than `best`.
+    fn tri_walk(g: &Geo, o: &Object, from: V3, d: V3, no_water: bool, best: Option<f32>) -> Option<(f32, V3, u8, bool)> {
+        let mut out = None::<(f32, V3, u8, bool)>;
+        for k in o.tris.clone() {
+            let node_pass = g.pass[k];
+            let mat = g.mats[k];
+            if no_water && mat & 0x3f == 0xE { continue; }
+            let t = &g.tris[k];
+            let (e1, e2) = (sub(t[1], t[0]), sub(t[2], t[0]));
+            let n = cross(e1, e2);
+            if dot(n, d) >= 0.0 { continue; } // back face [M 0x10a8c8:168]
+            let p = cross(d, e2);
+            let det = dot(e1, p);
+            if det.abs() < 1e-12 { continue; }
+            let inv = 1.0 / det;
+            let s = sub(from, t[0]);
+            let u = dot(s, p) * inv;
+            if !(0.0..=1.0).contains(&u) { continue; }
+            let q = cross(s, e1);
+            let v = dot(d, q) * inv;
+            if v < 0.0 || u + v > 1.0 { continue; }
+            let tt = dot(e2, q) * inv;
+            let lim = out.map(|b: (f32, V3, u8, bool)| b.0).or(best);
+            if (0.0..=1.0).contains(&tt) && lim.is_none_or(|b| tt < b) {
+                let l = dot(n, n).sqrt().max(1e-12);
+                out = Some((tt, [n[0] / l, n[1] / l, n[2] / l], mat, node_pass));
+            }
+        }
+        out
+    }
+
+    /// The dynamic set's half of the host queries: each moving part's triangles, the host being
+    /// the part's id and its matrix this tick.
+    fn dynamic_walk(&self, from: V3, to: V3, no_water: bool, best: &mut Option<(f32, V3, u8, bool, HitHost)>) {
+        let d = sub(to, from);
+        let dynamic = self.dynamic.read().unwrap();
+        for (i, o) in dynamic.geo.objects.iter().enumerate() {
+            if !seg_box(from, d, o.lo, o.hi) { continue; }
+            if let Some((tt, n, mat, pass)) = Self::tri_walk(&dynamic.geo, o, from, d, no_water, best.map(|b| b.0)) {
+                let host = dynamic.movers.get(i).map_or(HitHost::Cel(None), |&(id, _, m)| HitHost::Object(id, m));
+                *best = Some((tt, n, mat, pass, host));
+            }
+        }
+    }
+
+    /// The cel-scope bucket that holds static run `run` (`None`: no scope, or the run is in the
+    /// unattributed `always` set).
+    fn run_cell(&self, run: usize) -> Option<u32> {
+        let sc = self.scope.as_ref()?;
+        sc.cells.iter().position(|v| v.contains(&(run as u32))).map(|c| c as u32)
+    }
+
+    /// The live matrix of dynamic part `id` (the last `set_dynamic`), shape or not.
+    pub fn dynamic_matrix(&self, id: u64) -> Option<Mat4> {
+        self.dynamic.read().unwrap().last.get(&id).copied()
     }
 
     /// The flush's re-query with the game's candidate set: `segment_surface_flags` MINUS every
@@ -1854,72 +1921,32 @@ impl CollisionWorld {
     /// there is no scope or the cell is unknown — the caller's safety net, same as the scoped
     /// bullet query. level-11-stairwell-bullet-holes-6.
     pub fn segment_surface_flags_scoped(&self, cell: Option<usize>, from: V3, to: V3) -> Option<(f32, V3, u8, bool)> {
-        let Some(cell) = cell else { return self.segment_surface_flags(from, to, false) };
+        self.segment_surface_host_scoped(cell, from, to).map(|(t, n, m, p, _)| (t, n, m, p))
+    }
+
+    /// `segment_surface_flags_scoped` with the hit's host (see `segment_surface_host`).
+    pub fn segment_surface_host_scoped(&self, cell: Option<usize>, from: V3, to: V3) -> Option<(f32, V3, u8, bool, HitHost)> {
+        let Some(cell) = cell else { return self.segment_surface_host(from, to, false) };
         // An out-of-range cell is a caller bug: the flat answer is the conservative fallback (the
         // scoped actor queries instead test nothing — their callers keep a valid `bond.cel`).
         let in_range = self.scope.as_ref().is_some_and(|sc| cell < sc.graph.cells.len());
-        if !in_range { return self.segment_surface_flags(from, to, false); }
-        let Some(runs) = self.scoped_runs(cell, &mut Self::ray_portal_hit(from, to)) else { return self.segment_surface_flags(from, to, false); };
+        if !in_range { return self.segment_surface_host(from, to, false); }
+        let Some(runs) = self.scoped_runs(cell, &mut Self::ray_portal_hit(from, to)) else { return self.segment_surface_host(from, to, false); };
         let d = sub(to, from);
-        let mut best = None::<(f32, V3, u8, bool)>;
-        {
-            let stat = &self.stat;
-            for r in &runs {
-                let o = &stat.objects[*r as usize];
-                for k in o.tris.clone() {
-                    let node_pass = stat.pass[k];
-                    let mat = stat.mats[k];
-                    let t = &stat.tris[k];
-                    let (e1, e2) = (sub(t[1], t[0]), sub(t[2], t[0]));
-                    let n = cross(e1, e2);
-                    if dot(n, d) >= 0.0 { continue; } // back face [M 0x10a8c8:168]
-                    let p = cross(d, e2);
-                    let det = dot(e1, p);
-                    if det.abs() < 1e-12 { continue; }
-                    let inv = 1.0 / det;
-                    let s = sub(from, t[0]);
-                    let u = dot(s, p) * inv;
-                    if !(0.0..=1.0).contains(&u) { continue; }
-                    let q = cross(s, e1);
-                    let v = dot(d, q) * inv;
-                    if v < 0.0 || u + v > 1.0 { continue; }
-                    let tt = dot(e2, q) * inv;
-                    if (0.0..=1.0).contains(&tt) && best.is_none_or(|b| tt < b.0) {
-                        let l = dot(n, n).sqrt().max(1e-12);
-                        best = Some((tt, [n[0] / l, n[1] / l, n[2] / l], mat, node_pass));
-                    }
-                }
+        let mut best = None::<(f32, V3, u8, bool, HitHost)>;
+        for r in &runs {
+            let o = &self.stat.objects[*r as usize];
+            if let Some((tt, n, mat, pass)) = Self::tri_walk(&self.stat, o, from, d, false, best.map(|b| b.0)) {
+                best = Some((tt, n, mat, pass, HitHost::Cel(Some(u32::MAX - *r))));
             }
         }
-        let dynamic = self.dynamic.read().unwrap();
-        for g in [&self.missile, &dynamic.geo] {
-            for o in along(g, from, to) {
-                for k in o.tris.clone() {
-                    let node_pass = g.pass[k];
-                    let mat = g.mats[k];
-                    let t = &g.tris[k];
-                    let (e1, e2) = (sub(t[1], t[0]), sub(t[2], t[0]));
-                    let n = cross(e1, e2);
-                    if dot(n, d) >= 0.0 { continue; } // back face [M 0x10a8c8:168]
-                    let p = cross(d, e2);
-                    let det = dot(e1, p);
-                    if det.abs() < 1e-12 { continue; }
-                    let inv = 1.0 / det;
-                    let s = sub(from, t[0]);
-                    let u = dot(s, p) * inv;
-                    if !(0.0..=1.0).contains(&u) { continue; }
-                    let q = cross(s, e1);
-                    let v = dot(d, q) * inv;
-                    if v < 0.0 || u + v > 1.0 { continue; }
-                    let tt = dot(e2, q) * inv;
-                    if (0.0..=1.0).contains(&tt) && best.is_none_or(|b| tt < b.0) {
-                        let l = dot(n, n).sqrt().max(1e-12);
-                        best = Some((tt, [n[0] / l, n[1] / l, n[2] / l], mat, node_pass));
-                    }
-                }
+        for o in along(&self.missile, from, to) {
+            if let Some((tt, n, mat, pass)) = Self::tri_walk(&self.missile, o, from, d, false, best.map(|b| b.0)) {
+                best = Some((tt, n, mat, pass, HitHost::Cel(None)));
             }
         }
-        best
+        self.dynamic_walk(from, to, false, &mut best);
+        best.map(|b| self.resolve_run(b))
     }
 
     fn segment_surface_impl(&self, from: V3, to: V3, no_water: bool, drop_pass: bool) -> Option<(f32, V3, u8)> {
@@ -2453,6 +2480,28 @@ mod tests {
         w.set_dynamic(&[(1, 7, at(50.0)), (2, 8, at(5.0))]);
         assert!(w.segment([0.0, 0.0, 0.3], [10.0, 0.0, 0.3]).is_none());
         assert!(w.ground_motion([0.0, 0.0, 0.3], [10.0, 0.0, 0.3]).is_none());
+    }
+
+    /// The host of a hit (`HITDATA+0x54` cel / `+0x58` object [M Effect_Create 0x1ce688:64-66]):
+    /// a moving part reports its id and live matrix; a static face in front of it reports a cel
+    /// host. Sister: `segment_surface_flags` keeps its answer.
+    #[test]
+    fn a_hit_names_its_host() {
+        let mut w = world(vec![[[2.0, 0.0, -1.0], [2.0, -1.0, 1.0], [2.0, 1.0, 1.0]]]);
+        w.shapes.insert(7, vec![[[0.0, 0.0, -1.0], [0.0, -1.0, 1.0], [0.0, 1.0, 1.0]]]);
+        let at = |x: f32| [[1.0, 0.0, 0.0, 0.0], [0.0, 1.0, 0.0, 0.0], [0.0, 0.0, 1.0, 0.0], [x, 0.0, 0.0, 1.0]];
+        w.set_dynamic(&[(0x100_0000_0003, 7, at(1.0))]);
+        let (t, _, _, _, host) = w.segment_surface_host([0.0, 0.0, 0.3], [10.0, 0.0, 0.3], false).unwrap();
+        assert!((t - 0.1).abs() < 1e-5);
+        assert_eq!(host, HitHost::Object(0x100_0000_0003, at(1.0)), "the door part in front");
+        assert_eq!(w.dynamic_matrix(0x100_0000_0003), Some(at(1.0)));
+        // Moved behind the static face: the static face is the host.
+        w.set_dynamic(&[(0x100_0000_0003, 7, at(3.0))]);
+        let (t, _, _, _, host) = w.segment_surface_host([0.0, 0.0, 0.3], [10.0, 0.0, 0.3], false).unwrap();
+        assert!((t - 0.2).abs() < 1e-5);
+        assert_eq!(host, HitHost::Cel(None), "a static face (no scope: the cel is unknown)");
+        let (t2, _, _, _) = w.segment_surface_flags([0.0, 0.0, 0.3], [10.0, 0.0, 0.3], false).unwrap();
+        assert_eq!(t2, t, "the flags query is the host query minus the host");
     }
 
     #[test]

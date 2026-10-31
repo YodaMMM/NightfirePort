@@ -6739,7 +6739,7 @@ const SWOOSH_SLOT_BASE: u16 = 0x8000;
 /// round-robin pool (`Bullet_InitCasingLists` 0x12fd48 [M]). Debris: unbounded in the game (a
 /// class-0x40 object per particle, ≤ 6 per impact, ≤ ~54 ticks) — the port caps the draw slots.
 const DECAL_SLOTS: usize = 200;
-const DEBRIS_SLOTS: usize = 128;
+const DEBRIS_SLOTS: usize = nf_game::effect::DEBRIS_DRAW_SLOTS;
 
 /// The drone's height state after `DroneAnim_PreTransCallback` (0x13b490): `Drone+0xA0` = hip height − 0.02, at least
 /// 0.2 (it starts at 1.0 and keeps its value while the hip height is 0).
@@ -9409,6 +9409,9 @@ pub fn build(level: &Level, cels_only: bool, skeletons: &HashMap<u8, Skeleton>, 
         // A matrix that collapses a mesh to one point: its triangles become degenerate and draw nothing.
         let collapse = |at: &Mat4| -> Mat4 { [[0.0; 4], [0.0; 4], [0.0; 4], [at[3][0], at[3][1], at[3][2], 1.0]] };
         // Attached meshes: datum local · bone world · object (bind world when the character has no animation).
+        // The debris draw slots: each live piece sits in the slot it was handed at birth
+        // (`Effects::assign_debris_slots`), never in its list index.
+        let debris_map = self.sim.as_ref().map(|s| nf_game::effect::debris_slot_map(&s.drones.effects.debris, &s.drones.breaks.shatter.debris, &s.drones.blast_debris));
         let att_one = |k: usize, a: &Attachment| -> Mat4 {
             // The gas puffs: a camera billboard with the puff's scale and spin (the game's draw path is
             // `View_DrawObjectGlist`'s obj+0xF0 & 8 billboard: viewer rotation · the object's angles, scaled
@@ -9694,12 +9697,10 @@ pub fn build(level: &Level, cels_only: bool, skeletons: &HashMap<u8, Skeleton>, 
                     // from one hole to another (the old Vec-index slot moved every live hole one slot
                     // per eviction — every slot slid between two holes, through mid-air, while a full
                     // pool kept taking new holes).
+                    // A hole on a moving object draws at `node+0x20 · obj+0x90` (`Decal::m`, re-posed
+                    // each tick by `Effects::follow_hosts`) [M 0x1e6780:66-74].
                     0 => match s.drones.effects.decal_in_node(slot) {
-                        Some(d) if d.mesh == mesh => {
-                            let mut m = nf_game::searchlight::align2dir(d.normal, [0.0, 1.0, 0.0], [1.0, 0.0, 0.0]);
-                            m[3] = [d.pos[0], d.pos[1], d.pos[2], 1.0];
-                            m
-                        }
+                        Some(d) if d.mesh == mesh => d.m,
                         _ => far,
                     },
                     // The casing object: `Control_GetObjMatrix` 0x134210's euler(+0x50)·pos(+0x30)
@@ -9714,36 +9715,30 @@ pub fn build(level: &Level, cels_only: bool, skeletons: &HashMap<u8, Skeleton>, 
                     // once by `Control_GetObjMatrix` 0x134210:25-33 — `View_DrawObjectGlist` copies the cached
                     // matrix unscaled for non-billboards [M 0x1e6780:47-49]). The tick count is 255 − alpha:
                     // `Debris_Create` stores obj+0x106 = 0xff and `Debris_Update` 0x1aac00 steps it down 1/tick.
-                    2 => match s.drones.effects.debris.get(slot) {
-                        Some(d) if d.mesh == mesh => {
-                            let age = 255.0 - d.alpha as f32;
-                            let eul = [d.spin[0] * age, d.spin[1] * age, d.spin[2] * age];
-                            let mut m = nf_formats::placement::object_matrix(eul, d.pos);
-                            for r in 0..3 { for k in 0..3 { m[r][k] *= d.scale; } }
-                            m
-                        }
-                        Some(_) => far,
-                        // A killed breakable's pieces (`Break_Kill` 0x12b970 → `Debris_Create`): the
-                        // same class and draw — euler `rot` (the accumulated spin [M 0x1aac00:49-52]) at
-                        // obj+0x30, scaled by obj+0xe8 (`Control_GetObjMatrix` 0x134210:25-33).
-                        None => match s.drones.breaks.shatter.debris.get(slot - s.drones.effects.debris.len()) {
+                    2 => match debris_map.as_ref().and_then(|m| m.get(slot).copied().flatten()) {
+                        Some((0, i)) => match s.drones.effects.debris.get(i) {
+                            Some(d) if d.mesh == mesh => {
+                                let age = 255.0 - d.alpha as f32;
+                                let eul = [d.spin[0] * age, d.spin[1] * age, d.spin[2] * age];
+                                let mut m = nf_formats::placement::object_matrix(eul, d.pos);
+                                for r in 0..3 { for k in 0..3 { m[r][k] *= d.scale; } }
+                                m
+                            }
+                            _ => far,
+                        },
+                        // A killed breakable's pieces (`Break_Kill` 0x12b970 → `Debris_Create`) and the
+                        // blast debris (`Debris_CreateEx` 0x1ac808): the same class and draw — euler
+                        // `rot` (the accumulated spin [M 0x1aac00:49-52]) at obj+0x30, scaled by obj+0xe8
+                        // (`Control_GetObjMatrix` 0x134210:25-33).
+                        Some((src, i)) => match if src == 1 { s.drones.breaks.shatter.debris.get(i) } else { s.drones.blast_debris.get(i) } {
                             Some(d) if d.model == mesh => {
                                 let mut m = nf_formats::placement::object_matrix(d.rot, d.pos);
                                 for r in 0..3 { for k in 0..3 { m[r][k] *= d.e8; } }
                                 m
                             }
-                            Some(_) => far,
-                            // Past the breakable pieces: the blast debris — the same `Debris_Update` 0x1aac00
-                            // object and draw (euler `rot` at obj+0x30, scaled by obj+0xe8).
-                            None => match s.drones.blast_debris.get(slot - s.drones.effects.debris.len() - s.drones.breaks.shatter.debris.len()) {
-                                Some(d) if d.model == mesh => {
-                                    let mut m = nf_formats::placement::object_matrix(d.rot, d.pos);
-                                    for r in 0..3 { for k in 0..3 { m[r][k] *= d.e8; } }
-                                    m
-                                }
-                                _ => far,
-                            },
+                            _ => far,
                         },
+                        None => far,
                     },
                     // fix-grenade-throw: the smoke grenade's cloud (`Occlude_Create` 0x17ea80) — a
                     // static object at `obj+0x30`, no rotation (`Occlude_Update` 0x17eba0 only counts
@@ -10543,19 +10538,67 @@ pub fn build(level: &Level, cels_only: bool, skeletons: &HashMap<u8, Skeleton>, 
     }
 
 
-    /// The palette entries of the decal draw slots whose pool node was handed to a new hole since
-    /// the pool's eviction count was `prev_evicted` (`Effects::decal_nodes_reused_since`) — every
-    /// mesh row's slot for that node. The window shows these at the newer tick instead of blending
-    /// (`moving_entries`): a reused node is rewritten whole before it draws [M Effect_Bullet
-    /// 0x1ce9f0..0x1cea9c], it never slides from the evicted hole to the new one.
-    pub fn decal_reused_entries(&self, l: &SkinLayout, prev_evicted: u32) -> Vec<u32> {
+    /// The palette entries of the decal draw slots whose pool node took a new hole since the
+    /// pool's made count was `prev_made` (`Effects::decal_nodes_reused_since`) — every mesh row's
+    /// slot for that node. The window shows these at the newer tick instead of blending
+    /// (`moving_entries`): a node taken for a new hole is rewritten whole before it draws [M
+    /// Effect_Bullet 0x1ce9f0..0x1cea9c], it never slides from the old hole to the new one.
+    pub fn decal_reused_entries(&self, l: &SkinLayout, prev_made: u32) -> Vec<u32> {
         let Some(s) = self.sim.as_ref() else { return Vec::new() };
-        let nodes = s.drones.effects.decal_nodes_reused_since(prev_evicted);
-        if nodes.is_empty() { return Vec::new(); }
+        let nodes = s.drones.effects.decal_nodes_reused_since(prev_made);
+        self.effect_entries(l, 0, &nodes)
+    }
+
+    /// The debris twin of `decal_reused_entries`: the slots handed to a new piece since the
+    /// slot count was `prev_made` (`Effects::debris_made`) show the new piece at once.
+    pub fn debris_reused_entries(&self, l: &SkinLayout, prev_made: u32) -> Vec<u32> {
+        let Some(s) = self.sim.as_ref() else { return Vec::new() };
+        let d = &s.drones;
+        let slots = nf_game::effect::debris_slots_new_since(&d.effects.debris, &d.breaks.shatter.debris, &d.blast_debris, prev_made);
+        self.effect_entries(l, 2, &slots)
+    }
+
+    /// The palette entries of every mesh row's slot `slots` (sorted) of effect kind `kind`.
+    fn effect_entries(&self, l: &SkinLayout, kind: u8, slots: &[usize]) -> Vec<u32> {
+        if slots.is_empty() { return Vec::new(); }
         self.attachments.iter().enumerate()
-            .filter(|(_, a)| matches!(a.effect, Some((0, slot, _)) if nodes.contains(&slot)))
+            .filter(|(_, a)| matches!(a.effect, Some((k, slot, _)) if k == kind && slots.binary_search(&slot).is_ok()))
             .map(|(k, _)| l.attach_base + k as u32)
             .collect()
+    }
+
+    /// The live cel-hosted holes' palette entries with their cel (the collision cel-scope index,
+    /// the same index space as `cel_graph`'s cells): `View_DrawCelGlist` 0x1e6538 draws a cel's
+    /// hole nodes only with that cel [M :62-96], so a hole draws only while its cel is in the
+    /// frame's visible set (`hide_unseen_decals`). Holes on objects (drawn with the object) and
+    /// holes with no known cel are not listed.
+    pub fn decal_cell_entries(&self, l: &SkinLayout) -> Vec<(u32, u32)> {
+        let Some(s) = self.sim.as_ref() else { return Vec::new() };
+        let fx = &s.drones.effects;
+        self.attachments.iter().enumerate().filter_map(|(k, a)| {
+            let Some((0, slot, mesh)) = a.effect else { return None };
+            let d = fx.decal_in_node(slot).filter(|d| d.mesh == mesh)?;
+            match d.host { nf_game::effect::DecalHost::Cel(Some(c)) => Some((l.attach_base + k as u32, c)), _ => None }
+        }).collect()
+    }
+
+    /// Collapses the palette entries of the holes whose cel the frame does not draw. `vis` is the
+    /// per-room mask of `Renderer::cel_visibility`; a cel no room maps to stays drawn.
+    pub fn hide_unseen_decals(&self, pal: &mut [Mat4], entries: &[(u32, u32)], vis: &[bool]) -> Vec<u32> {
+        if entries.is_empty() { return Vec::new(); }
+        let n = self.cel_graph.room_to_cell.iter().flatten().map(|c| c + 1).max().unwrap_or(0);
+        let (mut mapped, mut seen) = (vec![false; n], vec![false; n]);
+        for (r, c) in self.cel_graph.room_to_cell.iter().enumerate() {
+            if let Some(c) = *c { mapped[c] = true; if vis.get(r).copied().unwrap_or(true) { seen[c] = true; } }
+        }
+        let mut hidden = Vec::new();
+        for &(e, c) in entries {
+            let c = c as usize;
+            if c < n && mapped[c] && !seen[c] {
+                if let Some(m) = pal.get_mut(e as usize) { *m = [[0.0; 4], [0.0; 4], [0.0; 4], [0.0, -10000.0, 0.0, 1.0]]; hidden.push(e); }
+            }
+        }
+        hidden
     }
 
     pub fn skin_palette(&self, l: &SkinLayout, choice: Option<usize>, time: f32, opts: ViewOpts, vis: Option<&[bool]>) -> (Vec<Mat4>, Vec<[f32; 4]>) {
@@ -10615,6 +10658,7 @@ pub fn build(level: &Level, cels_only: bool, skeletons: &HashMap<u8, Skeleton>, 
             }
         }
         for (a, m) in fs.attach.iter().enumerate() { p[l.attach_base as usize + a] = *m; }
+        if let Some(v) = vis { let e = self.decal_cell_entries(l); self.hide_unseen_decals(&mut p, &e, v); }
         if let Some(s) = self.sim.as_ref() {
             for k in 0..(l.door_base - l.sl_base) as usize {
                 let keep = match s.drones.searchlights.parts.get(k) {
