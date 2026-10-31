@@ -71,11 +71,12 @@ pub fn player_skin_hash(level: u32) -> u32 {
 }
 
 /// The zero-g substates (dispatch cases 8/9 share the `Player_ZeroG` 0x192ab0 body [M 0x193600:
-/// 238-241]). 9 is the one the game ever sets: the 0700001b spacewalk's script handler answers its
-/// 0x4b event with `ChangeSubState(glb_players, 9 | 0)` [M C_CHCHZEROG 0x216388 — 9 when its msg
-/// 0x40 query returns nonzero, else 0]; no caller or store writes 8 anywhere in ACTION.ELF. Only
-/// substate 9 runs the movement anim set [M 0x192ab0:201 `if (obj+0xF6 == 9)`], so 8 is the anim
-/// quiet twin the dispatch still honours.
+/// 238-241]). 8 is the level start's: the p3 == 2 start calls `Player_StandAtNewPosition(.., 8)`
+/// [M Player_Init 0x1910f8 :160-165] — 0700001b loads in it. 9 is the cheat page's ZEROG
+/// checkbox: `C_CHCHZEROG_Handler` 0x216388 answers the menu's 0x4b message with
+/// `ChangeSubState(glb_players, 9 | 0)` (9 when the checkbox's msg-0x40 query is nonzero, else 0)
+/// [M 0x216388:10-17]. Only substate 9 runs the movement anim set [M 0x192ab0:201
+/// `if (obj+0xF6 == 9)`].
 pub const SS_ZEROG_8: u8 = 8;
 pub const SS_ZEROG_9: u8 = 9;
 
@@ -698,8 +699,8 @@ impl Bond {
     }
 
     /// `Player_ZeroG` 0x192ab0 — the spacewalk substate (the dispatch runs cases 8 and 9 into the
-    /// same body [M 0x193600:238-241]; the script only ever sets 9 [M C_CHCHZEROG 0x216388], and
-    /// only 9 plays the movement anim set [M 0x192ab0:201]). The body rides `physics_tick`'s
+    /// same body [M 0x193600:238-241]; the level start enters 8 [M 0x1910f8 :160-165], the cheat
+    /// page's ZEROG checkbox 9 [M C_CHCHZEROG 0x216388], and only 9 plays the movement anim set [M 0x192ab0:201]). The body rides `physics_tick`'s
     /// collision tail with the walk/swim move + gravity replaced.
     fn zerog_tick(&mut self, world: &CollisionWorld, ctx: &LadderCtx, input: &Input) {
         self.physics_tick(world, ctx, input, false, true);
