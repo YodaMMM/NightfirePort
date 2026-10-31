@@ -109,6 +109,10 @@ pub struct Walker {
     sidestep: i32,
     max_y: f32,
     pub lenient: bool,
+    /// Inside the stuck ladder's hostile-body-block response (the arm's shoot/resupply run their
+    /// own nested walks): the nested stuck ladders must fall through to the plain sidestep ladder
+    /// instead of re-triggering the arm (the run-2 recursion: nav 5 flank 1 nav 1 flank 1 …).
+    fighting_blocker: bool,
     /// The walked path: a coarse breadcrumb of ground Bond actually covered (pushed in
     /// tick_inner, ~2 u resolution, 512 points). The resupply rule draws its corridor from it —
     /// see `resupply` for why the harness must not take off-path ammo detours.
@@ -182,6 +186,7 @@ impl Walker {
             drone_watch, watch_last,
             health_last: Vec::new(),
             shield: None,
+            fighting_blocker: false,
         }
     }
 
@@ -694,9 +699,23 @@ impl Walker {
                 let (vx, vz) = (dp[0] - bp[0], dp[2] - bp[2]);
                 let len = (vx * vx + vz * vz).sqrt().max(0.001);
                 let (px, pz) = (-vz / len, vx / len);
-                let fp = [dp[0] + px * side * dist, dp[1], dp[2] + pz * side * dist];
+                // A guard Bond cannot see ANY part of at body range (the 02 west-wing lip: drone
+                // 4 stood on the lower floor 1.4 u off the lane's edge — every part's eye segment
+                // clipped the lip, run3 2026-10-31 — Bond took his fire standing in the open and
+                // died at +1088): the player's own move is to STEP BACK first — distance opens
+                // the vertical angle over the lip — before any arc around him.
+                let close_buried = aim.is_none() && len < 3.0;
+                let fp = if close_buried {
+                    [bp[0] - vx / len * dist, bp[1], bp[2] - vz / len * dist]
+                } else {
+                    [dp[0] + px * side * dist, dp[1], dp[2] + pz * side * dist]
+                };
                 drop(sim);
-                eprintln!("[walk] {label}: no exposed part for {blocked_streak} ticks — flanking to ({:.1},{:.1},{:.1}) (side {side}, offset {dist:.1})", fp[0], fp[1], fp[2]);
+                if close_buried {
+                    eprintln!("[walk] {label}: no exposed part for {blocked_streak} ticks at {len:.1} u — stepping back to ({:.1},{:.1},{:.1})", fp[0], fp[1], fp[2]);
+                } else {
+                    eprintln!("[walk] {label}: no exposed part for {blocked_streak} ticks — flanking to ({:.1},{:.1},{:.1}) (side {side}, offset {dist:.1})", fp[0], fp[1], fp[2]);
+                }
                 self.lenient = true;
                 self.walk_nav_to(fp, &format!("{label} flank {flanks}"), 2.0);
                 self.lenient = false;
@@ -1016,6 +1035,48 @@ impl Walker {
                         }
                     }
                     if !used_door {
+                    // A hostile BODY-BLOCK: a guard standing on the lane itself. The 02
+                    // south-hall-west nav-10 wedge was exactly this — g3 closed to 0.8 u and Bond
+                    // (real health) took his fire for ~1400 ticks until the fail chain
+                    // auto-restarted [NF_ALARM_TRACE run06 2026-10-29; repro 2026-10-31: level_exit
+                    // at +1462 into nav 10]. The player's own response: shoot the blocker through
+                    // the real fire path (aim/expose/flank), then walk on. Hostiles only (team 1 —
+                    // the same filter the walkreal fights use), within a body's reach on Bond's
+                    // own floor.
+                    let blocker = (!self.fighting_blocker).then(|| {
+                        let sim = self.scene.sim.as_ref().unwrap();
+                        sim.drones.list.iter().position(|d| d.team == 1 && d.health > 0.0
+                            && !d.corpse && d.present
+                            && dxz(d.pos, self.pos) < 1.8
+                            && (d.pos[1] - self.pos[1]).abs() < 2.5)
+                    }).flatten();
+                    if let Some(bi) = blocker {
+                        eprintln!("[walk] {label}: hostile body-block (drone {bi}) — shooting the blocker");
+                        let was_lenient = self.lenient;
+                        self.fighting_blocker = true;
+                        // A blocker on a DIFFERENT floor (the 02 west-wing lip: drone 4 stood on
+                        // the lower floor 1.1 u below the lane — no part's eye segment cleared
+                        // the lip from above, run3/run4 2026-10-31): the player's own move is to
+                        // come DOWN to his floor and fight at eye level.
+                        let (bpos, bdy) = {
+                            let sim = self.scene.sim.as_ref().unwrap();
+                            let d = &sim.drones.list[bi];
+                            (d.pos, (d.pos[1] - sim.bond.pos[1]).abs())
+                        };
+                        if bdy > 0.7 {
+                            self.walk_nav_to(bpos, &format!("{label} blocker {bi} floor"), 2.5);
+                        }
+                        let killed = self.shoot(bi, label);
+                        if !killed {
+                            // Out of ammo: the fight's own loot (the drops land at the fight
+                            // floor [L drops]) — the same response clear_pursuers uses.
+                            self.resupply(label);
+                        }
+                        self.fighting_blocker = false;
+                        self.lenient = was_lenient;
+                        self.stuck = 0;
+                        continue;
+                    }
                     if self.stuck == 1 {
                         // No world wall on the hip line: a knee-high rail — hop first.
                         let rail = self.scene.sim.as_ref().unwrap().world.segment([self.pos[0], self.pos[1] - 0.7, self.pos[2]], [wp.at[0], wp.at[1] - 0.7, wp.at[2]]).is_some();
