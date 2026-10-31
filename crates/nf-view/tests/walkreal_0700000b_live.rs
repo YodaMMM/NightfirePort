@@ -381,13 +381,14 @@ fn walk_to_the_mission_end(mut w: &mut Walker, fresh: bool) {
         eprintln!("[0b] the desk approach arrived WALKED at ({:.2},{:.2},{:.2})", p[0], p[1], p[2]);
     }
     {
+        // The disc's island arm equips the Q-Worm at level load (`EquipWeapon(BL, 0x58, 0)` at
+        // 001a8494 — the 09 kit the 0a/0b arms fall into on a cold boot [M 0x1a7ef8 cases
+        // 0x7000009/0a/0b; the row decoded from /ACTION.ELF by loadout_disc_rows_live]), so the
+        // boot loadout OWNS it — hard-pinned, no poke: a loadout that drops the row fails here.
         let sim = w.scene.sim.as_ref().unwrap();
-        if !sim.drones.inventory.owned[0x58] {
-            // The port's boot-loadout gap (the disc load=1 [D matrix]) — printed, documented.
-            eprintln!("[0b] boot loadout does NOT own 0x58 — the gadget-carry gap, granting for the shot");
-            let sim = w.scene.sim.as_mut().unwrap();
-            sim.drones.inventory.owned[0x58] = true;
-        }
+        assert!(sim.drones.inventory.owned[0x58],
+            "[0b] the boot loadout does not own the Q-Worm 0x58 — the disc's island kit equips it \
+             at level load [M 0x1a7ef8 case 0x7000009/0a/0b, equip 001a8494]");
     }
     {
         let sim = w.scene.sim.as_mut().unwrap();
