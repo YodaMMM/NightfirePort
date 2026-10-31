@@ -20,3 +20,8 @@ say so in the report. Never weaken a decompile-backed test to make code pass.
 
 ---
 claimed-by: sandbox4 at 2026-10-31T20:55Z
+
+---
+## Report (done, 2026-10-31T21:57Z)
+
+Closed by the driver: the report is on `s/lamp-wind` (docs/reports/lamp-wind.md); the worker didn't run finish.sh.
