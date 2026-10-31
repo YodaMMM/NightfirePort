@@ -79,19 +79,25 @@ fn clear_captors(w: &mut Walker, around: [f32; 3], label: &str) {
 }
 
 /// Walk to the nearest live pickup (a guard drop or a placed box) through the real path and take
-/// it — Bond's own feet, no grants. Then cycle the wheel to a firearm with ammo (the drops are
-/// the guards' weapons [L drops]; `switch_to_armed` is the game's own weapon cycle).
-fn loot(w: &mut Walker, label: &str) {
+/// it — Bond's own feet, no grants — until clip+spare reaches `min`. Then cycle the wheel to a
+/// firearm with ammo (the drops are the guards' weapons [L drops]; `switch_to_armed` is the
+/// game's own weapon cycle).
+fn loot(w: &mut Walker, label: &str, min: i32) {
     for k in 0..3 {
-        let dry = {
+        let have = {
             let sim = w.scene.sim.as_ref().unwrap();
-            sim.gun.clip + sim.gun.spare == 0
+            sim.gun.clip + sim.gun.spare
         };
-        if !dry { break; }
+        if have as i32 >= min { break; }
         let bp = w.scene.sim.as_ref().unwrap().bond.pos;
+        // AT THE FEET only: a player in a firefight grabs the drop that landed next to him, not
+        // the nearest box across the map — the first threshold-24 run walked 6.5 u DOWN a floor
+        // to a placed box under live fire and died there (+1448 into the loot walk, health
+        // 76→37.5 on the way, no take ever landed, 2026-10-31). Same floor and ≤ 5 u.
         let target = w.scene.sim.as_ref().unwrap().drones.pickups.iter()
             .filter(|p| !p.gone)
             .map(|p| [p.m[3][0], p.m[3][1], p.m[3][2]])
+            .filter(|q| dxz(*q, bp) < 5.0 && (q[1] - bp[1]).abs() < 1.5)
             .min_by(|a, b| dxz(*a, bp).total_cmp(&dxz(*b, bp)));
         let Some(target) = target else { eprintln!("[02] {label}: nothing to loot"); return; };
         eprintln!("[02] {label}: looting ({:.1},{:.1},{:.1}) (d {:.1})", target[0], target[1], target[2], dxz(target, bp));
@@ -130,12 +136,23 @@ fn clear_pursuers(w: &mut Walker, radius: f32, label: &str) {
             // live pickup, walked to for real (the corridor rule in `resupply` blocks the
             // off-path boxes; a player mid-firefight grabs what dropped). Then the same guard.
             eprintln!("[02] {label}: pursuer {round} (drone {di}) survived — looting and retrying");
-            loot(w, &format!("{label} pursuer {round}"));
+            loot(w, &format!("{label} pursuer {round}"), 1);
             if w.scene.sim.as_ref().unwrap().gun.clip + w.scene.sim.as_ref().unwrap().gun.spare > 0 {
                 w.walk_nav_to(stand, &format!("{label} pursuer {round} again"), 1.0);
                 let _ = w.shoot(di, &format!("{label} pursuer {round} retry"));
             }
         }
+        // Top up BETWEEN fights, not only on a dry click: the kills' drops are lying at the
+        // fight floor and the route's later fights need the rounds (the first full walk died at
+        // the bunker corridor with clip 0 spare 0 — 23 firing engagements spent the starting
+        // 48 rounds and every dead guard's drop stayed on the floor, 2026-10-31 run). A player
+        // with a low mag grabs what dropped before walking on. The game's take needs Bond's
+        // capsule ON the pickup (the arrive-0.4 in `loot` [L first loot run 2026-10-29]).
+        let dry = {
+            let sim = w.scene.sim.as_ref().unwrap();
+            sim.gun.clip + sim.gun.spare < 24
+        };
+        if dry { loot(w, &format!("{label} after fight {round}"), 24); }
     }
 }
 
