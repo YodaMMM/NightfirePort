@@ -72,7 +72,10 @@ that fails on a missing gadget).
   `cold_loadout_arms_bond_on_every_story_level`). Targeted total: **61 passed, 0 failed**
   across 14 binaries.
 - No *inventory*-named binary exists; the inventory surface is covered by the above
-  (fix_start_loadouts' warm-carry test + gadget_carry's loadout rows) and nf-game's crate suite.
+  (fix_start_loadouts' warm-carry test + gadget_carry's loadout rows). nf-game itself: the
+  crate's lib unit tests (the gadget families, the pickup/inventory arithmetic, the draw
+  machines) — **588 passed, 0 failed, 5 ignored**; the crate's ~90 integration binaries ride
+  the fast runner below.
 - The fast runner (`tools/test/suite.py`, started 12:07 UTC on the base tree = origin/master
   d1b31fd3; my diff is tests-only, so the pre-existing binaries' results carry over): `build
   ok: 984 test binaries in 1166 s`, then the sweep — at the time of writing 6 FAILED lines, all
