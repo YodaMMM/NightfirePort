@@ -157,8 +157,19 @@ All gated on viewer+0x236 (`Sim::goggle_mode()`); the panes additionally on thei
   "watch_lazer" [M Player_LaserPointer 0x1a65d8:151-155] (scene.rs `NIGHT_BEAM_SLOT`). The
   beam's alpha flicker (`(a + 0x3f + FRand(128))/2` here, `a + Rand(9) − 4` in [0x10, 0x30]
   otherwise) is not modelled in either mode (pre-existing, sg5-laser-draw).
-- `View_SetupRenderModes_Tweak` 0x1e5888:13-20 quarters the alpha of objects with obj+0xF0 &
-  0x20000 in mode 1 — not ported (no port draw carries that object bit yet).
+- `View_SetupRenderModes_Tweak` 0x1e5888:12-17 quarters the alpha of objects with obj+0xF0 &
+  0x20000 in mode 1: the byte handed to `psiSetTweakARGB` is `obj+0x106 >> 2` (the colour
+  bytes are untouched; every object draw goes through it via `View_SetupRenderModes` 0x1e78b0 /
+  `View_SetupRenderModes2` 0x1e7908 / `View_DrawObjList` 0x1e69a0:77). The bit lives in obj+0xF0,
+  which is loaded from the glist flags (+0x44) by `Control_SetGList` 0x134960 /
+  `Control_CreateObjEx` 0x1343c8 and the per-class creators — but no glist on the disc carries
+  0x20000 [D nf-formats tests/night_quarter_alpha_census.rs; the searchlight beams
+  "OBJECT_SearchLightbeam*" are flags 0x221], and the only code that ORs it in is `Gas_Init`
+  0x1aacc8:83 (`|= 0x20020120`) [M grep of every obj+0xF0 store]. So the set is exactly the gas
+  puffs (muzzle smoke, impact/blood puffs, trail smoke, ripples, searchlight/copter wreck smoke).
+  Port: `nf_game::gas::Gas::tweak_alpha` (the gas pool's colour slot and CPU vertex alpha in
+  scene.rs); test `goggles_render_live::night_sight_quarters_the_gas_puff_alpha`. The searchlight
+  cones are not affected.
 
 **X-ray (2)**
 - Pane 15 (`XraySprInfo` 0x2bddb0, 5 sprites): sprite 0 = the 32×32 noise 0x03000098,
