@@ -2578,6 +2578,9 @@ pub struct FrontEnd {
     /// P_WINGAME's captured `SFXGetVolume()` [M 0x215100:19-20], reused at the credits open
     /// [M :48 → open_credits's volume].
     pub win_movie_vol: i32,
+    /// The host's last psiMovieFinished poll of the win movie, as a `flow.ticks` value (one poll
+    /// per page tick).
+    pub win_movie_polled: u32,
     // ── mp-menu-flow: the multiplayer front end (each new field on its own line [WORKLOG lesson 4]) ──
     /// The four Join-Game panels [M mpjoin 0x2dee68 (4 × 0x10: +0x00 joined, +0x01 ready,
     /// +0x04 team, +0x08 skin) and mp_stuff+0x360+slot·4 (the per-slot state: 0 = press ✕ to
@@ -3154,6 +3157,7 @@ impl FrontEnd {
             cheat_medal_sel: 0,
             medal_from_cheat: 0,
             win_movie_vol: 0,
+            win_movie_polled: 0,
             // mp-menu-flow (each new field on its own line [WORKLOG lesson 4]).
             mp_join: std::array::from_fn(|_| MpJoinAgent::default()),
             mp_scenario: 1,
@@ -8581,6 +8585,14 @@ const YELLOW: u32 = 0x7f621f;
 
 /// One menu frame's draw data. `menu_overlay` fills a `HudFrame` the host submits like the HUD's.
 pub fn menu_overlay(fe: &FrontEnd, font: &nf_formats::hud::Font, hfont: &nf_formats::hud::Font, lang: Option<&Lang>, textures: &[(u32, crate::scene::TextureImage)], aspect: f32) -> HudFrame {
+    menu_overlay_fonts(fe, font, hfont, font, lang, textures, aspect)
+}
+
+/// [`menu_overlay`] with all three menu faces: `font` FONTSerpLight (face 2), `hfont` FONTNFont2
+/// (face 1), `mfont` FONTMedium (face 3) [L FontTable 0x2dd8b0]. `menu_overlay` passes SerpLight
+/// for face 3 (the callers without the third face).
+#[allow(clippy::too_many_arguments)]
+pub fn menu_overlay_fonts(fe: &FrontEnd, font: &nf_formats::hud::Font, hfont: &nf_formats::hud::Font, mfont: &nf_formats::hud::Font, lang: Option<&Lang>, textures: &[(u32, crate::scene::TextureImage)], aspect: f32) -> HudFrame {
     let mut h = Hud { quads: Vec::new(), aspect, textures };
     let bind = |id: u32| -> String { lang.and_then(|l| l.bind(id)).unwrap_or("").to_string() };
     // Without the language file the hint bars keep their button layout (the ~N tokens) so the pages
@@ -8599,6 +8611,15 @@ pub fn menu_overlay(fe: &FrontEnd, font: &nf_formats::hud::Font, hfont: &nf_form
     // the stubbed slim ISO — the pre-movies look).
     if fe.intro_playing {
         plate(&mut h, 0.0, 0.0, MW, MH, gs(0x180c08, 0xff));
+        return h.finish();
+    }
+    // The win page 0x40000053 is the same shape: its PAGE record is the bare root window and the
+    // 0x4c starts the background movie 0x073f0048 [D the record; M P_WINGAME 0x215100:20] — the
+    // movie plane is the whole picture (crate::fe_pages::wingame_elems is empty). With no live
+    // frame (no `movies` feature, a stubbed image) the plate stands in, like the intro.
+    if fe.page == Page::WinGame {
+        if !fe.backdrop_live { plate(&mut h, 0.0, 0.0, MW, MH, gs(0x180c08, 0xff)); }
+        draw_page_elems(&mut h, &crate::fe_pages::wingame_elems(), [hfont, font, mfont], textures);
         return h.finish();
     }
     // The backdrop: the pages' aux FMVs are the real background — parsed from the menu-def's PAGE
@@ -9652,38 +9673,29 @@ pub fn menu_overlay(fe: &FrontEnd, font: &nf_formats::hud::Font, hfont: &nf_form
                 if !r.total.is_empty() { right_cell(&mut h, 3, &r.total, y, bright); }
             }
         }
-        // credits-data: the draw side draws the roll from fe.credits.visible() (the game's
-        // own line list + y positions) — nothing here yet.
-        Page::Credits => {}
+        // The credits roll [D page 0x40000030; M P_CREDITS_Handler 0x2152b0]: the background
+        // label, the 26-slot left/right lists the 0x50 tick fills and scrolls, the exit fade —
+        // crate::fe_pages::credits_elems builds the list from fe.credits (the handler's statics).
+        Page::Credits => {
+            let elems = crate::fe_pages::credits_elems(&fe.credits, &bind);
+            draw_page_elems(&mut h, &elems, [hfont, font, mfont], textures);
+        }
         // The intro run draws only the plate (above); P_PARISENUM's card box is not drawn [S].
         Page::Intro | Page::ParisEnum | Page::EstHero => {}
-        // unlock-popups: the draw side draws these from the model — NFBONUS from fe.bonus
-        // (the tier lines + the composed text; the page's own layout is header Txt 0x2c5, hint
-        // 0x2d0, texture control 0x100001cf at (89,112,171×256), text list 0x100001d0 at
-        // (268,94,284×292) [L the menu-def dump]), WINGAME is the movie page only, CHEATMEDAL
-        // has no page data (nothing static to draw).
-        // The 007 Bonus page, drawn from its page data [D menu-def page 0x40000038, dumped
-        // 2026-10-21]: header (50,40) LBL 0x2c5; the reward picture 0x100001cf (89,112,171×256) —
-        // the tier-1 texture when that line stands [M P_NFBONUS 0x209670:22-26], else the static
-        // TEX 0x03000134 (uv 0,0 173×257 from msg 0x2d); the text list 0x100001d0 (268,94,284×292)
-        // — the composed tier text [M :22-41]; the focus box 0x10000165 (62,372,61×59, b=1); the
-        // hint (50,419) LBL 0x2d0; the stamp 0x10000224 at the forced (539,393) like the results
-        // page; the logo. Open: the animation is not drawn yet.
+        // The 007 Bonus page [D menu-def page 0x40000038; M P_NFBONUS 0x209670]: the element list
+        // (crate::fe_pages::nfbonus_elems) — the header and hint ride the shared header / hint-bar
+        // drawers every page uses, the rest draws generically. The page animates nothing (its one
+        // script focuses the button [D]); the 007 flash that goes with the bonus sound is the
+        // HUD's health-pane sprite (hud.rs bond_moment_flash).
         Page::NfBonus => {
-            page_header(&mut h, hfont, &bind(0x2c5));
-            let pic = fe.bonus.as_ref().and_then(|b| b.texture).unwrap_or(0x0300_0134);
-            quad640(&mut h, pic, 89.0, 112.0, 171.0, 256.0, [0.0, 0.0, 173.0, 257.0], gs(0x7f7f7f, 0xff));
-            if let Some(b) = fe.bonus.as_ref().filter(|b| b.has_text) {
-                let text = b.text_labels.iter().map(|&l| bind(l)).filter(|t| !t.trim().is_empty()).collect::<Vec<_>>().join("
-");
-                for (i, line) in wrap_px(&text, font, mx(284.0)).iter().take(17).enumerate() {
-                    h.text(Anchor::Centre, font, -2, line, mx(268.0), my(94.0 + 8.0 + i as f32 * 17.0), false, cream, true);
+            let elems = crate::fe_pages::nfbonus_elems(fe.bonus.as_ref(), &bind);
+            for e in &elems {
+                match &e.what {
+                    crate::fe_pages::ElemWhat::Text { label: Some(0x2c5), s, .. } => page_header(&mut h, hfont, s),
+                    crate::fe_pages::ElemWhat::Text { label: Some(0x2d0), .. } => hint_bar(&mut h, font, &hint(0x2d0, "~A Continue"), 50.0, 419.0, cream),
+                    _ => draw_page_elems(&mut h, std::slice::from_ref(e), [hfont, font, mfont], textures),
                 }
             }
-            frame640(&mut h, 62.0, 372.0, 61.0, 59.0);
-            quad640(&mut h, 0x0300_014c, 539.0, 393.0, 255.0, 255.0, [0.0, 0.0, 256.0, 256.0], gs(0x7f7f7f, 0xff));
-            hint_bar(&mut h, font, &hint(0x2d0, "~A Continue"), 50.0, 419.0, cream);
-            logo_stamp(&mut h);
         }
         Page::WinGame | Page::CheatMedal => {}
     }
@@ -9725,6 +9737,88 @@ pub fn menu_overlay(fe: &FrontEnd, font: &nf_formats::hud::Font, hfont: &nf_form
         centred(&mut h, font, -12, "Press Enter", mx(320.0), my(282.0), dim, true, 1.0);
     }
     h.finish()
+}
+
+/// A game colour word 0xRRGGBBAA as the overlay's colour: the channels over 0x80 = 1.0 and the
+/// alpha byte clamped to 0x80 [M Label_Update 0x218cb8:116-121].
+fn word_colour(c: u32) -> [f32; 4] {
+    [(c >> 24) as f32 / 128.0, ((c >> 16) & 0xff) as f32 / 128.0, ((c >> 8) & 0xff) as f32 / 128.0, ((c & 0xff).min(0x80)) as f32 / 128.0]
+}
+
+/// Draw a page's element list (crate::fe_pages) — rects in the 512×448 space, which is the HUD's.
+/// `fonts` = [face 1 FONTNFont2, face 2 FONTSerpLight, face 3 FONTMedium].
+/// A text label's pen follows Label_Update 0x218cb8:157-200: x = ctrl.x (left) or ctrl.x + w/2
+/// with `__Font_DrawText`'s half-width shift (centred); y = trunc(ctrl.y + (h>>1) + lh/2 − 1)
+/// for one line, trunc(ctrl.y + (h>>1) − 1) when the text holds a newline (the extent term is
+/// dropped [M :186-193]), lh = the face's line advance (Font_GetTextExtent's height). Lines
+/// advance by lh [M __Font_DrawText 0x1ee598:65-71]; Menu_ClipString 0x1f2e70 keeps the
+/// characters until the widest line passes w (the rest of the string is dropped).
+fn draw_page_elems(h: &mut Hud, elems: &[crate::fe_pages::PageElem], fonts: [&nf_formats::hud::Font; 3], textures: &[(u32, crate::scene::TextureImage)]) {
+    use crate::fe_pages::{Align, ElemWhat};
+    const FACE_TEX: [u32; 3] = [0x0300_0005, 0x0300_0003, 0x0300_00d8];
+    for e in elems {
+        let [x, y, w, hh] = e.rect.map(|v| v as f32);
+        let c = word_colour(e.colour);
+        match &e.what {
+            ElemWhat::Tex { tex, uv } => {
+                if c[3] <= 0.0 { continue; }
+                if textures.iter().any(|(t, _)| t == tex) {
+                    quad_uv(h, *tex, x, y, w, hh, *uv, c);
+                } else {
+                    // An unloaded texture: the colour alone (the credits' black background).
+                    let (a, b) = (h.ndc(Anchor::Centre, x, y), h.ndc(Anchor::Centre, x + w, y + hh));
+                    let p = |q: [f32; 2]| HudVertex { p: q, uv: [0.0, 0.0], c };
+                    h.ndc_solid(0, [p([a[0], a[1]]), p([b[0], a[1]]), p([b[0], b[1]]), p([a[0], a[1]]), p([b[0], b[1]]), p([a[0], b[1]])], c);
+                }
+            }
+            ElemWhat::Fill => {
+                if c[3] <= 0.0 { continue; }
+                let (a, b) = (h.ndc(Anchor::Centre, x, y), h.ndc(Anchor::Centre, x + w, y + hh));
+                let p = |q: [f32; 2]| HudVertex { p: q, uv: [0.0, 0.0], c };
+                h.ndc_solid(-12, [p([a[0], a[1]]), p([b[0], a[1]]), p([b[0], b[1]]), p([a[0], a[1]]), p([b[0], b[1]]), p([a[0], b[1]])], c);
+            }
+            ElemWhat::Frame => frame640(h, x * MW / SW, y * MH / SH, w * MW / SW, hh * MH / SH),
+            ElemWhat::Text { s, face, align, shadow, .. } => {
+                if s.trim().is_empty() || c[3] <= 0.0 { continue; }
+                let fi = (*face as usize).clamp(1, 3) - 1;
+                let (font, tex) = (fonts[fi], FACE_TEX[fi]);
+                let lh = font.line_height();
+                let multi = s.contains('\n');
+                let pen_y = if multi { (y + (e.rect[3] >> 1) as f32 - 1.0).trunc() } else { (y + (e.rect[3] >> 1) as f32 + lh * 0.5 - 1.0).trunc() };
+                for (k, line) in clip_lines(s, font, w).iter().enumerate() {
+                    if line.is_empty() { continue; }
+                    let ly = pen_y + k as f32 * lh;
+                    match align {
+                        Align::Centre => centred_tex(h, font, tex, -2, line, x + w / 2.0, ly, c, *shadow, 1.0),
+                        Align::Left => {
+                            let x0 = font.layout(line, 0.0, 0.0).0.first().map(|p| p.x).unwrap_or(0.0);
+                            h.text_scaled_tex(Anchor::Centre, font, -2, tex, line, x - x0, ly, false, c, *shadow, 1.0);
+                        }
+                    }
+                }
+            }
+        }
+    }
+}
+
+/// Menu_ClipString 0x1f2e70 over a (possibly multi-line) label: Font_GetTextCountExtent counts the
+/// characters while the widest line so far stays within `w` [M __Font_DrawText 0x1ee598:272-279],
+/// so the line that first passes `w` is cut there and the lines after it are gone.
+fn clip_lines(s: &str, font: &nf_formats::hud::Font, w: f32) -> Vec<String> {
+    let mut out = Vec::new();
+    for line in s.split('\n') {
+        if font.layout(line, 0.0, 0.0).1 <= w { out.push(line.to_string()); continue; }
+        let mut cut = String::new();
+        for ch in line.chars() {
+            let mut t = cut.clone();
+            t.push(ch);
+            if font.layout(&t, 0.0, 0.0).1 > w { break; }
+            cut = t;
+        }
+        out.push(cut);
+        break;
+    }
+    out
 }
 
 /// A textured 640-space quad; when the texture isn't loaded draws the dim plate the pages fade from
@@ -10128,6 +10222,9 @@ pub fn mp_textures() -> &'static [u32] {
             // The 007 Bonus page's reward pictures (REWARD_TEXT's tier textures, msg 0x24 into
             // 0x100001cf [M P_NFBONUS 0x209670:23]) — never loaded before, so the page drew no card.
             .chain(nf_game::progress::REWARD_TEXT.iter().flat_map(|r| r.iter().map(|t| t.1)))
+            // The FONTMedium atlas (face 3 [L FontTable 0x2dd8b0[2]]) and the credits' background
+            // label TEX 0x03000129 [D page 0x40000030 control 0x1000023c].
+            .chain([0x0300_00d8u32, crate::fe_pages::CREDITS_BG_TEX])
             .filter(|h| *h != 0 && !MENU_TEXTURES.contains(h)).collect();
         v.sort_unstable(); v.dedup(); v
     })

@@ -24,6 +24,7 @@ pub mod dev;
 pub mod devwin;
 pub mod hud;
 pub mod credits;
+pub mod fe_pages;
 pub mod menu;
 pub mod menu_engine;
 pub mod mp_lobby;
@@ -2383,6 +2384,9 @@ fn front_end_menu(args: &[String], scene: &scene::Scene, front_end: bool, iso_pa
         let frame_n: usize = args.iter().position(|a| a == "--movie-frame").and_then(|i| args.get(i + 1)).and_then(|v| v.parse().ok()).unwrap_or(12);
         let want = if intro {
             Some(menu::INTRO_MOVIES[args.iter().position(|a| a == "--intro").and_then(|i| args.get(i + 1)).and_then(|v| v.parse::<usize>().ok()).unwrap_or(0).min(menu::INTRO_MOVIES.len() - 1)])
+        } else if fe.page == menu::Page::WinGame {
+            // The win page's own movie [M P_WINGAME 0x215100:20].
+            Some(crate::credits::WINGAME_MOVIE)
         } else {
             let aux = menu::aux_movie_for(fe.page_id());
             (aux != 0).then_some(aux)
@@ -2403,11 +2407,11 @@ fn front_end_menu(args: &[String], scene: &scene::Scene, front_end: bool, iso_pa
         // The intro FMV owns the screen — no controls, no plate [M 0x209e88]; the movie plane is
         // the whole picture. Without movie data the headless plate stands in.
         let hud = if movie.is_some() { None }
-            else { Some(menu::menu_overlay(&fe, &tables.font, &tables.font_header, lang.as_ref(), &scene.hud_textures, 1280.0 / 720.0)) };
+            else { Some(menu::menu_overlay_fonts(&fe, &tables.font, &tables.font_header, &tables.font_medium, lang.as_ref(), &scene.hud_textures, 1280.0 / 720.0)) };
         return (hud, movie);
     }
     fe.backdrop_live = movie.is_some();
-    (Some(menu::menu_overlay(&fe, &tables.font, &tables.font_header, lang.as_ref(), &scene.hud_textures, 1280.0 / 720.0)), movie)
+    (Some(menu::menu_overlay_fonts(&fe, &tables.font, &tables.font_header, &tables.font_medium, lang.as_ref(), &scene.hud_textures, 1280.0 / 720.0)), movie)
 }
 
 /// The ISO path for `read_files_bin` (the NF_ISO env or the default image name).
@@ -4117,6 +4121,35 @@ impl App {
                 fe.music.movie_finished();
                 fe.attract_movie_finished();
             }
+        } else if fe.page == menu::Page::WinGame && fe.win_movie {
+            // P_WINGAME: the 0x4c started 0x073f0048 on the ONE BGFMV slot after removing the
+            // menu-music pair (menu_movie = 0) [M 0x215100:16-21]; each 0x50 polls
+            // psiMovieFinished and the first finish restarts the pair and opens the credits
+            // [M :23-48]. A declined start is BGFMVPlaying == 0: finished at once [M 0x1082e8].
+            let code = crate::credits::WINGAME_MOVIE;
+            let wrong = match &self.movie { Some(p) => p.code() != code || p.is_looping(), None => true };
+            let mut ended = false;
+            if wrong {
+                if let Some(p) = self.movie.take() { p.stop(); }
+                fe.win_movie_polled = fe.flow.ticks;
+                match movie::Player::start(&movie_iso, code, movie_sfx_volume(fe)) {
+                    Ok(p) => { self.movie = Some(p); eprintln!("movie: playing {code:08x} (win page)"); fe.music.movie_started(); }
+                    Err(e) => { eprintln!("movie: {code:08x} not started: {e:?} — the win page goes straight to the credits"); ended = true; }
+                }
+            }
+            if let Some(p) = self.movie.as_mut().filter(|p| p.code() == code) {
+                // One psiMovieFinished poll per page tick (60 Hz), not per redraw.
+                while fe.win_movie_polled != fe.flow.ticks {
+                    p.headless_advance();
+                    fe.win_movie_polled = fe.win_movie_polled.wrapping_add(1);
+                }
+                ended |= p.finished();
+            }
+            if ended {
+                if let Some(p) = self.movie.take().filter(|p| p.code() == code) { p.stop(); }
+                fe.music.movie_finished();
+                fe.win_movie_finished();
+            }
         } else if mission_movie_glue(fe, &mut self.movie, &movie_iso) {
         } else {
             // The page's aux loop [M 0x21c858:338]: stop when the page has no aux, (re)start when
@@ -4238,7 +4271,7 @@ impl App {
         } else {
             self.fe.as_ref().and_then(|fe| self.scene.hud.as_ref().map(|t| {
                 let lang = self.lang.as_ref().or_else(|| self.scene.sim.as_ref().and_then(|s| s.lang.as_ref()));
-                menu::menu_overlay(fe, &t.font, &t.font_header, lang, &self.scene.hud_textures, 1280.0 / 720.0)
+                menu::menu_overlay_fonts(fe, &t.font, &t.font_header, &t.font_medium, lang, &self.scene.hud_textures, 1280.0 / 720.0)
             }))
         };
         shot(&self.scene, &self.cam, &png.to_string_lossy(), self.choice, self.anim_time, self.opts, self.notex, self.nofog, fe_menu.as_ref(), movie_owned.as_ref())
@@ -5541,10 +5574,11 @@ impl App {
         let state6 = self.fe.as_ref().is_some_and(|fe| fe.flow.get_state() == menu::ST_MOVIE);
         let intro_up = self.fe.as_ref().is_some_and(|fe| fe.intro_playing);
         let attract_up = self.fe.as_ref().is_some_and(|fe| fe.attract_playing);
+        let win_up = self.fe.as_ref().is_some_and(|fe| fe.page == menu::Page::WinGame && fe.win_movie);
         let flow_up = state6 && !intro_up && self.movie.is_some();
         let aux_up = self.movie.as_ref().is_some_and(|p| p.is_looping())
             && !self.fe.as_ref().is_some_and(|fe| fe.flow.movie_pending);
-        intro_up || flow_up || aux_up || attract_up
+        intro_up || flow_up || aux_up || attract_up || win_up
     }
 
     /// The RedrawRequested draw half (everything after `frame` that needs the GPU):
@@ -5693,12 +5727,14 @@ impl App {
                 // attract page has no controls [L the menu-def's 0x40000035 record], the movie
                 // plane IS the page [M P_ATTRACT_Handler 0x20a1f0's psiStartBackgroundMovie].
                 let attract_up = self.fe.as_ref().is_some_and(|fe| fe.attract_playing);
+                // The win page's movie owns the screen the same way (its PAGE record is bare [D]).
+                let win_up = self.fe.as_ref().is_some_and(|fe| fe.page == menu::Page::WinGame && fe.win_movie);
                 let flow_up = state6 && !intro_up && self.movie.is_some();
                 // The looping page player is the backdrop under the overlay; the early-started
                 // briefing player (non-looping, held through ST_MAPLOAD) is not.
                 let aux_up = self.movie.as_ref().is_some_and(|p| p.is_looping())
                     && !self.fe.as_ref().is_some_and(|fe| fe.flow.movie_pending);
-                let movie_up = intro_up || flow_up || aux_up || attract_up;
+                let movie_up = intro_up || flow_up || aux_up || attract_up || win_up;
                 let movie_frame = if movie_up { self.movie.as_mut().and_then(|p| p.present()) } else { None };
                 // The MP standings keep a constant on-screen text size (the lobby's view_h rule).
                 hud::set_view_h(g.config.height as f32);
@@ -5707,7 +5743,7 @@ impl App {
                         // fe-60hz: the front end's 60 Hz tick moved into `frame` (the draw half
                         // consumed the same post-tick state — headless-app-harness).
                     fe.backdrop_live = aux_up && movie_frame.is_some();
-                    if flow_up || (intro_up && movie_frame.is_some()) || (attract_up && movie_frame.is_some()) || fe.results_queued {
+                    if flow_up || (intro_up && movie_frame.is_some()) || (attract_up && movie_frame.is_some()) || (win_up && movie_frame.is_some()) || fe.results_queued {
                         // The movie plane replaces the overlay: the state-6 briefing blits over the
                         // empty backdrop and the fog pass is suppressed while a movie plays [M
                         // DecodeBGFMVFrame 0x108550 + PS2UploadBGMImage 0x108740, psiDrawFogPass
@@ -5743,7 +5779,7 @@ impl App {
                         }
                         fe.view_h = g.config.height as f32;
                         let mut f = match &self.scene.hud {
-                            Some(tables) => menu::menu_overlay(fe, &tables.font, &tables.font_header, lang, &self.scene.hud_textures, aspect),
+                            Some(tables) => menu::menu_overlay_fonts(fe, &tables.font, &tables.font_header, &tables.font_medium, lang, &self.scene.hud_textures, aspect),
                             None => overlay_for(&self.scene, aspect),
                         };
                         // fix-pause-menu2: the in-game HUD stays visible under the pause page —
