@@ -11008,6 +11008,10 @@ pub struct Swoosh {
 /// The swoosh pool's size (the game allocates control objects; the port keeps a fixed pool and drops a
 /// create when it is full, like `control_create_object` failing [M 0x18d8e8:20-23]).
 pub const SWOOSH_POOL: usize = 512;
+/// The Micro-Camera's base weapon id (weapon_data +2 of records 0x54/0x55) and its per-shot
+/// shutter sound [M Player_WeaponInitBullet 0x1a4bf0:261-263].
+pub const MICRO_CAMERA_BASE: u16 = 0x54;
+pub const MICRO_CAMERA_SHUTTER_SFX: u32 = 0xec;
 
 /// One of Bond's bullets (`Player_WeaponInitBullet` → `Bullet_init` / `Bullet_update` with owner = player).
 #[derive(Clone, Debug)]
@@ -13078,6 +13082,10 @@ fn segment_hits_sphere(a: V3, b: V3, c: V3, r: f32) -> bool {
             // `PlrStat_LogShotFired(0)` 0x1998d8 per bullet spawned (Player_WeaponInitBullet
             // 0x1a4bf0:258 runs inside the per-pellet loop) — fix-progress.
             self.progress.log_shot_fired(self.mission.status());
+            // The Micro-Camera's shutter: a record whose base weapon (+2 u16) is 0x54 plays the
+            // 2-D `Sound_Play(100, 0xec)` per bullet, inside the same pellet loop
+            // [M Player_WeaponInitBullet 0x1a4bf0:261-263, disasm `$a0` 0xec at 0x1a5050].
+            if u16::from_le_bytes([w[2], w[3]]) == MICRO_CAMERA_BASE { self.audio.play(MICRO_CAMERA_SHUTTER_SFX); }
             let dir = crate::bullet::spread(dir, f(0x24), flags68, &mut self.rng);
             // fix-fire-modes3 [M Bullet_init 0x12c5a0:188-190]: `+0x6C & 0x200` spawns the round at
             // QUARTER speed (`fVar17 = +0x20; if (+0x6C & 0x200) fVar17 *= 0.25`) — the Torpedo
@@ -16242,16 +16250,20 @@ fn segment_hits_sphere(a: V3, b: V3, c: V3, r: f32) -> bool {
         // The armed keypad's tick (`Lock_Update` 0x1ae3d8 case 4 [M :262-296]): the full typed
         // buffer matching the code with the count at the cap fires `Lock_Unlock` — the lock's
         // state := 1 (the port's `unlocked`), the manager deleted, the unlock sound (record
-        // u16[+4] — param 2, 0xffff-less; 0 on 0a's keypads = the game's Sound id 0, skipped) —
+        // u16[2] = placement param 3, `Lock::key_channels[0]`; 0xffff — no sound — on every disc
+        // lock [D]) —
         // and the NEXT tick's case 1 holds the out channel (the hold loop above; the game's
         // channel write lands one tick after the solve the same way). The page closed without a
         // match → state 0, re-armable (the Keypad::close arm — the view owns the close; the sim
         // keeps the page until solved).
         if let Some((li, kp)) = self.keypad.as_mut() {
             if kp.tick() {
-                // The unlock sound (record u16[+4] = placement param 2) — the port's Lock carries
-                // no param-2 word and 0a's keypads read 0 there [D placements #648/#732] (the
-                // game's Sound id 0), so the play is skipped, not approximated.
+                // The unlock sound `Sound_Play3D(record u16[2])` [M 0x1ae3d8:282-283]: placement
+                // param 3, kept as `key_channels[0]`; 0xffff (`Sound_Play3D`'s "none") on 0a's
+                // keypads #646/#648/#729/#732 and every other disc lock [D].
+                let snd = self.locks[*li].key_channels[0] as u32;
+                let pos = self.locks[*li].pos;
+                self.audio.play3d(snd, pos, None);
                 self.locks[*li].unlocked = true;
                 self.keypad = None;
             }
@@ -17673,7 +17685,14 @@ fn segment_hits_sphere(a: V3, b: V3, c: V3, r: f32) -> bool {
             if what == 6 { let _pw = crate::prof::scope("ctl: kind 6");
                 // `Sensor_Update` 0x1af618 (crate::sensor): the sweep/trip state machine — clears
                 // its out channel while sweeping, writes 1 after 2 s of continuous sight.
-                self.sensors.update(index, d.world, player, &mut self.channels, frame);
+                self.sensors.update(index, d.world, player, &mut self.channels, frame, &mut self.audio);
+                // The sensor's `Sound_Play3D`s enter the AI hearing list like any other (looped
+                // ones are skipped by `hear`, as `Sound_Alertness` skips them).
+                if let Some(t) = d.sfx {
+                    for (id, pos) in std::mem::take(&mut self.sensors.heard) { self.hear(pos, t.get(id)); }
+                } else {
+                    self.sensors.heard.clear();
+                }
                 continue;
             }
             if what == 2 { let _pw = crate::prof::scope("ctl: kind 2");

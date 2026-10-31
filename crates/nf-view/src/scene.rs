@@ -2875,6 +2875,11 @@ impl Sim {
                 let head = self.bond.head();
                 let dir = self.bond.look();
                 if let Some(point) = nf_game::gadget::pick_grapple_point(&self.drones.grapple_points, head, dir, nf_game::gadget::grapple_range(&self.weapons, claw)) {
+                    // The claw's latch clunk: `Bullet_Delete` 0x12e660:50-55 — the claw bolt (+0x70 &
+                    // 0x40) dying on a class-'Q' (0x51) grapple object plays `Sound_Play3D(100, -1,
+                    // -1, 0x28d, bullet+0xC0)` right before `Player_SetGrapplePoint` [M disasm $a0
+                    // 0x12e74c]. The port has no claw bolt; the bolt dies at the point it latches.
+                    self.drones.audio.play3d(GRAPPLE_LATCH_SFX, point, None);
                     self.bond.grapple = Some(nf_game::gadget::GrappleState { point, phase: 1, pull: 0.0 });
                     self.bond.substate = nf_game::player::SS_GRAPPLE;
                     self.bond.vel = [0.0; 3];
@@ -5995,6 +6000,9 @@ pub fn flash_mod(frame: u32) -> f32 {
 /// fixed 60 Hz ticks; the phase offset vs the game's boot-relative clock is cosmetic, the rate
 /// and quantization are exact [M GameFlow_Main 0x1c98c8:84 writes it every pass]).
 fn clock_100ths(frame: u32) -> u32 { frame * 10 / 6 }
+
+/// The Q-Claw's latch sound (`Bullet_Delete` 0x12e660:53, `$a0` = 0x28d at 0x12e74c [M]).
+pub const GRAPPLE_LATCH_SFX: u32 = 0x28d;
 
 /// A rigid mesh hung on a character's datum (`AnimObjectDraw`): world = `QuatTransToMat(q, t)` · bone world.
 /// Draw slots per gas mesh (the sim's pool holds `GasPool::CAP` = 128; a puff past this index doesn't draw).

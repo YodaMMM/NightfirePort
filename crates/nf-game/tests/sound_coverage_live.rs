@@ -227,3 +227,31 @@ fn special_death_0x0600021f_plays_0x148() {
     }
     assert!(sim2.list[gj].sfx_reqs.is_empty(), "no cry for other special-death scripts");
 }
+
+/// [M Player_WeaponInitBullet 0x1a4bf0:261-263]: a weapon record whose base id (+2 u16) is 0x54
+/// — the Micro-Camera pair 0x54/0x55 [L weapon_data] — plays the 2-D shutter 0xEC per bullet.
+/// Sister: the P2K 0x02 (base 0x02) fires without it.
+#[test]
+fn micro_camera_shot_plays_the_0xec_shutter() {
+    let Some(l) = Level02::load() else { eprintln!("skip: NF_ISO not set"); return };
+    let d = l.data();
+    let base = |w: usize| u16::from_le_bytes([d.weapons.records[w][2], d.weapons.records[w][3]]);
+    assert_eq!((base(0x54), base(0x55)), (0x54, 0x54), "both Micro-Camera records carry base 0x54 [L weapon_data +2]");
+    let hearing = nf_formats::sfx::SfxHearing { id: 0xffff, inner: 0.0, outer: 0.0, weight: 0.0, looped: false, cull: false };
+    for w in [0x54u8, 0x55] {
+        let mut sim = l.sim();
+        sim.fire_player(&d, [10.0, 2.0, 10.0], [-1.0, 0.0, 0.0], w, hearing);
+        let shutters = sim.audio.active_ids().iter().filter(|&&id| id == 0xec).count();
+        let pellets = u32::from_le_bytes(d.weapons.records[w as usize][0x18..0x1c].try_into().unwrap()).clamp(1, 16) as usize;
+        assert_eq!(shutters, pellets, "{w:#x}: one 0xEC per bullet");
+        sim.audio.update(None, ([0.0; 3], [1.0, 0.0, 0.0], [0.0, 1.0, 0.0], [0.0, 0.0, 1.0]), &|_| true);
+        let starts: Vec<_> = sim.audio.take_commands().into_iter().filter_map(|c| match c {
+            nf_game::sound::Cmd::Start { id: 0xec, pos, .. } => Some(pos),
+            _ => None,
+        }).collect();
+        assert!(!starts.is_empty() && starts.iter().all(|p| p.is_none()), "{w:#x}: the shutter is 2-D (`Sound_Play`)");
+    }
+    let mut sim = l.sim();
+    sim.fire_player(&d, [10.0, 2.0, 10.0], [-1.0, 0.0, 0.0], 0x02, hearing);
+    assert!(!sim.audio.active_ids().contains(&0xec), "sister: the P2K plays no shutter");
+}
