@@ -23,11 +23,13 @@ The disc holds two engines: `ACTION.ELF` (Eurocom's on-foot engine; shipped unst
 
 In short:
 
-- **On foot:** all 27 on-foot archives on the disc load and run. Not every level can be finished yet. The walkthrough tests that drive Bond through the same input a player uses still stop on seven levels (07000005, 07000006, 0700000a, 07000014, 07000016, 0700001b, 0700004a), and other levels have known problems. Each level's page in `docs/levels/` lists them.
+- **On foot:** all 27 on-foot archives on the disc load and run. Not every level can be finished yet. The walkthrough tests that drive Bond through the same input a player uses still stop on two levels (07000016 in Countdown and 0700001b in Equinox), several others still move Bond past a spot the walk cannot cross yet, and other levels have known problems. Each level's page in `docs/levels/` lists them.
 - **Driving:** the five driving missions can't be played. Picking one in the mission list shows a notice and unlocks the next mission. Parts of the driving engine exist as model code only: vehicle physics, the road network, AI traffic, input mapping, HUD data and mission scripts.
 - **Front end:** it follows the game's own menu flow. With the `movies` feature, the disc's videos play where the game plays them: the boot logos, the intro, the menu backdrops, and each mission's briefing and outro.
 - **Multiplayer:** the game's on-foot match rules and modes run on the 8 arenas, with bots, on one screen. There is no split screen. Online play is new in the port (see below).
 - **Cut-scenes:** faces animate from the game's own morph data.
+
+The latest release is v0.1.26 (2026-10-30). The releases since 0.1.19 have been single-player fixes across Double Cross, The Exchange, Night Shift, Chain Reaction, Phoenix Fire and Countdown; among them, Double Cross part 1 can now be finished behind Mayhew (0.1.24). Each release's notes are on the Releases page.
 
 "Cited" in the graphic is deliberately a loose measure. It counts a function whose address or name appears anywhere in the Rust crates or the docs. The port-map documents hold the stricter per-function grade (ported, partial, stub, stand-in, not started). The verification ledger lists three functions proven bit-exact against recorded PCSX2 calls (`PS2Sinf`, `Quat_QuatToMat`, `Rand_Rand`, 40 of 40 each).
 
@@ -182,7 +184,7 @@ The workspace has six crates:
 - `nf-net`: the UDP lockstep session, join codes and the lobby client.
 - `nf-extract`: a CLI for inspecting your disc: `info`, `manifest`, `elfs`, `files-extract`, `tex-export`, `bigf-extract`, `weapon-matrix`, ... (57 commands).
 
-That is about 300,000 lines of Rust in total.
+That is about 370,000 lines of Rust in total.
 
 ## Legal
 
@@ -207,9 +209,9 @@ Every claim in the docs carries an evidence tag:
 
 Behaviour is checked against the original by recording PCSX2 calls and traces and comparing numbers, not images, so no game data ends up in the tests. The verification ledger lists what is proven bit-exact.
 
-The test suite has about 3,400 `#[test]` functions across 735 integration test files. The last full run on master (2026-10-22) was 3,190 passed, 0 failed, 147 ignored.
+The test suite has about 4,100 `#[test]` functions across 989 integration test files. The last full run on master (2026-10-31) was 3,747 passed, 1 failed (a frame-timing test that passed when re-run on its own), 269 ignored.
 
-- **Walkthroughs:** 26 `walk_*` and 48 `walkreal_*` test files drive the story levels headless; the `walkreal_*` ones drive Bond through the real input path.
+- **Walkthroughs:** 26 `walk_*` and 25 `walkreal_*` test files drive the story levels headless; the `walkreal_*` ones drive Bond through the real input path.
 - **Placements and archives:** every placement on all 27 story levels is checked to resolve, and all 27 on-foot archives run 600 ticks without a panic.
 - **Performance:** per-frame cost budgets are part of the same suite.
 
