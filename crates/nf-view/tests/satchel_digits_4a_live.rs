@@ -134,6 +134,20 @@ fn the_landed_4a_charge_shows_lit_led_digits_on_its_display_pads() {
     assert!(texels.iter().any(|c| c[1] > 200), "texture 11's core is bright green");
     assert!(centres[0][0] > centres[1][0], "tens on +x of units (reads left to right with x flipped)");
 
+    // The charge body: its mesh's glist carries 0x800 (0x880 [D]), `Bullet_update`'s first tick
+    // applies it (`hashtable_set_object_to_entity_gfx` → `Control_SetGList` [M 0x12e7b0:125,
+    // 0x134960]) and `build_LinkToRoom` stored the cel's ambient in obj+0x100..0x102 [M 0x1c9680]:
+    // the tweak is (0xFF·ambient) >> 8 [M 0x1e5888:50-55] — the cel ambient at the charge.
+    assert_eq!(level.maps[sm].objects[so].flags & 0x800, 0x800, "OBJECT_SatchelCharge carries the 0x800 dim");
+    let bi = sim.drones.bullets.iter().position(|b| b.landed && b.family(&sim.weapons) == 0x3b).unwrap();
+    let body = scene.attachments.iter().position(|a| a.projectile == Some((nf_view::scene::PROJECTILE_SLOT_BASE as u16 + bi as u16, SATCHEL_MESH)))
+        .expect("the charge's projectile slot");
+    let amb = sim.ambient_at(pos).expect("the charge stands in a cel");
+    let want = nf_view::scene::mul_bytes(amb);
+    assert_eq!(attach_mult[body], want, "the body dims by the cel ambient {amb:?} at the charge");
+    // Sister: the cel is dim here, so the old white tint is a different value.
+    assert!(want.iter().all(|&c| c < 0.9), "the cel ambient at the charge is dim: {want:?}");
+
     // Sisters: the comparisons can fail.
     // (1) The previous placement — (±0.03, 0.032, 0.06) through the charge rows, no turn — lands
     //     the digits BELOW the pad face (inside the roof), outside the pad window.
