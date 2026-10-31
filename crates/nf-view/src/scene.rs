@@ -896,6 +896,15 @@ pub struct HudState {
     /// `Input::goggles_action` and consumed by `hud_tick` (which runs inside `run`, later in
     /// the same tick — the game's `Input_Action(p, 0xd, 4)` reads the same edge).
     pub goggles_press: bool,
+    /// The AIMS-20 zoom pane's boot list (`OICW_mode` / `OICW_timer`, `HUD_UpdateOICWPane`
+    /// 0x19cef8): created on the first HUD tick (`HUD_CreateOICWPane` 0x19cc90 plants SP mode 0 /
+    /// timer 0x96), ticked with the pane's enable byte (the OICW zoom up), drawn by hud.rs.
+    pub oicw_boot: Option<nf_game::hud_pane::OicwBoot>,
+    /// The Micro-Camera pane's shutter slot (`HUD_UpdateCameraPane` 0x1a12d8:16-36, the pane's
+    /// secondary u32): 10 on a frame the muzzle latch `BL+0x95B` is set, else −1 while non-zero;
+    /// sprite 0 (the full-screen subtractive white 0x03000002, layer 0x28) shows while it is
+    /// non-zero. Ticked only while the pane is enabled (the zoomed camera view).
+    pub camera_shutter: u8,
 }
 
 impl HudState {
@@ -5443,6 +5452,18 @@ impl Sim {
         // step [M 0x1b11d8]).
         if self.bond.icon_ctx != 0xff { self.hud.context_icon_timer = 30; self.hud.last_icon_ctx = self.bond.icon_ctx; }
         else if self.hud.context_icon_timer > 0 { self.hud.context_icon_timer -= 1; }
+        // The zoom panes' per-frame state. `HUD_Update` 0x19a088 runs every created pane's update
+        // each frame, enabled or not; the OICW update only resets while its pane is disabled
+        // [M 0x19cef8:15-19] and steps the boot list while enabled; the camera update returns
+        // at once while disabled [M 0x1a12d8:13-15]. The panes are enabled by
+        // `HUD_UpdateCrossHair` 0x19e6d0's scoped aim-mode switch (17 for 0x1a/0x1b, 11 for
+        // 0x54/0x55) — the port's zoom_target > 1 on those weapons (hud.rs `zoom_overlay`).
+        let zoom_pane = if self.zoom_target > 1.0 { Some(crate::hud::zoom_overlay(self.gun.weapon)) } else { None };
+        let mp = self.mp.is_some();
+        self.hud.oicw_boot.get_or_insert_with(|| nf_game::hud_pane::OicwBoot::new(mp)).tick(zoom_pane == Some(crate::hud::ZoomOverlay::Oicw));
+        if zoom_pane == Some(crate::hud::ZoomOverlay::Camera) {
+            self.hud.camera_shutter = if self.shot_tick { 10 } else { self.hud.camera_shutter.saturating_sub(1) };
+        }
         // Script op-0x1e text commands (`Script_TextStart` 0x1db2b8 → `Text_AddMsg(-1, 0, 4,
         // Txt_BindLabel(label), 0, time)` [M]): the raw labels drain to HUD messages with the same
         // bank binding as the pickup texts (fix-script-commands).

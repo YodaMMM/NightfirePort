@@ -6793,6 +6793,27 @@ pub fn run() -> Result<()> {
                     if v.len() >= 3 { sim.bond = nf_game::player::Bond::new([v[0], v[1], v[2]], v.get(3).copied().unwrap_or(sim.bond.yaw)); if let Some(&pt) = v.get(4) { sim.bond.pitch = pt; } sim.step_bond(shot_input, false, false, false); }
                 }
             }
+            // Render aid (fix-hud-parity): `NF_HUD_PROBE=k=v,…` sets HUD-facing state after the ticks so
+            // one --shot shows a HUD situation: `dmg=<bits>:<alpha>` (BL+0x967 / +0x968), `hp=<n>`,
+            // `armour=<n>`, `clip=<n>`, `swim=<air>` (substate 3, head under), `shutter=<n>` (the
+            // camera pane's slot), `ctx=<n>` (BL+0x95F), `objtime=<t>` (the head objective's remaining life).
+            if let Ok(spec) = std::env::var("NF_HUD_PROBE") {
+                for kv in spec.split(',') {
+                    let (k, v) = kv.split_once('=').unwrap_or((kv, ""));
+                    let f = |s: &str| s.parse::<f32>().unwrap_or(0.0);
+                    match k {
+                        "dmg" => { let (b, a) = v.split_once(':').unwrap_or((v, "200")); sim.drones.health.dir_bits = f(b) as u8; sim.drones.health.flash = f(a); }
+                        "hp" => sim.drones.health.health = f(v),
+                        "armour" => sim.drones.health.armour = f(v),
+                        "clip" => sim.gun.clip = f(v) as u32,
+                        "swim" => { sim.bond.substate = nf_game::player::SS_SWIM; sim.bond.underwater = true; sim.bond.air = f(v); }
+                        "shutter" => sim.hud.camera_shutter = f(v) as u8,
+                        "ctx" => sim.bond.icon_ctx = f(v) as u8,
+                        "objtime" => { if let Some(m) = sim.hud.objective_msgs.front_mut() { m.time = f(v); } }
+                        _ => eprintln!("NF_HUD_PROBE: unknown key {k:?}"),
+                    }
+                }
+            }
             if walk { let h = sim.bond.head(); cam = Camera { pos: Vec3::new(h[0], h[1], h[2]), yaw: sim.bond.yaw, pitch: sim.bond.pitch * std::f32::consts::FRAC_PI_2, fov: GAME_FOV / sim.zoom }; }
             if walk { if let Some((p, yaw, pitch, fov)) = sim.script_camera() { cam = Camera { pos: Vec3::new(p[0], p[1], p[2]), yaw, pitch, fov }; } }
             if walk { if let Some((p, yaw, pitch, fov)) = sim.wire_camera() { cam = Camera { pos: Vec3::new(p[0], p[1], p[2]), yaw, pitch, fov: GAME_FOV / fov }; } }

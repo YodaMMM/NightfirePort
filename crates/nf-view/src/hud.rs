@@ -35,8 +35,9 @@ const SH: f32 = 448.0;
 /// the table's other four ids never resolve in `hashtable_set_sprite` and the icon stays hidden].
 /// fix-space-pane added the 0700001b missile-status pane's five (0x03000177..7B [M SpaceSprInfo 0x2be3b0 +
 /// `HUD_UpdateSpacePane` 0x19d3b8; D 0700001b.bin entry 61 sub 0..4]).
-pub const TEXTURES: [u32; 33] = [0x0300_005b, 0x0300_005a, 0x0300_0026, 0x0300_007a, 0x0300_0128, 0x0300_018d, 0x0300_018e, 0x0300_0003, 0x0300_0034, 0x0300_0002, 0x0300_0173, 0x0300_0174, 0x0300_017f, 0x0300_017d, 0x0300_0055, 0x0300_0056, 0x0300_0057, 0x0300_0090, 0x0300_0141, 0x0300_0066, 0x0300_0067, 0x0300_006a, 0x0300_005e, 0x0300_004a, 0x0300_005f, 0x0300_005c, 0x0300_005d, 0x0300_0059,
-    0x0300_0177, 0x0300_0178, 0x0300_0179, 0x0300_017a, 0x0300_017b];
+/// fix-hud-parity added the Q-Claw marker 0x0300004C [D AmmoSprInfo[7]].
+pub const TEXTURES: [u32; 34] = [0x0300_005b, 0x0300_005a, 0x0300_0026, 0x0300_007a, 0x0300_0128, 0x0300_018d, 0x0300_018e, 0x0300_0003, 0x0300_0034, 0x0300_0002, 0x0300_0173, 0x0300_0174, 0x0300_017f, 0x0300_017d, 0x0300_0055, 0x0300_0056, 0x0300_0057, 0x0300_0090, 0x0300_0141, 0x0300_0066, 0x0300_0067, 0x0300_006a, 0x0300_005e, 0x0300_004a, 0x0300_005f, 0x0300_005c, 0x0300_005d, 0x0300_0059,
+    0x0300_0177, 0x0300_0178, 0x0300_0179, 0x0300_017a, 0x0300_017b, 0x0300_004c];
 
 /// The 0700001b missile-status pane (pane 20: `SpacePane` 0x2be598 = {x 0, y 0, flags 0, create
 /// `HUD_CreateDefault`, update `HUD_UpdateSpacePane` 0x19d3b8, `SpaceSprInfo` 0x2be3b0, 11 sprites}
@@ -364,6 +365,85 @@ impl Hud<'_> {
 /// at its size [M pickup.rs `Inventory::give` / the reload paths] — the clamp is the HUD standing safe.
 pub fn strip_clip(clip: f32, clip_size: f32) -> f32 { clip.min(clip_size.max(1.0)) }
 
+/// The crosshair sprite's top-left in the 512×448 frame for the smoothed offset (cx, cy) and the
+/// cell's w × h: `HUD_UpdateCrossHair` 0x19e6d0:89-90 stores `(short)(int)(256·cx + 256)` /
+/// `(short)(int)(224·−cy + 224)` and `View_DrawSprites` 0x1e5290:69-74 centres a 0x800 sprite by
+/// `w >> 1` / `h >> 1` [M]. An 11-px cell centred at 256 starts at 251, not 250.5.
+pub fn crosshair_pos(cx: f32, cy: f32, w: i32, h: i32) -> (f32, f32) {
+    let x = (SW / 2.0 * cx + SW / 2.0) as i32 as i16 as i32;
+    let y = (SH / 2.0 * -cy + SH / 2.0) as i32 as i16 as i32;
+    ((x - (w >> 1)) as f32, (y - (h >> 1)) as f32)
+}
+
+/// Which of the health pane's four damage-glow sprites (20..23) a `BL+0x967` direction byte
+/// lights: one bit each, independently — bit 1 → 20, 2 → 21, 4 → 22, 8 → 23
+/// [M HUD_UpdateHealthPane 0x19b9c8:92-107, four separate `if`s]. No combination is special.
+pub fn damage_glow_lit(dir_bits: u8) -> [bool; 4] {
+    [dir_bits & 1 != 0, dir_bits & 2 != 0, dir_bits & 4 != 0, dir_bits & 8 != 0]
+}
+
+/// The air / grip pane (pane 5, `HUD_UpdateAirPane` 0x1a11c8) for one frame: `None` = hidden,
+/// else (fill colour 0xRRGGBB, fill width px, icon shown).
+/// - The pane is enabled only in substate 3 (swim) or 6 (the wire) [M Player_MonitorAir
+///   0x191a70:16-23 `HUD_Enable(…, 5, sub == 3 || sub == 6)`]; a disabled pane draws nothing.
+/// - Enabled, it shows only while `BL+0x8C8 & 0x10` — set while the head bone is below the water
+///   surface, cleared above it, and forced on in substate 6 [M 0x191a70:37-61]; else every sprite
+///   goes to layer 0xff [M 0x1a11c8:25-29].
+/// - Shown: the fill (sprite 1) is layer 0x1e, the track (sprite 0) 0x1f; on the wire the fill is
+///   0x68d6b1ff and the icon (sprite 2) layer 0x1f, else 0x68b1d6ff and the icon hidden
+///   [M 0x1a11c8:31-41]. The 0x1e/0x1f bytes are +0x38 LAYERS, not alphas.
+/// - Width = `(int)(v·0.01·200 + 28)`, at least 1, with v = `100 − BL+0x8CC` on the wire, else
+///   the air `BL+0x8C0` [M :20-24, :43-55].
+pub fn air_pane(substate: u8, head_under: bool, air: f32, auto_drop: f32) -> Option<(u32, f32, bool)> {
+    let wire = substate == nf_game::player::SS_WIRE;
+    if !(wire || substate == nf_game::player::SS_SWIM) { return None; }
+    if !(wire || head_under) { return None; }
+    let v = if wire { 100.0 - auto_drop } else { air };
+    let w = ((v * 0.01 * 200.0 + 28.0) as i32 as i16).max(1) as f32;
+    Some((if wire { 0x68d6b1 } else { 0x68b1d6 }, w, wire))
+}
+
+/// The objective banner's text rows for one frame of a type-2 message (`HUD_UpdateStatusPane`
+/// 0x19c310 case 3 [M :203-262]): (status-label colour 0xRRGGBBAA, its shadow on?, body colour
+/// 0xRRGGBBAA). `time` is the message's remaining life (TXT_MSG+0x18).
+/// - The flash window — a NEW notice while `time + 60 > 300`, a COMPLETE one while
+///   `time + 60 > 180` (literal constants, not the message's own life): the body is 0, the status
+///   label 0x785a14ff on `fmodf(time, 40) < 20` else 0, and both shadows (+0x14) 0.
+/// - Steady: the status label 0x785a14ff with its shadow 0xff, the body 0x7d6d59ff (0 for a
+///   COMPLETE notice) with its shadow.
+/// - The fade (`0 ≤ time < 15`) rewrites only the BODY's alpha (`time·17`) [M :244-253]; the
+///   status label keeps 0xff until the pane closes (case 4 clears it).
+pub fn objective_rows(complete: bool, time: f32) -> (u32, bool, u32) {
+    let flash = if complete { 180.0 < time + 60.0 } else { 300.0 < time + 60.0 };
+    if flash {
+        let st = if time % 40.0 < 20.0 { 0x785a_14ff } else { 0 };
+        return (st, false, 0);
+    }
+    let mut body = if complete { 0 } else { 0x7d6d_59ffu32 };
+    if (0.0..15.0).contains(&time) && body != 0 { body = (body & 0xffff_ff00) | ((time * 17.0) as u32 & 0xff); }
+    (0x785a_14ff, true, body)
+}
+
+/// The Q-Claw marker (ammo pane sprite 7, `HUD_UpdateAmmoPane` 0x19a7f0:301-350): with the claw
+/// 0x50/0x51 held, the nearest class-'Q' grapple object that is drawn, in line of sight of the
+/// viewer and in front of it gets the marker at its screen position; `points` are (world pos,
+/// screen x, screen y, distance to the player) for the candidates that passed LOS + projection.
+/// Returns (x, y, colour 0xRRGGBBAA): 0x00ff00ff (green) while the distance is inside weapon 0x50's
+/// own range (`weapon_data+0x53dc` = record 0x50 +0x1C, both claws) AND the context byte `BL+0x95F`
+/// is 2, else 0xffffffff. The search starts at 10000.0 and keeps the strictly nearer [M :305-338].
+pub fn grapple_marker(points: &[(f32, f32, f32)], range: f32, ctx: u8) -> Option<(f32, f32, u32)> {
+    let mut best = 10000.0f32;
+    let mut out = None;
+    for &(x, y, d) in points {
+        if d < best {
+            best = d;
+            let c = if d < range && ctx == 2 { 0x00ff_00ff } else { 0xffff_ffff };
+            out = Some((x, y, c));
+        }
+    }
+    out
+}
+
 /// Build 6 NDC vertices (two triangles) for a rectangle from (x0,y0) to (x1,y1).
 fn ndc_rect(x0: f32, y0: f32, x1: f32, y1: f32) -> [crate::gpu::HudVertex; 6] {
     use crate::gpu::HudVertex;
@@ -407,9 +487,21 @@ pub fn overlay(scene: &crate::scene::Scene, aspect: f32) -> HudFrame {
         || sim.map_or(false, |s| s.bond.cam_mode != 0);
     // options-census: the Crosshairs row (Advanced 0x1000_0124 → PlayerSetting+0x08) hides the
     // sprite — HUD_UpdateCrossHair 0x19e6d0:96 sets +0x38 = 0xff (not drawn) when the byte is 0.
-    let crosshair_on = sim.map_or(true, |s| s.drones.crosshair);
-    if !zoomed && crosshair_on {
-        h.quad(Anchor::Centre, 49, CROSS_TEX, 0, SW / 2.0 * (1.0 + cx) - w / 2.0, SH / 2.0 * (1.0 - cy) - hh / 2.0, w, hh, [u, v, w, hh], (false, false), gs(0xff0000, 0xff));
+    // fix-hud-parity: that option gate sits on the NOT-aiming arm only — the aim-mode path
+    // (non-scoped weapon, cell 1) stores layer 0x31 and skips the `DAT_002a38d0` test [M
+    // 0x19e6d0:84-96: `if ((bVar1 & 1) == 0)` guards the option read], so the aim cross shows
+    // with Crosshairs off. The blood pane (12, +0x1a4) and the sec-cam pane (16, +0x224) hide
+    // it outright [M :24] — in MP the death pane leaves the rest of the HUD up, the crosshair
+    // goes. Colour 0x208020ff while the viewer's goggle mode (+0x236) is 1 (night sight), else
+    // 0xff0000ff [M :79-84]. Position: `(short)(int)(W/2·cx + W/2)`, `(short)(int)(H/2·−cy + H/2)`
+    // [M :89-90], then the 0x800 centring subtracts `w >> 1`, `h >> 1` in integers
+    // [M View_DrawSprites 0x1e5290:69-74] (the template flags 0x0800 [D CrossHair 0x2bcdf8+0xA]).
+    let crosshair_on = sim.map_or(true, |s| s.drones.crosshair) || (aiming && !scoped);
+    let blood_up = death.is_some();
+    if !zoomed && crosshair_on && !blood_up {
+        let (px, py) = crosshair_pos(cx, cy, w as i32, hh as i32);
+        let col = if sim.is_some_and(|s| s.goggle_mode() == 1) { 0x208020 } else { 0xff0000 };
+        h.quad(Anchor::Centre, 49, CROSS_TEX, 0, px, py, w, hh, [u, v, w, hh], (false, false), gs(col, 0xff));
     }
     let (Some(s), Some(t)) = (sim, scene.hud.as_ref()) else { return h.finish() };
     let frame = s.drones.frame;
@@ -488,19 +580,17 @@ pub fn overlay(scene: &crate::scene::Scene, aspect: f32) -> HudFrame {
     // generic pain paths write 0xC (both sides).
     let flash = s.drones.health.flash;
     let dir_bits = s.drones.health.dir_bits;
-    if flash > 0.0 {
-        let mut lit = [false; 4];
-        if dir_bits & 0xC == 0xC { lit[2] = true; lit[3] = true; }
-        else {
-            if dir_bits & 0x1 != 0 { lit[0] = true; }
-            if dir_bits & 0x2 != 0 { lit[1] = true; }
-            if dir_bits & 0x4 != 0 { lit[2] = true; }
-            if dir_bits & 0x8 != 0 { lit[3] = true; }
-        }
-        for (k, on) in lit.iter().enumerate() {
+    // fix-hud-parity: each bit lights its sprite independently (`damage_glow_lit`; the port used to
+    // collapse 0xF to the 0xC pair), and each sprite is its own template — HealthSprInfo[20..23]
+    // (0,0) 512×448, uv 0 = the whole texture, flags 0x100 / 0x180 / 0x100 / 0x140 (additive,
+    // 21 flipped V, 23 flipped U) [D the table]; layer 0x1e, colour `0xff000000 | BL+0x968`
+    // [M 0x19b9c8:92-107].
+    if flash > 0.0 && t.health.len() >= 24 {
+        for (k, on) in damage_glow_lit(dir_bits).iter().enumerate() {
             if !*on { continue; }
-            let tex = if k < 2 { 0x0300_018d } else { 0x0300_018e };
-            h.quad(Anchor::Stretch, 30, tex, 1, 0.0, 0.0, SW, SH, [0.0, 0.0, 64.0, 64.0], (k == 3, k == 1), gs(0xff0000, flash as u32));
+            let mut sp = t.health[20 + k].clone();
+            sp.layer = 0x1e;
+            h.sprite(Anchor::Stretch, (0.0, 0.0), &sp, gs(0xff0000, flash as u32));
         }
     }
     // Ammo pane: "clip-spare" in font 2 right-aligned at (496, 412) with a black shadow, the rounds strip above it.
@@ -564,8 +654,15 @@ pub fn overlay(scene: &crate::scene::Scene, aspect: f32) -> HudFrame {
         // must draw at most the clip size, or it overflows the pane (stacked/garbled icons).
         let clip = strip_clip(clip_n, max_n);
         let (rounds, empty) = (&t.ammo[5], &t.ammo[6]);
-        h.quad(Anchor::Right, rounds.layer as i32, 0x0300_0128, 0, x, bottom - clip * hpr, bw * k, clip * hpr, [bu, (max_n - clip) * hpr + bv, bw, clip * hpr], (false, false), gs(rounds.colour >> 8, rounds.colour & 0xff));
-        h.quad(Anchor::Right, empty.layer as i32, 0x0300_0128, 0, x, bottom - max_n * hpr, bw * k, max_n * hpr, [bu, bv, bw, max_n * hpr], (false, false), gs(empty.colour >> 8, empty.colour & 0xff));
+        // fix-hud-parity: every sprite field is a short the update truncates — h = (int)(clip·px),
+        // y = (int)(bottom − clip·px), v = (int)((max − clip)·px + v0), and the same for the empty
+        // column [M 0x19a7f0:254-299]; the 0.2-px/round percent strips (BulletImg kind 0x1a) drew
+        // fractional rows.
+        let tr = |f: f32| f as i32 as f32;
+        let fh = tr(clip * hpr);
+        let eh = tr(max_n * hpr);
+        h.quad(Anchor::Right, 0x1c, 0x0300_0128, 0, tr(x), tr(bottom - clip * hpr), tr(bw * k), fh, [tr(bu), tr((max_n - clip) * hpr + bv), tr(bw), fh], (false, false), gs(rounds.colour >> 8, rounds.colour & 0xff));
+        h.quad(Anchor::Right, 0x1d, 0x0300_0128, 0, tr(x), tr(bottom - max_n * hpr), tr(bw * k), eh, [tr(bu), tr(bv), tr(bw), eh], (false, false), gs(empty.colour >> 8, empty.colour & 0xff));
     }
     // The fire-mode / weapon-name labels (sprites 1 / 2, both at pane (0,38) → (496, 432), colour 0x7D6D59 with
     // the black shadow). Sprite +0x38 is the draw LAYER, not alpha: 0x1C = layer 28 (drawn), 0xFF = not drawn.
@@ -581,6 +678,33 @@ pub fn overlay(scene: &crate::scene::Scene, aspect: f32) -> HudFrame {
         if let (Some(sp), true) = (ammo_tbl.get(idx), id != u32::MAX && id != 0) {
             if let Some(txt) = lang.bind(id).filter(|t| !t.is_empty()) {
                 h.text(Anchor::Right, &t.font, 28, txt, ammo_at.0 + sp.x as f32, ammo_at.1 + sp.y as f32, true, gs(sp.colour >> 8, 0xff), true);
+            }
+        }
+    }
+    // The Q-Claw marker (ammo pane sprite 7, `grapple_marker`): AmmoSprInfo[7] tex 0x0300004C,
+    // flags 0x900 (additive, centred), layer 0x1c while placed [D the table; M 0x19a7f0:301-338].
+    // The candidates are the level's grapple points (the class-'Q' objects); the LOS is the
+    // game's `Collide_LineOfSight(point, viewer eye)` [M :313-315] (the port's world segment), the
+    // projection `View_3DPoint2Screen` > 0 (in front) [M :316-318] through the gameplay camera's
+    // own math (`project_hud`); obj+0xFC (drawn this frame) is the port's on-screen test [S].
+    // The marker ignores the weapon-name window (BL+0x95E): its layer is written every frame
+    // [M :301-303]. SP only — the MP ammo pane has 3 sprites (the `> 7` count gate).
+    if nf_game::gadget::is_grapple(s.gun.weapon) && t.ammo.len() >= 8 && !mp {
+        let eye = s.bond.head();
+        let root = s.bond.pos;
+        let cands: Vec<(f32, f32, f32)> = s.drones.grapple_points.iter().filter_map(|gp| {
+            if s.world.segment(gp.pos, eye).is_some() { return None; }
+            let (x, y) = project_hud(s, gp.pos)?;
+            let d = ((gp.pos[0] - root[0]).powi(2) + (gp.pos[1] - root[1]).powi(2) + (gp.pos[2] - root[2]).powi(2)).sqrt();
+            Some((x, y, d))
+        }).collect();
+        let range = nf_game::gadget::grapple_range(&s.weapons, 0x50);
+        if let Some((x, y, c)) = grapple_marker(&cands, range, s.bond.icon_ctx) {
+            let sp = &t.ammo[7];
+            let (tw, th) = h.tex_dims(sp.texture);
+            if tw > 0.0 {
+                let (px, py) = (x as i32 as i16 as i32 - ((tw as i32) >> 1), y as i32 as i16 as i32 - ((th as i32) >> 1));
+                h.quad(Anchor::Centre, 0x1c, sp.texture, 1, px as f32, py as f32, tw, th, [0.0, 0.0, tw, th], (false, false), gs(c >> 8, c & 0xff));
             }
         }
     }
@@ -712,18 +836,24 @@ pub fn overlay(scene: &crate::scene::Scene, aspect: f32) -> HudFrame {
             // colour is the gold 0x785a14ff (case 3's else branch stores it unconditionally), the
             // body's 0x7d6d59ff.
             let complete = msg.status == 0x0200_0053;
-            if let Some(lang) = s.lang.as_ref() {
+            // fix-hud-parity: the flash window and the label-only fade (`objective_rows`) — the
+            // banner opens on the status label alone, blinking 20 on / 20 off without its shadow
+            // for 60 ticks, then the body joins; only the body fades out.
+            let (st_col, st_shadow, body_col) = objective_rows(complete, msg.time);
+            let _ = a;
+            if let (Some(lang), true) = (s.lang.as_ref(), st_col & 0xff != 0) {
                 if let Some(st) = lang.bind(msg.status) {
                     let (_, sw) = t.font.layout(st, 0.0, 0.0);
-                    h.text(Anchor::Centre, &t.font, 29, st, SW / 2.0 - sw / 2.0, 20.0, false, gs(0x785a14, a), true);
+                    h.text(Anchor::Centre, &t.font, 29, st, SW / 2.0 - sw / 2.0, 20.0, false, gs(st_col >> 8, st_col & 0xff), st_shadow);
                 }
             }
+            let a = body_col & 0xff;
             // The body row: the wrapped message text. For a COMPLETE message the game shows NO body
             // row — case 2 forces the body sprite's colour to 0 after binding the status label and
             // case 3 keeps it 0 in both its phases [M 0x19c310 case 2 + case 3's `*(iVar8+0x10)=0`
             // stores] — the status label alone carries "OBJECTIVE COMPLETE" (the port used to draw
             // the body row too: two stacked OBJECTIVE COMPLETE banners).
-            if !complete {
+            if !complete && a != 0 {
                 // `Text_AddMsg` 0x1b0c30 wraps the message text with `Font_WordWrapString` at
                 // TextMsgFormats[2]'s maxWidth = 480 [L 0x2bf108+0x14 = 0x1e0] — the box's own width
                 // (ObjectiveStatusSprInfo[2] x 16 w 480 [L 0x319608+0x58]); the port wraps at draw
@@ -774,53 +904,39 @@ pub fn overlay(scene: &crate::scene::Scene, aspect: f32) -> HudFrame {
             h.text(Anchor::Centre, &t.font, 29, &msg.text, SW / 2.0 - tw / 2.0, 42.0 + by, false, gs(0x7d6d59, a), true);
             if let (Some(lang), true) = (s.lang.as_ref(), s.hud.fail_label != 0) {
                 if let Some(fl) = lang.bind(s.hud.fail_label) {
-                    // The flash while an objective notice is up [M 0x19c310:209 0x785a14ff].
-                    let flash = !s.hud.objective_msgs.is_empty() && frame % 30 < 15;
-                    let (c, al) = if flash { (0x785a14, a) } else { (0x7d6d59, a) };
+                    // fix-hud-parity: steady 0x7d6d59 (case 2 stores it, case 3 ORs alpha 0xff),
+                    // fading with the main row [M 0x19c310:113-114, :198-200, :244-253]. The
+                    // 0x785a14ff stores at :209/:237 write the OBJECTIVE pane's status label
+                    // (iVar20, non-zero only for `MsgObjectiveStatusPane` [M :56-58]) inside the
+                    // type-2 block — the mission pane's type-3 messages never reach them, so the
+                    // old blink while an objective notice was up had no source.
                     let (_, fw) = t.font.layout(fl, 0.0, 0.0);
-                    h.text(Anchor::Centre, &t.font, 29, fl, SW / 2.0 - fw / 2.0, 64.0 + by, false, gs(c, al), true);
+                    h.text(Anchor::Centre, &t.font, 29, fl, SW / 2.0 - fw / 2.0, 64.0 + by, false, gs(0x7d6d59, a), true);
                 }
             }
         } else if s.hud.mission_close > 0.0 {
             bar(&mut h, s.hud.mission_close);
         }
     }
-    // The air/oxygen pane (pane 5, `HUD_UpdateAirPane` 0x1a11c8, `AirSprInfo` 0x2bd490): shown while
-    // Bond swims (the game enables it in player modes 3/6 — `Player_MonitorAir` 0x191a70:50); the fill
-    // bar's width is `air·2 + 28` of the 256-wide track, its colour 0x68D6B1 fully submerged (mode 6) /
-    // 0x68B1D6 swimming (mode 3); the bubble icon is additive, bright under water (0xFF) and 0x1F at the
-    // surface, with the bar at 0x1E/0x1F [M 0x1a11c8].
-    // cable-3p: on the wire the same pane is the grip meter - `HUD_UpdateAirPane` 0x1a11c8 reads
-    // `100 − BL+0x8CC` (the auto-drop timer) when the player object's +0xF6 is 6 (the wire substate),
-    // colours the fill 0x68D6B1 and shows the icon sprite [M :17-33] - the hand and green bar over
-    // Bond hanging [L PCSX2 07000005 cable, audits/render-1029-cable p-stand].
-    if s.bond.substate == nf_game::player::SS_WIRE {
-        let grip = (100.0 - s.bond.auto_drop).clamp(0.0, 100.0);
-        if t.air.len() >= 2 {
-            let (bar, fill) = (&t.air[0], &t.air[1]);
-            let w = (grip * 2.0 + 28.0).clamp(1.0, 256.0);
-            h.sprite(Anchor::Left, (0.0, 0.0), bar, gs(bar.colour >> 8, 0xFF));
-            h.quad(Anchor::Left, fill.layer as i32, fill.texture, 0, fill.x as f32, fill.y as f32, w, fill.h as f32, [fill.uv[0] as f32, fill.uv[1] as f32, w, fill.uv[3] as f32], (false, false), gs(0x68d6b1, 0xFF));
-        }
-        if let Some(icon) = t.air.get(2) {
-            h.sprite(Anchor::Left, (0.0, 0.0), icon, gs(icon.colour >> 8, 0xFF));
-        }
-    } else
-    {
-        let under = s.bond.underwater;
-        if under || s.bond.air < 100.0 {
-            let air = s.bond.air.clamp(0.0, 100.0);
-            let (a_fill, a_bar, a_icon) = if under { (0xFF, 0xFF, 0xFF) } else { (0x1E, 0x1F, 0x1F) };
-            let fill_col = if under { 0x68d6b1 } else { 0x68b1d6 };
-            if t.air.len() >= 2 {
-                let (bar, fill) = (&t.air[0], &t.air[1]);
-                let w = (air * 2.0 + 28.0).clamp(1.0, 256.0);
-                h.sprite(Anchor::Left, (0.0, 0.0), bar, gs(bar.colour >> 8, a_bar));
-                h.quad(Anchor::Left, fill.layer as i32, fill.texture, 0, fill.x as f32, fill.y as f32, w, fill.h as f32, [fill.uv[0] as f32, fill.uv[1] as f32, w, fill.uv[3] as f32], (false, false), gs(fill_col, a_fill));
-            }
-            if let Some(icon) = t.air.get(2) {
-                h.sprite(Anchor::Left, (0.0, 0.0), icon, gs(icon.colour >> 8, a_icon));
-            }
+    // The air / grip pane (pane 5, `HUD_UpdateAirPane` 0x1a11c8, `AirSprInfo` 0x2bd490) — the rules
+    // are `air_pane`'s. fix-hud-parity: the old draw read the update's 0x1e/0x1f +0x38 stores as
+    // alphas (a dim pane at the surface) and showed the pane on dry land while the air refilled;
+    // the game enables it only in substates 3/6, shows it only with the head under water (or on
+    // the wire), colours the swim fill 0x68B1D6 (the wire's is 0x68D6B1) and shows the icon
+    // (0x0300017D, additive) on the wire only. Layers: track 0x1f, fill 0x1e, icon 0x1f; the
+    // track and icon keep their template colours (the update never writes them) [M 0x1a11c8].
+    // cable-3p: on the wire it is the grip meter over Bond hanging [L PCSX2 07000005 cable,
+    // audits/render-1029-cable p-stand].
+    if let (Some((fill_col, w, icon_on)), true) = (air_pane(s.bond.substate, s.bond.underwater, s.bond.air, s.bond.auto_drop), t.air.len() >= 3) {
+        let (bar, fill, icon) = (&t.air[0], &t.air[1], &t.air[2]);
+        let mut track = bar.clone();
+        track.layer = 0x1f;
+        h.sprite(Anchor::Left, (0.0, 0.0), &track, gs(bar.colour >> 8, bar.colour & 0xff));
+        h.quad(Anchor::Left, 0x1e, fill.texture, 0, fill.x as f32, fill.y as f32, w, fill.h as f32, [fill.uv[0] as f32, fill.uv[1] as f32, w, fill.uv[3] as f32], (false, false), gs(fill_col, 0xff));
+        if icon_on {
+            let mut ic = icon.clone();
+            ic.layer = 0x1f;
+            h.sprite(Anchor::Left, (0.0, 0.0), &ic, gs(icon.colour >> 8, icon.colour & 0xff));
         }
     }
     // The 0700001b missile-status pane (pane 20, `HUD_UpdateSpacePane` 0x19d3b8 — `space_pane`). The pane's
@@ -866,7 +982,8 @@ pub fn overlay(scene: &crate::scene::Scene, aspect: f32) -> HudFrame {
                 let sn = nf_game::trig::sinf(((ta - 100) * 4) as f32 * 0.031_415_93 + 1.570_796_4);
                 let w = ((tw * f) as i32) as f32;
                 let hh = ((th * f * sn.abs()) as i32) as f32;
-                h.quad(Anchor::Centre, 0, tex, 0, 256.0 - w / 2.0, 80.0 - hh / 2.0, w, hh, [0.0, 0.0, tw, th], (false, sn < 0.0), gs(0x7f7f7f, 0xff));
+                // The 0x800 centring is integer: x − (w >> 1) [M View_DrawSprites 0x1e5290:69-74].
+                h.quad(Anchor::Centre, 0, tex, 0, (256 - ((w as i32) >> 1)) as f32, (80 - ((hh as i32) >> 1)) as f32, w, hh, [0.0, 0.0, tw, th], (false, sn < 0.0), gs(0x7f7f7f, 0xff));
             }
         }
     }
@@ -954,6 +1071,13 @@ pub fn overlay(scene: &crate::scene::Scene, aspect: f32) -> HudFrame {
                 for (x, y) in [(48.0, 120.0), (432.0, 120.0), (48.0, 256.0), (432.0, 256.0)] {
                     h.quad(Anchor::Centre, 39, 0x0300_0057, 1, x, y, tw57, th57, [0.0, 0.0, tw57, th57], (false, false), c);
                 }
+                // fix-hud-parity: sprite 0, the shutter — CameraSprInfo[0] (0,0) 512×448 of the
+                // solid 0x03000002, flags 0x200 (subtractive) colour 0x7f7f7fff [D], layer 0x28
+                // for the 10 frames after a shot (`HudState::camera_shutter`) [M 0x1a12d8:16-36]:
+                // white taken off the scene — the frame goes black.
+                if s.hud.camera_shutter != 0 {
+                    h.quad(Anchor::Centre, 0x28, SCOPE_STRIP_TEX, 2, 0.0, 0.0, SW, SH, [0.0, 0.0, 31.0, 31.0], (false, false), c);
+                }
                 let (tw90, th90) = h.tex_dims(0x0300_0090);
                 h.quad(Anchor::Centre, 34, 0x0300_0090, 1, 256.0 - tw90 / 2.0, 224.0 - th90 / 2.0, tw90, th90, [0.0, 0.0, tw90, th90], (false, false), c);
                 // The target brackets (`HUD_UpdateCameraPane` 0x1a12d8) — one "DroneScan" sprite per
@@ -981,6 +1105,18 @@ pub fn overlay(scene: &crate::scene::Scene, aspect: f32) -> HudFrame {
             ZoomOverlay::Oicw => {
                 h.quad(Anchor::Centre, 40, SCOPE_STRIP_TEX, 2, 0.0, 0.0, SW, SH, [0.0, 0.0, 31.0, 31.0], (false, false), gs(0x00ffff, 0xff));
                 h.tiled_quad(Anchor::Centre, 39, 0x0300_0141, 192.0, 160.0, 128.0, 128.0, [1.0, 1.0, 127.0, 127.0], 0x0500, gs(0x7f7f7f, 0x40));
+                // fix-hud-parity: sprites 2-6, the boot list (`OicwBoot`, `HUD_UpdateOICWPane`
+                // 0x19cef8): "COMMAND.COM" … "OK" at x 50, rising 17 px a line from y 408, layer
+                // 0x1c while shown; OICWSprInfo[2..6] colour 0x7f7f7fc8, flags 0 (no drop shadow)
+                // [D the table]. The text sprites' face is the HUD font 2 [S — the create's
+                // `Sprite_SetText` passes no format].
+                if let (Some(boot), true) = (s.hud.oicw_boot.as_ref(), t.oicw.len() >= 7) {
+                    for (k, line) in boot.lines().iter().enumerate() {
+                        if line.layer == 0xff { continue; }
+                        let c = t.oicw[2 + k].colour;
+                        h.text(Anchor::Centre, &t.font, line.layer as i32, line.text.trim_end(), line.x as f32, line.y as f32, false, gs(c >> 8, c & 0xff), false);
+                    }
+                }
             }
         }
     }
@@ -1302,6 +1438,25 @@ pub fn camera_scan_roots(s: &crate::scene::Sim) -> Vec<[f32; 3]> {
     s.drones.llist.iter().map(|&i| &s.drones.list[i])
         .filter(|dr| dr.present && dr.enabled && dr.health > 0.0 && dr.state != nf_game::drone::state::WAIT_SWITCH)
         .map(|dr| dr.pos).collect()
+}
+
+/// A world point on the 512×448 HUD frame through the gameplay camera (the same eye / yaw /
+/// pitch / zoom-divided 60° FOV as `camera_brackets`): `None` behind the eye or off the screen.
+pub fn project_hud(s: &crate::scene::Sim, p: [f32; 3]) -> Option<(f32, f32)> {
+    let pos = s.bond.head();
+    let yaw = s.bond.yaw;
+    let pitch = s.bond.pitch * std::f32::consts::FRAC_PI_2;
+    let f = 1.0 / ((std::f32::consts::FRAC_PI_3 / s.zoom.max(1e-3)) * 0.5).tan();
+    let fwd = [pitch.cos() * yaw.sin(), pitch.sin(), pitch.cos() * yaw.cos()];
+    let right = [-yaw.cos(), 0.0, yaw.sin()];
+    let up = [right[1] * fwd[2] - right[2] * fwd[1], right[2] * fwd[0] - right[0] * fwd[2], right[0] * fwd[1] - right[1] * fwd[0]];
+    let dot = |a: [f32; 3], b: [f32; 3]| a[0] * b[0] + a[1] * b[1] + a[2] * b[2];
+    let rel = [p[0] - pos[0], p[1] - pos[1], p[2] - pos[2]];
+    let z = dot(fwd, rel);
+    if z <= 0.0 { return None; }
+    let x = SW / 2.0 + f * (dot(right, rel) / z) * (SW / 2.0) * 0.75;
+    let y = SH / 2.0 - f * (dot(up, rel) / z) * (SH / 2.0);
+    (x >= 0.0 && x <= SW && y >= 0.0 && y <= SH).then_some((x, y))
 }
 
 pub fn camera_brackets(s: &crate::scene::Sim, aspect: f32) -> Vec<[f32; 4]> {

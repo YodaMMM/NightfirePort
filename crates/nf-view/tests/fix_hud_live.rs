@@ -198,6 +198,8 @@ fn air_bar_draws_while_swimming() {
             let sim = sc.sim.as_mut().unwrap();
             sim.bond.air = air;
             sim.bond.underwater = under;
+            // The pane is enabled only while swimming (substate 3) [M Player_MonitorAir 0x191a70:16-23].
+            if under { sim.bond.substate = nf_game::player::SS_SWIM; }
         }
         let f = nf_view::hud::overlay(&sc, 4.0 / 3.0);
         let n: usize = tex_runs(&sc, &f, 0x0300_017f).iter().map(|(_, c)| c / 6).sum();
