@@ -76,13 +76,14 @@ fn try_park(scene: &mut nf_view::scene::Scene, cand: usize) -> bool {
 /// same subset the model describes. Sister: the gated shots still exist (the filter's skip count
 /// is logged and asserted non-negative trivially — a run with zero gated shots is a no-op).
 fn collect_shots(scene: &mut nf_view::scene::Scene, weapon: u32, wanted: u32, warmup_shots: u32) -> (usize, Vec<Shot>, Vec<(f32, f32, f32)>, f32) {
-    // Live guards with the weapon, the standard stats and the standard ×1 damage multiplier —
-    // tried in order until one actually opens fire (some are elevated or scripted and never do).
+    // Live non-captain guards with the weapon (the level's `drone_stats` record, not a captain's
+    // ×2 / ½-accuracy) — tried in order until one actually opens fire (some are elevated or
+    // scripted and never do).
     let candidates: Vec<usize> = {
         let sim = scene.sim.as_ref().unwrap();
         let mut v: Vec<usize> = (0..sim.drones.list.len()).filter(|&i| {
             let d = &sim.drones.list[i];
-            d.present && d.weapon == weapon && d.aggression == 0
+            d.present && d.weapon == weapon && !d.captain
         }).collect();
         v.sort_by_key(|&i| (sim.drones.list[i].mode != 0, i));
         v
