@@ -8,7 +8,8 @@
 //! this file adds the secret-door chain — the E-operated trigger volume (mask 4), the body-touch
 //! volume, the AND and the swinging SS door, with the chain's own SoundTrigger start — plus the
 //! hint plate's global-voice rule, the weapon pickup, the medal-gated kind-6 bonus and the
-//! destroyables' bullet-filter mask. Each test drives the real input (the walk, the E, the
+//! destroyables' bullet-filter mask, and (this task's census gap) the sniper-ammo pickup's
+//! AMMO-kind take. Each test drives the real input (the walk, the E, the
 //! trigger pull) and asserts the game's effect with its sister.
 //!
 //! Evidence tags: [M] the decompile address, [D] the disc bytes. A teleport reaches only the
@@ -339,4 +340,65 @@ fn the_bullet_filter_drops_handheld_fire_on_564_and_admits_it_on_492() {
     for _ in 0..60 { w2.tick(nf_game::player::Input::default(), false); }
     assert!(w2.scene.sim.as_ref().unwrap().drones.props.destroy[i492].dead,
         "the 0xff07 mask admits the handheld shots — the barrel dies [M 0x1ece30:26-33; D #492]");
+}
+
+/// The sniper-ammo pickup #477 (`PICKUP_300AP (Sniper)`, 37.62, 0.06, −149.05 [D]; p0=1 — the
+/// AMMO kind, p1=31 the weapon, p2=10 rounds, p4=272 the icon [D]) credits the carried pool on
+/// the walk-over: `Pickup_Handler` 0x18e650's case 1 runs `Player_EquipAmmo` 0x1a8d18 (the
+/// upgrade remap picks the pool) and takes the rounds into `+0x170 + 2·ammo_type` [M
+/// pickup.rs's take; the composition pinned by the 05/08 sisters]. The take never arms the
+/// weapon — case 1 has no equip arm [M 0x18e650] — and the take logs `Taken::Ammo` [M].
+/// Sisters: #477 and the tower pair #520/#521 (75.99/76.88, 5.07, −149.9/−149.2 [D], p2=5,
+/// p4=65535 — no icon) all sit before the walk, and #520 still sits after.
+#[test]
+fn the_sniper_ammo_pickup_credits_the_pool_and_the_tower_pair_sits() {
+    let mut w = ready();
+    let find = |w: &Walker, x: f32, z: f32| w.scene.sim.as_ref().unwrap().drones.pickups.iter()
+        .position(|p| p.kind == nf_game::pickup::kind::AMMO
+            && (p.centre()[0] - x).abs() < 0.5 && (p.centre()[2] - z).abs() < 0.5);
+    let i477 = find(&w, 37.62, -149.05).expect("the #477 300AP pickup [D]");
+    let i520 = find(&w, 75.99, -149.95).expect("the #520 tower 300AP pickup [D]");
+    let gone = |w: &Walker, i: usize| {
+        let s = w.scene.sim.as_ref().unwrap();
+        s.drones.pickups[i].gone || s.drones.pickups[i].hidden
+    };
+    assert!(!gone(&w, i477), "sister: #477 sits before the walk");
+    assert!(!gone(&w, i520), "sister: #520 sits before the walk");
+    let owned_before = w.scene.sim.as_ref().unwrap().drones.inventory.owned.get(31).copied().unwrap_or(false);
+    let pools = |w: &Walker| w.scene.sim.as_ref().unwrap().drones.inventory.carried.clone();
+    let before_vec = pools(&w);
+    {
+        let sim = w.scene.sim.as_ref().unwrap();
+        assert_eq!(sim.drones.inventory.clip.get(31), Some(&0), "sister: the 300AP clip slot is empty before the take");
+        assert_eq!(before_vec.get(8), Some(&0), "sister: the 300 pool is empty before the take");
+    }
+    // The yard's lower ring floor under the pickup (the spot's y 0.06 [D]).
+    let f = floor_under(&w, 37.62, 2.0, -149.05);
+    drop_at(&mut w, [37.62, f + 1.0, -149.05 - 1.4]);
+    w.wait(10);
+    w.walk_to(Wp::new(37.62, f + 1.0, -149.05).r(0.6), "onto the 300AP #477");
+    w.wait(30);
+    assert!(gone(&w, i477), "the walk-over takes the 300AP [M 0x18e650 case 1]");
+    // The game's case-1 two-tick dance [M 0x18e650 joined_r0x0018ebf0: the 0 return refuses the
+    // take (the pickup stays) while the fill arm 0x1a8d18 has ALREADY written the clip; the next
+    // tick re-takes the full rounds on top]: tick 1 fills clip[31] with the clip-size 5 [D
+    // weapon_data 0x1F clip word] and pools the remaining 5, returns 0; tick 2 skips the fill
+    // (the slot is non-zero now) and pools the full 10, returns 10 — the log entry. The game's
+    // own net from a p2=10 pickup is clip 5 + carried 15; the port replays it bit-faithfully.
+    {
+        let sim = w.scene.sim.as_ref().unwrap();
+        assert_eq!(sim.drones.inventory.clip.get(31), Some(&5),
+            "the refused tick's fill arm still wrote the clip [M 0x1a8d18; D weapon_data 0x1F clip 5]");
+        assert_eq!(sim.drones.inventory.carried.get(8), Some(&15),
+            "the pool holds the refused tick's 5 + the re-take's 10 [M 0x1a8d18 + the 0 gate 0x18e650]");
+        let ammo_takes = sim.drones.taken.iter()
+            .filter(|(_, t)| matches!(t, nf_game::pickup::Taken::Ammo { weapon: 31, .. })).count();
+        assert_eq!(ammo_takes, 1, "exactly one take is logged (the refused tick logs nothing) [M 0x18e650]");
+        let logged = sim.drones.taken.iter()
+            .any(|(_, t)| matches!(t, nf_game::pickup::Taken::Ammo { weapon: 31, rounds: 10 }));
+        assert!(logged, "the take logs Ammo {{ weapon: 31, rounds: 10 }} [D #477 p1=31 p2=10; M 0x18e650 case 1]");
+    }
+    let owned_now = w.scene.sim.as_ref().unwrap().drones.inventory.owned.get(31).copied().unwrap_or(false);
+    assert_eq!(owned_now, owned_before, "the ammo take never arms the weapon — case 1 has no equip arm [M 0x18e650]");
+    assert!(!gone(&w, i520), "sister: the tower pair #520 still sits");
 }
