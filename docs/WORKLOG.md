@@ -532,3 +532,12 @@ pass-global) — the next window's first work. Sandbox notes: the tool-output pa
 `[m` (phantom-corruption chase cost ~50 min; hex disproof recorded in the report), background
 runners die between tool calls (suite.py died twice with an empty suite.out), everything ran
 foreground. No code change landed; tree = the 0701a932 merge state.
+
+## capsule-cull-and-los-masks-19 (2026-10-31, s/capsule-cull-and-los-masks-19)
+
+Branch from origin/s/capsule-cull-and-los-masks-18 (98424eca) merged with origin/master (9d03fc0a
+via batch-1031e). Task: continue the -18 bisect — cull/masks/turret/walker_b2 are EXCLUDED by its
+measured matrix; the remaining candidate is the un-gated world.rs capsule delta (the walkable-gate
+sign discipline n[1] > 0.7 + q[1] < b[1], the pick bit's dot2 pass-global, the pick-contact ref
+changes). Extend the gate set, run the 13-red matrix, fix what differs from the game with
+[M]/[D]/fresh-boot [L] evidence, land with the 13 and every walkreal_* binary green.
