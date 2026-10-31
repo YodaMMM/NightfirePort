@@ -509,40 +509,37 @@ fn walk_to_the_mission_end(mut w: &mut Walker, fresh: bool) {
     let parachute = w.scene.sim.as_ref().unwrap().drones.pickups.iter()
         .find(|p| p.switch_channel == 0x3f).expect("OBJECT_Parachute (0xF0, ch 0x3F)").clone();
     let pp = [parachute.m[3][0], parachute.m[3][1], parachute.m[3][2]];
-    // Walk the deck east from the re-place point — the game's route to the pickup; on a wedge,
-    // the kept stand-in transit (the deck walk's blocker is the open item — the parachute-side
-    // INTERACTIONS below stay real either way, and the sister assert pins the pickup itself:
-    // `taken || ch 0x3F` below). Live check that settles it: a fresh-boot PCSX2 run, Bond on the
-    // helipad deck at the re-place key [−14.71, 58.00, −2.06], walk east toward the parachute at
-    // (2.53, 58.45, 42.34) [D #280] and record the deck's collision under the walk line (x −14 →
-    // 2, z −2 → 37) — whether the disc deck is continuous floor (the port's wedge is a port gap
-    // to fix) or the helicopter body's volume really walls the direct line (then the route is the
-    // detour the guard positions imply, and the walker needs the detour waypoints).
-    w.lenient = true;
-    let leg = w.walk_to(Wp::new(pp[0], pp[1] - 1.4, pp[2] - 5.0).r(1.6), "the deck below the parachute");
-    if leg == u32::MAX {
-        let sim = w.scene.sim.as_mut().unwrap();
-        sim.bond.pos = [pp[0], pp[1] - 1.2, pp[2] + 1.2];
-        sim.bond.vel = [0.0; 3];
-        eprintln!("[0b] the deck walk wedged — the documented transit to the parachute side");
-    }
-    w.lenient = false;
+    // The deck east from the re-place point IS the game's route and it WALKS: the walkthrough
+    // arrives at the deck below the pickup in both walks (deterministic 60 Hz — once green,
+    // always green), so no stand-in: the arrival is a hard assert. (The prior session's wedge
+    // transit is gone; the deck's full extent was never a blocker on this tree.)
+    w.walk_to(Wp::new(pp[0], pp[1] - 1.4, pp[2] - 5.0).r(1.6), "the deck below the parachute");
     w.wait(10);
-    // Take the parachute: the real pickup touch (stances around it; the helicopter's blocking
-    // volume may need the offset — the teleport test's own approach). KEPT test-setup placement
-    // (not a route transit): the route (the deck walk) is the leg above; these stances enumerate
-    // walk-over touch positions around the pickup (it hangs at pickup height — pp[1] − 1.2 puts
-    // Bond's feet in the touch band), so the subject is the pickup's walk-over law
-    // [M Pickup_Handler 0x18e650], not movement. The per-stance drive (forward 0.4) is real input.
+    // Take the parachute: the WALKED approach to the pickup's touch band, then the real
+    // walk-over drive (the pickup hangs at pickup height — pp[1] − 1.2 puts Bond's feet in the
+    // touch band [M Pickup_Handler 0x18e650's walk-over]). The sister assert (`taken || ch 0x3F`
+    // below) pins the pickup itself.
     let mut taken = false;
-    'stances: for c in [[0.0f32, 0.0, 0.0], [0.6, 0.0, 0.6], [-0.6, 0.0, 0.6], [0.6, 0.0, -0.6], [-0.6, 0.0, -0.6], [0.0, 0.6, 0.0], [0.0, 1.2, 0.0]] {
-        for _ in 0..40 {
+    if w.try_walk_to(Wp::new(pp[0], pp[1] - 1.2, pp[2] + 1.2).r(1.2), "under the parachute (walked)") {
+        for _ in 0..120 {
             w.tick(nf_game::player::Input { forward: 0.4, ..Default::default() }, false);
-            if w.scene.sim.as_ref().unwrap().drones.channels.on(0x3f) { taken = true; break 'stances; }
+            if w.scene.sim.as_ref().unwrap().drones.channels.on(0x3f) { taken = true; break; }
         }
-        let sim = w.scene.sim.as_mut().unwrap();
-        sim.bond.pos = [pp[0] + c[0], pp[1] + c[1] - 1.2, pp[2] + c[2]];
-        sim.bond.vel = [0.0; 3];
+    }
+    if !taken {
+        // The stance sweep — KEPT test-setup placements (interaction measurement spots, not a
+        // route transit): each stance is a touch position around the pickup the walk-over needs
+        // when the helicopter body's volume shadows one side; the drive between them is real
+        // forward input.
+        'stances: for c in [[0.0f32, 0.0, 0.0], [0.6, 0.0, 0.6], [-0.6, 0.0, 0.6], [0.6, 0.0, -0.6], [-0.6, 0.0, -0.6], [0.0, 0.6, 0.0], [0.0, 1.2, 0.0]] {
+            for _ in 0..40 {
+                w.tick(nf_game::player::Input { forward: 0.4, ..Default::default() }, false);
+                if w.scene.sim.as_ref().unwrap().drones.channels.on(0x3f) { taken = true; break 'stances; }
+            }
+            let sim = w.scene.sim.as_mut().unwrap();
+            sim.bond.pos = [pp[0] + c[0], pp[1] + c[1] - 1.2, pp[2] + c[2]];
+            sim.bond.vel = [0.0; 3];
+        }
     }
     assert!(taken || w.scene.sim.as_ref().unwrap().drones.channels.on(0x3f),
         "the parachute pickup must raise ch 0x3F [D pickup param 3]");
