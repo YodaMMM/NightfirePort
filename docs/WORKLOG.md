@@ -36,3 +36,17 @@ test binary and the full suite (tools/test/suite.py); quote every total.
   binaries are the next message's resume; the report has the exact command.
 - Pushed checkpoints after every step: 431f721a (branch+WORKLOG), 63709075 (stats merge),
   23cdee53 (fe-pages-2 merge), ade69a7f (the compile fixes).
+
+## page-titles (2026-10-31) — the shared title placement and the 007 Bonus corner stamp
+
+- Every header control in menu-def 08000002 is (50,40,376×17) (0x40000012 y 39; 0x4000001d /
+  0x40000020 540 wide) [D]. FixupResolution → (40,37,300×15); Label_Update pen y = (short)(y + h/2
+  + extent/2 − 1) with FONTNFont2's extent 20 → 53 [M 0x21b610, 0x218cb8:178-205]. `page_header`
+  drew at the fixed 54.5·448/480 = 50.9: every title about 2.5 units of 480 high. Now
+  `menu::page_header_pen`; headless ink rows 43.3–56.7 of 480 against the PCSX2 stats/results
+  captures' 43.1–56.8 (before: 40.7–54.0).
+- The 007 Bonus page's 0x10000224 now draws through `corner_stamp` (unscaled, clipped at x 512,
+  layer 3) instead of a generic 255-wide quad that ran past the backdrop's right edge.
+- U-052 closed: the placement arms in MenuManager_Create 0x21b908:305-314 are if / else-if, so the
+  stamp's forced-position arm never reaches FixupResolution.
+- tests/page_titles.rs (3 tests, sisters included).
