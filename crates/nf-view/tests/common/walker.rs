@@ -592,9 +592,24 @@ impl Walker {
         let mut aim = self.exposed_aim(di);
         let mut blocked_streak = 0u32;
         let mut flanks = 0i32;
+        // kill-trace (NF_KILL_TRACE, additive — the NF_HEALTH_TRACE pattern): the shoot loop's
+        // own view of the target's death walk; tick_inner's traces don't run here (this loop
+        // calls step_bond directly).
+        let kill_trace = std::env::var_os("NF_KILL_TRACE").is_some();
+        let mut kt_health = f32::MAX;
+        let mut kt_state = 0xffu8;
         for t in 0..10800u32 {
             {
                 let sim = self.scene.sim.as_ref().unwrap();
+                if kill_trace {
+                    let d = &sim.drones.list[di];
+                    if d.health != kt_health || d.state != kt_state {
+                        eprintln!("[killtrace] {label} +{t} d{di} hp {:.1}->{:.1} st {kt_state:#x}->{:#x} mode {:#x} corpse {} raise {:?} ch0e {} last_dmg {:.1} hit {:?}",
+                            kt_health, d.health, d.state, d.mode, d.corpse, d.raise,
+                            sim.drones.channels.on(0x0e), d.last_damage, d.hit.map(|h| h.part));
+                        kt_health = d.health; kt_state = d.state;
+                    }
+                }
                 if sim.drones.list[di].corpse || sim.drones.list[di].health <= 0.0 { return true; }
                 // Re-pick the exposed part periodically: the guard animates, a part clears or buries.
                 if t % 30 == 0 { aim = self.exposed_aim(di); }

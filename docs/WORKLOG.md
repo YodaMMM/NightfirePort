@@ -15,3 +15,19 @@ the test), un-ignore the test, keep the teleport approach as documented. Branch
 Progress log:
 - 09:06 branch created from origin/master b44ac857 (sandbox reused from the level-14 session:
   repo, work/, ISO, nf-queue, cargo all present). Branch pushed with this entry.
+- 09:47 THE BLOCKER RESOLVED — the ignore note was stale; the test's own ch-0x0e end assert was
+  the contradiction. Trace (NF_KILL_TRACE added to Walker::shoot, env-gated, the file's
+  NF_HEALTH_TRACE pattern): the walker kill enters AstronautDeath 0xbf at +130 with ch 0x0e ON
+  (corpse same tick), the defeat NIS plays out, ch 0x0b lands at the NIS's t600, MissionState 6
+  at the t720, to_end 0x0730001b — the chain is ALIVE on current master (a later 1b merge fixed
+  the death route; the 2026-10-23 note predates it). What never survived was the test's
+  end-of-chain `channels.on(0x0e)`: SP#198's stay is 0 [D placement #198 param 4, dumped from
+  the disc], so when the 720-tick NIS [D length] runs out the player reaches SP_Update's case
+  3, whose re-arm writes the OUT channel 0 [M 0x1dbda8 case 3 cVar10='\0' + the tail
+  `switch_channels[out] = cVar10`] — the game itself clears ch 0x0e after the NIS. Test fixed
+  per the rule (never weaken a decompile-backed assert, but this one overreached its citation):
+  the raise is now asserted AT the kill [M 0x1747b8/0x13e660], the clear asserted at the chain's
+  end, the wait loop runs the full window (no early break) so the re-arm tick lands inside it.
+  Un-ignored; interactables_0700001b_live 7/7, fix_finale_live 4/4, probe1b_blockers 5/5,
+  probe1b_drake 1/1, walkreal 9/9 (+1 ignored), probe1b_route 3/3, probe1b_rover 1/1,
+  interactables probes 1/1 + 5/5. Port code untouched — the fix is test-side only.
