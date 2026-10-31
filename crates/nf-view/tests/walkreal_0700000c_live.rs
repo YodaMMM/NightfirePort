@@ -688,6 +688,7 @@ fn walk_the_whole_mission_from_the_start_to_the_0d_handoff() {
         };
         sim.step_bond(input, false, false, false);
         w.total_ticks += 1;
+        top_up(&mut w);
     }
     assert!(climbed,
         "walking into the yard ladder #164 never grabbed it — the walk substate must ride the switch's DEFAULT arm r 0.55 [M 0x1953f4 via the jump table @0x2fc0d0]");
@@ -700,6 +701,7 @@ fn walk_the_whole_mission_from_the_start_to_the_0d_handoff() {
         if sim.bond.substate != nf_game::player::SS_CLIMB && sim.bond.pos[1] > 2.0 { mantled = true; break; }
         sim.step_bond(nf_game::player::Input { forward: 1.0, ..Default::default() }, false, false, false);
         w.total_ticks += 1;
+        top_up(&mut w);
     }
     assert!(mantled, "the yard climb never mantled past climb_top 12.139 [M 0x196118/0x196310], y {:?}", w.scene.sim.as_ref().unwrap().bond.pos);
     for _ in 0..600 {
@@ -707,6 +709,7 @@ fn walk_the_whole_mission_from_the_start_to_the_0d_handoff() {
         if sim.bond.grounded && sim.bond.substate == nf_game::player::SS_WALK && sim.bond.pos[1] > 10.5 { break; }
         w.scene.sim.as_mut().unwrap().step_bond(nf_game::player::Input { forward: 1.0, ..Default::default() }, false, false, false);
         w.total_ticks += 1;
+        top_up(&mut w);
     }
     {
         let sim = w.scene.sim.as_ref().unwrap();
@@ -749,6 +752,7 @@ fn walk_the_whole_mission_from_the_start_to_the_0d_handoff() {
             };
             w.scene.sim.as_mut().unwrap().step_bond(input, false, false, false);
             w.total_ticks += 1;
+            top_up(&mut w);
         }
         got
     };
@@ -770,6 +774,7 @@ fn walk_the_whole_mission_from_the_start_to_the_0d_handoff() {
             let input = nf_game::player::Input { strafe: 1.0, jump: d < 0.9, ..Default::default() };
             w.scene.sim.as_mut().unwrap().step_bond(input, false, false, false);
             w.total_ticks += 1;
+            top_up(&mut w);
         }
         dropped
     };
@@ -777,6 +782,7 @@ fn walk_the_whole_mission_from_the_start_to_the_0d_handoff() {
         if w.scene.sim.as_ref().unwrap().bond.grounded { break; }
         w.scene.sim.as_mut().unwrap().step_bond(nf_game::player::Input::default(), false, false, false);
         w.total_ticks += 1;
+        top_up(&mut w);
     }
     {
         let sim = w.scene.sim.as_ref().unwrap();
@@ -809,6 +815,7 @@ fn walk_the_whole_mission_from_the_start_to_the_0d_handoff() {
             };
             w.scene.sim.as_mut().unwrap().step_bond(input, false, false, false);
             w.total_ticks += 1;
+            top_up(&mut w);
         }
         got
     };
@@ -825,6 +832,7 @@ fn walk_the_whole_mission_from_the_start_to_the_0d_handoff() {
             let input = nf_game::player::Input { strafe: -1.0, jump: d < 0.9, ..Default::default() };
             w.scene.sim.as_mut().unwrap().step_bond(input, false, false, false);
             w.total_ticks += 1;
+            top_up(&mut w);
         }
         dropped
     };
@@ -832,6 +840,7 @@ fn walk_the_whole_mission_from_the_start_to_the_0d_handoff() {
         if w.scene.sim.as_ref().unwrap().bond.grounded { break; }
         w.scene.sim.as_mut().unwrap().step_bond(nf_game::player::Input::default(), false, false, false);
         w.total_ticks += 1;
+        top_up(&mut w);
     }
     {
         let sim = w.scene.sim.as_ref().unwrap();
@@ -862,6 +871,7 @@ fn walk_the_whole_mission_from_the_start_to_the_0d_handoff() {
             };
             w.scene.sim.as_mut().unwrap().step_bond(input, false, false, false);
             w.total_ticks += 1;
+            top_up(&mut w);
         }
         got
     };
@@ -886,10 +896,10 @@ fn walk_the_whole_mission_from_the_start_to_the_0d_handoff() {
             // Hold the jump one tick past the stop so the exit reads the overshoot pose.
             let at_stop = still >= 90;
             if d < best_d - 1e-4 { best_d = d; still = 0; } else { still += 1; }
-            if _t % 60 == 0 { eprintln!("[0c wire283] t {_t} sub {} mode {} regrab {} auto {:.2} d {d:.3} best {best_d:.3} still {still} jump {at_stop} pos {:?}", sim.bond.substate, sim.bond.mode, sim.bond.regrab, sim.bond.auto_drop, sim.bond.pos); }
             let input = nf_game::player::Input { strafe: 1.0, jump: at_stop, ..Default::default() };
             w.scene.sim.as_mut().unwrap().step_bond(input, false, false, false);
             w.total_ticks += 1;
+            top_up(&mut w);
         }
         dropped
     };
@@ -905,6 +915,7 @@ fn walk_the_whole_mission_from_the_start_to_the_0d_handoff() {
         if !sim.bond.grounded { saw_air = true; }
         w.scene.sim.as_mut().unwrap().step_bond(nf_game::player::Input::default(), false, false, false);
         w.total_ticks += 1;
+        top_up(&mut w);
     }
     {
         let sim = w.scene.sim.as_ref().unwrap();
@@ -1318,6 +1329,18 @@ fn walk_the_whole_mission_from_the_start_to_the_0d_handoff() {
     }
     eprintln!("[0c] objective 3 complete on the 0d arrival — the whole mission walked (0c legs {} ticks + 0d {} ticks)",
         w.total_ticks, w2.total_ticks);
+}
+
+/// The walker's health allowance for the raw `step_bond` loops (the ladder climbs and the wire
+/// rides drive the Sim directly, outside `Walker::tick`): the same top-up `Walker::tick` and
+/// `shoot_at` apply after every tick. Without it the raw loops were the only ticks of the walk
+/// where the guards' fire landed for real — the #283 ride (~700 ticks under drones #1/#13/#15/#18,
+/// all with a clear sight line) took six hits from 100 to 0, the death sequence started
+/// (`drones.death.active`), and `Sim::step_bond` stopped running the player body [M Player_Update
+/// 0x193600:316-319, the dead branch] — the "frozen wire ride" (pos and auto_drop held, the jump
+/// release never reached `wire_tick`). The wire code was never the cause.
+fn top_up(w: &mut Walker) {
+    if w.top_up_health { w.scene.sim.as_mut().unwrap().drones.health.health = 100.0; }
 }
 
 /// Fire the held weapon at a static point through the real trigger path (the walker's aim loop;
