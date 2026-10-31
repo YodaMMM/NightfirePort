@@ -535,7 +535,24 @@ impl Walker {
         let mut best: Option<(f32, V3)> = None;
         for b in d.hit_boxes(&data) {
             let c = [b.m[3][0], b.m[3][1], b.m[3][2]];
-            if sim.world.segment(eye, c).is_some() { continue; }
+            // The game's own answer to "can I shoot this part" — the BULLET's round, not a
+            // line-to-centre boolean. The game's bullet hits the drone box iff the ray ENTERS
+            // the box volume before the world's first solid contact: `Collide_Jointy` 0x1ec180
+            // takes the first box hit (list order) and the flight walk applies it iff
+            // `t_box < world_t` [M 0x1ea398:216-229] — the exact comparison the port's own
+            // bullet pass runs (first_box_hit vs segment_bullet_scoped, drone.rs:14287-14289),
+            // with the flight's world trace transparent to the pass-family tris (bullet_pass,
+            // world.rs:1113-1131) that Check_AutoAim's 0xa-mask ray also sees through
+            // [M 0x1a73f8:164-166 + 0x1edf54 + 0x1ebaa8:301-319]. A clear-line-to-CENTRE test is
+            // strictly stricter than the game twice over — it demands the centre visible (the
+            // bullet only needs box entry) and it counts pass-family tris as solid — which is
+            // what wedged the 02 west-wing lip fight (drone 4, 1.4-2.7 u: every part's centre
+            // ray clipped the stair lip) and the 01 escort's stairwell peer before it
+            // [world.rs:1626-1628]. level-02-every-objective-4 2026-10-31.
+            let ray = [c[0] - eye[0], c[1] - eye[1], c[2] - eye[2]];
+            let Some(t_box) = nf_game::damage::ray_box(eye, ray, &b) else { continue };
+            let tw = sim.world.segment_bullet_scoped(sim.world.find_cel(eye), eye, c);
+            if tw.is_some_and(|w| w < t_box) { continue; }
             let dev = dxz(c, torso);
             if best.map_or(true, |(bd, _)| dev < bd) { best = Some((dev, c)); }
         }
@@ -1045,10 +1062,21 @@ impl Walker {
                     // own floor.
                     let blocker = (!self.fighting_blocker).then(|| {
                         let sim = self.scene.sim.as_ref().unwrap();
-                        sim.drones.list.iter().position(|d| d.team == 1 && d.health > 0.0
+                        sim.drones.list.iter().enumerate().position(|(i, d)| d.team == 1 && d.health > 0.0
                             && !d.corpse && d.present
                             && dxz(d.pos, self.pos) < 1.8
-                            && (d.pos[1] - self.pos[1]).abs() < 2.5)
+                            && (d.pos[1] - self.pos[1]).abs() < 2.5
+                            // The hostage-TAKER is not a shootable blocker: the game's Hostage
+                            // tick frees the geisha the instant her captor's health hits 0
+                            // (0x15cb78:25-36 → HostageSaved 12 raises the rescue channel
+                            // [M 0x1441c0]), so a body-block shot here saves her mid-walk and
+                            // every later assert sees state 100 (HOSTAGE_GO_TO_GOAL) — master's
+                            // green walk died exactly this way on its first walker-fire pass
+                            // (2026-10-31: drone 5 shot at the ch-0x17 plate → geisha 1 at 100).
+                            // A player sees the kneeling situation and steps around it; the
+                            // walks' own clear_captors fires the rescue shot at its step.
+                            && !sim.drones.list.iter().any(|g| g.state == nf_game::drone::state::HOSTAGE
+                                && g.health > 0.0 && g.captor == Some(i)))
                     }).flatten();
                     if let Some(bi) = blocker {
                         eprintln!("[walk] {label}: hostile body-block (drone {bi}) — shooting the blocker");

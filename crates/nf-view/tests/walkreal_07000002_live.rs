@@ -235,12 +235,29 @@ fn walk_the_castle_all_objectives_real_health() {
     w.lenient = false;
     assert!(ch_on(&w, 0x17), "the geisha group is enabled [D tr[003] out 0x17]");
     {
+        // The game's own GATE, not a play order: the Hostage tick frees her iff the captor link
+        // is empty or the bound captor's health ≤ 0 [M 0x15cb78:25-36]; HostageSaved 12 raises
+        // 0x49 [M 0x1441c0] and runs her to a goal point with +0x5A2 = 0x0E [M 0x15ccf0:42-43],
+        // arriving into HostageHide 14 [M 0x165a68:30-32]. A mid-route fire fight can lawfully
+        // kill the bound captor before this line (the 24 u sweep shot captor drone 5 at 3.9 u,
+        // 2026-10-31 run) — that is the game's own early rescue, and gunfire does NOTHING else
+        // to a hostage in state 10 (no hearing, no vision, no timer: 0x15cb78 has no sound or
+        // vision case; the captor never drags her — no combat state writes +0x2B0).
         let sim = w.scene.sim.as_ref().unwrap();
         let gi = geisha(&w, 0x49).expect("geisha 1 (param 6 = 0x49) [D]");
         let g = &sim.drones.list[gi];
-        assert_eq!(g.state, nf_game::drone::state::HOSTAGE, "the enabled geisha sits in Hostage 0x0A [L DroneTypeSettings[5].start = 10]");
-        assert!(g.captor.is_some(), "the captor is bound [M 0x144030]");
-        assert!(!sim.drones.channels.on(0x49), "the rescue channel holds while the captor lives [M 0x1441c0]");
+        let freed = match g.captor {
+            None => true,
+            Some(ci) => sim.drones.list[ci].health <= 0.0 || sim.drones.list[ci].corpse,
+        };
+        if freed {
+            assert!(ch_on(&w, 0x49), "the bound captor is down: the game's Hostage tick freed her and HostageSaved raised 0x49 [M 0x15cb78:25-36 + 0x1441c0]");
+            assert!(matches!(g.state, nf_game::drone::state::HOSTAGE_SAVED | nf_game::drone::state::HOSTAGE_GO_TO_GOAL | nf_game::drone::state::HOSTAGE_HIDE),
+                "the freed geisha runs the game's save chain (saved 0x0C → goal 0x64 → hide 0x0E) [M 0x15ccf0:42-43 + 0x165a68:30-32], got {}", g.state);
+        } else {
+            assert_eq!(g.state, nf_game::drone::state::HOSTAGE, "the enabled geisha sits in Hostage 0x0A while her captor lives [L DroneTypeSettings[5].start = 10; M 0x15cb78]");
+            assert!(!ch_on(&w, 0x49), "the rescue channel holds while the captor lives [M 0x1441c0]");
+        }
     }
     // 3. The captors die (the 0x17 guards: death chs 0x88 / 0x2A / 0x29 [D param 12]) — the save
     //    fires through the real fire path, AND #397 closes 0x3B [D tr[017]].
@@ -325,9 +342,21 @@ fn walk_the_castle_all_objectives_real_health() {
     w.lenient = false;
     assert!(ch_on(&w, 0x19), "geisha 2's group enabled [D tr[009] out 0x19]");
     {
+        // The same game gate as geisha 1 above [M 0x15cb78:25-36 + 0x15ccf0:42-43 + 0x165a68:30-32].
         let sim = w.scene.sim.as_ref().unwrap();
         let gi = geisha(&w, 0x4a).expect("geisha 2 (param 6 = 0x4A) [D]");
-        assert_eq!(sim.drones.list[gi].state, nf_game::drone::state::HOSTAGE, "geisha 2 sits captive [L DroneTypeSettings[5].start]");
+        let g = &sim.drones.list[gi];
+        let freed = match g.captor {
+            None => true,
+            Some(ci) => sim.drones.list[ci].health <= 0.0 || sim.drones.list[ci].corpse,
+        };
+        if freed {
+            assert!(ch_on(&w, 0x4a), "geisha 2's captor is down: freed and saved [M 0x15cb78:25-36 + 0x1441c0]");
+            assert!(matches!(g.state, nf_game::drone::state::HOSTAGE_SAVED | nf_game::drone::state::HOSTAGE_GO_TO_GOAL | nf_game::drone::state::HOSTAGE_HIDE),
+                "the freed geisha 2 runs the save chain [M 0x15ccf0 + 0x165a68], got {}", g.state);
+        } else {
+            assert_eq!(g.state, nf_game::drone::state::HOSTAGE, "geisha 2 sits captive while her captor lives [L DroneTypeSettings[5].start; M 0x15cb78]");
+        }
     }
     let g2 = geisha(&w, 0x4a).unwrap();
     let at = w.scene.sim.as_ref().unwrap().drones.list[g2].pos;
