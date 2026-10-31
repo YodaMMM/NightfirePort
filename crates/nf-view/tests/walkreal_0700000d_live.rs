@@ -10,8 +10,11 @@
 //! jump being vertical-only [M Player_HandleJump 0x1916b0; Player_SSWalk 0x192310:69]) and the
 //! catwalk walk west to its end, and the dock E #460 (ch 0x2b, real input). STAND-INS: the
 //! catwalk→bay exit (the catwalk is sealed at walk height — probe20's scans) and the
-//! shipping-beam boarding + west ride (the beam shuttles x-only with its top at 13.47-14.32 and
-//! no boarding surface reached — probe20) into the yard at the nav web's north edge
+//! shipping-beam boarding (the one remaining pos write, [S] unverified — level-0d-boarding
+//! closed the data: the 18.6 canopy covers the whole swept footprint, the mover script carries
+//! no player hand-off, and the riding 0x0200_0a81 is the game's aboard detector (0xEA, out 103,
+//! mask 8); the ride west and the drop into the yard are real input now) into the yard at the
+//! nav web's north edge
 //! → the REAL yard walk to the ST-3 plate #378 (118.48–157.56, 3.74–13.26, −311.35..−306.49 [D])
 //! → ch 0x1d (objective 4) → the REAL laser photograph (0x54 carried [M 0x1a7ef8 case 0x700000d
 //! keeps the loadout]) into the CamSubject volumes #494/#495 (ch 0x1e [D]) → ch 0x1e (objective
@@ -346,10 +349,10 @@ fn walk_arrival_to_the_c5_door() {
         "the E fires the plate's out ch 0x2b [D #460 p0]");
     eprintln!("[0d] E #460 walked — the shipping SP #115 armed; the beam shuttles x 137.54 → 177.22 → 137.54 over 3000 ticks [D]");
 
-    // THE BOARDING QUESTION, pinned from the disc data (level-0d-beam-boarding). The mover is
-    // script 0x060009EF entity 1: a 1643-tri TWIN-GIRDER gantry [D shape 0x0200_0a80 bounds
-    // (±4.17, −2.98..+2.98, ±17.01) local] — at the rest origin (137.538, 11.334, −287.108) the
-    // two girders run z −270.1..−304.1 with their top surface ~13.5 and the inner runway Bond
+    // THE BOARDING QUESTION, pinned from the disc data (level-0d-beam-boarding + level-0d-boarding).
+    // The mover is script 0x060009EF entity 1: a 1643-tri TWIN-GIRDER gantry [D shape 0x0200_0a80
+    // bounds (±4.17, −2.98..+2.98, ±17.01) local] — at the rest origin (137.538, 11.334, −287.108)
+    // the two girders run z −270.1..−304.1 with their top surface ~13.5 and the inner runway Bond
     // rides at 13.51 (the ride's own floor read: pos 14.545 − the 1.035 root), the slot between
     // the girders OPEN to the yard below (the at-rest rays at x 137/138, z −280..−300 fall to
     // 4.0 [D fine-map rays]). The riding 0x0200_0a81 is a 2-tri FLAT TRIGGER plane at +2.95 (y
@@ -362,10 +365,25 @@ fn walk_arrival_to_the_c5_door() {
     // zeroes the velocity] so no 2.6 m gap is crossable onto a higher surface; the bay floor
     // (9.5) is 4 m under the ride floor with no stairs or ladder up (the ladder census: #0/#1 at
     // x 212..218, #2 at the catwalk's west end [D probe0d census]), and the gantry's own frame
-    // rises 9.5 m from the yard 4.0 with no access either. So the game's boarding surface is
-    // NOT settled by the port's statics: the sister asserts below pin the measured closure, the
-    // exact question goes to the report's live check, and the ONE documented write below is the
-    // stand-in — everything after it (the whole ride and the drop) is real input.
+    // rises 9.5 m from the yard 4.0 with no access either.
+    //
+    // level-0d-boarding closed the rest of the data: (1) THE CANOPY — the 18.6 roof spans the
+    // gantry's WHOLE swept footprint (probe21's roof map: x 130..190 × z −270..−305 reads the
+    // canopy first on every column; its north edge is z ≈ −267 at x 150..190 and its west edge
+    // x ≈ 130 — both clear of the footprint x 133.4..181.4 / z −270.1..−304.1), so no roof edge
+    // or hole ever passes over the ride and no walk-off/fall from above can land on it (the
+    // runway pillars at x 154/169 top out at 16.07 — 1.75+ above the gantry top — with portal
+    // openings for the shuttle, themselves unreachable from anywhere); (2) THE SCRIPT —
+    // 0x060009EF's nine streams carry NO player hand-off (no event 4 Player_Disable, no event 6
+    // Player_Enable [D the ops; M Script_EventHandler 0x1d94c0 cases 3/4/6 — its event 3 with
+    // p0 = 0 is the negative-delay hold]) — the boarding is not scripted; (3) THE DETECTOR —
+    // the riding 0x0200_0a81 is the game's own ABOARD SENSOR: a 0xEA trigger (out event 103 =
+    // ch 0x67, mask 8 = player walk-in) whose flat plane at gantry-deck height can only fire
+    // for a body already on the gantry, so the game expects a physical boarding the port's
+    // statics cannot offer. The per-tick sweep (probe21_sweep) verified the gantry's collision
+    // is live under the canopy for the whole shuttle. The sister asserts below pin this closure;
+    // the exact question goes to the report's live check, and the ONE documented write below is
+    // the stand-in — everything after it (the whole ride and the drop) is real input.
     {
         let sim = w.scene.sim.as_ref().unwrap();
         // [D] the east-side closure over the beam's max reach: at z −272 the ledge and the pad
@@ -387,6 +405,33 @@ fn walk_arrival_to_the_c5_door() {
         assert!(ledge.iter().any(|y| (13.4..=14.2).contains(y)), "the 13.76 step at x 184 [D interior scan], got {ledge:?}");
         assert!(pad.iter().any(|y| (14.4..=15.0).contains(y)), "the 14.7 pad at x 186..194 [D pad rays], got {pad:?}");
         assert!(!gap.iter().any(|y| (10.0..=16.0).contains(y)), "no floor near the ledge height between the beam's max face and the ledge [D], got {gap:?}");
+        // [D] the canopy closure (level-0d-boarding): every column over the swept footprint
+        // reads a roof surface (the 18.6 canopy, or the 20.2 rooftop structures over it) with
+        // no hole between the gantry top and the roof — probe21's roof map, now asserted.
+        for (x, z) in [(137.0f32, -280.0), (137.0, -300.0), (155.0, -290.0), (175.0, -287.0), (181.0, -300.0), (168.0, -296.0)] {
+            let top = sim.world.segment_hit([x, 21.0, z], [x, 15.0, z]).map(|(f, _)| 21.0 - 6.0 * f);
+            assert!(top.is_some_and(|y| (17.5..=21.0).contains(&y)),
+                "the canopy must cover the track at ({x},{z}) [D probe21 roof map], got {top:?}");
+        }
+    }
+    // [D] the script + the detector sisters (level-0d-boarding): the mover script carries no
+    // player hand-off, and the riding shape is the aboard sensor (0xEA, out 103 = ch 0x67,
+    // mask 8 = player walk-in) at gantry-deck height.
+    {
+        let (handoffs, ents) = boarding_script_ops(&iso);
+        assert!(!handoffs, "the gantry script must carry no player hand-off [D 0x060009EF's ops; M Script_EventHandler 0x1d94c0 cases 4/6]");
+        let trig = ents.iter().find(|(h, _, _)| *h == 0x0200_0a81).expect("the riding 0x0200_0a81 [D stream 2]");
+        assert_eq!(trig.1, 0xea, "the rider is the 0xEA trigger kind [D stream 2]");
+        assert!(trig.2.len() >= 2 && trig.2[0] == 103 && trig.2[1] == 8,
+            "the rider's out event 103 (ch 0x67) + mask 8 = the player walk-in detector [D stream 2 params], got {:?}", trig.2);
+        let sim = w.scene.sim.as_ref().unwrap();
+        let t = sim.world.shape(0x0200_0a81).expect("the rider shape [D]");
+        let (mut lo, mut hi) = ([f32::MAX; 3], [f32::MIN; 3]);
+        for tri in t { for v in tri { for k in 0..3 { lo[k] = lo[k].min(v[k]); hi[k] = hi[k].max(v[k]); } } }
+        assert!(t.len() == 2 && (lo[1] - 2.95).abs() < 0.1 && (hi[1] - 2.95).abs() < 0.1
+            && (lo[0] + 2.44).abs() < 0.1 && (hi[0] - 2.44).abs() < 0.1
+            && (lo[2] + 16.8).abs() < 0.1 && (hi[2] - 16.8).abs() < 0.1,
+            "the rider is the flat detector plane at +2.95, x ±2.44, z ±16.8 [D shape 0x0200_0a81], got {} tris lo {lo:?} hi {hi:?}", t.len());
     }
     // The east leg plays out under Bond's feet [D the keys]: sample the origin to its east
     // extreme, then keep sampling to the westbound leg's start.
@@ -404,8 +449,9 @@ fn walk_arrival_to_the_c5_door() {
     // THE BOARDING STAND-IN (the one remaining pos write, [S] unverified): place Bond over the
     // WEST girder at the westbound leg's start — he settles onto the inner runway where
     // probe_the_ride_carry rode (probe_crane.rs: the same placement, the carry held it whole
-    // ride). The game's own boarding path needs the live check (the report's live check 1);
-    // the ride and the drop below are the game's rules.
+    // ride). The game's own boarding path is the report's live check 1 (the data closed every
+    // route the port's statics offer — see THE BOARDING QUESTION above); the ride and the drop
+    // below are the game's rules.
     let ox = w.scene.sim.as_ref().unwrap().drones.scripts.entity_matrix((0x0600_09ef, 1)).unwrap()[3][0];
     {
         let sim = w.scene.sim.as_mut().unwrap();
@@ -584,6 +630,37 @@ fn walk_arrival_to_the_c5_door() {
     assert_eq!(sim.drones.mission.states[12][1], 4, "objective 5 complete");
     assert_eq!(sim.drones.mission.states[12][2], 4, "objective 6 complete");
     eprintln!("[0d] the full mission walked + completed in {} ticks; stuck {}; falls {}", w.total_ticks, w.report.stuck_events.len(), w.report.falls.len());
+}
+
+/// [D] 0700000d.bin's script 0x060009EF, decoded: (any player hand-off event 4/6, the entity
+/// ops as (hash, type, params)). The sister data for the boarding question: the mover script's
+/// nine streams carry no Player_Disable/Player_Enable, and stream 2 spawns the riding 0xEA
+/// trigger 0x0200_0a81 with params [103, 8] — the game's own aboard detector.
+fn boarding_script_ops(iso: &str) -> (bool, Vec<(u32, u8, Vec<u32>)>) {
+    use nf_formats::iso9660::IsoImage;
+    use nf_formats::levelbin::LevelBin;
+    use nf_formats::nis::{Cmd, Nis};
+    let img = IsoImage::open(iso).expect("open iso");
+    let (entries, bin) = nf_formats::disc::files_bin_entries(&img).expect("FILES.BIN");
+    let fe = entries.iter().find(|e| e.name.eq_ignore_ascii_case("0700000d.bin")).expect("the level bin");
+    let data = img.read_bytes(bin.lba as u64 * 2048 + fe.offset as u64, fe.size as u64).expect("read");
+    let lb = LevelBin::parse(&data).expect("levelbin");
+    let mut handoffs = false;
+    let mut ents = Vec::new();
+    for se in lb.entries.iter().filter(|e| e.kind == 7) {
+        let Ok(n) = Nis::parse(se.hash(), lb.data(&data, se)) else { continue };
+        if n.hashcode != 0x0600_09ef { continue; }
+        for s in &n.streams {
+            for c in s.decode() {
+                match c {
+                    Cmd::Event { kind, .. } if kind == 4 || kind == 6 => handoffs = true,
+                    Cmd::Entity { hash, obj_type, params, .. } => ents.push((hash, obj_type, params)),
+                    _ => {}
+                }
+            }
+        }
+    }
+    (handoffs, ents)
 }
 
 /// Fire the held weapon at a static point through the real trigger path (the walker's aim loop;
