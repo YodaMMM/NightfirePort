@@ -9,7 +9,7 @@
 //! [M :619-624]), the shots 200 held ticks fire (one pull, refired on +0x40), the clip (+0x92),
 //! the reload ticks (the +0xA8 start script, else the +0xA4 script at 1.35× from frame 6 for
 //! +0x68 & 0x1000 [M :463-486]), the zoom max (+0x88) and the held-zoom ticks from 1× to it
-//! (×1.025 per tick [M 0x1a1a70:28-34]). Opt-in via `NF_ISO`.
+//! (×1.025 per tick [M 0x1a1a70:34-41]). Opt-in via `NF_ISO`.
 
 use nf_game::gun::{Gun, GunParams};
 
@@ -19,7 +19,7 @@ fn iso() -> Option<String> { std::env::var("NF_ISO").ok() }
 /// ids and their twins.
 const WEAPONS: &[u8] = &[
     0x01, 0x02, 0x03, 0x04, 0x05, 0x06, 0x07, 0x08, 0x09, 0x0a, 0x0b, 0x0c, 0x0d, 0x0e, 0x0f, 0x10, 0x11,
-    0x12, 0x13, 0x14, 0x15, 0x16, 0x17, 0x1a, 0x1b, 0x1c, 0x1d, 0x1e, 0x1f, 0x24, 0x25, 0x2a, 0x2b,
+    0x12, 0x13, 0x14, 0x15, 0x16, 0x17, 0x1a, 0x1b, 0x1c, 0x1d, 0x1e, 0x1f, 0x20, 0x22, 0x24, 0x25, 0x26, 0x28, 0x2a, 0x2b,
     0x2c, 0x2d, 0x2e, 0x2f, 0x30, 0x32, 0x33, 0x34, 0x35, 0x36, 0x37, 0x3a, 0x3b, 0x41, 0x42, 0x43, 0x44, 0x45, 0x46,
     0x4a, 0x4c, 0x4e, 0x4f, 0x50, 0x51, 0x54, 0x56, 0x57,
 ];
@@ -77,8 +77,12 @@ const PINNED: &[(u8, &[usize], &[usize], usize, u32, u32, u32, f32, u32)] = &[
     (0x1d, &[0, 30, 60, 90], &[0, 32, 64, 96], 7, 8, 66, 66, 1.0, 0),
     (0x1e, &[0], &[0, 122], 1, 5, 143, 143, 10.0, 94),
     (0x1f, &[0], &[0, 122], 1, 5, 143, 143, 10.0, 94),
+    (0x20, &[0], &[0, 122], 1, 5, 143, 143, 16.0, 113),
+    (0x22, &[0], &[0, 122], 1, 10, 143, 143, 16.0, 113),
     (0x24, &[0], &[0, 122], 1, 5, 143, 143, 10.0, 94),
     (0x25, &[0], &[0, 122], 1, 5, 143, 143, 10.0, 94),
+    (0x26, &[0], &[0, 122], 1, 5, 143, 143, 16.0, 113),
+    (0x28, &[0], &[0, 122], 1, 10, 143, 143, 16.0, 113),
     (0x2a, &[0], &[0, 62, 124, 186], 1, 6, 118, 118, 2.0, 29),
     (0x2b, &[0], &[0, 62, 124, 186], 1, 6, 118, 118, 2.0, 29),
     (0x2c, &[0], &[0, 62, 124, 186], 1, 4, 134, 134, 1.0, 0),
@@ -165,6 +169,24 @@ fn the_8000_records_wait_for_the_fire_script() {
     let gaps: Vec<usize> = auto.windows(2).map(|p| p[1] - p[0]).collect();
     eprintln!("auto 0x1d shots {auto:?} gaps {gaps:?}");
     assert!(gaps.iter().any(|&g| g < 35), "the 0x1d twin refires inside its fire script, gaps {gaps:?}");
+}
+
+/// The Delta Repeater 0x11 (+0x68 = 0x180c0: 0x8000 set; +0x40 = 26; fire script +0xB0 80 frames,
+/// the last round's +0xB4 30 [D 07000005]) [M Player_SetFiringAnim 0x1a3c70:25-33 + the state-9
+/// gate 0x1a5460:631-636]: a full clip's first shot holds the trigger for the 80-frame script.
+#[test]
+fn the_delta_repeater_waits_for_its_fire_script() {
+    let Some(iso) = iso() else { eprintln!("NF_ISO not set — skipping"); return };
+    let mut w = nf_view::load_with_carry_weapons(&iso, "07000005.bin", false, None, &[0x11]).expect("load 07000005");
+    for _ in 0..10 { w.sim.as_mut().unwrap().step_bond(Default::default(), false, false, false); }
+    arm_and_draw(&mut w, 0x11, 3);
+    let shots = tap_shots(&mut w, 120);
+    eprintln!("delta 0x11 shots {shots:?}");
+    assert!(shots.len() >= 2 && shots[1] - shots[0] >= 80, "the second bolt waits for the 80-frame script: {shots:?}");
+    // Sister: the bare record cadence (no view-state gate) is the +0x40 timer's 28.
+    let rec = w.sim.as_ref().unwrap().weapons.records[0x11];
+    let r = row(0x11, &rec, |_| Some(80));
+    assert_eq!(r.tapped[1] - r.tapped[0], 28);
 }
 
 #[test]

@@ -78,7 +78,9 @@ fn the_wheel_steps_the_zoom_between_the_weapon_min_and_max() {
     for _ in 0..40 { wheel(&mut w, 0); }
     let sim = w.sim.as_ref().unwrap();
     assert!((sim.zoom_target - 5.0).abs() < 1e-4, "the hold-ramp must not push past the notch, got {}", sim.zoom_target);
-    assert!(sim.zoom > 5.0 && sim.zoom < 6.0, "the zoom chases the stepped target down, got {}", sim.zoom);
+    // The idle axis eases the zoom down ×1/1.15 per tick and clamps onto the target [M Player_Zoom
+    // 0x1a1a70:21-26, :55-69] — 10 → 5 in 5 ticks, then it sits exactly on the notch.
+    assert_eq!(sim.zoom, 5.0, "the zoom settles on the stepped target");
 
     // More notches walk the range: down to 2.5, back up through 5 to the 10 clamp.
     wheel(&mut w, -1);

@@ -14701,10 +14701,10 @@ fn segment_hits_sphere(a: V3, b: V3, c: V3, r: f32) -> bool {
             d.weapons.records.get(weapon as usize).map_or(t.Autoaim_Range, |w| f32::from_le_bytes(w[0x1c..0x20].try_into().unwrap()))
         } else { t.Autoaim_Range };
         let mut found = None;
-        // weapon-handling [M Player_AutoAim 0x1a7c98:44-58]: the Q-Claw (0x50/0x51) scans ONLY the
+        // weapon-handling [M Player_AutoAim 0x1a7c98:63-78]: the Q-Claw (0x50/0x51) scans ONLY the
         // class-'Q' objects (the grapple points, `Grapple_Create` 0x198298) — never the drones —
         // with k forced to 1 [M Check_AutoAim 0x1a73f8:150-152] and the object position (`obj+0x30`
-        // for a class other than 2/3 [M :86-93]); the port's point is the placement plus its
+        // for a class other than 2/3 [M :113-120]); the port's point is the placement plus its
         // object's sphere centre [S — the centre offset, not obj+0x30]. Grapple points carry an
         // index past `GRAPPLE_AIM` in `aim_target` (the lock-on ×1.4 memory).
         const GRAPPLE_AIM: usize = 1 << 20;

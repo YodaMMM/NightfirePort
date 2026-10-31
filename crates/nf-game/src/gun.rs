@@ -335,18 +335,18 @@ pub fn fire_mode_switch(weapon: u8, twin: i8, mode_count: u8, mode: u8, has_ammo
 /// magnification the view divides its FOV by), `target` is `+0x8D4`, `max` is `+0x8D8` (the held
 /// record's `weapon_data+0x88`, written on the aim bit's rise [M Player_Weapon 0x1a24c8:176-182]).
 /// `axis` is the zoom action 6 (`Input_Actionf(slot, 6, 1)`), read only while the aim bit is set
-/// [M 0x1a1a70:17-19]; the pad's d-pad up gives −1 (zoom in), down +1 (out) [M psiInput_MapInputs
+/// [M 0x1a1a70:18-19]; the pad's d-pad up gives −1 (zoom in), down +1 (out) [M psiInput_MapInputs
 /// style tables: `dpad: (6, 0x1000 → −1, 0x4000 → +1)`].
 ///
 /// - Axis held: `f = 1 + 0.025` (`1/f` when the axis is positive); the target AND the current
 ///   magnification are scaled by `f` (the current one clamped at the target), then the target
-///   takes the current value [M :28-34, :49-62, :63-65] — a geometric 1.025×/tick ramp.
+///   takes the current value [M :34-41, :55-69, :70-71] — a geometric 1.025×/tick ramp.
 /// - Axis idle: the current magnification eases toward the target by `1 + 0.15` per tick
-///   (`1/1.15` from above), clamped at the target [M :21-26, :49-62]; the target is untouched.
-/// - The target is clamped to `[1, min(max, 50)]` every tick [M :37-47].
+///   (`1/1.15` from above), clamped at the target [M :21-26, :55-69]; the target is untouched.
+/// - The target is clamped to `[1, min(max, 50)]` every tick [M :44-54].
 ///
 /// Returns `Some(cur)` when the axis moved the zoom — the value the game stores as the base
-/// record's remembered zoom (`BLData+0x1B4 + base·0xC`) [M :63-67].
+/// record's remembered zoom (`BLData+0x1B4 + base·0xC`) [M :70-74].
 pub fn zoom_tick(cur: &mut f32, target: &mut f32, max: f32, axis: f32) -> Option<f32> {
     let f8;
     let f5;

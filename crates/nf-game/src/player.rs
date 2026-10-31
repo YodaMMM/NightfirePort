@@ -257,7 +257,7 @@ pub struct Input {
     /// Right mouse held: zoom the scope (`Player_Zoom` 0x1a1a70, mouse-first like the game's aim button).
     pub zoom: bool,
     /// The zoom action 6 as the analog `Player_Zoom` 0x1a1a70 reads it (`Input_Actionf(slot, 6, 1)`,
-    /// only while aiming [M 0x1a1a70:17-19]): negative zooms in, positive out — the pad's d-pad
+    /// only while aiming [M 0x1a1a70:18-19]): negative zooms in, positive out — the pad's d-pad
     /// up/down give −1/+1 [M the style tables' `dpad` lane for action 6]. 0 with `zoom` held means
     /// the mouse's hold-to-zoom-in (the window maps it to −1). Local view state, not net-encoded.
     pub zoom_axis: f32,

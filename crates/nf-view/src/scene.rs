@@ -584,7 +584,7 @@ pub struct Sim {
     pub zoom_target: f32,
     /// `BLData+0x1B4 + w·0xC`: the remembered zoom per base record — `sqrt(weapon_data[w]+0x88)` at
     /// level start [M Player_InitAmmoWeapons 0x1a17f8:51], rewritten whenever the zoom axis moves
-    /// [M Player_Zoom 0x1a1a70:63-67], restored as the target on the aim bit's rise
+    /// [M Player_Zoom 0x1a1a70:70-74], restored as the target on the aim bit's rise
     /// [M Player_Weapon 0x1a24c8:170-182]. Filled lazily from the record table.
     pub zoom_saved: Vec<f32>,
     /// The aim bit as the zoom block last saw it (the rise restores the remembered zoom, the fall
