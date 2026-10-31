@@ -29,3 +29,33 @@ Findings so far ([M] unless noted):
 Next: port EnvWind + the gust cycle + Env_GetWindVel, plumb cel lookup per body, live test the
 07000004 drift within the 2-4° live band, sister 07000001 stays still, update the 07000006
 wiring test (its zero-wind premise predates the wind port).
+
+## lamp-wind — 2026-10-31 (the port + the pins)
+
+Ported: `EnvWind` (Env_Create 0x17b968's wind half: strength=target=p3·0.1, phase −1, grow 1,
+dir = RotMatrix 0x1e2368's dir row, falloff 1/(the wind cel's pCelList record+0x1c radius)),
+`env_update_gust` (Env_Update 0x17bc88's per-cel step from the one per-frame `Rand_Rand(20000)`
+— no new draws), `env_get_wind_vel` (0x17c048). The room-cel build + the 0xDF→cel attach + the
+per-body cel pick live in `Rbodies::create` (nf-game, no view dependency); `tick_winds` runs at
+the env slot of the tick (before the object handler, the game's order); `tick_one` passes the
+body's buoyancy fields (cel+0x90 water surface, cel+0x54) and its wind. RB_Update's force block
+re-read as BUOYANCY (cel+0x90 = the water surface [M fix-ladder's verified parseentity_fixup_entity
+0x1d00c0 reading], the depth-proportional lift + Gas_Init bubbles) — inert for the Rot lamps; the
+lamp mover is the wind's at-point torque [M 0x1d7c78].
+
+Data [D the port's level parse]: 07000004 0xDF #5 (rain p3=6) and lamps #39/#40 share room cel #1;
+07000006 barrel #65 shares cel #29 with SNOW_gen #1 (p3=6); 07000001 0xDF #279 shares cel #0 with
+lamps #9-#12. Every 0xD8-bearing named level has a wind — the zero-wind sister is the target-0
+gate (0x17c048) pinned live + in unit tests.
+
+Tests: `lamp_wind_live.rs` (the drift through the live 2-4° band + the zero-wind bit-still sister);
+fixed per the decompile (their zero-wind premises predate the port): `rigid_body_wiring_live`
+(the 07000006 barrel drifts, bounded < 0.5°), `interactables_07000004_live` (both rest pins),
+`interactables_07000001_live` (the identity-rest sisters → the bounded-drift wind sisters, the
+bullet detector is a per-tick omega jump now), `rigid_body_draw_live` (the settle band + the
+replay's wind-phase caveats). Unit: the gust cycle, the wind formula, the create parse, the
+update order (18 rigid_body lib tests green).
+
+Finding: the port's wind torque at the p99 replay is ~2× the recording's (peak 52.3° vs live
+44.24°) — the amplitude gap needs the live checks in the report (the exact point-vector slots of
+0x1d7c78 from the disassembly + a fresh-boot tilt trace).
