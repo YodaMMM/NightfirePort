@@ -19,11 +19,12 @@
 //! channels 0x46-0x4a model the 0a exit's RamSave carry [M Player_RamSave 0x195670 — the full
 //! 256-byte switch_channels block rides the save]. The balcony→exec lift ride is the game's own
 //! route on real input (the boarding hop, the carry on the script-entity collision set [M
-//! 0x194188 → Control_InheritVelocity 0x133e88], the step-off) and the exec office goes through
+//! 0x194188 → Control_InheritVelocity 0x133e88], the step-off), the exec office goes through
 //! the burned keypad's door (the Laser watch 0x4E on Lock #178 → ch 0x2F → door #151 [M
-//! 0x1ae3d8 case 0; D #178/#151]) — the ONE kept movement stand-in is the waiting-room exit
-//! transit (the walked doorway gap the probe maps: door #0's E opens it, the open leaf's pose
-//! still blocks the passage at t 0.41 — the report's live check); the deck→parachute leg walks
+//! 0x1ae3d8 case 0; D #178/#151]), and the waiting-room exit transit (doors #3 and #0) is
+//! WALKED on the E-opened leaves — the pick fix [M Collide_PickObj 0x1eae80:105-110, the
+//! door's own obj+0x8C radius alone] removed the phantom contact whose anti-crush reversals
+//! stalled every swing mid-doorway (the old stand-in's cause); the deck→parachute leg walks
 //! for real (the arrival hard-asserted) and only the parachute's stance sweep remains (the
 //! helicopter body's volume shadows the walk-over — the report's live check), and the files-plate
 //! / parachute-stance placements are interaction measurement spots, not route transits.
@@ -195,13 +196,19 @@ fn walk_to_the_mission_end(mut w: &mut Walker, fresh: bool) {
             let y = w.scene.sim.as_ref().unwrap().bond.pos[1];
             eprintln!("[0b] the cab ride: boarded, bond y now {y:.2} (surface target 47.6+)");
             if y > 40.0 {
-                // The step-off is a steering loop toward the exec floor's exit point.
+                // The step-off: the cab's top docks flush with the exec floor (the ride's own
+                // poll reads feet 48.60 = the 47.5 surface + the 1.09 standing offset [D the
+                // ride's surface target 47.6+]), whose continuous band runs SOUTH of the shaft
+                // (z 22.6..27 is the shaft hole [D placement #232]; the nav lane's n41 (2.91,
+                // 20.91) sits on it). Steer SOUTH off the cab's south edge; break only when Bond
+                // GROUNDS south of the shaft on the exec-floor band — the old eastward steer
+                // walked him off into the x 5-7 pit / the balcony fall [D the probe's floor map].
                 let start = w.total_ticks;
-                while w.total_ticks - start < 240 {
+                while w.total_ticks - start < 300 {
                     let sim = w.scene.sim.as_ref().unwrap();
                     let p = sim.bond.pos;
-                    if p[0] > 2.2 && (44.0..52.0).contains(&p[1]) { break; }
-                    let desired = (8.0f32 - p[0]).atan2(24.8 - p[2]);
+                    if sim.bond.grounded && p[2] < 22.4 && (47.9..49.8).contains(&p[1]) { break; }
+                    let desired = (0.8f32 - p[0]).atan2(21.3 - p[2]);
                     let err = walker::wrap_pi(desired - sim.bond.yaw);
                     let input = nf_game::player::Input {
                         turn: err.clamp(-0.08, 0.08),
@@ -212,7 +219,7 @@ fn walk_to_the_mission_end(mut w: &mut Walker, fresh: bool) {
                 }
                 let p = w.scene.sim.as_ref().unwrap().bond.pos;
                 eprintln!("[0b] the step-off: bond ({:.2},{:.2},{:.2})", p[0], p[1], p[2]);
-                rode = p[0] > 2.2 && (44.0..52.0).contains(&p[1]);
+                rode = w.scene.sim.as_ref().unwrap().bond.grounded && p[2] < 22.4 && (47.9..49.8).contains(&p[1]);
             }
         }
         eprintln!("[0b] diag: post-poll disabled {} ch7b {} boarded->rode {}",
@@ -223,28 +230,47 @@ fn walk_to_the_mission_end(mut w: &mut Walker, fresh: bool) {
     // + the bit-exact RNG make the boarding deterministic: once green, always green.
     assert!(rode, "the paternoster cab ride must board and step off on real input [M 0x194188 → Control_InheritVelocity 0x133e88; D the cab keys y 11.0 → 48.44]");
     w.stop_on_exit = true;
-    w.walk_to(Wp::new(8.0, 46.8, 24.8).r(1.3), "the exec floor");
 
-    // The exec floor: the waiting room (the lift landing) has NO walker exit — the nav probe
-    // (probe_0b_execfloor_nav, --ignored) wedged or fell on every outbound line: the dome hole
-    // north (bond fell to y 15.01 at (7.9, 27.9)), the south recess (y 36.27 at (7.2, 21.7)),
-    // the z 16-17 room-wall band at x 8-14 (wedges at (8.44,16.54)/(11.47,18.20)/(13.04,16.44)),
-    // the boardroom furniture row x 4-6 z 20-22 [D the -2 probes], and the arrival spot sits in
-    // a recess (y 46.56 vs the 47.48 floor). The doors dump: the waiting room's door #3
-    // (13.71, 46.78, 19.44, ch_open 0, ch_lock 0) wedges the walker 2.5-4.3 short from every
-    // in-room start, and the east room's door #0 (13.82, 46.78, 7.09) — the E fires (state
-    // 0x2 → 0x4, the swing end pos01 0.0) but the doorway segment still blocks at t 0.41 (the
-    // leaf pose vs the passage — the report's live check). THE one documented stand-in: out of
-    // the waiting room onto the ring's east corridor. EVERY approach after it is a real walk
-    // (probe-proven: door0-area→ring n11 54 ticks, the ring legs, the n13/n14→terminal 112-327
-    // ticks, the terminal→lock E route 585 ticks, ring n26↔desk 24-47 ticks).
-    {
-        let sim = w.scene.sim.as_mut().unwrap();
-        sim.bond.pos = [13.0, 47.4, 7.0];
-        sim.bond.vel = [0.0; 3];
-    }
-    w.wait(10);
-    eprintln!("[0b] the waiting-room exit transit (the documented stand-in — the probe's wedge/fall map carries it)");
+    // The exec floor: the waiting room's walker exit is the two-door transit — the waiting
+    // room's door #3 (13.71, 46.78, 19.44, ch_open 0, ch_lock 0 [D]) into the east room, south
+    // down the room, and the east room's door #0 (13.82, 46.78, 7.09 [D]) onto the ring's east
+    // corridor. The lane is the game's own nav path 0 'Navigation' [D nav nodes n41 (2.91,
+    // 20.91) → n55 (9.18, 21.33) → n54 (12.21, 19.68) → n53 (14.13, 18.35) → n52 (15.85,
+    // 16.77) → n50 (17.10, 14.00) → n49 (17.03, 10.83) → n19 (16.23, 8.07) → n18 (14.50,
+    // 6.54) → n17 (13.18, 6.63) → n11 (10.21, 8.20)]. BOTH doors are disc swing doors (kind 0,
+    // 3-key symmetric anims: the closed pose at key 1, the open ends at keys 0/2 [D the 0x19
+    // keys]; the E-open runs `dir = sign((inv_closed·activator).z)·(+0x5C)` [M Door_Activate
+    // 0x135be0:136-146] with +0x5C = ±1 from `Mat_GetDir(pose_t0)·Mat_GetNorm(pose_mid) < 0`
+    // [M Door_SetupSwing 0x135440:65-80 + Mat_GetDir 0x1e3398 = row 2, Mat_GetNorm 0x1e33d8 =
+    // row 0] — the port's create derives the same sign). The transit WALKED (the old teleport
+    // stand-in is gone — the pick fix [M 0x1eae80:105-110, the door's own obj+0x8C radius
+    // alone] stopped Door_ReactToHit's anti-crush reversing the E-open swings, which is what
+    // wedged every earlier attempt): door #3 opens away (pos01 → 1.0, the leaf south-east),
+    // door #0 opens away (pos01 → 0.0, the leaf west); the crossings ride the nav lane, whose
+    // doorway rows (z 6.54-6.63 through #0, the #3 line crossing at (13.25, 18.96)) clear the
+    // swung leaves' thin in-plane edges [D the probe's open-leaf AABBs].
+    w.walk_to(Wp::new(2.91, 47.18, 20.91).r(1.0), "nav n41 (the waiting room's south lane)");
+    w.walk_to(Wp::new(9.18, 47.18, 21.33).r(1.0), "nav n55 (the waiting room)");
+    let d3 = w.scene.sim.as_ref().unwrap().drones.doors.list.iter()
+        .position(|d| (d.pos[0] - 13.71).abs() < 0.5 && (d.pos[2] - 19.44).abs() < 0.5)
+        .expect("the waiting-room door #3 [D]");
+    w.walk_to(Wp::new(12.21, 47.18, 19.68).r(0.8), "nav n54 (door #3's approach)");
+    w.use_door(d3, "the waiting-room door");
+    w.wait(45); // the swing finishes before the doorway walk (the auto-close is 360 ticks [M Door_Update])
+    w.walk_to(Wp::new(13.4, 47.18, 18.3).r(0.6), "through door #3's opening");
+    w.walk_to(Wp::new(14.2, 47.18, 17.8).r(0.8), "clearing the swung leaf south");
+    w.walk_to(Wp::new(15.85, 47.18, 16.77).r(1.0), "nav n52 (the east room)");
+    w.walk_to(Wp::new(17.10, 47.18, 14.00).r(1.0), "nav n50 (the east room south)");
+    w.walk_to(Wp::new(17.03, 47.18, 10.83).r(1.0), "nav n49");
+    w.walk_to(Wp::new(16.23, 47.18, 8.07).r(1.0), "nav n19");
+    let d0 = w.scene.sim.as_ref().unwrap().drones.doors.list.iter()
+        .position(|d| (d.pos[0] - 13.82).abs() < 0.5 && (d.pos[2] - 7.09).abs() < 0.5)
+        .expect("the east room's ring door #0 [D]");
+    w.walk_to(Wp::new(14.50, 47.18, 6.54).r(0.7), "nav n18 (door #0's east side)");
+    w.use_door(d0, "the ring corridor door");
+    w.wait(45);
+    w.walk_to(Wp::new(13.18, 47.18, 6.63).r(0.7), "nav n17 (through door #0)");
+    eprintln!("[0b] the waiting-room exit transit WALKED (both doors E-opened on the route)");
     // The ring's east corridor → the terminal room — real walks from here.
     w.walk_to(Wp::new(10.21, 47.18, 8.20).r(1.0), "ring n11");
     w.walk_to(Wp::new(6.54, 47.18, 7.03).r(1.0), "ring n12");

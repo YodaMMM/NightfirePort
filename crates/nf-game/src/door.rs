@@ -652,6 +652,14 @@ impl Doors {
         // `update` — matching the disassembly's call structure. (A-11b: removed the `react_to_hit` call that
         // was reversing CLOSING→OPENING when Bond stood near the hinge, preventing the close.)
         if self.list[i].state & 0x18 != 0 {
+            // NF_DOORTRACE=1 per-tick diagnostic (level-0b-waiting-room-doors): a moving door's
+            // (index, state, pos01, dir, speed, flags) each tick, so a stalled swing shows its
+            // last-advancing tick and the gate that stopped it.
+            if std::env::var_os("NF_DOORTRACE").is_some() {
+                let d = &self.list[i];
+                eprintln!("[doortrace] #{} f{} state {:#x} pos01 {:.4} dir {:.1} speed {:.4} flags {:#x}",
+                    i, frame, d.state, d.pos01, d.dir, d.speed, d.flags);
+            }
             self.interp(i, true, channels, frame, &mut sounds);
         }
         let d = &self.list[i];
@@ -748,13 +756,19 @@ impl Doors {
     /// at 0x1336f8:23) — so a reversal's busy marker clears in the same tick's calc, exactly as the
     /// game's next-frame `Doors_Calc` would, and the 2-tick timer (`ext+0x6C`) still gates it.
     ///
-    /// Pick [M `Collide_PickObj` 0x1eae80:152-168, mode 0x800 — the player's `BLData+0x7D4`, written by
-    /// `Player_Collision` 0x194df0's substate arms]: for every mover × every door (the ForcedList is
-    /// global — `Collide_Pick` 0x1eb320:369-375 — no cel filter), the LIVE world sphere (`obj+0x80`,
-    /// rebuilt by the moved pass after `Door_Interp` [M 0x1336f8; the port's `transform(matrix,
-    /// sph_centre)`]): `sqdist(centre, closest point on the pick capsule, t clamped to [0,1]) <
-    /// (1.5·r_door + r_pick)²`. On hit, the contact forwards to the door's `obj+0xD0` (+0x58 = the
-    /// hitter) [M `Collide_Update` 0x1ea398:160-233]. Returns the `Door_SetState` sounds.
+    /// Pick [M `Collide_PickObj` 0x1eae80:100-110 — the test is the door's own `obj+0x8C` radius
+    /// ALONE: the sphere centre+radius `obj+0x80..0x8c` are copied onto the hittest, the closest
+    /// point on the A..B segment is taken (`vecutil_calculate_closest_point_on_line`), and the pick
+    /// fires only while `SqDist3D(centre, closest) < r_door²` (`r_door² <= d²` returns). No 1.5
+    /// inflation and no pick-radius term — the old `1.5·r_door + r_pick` made every E-activator a
+    /// permanent contact, so `Door_ReactToHit`'s anti-crush (0x135980:85-97) reversed the swing
+    /// every ~3 ticks and the leaf never cleared the doorway (0700000b doors #3/#0, the walkreal
+    /// stand-in's cause). Mode 0x800 = the player's `BLData+0x7D4`, written by `Player_Collision`
+    /// 0x194df0's substate arms; for every mover × every door (the ForcedList is global —
+    /// `Collide_Pick` 0x1eb320:369-375 — no cel filter), the LIVE world sphere (`obj+0x80`, rebuilt
+    /// by the moved pass after `Door_Interp` [M 0x1336f8; the port's `transform(matrix,
+    /// sph_centre)`]). On hit, the contact forwards to the door's `obj+0xD0` (+0x58 = the hitter)
+    /// [M `Collide_Update` 0x1ea398:160-233]. Returns the `Door_SetState` sounds.
     pub fn collide_step(&mut self, movers: &[DoorMover], channels: &mut Channels, frame: u32) -> Vec<SoundEvent> {
         let mut sounds = Vec::new();
         if self.contacts.len() != self.list.len() { self.contacts.resize_with(self.list.len(), Vec::new); }
@@ -763,7 +777,7 @@ impl Doors {
             let ab = [m.b[0] - m.a[0], m.b[1] - m.a[1], m.b[2] - m.a[2]];
             for i in 0..self.list.len() {
                 let c = transform(&self.list[i].matrix, self.list[i].sph_centre);
-                let r = self.list[i].sph.1 * 1.5 + m.radius;
+                let r = self.list[i].sph.1;   // obj+0x8C alone [M 0x1eae80:105-110]
                 let ab2 = ab[0] * ab[0] + ab[1] * ab[1] + ab[2] * ab[2];
                 let t = if ab2 > 0.0 {
                     (((c[0] - m.a[0]) * ab[0] + (c[1] - m.a[1]) * ab[1] + (c[2] - m.a[2]) * ab[2]) / ab2).clamp(0.0, 1.0)
