@@ -6887,6 +6887,23 @@ pub fn run() -> Result<()> {
             let aim0 = (sim.bond.yaw, sim.bond.pitch);
             for t in 1..=time as u32 {
                 if kill_at == Some(t) { let (h, r) = (&mut sim.drones.health, &mut sim.drones.rng); h.pain_generic(r, 500.0, 1, 0x0700_0005, 0); }
+                // Render aid (door colours after a kill): `NF_GUARD_DOWN_AT=t` knocks the nearest live
+                // guard out on tick t through the knockout state's ENTER (0x172a30), which drops his
+                // gun as a new pickup (`DroneWeap_DropWeapon` 0x17a2a0 [M 0x172ac0]) — the state a
+                // kill leaves for the palette, without aiming a headless shot.
+                if std::env::var("NF_GUARD_DOWN_AT").ok().and_then(|v| v.parse::<u32>().ok()) == Some(t) {
+                    let bp = sim.bond.pos;
+                    let near = sim.drones.list.iter().enumerate()
+                        .filter(|(_, d)| d.present && d.enabled && !d.corpse && d.health > 0.0 && d.weapon > 0)
+                        .min_by(|(_, a), (_, b)| {
+                            let f = |p: [f32; 3]| (p[0] - bp[0]).powi(2) + (p[1] - bp[1]).powi(2) + (p[2] - bp[2]).powi(2);
+                            f(a.pos).total_cmp(&f(b.pos))
+                        }).map(|(i, _)| i);
+                    if let Some(i) = near {
+                        eprintln!("[guard-down] drone {i} at {:?}", sim.drones.list[i].pos);
+                        sim.drones.list[i].set_state(nf_game::drone::state::KNOCKED_OUT_ANIM);
+                    }
+                }
                 // Render aid (copter-script-draw): `NF_CH_AT=t:ch` sets switch channel `ch` on tick t
                 // (the headless counterpart of the dev `--set-channel`).
                 if let Some((ct, cc)) = std::env::var("NF_CH_AT").ok().and_then(|v| v.split_once(':').and_then(|(a, b)| Some((a.parse::<u32>().ok()?, b.parse::<u32>().ok()?)))) {
