@@ -25,3 +25,7 @@ claimed-by: sandbox3 at 2026-10-31T14:12Z
 ## Report (done, 2026-10-31T17:27Z)
 
 Closed by the driver: the report is on `s/level-14-hall-walk-in` (docs/reports/level-14-hall-walk-in.md); the worker didn't run finish.sh.
+
+---
+## Report from the worker (done, 2026-10-31T17:31Z)
+
