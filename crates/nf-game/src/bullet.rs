@@ -304,6 +304,9 @@ impl PlayerHealth {
         let absorbed = (d * armour_frac).min(self.armour);
         self.armour -= absorbed;
         self.health = (self.health - (d - absorbed)).max(0.0);
+        // `if (fVar6 < 1.0) fVar6 = 0.0` before `Player_SetHealth` [M 0x1902c8:131-134]: a hit that
+        // leaves less than one point kills.
+        if self.health < 1.0 { self.health = 0.0; }
         let grunt = rng.rand(4) == 0; // Rand_Rand(4) [M 0x1902c8:111]
         self.flash = (self.flash + (d * 21.333).min(128.0)).min(255.0);
         grunt
