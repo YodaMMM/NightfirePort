@@ -1,6 +1,6 @@
 //! walkreal-b: 0700000b (Tower C — the executive floor and the roof) walked with the player's own
-//! movement — no teleports past a blocker, no channel or state pokes beyond the two documented
-//! disc-side open items. The mission's objective records [L ee_snapshot 0x2a3f78/0x2a3fc0/0x2a4008
+//! movement — no teleports past a blocker; the only channel pokes left are the warm walk's
+//! carried-channels model (the RamSave ch 0x46-0x4a block [M 0x195670]). The mission's objective records [L ee_snapshot 0x2a3f78/0x2a3fc0/0x2a4008
 //! + M Mission_MonitorObjectives 0x1827d8]: mission 07000009's monitored AND spans 11 records —
 //! obj 1 (label 0x04000016) completes on the INVERTED alarm channel ch 0x61 (flags word @+0x10 =
 //! 2), objs 2-5 (0x04000017-1a) on the carried ch 0x46-0x49, and THIS level's six:
@@ -10,7 +10,7 @@
 //! | 6   | 0x0400001b | 0x4B  | REAL: the spawn TOUCH_ONCE plates #165/#247/#284+#176 [D trig dump] |
 //! | 7   | 0x0400001c | 0x4C  | REAL: the Q-Worm gadget shot into SCOMP_QWORM_C #297 [M PCQWorm_Update 0x1aee20]; the boot loadout owns weapon 0x58 [D weapon-matrix 0700000b load=1] |
 //! | 8   | 0x0400001d | 0x4D  | REAL: the walked terminal-room plate #163 [D] |
-//! | 9   | 0x0400001e | 0x4E  | OR mux #295 = OR(ch 0x08 ← OUT #294 mirror of ch 0x54, ch 0x06) [D]; the disc writer of ch 0x54/0x06 is the level's OPEN item (swept: triggers, all 20 level scripts, 3 pack scripts, copter scripts, every placement param [D]) — the mux's ch 0x08 input is driven, exactly as the level doc's walkthrough does |
+//! | 9   | 0x0400001e | 0x4E  | REAL on BOTH walks: the terminal script 06000035 stream 8 spawns at its tick 0x1e5 the type-0xEA TouchOnce (hash 0x2000ab5, params [6, 4, ..] = out ch 6, mask 4 = use [D nis dump; M Script_CreateEntity 0x1d8968 case 0xEA → Trigger_TouchOnce]) — the level's ONLY ch-0x06 writer [D: the trigger census (60 rows) has no out 0x6, no level/pack script Event-0xD writes 6, no constant switch_channels[6] store in the decompile]; E-firing it → ch 0x06 → OR #295 → ch 0x4E. The OR's other arm (OUT #294 mirrors ch 0x54 into ch 0x08) is writer-less on 0b, both packs and 0a [D the same sweeps] — the old warm-walk ch 0x08 poke modelled a writer that does not exist and is deleted |
 //! | 10  | 0x040001f  | 0x59  | REAL chain: ch 0x4F = AND #299(0x4C, 0x4E) [D] → E-plate #166 (mask 4 = use) → ch 0x35 → SEQ #252(0x36, 0x35) → ch 0x34 → `Trigger_Calc` 0x1b1900's per-level copy → ch 0x2D → SP wedge #177 (060004FA) plays [M 0x1dbda8 gate law] → stream 13 @0x991 writes ch 0x59 |
 //! | 11  | 0x0400020  | 0x5A  | REAL: the parachute pickup touch (ch 0x3F) + the roof-outside volume (ch 0x40) → SEQ #281 → ch 0x41 → OUT #304 → ch 0x5A + ch 100 [D] |
 //!
@@ -74,15 +74,11 @@ fn load_fresh() -> Walker {
 }
 
 /// The shared walkthrough — both walks reuse the same legs: the spawn plates → the arrival
-/// cut-scene → the cab ride (or the documented stand-in) → the exec floor → the waiting-room
-/// exit transit (the one kept stand-in) → the ring → the terminal → the lock's walked E →
-/// the Q-Worm install → the roof gate → the roof cut-scene → the parachute → the jump →
-/// the mission latch. `fresh` selects objective 9's source: the warm walk drives the OR mux's
-/// ch 0x08 input (the disc's ch 0x54/0x06 writer is the level's one open channel chain); the
-/// fresh walk takes the REAL writer — the terminal script 06000035 stream 8 spawns at its tick
-/// 0x1e5 the type-0xEA TouchOnce (hash 0x2000ab5, params [6, 4, ..] = out ch 6, mask 4 = use
-/// [D nis dump; M Script_CreateEntity 0x1d8968 case 0xEA → Trigger_TouchOnce]) — and E-fires
-/// it: ch 0x06 → OR #295 → ch 0x4E.
+/// cut-scene → the cab ride → the exec floor → the waiting-room exit transit (the one kept
+/// stand-in) → the ring → the terminal → the lock's walked E → the Q-Worm install → the files
+/// (objective 9, the REAL writer on both walks) → the roof gate → the roof cut-scene → the
+/// parachute → the jump → the mission latch. `fresh` selects only the mission-latch wording
+/// (a fresh boot's AND cannot fold — the end rides OUT #304's own ch 100 write).
 fn walk_to_the_mission_end(mut w: &mut Walker, fresh: bool) {
     // The spawn plates fire under Bond (objective 6 + the arrival cut-scene arming); the
     // cut-scene's tail re-places Bond (event 6) — wait it out before any route work.
@@ -409,28 +405,59 @@ fn walk_to_the_mission_end(mut w: &mut Walker, fresh: bool) {
     assert!(installed, "the Q-Worm C install never landed [M 0x1aee20]");
     assert!(w.scene.sim.as_ref().unwrap().drones.channels.on(0x4c), "ch 0x4C (objective 7) [M 0x1aee20]");
 
-    // The files (objective 9). REAL on the fresh walk: the terminal script 06000035 stream 8
-    // spawns at its tick 0x1e5 the type-0xEA TouchOnce (hash 0x2000ab5, params [6, 4, ..] =
-    // out ch 6, mask 4 = use [D nis dump; M Script_CreateEntity 0x1d8968 case 0xEA →
-    // Trigger_TouchOnce]; the port's per-tick script-trigger rebuild lives at drone.rs's
-    // control-list head) — walk to it and hold the E: ch 0x06 → OR #295 → ch 0x4E. The warm
-    // walk keeps the documented ch 0x08 drive (the disc's ch 0x54/0x06 writer: open item).
-    if fresh {
+    // The files (objective 9) — the REAL writer on BOTH walks: the terminal script 06000035
+    // stream 8 spawns at its tick 0x1e5 the type-0xEA TouchOnce (hash 0x2000ab5, params
+    // [6, 4, ..] = out ch 6, mask 4 = use [D nis dump; M Script_CreateEntity 0x1d8968 case 0xEA
+    // → Trigger_TouchOnce]; the port's per-tick script-trigger rebuild lives at drone.rs's
+    // control-list head). The writer census [D]: the trigger dump (60 rows) has NO out 0x6, no
+    // level or pack script Event-0xD writes ch 6 (0700000b.bin + 0780000b/0790000b), 0a carries
+    // none, and the decompile has no constant switch_channels[6]/[0x54] store — the spawned
+    // plate is the level's ONLY ch-0x06 writer, and the warm route walks the same rooms, so
+    // BOTH walks E-fire it: ch 0x06 → OR #295 → ch 0x4E. (The OR's other arm: OUT #294 mirrors
+    // ch 0x54 into ch 0x08, but ch 0x54 has NO writer anywhere in this level's data [D the same
+    // sweeps] — the old warm-walk ch 0x08 poke modelled a writer that does not exist; deleted.)
+    // The route back from the desk: the proven ring legs n26 → n25 (the doorway) → n22 → n21 →
+    // n20 → n16 (the n24 side-loop is skipped: the direct n25→n24 line crosses the wall corner
+    // at x ≈ −19.6 [D the run dump: cel 7 at 27 %]), then the terminal lane in reverse
+    // n15 → n14, then the terminal room and the dome floor south to the plate. The dome's laser
+    // beams #270-277 are TOUCH plates out ch 0x0D (locked on ch 0x3B — no writer in the census,
+    // so they stay armed): crossing raises ch 0x0D → OR #290 → ch 0x0E, which nothing
+    // objective-bearing reads [D the census]; the beams are triggers, not collision.
+    {
+        for (label, wp) in [
+            ("files n26→n25 (the doorway)", Wp::new(-22.18, 47.18, 16.58).r(1.1)),
+            ("files n25→n22 (the keypad corner)", Wp::new(-21.14, 47.18, 15.75).r(1.0)),
+            ("files n22→n21 (the corridor)", Wp::new(-15.83, 47.18, 15.75).r(1.0)),
+            ("files n20", Wp::new(-14.30, 47.18, 15.79).r(1.0)),
+            ("files n16", Wp::new(-13.67, 47.18, 6.40).r(1.0)),
+            ("files n15", Wp::new(-1.33, 47.18, 6.82).r(1.0)),
+            ("files n14", Wp::new(-1.45, 47.18, 3.74).r(1.0)),
+        ] {
+            w.walk_to(wp, label);
+        }
         let spot = w.scene.sim.as_ref().unwrap().drones.triggers.iter()
             .find(|t| t.script.is_some() && t.out == 6 && !t.gone)
             .map(|t| (t.centre(), t.lo, t.hi));
         let mut fired = false;
         if let Some((c, lo, hi)) = spot {
-            eprintln!("[0b-fresh] the spawned files use-plate at ({:.2},{:.2},{:.2}) box ({:.2},{:.2},{:.2})..({:.2},{:.2},{:.2})",
+            eprintln!("[0b] the spawned files use-plate at ({:.2},{:.2},{:.2}) box ({:.2},{:.2},{:.2})..({:.2},{:.2},{:.2})",
                 c[0], c[1], c[2], lo[0], lo[1], lo[2], hi[0], hi[1], hi[2]);
-            let _ = w.try_walk_to(Wp::new(c[0], lo[1] - 0.4, c[2]).r(1.4), "the spawned files use-plate");
-            // Stances around the plate (the box may sit at console height); the use held each stance.
-            // KEPT test-setup placement (not a route transit): the walked approach already
-            // arrived at the spawned use-plate (try_walk_to above); these stances enumerate
-            // interaction positions AROUND the plate for the E hold (the plate's box may sit at
-            // console height — the y clamp keeps Bond in the touch band), so the subject is the
-            // use-plate's channel law, not movement. The route (the walked ring to the room) is
-            // asserted by the walked legs above.
+            let room = w.try_walk_to(Wp::new(-1.0, 47.5, -5.5).r(1.2), "files the terminal room (from n14)");
+            let walked = w.try_walk_to(Wp::new(c[0], lo[1] - 0.4, c[2]).r(1.4), "the spawned files use-plate");
+            eprintln!("[0b] the files approach: terminal room {} plate walked {}", room, walked);
+            // THE SISTER: objective 9 is still open at the writer — ch 0x06 and the OR's output
+            // ch 0x4E are OFF before the E fires. The plate is mask 4 = use, so the touch path
+            // cannot fire it (mask & 8 == 0 → the Trigger_Hit fallback is false [M 0x1b1fc8:161-163])
+            // and no other writer exists [D the census above].
+            {
+                let sim = w.scene.sim.as_ref().unwrap();
+                assert!(!sim.drones.channels.on(6) && !sim.drones.channels.on(0x4e),
+                    "objective 9 must be open before the files writer fires [D the census; M 0x1b1fc8 fallback]");
+            }
+            // The E hold at the plate. KEPT test-setup placement (not a route transit): the
+            // walked approach above is the route; these stances enumerate interaction positions
+            // AROUND the plate for the E hold (the box sits at console height — the y clamp keeps
+            // Bond in the use band), so the subject is the use-plate's channel law, not movement.
             'stances: for d in [[0.0f32, 0.0, 0.0], [0.5, 0.0, 0.0], [-0.5, 0.0, 0.0], [0.0, 0.0, 0.5], [0.0, 0.0, -0.5], [0.0, 0.6, 0.0]] {
                 {
                     let sim = w.scene.sim.as_mut().unwrap();
@@ -444,47 +471,27 @@ fn walk_to_the_mission_end(mut w: &mut Walker, fresh: bool) {
             }
         }
         assert!(fired, "the spawned files use-plate (06000035 s8 @0x1e5, out ch 6, mask 4) never raised ch 6 [D; M 0x1d8968 0xEA arm]");
-    } else {
-        eprintln!("[0b] the files' ch 0x08 input driven (the disc's ch 0x54/0x06 writer: open item)");
-        w.scene.sim.as_mut().unwrap().drones.set_channel(0x08);
-        w.wait(6);
     }
     w.wait(6);
     assert!(w.scene.sim.as_ref().unwrap().drones.channels.on(0x4e), "OR #295 → ch 0x4E (objective 9) [D #295]");
     assert!(w.scene.sim.as_ref().unwrap().drones.channels.on(0x4f), "AND #299(0x4C, 0x4E) reveals objective 10 [D #299]");
     assert!(w.scene.sim.as_ref().unwrap().drones.channels.on(0x36), "AND #303(0x4F) → ch 0x36 [D #303]");
 
-    // THE ROOF GATE — the REAL chain, no drive: walk BACK from the desk through the burned
-    // keypad's doorway (the door auto-closes after 360 ticks [M Door_Update], so the walker's
-    // stuck reaction E's it open again) and along the ring's proven legs to E-plate #166
-    // (mask 4 = use, box [-14.82, 46.78, 5.39]-[-13.75, 48.96, 7.58] [D]) → ch 0x35 →
+    // THE ROOF GATE — the REAL chain, no drive: walk BACK from the files plate (by the
+    // terminal) north to the terminal room, then the proven terminal lane n14 → n15 → n16 to
+    // E-plate #166 (mask 4 = use, box [-14.82, 46.78, 5.39]-[-13.75, 48.96, 7.58] [D]) → ch 0x35 →
     // SEQ #252(0x36, 0x35) → ch 0x34 → Trigger_Calc 0x1b1900's 0700000b copy → ch 0x2D →
     // the roof cut-scene SP #177.
     let mut ch35_real = false;
     {
-        // Two walked returns: the warm walk ends at the desk (the office side), the fresh walk
-        // at the spawned files' plate by the terminal. From the desk: n26 → the doorway n25 →
-        // the corridor n22 → n21 → n20 → n16 — the n24 side-loop is skipped (the direct n25→n24
-        // line crosses the wall corner at x ≈ −19.6 the ring's corridor z 15.8 lane threads
-        // [D the run dump: cel 7 at 27 %]). From the terminal: the proven n14 → n15 → n16 lane.
-        let p0 = w.scene.sim.as_ref().unwrap().bond.pos;
-        let from_desk = dxz_w(p0, [pc[0] + 0.6, pc[1], pc[2] + 0.9]) < 4.0;
-        let ret: Vec<(&str, Wp)> = if from_desk {
-            vec![
-                ("return n26→n25 (the doorway)", Wp::new(-22.18, 47.18, 16.58).r(1.1)),
-                ("return n25→n22 (the keypad corner)", Wp::new(-21.14, 47.18, 15.75).r(1.0)),
-                ("return n22→n21 (the corridor)", Wp::new(-15.83, 47.18, 15.75).r(1.0)),
-                ("return n20", Wp::new(-14.30, 47.18, 15.79).r(1.0)),
-                ("return n16", Wp::new(-13.67, 47.18, 6.40).r(1.0)),
-            ]
-        } else {
-            vec![
-                ("return n14", Wp::new(-1.45, 47.18, 3.74).r(1.0)),
-                ("return n15", Wp::new(-1.33, 47.18, 6.82).r(1.0)),
-                ("return n16", Wp::new(-13.67, 47.18, 6.40).r(1.0)),
-            ]
-        };
-        for (label, wp) in ret {
+        // Both walks end the files section at the spawned plate (by the terminal), so the
+        // return is ONE lane: the dome walk north, then the proven n14 → n15 → n16 legs.
+        let _ = w.try_walk_to(Wp::new(-1.0, 47.5, -5.5).r(1.2), "return the terminal room (from the dome)");
+        for (label, wp) in [
+            ("return n14", Wp::new(-1.45, 47.18, 3.74).r(1.0)),
+            ("return n15", Wp::new(-1.33, 47.18, 6.82).r(1.0)),
+            ("return n16", Wp::new(-13.67, 47.18, 6.40).r(1.0)),
+        ] {
             w.walk_to(wp, label);
         }
         w.walk_to(Wp::new(-14.3, 47.4, 6.5).r(1.0), "E-plate #166 side (walked)");
@@ -506,8 +513,13 @@ fn walk_to_the_mission_end(mut w: &mut Walker, fresh: bool) {
     // THE LIFT RIDE UP = the roof cut-scene (SP wedge #177 → script 060004FA, 2450 ticks). The
     // game's real ride: event 4 PlayerDisable at its start, the camera, the lift-doors entity
     // (2000668), then event 6 at tick 0x98f re-places Bond on the helipad deck (key 448:
-    // [−14.71, 58.00, −2.06] [D pack 0790000b]) — INSIDE lift_stop_trigger #245's volume
-    // (x −18.9..−9.1, y 56.8..63.8, z −1.9..2.2 [D trig dump]) → ch 0x75. Its tail writes
+    // [−14.71, 58.00, −2.06] [D pack 0790000b]). The deck key is OUTSIDE lift_stop_trigger
+    // #245's volume — the trigger's own box is z −1.88..2.15 [D trig dump] and the key's z
+    // −2.06 sits 0.18 south of its z face (the port's parsed 12-tri glist matches the box
+    // bounds exactly, and the toucher at the key misses the mesh while z −1.5 inside touches
+    // it [probe on this tree]) — so the old "INSIDE #245's volume → ch 0x75" reading was
+    // wrong and ch 0x75 does not fire at the re-place; the trigger is the shaft-top stop the
+    // player crosses on a LIFT ride, not at the cut-scene's deck placement. Its tail writes
     // ch 0x2A (the helicopter's gate) at 0x990 and ch 0x57 + ch 0x59 (objective 10) at 0x991
     // [D streams 6/13/14]. Everything after the gate is the real disc script.
     w.wait(2900);
@@ -533,10 +545,13 @@ fn walk_to_the_mission_end(mut w: &mut Walker, fresh: bool) {
         assert_eq!(c.out, 0x66, "rec+0x72 = param 7 = ch 0x66 [D #328 p7]");
         assert!(!sim.drones.channels.on(0x66),
             "the flight (state {}) never writes the out channel — only the death tail (hp < damage → state 6 on 0b) and cases 4/5/6 do [M 0x17dbb8:244-275, :355-370]", c.state);
-        // Observation, not a pin: the deck point sits inside #245's volume, but the port's touch
-        // did not raise ch 0x75 in this window in the walkthrough run (the focused test shows the
-        // re-place itself works). Follow-up item in the report.
-        eprintln!("[0b] ch 0x75 after the re-place: {} (lift_stop_trigger #245)", sim.drones.channels.on(0x75));
+        // Observation, not a pin: ch 0x75 stays off here — the deck key [−14.71, 58.00, −2.06]
+        // [D pack 0790000b] is OUTSIDE #245's box (z −1.88..2.15 [D trig dump]; the port's
+        // parsed glist matches the box bounds and misses the key by 0.18 in z, probe-verified
+        // on this tree). Whether the DISC raises ch 0x75 for a player who walks from the deck
+        // key into the shaft-top volume is a live check (the report's); the walkthrough does
+        // not need it (the cut-scene already placed Bond on the roof).
+        eprintln!("[0b] ch 0x75 after the re-place: {} (the deck key is outside #245's box [D])", sim.drones.channels.on(0x75));
         let p = sim.bond.pos;
         assert!((-20.0..=-8.0).contains(&p[0]) && (54.0..62.0).contains(&p[1]) && (-8.0..4.0).contains(&p[2]),
             "the event-6 re-place parks Bond at the deck key [−14.71, 58.00, −2.06], got {p:?}");
