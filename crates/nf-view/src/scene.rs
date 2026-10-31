@@ -10233,6 +10233,11 @@ pub fn build(level: &Level, cels_only: bool, skeletons: &HashMap<u8, Skeleton>, 
                 return self.dynobj_matrices.get(di).copied();
             }
             let sn = s.drones.sensors.list.get(c / 3)?;
+            // The camera a monitor console is showing is not drawn: `Monitor_Update` 0x1afcc8:156
+            // writes SENSOR+0x60 = 1 every viewed tick and `Sensor_Update` 0x1af618:57-70 turns
+            // that into obj+0xF0 |= 0x10 on the body, the lens (+0x4C) and the mount (+0x50) — the
+            // no-draw bit — so the picture is not taken from inside the camera's own mesh.
+            if s.sec_cam() == Some(c / 3) { return None; }
             return match c % 3 {
                 0 => Some(sn.matrix),
                 1 => Some(sn.mount_matrix()),

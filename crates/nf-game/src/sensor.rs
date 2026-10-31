@@ -19,9 +19,8 @@
 //!
 //! Not ported (all visual/audio, none of it sim-visible): the lens (param 0) and mount (param 7)
 //! gfx proxy objects and their `hashtable_set_object_to_entity_gfx` meshes, the destroyed-glist
-//! swap (`obj+0xD8`), the draw-flag bits (`obj+0xF0/0xFA`), the monitor-view hide latch
-//! (`SENSOR+0x60`, written by `Monitor_Update` 0x1afcc8 — the monitor console type 0x30 is
-//! unported), and every sound (the 0x4AA hum, the 0x4DD servo, the 0x4A9 beeps — `Sound_Play3D`
+//! swap (`obj+0xD8`), the draw-flag bits (`obj+0xF0/0xFA`; the monitor-view hide latch
+//! `SENSOR+0x60` is applied by nf-view from `Sim::sec_cam`, crate::monitor), and every sound (the 0x4AA hum, the 0x4DD servo, the 0x4A9 beeps — `Sound_Play3D`
 //! enters no RNG draw but nothing in the sim consumes them; ss.rs skips the same way).
 // draw hand-off: the lens proxy (param 0, 0x2000360-class) — the SetBeam sight line stretched to
 // its hit length (lens obj+0xE8) — is still renderer work; the camera body and the mount (param 7)
@@ -171,7 +170,7 @@ pub struct Sensor {
     pub lens: u32,
     /// param 7 — the mount gfx hash (visual).
     pub mount: u32,
-    /// param 8 u16 — the monitor-view channel (`Monitor_Update`'s write; unported).
+    /// param 8 u16 — the monitor-view channel (`Monitor_Update`'s write, crate::monitor).
     pub monitor_ch: u16,
     /// `obj+0xF4` — the state: 0 sweep, 1 tracking, 2 returning, 3 disabled.
     pub state: u16,
@@ -183,7 +182,10 @@ pub struct Sensor {
     pub seen: i16,
     /// The last detection result (for tests; not a game field).
     pub last_hit: bool,
-    /// `SENSOR+0x60` — set while a monitor views this sensor (the unhide) [M 0x1afcc8].
+    /// `SENSOR+0x60` — the monitor-view hide latch: `Monitor_Update` 0x1afcc8:156 writes 1 every
+    /// viewed tick, and `Sensor_Update` 0x1af618:57-70 answers 1 with the no-draw bit (obj+0xF0
+    /// |= 0x10) on the body, lens and mount, then 2, and 2 by clearing it again (:75-90) — the
+    /// camera is hidden while viewed (nf-view's sensor slots read `Sim::sec_cam`).
     pub unhidden: bool,
     /// The lens proxy's obj+0xE8 — the beam stretch [M]. `Sensor_Create` 0x1af010:103 seeds it
     /// with the range; `Sensor_SetBeam` 0x1af398 rewrites it every tick: range by default (:72),

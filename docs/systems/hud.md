@@ -135,8 +135,10 @@ the mission banner's fail label has no blink.
   0x2000 keeps the 4-way outline (0x4000), 0x4000 → a (−1, −1) highlight (0x2000). The port had drifted to
   1.5 px (`hud::text_shadow_offset`). The shadow's alpha is its own: the status panes' fades rewrite only
   +0x10, and the flash branch zeroes +0x14 explicitly [0x19c310 case 3] — so during a fade the game's
-  shadow stays at 0xff while the text fades. The port still fades the shadow with its text (not changed:
-  needs a PCSX2 frame of a fading message to confirm the look).
+  shadow stays at 0xff while the text fades, and the text path of `View_DrawSprites` (0x1e5290:166-182)
+  has no alpha test, so the shadow copy draws even at text alpha 0. The port's status messages
+  (pickup, INFO, MP INFO, objective body, mission rows) draw through `Hud::text_fading` with the
+  opaque shadow (hud-2).
 - Damage glow alpha `BL+0x968` is a byte: `(char)(int)(old + min(d·21.333334, 128))`, cap 255
   [Player_HandlePain 0x1902c8:126-130] (`PlayerHealth::pain_glow`).
 - Mounted gun (substate 0xc): the ammo pane swaps in the imp's heat — kind 0x1f, max 100, value
@@ -149,8 +151,39 @@ the mission banner's fail label has no blink.
   once-per-level hints 0x1000216 (Micro-Camera 0x54) / 0x10002dc (Remote Mine 0x37) with the view model
   idle [Player_WeaponFiring 0x1a5460:223-232, :385-390; latches cleared by Player_InitWeapon
   0x1a7ef8:124-125].
-- Health pane hide set: panes 9, 10, 11, 16, 17, 18 enabled → sprites 0..15 hidden [0x19b9c8:127-138]
-  (the port covers 9, 11, 17; 10 car / 16 sec-cam / 18 have no port pane yet).
+- INFO pane keycode message (hud-2): `PCQWorm_Update` 0x1aee20 state 1 with param 0 != 0 posts
+  `sprintf(Txt_BindLabel(0x2000014), KeyCodes[p0][0..4])` = "Obtained Lock Keycode %c%c%c%c" for 0xb4
+  ticks and sets `KeyCodes[p0*5+4] = 1` [:24-31]; `Lock_Update` 0x1ae3d8 case 3 posts it again when the
+  lock's code is known [:246-257]. On disc the param-0 PCs are the E-usable office computers (0a #683
+  p0 1 / #684 p0 2, 11 #216 p0 1, 12 #684 p0 5); the Q-Worm gadget targets (0a #688, 0b #297) carry
+  p0 = 0 and post nothing [D nf-formats/tests/view_object_census.rs].
+- Health pane hide set: panes 9, 10, 11, 16, 17, 18 enabled → sprites 0..15 hidden [0x19b9c8:127-138].
+  Pane 9 = cam mode 0xc (the guided missile, `Bullet_init` 0x12c5a0:252), 10 = `RCCarPane` (cam mode
+  0xd, set only by `Car_Activate` 0x131c48 — placement 0xda RC cars, MP maps only [D census]), 16 =
+  `SecCamPane` (`Monitor_Activate` 0x1b0058:47 — the monitor consoles of 01/02/0a/12/14), 18 =
+  `RoninPane` (cam mode 0xf, set only by `GT_TakeControl` 0x181740 for a turret whose owner is the
+  player, i.e. one deployed with weapon 0x53 [M Player_WeaponInitBullet 0x1a4bf0:120-133]; no SP kit
+  equips 0x53 [M Player_InitWeapon 0x1a7ef8] and `Pickup_CreateSimple` refuses it). The port covers
+  9, 11, 16, 17; 10 and 18 are MP-only views.
+
+## Security-camera view (pane 16) [M; hud-2]
+
+- Enter: E on a monitor console in state 0 with a listed same-group camera → state 2, the first such
+  camera in `CameraList` order (`LList_Add` 0x1cca28 appends: placement order)
+  [Monitor_Activate 0x1b0058:12-49].
+- The picture: the viewer's updator is cleared and `Monitor_Update` copies the camera's obj+0x90 into
+  viewer+0x120 every tick (0x1afcc8:155) — the port's `Sim::view_override` returns the camera's
+  position and `Mat_GetDir`. The watched camera's body, lens and mount are not drawn (SENSOR+0x60 = 1
+  → `Sensor_Update` 0x1af618:57-70 sets obj+0xF0 bit 0x10).
+- The player is disabled (`Player_Disable(player, 0)`: no input arm, the view model hidden); goggles
+  view mode forced 0 every frame (`HUD_UpdateSecCamPane` 0x1a1538:10).
+- HUD: panes 0 (ammo) and 1 (health) off, pane 16 on; the crosshair hides (0x19e6d0:24). `SecCamSprInfo`
+  0x2bdeb0 [L]: 0 the 0x030000AD wash 512×448, 1..4 the 0x030000AA corner brackets, 5 the 0x030000AB
+  tag at (412, 378), 6 the 0x030000AC lamp at (352, 378) blinking 0x7f7f7f78 / alpha 0 on
+  `frame & 0x1f < 0x10`.
+- E (fresh press) walks forward from the watched camera's next list node to the list's end; none
+  left → restore and state 9; a watched camera gone to state 3 hands over forward, then from the head
+  [0x1afcc8:63-147]. The cooldown: states 9..5 decrement, 4 → 0 (six ticks before E re-enters).
 - Status pane templates re-read from `ee_start_05.bin`: pickup CREATE (128, 364) w 256 flags 0x18, text
   template (128, 16) → (256, 380); objective CREATE (128, 0); mission (0, 156) 512 × 103 — the port's
   geometry matches.

@@ -123,7 +123,7 @@ impl Monitors {
     /// `Monitor_Update` 0x1afcc8's per-tick body: while viewing, a watched camera gone to state 3
     /// hands over to the next same-group camera after it, then from the list's head, else the
     /// view ends [M :63-104]; the viewed camera's monitor-view channel latches 1 every tick and
-    /// its +0x60 unhide sets [M :150-156]. The exit cooldown counts 9 → 4 one per tick, then 4 → 0
+    /// its +0x60 hide latch sets [M :150-156]. The exit cooldown counts 9 → 4 one per tick, then 4 → 0
     /// (states 5..9 decrement, 4 resets [M :68-83]) — six ticks before E can re-enter.
     pub fn tick(&mut self, sensors: &mut crate::sensor::Sensors, channels: &mut Channels, frame: u32) {
         for m in &mut self.list {
