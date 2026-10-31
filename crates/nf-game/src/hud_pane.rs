@@ -331,8 +331,10 @@ impl MonitorNightSight {
         // The fade timer [M :103-136]: +3 per tick toward 1800 while off, −1 while a mode is
         // up; at ≤ 0 with a mode set, clear the mode and both pane enables.
         if out.mode == 0 {
-            let grown = (self.fade as i32).wrapping_add(3);
-            self.fade = if self.fade < 1800.0 { grown as f32 } else { 1800.0 };
+            // `battery = MIN.S(battery + 3·FRAME_RATE_MUL, 1800)` — the cap tests the GROWN value
+            // [M disasm 0x19ec68 = COP1.S MIN.S; docs/systems/goggles.md]. The old form compared
+            // the pre-add value and let 1799 grow to 1802.
+            self.fade = (self.fade + 3.0).min(1800.0);
         } else {
             self.fade -= 1.0;
             if self.fade <= 0.0 && self.mode != 0 && self.mode <= 2 {
@@ -396,6 +398,87 @@ pub fn car_pane_layers(is_car_cel: bool) -> (u32, [u8; 5]) {
     } else {
         (0x2000ff, [0x27, 0x27, 0xff, 0xff, 0xff])
     }
+}
+
+/// The goggles' two pane updates, per frame, in `HUD_Update` 0x19a088's pane-walk order (pane 7
+/// `HUD_UpdateNightSightPane` 0x19d218 before pane 15 `HUD_UpdateXRayPane` 0x1a1410), over the
+/// SAME shared `Rand_Rand` stream the game draws from [M 0x19d218:18,24; 0x1a1410:15 — the
+/// `Rand_Rand__FUi` calls inside the sim tick]. Holds the runtime sprite fields the two updates
+/// write; the draw side (nf-view hud.rs) reads them over the `NightSightSprInfo` /
+/// `XraySprInfo` templates.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct GogglePanes {
+    /// Night pane sprite 0's colour word (0xRRGGBBAA): `(Rand(0x18) + 7) | 0xff0000` once the
+    /// update runs; the template's 0x007f0020 before [D NightSightSprInfo[0]; M 0x19d218:39-40].
+    pub night_colour: u32,
+    /// Night pane sprite 0's v (rt+0x32): `Rand(h − 1)` on every other update [M :43-47].
+    pub night_v: u16,
+    /// `Scrl_247`, the night pane's parity byte [M :41-42].
+    pub scrl: u8,
+    /// X-ray pane sprite 0's colour word: `(Rand(0x18) + 7) | 0xffffff00` [M 0x1a1410:17-18];
+    /// the template's 0x007f0020 before [D XraySprInfo[0]].
+    pub xray_colour: u32,
+    /// X-ray pane sprite 0's v: `+1 & 0x1f` per update [M :19-22].
+    pub xray_v: u16,
+    /// The battery bar's width (night sprite 4 / x-ray sprite 3, rt+0x2c and the uv width
+    /// rt+0x34): `max(1, (int)(battery · (1/1800) · 200 + 28))` [M 0x19d218:52-62 /
+    /// 0x1a1410:23-33]. `None` until an update ran (the template's 256).
+    pub night_bar: Option<u16>,
+    pub xray_bar: Option<u16>,
+}
+
+impl Default for GogglePanes {
+    fn default() -> Self {
+        Self { night_colour: 0x007f_0020, night_v: 0, scrl: 0, xray_colour: 0x007f_0020, xray_v: 0, night_bar: None, xray_bar: None }
+    }
+}
+
+/// What the night pane update asks of the caller this frame.
+#[derive(Clone, Copy, Debug, Default, PartialEq)]
+pub struct NightPaneOut {
+    /// SP only: `Light_Create(radius 32.0, intensity 2.5, glb_viewer+0xc0, 0xff,0xff,0xff,
+    /// channel 0, life 0, kind 1, flicker 0)` — a one-tick white light at the viewer, every
+    /// frame night sight is up [M 0x19d218:48-51; the arg order of the muzzle-flash sites].
+    /// The caller creates it (its own `Rand_Rand(0)` draw follows the pane's draws).
+    pub light: bool,
+}
+
+impl GogglePanes {
+    /// `HUD_UpdateNightSightPane` 0x19d218, one frame. `enable` is the pane's +0x1c byte
+    /// (`MonitorNightSight::night_pane_on`); a mode other than 1 clears it and draws nothing
+    /// [M :33-36, :66-68]. `sprite_h` is sprite 0's height word the jitter range reads (rt+0x2a;
+    /// the port passes the template's v extent, the redeemer pane's idiom — [S] the exact
+    /// runtime word). `mp` skips the light [M :48].
+    pub fn night_update(&mut self, enable: &mut bool, mode: u16, battery: f32, sprite_h: u16, mp: bool, rng: &mut crate::drone::Rng) -> NightPaneOut {
+        let mut out = NightPaneOut::default();
+        if !*enable { return out; }
+        if mode != 1 { *enable = false; return out; }
+        self.night_colour = (rng.rand(0x18) + 7) | 0x00ff_0000;
+        let odd = self.scrl & 1 != 0;
+        self.scrl = self.scrl.wrapping_add(1);
+        if odd {
+            self.night_v = rng.rand(u32::from(sprite_h).wrapping_sub(1)) as u16;
+        }
+        out.light = !mp;
+        self.night_bar = Some(NightSightFx { mode, fade: battery, scrl: 0 }.step());
+        out
+    }
+
+    /// `HUD_UpdateXRayPane` 0x1a1410, one frame (`enable` = `MonitorNightSight::xray_pane_on`;
+    /// mode != 2 clears it [M :13-16, :36-38]).
+    pub fn xray_update(&mut self, enable: &mut bool, mode: u16, battery: f32, rng: &mut crate::drone::Rng) {
+        if !*enable { return; }
+        if mode != 2 { *enable = false; return; }
+        self.xray_colour = (rng.rand(0x18) + 7) | 0xffff_ff00;
+        self.xray_v = NightSightFx::xray_next_v(self.xray_v);
+        self.xray_bar = Some(NightSightFx { mode, fade: battery, scrl: 0 }.step());
+    }
+}
+
+/// `HUD_UpdateCrossHair` 0x19e6d0:80-85: the crosshair's colour word — 0x208020ff (green)
+/// while night sight is up, else 0xff0000ff (red) [M].
+pub fn crosshair_colour(mode: u16) -> u32 {
+    if mode == 1 { 0x2080_20ff } else { 0xff00_00ff }
 }
 
 /// The HUD pane's private per-frame hash (the redeemer pane's idiom, nf-view hud.rs):
@@ -688,5 +771,82 @@ mod tests {
         assert_eq!(MonitorNightSight::clamp_item_class(0x5d), 1); // '\\' < 0x5d < '_'
         assert_eq!(MonitorNightSight::clamp_item_class(0x30), 0x30);
         assert_eq!(MonitorNightSight::clamp_item_class(b'A'), b'A');
+    }
+}
+
+#[cfg(test)]
+mod goggle_pane_tests {
+    use super::*;
+    use crate::drone::Rng;
+
+    /// [M 0x19d218:33-62] mode 1: the green tint word, the parity jitter, the SP light, the bar —
+    /// and the draws come off the shared stream (1 per frame + 1 on odd parity frames).
+    #[test]
+    fn night_update_writes_the_game_fields_from_the_shared_stream() {
+        let mut p = GogglePanes::default();
+        let mut rng = Rng::new(7);
+        let mut on = true;
+        let out = p.night_update(&mut on, 1, 1800.0, 255, false, &mut rng);
+        assert!(on && out.light);
+        assert_eq!(p.night_colour >> 8, 0x00ff00, "0x00ff00AA: green, alpha 7..30");
+        assert!((7..7 + 0x18).contains(&(p.night_colour & 0xff)));
+        assert_eq!(p.night_bar, Some(228));
+        assert_eq!(rng.draws, 1, "parity 0: tint only");
+        p.night_update(&mut on, 1, 900.0, 255, false, &mut rng);
+        assert_eq!(rng.draws, 3, "parity 1: tint + the v jitter");
+        assert!(p.night_v < 254);
+        assert_eq!(p.night_bar, Some(128));
+        // MP: no light, the bar still written [M :48].
+        let out = p.night_update(&mut on, 1, 0.0, 255, true, &mut rng);
+        assert!(!out.light);
+        assert_eq!(p.night_bar, Some(28));
+        // Sister (can fail): any other mode clears the enable and draws nothing.
+        let before = rng.draws;
+        let out = p.night_update(&mut on, 2, 1800.0, 255, false, &mut rng);
+        assert!(!on && !out.light);
+        assert_eq!(rng.draws, before);
+        // A disabled pane does nothing at all, mode 1 included.
+        let out = p.night_update(&mut on, 1, 1800.0, 255, false, &mut rng);
+        assert!(!out.light);
+        assert_eq!(rng.draws, before);
+    }
+
+    /// [M 0x1a1410:13-38] mode 2: the white tint word, the v ramp wrapping at 0x1f, the bar.
+    #[test]
+    fn xray_update_ramps_v_and_tints_white() {
+        let mut p = GogglePanes::default();
+        let mut rng = Rng::new(3);
+        let mut on = true;
+        for k in 1..=0x21u16 {
+            p.xray_update(&mut on, 2, 450.0, &mut rng);
+            assert_eq!(p.xray_v, k & 0x1f);
+        }
+        assert_eq!(p.xray_colour >> 8, 0xffffff);
+        assert_eq!(p.xray_bar, Some(78));
+        assert_eq!(rng.draws, 0x21);
+        // Sister: mode 1 clears the x-ray enable.
+        p.xray_update(&mut on, 1, 450.0, &mut rng);
+        assert!(!on);
+        assert_eq!(rng.draws, 0x21);
+    }
+
+    /// [M 0x19e6d0:80-85] the crosshair turns green only in night sight.
+    #[test]
+    fn crosshair_colour_follows_the_mode() {
+        assert_eq!(crosshair_colour(1), 0x2080_20ff);
+        assert_eq!(crosshair_colour(0), 0xff00_00ff);
+        assert_ne!(crosshair_colour(2), crosshair_colour(1), "sister: x-ray keeps the red cross");
+    }
+
+    /// [M disasm 0x19ec68 MIN.S] the battery's +3 caps on the GROWN value: 1799 → 1800, not 1802.
+    #[test]
+    fn battery_cap_tests_the_grown_value() {
+        let mut m = MonitorNightSight { fade: 1799.0, ..Default::default() };
+        let i = MonitorInputs { hud_active: true, viewer_state: 1, ..Default::default() };
+        m.tick(&i);
+        assert_eq!(m.fade, 1800.0);
+        m.fade = 1795.0;
+        m.tick(&i);
+        assert_eq!(m.fade, 1798.0, "sister: below the cap the +3 lands exactly");
     }
 }
