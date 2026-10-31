@@ -177,7 +177,16 @@ fn xray_only_laser_beams_draw_only_in_xray() {
     let fs = scene.frame_state(None, 0.0, opts());
     let drawn: Vec<usize> = slots.iter().copied().filter(|&k| fs.attach[k][3][1] > FAR_Y).collect();
     assert!(!drawn.is_empty(), "mode 2: the live beams draw");
-    for &k in &drawn { assert_eq!(fs.attach[k], scene.attachments[k].local, "at the placement matrix"); }
+    // A static beam draws at its placement matrix, a keyed one at its spline pose (#606/#614/#625
+    // carry 3-key lists [D]; `Trigger_Update` 0x1b1a78:60-70).
+    let s = scene.sim.as_ref().unwrap();
+    for &k in &drawn {
+        let pi = scene.attachments[k].tracer.unwrap() - XRAY_SLOT_BASE;
+        match s.drones.triggers.iter().find(|t| t.placement == pi).and_then(|t| t.motion.as_ref()) {
+            Some(m) => assert_eq!(fs.attach[k], m.matrix, "#{pi} at its spline pose"),
+            None => assert_eq!(fs.attach[k], scene.attachments[k].local, "#{pi} at the placement matrix"),
+        }
+    }
     // Sister (can fail): night sight hides them again.
     press_to(&mut scene, 0);
     press_to(&mut scene, 1);

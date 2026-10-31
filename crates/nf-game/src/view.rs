@@ -245,6 +245,26 @@ pub fn view_init() {}
 // Tests — numbers/ids only, each with a sister that can fail.
 // ---------------------------------------------------------------------------
 
+// ---------------------------------------------------------------------------
+// The night-sight alpha quarter (obj+0xF0 & 0x20000)
+// ---------------------------------------------------------------------------
+
+/// obj+0xF0 bit 0x20000: `View_SetupRenderModes_Tweak` 0x1e5888 quarters the draw alpha of an
+/// object carrying it while the viewer's goggle mode (+0x236) is 1 [M 0x1e5888:13-20; disasm
+/// 0x1e588c `lui v1, 2` / 0x1e58ac `and`, 0x1e58b8 `lhu +0x236`, 0x1e58d8 `srl s1, 2`]. The
+/// bit's only source is the glist flags word (`celglist+0x44`, copied to obj+0xF0 by
+/// `Control_SetGList` 0x134960 and the creators); no ACTION.ELF code ORs it in [M grep of every
+/// `+ 0xf0) =` store], and no glist in the 99 FILES.BIN archives carries it [D
+/// nf-formats tests/night_quarter_census.rs] — so on this disc the arm never changes a draw.
+pub const NIGHT_QUARTER: u32 = 0x20000;
+
+/// The Tweak's alpha byte for one object: obj+0x106, shifted right 2 when the object carries
+/// `NIGHT_QUARTER` and the viewer is in night sight (mode 1); unchanged otherwise
+/// [M 0x1e5888:12-20].
+pub fn tweak_alpha(obj_flags: u32, goggle_mode: u16, alpha: u8) -> u8 {
+    if obj_flags & NIGHT_QUARTER != 0 && goggle_mode == 1 { alpha >> 2 } else { alpha }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -479,5 +499,16 @@ mod tests {
         // accidental redefinition would break the first assert.
         assert_eq!(MASK_INIT, 0x1f);
         assert_eq!(SPRITE_QUEUE_MAX, 0x3f);
+    }
+
+    /// The night quarter: bit 0x20000 in mode 1 → alpha >> 2 [M 0x1e5888:13-20]; sisters: the
+    /// bit without night sight, and night sight without the bit, keep the byte.
+    #[test]
+    fn night_sight_quarters_only_flagged_objects() {
+        assert_eq!(super::tweak_alpha(0x20000, 1, 0x80), 0x20);
+        assert_eq!(super::tweak_alpha(0x20000 | 0x800, 1, 0xff), 0x3f);
+        assert_eq!(super::tweak_alpha(0x20000, 2, 0x80), 0x80);
+        assert_eq!(super::tweak_alpha(0x20000, 0, 0x80), 0x80);
+        assert_eq!(super::tweak_alpha(0x400, 1, 0x80), 0x80);
     }
 }

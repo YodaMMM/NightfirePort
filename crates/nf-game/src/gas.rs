@@ -49,8 +49,10 @@ pub const SMOKE_QUAD: u32 = 0x0200_0039;
 ///   disasm 0x140470 `ori $t0, $t0, 0x8bc` — sizes 3.0/6.0, kind 5, rgba 0xffffffff → 0xffffff00,
 ///   life 0x3c, and the gas obj's `+0xf0 |= 8` draw flag];
 /// - `0x0200_026e` — the Phoenix Samurai bolt's flesh puff [M the 0x32/0x33 arm, disasm
-///   0x140408 `ori $t0, $t0, 0x26e` — sizes 1.0/16.0].
-pub const POOL_MESHES: &[u32] = &[SMOKE_QUAD, 0x0200_001f, 0x0200_08bc, 0x0200_026e];
+///   0x140408 `ori $t0, $t0, 0x26e` — sizes 1.0/16.0];
+/// - `0x0200_021d` — the breath puff [M `Env_Breath` 0x17be00, `lui $t0, 0x200` + `ori $t0, $t0,
+///   0x21d` at 0x17bf14/0x17bfb8; env.rs `BREATH_MESH`].
+pub const POOL_MESHES: &[u32] = &[SMOKE_QUAD, 0x0200_001f, 0x0200_08bc, 0x0200_026e, crate::env::BREATH_MESH];
 
 /// REC_FRAME_RATE (0x30d0dc — GS_SetRefreshRate 0x17d2b8 sets it = 1/FRAME_RATE; 0x30d0cc is
 /// FRAME_RATE_INT) = 1/60 [M symtab; grenade.rs:52].
@@ -81,6 +83,10 @@ pub struct Gas {
     /// bolt case :251-255 does not]: `View_DrawObjectGlist` 0x1e6780:43-66 rotates a bit-3 object
     /// from the VIEWER matrix (billboard) instead of its own +0x90. The draw side reads it.
     pub billboard: bool,
+    /// The gas obj's +0xF0 bit 0x400 — set only by `Env_Breath`'s mode-2 puff [M 0x17c024-0x17c02c]:
+    /// a 0x400 object is submitted to a view only while that viewer's goggle mode (+0x236) is 2
+    /// [M View_AddObjects 0x1e62d8:38-47]. The draw side reads it.
+    pub xray_only: bool,
 }
 
 #[derive(Default)]
@@ -147,6 +153,7 @@ impl GasPool {
             life: 128.0,
             kind: 7,
             billboard: false,
+            xray_only: false,
         });
         let _ = yaw; // the rot-z euler: stored to obj+0x50/0x60 in the game; the port's billboard draw reads only the spin
     }
@@ -195,6 +202,7 @@ impl GasPool {
             life: 120.0,
             kind: 7,
             billboard: false,
+            xray_only: false,
         });
         let _ = yaw; // the rotation draw: stored to obj+0x50/0x60; the port's billboard reads only the spin
     }
@@ -230,6 +238,7 @@ impl GasPool {
             life: 64.0,
             kind: 0,
             billboard: false,
+            xray_only: false,
         });
     }
 
@@ -262,6 +271,7 @@ impl GasPool {
             life: 64.0, // [S] unverified — the decompile drops the life arg
             kind: 3, // [M :349]
             billboard: false,
+            xray_only: false,
         });
         let _ = yaw; // the rot-z euler (the searchlight's shape); the port's billboard reads only the spin
     }
@@ -308,6 +318,7 @@ impl GasPool {
             life,
             kind,
             billboard: false,
+            xray_only: false,
         });
         // The mesh rides alongside for the draw (the game passes it to the gfx hashtable); the port's
         // billboard draw reads it from the puff via the pool index.

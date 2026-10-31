@@ -195,9 +195,9 @@ pub fn env_water_ripple(gas: &mut crate::gas::GasPool, material: u8, hit_point: 
 /// - variant A (env gate true AND cam_mode == 2 [M 0x17bed0-0x17bf84]): `Gas_Init(0.05, 0.2,
 ///   cel, pos, quat {0, 0, Rand_FRand(6.2831855), ..}, dir, 0x0200_021d, kind 0, rgba
 ///   0xffffffc8, rgba_end 0xff01, life 40)` [M 0x17bf8c-0x17c020; the `sw $v0(0x28), ($sp)` life
-///   at 0x17c010], then the gas object's `+0xf0 |= 0x400` [M 0x17c024-0x17c02c] — a draw flag
-///   the port's `Gas` does not model [S; the blood puff's +0xf0 |= 8 is the same class of
-///   documented deviation]. The velocity is the `dir` argument times REC_FRAME_RATE (Gas_Init's
+///   at 0x17c010], then the gas object's `+0xf0 |= 0x400` [M 0x17c024-0x17c02c] — the x-ray-only
+///   draw bit (`View_AddObjects` 0x1e62d8:38-47 submits it only while the viewer's +0x236 is 2),
+///   carried as `Gas::xray_only`. The velocity is the `dir` argument times REC_FRAME_RATE (Gas_Init's
 ///   non-kind-4 `param_6 != 0` arm [M 0x1aacc8 tail]) — the puff drifts with the breath.
 /// - variant B (env gate false — any cam mode): `Gas_Init(0.05, 0.05, cel, pos, quat NULL, dir,
 ///   0x0200_021d, kind 0, rgba 0xffffff80, rgba_end 0xff01, life 40)` [M 0x17bf00-0x17bf70:
@@ -208,6 +208,27 @@ pub fn env_water_ripple(gas: &mut crate::gas::GasPool, material: u8, hit_point: 
 /// runs out (the same big-endian (r,g,b,a) packing `Gas_Init` writes to obj+0x103..0x106 [M
 /// 0x1aacc8]). The yaw draw is the pool's counter-hash stand-in, not the shared stream (the
 /// G-033/fix-world-fx discipline — `Gas_Init`'s own spin draw is the pool's [M 0x1aacc8:72-80]).
+/// The breath origin a guard hands `Env_Breath` [M `NDrone2_ControlSTANDARD` 0x1490f0:172-198]:
+/// `AnimGetBoneWorldTrans(obj, bone 5, …)` gives the head bone's world matrix; the direction is
+/// its z row (the COP2 `_vmulabc/_vmaddabc/_vmaddbc` of the rows with (0, 0, 1)), and the position
+/// is the bone origin plus that direction · 0.12 (0x3df5c28f). `head` uses the row-vector
+/// convention (rows = axes, row 3 = translation).
+pub fn guard_breath_origin(head: &[[f32; 4]; 4]) -> (V3, V3) {
+    let dir = [head[2][0], head[2][1], head[2][2]];
+    let k = f32::from_bits(0x3df5_c28f);
+    ([head[3][0] + dir[0] * k, head[3][1] + dir[1] * k, head[3][2] + dir[2] * k], dir)
+}
+
+/// The `Env_Breath` env-gate pair `GlobalEnv == 0 || GlobalEnv+0x4b != 0` [M 0x17bed0-0x17bee4]:
+/// `GlobalEnv` is the level's `Env_Create` 0x17b968 record and `+0x4b` its drop type
+/// (`pauVar8[4][0xb] = level_tag+0x2c`, the `InitDrops` argument [M 0x17b968:66-68,112-114]).
+/// `drop_type` = the winning 0xDF placement's param 0, `None` without one. Drop type 0 is SNOW
+/// (`Drops::kind`), so the gate is false exactly on the snow levels: there the plain puff
+/// (variant B) shows in every mode, and everywhere else breath spawns only in x-ray (variant A).
+pub fn breath_env_gate(drop_type: Option<u8>) -> bool {
+    match drop_type { None => true, Some(k) => k != 0 }
+}
+
 pub fn env_breath(
     gas: &mut crate::gas::GasPool, frame: u32, phase: u32, pos: V3, dir: V3,
     zone: i8, cel_env_bit: bool, cam_mode: i16, env_gate: Option<bool>,
@@ -241,7 +262,8 @@ pub fn env_breath(
             let rec = 1.0 / 60.0;
             g.vel = [dir[0] * rec, dir[1] * rec, dir[2] * rec];
         }
-        // +0xf0 |= 0x400: the draw flag the port's Gas does not model [S — documented deviation].
+        // +0xf0 |= 0x400 [M 0x17c024-0x17c02c]: the puff draws only in x-ray (`Gas::xray_only`).
+        if let Some(g) = gas.puffs.last_mut() { g.xray_only = true; }
     } else {
         // Variant B: null quaternion, no yaw, static 0.05 size [M 0x17bf00-0x17bf70].
         gas.init_ex(BREATH_MESH, at, 0.0, dir, 0.05, 0.05, 0, [255, 255, 255, 128], 0x0000_ff01, 40.0);
@@ -398,6 +420,43 @@ fn breath_gate_sisters_zone_and_window_edges() {
     assert_eq!(gas.puffs.len(), 1);
     assert_eq!(gas.puffs[0].rgba[3], 128.0); // 0xffffff80 [M 0x17bf60]
     assert!((gas.puffs[0].scale_rate).abs() < 1e-6); // p1 == p2 == 0.05 [M 0x17bf00-0x17bf08]
+}
+
+/// The two variants' draw bit: the mode-2 puff (env gate true) carries +0xF0 |= 0x400 — x-ray
+/// only [M 0x17c024-0x17c02c]; the plain puff does not (sister). Gate true outside mode 2 spawns
+/// nothing (sister). The env gate is false exactly for a snow env (drop type 0).
+#[test]
+fn breath_xray_variant_carries_the_xray_only_bit() {
+    let mut gas = crate::gas::GasPool::default();
+    env_breath(&mut gas, 36, 0, [0.0; 3], [0.0, 0.0, 1.0], 1, false, 2, Some(breath_env_gate(None)));
+    assert_eq!(gas.puffs.len(), 1);
+    assert!(gas.puffs[0].xray_only);
+    assert_eq!(gas.puffs[0].rgba[3], 200.0); // 0xffffffc8 [M 0x17c018]
+    // Sister: the same gate in mode 1 (night sight) spawns nothing.
+    env_breath(&mut gas, 42, 0, [0.0; 3], [0.0, 0.0, 1.0], 1, false, 1, Some(breath_env_gate(Some(1))));
+    assert_eq!(gas.puffs.len(), 1);
+    // Sister: the snow env (drop type 0) takes the plain puff in mode 0 — no x-ray bit.
+    env_breath(&mut gas, 30, 0, [0.0; 3], [0.0, 0.0, 1.0], 1, false, 0, Some(breath_env_gate(Some(0))));
+    assert_eq!(gas.puffs.len(), 2);
+    assert!(!gas.puffs[1].xray_only);
+    // The underwater cel bit (cel+0x3c & 0x10000000) forces the mode-2 variant even under snow.
+    env_breath(&mut gas, 24, 0, [0.0; 3], [0.0, 0.0, 1.0], 1, true, 0, Some(breath_env_gate(Some(0))));
+    assert_eq!(gas.puffs.len(), 2);
+    assert!(breath_env_gate(None) && breath_env_gate(Some(1)) && breath_env_gate(Some(0xff)) && !breath_env_gate(Some(0)));
+}
+
+/// The guard's breath origin: head bone z row as the direction, origin + dir·0.12
+/// [M 0x1490f0:172-198]; a sister with a turned head moves both.
+#[test]
+fn guard_breath_origin_is_the_head_z_row() {
+    let m = [[1.0, 0.0, 0.0, 0.0], [0.0, 1.0, 0.0, 0.0], [0.0, 0.0, 1.0, 0.0], [2.0, 1.5, -3.0, 1.0]];
+    let (p, d) = guard_breath_origin(&m);
+    assert_eq!(d, [0.0, 0.0, 1.0]);
+    assert!((p[2] - (-3.0 + 0.12)).abs() < 1e-6 && p[0] == 2.0 && p[1] == 1.5);
+    let turned = [[0.0, 0.0, -1.0, 0.0], [0.0, 1.0, 0.0, 0.0], [1.0, 0.0, 0.0, 0.0], [2.0, 1.5, -3.0, 1.0]];
+    let (p2, d2) = guard_breath_origin(&turned);
+    assert_eq!(d2, [1.0, 0.0, 0.0]);
+    assert_ne!(p2, p);
 }
 
 #[test]
