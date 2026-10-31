@@ -81,7 +81,7 @@
 #[path = "common/walker_b2.rs"]
 mod walker;
 
-use walker::{Act, Walker, Wp};
+use walker::{wrap_pi, Act, Walker, Wp};
 
 fn iso() -> String { std::env::var("NF_ISO").expect("NF_ISO") }
 
@@ -454,21 +454,130 @@ fn walk_the_whole_mission_from_the_start_to_the_0d_handoff() {
     // future leg. So the plates reach keeps the master's reach stand-in onto the plates; the
     // corridor walk after it is REAL (leg 5), and the door's west side gives the REAL yard
     // descent (leg 5b) — the master's yard-descent stand-in is GONE.
-    let plate2 = {
-        let sim = w.scene.sim.as_ref().unwrap();
-        sim.drones.triggers.iter()
-            .find(|t| (t.kind == 1 || t.kind == 2) && t.out == 2 && !t.tris.is_empty())
-            .map(|t| (t.placement, t.centre(), t.mask))
-            .unwrap_or_else(|| panic!("the out-ch 2 touch plate #559 [D]"))
-    };
+    // Leg 4 (the REAL route — one documented stand-in): the plates' corridor is entered the
+    // game's own way, DOWN through the mezzanine's annex vent. The vent SS #180 `ventmesh` +
+    // the blocking poly #184 hang in the corridor's ceiling at (53.8, 5.5, −163.59) with the
+    // Q-Laser latch #182 `VentLatch` (out ch 0x54 [D #182 p5]) at (53.80, 5.90, −165.36), all
+    // above the mezzanine deck (5.44..6.03, x 52..56, z −176..−152 [D reach-1 scans]). The
+    // [L 2026-10-31] fresh-boot runs closed every other entrance: the corridor's north end
+    // stops at z −150.23 on a barrel row in every lane (the port pins the same stop —
+    // walkreal_probe0c_barrelrow_live), the ST-1 walkway's south end holds at z −153.65 (a
+    // railing, no walk-off and no jump clears it in the port either —
+    // walkreal_probe0c_lip_live), and the mezzanine deck itself floods as a separate component
+    // in the port's statics (reach-1 comp 3). So the ONE stand-in left is the mezzanine REACH
+    // (the filed live check: how the game climbs to it — the grapple points gp0/gp1 at y 12.3
+    // [D #308/#346/#500/#508/#511] hang over the warehouse); everything after it is real input.
     {
         let sim = w.scene.sim.as_mut().unwrap();
-        // The plates-reach stand-in, unchanged from master (see Leg 4's comment for the
-        // probe evidence closing the walking routes). Sisters below pin the corridor's own
-        // geometry so the stand-in's landing stays on the disc's floor.
-        sim.bond.pos = [plate2.1[0], plate2.1[1] + 0.6, plate2.1[2]];
+        sim.bond.pos = [54.0, 5.8, -158.0];
         sim.bond.vel = [0.0; 3];
     }
+    w.wait(30);
+    {
+        let sim = w.scene.sim.as_ref().unwrap();
+        assert!(sim.bond.grounded && (5.2..6.2).contains(&sim.bond.pos[1]),
+            "the mezzanine-deck stand-in (5.44..6.03 [D reach-1 scans]) must hold Bond, got {:?} grounded {}",
+            sim.bond.pos, sim.bond.grounded);
+        assert!(sim.drones.locks.iter().any(|l| l.out as u32 == 0x54),
+            "the ch-0x54 VentLatch #182 exists [D #182 p5]");
+        assert!(!sim.drones.channels.on(0x54), "ch 0x54 is off before the burn [D #182]");
+    }
+    w.walk_to(Wp::new(54.0, 5.8, -160.8).r(0.8), "the deck south");
+    // The deck's internal 0.56 step-down around z −161 holds the walk (the game's own lip-hold
+    // [L 2026-10-31 walkway]); cross it with a grounded jump, real input.
+    {
+        let start = w.total_ticks;
+        let mut jumped = false;
+        for _ in 0..400u32 {
+            let (p, grounded, yaw) = {
+                let sim = w.scene.sim.as_ref().unwrap();
+                (sim.bond.pos, sim.bond.grounded, sim.bond.yaw)
+            };
+            if p[2] < -164.5 && grounded { break; }
+            let desired = (53.8f32 - p[0]).atan2(-165.5f32 - p[2]);
+            let err = wrap_pi(desired - yaw);
+            let jump = !jumped && grounded && p[2] < -160.4;
+            if jump { jumped = true; }
+            w.tick(nf_game::player::Input { turn: err.clamp(-0.08, 0.08), forward: 1.0, jump, ..Default::default() }, false);
+        }
+        let sim = w.scene.sim.as_ref().unwrap();
+        assert!(sim.bond.grounded && sim.bond.pos[2] < -163.0,
+            "the deck's step-down crossing must reach the latch side (z < −163), got {:?} grounded {}",
+            sim.bond.pos, sim.bond.grounded);
+        eprintln!("[0c] the deck step-down crossed at +{} ticks onto ({:.2},{:.2},{:.2})",
+            w.total_ticks - start, sim.bond.pos[0], sim.bond.pos[1], sim.bond.pos[2]);
+    }
+    w.walk_to(Wp::new(53.8, 5.8, -164.8).r(0.6), "under the latch");
+    // The Q-Laser burn of the VentLatch #182 through the held-fire path (the same shape as the
+    // hinge burn above [M Lock_Update 0x1ae3d8:82-101]) — ch 0x54.
+    w.tick(nf_game::player::Input { switch_to: Some(0x4e), ..Default::default() }, false);
+    for _ in 0..60 {
+        if w.scene.sim.as_ref().unwrap().gun.weapon == 0x4e { break; }
+        w.tick(nf_game::player::Input::default(), false);
+    }
+    assert_eq!(w.scene.sim.as_ref().unwrap().gun.weapon, 0x4e, "the laser is held [M 0x1a7ef8 case 0x700000c]");
+    {
+        let latch = w.scene.sim.as_ref().unwrap().drones.locks.iter()
+            .find(|l| l.out as u32 == 0x54).map(|l| l.pos)
+            .expect("the ch-0x54 VentLatch #182 lock [D]");
+        let mut burned = false;
+        let start = w.total_ticks;
+        while w.total_ticks - start <= 900 {
+            {
+                let sim = w.scene.sim.as_ref().unwrap();
+                if sim.drones.channels.on(0x54) { burned = true; break; }
+            }
+            let fire_input = {
+                let sim = w.scene.sim.as_ref().unwrap();
+                let h = sim.bond.head();
+                let d = [latch[0] - h[0], latch[1] - h[1], latch[2] - h[2]];
+                let l = (d[0] * d[0] + d[1] * d[1] + d[2] * d[2]).sqrt();
+                let yaw_err = wrap_pi(d[0].atan2(d[2]) - sim.bond.yaw);
+                let pitch_err = (d[1] / l).clamp(-1.0, 1.0).asin() * 2.0 / std::f32::consts::PI - sim.bond.pitch;
+                nf_game::player::Input { turn: yaw_err.clamp(-0.08, 0.08), look: pitch_err.clamp(-0.08, 0.08), ..Default::default() }
+            };
+            w.tick_fire(fire_input);
+        }
+        assert!(burned, "the VentLatch #182 never burned under the held laser fire [M 0x1ae3d8:82-101]");
+        eprintln!("[0c] the VentLatch #182 burned — ch 0x54 at +{} ticks", w.total_ticks - start);
+    }
+    // The vent SSs sweep (ch 0x54 [D #180/#184]) and the end pose clears the hole.
+    {
+        let mut swept = false;
+        for _ in 0..300u32 {
+            w.tick(nf_game::player::Input::default(), false);
+            let sim = w.scene.sim.as_ref().unwrap();
+            if let Some(ss) = sim.drones.sss.list.iter().find(|s| s.channel == 0x54) {
+                if ss.state == 0 { swept = true; break; }
+            }
+        }
+        assert!(swept, "the vent SS never swept open on ch 0x54 [D #180/#184; M SS_Update 0x1a9948]");
+    }
+    // Onto the vent hole and the drop into the corridor (the floor 0.90 [D secretreach]; the
+    // 4.5 m fall lands inside the corridor SOUTH of the barrel row at z −150.23 [L]).
+    w.walk_to(Wp::new(53.8, 5.8, -163.6).r(0.5), "onto the vent hole");
+    let mut landed = false;
+    for _ in 0..300u32 {
+        w.tick(nf_game::player::Input { forward: 0.3, ..Default::default() }, false);
+        let sim = w.scene.sim.as_ref().unwrap();
+        if sim.bond.grounded && sim.bond.pos[1] < 3.0 {
+            landed = true;
+            break;
+        }
+    }
+    {
+        let sim = w.scene.sim.as_ref().unwrap();
+        assert!(landed, "the vent drop never landed in the corridor, pos {:?}", sim.bond.pos);
+        assert!(sim.bond.pos[2] < -162.0 && sim.bond.pos[2] > -165.5 && (51.5..56.0).contains(&sim.bond.pos[0]),
+            "the vent drop must land inside the corridor past the barrel row (x 52..56, z −162..−165.5), got {:?}",
+            sim.bond.pos);
+        eprintln!("[0c] the vent drop landed in the corridor at ({:.2},{:.2},{:.2}) — past the barrel row [L z −150.23]",
+            sim.bond.pos[0], sim.bond.pos[1], sim.bond.pos[2]);
+    }
+    // The corridor south to the plates (the REAL walk the stand-in used to skip).
+    w.walk_to(Wp::new(53.5, 1.0, -167.0).r(1.0), "the corridor south 1");
+    w.walk_to(Wp::new(53.2, 1.0, -171.0).r(1.0), "the corridor south 2");
+    w.walk_to(Wp::new(52.9, 1.0, -173.3).r(0.7), "the plates");
     w.wait(20);
     {
         let sim = w.scene.sim.as_ref().unwrap();
@@ -483,7 +592,8 @@ fn walk_the_whole_mission_from_the_start_to_the_0d_handoff() {
         assert!(step.map_or(false, |y| (1.8..2.3).contains(&y)),
             "the corridor's south step moved (expected 2.07 [D this session]), got {step:?}");
     }
-    eprintln!("[0c] the secret-door reach stand-in (the closed display-ground descents) — on the plates");
+    eprintln!("[0c] the corridor walked for real through the open vent — on the plates at {:?}",
+        w.scene.sim.as_ref().unwrap().bond.pos);
 
     // Leg 5 (REAL): the secret-door chain — the co-located plates [D #558/#559]: #559 (mask 8)
     // is the player BODY touch; #558 (mask 4) is the E-interactable arm (`Trigger_Activate`
@@ -1142,7 +1252,13 @@ fn walk_the_whole_mission_from_the_start_to_the_0d_handoff() {
             "the climb stand-in must land on the band deck at (95, −209.5) (10.34 [D plc44]), got pos {p:?} under {under:?}");
     }
     eprintln!("[0c] the ground route walked + the climb stand-in — on the band at the gate steps");
-    w.walk_to(Wp::new(96.0, 11.2, -209.3).r(1.0), "the gate plane");
+    w.walk_to(Wp::new(96.8, 11.2, -209.6).r(0.4), "the gate plane");
+    {
+        let sim = w.scene.sim.as_ref().unwrap();
+        eprintln!("[0c] at the gate: alarm chs 0x60-63 = {} {} {} {}, key ch 0x1c = {}, mission state 11 = {:?}",
+            sim.drones.channels.on(0x60), sim.drones.channels.on(0x61), sim.drones.channels.on(0x62), sim.drones.channels.on(0x63),
+            sim.drones.channels.on(0x1c), sim.drones.mission.states.get(11).map(|s| s.iter().map(|x| x.to_string()).collect::<Vec<_>>().join(",")));
+    }
     // The E press: USE-activated LOAD_LEVEL [M 0x1a5170 case 0x1d → 0x1b2318:111].
     let mut loaded = false;
     for _ in 0..60 {

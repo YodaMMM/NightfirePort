@@ -7,12 +7,15 @@
 //! What the disc PROVES about the rest of the wrapper (pinned here, not guessed):
 //! - ch 0x6e arms the drone-touch plate #99 (lock 0x6e, mask 0x4, out 0x01 [D #99]) — and nothing
 //!   on the retail disc can ever fire it: the main map has NO type-0x0f drone placement [D dump],
-//!   the four type-0x71 spawners carry their scale-float window at +0x2c where the game reads the
-//!   spawner params [D record dump; M DroneSpawner_Create 0x1378d0's `1 < *(uint*)(rec+0x2c)`
-//!   gate + Control 0x137e68's mode-2/3 switch] so no live spawner template exists, and the 7
-//!   archive scripts are presentation-only (streaming static props/lights/sounds; no Event kind
-//!   0x1..0xF channel writes, no 0x0f Entity) [D decoded 06000027/44/45/4f/52/c4/c5/cf/d2/ef/944].
-//!   The game's own AI treats the level as guard-capable [M DroneFunc_FirstSightState 0x147c48's
+//!   the four type-0x71 placements are ROTORS, not spawners (0x1d04f0:284-290 case 0x71 →
+//!   `rotor_init` 0x18f4b8; DroneSpawner_Create is case 0xf1 only and nothing calls it — the
+//!   audit retracts this file's older "scale-float window" cite), and the archive's kind-7
+//!   scripts (0600004f/6f/27/44/45/52/7c4 [D the archive decode; the older header cite listed
+//!   anim scripts and ids that do not exist]) are presentation-only: no Event kind 0x11 channel
+//!   write, no 0x0f Entity, and — the audit's sharper finding — no class-0xd9 script player with
+//!   a real hash mounts anywhere on the level (the two 0xd9 SPs carry the 0x06000000 sentinel),
+//!   so no script player ever runs them on the disc or in the port. The game's own AI treats the
+//!   level as guard-capable [M DroneFunc_FirstSightState 0x147c48's
 //!   `GameState._12_4_ == 0x7000041` arm] — a live check below asks where the game's toucher comes
 //!   from.
 //! - the wrapper has NO level-exit trigger [D dump] and no script event 0x12 loadmap [D decoded]:
@@ -30,7 +33,7 @@
 mod walker;
 
 use nf_game::player::Input;
-use walker::{Act, Walker, Wp};
+use walker::{wrap_pi, Act, Walker, Wp};
 
 fn iso() -> String { std::env::var("NF_ISO").expect("NF_ISO") }
 
@@ -155,13 +158,16 @@ fn the_movie_trigger_e_path_stays_a_no_op() {
 }
 
 /// The tether crossing (§3), pinned to what the disc's own data allows: Bond WALKS the station
-/// floor south to the wire #26's sphere (11.26, 2.51, −54.13 [D #26]) — and the disc gives him no
-/// way to grab it: the level's only third-icon placements are #82..#85 (contexts 1/2, at
-/// (7.97,·,−45.5)/(14.76,38.57,−47.54) [D #82-#85]), none near the wire, and the game's grab that
-/// is certain is the JUMP press with the icon context 3 [M Player_HandleJump 0x1916b0:126-147;
-/// Player_Activate 0x1a5170 has no class-0x2C arm] — so the press is a plain jump. The ride the
-/// approach shows is scripted, not player-operated, on this wrapper's data. Sister: the five
-/// 0x3E cables themselves parse [D #26/#36/#102/#103/#104].
+/// floor south to the wire #26's sphere (11.26, 2.51, −54.13 [D #26]) — and at THAT spot the disc
+/// gives him no grab: the level's two 0xFA icons are #105 (ctx 2, on ch 1, at (8.59, 0, −29.47))
+/// and #114 (ctx 3, always-on, at (10.48, 0, −59.13)) [D #105/#114 — the older docstring's
+/// "#82..#85 third icons" cite was the kind-0x2c lightning census, the audit's correction], and
+/// #114's ctx-3 reach does not extend 5 m north to the wire's midpoint, so the press here is a
+/// plain jump [M Player_HandleJump 0x1916b0:126-147 — the grab arm needs BLData+0x95f == 3, set
+/// by ThirdIcon_Update 0x196e80 only inside the icon's reach]. The grab itself is real where the
+/// icon is: interactables' `the_tether_wire_grabs_and_carries_bond` takes #26 from the #114 spot,
+/// and the continuation walk below crosses on it. Sister: the five 0x3E cables themselves parse
+/// [D #26/#36/#102/#103/#104].
 #[test]
 fn the_tether_wires_refuse_a_player_grab_on_the_disc_data() {
     let iso = iso();
@@ -180,7 +186,7 @@ fn the_tether_wires_refuse_a_player_grab_on_the_disc_data() {
     {
         let sim = w.scene.sim.as_ref().unwrap();
         assert!(sim.bond.grounded, "Bond stands on the tether deck");
-        assert!(sim.bond.icon_ctx != 3, "no wire icon arms at the tether [D #82-#85 ctx 1/2]");
+        assert!(sim.bond.icon_ctx != 3, "no wire icon arms at the tether midpoint [D #105/#114 — #114 (10.48,0,−59.13) is ~5 m south, out of reach]");
     }
     // The jump press with no context: a plain jump, no grab [M 0x1916b0's icon gate].
     for _ in 0..120 {
@@ -191,4 +197,134 @@ fn the_tether_wires_refuse_a_player_grab_on_the_disc_data() {
     let sim = w.scene.sim.as_ref().unwrap();
     assert!(sim.bond.substate != nf_game::player::SS_WIRE && sim.bond.substate != nf_game::player::SS_ZIPLINE,
         "the tether refuses the player grab on the disc's icon set [M 0x1916b0:126-147]");
+}
+
+/// The continuation walk: from the player plate #100 the real walk goes on across everything the
+/// game's own writers placed on the wrapper's floor — the DynoRod's deck (gate ch 1, action
+/// 0x6e [D #117 params]), the tether crossing (the ctx-3 icon #114's spot [D #114] → the jump
+/// grab [M 0x1916b0:126-147] → the hand-over-hand traverse [M Player_Wire 0x1977c0]) — and ends
+/// where the wrapper's own data ends: no level-exit trigger exists [D the placement scan], the
+/// mission layer is inert (no 0x07000041 row in the 24-record MissionData table [L ee_start_05.bin
+/// @0x2a4350 stride 0x28] → Mission_Init 0x182270:53-56 leaves BaseMap = −1 and InternalState 5,
+/// and Mission_Update's case 5 is a bare no-op), and ch 0x01 — the only channel left that could
+/// drive anything — has no disc toucher (see the module header). So the walk's end IS the level's
+/// end on this disc: the next level's load / mission end comes from the driving-side flow, from
+/// nothing the walk can reach [D].
+#[test]
+fn walk_from_the_plate_to_the_tether_crossing_and_the_levels_end() {
+    let iso = iso();
+    let mut w = Walker::new(nf_view::load(&iso, "07000041.bin", false).unwrap());
+    w.wait_enabled(600, "the wrapper's load");
+    w.walk_route(&[
+        ("off the airlock west", Wp::new(24.0, 1.1, -31.0).r(1.4)),
+        ("the station floor", Wp::new(19.0, 1.1, -32.5).r(1.4)),
+        ("through the plate #100 volume", Wp::new(15.7, 1.1, -33.4).r(0.8)),
+        ("the DynoRod deck", Wp::new(18.8, 1.1, -43.6).r(1.6)),
+        ("the tether deck", Wp::new(13.0, 1.1, -47.0).r(2.0)),
+        ("under the wire #26", Wp::new(11.3, 1.1, -54.1).r(0.9)),
+        ("the ctx-3 icon #114 spot", Wp::new(10.48, 1.1, -59.13).r(0.25)),
+    ]);
+    // Settle at the spot (the interactables grab stands exactly here before the press), then the
+    // ctx-3 icon arms (ThirdIcon_Update 0x196e80 writes BLData+0x95f when the player is in reach
+    // and its 4-tick re-arm timer is clear [M]).
+    for _ in 0..60 { w.tick(Input::default(), false); }
+    let mut ctx = 0u8;
+    for _ in 0..90 {
+        ctx = w.scene.sim.as_ref().unwrap().bond.icon_ctx;
+        if ctx == 3 { break; }
+        w.tick(Input::default(), false);
+    }
+    eprintln!("[walkreal-41] at the #114 spot: icon_ctx {ctx} pos {:?}",
+        w.scene.sim.as_ref().unwrap().bond.pos);
+    assert_eq!(ctx, 3, "the ctx-3 icon arms at its spot on the walk-in [M 0x196e80; D #114]");
+    // Micro-approach: the walk-in stops within ~0.25 of the spot, and the grab segment's end is
+    // right there — the attach must happen at the spot itself (the interactables grab stands at
+    // (10.48, 1.4, −59.13)). Turn to the spot and close the last steps on the real path.
+    for _ in 0..180 {
+        let sim = w.scene.sim.as_ref().unwrap();
+        let p = sim.bond.pos;
+        let dx = 10.48 - p[0];
+        let dz = -59.13 - p[2];
+        if dx * dx + dz * dz < 0.015 { break; }
+        let desired = dx.atan2(dz);
+        let err = wrap_pi(desired - sim.bond.yaw);
+        let input = Input { turn: err.clamp(-0.08, 0.08), forward: 0.4, ..Default::default() };
+        w.tick(input, false);
+    }
+    eprintln!("[walkreal-41] micro-approach done: pos {:?} ctx {}",
+        w.scene.sim.as_ref().unwrap().bond.pos, w.scene.sim.as_ref().unwrap().bond.icon_ctx);
+    for _ in 0..30 { w.tick(Input::default(), false); }
+    // Face yaw 0 (the interactables grab's facing): the hand-over-hand strafe axis is
+    // Bond-relative [M Player_Wire 0x1977c0's Input_Action(…,1,1)], so the ride direction depends
+    // on the facing at the grab.
+    for _ in 0..120 {
+        let err = wrap_pi(0.0 - w.scene.sim.as_ref().unwrap().bond.yaw);
+        if err.abs() < 0.05 { break; }
+        w.tick(Input { turn: err.clamp(-0.08, 0.08), ..Default::default() }, false);
+    }
+    // The jump grab from the standstill [M 0x1916b0:126-147 — the jump edge with BLData+0x95f == 3
+    // takes the nearest class-0x2c object = wire #26].
+    w.tick(Input { jump: true, ..Default::default() }, false);
+    assert_eq!(w.scene.sim.as_ref().unwrap().bond.substate, nf_game::player::SS_WIRE,
+        "the jump grab attaches Bond to the tether [M 0x1916b0]");
+    // The hand-over-hand traverse [M Player_Wire 0x1977c0 — the strafe carries Bond along the
+    // cable] until the wire drops him, like the interactables grab's ride.
+    let grab_pos = w.scene.sim.as_ref().unwrap().bond.pos;
+    let mut rode = false;
+    for _ in 0..480 {
+        let on = w.scene.sim.as_ref().unwrap().bond.substate;
+        if on != nf_game::player::SS_WIRE && on != nf_game::player::SS_ZIPLINE { break; }
+        rode = true;
+        w.tick(Input { strafe: 1.0, ..Default::default() }, false);
+    }
+    let sim = w.scene.sim.as_ref().unwrap();
+    let ride_end = sim.bond.pos;
+    eprintln!("[walkreal-41] the ride: {} end ({:.2},{:.2},{:.2}) grounded {}",
+        if rode { "rode" } else { "instant drop" }, ride_end[0], ride_end[1], ride_end[2], sim.bond.grounded);
+    assert!(rode, "the traverse carried Bond [M 0x1977c0]");
+    assert!((ride_end[0] - grab_pos[0]).abs() > 1.0, "the strafe moved Bond along the cable >1 u [M 0x1977c0]");
+    // Bond is back on the deck south of the grab: the walk goes on across the deck's south half.
+    let mut grounded = false;
+    for _ in 0..180 {
+        w.tick(Input::default(), false);
+        if w.scene.sim.as_ref().unwrap().bond.grounded { grounded = true; break; }
+    }
+    assert!(grounded, "the wire drops Bond back onto the deck");
+    // The walk goes on across the deck as far as its geometry carries it (lenient: a wedged leg
+    // gives up and the next re-aims — the far-south cells are the dev-materials zone, and the
+    // crossing deck's walls are the port's own collision [S]). The pins that matter are the
+    // wrapper's own tail below, not how deep the south cells go.
+    w.lenient = true;
+    w.walk_route(&[
+        // The ride drops Bond beside the ladder (#480 at (6.55, 2.76, −58.14) [D]) — walk east
+        // around its grab zone before turning south.
+        ("clear the ladder east", Wp::new(11.5, 1.1, -57.0).r(1.6)),
+        ("the deck south of the crossing", Wp::new(8.0, 1.1, -68.0).r(2.5)),
+        ("the far south floor", Wp::new(0.0, 1.1, -82.0).r(3.0)),
+    ]);
+    w.lenient = false;
+    let sim = w.scene.sim.as_ref().unwrap();
+    let end = sim.bond.pos;
+    eprintln!("[walkreal-41] the walk's end: ({:.2},{:.2},{:.2})", end[0], end[1], end[2]);
+    // The walk's own far reach: south of the crossing the level's floor really continues (the
+    // dev-materials statics stand on it [D #500-#518 at z −70..−89]), and the walk deterministically
+    // covers it past z −80 (the port's collision + the walker; a route fact, not a game claim).
+    assert!(end[2] < -70.0, "the walk reaches the wrapper's far south floor, got z {:.2}", end[2]);
+    // The wrapper's own tail, pinned where the walk ends — exactly as cold as the disc makes it:
+    // ch 0x01 never rose (no toucher for plate #99 [D the audit's mount scan + per-stream
+    // decode]), no level-exit trigger exists [D the placement scan], and the mission layer is
+    // inert [L/M above]. So the walk's end IS the level's end on this disc: the next level's
+    // load / mission end comes from the driving-side flow, from nothing the walk can reach [D].
+    // The writer-placed objects the walk passed, pinned at the walk's end:
+    // - the DynoRod still stands: the action ch 0x6e armed at the plate, but its gate ch 1 never
+    //   rose — the delete needs BOTH [M DynamicObject_Update 0x18d3b8's gate + mode-0 delete;
+    //   D #117 params 0:0x1 1:0x6e].
+    assert_eq!(sim.drones.worldobjs.dynobjs.len(), 1, "the DynoRod parses [D #117]");
+    assert!(!sim.drones.worldobjs.dynobjs[0].dead, "the DynoRod stands — the gate ch 1 is cold [M 0x18d3b8]");
+    // - and the wrapper's own tail stays exactly as cold as the disc makes it: ch 0x01 never rose
+    //   (no toucher for plate #99 [D the audit's mount scan + per-stream decode]), no level-exit
+    //   trigger exists [D the placement scan], and the mission layer is inert [L/M above].
+    assert!(!sim.drones.channels.on(1), "ch 0x01 stays cold through the whole walk [D #99 mask 0x4 — no disc toucher]");
+    assert_eq!(sim.drones.level_exit, None, "no level-exit trigger on the wrapper [D the placement scan]");
+    assert_eq!(sim.drones.mission_end, None, "no mission record → the mission layer never ends the level [M Mission_Init 0x182270:53-56]");
 }
