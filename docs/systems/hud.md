@@ -19,7 +19,11 @@ research pass (2026-10-09); "checked" = read here (the tables are read from ACTI
 ## Crosshair [checked]
 
 `HUD_UpdateCrossHair` 0x19e6d0: sheet 0x03000026, `HUDCrossCoords` 0x2bec48 (1 aim 29 × 29, 2 normal 11 × 11,
-3 friendly), centred at (256 (1 + cx), 224 (1 − cy)), 0xFF0000FF, layer 49.
+3 friendly; 9 entries of 18 bytes, only 1-3 reachable), centred at (256 (1 + cx), 224 (1 − cy)), 0xFF0000FF, layer 49.
+fix-hud-parity [M]: the position is `(short)(int)` truncated and the 0x800 centring subtracts `w >> 1` / `h >> 1`
+(View_DrawSprites 0x1e5290:69-74); the Crosshairs option (`DAT_002a38d0`) gates the NOT-aiming arm only — the
+aim-mode cell 1 shows with the option off; panes 12 (blood) and 16 (sec-cam) hide it; colour 0x208020FF while the
+viewer's goggle mode is 1 (night sight).
 
 ## Health / armour pane 1 (`HUD_UpdateHealthPane` 0x19b9c8) [M; tables checked]
 
@@ -33,7 +37,8 @@ research pass (2026-10-09); "checked" = read here (the tables are read from ACTI
 - fix-hud: ported — the damage-direction bits (`pain_from`), the air pane (AirSprInfo), and the crouch icon (sprite 19: 0x03000173 crouched, 0x03000174 held 60 ticks after standing, fade over the last 30 [M 0x19b9c8:305-328]).
 - Damage glow sprites 20–23: full screen, additive, textures 0x0300018D (20, 21 flipped V) / 0x0300018E (22, 23
   flipped U), red at alpha `BL+0x968`, per bit of `BL+0x967` (direction from `Player_DealWithObjHit`; 0xC both
-  sides from `Player_HandlePain`).
+  sides from `Player_HandlePain`). Each bit lights its own sprite — four independent tests, no special 0xC case
+  (fix-hud-parity; the port had collapsed 0xF to the 0xC pair).
 - Also: Bond-moment icon (16) — ported since: the 007 flash, tex 0x0300005B at (256, 80), grows and tumbles for
   100 ticks, holds 100, hides [M HUD_UpdateHealthPane 0x19b9c8:231-260; PlrStat_DoneBondMoment 0x199448:23-25
   writes 200] (hud.rs); context icon (18) and crouch icon (19, 0x03000173 / 0x03000174) — see the sections below.
@@ -57,8 +62,11 @@ the Sim writes it per tick from the level's third icons — fix-wire2/fix-08-wal
 - The template: `HealthSprInfo[18]` tex 0x0300006A, layer 255 (hidden), (320, −300), w/h 0 [L 0x2BD368].
 - **Position caveat**: an earlier PCSX2 observation described the indicator "at the bottom-left ring"; the code
   draws sprite 18 at (400, 48). The live check (below) settles the screen position from the real machine.
-- The Q-Claw marker (ammo-pane sprite 7, flags 0x900, 3D-positioned) turns magenta (0xff00ff) while the context
-  is 2 [M HUD_UpdateAmmoPane 0x19a7f0:330-336] — not ported (the marker itself is not drawn).
+- The Q-Claw marker (ammo-pane sprite 7, tex 0x0300004C, flags 0x900, 3D-positioned): with 0x50/0x51 held, the
+  nearest drawn class-'Q' object in LOS of the viewer and in front of it; colour 0x00FF00FF (GREEN — the u32
+  0xff00ff in RRGGBBAA order; this doc used to say magenta) while its distance is inside weapon 0x50's range
+  (`weapon_data+0x53dc`) AND the context is 2, else 0xFFFFFFFF; layer 0x1c [M HUD_UpdateAmmoPane 0x19a7f0:301-350].
+  Ported by fix-hud-parity (`hud::grapple_marker`).
 
 ## Hint / info bar (pane 4, TXTMSG type 1) [M/L] (ported by fix-context-hints)
 
@@ -96,6 +104,29 @@ The TOP status bar (`MsgInfoStatusPane` **0x319810** [L]: x 128, w 480, create 0
   for 60 ticks after a weapon change (`BL+0x95E`) — need the text labels (not ported).
 - Sprites 5 / 6: the rounds strip / the empty strip (0x4040407F) from texture 0x03000128 by `BulletImg.189`
   (0x2bea38: per ammo type u, v, w, pixels per round; ×16 width for clips > 87): bottom at y 394, x = 496 − w.
+
+## Air / grip pane 5 (`HUD_UpdateAirPane` 0x1a11c8) [M] (corrected by fix-hud-parity)
+
+Enabled only in substate 3 (swim) or 6 (wire) [Player_MonitorAir 0x191a70:16-23]; shown only while `BL+0x8C8 & 0x10`
+(head bone under the water surface; forced in substate 6) [0x191a70:37-61]. Shown: track layer 0x1f, fill 0x1e
+(0x68B1D6 swimming, 0x68D6B1 on the wire), the icon (0x0300017D, additive) layer 0x1f on the wire only; width
+`(int)(v·2 + 28)` ≥ 1, v = air (`BL+0x8C0`) or `100 − BL+0x8CC` on the wire. The 0x1e/0x1f stores are LAYERS —
+an earlier port read them as alphas and drew a dim pane at the surface and on dry land.
+
+## Objective banner flash (pane 3, `HUD_UpdateStatusPane` 0x19c310 case 3) [M]
+
+A type-2 notice opens on the status label alone: while `time + 60 > 300` (NEW) / `> 180` (COMPLETE) — literal
+constants — the body colour is 0, the label 0x785A14FF on `fmodf(time, 40) < 20` else 0, both shadows 0. Then
+steady: label 0x785A14FF with shadow, body 0x7D6D59FF (0 for COMPLETE). The `time < 15` fade rewrites the body's
+alpha only; the label holds until the close. The 0x785A14FF stores write the objective pane's label (iVar20) only —
+the mission banner's fail label has no blink.
+
+## Zoom-pane extras [M] (fix-hud-parity)
+
+- AIMS-20 (pane 17): the five boot lines "COMMAND.COM" … "OK" (OICWSprInfo[2..6], colour 0x7F7F7FC8, no shadow) at
+  x 50 rising 17 px a line from y 408, layer 0x1c — `HUD_UpdateOICWPane` 0x19cef8 (`nf_game::hud_pane::OicwBoot`).
+- Micro-Camera (pane 11): sprite 0, the full-screen subtractive white 0x03000002 at layer 0x28, for 10 frames from
+  the muzzle latch `BL+0x95B` — a black shutter frame per photo (`HUD_UpdateCameraPane` 0x1a12d8:16-36).
 
 ## Fonts [M; font 2 checked]
 
