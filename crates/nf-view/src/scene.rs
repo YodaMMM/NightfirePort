@@ -6456,7 +6456,15 @@ fn add_instance(level: &Level, inst: &Instance, layer: Layer, character: Option<
     let (pass, fog) = match layer {
         Layer::SkyCamera | Layer::SkyFixed => if param4 == 1 { (0, 1) } else { (4, 0) },
         Layer::World => if chain == u32::MAX && obj.flags & 1 != 0 { (3, 2) } else { (1, 1) },
-        Layer::Character => (2, 1),
+        // The posed objects on the slot space (doors, SimpleScripts, breakables, locks, pickups,
+        // searchlight parts — `character == None`) are game objects: `View_AddObjects` 0x1e62d8:44-52 /
+        // `View_AddForcedObjects` 0x1e5fb8:152-160 send one with `obj+0xF0 & 1` to list 1, and
+        // `Control_SetGList` 0x134960 fills obj+0xF0 from the glist flags (`MapObject.flags`) [M]. List 1
+        // draws after list 0's characters (`Game_Draw` 0x1e6f50) with the alpha fade. In pass 2 the
+        // depth-writing glass of 07000014's windows (0x20 ServerRoomWindow / CompRoom1Window /
+        // SCCP_Window, flags 0x1; Door_Win_Slide_*, flags 0x40001 [D]) drew before the guards and hid
+        // them behind it.
+        Layer::Character => if character.is_none() && obj.flags & 1 != 0 { (3, 2) } else { (2, 1) },
         // `View_AddObjects` 0x1e62d8:57-59 routes an object with glist flag 0x2000 to sort list 2, which
         // `Game_Draw` 0x1e6f50:162-175 draws after `psiClearZ` — over the whole world. Only the Micro-Camera's
         // DroneScan (0x02000832, flags 0x2128 [D]) takes it here; the other 0x2000 effect meshes are unverified.
