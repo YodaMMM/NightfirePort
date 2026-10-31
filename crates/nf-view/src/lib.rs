@@ -6810,6 +6810,18 @@ pub fn run() -> Result<()> {
                         "shutter" => sim.hud.camera_shutter = f(v) as u8,
                         "ctx" => sim.bond.icon_ctx = f(v) as u8,
                         "objtime" => { if let Some(m) = sim.hud.objective_msgs.front_mut() { m.time = f(v); } }
+                        // `mount=<heat>`: the first mounted gun active with that heat, WeaponNone held.
+                        "mount" => { if let Some(g) = sim.drones.props.gunimps.first_mut() { g.active = true; g.heat = f(v); sim.gun.weapon = 0x47; sim.hud.weapon_label_timer = 0; } }
+                        // `info=<label hex>[:<time>]` / `pickup=<label hex>[:<time>]`: a bound message
+                        // straight into the INFO / pickup pane.
+                        "info" | "pickup" => {
+                            let (l, t) = v.split_once(':').unwrap_or((v, "120"));
+                            let id = u32::from_str_radix(l.trim_start_matches("0x"), 16).unwrap_or(0);
+                            if let Some(txt) = sim.lang.as_ref().and_then(|g| g.bind(id)).map(|s| s.trim().to_string()) {
+                                let m = crate::scene::Msg::new(txt, f(t));
+                                if k == "info" { sim.hud.info_msgs.push_back(m); } else { sim.hud.msgs.push_back(m); }
+                            }
+                        }
                         _ => eprintln!("NF_HUD_PROBE: unknown key {k:?}"),
                     }
                 }
