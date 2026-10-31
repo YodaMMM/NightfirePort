@@ -24,3 +24,16 @@ the port's pose law matches. Measured ends: door #3 → pos01 1.000, door #0 →
 probe_0b_doors committed. The walked-transit rewrite is mid-flight (commit f3873e62 on this
 branch); the test head is the green form. Verified: walkreal_0700000b_live 3/0,
 interactables_0700000b_live 9/0, all 15 *door* binaries 35 passed / 0 failed / 2 ignored.
+
+## level-0b-waiting-room-doors-2 (branch s/level-0b-waiting-room-doors-2)
+
+- start (from s/level-0b-waiting-room-doors 5aea1206; merge origin/master 20624c8c clean). Task:
+  the prior pick fix (the door's radius alone in `Doors::collide_step`) is the WRONG arm —
+  `Collide_PickObj` 0x1eae80 picks that radius only for hittest mode 0x200/0x201 (:91-107); the
+  player's mode (BL+0x7D4 = hittest+0x94) is 0x800 on every `Player_Collision` arm (:205, 229,
+  257, 282, 315, 363, 381 — 0 only at :308) and the 0x800 arm (:152-168) is `1.5*r_door + r_pick`
+  — the code master already has. Revert it; find the real difference (the r_pick value the port
+  passes (hittest+0x8C per arm), the door's live sphere (obj+0x80/+0x8C after Door_Interp), the
+  anti-crush condition and its local.z sign [M 0x135980], or the post-E stand [M Door_Activate
+  0x135be0]); fix with evidence; resume the walked rewrite (f3873e62) and delete the stand-in.
+  Run walkreal_0700000b_live, interactables_0700000b_live and every *door* binary.
