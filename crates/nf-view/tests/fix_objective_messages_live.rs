@@ -237,7 +237,9 @@ fn every_objective_text_wraps_inside_the_banner_box() {
                     let line = lang.bind(o.text).unwrap_or_else(|| panic!("objective {:#x} of {:08x} binds", o.text, level.level)).to_string();
                     sim.hud.objective_msgs.clear();
                     sim.hud.objective_msgs.push_back(nf_view::scene::Msg {
-                        text: line, time: 300.0, status: 0x0200_0051, failed: false, life: 300.0, opened: true, second: true,
+                        // time 200: past the NEW notice's 60-tick label-only flash (`time + 60 > 300`
+                        // hides the body [M HUD_UpdateStatusPane 0x19c310 case 3]) — the steady body row.
+                        text: line, time: 200.0, status: 0x0200_0051, failed: false, life: 300.0, opened: true, second: true,
                         label: 0, // fix-context-hints added the provenance id (0 = pre-bound text)
                         script: false, // fix-ladder-water added the script-subtitle flag (this is an objective line, not a subtitle)
                         sfx1: true, // objective-banner-timing: the case-3 chime already fired (second: true pairs with it)
