@@ -46,3 +46,14 @@ Remaining: write the walk legs (the lane south extension, the walkway/deck, the 
 the pit jump, the strip→warehouse→corridor walk), delete the `[plate2 + 0.6]` write, keep legs
 5+ untouched (the plates chain + the door + the yard are already real), run
 walkreal_0700000c_live + interactables_0700000c_live + the mission sweep, quote the totals.
+
+### level-0c-secret-door-reach-2 (start, 09:00 UTC, 2026-10-31)
+
+Task: `level-0c-secret-door-reach` (blocked) found the corridor's north end [D]: the corridor
+floor (0.90) runs north past the vent and joins the warehouse ground (0.69/0.89) — yard,
+warehouse ground and corridor flood as ONE component — so the plates #558/#559 are reachable
+on foot from the north end. This session: base the branch on that work (merged origin/master),
+write the walk legs on real input (yard -> warehouse ground -> the corridor north end -> south
+to the plates), open the secret door #544 through the plates (body touch #559 + E #558 -> AND
+#560 -> ch 8), walk out through it, and delete the `[plate2 + 0.6]` placement in
+`walkreal_0700000c_live`. Then walkreal_0700000c_live + interactables_0700000c_live totals.
