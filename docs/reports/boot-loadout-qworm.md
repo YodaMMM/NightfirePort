@@ -65,16 +65,21 @@ that fails on a missing gadget).
   Q-Worm install lands through the real trigger/bullet/PCQWorm path).
 - `fix_start_loadouts_live` 6/0, `gadget_carry_live` 6/0, `gadget_select_live` 2/0,
   `gadgets_live` 4/0, `gadget_grapple_live` 1/0, `gadget_laser_live` 8/0,
-  `gadget_grapple_user_spot` 2/0. Targeted total: **34 passed, 0 failed** across 9 binaries.
+  `gadget_grapple_user_spot` 2/0, `fix_weapon_modes_live` 6/0 (incl.
+  `the_island_loadout_grants_the_q_worm`), `qworm_not_on_0c_live` 3/0, `level_carry_live` 8/0
+  (incl. `cold_07000005_loadout_matches_the_snapshot`), `fix_dev_panel_live` 6/0 (incl.
+  `level_kit_grants_the_games_loadout`), `portal_live` 4/0 (incl.
+  `cold_loadout_arms_bond_on_every_story_level`). Targeted total: **61 passed, 0 failed**
+  across 14 binaries.
 - No *inventory*-named binary exists; the inventory surface is covered by the above
   (fix_start_loadouts' warm-carry test + gadget_carry's loadout rows) and nf-game's crate suite.
 - The fast runner (`tools/test/suite.py`, started 12:07 UTC on the base tree = origin/master
-  d1b31fd3; my diff is tests-only, so the pre-existing binaries' results carry over): build ok,
-  984 test binaries, then partway through the run with the only failures the expected
-  environment ones — 3 `disc_golden` + `identity_disc` (the slim-ISO cross-check dumps) and 2
-  `fix_0c_pylon_live` (headless GPU) [S per docs; the same set previous sessions saw]. The full
-  984-binary sweep does not fit the sandbox window; the runner stays alive and the next message
-  can read `tail suite.out` for the totals.
+  d1b31fd3; my diff is tests-only, so the pre-existing binaries' results carry over): `build
+  ok: 984 test binaries in 1166 s`, then the sweep — at the time of writing 6 FAILED lines, all
+  the expected environment set: 3 `disc_golden` + `identity_disc` (the slim-ISO cross-check
+  dumps) and 2 `fix_0c_pylon_live` (headless GPU) — the same set previous sessions saw. The
+  full 984-binary sweep does not fit the sandbox window; the runner stays alive writing
+  suite.out and the next message can read its total line.
 
 ## What's left
 
