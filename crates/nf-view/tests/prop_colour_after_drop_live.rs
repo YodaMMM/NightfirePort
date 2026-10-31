@@ -1,11 +1,12 @@
 //! The doors' and interactables' shared colour entry stays white after a guard dies.
 //!
 //! The palette's colour table is laid out at build: [characters][attachments][pickups][searchlight
-//! parts][col_one], `col_one` being the 1.0 entry every door and untinted interactable draws with
-//! (`Scene::skin_layout`). A guard's death drops his gun as a NEW pickup (`DroneWeap_DropWeapon` →
+//! parts][door-region slots][col_one]; the doors and posed interactables draw from their own section
+//! (`col_door`, white unless the glist carries 0x800 — ambient-sweep), `col_one` is the shared 1.0
+//! entry (`Scene::skin_layout`). A guard's death drops his gun as a NEW pickup (`DroneWeap_DropWeapon` →
 //! `Pickup_Create` 0x18dda0 [M]), so the sim's pickup list outgrows the build's pickup section. The
 //! palette used to write that pickup's ambient multiplier one slot past the section — on 07000014
-//! (no searchlights) straight into `col_one`, dimming every door and interactable to the cel ambient
+//! (no searchlights) straight into the first door colour (then `col_one`), dimming the doors and interactable to the cel ambient
 //! at the drop (the level's dark blue 28/36/78). The drop itself draws as its attachment, so the
 //! extra pickup has no slot of its own here.
 //!
@@ -28,7 +29,10 @@ fn a_dropped_gun_leaves_the_shared_colour_white() {
     let (layout, _) = w.scene.skin_layout();
     let one_ok = |s: &nf_view::scene::Scene| {
         let (_, cols) = s.skin_palette(&layout, None, 0.0, nf_view::scene::ViewOpts::default(), None);
-        cols[layout.col_one as usize]
+        // ambient-sweep: the doors draw from their own section (`col_door`, right after the
+        // searchlight parts); door 0's slot is what an overflowing pickup write would hit first.
+        assert!(layout.col_one > layout.col_door, "07000014 has door colour slots");
+        cols[layout.col_door as usize]
     };
     assert_eq!(one_ok(&w.scene), [1.0; 4], "col_one is white at the start");
     let n_pick0 = w.scene.sim.as_ref().unwrap().drones.pickups.len();
@@ -60,7 +64,8 @@ fn an_unbounded_pickup_write_would_reach_col_one() {
     let scene = nf_view::load_with_carry(&iso, "07000014.bin", false, None).unwrap();
     let (layout, _) = scene.skin_layout();
     let n_pick = layout.col_sl - layout.col_pick;
-    let n_sl = layout.col_one - layout.col_sl;
+    let n_sl = layout.col_door - layout.col_sl;
     assert_eq!(n_sl, 0, "07000014 has no searchlight colour slots [D]");
-    assert_eq!(layout.col_pick + n_pick, layout.col_one, "the first extra pickup index lands on col_one");
+    assert!(layout.col_one > layout.col_door, "07000014 has door colour slots");
+    assert_eq!(layout.col_pick + n_pick, layout.col_door, "the first extra pickup index lands on door 0's colour");
 }
