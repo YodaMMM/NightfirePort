@@ -145,6 +145,13 @@ fn the_scorpion_fire_modes_through_the_real_input_path() {
             d.present && !d.corpse && d.enabled && d.health > 0.0
         }).expect("07000012 has an enabled guard after the intro")
     };
+    // The homing is the subject, not the guard's AI: hold the NPCs so the target stands where
+    // the aim set-up put it (its mission route would otherwise walk it out of the cone).
+    scene.sim.as_mut().unwrap().drones.hold_npcs = true;
+    // ... and stand it on the spot this scenario's ring/off-axis numbers were calibrated at (its
+    // patrol position at this tick before the 0.5 mission-route arrival [M NDrone2_InitAIPath
+    // 0x153720:113] moved where its route ends) — the homing, not the patrol, is under test.
+    scene.sim.as_mut().unwrap().drones.list[guard].pos = [10.10, 1.00, 19.14];
     let off_axis = 0.30f32; // ~17° — inside the 0.66-dot (≈49°) acquisition cone, clearly off-axis.
     // Recalibrated for the game's flight speed (scorpion-rocket-speed): at the measured ×4.04
     // scale the pursuit rides a residual ~17° equilibrium (the closing sweep beats the

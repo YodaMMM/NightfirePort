@@ -1,15 +1,17 @@
-//! Countdown Part 1, the door guards (07000014): the spawner clones the cascade releases hunt
-//! west and the route's door node parks them in `DSTATE_OpenDoor` (0x81) at the locked
-//! Door_Slide_11A/B pair — the game's uninterruptible locked-door wait [M 0x1681f8: the
-//! switch handles ONLY 0/1/2/3/6/7/8/9/0x17/0x18/0x19/0xC/0x20/0x21, so noise/sight/shout
-//! re-route to case 0 and drop; case 3 leaves only on `NDrone2_DoorIsOpen`; case 0xC re-arms
-//! the 2-tick `NDrone2_OpenDoor` retry with the bark on the door anim's event 6 (case 0x20,
-//! `Drone_SfxInfo[0x27]` = sound 1477)]. The port must hold the same wait. Opt-in via NF_ISO.
+//! Countdown Part 1, the door guards (07000014): the guards the cascade releases (ch 0x87 +
+//! ch 0x88 -> 0x8C) come west to the locked Door_Slide_11A/B pair and STOP there. They do not
+//! work the door: the game's A* rejects a link between two door-type nodes while the bound door
+//! is locked [M AINetwork_DoAStarPath 0x1571b0:262-271 -> Door_IsLocked 0x136810], so the combat
+//! route to Bond fails (COMBAT_NO_ROUTE 0x5f) instead of reaching the door node that would enter
+//! DSTATE_OpenDoor 0x81 [M NDrone2_ReachedDestNode 0x153358:144-163]. Live, Bond out of sight:
+//! the guards stand at (-51.6, 41.2) / (-51.2, 38.8), CUR 0x5f / PREV 0x5a, never 0x81 across
+//! 3000 frames [L 2026-10-30 PCSX2 fresh boot]. (This test used to pin the OpenDoor wait — the
+//! port's old route ignored the lock; the live capture contradicts it.) Opt-in via NF_ISO.
 
 fn iso() -> String { std::env::var("NF_ISO").expect("NF_ISO") }
 
 #[test]
-fn the_door_guards_wait_at_the_locked_door_in_opendoor() {
+fn the_door_guards_hold_at_the_locked_door_without_opendoor() {
     let iso = iso();
     let mut scene = nf_view::load(&iso, "07000014.bin", false).expect("load 07000014");
     for _ in 0..400 {
@@ -22,8 +24,8 @@ fn the_door_guards_wait_at_the_locked_door_in_opendoor() {
     scene.sim.as_mut().unwrap().drones.channels.set(0x87, 1, 1);
     scene.sim.as_mut().unwrap().drones.channels.set(0x88, 1, 1);
     scene.sim.as_mut().unwrap().bond.pos = [-87.5, -1.7, 33.4]; // the sabotage room, west end
-    // The real flow gives the guards about a minute before the E press: the clones hunt west
-    // and park at the locked door [M NDrone2_ReachedDestNode 0x153358:144-163 → OpenDoor].
+    // The real flow gives the guards about a minute before the E press: the clones come west
+    // and hold at the locked door without working it [L 2026-10-30; M 0x1571b0:262-271].
     let mut waiters = Vec::new();
     let mut opendoor_ticks = 0u32;
     for k in 0..2400u32 {
@@ -54,8 +56,7 @@ fn the_door_guards_wait_at_the_locked_door_in_opendoor() {
             eprintln!("[014] k{k}: {}", sts.join(" | "));
         }
     }
-    assert!(!waiters.is_empty(), "the released clones park at the locked west door in OpenDoor [M 0x153358:144-163]");
-    assert!(opendoor_ticks > 1200, "the wait is sustained ({} OpenDoor ticks across the window) [M 0x1681f8 case 3's DoorIsOpen gate]", opendoor_ticks);
+    assert_eq!(opendoor_ticks, 0, "no released clone works the LOCKED door (OpenDoor 0x81 ticks {opendoor_ticks}, at the door {waiters:?}) [L 2026-10-30: never 0x81; M 0x1571b0:262-271]");
     // The door is still locked and shut the whole window [M Door_Update 0x1363c8 — no 0x85 edge].
     let sim = scene.sim.as_ref().unwrap();
     let door = sim.drones.doors.list.iter().position(|d| d.ch_lock == 0x85)

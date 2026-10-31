@@ -1344,7 +1344,7 @@ fn route(iso: &IsoImage, level_name: &str, from: [f32; 3], to: [f32; 3]) -> Resu
     }
     println!("  post test r 0.2: {}, r 0.4: {}", nav.bounds_node_test(0.2, from, to), nav.bounds_node_test(0.4, from, to));
     let goal = nav.target_nodes(&world, pi, to, 36.0);
-    match nf_game::nav::Route::to_position(&nav, &world, Some(pi), from, to, &goal, &[]) {
+    match nf_game::nav::Route::to_position(&nav, &world, Some(pi), from, to, &goal, &[], &|_, _| false) {
         Ok((res, r)) => {
             println!("route result {res}: {} nodes {:?}", r.nodes.len(), r.nodes);
             for &n in &r.nodes { let q = nav.paths[pi].nodes[n as usize].pos; println!("    node {n}: ({:.2}, {:.2}, {:.2})", q[0], q[1], q[2]); }

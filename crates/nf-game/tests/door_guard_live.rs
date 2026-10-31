@@ -377,3 +377,107 @@ fn the_waiting_pair_activates_through_its_channel() {
     }
     assert!(paired, "the activated guards entered 0x31 and paired: a state {:#x} partner {:?}", sim.list[a].state, sim.list[a].door_partner);
 }
+
+/// guard-opponent-pointer: the zone bands never read Y — the planes' normals are horizontal
+/// (n = cross(v0, (0,1,0)) [M 0x141360:115-174 + 0x1e4498], the b coefficient 0) — so the ONLY
+/// Y input in `NDrone2_DoorGuardHandler` is the [M 0x1416d8:22] height gate
+/// |opp +0x34 − my +0x34| ≤ 2.0. The original test's raised sister pins the >2.0 refuse side;
+/// this pins the pass side's margin: Bond 1.9 BELOW the guard's floor, inside the challenge
+/// band, still reads the zone-2 challenge. (The lost-sight zone case is unreachable in this
+/// level's ray world — every in-band spot has a clear eye ray, and floors cull their back
+/// face [M 0x10a8c8:168] — it is a live check in the report.)
+#[test]
+fn the_zone_bands_read_a_bond_below_the_floor_within_the_height_gate() {
+    let Some(l) = L::load() else { eprintln!("skip: NF_ISO not set"); return };
+    let d = l.data();
+    let (mut sim, _rng) = l.sim();
+    let p0 = bond_at([-500.0, 0.0, -500.0]);
+    sim.tick(&d, &p0);
+    sim.tick(&d, &p0);
+    let side = |pl: [f32; 4], p: [f32; 3]| pl[0] * p[0] + pl[1] * p[1] + pl[2] * p[2] + pl[3];
+    let guards: Vec<usize> = [404usize, 417, 441, 442].iter().map(|&pl| idx(&sim, pl)).collect();
+    let mut below_challenge: Option<(usize, [f32; 3])> = None;
+    for &ev in &guards {
+        if sim.list[ev].door_side == 0xff { continue; }
+        let planes = sim.list[ev].door_planes;
+        let anchor = sim.list[ev].pos;
+        let face = [sim.list[ev].yaw.sin(), 0.0, sim.list[ev].yaw.cos()];
+        'outer: for k in [1usize, 2, 3, 4] {
+            for (dx, dz) in [(0i32, 0i32), (1, 0), (-1, 0), (0, 1), (0, -1)] {
+                let cand = [anchor[0] + face[0] * k as f32 + dx as f32 * 0.3, anchor[1] - 1.9, anchor[2] + face[2] * k as f32 + dz as f32 * 0.3];
+                let (s0, s1, s2) = (side(planes[0], cand), side(planes[1], cand), side(planes[2], cand));
+                if (0.0..2.0).contains(&s0) && s1 >= 0.0 && s2 >= 0.0 { below_challenge = Some((ev, cand)); break 'outer; }
+            }
+        }
+        if below_challenge.is_some() { break; }
+    }
+    let Some((guard, pos)) = below_challenge else { panic!("no below-floor challenge spot (the geometry probe)") };
+    sim.bond_weapon = 1;
+    sim.tick(&d, &p0);
+    sim.tick(&d, &p0);
+    let ev = idx(&sim, sim.list[guard].placement);
+    let p = bond_at(pos);
+    let mut saw = false;
+    for _ in 0..90 {
+        sim.tick(&d, &p);
+        if sim.list[ev].door_zone == 2 && sim.list[ev].door_zone_step == 2 { saw = true; break; }
+        assert!(sim.list[ev].fail_reason.is_none(), "the challenge band must not fail the mission");
+    }
+    assert!(saw, "a Bond 1.9 below the floor (inside the [M 0x1416d8:22] gate) never challenged: zone {} step {}",
+        sim.list[ev].door_zone, sim.list[ev].door_zone_step);
+}
+
+/// guard-opponent-pointer: the zone dies with Bond, NOT with sight. Health 0 zeroes the fold's
+/// pointer [M 0x1424e0:111-114] and the handler's first gate returns 0 [M 0x1416d8:9-11] —
+/// from a spot the guard still sees (los true), so the zero is the POINTER's doing.
+#[test]
+fn the_zone_dies_with_bond_even_seen() {
+    let Some(l) = L::load() else { eprintln!("skip: NF_ISO not set"); return };
+    let d = l.data();
+    let (mut sim, _rng) = l.sim();
+    let p0 = bond_at([-500.0, 0.0, -500.0]);
+    sim.tick(&d, &p0);
+    sim.tick(&d, &p0);
+    let side = |pl: [f32; 4], p: [f32; 3]| pl[0] * p[0] + pl[1] * p[1] + pl[2] * p[2] + pl[3];
+    let guards: Vec<usize> = [404usize, 417, 441, 442].iter().map(|&pl| idx(&sim, pl)).collect();
+    let mut seen_challenge: Option<(usize, [f32; 3])> = None;
+    for &ev in &guards {
+        if sim.list[ev].door_side == 0xff { continue; }
+        let planes = sim.list[ev].door_planes;
+        let anchor = sim.list[ev].pos;
+        let face = [sim.list[ev].yaw.sin(), 0.0, sim.list[ev].yaw.cos()];
+        'outer: for k in [1usize, 2, 3, 4] {
+            for (dx, dz) in [(0i32, 0i32), (1, 0), (-1, 0), (0, 1), (0, -1)] {
+                let cand = [anchor[0] + face[0] * k as f32 + dx as f32 * 0.3, anchor[1], anchor[2] + face[2] * k as f32 + dz as f32 * 0.3];
+                if !d.world.line_of_sight([cand[0], cand[1] + 1.0, cand[2]], [anchor[0], anchor[1] + 1.4, anchor[2]], nf_game::world::LOS_GUARD_VISION) { continue; }
+                let (s0, s1, s2) = (side(planes[0], cand), side(planes[1], cand), side(planes[2], cand));
+                if (0.0..2.0).contains(&s0) && s1 >= 0.0 && s2 >= 0.0 { seen_challenge = Some((ev, cand)); break 'outer; }
+            }
+        }
+        if seen_challenge.is_some() { break; }
+    }
+    let Some((guard, pos)) = seen_challenge else { panic!("no seen challenge spot (the geometry probe)") };
+    sim.bond_weapon = 1;
+    sim.tick(&d, &p0);
+    sim.tick(&d, &p0);
+    let ev = idx(&sim, sim.list[guard].placement);
+    let p = bond_at(pos);
+    let mut saw = false;
+    for _ in 0..90 {
+        sim.tick(&d, &p);
+        if sim.list[ev].door_zone == 2 && sim.list[ev].door_zone_step == 2 { saw = true; break; }
+    }
+    assert!(saw, "the seen challenge never fired: zone {} step {} state {:#x}",
+        sim.list[ev].door_zone, sim.list[ev].door_zone_step, sim.list[ev].state);
+    // The sight evidence is the probe's FRESH ray (the port's `los` field is the rotating
+    // per-tick budget — its value at this tick proves nothing): the spot was chosen with a
+    // clear line and the stationary guard has not moved.
+    assert!(d.world.line_of_sight([pos[0], pos[1] + 1.0, pos[2]], [sim.list[ev].pos[0], sim.list[ev].pos[1] + 1.4, sim.list[ev].pos[2]], nf_game::world::LOS_GUARD_VISION),
+        "the spot must be IN sight for the pin to bite");
+    // Bond dies: the fold zeroes +0x170 [M 0x1424e0:111-114] → the zone gate [M 0x1416d8:9-11]
+    // zeroes the zone on the next read — the same tick's sight stamp keeps `has_opponent` true
+    // (the grace [M 0x14ad58:11-14]), which the handler does NOT read.
+    for _ in 0..8 { sim.health.health = 0.0; sim.tick(&d, &p); }
+    assert_eq!(sim.list[ev].door_zone, 0, "a dead opponent zeroes the zone [M 0x1416d8:9-11]");
+}
+

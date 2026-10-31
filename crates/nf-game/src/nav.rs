@@ -283,13 +283,14 @@ impl Network {
 
     /// `AINetwork_DoAStarPath` from `start` toward `dest` whose goal nodes are `goal`; `used` = link used-counts
     /// this frame. Returns (0 real goal / 1 fallback goal, node list, link list) or the failure code (4, 5, 6).
-    /// `AINetwork_DoAStarPath` 0x1571b0. Not modelled here: the game's door-link gate — a link
-    /// between two door-type MAPNODEs (+4 & 2) is rejected while `Door_IsLocked` 0x136810
-    /// reads the lock channel OFF (`AINetwork_DoAStarPath` 0x1571b0:269, `AINetwork_EmitPath`
-    /// 0x158cf8:233, `AINetwork_Emitter_GetNodeAtDistance` 0x159268:177 [M]); the port's
-    /// route queries see no switch-channel state, and drones open doors by contact, so the
-    /// gate is deferred — the door-side fn is `Doors::is_locked` (door.rs) [S].
-    pub fn astar(&self, world: &CollisionWorld, path: usize, start: V3, dest: V3, goal: &TargetNodes, used: &[u16]) -> Result<(u8, Vec<u16>, Vec<u16>), u8> {
+    /// `AINetwork_DoAStarPath` 0x1571b0. The door-link gate [M 0x1571b0:262-271]: expanding from a
+    /// node that carries a bound door (MAPNODE+0x28, `NDrone_InitDoorNodes` 0x139a70) to a
+    /// neighbour, when BOTH are door-type (+4 & 2) and `Door_IsLocked` 0x136810 reports the
+    /// expanding node's door locked, the link is rejected. `locked(path, node)` answers "this
+    /// node's bound door is locked" (the drones lend it per tick from `Doors::is_locked`).
+    /// (`AINetwork_EmitPath` 0x158cf8:233 and `AINetwork_Emitter_GetNodeAtDistance` 0x159268:177
+    /// carry the same gate; not wired here.)
+    pub fn astar(&self, world: &CollisionWorld, path: usize, start: V3, dest: V3, goal: &TargetNodes, used: &[u16], locked: &dyn Fn(usize, u16) -> bool) -> Result<(u8, Vec<u16>, Vec<u16>), u8> {
         let p = &self.paths[path];
         let (goal_node, result) = match (goal.found, goal.fallback) { (Some(g), _) => (g, 0), (None, Some(g)) => (g, 1), _ => return Err(4) };
         const OPEN: u32 = 0x4000_0000;
@@ -335,6 +336,7 @@ impl Network {
             for &li in &p.adj[cur] {
                 let l = &p.links[li as usize];
                 let nb = if l.a as usize == cur { l.b } else { l.a } as usize;
+                if p.nodes[cur].flags & 2 != 0 && p.nodes[nb].flags & 2 != 0 && locked(path, cur as u16) { continue; }
                 let cost = g[cur] + l.len * (used.get(li as usize).copied().unwrap_or(0) as f32 + 1.0);
                 if flags[nb] & 0xC000_0000 != 0 && g[nb] <= cost { continue; }
                 parent[nb] = Some((cur as u16, li));
@@ -610,6 +612,12 @@ impl Route {
             let d = [b[0] - a[0], b[1] - a[1], b[2] - a[2]];
             let l = (d[0] * d[0] + d[1] * d[1] + d[2] * d[2]).sqrt().max(1e-6);
             r.dest = [b[0] + 0.5 * d[0] / l, b[1] + 0.5 * d[1] / l, b[2] + 0.5 * d[2] / l];
+            // The same branch writes the arrival threshold route+0x8C (drone+0x9FC) = 0.5
+            // [M NDrone2_InitAIPath 0x153720:113], the value AINetwork_FollowRoute compares the
+            // remaining distance against [M 0x15b110: `+0x8C <= distance` keeps following]. With
+            // the constructor's 2.0 a mission route "arrived" 1.5 short of its end (07000014's
+            // released guards then took ENEMY_MISSION's arrival arm into combat).
+            r.radius = 0.5;
         }
         r.calc(net, 0);
         r.target = r.creep.a;
@@ -622,7 +630,7 @@ impl Route {
     /// `AINetwork_CalcRouteToObject` (0x15aee8, via `NDrone2_MoveToObject` 0x151618) — the port's
     /// single route build. The game's `AlterDestFor_DROUTE_Nearest` (0x156088) dest pull-back for
     /// unreachable goals is not ported (gap, docs/systems/uncited-audit.md).
-    pub fn to_position(net: &Network, world: &CollisionWorld, path: Option<usize>, start: V3, dest: V3, goal: &TargetNodes, used: &[u16]) -> Result<(u8, Route), u8> {
+    pub fn to_position(net: &Network, world: &CollisionWorld, path: Option<usize>, start: V3, dest: V3, goal: &TargetNodes, used: &[u16], locked: &dyn Fn(usize, u16) -> bool) -> Result<(u8, Route), u8> {
         if net.move_test(world, start, dest, true, false).0 == 1 {
             let mut r = Route::new(path.unwrap_or(0), RouteMode::OneWay, Vec::new(), Vec::new(), start, dest);
             r.creep = Creep::new(start, dest, None);
@@ -630,7 +638,7 @@ impl Route {
             return Ok((follow::DIRECT, r));
         }
         let Some(pi) = path.filter(|&p| !net.paths[p].nodes.is_empty()) else { return Err(8) };
-        let (res, mut nodes, mut links) = net.astar(world, pi, start, dest, goal, used)?;
+        let (res, mut nodes, mut links) = net.astar(world, pi, start, dest, goal, used, locked)?;
         // OptimiseRoute 0x156760 (its two `NDrone2_MoveTestToNode` 0x155620 probes): trim the
         // first / last node when the next one is reachable directly.
         let p = &net.paths[pi];
@@ -808,15 +816,15 @@ mod tests {
         let n = net(&[[0.0, 0.0, 0.0], [10.0, 0.0, 0.0], [10.0, 0.0, 10.0], [0.0, 0.0, 10.0], [-20.0, 0.0, 30.0]], &[(0, 1), (1, 2), (2, 3), (3, 0), (0, 4), (4, 2)], 2);
         let w = CollisionWorld::empty();
         let goal = TargetNodes { found: Some(2), fallback: None };
-        let (res, nodes, links) = n.astar(&w, 0, [0.0, 0.0, -1.0], [10.0, 0.0, 11.0], &goal, &[0; 6]).unwrap();
+        let (res, nodes, links) = n.astar(&w, 0, [0.0, 0.0, -1.0], [10.0, 0.0, 11.0], &goal, &[0; 6], &|_, _| false).unwrap();
         assert_eq!(res, 0);
         assert_eq!((nodes[0], nodes[2], nodes.len()), (0, 2, 3));
         assert_eq!(links.len(), 2);
         // Busy links 0→1 and 0→3 (used 9 times each) push the route onto the detour.
-        let (_, nodes, _) = n.astar(&w, 0, [0.0, 0.0, -1.0], [10.0, 0.0, 11.0], &goal, &[9, 0, 0, 9, 0, 0]).unwrap();
+        let (_, nodes, _) = n.astar(&w, 0, [0.0, 0.0, -1.0], [10.0, 0.0, 11.0], &goal, &[9, 0, 0, 9, 0, 0], &|_, _| false).unwrap();
         assert_eq!(nodes, vec![0, 4, 2]);
         // No goal → 4.
-        assert_eq!(n.astar(&w, 0, [0.0; 3], [1.0; 3], &TargetNodes::default(), &[0; 6]).unwrap_err(), 4);
+        assert_eq!(n.astar(&w, 0, [0.0; 3], [1.0; 3], &TargetNodes::default(), &[0; 6], &|_, _| false).unwrap_err(), 4);
     }
 
     /// `AINetwork_SetLinksFlagInCircle` 0x15b548 + `AINetwork_ClearLinkFlags` 0x15b498: the flag
@@ -860,7 +868,7 @@ mod tests {
         let mut flags: LinkFlags = vec![vec![0; 6]];
         n.set_links_flag_in_circle(&mut flags, [5.0, 0.0, 0.0], 4.0, 0x100, 0);
         assert_eq!(flags[0][0], 0x100, "the short way is the flagged way");
-        let (res, nodes, _) = n.astar(&w, 0, [0.0, 0.0, -1.0], [10.0, 0.0, 9.5], &goal, &[0; 6]).unwrap();
+        let (res, nodes, _) = n.astar(&w, 0, [0.0, 0.0, -1.0], [10.0, 0.0, 9.5], &goal, &[0; 6], &|_, _| false).unwrap();
         assert_eq!((res, nodes), (0, vec![0, 1, 2]), "through the 0x100 link, like the game");
     }
 

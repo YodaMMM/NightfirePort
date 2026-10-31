@@ -972,6 +972,9 @@ fn walk_the_infiltration_to_the_delta_exit() {
     // (23.31,1.14,−24.64) — master's unshifted route slipped the doorway diagonally; the three
     // legs below are the approach the probe walked green from BOTH the leg-6 start and the wedge
     // spot itself (E reacted, the exit leg arrived at +137 ticks).
+    // Arriving from the north (the west door at (27.8, -19.6)), the straight line to the approach
+    // spot catches the wall west of (25.5, -18.7); square up south first.
+    w.walk_to(Wp::new(26.0, 1.0, -22.0).r(1.0), "the delta doorway east");
     w.walk_to(Wp::new(22.9, 1.0, -22.8).r(1.2), "the delta doorway approach");
     w.walk_to(Wp { at: [24.0, 1.2, -22.8], act: Act::Use { use_ticks: 240 }, arrive: 1.1 }, "E the delta slides");
     w.walk_to(Wp::new(27.79, 1.28, -25.32).r(1.0), "to the Delta exit #944");

@@ -279,7 +279,10 @@ impl Props {
         let d = self.destroy.get_mut(i)?;
         if d.dead { return None; }
         d.dead = true;
-        ch.set(d.channel as u32, 1, frame);
+        // The channel-0 arm [M 0x12bb60:34-37]: a tag whose channel word is 0 only flips
+        // obj+0xff (the class byte) — no switch_channels write. The write is the else arm's
+        // (0x12bb60:40), for a non-zero channel.
+        if d.channel != 0 { ch.set(d.channel as u32, 1, frame); }
         if d.kind == 0 { return None; }
         // The box centre stands in for the object's position; a leaf without bounds (the C5
         // pair's bigdoor01) has none, so it blasts at its placement — at the box's (0,0,0) its
