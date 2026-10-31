@@ -64,7 +64,9 @@ fn snap(w: &Walker) -> Vec<(u16, [u8; 132])> {
 
 /// KIND: the rigid bodies 0xD8, created at rest. `RB_Create` 0x1d6bf0 (the dispatcher's case
 /// 0xD8 [M 0x1d04f0]) runs RB_Init/RB_Build/RB_SetState on each placement's record: #39/#40
-/// "rb_whitelamp" carry mass param 2 = 1 and the type halfword 0xFFFF (param 4 [D]) — the
+/// "rb_whitelamp" carry params (0,1) (1,0) (2,1) (3,1) (4,0xFFFF) [D]; `level_tag` holds param k at
+/// +0x2C+4k [M 0x1d1b68:64-75], so the mass word (+0x2c) is 1 and the type halfword (+0x34) is 1
+/// [L RB_Create's level_tag and rb+0xa8 = 1 read live] — the
 /// sphere-collider table [M 0x1d6bf0:77 — SPHERE_VERTS for every non-zero type] and the
 /// rotation-only body (the linear integrate arm is type-0 only [M RB_EulerEvolve 0x1d796c]).
 /// Sister: the SECOND lamp untouched — both rest bit-identical over 600 ticks.
@@ -77,8 +79,9 @@ fn lamps_are_created_and_rest_bit_identical() {
         let lamps: Vec<_> = sim.drones.rbodies.list.iter().filter(|o| o.placement == 39 || o.placement == 40).collect();
         assert_eq!(lamps.len(), 2, "both rb_whitelamp placements create bodies [D #39/#40; M 0x1d6bf0 via 0x1d04f0 case 0xD8]");
         for l in &lamps {
-            assert_eq!(l.rb.ty, -1, "the type halfword 0xFFFF [D param 4; M RB_Init stores it at +0xa8]");
-            assert!((l.rb.mass - 1.0).abs() < 1e-4, "mass param 2 = 1 [D; M RB_Create's mass read]");
+            assert_eq!(l.rb.ty, 1, "the type halfword = param 2 = 1 [D; M RB_Init stores it at +0xa8; L rb+0xa8 = 1]");
+            assert!((l.rb.mass - 1.0).abs() < 1e-4, "mass = param 0 = 1 [D; M RB_Create's level_tag+0x2c read; L rb+0x78 = 1.0]");
+            assert_eq!((l.s154, l.s158), (1, 0xffff), "+0x154 = param 3, +0x158 = param 4 [M 0x1d6bf0:100-104; L]");
             assert_eq!(l.rb.vert_table, nf_game::rigid_body::SPHERE_VERTS, "the sphere collider table [M 0x1d6bf0:77]");
             assert!((l.st.s13c - 0.0).abs() < 10.0 && l.st.s13c > 0.0, "the body's world-sphere radius is sane, got {}", l.st.s13c);
         }

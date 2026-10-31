@@ -14187,35 +14187,41 @@ fn segment_hits_sphere(a: V3, b: V3, c: V3, r: f32) -> bool {
             }
             // rigid-body-bullet: the game's collision pass appends the round's contact to the
             // kind-0xD8 body's `obj+0xD0` chain (the bullet is class 5) and `RB_CollisionHandler`
-            // 0x1d7a80 walks the chain into `RB_RestingContactRot` 0x1d73a0's per-hit arm — the
-            // same math the blast route carries [M 0x1d7428-0x1d74c8: impulse = hit_vel·(scale·0.5)
-            // into +0x40, (point − translation) × impulse into +0x50; the port's
-            // `rb_explosion_hit_arm`]. The contact test: the game's picker runs the body's world
-            // sphere (Control_BuildWorldSph 0x133070 over its glist — the port's `st.s13c` radius,
-            // `st.trans` centre) against the round's segment. The bullet's record: the unit flight
-            // direction as hit_vel and scale 1.0 [S — the game's per-bullet HITDATA+0x8 float for
-            // an RB contact is not pinned from the decompile; the report's live check asks gdbwatch
-            // for it]. The round stops on the body (the solid-prop default — the same walk rule
-            // that ends the flight on the world's first solid hit).
+            // 0x1d7a80 walks the chain into `RB_RestingContactRot` 0x1d73a0's per-hit arm
+            // [M 0x1d74dc-0x1d758c: impulse = hit+0x30·(hit+0x8·0.5), (hit+0x40 − translation) ×
+            // impulse into +0x50]. The contact test: the game's picker runs the body's world sphere
+            // (obj+0x80/obj+0x8C — the glist centre posed by the live matrix and the glist radius,
+            // `Control_BuildWorldSph` 0x133070) against the round's segment, the closest point on
+            // the query line vs the sphere [M Collide_PickObj 0x1eae80]; the RB props carry no
+            // collision triangles of their own (no 0x2E block on the rb_* glists [D]), so the port
+            // takes that closest point as the contact point [S — the game's +0x40 for this contact
+            // sat 0.17 nearer the shooter along the ray in the one live sample; the torque's
+            // dominant term (r.y·imp.z for a level shot) is unchanged by a shift along the ray].
+            // The record: the unit flight direction as hit+0x30 and the round's damage as hit+0x8
+            // (HITTEST+0x90 = weapon_definition+0x0C, the float the drone path reads) [L 07000004
+            // lamp #40, a break at the class-5 arm 0x1d74dc: hit+0x8 = 3.5 (the P99 round),
+            // hit+0x30 = (0.0016, −0.00006, −1.0); rb+0x50 after the arm = (hit+0x40 − trans) ×
+            // (hit+0x8·0.5·hit+0x30) with the type-1 y lane zeroed, exactly]. The round stops on
+            // the body (the solid-prop default — the same walk rule that ends the flight on the
+            // world's first solid hit).
             if !self.rbodies.list.is_empty() {
                 let seg = [end[0] - b.pos[0], end[1] - b.pos[1], end[2] - b.pos[2]];
                 let seg2 = seg[0] * seg[0] + seg[1] * seg[1] + seg[2] * seg[2];
                 let mag = if seg2 > 1e-9 { seg2.sqrt() } else { 1.0 };
                 let udir = [seg[0] / mag, seg[1] / mag, seg[2] / mag];
-                for rbo in self.rbodies.list.iter_mut() {
-                    let c = rbo.st.trans;
-                    let r = rbo.st.s13c;
-                    // The segment-vs-sphere hit parameter (the same test segment_hits_sphere makes).
-                    let oc = [b.pos[0] - c[0], b.pos[1] - c[1], b.pos[2] - c[2]];
-                    let bq = oc[0] * seg[0] + oc[1] * seg[1] + oc[2] * seg[2];
-                    let cc = oc[0] * oc[0] + oc[1] * oc[1] + oc[2] * oc[2] - r * r;
-                    let disc = bq * bq - cc * seg2;
-                    if disc < 0.0 { continue; }
-                    let t = (-bq - disc.sqrt()) / seg2;
-                    if t < 0.0 || t > 1.0 { continue; }
+                let mut best: Option<(f32, usize, [f32; 3])> = None;
+                for (k, rbo) in self.rbodies.list.iter().enumerate() {
+                    let (c, r) = rbo.world_sphere();
+                    let ac = [c[0] - b.pos[0], c[1] - b.pos[1], c[2] - b.pos[2]];
+                    let t = if seg2 > 1e-9 { ((ac[0] * seg[0] + ac[1] * seg[1] + ac[2] * seg[2]) / seg2).clamp(0.0, 1.0) } else { 0.0 };
                     let point = [b.pos[0] + seg[0] * t, b.pos[1] + seg[1] * t, b.pos[2] + seg[2] * t];
-                    rbo.hits.push(crate::rigid_body::RbHit {
-                        scale: 1.0,
+                    let d = [point[0] - c[0], point[1] - c[1], point[2] - c[2]];
+                    if d[0] * d[0] + d[1] * d[1] + d[2] * d[2] >= r * r { continue; }
+                    if best.is_none_or(|(bt, _, _)| t < bt) { best = Some((t, k, point)); }
+                }
+                if let Some((_, k, point)) = best {
+                    self.rbodies.list[k].hits.push(crate::rigid_body::RbHit {
+                        scale: b.damage,
                         normal: [-udir[0], -udir[1], -udir[2]],
                         vel: udir,
                         point,
@@ -14223,7 +14229,6 @@ fn segment_hits_sphere(a: V3, b: V3, c: V3, r: f32) -> bool {
                         other_pos: b.pos,
                     });
                     b.dead = true;
-                    break;
                 }
             }
             self.bullet_path_weapons.push(b.weapon);
@@ -17631,10 +17636,15 @@ fn segment_hits_sphere(a: V3, b: V3, c: V3, r: f32) -> bool {
                 // (`update_player_bullets`' rigid-body-bullet arm). Consumed here; the NEXT
                 // tick's RB_Update applies the accumulators (the same one-tick shape
                 // spawn_blast's arm rides).
+                // Per object: this control entry's body only (`index` = its list slot) — the
+                // walk visits each 0xD8 object once, so each body handles its contacts and
+                // evolves once per frame [M the per-object dispatch pair]. (Running the whole
+                // list here evolved every body once per BODY: 07000004's two lamps swung at
+                // double rate.)
                 let mut rb_sounds = Vec::new();
-                self.rbodies.handle_collisions(&mut rb_sounds);
+                self.rbodies.handle_collisions_one(index, &mut rb_sounds);
                 for (id, pos) in rb_sounds { self.audio.play3d(id, pos, None); }
-                self.rbodies.tick(self.level_current & 0xf, &mut self.rng);
+                self.rbodies.tick_one(index, self.level_current & 0xf, &mut self.rng);
                 continue;
             }
             if what == 3 { let _pw = crate::prof::scope("ctl: kind 3");

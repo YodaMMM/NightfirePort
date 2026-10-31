@@ -25,7 +25,7 @@
 //!
 //! Collide_CylinderIntersect 0x1ecc00 [M] runs from RB_CollisionHandler 0x1d7a80 → RB_RestingContactRot 0x1d73a0:111
 //! (cylinder HITTEST at RIGIDBODY+0xB0) — reached on levels 07000006/0700000d (barrel placements, type halfword
-//! 0xFFFF [D]); owned when the RB evolution lands (docs/systems/levels.md §7.1). Coll_ResetHitHeap 0x1edda0 [M]
+//! 1 = param 2 [D; L rb+0xa8]); owned when the RB evolution lands (docs/systems/levels.md §7.1). Coll_ResetHitHeap 0x1edda0 [M]
 //! (the per-level HITDATA/TriHeap reset, ResetMap_GameInit 0x1d5080:35) is absorbed: the port's collision allocates
 //! directly (world.rs CollisionWorld, nf-formats/collision.rs).
 
@@ -602,10 +602,10 @@ pub fn rb_resting_contact(
 }
 
 /// `RB_RestingContactRot` 0x1d73a0 [M], the type != 0 hit-list walk — the arm the census
-/// barrels (type 0xFFFF) take. Per hit, class 5 only [M 0x1d7428-0x1d74c8]: Sound_Play3D
+/// barrels and lamps (type 1, param 2 [D; L rb+0xa8 = 1]) take. Per hit, class 5 only [M 0x1d7428-0x1d74c8]: Sound_Play3D
 /// (collected, not played), impulse = (hit+0x8)·0.5·vel, +0x50 += r×impulse (no +0x40 write)
 /// with the PER-TYPE masking of the cross lanes: type 2 keeps x, type 3 keeps y, type 4 keeps
-/// z, type 1 zeroes y; every other type (incl. 0xFFFF/−1) adds the full cross. Other classes fall through — Rot has NO position-correction arm
+/// z, type 1 (the census lamps and barrels) zeroes y; every other type adds the full cross. Other classes fall through — Rot has NO position-correction arm
 /// [M the decompile's only else arm walks to the next hit]. The cylinder interior (the
 /// +0xD0/+0xE0/+0x100 test points, the `Collide_CylinderIntersect` sweep and its
 /// uprighting tail) is the documented remainder: it needs the port's cylinder sweep (the
@@ -624,7 +624,8 @@ pub fn rb_resting_contact_rot(
             let cross = cross3(r, imp);
             // The per-type lane masks on the cross at sp+0x20/+0x24/+0x28 [M disasm
             // 0x1d753c-0x1d757c]: type 2 zeroes y,z; type 3 zeroes z,x; type 4 zeroes y,x;
-            // type 1 zeroes y; every other type (0xFFFF lamps/barrels) keeps the full cross.
+            // type 1 zeroes y (the census lamps/barrels — live lamp #40's +0x50 after the arm
+            // carried y = 0 [L]); every other type keeps the full cross.
             let masked = match rb.ty {
                 2 => [cross[0], 0.0, 0.0],
                 3 => [0.0, cross[1], 0.0],
@@ -681,9 +682,27 @@ pub struct RbObj {
     pub st: RbState,
     /// obj+0xD0: this tick's hit list (the collide pass fills it; the handler drains it).
     pub hits: Vec<RbHit>,
+    /// The glist bounding sphere in object space (entity params +0x08 centre, +0x14 radius):
+    /// `Control_BuildWorldSph` 0x133070 poses the centre by the live obj+0x90 into obj+0x80 and
+    /// keeps the radius at obj+0x8C — the sphere `Collide_PickObj` 0x1eae80 tests [M].
+    pub sph_centre: [f32; 3],
+    pub sph_radius: f32,
 }
 
 impl RbObj {
+    /// obj+0x80 / obj+0x8C: the live world sphere — the glist centre through the body's current
+    /// rotation rows plus the translation row (row-vector v·M), the glist radius [M
+    /// Control_BuildWorldSph 0x133070].
+    pub fn world_sphere(&self) -> ([f32; 3], f32) {
+        let (c, m, t) = (self.sph_centre, &self.st.matrix, self.st.trans);
+        let w = [
+            t[0] + c[0] * m[0][0] + c[1] * m[1][0] + c[2] * m[2][0],
+            t[1] + c[0] * m[0][1] + c[1] * m[1][1] + c[2] * m[2][1],
+            t[2] + c[0] * m[0][2] + c[1] * m[1][2] + c[2] * m[2][2],
+        ];
+        (w, self.sph_radius)
+    }
+
     /// obj+0x90: the drawn/collided matrix — the quaternion rows (`rb_set_state`/EulerEvolve)
     /// with the +0x30 translation row = `st.trans` [M RB_SetState 0x1d7da0, EulerEvolve :96].
     pub fn matrix(&self) -> nf_formats::anim::Mat4 {
@@ -729,16 +748,18 @@ impl Rbodies {
             let resolved = if p.by_hash() { level.by_hash.get(&p.hashcode).copied() } else { Some((m, p.index as usize)) };
             let Some((map, object)) = resolved else { continue };
             let Some(o) = level.maps[map].objects.get(object) else { continue };
-            // The record words: `RB_Create` reads the mass at rec+0x2c and the type halfword at
-            // rec+0x34 [M 0x1d6bf0:52-56]. The placement's param words are the (slot, value)
-            // pairs the parse carries (`Placement.params`, slot k = the record word +0x24+4k —
-            // the same words `extra` mirrors; the parse leaves `extra` zeroed on these rows, so
-            // the read goes through `params`). Slot 2 = +0x2c (the mass word), slot 4 = +0x34
-            // (the type halfword): 07000004's lamps carry (2,1) and (4,65535) [D], 07000006's
-            // barrels (0,8) and (4,65535) [D].
+            // The record words: `RB_Create` reads the mass at level_tag+0x2c and the type
+            // halfword at level_tag+0x34 [M 0x1d6bf0:52-56]. `level_tag` is the 0xB0 block
+            // `parsemap_block_map_data_dynamic` memsets per placement and fills with each
+            // (key, value) pair at +0x2C + 4·key [M 0x1d1b68:64-75] — param k sits at +0x2C+4k:
+            // p0 = the mass word, p2 = the type halfword, p3 = the +0x154 byte, p4 = the +0x158
+            // word [L a break at RB_Create 0x1d6bf0: 07000004's lamps #39/#40 arrive with
+            // +0x2c = 1, +0x34 = 1, +0x38 = 1, +0x3c = 0xFFFF (rb+0xa8 = 1, rb+0x78 mass = 1.0
+            // read back after the create); 07000006's barrel with +0x2c = 8, +0x34 = 1, +0x38 = 0,
+            // +0x3c = 0xFFFF].
             let pv = |k: u32| p.params.iter().find(|(j, _)| *j == k).map(|&(_, v)| v).unwrap_or(0);
-            let ty = (pv(4) & 0xffff) as u16 as i16;
-            let mass_word = pv(2);
+            let ty = (pv(2) & 0xffff) as u16 as i16;
+            let mass_word = pv(0);
             let mass = if mass_word == 0 { 3.0 }
                 else if mass_word & 0x8000_0000 != 0 { mass_word as f32 }
                 else { (mass_word as i32) as f32 };
@@ -765,11 +786,13 @@ impl Rbodies {
                 glist: o.hashcode,
                 flags: 0x44,
                 s_aa,
-                s154: (pv(5) & 0xff) as u8,
-                s158: if pv(6) == 0 { 0xffff } else { pv(6) },
+                s154: (pv(3) & 0xff) as u8,
+                s158: if pv(4) == 0 { 0xffff } else { pv(4) },
                 rb,
                 st,
                 hits: Vec::new(),
+                sph_centre: o.centre,
+                sph_radius: o.radius,
             });
         }
         Rbodies { list }
@@ -781,22 +804,35 @@ impl Rbodies {
     /// sim reads (obj+0xFA |= 0x20 [M :tail]; the +0x100 light-position sync is the visual
     /// layer — not ported).
     pub fn tick(&mut self, level_low_nibble: u32, rng: &mut crate::drone::Rng) {
-        for o in &mut self.list {
-            let obj_y = o.st.trans[1];
-            crate::rigid_body::rb_update(&mut o.rb, &mut o.st, None, obj_y, level_low_nibble, |m| rng.frand(m));
-            o.flags |= 0x20;
+        for j in 0..self.list.len() {
+            self.tick_one(j, level_low_nibble, rng);
         }
+    }
+
+    /// One body's `RB_Update` — the control walk's per-object call: each kind-0xD8 object runs
+    /// its own update once per frame (the dispatch pair at 0x26f9c8 is per object [M]).
+    pub fn tick_one(&mut self, j: usize, level_low_nibble: u32, rng: &mut crate::drone::Rng) {
+        let Some(o) = self.list.get_mut(j) else { return };
+        let obj_y = o.st.trans[1];
+        crate::rigid_body::rb_update(&mut o.rb, &mut o.st, None, obj_y, level_low_nibble, |m| rng.frand(m));
+        o.flags |= 0x20;
     }
 
     /// `RB_CollisionHandler` 0x1d7a80 [M] per body over its hit list; the sounds collect for
     /// the caller's pool.
     pub fn handle_collisions(&mut self, sounds: &mut Vec<(u32, [f32; 3])>) {
-        for o in &mut self.list {
-            if o.hits.is_empty() { continue; }
-            let hits = std::mem::take(&mut o.hits);
-            rb_collision_handler(&o.rb, &mut o.st, o.s_aa, &hits, sounds);
-            o.flags |= 0x20;
+        for j in 0..self.list.len() {
+            self.handle_collisions_one(j, sounds);
         }
+    }
+
+    /// One body's `RB_CollisionHandler` over its own hit list (the control walk's per-object call).
+    pub fn handle_collisions_one(&mut self, j: usize, sounds: &mut Vec<(u32, [f32; 3])>) {
+        let Some(o) = self.list.get_mut(j) else { return };
+        if o.hits.is_empty() { return; }
+        let hits = std::mem::take(&mut o.hits);
+        rb_collision_handler(&o.rb, &mut o.st, o.s_aa, &hits, sounds);
+        o.flags |= 0x20;
     }
 }
 
@@ -879,8 +915,8 @@ mod tests {
 mod evolve_tests {
     use super::*;
 
-    /// A census-shaped barrel: type halfword 0xFFFF (the sphere-type placements on 07000006 /
-    /// 0700000d [D docs/systems/levels.md §RB rows]), mass 3 (the RB_Create default when
+    /// A sphere-type body with an unmasked type halfword 0xFFFF (−1: none of the Rot arm's lane
+    /// masks applies — the census bodies themselves are type 1, param 2 [D; L]), mass 3 (the RB_Create default when
     /// rec+0x2c is 0 [M 0x1d6bf0:60-64]), cuboid moments of a 2×3×4 box.
     fn barrel() -> (RigidBody, RbState) {
         let mut rb = rb_init(-1i16); // 0xFFFF
@@ -1053,7 +1089,7 @@ mod evolve_tests {
     }
 
     /// [M disasm 0x1d7864-0x1d78dc] The angular damping is omega += omega·(−(1 − e^(−dt/a))/dt):
-    /// ×0.96 per tick at +0xa4 = 25 (type 0xFFFF). Sister (can fail): the plain e^(−dt/a)
+    /// ×0.96 per tick at +0xa4 = 25 (any type other than 0 and 3). Sister (can fail): the plain e^(−dt/a)
     /// form (×0.99933 per tick) is far weaker.
     #[test]
     fn angular_damping_is_the_games_rate_form() {
