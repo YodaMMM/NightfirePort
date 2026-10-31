@@ -24,3 +24,17 @@ Progress log:
 - 23:10 loot loop added (walk to the nearest live pickup, arrive 0.4, cycle weapons). The walk
   reaches the same wedge dry: 48 start rounds vs ~13 armed guards; drops untaken (one at y 0.0,
   through the floor — run08). Test stays ignored with both blockers; pokes stay gone.
+
+## level-02-every-objective-3 (started 06:45 UTC 2026-10-31)
+
+Task: make every objective of 07000002 complete on real input in its walkreal test — read
+blocked/10-level-02-every-objective-2.md (the whole report), settle its blockers with [D]/[M]
+evidence (or pin the exact live check if only a live run can settle one), fix the port gap, and
+un-ignore what can be un-ignored. Run walkreal_07000002_live, interactables_07000002_live and
+nf-game; quote the totals. Branch `s/level-02-every-objective-3`, from
+origin/s/level-02-every-objective-2 5270c0e9 merged with origin/master 7d0091a0.
+
+Progress log:
+- 06:45 branch created (merge above; clear_captors conflict — master's fd649f0f real-approach
+  walk is the newer, dedicated follow-up, it wins; e2's loot/clear_pursuers kept). Branch pushed
+  with this entry.
