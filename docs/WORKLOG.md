@@ -10,3 +10,17 @@ Collide_PickObj 0x1eae80]. Find which end value (0.0/1.0) these doors open to an
 port gives the open leaf vs the game's law [D door params/anim; M Door_Interp], fix the port's
 open-leaf pose or the doorway cels, walk the transit on real input (delete the write). Run
 walkreal_0700000b_live, interactables_0700000b_live and every *door* binary; quote totals.
+
+### level-0b-waiting-room-doors (finish, 03:55 UTC, 2026-10-31)
+
+The stand-in's cause found and fixed: the port's door pick used `1.5·r_door + r_pick` where the
+game's law [M Collide_PickObj 0x1eae80:100-110] is the door's own obj+0x8C radius ALONE — the
+phantom E-activator contact drove Door_ReactToHit's anti-crush [M 0x135980:85-97] to reverse
+every E-open swing ~every 3 ticks (NF_DOORTRACE caught the oscillation), so the open leaf never
+cleared the doorway. The doors' law established: closed = the middle key, the open ends = keys
+0/2, the end value from the approach side [M Door_Activate 0x135be0:136-146], +0x5C derived by
+Door_SetupSwing [M 0x135440:65-80, Mat_GetDir 0x1e3398 = row 2, Mat_GetNorm 0x1e33d8 = row 0] —
+the port's pose law matches. Measured ends: door #3 → pos01 1.000, door #0 → 0.000 (state 4).
+probe_0b_doors committed. The walked-transit rewrite is mid-flight (commit f3873e62 on this
+branch); the test head is the green form. Verified: walkreal_0700000b_live 3/0,
+interactables_0700000b_live 9/0, all 15 *door* binaries 35 passed / 0 failed / 2 ignored.
