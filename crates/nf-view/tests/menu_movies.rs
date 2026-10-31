@@ -115,7 +115,7 @@ fn the_page_aux_movie_map_comes_from_the_page_data() {
     // contract]: main = 0x07330048, P_LANGUAGE/list/results pages = 0x07350048, P_INTRO and the
     // title 0x40000009 = none (P_INTRO plays its movies from the handler, 0x209e88).
     use nf_view::menu::Page;
-    for page in [Page::Start, Page::Main, Page::Codename, Page::Difficulty, Page::MissionSelect, Page::Dossier, Page::Options, Page::Pause, Page::Results] {
+    for page in [Page::Start, Page::Main, Page::Codename, Page::Difficulty, Page::MissionSelect, Page::Dossier, Page::Options, Page::Pause, Page::Results, Page::Stats] {
         let want = mine.iter().find(|(i, _)| *i == page.id()).map(|(_, a)| *a).unwrap_or(0);
         assert_eq!(nf_view::menu::aux_movie_for(page.id()), want,
             "page {page:?} ({:#010x}): the port's aux movie must be the PAGE record's", page.id());
