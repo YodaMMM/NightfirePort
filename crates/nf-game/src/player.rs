@@ -1609,6 +1609,13 @@ impl Bond {
         // local-forward push (Player_Climb's ±0x18 write) rides along once.
         let vf = vf0 + self.push_fwd;
         self.push_fwd = 0.0;
+        // The tick's move (the move the clip model truncates — captured before EVERY position
+        // move: zero-g's matrix move, swim's look-dir move and the walk add all land above, and
+        // the vel/60 integration below rides the same span; the contacts run after the whole
+        // move [M Player_Update 0x193600:284-295 → Player_Collision]). Captured inside the
+        // integration before (NF_WALK_CLIP measured "zero clip applications" — move_v read
+        // (0, gravity, 0) on every walked tick and the flag path ghosted through walls).
+        let pre_move_pos = self.pos;
         if zero_g {
             // ===== Player_ZeroG 0x192ab0 (the spacewalk body) =====
             // First tick of the spell builds the orientation from the walk yaw/pitch:
@@ -1737,8 +1744,6 @@ self.local = [vs / k, vf / k];
             self.vel = [0.0; 3];
         }
         self.vel[1] = self.vel[1].clamp(-45.0, 45.0);
-        // The tick's move (the move the clip model truncates — captured before the integration).
-        let pre_move_pos = self.pos;
         if settle_release {
             // The ONE integration of the held velocity, in the game's op order (the VU mul then the
             // add [M 0x194df0:189-197]) — the shape the ee_start root reproduces bit-exactly. The
