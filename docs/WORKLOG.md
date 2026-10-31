@@ -56,3 +56,28 @@ Progress log:
   placements' [D] rows; if gated, pin present-at-higher/absent-at-lower; else fix the
   parse/attach drop; then pin the release in door_guards_locked_door_07000014_live and run it
   + every 07000014 binary + nf-game.
+
+## level-14-missing-group-guards — done
+
+- 10:00 the answer, before any code: the three "missing" templates are the disc's own difficulty
+  tags. `Drone_Create` 0x136be0 (first branch) creates nothing when `level_tag+0x34` (the
+  placement's parameter 2) exceeds `GameState._40_4_` — Ghidra DECIMAL 40 = +0x28 (0x2a3790), the
+  port's `Drones::difficulty` [M 0x136be0; D difficulty table 0x2df4c0]. [D audit :73-76/:85-87]
+  parameter 2: #721/#722/#724/#783 = 0x1, #723 = 0x3, #784 = 0x2, #785 = 0x3; group 9:
+  #778/#780 = 0x1, #779 = 0x2, #781 = 0x3. The test loads at difficulty 1 (Operative — the
+  mission-start force [M 0x1ffb90:22; L ee_start_*.bin +0x28 = 1]), so exactly the param-2 >= 2
+  set is gated — the absent set. The port's mirror (drone.rs level_drones `param(2) >
+  d.difficulty` + scene.rs ghost-guards-990) is faithful; NO parse/attach fix needed.
+- 10:38 the pin, door_guards_locked_door_07000014_live: Operative → the release brings 6 (trio
+  #721/#722/#724 at 0x38 [M 0x161560] + #783 + the group-9 pair; #723/#784/#785 never exist,
+  load or post-release) and 00 Agent (load_with_carry_difficulty 3) → 9 (ambush QUARTET all
+  0x38 — #723 shares prop word 0xf1dfc8c1 with the trio [D audit :85-87], so it is AmbushWait
+  too, NOT a door router; + full-alert #783/#784/#785 routing to the door area + 2 of the
+  group-9 spawner's 4 candidates, max 2 [D #720/#1333]). Released set = enabled ∧ alive ∧
+  not-enabled-at-load (templates sit enabled=false/health=10.0 until the wake).
+- 11:00 runs: door_guards_locked_door_07000014_live 4 passed/0 failed/1 ignored (the ignored
+  0x5f-hold test keeps its two named blockers); every *07000014* binary 37 passed/0 failed/
+  2 ignored across 16 binaries; nf-game 953 passed/0 failed. Full-suite chunks: the sandbox's
+  9.9 GB disk filled (ENOSPC at 100%) during the remaining builds; report has the totals above
+  and the resume command.
+- 11:25 the report: docs/reports/level-14-missing-group-guards.md.
