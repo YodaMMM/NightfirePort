@@ -262,6 +262,15 @@ impl EmitterDef {
     }
 }
 
+/// One sky object of `Level::sky_slot_instances`: the `GfxList` slot it fills, whether it is the slot's
+/// lightning (flash) variant, the instance, and glist flag bit 2 (drawn centred on the viewer).
+pub struct SkySlotInstance {
+    pub slot: u32,
+    pub flash: bool,
+    pub instance: Instance,
+    pub follows_camera: bool,
+}
+
 pub struct Instance {
     pub map: usize,
     pub object: usize,
@@ -438,13 +447,21 @@ impl Level {
     /// 001d04f0 case 0xd4 passes param_2], so its slot word `*(u16*)(block+0x3C)` is **parameter 4** and the drift
     /// rates are params 0–3 [M 0018d620:20-28].
     pub fn sky_instances(&self) -> Vec<(Instance, bool)> {
+        self.sky_slot_instances().into_iter().filter(|s| !s.flash).map(|s| (s.instance, s.follows_camera)).collect()
+    }
+
+    /// Every sky object with its `GfxList` slot and variant, sorted by slot (stable: placement order within a
+    /// slot). `flash` = the 0x2A lightning variant (parameter 1 ≠ 0): `View_AddSkyObj` 0x1e79a0 stores it in the
+    /// slot's +0x14/+0x1c handles, which `View_DrawSky` 0x1e5ad0 draws in place of the +0x10/+0x18 pair on a
+    /// flash tick [M 0x1e5ad0:122-157]. The clouds (0xD4) are never flash variants.
+    pub fn sky_slot_instances(&self) -> Vec<SkySlotInstance> {
         let Some(m) = self.main_map() else { return Vec::new() };
-        let mut out: Vec<(u32, Instance, bool)> = Vec::new();
+        let mut out: Vec<SkySlotInstance> = Vec::new();
         for p in self.maps[m].placements.iter().filter(|p| matches!(p.flags & 0xff, 0x2a | 0xd4)) {
             let param = |k: u32| p.params.iter().find(|(i, _)| *i == k).map(|&(_, v)| v).unwrap_or(0);
             // 0x2A's param 1 is the lightning-variant flag (View_AddSkyObj's param_6 byte); the cloud's
             // params 1/2 are its drift rates [M 0018d620:22-24], never a variant flag.
-            if p.flags & 0xff == 0x2a && param(1) != 0 { continue; }
+            let flash = p.flags & 0xff == 0x2a && param(1) as u8 != 0;
             // 0x2A: slot = param 0 [M 001d04f0 case 0x2a reads the param block at +0x2C]. 0xD4: slot = param 4
             // [M 0018d620:27 reads *(u16*)(block+0x3C) = param block offset 0x3C = param 4].
             let slot = if p.flags & 0xff == 0x2a { param(0) } else { param(4) };
@@ -459,10 +476,10 @@ impl Level {
             } else {
                 placement::object_matrix(p.rotation, p.translation)
             };
-            out.push((slot, Instance { map, object, matrix, placement: p.clone() }, follows_camera));
+            out.push(SkySlotInstance { slot, flash, instance: Instance { map, object, matrix, placement: p.clone() }, follows_camera });
         }
-        out.sort_by_key(|(slot, _, _)| *slot);
-        out.into_iter().map(|(_, i, c)| (i, c)).collect()
+        out.sort_by_key(|s| s.slot);
+        out
     }
 
     /// The main map (loader type 1), if the archive has one.

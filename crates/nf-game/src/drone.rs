@@ -11960,8 +11960,8 @@ pub struct Drones {
     /// 0xf2 emitters — crates/nf-game/src/world_fx.rs, fix-world-fx).
     pub fx: crate::world_fx::WorldFx,
     /// The sky's lightning timers (`View_DrawSky` 0x1e5ad0's per-slot +0x40..+0x48), ticked once
-    /// per sim frame for the thunder sound. The flash swap and the globals the 0x2c bolts read
-    /// (`fx.lightning`) are the renderer's to adopt; this copy only voices the thunder.
+    /// per sim frame: the thunder sound, the drawn variant per slot (`sky.flash_mask`, the
+    /// renderer's lightning swap) and the globals the 0x2c bolts read (mirrored into `fx.lightning`).
     pub sky: crate::sky::Sky,
     /// The stream the sky's `Rand_Rand` draws come from. *Deviation*: the game draws them from
     /// the shared `Rand_Rand` stream inside `Game_Draw`; the port keeps them off the sim's stream
@@ -15860,9 +15860,14 @@ fn segment_hits_sphere(a: V3, b: V3, c: V3, r: f32) -> bool {
     /// [M 0x1e5ad0:100-109]. Only slots with a flash variant run the timers (0700000a/0700000b's
     /// slot 3 on the disc [D]).
     fn sky_frame(&mut self) {
+        // One set of lightning globals (`LightningType`/`Reflicker`/`SuperHappyLightningFlag`
+        // [L 0x30d0b8/0x30d0b9]): `Lightning_Update` 0x18cf68 (the 0x2c bolts, ticked in `fx`) consumes
+        // `Reflicker` [M :23-24] before the frame's `View_DrawSky` calls read and rewrite all three.
+        self.sky.globals = self.fx.lightning;
         for th in self.sky.frame_thunder(0, false, &mut self.sky_rng) {
             self.audio.play(th.id());
         }
+        self.fx.lightning = self.sky.globals;
     }
 
     /// `NDrone2_FindOpponent` 0x1424e0's team-2 arm, per tick (the ControlSTANDARD 0x1490f0:167

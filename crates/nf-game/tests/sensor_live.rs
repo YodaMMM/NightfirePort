@@ -230,10 +230,18 @@ fn the_lightning_slot_thunders_and_a_still_sky_does_not() {
     let mut flash_starts = Vec::new();
     let mut thunders = Vec::new();
     let mut was_flashing = false;
+    let mut lit = 0usize;
     for t in 0..8000u32 {
         sim.tick(&d, &bond);
         let flashing = sim.sky.slots[3].flash > 0;
         if flashing && !was_flashing { flash_starts.push(t); }
+        // The drawn-variant record the renderer swaps on: slot 3's bit only, and only inside a
+        // flash (its last countdown tick ends at flash 0); the 0x2c bolts read the same globals.
+        if sim.sky.flash_mask != 0 {
+            assert!(sim.sky.flash_mask == 1 << 3 && (flashing || was_flashing), "tick {t}: mask {:#x}", sim.sky.flash_mask);
+            lit += 1;
+        }
+        assert_eq!(sim.fx.lightning, sim.sky.globals, "tick {t}: one set of lightning globals");
         was_flashing = flashing;
         sim.audio.update(None, ([0.0; 3], [1.0, 0.0, 0.0], [0.0, 1.0, 0.0], [0.0, 0.0, 1.0]), &|_| true);
         for c in sim.audio.take_commands() {
@@ -246,6 +254,7 @@ fn the_lightning_slot_thunders_and_a_still_sky_does_not() {
         }
     }
     assert!(thunders.len() >= 2, "several storms in 8000 ticks: {thunders:?} (flashes {flash_starts:?})");
+    assert!(lit >= flash_starts.len(), "every flash start draws the flash variant: {lit} lit ticks, {} starts", flash_starts.len());
     for &(t, id) in &thunders {
         let start = *flash_starts.iter().filter(|&&f| f <= t).last().expect("a flash before every thunder");
         let lag = t - start;

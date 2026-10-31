@@ -297,7 +297,7 @@ pub fn alpha_shaped(rgba: &[u8]) -> bool {
 struct Batch { bg: wgpu::BindGroup, snow_tex: u32, indirect: wgpu::Buffer, args: Vec<u32> }
 
 #[derive(Clone, Copy)]
-struct DrawCall { layer: crate::scene::Layer, pass: u8, pipeline: usize, tex: usize, first: u32, count: u32, centre: [f32; 3], radius: f32, cel: Option<u16>, chain: u32, node: u32, lflags: u16, skin: Option<(u32, Option<u32>)> }
+struct DrawCall { layer: crate::scene::Layer, pass: u8, pipeline: usize, tex: usize, first: u32, count: u32, centre: [f32; 3], radius: f32, cel: Option<u16>, chain: u32, node: u32, lflags: u16, skin: Option<(u32, Option<u32>)>, sky_slot: Option<(u8, bool)> }
 
 pub struct Renderer {
     hud_pipeline: wgpu::RenderPipeline,
@@ -339,6 +339,11 @@ pub struct Renderer {
     /// doorway ends open [L]). Fed by lib.rs each frame from `Scene::destroy_centres` + the sim's
     /// `props.destroy[..].dead`; empty until set (the loading screen and the pre-sim frames).
     pub destroy_dead: Vec<[u32; 3]>,
+    /// The sky's lightning swap, per frame: bit n set = `GfxList` slot n draws its flash variant this tick
+    /// (`View_DrawSky` 0x1e5ad0:122-157 — the sim's `Sky::flash_mask`). A tagged sky draw
+    /// (`Material::sky_slot`) renders only when its variant matches the slot's bit; 0 = every slot
+    /// draws its normal variant (the loading screen, the pre-sim frames).
+    pub sky_flash_mask: u32,
     /// The swap's WRECK draws, per frame: the baked wreck instances' material centres (f32
     /// bits) whose Destroy leaf is dead — the only wreck draws that render ([M Destroy_Smash
     /// 0x12bb60's `Control_SetGList(obj, tag[0])` swap: the dead object rides the destroyed
@@ -710,7 +715,7 @@ impl Renderer {
         // entries front-to-back. `Material::chain` carries the room's build-time parse-rank fallback, `node` its
         // per-frame chain cel (u32::MAX = a distance-keyed entry).
         let draws: Vec<DrawCall> = scene.materials.iter().zip(&material_tex)
-            .map(|(m, &tex)| DrawCall { layer: m.layer, pass: m.draw.pass, pipeline: pipelines.iter().position(|(d, _)| *d == m.draw).unwrap(), tex, first: m.first_index, count: m.index_count, centre: m.centre, radius: m.radius, cel: m.cel, chain: m.chain, node: m.node, lflags: m.lflags, skin: m.skin }).collect();
+            .map(|(m, &tex)| DrawCall { layer: m.layer, pass: m.draw.pass, pipeline: pipelines.iter().position(|(d, _)| *d == m.draw).unwrap(), tex, first: m.first_index, count: m.index_count, centre: m.centre, radius: m.radius, cel: m.cel, chain: m.chain, node: m.node, lflags: m.lflags, skin: m.skin, sky_slot: m.sky_slot }).collect();
         let fog = scene.fog;
         let snow_pipeline = make_pipeline(Draw { pass: 5, blend: 1, zwrite: false, atest: 0, fog: 0 });
         // break-shards draw: normal alpha, no depth write, the alpha-list test [S: psiDrawShard's
@@ -760,7 +765,7 @@ impl Renderer {
             for ch in &cel_graph.chains { for &c in ch { if (c as usize) < n { reached[c as usize] = true; } } }
             reached.iter().map(|r| !r).collect()
         };
-        Renderer { shard_pipeline, shard_vbuf, shard_groups: Vec::new(), woman_tex, snow_pipeline, snow_vbuf, snow_bg, hud_pipeline, hud_add_pipeline, hud_sub_pipeline, hud_vbuf, hud_bgs, pipelines, fog, notex, nofog, uniform, uniform_bg, staged: Vec::new(), orphan_nodes, destroy_dead: Vec::new(), destroy_wreck_draw: Vec::new(), destroy_wreck_all: scene.destroy_wrecks.iter().map(|(c, _)| c.map(f32::to_bits)).collect(), destroy_tint: Vec::new(), batch, vbuf, skin_buf, snow_skin, pal_buf, col_buf, wts_buf, mtg_buf, skin_layout, skin_pos: Default::default(), char_light_centre: Vec::new(), lights: Default::default(), screen_aspect: 0.0, ibuf, tex_bgs, tex_frames, draws, order: Vec::with_capacity(order_cap), cel_boxes, cel_graph, viewer_cel: Default::default(), last_vis: None, last_cell_vis: None, movie_tex: None, movie_bg: None, movie_size: None, movie_vbuf, hud_tbgl: tbgl, hud_sampler: sampler }
+        Renderer { shard_pipeline, shard_vbuf, shard_groups: Vec::new(), woman_tex, snow_pipeline, snow_vbuf, snow_bg, hud_pipeline, hud_add_pipeline, hud_sub_pipeline, hud_vbuf, hud_bgs, pipelines, fog, notex, nofog, uniform, uniform_bg, staged: Vec::new(), orphan_nodes, destroy_dead: Vec::new(), sky_flash_mask: 0, destroy_wreck_draw: Vec::new(), destroy_wreck_all: scene.destroy_wrecks.iter().map(|(c, _)| c.map(f32::to_bits)).collect(), destroy_tint: Vec::new(), batch, vbuf, skin_buf, snow_skin, pal_buf, col_buf, wts_buf, mtg_buf, skin_layout, skin_pos: Default::default(), char_light_centre: Vec::new(), lights: Default::default(), screen_aspect: 0.0, ibuf, tex_bgs, tex_frames, draws, order: Vec::with_capacity(order_cap), cel_boxes, cel_graph, viewer_cel: Default::default(), last_vis: None, last_cell_vis: None, movie_tex: None, movie_bg: None, movie_size: None, movie_vbuf, hud_tbgl: tbgl, hud_sampler: sampler }
     }
 
     /// The game's depth-0 pyramid for the walk [M `Vision_Calculate_View_Fustrum` 0x1e7df8,
@@ -1039,6 +1044,7 @@ impl Renderer {
             // The destroyed-glist swap's draw side (see the field doc): a dead Destroy leaf's
             // materials — matched by the build-time centre bits — drop out of the frame.
             let destroy_dead = &self.destroy_dead;
+            let sky_flash_mask = self.sky_flash_mask;
             // The swap's wreck side: a baked wreck draw renders only while its leaf is dead (see
             // the field docs — before the smash the object's live glist is the intact one).
             let wreck_all = &self.destroy_wreck_all;
@@ -1047,6 +1053,8 @@ impl Renderer {
             let layout = &self.skin_layout;
             self.order.extend(draws.iter().enumerate().filter(|&(k, dc)| {
                 if skip.contains(&k) { return false; }
+                // The sky's lightning swap: a slot with a flash variant draws one of its two pairs.
+                if !crate::scene::sky_variant_drawn(dc.sky_slot, sky_flash_mask) { return false; }
                 if !destroy_dead.is_empty() && dc.layer == Layer::World
                     && destroy_dead.contains(&dc.centre.map(f32::to_bits)) { return false; }
                 if !wreck_all.is_empty() && dc.layer == Layer::World

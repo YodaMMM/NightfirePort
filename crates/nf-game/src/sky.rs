@@ -329,6 +329,11 @@ pub struct Sky {
     pub slots: [SkySlot; MAX_SLOTS],
     pub globals: LightningGlobals,
     pub rotating: RotatingSky,
+    /// The variant each slot drew on the last frame: bit n = slot n drew its flash variant
+    /// (`View_DrawSky` 0x1e5ad0's `iVar11 = +0x14` / `iVar10 = +0x1c` swap [M :122-157]); a clear bit =
+    /// the normal +0x10/+0x18 pair [M :97-98] — nothing at all for a flash-only slot. The renderer's
+    /// lightning swap reads it (`Renderer::sky_flash_mask`).
+    pub flash_mask: u32,
 }
 
 impl Sky {
@@ -391,14 +396,19 @@ impl Sky {
     /// world list, `View_DrawSky(viewer, 0)` after `psiPostSolid` — returning the thunder sounds
     /// that fired (`Sound_Play(100, 0x5d / 0x5e)` [M 0x1e5ad0:100-109]). The timers run only while
     /// the game is not paused (`GameState[0x50] == 0`, :99).
+    /// Also records the frame's drawn variants in `flash_mask`: a paused frame skips the timers and
+    /// draws every slot's normal pair (the :99 gate leaves `iVar11`/`iVar10` at +0x10/+0x18).
     pub fn frame_thunder(&mut self, level: u32, paused: bool, rng: &mut Rng) -> Vec<ThunderSound> {
-        if paused { return Vec::new(); }
+        if paused { self.flash_mask = 0; return Vec::new(); }
         let mut out = Vec::new();
+        let mut mask = 0u32;
         for group in [1u8, 0] {
-            for (_, t) in self.tick_group_slots(group, level, paused, rng) {
+            for (i, t) in self.tick_group_slots(group, level, paused, rng) {
                 if let Some(th) = t.thunder { out.push(th); }
+                if t.drew_flash { mask |= 1 << i; }
             }
         }
+        self.flash_mask = mask;
         out
     }
 
