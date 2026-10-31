@@ -2,7 +2,7 @@
 //! cinema never moves Bond. Its Bond-actor stream (stream 8, kind 1) carries exactly ONE key at
 //! the pit floor, so the event-6 hand-back snapshot [M Script_EventHandler 0x1d94c0:125-134 →
 //! Player_Enable 0x195498's teleport] re-enables the player INSIDE the ch-0xf3 hurt volume's box
-//! — the game's escape is the pack flight, not a cinema move. Opt-in via NF_ISO.
+//! — the escape is the blast-room shelter (blast_room_shelter_16_live), not a cinema move. Opt-in via NF_ISO.
 #[test]
 fn the_pack_cinema_never_moves_bond_stream8_is_one_pit_floor_key() {
     use nf_formats::{disc, iso9660::IsoImage, levelbin::LevelBin, nis::Nis};
