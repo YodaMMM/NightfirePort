@@ -1165,6 +1165,45 @@ pub fn mul_bytes(a: [u8; 3]) -> [f32; 3] {
     [0, 1, 2].map(|k| ((tint[k] as u32 * a[k] as u32) >> 8) as f32 / 255.0)
 }
 
+/// ambient-sweep: the 0x800 dim of one sim-posed object slot (doors, SimpleScripts, breakables, gun
+/// emplacements, sensors, dynamic objects, rotors, searchlight parts). Each creator copies the
+/// glist flags into obj+0xF0 (`Control_SetGList` 0x134960 — Door_Create 0x136100, SS_Create
+/// 0x1a9c58, Break_Create 0x12c230; a direct `obj+0xF0 = glist+0x44` store — DynamicObject_Create
+/// 0x18dbf8, rotor_init 0x18f4b8, Searchlight_Create 0x1cb4f8, Sensor_Create 0x1af010 (its two
+/// children via `hashtable_set_object_to_entity_gfx` 0x1ca6d8 → SetGList); GunImp_Create 0x131f20
+/// via `Control_CreateObjEx` 0x1343c8's `glist+0x44 | extra`) [M], so a mesh whose glist carries
+/// 0x800 is drawn at `tint × obj+0x100..0x102 >> 8` (`View_SetupRenderModes_Tweak` 0x1e5888). The
+/// bytes are snapped from the linked cel at the create-time link (`build_LinkToRoom` 0x1c9680 at the
+/// world-sphere centre obj+0x80) and only eased again by objects whose updater sets the 0x20
+/// re-link bit (`control_movement_object_handler` 0x1336f8's `Lights_CalcAmbientLight` pass:
+/// SS_Update 0x1a9948, GunImp_Update 0x1320d8, rotor_update 0x18f568 set it) — `live`. Lock_Create
+/// 0x1ae1f8 and RB_Create 0x1d6bf0 never write obj+0xF0 (0 from `control_create_object`'s memset),
+/// so locks and rigid bodies stay undimmed and get no entry.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct PosedDim {
+    /// The glist sphere centre in object space (the obj+0x80 world-sphere source).
+    pub centre: [f32; 3],
+    /// The multiplier snapped at the build-time link (switch shift 0, the level-start state).
+    pub snap: [f32; 3],
+    /// The updater re-links the object every tick: the dim follows the cel at its live matrix.
+    pub live: bool,
+}
+
+/// `PosedDim` for one posed-slot instance: Some only when the mesh's glist flags carry 0x800.
+fn posed_dim(level: &Level, cels: &[Cel], inst: &Instance, live: bool) -> Option<PosedDim> {
+    let obj = &level.maps[inst.map].objects[inst.object];
+    (obj.flags & 0x800 != 0).then(|| PosedDim {
+        centre: obj.centre,
+        snap: mul_bytes(cel_ambient(cels, transform(&inst.matrix, obj.centre), 0).unwrap_or([0xff; 3])),
+        live,
+    })
+}
+
+fn put_dim(v: &mut Vec<Option<PosedDim>>, k: usize, d: Option<PosedDim>) {
+    if v.len() <= k { v.resize(k + 1, None); }
+    if v[k].is_none() { v[k] = d; }
+}
+
 /// The level's room cels: the main map's cel placements whose low 16 flag bits are 0xc023/0xc047
 /// (`parseentity_fixup_entity` 0x1d00c0 fills the runtime cel's ambient/zone from the placement's params
 /// for exactly these two flag words). See `Cel`. The room half of `parse_cel_graph` — the two MUST
@@ -6122,7 +6161,7 @@ pub struct SkinAttr { pub a: u32, pub b: u32, pub w: f32, pub col: u32,
     pub tend: u32 }
 
 /// The palette / colour-table layout of `Scene::skin_layout`.
-pub struct SkinLayout { pub char_base: Vec<u32>, pub attach_base: u32, pub sl_base: u32, pub door_base: u32, pub pick_base: u32, pub n_mats: u32, pub col_att: u32, pub col_pick: u32, pub col_sl: u32, pub col_one: u32,
+pub struct SkinLayout { pub char_base: Vec<u32>, pub attach_base: u32, pub sl_base: u32, pub door_base: u32, pub pick_base: u32, pub n_mats: u32, pub col_att: u32, pub col_pick: u32, pub col_sl: u32, pub col_door: u32, pub col_one: u32,
     /// fix-gpu-facial-morphs: the per-character facial-weight block stride, in vec4s (the widest
     /// facial count across the characters, rounded up; 0 = the scene has no morph bearer).
     pub wt_stride: u32,
@@ -6258,6 +6297,12 @@ pub struct Scene {
     /// The 0x2E locks' placement matrices (`Lock::create` order): where the keypads' posed slots
     /// draw the placed object or its LOD variant.
     pub lock_matrices: Vec<Mat4>,
+    /// ambient-sweep: per door-region posed slot (doors, SS, breakables, locks, gun emplacements,
+    /// sensors, dynamic objects, rotors, rigid bodies — `skin_layout`'s door index), the 0x800 dim
+    /// (`PosedDim`); None = drawn undimmed.
+    pub door_dims: Vec<Option<PosedDim>>,
+    /// ambient-sweep: the same per searchlight slot (parts, then the LOD slots).
+    pub sl_dims: Vec<Option<PosedDim>>,
     /// The 0x3B gated dynamic objects' placement matrices (`WorldObjects::create` order — every
     /// 0x3b placement, placement order): where the posed slots draw them, collapsed once the sim
     /// deletes the object (`DynamicObject_Update` 0x18d3b8:26 mode-0 armed-B → obj+0xFE bit 0 →
@@ -8412,7 +8457,12 @@ pub fn build(level: &Level, cels_only: bool, skeletons: &HashMap<u8, Skeleton>, 
                 // slot space below (`GunImp_Update` 0x1320d8:162-173 re-poses both every tick).
                 if kind == 0x34 { *misc_drawn.entry(kind).or_default() += 1; continue; }
                 // The 0x800 dim, the same rule the main static loop applies (View_SetupRenderModes_Tweak 0x1e5888).
-                let mult = if obj.flags & 0x800 != 0 {
+                // ambient-sweep: obj+0xF0 is the glist's flags only where the creator copies them; Lock_Create
+                // 0x1ae1f8 (0x2e), OneSided_Create 0x1e7ce8 (0xd5), RB_Create 0x1d6bf0 (0xd8) and Mine_Create
+                // 0x17ce28 (0xfe) never write obj+0xF0 (0 from `control_create_object` 0x1344e0's memset) [M],
+                // so those objects draw undimmed whatever their glist says.
+                let copies_flags = !matches!(kind, 0x2e | 0xd5 | 0xd8 | 0xfe);
+                let mult = if copies_flags && obj.flags & 0x800 != 0 {
                     let mx = nf_formats::placement::object_matrix(p.rotation, p.translation);
                     mul_bytes(cel_ambient(&room_cels, transform(&mx, obj.centre), 0).unwrap_or([0xff; 3]))
                 } else { [1.0; 3] };
@@ -8424,7 +8474,8 @@ pub fn build(level: &Level, cels_only: bool, skeletons: &HashMap<u8, Skeleton>, 
                         let Some(c) = level.by_hash.get(&h).copied().filter(|&c| has_gfx(c)) else { continue };
                         let mut cm = hm;
                         if k == 2 { cm[0] = [1.0, 0.0, 0.0, 0.0]; cm[1] = [0.0, 1.0, 0.0, 0.0]; cm[2] = [0.0, 0.0, 1.0, 0.0]; }
-                        add_instance(level, &Instance { map: c.0, object: c.1, matrix: cm, placement: p.clone() }, Layer::World, None, &mut groups, None, None, None, None, [1.0; 3], &room_cels, u32::MAX, u32::MAX);
+                        // ambient-sweep: the children take their own glist's 0x800 dim (`hashtable_set_object_to_entity_gfx` 0x1ca6d8 → `Control_SetGList` 0x134960 [M Car_Create 0x1305b0 / Car_InitBits 0x12fec8]).
+                        { let ci = Instance { map: c.0, object: c.1, matrix: cm, placement: p.clone() }; let cmul = posed_dim(level, &room_cels, &ci, false).map_or([1.0; 3], |d| d.snap); add_instance(level, &ci, Layer::World, None, &mut groups, None, None, None, None, cmul, &room_cels, u32::MAX, u32::MAX); }
                         *misc_drawn.entry(0xda).or_default() += 1;
                     }
                     continue;
@@ -8469,14 +8520,14 @@ pub fn build(level: &Level, cels_only: bool, skeletons: &HashMap<u8, Skeleton>, 
                     let has_gfx = |(cm, co): (usize, usize)| level.maps[cm].objects[co].gfx.leaves.iter().any(|l| !l.batches.is_empty());
                     // Child 1 (data+0xE0, 0x2000502): a full Mat_Copy of the body's matrix [M 0x12fec8:33].
                     if let Some(c) = level.by_hash.get(&0x0200_0502).copied().filter(|&c| has_gfx(c)) {
-                        add_instance(level, &Instance { map: c.0, object: c.1, matrix: inst.matrix, placement: p.clone() }, Layer::World, None, &mut groups, None, None, None, None, [1.0; 3], &room_cels, u32::MAX, u32::MAX);
+                        { let ci = Instance { map: c.0, object: c.1, matrix: inst.matrix, placement: p.clone() }; let cmul = posed_dim(level, &room_cels, &ci, false).map_or([1.0; 3], |d| d.snap); add_instance(level, &ci, Layer::World, None, &mut groups, None, None, None, None, cmul, &room_cels, u32::MAX, u32::MAX); }
                         *misc_drawn.entry(0xda).or_default() += 1;
                     }
                     // Child 2 (data+0xE4, 0x2000505): identity rotation + the body's translation [M 0x12fec8:13-33].
                     if let Some(c) = level.by_hash.get(&0x0200_0505).copied().filter(|&c| has_gfx(c)) {
                         let mut cm = inst.matrix;
                         cm[0] = [1.0, 0.0, 0.0, 0.0]; cm[1] = [0.0, 1.0, 0.0, 0.0]; cm[2] = [0.0, 0.0, 1.0, 0.0];
-                        add_instance(level, &Instance { map: c.0, object: c.1, matrix: cm, placement: p.clone() }, Layer::World, None, &mut groups, None, None, None, None, [1.0; 3], &room_cels, u32::MAX, u32::MAX);
+                        { let ci = Instance { map: c.0, object: c.1, matrix: cm, placement: p.clone() }; let cmul = posed_dim(level, &room_cels, &ci, false).map_or([1.0; 3], |d| d.snap); add_instance(level, &ci, Layer::World, None, &mut groups, None, None, None, None, cmul, &room_cels, u32::MAX, u32::MAX); }
                         *misc_drawn.entry(0xda).or_default() += 1;
                     }
                 }
@@ -8488,6 +8539,8 @@ pub fn build(level: &Level, cels_only: bool, skeletons: &HashMap<u8, Skeleton>, 
         // cone along the aim, the spot on its ray hit, the corona a camera billboard (docs/systems/world-objects.md).
         crate::phase_mark("b5f coronas/wires/ladders/misc", t); t = std::time::Instant::now();
         let mut lock_matrices: Vec<Mat4> = Vec::new();
+        let mut door_dims: Vec<Option<PosedDim>> = Vec::new();
+        let mut sl_dims: Vec<Option<PosedDim>> = Vec::new();
         let mut dynobj_matrices: Vec<Mat4> = Vec::new();
         let mut rotor_placements: Vec<([f32; 3], [f32; 3])> = Vec::new();
         let mut rbody_placements: Vec<u16> = Vec::new();
@@ -8502,6 +8555,7 @@ pub fn build(level: &Level, cels_only: bool, skeletons: &HashMap<u8, Skeleton>, 
                 if let Some((map, object)) = target {
                     let inst = Instance { map, object, matrix: nf_formats::placement::object_matrix(p.rotation, p.translation), placement: p.clone() };
                     add_instance(level, &inst, Layer::Character, None, &mut groups, None, Some(pi as u16), None, None, [1.0; 3], &room_cels, u32::MAX, u32::MAX);
+                    put_dim(&mut sl_dims, pi as usize, posed_dim(level, &room_cels, &inst, false));
                 }
             }
             // The off-kill's / break's `Control_NextLOD(head)` [M Searchlight_Update 0x1cb900:138, :454;
@@ -8519,6 +8573,7 @@ pub fn build(level: &Level, cels_only: bool, skeletons: &HashMap<u8, Skeleton>, 
                 let slot = (sl_parts.len() + sl_lod.len()) as u16;
                 let inst = Instance { map, object: lod, matrix: nf_formats::placement::object_matrix(p.rotation, p.translation), placement: p.clone() };
                 add_instance(level, &inst, Layer::Character, None, &mut groups, None, Some(slot), None, None, [1.0; 3], &room_cels, u32::MAX, u32::MAX);
+                put_dim(&mut sl_dims, slot as usize, posed_dim(level, &room_cels, &inst, false));
                 sl_lod.push(pi as u16);
             }
             // Doors (`Door_Create`'s creation order = `door_placements`): each door's object as Character-layer
@@ -8542,6 +8597,7 @@ pub fn build(level: &Level, cels_only: bool, skeletons: &HashMap<u8, Skeleton>, 
                 if let Ok(h) = std::env::var("NF_HIDE") { if h.split(',').any(|n| !n.is_empty() && level.maps[map].objects[object].name.contains(n)) { continue; } }
                 let inst = Instance { map, object, matrix: nf_formats::placement::object_matrix(p.rotation, p.translation), placement: p.clone() };
                 add_instance(level, &inst, Layer::Character, None, &mut groups, None, None, Some(di as u16), None, [1.0; 3], &room_cels, u32::MAX, u32::MAX);
+                put_dim(&mut door_dims, di, posed_dim(level, &room_cels, &inst, false));
             }
             // SimpleScripts (`SS_Create` 0x1a9c58 / `SS_Update` 0x1a9948, map-tower2): the animated 0xE2
             // placements (key count non-zero) ride the door slot space — their vertices pose from
@@ -8561,6 +8617,7 @@ pub fn build(level: &Level, cels_only: bool, skeletons: &HashMap<u8, Skeleton>, 
                 let Some((map, object)) = target else { continue };
                 let inst = Instance { map, object, matrix: nf_formats::placement::object_matrix(p.rotation, p.translation), placement: p.clone() };
                 add_instance(level, &inst, Layer::Character, None, &mut groups, None, None, Some((n_doors + si) as u16), None, [1.0; 3], &room_cels, u32::MAX, u32::MAX);
+                put_dim(&mut door_dims, n_doors + si, posed_dim(level, &room_cels, &inst, true));
             }
             // The breakables (0x20, `Break_Create` 0x12c230): `nf_game::breakable::Breaks::create`'s
             // order (every 0x20 placement, placement order) after the SS slots — posed at their
@@ -8579,6 +8636,7 @@ pub fn build(level: &Level, cels_only: bool, skeletons: &HashMap<u8, Skeleton>, 
                 if let Ok(h) = std::env::var("NF_HIDE") { if h.split(',').any(|n| !n.is_empty() && level.maps[map].objects[object].name.contains(n)) { continue; } }
                 let inst = Instance { map, object, matrix: nf_formats::placement::object_matrix(p.rotation, p.translation), placement: p.clone() };
                 add_instance(level, &inst, Layer::Character, None, &mut groups, None, None, Some(slot as u16), None, [1.0; 3], &room_cels, u32::MAX, u32::MAX);
+                put_dim(&mut door_dims, slot, posed_dim(level, &room_cels, &inst, false));
             }
             // The locks with a LOD variant (`Lock::create`'s order — every 0x2E placement), after the
             // breakables: two slots per lock, the placed object at `2·li` and its LOD variant at
@@ -8617,11 +8675,13 @@ pub fn build(level: &Level, cels_only: bool, skeletons: &HashMap<u8, Skeleton>, 
                     if let Some((map, object)) = target.filter(|&t| has_gfx(t)) {
                         let inst = Instance { map, object, matrix: mx, placement: p.clone() };
                         add_instance(level, &inst, Layer::Character, None, &mut groups, None, None, Some(slot0 as u16), None, [1.0; 3], &room_cels, u32::MAX, u32::MAX);
+                        put_dim(&mut door_dims, slot0, posed_dim(level, &room_cels, &inst, true));
                     }
                     for (a, art) in nf_game::gunimp::TURRET_ARTS.iter().enumerate() {
                         let Some((map, object)) = level.by_hash.get(art).copied().filter(|&t| has_gfx(t)) else { continue };
                         let inst = Instance { map, object, matrix: mx, placement: p.clone() };
                         add_instance(level, &inst, Layer::Character, None, &mut groups, None, None, Some((slot0 + 1 + a) as u16), None, [1.0; 3], &room_cels, u32::MAX, u32::MAX);
+                        put_dim(&mut door_dims, slot0 + 1 + a, posed_dim(level, &room_cels, &inst, true));
                     }
                 }
             }
@@ -8654,6 +8714,7 @@ pub fn build(level: &Level, cels_only: bool, skeletons: &HashMap<u8, Skeleton>, 
                         let Some((map, object)) = t.filter(|&t| has_gfx(t)) else { continue };
                         let inst = Instance { map, object, matrix: mx, placement: p.clone() };
                         add_instance(level, &inst, Layer::Character, None, &mut groups, None, None, Some((cam_base + 3 * si + k) as u16), None, [1.0; 3], &room_cels, u32::MAX, u32::MAX);
+                        put_dim(&mut door_dims, cam_base + 3 * si + k, posed_dim(level, &room_cels, &inst, false));
                     }
                 }
             }
@@ -8681,6 +8742,7 @@ pub fn build(level: &Level, cels_only: bool, skeletons: &HashMap<u8, Skeleton>, 
                 if let Ok(h) = std::env::var("NF_HIDE") { if h.split(',').any(|n| !n.is_empty() && level.maps[map].objects[object].name.contains(n)) { continue; } }
                 let inst = Instance { map, object, matrix: mx, placement: p.clone() };
                 add_instance(level, &inst, Layer::Character, None, &mut groups, None, None, Some((dynobj_base + di) as u16), None, [1.0; 3], &room_cels, u32::MAX, u32::MAX);
+                put_dim(&mut door_dims, dynobj_base + di, posed_dim(level, &room_cels, &inst, false));
             }
             // The rotors (0x71, `WorldObjects::create`'s order), after the dynamic objects: one slot each,
             // posed every tick at the placement ROT + the sim's accumulated spin [M 0x18f4b8, 0x18f568].
@@ -8697,6 +8759,7 @@ pub fn build(level: &Level, cels_only: bool, skeletons: &HashMap<u8, Skeleton>, 
                 let mx = nf_formats::placement::object_matrix(p.rotation, p.translation);
                 let inst = Instance { map, object, matrix: mx, placement: p.clone() };
                 add_instance(level, &inst, Layer::Character, None, &mut groups, None, None, Some((rotor_base + ri) as u16), None, [1.0; 3], &room_cels, u32::MAX, u32::MAX);
+                put_dim(&mut door_dims, rotor_base + ri, posed_dim(level, &room_cels, &inst, true));
             }
             // The rigid bodies (0xD8, placement order — `Rbodies::create`'s), after the rotors: one slot
             // each, posed every tick at the body's obj+0x90 (rotation rows + the +0x30 translation)
@@ -9190,7 +9253,7 @@ pub fn build(level: &Level, cels_only: bool, skeletons: &HashMap<u8, Skeleton>, 
                 }
             }
         }
-        Scene { shard_tex, cels: room_cels, cel_graph, streams: None, music_files: None, music_tables: None, sound_bank: None, sound_spares: Vec::new(), snow_texture, vertices, indices, materials, textures, hud_textures, woman: None, hud, script_billboards, view_models, mp_bodies, bond_body, mp_body_weapons, mp_char_bodies, mp_anim_sets, fog, bounds, start, stats, characters, char_vertex_start, char_verts, sequences, attachments, sim, colliders, models_0x800, npc_pool, ladders_drawn, grapple_hooks_drawn, misc_drawn, lock_matrices, dynobj_matrices, rotor_placements, rbody_placements, gunimp_placements,
+        Scene { shard_tex, cels: room_cels, cel_graph, streams: None, music_files: None, music_tables: None, sound_bank: None, sound_spares: Vec::new(), snow_texture, vertices, indices, materials, textures, hud_textures, woman: None, hud, script_billboards, view_models, mp_bodies, bond_body, mp_body_weapons, mp_char_bodies, mp_anim_sets, fog, bounds, start, stats, characters, char_vertex_start, char_verts, sequences, attachments, sim, colliders, models_0x800, npc_pool, ladders_drawn, grapple_hooks_drawn, misc_drawn, lock_matrices, door_dims, sl_dims, dynobj_matrices, rotor_placements, rbody_placements, gunimp_placements,
             door_scene_hidden,
             sl_lod,
             destroy_centres,
@@ -10096,6 +10159,35 @@ pub fn build(level: &Level, cels_only: bool, skeletons: &HashMap<u8, Skeleton>, 
     /// A lock's posed slot (door slot `k`, past the doors, SSs and breakables): `2·li` is the placed
     /// object, `2·li + 1` its LOD variant; the one `obj+0xD8` points at draws at the placement
     /// matrix, the other is `None` (collapsed). `Control_NextLOD` 0x1349b0 is the swap (`Lock::lod_next`).
+    /// The door-region posed slot `k`'s live matrix (doors, then the SimpleScripts, the breakables,
+    /// then `lock_slot`'s locks / gun emplacements / sensors / dynamic objects / rotors / rigid
+    /// bodies); the far collapse when the object is gone.
+    pub fn door_slot_matrix(&self, s: &Sim, k: usize) -> Mat4 {
+        const FAR: Mat4 = [[0.0; 4], [0.0; 4], [0.0; 4], [0.0, -10000.0, 0.0, 1.0]];
+        let brk = |k: usize| k.checked_sub(s.drones.doors.list.len() + s.drones.sss.list.len())
+            .and_then(|bi| s.drones.breaks.list.get(bi));
+        match s.drones.doors.list.get(k) {
+            Some(d) => d.matrix,
+            None => match s.drones.sss.list.get(k - s.drones.doors.list.len()) {
+                Some(q) => q.matrix,
+                // `Break_Kill` 0x12b970: obj+0xFE bit 0 → the delete pass removes the object [M].
+                None => match brk(k) {
+                    Some(b) => if b.dead { FAR } else { b.matrix },
+                    None => self.lock_slot(s, k).unwrap_or(FAR),
+                },
+            },
+        }
+    }
+
+    /// ambient-sweep: the TAmbient multiplier of one 0x800 posed slot drawn at `m` — the snapped
+    /// create-time bytes, or (for the 0x20 re-linking updaters) the cel at the live world-sphere
+    /// centre (`transform(m, glist centre)`), falling back to the snap outside every cel (an
+    /// unlinked object keeps its bytes — `Lights_CalcAmbientLight` 0x1cb178 needs obj+0x20).
+    pub fn posed_dim_mult(&self, s: &Sim, d: &PosedDim, m: &Mat4) -> [f32; 3] {
+        if !d.live || m[3][1] <= -9999.0 { return d.snap; }
+        s.ambient_at(transform(m, d.centre)).map(mul_bytes).unwrap_or(d.snap)
+    }
+
     fn lock_slot(&self, s: &Sim, k: usize) -> Option<Mat4> {
         let j = k.checked_sub(s.drones.doors.list.len() + s.drones.sss.list.len() + s.drones.breaks.list.len())?;
         let Some(l) = s.drones.locks.get(j / 2) else {
@@ -10438,12 +10530,14 @@ pub fn build(level: &Level, cels_only: bool, skeletons: &HashMap<u8, Skeleton>, 
         // draw reads obj+0x106 as the quad's alpha. All other parts keep alpha 1.0; the slots sit
         // before the shared 1.0 entry (`col_one`).
         let col_sl = col_pick + n_pick;
-        let col_one = col_sl + n_sl;
+        // ambient-sweep: one colour slot per door-region slot (the 0x800 posed objects' dim).
+        let col_door = col_sl + n_sl;
+        let col_one = col_door + n_door;
         let attrs = self.char_verts.iter().map(|v| {
             let one = |m: u32, col: u32| SkinAttr { a: m, b: m, w: 1.0, col, mtb: -1, mwb: 0, cnt: 0, tend: 0 };
             if let Some(sl) = v.searchlight { return one(sl_base + sl as u32, col_sl + sl as u32); }
             if let Some(pk) = v.pickup { return one(pick_base + pk as u32, col_pick + pk as u32); }
-            if let Some(dr) = v.door { return one(door_base + dr as u32, col_one); }
+            if let Some(dr) = v.door { return one(door_base + dr as u32, col_door + dr as u32); }
             if let Some(a) = v.attachment { return one(attach_base + a, col_att + a); }
             let c = &self.characters[v.character as usize];
             let base = char_base[v.character as usize];
@@ -10470,7 +10564,7 @@ pub fn build(level: &Level, cels_only: bool, skeletons: &HashMap<u8, Skeleton>, 
                 _ => one_char(base),
             }
         }).collect();
-        (SkinLayout { char_base, attach_base, sl_base, door_base, pick_base, n_mats, col_att, col_pick, col_sl, col_one, wt_stride, n_tgt }, attrs)
+        (SkinLayout { char_base, attach_base, sl_base, door_base, pick_base, n_mats, col_att, col_pick, col_sl, col_door, col_one, wt_stride, n_tgt }, attrs)
     }
 
     /// fix-gpu-facial-morphs: the morph targets of every character, concatenated in character order
@@ -10666,17 +10760,7 @@ pub fn build(level: &Level, cels_only: bool, skeletons: &HashMap<u8, Skeleton>, 
                 let straddle_seen = !linked.is_empty() && vis.is_some_and(|v| self.cel_graph.room_to_cell.iter().enumerate()
                     .any(|(r, c)| c.is_some_and(|c| linked.contains(&c)) && v.get(r).copied().unwrap_or(false)));
                 if !straddle_seen && dpos.is_some_and(|p3| !vis_room([p3[0], p3[1], p3[2]])) { p[l.door_base as usize + k] = FAR; continue; }
-                p[l.door_base as usize + k] = match s.drones.doors.list.get(k) {
-                    Some(d) => d.matrix,
-                    None => match s.drones.sss.list.get(k - s.drones.doors.list.len()) {
-                        Some(q) => q.matrix,
-                        // `Break_Kill` 0x12b970: obj+0xFE bit 0 → the delete pass removes the object [M].
-                        None => match brk(k) {
-                            Some(b) => if b.dead { FAR } else { b.matrix },
-                            None => self.lock_slot(s, k).unwrap_or(FAR),
-                        },
-                    },
-                };
+                p[l.door_base as usize + k] = self.door_slot_matrix(s, k);
             }
             for k in 0..(l.n_mats - l.pick_base) as usize {
                 let pk = s.drones.pickups.get(k).filter(|q| !q.gone && !q.hidden);
@@ -10710,6 +10794,23 @@ pub fn build(level: &Level, cels_only: bool, skeletons: &HashMap<u8, Skeleton>, 
             for (ci, m) in mults.iter().enumerate().take(l.col_att as usize) { cols[ci] = rgb(*m); }
             for (a, m) in attach_mult.iter().enumerate().take((l.col_pick - l.col_att) as usize) { cols[(l.col_att + a as u32) as usize] = rgb(*m); }
             for (pk, m) in pickup_mult.iter().enumerate().take((l.col_sl - l.col_pick) as usize) { cols[(l.col_pick + pk as u32) as usize] = rgb(*m); }
+        }
+        // ambient-sweep: the 0x800 posed objects (`PosedDim`) — door-region slots in their own
+        // colour section, searchlight parts in theirs (rgb only: the corona alpha stays).
+        if let Some(s) = self.sim.as_ref() {
+            for (k, d) in self.door_dims.iter().enumerate().take(l.pick_base.saturating_sub(l.door_base) as usize) {
+                let Some(d) = d else { continue };
+                let ci = l.col_door as usize + k;
+                if ci >= l.col_one as usize { break; }
+                let m = self.posed_dim_mult(s, d, &p[l.door_base as usize + k]);
+                cols[ci][..3].copy_from_slice(&m);
+            }
+            for (k, d) in self.sl_dims.iter().enumerate().take(l.door_base.saturating_sub(l.sl_base) as usize) {
+                let Some(d) = d else { continue };
+                let ci = l.col_sl as usize + k;
+                if ci >= l.col_door as usize { break; }
+                cols[ci][..3].copy_from_slice(&d.snap);
+            }
         }
         // blood-puff-render: the gas puffs' draw colour IS the pool's live rgba — the game's
         // `View_SetupRenderModes_Tweak` 0x1e5888:46-49 feeds the gas object's obj+0x103..0x106 bytes
@@ -10904,7 +11005,14 @@ pub fn build(level: &Level, cels_only: bool, skeletons: &HashMap<u8, Skeleton>, 
             .zip(self.vertices[self.char_vertex_start..].iter().zip(self.char_verts.iter()))
             .map(|(pos, (v, cv))| {
                 let m = if mults.is_empty() { one() }
-                    else if cv.searchlight.is_some() || cv.door.is_some() { one() }
+                    else if let Some(sl) = cv.searchlight { self.sl_dims.get(sl as usize).copied().flatten().map_or_else(one, |d| d.snap) }
+                    else if let Some(dr) = cv.door {
+                        // ambient-sweep: the 0x800 posed slots (`PosedDim`), the GPU palette's rule.
+                        match (self.door_dims.get(dr as usize).copied().flatten(), self.sim.as_ref()) {
+                            (Some(d), Some(s)) => self.posed_dim_mult(s, &d, &self.door_slot_matrix(s, dr as usize)),
+                            _ => one(),
+                        }
+                    }
                     else if let Some(pk) = cv.pickup {
                         // The pickup is its own object (`View_DrawObjectGlist` 0x1e6780 draws obj+0xD8);
                         // `Pickup_Create` (0x18dda0) forces obj+0xF0 = glist_flags & ~0x2000 | 0x840 — every

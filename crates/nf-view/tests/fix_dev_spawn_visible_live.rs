@@ -42,6 +42,8 @@ fn full_layout(scene: &Scene) -> nf_view::scene::SkinLayout {
         col_att: 0,
         col_pick: attaches as u32,
         col_sl: (attaches + picks) as u32,
+        // ambient-sweep: the door-region colour section — empty here (the writers stop at col_one).
+        col_door: col_one,
         col_one,
         // fix-gpu-facial-morphs' fields: no morph upload in this CPU-side layout check.
         wt_stride: 0,
