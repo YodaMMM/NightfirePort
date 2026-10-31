@@ -5012,13 +5012,13 @@ impl App {
                                     scope: self.zoom,
                                     // The fire-mode button (pad ○; keyboard M) [M Player_Weapon 0x1a24c8].
                                     mode_switch: self.just.remove(&KeyCode::KeyB),
-                                    // The goggles key: pad action 13 only (the styles). No keyboard
-                                    // bind — the disc grants the goggles nowhere, and the game's
-                                    // latch-clear press requests item 0x5d with no ownership check
-                                    // [M HUD_MonitorNightSight 0x19e9d8:82-84; Player_WeaponSelect
-                                    // 0x1a2cc0 has none either], so a port-only key would draw an
-                                    // item Bond does not carry.
-                                    goggles_action: false,
+                                    // The goggles key (V, a port choice): the press edge of the pad's
+                                    // action 13 [M HUD_MonitorNightSight 0x19e9d8:74 `Input_Action(p,
+                                    // 0xd, 4)`]. The latch-clear press requests item 0x5d with no
+                                    // ownership check [M 0x19e9d8:82-84], exactly as the pad's does, so
+                                    // the key arms night sight on every on-foot level and then cycles
+                                    // 1 → 2 → 0. The catch-all key arm lands V in `just`.
+                                    goggles_action: self.just.remove(&KeyCode::KeyV),
                                 };
                                 (input, self.trigger, self.just.remove(&KeyCode::KeyR), self.just.remove(&KeyCode::KeyE))
                             };
@@ -7984,6 +7984,44 @@ mod headless_app_harness {
         assert!(sim.bond.crouched, "hold: still held, still crouched");
         sim.step_bond(inp(false, false), false, false, false);
         assert!(!sim.bond.crouched, "hold: released stands [M 0x1924c0:84-88]");
+    }
+
+    // The goggles key: V is the keyboard's action-13 press [M HUD_MonitorNightSight 0x19e9d8:74
+    // `Input_Action(p, 0xd, 4)`], through the App's own key handling and Input build. The first
+    // press arms night sight (the latch-clear request of item 0x5d [M 0x19e9d8:82-84]); later
+    // presses cycle 1 → 2 → 0.
+    #[test]
+    fn the_v_key_switches_the_goggle_modes() {
+        let Ok(iso) = std::env::var("NF_ISO") else { return };
+        let mut h = HeadlessApp::mission(&iso, "07000005.bin");
+        h.app.grabbed = true;
+        // The level's opening cut-scene first (a key press there is the game's skip, not the
+        // goggles), then the player is live.
+        for _ in 0..3000 {
+            if !h.app.scene.sim.as_ref().unwrap().disabled { break; }
+            h.frames(1);
+        }
+        assert!(!h.app.scene.sim.as_ref().unwrap().disabled, "the player is live");
+        h.frames(60);
+        let mode = |h: &HeadlessApp| h.app.scene.sim.as_ref().unwrap().goggle_mode();
+        assert_eq!(mode(&h), 0, "the level starts with the goggles off");
+        // Sister: a key that is not the goggles' (B, the fire-mode press) leaves the mode alone.
+        h.key(KeyCode::KeyB);
+        h.frames(30);
+        assert_eq!(mode(&h), 0, "B is not the goggles key");
+        let mut seen = vec![];
+        for want in [1u16, 2, 0] {
+            h.key(KeyCode::KeyV);
+            // The first press requests the goggles item: the holster, the item's draw and its
+            // stow run before the mode lands; the cycle presses land at once.
+            for _ in 0..600 {
+                h.frames(1);
+                if mode(&h) == want { break; }
+            }
+            h.frames(20);
+            seen.push(mode(&h));
+        }
+        assert_eq!(seen, vec![1, 2, 0], "V arms night sight, then x-ray, then off");
     }
 
     // profile-options-2 (the re-land of 610's volume test on master's drain path): the AV page's
