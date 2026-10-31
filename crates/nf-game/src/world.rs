@@ -400,6 +400,20 @@ fn capsule_tri_contact(t: &[V3; 3], mat: u8, a: &mut V3, b: &mut V3, r: f32, gro
     // |d| = 1.3097183] — f means the game's fraction from the top end along the raw B − A.
     // Faces the old |n·y| > 0.7 + top-end-side rule culled in the 0.70-0.763 band (≈45-77°
     // slopes above the capsule) are TESTED here, exactly as the game tests them.
+    // The HORIZONTAL one-sided skip, re-derived from the game's own rules (capsule-cull-and-los-
+    // masks-19; master carried it as the one-sided stand-in): a near-horizontal face the spine
+    // TOP sits on the negative side of (dot(n, a − t0) < 0 — for an underside n·y < −0.7 that is
+    // "above the face", for a ceiling n·y > +0.7 it is "below the face") never carries the
+    // capsule: the game's approach ticks are flags-99-skipped [M 0x109770 + 0x10a33c], the
+    // straddle tick's radial push arm is dead for a real level position (ref = the lifetime
+    // DeltaP accumulator [L hatch-10: drift ≈15 m; ee_start boots (0,0,0)]), and the face is
+    // outside the walkable gate [M decompile :473 n·y > 0.7] so the feet band gives no support —
+    // the game's Bond falls through to the next support (the 07000011 spawn perch: the port's
+    // straddle push held Bond ~0.55 high and the landing oscillation doubled the fall_timer —
+    // the survivable 8-unit drop read as ~140 ticks, health 19.5 vs the [M 0x1949a8:117-126]
+    // model's ~76 ticks → ~16 damage). The UP-facing side (the floor underfoot, the stair-step
+    // face above/behind [L level-0a-office-hatch-9 1.127→1.120]) is untouched.
+    if n[1].abs() > 0.7 && dot(n, sub(*a, t[0])) < 0.0 { return false; }
     let ab = sub(*b, *a);
     let denom = dot(n, ab);
     let mut f = 0.0f32;
