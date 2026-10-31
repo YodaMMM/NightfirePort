@@ -149,6 +149,25 @@ fn norm(v: V3) -> V3 { let l = (v[0] * v[0] + v[1] * v[1] + v[2] * v[2]).sqrt();
 /// the offset's components are added to x, z, y in that order.
 pub fn spread(dir: V3, spread: f32, flags68: u32, rng: &mut crate::drone::Rng) -> V3 {
     let s = if flags68 & 0x40_0000 != 0 { 0.0 } else { spread };
+    cone(dir, s, rng)
+}
+
+/// The spread scale `Bullet_init` 0x12c5a0:139-170 uses when the OWNER is the player (class 3):
+/// `(+0x24 + bloom) × mul`, where the bloom is the shot's place in the pull —
+/// `n = min(spp[mode] − BL+0x936, +0x92 clip size)` (`BL+0x936` = the shots left after this one's
+/// decrement [M Player_WeaponFiring 0x1a5460:651-653]) — scaled by `+0x98` and truncated to an
+/// integer (`(short)(int)((float)n · +0x98)`), and `mul` = 0 only when `+0x68 & 0x400000` AND the aim
+/// bit is set (the snipers' hip-fire keeps their 100-unit cone; aimed they are exact), else 1.
+/// The drones' rule (`spread`) gates 0x400000 unconditionally — theirs is the `cVar1 == 2` arm.
+pub fn player_spread(base: f32, bloom: f32, shots_in_pull: i32, clip_size: i32, flags68: u32, aiming: bool) -> f32 {
+    let n = shots_in_pull.min(clip_size);
+    let bloom = (n as f32 * bloom) as i32 as i16 as f32;
+    let mul = if flags68 & 0x40_0000 != 0 && aiming { 0.0 } else { 1.0 };
+    (base + bloom) * mul
+}
+
+/// The cone draw of `Bullet_init` for an already-scaled spread `s` (see `spread`).
+pub fn cone(dir: V3, s: f32, rng: &mut crate::drone::Rng) -> V3 {
     let r = nf_formats::ps2float::mul(rng.frand(2.0 * s) - s, 0.0014);
     let (th, ph) = (rng.frand(crate::trig::TAU), rng.frand(crate::trig::PI));
     // G-046 ps2sinf-remaining: the game's cone is Vec_Spherical_2_Cartesian 0x1e3948 [M]: PS2Sinf2
@@ -380,6 +399,25 @@ pub fn damage_factor(level: u32, difficulty: u32) -> f32 {
 
 #[cfg(test)]
 mod tests {
+    /// `Bullet_init` 0x12c5a0:139-170, the player arm, on the disc's records [L weapon_data
+    /// 0x2bf150]: the Storm M32 0x12 (spread 16, bloom 5, clip 32) blooms by 5 per shot of the pull
+    /// up to the clip; the sniper 0x24 (spread 100, flags 0x4080d0) is exact only while aimed.
+    #[test]
+    fn player_spread_blooms_and_the_aim_gate() {
+        assert_eq!(player_spread(16.0, 5.0, 1, 32, 0, false), 21.0);
+        assert_eq!(player_spread(16.0, 5.0, 10, 32, 0, false), 66.0);
+        assert_eq!(player_spread(16.0, 5.0, 998, 32, 0, false), 176.0, "capped at the clip size");
+        assert_eq!(player_spread(100.0, 0.0, 1, 5, 0x4080d0, true), 0.0);
+        assert_eq!(player_spread(100.0, 0.0, 1, 5, 0x4080d0, false), 100.0, "hip-fired sniper keeps its cone");
+        // The bloom truncates: 0.5 per shot gives 0 then 1.
+        assert_eq!(player_spread(2.0, 0.5, 1, 7, 0, false), 2.0);
+        assert_eq!(player_spread(2.0, 0.5, 3, 7, 0, false), 3.0);
+        // Sister: the drones' rule drops the sniper cone whatever the aim.
+        let mut rng = crate::drone::Rng::new(1);
+        let d = spread([0.0, 0.0, 1.0], 100.0, 0x4080d0, &mut rng);
+        assert_eq!(d, [0.0, 0.0, 1.0]);
+    }
+
     use super::*;
 
     /// bullet-range-210: the flight death range is `weapon_data+0x1C` [M `Bullet_update` case 1,

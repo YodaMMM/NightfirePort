@@ -582,6 +582,14 @@ pub struct Sim {
     pub zoom: f32,
     /// `BLData+0x8D4`: the target zoom factor. Right mouse (mouse-first) zooms in; releasing returns to 1.0.
     pub zoom_target: f32,
+    /// `BLData+0x1B4 + w·0xC`: the remembered zoom per base record — `sqrt(weapon_data[w]+0x88)` at
+    /// level start [M Player_InitAmmoWeapons 0x1a17f8:51], rewritten whenever the zoom axis moves
+    /// [M Player_Zoom 0x1a1a70:63-67], restored as the target on the aim bit's rise
+    /// [M Player_Weapon 0x1a24c8:170-182]. Filled lazily from the record table.
+    pub zoom_saved: Vec<f32>,
+    /// The aim bit as the zoom block last saw it (the rise restores the remembered zoom, the fall
+    /// drops the target to 1.0 [M Player_Weapon 0x1a24c8:156-187]).
+    pub zoom_aim_prev: bool,
     /// `Player_Disable` by a script (cut-scene): no input, no first-person view, until `Player_Enable`.
     pub disabled: bool,
     /// Surface sounds (`EffectInfo`) and Bond's footstep distance (`BL+0x924`).
@@ -3331,46 +3339,43 @@ impl Sim {
         };
         self.run(self.bond.pos, self.bond.sphere_centre(), head, look, aim, trigger, input.aiming || input.scope, reload, use_key, stick);
         self.drones.net_bodies = None;
-        // `Player_Zoom` (0x1a1a70): the scope zoom. Right mouse (mouse-first) zooms in; releasing returns to 1.0.
-        // The zoom interpolates toward the target at the game's rate (1.025× per tick zooming in, 1.15× out).
-        // The FOV is divided by the zoom factor. Scoped weapons only (`weapon_data+0x68 & 0x40`).
-        let scoped = self.weapons.records.get(self.gun.weapon as usize).is_some_and(|w| u32::from_le_bytes(w[0x68..0x6c].try_into().unwrap()) & 0x40 != 0);
+        // `Player_Zoom` (0x1a1a70) — weapon-handling: the game's own zoom, every weapon (no scope-flag
+        // gate: the Militek MGL 0x2a zooms 2x and record 0x19 3x while aiming [L weapon_data +0x88];
+        // the max is the held record's +0x88, written on the aim rise [M Player_Weapon 0x1a24c8:176-182]).
+        // - The aim bit's rise: the target = the base record's remembered zoom (`BL+0x1B4 + base·0xC`,
+        //   sqrt(+0x88) at level start [M 0x1a17f8:51]; PlayerSetting+6 = 1 by default [M Input_Init
+        //   0x17edd8:22]), clamped to the max; the fall: the target = 1.0 [M 0x1a24c8:156-187].
+        // - The zoom axis (action 6, aim bit only): both magnifications ramp ×1.025/tick and the
+        //   current value is remembered; idle, the current one eases ×1.15/tick toward the target
+        //   (`nf_game::gun::zoom_tick`). The mouse's held right button is the axis at −1 (zoom in);
+        //   the pad's d-pad gives ±1.
+        // - The wheel (port-only design, the PS2 pad has none): a notch steps the target ×2 / ÷2
+        //   within [1, max] and the hold-ramp yields until the aim falls (`zoom_wheel`).
         let max_zoom = self.weapons.zoom(self.gun.weapon as usize);
-        if scoped {
-            // fix-aim-raise: the zoom starts only when the aim BIT is set — the game writes +0x8D4
-            // from the per-weapon table on the bit's rise [M Player_Weapon 0x1a24c8:156-187] and
-            // `Player_Zoom` 0x1a1a70:18 reads the zoom button only while the bit is set. During
-            // the raise the bit is clear, so the target stays 1.0 until the raise's last tick.
-            if input.zoom && self.aiming {
-                // microcam-wheel-zoom: a wheel notch while the aim is held steps the zoom target
-                // ×2 (up) / ÷2 (down) within the weapon's own range [1.0, weapon_data+0x88 — the
-                // max `Player_Weapon` writes to BL+0x8D8]. The ×2 step is port-only design, not a
-                // game claim: the PS2 pad has no wheel, and the game's own
-                // zoom is continuous — `Player_Zoom` 0x1a1a70 ramps the held target ×1.025/tick
-                // [M 0x1a1a70:22-39]. Once the wheel has stepped, the hold-ramp
-                // to max yields (`zoom_wheel`) so the notch stays until the aim falls.
-                if input.zoom_cycle != 0 {
-                    let step = (2.0f32).powi(input.zoom_cycle as i32);
-                    self.zoom_target = (self.zoom_target * step).clamp(1.0, max_zoom.max(1.0));
-                    self.zoom_wheel = true;
-                } else if !self.zoom_wheel {
-                    self.zoom_target = max_zoom;
-                }
-            } else {
-                self.zoom_target = 1.0;
-                self.zoom_wheel = false;
-            }
-        } else {
-            self.zoom_target = 1.0;
+        if self.zoom_saved.len() < self.weapons.records.len() {
+            self.zoom_saved = (0..self.weapons.records.len()).map(|w| nf_game::gun::initial_saved_zoom(self.weapons.zoom(w))).collect();
+        }
+        let base = self.weapons.records.get(self.gun.weapon as usize).map_or(0, |w| u16::from_le_bytes([w[2], w[3]]) as usize);
+        if self.aiming != self.zoom_aim_prev {
+            self.zoom_target = if self.aiming { self.zoom_saved.get(base).copied().unwrap_or(1.0).min(max_zoom) } else { 1.0 };
             self.zoom_wheel = false;
         }
-        // Interpolate zoom toward target [M 0x1a1a70 lines 22-39].
-        // `Player_Zoom` (0x1a1a70): zoom in at 1.025×/tick, zoom out at 1.15×/tick [M lines 22-39].
-        // The game's BLData+0x8D4 is the inverse (decreases as zoom increases); the port's `zoom` is the FOV
-        // divisor (increases as zoom increases), so the interpolation factor is the complement.
-        let rate = if self.zoom < self.zoom_target { 1.0 + 0.025 } else { 1.0 + 0.15 };
-        self.zoom = self.zoom + (self.zoom_target - self.zoom) * (1.0 - 1.0 / rate);
-        self.zoom = self.zoom.clamp(1.0, max_zoom.max(1.0));
+        self.zoom_aim_prev = self.aiming;
+        let mut axis = 0.0;
+        if self.aiming {
+            if input.zoom_cycle != 0 {
+                let step = (2.0f32).powi(input.zoom_cycle as i32);
+                self.zoom_target = (self.zoom_target * step).clamp(1.0, max_zoom.max(1.0));
+                self.zoom_wheel = true;
+            } else if input.zoom_axis != 0.0 {
+                axis = input.zoom_axis;
+            } else if input.zoom && !self.zoom_wheel {
+                axis = -1.0;
+            }
+        }
+        if let Some(saved) = nf_game::gun::zoom_tick(&mut self.zoom, &mut self.zoom_target, max_zoom, axis) {
+            if let Some(z) = self.zoom_saved.get_mut(base) { *z = saved; }
+        }
         // Wire / creep: the music event moved up with the substate effects (fix-wire) — the substate is
         // now the only source (the old proximity hack is gone).
         let _ = &self.wires;
@@ -4179,7 +4184,13 @@ impl Sim {
                 nf_game::gadget::pick_decryptor_lock(camera, vdir, self.bond.pos, &self.drones.locks, &self.world, range)
             } else { None };
             let (trigger, reload) = if decryptor_weapon && trigger && decryptor_pick.is_none() { (false, reload) } else { (trigger, reload) };
-            let fired = self.gun.update_with(trigger, reload, busy, params);
+            // weapon-handling [M Player_WeaponFiring 0x1a5460:503-506]: with the trigger held and Bond
+            // under the surface (`surfaced == 0`, `Player_MonitorAir` 0x191a70:98-125 — the port's
+            // `Bond::underwater`), a record without `+0x68 & 0x2` RETURNS before the pull: no shot, no
+            // refire countdown, no auto-reload. The 0x2 records [L weapon_data 0x2bf150]: the fists
+            // 0x01, the Torpedo Launcher 0x30, the watch laser 0x4e/0x4f, the stunner twins 0x4b/0x4d.
+            let under_block = trigger && self.bond.underwater && rd0(0x68) & 0x2 == 0;
+            let fired = if under_block { false } else { self.gun.update_with(trigger, reload, busy, params) };
             // fix-gadgets-live: the AIMS-20's idle timer (`BLData+0x93a`): the game increments it while
             // the view anim is idle and resets on any fire/reload/switch anim [M Player_SetWeaponAnimObj
             // 0x1a2e38:41-57]; it gates the view model's side lights (0x1a5460:264/348).
@@ -4702,7 +4713,10 @@ impl Sim {
                 let flags70_w = u32::from_le_bytes(w[0x70..0x74].try_into().unwrap());
                 if flags6c & 0x8 != 0 && flags70_w & (0x4 | 0x80 | 0x100) != 0 {
                     let f32_at = |o: usize| f32::from_le_bytes(w[o..o + 4].try_into().unwrap());
-                    let sdir = nf_game::bullet::spread(dir, f32_at(0x24), flags, &mut self.drones.rng);
+                    // weapon-handling [M Bullet_init 0x12c5a0:139-170, the class-3 owner arm]: the pull
+                    // bloom (+0x98 per shot of the pull) and the aimed 0x400000 gate.
+                    let s = nf_game::bullet::player_spread(f32_at(0x24), f32_at(0x98), params.shots_per_pull - self.gun.pending, params.clip as i32, flags, self.aiming);
+                    let sdir = nf_game::bullet::cone(dir, s, &mut self.drones.rng);
                     let speed = f32_at(0x20);
                     // The fuse is the bullet's BU+0xFC: 210 ticks, 300 when weapon +0x70 & 0x10000, the
                     // mine 0x37 → 420 (7777.0 for a player owner — trigger-detonated; the port has no
@@ -4890,6 +4904,14 @@ impl Sim {
                                 None => (camera, dir),
                             }
                         };
+                        // weapon-handling [M Bullet_init 0x12c5a0:139-170]: the player owner's spread —
+                        // `+0x24` plus the pull bloom (`+0x98` × the shots of this pull, capped at the
+                        // clip size), zeroed only for a 0x400000 record with the aim bit set.
+                        {
+                            let f32_at = |o: usize| f32::from_le_bytes(w[o..o + 4].try_into().unwrap());
+                            let flags68 = u32::from_le_bytes(w[0x68..0x6c].try_into().unwrap());
+                            self.drones.player_spread = Some(nf_game::bullet::player_spread(f32_at(0x24), f32_at(0x98), params.shots_per_pull - self.gun.pending, params.clip as i32, flags68, self.aiming));
+                        }
                         self.drones.fire_player(&d, shot_from, shot_dir, self.gun.weapon, sound);
                         // fix-weapon-fire-modes [M Bullet_init 0x12c5a0:248-253]: a `+0x6C & 4` shot hands
                         // the view to the projectile — `Player_ChangeSubState(owner, 10)`, `BLData+0x878 =
@@ -9098,7 +9120,7 @@ pub fn build(level: &Level, cels_only: bool, skeletons: &HashMap<u8, Skeleton>, 
             // The difficulty was set before the creates above (the game's GameState+0x28 pick);
             // the old direct-load hardcode `= 1` moved into the build parameter so replay loads
             // pass 1 and the front-end path passes the menu's pick.
-            Some(Sim { drones, tables: d.tables.clone(), props, scripts: d.scripts.clone(), weapons, world, level: d.level_id, char_drone, char_script, char_script_skin, seq_index, seqs, skins: level.skins.clone(), skeletons: skeletons.clone(), nav, covers, ai_points, tuning: d.tuning.clone(), hitboxes, sfx: d.sfx.clone(), volumes, glist_bounds, models, gun: nf_game::gun::Gun::new(2, 7, 41), bond, cursor: [0.0; 2], cross: [0.0; 2], view_script: 0, first_person: false, last_shot: None, shot_tick: false, view_time: 0.0, view_speed: 1.0, bob: [0.0; 2], aiming: false, free_aim: false, auto_aim: false, rapid_fire: false, zoom: 1.0, zoom_target: 1.0, disabled: false, surfaces: d.surfaces.clone(), voices: d.voices.clone(), step_dist: 0.0, wires, creepwalls, creeping: false, wire_anims, wire_channel: 0, ladders, icons, view_model_ids: std::collections::HashSet::new(), cross_state: 2, cels: sim_cels, char_ambient, view_model_chars: Vec::new(), mp_body_chars: Vec::new(), bond_body_char: None, mp_last_held: [2; nf_net::MAX_AGENTS], mp_weapon_loaded: Vec::new(), ambient_lookups: std::cell::Cell::new(0), mp_draw_cache: Default::default(), mp_anim: (0..nf_net::MAX_AGENTS).map(|_| nf_game::mp::body_anim::MpBodyAnim::new()).collect(), mp_anim_sets: d.mp_anims.as_ref().map(|a| nf_formats::mpanim::MpAnimSets { sets: a.sets }), sun_seen: false, lang: None, hud: Default::default(), smoke: Vec::new(), room_cell: cel_graph.room_to_cell.clone(), prev_trigger: false,
+            Some(Sim { drones, tables: d.tables.clone(), props, scripts: d.scripts.clone(), weapons, world, level: d.level_id, char_drone, char_script, char_script_skin, seq_index, seqs, skins: level.skins.clone(), skeletons: skeletons.clone(), nav, covers, ai_points, tuning: d.tuning.clone(), hitboxes, sfx: d.sfx.clone(), volumes, glist_bounds, models, gun: nf_game::gun::Gun::new(2, 7, 41), bond, cursor: [0.0; 2], cross: [0.0; 2], view_script: 0, first_person: false, last_shot: None, shot_tick: false, view_time: 0.0, view_speed: 1.0, bob: [0.0; 2], aiming: false, free_aim: false, auto_aim: false, rapid_fire: false, zoom: 1.0, zoom_target: 1.0, zoom_saved: Vec::new(), zoom_aim_prev: false, disabled: false, surfaces: d.surfaces.clone(), voices: d.voices.clone(), step_dist: 0.0, wires, creepwalls, creeping: false, wire_anims, wire_channel: 0, ladders, icons, view_model_ids: std::collections::HashSet::new(), cross_state: 2, cels: sim_cels, char_ambient, view_model_chars: Vec::new(), mp_body_chars: Vec::new(), bond_body_char: None, mp_last_held: [2; nf_net::MAX_AGENTS], mp_weapon_loaded: Vec::new(), ambient_lookups: std::cell::Cell::new(0), mp_draw_cache: Default::default(), mp_anim: (0..nf_net::MAX_AGENTS).map(|_| nf_game::mp::body_anim::MpBodyAnim::new()).collect(), mp_anim_sets: d.mp_anims.as_ref().map(|a| nf_formats::mpanim::MpAnimSets { sets: a.sets }), sun_seen: false, lang: None, hud: Default::default(), smoke: Vec::new(), room_cell: cel_graph.room_to_cell.clone(), prev_trigger: false,
             mp_bonds: [const { None }; nf_net::MAX_AGENTS],
             mp_local_slot: 0,
             mp_body_speed: [0.0; nf_net::MAX_AGENTS],

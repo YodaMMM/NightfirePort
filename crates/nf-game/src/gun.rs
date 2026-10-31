@@ -324,6 +324,53 @@ pub fn fire_mode_switch(weapon: u8, twin: i8, mode_count: u8, mode: u8, has_ammo
     }
 }
 
+/// `Player_Zoom` 0x1a1a70, one tick (`FRAME_RATE_MUL` = 1). `cur` is `BLData+0x8D0` (the
+/// magnification the view divides its FOV by), `target` is `+0x8D4`, `max` is `+0x8D8` (the held
+/// record's `weapon_data+0x88`, written on the aim bit's rise [M Player_Weapon 0x1a24c8:176-182]).
+/// `axis` is the zoom action 6 (`Input_Actionf(slot, 6, 1)`), read only while the aim bit is set
+/// [M 0x1a1a70:17-19]; the pad's d-pad up gives −1 (zoom in), down +1 (out) [M psiInput_MapInputs
+/// style tables: `dpad: (6, 0x1000 → −1, 0x4000 → +1)`].
+///
+/// - Axis held: `f = 1 + 0.025` (`1/f` when the axis is positive); the target AND the current
+///   magnification are scaled by `f` (the current one clamped at the target), then the target
+///   takes the current value [M :28-34, :49-62, :63-65] — a geometric 1.025×/tick ramp.
+/// - Axis idle: the current magnification eases toward the target by `1 + 0.15` per tick
+///   (`1/1.15` from above), clamped at the target [M :21-26, :49-62]; the target is untouched.
+/// - The target is clamped to `[1, min(max, 50)]` every tick [M :37-47].
+///
+/// Returns `Some(cur)` when the axis moved the zoom — the value the game stores as the base
+/// record's remembered zoom (`BLData+0x1B4 + base·0xC`) [M :63-67].
+pub fn zoom_tick(cur: &mut f32, target: &mut f32, max: f32, axis: f32) -> Option<f32> {
+    let f8;
+    let f5;
+    if axis == 0.0 {
+        f8 = *cur - *target;
+        f5 = if f8 > 0.0 { 1.0 / (1.0 + 0.15) } else { 1.0 + 0.15 };
+    } else {
+        f5 = if axis > 0.0 { 1.0 / (1.0 + 0.025) } else { 1.0 + 0.025 };
+        *target *= f5;
+        f8 = axis;
+    }
+    if max < *target { *target = max; }
+    if *target < 1.0 { *target = 1.0; } else if *target > 50.0 { *target = 50.0; }
+    if f8 != 0.0 {
+        *cur *= f5;
+        let past = if f8 < 0.0 { *target < *cur } else { *cur < *target };
+        if past { *cur = *target; }
+    }
+    if axis != 0.0 {
+        *target = *cur;
+        Some(*cur)
+    } else { None }
+}
+
+/// The remembered zoom a base record starts with: `sqrt(weapon_data[w]+0x88)` per record
+/// [M Player_InitAmmoWeapons 0x1a17f8:51 — `BL+0x1B4 + w·0xC = SQRT(weapon_data[w]+0x88)`].
+/// The aim bit's rise restores it as the target when `PlayerSetting+6` is set (the boot default
+/// 1 [M Input_Init 0x17edd8:22; L ee_start_05 0x2a38ce = 1]), clamped to the record's max
+/// [M Player_Weapon 0x1a24c8:170-182].
+pub fn initial_saved_zoom(max: f32) -> f32 { max.max(0.0).sqrt() }
+
 /// The fields of a `weapon_data` record the trigger uses.
 #[derive(Clone, Copy, Debug)]
 pub struct GunParams {
@@ -702,5 +749,34 @@ mod tests {
         // Sister: other weapons ignore clip[0x45] entirely.
         clip[0x45] = 0;
         assert!(Gun::has_ammo(1, &carried, &clip, |_w| 0usize, flags, |w| w as usize), "ammo_type 0 = melee: always true");
+    }
+    /// `Player_Zoom` 0x1a1a70: the held axis ramps BOTH magnifications ×1.025/tick from where the
+    /// current one stands (the sniper 0x24, max 10 [L weapon_data +0x88]: 1 → 10 in 94 ticks),
+    /// the idle axis eases ×1.15/tick toward the target, and the max clamps exactly.
+    #[test]
+    fn zoom_ramps_geometrically_and_eases_back() {
+        let (mut cur, mut target) = (1.0f32, 1.0f32);
+        let mut n = 0;
+        while cur < 10.0 {
+            assert!(zoom_tick(&mut cur, &mut target, 10.0, -1.0).is_some());
+            assert_eq!(cur, target, "the held axis keeps the target on the current zoom");
+            n += 1;
+        }
+        assert_eq!((n, cur), (94, 10.0), "1.025^93 < 10 <= 1.025^94; the max clamps exactly");
+        // Idle: the zoom stays (the target is untouched by an idle tick).
+        assert_eq!(zoom_tick(&mut cur, &mut target, 10.0, 0.0), None);
+        assert_eq!(cur, 10.0);
+        // The aim falls: the target drops to 1.0 and the zoom eases out at 1/1.15 per tick.
+        target = 1.0;
+        let mut out = 0;
+        while cur > 1.0 { zoom_tick(&mut cur, &mut target, 10.0, 0.0); out += 1; }
+        assert_eq!(out, 17, "ln 10 / ln 1.15 = 16.5 → 17 ticks, the last clamped onto 1.0");
+        // Sister: a positive axis zooms OUT, and never below 1.
+        let (mut c, mut t) = (2.0f32, 2.0f32);
+        zoom_tick(&mut c, &mut t, 10.0, 1.0);
+        assert!(c < 2.0 && (c - 2.0 / 1.025).abs() < 1e-6);
+        for _ in 0..100 { zoom_tick(&mut c, &mut t, 10.0, 1.0); }
+        assert_eq!(c, 1.0);
+        assert_eq!(initial_saved_zoom(16.0), 4.0);
     }
 }
