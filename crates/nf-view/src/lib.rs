@@ -2555,6 +2555,19 @@ fn mp_drive_shots(scene: &mut scene::Scene, args: &[String], spec: &str, out: &s
     Ok(())
 }
 
+/// The Screen Adjust offset (game units) → the renderer's picture fractions: X/2560, Y/448 [M
+/// docs/systems/screen-adjust.md §3; `FrontEnd::screen_offset_frac` is the same conversion].
+pub fn screen_frac(pos: (i32, i32)) -> [f32; 2] {
+    [pos.0 as f32 / 2560.0, pos.1 as f32 / 448.0]
+}
+
+/// The headless shot's offset: `NF_SCREEN_POS=x,y` (the game's units), clamped to the game's limits.
+fn shot_screen_pos() -> (i32, i32) {
+    let Ok(v) = std::env::var("NF_SCREEN_POS") else { return (0, 0) };
+    let mut it = v.split(',').map(|t| t.trim().parse::<i32>().unwrap_or(0));
+    (it.next().unwrap_or(0).clamp(-0x1b0, 0x1b0), it.next().unwrap_or(0).clamp(-0x30, 0x30))
+}
+
 fn shot(scene: &scene::Scene, cam: &Camera, out: &str, choice: Option<usize>, time: f32, mut opts: scene::ViewOpts, notex: bool, nofog: bool, menu: Option<&gpu::HudFrame>, movie: Option<&(u32, u32, Vec<u8>)>) -> Result<()> {
     let (w, h) = (1280u32, 720u32);
     let instance = wgpu::Instance::new(wgpu::InstanceDescriptor::new_without_display_handle());
@@ -2593,6 +2606,9 @@ fn shot(scene: &scene::Scene, cam: &Camera, out: &str, choice: Option<usize>, ti
     r.set_char_light_centres(scene);
     r.lights = scene.frame_lights();
     r.screen_aspect = w as f32 / h as f32;
+    // Render aid: `NF_SCREEN_POS=x,y` — the Screen Adjust offset in the game's units (PS2ScreenXPos /
+    // PS2ScreenYPos, clamped to psiAdjustScreenPos' ±0x1b0 / ±0x30 [M 0x10b890]).
+    r.screen_offset = screen_frac(shot_screen_pos());
     // `NF_BENCH=N`: time the per-frame CPU side N times (posing + vertex build, and the upload) for profiling.
     if let Some(n) = std::env::var("NF_BENCH").ok().and_then(|v| v.parse::<u32>().ok()) {
         let t0 = std::time::Instant::now();
@@ -2778,6 +2794,9 @@ struct App {
     /// The front end (fix-menus): Some while a menu page is up (title / main / mission select /
     /// difficulty / options / pause / results). None = playing a mission directly.
     fe: Option<menu::FrontEnd>,
+    /// Screen Adjust's live offset (`PS2ScreenXPos`/`PS2ScreenYPos` [M 0x30c75c/0x30c760]) — mirrored
+    /// from the front end each frame it stands, so gameplay frames (no front end) keep the shift.
+    screen_pos: (i32, i32),
     /// The Advanced options' Auto Aim (control 0x1000011b; the profile's +0x01 — default ON [M
     /// Player_AutoAim 0x1a7c98:41 reads it]). Mirrored from the front end while it is up and kept
     /// across missions (the front end closes during play); applied to the sim every frame. The
@@ -3213,7 +3232,7 @@ impl App {
         if fe.settings_save_pending {
             fe.settings_save_pending = false;
             if let Some(p) = settings::default_path() {
-                if let Err(e) = settings::save_opts(&p, &fe.opts) { eprintln!("[settings] {e}"); }
+                if let Err(e) = settings::save_opts(&p, &fe.opts_with_screen()) { eprintln!("[settings] {e}"); }
             }
         }
         // menu-sfx: the front end's sound events play straight through the driver's 2-D start —
@@ -3490,7 +3509,10 @@ impl App {
         // settings-persist: the option file's values, not the bare defaults.
         let (opts, warn) = settings::load_default();
         if let Some(w) = warn { eprintln!("[settings] {w}"); }
-        fe.opts = opts;
+        fe.set_opts(opts);
+        // Screen Adjust: the offset is a global the menu managers don't own [M PS2ScreenXPos/YPos
+        // 0x30c75c/0x30c760] — a fresh manager keeps the live value.
+        (fe.screen_x, fe.screen_y) = self.screen_pos;
         // profile-session: keep the standing codename session (the other re-creates' rule).
         self.inherit_profile_session(&mut fe);
         // net-desync-detail: the fail box carries the diagnosis + the report zip's path (the
@@ -3555,6 +3577,7 @@ impl App {
         };
         let view = frame.texture.create_view(&Default::default());
         g.renderer.screen_aspect = aspect;
+        g.renderer.screen_offset = screen_frac(self.fe.as_ref().map_or(self.screen_pos, |f| (f.screen_x, f.screen_y)));
         // A zero view-projection collapses every world vertex (w = 0), so only the picture and the overlay draw.
         let id = [[0.0f32; 4]; 4];
         let movie = picture.map(|(w, h, rgba)| (*w, *h, rgba.as_slice()));
@@ -3931,7 +3954,10 @@ impl App {
         // defaults would otherwise ride the results page's quit back into the front end.
         let (opts, warn) = settings::load_default();
         if let Some(w) = warn { eprintln!("[settings] {w}"); }
-        fe.opts = opts;
+        fe.set_opts(opts);
+        // Screen Adjust: the offset is a global the menu managers don't own [M PS2ScreenXPos/YPos
+        // 0x30c75c/0x30c760] — a fresh manager keeps the live value.
+        (fe.screen_x, fe.screen_y) = self.screen_pos;
         // The demo hook stands in for Mission_Update 0x182c60, which fires in state 2 — the flow
         // must be in a state reset_map_level_to_load accepts (its gate [M 0x1d3800]) for the outro
         // request to wrap into the movie state. The results PAGE opens only at the front-end
@@ -5416,7 +5442,10 @@ impl App {
                                     Self::inherit_music_statics(&mut fe, self.music_bank_flip, self.music_loaded_bank, self.music_master);
                                     let (opts, warn) = settings::load_default();
                                     if let Some(w) = warn { eprintln!("[settings] {w}"); }
-                                    fe.opts = opts;
+                                    fe.set_opts(opts);
+        // Screen Adjust: the offset is a global the menu managers don't own [M PS2ScreenXPos/YPos
+        // 0x30c75c/0x30c760] — a fresh manager keeps the live value.
+        (fe.screen_x, fe.screen_y) = self.screen_pos;
                                     fe
                                 });
                                 // profile-session: a fresh debriefing manager inherits the standing
@@ -5842,6 +5871,9 @@ impl App {
                 if scene_overlay_up(&self.scene, movie_frame.is_some()) { hud.append(&self.scene.script_overlay_hud(aspect)); }
                 g.renderer.lights = self.scene.frame_lights();
                 g.renderer.screen_aspect = g.config.width as f32 / g.config.height.max(1) as f32;
+                // Screen Adjust: the whole frame shifts by the live offset (gpu::screen_adjust_viewport).
+                if let Some(fe) = self.fe.as_ref() { self.screen_pos = (fe.screen_x, fe.screen_y); }
+                g.renderer.screen_offset = screen_frac(self.screen_pos);
                 // The destroyed-glist swap's draw side: the dead Destroy leaves' centres
                 // (see Scene::destroy_centres) — the doorway ends open [L] once the leaf is dead.
                 g.renderer.destroy_dead = dead_destroy_centres(&self.scene);
@@ -6074,7 +6106,10 @@ impl App {
                                     // settings-persist: same boot as the title's front end.
                                     let (opts, warn) = settings::load_default();
                                     if let Some(w) = warn { eprintln!("[settings] {w}"); }
-                                    fe.opts = opts;
+                                    fe.set_opts(opts);
+        // Screen Adjust: the offset is a global the menu managers don't own [M PS2ScreenXPos/YPos
+        // 0x30c75c/0x30c760] — a fresh manager keeps the live value.
+        (fe.screen_x, fe.screen_y) = self.screen_pos;
                                     fe
                                 });
                                 // profile-session: a FRESH pause manager inherits the standing codename
@@ -6227,6 +6262,7 @@ impl App {
             panel_level: 0,
             panel_frames: 0,
             fe: None,
+            screen_pos: (0, 0),
             auto_aim_opt: true,
             look_inverted: false,
             crouch_toggle_opt: true,
@@ -7019,7 +7055,9 @@ pub fn run() -> Result<()> {
         // resumed).
         let (opts, warn) = settings::load_default();
         if let Some(w) = warn { eprintln!("[settings] {w}"); }
-        app.fe.as_mut().unwrap().opts = opts;
+        app.fe.as_mut().unwrap().set_opts(opts);
+        // The boot's psiSetScreenPos from the loaded settings [M LS_LoadGlobalSettings 0x1cdbc8].
+        app.screen_pos = app.fe.as_ref().map_or((0, 0), |f| (f.screen_x, f.screen_y));
         // options-persist-roundtrip: the AV volume rows reach the sound layer at boot [M
         // LS_LoadGlobalSettings 0x1cdbc8:69-70 — the loaded settings call
         // SFXMusicSetVolume/SFXSetVolume].

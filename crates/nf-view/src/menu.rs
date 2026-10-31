@@ -233,6 +233,10 @@ pub const PAGE_CHEAT_MEDAL: u32 = 0x4000_004c;
 /// How many page ticks a Screen Adjust press keeps its arrow lit (the port's press-edge stand-in
 /// for the game's while-held +0x142 [S]).
 pub const SCREEN_ADJUST_HELD_TICKS: u8 = 6;
+/// The option-map keys carrying the picture offset (`PS2ScreenXPos` 0x30c75c / `PS2ScreenYPos`
+/// 0x30c760 [M symtab] — the globals' own addresses, outside every row control's 0x10000000 range).
+pub const OPT_SCREEN_X: u32 = 0x0030_c75c;
+pub const OPT_SCREEN_Y: u32 = 0x0030_c760;
 
 // ── mp-menu-flow: the multiplayer front-end pages ─────────────────────────────────────────────
 // All 13 PAGE records verified in the disc's menu-def (08000002 in 07000048.bin, parsed 2026-10-15 —
@@ -4132,10 +4136,30 @@ impl FrontEnd {
     }
 
     /// The picture offset as fractions of the visible picture: (X/2560, Y/448) [M §3]. The renderer
-    /// multiplies by its own viewport size; the DIRECTION of the shift on the TV is the report's
-    /// live check (DISPLAY's DX/DY select where the read starts).
+    /// (`gpu::screen_adjust_viewport`) moves the whole frame by it: + X right, + Y down — DISPLAY2's
+    /// DX/DY place the display area on the monitor, and the page's ◀ / ▲ lower them [M Scroll_Update
+    /// 0x221b20 + C_SBSCREEN 0x217b08; S GS manual for the DX/DY meaning].
     pub fn screen_offset_frac(&self) -> (f32, f32) {
         (self.screen_x as f32 / 2560.0, self.screen_y as f32 / 448.0)
+    }
+
+    /// The option map with the picture offset folded in: the game saves `psiGetScreenPos`'s X/Y in
+    /// the global settings blob next to the AV values [M LS_MakeGlobalSettings 0x1cd9d0], so the
+    /// port's option file carries them under [`OPT_SCREEN_X`] / [`OPT_SCREEN_Y`] (settings.rs).
+    pub fn opts_with_screen(&self) -> std::collections::HashMap<u32, i32> {
+        let mut o = self.opts.clone();
+        o.insert(OPT_SCREEN_X, self.screen_x);
+        o.insert(OPT_SCREEN_Y, self.screen_y);
+        o
+    }
+
+    /// Takes a loaded option map: the rows' values, and the picture offset the load restores —
+    /// `LS_LoadGlobalSettings` 0x1cdbc8 pulls X/Y and calls `psiSetScreenPos(x, y)` [M], clamped to
+    /// psiAdjustScreenPos' limits (±0x1b0, ±0x30 [M 0x10b890]) since the file is hand-editable.
+    pub fn set_opts(&mut self, opts: std::collections::HashMap<u32, i32>) {
+        self.screen_x = opts.get(&OPT_SCREEN_X).copied().unwrap_or(0).clamp(-0x1b0, 0x1b0);
+        self.screen_y = opts.get(&OPT_SCREEN_Y).copied().unwrap_or(0).clamp(-0x30, 0x30);
+        self.opts = opts;
     }
 
     /// The view aspect the game's camera writes at viewer+0x114: 16/9 (0x3fe38e39) with the

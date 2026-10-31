@@ -233,6 +233,26 @@ const HUD_MAX: usize = 16384;
 /// `a·x + b·y + c·z + d ≥ 0` inside the frustum, normalised so a sphere of radius `r` centred at `p` is fully outside
 /// when `a·p.x + b·p.y + c·p.z + d < −r`.
 ///
+/// Screen Adjust's picture shift (docs/systems/screen-adjust.md §3): the game writes the offset into GS
+/// DISPLAY2 as `DX = 0x27c + PS2ScreenXPos`, `DY = 0x32 + PS2ScreenYPos` [M `VBlankInt` 0x124088:13-17], so
+/// the whole displayed frame — 3-D view, HUD, menus, movie plane — moves together; DX/DY are where the
+/// display area starts on the monitor, so a larger value moves the picture right / down [S GS manual,
+/// DISPLAY1/2 "x/y position in the display area"], and the page's ◀ / ▲ lower them [M Scroll_Update
+/// 0x221b20: ◀ (action 0x1c) / ▲ (0x1a) take the 0x40 arm, value − 1; C_SBSCREEN_Handler 0x217b08 feeds
+/// it to psiAdjustScreenPos 0x10b890]. `frac` is the offset in picture fractions (X/2560, Y/448 —
+/// MAGH 5 × 512 VCK per line, 448 lines [M the DISPLAY2 constant 0x1bf9ff02000000]); the port's picture
+/// is the 4:3 frame at the target's height (the HUD's own pixel shape, `Hud::ndc`), so the shift is
+/// `frac.x · H·4/3`, `frac.y · H` target pixels. `base` is the frame's own viewport (the cut-scene band)
+/// or None for the whole target. Returns the viewport to set, or None when nothing moves and no band
+/// stands (the pass keeps its default full-target viewport). What the shift uncovers stays at the
+/// pass's black clear — the GS shows nothing outside its display area.
+pub fn screen_adjust_viewport(target: [f32; 2], base: Option<[f32; 4]>, frac: [f32; 2]) -> Option<[f32; 4]> {
+    let (dx, dy) = (frac[0] * target[1] * 4.0 / 3.0, frac[1] * target[1]);
+    if dx == 0.0 && dy == 0.0 { return base; }
+    let [x, y, w, h] = base.unwrap_or([0.0, 0.0, target[0], target[1]]);
+    Some([x + dx, y + dy, w, h])
+}
+
 /// `view_proj` is the column-major `Mat4` produced by `glam` and stored as `[[col0], [col1], [col2], [col3]]` —
 /// `vp[i]` is the i-th column. The i-th row (what Gribb-Hartmann combines with the w-row 3) is
 /// `(vp[0][i], vp[1][i], vp[2][i], vp[3][i])`. With the right-handed Vulkan/wgpu projection used here
@@ -387,6 +407,11 @@ pub struct Renderer {
     /// loading picture fill the PS2's 4:3 picture [M DecodeBGFMVFrame 0x108550 — 512×448 centred]; stretched to a
     /// 16:9 window they were a third too wide). 0 = fill the target.
     pub screen_aspect: f32,
+    /// Screen Adjust: the picture offset as fractions of the PS2 picture (`FrontEnd::screen_offset_frac`
+    /// — X/2560 of the width, Y/448 of the height). The game moves the whole displayed frame by
+    /// writing `PS2ScreenXPos`/`PS2ScreenYPos` into GS DISPLAY2's DX/DY in `VBlankInt` 0x124088:13-17 [M];
+    /// `render` shifts every draw of the frame by the same amount ([`screen_adjust_viewport`]).
+    pub screen_offset: [f32; 2],
     ibuf: wgpu::Buffer,
     tex_bgs: Vec<wgpu::BindGroup>,
     /// Per texture slot: its first bind group, frame count and rate (animated textures).
@@ -760,7 +785,7 @@ impl Renderer {
             for ch in &cel_graph.chains { for &c in ch { if (c as usize) < n { reached[c as usize] = true; } } }
             reached.iter().map(|r| !r).collect()
         };
-        Renderer { shard_pipeline, shard_vbuf, shard_groups: Vec::new(), woman_tex, snow_pipeline, snow_vbuf, snow_bg, hud_pipeline, hud_add_pipeline, hud_sub_pipeline, hud_vbuf, hud_bgs, pipelines, fog, notex, nofog, uniform, uniform_bg, staged: Vec::new(), orphan_nodes, destroy_dead: Vec::new(), destroy_wreck_draw: Vec::new(), destroy_wreck_all: scene.destroy_wrecks.iter().map(|(c, _)| c.map(f32::to_bits)).collect(), destroy_tint: Vec::new(), batch, vbuf, skin_buf, snow_skin, pal_buf, col_buf, wts_buf, mtg_buf, skin_layout, skin_pos: Default::default(), char_light_centre: Vec::new(), lights: Default::default(), screen_aspect: 0.0, ibuf, tex_bgs, tex_frames, draws, order: Vec::with_capacity(order_cap), cel_boxes, cel_graph, viewer_cel: Default::default(), last_vis: None, last_cell_vis: None, movie_tex: None, movie_bg: None, movie_size: None, movie_vbuf, hud_tbgl: tbgl, hud_sampler: sampler }
+        Renderer { shard_pipeline, shard_vbuf, shard_groups: Vec::new(), woman_tex, snow_pipeline, snow_vbuf, snow_bg, hud_pipeline, hud_add_pipeline, hud_sub_pipeline, hud_vbuf, hud_bgs, pipelines, fog, notex, nofog, uniform, uniform_bg, staged: Vec::new(), orphan_nodes, destroy_dead: Vec::new(), destroy_wreck_draw: Vec::new(), destroy_wreck_all: scene.destroy_wrecks.iter().map(|(c, _)| c.map(f32::to_bits)).collect(), destroy_tint: Vec::new(), batch, vbuf, skin_buf, snow_skin, pal_buf, col_buf, wts_buf, mtg_buf, skin_layout, skin_pos: Default::default(), char_light_centre: Vec::new(), lights: Default::default(), screen_aspect: 0.0, screen_offset: [0.0; 2], ibuf, tex_bgs, tex_frames, draws, order: Vec::with_capacity(order_cap), cel_boxes, cel_graph, viewer_cel: Default::default(), last_vis: None, last_cell_vis: None, movie_tex: None, movie_bg: None, movie_size: None, movie_vbuf, hud_tbgl: tbgl, hud_sampler: sampler }
     }
 
     /// The game's depth-0 pyramid for the walk [M `Vision_Calculate_View_Fustrum` 0x1e7df8,
@@ -923,7 +948,10 @@ impl Renderer {
         // The frame starts as fog (what the fog pass covers where nothing was drawn: zb 0); the
         // pillar-box clears black so the sides of a cut-scene frame are the void around the game's
         // 4:3 picture (the fog pass repaints the band's background itself).
-        let clear = if (pillar.is_some() && movie.is_none()) || (movie.is_some() && self.screen_aspect > 0.0) { wgpu::Color { r: 0.0, g: 0.0, b: 0.0, a: 1.0 } }
+        let tsz = target.texture().size();
+        let viewport = screen_adjust_viewport([tsz.width as f32, tsz.height as f32], pillar.filter(|_| movie.is_none()), self.screen_offset);
+        let shifted = self.screen_offset != [0.0; 2];
+        let clear = if (pillar.is_some() && movie.is_none()) || (movie.is_some() && self.screen_aspect > 0.0) || shifted { wgpu::Color { r: 0.0, g: 0.0, b: 0.0, a: 1.0 } }
             else if fog_on > 0.0 { wgpu::Color { r: (fog_rgb[0] * GAIN) as f64, g: (fog_rgb[1] * GAIN) as f64, b: (fog_rgb[2] * GAIN) as f64, a: 1.0 } } else { wgpu::Color { r: 0.05, g: 0.06, b: 0.08, a: 1.0 } };
         let mut enc = device.create_command_encoder(&Default::default());
         {
@@ -940,7 +968,7 @@ impl Renderer {
                 }),
                 timestamp_writes: None, occlusion_query_set: None, multiview_mask: None,
             });
-            if let Some([x, y, w, h]) = pillar.filter(|_| movie.is_none()) {
+            if let Some([x, y, w, h]) = viewport {
                 pass.set_viewport(x, y, w, h, 0.0, 1.0);
             }
             pass.set_vertex_buffer(0, self.vbuf.slice(..));
