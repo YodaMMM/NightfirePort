@@ -376,6 +376,19 @@ pub fn mounted_heat_strip(heat: f32) -> (f32, f32) {
     (v.min(100) as f32, 100.0)
 }
 
+/// The once-per-level gadget hint for this frame (`Player_WeaponFiring` 0x1a5460 [M]): weapon 0x54
+/// (the Micro-Camera) with the view model idle and `CamHint` clear → label 0x1000216 (:223-232);
+/// weapon 0x37 (the Remote Mine) likewise with `StickyHint` → 0x10002dc (:385-390). Each latch is set
+/// as it posts; `Player_InitWeapon` 0x1a7ef8:124-125 clears both per level.
+pub fn gadget_hint(weapon: u8, vm_idle: bool, cam: &mut bool, sticky: &mut bool) -> Option<u32> {
+    if !vm_idle { return None; }
+    match weapon {
+        0x54 if !*cam => { *cam = true; Some(0x100_0216) }
+        0x37 if !*sticky => { *sticky = true; Some(0x100_02dc) }
+        _ => None,
+    }
+}
+
 /// The HUD text drop-shadow offset (both axes) at a text scale: `Font_DrawText` 0x1eee48:96-98
 /// draws the flag-0x1000 shadow once at (x + 1.0, y + 1.0) [M]; scaled text keeps the proportion.
 pub fn text_shadow_offset(scale: f32) -> f32 { scale }

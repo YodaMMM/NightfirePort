@@ -908,6 +908,10 @@ pub struct HudState {
     /// sprite 0 (the full-screen subtractive white 0x03000002, layer 0x28) shows while it is
     /// non-zero. Ticked only while the pane is enabled (the zoomed camera view).
     pub camera_shutter: u8,
+    /// `CamHint` / `StickyHint`: the once-per-level gadget hints `Player_WeaponFiring` 0x1a5460
+    /// posts (cleared by `Player_InitWeapon` 0x1a7ef8:124-125 on every level load).
+    pub cam_hint: bool,
+    pub sticky_hint: bool,
 }
 
 impl HudState {
@@ -5273,6 +5277,11 @@ impl Sim {
         // gate the game checks inline (`GameState != 0x7000014 && != 0x700004a` [M :101]) — on
         // those two levels the door still unlocks, silently. The activate/clear/busy steps ran in
         // `Doors::update` regardless, exactly like the game.
+        // The locked-exit message (`Trigger_Activate` 0x1b2318:84-85 → TXTMSG type 1, label
+        // 0x2000021, life 0xb4 [M]) — no level gate on this one.
+        for (label, time) in self.drones.info_labels.drain(..) {
+            self.hud.info_labels.push_back((label, time));
+        }
         if self.level == 0x0700_0014 || self.level == 0x0700_004a {
             self.drones.doors.labels.clear();
         } else {
@@ -5391,6 +5400,15 @@ impl Sim {
     /// `Text_AddMsg` 0x1b0c30; `Text_UpdateMsg` 0x1b11d8 decrements the head's time by FRAME_RATE_MUL
     /// = 1 and deletes it at ≤ 0).
     fn hud_tick(&mut self) {
+        // The gadget hints (`Player_WeaponFiring` 0x1a5460:223-232, :385-390 [M]): holding the
+        // Micro-Camera 0x54 or the Remote Mine 0x37 with the view model's anim idle (`BL+0x7e8`
+        // +0xf4 == 0 — the port's no-switch / no-reload / no-fire state) posts the type-1 INFO
+        // message 0x1000216 / 0x10002dc, life 0xb4, once per level (the `CamHint` / `StickyHint`
+        // latches).
+        let vm_idle = self.gun.switch_state == 0 && self.gun.reload_state == 0 && !self.gun.fire_state;
+        if let Some(label) = crate::hud::gadget_hint(self.gun.weapon, vm_idle, &mut self.hud.cam_hint, &mut self.hud.sticky_hint) {
+            self.hud.info_labels.push_back((label, 180.0));
+        }
         // The goggles flow controller first — the game's `HUD_Update` 0x19a088 calls
         // `HUD_MonitorNightSight` 0x19e9d8 right after the crosshair, before the pane walk
         // [M :19]. The guard ladder's inputs, each per its decompile line:

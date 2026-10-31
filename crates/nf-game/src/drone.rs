@@ -11682,6 +11682,9 @@ pub struct Drones {
     /// on this path starts one or loads a level — the disc's single record carries code 0 [D
     /// 07000041 #81 params] — so the host consumes and drops it (a view-side fade would go here).
     pub movie_request: Option<u32>,
+    /// Type-1 INFO messages posted by the object updates this tick (label, life) — the locked exit
+    /// (`Trigger_Activate` 0x1b2318:84-85); the Sim drains them into its INFO pane.
+    pub info_labels: Vec<(u32, f32)>,
     /// The mission's own end (`Mission_Update` 0x182c60 case 4's `ResetMap_LevelToLoad(LevelToEndTo)`
     /// to the front end or an outro/interlude code, not the next 0x0700 level): the host runs the
     /// game's end sequence (the outro movie when the level has one, then the results page).
@@ -12227,6 +12230,7 @@ impl Drones {
             // here as `Drone_LevelReset`'s memset zeroes it at level reset [M 0x13a5bc-cc].
             los_probes: 0,
             movie_request: None,
+            info_labels: Vec::new(),
             pickups: Vec::new(), inventory: crate::pickup::Inventory::level_start(0x73, 34), taken: Vec::new(), scripts: Default::default(), player_events: Vec::new(), npc_enabled: true, hold_npcs: false, hold_active: false,
             npc_system_disabled: false,
             spawn_counter: 0, audio: Default::default(), script_sounds: Vec::new(), map_sounds: Default::default(), music: Default::default(), attack_gate: Default::default(), alarm_music: [0; 3], voice_last: Vec::new(), patrol_cooldown: 0, saw_opp_this_frame: false, saw_opp_last_frame: false, searchlights: Default::default(), doors: Default::default(), fuseboxes: Vec::new(), wire_geo: Default::default(), sss: Default::default(), bullet_paths: Vec::new(), sl_shots: Vec::new(), props: Default::default(), break_kills: Vec::new(), breaks: Default::default(), monitors: Default::default(), mission: crate::mission::Mission::new(), mission_carry: None, mission_inited: false, mission_events: Vec::new(), useobjs: Default::default(), ai_points: Vec::new(), bullet_path_weapons: Vec::new(), copters: Vec::new(), copter_paths: Vec::new(), locks: Vec::new(), grapple_points: Vec::new(), prev_event2: 0,
@@ -15274,6 +15278,8 @@ fn segment_hits_sphere(a: V3, b: V3, c: V3, r: f32) -> bool {
         }).collect();
         for i in hits {
             let (sets, next) = self.triggers[i].activate_request(&self.channels);
+            self.triggers[i].activate_locked_message(&self.channels);
+            if std::mem::take(&mut self.triggers[i].lock_msg) { self.info_labels.push((0x200_0021, 180.0)); }
             for (c, v) in &sets { self.channels.set(*c as u32, *v, frame); }
             // `Trigger_Activate` 0x1b2318's type-0xd arm [M :53-61]: the `mask & 4` gate, then
             // `GameState+0x10 = ext+0x20` (the full u32), `GameState+0x14 = 0`, push 6 + push 7
@@ -17565,6 +17571,7 @@ fn segment_hits_sphere(a: V3, b: V3, c: V3, r: f32) -> bool {
         for &(_, what, index) in &order {
             if what == 1 { let _pw = crate::prof::scope("ctl: kind 1");
                 self.triggers[index].update(&mut self.channels, &touchers, &self.bullet_contacts_prev, frame);
+                if std::mem::take(&mut self.triggers[index].lock_msg) { self.info_labels.push((0x200_0021, 180.0)); }
                 // `LOAD_LEVEL` (0xE8): when the exit trigger fires, carry the next level's hashcode for the main loop
                 // to reload (`Trigger_Activate` 0x1b2318 → `ResetMap_LevelToLoad`). Also post `Music_Event(3, 1)`
                 // (the end-sting) and `GS_PauseGame(1)` (the pause during transition) [M 0x1b2318:108-110].

@@ -90,3 +90,35 @@ fn frame_mounted_gun_draws_the_heat_gauge() {
     assert!((full[0] - 480.0).abs() < 0.5 && (full[2] - 496.0).abs() < 0.5 && (full[1] - 294.0).abs() < 0.5, "{full:?}");
     assert!((fill[1] - 334.0).abs() < 0.5 && (fill[3] - 394.0).abs() < 0.5, "{fill:?}");
 }
+
+#[test]
+fn gadget_hints_post_once_with_the_view_idle() {
+    let (mut cam, mut sticky) = (false, false);
+    // Busy view model (raise / fire / reload): nothing, and the latch stays clear.
+    assert_eq!(hud::gadget_hint(0x54, false, &mut cam, &mut sticky), None);
+    assert!(!cam);
+    // Idle with the Micro-Camera: 0x1000216, once.
+    assert_eq!(hud::gadget_hint(0x54, true, &mut cam, &mut sticky), Some(0x100_0216));
+    assert_eq!(hud::gadget_hint(0x54, true, &mut cam, &mut sticky), None, "CamHint latches");
+    // The Remote Mine: 0x10002dc, once.
+    assert_eq!(hud::gadget_hint(0x37, true, &mut cam, &mut sticky), Some(0x100_02dc));
+    assert_eq!(hud::gadget_hint(0x37, true, &mut cam, &mut sticky), None, "StickyHint latches");
+    // Sister: another weapon never posts.
+    let (mut c2, mut s2) = (false, false);
+    assert_eq!(hud::gadget_hint(0x02, true, &mut c2, &mut s2), None);
+    assert!(!c2 && !s2);
+}
+
+#[test]
+fn info_hint_labels_bind_to_text() {
+    let Some(iso) = iso() else { eprintln!("NF_ISO unset — skipping"); return };
+    let sc = nf_view::load(&iso, "07000005.bin", false).expect("load");
+    let lang = sc.sim.as_ref().and_then(|s| s.lang.as_ref()).expect("the language bank");
+    for id in [0x100_0216u32, 0x100_02dc, 0x200_0021] {
+        let t = lang.bind(id).unwrap_or("");
+        eprintln!("[hud-audit] {id:#x} = {t:?}");
+        assert!(!t.trim().is_empty(), "label {id:#x} binds to a string");
+    }
+    // Sister: an id past the bank's end binds to nothing usable.
+    assert!(lang.bind(0x0fff_ffff).map_or(true, |t| t.is_empty()));
+}
