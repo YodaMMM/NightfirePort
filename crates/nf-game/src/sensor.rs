@@ -17,12 +17,16 @@
 //! (FRAME_RATE_INT) returns the head (state 2). The disable channel (param 4) set → state 3
 //! (off/destroyed glist), cleared → re-arm.
 //!
-//! Not ported (all visual/audio, none of it sim-visible): the lens (param 0) and mount (param 7)
+//! Sounds (all `Sound_Play3D` at the sensor, no RNG draw): the 0x4AA hum loop (started by the
+//! preamble while the sensor is enabled, stopped by the disable channel / state 3), the 0x4DD
+//! servo at the sweep's half and wrap, and the 0x4A9 alert beep (on the alert, then every
+//! 0.5/0.25/0.125 s while tracking) [M 0x1af618].
+//!
+//! Not ported (all visual, none of it sim-visible): the lens (param 0) and mount (param 7)
 //! gfx proxy objects and their `hashtable_set_object_to_entity_gfx` meshes, the destroyed-glist
 //! swap (`obj+0xD8`), the draw-flag bits (`obj+0xF0/0xFA`), the monitor-view hide latch
 //! (`SENSOR+0x60`, written by `Monitor_Update` 0x1afcc8 — the monitor console type 0x30 is
-//! unported), and every sound (the 0x4AA hum, the 0x4DD servo, the 0x4A9 beeps — `Sound_Play3D`
-//! enters no RNG draw but nothing in the sim consumes them; ss.rs skips the same way).
+//! unported).
 // draw hand-off: the lens proxy (param 0, 0x2000360-class) — the SetBeam sight line stretched to
 // its hit length (lens obj+0xE8) — is still renderer work; the camera body and the mount (param 7)
 // draw from scene.rs's posed slots (`Sensor::matrix` / `mount_matrix`).
@@ -30,6 +34,7 @@
 use crate::door::{interp, parse_keys, quat_matrix, Key, Mat4};
 use crate::trig::sinf;
 use crate::triggers::Channels;
+use crate::sound::Sounds;
 use crate::world::{CollisionWorld, V3};
 use nf_formats::placement::{view_rot_trans_matrix, Placement};
 
@@ -58,6 +63,11 @@ const RETURN_EPS: f32 = 0.01;
 /// The detection-time thresholds (the beep acceleration's 2.0/3.0 at 0x1af618:125/128 and the
 /// channel write's 2.0 at :154) [M].
 const TRIP_TIME: f32 = 2.0;
+/// The sensor's sounds [M 0x1af618 disasm `$a0` at 0x1af76c / 0x1af8d0 / 0x1af958 / 0x1af9ec /
+/// 0x1afaa0]: the running hum, the sweep servo (half + wrap), the alert beep.
+pub const SFX_HUM: u32 = 0x4aa;
+pub const SFX_SERVO: u32 = 0x4dd;
+pub const SFX_BEEP: u32 = 0x4a9;
 /// The player's world-sphere radius (`obj+0x8C`): `Control_BuildWorldSph` 0x133070 builds the
 /// player's +0x80 sphere from the AnimObject local sphere (glist +0x1C radius × |obj scale
 /// +0xE8|) [M 0x133070; docs/fields/glist.md], and the player's is **1.0576** — the fresh-boot
@@ -177,8 +187,11 @@ pub struct Sensor {
     pub state: u16,
     /// `SENSOR+0x44` — the detection timer (the 2.0 s trip clock).
     pub detect: f32,
-    /// `SENSOR+0x48` — the beep/servo timer (only gates unplayed sounds; kept for the field map).
+    /// `SENSOR+0x48` — the beep/servo timer: state 1's beep clock (0x4A9 every 0.5/0.25/0.125 s),
+    /// state 0's half-sweep latch for the 0x4DD servo [M 0x1af618:121-133, 178-196].
     pub beep: f32,
+    /// `SENSOR+0x54` — the 0x4AA hum's sound handle (0 = not playing) [M 0x1af618:96-117, 252-255].
+    pub hum: crate::sound::Handle,
     /// `obj+0xF6` — the consecutive seen/lost tick counter (both states use it).
     pub seen: i16,
     /// The last detection result (for tests; not a game field).
@@ -264,12 +277,21 @@ impl Sensor {
         world.line_of_sight(self.pos, player.pos, crate::world::LOS_SENSOR)
     }
 
-    /// One `Sensor_Update` 0x1af618 tick.
-    pub fn update(&mut self, world: &CollisionWorld, player: &crate::drone::Player, ch: &mut Channels, frame: u32) {
+    /// One `Sensor_Update` 0x1af618 tick. Sounds go to `audio` (the `DYNAMICSOUNDS` pool), all
+    /// `Sound_Play3D(100, -1, -1, id, obj+0x30)` at the sensor's position; every started id is
+    /// also pushed to `heard` — `Sound_Play3D` enters the node in the AI hearing list
+    /// (`Sound_Alertness` 0x1ddc48 reads the pool), which the caller feeds.
+    pub fn update(&mut self, world: &CollisionWorld, player: &crate::drone::Player, ch: &mut Channels, frame: u32, audio: &mut Sounds, heard: &mut Vec<(u32, V3)>) {
+        let pos = self.pos;
+        let mut play = |audio: &mut Sounds, id: u32| { heard.push((id, pos)); audio.play3d(id, pos, None) };
         // The preamble [M 0x1af618:96-117]: while the disable channel (SENSOR+0x5A) is set the
-        // sensor is pinned to state 3 (the 0x4AA hum stop is unplayed).
+        // hum (SENSOR+0x54) stops and the sensor is pinned to state 3; otherwise (no disable
+        // channel, or it is clear) a sensor without a hum handle starts the 0x4AA hum.
         if self.disable != 0 && ch.on(self.disable as u32) {
+            if self.hum != 0 { audio.stop(self.hum); self.hum = 0; }
             self.state = 3;
+        } else if self.hum == 0 {
+            self.hum = play(audio, SFX_HUM);
         }
         match self.state {
             0 => {
@@ -279,11 +301,20 @@ impl Sensor {
                 self.detect = 0.0;
                 // The sweep [M 0x1af618:173-203]: pose at the playhead, advance
                 // `t += step · FRAME_RATE_MUL` (1.0 at 60 Hz), wrap past the limit. The servo
-                // sounds (0x4DD at the half and at the wrap) are unplayed.
+                // 0x4DD plays once past the half (latched by SENSOR+0x48 = 1.0) and again at the
+                // wrap (the latch cleared) [M 0x1af618:180-196].
                 if self.limit != 0 {
                     if let Some(m) = interp(&self.keys, 0, self.limit, self.t, true) { self.matrix = m; }
                     self.t += self.step;
-                    if self.t > self.limit as f32 { self.t = 0.0; }
+                    if self.limit as f32 * 0.5 < self.t && self.beep == 0.0 {
+                        play(audio, SFX_SERVO);
+                        self.beep = 1.0;
+                    }
+                    if self.t > self.limit as f32 {
+                        self.t = 0.0;
+                        play(audio, SFX_SERVO);
+                        self.beep = 0.0;
+                    }
                 }
                 // Detection [M 0x1af618:204-222]: hit → count; `prev > 0x1e` → alert (state 1).
                 let hit = self.in_cone(world, player);
@@ -295,12 +326,26 @@ impl Sensor {
                         self.detect = 0.0;
                         self.beep = 0.0;
                         self.state = 1;
+                        // The first alert beep — only for a sensor with an out channel [M 0x1af618:217-219].
+                        if self.out != 0 { play(audio, SFX_BEEP); }
                     }
                 } else {
                     self.seen = 0;
                 }
             }
             1 => {
+                // The alert beep [M 0x1af618:121-134]: with an out channel, `+0x48 += REC`; the
+                // interval is 0.5 s, 0.25 s once the detection timer (+0x44, this tick's value
+                // before the increment below) reaches 2.0, 0.125 s at 3.0; on reaching it the
+                // clock resets and 0x4A9 plays.
+                if self.out != 0 {
+                    self.beep += REC;
+                    let interval = if 3.0 <= self.detect { 0.125 } else if 2.0 <= self.detect { 0.25 } else { 0.5 };
+                    if interval <= self.beep {
+                        self.beep = 0.0;
+                        play(audio, SFX_BEEP);
+                    }
+                }
                 // State 1 tracks Bond [M 0x1af618:137-138 `Vec_Track(0.05, players[0]+0x80,
                 // obj+0x30, obj+0x90, SENSOR+0x14)`]: slerp the pose toward facing his sphere.
                 let qa = mat_to_quat(&self.matrix);
@@ -358,7 +403,9 @@ impl Sensor {
             }
             _ => {
                 // State 3 (disabled): the destroyed-glist swap and the lens hide are visual; the
-                // re-arm [M 0x1af618:259-263] waits for the disable channel to clear.
+                // hum stops [M 0x1af618:252-255]; the re-arm [M 0x1af618:259-263] waits for the
+                // disable channel to clear.
+                if self.hum != 0 { audio.stop(self.hum); self.hum = 0; }
                 if self.disable != 0 && !ch.on(self.disable as u32) {
                     self.state = 0;
                 }
@@ -394,7 +441,12 @@ fn segment_hits_sphere(a: V3, b: V3, c: V3, r: f32) -> bool {
 /// Every sensor of the level, in placement order (`Sensor_Create` order — `parsemap_create_dynamic_objects`
 /// 0x1d04f0 case 0x28, no RNG draw [M 0x1af010 has none]).
 #[derive(Clone, Debug, Default)]
-pub struct Sensors { pub list: Vec<Sensor> }
+pub struct Sensors {
+    pub list: Vec<Sensor>,
+    /// The sounds this tick's updates started, (id, position) — drained by the sim into the AI
+    /// hearing list.
+    pub heard: Vec<(u32, V3)>,
+}
 
 impl Sensors {
     /// `Sensor_Create` over the main map's 0x28 placements [M]. Params (level_tag → `Placement`):
@@ -445,15 +497,16 @@ impl Sensors {
                 seen: 0,
                 last_hit: false,
                 unhidden: false,
+                hum: 0,
             });
         }
-        Sensors { list }
+        Sensors { list, heard: Vec::new() }
     }
 
     /// One sensor's update (the control-list walk calls per object, like `Doors::update`).
-    pub fn update(&mut self, index: usize, world: &CollisionWorld, player: &crate::drone::Player, ch: &mut Channels, frame: u32) {
+    pub fn update(&mut self, index: usize, world: &CollisionWorld, player: &crate::drone::Player, ch: &mut Channels, frame: u32, audio: &mut Sounds) {
         if let Some(s) = self.list.get_mut(index) {
-            s.update(world, player, ch, frame);
+            s.update(world, player, ch, frame, audio, &mut self.heard);
         }
     }
 
@@ -497,6 +550,7 @@ mod tests {
             last_hit: false,
             unhidden: false,
             beam_len: 0.0,
+            hum: 0,
         }
     }
 
@@ -565,5 +619,135 @@ mod tests {
         let world = CollisionWorld::empty();
         let behind = player_at([1.5, 0.0, 0.0]);
         assert!(!s.in_cone(&world, &behind), "behind the axis, outside the sphere → no detect [M 0x1ee100:37]");
+    }
+    /// The pool's starts after one update: (id, pos) of every `Cmd::Start`.
+    fn starts(audio: &mut Sounds) -> Vec<(u32, Option<V3>)> {
+        audio.update(None, ([0.0; 3], [1.0, 0.0, 0.0], [0.0, 1.0, 0.0], [0.0, 0.0, 1.0]), &|_| true);
+        audio.take_commands().into_iter().filter_map(|c| match c {
+            crate::sound::Cmd::Start { id, pos, .. } => Some((id, pos)),
+            _ => None,
+        }).collect()
+    }
+
+    /// The hum [M 0x1af618:96-117]: an enabled sensor's first tick starts 0x4AA at its position
+    /// (3-D) once — the handle at SENSOR+0x54 keeps later ticks from starting another.
+    #[test]
+    fn the_hum_starts_once_at_the_sensor() {
+        let mut s = sensor_aiming([0.0, 0.0, 1.0]);
+        s.pos = [3.0, 1.0, -2.0];
+        let world = CollisionWorld::empty();
+        let far = player_at([0.0, 0.0, -50.0]);
+        let mut ch = Channels::default();
+        let mut audio = Sounds::default();
+        s.update(&world, &far, &mut ch, 1, &mut audio, &mut Vec::new());
+        assert_eq!(starts(&mut audio), vec![(SFX_HUM, Some([3.0, 1.0, -2.0]))]);
+        for f in 2..10 { s.update(&world, &far, &mut ch, f, &mut audio, &mut Vec::new()); }
+        assert!(starts(&mut audio).is_empty(), "sister: no second hum while the first is held");
+    }
+
+    /// The disable channel stops the hum and pins state 3; clearing it restarts the hum
+    /// [M 0x1af618:107-117, 252-263]. Sister: a sensor with the channel up from the start never hums.
+    #[test]
+    fn the_disable_channel_stops_and_restarts_the_hum() {
+        let mut s = sensor_aiming([0.0, 0.0, 1.0]);
+        s.disable = 40;
+        let world = CollisionWorld::empty();
+        let far = player_at([0.0, 0.0, -50.0]);
+        let mut ch = Channels::default();
+        let mut audio = Sounds::default();
+        s.update(&world, &far, &mut ch, 1, &mut audio, &mut Vec::new());
+        assert_eq!(starts(&mut audio).len(), 1);
+        assert_eq!(audio.live_ids(), vec![SFX_HUM]);
+        ch.set(40, 1, 2);
+        s.update(&world, &far, &mut ch, 2, &mut audio, &mut Vec::new());
+        assert_eq!(s.state, 3);
+        let _ = starts(&mut audio);
+        assert!(audio.live_ids().is_empty(), "the hum node is removed after the stop");
+        // The re-arm tick: the preamble starts a hum and the same tick's state-3 arm stops it
+        // again (the game's order, 0x1af618:107-117 then 252-255); the hum holds from the next tick.
+        ch.set(40, 0, 3);
+        s.update(&world, &far, &mut ch, 3, &mut audio, &mut Vec::new());
+        assert_eq!(s.state, 0);
+        assert!(starts(&mut audio).is_empty(), "the re-arm tick's hum is stopped before it starts");
+        s.update(&world, &far, &mut ch, 4, &mut audio, &mut Vec::new());
+        assert_eq!(starts(&mut audio), vec![(SFX_HUM, Some(s.pos))], "re-enabled → hum again");
+
+        let mut off = sensor_aiming([0.0, 0.0, 1.0]);
+        off.disable = 40;
+        let mut ch2 = Channels::default();
+        ch2.set(40, 1, 1);
+        let mut audio2 = Sounds::default();
+        for f in 1..5 { off.update(&world, &far, &mut ch2, f, &mut audio2, &mut Vec::new()); }
+        assert!(starts(&mut audio2).is_empty(), "disabled from the start: silent");
+    }
+
+    /// The sweep servo [M 0x1af618:180-196]: 0x4DD once past the half of the playhead and once
+    /// at the wrap — two per sweep cycle, never per tick.
+    #[test]
+    fn the_sweep_servo_plays_at_the_half_and_the_wrap() {
+        let mut s = sensor_aiming([0.0, 0.0, 1.0]);
+        s.limit = 10;
+        s.step = 1.0;
+        let world = CollisionWorld::empty();
+        let far = player_at([0.0, 0.0, -50.0]);
+        let mut ch = Channels::default();
+        let mut audio = Sounds::default();
+        let mut servo_ticks = Vec::new();
+        for f in 1..=22u32 {
+            s.update(&world, &far, &mut ch, f, &mut audio, &mut Vec::new());
+            if starts(&mut audio).iter().any(|(id, _)| *id == SFX_SERVO) { servo_ticks.push(f); }
+        }
+        // t after tick f = f (wrapping to 0 at 11): the half test `5 < t` first holds at t = 6,
+        // the wrap `t > 10` at t = 11; then again 11 ticks later.
+        assert_eq!(servo_ticks, vec![6, 11, 17, 22]);
+    }
+
+    /// Sister: a sensor without a sweep path (limit 0) never plays the servo.
+    #[test]
+    fn a_still_sensor_has_no_servo() {
+        let mut s = sensor_aiming([0.0, 0.0, 1.0]);
+        let world = CollisionWorld::empty();
+        let far = player_at([0.0, 0.0, -50.0]);
+        let mut ch = Channels::default();
+        let mut audio = Sounds::default();
+        for f in 1..=40 { s.update(&world, &far, &mut ch, f, &mut audio, &mut Vec::new()); }
+        assert!(!starts(&mut audio).iter().any(|(id, _)| *id == SFX_SERVO));
+    }
+
+    /// The alert beep [M 0x1af618:121-134, 217-219]: the alert tick beeps, then every 0.5 s
+    /// (30 ticks) while the detection timer is under 2 s, every 0.25 s from 2 s, 0.125 s from 3 s.
+    #[test]
+    fn the_alert_beep_accelerates_with_the_detection_timer() {
+        let mut s = sensor_aiming([0.0, 0.0, 1.0]);
+        s.out = 9;
+        let world = CollisionWorld::empty();
+        let bond = player_at([0.0, 0.0, 5.0]);
+        let mut ch = Channels::default();
+        let mut audio = Sounds::default();
+        let mut beeps = Vec::new();
+        for f in 1..=260u32 {
+            s.update(&world, &bond, &mut ch, f, &mut audio, &mut Vec::new());
+            if starts(&mut audio).iter().any(|(id, _)| *id == SFX_BEEP) { beeps.push(f); }
+        }
+        // The alert is the 32nd in-cone tick (prev > 0x1e); state 1 starts on tick 33.
+        assert_eq!(beeps[0], 32, "the alert beep");
+        let gaps: Vec<u32> = beeps.windows(2).map(|w| w[1] - w[0]).collect();
+        assert!(gaps.starts_with(&[30, 30, 30, 30]), "0.5 s while detect < 2.0: {gaps:?}");
+        assert!(gaps.contains(&15), "0.25 s once detect ≥ 2.0: {gaps:?}");
+        assert_eq!(*gaps.last().unwrap(), 8, "0.125 s once detect ≥ 3.0 (7.5 ticks → 8): {gaps:?}");
+        assert!(ch.on(9), "the out channel tripped too");
+    }
+
+    /// Sister: the same sighting with no out channel (SENSOR+0x58 = 0) never beeps [M 0x1af618:121, 217].
+    #[test]
+    fn a_sensor_without_an_out_channel_never_beeps() {
+        let mut s = sensor_aiming([0.0, 0.0, 1.0]);
+        let world = CollisionWorld::empty();
+        let bond = player_at([0.0, 0.0, 5.0]);
+        let mut ch = Channels::default();
+        let mut audio = Sounds::default();
+        for f in 1..=200 { s.update(&world, &bond, &mut ch, f, &mut audio, &mut Vec::new()); }
+        assert_eq!(s.state, 1, "it still tracks");
+        assert!(!starts(&mut audio).iter().any(|(id, _)| *id == SFX_BEEP));
     }
 }

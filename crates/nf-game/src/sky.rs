@@ -99,6 +99,11 @@ pub enum ThunderSound {
     Reflicker,
 }
 
+impl ThunderSound {
+    /// The bank id the game plays [M 0x1e5ad0:104-107].
+    pub fn id(self) -> u32 { match self { ThunderSound::Normal => 0x5d, ThunderSound::Reflicker => 0x5e } }
+}
+
 /// What one slot tick decided (the renderer draws the normal variant when `drew_flash` is false).
 #[derive(Clone, Copy, Debug, Default, PartialEq)]
 pub struct SlotTick {
@@ -324,6 +329,11 @@ pub struct Sky {
     pub slots: [SkySlot; MAX_SLOTS],
     pub globals: LightningGlobals,
     pub rotating: RotatingSky,
+    /// The variant each slot drew on the last frame: bit n = slot n drew its flash variant
+    /// (`View_DrawSky` 0x1e5ad0's `iVar11 = +0x14` / `iVar10 = +0x1c` swap [M :122-157]); a clear bit =
+    /// the normal +0x10/+0x18 pair [M :97-98] — nothing at all for a flash-only slot. The renderer's
+    /// lightning swap reads it (`Renderer::sky_flash_mask`).
+    pub flash_mask: u32,
 }
 
 impl Sky {
@@ -349,6 +359,57 @@ impl Sky {
             }
         }
         (out, last_spin)
+    }
+
+    /// The slots `View_AddSkyObj` 0x1e79a0 fills from the map's type-0x2A placements, in placement
+    /// order [M parsemap 0x1d04f0 case 0x2a → View_AddSkyObj(param 0 slot, glist, trans, rot, 0,
+    /// param 1 flash, param 2 interval, param 3 flash length, param 4 sky group)]. A flash
+    /// placement fills the slot's flash handle, `interval × FRAME_RATE` (truncated to short) and the
+    /// flash length; a normal one the normal handle; both write the group and clear the three
+    /// timers [M 0x1e79a0:17-36]. Slot indices ≥ 0x15 are dropped [M :17]. The glist/object
+    /// handles carry the placement index + 1 (any non-zero value — the timers only test for zero).
+    pub fn from_placements(placements: &[nf_formats::placement::Placement]) -> Sky {
+        let mut sky = Sky::default();
+        for (i, p) in placements.iter().enumerate() {
+            if p.flags & 0xff != 0x2a { continue; }
+            let param = |k: u32| p.params.iter().find(|(j, _)| *j == k).map_or(0, |&(_, v)| v);
+            let slot = (param(0) & 0xffff) as usize;
+            if slot >= MAX_SLOTS { continue; }
+            let s = &mut sky.slots[slot];
+            let handle = i as u32 + 1;
+            if param(1) as u8 != 0 {
+                s.flash_glist = handle;
+                s.flash_len = param(3) as u16 as i16;
+                s.interval = mul(param(2) as u16 as f32, FRAME_RATE) as i16 as u16;
+            } else {
+                s.glist = handle;
+            }
+            s.skyid = param(4) as u8;
+            s.flash = 0;
+            s.dark = 0;
+            s.thunder = 0;
+        }
+        sky
+    }
+
+    /// One frame of `Game_Draw` 0x1e6f50's two sky calls — `View_DrawSky(viewer, 1)` before the
+    /// world list, `View_DrawSky(viewer, 0)` after `psiPostSolid` — returning the thunder sounds
+    /// that fired (`Sound_Play(100, 0x5d / 0x5e)` [M 0x1e5ad0:100-109]). The timers run only while
+    /// the game is not paused (`GameState[0x50] == 0`, :99).
+    /// Also records the frame's drawn variants in `flash_mask`: a paused frame skips the timers and
+    /// draws every slot's normal pair (the :99 gate leaves `iVar11`/`iVar10` at +0x10/+0x18).
+    pub fn frame_thunder(&mut self, level: u32, paused: bool, rng: &mut Rng) -> Vec<ThunderSound> {
+        if paused { self.flash_mask = 0; return Vec::new(); }
+        let mut out = Vec::new();
+        let mut mask = 0u32;
+        for group in [1u8, 0] {
+            for (i, t) in self.tick_group_slots(group, level, paused, rng) {
+                if let Some(th) = t.thunder { out.push(th); }
+                if t.drew_flash { mask |= 1 << i; }
+            }
+        }
+        self.flash_mask = mask;
+        out
     }
 
     /// Convenience wrapper returning just the slot ticks.

@@ -2627,6 +2627,7 @@ fn shot(scene: &scene::Scene, cam: &Camera, out: &str, choice: Option<usize>, ti
     let vis_shot = r.cel_visibility(cam.pos.to_array(), vp_shot, world, door_closed.as_deref());
     // The destroyed-glist swap's draw side: the dead Destroy leaves' centres (see Scene::destroy_centres).
     r.destroy_dead = dead_destroy_centres(scene);
+    r.sky_flash_mask = scene.sim.as_ref().map_or(0, |s| s.drones.sky.flash_mask);
     r.destroy_wreck_draw = wreck_draw_centres(scene);
     r.destroy_tint = destroy_tints(scene);
     // Objects are never room-culled (see the live path).
@@ -5952,6 +5953,7 @@ impl App {
                 // The destroyed-glist swap's draw side: the dead Destroy leaves' centres
                 // (see Scene::destroy_centres) — the doorway ends open [L] once the leaf is dead.
                 g.renderer.destroy_dead = dead_destroy_centres(&self.scene);
+                g.renderer.sky_flash_mask = self.scene.sim.as_ref().map_or(0, |s| s.drones.sky.flash_mask);
                 g.renderer.destroy_wreck_draw = wreck_draw_centres(&self.scene);
                 g.renderer.destroy_tint = destroy_tints(&self.scene);
                 let fp_enc = std::time::Instant::now();

@@ -21,9 +21,9 @@ front-end only). Ported-this-pass items link the test (`crates/nf-game/tests/sou
 | Weapons/bullets (fire, impacts, fly-by, casings) | 25 | PORTED except 0x28D (class-0x51 bullet-end) |
 | World objects (doors, searchlights, pickups, hints, sound triggers, locks) | 30 | PORTED except the picklock beeps 0x5DB/0x5DA + activate sounds, `Hurt` loop |
 | Drones/guards (foley, pain, gunfire, deaths, seen-music) | 25 | PORTED except class-specific extras (below) |
-| Security cameras (`Sensor_Update`) | 7 | Update 2026-10-22: the class is ported in `crates/nf-game/src/sensor.rs`, which carries 0x4AA / 0x4A9 / 0x4DD; the rows below predate it |
+| Security cameras (`Sensor_Update`) | 7 | PORTED (2026-10-31): `sensor.rs` plays the 0x4AA hum loop, the 0x4DD servo and the 0x4A9 alert beeps; the starts feed AI hearing |
 | SpaceLaser (0x50), SS (0x25), Break (0x20) classes | 10 | Update 2026-10-22: all three classes are ported (`space_laser.rs`, `ss.rs`, `breakable.rs` — the Break kill sounds 0x5F2/0x5F3 are in breakable.rs); per-id coverage not re-checked (unverified, 2026-10-22) |
-| Sky thunder (`View_DrawSky`) | 2 | MISSING — the lightning tick (`sky.rs`) is not wired into the sim (G-019) |
+| Sky thunder (`View_DrawSky`) | 2 | PORTED (2026-10-31): `Sky::from_placements` + `Drones::sky_frame` play 0x5D/0x5E; the draws use their own stream (the flash swap stays G-019) |
 | Front-end menus (`P_*_Handler`, `Menu_PlaySound`) | 40 | N/A (front-end) |
 | Vehicles/driving/MP (`Car_*`, `Copter_*`, `Sub_*`, `GT_*`, `MPSound_*`) | 22 | N/A |
 
@@ -47,7 +47,7 @@ burn-through, 0x148 special-death cry.
 | `Player_ChangeSubState` 0x190630:83-85 / `Player_Init` 0x1910f8:41-43 | Sound_StopAllWithId | 0x12, 0x3D, 0xF0 | substate change: the loop stops | PORTED `audio.stop_all_with_id` (`scene.rs:2398,2712`) |
 | `Player_SetWeaponAnimObj` 0x1a2e38:227-295 | Sound_Play | 0x283/0x280 holster, 0x281/0x282 draw | the weapon-change machine (gadgets 0x4A..0x5E vs weapons) | PORTED `scene.rs:2715,2744,2787,2851` |
 | `Player_WeaponChange` 0x1a6f80:128 | Sound_Play | 0x1DB | the change refused, `level_tag+0x62 == 1` | MISSING (the tag byte is unparsed) |
-| `Player_WeaponInitBullet` 0x1a4bf0:262 | Sound_Play | 0xEC | per bullet init | MISSING (the port plays fire through the anim script op 1; the per-weapon op-1 remaps are G-graded, sound.md) |
+| `Player_WeaponInitBullet` 0x1a4bf0:262 | Sound_Play | 0xEC | per bullet of a base-0x54 record (the Micro-Camera's shutter) | PORTED `drone.rs` `fire_player` (`MICRO_CAMERA_SHUTTER_SFX`) + test |
 | `Player_Zoom` 0x1a1a70:31-84 / `Player_Weapon` 0x1a24c8:164 | Sound_Stop | [BL+0x898] | scope/weapon exit stops the gadget loop | PORTED `scene.rs:2712` (`gadget_loop_ids`) |
 | `Player_Creep` 0x1969d0:85 / `Player_Wire` 0x197658:107 | Music_Event | 0xD | the creep/wire stealth music | PORTED `music.rs` event 13 |
 | `Player_Update` 0x193600:121 | Music_Event | `level_tag+0xA1` byte | the level's constant music event | MISSING (byte unparsed; low impact) |
@@ -66,7 +66,7 @@ burn-through, 0x148 special-death cry.
 | `Bullet_DoTrails` 0x12d890:442 | Sound_Play3D | 0x447 | the smoke-trail tick | PORTED `drone.rs:8512` |
 | `Bullet_DoTrails` 0x12d890:473 | Sound_Play3D | **0x5DD** | the Lazer-Watch beam's burn life ends (0x4E/0x4F) | **PORTED this pass** (with the lock clunk) + test |
 | `Bullet_update` 0x12e7b0:104,290,327 | SetPosition / Stop / Play3D 0x27C | — | the in-flight loop follows the grenade; the bounce | PORTED `grenade.rs:114`, `drone.rs:8506` |
-| `Bullet_Delete` 0x12e660:14,53 | Stop / Play3D 0x28D | — / 0x28D | the loop stop; the last-hit object class 'Q' (0x51) plays 0x28D | 0x51: control_funcs[0x51] is NULL (no update) — a static class the port has no list for: MISSING |
+| `Bullet_Delete` 0x12e660:14,53 | Stop / Play3D 0x28D | — / 0x28D | the loop stop; the claw bolt (+0x70 & 0x40) dying on a class-'Q' (0x51) grapple point plays 0x28D before `Player_SetGrapplePoint` | PORTED `scene.rs` `GRAPPLE_LATCH_SFX` at the latch + `gadget_grapple_live` |
 | `Bullet_casing_update` 0x12faa0:97 | Sound_Play3D | 0x1FE-0x204 by material | the casing lands | PORTED `casing.rs:168-223` |
 | `Break_Kill` 0x12b970:69-75 | Sound_Play3D | 0x5F2 (41% roll) / 0x5F3 / 0x2E | a breakable (class 0x20) dies | MISSING — the Break class is unported (`parsemap` case 0x20 → `Break_Create`; no port list) |
 
@@ -78,21 +78,21 @@ burn-through, 0x148 special-death cry.
 | `Lock_Update` 0x1ae3d8:92 | Sound_Play3D | **0x249** | the laser burn drops +0x105 below 4 → `Lock_Unlock` | **PORTED this pass** (with 0x5DD) + test |
 | `Lock_Update` 0x1ae3d8:282 | Sound_Play3D | (unlock click) | the picklock sequence's unlock | MISSING — the picklock minigame is unported (lock.rs covers the burn only) |
 | `Lock_Update` 0x1ae3d8:368,374 | Sound_Play | 0x5DB, 0x5DA | the picklock ticks / the success | MISSING (same) |
-| `Lock_Activate` 0x1aed00:27-32 / `Lock_Unlock` 0x1b0650:18 | Sound_Play3D | LOCK data [+2]/[+4]/[+6] u16s | the E-interaction locked/burnt feedback, the unlock | MISSING (no play in `lock.rs` — the ids come from the lock record) |
+| `Lock_Activate` 0x1aed00:27-32 / `Lock_Unlock` 0x1b0650:18 | Sound_Play3D | LOCK words [2]/[3] = placement params 3/4 (0 → 0xFFFF) | the key-lock rattle / the unlock | DEAD DATA: 0xFFFF on every disc 0x2E placement [D]; `Lock::key_channels` keeps them, the keypad solve plays word [2] |
 | `Searchlight_Update` 0x1cb900:401,455 | Sound_Play3D | 0xE5, 0xE6 | the searchlight's sweep/alarm | PORTED `searchlight.rs:279,449` |
-| `Sensor_Update` 0x1af618:103-255 | Sound_Play3D | 0x4AA (activate), 0x4A9 (accelerating beep: 0.5→0.25→0.125 s), 0x4DD (sweep ends) | the security camera | MISSING — class 0x29 unported (`parsemap` case 0x29; the port has no sensor list) |
+| `Sensor_Update` 0x1af618:103-255 | Sound_Play3D | 0x4AA (activate), 0x4A9 (accelerating beep: 0.5→0.25→0.125 s), 0x4DD (sweep ends) | the security camera (placement 0x28) | PORTED `sensor.rs` (`SFX_HUM`/`SFX_SERVO`/`SFX_BEEP`) + `sensor_live` |
 | `Pickup_Handler` 0x18e650:336 | Sound_Play3D | PICKUPINFO +0x2A (kind overrides 0xF5/0x141/0x14C) | the pickup taken | PORTED `pickup.rs:81-126` |
 | `Hint_Update` 0x1b3380:26 | Sound_Play | HINT data [0] | the hint volume fires | PORTED `scene.rs:2295` |
 | `SoundTrigger_Update` 0x1b2790:30-59 | Play3D/Play/Stop | TRIGGER data `puVar2[3]`, loop stop | the channel-gated emitter | PORTED `sound.rs` `SoundTriggers::tick` |
 | `MusicTrigger_Update` 0x1b31a0:24 | Music_Event | TRIGGER data [0] | the music trigger volume | PORTED `music.rs` (the trigger volumes feed the event table) |
-| `Hurt_Update` 0x17e5d0:120 | Sound_Play3D | HURT data +0x1A | the hurt volume (fire/spikes) loops | MISSING — the Hurt object (0x27) loop is not in the port's object lists |
+| `Hurt_Update` 0x17e5d0:120 | Sound_Play3D | HURT data +0x1A | the hurt volume's activation sound | DEAD DATA — `hurt.rs` `sound` (param 3) is 0xFFFF on every surveyed placement [D] |
 | `Light_Update` 0x1cafb8:27 | Sound_Play3D | LIGHT data +0x2C | the flicker counter wraps through 0xF000 | MISSING in code but **dead data**: the placement call sites never write +0x2C (`light.rs:145-148`) |
 | `AnimObjectUpdate` 0x1befd8:205 | Sound_Play3D | 0x286 | the anim object's event | PORTED `scene.rs:2402,2424` |
 | `AnimProcessScriptCmds` 0x1c1b38:320,388 | Play3D / StopAllWithId | the anim script's sound cmd | the animation-script sounds | PORTED (`anim_sounds`, `d.sfx` paths) |
-| `RB_RestingContact(Rot)` 0x1d7168:111 / 0x1d73a0:121 | Sound_Play3D | *(*(RIGIDBODY+0x54)+8), loop [RB+0x158] | a rigid body's contact list has a class-5 (bullet) object: the shot-body thud | MISSING — the port's props carry no rest-contact sound outbox |
+| `RB_RestingContact(Rot)` 0x1d7168:111 / 0x1d73a0:121 | Sound_Play3D | RIGIDBODY+0x158 (level_tag+0x3c, 0 → 0xFFFF) | a class-5 contact on a rigid body | PORTED `rigid_body.rs` (was playing the 100.0f volume word as the id); 0xFFFF on every disc 0xD8 placement [D] |
 | `SS_Update` 0x1a9948:86 | Sound_Play3D | SS data +0x14/+0x26 | the SS (0x25) playback state 0x40 | MISSING — the port's `ss.rs` runs activation only, not the playhead states |
 | `SpaceLaser_Update` 0x1aa3f8:82-194 | Play 0x5DE / Play3D 0x46A / Stops | — | the laser grid: the trip hum (2-D) and the beam hit | MISSING — class 0x50 unported |
-| `View_DrawSky` 0x1e5ad0:104-107 | Sound_Play | 0x5D (`LightningType==0`) / 0x5E | the sky slot's thunder countdown hits 1 | MISSING — `sky.rs` computes the event (`SlotTick.thunder`) but no sim/render caller wires it (G-019); live check below |
+| `View_DrawSky` 0x1e5ad0:104-107 | Sound_Play | 0x5D (`LightningType==0`) / 0x5E | the sky slot's thunder countdown hits 1 | PORTED `drone.rs` `sky_frame` (0700000a/0b slot 3 [D]) + `sensor_live` thunder test |
 | `HandleMapSoundAllocation` 0x1dd118:69-77 | Play3D / Stop | the map's ambient list | the listener inside R starts / 1.2·R² stops | PORTED `sound.rs` `MapSounds` |
 | `GunImp_Update` 0x1320d8:263-333 / `GunImp_Deactivate` 0x132c18:62 | Play3D 0x5E4/0x5E5/0x5E6 + the TurretGuns fire id / Stop | — | the gun implacement's servo/fire | MISSING (class unported; SP-visible only in 0700000C/0D) |
 | `GT_Update` 0x180498:291-518 | Music_Event 2 / Play3D fire id, 0x10A | — | the gun turret | N/A (the port has no GT list; the drivable sections only) |

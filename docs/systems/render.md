@@ -187,12 +187,25 @@ draw the flash glist instead of the normal one; reflicker-type flash ticks raise
 [0x30d0b8], which shows the 8-beam lightning polyline (`Lightning_Update` 0x18cf68, re-fractaled by
 `Reflicker` via `FractalThing`; the beams follow the player). **The flash does not light the level**: no
 ambient write and no `Light_Create` in the path — the level-side evidence is the beams only; the port
-leaves a marked hook (`sky::Sky.globals.super_happy`) for the lighting work. RNG order per tick: flash start
+shares `sky::Sky.globals` with the 0x2c bolts (`WorldFx::lightning`). RNG order per tick: flash start
 = `Rand_Rand(interval)` then `Rand_Rand(100)` (plus `Rand_Rand(120)` on the non-reflicker branch); a
 flashing tick = one `Rand_Rand(100)`; dark ticks draw nothing [M 0x1e5ad0:92-158].
 
 Disc parameters [D]: 0700000a Thunderhead slot 3 = interval 24 → 1440 ticks, flash 5; 0700000b slot 3 =
 30 → 1800, flash 10. The other 25 on-foot levels have no flash variant.
+
+**What the flash draws on 0a/0b: nothing.** Slot 3 holds only the flash variant (no normal placement),
+and the Thunderhead's PS2_GFX block is the 32-byte empty glist (header word = footer offset 0x10 [D]):
+`psiCreateEntityGfx` 0x1171b0:23-27 zeroes such a glist's box count and box array, and
+`psiDrawObjectMatrix` 0x124708 returns before `RecurseAndDrawBoxes` [M]. No 0x2c bolt records exist on
+either level [D-census], so `SuperHappyLightningFlag` has nothing to show there, and no fog/ambient/light
+write rides the lightning globals (only `View_DrawSky` and `Lightning_Update` reference them [M grep]).
+The port runs the swap exactly anyway: `Sky::flash_mask` (the drawn variant per slot, per sim frame) →
+`Renderer::sky_flash_mask` → `scene::sky_variant_drawn` on the tagged sky draws of any slot that has a
+flash variant; a paused frame draws the normal pair. The sim's lightning globals are one set shared with
+the 0x2c bolts (`Drones::sky_frame`). Renders: the mid-flash and between-flash frames match pixel for
+pixel apart from the rain drops (crates/nf-game/tests/sky_flash_live.rs pins the schedule and the empty
+glist).
 
 **The rotating sky of 0x0700001B**: inside the per-slot body, when the glist flags lack bit 0x8, the frame
 counter `rotatosky.168` [0x30d878] increments once per slot pass (both of 0700001b's slots — SKY_StarField

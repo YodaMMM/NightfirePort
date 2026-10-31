@@ -51,15 +51,16 @@ fn sky_pass_gs_state_from_the_first_cnt() {
     let (name, params, gs) = &objs[3];
     assert_eq!(name.as_str(), "Thunderhead");
     assert_eq!(*params, [3, 1, 24, 5, 0], "slot 3, flash variant, interval param 24, flash length 5, group 0");
-    // MEASURED [D]: the Thunderhead's first leaf carries NO A+D writes at all — the sky glists inherit
-    // the pass state entirely: ALPHA_1 = 0x2a (replace) from psiSetUpColourBlend(2), no fog change (the
-    // psiFog stub), and whatever depth state the frame set before the sky draws. The renderer's
-    // zwrite=false on both sky passes models that inherited depth state; pinning the exact ZBUF_1 the GS
-    // holds during the sky draws is an open live check.
+    // MEASURED [D]: the Thunderhead has no leaf at all — its PS2_GFX block is the 32-byte empty glist
+    // (footer offset 0x10, which `psiCreateEntityGfx` 0x1171b0:23-27 turns into box count 0), so it
+    // sends no A+D writes and draws nothing (`psiDrawObjectMatrix` 0x124708 returns on the zero box
+    // array; crates/nf-game/tests/sky_flash_live.rs pins it). The pass-initial state below is what any
+    // sky glist without its own writes inherits: ALPHA_1 = 0x2a (replace) from psiSetUpColourBlend(2),
+    // no fog change (the psiFog stub), and whatever depth state the frame set before the sky draws.
     let alpha = gs.iter().find(|&&(r, _)| r == 0x42).map(|&(_, v)| v).unwrap_or(0x2a);
     let test = gs.iter().find(|&&(r, _)| r == 0x47).map(|&(_, v)| v).unwrap_or(0x5001b);
     let zbuf = gs.iter().find(|&&(r, _)| r == 0x4e).map(|&(_, v)| v).unwrap_or(0x3100_0002);
-    assert_eq!(gs.is_empty(), true, "the first CNT of the flash sky carries no A+D writes (inheritance)");
+    assert_eq!(gs.is_empty(), true, "the empty flash glist carries no A+D writes");
     println!("Thunderhead first-CNT writes: {gs:?}; effective ALPHA_1 {alpha:#x}, TEST_1 {test:#x}, ZBUF_1 {zbuf:#x}");
     let (a, b, c, _fix, _d) = decode_alpha(alpha);
     println!("Thunderhead effective ALPHA_1 {alpha:#x} (A{a} B{b} C{c}) TEST_1 {test:#x} ZBUF_1(inherited assumption) {zbuf:#x}");

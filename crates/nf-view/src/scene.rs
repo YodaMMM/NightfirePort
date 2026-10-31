@@ -222,6 +222,10 @@ pub struct Material {
     /// re-centres the draw's light pick on the owner's live palette root every frame (the game's
     /// obj+0x80 world sphere follows the object). `None` = a static draw (its `centre` stands).
     pub skin: Option<(u32, Option<u32>)>,
+    /// A sky draw of a `GfxList` slot that has a lightning variant: (slot, is the flash variant). The renderer
+    /// draws it only when the slot's bit in `Renderer::sky_flash_mask` equals the flag (`View_DrawSky`
+    /// 0x1e5ad0 draws one variant per tick [M :122-157]). `None` = every other draw.
+    pub sky_slot: Option<(u8, bool)>,
     pub first_index: u32,
     pub index_count: u32,
 }
@@ -2945,6 +2949,11 @@ impl Sim {
                 let head = self.bond.head();
                 let dir = self.bond.look();
                 if let Some(point) = nf_game::gadget::pick_grapple_point(&self.drones.grapple_points, head, dir, nf_game::gadget::grapple_range(&self.weapons, claw)) {
+                    // The claw's latch clunk: `Bullet_Delete` 0x12e660:50-55 — the claw bolt (+0x70 &
+                    // 0x40) dying on a class-'Q' (0x51) grapple object plays `Sound_Play3D(100, -1,
+                    // -1, 0x28d, bullet+0xC0)` right before `Player_SetGrapplePoint` [M disasm $a0
+                    // 0x12e74c]. The port has no claw bolt; the bolt dies at the point it latches.
+                    self.drones.audio.play3d(GRAPPLE_LATCH_SFX, point, None);
                     self.bond.grapple = Some(nf_game::gadget::GrappleState { point, phase: 1, pull: 0.0 });
                     self.bond.substate = nf_game::player::SS_GRAPPLE;
                     self.bond.vel = [0.0; 3];
@@ -6130,6 +6139,9 @@ pub fn flash_mod(frame: u32) -> f32 {
 /// and quantization are exact [M GameFlow_Main 0x1c98c8:84 writes it every pass]).
 fn clock_100ths(frame: u32) -> u32 { frame * 10 / 6 }
 
+/// The Q-Claw's latch sound (`Bullet_Delete` 0x12e660:53, `$a0` = 0x28d at 0x12e74c [M]).
+pub const GRAPPLE_LATCH_SFX: u32 = 0x28d;
+
 /// A rigid mesh hung on a character's datum (`AnimObjectDraw`): world = `QuatTransToMat(q, t)` · bone world.
 /// Draw slots per gas mesh (the sim's pool holds `GasPool::CAP` = 128; a puff past this index doesn't draw).
 pub const GAS_DRAW_SLOTS: usize = 64;
@@ -6489,6 +6501,21 @@ pub fn fog_for(level: u32) -> Option<([u8; 3], f32)> {
 pub type GroupKey = (Layer, [u32; 3], u32, u32, Option<(usize, u32)>, Draw, u16);
 /// The group key's slot-2 tag for a per-character group (see `add_instance`'s `ikey`).
 const SKIN_TAG: u32 = 0x5c1d_0000;
+/// The sky's lightning swap for one draw: a tagged sky draw (`Material::sky_slot` = (slot, flash variant))
+/// renders only when its variant is the one the slot drew this tick — `flash_mask` bit n set = slot n drew
+/// its +0x14/+0x1c flash pair, clear = its +0x10/+0x18 normal pair [M View_DrawSky 0x1e5ad0:97-98, 145,
+/// 152-153]. Untagged draws always pass.
+pub fn sky_variant_drawn(sky_slot: Option<(u8, bool)>, flash_mask: u32) -> bool {
+    match sky_slot {
+        Some((slot, flash)) => (slot < 32 && flash_mask >> slot & 1 != 0) == flash,
+        None => true,
+    }
+}
+
+/// The group key's slot-2 tag for a sky draw whose `GfxList` slot has a lightning variant: slot 0 = the slot,
+/// slot 1 = 1 for the flash variant (+0x14/+0x1c), 0 for the normal one (+0x10/+0x18). `View_DrawSky` 0x1e5ad0
+/// draws exactly one of the two per tick [M 0x1e5ad0:97-98, 122-157, 161-219], so they need their own draws.
+const SKY_TAG: u32 = 0x5c1e_0000;
 type Groups = BTreeMap<GroupKey, (Vec<Vertex>, Vec<u32>, Vec<CharVertex>, [f32; 3], f32, Option<u16>, u32)>;
 
 /// ── Pool-slot replay (level-load-time) ───────────────────────────────────────────────────────────
@@ -6604,6 +6631,11 @@ fn morph_vertex(mut pos: [f32; 3], morph: i16, weights: &[f32], targets: &[u8]) 
 }
 
 fn add_instance(level: &Level, inst: &Instance, layer: Layer, character: Option<(u32, Option<u32>)>, groups: &mut Groups, bounds: Option<&mut ([f32; 3], [f32; 3])>, searchlight: Option<u16>, door: Option<u16>, pickup: Option<u16>, mult: [f32; 3], cels: &[Cel], chain: u32, node: u32) {
+    add_instance_tagged(level, inst, layer, character, groups, bounds, searchlight, door, pickup, mult, cels, chain, node, None)
+}
+
+/// `add_instance` with an explicit group-key identity (`ikey`) — the sky's lightning slots (`SKY_TAG`).
+fn add_instance_tagged(level: &Level, inst: &Instance, layer: Layer, character: Option<(u32, Option<u32>)>, groups: &mut Groups, bounds: Option<&mut ([f32; 3], [f32; 3])>, searchlight: Option<u16>, door: Option<u16>, pickup: Option<u16>, mult: [f32; 3], cels: &[Cel], chain: u32, node: u32, tag: Option<[u32; 3]>) {
     let obj = &level.maps[inst.map].objects[inst.object];
     let mut m = inst.matrix;
     if layer == Layer::SkyCamera { m[3] = [0.0, 0.0, 0.0, 1.0]; }
@@ -6661,7 +6693,8 @@ fn add_instance(level: &Level, inst: &Instance, layer: Layer, character: Option<
     // last instance's — the bind-time origin for script actors), so cut-scene faces got no point lights
     // (flat-lit cut-scene characters). The tag SKIN_TAG in
     // slot 2 lets the material build recover the (character, attachment) pair.
-    let ikey = if matches!(layer, Layer::World) { centre.map(f32::to_bits) }
+    let ikey = if let Some(t) = tag { t }
+        else if matches!(layer, Layer::World) { centre.map(f32::to_bits) }
         // Keyed per CHARACTER only: an attachment (the held gun) lights with its owner, and the pools that
         // share a character index across many slots (projectiles/debris) keep merging — keying per slot
         // multiplied the draw count (07000002: 4540 → 5927 materials) for no lighting gain.
@@ -7260,7 +7293,7 @@ pub fn build(level: &Level, cels_only: bool, skeletons: &HashMap<u8, Skeleton>, 
             char_instances.extend(extra.into_iter().map(|i| (None, i)));
         }
         let mut npc_pool: Vec<NpcSlot> = Vec::new();
-        let sky = level.sky_instances();
+        let sky = level.sky_slot_instances();
         crate::phase_mark("b1 instances gather (scene/char/npc/sky)", t); t = std::time::Instant::now();
         let mut groups: Groups = BTreeMap::new();
         let mut bounds = ([f32::INFINITY; 3], [f32::NEG_INFINITY; 3]);
@@ -8144,8 +8177,14 @@ pub fn build(level: &Level, cels_only: bool, skeletons: &HashMap<u8, Skeleton>, 
             }
         }
         crate::phase_mark("b5c projectile pools", t); t = std::time::Instant::now();
-        for (inst, follows_camera) in &sky {
-            add_instance(level, inst, if *follows_camera { Layer::SkyCamera } else { Layer::SkyFixed }, None, &mut groups, None, None, None, None, [1.0; 3], &room_cels, u32::MAX, u32::MAX);
+        // The sky slots. A slot with a lightning variant draws either its flash pair or its normal pair each
+        // tick (`View_DrawSky` 0x1e5ad0:97-98 load the normal +0x10/+0x18, a flash tick swaps in +0x14/+0x1c
+        // [M :122-157]); both variants get tagged draws the renderer picks between with the sim's per-slot
+        // `Sky::flash_mask`. Slots without a flash variant keep the shared untagged sky draws.
+        let flash_slots: u32 = sky.iter().filter(|s| s.flash && s.slot < 32).fold(0, |m, s| m | 1 << s.slot);
+        for s in &sky {
+            let tag = (s.slot < 32 && flash_slots & 1 << s.slot != 0).then(|| [s.slot, s.flash as u32, SKY_TAG]);
+            add_instance_tagged(level, &s.instance, if s.follows_camera { Layer::SkyCamera } else { Layer::SkyFixed }, None, &mut groups, None, None, None, None, [1.0; 3], &room_cels, u32::MAX, u32::MAX, tag);
         }
         // fix-impacts-render: the impact-effect draw pools — the game's own meshes for the bullet decals, the
         // shell casings and the debris. There is no dedicated draw function in ACTION.ELF: the decal nodes ride
@@ -8976,6 +9015,7 @@ pub fn build(level: &Level, cels_only: bool, skeletons: &HashMap<u8, Skeleton>, 
         let mut char_vertex_start = None;
         for ((layer, ikey, _, chain, key, draw, lflags), (vs, is, cv, centre, mut radius, cel, node)) in groups {
             let skin = (ikey[2] == SKIN_TAG).then(|| (ikey[0], ikey[1].checked_sub(1)));
+            let sky_slot = (ikey[2] == SKY_TAG).then(|| (ikey[0] as u8, ikey[1] != 0));
             if is.is_empty() { continue; }
             // fix-render-artifacts: the cull sphere must contain the group's DRAWN geometry — the glist
             // radius can undershoot it (0700000c's floor decal: glist r 0.6 vs a 0.87 half-diagonal box),
@@ -8996,7 +9036,7 @@ pub fn build(level: &Level, cels_only: bool, skeletons: &HashMap<u8, Skeleton>, 
             }
             if matches!(layer, Layer::Character | Layer::Effect) && char_vertex_start.is_none() { char_vertex_start = Some(vertices.len()); }
             let base = vertices.len() as u32;
-            materials.push(Material { layer, draw, centre, radius, cel, chain, node, key, lflags, skin, first_index: indices.len() as u32, index_count: is.len() as u32 });
+            materials.push(Material { layer, draw, centre, radius, cel, chain, node, key, lflags, skin, sky_slot, first_index: indices.len() as u32, index_count: is.len() as u32 });
             indices.extend(is.iter().map(|i| i + base));
             vertices.extend(vs);
             char_verts.extend(cv);
@@ -9023,7 +9063,7 @@ pub fn build(level: &Level, cels_only: bool, skeletons: &HashMap<u8, Skeleton>, 
         let hud = drones.and_then(|d| d.hud.clone());
         let n_seq: usize = sequences.values().map(Vec::len).sum();
         let stats = format!("{} world instances ({hidden} skipped by the cel pass: flag 0x10), {} animated character meshes, {chars_missing} drones with a skin from another archive, {} sky objects, {missing} unresolved, {} triangles, {} materials, {n_seq} sequences",
-            instances.len(), characters.len(), sky.len(), indices.len() / 3, materials.len());
+            instances.len(), characters.len(), sky.iter().filter(|s| !s.flash).count(), indices.len() / 3, materials.len());
         let char_vertex_start = char_vertex_start.unwrap_or(vertices.len());
         crate::phase_mark("b7 texture decode", t); t = std::time::Instant::now();
         for c in characters.iter_mut() {

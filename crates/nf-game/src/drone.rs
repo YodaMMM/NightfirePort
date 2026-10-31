@@ -11019,6 +11019,10 @@ pub struct Swoosh {
 /// The swoosh pool's size (the game allocates control objects; the port keeps a fixed pool and drops a
 /// create when it is full, like `control_create_object` failing [M 0x18d8e8:20-23]).
 pub const SWOOSH_POOL: usize = 512;
+/// The Micro-Camera's base weapon id (weapon_data +2 of records 0x54/0x55) and its per-shot
+/// shutter sound [M Player_WeaponInitBullet 0x1a4bf0:261-263].
+pub const MICRO_CAMERA_BASE: u16 = 0x54;
+pub const MICRO_CAMERA_SHUTTER_SFX: u32 = 0xec;
 
 /// One of Bond's bullets (`Player_WeaponInitBullet` → `Bullet_init` / `Bullet_update` with owner = player).
 #[derive(Clone, Debug)]
@@ -11969,6 +11973,14 @@ pub struct Drones {
     /// The world presentation FX (0x21 ripples, 0xe3 flicker, 0xd4 cloud drift, 0x4a apocalypse,
     /// 0xf2 emitters — crates/nf-game/src/world_fx.rs, fix-world-fx).
     pub fx: crate::world_fx::WorldFx,
+    /// The sky's lightning timers (`View_DrawSky` 0x1e5ad0's per-slot +0x40..+0x48), ticked once
+    /// per sim frame: the thunder sound, the drawn variant per slot (`sky.flash_mask`, the
+    /// renderer's lightning swap) and the globals the 0x2c bolts read (mirrored into `fx.lightning`).
+    pub sky: crate::sky::Sky,
+    /// The stream the sky's `Rand_Rand` draws come from. *Deviation*: the game draws them from
+    /// the shared `Rand_Rand` stream inside `Game_Draw`; the port keeps them off the sim's stream
+    /// (`rng`) so the AI's draw order is untouched — the thunder's timing is random either way.
+    pub sky_rng: Rng,
     /// The mines (placement 0xFE → `Mine_Create` 0x17ce28, class 0x4B; crate::worldobj::Mine —
     /// the floating laser tripbombs, 07000015's nine `Tripbomb_3rd_*` cels). Created in
     /// `attach_level`, ticked in `tick` (the bob + the contact explode).
@@ -12318,6 +12330,8 @@ impl Drones {
             worldobjs: Default::default(),
             // fix-world-fx: the presentation FX.
             fx: Default::default(),
+            sky: Default::default(),
+            sky_rng: Rng::new(0x1e5a_d0),
             // level-15-interactables: the mines.
             mines: Vec::new(),
             pending_world_impacts: Vec::new(),
@@ -12834,6 +12848,8 @@ impl Drones {
         // The presentation FX (0x21/0xe3/0xd4/0x4a/0xf2 placements, fix-world-fx): the same
         // placement-order walk `parsemap_create_dynamic_objects` 0x1d04f0 runs.
         self.fx = crate::world_fx::WorldFx::attach_level(level, level_hash);
+        // The sky slots (type 0x2A, `View_AddSkyObj` 0x1e79a0) for the lightning/thunder timers.
+        self.sky = level.main_map().map_or_else(Default::default, |m| crate::sky::Sky::from_placements(&level.maps[m].placements));
         // The SpaceMissiles (0700001b): the kind-0x39 placements, the same placement walk
         // `parsemap_create_dynamic_objects` 0x1d04f0 runs for the dynamic creators [M 0x1d1b68].
         self.space_missiles.clear();
@@ -13093,6 +13109,10 @@ fn segment_hits_sphere(a: V3, b: V3, c: V3, r: f32) -> bool {
             // `PlrStat_LogShotFired(0)` 0x1998d8 per bullet spawned (Player_WeaponInitBullet
             // 0x1a4bf0:258 runs inside the per-pellet loop) — fix-progress.
             self.progress.log_shot_fired(self.mission.status());
+            // The Micro-Camera's shutter: a record whose base weapon (+2 u16) is 0x54 plays the
+            // 2-D `Sound_Play(100, 0xec)` per bullet, inside the same pellet loop
+            // [M Player_WeaponInitBullet 0x1a4bf0:261-263, disasm `$a0` 0xec at 0x1a5050].
+            if u16::from_le_bytes([w[2], w[3]]) == MICRO_CAMERA_BASE { self.audio.play(MICRO_CAMERA_SHUTTER_SFX); }
             let dir = crate::bullet::spread(dir, f(0x24), flags68, &mut self.rng);
             // fix-fire-modes3 [M Bullet_init 0x12c5a0:188-190]: `+0x6C & 0x200` spawns the round at
             // QUARTER speed (`fVar17 = +0x20; if (+0x6C & 0x200) fVar17 *= 0.25`) — the Torpedo
@@ -15846,9 +15866,26 @@ fn segment_hits_sphere(a: V3, b: V3, c: V3, r: f32) -> bool {
             self.hold_active = false;
             // Dev-only: a script's event 5 during a held tick is not kept (the hold already freezes them).
             self.npc_enabled = true;
+            self.sky_frame();
             return;
         }
         self.tick_inner(d, player);
+        self.sky_frame();
+    }
+
+    /// The frame's `View_DrawSky` pair (Game_Draw, after the update): the thunder countdowns —
+    /// a 2-D `Sound_Play(100, 0x5d)` (0x5e after a reflicker roll) when one leaves 1
+    /// [M 0x1e5ad0:100-109]. Only slots with a flash variant run the timers (0700000a/0700000b's
+    /// slot 3 on the disc [D]).
+    fn sky_frame(&mut self) {
+        // One set of lightning globals (`LightningType`/`Reflicker`/`SuperHappyLightningFlag`
+        // [L 0x30d0b8/0x30d0b9]): `Lightning_Update` 0x18cf68 (the 0x2c bolts, ticked in `fx`) consumes
+        // `Reflicker` [M :23-24] before the frame's `View_DrawSky` calls read and rewrite all three.
+        self.sky.globals = self.fx.lightning;
+        for th in self.sky.frame_thunder(0, false, &mut self.sky_rng) {
+            self.audio.play(th.id());
+        }
+        self.fx.lightning = self.sky.globals;
     }
 
     /// `NDrone2_FindOpponent` 0x1424e0's team-2 arm, per tick (the ControlSTANDARD 0x1490f0:167
@@ -16260,16 +16297,20 @@ fn segment_hits_sphere(a: V3, b: V3, c: V3, r: f32) -> bool {
         // The armed keypad's tick (`Lock_Update` 0x1ae3d8 case 4 [M :262-296]): the full typed
         // buffer matching the code with the count at the cap fires `Lock_Unlock` — the lock's
         // state := 1 (the port's `unlocked`), the manager deleted, the unlock sound (record
-        // u16[+4] — param 2, 0xffff-less; 0 on 0a's keypads = the game's Sound id 0, skipped) —
+        // u16[2] = placement param 3, `Lock::key_channels[0]`; 0xffff — no sound — on every disc
+        // lock [D]) —
         // and the NEXT tick's case 1 holds the out channel (the hold loop above; the game's
         // channel write lands one tick after the solve the same way). The page closed without a
         // match → state 0, re-armable (the Keypad::close arm — the view owns the close; the sim
         // keeps the page until solved).
         if let Some((li, kp)) = self.keypad.as_mut() {
             if kp.tick() {
-                // The unlock sound (record u16[+4] = placement param 2) — the port's Lock carries
-                // no param-2 word and 0a's keypads read 0 there [D placements #648/#732] (the
-                // game's Sound id 0), so the play is skipped, not approximated.
+                // The unlock sound `Sound_Play3D(record u16[2])` [M 0x1ae3d8:282-283]: placement
+                // param 3, kept as `key_channels[0]`; 0xffff (`Sound_Play3D`'s "none") on 0a's
+                // keypads #646/#648/#729/#732 and every other disc lock [D].
+                let snd = self.locks[*li].key_channels[0] as u32;
+                let pos = self.locks[*li].pos;
+                self.audio.play3d(snd, pos, None);
                 self.locks[*li].unlocked = true;
                 self.keypad = None;
             }
@@ -17693,7 +17734,14 @@ fn segment_hits_sphere(a: V3, b: V3, c: V3, r: f32) -> bool {
             if what == 6 { let _pw = crate::prof::scope("ctl: kind 6");
                 // `Sensor_Update` 0x1af618 (crate::sensor): the sweep/trip state machine — clears
                 // its out channel while sweeping, writes 1 after 2 s of continuous sight.
-                self.sensors.update(index, d.world, player, &mut self.channels, frame);
+                self.sensors.update(index, d.world, player, &mut self.channels, frame, &mut self.audio);
+                // The sensor's `Sound_Play3D`s enter the AI hearing list like any other (looped
+                // ones are skipped by `hear`, as `Sound_Alertness` skips them).
+                if let Some(t) = d.sfx {
+                    for (id, pos) in std::mem::take(&mut self.sensors.heard) { self.hear(pos, t.get(id)); }
+                } else {
+                    self.sensors.heard.clear();
+                }
                 continue;
             }
             if what == 2 { let _pw = crate::prof::scope("ctl: kind 2");

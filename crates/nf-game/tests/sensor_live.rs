@@ -147,3 +147,129 @@ fn sensor_trips_after_two_seconds_of_sight_and_the_empty_sister_does_not() {
     assert!(sim.channels.on(0x28), "ch 0x28 stays 1 while the sight holds [M 0x1af618:154-157 re-writes every tick]");
     eprintln!("== sensor 164 tripped ch 0x28 at tick {first_on}; sister ch 0x27 never set");
 }
+
+/// Every `Cmd::Start` the pool sends this tick: (id, 3-D position).
+fn pool_starts(sim: &mut Drones, sfx: &nf_formats::sfx::SfxTable, listener: [f32; 3]) -> Vec<(u32, Option<[f32; 3]>)> {
+    sim.audio.update(Some(sfx), (listener, [1.0, 0.0, 0.0], [0.0, 1.0, 0.0], [0.0, 0.0, 1.0]), &|_| true);
+    sim.audio.take_commands().into_iter().filter_map(|c| match c {
+        nf_game::sound::Cmd::Start { id, pos, .. } => Some((id, pos)),
+        _ => None,
+    }).collect()
+}
+
+/// The sensor sounds [M Sensor_Update 0x1af618; ids from the disasm `$a0`]: both 0700000b sensors
+/// start the 0x4AA hum at their own positions on the first tick (a LOOPED id [L SFXOutputData
+/// 0x4aa: looped 1] — held, never restarted), and with Bond in sensor 164's cone the alert beep
+/// 0x4A9 plays at 164 — sister: sensor 172, whose cone he is never in, never beeps.
+#[test]
+fn sensors_hum_and_the_tracking_one_beeps() {
+    let Some(l) = Level0b::load() else { eprintln!("skip: NF_ISO not set"); return };
+    let d = l.data();
+    let mut rng = Rng::new(0x1234_5678);
+    let mut lights = nf_game::light::LightList::default();
+    let drones = nf_game::drone::level_drones(&d, &l.level, &mut rng, &mut lights);
+    let mut sim = Drones::new(drones, rng);
+    sim.attach_level_id(&l.level, 0x0700_000b);
+    sim.difficulty = 1;
+    sim.npc_enabled = false;
+    assert!(l.sfx.entries[0x4aa].looped && !l.sfx.entries[0x4a9].looped && !l.sfx.entries[0x4dd].looped,
+        "0x4AA loops, the beep and the servo are one-shots [L SFXOutputData]");
+    let p164 = sim.sensors.list.iter().find(|s| s.placement == 164).unwrap().pos;
+    let p172 = sim.sensors.list.iter().find(|s| s.placement == 172).unwrap().pos;
+
+    let mut bond = Player { pos: [40.0, 30.0, 40.0], ..Default::default() };
+    bond.sph = [40.0, 30.9, 40.0];
+    bond.target = bond.pos;
+    sim.tick(&d, &bond);
+    let first = pool_starts(&mut sim, &l.sfx, p164);
+    let hums: Vec<_> = first.iter().filter(|(id, _)| *id == 0x4aa).map(|(_, p)| p.unwrap()).collect();
+    assert_eq!(hums.len(), 2, "one hum per sensor: {first:x?}");
+    assert!(hums.contains(&p164) && hums.contains(&p172), "each hum sits at its sensor: {hums:?}");
+    for _ in 0..60 { sim.tick(&d, &bond); }
+    assert!(!pool_starts(&mut sim, &l.sfx, p164).iter().any(|(id, _)| *id == 0x4aa), "the hum is held, not restarted");
+
+    // Bond on sensor 164's sweep bisector (the trip test's spot): the alert, then the beeps.
+    let s164 = sim.sensors.list.iter().find(|s| s.placement == 164).unwrap();
+    let bis = interp(&s164.keys, 0, s164.limit, 0.5, true).unwrap();
+    let at = [p164[0] + 3.0 * bis[2][0], p164[1] + 3.0 * bis[2][1], p164[2] + 3.0 * bis[2][2]];
+    bond.pos = [at[0], at[1] - 0.9, at[2]];
+    bond.sph = at;
+    bond.target = bond.pos;
+    let (mut beeps164, mut beeps172) = (0, 0);
+    for _ in 0..400 {
+        sim.tick(&d, &bond);
+        for (id, p) in pool_starts(&mut sim, &l.sfx, p164) {
+            if id != 0x4a9 { continue; }
+            if p == Some(p164) { beeps164 += 1; }
+            if p == Some(p172) { beeps172 += 1; }
+        }
+    }
+    assert!(beeps164 >= 5, "the tracking sensor beeps (alert + every ≤ 0.5 s): {beeps164}");
+    assert_eq!(beeps172, 0, "sister: sensor 172 never sees Bond, never beeps");
+}
+
+/// The thunder [M View_DrawSky 0x1e5ad0:100-158]: 0700000b's sky slot 3 is a flash variant
+/// (interval 30 s, flash 10 ticks [D placement params]); over a long run the sim plays the 2-D
+/// thunder 0x5D (or 0x5E after a reflicker roll) a short delay after each flash start — 10 ticks
+/// for a reflicker, 30..150 ticks (FRAME_RATE·0.5 + Rand(2·FRAME_RATE)) otherwise. Sister: a
+/// level whose sky has no flash variant (0700000c [D]) never thunders over the same run.
+#[test]
+fn the_lightning_slot_thunders_and_a_still_sky_does_not() {
+    let Some(l) = Level0b::load() else { eprintln!("skip: NF_ISO not set"); return };
+    let d = l.data();
+    let mut rng = Rng::new(0x1234_5678);
+    let mut lights = nf_game::light::LightList::default();
+    let drones = nf_game::drone::level_drones(&d, &l.level, &mut rng, &mut lights);
+    let mut sim = Drones::new(drones, rng);
+    sim.attach_level_id(&l.level, 0x0700_000b);
+    sim.npc_enabled = false;
+    let s3 = sim.sky.slots[3];
+    assert!(s3.flash_glist != 0 && s3.interval == 1800 && s3.flash_len == 10 && s3.skyid == 0,
+        "0700000b slot 3: flash variant, 30·60 interval, 10-tick flash, group 0 [D]: {s3:?}");
+    let bond = Player { pos: [40.0, 30.0, 40.0], sph: [40.0, 30.9, 40.0], target: [40.0, 30.0, 40.0], ..Default::default() };
+    let mut flash_starts = Vec::new();
+    let mut thunders = Vec::new();
+    let mut was_flashing = false;
+    let mut lit = 0usize;
+    for t in 0..8000u32 {
+        sim.tick(&d, &bond);
+        let flashing = sim.sky.slots[3].flash > 0;
+        if flashing && !was_flashing { flash_starts.push(t); }
+        // The drawn-variant record the renderer swaps on: slot 3's bit only, and only inside a
+        // flash (its last countdown tick ends at flash 0); the 0x2c bolts read the same globals.
+        if sim.sky.flash_mask != 0 {
+            assert!(sim.sky.flash_mask == 1 << 3 && (flashing || was_flashing), "tick {t}: mask {:#x}", sim.sky.flash_mask);
+            lit += 1;
+        }
+        assert_eq!(sim.fx.lightning, sim.sky.globals, "tick {t}: one set of lightning globals");
+        was_flashing = flashing;
+        sim.audio.update(None, ([0.0; 3], [1.0, 0.0, 0.0], [0.0, 1.0, 0.0], [0.0, 0.0, 1.0]), &|_| true);
+        for c in sim.audio.take_commands() {
+            if let nf_game::sound::Cmd::Start { id, pos, .. } = c {
+                if id == 0x5d || id == 0x5e {
+                    assert!(pos.is_none(), "the thunder is 2-D (`Sound_Play`)");
+                    thunders.push((t, id));
+                }
+            }
+        }
+    }
+    assert!(thunders.len() >= 2, "several storms in 8000 ticks: {thunders:?} (flashes {flash_starts:?})");
+    assert!(lit >= flash_starts.len(), "every flash start draws the flash variant: {lit} lit ticks, {} starts", flash_starts.len());
+    for &(t, id) in &thunders {
+        let start = *flash_starts.iter().filter(|&&f| f <= t).last().expect("a flash before every thunder");
+        let lag = t - start;
+        if id == 0x5e { assert_eq!(lag, 10, "reflicker thunder: FRAME_RATE/6 = 10 ticks after the flash start"); }
+        else { assert!((30..=150).contains(&lag), "thunder {lag} ticks after the flash start (30..150)"); }
+    }
+
+    // Sister: 0700000c's sky (no flash-variant placement [D]) — the same frames, no thunder.
+    let iso = IsoImage::open(std::env::var_os("NF_ISO").unwrap()).unwrap();
+    let (entries, bin) = disc::files_bin_entries(&iso).unwrap();
+    let fe = entries.iter().find(|e| e.name.eq_ignore_ascii_case("0700000c.bin")).unwrap();
+    let data = iso.read_bytes(bin.lba as u64 * 2048 + fe.offset as u64, fe.size as u64).unwrap();
+    let lc = Level::parse(&data).unwrap();
+    let mut sky = nf_game::sky::Sky::from_placements(&lc.maps[lc.main_map().unwrap()].placements);
+    let mut r = Rng::new(7);
+    let quiet: usize = (0..8000).map(|_| sky.frame_thunder(0, false, &mut r).len()).sum();
+    assert_eq!(quiet, 0, "a sky without a flash variant never thunders");
+}
