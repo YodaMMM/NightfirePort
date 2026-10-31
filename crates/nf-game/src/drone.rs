@@ -11517,6 +11517,19 @@ pub struct Drones {
     /// Bond's previous position and the tick he started moving (`DoOpponentTargetting` +0x1DC / +0x1DD).
     prev_player: Option<V3>,
     moved_since: Option<u32>,
+    /// Bond's local thruster pair `BL+0x20`/`+0x28` (strafe, forward) while he floats in the
+    /// zero-g substates (8/9), set by the viewer before each tick; `None` on foot. In zero-g the
+    /// targetting's "moving" byte is this pair, not a position change: `Player_Update` zeroes the
+    /// `BL+0x10` move quad every active tick [M 0x193600:131-133, `obj+0xF4 == 1` → `Vec_Zero(BL+0x10)`], `Player_ZeroG` adds
+    /// the eased smoothers into it (`+0x10 += +0x20`, `+0x18 += +0x28` [M 0x192ab0:113, 135]),
+    /// and `DroneWeap_DoOpponentTargetting` sets `+0x1DC = |(BL+0x10, 0, BL+0x18)| != 0`
+    /// [M 0x179a48:34-41]. The smoothers ease at 0.04 with no dead-zone [M 0x192ab0:92-135], so
+    /// a float that has thrusted keeps a non-zero pair (×`TargetMoving` 0.75 on the hit chance
+    /// [M DoBulletAccuracy 0x179740:78-80]) while it hovers on the spot.
+    pub player_move_local: Option<[f32; 2]>,
+    /// This tick's targetting bytes as the hit roll reads them: (`+0x1DC` moving, `+0x1DD`
+    /// first moved) [M 0x179a48]. Observability for the tests; the sim reads its locals.
+    pub target_motion: (bool, bool),
     /// The player as an AI target and this frame's link used-counts per path.
     pub target: PlayerTarget,
     used: Vec<Vec<u16>>,
@@ -12222,7 +12235,7 @@ impl Drones {
             if let Some(g) = &mut dr.body_glow { g.owner = i; }
         }
         let llist = (0..list.len()).collect();
-        let mut drones = Drones { list, frame: 0, los_cursor: 0, llist, rng, lights: Default::default(), player_pos: [0.0; 3], bullets: Vec::new(), grenades: Vec::new(), explosions: Vec::new(), shake: 0.0, health: Default::default(), player_hits: Vec::new(), impacts: Vec::new(), prev_player: None, moved_since: None, target: PlayerTarget::default(), used: Vec::new(), link_flags: Vec::new(), locked_door_nodes: Default::default(), channels: Default::default(), triggers: Vec::new(), spawners: Vec::new(), cover_rt: Vec::new(), sounds: Vec::new(), cover_cursor: 0, cover_counter: 0, player_bullets: Vec::new(), net_no_self_hurt: false, player_impacts: Vec::new(), last_flinch: None, bond_aiming: false, level_exit: None, mission_end: None, bond_weapon: 2, env: None, sun_vector: [0.0; 3], env_pending: None, mp_master: 0, fill_rng: Rng::new(0x5eed), last_alarm: None, alarm_sent: false, party_loud: false, iop_section: 0, hud_frozen: false, aim_target: None, aim_offset: [0.0; 2],
+        let mut drones = Drones { list, frame: 0, los_cursor: 0, llist, rng, lights: Default::default(), player_pos: [0.0; 3], bullets: Vec::new(), grenades: Vec::new(), explosions: Vec::new(), shake: 0.0, health: Default::default(), player_hits: Vec::new(), impacts: Vec::new(), prev_player: None, moved_since: None, player_move_local: None, target_motion: (false, false), target: PlayerTarget::default(), used: Vec::new(), link_flags: Vec::new(), locked_door_nodes: Default::default(), channels: Default::default(), triggers: Vec::new(), spawners: Vec::new(), cover_rt: Vec::new(), sounds: Vec::new(), cover_cursor: 0, cover_counter: 0, player_bullets: Vec::new(), net_no_self_hurt: false, player_impacts: Vec::new(), last_flinch: None, bond_aiming: false, level_exit: None, mission_end: None, bond_weapon: 2, env: None, sun_vector: [0.0; 3], env_pending: None, mp_master: 0, fill_rng: Rng::new(0x5eed), last_alarm: None, alarm_sent: false, party_loud: false, iop_section: 0, hud_frozen: false, aim_target: None, aim_offset: [0.0; 2],
             // The game's `DAT_00299092` (the shared LOS-probe counter; see the field) — zeroed
             // here as `Drone_LevelReset`'s memset zeroes it at level reset [M 0x13a5bc-cc].
             los_probes: 0,
@@ -16915,10 +16928,16 @@ fn segment_hits_sphere(a: V3, b: V3, c: V3, r: f32) -> bool {
         }
         } // end `NPCGlobals` shared-pass block
         // Bond's motion (`DroneWeap_DoOpponentTargetting`): moving, and "first moved" for 2 s after he starts.
-        let moving = self.prev_player.is_some_and(|q| (q[0] - player.pos[0]).abs() + (q[2] - player.pos[2]).abs() > 1e-4);
+        // Zero-g: the thruster pair itself [M 0x179a48:34-41 reading the BL+0x10 quad that
+        // 0x193600:133 / 0x192ab0:113,135 build] — see `player_move_local`.
+        let moving = match self.player_move_local {
+            Some(m) => m[0] != 0.0 || m[1] != 0.0,
+            None => self.prev_player.is_some_and(|q| (q[0] - player.pos[0]).abs() + (q[2] - player.pos[2]).abs() > 1e-4),
+        };
         if moving && self.moved_since.is_none() { self.moved_since = Some(frame) }
         if !moving { self.moved_since = None }
         let first_moved = self.moved_since.is_some_and(|f| frame < f + 120);
+        self.target_motion = (moving, first_moved);
         self.prev_player = Some(player.pos);
         // `NDrone2_NavNodeCache` / `BuildAITarget`: the player's goal nodes per navigation path, rebuilt when he has
         // moved 2.0 or more (search radius 6 = min(engage range, 6) for these guards); `AINetwork_ClearLinkFlags`.

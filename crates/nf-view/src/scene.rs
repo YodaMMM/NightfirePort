@@ -4916,6 +4916,9 @@ impl Sim {
         // param is the ungated input the view chain's queue arm reads its edges from) — run must
         // not clobber it with the raw button.
         self.drones.bond_aiming = self.aiming;
+        // The zero-g "moving" read: the thruster pair, not a position change (`Drones::player_move_local`).
+        self.drones.player_move_local = (self.bond.zero_g_active && matches!(self.bond.substate, nf_game::player::SS_ZEROG_8 | nf_game::player::SS_ZEROG_9))
+            .then_some(self.bond.local);
         // The class byte the AI's `ObjectIsArmed` 0x178768 reads: Bond obj+0xdc+0x62. `Player_WeaponSelect`
         // 0x1a2cc0 copies the request (+0x63) into it at the switch's START (the `weapon_data[+0x64].+0xc4
         // == 0` arm — +0x64 is 0x47 from InitWeapon 0x1a7ef8:137-139), so mid-holster the AI already reads
