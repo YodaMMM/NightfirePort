@@ -116,6 +116,14 @@ fn walk_to_the_gatehouse_and_ride_the_truck() {
         eprintln!("[05] the objective chain complete: 05 record state 4, 06 record state 3, ch 0x46 on");
     }
 }
+fn wait_enabled(w: &mut Walker) {
+    for _ in 0..2400u32 {
+        if !w.scene.sim.as_ref().unwrap().disabled { return; }
+        w.tick(Input::default(), false);
+    }
+    panic!("the sim stayed disabled for 2400 ticks at {:?}", w.scene.sim.as_ref().unwrap().bond.pos);
+}
+
 
 /// The cable route, MEASURED (level-05-west-ledge 2026-10-23): the cold start → door #153 →
 /// ladder #151 → the tower top → the game's own exit from it — a walk-off FALL — → the west roofs
@@ -728,60 +736,19 @@ fn the_notch_grab_and_ride_parked() {
     for st in &w.report.stuck_events { eprintln!("[05g] stuck: {st}"); }
 }
 
-/// The cable route's LAST legs: from the wire ride's landing on the ledge's south piece to the
-/// zip door #112 "Locked_Door_Top_I" ((37.25, 49.00, −69.00) [D placement], whose E writes the
-/// fallback ch 0x1E and loads 07000006 [M Trigger_Activate 0x1b2318:91-107; level_carry_live pins
-/// the 0x1E spawn]) — the whole route on real input.
-///
-/// THE ROUTE (level-05-zip-door; the old "south walk stalls" negative is superseded — the stall
-/// was real but the route leaves the x −23.5 line). The disc's own data [D the probe census +
-/// examples/probe_southwest05.rs's band maps, x −44..24 step 1 at y0 60/48/34]:
-/// - the landing's south piece (x −26..−22, z 0..−8, floors 30.4-31.4) past the landing's south
-///   rail, then a NOTCH in the strip at z −11..−13 (floor 20-25) — jumped;
-/// - the strip's approach (x −29..−23, z −16..−18, floors 32.2-35.4) sloping west down to the
-///   window-ledge approach (x −35..−34, z −20..−27, floors 27-33.7 under the gallery's 45.5
-///   roof) and up onto the window ledge (x −35, z −28, floor 35.3);
-/// - THE WALL-HUG WINDOW CRAWL #35 "Wall Hug Window" ((−34.10, 37.28, −31.65), yaw 1.571,
-///   half_len 5.36×scale → the band z −26.3..−37.0 [D placement + CreepWall_Create 0x196fc8;
-///   the crawl prompts #84/#85 (type 6) at z −37.3/−25.5, the progress plates #311-#314
-///   (out 127/128/129/133) riding the band]) — the E press enters substate 7 [M Player_Activate
-///   0x1a5170:66-97 → Player_CollCreepWall 0x196758], forward crawls to the wall's south end
-///   [M Player_Creep 0x1969d0: the input direction decides the end];
-/// - the roofed corridor south (x −36, z −38..−44, floor 32.5-36.2 under the 46.0 roof), then a
-///   second notch at z −46..−50 (floor 18-25) — jumped;
-/// - the south gallery (x −35..−34, z −52..−60, floors 31-33.7) and the SW loop: the lower path
-///   bends west/south (x −39..−41, z −64..−72, floors 27.8-32.6), the west walkway (x −41..−40,
-///   z −70..−76, floors 37.1-37.6), the z −78 band (x −38..−27, floors 29-37.3), the z −76 spine
-///   (x −30..−26, 37.4→32.9) up to the battlement's west end (x −28..−16, z −72..−74, floors
-///   36.7-37.5) — the SWITCH_Helicopterstart(SC3) plate #269 ((−22.76, 37.15, −72.36) out 0x42
-///   [D placement]) fires en route;
-///
-/// WALKED NOW (level-05-every-objective-2): the approach → the WINDOW LEDGE (x −35, the
-/// disc's own floors 36.0-36.43 running z −19..−25.5 [D probe_sealtris05]) → the wall-hug
-/// window crawl #35 (the real E at the prompt #85 zone, the forward crawl south to the band's
-/// end z ~−36). The band's north seal (the negative below) is REAL but OFF-ROUTE: the player's
-/// lane leaves west over the ledge — the seal's tri anatomy (the notches closed by their
-/// pillars, the piers) is cited on the negative's comment.
-/// - THE MOAT INLET at x −15..−5 (z −72..−76 floors 20-23 — a 14-unit cut through the wall-walk)
-///   is crossed by THE Q-CLAW GRAPPLE: pulley #281 "graple_pulley" ((−3.40, 42.94, −71.77) [D
-///   placement] with its "Grapple_from bottom" CEL #280 (−3.39, 42.82, −70.96)) stands 17.6
-///   units east of the west battlement's east end — inside the claw's bolt range 50.0
-///   [M 0x12e7b0:158 + weapon_data[0x50]+0x1c]; the reel [M Player_SSGrapple 0x192860: phase 1
-///   pulls at 0.05→0.5/tick toward BLData+0x140, phase 2 hangs within 2.0, the fire RELEASE
-///   detaches] carries Bond over the inlet onto the east battlement (x −4..+4, z −72, floors
-///   36.3-36.9) — the route's own grapple icons #277/#300 (the landing, type 3) and #310 (the
-///   notch, type 3 big) mark the claw legs [D placements];
-/// - the east battlement east through the trough (x 5..8, floors 30.2-34.2) and up the rising
-///   stairs (x 9..24, 37.0→40.4) to the door's y-49 band (x 16..36 at z −68 [D the old scan])
-///   and the door at its east end; the door guards #271/#272 (41.5/46.4, 46, −69.7) and the
-///   ammo #322/#323 (49.2/48.1, 49, −60.5/−59.3) stand past it [D placements].
-#[test]
-fn the_cable_landing_walks_the_south_walkway_toward_the_zip_door() {
-    let iso = iso();
-    let mut w = Walker::new(nf_view::load(&iso, "07000005.bin", false).expect("load 07000005"));
-    w.wait(30);
-    walk_to_the_slab_east_end(&mut w);
-    walk_the_gap_to_the_notch(&mut w);
+/// The shared cable route, WALKED (real input only): the cold start → the courtyard strip →
+/// the castle lane → the tower top → the south slope → the west-of-parapet ledge → the crawl
+/// shelf → the wall-hug crawl #299 → the slab → the cable ledge → the notch → the wire grab +
+/// ride → the south legs → the window ledge → the wall-hug window crawl #35 → the corridor →
+/// the SW loop → the battlement (plate #269, ch 0x42) → the Q-claw grapple over the moat inlet
+/// (the release rides STRAIGHT down onto the lane below the hang — the old aim-at-(0,−72)
+/// steering pulled the release 5.5 east / 1.2 south off the lane's south strip into a
+/// PlungeTrigger, whose death NIS SP #284 (06000952) disabled the sim and wrote the mission-fail
+/// ch 0x62 [L the NF_SCRIPTLOG run of 2026-10-31]) → the east lane → the covered staircase's
+/// top (35.0, 43.3, −71.4). Ends standing on the stairs' top.
+fn walk_the_cable_route_to_the_stairs_top(w: &mut Walker) {
+    walk_to_the_slab_east_end(w);
+    walk_the_gap_to_the_notch(w);
     // The grab + ride, the round-8 shape (the notch test's exact legs): the ctx-3 zone walk,
     // the settle, the jump press, the strafe ride.
     let mut in_zone = false;
@@ -855,7 +822,7 @@ fn the_cable_landing_walks_the_south_walkway_toward_the_zip_door() {
     // lane runs to z −8 [L the two wedge runs]) then cut EAST to the crack's north lip — the
     // crack (z −11.5..−12.5) swallows x −25..−24; the lip lane x −23.5 keeps floors 31.0-31.2
     // [D probe_dip05's fine map].
-    walk_legs(&mut w, &[
+    walk_legs(w, &[
         ([-23.7, 31.3, 0.5], "the landing's south edge"),
         ([-24.6, 31.6, -2.0], "the south piece west"),
         ([-24.9, 31.4, -5.0], "the south piece 5"),
@@ -866,13 +833,13 @@ fn the_cable_landing_walks_the_south_walkway_toward_the_zip_door() {
 
     // Leg 2: HOP the strip's crack (z −11.5..−12.5, floor 23.5-28 [D probe_dip05]) — a 1.5-unit
     // hop along x −23.5; the far side resumes 31.4 at z −12.5.
-    run_jump(&mut w, [-23.6, 31.4, -13.4], "the strip crack hop", 420, 17.0);
+    run_jump(w, [-23.6, 31.4, -13.4], "the strip crack hop", 420, 17.0);
 
     // Leg 3: the approach (z −16..−19, floors 32.2-36.6 [D the fine map]) west onto the window
     // ledge itself — the ledge at x −35 runs z −22..−28 at y 37.0-37.3 [D the y0-48 band map;
     // the y0-34 hits under it are a lower shelf], the crawl prompt #85 at its middle. The
     // ledge's north lip (a step off the 0.95-normal slope [L the wedge run]) hops.
-    walk_legs(&mut w, &[
+    walk_legs(w, &[
         ([-25.8, 32.6, -16.6], "the approach 16"),
         ([-27.5, 33.8, -18.0], "the approach 18"),
         ([-24.6, 34.4, -18.4], "the east strip south"),
@@ -929,7 +896,7 @@ fn the_cable_landing_walks_the_south_walkway_toward_the_zip_door() {
     // sits 0.57 over the ledge floor and rides; the ledge continues south (36.0-36.27 to
     // z −25.5) to the crawl prompt #85 zone (the crawl #35 "Wall Hug Window" at (−34.10,
     // 37.28, −31.65), band z −26.3..−37.0, prompts #84/#85 at z −37.3/−25.5 [D placements]).
-    walk_legs(&mut w, &[
+    walk_legs(w, &[
         ([-34.6, 36.0, -18.6], "the approach west end"),
         ([-35.2, 36.1, -20.6], "the ledge lip"),
         ([-35.3, 36.1, -22.2], "the ledge south 1"),
@@ -999,7 +966,7 @@ fn the_cable_landing_walks_the_south_walkway_toward_the_zip_door() {
     // through the "second crack" (z −46..−50 — the crack cuts x −36..−34.25 to floors 18-25, but
     // the spine holds) and down the gallery (z −52..−64, the spine 37.4 with the gallery floor
     // 4-6 below on both sides) to the widening at z −65 (x −37..−35: 37-38).
-    walk_legs(&mut w, &[
+    walk_legs(w, &[
         ([-34.9, 37.0, -37.5], "the corridor 37.5"),
         ([-34.9, 37.2, -39.5], "the corridor 39.5"),
         ([-34.9, 37.4, -41.5], "the corridor 41.5"),
@@ -1018,7 +985,7 @@ fn the_cable_landing_walks_the_south_walkway_toward_the_zip_door() {
     // x −40 (37.3) → z −69.5..−72: x −41..−40.5 (37.0-37.5) → z −73..−74: x −40 (37.4) →
     // z −75: x −39 (37.4) → z −76: x −38.5 (37.2) → z −77: x −37..−36 (37.3) → z −77.6..−78:
     // x −35..−33 (37.1-37.3).
-    walk_legs(&mut w, &[
+    walk_legs(w, &[
         ([-36.6, 37.7, -65.5], "the widening"),
         ([-37.8, 37.5, -66.2], "the loop west 1"),
         ([-39.3, 37.3, -67.0], "the loop west 2"),
@@ -1041,7 +1008,7 @@ fn the_cable_landing_walks_the_south_walkway_toward_the_zip_door() {
     // The z −77 band runs east (x −33..−29.5: 37-38), rises through the z −76/−75 spine
     // (x −30.5..−27: 37) onto the battlement lane (z −73.5..−72.5: x −28.5..−16 at 37). The
     // plate sits on the lane at x −22.76 — the walk fires it.
-    walk_legs(&mut w, &[
+    walk_legs(w, &[
         ([-32.8, 37.4, -77.4], "the band east 1"),
         ([-31.0, 37.2, -76.8], "the band east 2"),
         ([-30.0, 37.0, -76.3], "the spine north 1"),
@@ -1119,18 +1086,15 @@ fn the_cable_landing_walks_the_south_walkway_toward_the_zip_door() {
             sim.bond.pos, sim.bond.grapple.as_ref().map(|g| g.phase), sim.bond.substate);
         assert!(hung, "the reel must hang Bond at pulley #281 [M Player_SSGrapple 0x192860; D placement]");
         // RELEASE (the fire's release detaches [M 0x192860:64-66]) and ride the fall EAST onto
-        // the battlement: face east, hold forward through the drop.
+        // the battlement: ride the fall straight down onto the lane below the hang (the lane
+        // z −71.4, floors 36-37 [D]) — no forward steering (the old aim-at-(0,−72) pull carried
+        // the release 5.5 east and 1.2 south, off the lane's south strip into the plunge zone).
         w.tick(Input::default(), false);
         let mut landed = false;
         for t in 0..300u32 {
+            w.tick(Input::default(), false);
             let sim = w.scene.sim.as_ref().unwrap();
-            let p = sim.bond.pos;
-            let desired = (0.0f32 - p[0]).atan2(-72.0 - p[2]);
-            let err = walker::wrap_pi(desired - sim.bond.yaw);
-            let input = Input { turn: err.clamp(-0.07, 0.07), forward: 1.0, ..Default::default() };
-            w.tick(input, false);
-            let sim = w.scene.sim.as_ref().unwrap();
-            if sim.bond.grounded && sim.bond.pos[1] < 39.5 && sim.bond.pos[0] > -5.5 { landed = true; break; }
+            if sim.bond.grounded && sim.bond.pos[1] < 39.5 { landed = true; break; }
             if t % 60 == 0 { eprintln!("[05r drop t{t}] bond {:?} g {}", sim.bond.pos, sim.bond.grounded); }
             assert!(sim.bond.pos[1] > 20.0, "the release drop must not fall into the moat: {:?}",
                 sim.bond.pos);
@@ -1153,14 +1117,6 @@ fn the_cable_landing_walks_the_south_walkway_toward_the_zip_door() {
     }
     // The scripts may disable the sim mid-route (the ch 0x42 chain and the corridor-mouth
     // triggers #313/#314); every leg group below waits it out first.
-    fn wait_enabled(w: &mut Walker) {
-        for _ in 0..2400u32 {
-            if !w.scene.sim.as_ref().unwrap().disabled { return; }
-            w.tick(Input::default(), false);
-        }
-        panic!("the sim stayed disabled for 2400 ticks at {:?}", w.scene.sim.as_ref().unwrap().bond.pos);
-    }
-    wait_enabled(&mut w);
 
     // ---- THE EAST LANE + THE RISING STAIRS (the disc's own lane [D probe_corridor05]) ----
     // The east battlement lane runs east at z −71.4 (x −4..9 at 36-37; the z −71 row's x-10 hole
@@ -1189,26 +1145,12 @@ fn the_cable_landing_walks_the_south_walkway_toward_the_zip_door() {
             {
                 let sim = w.scene.sim.as_ref().unwrap();
                 if sim.disabled {
-                    // Hold position through the script window (real idle ticks). PARKED: the
-                    // ch 0x42 script's window never closed in 3600 ticks (L the run of
-                    // 2026-10-29: bond frozen at the landing's slide spot with disabled=true;
-                    // the real game's helicopter-start cut-scene is the live check) — the east
-                    // legs STOP here as a documented boundary, not a failure.
-                    let mut re = false;
-                    for t in 0..3600u32 {
-                        w.tick(Input::default(), false);
-                        if !w.scene.sim.as_ref().unwrap().disabled { re = true; break; }
-                        if t % 600 == 0 { eprintln!("[05r east hold t{t}] bond {:?}",
-                            w.scene.sim.as_ref().unwrap().bond.pos); }
-                    }
-                    if !re {
-                        let sim = w.scene.sim.as_ref().unwrap();
-                        eprintln!("[05r] PARKED at the ch 0x42 script window: bond {:?} disabled {} ch 0x42 {}",
-                            sim.bond.pos, sim.disabled, sim.drones.channels.on(0x42) as u8);
-                        eprintln!("[05r] the corridor→stairs legs complete in {} ticks; falls {:?}",
-                            w.total_ticks, w.report.falls);
-                        return; // the walked route ends at the script boundary; see the report
-                    }
+                    // Hold position through a script's disable window (real idle ticks).
+                    // The scripts may disable the sim mid-route; the straight grapple release
+                    // lands on the lane and no window outlasts the hold (the 2026-10-29
+                    // "never-closing window" was the old drop steering's slide off the lane's
+                    // south strip into a PlungeTrigger, whose death NIS SP #284 disabled the
+                    // sim — L the NF_SCRIPTLOG run of 2026-10-31).
                     continue;
                 }
             }
@@ -1237,6 +1179,119 @@ fn the_cable_landing_walks_the_south_walkway_toward_the_zip_door() {
     for f in &w.report.falls { eprintln!("[05r] fall: {f}"); }
     for st in &w.report.stuck_events { eprintln!("[05r] stuck: {st}"); }
 }
+
+/// The stairs' top → the terrace, the disc's own continuation the old scans stopped short of
+/// (their x ≤ 38 window read the stairs' overhang as the terrace's south face). The fine 0.25
+/// map [D probe_terroute05 map D]: the covered staircase's top flight (43.8 @ x 36.5, z −71.5)
+/// turns SOUTH-EAST onto the south strip (43.9-44.1, z −72.25..−73.5, running east to x 47+),
+/// which connects NORTH over the walkway tip at x ~43.5 (44.2, z −71.75..−71.0, threading the
+/// 46.2-46.3 posts at (42.0, −71.5) and (45.0, −71.2)) onto the EAST WALKWAY (44.0-45.2, x 38-49,
+/// z −70.75..−58.5 — the door guards #271/#272 post at (41.5/46.4, 46, −69.7) [D placements] on
+/// it); the walkway's north-west corner climbs the WEST STAIRCASE up to the y-49 terrace slab
+/// (45.0→46.6 along x 44→41 at z −59.5 [D maps B/C], the 47.0 band at x 40-41, then 47.4→48.8
+/// down z −61.5..−64.5 onto the 49.0 slab at z −65.5; the terrace slab 49.0, x 14..40,
+/// z −65.5..−69.5 [D probe_terrace05 MAP A]). The slab's east part is covered by the DOORHOUSE
+/// (the roof tops 53-55 over x 36..41, z −66..−71 [D map E]; no walls east of x 37.5 at body
+/// height [D map F]), and its west wall is TWO planes — x 37.0 (i20.m50.o38 mat10) and x 37.5
+/// (i23.m50.o41 mat10) — each with a gap at z −67.75..−69.0/−69.25: THE DOORWAY, the only link
+/// between the staircase pocket (x 38-40) and the open slab (x ≤ 36) [D map F, the y-50.2 wall
+/// sections]. Ends standing at the terrace spot (22.0, −68.0).
+fn walk_the_stairs_top_to_the_terrace_spot(w: &mut Walker) {
+    walk_legs(w, &[
+        ([36.4, 43.8, -71.8], "the stairs' top east end"),
+        ([36.4, 43.7, -72.6], "the strip's west corner"),
+        ([38.5, 44.0, -72.7], "the south strip 38.5"),
+        ([41.0, 44.1, -72.7], "the south strip 41"),
+        ([43.4, 44.1, -72.6], "the south strip 43.4"),
+        ([43.5, 44.2, -71.7], "the walkway tip"),
+        ([43.3, 44.2, -70.9], "the tip's north end"),
+        ([42.6, 44.4, -70.2], "the walkway south 1"),
+        ([41.8, 44.7, -69.2], "the walkway south 2"),
+        ([42.5, 45.0, -67.5], "the walkway 45 1"),
+        ([43.5, 45.0, -65.5], "the walkway 45 2"),
+        ([44.0, 45.0, -62.5], "the walkway 45 3"),
+        ([44.0, 45.0, -60.8], "the walkway's north end"),
+        ([43.5, 45.6, -59.6], "the up-flight 1"),
+        ([42.5, 46.0, -59.4], "the up-flight 2"),
+        ([41.5, 46.6, -59.4], "the up-flight 3"),
+        ([40.4, 47.0, -59.6], "the 47 band"),
+        ([39.2, 47.4, -61.3], "the west flight 1"),
+        ([38.8, 48.4, -63.4], "the west flight 2"),
+        ([38.6, 48.8, -64.5], "the west flight 3"),
+        ([38.2, 49.0, -65.8], "the terrace's east edge"),
+        ([38.5, 49.0, -67.0], "the doorhouse's east lane"),
+        ([38.6, 49.0, -68.3], "the doorway's east mouth"),
+        ([36.2, 49.0, -68.6], "through the doorway"),
+        ([32.0, 49.0, -67.5], "the terrace west 1"),
+        ([26.0, 49.0, -67.8], "the terrace west 2"),
+        ([22.0, 50.1, -68.0], "the terrace spot"),
+    ], 40.0, 900);
+    {
+        let sim = w.scene.sim.as_ref().unwrap();
+        // The terrace spot rests on the disc floor 49.001 under it [D probe_terrace05 col
+        // (21.8, −68.1): instance 20, map 50, object 38, mat 12], the centre in the feet-band
+        // rest over it (floor + 1.03..1.13 [M Player_FeetOnPoint 0x194188:106; L live 1.086]).
+        assert!(sim.bond.grounded && sim.bond.pos[1] > 49.9 && sim.bond.pos[1] < 50.4,
+            "the walked route must stand Bond on the y-49 terrace (floor 49.001 [D probe_terrace05]), got {:?}",
+            sim.bond.pos);
+    }
+}
+
+/// The cable route's LAST legs: from the wire ride's landing on the ledge's south piece to the
+/// y-49 terrace above the covered staircase — the zip door #112 "Locked_Door_Top_I"
+/// ((37.25, 49.00, −69.00) [D placement], whose E writes the fallback ch 0x1E and loads
+/// 07000006 [M Trigger_Activate 0x1b2318:91-107; level_carry_live pins the 0x1E spawn]) — the
+/// whole route on real input, via `walk_the_cable_route_to_the_stairs_top`.
+///
+/// THE ROUTE (level-05-zip-door; the old "south walk stalls" negative is superseded — the stall
+/// was real but the route leaves the x −23.5 line). The disc's own data [D the probe census +
+/// examples/probe_southwest05.rs's band maps, x −44..24 step 1 at y0 60/48/34]:
+/// - the landing's south piece (x −26..−22, z 0..−8, floors 30.4-31.4) past the landing's south
+///   rail, then a NOTCH in the strip at z −11..−13 (floor 20-25) — jumped;
+/// - the strip's approach (x −29..−23, z −16..−18, floors 32.2-35.4) sloping west down to the
+///   window-ledge approach (x −35..−34, z −20..−27, floors 27-33.7 under the gallery's 45.5
+///   roof) and up onto the window ledge (x −35, z −28, floor 35.3);
+/// - THE WALL-HUG WINDOW CRAWL #35 "Wall Hug Window" ((−34.10, 37.28, −31.65), yaw 1.571,
+///   half_len 5.36×scale → the band z −26.3..−37.0 [D placement + CreepWall_Create 0x196fc8;
+///   the crawl prompts #84/#85 (type 6) at z −37.3/−25.5, the progress plates #311-#314
+///   (out 127/128/129/133) riding the band]) — the E press enters substate 7 [M Player_Activate
+///   0x1a5170:66-97 → Player_CollCreepWall 0x196758], forward crawls to the wall's south end
+///   [M Player_Creep 0x1969d0: the input direction decides the end];
+/// - the roofed corridor south (x −36, z −38..−44, floor 32.5-36.2 under the 46.0 roof), then a
+///   second notch at z −46..−50 (floor 18-25) — jumped;
+/// - the south gallery (x −35..−34, z −52..−60, floors 31-33.7) and the SW loop: the lower path
+///   bends west/south (x −39..−41, z −64..−72, floors 27.8-32.6), the west walkway (x −41..−40,
+///   z −70..−76, floors 37.1-37.6), the z −78 band (x −38..−27, floors 29-37.3), the z −76 spine
+///   (x −30..−26, 37.4→32.9) up to the battlement's west end (x −28..−16, z −72..−74, floors
+///   36.7-37.5) — the SWITCH_Helicopterstart(SC3) plate #269 ((−22.76, 37.15, −72.36) out 0x42
+///   [D placement]) fires en route;
+/// - THE MOAT INLET at x −15..−5 (z −72..−76 floors 20-23 — a 14-unit cut through the wall-walk)
+///   is crossed by THE Q-CLAW GRAPPLE: pulley #281 "graple_pulley" ((−3.40, 42.94, −71.77) [D
+///   placement] with its "Grapple_from bottom" CEL #280 (−3.39, 42.82, −70.96)) stands 17.6
+///   units east of the west battlement's east end — inside the claw's bolt range 50.0
+///   [M 0x12e7b0:158 + weapon_data[0x50]+0x1c]; the reel [M Player_SSGrapple 0x192860: phase 1
+///   pulls at 0.05→0.5/tick toward BLData+0x140, phase 2 hangs within 2.0, the fire RELEASE
+///   detaches] carries Bond over the inlet onto the east battlement (x −4..+4, z −72, floors
+///   36.3-36.9) — the route's own grapple icons #277/#300 (the landing, type 3) and #310 (the
+///   notch, type 3 big) mark the claw legs [D placements];
+/// - the east battlement east (x −4..12, z −71.4, floors 36-38) and up the covered staircase
+///   (x 14 at 37.1 → x 35.5 at 43.4 [D probe_corridor05]) to its top flight; THE TERRACE LINK
+///   (level-05-terrace-walk) continues on the east walkway and the west staircase — see
+///   `walk_the_stairs_top_to_the_terrace_spot`; the door guards #271/#272 (41.5/46.4, 46,
+///   −69.7) and the ammo #322/#323 (48.1/49.2, 49, −59.3/−60.5) stand on the disc's own
+///   walkway/terrace floors [D placements].
+#[test]
+fn the_cable_landing_walks_the_south_walkway_toward_the_zip_door() {
+    let iso = iso();
+    let mut w = Walker::new(nf_view::load(&iso, "07000005.bin", false).expect("load 07000005"));
+    w.wait(30);
+    walk_the_cable_route_to_the_stairs_top(&mut w);
+    eprintln!("[05r] the corridor→stairs legs complete in {} ticks; falls {:?}",
+        w.total_ticks, w.report.falls);
+    for f in &w.report.falls { eprintln!("[05r] fall: {f}"); }
+    for st in &w.report.stuck_events { eprintln!("[05r] stuck: {st}"); }
+}
+
 
 /// Raw full-forward steer along a waypoint chain: real inputs only (turn + forward, with an
 /// auto-unstuck sidestep burst), a per-leg wedge guard and a fall guard. The kink-walk shape.
@@ -1344,40 +1399,23 @@ fn the_notch_holds_the_walk_and_the_grab_needs_its_zone() {
 /// ((37.25, 49.00, −69.00), p0=0x7000006, p3=0x1e [D placement]) writes the fallback ch 0x1E
 /// [M Trigger_Activate 0x1b2318:91-107] and ends the level into 07000006.
 #[test]
-fn the_door_band_exit_chains_to_07000006_climb_parked() {
+/// The door #112's exit chain, WALKED: the route to the y-49 terrace is the disc's own — the
+/// covered staircase's top flight runs onto the east walkway (the door guards' post) and the
+/// walkway's north-west corner climbs the west staircase onto the terrace slab
+/// (`walk_the_stairs_top_to_the_terrace_spot`; [D probe_terroute05 maps A/B/C over the port's
+/// collision of the disc's data]). The old "no walkable link" claim scanned only to x 38 and
+/// read the stairs' 49.5 overhang for the terrace's south face — the TEST comment was wrong,
+/// not the disc. From the walked terrace spot the E press at door #112 "Locked_Door_Top_I"
+/// ((37.25, 49.00, −69.00), p0=0x7000006, p3=0x1e [D placement]) writes the fallback ch 0x1E
+/// [M Trigger_Activate 0x1b2318:91-107] and ends the level into 07000006 — the same chain the
+/// old stand-in pinned, now reached on real input.
+#[test]
+fn the_door_band_exit_chains_to_07000006_walked() {
     let iso = iso();
     let mut w = Walker::new(nf_view::load(&iso, "07000005.bin", false).expect("load 07000005"));
     w.wait(30);
-    // PROBE-GRADE placement on the terrace (the climb is the parked gap; see the doc above).
-    // Placed at the REST height, not at the floor band: a standing upright capsule's centre
-    // rides ~1.03-1.13 ABOVE the floor it stands on — the capsule's bottom sphere (B =
-    // pos + up·(0.55 − cc), r 0.55 [M Player_Collision 0x194df0]) touches it, lowest point =
-    // pos.y − cc [M], and the live game parks Bond 1.086 over his floor (boot: obj+0x30
-    // 24.9633 over the disc floor 23.877 at (104.954, 108.825) [L ee_start_05 @0x2d88e0 →
-    // obj+0x30 + probe_terrace05 col; the 05-truck trace "standing live 1.086, cc 1.0347"
-    // player.rs ROOT_HEIGHT doc]). The -3 draft placed 49.2 and expected the centre ~49.0 —
-    // it buried the capsule (B 0.83 under the floor; the push lifted AND shoved him west to
-    // 21.805) and asserted the centre against the floor band, wrong on the port and the game
-    // alike. The terrace floor under the spot is 49.001 [D probe_terrace05 col (21.8, −68.1):
-    // instance 20, map 50, object 38, mat 12].
-    {
-        let sim = w.scene.sim.as_mut().unwrap();
-        sim.bond.pos = [22.0, 50.1, -68.0];
-        sim.bond.vel = [0.0; 3];
-        sim.bond.yaw = std::f32::consts::FRAC_PI_2; // face +x east, at the door
-    }
-    w.wait(10);
-    {
-        let sim = w.scene.sim.as_ref().unwrap();
-        // Grounded on the y-49 terrace: the disc floor 49.001 under the spot [D probe_terrace05],
-        // the centre in the feet-band rest above it — the port's band rest [M Player_FeetOnPoint
-        // 0x194188:106 `hit − 0.1 <= cc`] parks the fall inside cc..cc+0.1 over the floor (this
-        // run: 50.089 = floor + 1.089; the game's live rest floor + 1.086 [L ee_start_05]).
-        assert!(sim.bond.grounded && sim.bond.pos[1] > 49.9 && sim.bond.pos[1] < 50.4,
-            "the terrace placement rests on the y-49 band's feet-band window (floor 49.001 [D \
-             probe_terrace05]; centre floor+1.03..1.13 [M 0x194188:106; L live 1.086]), got {:?}",
-            sim.bond.pos);
-    }
+    walk_the_cable_route_to_the_stairs_top(&mut w);
+    walk_the_stairs_top_to_the_terrace_spot(&mut w);
     // Walk east INTO the doorway arch and press E (the walker's Use: face the point, pulse the
     // key — the game's Activate is edge-triggered [M Input_Action mask 4]). The reach is the
     // game's use sphere: radius 1.0 at head + 1×view dir, sphere vs the trigger's glist [M

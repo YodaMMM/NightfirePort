@@ -1,18 +1,28 @@
 //! walkreal-c: 0700000c (Chain Reaction, part 1 — the power station) walked with the player's own
 //! movement — `step_bond` input only: no channel or state pokes. The REAL legs this session:
 //! the laser-watch hinge burn (the four #139-142 locks through the held-fire path), the vent
-//! drop firing plate #274 mid-fall (objective 1 on the game's own route), the case-exit walk,
-//! the 11.27 hall + the upper east lane south, the east-strip yard descent, and the three wire
+//! drop firing plate #274 mid-fall (objective 1 on the game's own route), the 11.27 hall +
+//! the upper east lane south, the yard reached WEST through the open secret door, and the three wire
 //! crossings (jump-grab + hand-over-hand rides), and the STAIRCASE descent to the display
 //! ground (the hall floor's own opening over `obj_stor2_staircase01` #359's ramp [D] — the
 //! display eye reached by real input). The DOCUMENTED stand-ins left (each with its evidence
-//! inline): the case's trench exit (the interior has no walkable exit at body height — glass is
-//! body-solid [M hatch-4]), the plates reach (every walking route off the display-ground
-//! complex is closed — the slab's south face leaves a 0.23..0.4 slot above the 2.37 deck [D
-//! probe rays]; the game's own connection is the annex vent #180/#182/#184 [D census]), the east
-//! climb ground→band (unpinned — the disc's own collision connects nothing: staircase01's bottom
-//! 9.52 floats over the 6.35 under-stairs [D eastclimb3/4 this session]; the stand-in lifts Bond
-//! onto the band at the gate), and the ladder495 sister test's west-ground placement. Route: the ST-1
+//! inline): the case's trench exit (the vent shaft is a ONE-WAY DROP in the disc's own data:
+//! the south crawl pocket is sealed by the wall slab z −112.34..−112.363 and the crouch
+//! capsule stops ON it at −111.813 [D this session's block dump + M 0x194df0 case 3]; the
+//! game holds the body too [L 2026-10-26 hatch-3]; no breakable glass exists [D census]), the
+//! plates reach (every
+//! walking route off the display-ground complex is closed — the slab's south face leaves a
+//! 0.23..0.4 slot above the 2.37 deck [D probe rays]; the game's own connection is the
+//! warehouse-side corridor/annex, a live check), the east
+//! climb ground→band (PINNED an island, level-0c-east-climb: the disc's own collision connects
+//! NOTHING to the band deck — staircase01's bottom 9.52 floats over the 6.35 under-stairs [D
+//! eastclimb3/4], the turb4 stair chain's slot x 81.5..83.7 is EMPTY 6.5..9.3 [D eastclimb5/6],
+//! the band strip gaps 10.4 m over the chasm, the north-strip mezzanine breaks at x 54..64.5,
+//! the crates4 gap is 3.1 m + 2.06 [D eastclimb6/7]; the deck is unreachable in the flood-fill
+//! at step law 0.55 AND 0.80 [D eastclimb7]; no lift kind, no east-side mover, west-only
+//! ladders/grapples [D kind census]; the nav patrols G3/G4 are separate [D nav dump]; the
+//! stand-in lifts Bond onto the band at the gate — the live checks decide whether the real
+//! game has a dynamic the parse cannot see), and the ladder495 sister test's west-ground placement. Route: the ST-1
 //! walkway start #1 (8.98, 15.07, −149.65 [D]) → north along the walkway (14.61 floor [D probe blk],
 //! east of the raised block x 5..10 [D probe0c-lane]) → the inner balcony repro spot (7.61, 15.71,
 //! −113.39 [L 991]) → the LASER-WATCH burn of the four hinge locks #139-142 through the held-fire
@@ -29,11 +39,12 @@
 //! x 12.6..14.5 [D probe rays]) north to the display pocket → the REAL camera photograph (0x54
 //! [M 0x1a7ef8 case 0x700000c]) into the CamSubject #454 volume → ch 0x1c (objective 2) → the
 //! DOCUMENTED plates-reach stand-in (the walking routes off the display-ground complex are
-//! all closed — see Leg 4) onto the secret-door plates
+//! all closed — see Leg 4; this session also mapped the far side: the plates stand in a
+//! ground-level corridor (0.90) running north under the warehouse mezzanine, whose only
+//! proven entrances are the secret door and an unproven north end) onto the secret-door plates
 //! #558/#559 (52.24..53.29, 0.90..3.20, −174.45..−172.73 [D]): the REAL body-touch + E-arm AND chain
-//! → Door_secret1 #544 sweeps (rate 400 [D]) → through the door onto the doorway ledge (0.90) → the
-//! REAL east-south descent around the ledge's south wall (the wall z −175.8 spans x ≤ 55.5 only; x ≥
-//! 56 is open, floor 0.90 → 0.69 [D probe blk rays]) → the yard ladder #164 (9.67, 5.53, −187.34 [D])
+//! → Door_secret1 #544 sweeps (rate 400 [D]) → through the open door WEST for real onto the
+//! yard (0.69 [D this session's scan]) — the master's yard-descent stand-in is GONE — → the yard ladder #164 (9.67, 5.53, −187.34 [D])
 //! → the REAL walk-in grab + climb (the walk substate rides `Player_Collision` 0x194df0's DEFAULT
 //! hittest arm r 0.55 [M 0x1953f4 via the jump table @0x2fc0d0]) → the patrol-ring diagonal walkway
 //! (the ladder map: (6-9,−188) → (12-13,−194) [D probes]) → the ring north-west corner (12,−202..−208)
@@ -56,729 +67,39 @@
 //! kind-0x202 ring path], the running jump onto the turb4 lower ramp [D the 0.25-grid step
 //! scan], up to the east ground 6.17 [D plc42] — the straight crossing is dead ([L 2026-10-30
 //! fresh boot: Bond drops into the pit] + the void sisters below) → the east climb STAND-IN (the
-//! only unproven link: the disc's collision connects nothing — staircase01's bottom step 9.52
-//! floats over the 6.35 under-stairs at x 84.5 [D eastclimb3/4], the band's south rail 11.17
-//! walls the deck [D eastclimb3], the 0.78 jump apex [M player.rs]) lifting Bond onto the band
+//! only unproven link: the deck is a collision ISLAND — the disc's static data connects nothing;
+//! staircase01's bottom step 9.52 floats over the 6.35 under-stairs at x 84.5 [D eastclimb3/4],
+//! the stair slot x 81.5..83.7 is empty 6.5..9.3 [D eastclimb5/6], the band's south rail 11.17
+//! walls the deck [D eastclimb3], the 0.78 jump apex [M player.rs]; sisters 5b/5c pin the slot
+//! and the three remaining crossing attempts) lifting Bond onto the band
 //! at (95, −209.5), deck 10.34 [D plc44] → the gate steps → E → level_exit 0x0700000d ([M Player_Activate
 //! 0x1a5170 case 0x1d → Trigger_Activate 0x1b2318:111], the key gate ch 0x1c on) → the warm RamSave
 //! carry into 0700000d → the spawn TouchOnce #436 (179.53, 11.58, −205.40, out 0x23 [D 0d]) fires
 //! → objective 3 completes and 0d's own objective reveals ([M Mission_Init 0x182270:92-121 carries
 //! record 11 across the load]).
+//!
+//! Legs 1-9c (the spawn asserts through the slot jump's band landing) live in
+//! common/walkreal0c.rs as `walk_spawn_to_the_band` — moved verbatim from this file (same
+//! load, same ticks, same order) and shared with walkreal_0700000c_eastroute_live, which now
+//! replays the game's own route to the band west end instead of teleporting to it. The two
+//! documented stand-ins inside (the trench exit, the mezzanine reach) moved with it, reason
+//! and sisters intact.
 
-#[path = "common/walker_b2.rs"]
+#[path = "common/walkreal0c.rs"]
 mod walker;
 
-use walker::{Act, Walker, Wp};
+use walker::{Walker, Wp};
 
 fn iso() -> String { std::env::var("NF_ISO").expect("NF_ISO") }
 
 #[test]
 fn walk_the_whole_mission_from_the_start_to_the_0d_handoff() {
     let iso = iso();
-    let mut w = Walker::new(nf_view::load_with_carry(&iso, "0700000c.bin", false, None).unwrap());
-    {
-        let sim = w.scene.sim.as_ref().unwrap();
-        let p = sim.bond.pos;
-        assert!((p[0] - 8.98).abs() < 2.0 && (p[1] - 15.07).abs() < 2.0 && (p[2] + 149.65).abs() < 2.0,
-            "the walkway start #1 [D], got {p:?}");
-        assert!(sim.drones.inventory.owned.get(0x54).copied().unwrap_or(false),
-            "the camera gadget (0x54) is in the loadout [M 0x1a7ef8 case 0x700000c]");
-        // The boot loadout's other members, for the record ([D loadout; no assert on the order]).
-        eprintln!("[0c] the boot loadout: {:?}", (0..0x60).filter(|i| sim.drones.inventory.owned.get(*i).copied().unwrap_or(false)).collect::<Vec<_>>());
-    }
-    w.wait_enabled(3000, "the intro");
-    w.wait(120);
-
-    // Leg 1 (REAL, blocker 2 replaced): the walkway NORTH to the inner balcony, the LASER-WATCH
-    // burn of the four hinge locks, and the vent drop through the trench — the game's own route
-    // to objective 1 (the vent/pulley stand-in is gone). Evidence: the walkway floor 14.61
-    // [D probe blk]; the balcony repro spot (7.61, 15.71, −113.39) [L 991]; the hinges #139-142
-    // (out 14..17, (7.09/4.54, 15.70/16.87, −112.37) [D]); one contact per held tick, −3 off
-    // both burn bytes from 0xff, complete when +0x105 < 4 → 84 contact ticks [M Lock_Update
-    // 0x1ae3d8:82-101 + Player_WeaponFiring 0x1a5460:653-658]; the AND #505 (14,15,16,17 → 18
-    // [D]) drives SS #138 ventmesh-front 16.4 → 14.76 and SS #179 VentBlockingPoly 16.3 → 20.0
-    // [D #138/#179; M SS_Update 0x1a9948]; after both sweep, the y-16.3 ray crosses the vent
-    // [M the SS end poses]. The trench (x 5..6.5, z −110.5..−111.5, floor 11.84 [D probe blk
-    // floors]) carries plate #274 (kind 2, out 0x1b, centre (5.79, 14.09, −111.10) [D trig]) in
-    // the fall path — the game fires it while the body's volume crosses [L hatch-2].
-    w.walk_to(Wp::new(9.0, 15.7, -140.0).r(1.5), "the walkway north 1");
-    // The east lane: the walkway carries a raised block x 5..10, z −122..−125 (top 16.49, west
-    // face x 10.15 [D probe0c-lane floors+rays]) — the x 11..13 lane is the clear walk north.
-    w.walk_to(Wp::new(12.0, 15.7, -118.0).r(1.5), "the walkway north 2 (east of the raised block)");
-    w.walk_to(Wp::new(7.61, 15.71, -113.39).r(0.8), "the inner balcony repro spot [L 991]");
-    // The laser out through the REAL switch input (the draw runs its anim; the fire gate holds
-    // shots until it settles [M 0x1a5460's switching gate]).
-    w.tick(nf_game::player::Input { switch_to: Some(0x4e), ..Default::default() }, false);
-    for _ in 0..60 {
-        if w.scene.sim.as_ref().unwrap().gun.weapon == 0x4e { break; }
-        w.tick(nf_game::player::Input::default(), false);
-    }
-    assert_eq!(w.scene.sim.as_ref().unwrap().gun.weapon, 0x4e, "the Laser equips [M 0x1a7ef8]");
-    // Burn the hinges: the aim re-converges per hinge through turn/look (the player's own
-    // re-aim) and the trigger HOLDS — 84 contacts each [M 0x1ae3d8:82-101]; the clip 500 [L
-    // +0x92] covers 4 × 85 spends.
-    for out in [14u32, 15, 16, 17] {
-        let target = w.scene.sim.as_ref().unwrap().drones.locks.iter()
-            .find(|l| l.out as u32 == out).map(|l| l.pos)
-            .unwrap_or_else(|| panic!("the out-{out} hinge lock exists [D #139-142]"));
-        let mut burned = false;
-        let start = w.total_ticks;
-        while w.total_ticks - start <= 500 {
-            let fire_input = {
-                let sim = w.scene.sim.as_ref().unwrap();
-                if sim.drones.channels.on(out) { burned = true; break; }
-                let h = sim.bond.head();
-                let d = [target[0] - h[0], target[1] - h[1], target[2] - h[2]];
-                let l = (d[0] * d[0] + d[1] * d[1] + d[2] * d[2]).sqrt();
-                let yaw_err = walker::wrap_pi(d[0].atan2(d[2]) - sim.bond.yaw);
-                // the port's look convention: pitch ±1 → ±π/2 [M nf-view lib.rs --bond parser]
-                let pitch_err = (d[1] / l).clamp(-1.0, 1.0).asin() * 2.0 / std::f32::consts::PI - sim.bond.pitch;
-                nf_game::player::Input {
-                    turn: yaw_err.clamp(-0.08, 0.08),
-                    look: pitch_err.clamp(-0.08, 0.08),
-                    ..Default::default()
-                }
-            };
-            w.tick_fire(fire_input);
-        }
-        assert!(burned, "hinge out {out} never burned under the held laser fire [M 0x1ae3d8:82-101]");
-        eprintln!("[0c] hinge out {out} burned at +{} ticks", w.total_ticks - start);
-    }
-    {
-        let sim = w.scene.sim.as_ref().unwrap();
-        assert!(sim.drones.channels.on(18), "the AND mux #505 raised ch 18 [D #505 list 14,15,16,17]");
-    }
-    // The SSs animate after ch 18 (rate 50 / rate 10 [D]) and each RESETS to t 0 / state 0
-    // when its sweep completes (this run: t138 0.1 → 3.1 → 0 by +60) — so the completion pin
-    // is the END POSE: the y-16.3 ray crossing the open vent [M the SS end poses; the same
-    // ray the laser-watch test pins].
-    let mut saw_sweep = false;
-    let mut open = false;
-    for _ in 0..300 {
-        {
-            let sim = w.scene.sim.as_ref().unwrap();
-            let ss138 = sim.drones.sss.of_placement(138).expect("ventmesh-front SS [D #138]");
-            let ss179 = sim.drones.sss.of_placement(179).expect("VentBlockingPoly SS [D #179]");
-            let (t138, t179) = (sim.drones.sss.list[ss138].t, sim.drones.sss.list[ss179].t);
-            if t138 > 0.0 || t179 > 0.0 { saw_sweep = true; }
-            if sim.world.segment_hit([5.78, 16.3, -111.7], [5.78, 16.3, -113.0]).is_none() { open = true; break; }
-        }
-        w.tick(nf_game::player::Input::default(), false);
-    }
-    eprintln!("[0c] the vent sweep ran ({saw_sweep}) and the end pose passed the ray ({open})");
-    assert!(open, "the open vent never let the y-16.3 ray through [M the SS end poses]");
-    eprintln!("[0c] all four hinges burned — the vent is open");
-    // Through the open vent (the passage the y-16.3 ray proves) and off the lip into the
-    // trench — the REAL fall crosses plate #274 mid-fall (ch 0x1b) and lands on the lower
-    // walkway (11.84 [D probe blk floors]).
-    w.walk_to(Wp::new(5.78, 15.7, -112.3).r(0.6), "through the open vent");
-    let mut fired_at = None;
-    let start = w.total_ticks;
-    let landed = loop {
-        let sim = w.scene.sim.as_ref().unwrap();
-        let (p, grounded) = (sim.bond.pos, sim.bond.grounded);
-        if grounded && fired_at.is_some() { break true; }
-        if w.total_ticks - start > 400 { break false; }
-        if !grounded && fired_at.is_none() && sim.drones.channels.on(0x1b) {
-            fired_at = Some(w.total_ticks - start);
-        }
-        let desired = (5.78f32 - p[0]).atan2(-110.8f32 - p[2]);
-        let err = walker::wrap_pi(desired - sim.bond.yaw);
-        let input = nf_game::player::Input {
-            turn: err.clamp(-0.08, 0.08),
-            forward: if err.abs() > 0.6 { 0.0 } else { 1.0 },
-            ..Default::default()
-        };
-        w.tick(input, false);
-    };
-    {
-        let sim = w.scene.sim.as_ref().unwrap();
-        let p = sim.bond.pos;
-        assert!(landed && fired_at.is_some() && sim.bond.grounded && (p[1] - 12.93).abs() < 0.6,
-            "the vent drop must fire plate #274 mid-fall (ch 0x1b [D #274; L hatch-2]) and land on the \
-             lower walkway (11.84 [D probe blk floors]), got pos {p:?} fired {fired_at:?}");
-        assert_eq!(sim.drones.mission.states[11][0], 4, "objective 1 completes on the #274 drop [M 0x1827d8:88-99]");
-        assert_eq!(sim.drones.mission.states[11][1], 3, "ch 0x1b reveals objective 2 [L record 11 obj 1]");
-    }
-    eprintln!("[0c] the vent drop fired plate #274 mid-fall at +{:?} — objective 1 complete on the game's own route", fired_at);
-
-    // Leg 2 (REAL): out of the case's trench south-west onto the 11.27 hall, the hall east
-    // under the case, the upper east lane (11.27, x 13..14 [D probe]) south to the STAIRCASE
-    // HEAD, the ramp descent to the display ground (6.27), the ledge north to the SUBJECT's
-    // clear-line eye, and the photograph through the REAL camera switch and bullet path [M
-    // CamSubject_Update 0x1bc668:14-24]. (Route floors from the crossings session's probe: the
-    // trench exit at z −112.5 is open west at body height; the direct south lane hits the 1.28
-    // riser wall at z −114.09 [D probe]; the x 13..14 upper lane carries.)
-    // The trench EXIT — the one stand-in this session ADDED (the case's interior has no
-    // walkable exit at body height): the case's south glass lintels at z −111.89 from y ~13.2
-    // up [D probe rays: the y 13.0 ray passes, the y 13.4 ray hits at x 5.0..6.5], the west
-    // inner face x 4.78 blocks the chest (y 12.9) across the trench's z span [D probe rays],
-    // and the crouched body (root 0.607 over the floor [L 05-truck]; this run settled at
-    // 12.50 over the 11.84 floor) still clips the lintel — the port's crouch capsule does not
-    // fit under 13.2. Glass is body-solid [M hatch-4's 0x1eb320:337 + the 0x800/0xc query
-    // flags; L 0700001b]. No SS keys off ch 0x1b (the level's movers are the ch-18 grate/poly,
-    // the ch-8 door, the 0x54 lid [D keys]). So the game's exit out of the display case after
-    // the #274 drop is UNPINNED — live check 2 below. The stand-in moves Bond onto the 11.27
-    // hall just south of the case (the pinned floors [D probe]); the sister ray pins the
-    // lintel so the stand-in never walks through a glass that later opens.
-    {
-        let sim = w.scene.sim.as_ref().unwrap();
-        let lintel = sim.world.segment_hit([5.5, 13.4, -111.4], [5.5, 13.4, -113.0]);
-        assert!(lintel.is_some(), "the case's south lintel (z −111.89, y 13.2+ [D probe rays]) vanished; the exit stand-in could become a walk");
-    }
-    {
-        let sim = w.scene.sim.as_mut().unwrap();
-        sim.bond.pos = [5.0, 12.35, -112.9];
-        sim.bond.vel = [0.0; 3];
-    }
-    w.wait(10);
-    eprintln!("[0c] the trench-exit stand-in (the case's unpinned exit) — on the 11.27 hall");
-    w.walk_to(Wp::new(8.0, 12.4, -113.2).r(1.0), "the hall east (south of the x 6..7 pillars)");
-    w.walk_to(Wp::new(13.5, 12.4, -115.0).r(1.2), "the upper east lane");
-    // The STAIRCASE descent — the game's own route to the display ground, no class port
-    // needed: the 0xE2 SS class is fully ported (SS_Create 0x1a9c58 / SS_Update 0x1a9948 /
-    // SS_Operate 0x1a9df8 / SS_Activate 0x1a9ea8 = crates/nf-game/src/ss.rs create/tick/
-    // activate), and the level's 0xE2 census [D] has NO travel lift: the obj_stor*_pully*
-    // winches #351/#364/#377 carry four SAME-position keys (a ±0.026-rad wheel sway, mask 0x2
-    // = the bullet contact class [M 0x1a9df8:35-37]) — dead props, not rides. The walkable
-    // descent is the hall floor's own opening (the floor is MISSING at x 9..12.4 for
-    // z −115.5..−131.5 [D probe rays]) crossed by the static `obj_stor2_staircase01` #359
-    // (kind 0x19, bounds x 9.97..12.29, y 6.13..12.14, z −127.5..−117.1 [D placement]): the
-    // landing at 11.12..11.29 (z −127..−128, level with the 11.27 hall floor) and the ramp
-    // down to 6.29 at z −120 [D probe rays]. The lane walk stays EAST of x 12.5 (the shaft
-    // is open to the 2.18 deep floor); the descent lands on the south ledge (6.27,
-    // x 12.6..14.5 [D probe rays]) whose north end joins the display ground at z −113.5
-    // (the 6.27 floor spans x 1..14.5 there [D probe rays]).
-    {
-        let sim = w.scene.sim.as_ref().unwrap();
-        // Sisters pinning the route's real geometry: the shaft hole east of the lane, the
-        // landing Bond is about to walk onto, and the ramp's mid surface.
-        let shaft = sim.world.segment_hit([11.0, 12.0, -122.0], [11.0, 10.6, -122.0]);
-        assert!(shaft.is_none(), "the stair shaft gained hall-height floor at (11, −122); the lane walk could cross it [D probe rays]");
-        let landing = sim.world.segment_hit([11.2, 13.0, -128.0], [11.2, 10.6, -128.0]);
-        assert!(landing.is_some(), "the stair landing (11.29 at z −128 [D probe rays]) vanished; the descent has no head");
-        let ramp = sim.world.segment_hit([11.2, 12.0, -124.0], [11.2, 7.0, -124.0]);
-        assert!(ramp.is_some(), "the ramp's mid surface (~8.52 at z −124 [D probe rays]) vanished; the descent would free-fall");
-    }
-    w.walk_to(Wp::new(13.2, 12.4, -124.0).r(1.0), "the lane south to the stair head");
-    w.walk_to(Wp::new(13.0, 12.4, -128.2).r(0.8), "the stair approach");
-    // West onto the landing (z −128: the hall floor 11.27 at x 12.5+, the landing 11.29..11.32
-    // at x 10.5..12 — level [D probe rays]).
-    w.walk_to(Wp::new(11.2, 12.35, -128.1).r(0.6), "west onto the stair landing");
-    {
-        let sim = w.scene.sim.as_ref().unwrap();
-        assert!(sim.bond.grounded && (sim.bond.pos[1] - 12.35).abs() < 0.4,
-            "Bond stands on the stair landing (11.29 [D probe rays]), got {:?} grounded {}", sim.bond.pos, sim.bond.grounded);
-    }
-    // Down the ramp (south, ~0.8 y per z [D probe rays]): targets every ~1.5 z keep the
-    // steering on the surface; the body rides the slope with short airborne hops.
-    for (x, z, label) in [
-        (11.2f32, -126.5f32, "the ramp 1"),
-        (11.2, -125.0, "the ramp 2"),
-        (11.2, -123.5, "the ramp 3"),
-        (11.3, -122.0, "the ramp 4"),
-        (11.4, -120.8, "the ramp 5"),
-    ] {
-        w.walk_to(Wp::new(x, 7.0, z).r(0.9), label);
-    }
-    {
-        let sim = w.scene.sim.as_ref().unwrap();
-        assert!(sim.bond.pos[1] < 9.0 && sim.bond.pos[2] > -122.0,
-            "the ramp descent reaches the bottom landing (6.29 at z −120 [D probe rays]), got {:?}", sim.bond.pos);
-    }
-    // East onto the south ledge (the bottom 6.29..6.32 joins the ledge 6.27 at x 12.6 [D
-    // probe rays]), then NORTH along it to the display pocket — the ledge's west edge is the
-    // shaft (x 11.5..12.3 open to 2.18 at z −114..−117 [D probe rays]), so the west turn
-    // happens at z −113.5 where the 6.27 floor spans the full width.
-    w.walk_to(Wp::new(12.2, 7.4, -120.3).r(0.7), "the stair bottom east");
-    w.walk_to(Wp::new(13.2, 7.4, -120.0).r(0.8), "onto the ledge");
-    {
-        let sim = w.scene.sim.as_ref().unwrap();
-        assert!(sim.bond.grounded && (sim.bond.pos[1] - 7.41).abs() < 0.5,
-            "Bond stands on the south ledge (6.27 [D probe rays]), got {:?} grounded {}", sim.bond.pos, sim.bond.grounded);
-        let hole = sim.world.segment_hit([11.8, 8.0, -115.5], [11.8, 1.4, -115.5]);
-        let hole_y = hole.map(|(t, _)| 8.0 + t * (1.4 - 8.0));
-        assert!(hole_y.map_or(false, |y| y < 3.0), "the ledge's west shaft (x 11.8, z −115.5 open to 2.18 [D probe rays]) gained floor: {hole_y:?}");
-    }
-    w.walk_to(Wp::new(13.2, 7.4, -116.0).r(0.9), "the ledge north 1");
-    w.walk_to(Wp::new(13.2, 7.4, -113.4).r(0.8), "the ledge north 2");
-    w.walk_to(Wp::new(10.5, 7.4, -113.4).r(0.9), "the display ground west");
-    w.walk_to(Wp::new(5.4, 7.35, -113.0).r(0.7), "the display eye");
-    {
-        let sim = w.scene.sim.as_ref().unwrap();
-        assert!(sim.bond.grounded && (sim.bond.pos[1] - 7.41).abs() < 0.5,
-            "Bond stands on the display ground at the eye spot (6.27 floor [D probe rays]), got {:?} grounded {}",
-            sim.bond.pos, sim.bond.grounded);
-    }
-    eprintln!("[0c] the staircase descent walked for real — the eye on the display ground at {:?}",
-        w.scene.sim.as_ref().unwrap().bond.pos);
-    let subject = {
-        let sim = w.scene.sim.as_ref().unwrap();
-        sim.drones.props.subjects.iter().find(|s| s.channel == 0x1c)
-            .map(|s| (s.lo, s.hi)).expect("the jetpack subjects [D #414/#454]")
-    };
-    eprintln!("[0c] the display eye (the staircase-routed spot) — the camera next");
-    // The camera out through the REAL switch input (the old gun.switch_request write is gone).
-    w.tick(nf_game::player::Input { switch_to: Some(0x54), ..Default::default() }, false);
-    for _ in 0..60 {
-        if w.scene.sim.as_ref().unwrap().gun.weapon == 0x54 { break; }
-        w.tick(nf_game::player::Input::default(), false);
-    }
-    assert_eq!(w.scene.sim.as_ref().unwrap().gun.weapon, 0x54, "the camera is held [M 0x1a7ef8]");
-    let sc = [(subject.0[0] + subject.1[0]) / 2.0, (subject.0[1] + subject.1[1]) / 2.0, (subject.0[2] + subject.1[2]) / 2.0];
-    let photographed = shoot_at(&mut w, sc, 30.0, 900, "the jetpack photograph",
-        &|sim| sim.drones.channels.on(0x1c));
-    assert!(photographed, "the photograph never wrote ch 0x1c [M 0x1bc668:14-24]");
-    {
-        let sim = w.scene.sim.as_mut().unwrap();
-        for _ in 0..2 { sim.step_bond(nf_game::player::Input::default(), false, false, false); }
-        assert_eq!(sim.drones.mission.states[11][1], 4, "objective 2 completes [M 0x1827d8:88-99]");
-    }
-    eprintln!("[0c] objective 2 complete — the photograph (the staircase-routed eye spot)");
-
-    // Leg 4: the secret-door reach — the DOCUMENTED stand-in (master's shape), because this
-    // session's probes closed every walking route off the display-ground complex toward the
-    // yard/warehouse: the slab's south face stands at z −155.77..−156.26 from y ~2.5 up
-    // (x 2.5..15.25 [probe rays]), leaving only a 0.23..0.4 slot above the 2.37 deck — no
-    // standing or crouched capsule passes [D probe rays]; the raw south walk stops at the
-    // edge z −155.04 standing AND crouched [probe runs]; the 2.18 deep-floor lane (x 8.5..12.2,
-    // the shaft's bottom) runs south only to z ~−150 and steps up onto the same 2.37 deck
-    // pocket, wall-closed south at x ≥ 10.5 [D probe rays]; and the east deck pocket (2.37,
-    // x 12.5..15.4, z −154..−155.5) is closed south by the same face [D probe rays]. The
-    // game's own connection from here is the ANNEX VENT — the 0xE2 SS lid #180 "ventmesh"
-    // (53.80, 5.50, −163.59, ch 0x54, 6 keys rate 50, the lid swings up around +X), its
-    // VentLatch #182 (53.80, 5.90, −165.36, kind 0x2e) and the blocker #184 (keys 2 rate 10,
-    // sinks y 5.43 → 0) [D census] — but the annex floor (~5.44..5.99, x 52.5..55.5) hangs
-    // unreachable from the display ground too (open air over void at x 15..45, faces at
-    // x 14.9/31.7/45.2 at y 6.3 [D probe rays]); it is the warehouse-side connection, for a
-    // future leg. So the plates reach keeps the master's reach stand-in onto the plates.
-    let plate2 = {
-        let sim = w.scene.sim.as_ref().unwrap();
-        sim.drones.triggers.iter()
-            .find(|t| (t.kind == 1 || t.kind == 2) && t.out == 2 && !t.tris.is_empty())
-            .map(|t| (t.placement, t.centre(), t.mask))
-            .unwrap_or_else(|| panic!("the out-ch 2 touch plate #559 [D]"))
-    };
-    {
-        let sim = w.scene.sim.as_mut().unwrap();
-        // The plates-reach stand-in, unchanged from master (see Leg 4's comment for the
-        // probe evidence closing the walking routes).
-        sim.bond.pos = [plate2.1[0], plate2.1[1] + 0.6, plate2.1[2]];
-        sim.bond.vel = [0.0; 3];
-    }
-    w.wait(20);
-    eprintln!("[0c] the secret-door reach stand-in (the closed display-ground descents) — on the plates");
-
-    // Leg 5 (REAL): the secret-door chain — the co-located plates [D #558/#559]: #559 (mask 8)
-    // is the player BODY touch; #558 (mask 4) is the E-interactable arm (`Trigger_Activate`
-    // 0x1b2318:23-33's type-2 `mask & 4` gate). The AND #560 [D: out 8, inputs 2, 3] raises
-    // ch 8 and `Door_secret1` #544 (ch 8, 2 keys, rate 400, wrap 1 [D]) sweeps open over two
-    // E pulses and holds.
-    {
-        let sim = w.scene.sim.as_ref().unwrap();
-        assert!(!sim.drones.channels.on(8), "the secret door's ch 8 is off before the chain runs [D #560]");
-        assert!(sim.drones.channels.on(2), "the body-touch plate fires ch 2 under Bond [D #559]");
-        assert!(!sim.drones.channels.on(3), "sister: the body touch alone never writes ch 3 [M 0x1b2318:23-33]");
-    }
-    let mut and_at = None;
-    for _ in 0..120 {
-        w.tick(nf_game::player::Input::default(), true);
-        if and_at.is_none() && w.scene.sim.as_ref().unwrap().drones.channels.on(8) { and_at = Some(w.total_ticks); break; }
-    }
-    assert!(and_at.is_some(), "E on the plate never raised ch 8 (the AND of the body touch + the E arm [D #560; M 0x1b2318:23-33]) within 120 ticks");
-    let mut open_at = None;
-    for _ in 0..900 {
-        w.tick(nf_game::player::Input::default(), true);
-        let sim = w.scene.sim.as_ref().unwrap();
-        let door = sim.drones.sss.list.iter().find(|s| s.channel == 8).expect("the ch-8 door SS [D #544]");
-        if door.state == 0 { open_at = Some((w.total_ticks, door.pos())); break; }
-    }
-    assert!(open_at.is_some(), "the door never reached its spent (wrap-1 [D #544]) open pose — state {:?}",
-        w.scene.sim.as_ref().unwrap().drones.sss.list.iter().find(|s| s.channel == 8).map(|s| (s.state, s.t)));
-    eprintln!("[0c] the secret door swept spent open at +{:?}", open_at.map(|(t, _)| t));
-    // Walk through the spent door for real (the doorway is east of the plates — Bond crosses
-    // the door slab's plane x ≈ 51.9 [D #544]) and drop back onto the warehouse floor.
-    w.walk_to(Wp::new(55.0, 2.1, -175.2).r(0.9), "through the secret door");
-    {
-        let sim = w.scene.sim.as_ref().unwrap();
-        assert!(sim.bond.pos[0] > 53.5, "Bond crossed the doorway for real (x {:?})", sim.bond.pos[0]);
-    }
-    // The yard descent — the DOCUMENTED stand-in (master's shape, kept): the east-strip
-    // descent [D probe blk: the wall z −175.8 spans x ≤ 55.5 only; the ledge 0.90 steps down
-    // to the yard 0.69 across x ~55.75] wedges this run at x 55.01 on the wall's unprobed
-    // EAST RETURN (a face at x ≈ 55.55 at y ~2 [this run's STUCK + the report's wedge]) —
-    // one face map away from a real leg. Live check 4 below.
-    {
-        let sim = w.scene.sim.as_mut().unwrap();
-        sim.bond.pos = [56.5, 2.8, -176.5];
-        sim.bond.vel = [0.0; 3];
-    }
-    for _ in 0..200 {
-        if w.scene.sim.as_ref().unwrap().bond.grounded { break; }
-        w.tick(nf_game::player::Input::default(), false);
-    }
-    eprintln!("[0c] the yard descent stand-in (the unprobed east return at x ~55.55) — on the yard floor");
-
-    // Leg 6 (REAL): south-west across the yard to the ladder base.
-    w.walk_to(Wp::new(56.0, 1.4, -182.0).r(1.5), "the yard south");
-    w.walk_to(Wp::new(40.0, 1.4, -184.5).r(2.0), "the yard west");
-    w.walk_to(Wp::new(20.0, 1.4, -184.5).r(1.5), "the yard west 2");
-    w.walk_to(Wp::new(11.6, 1.2, -186.6).r(1.2), "the ladder base");
-    // Leg 7 (REAL): the ladder walk-in grab + climb (the walk substate rides the DEFAULT arm
-    // r 0.55 [M 0x1953f4 via the jump table @0x2fc0d0]).
-    w.walk_to(Wp::new(10.3, 1.05, -186.8).r(0.7), "the ladder approach");
-    let mut climbed = false;
-    for _ in 0..900 {
-        let sim = w.scene.sim.as_mut().unwrap();
-        if sim.bond.substate == nf_game::player::SS_CLIMB { climbed = true; break; }
-        // yaw = atan2(dx, dz) — forward = (sin yaw, cos yaw) — [S] unverified (Bond::look is the port's look maths; the game's heading convention is not pinned here).
-        let desired = (9.669741f32 - sim.bond.pos[0]).atan2(-187.3427f32 - sim.bond.pos[2]);
-        let err = walker::wrap_pi(desired - sim.bond.yaw);
-        let input = nf_game::player::Input {
-            turn: if err.abs() > 0.2 { err.clamp(-0.08, 0.08) } else { 0.0 },
-            forward: if err.abs() > 0.2 { 0.3 } else { 1.0 },
-            ..Default::default()
-        };
-        sim.step_bond(input, false, false, false);
-        w.total_ticks += 1;
-    }
-    assert!(climbed,
-        "walking into the yard ladder #164 never grabbed it — the walk substate must ride the switch's DEFAULT arm r 0.55 [M 0x1953f4 via the jump table @0x2fc0d0]");
-    // Climb for real: hold forward until the mantle fires (the dismount at pos.y > climb_top
-    // 12.139 [M Player_Climb 0x196310:54-62 + Player_CollLadder 0x196118's +0.85 top]) and the
-    // walk resumes, then keep the stick forward through the lunge (+0.6 [M 0x196310:56]).
-    let mut mantled = false;
-    for _ in 0..2400 {
-        let sim = w.scene.sim.as_mut().unwrap();
-        if sim.bond.substate != nf_game::player::SS_CLIMB && sim.bond.pos[1] > 2.0 { mantled = true; break; }
-        sim.step_bond(nf_game::player::Input { forward: 1.0, ..Default::default() }, false, false, false);
-        w.total_ticks += 1;
-    }
-    assert!(mantled, "the yard climb never mantled past climb_top 12.139 [M 0x196118/0x196310], y {:?}", w.scene.sim.as_ref().unwrap().bond.pos);
-    for _ in 0..600 {
-        let sim = w.scene.sim.as_ref().unwrap();
-        if sim.bond.grounded && sim.bond.substate == nf_game::player::SS_WALK && sim.bond.pos[1] > 10.5 { break; }
-        w.scene.sim.as_mut().unwrap().step_bond(nf_game::player::Input { forward: 1.0, ..Default::default() }, false, false, false);
-        w.total_ticks += 1;
-    }
-    {
-        let sim = w.scene.sim.as_ref().unwrap();
-        assert!(sim.bond.grounded && sim.bond.pos[1] > 10.5,
-            "Bond lands on the ladder-top walkway (11.086 [D probes]) after the mantle, got {:?} grounded {}",
-            sim.bond.pos, sim.bond.grounded);
-    }
-    eprintln!("[0c] the yard ladder climbed for real to y {:.2}", w.scene.sim.as_ref().unwrap().bond.pos[1]);
-
-    // Leg 8 (REAL): the patrol-ring diagonal from the ladder top to the north-west corner
-    // ((6-9,−188) → (9-11,−190) → (11-12,−192) → (12-13,−194) [D probes]) and west along the
-    // north-west walkway to its west edge (0..8, −208 [D probes]).
-    w.walk_to(Wp::new(10.5, 11.1, -190.5).r(1.2), "the ring diagonal");
-    w.walk_to(Wp::new(12.0, 11.1, -196.0).r(1.2), "the ring diagonal 2");
-    w.walk_to(Wp::new(12.0, 11.1, -203.0).r(1.2), "the ring north-west corner");
-    w.walk_to(Wp::new(4.0, 11.1, -207.5).r(1.2), "the ring west edge");
-    // Leg 8b (REAL, blocker 4 replaced): the west-gap wire crossing. The disc's own mechanism
-    // [D probe blk/blk2]: the type-3 grab icon #4 (−3.30, 12.36, −207.51) sits at the west
-    // edge's south end; `wire_firstsilo2mainsilos` #284's grab segment A (−4.63, 13.67, −209.88)
-    // B (−8.47, 13.67, −216.52) spans the gap, and BOTH ends have landing floor: the west edge
-    // (11.1) at A's side and the west ledge (11.24-11.38, x −12..−8, z −216..−218) at B's side.
-    // The grab: the jump grab with the icon's ctx 3 [M Player_HandleJump 0x1916b0:118-147] or
-    // the body-contact grab [M Player_CollWire 0x197130]; the ride is the strafe tree [M
-    // Player_Wire 0x197658], the drop the action press [M 0x197758].
-    let grabbed = {
-        let mut got = false;
-        for t in 0..240u32 {
-            let sim = w.scene.sim.as_ref().unwrap();
-            if sim.bond.substate == nf_game::player::SS_WIRE { got = true; break; }
-            let (p, grounded) = (sim.bond.pos, sim.bond.grounded);
-            if !grounded && p[1] < 9.0 { break; }
-            let desired = (-4.6f32 - p[0]).atan2(-209.9f32 - p[2]);
-            let err = walker::wrap_pi(desired - sim.bond.yaw);
-            let input = nf_game::player::Input {
-                turn: err.clamp(-0.08, 0.08),
-                forward: if err.abs() > 0.6 { 0.0 } else { 1.0 },
-                jump: grounded && p[0] < 2.0 && t > 6,
-                strafe: if sim.bond.substate == nf_game::player::SS_WIRE { 1.0 } else { 0.0 },
-                ..Default::default()
-            };
-            w.scene.sim.as_mut().unwrap().step_bond(input, false, false, false);
-            w.total_ticks += 1;
-        }
-        got
-    };
-    assert!(grabbed, "the west-edge jump never grabbed wire #284 (icon ctx 3 [D #4] or the body sphere [D probe blk])");
-    // Ride to B (−8.47, −216.52): strafe +1 faces wire.yaw + 3π/2 = toward B [M Player_Wire's
-    // mode-7 facing]; drop with the action press inside 0.9 of B.
-    let dropped = {
-        let mut dropped = false;
-        for _ in 0..2400u32 {
-            let sim = w.scene.sim.as_ref().unwrap();
-            if sim.bond.substate != nf_game::player::SS_WIRE { dropped = true; break; }
-            let d = ((sim.bond.pos[0] + 8.47).powi(2) + (sim.bond.pos[2] + 216.52).powi(2)).sqrt();
-            // The drop is the jump press inside 0.9 of B (blockers-2's green drop). The
-            // FIRE-action variant (real-crossings 29b43fa9, never run on that branch) rode the
-            // full 2400 ticks to the natural stop d_B ≈ 1.05 past B WITHOUT releasing [this
-            // run's hang at (−8.98, 12.65, −217.44) — the y 12.65 hang root = wire 13.67 − 1.02
-            // [M hang 1.0207]], so the wire release does not answer the trigger here; the jump
-            // press does (blockers-2's three green drops).
-            let input = nf_game::player::Input { strafe: 1.0, jump: d < 0.9, ..Default::default() };
-            w.scene.sim.as_mut().unwrap().step_bond(input, false, false, false);
-            w.total_ticks += 1;
-        }
-        dropped
-    };
-    for _ in 0..200 {
-        if w.scene.sim.as_ref().unwrap().bond.grounded { break; }
-        w.scene.sim.as_mut().unwrap().step_bond(nf_game::player::Input::default(), false, false, false);
-        w.total_ticks += 1;
-    }
-    {
-        let sim = w.scene.sim.as_ref().unwrap();
-        let p = sim.bond.pos;
-        assert!(dropped && sim.bond.grounded && p[0] < -6.5 && p[0] > -13.0 && p[2] < -214.5 && p[2] > -219.5
-            && (p[1] - 12.4).abs() < 0.8,
-            "the #284 ride must drop onto the west ledge (11.24-11.38 [D probe blk2 west map]), got {p:?} dropped {dropped}");
-    }
-    eprintln!("[0c] the west gap crossed on wire #284 — landed {:?}", w.scene.sim.as_ref().unwrap().bond.pos);
-    // The diagonal ledges south-east to icon #6 [D probe blk2 west map].
-    w.walk_to(Wp::new(-6.0, 12.4, -219.6).r(1.5), "the west ledge diagonal");
-    w.walk_to(Wp::new(-4.5, 12.4, -221.5).r(1.5), "the west ledge diagonal 2");
-    w.walk_to(Wp::new(-2.5, 12.4, -222.8).r(1.4), "the west ledge diagonal 3");
-    w.walk_to(Wp::new(-1.4, 12.4, -223.6).r(1.0), "icon #6 at wire #282's B end");
-    // REAL: grab wire #282 (`wire_silosilo2`, A (5.85, 14.11, −223.15) B (−0.25, 14.11, −223.15)
-    // [D probe blk]) — the standing body at (−1.4, −223.6) is inside the wire's world sphere
-    // (centre (2.80, 14.11, −223.15) r 5.05 [D probe blk]), so the walk-east contact grab fires
-    // [M Player_CollWire 0x197130]; the jump grab at icon #6 (ctx 3 [D]) is the fallback.
-    let grabbed = {
-        let mut got = false;
-        for _ in 0..240u32 {
-            let sim = w.scene.sim.as_ref().unwrap();
-            if sim.bond.substate == nf_game::player::SS_WIRE { got = true; break; }
-            let grounded = sim.bond.grounded;
-            let input = nf_game::player::Input {
-                forward: 1.0,
-                jump: grounded,
-                strafe: if sim.bond.substate == nf_game::player::SS_WIRE { -1.0 } else { 0.0 },
-                ..Default::default()
-            };
-            w.scene.sim.as_mut().unwrap().step_bond(input, false, false, false);
-            w.total_ticks += 1;
-        }
-        got
-    };
-    assert!(grabbed, "walking east at wire #282's B end never grabbed it (sphere r 5.05 [D probe blk])");
-    // Ride EAST to A (5.85, −223.15): strafe −1 (mode 8 faces wire.yaw + π/2 = +X toward A) [M
-    // Player_Wire's mode-8 facing]; drop inside 0.9 of A.
-    let dropped = {
-        let mut dropped = false;
-        for _ in 0..2400u32 {
-            let sim = w.scene.sim.as_ref().unwrap();
-            if sim.bond.substate != nf_game::player::SS_WIRE { dropped = true; break; }
-            let d = ((sim.bond.pos[0] - 5.85).powi(2) + (sim.bond.pos[2] + 223.15).powi(2)).sqrt();
-            // The drop is the jump press inside 0.9 of B (see the #284 note).
-            let input = nf_game::player::Input { strafe: -1.0, jump: d < 0.9, ..Default::default() };
-            w.scene.sim.as_mut().unwrap().step_bond(input, false, false, false);
-            w.total_ticks += 1;
-        }
-        dropped
-    };
-    for _ in 0..200 {
-        if w.scene.sim.as_ref().unwrap().bond.grounded { break; }
-        w.scene.sim.as_mut().unwrap().step_bond(nf_game::player::Input::default(), false, false, false);
-        w.total_ticks += 1;
-    }
-    {
-        let sim = w.scene.sim.as_ref().unwrap();
-        let p = sim.bond.pos;
-        assert!(dropped && sim.bond.grounded && p[0] > 3.0 && p[0] < 9.0 && p[2] < -220.0 && p[2] > -227.0
-            && (p[1] - 12.4).abs() < 0.8,
-            "the #282 ride must drop onto the (4..8, −221..−226) ledge (11.24 [D probe blk2]), got {p:?} dropped {dropped}");
-    }
-    eprintln!("[0c] wire #282 ridden east — landed {:?}", w.scene.sim.as_ref().unwrap().bond.pos);
-    // The SW arc: the ledge to the arc's west end and east along it [D probes].
-    w.walk_to(Wp::new(8.0, 12.4, -222.0).r(1.0), "the ledge to the arc");
-    w.walk_to(Wp::new(13.0, 12.4, -218.5).r(1.2), "the arc west end");
-    w.walk_to(Wp::new(24.0, 12.4, -218.0).r(1.5), "the ring south-west arc");
-    // REAL: grab wire #283 (`wire_silo2turbine`, A (29.58, 14.44, −216.96) B (35.89, 14.44,
-    // −209.44) [D probe blk]) at the arc's east end — the body sphere-HIT is confirmed at
-    // (28, 12.3, −217.5) [D probe blk]; icon #12 (28.42, 12.24, −218.43, ctx 3 [D]) marks it.
-    let grabbed = {
-        let mut got = false;
-        for _ in 0..240u32 {
-            let sim = w.scene.sim.as_ref().unwrap();
-            if sim.bond.substate == nf_game::player::SS_WIRE { got = true; break; }
-            let grounded = sim.bond.grounded;
-            let input = nf_game::player::Input {
-                forward: 1.0,
-                jump: grounded,
-                strafe: if sim.bond.substate == nf_game::player::SS_WIRE { 1.0 } else { 0.0 },
-                ..Default::default()
-            };
-            w.scene.sim.as_mut().unwrap().step_bond(input, false, false, false);
-            w.total_ticks += 1;
-        }
-        got
-    };
-    assert!(grabbed, "walking east at the arc's end never grabbed wire #283 (the sphere HIT [D probe blk])");
-    // Ride to B (35.89, −209.44): strafe +1 (mode 7 faces wire.yaw + 3π/2 = north-east toward B)
-    // [M Player_Wire]. The ride must run to the wire's END before the jump: the corner floor's
-    // west edge is x ≈ 35.8 (10.89 step at z −210..−209.8, the 11.06..11.09 corner east of it
-    // [D scratch probe rays; the corner 11.09..11.17 at x ≤ 40.5, z −210..−208 D probe door2]),
-    // so the old `jump at d < 0.9` dropped Bond at x ≈ 35.15 — 0.65 WEST of the edge, over the
-    // void (no face y 15..8 under (35.15, −209.95) [D rays]) and he fell to the yard. The
-    // strafe zero rule parks the idle at d_B ≈ 0.5 [M 0x1977c0's `d_b <= 0.5`], but the playing
-    // mode-7 move anim finishes its root motion and overshoots to d_B ≈ 1.1 PAST B — x ≈ 36.7,
-    // over the 11.06 corner floor. Jump there (the ride's natural stop, d no longer shrinking).
-    let dropped = {
-        let mut dropped = false;
-        let mut best_d = f32::MAX;
-        let mut still = 0u32;
-        for _t in 0..2400u32 {
-            let sim = w.scene.sim.as_ref().unwrap();
-            if sim.bond.substate != nf_game::player::SS_WIRE { dropped = true; break; }
-            let d = ((sim.bond.pos[0] - 35.89).powi(2) + (sim.bond.pos[2] + 209.44).powi(2)).sqrt();
-            // Hold the jump one tick past the stop so the exit reads the overshoot pose.
-            let at_stop = still >= 90;
-            if d < best_d - 1e-4 { best_d = d; still = 0; } else { still += 1; }
-            let input = nf_game::player::Input { strafe: 1.0, jump: at_stop, ..Default::default() };
-            w.scene.sim.as_mut().unwrap().step_bond(input, false, false, false);
-            w.total_ticks += 1;
-        }
-        dropped
-    };
-    // Settle through the REAL fall: the wire ride leaves `grounded` stale-true on the exit tick
-    // (wire_tick zeroes vel and returns; the flag clears the next tick [M wire_tick 0x197758's
-    // exit]), so the old `if grounded break` snapped the assert onto the HANG pose — the merge
-    // RED's [35.15, 13.55, −209.95] is exactly the hang root (wire y 14.44 − 1.02 [M hang
-    // 1.0207]). Wait for air, then ground.
-    let mut saw_air = false;
-    for _ in 0..300 {
-        let sim = w.scene.sim.as_ref().unwrap();
-        if sim.bond.grounded && saw_air { break; }
-        if !sim.bond.grounded { saw_air = true; }
-        w.scene.sim.as_mut().unwrap().step_bond(nf_game::player::Input::default(), false, false, false);
-        w.total_ticks += 1;
-    }
-    {
-        let sim = w.scene.sim.as_ref().unwrap();
-        let p = sim.bond.pos;
-        assert!(dropped && sim.bond.grounded && p[0] > 33.5 && p[0] < 40.5 && p[2] < -207.0 && p[2] > -211.5
-            && (p[1] - 12.2).abs() < 0.8,
-            "the #283 ride must drop onto the ring SE corner (11.09..11.17 [D probe door2]), got {p:?} dropped {dropped}");
-    }
-    eprintln!("[0c] the south gap crossed on wire #283 — landed {:?}", w.scene.sim.as_ref().unwrap().bond.pos);
-
-    // Leg 9 (REAL from the SE corner through the door): the district's true geometry [D, probe
-    // walkreal_probe0c_door2_live]: the corner (11.10..11.17, x ≤40.5, z −210..−208) is where
-    // #283's B end drops Bond; the corridor (11.09, x 38.05..39.55, z −212.75..−212) runs to
-    // door2turbine #281's mouth; the E stance (39.0, 11.09, −210.8) — the live sphere (40.01,
-    // 12.57, −209.69) r 1.62 within the 2.62 pick [M Collide_PickObj 0x1eae80's 0x101 arm].
-    {
-        let sim = w.scene.sim.as_ref().unwrap();
-        let wall = sim.world.segment_hit([40.2, 13.0, -213.51], [40.2, 11.9, -213.51]);
-        assert!(wall.is_some(), "the slot end wall at z −213.51 (y 12.02..14.22 [D room_turbine01 tri 463]) vanished");
-    }
-    // The corner to the door stance (the port's kind-0xDB doors carry no leaf collision [M
-    // build_LinkToRoom 0x1c9680:63-66, Collide_Pick 0x1eb320:369-375]).
-    w.walk_to(Wp::new(38.9, 11.1, -210.8).r(0.7), "the corner to the door stance");
-    {
-        let sim = w.scene.sim.as_ref().unwrap();
-        // Sister: pin the door closed right before the E press — if a fix opens it early, this
-        // leg must change.
-        let door = sim.drones.doors.list.iter().find(|d| (d.pos[0] - 40.0).abs() < 0.5 && (d.pos[2] + 210.4).abs() < 0.5)
-            .expect("the door2turbine #281 [D]");
-        assert_eq!(door.state, 0x2, "door2turbine opened before the E press");
-    }
-    // The REAL E press at the door mouth: face the leaf, pulse E every 6 ticks.
-    // [M 0x135be0: info+0x68 (ch_lock) == 0 skips the channel gate; kind 0 (obj+0xf6) closed
-    //  (obj+0xf4 & 0x12 == 0) → Door_SetState(obj, 8); M 0x135618: stores obj+0xf4 = 8 and
-    //  writes switch_channels[info+0x66] = (8 & 0xc != 0) → the door's ch_open 5 turns on.]
-    let mut opened = false;
-    for t in 0..90u32 {
-        let turn = {
-            let sim = w.scene.sim.as_ref().unwrap();
-            let b = &sim.bond;
-            let desired = (40.0f32 - b.pos[0]).atan2(-210.4f32 - b.pos[2]);
-            walker::wrap_pi(desired - b.yaw).clamp(-0.08, 0.08)
-        };
-        w.tick(nf_game::player::Input { turn, ..Default::default() }, t % 6 == 0);
-        if t % 6 == 0 {
-            let sim = w.scene.sim.as_ref().unwrap();
-            if let Some(d) = sim.drones.doors.list.iter().find(|d| (d.pos[0] - 40.0).abs() < 0.5 && (d.pos[2] + 210.4).abs() < 0.5) {
-                if d.state != 0x2 { opened = true; break; }
-            }
-        }
-    }
-    {
-        let sim = w.scene.sim.as_ref().unwrap();
-        let door = sim.drones.doors.list.iter().find(|d| (d.pos[0] - 40.0).abs() < 0.5 && (d.pos[2] + 210.4).abs() < 0.5)
-            .expect("the door2turbine #281 [D]");
-        assert!(opened, "the E press at the corridor mouth never moved door2turbine (state {})", door.state);
-    }
-    eprintln!("[0c] door2turbine moved on the real E press (the swing-open arm)");
-    // The channel write lands on the transitions where the OLD state's 0xc bits are set [M
-    // 0x135618's switch_channels store]: the E press's OPENING (8) write happens with the old
-    // CLOSED (2) → stays off; the channel turns ON exactly when the swing completes
-    // (set_state(OPEN=4) with the old OPENING=8). Poll for that completion.
-    let mut open_settled = false;
-    for _ in 0..300 {
-        w.tick(nf_game::player::Input::default(), false);
-        if w.scene.sim.as_ref().unwrap().drones.channels.on(5) { open_settled = true; break; }
-    }
-    {
-        let sim = w.scene.sim.as_ref().unwrap();
-        let door = sim.drones.doors.list.iter().find(|d| (d.pos[0] - 40.0).abs() < 0.5 && (d.pos[2] + 210.4).abs() < 0.5)
-            .expect("the door2turbine #281 [D]");
-        assert!(open_settled, "the door never completed its swing with ch_open 5 on [M 0x135618 via the OPEN transition], state {:#x}", door.state);
-        // The ch5-on observable PROVES the OPEN transition ran (the channel only turns on from
-        // an old state with the 0xc bits [M 0x135618]); the door's auto-close [D audit: #281
-        // auto-close] may already have moved it to CLOSING by the time the poll breaks.
-        assert!(door.state == nf_game::door::OPEN || door.state == nf_game::door::CLOSING,
-            "the door state after the swing [M 0x135618], got {:#x}", door.state);
-        assert!(sim.drones.channels.on(5), "the door's OPEN wrote its ch_open 5 [M 0x135618's switch_channels store]");
-    }
-    eprintln!("[0c] door2turbine opened on the real E press (state OPEN, ch 5 on)");
-    // REAL: through the doorway (the port's kind-0xDB doors carry no leaf collision — the game
-    // picks them through the ForcedList [M build_LinkToRoom 0x1c9680:63-66, Collide_Pick
-    // 0x1eb320:369-375]) onto the corner.
-    w.walk_to(Wp::new(39.4, 11.1, -209.6).r(0.9), "through the doorway onto the corner");
-    // The corner's east boundary is a wall (x 40.01..40.37) with a 1.52-wide doorway tunnel
-    // (z −208.93..−210.45, floor 11.10, ceiling 13.96 [D room_turbine01 tris 478-485 — no
-    // x-face tris: open along x]); the band's west lip exists only at z ≥ −209.0 [(43.4, 10.89)
-    // / (44.2, 11.17) [D map]]. Run up west of the wall, THROUGH the tunnel, and jump east of it.
-    w.walk_to(Wp::new(38.6, 11.1, -209.7).r(0.5), "the jump run-up start");
-    let mut jumped = false;
-    for t in 0..300u32 {
-        let (p, grounded) = {
-            let sim = w.scene.sim.as_ref().unwrap();
-            let b = &sim.bond;
-            (b.pos, b.grounded)
-        };
-        // Land (after a real airborne phase) → the assert judges where.
-        if jumped && grounded && t > 20 { break; }
-        // Still falling deep below the band's lip → the shaft; the assert reports it.
-        if !grounded && jumped && p[1] < 9.0 { break; }
-        let (turn, forward) = {
-            let sim = w.scene.sim.as_ref().unwrap();
-            let b = &sim.bond;
-            let desired = (44.5f32 - b.pos[0]).atan2(-208.8f32 - b.pos[2]);
-            let err = walker::wrap_pi(desired - b.yaw);
-            (err.clamp(-0.08, 0.08), if err.abs() > 0.6 { 0.0 } else { 1.0 })
-        };
-        // Fire the jump while grounded just EAST of the wall's east face (x 40.37 [D]) — full
-        // run speed through the 1.8-unit run-up and the tunnel.
-        let jump = !jumped && grounded && p[0] >= 40.42;
-        if jump { jumped = true; }
-        w.tick(nf_game::player::Input { turn, forward, jump, ..Default::default() }, false);
-    }
-    {
-        let sim = w.scene.sim.as_ref().unwrap();
-        let p = sim.bond.pos;
-        let under = sim.world.segment_hit([p[0], p[1], p[2]], [p[0], p[1] - 3.0, p[2]])
-            .map(|(t, _)| p[1] - 3.0 * t);
-        assert!(sim.bond.grounded && p[0] > 42.6 && under.map_or(false, |y| (10.2..11.7).contains(&y)),
-            "the slot jump must land on the band (10.89..11.17 floor at x 43.4+ [D]), got pos {p:?} under {under:?}");
-    }
-    eprintln!("[0c] the slot jump landed on the band at {:?}", w.scene.sim.as_ref().unwrap().bond.pos);
+    // Legs 1-9c (the spawn asserts through the slot jump's band landing) are the shared
+    // prologue `walk_spawn_to_the_band` (common/walkreal0c.rs) — moved verbatim, same
+    // ticks, so the eastroute test can replay the game's own route to the band instead
+    // of teleporting to it.
+    let mut w = walker::walk_spawn_to_the_band(&iso);
 
     // Leg 10 (REAL): the band east to its true end. The disc's band floor 10.34 runs x 44..55.6
     // (z −209.06..−206.31: obj_turb1_walkway01 x 43.2..49.3 + obj_turb2_walkway01 x 49.3..56.1
@@ -946,6 +267,57 @@ fn walk_the_whole_mission_from_the_start_to_the_0d_handoff() {
         assert!(bottom.map_or(false, |y| (9.3..9.9).contains(&y)),
             "staircase01's bottom step moved (expected 9.52..9.68 [D eastclimb3]), got {bottom:?}");
     }
+    // Sister 5b (level-0c-east-climb: the stair SLOT — the decisive missing link of the climb
+    // chain). The turb4 flights are horizontally disjoint: staircase02 (plc36) tops at 8.10 at
+    // x 81.3..81.4 and staircase01 (plc35) starts at 9.45 at x 83.8..84.4 [D the eastclimb5
+    // level census this session]; between them (x 81.5..83.7, z −211..−209.5) the slot is EMPTY
+    // down to the lower flight's steps 1.75..3.75 [D the eastclimb6 fine map]. Crossing needs a
+    // 2.4 m jump that GAINS 1.35 — beyond the 0.78 apex [M player.rs]. A surface appearing in
+    // the slot band reopens the climb.
+    {
+        let sim = w.scene.sim.as_ref().unwrap();
+        for x in [81.75f32, 82.25, 82.75, 83.25] {
+            let slot = sim.world.segment_hit([x, 9.3, -210.0], [x, 6.5, -210.0]);
+            assert!(slot.is_none(), "a surface appeared in the stair slot at ({x}, −210.0) 9.3..6.5; the east climb reopened");
+        }
+        let top36 = sim.world.segment_hit([81.35, 8.5, -211.25], [81.35, 7.6, -211.25]).map(|(t, _)| 8.5 - 0.9 * t);
+        assert!(top36.map_or(false, |y| (7.9..8.3).contains(&y)),
+            "staircase02's top step moved (expected 8.10 [D eastclimb5]), got {top36:?}");
+    }
+    // Sister 5c (the band deck is an ISLAND — the flood-fill over the sim's own collision, 0.25
+    // grid, directed edges, step law 0.55 AND 0.80 [S the law itself; the island holds at both]):
+    // the gate deck + staircase01's deck form one component unreachable from the east ground, the
+    // yard, the west band, the corridor, the gallery and the catwalks [D eastclimb7 this
+    // session]. The remaining crossing attempts, each beyond the pinned apex:
+    // (a) the west band's east end 56.08 → turb3_walkway04's deck 66.5 — 10.4 m at deck height
+    //     (the [L 2026-10-30 fresh boot] drop at x 63.4 already pinned the walk-off);
+    // (b) the north-strip mezzanine (10.85, z −206.0..−205.1) breaks at x 54..64.5 [D eastclimb6
+    //     row −206.0: 6.17 ground, no 10.85 floor];
+    // (c) crates4 (tops 7.31/8.31) → walkway02's dead south end 10.37 — 3.1 m + 2.06 up.
+    {
+        let sim = w.scene.sim.as_ref().unwrap();
+        // (a) widened: the whole band-height strip over the chasm's west half.
+        for x in [57.0f32, 59.0, 61.0, 63.0, 65.0] {
+            let gap = sim.world.segment_hit([x, 11.9, -207.5], [x, 8.0, -207.5]);
+            assert!(gap.is_none(), "band-height floor appeared over the chasm at ({x}, −207.5); the east climb reopened");
+        }
+        // (b) the north strip's break: the west mezzanine's 10.85 ends at x 53.5 and the next
+        //     north-strip surface is room02's isolated 10.17 sliver [58.9..63.3, −206.1..−205.1
+        //     [D eastclimb5 plc9]] — nothing spans x 55..58.5 at 9.5..11.5, so the north route
+        //     never bridges the chasm (the sliver itself is an island: 5+ m to the west patch,
+        //     and the flood at 0.80 leaves it unconnected [D eastclimb7]).
+        for x in [55.0f32, 56.5, 58.0] {
+            let gap = sim.world.segment_hit([x, 11.5, -205.7], [x, 9.5, -205.7]);
+            assert!(gap.is_none(), "north-strip mezzanine floor appeared at ({x}, −205.7) 9.5..11.5; the east climb reopened");
+        }
+        // (c) the crates4 air gap: no floor 9.4..10.2 at z −229.0/−228.0, x 93..95.
+        for z in [-229.0f32, -228.0] {
+            for x in [93.0f32, 94.0, 95.0] {
+                let gap = sim.world.segment_hit([x, 10.2, z], [x, 9.4, z]);
+                assert!(gap.is_none(), "a surface appeared in the crates4 air gap at ({x}, {z}) 9.4..10.2; the east climb reopened");
+            }
+        }
+    }
     w.walk_to(Wp::new(95.0, 7.3, -209.5).r(1.2), "the gate's ground spot under the band");
     // Sister 6: the gate does NOT fire from the ground (the east-route report's probe: Bond at
     // (95.0, 7.3, −209.5), 120 use pulses — no level_exit): the trigger quad is at y 11.25..13.98
@@ -956,7 +328,15 @@ fn walk_the_whole_mission_from_the_start_to_the_0d_handoff() {
     // STAND-IN (now ONLY the east climb): lift Bond from the east ground onto the band deck
     // above the same spot — obj_turb5_walkway02's deck 10.34 at (95, −209.5) [D plc44 x
     // 92.38..95.31, y 10.16..11.17, z −227.26..−206.31; the scan z −209.5 x 95.0 = 10.34 [D
-    // eastclimb3]]. The unpinned link is the climb itself — live check in the report.
+    // eastclimb3]]. The deck is a COLLISION ISLAND pinned by sisters 5b/5c: the disc's own
+    // static data connects NOTHING to it (the turb4 stair flights are disjoint with an empty
+    // slot between; the band strip gaps 10.4 m over the chasm; the mezzanine strips break; the
+    // crates4 gap is 3.1 m + 2.06), no mover serves it (no lift kind on 0c [D kind census]; the
+    // 8 SSs, 2 doors, 2 ScriptPlayers are west-side [D audit §6]; ladders #164/#495 west [D];
+    // the five graple_pulley points elsewhere [D #308/346/500/508/511]), and the game's own nav
+    // patrols the east band (G3, 10.34) and the east ground (G4, 6.17) as SEPARATE paths with
+    // no links [D the 0c nav dump]. Live checks in the report settle whether the REAL game has
+    // a dynamic the parse cannot see.
     {
         let sim = w.scene.sim.as_mut().unwrap();
         sim.bond.pos = [95.0, 11.3, -209.5];
@@ -972,7 +352,13 @@ fn walk_the_whole_mission_from_the_start_to_the_0d_handoff() {
             "the climb stand-in must land on the band deck at (95, −209.5) (10.34 [D plc44]), got pos {p:?} under {under:?}");
     }
     eprintln!("[0c] the ground route walked + the climb stand-in — on the band at the gate steps");
-    w.walk_to(Wp::new(96.0, 11.2, -209.3).r(1.0), "the gate plane");
+    w.walk_to(Wp::new(96.8, 11.2, -209.6).r(0.4), "the gate plane");
+    {
+        let sim = w.scene.sim.as_ref().unwrap();
+        eprintln!("[0c] at the gate: alarm chs 0x60-63 = {} {} {} {}, key ch 0x1c = {}, mission state 11 = {:?}",
+            sim.drones.channels.on(0x60), sim.drones.channels.on(0x61), sim.drones.channels.on(0x62), sim.drones.channels.on(0x63),
+            sim.drones.channels.on(0x1c), sim.drones.mission.states.get(11).map(|s| s.iter().map(|x| x.to_string()).collect::<Vec<_>>().join(",")));
+    }
     // The E press: USE-activated LOAD_LEVEL [M 0x1a5170 case 0x1d → 0x1b2318:111].
     let mut loaded = false;
     for _ in 0..60 {
@@ -1007,52 +393,16 @@ fn walk_the_whole_mission_from_the_start_to_the_0d_handoff() {
         w.total_ticks, w2.total_ticks);
 }
 
-/// Fire the held weapon at a static point through the real trigger path (the walker's aim loop;
-/// kept local to keep walker.rs additive).
-fn shoot_at(w: &mut Walker, target: [f32; 3], range: f32, max_ticks: u32, _label: &str, done: &dyn Fn(&nf_view::scene::Sim) -> bool) -> bool {
-    let start = w.total_ticks;
-    let mut last_tap = 0u32;
-    loop {
-        if done(&w.scene.sim.as_ref().unwrap()) { return true; }
-        if w.total_ticks - start >= max_ticks { return false; }
-        {
-            let sim = w.scene.sim.as_ref().unwrap();
-            let bp = sim.bond.pos;
-            let eye = bp[1] + sim.bond.eye - sim.bond.crouch_drop;
-            let dx = target[0] - bp[0];
-            let dz = target[2] - bp[2];
-            let dy = target[1] - eye;
-            if (dx * dx + dy * dy + dz * dz).sqrt() > range { return false; }
-            let desired = dx.atan2(dz);
-            let err = walker::wrap_pi(desired - sim.bond.yaw);
-            let want_pitch = (dy / walker::dxz(bp, target).max(0.5)).atan() / std::f32::consts::FRAC_PI_2;
-            let perr = want_pitch - sim.bond.pitch;
-            let on_target = err.abs() < 0.008 && perr.abs() < 0.012 && w.total_ticks - last_tap > 15;
-            let trigger = on_target;
-            if trigger { last_tap = w.total_ticks; }
-            let input = if trigger {
-                nf_game::player::Input { aiming: true, ..Default::default() }
-            } else {
-                nf_game::player::Input {
-                    turn: err.clamp(-0.08, 0.08),
-                    look: perr.clamp(-0.08, 0.08),
-                    aiming: true,
-                    ..Default::default()
-                }
-            };
-            w.scene.sim.as_mut().unwrap().step_bond(input, trigger, false, false);
-        }
-        w.total_ticks += 1;
-        if w.top_up_health { w.scene.sim.as_mut().unwrap().drones.health.health = 100.0; }
-    }
-}
 
 /// Sister (ladder-0c): the 0c's OTHER ladder, #495 `Ladder` (−6.42, 1.0, −177.39, yaw −0.2618,
 /// mesh bounds x ±0.204 / y 0..2.0 / z degenerate [D placement #495 + its map object]) — the same
 /// walk-in grab + climb through the real input path, on the flat west ground (floor ~0.0 [D
-/// probes]; the small 1.936 ledge sits ~0.9 east of the plane). The stand-in: Bond placed on the
-/// west ground — the ported route never crosses the yard's west edge (the walkreal's route stand-
-/// ins are all documented in the header) — the walk and the climb after it are real input.
+/// probes]; the small 1.936 ledge sits ~0.9 east of the plane). The placement below is a
+/// MEASUREMENT SPOT, not a route stand-in: the test's subject is the ladder grab/climb classes
+/// ([M 0x1953f4's DEFAULT arm + 0x196118/0x196310]) at #495's own plane, not the route to the
+/// ladder — the walkreal route never crosses the yard's west edge (the walkreal's route stand-ins
+/// are all documented in the header), so the only honest setup is Bond on the west ground beside
+/// the ladder; the walk-in and the climb after it are real input.
 #[test]
 fn ladder495_walk_grab_and_climb_to_the_top() {
     let iso = iso();
@@ -1063,6 +413,17 @@ fn ladder495_walk_grab_and_climb_to_the_top() {
         let sim = w.scene.sim.as_mut().unwrap();
         sim.bond.pos = [-7.6, 1.1, -176.9];
         sim.bond.vel = [0.0; 3];
+    }
+    {
+        let sim = w.scene.sim.as_ref().unwrap();
+        // Sister (the measurement spot's ground truth): the west ground's floor ~0.0 under the
+        // spot [D probes] — if it moves, the measurement spot re-derives (the climb asserts
+        // below key on the mesh's own top 2.0 [D] and climb_top 2.87 [M 0x196118], both
+        // floor-independent, but the grab approach's walk-in starts here).
+        let f = sim.world.segment_hit([-7.6, 1.1, -176.9], [-7.6, -2.0, -176.9])
+            .map(|(t, _)| 1.1 - 3.1 * t);
+        assert!(f.map_or(false, |y| (-0.3..0.4).contains(&y)),
+            "the west ground under the #495 measurement spot moved (floor ~0.0 [D probes]), got {f:?}");
     }
     w.wait(20);
     eprintln!("[0c] the #495 stand-in — the west ground (floor ~0.0 [D probes])");
@@ -1102,3 +463,4 @@ fn ladder495_walk_grab_and_climb_to_the_top() {
     assert!(done, "the #495 climb never dismounted past its mesh top 2.0 [D]");
     eprintln!("[0c] the #495 ladder climbed for real to y {max_y:.2}");
 }
+

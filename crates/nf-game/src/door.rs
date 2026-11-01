@@ -652,6 +652,14 @@ impl Doors {
         // `update` — matching the disassembly's call structure. (A-11b: removed the `react_to_hit` call that
         // was reversing CLOSING→OPENING when Bond stood near the hinge, preventing the close.)
         if self.list[i].state & 0x18 != 0 {
+            // NF_DOORTRACE=1 per-tick diagnostic (level-0b-waiting-room-doors): a moving door's
+            // (index, state, pos01, dir, speed, flags) each tick, so a stalled swing shows its
+            // last-advancing tick and the gate that stopped it.
+            if std::env::var_os("NF_DOORTRACE").is_some() {
+                let d = &self.list[i];
+                eprintln!("[doortrace] #{} f{} state {:#x} pos01 {:.4} dir {:.1} speed {:.4} flags {:#x}",
+                    i, frame, d.state, d.pos01, d.dir, d.speed, d.flags);
+            }
             self.interp(i, true, channels, frame, &mut sounds);
         }
         let d = &self.list[i];
@@ -752,9 +760,12 @@ impl Doors {
     /// `Player_Collision` 0x194df0's substate arms]: for every mover × every door (the ForcedList is
     /// global — `Collide_Pick` 0x1eb320:369-375 — no cel filter), the LIVE world sphere (`obj+0x80`,
     /// rebuilt by the moved pass after `Door_Interp` [M 0x1336f8; the port's `transform(matrix,
-    /// sph_centre)`]): `sqdist(centre, closest point on the pick capsule, t clamped to [0,1]) <
-    /// (1.5·r_door + r_pick)²`. On hit, the contact forwards to the door's `obj+0xD0` (+0x58 = the
-    /// hitter) [M `Collide_Update` 0x1ea398:160-233]. Returns the `Door_SetState` sounds.
+    /// sph_centre)`]): the closest point on the pick capsule (A..B = hittest+0x20..0x3C), then
+    /// `sqdist(centre, closest) < (1.5·r_door + r_pick)²` with r_pick = hittest+0x8C [M :160,164,166 —
+    /// the scratch radius `obj+0x8C · 1.5` plus `hittest+0x2C-of-16 = +0x8C`, the capsule radius slot
+    /// `BLData+0x7cc`: 0.55 on the walk/default arm, 0.275 on the climb 0/6 arm [M 0x194df0:316/:204]].
+    /// REVERT of the level-0b-waiting-room-doors pick change (the door's radius alone): that law is
+    /// the 0x200/0x201 arm [M 0x1eae80:91-107], not the player's 0x800 arm.
     pub fn collide_step(&mut self, movers: &[DoorMover], channels: &mut Channels, frame: u32) -> Vec<SoundEvent> {
         let mut sounds = Vec::new();
         if self.contacts.len() != self.list.len() { self.contacts.resize_with(self.list.len(), Vec::new); }
@@ -763,6 +774,8 @@ impl Doors {
             let ab = [m.b[0] - m.a[0], m.b[1] - m.a[1], m.b[2] - m.a[2]];
             for i in 0..self.list.len() {
                 let c = transform(&self.list[i].matrix, self.list[i].sph_centre);
+                // 1.5·r_door + r_pick [M 0x1eae80:160,164,166 — the 0x800 arm; r_pick = the mover's
+                // hittest+0x8C capsule radius, carried on the mover].
                 let r = self.list[i].sph.1 * 1.5 + m.radius;
                 let ab2 = ab[0] * ab[0] + ab[1] * ab[1] + ab[2] * ab[2];
                 let t = if ab2 > 0.0 {
@@ -802,6 +815,10 @@ impl Doors {
                 let local = transform(&rigid_inverse(&self.list[i].matrix), hit);
                 let mut f = local[2] * self.list[i].swing;
                 if self.list[i].pos01 > 0.5 { f = -f; }
+                if std::env::var_os("NF_DOORTRACE").is_some() {
+                    eprintln!("[doorreact] #{} state {:#x} pos01 {:.4} dir {:.1} swing {:.1} lz {:.4} f {:.4} hit ({:.2},{:.2},{:.2})",
+                        i, state, self.list[i].pos01, dir, self.list[i].swing, local[2], f, hit[0], hit[1], hit[2]);
+                }
                 if state & 0x10 == 0 || f >= -HIT_EPS {
                     if state & 8 == 0 { return; }
                     if f <= HIT_EPS { return; }

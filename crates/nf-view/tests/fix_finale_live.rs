@@ -83,10 +83,10 @@ fn the_07000016_kiko_death_button_defeat_completes_the_final_mission() {
     // from, outside the volume, for the rest of the chain. U-051 ANSWERED (docs/systems/
     // hurt-volumes.md §U-051): the game's re-enable is the pit floor — the cinema's stream-8
     // single key (3.57, −22.76, −179.55) [D pack_cinema_16_live] teleported by Player_Enable
-    // 0x195498 [M] — and the survival is the PACK FLIGHT in the 861-tick window (the pit door's
-    // ch 0xf0 opens at 2180, after the pulse [D]). The port has no jetpack substate; this re-seat
-    // is the documented stand-in for that flight [S], needed only because the test fires ch 0x81
-    // from the upper floor instead of walking Bond to the pack.
+    // 0x195498 [M] — and the survival is the blast-room shelter (blast_room_shelter_16_live; the
+    // walked finale is walkreal_07000016_live). This re-seat is a test-only shortcut, needed
+    // because the test fires ch 0x81 from the upper floor and skips the shelter and the pit squad;
+    // it is not a game claim.
     let chaser = {
         let mut found = None;
         let mut re_seated = false;

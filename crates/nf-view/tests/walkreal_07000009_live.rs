@@ -253,17 +253,42 @@ fn the_alarm_switch_fails_objective_1() {
     w.top_up_health = true;
     w.wait(10);
     // An alarm switch: the 0x29 Switch objects on ch 124 (0x7C) [D placements #78/251/252/253/
-    // 262/263/264]. Take the first, stand Bond beside it (a teleport to reach the spot — the press
-    // itself is the real input path), aim, and pulse E.
+    // 262/263/264]. Take the first, WALK to it (level-09-alarm-switch-walk: the spawn -> the
+    // stair base -> across the lobby, the walked legs of walk_tower_a_start_to_finish), aim,
+    // and pulse E. No teleport.
     let spot = {
         let sim = w.scene.sim.as_ref().unwrap();
+        for (i, s) in sim.drones.useobjs.switches.iter().enumerate() {
+            if s.ch == 124 { eprintln!("[09-alarm] switch[{i}] gate {} at {:?}", s.gate, s.pos); }
+        }
         let s = sim.drones.useobjs.switches.iter().find(|s| s.ch == 124 && s.gate == 0)
             .expect("an alarmswitchplayer on ch 124 with no gate [D]");
         s.pos
     };
+    assert!(cycle_to_lethal(&mut w), "the P2K (0x2, 7+41) is in Bond's 09 owned set — the K5 darts the load opens on damage nothing [M 0x13fff0:269-306]");
+    walk_nav_clearing(&mut w, [19.79, -376.68, 30.37], "the stair base", 1.4);
+    walk_nav_clearing(&mut w, [-18.4, -368.8, 27.5], "up the stairs and across the lobby", 1.2);
     {
-        let sim = w.scene.sim.as_mut().unwrap();
-        sim.bond.pos = [spot[0] + 0.9, spot[1], spot[2]];
+        let sim = w.scene.sim.as_ref().unwrap();
+        assert!(!sim.drones.channels.on(0x61) && !sim.drones.channels.on(0x7c) && !sim.drones.channels.on(0x7d),
+            "the walk to the switch must not raise the alarm (obj 1) before the press");
+    }
+    // The final leg walks the nav graph to the switch with NO clears: clear_live_guards chases
+    // ever_seen guards across floors (the first walked runs dragged Bond down to the car park
+    // mid-leg and the dxz-only arrival then "reached" the switch from 8 units below it), and the
+    // lobby leg above already left the beat cleared.
+    w.walk_nav_to(spot, "the alarm switch", 0.95);
+    assert!(w.try_walk_to(Wp::new(spot[0], spot[1], spot[2]).r(0.95), "the alarm switch final approach"),
+        "the walk must reach the ch-124 switch at {spot:?} — Walker movement only, no sim.bond.pos writes");
+    {
+        let sim = w.scene.sim.as_ref().unwrap();
+        let p = sim.bond.pos;
+        let d = dxz(p, spot);
+        eprintln!("[09-alarm] walked to ({:.2},{:.2},{:.2}); switch at {:?}; final dxz {d:.2}", p[0], p[1], p[2], spot);
+        assert!((p[1] - spot[1]).abs() < 2.0, "the walked position must be on the switch's floor (dy {:.2} — a dxz-only arrive lands underneath, 8 units down)", p[1] - spot[1]);
+        assert!(d < 1.4, "the walked position must be within the press reach of the switch (dxz {d:.2})");
+        assert!(!sim.drones.channels.on(0x61) && !sim.drones.channels.on(0x7c) && !sim.drones.channels.on(0x7d),
+            "the alarm is still off when Bond arrives — the E press below is the ch 0x7C writer");
     }
     let mut fired = false;
     for k in 0..120 {

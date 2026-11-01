@@ -1,28 +1,22 @@
-//! walkreal-c: 0700001b (the space station) walked with the player's own movement — no
-//! `bond.pos` writes after the spawn.
+//! walkreal-c: 0700001b (the space station) walked with the player's own input — no `bond.pos`,
+//! substate or channel writes after the load in the full walk (`walk_arrival_to_drakes_defeat`).
 //!
-//! UPDATED (level-1b-complete) — the mapped structure (probe1b_route.rs +
-//! probe1b_rover.rs): the shuttle-arrival NIS holds Bond ~2100 ticks, then the spawn platform
-//! (x 15–24, z 1–7) and the EAST HUB DECK (x 8–28, z −8..2, floor ≈ −2.4) are walked. The
-//! central pit is an east-west SLIT at z ≈ 0 (±0.9) — the deck has no floor there — and an
-//! island (x 1–3, z −2..1) sits inside it, ~4 m west of the deck's edge over the void. On-foot
-//! the slit is uncrossable; the game crosses it with the scripted zero-G float: the zone script
-//! fires the 0x4b control event and `C_CHCHZEROG_Handler` 0x216388 answers
-//! `Player_ChangeSubState(glb_players, 9)` (msg 0x40 query nonzero) [M 0x216388:10-17], and
-//! `Player_ZeroG` 0x192ab0 floats Bond. **The port has no 0x4b → substate-9 path** (SS_ZEROG_9
-//! is only set by tests; no C_CHCHZEROG handler exists), so the port's float runs in the walk
-//! substate and STALLS at the island's east face (4.98, −1.62, 0.00) — the walk's reached
-//! blocker. West of the island (the Drake arena, x ≈ −7.3) no collision floor exists until the
-//! fight materializes it (unverified — a live check).
+//! The station is a zero-g level from the start: the p3 == 2 spawn enters substate 8 [M
+//! Player_Init 0x1910f8 :160-165] and nothing in ACTION.ELF leaves it on this level. The mission
+//! never needs the shaft's west side: the first wave's death raises the launch order, the eight
+//! console screens are shot from floats inside the hangar, the disarm chain opens the fight gate
+//! and Drake closes in through the float (the walk's doc comment has the [D]/[M] chain).
+//!
+//! `C_CHCHZEROG_Handler` 0x216388 is a cheat-menu checkbox handler (the C_CHCH* family the menu
+//! dispatch `Handler_HandleMessage` 0x2029e0 drives — MUSIC, FLY, DRONES, BLIND, WEAP, HEALTH, HUD,
+//! DEBUG, COORDS, ZEROG) whose `param_4 == 0x4b` is the menu message id, not a switch channel;
+//! the port's ch-75 → substate-9 binding (scene.rs) is its own [S] model. The older legs below
+//! still force the ground substate ([S] premise) and drive ch 0x4b to reach the float from a
+//! walk — they pin port mechanisms (the deck route, the boundary wall, the iris doors), not the
+//! mission route.
 //!
 //! Enemies are DISABLED for the walk only in the walkreal sense: damage is suppressed
 //! (top_up_health, the walker's allowance). Opt-in via NF_ISO (the slim ISO is enough).
-//!
-//! UPDATE (audit-fix-abseil-zerog, 2026-10-19): the p3 == 2 spawn now ENTERS substate 8 [M
-//! Player_Init 0x1910f8 :160-165 — the port followed the wrong start]. The walking legs force
-//! the ground substate back with an [S] premise: no decompile path from 8 to a ground substate
-//! after the arrival NIS is pinned (the only proven 1b change is the slit zone's 0x4b → 9 [M
-//! 0x216388], past these routes) and the port wires no substate-changing handler.
 
 #[path = "common/walker.rs"]
 mod walker;
@@ -111,56 +105,190 @@ fn the_slit_float_carries_bond_west_without_a_fall() {
     }
 }
 
-/// The full chain (solved this task — the walk is UN-IGNORED): the deck → the slit float → the
-/// westward crossing → the fight gate → Drake spawns (spawner #187, trigger 10 [D]) → the defeat
-/// through the real fire path → the defeat NIS → ch 0x0b + ch 100 → MissionState 6 → 0x0730001b
-/// [M 0x182c60:114-116].
-///
-/// THE CROSSING IS NOT A SCRIPTED CARRY — it is the boundary's own OPEN Z-END, on real-input
-/// float. The prior premise ("the game's crossing past x 4.43 must be a scripted carry", the
-/// SP#211 chain as the candidate) is REFUTED on the disc:
-/// - The whole 0700001b script archive carries exactly ONE player-touching event row: NIS
-///   0x06000a20's stream-4 ev05 (`Drone_EnableAll`) [D sweep of every kind-7 entry, decoded
-///   through the 5,263-stream-validated parser]. No event 4 (`Player_Disable`), no event 6 (the
-///   only player-matrix writer — `Script_EventHandler` 0x1d94c0 case 6 anchors `SCRIPTINFO+0x40`
-///   at the player/entity matrix, and `Script_Free` 0x1da880 re-enables the player AT that matrix
-///   under flag 0x100) fires anywhere on this level, so the script system can never move Bond.
-/// - The SP#211 chain decodes clean [D]: 0x060007fd (len 4780) = one sky entity (glist 0x02000823,
-///   type 31) on a 240-key track (1051,174,527)→(−187,158,52) + an event-3 hold pair + the engine
-///   sound — the station-exterior fly-by; 0x060008f0 (len 470) = 8 sky entities (0x02000919..20)
-///   scattering from (144,26,21) + SUBs 0x06000971 (t384-391: a type-0xe1 destroy prop + ev0x0d
-///   [75,1]@t2/[75,0]@t4) and 0x0600096e (t392-399: the same with ch 74) + the fight gate
-///   ev0x0d [10,1] at t400. No player-position write, no attach, no teleport: the chain pulses
-///   the float channel and opens the gate, and the float physics do the rest.
-/// - The boundary box (plc #128 OBJECT_Boundary_1, mat 0x40) is sealed on THREE sides only
-///   [D segment probes on the ported collision]: the west wall at x 4.433 spans y −16.56..+16.74
-///   for z −20..+20 (present at z ±20, ABSENT at z ±22), the shaft's top slab at y 16.74 (normal
-///   down, covers x 4.5..24 — no chimney at the wall) and the pit floor at y −16.56. There are NO
-///   z-facing faces anywhere at x 4.6..8 between z 12 and 30 (north→south rays at y 0/9.45/−5/−10
-///   all pass): the box's z-ends are OPEN. Past z ≈ ±21 the wall simply ends.
-/// - The float body cannot filter the wall [M re-verified this task: `Player_Collision` 0x194df0's
-///   default arm (substate 9) writes the shape word +0x7d4 = 0x800 and never the filter word
-///   +0x7d8 (only substate 15 zipline writes 0x1c0 :382), so `Collide_Filter` 0x1ed888's
-///   `(surf & 0x40) && (flags & 0x800)` reject can never fire for the body] — so the crossing
-///   goes AROUND the z-end: rise off the deck band, drift north inside the shaft past z 21,
-///   cross west at z ≈ 22.8 (no wall, no slab, no floor there [D]), come south over the void,
-///   and hover above the island. Every leg is the port's own float under real thrust input
-///   [M Player_ZeroG 0x192ab0: the ±0.05-smoothed thrusters], steered by the same closed loop
-///   the walk legs use (turn = the clamped yaw error [M the float's action-0 yaw rate]).
-///
-/// The two documented stand-ins stay (their disc routes are data-dead above the unwritten ch 194
-/// [D sweep — 194 has NO writer in the archive]): the ch 30 + ch 46 drive that fires SP#211's
-/// trigger, and the ch 0x0a drive for the fight gate (0x060008f0's own t400 write — the chain is
-/// played, so on the port it lands too; the drive only makes the test independent of its timing).
-/// The zero-G ENTRY itself is the disc's own ch-75 pulse on the ported `C_CHCHZEROG` handler
-/// [M 0x216388:10-17] — no raw ch-0x4b poke anywhere.
-///
-/// Evidence trail for the geometry: the sister `the_boundary_wall_stops_the_float_and_passes_bullets`
-/// still pins the wall body-solid at the slit's z band (a thrust at z 0 stalls at 4.98 = the wall
-/// plane + the 0.55 capsule); this walk pins the z-end route past it. Both hold together: the wall
-/// blocks at |z| ≤ 20 and is absent beyond ±22 [D probes].
+/// The game's own hit volumes for the walk's aim: the `Data` view the drone pass hands
+/// `Scripts::held_hit_targets` (the `SP_GetHitDamage` 0x1dc5f8 read set [M]).
+fn data_of(sim: &nf_view::scene::Sim) -> nf_game::drone::Data<'_> {
+    nf_game::drone::Data {
+        tables: &sim.tables, props: &sim.props, scripts: &sim.scripts, weapons: &sim.weapons,
+        world: &sim.world, level: sim.level, sequences: &sim.seqs, skins: &sim.skins,
+        skeletons: &sim.skeletons, nav: &sim.nav, covers: &sim.covers, tuning: &sim.tuning,
+        hitboxes: &sim.hitboxes, volumes: &sim.volumes, sfx: sim.sfx.as_ref(), models: &sim.models,
+        surfaces: sim.surfaces.as_ref(), voices: sim.voices.as_deref(), difficulty: sim.drones.difficulty,
+        ai_points: &sim.ai_points,
+    }
+}
+
+/// The float's thrusters toward `at`: the strafe / lift / forward inputs are the body-axis
+/// components of the offset (the zero-g move is `pos += local·rows` [M 0x193600:284-295]), so a
+/// proportional input flies straight at the point without turning (the 0.04 ease damps it).
+fn thrust_to(sim: &nf_view::scene::Sim, at: [f32; 3]) -> Input {
+    let p = sim.bond.pos;
+    let d = [at[0] - p[0], at[1] - p[1], at[2] - p[2]];
+    let m = sim.bond.zero_g_rot;
+    let dot = |a: [f32; 3]| a[0] * d[0] + a[1] * d[1] + a[2] * d[2];
+    Input {
+        strafe: (dot(m[0]) * 0.15).clamp(-1.0, 1.0),
+        lift: (dot(m[1]) * 0.15).clamp(-1.0, 1.0),
+        forward: (dot(m[2]) * 0.15).clamp(-1.0, 1.0),
+        ..Default::default()
+    }
+}
+
+/// Kill every live astronaut (skin 0x05000078) with the walker's real fire, until `done` or
+/// none is left.
+fn kill_astronauts(w: &mut Walker, hold: [f32; 3], done: impl Fn(&nf_view::scene::Sim) -> bool, cap: u32) {
+    let mut n = 0u32;
+    while n < cap {
+        let target = {
+            let sim = w.scene.sim.as_ref().unwrap();
+            if done(sim) { return; }
+            sim.drones.list.iter().position(|d| d.present && !d.corpse && d.enabled && d.health > 0.0 && d.skin & 0xffff == 0x78)
+        };
+        match target {
+            Some(di) => { let _ = w.shoot(di, "astronaut"); n += 1; }
+            None => { let input = thrust_to(w.scene.sim.as_ref().unwrap(), hold); w.tick(input, false); n += 1; }
+        }
+    }
+}
+
+/// The station Bond floats at to shoot console `k`'s screen: every screen is bullet-visible from
+/// (32, −1.7, 0) [the probe1b_chanmap los_1b_screens scan of the port's bullet segments]; the far
+/// pairs are shot from nearer floats — 7/8 from (46, −7, 0), 1/2 from (20, −2, 0) — the harness's
+/// choice of where to fly (any screen in bullet sight within 20 u is fired at on the way).
+fn console_station(k: u32) -> [f32; 3] {
+    match k { 7 | 8 => [46.0, -7.0, 0.0], 1 | 2 => [20.0, -2.0, 0.0], _ => [32.0, -1.7, 0.0] }
+}
+
+/// The deadline order: the missiles' p0 scripts end at state-1 ticks 1799 (3/4/5), 2399 (6/8)
+/// and 3299 (1/2/7) [D P0_LEN — space_missile.rs], and state 2 reads the console channel then
+/// [M 0x1aa25c].
+const CONSOLE_ORDER: [u32; 8] = [3, 4, 5, 6, 8, 7, 1, 2];
+
+/// Shoot the eight console screens from the float stations: each console UI script carries three
+/// holds (event 3 on streams 1/2/3 [D the probe1b_scripts decode]) and resumes from each on 20
+/// bullet damage — one rifle hit per hold [M SP_UnPause 0x1dca58 /
+/// SP_GetHitDamage 0x1dc5f8], then writes the console channel [D stream 4 ev0x0d]. The aim is the held
+/// script's largest hit sphere (the game's own damage volume — held_hit_targets); the trigger is
+/// tapped in bursts: the rifle's clip recharges (the gun_1b probe: 12 rounds per shot, ~1 round
+/// per 4 ticks after a ~100-tick pause), so the walk waits for three shots' worth before a burst.
+/// Returns the frame each console latched.
+fn shoot_consoles(w: &mut Walker) -> Vec<(u32, u32)> {
+    let mut latched = Vec::new();
+    let mut last_shot = 0u32;
+    let mut in_burst = false;
+    for tt in 0..6000u32 {
+        let (input, fire) = {
+            let sim = w.scene.sim.as_ref().unwrap();
+            for &k in &CONSOLE_ORDER {
+                if sim.drones.channels.on(k) && !latched.iter().any(|&(c, _)| c == k) { latched.push((k, sim.drones.frame)); }
+            }
+            let Some(&k) = CONSOLE_ORDER.iter().find(|&&k| !sim.drones.channels.on(k)) else { break };
+            let pi = sim.drones.scripts.players.iter().position(|p| p.gate as u32 == 30 + k && p.hit_points > 0.0)
+                .expect("the console's UI script player (gate 30 + k, hit points 20 [D SP#213-220])");
+            let tg = sim.drones.scripts.held_hit_targets(&data_of(sim));
+            let best = tg.iter().filter(|x| x.0 == pi).max_by(|a, b| a.2.partial_cmp(&b.2).unwrap()).map(|x| x.1);
+            let station = console_station(k);
+            let mut inp = thrust_to(sim, station);
+            let mut fire = false;
+            if let Some(c) = best {
+                let (e, pe) = walker::zero_g_errs(sim, c).unwrap();
+                inp.turn = e.clamp(-0.08, 0.08);
+                inp.look = pe.clamp(-0.08, 0.08);
+                let clip = sim.gun.clip;
+                if clip >= 36 { in_burst = true; }
+                if clip < 12 { in_burst = false; }
+                let eye = sim.bond.head();
+                let dist = ((c[0] - eye[0]).powi(2) + (c[1] - eye[1]).powi(2) + (c[2] - eye[2]).powi(2)).sqrt();
+                let los = match sim.world.segment_bullet(eye, c) { None => true, Some(t) => (1.0 - t) * dist < 0.4 };
+                let near = walker::dxz(sim.bond.pos, station) < 2.5 || (los && dist < 20.0);
+                fire = near && in_burst && e.abs() < 0.006 && pe.abs() < 0.006
+                    && tt.saturating_sub(last_shot) >= 12 && tt % 6 == 0;
+            }
+            (inp, fire)
+        };
+        if fire {
+            let c0 = w.scene.sim.as_ref().unwrap().gun.clip;
+            w.tick_fire(input);
+            if w.scene.sim.as_ref().unwrap().gun.clip < c0 { last_shot = tt; }
+        } else {
+            w.tick(input, false);
+        }
+    }
+    let sim = w.scene.sim.as_ref().unwrap();
+    for &k in &CONSOLE_ORDER {
+        if sim.drones.channels.on(k) && !latched.iter().any(|&(c, _)| c == k) { latched.push((k, sim.drones.frame)); }
+    }
+    latched
+}
+
+/// The launch order is the FIRST WAVE's death, on disc data alone: the arrival script
+/// 0x0600085c writes ch 190/191 [D stream 6/9 ev0x0d], ch 191 gates SP#148 (0x060009a4 [D p9])
+/// whose streams write ch 115 (spawner #163's trigger [D p4 = 0x73]) and ch 193 [D streams 1/3];
+/// spawner #163's DONE channel is ch 194 [D p6 = 0xc2] — written when its spawned wave is dead
+/// [M DroneSpawner 0x137e68:126-143, the `p6 != 0` wait] — and AND #202 folds ch 193 & 194 into
+/// ch 19 [D p0 = 0x13, p1/p2 = 0xc1/0xc2], the missiles' launch-order gate [D p7 = 19; M
+/// 0x1aa1c8]. The older "ch 19 has no disc writer" reading only swept the scripts. Sister: with
+/// the wave alive, ch 194 / ch 19 stay off and every missile sits in state 0.
 #[test]
-#[ignore = "THE SHAFT BOX IS SEALED FOR THE PLAYER BODY (this task's conclusion, every face probed): the west wall x 4.433 (plc #128 OBJECT_Boundary_1, m40, y −16.56..+16.74, z ±20.4 — body-solid [M Player_Collision 0x194df0's default arm: shape 0x800, the filter word +0x7d8 stays 0 for substate 9, so Collide_Filter 0x1ed888's 0x40 reject can never fire]), the top slab y 16.74 (normal down, x 4.5..24 — no chimney), the pit floor y −16.56, and END-WALLS at z ±20.40 (m40, both directions [D] — the_end_walls_seal_the_shaft_box pins them) whose only openings are deck-level windows 0.8..1.0 tall [D 0.2-step scans: x 7.5/8.0 open y −1.8..−1.0, x 10.0 −2.2..−1.2] — narrower than the float body (~1.58 tall [M the default arm's capsule A = pos+up·0.55, B = pos+up·(+0x7CC−cc), r 0.55; cc 1.0347 [L ee_start_05]]). The crossing is NOT a scripted carry: the whole 0700001b archive carries ONE player-touching event row (0x06000a20 s4 ev05 Drone_EnableAll) [D sweep through the 5,263-stream-validated parser] — no event 4/6 anywhere, so the script system never moves Bond (event 6 anchors SCRIPTINFO+0x40 at the player [M 0x1d94c0 case 6] and Script_Free 0x1da880 re-enables the player AT it under flag 0x100 — never armed here); the SP#211 chain decodes clean [D: 0x060007fd = the sky fly-by (one entity, 240 keys, 4780 ticks), 0x060008f0 = 8 sky entities + SUBs 0x06000971/0x0600096e (type-0xe1 props + ev0x0d [75,*]@t384-391 / [74,*]@t392-399) + the fight gate ev0x0d [10,1]@t400]. The pilots below walk the deck, enter the float on the chain's own ch-75 pulse, rise, and drift south past the deck's corner — then wedge at the end-wall inside the window band (min z −19.85 = −20.40 + 0.55). LIVE CHECKS: (1) fresh boot 0700001b, float at the slit — does the game's Bond pass x 4.43 westward at all, and in which substate? (2) gdbwatch the float substate's HITTEST (+0x7CC/+0x7D0.. and cc at obj+0xDC+0xCC) during the crossing — is the float body a DIFFERENT (smaller) shape than the walk's? (3) watch switch_channels[74] through 0x060008f0's t392-399 — the allie​s-talk line, not a carry (NDrone2_HandleTalking 0x13f688 is its only reader [D ACTION.ELF sweep]). If the live game crosses, the missing piece is the body shape/handler the port has not seen; if it does not, the level's own route is elsewhere (the mission's 1b exit may not need the arena on foot — the defeat NIS path via fix_finale already ends the mission)."]
+fn the_first_wave_kill_raises_the_launch_order() {
+    let iso = iso();
+    let mut w = Walker::new(nf_view::load(&iso, "0700001b.bin", false).unwrap());
+    w.wait_enabled(3000, "the shuttle arrival");
+    assert_eq!(w.scene.sim.as_ref().unwrap().bond.substate, SS_ZEROG_8,
+        "the p3 == 2 start is the zero-g substate 8 [M Player_Init 0x1910f8 :160-165]");
+    let mut spawned = false;
+    for _ in 0..3000u32 {
+        w.tick(Default::default(), false);
+        let sim = w.scene.sim.as_ref().unwrap();
+        if sim.drones.list.iter().any(|d| d.present && !d.corpse && d.skin & 0xffff == 0x78) { spawned = true; break; }
+    }
+    {
+        let sim = w.scene.sim.as_ref().unwrap();
+        assert!(spawned, "ch 115 (SP#148's write [D 060009a4 stream 1]) spawns the first wave [D spawner #163 p4 = 0x73]");
+        assert!(sim.drones.channels.on(115) && sim.drones.channels.on(191), "the chain's head: ch 191 → SP#148 → ch 115 [D]");
+    }
+    // Sister: the wave alive — 1500 ticks idle, no launch order.
+    for _ in 0..1500u32 { w.tick(Default::default(), false); }
+    {
+        let sim = w.scene.sim.as_ref().unwrap();
+        assert!(sim.drones.channels.on(193), "SP#148's ch 193 write lands [D 060009a4 stream 3]");
+        assert!(!sim.drones.channels.on(194) && !sim.drones.channels.on(19),
+            "sister: the live wave holds the spawner's done write [M 0x137e68:126-143] — no ch 194, no ch 19");
+        assert!(sim.drones.space_missiles.iter().all(|m| m.state == 0), "sister: the missiles wait on ch 19 [M 0x1aa1c8]");
+    }
+    let hold = w.scene.sim.as_ref().unwrap().bond.pos;
+    kill_astronauts(&mut w, hold, |s| s.drones.channels.on(19), 2400);
+    let sim = w.scene.sim.as_ref().unwrap();
+    assert!(sim.drones.channels.on(194), "the dead wave writes spawner #163's done channel 194 [D p6; M 0x137e68]");
+    assert!(sim.drones.channels.on(19), "AND #202 (193 & 194) raises the launch order ch 19 [D]");
+}
+
+/// The whole mission on real input — no position, substate or channel write after the load.
+/// The station is a zero-g level from the start (the p3 == 2 spawn enters substate 8 [M
+/// Player_Init 0x1910f8 :160-165]) and the route never needs the shaft's far side: Drake comes
+/// to Bond.
+///
+/// 1. The arrival plays; the first wave (spawner #163) attacks; killing it raises ch 194 →
+///    AND #202 → ch 19, the launch order [D — the sister test above].
+/// 2. The eight missiles leave state 0 [M 0x1aa1c8]; their p0 scripts write the console gates
+///    31..38 at t359 [D], the console UI scripts (SP#213-220, hit points 20) play and hold at
+///    t650; Bond floats to the stations and shoots the screens (20 damage resumes the script
+///    [M SP_UnPause 0x1dca58], the t682 write latches the console channel [D]) before each
+///    missile's p0 ends (state 2 reads the channel [M 0x1aa25c]) — all eight take the DISARM
+///    branch (MissileDeploy 2 [M 0x1aa2cc]).
+/// 3. Missile 1's disarm script writes ch 46 [D 0600091c @t1000] — SP#211's start (gate ch 30,
+///    console 1's UI write [D 060007e2]); the fly-by chain 0x060007fd → 0x060008f0 writes the
+///    fight gate ch 10 at its t400 [D]; spawner #187 (trigger 10 [D]) spawns Drake, who closes
+///    in through the float. The done channels 21/22/27 land → AND #139 → ch 9, objective 1 [D].
+/// 4. Bond shoots Drake (the real fire path): his death channel 14 [D #186 p12], the defeat NIS
+///    (SP#198) writes ch 0x0b [D 0x06000a20], the monitor's ch 9 & 0x0b → ch 100 → MissionState
+///    6 → 0x0730001b [M 0x182c60:114-116].
+///
+/// The walker's health allowance stays on (damage suppressed — the walkreal convention): the
+/// later waves (spawners #165-181, ch 116-120 from the missile scripts [D]) keep firing while
+/// the rifle's recharge paces the console shots, and the port's astronaut accuracy is
+/// unmeasured against the game.
+#[test]
 fn walk_arrival_to_drakes_defeat() {
     let iso = iso();
     let mut w = Walker::new(nf_view::load(&iso, "0700001b.bin", false).unwrap());
@@ -168,222 +296,63 @@ fn walk_arrival_to_drakes_defeat() {
     w.wait(120);
     {
         let sim = w.scene.sim.as_ref().unwrap();
+        assert_eq!(sim.bond.substate, SS_ZEROG_8, "the station starts in the zero-g substate [M Player_Init 0x1910f8 :160-165]");
         assert_eq!(sim.drones.mission.states[23][0], 3,
             "'Disable the missiles' shows at once (enable 0 [L], the state-0 arm [M 0x1827d8:41-54])");
         assert_eq!(sim.drones.mission.states[23][1], 1, "'Defeat Drake' hides until ch 0x09 [L record 1b obj 2]");
     }
 
-    // The mapped deck route to the slit mouth (leg 1/leg 2's nodes, real input).
-    for wp in [[20.0f32, -1.9, 1.0], [17.0, -1.9, -1.0], [13.0, -1.9, -1.0], [10.0, -1.9, -1.0]] {
-        let _ = w.try_walk_to(walker::Wp::new(wp[0], wp[1], wp[2]).r(1.2), "the deck west");
-    }
-    let _ = w.try_walk_to(walker::Wp::new(8.6, -1.9, -0.6).r(1.2), "the slit mouth");
+    // 1. The first wave → the launch order.
+    kill_astronauts(&mut w, [32.0, -1.7, 0.0], |s| s.drones.channels.on(19), 4000);
+    assert!(w.scene.sim.as_ref().unwrap().drones.channels.on(19),
+        "the first wave's death raises the launch order ch 19 [D spawner #163 p6 = 194, AND #202]");
 
-    // The zero-G float via the DISC'S OWN ACTIVATION: ch 30 opens SP#211's gate (console-1's
-    // UI-script write [D 0x060007e2 s1]) and ch 46 — SP#211's out, whose mask bit 0 IS the
-    // state-0 start trigger [M 0x1dbda8 case 0 + SP_Hit's out bit] — fires it. The missile-disarm
-    // chain that writes ch 46 on disc is data-dead above the unwritten 194 (the doc comment
-    // above), so the walk drives the two writes the way the NIS's own events do — the documented
-    // stand-in fix_finale already pins for ch 0x0a. SP#211 then plays 0x060007fd → 0x060008f0,
-    // whose own SUB 0x6000971 pulses ch 75 [D] — the ported C_CHCHZEROG entry [M 0x216388:10-17]
-    // flips the substate on the NIS's own write, no raw ch-0x4b poke anywhere.
+    // 2. The consoles, in deadline order.
+    let latched = shoot_consoles(&mut w);
+    eprintln!("[1b] consoles latched (console, frame): {latched:?}");
     {
-        let sim = w.scene.sim.as_mut().unwrap();
-        sim.drones.channels.set(0x1e, 1, sim.drones.frame);
-        sim.drones.channels.set(0x2e, 1, sim.drones.frame);
-    }
-    let mut entered = false;
-    for _ in 0..1800u32 {
-        w.tick(Input::default(), false);
-        if w.scene.sim.as_ref().unwrap().bond.substate == SS_ZEROG_9 { entered = true; break; }
-    }
-    assert!(entered, "the SP#211 chain's own ch-75 pulse enters the zero-G float [M 0x216388:10-17; D SUB 0x6000971 s2]");
-
-    // THE CROSSING — real input only, around the boundary's open z-end [D the doc comment]:
-    // the same closed-loop steer the walk legs use (turn = the clamped yaw error toward
-    // atan2(dx, dz) [M the float's action-0 yaw rate, Player_ZeroG 0x192ab0]), the lift thruster
-    // riding the body's up row [M 0x193600:284-295]. Phases: rise off the deck band, drift north
-    // inside the shaft to z ≈ 22.8 (past the wall's z-end: the wall is present at z ±20, absent
-    // at ±22 [D]), cross west past the x 4.433 plane, come south over the void, hover above the
-    // island. min_x < 4.4 is the crossing pin: with the wall body-solid at |z| ≤ 20 [M
-    // Player_Collision 0x194df0's default arm — no filter word for the float] the plane is
-    // unreachable except around its end (the sister wall test stalls at 4.98 at z 0).
-    let steer = |w: &mut Walker, tx: f32, tz: f32, lift: f32| -> Input {
         let sim = w.scene.sim.as_ref().unwrap();
-        let p = sim.bond.pos;
-        let desired = (tx - p[0]).atan2(tz - p[2]);
-        let err = walker::wrap_pi(desired - sim.bond.yaw);
-        Input { turn: err.clamp(-0.08, 0.08), forward: if err.abs() < 0.35 { 1.0 } else { 0.15 }, lift, ..Default::default() }
-    };
-    let mut min_x = f32::MAX;
-    let mut max_z = f32::MIN;
-    let mut fell = false;
-    // Rise: the proven lift pin (the walk-substate bond wedges at y −1.62 on the island's face).
-    let mut rose = false;
-    for _ in 0..900u32 {
-        w.tick(Input { lift: 1.0, ..Default::default() }, false);
-        if w.scene.sim.as_ref().unwrap().bond.pos[1] > 2.0 { rose = true; break; }
-    }
-    assert!(rose, "the float rises off the deck band under the lift thruster (the walk-substate bond wedges at y -1.62)");
-    // THE SOUTH LEG — the [D-probed deck-level route]: the boundary box's end-walls at z ±20.40
-    // carry a deck-level window at (x ≈ 7.5, y −1.6..−0.8) [D two-direction probes], the lane
-    // x 7.5 is open from z −2 to −19.5 at y −1.2 (the north lane's stub at z +8.13 has no south
-    // twin), the west leg is CLEAR at z −20.9/−21.5/−22.5 (the boundary wall's south end sits in
-    // (−20.4, −20.8] [D]), and the island's south face (z −2, top −0.7) forces the climb before
-    // the final north leg. Phases, all real input through the float's thrusters:
-    let hold = |w: &mut Walker, tx: f32, tz: f32, ty: f32| -> Input {
-        let sim = w.scene.sim.as_ref().unwrap();
-        let lift = ((ty - sim.bond.pos[1]) * 2.0).clamp(-1.0, 1.0);
-        steer(w, tx, tz, lift)
-    };
-    let mut min_x = f32::MAX;
-    let mut min_z = f32::MAX;
-    let mut fell = false;
-    // (a) south at deck level, past the deck's south-west rail (m06 z −8.13 spans y −1.6..−1.0
-    // only [D] — deck level y ≈ −0.2 clears it) and the deck's south edge (z −8), to z −9.6
-    let mut s1 = false;
-    for _ in 0..14000u32 {
-        let p = w.scene.sim.as_ref().unwrap().bond.pos;
-        if p[2] < -9.6 { s1 = true; break; }
-        let input = steer(&mut w, 7.0, -11.0, 0.0);
-        w.tick(input, false);
-        let p = w.scene.sim.as_ref().unwrap().bond.pos;
-        min_x = min_x.min(p[0]); min_z = min_z.min(p[2]);
-        if p[1] < -6.0 { fell = true; break; }
-    }
-    assert!(!fell && s1, "the float drifts south at deck level past the deck's corner (min z {min_z:.2})");
-    // (b) descend BELOW both south rails (z −8.13 band −1.6..−1.0, z −14.25 band −1.9..−0.7
-    // [D]; the capsule top at y −3.4 is −2.19, clear of both bottoms) — off the deck, void below
-    let mut s2 = false;
-    for _ in 0..8000u32 {
-        let p = w.scene.sim.as_ref().unwrap().bond.pos;
-        if p[1] < -3.3 { s2 = true; break; }
-        let input = hold(&mut w, 7.0, -11.5, -3.6);
-        w.tick(input, false);
-        let p = w.scene.sim.as_ref().unwrap().bond.pos;
-        min_x = min_x.min(p[0]);
-        if p[1] < -6.0 { fell = true; break; }
-    }
-    assert!(!fell && s2, "the float descends under the south rails (y {:.2})", w.scene.sim.as_ref().unwrap().bond.pos[1]);
-    // (c) south under both rails to z −15.5
-    let mut s3 = false;
-    for _ in 0..14000u32 {
-        let p = w.scene.sim.as_ref().unwrap().bond.pos;
-        if p[2] < -15.5 { s3 = true; break; }
-        let input = hold(&mut w, 7.5, -22.0, -3.4);
-        w.tick(input, false);
-        let p = w.scene.sim.as_ref().unwrap().bond.pos;
-        min_x = min_x.min(p[0]); min_z = min_z.min(p[2]);
-        if p[1] < -6.0 { fell = true; break; }
-    }
-    assert!(!fell && s3, "the float passes under both south rails (min z {min_z:.2})");
-    // (c2) rise into the window band y −1.2 (the end-wall window at y −1.6..−0.8 spans x ≈ 5.5..10.5 [D])
-    let mut s4 = false;
-    for _ in 0..8000u32 {
-        let p = w.scene.sim.as_ref().unwrap().bond.pos;
-        if p[1] > -1.35 && p[1] < -0.85 { s4 = true; break; }
-        let input = hold(&mut w, 8.0, -17.0, -1.2);
-        w.tick(input, false);
-        let p = w.scene.sim.as_ref().unwrap().bond.pos;
-        min_x = min_x.min(p[0]); min_z = min_z.min(p[2]);
-        if p[1] < -6.0 { fell = true; break; }
-    }
-    assert!(!fell && s4, "the float rises into the window band (y {:.2})", w.scene.sim.as_ref().unwrap().bond.pos[1]);
-    // (c3) south through the end-wall window to z −21.2
-    let mut s5 = false;
-    for _ in 0..16000u32 {
-        let p = w.scene.sim.as_ref().unwrap().bond.pos;
-        if p[2] < -21.2 { s5 = true; break; }
-        let input = hold(&mut w, 8.0, -22.0, -1.2);
-        w.tick(input, false);
-        let p = w.scene.sim.as_ref().unwrap().bond.pos;
-        min_x = min_x.min(p[0]); min_z = min_z.min(p[2]);
-        if p[1] < -6.0 { fell = true; break; }
-    }
-    assert!(!fell && s5, "the float threads the south end-wall window at deck level (min z {min_z:.2})");
-    // (d) west past the boundary plane (its south end is north of z −20.9 [D])
-    let mut crossed = false;
-    for _ in 0..8000u32 {
-        let p = w.scene.sim.as_ref().unwrap().bond.pos;
-        if p[0] < 4.4 { crossed = true; break; }
-        let input = hold(&mut w, 2.2, -21.2, -1.2);
-        w.tick(input, false);
-        let p = w.scene.sim.as_ref().unwrap().bond.pos;
-        min_x = min_x.min(p[0]); min_z = min_z.min(p[2]);
-        if p[1] < -6.0 { fell = true; break; }
-    }
-    assert!(!fell, "Bond never fell over the west void (min x {min_x:.2})");
-    assert!(crossed && min_x < 4.4,
-        "the float crosses the boundary plane x 4.433 around its south end [D plc #128; the wall is body-solid at |z| ≤ 20.4 — M Player_Collision 0x194df0 default arm; the end-wall window at (7.5, −1.2, −20.4) is the opening] — min x {min_x:.3}, min z {min_z:.2}");
-    // (e) climb over the island's south face (top −0.7 [D]), then north to the island's band
-    let mut s6 = false;
-    for _ in 0..3000u32 {
-        let p = w.scene.sim.as_ref().unwrap().bond.pos;
-        if p[1] > 0.5 { s5 = true; break; }
-        w.tick(Input { lift: 1.0, ..Default::default() }, false);
-        let p = w.scene.sim.as_ref().unwrap().bond.pos;
-        if p[1] < -6.0 { fell = true; break; }
-    }
-    assert!(!fell && s5, "the float climbs over the island's south face");
-    let mut s7 = false;
-    for _ in 0..16000u32 {
-        let p = w.scene.sim.as_ref().unwrap().bond.pos;
-        if p[2] > 0.4 { s7 = true; break; }
-        let input = hold(&mut w, 2.0, 0.4, 0.5);
-        w.tick(input, false);
-        let p = w.scene.sim.as_ref().unwrap().bond.pos;
-        min_x = min_x.min(p[0]);
-        if p[1] < -6.0 { fell = true; break; }
-    }
-    assert!(!fell && s7, "the float comes north over the arena void to the island's band");
-    let _ = rose;
-
-    // The fight gate: ch 0x0a — the documented drive of 0x060008f0's t400 write [D stream 15],
-    // whose disc route is data-dead above the gates 31..38 (see the doc comment). Drake spawns
-    // while Bond floats in the arena — the island no longer shadows him.
-    let drake = {
-        let sim = w.scene.sim.as_mut().unwrap();
-        sim.drones.channels.set(0x0a, 1, sim.drones.frame);
-        let mut found = None;
-        for _ in 0..900u32 {
-            w.tick(Default::default(), false);
-            let sim = w.scene.sim.as_ref().unwrap();
-            if let Some(i) = sim.drones.list.iter().position(|d| d.present && !d.corpse && d.skin & 0xffff == 0xba) {
-                found = Some(i);
-                break;
-            }
+        for k in 1..=8u32 {
+            assert!(sim.drones.channels.on(k), "console {k} latched by the real shot [D the console UI scripts' t682 write]");
         }
-        let i = found.expect("the gate spawns Drake (spawner #187 [D])");
-        assert!(w.scene.sim.as_ref().unwrap().drones.list[i].enabled, "the gate enables Drake (wait-switch 10 [D])");
-        i
-    };
+    }
+
+    // 3. The disarm branch, the fly-by chain, Drake.
+    let mut drake = None;
+    for _ in 0..4000u32 {
+        let sim = w.scene.sim.as_ref().unwrap();
+        if let Some(i) = sim.drones.list.iter().position(|d| d.present && !d.corpse && d.skin & 0xffff == 0xba) { drake = Some(i); break; }
+        let input = thrust_to(sim, [32.0, -1.7, 0.0]);
+        w.tick(input, false);
+    }
     {
         let sim = w.scene.sim.as_ref().unwrap();
-        let aim = w.exposed_aim(drake);
-        assert!(aim.is_some(), "Drake's aim sphere is exposed from the hover over the island, west of the boundary");
+        assert!(sim.drones.missile_deploy.iter().all(|&d| d == 2),
+            "every missile took the DISARM branch (MissileDeploy 2 [M 0x1aa2cc]): {:?}", sim.drones.missile_deploy);
+        assert!(sim.drones.channels.on(46), "missile 1's disarm script writes SP#211's start ch 46 [D 0600091c @t1000]");
+        assert!(sim.drones.channels.on(10), "the fly-by chain writes the fight gate ch 10 [D 0x060008f0 t400]");
+        assert!(sim.drones.mission.status() <= 1, "no fail on the way (status {}) [M 0x182c60]", sim.drones.mission.status());
     }
-    // The defeat through the real fire path (the Astronaut combat states run — Drake fires
-    // when his LOS clears [M 0x154618:78]; the walker's allowance tops Bond's health up).
-    assert!(w.shoot(drake, "Drake"), "Drake dies to Bond's fire from the arena float");
+    let drake = drake.expect("the fight gate spawns Drake (spawner #187, trigger 10 [D])");
+    assert!(w.scene.sim.as_ref().unwrap().drones.list[drake].enabled, "the gate enables Drake (wait-switch 10 [D])");
 
-    // The defeat NIS (SP#198, out ch 0x0e [D]): its t600 event-11 writes ch 0x0b, t720 ch 100
-    // [D 0x06000a20; M Script_EventHandler 0x1d94c0 case 0x11] → MissionState 6 → 0x0730001b
-    // [M 0x182c60:114-116]. Plays OUT (no skip) so the channel writes land.
+    // 4. The fight and the defeat NIS (plays out — no skip, so its channel writes land).
     w.skip_cutscenes = false;
+    assert!(w.shoot(drake, "Drake"), "Drake dies to Bond's fire in the float");
+    assert!(w.scene.sim.as_ref().unwrap().drones.channels.on(0x0e),
+        "Drake's death channel ch 0x0e rises with the kill [D #186 p12 = 14; M 0x1747b8/0x13e660]");
     let mut ended = false;
     for _ in 0..2400u32 {
         w.tick(Default::default(), false);
         if w.scene.sim.as_ref().unwrap().drones.mission.status() == 6 { ended = true; break; }
     }
     w.skip_cutscenes = true;
-    {
-        let sim = w.scene.sim.as_ref().unwrap();
-        assert!(sim.drones.channels.on(0x0e), "Drake's death channel ch 0x0e [D param 12 = 14]");
-        assert!(sim.drones.channels.on(0x0b), "the NIS's t600 event-11 writes ch 0x0b [D]");
-        assert!(sim.drones.channels.on(100), "the NIS's t720 event-11 writes ch 0x64 = 100 [D]");
-        assert!(ended, "the defeat NIS ends the mission (MissionState 6) [M 0x182c60]");
-        assert_eq!(sim.drones.mission.to_end, 0x0730_001b, "the station's own end code [M 0x182c60:114-116]");
-    }
+    let sim = w.scene.sim.as_ref().unwrap();
+    assert!(sim.drones.channels.on(0x09), "objective 1: AND #139 (21 & 22 & 27) → ch 9 [D]");
+    assert!(sim.drones.channels.on(0x0b), "the defeat NIS writes ch 0x0b [D 0x06000a20]");
+    assert!(sim.drones.channels.on(100), "ch 100, the mission end [M 0x1827d8:120 / D 0x06000a20]");
+    assert!(ended, "the mission ends (MissionState 6) [M 0x182c60]");
+    assert_eq!(sim.drones.mission.to_end, 0x0730_001b, "the station's own end code [M 0x182c60:114-116]");
 }
 
 /// The float-entry sister: the ch-75 rise enters the zero-G substate and the lift thruster

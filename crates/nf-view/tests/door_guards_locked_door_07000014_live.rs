@@ -133,3 +133,138 @@ fn the_unlocked_door_is_no_route_block() {
     ch.set(0x85, 1, 1);
     assert!(!sim.drones.doors.is_locked(door, &ch), "ch 0x85 unlocks it [M Door_IsLocked 0x136810:10-16]");
 }
+
+// level-14-missing-group-guards: the release's "missing" guards are the disc's own difficulty
+// tags, not a parse drop. `Drone_Create` 0x136be0 (first branch) creates NOTHING for a placement
+// whose level tag (parameter 2, level_tag+0x34) exceeds the load's difficulty —
+// `*(uint *)(param_3 + 0x34) <= (uint)GameState._40_4_` [M 0x136be0]; `_40_4_` is Ghidra's
+// DECIMAL 40 = +0x28 (0x2a3790), the port's `Drones::difficulty` (1 Operative / 2 Agent /
+// 3 00 Agent [D difficulty table 0x2df4c0; M C_SBNFDFCTY_Handler 0x216dc4]). The port mirrors
+// the gate at level_drones (drone.rs, `if param(2) > d.difficulty { return None; }`) — the
+// ghost-guards-990 mirror. [D audit :73-76/:85-87] parameter 2: #721/#722/#724/#783 = 0x1,
+// #723 = 0x3, #784 = 0x2, #785 = 0x3; group 9: #778/#780 = 0x1, #779 = 0x2, #781 = 0x3.
+// The tests load at difficulty 1 (Operative — the game's mission-start force writes +0x28 = 1
+// [M Menu_RunMiniMission 0x1ffb90:22; L the level-start snapshots' +0x28 = 1]), so exactly the
+// parameter-2 >= 0x2 set is gated — the probe's absent set. Spawners [D audit :1527/:1531]:
+// #1333 group 0xd max 7 waves 1 wake 0x8C; #720 group 9 max 2 wake 0x8C; mux #717
+// 0x8C = 0x87 AND 0x88 [D audit :1411]. The ambush trio stays 0x38 at every difficulty —
+// `NDrone2_DSTATE_AmbushWait` 0x161560 has no channel read; its only exits are the
+// opponent-sight bit or the player within 3.0 2-D [M 0x161560:28-70], and Bond is held 25+
+// units away in the hall.
+
+const AMBUSH_WAIT: u8 = 0x38;
+
+fn at_xz<'a, I>(list: I, x: f32, z: f32) -> Option<&'a nf_game::drone::Drone>
+where I: IntoIterator<Item = &'a nf_game::drone::Drone> {
+    list.into_iter().find(|d| (d.pos[0] - x).powi(2) + (d.pos[2] - z).powi(2) < 0.25)
+}
+
+/// The [D] audit positions of the three templates the probe found missing at Operative.
+const TAGGED: [(u32, f32, f32); 3] = [(723, -32.78, 28.48), (784, -36.18, 27.76), (785, -31.74, 25.16)];
+/// The ambush trio's [D] positions (#721/#722/#724) and #783 (the one full-alert group-0xd
+/// template at Operative).
+const TRIO: [(u32, f32, f32); 3] = [(721, -51.33, 32.42), (722, -47.87, 33.48), (724, -40.24, 25.15)];
+/// The release's template set: the seven group-0xd wake-0x8C templates [D #1333] + the four
+/// group-9 wake-0x8C templates [D #720], by main-map placement index (the audit's #N).
+const RELEASED: [usize; 11] = [721, 722, 723, 724, 783, 784, 785, 778, 779, 780, 781];
+/// The ambush QUARTET's audit ids and [D] positions — #723 shares prop word 0xf1dfc8c1 with
+/// #721/#722/#724 [D audit :73-76/:85-87], so it is AmbushWait too, not a door router.
+const QUARTET: [(usize, f32, f32); 4] = [(721, -51.33, 32.42), (722, -47.87, 33.48), (723, -32.78, 28.48), (724, -40.24, 25.15)];
+
+fn hold_and_release(difficulty: u32) -> (nf_view::scene::Scene, std::collections::HashSet<usize>) {
+    let mut scene = if difficulty == 1 {
+        nf_view::load(&iso(), "07000014.bin", false).expect("load 07000014")
+    } else {
+        nf_view::load_with_carry_difficulty(&iso(), "07000014.bin", false, None, difficulty).expect("load 07000014")
+    };
+    for _ in 0..400 {
+        if !scene.sim.as_ref().unwrap().disabled { break; }
+        scene.sim.as_mut().unwrap().step_bond(nf_game::player::Input::default(), false, false, false);
+    }
+    let pre: std::collections::HashSet<usize> = scene.sim.as_ref().unwrap().drones.list.iter()
+        .filter(|d| d.enabled && d.health > 0.0).map(|d| d.placement).collect();
+    {
+        let sim = scene.sim.as_mut().unwrap();
+        sim.drones.channels.set(0x87, 1, 1);
+        sim.drones.channels.set(0x88, 1, 1);
+    }
+    (scene, pre)
+}
+
+fn run_release(scene: &mut nf_view::scene::Scene) {
+    let hall = [-76.8, -1.1 + 1.0347, 46.5];
+    for _ in 0..3000u32 {
+        let sim = scene.sim.as_mut().unwrap();
+        sim.bond.pos = hall;
+        sim.step_bond(nf_game::player::Input::default(), false, false, false);
+    }
+}
+
+/// Operative (difficulty 1): the parameter-2 >= 0x2 templates never exist, so the ch 0x87+0x88
+/// release spawns SIX alive guards — the ambush trio (#721/#722/#724, all 0x38 [M 0x161560]) +
+/// #783 + the group-9 pair (#778/#780) — not nine. Absent at load, enabled or not [M 0x136be0].
+/// Released set = enabled ∧ alive ∧ not enabled at load (the wake-0x8C templates sit
+/// enabled=false/health=10.0 until spawner #1333/#720 pick them [M 0x137cb0]).
+#[test]
+fn at_operative_the_tagged_templates_never_exist_and_the_release_spawns_six() {
+    let (mut scene, pre) = hold_and_release(1);
+    {
+        let sim = scene.sim.as_ref().unwrap();
+        for (id, x, z) in TAGGED {
+            assert!(at_xz(&sim.drones.list, x, z).is_none(),
+                "Operative: template #{id} ({x},{z}) must not exist at load — Drone_Create 0x136be0 makes nothing for parameter 2 = 3 > difficulty 1 [M 0x136be0]");
+        }
+    }
+    run_release(&mut scene);
+    let sim = scene.sim.as_ref().unwrap();
+    let released: Vec<&nf_game::drone::Drone> = sim.drones.list.iter()
+        .filter(|d| d.enabled && d.health > 0.0 && !pre.contains(&d.placement)).collect();
+    eprintln!("[014-op] released after the release: {} — {}", released.len(),
+        released.iter().map(|d| format!("({:.2},{:.2}) {:#04x} en {}", d.pos[0], d.pos[2], d.state, d.enabled)).collect::<Vec<_>>().join("; "));
+    assert_eq!(released.len(), 6,
+        "Operative: the release brings 6 (7 group-0xd candidates gated to 4 [D] + spawner #720's 2 of the 2 existing group-9 [M 0x137cb0]), not 9");
+    for (id, x, z) in TRIO {
+        let d = at_xz(released.iter().copied(), x, z)
+            .unwrap_or_else(|| panic!("Operative: ambush template #{id} must be alive at ({x},{z}) [D audit :73-76]"));
+        assert_eq!(d.state, AMBUSH_WAIT,
+            "Operative: #{id} holds 0x38 — NDrone2_DSTATE_AmbushWait 0x161560 has no channel read and Bond is 25+ units away [M 0x161560:28-70]");
+    }
+    for (id, x, z) in TAGGED {
+        assert!(at_xz(&sim.drones.list, x, z).is_none(),
+            "Operative: template #{id} still must not exist after the release [M 0x136be0]");
+    }
+}
+
+/// 00 Agent (difficulty 3): every parameter-2 tag passes the gate [M 0x136be0], so the three
+/// tagged templates EXIST at load (as wake-0x8C spawner templates, enabled=false until the
+/// release) and the release spawns NINE — the ambush QUARTET (all 0x38) + the full-alert
+/// #783/#784/#785 + the group-9 spawner's 2 picks from its now-4 candidates (still capped at
+/// max 2 [D audit :1527]). The quartet holds 0x38 at every difficulty: #723 carries the SAME
+/// ambush prop word 0xf1dfc8c1 as #721/#722/#724 [D audit :85-87; M 0x161560].
+#[test]
+fn at_00_agent_the_tagged_templates_exist_and_the_release_spawns_nine() {
+    let (mut scene, pre) = hold_and_release(3);
+    {
+        let sim = scene.sim.as_ref().unwrap();
+        for (id, x, z) in TAGGED {
+            let d = at_xz(&sim.drones.list, x, z)
+                .unwrap_or_else(|| panic!("00 Agent: template #{id} must exist at load — parameter 2 <= difficulty 3 passes Drone_Create's gate [M 0x136be0; D audit :85-87]"));
+            assert!(!d.enabled,
+                "00 Agent: #{id} is a wake-0x8C template, not yet released at load [D audit :85-87]");
+        }
+    }
+    run_release(&mut scene);
+    let sim = scene.sim.as_ref().unwrap();
+    let released: Vec<&nf_game::drone::Drone> = sim.drones.list.iter()
+        .filter(|d| d.enabled && d.health > 0.0 && !pre.contains(&d.placement)).collect();
+    eprintln!("[014-00a] released after the release: {} — {}", released.len(),
+        released.iter().map(|d| format!("({:.2},{:.2}) {:#04x} en {}", d.pos[0], d.pos[2], d.state, d.enabled)).collect::<Vec<_>>().join("; "));
+    assert_eq!(released.len(), 9,
+        "00 Agent: the release brings 9 — 7 group-0xd [D #1333 max 7] + 2 group-9 [D #720 max 2] [M 0x137cb0]");
+    for (id, x, z) in QUARTET {
+        let d = at_xz(released.iter().copied(), x, z)
+            .unwrap_or_else(|| panic!("00 Agent: ambush template #{id} must be released at its placement ({x},{z}) [D audit]"));
+        assert_eq!(d.state, AMBUSH_WAIT,
+            "00 Agent: #{id} still holds 0x38 — the ambush props are difficulty-independent [D audit :85-87; M 0x161560]");
+    }
+}

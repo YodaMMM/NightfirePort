@@ -92,11 +92,13 @@ fn a_shot_at_a_wall_leaves_a_decal_a_sky_shot_leaves_none() {
     // fix-impacts-render: the draw is the game's own mesh. The scene's Effect-instance pool for the
     // decal's `EffectInfo+4` mesh hash exists (`hashtable_set_sub_object_to_entity_gfx(node,
     // EffectInfo[type]+4)` 0x1ce9c8), and the frame matrix of the new decal's slot (the last FIFO
-    // index) sits at the stored pose — `Mat_Align2Dir` 0x1df2a8 rotation, translation `hit +
+    // node) sits at the stored pose — `Mat_Align2Dir` 0x1df2a8 rotation, translation `hit +
     // normal·0.01` (`View_DrawObjectGlist` 0x1e6780 draws node+0x10's glist at node+0x20).
     let (decal_att, debris_att, debris) = {
         let sim = scene.sim.as_ref().unwrap();
-        let slot = sim.drones.effects.decals.len() - 1;
+        // The new decal's draw slot is its pool node (the 200-slot ring keeps each hole in its node for
+        // life [M Effect_InitLists 0x1cf268]), not the list index.
+        let slot = sim.drones.effects.decal_node(sim.drones.effects.decals.len() - 1);
         let att = scene.effect_attachment(0, slot, dec.mesh)
             .expect("the decal mesh's draw slots are in the scene");
         // The debris pool: `Scene::build` instances every `EffectInfo+0x74` hash the level archive
