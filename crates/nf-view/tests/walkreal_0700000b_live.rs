@@ -794,3 +794,87 @@ fn shoot_at(w: &mut Walker, target: [f32; 3], range: f32, max_ticks: u32, label:
 /// XZ distance for the return-chain checks.
 fn dxz_w(a: [f32; 3], b: [f32; 3]) -> f32 { ((a[0] - b[0]).powi(2) + (a[2] - b[2]).powi(2)).sqrt() }
 
+
+/// THE PATERNOSTER CAB IS A SEALED CAGE — the level-0b-lift-exit session's evidence, pinned so a
+/// future "make the ride walkable" change must first refute this on the disc's own bytes:
+///
+/// - The cab (obj 'lift' 0x02000367, 1435 collision tris [D the 0x2E block]) is a tiered box:
+///   horizontal levels local −2.89/−2.55/−1.68/−1.24 (the base), **−0.21..−0.08 (the platform
+///   floor, 140 tris, x −2.59..1.48 z 23.60..27.24)**, +1.07 (a 4-tri south ledge), +2.26..+2.61
+///   (the rail band, 124 tris), +3.76 (the roof slab) and +4.03..+4.10 (a centre cap). The keyed
+///   y rides matrix[3][1]; the platform floor stands at keyed −0.15.
+/// - The glass (obj 'lift_glass' 0x02000421, 56 tris, local y −1.26..+2.46, parented entity
+///   0x2000421 [D nis dump stream 1]) closes the cage at body heights, and the game gives it NO
+///   kind exclusion: the collide node's kind-exclusion word cel+0x98 is written ONLY by the room-cel
+///   fixup (parseentity_fixup 0x1d00c0:115/142, cel kinds 0xc023/0xc047) and the static parser
+///   writes ONLY cel+0x94 (parsemap_block_map_data_static 0x1d1998:101-103) — a dynamic/script
+///   entity's node carries +0x98 = 0, so Collide_Intersect 0x1ebaa8:301-317's kind filters
+///   (node bit 0x1 vs hittest kinds 0xd/0xe, bit 0x2 vs 0x10, bit 0x800 vs 0x40) never open it.
+/// - Measured on the port's world (the same celglist law [M Script_CreateEntity 0x1d8968's
+///   fallthrough → Control_SetGList]): at the exec pass (cab y 46.93, floor 46.78) every
+///   east/west/south/north face line at floor+0.5/+0.9/+1.5 hits — 9 z-lines per east/west face,
+///   9 x-lines per south/north face, 0 openings; the interior has NO standable surface between
+///   cy+1.6 and cy−0.5 except the west/north edge bits of the −0.15 floor rim.
+/// - The exits from the RIDE surface (the roof slab, keyed +3.76 — the game's feet ray from above
+///   [M 0x194188] lands there exactly as the port's does): EAST the waiting-room floor hole
+///   (x 2..6, z 24.5..27.5 has no floor to y 39 [D the room ray grid]), SOUTH the shaft's south
+///   wall (top 55.5, walled at lid+0.3..+2.1 at every probed x −1.2..1.45), WEST/NORTH wall/void.
+///   The AI nav has no balcony→exec route either (`nf-extract route` from the spawn area
+///   (2.3, 14.0, 25.8) to nav n41 (12.21, 46.9, 19.68): "no route: code 5").
+///
+/// So the balcony→exec transit CANNOT be the cab ride: the walkreal keeps its documented stand-in
+/// hop above, and the route up stays unpinned ([S docs/levels/0700000b.md:65 "the route up is not
+/// pinned by the dumps"]). The live checks that would settle it are in the session report.
+#[test]
+fn the_paternoster_cab_is_a_sealed_cage() {
+    let mut scene = nf_view::load(&iso(), "0700000b.bin", false).expect("load 0700000b");
+    for _ in 0..3000u32 {
+        scene.sim.as_mut().unwrap().step_bond(nf_game::player::Input::default(), false, false, false);
+        if !scene.sim.as_ref().unwrap().disabled { break; }
+    }
+    // Ride the cycle to the exec pass (the cab floor level with the 46.8 sill).
+    let cy = {
+        let mut cy = None;
+        for _ in 0..2500u32 {
+            scene.sim.as_mut().unwrap().step_bond(nf_game::player::Input::default(), false, false, false);
+            let cur = scene.sim.as_ref().unwrap().drones.scripts.objects.list.iter().flatten()
+                .find_map(|o| match o { nf_game::nis::Obj::Entity { hash, matrix, .. } if *hash == 0x2000367 => Some(matrix[3][1]), _ => None });
+            if let Some(c) = cur { if (c - 46.93).abs() < 0.06 { cy = Some(c); break; } }
+        }
+        cy.expect("the cab passes cy 46.93 [D nis dump keys]")
+    };
+    let floor = cy - 0.15;
+    let sim = scene.sim.as_ref().unwrap();
+    // The four faces, probed at body heights on 0.5-spaced lines: EVERY line hits (no door).
+    let mut lines = 0;
+    let mut open = 0;
+    for i in 0..9 {
+        let z = 23.3 + 0.5 * i as f32;
+        let x = -2.5 + 0.5 * i as f32;
+        for (from, to) in [([4.0f32, 0.0, 0.0], [-4.0, 0.0, 0.0]), ([-4.5, 0.0, 0.0], [4.5, 0.0, 0.0])] {
+            for h in [0.5f32, 0.9, 1.5] {
+                lines += 1;
+                if sim.world.segment([from[0], floor + h, z], [to[0], floor + h, z]).is_none() { open += 1; }
+            }
+        }
+        for (from, to) in [([0.0f32, 0.0, 20.5], [0.0, 0.0, 25.0]), ([0.0, 0.0, 29.5], [0.0, 0.0, 25.0])] {
+            for h in [0.5f32, 0.9, 1.5] {
+                lines += 1;
+                if sim.world.segment([x, floor + h, from[2]], [x, floor + h, to[2]]).is_none() { open += 1; }
+            }
+        }
+    }
+    assert!(lines >= 100, "the face probe ran its grid ({lines} lines)");
+    assert_eq!(open, 0, "every face line at body heights hits: the cage is sealed [D obj 0x02000367/0x02000421 collision; M the node kind-exclusion cel+0x98 is 0 for objects (0x1d1998:101-103 writes only +0x94)]");
+    // The interior floor rim: the platform floor (keyed −0.15) is unreachable — no standable
+    // surface in the open middle at the boarding heights.
+    let mut interior_hits = 0;
+    for zi in 0..8 {
+        for xi in 0..10 {
+            let x = -1.5 + 0.3 * xi as f32;
+            let z = 23.8 + 0.4 * zi as f32;
+            if sim.world.segment([x, cy + 1.6, z], [x, cy - 0.5, z]).is_some() { interior_hits += 1; }
+        }
+    }
+    assert!(interior_hits <= 6, "the cage interior is open air at body heights ({interior_hits} stray rim hits) — no walkable interior [D the −0.15 floor tier is enclosed]");
+}
