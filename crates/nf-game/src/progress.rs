@@ -194,6 +194,17 @@ pub struct RewardEntry {
     pub desc: [RewardDesc; 5],
 }
 
+/// The results page's medal for `score` against an entry's four thresholds (`ScoringTable`
+/// +0x04 bronze, +0x08 silver, +0x0C gold, +0x10 platinum): 4 platinum, 3 gold, 2 silver,
+/// 1 bronze, 5 none. `P_NFRESULTS_Handler` 0x208e78:98-142 [M]: the cascade tests the platinum
+/// threshold FIRST with an unsigned `score < +0x10` (so a score equal to a threshold earns that
+/// tier), then +0x0C, +0x08, +0x04; the medal counter it hands to `Menu_SetLevelBonus`
+/// 0x1ffa10 (:169) is `uVar11` = 4/3/2/1/5 in those arms. The one shared chain: `get_score`,
+/// `finish_level` and the results page (nf-view `results_enter`) all read it.
+pub fn results_medal(score: u32, th: [u32; 4]) -> u32 {
+    if score >= th[3] { 4 } else if score >= th[2] { 3 } else if score >= th[1] { 2 } else if score >= th[0] { 1 } else { 5 }
+}
+
 /// The 12 `sp_level` map hashes, in table order ([L] ee_start_05.bin 0x2df2e0, +0xC of each
 /// 24-byte record; identical to the `ScoringTable` order).
 pub static SP_LEVEL_HASHES: [u32; 12] = [
@@ -709,9 +720,7 @@ impl Progress {
             e.last = 0; // puVar7[0xd] +0x34 [M :331]
             done_better = false; // DoneBetter [M :332]
         }
-        let th = SCORING_TABLE[idx].thresholds;
-        let medal = if e.last >= th[3] { 4 } else if e.last >= th[2] { 3 }
-            else if e.last >= th[1] { 2 } else if e.last >= th[0] { 1 } else { 5 };
+        let medal = results_medal(e.last, e.thresholds);
         Some(Scored { base: e.base, bonus: e.bonus, last: e.last, best: e.best, done_better, medal })
     }
 
@@ -739,8 +748,7 @@ impl Progress {
         let total = e.base.wrapping_add(e.bonus);
         // The medal compare chain on the run's total [M 0x208e78:98-146 — the +0x10/+0xc/+8/+4
         // threshold cascade].
-        let medal = if total >= e.thresholds[3] { 4 } else if total >= e.thresholds[2] { 3 }
-            else if total >= e.thresholds[1] { 2 } else if total >= e.thresholds[0] { 1 } else { 5 };
+        let medal = results_medal(total, e.thresholds);
         let out = FinishedLevel {
             base_map,
             mission_status: 6,
