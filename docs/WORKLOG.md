@@ -101,3 +101,14 @@ Session 1 progress (~11:30 UTC):
   talk script need not be present once the push shifts Bond's intro-end position). Next: a
   direction-aware push-dodge arm in the stuck ladder (safe-by-default: fires only on a live
   body within reach of a stalled leg), then the facial harness pick.
+- Harness pass (17:30-17:55 UTC): walker.rs push-dodge arm — a live body (any team; enabled &&
+  present && !corpse && health > 0, |dy| < 2.5, d < 1.5) inside a stalled leg's stuck ladder now
+  triggers a DIAGONAL dodge (strafe away-from-body side, forward 0.45) that runs until the body
+  is behind the run or 2.2 clear (1200-tick cap); same-body re-stall flips the side (the away
+  side can be the walled one — the 0a civilian's push carries Bond into the south wall, the room
+  is north). strafe +1 = LEFT = (cos yaw, −sin yaw) [M Player_Update 0x193600's move rows]. The
+  0a hall-door civilian STILL holds the leg after 6 dodge cycles (d oscillates 0.95↔1.43, the
+  lane feeds back into his spot) — the dodge persists but the geometry needs a wider swing or a
+  nav-level avoidance; left for the next pass with the failing dump in the report. NOT validated
+  against the green walks (no suite run — sandbox reaps background jobs; chunked runner queued
+  for the next window).

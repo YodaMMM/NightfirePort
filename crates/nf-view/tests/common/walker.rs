@@ -1043,6 +1043,17 @@ impl Walker {
         // (the 01 stairwell head's threshold door sat on the lane, opened, auto-closed, and
         // re-hijacked the mitigation forever, so the sidestep/jump ladder never ran).
         let mut last_door: Option<usize> = None;
+        // The push-dodge micro-state: Some((body index, strafe side ±1.0)) — a DIAGONAL walk
+        // around a live body (lateral + forward: the body's own push supplies the backward
+        // component, the diagonal carries past it). It runs until the body no longer presses
+        // (d > 1.6 / gone / dead) or the hard cap — a fixed tick count ends BESIDE the body and
+        // the lane steers straight back into it (the 0a civilian: d oscillated 0.95→1.43→0.95).
+        let mut dodge: Option<(usize, f32)> = None;
+        let mut dodge_ticks = 0u32;
+        // The body the last dodge circled: the away-from-body side can be the walled side (the
+        // 0a hall-door civilian: the push carries Bond into the south wall, the room is north) —
+        // a same-body re-stall flips the side.
+        let mut last_dodge_body: Option<usize> = None;
         loop {
             if self.total_ticks - start_ticks >= 40_000 && !self.lenient {
                 let dump = fail_dump(&self.scene, wp.at, label);
@@ -1070,6 +1081,35 @@ impl Walker {
             if !riding && !ladder && self.total_ticks % 10 == 0 {
                 let t0 = self.total_ticks;
                 if self.return_fire(label) { start_ticks += self.total_ticks - t0; continue; }
+            }
+            // The active push-dodge: strafe around the body with forward held until it no longer
+            // presses (the dodge's own budget is the leg's — it IS the walk). End condition:
+            // well clear (2.2), or clear-ish (1.6) AND the body behind the run — a body still
+            // level with the lane re-traps the leg the moment steering resumes.
+            if let Some((di, side)) = dodge {
+                dodge_ticks += 1;
+                let keep = dodge_ticks < 1200 && {
+                    let sim = self.scene.sim.as_ref().unwrap();
+                    let b = sim.bond.pos;
+                    sim.drones.list.get(di).is_some_and(|d| d.enabled && d.present && !d.corpse
+                        && d.health > 0.0 && (d.pos[1] - b[1]).abs() < 2.5 && {
+                        let dd = dxz(d.pos, b);
+                        if dd >= 2.2 { false }
+                        else if dd < 1.6 { true }
+                        else {
+                            let (vx, vz) = (wp.at[0] - b[0], wp.at[2] - b[2]);
+                            let (bx, bz) = (d.pos[0] - b[0], d.pos[2] - b[2]);
+                            (vx * bx + vz * bz) / ((vx * vx + vz * vz).sqrt() * dd.max(1e-3)) > 0.15
+                        }
+                    })
+                };
+                if !keep {
+                    dodge = None;
+                    dodge_ticks = 0;
+                } else {
+                    self.tick(Input { strafe: side, forward: 0.45, ..Default::default() }, false);
+                    continue;
+                }
             }
             let p = self.scene.sim.as_ref().unwrap().bond.pos;
             self.pos = p;
@@ -1261,6 +1301,45 @@ impl Walker {
                         }
                     }
                     if !used_door {
+                    // A live BODY in reach of a stalled leg: the every-tick push [M Collide_Jointy
+                    // 0x1ec180:253-266, per-bot gate NDrone2_DoCollision 0x149ec8 — 0x20 set by
+                    // DefaultInit 0x801e2 / Enable(1) 0x801a0, restored after Enable(0) [M
+                    // 0x149dd0]; a live bot within 2.0 is ON via the near arm [M 0x14b190]] pins
+                    // Bond at an equilibrium against it (the 0a control-room civilian held the
+                    // hall-door lane at 0.88 u — pushdbg 2026-11-01: ~0.065/tick out of the
+                    // doorway while the leg pressed in). The player's move is to step around the
+                    // body, AWAY from it: the blind sidestep ladder below can walk INTO the
+                    // pusher and re-wedge every cycle. Direction-aware, every team (civilians,
+                    // allies and guests push too — the near arm subsumes the voice arms
+                    // [M 0x149ec8:16-33]); corpses can't (the 0x200 arm).
+                    let pusher = {
+                        let sim = self.scene.sim.as_ref().unwrap();
+                        let b = self.pos;
+                        sim.drones.list.iter().enumerate()
+                            .filter(|(_, d)| d.enabled && d.present && !d.corpse && d.health > 0.0
+                                && (d.pos[1] - b[1]).abs() < 2.5 && dxz(d.pos, b) < 1.5)
+                            .min_by(|a, c| dxz(a.1.pos, b).total_cmp(&dxz(c.1.pos, b)))
+                            .map(|(i, d)| (i, d.pos))
+                    };
+                    if let Some((di, dpos)) = pusher {
+                        let yaw = self.scene.sim.as_ref().unwrap().bond.yaw;
+                        // strafe +1 = LEFT = (cos yaw, −sin yaw) [M Player_Update 0x193600's move:
+                        // pos[0] += c·vs + s·vf, pos[2] += −s·vs + c·vf]
+                        let (lx, lz) = (yaw.cos(), -yaw.sin());
+                        let away = [self.pos[0] - dpos[0], self.pos[2] - dpos[2]];
+                        let left_dot = away[0] * lx + away[1] * lz;
+                        // First try the away-from-body side; a same-body re-stall means that side
+                        // is the walled one — flip (the away side is where the push already
+                        // carries him, which is exactly where the equilibrium sits).
+                        let want_left = if last_dodge_body == Some(di) { left_dot < 0.0 } else { left_dot >= 0.0 };
+                        last_dodge_body = Some(di);
+                        dodge = Some((di, if want_left { 1.0 } else { -1.0 }));
+                        dodge_ticks = 0;
+                        eprintln!("[walk] {label}: push-dodge around body {di} (d {:.2}, side {})", dxz(dpos, self.pos), if want_left { "left" } else { "right" });
+                        self.note_stuck(format!("push-dodge around body {di}"));
+                        self.stuck = 0;
+                        continue;
+                    }
                     // A hostile BODY-BLOCK: a guard standing on the lane itself. The 02
                     // south-hall-west nav-10 wedge was exactly this — g3 closed to 0.8 u and Bond
                     // (real health) took his fire for ~1400 ticks until the fail chain
