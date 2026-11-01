@@ -19,8 +19,10 @@
 //! the guardhouse courtyard → E-door #47 Door_Top_I1 (36.50, 40.00, −16.25) → the guardroom
 //! FuseBox #747 (28.00, 40.00, −18.15): the stealth route's optional Laser cut (group 0 → ch 57
 //! searchlights-off + ch 103 [M FuseBox_Update 0x1adfe8:110-115]) → E-door #59 Door_Top_I2
-//! (27.88, 40.00, −23.00, auto-close) → the searchlight courtyard (the entry plates #525/#526 →
-//! 0x52 stage SP #808's boot NIS; ch 55 rises when a head holds Bond — the alarm is NOT a fail
+//! (27.88, 40.00, −23.00, auto-close) → the ramp to head #2's balcony and the drop into the
+//! searchlight courtyard (the drop crosses plate #664 → ch 0x34 → SP #808 plays the reveal NIS
+//! 0x06000066; the ground mouth from the guardhouse court crosses #526 instead — see
+//! the_lamps_light_at_the_ground_mouth; ch 55 rises when a head holds Bond — the alarm is NOT a fail
 //! channel on this level [L record 1: fail 0xffffffff; M 0x1827d8:98-107]) → E-door #71
 //! Door_Tunnel_G9 (3.75, 42.00, −51.13) → the tunnel climb (y 42 → 49) → E-door #72
 //! Door_Tunnel_G9_2 (4.00, 49.00, −64.88) → the upper gallery (y≈50.1, the WineTruck building's
@@ -111,6 +113,18 @@ fn carry(on: &[u32]) -> RamSave {
     RamSave::capture(&Default::default(), 0, &nf_game::pickup::Inventory::level_start(0x73, 240), &ch)
 }
 
+/// The courtyard searchlight heads (kind 1) — four on 07000006 [D census] — as (state, on-channel lit).
+fn heads06(w: &Walker) -> Vec<(u8, bool)> {
+    let sim = w.scene.sim.as_ref().unwrap();
+    sim.drones.searchlights.parts.iter().filter(|p| p.kind == 1)
+        .map(|p| (p.state, sim.drones.channels.on(p.on as u32))).collect()
+}
+
+/// The ch-0x34 courtyard plates [D trigger census: TouchOnce #524/#525/#526 and the Spotlight
+/// Trigger polys #661-#664, all p0 = 0x34].
+const PLATES_34: [usize; 7] = [524, 525, 526, 661, 662, 663, 664];
+
+
 /// The Laser drawn with the real weapon-cycle input (the disc's own cutting laser, 0x4E) [D
 /// USATxt label 0x05000043; the proven fusebox_06_live draw].
 fn draw_laser(w: &mut Walker) {
@@ -148,6 +162,12 @@ fn fight_through(w: &mut Walker) {
 /// ch-55 alarm — neither blocks the walk (no fail channel on this level [L record 1; M
 /// 0x1827d8:98-107]).
 fn walk_to_the_courtyard(w: &mut Walker, cut: bool) {
+    walk_to_the_guardhouse_court(w);
+    walk_from_the_guardhouse_court(w, cut);
+}
+
+/// The spawn → the guardhouse court east of the searchlight courtyard, with its idle guard down.
+fn walk_to_the_guardhouse_court(w: &mut Walker) {
     // THE DISMOUNT: off the truck bed's open south side (the spawn's own facing walks onto the
     // bed; the probe drops grounded at z≈29).
     w.walk_nav_to([60.0, 38.3, 31.5], "off the truck, south", 1.6);
@@ -181,6 +201,13 @@ fn walk_to_the_courtyard(w: &mut Walker, cut: bool) {
     // real fire path kills him (10 hp — the fire-path pins in fix_06_fire_live.rs walk this
     // same fight with every press firing).
     fight_through(w);
+}
+
+/// The guardroom route into the searchlight courtyard: door #47, the fusebox nook, door #59, the
+/// west ramp up to head #2's balcony (floor 46.0 at x 7..10.8, z −26..−22 [D floor probe]) and
+/// off its west edge onto the 41.0 courtyard floor — the drop passes through the Spotlight
+/// Trigger poly #664 (y 45.93, x −0.8..6.8, z −25.7..−21.0 [D trigger dump]).
+fn walk_from_the_guardhouse_court(w: &mut Walker, cut: bool) {
     w.walk_to(Wp::new(36.0, 39.1, -13.4), "before door #47");
     {
         let sim = w.scene.sim.as_ref().unwrap();
@@ -223,8 +250,8 @@ fn walk_to_the_courtyard(w: &mut Walker, cut: bool) {
     // THROUGH the doorway (level-06-castle-fire): without this waypoint the mouth leg aims
     // through the guardroom's west wall (the auto-closing doorway is a nav blind spot).
     w.walk_to(Wp::new(26.6, 40.6, -23.6), "through door #59");
-    // West up the steps to the searchlight courtyard mouth (the entry plates #525/#526 → 0x52;
-    // SP #808's boot NIS fires and the walker skips it with the game's own skip action).
+    // West up the ramp to head #2's balcony and down into the courtyard (the nav leg drops off the
+    // balcony's west edge through plate #664 → ch 0x34 → SP #808's reveal NIS 0x06000066).
     w.walk_nav_to([8.4, 42.0, -12.0], "the searchlight courtyard mouth", 1.6);
     {
         let sim = w.scene.sim.as_ref().unwrap();
@@ -385,12 +412,43 @@ fn walk_the_castle_interior_to_the_party() {
         assert!((p[0] - 57.18).abs() < 2.0 && (p[2] - 22.61).abs() < 2.0,
             "the carried ch-0x1D gate selects the truck-ride spawn #496 [M Player_Start 0x190fd0], got {p:?}");
     }
+    // courtyard-lamps: watch the reveal channel (SP #808's p6, ch 0x34) and the alarm (ch 55, the
+    // heads' p3 [D]) for the whole walk.
+    w.rise_watch = vec![0x34, 55];
     // The level-start NIS: waited out through the game's own skip action.
     w.wait_enabled(3000, "the intro NIS");
     w.wait(30);
+    // THE LAMPS ARE DARK AT THE START: SP #808 waits in state 0 for ch 0x34 [M SP_Update 0x1dbda8
+    // case 0; SP_Hit 0x1dc470:16-18], so the reveal NIS 0x06000066 has not raised any head's
+    // on-channel and every head sits in state 3 (off) [M Searchlight_Create: p1 != 0 → state 3].
+    {
+        let h = heads06(&w);
+        assert_eq!(h.len(), 4, "07000006 has four courtyard heads [D census]");
+        assert!(h.iter().all(|&(st, on)| st == 3 && !on), "the courtyard lamps are dark at the start: {h:?}");
+        let sim = w.scene.sim.as_ref().unwrap();
+        assert!(!sim.drones.channels.on(0x34), "no plate crossed on the truck");
+        assert!(sim.drones.searchlights.parts.iter().filter(|p| p.kind == 4).all(|p| !p.drawn), "no corona at the start");
+    }
 
     walk_to_the_courtyard(&mut w, false);
     eprintln!("[06] reached the courtyard at tick {}", w.total_ticks);
+    for r in &w.rises { eprintln!("[06] rise: ch {} at tick {} bond {:?} touching {:?}", r.0, r.1, r.2, r.3); }
+    // THE WALKED BOND TURNS THEM ON AT THE ENTRANCE: the first ch-0x34 rise is the walk's own
+    // plate crossing at the courtyard mouth, and the reveal has lit all four heads by now.
+    {
+        let first = w.rises.iter().find(|r| r.0 == 0x34).expect("the walk crosses a ch-0x34 plate");
+        assert!(!first.3.is_empty() && first.3.iter().all(|p| PLATES_34.contains(p)),
+            "ch 0x34 rises under Bond's own feet on a courtyard plate, got {:?} at {:?}", first.3, first.2);
+        // The balcony drop: Bond falls through the Spotlight Trigger poly #664 [D] (measured on
+        // this walk: Bond ≈ (3.4, 46.5, −21.5) mid-drop).
+        assert_eq!(first.3, vec![664], "the guardroom route's first plate is the balcony-drop poly #664");
+        let h = heads06(&w);
+        assert!(h.iter().all(|&(st, on)| st != 3 && on), "all four heads lit after the entrance plate: {h:?}");
+        // The lit heads still spot Bond: the alarm channel 55 (written only while a head tracks
+        // [M Searchlight_Update 0x1cb900:142-144]) rises in the courtyard, after the plate.
+        let alarm = w.rises.iter().find(|r| r.0 == 55).expect("a lit head spots the walked Bond (ch 55)");
+        assert!(alarm.1 > first.1, "the alarm follows the reveal (plate t{}, alarm t{})", first.1, alarm.1);
+    }
     {
         let sim = w.scene.sim.as_ref().unwrap();
         // The route's own channel, written by the walk itself (the fusebox cut is pinned by
@@ -406,6 +464,36 @@ fn walk_the_castle_interior_to_the_party() {
     eprintln!("[06] the whole castle walked in {} ticks; falls: {:?}", w.total_ticks, w.report.falls);
     for f in &w.report.falls { eprintln!("[06] fall: {f}"); }
     for s in &w.report.stuck_events { eprintln!("[06] stuck: {s}"); }
+}
+
+/// The other entrance: from the guardhouse court straight west up the ground ramp (floor 38.0 →
+/// 41.0 along z −12..−13 [D floor probe]) into the courtyard mouth, real input all the way. The
+/// first plate under Bond's feet is #526 (x 9.17..10.67, z −13.86..−11.35 — the east one of the
+/// mouth pair [D trigger dump]); the reveal NIS then lights all four heads within its 167 waits
+/// [D 0x06000066 stream 0]. Nothing is lit before the plate.
+#[test]
+fn the_lamps_light_at_the_ground_mouth() {
+    let iso = iso();
+    let mut w = Walker::new(nf_view::load_with_carry(&iso, "07000006.bin", false,
+        Some(&carry(&[0x1d, 0x45, 0x70]))).expect("load 07000006"));
+    w.rise_watch = vec![0x34];
+    w.wait_enabled(3000, "the intro NIS");
+    w.wait(30);
+    walk_to_the_guardhouse_court(&mut w);
+    {
+        let h = heads06(&w);
+        assert!(h.iter().all(|&(st, on)| st == 3 && !on), "still dark in the guardhouse court: {h:?}");
+        assert!(w.rises.is_empty(), "no ch-0x34 plate on the way to the guardhouse court");
+    }
+    w.walk_to(Wp::new(22.0, 39.1, -12.3), "the guardhouse court's west end");
+    w.walk_to(Wp::new(12.0, 41.5, -12.3), "up the ground ramp");
+    w.walk_to(Wp::new(6.0, 42.0, -12.3), "into the courtyard mouth");
+    let first = w.rises.first().cloned().expect("the mouth crosses a ch-0x34 plate");
+    eprintln!("[06] mouth rise at tick {} bond {:?} touching {:?}", first.1, first.2, first.3);
+    assert_eq!(first.3, vec![526], "the ground mouth's first plate is #526");
+    for _ in 0..240 { w.tick(Input::default(), false); }
+    let h = heads06(&w);
+    assert!(h.iter().all(|&(st, on)| st != 3 && on), "all four heads lit after the mouth plate: {h:?}");
 }
 
 /// The scenic leg the ORIGINAL walk covered: the tunnel switchback (the two-ramp climb the walk
