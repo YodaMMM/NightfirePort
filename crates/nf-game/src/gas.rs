@@ -24,12 +24,15 @@
 //!   drift KEPT, a slight upward buoyancy [M 0x1ab2d0:47-65, rocket-trail-gas];
 //!   9/10 = hidden emitters (not ported); the tail fades rgba and kills at life ≤ 0 (obj+0xFE |= 1).
 //!
-//! RNG discipline: the game's draw count per puff is 1 (the caller's rotation draw) + 2 (spin, sign)
-//! + the velocity branch — the searchlight's type-7/NULL-vel site consumes **6** (the old "5" here
-//! counted only the internal ones). fix-searchlight-remainder: the searchlight smoke consumes the real
-//! draws through `init_searchlight_smoke` (bit-exact formulas, G-033's remainder closed for this site);
-//! the other callers (muzzle, effects) keep the counter hash until their own sites are re-based — the
-//! shared stream must only ever gain draws that the game also makes, so their hashes stay [S].
+//! RNG discipline: the game's draw count per puff is 1 (the caller's rotation draw, if its site makes
+//! one) + 2 (spin, sign) + the velocity branch — the searchlight's type-7/NULL-vel site consumes **6**
+//! (the old "5" here counted only the internal ones). `init_ex`/`init` now consume the game's own
+//! `Gas_Init` draws (spin `Rand_FRand(π/2·REC_FRAME_RATE)` 0x1ab060, sign `Rand_Rand(0x100)` 0x1ab08c
+//! [M 0x1aacc8:72-80], then the kind-4 given-vel jitter `Rand_FRand(0.05)` ×2 [M 0x1ab21c/0x1ab248] or
+//! the kind-7/NULL-vel wind `Rand_FRand(0.2)` ×3 [M 0x1ab160/0x1ab184/0x1ab1a4]) for every site the
+//! game reaches through `Gas_Init`; the port stand-ins that are NOT game `Gas_Init` calls (the swoosh
+//! ribbon puff, the GT destroy burst) stay on `init_hash`'s counter hash — the game consumes no draws
+//! there, so the stream must not move either.
 
 use crate::world::V3;
 
@@ -56,7 +59,7 @@ pub const POOL_MESHES: &[u32] = &[SMOKE_QUAD, 0x0200_001f, 0x0200_08bc, 0x0200_0
 
 /// REC_FRAME_RATE (0x30d0dc — GS_SetRefreshRate 0x17d2b8 sets it = 1/FRAME_RATE; 0x30d0cc is
 /// FRAME_RATE_INT) = 1/60 [M symtab; grenade.rs:52].
-const REC_FRAME_RATE: f32 = 1.0 / 60.0;
+pub(crate) const REC_FRAME_RATE: f32 = 1.0 / 60.0;
 /// WldGravity [L grenade.rs:51; M the global the update's `_WldGravity` reads].
 const WLD_GRAVITY: V3 = [0.0, -9.8, 0.0];
 
@@ -142,13 +145,53 @@ impl GasPool {
     /// frame with the same parameters, so a few dozen live at once in play; 128 covers grenade chains.
     pub const CAP: usize = 128;
 
-    /// `Gas_Init` 0x1aacc8 minus the RNG draws (see the module doc). `p1`/`p2` = the scale start/end,
-    /// `rgba` = the packed param 9 (r, g, b, a), the target rgba is the callers' ~0 (fade out),
-    /// `yaw` = the quaternion z the callers pass (a random half-open π for the muzzle/searchlight,
-    /// unused by the port's billboard draw beyond the spin), `vel` = the type-4 velocity vector.
+    /// `Gas_Init` 0x1aacc8 for the meshless callers (SMOKE_QUAD, rgba end 0): consumes the game's
+    /// draws (see `init_ex`). `p1`/`p2` = the scale start/end, `rgba` = the packed param 9 (r, g, b, a),
+    /// `yaw` = the quaternion z the callers pass (a drawn angle for the muzzle/breath A sites,
+    /// unused by the port's billboard draw beyond the spin), `vel` = the given velocity vector.
     #[allow(clippy::too_many_arguments)]
-    pub fn init(&mut self, pos: V3, yaw: f32, vel: V3, p1: f32, p2: f32, kind: u8, rgba: [u8; 4], life: f32) {
-        self.init_ex(crate::gas::SMOKE_QUAD, pos, yaw, vel, p1, p2, kind, rgba, 0, life);
+    pub fn init(&mut self, rng: &mut crate::drone::Rng, pos: V3, yaw: f32, vel: V3, p1: f32, p2: f32, kind: u8, rgba: [u8; 4], life: f32) {
+        self.init_ex(rng, crate::gas::SMOKE_QUAD, pos, yaw, vel, p1, p2, kind, rgba, 0, life);
+    }
+
+    /// The port stand-ins that are NOT game `Gas_Init` calls (the swoosh ribbon puff
+    /// `Swoosh_Update` 0x18d200 has no gas/RNG path of its own [M 0x18d200:49-82]; the GT destroy
+    /// burst is the port's presentation of `Emitter_Create` [M 0x180498:249-257]). The game consumes
+    /// no shared draws for them, so neither does the port — the old counter-hash body, kept verbatim
+    /// so the stream stays where the game's is.
+    #[allow(clippy::too_many_arguments)]
+    pub fn init_hash(&mut self, mesh: u32, pos: V3, yaw: f32, vel: V3, p1: f32, p2: f32, kind: u8, rgba: [u8; 4], rgba_end: u32, life: f32) {
+        if life <= 0.0 || self.puffs.len() >= Self::CAP { return; }
+        let n = self.counter.wrapping_add(0x9e37_79b9);
+        self.counter = n;
+        let spin = jitter(n, 1) * (std::f32::consts::FRAC_PI_2 * REC_FRAME_RATE)
+            * if jitter(n, 2) > 0.5 { 1.0 } else { -1.0 };
+        let vel = match kind {
+            4 => [vel[0] * REC_FRAME_RATE + (jitter(n, 3) - 0.025), vel[1] * REC_FRAME_RATE, vel[2] * REC_FRAME_RATE + (jitter(n, 4) - 0.025)],
+            7 => [(jitter(n, 3) * 0.2 - 0.1) * REC_FRAME_RATE, jitter(n, 5) * 0.2 * REC_FRAME_RATE, (jitter(n, 4) * 0.2 - 0.1) * REC_FRAME_RATE],
+            _ => [0.0, REC_FRAME_RATE, 0.0],
+        };
+        let _ = yaw;
+        let end = [(rgba_end >> 24) as u8, (rgba_end >> 16) as u8, (rgba_end >> 8) as u8, rgba_end as u8];
+        self.puffs.push(Gas {
+            pos, vel,
+            mesh,
+            scale: p1,
+            scale_rate: (p2 - p1) / life,
+            rgba: rgba.map(f32::from),
+            rgba_rate: [
+                (f32::from(end[0]) - f32::from(rgba[0])) / life,
+                (f32::from(end[1]) - f32::from(rgba[1])) / life,
+                (f32::from(end[2]) - f32::from(rgba[2])) / life,
+                (f32::from(end[3]) - f32::from(rgba[3])) / life,
+            ],
+            spin,
+            life,
+            kind,
+            billboard: false,
+            xray_only: false,
+        });
+        if let Some(g) = self.puffs.last_mut() { g.mesh = mesh; }
     }
 
     /// `Gas_Init` for the broken-searchlight site (`Searchlight_Update` 0x1cb900:373-385), consuming the
@@ -305,29 +348,41 @@ impl GasPool {
         let _ = yaw; // the rot-z euler (the searchlight's shape); the port's billboard reads only the spin
     }
 
-    /// The full form the `Effect_Bullet` gas entries need [M disasm 0x1ce964..0x1cea90]: the entry's own
-    /// mesh hash (the callers' SMOKE_QUAD is only the common case) and the packed rgba END (the game
-    /// fades start→end; `init`'s callers pass ~0). Fix-impacts hook, additive.
+    /// `Gas_Init` 0x1aacc8 — the game's own draws consumed in the game's order, for every site the
+    /// game reaches through this function: the spin `Rand_FRand(π/2·REC_FRAME_RATE)` [M 0x1ab060;
+    /// decompile 0x1aacc8:72-73], quartered for kind 0xb [M 0x1aacc8:74-76], the sign
+    /// `Rand_Rand(0x100)` (negate when the draw is ≥ 0x80) [M 0x1ab08c; decompile :77-80], then the
+    /// velocity branch — kind 4 with a GIVEN velocity: `vel·REC + Rand_FRand(0.05)` on x and z, no
+    /// y draw [M 0x1ab21c/0x1ab248; decompile :91-98 — the draw is ADDED raw, not centred]; kind 7
+    /// with a NULL velocity (every kind-7 caller here passes NULL — the muzzle 0x1a4428, the
+    /// Effect_Bullet entries 0x1cea80): `Env_GetWindVel` (0 — no wind radiators in the port's rooms
+    /// [S]) + the `(rand−0.1, rand, rand−0.1)` spread over 0.2 [M 0x1ab160/0x1ab184/0x1ab1a4;
+    /// decompile :108-116]; every other kind: the (0, REC, 0) default, no draws [M decompile
+    /// :105-129]. The draws land BEFORE the pool-cap check — the game's RNG has no notion of the
+    /// port's cap, and a skipped draw would shift the shared stream. The life gate stays first:
+    /// the game draws nothing when the 11th arg (the life ushort) is 0 [M 0x1aacc8:31].
     #[allow(clippy::too_many_arguments)]
-    pub fn init_ex(&mut self, mesh: u32, pos: V3, yaw: f32, vel: V3, p1: f32, p2: f32, kind: u8, rgba: [u8; 4], rgba_end: u32, life: f32) {
-        if life <= 0.0 || self.puffs.len() >= Self::CAP { return; }
-        let n = self.counter.wrapping_add(0x9e37_79b9);
-        self.counter = n;
-        // The spin rate: Rand_FRand(π/2 · REC_FRAME_RATE), sign from the coin [M 0x1aacc8:72-80]. The
-        // game's value is per-tick; the port keeps the magnitude and derives the sign deterministically.
-        let spin = jitter(n, 1) * (std::f32::consts::FRAC_PI_2 * REC_FRAME_RATE)
-            * if jitter(n, 2) > 0.5 { 1.0 } else { -1.0 };
-        // Velocity by type [M 0x1aacc8:89-141]: 4 = given · REC + ±0.05 x/z jitter; 7 = the wind
-        // (Env_GetWindVel — the port's rooms carry no wind radiators for these sources [S]) + the
-        // (rand−0.1, rand, rand−0.1) spread over 0.2, ALL × REC_FRAME_RATE [M 0x1aacc8:108-115:
-        // `(*pfVar1 + (fVar11 - 0.1)) * REC_FRAME_RATE` with fVar11 = Rand_FRand(0.2)]; else the
-        // decomp's (0, REC, 0) default. rocket-trail-gas: the old kind-7 arm dropped the ·REC —
-        // ~12× the game's drift on every generic kind-7 puff (the muzzle smoke included).
+    pub fn init_ex(&mut self, rng: &mut crate::drone::Rng, mesh: u32, pos: V3, yaw: f32, vel: V3, p1: f32, p2: f32, kind: u8, rgba: [u8; 4], rgba_end: u32, life: f32) {
+        if life <= 0.0 { return; }
+        // Draw 1: the spin [M 0x1ab060], quartered for kind 0xb [M 0x1aacc8:74-76].
+        let mut spin_mag = rng.frand(std::f32::consts::FRAC_PI_2 * REC_FRAME_RATE);
+        if kind == 0xb { spin_mag *= 0.25; }
+        // Draw 2: the sign coin [M 0x1ab08c; decompile :77-80 — `0x7f < draw` negates].
+        let spin = if rng.rand(0x100) >= 0x80 { -spin_mag } else { spin_mag };
+        // Draws 3+: the velocity branch [M 0x1aacc8:89-141].
         let vel = match kind {
-            4 => [vel[0] * REC_FRAME_RATE + (jitter(n, 3) - 0.025), vel[1] * REC_FRAME_RATE, vel[2] * REC_FRAME_RATE + (jitter(n, 4) - 0.025)],
-            7 => [(jitter(n, 3) * 0.2 - 0.1) * REC_FRAME_RATE, jitter(n, 5) * 0.2 * REC_FRAME_RATE, (jitter(n, 4) * 0.2 - 0.1) * REC_FRAME_RATE],
+            4 => [
+                mul_ee(vel[0], REC_FRAME_RATE) + rng.frand(0.05),
+                mul_ee(vel[1], REC_FRAME_RATE),
+                mul_ee(vel[2], REC_FRAME_RATE) + rng.frand(0.05),
+            ],
+            7 => {
+                let (rx, ry, rz) = (rng.frand(0.2), rng.frand(0.2), rng.frand(0.2));
+                [mul_ee(rx - 0.1, REC_FRAME_RATE), mul_ee(ry, REC_FRAME_RATE), mul_ee(rz - 0.1, REC_FRAME_RATE)]
+            }
             _ => [0.0, REC_FRAME_RATE, 0.0],
         };
+        if self.puffs.len() >= Self::CAP { return; }
         let _ = yaw;
         // The fade target: the entry's packed rgba end (the game's param 10 [M 0x1aacc8:56-71]).
         let end = [(rgba_end >> 24) as u8, (rgba_end >> 16) as u8, (rgba_end >> 8) as u8, rgba_end as u8];
@@ -401,8 +456,9 @@ mod tests {
         // [M Gas_Init 0x1aacc8:83 |= 0x20020120; View_SetupRenderModes_Tweak 0x1e5888:12-17 >> 2 in mode 1;
         // gases_smoke 0x1ab2d0 tail: (int) clamp 0..255]
         assert_ne!(GAS_OBJ_FLAGS & NIGHT_QUARTER_ALPHA, 0);
+        let mut rng = crate::drone::Rng::new(0x21d);
         let mut pool = GasPool::default();
-        pool.init([0.0; 3], 0.0, [0.0; 3], 0.5, 0.5, 0, [0xff, 0xff, 0xff, 0xc8], 60.0);
+        pool.init(&mut rng, [0.0; 3], 0.0, [0.0; 3], 0.5, 0.5, 0, [0xff, 0xff, 0xff, 0xc8], 60.0);
         let g = &mut pool.puffs[0];
         g.rgba[3] = 199.9;
         assert_eq!(g.alpha_byte(), 199);
@@ -458,8 +514,9 @@ mod tests {
 
     #[test]
     fn a_puff_grows_fades_and_dies() {
+        let mut rng = crate::drone::Rng::new(0x21d);
         let mut pool = GasPool::default();
-        pool.init([1.0, 2.0, 3.0], 0.0, [0.0; 3], 0.05, 0.10, 7, [0x48, 0x40, 0x30, 0x80], 8.0);
+        pool.init(&mut rng, [1.0, 2.0, 3.0], 0.0, [0.0; 3], 0.05, 0.10, 7, [0x48, 0x40, 0x30, 0x80], 8.0);
         assert_eq!(pool.puffs.len(), 1);
         let g0 = pool.puffs[0].clone();
         pool.update();
@@ -473,12 +530,74 @@ mod tests {
 
     #[test]
     fn the_pool_is_deterministic_and_capped() {
+        let mut ra = crate::drone::Rng::new(0x21d);
+        let mut rb = crate::drone::Rng::new(0x21d);
         let mut a = GasPool::default();
         let mut b = GasPool::default();
-        for i in 0..64 { a.init([i as f32, 0.0, 0.0], 0.0, [0.0; 3], 0.05, 0.1, 7, [72, 64, 48, 128], 4.0); }
-        for i in 0..64 { b.init([i as f32, 0.0, 0.0], 0.0, [0.0; 3], 0.05, 0.1, 7, [72, 64, 48, 128], 4.0); }
-        assert_eq!(a.puffs, b.puffs, "same calls, same puffs (no wall-clock)");
-        for _ in 0..200 { a.init([0.0; 3], 0.0, [0.0; 3], 0.05, 0.1, 7, [72, 64, 48, 128], 4.0); }
+        for i in 0..64 { a.init(&mut ra, [i as f32, 0.0, 0.0], 0.0, [0.0; 3], 0.05, 0.1, 7, [72, 64, 48, 128], 4.0); }
+        for i in 0..64 { b.init(&mut rb, [i as f32, 0.0, 0.0], 0.0, [0.0; 3], 0.05, 0.1, 7, [72, 64, 48, 128], 4.0); }
+        assert_eq!(a.puffs, b.puffs, "same calls, same draws, same puffs (no wall-clock)");
+        for _ in 0..200 { a.init(&mut ra, [0.0; 3], 0.0, [0.0; 3], 0.05, 0.1, 7, [72, 64, 48, 128], 4.0); }
         assert_eq!(a.puffs.len(), GasPool::CAP, "the pool caps");
+    }
+
+    #[test]
+    fn init_ex_consumes_the_games_draws_in_order() {
+        // [M 0x1ab060 spin, 0x1ab08c sign, 0x1ab160/0x1ab184/0x1ab1a4 kind-7 wind, 0x1ab21c/0x1ab248
+        // kind-4 jitter; the kind-0xb quarter [M 0x1aacc8:74-76]] — each call's fields must equal the
+        // draws replayed on a twin stream, bit for bit, and the stream must advance by exactly the
+        // game's count (2 kind 0/1/0xb, 5 kind 7, 4 kind 4).
+        // kind 0: spin + sign only, default (0, REC, 0) velocity.
+        let mut rng = crate::drone::Rng::new(0x5e4c04);
+        let mut pool = GasPool::default();
+        pool.init_ex(&mut rng, SMOKE_QUAD, [0.0; 3], 0.0, [9.0, 9.0, 9.0], 0.05, 0.1, 0, [255, 255, 255, 200], 0, 40.0);
+        let mut r = crate::drone::Rng::new(0x5e4c04);
+        let spin = r.frand(std::f32::consts::FRAC_PI_2 * REC_FRAME_RATE);
+        let sign = r.rand(0x100);
+        let g = &pool.puffs[0];
+        let expect = if sign >= 0x80 { -spin } else { spin };
+        assert_eq!(g.spin.to_bits(), expect.to_bits(), "kind 0: the spin draw with the sign coin");
+        assert_eq!(g.vel, [0.0, REC_FRAME_RATE, 0.0], "kind 0: the default velocity, no draws");
+        assert_eq!(r.draws, 2, "kind 0 consumed exactly the game's 2 draws");
+        assert_eq!(rng.draws, r.draws, "the pool's stream matches the replay");
+        // kind 7: spin + sign + the 3 wind draws; vel = (r−0.1, r, r−0.1)·REC [M 0x1aacc8:108-116].
+        let mut pool7 = GasPool::default();
+        pool7.init_ex(&mut rng, SMOKE_QUAD, [1.0, 2.0, 3.0], 0.0, [0.0; 3], 0.05, 0.1, 7, [0x48, 0x40, 0x30, 0x80], 1, 128.0);
+        let spin7 = r.frand(std::f32::consts::FRAC_PI_2 * REC_FRAME_RATE);
+        let sign7 = r.rand(0x100);
+        let (rx, ry, rz) = (r.frand(0.2), r.frand(0.2), r.frand(0.2));
+        let g7 = &pool7.puffs[0];
+        let expect7 = if sign7 >= 0x80 { -spin7 } else { spin7 };
+        assert_eq!(g7.spin.to_bits(), expect7.to_bits(), "kind 7: the spin draw with the sign coin");
+        assert_eq!(g7.vel[0].to_bits(), mul_ee(rx - 0.1, REC_FRAME_RATE).to_bits());
+        assert_eq!(g7.vel[1].to_bits(), mul_ee(ry, REC_FRAME_RATE).to_bits());
+        assert_eq!(g7.vel[2].to_bits(), mul_ee(rz - 0.1, REC_FRAME_RATE).to_bits());
+        assert_eq!(r.draws, 7, "kind 7 consumed exactly the game's 5 more draws");
+        // kind 4: spin + sign + 2 jitter draws; x/z = given·REC + the RAW draw [M 0x1aacc8:91-98].
+        let mut pool4 = GasPool::default();
+        pool4.init_ex(&mut rng, SMOKE_QUAD, [0.0; 3], 0.0, [1.0, 2.0, 3.0], 0.3, 1.5, 4, [255, 255, 255, 255], 1, 20.0);
+        let spin4 = r.frand(std::f32::consts::FRAC_PI_2 * REC_FRAME_RATE);
+        let sign4 = r.rand(0x100);
+        let (jx, jz) = (r.frand(0.05), r.frand(0.05));
+        let g4 = &pool4.puffs[0];
+        let expect4 = if sign4 >= 0x80 { -spin4 } else { spin4 };
+        assert_eq!(g4.spin.to_bits(), expect4.to_bits(), "kind 4: the spin draw with the sign coin");
+        assert_eq!(g4.vel[0].to_bits(), (mul_ee(1.0, REC_FRAME_RATE) + jx).to_bits(), "the draw is ADDED raw, not centred");
+        assert_eq!(g4.vel[1].to_bits(), mul_ee(2.0, REC_FRAME_RATE).to_bits(), "no y draw [M 0x1aacc8:91-98]");
+        assert_eq!(g4.vel[2].to_bits(), (mul_ee(3.0, REC_FRAME_RATE) + jz).to_bits());
+        assert_eq!(r.draws, 11, "kind 4 consumed exactly the game's 4 more draws");
+        // kind 0xb: the quarter spin [M 0x1aacc8:74-76], sign coin, default velocity.
+        let mut poolb = GasPool::default();
+        poolb.init_ex(&mut rng, 0x0200_001f, [0.0; 3], 0.0, [0.0; 3], 0.5, 1.68, 0xb, [255, 255, 255, 127], 0x8080_8000, 127.0);
+        let spinb = r.frand(std::f32::consts::FRAC_PI_2 * REC_FRAME_RATE) * 0.25;
+        let signb = r.rand(0x100);
+        let gb = &poolb.puffs[0];
+        let expectb = if signb >= 0x80 { -spinb } else { spinb };
+        assert_eq!(gb.spin.to_bits(), expectb.to_bits(), "kind 0xb: the quartered spin with the sign coin");
+        assert_eq!(r.draws, 13, "kind 0xb consumed exactly the game's 2 more draws");
+        // The stream keeps walking identically after all four puffs.
+        let a = rng.frand(1.0).to_bits();
+        let b = r.frand(1.0).to_bits();
+        assert_eq!(a, b, "the pool consumed exactly the game's draws, nothing else");
     }
 }

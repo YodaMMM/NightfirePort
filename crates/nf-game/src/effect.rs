@@ -503,7 +503,7 @@ impl Effects {
                     // a visual; `Vec_NormToRot`/`ATAN2_APPROX` are not ported).
                     let _ = g.orient_normal;
                     let rgba = [((g.rgba[0] >> 24) & 0xff) as u8, ((g.rgba[0] >> 16) & 0xff) as u8, ((g.rgba[0] >> 8) & 0xff) as u8, (g.rgba[0] & 0xff) as u8];
-                    gas.init_ex(g.mesh, p, 0.0, [0.0; 3], g.scale[0], g.scale[1], g.kind as u8, rgba, g.rgba[1], g.life as f32);
+                    gas.init_ex(rng, g.mesh, p, 0.0, [0.0; 3], g.scale[0], g.scale[1], g.kind as u8, rgba, g.rgba[1], g.life as f32);
                 }
             }
             // The decal: `EffectInfo+4` != 0 → take a pool node, evicting the OLDEST when the 200 are
