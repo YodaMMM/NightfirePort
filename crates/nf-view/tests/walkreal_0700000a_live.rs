@@ -327,9 +327,17 @@ fn walk_to_security_keyboard() -> Walker {
     // Q-Worm BULLET reaches the PC clear [M PCQWorm_Update 0x1aee20's class-5 seg test; D probe:
     // segment_bullet CLEAR from every stand x −16..−17.8, z −33.5..−34.4].
     let _ = w.try_walk_to(Wp::new(-13.9, 0.4, -30.5).r(0.9), "pocket south-east");
-    let _ = w.try_walk_to(Wp::new(-13.5, 0.4, -32.5).r(0.9), "the x −13.5 column south");
-    let _ = w.try_walk_to(Wp::new(-13.5, 0.4, -34.0).r(0.9), "into the band");
-    let _ = w.try_walk_to(Wp::new(-15.5, 0.4, -34.3).r(0.9), "band west");
+    // Beam #621 (out ch 0x24, OR #668 → ch 0x10 → gun #639) is a diagonal low line
+    // (−14.93,−32.34)→(−9.90,−33.87) at y 0.26 [probe tris] — no stance clears a low beam (the
+    // capsule bottom reaches feet−0.04 [M 0x194df0 case 3]); the player's pass is EAST of its
+    // east end (the game's own passage: northward rays from z −34.4 clear at x −9 [D probe
+    // rays]; the end (−9.90,−33.87) sits 1.0 from the (−9.0,−34.2) leg), then the band south of
+    // it, dipping z −34.8 past the end.
+    let _ = w.try_walk_to(Wp::new(-12.8, 0.4, -30.9).r(0.9), "east of the column");
+    let _ = w.try_walk_to(Wp::new(-9.2, 0.4, -32.6).r(0.9), "the x −9 passage north of beam #621");
+    let _ = w.try_walk_to(Wp::new(-9.0, 0.4, -34.2).r(0.9), "past beam #621's east end");
+    let _ = w.try_walk_to(Wp::new(-10.5, 0.4, -34.8).r(0.9), "the band dip south of #621");
+    let _ = w.try_walk_to(Wp::new(-16.5, 0.4, -34.8).r(0.9), "the band west, south of #621");
     let _ = w.try_walk_to(Wp::new(-16.5, 0.4, -34.3).r(0.7), "the south stand");
     // The REAL install: equip the Q-Worm through the real gadget cycle (mode-1 bounds 0x4A..0x5E,
     // owned entries only [M player.rs Input::gadget_cycle / Gun_Update's cycle]) — the prior
@@ -370,7 +378,18 @@ fn walk_to_security_keyboard() -> Walker {
     // 0x168ea8's follow].
     let back = {
         let sim = w.scene.sim.as_ref().unwrap();
-        walker::nav_route(sim, sim.bond.pos, [-3.9, 0.0, 13.2])
+        // Via east of beam #621's east end: the A* from the stand would otherwise recross the
+        // diagonal through the x −13 passage (inside the beam's span).
+        match walker::nav_route(sim, sim.bond.pos, [-9.0, 0.4, -34.2]) {
+            Some(via) => {
+                let mut nodes = via;
+                match walker::nav_route(sim, [-9.0, 0.4, -34.2], [-3.9, 0.0, 13.2]) {
+                    Some(rest) => { nodes.extend(rest); Some(nodes) }
+                    None => walker::nav_route(sim, sim.bond.pos, [-3.9, 0.0, 13.2]),
+                }
+            }
+            None => walker::nav_route(sim, sim.bond.pos, [-3.9, 0.0, 13.2]),
+        }
     };
     match back {
         Some(nodes) => for (k, p) in nodes.iter().enumerate() {
@@ -510,7 +529,7 @@ fn walk_office_floor_qworm_keyboard_hatch() {
     // player's legal ring route: south through the west offices, the west corridor, the south
     // corridor, and up the east side to the hatch — the corners below, walked steadily (a real
     // player's stealth timing: no stops inside a civilian's reach).
-    let ring: [([f32; 3], &str, bool); 24] = [
+    let ring: [([f32; 3], &str, bool); 25] = [
         ([-7.5, 1.3, 14.5], "ring: the security centre's west door", false),
         ([-7.5, 1.3, 16.5], "ring: the west hall north", false),
         // Beam #607's plane (x −8.45, z 15-20.25 [D triggers dump]) spans this corridor: the
@@ -519,6 +538,10 @@ fn walk_office_floor_qworm_keyboard_hatch() {
         // [M 0x194df0 default arm] crosses and arms gun #640 through OR #667 → ch 0x0F).
         ([-9.6, 1.3, 16.5], "ring: crouched through beam #607's plane", true),
         ([-20.5, 1.3, 16.5], "ring: the west offices' north corridor", false),
+        // Beam #614 (out ch 0x22, OR #667 → ch 0x0F → gun #640) is a low line z 13.03,
+        // x −24.7..−19.45, y 0.26-0.52 [probe tris] — the dodge is EAST of its east end
+        // (1.15 from (−19.45, 13.03) at x −18.3).
+        ([-18.3, 1.3, 13.0], "ring: east of beam #614's east end", false),
         ([-20.5, 1.3, 5.5], "ring: down the west office block", false),
         // The crossing rides the game's own ai lane: the patrol nodes 17/28 cross at z 5.54/5.60
         // [D 0700000a ai_network, disc y 0.0]. The swing door opened to the pos01-0 end leaves
@@ -572,6 +595,15 @@ fn walk_office_floor_qworm_keyboard_hatch() {
         watch_and_clear(&mut w, 16.0);
         w.walk_to(Wp::new(wp[0], wp[1], wp[2]).r(0.8), label);
         if crouched { set_crouch(&mut w, false); }
+        {
+            let sim = w.scene.sim.as_ref().unwrap();
+            let chs: Vec<String> = [0x1f, 0x20, 0x21, 0x22, 0x24, 0x25, 0x26, 0x0f, 0x10, 0x11, 0x12, 0x81]
+                .iter().filter(|c| sim.drones.channels.on(**c)).map(|c| format!("{c:#04x}")).collect();
+            let tur: Vec<String> = sim.drones.gt_turrets.iter()
+                .map(|t| format!("{}:s{}", t.placement, t.state)).collect();
+            eprintln!("[ring] after '{label}' pos ({:.2},{:.2},{:.2}) ch on [{}] turrets [{}]",
+                sim.bond.pos[0], sim.bond.pos[1], sim.bond.pos[2], chs.join(","), tur.join(","));
+        }
         assert!(w.scene.sim.as_ref().unwrap().drones.level_exit.is_none(), "the mission failed at '{label}'");
     }
     // THE MOUTH, through the game's own writer chain (all real input — see the test doc):
@@ -640,7 +672,7 @@ fn walk_office_floor_qworm_keyboard_hatch() {
         assert!(sim.drones.locks.iter().filter(|l| l.placement == 648).all(|l| l.unlocked), "the used lock's state 1 [M 0x1b0650]");
     }
     // The crossing + the lane south (this round's walked legs):
-    let ring2: [([f32; 3], &str); 21] = [
+    let ring2: [([f32; 3], &str); 19] = [
         ([-11.0, 1.3, -18.7], "ring: the doorway west"),
         ([-9.6, 1.3, -18.7], "ring: through the doorway, the atrium lane"),
         // The player's route south rides the game's N-S lane at x −8.5 (the ai nodes 132
@@ -652,15 +684,16 @@ fn walk_office_floor_qworm_keyboard_hatch() {
         ([-6.5, 1.3, -22.5], "ring: the south corridor"),
         ([9.5, 1.3, -22.5], "ring: the south corridor's east run"),
         ([9.5, 1.3, -13.5], "ring: up the east side south"),
-        ([22.5, 1.3, -13.5], "ring: the south-east corner"),
-        ([22.5, 1.3, -12.5], "ring: the east corridor jink"),
-        ([23.5, 1.3, -12.5], "ring: the east corridor jink 2"),
-        ([23.5, 1.3, -11.5], "ring: up the east corridor"),
-        ([24.5, 1.3, -11.5], "ring: the east corridor jink 3"),
+        // The 0x25 laser fence (#652-654, diagonal (22.93,−13.89)→(19.20,−10.76), 4 stacked
+        // rows [probe tris]) seals the old corner: the pass is NORTH of its north post
+        // (19.20,−10.76) — z −9.8 rides 0.96 clear.
+        ([9.5, 1.3, -9.8], "ring: north of the fence line, east run"),
+        ([23.0, 1.3, -9.8], "ring: east of the fence's north post"),
+        ([24.5, 1.3, -9.0], "ring: the east corridor mouth"),
         ([24.5, 1.3, 2.5], "ring: up the east offices"),
         ([23.5, 1.3, 2.5], "ring: the east corridor jink 4"),
-        ([23.5, 1.3, 3.5], "ring: up 2"),
-        ([11.5, 1.3, 3.5], "ring: west along the east corridor"),
+        ([23.5, 1.3, 1.5], "ring: south of beam #625's south end"),
+        ([11.5, 1.3, 1.5], "ring: west under #625's south end"),
         ([11.5, 1.3, 15.5], "ring: up the east corridor north"),
         ([17.5, 1.3, 15.5], "ring: east to the hatch anteroom's south"),
         ([17.5, 1.3, 16.5], "ring: into the anteroom"),
@@ -1236,4 +1269,24 @@ fn the_pick_ref_accumulator_tracks_the_game_ref() {
 #[test]
 fn walk_office_floor_qworm_keyboard_hatch_real_damage() {
     walker::with_real_damage(walk_office_floor_qworm_keyboard_hatch);
+}
+
+/// Load-only probe: every mask-8 (player) touch trigger's tri bounding box — the laser web's
+/// positions the route must crouch or dodge.
+#[test]
+fn probe_laser_web_positions() {
+    let cold = nf_view::load_with_carry(&iso(), "0700000a.bin", false, None).expect("load");
+    let sim = cold.sim.as_ref().unwrap();
+    for t in &sim.drones.triggers {
+        if t.mask & 8 == 0 || t.tris.is_empty() { continue; }
+        if t.placement == 621 || t.placement == 614 {
+            for (ti, tri) in t.tris.iter().enumerate() {
+                eprintln!("[laser{}] tri{} {:?}", t.placement, ti, tri);
+            }
+        }
+        let (mut lo, mut hi) = (t.tris[0][0], t.tris[0][0]);
+        for tri in &t.tris { for v in tri { for k in 0..3 { lo[k] = lo[k].min(v[k]); hi[k] = hi[k].max(v[k]); } } }
+        eprintln!("[laser] plc {} out {:#04x} lo ({:.2},{:.2},{:.2}) hi ({:.2},{:.2},{:.2})",
+            t.placement, t.out, lo[0], lo[1], lo[2], hi[0], hi[1], hi[2]);
+    }
 }
