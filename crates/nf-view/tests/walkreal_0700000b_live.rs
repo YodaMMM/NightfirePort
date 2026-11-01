@@ -19,7 +19,10 @@
 //! channels 0x46-0x4a model the 0a exit's RamSave carry [M Player_RamSave 0x195670 — the full
 //! 256-byte switch_channels block rides the save]. The balcony→exec lift ride is the game's own
 //! route on real input (the boarding hop, the carry on the script-entity collision set [M
-//! 0x194188 → Control_InheritVelocity 0x133e88], the step-off) and the exec office goes through
+//! 0x194188 → Control_InheritVelocity 0x133e88], the south step-off through the shaft's
+//! south-wall exec-floor opening [D obj 'lift' 0x02000367 collision; D the opening at x 0.5..1.5
+//! z ~22.5 — the east lip at z 23.5+ has NO floor and the old east steer + the ~6 m rescue
+//! teleport are deleted]) and the exec office goes through
 //! the burned keypad's door (the Laser watch 0x4E on Lock #178 → ch 0x2F → door #151 [M
 //! 0x1ae3d8 case 0; D #178/#151]) — and the waiting-room exit transit (doors #3 and #0) is
 //! WALKED on the E-opened leaves: the pick is the game's 0x800 arm `1.5·r_door + r_pick` [M
@@ -74,10 +77,10 @@ fn load_fresh() -> Walker {
 }
 
 /// The shared walkthrough — both walks reuse the same legs: the spawn plates → the arrival
-/// cut-scene → the cab ride → the exec floor → the waiting-room exit transit (the one kept
-/// stand-in) → the ring → the terminal → the lock's walked E → the Q-Worm install → the files
-/// (objective 9, the REAL writer on both walks) → the roof gate → the roof cut-scene → the
-/// parachute → the jump → the mission latch. `fresh` selects only the mission-latch wording
+/// cut-scene → the cab ride (the south step-off onto the exec floor) → the walked lane to n41
+/// → the waiting-room exit transit → the ring → the terminal → the lock's walked E → the
+/// Q-Worm install → the files (objective 9, the REAL writer on both walks) → the roof gate →
+/// the roof cut-scene → the parachute → the jump → the mission latch. `fresh` selects only the mission-latch wording
 /// (a fresh boot's AND cannot fold — the end rides OUT #304's own ch 100 write).
 fn walk_to_the_mission_end(mut w: &mut Walker, fresh: bool) {
     // The spawn plates fire under Bond (objective 6 + the arrival cut-scene arming); the
@@ -194,17 +197,35 @@ fn walk_to_the_mission_end(mut w: &mut Walker, fresh: bool) {
             let y = w.scene.sim.as_ref().unwrap().bond.pos[1];
             eprintln!("[0b] the cab ride: boarded, bond y now {y:.2} (surface target 47.6+)");
             if y > 40.0 {
-                // The step-off: the proven east steer — off the cab's east edge (x 1.6) onto the
-                // dock band (51.8). (The south-edge variant wedges on the cab's raised south
-                // section at z 23.45 once the cab docks; the dock band is an ISLAND — the pit
-                // x 3-8 z 23-25.5, the x 2-3.5 hole and the dome hole x 7-9.5 z 26.5+ surround
-                // it [D the floor grid in probe_0b_doors] — no walked descent exists.)
+                // THE STEP-OFF, SOUTH [D the shaft's south-wall opening at the exec floor]: the
+                // exec floor (46.8) reaches into the shaft through an opening in the shaft's
+                // south wall at x 0.5..1.5, z ~22.5 (the room ray at z 22.5 x 0.5-1.5 hits the
+                // 46.8 floor with NO wall above it, while every face ray at waist/head height
+                // hits wall, and EAST of the lip x 1.6 at z 23.5-27.5 there is NO floor down to
+                // y 39 — the old east steer dropped Bond into that hole and the walk teleported
+                // ~6 m as the rescue). The cab's roof top (local +3.76..+4.10 [D obj 'lift'
+                // 0x02000367 collision, 1435 tris, horizontal levels -2.89/-1.68/+2.39..2.61/
+                // +3.76/+4.03..4.10 — a closed hollow box with NO interior floor: interior rays
+                // from cy+1.6 to cy-0.5 hit nothing]) passes level with the 46.8 sill at
+                // cy ≈ 42.7-43.0, so the walked transit is: as the ride loop releases at
+                // cy+4.1 >= 47.6 (roof 47.26, 0.46 above the sill), steer SOUTH along the roof,
+                // cross the roof's south edge and land on the exec floor — real input only.
                 let start = w.total_ticks;
-                while w.total_ticks - start < 240 {
+                let mut off = false;
+                while w.total_ticks - start < 700 {
                     let sim = w.scene.sim.as_ref().unwrap();
                     let p = sim.bond.pos;
-                    if p[0] > 2.2 && (44.0..52.0).contains(&p[1]) { break; }
-                    let desired = (8.0f32 - p[0]).atan2(24.8 - p[2]);
+                    // Landed: south of the gap line, grounded on the exec-floor band (the floor
+                    // 46.8 + the pos's ~1.0 body offset, widened for the walking drop).
+                    if p[2] < 22.55 && sim.bond.grounded && (46.9..49.3).contains(&p[1]) { off = true; break; }
+                    let cy = cab_y(&w).unwrap_or(0.0);
+                    if cy > 46.5 { break; } // the pass window is gone — the sill is below the roof
+                    // East first: the shaft's south wall is solid at x 0.0-0.3 up to its 55.5 cap
+                    // [D the room map's z 23.0 row] — the full-height gap runs x 0.5..1.5, so
+                    // walk to x 1.1 on the roof's lower east part (the raised band ends at x 0.29
+                    // [D the +4.03 level's x span]) before turning south through the gap.
+                    let target = if p[0] < 0.75 { [1.1f32, 23.8] } else { [1.1f32, 21.8] };
+                    let desired = (target[0] - p[0]).atan2(target[1] - p[2]);
                     let err = walker::wrap_pi(desired - sim.bond.yaw);
                     let input = nf_game::player::Input {
                         turn: err.clamp(-0.08, 0.08),
@@ -214,40 +235,39 @@ fn walk_to_the_mission_end(mut w: &mut Walker, fresh: bool) {
                     w.tick(input, false);
                 }
                 let p = w.scene.sim.as_ref().unwrap().bond.pos;
-                eprintln!("[0b] the step-off: bond ({:.2},{:.2},{:.2})", p[0], p[1], p[2]);
-                rode = p[0] > 2.2 && (44.0..52.0).contains(&p[1]);
+                eprintln!("[0b] the step-off south: bond ({:.2},{:.2},{:.2}) grounded {}",
+                    p[0], p[1], p[2], w.scene.sim.as_ref().unwrap().bond.grounded);
+                rode = off;
             }
         }
         eprintln!("[0b] diag: post-poll disabled {} ch7b {} boarded->rode {}",
             w.scene.sim.as_ref().unwrap().disabled, w.scene.sim.as_ref().unwrap().drones.channels.on(0x7b), rode);
     }
-    // No stand-in: the cab ride IS the game's route (the boarding hop, the carry on the
-    // script-entity collision set, the step-off south — all real input above). The fixed 60 Hz
-    // + the bit-exact RNG make the boarding deterministic: once green, always green.
-    assert!(rode, "the paternoster cab ride must board and step off on real input [M 0x194188 → Control_InheritVelocity 0x133e88; D the cab keys y 11.0 → 48.44]");
+    // No stand-in anywhere: the cab ride AND the exec-floor arrival are the game's route (the
+    // boarding hop, the carry on the script-entity collision set, the south step-off through
+    // the shaft's south-wall opening — all real input above). The fixed 60 Hz + the bit-exact
+    // RNG make the boarding deterministic: once green, always green.
+    assert!(rode, "the paternoster cab ride must board and step off south onto the exec floor on real input [M 0x194188 → Control_InheritVelocity 0x133e88; D the cab keys y 11.0 → 48.44; D obj 'lift' 0x02000367 collision + the shaft's south-wall opening at x 0.5..1.5 z 22.5]");
     w.stop_on_exit = true;
-    w.walk_to(Wp::new(8.0, 46.8, 24.8).r(1.3), "the exec floor (the proven z≈25 leg)");
 
     // The exec floor: the waiting room's walker exit is the two-door transit — door #3
     // (13.71, 46.78, 19.44 [D]) into the east room, south down the room, and door #0
     // (13.82, 46.78, 7.09 [D]) onto the ring's east corridor. The lane east of the room's
     // barrier is the game's own nav path 0 'Navigation' [D n54 (12.21, 19.68) → n53 (14.13,
     // 18.35) → n52 (15.85, 16.77) → n50 (17.10, 14.00) → n49 (17.03, 10.83) → n19 (16.23,
-    // 8.07) → n18 (14.50, 6.54) → n17 (13.18, 6.63) → n11 (10.21, 8.20)]. THE ONE KEPT
-    // STAND-IN (the dock→east-approach hop, ~6 m): the waiting room's floor is split — the
-    // dock band (51.8) is an island (the pit x 3-8 z 23-25.5, the x 2-3.5 hole, the dome hole
-    // x 7-9.5 z 26.5+ [D the floor grid in probe_0b_doors]; the pit's SW rim line descends
-    // into the bowl and its east rim walls the walker at body height — walked and wedged),
-    // and the main floor's x 4.5-6.5 barrier (the N-S slot at x 5.0 z 17.5-23, the furniture
-    // 48.2-48.8 at x 6-9.5 z 18-21.5, the wall band x 8-14 z 16-17 [D the -2 probes]) leaves
-    // only the z 17.0 seam, which the wall band closes at x 9.5+. The nav lane's own n41→n55
-    // hop rides furniture tops the AI ignores (n55 sits on the 48.7 band [D the grid]).
-    {
-        let sim = w.scene.sim.as_mut().unwrap();
-        sim.bond.pos = [12.21, 47.4, 19.68];
-        sim.bond.vel = [0.0; 3];
-    }
-    w.wait(10);
+    // 8.07) → n18 (14.50, 6.54) → n17 (13.18, 6.63) → n11 (10.21, 8.20)]. WALKED — no stand-in:
+    // the south step-off lands on the room's open floor, and the lane to n41 rides the floor
+    // the room map shows continuous: south along x ~2 (west of the N-S slot x 4.5-5.5 and the
+    // furniture at x 2.5-3.0 z 20.5-21.5), the z 17.0 seam east (the only floor-continuous
+    // crossing of the slot band — north of it the pit x 1.5-5.5 z 23.0-23.5 and the slot
+    // x 4.5-5.5 z 17.5-22.5 close the way [D the room map], and the dock band 52.6→51.7
+    // x -1..8 z 18.5-22.5 stands 5 m OVERHEAD, floor clearance intact), then north-east past
+    // the seam's east end to n41.
+    w.walk_to(Wp::new(2.0, 47.0, 21.6).r(1.0), "the exec floor south of the shaft");
+    w.walk_to(Wp::new(2.3, 47.0, 17.3).r(1.0), "the slot band's west side");
+    w.walk_to(Wp::new(9.0, 47.0, 17.05).r(0.9), "the z 17.0 seam east");
+    w.walk_to(Wp::new(10.4, 47.0, 18.4).r(0.9), "north-east past the seam's east end");
+    w.walk_to(Wp::new(12.21, 47.18, 19.68).r(0.6), "nav n41 (door #3's approach)");
     // The doors: disc swing doors (kind 0, 3-key symmetric anims — the closed pose at key 1,
     // the open ends at keys 0/2 [D the 0x19 keys]); the E-open runs `dir = sign((inv_closed ·
     // activator).z)·(+0x5C)` [M Door_Activate 0x135be0:136-146], +0x5C from `Door_SetupSwing`
