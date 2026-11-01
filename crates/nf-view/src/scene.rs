@@ -11071,7 +11071,9 @@ pub fn build(level: &Level, cels_only: bool, skeletons: &HashMap<u8, Skeleton>, 
         // .a (the shader's ×255/128 rescale makes byte 0x2e → 0.36 exactly like the GS); the other
         // parts stay 1.0. The byte is the sim's (`Searchlight_Update` 0x1cb900:334-336).
         if let Some(s) = self.sim.as_ref() {
-            for (k, sp) in s.drones.searchlights.parts.iter().enumerate() {
+            // Bounded to the searchlight section like every other run: a part past it would set a
+            // door slot's (or `col_one`'s) alpha.
+            for (k, sp) in s.drones.searchlights.parts.iter().enumerate().take((l.col_door - l.col_sl) as usize) {
                 if let Some(c) = cols.get_mut(l.col_sl as usize + k) {
                     c[3] = if sp.kind == 4 { sp.alpha as f32 / 255.0 } else { 1.0 };
                 }
