@@ -64,3 +64,16 @@ Session 1 progress (~11:30 UTC):
   opt-in): exit_aim_01 1/1, walkreal_07000001 4/6 (the_plate sister 15 + the real-damage escort
   still wedge mid-leg — the next pass's item). MP digests structurally untouched (empty
   bot_capsules on both MP paths) but unrun. Report: docs/reports/guard-push-every-tick.md.
+
+## guard-push-every-tick-2 (branch s/guard-push-every-tick-2)
+
+- start (s/guard-push-every-tick 76172aff merged with master 71b7b6b9 → 7c6ac4ce, 2026-11-01
+  ~16:08 UTC). Task: the every-tick drone-player push landed on master red 20 binaries —
+  walkreal 01 (x3 + real_damage timeout), 02 (timeout), 07 (x2), 0c (x2), 11 lower floor;
+  escort_follow_07000001; exit_aim_01 (timeout); interactables_07000001 camera sweep,
+  interactables_07000003 breakables; cutscene_timer_pause; party_door_lock_07000007 (x2);
+  speech_facial_fallback; guest_faces; probe_07_route. Many are non-walk: check which drones
+  the Collide_Jointy 0x1ec180 / NDrone2_DoCollision 0x149ec8 gates admit (allies, party
+  guests, scripted/cut-scene actors, non-combat NPCs — voice +0xd8, +0x538, obj+0xFC,
+  +0x570&2), cut-scene / disabled-player windows, and push magnitude/direction vs the game.
+  Fix the port where it differs; fix walks only where fragile.
