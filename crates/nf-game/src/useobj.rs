@@ -63,6 +63,10 @@ fn seg_sphere(a: V3, b: V3, c: V3, r: f32) -> bool {
 /// One Q-Worm target PC (`PCQWorm_Create` 0x1b07a8's ext: `[0]=param0 keycodes, [1]=param1
 /// channel, [2]=param2 E-usable, [3]=param3`).
 pub struct PcQworm {
+    /// param 0: the `KeyCodes` index the install reveals (0 = none) — `PCQWorm_Update` 0x1aee20
+    /// state 1 posts "Obtained Lock Keycode %c%c%c%c" for that entry and sets its flag byte
+    /// [M 0x1aee20:24-31].
+    pub keys: u16,
     /// The object's world position (the placement transform; the Tower PCs carry real ones [D]).
     pub pos: V3,
     /// param 1: the channel `PCQWorm_Update` writes when the install completes [M 0x1aee20].
@@ -126,6 +130,10 @@ pub struct SwitchObj {
 pub struct UseObjects {
     pub pcs: Vec<PcQworm>,
     pub switches: Vec<SwitchObj>,
+    /// The `KeyCodes` indices revealed by this tick's Q-Worm installs (state 1 with param 0 != 0
+    /// [M 0x1aee20:24-31]); the owner (crate::drone) sets the entry's flag byte and posts the
+    /// INFO message, then clears this.
+    pub revealed: Vec<u16>,
 }
 
 impl UseObjects {
@@ -161,7 +169,7 @@ impl UseObjects {
             let pos = p.translation;
             if p.flags & 0xff == 0x35 {
                 // PCQWorm_Create 0x1b07a8: ext[1] = param 1 (the channel), ext[2] byte = param 2.
-                u.pcs.push(PcQworm { pos, ch: par(1) as u8, e_usable: par(2) as u8, armed: par(3) != 0, state: 0, radius: 0.0,
+                u.pcs.push(PcQworm { keys: par(0) as u16, pos, ch: par(1) as u8, e_usable: par(2) as u8, armed: par(3) != 0, state: 0, radius: 0.0,
                     sph_centre: pos });
             } else {
                 // Switch_Create 0x1adcc0: +0x12 = param 0, +0x10 = param 2, +0x16 = param 3,
@@ -244,9 +252,16 @@ impl UseObjects {
                     }
                 }
                 1 => {
-                    // State 1: the keycode message (param 0 keys; presentation) and the channel
-                    // write, then state 2 [M 0x1aee20 LAB_001aefec]. The Tower PCs carry param 0
-                    // = 0 → the write lands the tick after the hit.
+                    // State 1 [M 0x1aee20:20-41]: with param 0 != 0, `Control_NextLOD` 0x1349b0
+                    // (obj+0xD8 ← glist+0x40 only when that link is set [M :8-12]; every PCQWorm
+                    // glist on the disc carries −1 in block 0x27 [D pc_screen_live] → a no-op, the
+                    // model never changes; the visible change is the Q-Worm screen overlay the
+                    // channel below unpauses — nf-view `script_tweak_alpha`), the keycode message
+                    // `Text_AddMsg(0, 0, 1, sprintf(Txt_BindLabel(0x2000014), KeyCodes[p0]…), 0,
+                    // 0xb4)` and `KeyCodes[p0*5+4] = 1` (handed to the owner through `revealed`);
+                    // then the channel write and state 2 [LAB_001aefec]. The Tower PCs carry
+                    // param 0 = 0 → only the write, the tick after the hit.
+                    if pc.keys != 0 { self.revealed.push(pc.keys); }
                     if pc.ch != 0 { ch.set(pc.ch as u32, 1, frame); }
                     pc.state = 2;
                 }

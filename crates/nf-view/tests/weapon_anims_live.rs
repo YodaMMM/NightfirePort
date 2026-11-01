@@ -171,16 +171,18 @@ fn p2k_draw_fire_reload_modeswitch_holster_numbers() {
     assert_eq!(fire.ticks, 24, "fire ticks = ceil((25-1)/1.0) [D census len 25]");
     assert_eq!(scene.sim.as_ref().unwrap().gun.clip, 6, "the shot spent a round (the P2K is owned: the clip stayed 7)");
 
-    // Reload: 0x1004 → no start script, +0xA4 @1.35 seeked to frame 6: 1 + ceil((155-6)/1.35) = 112
-    // ticks where the reload script is the view script; the state machine itself runs
-    // p.reload_ticks = 111 [M reload_ticks() formula; Player_WeaponFiring 0x1a6250-0x1a631c].
+    // Reload by the key: 0x1004 → no start script, +0xA4 @1.35 from frame 0; the state machine runs
+    // p.reload_key_ticks = 115 [M Player_WeaponFiring 0x1a5fb0-0x1a5fdc].
     let mut rec = Rec::new(&scene);
     run_until(&mut scene, &mut rec, Input::default(), false, true, 600, |sc| idle(sc));
     let plays = rec.finish();
     let rel = play_of(&plays, 0x0600_0827);
     assert_eq!(rel.hash, 0x0600_0827, "P2K reload script (+0xA4)");
     assert_eq!(rel.speed, 1.35, "direct-to-6 reload plays at 1.35 [M 0x1a6250-0x1a631c]");
-    assert_eq!(rel.ticks, 109, "reload ticks (the machine runs ceil(155/1.35) = 115 with the queue-tick decrement and the rec convention); the formula pin is the machine's");
+    // weapon-handling: this is the reload KEY (branch A, disasm 0x1a5fb0-0x1a5fdc), which queues
+    // +0xA4 at 1.35 from frame 0 — the frame-6 seek is the auto-reload's only (0x1a62e4-0x1a631c);
+    // 4 ticks longer than the old frame-6 pin (115 vs 111 on the state machine).
+    assert_eq!(rel.ticks, 113, "reload-key ticks (+0xA4 155 frames @1.35 from frame 0, the rec convention)");
     let s = scene.sim.as_ref().unwrap();
     assert_eq!(s.gun.clip, 7, "the reload refilled the clip to capacity");
 

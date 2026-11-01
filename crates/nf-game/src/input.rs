@@ -374,6 +374,7 @@ impl PadDriver {
         input.goggles_action = a[13] != 0.0 && newly & self.mask_of(pad, 13) != 0;
         // Player_Zoom 0x1a1a70: action 6 while aim mode is on.
         input.zoom = input.aiming && a[6] != 0.0;
+        input.zoom_axis = if input.aiming { a[6] } else { 0.0 };
         if input.aiming {
             // Manual aim [M Player_Aiming 0x1a1d28:78-194]: the crosshair moves inside the box at
             // Plr_AimSpeed × 0.125; pinned at an edge, the view turns at the ramped Plr_AimTurnSpeed.

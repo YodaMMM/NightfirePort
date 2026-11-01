@@ -61,7 +61,9 @@ fn the_ground_route_crosses_to_the_east_side() {
     }
     // 1. The staircase descent (the turb2 flights, real walk legs).
     w.walk_to(Wp::new(51.5, 11.0, -209.6).r(1.2), "onto the turb2 staircase top");
-    w.walk_to(Wp::new(51.5, 4.0, -211.4).r(1.2), "down the turb2 flight");
+    // r 0.8: the south-end check below is z < −210.5; a 1.2 arrival ring around z −211.4 ends the
+    // leg as early as z −210.2, still on the flight's top step.
+    w.walk_to(Wp::new(51.5, 4.0, -211.4).r(0.8), "down the turb2 flight");
     {
         let sim = w.scene.sim.as_ref().unwrap();
         let p = sim.bond.pos;

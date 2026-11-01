@@ -25,6 +25,10 @@ fn the_spot_lands_on_the_static_segments_first_hit() {
     let mut scene = nf_view::load(&path, "07000006.bin", false).expect("load 07000006");
     let sim = scene.sim.as_mut().unwrap();
     for _ in 0..300 { sim.step_bond(Default::default(), false, false, false); if !sim.disabled { break; } }
+    // light-glow: the courtyard reveal (SP #808, NIS 0x06000066) waits on ch 0x34 — the entry plates'
+    // output [D trigger census #524-#526; M SP_Hit 0x1dc470:16-18, SP_Update 0x1dbda8 case 0].
+    // Raise it the way a plate does.
+    sim.drones.channels.set(0x34, 1, 0);
     // Wait for a sweeping head with a linked spot (07000006's courtyard heads all carry one).
     let mut head = None;
     for _ in 0..600 {

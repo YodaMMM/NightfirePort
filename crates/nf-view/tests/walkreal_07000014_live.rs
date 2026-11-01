@@ -40,7 +40,7 @@
 #[path = "common/walker_b2.rs"]
 mod walker;
 
-use walker::{wrap_pi, Act, Walker, Wp};
+use walker::{dxz, wrap_pi, Act, Walker, Wp};
 
 fn iso() -> String { std::env::var("NF_ISO").expect("NF_ISO") }
 
@@ -950,6 +950,10 @@ fn walk_the_infiltration_to_the_delta_exit() {
     for _ in 0..40 { w.tick(nf_game::player::Input { switch_to: Some(0x2), ..Default::default() }, false); }
     let mut dead = false;
     for attempt in 0..3 {
+        // Close in first: from the wake touch Rook stands ~67 u off, past the hand gun's useful
+        // spread (the walk emptied both clips at that range and then wedged its resupply legs).
+        let rp = w.scene.sim.as_ref().unwrap().drones.list[rook_i].pos;
+        if dxz(w.scene.sim.as_ref().unwrap().bond.pos, rp) > 10.0 { w.walk_nav_to(rp, &format!("close on Rook {attempt}"), 8.0); }
         if w.shoot(rook_i, "Rook") { dead = true; break; }
         assert!(w.resupply(&format!("Rook attempt {attempt}")), "no ammo for the Rook kill");
     }
@@ -990,6 +994,11 @@ fn walk_the_infiltration_to_the_delta_exit() {
     // spot itself (E reacted, the exit leg arrived at +137 ticks).
     // Arriving from the north (the west door at (27.8, -19.6)), the straight line to the approach
     // spot catches the wall west of (25.5, -18.7); square up south first.
+    // Rook's kill can land anywhere on his run (he flees the wake spot): from more than a room
+    // away, walk the nav web back to the doorway's north side before the squared-up legs.
+    if dxz(w.scene.sim.as_ref().unwrap().bond.pos, [26.0, 1.0, -22.0]) > 8.0 {
+        w.walk_nav_to([26.0, 1.0, -22.0], "back to the delta doorway", 1.5);
+    }
     w.walk_to(Wp::new(26.0, 1.0, -22.0).r(1.0), "the delta doorway east");
     w.walk_to(Wp::new(22.9, 1.0, -22.8).r(1.2), "the delta doorway approach");
     w.walk_to(Wp { at: [24.0, 1.2, -22.8], act: Act::Use { use_ticks: 240 }, arrive: 1.1 }, "E the delta slides");

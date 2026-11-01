@@ -138,6 +138,13 @@ pub struct Walker {
     /// enclosing leg's 6000-tick give-up cap then charged as a wedge (walker.rs:853 panic) —
     /// 6 suite tests red across 4 binaries (level-02-every-objective-5 2026-10-31).
     pub body_block_response: bool,
+    /// The nav-leg corner escape, OPT-IN (the 01 walk sets it). A lenient nav leg that wedges
+    /// (its target sits behind a wall corner the direct steer presses into: the 01 hall's
+    /// south wall + the east-door jamb at (5.45, 11.60), where the route's first node lay
+    /// through the jamb) walks to a bridging nav node first — one with a clear line from Bond
+    /// AND to the wedged target — then retries the target once. Legs that never wedge are
+    /// untouched, so the default keeps master's walk everywhere else.
+    pub bridge_wedged_nav: bool,
     /// The walked path: a coarse breadcrumb of ground Bond actually covered (pushed in
     /// tick_inner, ~2 u resolution, 512 points). The resupply rule draws its corridor from it —
     /// see `resupply` for why the harness must not take off-path ammo detours.
@@ -213,6 +220,7 @@ impl Walker {
             shield: None,
             fighting_blocker: false,
             body_block_response: false,
+            bridge_wedged_nav: false,
         }
     }
 
@@ -870,10 +878,67 @@ impl Walker {
         };
         for (k, p) in pts.iter().enumerate().skip(1) {
             // A wedged nav node is SKIPPED (the next node re-aims); the route continues.
-            let _ = self.walk_to(Wp::new(p[0], p[1], p[2]).r(1.3), &format!("{label} nav {k}"));
+            let r = self.walk_to(Wp::new(p[0], p[1], p[2]).r(1.3), &format!("{label} nav {k}"));
+            if r == u32::MAX { self.bridge_and_retry(*p, 1.3, &format!("{label} nav {k}")); }
         }
-        self.walk_to(Wp { at: target, act: Act::None, arrive: final_arrive }, label);
+        let r = self.walk_to(Wp { at: target, act: Act::None, arrive: final_arrive }, label);
+        if r == u32::MAX { self.bridge_and_retry(target, final_arrive, label); }
         self.lenient = false;
+    }
+
+    /// `bridge_wedged_nav`: after a wedged lenient leg, route Bond to `to` over the nav nodes
+    /// joined by clear lines (a visibility graph: Dijkstra, edges ≤ 8 units whose segment the
+    /// collision world leaves clear, dynamic parts included) and retry `to` once. The lines run
+    /// at Bond's root height (the nav nodes sit ~0.5 above the floor; Bond's root ~1.0).
+    fn bridge_and_retry(&mut self, to: V3, arrive: f32, label: &str) {
+        if !self.bridge_wedged_nav { return; }
+        let route = {
+            let sim = self.scene.sim.as_ref().unwrap();
+            let from = sim.bond.pos;
+            let up = |q: V3| [q[0], q[1] + 0.5, q[2]];
+            let clear = |a: V3, b: V3| sim.world.segment(a, b).is_none();
+            // Graph points: 0 = Bond, 1 = the target, then the nav nodes near the leg.
+            let span = dxz(from, to) + 8.0;
+            let mut pts: Vec<V3> = vec![from, up(to)];
+            for path in &sim.nav.paths {
+                for n in &path.nodes {
+                    if dxz(n.pos, from) < span && dxz(n.pos, to) < span
+                        && (n.pos[1] - from[1]).abs() < 3.0 { pts.push(up(n.pos)); }
+                }
+            }
+            let n = pts.len();
+            let mut dist = vec![f32::INFINITY; n];
+            let mut prev = vec![usize::MAX; n];
+            let mut done = vec![false; n];
+            dist[0] = 0.0;
+            loop {
+                let Some(u) = (0..n).filter(|&k| !done[k] && dist[k].is_finite())
+                    .min_by(|&a, &b| dist[a].total_cmp(&dist[b])) else { break };
+                if u == 1 { break; }
+                done[u] = true;
+                for v in 0..n {
+                    if done[v] || v == u { continue; }
+                    let d = dxz(pts[u], pts[v]);
+                    if d > 8.0 || dist[u] + d >= dist[v] { continue; }
+                    if !clear(pts[u], pts[v]) { continue; }
+                    dist[v] = dist[u] + d;
+                    prev[v] = u;
+                }
+            }
+            if dist[1].is_finite() {
+                let mut chain = Vec::new();
+                let mut k = prev[1];
+                while k != 0 && k != usize::MAX { chain.push(pts[k]); k = prev[k]; }
+                chain.reverse();
+                Some(chain)
+            } else { None }
+        };
+        let Some(route) = route else { eprintln!("[walk] {label}: no clear nav route out of the wedge"); return };
+        eprintln!("[walk] {label}: wedged — re-routing over {} clear nav node(s) {:?}", route.len(), route);
+        for (k, b) in route.iter().enumerate() {
+            let _ = self.walk_to(Wp::new(b[0], b[1] - 0.5, b[2]).r(0.8), &format!("{label} bridge {k}"));
+        }
+        let _ = self.walk_to(Wp { at: to, act: Act::None, arrive }, &format!("{label} retry"));
     }
 
     /// Steer Bond to one waypoint; returns the ticks it took. Panics with a dump when genuinely
@@ -1252,6 +1317,20 @@ impl Walker {
             return;
         }
         eprintln!("[walk] {label}: opening door ({:.1},{:.1},{:.1}) state {:#x}", dpos[0], dpos[1], dpos[2], state);
+        // A door found CLOSING right after this walker opened it swung into Bond and reversed:
+        // re-pressing from inside the leaf's sweep swings it back through him and pins him
+        // between the leaf and the jamb (the 03 west double doors at (10.0/11.8, −20.2) held
+        // a walk 26 legs). Step back out of the sweep first, facing the door.
+        if state == nf_game::door::CLOSING {
+            for _ in 0..60u32 {
+                let sim = self.scene.sim.as_ref().unwrap();
+                if dxz(sim.bond.pos, dpos) > 1.6 { break; }
+                let desired = (dpos[0] - sim.bond.pos[0]).atan2(dpos[2] - sim.bond.pos[2]);
+                let err = wrap_pi(desired - sim.bond.yaw);
+                let input = Input { turn: err.clamp(-0.08, 0.08), forward: -0.8, ..Default::default() };
+                self.tick(input, false);
+            }
+        }
         for k in 0..60u32 {
             let sim = self.scene.sim.as_ref().unwrap();
             let desired = (dpos[0] - sim.bond.pos[0]).atan2(dpos[2] - sim.bond.pos[2]);

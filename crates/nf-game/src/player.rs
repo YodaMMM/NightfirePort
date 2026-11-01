@@ -71,11 +71,12 @@ pub fn player_skin_hash(level: u32) -> u32 {
 }
 
 /// The zero-g substates (dispatch cases 8/9 share the `Player_ZeroG` 0x192ab0 body [M 0x193600:
-/// 238-241]). 9 is the one the game ever sets: the 0700001b spacewalk's script handler answers its
-/// 0x4b event with `ChangeSubState(glb_players, 9 | 0)` [M C_CHCHZEROG 0x216388 — 9 when its msg
-/// 0x40 query returns nonzero, else 0]; no caller or store writes 8 anywhere in ACTION.ELF. Only
-/// substate 9 runs the movement anim set [M 0x192ab0:201 `if (obj+0xF6 == 9)`], so 8 is the anim
-/// quiet twin the dispatch still honours.
+/// 238-241]). 8 is the level start's: the p3 == 2 start calls `Player_StandAtNewPosition(.., 8)`
+/// [M Player_Init 0x1910f8 :160-165] — 0700001b loads in it. 9 is the cheat page's ZEROG
+/// checkbox: `C_CHCHZEROG_Handler` 0x216388 answers the menu's 0x4b message with
+/// `ChangeSubState(glb_players, 9 | 0)` (9 when the checkbox's msg-0x40 query is nonzero, else 0)
+/// [M 0x216388:10-17]. Only substate 9 runs the movement anim set [M 0x192ab0:201
+/// `if (obj+0xF6 == 9)`].
 pub const SS_ZEROG_8: u8 = 8;
 pub const SS_ZEROG_9: u8 = 9;
 
@@ -256,6 +257,11 @@ pub struct Input {
     pub switch_to: Option<u8>,
     /// Right mouse held: zoom the scope (`Player_Zoom` 0x1a1a70, mouse-first like the game's aim button).
     pub zoom: bool,
+    /// The zoom action 6 as the analog `Player_Zoom` 0x1a1a70 reads it (`Input_Actionf(slot, 6, 1)`,
+    /// only while aiming [M 0x1a1a70:18-19]): negative zooms in, positive out — the pad's d-pad
+    /// up/down give −1/+1 [M the style tables' `dpad` lane for action 6]. 0 with `zoom` held means
+    /// the mouse's hold-to-zoom-in (the window maps it to −1). Local view state, not net-encoded.
+    pub zoom_axis: f32,
     /// The mouse's scope/aim button (the right button, held): drives the aim bit — the raise, then the zoom —
     /// like the pad's aim button, but never the free-aim cursor window (PLAN.md D-002: the mouse aims
     /// directly). The pad keeps `aiming` (aim) and `zoom` (its own zoom axis).
@@ -697,8 +703,8 @@ impl Bond {
     }
 
     /// `Player_ZeroG` 0x192ab0 — the spacewalk substate (the dispatch runs cases 8 and 9 into the
-    /// same body [M 0x193600:238-241]; the script only ever sets 9 [M C_CHCHZEROG 0x216388], and
-    /// only 9 plays the movement anim set [M 0x192ab0:201]). The body rides `physics_tick`'s
+    /// same body [M 0x193600:238-241]; the level start enters 8 [M 0x1910f8 :160-165], the cheat
+    /// page's ZEROG checkbox 9 [M C_CHCHZEROG 0x216388], and only 9 plays the movement anim set [M 0x192ab0:201]). The body rides `physics_tick`'s
     /// collision tail with the walk/swim move + gravity replaced.
     fn zerog_tick(&mut self, world: &CollisionWorld, ctx: &LadderCtx, input: &Input) {
         self.physics_tick(world, ctx, input, false, true);
@@ -1609,6 +1615,13 @@ impl Bond {
         // local-forward push (Player_Climb's ±0x18 write) rides along once.
         let vf = vf0 + self.push_fwd;
         self.push_fwd = 0.0;
+        // The tick's move (the move the clip model truncates — captured before EVERY position
+        // move: zero-g's matrix move, swim's look-dir move and the walk add all land above, and
+        // the vel/60 integration below rides the same span; the contacts run after the whole
+        // move [M Player_Update 0x193600:284-295 → Player_Collision]). Captured inside the
+        // integration before (NF_WALK_CLIP measured "zero clip applications" — move_v read
+        // (0, gravity, 0) on every walked tick and the flag path ghosted through walls).
+        let pre_move_pos = self.pos;
         if zero_g {
             // ===== Player_ZeroG 0x192ab0 (the spacewalk body) =====
             // First tick of the spell builds the orientation from the walk yaw/pitch:
@@ -1737,8 +1750,6 @@ self.local = [vs / k, vf / k];
             self.vel = [0.0; 3];
         }
         self.vel[1] = self.vel[1].clamp(-45.0, 45.0);
-        // The tick's move (the move the clip model truncates — captured before the integration).
-        let pre_move_pos = self.pos;
         if settle_release {
             // The ONE integration of the held velocity, in the game's op order (the VU mul then the
             // add [M 0x194df0:189-197]) — the shape the ee_start root reproduces bit-exactly. The

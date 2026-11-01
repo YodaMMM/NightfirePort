@@ -1922,42 +1922,18 @@ impl Scripts {
     /// used to key the 0700004a lift stand-in; the lift now holds on its channel — nothing reads it.)
     pub fn new(lib: HashMap<u32, Arc<Nis>>, placements: &[Placement]) -> Scripts {
         let mut players = placements.iter().enumerate().filter(|(_, p)| p.flags & 0xff == 0xd9).filter_map(|(i, p)| Player::from_placement(i, p)).collect::<Vec<_>>();
-        // fix-searchlight-alarm: 07000006's courtyard searchlights. The disc's NIS 0x06000066 stream 0
-        // raises the heads' on-channels in a staged reveal — ch 64 (0x40) = 1 at wait 1, ch 63 (0x3F) at
-        // 59, ch 61 (0x3D) at 116, ch 62 (0x3E) at 167 [D 07000006 kind-7 NIS 0x06000066; the heads'
-        // on-channels are 64/63/61/62 on the four 0xDE kind-1 placements] — all four courtyard lights
-        // sweep within ~2.8 s of the script's start. The script's owner on the disc is SP placement
-        // #808 (kind 0xD9, p0 = 0x06000066, mask p5 = 1, out ch 0x34) [D census, level-06-audit]:
-        // mask != 0 parks it in state 0 [M 0x1db9a8:74-86] where only its SP_Hit/activate path can
-        // start it — a beat not derivable headlessly. The port therefore ALSO boots the script once
-        // at level start, mode 1 (play once), the way a hidden `SP_CreateScriptPlayer` one-shot runs
-        // (`spawn_once`'s precedent, the copter script [M 0x1dbc08's mode dispatch]); the placement
-        // player is created alongside and stays idle. Without the boot the port's courtyard heads
-        // stay state 3 (dark) forever, the alarm channel 55 can never rise and the guards never
-        // react. The real activation moment (which beat moves #808 in the game) is an open
-        // live check. Pinned to the level by its own data: a class-0x22 head
-        // placement whose alarm channel is 55 AND the script in the lib.
-        let light_boot = placements.iter().any(|p| p.flags & 0xff == 0xde
-            && p.params.iter().any(|&(k, v)| k == 3 && v == 55))
-            && lib.contains_key(&0x0600_0066);
-        if light_boot {
-            players.push(Player {
-                placement: placements.len(), scripts: [0x0600_0066, 0], modes: [1, 0], stay: false, mask: 0, out: 0, gate: 0,
-                scale: 1.0, matrix: [[1.0, 0.0, 0.0, 0.0], [0.0, 1.0, 0.0, 0.0], [0.0, 0.0, 1.0, 0.0], [0.0, 0.0, 0.0, 1.0]],
-                cur: 0, state: 7, activated: false, countdown: 0, info: [None, None], deleted: false,
-                // Merge drift (fix-searchlight-alarm × walkreal-b2's field): the identity, like the matrix.
-                live_matrix: [[1.0, 0.0, 0.0, 0.0], [0.0, 1.0, 0.0, 0.0], [0.0, 0.0, 1.0, 0.0], [0.0, 0.0, 0.0, 1.0]],
-                subs: Vec::new(),
-                hit_points: 0.0,
-                damage: 0.0,
-                tick_damage: 0.0,
-                // +0x36: nothing hides a placed/fusebox/useobj SP at create [M 0x1db9a8].
-                hidden: false,
-                bullet_filter: 0,
-                bullet_hits: Vec::new(),
-                tick_bullet_hits: Vec::new(),
-            });
-        }
+        // light-glow: 07000006's courtyard searchlights start DARK and stay dark until Bond steps on a
+        // ch-52 plate. The reveal NIS 0x06000066 (stream 0 raises the heads' on-channels 64/63/61/62 at
+        // waits 1/59/116/167 [D 07000006 kind-7 NIS]) belongs to SP placement #808 (kind 0xD9,
+        // p0 = 0x06000066, p5 mask = 1, p6 = ch 0x34) [D]. `SP_Hit` 0x1dc470:16-18 sets bit 1 while
+        // `switch_channels[tag+0x30]` (p6, ch 0x34) is on, and `SP_Update` 0x1dbda8 case 0 loads +
+        // plays the script once `bits & tag+0x2E` (p5) is nonzero [M 0x1dbda8:64-106]. Ch 0x34 (52)
+        // is written only by the courtyard TouchOnce plates #524/#525/#526/#661-#664 [D trigger
+        // census], so the lights reveal when Bond walks in — `Player::update`'s state-0 arm already
+        // does exactly that for #808. The synthetic level-start boot the port used to add here lit
+        // all four heads within 2.8 s of the load wherever Bond was: a PS2 capture teleported into
+        // the courtyard without crossing a plate shows the four heads dark (no beams, no coronas,
+        // lenses at pitch 0), while the port drew two full-size coronas over the wall.
         Scripts { lib, players, objects: Objects::default(), requests: Vec::new(), primed: false, skip_request: false }
     }
 

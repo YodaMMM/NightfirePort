@@ -1,21 +1,20 @@
 //! walkreal-b: 07000012 (HT Tower2 B, the lower offices) walked with the player's own movement —
 //! the route lives in `common/tower2.rs` (shared with the 07000013 warm chain). Every leg is the
-//! real input path except the TWO documented stand-ins: the door[19] doorway crossing (the corner
-//! pincer — see the report's live checks) and the north-wall funnel into the shaft lobby (the
-//! 0.88 pinch — measured, see tower2.rs's comment and the probe12 evidence). The level's summary:
+//! real input path; no position writes. The level's summary:
 //!
 //! the elevator start #0 (22.49, 0.19, 19.16 [D]) → the spawn TouchOnce #679 fires ch 0x48 → the
 //! REAL walk south around the shaft core → the REAL Q-Decryptor G-cycle + beam burn of the keypad
 //! locks #656/#694 ("Lock - KeypadLocked", out 0xa [D]) → ch 0xa's rising edge OPENS door[19]
-//! ([M Door_Update's lock path; the 0x1336f8 two-latch snapshot — the fix this task landed]) →
-//! the doorway stand-in → the REAL walk to the security-centre console → E → ch 0x49 (objective
-//! 1) + ch 0x59 (the SS lift doors #677/#678 slide to key 1 [M SS_Update 0x1a9948]) → the REAL
-//! lift call button #699 E (ch 0x58 swaps both shutter SS pairs [M SS_Update]) → the funnel
-//! stand-in → the REAL walk down the lobby ramp into the shaft entrance → #683 holds ch 0x1F →
-//! the gated exit #669 auto-fires ([M Trigger_Update 0x1b1a78 case 10]) → level_exit 0700004A →
-//! the RamSave carried through the real load: 4A's spawn drop into touch #277 fires ch 0x4D and
-//! objective 2 "Escape through the elevator shaft" completes (the late AND — its writer is on
-//! 0700004A [D census §2]).
+//! ([M Door_Update's lock path; the 0x1336f8 two-latch snapshot]) → the REAL walk through the
+//! doorway (the security room's cel at the identity [M parseentity_fixup_entity 0x1d00c0]; the
+//! game's crossing line [L]) → the console → E → ch 0x49 (objective 1) + ch 0x59 (the SS lift doors
+//! #677/#678 slide to key 1 [M SS_Update 0x1a9948]) → the REAL lift call button #699 E (ch 0x58
+//! swaps both shutter SS pairs [M SS_Update]) → back out through door[19] and the REAL walk round
+//! the south and west wings to the north lobby (door plc 545 opened with E) → through the lift
+//! doors into the shaft entrance → #683 holds ch 0x1F → the gated exit #669 auto-fires ([M
+//! Trigger_Update 0x1b1a78 case 10]) → level_exit 0700004A → the RamSave carried through the real
+//! load: 4A's spawn drop into touch #277 fires ch 0x4D and objective 2 "Escape through the
+//! elevator shaft" completes (the late AND — its writer is on 0700004A [D census §2]).
 
 //! every-objective: the level's mission data lists EXACTLY TWO objective records — decoded from
 //! the EE snapshot [L ee_snapshot.bin 0x2a4350 + row 16*40 (level 07000012, mission 07000011,

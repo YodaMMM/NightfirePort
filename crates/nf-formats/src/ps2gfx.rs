@@ -99,6 +99,26 @@ pub struct Batch {
     pub alpha: u64,
     pub test: u64,
     pub zbuf: u64,
+    /// The VU1 batch-handler selector: the low half-word of the GIF tag's fourth word (REGS fields
+    /// 8-11, unused by NREG 3). The microprogram's dispatch reads it with `ILW.w vi04, 0(vi01)` and
+    /// jumps to it plus the per-object light/tweak mode (data 0x16.x, 0/2/4/6 —
+    /// `FillMatrixChainRot` 0x122310 / `FillMatrixChainSkin` 0x122788) [M .vutext micro 0x023-0x025].
+    /// The disc carries two values: `HANDLER_LIT` (8: the transform with the light/tweak variants)
+    /// and `HANDLER_ENV` (0x10: the environment-map handler for every mode).
+    pub handler: u16,
+}
+
+/// The normal batch handler (micro 0x08 + mode: no tweak/lights, tweak, lights, both).
+pub const HANDLER_LIT: u16 = 0x08;
+/// The environment-map batch handler (micro 0x10..0x16 all branch to micro 0x2e2): the ST pair is
+/// generated per vertex from the normal — `ST = 0.5 + (row · n)/256` with the rows the matrix
+/// builders upload at data 0x10-0x13 (viewer camera rows +0x120 and +0x130, × 1/256, + 0.5) —
+/// and the colour is `TAmbient ⊙ rgba` with no point lights [M .vutext micro 0x2e2-0x33e].
+pub const HANDLER_ENV: u16 = 0x10;
+
+impl Batch {
+    /// An environment-mapped batch (`HANDLER_ENV`).
+    pub fn env_mapped(&self) -> bool { self.handler == HANDLER_ENV }
 }
 
 /// Skinned vertices: bit 15 of the packed skinning word (source qword 1, word 3) marks "no kick": set on all 51,664
@@ -264,7 +284,7 @@ impl Vu {
             if self.gen.get(base + 1 + 3 * nloop as usize).is_some_and(|g| *g == self.cur) && base + 1 + 3 * (nloop as usize) < base + UV_OFFSET {
                 return invalid(format!("more vertex data than NLOOP {nloop}"));
             }
-            Some(Batch { texture, prim, nloop, eop, skinned, verts, alpha: self.alpha, test: self.test, zbuf: self.zbuf })
+            Some(Batch { texture, prim, nloop, eop, skinned, verts, alpha: self.alpha, test: self.test, zbuf: self.zbuf, handler: (tag[3] & 0xffff) as u16 })
         };
         self.cur += 1;
         Ok(out)
@@ -402,7 +422,7 @@ mod tests {
     #[test]
     fn strip_triangles_skip_no_kick_vertices_and_alternate_winding() {
         let v = |w| Vertex { pos: [0.0; 3], uv: [0.0; 2], rgba: [0; 4], normal: [0; 3], w, weight: 1.0, slots: [0, 0] };
-        let b = Batch { texture: None, prim: 0x5c, nloop: 6, eop: true, skinned: false, verts: vec![v(-1), v(-1), v(0), v(0), v(-1), v(0)], alpha: 0x44, test: 0x5001b, zbuf: 0x3100_0000 };
+        let b = Batch { texture: None, prim: 0x5c, nloop: 6, eop: true, skinned: false, verts: vec![v(-1), v(-1), v(0), v(0), v(-1), v(0)], alpha: 0x44, test: 0x5001b, zbuf: 0x3100_0000, handler: HANDLER_LIT };
         assert_eq!(b.triangles(), [[0, 1, 2], [2, 1, 3], [4, 3, 5]]);
     }
 }

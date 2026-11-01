@@ -20,6 +20,10 @@ fn load_and_light(iso: &str) -> nf_view::scene::Scene {
     let mut scene = nf_view::load(iso, "07000006.bin", false).expect("load 07000006");
     let sim = scene.sim.as_mut().unwrap();
     for _ in 0..300 { sim.step_bond(Default::default(), false, false, false); if !sim.disabled { break; } }
+    // light-glow: the courtyard reveal (SP #808, NIS 0x06000066) waits on ch 0x34 — the entry plates'
+    // output [D trigger census #524-#526; M SP_Hit 0x1dc470:16-18, SP_Update 0x1dbda8 case 0].
+    // Raise it the way a plate does.
+    sim.drones.channels.set(0x34, 1, 0);
     for _ in 0..300 {
         sim.step_bond(Default::default(), false, false, false);
         if sim.drones.searchlights.parts.iter().any(|p| p.kind == 1 && p.state == 0 && p.links[2].is_some()) { break; }

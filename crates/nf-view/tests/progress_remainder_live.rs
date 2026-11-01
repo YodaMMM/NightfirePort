@@ -174,64 +174,118 @@ fn the_party_weapon_and_team_gates_follow_the_decompile() {
     }
 }
 
-/// ── 3. The auto-aim's distance cap: the Q-Claw reaches 50, the guns 25 ──────────────────────────
-/// [M Player_AutoAim 0x1a7c98 disasm 0x1a7d30-0x1a7d68]: the running best starts at
+/// ── 3. The auto-aim's distance cap: the Q-Claw reaches 50 — on the grapple points only ─────────
+/// [M Player_AutoAim 0x1a7c98:63-81, disasm 0x1a7d30-0x1a7d68]: the running best starts at
 /// `Autoaim_Range` (0x30cd54, 25.0 [L]) — except weapon 0x50/0x51, whose seed is
-/// `weapon_data[type]+0x1c` (50.0 / 100.0 [L ee_start_05]); `Check_AutoAim` 0x1a73f8 disasm
-/// 0x1a75a4-0x1a75b0 rejects candidates at `*param_3 < dist`.
+/// `weapon_data[type]+0x1c` (50.0 / 100.0 [L ee_start_05]) and whose scan walks
+/// `control_first_object` for the class-'Q' objects (the grapple points) ONLY: the drone list and
+/// the players are the other weapons' scan [M :82-103]. `Check_AutoAim` 0x1a73f8:121-122 rejects
+/// candidates at `*param_3 < dist`; :150-152 forces the claw's angle scale k to 1.
 #[test]
 fn the_q_claw_auto_aim_reaches_past_the_gun_range() {
     let Some(iso) = iso() else { eprintln!("NF_ISO not set — skipping"); return };
     let mut scene = nf_view::load(&iso, "07000005.bin", false).expect("load 07000005");
     let sim = scene.sim.as_mut().unwrap();
-    // The warm (the guards' vision comes up with the IDLE enter — the 3000-tick convention).
     tick_idle(sim, 3000);
-    // A live team-1 guard, and an open spot 30 units from it (inside the claw's 50, outside the
-    // guns' 25). Walk the compass from the guard for a spot with open LOS.
-    let guard = sim.drones.list.iter().position(|d| d.present && d.enabled && d.team == 1
-        && !d.corpse && d.health > 0.0).expect("07000005 has a live guard");
-    let g = sim.drones.list[guard].pos;
+    // The port's grapple-point index in `aim_target` (drone.rs `GRAPPLE_AIM`).
+    const GRAPPLE_AIM: usize = 1 << 20;
+    // A grapple point and an open spot 27-45 units from it (inside the claw's 50, outside the
+    // guns' 25), with the auto-aim's own LOS mask [M 0x1a73f8:164-165].
     let mut spot = None;
-    for a in 0..16 {
-        let ang = a as f32 * std::f32::consts::FRAC_PI_8;
-        let p = [g[0] + 30.0 * ang.sin(), g[1], g[2] + 30.0 * ang.cos()];
-        let b = nf_game::player::Bond::stand_at(&sim.world, p, 0.0);
-        // stand_at snaps to the floor — require the snap to stay near the guard's height and the
-        // LOS to hold (a spot behind a wall or on another floor is rejected).
-        if (b.pos[1] - g[1]).abs() > 3.0 { continue; }
-        let head = [b.pos[0], b.pos[1] + 1.0, b.pos[2]];
-        let target = [g[0], g[1] + 0.6, g[2]];
-        if sim.world.line_of_sight(head, target, nf_game::world::LOS_PROBE_8) { spot = Some((b, head, target)); break; }
+    'find: for (gi, gp) in sim.drones.grapple_points.iter().enumerate() {
+        let g = gp.pos;
+        for r in [30.0f32, 34.0, 38.0] {
+            for a in 0..16 {
+                let ang = a as f32 * std::f32::consts::FRAC_PI_8;
+                let p = [g[0] + r * ang.sin(), g[1], g[2] + r * ang.cos()];
+                let b = nf_game::player::Bond::stand_at(&sim.world, p, 0.0);
+                let head = [b.pos[0], b.pos[1] + 1.0, b.pos[2]];
+                let d = dist(head, g);
+                if !(27.0..45.0).contains(&d) { continue; }
+                if sim.world.line_of_sight_masked(head, g, nf_game::world::LOS_SENSOR) { spot = Some((gi, b)); break 'find; }
+            }
+        }
     }
-    let Some((b, head, target)) = spot else { panic!("no open 30-unit spot around the guard at {g:?}") };
+    let Some((gi, b)) = spot else { panic!("no open 27-45-unit spot around 07000005's grapple points") };
+    let g = sim.drones.grapple_points[gi].pos;
+    let face = |sim: &mut nf_view::scene::Sim| {
+        let head = [sim.bond.pos[0], sim.bond.pos[1] + 1.0, sim.bond.pos[2]];
+        sim.bond.yaw = yaw_to(head, g);
+        sim.bond.pitch = (((g[1] - head[1]) / dist(head, g)).clamp(-1.0, 1.0).asin()
+            / std::f32::consts::FRAC_PI_2).clamp(-1.0, 1.0);
+    };
     sim.bond = b;
-    sim.bond.yaw = yaw_to(sim.bond.pos, g);
+    face(sim);
     tick_idle(sim, 2);
-    assert!((30.0 - dist(head, target)).abs() < 4.0, "the spot is ~30 units from the guard");
-    assert!(sim.world.line_of_sight(head, target, nf_game::world::LOS_PROBE_8), "open LOS from the spot to the guard");
     // The claw out and auto-aim on (the profile's default [M profile.rs auto_aim: true]; the Sim
-    // defaults it off for the raw viewer — the options path turns it on, the test mirrors that).
-    // The scan runs OUTSIDE aim mode [M 0x1a7c98's aim-bit branch] — no aiming input here.
+    // defaults it off for the raw viewer). The scan runs OUTSIDE aim mode [M 0x1a7c98:50].
     sim.gun.weapon = 0x50;
     sim.auto_aim = true;
     let mut snapped = false;
     for _ in 0..60 {
+        face(sim);
+        sim.step_bond(Input::default(), false, false, false);
+        if sim.drones.aim_target == Some(GRAPPLE_AIM + gi) { snapped = true; break; }
+    }
+    let d = dist([sim.bond.pos[0], sim.bond.pos[1] + 1.0, sim.bond.pos[2]], g);
+    assert!(snapped, "the Q-Claw's auto-aim snaps onto the grapple point {d:.1} units away (its \
+        weapon_data+0x1c cap 50 [M 0x1a7d64; L ee_start_05], class 'Q' [M 0x1a7c98:70])");
+    // Sister: the P2K (weapon 2) at the same spot never takes the grapple point — the guns scan
+    // the drones and players from Autoaim_Range 25 [M 0x1a7c98:82-103].
+    sim.gun.weapon = 2;
+    sim.drones.aim_target = None;
+    for _ in 0..60 {
+        face(sim);
+        sim.step_bond(Input::default(), false, false, false);
+        assert_ne!(sim.drones.aim_target, Some(GRAPPLE_AIM + gi), "the guns never aim at a grapple point");
+    }
+}
+
+/// The Q-Claw's scan never takes a drone: a live guard the P2K's auto-aim takes from the same spot
+/// (inside both caps, open LOS, faced) is not a claw candidate [M Player_AutoAim 0x1a7c98:64-81 — the 0x50/0x51 arm walks
+/// class 'Q' only; the drone list `DAT_00298e14` is the else arm's].
+#[test]
+fn the_q_claw_auto_aim_skips_the_guards() {
+    let Some(iso) = iso() else { eprintln!("NF_ISO not set — skipping"); return };
+    let mut scene = nf_view::load(&iso, "07000005.bin", false).expect("load 07000005");
+    let sim = scene.sim.as_mut().unwrap();
+    tick_idle(sim, 3000);
+    let guard = sim.drones.list.iter().position(|d| d.present && d.enabled && d.team == 1
+        && !d.corpse && d.health > 0.0).expect("07000005 has a live guard");
+    let g = sim.drones.list[guard].pos;
+    let mut spot = None;
+    for r in [12.0f32, 15.0, 18.0] {
+        for a in 0..16 {
+            let ang = a as f32 * std::f32::consts::FRAC_PI_8;
+            let p = [g[0] + r * ang.sin(), g[1], g[2] + r * ang.cos()];
+            let b = nf_game::player::Bond::stand_at(&sim.world, p, 0.0);
+            if (b.pos[1] - g[1]).abs() > 3.0 { continue; }
+            let head = [b.pos[0], b.pos[1] + 1.0, b.pos[2]];
+            let target = [g[0], g[1] + 0.6, g[2]];
+            if sim.world.line_of_sight(head, target, nf_game::world::LOS_PROBE_8) { spot = Some((b, r)); break; }
+        }
+        if spot.is_some() { break; }
+    }
+    let Some((b, r)) = spot else { panic!("no open spot around the guard at {g:?}") };
+    sim.bond = b;
+    sim.auto_aim = true;
+    // Sister first: the P2K does take this guard from the spot (the guns' scan reaches it).
+    sim.gun.weapon = 2;
+    let mut gun_snapped = false;
+    for _ in 0..60 {
         sim.bond.yaw = yaw_to(sim.bond.pos, sim.drones.list[guard].pos);
         sim.step_bond(Input::default(), false, false, false);
-        if sim.drones.aim_target == Some(guard) { snapped = true; break; }
+        if sim.drones.aim_target == Some(guard) { gun_snapped = true; break; }
     }
-    assert!(snapped, "the Q-Claw's auto-aim snaps at 30 units (its weapon_data+0x1c cap 50 \
-        [M 0x1a7d64; L ee_start_05])");
-    // Sister: the same spot with the P2K (weapon 2, the start weapon) finds nothing — the guns'
-    // cap is Autoaim_Range 25 [M 0x1a7d30].
-    sim.gun.weapon = 2;
+    assert!(gun_snapped, "sister: the P2K's auto-aim takes the guard {r} units away");
+    sim.gun.weapon = 0x50;
     sim.drones.aim_target = None;
     for _ in 0..60 {
         sim.bond.yaw = yaw_to(sim.bond.pos, sim.drones.list[guard].pos);
         sim.step_bond(Input::default(), false, false, false);
+        assert_ne!(sim.drones.aim_target, Some(guard),
+            "the Q-Claw's auto-aim scans class 'Q' only [M 0x1a7c98:64-81]");
     }
-    assert_ne!(sim.drones.aim_target, Some(guard),
-        "the P2K's auto-aim does not reach 30 units (the Autoaim_Range 25 cap [M 0x1a73f8])");
 }
 
 /// ── 4. The NewScoresRef hand-off: the 0x09 maps read the zeroed PTPDATA rows ────────────────────

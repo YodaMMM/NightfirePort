@@ -386,7 +386,7 @@ impl Sim {
                 let shooter_at = self.mpfx_slot_head(shot.shooter).unwrap_or(shot.from);
                 let h = &mut self.drones.health;
                 h.dir_bits = nf_game::bullet::PlayerHealth::hit_dir_bits(shooter_at, self.bond.head(), self.bond.yaw);
-                h.flash = (h.flash + (shot.damage * 21.333).min(128.0)).min(255.0);
+                h.flash = nf_game::bullet::PlayerHealth::pain_glow(h.flash, shot.damage);
                 if flags70 & 0x180 == 0 {
                     self.drones.audio.play(0x412);
                     self.mp_fx.started.push((frame, 0x412, self.bond.head(), local));

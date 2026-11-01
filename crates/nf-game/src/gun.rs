@@ -64,6 +64,13 @@ pub struct Gun {
     /// The anim-script toggle (`AnimProcessScriptCmds` 0x1c1b38 case 1) can flip it outside the
     /// draw path — the port does not port that command (no scripted user known); [S] noted.
     pub laser_on: bool,
+    /// weapon-handling: the running reload was started by the reload key (branch A — +0xA4 from
+    /// frame 0) rather than by the empty-clip auto-reload (branch B — frame 6 for +0x68 & 0x1000).
+    pub reload_by_key: bool,
+    /// weapon-handling: the caller's view-state gate for this tick (`Player_WeaponFiring`
+    /// 0x1a5460:631-648 — state 9 with `+0x68 & 0x8000`, or a state outside {0, 9, 0xB}): the
+    /// countdown runs, the shot does not.
+    pub refire_blocked: bool,
 }
 
 impl Gun {
@@ -324,6 +331,53 @@ pub fn fire_mode_switch(weapon: u8, twin: i8, mode_count: u8, mode: u8, has_ammo
     }
 }
 
+/// `Player_Zoom` 0x1a1a70, one tick (`FRAME_RATE_MUL` = 1). `cur` is `BLData+0x8D0` (the
+/// magnification the view divides its FOV by), `target` is `+0x8D4`, `max` is `+0x8D8` (the held
+/// record's `weapon_data+0x88`, written on the aim bit's rise [M Player_Weapon 0x1a24c8:176-182]).
+/// `axis` is the zoom action 6 (`Input_Actionf(slot, 6, 1)`), read only while the aim bit is set
+/// [M 0x1a1a70:18-19]; the pad's d-pad up gives −1 (zoom in), down +1 (out) [M psiInput_MapInputs
+/// style tables: `dpad: (6, 0x1000 → −1, 0x4000 → +1)`].
+///
+/// - Axis held: `f = 1 + 0.025` (`1/f` when the axis is positive); the target AND the current
+///   magnification are scaled by `f` (the current one clamped at the target), then the target
+///   takes the current value [M :34-41, :55-69, :70-71] — a geometric 1.025×/tick ramp.
+/// - Axis idle: the current magnification eases toward the target by `1 + 0.15` per tick
+///   (`1/1.15` from above), clamped at the target [M :21-26, :55-69]; the target is untouched.
+/// - The target is clamped to `[1, min(max, 50)]` every tick [M :44-54].
+///
+/// Returns `Some(cur)` when the axis moved the zoom — the value the game stores as the base
+/// record's remembered zoom (`BLData+0x1B4 + base·0xC`) [M :70-74].
+pub fn zoom_tick(cur: &mut f32, target: &mut f32, max: f32, axis: f32) -> Option<f32> {
+    let f8;
+    let f5;
+    if axis == 0.0 {
+        f8 = *cur - *target;
+        f5 = if f8 > 0.0 { 1.0 / (1.0 + 0.15) } else { 1.0 + 0.15 };
+    } else {
+        f5 = if axis > 0.0 { 1.0 / (1.0 + 0.025) } else { 1.0 + 0.025 };
+        *target *= f5;
+        f8 = axis;
+    }
+    if max < *target { *target = max; }
+    if *target < 1.0 { *target = 1.0; } else if *target > 50.0 { *target = 50.0; }
+    if f8 != 0.0 {
+        *cur *= f5;
+        let past = if f8 < 0.0 { *target < *cur } else { *cur < *target };
+        if past { *cur = *target; }
+    }
+    if axis != 0.0 {
+        *target = *cur;
+        Some(*cur)
+    } else { None }
+}
+
+/// The remembered zoom a base record starts with: `sqrt(weapon_data[w]+0x88)` per record
+/// [M Player_InitAmmoWeapons 0x1a17f8:51 — `BL+0x1B4 + w·0xC = SQRT(weapon_data[w]+0x88)`].
+/// The aim bit's rise restores it as the target when `PlayerSetting+6` is set (the boot default
+/// 1 [M Input_Init 0x17edd8:22; L ee_start_05 0x2a38ce = 1]), clamped to the record's max
+/// [M Player_Weapon 0x1a24c8:170-182].
+pub fn initial_saved_zoom(max: f32) -> f32 { max.max(0.0).sqrt() }
+
 /// The fields of a `weapon_data` record the trigger uses.
 #[derive(Clone, Copy, Debug)]
 pub struct GunParams {
@@ -332,6 +386,10 @@ pub struct GunParams {
     pub clip: u32,
     pub ammo_per_shot: u32,
     pub reload_ticks: u32,       // legacy: total reload time for non-shotgun weapons
+    /// weapon-handling: the reload KEY's time (branch A, `Player_WeaponFiring` disasm 0x1a5fb0-0x1a5fdc):
+    /// +0xA4 at 1.35× from frame 0 — the frame-6 start of +0x68 & 0x1000 is the auto-reload's
+    /// alone (branch B, 0x1a62e4-0x1a631c). Equal to `reload_ticks` for every other record.
+    pub reload_key_ticks: u32,
     pub one_at_a_time: bool,
     pub reload_start_ticks: u32, // state 5: +0xA8 script length (0 if no start script)
     pub reload_loop_ticks: u32,  // state 6: +0xA4 script length per shell
@@ -371,6 +429,7 @@ impl GunParams {
             // and refused the detonator's fire outright (the F family: sounds, no shot tick).
             ammo_per_shot: w[0x91] as u32,
             reload_ticks: reload_ticks(start_h, reload_h, flags68, &script_len),
+            reload_key_ticks: reload_ticks(start_h, reload_h, flags68 & !0x1000, &script_len),
             one_at_a_time: flags68 & 0x100 != 0,
             reload_start_ticks: len_of(start_h),
             reload_loop_ticks: len_of(reload_h),
@@ -398,7 +457,7 @@ pub fn reload_ticks(start: u32, reload: u32, flags68: u32, script_len: &impl Fn(
 
 impl Gun {
     /// Bond's start on 07000005 (`Player_InitWeapon`): weapon 2 with 7 in the clip and 41 spare [L].
-    pub fn new(weapon: u8, clip: u32, spare: u32) -> Gun { Gun { weapon, clip, spare, timer: 0.0, pending: 0, held: false, reload_state: 0, reload_ticks: 0, reload_loop_restarted: false, switch_request: weapon, saved_weapon: weapon, prev_weapon: 0, prev_gadget: 0, switch_state: 0, fire_state: false, latch: false, alt_fire_toggle: 0, twin_skip: vec![0i8; 0x72], laser_on: false } }
+    pub fn new(weapon: u8, clip: u32, spare: u32) -> Gun { Gun { weapon, clip, spare, timer: 0.0, pending: 0, held: false, reload_state: 0, reload_ticks: 0, reload_loop_restarted: false, switch_request: weapon, saved_weapon: weapon, prev_weapon: 0, prev_gadget: 0, switch_state: 0, fire_state: false, latch: false, alt_fire_toggle: 0, twin_skip: vec![0i8; 0x72], laser_on: false, reload_by_key: false, refire_blocked: false } }
 
     /// One tick with the trigger (action 9) `pressed` (no reload key, gun idle).
     pub fn update(&mut self, pressed: bool, p: GunParams) -> bool { self.update_with(pressed, false, false, p) }
@@ -439,15 +498,28 @@ impl Gun {
             // With a +0xA8 start script it sets state 5 instead and queues +0xA8 at 1.0 [M 0x1a6260-0x1a626c];
             // case 5 then queues +0xA4 at 1.0 for the full length (0x1a2e38 case 5).
             self.reload_state = if p.reload_start_ticks > 0 { 5 } else { 6 };
-            self.reload_ticks = if p.reload_start_ticks > 0 { p.reload_start_ticks.max(1) } else { p.reload_ticks.max(1) };
+            // weapon-handling [M disasm 0x1a5fb0-0x1a5fdc vs 0x1a62e4-0x1a631c]: the key's reload
+            // plays +0xA4 from frame 0; only the auto-reload skips to frame 6 (+0x68 & 0x1000).
+            self.reload_by_key = reload;
+            let loop_ticks = if reload { p.reload_key_ticks } else { p.reload_ticks };
+            self.reload_ticks = if p.reload_start_ticks > 0 { p.reload_start_ticks.max(1) } else { loop_ticks.max(1) };
             self.pending = 0;
             self.held = pressed;
             return false;
         }
         if !pressed { self.pending = 0; }
-        if pressed && !self.held && self.timer <= 0.0 { self.pending = p.shots_per_pull; self.timer = 1.0; }
+        let fresh = pressed && !self.held;
+        if fresh && self.timer <= 0.0 { self.pending = p.shots_per_pull; self.timer = 1.0; }
         self.held = pressed;
+        // weapon-handling [M 0x1a5460:601-629]: without a fresh press a run-out timer RETURNS before
+        // the countdown — a held trigger whose timer ran out on a refused tick (the state gate below)
+        // never refires until the next press.
+        if !fresh && self.timer <= 0.0 { return false; }
         self.timer -= 1.0;
+        // weapon-handling [M 0x1a5460:631-648]: the view-state gate after the countdown — a fire
+        // script still playing (state 9) refuses the shot for `+0x68 & 0x8000` records (the pump
+        // Frinesi 0x1c, the snipers 0x1e-0x29: their fire scripts outlast +0x40 [D 07000005 scripts]).
+        if self.refire_blocked { return false; }
         let mut fired = false;
         if self.timer <= 0.0 {
             self.pending -= 1;
@@ -537,7 +609,7 @@ mod tests {
     /// 0x3E7, the tick count at +0x40 = 6].
     #[test]
     fn held_automatic_fires_at_the_record_rate() {
-        let p = GunParams { shots_per_pull: 999, interval: 6.0, clip: 30, ammo_per_shot: 1, reload_ticks: 0, one_at_a_time: false, reload_start_ticks: 0, reload_loop_ticks: 0, reload_end_ticks: 0, ammo_type: 1, fire_anim_len: 0, fire_script: 0x0600_0900, fire_last: 0 };
+        let p = GunParams { shots_per_pull: 999, interval: 6.0, clip: 30, ammo_per_shot: 1, reload_ticks: 0, reload_key_ticks: 0, one_at_a_time: false, reload_start_ticks: 0, reload_loop_ticks: 0, reload_end_ticks: 0, ammo_type: 1, fire_anim_len: 0, fire_script: 0x0600_0900, fire_last: 0 };
         let mut g = Gun::new(0x12, 30, 60);
         let shots: Vec<usize> = (0..37).filter(|&t| g.update(true, p)).collect();
         assert_eq!(shots, [0, 6, 12, 18, 24, 30, 36], "held fire → the record's interval [M 0x1a5460:601-655; L weapon 0x12: spp 999, interval 6]");
@@ -547,7 +619,7 @@ mod tests {
 
     #[test]
     fn one_shot_per_press_at_most_every_interval() {
-        let p = GunParams { shots_per_pull: 1, interval: 8.0, clip: 7, ammo_per_shot: 1, reload_ticks: reload_ticks(0, 0x0600_0827, 0x1004, &|_| Some(155)), one_at_a_time: false, reload_start_ticks: 0, reload_loop_ticks: 111, reload_end_ticks: 0, ammo_type: 1, fire_anim_len: 0, fire_script: 0x0600_0823, fire_last: 0 };
+        let p = GunParams { shots_per_pull: 1, interval: 8.0, clip: 7, ammo_per_shot: 1, reload_ticks: reload_ticks(0, 0x0600_0827, 0x1004, &|_| Some(155)), reload_key_ticks: reload_ticks(0, 0x0600_0827, 0x04, &|_| Some(155)), one_at_a_time: false, reload_start_ticks: 0, reload_loop_ticks: 111, reload_end_ticks: 0, ammo_type: 1, fire_anim_len: 0, fire_script: 0x0600_0823, fire_last: 0 };
         assert_eq!(p.reload_ticks, 111);
         let mut g = Gun::new(2, 7, 41);
         // Holding the trigger fires once.
@@ -702,5 +774,34 @@ mod tests {
         // Sister: other weapons ignore clip[0x45] entirely.
         clip[0x45] = 0;
         assert!(Gun::has_ammo(1, &carried, &clip, |_w| 0usize, flags, |w| w as usize), "ammo_type 0 = melee: always true");
+    }
+    /// `Player_Zoom` 0x1a1a70: the held axis ramps BOTH magnifications ×1.025/tick from where the
+    /// current one stands (the sniper 0x24, max 10 [L weapon_data +0x88]: 1 → 10 in 94 ticks),
+    /// the idle axis eases ×1.15/tick toward the target, and the max clamps exactly.
+    #[test]
+    fn zoom_ramps_geometrically_and_eases_back() {
+        let (mut cur, mut target) = (1.0f32, 1.0f32);
+        let mut n = 0;
+        while cur < 10.0 {
+            assert!(zoom_tick(&mut cur, &mut target, 10.0, -1.0).is_some());
+            assert_eq!(cur, target, "the held axis keeps the target on the current zoom");
+            n += 1;
+        }
+        assert_eq!((n, cur), (94, 10.0), "1.025^93 < 10 <= 1.025^94; the max clamps exactly");
+        // Idle: the zoom stays (the target is untouched by an idle tick).
+        assert_eq!(zoom_tick(&mut cur, &mut target, 10.0, 0.0), None);
+        assert_eq!(cur, 10.0);
+        // The aim falls: the target drops to 1.0 and the zoom eases out at 1/1.15 per tick.
+        target = 1.0;
+        let mut out = 0;
+        while cur > 1.0 { zoom_tick(&mut cur, &mut target, 10.0, 0.0); out += 1; }
+        assert_eq!(out, 17, "ln 10 / ln 1.15 = 16.5 → 17 ticks, the last clamped onto 1.0");
+        // Sister: a positive axis zooms OUT, and never below 1.
+        let (mut c, mut t) = (2.0f32, 2.0f32);
+        zoom_tick(&mut c, &mut t, 10.0, 1.0);
+        assert!(c < 2.0 && (c - 2.0 / 1.025).abs() < 1e-6);
+        for _ in 0..100 { zoom_tick(&mut c, &mut t, 10.0, 1.0); }
+        assert_eq!(c, 1.0);
+        assert_eq!(initial_saved_zoom(16.0), 4.0);
     }
 }

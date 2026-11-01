@@ -35,13 +35,16 @@ fn load_settled(iso: &str) -> nf_view::scene::Scene {
     let sim = scene.sim.as_mut().unwrap();
     for _ in 0..300 { sim.step_bond(Default::default(), false, false, false); if !sim.disabled { break; } }
     assert!(!sim.disabled, "Bond is free after the intro");
-    // The boot NIS stages the heads' on-channels [D 0x06000066 stream 0]; wait for a sweeping head.
+    // light-glow: the reveal NIS 0x06000066 stages the heads' on-channels [D stream 0] once SP #808's
+    // ch 0x34 rises — the courtyard entry plates' output [D trigger census #524-#526; M SP_Hit
+    // 0x1dc470:16-18, SP_Update 0x1dbda8 case 0]. Raise it the way a plate does; wait for a sweeping head.
+    sim.drones.channels.set(0x34, 1, 0);
     let mut lit = false;
     for _ in 0..240u32 {
         sim.step_bond(Default::default(), false, false, false);
         if sim.drones.searchlights.parts.iter().any(|p| p.kind == 1 && p.state == 0) { lit = true; break; }
     }
-    assert!(lit, "a courtyard head sweeps (the boot raised its on-channel)");
+    assert!(lit, "a courtyard head sweeps (the reveal raised its on-channel)");
     scene
 }
 

@@ -275,8 +275,12 @@ fn the_shutter_switch_swaps_the_shutter_pair() {
     let rest = sim_mat(&w, shutter);
     {
         let sim = w.scene.sim.as_mut().unwrap();
-        sim.bond.pos = [sw[0], 0.6, sw[2] - 1.0];
-        sim.bond.yaw = 0.0;
+        // The spot the real walk presses from (walkreal_07000012's arrival at the switch, (0.60,
+        // 1.13, 7.38)), facing the switch. (The old blind drop to (sw.x, 0.6, sw.z − 1.0), facing
+        // north, fires the level exit #669 (mask 0xe, (1.20..3.32, 9.47..10.45)) on its first E
+        // tick once the security room's collision sits at the identity — the sim then holds.)
+        sim.bond.pos = [0.60, 1.13, 7.38];
+        sim.bond.yaw = (sw[0] - 0.60).atan2(sw[2] - 7.38);
         sim.bond.vel = [0.0; 3];
     }
     let mut pressed = false;

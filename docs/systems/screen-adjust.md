@@ -108,8 +108,9 @@ Slider behaviour [M `C_SBSCREEN_Handler` 0x217b08, size 204]:
   (then the flag clears — the write happens once per change, in vblank). The constant decodes
   against the game's own `sceGsSetDefDispEnv` 0x226370 [M] for NTSC 512×448 interlaced
   (`sceGsSetDefDBuff(…,0,0x200,0x1c0,…)`, `CreateDB` 0x10b000:21): MAGH = 5 (`(512+0x9ff)/512 = 5`,
-  written as `(5-1)<<23`), DW = 5·512−1 = 2559 (bits 32+), DH = 448·2−1 = 895 (bits 44+), DX base
-  0x27c = 636, DY base 0x32 = 50 — exactly the constant `0x1bf9ff02000000 | 50<<12` [M].
+  written as `(5-1)<<23`), DW = 5·512−1 = 2559 (bits 32-43 = 0x9ff), DH = 0x1bf = 447 (bits 44+:
+  448 lines — `sceGsSetDefDispEnv`'s `h − 1` arm, the `2h − 1` arm is not taken), DX base 0x27c =
+  636, DY base 0x32 = 50 — exactly the constant `0x1bf9ff02000000 | 50<<12` [M].
 
 - Units: the visible line is 5·512 = 2560 DX units wide (MAGH 5), so **X is in 1/5 framebuffer
   pixel units**: one X step (12) = 2.4/512 of the picture width; the full X range (±432) =
@@ -120,10 +121,13 @@ Slider behaviour [M `C_SBSCREEN_Handler` 0x217b08, size 204]:
   - 640×480 menu space (what the menu overlay authors in, mapped 640→512 / 480→448): **(X/4,
     Y·15/14)** — exact inverses of the overlay's 0.8 / 14·15 scaling.
   - fractions of the visible picture: **(X/2560, Y/448)**.
-  - The SIGN convention (whether a positive X shifts the drawn picture left or right on the TV —
-    DISPLAY's DX selects where the read starts) is not decidable from the decompile alone; the
-    renderer applies the fraction and the direction is confirmed by the live check in
-    the port's model. [S]
+  - Direction: DISPLAY's DX/DY are the display area's position on the monitor (the read start in
+    the framebuffer is DISPFB's DBX/DBY, untouched here) [S GS manual, DISPLAY1/2], so a larger X
+    moves the picture **right** and a larger Y moves it **down**. The page agrees: ◀ (action 0x1c)
+    and ▲ (0x1a) take Scroll_Update's 0x40 arm, value − 1 [M 0x221b20; the action numbers from
+    `psiInput_MapInputs` 0x10cd80's menu arm: +0x7c Up 0x1000 = 0x1a, +0x80 Down = 0x1b, +0x84 Left
+    = 0x1c, +0x88 Right = 0x1d], and C_SBSCREEN passes it to psiAdjustScreenPos — ◀ lowers DX (left),
+    ▲ lowers DY (up): each arrow moves the picture its own way.
 
 - PAL note: `sceGsSetDefDispEnv`'s PAL bases are DX 0x290 / DY 0x48 [M 0x226370:83-96], but
   `VBlankInt` writes the NTSC bases unconditionally; on this NTSC-U disc `PS2Region` is 0 and
@@ -209,8 +213,15 @@ also `psiSetScreenPos(DAT_0031cac0, DAT_0031cac4)` [M].
   for `SCREEN_ADJUST_HELD_TICKS` ticks — the port's input is press edges [S]).
 - Draw: `fe_pages::screenadjust_elems` (the picture, the 24 brackets, the hint through the shared
   hint bar, the SET 3 arrows); `--page screenadjust` (NF_SA_HELD=h-|h+|v-|v+) renders it.
-  Open: the picture offset itself is not applied to the rendered frame (the DISPLAY2 DX/DY shift's
-  sign is unconfirmed — §3).
+- The frame shift: `gpu::screen_adjust_viewport` moves the whole frame (one render pass — world,
+  fog, sky, snow, HUD/menus, movie plane — through `set_viewport`) by `X/2560 · H·4/3`, `Y/448 · H`
+  target pixels (the port's picture is the 4:3 frame at the target's height, the HUD's own pixel
+  shape); a cut-scene band rides the same shift; what the shift uncovers is the black clear (the GS
+  shows nothing outside its display area). The App mirrors the live offset (`App::screen_pos`) so
+  gameplay frames, which have no front end, keep it; fresh menu managers adopt it (the game's
+  globals outlive the manager). Render aid: `NF_SCREEN_POS=x,y` (game units, clamped) on `--shot`.
+- Persistence: the option file's [av] section carries `screen_x` / `screen_y` (the global settings
+  blob's X/Y, §5), clamped to ±0x1b0 / ±0x30 on load (`FrontEnd::opts_with_screen` / `set_opts`).
 - `FrontEnd`: `screen_x` / `screen_y` (PS2ScreenXPos/YPos), `screen_saved_x/y` (the Screen Adjust
   page's enter snapshot, PS2OldX/Y), `screen_av_saved_x/y` (the AV page's snapshot,
   screen_adjust_x/y) — each field on its own line [WORKLOG lesson 4].
