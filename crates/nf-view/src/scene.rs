@@ -3901,7 +3901,19 @@ impl Sim {
         } else {
             ([pos[0], pos[1] + 0.55, pos[2]], [pos[0], pos[1] + 0.275 - self.bond.cc, pos[2]])
         };
-        let player = nf_game::drone::Player { pos, target: [camera[0], camera[1] - 0.45, camera[2]], eye: camera, aim: look, sph, hanging, capsule,
+        // The collide-pass body (the object contacts): `Player_Collision` 0x194df0's switch on
+        // substate − 1 — case 0/6 (climb 1 / creep 7) [M :202-222], case 3 (the crouch, substate 4)
+        // [M :228-248], the default arm for the walk [M :315-333; the walk 0 rides the default —
+        // ladder.rs `capsule_hits_default`]. The other arms (0xb-0xe: wire/zipline family) are not
+        // split out here [S] — they take the default.
+        let cc = self.bond.cc;
+        let at = |dy: f32| [pos[0], pos[1] + dy, pos[2]];
+        let body = match self.bond.substate {
+            nf_game::player::SS_CLIMB | nf_game::player::SS_CREEP => (at(0.55), at(0.275 - cc), 0.275),
+            _ if self.bond.crouched => (at(0.1 - (cc - 0.55)), at(0.45 - cc), 0.55),
+            _ => (at(0.275), at(0.55 - cc), 0.55),
+        };
+        let player = nf_game::drone::Player { pos, target: [camera[0], camera[1] - 0.45, camera[2]], eye: camera, aim: look, sph, hanging, capsule, body,
             // standins-drone-922: the facing yaw the flash factor reads [M 0x12d890:328-330].
             yaw: self.bond.yaw,
             cel: self.cel_at(self.bond.pos).and_then(|room| self.room_cell.get(room).copied().flatten()) };

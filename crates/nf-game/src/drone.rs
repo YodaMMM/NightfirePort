@@ -717,6 +717,16 @@ pub struct Player {
     /// `Player_Collision` 0x194df0 builds the capsule per substate off obj+0x30 with the up vector.
     /// Built at the construction site off Bond's stance (`cc`).
     pub capsule: (V3, V3),
+    /// The body HITTEST `Player_Collision` 0x194df0 stamps into BLData+0x740 for the collide pass
+    /// (A arm BL+0x760, B arm BL+0x770, radius BL+0x7CC; mode 0x800, mask BL+0x7D8 = 0 on these
+    /// arms): the default arm (the walk) A = pos + 0.275, B = pos + (0.55 − cc), r 0.55
+    /// [M 0x194df0:315-333]; the crouch arm (case 3) A = pos + (0.1 − (cc − 0.55)), B = pos +
+    /// (0.45 − cc), r 0.55 [M :228-248]; the climb/creep arm (case 0/6) A = pos + 0.55, B = pos +
+    /// (0.275 − cc), r 0.275 [M :202-222]. The object contacts (`Collide_PickObj` 0x1eae80 →
+    /// `Collide_Intersect` 0x1ebaa8 → the mirror onto the hit object, `Collide_Update` 0x1ea398:
+    /// 160-233) are built from this shape — the mines read it. Radius 0 = not built (callers
+    /// without a body model).
+    pub body: (V3, V3, f32),
     /// The runtime cel the queries start from (obj+0x20 — fix-safe08b): the `pCelList` cell index in
     /// the world's `ScopeGraph`; `None` = the flat (unscoped) world.
     pub cel: Option<usize>,
@@ -12764,11 +12774,14 @@ impl Drones {
         self.mines = crate::worldobj::Mine::create(&level.maps[m].placements, |p| {
             let obj = if p.by_hash() { level.by_hash.get(&p.hashcode).map(|&(map, object)| &level.maps[map].objects[object]) }
                 else { level.maps[m].objects.get(p.index as usize) };
-            let Some(o) = obj else { return Vec::new() };
-            let Some(c) = o.collision.as_ref() else { return Vec::new() };
             // Mine_Create's obj+0x90: CCO(0) → View_RotTransMatrix [M 0x17ce28:16].
             let mx = nf_formats::placement::view_rot_trans_matrix(p.rotation, p.translation);
-            c.triangles().into_iter().map(|t| t.map(|v| nf_formats::placement::transform(&mx, v))).collect()
+            let Some(o) = obj else { return (Vec::new(), p.translation, 0.0) };
+            // The world sphere: the matrix · the glist centre, the glist radius · |obj+0xE8| (1.0)
+            // [M Control_BuildWorldSph 0x133070; control_init_object 0x134630:17].
+            let centre = nf_formats::placement::transform(&mx, o.centre);
+            let Some(c) = o.collision.as_ref() else { return (Vec::new(), centre, o.radius) };
+            (c.triangles().into_iter().map(|t| t.map(|v| nf_formats::placement::transform(&mx, v))).collect(), centre, o.radius)
         });
         let ps = &level.maps[m].placements;
         let lib = level.nis.iter().map(|(&h, n)| (h, std::sync::Arc::new(n.clone()))).collect();
@@ -13357,6 +13370,19 @@ fn segment_hits_sphere(a: V3, b: V3, c: V3, r: f32) -> bool {
         self.casings.eject(&d.surfaces.map(|s| &s.ammo).unwrap_or(&Default::default()), w, from, yaw, pitch, from[1], rng);
     }
 
+    /// `Explode_Propagate` 0x17c518's case 0x4B over the live mines: every mine the falloff reaches
+    /// gets a referenced HITDATA (+0x58 = the blast's attacker), which its next `Mine_Update`
+    /// 0x17c930 explodes on [M]. The port's blasts all carry an attacker (the mine itself for a
+    /// mine's blast [M 0x17c930 EXPLODEINFO+0x24 = the mine, 0x17cde0 param_5]; the player or a
+    /// drone otherwise) — a null-attacker blast would leave the entry unreferenced [S: no port
+    /// blast is attacker-less]. The candidate set is the distance sweep the other cases use; the
+    /// game's `Collide_SphereIntersect` cel scoping is not modelled [S].
+    fn blast_mines(&mut self, pos: V3, radius: f32, damage: f32) {
+        for m in &mut self.mines {
+            if m.pending == 0 && m.blast_reaches(pos, radius, damage) { m.pending = crate::worldobj::MINE_BLAST; }
+        }
+    }
+
     /// `Explode_Create` 0x17cbd0's blast, shared by the fuse death (`Bullet_handle_object_destruction`
     /// 0x12e1c0), the impact explode (`Bullet_CollisionHandler` 0x12d068-0x12d0bc [M, disassembled])
     /// and the grenade contact. `Explode_Propagate` 0x17c518 through `explode::propagate`: the full
@@ -13426,6 +13452,9 @@ fn segment_hits_sphere(a: V3, b: V3, c: V3, r: f32) -> bool {
                 // no filter [M 0x17c518:86-105]. The parts are the class-0 script entities, so
                 // the sweep is over the SP part targets' spheres.
                 copters: &copter_parts });
+        // case 0x4B → the mines' referenced hit entry (the chain: a mine's blast sets off the
+        // mines in its reach on their next update) [M 0x17c518 case 0x4b; Mine::blast_reaches].
+        self.blast_mines(pos, radius, damage);
         // case 0x21 → `Destroy_Smash` [M 0x17c518:141-177 → 0x12bb60]: the channel write is the
         // smash's, the twin's blast queued like the beam path's (script by the type byte, owner
         // the blast's owner).
@@ -14052,6 +14081,27 @@ fn segment_hits_sphere(a: V3, b: V3, c: V3, r: f32) -> bool {
                                 if !e.looped { self.sounds.push(Sound { id, pos: k.pos, inner: e.inner, outer: e.outer, weight: e.weight }); }
                             }
                         }
+                    }
+                }
+            }
+            // The mines (class 0x4B) take the round: the flight segment picks the mine's mesh (the
+            // 0x201 pick + mesh refine, `Mine::segment_t`), `Collide_Update` 0x1ea398:160-233 mirrors
+            // the hit onto the mine's list with +0x58 = the bullet, and `Mine_Update` 0x17c930
+            // explodes on any referenced entry — no class, damage or filter gate [M]. The world
+            // stop in front of the mine (the sorted list's first solid node [M 0x1ea398:216-229])
+            // shields it. The round dies on the beam: the hit carries no pass bit — obj+0xF0 is 0
+            // (the 0x40 test of `Collide_Intersect` 0x1ebaa8's object arm), and the three Tripbomb
+            // meshes' surface bytes are 0 and 6 (no 0x40/0x80) [D census_07000015 probe_07000015_mine_objects] —
+            // a solid node, the round's state-2 stop [M Bullet_CollisionHandler 0x12ce80].
+            if !net_world && !b.dead && !self.mines.is_empty() {
+                let hit = self.mines.iter().enumerate()
+                    .filter_map(|(i, m)| m.segment_t(b.pos, end).map(|t| (i, t)))
+                    .min_by(|x, y| x.1.total_cmp(&y.1));
+                if let Some((i, t)) = hit {
+                    let tstop = d.world.segment_bullet_scoped(d.world.find_cel(b.pos), b.pos, end);
+                    if tstop.is_none_or(|ts| t <= ts) {
+                        if self.mines[i].pending == 0 { self.mines[i].pending = crate::worldobj::MINE_BULLET; }
+                        b.dead = true;
                     }
                 }
             }
@@ -15394,6 +15444,7 @@ fn segment_hits_sphere(a: V3, b: V3, c: V3, r: f32) -> bool {
             let hits = crate::explode::propagate(pos, radius, damage, owner,
                 &crate::explode::Targets { drones: &drones_t, player: player_pos, breaks: &breaks_t,
                     destroys: &destroys, copters: &[] });
+            self.blast_mines(pos, radius, damage); // case 0x4B [M 0x17c518]
             // case 0x21 → `Destroy_Smash` [M 0x17c518:141-177 → 0x12bb60]: the channel write is
             // the smash's, the blast queued like the bullet-kill path's (script by the type
             // byte, owner the imp — not the player).
@@ -16882,17 +16933,29 @@ fn segment_hits_sphere(a: V3, b: V3, c: V3, r: f32) -> bool {
             .filter(|dr| dr.present && !dr.corpse)
             .map(|dr| ([dr.pos[0], dr.pos[1] - 1.0, dr.pos[2]], [dr.pos[0], dr.pos[1] + 0.8, dr.pos[2]]))
             .collect();
+        // The player's body is the collide-pass HITTEST `Player_Collision` 0x194df0 builds (`Player::body`
+        // — the walk's default arm reaches from the floor to 0.825 over the root, the crouch arm
+        // 1.3 over the floor); the old stand-in (pos .. pos + 1.8, r 0.55) rode a metre too high —
+        // it never met a floor-level beam and caught a crouched Bond under a raised one.
+        let (body_a, body_b, body_r) = if player.body.2 > 0.0 { player.body }
+            else { ([player.pos[0], player.pos[1], player.pos[2]], [player.pos[0], player.pos[1] + 1.8, player.pos[2]], 0.55) };
+        // The referenced entries the LAST pass's collide work left (the blasts' case-0x4B hits) are
+        // read now; a blast spawned inside this loop hangs its entry for the next pass [M
+        // Explode_CollisionHandler 0x17cde0 runs in the collide pass after the update that made
+        // the blast]. This tick's bullet contacts (the bullet pass ran above) are read too.
+        let pending: Vec<u8> = self.mines.iter_mut().map(|m| std::mem::take(&mut m.pending)).collect();
         for mi in 0..self.mines.len() {
             let mine = &mut self.mines[mi];
             if mine.exploded { continue; }
             mine.bob(frame);
-            let feet = [player.pos[0], player.pos[1], player.pos[2]];
-            let head = [player.pos[0], player.pos[1] + 1.8, player.pos[2]];
-            let hit = mine.touching(feet, head, 0.55)
-                || drone_bodies.iter().any(|&(a, b)| mine.touching(a, b, 0.4));
-            if hit {
+            let cause = if pending[mi] != 0 { pending[mi] }
+                else if mine.touching(body_a, body_b, body_r) { crate::worldobj::MINE_BODY }
+                else if drone_bodies.iter().any(|&(a, b)| mine.touching(a, b, 0.4)) { crate::worldobj::MINE_DRONE }
+                else { 0 };
+            if cause != 0 {
                 let (pos, radius, damage, script) = (mine.pos, mine.radius, mine.damage, mine.script);
                 self.mines[mi].exploded = true;
+                self.mines[mi].cause = cause;
                 self.spawn_blast(d, pos, radius, damage, usize::MAX, 0, player.pos, frame, script, radius,
                     0); // explode-debris-spawn: Mine_Update's inline Explode_Create stores kind 0 [M 0x17c930:128]
             }
