@@ -63,6 +63,8 @@ pub struct DamageLog {
     pub fighting: bool,
     /// Return-fire fights started, for the summary.
     pub fights: u32,
+    /// (drone, tick) — a guard a fight did not drop is not re-fought before the tick.
+    pub cooldown: Vec<(usize, u32)>,
     last_health: f32,
     last_hits: Vec<(u32, usize, f32)>,
 }
@@ -154,13 +156,38 @@ impl DamageLog {
         c.into_iter().map(|(_, i)| i).collect()
     }
 
-    /// Bond's eye sees drone `i`'s torso or head (the static world's segment is clear).
-    pub fn visible(sim: &nf_view::scene::Sim, i: usize) -> bool {
-        let b = sim.bond.pos;
-        let eye = [b[0], b[1] + sim.bond.eye - sim.bond.crouch_drop, b[2]];
-        let d = sim.drones.list[i].pos;
-        [0.3f32, 1.5].iter().any(|h| sim.world.segment(eye, [d[0], d[1] + h, d[2]]).is_none())
+    /// The exposed part of drone `i` Bond's bullet can reach: the hit box whose centre ray enters
+    /// the box before the static world's bullet trace stops it (walker.rs `exposed_aim`'s rule —
+    /// `Collide_Jointy` 0x1ec180's first box vs the flight's world stop [M 0x1ea398:216-229]),
+    /// the one nearest the torso. None = nothing of him is reachable from here.
+    pub fn exposed_part(sim: &nf_view::scene::Sim, i: usize) -> Option<[f32; 3]> {
+        let d = &sim.drones.list[i];
+        let bp = sim.bond.pos;
+        let eye = [bp[0], bp[1] + sim.bond.eye - sim.bond.crouch_drop, bp[2]];
+        let data = nf_game::drone::Data {
+            tables: &sim.tables, props: &sim.props, scripts: &sim.scripts, weapons: &sim.weapons,
+            world: &sim.world, level: sim.level, sequences: &sim.seqs, skins: &sim.skins,
+            skeletons: &sim.skeletons, nav: &sim.nav, covers: &sim.covers, tuning: &sim.tuning,
+            hitboxes: &sim.hitboxes, volumes: &sim.volumes, sfx: sim.sfx.as_ref(), models: &sim.models,
+            surfaces: sim.surfaces.as_ref(), voices: sim.voices.as_deref(), difficulty: sim.drones.difficulty,
+            ai_points: &sim.ai_points,
+        };
+        let torso = [d.pos[0], d.pos[1] + 0.3, d.pos[2]];
+        let mut best: Option<(f32, [f32; 3])> = None;
+        for b in d.hit_boxes(&data) {
+            let c = [b.m[3][0], b.m[3][1], b.m[3][2]];
+            let ray = [c[0] - eye[0], c[1] - eye[1], c[2] - eye[2]];
+            let Some(t_box) = nf_game::damage::ray_box(eye, ray, &b) else { continue };
+            let tw = sim.world.segment_bullet_scoped(sim.world.find_cel(eye), eye, c);
+            if tw.is_some_and(|w| w < t_box) { continue; }
+            let dev = ((c[0] - torso[0]).powi(2) + (c[1] - torso[1]).powi(2) + (c[2] - torso[2]).powi(2)).sqrt();
+            if best.map_or(true, |(bd, _)| dev < bd) { best = Some((dev, c)); }
+        }
+        best.map(|(_, c)| c)
     }
+
+    /// Bond can put a round into drone `i` from where he stands (`exposed_part`).
+    pub fn visible(sim: &nf_view::scene::Sim, i: usize) -> bool { Self::exposed_part(sim, i).is_some() }
 
     pub fn summary(&self, sim: &nf_view::scene::Sim) -> String {
         let mut top = self.by_owner.clone();
@@ -193,6 +220,21 @@ impl Walker {
             self.dmg.shooters(sim).into_iter().find(|&i| DamageLog::visible(sim, i))
         };
         let Some(di) = di else { return false };
+        if self.dmg.cooldown.iter().any(|&(i, until)| i == di && self.total_ticks < until) { return false; }
+        // Only with a gun in hand: a player without rounds walks on (the 16 arrival carries
+        // the fists alone — the weapon cycle stood Bond 730 ticks at the ramp foot under fire).
+        {
+            let sim = self.scene.sim.as_ref().unwrap();
+            let g = &sim.gun;
+            let in_hand = (2..=0x47).contains(&g.weapon) && g.clip + g.spare > 0;
+            let inv = &sim.drones.inventory;
+            let carried = (2..=0x47usize).any(|w| inv.owned.get(w).copied().unwrap_or(false) && {
+                let slot = nf_game::pickup::Inventory::clip_slot(&sim.weapons, w);
+                inv.clip.get(slot).copied().unwrap_or(0) > 0
+                    || inv.carried.get(sim.weapons.ammo_type(w)).copied().unwrap_or(0) > 0
+            });
+            if !in_hand && !carried { return false; }
+        }
         self.dmg.fighting = true;
         self.dmg.fights += 1;
         let h0 = self.scene.sim.as_ref().unwrap().drones.health.health;
@@ -205,22 +247,29 @@ impl Walker {
             self.tick(Input { look: (-p).clamp(-0.08, 0.08), ..Default::default() }, false);
         }
         self.dmg.fighting = false;
+        // A guard the stand did not drop (out of sight, the cap) is left for 240 ticks: the
+        // leg walks on instead of standing in the open re-fighting him.
+        if !killed { let until = self.total_ticks + 240; self.dmg.cooldown.retain(|e| e.0 != di); self.dmg.cooldown.push((di, until)); }
         let sim = self.scene.sim.as_ref().unwrap();
         eprintln!("[real-damage] {label}: returned fire on drone #{di} (killed {killed}) at tick {}, health {h0:.1} -> {:.1}",
             self.total_ticks, sim.drones.health.health);
         true
     }
 
-    /// Aim at drone `di` (torso, or the head when the torso is hidden) with the view and tap the
+    /// Aim at drone `di` (his exposed part, `DamageLog::exposed_part`) with the view and tap the
     /// trigger when the view is on him; reload on an empty clip. Bond does not move: a player
     /// returning fire on a ledge or a stair does not sidestep off it (the walker's `shoot`
     /// flanks, which walked Bond off the 05 tower lane and the 14 stairwell). Stops when the
-    /// guard dies (true), is out of sight for 60 ticks, the gun is dry, or after `cap` ticks. A
+    /// guard dies (true), is out of sight for 60 ticks, takes no round for 300, the gun is dry,
+    /// or after `cap` ticks. A
     /// tap whose line passes within 0.6 u of another live drone short of the target is held
     /// (the game's bullets hit any drone — the 03 servants stand among the guards).
     pub fn stand_and_fire(&mut self, di: usize, cap: u32) -> bool {
         let mut unseen = 0u32;
         let mut last_tap = 0u32;
+        let mut aim: Option<[f32; 3]> = None;
+        let mut hp0 = self.scene.sim.as_ref().unwrap().drones.list[di].health;
+        let mut last_hit = 0u32;
         for t in 0..cap {
             let (input, fire, reload) = {
                 let sim = self.scene.sim.as_ref().unwrap();
@@ -231,11 +280,14 @@ impl Walker {
                 let b = sim.bond.pos;
                 let eye = [b[0], b[1] + sim.bond.eye - sim.bond.crouch_drop, b[2]];
                 let torso = [d.pos[0], d.pos[1] + 0.3, d.pos[2]];
-                let head = [d.pos[0], d.pos[1] + 1.5, d.pos[2]];
-                let at = if sim.world.segment(eye, torso).is_none() { Some(torso) }
-                    else if sim.world.segment(eye, head).is_none() { Some(head) } else { None };
-                if at.is_none() { unseen += 1; if unseen > 60 { return false; } } else { unseen = 0; }
-                let at = at.unwrap_or(torso);
+                // Re-pick the exposed part every 10 ticks (the guard animates, cover buries a part).
+                if t % 10 == 0 { aim = DamageLog::exposed_part(sim, di); }
+                if aim.is_none() { unseen += 1; if unseen > 60 { return false; } } else { unseen = 0; }
+                // No round landed for 300 ticks: walk on (a guard in cover the stand cannot reach;
+                // the 13 lobby stand took 40 health that way).
+                if d.health < hp0 { hp0 = d.health; last_hit = t; }
+                if t - last_hit > 300 { return false; }
+                let at = aim.unwrap_or(torso);
                 let (dx, dy, dz) = (at[0] - eye[0], at[1] - eye[1], at[2] - eye[2]);
                 let h = (dx * dx + dz * dz).sqrt().max(0.5);
                 let err = { let mut a = dx.atan2(dz) - sim.bond.yaw;
