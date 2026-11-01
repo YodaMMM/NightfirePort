@@ -32,3 +32,23 @@ non-bullet arms], so bodies react to Bond/guards/doors brushing them as in the g
 with tests (a walk-through contact moves the body the game's way; sister tests), keep the bullet-hit
 curve pinned on lamp-calib unchanged. Branch start: created s/rigid-body-cylinder-sweep from
 origin/s/lamp-calib, merged origin/master.
+
+Port (2026-11-01, same session, continued after a sandbox reset): the cylinder contact check and
+its torque step are in. `rb_resting_contact_rot` now runs the game's THREE passes in order [M
+0x1d73a0]: the cylinder block (up = Mat_GetUp row 1, HITTEST+0x50 base = obj_pos + up·(+0x13c −
++0x9c), start = obj_pos + up·(−+0x13c·1.8) [M 0x1d73f0-0x1d7490], the per-straddled-cel sweep with
+the per-candidate DeltaP accumulation into rb+0xC0 (new `RbState.cyl_deltap`) [M 0x1ebaa8:353-394],
+the pick's 0x10 flag skipping dynamic objects [M 0x1eb8f8]); the class-5 walk with the per-type
+lane masks (type 2 keeps x, type 3 keeps y, type 4 keeps z, type 1 zeroes y — census lamps/barrels
+— [M disasm 0x1d753c-0x1d757c], torque slot only, no +0x40 write); the grounding tail [M
+0x1d75a0-0x1d7610]. The handler runs every tick (a resting body's cylinder digs the floor even
+with an empty obj+0xD0 chain). 3 new lib pins + the lamp-calib bullet curve pins unchanged.
+
+Audit fix (2026-11-01, same session): an independent disassembly audit of 0x1d75a0-0x1d7620
+confirmed every mask and gate, and caught one bug the lib tests had missed — the grounding tail
+zeroes the cross's Y lane before the add [M 0x1d7600 `swc1 f20, 0x24(sp)` stores the 0.0
+tolerance register (f20 = mtc1 $zero, 0x1d75a8) over the stored cross's y lane; VADD 0x1d760c;
+store rb+0x50 0x1d7610]. Fixed `rb_cyl_grounding_tail` (+0x50.y untouched) and added the oblique-
+push sister case that pins it (nonzero raw cross-y must not reach +0x50). Doc nuance: obj+0xFA |=
+0x20 is applied by RB_CollisionHandler itself after either branch [M 0x1d7a80:16-23], not the
+caller.

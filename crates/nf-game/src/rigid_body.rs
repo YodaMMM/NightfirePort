@@ -757,14 +757,18 @@ fn rb_cyl_points(up: [f32; 3], obj_pos: [f32; 3], s13c: f32, s9c: f32) -> ([f32;
 /// (0,0,0) — `Vec_IsEqual(rb+0xC0, 0x2d6200, 0.0)`, the 0x2d6200 table = (0,0,0) [L
 /// ACTION.ELF:0x2d6200; tolerance 0.0 = mtc1 zero [M 0x1d75a8-0x1d75bc]] — +0x50 += (hit0+0x40
 /// − translation) × (h+0x10·2.0) [M 0x1d75c8-0x1d7610: Vec_MulR32 0x40200000 = 2.0, the VU
-/// outer product 0x1d75e8-0x1d75f8, VADD into +0x50 at 0x1d7600-0x1d7610].
+/// outer product 0x1d75e8-0x1d75f8, VADD into +0x50 at 0x1d7600-0x1d7610] — with the cross's
+/// Y lane zeroed first [M 0x1d7600: `swc1 f20, 0x24(sp)` stores the 0.0 tolerance register
+/// over the stored cross's y lane before the VADD loads it; f20 = mtc1 $zero at 0x1d75a8]:
+/// only the x and z lanes of the cross reach +0x50, +0x50.y is untouched.
 fn rb_cyl_grounding_tail(st: &mut RbState, hit0: [f32; 3]) {
     if st.cyl_deltap == [0.0; 3] {
         return;
     }
     let vel = [st.cyl_deltap[0] * 2.0, st.cyl_deltap[1] * 2.0, st.cyl_deltap[2] * 2.0];
     let r = [hit0[0] - st.trans[0], hit0[1] - st.trans[1], hit0[2] - st.trans[2]];
-    let cross = cross3(r, vel);
+    let mut cross = cross3(r, vel);
+    cross[1] = 0.0; // [M 0x1d7600 swc1 f20(=0.0) → the cross's y lane; VADD 0x1d760c skips y]
     for i in 0..3 {
         st.tor_impulse[i] += cross[i];
     }
@@ -825,8 +829,9 @@ pub fn rb_cylinder_sweep(
 ///    (the list head survives the 1e8 drop) and h+0x10 != (0,0,0) — `Vec_IsEqual(rb+0xC0,
 ///    0x2d6200, 0.0)` with the 0x2d6200 table = (0,0,0) [L ACTION.ELF:0x2d6200; the tolerance
 ///    is 0.0, f20 = mtc1 zero [M 0x1d75a8-0x1d75bc]] — +0x50 += (hit0+0x40 − translation) ×
-///    (h+0x10·2.0) [M 0x1d75c8-0x1d7610: Vec_MulR32(0x40200000 = 2.0), the VU outer product
-///    0x1d75e8-0x1d75f8, VADD into +0x50 at 0x1d7600-0x1d7610]. The direction crosses the
+///    (h+0x10·2.0) with the cross's Y lane zeroed before the add [M 0x1d7600 `swc1 f20
+///    (=0.0) → the cross's y lane`] [M 0x1d75c8-0x1d7610: Vec_MulR32(0x40200000 = 2.0), the VU
+///    outer product 0x1d75e8-0x1d75f8, VADD into +0x50 at 0x1d7600-0x1d7610]. The direction crosses the
 ///    up-vector arm (hit0 = the +0x50 base ≈ trans + up·(radius − +0x9c)) with the floor push
 ///    (0, pen, 0) into h·pen·(−up.z, 0, up.x) — the same axis the up-righting spring drives
 ///    [M 0x1d79f4-0x1d7a58], so a body whose cylinder digs obliquely (tipped) is righted by
@@ -889,7 +894,8 @@ pub fn rb_resting_contact_rot(
 }
 
 /// `RB_CollisionHandler` 0x1d7a80 [M]: type 0 → RestingContact, every other type →
-/// RestingContactRot; the caller then applies obj+0xFA |= 0x20.
+/// RestingContactRot; the handler itself then applies obj+0xFA |= 0x20 [M 0x1d7a80:16-23,
+/// after either branch] (the port does the same in the caller).
 pub fn rb_collision_handler(
     rb: &RigidBody,
     st: &mut RbState,
@@ -1787,6 +1793,21 @@ mod evolve_tests {
         st3.cyl_deltap = [0.0; 3];
         rb_cyl_grounding_tail(&mut st3, base2);
         assert_eq!(st3.tor_impulse, [0.0; 3]);
+        // Sister 3 [M 0x1d7600 swc1 f20(=0.0) → the cross's y lane]: an oblique push makes the
+        // raw cross's y lane NONZERO — the game zeroes it before the VADD, so +0x50.y is
+        // untouched while the x/z lanes get the full cross lanes.
+        let (_, mut st4) = barrel();
+        st4.trans = [10.0, 1.0, 20.0];
+        st4.cyl_deltap = [0.03, pen, 0.02]; // oblique dig, not a pure floor push
+        let base4 = [st4.trans[0] + 0.4, st4.trans[1] + h, st4.trans[2] - 0.3];
+        rb_cyl_grounding_tail(&mut st4, base4);
+        let r4 = [base4[0] - st4.trans[0], base4[1] - st4.trans[1], base4[2] - st4.trans[2]];
+        let v4 = [0.03 * 2.0, pen * 2.0, 0.02 * 2.0];
+        let raw = cross3(r4, v4);
+        assert!(raw[1] != 0.0, "the case must produce a nonzero cross y lane to pin the mask");
+        assert_eq!(st4.tor_impulse[1], 0.0, "+0x50.y untouched [M 0x1d7600]");
+        assert!((st4.tor_impulse[0] - raw[0]).abs() < 1.0e-6);
+        assert!((st4.tor_impulse[2] - raw[2]).abs() < 1.0e-6);
     }
 
     /// [M 0x1ebaa8:353-394] The sweep's per-candidate bookkeeping: each hitting candidate adds
