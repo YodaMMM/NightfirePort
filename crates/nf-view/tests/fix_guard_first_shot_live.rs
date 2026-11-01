@@ -26,6 +26,10 @@ fn a_real_stand_in_the_beam_never_draws_a_shot_inside_the_game_s_reaction_chain(
 
     // Bond stands in the sweep, armed (the P2K), through the real input path.
     sim.bond = nf_game::player::Bond::stand_at(&sim.world, BEAM_SPOT, -2.2091);
+    // light-glow: the walk-in to BEAM_SPOT crosses the courtyard entry plates (#525/#526, out ch 0x34
+    // [D trigger census]) that start SP #808's light reveal [M SP_Hit 0x1dc470:16-18, SP_Update
+    // 0x1dbda8 case 0]; the teleport skips them, so raise ch 0x34 the way the plate does.
+    sim.drones.channels.set(0x34, 1, 0);
     sim.gun.weapon = 2;
     sim.gun.switch_request = 2;
     sim.gun.switch_state = 0;

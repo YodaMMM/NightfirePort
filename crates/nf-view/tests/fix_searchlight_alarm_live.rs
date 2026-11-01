@@ -34,8 +34,12 @@ fn a_courtyard_searchlight_arms_and_raises_the_alarm_channel() {
     for _ in 0..300 { sim.step_bond(Default::default(), false, false, false); if !sim.disabled { break; } }
     assert!(!sim.disabled, "Bond is free after the intro");
 
-    // The boot must stage the light channels [D 0x06000066 stream 0: 64 @ 1, 63 @ 59, 61 @ 116, 62 @ 167]
-    // — all four heads sweep within ~2.8 s of the boot (head #2's on-channel 64 goes first).
+    // light-glow: the reveal runs when SP #808's ch 0x34 rises — the courtyard entry plates' output
+    // [D trigger census #524-#526; M SP_Hit 0x1dc470:16-18, SP_Update 0x1dbda8 case 0]. The walk to
+    // BEAM_SPOT crosses them; raise the channel the way the plate does. The script then stages the
+    // light channels [D 0x06000066 stream 0: 64 @ 1, 63 @ 59, 61 @ 116, 62 @ 167] — all four heads
+    // sweep within ~2.8 s (head #2's on-channel 64 goes first).
+    sim.drones.channels.set(0x34, 1, 0);
     let mut lit = None;
     for t in 0..240u32 {
         sim.step_bond(Default::default(), false, false, false);

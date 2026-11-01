@@ -141,7 +141,10 @@ fn row_writes(kind: u8, p: &[u32]) -> Vec<(u8, u8)> {
 /// tick from the load (`Scripts::skip_request` = `Input_Action(-1, 0x19, 1)` [M 0x1dbda8:129-141;
 /// nis.rs begin_tick] — the Walker only presses it while the player is disabled; the real player
 /// can press it any time a scene plays).
-fn sweep(level: &str, ticks: u32, mash_skip: bool) -> Option<(Vec<(u8, u8, u32, bool)>, Walker)> {
+/// `plate`: after the enable, raise ch 0x34 the way 07000006's courtyard entry plates do (#524-#526
+/// [D trigger census]) — SP #808's trigger channel for the light reveal NIS 0x06000066 [M SP_Hit
+/// 0x1dc470:16-18, SP_Update 0x1dbda8 case 0].
+fn sweep(level: &str, ticks: u32, mash_skip: bool, plate: bool) -> Option<(Vec<(u8, u8, u32, bool)>, Walker)> {
     let Ok(scene) = nf_view::load(&iso(), &format!("{level}.bin"), false) else {
         eprintln!("[census-live] {level}: LOAD FAILED (skip)");
         return None;
@@ -156,6 +159,7 @@ fn sweep(level: &str, ticks: u32, mash_skip: bool) -> Option<(Vec<(u8, u8, u32, 
         if !w.scene.sim.as_ref().unwrap().disabled { enabled = true; break; }
     }
     let _ = enabled;
+    if plate { w.scene.sim.as_mut().unwrap().drones.channels.set(0x34, 1, 0); }
     eprintln!("[census-live] {level}: enabled={enabled} ({} ticks)", w.total_ticks);
     let mut fired: Vec<(u8, u8, u32, bool)> = Vec::new();
     for _ in 0..ticks {
@@ -181,7 +185,7 @@ fn sweep(level: &str, ticks: u32, mash_skip: bool) -> Option<(Vec<(u8, u8, u32, 
 #[test]
 fn every_script_channel_write_is_a_census_row_or_an_sp_out() {
     for level in LEVELS {
-        let Some((fired, w)) = sweep(level, 400, false) else { continue };
+        let Some((fired, w)) = sweep(level, 400, false, false) else { continue };
         let rows = census(level);
         let sp_outs: std::collections::BTreeSet<u8> = w.scene.sim.as_ref().unwrap()
             .drones.scripts.players.iter().map(|p| p.out as u8).filter(|o| *o != 0).collect();
@@ -199,14 +203,14 @@ fn every_script_channel_write_is_a_census_row_or_an_sp_out() {
     }
 }
 
-/// Audit 2 — the fired rows, end to end on the real input path, PLAYED: 07000006's boot NIS
-/// (`SP #808` → script 0x06000066, the level's intro) writes the four searchlight on-channels
+/// Audit 2 — the fired rows, end to end on the real input path, PLAYED: 07000006's light-reveal NIS
+/// (`SP #808` → script 0x06000066, started once the courtyard plates raise ch 0x34) writes the four searchlight on-channels
 /// in the census's stream order at the stream's own pacing, `script_channels` records them, and
 /// the game's readers react: searchlight placements 2/4/6/8 leave the off state as their
 /// on-channel lights (`Searchlight_Update` 0x1cb900's state-3 relight [M :371]).
 #[test]
 fn the_boot_nis_lights_the_four_searchlights_as_it_plays() {
-    let Some((fired, w)) = sweep("07000006", 700, false) else { panic!("07000006 load failed") };
+    let Some((fired, w)) = sweep("07000006", 700, false, true) else { panic!("07000006 load failed") };
     // The four census rows, in order (stream 0's 0xD sequence: t1 0x40, t59 0x3f, t116 0x3d, t167 0x3e).
     let want: Vec<(u8, u8)> = [(0x40u8, 1u8), (0x3f, 1), (0x3d, 1), (0x3e, 1)].into();
     let got: Vec<(u8, u8)> = fired.iter().filter(|&&(c, _, _, _)| want.iter().any(|&(wc, _)| wc == c))
@@ -248,7 +252,7 @@ fn the_boot_nis_lights_the_four_searchlights_as_it_plays() {
 /// fast-forward it — the scene plays out and every write lands at the stream's own pacing.
 #[test]
 fn the_boot_nis_cannot_be_skipped_the_games_no_camera_rule() {
-    let Some((fired, w)) = sweep("07000006", 700, true) else { panic!("07000006 load failed") };
+    let Some((fired, w)) = sweep("07000006", 700, true, true) else { panic!("07000006 load failed") };
     let want: Vec<(u8, u8)> = [(0x40u8, 1u8), (0x3f, 1), (0x3d, 1), (0x3e, 1)].into();
     let got: Vec<(u8, u8)> = fired.iter().filter(|&&(c, _, _, _)| want.iter().any(|&(wc, _)| wc == c))
         .map(|&(c, v, _, _)| (c, v)).collect();
