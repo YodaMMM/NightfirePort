@@ -176,14 +176,21 @@ fn walk_spawn_to_the_lower_floor_load_point() {
     }
     eprintln!("[011] the stairwell descent WALKED at +{} ticks", w.total_ticks);
     // Leg 3: the Load Point #158 and the E press ([M 0x1a5170 case 0x1d → 0x1b2318]).
-    w.walk_to(Wp::new(14.6, 17.0, -2.8).r(0.9), "the Load Point");
+    // The exit that loads is #193 "DOOR_loadlevel" (key gate 0): #158's key gate ch 0x1E [D] is off
+    // at the press on this route, so `Trigger_Locked` 0x1b2fc8 refuses #158 [M 0x1b2318:76-90].
+    // The use pick is the glist sphere test at head + look, radius 1.0, front side only [M
+    // Player_Activate 0x1a5170:100-108 → Intersect_PointGeom 0x1e92d8: plane distance in (0, 1.0]];
+    // #193's +Z faces sit at z −4.00 over x 14.00..14.62 [D tris], so Bond walks in at x 14.3 and
+    // ends facing −Z with the head near z −2.8 (the old 0.9 arrival left the use point 1.04 out).
+    w.walk_to(Wp::new(14.3, 17.0, -2.0).r(0.3), "in front of the Load Point");
+    w.walk_to(Wp::new(14.3, 17.0, -2.8).r(0.3), "the Load Point");
     let mut loaded = false;
     for _ in 0..60 {
         w.tick(nf_game::player::Input::default(), true);
         if w.scene.sim.as_ref().unwrap().drones.level_exit.is_some() { loaded = true; break; }
     }
     assert_eq!(w.scene.sim.as_ref().unwrap().drones.level_exit, Some(0x0700_0012),
-        "E at the Load Point #158 loads 07000012 [M 0x1b2318]");
+        "E at the stairwell-bottom exit #193 loads 07000012 [M 0x1b2318]");
     assert!(loaded, "the exit fired");
     // The exit's end-of-level mission rows: neither record completed here — their writers live on
     // 07000012 (#679's spawn tile) and on 07000013 (the whole-mission AND) [D §2].

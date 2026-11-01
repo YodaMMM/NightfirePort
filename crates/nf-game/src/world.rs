@@ -1140,6 +1140,27 @@ impl CollisionWorld {
         self.straddle(cell, &mut hit)
     }
 
+    /// `Intersect_PointGeom` 0x1e92d8 as the use pick drives it (mask 0x101, HITTEST+0x9a = 0):
+    /// the sphere (centre `p`, radius `r` = HITTEST+0x8C) against the object's glist triangles —
+    /// per triangle the signed plane distance must lie in (0, r] (`fVar25 = 0` when +0x9a & 8 is
+    /// clear [M :116-121, :200-201] — the front side only), then the point-to-triangle distance
+    /// ≤ r [M `vecutil_Dist2Tri_PointGeom` 0x1dfac8, :222-229]. A miss leaves the hit node's
+    /// distance at 1e8 (`Collide_Intersect` 0x1ebaa8:187), and `Collide_SphereIntersect` 0x1ec940
+    /// frees every 1e8 node before returning the list [M :120-125] — no node, no activation.
+    /// The plane normal is the stored winding's +cross(v1−v0, v2−v0) (`tris_near`'s note).
+    pub fn sphere_meets_tris(p: V3, r: f32, tris: &[[V3; 3]]) -> bool {
+        tris.iter().any(|t| {
+            let n = cross(sub(t[1], t[0]), sub(t[2], t[0]));
+            let l = dot(n, n).sqrt();
+            if l <= 0.0 { return false; }
+            let dp = dot(sub(p, t[0]), n) / l;
+            if !(dp > 0.0 && dp <= r) { return false; }
+            let (cp, _) = closest_on_triangle(p, t);
+            let d = sub(p, cp);
+            dot(d, d) <= r * r
+        })
+    }
+
     pub fn triangle_count(&self) -> usize { self.stat.tris.len() }
 
     /// Every static triangle whose object's box meets `lo`..`hi`, in stored winding order (the [D]

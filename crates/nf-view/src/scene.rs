@@ -311,6 +311,10 @@ pub struct DroneContext {
     pub tuning: nf_formats::tuning::Tuning,
     pub hitboxes: Option<nf_formats::hitbox::CollisionBones>,
     pub sfx: Option<nf_formats::sfx::SfxTable>,
+    /// subtitles-do-spoken: `Snd2Lbl` (0x2d25d8) + the `SFXOutputData+0x10` durations —
+    /// `Sound_DoSubtitle` 0x1dde58's data, attached onto `Drones` at the build.
+    pub snd2lbl: Vec<(u32, u32)>,
+    pub sfx_durations: Vec<f32>,
     pub surfaces: Option<nf_formats::sfx::SurfaceSounds>,
     pub voices: Option<Vec<nf_formats::sfx::VoiceLine>>,
     /// The HUD's sprite tables and font (docs/systems/hud.md).
@@ -6771,6 +6775,11 @@ pub struct Scene {
     /// The rigid bodies' placement indices (0xD8, placement order): slot `bi` past the rotors draws
     /// the body whose `RbObj::placement` is `rbody_placements[bi]` at its live obj+0x90.
     pub rbody_placements: Vec<u16>,
+    /// The mines (0xFE, `Mine::create`'s placement order): slot `k` past the rigid bodies draws
+    /// the mine of main-map placement `.0` at its placement matrix `.1` until the sim explodes it
+    /// (`Mine_Update` 0x17c930 sets obj+0xFE bit 0 → the delete pass removes the object [M
+    /// 0x17cb7c-0x17cb88]), then collapsed.
+    pub mine_placements: Vec<(usize, Mat4)>,
     /// The 0x34 placements the build gave posed slots (the camera slots follow them; the sim's
     /// gunimp list may be emptied by the MP Gun Emplacements setting, the slot layout is not).
     pub gunimp_placements: usize,
@@ -9264,6 +9273,10 @@ pub fn build(level: &Level, cels_only: bool, skeletons: &HashMap<u8, Skeleton>, 
                 // obj+0x90 once a body is disturbed [M 0x1d7810:0x1d796c-0x1d7994], so the static draw
                 // left a shot lamp hanging still while its body swung.
                 if kind == 0xd8 && cels_only { *misc_drawn.entry(0xd8).or_default() += 1; continue; }
+                // The mines ride a posed slot below (after the rigid bodies): the game deletes an
+                // exploded mine (`Mine_Update` 0x17c930 → obj+0xFE |= 1 → the delete pass [M
+                // 0x17cb7c-0x17cb88]), and the static draw never collapsed.
+                if kind == 0xfe && cels_only { *misc_drawn.entry(0xfe).or_default() += 1; continue; }
                 // A lock whose object has a LOD variant (the keypads: "Lock - KeypadLocked" →
                 // "Lock - KeypadUnlocked" [D block 0x27]) rides the posed slot space below, so the
                 // unlock's `Control_NextLOD` can swap it.
@@ -9359,6 +9372,7 @@ pub fn build(level: &Level, cels_only: bool, skeletons: &HashMap<u8, Skeleton>, 
         let mut dynobj_matrices: Vec<Mat4> = Vec::new();
         let mut rotor_placements: Vec<([f32; 3], [f32; 3])> = Vec::new();
         let mut rbody_placements: Vec<u16> = Vec::new();
+        let mut mine_placements: Vec<(usize, Mat4)> = Vec::new();
         let mut gunimp_placements = 0usize;
         let mut door_scene_hidden = std::collections::HashSet::new();
         let mut sl_lod: Vec<u16> = Vec::new();
@@ -9645,6 +9659,24 @@ pub fn build(level: &Level, cels_only: bool, skeletons: &HashMap<u8, Skeleton>, 
                 let inst = Instance { map, object, matrix: nf_formats::placement::object_matrix(p.rotation, p.translation), placement: p.clone() };
                 add_instance(level, &inst, Layer::Character, None, &mut groups, None, None, Some((rbody_base + bi) as u16), None, [1.0; 3], &room_cels, u32::MAX, u32::MAX);
             }
+            // The mines (0xFE, placement order — `Mine::create`'s), after the rigid bodies: one slot
+            // each at the placement matrix, collapsed once the sim explodes the mine (the game's
+            // delete [M Mine_Update 0x17c930, 0x17cb7c-0x17cb88]). `Mine_Create` 0x17ce28 copies no
+            // glist flags (the MISC loop's non-copying kinds), so no 0x10 gate and no 0x800 dim.
+            let mine_base = rbody_base + level.maps[m].placements.iter().filter(|p| p.flags & 0xff == 0xd8).count();
+            for (k, (pi, p)) in level.maps[m].placements.iter().enumerate().filter(|(_, p)| p.flags & 0xff == 0xfe).enumerate() {
+                let mx = nf_formats::placement::object_matrix(p.rotation, p.translation);
+                mine_placements.push((pi, mx));
+                if !cels_only { continue; }
+                let target = if p.by_hash() { level.by_hash.get(&p.hashcode).copied() }
+                    else if (p.index as usize) < level.maps[m].objects.len() { Some((m, p.index as usize)) } else { None };
+                let Some((map, object)) = target else { continue };
+                let obj = &level.maps[map].objects[object];
+                if !obj.gfx.leaves.iter().any(|l| !l.batches.is_empty()) || obj.flags & 0x400 != 0 { continue; }
+                if let Ok(h) = std::env::var("NF_HIDE") { if h.split(',').any(|n| !n.is_empty() && obj.name.contains(n)) { continue; } }
+                let inst = Instance { map, object, matrix: mx, placement: p.clone() };
+                add_instance(level, &inst, Layer::Character, None, &mut groups, None, None, Some((mine_base + k) as u16), None, [1.0; 3], &room_cels, u32::MAX, u32::MAX);
+            }
             // Level-placed pickups (`Pickup_Create` 0x18dda0): `View_DrawObjectGlist` 0x1e6780 draws
             // `obj+0xD8` at `obj+0x90` — the same object carries the glist the renderer draws [M], so the
             // port draws them the way it draws doors: Character-layer vertices posed by the simulation every
@@ -9899,8 +9931,12 @@ pub fn build(level: &Level, cels_only: bool, skeletons: &HashMap<u8, Skeleton>, 
             // The spawn arrival settle is NOT armed on this structural fallback: the level start
             // re-places the bond in lib.rs (the `Player_Init` 0x1910f8 path) and arms it there
             // (`arm_spawn_settle` doc — the [L] evidence is the boot's level-start placement).
+            // subtitles-do-spoken: `Sound_DoSubtitle`'s static tables ride the context (read
+            // before the `drones` name is shadowed by the Drones value below).
+            let spoken = drones.map(|c| (c.snd2lbl.clone(), c.sfx_durations.clone()));
             let mut drones = nf_game::drone::Drones::new(list, rng);
             drones.lights = lights;
+            if let Some((rows, durs)) = spoken { drones.attach_snd2lbl(rows, durs); }
             // The selected difficulty BEFORE the creates: every create-time gate reads it
             // (captain_setup 0x14b300:504-535, Drone_Create's min-difficulty tag 0x136be0:49,
             // Lock_Create's Operative auto-unlock 0x1ae1f8:67, Copter_Create's HP 0x17d340:76,
@@ -10123,7 +10159,7 @@ pub fn build(level: &Level, cels_only: bool, skeletons: &HashMap<u8, Skeleton>, 
                 }
             }
         }
-        Scene { shard_tex, cels: room_cels, cel_graph, streams: None, music_files: None, music_tables: None, sound_bank: None, sound_spares: Vec::new(), snow_texture, vertices, indices, materials, textures, hud_textures, woman: None, hud, script_billboards, view_models, mp_bodies, bond_body, mp_body_weapons, mp_char_bodies, mp_anim_sets, fog, bounds, start, stats, characters, char_vertex_start, char_verts, sequences, attachments, sim, colliders, models_0x800, npc_pool, ladders_drawn, grapple_hooks_drawn, misc_drawn, lock_matrices, door_dims, sl_dims, dynobj_matrices, rotor_placements, rbody_placements, gunimp_placements, script_tweak_alpha,
+        Scene { shard_tex, cels: room_cels, cel_graph, streams: None, music_files: None, music_tables: None, sound_bank: None, sound_spares: Vec::new(), snow_texture, vertices, indices, materials, textures, hud_textures, woman: None, hud, script_billboards, view_models, mp_bodies, bond_body, mp_body_weapons, mp_char_bodies, mp_anim_sets, fog, bounds, start, stats, characters, char_vertex_start, char_verts, sequences, attachments, sim, colliders, models_0x800, npc_pool, ladders_drawn, grapple_hooks_drawn, misc_drawn, lock_matrices, door_dims, sl_dims, dynobj_matrices, rotor_placements, rbody_placements, mine_placements, gunimp_placements, script_tweak_alpha,
             door_scene_hidden,
             sl_lod,
             corona_pos,
@@ -11375,7 +11411,15 @@ pub fn build(level: &Level, cels_only: bool, skeletons: &HashMap<u8, Skeleton>, 
                     let ri = di - self.dynobj_matrices.len();
                     if ri >= self.rotor_placements.len() {
                         // Past the rotors: the rigid bodies at their live obj+0x90 [M RB_EulerEvolve 0x1d7810].
-                        let pi = *self.rbody_placements.get(ri - self.rotor_placements.len())?;
+                        let bi = ri - self.rotor_placements.len();
+                        if bi >= self.rbody_placements.len() {
+                            // Past the rigid bodies: the mines at their placement matrix until the
+                            // sim explodes one (the game deletes it [M 0x17cb7c-0x17cb88]).
+                            let &(pl, mx) = self.mine_placements.get(bi - self.rbody_placements.len())?;
+                            if s.drones.mines.iter().any(|mn| mn.placement == pl && mn.exploded) { return None; }
+                            return Some(mx);
+                        }
+                        let pi = self.rbody_placements[bi];
                         let st = &s.drones.rbodies.list.iter().find(|o| o.placement == pi)?.st;
                         let r = st.matrix;
                         return Some([[r[0][0], r[0][1], r[0][2], 0.0], [r[1][0], r[1][1], r[1][2], 0.0],

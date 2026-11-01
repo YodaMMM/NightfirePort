@@ -5559,8 +5559,10 @@ impl Drone {
         // The fresh path is `NDrone2_ClosestAIPoint` 0x151b18: the point's emitter cost byte at the
         // drone's nearest node, the nav-path match, least cost / first on ties, the +0x144 owner
         // preference [M 0x151b18:128-181] — `aipoint::closest`, the same selection `find_run_to_point`
-        // runs; the old 2-D scan stand-in is gone with the decoded cost arrays.
-        let owner = d.props.get(0x11, &self.props) as i32; // Drone+0x144 = placement parameter 0x11 [M DefaultInit 0x14b300:472]
+        // runs; the old 2-D scan stand-in is gone with the decoded cost arrays. The game's owner is
+        // Drone+0x144 = placement parameter 4 [M DefaultInit 0x14b300:472 — piVar19[0x11] =
+        // params[4]; params start at piVar19[13] = the flat level_tag param array].
+        let owner = self.group as i32;
         let path = self.nav_path.flatten();
         let Some(pi) = crate::aipoint::closest(d.ai_points, d.nav, d.world, path, self.pos, 8, owner) else { return false };
         self.goal = Some(d.ai_points[pi].pos);
@@ -5583,7 +5585,11 @@ impl Drone {
     /// artifact) [M-dis]. This selection replaced an earlier route-probe stand-in.
     fn find_run_to_point(&mut self, d: &Data) -> bool {
         let Some(group) = crate::aipoint::run_to_point_group(self.prop(d, 0x56), self.prop(d, 0x4e), self.team) else { return false };
-        let owner = d.props.get(0x11, &self.props) as i32; // Drone+0x144 = placement parameter 0x11 [M DefaultInit 0x14b300:472]
+        // The game's owner is Drone+0x144 = placement parameter 4 [M DefaultInit 0x14b300:472 —
+        // piVar19[0x11] = params[4], params start at
+        // piVar19[13] = DIVars+0x34 = the level_tag's flat param array]; the old read took property
+        // BIT 0x11 of the props words (the alert block sets bit 17 on many guards).
+        let owner = self.group as i32;
         let path = self.nav_path.flatten();
         let hit = crate::aipoint::closest(d.ai_points, d.nav, d.world, path, self.pos, group, owner)
             .or_else(|| if group == 2 { crate::aipoint::closest(d.ai_points, d.nav, d.world, path, self.pos, 1, owner) } else { None });
@@ -12308,6 +12314,13 @@ pub struct Drones {
     /// game's `Text_AddMsg` 0x1b0c30 drops type-4 adds while it is 0, so the port gates both this
     /// track and the `script_msgs` drain on it (the fresh profile's default is Off [M profile.rs]).
     pub subtitle_track: crate::subtitle::SubtitleTrack,
+    /// subtitles-do-spoken: `Snd2Lbl` (ACTION.ELF 0x2d25d8, 484 × 8) rows — `(label |
+    /// 0x80000000 always-show, sound_id)` — `Sound_DoSubtitle` 0x1dde58's scan table, attached
+    /// from ACTION.ELF by the host (`Drones::attach_snd2lbl`).
+    pub snd2lbl: Vec<(u32, u32)>,
+    /// subtitles-do-spoken: `SFXOutputData[id] + 0x10` seconds per id (`nf_formats::sfx::sfx_durations`)
+    /// — `Sound_DoSubtitle`'s duration source.
+    pub sfx_durations: Vec<f32>,
     /// The 0700001b SpaceMissiles — the kind-0x39 placements (`Create_SpaceMissile` 0x1a9ef0).
     pub space_missiles: Vec<crate::space_missile::SpaceMissile>,
     /// `MissileDeploy` — the 8 bytes at 0x30cd70 [M 0x1aa218/0x1aa2c8/0x1aa324], zeroed by
@@ -12683,8 +12696,51 @@ impl Drones {
             // override with the snapshot's own table [L].
             key_codes: crate::lock::KeyCodes::init(&mut Rng::new(0x1b0548), 0),
             keypad: None,
+            // subtitles-do-spoken: `Snd2Lbl` (0x2d25d8) rows (label | 0x80000000 always-show,
+            // sound id) and `SFXOutputData[id]+0x10` seconds — `Sound_DoSubtitle` 0x1dde58's data,
+            // attached by the host from ACTION.ELF (`attach_snd2lbl`); empty = no spoken subtitles.
+            snd2lbl: Vec::new(),
+            sfx_durations: Vec::new(),
     };
         drones
+    }
+
+    /// subtitles-do-spoken: the host's one-time attach of `Sound_DoSubtitle`'s data (the game reads
+    /// the two static tables directly; the port carries them in so headless tests and the viewer
+    /// share one parse).
+    pub fn attach_snd2lbl(&mut self, rows: Vec<(u32, u32)>, durations: Vec<f32>) {
+        self.snd2lbl = rows;
+        self.sfx_durations = durations;
+    }
+
+    /// `Sound_DoSubtitle(id)` (0x1dde58) for a sound whose start the game gates through the node's
+    /// +0x52 flag: `Sound_UpdateSounds` (0x1dda70) fires it when `Sound_ReqestPlaySfx` (0x1dcc68) set
+    /// +0x52 at the request — `dist < node outer × 0.5`, or verbatim 1 for a 2-D `Sound_Play` node
+    /// (+0x4e == 0) [M 0x1dcc68:11-14], or forced 1 while `ScriptCam != 0` [M 0x1dcc68:83-99]. The
+    /// scan of `Snd2Lbl` (0x2d25d8) maps the id to its line; the gate `DAT_002a37c8 != 0 || (label &
+    /// 0x80000000) != 0` is DoSubtitle's own [M 0x1dde58:21-23] — the option OFF still subtitles the
+    /// always-show rows, which is why the PS2's fresh-boot 07000006 shows the driver conversation
+    /// with the default Off [L ee_start_*.bin @0x2a37c8 = 0]. The add is
+    /// `Text_AddMsg(-1, 0xff, 4, Txt_BindLabel(label), 0, fptoui(g_fSubtitleDurationModification ×
+    /// SFXOutputData[id]+0x10 × 60))` [M 0x1dde58:26-34] — the id-0xff type-4 add rides
+    /// `Text_AddMsg`'s `(type == 4 && id == 0xff)` gate disjunct [M 0x1b0c30], so the port pushes the
+    /// HUD drain and the track unconditionally for the rows that passed DoSubtitle's gate
+    /// (`push_always`). `g_fSubtitleDurationModification` (0x30d084) = 0.92 [L ee_start_05.bin
+    /// @0x30d084]; `dur_s` is the row's +0x10 seconds (the caller passes the parsed table's value —
+    /// 3.0 when the game's `param_1 >= 0x60d` fallback arm fires [M 0x1dde58:26-28], unmodelled: no
+    /// Snd2Lbl row carries such an id [D table]).
+    fn sound_subtitle(&mut self, id: u32, dist_ok: bool, dur_s: f32) {
+        let Some(&(label, sound)) = self.snd2lbl.iter().find(|&&(_, s)| s == id) else { return };
+        // The +0x52 gate first [M 0x1dda70: the `+0x52 == 0` arm skips DoSubtitle entirely — an
+        // always-show row out of the node's half radius does not post either].
+        if !dist_ok { return; }
+        let always = label & 0x8000_0000 != 0;
+        // DoSubtitle's own gate [M 0x1dde58:21-23: return only when the option is 0 AND the bit is 0].
+        if !self.subtitle_track.enabled && !always { return; }
+        const SUB_DUR_MOD: f32 = 0.92; // [L ee_start_05.bin @0x30d084]
+        let time = (SUB_DUR_MOD * dur_s * 60.0) as u16;
+        self.script_msgs.push((label & 0x7fff_ffff, time));
+        self.subtitle_track.push_always(self.frame, label & 0x7fff_ffff, time);
     }
 
     /// A keypad digit press — `C_KEYPAD_Handler` 0x216810's msg 0x4b (the digit button's
@@ -15913,15 +15969,33 @@ fn segment_hits_sphere(a: V3, b: V3, c: V3, r: f32) -> bool {
     fn player_use_triggers(&mut self, head: V3, look: V3, frame: u32) {
         let use_point = [head[0] + look[0], head[1] + look[1], head[2] + look[2]];
         let r = 1.0;
-        // Collect trigger indices whose bounding box meets the use sphere — the game's test is
-        // `Collide_SphereIntersect(pos, 1.0, …, mode 0x101)`: a bounding-sphere gate (centre
-        // obj+0x80, radius obj+0x8C [M 0x1eae80:219-228]) then the point transformed by the inverse
-        // object matrix and `Intersect_PointGeom` — point-vs-glist-TRIS [M 0x1ebaa8:186-190; caller
-        // 0x1a5170:100-137]; hit type 0x1d → Trigger_Activate. The port's AABB is the documented
-        // stand-in (a superset of the mesh test — exact only where the mesh fills its box).
+        // The game's test is `Collide_SphereIntersect(1.0, head + look, *(player+0x20), …)`, mask
+        // 0x101 [M 0x1a5170:100-108 → 0x1ec940:94-111], three stages (level-12-exit-pick):
+        // 1. The cel scope: `Collide_Pick` 0x1eb320 walks only the objects linked to the cels
+        //    `Collide_StraddleCels` 0x1eac98 reaches from the PLAYER's cel through the portals the
+        //    use sphere meets (`Intersect_Portal` 0x1ea7b8 v0x101) [M 0x1eb320:125, :313-328];
+        //    `Trigger_Create` 0x1b1720:96 links each trigger once (`build_LinkToRoom` 0x1c9680 at
+        //    its world-sphere centre). NOT modelled: the port carries no trigger obj+0x80 and its
+        //    cel links are approximations (the player relinks at POS, `player_cel_relink`), and a
+        //    trial gate refused real presses — 0700000d's E panel #450 resolved to cel 6 at its box
+        //    centre while Bond, standing at it, sat in cel 93 (use_key_census_live). The class-0x1D
+        //    arm has no facing or line-of-sight test [M 0x1a5170:134-137].
+        // 2. The bounds-sphere gate: `|use point − obj+0x80|² < (1.0 + obj+0x8C)²` [M 0x1eae80:
+        //    219-228] — implied by stage 3 for the port's world-space tris (the bounds sphere
+        //    encloses the glist), so not repeated.
+        // 3. The mesh refine: `Collide_Intersect` 0x1ebaa8:186-190 → `Intersect_PointGeom`
+        //    0x1e92d8 — the sphere against the glist TRIS, front side only; a miss frees the node
+        //    [M 0x1ec940:120-125] (`CollisionWorld::sphere_meets_tris`). The old AABB stand-in was
+        //    a superset: 07000012's exit #669 is two crossed planes (y 0.676, z 9.962 [D]) inside
+        //    its 1.20..3.32 × 9.47..10.45 box, so a press from the security room at (1.12, 7.49)
+        //    facing north met the inflated box through the room's north wall, while the use point
+        //    sits 1.49 from the vertical plane and 1.11 above the horizontal one — no hit, as in
+        //    the game [L PCSX2 2026-10-31, docs/levels/07000012.md §3].
+        // Triggers without tris (synthetic test volumes) keep the AABB test.
         let hits: Vec<usize> = (0..self.triggers.len()).filter(|&i| {
             let t = &self.triggers[i];
-            !(0..3).any(|k| use_point[k] + r < t.lo[k] || use_point[k] - r > t.hi[k])
+            if (0..3).any(|k| use_point[k] + r < t.lo[k] || use_point[k] - r > t.hi[k]) { return false; }
+            t.tris.is_empty() || CollisionWorld::sphere_meets_tris(use_point, r, &t.tris)
         }).collect();
         for i in hits {
             let (sets, next) = self.triggers[i].activate_request(&self.channels);
@@ -18396,6 +18470,9 @@ fn segment_hits_sphere(a: V3, b: V3, c: V3, r: f32) -> bool {
         // msg 0x22, bullets 6/7/0x19/0x17, walls/doors the default arm = velocity zero + deflect
         // [M 0x13fff0:127-147]; doors reverse closing leaves only [M 0x135980:44-111]).
         let drone_pre: Vec<V3> = self.list.iter().map(|x| x.pos).collect();
+        // subtitles-do-spoken: deferred `Sound_DoSubtitle` adds (the per-drone `dr` borrow holds
+        // the list; the helper needs `&mut self` — drained after the loop).
+        let mut spoken_subs: Vec<(u32, bool, f32)> = Vec::new();
         for &(_, what, index) in &order {
             if what == 1 { let _pw = crate::prof::scope("ctl: kind 1");
                 self.triggers[index].update(&mut self.channels, &touchers, &self.bullet_contacts_prev, frame);
@@ -19337,7 +19414,20 @@ fn segment_hits_sphere(a: V3, b: V3, c: V3, r: f32) -> bool {
                 }
             }
             for id in std::mem::take(&mut dr.anim_stops) { self.audio.stop_all_with_id(id); }
-            if let Some(t) = d.sfx { for id in snd { let h = t.get(id); self.audio.play3d(h.id, at, None); if !h.looped { self.sounds.push(Sound { id: h.id, pos: at, inner: h.inner, outer: h.outer, weight: h.weight }); } } }
+            if let Some(t) = d.sfx { for id in &snd { let h = t.get(*id); self.audio.play3d(h.id, at, None); if !h.looped { self.sounds.push(Sound { id: h.id, pos: at, inner: h.inner, outer: h.outer, weight: h.weight }); } } }
+            // subtitles-do-spoken: `AnimProcessScriptCmds` 0x1c1b38 case 1's `Sound_Play3D(100.0f,
+            // −1, −1, id, bone-0 pos, …)` builds the node with the CUSTOM outer 100.0 (node+0x44,
+            // +0x30 = 1 [M 0x1dd548:33]); `Sound_ReqestPlaySfx` 0x1dcc68 then sets +0x52 =
+            // dist < 100 × 0.5 (the streamed ids' distance arm — the spoken ids carry
+            // SFXOutputData+0x15 = 1 [D], ScriptCam == 0 at the 07000006 boot [D the boot NIS
+            // 0x06000066 carries no camera op]) and `Sound_UpdateSounds` 0x1dda70 fires
+            // `Sound_DoSubtitle(id)` on the start with +0x52 set — the driver conversation
+            // (`snd2lbl` ids 0xac/0xae [D Snd2Lbl idx 78/79, always-show]) posts here.
+            for id in &snd {
+                let dist = ((self.player_pos[0] - at[0]).powi(2) + (self.player_pos[1] - at[1]).powi(2) + (self.player_pos[2] - at[2]).powi(2)).sqrt();
+                let dur = self.sfx_durations.get((id & 0xfffff) as usize).copied().unwrap_or(0.0);
+                spoken_subs.push((*id, dist < 50.0, dur));
+            }
             for mut p in dr.drops.drain(..) { p.from = Some(index); self.pickups.push(p); }
             // `Drone_CollisionHandler` (0x140968, WORKLOG 0078): the feet-sphere down-ray + gravity, before the
             // AI-boundary push-out (the game's `AINetwork_GetBoundsPushVectorForSphere` runs last in the handler).
@@ -19358,6 +19448,9 @@ fn segment_hits_sphere(a: V3, b: V3, c: V3, r: f32) -> bool {
             // X_{K+1} = drawn_K ? 2 : max(X_K − 1, 0).
             dr.drawn_grace = if dr.drawn { 2 } else { dr.drawn_grace.saturating_sub(1) };
         }
+        // subtitles-do-spoken: the deferred `Sound_DoSubtitle` adds (the frame is the sound's
+        // start tick — `Sound_UpdateSounds` 0x1dda70 fires the call on the request tick).
+        for (id, dist_ok, dur) in spoken_subs { self.sound_subtitle(id, dist_ok, dur); }
         // `SetupHostageKiller`'s hostage half: hostage +0x2B0 = the killer [M 0x144030:57-59].
         for (hi, ki) in killer_binds { if let Some(h) = self.list.get_mut(hi) { h.captor = Some(ki); } }
         drop(prof_loop);
