@@ -6960,6 +6960,13 @@ pub fn run() -> Result<()> {
                 if let Some(i) = args.iter().position(|a| a == "--bond") {
                     let v: Vec<f32> = args.get(i + 1).map(|s| s.split(',').filter_map(|t| t.parse().ok()).collect()).unwrap_or_default();
                     if v.len() >= 3 { sim.bond = nf_game::player::Bond::new([v[0], v[1], v[2]], v.get(3).copied().unwrap_or(sim.bond.yaw)); if let Some(&pt) = v.get(4) { sim.bond.pitch = pt; } sim.step_bond(shot_input, false, false, false); }
+                    // Render aid (viewmodel-light): `--settle N` lets N ticks pass on the spot instead of
+                    // one, so the per-object state that ramps after a move — the 0x800 objects' ambient
+                    // bytes, which `Lights_CalcAmbientLight` 0x1cb178 steps toward the new cel by
+                    // `ClrStep(…, 0.1)` per tick — reaches what a PS2 capture taken a while after its
+                    // teleport shows. Default 1 (the old behaviour).
+                    let settle: u32 = args.iter().position(|a| a == "--settle").and_then(|k| args.get(k + 1)).and_then(|s| s.parse().ok()).unwrap_or(1);
+                    if v.len() >= 3 { for _ in 1..settle { sim.step_bond(shot_input, false, false, false); } }
                 }
             }
             if walk { let h = sim.bond.head(); cam = Camera { pos: Vec3::new(h[0], h[1], h[2]), yaw: sim.bond.yaw, pitch: sim.bond.pitch * std::f32::consts::FRAC_PI_2, fov: GAME_FOV / sim.zoom }; }

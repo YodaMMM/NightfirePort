@@ -6683,9 +6683,20 @@ fn add_instance(level: &Level, inst: &Instance, layer: Layer, character: Option<
             // World vertices get it in world space through the instance matrix here.
             let posed = character.is_some() || searchlight.is_some() || door.is_some() || pickup.is_some();
             let n0 = v.normal.map(|c| c as f32);
-            let n = if posed { n0 } else { [0, 1, 2].map(|k| n0[0] * m[0][k] + n0[1] * m[1][k] + n0[2] * m[2][k]) };
+            // viewmodel-light: an environment-mapped batch (`Batch::env_mapped`, the VU1 handler 0x10)
+            // takes its ST from the normal and skips the point lights (gpu.rs `ENV_*`). The normal it
+            // reads differs by draw path: a SKINNED mesh (a character's main glists through
+            // `psiDrawSkinObjectMatrix` 0x111828) hands the VU the normal `SkinIt` 0x10bf30 rotated
+            // into world space, while a rigid or static draw (`DrawThisBox` 0x1230d8 →
+            // `FillMatrixChainRot` 0x122310) keeps the mesh's object-space normal — the env rows are
+            // the viewer's camera rows uploaded raw in both builders, never rotated into the object
+            // [M 0x122310:150-160, 0x122788:12-18]. nrm.w carries it: ENV_SKINNED (the shader rotates
+            // the normal with the palette first), ENV_OBJECT (used as stored), 0 = not env-mapped.
+            let skinned_env = matches!(character, Some((_, None)));
+            let env_w = if !b.env_mapped() { 0 } else if skinned_env { ENV_SKINNED } else { ENV_OBJECT };
+            let n = if posed || env_w == ENV_OBJECT { n0 } else { [0, 1, 2].map(|k| n0[0] * m[0][k] + n0[1] * m[1][k] + n0[2] * m[2][k]) };
             let nl = (n[0] * n[0] + n[1] * n[1] + n[2] * n[2]).sqrt();
-            let nrm = if nl > 1e-6 { [(n[0] / nl * 127.0) as i8, (n[1] / nl * 127.0) as i8, (n[2] / nl * 127.0) as i8, 0] } else { [0; 4] };
+            let nrm = if nl > 1e-6 { [(n[0] / nl * 127.0) as i8, (n[1] / nl * 127.0) as i8, (n[2] / nl * 127.0) as i8, env_w] } else { [0; 4] };
             vs.push(Vertex { pos: p, uv, rgba, nrm });
             if let Some((c, attachment)) = character { cv.push(CharVertex { character: c, pos: v.pos, weight: v.weight, slots: v.slots, attachment, searchlight: None, door: None, pickup: None, morph: (v.w >> 16) as i16 }); }
             else if let Some(sl) = searchlight { cv.push(CharVertex { character: 0, pos: v.pos, weight: v.weight, slots: v.slots, attachment: None, searchlight: Some(sl), door: None, pickup: None, morph: -1 }); }
@@ -6813,6 +6824,13 @@ fn casing_matrix(c: &nf_game::casing::Casing) -> Mat4 {
 /// re-uploads lights [M View_DrawObjList 0x1e69a0:75-98] — so the gun takes NO point lights. The renderer
 /// zeroes them for these draws; `node` is otherwise read only for World cel culling.
 pub const VIEW_MODEL_NODE: u32 = u32::MAX - 1;
+
+/// `Vertex::nrm[3]` of an environment-mapped vertex whose normal the palette rotates first (a
+/// skinned mesh: `SkinIt` hands the VU world-space normals) — snorm 127 = 1.0 in the shader.
+pub const ENV_SKINNED: i8 = 127;
+/// `Vertex::nrm[3]` of an environment-mapped vertex whose stored (object-space) normal feeds the
+/// env rows as-is (rigid and static draws) — snorm 64 ≈ 0.5 in the shader.
+pub const ENV_OBJECT: i8 = 64;
 /// Posed slots per gun emplacement: the base object, then one per `gunimp::TURRET_ARTS` gun child.
 const GUNIMP_SLOTS: usize = 1 + nf_game::gunimp::TURRET_ARTS.len();
 

@@ -58,7 +58,8 @@ override NOFOG: f32 = 0.0;   // debug: 1.0 = skip the fog pass entirely
 // lp0/lp1: the frame's two closest lights' positions (psiLight_SetLights 0x10e588's TLight, w = 1);
 // lc0/lc1: their TColor rows (rgb·intensity in the game's byte scale, w = 1/r²), fix-lighting.
 // frame-240: one flat vec4 array, bound once per frame. us[0..4] = view_proj's columns, us[4..8] =
-// view_proj_rot's (the camera-rotation sky), us[8] = fog, us[9] = fogk; then one 5-vec4 slot per
+// view_proj_rot's (the camera-rotation sky), us[8] = fog, us[9] = fogk, us[10]/us[11] = the camera's
+// right/up axes in world space (the env-map rows, viewmodel-light); then one 5-vec4 slot per
 // draw, picked by the draw's instance index (slot 0 = the eye's own, the snow pass): lp0, lp1, lc0,
 // lc1, sel (sel.x > 0.5 → the rotation-only matrix).
 @group(0) @binding(0) var<storage, read> us: array<vec4<f32>>;
@@ -91,17 +92,18 @@ fn morph_pos(p0: vec3<f32>, mtb: i32, mwb: u32, cnt: u32, tend: u32) -> vec3<f32
     }
     return pos;
 }
-@vertex fn vs(@location(0) p0: vec3<f32>, @location(1) uv: vec2<f32>, @location(2) c0: vec4<f32>,
+@vertex fn vs(@location(0) p0: vec3<f32>, @location(1) uv0: vec2<f32>, @location(2) c0: vec4<f32>,
               @location(3) sa: vec2<u32>, @location(4) sw: f32, @location(5) sc: u32, @location(6) n0: vec4<f32>,
               @location(7) mtb: i32, @location(8) mm: vec2<u32>, @location(9) tend: u32,
               @builtin(instance_index) iid: u32) -> VO {
-    let b = 10u + 5u * iid;
+    let b = 12u + 5u * iid;
     let lp0 = us[b]; let lp1 = us[b + 1u]; let lc0 = us[b + 2u]; let lc1 = us[b + 3u];
     var vp = mat4x4<f32>(us[0], us[1], us[2], us[3]);
     if (us[b + 4u].x > 0.5) { vp = mat4x4<f32>(us[4], us[5], us[6], us[7]); }
     var o: VO;
     var p = p0;
     var c = c0;
+    var uv = uv0;
     // Skinned (a != 0xFFFFFFFF): w*(P[a]*p) + (1-w)*(P[b]*p), and the object's TAmbient multiplier.
     if (sa.x != 0xffffffffu) {
         // fix-gpu-facial-morphs: the morph term goes on the source position BEFORE the palette
@@ -128,7 +130,24 @@ fn morph_pos(p0: vec3<f32>, mtb: i32, mwb: u32, cnt: u32, tend: u32) -> vec3<f32
     // the program clamps the summed colour to byte 255 with MINIi (I = 255.0 loaded by the LOI at
     // I-mem 900/936, applied at 919/954) — min(·, 1.0) here. No normal (sprites, snow, the radar,
     // the flash itself): unlit.
-    if (FAR < 0.5) {
+    // viewmodel-light: the environment-map batch handler (VU1 handler 0x10, micro 0x2e2-0x33e — the
+    // chrome sheen layers of the weapon models, scene.rs `ENV_*` in nrm.w). Per vertex the VU builds
+    // ST = 0.5 + (row · n)/256 from the packed int normal (|n| ≈ 127) with the rows the matrix
+    // builders upload at data 0x10-0x13: the viewer's camera rows +0x120 (U) and +0x130 (V), × 1/256,
+    // + 0.5 [M FillMatrixChainSkin 0x122788:12-18, FillMatrixChainRot 0x122310:150-160]; the colour is
+    // TAmbient ⊙ rgba only — the handler never reads the light rows (no point lights) [M micro 0x304
+    // MUL vf18, vf12, vf17]. A skinned mesh feeds it the skinned (world) normal, a rigid/static draw
+    // its object-space normal (ENV_OBJECT ≈ 0.5 here, ENV_SKINNED = 1.0).
+    let env = n0.w > 0.25;
+    if (env && FAR < 0.5) {
+        var en = n0.xyz;
+        if (sa.x != 0xffffffffu && n0.w > 0.75) { en = sw * (pal[sa.x] * vec4<f32>(n0.xyz, 0.0)).xyz + (1.0 - sw) * (pal[sa.y] * vec4<f32>(n0.xyz, 0.0)).xyz; }
+        if (dot(en, en) > 1e-6) {
+            let k = normalize(en) * (127.0 / 256.0);
+            uv = vec2<f32>(0.5 + dot(us[10].xyz, k), 0.5 + dot(us[11].xyz, k));
+        }
+    }
+    if (FAR < 0.5 && !env) {
         var n = n0.xyz;
         if (sa.x != 0xffffffffu) { n = sw * (pal[sa.x] * vec4<f32>(n0.xyz, 0.0)).xyz + (1.0 - sw) * (pal[sa.y] * vec4<f32>(n0.xyz, 0.0)).xyz; }
         let n2 = dot(n, n);
@@ -1181,7 +1200,7 @@ impl Renderer {
             drop(prof_sort);
             let prof_lights = nf_game::prof::scope("enc: uniforms + light picks");
             {
-                const HEAD: usize = 40;
+                const HEAD: usize = 48;
                 const SLOT: usize = 20;
                 let mut staged = std::mem::take(&mut self.staged);
                 staged.clear();
@@ -1194,6 +1213,11 @@ impl Renderer {
                 }
                 for c in 0..4 { staged[c * 4..c * 4 + 4].copy_from_slice(&view_proj[c]); staged[16 + c * 4..20 + c * 4].copy_from_slice(&view_proj_rot[c]); }
                 staged[32..40].copy_from_slice(&extra);
+                // viewmodel-light: the env-map rows (us[10] / us[11]) — the camera's right and up
+                // axes in world space, read back from the rotation-only view-projection (its rows 0
+                // and 1 are the view's right/up axes scaled by the projection).
+                staged[40..44].copy_from_slice(&cam_axis(&view_proj_rot, 0));
+                staged[44..48].copy_from_slice(&cam_axis(&view_proj_rot, 1));
                 // perf-240: the light-pick memo (see the field doc) — invalidated when the list changed.
                 if !self.lights.same_bits(&self.light_memo_lights) {
                     self.light_memo_gen = self.light_memo_gen.wrapping_add(1).max(1);
@@ -1409,6 +1433,16 @@ impl Renderer {
         enc
     }
 }
+/// Row `r` (0 = right, 1 = up) of the camera's world-space basis, from a rotation-only
+/// view-projection (column-major): the projection only scales those rows, so normalising row `r`'s
+/// first three columns recovers the axis. `w` = 0. A degenerate matrix (the menu's identity draw
+/// included) gives the identity row.
+pub fn cam_axis(vp_rot: &[[f32; 4]; 4], r: usize) -> [f32; 4] {
+    let a = [vp_rot[0][r], vp_rot[1][r], vp_rot[2][r]];
+    let l = (a[0] * a[0] + a[1] * a[1] + a[2] * a[2]).sqrt();
+    if l > 1e-6 { [a[0] / l, a[1] / l, a[2] / l, 0.0] } else { let mut e = [0.0; 4]; e[r] = 1.0; e }
+}
+
 pub fn depth_view(device: &wgpu::Device, w: u32, h: u32) -> wgpu::TextureView {
     device.create_texture(&wgpu::TextureDescriptor {
         label: None, size: wgpu::Extent3d { width: w, height: h, depth_or_array_layers: 1 }, mip_level_count: 1, sample_count: 1,
@@ -1434,6 +1468,36 @@ mod tests {
             [0.0, 0.0, 1.0000125, 1.0],           // col 2
             [0.0, 0.0, -0.05, 0.0],               // col 3
         ]
+    }
+
+    /// viewmodel-light: the env-map rows come back out of the rotation-only view-projection —
+    /// at yaw 0 the port's camera right is −x and up is +y (`Camera::right` / `view_proj`).
+    #[test]
+    fn cam_axis_recovers_the_view_right_and_up() {
+        let vp = vp_origin_looking_z();
+        let (r, u) = (cam_axis(&vp, 0), cam_axis(&vp, 1));
+        for (got, want) in [(r, [-1.0, 0.0, 0.0, 0.0]), (u, [0.0, 1.0, 0.0, 0.0])] {
+            for k in 0..4 { assert!((got[k] - want[k]).abs() < 1e-6, "{got:?} vs {want:?}"); }
+        }
+        // Sister: the rows differ, and a zero matrix falls back to the identity row instead of NaN.
+        assert_ne!(r, u);
+        assert_eq!(cam_axis(&[[0.0; 4]; 4], 1), [0.0, 1.0, 0.0, 0.0]);
+    }
+
+    /// viewmodel-light: an env-mapped vertex (nrm.w = ENV_*) takes ST = 0.5 + (row · n)/256 from
+    /// the camera rows and skips the point lights — the VU1 handler 0x10 [M .vutext micro
+    /// 0x2e2-0x33e]; every other vertex keeps its disc UV and the light add (the sister).
+    #[test]
+    fn env_vertices_build_their_uv_from_the_normal_and_skip_the_lights() {
+        assert!(SHADER.contains("uv = vec2<f32>(0.5 + dot(us[10].xyz, k), 0.5 + dot(us[11].xyz, k));"), "the env ST");
+        assert!(SHADER.contains("let k = normalize(en) * (127.0 / 256.0);"), "|n| 127 over 256 = the VU's row scale");
+        assert!(SHADER.contains("if (FAR < 0.5 && !env) {"), "env vertices skip the light loop");
+        assert!(SHADER.contains("let b = 12u + 5u * iid;"), "the per-draw slots start after the two camera rows");
+        // Sister: the lit path and the disc UV are still there for everything else.
+        assert!(SHADER.contains("var uv = uv0;") && SHADER.contains("    o.uv = uv;
+    o.c = c * (255.0 / 128.0);"));
+        assert!(SHADER.contains("min(c.rgb + lc.rgb * term / 255.0, vec3<f32>(1.0))"));
+        assert_eq!((crate::scene::ENV_SKINNED, crate::scene::ENV_OBJECT), (127, 64), "the shader's 0.75 / 0.25 thresholds split these");
     }
 
     #[test]
