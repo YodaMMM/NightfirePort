@@ -252,8 +252,11 @@ impl UseObjects {
                     }
                 }
                 1 => {
-                    // State 1 [M 0x1aee20:20-41]: with param 0 != 0, `Control_NextLOD` (the
-                    // screen's model swap — draw side), the keycode message
+                    // State 1 [M 0x1aee20:20-41]: with param 0 != 0, `Control_NextLOD` 0x1349b0
+                    // (obj+0xD8 ← glist+0x40 only when that link is set [M :8-12]; every PCQWorm
+                    // glist on the disc carries −1 in block 0x27 [D pc_screen_live] → a no-op, the
+                    // model never changes; the visible change is the Q-Worm screen overlay the
+                    // channel below unpauses — nf-view `script_tweak_alpha`), the keycode message
                     // `Text_AddMsg(0, 0, 1, sprintf(Txt_BindLabel(0x2000014), KeyCodes[p0]…), 0,
                     // 0xb4)` and `KeyCodes[p0*5+4] = 1` (handed to the owner through `revealed`);
                     // then the channel write and state 2 [LAB_001aefec]. The Tower PCs carry

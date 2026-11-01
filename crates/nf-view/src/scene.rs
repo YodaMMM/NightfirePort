@@ -6057,6 +6057,20 @@ impl Sim {
             }
         }).nth(k)
     }
+    /// pc-screen: the k-th live script entity's alpha byte obj+0x106 (`script_entity_k`'s order) —
+    /// `fptoui(key+0x24 · 255 + 0.5)` kept to its low byte by the `sb` store [M Script_GetInterp
+    /// 0x1da158:186-189, Script_Interp 0x1d9a08:104].
+    pub fn script_entity_alpha_k(&self, src: (u32, u8), hash: u32, k: usize) -> Option<u8> {
+        let hidden = self.drones.scripts.hidden_stream_objects();
+        self.drones.scripts.objects.list.iter().enumerate().rev().filter_map(|(i, o)| {
+            if hidden.contains(&i) { return None; }
+            match o {
+                Some(nf_game::nis::Obj::Entity { hash: h, alpha, src: o, .. }) if *o == src && *h == hash =>
+                    Some(((alpha * 255.0 + 0.5).max(0.0) as u32 & 0xff) as u8),
+                _ => None,
+            }
+        }).nth(k)
+    }
     /// The game data the simulation consults, borrowed from this Sim.
     pub fn data(&self) -> nf_game::drone::Data<'_> {
         nf_game::drone::Data { tables: &self.tables, props: &self.props, scripts: &self.scripts, weapons: &self.weapons, world: &self.world, level: self.level, sequences: &self.seqs, skins: &self.skins, skeletons: &self.skeletons, nav: &self.nav, covers: &self.covers, tuning: &self.tuning, hitboxes: &self.hitboxes, volumes: &self.volumes, sfx: self.sfx.as_ref(), models: &self.models , surfaces: self.surfaces.as_ref(), voices: self.voices.as_deref(), difficulty: self.drones.difficulty,
@@ -6462,6 +6476,16 @@ pub struct Scene {
     /// sit in their authored plane and read edge-on as a very thin wall.
     /// Collected at build time (the parsed level is not kept on the Scene).
     pub script_billboards: std::collections::HashSet<u32>,
+    /// pc-screen: the script-entity glists whose draw takes the stream's key alpha. `Script_Interp`
+    /// 0x1d9a08 case 1 stores `Script_GetInterp` 0x1da158's colour out — `fptoui(key+0x24 · 255 +
+    /// 0.5)` [M 0x1da158:186-189] — in the object's alpha byte obj+0x106 every tick [M 0x1d9a08:99-104],
+    /// and `View_SetupRenderModes_Tweak` 0x1e5888:12,46-49 hands obj+0x106 to `psiSetTweakARGB` as
+    /// the draw's alpha factor. The factor only shows where the GS blends: the glists whose every
+    /// batch's PRIM sets ABE (bit 6) — a mixed or ABE-free glist keeps alpha 1 (the port's shader
+    /// has no per-batch ABE). The Q-Worm screens (0a SCREEN_Q, 0b/11 SCREEN_QWORM_*, 12 qworm2b)
+    /// key 0 until the install's channel unpauses their player, then pulse 0 → 1 → 0.
+    /// Collected at build time (the parsed level is not kept on the Scene).
+    pub script_tweak_alpha: std::collections::HashSet<u32>,
     pub bounds: ([f32; 3], [f32; 3]),
     /// Camera start: the first placement whose object is named "Player1" (translation, yaw), if any.
     pub start: Option<([f32; 3], f32)>,
@@ -8099,6 +8123,7 @@ pub fn build(level: &Level, cels_only: bool, skeletons: &HashMap<u8, Skeleton>, 
         // can make; each shows only while the simulation has the object.
         let mut script_objects = 0;
         let mut script_billboards: std::collections::HashSet<u32> = std::collections::HashSet::new();
+        let mut script_tweak_alpha: std::collections::HashSet<u32> = std::collections::HashSet::new();
         if let Some(m) = level.main_map() {
             let ident = anim::quat_trans_to_mat([0.0, 0.0, 0.0, 1.0], [0.0; 3]);
             let placement = level.maps[m].placements.first().cloned().unwrap_or_default();
@@ -8247,6 +8272,9 @@ pub fn build(level: &Level, cels_only: bool, skeletons: &HashMap<u8, Skeleton>, 
                                 let Some(&(map, object)) = level.by_hash.get(&hash) else { continue };
                                 // The billboard set: glist flags bit 0x8 (`View_DrawObjectGlist`'s test).
                                 if level.maps[map].objects[object].flags & 0x8 != 0 { script_billboards.insert(hash); }
+                                // pc-screen: the key alpha reaches the draw only through blended batches (PRIM ABE).
+                                let mut bs = level.maps[map].objects[object].gfx.leaves.iter().flat_map(|l| l.batches.iter()).peekable();
+                                if bs.peek().is_some() && bs.all(|b| b.prim & 0x40 != 0) { script_tweak_alpha.insert(hash); }
                                 // One draw slot per ScriptPlayer running this script: every SP creates its own
                                 // copy of the stream's entities (07000014's three vent lids are nine SPs on
                                 // 0x06000A3B — one slot drew only the newest lid; the hatch under the spawn
@@ -9673,7 +9701,7 @@ pub fn build(level: &Level, cels_only: bool, skeletons: &HashMap<u8, Skeleton>, 
                 }
             }
         }
-        Scene { shard_tex, cels: room_cels, cel_graph, streams: None, music_files: None, music_tables: None, sound_bank: None, sound_spares: Vec::new(), snow_texture, vertices, indices, materials, textures, hud_textures, woman: None, hud, script_billboards, view_models, mp_bodies, bond_body, mp_body_weapons, mp_char_bodies, mp_anim_sets, fog, bounds, start, stats, characters, char_vertex_start, char_verts, sequences, attachments, sim, colliders, models_0x800, npc_pool, ladders_drawn, grapple_hooks_drawn, misc_drawn, lock_matrices, door_dims, sl_dims, dynobj_matrices, rotor_placements, rbody_placements, gunimp_placements,
+        Scene { shard_tex, cels: room_cels, cel_graph, streams: None, music_files: None, music_tables: None, sound_bank: None, sound_spares: Vec::new(), snow_texture, vertices, indices, materials, textures, hud_textures, woman: None, hud, script_billboards, view_models, mp_bodies, bond_body, mp_body_weapons, mp_char_bodies, mp_anim_sets, fog, bounds, start, stats, characters, char_vertex_start, char_verts, sequences, attachments, sim, colliders, models_0x800, npc_pool, ladders_drawn, grapple_hooks_drawn, misc_drawn, lock_matrices, door_dims, sl_dims, dynobj_matrices, rotor_placements, rbody_placements, gunimp_placements, script_tweak_alpha 
             door_scene_hidden,
             sl_lod,
             corona_pos,
@@ -11404,6 +11432,18 @@ pub fn build(level: &Level, cels_only: bool, skeletons: &HashMap<u8, Skeleton>, 
                 if let Some(c) = cols.get_mut((l.col_att + a as u32) as usize) { c[3] = (sw.life as f32 * 128.0 / sw.max.max(1) as f32) / 255.0; }
             }
         }
+        // pc-screen: a script entity's tweak alpha — obj+0x106, the stream key's +0x24 byte
+        // [M Script_Interp 0x1d9a08:104], the factor `View_SetupRenderModes_Tweak` 0x1e5888:12,47-49
+        // passes to `psiSetTweakARGB` — on the glists that blend (`script_tweak_alpha`). The Q-Worm
+        // screen overlays key 0 until the install's channel unpauses their player.
+        if let Some(s) = self.sim.as_ref() {
+            for (a, att) in self.attachments.iter().enumerate() {
+                let Some((h, si, hash, k)) = att.script else { continue };
+                if !self.script_tweak_alpha.contains(&hash) { continue; }
+                let Some(b) = s.script_entity_alpha_k((h, si), hash, k as usize) else { continue };
+                if let Some(c) = cols.get_mut((l.col_att + a as u32) as usize) { c[3] = b as f32 / 255.0; }
+            }
+        }
         // Bond's muzzle flash alpha: `Draw_MuzzleFlash` writes the object's alpha byte (`obj+0x106`) on
         // every drawn tick as `wd[+0x51] + Rand_FRand(wd[+0x52] − wd[+0x51])` [M 0x1a3fe0:141-144], which
         // `View_SetupRenderModes_Tweak` 0x1e5888:47-49 hands to `psiSetTweakARGB` as the draw's alpha
@@ -11605,6 +11645,12 @@ pub fn build(level: &Level, cels_only: bool, skeletons: &HashMap<u8, Skeleton>, 
                 None => 1.0,
             }
         }).collect();
+        // pc-screen: the script entities' tweak alpha (obj+0x106 / 255, the GPU palette's same factor).
+        let attach_alpha: Vec<f32> = self.attachments.iter().map(|a| {
+            let Some((h, si, hash, k)) = a.script else { return 1.0 };
+            if !self.script_tweak_alpha.contains(&hash) { return 1.0; }
+            self.sim.as_ref().and_then(|s| s.script_entity_alpha_k((h, si), hash, k as usize)).map_or(1.0, |b| b as f32 / 255.0)
+        }).collect();
         let one = || [1.0f32; 3];
         self.animate(choice, time, opts).into_iter()
             .zip(self.vertices[self.char_vertex_start..].iter().zip(self.char_verts.iter()))
@@ -11641,6 +11687,8 @@ pub fn build(level: &Level, cels_only: bool, skeletons: &HashMap<u8, Skeleton>, 
                 // the searchlight/door parts are their own objects with their own alpha).
                 let ca = if cv.searchlight.is_none() && cv.door.is_none() && cv.pickup.is_none() && cv.attachment.is_none() {
                     char_alpha.get(cv.character as usize).copied().unwrap_or(1.0)
+                } else if let Some(ai) = cv.attachment.filter(|_| cv.searchlight.is_none() && cv.door.is_none() && cv.pickup.is_none()) {
+                    attach_alpha.get(ai as usize).copied().unwrap_or(1.0)
                 } else { 1.0 };
                 let a = ((rgba[3] as f32 * ca).round() as i32).clamp(0, 255) as u8;
                 Vertex { pos, uv: v.uv, rgba: [rgba[0], rgba[1], rgba[2], a], nrm: v.nrm }
