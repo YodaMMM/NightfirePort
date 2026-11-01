@@ -37,11 +37,14 @@ address in `work/decomp/ACTION.ELF/`.
    (`psiMovieFinished` 0x1082e8 = `BGFMVPlaying == 0`) and state 7 — the fade state machine
    [M 0x1c9ca8-0x1c9cfc, disasm; the decomp hides it] — counts its 300 frames out and pops. **The
    game's own E-arm on this disc data never sets a load.**
-5. **No other carrier exists in ACTION.ELF.** The whole-ELF scan finds 0x07000041 exactly six times:
-   the five gameplay special-cases the earlier census knew plus one `.data` row (0x24fe0c) in the
-   per-level attribute table alongside 0x07000048/43/46/49/4b/4c — no story-order table, no
-   hardcoded 41→1b pair [D]. The `GetLevelToLoadFromMovieCode` table (0x1d3560) never returns
-   0x0700001b; its only route to the station is the briefing special case in the load path itself.
+5. **No other carrier exists in ACTION.ELF.** The whole-ELF dword scan finds 0x07000041 exactly
+   once: the `.data` row at 0x24fe0c in the per-level attribute table alongside
+   0x07000048/43/46/49/4b/4c (the engine's "special level" records — a loading/attributes table,
+   not a story order) [D]. The five code references the earlier census knew are all gameplay
+   special-cases [D; lui/ori pairs never form the dword, hence the byte scan's one hit]. There is
+   no story-order table and no hardcoded 41→1b pair [D]. The `GetLevelToLoadFromMovieCode` table
+   (0x1d3560) never returns 0x0700001b; its only route to the station is the briefing special case
+   in the load path itself.
 6. **The game's way into 0x0700001b is the briefing ride**: any `ResetMap_LevelToLoad(0x0700001b, …,
    no_intro=0)` remaps to the 0x7100018 briefing [M 0x1d3800:95-97], `ResetMap_Load`'s phase 0 starts
    briefing movie 18 (`UsingMovie(0x7100018) = 1` [M 0x107eb8]) and maps the masked
