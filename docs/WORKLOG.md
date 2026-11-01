@@ -52,3 +52,13 @@ store rb+0x50 0x1d7610]. Fixed `rb_cyl_grounding_tail` (+0x50.y untouched) and a
 push sister case that pins it (nonzero raw cross-y must not reach +0x50). Doc nuance: obj+0xFA |=
 0x20 is applied by RB_CollisionHandler itself after either branch [M 0x1d7a80:16-23], not the
 caller.
+
+Finish (2026-11-01, same session): the port verified and merged-clean on the final tree. An
+independent audit (decompile + raw disassembly) verified all seven structural claims and caught
+the grounding tail's missing y-lane zero [M 0x1d7600] — fixed and pinned. Named tests post-fix:
+rigid_body_draw_live 3/0, rigid_body_wiring_live 2/0, interactables_07000001_live 9/0/1,
+interactables_07000004_live 4/0, interactables_07000006_live 5/0; nf-game lib 644/0/5. Full
+suite: build ok (1070 bins, 1546 s), run cut at the deadline at 288 bins — 1706/5/55, the 5
+fails all environmental (3 disc_golden + identity_disc slim-ISO, probe_pylon_render no-GPU).
+Report: docs/reports/rigid-body-cylinder-sweep.md (live checks for the main agent inside: rb+0xC0
+lifetime, the tail's y lane on a tipped body, brush-reaction existence, the cylinder test points).
