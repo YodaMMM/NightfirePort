@@ -6407,6 +6407,10 @@ pub struct Scene {
     /// `(obj+0xF0 & 0x8010) == 0`]). Consumed by lib.rs's per-frame `Renderer::destroy_wreck_draw`
     /// feed; the centre matches the wreck materials' cull spheres by bits.
     pub destroy_wrecks: Vec<([f32; 3], usize)>,
+    /// missing-scenery: the 0xF3 trees (`Env_Tree_Create` 0x17c200) as (character index, main-map
+    /// placement index). Their skin carries no skinned mesh, only rigid parts, so they are drawn
+    /// as attachments posed by the tree's paused sway script (see `frame_state_for`).
+    pub tree_chars: Vec<(usize, usize)>,
     /// Per level object hashcode: whether its glist flags carry 0x800 (the character-lighting bit
     /// `Control_SetGList` 0x134960 merges into obj+0xF0). fix-render2: decides the ambient dim for
     /// the drawn script entities (the truck's nine objects carry 0x8880 [L ee_start_05.bin
@@ -7479,6 +7483,43 @@ pub fn build(level: &Level, cels_only: bool, skeletons: &HashMap<u8, Skeleton>, 
                     add_instance(level, &finst, Layer::Effect, Some((character, Some(attachments.len() as u32))), &mut groups, None, None, None, None, [1.0; 3], &room_cels, u32::MAX, u32::MAX);
                     attachments.push(Attachment { character, bone: md.bone as usize, local: anim::quat_trans_to_mat(md.q, md.t), flash: Some(rgb), tracer: None, dropped: false, aims_light: None, projectile: None, script: None, gas: None, effect: None, silencer: false, quiver_bolt: None, swap_piece: false, watch_hand: None, pda_digit: None });
                 }
+            }
+        }
+        // missing-scenery (07000004's courtyard tree): the 0xF3 trees. `Env_Tree_Create` 0x17c200
+        // builds a class-0x3f object at the placement pose and `AnimObjectNew(obj, param 0)` [M :15].
+        // The tree skin 0x05000003 has NO main (skinned) mesh — only six rigid parts on bones 0..5
+        // (tree_base1, tree_base2, tree_top, tree_branch1..3 [D 07000004 / 07000002 skin entry]) —
+        // so `character_instances` (main meshes only) never built it and the tree drew nothing.
+        // The game draws the rigid parts as their own objects: `AnimObjectNew` 0x1be910 makes one
+        // `Control_CreateObjEx` object per skin+8 entry (count skin+0x2d, class 0x3d, obj+0xF0
+        // `& ~0x20 | 0x8000`) [M :143-170], and `AnimObjectUpdate` 0x1befd8 copies the bone's world
+        // matrix (anim+0xb8 + bone·0x40, the bone byte at skin+0xc) into each part's obj+0x90
+        // every update [M :300-317]. Here: one Character per tree with each part attached to its
+        // bone (local identity), posed in `frame_state_for` by the paused sway script.
+        let mut tree_chars: Vec<(usize, usize)> = Vec::new();
+        if let Some(mm) = level.main_map() {
+            for (pi, p) in level.maps[mm].placements.iter().enumerate().filter(|(_, p)| p.flags & 0xff == 0xf3) {
+                let Some(&(_, skin_hash)) = p.params.iter().find(|(i, _)| *i == 0) else { continue };
+                let Some(skin) = level.skins.get(&skin_hash) else { continue };
+                // A skin with a skinned main mesh already went through the character loop above.
+                if skin.main.iter().flatten().any(|h| level.by_hash.contains_key(h)) || skin.extra.is_empty() { continue; }
+                let Some(skeleton) = skeletons.get(&skin.skeleton) else { continue };
+                let ci = characters.len() as u32;
+                let ident = anim::quat_trans_to_mat([0.0, 0.0, 0.0, 1.0], [0.0; 3]);
+                let mut parts = 0;
+                for &(bone, part) in &skin.extra {
+                    let Some(&(pmap, pobject)) = part.and_then(|h| level.by_hash.get(&h)) else { continue };
+                    let pinst = Instance { map: pmap, object: pobject, matrix: ident, placement: p.clone() };
+                    add_instance(level, &pinst, Layer::Character, Some((ci, Some(attachments.len() as u32))), &mut groups, None, None, None, None, [1.0; 3], &room_cels, u32::MAX, u32::MAX);
+                    attachments.push(Attachment { character: ci, bone: bone as usize, local: ident, flash: None, tracer: None, dropped: false, aims_light: None, projectile: None, script: None, gas: None, effect: None, silencer: false, quiver_bolt: None, swap_piece: false, watch_hand: None, pda_digit: None });
+                    parts += 1;
+                }
+                if parts == 0 { continue; }
+                // `control_create_object(0, pos, rot)` [M 0x17c200:13] — the placement transform.
+                let matrix = nf_formats::placement::object_matrix(p.rotation, p.translation);
+                char_placements.push(None);
+                characters.push(Character { matrix, skin: skin.clone(), skeleton: skeleton.clone(), slot_bones: Vec::new(), start: None, role: drone::SpawnRole::Placed, floor: None, script: None, morph_targets: None });
+                tree_chars.push((ci as usize, pi));
             }
         }
         // mp-character-data: the MP bodies — one per human slot and per bot, parked hidden. The
@@ -9364,7 +9405,8 @@ pub fn build(level: &Level, cels_only: bool, skeletons: &HashMap<u8, Skeleton>, 
             door_scene_hidden,
             sl_lod,
             destroy_centres,
-            destroy_wrecks }
+            destroy_wrecks,
+            tree_chars }
     }
 
     /// Sequence index and frame a character shows after `ticks` 60 Hz updates: its start script (`choice = None`) or the
@@ -9451,6 +9493,21 @@ pub fn build(level: &Level, cels_only: bool, skeletons: &HashMap<u8, Skeleton>, 
                 let world = anim::world_pose(&local, &c.skin);
                 let m = nf_formats::placement::object_matrix([0.0, s.bond.yaw, 0.0], s.bond.pos);
                 return Some((anim::skin_matrices(&world, &c.skin), world, m));
+            }
+            // missing-scenery: a 0xF3 tree — its sway script (`AnimScriptAdd(obj, param 1)`, the
+            // 0x600008c/0x600008d coin [M Env_Tree_Create 0x17c200:16-23]) held at its start phase:
+            // every level but 0x7000043 sets the pause bit (+0x78 | 0x80000000) and stores
+            // `(int)Rand_FRand(length)` as the script time (+0x90) [M :24-31], so the tree stands in
+            // one frozen frame of the sway. The phase draw is the shared stream; the port's
+            // `TreeFx::phase_unit` is the counter-hashed unit [S]. 0x7000043's unpaused sway plays.
+            if let Some(&(_, pi)) = self.tree_chars.iter().find(|(tc, _)| *tc == ci) {
+                let s = self.sim.as_ref()?;
+                let t = s.drones.fx.trees.iter().find(|t| t.placement == pi)?;
+                let len = s.scripts.get(&t.anim)?.length.max(1) as f32;
+                let time = if t.paused { 1.0 + (t.phase_unit * len).floor().min(len - 1.0) } else { 1.0 + (s.drones.frame as f32 % len) };
+                let local = nf_game::anim::script_pose_drone(&s.scripts, &s.seqs, &c.skeleton, &c.skin, t.anim, time)?;
+                let world = anim::world_pose(&local, &c.skin);
+                return Some((anim::skin_matrices(&world, &c.skin), world, c.matrix));
             }
             // Script animations: the object's frame, the root kept (the object sits at the origin).
             if let Some(src) = c.script {
