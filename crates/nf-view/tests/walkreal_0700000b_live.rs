@@ -109,8 +109,9 @@ fn walk_to_the_mission_end(mut w: &mut Walker, fresh: bool) {
         // stand surface is cy + 4.1 (15.1 at the key-0 hold [L lifts_ride_live: grounded 16.11]),
         // a full step above the 14.1 floor, so the board is the player's hop, not a walk step.
         if w.try_walk_to(Wp::new(2.3, 14.0, 25.8).r(1.0), "the shaft wait (east of the lip)") {
-            let sim = w.scene.sim.as_mut().unwrap();
-            sim.bond.vel = [0.0; 3];
+            // Let go of the stick and let the walk's residual velocity die out (the former
+            // velocity write).
+            w.wait(20);
         }
         {
             // One probe of the script-entity id/hash pairing (the report's open item): the lift
@@ -347,12 +348,14 @@ fn walk_to_the_mission_end(mut w: &mut Walker, fresh: bool) {
         let (head, target) = { let sim = w.scene.sim.as_ref().unwrap(); (sim.bond.head(), lp) };
         let dir = [target[0] - head[0], target[1] - head[1], target[2] - head[2]];
         let l = (dir[0] * dir[0] + dir[1] * dir[1] + dir[2] * dir[2]).sqrt().max(1e-4);
-        {
-            let sim = w.scene.sim.as_mut().unwrap();
-            sim.bond.yaw = dir[0].atan2(dir[2]);
-            sim.bond.pitch = (dir[1] / l).asin() / std::f32::consts::FRAC_PI_2;
-        }
-        w.scene.sim.as_mut().unwrap().step_bond(Default::default(), true, false, false);
+        // Aimed with the stick (turn + look), not a yaw/pitch write; the trigger held throughout.
+        let (turn, look) = {
+            let sim = w.scene.sim.as_ref().unwrap();
+            (walker::wrap_pi(dir[0].atan2(dir[2]) - sim.bond.yaw),
+             (dir[1] / l).asin() / std::f32::consts::FRAC_PI_2 - sim.bond.pitch)
+        };
+        let input = nf_game::player::Input { turn: turn.clamp(-0.08, 0.08), look: look.clamp(-0.08, 0.08), ..Default::default() };
+        w.scene.sim.as_mut().unwrap().step_bond(input, true, false, false);
     }
     assert!(burned, "the Laser watch burns the keypad [M Lock_Update 0x1ae3d8 case 0]");
     w.wait(5);
