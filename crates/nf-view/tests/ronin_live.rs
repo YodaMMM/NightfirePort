@@ -323,3 +323,79 @@ fn ronin_remote_view_eye_and_flash() {
     let hidden = sim.drones.scripts.hidden_stream_objects();
     assert!(!hidden.contains(&(t.registered[1] as usize - 1)) && !hidden.contains(&(t.registered[2] as usize - 1)), "barrel and gun drawn");
 }
+
+/// Screen-space boxes (x0, y0, x1, y1) of the HUD quads drawn with texture `hash`, in the 512×448 frame.
+fn hud_boxes(scene: &nf_view::scene::Scene, hash: u32) -> Vec<[f32; 4]> {
+    let f = nf_view::hud::overlay(scene, 4.0 / 3.0);
+    let Some(ti) = scene.hud_textures.iter().position(|(h, _)| *h == hash) else { return Vec::new() };
+    let mut out = Vec::new();
+    for r in f.runs.iter().filter(|r| r.0 == ti + 1) {
+        for q in f.v[r.2 as usize..(r.2 + r.3) as usize].chunks(6) {
+            let (a, b) = (q[0].p, q[2].p);
+            out.push([(a[0] + 1.0) * 256.0, (1.0 - a[1]) * 224.0, (b[0] + 1.0) * 256.0, (1.0 - b[1]) * 224.0]);
+        }
+    }
+    out
+}
+
+/// The red bar on the right of the remote view: the ammo pane's kind-0x1f strip fed the turret's shot
+/// counter. `GT_TakeControl` 0x181740 puts Bond in substate 0x10 and BL+0x878 = the turret, and
+/// `HUD_UpdateAmmoPane` 0x19a7f0:146-151 then sets kind 0x1f, max 100, value (short)ext+0xF0 / 2.
+/// Measured [L PCSX2 audits/render-1101-roninview/ps2_remote_view.png]: the bar spans x ≈ 480..493,
+/// y ≈ 295..392 of the 512×448 frame with a fresh (200-shot) turret.
+#[test]
+fn ronin_remote_view_shot_gauge() {
+    assert_eq!(nf_view::hud::ronin_shots_strip(200), (100.0, 100.0), "a fresh Ronin is full");
+    assert_eq!(nf_view::hud::ronin_shots_strip(57), (28.0, 100.0), "halved toward zero");
+    assert_eq!(nf_view::hud::ronin_shots_strip(0), (0.0, 100.0));
+    // Sister: the raw counter is not the value (200 would draw a column twice the gauge).
+    assert_ne!(nf_view::hud::ronin_shots_strip(200).0, 200.0);
+    let Some(mut scene) = load() else { eprintln!("NF_ISO not set — skipping"); return };
+    const STRIP: u32 = 0x0300_0128;
+    let ti = {
+        let sim = scene.sim.as_mut().unwrap();
+        let ti = deployed(sim);
+        clear_guards(sim);
+        for _ in 0..600 {
+            sim.step_bond(Input::default(), false, false, false);
+            if sim.drones.gt_turrets[ti].state == gt_state::COMBAT && sim.gun.weapon == RONIN_CONTROL && sim.gun.switch_state == 0 { break; }
+        }
+        sim.hud.weapon_label_timer = 0;
+        ti
+    };
+    // Sister: deployed but not mounted (0x53 in hand), the pane draws no 100-unit gauge.
+    let tall = |b: &[[f32; 4]]| b.iter().any(|r| (r[3] - r[1] - 100.0).abs() < 0.5);
+    assert!(!tall(&hud_boxes(&scene, STRIP)), "no shot gauge before the remote view: {:?}", hud_boxes(&scene, STRIP));
+    {
+        let sim = scene.sim.as_mut().unwrap();
+        for t in 0..60 {
+            sim.step_bond(Input::default(), t < 4, false, false);
+            if sim.drones.ronin_mounted().is_some() { break; }
+        }
+        assert!(sim.drones.ronin_mounted().is_some(), "mounted");
+        idle(sim, 30);
+        sim.hud.weapon_label_timer = 0;
+    }
+    let hp0 = scene.sim.as_ref().unwrap().drones.gt_turrets[ti].hp;
+    assert_eq!(hp0, 200, "no shot spent yet");
+    let b = hud_boxes(&scene, STRIP);
+    // BulletImg[0x1f] (1 px/unit, ×16 wide at max 100): the empty column 100 tall from y 294 and the
+    // full fill the same, x 480..496 — the bar the PS2 frame shows.
+    let cols: Vec<_> = b.iter().filter(|r| (r[3] - r[1] - 100.0).abs() < 0.5).collect();
+    assert_eq!(cols.len(), 2, "the gauge's two columns, both full: {b:?}");
+    for c in &cols {
+        assert!((c[0] - 480.0).abs() < 0.5 && (c[2] - 496.0).abs() < 0.5 && (c[1] - 294.0).abs() < 0.5 && (c[3] - 394.0).abs() < 0.5, "{c:?}");
+    }
+    // Firing spends shots and the fill drops by half the spent count.
+    {
+        let sim = scene.sim.as_mut().unwrap();
+        for _ in 0..40 { sim.step_bond(Input::default(), true, false, false); }
+        idle(sim, 2);
+    }
+    let hp = scene.sim.as_ref().unwrap().drones.gt_turrets[ti].hp;
+    assert!(hp < hp0, "the mounted burst spent shots ({hp})");
+    let want = (hp / 2) as f32;
+    let b = hud_boxes(&scene, STRIP);
+    assert!(b.iter().any(|r| (r[3] - r[1] - want).abs() < 0.5 && (r[3] - 394.0).abs() < 0.5), "the fill is {want} tall after the burst: {b:?}");
+    assert!(tall(&b), "the empty column stays 100 tall");
+}

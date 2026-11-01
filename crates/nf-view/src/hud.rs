@@ -451,6 +451,15 @@ pub fn mounted_heat_strip(heat: f32) -> (f32, f32) {
     (v.min(100) as f32, 100.0)
 }
 
+/// The ammo pane's strip (filled, full) in the Ronin's remote view: the substate-0x10 arm sets max 100
+/// and the value `((short)v + (v >> 15)) >> 1 & 0xffff` of the turret's ext+0xF0 shot counter, with no
+/// clamp (only the 0xc arm clamps) [M HUD_UpdateAmmoPane 0x19a7f0:146-151].
+pub fn ronin_shots_strip(shots: u16) -> (f32, f32) {
+    let v = shots as i16 as i32;
+    let half = ((v + ((shots >> 15) as i32)) >> 1) as u32 & 0xffff;
+    (half as f32, 100.0)
+}
+
 /// The once-per-level gadget hint for this frame (`Player_WeaponFiring` 0x1a5460 [M]): weapon 0x54
 /// (the Micro-Camera) with the view model idle and `CamHint` clear → label 0x1000216 (:223-232);
 /// weapon 0x37 (the Remote Mine) likewise with `StickyHint` → 0x10002dc (:385-390). Each latch is set
@@ -790,7 +799,12 @@ pub fn overlay(scene: &crate::scene::Scene, aspect: f32) -> HudFrame {
     // kind 0x1f, max 100, value min((int)(ext+0x90 · 0.5), 100) [M HUD_UpdateAmmoPane 0x19a7f0:137-145]
     // — so the rounds strip becomes BulletImg[0x1f]'s heat gauge (`mounted_heat_strip`). The count
     // text stays blank: the held weapon is WeaponNone 0x47, whose +0x68 carries 0x20 [D weapon_data].
-    let mount_heat = s.drones.props.gunimps.iter().find(|g| g.active).map(|g| g.heat);
+    // The Ronin's remote view (substate 0x10, `GT_TakeControl` 0x181740 → BL+0x878 = the turret)
+    // takes the same kind-0x1f gauge, max 100, value = the turret's shot counter ext+0xF0 halved
+    // (`(short)v / 2`, no clamp) [M HUD_UpdateAmmoPane 0x19a7f0:146-151] — the red bar on the right
+    // of the remote view, full at the 200 shots `GT_Create` gives a player's Ronin.
+    let mount_heat = s.drones.props.gunimps.iter().find(|g| g.active).map(|g| mounted_heat_strip(g.heat))
+        .or_else(|| s.drones.ronin_mounted().map(|i| ronin_shots_strip(s.drones.gt_turrets[i].hp)));
     let strip_kind = if mount_heat.is_some() { 0x1f } else { ammo_type };
     if let (false, false, Some(&[bu, bv, bw, hpr])) = (mp || sec_cam, switching, t.bullets.get(strip_kind)) {
         // The strips draw the same transformed clip'/max' for kind 0x1f [M 0x19a7f0:129-136 flows into
@@ -799,8 +813,8 @@ pub fn overlay(scene: &crate::scene::Scene, aspect: f32) -> HudFrame {
         // fix-laser-watch-look: the held laser's strip shows the charge of 100 (the pane's second
         // value reads the same instance's f32 [M 0x19a7f0:172]; the sprite layout's exact gauge is a
         // render live check).
-        let (clip_n, max_n) = if let Some(heat) = mount_heat {
-            mounted_heat_strip(heat)
+        let (clip_n, max_n) = if let Some(strip) = mount_heat {
+            strip
         } else if laser_held {
             (s.laser_charge, 100.0)
         } else if ammo_type as u8 == 0x1f {
