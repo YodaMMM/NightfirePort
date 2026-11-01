@@ -366,7 +366,9 @@ fn a_broken_searchlight_smokes_every_seventh_tick() {
     let mut spawns = 0;
     for t in 0..70u32 {
         sim.step_bond(Input::default(), false, false, false);
-        if let Some(g) = sim.drones.gas.puffs.last() {
+        // The guards' breath (`Env_Breath` 0x17be00, mesh 0x200021d) also starts at 0.05 in the
+        // shared pool; only the searchlight's own puffs count.
+        if let Some(g) = sim.drones.gas.puffs.iter().rev().find(|g| g.mesh != nf_game::env::BREATH_MESH) {
             if (g.scale - 0.05).abs() < 1e-6 { spawns += 1; }
         }
         let _ = t;

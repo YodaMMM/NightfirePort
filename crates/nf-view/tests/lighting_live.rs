@@ -60,11 +60,13 @@ fn the_shot_leaves_a_smoke_puff() {
     for _ in 0..30 { scene.sim.as_mut().unwrap().step_bond(Default::default(), false, false, false); }
     scene.sim.as_mut().unwrap().step_bond(Default::default(), true, false, false);
     // The puff lives in models-misc's gas pool (the merge drew it there; fix-lighting2's stand-in list is unused).
-    assert!(!scene.sim.as_ref().unwrap().drones.gas.puffs.is_empty(), "Gas_Init made a smoke puff (the P2K has no 0x2000 flag at weapon_data+0x68)");
+    // The guards' breath puffs (`Env_Breath` 0x17be00, mesh 0x200021d) share the pool, so they are left out.
+    let smoke = |p: &[nf_game::gas::Gas]| p.iter().any(|g| g.mesh != nf_game::env::BREATH_MESH);
+    assert!(smoke(&scene.sim.as_ref().unwrap().drones.gas.puffs), "Gas_Init made a smoke puff (the P2K has no 0x2000 flag at weapon_data+0x68)");
     // Sister: no shot, no puff.
     let mut calm = nf_view::load(&iso, "07000005.bin", false).expect("load");
     for _ in 0..31 { calm.sim.as_mut().unwrap().step_bond(Default::default(), false, false, false); }
-    assert!(calm.sim.as_ref().unwrap().drones.gas.puffs.is_empty(), "no smoke without a shot");
+    assert!(!smoke(&calm.sim.as_ref().unwrap().drones.gas.puffs), "no smoke without a shot");
 }
 
 /// fix-lighting2, the fail-first: at the P2K shot on 07000005 the world draw nearest the muzzle

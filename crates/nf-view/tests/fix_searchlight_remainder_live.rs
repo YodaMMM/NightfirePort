@@ -84,14 +84,17 @@ fn the_broken_head_smoke_uses_the_game_stream_and_life() {
     let head = sim.drones.searchlights.parts.iter().position(|p| p.kind == 1 && p.state != 3 && p.links[2].is_some())
         .expect("a lit courtyard head with a linked spot");
     sim.drones.searchlights.parts[head].state = 2;
+    // The guards' breath (`Env_Breath` 0x17be00, mesh 0x200021d) shares the gas pool and breathes
+    // on 07000006 in every mode, so only the non-breath puffs are the head's smoke.
+    let smoke = |s: &nf_view::scene::Sim| s.drones.gas.puffs.iter().position(|g| g.mesh != nf_game::env::BREATH_MESH);
     let mut spawn_frame = None;
     let mut snap_rng = None;
     for t in 0..40u32 {
         let f = sim.drones.frame;
-        if sim.drones.gas.puffs.is_empty() {
+        if smoke(sim).is_none() {
             snap_rng = Some(sim.drones.rng.clone());
             sim.step_bond(Default::default(), false, false, false);
-            if !sim.drones.gas.puffs.is_empty() {
+            if smoke(sim).is_some() {
                 spawn_frame = Some((f, t));
                 break;
             }
@@ -102,7 +105,7 @@ fn the_broken_head_smoke_uses_the_game_stream_and_life() {
     // step_bond call; the bit-exact replay below passing proves the call ran exactly one tick).
     assert_eq!((f + 1 + sim.drones.searchlights.parts[head].created) % 7, 0,
         "the smoke fires on the game's (GameState+52 + obj+0xEC) % 7 phase [M 0x1cb900:375]");
-    let puff = &sim.drones.gas.puffs[0];
+    let puff = &sim.drones.gas.puffs[smoke(sim).unwrap()];
     assert_eq!(puff.life, 128.0, "the decomp-dropped 11th arg = 0x80 ticks [M 0x1cbce0], not the old guessed 24");
     assert_eq!(puff.kind, 7);
     // The 6 game draws, replayed on the pre-tick snapshot after the k other draws that tick made
