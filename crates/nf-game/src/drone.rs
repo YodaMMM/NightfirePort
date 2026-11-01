@@ -15436,6 +15436,11 @@ fn segment_hits_sphere(a: V3, b: V3, c: V3, r: f32) -> bool {
         t.script_player_b = self.scripts.spawn_primed(pb, &mut self.channels, d, frame);
         eprintln!("[ronin] deployed at ({:.2}, {:.2}, {:.2}) yaw {:.3} — GT_DeployMiniGun 0x181560", seat[0], seat[1], seat[2], t.base_yaw());
         self.gt_turrets.push(t);
+        // `Script_Load`'s create callback `GT_Register` 0x181538 runs inside the load, so the
+        // slots are filled before `GT_Create` returns [M 0017ffa0:100-104]. The priming beat's
+        // event-0xF hand-offs sit in the request list; drain them now, with the turret in the
+        // list — the next tick head clears the list before the walk would see them.
+        self.drain_script_requests(d);
         Some(self.gt_turrets.len() - 1)
     }
 
@@ -16750,6 +16755,9 @@ fn segment_hits_sphere(a: V3, b: V3, c: V3, r: f32) -> bool {
                 crate::gt::GTurret::player_has_died(&mut self.gt_turrets, crate::gt::PLAYER_OWNER);
             }
             let mount_in = self.gt_mount.take();
+            // Rebuilt from the live turrets every tick, so a deleted turret's freed object slot
+            // never stays hidden for whatever reuses it.
+            self.scripts.hidden_objs.clear();
             for (ti, t) in self.gt_turrets.iter_mut().enumerate() {
                 if t.delete_flag { continue; }
                 // The per-candidate LOS walk [M 0x17f9c8:271-278 — one
@@ -16775,7 +16783,6 @@ fn segment_hits_sphere(a: V3, b: V3, c: V3, r: f32) -> bool {
                     mp: false, // the port's drone AI is SP-only (MPSettings stays 0)
                     frame,
                     cands: &cands,
-                    registered0_state: None, // the script VM is the tracked gap (gt.rs)
                     // case 7 reads the owner's pad [M 00180498 case 7 — `Input_Actionf(BL+0x94e, …)`]:
                     // only the player's own mounted turret sees the viewer's inputs.
                     mount: if t.owner == crate::gt::PLAYER_OWNER && t.state == crate::gt::gt_state::MOUNTED { mount_in } else { None },
@@ -16783,6 +16790,11 @@ fn segment_hits_sphere(a: V3, b: V3, c: V3, r: f32) -> bool {
                 let mut out = Vec::new();
                 let was_mounted = t.state == crate::gt::gt_state::MOUNTED;
                 t.update(&ctx, &mut self.rng, &mut out);
+                // registered[0]'s obj+0xF0 bit 0x10 (the muzzle flash, 0x2000361 on the Ronin)
+                // → the draw's hidden object set [M 00180498:110-122].
+                if t.registered[0] != 0 {
+                    self.scripts.set_obj_hidden(t.registered[0] as usize - 1, t.flash_hidden);
+                }
                 // case 7's `PlrStat_LogShotFired` per mounted shot [M 00180498 case 7].
                 if was_mounted {
                     for _ in out.iter().filter(|e| matches!(e, crate::gt::GTEvent::Fire { .. })) {

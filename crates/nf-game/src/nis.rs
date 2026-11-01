@@ -1905,9 +1905,23 @@ pub struct Scripts {
     /// The game's `Input_Action(-1, 0x19, 1)` for the next tick — any player pressing the skip action. The
     /// viewer's key handler sets this while a cut-scene is playing (fix-dev T1); consumed every tick.
     pub skip_request: bool,
+    /// Single objects hidden by their owner's own obj+0xF0 bit 0x10 (not a whole SP's
+    /// `Script_HideObj` cascade) — the turret's registered[0] muzzle flash
+    /// (`GT_Update` 0x180498:110-122). Indices into `objects.list`.
+    pub hidden_objs: Vec<usize>,
 }
 
 impl Scripts {
+    /// Sets or clears one object's own hidden bit (see `hidden_objs`).
+    pub fn set_obj_hidden(&mut self, obj: usize, hidden: bool) {
+        let at = self.hidden_objs.iter().position(|&o| o == obj);
+        match (hidden, at) {
+            (true, None) => self.hidden_objs.push(obj),
+            (false, Some(i)) => { self.hidden_objs.swap_remove(i); }
+            _ => {}
+        }
+    }
+
     /// fix-script-objects: the live entity matrix of `src` (script hash, stream) — the
     /// script-created AI volumes' per-tick refresh reads it (the game keys obj+0x90 from the
     /// stream every `Script_Interp` 0x1d9a08:106-133). Read-only.
@@ -1934,7 +1948,7 @@ impl Scripts {
         // all four heads within 2.8 s of the load wherever Bond was: a PS2 capture teleported into
         // the courtyard without crossing a plate shows the four heads dark (no beams, no coronas,
         // lenses at pitch 0), while the port drew two full-size coronas over the wall.
-        Scripts { lib, players, objects: Objects::default(), requests: Vec::new(), primed: false, skip_request: false }
+        Scripts { lib, players, objects: Objects::default(), requests: Vec::new(), primed: false, skip_request: false, hidden_objs: Vec::new() }
     }
 
     /// `SP_GetHitDamage` 0x1dc5f8's read set: the current script's stream objects of every player
@@ -2244,7 +2258,7 @@ impl Scripts {
     /// skip these, so a frozen SP's primed model resolves to nothing (the draw code needs no
     /// change).
     pub fn hidden_stream_objects(&self) -> Vec<usize> {
-        let mut out = Vec::new();
+        let mut out = self.hidden_objs.clone();
         for p in &self.players {
             if !p.hidden { continue; }
             if let Some(s) = p.info[p.cur].as_ref() {
