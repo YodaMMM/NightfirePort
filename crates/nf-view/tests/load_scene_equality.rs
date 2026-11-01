@@ -63,13 +63,13 @@ const BASELINE: &[(&str, &str)] = &[
     // destroy-wreck re-pin (10-29): the 0xe1 leaves' destroyed glists are baked at the leaf (drawn only once dead) [M Destroy_Create 0x12c318:25-30, Destroy_Smash 0x12bb60] - more vertices/materials on 01/02/0c/14, same characters/attachments.
     // glass-guards-14 re-pin (01, 02): posed objects with glist flag 0x1 move to the alpha list
     // [M View_AddObjects 0x1e62d8:44-52]; the Draw key re-orders their material groups (same counts).
-    ("07000002.bin", "1e24cd943df8ab7a 4523624 9461472 5281 4390315 82 11050 205 28 25 5"), // re-pinned 10-30: the rigid bodies (0xD8) on posed slots [M RB_EulerEvolve 0x1d7810]
-    ("07000005.bin", "c18ce5ee4f22d3cf 4426865 9260541 3624 4342524 74 10984 106 19 16 4"), // the two copter SPs + their script draw slots; re-pinned 10-26: the 0x3b dynamic objects ride posed slots [M View_AddObjects 0x1e62d8:33, DynamicObject_Update 0x18d3b8]; re-pinned 10-28: the searchlight heads' block-0x27 LOD meshes (OBJECT_SearchLightBroken) on their own slots [M Control_NextLOD 0x1349b0] (+1134 verts, +1 material)
+    ("07000002.bin", "741c49306ffebde3 4523624 9461472 5281 4390315 82 11050 205 28 25 5"), // re-pinned 10-30: the rigid bodies (0xD8) on posed slots [M RB_EulerEvolve 0x1d7810]
+    ("07000005.bin", "11f25d073213c34f 4426865 9260541 3624 4342524 74 10984 106 19 16 4"), // the two copter SPs + their script draw slots; re-pinned 10-26: the 0x3b dynamic objects ride posed slots [M View_AddObjects 0x1e62d8:33, DynamicObject_Update 0x18d3b8]; re-pinned 10-28: the searchlight heads' block-0x27 LOD meshes (OBJECT_SearchLightBroken) on their own slots [M Control_NextLOD 0x1349b0] (+1134 verts, +1 material)
     // lift-indicators-09 re-pin: one draw slot per `Script_SubScriptStart` op per running SP
     // [M 0x1db050] — 0700000c's multi-SP sub chains add 6 slots (+248 vertices, +576 indices,
     // +1 attachment); 07000014's vent-lid SPs are placed SPs (unchanged), the rest have no
     // multi-SP sub chains.
-    ("0700000c.bin", "cdb588bea7be0a4c 4921536 10345704 8400 4721616 97 12237 170 22 40 11"), // re-pinned 10-26: 0x3b on posed slots
+    ("0700000c.bin", "f7a18e44505a1208 4921536 10345704 8400 4721616 97 12237 170 22 40 11"), // re-pinned 10-26: 0x3b on posed slots
     // script-entity-copies: one draw slot per ScriptPlayer running a script — 14's nine
     // SPs on the vent-lid script 0x06000A3B (+ its other shared scripts) add 20 attachments, +1600 vertices.
     // The keypads' LOD pair in the posed slots (Lock_Unlock 0x1b0650 / case 1 `Control_NextLOD`: three
@@ -83,10 +83,13 @@ const BASELINE: &[(&str, &str)] = &[
     // param-0 script 0x06000A1B, +20 script-entity slots (the cabinet and wire art) [M FuseBox_Create].
     // 07000014 places two kind-6 rows as well: −836 verts / −752 indices / −2 material slots,
     // pickups 32 → 30 (same gate).
-    ("07000014.bin", "e535884775727d1c 7197909 14957277 6835 7036122 99 14751 173 41 37 30"), // re-pinned 10-26: p0-gated 0x3b instanced from load (created hidden [M 0x18dbf8:27-29])
-    ("07000001.bin", "1152c5549df1c669 4436539 9302259 3532 4363357 77 11064 101 11 20 4"), // re-pinned 10-30: the rigid bodies (0xD8) on posed slots [M RB_EulerEvolve 0x1d7810]
+    ("07000014.bin", "676835bc7f6ce5dc 7197909 14957277 6835 7036122 99 14751 173 41 37 30"), // re-pinned 10-26: p0-gated 0x3b instanced from load (created hidden [M 0x18dbf8:27-29])
+    ("07000001.bin", "50d48820d5767289 4436539 9302259 3532 4363357 77 11064 101 11 20 4"), // re-pinned 10-30: the rigid bodies (0xD8) on posed slots [M RB_EulerEvolve 0x1d7810]
 ];
 
+// viewmodel-light re-pin (all five): only the hash moved — every count is unchanged. The env-mapped
+// batches (VU1 handler 0x10) now mark their vertices' nrm.w (ENV_SKINNED / ENV_OBJECT) and a
+// static env vertex keeps its object-space normal [M .vutext micro 0x2e2, 0x122310].
 #[test]
 fn the_cut_costs_build_the_same_scene() {
     let Some(iso) = iso() else { return };
