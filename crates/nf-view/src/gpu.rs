@@ -506,8 +506,17 @@ impl Renderer {
         // One pipeline per draw state: blend (ALPHA_1), depth write (ZBUF_1), alpha test (TEST_1) and fog as shader
         // overrides; the pre-world sky pass ignores depth, the post-fog sky is pinned to the far plane (drawn only where
         // nothing else is).
+        // missing-scenery (0700000c's mountain range): the pre-world sky (pass 0, sky group 1) keeps its
+        // leaf's own depth state. `View_DrawSky` 0x1e5ad0 sets only the blend/tint/lights and writes no
+        // Z register [M]; every sky glist carries its own ZBUF_1 [D, all 27 on-foot archives]:
+        // 0700000c "Mountains_new1" 0x31000000 (ZMSK 0 — writes depth), "SkyBox1-terra"
+        // 0x1_31000000 (no write), under TEST_1 0x5001b (ZTE, GEQUAL). So the group-1 mountains write
+        // their depth and the post-fog skybox (group 0, pass 4 — far-pinned, LessEqual) only fills
+        // where nothing nearer was drawn. The old (Always, no write) left the far plane clear behind
+        // the mountains and the skybox painted over them: plain sky and sea where the PS2 has
+        // mountains (also 04's "mountains", 0d's "Mountains_new", the 05/06/08 Sky_Tower pieces).
         let make_pipeline = |d: Draw| {
-            let (compare, write) = match d.pass { 0 | 6 => (wgpu::CompareFunction::Always, false), 4 => (wgpu::CompareFunction::LessEqual, false), _ => (wgpu::CompareFunction::LessEqual, d.zwrite) };
+            let (compare, write) = match d.pass { 6 => (wgpu::CompareFunction::Always, false), 0 => (wgpu::CompareFunction::LessEqual, d.zwrite), 4 => (wgpu::CompareFunction::LessEqual, false), _ => (wgpu::CompareFunction::LessEqual, d.zwrite) };
             let alpha_keep = wgpu::BlendComponent { src_factor: wgpu::BlendFactor::Zero, dst_factor: wgpu::BlendFactor::One, operation: wgpu::BlendOperation::Add };
             let blend = match d.blend {
                 1 => wgpu::BlendState { color: wgpu::BlendComponent { src_factor: wgpu::BlendFactor::SrcAlpha, dst_factor: wgpu::BlendFactor::One, operation: wgpu::BlendOperation::Add }, alpha: alpha_keep },
