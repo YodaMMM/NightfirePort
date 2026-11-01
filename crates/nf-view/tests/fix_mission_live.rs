@@ -198,6 +198,9 @@ fn the_07000001_exit_works_end_to_end() {
         let contact = mi;
         let mut w = walker::Walker::new(scene);
         w.shield = Some(contact);
+        // The 01 walk's corner escape (walkreal_07000001 sets it too): a nav leg wedged on the
+        // hall's east-door jamb at (5.45, 11.60) re-routes over clear nav nodes.
+        w.bridge_wedged_nav = true;
         // The intro tail's tail (event 6 re-places Bond) — the walkreal's post-intro settle.
         w.wait(300);
         w.walk_nav_to([6.8, 6.0, 8.9], "the meet plate (walk ahead into the ambush)", 1.0);
@@ -249,8 +252,11 @@ fn the_07000001_exit_works_end_to_end() {
                 drop(sim);
                 if dry { walker::hall_ammo_ladder(&mut w, &format!("ambush guard {g} ammo")); }
             }
-            if !w.shoot(g, &format!("ambush guard {g}")) {
-                if w.resupply("ambush ammo") { w.shoot(g, &format!("ambush guard {g}")); }
+            // Dry mid-fight inside the hall: out the east door to the corridor boxes and back in
+            // (the hall's own ladder — the direct resupply leg wedges on that door's jamb).
+            for k in 0..2 {
+                if w.shoot(g, &format!("ambush guard {g}")) { break; }
+                walker::hall_ammo_ladder(&mut w, &format!("ambush guard {g} ammo {k}"));
             }
         }
         w.wait(30);

@@ -131,7 +131,10 @@ fn the_escort_holds_at_the_ally_wait_node_until_the_ambush_clears() {
             let d3 = (walker::dxz(bond, dpos).powi(2) + dy * dy).sqrt();
             let input = Input {
                 turn: err.clamp(-0.07, 0.07),
-                forward: if d3 > 10.0 { 1.0 } else if d3 > 4.5 { 0.55 } else { 0.0 },
+                // Bond inside the escort's PlayerInWay band (Dist2D < 3.5 within the π/3 facing
+                // cone [M 0x15ea28 case 3]) parks him until Bond leaves it: step back out of his
+                // way (a player who closed in on a stall stands in his path).
+                forward: if dstate == state::PLAYER_IN_WAY { -1.0 } else if d3 > 10.0 { 1.0 } else if d3 > 4.5 { 0.55 } else { 0.0 },
                 ..Default::default()
             };
             drop(sim);
