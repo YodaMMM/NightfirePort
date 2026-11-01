@@ -79,6 +79,10 @@ fn walk_spawn_to_the_shaft_exit() {
         let sim = w.scene.sim.as_ref().unwrap();
         nf_game::player::RamSave::capture(&sim.drones.health, sim.gun.switch_request,
             &sim.drones.inventory, &sim.drones.channels).with_mission(&sim.drones.mission)
+            // The difficulty rides the warm save: the game's GameState+0x28 global survives the
+            // level change untouched (no transition-path writer [M whole-decompile grep]) and the
+            // next level's creates/locks read the SAME 00 Agent pick [M 0x136be0:49, 0x1ae1f8 tail].
+            .with_difficulty(sim.drones.difficulty)
     };
     let mut w = Walker::new(nf_view::load_with_carry(&iso, "0700004a.bin", false, Some(&save)).unwrap());
     w.wait_enabled(3000, "the 4A intro");
