@@ -375,8 +375,8 @@ starts "unverified" and moves up only through the recording + replay route above
 | 0x14a218 | NDrone2_FadeOut | drone.rs::handle_death(FADE/FADE_FAST, …) | unverified | - | drone AI; partial; Alpha decrement. |
 | 0x14a298 | DroneFunc_DeadDrone | drone.rs::Drones::tick (corpse cull) | unverified | - | drone AI; partial; Counts 0x0F/0x47/0x48(+300)/0xBF; the oldest goes FadeFast beyond 3 (DAT_00298F5C). |
 | 0x14a2f0 | NDrone2_SetAsDead | drone.rs::handle_death(DEAD, ENTER) | unverified | - | drone AI; partial; obj+0xF0 |
-| 0x14a5f0 | DroneFunc_Set1stBehaviour | drone.rs::handle(*, msg::FIRST_SIGHT) | unverified | - | drone AI; partial; +0x4D8 → +0x4DC. |
-| 0x14a618 | DroneFunc_Set2ndBehaviour | drone.rs::handle(ATTACK, ENTER) | unverified | - | drone AI; partial; +0x4D8 → +0x4E8. |
+| 0x14a5f0 | DroneFunc_Set1stBehaviour | drone.rs::Drone::set_1st_behaviour | unverified | - | drone AI; partial; +0x4D8 → +0x4DC (GoToGoal arrival). |
+| 0x14a618 | DroneFunc_Set2ndBehaviour | drone.rs::Drone::set_2nd_behaviour | unverified | - | drone AI; +0x4D8 → +0x4E8; start_corridor_guard_07000011_live. |
 | 0x14a718 | DroneFunc_AnyoneNear | drone.rs::Drones::tick (bunched) | unverified | - | drone AI; partial; Another drone within 3 units. |
 | 0x14ac60 | DroneFunc_ReactionTime | drone.rs::reaction_time | unverified | - | drone AI; partial; (1 − alert)·0.3·(200 − stat_b8) on 0x7000002/3/5/9/A, else 10. [L] 07000005: 60 ticks. |
 | 0x14af80 | DroneFunc_AttackNoWeapon | drone.rs::handle(ATTACK, ENTER) | unverified | - | drone AI; stub; → DrawWeapon when unarmed. |

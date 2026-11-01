@@ -192,8 +192,8 @@ the old state, then msg 1 (enter) to the new one, repeating while enters keep ch
 | 0x14b158 | `DroneFunc_DropGrenade` | partial | `drone.rs::drop_grenades` | Captain death drops weapon 0x35 at its matrix. |
 | 0x14a718 | `DroneFunc_AnyoneNear` | partial | `drone.rs::Drones::tick` (bunched) | Another drone within 3 units. |
 | 0x1431c0 | `DroneFunc_ConsiderExplosive` | partial | `drone.rs::consider_explosive` | Stores `+0x330` (pos) / `+0x350` (12 frag / 5 stun / 10 mine); routes to 0x86. The flee route itself is the STANDIN above. |
-| 0x14a5f0 | `DroneFunc_Set1stBehaviour` | partial | `drone.rs::handle(*, msg::FIRST_SIGHT)` | `+0x4D8 → +0x4DC`. |
-| 0x14a618 | `DroneFunc_Set2ndBehaviour` | partial | `drone.rs::handle(ATTACK, ENTER)` | `+0x4D8 → +0x4E8`. |
+| 0x14a5f0 | `DroneFunc_Set1stBehaviour` | partial | `drone.rs::Drone::set_1st_behaviour` (GO_TO_GOAL arrival) | `+0x4D8 → +0x4DC`; the HandleImpact 09/0A site is not wired (G-055). |
+| 0x14a618 | `DroneFunc_Set2ndBehaviour` | ported | `drone.rs::Drone::set_2nd_behaviour` (GO_TO_GOAL arrival, `change_to_attack_mode`) | `+0x4D8 → +0x4E8`. |
 
 ## 3. Vision
 
