@@ -12053,15 +12053,14 @@ pub fn build(level: &Level, cels_only: bool, skeletons: &HashMap<u8, Skeleton>, 
     pub fn posed_vertices(&self, choice: Option<usize>, time: f32, opts: ViewOpts) -> Vec<Vertex> {
         let (mults, pickup_mult, attach_mult) = self.colour_mults();
         // The gas puffs' live rgba (the object's obj+0x103..0x106 bytes the draw reads [M 0x1ab2d0 tail]):
-        // read straight from the pool — the alpha byte fades the quad out.
-        let gas_rgba: Vec<Option<[u8; 4]>> = self.attachments.iter().map(|a| {
+        // read straight from the pool — the alpha byte fades the quad out. It is the Tweak's factor
+        // (byte/255) on the mesh's own vertex colour and alpha [M View_SetupRenderModes_Tweak
+        // 0x1e5888:46-49 → psiSetTweakARGB 0x124770], the GPU palette's same multiply: the old
+        // replace drew the breath mesh (0x200021d, vertex rgb 55..122) at a flat 255 white.
+        let gas_rgba: Vec<Option<[f32; 4]>> = self.attachments.iter().map(|a| {
             a.gas.and_then(|(gi, gm)| self.sim.as_ref().and_then(|s| s.drones.gas.puffs.get(gi as usize).filter(|g| g.mesh == gm)
-                .map(|g| {
-                    // night-alpha: the night-sight quarter on the alpha byte (`Gas::tweak_alpha`).
-                    let mut c = g.rgba.map(|c| c.round().clamp(0.0, 255.0) as u8);
-                    if s.goggle_mode() == 1 { c[3] = (g.tweak_alpha(1) * 255.0).round() as u8; }
-                    c
-                })))
+                // night-alpha: the night-sight quarter on the alpha byte (`Gas::tweak_alpha`).
+                .map(|g| [g.rgba[0] / 255.0, g.rgba[1] / 255.0, g.rgba[2] / 255.0, g.tweak_alpha(s.goggle_mode())])))
         }).collect();
         // The corpse fade (fix-ai-remainder; G-026): the game's `NDrone2_FadeOut` 0x172dd8 decays the
         // drone object's alpha byte obj+0x106 (0.6 per tick in Fade 0x48, 8.0 in FadeFast 0x49) and the
@@ -12105,8 +12104,8 @@ pub fn build(level: &Level, cels_only: bool, skeletons: &HashMap<u8, Skeleton>, 
                         attach_mult.get(&ai).copied().unwrap_or_else(one)
                     }
                     else { mults.get(cv.character as usize).copied().unwrap_or_else(one) };
-                let rgba = if let Some(ai) = cv.attachment.and_then(|ai| gas_rgba.get(ai as usize)).copied().flatten() {
-                    ai
+                let rgba = if let Some(g) = cv.attachment.and_then(|ai| gas_rgba.get(ai as usize)).copied().flatten() {
+                    [0, 1, 2, 3].map(|k| ((v.rgba[k] as f32 * g[k]).round() as i32).clamp(0, 255) as u8)
                 } else if m == [1.0; 3] { v.rgba } else {
                     let rgb = [0, 1, 2].map(|k| ((v.rgba[k] as f32 * m[k]).round() as i32).clamp(0, 255) as u8);
                     [rgb[0], rgb[1], rgb[2], v.rgba[3]]
