@@ -17440,8 +17440,22 @@ fn segment_hits_sphere(a: V3, b: V3, c: V3, r: f32) -> bool {
             // build_LinkToRoom links the body into the room's cel chain [M 0x1d6bf0]). Id:
             // bit 43 + the body index. At rest the rows are the identity quat's (RB_SetState —
             // the same rows the game's first update writes) over the placement translation.
+            // The shape is `RbObj::shape_key`, not the raw glist hashcode: the hanging lamps are
+            // anonymous objects (hashcode 0xFFFFFFFF) whose triangles sit under the synthetic
+            // (map, object) key, so the raw hashcode left them with no collision at all.
+            // Who collides against them [M]: `Collide_Pick` 0x1eb320:314-329 walks each candidate
+            // cel's linked objects (cel+8 → obj+8) into `Collide_PickObj` 0x1eae80 unless the
+            // query's HITTEST+0x98 has 0x10 or obj+0xF0 & 0x30000000. PickObj admits the body
+            // (obj+0xF0 has none of the mask bits — no RB_* writes obj+0xF0; its glist carries
+            // geometry, obj+0xD8 → +8 ≠ 0), and `Collide_Intersect` 0x1ebaa8:106 copies obj+0x90
+            // and runs the query's narrow phase over the glist (0x800 → `Intersect_CylGeom`
+            // 0x109da0 :296, 0x201 → `Intersect_RayGeom` 0x10a8c8 :229) then pushes the query
+            // shape out by the contact (:354-373). The player's walk query is kind 0x800 with
+            // +0x98 = 0 [M Player_Collision 0x194df0:88,205 — BL+0x7D4/+0x7D8], so the lamps
+            // block Bond like any other cel-linked object; Collide_Update 0x1ea398:162-215 then
+            // mirrors the contact onto the body's own obj+0xD0 list.
             parts.extend(drones.rbodies.list.iter().enumerate()
-                .map(|(k, x)| (0x800_0000_0000 | k as u64, x.glist, x.matrix())));
+                .map(|(k, x)| (0x800_0000_0000 | k as u64, x.shape_key, x.matrix())));
             parts
         };
         // Script triggers (`Trigger_TouchOnce` / `Trigger_Touch` made by `Script_CreateEntity`): one per live entity,
