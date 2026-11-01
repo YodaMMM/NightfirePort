@@ -44,6 +44,10 @@ fn stepping_into_a_beam_sounds_the_alarm_siren() {
     assert!(!sim.drones.audio.active_ids().contains(&SIREN_ID),
         "the siren does not sound before the alarm channel rises");
     assert!(!sim.drones.channels.on(55), "ch 55 is low before the beam");
+    // light-glow: the walk-in crosses the courtyard entry plates (ch 0x34 [D trigger census
+    // #524-#526]) that start SP #808's light reveal [M SP_Hit 0x1dc470:16-18, SP_Update 0x1dbda8
+    // case 0]; the teleport below skips them, so raise the channel the way a plate does.
+    sim.drones.channels.set(0x34, 1, 0);
 
     // Bond steps into the beam: the head arms (state 1), ch 55 rises [M 0x1cb900:142-144], and the
     // courtyard's siren trigger (ON ch 55) starts sound 329 on the same frame's object walk

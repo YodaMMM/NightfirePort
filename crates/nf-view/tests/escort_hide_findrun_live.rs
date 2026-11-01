@@ -203,6 +203,22 @@ fn the_hides_exit_reanchors_the_mission_route_before_the_lead_resumes() {
         }
     }
     exited_at.expect("the hide must exit once the 14-band clears [M 0x15ec08 case 3]");
+    // The exit can land inside a shoot leg (the test's wait loop above is the only place that
+    // snapshots the cower): the hide's own exit test is NotNearArmedDrone's latch-aware scan
+    // [M 0x177640:94-115], not this loop's plain 14-band, so the contact can leave LeadHide while a
+    // guard the latch has dropped still stands within 14. When the state log ends LeadHide →
+    // AllyLeadWait 0x20 (the ReFindMissionPath exit [M 0x15ec08 case 0xc]) and he still stands in
+    // 0x20 — whose UPDATE does not move him [M 0x15eda8 case 3] — his position IS the hide spot
+    // the scan ran from; a snapshot from an earlier hide is stale.
+    {
+        let d = &w.scene.sim.as_ref().unwrap().drones.list[ci];
+        let n = d.log.len();
+        if d.state == state::ALLY_LEAD_WAIT && n >= 2 && d.log[n - 2].1 == state::LEAD_HIDE && d.log[n - 1].1 == state::ALLY_LEAD_WAIT
+            && pre.as_ref().is_none_or(|(p, _)| walker::dxz(*p, d.pos) > 0.5) {
+            eprintln!("[hide-exit] the exit ran mid-leg at frame {}: hide spot {:?}", d.log[n - 1].0, d.pos);
+            pre = Some((d.pos, d.route.clone()));
+        }
+    }
     // The re-anchor, pinned on the game's own scan [M 0x153a30]: the anchor is the route node
     // nearest the contact's hide spot that MoveTest reaches (the first reachable inside 20 sets the
     // bound, later ones only when closer), and after the exit the mission route's index IS that

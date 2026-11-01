@@ -27,13 +27,16 @@ fn every_06_beam_basis_stays_continuous_over_the_sweep() {
     let sim = scene.sim.as_mut().unwrap();
     for _ in 0..300 { sim.step_bond(Default::default(), false, false, false); if !sim.disabled { break; } }
     assert!(!sim.disabled, "Bond is free after the intro");
-    // Light the heads (the boot NIS stages the on-channels [D 0x06000066 stream 0]).
+    // Light the heads: the reveal NIS stages the on-channels [D 0x06000066 stream 0] once SP #808's
+    // ch 0x34 rises (light-glow: the courtyard entry plates' output [D trigger census #524-#526;
+    // M SP_Hit 0x1dc470:16-18, SP_Update 0x1dbda8 case 0]) — raise it the way a plate does.
+    sim.drones.channels.set(0x34, 1, 0);
     let mut lit = false;
     for _ in 0..240u32 {
         sim.step_bond(Default::default(), false, false, false);
         if sim.drones.searchlights.parts.iter().any(|p| p.kind == 1 && p.state == 0) { lit = true; break; }
     }
-    assert!(lit, "a courtyard head sweeps (the boot raised its on-channel)");
+    assert!(lit, "a courtyard head sweeps (the reveal raised its on-channel)");
     // Bond parks inside head #2's sweep: the aim crosses his direction every period — the
     // near-degenerate window — and the spot's pass may arm the tracker (state 1), the
     // sustained-tracking case.
@@ -148,6 +151,8 @@ fn beam_basis_stays_continuous_while_bond_walks_the_courtyard() {
     let mut scene = nf_view::load(&iso, "07000006.bin", false).expect("load 07000006");
     let sim = scene.sim.as_mut().unwrap();
     for _ in 0..300 { sim.step_bond(Default::default(), false, false, false); if !sim.disabled { break; } }
+    // light-glow: the walk into the courtyard crosses the ch-0x34 entry plates (SP #808's reveal).
+    sim.drones.channels.set(0x34, 1, 0);
     let mut lit = false;
     for _ in 0..240u32 {
         sim.step_bond(Default::default(), false, false, false);

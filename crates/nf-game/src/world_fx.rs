@@ -312,9 +312,8 @@ pub struct LightningStrike {
 impl LightningStrike {
     /// `Lightning_Update` 0x18cf68 for this strike, one tick. `g` is the port's copy of the
     /// lightning globals (`crate::sky::LightningGlobals` — the game reads the globals
-    /// `SuperHappyLightningFlag`/`Reflicker` [M 0x18cf68:12/23]; the sim does not drive
-    /// `View_DrawSky` yet, so `WorldFx::lightning` rests cleared and the bolt stays hidden —
-    /// the sky pass sets them through `WorldFx::lightning_globals_mut`).
+    /// `SuperHappyLightningFlag`/`Reflicker` [M 0x18cf68:12/23]; `Drones::sky_frame` writes
+    /// the frame's `View_DrawSky` result into `WorldFx::lightning` after each tick).
     pub fn tick(&mut self, g: &mut crate::sky::LightningGlobals) {
         if !g.super_happy {
             self.visible = false; // the 8 × `View_SetDrawInNoViews` arm [M 0x18cf68:13-21]
@@ -484,8 +483,8 @@ pub struct WorldFx {
     pub unpaired_lightnings: Vec<usize>,
     /// The port's copy of the lightning globals (`LightningType`/`Reflicker`/
     /// `SuperHappyLightningFlag` [L 0x30d0b8/0x30d0b9]; `crate::sky::LightningGlobals`). The
-    /// game's `Lightning_Update` reads the globals each pass; the (future) sky pass mirrors
-    /// its `View_DrawSky` tick into here.
+    /// game's `Lightning_Update` reads the globals each pass; `Drones::sky_frame` shares them
+    /// with `Drones::sky` (read before, written back after the frame's sky calls).
     pub lightning: crate::sky::LightningGlobals,
     defs: std::collections::HashMap<u32, EmitterDef>,
 }
@@ -637,7 +636,7 @@ impl WorldFx {
         fx
     }
 
-    /// The lightning globals the (future) sky pass mirrors its `View_DrawSky` tick into —
+    /// The lightning globals `Drones::sky_frame` mirrors its `View_DrawSky` tick into —
     /// `Lightning_Update` reads them per pass [M 0x18cf68:12/23].
     pub fn lightning_globals_mut(&mut self) -> &mut crate::sky::LightningGlobals { &mut self.lightning }
 

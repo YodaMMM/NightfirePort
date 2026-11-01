@@ -80,6 +80,7 @@ impl TickInput {
             // microcam-wheel-zoom: the wheel's zoom steps are not part of the replay format either
             // (local view input; a replayed run holds the recorded zoom as it was recorded).
             zoom_cycle: 0,
+            zoom_axis: 0.0,
         
         goggles_action: false,
     };

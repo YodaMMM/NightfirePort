@@ -683,10 +683,30 @@ fn the_hall_guards_wait_for_the_meet_scenes_channel() {
 /// the game's AllyLeadDone parks him there [M NDrone2_DSTATE_AllyLeadDone 0x15f2e8 case 3
 /// falls to the default — no movement]. Bond then steps onto the plate: the AND (mask 0x18,
 /// filter skin 0x4F [M Trigger_Hit 0x1b1fc8]) fires ch 0x10 → the exit loads 07000002.
+/// The contact parked in PlayerInWay [M 0x15ea28] with Bond AHEAD of him on his lead (nearer
+/// his steering target — the route's current `target`, else the stairwell head): a player steps
+/// back 4.0 behind him (the far side from the target) so the lead resumes. Bond trailing or
+/// level with him: None (the follow's own trail/close rules apply).
+fn behind_the_in_way_contact(w: &Walker, ci: usize, head: V3) -> Option<V3> {
+    let sim = w.scene.sim.as_ref().unwrap();
+    let d = &sim.drones.list[ci];
+    if d.state != nf_game::drone::state::PLAYER_IN_WAY { return None; }
+    let (cp, bp) = (d.pos, sim.bond.pos);
+    let ahead = d.route.as_ref().map(|r| r.target).filter(|t| walker::dxz(*t, cp) > 0.5).unwrap_or(head);
+    if walker::dxz(bp, ahead) >= walker::dxz(cp, ahead) { return None; }
+    let (hx, hz) = (cp[0] - ahead[0], cp[2] - ahead[2]);
+    let hl = (hx * hx + hz * hz).sqrt().max(1e-3);
+    Some([cp[0] + hx / hl * 4.0, cp[1], cp[2] + hz / hl * 4.0])
+}
+
 #[test]
 fn following_mayhew_down_completes_the_level() {
     let iso = iso();
     let mut w = Walker::new(nf_view::load(&iso, "07000001.bin", false).expect("load 07000001"));
+    // The hall's hanging lamps are solid (and block the guards' sight, as the game's
+    // DroneVision LOS picks cel-linked objects): the run can leave Bond pressed into the
+    // south-wall/east-door-jamb corner, so wedged nav legs bridge through a visible node.
+    w.bridge_wedged_nav = true;
     // ---- the route to the stairwell head (the main test's play, condensed) ------------------
     for t in 0..4000u32 {
         w.tick(Default::default(), false);
@@ -876,6 +896,11 @@ fn following_mayhew_down_completes_the_level() {
                 w.walk_nav_to([6.88, 6.4, 14.62], "the hall's north opening (nav node 7)", 1.4);
                 w.walk_nav_to([7.4, 6.0, 11.0], "back through the east door band", 1.4);
             }
+            if let Some(back) = behind_the_in_way_contact(&w, ci, head) {
+                eprintln!("[01f] he waits in PlayerInWay with Bond ahead — stepping back behind him to ({:.2},{:.2})", back[0], back[2]);
+                w.walk_nav_to(back, "step back behind the waiting contact", 2.0);
+                continue;
+            }
             w.walk_nav_to(cp, "close on the waiting contact", 3.0);
             continue;
         }
@@ -895,7 +920,11 @@ fn following_mayhew_down_completes_the_level() {
         let bp = w.scene.sim.as_ref().unwrap().bond.pos;
         let (dx, dz) = (cp[0] - bp[0], cp[2] - bp[2]);
         let l = (dx * dx + dz * dz).sqrt().max(1e-3);
-        let trail = [cp[0] - dx / l * 4.0, cp[1], cp[2] - dz / l * 4.0];
+        let mut trail = [cp[0] - dx / l * 4.0, cp[1], cp[2] - dz / l * 4.0];
+        if let Some(back) = behind_the_in_way_contact(&w, ci, head) {
+            eprintln!("[01f] Bond is ahead of the contact (PlayerInWay) — stepping back behind him to ({:.2},{:.2})", back[0], back[2]);
+            trail = back;
+        }
         w.walk_nav_to(trail, &format!("trail the contact {rounds}"), 2.0);
     }
     // The endgame state: the contact where the follow left him, Bond behind.

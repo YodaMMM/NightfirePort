@@ -266,18 +266,14 @@ fn walk_arrival_to_the_chasers_spawn() {
 fn the_pit_pulse_kills_an_idle_bond_about_450_ticks_later_like_the_game() {
     let iso = iso();
     let mut w = Walker::new(nf_view::load_with_carry(&iso, "07000016.bin", false, Some(&carry(&[0x47, 0x48, 0x4a, 0x54, 0xce, 0x4b]))).unwrap());
-    // The sister pins the death/fail TIMING, so the walkreal allowances are off: the hurt contact
-    // must land (no top-up) and the pack cinema must play out (no skip) — the live session's own
-    // shape [L no input].
-    w.top_up_health = false;
-    w.skip_cutscenes = false;
-    {
-        let sim = w.scene.sim.as_mut().unwrap();
-        for _ in 0..600 { sim.step_bond(Input::default(), false, false, false); }
-        // The live session's own setup [L]: Bond placed on the bridge trigger #255, no input —
-        // the touch fires the chain head (ch 0x81), the pack cinema drops him at the pit floor.
-        sim.bond.pos = [2.4, 1.2, -175.5];
-    }
+    // The port walks the game's own route onto #255 (APPROACH: the corridor, the station E for
+    // door[0]'s 0x24, the panels #684/#685/#617 for 0x27/0x28/0xb4 — tower_door1 #392's lock is
+    // 0xb4, the south room's only way in [D placements]) and steps onto the slab in real time.
+    // The live session placed Bond on #255 instead [L]; the_real_order_launch_chain_matches_the_teleported_one
+    // pins that the two orders run the chain on the same clock.
+    w.wait_enabled(3000, "the launch-centre arrival");
+    w.wait(200);
+    walk_onto_the_slab(&mut w);
     let (mut t_reenable, mut t243, mut t_dead, mut t_fail) = (None, None, None, None);
     for t in 0..4200u32 {
         w.tick(Input::default(), false);
@@ -357,6 +353,51 @@ const APPROACH: &[(&str, walker::Wp)] = &[
     ("door[4] through", walker::Wp { at: [2.5, 1.0, -169.0], act: walker::Act::None, arrive: 1.3 }),
     ("the bridge slab #255", walker::Wp { at: [2.4, 1.0, -176.8], act: walker::Act::None, arrive: 1.2 }),
 ];
+
+/// APPROACH up to the staging point north of the ch-0x81 slab (its z span −178.50..−174.32 [D
+/// trigger bbox]), then a real-time step south onto it with the walkreal allowances OFF: the pack
+/// cinema plays out (no skip) and the hurt contact lands (no top-up) — the sisters pin the chain's
+/// TIMING from the touch on. Returns with ch 0x81 just raised and Bond's input otherwise idle.
+fn walk_onto_the_slab(w: &mut Walker) {
+    w.walk_route(&APPROACH[..APPROACH.len() - 1]);
+    w.walk_route(&[("the slab's north edge", walker::Wp::new(2.4, 1.0, -172.0).r(0.8))]);
+    w.top_up_health = false;
+    w.skip_cutscenes = false;
+    for _ in 0..900u32 {
+        if w.scene.sim.as_ref().unwrap().drones.channels.on(0x81) { return; }
+        w.scene.sim.as_mut().unwrap().bond.yaw = std::f32::consts::PI;
+        w.tick(Input { forward: 1.0, ..Default::default() }, false);
+    }
+    panic!("the walked step south never touched #255 (ch 0x81) at {:?}", w.scene.sim.as_ref().unwrap().bond.pos);
+}
+
+/// SISTER for the placed order: with ch 0xb4 cold, tower_door1 #392 (2.46, 1.04, −166.38; lock
+/// 0xb4 [D params]) stays shut under a walked Bond's forward press (no E) — the locked leaf is
+/// solid [M Door lock 0x136810:10-16] — so #255 (ch 0x81) cannot be reached without the panel
+/// #617's E. Bond must actually reach the leaf (z < −164.6) for the hold to count.
+fn tower_door1_holds_without_its_panel(w: &mut Walker) {
+    let di = {
+        let sim = w.scene.sim.as_ref().unwrap();
+        assert!(!sim.drones.channels.on(0xb4), "0xb4 is cold before the panel");
+        let di = sim.drones.doors.list.iter().position(|d| (d.pos[2] + 166.38).abs() < 0.5 && (d.pos[0] - 2.46).abs() < 0.5)
+            .expect("tower_door1 #392");
+        assert_eq!(sim.drones.doors.list[di].ch_lock, 0xb4, "tower_door1's lock is 0xb4 [D]");
+        di
+    };
+    let mut min_z = f32::MAX;
+    for _ in 0..360u32 {
+        w.scene.sim.as_mut().unwrap().bond.yaw = std::f32::consts::PI;
+        w.tick(Input { forward: 1.0, ..Default::default() }, false);
+        min_z = min_z.min(w.scene.sim.as_ref().unwrap().bond.pos[2]);
+    }
+    let sim = w.scene.sim.as_ref().unwrap();
+    let d = &sim.drones.doors.list[di];
+    eprintln!("[sister] tower_door1 state {:#x} pos01 {:.3}, Bond min z {min_z:.2}", d.state, d.pos01);
+    assert!(min_z < -164.6, "the walk reached the leaf (min z {min_z:.2})");
+    assert!(min_z > -167.0, "the locked leaf held Bond north of it (min z {min_z:.2})");
+    assert!(d.pos01 < 0.05 && !sim.drones.channels.on(0xb4) && !sim.drones.channels.on(0x81),
+        "no E → no 0xb4 → the leaf stays shut and #255 untouched (state {:#x}, pos01 {:.3})", d.state, d.pos01);
+}
 
 /// From the pit floor into the west blast room (blast_room_shelter_16_live: the room is outside
 /// HurtPoly-ShuttleLaunch's polygon [D], its door leaves shut over both pulses [D 0600090a
@@ -771,7 +812,10 @@ fn the_real_order_launch_chain_matches_the_teleported_one() {
         // the cinema mid-leg.
         ("the slab's north edge", walker::Wp::new(2.4, 1.0, -172.0).r(0.8)),
     ];
-    w.walk_route(route);
+    let panel = route.iter().position(|(n, _)| *n == "door[4]'s panel").expect("the route presses #617");
+    w.walk_route(&route[..panel]);
+    tower_door1_holds_without_its_panel(&mut w);
+    w.walk_route(&route[panel..]);
     // Manual real-time approach: face south (yaw π = atan2(0, −1)) and walk into the slab, so the
     // touch tick, the cinema's player-disable, the hand-back and ch 243 are all observed from this
     // loop (walk_to is opaque and its legs tick through the disable).
@@ -828,7 +872,14 @@ fn the_real_order_launch_chain_matches_the_teleported_one() {
         assert!(!sim.drones.channels.on(0xb4), "the cinema's stream-13 t747 write cleared ch 0xb4 [D 06000631 s13 EV0x0d[180,0]]");
     }
 
-    // ---- phase B: the teleported run (the sister's own setup: placed on trigger #255, no input) ----
+    // ---- phase B: the teleported run (the live session's own setup: placed on trigger #255, no input) ----
+    // KEPT WRITE: this phase IS the placed order — #255 touched with 0x24/0x27/0x28/0xb4 all
+    // cold — and no real input reaches it: tower_door1 #392 (lock 0xb4, writer only the panel
+    // #617 [D census]) is the south room's only way in, and phase A's sister
+    // `tower_door1_holds_without_its_panel` pins that the leaf holds a walked Bond until the E.
+    // The PCSX2 check that would retire it: a fresh-boot walked run of the same route, watching
+    // switch_channels[243] (0x26fc90+243) against the hand-back's re-enable — if that delta
+    // matches the placed run's 1591 [L], the placed live measurement needs no placed port twin.
     let mut w = Walker::new(nf_view::load_with_carry(&iso, "07000016.bin", false, Some(&carry(&[0x47, 0x48, 0x4a, 0x54, 0xce, 0x4b]))).unwrap());
     w.top_up_health = false;
     w.skip_cutscenes = false;

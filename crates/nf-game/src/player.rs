@@ -71,11 +71,12 @@ pub fn player_skin_hash(level: u32) -> u32 {
 }
 
 /// The zero-g substates (dispatch cases 8/9 share the `Player_ZeroG` 0x192ab0 body [M 0x193600:
-/// 238-241]). 9 is the one the game ever sets: the 0700001b spacewalk's script handler answers its
-/// 0x4b event with `ChangeSubState(glb_players, 9 | 0)` [M C_CHCHZEROG 0x216388 — 9 when its msg
-/// 0x40 query returns nonzero, else 0]; no caller or store writes 8 anywhere in ACTION.ELF. Only
-/// substate 9 runs the movement anim set [M 0x192ab0:201 `if (obj+0xF6 == 9)`], so 8 is the anim
-/// quiet twin the dispatch still honours.
+/// 238-241]). 8 is the level start's: the p3 == 2 start calls `Player_StandAtNewPosition(.., 8)`
+/// [M Player_Init 0x1910f8 :160-165] — 0700001b loads in it. 9 is the cheat page's ZEROG
+/// checkbox: `C_CHCHZEROG_Handler` 0x216388 answers the menu's 0x4b message with
+/// `ChangeSubState(glb_players, 9 | 0)` (9 when the checkbox's msg-0x40 query is nonzero, else 0)
+/// [M 0x216388:10-17]. Only substate 9 runs the movement anim set [M 0x192ab0:201
+/// `if (obj+0xF6 == 9)`].
 pub const SS_ZEROG_8: u8 = 8;
 pub const SS_ZEROG_9: u8 = 9;
 
@@ -94,9 +95,8 @@ fn rot_matrix(pitch_x: f32, yaw_y: f32, roll_z: f32) -> [[f32; 3]; 3] {
     ]
 }
 
-/// The row-axis 3×3 product a·b (out[i] = Σ_k a[i][k]·b[k]). `Concat(a, b)` 0x1e4a90 computes
-/// b := b·a [M 0x1e4a90:13-49]; Player_ZeroG's `Concat(obj+0x90, R)` + copy-back is therefore
-/// obj := R·obj = `mat3_mul(&r, &obj)` — the look rotation in the BODY frame.
+/// `Concat(a, ab)` 0x1e4a90 ⇒ ab := a·ab [M 0x1e4a90:13-49] — Player_ZeroG calls it as
+/// `Concat(obj+0x90, R)`, so each tick's look rotation lands in the BODY frame.
 fn mat3_mul(a: &[[f32; 3]; 3], b: &[[f32; 3]; 3]) -> [[f32; 3]; 3] {
     let mut out = [[0.0f32; 3]; 3];
     for i in 0..3 {
@@ -257,6 +257,11 @@ pub struct Input {
     pub switch_to: Option<u8>,
     /// Right mouse held: zoom the scope (`Player_Zoom` 0x1a1a70, mouse-first like the game's aim button).
     pub zoom: bool,
+    /// The zoom action 6 as the analog `Player_Zoom` 0x1a1a70 reads it (`Input_Actionf(slot, 6, 1)`,
+    /// only while aiming [M 0x1a1a70:18-19]): negative zooms in, positive out — the pad's d-pad
+    /// up/down give −1/+1 [M the style tables' `dpad` lane for action 6]. 0 with `zoom` held means
+    /// the mouse's hold-to-zoom-in (the window maps it to −1). Local view state, not net-encoded.
+    pub zoom_axis: f32,
     /// The mouse's scope/aim button (the right button, held): drives the aim bit — the raise, then the zoom —
     /// like the pad's aim button, but never the free-aim cursor window (PLAN.md D-002: the mouse aims
     /// directly). The pad keeps `aiming` (aim) and `zoom` (its own zoom axis).
@@ -698,8 +703,8 @@ impl Bond {
     }
 
     /// `Player_ZeroG` 0x192ab0 — the spacewalk substate (the dispatch runs cases 8 and 9 into the
-    /// same body [M 0x193600:238-241]; the script only ever sets 9 [M C_CHCHZEROG 0x216388], and
-    /// only 9 plays the movement anim set [M 0x192ab0:201]). The body rides `physics_tick`'s
+    /// same body [M 0x193600:238-241]; the level start enters 8 [M 0x1910f8 :160-165], the cheat
+    /// page's ZEROG checkbox 9 [M C_CHCHZEROG 0x216388], and only 9 plays the movement anim set [M 0x192ab0:201]). The body rides `physics_tick`'s
     /// collision tail with the walk/swim move + gravity replaced.
     fn zerog_tick(&mut self, world: &CollisionWorld, ctx: &LadderCtx, input: &Input) {
         self.physics_tick(world, ctx, input, false, true);
@@ -1610,6 +1615,13 @@ impl Bond {
         // local-forward push (Player_Climb's ±0x18 write) rides along once.
         let vf = vf0 + self.push_fwd;
         self.push_fwd = 0.0;
+        // The tick's move (the move the clip model truncates — captured before EVERY position
+        // move: zero-g's matrix move, swim's look-dir move and the walk add all land above, and
+        // the vel/60 integration below rides the same span; the contacts run after the whole
+        // move [M Player_Update 0x193600:284-295 → Player_Collision]). Captured inside the
+        // integration before (NF_WALK_CLIP measured "zero clip applications" — move_v read
+        // (0, gravity, 0) on every walked tick and the flag path ghosted through walls).
+        let pre_move_pos = self.pos;
         if zero_g {
             // ===== Player_ZeroG 0x192ab0 (the spacewalk body) =====
             // First tick of the spell builds the orientation from the walk yaw/pitch:
@@ -1628,19 +1640,13 @@ impl Bond {
             // dead here (`Bond::look` returns the matrix's forward row instead).
             self.vel = [0.0; 3];
             // The look rates [M :76-90]: the pitch action → the x angle, the turn action → the y
-            // angle, roll 0 — `RotMatrix` then `Concat(obj+0x90, R)` + `Mat_CopyRot(R, obj+0x90)`.
-            // Concat(a, b) writes b[i] := b[i].x·a[0] + b[i].y·a[1] + b[i].z·a[2] — b := b·a in the
-            // row-axis convention [M 0x1e4a90:13-49, the VU broadcast lanes ride b's rows] — so the
-            // copied-back matrix is m := R·m [M 0x192ab0:162-164; Mat_CopyRot 0x1e3370 = memcpy(dst
-            // = arg 2)]: each row is a mix of the BODY axes, the rotation lands in the body frame
-            // (look pitches about the body right row at every heading; a pitched yaw drifts the up —
-            // what the auto-stabiliser repairs). m·R would rotate the rows about the WORLD axes —
-            // facing ±x the look then barely tilts the view.
+            // angle, roll 0 — `RotMatrix` then `Concat(obj, R)` ⇒ m := m·R [M 0x1e4a90:13-49],
+            // the BODY frame (a pitched yaw drifts the up — what the auto-stabiliser repairs).
             // The port's `turn`/`look` are already per-tick deltas (mouse-direct, pad-ramped,
             // D-002); the game's own pad constant is 1.2566371·REC_FRAME_RATE rad/tick, `look`
             // riding in π/2 units.
             let r = rot_matrix(-input.look * std::f32::consts::FRAC_PI_2, turn, 0.0);
-            self.zero_g_rot = mat3_mul(&r, &self.zero_g_rot);
+            self.zero_g_rot = mat3_mul(&self.zero_g_rot, &r);
             // The thruster smoothers [M :92-159]: targets strafe = action 1·0.1, forward =
             // action 2·0.1, vertical = (action 7 − action 8)·0.1; each eases
             // `v += (target − v)·FRAME_RATE_MUL·0.04` (FRAME_RATE_MUL = 1.0 at 60 Hz [M .sdata
@@ -1744,8 +1750,6 @@ self.local = [vs / k, vf / k];
             self.vel = [0.0; 3];
         }
         self.vel[1] = self.vel[1].clamp(-45.0, 45.0);
-        // The tick's move (the move the clip model truncates — captured before the integration).
-        let pre_move_pos = self.pos;
         if settle_release {
             // The ONE integration of the held velocity, in the game's op order (the VU mul then the
             // add [M 0x194df0:189-197]) — the shape the ee_start root reproduces bit-exactly. The
@@ -2851,41 +2855,6 @@ mod tests {
         let step2 = dist3_sq(b.pos, p1).sqrt();
         assert!(step2 > 0.01, "still gliding: {}", step2);
         assert!(step2 < step, "decaying: {} < {}", step2, step);
-    }
-
-    /// The look rotation lands in the BODY frame at every heading: Player_ZeroG's
-    /// `Concat(obj+0x90, R)` + copy-back is obj := R·obj [M 0x1e4a90:13-49, 0x192ab0:162-164].
-    /// Facing west (−x), one look tick pitches the view by look·π/2 about the body's right row.
-    /// Sister: the world-frame product (m·R) barely tilts it at that heading (only the forward
-    /// row's z lane rotates about world x), so the pin can fail.
-    #[test]
-    fn zero_g_look_pitches_about_the_body_right_at_any_heading() {
-        let w = room();
-        let mut b = Bond::stand_at(&w, [0.0, 0.0, -14.0], -std::f32::consts::FRAC_PI_2);
-        b.substate = SS_ZEROG_9;
-        b.tick(&w, &Input::default()); // the entry matrix is live (level, facing −x)
-        let f0 = b.look();
-        assert!(f0[0] < -0.999, "facing west: {:?}", f0);
-        let m0 = b.zero_g_rot;
-        b.tick(&w, &Input { look: 0.1, ..Default::default() });
-        let f1 = b.look();
-        let want = (0.1f32 * std::f32::consts::FRAC_PI_2).sin();
-        assert!((f1[1] - want).abs() < 1e-3, "body-frame pitch: fwd.y {} vs sin(0.1·π/2) {}", f1[1], want);
-        assert!(f1[2].abs() < 1e-3, "the pitch stays in the heading plane: {:?}", f1);
-        // Sister: the world-frame composition at the same heading.
-        let r = rot_matrix(-0.1 * std::f32::consts::FRAC_PI_2, 0.0, 0.0);
-        let world = mat3_mul(&m0, &r);
-        assert!(world[2][1].abs() < 0.01, "sister: m·R barely tilts a west-facing view ({})", world[2][1]);
-        // A yaw after the pitch turns about the BODY up (the pitched body's up row): the forward
-        // swings toward the level right row, so its elevation shrinks by cos(turn) — a world-up
-        // yaw would keep it exactly.
-        b.tick(&w, &Input { turn: 0.2, ..Default::default() });
-        let m = b.zero_g_rot;
-        let dot = m[1][0] * m[2][0] + m[1][1] * m[2][1] + m[1][2] * m[2][2];
-        assert!(dot.abs() < 1e-3, "the body stays orthonormal: up·fwd {}", dot);
-        let want_y = 0.2f32.cos() * f1[1];
-        assert!((b.look()[1] - want_y).abs() < 2e-4 && (b.look()[1] - f1[1]).abs() > 2e-3,
-            "a body-up yaw scales the elevation by cos(turn): {} vs {} (world-up would keep {})", b.look()[1], want_y, f1[1]);
     }
 
     #[test]

@@ -64,7 +64,12 @@ pub struct Lock {
     pub radius: f32,
     /// Record u16[+8] = placement param 5: the channel written on burn-through [M 0x1ae3d8:194].
     pub out: u16,
-    /// Placement params 3/4 (the record's +4/+6 key/take words, 0xffff on the safe bolts [D]).
+    /// Placement params 3/4 = the record's u16[2]/u16[3] (+4/+6; 0 → 0xffff at create) — the lock's
+    /// two SOUND ids: [0] the unlock sound (`Lock_Unlock` 0x1b0650:23-24 from state 0, `Lock_Update`
+    /// case 4's keypad solve :282-283, `Lock_Activate` 0x1aed00's key-held arm), [1] the locked
+    /// rattle (`Lock_Activate`'s kind≠0 no-key arm) [M Lock_Create 0x1ae1f8:28-36]. Every 0x2E
+    /// placement on the disc carries 0xffff in both (0700000a/0b/0c/08/11/12/14/15/46 swept [D]),
+    /// so no shipped lock plays either; the port keeps the words and plays nothing.
     pub key_channels: [u16; 2],
     /// Ticks of laser burn applied (`Lock_Update`'s timer). The create-time base is 0 on this
     /// level's data [M 0x1ae1f8: the tag+2 word is 0], so the first tick of burn completes it.
@@ -135,7 +140,8 @@ impl Lock {
                 pos: [p.translation[0] + centre[0], p.translation[1] + centre[1], p.translation[2] + centre[2]],
                 radius,
                 out: param(5) as u16,
-                key_channels: [param(3) as u16, param(4) as u16],
+                // `Lock_Create`'s `0 → 0xffff` (no sound) for both words [M 0x1ae1f8:27-36].
+                key_channels: [param(3), param(4)].map(|v| if v == 0 { 0xffff } else { v as u16 }),
                 burn: 0,
                 burned: false,
                 burn_a: 0xff,
@@ -356,7 +362,8 @@ impl KeyCodes {
 /// The view draws: the keypad page's 24 controls as laid out in the level def —
 /// the digit grid, and the display label 0x10000075 bound to [`Self::display`]; when
 /// `code_shown` the hint line shows the code (`Lock_Update` case 3 binds the sprintf'd
-/// "%d%d%d%d" through Txt_BindLabel 0x2000014 + Text_AddMsg 0xb4 [M 0x1ae3d8:249-258]).
+/// code chars through Txt_BindLabel 0x2000014 — "Obtained Lock Keycode %c%c%c%c" [D USATxt] —
+/// + Text_AddMsg 0xb4 [M 0x1ae3d8:249-258]; the Drones post it as an INFO message).
 #[derive(Clone, Debug)]
 pub struct Keypad {
     /// The code being typed against (0x2a37d8..dc).
@@ -400,7 +407,7 @@ impl Keypad {
         String::from_utf8_lossy(&self.typed[..n]).into_owned()
     }
 
-    /// The Q-Worm hint line — `sprintf("%d%d%d%d", …)` bound through Txt_BindLabel 0x2000014
+    /// The revealed code's four chars — the `%c%c%c%c` arguments of label 0x2000014
     /// [M 0x1ae3d8:249-258]. Empty unless the code is revealed.
     pub fn hint(&self) -> String {
         if !self.code_shown { return String::new(); }
@@ -433,6 +440,16 @@ impl Keypad {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// `Lock_Create` 0x1ae1f8:27-36: the two sound words (params 3/4) read 0 → 0xffff ("none");
+    /// a nonzero word is kept. Sister: the nonzero case proves the mapping is not a blanket 0xffff.
+    #[test]
+    fn create_maps_zero_sound_words_to_none() {
+        let mk = |p3: u32, p4: u32| nf_formats::placement::Placement { flags: 0x2e, params: vec![(0, 0), (1, 1), (3, p3), (4, p4), (5, 9)], ..Default::default() };
+        let locks = Lock::create(&[mk(0, 0), mk(0x249, 0x5db)], 0, |_| None);
+        assert_eq!(locks[0].key_channels, [0xffff, 0xffff]);
+        assert_eq!(locks[1].key_channels, [0x249, 0x5db]);
+    }
 
     fn lock(kind: u16, out: u16, code: u16) -> Lock {
         Lock {

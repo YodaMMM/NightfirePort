@@ -54,7 +54,8 @@ alpha-list distance fade, environment mapping, dynamic lights / motion blur / br
   draws each (cel entries through `View_DrawCelGlist`, objects through
   `View_SetupRenderModes_Tweak` + `View_DrawObjectGlist`). So list 0 = **all visible statics in
   placement-parse order, then the dynamic objects front-to-back**; list 1 = the flagged objects
-  back-to-front. Flags 0x8 billboard, 0x4 scale jitter 1.0–1.05 per frame, 0x10 hidden (the
+  back-to-front. Flags 0x8 billboard (`View_DrawObjectGlist` 0x1e6780: `Mat_CopyRot(viewer+0x1a0)` +
+  `Mat_SetTrans(obj+0xC0)` [M 0x1e67a4-0x1e6810]; every placed corona glist carries it — docs/systems/corona.md), 0x4 scale jitter 1.0–1.05 per frame, 0x10 hidden (the
   cel-pass skip — `View_AddCels` never pushes a record with glist flags bit 0x10); `cel+0xA3`
   alpha pulse for placement types 0x8018 / 0x8019.
 - Textures: bilinear, no mipmaps (TEX1 0x60); REGION_REPEAT inside the page; MODULATE, TCC 1;
@@ -77,7 +78,27 @@ vertex colour and clamps the sum to byte 255 (`MINIi`, I = 255.0 at I-mem 919/95
 shader mirrors that at /255 over its Unorm8x4 vertex colour with a min(·,1) clamp (fix-lighting2;
 the earlier /128 over an Unorm8x4 colour was 2× the game's add). Tint (`obj+0x103..0x106`, × room
 ambient with flag 0x800); environment map on 31 objects (box flag +0x34 bit 0, e.g.
-`OBJECT_windows`): UV ≈ 0.5 + rot·n/256 [S].
+`OBJECT_windows`) and on the skinned weapon/hazmat meshes: per BATCH, the GIF tag's handler
+selector 0x10 picks the VU1 env handler — ST = 0.5 + (camera row · n)/256, colour TAmbient ⊙ rgba,
+no point lights [M, ps2gfx.md "Batch handler selector"; viewmodel-light 2026-10-31]. The weapons'
+chrome layers (the sniper silencer, pistol slides, suppressors) are these batches.
+
+### The view model's lighting (viewmodel-light, 2026-10-31) [M, D]
+
+- `AnimObjectDraw` 0x1c4490:117-122 picks `View_SetupRenderModes2` (the viewer's camera, radius
+  2.0, only while viewer+0x224 — the player object, `Player_Init` 0x1910f8:124 — is set) when the
+  skin has main glists (+0x2c) AND rigid extras (+0x2d, `AnimProcessSkinData` 0x1bd500:93-96), else
+  `View_SetupRenderModes` (obj+0x80 sphere). Both feed `View_SetupRenderModes_Tweak` 0x1e5888: the
+  0x800 view model's TAmbient = tint × obj+0x100..0x102 >> 8.
+- A datum entity (`AnimObjectDraw`'s datum loop, before `psiDrawObjectMatrix`) whose glist lacks 0x800 is re-tweaked with the raw tint;
+  a 0x800 glist keeps the object's ambient tweak.
+- The near-white sniper silencer was the env handler drawn as a plain additive batch: its disc UVs
+  sit on the stripe texture's bright band and the lights were added. With the env ST and no lights it
+  is the PS2's banded chrome (0700000c apron) and dark gunmetal in the dim ST-3 building (0700000d:
+  ambient 36 [D]). The 07000006 courtyard P-41 is lit by a kind-2 searchlight light (the spot within
+  4 of Bond, intensity (1 − d/4)·50), i.e. the searchlights' state in the port frame, not the model.
+- Shot harness: `--settle N` lets the ramp run N ticks after the `--bond` re-place (the ambient
+  needs ~30 ticks to cross from a sunlit start into a dark room).
 
 ### Light-pick corrections (2026-10-17, light-fixes) [M, L]
 
@@ -156,7 +177,15 @@ only within one tick's motion).
   ±0.0002 / tick clamped ±0.01; up to 21 respawns per tick at x, z ± 15, y = centre.y + 7.5 + rand(7.5), only inside an
   active box; a flake dies below max(box min y, centre.y − 7.5). First frame on 05 / 06: all 4096 in the cube.
 - `DrawDrops` 0x18cb90 → `psiDrawParticleList(0.2, …, 0x808080, 0x03000045)`: GS sprites, additive, depth-tested,
-  no write, colour (63, 63, 63, 127) × texture; size ≈ 0.2 m [S: full or half width open].
+  no write, colour (63, 63, 63, 127) × texture. Size: the VU1 scale word is `1/(PS2SnowSize·PS2SnowSizeMult)`
+  (`CreatePointerSpriteList` 0x11a160:81 [M]); PS2SnowSize 28990 / 12826 / 19053 on 05 / 06 / 08, the `.sdata`
+  boot value 10000 elsewhere [D 0x30c974]. As an emitter sprite of size `Far1·0.002386635/(4·SnowSize)` read
+  as a full width, the half-extent is 0.197 / 0.187 / 0.207 m (boot: 0.125) — `nf_game::env::flake_half_extent`;
+  the full-width reading matches the 05 f198 / 06 f206 PS2 captures (audits/render-1031-weather).
+- Rain (DropType 1): `DrawDrops` draws the `Raindrop` mesh 0x02000290 (about 8 additive streaks, ALPHA_1 0x48)
+  per live drop after Game_Draw's `psiSetTweakARGB(0xff…)` [M 0x1e6f50:148-151] — white tweak, no ambient dim;
+  on 09..0b a second pass draws `smoke_1_dust` 0x02000039 per drop with the viewer rotation under
+  `psiSetTweakARGB(0x24, 0x20, 0x20, 0x20)` [M 0x18cb90]. Caps 0x80 (09..0b) / 0x40 [M 0x18bf68].
 
 ## Output [M, L]
 
@@ -187,12 +216,25 @@ draw the flash glist instead of the normal one; reflicker-type flash ticks raise
 [0x30d0b8], which shows the 8-beam lightning polyline (`Lightning_Update` 0x18cf68, re-fractaled by
 `Reflicker` via `FractalThing`; the beams follow the player). **The flash does not light the level**: no
 ambient write and no `Light_Create` in the path — the level-side evidence is the beams only; the port
-leaves a marked hook (`sky::Sky.globals.super_happy`) for the lighting work. RNG order per tick: flash start
+shares `sky::Sky.globals` with the 0x2c bolts (`WorldFx::lightning`). RNG order per tick: flash start
 = `Rand_Rand(interval)` then `Rand_Rand(100)` (plus `Rand_Rand(120)` on the non-reflicker branch); a
 flashing tick = one `Rand_Rand(100)`; dark ticks draw nothing [M 0x1e5ad0:92-158].
 
 Disc parameters [D]: 0700000a Thunderhead slot 3 = interval 24 → 1440 ticks, flash 5; 0700000b slot 3 =
 30 → 1800, flash 10. The other 25 on-foot levels have no flash variant.
+
+**What the flash draws on 0a/0b: nothing.** Slot 3 holds only the flash variant (no normal placement),
+and the Thunderhead's PS2_GFX block is the 32-byte empty glist (header word = footer offset 0x10 [D]):
+`psiCreateEntityGfx` 0x1171b0:23-27 zeroes such a glist's box count and box array, and
+`psiDrawObjectMatrix` 0x124708 returns before `RecurseAndDrawBoxes` [M]. No 0x2c bolt records exist on
+either level [D-census], so `SuperHappyLightningFlag` has nothing to show there, and no fog/ambient/light
+write rides the lightning globals (only `View_DrawSky` and `Lightning_Update` reference them [M grep]).
+The port runs the swap exactly anyway: `Sky::flash_mask` (the drawn variant per slot, per sim frame) →
+`Renderer::sky_flash_mask` → `scene::sky_variant_drawn` on the tagged sky draws of any slot that has a
+flash variant; a paused frame draws the normal pair. The sim's lightning globals are one set shared with
+the 0x2c bolts (`Drones::sky_frame`). Renders: the mid-flash and between-flash frames match pixel for
+pixel apart from the rain drops (crates/nf-game/tests/sky_flash_live.rs pins the schedule and the empty
+glist).
 
 **The rotating sky of 0x0700001B**: inside the per-slot body, when the glist flags lack bit 0x8, the frame
 counter `rotatosky.168` [0x30d878] increments once per slot pass (both of 0700001b's slots — SKY_StarField
@@ -211,9 +253,14 @@ angles overwrite it each frame and the rotated matrix is applied (`ApplyMatrixLV
 `Game_Draw`], so the sky pass itself writes no fog register. The glists confirm the inheritance [D
 sky_gs_live]: the 0700000a Thunderhead's first CNT carries **no A+D writes at all** (effective state =
 the pass-initial 0x2a / TEST_1 0x5001b), while 0700001b's SKY_StarField writes its own ALPHA_1 0x44
-(normal blend), TEST_1 0x5001b and ZBUF_1 0x1_31000000. gpu.rs's sky pipelines (pass 0: depth Always, no
-write; pass 4: LessEqual, no write, far-pin) stay as modeled; the exact ZMSK state the GS holds during the
-sky draws is an open live check below.
+(normal blend), TEST_1 0x5001b and ZBUF_1 0x1_31000000. **Every sky glist on the 27 on-foot archives writes
+its own ZBUF_1 and TEST_1** [D, missing-scenery survey]: the camera-following skyboxes/moons carry
+0x1_31000000 (no write), while the fixed group-1 pieces (0700000c Mountains_new1, 04 mountains, 0d
+Mountains_new, 05/06 Sky_Tower*/Sky_Wall*, 08 Sky_Walltop/Sky_Roof_1/SKY_Tower_Top_1, 07000024 Mountains1)
+carry 0x31000000 — they write depth under ZTE GEQUAL. gpu.rs therefore draws pass 0 with LessEqual and the
+leaf's own depth write (was: Always, no write — the far-pinned pass-4 skybox then painted over the
+0c mountains); pass 4 stays LessEqual, no write, far-pinned. Pinned by
+`missing_scenery_live::the_0c_mountain_range_draws_behind_the_plant`.
 
 **Snow and rain** are not sky-pass draws: `DrawDrops` 0x18cb90 runs after the alpha list (blend 2, no
 lights, `Game_Draw`). The physics/density live in `nf_game::env.rs` (`InitDrops` 0x18bf68 etc.). The look,

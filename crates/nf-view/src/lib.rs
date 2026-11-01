@@ -318,6 +318,9 @@ fn view_model_entries(scene: &scene::Scene, l: &scene::SkinLayout) -> Option<Vec
     // anim set [M `Player_ChangeSubState(10)`; L PCSX2 "no view model"]) — frame_state hides the
     // arms' palette; the reattach skips too.
     if s.missile_cam.is_some() { return None; }
+    // The security-camera view: `Player_Disable(player, 0)` hides the view-model object
+    // (obj+0xF0 |= 0x10 [M 0x195f70:17-20]).
+    if s.sec_cam().is_some() { return None; }
     // fix-wallhug-prompt: the creep's third-person camera hides the view model too [M
     // `Player_PositionCamera` 0x18f5d8 case 0xb: `View_SetDrawInNoViews(BLData+0x7e8)`; the entry
     // holsters the weapon, `Player_WeaponNone` 0x196758:114].
@@ -2419,10 +2422,12 @@ fn front_end_menu(args: &[String], scene: &scene::Scene, front_end: bool, iso_pa
         // the same state `FrontEnd::action`'s Confirm sets on the OBJECTIVES tab [M 0x204408
         // 0x205b98-0x205c34: control 1's activation reads control 8's row and opens the ok-only
         // box; 0xffffffff → 0x31d]. After the fill above (the rows must exist).
-        if args.iter().any(|a| a == "--pause-hint") && fe.pause_tab == 1 && !fe.pause_objectives.is_empty() {
-            let sel = fe.pause_objectives_sel.min(fe.pause_objectives.len() - 1);
-            let hint = fe.pause_objectives[sel].hint;
-            fe.pause_hint = Some(if hint == 0xffff_ffff { 0x31d } else { hint });
+        // `--pause-hint-again` opens, closes and re-opens the same row's box (the reopened box;
+        // every box is sized for its own lines, fe_pages::HintBoxView::size_lines).
+        let again = args.iter().any(|a| a == "--pause-hint-again");
+        if (again || args.iter().any(|a| a == "--pause-hint")) && fe.pause_tab == 1 && !fe.pause_objectives.is_empty() {
+            fe.open_objective_hint();
+            if again { fe.close_objective_hint(); fe.open_objective_hint(); }
         }
     }
     // Tick through the boot load and let the page's timers run (the flash cycle etc.).
@@ -2583,6 +2588,19 @@ fn mp_drive_shots(scene: &mut scene::Scene, args: &[String], spec: &str, out: &s
     Ok(())
 }
 
+/// The Screen Adjust offset (game units) → the renderer's picture fractions: X/2560, Y/448 [M
+/// docs/systems/screen-adjust.md §3; `FrontEnd::screen_offset_frac` is the same conversion].
+pub fn screen_frac(pos: (i32, i32)) -> [f32; 2] {
+    [pos.0 as f32 / 2560.0, pos.1 as f32 / 448.0]
+}
+
+/// The headless shot's offset: `NF_SCREEN_POS=x,y` (the game's units), clamped to the game's limits.
+fn shot_screen_pos() -> (i32, i32) {
+    let Ok(v) = std::env::var("NF_SCREEN_POS") else { return (0, 0) };
+    let mut it = v.split(',').map(|t| t.trim().parse::<i32>().unwrap_or(0));
+    (it.next().unwrap_or(0).clamp(-0x1b0, 0x1b0), it.next().unwrap_or(0).clamp(-0x30, 0x30))
+}
+
 fn shot(scene: &scene::Scene, cam: &Camera, out: &str, choice: Option<usize>, time: f32, mut opts: scene::ViewOpts, notex: bool, nofog: bool, menu: Option<&gpu::HudFrame>, movie: Option<&(u32, u32, Vec<u8>)>) -> Result<()> {
     let (w, h) = (1280u32, 720u32);
     let instance = wgpu::Instance::new(wgpu::InstanceDescriptor::new_without_display_handle());
@@ -2614,6 +2632,7 @@ fn shot(scene: &scene::Scene, cam: &Camera, out: &str, choice: Option<usize>, ti
     let vis_shot = r.cel_visibility(cam.pos.to_array(), vp_shot, world, door_closed.as_deref());
     // The destroyed-glist swap's draw side: the dead Destroy leaves' centres (see Scene::destroy_centres).
     r.destroy_dead = dead_destroy_centres(scene);
+    r.sky_flash_mask = scene.sim.as_ref().map_or(0, |s| s.drones.sky.flash_mask);
     r.destroy_wreck_draw = wreck_draw_centres(scene);
     r.destroy_tint = destroy_tints(scene);
     // Objects are never room-culled (see the live path).
@@ -2630,6 +2649,9 @@ fn shot(scene: &scene::Scene, cam: &Camera, out: &str, choice: Option<usize>, ti
     r.set_char_light_centres(scene);
     r.lights = scene.frame_lights();
     r.screen_aspect = w as f32 / h as f32;
+    // Render aid: `NF_SCREEN_POS=x,y` — the Screen Adjust offset in the game's units (PS2ScreenXPos /
+    // PS2ScreenYPos, clamped to psiAdjustScreenPos' ±0x1b0 / ±0x30 [M 0x10b890]).
+    r.screen_offset = screen_frac(shot_screen_pos());
     // `NF_BENCH=N`: time the per-frame CPU side N times (posing + vertex build, and the upload) for profiling.
     if let Some(n) = std::env::var("NF_BENCH").ok().and_then(|v| v.parse::<u32>().ok()) {
         let t0 = std::time::Instant::now();
@@ -2824,6 +2846,9 @@ struct App {
     /// The front end (fix-menus): Some while a menu page is up (title / main / mission select /
     /// difficulty / options / pause / results). None = playing a mission directly.
     fe: Option<menu::FrontEnd>,
+    /// Screen Adjust's live offset (`PS2ScreenXPos`/`PS2ScreenYPos` [M 0x30c75c/0x30c760]) — mirrored
+    /// from the front end each frame it stands, so gameplay frames (no front end) keep the shift.
+    screen_pos: (i32, i32),
     /// The Advanced options' Auto Aim (control 0x1000011b; the profile's +0x01 — default ON [M
     /// Player_AutoAim 0x1a7c98:41 reads it]). Mirrored from the front end while it is up and kept
     /// across missions (the front end closes during play); applied to the sim every frame. The
@@ -3259,7 +3284,7 @@ impl App {
         if fe.settings_save_pending {
             fe.settings_save_pending = false;
             if let Some(p) = settings::default_path() {
-                if let Err(e) = settings::save_opts(&p, &fe.opts) { eprintln!("[settings] {e}"); }
+                if let Err(e) = settings::save_opts(&p, &fe.opts_with_screen()) { eprintln!("[settings] {e}"); }
             }
         }
         // menu-sfx: the front end's sound events play straight through the driver's 2-D start —
@@ -3536,7 +3561,10 @@ impl App {
         // settings-persist: the option file's values, not the bare defaults.
         let (opts, warn) = settings::load_default();
         if let Some(w) = warn { eprintln!("[settings] {w}"); }
-        fe.opts = opts;
+        fe.set_opts(opts);
+        // Screen Adjust: the offset is a global the menu managers don't own [M PS2ScreenXPos/YPos
+        // 0x30c75c/0x30c760] — a fresh manager keeps the live value.
+        (fe.screen_x, fe.screen_y) = self.screen_pos;
         // profile-session: keep the standing codename session (the other re-creates' rule).
         self.inherit_profile_session(&mut fe);
         // net-desync-detail: the fail box carries the diagnosis + the report zip's path (the
@@ -3601,6 +3629,7 @@ impl App {
         };
         let view = frame.texture.create_view(&Default::default());
         g.renderer.screen_aspect = aspect;
+        g.renderer.screen_offset = screen_frac(self.fe.as_ref().map_or(self.screen_pos, |f| (f.screen_x, f.screen_y)));
         // A zero view-projection collapses every world vertex (w = 0), so only the picture and the overlay draw.
         let id = [[0.0f32; 4]; 4];
         let movie = picture.map(|(w, h, rgba)| (*w, *h, rgba.as_slice()));
@@ -3977,7 +4006,10 @@ impl App {
         // defaults would otherwise ride the results page's quit back into the front end.
         let (opts, warn) = settings::load_default();
         if let Some(w) = warn { eprintln!("[settings] {w}"); }
-        fe.opts = opts;
+        fe.set_opts(opts);
+        // Screen Adjust: the offset is a global the menu managers don't own [M PS2ScreenXPos/YPos
+        // 0x30c75c/0x30c760] — a fresh manager keeps the live value.
+        (fe.screen_x, fe.screen_y) = self.screen_pos;
         // The demo hook stands in for Mission_Update 0x182c60, which fires in state 2 — the flow
         // must be in a state reset_map_level_to_load accepts (its gate [M 0x1d3800]) for the outro
         // request to wrap into the movie state. The results PAGE opens only at the front-end
@@ -5124,6 +5156,9 @@ impl App {
                                     weapon_cycle: std::mem::take(&mut self.weapon_cycle),
                                     gadget_cycle: std::mem::take(&mut self.gadget_cycle),
                                     zoom_cycle: std::mem::take(&mut self.zoom_cycle),
+                                    // weapon-handling: the mouse's held right button is the zoom-in axis
+                                    // (the scene maps a held `zoom` to −1); the pad merge writes its own.
+                                    zoom_axis: 0.0,
                                     switch_to: self.weapon_switch_to.take(),
                                     fire: self.trigger,
                                     zoom: self.zoom,
@@ -5462,7 +5497,10 @@ impl App {
                                     Self::inherit_music_statics(&mut fe, self.music_bank_flip, self.music_loaded_bank, self.music_master);
                                     let (opts, warn) = settings::load_default();
                                     if let Some(w) = warn { eprintln!("[settings] {w}"); }
-                                    fe.opts = opts;
+                                    fe.set_opts(opts);
+        // Screen Adjust: the offset is a global the menu managers don't own [M PS2ScreenXPos/YPos
+        // 0x30c75c/0x30c760] — a fresh manager keeps the live value.
+        (fe.screen_x, fe.screen_y) = self.screen_pos;
                                     fe
                                 });
                                 // profile-session: a fresh debriefing manager inherits the standing
@@ -5917,9 +5955,13 @@ impl App {
                 if scene_overlay_up(&self.scene, movie_frame.is_some()) { hud.append(&self.scene.script_overlay_hud(aspect)); }
                 g.renderer.lights = self.scene.frame_lights();
                 g.renderer.screen_aspect = g.config.width as f32 / g.config.height.max(1) as f32;
+                // Screen Adjust: the whole frame shifts by the live offset (gpu::screen_adjust_viewport).
+                if let Some(fe) = self.fe.as_ref() { self.screen_pos = (fe.screen_x, fe.screen_y); }
+                g.renderer.screen_offset = screen_frac(self.screen_pos);
                 // The destroyed-glist swap's draw side: the dead Destroy leaves' centres
                 // (see Scene::destroy_centres) — the doorway ends open [L] once the leaf is dead.
                 g.renderer.destroy_dead = dead_destroy_centres(&self.scene);
+                g.renderer.sky_flash_mask = self.scene.sim.as_ref().map_or(0, |s| s.drones.sky.flash_mask);
                 g.renderer.destroy_wreck_draw = wreck_draw_centres(&self.scene);
                 g.renderer.destroy_tint = destroy_tints(&self.scene);
                 let fp_enc = std::time::Instant::now();
@@ -6149,7 +6191,10 @@ impl App {
                                     // settings-persist: same boot as the title's front end.
                                     let (opts, warn) = settings::load_default();
                                     if let Some(w) = warn { eprintln!("[settings] {w}"); }
-                                    fe.opts = opts;
+                                    fe.set_opts(opts);
+        // Screen Adjust: the offset is a global the menu managers don't own [M PS2ScreenXPos/YPos
+        // 0x30c75c/0x30c760] — a fresh manager keeps the live value.
+        (fe.screen_x, fe.screen_y) = self.screen_pos;
                                     fe
                                 });
                                 // profile-session: a FRESH pause manager inherits the standing codename
@@ -6305,6 +6350,7 @@ impl App {
             panel_level: 0,
             panel_frames: 0,
             fe: None,
+            screen_pos: (0, 0),
             auto_aim_opt: true,
             look_inverted: false,
             crouch_toggle_opt: true,
@@ -6887,10 +6933,37 @@ pub fn run() -> Result<()> {
             let aim0 = (sim.bond.yaw, sim.bond.pitch);
             for t in 1..=time as u32 {
                 if kill_at == Some(t) { let (h, r) = (&mut sim.drones.health, &mut sim.drones.rng); h.pain_generic(r, 500.0, 1, 0x0700_0005, 0); }
+                // Render aid (door colours after a kill): `NF_GUARD_DOWN_AT=t` knocks the nearest live
+                // guard out on tick t through the knockout state's ENTER (0x172a30), which drops his
+                // gun as a new pickup (`DroneWeap_DropWeapon` 0x17a2a0 [M 0x172ac0]) — the state a
+                // kill leaves for the palette, without aiming a headless shot.
+                if std::env::var("NF_GUARD_DOWN_AT").ok().and_then(|v| v.parse::<u32>().ok()) == Some(t) {
+                    let bp = sim.bond.pos;
+                    let near = sim.drones.list.iter().enumerate()
+                        .filter(|(_, d)| d.present && d.enabled && !d.corpse && d.health > 0.0 && d.weapon > 0)
+                        .min_by(|(_, a), (_, b)| {
+                            let f = |p: [f32; 3]| (p[0] - bp[0]).powi(2) + (p[1] - bp[1]).powi(2) + (p[2] - bp[2]).powi(2);
+                            f(a.pos).total_cmp(&f(b.pos))
+                        }).map(|(i, _)| i);
+                    if let Some(i) = near {
+                        eprintln!("[guard-down] drone {i} at {:?}", sim.drones.list[i].pos);
+                        sim.drones.list[i].set_state(nf_game::drone::state::KNOCKED_OUT_ANIM);
+                    }
+                }
                 // Render aid (copter-script-draw): `NF_CH_AT=t:ch` sets switch channel `ch` on tick t
                 // (the headless counterpart of the dev `--set-channel`).
                 if let Some((ct, cc)) = std::env::var("NF_CH_AT").ok().and_then(|v| v.split_once(':').and_then(|(a, b)| Some((a.parse::<u32>().ok()?, b.parse::<u32>().ok()?)))) {
                     if ct == t { let f = sim.drones.frame; sim.drones.channels.set(cc, 1, f); }
+                }
+                // Render aid (pc-screen): `NF_QWORM_AT=t:ch` starts the install of the PCQWorm PCs whose
+                // param 1 is `ch` on tick t (`all` = every PC) — the state `PCQWorm_Activate` 0x1b0840 /
+                // the Q-Worm bullet leave (obj+0xF4 = 1), so `PCQWorm_Update` 0x1aee20 state 1 runs next.
+                if let Some((qt, qc)) = std::env::var("NF_QWORM_AT").ok().and_then(|v| v.split_once(':').and_then(|(a, b)| Some((a.parse::<u32>().ok()?, b.to_string())))) {
+                    if qt == t {
+                        for pc in sim.drones.useobjs.pcs.iter_mut().filter(|p| qc == "all" || qc.parse::<u8>().ok() == Some(p.ch)) {
+                            if pc.state == 0 { pc.state = 1; eprintln!("[qworm] install started on tick {t}: PC ch {:#x}", pc.ch); }
+                        }
+                    }
                 }
                 // Render aid (keypad LOD swap): `NF_UNLOCK_AT=t:out` unlocks the locks with that out
                 // channel on tick t (the state `Lock_Unlock` 0x1b0650 leaves), to render the swapped model.
@@ -6960,12 +7033,61 @@ pub fn run() -> Result<()> {
                 if let Some(i) = args.iter().position(|a| a == "--bond") {
                     let v: Vec<f32> = args.get(i + 1).map(|s| s.split(',').filter_map(|t| t.parse().ok()).collect()).unwrap_or_default();
                     if v.len() >= 3 { sim.bond = nf_game::player::Bond::new([v[0], v[1], v[2]], v.get(3).copied().unwrap_or(sim.bond.yaw)); if let Some(&pt) = v.get(4) { sim.bond.pitch = pt; } sim.step_bond(shot_input, false, false, false); }
+                    // Render aid (viewmodel-light): `--settle N` lets N ticks pass on the spot instead of
+                    // one, so the per-object state that ramps after a move — the 0x800 objects' ambient
+                    // bytes, which `Lights_CalcAmbientLight` 0x1cb178 steps toward the new cel by
+                    // `ClrStep(…, 0.1)` per tick — reaches what a PS2 capture taken a while after its
+                    // teleport shows. Default 1 (the old behaviour).
+                    let settle: u32 = args.iter().position(|a| a == "--settle").and_then(|k| args.get(k + 1)).and_then(|s| s.parse().ok()).unwrap_or(1);
+                    if v.len() >= 3 { for _ in 1..settle { sim.step_bond(shot_input, false, false, false); } }
+                }
+            }
+            // Render aid (fix-hud-parity): `NF_HUD_PROBE=k=v,…` sets HUD-facing state after the ticks so
+            // one --shot shows a HUD situation: `dmg=<bits>:<alpha>` (BL+0x967 / +0x968), `hp=<n>`,
+            // `armour=<n>`, `clip=<n>`, `swim=<air>` (substate 3, head under), `shutter=<n>` (the
+            // camera pane's slot), `ctx=<n>` (BL+0x95F), `objtime=<t>` (the head objective's remaining life).
+            if let Ok(spec) = std::env::var("NF_HUD_PROBE") {
+                for kv in spec.split(',') {
+                    let (k, v) = kv.split_once('=').unwrap_or((kv, ""));
+                    let f = |s: &str| s.parse::<f32>().unwrap_or(0.0);
+                    match k {
+                        "dmg" => { let (b, a) = v.split_once(':').unwrap_or((v, "200")); sim.drones.health.dir_bits = f(b) as u8; sim.drones.health.flash = f(a); }
+                        "hp" => sim.drones.health.health = f(v),
+                        "armour" => sim.drones.health.armour = f(v),
+                        "clip" => sim.gun.clip = f(v) as u32,
+                        "swim" => { sim.bond.substate = nf_game::player::SS_SWIM; sim.bond.underwater = true; sim.bond.air = f(v); }
+                        "shutter" => sim.hud.camera_shutter = f(v) as u8,
+                        "ctx" => sim.bond.icon_ctx = f(v) as u8,
+                        "objtime" => { if let Some(m) = sim.hud.objective_msgs.front_mut() { m.time = f(v); } }
+                        // `mount=<heat>`: the first mounted gun active with that heat, WeaponNone held.
+                        "mount" => { if let Some(g) = sim.drones.props.gunimps.first_mut() { g.active = true; g.heat = f(v); sim.gun.weapon = 0x47; sim.hud.weapon_label_timer = 0; } }
+                        // `info=<label hex>[:<time>]` / `pickup=<label hex>[:<time>]`: a bound message
+                        // straight into the INFO / pickup pane.
+                        "info" | "pickup" => {
+                            let (l, t) = v.split_once(':').unwrap_or((v, "120"));
+                            let id = u32::from_str_radix(l.trim_start_matches("0x"), 16).unwrap_or(0);
+                            if let Some(txt) = sim.lang.as_ref().and_then(|g| g.bind(id)).map(|s| s.trim().to_string()) {
+                                let m = crate::scene::Msg::new(txt, f(t));
+                                if k == "info" { sim.hud.info_msgs.push_back(m); } else { sim.hud.msgs.push_back(m); }
+                            }
+                        }
+                        // `seccam=<monitor index>`: that monitor console's camera view
+                        // (`Monitor_Activate` 0x1b0058's state 2 — pane 16).
+                        "seccam" => { let i = f(v) as usize; let sensors = sim.drones.sensors.clone(); sim.drones.monitors.activate(i, &sensors); }
+                        _ => eprintln!("NF_HUD_PROBE: unknown key {k:?}"),
+                    }
                 }
             }
             if walk { let h = sim.bond.head(); cam = Camera { pos: Vec3::new(h[0], h[1], h[2]), yaw: sim.bond.yaw, pitch: sim.bond.pitch * std::f32::consts::FRAC_PI_2, fov: GAME_FOV / sim.zoom }; }
             if walk { if let Some((p, yaw, pitch, fov)) = sim.script_camera() { cam = Camera { pos: Vec3::new(p[0], p[1], p[2]), yaw, pitch, fov }; } }
             if walk { if let Some((p, yaw, pitch, fov)) = sim.wire_camera() { cam = Camera { pos: Vec3::new(p[0], p[1], p[2]), yaw, pitch, fov: GAME_FOV / fov }; } }
             eprintln!("Bond at {:?}{}, health {}", sim.bond.pos, if sim.disabled { " (disabled by a script)" } else { "" }, sim.drones.health.health);
+            // Render aid (light-glow): `NF_SL_LOG=1` lists the searchlight parts the shot draws.
+            if std::env::var_os("NF_SL_LOG").is_some() {
+                for (k, p) in sim.drones.searchlights.parts.iter().enumerate() {
+                    eprintln!("searchlight part {k}: kind {} state {} drawn {} pos {:?} alpha {} scale {} pitch {} yaw {} on {} ({}) off {} ({}) alarm {}", p.kind, p.state, p.drawn, p.pos, p.alpha, p.scale, p.pitch, p.yaw, p.on, sim.drones.channels.on(p.on as u32), p.off, sim.drones.channels.on(p.off as u32), p.alarm);
+                }
+            }
             for u in sim.unposed(&scene.characters) { eprintln!("unposed: {u}"); }
             for p in &sim.drones.pickups { eprintln!("pickup: weapon {:#x}, {} rounds at {:?}", p.weapon, p.rounds, &p.m[3][..3]); }
             if let Some(dr) = sim.drones.list.iter().find(|d| !d.shots.is_empty() || d.state != 4) {
@@ -7159,7 +7281,9 @@ pub fn run() -> Result<()> {
         // resumed).
         let (opts, warn) = settings::load_default();
         if let Some(w) = warn { eprintln!("[settings] {w}"); }
-        app.fe.as_mut().unwrap().opts = opts;
+        app.fe.as_mut().unwrap().set_opts(opts);
+        // The boot's psiSetScreenPos from the loaded settings [M LS_LoadGlobalSettings 0x1cdbc8].
+        app.screen_pos = app.fe.as_ref().map_or((0, 0), |f| (f.screen_x, f.screen_y));
         // options-persist-roundtrip: the AV volume rows reach the sound layer at boot [M
         // LS_LoadGlobalSettings 0x1cdbc8:69-70 — the loaded settings call
         // SFXMusicSetVolume/SFXSetVolume].

@@ -233,6 +233,10 @@ pub const PAGE_CHEAT_MEDAL: u32 = 0x4000_004c;
 /// How many page ticks a Screen Adjust press keeps its arrow lit (the port's press-edge stand-in
 /// for the game's while-held +0x142 [S]).
 pub const SCREEN_ADJUST_HELD_TICKS: u8 = 6;
+/// The option-map keys carrying the picture offset (`PS2ScreenXPos` 0x30c75c / `PS2ScreenYPos`
+/// 0x30c760 [M symtab] — the globals' own addresses, outside every row control's 0x10000000 range).
+pub const OPT_SCREEN_X: u32 = 0x0030_c75c;
+pub const OPT_SCREEN_Y: u32 = 0x0030_c760;
 
 // ── mp-menu-flow: the multiplayer front-end pages ─────────────────────────────────────────────
 // All 13 PAGE records verified in the disc's menu-def (08000002 in 07000048.bin, parsed 2026-10-15 —
@@ -3138,6 +3142,7 @@ impl FrontEnd {
             // objective-hints (each new field on its own line [WORKLOG lesson 4]).
             pause_objectives_sel: 0,
             pause_hint: None,
+            // pause-hint (each new field on its own line [WORKLOG lesson 4]).
             // fix-save-profile (each new field on its own line [WORKLOG lesson 4]).
             profile_dir: None,
             profiles: Vec::new(),
@@ -4132,10 +4137,30 @@ impl FrontEnd {
     }
 
     /// The picture offset as fractions of the visible picture: (X/2560, Y/448) [M §3]. The renderer
-    /// multiplies by its own viewport size; the DIRECTION of the shift on the TV is the report's
-    /// live check (DISPLAY's DX/DY select where the read starts).
+    /// (`gpu::screen_adjust_viewport`) moves the whole frame by it: + X right, + Y down — DISPLAY2's
+    /// DX/DY place the display area on the monitor, and the page's ◀ / ▲ lower them [M Scroll_Update
+    /// 0x221b20 + C_SBSCREEN 0x217b08; S GS manual for the DX/DY meaning].
     pub fn screen_offset_frac(&self) -> (f32, f32) {
         (self.screen_x as f32 / 2560.0, self.screen_y as f32 / 448.0)
+    }
+
+    /// The option map with the picture offset folded in: the game saves `psiGetScreenPos`'s X/Y in
+    /// the global settings blob next to the AV values [M LS_MakeGlobalSettings 0x1cd9d0], so the
+    /// port's option file carries them under [`OPT_SCREEN_X`] / [`OPT_SCREEN_Y`] (settings.rs).
+    pub fn opts_with_screen(&self) -> std::collections::HashMap<u32, i32> {
+        let mut o = self.opts.clone();
+        o.insert(OPT_SCREEN_X, self.screen_x);
+        o.insert(OPT_SCREEN_Y, self.screen_y);
+        o
+    }
+
+    /// Takes a loaded option map: the rows' values, and the picture offset the load restores —
+    /// `LS_LoadGlobalSettings` 0x1cdbc8 pulls X/Y and calls `psiSetScreenPos(x, y)` [M], clamped to
+    /// psiAdjustScreenPos' limits (±0x1b0, ±0x30 [M 0x10b890]) since the file is hand-editable.
+    pub fn set_opts(&mut self, opts: std::collections::HashMap<u32, i32>) {
+        self.screen_x = opts.get(&OPT_SCREEN_X).copied().unwrap_or(0).clamp(-0x1b0, 0x1b0);
+        self.screen_y = opts.get(&OPT_SCREEN_Y).copied().unwrap_or(0).clamp(-0x30, 0x30);
+        self.opts = opts;
     }
 
     /// The view aspect the game's camera writes at viewer+0x114: 16/9 (0x3fe38e39) with the
@@ -4522,6 +4547,37 @@ impl FrontEnd {
         } else { false }
     }
 
+    /// pause-hint: ✕ on the OBJECTIVES tab — `C_GCPAUSE_Handler` 0x204408's control-1 0x4b arm
+    /// [M 0x205b98-0x205c34]: the selected row's record hint (−1 → 0x31d), control 8 hidden, then
+    /// `Menu_CreateOptionBox(player, hint, 10, 1, 0)` pushes page 0x4000002f over the pause
+    /// (msg 0x44 arg 2 keeps the pause page drawn beneath [M Manager_SendMessage 0x21c858 case
+    /// 0x44: bit 2 parks it in +0x1c0, still updated each frame [M MenuManager_Update
+    /// 0x21c3d8]]) and re-keys the sound gates to the box page's (`Menu_EnableSounds` → 9
+    /// [M 0x1f31f0 default arm]). The box is sized for this hint's own lines
+    /// (`fe_pages::HintBoxView::size_lines`). Returns false with no rows.
+    pub fn open_objective_hint(&mut self) -> bool {
+        let n = self.pause_objectives.len();
+        if n == 0 { return false; }
+        let hint = self.pause_objectives[self.pause_objectives_sel.min(n - 1)].hint;
+        // No-hint records (−1 = 0xffffffff) show label 0x31d [M 0x204408 `if (iStack_304 == -1)
+        // iStack_304 = 0x31d`].
+        let hint = if hint == 0xffff_ffff { 0x31d } else { hint };
+        self.pause_hint = Some(hint);
+        self.enabled_sound_flags = menu_enable_sounds(crate::fe_pages::HINTBOX_PAGE);
+        true
+    }
+
+    /// pause-hint: the box closes — its OK row (✕, msg 0x4b: option_return = the row's value 3)
+    /// or a cancel (△, msg 0x6d: option_return 4) both send the manager msg 0x5f [M
+    /// C_LBMSGOPTIONS_Handler 0x2022a0], whose stack pop sends 0x44 back to the pause page
+    /// (`Menu_EnableSounds(0x4000004b)` → 0xb [M 0x21c858 case 0x5f → case 0x44]); the pause
+    /// page's next 0x50 sees the non-zero option_return and re-shows control 8 [M P_PAUSE_Handler
+    /// 0x203c28:19-24].
+    pub fn close_objective_hint(&mut self) {
+        self.pause_hint = None;
+        self.enabled_sound_flags = menu_enable_sounds(PAGE_PAUSE);
+    }
+
     /// A mission ended [M Mission_Update 0x182c60]. Cases 2/3 (failed) and 6 (complete) only set
     /// `LevelToEndTo` and count down; case 4 then splits on MissionState [M :65-81]:
     /// - complete (MissionState 6): +0x1c = 0x40000036, `ResetMap_LevelToLoad(LevelToEndTo, 0, 0)`
@@ -4613,16 +4669,15 @@ impl FrontEnd {
             // silver (≥ +8): target +0xc, name 0x2c9, label 0x2cd, emblem 0x3000140 [M :119-125];
             // bronze (≥ +4): target +8, name 0x2ca, label 0x2ce, emblem 0x300013d [M :111-117];
             // none: target +4, name 0x10001fd (composed), label 0x2cf, emblem 0x300019a [M :104-110].
-            let (medal_label, target, target_label, emblem, medal) = if s.last >= th[3] {
-                (0x2c7u32, th[3], 0x2ccu32, 0x0300_013fu32, 4u32)
-            } else if s.last >= th[2] {
-                (0x2c8, th[3], 0x2cc, 0x0300_013e, 3)
-            } else if s.last >= th[1] {
-                (0x2c9, th[2], 0x2cd, 0x0300_0140, 2)
-            } else if s.last >= th[0] {
-                (0x2ca, th[1], 0x2ce, 0x0300_013d, 1)
-            } else {
-                (0x100_01fd, th[0], 0x2cf, 0x0300_019a, 5)
+            // The tier is the shared compare chain (nf_game::progress::results_medal), so the
+            // page, GetScore's port and the level-end hand-off cannot disagree.
+            let medal = nf_game::progress::results_medal(s.last, th);
+            let (medal_label, target, target_label, emblem) = match medal {
+                4 => (0x2c7u32, th[3], 0x2ccu32, 0x0300_013fu32),
+                3 => (0x2c8, th[3], 0x2cc, 0x0300_013e),
+                2 => (0x2c9, th[2], 0x2cd, 0x0300_0140),
+                1 => (0x2ca, th[1], 0x2ce, 0x0300_013d),
+                _ => (0x100_01fd, th[0], 0x2cf, 0x0300_019a),
             };
             // The medal plate's text [M :144-158]: a real medal binds its name; the no-medal line
             // is a FORMAT string (Txt 0x10001fd, "%s") filled with the codename when the buffer
@@ -5683,7 +5738,11 @@ impl FrontEnd {
         // row reading; the ScreenAdjust bars select nothing]. The host drains `sfx_out`.
         match a {
             Action::Confirm if self.sfx_selectable() => self.sfx(MENU_SOUND_SELECT, SFX_MENU_TICK),
-            Action::Back => self.sfx(MENU_SOUND_BACK, SFX_MENU_VAL_INC),
+            // pause-hint: under the hint box the △ never reaches the manager's buzz — the box was
+            // pushed with msg 0x44 bit 2 (+0x1d3 = 1 skips MenuManager_Update's pop arm [M
+            // 0x21c3d8:78-105]); the focused list's scroll takes it with MENU_SOUND 9, silence
+            // [M Scroll_Update 0x221b20:455-458].
+            Action::Back if !(self.page == Page::Pause && self.pause_hint.is_some()) => self.sfx(MENU_SOUND_BACK, SFX_MENU_VAL_INC),
             Action::Side if self.sfx_selectable() => self.sfx(MENU_SOUND_SIDE_CIRCLE, SFX_MENU_TICK),
             _ => {}
         }
@@ -6375,15 +6434,23 @@ impl FrontEnd {
                 // cancel (0x6d) pops it [M C_LBMSGOPTIONS_Handler 0x2022a0]; the page handler
                 // then re-shows the list on msg 0x50 [M P_PAUSE_Handler 0x203c28:19-24 —
                 // option_return != 0 → control 8 0x2b(0); the ok-only box returns 3 on OK and 4
-                // on cancel, both non-zero] — the port just clears the field. Everything else
-                // idles. The game's box is the authored TYPE-6 list control 0x10000120 on that
+                // on cancel, both non-zero] — the port closes the box (`close_objective_hint`). The game's box is the authored TYPE-6 list control 0x10000120 on that
                 // page [D census]: Menu_CreateOptionBox fills its row text via
                 // `List_SendMessage` 0x2196e8 arm 0x10 (:27-41) and calls `List_Update`
                 // 0x21a598 directly (:68) — the port's `ListState` + this modal stand in for
                 // that flow.
+                // pause-hint: the box's input is the focused list's embedded scroll [M
+                // Scroll_Update 0x221b20, run from List_Update]: ✕ plays MENU_SOUND 0 (the gate
+                // is the box page's 9 → 0x1da, played above) and sends 0x4b; △ plays MENU_SOUND 9
+                // (silence) and sends 0x6d; ~V steps the one-row range 0..0, which wraps (+0x144 =
+                // 1 from Scroll_Init 0x2214f0's init arm) onto the same row with MENU_SOUND 3 (up,
+                // 0x1d8) / 4 (down, 0x1d9) and a msg 0x49 nothing handles [M :188-204]. Nothing
+                // else reaches the pause page (its controls test the focus, which is the box's).
                 if self.pause_hint.is_some() {
                     match a {
-                        Action::Confirm | Action::Back => { self.pause_hint = None; return true; }
+                        Action::Confirm | Action::Back => { self.close_objective_hint(); return true; }
+                        Action::Up => { self.sfx(MENU_SOUND_VAL_DEC, SFX_MENU_VAL_DEC); return false; }
+                        Action::Down => { self.sfx(MENU_SOUND_VAL_INC, SFX_MENU_VAL_INC); return false; }
                         _ => return false,
                     }
                 }
@@ -6393,15 +6460,7 @@ impl FrontEnd {
                 if self.pause_tab == 1 {
                     let n = self.pause_objectives.len();
                     match a {
-                        Action::Confirm => {
-                            if n == 0 { return false; }
-                            let sel = self.pause_objectives_sel.min(n - 1);
-                            let hint = self.pause_objectives[sel].hint;
-                            // No-hint records (−1 = 0xffffffff) show label 0x31d instead
-                            // [M 0x204408 `if (iStack_304 == -1) iStack_304 = 0x31d`].
-                            self.pause_hint = Some(if hint == 0xffff_ffff { 0x31d } else { hint });
-                            return true;
-                        }
+                        Action::Confirm => return self.open_objective_hint(),
                         Action::Up if n > 0 => { if self.pause_objectives_sel > 0 { self.pause_objectives_sel -= 1; } return true; }
                         Action::Down if n > 0 => { if self.pause_objectives_sel + 1 < n { self.pause_objectives_sel += 1; } return true; }
                         _ => {}
@@ -8821,7 +8880,8 @@ pub fn menu_overlay_fonts(fe: &FrontEnd, font: &nf_formats::hud::Font, hfont: &n
                 _ => (0x294, MP_CHARACTERS.len(), fe.mp_bot_char),
             };
             let cur = cur.min(n - 1);
-            page_header(&mut h, hfont, &bind(hdr));
+            // Scenario Options' header control is authored one unit higher (y 39) [D page 0x40000012].
+            page_header_y(&mut h, hfont, &bind(hdr), if fe.page == Page::MpOptions { 39 } else { HEADER_RECT.1 });
             panel(&mut h);
             let c = if fe.mp_row_locked(cur) { gs(0x7f7f7f, 0x60) } else { gs(0x7f7f7f, 0xff) };
             emblem_col(&mut h, fe.mp_row_preview(cur), 0x0300_00bf, c, c);
@@ -9211,6 +9271,12 @@ pub fn menu_overlay_fonts(fe: &FrontEnd, font: &nf_formats::hud::Font, hfont: &n
             // More than the game's 4 columns (16-player matches): a ranked table, one line per
             // participant, sized so every line fits above the result plate [S port layout].
             let all_rows = fe.mp_debriefing.as_ref().map_or(0, |b| b.rows.len());
+            // The frame buttons [D page 0x40000033: SET 7 — the four participant columns 0x1000015d and
+            // the result box]: a column's box stands only for a participant [M P_MPDEBRIEFING
+            // 0x212198:148-150, :206-207]; the ranked table (more than four) shows none.
+            // Drawn first: the boxes sit behind the portraits and text (layer 0x1a against their 0x19).
+            let cols = if all_rows > 4 { 0 } else { fe.mp_debriefing_rows().len() };
+            draw_page_elems(&mut h, &crate::fe_pages::debrief_frame_elems(cols), [hfont, font, mfont.unwrap_or(font)], textures);
             if all_rows > 4 {
                 let board = fe.mp_debriefing.as_ref().unwrap();
                 let (top, avail) = (112.0f32, 232.0f32);
@@ -9258,7 +9324,6 @@ pub fn menu_overlay_fonts(fe: &FrontEnd, font: &nf_formats::hud::Font, hfont: &n
             const PORTRAIT_PLACEHOLDER: [u32; 4] = [0x0300_015d, 0x0300_015c, 0x0300_0156, 0x0300_016b];
             for (i, (rank, name, tex, points, victories, deaths, total)) in fe.mp_debriefing_rows().iter().enumerate() {
                 let dx = i as f32 * 104.0;
-                plate(&mut h, mx(176.0 + dx), my(94.0), mx(96.0), my(253.0), gs(0x1e1210, 0x60));
                 let ptex = if *tex != 0 { *tex } else { PORTRAIT_PLACEHOLDER[i] };
                 tex_quad_or_plate(&mut h, textures, ptex, 184.0 + dx, 102.0, 81.0, 81.0, [32.0, 0.0, 64.0, 64.0], gs(0x7f7f7f, 0xff));
                 left_text(&mut h, font, &bind(*rank), mx(187.0 + dx), my(103.0 + 8.5 + 6.0), bright, true, 1.0);
@@ -9273,7 +9338,6 @@ pub fn menu_overlay_fonts(fe: &FrontEnd, font: &nf_formats::hud::Font, hfont: &n
                 }
             }
             }
-            plate(&mut h, mx(176.0), my(355.0), mx(408.0), my(52.0), gs(0x1e1210, 0x60));
             let (rl, mut rarg) = fe.mp_debriefing_result();
             // A bot winner has no codename in the settings: its name cell's caption stands in
             // (the line read "%s wins the match." when the Guard bot won the two-window match) [S].
@@ -9431,11 +9495,9 @@ pub fn menu_overlay_fonts(fe: &FrontEnd, font: &nf_formats::hud::Font, hfont: &n
             // binds (the level's own high score / best / upgrades) — headless has no save data, so
             // the values draw as 0.]
             page_header(&mut h, hfont, &bind(0x280));
-            // The three framed boxes [L the b0=1 frame controls (68,120,505×34), (68,162,505×113), (68,285,505×60)]:
-            // translucent black with a thin dark border (PCSX2 07000048 Records, 2026-10-13). No ring art.
-            for (x, y, w, hh) in [(68.0f32, 120.0f32, 505.0f32, 34.0f32), (68.0, 162.0, 505.0, 113.0), (68.0, 285.0, 505.0, 60.0)] {
-                frame640(&mut h, x, y, w, hh);
-            }
+            // The three frame buttons [D page 0x4000003a: type 1, SET 0xc at (68,120,505×34), SET 7 at
+            // (68,162,505×113) and (68,285,505×60)] draw their sprite sets (crate::fe_pages::FRAME_BUTTONS).
+            draw_page_elems(&mut h, &crate::fe_pages::page_frame_elems(PAGE_RECORDS), [hfont, font, mfont.unwrap_or(font)], textures);
             let m = fe.cursor.min(CAMPAIGN.len() - 1);
             // The spinner 0x10000174 (132,124,376×16): the mission name centred, a yellow ◀ ▶ at its ends (PCSX2:
             // x 144 / 497) [M P_DSRECORDS 0x217248:11-13 fills it from sp_level].
@@ -9475,6 +9537,10 @@ pub fn menu_overlay_fonts(fe: &FrontEnd, font: &nf_formats::hud::Font, hfont: &n
             // RewardsTable+0x30..+0x3c, caption msg 0x18 from +0x1c..+0x28, hidden until their
             // cumulative medal chain); the logo. The stamp UVs are the draw pass's to verify.]
             page_header(&mut h, hfont, &bind(0x281));
+            // The five frame buttons [D page 0x4000003b: type 1, SET 7 — the spinner box (68,84,505×34)
+            // and the reward rows 0x100001da..dd (68,121/193/265/337,505×69)]; every one stays shown
+            // (C_RBDSREWARDS hides the stamps and captions, not the boxes [M 0x20c248]).
+            draw_page_elems(&mut h, &crate::fe_pages::page_frame_elems(PAGE_REWARDS), [hfont, font, mfont.unwrap_or(font)], textures);
             let m = fe.cursor.min(CAMPAIGN.len() - 1);
             label(&mut h, font, &bind(CAMPAIGN[m].1), 132.0, 93.0, 376.0, 16.0, bright, true, 1.0);
             for (i, (shown, cap, tex)) in fe.reward_rows(m).into_iter().enumerate() {
@@ -9630,8 +9696,7 @@ pub fn menu_overlay_fonts(fe: &FrontEnd, font: &nf_formats::hud::Font, hfont: &n
                 (fe.secret.typed.as_str(), Some(fe.secret.cursor))
             };
             page_header(&mut h, hfont, &bind(title));
-            frame640(&mut h, 117.0, 126.0, 406.0, 42.0);
-            frame640(&mut h, 117.0, 161.0, 407.0, 191.0);
+            draw_page_elems(&mut h, &crate::fe_pages::page_frame_elems(PAGE_CN_NAME), [hfont, font, mfont.unwrap_or(font)], textures);
             centred(&mut h, font, -2, typed, mx(117.0 + 203.0), my(135.0 + 8.0 + 3.0), cream, true, 1.0);
             let off = gs(0x73330f, 0x80);
             for (i, &(x, y, w, hh)) in CNNAME_CELLS.iter().enumerate() {
@@ -9667,6 +9732,9 @@ pub fn menu_overlay_fonts(fe: &FrontEnd, font: &nf_formats::hud::Font, hfont: &n
         // draw pass's.
         Page::CnControls => {
             page_header(&mut h, hfont, &bind(0x1f3));
+            // The page's frame buttons [D page 0x40000022: the style band (53,104,535×32) SET 0xc and
+            // the Y-axis button 0x100000c9 (461,109,99×25) SET 7].
+            draw_page_elems(&mut h, &crate::fe_pages::page_frame_elems(PAGE_CN_CONTROLS), [hfont, font, mfont.unwrap_or(font)], textures);
             cn_controls_rows(&mut h, fe, font, lang);
             hint_bar(&mut h, font, &hint(0x497, "~A Confirm  ~H Change  ~B Back"), 50.0, 419.0, cream);
             logo_stamp(&mut h);
@@ -9740,6 +9808,9 @@ pub fn menu_overlay_fonts(fe: &FrontEnd, font: &nf_formats::hud::Font, hfont: &n
                 match &e.what {
                     crate::fe_pages::ElemWhat::Text { label: Some(0x2c5), s, .. } => page_header(&mut h, hfont, s),
                     crate::fe_pages::ElemWhat::Text { label: Some(0x2d0), .. } => hint_bar(&mut h, font, &hint(0x2d0, "~A Continue"), 50.0, 419.0, cream),
+                    // The corner stamp: the stats/results pages' draw (its forced unscaled
+                    // (340,198) rect clipped at the 512-wide screen, behind the text).
+                    _ if e.ctrl == 0x1000_0224 => corner_stamp(&mut h),
                     _ => draw_page_elems(&mut h, std::slice::from_ref(e), [hfont, font, mfont.unwrap_or(font)], textures),
                 }
             }
@@ -9794,6 +9865,15 @@ pub fn menu_overlay_fonts(fe: &FrontEnd, font: &nf_formats::hud::Font, hfont: &n
 
 /// A game colour word 0xRRGGBBAA as the overlay's colour: the channels over 0x80 = 1.0 and the
 /// alpha byte clamped to 0x80 [M Label_Update 0x218cb8:116-121].
+/// A menu sprite's colour word as the GS gets it: `psiDrawSprites` 0x120e68 hands the sprite's
+/// alpha byte over halved (`srl v1,v1,1` at 0x120fe0, stored to SpriteColourA 0x30d70f at
+/// 0x121004) [M], so 0xff draws at 0x7f/128 and the option box's 0x0000007f at 0x3f/128.
+/// [L the 07000005 hint box halves the pause backdrop behind it: 0.49-0.50 on six samples.]
+pub fn sprite_colour(c: u32) -> [f32; 4] {
+    let [r, g, b, _] = word_colour(c);
+    [r, g, b, ((c & 0xff) >> 1) as f32 / 128.0]
+}
+
 fn word_colour(c: u32) -> [f32; 4] {
     [(c >> 24) as f32 / 128.0, ((c >> 16) & 0xff) as f32 / 128.0, ((c >> 8) & 0xff) as f32 / 128.0, ((c & 0xff).min(0x80)) as f32 / 128.0]
 }
@@ -9830,7 +9910,6 @@ fn draw_page_elems(h: &mut Hud, elems: &[crate::fe_pages::PageElem], fonts: [&nf
                 let p = |q: [f32; 2]| HudVertex { p: q, uv: [0.0, 0.0], c };
                 h.ndc_solid(-12, [p([a[0], a[1]]), p([b[0], a[1]]), p([b[0], b[1]]), p([a[0], a[1]]), p([b[0], b[1]]), p([a[0], b[1]])], c);
             }
-            ElemWhat::Frame => frame640(h, x * MW / SW, y * MH / SH, w * MW / SW, hh * MH / SH),
             ElemWhat::Pen { s, face, shadow } => {
                 if s.trim().is_empty() || c[3] <= 0.0 { continue; }
                 let fi = (*face as usize).clamp(1, 3) - 1;
@@ -10068,8 +10147,10 @@ fn pause_page(h: &mut Hud, fe: &FrontEnd, font: &nf_formats::hud::Font, lang: Op
             // (PCSX2 m22, 2026-10-15: "• Breach the castle walls", the bullet at x 137, the text at 149, middle y 159);
             // the list's selection starts on the LAST row [M :271 msg 0x1d = count−1] and moves with ~V — the
             // yellow arrow follows fe.pause_objectives_sel (objective-hints).
-            let n = fe.pause_objectives.len().min(8);
-            for (i, o) in fe.pause_objectives.iter().enumerate().take(8) {
+            // pause-hint: the hint box hides the list (control 8 msg 0x2b 1 before the box opens
+            // [M 0x204408 0x205bf0]; msg 0x50 re-shows it after the close [M 0x203c28:19-24]).
+            let n = if fe.pause_hint.is_some() { 0 } else { fe.pause_objectives.len().min(8) };
+            for (i, o) in fe.pause_objectives.iter().enumerate().take(n) {
                 let y = 159.0 + i as f32 * 22.0;
                 let marker = if o.done { "~J" } else { "~I" };
                 glyph_row(h, font, &format!("{marker} {}", lbl(o.text, "(objective)")), 135.0, y - 9.0, bright);
@@ -10132,6 +10213,170 @@ fn pause_page(h: &mut Hud, fe: &FrontEnd, font: &nf_formats::hud::Font, lang: Op
     // PC: the CONTROLS tab's hint is the keyboard's (the pad's "○ Invert" has no meaning here).
     let hint_text = if tab == 2 && !(fe.confirming_restart || fe.confirming_quit) { "~H Next  ~B Back".to_string() } else { hint_wrap(lang, hint_id, hint_fb) };
     hint_row_s(h, font, &hint_text, 45.0, 341.0 + 2.5, gs(0x0d0904, 0xff), None, false); // middle 352 (m21–m27)
+    // pause-hint: the objective-hint option box over the page (fe_pages::hintbox_elems).
+    if let Some(view) = pause_hint_view(fe, font, lang) {
+        draw_hint_box(h, &crate::fe_pages::hintbox_elems(&view), font, textures);
+    }
+}
+
+/// pause-hint: the hint box's view this frame — [`hint_box_view`] over the open hint's text and
+/// the OK row (Txt 0x266). None while no box is up.
+pub fn pause_hint_view(fe: &FrontEnd, font: &nf_formats::hud::Font, lang: Option<&Lang>) -> Option<crate::fe_pages::HintBoxView> {
+    let hint = fe.pause_hint?;
+    let bind = |id: u32| -> String { lang.and_then(|l| l.bind(id)).unwrap_or("").to_string() };
+    Some(hint_box_view(&bind(hint), &bind(crate::fe_pages::HINTBOX_OK_LABEL), font))
+}
+
+/// pause-hint: the option box's view for `text` — wrapped at memo w − 16 in FONTSerpLight (the
+/// pause page's `font`) by [`font_word_wrap`], the box sized for those same lines, the two
+/// pitches from the face's extent height and the OK row `ok`.
+///
+/// The size count is the box's OWN text, the first box of a pause included [M]:
+/// `Menu_CreateOptionBox` 0x1f9608 sends the memo its text (msg 0x18 stores +0x1dc whether or not
+/// it re-lays the memo [M Memo_SendMessage 0x21e108 case 0x18]), then pushes the box page with
+/// msg 0x44 (jal 0x21c858 at 0x1f9770). The 0x44 clears the new page's +0x7a and, after its
+/// page loop, runs `Page_Update(manager, manager+0x1bc, 0)` on it unconditionally [M
+/// Manager_SendMessage 0x21c858: jal 0x21edc8 at 0x21cf30, a1 = +0x1bc in the delay slot
+/// 0x21cf34, reached when the loop exits at 0x21cf20]. Page_Update's control walk (the manager is
+/// live, +0x1d1 = 1 [M MenuManager_Create 0x21b908:132]) calls `Menu_Update` (jal 0x1f1dc0 at
+/// 0x21f028) → `Memo_Update` 0x21e490 with the page visible, which wraps +0x1dc and counts
+/// +0x281 [M :154-220]. The msg 0x65 that sizes the box (jal 0x1f1c18 at 0x1f980c) comes after.
+/// [L the 07000005 pause: the first box, the reopened box and the second pause's first box
+/// are identical and fit their text.]
+pub fn hint_box_view(text: &str, ok: &str, font: &nf_formats::hud::Font) -> crate::fe_pages::HintBoxView {
+    use crate::fe_pages::{hintbox_list_stride, hintbox_memo_stride, HintBoxView, HINTBOX_MEMO};
+    let m = crate::fe_pages::control_rect(HINTBOX_MEMO.0, 200, HINTBOX_MEMO.1, HINTBOX_MEMO.2, HINTBOX_MEMO.3, HINTBOX_MEMO.4);
+    // The memo's wrap width: w − (the SET 2 insets 0 + 0x10) − 0 [M Memo_Update 0x21e490:174-177].
+    let lines: Vec<(String, f32)> = font_word_wrap(text, font, (m[2] - 16) as f32)
+        .into_iter().map(|l| { let w = font.layout(&l, 0.0, 0.0).1; (l, w) }).collect();
+    let size_lines = lines.len() as u32;
+    let okw = font.layout(ok, 0.0, 0.0).1;
+    let fh = font.line_height();
+    HintBoxView { lines, size_lines, memo_stride: hintbox_memo_stride(fh), list_stride: hintbox_list_stride(fh), ok: (ok.to_string(), okw) }
+}
+
+/// `Font_WordWrapString` 0x1ef178 at scale 1, called until the text runs out (Memo_Update's loop
+/// [M 0x21e490:166-224]). Each call takes one line:
+/// - Before each character it stops once the running measure has reached `max_w`
+///   (`if (width <= acc) break`), so the character that crosses the width is still counted and
+///   the stop lands on the next one.
+/// - A space or tab sets the break point (just after it) and adds nothing to the measure.
+/// - Every other character adds w + pre + post + kern(prev, c) + 1 for its glyph (+4, +0xa, +0xc
+///   of the 0x18-byte record) [M :129-146]. 0x92 measures as 0x27.
+/// - A newline ends the line there.
+/// - Stopping cuts the line back to the last break point. With none, it cuts one character
+///   short of the stop.
+/// - Running off the end of the text keeps it all: the width is not checked after the last
+///   character.
+///
+/// The returned lines drop the break's trailing space (the drawn extent is the port's
+/// `Font::layout`; the PS2 frames show the broken lines centred like the last one).
+///
+/// The game's measure differs from `Font::layout`, which charges spaces 1.25 × the space advance
+/// and has no +1 per glyph. On 07000005's first hint, "...through the front door," is 370 by
+/// this measure, over the memo's 368, and 357 by `layout`. [L the PS2 breaks after "front".]
+pub fn font_word_wrap(s: &str, font: &nf_formats::hud::Font, max_w: f32) -> Vec<String> {
+    let chars: Vec<char> = s.chars().collect();
+    let mut out = Vec::new();
+    let mut start = 0usize;
+    // Font_WordWrapString returns no line for an empty string [M :101-103].
+    while start < chars.len() {
+        let rest = &chars[start..];
+        let (mut acc, mut brk, mut prev, mut i) = (0.0f32, 0usize, 0u32, 0usize);
+        let mut stopped = false;
+        let mut newline = false;
+        while i < rest.len() {
+            if max_w <= acc { stopped = true; break; }
+            let c = rest[i];
+            i += 1;
+            let code = match c as u32 { 0x92 | 0x2019 => 0x27, v => v };
+            match c {
+                '\t' | ' ' => brk = i,
+                '\n' => { brk = i; newline = true; break; }
+                _ => if let Some(g) = game_glyph(font, code) {
+                    acc += game_kern(font, code, prev) + g.pre as f32 + g.post as f32 + g.w as f32 + 1.0;
+                },
+            }
+            prev = code;
+        }
+        let end = if newline || stopped {
+            if brk == 0 { if stopped { i.saturating_sub(1) } else { brk } } else { brk }
+        } else { rest.len() };
+        if end == 0 { break; } // the game returns no line and Memo_Update stops [M :167]
+        let line: String = rest[..end].iter().collect();
+        out.push(line.trim_end_matches(['\n', ' ', '\t']).to_string());
+        start += end;
+    }
+    out
+}
+
+/// The glyph `Font_WordWrapString` / `Font_GetKernAdjust` look up for `code`: none outside the
+/// font's first..last, else the binary search over the code-sorted table — an exact hit, or the
+/// record the search ends on [M 0x1ef178:116-139].
+fn game_glyph(font: &nf_formats::hud::Font, code: u32) -> Option<&nf_formats::hud::Glyph> {
+    if code < font.first as u32 || code > font.last as u32 { return None; }
+    let (mut lo, mut hi) = (0i32, font.glyphs.len() as i32);
+    let mut mid = hi;
+    while lo <= hi {
+        mid >>= 1;
+        let g = font.glyphs.get(mid as usize)?;
+        if code < g.code as u32 { hi = mid - 1; } else if code == g.code as u32 { return Some(g); } else { lo = mid + 1; }
+        mid = lo + hi;
+    }
+    if hi < 0 { None } else { font.glyphs.get(hi as usize) }
+}
+
+/// `Font_GetKernAdjust` 0x1ee298(c, prev): prev's glyph's kern pairs, walked in order — the
+/// first pair whose character is below `c` ends the walk with 0, a match returns its signed
+/// adjustment. `c` is a signed char: 0x80 and above get 0.
+fn game_kern(font: &nf_formats::hud::Font, c: u32, prev: u32) -> f32 {
+    if c >= 0x80 || (c as u16) < font.first || (c as u16) > font.last { return 0.0; }
+    let Some(g) = game_glyph(font, prev & 0xff) else { return 0.0 };
+    for &(k, adj) in &g.kerns {
+        if (k as u32) < c { return 0.0; }
+        if k as u32 == c { return adj as f32; }
+    }
+    0.0
+}
+
+/// pause-hint: draws the box's elements above the pause page — the game pushes the box page at
+/// layer 5 and parks the pause page at −5 [M Manager_SendMessage 0x21c858 case 0x44: the new
+/// page's +0x78 = 5, the old one's 0xfffb], so the whole box is on top: the fill under its own
+/// text, both under nothing of the pause page's (lower HUD layers draw later).
+fn draw_hint_box(h: &mut Hud, elems: &[crate::fe_pages::PageElem], font: &nf_formats::hud::Font, textures: &[(u32, crate::scene::TextureImage)]) {
+    use crate::fe_pages::ElemWhat;
+    for e in elems {
+        let [x, y, w, hh] = e.rect.map(|v| v as f32);
+        let c = word_colour(e.colour);
+        if c[3] <= 0.0 { continue; }
+        match &e.what {
+            ElemWhat::Tex { tex, uv } => {
+                let c = sprite_colour(e.colour);
+                if textures.iter().any(|(t, _)| t == tex) {
+                    h.quad(Anchor::Centre, -6, *tex, 0, x, y, w, hh, *uv, (false, false), c);
+                } else {
+                    let (a, b) = (h.ndc(Anchor::Centre, x, y), h.ndc(Anchor::Centre, x + w, y + hh));
+                    let p = |q: [f32; 2]| HudVertex { p: q, uv: [0.0, 0.0], c };
+                    h.ndc_solid(-6, [p([a[0], a[1]]), p([b[0], a[1]]), p([b[0], b[1]]), p([a[0], a[1]]), p([b[0], b[1]]), p([a[0], b[1]])], c);
+                }
+            }
+            ElemWhat::Pen { s, shadow, .. } if s.contains('~') => {
+                // A line with a button token (the OK row's Txt 0x266 "Press ~A to Continue"): the
+                // menu text renderer draws the token through `specialchar` [M Font_DrawText's ~
+                // codes]; the port's hint-row path shows the PC key for it (`pc_key`). Centred on the
+                // line's own centre; its quads move under the box's layers.
+                let n0 = h.quads.len();
+                hint_row_s(h, font, s, (x + w * 0.5) * MW / SW - 270.0, y * MH / SH - 15.0, c, None, *shadow);
+                for q in &mut h.quads[n0..] { q.layer -= 6; }
+            }
+            ElemWhat::Pen { s, shadow, .. } => {
+                if s.trim().is_empty() { continue; }
+                let x0 = font.layout(s, 0.0, 0.0).0.first().map(|p| p.x).unwrap_or(0.0);
+                h.text_scaled_tex(Anchor::Centre, font, -7, 0x0300_0003, s, x - x0, y, false, c, *shadow, 1.0);
+            }
+            _ => {}
+        }
+    }
 }
 
 /// fix-pause-menu2: a menu-space text row with the specialchar glyphs inline (the "~A Label" rows of
@@ -10380,8 +10625,11 @@ fn stats_list(h: &mut Hud, font: &nf_formats::hud::Font, rows: &[(String, String
 /// lands UNSCALED in the 512×448 screen: the capture's edge points (500,412)…(630,376) of 640×480
 /// fit the texture's curve drawn 1:1 at (340,198) of 512×448 within ±3 units [L PCSX2 07000004 finish,
 /// 2026-10-31], and the list pages' (539,393) copy is off-screen there — PCSX2 shows nothing on those
-/// pages [L m06/m10/m12]. Why this control skips the 640→512 scale is open (docs/UNKNOWNS.md). Layer
-/// f1 0x2d: behind the list plates (0x28) and the text.
+/// pages [L m06/m10/m12]. It skips the 640→512 scale because `MenuManager_Create`'s placement arms
+/// are an if / else-if chain: the id-0x10000224 arm writes (0x154, 0xc6) and so never reaches the
+/// `FixupResolution` arm, and its 255×255 size stays authored [M 0x21b908:305-314] (U-052, settled).
+/// The results/stats pages and the 007 Bonus page (same control, same data) share this draw.
+/// Layer f1 0x2d: behind the list plates (0x28) and the text.
 /// Only the part inside the 512-wide screen is drawn: on PS2 the rest is off-screen, and the wide
 /// window would otherwise show the curve running on past the backdrop's right edge.
 fn corner_stamp(h: &mut Hud) {
@@ -10482,6 +10730,8 @@ pub fn mp_textures() -> &'static [u32] {
             .chain([0x0300_00d8u32, crate::fe_pages::CREDITS_BG_TEX])
             // The card box's frame atlas (SET 0xe [D 08000002]) — P_PARISENUM's box.
             .chain([crate::fe_pages::ATLAS_BOX])
+            // SET 0xc's atlas — the Records / Controls title band [D 08000002].
+            .chain([crate::fe_pages::ATLAS_SETC])
             .filter(|h| *h != 0 && !MENU_TEXTURES.contains(h)).collect();
         v.sort_unstable(); v.dedup(); v
     })
@@ -10569,9 +10819,13 @@ fn cn_controls_rows(h: &mut Hud, fe: &FrontEnd, font: &nf_formats::hud::Font, la
     let mid0 = 109.0 + 12.0;
     centred(h, font, -2, &value_txt(0), mx(60.0 + 158.0), my(mid0 + 6.0), if sel0 { on } else { off }, true, sc);
     if sel0 { arrow(h, 70.0, mid0, true); arrow(h, 356.0, mid0, false); }
-    // The Y-Axis label and its value control.
+    // The Y-Axis label and its value control. Both are cream whatever the focus: the label
+    // 0x10000001 LBL 0x492 (376,113,83×16) and the button 0x100000c9's label carry 0x645a49ff in
+    // both msg 0x1b and 0x1c [D page 0x40000022], and P_CNCONTROLS_Handler sends them no colour
+    // [M 0x213cd0 — only the value text (0x3bd / 0x206) via msg 0x18]. The option-row pair
+    // (cream / 0x73330fc0) is the style list 0x10000025's own [D its msg 0x1b / 0x1c].
     let mid1 = 109.0 + 12.5;
-    let c1 = if sel1 { on } else { off };
+    let c1 = on;
     if let Some(r) = rows.get(1) { left_text(h, font, &bind(r.label), mx(376.0), my(mid1 + 6.0), c1, true, sc); }
     centred(h, font, -2, &value_txt(1), mx(461.0 + 49.5), my(mid1 + 6.0), c1, true, sc);
     if sel1 { arrow(h, 455.0, mid1, true); arrow(h, 566.0, mid1, false); }
@@ -10688,10 +10942,33 @@ fn centred_tex(h: &mut Hud, font: &nf_formats::hud::Font, tex: u32, layer: i32, 
 /// NAME = ff 00 01 00 00 00 …]. FontTable[0] = {tex 0x03000005, FONTNFont2 0x305a58} [L
 /// ee_snapshot 0x2dd8b0].]
 fn page_header(h: &mut Hud, hfont: &nf_formats::hud::Font, s: &str) {
-    // Left-aligned at the control's x 50 at the face's own size, middle on y 48.5 (PCSX2 07000048: every header's ink
-    // starts at x 51; "Select Codename" measures 261 units).
+    page_header_y(h, hfont, s, HEADER_RECT.1);
+}
+
+/// The header control's authored rect: (50,40,376×17) on every page that has one, bar the MP
+/// Scenario Options page 0x40000012's y 39 and the 540-wide copies on 0x4000001d / 0x40000020
+/// (same x, y and h, so the same pen) [D menu-def 08000002; tests/page_titles.rs pins it].
+pub const HEADER_RECT: (i32, i32, i32, i32) = (50, 40, 376, 17);
+
+/// The header's pen (x, baseline y) in the 512×448 screen for an authored header y:
+/// `MenuManager_Create` puts the type-5 control through `FixupResolution` (50,40,376×17 → 40,37,
+/// 300×15) [M 0x21b908:305-314, 0x21b610], then `Label_Update` (no `fe` tag → left, x = ctrl.x)
+/// sets the sprite's y = (short)(ctrl.y + h/2 + extent_h·0.5 + page.y − 1), the extent height being
+/// the face's line advance (FONTNFont2: 13 + 6 + 1 = 20) [M 0x218cb8:178-205; Font_GetTextExtent
+/// 0x1ef588 → 0x1ee598:65-71]. With the page at 0: (40, 53) — the old fixed 54.5·448/480 = 50.9
+/// drew every title about 2.5 units of 480 high against the PCSX2 stats/results captures.
+pub fn page_header_pen(hfont: &nf_formats::hud::Font, y640: i32) -> (f32, f32) {
+    let [x, y, _, hh] = crate::fe_pages::control_rect(0x1000_0001, 5, HEADER_RECT.0, y640, HEADER_RECT.2, HEADER_RECT.3);
+    (x as f32, (y as f32 + (hh >> 1) as f32 + hfont.line_height() * 0.5 - 1.0).trunc())
+}
+
+/// `page_header` for a page whose header control sits at authored y `y640`.
+fn page_header_y(h: &mut Hud, hfont: &nf_formats::hud::Font, s: &str, y640: i32) {
+    // The pen at the control's x; the ink starts at the first glyph's own offset from it, as every
+    // left-aligned label draws (draw_page_elems).
+    let (px, py) = page_header_pen(hfont, y640);
     let x0 = hfont.layout(s, 0.0, 0.0).0.first().map(|p| p.x).unwrap_or(0.0);
-    h.text_scaled_tex(Anchor::Centre, hfont, -1, 0x0300_0005, s, mx(50.0) - x0, my(48.5 + 6.0), false, gs(CREAM, 0xff), true, 1.0);
+    h.text_scaled_tex(Anchor::Centre, hfont, -1, 0x0300_0005, s, px - x0, py, false, gs(CREAM, 0xff), true, 1.0);
 }
 
 /// The panel behind the rows [M pages 0x40000025/0x40000023/0x4000001c/0x4000002b control (50,53,590×295)
@@ -11036,23 +11313,6 @@ fn quad_uv(h: &mut Hud, tex: u32, x: f32, y: f32, w: f32, hh: f32, uv: [f32; 4],
 
 /// A flat coloured plate (the menu backdrop / the confirm box), inside the centred 4:3 band — see
 /// `quad640` [L PCSX2 captures].
-/// A 640-space framed box: a translucent black fill and a thin dark border (the b0=1 frame controls, PCSX2 07000048
-/// Records 2026-10-13).
-fn frame640(h: &mut Hud, x: f32, y: f32, w: f32, hh: f32) {
-    let rect = |h: &mut Hud, x0: f32, y0: f32, x1: f32, y1: f32, layer: i32, c: [f32; 4]| {
-        let (a, b) = (h.ndc(Anchor::Centre, mx(x0), my(y0)), h.ndc(Anchor::Centre, mx(x1), my(y1)));
-        let q = |p: [f32; 2]| HudVertex { p, uv: [0.0, 0.0], c };
-        let v = [q([a[0], a[1]]), q([b[0], a[1]]), q([b[0], b[1]]), q([a[0], a[1]]), q([b[0], b[1]]), q([a[0], b[1]])];
-        h.ndc_solid(layer, v, c);
-    };
-    rect(h, x, y, x + w, y + hh, -1, [0.0, 0.0, 0.0, 0.55]);
-    let e = [0.04, 0.02, 0.01, 0.9];
-    rect(h, x, y, x + w, y + 1.5, -1, e);
-    rect(h, x, y + hh - 1.5, x + w, y + hh, -1, e);
-    rect(h, x, y, x + 1.5, y + hh, -1, e);
-    rect(h, x + w - 1.5, y, x + w, y + hh, -1, e);
-}
-
 fn plate(h: &mut Hud, x: f32, y: f32, w: f32, hh: f32, c: [f32; 4]) {
     let (a, b) = (h.ndc(Anchor::Centre, x, y), h.ndc(Anchor::Centre, x + w, y + hh));
     let p = |q: [f32; 2]| HudVertex { p: q, uv: [0.03, 0.03], c };

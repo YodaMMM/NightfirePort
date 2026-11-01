@@ -58,7 +58,8 @@ override NOFOG: f32 = 0.0;   // debug: 1.0 = skip the fog pass entirely
 // lp0/lp1: the frame's two closest lights' positions (psiLight_SetLights 0x10e588's TLight, w = 1);
 // lc0/lc1: their TColor rows (rgb·intensity in the game's byte scale, w = 1/r²), fix-lighting.
 // frame-240: one flat vec4 array, bound once per frame. us[0..4] = view_proj's columns, us[4..8] =
-// view_proj_rot's (the camera-rotation sky), us[8] = fog, us[9] = fogk; then one 5-vec4 slot per
+// view_proj_rot's (the camera-rotation sky), us[8] = fog, us[9] = fogk, us[10]/us[11] = the camera's
+// right/up axes in world space (the env-map rows, viewmodel-light); then one 5-vec4 slot per
 // draw, picked by the draw's instance index (slot 0 = the eye's own, the snow pass): lp0, lp1, lc0,
 // lc1, sel (sel.x > 0.5 → the rotation-only matrix).
 @group(0) @binding(0) var<storage, read> us: array<vec4<f32>>;
@@ -91,17 +92,18 @@ fn morph_pos(p0: vec3<f32>, mtb: i32, mwb: u32, cnt: u32, tend: u32) -> vec3<f32
     }
     return pos;
 }
-@vertex fn vs(@location(0) p0: vec3<f32>, @location(1) uv: vec2<f32>, @location(2) c0: vec4<f32>,
+@vertex fn vs(@location(0) p0: vec3<f32>, @location(1) uv0: vec2<f32>, @location(2) c0: vec4<f32>,
               @location(3) sa: vec2<u32>, @location(4) sw: f32, @location(5) sc: u32, @location(6) n0: vec4<f32>,
               @location(7) mtb: i32, @location(8) mm: vec2<u32>, @location(9) tend: u32,
               @builtin(instance_index) iid: u32) -> VO {
-    let b = 10u + 5u * iid;
+    let b = 12u + 5u * iid;
     let lp0 = us[b]; let lp1 = us[b + 1u]; let lc0 = us[b + 2u]; let lc1 = us[b + 3u];
     var vp = mat4x4<f32>(us[0], us[1], us[2], us[3]);
     if (us[b + 4u].x > 0.5) { vp = mat4x4<f32>(us[4], us[5], us[6], us[7]); }
     var o: VO;
     var p = p0;
     var c = c0;
+    var uv = uv0;
     // Skinned (a != 0xFFFFFFFF): w*(P[a]*p) + (1-w)*(P[b]*p), and the object's TAmbient multiplier.
     if (sa.x != 0xffffffffu) {
         // fix-gpu-facial-morphs: the morph term goes on the source position BEFORE the palette
@@ -128,7 +130,24 @@ fn morph_pos(p0: vec3<f32>, mtb: i32, mwb: u32, cnt: u32, tend: u32) -> vec3<f32
     // the program clamps the summed colour to byte 255 with MINIi (I = 255.0 loaded by the LOI at
     // I-mem 900/936, applied at 919/954) — min(·, 1.0) here. No normal (sprites, snow, the radar,
     // the flash itself): unlit.
-    if (FAR < 0.5) {
+    // viewmodel-light: the environment-map batch handler (VU1 handler 0x10, micro 0x2e2-0x33e — the
+    // chrome sheen layers of the weapon models, scene.rs `ENV_*` in nrm.w). Per vertex the VU builds
+    // ST = 0.5 + (row · n)/256 from the packed int normal (|n| ≈ 127) with the rows the matrix
+    // builders upload at data 0x10-0x13: the viewer's camera rows +0x120 (U) and +0x130 (V), × 1/256,
+    // + 0.5 [M FillMatrixChainSkin 0x122788:12-18, FillMatrixChainRot 0x122310:150-160]; the colour is
+    // TAmbient ⊙ rgba only — the handler never reads the light rows (no point lights) [M micro 0x304
+    // MUL vf18, vf12, vf17]. A skinned mesh feeds it the skinned (world) normal, a rigid/static draw
+    // its object-space normal (ENV_OBJECT ≈ 0.5 here, ENV_SKINNED = 1.0).
+    let env = n0.w > 0.25;
+    if (env && FAR < 0.5) {
+        var en = n0.xyz;
+        if (sa.x != 0xffffffffu && n0.w > 0.75) { en = sw * (pal[sa.x] * vec4<f32>(n0.xyz, 0.0)).xyz + (1.0 - sw) * (pal[sa.y] * vec4<f32>(n0.xyz, 0.0)).xyz; }
+        if (dot(en, en) > 1e-6) {
+            let k = normalize(en) * (127.0 / 256.0);
+            uv = vec2<f32>(0.5 + dot(us[10].xyz, k), 0.5 + dot(us[11].xyz, k));
+        }
+    }
+    if (FAR < 0.5 && !env) {
         var n = n0.xyz;
         if (sa.x != 0xffffffffu) { n = sw * (pal[sa.x] * vec4<f32>(n0.xyz, 0.0)).xyz + (1.0 - sw) * (pal[sa.y] * vec4<f32>(n0.xyz, 0.0)).xyz; }
         let n2 = dot(n, n);
@@ -233,6 +252,26 @@ const HUD_MAX: usize = 16384;
 /// `a·x + b·y + c·z + d ≥ 0` inside the frustum, normalised so a sphere of radius `r` centred at `p` is fully outside
 /// when `a·p.x + b·p.y + c·p.z + d < −r`.
 ///
+/// Screen Adjust's picture shift (docs/systems/screen-adjust.md §3): the game writes the offset into GS
+/// DISPLAY2 as `DX = 0x27c + PS2ScreenXPos`, `DY = 0x32 + PS2ScreenYPos` [M `VBlankInt` 0x124088:13-17], so
+/// the whole displayed frame — 3-D view, HUD, menus, movie plane — moves together; DX/DY are where the
+/// display area starts on the monitor, so a larger value moves the picture right / down [S GS manual,
+/// DISPLAY1/2 "x/y position in the display area"], and the page's ◀ / ▲ lower them [M Scroll_Update
+/// 0x221b20: ◀ (action 0x1c) / ▲ (0x1a) take the 0x40 arm, value − 1; C_SBSCREEN_Handler 0x217b08 feeds
+/// it to psiAdjustScreenPos 0x10b890]. `frac` is the offset in picture fractions (X/2560, Y/448 —
+/// MAGH 5 × 512 VCK per line, 448 lines [M the DISPLAY2 constant 0x1bf9ff02000000]); the port's picture
+/// is the 4:3 frame at the target's height (the HUD's own pixel shape, `Hud::ndc`), so the shift is
+/// `frac.x · H·4/3`, `frac.y · H` target pixels. `base` is the frame's own viewport (the cut-scene band)
+/// or None for the whole target. Returns the viewport to set, or None when nothing moves and no band
+/// stands (the pass keeps its default full-target viewport). What the shift uncovers stays at the
+/// pass's black clear — the GS shows nothing outside its display area.
+pub fn screen_adjust_viewport(target: [f32; 2], base: Option<[f32; 4]>, frac: [f32; 2]) -> Option<[f32; 4]> {
+    let (dx, dy) = (frac[0] * target[1] * 4.0 / 3.0, frac[1] * target[1]);
+    if dx == 0.0 && dy == 0.0 { return base; }
+    let [x, y, w, h] = base.unwrap_or([0.0, 0.0, target[0], target[1]]);
+    Some([x + dx, y + dy, w, h])
+}
+
 /// `view_proj` is the column-major `Mat4` produced by `glam` and stored as `[[col0], [col1], [col2], [col3]]` —
 /// `vp[i]` is the i-th column. The i-th row (what Gribb-Hartmann combines with the w-row 3) is
 /// `(vp[0][i], vp[1][i], vp[2][i], vp[3][i])`. With the right-handed Vulkan/wgpu projection used here
@@ -297,7 +336,7 @@ pub fn alpha_shaped(rgba: &[u8]) -> bool {
 struct Batch { bg: wgpu::BindGroup, snow_tex: u32, indirect: wgpu::Buffer, args: Vec<u32> }
 
 #[derive(Clone, Copy)]
-struct DrawCall { layer: crate::scene::Layer, pass: u8, pipeline: usize, tex: usize, first: u32, count: u32, centre: [f32; 3], radius: f32, cel: Option<u16>, chain: u32, node: u32, lflags: u16, skin: Option<(u32, Option<u32>)> }
+struct DrawCall { layer: crate::scene::Layer, pass: u8, pipeline: usize, tex: usize, first: u32, count: u32, centre: [f32; 3], radius: f32, cel: Option<u16>, chain: u32, node: u32, lflags: u16, skin: Option<(u32, Option<u32>)>, sky_slot: Option<(u8, bool)> }
 
 pub struct Renderer {
     hud_pipeline: wgpu::RenderPipeline,
@@ -339,6 +378,11 @@ pub struct Renderer {
     /// doorway ends open [L]). Fed by lib.rs each frame from `Scene::destroy_centres` + the sim's
     /// `props.destroy[..].dead`; empty until set (the loading screen and the pre-sim frames).
     pub destroy_dead: Vec<[u32; 3]>,
+    /// The sky's lightning swap, per frame: bit n set = `GfxList` slot n draws its flash variant this tick
+    /// (`View_DrawSky` 0x1e5ad0:122-157 — the sim's `Sky::flash_mask`). A tagged sky draw
+    /// (`Material::sky_slot`) renders only when its variant matches the slot's bit; 0 = every slot
+    /// draws its normal variant (the loading screen, the pre-sim frames).
+    pub sky_flash_mask: u32,
     /// The swap's WRECK draws, per frame: the baked wreck instances' material centres (f32
     /// bits) whose Destroy leaf is dead — the only wreck draws that render ([M Destroy_Smash
     /// 0x12bb60's `Control_SetGList(obj, tag[0])` swap: the dead object rides the destroyed
@@ -407,6 +451,11 @@ pub struct Renderer {
     /// loading picture fill the PS2's 4:3 picture [M DecodeBGFMVFrame 0x108550 — 512×448 centred]; stretched to a
     /// 16:9 window they were a third too wide). 0 = fill the target.
     pub screen_aspect: f32,
+    /// Screen Adjust: the picture offset as fractions of the PS2 picture (`FrontEnd::screen_offset_frac`
+    /// — X/2560 of the width, Y/448 of the height). The game moves the whole displayed frame by
+    /// writing `PS2ScreenXPos`/`PS2ScreenYPos` into GS DISPLAY2's DX/DY in `VBlankInt` 0x124088:13-17 [M];
+    /// `render` shifts every draw of the frame by the same amount ([`screen_adjust_viewport`]).
+    pub screen_offset: [f32; 2],
     ibuf: wgpu::Buffer,
     tex_bgs: Vec<wgpu::BindGroup>,
     /// Per texture slot: its first bind group, frame count and rate (animated textures).
@@ -506,8 +555,17 @@ impl Renderer {
         // One pipeline per draw state: blend (ALPHA_1), depth write (ZBUF_1), alpha test (TEST_1) and fog as shader
         // overrides; the pre-world sky pass ignores depth, the post-fog sky is pinned to the far plane (drawn only where
         // nothing else is).
+        // missing-scenery (0700000c's mountain range): the pre-world sky (pass 0, sky group 1) keeps its
+        // leaf's own depth state. `View_DrawSky` 0x1e5ad0 sets only the blend/tint/lights and writes no
+        // Z register [M]; every sky glist carries its own ZBUF_1 [D, all 27 on-foot archives]:
+        // 0700000c "Mountains_new1" 0x31000000 (ZMSK 0 — writes depth), "SkyBox1-terra"
+        // 0x1_31000000 (no write), under TEST_1 0x5001b (ZTE, GEQUAL). So the group-1 mountains write
+        // their depth and the post-fog skybox (group 0, pass 4 — far-pinned, LessEqual) only fills
+        // where nothing nearer was drawn. The old (Always, no write) left the far plane clear behind
+        // the mountains and the skybox painted over them: plain sky and sea where the PS2 has
+        // mountains (also 04's "mountains", 0d's "Mountains_new", the 05/06/08 Sky_Tower pieces).
         let make_pipeline = |d: Draw| {
-            let (compare, write) = match d.pass { 0 | 6 => (wgpu::CompareFunction::Always, false), 4 => (wgpu::CompareFunction::LessEqual, false), _ => (wgpu::CompareFunction::LessEqual, d.zwrite) };
+            let (compare, write) = match d.pass { 6 => (wgpu::CompareFunction::Always, false), 0 => (wgpu::CompareFunction::LessEqual, d.zwrite), 4 => (wgpu::CompareFunction::LessEqual, false), _ => (wgpu::CompareFunction::LessEqual, d.zwrite) };
             let alpha_keep = wgpu::BlendComponent { src_factor: wgpu::BlendFactor::Zero, dst_factor: wgpu::BlendFactor::One, operation: wgpu::BlendOperation::Add };
             let blend = match d.blend {
                 1 => wgpu::BlendState { color: wgpu::BlendComponent { src_factor: wgpu::BlendFactor::SrcAlpha, dst_factor: wgpu::BlendFactor::One, operation: wgpu::BlendOperation::Add }, alpha: alpha_keep },
@@ -730,7 +788,7 @@ impl Renderer {
         // entries front-to-back. `Material::chain` carries the room's build-time parse-rank fallback, `node` its
         // per-frame chain cel (u32::MAX = a distance-keyed entry).
         let draws: Vec<DrawCall> = scene.materials.iter().zip(&material_tex)
-            .map(|(m, &tex)| DrawCall { layer: m.layer, pass: m.draw.pass, pipeline: pipelines.iter().position(|(d, _)| *d == m.draw).unwrap(), tex, first: m.first_index, count: m.index_count, centre: m.centre, radius: m.radius, cel: m.cel, chain: m.chain, node: m.node, lflags: m.lflags, skin: m.skin }).collect();
+            .map(|(m, &tex)| DrawCall { layer: m.layer, pass: m.draw.pass, pipeline: pipelines.iter().position(|(d, _)| *d == m.draw).unwrap(), tex, first: m.first_index, count: m.index_count, centre: m.centre, radius: m.radius, cel: m.cel, chain: m.chain, node: m.node, lflags: m.lflags, skin: m.skin, sky_slot: m.sky_slot }).collect();
         let fog = scene.fog;
         let snow_pipeline = make_pipeline(Draw { pass: 5, blend: 1, zwrite: false, atest: 0, fog: 0 });
         // break-shards draw: normal alpha, no depth write, the alpha-list test [S: psiDrawShard's
@@ -780,7 +838,7 @@ impl Renderer {
             for ch in &cel_graph.chains { for &c in ch { if (c as usize) < n { reached[c as usize] = true; } } }
             reached.iter().map(|r| !r).collect()
         };
-        Renderer { shard_pipeline, shard_vbuf, shard_groups: Vec::new(), woman_tex, snow_pipeline, snow_vbuf, snow_bg, hud_pipeline, hud_add_pipeline, hud_sub_pipeline, hud_vbuf, hud_bgs, pipelines, fog, notex, nofog, uniform, uniform_bg, staged: Vec::new(), orphan_nodes, destroy_dead: Vec::new(), destroy_wreck_draw: Vec::new(), destroy_wreck_all: scene.destroy_wrecks.iter().map(|(c, _)| c.map(f32::to_bits)).collect(), destroy_tint: Vec::new(), batch, vbuf, skin_buf, snow_skin, pal_buf, col_buf, wts_buf, mtg_buf, skin_layout, skin_pos: Default::default(), char_light_centre: Vec::new(), lights: Default::default(), light_memo: Vec::new(), light_memo_gen: 1, light_memo_lights: Default::default(), los_memo: Vec::new(), los_memo_world: (0, 0), wreck_of: Vec::new(), wreck_of_src: Vec::new(), dead_sorted: Vec::new(), screen_aspect: 0.0, ibuf, tex_bgs, tex_frames, draws, order: Vec::with_capacity(order_cap), cel_boxes, cel_graph, viewer_cel: Default::default(), last_vis: None, last_cell_vis: None, movie_tex: None, movie_bg: None, movie_size: None, movie_vbuf, hud_tbgl: tbgl, hud_sampler: sampler }
+        Renderer { shard_pipeline, shard_vbuf, shard_groups: Vec::new(), woman_tex, snow_pipeline, snow_vbuf, snow_bg, hud_pipeline, hud_add_pipeline, hud_sub_pipeline, hud_vbuf, hud_bgs, pipelines, fog, notex, nofog, uniform, uniform_bg, staged: Vec::new(), orphan_nodes, destroy_dead: Vec::new(), destroy_wreck_draw: Vec::new(), destroy_wreck_all: scene.destroy_wrecks.iter().map(|(c, _)| c.map(f32::to_bits)).collect(), destroy_tint: Vec::new(), batch, vbuf, skin_buf, snow_skin, pal_buf, col_buf, wts_buf, mtg_buf, skin_layout, skin_pos: Default::default(), char_light_centre: Vec::new(), lights: Default::default(), light_memo: Vec::new(), light_memo_gen: 1, light_memo_lights: Default::default(), los_memo: Vec::new(), los_memo_world: (0, 0), wreck_of: Vec::new(), wreck_of_src: Vec::new(), dead_sorted: Vec::new(), screen_aspect: 0.0, screen_offset: [0.0; 2], ibuf, tex_bgs, tex_frames, draws, order: Vec::with_capacity(order_cap), cel_boxes, cel_graph, viewer_cel: Default::default(), last_vis: None, last_cell_vis: None, movie_tex: None, movie_bg: None, movie_size: None, movie_vbuf, hud_tbgl: tbgl, hud_sampler: sampler, sky_flash_mask: 0 }
     }
 
     /// The game's depth-0 pyramid for the walk [M `Vision_Calculate_View_Fustrum` 0x1e7df8,
@@ -965,7 +1023,10 @@ impl Renderer {
         // The frame starts as fog (what the fog pass covers where nothing was drawn: zb 0); the
         // pillar-box clears black so the sides of a cut-scene frame are the void around the game's
         // 4:3 picture (the fog pass repaints the band's background itself).
-        let clear = if (pillar.is_some() && movie.is_none()) || (movie.is_some() && self.screen_aspect > 0.0) { wgpu::Color { r: 0.0, g: 0.0, b: 0.0, a: 1.0 } }
+        let tsz = target.texture().size();
+        let viewport = screen_adjust_viewport([tsz.width as f32, tsz.height as f32], pillar.filter(|_| movie.is_none()), self.screen_offset);
+        let shifted = self.screen_offset != [0.0; 2];
+        let clear = if (pillar.is_some() && movie.is_none()) || (movie.is_some() && self.screen_aspect > 0.0) || shifted { wgpu::Color { r: 0.0, g: 0.0, b: 0.0, a: 1.0 } }
             else if fog_on > 0.0 { wgpu::Color { r: (fog_rgb[0] * GAIN) as f64, g: (fog_rgb[1] * GAIN) as f64, b: (fog_rgb[2] * GAIN) as f64, a: 1.0 } } else { wgpu::Color { r: 0.05, g: 0.06, b: 0.08, a: 1.0 } };
         let mut enc = device.create_command_encoder(&Default::default());
         {
@@ -982,7 +1043,7 @@ impl Renderer {
                 }),
                 timestamp_writes: None, occlusion_query_set: None, multiview_mask: None,
             });
-            if let Some([x, y, w, h]) = pillar.filter(|_| movie.is_none()) {
+            if let Some([x, y, w, h]) = viewport {
                 pass.set_viewport(x, y, w, h, 0.0, 1.0);
             }
             pass.set_vertex_buffer(0, self.vbuf.slice(..));
@@ -1089,6 +1150,7 @@ impl Renderer {
             // The destroyed-glist swap's draw side (see the field doc): a dead Destroy leaf's
             // materials — matched by the build-time centre bits — drop out of the frame.
             let destroy_dead = &self.dead_sorted;
+            let sky_flash_mask = self.sky_flash_mask;
             // The swap's wreck side: a baked wreck draw renders only while its leaf is dead (see
             // the field docs — before the smash the object's live glist is the intact one).
             let wreck_all = &self.destroy_wreck_all;
@@ -1097,6 +1159,8 @@ impl Renderer {
             let layout = &self.skin_layout;
             self.order.extend(draws.iter().enumerate().filter(|&(k, dc)| {
                 if skip.contains(&k) { return false; }
+                // The sky's lightning swap: a slot with a flash variant draws one of its two pairs.
+                if !crate::scene::sky_variant_drawn(dc.sky_slot, sky_flash_mask) { return false; }
                 if !destroy_dead.is_empty() && dc.layer == Layer::World
                     && destroy_dead.binary_search(&dc.centre.map(f32::to_bits)).is_ok() { return false; }
                 if !wreck_all.is_empty() && wreck_of[k]
@@ -1181,7 +1245,7 @@ impl Renderer {
             drop(prof_sort);
             let prof_lights = nf_game::prof::scope("enc: uniforms + light picks");
             {
-                const HEAD: usize = 40;
+                const HEAD: usize = 48;
                 const SLOT: usize = 20;
                 let mut staged = std::mem::take(&mut self.staged);
                 staged.clear();
@@ -1194,6 +1258,11 @@ impl Renderer {
                 }
                 for c in 0..4 { staged[c * 4..c * 4 + 4].copy_from_slice(&view_proj[c]); staged[16 + c * 4..20 + c * 4].copy_from_slice(&view_proj_rot[c]); }
                 staged[32..40].copy_from_slice(&extra);
+                // viewmodel-light: the env-map rows (us[10] / us[11]) — the camera's right and up
+                // axes in world space, read back from the rotation-only view-projection (its rows 0
+                // and 1 are the view's right/up axes scaled by the projection).
+                staged[40..44].copy_from_slice(&cam_axis(&view_proj_rot, 0));
+                staged[44..48].copy_from_slice(&cam_axis(&view_proj_rot, 1));
                 // perf-240: the light-pick memo (see the field doc) — invalidated when the list changed.
                 if !self.lights.same_bits(&self.light_memo_lights) {
                     self.light_memo_gen = self.light_memo_gen.wrapping_add(1).max(1);
@@ -1409,6 +1478,16 @@ impl Renderer {
         enc
     }
 }
+/// Row `r` (0 = right, 1 = up) of the camera's world-space basis, from a rotation-only
+/// view-projection (column-major): the projection only scales those rows, so normalising row `r`'s
+/// first three columns recovers the axis. `w` = 0. A degenerate matrix (the menu's identity draw
+/// included) gives the identity row.
+pub fn cam_axis(vp_rot: &[[f32; 4]; 4], r: usize) -> [f32; 4] {
+    let a = [vp_rot[0][r], vp_rot[1][r], vp_rot[2][r]];
+    let l = (a[0] * a[0] + a[1] * a[1] + a[2] * a[2]).sqrt();
+    if l > 1e-6 { [a[0] / l, a[1] / l, a[2] / l, 0.0] } else { let mut e = [0.0; 4]; e[r] = 1.0; e }
+}
+
 pub fn depth_view(device: &wgpu::Device, w: u32, h: u32) -> wgpu::TextureView {
     device.create_texture(&wgpu::TextureDescriptor {
         label: None, size: wgpu::Extent3d { width: w, height: h, depth_or_array_layers: 1 }, mip_level_count: 1, sample_count: 1,
@@ -1434,6 +1513,36 @@ mod tests {
             [0.0, 0.0, 1.0000125, 1.0],           // col 2
             [0.0, 0.0, -0.05, 0.0],               // col 3
         ]
+    }
+
+    /// viewmodel-light: the env-map rows come back out of the rotation-only view-projection —
+    /// at yaw 0 the port's camera right is −x and up is +y (`Camera::right` / `view_proj`).
+    #[test]
+    fn cam_axis_recovers_the_view_right_and_up() {
+        let vp = vp_origin_looking_z();
+        let (r, u) = (cam_axis(&vp, 0), cam_axis(&vp, 1));
+        for (got, want) in [(r, [-1.0, 0.0, 0.0, 0.0]), (u, [0.0, 1.0, 0.0, 0.0])] {
+            for k in 0..4 { assert!((got[k] - want[k]).abs() < 1e-6, "{got:?} vs {want:?}"); }
+        }
+        // Sister: the rows differ, and a zero matrix falls back to the identity row instead of NaN.
+        assert_ne!(r, u);
+        assert_eq!(cam_axis(&[[0.0; 4]; 4], 1), [0.0, 1.0, 0.0, 0.0]);
+    }
+
+    /// viewmodel-light: an env-mapped vertex (nrm.w = ENV_*) takes ST = 0.5 + (row · n)/256 from
+    /// the camera rows and skips the point lights — the VU1 handler 0x10 [M .vutext micro
+    /// 0x2e2-0x33e]; every other vertex keeps its disc UV and the light add (the sister).
+    #[test]
+    fn env_vertices_build_their_uv_from_the_normal_and_skip_the_lights() {
+        assert!(SHADER.contains("uv = vec2<f32>(0.5 + dot(us[10].xyz, k), 0.5 + dot(us[11].xyz, k));"), "the env ST");
+        assert!(SHADER.contains("let k = normalize(en) * (127.0 / 256.0);"), "|n| 127 over 256 = the VU's row scale");
+        assert!(SHADER.contains("if (FAR < 0.5 && !env) {"), "env vertices skip the light loop");
+        assert!(SHADER.contains("let b = 12u + 5u * iid;"), "the per-draw slots start after the two camera rows");
+        // Sister: the lit path and the disc UV are still there for everything else.
+        assert!(SHADER.contains("var uv = uv0;") && SHADER.contains("    o.uv = uv;
+    o.c = c * (255.0 / 128.0);"));
+        assert!(SHADER.contains("min(c.rgb + lc.rgb * term / 255.0, vec3<f32>(1.0))"));
+        assert_eq!((crate::scene::ENV_SKINNED, crate::scene::ENV_OBJECT), (127, 64), "the shader's 0.75 / 0.25 thresholds split these");
     }
 
     #[test]
