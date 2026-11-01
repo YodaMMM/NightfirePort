@@ -84,6 +84,10 @@ pub struct DamageLog {
     pub fights: u32,
     /// (drone, tick) — a guard a fight did not drop is not re-fought before the tick.
     pub cooldown: Vec<(usize, u32)>,
+    /// real-damage-routes: drones the return fire must NOT engage (a route's own scripted fight
+    /// owns them — 03's servant captors die to it before the bind, which strands the rescue).
+    /// `shooters` filters them; the test clears the list once its own fight ran.
+    pub spare: Vec<usize>,
     /// OPT-IN for `stand_and_fire`: give the target up after this many taps without a round
     /// landing (a player switches to the next guard instead of emptying the clip into cover the
     /// world trace does not see). None keeps the 300-tick rule alone.
@@ -170,6 +174,7 @@ impl DamageLog {
         let mut c: Vec<(f32, usize)> = sim.drones.list.iter().enumerate()
             .filter(|(i, d)| {
                 if !(d.present && d.enabled && !d.corpse && d.health > 0.0 && d.team == 1) { return false; }
+                if self.spare.contains(i) { return false; }
                 if dxz(d.pos) > 20.0 || (d.pos[1] - b[1]).abs() > 6.0 { return false; }
                 let hit = sim.drones.player_hits.iter().rev()
                     .take_while(|h| now.saturating_sub(h.0) <= 240)
@@ -247,7 +252,12 @@ impl Walker {
             self.dmg.shooters(sim).into_iter().find(|&i| DamageLog::visible(sim, i))
         };
         let Some(di) = di else { return false };
-        if self.dmg.cooldown.iter().any(|&(i, until)| i == di && self.total_ticks < until) { return false; }
+        // The cooldown only shields a guard who has STOPPED shooting: one still hitting Bond
+        // (he is on the shooter list — the same 240-frame hit window) is re-fought after a short
+        // pause, or a route leg pressed past him dies in the open (the 07000012 east wing: the
+        // fight's `killed false` left him at 12 hp and the 240-tick shield outlived Bond).
+        let still_shooting = self.dmg.shooters(self.scene.sim.as_ref().unwrap()).contains(&di);
+        if !still_shooting && self.dmg.cooldown.iter().any(|&(i, until)| i == di && self.total_ticks < until) { return false; }
         // Only with a gun in hand: a player without rounds walks on (the 16 arrival carries
         // the fists alone — the weapon cycle stood Bond 730 ticks at the ramp foot under fire).
         {
@@ -276,10 +286,15 @@ impl Walker {
         self.dmg.fighting = false;
         // A guard the stand did not drop (out of sight, the cap) is left for 240 ticks: the
         // leg walks on instead of standing in the open re-fighting him.
-        if !killed { let until = self.total_ticks + 240; self.dmg.cooldown.retain(|e| e.0 != di); self.dmg.cooldown.push((di, until)); }
+        if !killed { let until = self.total_ticks + if still_shooting { 120 } else { 240 }; self.dmg.cooldown.retain(|e| e.0 != di); self.dmg.cooldown.push((di, until)); }
         let sim = self.scene.sim.as_ref().unwrap();
         eprintln!("[real-damage] {label}: returned fire on drone #{di} (killed {killed}) at tick {}, health {h0:.1} -> {:.1}",
             self.total_ticks, sim.drones.health.health);
+        // A fight that emptied the gun: take the nearest ground drop (the guards' own) or cycle
+        // to the fullest — a player reloads from the field before walking on. Without this the
+        // walk pressed on dry and died to the next volley (03's exit lawn).
+        let dry = { let g = &self.scene.sim.as_ref().unwrap().gun; g.clip + g.spare == 0 };
+        if dry { self.resupply(label); }
         true
     }
 

@@ -42,6 +42,14 @@ use walker::{Walker, Wp};
 
 fn iso() -> String { std::env::var("NF_ISO").expect("NF_ISO") }
 
+/// Real damage: the same walk (the tower + the 07000012 extension + the 4A drop) with the health
+/// top-up off and the walker's return fire on. Bond's death panics with the death line
+/// (common/damage_log.rs), so a pass pins the whole chain on the port's own damage.
+#[test]
+fn walk_spawn_to_the_lower_floor_load_point_real_damage() {
+    walker::with_real_damage(walk_spawn_to_the_lower_floor_load_point);
+}
+
 #[test]
 fn walk_spawn_to_the_lower_floor_load_point() {
     let iso = iso();

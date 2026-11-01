@@ -101,6 +101,11 @@ fn aim_and_fire_until(w: &mut Walker, target: [f32; 3], weapon: u8, fire_ticks: 
 /// (objective 1 → 4), the descent back down, the boarding, the ride, the cinematic, the Hind
 /// shoot-down on real aim and trigger (objective 2 → 4), and the mission end into 0x0730008.
 #[test]
+fn walk_the_whole_mission_on_real_input_real_damage() {
+    walker::with_real_damage(walk_the_whole_mission_on_real_input);
+}
+
+#[test]
 fn walk_the_whole_mission_on_real_input() {
     let iso = iso();
     let mut w = Walker::new(nf_view::load(&iso, "07000008.bin", false).expect("load 07000008"));

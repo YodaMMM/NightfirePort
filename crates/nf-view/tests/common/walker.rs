@@ -567,9 +567,10 @@ impl Walker {
             // while the nav believed it had arrived). Close the last stretch directly — walk_to's
             // stuck handler opens the doors on the way; lenient so a wedged doorway gives up.
             if dxz(target, self.pos) > 0.9 {
+                let saved = self.lenient;
                 self.lenient = true;
                 self.walk_to(Wp { at: target, act: Act::None, arrive: 0.7 }, &format!("{label} resupply {attempt} close"));
-                self.lenient = false;
+                self.lenient = saved;
             }
             if ammo(self) > before { break; }
         }
@@ -599,7 +600,13 @@ impl Walker {
             if w >= 2 && w <= 0x47 && c + s > 0 { return true; }
             eprintln!("[walk] {label}: cycling weapons ({k}) (weapon {w:#x} clip {c} spare {s})");
             self.tick(Input { weapon_cycle: 1, ..Default::default() }, false);
-            for _ in 0..60 { self.tick(Input::default(), false); } // the holster/draw cycle
+            // Real damage: the cycle stands 12×60 ticks — answer whoever is shooting meanwhile
+            // (a dry gun skips the fight via the ammo gate, so no recursion: the fight's own
+            // cycle sees `dmg.fighting` up and its return_fire is the no-op).
+            for _ in 0..60 {
+                if self.total_ticks % 10 == 0 { let _ = self.return_fire(label); }
+                self.tick(Input::default(), false);
+            } // the holster/draw cycle
         }
         let (w, c, s) = {
             let sim = self.scene.sim.as_ref().unwrap();
@@ -858,9 +865,10 @@ impl Walker {
                 } else {
                     eprintln!("[walk] {label}: no exposed part for {blocked_streak} ticks — flanking to ({:.1},{:.1},{:.1}) (side {side}, offset {dist:.1})", fp[0], fp[1], fp[2]);
                 }
+                let saved = self.lenient;
                 self.lenient = true;
                 self.walk_nav_to(fp, &format!("{label} flank {flanks}"), 2.0);
-                self.lenient = false;
+                self.lenient = saved;
                 blocked_streak = 0;
                 aim = self.exposed_aim(di);
                 last_progress = t; // the flank is the progress for now
@@ -935,15 +943,21 @@ impl Walker {
     /// `walk_to` that reports a wedge instead of panicking (resupply / guard approach skip the
     /// unreachable target and the caller carries on).
     pub fn try_walk_to(&mut self, wp: Wp, label: &str) -> bool {
+        let saved = self.lenient;
         self.lenient = true;
         let r = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| self.walk_to(wp, label)));
-        self.lenient = false;
+        self.lenient = saved;
         r.is_ok()
     }
 
     /// Walk to a target THROUGH the nav graph (the guard approaches and resupply runs cross rooms;
     /// the direct steer wedges on walls between them). `final_arrive`: the last leg's radius.
     pub fn walk_nav_to(&mut self, target: V3, label: &str, final_arrive: f32) {
+        // real-damage-routes: restore the CALLER's lenient — a nav leg inside a lenient route
+        // (the 03 east lane) or inside `shoot`'s flank must not leave the flag false for the
+        // next leg (the clobber turned the east-lane walk_to non-lenient and it panicked at the
+        // 6000 cap instead of giving up).
+        let saved_lenient = self.lenient;
         self.lenient = true;
         let pts = {
             let sim = self.scene.sim.as_ref().unwrap();
@@ -956,7 +970,7 @@ impl Walker {
         }
         let r = self.walk_to(Wp { at: target, act: Act::None, arrive: final_arrive }, label);
         if r == u32::MAX { self.bridge_and_retry(target, final_arrive, label); }
-        self.lenient = false;
+        self.lenient = saved_lenient;
     }
 
     /// `bridge_wedged_nav`: after a wedged lenient leg, route Bond to `to` over the nav nodes
@@ -1054,7 +1068,7 @@ impl Walker {
             }
             // Real damage: answer whoever is shooting Bond before walking on (the fight's
             // ticks are the response's cost, not the leg's).
-            if !riding && !ladder && self.total_ticks % 10 == 0 {
+            if !riding && !ladder {
                 let t0 = self.total_ticks;
                 if self.return_fire(label) { start_ticks += self.total_ticks - t0; continue; }
             }
