@@ -335,6 +335,27 @@ impl Walker {
         c + s > 0
     }
 
+    /// The return-fire switch (damage_log.rs): cycle until a GUN in hand has ammo (or give up
+    /// after 12 switches). The armed test is return_fire's in-hand gate — `(2..=0x47)` [M the
+    /// gadget ids sit above it]: the Q-Decryptor's beam charge (clip 500) reads as ammo to the
+    /// plain `switch_to_armed`, and a fight "fired" the gadget at the guard until its burst killed
+    /// Bond (07000012, real damage). Kept apart from `switch_to_armed`, whose any-ammo test the
+    /// 07000009 patrol-beat clears rely on (their dry-P2K resupply ends on the first armed slot;
+    /// a gun-only cycle there stands Bond 732 ticks while the lobby guards close in).
+    pub fn switch_to_gun(&mut self, label: &str) -> bool {
+        let armed = |w: &Walker| {
+            let sim = w.scene.sim.as_ref().unwrap();
+            (2..=0x47).contains(&sim.gun.weapon) && sim.gun.clip + sim.gun.spare > 0
+        };
+        for k in 0..12 {
+            if armed(self) { return true; }
+            eprintln!("[walk] {label}: cycling to a gun ({k})");
+            self.tick(Input { weapon_cycle: 1, ..Default::default() }, false);
+            for _ in 0..60 { self.tick(Input::default(), false); } // the holster/draw cycle
+        }
+        armed(self)
+    }
+
     /// Aim at a drone's torso (root + 0.3 — the port's drone pos is the ROOT, the torso box centre
     /// sits +0.27 above it [L hit-box dump]) with the view (turn + look through the input) and tap
     /// the trigger until it dies or the cap. The real fire path (the gun, the bullets, the hit
