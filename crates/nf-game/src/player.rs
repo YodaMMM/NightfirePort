@@ -531,6 +531,20 @@ pub struct Bond {
     /// (ChangeSubState 2 zeroes the velocity block [M Player_ChangeSubState 0x190630's
     /// `*(obj+0x50) = 0` arm]) and on the release (the port's pinned no-momentum drop).
     pub grapple_drift: [f32; 2],
+    /// The `BLData+0x10` move quad's x (strafe) and z (forward) lanes as the game's stores leave
+    /// them — the lanes the guards' accuracy moving test reads: `DroneWeap_DoOpponentTargetting`
+    /// 0x179a48:33-41 takes the target object's class byte `obj+0xFF == 3` (the player object [M
+    /// Player_Init 0x1910f8:76]) and sets `DL+0x1DC = |(BL+0x10, 0, BL+0x18)| != 0` — on foot
+    /// exactly as in zero-g. The quad zeroes every active on-foot tick [M Player_Update
+    /// 0x193600:131-133 `obj+0xF4 == 1 → Vec_Zero(BL+0x10)`], then `Player_Move` stores the
+    /// eased walk lanes (x = strafe, z = forward × the substate's multiplier [M 0x191dd0:166-170]),
+    /// swim overwrites x after the look-dir add [M 0x191dd0:149-165], the climb dismounts push z directly [M Player_Climb
+    /// 0x196310:56,90] and the creep exit adds 0.05 once [M Player_Creep 0x1969d0:151]. Held
+    /// input against a wall keeps the lanes non-zero — the guards read Bond as MOVING even where
+    /// his position pins (the port's old position-delta read called that still). In zero-g the
+    /// quad is the thruster pair `local` [M Player_ZeroG 0x192ab0:113,135], which the viewer hands
+    /// to the guards as `Drones::player_move_local`; these lanes stay zeroed there.
+    pub move_local: [f32; 2],
 }
 
 impl Bond {
@@ -542,6 +556,7 @@ impl Bond {
             water_fade: 0.0, air_tick: 0, push_fwd: 0.0, wire: None, auto_drop: 0.0, wire_anim: 0, wire_anim_time: 0.0, wire_anim_rate: 1.0, cam_mode: 0, fall_speed: 0.0, grapple: None,
             icon_ctx: 0xff,
             cel: None,
+            move_local: [0.0; 2],
             prev_pos: pos,
             pre_collide: pos,
             pick_ref: [0.0; 3],
@@ -686,6 +701,11 @@ impl Bond {
         self.regrab = self.regrab.saturating_sub(1);
         self.fall_damage = None;
         self.drown_damage = None;
+        // The move quad zeroes every active on-foot tick before the substate body runs [M
+        // Player_Update 0x193600:131-133 `obj+0xF4 == 1 → Vec_Zero(BLData+0x10)`] — the guards'
+        // accuracy moving test reads these lanes, so a substate that stores nothing (the climb
+        // body, the creep body) leaves the quad at zero.
+        self.move_local = [0.0; 2];
         match self.substate {
             SS_CLIMB => self.climb_tick(world, ctx, input),
             SS_GRAPPLE => self.grapple_tick(&input),
@@ -749,6 +769,11 @@ impl Bond {
             };
             self.grapple_drift[0] = ease(self.grapple_drift[0], input.strafe * 0.075);
             self.grapple_drift[1] = ease(self.grapple_drift[1], input.forward * 0.075);
+            // The move quad rides the same eased wish during the hang [M Player_Move's stores from
+            // the +0x20 block, 0x191dd0:111-141/166-170 — substate 2 passes Player_Move's gate]: the
+            // guards read a drifting hang as moving. The reel/release keep the zeroed quad (the
+            // port's pinned no-momentum release; the game's reel-tick quad [S] unverified).
+            self.move_local = self.grapple_drift;
             let (s, c) = (crate::trig::sinf(self.yaw), crate::trig::cosf(self.yaw));
             let (vs, vf) = (self.grapple_drift[0], self.grapple_drift[1]);
             pos[0] += c * vs + s * vf;
@@ -937,6 +962,10 @@ impl Bond {
         if action && fwd_raw < 0.05 {
             self.push_fwd = -0.05;
             dismount_push = -0.05;
+            // The dismount's own +0x18 write [M Player_Climb 0x196310:90 `+0x18 −= 0.05`]: the quad's
+            // z lane reads −0.05 on THIS tick (the guards' moving test sees it; the port applies the
+            // push to the position on the next walk tick).
+            self.move_local[1] = -0.05;
             self.dismount();
         } else {
             // Recompute the thresholds every tick [M 0x196310:49-53].
@@ -946,6 +975,8 @@ impl Bond {
                 // Above the top: the +0.6 forward lunge [M 0x196310:54-62], consumed next tick.
                 self.push_fwd = 0.6;
                 dismount_push = 0.6;
+                // The lunge's +0x18 write [M 0x196310:56] — the quad's z lane this tick.
+                self.move_local[1] = 0.6;
                 self.dismount();
             } else if self.climb_bottom <= self.pos[1] {
                 // Mid-ladder: climb [M 0x196310:63-78].
@@ -1719,6 +1750,9 @@ impl Bond {
             let ld = self.look();
             self.pos[0] += c * vs + ld[0] * vf;
             self.pos[2] += -s * vs + ld[2] * vf;
+            // The move quad [M 0x191dd0:152-168]: quad += dir·(forward·k), then x = strafe — the
+            // z lane the accuracy read takes carries the look-dir's z component.
+            self.move_local = [vs, ld[2] * vf];
             // The world-Y component rides as this tick's vertical velocity; the swim tail clamps it
             // against `surface − 0.3` before integrating (case 3 tail [M 0x193600:201-220]).
             self.vel[1] = ld[1] * vf * 60.0;
@@ -1727,6 +1761,12 @@ impl Bond {
             self.pos[2] += -s * vs + c * vf;
         }
 self.local = [vs / k, vf / k];
+        if !swimming && !zero_g {
+            // The walk quad's own stores [M Player_Move 0x191dd0:166-170: `+0x10 = strafe`,
+            // `+0x18 = forward·mult`] — the eased lanes × the substate's multiplier, WITHOUT the
+            // climb push (in the game that lands on the dismount tick's own +0x18 write below).
+            self.move_local = [vs, vf0];
+        }
         }
         // `Player_Collision`: gravity unless standing on a gentle floor (jumping keeps the velocity).
         // The water path skips `WldGravity` entirely [M 0x194df0 default case]. The vertical velocity
@@ -2822,6 +2862,58 @@ mod tests {
         // Sister: stopping takes ~11 ticks, not one.
         for _ in 0..5 { b.tick(&w, &Input::default()); }
         assert!(b.local[0] != 0.0);
+    }
+
+    /// The accuracy moving term's quad (onfoot-moving-accuracy): the walk lanes the game stores
+    /// (`Player_Move` 0x191dd0:166-170 — x = strafe, z = forward · multiplier) stay non-zero while
+    /// Bond pushes INTO the wall, so the guards' `|(BL+0x10, 0, BL+0x18)| != 0` test [M
+    /// DroneWeap_DoOpponentTargetting 0x179a48:34-41] reads him MOVING where a position-delta read
+    /// would call him still. Sisters: the dead-zone snap [M 0x191dd0:96-99 — |target| ≤ 0.0002 and
+    /// |eased| < 0.01 → 0.0] parks the released lanes at EXACTLY zero, and the crouch walk scales
+    /// the store by `Player_SSCrouch`'s own 0.75 call argument [M 0x1924c0:58].
+    #[test]
+    fn move_quad_stays_set_pushing_into_a_wall_and_snaps_to_zero_at_rest() {
+        let w = room();
+        let mut b = Bond::stand_at(&w, [0.0, 0.0, 0.0], 0.0);
+        let fwd = Input { forward: 1.0, ..Default::default() };
+        for _ in 0..150 { b.tick(&w, &fwd); }
+        assert!(b.pos[2] < 5.0 - RADIUS + 0.01, "held by the wall: {:?}", b.pos);
+        assert!(b.move_local[0] == 0.0 && b.move_local[1] > 0.0,
+            "pushing into the wall reads moving: {:?}", b.move_local);
+        // Release: the dead-zone snaps the lanes to exactly 0 [M 0x191dd0:96-99 —
+        // |target| ≤ 0.0002 and |eased| < 0.01 → 0.0], so the guards read still.
+        for _ in 0..20 { b.tick(&w, &Input::default()); }
+        assert_eq!(b.move_local, [0.0, 0.0], "the dead-zone parks the quad at zero: {:?}", b.move_local);
+        // The strafe lane rides x [M 0x191dd0:166] while the released forward lane stays 0.
+        for _ in 0..10 { b.tick(&w, &Input { strafe: 1.0, ..Default::default() }); }
+        assert!(b.move_local[0] != 0.0 && b.move_local[1] == 0.0, "strafe lane: {:?}", b.move_local);
+        // Crouch walk: the 0.75 multiplier scales the z store [M 0x1924c0:58].
+        let mut b = Bond::stand_at(&w, [0.0, 0.0, 0.0], 0.0);
+        b.tick(&w, &Input { crouch: true, ..Default::default() });
+        for _ in 0..30 { b.tick(&w, &fwd); }
+        assert!(b.crouched);
+        assert!(b.move_local[1] > 0.0 && b.move_local[1] < 0.08,
+            "crouch walk lane eases toward 0.1·0.75: {:?}", b.move_local);
+    }
+
+    /// The zero-g quad the guards read is the thruster pair `local` (handed over as
+    /// `Drones::player_move_local`) [M Player_ZeroG 0x192ab0:113,135 — the smoothers add into the
+    /// zeroed quad's x/z lanes]. A forward thrust sets the pair; a float thrusting ONLY vertically
+    /// leaves it at zero — the lift rides +0x14 [M :156], the lane the guards' magnitude forces to
+    /// 0 [M 0x179a48:39] — so a pure climb or sink is not "moving" to them.
+    #[test]
+    fn zero_g_thruster_pair_carries_strafe_forward_but_not_lift() {
+        let w = room();
+        let mut b = Bond::stand_at(&w, [0.0, 0.0, -14.0], 0.0);
+        b.substate = SS_ZEROG_9;
+        for _ in 0..40 { b.tick(&w, &Input { forward: 1.0, ..Default::default() }); }
+        assert!(b.local[1] > 0.0, "forward thrust sets the pair: {:?}", b.local);
+        // Vertical-only thrust rides the excluded y lane.
+        let mut b = Bond::stand_at(&w, [0.0, 0.0, -14.0], 0.0);
+        b.substate = SS_ZEROG_9;
+        for _ in 0..40 { b.tick(&w, &Input { lift: 1.0, ..Default::default() }); }
+        assert!(b.zero_g_lift > 0.0, "the lift smoother ran: {}", b.zero_g_lift);
+        assert_eq!(b.local, [0.0, 0.0], "pure lift leaves the read pair at zero: {:?}", b.local);
     }
 
     #[test]
