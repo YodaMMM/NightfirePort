@@ -34,6 +34,8 @@ fn walk_to_the_exit(iso: &str, stop_at_fire: bool) -> Walker {
     // The type-2 guards carry 12 health, captains 24 [L ee_02b.bin]: Bond aims for the head
     // (`Walker::prefer_head`), as a player does, or the scripted fights run the walk dry.
     w.prefer_head = true;
+    // A left nudge ends like a right one (`Walker::sidestep_decays`).
+    w.sidestep_decays = true;
     // hud-start: a load holds nothing (0x47 [M Player_InitWeapon 0x1a7ef8:137]) - settle the start draw first.
     nf_view::settle_start_draw(w.scene.sim.as_mut().unwrap());
     {
@@ -474,6 +476,10 @@ fn walk_to_the_exit(iso: &str, stop_at_fire: bool) -> Walker {
             if walker::dxz(gpos, bpos) > 9.0 || !los_clear {
                 w.walk_nav_to(gpos, &format!("approach stairwell guard {g}"), 3.0);
             }
+            // The contact reached the plate while Bond stood on it: the AND fired on this leg
+            // (the walk stops on the exit tick) — the fight below would walk Bond off the plate
+            // and drop ch 0x10 before the check reads it.
+            if w.scene.sim.as_ref().unwrap().drones.channels.on(0x10) { break 'recovery; }
             {
                 let sim = w.scene.sim.as_ref().unwrap();
                 if sim.gun.clip + sim.gun.spare < 8 { drop(sim); w.resupply("ammo"); }

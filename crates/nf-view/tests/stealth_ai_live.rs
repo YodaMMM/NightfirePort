@@ -363,7 +363,7 @@ struct BoneTrace { first_los: Option<u32>, first_seen: Option<u32>, chest_clear:
 /// `DroneVision_CanSeeObjectFrom` 0x176f18 casts: the bone's world point clamped into Bond's 0.4
 /// cylinder [M 0x1499d0] → the guard's eye, mask 0xa27); `chest_clear` counts the ticks the old
 /// one-point target (eye − 0.45) would have had a clear ray before the guard's state changed,
-/// `chest_run` the longest unbroken run of them (a sighting needs 59 in a row here).
+/// `chest_run` the longest unbroken run of them (a sighting needs 35 in a row here).
 fn crouched_behind_desk(dist: f32, ang: f32, ticks: u32) -> BoneTrace {
     let mut w = setup("07000009.bin", G09);
     { let sim = w.scene.sim.as_mut().unwrap(); sim.bond.pos = [3.5873525, -375.9931, 36.755123]; }
@@ -373,6 +373,7 @@ fn crouched_behind_desk(dist: f32, ang: f32, ticks: u32) -> BoneTrace {
         assert!(sim.bond.crouched && sim.bond_anim.hold == 0, "crouched, the transition over");
         assert_eq!(sim.drones.list[G09].view_bone, 0, "the cursor is untouched while Bond is out of sight");
         assert_eq!(sim.drones.list[G09].team, 3, "the tower's lobby guard is team 3 [D]");
+        assert_eq!(sim.drones.list[G09].reaction, 80, "the 09 guards' reaction stat [L ee_start_09.bin]");
     }
     place(&mut w, G09, dist, ang, true);
     // `place` puts Bond at a standing height; let the crouched body settle onto the floor (40
@@ -428,10 +429,11 @@ fn crouched_behind_desk(dist: f32, ang: f32, ticks: u32) -> BoneTrace {
 /// → :88). The crouched head bone stands 0.40 above obj+0x30; the port's old single point
 /// (eye − 0.45) sat at obj+0x30 − 0.20, at the knees, below the desk top.
 /// - Head-on at 4.0, 5.0 and 6.0u: the head clears the desk — LOS from the first tick, held, the
-///   ack 58 ticks on, the guard hides. Sister: the old point is behind the desk on every tick
+///   ack 34 ticks on (`DroneFunc_ReactionTime` = (1 − 0)·30·0.01·(200 − 80) EE-chopped = 35 [M
+///   0x14ac60]; the 09 guards' reaction stat is 80 [L ee_start_09.bin]), the guard hides. Sister: the old point is behind the desk on every tick
 ///   there — under that rule he was never seen.
 /// - Head-on at 7.0u (past the desk's shadow): seen the same way, and the old point agrees
-///   (clear for the whole 59-tick run).
+///   (clear for the whole 35-tick run).
 /// - 6.0u at +35°: the desk's corner hides the head while bones 2 and 3 (spine, chest) and the
 ///   0x13 shoulder clear it — the team-3 guard never sees him. Sister: a team-1 guard's
 ///   seven-bone cycle on the same rays lands.
@@ -442,12 +444,12 @@ fn vision_09_crouched_behind_desk_view_bones() {
         eprintln!("{dist}u head-on: los {:?} seen {:?} chest {} run {} states {:?} rays {:?}", a.first_los, a.first_seen, a.chest_clear, a.chest_run, a.states, &a.bones_seen[..2]);
         assert!(a.bones_seen.iter().all(|s| &s[2..3] == "1"), "{dist}u: the head bone is clear on every tick: {:?}", a.bones_seen);
         assert_eq!(a.first_los, Some(0), "{dist}u: the head ray lands on the first call");
-        assert_eq!(a.first_seen, Some(58), "{dist}u: the LOS holds: acked on the 59th tick (ReactionTime 59)");
+        assert_eq!(a.first_seen, Some(34), "{dist}u: the LOS holds: acked on the 35th tick (ReactionTime 35)");
         assert_eq!(a.states.first().map(|s| s.1), Some(nf_game::drone::state::CIVILIAN_HIDING), "{dist}u: the guard hides: {:?}", a.states);
         if dist < 6.5 {
             assert_eq!(a.chest_clear, 0, "{dist}u sister: the one-point target is behind the desk on every tick");
         } else {
-            assert_eq!(a.chest_run, 59, "{dist}u: past the desk the one-point target agrees");
+            assert_eq!(a.chest_run, 35, "{dist}u: past the desk the one-point target agrees");
         }
     }
 
