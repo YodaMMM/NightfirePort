@@ -721,6 +721,16 @@ fn live_astronauts(sim: &nf_view::scene::Sim) -> Vec<usize> {
         .map(|(i, _)| i).collect()
 }
 
+/// The first present, enabled, live guard — the per-guard motion read [M DroneWeap_DoOpponentTargetting
+/// 0x179a48:47-73: the latches live on every Drone]. The station's opening wave is present from the
+/// arrival (the spawner walk built the list before the first tick).
+fn first_tracker(sim: &nf_view::scene::Sim) -> usize {
+    sim.drones.list.iter().enumerate()
+        .find(|(_, d)| d.present && !d.corpse && d.enabled && d.health > 0.0)
+        .map(|(i, _)| i)
+        .expect("a present guard in the station sim")
+}
+
 /// A player's zero-g fight: hold the float station `hold` on the thrusters, turn to the nearest
 /// astronaut whose body a bullet can reach (`exposed_aim` — the game's own box-entry rule), and
 /// tap the rifle when the view is on him; auto-aim (the app's default, applied every frame)
@@ -822,7 +832,7 @@ fn fight(w: &mut Walker, hold: [f32; 3], prio: Option<usize>, done: impl Fn(&nf_
             let sim = w.scene.sim.as_ref().unwrap();
             for h in &sim.drones.player_hits[nh..] {
                 let d = &sim.drones.list[h.1.min(sim.drones.list.len() - 1)];
-                eprintln!("[hit] f{} d{} lost {:.1} dist {:.1} seen {} st {:#x} armour {:.0} motion {:?}", h.0, h.1, h.2, d.dist, d.seen_ticks, d.state, sim.drones.health.armour, sim.drones.target_motion);
+                eprintln!("[hit] f{} d{} lost {:.1} dist {:.1} seen {} st {:#x} armour {:.0} motion {:?}", h.0, h.1, h.2, d.dist, d.seen_ticks, d.state, sim.drones.health.armour, d.target_motion);
             }
         }
         if std::env::var_os("NF_1B_TRACE").is_some() && t % 100 == 0 {
@@ -939,10 +949,15 @@ fn the_zero_g_float_reads_moving_while_its_thrusters_decay() {
         assert_eq!(sim.bond.substate, SS_ZEROG_8, "the float substate [M 0x1910f8 :160-165]");
         assert_eq!(sim.bond.local, [0.0, 0.0], "no thrust yet");
         assert_eq!(sim.drones.player_move_local, Some([0.0, 0.0]), "the viewer hands the drones the pair in zero-g");
-        assert!(!sim.drones.target_motion.0, "sister: a float that never thrusted reads still");
+        let g = first_tracker(sim);
+        assert!(!sim.drones.list[g].target_motion.moving, "sister: a float that never thrusted reads still [M 0x179a48:34-41]");
     }
     for _ in 0..20u32 { w.tick(Input { forward: 1.0, ..Default::default() }, false); }
-    assert!(w.scene.sim.as_ref().unwrap().drones.target_motion.0, "thrusting reads moving");
+    {
+        let sim = w.scene.sim.as_ref().unwrap();
+        let g = first_tracker(sim);
+        assert!(sim.drones.list[g].target_motion.moving, "thrusting reads moving [M 0x179a48:34-41]");
+    }
     for _ in 0..300u32 { w.tick(Input::default(), false); }
     let p0 = w.scene.sim.as_ref().unwrap().bond.pos;
     w.tick(Input::default(), false);
@@ -951,8 +966,9 @@ fn the_zero_g_float_reads_moving_while_its_thrusters_decay() {
     let step = (p1[0] - p0[0]).abs() + (p1[2] - p0[2]).abs();
     assert!(step < 1e-4, "the decayed drift moves under the on-foot 1e-4 test ({step:e})");
     assert!(sim.bond.local[1] != 0.0, "the eased forward smoother never reaches 0 [M 0x192ab0:116-135]");
-    assert!(sim.drones.target_motion.0, "the float still reads MOVING for the hit roll [M 0x179a48:34-41]");
-    assert!(!sim.drones.target_motion.1, "the first-moved window (2 s) is long over [M 0x179a48:70-73]");
+    let g = first_tracker(sim);
+    assert!(sim.drones.list[g].target_motion.moving, "the float still reads MOVING for the hit roll [M 0x179a48:34-41]");
+    assert!(!sim.drones.list[g].target_motion.first_moved, "the first-moved window (2 s) is long over [M 0x179a48:70-73]");
 }
 
 /// The float against the shaft's south end-wall (z −20.40 [D the_end_walls_seal_the_shaft_box])
