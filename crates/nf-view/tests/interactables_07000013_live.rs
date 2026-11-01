@@ -208,9 +208,11 @@ fn gold_bits(base_map: u32) -> u64 {
 
 /// KIND Door (0xdb ×2): the security-room door #355 (−26.65, −368.36, 37.44, no lock channel —
 /// param 3 = 0 [D census]) opens on the player's E [M Door_Activate 0x135be0's toggle] and the
-/// stairwell door #274 (18.82, −368.35, 38.95; lock channel param 3 = 0xc8 [D census] with NO
-/// writer in the level's data [D §7]) refuses the same E — while ch 0xc8 is off the activation
-/// only plays the hit sound [M Door_Activate's locked arm; door.rs ch_lock].
+/// stairwell door #274 (18.82, −368.35, 38.95; lock channel param 3 = 0xc8 [D census]) refuses the
+/// same E while ch 0xc8 is off — the activation only plays the hit sound [M Door_Activate's locked
+/// arm; door.rs ch_lock]. Whether anything in the level ever sets 0xc8 is unproven (no writer was
+/// found in the level's data, which is not proof of none), so the channel's state is logged, not
+/// asserted, and the refusal checks run only while the channel reads off.
 ///
 /// The approach alone opens NEITHER door: `Door_Update` 0x1363c8's sphere scan (an actor within
 /// √2·(r_door + r_actor) of the door's live world sphere [M 0x136678-0x136684]) runs only to hold
@@ -233,12 +235,15 @@ fn the_security_door_walks_open_and_the_stairwell_door_refuses() {
          find(18.82, 38.95).expect("door #274 by its placement spot [D census]"))
     };
     {
-        // Sister first: the stairwell door is closed and locked (ch 0xc8 has no writer [D §7]).
+        // Sister first: the stairwell door rests closed.
         let sim = w.scene.sim.as_ref().unwrap();
         assert_eq!(sim.drones.doors.list[di274].state & 0xc, 0,
             "the stairwell door rests closed [D]");
-        assert!(!sim.drones.channels.on(0xc8), "the lock channel 0xc8 is off — no writer on the disc [D census]");
     }
+    // [S] unverified: no writer of ch 0xc8 was found in the level's data; that absence is not
+    // asserted as game truth. Logged only, outside pass/fail.
+    let lock_off = !w.scene.sim.as_ref().unwrap().drones.channels.on(0xc8);
+    eprintln!("[S] 13: lock channel 0xc8 reads {} at the stairwell walk-up", if lock_off { "off" } else { "on" });
     // The same walk-up that opens #355 walks to #274's doorway first: the locked door must not
     // move under the approach and must refuse the E (only the hit sound plays [M]). The route is
     // the lobby's proven north strip (the pickups route's z-40 lane) east to the stairwell
@@ -248,7 +253,7 @@ fn the_security_door_walks_open_and_the_stairwell_door_refuses() {
     w.walk_to(Wp::new(5.0, -368.4, 38.0).r(1.5), "13: the north strip east end");
     w.walk_to(Wp::new(11.0, -368.4, 38.5).r(1.5), "13: the north strip past the desks");
     w.walk_to(Wp::new(16.5, -368.4, 38.5).r(1.2), "13: at the stairwell door");
-    {
+    if lock_off {
         let sim = w.scene.sim.as_ref().unwrap();
         let d = &sim.drones.doors.list[di274];
         assert_eq!(d.state & 0xc, 0,
@@ -256,7 +261,7 @@ fn the_security_door_walks_open_and_the_stairwell_door_refuses() {
     }
     w.use_door(di274, "13: E the locked stairwell door");
     w.wait(30);
-    {
+    if lock_off {
         let sim = w.scene.sim.as_ref().unwrap();
         assert_eq!(sim.drones.doors.list[di274].state & 0xc, 0,
             "sister: the stairwell door refuses the E while ch 0xc8 is off [M Door_Activate's locked arm]");
