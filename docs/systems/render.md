@@ -32,6 +32,15 @@ alpha-list distance fade, environment mapping, dynamic lights / motion blur / br
   the previous leaf's state.
 - ALPHA_1: 0x44 normal (Cs − Cd)·As + Cd; 0x7F_00000048 additive Cs·As + Cd; 0x7F_00000042 subtractive Cd − Cs·As
   (bullet holes).
+- The As range: MODULATE gives As = At·Av/0x80 clamped to 0xFF, and the blend reads it with 0x80 = 1.0, so As up to
+  0xFF adds up to 255/128 of Cs. What feeds Av > 0x80 [M, D]: only the emitter particles — every block-0x30 def keys
+  alpha 255 (`Emitter_LoadDefs` 0x17ab40 halves the key rgb, not the alpha), `Emitter_Update` 0x17b080 stores the
+  byte, and the colour-list microcode (vu1dis lines 0x47f-0x4b8, entered via `psiDrawParticleList` 0x122d50's
+  MSCALF 4) copies the unpacked slot qword straight to RGBAQ. Level mesh vertex alpha never exceeds 0x80 (scan of
+  05/06/15 and all 34 archives); corona/object tweaks are byte/255 multipliers (`psiSetTweakARGB` 0x124770,
+  `View_SetupRenderModes_Tweak` 0x1e5888, `Corona_Update` 0x18da78 caps obj+0x106 at 0xFF); HUD sprites draw
+  A >> 1 (`psiDrawSprites` 0x120e68); rain/snow use the constant (0x3f, 0x3f, 0x3f, 0x7f). The port keeps As up to
+  255/128 on the 0x48/0x42 pipelines (gpu.rs `PREMUL`); 0x44 keeps the 1.0 clamp (nothing feeds it more).
 - TEST_1: 0x5001B (689 leaves): alpha test passes for As ≥ 1 — **only A = 0 is discarded** (the viewer's 0.5 test is
   wrong); depth GEQUAL. 0x507FD (2 leaves: `Leaf`, `spark leaves`): As > 0x7F.
 - ZBUF_1: ZMSK 0 (write, 570 leaves) / 1 (no write, 150). Blending is always on (PRIM ABE).
