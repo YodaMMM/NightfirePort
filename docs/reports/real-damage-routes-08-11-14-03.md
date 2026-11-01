@@ -124,3 +124,15 @@ nothing of 14 is changed on the branch.
 
 not visible to me — this environment exposes no token, context-window or cost figures for the
 session (no numbers to copy; nothing estimated).
+
+## ntfy failed
+
+All three fallbacks failed (the sandbox cannot reach ntfy.sh):
+
+1. `curl -sS -m 20 -H "Title: NightfirePort" -d "real-damage-routes-08-11-14-03: ..." https://ntfy.sh/nightfire-yoda-8k3x`
+   → `curl: (28) Connection timed out after 20000 milliseconds`
+2. `python3 -c "... urllib.request ..."`
+   → `urllib.error.URLError: <urlopen error [Errno 101] Network is unreachable>`
+3. `wget -q -O- --post-data "real-damage-routes-08-11-14-03: ..." https://ntfy.sh/nightfire-yoda-8k3x`
+   → timed out after 30 s, killed (no output).
+
