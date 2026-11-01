@@ -730,6 +730,9 @@ pub struct Player {
     /// The runtime cel the queries start from (obj+0x20 — fix-safe08b): the `pCelList` cell index in
     /// the world's `ScopeGraph`; `None` = the flat (unscoped) world.
     pub cel: Option<usize>,
+    /// The crouch substate is live (`bond.crouched` at the build site): the trigger toucher
+    /// switches to the game's crouch pick arm with it (level-0a-ceiling-gun-route).
+    pub crouched: bool,
 }
 
 /// The player as an AI target (`DAT_00298fd0`): his position when the nodes were found, the frame (`+0x54`), and per
@@ -16761,6 +16764,13 @@ fn segment_hits_sphere(a: V3, b: V3, c: V3, r: f32) -> bool {
                         self.audio.play3d(sound, muzzle, None);
                         if let Some(w) = d.weapons.records.get(crate::gt::TURRET_WEAPON_RECORD) {
                             let f32_at = |o: usize| f32::from_le_bytes(w[o..o + 4].try_into().unwrap());
+                            // The mounted case-7 shot runs the same `Bullet_init` cone: owner = the
+                            // player (obj+0xff 2) with weapon 96's +0x68 = 0 keeps the BL+0xC0 = 1
+                            // scale arm [M 0x12c5a0 disasm 0x12c7cc-0x12c7f0], spread 4.0, then
+                            // case 7's own post-shot Rand_FRand(2π) w-pad draw [M 0x180498:522].
+                            let flags68 = u32::from_le_bytes(w[0x68..0x6c].try_into().unwrap());
+                            let dir = crate::bullet::spread(dir, f32_at(0x24), flags68, &mut self.rng);
+                            let _pad = self.rng.frand(crate::trig::TAU); // [M 0x180498:522]
                             let f6c = u32::from_le_bytes(w[0x6c..0x70].try_into().unwrap());
                             self.player_bullets.push(PlayerBullet {
                                 pos: muzzle, dir, speed: f32_at(0x20), travelled: 0.0, range: f32_at(0x1c), damage: f32_at(0x0c),
@@ -16794,6 +16804,20 @@ fn segment_hits_sphere(a: V3, b: V3, c: V3, r: f32) -> bool {
                         self.audio.play3d(sound, muzzle, None);
                         if let Some(w) = d.weapons.records.get(crate::gt::TURRET_WEAPON_RECORD) {
                             let f32_at = |o: usize| f32::from_le_bytes(w[o..o + 4].try_into().unwrap());
+                            // `Bullet_init` 0x12c5a0's cone draw: the turret owner's obj+0xff is not
+                            // the player's 2 and the barrel obj is not a class-3 drone, so the
+                            // scale stays 1.0 and the bloom term never computes [M 0x12c5a0:134-166
+                            // + disasm 0x12c710-0x12c7f4]. Record 96 (0x2c55d0) carries +0x24 = 4.0
+                            // with +0x68 = 0 (no 0x400000) [L ee_start_05.bin @0x2c55d0] — every
+                            // round leaves through the FRand_MVar2(2s)·0.0014 / FRand(2π) / FRand(π)
+                            // spherical offset added to the direction [M 0x12c5a0:166-184, disasm
+                            // 0x12c7f4-0x12c858]. `GT_Update` then draws one more Rand_FRand(2π)
+                            // into the direction vector's w pad [M 0x180498:349] — 4 shared-stream
+                            // draws per shot this consumer skipped (the turret rounds flew dead-on
+                            // and every later draw desynced from the game's stream).
+                            let flags68 = u32::from_le_bytes(w[0x68..0x6c].try_into().unwrap());
+                            let dir = crate::bullet::spread(dir, f32_at(0x24), flags68, &mut self.rng);
+                            let _pad = self.rng.frand(crate::trig::TAU); // [M 0x180498:349]
                             let mut b = crate::bullet::Bullet {
                                 pos: muzzle, dir, speed: f32_at(0x20), travelled: 0.0, range: f32_at(0x1c),
                                 damage: f32_at(0x0c), owner: usize::MAX, state: 0,
@@ -17860,7 +17884,26 @@ fn segment_hits_sphere(a: V3, b: V3, c: V3, r: f32) -> bool {
         // byte's trigger credit is the one residual for a live check). The reach laws are the ones
         // above. [M the walk; the port's per-body design is the MP port design].
         let player_touchers: Vec<crate::triggers::Toucher> = match &self.net_bodies {
-            None => vec![crate::triggers::Toucher { contain: !player.hanging, ..crate::triggers::Toucher::player([player.pos[0], player.pos[1] - 0.6, player.pos[2]]) }],
+            None => vec![{
+                if player.crouched {
+                    // The crouch IS a different pick arm in the game, and `body` already carries
+                    // it case-correct (`Player_Collision` 0x194df0's substate switch: case 3 =
+                    // the crouch A = pos + 0.1 − (cc − 0.55), B = pos + 0.45 − cc, r 0.55 [M
+                    // :228-248], built at the scene's drone::Player site from bond.substate/
+                    // crouched/cc). With the crouch rest cc 0.55 [M player.rs CROUCH_ROOT_HEIGHT]
+                    // and the crouch park pos−floor 0.607 [L level_reload_live.rs:215] the
+                    // crouched body tops ≈ feet+1.26 — under 0a's laser band 1.49..1.76 above the
+                    // floor [D 0700000a triggers dump, #607] — so a crouch passes UNDER the beams
+                    // in the game, while the standing body 1.86 [M 0x194df0 default arm] crosses.
+                    // The port's standing-box toucher fired the beam crouched; that gap is this
+                    // arm. The standing stance keeps the measured box reach below (the
+                    // truck-chain/park-plate calibrations live there).
+                    let (a, b, r) = player.body;
+                    crate::triggers::Toucher { a, b, r, drone: false, skin: 0, contain: !player.hanging }
+                } else {
+                    crate::triggers::Toucher { contain: !player.hanging, ..crate::triggers::Toucher::player([player.pos[0], player.pos[1] - 0.6, player.pos[2]]) }
+                }
+            }],
             Some(bodies) => bodies.iter().filter(|b| b.alive).map(|b| if b.bot {
                 crate::triggers::Toucher { a: [b.pos[0], b.pos[1] - 1.0, b.pos[2]], b: b.head, r: 0.4, drone: true, skin: 0, contain: true }
             } else {
