@@ -95,6 +95,14 @@ shared stream advances 3 draws per drawn wobbling object per frame — a draw-or
 what is in view — which the port's sim stream does not mirror (a sim that copied it would make
 AI/bullet randomness depend on the camera and the display rate). Recorded in GAPS G-034.
 
+### PS2 check status (2026-10-31)
+
+07000005's start coronas were compared against PCSX2 frames. **07000015 (76) and 07000016 (21) have
+no PS2 capture yet**: no local PCSX2 frame of either level shows them. Port views exist (15: the
+`corona1` ring on the tower top at (0, 54.6, 0) seen from (20, 48, 0), the ring at (71, 54.6, 0),
+the `corona_small` wall lamps at x ≈ 0, y 35.2; 16: the `Corona_Glow2` field at y 28.9 around
+(3, −160)). A PS2 frame of each spot is still owed before the 15/16 corona look counts as checked.
+
 ## Corona_Update 0x18da78 (the unlaunched runtime fade — documented, not ported)
 
 For the class-0x45 object that never exists, the update would do [M 0x18da78:12-35]:
