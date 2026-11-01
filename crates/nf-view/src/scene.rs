@@ -955,6 +955,14 @@ pub struct HudState {
     /// `HUD_UpdateXRayPane` 0x1a1410), updated in `hud_tick` after the flow controller — the
     /// game's pane walk order [M HUD_Update 0x19a088:20-69]. hud.rs draws them.
     pub goggle_panes: nf_game::hud_pane::GogglePanes,
+    /// hud-ammo-under-label: the ammo strips' "ever drawn at rest" latch. The game's strip sprites
+    /// (AmmoSprInfo[5]/[6]) sit in their created state — template layers 0x1c/0x1d and the template
+    /// rect — until the pane's strip blocks first run with `BL+0x95E` at 0 and position them
+    /// [M HUD_UpdateAmmoPane 0x19a7f0:247-300]; the 07000011 f42 capture shows the bar over the
+    /// weapon name during that first label. Once a rest frame has positioned them, a switch takes
+    /// them off again (layer 0xff) [M 0x19ad0c/0x19ae48; L 07000005 2026-10-12 switch shows the name
+    /// alone]. The port latches on the first timer==0 tick (hud_tick); false at load.
+    pub ammo_strips_positioned: bool,
 }
 
 impl HudState {
@@ -5792,6 +5800,12 @@ impl Sim {
             if changed { self.hud.weapon_label_timer = 60; }
         }
         self.hud.weapon_label_timer = self.hud.weapon_label_timer.saturating_sub(1);
+        // hud-ammo-under-label: the strips' first rest frame. The pane's strip blocks position the
+        // two strip sprites the first time they run with the timer at 0 [M HUD_UpdateAmmoPane
+        // 0x19a7f0:248-269, 276-296]; before that (the level-start label) the sprites still carry
+        // the created template state the f42 capture shows. hud.rs draws the template state while
+        // this latch is clear and the timer runs.
+        if self.hud.weapon_label_timer == 0 { self.hud.ammo_strips_positioned = true; }
         // The crouch icon: the timer holds 60 while crouched, then fades after standing
         // [M 0x19b9c8:305-328].
         if self.bond.crouched { self.hud.crouch_icon_timer = 60; }
