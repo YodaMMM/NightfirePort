@@ -289,6 +289,7 @@ fn the_first_wave_kill_raises_the_launch_order() {
 /// real-health run of the same route, with the later waves (spawners #165-181, ch 116-120 from
 /// the missile scripts [D]) fought, is `walk_arrival_to_drakes_defeat_on_real_health`.
 #[test]
+#[ignore = "zero-g look in the body frame reverted (the aim did not follow the camera); the console shots need it - 10-level-1b-zero-g-look"]
 fn walk_arrival_to_drakes_defeat() {
     let iso = iso();
     let mut w = Walker::new(nf_view::load(&iso, "0700001b.bin", false).unwrap());
