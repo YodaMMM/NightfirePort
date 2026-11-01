@@ -156,7 +156,15 @@ only within one tick's motion).
   ±0.0002 / tick clamped ±0.01; up to 21 respawns per tick at x, z ± 15, y = centre.y + 7.5 + rand(7.5), only inside an
   active box; a flake dies below max(box min y, centre.y − 7.5). First frame on 05 / 06: all 4096 in the cube.
 - `DrawDrops` 0x18cb90 → `psiDrawParticleList(0.2, …, 0x808080, 0x03000045)`: GS sprites, additive, depth-tested,
-  no write, colour (63, 63, 63, 127) × texture; size ≈ 0.2 m [S: full or half width open].
+  no write, colour (63, 63, 63, 127) × texture. Size: the VU1 scale word is `1/(PS2SnowSize·PS2SnowSizeMult)`
+  (`CreatePointerSpriteList` 0x11a160:81 [M]); PS2SnowSize 28990 / 12826 / 19053 on 05 / 06 / 08, the `.sdata`
+  boot value 10000 elsewhere [D 0x30c974]. As an emitter sprite of size `Far1·0.002386635/(4·SnowSize)` read
+  as a full width, the half-extent is 0.197 / 0.187 / 0.207 m (boot: 0.125) — `nf_game::env::flake_half_extent`;
+  the full-width reading matches the 05 f198 / 06 f206 PS2 captures (audits/render-1031-weather).
+- Rain (DropType 1): `DrawDrops` draws the `Raindrop` mesh 0x02000290 (about 8 additive streaks, ALPHA_1 0x48)
+  per live drop after Game_Draw's `psiSetTweakARGB(0xff…)` [M 0x1e6f50:148-151] — white tweak, no ambient dim;
+  on 09..0b a second pass draws `smoke_1_dust` 0x02000039 per drop with the viewer rotation under
+  `psiSetTweakARGB(0x24, 0x20, 0x20, 0x20)` [M 0x18cb90]. Caps 0x80 (09..0b) / 0x40 [M 0x18bf68].
 
 ## Output [M, L]
 
