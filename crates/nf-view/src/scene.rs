@@ -5036,7 +5036,7 @@ impl Sim {
             // `head`; the SP/switch/PCQWORM arm takes `sp_head` (garage-lift-calls); the SS/gunimp
             // pick below re-derives the same head. The last argument is Bond's body position
             // (obj+0xC0) — `SP_Activate` 0x1dc338:51-53's facing-dot input (use-pick-sp-standins).
-            self.drones.player_use_doors(&d, self.bond.head(), look, self.drones.frame, self.bond.head(), self.bond.pos);
+            self.drones.player_use_doors(&d, self.bond.head(), look, self.drones.frame, self.bond.head(), self.bond.pos, self.bond.cel);
             // `Player_Activate` 0x1a5170's ONE pick for every class [M :100-108]: a sphere of radius
             // exactly 1.0 (asm 0x1a5278 `lui $at, 0x3f80`) centred at head + view dir (`Mat_GetDir`
             // of the slot viewer's matrix, asm 0x1a5250), through Collide_SphereIntersect 0x1ec940
@@ -12326,10 +12326,10 @@ impl Sim {
         for slot in 0..nf_net::MAX_AGENTS {
             if !row[slot].use_key || self.mp_dead_ticks[slot] > 0 { continue; }
             let Some(b) = self.net_body(slot) else { continue };
-            let (head, look) = (b.head(), b.look());
+            let (head, look, bcel) = (b.head(), b.look(), b.cel);
             let (evs, _) = self.drones.doors.player_use(head, look, &mut self.drones.channels, frame, &self.world);
             for (id, pos) in evs { self.drones.audio.play3d(id as u32, pos, None); }
-            self.drones.net_use_triggers.push((head, look));
+            self.drones.net_use_triggers.push((head, look, bcel));
             let mut best: Option<(f32, usize)> = None;
             for (i, s) in self.drones.sss.list.iter().enumerate() {
                 if s.state == 0 || s.mask & 4 == 0 { continue; }

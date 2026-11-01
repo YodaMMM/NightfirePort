@@ -863,6 +863,52 @@ impl CollisionWorld {
         self.straddle(cell, &mut hit)
     }
 
+    /// The use key's straddle set (level-12-exit-pick): `Player_Activate` 0x1a5170:106-108 calls
+    /// `Collide_SphereIntersect(1.0, head + look, *(player+0x20), …)` — the HITTEST's start cel is
+    /// the PLAYER's cel, its query the sphere (r 1.0) at the use point, mask 0x101 [M 0x1ec940:94-111].
+    /// `Collide_Pick` 0x1eb320:125 takes its objects only from `Collide_StraddleCels` 0x1eac98's
+    /// cels (each cel's +0x8 object chain, 0x1eb320:313-328) plus the ForcedList, and the straddle
+    /// BFS crosses a portal only when `Intersect_Portal` 0x1ea7b8's 0x101 arm passes: the portal
+    /// AABB (+0x80..+0x98) against the use point (+0x50) ± r [M :184-201], then
+    /// `|Dist2Tri(use point, portal tri)| < r` on either of the two triangles [M :207-221]. `None`
+    /// when there is no cel scope or the cell is out of range (the caller's unscoped fallback).
+    pub fn use_sphere_cels(&self, cell: usize, centre: V3, r: f32) -> Option<Vec<usize>> {
+        let sc = self.scope.as_ref()?;
+        if cell >= sc.graph.cells.len() { return None; }
+        let mut hit = move |p: &ScopePortal| {
+            let (mut lo, mut hi) = (p.tris[0][0], p.tris[0][0]);
+            for t in &p.tris { for v in t { for k in 0..3 { lo[k] = lo[k].min(v[k]); hi[k] = hi[k].max(v[k]); } } }
+            if (0..3).any(|k| centre[k] - r > hi[k] || centre[k] + r < lo[k]) { return false; }
+            p.tris.iter().any(|t| {
+                let (cp, _) = closest_on_triangle(centre, t);
+                let d = sub(centre, cp);
+                dot(d, d) < r * r
+            })
+        };
+        Some(self.straddle(cell, &mut hit))
+    }
+
+    /// `Intersect_PointGeom` 0x1e92d8 as the use pick drives it (mask 0x101, HITTEST+0x9a = 0):
+    /// the sphere (centre `p`, radius `r` = HITTEST+0x8C) against the object's glist triangles —
+    /// per triangle the signed plane distance must lie in (0, r] (`fVar25 = 0` when +0x9a & 8 is
+    /// clear [M :116-121, :200-201] — the front side only), then the point-to-triangle distance
+    /// ≤ r [M `vecutil_Dist2Tri_PointGeom` 0x1dfac8, :222-229]. A miss leaves the hit node's
+    /// distance at 1e8 (`Collide_Intersect` 0x1ebaa8:187), and `Collide_SphereIntersect` 0x1ec940
+    /// frees every 1e8 node before returning the list [M :120-125] — no node, no activation.
+    /// The plane normal is the stored winding's +cross(v1−v0, v2−v0) (`tris_near`'s note).
+    pub fn sphere_meets_tris(p: V3, r: f32, tris: &[[V3; 3]]) -> bool {
+        tris.iter().any(|t| {
+            let n = cross(sub(t[1], t[0]), sub(t[2], t[0]));
+            let l = dot(n, n).sqrt();
+            if l <= 0.0 { return false; }
+            let dp = dot(sub(p, t[0]), n) / l;
+            if !(dp > 0.0 && dp <= r) { return false; }
+            let (cp, _) = closest_on_triangle(p, t);
+            let d = sub(p, cp);
+            dot(d, d) <= r * r
+        })
+    }
+
     pub fn triangle_count(&self) -> usize { self.stat.tris.len() }
 
     /// Every static triangle whose object's box meets `lo`..`hi`, in stored winding order (the [D]
