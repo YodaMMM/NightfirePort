@@ -258,7 +258,7 @@ pub fn script_pose_drone(scripts: &HashMap<u32, Script>, seqs: &HashMap<u32, Seq
 /// cached pose is the identical pose. Render-only: the sim's drone poses keep the direct path.
 #[derive(Default)]
 pub struct PoseSampleCache {
-    map: HashMap<(u32, u16, u32, u32, [u32; 3], u32, usize), Pose>,
+    map: crate::fxhash::FxHashMap<(u32, u16, u32, u32, [u32; 3], u32, usize), Pose>,
 }
 
 impl PoseSampleCache {

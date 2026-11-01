@@ -36,6 +36,7 @@ pub mod mpfx;
 pub mod desync;
 pub mod clipboard;
 pub mod scene;
+pub mod pose_pool;
 pub mod replay;
 pub mod bugreport;
 pub mod panel;
