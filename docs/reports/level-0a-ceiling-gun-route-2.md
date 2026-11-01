@@ -101,7 +101,8 @@ every *0700000a* binary and nf-game run with totals.
 All three fallbacks (this sandbox has no route to ntfy.sh):
 1. curl → `curl: (28) Connection timed out after 20002 milliseconds`
 2. python3 urllib → `urllib.error.URLError: <urlopen error [Errno 101] Network is unreachable>`
-3. wget → hung past the 120 s tool timeout (the same unreachable host).
+3. wget (25 s timeout wrapper) → exited 0 with no output — the one attempt that completed;
+   if it did not post, the first two errors above are the record.
 
 ## Usage
 
