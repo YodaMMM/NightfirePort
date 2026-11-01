@@ -544,7 +544,8 @@ fn guard_breath_origin_is_the_head_z_row() {
 #[test]
 fn water_ripple_fires_on_the_water_materials() {
     let mut gas = crate::gas::GasPool::default();
-    env_water_ripple(&mut gas, 0x0d, [5.0, 0.5, 6.0]);
+    let mut rng = Rng::new(0x5e4c04);
+    env_water_ripple(&mut gas, &mut rng, 0x0d, [5.0, 0.5, 6.0]);
     assert_eq!(gas.puffs.len(), 1);
     let g = &gas.puffs[0];
     assert_eq!(g.mesh, crate::world_fx::RIPPLE_MESH); // 0x0200_0129 [M 0x17c18c]
@@ -553,13 +554,22 @@ fn water_ripple_fires_on_the_water_materials() {
     assert_eq!(g.rgba, [127.0, 127.0, 127.0, 127.0]); // 0x7f7f7f7f [M 0x17c194]
     assert_eq!(g.rgba_rate[3], (2.0 - 127.0) / 63.0); // end 2 [M 0x17c19c], life 63 [M 0x17c180]
     assert_eq!(g.kind, 1); // t1 [M 0x17c190]
+    // The draws: Gas_Init's spin/sign only — kind 1 with a NULL velocity makes no velocity draws
+    // [M 0x1aacc8:72-80, 105-129].
+    let mut r = Rng::new(0x5e4c04);
+    let spin = r.frand(std::f32::consts::FRAC_PI_2 * crate::gas::REC_FRAME_RATE);
+    let sign = r.rand(0x100);
+    let expect = if sign >= 0x80 { -spin } else { spin };
+    assert_eq!(g.spin.to_bits(), expect.to_bits());
+    assert_eq!(r.draws, 2, "the ripple consumed exactly Gas_Init's 2 draws");
     // Sister: material 0x0c (just below the water pair) -> nothing [M 0x17c130-0x17c138 sltiu 2].
     let mut gas2 = crate::gas::GasPool::default();
-    env_water_ripple(&mut gas2, 0x0c, [0.0; 3]);
+    env_water_ripple(&mut gas2, &mut rng, 0x0c, [0.0; 3]);
     assert!(gas2.puffs.is_empty());
     // Sister: 0x0f (just above) -> nothing.
-    env_water_ripple(&mut gas2, 0x0f, [0.0; 3]);
+    env_water_ripple(&mut gas2, &mut rng, 0x0f, [0.0; 3]);
     assert!(gas2.puffs.is_empty());
+    assert_eq!(rng.draws, 2, "a gated-out ripple consumes nothing [M 0x17c130-0x17c138]");
 }
 }
 

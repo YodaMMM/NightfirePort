@@ -780,14 +780,22 @@ mod tests {
         assert!((d[0] - 0.995).abs() < 0.01, "the tangential component survives");
         assert!(d[2].abs() < 0.01, "the normal component is removed (e ≈ 0)");
         assert!((d[0] * d[0] + d[1] * d[1] + d[2] * d[2] - 1.0).abs() < 1e-4, "normalised");
-        // Sister: N = 0 → no draw, no reflection.
+        // Sister: N = 0 → no ricochet draw, no reflection. The stream still moves: the record's
+        // kind-9 gas puff spawns through `Gas_Init`, whose spin and sign are shared-stream draws
+        // [M 0x1aacc8:72-80 — unconditional for every puff; kind 9 takes the no-draw position arm
+        // :105-141]. gas-rng-draws: the old pin read 0 total draws — that was only true while the
+        // port's Gas_Init consumed nothing; Effect_RicochetProb itself still draws nothing, so the
+        // twin replay of the puff's 2 draws must land on the exact state the call leaves.
         let r3 = EffectRecord { debris_enable: 0, ..rec(0, 0) };
         let surf3 = table(r3);
         let mut e3 = Effects::new();
         let mut rng3 = Rng::new(1);
-        let before3 = (rng3.x, rng3.y);
+        let mut twin = Rng::new(1);
+        twin.frand(std::f32::consts::FRAC_PI_2 * crate::gas::REC_FRAME_RATE); // the spin [M 0x1ab060]
+        twin.rand(0x100); // the sign coin [M 0x1ab08c]
         assert!(e3.bullet_impact(&mut rng3, Some(&surf3), &mut gas, &mut fx(), [0.0; 3], n, 10, dir, 0x12, 0, true, 8).is_none());
-        assert_eq!((rng3.x, rng3.y), before3, "N = 0: Effect_RicochetProb draws nothing");
+        assert_eq!((rng3.x, rng3.y), (twin.x, twin.y), "N = 0: exactly the puff's 2 Gas_Init draws, no ricochet draw");
+        assert_eq!(rng3.draws, 2);
     }
 
     /// `Vec_MakeOrthonormalBasis` 0x1e4b78: the basis sum is orthogonal to the normal.
