@@ -332,7 +332,12 @@ impl Walker {
             if c + s > 0 { return true; }
             eprintln!("[walk] {label}: cycling weapons ({k})");
             self.tick(Input { weapon_cycle: 1, ..Default::default() }, false);
-            for _ in 0..60 { self.tick(Input::default(), false); } // the holster/draw cycle
+            // Real damage: answer shooters during the draw cycle (see walker.rs's note — the
+            // dry gun's ammo gate makes the nested call a no-op).
+            for _ in 0..60 {
+                if self.total_ticks % 10 == 0 { let _ = self.return_fire(label); }
+                self.tick(Input::default(), false);
+            } // the holster/draw cycle
         }
         let (c, s) = {
             let sim = self.scene.sim.as_ref().unwrap();
@@ -549,15 +554,18 @@ impl Walker {
     /// `walk_to` that reports a wedge instead of panicking (resupply / guard approach skip the
     /// unreachable target and the caller carries on).
     pub fn try_walk_to(&mut self, wp: Wp, label: &str) -> bool {
+        let saved = self.lenient;
         self.lenient = true;
         let r = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| self.walk_to(wp, label)));
-        self.lenient = false;
+        self.lenient = saved;
         r.is_ok()
     }
 
     /// Walk to a target THROUGH the nav graph (the guard approaches and resupply runs cross rooms;
     /// the direct steer wedges on walls between them). `final_arrive`: the last leg's radius.
     pub fn walk_nav_to(&mut self, target: V3, label: &str, final_arrive: f32) {
+        // real-damage-routes: restore the CALLER's lenient (see walker.rs's note).
+        let saved_lenient = self.lenient;
         self.lenient = true;
         let pts = {
             let sim = self.scene.sim.as_ref().unwrap();
@@ -568,7 +576,7 @@ impl Walker {
             let _ = self.walk_to(Wp::new(p[0], p[1], p[2]).r(1.3), &format!("{label} nav {k}"));
         }
         self.walk_to(Wp { at: target, act: Act::None, arrive: final_arrive }, label);
-        self.lenient = false;
+        self.lenient = saved_lenient;
     }
 
     /// Steer Bond to one waypoint; returns the ticks it took. Panics with a dump when genuinely
@@ -604,7 +612,7 @@ impl Walker {
             }
             // Real damage: answer whoever is shooting Bond before walking on (the fight's
             // ticks are the response's cost, not the leg's).
-            if !riding && !ladder && self.total_ticks % 10 == 0 {
+            if !riding && !ladder {
                 let t0 = self.total_ticks;
                 if self.return_fire(label) { start_ticks += self.total_ticks - t0; continue; }
             }

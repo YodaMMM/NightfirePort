@@ -144,6 +144,25 @@ fn walk_the_full_route_and_complete_every_objective() {
     // The type-2 guards carry 12 health, captains 24 [L ee_02b.bin]: Bond aims for the head
     // (`Walker::prefer_head`), as a player does, or the scripted fights run the walk dry.
     w.prefer_head = true;
+    // Real damage: the return fire must not eat the rescues — the captors are the DTYPE-4 killer
+    // guards (mode 4 [M NDrone2_GetDTYPENEW 0x14c938 case 4; the bathhouse census]), and a captor
+    // killed between its enable plate and the hostage bind strands the save (the bind at the
+    // HOSTAGE entering tick [M 0x144030] needs a live armed guard). Spare them from `shooters`
+    // until both saves have fired; the route's own clear_near + the scripted captor kill (below)
+    // do the fighting, exactly the top-up walk's shape.
+    if !w.tops_up() {
+        w.dmg.spare = w.scene.sim.as_ref().unwrap().drones.list.iter().enumerate()
+            .filter(|(_, d)| d.team == 1 && d.mode == 4).map(|(i, _)| i).collect();
+        eprintln!("[03] real-damage spares: {:?} (modes {})", w.dmg.spare,
+            w.scene.sim.as_ref().unwrap().drones.list.iter().enumerate()
+                .filter(|(i, _)| w.dmg.spare.contains(i))
+                .map(|(i, d)| format!("#{} skin {:#x} mode {}", i, d.skin, d.mode)).collect::<Vec<_>>().join(","));
+        // Shotgun captains (0x1c, 8 pellets a round [M DroneWeap_FireWeapon 0x178f68]) at arm's
+        // length took the walk down (the 03 death run: six pellets from 3.0 u at 3.5 health):
+        // the 01 arm's rule — keep every live guard 4 u off in the fights and the walk.
+        w.keep_off = Some(4.0);
+        w.dmg.back_off = Some(4.0);
+    }
     let (li, o0, o1, o2) = mission_row();
     {
         let sim = w.scene.sim.as_ref().unwrap();
@@ -282,6 +301,7 @@ fn walk_the_full_route_and_complete_every_objective() {
         assert!(sim.drones.channels.on(0x51), "the disc's AND(0x4f,0x50) writes obj1's channel [D]");
         assert_eq!(sim.drones.mission.states[li][o1], 4, "obj1 COMPLETE through the real monitor [M 0x1827d8:78-85]");
     }
+    w.dmg.spare.clear(); // both rescues done: the walk answers everyone again
 
     // 2. The front gate. The plate (kind 1, mask 4 = E-usable [M Trigger_Activate 0x1b2318:38-49])
     //    writes 0x31; the door starts locked behind it and the gate SS #502 listens on 0x31. The
@@ -435,6 +455,14 @@ fn walk_the_full_route_and_complete_every_objective() {
     eprintln!("[03] full walk: {} ticks; falls: {:?}", w.total_ticks, w.report.falls);
     for f in &w.report.falls { eprintln!("[03] fall: {f}"); }
     for s in &w.report.stuck_events { eprintln!("[03] stuck: {s}"); }
+}
+
+/// Real damage: the same walk with the health top-up off for every walker it makes and the
+/// walker's return fire on — the captor spares above keep the rescues intact, the route's own
+/// fights answer the rest. Bond's death panics with the death line (common/damage_log.rs).
+#[test]
+fn walk_the_full_route_and_complete_every_objective_real_damage() {
+    walker::with_real_damage(walk_the_full_route_and_complete_every_objective);
 }
 
 /// Sister of the full walk's key gate: one objective's channel alone never opens the gate —

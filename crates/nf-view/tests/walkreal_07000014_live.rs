@@ -848,6 +848,11 @@ fn the_vent_drop_hands_bond_into_the_facility() {
 /// part 1's records untouched [M 0x182270:68-129], and "Find the exit to Omega Sector" announcing
 /// off the spawn plate #484's 0x4b [D row 21; M 0x1827d8 case 1].
 #[test]
+fn walk_the_infiltration_to_the_delta_exit_real_damage() {
+    walker::with_real_damage(walk_the_infiltration_to_the_delta_exit);
+}
+
+#[test]
 fn walk_the_infiltration_to_the_delta_exit() {
     let iso = iso();
     let mut w = Walker::new(nf_view::load_with_carry(&iso, "07000014.bin", false, None).unwrap());
