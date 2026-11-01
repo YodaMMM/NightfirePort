@@ -34,6 +34,8 @@ fn walk_to_the_exit(iso: &str, stop_at_fire: bool) -> Walker {
     // The type-2 guards carry 12 health, captains 24 [L ee_02b.bin]: Bond aims for the head
     // (`Walker::prefer_head`), as a player does, or the scripted fights run the walk dry.
     w.prefer_head = true;
+    // A left nudge ends like a right one (`Walker::sidestep_decays`).
+    w.sidestep_decays = true;
     // hud-start: a load holds nothing (0x47 [M Player_InitWeapon 0x1a7ef8:137]) - settle the start draw first.
     nf_view::settle_start_draw(w.scene.sim.as_mut().unwrap());
     {
@@ -167,7 +169,16 @@ fn walk_to_the_exit(iso: &str, stop_at_fire: bool) -> Walker {
         let sim = w.scene.sim.as_ref().unwrap();
         let dry = (sim.gun.clip as i32) + (sim.gun.spare as i32) < 48;
         drop(sim);
-        if dry { w.resupply("pre-hall ammo"); }
+        if dry {
+            w.resupply("pre-hall ammo");
+            // Back to the meet room before the hall: the stage below is the route proven FROM
+            // the meet plate. From a corridor box south-west of it the stage leg's nav wedged at
+            // (1.5, 7.1, 8.6) — Bond 0.6 above the room's walk height (6.47), the segment to the
+            // stage hitting at t 0.31 — for its 3000-tick cap and every guard approach after.
+            if walker::dxz(w.scene.sim.as_ref().unwrap().bond.pos, [6.8, 6.0, 8.9]) > 3.0 {
+                w.walk_nav_to([6.8, 6.0, 8.9], "back to the meet room", 1.5);
+            }
+        }
     }
 
     // The hall detour: the disc's AND mux (kind 3, out 0x99 = 153, list [0x11,0x12,0x13] [D the
@@ -474,6 +485,10 @@ fn walk_to_the_exit(iso: &str, stop_at_fire: bool) -> Walker {
             if walker::dxz(gpos, bpos) > 9.0 || !los_clear {
                 w.walk_nav_to(gpos, &format!("approach stairwell guard {g}"), 3.0);
             }
+            // The contact reached the plate while Bond stood on it: the AND fired on this leg
+            // (the walk stops on the exit tick) — the fight below would walk Bond off the plate
+            // and drop ch 0x10 before the check reads it.
+            if w.scene.sim.as_ref().unwrap().drones.channels.on(0x10) { break 'recovery; }
             {
                 let sim = w.scene.sim.as_ref().unwrap();
                 if sim.gun.clip + sim.gun.spare < 8 { drop(sim); w.resupply("ammo"); }

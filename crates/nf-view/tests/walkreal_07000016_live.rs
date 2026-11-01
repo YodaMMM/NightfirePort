@@ -471,8 +471,18 @@ fn tick_until(w: &mut Walker, max: u32, what: &str, done: impl Fn(&nf_view::scen
 /// mission not failed. Returns the pulse length.
 fn sit_out_pulse(w: &mut Walker, label: &str) -> u32 {
     let allowance = w.top_up_health;
+    // The allowance holds until the pulse rises (the guards' fire before it is not the volume's
+    // contact), then is OFF for every tick of the pulse. Through both, a player in the room
+    // answers a guard shooting him (a guard who followed him in stood 1.7 u away and shot him
+    // dead 448 ticks into pulse 2) — he aims and fires; nothing moves his feet.
+    let mut last_tap = 0u32;
+    let mut waited = 0u32;
+    while !w.scene.sim.as_ref().unwrap().drones.channels.on(243) {
+        shelter_tick(w, &mut last_tap);
+        waited += 1;
+        assert!(waited < 8000, "{label}: not within 8000 ticks");
+    }
     w.top_up_health = false;
-    tick_until(w, 8000, label, |s| s.drones.channels.on(243));
     let mut n = 0u32;
     while w.scene.sim.as_ref().unwrap().drones.channels.on(243) {
         {
@@ -482,7 +492,7 @@ fn sit_out_pulse(w: &mut Walker, label: &str) -> u32 {
             assert!(!h.contains(p, [p[0], p[1] + 1.8, p[2]], 0.55), "{label}: the volume touches Bond at {p:?} (+{n})");
             assert!(sim.drones.health.health > 0.0, "{label}: Bond died at {p:?} (+{n})");
         }
-        w.tick(Input::default(), false);
+        shelter_tick(w, &mut last_tap);
         n += 1;
         assert!(n < 1000, "{label}: the pulse never fell");
     }
@@ -490,6 +500,44 @@ fn sit_out_pulse(w: &mut Walker, label: &str) -> u32 {
     assert!(sim.drones.health.health > 0.0 && sim.drones.mission.status() != 3, "{label}: Bond lives, no fail");
     w.top_up_health = allowance;
     n
+}
+
+/// One tick in the shelter: with a visible guard shooting Bond (`DamageLog::shooters`), turn the
+/// view onto his exposed part and fire (a tap every 8 ticks once on target, a reload on an empty
+/// clip); otherwise an idle tick. Turn/look only — Bond's feet never move, so the pulse's
+/// per-tick volume check reads the same standing spot.
+fn shelter_tick(w: &mut Walker, last_tap: &mut u32) {
+    let pick = {
+        let sim = w.scene.sim.as_ref().unwrap();
+        let armed = sim.gun.clip + sim.gun.spare > 0 && (2..=0x47).contains(&sim.gun.weapon);
+        if !armed || sim.disabled { None } else {
+            w.dmg.shooters(sim).into_iter()
+                .find_map(|i| walker::DamageLog::exposed_part(sim, i).map(|at| (i, at)))
+        }
+    };
+    let Some((_, at)) = pick else { w.tick(Input::default(), false); return };
+    let (input, fire, reload) = {
+        let sim = w.scene.sim.as_ref().unwrap();
+        let b = sim.bond.pos;
+        let eye = [b[0], b[1] + sim.bond.eye - sim.bond.crouch_drop, b[2]];
+        let (dx, dy, dz) = (at[0] - eye[0], at[1] - eye[1], at[2] - eye[2]);
+        let h = (dx * dx + dz * dz).sqrt().max(0.5);
+        let err = walker::wrap_pi(dx.atan2(dz) - sim.bond.yaw);
+        let perr = (dy / h).atan() / std::f32::consts::FRAC_PI_2 - sim.bond.pitch;
+        let reload = sim.gun.clip == 0;
+        let fire = !reload && err.abs() < 0.03 && perr.abs() < 0.04 && w.total_ticks.saturating_sub(*last_tap) >= 8;
+        (Input { turn: err.clamp(-0.08, 0.08), look: perr.clamp(-0.08, 0.08), ..Default::default() }, fire, reload)
+    };
+    if reload {
+        w.scene.sim.as_mut().unwrap().step_bond(Input::default(), false, true, false);
+        w.total_ticks += 1;
+        w.after_step();
+    } else if fire {
+        *last_tap = w.total_ticks;
+        w.tick_fire(input);
+    } else {
+        w.tick(input, false);
+    }
 }
 
 /// E beats aimed at `at` until `done` (the interactables press shape: the game's Player_Activate
@@ -539,7 +587,11 @@ fn walk_the_chasers_defeat_completes_the_mission() {
     let mut w = Walker::new(nf_view::load_with_carry(&iso, "07000016.bin", false, Some(&carry(&[0x47, 0x48, 0x4a, 0x54, 0xce, 0x4b]))).unwrap());
     let (chaser, t0) = walk_to_the_chaser_fight(&mut w);
     assert_armed_for_the_chaser(w.scene.sim.as_ref().unwrap(), &CHAIN_OWNED, "the 15 → 16 chain");
-    assert!(w.shoot(chaser, "the chaser"), "the chaser dies to Bond's fire");
+    // Dry mid-fight (the 15 carry's Delta Repeater holds 12 rounds here): the player switches to
+    // another carried gun with ammo (or, with none, picks up a fallen guard's), then fights on.
+    let killed = w.shoot(chaser, "the chaser")
+        || ((w.switch_to_armed("the chaser ammo") || w.resupply("the chaser ammo")) && w.shoot(chaser, "the chaser"));
+    assert!(killed, "the chaser dies to Bond's fire");
     finish_after_the_chaser(&mut w, t0);
 }
 
@@ -627,8 +679,15 @@ fn finish_after_the_chaser(w: &mut Walker, t0: u32) {
         assert!(sim.drones.mission.status() != 6, "the mission does not complete on the kill [D AND #271 waits for the button]");
     }
     eprintln!("[finale] the chaser down +{}", w.total_ticks - t0);
-    // Back into the shelter before the leaves shut again (6310..6660 [D]).
-    w.walk_route(INTO_THE_SHELTER);
+    // Back into the shelter before the leaves shut again (6310..6660 [D]) — from where the fight
+    // left Bond: a player who fought her from inside the room (west of the blast door at x
+    // −11.0) stays in; the full route out to the pit floor and back in wedged on its first leg
+    // for 1523 ticks and pulse 2 caught him outside.
+    if w.scene.sim.as_ref().unwrap().bond.pos[0] < -12.0 {
+        w.walk_route(&INTO_THE_SHELTER[INTO_THE_SHELTER.len() - 1..]);
+    } else {
+        w.walk_route(INTO_THE_SHELTER);
+    }
     let back_at = w.total_ticks - t0;
     eprintln!("[finale] back in the shelter +{back_at}");
     assert!(back_at < 6310, "back in the room before its door shuts for pulse 2 (+{back_at})");
@@ -648,7 +707,10 @@ fn finish_after_the_chaser(w: &mut Walker, t0: u32) {
         };
         let Some(i) = next else { break };
         eprintln!("[finale] squad #{i} (death ch {:#x}) at {:?}", w.scene.sim.as_ref().unwrap().drones.list[i].death_channel, w.scene.sim.as_ref().unwrap().drones.list[i].pos);
-        assert!(w.shoot(i, "the pit squad"), "the pit squad member #{i} dies to Bond's fire");
+        // Dry mid-fight: another carried gun with ammo or the fallen squad's guns, then fight on.
+        let killed = w.shoot(i, "the pit squad")
+            || ((w.switch_to_armed("the pit squad ammo") || w.resupply("the pit squad ammo")) && w.shoot(i, "the pit squad"));
+        assert!(killed, "the pit squad member #{i} dies to Bond's fire");
     }
     tick_until(w, 600, "the pit squad's deaths raise ch 0xbf [D mux #611]", |s| s.drones.channels.on(0xbf));
     eprintln!("[finale] ch 0xbf +{}", w.total_ticks - t0);

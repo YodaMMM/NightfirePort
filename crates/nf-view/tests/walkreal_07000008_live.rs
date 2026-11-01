@@ -155,7 +155,11 @@ fn walk_the_whole_mission_on_real_input() {
     let fusebox = [154.35f32, 43.41, -119.67];
     for (name, at) in [
         ("the station hall", [139.0f32, 49.5, -93.0]),
-        ("the station doors", [139.5, 49.5, -97.5]),
+        // No "station doors" stop at (139.5, 49.5, −97.5) on this walk: its nav route runs east
+        // through door (160.6, 45.0, −100.1) and back west along the lower deck (y 46.1), and the
+        // last leg aims at a point 3.4 above that deck — the leg wedged there, and the stuck
+        // ladder's sidesteps at the deck edge dropped Bond into the station pit and out of the
+        // map (y 46.1 → 40.8 → −508). The walkway head's own route walks the same deck.
         ("the walkway head", [144.0, 46.0, -105.0]),
         ("the walkway mid", [145.5, 45.0, -108.6]),
         ("the lower landing", [150.0, 43.5, -116.0]),
@@ -183,6 +187,11 @@ fn walk_the_whole_mission_on_real_input() {
     for (name, at, r) in [
         ("the stair head", [146.6f32, 44.4, -117.6], 2.2),
         ("the walkway west", [146.3, 43.3, -119.8], 2.0),
+        // The stair foot: the green crossing's own arrival (146.15, 43.26, −119.85). The 2.0
+        // radius above can count Bond arrived still ON the stair (measured (146.33, 44.15,
+        // −117.85)); the diagonal leg east from there pressed the stair's side, and the stuck
+        // ladder walked him back up to the walkway door (146.3, 46.1, −109.4) for the cap.
+        ("the stair foot", [146.15, 43.26, -119.85], 0.7),
         ("the walkway line", [149.5, 43.2, -120.3], 2.2),
         ("by the fusebox", [153.0, 43.4, -118.5], 1.5),
     ] {
@@ -253,6 +262,18 @@ fn walk_the_whole_mission_on_real_input() {
         ("by the fusebox", [153.0, 43.4, -118.5]),
         ("the lower landing", [150.0, 43.5, -116.0]),
     ] {
+        if name == "at the door west side" {
+            // The way out is the door Bond came in by (#10/122 at (154.5, 42, −121.3)): walk INTO
+            // its gap and press E, as the way in did. The old 1.5 nav arrival counted (155.19,
+            // −119.93) — still on the room side of the wall line x 155.19, beside the kind-2 door
+            // at (154.3, −119.6) — as arrived; the straight leg west to the fusebox then pressed
+            // that wall and slid into the corner at (155.19, −121.78), wedged there for every
+            // later leg while two guards stood in GoToGoalPosition 0x63 just outside at (154.0,
+            // 43.0, −120.1) (measured on the seven-bone sight build; the arrival spot depends on
+            // the run's earlier fights).
+            w.walk_to(Wp { at, act: Act::Use { use_ticks: 240 }, arrive: 0.5 }, name);
+            continue;
+        }
         w.walk_nav_to(at, name, 1.5);
     }
 
