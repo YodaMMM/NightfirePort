@@ -28,3 +28,11 @@ Player_Collision 0x194df0), fix with the address cited, pin Bond on the floor wa
   with the fix the walk wedges at the wall (grounded ON the lip — the game's own park spot) where
   stealth-los-2's run fell through. Adopted 00310262's route (retrace the opening legs + the 0x25
   doorway fallback; "Every assertion is unchanged") — walkreal_07000003_live 4/0 (227.7 s).
+
+## Outcome (2026-11-01, ~09:15 UTC)
+
+- Run on the final branch tree: walkreal_07000003_live 4/0 (227.7 s), walk_07000003_live 2/0,
+  interactables_07000003_live 8/0/1i, wiring_07000003_live 4/0, walkreal_0700000a_live 7/0/2i,
+  walkreal_07000001_live 5/0 (187.1 s), flank_fall_repro 2/0, nf_game lib 631/0/5i. The full
+  fast-suite pass did not fit (background reaped between tool calls; the 9.9G disk — same as the
+  previous session). Report: docs/reports/level-03-fall-through-floor.md.
