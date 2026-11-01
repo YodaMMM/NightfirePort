@@ -14340,6 +14340,63 @@ fn segment_hits_sphere(a: V3, b: V3, c: V3, r: f32) -> bool {
             // The drone candidate — part of the SAME sorted collide list [M 0x1ea398:120-158] —
             // queried here (pure), applied in the match below.
             let mut best: Option<(usize, i16, f32)> = None;
+            // The flight trace drops the pass-flagged hits (segment_bullet): the game's flying
+            // bullet ARMS its HITTEST pick every tick (+0x94 = 0x101/0x201, +0x9a = the surface
+            // mask 0x20 for guns without weapon_data+0x6c & 0x800 [M Bullet_update 0x12e7b0 disasm
+            // 0x12f030-0x12f058, 0x12f134/0x12f154]) and its sorted contact list is walked past
+            // every pass-flagged hit to the first solid one [M Collide_Update 0x1ea398:216-229 —
+            // pass = HITDATA+0x51 bit 1 (the glist node 0x40 flag / the surface byte's 0x40,
+            // Collide_Intersect disasm 0x1ebf78-0x1ebf80) | +0x50 bit 0x40 | the 0x80 random roll
+            // | (mask 0x20 → glass class 0x10 passes); a non-pass hit ends the walk]. The
+            // stairwell's 'stairwell_blocking_ploys…' fudge (glist 0x10, triangles mat 0x40 [D
+            // 07000011 map43#126]) is exactly such a pass surface: the game's rounds fly through
+            // it to the rope guards. (The earlier reading here — the flight keeps the plain
+            // first-hit ray because HITTEST+0x94 stays 0 — read the INIT zeroing at 0x12c668;
+            // the flight re-arms the mask per tick, so the walk rule governs.) The 0x80 random
+            // roll and the glass-class pass are not modelled in the port's flight trace (no
+            // 0x80/glass surface sits on these paths; adding the roll would spend RNG the game
+            // spends only per 0x80 hit) — [S] documented deviation.
+            // The cel-scoped pick (see the contact pass above): geometry outside the cells the
+            // segment straddles - the exterior backdrop planes around 07000011's stairwell - is
+            // never a candidate [M 0x1eb320:125, 0x1eac98].
+            // mine-shield-by-guard: the query moved ahead of the mine and stuck-gadget passes so
+            // the guard competes with them by hit distance [M the same first-hit rule]; the
+            // application stays in the match below.
+            let tw = d.world.segment_bullet_scoped(d.world.find_cel(b.pos), b.pos, end);
+            for (i, dr) in self.list.iter().enumerate() {
+                // `Drone_CollisionHandler` 0x140968:62 returns while `NPCGlobals == 0` (the NIS freeze:
+                // drones take no damage) and `Collide_PickObj` 0x1eae80:26-30 drops `obj+0xF0 & 0x20`
+                // objects (set by `NDrone2_Enable(0)`) — bullets pass through the frozen drones.
+                if !(self.npc_enabled || self.hold_active) || !dr.present || !dr.enabled || dr.corpse { continue; }
+                let c = [dr.pos[0], dr.pos[1], dr.pos[2]];
+                if seg_point_dist2(b.pos, end, c) > 1.05 * 1.05 * 4.0 { continue; }
+                let fb = crate::damage::first_box_hit(b.pos, ray, &dr.hit_boxes(d));
+                // `NDrone2_Collision` 0x140e90's down branch (+0x2f set [M :65-90]): the shootable
+                // volume is the low sphere — radius 0.3, centre (0.3 − obj+0xa0) above the origin
+                // along the up vector — while a standing guard uses 0.4/0.55 [M 0x140e90:65-90]. The
+                // port's standing volume is the posed bone boxes — the established documented
+                // approximation (the game's two origin-centred standing spheres are what the boxes
+                // refine; the damage tests pin them); a
+                // DOWNED guard's boxes lie along the ground and leave the aimed-at-origin ray
+                // uncovered (a re-tase did nothing), so the game's own sphere is the
+                // contact here. The port's origins rest on the floor when down (the anim root
+                // settles), so the centre is pos + 0.3 up — the lift term drops out.
+                let fb = fb.or_else(|| {
+                    if !dr.down { return None; }
+                    let centre = [dr.pos[0], dr.pos[1] + 0.3, dr.pos[2]];
+                    let ab = [end[0] - b.pos[0], end[1] - b.pos[1], end[2] - b.pos[2]];
+                    let ab2 = ab[0] * ab[0] + ab[1] * ab[1] + ab[2] * ab[2];
+                    let ap = [centre[0] - b.pos[0], centre[1] - b.pos[1], centre[2] - b.pos[2]];
+                    let t = if ab2 > 1e-9 { (ap[0] * ab[0] + ap[1] * ab[1] + ap[2] * ab[2]) / ab2 } else { 0.0 };
+                    let tc = t.clamp(0.0, 1.0);
+                    let cl = [b.pos[0] + ab[0] * tc, b.pos[1] + ab[1] * tc, b.pos[2] + ab[2] * tc];
+                    let d2 = (cl[0] - centre[0]).powi(2) + (cl[1] - centre[1]).powi(2) + (cl[2] - centre[2]).powi(2);
+                    (d2 <= 0.3 * 0.3).then(|| (i16::MAX, tc))
+                });
+                if let Some((part, t)) = fb {
+                    if best.is_none_or(|(_, _, bt)| t < bt) { best = Some((i, part, t)); }
+                }
+            }
             if !net_world {
                 // The round's world stop rides the game's cel-scoped pick [M Collide_Pick 0x1eb320:125
                 // candidate nodes from Collide_StraddleCels 0x1eac98 only; Bullet_update re-feeds
@@ -14435,6 +14492,22 @@ fn segment_hits_sphere(a: V3, b: V3, c: V3, r: f32) -> bool {
             // damage +0x0C, owner BU+0x30, script 0x0600_0052), and the 0x80000 laser tail deletes
             // the beam object (BU+0x38) — the port's beam list is rebuilt from the live stuck
             // tripbombs each tick, so the deleted gadget's beam is gone with it.
+            // mine-shield-by-guard: the stuck-gadget and mine candidates ride the SAME sorted
+            // collide list [M 0x1ea398:120-158] — queried here (pure) so the mines, the drones,
+            // the stuck tripbombs and the world compete by hit distance; the takes below and the
+            // guard arm in the match below apply only the nearest one. Ties: the mine and the
+            // gadget beat the guard (the guard arm below demands the strict t) and the gadget
+            // beats the mine (the existing `t <= mt` gate).
+            let gadget_t: Option<f32> = if !net_world {
+                self.grenades.iter().filter_map(|g| {
+                    let model = d.models.get(&g.mesh)?;
+                    let shape = d.world.shape(g.mesh)?;
+                    g.round_pick(model, shape, d.world.shape_materials(g.mesh), b.pos, end).map(|(t, _)| t)
+                }).min_by(|x, y| x.total_cmp(&y))
+            } else { None };
+            let mine_t: Option<f32> = if !net_world {
+                self.mines.iter().filter_map(|m| m.segment_t(b.pos, end)).min_by(|x, y| x.total_cmp(&y))
+            } else { None };
             if !net_world && !b.dead && !self.grenades.is_empty() {
                 let hit = self.grenades.iter().enumerate()
                     .filter_map(|(gi, g)| {
@@ -14444,11 +14517,13 @@ fn segment_hits_sphere(a: V3, b: V3, c: V3, r: f32) -> bool {
                     })
                     .min_by(|x, y| x.1.total_cmp(&y.1));
                 if let Some((gi, t, mat)) = hit {
-                    let tstop = d.world.segment_bullet_scoped(d.world.find_cel(b.pos), b.pos, end);
-                    let mine_t = self.mines.iter().filter_map(|m| m.segment_t(b.pos, end)).min_by(|x, y| x.total_cmp(y));
                     // A pass surface (HITDATA+0x50 & 0x40) lets the round on without a contact
-                    // [M 0x12ce80:149-151]; no gadget surface carries it [D above].
-                    if tstop.is_none_or(|ts| t <= ts) && mine_t.is_none_or(|mt| t <= mt) && mat & 0x40 == 0 {
+                    // [M 0x12ce80:149-151]; no gadget surface carries it [D above]. The gate is
+                    // the sorted list's first-solid-node rule over the whole candidate set [M
+                    // 0x1ea398:216-229]: the world (tw), a nearer mine, a nearer guard — each
+                    // shields the gadget.
+                    if tw.is_none_or(|ts| t <= ts) && mine_t.is_none_or(|mt| t <= mt)
+                        && best.is_none_or(|(_, _, dt)| t <= dt) && mat & 0x40 == 0 {
                         b.dead = true;
                         let round_dmg = d.weapons.records.get(b.weapon as usize)
                             .map_or(0.0, |r| f32::from_le_bytes([r[0x0c], r[0x0d], r[0x0e], r[0x0f]]));
@@ -14469,8 +14544,12 @@ fn segment_hits_sphere(a: V3, b: V3, c: V3, r: f32) -> bool {
                     .filter_map(|(i, m)| m.segment_t(b.pos, end).map(|t| (i, t)))
                     .min_by(|x, y| x.1.total_cmp(&y.1));
                 if let Some((i, t)) = hit {
-                    let tstop = d.world.segment_bullet_scoped(d.world.find_cel(b.pos), b.pos, end);
-                    if tstop.is_none_or(|ts| t <= ts) {
+                    // The same first-solid-node gate [M 0x1ea398:216-229]: the world, a nearer
+                    // stuck gadget or a nearer guard shields the mine — the guard in front takes
+                    // the round instead (its own arm in the match below). The guard tie goes to
+                    // the mine: the guard arm demands the strict t.
+                    if tw.is_none_or(|ts| t <= ts) && gadget_t.is_none_or(|gt| t < gt)
+                        && best.is_none_or(|(_, _, dt)| t <= dt) {
                         if self.mines[i].pending == 0 { self.mines[i].pending = crate::worldobj::MINE_BULLET; }
                         b.dead = true;
                     }
@@ -14836,67 +14915,16 @@ fn segment_hits_sphere(a: V3, b: V3, c: V3, r: f32) -> bool {
                 }
             }
             self.bullet_path_weapons.push(b.weapon);
-            // The flight trace drops the pass-flagged hits (segment_bullet): the game's flying
-            // bullet ARMS its HITTEST pick every tick (+0x94 = 0x101/0x201, +0x9a = the surface
-            // mask 0x20 for guns without weapon_data+0x6c & 0x800 [M Bullet_update 0x12e7b0 disasm
-            // 0x12f030-0x12f058, 0x12f134/0x12f154]) and its sorted contact list is walked past
-            // every pass-flagged hit to the first solid one [M Collide_Update 0x1ea398:216-229 —
-            // pass = HITDATA+0x51 bit 1 (the glist node 0x40 flag / the surface byte's 0x40,
-            // Collide_Intersect disasm 0x1ebf78-0x1ebf80) | +0x50 bit 0x40 | the 0x80 random roll
-            // | (mask 0x20 → glass class 0x10 passes); a non-pass hit ends the walk]. The
-            // stairwell's 'stairwell_blocking_ploys…' fudge (glist 0x10, triangles mat 0x40 [D
-            // 07000011 map43#126]) is exactly such a pass surface: the game's rounds fly through
-            // it to the rope guards. (The earlier reading here — the flight keeps the plain
-            // first-hit ray because HITTEST+0x94 stays 0 — read the INIT zeroing at 0x12c668;
-            // the flight re-arms the mask per tick, so the walk rule governs.) The 0x80 random
-            // roll and the glass-class pass are not modelled in the port's flight trace (no
-            // 0x80/glass surface sits on these paths; adding the roll would spend RNG the game
-            // spends only per 0x80 hit) — [S] documented deviation.
-            // The cel-scoped pick (see the contact pass above): geometry outside the cells the
-            // segment straddles - the exterior backdrop planes around 07000011's stairwell - is
-            // never a candidate [M 0x1eb320:125, 0x1eac98].
-            let tw = d.world.segment_bullet_scoped(d.world.find_cel(b.pos), b.pos, end);
-            for (i, dr) in self.list.iter().enumerate() {
-                // `Drone_CollisionHandler` 0x140968:62 returns while `NPCGlobals == 0` (the NIS freeze:
-                // drones take no damage) and `Collide_PickObj` 0x1eae80:26-30 drops `obj+0xF0 & 0x20`
-                // objects (set by `NDrone2_Enable(0)`) — bullets pass through the frozen drones.
-                if !(self.npc_enabled || self.hold_active) || !dr.present || !dr.enabled || dr.corpse { continue; }
-                let c = [dr.pos[0], dr.pos[1], dr.pos[2]];
-                if seg_point_dist2(b.pos, end, c) > 1.05 * 1.05 * 4.0 { continue; }
-                let fb = crate::damage::first_box_hit(b.pos, ray, &dr.hit_boxes(d));
-                // `NDrone2_Collision` 0x140e90's down branch (+0x2f set [M :65-90]): the shootable
-                // volume is the low sphere — radius 0.3, centre (0.3 − obj+0xa0) above the origin
-                // along the up vector — while a standing guard uses 0.4/0.55 [M 0x140e90:65-90]. The
-                // port's standing volume is the posed bone boxes — the established documented
-                // approximation (the game's two origin-centred standing spheres are what the boxes
-                // refine; the damage tests pin them); a
-                // DOWNED guard's boxes lie along the ground and leave the aimed-at-origin ray
-                // uncovered (a re-tase did nothing), so the game's own sphere is the
-                // contact here. The port's origins rest on the floor when down (the anim root
-                // settles), so the centre is pos + 0.3 up — the lift term drops out.
-                let fb = fb.or_else(|| {
-                    if !dr.down { return None; }
-                    let centre = [dr.pos[0], dr.pos[1] + 0.3, dr.pos[2]];
-                    let ab = [end[0] - b.pos[0], end[1] - b.pos[1], end[2] - b.pos[2]];
-                    let ab2 = ab[0] * ab[0] + ab[1] * ab[1] + ab[2] * ab[2];
-                    let ap = [centre[0] - b.pos[0], centre[1] - b.pos[1], centre[2] - b.pos[2]];
-                    let t = if ab2 > 1e-9 { (ap[0] * ab[0] + ap[1] * ab[1] + ap[2] * ab[2]) / ab2 } else { 0.0 };
-                    let tc = t.clamp(0.0, 1.0);
-                    let cl = [b.pos[0] + ab[0] * tc, b.pos[1] + ab[1] * tc, b.pos[2] + ab[2] * tc];
-                    let d2 = (cl[0] - centre[0]).powi(2) + (cl[1] - centre[1]).powi(2) + (cl[2] - centre[2]).powi(2);
-                    (d2 <= 0.3 * 0.3).then(|| (i16::MAX, tc))
-                });
-                if let Some((part, t)) = fb {
-                    if best.is_none_or(|(_, _, bt)| t < bt) { best = Some((i, part, t)); }
-                }
-            }
             let at = |t: f32| [b.pos[0] + ray[0] * t, b.pos[1] + ray[1] * t, b.pos[2] + ray[2] * t];
             // The first solid node wins the round [M 0x1ea398:216-229 + 0x12cff0-4]: a scenery
             // contact taken above (contact.is_some) kills the walk — nothing farther applies.
             // A round that died on the copter body reaches neither a guard nor the world behind it.
             let (best, tw) = if copter_stop { (None, None) } else { (best, tw) };
             match (best, tw) {
-                (Some((i, part, t)), w) if w.is_none_or(|w| t < w) && contact.is_none_or(|(ct, _)| t < ct) => {
+                // mine-shield-by-guard: the guard is the SAME sorted list's node — a nearer mine
+                // or stuck gadget takes the round first (the mine/gadget arms above win the tie).
+                (Some((i, part, t)), w) if w.is_none_or(|w| t < w) && contact.is_none_or(|(ct, _)| t < ct)
+                    && mine_t.is_none_or(|mt| t < mt) && gadget_t.is_none_or(|gt| t < gt) => {
                     b.dead = true;
                     let hit = Hit { part, ray, point: at(t), damage: b.damage, weapon: b.weapon };
                     self.player_impacts.push(PlayerImpact::Drone { drone: i, part, at: hit.point });
