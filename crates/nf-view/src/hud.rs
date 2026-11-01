@@ -136,7 +136,7 @@ pub fn script_overlay(fade: Option<nf_game::drone::ViewFade>, letterbox: bool, s
             // fullscreen SPRITE packet (Q=1.0, z-test off) per viewer. This quad is black; the game
             // fades to the viewer's own r,g,b — open render-parity check
             // (docs/systems/psi-render-plumbing.md).
-            h.quad(Anchor::Stretch, 0, SCOPE_STRIP_TEX, 0, 0.0, 0.0, SW, SH, [0.0; 4], (false, false), [0.0, 0.0, 0.0, f.alpha.min(1.0)]);
+            h.quad(Anchor::Stretch, 0, SCOPE_STRIP_TEX, 0, 0.0, 0.0, SW, SH, [0.0; 4], (false, false), [0.0, 0.0, 0.0, fade_cover(f.alpha)]);
         }
     }
     // fix-grenade-types: the flashbang whiteout — `Player_Update` feeds `GlobalBlur` and the white
@@ -146,6 +146,31 @@ pub fn script_overlay(fade: Option<nf_game::drone::ViewFade>, letterbox: bool, s
         h.quad(Anchor::Stretch, 0, SCOPE_STRIP_TEX, 0, 0.0, 0.0, SW, SH, [0.0; 4], (false, false), [1.0, 1.0, 1.0, flashbang.min(1.0)]);
     }
     h.finish()
+}
+
+/// The objective banner's opening flash: `HUD_UpdateStatusPane` 0x19c310 case 3 for a TXTMSG
+/// type-2 message, while `time + 60 > 300` (a new objective) or `time + 60 > 180` (OBJECTIVE
+/// COMPLETE) — the literal totals, not the message's life [M :201-202] — zeroes the body and
+/// fail-reason colours and blinks the status label: gold 0x785a14ff while `fmod(time, 40) < 20`,
+/// colour 0 otherwise [M :203-213]. So a new objective shows only a blinking "NEW OBJECTIVE"
+/// for its first 60 ticks and its text after that. Returns (in the flash window, label drawn).
+pub fn objective_flash(complete: bool, time: f32) -> (bool, bool) {
+    let total = if complete { 180.0 } else { 300.0 };
+    if total < time + 60.0 { (true, time.rem_euclid(40.0) < 20.0) } else { (false, true) }
+}
+
+/// The screen cover of a viewer fade at state alpha `a` (0..1, `viewer+0x228`). The fade byte is
+/// `(int)(a·255)` [M Camera_UpdateGlbVars 0x1bada0:18-31] and `CreateTotalScreenSprite` 0x1181b0
+/// writes it UNSCALED into the sprite's RGBAQ alpha (`r | g<<8 | b<<16 | a<<24`) under
+/// ALPHA_1 = 0x44 — (Cs − Cd)·As/128 + Cd [M 0x1181b0: the A+D pair 0x44 → reg 0x42]. The GS
+/// takes As = 0x80 as 1.0, so every byte ≥ 128 covers the screen completely (the colour clamps)
+/// and only the lower half of the byte range fades: the 45-tick entry fade (−1/45 per tick from
+/// 1.0 [M Player_Init 0x1910f8:45, Camera_SetFade 0x1bbdd8]) holds BLACK for ~22 ticks, then
+/// lightens over the next ~23. The port used to read the state alpha as the cover directly, so
+/// the level was half lit after 22 ticks and almost fully lit at ~36.
+pub fn fade_cover(a: f32) -> f32 {
+    let byte = (a.clamp(0.0, 1.0) * 255.0) as u32;
+    (byte as f32 / 128.0).min(1.0)
 }
 
 /// How a sprite keeps its place in a window wider (or narrower) than the game's 4:3 screen: pixels keep the 4:3
@@ -712,10 +737,16 @@ pub fn overlay(scene: &crate::scene::Scene, aspect: f32) -> HudFrame {
             // colour is the gold 0x785a14ff (case 3's else branch stores it unconditionally), the
             // body's 0x7d6d59ff.
             let complete = msg.status == 0x0200_0053;
+            let (flashing, label_on) = objective_flash(complete, msg.time);
             if let Some(lang) = s.lang.as_ref() {
                 if let Some(st) = lang.bind(msg.status) {
                     let (_, sw) = t.font.layout(st, 0.0, 0.0);
-                    h.text(Anchor::Centre, &t.font, 29, st, SW / 2.0 - sw / 2.0, 20.0, false, gs(0x785a14, a), true);
+                    // The status label is never touched by the 15-tick fade-out (case 3 writes
+                    // only the body / fail sprites' alpha there [M 0x19c310:261-276]): full gold
+                    // when on, and no shadow while it flashes (+0x14 = 0 [M :214]).
+                    if label_on {
+                        h.text(Anchor::Centre, &t.font, 29, st, SW / 2.0 - sw / 2.0, 20.0, false, gs(0x785a14, 0xff), !flashing);
+                    }
                 }
             }
             // The body row: the wrapped message text. For a COMPLETE message the game shows NO body
@@ -723,7 +754,7 @@ pub fn overlay(scene: &crate::scene::Scene, aspect: f32) -> HudFrame {
             // case 3 keeps it 0 in both its phases [M 0x19c310 case 2 + case 3's `*(iVar8+0x10)=0`
             // stores] — the status label alone carries "OBJECTIVE COMPLETE" (the port used to draw
             // the body row too: two stacked OBJECTIVE COMPLETE banners).
-            if !complete {
+            if !complete && !flashing {
                 // `Text_AddMsg` 0x1b0c30 wraps the message text with `Font_WordWrapString` at
                 // TextMsgFormats[2]'s maxWidth = 480 [L 0x2bf108+0x14 = 0x1e0] — the box's own width
                 // (ObjectiveStatusSprInfo[2] x 16 w 480 [L 0x319608+0x58]); the port wraps at draw
