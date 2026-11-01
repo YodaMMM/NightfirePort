@@ -18448,19 +18448,29 @@ fn segment_hits_sphere(a: V3, b: V3, c: V3, r: f32) -> bool {
         // The actor list `Door_Update`'s proximity test (`dist² < (r1+r2)²·2` over classes
         // 2/3/0x12, skipping `obj+0xF0 & 0x10` candidates [M 0x136678-0x136684]) sees: the player
         // first (`glb_players`, the activator of every auto-activation) with radius 0.4, then every
-        // live non-corpse drone with radius 0.4. The third field is the `obj+0xF0 & 0x10` skip bit:
-        // modelled CLEAR for both — the 07000005 player reads 0x880 [L ee_start_05.bin]; the drones'
-        // 07000005 value is not in the snapshots and the bit's writer is unported (door-port-check #2:
-        // on 07000001 both are SET [L], which the port cannot reproduce yet).
+        // live non-corpse drone with radius 0.4. The third field is the `obj+0xF0 & 0x10` skip bit,
+        // now CARRIED (door-scan-skip-bit; door-port-check #2):
+        // • player — the level's boot value `door::player_door_skip` (the `Control_SetGList`
+        //   0x134960:12-13 copy of the level celglist word into obj+0xF0, reached from `Player_Init`
+        //   0x1910f8:115 via `AnimObjectNew`/`hashtable_set_object_to_entity_gfx`; 0x890 = bit SET
+        //   on 07000001, 0x880 = CLEAR on 07000005 [L ee_start_07000001.bin / ee_start_05.bin]).
+        // • drones — the enable lifecycle: `NDrone2_DefaultInit` 0x14b300:606 clears obj+0xF0 bits
+        //   0x10|0x20 when the drone spawns, and `NDrone2_Enable(0,…)` 0x149dd0:12-13 sets them for
+        //   every disabled/waiting drone (death states disable the same way [M 0x1637f8:89]). The
+        //   port's `started` latch is that spawn event, so an unstarted drone carries the bit — the
+        //   07000001 boot drones read 0x8B0 (0x10|0x20 set) [L ee_start_07000001.bin]. Corpses sit
+        //   out via the `!corpse` filter (the game skips them through the same bit). The lifecycle
+        //   is level-independent [M]; 07000005's drone boards are not in the snapshots.
         // mp-world-sync: online the actor list is every live body (humans in slot order, then
         // the bots — `Door_Update`'s scan covers classes 2/3/0x12, every player object [M
-        // 0x136678]) instead of the one local player.
+        // 0x136678]) instead of the one local player; each body's own obj carries the same
+        // level-boot glist word.
         let player_actors: Vec<crate::door::DoorActor> = match &self.net_bodies {
-            None => vec![(player.pos, 0.4, false)],
-            Some(bodies) => bodies.iter().filter(|b| b.alive).map(|b| (b.pos, 0.4, false)).collect(),
+            None => vec![(player.pos, 0.4, crate::door::player_door_skip(d.level))],
+            Some(bodies) => bodies.iter().filter(|b| b.alive).map(|b| (b.pos, 0.4, crate::door::player_door_skip(d.level))).collect(),
         };
         let actors: Vec<crate::door::DoorActor> = player_actors.into_iter()
-            .chain(self.list.iter().filter(|x| x.present && !x.corpse).map(|x| (x.pos, 0.4, false)))
+            .chain(self.list.iter().filter(|x| x.present && !x.corpse).map(|x| (x.pos, 0.4, !x.started)))
             .collect();
         // fix-casings-16: the straddle walk-in runs EVERY tick, once, on this actor list (the game's
         // straddle doors open on contact with no E — the collide path the port has not rebuilt,
