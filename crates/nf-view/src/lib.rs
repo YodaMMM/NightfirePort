@@ -2073,16 +2073,25 @@ fn destroy_tints(scene: &scene::Scene) -> Vec<([u32; 3], [u8; 2])> {
         .collect()
 }
 
-/// The snow quads facing the camera, plus the emitter particles (fix-world-fx: the same billboard
-/// pass — `Emitter_Draw` 0x17b708 path A draws both through `psiDrawParticleList`).
+/// The snow quads facing the camera (`DrawDrops` → `psiDrawParticleList` with the flake texture).
 fn snow_for(scene: &scene::Scene, cam: &Camera) -> Vec<scene::Vertex> {
     let Some(sim) = scene.sim.as_ref() else { return Vec::new() };
-    let f = cam.dir();
+    let (right, up) = billboard_axes(cam);
+    sim.snow_quads(right, up)
+}
+
+/// The emitter sprites facing the camera, grouped by def texture and blend (`Emitter_Draw` 0x17b708
+/// path A → `psiDrawParticleList` 0x122d50 with def+0x04 bound; `Scene::particle_draws`).
+fn particles_for(scene: &scene::Scene, cam: &Camera) -> Vec<(Option<usize>, bool, Vec<scene::Vertex>)> {
+    let (right, up) = billboard_axes(cam);
+    scene.particle_draws(right, up)
+}
+
+/// The camera's world right/up axes the billboards span.
+fn billboard_axes(cam: &Camera) -> ([f32; 3], [f32; 3]) {
     let right = cam.right();
-    let up = right.cross(f).normalize_or_zero();
-    let mut out = sim.snow_quads(right.to_array(), up.to_array());
-    out.extend(sim.particle_quads(right.to_array(), up.to_array()));
-    out
+    let up = right.cross(cam.dir()).normalize_or_zero();
+    (right.to_array(), up.to_array())
 }
 
 /// One frame of sound (`Sound_UpdateListeners` → `Sound_UpdateSounds` → the batch → `SFXUpdate`): the listener is
@@ -2797,6 +2806,7 @@ fn shot(scene: &scene::Scene, cam: &Camera, out: &str, choice: Option<usize>, ti
     let hud = &hud_owned;
     let movie_arg = movie.map(|(w, h, rgba)| (*w, *h, rgba.as_slice()));
     r.set_shards(&queue, &scene.shard_draws());
+    r.set_particles(&queue, &particles_for(scene, cam));
     let mut enc = r.render(&device, &queue, &view, &depth, vp, vp_rot, cam.pos.to_array(), time as u32, &snow, hud, movie_arg, if cut { Some(band) } else { None });
     let row = (4 * w).next_multiple_of(256);
     let buf = device.create_buffer(&wgpu::BufferDescriptor { label: None, size: (row * h) as u64, usage: wgpu::BufferUsages::COPY_DST | wgpu::BufferUsages::MAP_READ, mapped_at_creation: false });
@@ -6091,6 +6101,7 @@ impl App {
                 g.renderer.destroy_tint = destroy_tints(&self.scene);
                 let fp_enc = std::time::Instant::now();
                 g.renderer.set_shards(&g.queue, &self.scene.shard_draws());
+                g.renderer.set_particles(&g.queue, &particles_for(&self.scene, &draw_cam));
                 let enc = g.renderer.render(&g.device, &g.queue, &view, &g.depth, vp, vp_rot, draw_cam.pos.to_array(), self.anim_time as u32, &snow, &hud, movie_frame, if cutscene { Some(band) } else { None });
                 let fp_sub = std::time::Instant::now();
                 frame_part(5, fp_sub - fp_enc);
@@ -7121,6 +7132,21 @@ pub fn run() -> Result<()> {
                 // Render aid (health-pane-fade): `NF_PANE_FADE=1` turns the pane-fade option on
                 // (`decay_gate`, PlayerSetting+0xB) from tick 1, so BL+0x8BC decays and the pane fades.
                 if t == 1 && std::env::var_os("NF_PANE_FADE").is_some() { sim.drones.decay_gate = true; }
+                // Render aid (particle-textures): `NF_EMITTER_AT=t:hash[:dist]` spawns a one-shot burst of
+                // emitter def `hash` (the `Effect_Create` impact arm's `WorldFx::spawn_impact`) `dist`
+                // units (default 2) along Bond's view on tick t, normal up — a shot of any def's sprites.
+                if let Some(v) = std::env::var("NF_EMITTER_AT").ok() {
+                    let p: Vec<&str> = v.split(':').collect();
+                    let tick = p.first().and_then(|s| s.parse::<u32>().ok());
+                    let hash = p.get(1).and_then(|s| u32::from_str_radix(s.trim_start_matches("0x"), 16).ok());
+                    let dist = p.get(2).and_then(|s| s.parse::<f32>().ok()).unwrap_or(2.0);
+                    if let (Some(tick), Some(hash)) = (tick, hash) {
+                        if tick == t {
+                            let (h, l) = (sim.bond.head(), sim.bond.look());
+                            sim.drones.fx.spawn_impact(hash, [h[0] + l[0] * dist, h[1] + l[1] * dist, h[2] + l[2] * dist], [0.0, 1.0, 0.0]);
+                        }
+                    }
+                }
                 // Render aid (bond-moment-flash): `NF_MOMENT_AT=t` marks Bond moment 0x65 done on tick t
                 // (the BondMoments entry PlrStat_DoneBondMoment sets), so the HUD's 007 flash runs.
                 if std::env::var("NF_MOMENT_AT").ok().and_then(|v| v.parse::<u32>().ok()) == Some(t) {

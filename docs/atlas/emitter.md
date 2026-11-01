@@ -45,17 +45,37 @@ b·0.5, a, t) [M 0x17ab40:136-149]. An unresolvable hash means NO object [M 0x17
 
 ## Draw (Emitter_Draw 0x17b708) and the port's handoff
 
-Path A (model hash 0): `psiDrawParticleList` 0x122d50 — billboarded sprite quads, texture =
-def+0x04 via `psiFont_SetTexture` [M 0x119910:19], blend def+0x3c ? additive : alpha, size =
-def+0x30 (screen-space scalar `4·size/(PS2ParticleSize·PS2SnowSizeMult)`, 0x11e2e8:67). Path B
-(model ≠ 0): one tinted spinning mesh per particle. The port exposes
-`WorldFx::particle_sprites()` (pos, size, rgba, additive) and draws path-A sprites as camera-facing
-quads (`Sim::particle_quads`, appended to the snow pass in nf-view/src/lib.rs `snow_for`).
+Path A (model hash 0): `psiDrawParticleList` 0x122d50 (args: size def+0x30, positions data+4,
+count def+0x38, texture def+0x04, colours data+8, flag `def+0x3c == 0` [M disasm 0x17b80c-0x17b830]).
+- Texture: def+0x04 is the texture hashtable entry's first word (`Emitter_LoadDefs` 0x17ab40 looks
+  the file's texture hash up, −1 → none); `CreatePointerSpriteListColour` 0x119910 binds it via
+  `psiFont_SetTexture` 0x120880 [M 0x119910:19]. TEX0 TCC 1, TFX 0 (MODULATE by the slot rgba);
+  CLAMP_1 region-repeat over the texture's own w×h, sprite ST 0..1 — each sprite is the whole image.
+- Blend: the flag set (def+0x3c == 0) → `psiSetUpColourBlend(0)` = ALPHA_1 0x48, Cs·As + Cd
+  (ADDITIVE); clear → `psiSetUpColourBlend(1)` = 0x44, (Cs−Cd)·As + Cd (normal) [M 0x122da8-0x122dc4,
+  0x1214f8]. Depth read on, write off [M 0x122d98-0x122da4].
+- Size: the VU1 scale word `4·size/(PS2ParticleSize·PS2SnowSizeMult)` [M 0x119910:81]; the port
+  reads def+0x30 as the sprite's FULL world width (half-extent size/2), the reading the flake size
+  measured on the 05 / 06 PS2 captures gives (`nf_game::env::flake_half_extent`).
+
+Path B (model ≠ 0): one tinted spinning mesh per particle.
+
+The port (particle-textures): `WorldFx::particle_sprites()` (pos, size, rgba, additive, texture);
+`Scene::particle_draws` groups the camera-facing quads by (texture, blend) and the renderer draws
+each group with its own texture slot and pipeline (gpu.rs `set_particles`). The def textures join
+the scene textures at load (`scene::particle_textures`: the first map holding the hashcode).
+
+Block-0x30 defs on this disc (one shared set of 18 on 01 / 02 / 14 / 15 / 4a [D]): textures
+0x03000080 (64×64 star), 0x03000082 (64×64 round glow), 0x030000c8 (16×64 ring), 0x030000bb
+(16×16), 0x03000127 (32×32); def 0x0c000007 has none. Only def 0x0c000003 has def+0x3c = 1
+(normal alpha); its texture's palette alpha is 0x80 throughout [D], so its sprites draw as dark
+squares around the star — unverified against a capture [S].
 
 **Deviations [S]**: the 4 spawn draws per particle come from the per-object counter hash, not the
 shared stream (the gas.rs/searchlight discipline — the bit-exact stream must not gain draws); the
-sprite texture (def+0x04) is not bound — the quad colour is the slot rgba alone; the screen-space
-size formula is taken as the world-space half-extent. Path B is not rendered (no def on this disc
-resolved a model hash — unverified [S]).
+screen-space size formula is taken as a world-space width; the GS alpha coefficient As/0x80 can
+reach ~2 (slot alpha 255 × texel alpha 0x80) where the port's blend clamps it to 1 — additive
+sprites with key alpha 255 draw up to half as bright as the GS would. Path B is not rendered (no
+def on this disc resolved a model hash — unverified [S]).
 
 Levels with 0xf2 on this disc: 07000002, 07000014, 07000015 (docs/systems/levels.md §7.1).

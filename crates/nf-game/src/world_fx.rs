@@ -456,8 +456,16 @@ pub struct ParticleSprite {
     pub pos: V3,
     pub size: f32,
     pub rgba: [u8; 4],
-    /// def+0x3c: 0 = normal alpha, else additive [M 0x17b708:15].
+    /// The GS blend `psiDrawParticleList` 0x122d50 sets: def+0x3c == 0 → ADDITIVE. `Emitter_Draw`
+    /// passes `def+0x3c == 0` as the t1 flag [M disasm 0x17b80c-0x17b830: `lhu t1,60(v1)` /
+    /// `sltiu t1,t1,1`]; a set flag takes `psiSetUpColourBlend(0)` [M 0x122da8-0x122db4] = ALPHA_1
+    /// 0x48 (Cs·As + Cd), a clear one `psiSetUpColourBlend(1)` = 0x44 ((Cs−Cd)·As + Cd)
+    /// [M 0x1214f8].
     pub additive: bool,
+    /// def+0x04: the sprite texture hash (0 = none) — `Emitter_LoadDefs` 0x17ab40 stores the
+    /// texture hashtable entry's first word and `CreatePointerSpriteListColour` 0x119910 binds it
+    /// through `psiFont_SetTexture` 0x120880 [M 0x119910:19].
+    pub texture: u32,
 }
 
 /// The whole FX set for one level (`WorldFx::attach_level`).
@@ -909,7 +917,7 @@ impl WorldFx {
             let Some(def) = self.defs.get(&e.def) else { continue };
             for p in &e.parts {
                 if p.age >= p.life || p.rgba[3] == 0 { continue; }
-                out.push(ParticleSprite { pos: p.pos, size: def.size, rgba: p.rgba, additive: def.blend != 0 });
+                out.push(ParticleSprite { pos: p.pos, size: def.size, rgba: p.rgba, additive: def.blend == 0, texture: def.texture });
             }
         }
         out
@@ -1094,6 +1102,13 @@ mod tests {
         let p0 = &fx.emitters[0].parts[0];
         assert!(p0.pos[1] < 2.0 && p0.vel[1] < 0.0, "gravity pulls the velocity down (speed 1 up, g 1)");
         assert!(p0.rgba != [0; 4], "the colour keys feed the slot rgba");
+        // The draw handoff carries the def's sprite texture (def+0x04) and the blend sense
+        // `Emitter_Draw` passes (`def+0x3c == 0` → additive) [M disasm 0x17b81c, 0x122da8].
+        assert!(fx.particle_sprites().iter().all(|s| s.texture == 0 && !s.additive), "def+0x3c = 1 draws normal alpha, no texture");
+        fx.defs.get_mut(&0x1234).unwrap().blend = 0;
+        fx.defs.get_mut(&0x1234).unwrap().texture = 0x0300_0082;
+        // Sister: the same slots flip with the def — the flag is read from the def, not fixed.
+        assert!(fx.particle_sprites().iter().all(|s| s.texture == 0x0300_0082 && s.additive), "def+0x3c = 0 draws additive with the def texture");
         // The one-shot: rate 0 → expired at create; the never-spawned slots fire once more
         // [M 0x17b080 the `age < 99999` skip], live their life, and 3 all-dead ticks later the
         // object self-destructs (obj+0xFE bit 0).

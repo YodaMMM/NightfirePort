@@ -259,6 +259,8 @@ impl HudFrame {
 const SNOW_MAX: usize = 4096 * 6;
 /// break-shards draw: at most this many texture groups of glass shards per frame (one uniform slot each).
 const SHARD_GROUPS: usize = 16;
+/// particle-textures: at most this many (texture, blend) groups of emitter sprites per frame (one uniform slot each).
+const PARTICLE_GROUPS: usize = 16;
 
 /// Most overlay vertices per frame.
 const HUD_MAX: usize = 16384;
@@ -444,6 +446,12 @@ pub struct Renderer {
     shard_vbuf: wgpu::Buffer,
     /// This frame's shard groups: (tex_frames index, first vertex, count) — `set_shards`.
     shard_groups: Vec<(usize, u32, u32)>,
+    /// particle-textures: the emitter sprites (`Scene::particle_draws`) — the normal-alpha pipeline
+    /// (the additive groups use `snow_pipeline`), their vertex buffer, and this frame's groups
+    /// (tex_frames index, additive, first vertex, count) — `set_particles`.
+    particle_alpha_pipeline: wgpu::RenderPipeline,
+    particle_vbuf: wgpu::Buffer,
+    particle_groups: Vec<(usize, bool, u32, u32)>,
     snow_vbuf: wgpu::Buffer,
     snow_bg: wgpu::BindGroup,
     /// The level's fog (`psiPreGameRun`): colour 0-255, `Ps2Far1`.
@@ -921,6 +929,11 @@ impl Renderer {
         // break-shards draw: normal alpha, no depth write, the alpha-list test [S: psiDrawShard's
         // GS state is in its microcode packet, unread — the pane's own list-1 state stood in].
         let shard_pipeline = make_pipeline(Draw { pass: 5, blend: 0, zwrite: false, atest: 1, fog: 0 });
+        // particle-textures: `psiDrawParticleList` 0x122d50's def+0x3c ≠ 0 state — ALPHA_1 0x44,
+        // depth read on, write off [M 0x122d98-0x122dc4, 0x1214f8]; the additive state (0x48) is the
+        // snow pipeline's.
+        let particle_alpha_pipeline = make_pipeline(Draw { pass: 5, blend: 0, zwrite: false, atest: 0, fog: 0 });
+        let particle_vbuf = device.create_buffer(&wgpu::BufferDescriptor { label: Some("particles"), size: (SNOW_MAX * std::mem::size_of::<crate::scene::Vertex>()) as u64, usage: wgpu::BufferUsages::VERTEX | wgpu::BufferUsages::COPY_DST, mapped_at_creation: false });
         let shard_vbuf = device.create_buffer(&wgpu::BufferDescriptor { label: Some("shards"), size: (SNOW_MAX * std::mem::size_of::<crate::scene::Vertex>()) as u64, usage: wgpu::BufferUsages::VERTEX | wgpu::BufferUsages::COPY_DST, mapped_at_creation: false });
         let snow_vbuf = device.create_buffer(&wgpu::BufferDescriptor { label: None, size: (SNOW_MAX * std::mem::size_of::<crate::scene::Vertex>()) as u64, usage: wgpu::BufferUsages::VERTEX | wgpu::BufferUsages::COPY_DST, mapped_at_creation: false });
         let (snow_bg, snow_view) = match &scene.snow_texture { Some(t) => make_tex2(t.width, t.height, &t.rgba), None => make_tex2(1, 1, &[255, 255, 255, 255]) };
@@ -965,7 +978,7 @@ impl Renderer {
             for ch in &cel_graph.chains { for &c in ch { if (c as usize) < n { reached[c as usize] = true; } } }
             reached.iter().map(|r| !r).collect()
         };
-        Renderer { shard_pipeline, shard_vbuf, shard_groups: Vec::new(), woman_tex, snow_pipeline, snow_vbuf, snow_bg, hud_pipeline, hud_add_pipeline, hud_sub_pipeline, hud_vbuf, hud_bgs, pipelines, fog, notex, nofog, uniform, uniform_bg, staged: Vec::new(), orphan_nodes, destroy_dead: Vec::new(), destroy_wreck_draw: Vec::new(), destroy_wreck_all: scene.destroy_wrecks.iter().map(|(c, _)| c.map(f32::to_bits)).collect(), destroy_tint: Vec::new(), batch, vbuf, skin_buf, snow_skin, pal_buf, col_buf, wts_buf, mtg_buf, skin_layout, skin_pos: Default::default(), skin_collapsed: Default::default(), pal_shadow: Default::default(), sub_runs, sub_meta, live_prefix: Vec::new(), split_runs: true, last_indices: 0, char_light_centre: Vec::new(), lights: Default::default(), light_memo: Vec::new(), light_memo_gen: 1, light_memo_lights: Default::default(), los_memo: Vec::new(), los_memo_world: (0, 0), wreck_of: Vec::new(), wreck_of_src: Vec::new(), dead_sorted: Vec::new(), screen_aspect: 0.0, screen_offset: [0.0; 2], ibuf, tex_bgs, tex_frames, draws, order: Vec::with_capacity(order_cap), cel_boxes, cel_graph, viewer_cel: Default::default(), last_vis: None, last_cell_vis: None, movie_tex: None, movie_bg: None, movie_size: None, movie_vbuf, hud_tbgl: tbgl, hud_sampler: sampler, sky_flash_mask: 0, pass_timestamps: None, probe_skip: Vec::new() }
+        Renderer { shard_pipeline, shard_vbuf, shard_groups: Vec::new(), particle_alpha_pipeline, particle_vbuf, particle_groups: Vec::new(), woman_tex, snow_pipeline, snow_vbuf, snow_bg, hud_pipeline, hud_add_pipeline, hud_sub_pipeline, hud_vbuf, hud_bgs, pipelines, fog, notex, nofog, uniform, uniform_bg, staged: Vec::new(), orphan_nodes, destroy_dead: Vec::new(), destroy_wreck_draw: Vec::new(), destroy_wreck_all: scene.destroy_wrecks.iter().map(|(c, _)| c.map(f32::to_bits)).collect(), destroy_tint: Vec::new(), batch, vbuf, skin_buf, snow_skin, pal_buf, col_buf, wts_buf, mtg_buf, skin_layout, skin_pos: Default::default(), skin_collapsed: Default::default(), pal_shadow: Default::default(), sub_runs, sub_meta, live_prefix: Vec::new(), split_runs: true, last_indices: 0, char_light_centre: Vec::new(), lights: Default::default(), light_memo: Vec::new(), light_memo_gen: 1, light_memo_lights: Default::default(), los_memo: Vec::new(), los_memo_world: (0, 0), wreck_of: Vec::new(), wreck_of_src: Vec::new(), dead_sorted: Vec::new(), screen_aspect: 0.0, screen_offset: [0.0; 2], ibuf, tex_bgs, tex_frames, draws, order: Vec::with_capacity(order_cap), cel_boxes, cel_graph, viewer_cel: Default::default(), last_vis: None, last_cell_vis: None, movie_tex: None, movie_bg: None, movie_size: None, movie_vbuf, hud_tbgl: tbgl, hud_sampler: sampler, sky_flash_mask: 0, pass_timestamps: None, probe_skip: Vec::new() }
     }
 
     /// The game's depth-0 pyramid for the walk [M `Vision_Calculate_View_Fustrum` 0x1e7df8,
@@ -1187,6 +1200,19 @@ impl Renderer {
     /// ignores the band: the FMV owns the whole screen [M 0x209e88].
     /// break-shards draw: this frame's glass shards (`Scene::shard_draws` — scene texture index,
     /// world vertices), uploaded before `render`.
+    /// particle-textures: this frame's emitter sprites (`Scene::particle_draws` — scene texture
+    /// index or None for the white fallback, additive, world vertices), uploaded before `render`.
+    pub fn set_particles(&mut self, queue: &wgpu::Queue, groups: &[(Option<usize>, bool, Vec<crate::scene::Vertex>)]) {
+        self.particle_groups.clear();
+        let mut all: Vec<crate::scene::Vertex> = Vec::new();
+        for (ti, additive, v) in groups.iter().take(PARTICLE_GROUPS) {
+            let n = v.len().min(SNOW_MAX - all.len()) / 3 * 3;
+            if n == 0 { break; }
+            self.particle_groups.push((ti.map_or(0, |t| t + 1), *additive, all.len() as u32, n as u32));
+            all.extend_from_slice(&v[..n]);
+        }
+        if !all.is_empty() { queue.write_buffer(&self.particle_vbuf, 0, bytemuck::cast_slice(&all)); }
+    }
     pub fn set_shards(&mut self, queue: &wgpu::Queue, groups: &[(usize, Vec<crate::scene::Vertex>)]) {
         self.shard_groups.clear();
         let mut all: Vec<crate::scene::Vertex> = Vec::new();
@@ -1443,7 +1469,13 @@ impl Renderer {
                 const SLOT: usize = 20;
                 let mut staged = std::mem::take(&mut self.staged);
                 staged.clear();
-                staged.resize(HEAD + SLOT * (self.order.len() + 1 + self.shard_groups.len()), 0.0);
+                staged.resize(HEAD + SLOT * (self.order.len() + 1 + self.shard_groups.len() + self.particle_groups.len()), 0.0);
+                // particle-textures: one slot per emitter-sprite group after the shard groups.
+                let pbase = self.order.len() + 1 + self.shard_groups.len();
+                for (g, &(tf, _, _, _)) in self.particle_groups.iter().enumerate() {
+                    let (fb, nf, rate) = self.tex_frames[tf];
+                    staged[HEAD + (pbase + g) * SLOT + 17] = (fb + ((ticks / rate) % nf) as usize) as f32;
+                }
                 // break-shards draw: one slot per shard group after the draws — no lights, the
                 // group's texture as the array index (batch-draws).
                 for (g, &(tf, _, _)) in self.shard_groups.iter().enumerate() {
@@ -1620,6 +1652,19 @@ impl Renderer {
             // perf-240g: with the batch, groups 0 (uniform_bg) and 1 (the bindless array) are still
             // bound from the world draws, and the snow / shard pipelines share their layout, so the
             // bindings carry over (re-setting the array re-tracked every texture in it at finish).
+            // particle-textures: the emitter sprites (`Emitter_Draw` 0x17b708 path A), each group
+            // with its def texture and blend in its own uniform slot.
+            if !self.particle_groups.is_empty() {
+                if self.batch.is_none() { pass.set_bind_group(0, &self.uniform_bg, &[]); }
+                pass.set_vertex_buffer(0, self.particle_vbuf.slice(..));
+                pass.set_vertex_buffer(1, self.snow_skin.slice(..));
+                let base = (self.order.len() + 1 + self.shard_groups.len()) as u32;
+                for (g, &(tf, additive, first, count)) in self.particle_groups.iter().enumerate() {
+                    pass.set_pipeline(if additive { &self.snow_pipeline } else { &self.particle_alpha_pipeline });
+                    if self.batch.is_none() { let (fb, nf, rate) = self.tex_frames[tf]; pass.set_bind_group(1, &self.tex_bgs[fb + ((ticks / rate) % nf) as usize], &[]); }
+                    pass.draw(first..first + count, base + g as u32..base + g as u32 + 1);
+                }
+            }
             if ns > 0 {
                 pass.set_pipeline(&self.snow_pipeline);
                 if self.batch.is_none() {
