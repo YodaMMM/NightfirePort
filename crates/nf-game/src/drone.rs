@@ -11856,8 +11856,10 @@ pub struct Drones {
     pub ss_bullet_contacts: Vec<u8>,
     /// level-0c-complete: the use key's class-0x1D trigger half, deferred from the scene's use
     /// block to this tick's post-`Trigger_Calc` slot (the game runs it at Bond's turn in the
-    /// object walk — see `player_use_doors`'s note). `(head, look)`.
-    pub use_trigger_request: Option<(V3, V3)>,
+    /// object walk — see `player_use_doors`'s note). `(head, look, trigger_scope)` — the scope
+    /// is the game's stage-2 cel gate [M Collide_Pick 0x1eb320:125, :313-328] as the caller
+    /// resolved it (None = ungated: the caller had no cel graph, the MP net path).
+    pub use_trigger_request: Option<(V3, V3, Option<Vec<bool>>)>,
     pub player_impacts: Vec<PlayerImpact>,
     /// fix-gas-rng4 (111d3's deferral onto the G-041 walk): the world-hit draws' ride record — one
     /// entry per player bullet whose flight segment ended on the world this tick, `(bullet index,
@@ -15933,7 +15935,7 @@ fn segment_hits_sphere(a: V3, b: V3, c: V3, r: f32) -> bool {
     /// calls `Trigger_Activate` (0x1b2318) — routes b and c on 07000005 (the on-foot gate door and the zip-wire
     /// exit). The port's `player_use_doors` handled only doors; this adds the trigger path so pressing E on a
     /// LOAD_LEVEL or TouchOnce trigger fires it immediately [M 0x1a5170:100-108,128, 0x1b2318:34-111].
-    pub fn player_use_doors(&mut self, d: &Data, head: V3, look: V3, frame: u32, sp_head: V3, body: V3) {
+    pub fn player_use_doors(&mut self, d: &Data, head: V3, look: V3, frame: u32, sp_head: V3, body: V3, trigger_scope: Option<Vec<bool>>) {
         let (evs, _hits) = self.doors.player_use(head, look, &mut self.channels, frame, d.world);
         for (id, pos) in evs {
             match d.sfx {
@@ -15951,7 +15953,7 @@ fn segment_hits_sphere(a: V3, b: V3, c: V3, r: f32) -> bool {
         // wiped the write before the mux walk ever saw it (0700000c's secret-door E plate #558
         // [D: mask 4, out 3] never reached its AND). The doors' half stays here (the events feed
         // the scene's sound path); the request carries (head, look).
-        self.use_trigger_request = Some((head, look));
+        self.use_trigger_request = Some((head, look, trigger_scope));
         // `Player_Activate`'s remaining classes the Tower levels need (map-tower): the mask-4
         // ScriptPlayers (`SP_Activate` 0x1dc338 — the elevator, the security keyboard), the
         // switches (0x29, `Switch_Activate` 0x1b02a8) and the Q-Worm PCs (0x35,
@@ -16020,7 +16022,7 @@ fn segment_hits_sphere(a: V3, b: V3, c: V3, r: f32) -> bool {
     /// head + look) activates every trigger whose volume it meets. For LOAD_LEVEL: `Trigger_Activate` checks
     /// cancel channels (0x60–0x63), the key gate, sets the success/fallback channels, and requests the level
     /// load. For TouchOnce: sets the output channel. [M 0x1a5170:100-108, 0x1b2318:34-111].
-    fn player_use_triggers(&mut self, head: V3, look: V3, frame: u32) {
+    fn player_use_triggers(&mut self, head: V3, look: V3, frame: u32, scope: Option<&[bool]>) {
         let use_point = [head[0] + look[0], head[1] + look[1], head[2] + look[2]];
         let r = 1.0;
         // The game's pick is `Collide_SphereIntersect(1.0, head + viewer dir, player cel, player,
@@ -16052,14 +16054,22 @@ fn segment_hits_sphere(a: V3, b: V3, c: V3, r: f32) -> bool {
         //    parsed yet — a port-gap stand-in, not game behaviour (a live check asks gdbwatch to
         //    confirm the disc gives those triggers a glist).
         let hits: Vec<usize> = (0..self.triggers.len()).filter(|&i| {
+            if scope.is_some_and(|s| !s.get(i).copied().unwrap_or(true)) { return false; }
             let t = &self.triggers[i];
+            if t.tris.is_empty() {
+                // The stand-in arm decides alone, so it keeps the TIGHT per-axis sphere-vs-box
+                // test (a pre-gate looser than the box — e.g. the bounds sphere of a long thin
+                // exit plane — would fire exits the game refuses; use_key_census_live's
+                // 07000001 door row is the regression pin).
+                return !(0..3).any(|k| use_point[k] + r < t.lo[k] || use_point[k] - r > t.hi[k]);
+            }
             let centre = [(t.lo[0] + t.hi[0]) * 0.5, (t.lo[1] + t.hi[1]) * 0.5, (t.lo[2] + t.hi[2]) * 0.5];
             let half = [t.hi[0] - centre[0], t.hi[1] - centre[1], t.hi[2] - centre[2]];
             let bound_r = (half[0] * half[0] + half[1] * half[1] + half[2] * half[2]).sqrt();
             let d = [use_point[0] - centre[0], use_point[1] - centre[1], use_point[2] - centre[2]];
             let d2 = d[0] * d[0] + d[1] * d[1] + d[2] * d[2];
             if d2 >= (r + bound_r) * (r + bound_r) { return false; }
-            t.tris.is_empty() || CollisionWorld::sphere_meets_tris(use_point, r, &t.tris)
+            CollisionWorld::sphere_meets_tris(use_point, r, &t.tris)
         }).collect();
         for i in hits {
             let (sets, next) = self.triggers[i].activate_request(&self.channels);
@@ -18105,12 +18115,14 @@ fn segment_hits_sphere(a: V3, b: V3, c: V3, r: f32) -> bool {
         // Bond's turn in the object walk, AFTER Trigger_Calc's touch clear and BEFORE the later
         // muxes' updates in the same walk [M 0x1336f8's loop; Player_Activate 0x1a5170]. Consumed
         // here so the written channel survives to the mux walk (0700000c's secret door).
-        if let Some((head, look)) = self.use_trigger_request.take() {
-            self.player_use_triggers(head, look, frame);
+        if let Some((head, look, scope)) = self.use_trigger_request.take() {
+            self.player_use_triggers(head, look, frame, scope.as_deref());
         }
         // mp-world-sync: online, every pressing body's trigger half, in slot order.
         for (head, look) in std::mem::take(&mut self.net_use_triggers) {
-            self.player_use_triggers(head, look, frame);
+            // The MP bodies carry no cel scope: the net path's per-slot semantics are the port's
+            // own (net_use_pass), and a body without a resolved cel is ungated (fail-open).
+            self.player_use_triggers(head, look, frame, None);
         }
         // `switch_channels_prev` is snapshotted right after `Trigger_Calc`, BEFORE the object walk [M 0x1336f8:52-53
         // — `prev ← hold; hold ← channels` at 0x1337cc/0x1337dc] — so `Door_Update`'s lock rising edge
