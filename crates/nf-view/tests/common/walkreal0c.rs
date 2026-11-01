@@ -762,6 +762,9 @@ pub fn walk_spawn_to_the_band(iso: &str) -> Walker {
             };
             w.scene.sim.as_mut().unwrap().step_bond(input, false, false, false);
             w.total_ticks += 1;
+            // The walker's damage allowance (`Walker::tick`'s top-up), which these direct
+            // `step_bond` loops bypass: a guard round on the ride must not end the crossing.
+            if w.top_up_health { w.scene.sim.as_mut().unwrap().drones.health.health = 100.0; }
         }
         got
     };
@@ -789,6 +792,9 @@ pub fn walk_spawn_to_the_band(iso: &str) -> Walker {
             let input = nf_game::player::Input { strafe: 1.0, jump: at_stop, ..Default::default() };
             w.scene.sim.as_mut().unwrap().step_bond(input, false, false, false);
             w.total_ticks += 1;
+            // The walker's damage allowance (`Walker::tick`'s top-up), which these direct
+            // `step_bond` loops bypass: a guard round on the ride must not end the crossing.
+            if w.top_up_health { w.scene.sim.as_mut().unwrap().drones.health.health = 100.0; }
         }
         dropped
     };
@@ -804,13 +810,17 @@ pub fn walk_spawn_to_the_band(iso: &str) -> Walker {
         if !sim.bond.grounded { saw_air = true; }
         w.scene.sim.as_mut().unwrap().step_bond(nf_game::player::Input::default(), false, false, false);
         w.total_ticks += 1;
+            // The walker's damage allowance (`Walker::tick`'s top-up), which these direct
+            // `step_bond` loops bypass: a guard round on the ride must not end the crossing.
+            if w.top_up_health { w.scene.sim.as_mut().unwrap().drones.health.health = 100.0; }
     }
     {
         let sim = w.scene.sim.as_ref().unwrap();
         let p = sim.bond.pos;
         assert!(dropped && sim.bond.grounded && p[0] > 33.5 && p[0] < 40.5 && p[2] < -207.0 && p[2] > -211.5
             && (p[1] - 12.2).abs() < 0.8,
-            "the #283 ride must drop onto the ring SE corner (11.09..11.17 [D probe door2]), got {p:?} dropped {dropped}");
+            "the #283 ride must drop onto the ring SE corner (11.09..11.17 [D probe door2]), got {p:?} dropped {dropped} health {} substate {}",
+            sim.drones.health.health, sim.bond.substate);
     }
     eprintln!("[0c] the south gap crossed on wire #283 — landed {:?}", w.scene.sim.as_ref().unwrap().bond.pos);
 
