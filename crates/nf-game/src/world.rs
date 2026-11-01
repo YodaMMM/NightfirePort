@@ -1519,6 +1519,35 @@ impl CollisionWorld {
         (total, walkable)
     }
 
+    /// The static-only, single-cel cylinder push the rigid-body sweep drives:
+    /// `Collide_CylinderIntersect` 0x1ecc00 walks the pick's cel nodes and `Collide_Intersect`
+    /// 0x1ebaa8:296-345 runs `Intersect_CylGeom` 0x109da0 per cel node with h+0x88 =
+    /// *(cel+0x38) — the cel's own static coll data (the pick's 0x10 flag skips dynamic
+    /// objects [M 0x1eb8f8]). The per-triangle push math is the ported `capsule_tri_contact`
+    /// (the same `Intersect_CylGeom` core the player pick drives); the moving-object geo is
+    /// deliberately not tested (the port's `dynamic` geo is the door/lift set — a different
+    /// candidate class the game's body pick never adds). Returns the accumulated push for
+    /// this cel's geometry, `0` on a miss (the node stays at 1e8 [M 0x1ebaa8:187]).
+    pub fn rb_cyl_push_cell(&self, cell: usize, a: V3, b: V3, r: f32, ref_v: V3) -> V3 {
+        let Some(runs) = self.scoped_runs(cell, &mut Self::capsule_portal_hit(a, b, r)) else { return [0.0; 3] };
+        let (mut a, mut b) = (a, b);
+        let mut total = [0f32; 3];
+        let mut walkable = false;
+        let mut pick = false;
+        let grow = r + 0.1;
+        let mut lo = [0f32; 3];
+        let mut hi = [0f32; 3];
+        for k in 0..3 { lo[k] = a[k].min(b[k]) - grow; hi[k] = a[k].max(b[k]) + grow; }
+        let stat = &self.stat;
+        for run in runs {
+            let o = &stat.objects[run as usize];
+            if !(0..3).any(|k| o.hi[k] < lo[k] || o.lo[k] > hi[k]) {
+                for k in o.tris.clone() { capsule_tri_contact(&stat.tris[k], stat.mats[k], &mut a, &mut b, r, grow, &mut total, &mut walkable, &mut pick, false, ref_v); }
+            }
+        }
+        total
+    }
+
     /// The game's pick-contact grounded signal for the actor capsule: whether any contact this
     /// query resolves sets the pick bit the game grounds on (`Player_FeetOnPoint` 0x194188:176-185
     /// sets `obj+0x60 |= 8` when `HITTEST+0x9c != 0`; the bit is ORed in per real contact by

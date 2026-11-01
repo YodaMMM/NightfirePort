@@ -178,6 +178,13 @@ pub struct RbState {
     /// half-diagonal for types 2/4, 0 for type 3) [M 0x1d6bf0:56-88].
     pub s9c: f32,
     pub s13c: f32,
+    /// +0xc0 = HITTEST+0x10: the cylinder sweep's world push-out accumulator (the writer is
+    /// `Collide_Intersect` 0x1ebaa8's post-hit tail: h+0x10 += DeltaP per hitting candidate,
+    /// 0x1ebaa8:353-376 — the port's comment on the type-0 tail's inert gate called this "the
+    /// unported cylinder pass"). No clear found in the RB family or the sweep path: the value
+    /// persists across ticks like the game's embedded HITTEST (memset once at RB_Init) —
+    /// [S] unverified beyond those reads; a live check is listed in the report.
+    pub cyl_deltap: [f32; 3],
 }
 
 impl RbState {
@@ -195,6 +202,7 @@ impl RbState {
             trans: [0.0; 3],
             s9c: 0.0,
             s13c: 0.0,
+            cyl_deltap: [0.0; 3],
         }
     }
 }
@@ -715,22 +723,143 @@ pub fn rb_resting_contact(
     }
 }
 
+/// `Collide_CylinderIntersect` 0x1ecc00 over the port's static world, one candidate per
+/// straddled cel. Game shape [M]: the pick adds a node per straddled cel (`Collide_Pick`
+/// 0x1eb320:125 → `Collide_StraddleCels` 0x1eac98) and — because the body's setup wrote
+/// HITTEST+0x98 = 0x10 [M disasm 0x1d7488] and the pick skips the cel object lists while the
+/// word carries 0x10 [M 0x1eb320 disasm 0x1eb8f8 andi 0x10 / bne past the walk] — NO dynamic
+/// object candidates; `Collide_Intersect` 0x1ebaa8:296-345 runs `Intersect_CylGeom` 0x109da0
+/// per cel node (h+0x88 = *(cel+0x38), the static coll data); each hitting candidate adds its
+/// push to h+0x10 and pushes h+0x20/0x30/0x50 [M 0x1ebaa8:353-394], a miss leaves the node at
+/// 1e8 and adds nothing [M :187, the 1e8 gate at :353]. The per-triangle push math is the
+/// ported `capsule_tri_contact` (`world::rb_cyl_push_cell`, the same `Intersect_CylGeom` core
+/// the player pick drives). The candidates' sort (the game sorts by the contact distance,
+/// 0x1ecd24-0x1ecd98) only picks the tail's `hit+0x40`: the port keeps the minimum-distance
+/// hit. The node's hit point = the +0x50 base as pushed by the PRIOR candidates [M
+/// `Intersect_CylGeom` 0x109da0:298 stores param_1[5] = HITTEST+0x50; the prior candidates'
+/// DeltaP adds at 0x1ebaa8:376-394 pushed it].
+/// Returns (the nearest hit's point, the total push into h+0x10).
+///
+/// The cylinder block's test points [M 0x1d73f0-0x1d747c]: up = matrix row 1 (`Mat_GetUp`
+/// 0x1e33b8); dy = +0x13c − +0x9c [M 0x1d7404 sub.s f2,f1,f0]; the HITTEST+0x50 base point =
+/// obj_pos + up·dy [M 0x1d741c-0x1d7420]; start = obj_pos + up·(−(+0x13c)·1.8) [M
+/// 0x1d742c-0x1d7474, the 1.8 literal 0x3fe66666 at 0x1d742c, negated at 0x1d7458]; end = the
+/// base point [M 0x1d7444-0x1d747c reuses the f2 broadcast]. Returns (start, base).
+fn rb_cyl_points(up: [f32; 3], obj_pos: [f32; 3], s13c: f32, s9c: f32) -> ([f32; 3], [f32; 3]) {
+    let dy = s13c - s9c;
+    let base = [obj_pos[0] + up[0] * dy, obj_pos[1] + up[1] * dy, obj_pos[2] + up[2] * dy];
+    let k = -(s13c * 1.8);
+    let start = [obj_pos[0] + up[0] * k, obj_pos[1] + up[1] * k, obj_pos[2] + up[2] * k];
+    (start, base)
+}
+
+/// The grounding tail [M 0x1d75a0-0x1d7610]: when the sweep hit anything and h+0x10 !=
+/// (0,0,0) — `Vec_IsEqual(rb+0xC0, 0x2d6200, 0.0)`, the 0x2d6200 table = (0,0,0) [L
+/// ACTION.ELF:0x2d6200; tolerance 0.0 = mtc1 zero [M 0x1d75a8-0x1d75bc]] — +0x50 += (hit0+0x40
+/// − translation) × (h+0x10·2.0) [M 0x1d75c8-0x1d7610: Vec_MulR32 0x40200000 = 2.0, the VU
+/// outer product 0x1d75e8-0x1d75f8, VADD into +0x50 at 0x1d7600-0x1d7610] — with the cross's
+/// Y lane zeroed first [M 0x1d7600: `swc1 f20, 0x24(sp)` stores the 0.0 tolerance register
+/// over the stored cross's y lane before the VADD loads it; f20 = mtc1 $zero at 0x1d75a8]:
+/// only the x and z lanes of the cross reach +0x50, +0x50.y is untouched.
+fn rb_cyl_grounding_tail(st: &mut RbState, hit0: [f32; 3]) {
+    if st.cyl_deltap == [0.0; 3] {
+        return;
+    }
+    let vel = [st.cyl_deltap[0] * 2.0, st.cyl_deltap[1] * 2.0, st.cyl_deltap[2] * 2.0];
+    let r = [hit0[0] - st.trans[0], hit0[1] - st.trans[1], hit0[2] - st.trans[2]];
+    let mut cross = cross3(r, vel);
+    cross[1] = 0.0; // [M 0x1d7600 swc1 f20(=0.0) → the cross's y lane; VADD 0x1d760c skips y]
+    for i in 0..3 {
+        st.tor_impulse[i] += cross[i];
+    }
+}
+
+pub fn rb_cylinder_sweep(
+    world: &crate::world::CollisionWorld,
+    cell: usize,
+    mut start: [f32; 3],
+    mut end: [f32; 3],
+    radius: f32,
+    base: &mut [f32; 3],
+) -> (Option<[f32; 3]>, [f32; 3]) {
+    let mut deltap = [0.0f32; 3];
+    let mut hit0: Option<([f32; 3], f32)> = None;
+    // The straddle set [M 0x1eb320:125; the port's `debug_straddle` is the documented
+    // `Collide_StraddleCels` result].
+    for cel in world.debug_straddle(cell, start, end, radius) {
+        let push = world.rb_cyl_push_cell(cel, start, end, radius, *base);
+        if push == [0.0; 3] {
+            continue;
+        }
+        let dist = (push[0] * push[0] + push[1] * push[1] + push[2] * push[2]).sqrt();
+        if hit0.is_none_or(|(_, d)| dist < d) {
+            hit0 = Some((*base, dist));
+        }
+        for i in 0..3 {
+            deltap[i] += push[i];
+            start[i] += push[i];
+            end[i] += push[i];
+            base[i] += push[i];
+        }
+    }
+    (hit0.map(|(p, _)| p), deltap)
+}
+
 /// `RB_RestingContactRot` 0x1d73a0 [M], the type != 0 hit-list walk — the arm the census
-/// barrels and lamps (type 1, param 2 [D; L rb+0xa8 = 1]) take. Per hit, class 5 only [M 0x1d7428-0x1d74c8]: Sound_Play3D
-/// (collected, not played), impulse = (hit+0x8)·0.5·vel, +0x50 += r×impulse (no +0x40 write)
-/// with the PER-TYPE masking of the cross lanes: type 2 keeps x, type 3 keeps y, type 4 keeps
-/// z, type 1 (the census lamps and barrels) zeroes y; every other type adds the full cross. Other classes fall through — Rot has NO position-correction arm
-/// [M the decompile's only else arm walks to the next hit]. The cylinder interior (the
-/// +0xD0/+0xE0/+0x100 test points, the `Collide_CylinderIntersect` sweep and its
-/// uprighting tail) is the documented remainder: it needs the port's cylinder sweep (the
-/// remainder report's item 2).
+/// barrels and lamps (type 1, param 2 [D; L rb+0xa8 = 1]) take. THREE passes, the game's order:
+///
+/// 1. THE CYLINDER BLOCK [M 0x1d73e8-0x1d7490, skipped for type 3 by the `rb+0xa8 != 3` gate
+///    at 0x1d7424]: up = `Mat_GetUp(obj+0x90)` = matrix row 1 [M 0x1e33b8]; the HITTEST+0x50
+///    base point (rb+0x100) = obj_pos + up·(+0x13c − +0x9c) [M 0x1d73f0-0x1d7420, always];
+///    HITTEST+0x20 start = obj_pos + up·(−(+0x13c)·1.8) and HITTEST+0x30 end = the base point
+///    [M 0x1d742c-0x1d747c, the 1.8 literal at 0x1d742c (0x3fe66666)]; HITTEST+0x98 = 0x10 [M
+///    0x1d7488]; the sweep (`rb_cylinder_sweep` — `Collide_CylinderIntersect` 0x1ecc00).
+///    obj_pos = obj+0xC0 — the port's one slot is `st.trans` (the kind-0xD8 body never
+///    translates on this path [M EulerEvolve's type-0 position arm]; the port's heat-puff and
+///    wind passes use the same identity) [S the slot identity].
+/// 2. THE CLASS-5 WALK over the obj+0xD0 chain (the game's param_3 — a DIFFERENT list from the
+///    sweep's local one [M the sweep writes aiStack_f0, the walk walks param_3]). Per hit,
+///    class 5 only [M 0x1d7428-0x1d74c8]: Sound_Play3D (collected, not played), impulse =
+///    (hit+0x8)·0.5·vel, +0x50 += r×impulse (no +0x40 write) with the PER-TYPE masking of the
+///    cross lanes: type 2 keeps x, type 3 keeps y, type 4 keeps z, type 1 (the census lamps
+///    and barrels) zeroes y; every other type adds the full cross. Other classes fall through
+///    — Rot has NO position-correction arm [M the decompile's only else arm walks to the next
+///    hit].
+/// 3. THE GROUNDING TAIL [M 0x1d75a0-0x1d7610, on the SWEEP list]: when the sweep hit anything
+///    (the list head survives the 1e8 drop) and h+0x10 != (0,0,0) — `Vec_IsEqual(rb+0xC0,
+///    0x2d6200, 0.0)` with the 0x2d6200 table = (0,0,0) [L ACTION.ELF:0x2d6200; the tolerance
+///    is 0.0, f20 = mtc1 zero [M 0x1d75a8-0x1d75bc]] — +0x50 += (hit0+0x40 − translation) ×
+///    (h+0x10·2.0) with the cross's Y lane zeroed before the add [M 0x1d7600 `swc1 f20
+///    (=0.0) → the cross's y lane`] [M 0x1d75c8-0x1d7610: Vec_MulR32(0x40200000 = 2.0), the VU
+///    outer product 0x1d75e8-0x1d75f8, VADD into +0x50 at 0x1d7600-0x1d7610]. The direction crosses the
+///    up-vector arm (hit0 = the +0x50 base ≈ trans + up·(radius − +0x9c)) with the floor push
+///    (0, pen, 0) into h·pen·(−up.z, 0, up.x) — the same axis the up-righting spring drives
+///    [M 0x1d79f4-0x1d7a58], so a body whose cylinder digs obliquely (tipped) is righted by
+///    the cylinder too.
 pub fn rb_resting_contact_rot(
     rb: &RigidBody,
     st: &mut RbState,
+    world: &crate::world::CollisionWorld,
+    cell: Option<usize>,
     hits: &[RbHit],
     sound: u32,
     sounds: &mut Vec<(u32, [f32; 3])>,
 ) {
+    // Pass 1 — the cylinder block [M 0x1d73e8-0x1d7490].
+    let mut sweep_hit0: Option<[f32; 3]> = None;
+    if rb.ty != 3 {
+        let up = st.matrix[1]; // Mat_GetUp [M 0x1e33b8, row 1]
+        let obj_pos = st.trans; // obj+0xC0 [S the port's one-slot identity]
+        let (start, mut base) = rb_cyl_points(up, obj_pos, st.s13c, st.s9c);
+        if let Some(cell) = cell {
+            let (hit0, deltap) = rb_cylinder_sweep(world, cell, start, base, st.s13c, &mut base);
+            sweep_hit0 = hit0;
+            for i in 0..3 {
+                st.cyl_deltap[i] += deltap[i]; // h+0x10 += [M 0x1ebaa8:368-376]
+            }
+        }
+    }
+    // Pass 2 — the class-5 walk over obj+0xD0 [M 0x1d74c0-0x1d7590].
     for hit in hits {
         if hit.other_class == 5 {
             let k = hit.scale * 0.5;
@@ -758,10 +887,15 @@ pub fn rb_resting_contact_rot(
             sounds.push((sound, st.trans));
         }
     }
+    // Pass 3 — the grounding tail [M 0x1d75a0-0x1d7610].
+    if let Some(hit0) = sweep_hit0 {
+        rb_cyl_grounding_tail(st, hit0);
+    }
 }
 
 /// `RB_CollisionHandler` 0x1d7a80 [M]: type 0 → RestingContact, every other type →
-/// RestingContactRot; the caller then applies obj+0xFA |= 0x20.
+/// RestingContactRot; the handler itself then applies obj+0xFA |= 0x20 [M 0x1d7a80:16-23,
+/// after either branch] (the port does the same in the caller).
 pub fn rb_collision_handler(
     rb: &RigidBody,
     st: &mut RbState,
@@ -769,11 +903,13 @@ pub fn rb_collision_handler(
     hits: &[RbHit],
     sound: u32,
     sounds: &mut Vec<(u32, [f32; 3])>,
+    world: &crate::world::CollisionWorld,
+    cell: Option<usize>,
 ) {
     if rb.ty == 0 {
         rb_resting_contact(rb, st, s_aa, hits, sound, sounds);
     } else {
-        rb_resting_contact_rot(rb, st, hits, sound, sounds);
+        rb_resting_contact_rot(rb, st, world, cell, hits, sound, sounds);
     }
 }
 
@@ -1104,20 +1240,24 @@ impl Rbodies {
         o.flags |= 0x20;
     }
 
-    /// `RB_CollisionHandler` 0x1d7a80 [M] per body over its hit list; the sounds collect for
-    /// the caller's pool.
-    pub fn handle_collisions(&mut self, sounds: &mut Vec<(u32, [f32; 3])>) {
+    /// `RB_CollisionHandler` 0x1d7a80 [M] per body; the sounds collect for the caller's pool.
+    /// The handler runs EVERY tick (the game's dispatch pair) — the cylinder sweep (the Rot
+    /// path's pass 1) must run even with an empty obj+0xD0 chain (a resting body's cylinder
+    /// digs the floor every tick [M 0x1d73a0:0x1d73e8+ runs before the hit walk]).
+    pub fn handle_collisions(&mut self, world: &crate::world::CollisionWorld, sounds: &mut Vec<(u32, [f32; 3])>) {
         for j in 0..self.list.len() {
-            self.handle_collisions_one(j, sounds);
+            self.handle_collisions_one(world, j, sounds);
         }
     }
 
-    /// One body's `RB_CollisionHandler` over its own hit list (the control walk's per-object call).
-    pub fn handle_collisions_one(&mut self, j: usize, sounds: &mut Vec<(u32, [f32; 3])>) {
+    /// One body's `RB_CollisionHandler` (the control walk's per-object call). The sweep's
+    /// home cel = `find_cel(obj+0xC0)` — the port keeps no stored cel on the body [S the
+    /// re-pick; the Rot bodies never translate so it is stable].
+    pub fn handle_collisions_one(&mut self, world: &crate::world::CollisionWorld, j: usize, sounds: &mut Vec<(u32, [f32; 3])>) {
         let Some(o) = self.list.get_mut(j) else { return };
-        if o.hits.is_empty() { return; }
         let hits = std::mem::take(&mut o.hits);
-        rb_collision_handler(&o.rb, &mut o.st, o.s_aa, &hits, o.s158, sounds);
+        let cell = world.find_cel(o.st.trans);
+        rb_collision_handler(&o.rb, &mut o.st, o.s_aa, &hits, o.s158, sounds, world, cell);
         o.flags |= 0x20;
     }
 }
@@ -1214,7 +1354,7 @@ mod evolve_tests {
             let (mut rb, mut st) = barrel();
             rb.ty = ty;
             let mut sounds = Vec::new();
-            rb_collision_handler(&rb, &mut st, 0x101, &[hit(5), hit(3)], 0x123, &mut sounds);
+            rb_collision_handler(&rb, &mut st, 0x101, &[hit(5), hit(3)], 0x123, &mut sounds, &crate::world::CollisionWorld::empty(), None);
             assert_eq!(sounds.len(), 1, "type {ty}: one sound for the one class-5 hit");
             assert_eq!(sounds[0].0, 0x123, "type {ty}: the id is rb+0x158, not the 100.0f volume word");
             assert_eq!(sounds[0].1, st.trans, "type {ty}: at the body's translation");
@@ -1578,7 +1718,7 @@ mod evolve_tests {
             let (mut rb, mut st) = barrel();
             rb.ty = ty;
             let mut snd = Vec::new();
-            rb_resting_contact_rot(&rb, &mut st, std::slice::from_ref(&hit), 0, &mut snd);
+            rb_resting_contact_rot(&rb, &mut st, &crate::world::CollisionWorld::empty(), None, std::slice::from_ref(&hit), 0, &mut snd);
             assert_eq!(st.tor_impulse, want, "type {ty}");
             assert_eq!(st.lin_impulse, [0.0; 3], "Rot never writes +0x40 (type {ty})");
             assert_eq!(snd.len(), 1);
@@ -1590,5 +1730,109 @@ mod evolve_tests {
     fn vec_special_formula() {
         let out = rb_vec_special([1.0, 2.0, 3.0], [0.5, 0.5, 0.5], -2.0, 4.0);
         assert_eq!(out, [-2.0 * (1.0 - 2.0), -2.0 * (2.0 - 2.0), -2.0 * (3.0 - 2.0)]);
+    }
+
+    // ---- the cylinder contact check + its torque step (this task) ----
+
+    /// [M 0x1d73f0-0x1d747c] The test points: up = row 1; base (HITTEST+0x50) = obj_pos +
+    /// up·(+0x13c − +0x9c); start (HITTEST+0x20) = obj_pos + up·(−(+0x13c)·1.8); end
+    /// (HITTEST+0x30) = the base point. The 1.8 is the game's literal at 0x1d742c.
+    #[test]
+    fn cyl_test_points_match_the_setup() {
+        let (start, base) = rb_cyl_points([0.0, 1.0, 0.0], [10.0, 2.0, 20.0], 0.5, 0.25);
+        assert_eq!(base, [10.0, 2.25, 20.0], "+0x50 = obj_pos + up·(+0x13c − +0x9c)");
+        assert_eq!(start, [10.0, 2.0 - 0.9, 20.0], "+0x20 = obj_pos + up·(−(+0x13c)·1.8)");
+        // Sister (can fail): a different radius changes both offsets, the 1.8 only the start.
+        let (s2, b2) = rb_cyl_points([0.0, 1.0, 0.0], [10.0, 2.0, 20.0], 1.0, 0.0);
+        assert_eq!((s2[1], b2[1]), (2.0 - 1.8, 3.0));
+        // The tilted body's points ride the up row (Mat_GetUp), not the world y.
+        let th = 0.3f32;
+        let up = [0.0, th.cos(), th.sin()];
+        let (s3, b3) = rb_cyl_points(up, [0.0, 2.0, 0.0], 0.5, 0.25);
+        assert!((s3[2] - (-0.9 * th.sin())).abs() < 1.0e-6, "start rides up.z, {s3:?}");
+        assert!((b3[2] - 0.25 * th.sin()).abs() < 1.0e-6, "base rides up.z, {b3:?}");
+    }
+
+    /// [M 0x1d75a0-0x1d7610] The grounding tail: +0x50 += (hit0 − trans) × (h+0x10·2.0), only
+    /// when the sweep hit AND h+0x10 != (0,0,0) (the 0x2d6200 = (0,0,0) gate [L ACTION.ELF],
+    /// tolerance 0.0 [M 0x1d75a8 mtc1 zero]). A tipped body whose cylinder digs the floor
+    /// (push (0, pen, 0)) gets h·pen·2·(−up.z, 0, up.x) — the up-righting axis.
+    #[test]
+    fn cyl_grounding_tail_rightes_a_tipped_body() {
+        let (mut rb, mut st) = barrel();
+        let th = 0.2f32; // tilted about x: up = (0, cos, sin)
+        rb.ty = 1;
+        st.matrix = crate::player::quat_to_matrix(&[(th * 0.5).cos(), (th * 0.5).sin(), 0.0, 0.0]);
+        let up = st.matrix[1];
+        let h = 0.25f32; // the up-arm length (s13c − s9c)
+        let pen = 0.05f32;
+        st.trans = [10.0, 1.0, 20.0];
+        st.cyl_deltap = [0.0, pen, 0.0];
+        let base = [st.trans[0] + up[0] * h, st.trans[1] + up[1] * h, st.trans[2] + up[2] * h];
+        let before = st.tor_impulse;
+        rb_cyl_grounding_tail(&mut st, base);
+        let want = [-(up[2] * h) * pen * 2.0, 0.0, up[0] * h * pen * 2.0];
+        for i in 0..3 {
+            assert!(
+                (st.tor_impulse[i] - (before[i] + want[i])).abs() < 1.0e-6,
+                "tail cross axis {i}: {:?} vs {:?}", st.tor_impulse, want
+            );
+        }
+        // Sister 1 (can fail): an UPRIGHT body's r is parallel to the floor push — zero torque
+        // (the resting body never creeps).
+        let (mut rb2, mut st2) = barrel();
+        rb2.ty = 1;
+        st2.trans = [10.0, 1.0, 20.0];
+        st2.matrix = rb_set_state(&rb2); // identity
+        st2.cyl_deltap = [0.0, pen, 0.0];
+        let base2 = [st2.trans[0], st2.trans[1] + h, st2.trans[2]];
+        rb_cyl_grounding_tail(&mut st2, base2);
+        assert_eq!(st2.tor_impulse, [0.0; 3], "upright r ∥ floor push → no torque");
+        // Sister 2: a zero h+0x10 (the Vec_IsEqual gate) never writes, hit or not.
+        let mut st3 = st2.clone();
+        st3.cyl_deltap = [0.0; 3];
+        rb_cyl_grounding_tail(&mut st3, base2);
+        assert_eq!(st3.tor_impulse, [0.0; 3]);
+        // Sister 3 [M 0x1d7600 swc1 f20(=0.0) → the cross's y lane]: an oblique push makes the
+        // raw cross's y lane NONZERO — the game zeroes it before the VADD, so +0x50.y is
+        // untouched while the x/z lanes get the full cross lanes.
+        let (_, mut st4) = barrel();
+        st4.trans = [10.0, 1.0, 20.0];
+        st4.cyl_deltap = [0.03, pen, 0.02]; // oblique dig, not a pure floor push
+        let base4 = [st4.trans[0] + 0.4, st4.trans[1] + h, st4.trans[2] - 0.3];
+        rb_cyl_grounding_tail(&mut st4, base4);
+        let r4 = [base4[0] - st4.trans[0], base4[1] - st4.trans[1], base4[2] - st4.trans[2]];
+        let v4 = [0.03 * 2.0, pen * 2.0, 0.02 * 2.0];
+        let raw = cross3(r4, v4);
+        assert!(raw[1] != 0.0, "the case must produce a nonzero cross y lane to pin the mask");
+        assert_eq!(st4.tor_impulse[1], 0.0, "+0x50.y untouched [M 0x1d7600]");
+        assert!((st4.tor_impulse[0] - raw[0]).abs() < 1.0e-6);
+        assert!((st4.tor_impulse[2] - raw[2]).abs() < 1.0e-6);
+    }
+
+    /// [M 0x1ebaa8:353-394] The sweep's per-candidate bookkeeping: each hitting candidate adds
+    /// its push to h+0x10 and pushes start/end/base; a miss adds nothing. Driven through
+    /// `rb_cylinder_sweep` on a from_triangles world with the flat (cel-0) path… the straddle
+    /// needs a real cel graph, so the candidate loop's shape is pinned through the tail end:
+    /// the port's `rb_cyl_push_cell` returns 0 on an unmapped cel (no geometry → no candidate)
+    /// and the sweep then reports no hit and no push — the at-rest hang-lamp path (the
+    /// bullet-hit curve pins stay untouched).
+    #[test]
+    fn cyl_sweep_without_geometry_is_inert() {
+        let world = crate::world::CollisionWorld::empty();
+        let mut base = [10.0, 2.25, 20.0];
+        let (hit0, deltap) = rb_cylinder_sweep(&world, 0, [10.0, 1.1, 20.0], base, 0.5, &mut base);
+        assert!(hit0.is_none(), "no geometry → the node stays at 1e8 → no hit0");
+        assert_eq!(deltap, [0.0; 3], "no candidate hit → h+0x10 gains nothing");
+        assert_eq!(base, [10.0, 2.25, 20.0], "the +0x50 point is not pushed");
+        // Sister (can fail): the same call through the handler keeps the accumulators at rest —
+        // the class-5 walk is the only writer on an empty sweep.
+        let (mut rb, mut st) = barrel();
+        rb.ty = 1;
+        st.matrix = rb_set_state(&rb);
+        let mut snd = Vec::new();
+        rb_collision_handler(&rb, &mut st, 0, &[], 0xffff, &mut snd, &world, Some(0));
+        assert_eq!(st.tor_impulse, [0.0; 3]);
+        assert_eq!(st.lin_impulse, [0.0; 3]);
     }
 }
