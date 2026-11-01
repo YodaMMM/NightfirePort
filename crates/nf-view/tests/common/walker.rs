@@ -608,6 +608,10 @@ impl Walker {
         w >= 2 && w <= 0x47 && c + s > 0
     }
 
+    /// The return-fire switch (damage_log.rs): this walker's `switch_to_armed` already cycles
+    /// to a gun only (`2..=0x47`), so it is the same cycle.
+    pub fn switch_to_gun(&mut self, label: &str) -> bool { self.switch_to_armed(label) }
+
     /// The exposed-part aim point: enumerate the drone's hit boxes (the same boxes the port's
     /// bullets test against, `hit_boxes` [L hit-box dump]; the game's per-part damage groups are
     /// `NDrone2_HitDamage` 0x145558 — head 5 ×100, the arms 53–56 ×1.0, legs ×0.75) and return the

@@ -249,7 +249,7 @@ impl DamageLog {
 }
 
 // The return-fire response, shared by both walkers (this file is `include!`d into each walker
-// module, so `Walker` is that module's walker; both carry `tick`, `tick_fire`, `switch_to_armed`,
+// module, so `Walker` is that module's walker; both carry `tick`, `tick_fire`, `switch_to_gun`,
 // `tops_up`, `scene`, `total_ticks` and `dmg`).
 #[allow(dead_code)]
 impl Walker {
@@ -330,7 +330,7 @@ impl Walker {
         self.dmg.fighting = true;
         self.dmg.fights += 1;
         let h0 = self.scene.sim.as_ref().unwrap().drones.health.health;
-        let killed = self.switch_to_armed(label) && self.stand_and_fire(di, 900);
+        let killed = self.switch_to_gun(label) && self.stand_and_fire(di, 900);
         // The stand may have emptied the gun (stand_and_fire gives up when clip+spare hit 0):
         // restock from the floor drops so the NEXT fight does not run dry (same run, the sniper).
         if !armed(self) && !self.dmg.resupplying {
