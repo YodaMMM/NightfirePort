@@ -104,6 +104,13 @@ pub struct Part {
     /// target's mesh for the part when this is set (nf-view resolves `LevelMap::lod_target` from
     /// the part's placement; the swap is a draw change — the sim only pins the state).
     pub lod_next: bool,
+    /// Coronas: `obj+0xF0 & 0x2000` — the sort-list-2 bit. `Searchlight_Update` sets it (and scales
+    /// ×1.5) when `Collide_LineOfSight(viewer, corona)` is clear and clears it when blocked, but only
+    /// while the alpha byte is nonzero; with alpha 0 the bit keeps its last value [M 0x1cb900:337-347].
+    /// `View_AddObjects` 0x1e62d8:57-59 sends a 0x2000 object to list 2, which `Game_Draw` 0x1e6f50
+    /// draws after `psiClearZ` (WipeZBuffer 0x30c759 = 1 [D ACTION.ELF data; L ee_start_05.bin]) —
+    /// the renderer's no-depth-test pass 6 draws the corona while this is set.
+    pub sight: bool,
 }
 
 /// All searchlight parts of a level, in placement (creation) order.
@@ -229,6 +236,7 @@ impl Searchlights {
                 spawn_pos: p.translation,
                 created: 0,
                 lod_next: false,
+                sight: false,
             };
             let (half, mid) = half_mid(param(4), param(5));
             part.half = half;
@@ -515,8 +523,15 @@ impl Searchlights {
                 let scale = a * 4.0;
                 let alpha = (a * 255.0) as u8;
                 let mut scale = scale;
-                if alpha != 0 && d.world.line_of_sight(player.eye, corona_pos, crate::world::LOS_PROBE_8) { scale *= 1.5; }
+                // The 0x2000 list-2 bit follows the sight test only while the alpha byte is nonzero
+                // [M 0x1cb900:337-347]; alpha 0 keeps the previous bit.
+                let mut sight = self.parts[c].sight;
+                if alpha != 0 {
+                    sight = d.world.line_of_sight(player.eye, corona_pos, crate::world::LOS_PROBE_8);
+                    if sight { scale *= 1.5; }
+                }
                 let corona = &mut self.parts[c];
+                corona.sight = sight;
                 corona.pos = corona_pos;
                 corona.drawn = true;
                 corona.alpha = alpha;
@@ -754,7 +769,7 @@ mod tests {
             phase: 0.0, drawn: true, matrix: [[1.0, 0.0, 0.0, 0.0], [0.0, 1.0, 0.0, 0.0], [0.0, 0.0, 1.0, 0.0], [pos[0], pos[1], pos[2], 0.0]],
             state: 0, pitch: 0.0, yaw: 0.0, links: [None; 5], killed: false, light: None,
             alpha: 255, scale: 1.0, box_min: [-0.5; 3], box_max: [0.5; 3],
-            sph_centre: [0.0; 3], sph_radius: 1.0, spawn_pos: pos, created: 0, lod_next: false,
+            sph_centre: [0.0; 3], sph_radius: 1.0, spawn_pos: pos, created: 0, lod_next: false, sight: false,
         };
         sl.parts = vec![part(0, [0.0, -1.5, 0.0]), part(1, [0.0, 0.0, 0.0]), part(2, [0.0, -10000.0, 0.0]), part(3, [0.0, 0.0, 0.0]), part(4, [0.0, 0.4, 0.0])];
         sl.parts[1].links = [Some(0), None, Some(2), Some(3), Some(4)];
@@ -790,7 +805,7 @@ mod tests {
             phase: 0.0, drawn: kind < 2, matrix: [[1.0, 0.0, 0.0, 0.0], [0.0, 1.0, 0.0, 0.0], [0.0, 0.0, 1.0, 0.0], [pos[0], pos[1], pos[2], 0.0]],
             state: 0, pitch: 0.0, yaw: 0.0, links: [None; 5], killed: false, light: None,
             alpha: 255, scale: 1.0, box_min: [-0.5; 3], box_max: [0.5; 3],
-            sph_centre: [0.0; 3], sph_radius: 1.0, spawn_pos: pos, created: 0, lod_next: false,
+            sph_centre: [0.0; 3], sph_radius: 1.0, spawn_pos: pos, created: 0, lod_next: false, sight: false,
         };
         sl.parts = vec![part(0, [0.0, -0.1, 0.0]), part(1, [0.0, 0.0, 0.0]), part(2, [0.0, -10000.0, 0.0]), part(3, [0.0, 0.0, 0.0]), part(4, [0.0, 0.4, 0.0])];
         sl.parts[1].links = [Some(0), None, Some(2), Some(3), Some(4)];
@@ -822,7 +837,7 @@ mod tests {
             phase: 0.0, drawn: true, matrix: [[1.0, 0.0, 0.0, 0.0], [0.0, 1.0, 0.0, 0.0], [0.0, 0.0, 1.0, 0.0], [pos[0], pos[1], pos[2], 0.0]],
             state: 0, pitch: 0.0, yaw: 0.0, links: [None; 5], killed: false, light: None,
             alpha: 255, scale: 1.0, box_min: [-0.5; 3], box_max: [0.5; 3],
-            sph_centre: [0.0; 3], sph_radius: 1.0, spawn_pos: pos, created: 0, lod_next: false,
+            sph_centre: [0.0; 3], sph_radius: 1.0, spawn_pos: pos, created: 0, lod_next: false, sight: false,
         };
         sl.parts = vec![part(0, [0.0, -3.0, 0.0]), part(1, [0.0, 0.0, 0.0])];
         sl.parts[1].links = [Some(0), None, None, None, None];
@@ -846,7 +861,7 @@ mod tests {
             phase: 0.0, drawn: true, matrix: [[1.0, 0.0, 0.0, 0.0], [0.0, 1.0, 0.0, 0.0], [0.0, 0.0, 1.0, 0.0], [0.0, 0.0, 0.0, 0.0]],
             state: 0, pitch: 0.0, yaw: 0.0, links: [None; 5], killed: false, light: None,
             alpha: 255, scale: 1.0, box_min: [-0.5; 3], box_max: [0.5; 3],
-            sph_centre: [0.0; 3], sph_radius: 1.0, spawn_pos: [0.0; 3], created: 0, lod_next: false,
+            sph_centre: [0.0; 3], sph_radius: 1.0, spawn_pos: [0.0; 3], created: 0, lod_next: false, sight: false,
         };
         sl.parts = vec![part(1)];
         let through = Shot { from: [-3.0, 0.0, 0.0], to: [3.0, 0.0, 0.0], damage: 0.0, segment: true };
@@ -869,7 +884,7 @@ mod tests {
             phase: 0.0, drawn: true, matrix: [[1.0, 0.0, 0.0, 0.0], [0.0, 1.0, 0.0, 0.0], [0.0, 0.0, 1.0, 0.0], [0.0, 0.0, 0.0, 0.0]],
             state: 2, pitch: 0.4, yaw: 0.0, links: [None; 5], killed: false, light: None,
             alpha: 255, scale: 1.0, box_min: [-0.5; 3], box_max: [0.5; 3],
-            sph_centre: [0.0; 3], sph_radius: 1.0, spawn_pos: [0.0; 3], created: 0, lod_next: false,
+            sph_centre: [0.0; 3], sph_radius: 1.0, spawn_pos: [0.0; 3], created: 0, lod_next: false, sight: false,
         };
         sl.parts = vec![part(1)];
         let shot = Shot { from: [-3.0, 0.0, 0.0], to: [3.0, 0.0, 0.0], damage: 3.5, segment: true };
@@ -891,7 +906,7 @@ mod tests {
             phase: 0.0, drawn: true, matrix: [[1.0, 0.0, 0.0, 0.0], [0.0, 1.0, 0.0, 0.0], [0.0, 0.0, 1.0, 0.0], [0.0, 0.0, 0.0, 0.0]],
             state: 0, pitch: 0.0, yaw: 0.0, links: [None; 5], killed: false, light: None,
             alpha: 255, scale: 1.0, box_min: [-0.5; 3], box_max: [0.5; 3],
-            sph_centre: [0.0; 3], sph_radius: 1.0, spawn_pos: [0.0; 3], created: 0, lod_next: false,
+            sph_centre: [0.0; 3], sph_radius: 1.0, spawn_pos: [0.0; 3], created: 0, lod_next: false, sight: false,
         };
         sl.parts = vec![part(1)];
         // 1.2 from the centre: inside the 0.25 + 1.0 point margin, outside the 1.0 sphere.

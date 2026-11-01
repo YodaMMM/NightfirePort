@@ -124,7 +124,7 @@ fn fire_until(w: &mut Walker, target: [f32; 3], max_ticks: u32, done: impl Fn(&n
             w.scene.sim.as_mut().unwrap().step_bond(fire_input, on_target && !clip_empty, reload, false);
         }
         w.total_ticks += 1;
-        if w.top_up_health { w.scene.sim.as_mut().unwrap().drones.health.health = 100.0; }
+        w.after_step();
     }
 }
 

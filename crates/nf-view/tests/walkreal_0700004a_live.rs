@@ -221,3 +221,12 @@ fn ride_the_lift_from_the_spawn_and_walk_into_the_lobby() {
         assert!(sim.drones.mission.states[17][0] != 0, "the objective holds through the walk-out");
     }
 }
+
+/// Real damage: the same walk with the health top-up off for every walker it makes (the
+/// tests' own `top_up_health = true` included) and the walker's return fire on — Bond's death
+/// panics with the death spot and the last hits (common/damage_log.rs), so a pass pins that the
+/// walk completes on the port's own damage.
+#[test]
+fn ride_the_lift_from_the_spawn_and_walk_into_the_lobby_real_damage() {
+    walker::with_real_damage(ride_the_lift_from_the_spawn_and_walk_into_the_lobby);
+}

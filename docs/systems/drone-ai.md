@@ -99,7 +99,8 @@ alertness 0 or 1 (property 0x20 → {0, 0, 0.66, 1.0} at 0x2f5cc8, verified); al
 - Line of sight (`DroneVision_ProcessDroneSight`): one drone per tick, round robin, only if vis ≥ 0.7; head to
   target bone (`Drone_View_Bones` cycle 2, 3, 5, …). Counters: seen ticks `+0x270`, unseen `+0x274`.
 - Reaction (`DroneFunc_ReactionTime`): on levels 0x7000002/3/5/9/A `(1 − alert)·0.3·(200 − stat_b8)` ticks
-  (0 once seen or at alertness 1), else 10. [L] 07000005: `drone_stats` for the guards' type is zero → 60 ticks;
+  (0 once seen or at alertness 1), else 10. `stat_b8` = `drone_stats[type][1]` word 5 (docs/systems/drone-damage.md).
+  [L] 07000005: the level-start guards' type-1 record is empty → 59 ticks; 07000002's type-2 guards read 80 → 36;
   the game noticed Bond 61 ticks after he appeared (round-robin scheduling adds the tick).
 - Alertness decays 1/50 per second toward its floor (never from 1.0); sight never raises it; noise does
   (`Sound_Alertness` per tick, weights from `SFXOutputData`), and so do impacts and alarms. Drone-to-drone alerts are

@@ -824,6 +824,13 @@ pub struct Animator {
     pub follow_on: u16,
     /// Scripts still fading out after being replaced (`AnimScriptAppendBlend`), oldest first (docs/systems/anim-engine.md).
     pub outgoing: Vec<crate::anim::Outgoing>,
+    /// `Drone+0x538`, the ONE blend-out word `DroneWeap_Ready2Fire` reads [M 0x178c48:102-104].
+    /// `DroneAnim_SetHTAnim` stores the replaced script there and points that script's back-pointer
+    /// (+0x64) at the word [M 0x13b1c8:76-77]; `AnimScriptDelete` zeroes whatever a dying script's
+    /// back-pointer names [M 0x1c14f0:26-29]. Every script a blend replaced keeps a back-pointer to
+    /// the same word, so the FIRST of them to die clears it, even while a later one still fades:
+    /// the word is set on each blend start and cleared on any outgoing script's deletion.
+    pub blend_out: bool,
     /// The playing script's start-frame commands ran (`+0x78 & 0x20000000` cleared).
     pub started: bool,
     /// Event 7 cleared `+0x579`: `DroneAnim_CheckForAnimComplete` ends the one-shot before its last frame.
@@ -906,6 +913,8 @@ pub struct Drone {
     pub accuracy: u8,
     pub aggression: u8,
     pub reaction: u8,
+    /// `+0xB9` — the recover stat (`DroneFunc_RecoverTime` 0x147188's `200 − +0xB9`), from `drone_stats`.
+    pub recover: u8,
     // Vision (`+0x228` bits 2 = line of sight, 4 = seen this tick, 8 = ever seen; `+0x230`, `+0x270`, `+0x274`).
     pub los: bool,
     pub seen: bool,
@@ -1846,7 +1855,18 @@ pub fn quat_quat_to_mat(q: [f32; 4]) -> nf_formats::anim::Mat4 {
 
 impl Drone {
     /// From a placement (parameters by index) after `NDrone2_DefaultInit` / `DoModeSettingsNEW`.
+    /// The stats come from the placement's own behaviour words only (`behaviour_util_get` into a fresh
+    /// table); `level_drones` threads the level's shared `drone_stats` table through `new_with_stats`.
     pub fn new(d: &Data, pos: V3, yaw: f32, param: impl Fn(u32) -> u32, rng: &mut Rng) -> Drone {
+        let mut table = nf_formats::drone::DroneStatsTable::default();
+        let ty = table.behaviour_get(&param);
+        let stats = table.stats(ty);
+        Self::new_with_stats(d, pos, yaw, param, rng, stats)
+    }
+
+    /// `stats` = `behaviour_util_getStats(+0xC7, 1)` after this placement's `behaviour_util_get`
+    /// (`NDrone2_DoModeSettingsNEW` 0x14c600:70-107).
+    pub fn new_with_stats(d: &Data, pos: V3, yaw: f32, param: impl Fn(u32) -> u32, rng: &mut Rng, stats: nf_formats::drone::DroneStats) -> Drone {
         // The 07000014 skin rewrite [M 0x14b300:82-95]: with GameState+12 == 0x07000014 a param-0
         // skin 0x050000b1 is rewritten to 0x0500008c BEFORE the `Drone+0xe0` store — the kind
         // switch, the captain block and the `AnimObjectNew` handoff ([M 0x14b300:563-565] reads
@@ -1902,17 +1922,19 @@ impl Drone {
         let mut dr = Drone {
             skin, anim_set, weapon, pos, yaw, desired_yaw: yaw, aim_yaw: 0.0, alert, alert_floor: alert, props: normal, alert_props,
             sight_range: e8, half_fov: crate::trig::HALF_PI, engage_range: f0, combat_range: fc,
-            // `drone_stats` for the guards' type is all zero at run time (07000005 snapshot) → defaults.
-            // (The lookup is `behaviour_util_getStats` 0x1c7e58 — `drone_stats + type·0x60 + kind·0x20`,
-            // driven by `NDrone2_DoModeSettingsNEW` 0x14c600:81; its word +8 is the health [M].)
-            accuracy: 5, aggression: 0, reaction: 0,
+            // `+0xB4`/`+0xB5`/`+0xB8` from `drone_stats[+0xC7][1]` (`NDrone2_DoModeSettingsNEW`
+            // 0x14c600:81-107; defaults 5/0/0 when its health word is 0). [L] 07000005's guards are
+            // type 1 (no record) → 5/0/0; 07000001/02's type-2 guards read 8/1/80 (ee_start_07000001.bin,
+            // ee_02b.bin) — the old fixed 5/0/0 made those guards 25% more accurate (75 vs 60 base),
+            // their bursts longer (×1.66 vs ×1.33 delay) and their reaction 59 ticks instead of 36.
+            accuracy: stats.accuracy, aggression: stats.aggression, reaction: stats.reaction, recover: stats.recover,
             los: false, seen: false, ever_seen: false, ever_seen_3c: false, bond_alive: true, visibility: 0.0, seen_ticks: 0, unseen_ticks: 0, vision_on: false,
             dist: 0.0, yaw_to_opp: 0.0,
             state: state::GLOBAL, prev_state: 0, next_state: None, entered: 0, timer_c: None, timer_d: None,
             alarm_yaw: 0.0, alarm_run: false, timer_c_payload: 0, alarm_patrol: param(23) as u8, alarm_point: None,
             ai_points: Vec::new(), alarm_switches: Vec::new(),
             explosive_pos: pos, explosive_run_dist: 0.0,
-            anim: Animator { danim: 0, script: None, time: 0, state: 0, class: 0, call: None, reached: false, call_from: 0, blend_wait: 0, ftime: 0.0, speed: 1.0, variant: 0, once: false, held: false, follow_on: 0, outgoing: Vec::new(), started: false, early_end: false, len_cap: None },
+            anim: Animator { danim: 0, script: None, time: 0, state: 0, class: 0, call: None, reached: false, call_from: 0, blend_wait: 0, ftime: 0.0, speed: 1.0, variant: 0, once: false, held: false, follow_on: 0, outgoing: Vec::new(), blend_out: false, started: false, early_end: false, len_cap: None },
             firing: false, burst_done: false, burst: 0, next_shot: 0, last_shot: 0, clip, clip_max: clip,
             grenade_weapon, grenade_count, pending_grenade: false,
             shots: Vec::new(), log: Vec::new(), knocked_out: false, disabled_logged: false, dispatched_logged: false, start_script, root_prev: None, aimed_at: false, aimed_until: 0, bunched: false, wobble: rng.rand(10000), lost_sight: true, damage_mul: 1.0, alert_bits: 0, light: 1.0, attack_frame: 0, alerted_by_drone: false, watching: false,
@@ -1946,8 +1968,10 @@ impl Drone {
             captor: None, hostage_searched: false,
             hostage_target: None, killer_searched: false, msg_out: Vec::new(), msg_now: Vec::new(),
             loudness: 0.0, sound_share: 0.0, heard_frame: 0, heard_peak: 0.0, sound_pos: pos, noise_level: 0, investigating: false, turned: false, resume_state: 0, home: pos,
-            // `drone_stats[type]+8` is 0 for these guards → 10 (captains, difficulty ≥ 2 only, are not modelled).
-            health: 10.0, max_health: 10.0, damage_taken: 1.0, damageable: !matches!(skin, 0x0500_003b | 0x0500_003c | 0x0500_0053), kind: setup.kind,
+            // `+0xAC` = `drone_stats[type][1]` word 2 when non-zero, else 10 [M 0x14c600:81-95]; the
+            // captain ×`DroneCaptain_Mod_Health` follows in `captain_setup` ([L] ee_02b.bin: type-2
+            // guards 12, their captains 24).
+            health: stats.health as f32, max_health: stats.health as f32, damage_taken: 1.0, damageable: !matches!(skin, 0x0500_003b | 0x0500_003c | 0x0500_0053), kind: setup.kind,
             last_damage: 0.0, silent_kill: false, big_hit: false, flinch_at: None, hit: None, impact_resume: 0, hits_taken: 0, attack_entry_talks: 0,
             blast: None,
             global_flinch: None, bond_aiming: false, cull: false, bond_armed: true, stat_ok: true, opp_facing: 0.0, opp_target: [0.0; 3], sighted: false, own_sight: false, first_attack_done: false,
@@ -2041,6 +2065,11 @@ impl Drone {
             // Drone+0x1e — the gun-through-wall flag (SeekOpponentLOS refreshes it on sight ticks).
             gun_through_wall: false,
         };
+        // `NDrone2_DefaultInit`'s held-weapon switch: the pistol class {2, 6, 0xA, 0xB, 0xE, 0x10,
+        // 0x3B..0x40} writes `+0x100 = 2.0` beside its anim set 4 and clip 12 [M 0x14b300:267-293];
+        // the captain block later overwrites it with `DroneCaptain_Mod_BulletDamage` [M :559].
+        // [L] ee_02b.bin / ee_start_07000001.bin: every non-captain weapon-0xE guard reads +0x100 = 2.0.
+        if matches!(weapon, 2 | 6 | 0xa | 0xb | 0xe | 0x10 | 0x3b..=0x40) { dr.damage_mul = 2.0; }
         dr.init_properties(d, &param);
         // `DroneInit_Collision` 0x14b1e8 (DefaultInit 0x14b300:775): not MP, `+0xBD4`/`+0x23` clear,
         // `+0xD8 != 0x13`, `+0xC5 != 0x17` — a 25-unit ray down from obj+1.0 moves the spawn to the
@@ -2643,7 +2672,8 @@ impl Drone {
     /// no bitfield, no +0xa0 time-scale field. The param-0 clear arm has no port path: nothing re-enables
     /// rotation-carrying on a live script.)
     fn begin_blend(&mut self, d: &Data, blend: u16, old_turn: bool) {
-        if blend == 0 || !self.drawn { self.anim.outgoing.clear(); return; }
+        // `AnimScriptAdd` deletes every script: each fading one zeroes +0x538 [M 0x1c14f0:26-29].
+        if blend == 0 || !self.drawn { if !self.anim.outgoing.is_empty() { self.anim.blend_out = false; } self.anim.outgoing.clear(); return; }
         for o in &mut self.anim.outgoing { o.clock = 8.0; o.length = 8.0; }
         if let Some(s) = self.anim.script {
             let looping = !(self.anim.once || self.anim.held);
@@ -2665,7 +2695,9 @@ impl Drone {
                 self.yaw = self.desired_yaw;
             }
             self.anim.outgoing.push(o);
-            if self.anim.outgoing.len() > 31 { self.anim.outgoing.remove(0); }
+            // +0x538 = the replaced script, its back-pointer at the word [M 0x13b1c8:76-77].
+            self.anim.blend_out = true;
+            if self.anim.outgoing.len() > 31 { self.anim.outgoing.remove(0); self.anim.blend_out = false; }
         }
     }
 
@@ -2854,7 +2886,10 @@ impl Drone {
             return self.call_handler(d);
         }
         // The fading scripts keep playing (`AnimScriptTick`) while their blend clocks run down (`AnimFrameResolve`).
+        let n_out = self.anim.outgoing.len();
         self.anim.outgoing.retain_mut(|o| { let len = d.scripts.get(&o.script).map_or(1.0, |s| s.length as f32); o.tick(len) });
+        // A faded script's `AnimScriptDelete` zeroes +0x538 through its back-pointer [M 0x1c14f0:26-29].
+        if self.anim.outgoing.len() < n_out { self.anim.blend_out = false; }
         if self.anim.held { self.root_prev = None; return self.call_handler(d); }
         let before = (self.anim.script, self.anim.danim);
         let ftime_in = self.anim.ftime;
@@ -4883,12 +4918,22 @@ impl Drone {
     /// The local pose shown now: the playing script at its fractional time, blended with the scripts fading out
     /// (docs/systems/anim-engine.md). Root translation kept.
     pub fn local_pose(&self, d: &Data) -> Option<crate::anim::Pose> {
+        self.local_pose_with(d, None)
+    }
+
+    /// `local_pose` with the script samples taken through `cache` when given
+    /// (`crate::anim::script_pose_drone_cached` — the identical pose; perf-240f, the render's palette).
+    fn local_pose_with(&self, d: &Data, mut cache: Option<&mut crate::anim::PoseSampleCache>) -> Option<crate::anim::Pose> {
         let skin = d.skins.get(&self.skin)?;
         let skel = d.skeletons.get(&skin.skeleton)?;
-        let cur = crate::anim::script_pose_drone(d.scripts, d.sequences, skel, skin, self.anim.script?, 1.0 + self.anim.ftime)?;
+        let mut pose = |hash: u32, time: f32| match cache.as_deref_mut() {
+            Some(c) => crate::anim::script_pose_drone_cached(d.scripts, d.sequences, skel, skin, hash, time, c),
+            None => crate::anim::script_pose_drone(d.scripts, d.sequences, skel, skin, hash, time),
+        };
+        let cur = pose(self.anim.script?, 1.0 + self.anim.ftime)?;
         let outs: Vec<(crate::anim::Pose, f32)> = self.anim.outgoing.iter()
             .filter_map(|o| {
-                let mut p = crate::anim::script_pose_drone(d.scripts, d.sequences, skel, skin, o.script, o.time)?;
+                let mut p = pose(o.script, o.time)?;
                 if o.unyaw != 0.0 { if let Some(r) = p.first_mut() { r.1 = crate::anim::unyaw(r.1, o.unyaw); } }
                 Some((p, o.weight()))
             }).collect();
@@ -4904,15 +4949,22 @@ impl Drone {
     /// the head's right axis, premultiplied `q_yaw ⊗ q_pitch ⊗ q_bone`; *approximation*: the port's axes are the
     /// model's), and the hip height. Drawing and hit boxes both use it.
     pub fn object_pose(&self, d: &Data) -> Option<(Vec<nf_formats::anim::Mat4>, f32)> {
-        self.object_pose_inner(d, true)
+        self.object_pose_inner(d, true, None)
+    }
+
+    /// `object_pose` with the script samples memoised in `cache` (perf-240f: the render's palette
+    /// build re-samples the same integer frames tick after tick; a sample is a pure function of its
+    /// key, so the pose is the identical pose — see `crate::anim::PoseSampleCache`).
+    pub fn object_pose_cached(&self, d: &Data, cache: &mut crate::anim::PoseSampleCache) -> Option<(Vec<nf_formats::anim::Mat4>, f32)> {
+        self.object_pose_inner(d, true, Some(cache))
     }
 
     /// `track = false` gives the pose WITHOUT the head-track rotation — the palette the game's
     /// `AnimObjectHeadTrack` 0x1bf618 itself receives (psiBuildMatrixPalette rebuilds it from the
     /// anim every tick, so the stored rotation is never in the axes it measures from).
-    fn object_pose_inner(&self, d: &Data, track: bool) -> Option<(Vec<nf_formats::anim::Mat4>, f32)> {
+    fn object_pose_inner(&self, d: &Data, track: bool, cache: Option<&mut crate::anim::PoseSampleCache>) -> Option<(Vec<nf_formats::anim::Mat4>, f32)> {
         let skin = d.skins.get(&self.skin)?;
-        let mut local = self.local_pose(d)?;
+        let mut local = self.local_pose_with(d, cache)?;
         let hip = local.first().map_or(0.0, |r| r.0[1]);
         if let Some(r) = local.first_mut() { r.0 = [0.0; 3]; }
         let mut world = nf_formats::anim::world_pose(&local, skin);
@@ -5000,7 +5052,7 @@ impl Drone {
     /// position (sAnimObject+0x104 = 5 [docs/fields/animobject.md [L-read]]; the port stands in
     /// the AI's player eye snapshot).
     pub fn head_track_want(&self, d: &Data, target: [f32; 3]) -> Option<(f32, f32)> {
-        let (world, hip) = self.object_pose_inner(d, false)?;
+        let (world, hip) = self.object_pose_inner(d, false, None)?;
         if world.len() <= 5 { return None; }
         // The port's pose is OBJECT-space (the game's palette is world; the port factors the
         // placement into palette()'s object matrix) — take the tracked point into the same frame:
@@ -5726,7 +5778,22 @@ impl Drone {
         let hip = self.hip();
         let from = [self.pos[0], self.pos[1], self.pos[2]];
         let to = [self.pos[0], self.pos[1] - (hip + 0.6), self.pos[2]];
-        let hit = world.segment(from, to)?;
+        // The seam bridge: the game's drone also carries the 0.4 collision sphere `NDrone2_Collision`
+        // sets up for the object pass: centres obj + up·0.4 (`+0x3F0`) and obj + up·(0.4 − hip)
+        // (`+0x400`), `+0x45C` = 0.4 (0.3 sitting), `obj+0xFD = 1` [M 0x140e90:91-117, 168]; read
+        // as a 0.4 sphere at the feet [S: the radius role of +0x45C is inferred from its use],
+        // which rests on the floor triangles either side of a sub-centimetre seam between two
+        // objects' quantized meshes, so a guard never drops through one. The port has only the
+        // feet ray, which threads such a seam: 07000001's west hall has a 0.37 mm gap at
+        // z −6.1047..−6.1044 and a 2 mm gap at z −5.9675..−5.9692 [D collision tris], and a guard
+        // whose dodge ended on the seam fell out of the level. When the centre ray misses, four
+        // rays 2 cm out stand in for the sphere's contact (a 0.4 sphere over a 4 cm gap sinks
+        // 0.5 mm) [S]; a real ledge still drops the drone once it is 2 cm past the edge.
+        let hit = world.segment(from, to).or_else(|| {
+            [[0.02f32, 0.0], [-0.02, 0.0], [0.0, 0.02], [0.0, -0.02]].iter().filter_map(|o| {
+                world.segment([from[0] + o[0], from[1], from[2] + o[1]], [to[0] + o[0], to[1], to[2] + o[1]])
+            }).min_by(|a, b| a.total_cmp(b))
+        })?;
         let floor = from[1] + (to[1] - from[1]) * hit;
         let feet_y = self.pos[1] - hip;
         if floor >= feet_y - 0.2 { Some(floor) } else { None }
@@ -6247,7 +6314,7 @@ impl Drone {
                 // = 18·(200−0) = 3600 ticks at the stats default +0xB9 = 0 (BOT_stats[8], zero at run time
                 // [L 07000005]) [M 0x147188 + 0x172bb0]. The old 7200 read the switch's DEFAULT arm — twice
                 // the game's stun for a stun bullet.
-                self.stun_until = frame + 3600;
+                self.stun_until = frame + self.recover_time(30);
                 // fix-guard-drops-flashbang [M 0x172bb0:15-18, the state's own case 1]: the flashed
                 // guard DROPS the held gun and takes the fists — `if (+0xda != 4) { DropWeapon;
                 // ChangeWeapon(1) }` — whatever route stunned him (the flash broadcast, a stunned
@@ -6347,7 +6414,7 @@ impl Drone {
                 // byte [M 0x162b98:27-34, the `lhu/slti` on 0xda]; ChangeWeapon(1) is the full table
                 // arm: weapon 1, anim set 0xC, clip 0, clip_max 0 [M 0x17a72c→0x17a714]. The drop rolls
                 // the shared stream here, BEFORE the anim draw, in the game's case-1 order.
-                self.tase_recover = 1200;
+                self.tase_recover = self.recover_time(10);
                 if self.team == 1 && self.anim_set != 4 {
                     self.drop_weapon(d, rng);
                     self.change_weapon(1);
@@ -6500,7 +6567,15 @@ impl Drone {
             0x4a | 0x4c => 10,
             _ => 60,
         };
-        120 * k
+        self.recover_time(k)
+    }
+
+    /// `DroneFunc_RecoverTime` 0x147188's tail: `fptoui(FRAME_RATE_INT·k · 0.01 · (200 − +0xB9))`
+    /// [M :44-46], each product an EE `mul.s`. `+0xB9` = 0 → 120·k; the 01–04 type-2 guards' 80
+    /// ([L] ee_02b.bin) → 72·k.
+    fn recover_time(&self, k: u32) -> u32 {
+        use nf_formats::ps2float::mul;
+        mul(mul((60 * k) as f32, 0.01), (200 - self.recover as i32) as f32) as u32
     }
 
     /// The dart's ENTER weapon drop band, `+0xDA ∈ {5, 6, 9}` [M 0x163430:20-27, dis
@@ -9993,7 +10068,7 @@ impl Drone {
             return None;
         }
         let go = self.seen && self.prop(d, 0x3c) && (self.alert >= 0.66 || self.prop(d, 0x51));
-        if std::env::var_os("NF_AILOG").is_some() {
+        if { static F: std::sync::OnceLock<bool> = std::sync::OnceLock::new(); *F.get_or_init(|| std::env::var_os("NF_AILOG").is_some()) } {
             eprintln!("[ailog] guard {} look_for_opponent: seen={} prop_3c={} alert={:.2} prop_51={} -> {}",
                 self.index, self.seen, self.prop(d, 0x3c), self.alert, self.prop(d, 0x51), if go { "ATTACK" } else { "none" });
         }
@@ -10680,19 +10755,27 @@ impl Drone {
         self.next_shot = (self.last_shot + i).max(frame);
     }
 
-    /// `DroneWeap_Ready2Fire`: aiming class, close enough, or the gun within 20° of the target.
+    /// `DroneWeap_Ready2Fire` 0x178c48 (single player): the danim class `+0x568` 4 (the state-0x58
+    /// recoil/fire danims 0x31, 0x5C, 0xDF, 0xEA, 0x198 [D the danim info table]) is ready at once
+    /// [M :47 `if (cVar7 != 4) … else uVar5 = 1`]; any other class but 2 refuses [M :49-51], as does
+    /// a running blend-out `+0x538` [M :52-54]; under 2.0 the shot is ready [M :55-57]; else the gun
+    /// within 20° of the target, 30° in mode 0xD [M :124-127 `0.34906587` / `0.5235988`]. The game
+    /// compares the gun bone's 3D direction; the port compares the aimed yaw.
     fn ready_to_fire(&self) -> bool {
+        if self.anim.class == 4 { return true; }
         if self.anim.class != 2 { return false; }
+        if self.anim.blend_out { return false; }
         if self.dist < 2.0 { return true; }
-        angle_difference(self.yaw + self.aim_yaw, self.yaw_to_opp).abs() < 0.349
+        let tol = if self.mode == 0xd { 0.523_598_8 } else { 0.349_065_87 };
+        angle_difference(self.yaw + self.aim_yaw, self.yaw_to_opp).abs() < tol
     }
 
     /// `DroneWeap_HandleFiring` → `DoFiring` → `FireWeapon`.
-    fn handle_firing(&mut self, d: &Data, rng: &mut Rng, frame: u32, p: &Player, motion: (bool, bool), owner: usize, lights: &mut crate::light::LightList) -> Option<crate::bullet::Bullet> {
-        if !self.firing { return None; }
+    fn handle_firing(&mut self, d: &Data, rng: &mut Rng, frame: u32, p: &Player, motion: Motion, owner: usize, lights: &mut crate::light::LightList) -> Vec<crate::bullet::Bullet> {
+        if !self.firing { return Vec::new(); }
         self.burst_done = false;
         let mut more = false;
-        let mut bullet = None;
+        let mut bullet = Vec::new();
         if self.burst == 0 { self.next_bullet_time(d, rng, frame, true); }
         if self.unseen_ticks < 0x10 || self.prop(d, 0x17) {
             more = true;
@@ -10704,7 +10787,7 @@ impl Drone {
             // 0x5C recoil danim, zeroes the pending call's completion action (+0x596 / +0x598), sets +0x57B
             // and clears +0x40. Non-recoil weapons fire as before (the game's `+0x3E == 0` early-out).
             let fire_now = !self.recoil_weapon
-                || (self.event_21 && self.anim.call.is_none() && self.anim.outgoing.is_empty());
+                || (self.event_21 && self.anim.call.is_none() && !self.anim.blend_out);
             if self.next_shot <= frame && self.ready_to_fire() && fire_now {
                 if self.recoil_weapon {
                     self.anim.call.as_mut().into_iter().for_each(|c| { c.1 = 0; c.2 = 0; });
@@ -10718,7 +10801,7 @@ impl Drone {
                     if id != 0x5ef && id != 0 { self.anim_sounds.push(id); }
                 }
                 self.shots.push(frame);
-                self.shot_aims.push((frame, bullet.as_ref().map(|b| b.pos).unwrap_or(self.muzzle(d)), self.opp_target));
+                self.shot_aims.push((frame, bullet.first().map(|b| b.pos).unwrap_or(self.muzzle(d)), self.opp_target));
                 self.last_shot = frame;
                 self.clip -= 1;
                 self.burst -= 1;
@@ -10805,7 +10888,7 @@ impl Drone {
 
     /// `DroneWeap_FireWeapon` + `DoBulletAccuracy`: hit roll, the miss wobble, the cone (`Bullet_init`), damage
     /// (`Drone_ModBulletDamage`: the ×2 under TooClose lands at the hit site, × `+0x100` here).
-    fn fire_weapon(&mut self, d: &Data, rng: &mut Rng, frame: u32, p: &Player, (moving, first_moved): (bool, bool), owner: usize, lights: &mut crate::light::LightList) -> Option<crate::bullet::Bullet> {
+    fn fire_weapon(&mut self, d: &Data, rng: &mut Rng, frame: u32, _p: &Player, m: Motion, owner: usize, lights: &mut crate::light::LightList) -> Vec<crate::bullet::Bullet> {
         // `DroneWeap_FireWeapon` 0x178f68:92-145: before any accuracy draw, the mounted-minigun
         // deploy branch — the guard's weapon datum char (BOT_vars+0x768) == 'R', combat state
         // type 4, weapon id not 0xdd/0xde, `AmmoInGun >= 1`, not `tooCloseForWeapon` (+0x170
@@ -10816,25 +10899,18 @@ impl Drone {
         // branch cannot select here; the deploy position math is ported
         // (`crate::gt::deploy_position`, unit-tested) and the turret record it creates is
         // `crate::gt::GTurret` (the minigun glist 0x2000359, the Collide_PlaceObject radii).
-        let w = d.weapons.records.get(self.weapon as usize)?;
+        let Some(w) = d.weapons.records.get(self.weapon as usize) else { return Vec::new() };
         let f32_at = |o: usize| f32::from_le_bytes(w[o..o + 4].try_into().unwrap());
-        // Hit chance: p = 100 − 5·accuracy, ×2 under TooClose ([0x30cb14] — `close_threshold`), ×0.25
-        // first moved, ×0.75 moving, × level difficulty accuracy (07000005–08: 0.8 / 0.9 / 1.3;
-        // difficulty 1 as read live), ×2 again under TooClose. The hard always-hit cut is a separate
-        // literal 3.0 [M 0x179914-0x17992c].
-        let mut pct = 100.0 - 5.0 * self.accuracy as f32;
-        let close = self.dist < close_threshold(d.level);
-        if close { pct *= 2.0 }
-        if first_moved { pct *= 0.25 }
-        if moving { pct *= 0.75 }
-        pct *= level_accuracy(d.level, d.difficulty);
-        if close { pct *= 2.0 }
+        let pct = hit_chance(d.tuning, d.level, d.difficulty, self.accuracy, self.dist, m, self.anim_set);
+        let close = self.dist < d.tuning.DroneFiring_TooClose_Distance;
         let mut hit = rng.frand(100.0) < pct;
         // The raw roll, exposed for the tests (see `shot_rolls`): the model quantity is the
         // roll itself, not the bullet's landing — a rolled miss still flies the wobble-offset
         // bullet and can clip Bond's bounds.
         self.shot_rolls.push(hit);
-        if !close { hit &= self.seen_ticks >= 120 && !self.lost_sight; }
+        // Beyond TooClose the hit also needs `+0x270 ≥ fptoui(NewSighting_TimeToHit · FRAME_RATE)`
+        // (2.0 · 60 = 120 on every campaign group) and `+0x41 == 0` [M 0x179740:93-99].
+        if !close { hit &= self.seen_ticks >= (d.tuning.DroneFiring_NewSighting_TimeToHit * 60.0) as u32 && !self.lost_sight; }
         if self.dist < 3.0 { hit = true; }
         self.lost_sight = false;
         // Miss: deterministic wobble (0.5 sin a, 1.5 sin(a + π/2), 1.5 sin 0.02t), a = 0.01t, t = frame + obj+0xEC,
@@ -10862,7 +10938,6 @@ impl Drone {
         // A live check settles the object-create side with gdbwatch.
         let aim = [self.opp_target[0] + off[0] - muzzle[0], self.opp_target[1] + off[1] - muzzle[1], self.opp_target[2] + off[2] - muzzle[2]];
         let flags68 = u32::from_le_bytes(w[0x68..0x6c].try_into().unwrap());
-        let dir = crate::bullet::spread(aim, f32_at(0x24), flags68, rng);
         // The raw damage: weapon_data+0x0C. `Drone+0x100` (the ×mul) is applied at HIT time by
         // `Drone_ModBulletDamage` — weapons 0x63-0x66 skip EVERY modifier there (0x139f98-0x139fa8),
         // so they must not carry the multiplier in the bullet either.
@@ -10874,10 +10949,16 @@ impl Drone {
         // does not feed the sim's RNG; consuming it here shifted every later sim draw off the
         // live-calibrated stream (two test failures). Open: whether the game's sim stream
         // really carries it is not yet confirmed live.
-        let mut b = crate::bullet::Bullet { pos: muzzle, dir, speed: f32_at(0x20), travelled: 0.0, range: f32_at(0x1c), damage, owner, state: 0,
-            weapon: self.weapon as u16, flyby: d.weapons.flyby(self.weapon as usize), bounces: 0, ..crate::bullet::Bullet::TAIL };
-        b.init_fuse(w);
-        Some(b)
+        // `weapon_data+0x18` rounds per shot, each its own `Bullet_init` (its own cone draws) along the
+        // same aim [M 0x178f68:233-241 — the loop runs while i < (u8)weapon_data[+0x18], none for 0];
+        // the shotgun records 0x1C / 0x1D carry 8 [D weapon_data 0x2bf150 +0x18].
+        (0..w[0x18]).map(|_| {
+            let dir = crate::bullet::spread(aim, f32_at(0x24), flags68, rng);
+            let mut b = crate::bullet::Bullet { pos: muzzle, dir, speed: f32_at(0x20), travelled: 0.0, range: f32_at(0x1c), damage, owner, state: 0,
+                weapon: self.weapon as u16, flyby: d.weapons.flyby(self.weapon as usize), bounces: 0, ..crate::bullet::Bullet::TAIL };
+            b.init_fuse(w);
+            b
+        }).collect()
     }
 
     // ---- per tick -----------------------------------------------------------------------------------------------
@@ -11419,11 +11500,34 @@ pub fn level_drones(d: &Data, level: &nf_formats::level::Level, rng: &mut Rng, l
     // The map parse's ambient radiators precede every dynamic-object create [M parsemap_handle_block_id 0x1d1020].
     crate::light::level_lights(level, rng, lights);
     let Some(m) = level.main_map() else { return Vec::new() };
+    // The run-time `drone_stats` table: `behaviour_util_get` 0x1c7a98 writes a type's records from the
+    // first placement that carries the stats section, and every later drone of that type reads them
+    // (`DoModeSettingsNEW` 0x14c600:70-107). Gated-out placements never reach `Drone_Create`'s body.
+    // A spawner template runs its `DoModeSettingsNEW` only when `DroneSpawner_SpawnDrone` 0x137cb0
+    // creates it, so its section does not reach the drones placed at load: 07000005's only section
+    // sits on template #3 (type 1, group 2) [D] and the level-start guards read the defaults ([L]
+    // ee_start_05.bin: type-1 record empty, acc 5 / aggression 0 / health 10). A template takes its
+    // own section over the load-time table (the record it writes is the one it reads).
+    let roles: Vec<nf_formats::drone::SpawnRole> = {
+        let list: Vec<(u32, Vec<(u32, u32)>)> = level.maps[m].placements.iter().map(|p| (p.flags & 0xff, p.params.clone())).collect();
+        nf_formats::drone::spawn_roles(&list)
+    };
+    let mut stats = nf_formats::drone::DroneStatsTable::default();
+    for (k, p) in level.maps[m].placements.iter().filter(|p| p.flags & 0xff == 0x0f).enumerate() {
+        let param = |j: u32| p.params.iter().find(|(i, _)| *i == j).map(|&(_, v)| v).unwrap_or(0);
+        if param(2) > d.difficulty || roles.get(k) != Some(&nf_formats::drone::SpawnRole::Placed) { continue; }
+        stats.behaviour_get(param);
+    }
+    let load_stats = stats.clone();
+    let mut stats = nf_formats::drone::DroneStatsTable::default();
+    let mut drone_k = 0usize;
     level.maps[m].placements.iter().enumerate().filter_map(|(i, p)| {
         // The drones (0x0F) and the type-0x4E lights are created by the same
         // `parsemap_create_dynamic_objects` pass in placement order, so their RNG draws interleave here.
         if p.flags & 0xff == 0x4e { crate::light::placement_light(level, m, i, rng, lights); return None; }
         if p.flags & 0xff != 0x0f { return None; }
+        let role = roles.get(drone_k).copied();
+        drone_k += 1;
         let param = |k: u32| p.params.iter().find(|(j, _)| *j == k).map(|&(_, v)| v).unwrap_or(0);
         // Drone_Create's difficulty gate [M 0x136be0:49]: level_tag+0x34 (param 2) is the
         // placement's MINIMUM-difficulty tag — the drone spawns iff `param2 <= difficulty`
@@ -11431,7 +11535,15 @@ pub fn level_drones(d: &Data, level: &nf_formats::level::Level, rng: &mut Rng, l
         // `Drone_Create`'s body). docs/fields/level-tag.md's "spawn frame" name is a misread.
         if param(2) > d.difficulty { return None; }
         let floor = d.world.floor_below(p.translation, 3.0).unwrap_or(p.translation[1] - 1.0);
-        let mut dr = Drone::new(d, [p.translation[0], floor + 1.0, p.translation[2]], p.rotation[1], param, rng);
+        let st = if role == Some(nf_formats::drone::SpawnRole::Placed) {
+            let ty = stats.behaviour_get(&param);
+            stats.stats(ty)
+        } else {
+            let mut t = load_stats.clone();
+            let ty = t.behaviour_get(&param);
+            t.stats(ty)
+        };
+        let mut dr = Drone::new_with_stats(d, [p.translation[0], floor + 1.0, p.translation[2]], p.rotation[1], param, rng, st);
         dr.placement = i;
         // `NDrone2_PostLoad_Init` 0x14d890:18-22: every drone's nav path (+0x954) is
         // `AINetwork_NavPathForPosition(drone pos)` at level load — the path `ClosestAIPoint`
@@ -11441,34 +11553,55 @@ pub fn level_drones(d: &Data, level: &nf_formats::level::Level, rng: &mut Rng, l
     }).collect()
 }
 
-/// Per-level accuracy factors by difficulty (`ReadTuningVars` 0x1d3a80). The difficulty itself is
-/// `Drones::difficulty` — `GameState+0x28` (0x2a3790): BOTH the accuracy switch (`DroneWeap_DoBulletAccuracy`
-/// 0x179848: `lw a0,40(v0)` off GameState 0x2a3768) and the pain switch (`Player_HandlePain` 0x19040c) read
-/// +0x28, and the difficulty page writes it there (`C_SBNFDFCTY_Handler` 0x216dc4: `sw v0,0x3790(t0)`);
-/// the snapshot has +0x28 = 1 at 07000005 start while the scored +0x40 (0x2a37a8) = 0 [L ee_start_05.bin].
-pub fn level_accuracy(level: u32, difficulty: u32) -> f32 {
-    let (e, n, h) = match level & 0xff {
-        0x01..=0x04 | 0x14..=0x16 => (0.5, 0.7, 1.0),
-        0x05..=0x08 => (0.8, 0.9, 1.3),
-        0x09..=0x0b => (0.8, 1.0, 1.0),
-        0x0c | 0x0d | 0x1b => (0.6, 0.8, 1.2),
-        0x11..=0x13 | 0x4a => (0.7, 0.8, 1.0),
-        0x21..=0x29 | 0x4b | 0x4c => (0.8, 1.0, 1.5),
-        _ => (0.5, 1.0, 2.0),
+/// Bond's motion as the firing drones read it (`DroneWeap_DoOpponentTargetting` 0x179a48): `moving` =
+/// `+0x1DC` (the opponent's horizontal velocity is non-zero [M :31-37]); `first_moved` = `+0x1DD`, set when
+/// he starts moving and cleared once `stamp + fptoui(TargetFirstMoved_TimeToHit · FRAME_RATE) < now`
+/// [M :54-63]; `first_stopped` = `+0x1DF`, the same for the stop with `TargetFirstStopped_TimeToHit`
+/// [M :41-52]. Both share the `+0x224` stamp.
+#[derive(Clone, Copy, Debug, Default, PartialEq)]
+pub struct Motion { pub moving: bool, pub first_moved: bool, pub first_stopped: bool }
+
+/// `DroneWeap_DoBulletAccuracy` 0x179740's hit percentage (compared against `Rand_FRand(100)`), every
+/// factor from the level's tuning globals (`ReadTuningVars` 0x1d3a80, `d.tuning`):
+/// `p = 100 − 5·accuracy` (`+0xB4`) [M :48]; × `TooClose_Accuracy` when `dist < TooClose_Distance` [M :49-51];
+/// × `TargetFirstMoved_Accuracy` (`+0x1DD`) [M :52-54]; × `TargetFirstStopped_Accuracy` (`+0x1DF`) only on
+/// 0x0700000C/0x0700000D for the anim set `+0xDA` 0x13 [M :55-70]; × `TargetMoving_Accuracy` (`+0x1DC`)
+/// [M :71-73]; × the difficulty factor on `GameState+0x28` — 1 Easy, 3/4 Hard, 0/2/≥5 Normal [M :74-88];
+/// × `TooClose_Accuracy` again [M :90-92].
+pub fn hit_chance(t: &nf_formats::tuning::Tuning, level: u32, difficulty: u32, accuracy: u8, dist: f32, m: Motion, anim_set: u16) -> f32 {
+    let close = dist < t.DroneFiring_TooClose_Distance;
+    let mut p = 100.0 - accuracy as f32 * 5.0;
+    if close { p *= t.DroneFiring_TooClose_Accuracy; }
+    if m.first_moved { p *= t.DroneFiring_TargetFirstMoved_Accuracy; }
+    if m.first_stopped && (0x0700_000c..0x0700_000e).contains(&level) && anim_set == 0x13 {
+        p *= t.DroneFiring_TargetFirstStopped_Accuracy;
+    }
+    if m.moving { p *= t.DroneFiring_TargetMoving_Accuracy; }
+    p *= match difficulty {
+        1 => t.DroneFiring_Accuracy_Easy,
+        3 | 4 => t.DroneFiring_Accuracy_Hard,
+        _ => t.DroneFiring_Accuracy_Normal,
     };
-    match difficulty { 1 => e, 3 | 4 => h, _ => n }
+    if close { p *= t.DroneFiring_TooClose_Accuracy; }
+    p
 }
 
-/// The "too close" tuning variable `DroneAcc_TooClose` (0x30cb14, written per level group by
-/// `ReadTuningVars`): the threshold for the ×2 accuracy bonus and the ×2 hit damage
-/// (`Drone_ModBulletDamage` 0x139fb4: `c.4.s f1, [0x30cb14]`). The groups write 3.0 (01–1B campaign
-/// groups + 4A); 21–29+4B+4C write 4.0; every unlisted level keeps the ELF static 4.0. NOT the 4.0
-/// the port hardcoded before — on 07000005 the game's threshold is 3.0 [L ee_start_05.bin: 3.0].
-pub fn close_threshold(level: u32) -> f32 {
-    match level & 0xff {
-        0x01..=0x0d | 0x11..=0x16 | 0x1b | 0x4a => 3.0,
-        _ => 4.0,
+/// `Drone_ModBulletDamage` 0x139f50 on a drone round hitting Bond, from the raw `weapon_data+0x0C`
+/// (the bullet already carries `× Drone+0x100`): `Drone+0xD8 == 0xC` → 0 [M :14-16]; weapons 0x63–0x66
+/// untouched [M :17-20]; × `TooClose_Damage` when the shooter's `+0x1A0 < TooClose_Distance` [M :21-23];
+/// × `PlayerBackShot_Damage` when the shooter's mode `+0xC5` is neither 2 nor 0x19, its anim set `+0xDA`
+/// is 0x12 (NOT the weapon id), the level is not 0x0700001B, and the bullet's travel yaw is within
+/// 90° of Bond's facing (obj+0x54) [M :24-48].
+pub fn player_hit_damage(t: &nf_formats::tuning::Tuning, level: u32, raw: f32, weapon: u16, voice_type: u16, shooter_dist: f32, mode: u8, anim_set: u16, bullet_yaw: f32, bond_yaw: f32) -> f32 {
+    if raw == 0.0 || voice_type == 0xc { return 0.0; }
+    if (0x63..=0x66).contains(&(weapon as u32)) { return raw; }
+    let mut dmg = raw;
+    if shooter_dist < t.DroneFiring_TooClose_Distance { dmg *= t.DroneFiring_TooClose_Damage; }
+    if mode != 2 && mode != 0x19 && anim_set == 0x12 && level != 0x0700_001b
+        && angle_difference(bullet_yaw, bond_yaw).abs() < 1.570_796_4 {
+        dmg *= t.DroneFiring_PlayerBackShot_Damage;
     }
+    dmg
 }
 
 /// All drones of a level plus the round-robin line-of-sight cursor.
@@ -11566,6 +11699,21 @@ pub struct Drones {
     /// Bond's previous position and the tick he started moving (`DoOpponentTargetting` +0x1DC / +0x1DD).
     prev_player: Option<V3>,
     moved_since: Option<u32>,
+    /// Bond's local thruster pair `BL+0x20`/`+0x28` (strafe, forward) while he floats in the
+    /// zero-g substates (8/9), set by the viewer before each tick; `None` on foot. In zero-g the
+    /// targetting's "moving" byte is this pair, not a position change: `Player_Update` zeroes the
+    /// `BL+0x10` move quad every active tick [M 0x193600:131-133, `obj+0xF4 == 1` → `Vec_Zero(BL+0x10)`], `Player_ZeroG` adds
+    /// the eased smoothers into it (`+0x10 += +0x20`, `+0x18 += +0x28` [M 0x192ab0:113, 135]),
+    /// and `DroneWeap_DoOpponentTargetting` sets `+0x1DC = |(BL+0x10, 0, BL+0x18)| != 0`
+    /// [M 0x179a48:34-41]. The smoothers ease at 0.04 with no dead-zone [M 0x192ab0:92-135], so
+    /// a float that has thrusted keeps a non-zero pair (×`TargetMoving` 0.75 on the hit chance
+    /// [M DoBulletAccuracy 0x179740:78-80]) while it hovers on the spot.
+    pub player_move_local: Option<[f32; 2]>,
+    /// This tick's targetting bytes as the hit roll reads them: (`+0x1DC` moving, `+0x1DD`
+    /// first moved) [M 0x179a48]. Observability for the tests; the sim reads its locals.
+    pub target_motion: (bool, bool),
+    /// The tick Bond stopped (`+0x1DF`'s stamp, `DoOpponentTargetting` 0x179a48:41-52).
+    stopped_since: Option<u32>,
     /// The player as an AI target and this frame's link used-counts per path.
     pub target: PlayerTarget,
     used: Vec<Vec<u16>>,
@@ -12307,7 +12455,7 @@ impl Drones {
             if let Some(g) = &mut dr.body_glow { g.owner = i; }
         }
         let llist = (0..list.len()).collect();
-        let mut drones = Drones { list, frame: 0, los_cursor: 0, llist, rng, lights: Default::default(), player_pos: [0.0; 3], bullets: Vec::new(), grenades: Vec::new(), explosions: Vec::new(), shake: 0.0, bond_crouched: false, vision_enable_frame: 0, player_spread: None, health: Default::default(), player_hits: Vec::new(), impacts: Vec::new(), prev_player: None, moved_since: None, target: PlayerTarget::default(), used: Vec::new(), link_flags: Vec::new(), locked_door_nodes: Default::default(), channels: Default::default(), triggers: Vec::new(), spawners: Vec::new(), cover_rt: Vec::new(), sounds: Vec::new(), cover_cursor: 0, cover_counter: 0, player_bullets: Vec::new(), net_no_self_hurt: false, player_impacts: Vec::new(), last_flinch: None, bond_aiming: false, level_exit: None, mission_end: None, bond_weapon: 2, env: None, sun_vector: [0.0; 3], env_pending: None, mp_master: 0, fill_rng: Rng::new(0x5eed), last_alarm: None, alarm_sent: false, party_loud: false, iop_section: 0, hud_frozen: false, aim_target: None, aim_offset: [0.0; 2],
+        let mut drones = Drones { list, frame: 0, los_cursor: 0, llist, rng, lights: Default::default(), player_pos: [0.0; 3], bullets: Vec::new(), grenades: Vec::new(), explosions: Vec::new(), shake: 0.0, bond_crouched: false, stopped_since: None, player_move_local: None, target_motion: (false, false), vision_enable_frame: 0, player_spread: None, health: Default::default(), player_hits: Vec::new(), impacts: Vec::new(), prev_player: None, moved_since: None, target: PlayerTarget::default(), used: Vec::new(), link_flags: Vec::new(), locked_door_nodes: Default::default(), channels: Default::default(), triggers: Vec::new(), spawners: Vec::new(), cover_rt: Vec::new(), sounds: Vec::new(), cover_cursor: 0, cover_counter: 0, player_bullets: Vec::new(), net_no_self_hurt: false, player_impacts: Vec::new(), last_flinch: None, bond_aiming: false, level_exit: None, mission_end: None, bond_weapon: 2, env: None, sun_vector: [0.0; 3], env_pending: None, mp_master: 0, fill_rng: Rng::new(0x5eed), last_alarm: None, alarm_sent: false, party_loud: false, iop_section: 0, hud_frozen: false, aim_target: None, aim_offset: [0.0; 2],
             // The game's `DAT_00299092` (the shared LOS-probe counter; see the field) — zeroed
             // here as `Drone_LevelReset`'s memset zeroes it at level reset [M 0x13a5bc-cc].
             los_probes: 0,
@@ -13114,6 +13262,22 @@ fn segment_hits_aabb(a: V3, b: V3, lo: V3, hi: V3) -> bool {
     true
 }
 
+/// The segment parameter (0..1) where `a → b` first enters the sphere `(c, r)`; 0 when `a` is
+/// already inside; None on a miss.
+fn segment_sphere_entry(a: V3, b: V3, c: V3, r: f32) -> Option<f32> {
+    let ab = [b[0] - a[0], b[1] - a[1], b[2] - a[2]];
+    let ca = [a[0] - c[0], a[1] - c[1], a[2] - c[2]];
+    let qa = ab[0] * ab[0] + ab[1] * ab[1] + ab[2] * ab[2];
+    let qb = 2.0 * (ab[0] * ca[0] + ab[1] * ca[1] + ab[2] * ca[2]);
+    let qc = ca[0] * ca[0] + ca[1] * ca[1] + ca[2] * ca[2] - r * r;
+    if qc <= 0.0 { return Some(0.0); }
+    if qa <= 0.0 { return None; }
+    let disc = qb * qb - 4.0 * qa * qc;
+    if disc < 0.0 { return None; }
+    let t = (-qb - disc.sqrt()) / (2.0 * qa);
+    (0.0..=1.0).contains(&t).then_some(t)
+}
+
 /// The satchel burn sparks' emitter def — `Bullet_DoTrails`' contact walk passes the immediate
 /// 0xc00000a [M 0x12d890:467-468].
 pub const SATCHEL_BURN_SPARKS: u32 = 0x0c00_000a;
@@ -13407,7 +13571,10 @@ fn segment_hits_sphere(a: V3, b: V3, c: V3, r: f32) -> bool {
         // targets, the same volumes the bullet pass tests).
         let copter_parts: Vec<(usize, Vec<(V3, f32)>)> = self.copters.iter().enumerate()
             .map(|(ci, c)| {
-                let (targets, present) = self.scripts.copter_part_targets(c.placement, d);
+                let (targets, present) = self.scripts.copter_part_targets(c.placement, &c.parts, d);
+                // The sweep is a `Collide_SphereIntersect` pick [M 0x17c518 → 0x1ec940:111 →
+                // Collide_Pick → Collide_PickObj's always-on 0x20 gate]: the body only.
+                let present = present & crate::copter::PICKABLE_SLOTS;
                 (ci, targets.iter().enumerate()
                     .filter(|(i, _)| present & (1u16 << i) != 0)
                     .filter_map(|(_, v)| *v).collect())
@@ -13859,7 +14026,14 @@ fn segment_hits_sphere(a: V3, b: V3, c: V3, r: f32) -> bool {
         // tick (the parts pose with the SP player — the documented one-tick script-entity lag;
         // the game's collide pass reads the same last-walk poses [M 0x1336f8:238]).
         let copter_targets: Vec<([Option<([f32; 3], f32)>; 9], u16)> = self.copters.iter()
-            .map(|c| self.scripts.copter_part_targets(c.placement, d)).collect();
+            .map(|c| {
+                // Only the pickable part slots take a bullet [M Collide_PickObj 0x1eae80:58-82 —
+                // the always-on obj+0xF0 0x20 gate; Copter_Register 0x17e530:7 sets it on every
+                // part but slot 2]. Before this gate the rotor (stream 4) sat in Bits slot 4
+                // (×100) and one P2K round (3.5) took the 299-hp copter down.
+                let (t, present) = self.scripts.copter_part_targets(c.placement, &c.parts, d);
+                (t, present & crate::copter::PICKABLE_SLOTS)
+            }).collect();
         let frame = self.frame;
         let mut bullets = std::mem::take(&mut self.player_bullets);
         // fix-0c-hatch-latches2: this tick's bullet-vs-SS-part Operate contacts (bit 1), recorded
@@ -14111,12 +14285,18 @@ fn segment_hits_sphere(a: V3, b: V3, c: V3, r: f32) -> bool {
             // bounding-sphere radius obj+0x8C [M; M-dis 0x1afdb8-0x1afdf8] — f12 r·6 = the script
             // presentation scale (SCRIPTINFO+0x94), f13 r = the shake radius (+ fuse r/15), f14 0.5
             // = the damage (EXPLODEINFO+0x28; zeroed when r < 0.5), the 200s are u8 args, not damage
-            // [M-dis 0x17cc1c-0x17cd60]. The port's queue keeps the historical (3.0, 200.0, 3.0)
-            // stand-in — `Monitors` stores no per-monitor r yet [D monitor.rs], so the exact triple
-            // (r, 0.5, r·6) awaits the radius plumbing at creation.
-            if !net_world && self.monitors.bullet_hit(b.pos, end, b.damage) {
-                let m = self.monitors.list.iter().find(|m| m.state == 3).map(|m| m.pos);
-                if let Some(p) = m { self.pending_blasts.push((p, 3.0, 200.0, usize::MAX, 0, 0x0600_0027, 3.0, 0)); }
+            // [M-dis 0x17cc1c-0x17cd60]. The damage is the game's 0.5 (Explode_Create stores its
+            // third float, f14, at EXPLODEINFO+0x28 [M 0x17cbd0:79 `+0x28 = param_3`] — the same
+            // slot the mine's param 0 and the grenade's weapon_data+0x0C fill). The port used
+            // 200.0 here, 400 times the game's: a console blast took up to 80 of Bond's health on
+            // Agent. The blast sits at the destroyed monitor's own position (obj+0x80), not the
+            // first state-3 monitor in the list. The radius and scale keep the 3.0 stand-in —
+            // `Monitors` stores no per-monitor r (obj+0x8C) yet [D monitor.rs], so the exact
+            // (r, 0.5, r·6) triple still awaits the radius plumbing at creation.
+            if !net_world {
+                if let Some(p) = self.monitors.bullet_hit(b.pos, end, b.damage) {
+                    self.pending_blasts.push((p, 3.0, 0.5, usize::MAX, 0, 0x0600_0027, 3.0, 0));
+                }
             }
             // The 0x54 camera-subject detector rides the same pass (a shot marker, not a solid
             // contact — it does not consume the round [M props.rs camera_shot_hit]).
@@ -14262,6 +14442,7 @@ fn segment_hits_sphere(a: V3, b: V3, c: V3, r: f32) -> bool {
                     self.site_bullet_damage += b.damage;
                 }
             }
+            let mut copter_stop = false;
             // copter-hitdata-damage [M Copter_Update 0x17dbb8:277-320]: the game's collide pass
             // appends the contact to the hit PART's obj+0xD0 chain (the parts are the SP's
             // class-0 script entities) and the walk consumes the chains with the per-slot Bits
@@ -14274,16 +14455,59 @@ fn segment_hits_sphere(a: V3, b: V3, c: V3, r: f32) -> bool {
                 let bclass = d.weapons.records.get(b.weapon as usize)
                     .map_or(0u16, |r| u16::from_le_bytes([r[0x10], r[0x11]]));
                 let bcontact = d.weapons.bullet_contact_damage(b.weapon);
+                // The world stop gates the contact: the collide list is nearest-first and stops
+                // at the first solid node [M Collide_Update 0x1ea398:216-229], so a wall between
+                // Bond and the body takes the round.
+                let mut tw_copter: Option<Option<f32>> = None;
+                let mut copter_t = f32::INFINITY;
                 for (ci, (targets, present)) in copter_targets.iter().enumerate() {
                     if *present == 0 { continue; }
-                    let c = &mut self.copters[ci];
                     for slot in 0..9usize {
+                        if *present & (1u16 << slot) == 0 { continue; }
                         let Some((centre, r)) = targets[slot] else { continue };
-                        if Self::segment_hits_sphere(b.pos, end, centre, r) {
-                            c.part_hits.push(crate::copter::PartHit { slot: slot as u8, damage: bcontact, class: bclass });
-                        }
+                        let Some(t) = Self::segment_sphere_entry(b.pos, end, centre, r) else { continue };
+                        let tw = *tw_copter.get_or_insert_with(|| d.world.segment_bullet_scoped(d.world.find_cel(b.pos), b.pos, end));
+                        if tw.is_some_and(|w| w < t) { continue; }
+                        self.copters[ci].part_hits.push(crate::copter::PartHit { slot: slot as u8, damage: bcontact, class: bclass });
+                        copter_stop = true;
+                        copter_t = copter_t.min(t);
                     }
                 }
+                // The body contact runs `Bullet_CollisionHandler`'s explode arms like any other
+                // contact [M 0x12ce80 — the 0x4 arm `Explode_Create(+0x08, +0x08, +0x0C, …,
+                // HITDATA+0x40, …, 0x6000052)` and the 0x100000/0x200000 bolt arms (script
+                // 0x60007c4, f12 1.0) are gated only on the pierce flag bVar7, which the body's
+                // HITDATA leaves clear: `Collide_PickObj` 0x1eae80 memsets the node (0x60 bytes,
+                // material +0x50 = 0, +0x51 = 0) and the body has no obj+0xF0 0x20 bit
+                // (`Copter_Register` 0x17e530:7 skips slot 2)]. So a rocket on the body blasts at
+                // the contact, and `Explode_Propagate` 0x17c518 case 0 [:86-105] adds the falloff
+                // (≈ +0x0C at the surface) into rec+0x64 — 0x2C/0x2D carry radius 8, damage 100
+                // [L ee_start_05.bin @0x2bf150]. The port dropped the blast here (the round died
+                // on the body with only its 1.0 contact [M Bullet_update's id override]). The
+                // contact point is the segment's sphere entry [S: the game's HITDATA+0x40 for an
+                // object pick — the sweep's (int) truncation makes any point within a unit of the
+                // surface the same full amount].
+                if copter_stop && b.bounces == 0 {
+                    let rec = d.weapons.records.get(b.weapon as usize);
+                    let flags70c = rec.map_or(0u32, |r| u32::from_le_bytes(r[0x70..0x74].try_into().unwrap()));
+                    if flags70c & (0x4 | 0x10_0000 | 0x20_0000) != 0 {
+                        let radius = rec.map_or(0.0, |r| f32::from_le_bytes(r[0x08..0x0c].try_into().unwrap()));
+                        let damage = rec.map_or(0.0, |r| f32::from_le_bytes(r[0x0c..0x10].try_into().unwrap()));
+                        let script = if flags70c & 4 != 0 { 0x0600_0052 } else { 0x0600_07c4 };
+                        let scale = if flags70c & 4 != 0 { radius } else { 1.0 };
+                        let t = copter_t.clamp(0.0, 1.0);
+                        let hit = [b.pos[0] + (end[0] - b.pos[0]) * t, b.pos[1] + (end[1] - b.pos[1]) * t,
+                            b.pos[2] + (end[2] - b.pos[2]) * t];
+                        self.pending_blasts.push((hit, radius, damage, usize::MAX, b.weapon, script, scale, 0));
+                    }
+                }
+                // The body is a solid object: the round dies on it [M Bullet_CollisionHandler
+                // 0x12ce80 disasm 0x12cff0-0x12cff4 — state 2 on the same hit, the rule the
+                // breakables/destroys above follow], so one round lands once and nothing behind
+                // it (the ground, a guard) takes it. Without the stop a round fired down through
+                // the 7.4-unit body sphere hit the ground behind it, ricocheted back up and
+                // scored a second time.
+                if copter_stop { b.dead = true; }
             }
             // The lazer watch's beam burns the locks (`Lock_Update` 0x1ae3d8 case 0, record word 1):
             // the lock's contact list takes THIS bullet's per-tick segment as a contact (the game's
@@ -14472,6 +14696,8 @@ fn segment_hits_sphere(a: V3, b: V3, c: V3, r: f32) -> bool {
             let at = |t: f32| [b.pos[0] + ray[0] * t, b.pos[1] + ray[1] * t, b.pos[2] + ray[2] * t];
             // The first solid node wins the round [M 0x1ea398:216-229 + 0x12cff0-4]: a scenery
             // contact taken above (contact.is_some) kills the walk — nothing farther applies.
+            // A round that died on the copter body reaches neither a guard nor the world behind it.
+            let (best, tw) = if copter_stop { (None, None) } else { (best, tw) };
             match (best, tw) {
                 (Some((i, part, t)), w) if w.is_none_or(|w| t < w) && contact.is_none_or(|(ct, _)| t < ct) => {
                     b.dead = true;
@@ -15806,6 +16032,17 @@ fn segment_hits_sphere(a: V3, b: V3, c: V3, r: f32) -> bool {
                     if let Some(fb) = self.fuseboxes.iter_mut().find(|f| f.placement == player) {
                         fb.register_wire(obj, group);
                     }
+                    // The copter's SP shares the callback slot: `Copter_Create` 0x17d340 passes
+                    // `Copter_Register` 0x17e530 to `SP_Create` [M 0x17d340: the 0x17e530 arg],
+                    // the slot is the event's param 0. The hash rides along as the object-reuse guard.
+                    if let Some(c) = self.copters.iter_mut().find(|c| c.placement == player) {
+                        let hash = match self.scripts.objects.list.get(obj).and_then(|o| o.as_ref()) {
+                            Some(crate::nis::Obj::Entity { hash, .. }) => Some(*hash),
+                            Some(crate::nis::Obj::Anim { skin, .. }) => Some(*skin),
+                            _ => None,
+                        };
+                        if let Some(h) = hash { c.register(obj, h, group); }
+                    }
                     // The turrets' create callback is `GT_Register` 0x181538 (the `Script_Load`
                     // callback arg 0x181538 [M 0017ffa0:100-104]): slot = param 0 (< 3). The port
                     // stores the script object index + 1 (0 = empty, the game's NULL test).
@@ -17087,7 +17324,7 @@ fn segment_hits_sphere(a: V3, b: V3, c: V3, r: f32) -> bool {
                     // 222-231 on every opponent-visible tick, NO team gate; HasOpponent
                     // 0x14ad58:11-14 honours it for every team).
                     dr.opp_have_frame = frame;
-                    if !dr.seen && std::env::var_os("NF_AILOG").is_some() {
+                    if !dr.seen && { static F: std::sync::OnceLock<bool> = std::sync::OnceLock::new(); *F.get_or_init(|| std::env::var_os("NF_AILOG").is_some()) } {
                         eprintln!("[ailog] guard {} SEEN! (seen_ticks={} >= reaction_time={}, dist={:.1}, state={:#x})",
                             dr.index, dr.seen_ticks, dr.reaction_time(d.level), dr.dist, dr.state);
                     }
@@ -17374,11 +17611,26 @@ fn segment_hits_sphere(a: V3, b: V3, c: V3, r: f32) -> bool {
             }
         }
         } // end `NPCGlobals` shared-pass block
-        // Bond's motion (`DroneWeap_DoOpponentTargetting`): moving, and "first moved" for 2 s after he starts.
-        let moving = self.prev_player.is_some_and(|q| (q[0] - player.pos[0]).abs() + (q[2] - player.pos[2]).abs() > 1e-4);
-        if moving && self.moved_since.is_none() { self.moved_since = Some(frame) }
-        if !moving { self.moved_since = None }
-        let first_moved = self.moved_since.is_some_and(|f| frame < f + 120);
+        // Bond's motion (`DroneWeap_DoOpponentTargetting` 0x179a48): moving, "first moved" from the start
+        // of a move and "first stopped" from the start of a stop, each until `stamp + fptoui(T · 60) < now`
+        // (the strict compare keeps the flag on the boundary tick) [M :41-63]; T = the level's
+        // TargetFirstMoved / TargetFirstStopped_TimeToHit (2.0 s; 1.0 s for the stop on 0C/0D).
+        // Zero-g: "moving" is the thruster pair itself [M 0x179a48:34-41 reading the BL+0x10 quad that
+        // 0x193600:133 / 0x192ab0:113,135 build] — see `player_move_local`.
+        let moving = match self.player_move_local {
+            Some(m) => m[0] != 0.0 || m[1] != 0.0,
+            None => self.prev_player.is_some_and(|q| (q[0] - player.pos[0]).abs() + (q[2] - player.pos[2]).abs() > 1e-4),
+        };
+        if moving { self.stopped_since = None; if self.moved_since.is_none() { self.moved_since = Some(frame) } }
+        else { self.moved_since = None; if self.stopped_since.is_none() { self.stopped_since = Some(frame) } }
+        let t_moved = (d.tuning.DroneFiring_TargetFirstMoved_TimeToHit * 60.0) as u32;
+        let t_stopped = (d.tuning.DroneFiring_TargetFirstStopped_TimeToHit * 60.0) as u32;
+        let motion = Motion {
+            moving,
+            first_moved: self.moved_since.is_some_and(|f| frame <= f + t_moved),
+            first_stopped: self.stopped_since.is_some_and(|f| frame <= f + t_stopped),
+        };
+        self.target_motion = (motion.moving, motion.first_moved);
         self.prev_player = Some(player.pos);
         // `NDrone2_NavNodeCache` / `BuildAITarget`: the player's goal nodes per navigation path, rebuilt when he has
         // moved 2.0 or more (search radius 6 = min(engage range, 6) for these guards); `AINetwork_ClearLinkFlags`.
@@ -17631,7 +17883,7 @@ fn segment_hits_sphere(a: V3, b: V3, c: V3, r: f32) -> bool {
         for c in &mut self.copters {
             // copter-hitdata-damage: the slot-3 emitter's position (the gas branch's gate
             // `rec+0x3c != 0` + its obj+0x80) refreshes from the SP part targets each tick.
-            let (targets, _) = self.scripts.copter_part_targets(c.placement, d);
+            let (targets, _) = self.scripts.copter_part_targets(c.placement, &c.parts, d);
             c.slot3_pos = targets[3].map(|(p, _)| p);
             let (unhide, posed, death_blast) = c.update(&paths, &mut self.channels, &mut self.gas, frame, explode_level, &mut self.rng);
             if unhide { self.scripts.unhide_sp(c.placement); }
@@ -18071,7 +18323,7 @@ fn segment_hits_sphere(a: V3, b: V3, c: V3, r: f32) -> bool {
                 // NF_LEVELLOG=1: once per second, log each LOAD_LEVEL trigger's gate channel, whether the gate
                 // is on, and whether the trigger has fired. Shows why the level doesn't end —
                 // e.g. ch 0x1D is off because the EndLevel script never ran.
-                if std::env::var("NF_LEVELLOG").is_ok_and(|v| v == "1")
+                if { static F: std::sync::OnceLock<bool> = std::sync::OnceLock::new(); *F.get_or_init(|| std::env::var("NF_LEVELLOG").is_ok_and(|v| v == "1")) }
                     && self.triggers[index].kind == crate::triggers::kind::LOAD_LEVEL
                     && frame % 60 == 0
                 {
@@ -18823,7 +19075,7 @@ fn segment_hits_sphere(a: V3, b: V3, c: V3, r: f32) -> bool {
                 dr.head_yaw = rotate_to_bearing(dr.head_yaw, 0.0, 0.07, crate::trig::PI);
                 dr.head_pitch = rotate_to_bearing(dr.head_pitch, 0.0, 0.07, crate::trig::PI);
             }
-            if !dr.corpse { let _pf = crate::prof::scope("drone: handle_firing"); let b = { let lights = &mut self.lights; dr.handle_firing(d, rng, frame, player, (moving, first_moved), index, lights) }; if let Some(b) = b {
+            if !dr.corpse { let _pf = crate::prof::scope("drone: handle_firing"); let bs = { let lights = &mut self.lights; dr.handle_firing(d, rng, frame, player, motion, index, lights) }; if let Some(b) = bs.first().cloned() {
                 // `DroneWeap_FireWeapon` 0x178f68:264 → `Bullet_init_casing`: the guard's shell eject.
                 // The basis is the game's guard arm of `Bullet_init_casing_ex` 0x12f678:102-114: the
                 // weapon datum's bone world matrix (datum base+2 when the skin carries the eject port,
@@ -18846,8 +19098,8 @@ fn segment_hits_sphere(a: V3, b: V3, c: V3, r: f32) -> bool {
                     // it each expiry tick, as the game re-poses.
                     self.casings.reserve(&d.surfaces.map(|s| &s.ammo).unwrap_or(&Default::default()), w, Some(index));
                 }
-                self.bullets.push(b);
-            } }
+                let _ = b;
+            } self.bullets.extend(bs); }
             // `ControlSTANDARD`'s door check (0x1490f0:232-248): a door standing in +0xBA8, 60 ticks
             // after the last attempt (+0xBB0 + 60 < GameState): beyond 2.0 (Vec_Dist3D of the obj
             // positions) the drone forgets it; else `NDrone2_DoorIsOpen` false → `NDrone2_OpenDoor`.
@@ -19207,7 +19459,16 @@ fn segment_hits_sphere(a: V3, b: V3, c: V3, r: f32) -> bool {
         // (`Player_HandlePain`); the hit flash fades by 1 per tick (HUD). `Bullet_DoTrails` fly-by (sound 0x1dc) is
         // checked inside `Bullet::update` in the game's RNG order (Rand_FRand → Rand_Rand(5)).
         self.impacts.clear();
-        let vol = crate::bullet::PlayerVolume { feet: [player.pos[0], player.pos[1] - 0.4, player.pos[2]], height: 1.8, radius: 0.25 };
+        // Bond's hit volume spans his body boxes: the game tests his `HumanCollisionBones` boxes
+        // (`Collide_Intersect` 0x1ebaa8 → `Collide_Jointy` for `obj+0xFA & 8`, set on the player
+        // [L ee_start_05/0700000a/07000001: obj+0xFA = 8, the anim palette live +200 & 1]). A standing
+        // human's boxes reach from 1.03 below obj+0x30 (the foot boxes, 0x34/0x38) to 0.87 above it
+        // (the head box 5: centre +0.76, half 0.11) [D the port's AnimGetCollData boxes on 07000002's
+        // idle guards]; the top follows the eye (+0.70 standing) so a crouch lowers it. The old
+        // cylinder ran from 0.4 below to 1.4 above — missing the legs and catching shots 0.5 over the head.
+        let feet_y = player.pos[1] - 1.03;
+        let eye_y = if player.eye == [0.0; 3] { player.pos[1] + 0.7 } else { player.eye[1] }; // fixtures without an eye
+        let vol = crate::bullet::PlayerVolume { feet: [player.pos[0], feet_y, player.pos[2]], height: (eye_y + 0.17 - feet_y).max(0.5), radius: 0.25 };
         let viewer = player.pos;
         for b in &mut self.bullets {
             let (from, dir) = (b.pos, b.dir);
@@ -19338,27 +19599,19 @@ fn segment_hits_sphere(a: V3, b: V3, c: V3, r: f32) -> bool {
                         // 2. weapons 0x63-0x66 return the raw damage untouched [M 0x139f98-0x139fa8];
                         // 3. `Drone+0x1A0` (the shooter's tracked distance) < the level's TooClose
                         //    [0x30cb14] → ×[0x30cb1c] `DroneFiring_TooClose_Damage` (2.0)
-                        //    [M 0x139fac-0x139fc8] — `close_threshold`;
+                        //    [M 0x139fac-0x139fc8] — `player_hit_damage`;
                         // 4. ×`Drone+0x100` [M 0x139fcc-0x139fdc] (the bullet already carries it);
                         // 5. the BACKSHOT ×[0x30cb20] `DroneFiring_PlayerBackShot_Damage` (2.0)
                         //    [M 0x139fd4-0x13a080]: the shooter's mode (+0xC5) is neither 2 nor 0x19,
-                        //    its weapon (+0xDA) is 0x12, the level is not 0x700001b, and the angle
+                        //    its ANIM SET (+0xDA, `anim_set` — not the weapon id) is 0x12, the level is not 0x700001b, and the angle
                         //    between the bullet's travel yaw (ATAN2 of HITDATA+0x30/+0x38) and Bond's
                         //    facing (obj+0x54) is under 1.5707964 — the shot into his back.
                         // No distance falloff anywhere in the chain [M 0x19455c-0x194588:
                         // `HIT+8 + Hurt_GetDamage`; the only distance term is this binary TooClose ×2].
                         let mut damage = damage;
-                        let special_weapon = (0x63..=0x66).contains(&(b.weapon as u32));
                         if let Some(sh) = self.list.get(b.owner).filter(|x| x.present) {
-                            if sh.voice_type == 0xC { damage = 0.0; }
-                            else if !special_weapon {
-                                if sh.dist < close_threshold(d.level) { damage *= 2.0; }
-                                if b.weapon as u32 == 0x12 && sh.mode != 2 && sh.mode != 0x19 && d.level != 0x700001b {
-                                    let bullet_yaw = atan2_approx(b.dir[0], b.dir[2]);
-                                    let bond_yaw = atan2_approx(player.aim[0], player.aim[2]);
-                                    if angle_difference(bullet_yaw, bond_yaw).abs() < 1.5707964 { damage *= 2.0; }
-                                }
-                            }
+                            damage = player_hit_damage(d.tuning, d.level, damage, b.weapon, sh.voice_type, sh.dist, sh.mode, sh.anim_set,
+                                atan2_approx(b.dir[0], b.dir[2]), atan2_approx(player.aim[0], player.aim[2]));
                         }
                         // `Player_DealWithObjHit` 0x194458:201-226: the direction bits from the ATTACKER's position
                         // (HITDATA+0x30 = the shooter) in the viewer's frame.
@@ -20355,13 +20608,13 @@ mod tests {
             gun_through_wall: false,
             dist_to_player: [100000.0; 4],
             props: [0; 3], alert_props: None, sight_range: 0.0, half_fov: 0.0, engage_range: 0.0, combat_range: 0.0,
-            accuracy: 0, aggression: 0, reaction: 0, los: false, seen: false, ever_seen: false, ever_seen_3c: false, bond_alive: true, visibility: 0.0,
+            accuracy: 0, aggression: 0, reaction: 0, recover: 0, los: false, seen: false, ever_seen: false, ever_seen_3c: false, bond_alive: true, visibility: 0.0,
             seen_ticks: 0, unseen_ticks: 0, vision_on: false, dist: 0.0, yaw_to_opp: 0.0,
             state: 0, prev_state: 0, next_state: None, entered: 0, timer_c: None, timer_d: None,
             alarm_yaw: 0.0, alarm_run: false, timer_c_payload: 0, alarm_patrol: 0, alarm_point: None,
             ai_points: Vec::new(), alarm_switches: Vec::new(),
             explosive_pos: pos, explosive_run_dist: 0.0,
-            anim: Animator { danim: 0, script: None, time: 0, state: 0, class: 0, call: None, reached: false, call_from: 0, blend_wait: 0, ftime: 0.0, speed: 1.0, variant: 0, once: false, held: false, follow_on: 0, outgoing: Vec::new(), started: false, early_end: false, len_cap: None },
+            anim: Animator { danim: 0, script: None, time: 0, state: 0, class: 0, call: None, reached: false, call_from: 0, blend_wait: 0, ftime: 0.0, speed: 1.0, variant: 0, once: false, held: false, follow_on: 0, outgoing: Vec::new(), blend_out: false, started: false, early_end: false, len_cap: None },
             firing: false, burst_done: false, burst: 0, next_shot: 0, last_shot: 0, clip: 0, clip_max: 0,
             grenade_weapon: 0x35, grenade_count: 0, pending_grenade: false, shots: Vec::new(),
             // 952: the raw accuracy roll per shot, parallel to `shots`.

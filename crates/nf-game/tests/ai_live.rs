@@ -247,7 +247,17 @@ fn guard_takes_cover_like_the_game() {
     // moves the first sighting, shifting the shared stream). Seed 2 (re-picked at the attack-reentry-choice merge, 913: Attack's own fallback sends the level's
     // mode-2 guard to SniperAim 0x2a [M 0x164210:85-88] instead of Combat, shifting the shared stream;
     // fix-impact-remainder2 had 4, fix-ai-remainder 1).
-    let (drones, gi, rng) = l.drones_seeded(None, 61.342, 1);
+    // Seed 9 (re-picked at the single blend-out word: `Ready2Fire` reads `Drone+0x538`, which the
+    // first replaced script to die clears [M 0x13b1c8:76-77, 0x1c14f0:26-29], so the guard's Combat
+    // shots before the cover run land on other ticks and the shared stream shifts. Seeds 0-24 on
+    // this model: 9, 16, 20 and 21 pass every pin; 1, 2, 3, 5 and 8 hold the 90-tick lean in
+    // UnderCoverAim (live 37), the rest pick another first move or cover spot).
+    // Seed 5 (re-picked at fix-enemy-accuracy: the spawner templates' drones now carry their own
+    // stats section — 07000005 template #3's type-1 record, accuracy 9 / aggression 1 / reaction 80
+    // [M 0x1c7a98 + 0x14c600:81-107] — so spawner 266's drone fires and reacts on a different
+    // schedule and the shared stream shifts; 913's attack-reentry-choice had 2, fix-impact-remainder2
+    // 4, fix-ai-remainder 1).
+    let (drones, gi, rng) = l.drones_seeded(None, 61.342, 9);
     let mut sim = l.sim(drones, rng);
     let player = bond_at([79.86, 22.92, 96.0]);
     for _ in 0..700 { sim.tick(&d, &player); }

@@ -14,21 +14,27 @@
 use nf_formats::ps2float;
 
 /// EE FPU / VU0 multiply: the exact product truncated toward zero.
+#[inline]
 pub fn mul(a: f32, b: f32) -> f32 { ps2float::mul(a, b) }
 
 /// EE FPU add: no guard bit on the smaller operand, result truncated toward zero.
+#[inline]
 pub fn fpu_add(a: f32, b: f32) -> f32 { ps2float::add_noguard(a, b, true) }
 
 /// EE FPU subtract.
+#[inline]
 pub fn fpu_sub(a: f32, b: f32) -> f32 { ps2float::add_noguard(a, -b, true) }
 
 /// VU0 add (also the FPU's behaviour when the exponents are close): the exact sum truncated toward zero.
+#[inline]
 pub fn vu_add(a: f32, b: f32) -> f32 { ps2float::add(a, b) }
 
 /// VU0 subtract.
+#[inline]
 pub fn vu_sub(a: f32, b: f32) -> f32 { ps2float::add(a, -b) }
 
 /// VU0 multiply-add: `ACC = ACC + d·e` — the product truncated, the sum keeping the guard bit.
+#[inline]
 pub fn vu_madd(d: f32, e: f32, acc: f32) -> f32 { ps2float::add(acc, ps2float::mul(d, e)) }
 
 #[cfg(test)]

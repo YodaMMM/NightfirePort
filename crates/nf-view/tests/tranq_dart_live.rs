@@ -9,7 +9,8 @@
 //! (:315-361) logs `PlrStat_LogShotHitEnemy(0)` and sets state **0x50 StunDartImpact**
 //! (0x163430: the sleep-fall anim 0x2B/0x2C → 0x51), **0x51 StunDartLoop** (0x163570: down flag
 //! +0x2F, the wake timer +0xCC4 = now + `DroneFunc_RecoverTime` 0x147188 — 0x43 → k=60 →
-//! 60·60·0.01·(200−0) = **7200 ticks = 120 s** [+0xB9 = 0 at run time, L ee_start_05.bin]; the
+//! 60·60·0.01·(200−+0xB9): 7200 ticks = 120 s at +0xB9 = 0 [L ee_start_05.bin], the guard's own
+//! stat otherwise (the level's stats section, DoModeSettingsNEW 0x14c600); the
 //! TIMER_C gate `DroneFunc_AnyoneNear(2.0)` 0x14a718 holds him while anyone is near) → 0x52
 //! StunDartRecover (0x163700: the get-up 0x76 with follow-on Attack 0x56 for non-civilians).
 //! A punch on a sleeper → `NDrone2_PainTalk` + **0x42 KnockedOut_Anim** [M 0x163570 case 6].
@@ -114,7 +115,7 @@ fn setup_k5_guard() -> (nf_view::scene::Scene, usize) {
 
 /// The core symptom: a dart hit puts the guard into the game's sleep family —
 /// StunDartImpact 0x50 → StunDartLoop 0x51 with the down flag, NO health loss, and the
-/// 7200-tick (120 s) wake timer of `DroneFunc_RecoverTime` 0x147188's 0x43 arm.
+/// `DroneFunc_RecoverTime` 0x147188's 0x43-arm wake timer (60·60·0.01·(200 − the guard's +0xB9)).
 #[test]
 fn the_k5_dart_puts_a_guard_to_sleep() {
     let iso = iso();
@@ -169,12 +170,16 @@ fn the_k5_dart_puts_a_guard_to_sleep() {
         let sim = scene.sim.as_ref().unwrap();
         let dr = &sim.drones.list[gi];
         assert!(dr.down, "the sleeper carries the DOWN flag +0x2F [M 0x163570 case 1]");
-        // The wake deadline: +0xCC4 = the loop's enter frame + +0xCE0 = RecoverTime(0x43) = 7200
-        // [M 0x147188 case 0x43: FRAME_RATE_INT·60·0.01·(200 − +0xB9); +0xB9 = 0 [L ee_start_05]].
+        // The wake deadline: +0xCC4 = the loop's enter frame + +0xCE0 = RecoverTime(0x43)
+        // [M 0x147188 case 0x43: FRAME_RATE_INT·60·0.01·(200 − +0xB9)] — 7200 at +0xB9 = 0 (the 05
+        // drones [L ee_start_05]); the guard's own +0xB9 comes from the level's stats section
+        // [M DoModeSettingsNEW 0x14c600:81-107; D 07000009 placements].
+        let want = (3600.0f32 * 0.01 * (200 - dr.recover as i32) as f32) as i64;
+        eprintln!("[tranq] guard +0xB9 = {} -> RecoverTime(0x43) = {want}", dr.recover);
         let tc = dr.timer_c.expect("the wake timer TIMER_C is armed [M 0x163570 case 1]");
         let until = tc.saturating_sub(sim.drones.frame);
-        assert!((7200i64 - until as i64).abs() <= 5,
-            "the K5 sleep runs 7200 ticks (120 s), got {until}");
+        assert!((want - until as i64).abs() <= 5,
+            "the K5 sleep runs RecoverTime(0x43) = {want} ticks, got {until}");
     }
 
     // The wake: Bond steps out of the AnyoneNear(2.0) band before the deadline; at the expiry

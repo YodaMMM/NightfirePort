@@ -45,7 +45,10 @@ set 0's entry when the set's is 0; 0x06000000 (both 0) means no animation (`Dron
   current state's list, else state 0's (generic records: blend 30 with wait, 60 for 0x6F–0x74); a variant below the
   count is added to the danim.
 - `SetDAnimInternal` starts the danim (state, class, script, speed, follow-on) and `SetHTAnim` blends the old script out
-  over the blend frames (`+0x538` until it stops; 30 frames for anims with flag 0x100). `CallHandler` completes a call
+  over the blend frames (`+0x538` until it stops; 30 frames for anims with flag 0x100). `+0x538` is ONE word: each
+  blend stores the replaced script there and points that script's back-pointer (+0x64) at it [M 0x13b1c8:76-77], and
+  `AnimScriptDelete` zeroes whatever a dying script's back-pointer names [M 0x1c14f0:26-29] — so the first replaced
+  script to die clears the word even while a later one still fades (`Animator::blend_out`). `CallHandler` completes a call
   when the requested state plays with class 2 or 9 (class 1 with `+0x57A` clear) and no wait is pending (`+0x578`).
 - Full call cycle [M] (WORKLOG 0029; decomp of `CallAnim` 0x13ab58, `CallHandler` 0x13add0, `CanSetAnimCall` 0x13dbf8,
   `SetDAnimInternal` 0x13aee8, `CheckForAnimComplete` 0x13dae8, `SetEndAnim`, `InTransition` 0x13e3b0):

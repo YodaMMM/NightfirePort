@@ -197,6 +197,7 @@ pub fn sinf(mut x: f32) -> f32 {
 /// the EE FPU's (doubling adds exact, products chopped, no-guard sums — G-024 closed: diff_calls proves the
 /// model bit-exact on the 40 recorded `Quat_QuatToMat` calls, and the 07000001 escort divergence it used to flip
 /// has another root cause — the game's own math is this path).
+#[inline]
 pub fn quat_trans_to_mat(q: [f32; 4], t: [f32; 3]) -> Mat4 {
     use crate::ps2float as pf;
     let [x, y, z, w] = q;
@@ -218,6 +219,7 @@ pub fn quat_trans_to_mat(q: [f32; 4], t: [f32; 3]) -> Mat4 {
 /// truncate, the running sum keeps its guard bit (`ACC = a₀·b₀; ACC += a₁·b₁; …`). Measured against the EE
 /// snapshots by `nf-extract pose-check` (docs/formats/animation.md "Arithmetic"); the escort divergence is
 /// not caused by this path.
+#[inline]
 pub fn mul(a: &Mat4, b: &Mat4) -> Mat4 {
     use crate::ps2float::{add, mul};
     let mut r = [[0f32; 4]; 4];
@@ -229,6 +231,7 @@ pub fn mul(a: &Mat4, b: &Mat4) -> Mat4 {
     r
 }
 
+#[inline]
 pub fn transform(m: &Mat4, v: [f32; 3]) -> [f32; 3] {
     [0, 1, 2].map(|c| v[0] * m[0][c] + v[1] * m[1][c] + v[2] * m[2][c] + m[3][c])
 }
@@ -347,7 +350,9 @@ pub fn skin_matrices(world: &[Mat4], skin: &Skin) -> Vec<Mat4> {
     world.iter().enumerate().map(|(bone, m)| {
         let ib = skin.inverse_bind.get(bone).map(|b| b.0).unwrap_or([0.0; 3]);
         let mut s = *m;
-        s[3] = [0, 1, 2].map(|c| ib[0] * m[0][c] + ib[1] * m[1][c] + ib[2] * m[2][c] + m[3][c]).into_iter().chain([1.0]).collect::<Vec<_>>().try_into().unwrap();
+        // perf-240f: the same sums, without a Vec per bone.
+        let r = [0, 1, 2].map(|c| ib[0] * m[0][c] + ib[1] * m[1][c] + ib[2] * m[2][c] + m[3][c]);
+        s[3] = [r[0], r[1], r[2], 1.0];
         s
     }).collect()
 }

@@ -10,6 +10,8 @@ use nf_game::triggers::kind;
 use nf_game::world::V3;
 use nf_view::scene::Scene;
 
+include!("damage_log.rs");
+
 pub const TICKS_PER_SEC: u32 = 60;
 
 /// faster-live-tests: the LENIENT leg's give-up cap (ticks). A lenient leg that burns this long is
@@ -103,6 +105,8 @@ pub struct Walker {
     /// Top Bond's health up every tick (the "enemies disabled for the walk" allowance; the pain
     /// pipeline still runs — flash, dir bits — so the walk is not a no-op).
     pub top_up_health: bool,
+    /// Real-damage bookkeeping (damage_log.rs): live whenever the top-up is off.
+    pub dmg: DamageLog,
     /// Drones kept standing every tick (an escort-leg allowance, opt-in; empty by default): health
     /// floored at 1000 while alive (god mode, like Bond's top-up). For walks that pin an escort's route rules, not the firefight.
     pub keep_alive: Vec<usize>,
@@ -145,6 +149,20 @@ pub struct Walker {
     /// AND to the wedged target — then retries the target once. Legs that never wedge are
     /// untouched, so the default keeps master's walk everywhere else.
     pub bridge_wedged_nav: bool,
+    /// The player's head shot, OPT-IN: `exposed_aim` takes the head box (part 5) whenever its
+    /// round is clear. `NDrone2_HitDamage` 0x145558 multiplies a part-5 hit by
+    /// `DroneDamage_Head` (the P2K's 3.5 lands 35 on the head, 5.25 on the torso at Easy [M;
+    /// damage.rs's own pin]), so one
+    /// hit drops the 12-health type-2 guards and the 24-health captains that the placement
+    /// stats give 01-04 [L ee_02b.bin]; the torso-first aim spends 3-5 rounds a guard and ran
+    /// the scripted walks dry. Within 6 u only (see `exposed_aim`). Default off so the other
+    /// walks keep their fight timelines.
+    pub prefer_head: bool,
+    /// OPT-IN: in `shoot`, Bond backs away (aim held, trigger live) while the target or any
+    /// other live guard stands inside this range — a player keeps a shotgun guard off arm's
+    /// length. `DroneWeap_DoBulletAccuracy` 0x179740 forces every round to hit under 3.0 u
+    /// (`if (dist < 3.0) bVar2 = true` [M :113-115]), so a fight at 1-2 u takes the whole volley.
+    pub keep_off: Option<f32>,
     /// The walked path: a coarse breadcrumb of ground Bond actually covered (pushed in
     /// tick_inner, ~2 u resolution, 512 points). The resupply rule draws its corridor from it —
     /// see `resupply` for why the harness must not take off-path ammo detours.
@@ -166,6 +184,12 @@ pub struct Walker {
     /// steps off the line (the strafe) instead of shooting the escort. `None` = the old
     /// behaviour, every other caller unchanged.
     pub shield: Option<usize>,
+    /// courtyard-lamps: the channel-rise watch (opt-in; empty by default). Each tick a listed
+    /// channel turns on, `rises` records (channel, walker tick, Bond's feet, the placement indices
+    /// of the not-yet-deleted triggers writing that channel whose volume Bond's capsule touches) —
+    /// which plate a walked route actually crossed first.
+    pub rise_watch: Vec<u8>,
+    pub rises: Vec<(u8, u32, V3, Vec<usize>)>,
 }
 
 /// The stuck dump, public for the walkreal tests' own aim loops (walkreal-b2).
@@ -194,6 +218,11 @@ fn fail_dump(scene: &Scene, target: V3, label: &str) -> String {
         .map(|t| format!("trig kind={} out={:#x} mask={:#x} at({:.1},{:.1},{:.1})", t.kind, t.out, t.mask, t.centre()[0], t.centre()[1], t.centre()[2]))
         .collect();
     s.push_str(&format!("triggers nearby: {}\n", if trigs.is_empty() { "none".into() } else { trigs.join("; ") }));
+    let drones: Vec<String> = sim.drones.list.iter().enumerate()
+        .filter(|(_, d)| d.present && !d.corpse && dxz(d.pos, p) < 3.0)
+        .map(|(i, d)| format!("drone #{i} team {} state {:#x} at ({:.1},{:.1},{:.1}) hp {:.0}", d.team, d.state, d.pos[0], d.pos[1], d.pos[2], d.health))
+        .collect();
+    s.push_str(&format!("drones within 3 u: {}\n", if drones.is_empty() { "none".into() } else { drones.join("; ") }));
     let ground = sim.world.floor_below(p, 6.0);
     s.push_str(&format!("floor_below: {:?}\n", ground));
     s
@@ -209,7 +238,7 @@ impl Walker {
             .map(|s| s.split(',').filter_map(|x| x.trim().parse().ok()).collect()).unwrap_or_default();
         let watch_last = vec![(0u8, [0.0f32; 3]); drone_watch.len()];
         Walker {
-            scene, top_up_health: true, keep_alive: Vec::new(), stop_on_exit: true, skip_cutscenes: true,
+            scene, top_up_health: true, dmg: DamageLog::new(), keep_alive: Vec::new(), stop_on_exit: true, skip_cutscenes: true,
             report: Report { legs: Vec::new(), stuck_events: Vec::new(), falls: Vec::new() },
             total_ticks: 0, pos, last_sample: pos, sample_tick: 0, stuck: 0, stuck_cycles: 0,
             sidestep: 0, max_y: pos[1], lenient: false,
@@ -221,7 +250,29 @@ impl Walker {
             fighting_blocker: false,
             body_block_response: false,
             bridge_wedged_nav: false,
+            rise_watch: Vec::new(),
+            rises: Vec::new(),
+            prefer_head: false,
+            keep_off: None,
         }
+    }
+
+    /// The top-up is on: the walker's flag, unless `NF_WALK_NO_TOPUP` turns it off binary-wide.
+    pub fn tops_up(&self) -> bool { self.top_up_health && !no_topup_env() }
+
+    /// After every stepped tick: read the damage (damage_log.rs), then top health up when on. A
+    /// death on a real-damage walk panics with the death line (the walk cannot go on).
+    pub fn after_step(&mut self) {
+        self.dmg.active = !self.tops_up();
+        let tick = self.total_ticks;
+        self.dmg.note(self.scene.sim.as_ref().unwrap(), tick);
+        if self.dmg.active && (tick % 60 == 0 || self.dmg.died.is_some()) {
+            note_summary(self.total_ticks, self.dmg.summary(self.scene.sim.as_ref().unwrap()));
+        }
+        if self.dmg.active && self.dmg.die_panics {
+            if let Some(d) = &self.dmg.died { panic!("[real-damage] {d}"); }
+        }
+        if self.tops_up() { self.scene.sim.as_mut().unwrap().drones.health.health = 100.0; }
     }
 
     fn sim(&mut self) -> &mut nf_view::scene::Sim { self.scene.sim.as_mut().unwrap() }
@@ -345,9 +396,24 @@ impl Walker {
             self.scene.sim.as_mut().unwrap().drones.scripts.skip_request = true;
         }
         let y_before = self.scene.sim.as_ref().unwrap().bond.pos[1];
+        let watch_before: Vec<bool> = {
+            let sim = self.scene.sim.as_ref().unwrap();
+            self.rise_watch.iter().map(|&c| sim.drones.channels.on(c as u32)).collect()
+        };
+        let feet_before = self.scene.sim.as_ref().unwrap().bond.pos;
         self.scene.sim.as_mut().unwrap().step_bond(input, fire, reload, use_key);
         let sim = self.scene.sim.as_ref().unwrap();
         self.total_ticks += 1;
+        for (k, &c) in self.rise_watch.iter().enumerate() {
+            if watch_before[k] || !sim.drones.channels.on(c as u32) { continue; }
+            // The writer ran inside this step: test the capsule at both ends of the tick's move (the
+            // sim's own player toucher sits at pos − 0.6, drone.rs `Toucher::player`).
+            let touching: Vec<usize> = sim.drones.triggers.iter()
+                .filter(|t| t.out == c && !t.tris.is_empty())
+                .filter(|t| [feet_before, sim.bond.pos].iter().any(|&f| t.touched_by(&nf_game::triggers::Toucher::player([f[0], f[1] - 0.6, f[2]]))))
+                .map(|t| t.placement).collect();
+            self.rises.push((c, self.total_ticks, sim.bond.pos, touching));
+        }
         if !self.drone_watch.is_empty() {
             for (k, &i) in self.drone_watch.iter().enumerate() {
                 if let Some(dr) = sim.drones.list.get(i) {
@@ -433,10 +499,7 @@ impl Walker {
             // close any open fall entry
             for f in self.report.falls.iter_mut() { if f.ends_with("(open)") { f.push_str(" landed"); } }
         }
-        if self.top_up_health {
-            let h = &mut self.scene.sim.as_mut().unwrap().drones.health;
-            h.health = 100.0;
-        }
+        self.after_step();
     }
 
     /// Step with no input until Bond is not `disabled` (cut-scene wait), capped.
@@ -587,6 +650,9 @@ impl Walker {
             let Some(t_box) = nf_game::damage::ray_box(eye, ray, &b) else { continue };
             let tw = sim.world.segment_bullet_scoped(sim.world.find_cel(eye), eye, c);
             if tw.is_some_and(|w| w < t_box) { continue; }
+            // Close in only: the head box is ~0.2 u, and past ~6 u Bond's own spread covers more
+            // than that (the 02 geisha-2 captor at 11.2 u took 23 head-aimed rounds unhurt).
+            if self.prefer_head && b.part == 5 && dxz(c, eye) <= 6.0 { return Some(c); }
             let dev = dxz(c, torso);
             if best.map_or(true, |(bd, _)| dev < bd) { best = Some((dev, c)); }
         }
@@ -723,6 +789,9 @@ impl Walker {
                 // Tap only when the view is ON the part (the boxes are ~0.3 wide; the fixed-period
                 // taps sprayed ammo at a drifting aim) and SOMETHING is exposed.
                 let on_target = err.abs() < 0.02 && perr.abs() < 0.028 && t.saturating_sub(last_tap) > 15;
+                let dist_now = dxz(bp, dp);
+                let backing = self.keep_off.is_some_and(|r| (!blocked && dist_now < r)
+                    || sim.drones.list.iter().any(|o| o.team == 1 && o.enabled && o.present && !o.corpse && o.health > 0.0 && dxz(o.pos, bp) < r));
                 let trigger = !clip_empty && !blocked && on_target;
                 if trigger { last_tap = t; }
                 // The flank: while blocked, sidestep (alternating every 90 ticks) and push forward
@@ -732,14 +801,14 @@ impl Walker {
                 let input = Input {
                     turn: err.clamp(-0.08, 0.08),
                     look: perr.clamp(-0.08, 0.08),
-                    forward: if blocked && far && window { 1.0 } else { 0.0 },
-                    strafe: if blocked { if window { 1.0 } else { -1.0 } } else if repositions % 2 != 0 && t - last_progress < 60 { -1.0 } else if repositions % 2 != 0 { 0.0 } else if t - last_progress < 60 { 1.0 } else { 0.0 },
+                    forward: if backing { -1.0 } else if blocked && far && window { 1.0 } else { 0.0 },
+                    strafe: if backing { 0.0 } else if blocked { if window { 1.0 } else { -1.0 } } else if repositions % 2 != 0 && t - last_progress < 60 { -1.0 } else if repositions % 2 != 0 { 0.0 } else if t - last_progress < 60 { 1.0 } else { 0.0 },
                     ..Default::default()
                 };
                 self.scene.sim.as_mut().unwrap().step_bond(input, trigger, reload, false);
             }
             self.total_ticks += 1;
-            if self.top_up_health { self.scene.sim.as_mut().unwrap().drones.health.health = 100.0; }
+            self.after_step();
             // Out of ammo: give up (the caller resupplies and retries).
             if self.scene.sim.as_ref().unwrap().gun.clip == 0
                 && self.scene.sim.as_ref().unwrap().gun.spare == 0 && t > 60 {
@@ -844,6 +913,10 @@ impl Walker {
                 eprintln!("[walk] {label}: the drone stopped short of the goal at ({:.1},{:.1},{:.1}) after +{} ticks (10 s still)", target[0], target[1], target[2], self.total_ticks - start_ticks);
                 return target;
             }
+            // Real damage: answer a guard shooting Bond before following on (the 01 escort stood
+            // still under a pistol guard's 1.7-u fire after the hall AND, 39 → 0 health; the
+            // follow loop never looked at him). A no-op while the top-up is on.
+            if self.return_fire(label) { continue; }
             // Steer toward the drone, keeping OUT of the lead's "Bond in the way" band: the escort
             // parks in PlayerInWay while Bond is within 3.0 [M 0x15ea28 case 3], and waits when Bond
             // is beyond 12 [M 0x15e698 case 3]. The escort band is 4.5..10.
@@ -978,6 +1051,12 @@ impl Walker {
             if self.scene.sim.as_ref().unwrap().disabled {
                 self.tick(Input::default(), false);
                 continue;
+            }
+            // Real damage: answer whoever is shooting Bond before walking on (the fight's
+            // ticks are the response's cost, not the leg's).
+            if !riding && !ladder && self.total_ticks % 10 == 0 {
+                let t0 = self.total_ticks;
+                if self.return_fire(label) { start_ticks += self.total_ticks - t0; continue; }
             }
             let p = self.scene.sim.as_ref().unwrap().bond.pos;
             self.pos = p;

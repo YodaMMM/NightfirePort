@@ -16,7 +16,19 @@ quoted in drone-alerts.md are the ELF statics, replaced at level load.)
 ## Health at creation [M]
 
 `NDrone2_DefaultInit` (0x14b300): `+0xAC` health 10.0, `+0x14` damageable 1, `+0x14C` damage-taken multiplier 1.0,
-`+0x100` 1.0. `DoModeSettingsNEW`: health = `drone_stats[type]+8` when non-zero (0 for 07000005's type 2 [L]).
+`+0x100` 1.0 (2.0 for the pistol-class held weapons {2,6,0xA,0xB,0xE,0x10,0x3B..0x40} [M 0x14b300:267-293]).
+`DoModeSettingsNEW`: health = `drone_stats[type][1]` word 2 when non-zero. The table (0x31aa30, BSS) is written only by
+`behaviour_util_get` 0x1c7a98 from a placement's stats section (tag 0x8001xxxx after the two behaviour blocks; three
+bit-packed records at the 0x303330 widths 8,3,8,8,5,8,8,1); a type's record serves every later drone of that type —
+07000002's first guard placement #442 carries the type-2 section, the rest read it ([L] ee_02b.bin: type-2 guards 12,
+captains 24). Spawner templates write theirs only at the spawn (07000005's only section is template #3's; the
+level-start guards read the empty type-1 record → 10 [L]).
+The decode is cross-checked against the live table on two levels: 07000002's three sections (types 2, 12, 14) decode to
+the exact words ee_02b.bin holds (type 14 kind 1 = 80, 1, 10, 80, 3, 80, 80, 1); 07000009's guards are all type 13, whose
+section decodes to kind 1 = **accuracy 80, aggression 1, health 1, reaction 80, recover 80**, and the game agrees —
+[L ee_start_09.bin, `goto_level.py 07000009`, difficulty 1]: the table's type-13 records and all six live drones
+(`+0xC7` 13, `+0xB4` 80, `+0xAC` 1.0, `+0xB8` 80, `+0xB9` 80). With accuracy 80 the hit chance `100 − 5·80` is negative
+[M 0x179740:48], so 09's guards never land a rolled hit beyond the 3.0 always-hit range: a game fact, not a bad decode.
 Captains (`+0x19`: prop 9 / 5 / 8 at difficulty 1 / 2 / 3, types 1, 2, 3, 6, 7): health × `DroneCaptain_Mod_Health`.
 `+0xB0` max = `+0xAC`; `+0xBB` armour bits stay 0 in this build. 07000005 [L]: every guard 10 / 10.
 
