@@ -1229,19 +1229,45 @@ impl Walker {
             // door sits open — the escort walk's 110p timeout. Steer at the door's centre until
             // inside the threshold (~0.9), capped; the caller's stuck ladder resumes from there.
             // The door cycling (auto-close → ReactToHit reversal) just re-runs this arm.
+            // A DOUBLE door (a sibling leaf within 2.2 on the same floor — the 03 courtyard pair
+            // at x 10.0 / 11.8, z −20.2) is a leaf pos at each side of the opening: steer at the
+            // pair's midpoint, then carry straight on ~1.2 through the threshold. Steering at
+            // one leaf's pos parked the capsule on the frame east of the opening ((11.87, −20.90)
+            // against the x 11.06..12.86, z −20.30 faces — measured on the faithful capsule tree)
+            // and the caller's diagonal hop never cleared it.
+            let sibling = {
+                let sim = self.scene.sim.as_ref().unwrap();
+                let me = sim.drones.doors.list[di].pos;
+                sim.drones.doors.list.iter().enumerate()
+                    .filter(|&(j, d)| j != di && (d.pos[1] - me[1]).abs() < 0.5 && dxz(d.pos, me) < 2.2)
+                    .map(|(j, _)| j).next()
+            };
+            let mut reached = false;
             for _ in 0..90u32 {
                 let (dpos, st) = {
                     let sim = self.scene.sim.as_ref().unwrap();
-                    (sim.drones.doors.list[di].pos, sim.drones.doors.list[di].state)
+                    let p = sim.drones.doors.list[di].pos;
+                    let p = match sibling {
+                        Some(j) => { let q = sim.drones.doors.list[j].pos; [(p[0] + q[0]) * 0.5, p[1], (p[2] + q[2]) * 0.5] }
+                        None => p,
+                    };
+                    (p, sim.drones.doors.list[di].state)
                 };
                 if st & 0xc == 0 { break; }   // closed again mid-walk: the E arm handles the next cycle
                 let sim = self.scene.sim.as_ref().unwrap();
                 let dd = dxz(sim.bond.pos, dpos);
-                if dd < 0.9 { break; }
+                if dd < 0.9 { reached = true; break; }
                 let desired = (dpos[0] - sim.bond.pos[0]).atan2(dpos[2] - sim.bond.pos[2]);
                 let err = wrap_pi(desired - sim.bond.yaw);
                 let input = Input { turn: err.clamp(-0.08, 0.08), forward: 0.8, ..Default::default() };
                 self.tick(input, false);
+            }
+            if reached && sibling.is_some() {
+                let start = self.scene.sim.as_ref().unwrap().bond.pos;
+                for _ in 0..40u32 {
+                    if dxz(self.scene.sim.as_ref().unwrap().bond.pos, start) > 1.2 { break; }
+                    self.tick(Input { forward: 0.8, ..Default::default() }, false);
+                }
             }
             return;
         }
