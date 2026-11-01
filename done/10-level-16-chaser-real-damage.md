@@ -24,3 +24,8 @@ claimed-by: sandbox3 at 2026-11-01T13:52Z
 ---
 ## Report (done, 2026-11-01T17:34Z)
 
+
+---
+## Report from the worker (done, 2026-11-01T17:34Z)
+
+Closed by the driver: the report is on `s/level-16-chaser-real-damage` (docs/reports/level-16-chaser-real-damage.md); the worker didn't run finish.sh.
