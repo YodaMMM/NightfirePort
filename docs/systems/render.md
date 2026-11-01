@@ -224,9 +224,14 @@ angles overwrite it each frame and the rotated matrix is applied (`ApplyMatrixLV
 `Game_Draw`], so the sky pass itself writes no fog register. The glists confirm the inheritance [D
 sky_gs_live]: the 0700000a Thunderhead's first CNT carries **no A+D writes at all** (effective state =
 the pass-initial 0x2a / TEST_1 0x5001b), while 0700001b's SKY_StarField writes its own ALPHA_1 0x44
-(normal blend), TEST_1 0x5001b and ZBUF_1 0x1_31000000. gpu.rs's sky pipelines (pass 0: depth Always, no
-write; pass 4: LessEqual, no write, far-pin) stay as modeled; the exact ZMSK state the GS holds during the
-sky draws is an open live check below.
+(normal blend), TEST_1 0x5001b and ZBUF_1 0x1_31000000. **Every sky glist on the 27 on-foot archives writes
+its own ZBUF_1 and TEST_1** [D, missing-scenery survey]: the camera-following skyboxes/moons carry
+0x1_31000000 (no write), while the fixed group-1 pieces (0700000c Mountains_new1, 04 mountains, 0d
+Mountains_new, 05/06 Sky_Tower*/Sky_Wall*, 08 Sky_Walltop/Sky_Roof_1/SKY_Tower_Top_1, 07000024 Mountains1)
+carry 0x31000000 — they write depth under ZTE GEQUAL. gpu.rs therefore draws pass 0 with LessEqual and the
+leaf's own depth write (was: Always, no write — the far-pinned pass-4 skybox then painted over the
+0c mountains); pass 4 stays LessEqual, no write, far-pinned. Pinned by
+`missing_scenery_live::the_0c_mountain_range_draws_behind_the_plant`.
 
 **Snow and rain** are not sky-pass draws: `DrawDrops` 0x18cb90 runs after the alpha list (blend 2, no
 lights, `Game_Draw`). The physics/density live in `nf_game::env.rs` (`InitDrops` 0x18bf68 etc.). The look,
