@@ -169,7 +169,16 @@ fn walk_to_the_exit(iso: &str, stop_at_fire: bool) -> Walker {
         let sim = w.scene.sim.as_ref().unwrap();
         let dry = (sim.gun.clip as i32) + (sim.gun.spare as i32) < 48;
         drop(sim);
-        if dry { w.resupply("pre-hall ammo"); }
+        if dry {
+            w.resupply("pre-hall ammo");
+            // Back to the meet room before the hall: the stage below is the route proven FROM
+            // the meet plate. From a corridor box south-west of it the stage leg's nav wedged at
+            // (1.5, 7.1, 8.6) — Bond 0.6 above the room's walk height (6.47), the segment to the
+            // stage hitting at t 0.31 — for its 3000-tick cap and every guard approach after.
+            if walker::dxz(w.scene.sim.as_ref().unwrap().bond.pos, [6.8, 6.0, 8.9]) > 3.0 {
+                w.walk_nav_to([6.8, 6.0, 8.9], "back to the meet room", 1.5);
+            }
+        }
     }
 
     // The hall detour: the disc's AND mux (kind 3, out 0x99 = 153, list [0x11,0x12,0x13] [D the

@@ -83,8 +83,10 @@ fn tick_until(w: &mut Walker, max: u32, what: &str, done: impl Fn(&nf_view::scen
 /// HurtPoly-ShuttleLaunch, and he ends it alive with the mission not failed (the walkreal shape).
 fn sit_out_pulse(w: &mut Walker, label: &str) -> u32 {
     let allowance = w.top_up_health;
-    w.top_up_health = false;
+    // The allowance holds until the pulse rises (the guards' fire before it is not the volume's
+    // contact), then is OFF for every tick of the pulse (walkreal_07000016_live's shape).
     tick_until(w, 8000, label, |s| s.drones.channels.on(243));
+    w.top_up_health = false;
     let mut n = 0u32;
     while w.scene.sim.as_ref().unwrap().drones.channels.on(243) {
         {
