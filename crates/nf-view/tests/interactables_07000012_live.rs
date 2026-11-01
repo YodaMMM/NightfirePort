@@ -64,7 +64,7 @@ fn shoot_at(w: &mut Walker, target: [f32; 3], max_ticks: u32, done: &dyn Fn(&nf_
             w.scene.sim.as_mut().unwrap().step_bond(input, on_target, false, false);
         }
         w.total_ticks += 1;
-        if w.top_up_health { w.scene.sim.as_mut().unwrap().drones.health.health = 100.0; }
+        w.after_step();
     }
 }
 
