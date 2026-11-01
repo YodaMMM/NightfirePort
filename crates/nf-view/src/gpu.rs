@@ -54,6 +54,9 @@ override FOG: f32 = 0.0;
 override FAR: f32 = 0.0;
 override NOTEX: f32 = 0.0;  // debug: 1.0 = ignore the texture sample (treat as solid white) to isolate vertex colour
 override NOFOG: f32 = 0.0;   // debug: 1.0 = skip the fog pass entirely
+// 1.0 on the Cs·As + Cd and Cd − Cs·As pipelines (ALPHA_1 0x48 / 0x42): As keeps the GS range (0x80 = 1.0,
+// up to 0xFF = 255/128). The SrcAlpha factor stops at 1.0, so the part of As above 1.0 scales the colour.
+override PREMUL: f32 = 0.0;
 // fog: rgb + enabled; fogk: N1, (F1 − N1)·n/(f − n), f, gain.
 // lp0/lp1: the frame's two closest lights' positions (psiLight_SetLights 0x10e588's TLight, w = 1);
 // lc0/lc1: their TColor rows (rgb·intensity in the game's byte scale, w = 1/r²), fix-lighting.
@@ -183,7 +186,8 @@ fn morph_pos(p0: vec3<f32>, mtb: i32, mwb: u32, cnt: u32, tend: u32) -> vec3<f32
     let o = t * i.c;
     if (AGREATER > 0.5) { if (o.a <= AREF) { discard; } } else if (o.a < AREF) { discard; }
     var rgb = min(o.rgb, vec3<f32>(1.0));
-    var a = clamp(o.a, 0.0, 1.0);
+    // MODULATE: As = At·Av/0x80, clamped to 0xFF (255/128); only the PREMUL pipelines keep it above 1.0.
+    var a = clamp(o.a, 0.0, select(1.0, 255.0 / 128.0, PREMUL > 0.5));
     if (FOG > 0.5 && fog.w > 0.5 && NOFOG < 0.5) {
         let zb = fogk.x + fogk.y * (fogk.z / max(i.d, 0.001) - 1.0);
         if (FOG < 1.5) {
@@ -195,9 +199,24 @@ fn morph_pos(p0: vec3<f32>, mtb: i32, mwb: u32, cnt: u32, tend: u32) -> vec3<f32
             a = a * min(floor(zb / 128.0), 255.0) / 255.0;
         }
     }
-    return vec4<f32>(min(rgb * fogk.w, vec3<f32>(1.0)), a);
+    let c = min(rgb * fogk.w, vec3<f32>(1.0));
+    // GS As above 0x80 brightens the Cs·As term up to 2× (the emitter particles' 0xFF alpha bytes):
+    // colour × max(As, 1) under a SrcAlpha factor of min(As, 1). For As ≤ 1 the output is unchanged;
+    // above 1 the target clamps the term the way COLCLAMP clamps the sum (Cd ≥ 0, so a term ≥ 1
+    // saturates either way).
+    if (PREMUL > 0.5) { return vec4<f32>(c * max(a, 1.0), min(a, 1.0)); }
+    return vec4<f32>(c, a);
 }
 "#;
+
+/// The world shader's `PREMUL` override per blend mode: 1 for the GS's Cs·As + Cd (ALPHA_1 0x48, blend 1)
+/// and Cd − Cs·As (0x42, blend 2). The GS reads As on the 0x80 = 1.0 scale up to 0xFF ≈ 2.0
+/// (MODULATE As = At·Av/0x80, clamped to 0xFF); a SrcAlpha blend factor stops at 1.0, so on those two
+/// pipelines the shader multiplies the colour by the part of As above 1.0 (unchanged at As ≤ 1.0).
+/// The emitter particles feed Av = 0xFF (`Emitter_LoadDefs` 0x17ab40 keeps the key alpha unhalved; the colour-list
+/// microcode copies the byte straight to RGBAQ). Normal blending (0x44) keeps the SrcAlpha / OneMinusSrcAlpha clamp: no
+/// draw on the disc feeds it Av > 0x80.
+pub fn premul(blend: u8) -> f64 { if matches!(blend, 1 | 2) { 1.0 } else { 0.0 } }
 
 /// The overlay (crosshair, HUD): screen-space triangles in normalised device coordinates, alpha-blended, no depth.
 pub(crate) const HUD_SHADER: &str = r#"
@@ -685,6 +704,7 @@ impl Renderer {
             let (compare, write) = match d.pass { 6 => (wgpu::CompareFunction::Always, false), 0 => (wgpu::CompareFunction::LessEqual, d.zwrite), 4 => (wgpu::CompareFunction::LessEqual, false), _ => (wgpu::CompareFunction::LessEqual, d.zwrite) };
             let alpha_keep = wgpu::BlendComponent { src_factor: wgpu::BlendFactor::Zero, dst_factor: wgpu::BlendFactor::One, operation: wgpu::BlendOperation::Add };
             let blend = match d.blend {
+                // Cs·As + Cd / Cd − Cs·As: the shader folds As above 1.0 into the colour (PREMUL).
                 1 => wgpu::BlendState { color: wgpu::BlendComponent { src_factor: wgpu::BlendFactor::SrcAlpha, dst_factor: wgpu::BlendFactor::One, operation: wgpu::BlendOperation::Add }, alpha: alpha_keep },
                 2 => wgpu::BlendState { color: wgpu::BlendComponent { src_factor: wgpu::BlendFactor::SrcAlpha, dst_factor: wgpu::BlendFactor::One, operation: wgpu::BlendOperation::ReverseSubtract }, alpha: alpha_keep },
                 // (Cs−Cd)·FIX0 + Cd (07000041's mod batches): the framebuffer comes back unchanged, but the
@@ -699,7 +719,7 @@ impl Renderer {
             // As >= 1 (TEST 0x5001B) -> a >= 1/128; As > 0x7F (0x507FD) -> a > 127/128.
             let (aref, greater) = match d.atest { 1 => (1.0 / 128.0, 0.0), 2 => (127.0 / 128.0, 1.0), _ => (0.0, 0.0) };
             let constants = [("AREF", aref), ("AGREATER", greater), ("FOG", d.fog as f64), ("FAR", if d.pass == 4 { 1.0 } else { 0.0 }), ("VMZ", if d.pass == 7 { 1.0 } else { 0.0 }),
-                ("NOTEX", if notex { 1.0 } else { 0.0 }), ("NOFOG", if nofog { 1.0 } else { 0.0 })];
+                ("NOTEX", if notex { 1.0 } else { 0.0 }), ("NOFOG", if nofog { 1.0 } else { 0.0 }), ("PREMUL", premul(d.blend))];
             device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
                 label: Some("nf-view"),
                 layout: Some(&layout),
