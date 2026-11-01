@@ -95,7 +95,7 @@ fn the_bullet_driven_winch_sweeps_on_a_shot_and_holds_without_one() {
         if s.t == 0.0 && (s.state == 0x40 || s.state == 0) { break true; }
         if w.total_ticks - start > rate + 40 { break false; }
         w.tick(nf_game::player::Input::default(), false);
-        if w.top_up_health { w.scene.sim.as_mut().unwrap().drones.health.health = 100.0; }
+        w.after_step();
     };
     assert!(wrapped, "the winch ss[{wi}] never wrapped after the shot (t {max_t} state stalled) — the sweep did not run in state 1 [M 0x1a9948]");
     assert!(max_t >= last - step,
@@ -185,6 +185,6 @@ fn shoot_sweeping(w: &mut Walker, target: [f32; 3], range: f32, max_ticks: u32, 
             w.scene.sim.as_mut().unwrap().step_bond(input, trigger, false, false);
         }
         w.total_ticks += 1;
-        if w.top_up_health { w.scene.sim.as_mut().unwrap().drones.health.health = 100.0; }
+        w.after_step();
     }
 }

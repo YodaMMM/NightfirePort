@@ -546,3 +546,12 @@ fn the_challenge_state_guard_sleeps_to_a_dart_and_loses_no_health() {
     assert_eq!(d.health, hp0, "the darts lose NO health (msg 0x19 never reaches HitDamage [M 0x13fff0:269-306])");
     assert!(!sim.drones.channels.on(0x61), "no alarm while the challenger sleeps (the press never ran)");
 }
+
+/// Real damage: the same walk with the health top-up off for every walker it makes (the
+/// tests' own `top_up_health = true` included) and the walker's return fire on — Bond's death
+/// panics with the death spot and the last hits (common/damage_log.rs), so a pass pins that the
+/// walk completes on the port's own damage.
+#[test]
+fn walk_tower_a_start_to_finish_real_damage() {
+    walker::with_real_damage(walk_tower_a_start_to_finish);
+}

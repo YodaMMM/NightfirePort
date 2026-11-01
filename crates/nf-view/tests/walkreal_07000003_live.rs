@@ -37,6 +37,29 @@ fn iso() -> String { std::env::var("NF_ISO").expect("NF_ISO") }
 /// The mission-table row and objective indices for this level [L ee_start_05 @ 0x2a3f18 via
 /// mission::c07000003]: obj0 0x4e "Retrieve Dragon Safe contents", obj1 0x51 "Rescue Mayhew's
 /// servants", obj2 0x53 "Find door leading to Mayhew" (enable 0x52).
+/// Shoot every enabled, alerted hostile within `r` of Bond on his floor, nearest first, through the
+/// real fire path. With the placement stats (accuracy / aggression / reaction [M DoModeSettingsNEW
+/// 0x14c600:81-107]; bisected: green before that merge, red after) four live guards stood on
+/// Bond's next step at (10.4, 6.5, −31.5) in state 0x5C, and the west-lane and east-lane legs
+/// pressed into them for whole caps until Bond left the floor. A player clears the guards in his
+/// way.
+fn clear_near(w: &mut Walker, r: f32, label: &str) {
+    for k in 0..8 {
+        let near = {
+            let sim = w.scene.sim.as_ref().unwrap();
+            let b = sim.bond.pos;
+            sim.drones.list.iter().enumerate()
+                .filter(|(_, d)| d.team == 1 && d.enabled && d.present && !d.corpse && d.health > 0.0
+                    && d.state != nf_game::drone::state::HOSTAGE && (d.pos[1] - b[1]).abs() < 2.0 && walker::dxz(d.pos, b) < r)
+                .min_by(|a, c| walker::dxz(a.1.pos, b).total_cmp(&walker::dxz(c.1.pos, b)))
+                .map(|(i, _)| i)
+        };
+        let Some(di) = near else { return };
+        let _ = w.switch_to_armed(label);
+        if !w.shoot(di, &format!("{label} guard {k}")) { let _ = w.resupply(label); }
+    }
+}
+
 fn mission_row() -> (usize, usize, usize, usize) {
     let li = nf_game::mission::LEVELS.iter().position(|l| l.level == 0x0700_0003).expect("the 07000003 mission record");
     (li, 0, 1, 2)
@@ -118,6 +141,9 @@ fn walk_the_alpine_route_to_the_exit() {
 fn walk_the_full_route_and_complete_every_objective() {
     let iso = iso();
     let mut w = Walker::new(nf_view::load(&iso, "07000003.bin", false).expect("load 07000003"));
+    // The type-2 guards carry 12 health, captains 24 [L ee_02b.bin]: Bond aims for the head
+    // (`Walker::prefer_head`), as a player does, or the scripted fights run the walk dry.
+    w.prefer_head = true;
     let (li, o0, o1, o2) = mission_row();
     {
         let sim = w.scene.sim.as_ref().unwrap();
@@ -184,7 +210,22 @@ fn walk_the_full_route_and_complete_every_objective() {
         assert!(sim.drones.channels.on(0x21),
             "the west-lane approach stands inside the west 0x21 plate's footprint [D lo/hi x 7.3..10.7 z −35.0..−33.7]");
     }
-    w.walk_nav_to([13.0, 5.9, -18.0], "back across the courtyard", 1.6);
+    // Back to the servants' ground by the east lane the "mid courtyard" leg itself walked
+    // (x 10.0-10.6 from the moat to the door at (11.8, 6.5, -20.2): the nav stops Bond reached
+    // on that leg). The nav's own way "back across the courtyard" to (13, -18) runs through the
+    // obstacle at (6.35, -15.7..-17.7) (Bond climbs to y 7.3, airborne) and wedges at every cap, the
+    // servant approach and the captor flanks with it — the captor (mode 4, dodging at
+    // x 10-15, z -21..-25) stays out of sight across the wall.
+    w.lenient = true;
+    for (name, at) in [
+        ("the east lane south", [10.05f32, 6.56, -31.87]),
+        ("the east lane", [10.27, 6.65, -30.01]),
+        ("the east lane north", [10.59, 6.47, -22.91]),
+    ] {
+        clear_near(&mut w, 8.0, name);
+        w.walk_to(Wp { at, act: Act::None, arrive: 1.0 }, name);
+    }
+    w.lenient = false;
     for (plate, want_ch) in [(None, 0x4fu8), (Some(plate0x25), 0x50u8)] {
         let (si, at, rescue_ch) = *servants.iter().find(|(_, _, ch)| *ch == want_ch)
             .unwrap_or_else(|| panic!("the servant carrying {want_ch:#x} [D p6]"));

@@ -91,7 +91,7 @@ fn shoot_at(w: &mut Walker, target: [f32; 3], range: f32, max_ticks: u32, label:
             w.scene.sim.as_mut().unwrap().step_bond(input, trigger, false, false);
         }
         w.total_ticks += 1;
-        if w.top_up_health { w.scene.sim.as_mut().unwrap().drones.health.health = 100.0; }
+        w.after_step();
     }
 }
 
@@ -1151,4 +1151,13 @@ fn the_pick_ref_accumulator_tracks_the_game_ref() {
     assert!(ref_press[1].abs() < 1e-3 && (ref_press[2]).abs() < 1e-3,
         "the press's pushes are x-only [L 2026-10-26: y 0.08088 and z −22.77985 unchanged], got {ref_press:?}");
     assert!(pos_press[0] <= -45.0, "Bond reached the wall skin (x {:.3})", pos_press[0]);
+}
+
+/// Real damage: the same walk with the health top-up off for every walker it makes (the
+/// tests' own `top_up_health = true` included) and the walker's return fire on — Bond's death
+/// panics with the death spot and the last hits (common/damage_log.rs), so a pass pins that the
+/// walk completes on the port's own damage.
+#[test]
+fn walk_office_floor_qworm_keyboard_hatch_real_damage() {
+    walker::with_real_damage(walk_office_floor_qworm_keyboard_hatch);
 }
