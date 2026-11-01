@@ -27,7 +27,9 @@ research pass (2026-10-09); "checked" = read here (the tables are read from ACTI
 fix-hud-parity [M]: the position is `(short)(int)` truncated and the 0x800 centring subtracts `w >> 1` / `h >> 1`
 (View_DrawSprites 0x1e5290:69-74); the Crosshairs option (`DAT_002a38d0`) gates the NOT-aiming arm only — the
 aim-mode cell 1 shows with the option off; panes 12 (blood) and 16 (sec-cam) hide it; colour 0x208020FF while the
-viewer's goggle mode is 1 (night sight).
+viewer's goggle mode is 1 (night sight). Any non-zero cam mode (BL+0x950, stored by `Player_SetCamMode` 0x195928)
+hides it [0x19e6d0:97-100]: the wire/creep 0xB, the orbit 1/2, and the Ronin's remote view 0xf (`GT_TakeControl`
+0x181740), where only pane 18's octagon reticle shows (`ronin_live` `ronin_remote_view_hides_the_crosshair`).
 
 ## Health / armour pane 1 (`HUD_UpdateHealthPane` 0x19b9c8) [M; tables checked]
 

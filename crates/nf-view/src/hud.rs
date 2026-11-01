@@ -600,7 +600,12 @@ pub fn overlay(scene: &crate::scene::Scene, aspect: f32) -> HudFrame {
     let zoomed = sim.map_or(false, |s| s.zoom_target > 1.0) || sim.map_or(false, |s| s.missile_cam.is_some())
         // cable-3p: any non-first-person camera mode hides it - `HUD_UpdateCrossHair` 0x19e6d0 ends at
         // LAB_0019e9c8 (not drawn) when BLData+0x950 != 0 [M :97-100] (the wire/creep 0xB, the orbit 1/2).
-        || sim.map_or(false, |s| s.bond.cam_mode != 0);
+        || sim.map_or(false, |s| s.bond.cam_mode != 0)
+        // The Ronin's remote view is cam mode 0xf: `GT_TakeControl` 0x181740 calls
+        // `Player_SetCamMode(BL, 0xf)`, which stores BL+0x950 = 0xf and enables pane 18 [M 0x195928
+        // :11, case 0xf], so the same BL+0x950 != 0 exit hides the cross [M 0x19e6d0:97-100]. Only
+        // the pane's own reticle (sprite 5) shows. The port keeps that cam mode as `ronin_mounted`.
+        || sim.is_some_and(|s| s.drones.ronin_mounted().is_some());
     // options-census: the Crosshairs row (Advanced 0x1000_0124 → PlayerSetting+0x08) hides the
     // sprite — HUD_UpdateCrossHair 0x19e6d0:96 sets +0x38 = 0xff (not drawn) when the byte is 0.
     // fix-hud-parity: that option gate sits on the NOT-aiming arm only — the aim-mode path

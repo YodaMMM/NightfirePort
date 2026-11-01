@@ -475,3 +475,49 @@ fn ronin_remote_view_marks_the_wrapped_parts() {
     for k in 0..3 { assert!((e[0][k] - (c * m[0][k] + s * m[1][k])).abs() < 1e-4, "spun x row {:?} vs pose {:?} at {a}", e[0], m[0]); }
     assert!(a.abs() > 0.5, "the drawn barrel is visibly turned ({a})");
 }
+
+/// The remote view shows the Ronin pane's reticle and no normal crosshair. `GT_TakeControl` 0x181740
+/// calls `Player_SetCamMode(BL, 0xf)`, which stores BL+0x950 = 0xf and enables pane 18 [M 0x195928
+/// case 0xf]; `HUD_UpdateCrossHair` 0x19e6d0:97-100 then ends at LAB_0019e9c8 (sprite layer 0xff,
+/// not drawn) while BL+0x950 != 0. [L PCSX2 audits/render-1101-roninview2/sbs_remote_view.png: the
+/// PS2 frame has the octagon reticle only.] Sister: on foot with 0x53 in hand the cross draws.
+#[test]
+fn ronin_remote_view_hides_the_crosshair() {
+    let Some(mut scene) = load() else { eprintln!("NF_ISO not set — skipping"); return };
+    const CROSS_TEX: u32 = 0x0300_0026;
+    {
+        let sim = scene.sim.as_mut().unwrap();
+        let ti = deployed(sim);
+        clear_guards(sim);
+        for _ in 0..600 {
+            sim.step_bond(Input::default(), false, false, false);
+            if sim.drones.gt_turrets[ti].state == gt_state::COMBAT && sim.gun.weapon == RONIN_CONTROL && sim.gun.switch_state == 0 { break; }
+        }
+        assert_eq!(sim.gun.weapon, RONIN_CONTROL);
+        assert!(sim.drones.ronin_mounted().is_none());
+    }
+    // The normal cross: cell 2 (11×11) centred on the screen centre (256, 224).
+    let cross = |b: &[[f32; 4]]| b.iter().filter(|r| (r[2] - r[0] - 11.0).abs() < 0.5 && (r[3] - r[1] - 11.0).abs() < 0.5
+        && ((r[0] + r[2]) / 2.0 - 256.0).abs() < 2.0 && ((r[1] + r[3]) / 2.0 - 224.0).abs() < 2.0).count();
+    let before = hud_boxes(&scene, CROSS_TEX);
+    assert_eq!(cross(&before), 1, "sister: on foot the crosshair draws at the centre: {before:?}");
+    let reticle_tex = scene.hud.as_ref().expect("HUD tables").ronin[5].texture;
+    assert!(hud_boxes(&scene, reticle_tex).is_empty(), "no pane-18 reticle before the remote view: {:?}", hud_boxes(&scene, reticle_tex));
+    {
+        let sim = scene.sim.as_mut().unwrap();
+        for t in 0..60 {
+            sim.step_bond(Input::default(), t < 4, false, false);
+            if sim.drones.ronin_mounted().is_some() { break; }
+        }
+        assert!(sim.drones.ronin_mounted().is_some(), "mounted");
+        idle(sim, 30);
+    }
+    let after = hud_boxes(&scene, CROSS_TEX);
+    assert_eq!(cross(&after), 0, "the remote view draws no normal crosshair: {after:?}");
+    // The pane's reticle (sprite 5, flag 0x800 → centred on (256, 224)) still draws: its quads
+    // together cover a box wider than the cross, centred on the screen centre.
+    let ret = hud_boxes(&scene, reticle_tex);
+    let u = ret.iter().fold([f32::MAX, f32::MAX, f32::MIN, f32::MIN], |a, r| [a[0].min(r[0]), a[1].min(r[1]), a[2].max(r[2]), a[3].max(r[3])]);
+    assert!(!ret.is_empty() && ((u[0] + u[2]) / 2.0 - 256.0).abs() < 2.0 && ((u[1] + u[3]) / 2.0 - 224.0).abs() < 2.0 && u[2] - u[0] > 20.0,
+        "the octagon reticle stays: tex {reticle_tex:#x} {ret:?}");
+}
