@@ -1337,6 +1337,10 @@ fn load_impl(iso_path: &str, archive: &str, all: bool, save: Option<&nf_game::pl
         },
         hitboxes: nf_formats::hitbox::CollisionBones::from_action_elf(&elf).ok(),
         sfx: nf_formats::sfx::SfxTable::from_action_elf(&elf).ok(),
+        // subtitles-do-spoken: `Sound_DoSubtitle` 0x1dde58's two static tables (Snd2Lbl 0x2d25d8,
+        // SFXOutputData+0x10 durations) — `Drones::attach_snd2lbl` consumes them.
+        snd2lbl: nf_formats::sfx::snd2lbl(&elf).map_err(|e| eprintln!("Snd2Lbl: {e}")).unwrap_or_default(),
+        sfx_durations: nf_formats::sfx::sfx_durations(&elf).map_err(|e| eprintln!("SFX durations: {e}")).unwrap_or_default(),
         surfaces: nf_formats::sfx::SurfaceSounds::from_action_elf(&elf).map_err(|e| eprintln!("EffectInfo: {e}")).ok(),
         voices: nf_formats::sfx::voice_lines(&elf).map_err(|e| eprintln!("Drone_SfxInfo: {e}")).ok(),
         hud: nf_formats::hud::HudTables::from_action_elf(&elf).map_err(|e| eprintln!("HUD tables: {e}")).ok(),

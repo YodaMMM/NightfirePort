@@ -311,6 +311,10 @@ pub struct DroneContext {
     pub tuning: nf_formats::tuning::Tuning,
     pub hitboxes: Option<nf_formats::hitbox::CollisionBones>,
     pub sfx: Option<nf_formats::sfx::SfxTable>,
+    /// subtitles-do-spoken: `Snd2Lbl` (0x2d25d8) + the `SFXOutputData+0x10` durations —
+    /// `Sound_DoSubtitle` 0x1dde58's data, attached onto `Drones` at the build.
+    pub snd2lbl: Vec<(u32, u32)>,
+    pub sfx_durations: Vec<f32>,
     pub surfaces: Option<nf_formats::sfx::SurfaceSounds>,
     pub voices: Option<Vec<nf_formats::sfx::VoiceLine>>,
     /// The HUD's sprite tables and font (docs/systems/hud.md).
@@ -9753,8 +9757,12 @@ pub fn build(level: &Level, cels_only: bool, skeletons: &HashMap<u8, Skeleton>, 
             // The spawn arrival settle is NOT armed on this structural fallback: the level start
             // re-places the bond in lib.rs (the `Player_Init` 0x1910f8 path) and arms it there
             // (`arm_spawn_settle` doc — the [L] evidence is the boot's level-start placement).
+            // subtitles-do-spoken: `Sound_DoSubtitle`'s static tables ride the context (read
+            // before the `drones` name is shadowed by the Drones value below).
+            let spoken = drones.map(|c| (c.snd2lbl.clone(), c.sfx_durations.clone()));
             let mut drones = nf_game::drone::Drones::new(list, rng);
             drones.lights = lights;
+            if let Some((rows, durs)) = spoken { drones.attach_snd2lbl(rows, durs); }
             // The selected difficulty BEFORE the creates: every create-time gate reads it
             // (captain_setup 0x14b300:504-535, Drone_Create's min-difficulty tag 0x136be0:49,
             // Lock_Create's Operative auto-unlock 0x1ae1f8:67, Copter_Create's HP 0x17d340:76,
