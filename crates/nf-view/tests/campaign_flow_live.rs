@@ -99,7 +99,7 @@ fn shoot_gadget_at(w: &mut Walker, target: [f32; 3], range: f32, max_ticks: u32,
             w.scene.sim.as_mut().unwrap().step_bond(input, trigger, false, false);
         }
         w.total_ticks += 1;
-        if w.top_up_health { w.scene.sim.as_mut().unwrap().drones.health.health = 100.0; }
+        w.after_step();
     }
 }
 

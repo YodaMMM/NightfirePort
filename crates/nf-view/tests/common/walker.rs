@@ -10,6 +10,8 @@ use nf_game::triggers::kind;
 use nf_game::world::V3;
 use nf_view::scene::Scene;
 
+include!("damage_log.rs");
+
 pub const TICKS_PER_SEC: u32 = 60;
 
 /// faster-live-tests: the LENIENT leg's give-up cap (ticks). A lenient leg that burns this long is
@@ -103,6 +105,8 @@ pub struct Walker {
     /// Top Bond's health up every tick (the "enemies disabled for the walk" allowance; the pain
     /// pipeline still runs — flash, dir bits — so the walk is not a no-op).
     pub top_up_health: bool,
+    /// Real-damage bookkeeping (damage_log.rs): live whenever the top-up is off.
+    pub dmg: DamageLog,
     /// Drones kept standing every tick (an escort-leg allowance, opt-in; empty by default): health
     /// floored at 1000 while alive (god mode, like Bond's top-up). For walks that pin an escort's route rules, not the firefight.
     pub keep_alive: Vec<usize>,
@@ -202,7 +206,7 @@ impl Walker {
             .map(|s| s.split(',').filter_map(|x| x.trim().parse().ok()).collect()).unwrap_or_default();
         let watch_last = vec![(0u8, [0.0f32; 3]); drone_watch.len()];
         Walker {
-            scene, top_up_health: true, keep_alive: Vec::new(), stop_on_exit: true, skip_cutscenes: true,
+            scene, top_up_health: true, dmg: DamageLog::new(), keep_alive: Vec::new(), stop_on_exit: true, skip_cutscenes: true,
             report: Report { legs: Vec::new(), stuck_events: Vec::new(), falls: Vec::new() },
             total_ticks: 0, pos, last_sample: pos, sample_tick: 0, stuck: 0, stuck_cycles: 0,
             sidestep: 0, max_y: pos[1], lenient: false,
@@ -214,6 +218,21 @@ impl Walker {
             fighting_blocker: false,
             body_block_response: false,
         }
+    }
+
+    /// The top-up is on: the walker's flag, unless `NF_WALK_NO_TOPUP` turns it off binary-wide.
+    pub fn tops_up(&self) -> bool { self.top_up_health && !no_topup_env() }
+
+    /// After every stepped tick: read the damage (damage_log.rs), then top health up when on. A
+    /// death on a real-damage walk panics with the death line (the walk cannot go on).
+    pub fn after_step(&mut self) {
+        self.dmg.active = !self.tops_up();
+        let tick = self.total_ticks;
+        self.dmg.note(self.scene.sim.as_ref().unwrap(), tick);
+        if self.dmg.active && self.dmg.die_panics {
+            if let Some(d) = &self.dmg.died { panic!("[real-damage] {d}"); }
+        }
+        if self.tops_up() { self.scene.sim.as_mut().unwrap().drones.health.health = 100.0; }
     }
 
     fn sim(&mut self) -> &mut nf_view::scene::Sim { self.scene.sim.as_mut().unwrap() }
@@ -425,10 +444,7 @@ impl Walker {
             // close any open fall entry
             for f in self.report.falls.iter_mut() { if f.ends_with("(open)") { f.push_str(" landed"); } }
         }
-        if self.top_up_health {
-            let h = &mut self.scene.sim.as_mut().unwrap().drones.health;
-            h.health = 100.0;
-        }
+        self.after_step();
     }
 
     /// Step with no input until Bond is not `disabled` (cut-scene wait), capped.
@@ -731,7 +747,7 @@ impl Walker {
                 self.scene.sim.as_mut().unwrap().step_bond(input, trigger, reload, false);
             }
             self.total_ticks += 1;
-            if self.top_up_health { self.scene.sim.as_mut().unwrap().drones.health.health = 100.0; }
+            self.after_step();
             // Out of ammo: give up (the caller resupplies and retries).
             if self.scene.sim.as_ref().unwrap().gun.clip == 0
                 && self.scene.sim.as_ref().unwrap().gun.spare == 0 && t > 60 {
@@ -913,6 +929,12 @@ impl Walker {
             if self.scene.sim.as_ref().unwrap().disabled {
                 self.tick(Input::default(), false);
                 continue;
+            }
+            // Real damage: answer whoever is shooting Bond before walking on (the fight's
+            // ticks are the response's cost, not the leg's).
+            if !riding && !ladder && self.total_ticks % 10 == 0 {
+                let t0 = self.total_ticks;
+                if self.return_fire(label) { start_ticks += self.total_ticks - t0; continue; }
             }
             let p = self.scene.sim.as_ref().unwrap().bond.pos;
             self.pos = p;
@@ -1464,4 +1486,14 @@ pub fn hall_ammo_ladder(w: &mut Walker, label: &str) {
     w.walk_nav_to([7.9, 5.3, 11.1], &format!("{label}: out the hall's east door"), 1.6);
     w.resupply(label);
     hall_restage(w, label);
+}
+
+impl Drop for Walker {
+    fn drop(&mut self) {
+        if self.dmg.active {
+            if let Some(sim) = self.scene.sim.as_ref() {
+                eprintln!("[real-damage] at tick {}: {}", self.total_ticks, self.dmg.summary(sim));
+            }
+        }
+    }
 }
