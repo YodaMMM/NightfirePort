@@ -414,6 +414,51 @@ fn the_mine_explodes_when_bond_walks_into_its_beam() {
         "the blast carries the disc's radius 10 / damage 80 [D p1/p0]");
 }
 
+/// The exploded mine stops drawing: `Mine_Update` 0x17c930 sets obj+0xFE bit 0 on the explode
+/// tick and the delete pass removes the object [M 0x17cb7c-0x17cb88], so its mesh is gone from
+/// the frame. The draw side poses each mine on its own slot at the placement matrix and collapses
+/// the slot once the sim's `Mine.exploded` is set. Sister: the slot draws at the placement matrix
+/// before the walk, and the mines that did not go keep drawing.
+#[test]
+fn the_exploded_mine_stops_drawing() {
+    let mut w = load15();
+    let far = |m: [[f32; 4]; 4]| m[3][1] <= -9999.0;
+    let slot_of = |w: &Walker, pl: usize| -> usize {
+        let &(_, mx) = w.scene.mine_placements.iter().find(|(p, _)| *p == pl).expect("the mine has a draw slot");
+        let sim = w.scene.sim.as_ref().unwrap();
+        (0..4096).find(|&k| w.scene.door_slot_matrix(sim, k) == mx).expect("a posed slot carries the mine's placement matrix")
+    };
+    let placements: Vec<usize> = w.scene.sim.as_ref().unwrap().drones.mines.iter().map(|m| m.placement).collect();
+    assert_eq!(w.scene.mine_placements.len(), placements.len(), "one draw slot per created mine [M Mine_Create 0x17ce28]");
+    let slots: Vec<usize> = placements.iter().map(|&pl| slot_of(&w, pl)).collect();
+    for &k in &slots {
+        assert!(w.scene.char_verts.iter().any(|v| v.door == Some(k as u16)), "slot {k}: the mine's mesh rides its slot");
+    }
+    w.scene.sim.as_mut().unwrap().bond.pos = [35.5, 41.5, 15.0];
+    w.scene.sim.as_mut().unwrap().bond.yaw = 0.0; // face +z, into the z-18 doorway fence
+    w.scene.sim.as_mut().unwrap().bond.vel = [0.0; 3];
+    w.wait(10);
+    {
+        let sim = w.scene.sim.as_ref().unwrap();
+        assert!(sim.drones.mines.iter().all(|m| !m.exploded), "sister: no mine has exploded standing here");
+        for &k in &slots { assert!(!far(w.scene.door_slot_matrix(sim, k)), "sister: slot {k} draws before the walk"); }
+    }
+    let mut boom = None;
+    for _ in 0..400 {
+        if let Some(m) = w.scene.sim.as_ref().unwrap().drones.mines.iter().position(|m| m.exploded) { boom = Some(m); break; }
+        w.tick(nf_game::player::Input { forward: 1.0, ..Default::default() }, false);
+    }
+    let boom = boom.expect("walking the z-18 doorway fence explodes a mine [M 0x17c930's hit-list arm]");
+    let sim = w.scene.sim.as_ref().unwrap();
+    for (i, &k) in slots.iter().enumerate() {
+        let gone = far(w.scene.door_slot_matrix(sim, k));
+        assert_eq!(gone, sim.drones.mines[i].exploded,
+            "mine {i} (slot {k}): drawn exactly while it has not exploded [M 0x17cb7c-0x17cb88]");
+    }
+    assert!(far(w.scene.door_slot_matrix(sim, slots[boom])), "the exploded mine's slot is collapsed");
+    assert!(sim.drones.mines.iter().any(|m| !m.exploded), "sister: some mines are still standing, still drawn");
+}
+
 /// explode-debris-spawn: the mine's blast is a persistent object now, and it spawns NO debris.
 /// The game chain: `Mine_Update` 0x17c930 inlines `Explode_Create` and stores the u16 debris
 /// kind 0 [M 0x17c930:128], so `Explode_Update`'s debris arm returns BEFORE its Rand_Rand(5)
