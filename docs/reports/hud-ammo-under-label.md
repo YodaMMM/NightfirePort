@@ -90,3 +90,16 @@ and not yet positioned → the created state; otherwise the positioned draw (hid
 ## Usage
 
 `not visible to me` — this session's environment shows no token, cost or context-window figures.
+
+## ntfy failed
+
+All three fallbacks failed (2026-11-01 ~20:20 UTC):
+
+1. curl -sS -m 20 -H "Title: NightfirePort" -d "hud-ammo-under-label: ..." https://ntfy.sh/nightfire-yoda-8k3x
+   -> curl: (28) Connection timed out after 20000 milliseconds
+2. python3 urllib.request with the same URL and an ASCII body
+   -> urllib.error.URLError: <urlopen error [Errno 101] Network is unreachable> (a first attempt with an em-dash in the bytes literal died on SyntaxError: bytes can only contain ASCII literal characters; the ASCII retry reached the network error above)
+3. wget -q -O- --post-data "hud-ammo-under-label: ..." https://ntfy.sh/nightfire-yoda-8k3x
+   -> no output, killed at the 120 s tool timeout (host unreachable)
+
+The branch, the report and the queue done entry were all pushed; only the push notification was missing.
