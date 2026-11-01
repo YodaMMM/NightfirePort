@@ -94,6 +94,18 @@ impl DamageLog {
                 Some(e) => { e.1 += dmg; e.2 += 1; }
                 None => self.by_owner.push((o, dmg, 1)),
             }
+            if std::env::var_os("NF_DMG_TRACE").is_some() && dmg != 0.0 {
+                let p = sim.bond.pos;
+                eprintln!("[dmg] tick {tick} frame {f}: -{dmg:.2} (health {:.1}) Bond ({:.1},{:.1},{:.1}) from {}",
+                    sim.drones.health.health, p[0], p[1], p[2], Self::owner_desc(sim, o));
+                if o >= sim.drones.list.len() {
+                    for e in sim.drones.explosions.iter().rev().take(3) {
+                        let d = ((e.0[0] - p[0]).powi(2) + (e.0[1] - p[1]).powi(2) + (e.0[2] - p[2]).powi(2)).sqrt();
+                        eprintln!("[dmg]   explosion at ({:.1},{:.1},{:.1}) d {d:.1} radius {:.1} damage {:.1} owner {} kind {}",
+                            e.0[0], e.0[1], e.0[2], e.1, e.2, e.3 as isize, e.4);
+                    }
+                }
+            }
             self.last_hits.push((f, o, dmg));
             if self.last_hits.len() > 6 { self.last_hits.remove(0); }
         }
