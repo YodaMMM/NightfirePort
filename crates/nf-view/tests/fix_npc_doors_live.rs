@@ -179,9 +179,14 @@ fn the_escort_opens_the_interior_doors_on_his_route() {
                 let desired = (target[0] - sim.bond.pos[0]).atan2(target[2] - sim.bond.pos[2]);
                 let err = walker::wrap_pi(desired - sim.bond.yaw);
                 let d = walker::dxz(sim.bond.pos, target);
+                // The escort's own stop: PlayerInWay (0x1e) HOLDS while Bond stands within 3.5
+                // dxz in his facing cone [M 0x15ea28:32-47] — the 3.5 exit is the only release.
+                // A player who closed in too far steps back out of the band (facing him, so the
+                // back-step opens the distance) instead of standing in his way.
+                let in_way = sim.drones.list[ci].state == 0x1e && d < 3.6;
                 let input = nf_game::player::Input {
                     turn: err.clamp(-0.07, 0.07),
-                    forward: if d > 5.0 { 1.0 } else if d > 4.0 { 0.45 } else { 0.0 },
+                    forward: if in_way { -1.0 } else if d > 5.0 { 1.0 } else if d > 4.0 { 0.45 } else { 0.0 },
                     ..Default::default()
                 };
                 drop(sim);

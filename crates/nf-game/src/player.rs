@@ -769,11 +769,10 @@ impl Bond {
             };
             self.grapple_drift[0] = ease(self.grapple_drift[0], input.strafe * 0.075);
             self.grapple_drift[1] = ease(self.grapple_drift[1], input.forward * 0.075);
-            // The move quad rides the same eased wish during the hang [M Player_Move's stores from
-            // the +0x20 block, 0x191dd0:111-141/166-170 — substate 2 passes Player_Move's gate]: the
-            // guards read a drifting hang as moving. The reel/release keep the zeroed quad (the
-            // port's pinned no-momentum release; the game's reel-tick quad [S] unverified).
-            self.move_local = self.grapple_drift;
+            // The move quad stays ZERO through the whole grapple: `Player_SSGrapple` runs
+            // `Player_Move` (the quad stores), copies the quad into the +0x20 block, then
+            // `memset(BL+0x10, 0, 0x10)` on every phase's exit path [M 0x192860:49, 123-131] —
+            // the guards' moving test reads a grappling Bond (hang drift included) as still.
             let (s, c) = (crate::trig::sinf(self.yaw), crate::trig::cosf(self.yaw));
             let (vs, vf) = (self.grapple_drift[0], self.grapple_drift[1]);
             pos[0] += c * vs + s * vf;
@@ -1424,6 +1423,9 @@ impl Bond {
             self.yaw = crawl_yaw + if nearer_a { -std::f32::consts::FRAC_PI_2 } else { std::f32::consts::FRAC_PI_2 };
             self.regrab = 0x78;
             self.push_fwd += 0.05;
+            // The exit's own +0x18 write on the zeroed quad [M 0x1969d0:151 `+0x18 += 0.05`]: the
+            // guards' moving test reads it on this tick.
+            self.move_local[1] = 0.05;
             return;
         }
         // The crawl motion along the axis is the port's shape (the game's is the crawl anims' root
@@ -1491,6 +1493,9 @@ impl Bond {
         // the shipped game — both live wires are type 0 [D placements probe]). The clamp below
         // projects the ride onto the line, so Bond slides down a sloped zipline and accelerates.
         self.fall_speed += 0.15;
+        // The same write lands on the quad Player_Update zeroed this tick [M 0x197f50:121 on
+        // 0x193600:133's Vec_Zero]: the guards' moving test reads a riding Bond as moving.
+        self.move_local[1] = 0.15;
         self.pos[1] -= self.fall_speed / 60.0;
         let lifted = [self.pos[0], self.pos[1] + 1.17363, self.pos[2]];
         let closest = Wire::closest_point(a, b, lifted);
@@ -2902,6 +2907,25 @@ mod tests {
         assert!(b.crouched);
         assert!(b.move_local[1] > 0.0 && b.move_local[1] < 0.08,
             "crouch walk lane eases toward 0.1·0.75: {:?}", b.move_local);
+    }
+
+    /// The grapple hang reads STILL to the guards: `Player_SSGrapple` stores the quad through
+    /// `Player_Move`, copies it into +0x20 and `memset(BL+0x10, 0, 0x10)` on every phase's exit
+    /// [M 0x192860:49, 123-131]. Sister: the same strafe on foot sets the x lane.
+    #[test]
+    fn grapple_hang_leaves_the_move_quad_zero() {
+        let w = room();
+        let mut b = Bond::stand_at(&w, [0.0, 0.0, 0.0], 0.0);
+        b.substate = SS_GRAPPLE;
+        b.grapple = Some(crate::gadget::GrappleState { point: [0.0, 2.0, 0.0], phase: 2, pull: 0.0 });
+        let hang = Input { strafe: 1.0, forward: 1.0, fire: true, ..Default::default() };
+        for _ in 0..30 { b.tick(&w, &hang); }
+        assert_eq!(b.substate, SS_GRAPPLE, "the held fire keeps the hang");
+        assert!(b.grapple_drift[0] != 0.0, "the hang drift eased in: {:?}", b.grapple_drift);
+        assert_eq!(b.move_local, [0.0, 0.0], "the hang's quad is zeroed: {:?}", b.move_local);
+        let mut b = Bond::stand_at(&w, [0.0, 0.0, 0.0], 0.0);
+        for _ in 0..10 { b.tick(&w, &Input { strafe: 1.0, ..Default::default() }); }
+        assert!(b.move_local[0] != 0.0, "sister: the on-foot strafe sets x: {:?}", b.move_local);
     }
 
     /// The zero-g quad the guards read is the thruster pair `local` (handed over as

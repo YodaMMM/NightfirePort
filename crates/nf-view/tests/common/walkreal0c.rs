@@ -607,6 +607,11 @@ pub fn walk_spawn_to_the_band(iso: &str) -> Walker {
     // Leg 7 (REAL): the ladder walk-in grab + climb (the walk substate rides the DEFAULT arm
     // r 0.55 [M 0x1953f4 via the jump table @0x2fc0d0]).
     w.walk_to(Wp::new(10.3, 1.05, -186.8).r(0.7), "the ladder approach");
+    // The hand-driven loops from here to the west ledge (climb, mantle, the #284 grab, ride and
+    // drop) step the sim themselves, so each tick ends with the walker's own `after_step`: the
+    // walk's health allowance and damage bookkeeping hold on these legs exactly as on the
+    // walked ones. Without it the ring guards' fire on the wire (24 hits by the ride's 2-u mark)
+    // emptied Bond's health mid-ride and the dead Bond hung frozen short of B.
     let mut climbed = false;
     for _ in 0..900 {
         let sim = w.scene.sim.as_mut().unwrap();
@@ -620,7 +625,7 @@ pub fn walk_spawn_to_the_band(iso: &str) -> Walker {
             ..Default::default()
         };
         sim.step_bond(input, false, false, false);
-        w.total_ticks += 1;
+        w.total_ticks += 1; w.after_step();
     }
     assert!(climbed,
         "walking into the yard ladder #164 never grabbed it — the walk substate must ride the switch's DEFAULT arm r 0.55 [M 0x1953f4 via the jump table @0x2fc0d0]");
@@ -632,14 +637,14 @@ pub fn walk_spawn_to_the_band(iso: &str) -> Walker {
         let sim = w.scene.sim.as_mut().unwrap();
         if sim.bond.substate != nf_game::player::SS_CLIMB && sim.bond.pos[1] > 2.0 { mantled = true; break; }
         sim.step_bond(nf_game::player::Input { forward: 1.0, ..Default::default() }, false, false, false);
-        w.total_ticks += 1;
+        w.total_ticks += 1; w.after_step();
     }
     assert!(mantled, "the yard climb never mantled past climb_top 12.139 [M 0x196118/0x196310], y {:?}", w.scene.sim.as_ref().unwrap().bond.pos);
     for _ in 0..600 {
         let sim = w.scene.sim.as_ref().unwrap();
         if sim.bond.grounded && sim.bond.substate == nf_game::player::SS_WALK && sim.bond.pos[1] > 10.5 { break; }
         w.scene.sim.as_mut().unwrap().step_bond(nf_game::player::Input { forward: 1.0, ..Default::default() }, false, false, false);
-        w.total_ticks += 1;
+        w.total_ticks += 1; w.after_step();
     }
     {
         let sim = w.scene.sim.as_ref().unwrap();
@@ -681,7 +686,7 @@ pub fn walk_spawn_to_the_band(iso: &str) -> Walker {
                 ..Default::default()
             };
             w.scene.sim.as_mut().unwrap().step_bond(input, false, false, false);
-            w.total_ticks += 1;
+            w.total_ticks += 1; w.after_step();
         }
         got
     };
@@ -702,14 +707,14 @@ pub fn walk_spawn_to_the_band(iso: &str) -> Walker {
             // press does (blockers-2's three green drops).
             let input = nf_game::player::Input { strafe: 1.0, jump: d < 0.9, ..Default::default() };
             w.scene.sim.as_mut().unwrap().step_bond(input, false, false, false);
-            w.total_ticks += 1;
+            w.total_ticks += 1; w.after_step();
         }
         dropped
     };
     for _ in 0..200 {
         if w.scene.sim.as_ref().unwrap().bond.grounded { break; }
         w.scene.sim.as_mut().unwrap().step_bond(nf_game::player::Input::default(), false, false, false);
-        w.total_ticks += 1;
+        w.total_ticks += 1; w.after_step();
     }
     {
         let sim = w.scene.sim.as_ref().unwrap();
@@ -741,7 +746,7 @@ pub fn walk_spawn_to_the_band(iso: &str) -> Walker {
                 ..Default::default()
             };
             w.scene.sim.as_mut().unwrap().step_bond(input, false, false, false);
-            w.total_ticks += 1;
+            w.total_ticks += 1; w.after_step();
         }
         got
     };
@@ -757,14 +762,14 @@ pub fn walk_spawn_to_the_band(iso: &str) -> Walker {
             // The drop is the jump press inside 0.9 of B (see the #284 note).
             let input = nf_game::player::Input { strafe: -1.0, jump: d < 0.9, ..Default::default() };
             w.scene.sim.as_mut().unwrap().step_bond(input, false, false, false);
-            w.total_ticks += 1;
+            w.total_ticks += 1; w.after_step();
         }
         dropped
     };
     for _ in 0..200 {
         if w.scene.sim.as_ref().unwrap().bond.grounded { break; }
         w.scene.sim.as_mut().unwrap().step_bond(nf_game::player::Input::default(), false, false, false);
-        w.total_ticks += 1;
+        w.total_ticks += 1; w.after_step();
     }
     {
         let sim = w.scene.sim.as_ref().unwrap();
@@ -794,7 +799,7 @@ pub fn walk_spawn_to_the_band(iso: &str) -> Walker {
                 ..Default::default()
             };
             w.scene.sim.as_mut().unwrap().step_bond(input, false, false, false);
-            w.total_ticks += 1;
+            w.total_ticks += 1; w.after_step();
         }
         got
     };
@@ -821,7 +826,7 @@ pub fn walk_spawn_to_the_band(iso: &str) -> Walker {
             if d < best_d - 1e-4 { best_d = d; still = 0; } else { still += 1; }
             let input = nf_game::player::Input { strafe: 1.0, jump: at_stop, ..Default::default() };
             w.scene.sim.as_mut().unwrap().step_bond(input, false, false, false);
-            w.total_ticks += 1;
+            w.total_ticks += 1; w.after_step();
         }
         dropped
     };
@@ -836,7 +841,7 @@ pub fn walk_spawn_to_the_band(iso: &str) -> Walker {
         if sim.bond.grounded && saw_air { break; }
         if !sim.bond.grounded { saw_air = true; }
         w.scene.sim.as_mut().unwrap().step_bond(nf_game::player::Input::default(), false, false, false);
-        w.total_ticks += 1;
+        w.total_ticks += 1; w.after_step();
     }
     {
         let sim = w.scene.sim.as_ref().unwrap();

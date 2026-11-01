@@ -155,7 +155,11 @@ fn walk_the_whole_mission_on_real_input() {
     let fusebox = [154.35f32, 43.41, -119.67];
     for (name, at) in [
         ("the station hall", [139.0f32, 49.5, -93.0]),
-        ("the station doors", [139.5, 49.5, -97.5]),
+        // No "station doors" stop at (139.5, 49.5, −97.5) on this walk: its nav route runs east
+        // through door (160.6, 45.0, −100.1) and back west along the lower deck (y 46.1), and the
+        // last leg aims at a point 3.4 above that deck — every run wedged on it for the
+        // 3000-tick cap, and the stuck ladder's sidesteps at the deck edge can drop Bond into
+        // the station pit and out of the map. The walkway head's own route walks the same deck.
         ("the walkway head", [144.0, 46.0, -105.0]),
         ("the walkway mid", [145.5, 45.0, -108.6]),
         ("the lower landing", [150.0, 43.5, -116.0]),

@@ -502,6 +502,18 @@ fn walk_to_the_exit(iso: &str, stop_at_fire: bool) -> Walker {
         // the balcony side climbs over the top floor and never enters the stairwell — the sister
         // proved the descent through this anchor).
         w.walk_nav_to([-30.8, 6.4, 13.1], "the stairwell head", 1.2);
+        // Then down the stairwell by its own measured line — the first "the plate" leg's green
+        // nodes: south along the landing to the door pair at z 9.0, through it and down the
+        // stair to the plate. One long nav leg from an anchor arrival south of the head routed
+        // EAST instead (back through door #2 to the furniture wedge at (−13.4, 7.2, 11.6), 20 u
+        // from the contact, who then waits for Bond on the stair, state 0x20, until the cap).
+        for (name, at) in [
+            ("the descent landing", [-30.5f32, 6.4, 9.3]),
+            ("the descent door top", [-32.4, 6.4, 8.4]),
+            ("the descent stair", [-32.9, 6.0, 10.15]),
+        ] {
+            w.walk_nav_to(at, name, 1.0);
+        }
         w.walk_nav_to(plate, "the plate (lead the descent)", 1.2);
     }
     // level-01-end-fade: the pin path stops AT the fire — the mission-monitor block below waits
