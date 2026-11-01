@@ -1185,6 +1185,23 @@ pub fn icon_straddle_cels(graph: &CelGraph, start_cell: usize, centre: [f32; 3],
 /// The `(tint × ambient) >> 8` bytes of `View_SetupRenderModes_Tweak` (0x1e5888) as floats — the VU1
 /// `TAmbient` term (`psiSetTweakARGB` 0x124770: each byte / 255). White tint (the port's default) leaves the
 /// bytes equal to the ambient bytes.
+/// The live position of a projectile slot's object while it carries `mesh` (the slot layout and
+/// the live tests of the projectile pose: grenades newest-first in 0..GRENADE_SLOTS, then the
+/// drone bullets, then Bond's); None when the slot draws nothing.
+fn projectile_pos(s: &Sim, slot: usize, mesh: u32) -> Option<[f32; 3]> {
+    if slot < GRENADE_SLOTS {
+        let n = s.drones.grenades.len();
+        let gi = if n > GRENADE_SLOTS { n - GRENADE_SLOTS + slot } else { slot };
+        s.drones.grenades.get(gi).filter(|g| g.state == 1 && g.mesh == mesh).map(|g| g.pos)
+    } else if slot < GRENADE_SLOTS + TRACER_SLOTS {
+        s.drones.bullets.get(slot - GRENADE_SLOTS)
+            .filter(|b| b.state == 1 && s.weapons.projectile_mesh(b.weapon as usize) == mesh).map(|b| b.pos)
+    } else {
+        s.drones.player_bullets.get(slot - GRENADE_SLOTS - TRACER_SLOTS)
+            .filter(|b| !b.dead && s.weapons.projectile_mesh(b.weapon as usize) == mesh).map(|b| b.pos)
+    }
+}
+
 pub fn mul_bytes(a: [u8; 3]) -> [f32; 3] {
     let tint = [0xffu8; 3];
     [0, 1, 2].map(|k| ((tint[k] as u32 * a[k] as u32) >> 8) as f32 / 255.0)
@@ -11243,11 +11260,27 @@ pub fn build(level: &Level, cels_only: bool, skeletons: &HashMap<u8, Skeleton>, 
                         // [M 0x134630:18-21; Swoosh_Create/Update never write obj+0x103..0x105], so its
                         // tweak RGB is 1.0 — no cel-ambient dim (the dim made the grey ribbon vanish).
                         if a.projectile.is_some_and(|(slot, _)| slot >= SWOOSH_SLOT_BASE) { return one(); }
-                        // rocket-flare: the flying bullet objects (drone and player slots) keep the 0xFF tint
-                        // too — `Bullet_init`/`Bullet_update` never write obj+0x103..0x105 [M 0x12c5a0,
-                        // 0x12e7b0] — so the rocket's own orange light saturates it to the PS2's white flare
-                        // (the cel-ambient dim left the blue low: a yellow star). Grenade slots unchanged.
-                        if a.projectile.is_some_and(|(slot, _)| (slot as usize) >= GRENADE_SLOTS) { return one(); }
+                        // A projectile object (grenade, drone or player bullet): `Bullet_init` 0x12c5a0
+                        // leaves the tint bytes obj+0x103..0x105 at `control_init_object`'s 0xFF [M
+                        // 0x134630:18-21] and links the object to its room — `build_LinkToRoom` 0x1c9680
+                        // copies the cel's ambient (cel + switch_channels[cel+0xa2], +0x9a/0x9c/0x9e) to
+                        // obj+0x100..0x102 [M 0x1c9680:45-49], again on every cel change
+                        // (`control_handle_cel_change` 0x133288). `Bullet_update`'s first tick sets the
+                        // weapon's +0x5C mesh with `hashtable_set_object_to_entity_gfx` [M 0x12e7b0:125,
+                        // disasm 0x12e8f0] → `Control_SetGList` 0x134960, which ORs the glist flags into
+                        // obj+0xF0 [M 0x134960:12]. So `View_SetupRenderModes_Tweak` dims the projectile
+                        // by its cel's ambient exactly when its mesh's glist carries 0x800 [M
+                        // 0x1e5888:50-55], and passes 0xFF when it does not [M :46-49]. The satchel
+                        // charge OBJECT_SatchelCharge 0x020007b3 carries 0x880 [D] — dim; a mesh
+                        // without 0x800 (rocket-flare: the rocket's own light saturates it to the
+                        // PS2's white flare) keeps the white tint.
+                        if let Some((slot, mesh)) = a.projectile {
+                            if !self.models_0x800.get(&mesh).copied().unwrap_or(false) { return one(); }
+                            return match projectile_pos(s, slot as usize, mesh) {
+                                Some(p) => s.ambient_at(p).map(mul_bytes).unwrap_or_else(one),
+                                None => one(),
+                            };
+                        }
                         // The satchel countdown digits keep the white tweak: `control_create_object`
                         // runs `control_init_object` (tint bytes obj+0x103..0x106 = 0xFF [M
                         // 0x1344e0:19, 0x134630:18-21]) and `Bullet_DoTrails` never writes them [M
