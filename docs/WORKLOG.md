@@ -77,3 +77,27 @@ Session 1 progress (~11:30 UTC):
   guests, scripted/cut-scene actors, non-combat NPCs — voice +0xd8, +0x538, obj+0xFC,
   +0x570&2), cut-scene / disabled-player windows, and push magnitude/direction vs the game.
   Fix the port where it differs; fix walks only where fragile.
+- Diagnosis pass (16:10-17:30 UTC): reproduced cutscene_timer_pause on the merged tree — the
+  walker wedges at the hall door against drone #22 (team 3, CIVILIAN_MISSION 0x16) parked
+  0.88 u off Bond's spine (pushdbg: equilibrium, push ~0.065/tick out of the doorway). Researched
+  the gates with two decompile sweeps: the near-arm distances live at Drone+0x154..0x160 f32[4]
+  (PreDroneControl 0x148db0:35-50 rewrites them EVERY tick for every live NPC, 100000.0 sentinel
+  for empty slots — no stale-zero hazard; the decompile's `param_1 + 0x154` is a byte offset,
+  raw MIPS 0x14b19c `addiu $a0,$a0,0x154`); `+0x570` is the current danim's Drone_AnimInfo flags
+  word (bit 2 = in-place anim, set on danim 0x11A the universal start idle — every drone spawns
+  with it, moving clears it; writers only DroneAnim_SetDAnimInternal 0x13aee8:50 and
+  DroneAnim_SetScript 0x13e088:26); `+0x538` is the blend-out script pointer (SetHTAnim
+  0x13b1c8:76); `+0xd8` is the VOICE SET not a state word (DefaultInit skin switch 0x14b300:201/
+  :232: 0xc = Zoe-class VIP, 0x13 = Drake — always-ON arms). Re-derived DoCollision 0x149ec8 for
+  a live drone: 0x20 set (DefaultInit 0x801e2 / Enable(1) 0x801a0 restores, Enable(0) 0xffe7fe5f
+  clears) + not dead → ON if voice 0xc/0x13, mid-blend, near < 2.0, or drawn (obj+0xFC draw
+  counter, View_AddObjects 0x1e62d8); the +0x570&2 OFF arm only bites far+off-screen. So every
+  bot the push can touch is ON in the game — the port's admission (enabled && !corpse && < 2.0)
+  is FAITHFUL, and the push math matches Collide_Jointy 0x1ec180:253-266 (normalized
+  (p−q)/dist, overlap = r-sum − dist, fVar12 1.0 SP vs class-2). VERDICT: the port does not
+  differ; the 20 reds are the harness fragility the driver's walk-fix carve-out covers (walks
+  wedged on bodies they cannot pass: the walker's stuck ladder sidesteps blind and its
+  clear_pushing_guards only shoots team 1; the facial harnesses pick the nearest guest whose
+  talk script need not be present once the push shifts Bond's intro-end position). Next: a
+  direction-aware push-dodge arm in the stuck ladder (safe-by-default: fires only on a live
+  body within reach of a stalled leg), then the facial harness pick.
