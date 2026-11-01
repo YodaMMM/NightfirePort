@@ -54,7 +54,8 @@ fn the_walked_beam_entry_raises_the_alarm_channel() {
         let p = w.scene.sim.as_ref().unwrap().bond.pos;
         assert!((p[0] - 57.18).abs() < 2.0 && (p[2] - 22.61).abs() < 2.0, "the truck-ride spawn #496 [D], got {p:?}");
     }
-    // The heads sweep from the light boot (ch 64/63/61/62 at the script's waits) [D 0x06000066].
+    // The heads light when the walk crosses a ch-0x34 courtyard plate (SP #808 plays the reveal NIS
+    // 0x06000066: ch 64/63/61/62 at the script's waits [D]).
     // By the time the walk reaches the courtyard (minutes of sim) all four sweep.
     for (k, a) in ANCHORS.iter().enumerate() {
         w.walk_to(Wp::new(a[0], a[1], a[2]).r(1.4), &format!("anchor {k}"));

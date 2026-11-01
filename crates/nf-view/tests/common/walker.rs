@@ -166,6 +166,12 @@ pub struct Walker {
     /// steps off the line (the strafe) instead of shooting the escort. `None` = the old
     /// behaviour, every other caller unchanged.
     pub shield: Option<usize>,
+    /// courtyard-lamps: the channel-rise watch (opt-in; empty by default). Each tick a listed
+    /// channel turns on, `rises` records (channel, walker tick, Bond's feet, the placement indices
+    /// of the not-yet-deleted triggers writing that channel whose volume Bond's capsule touches) —
+    /// which plate a walked route actually crossed first.
+    pub rise_watch: Vec<u8>,
+    pub rises: Vec<(u8, u32, V3, Vec<usize>)>,
 }
 
 /// The stuck dump, public for the walkreal tests' own aim loops (walkreal-b2).
@@ -221,6 +227,8 @@ impl Walker {
             fighting_blocker: false,
             body_block_response: false,
             bridge_wedged_nav: false,
+            rise_watch: Vec::new(),
+            rises: Vec::new(),
         }
     }
 
@@ -345,9 +353,24 @@ impl Walker {
             self.scene.sim.as_mut().unwrap().drones.scripts.skip_request = true;
         }
         let y_before = self.scene.sim.as_ref().unwrap().bond.pos[1];
+        let watch_before: Vec<bool> = {
+            let sim = self.scene.sim.as_ref().unwrap();
+            self.rise_watch.iter().map(|&c| sim.drones.channels.on(c as u32)).collect()
+        };
+        let feet_before = self.scene.sim.as_ref().unwrap().bond.pos;
         self.scene.sim.as_mut().unwrap().step_bond(input, fire, reload, use_key);
         let sim = self.scene.sim.as_ref().unwrap();
         self.total_ticks += 1;
+        for (k, &c) in self.rise_watch.iter().enumerate() {
+            if watch_before[k] || !sim.drones.channels.on(c as u32) { continue; }
+            // The writer ran inside this step: test the capsule at both ends of the tick's move (the
+            // sim's own player toucher sits at pos − 0.6, drone.rs `Toucher::player`).
+            let touching: Vec<usize> = sim.drones.triggers.iter()
+                .filter(|t| t.out == c && !t.tris.is_empty())
+                .filter(|t| [feet_before, sim.bond.pos].iter().any(|&f| t.touched_by(&nf_game::triggers::Toucher::player([f[0], f[1] - 0.6, f[2]]))))
+                .map(|t| t.placement).collect();
+            self.rises.push((c, self.total_ticks, sim.bond.pos, touching));
+        }
         if !self.drone_watch.is_empty() {
             for (k, &i) in self.drone_watch.iter().enumerate() {
                 if let Some(dr) = sim.drones.list.get(i) {
