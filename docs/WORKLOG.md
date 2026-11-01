@@ -39,3 +39,19 @@ quote the totals. Full suite with the fast runner on the final tree (merged with
 - Totals so far: walkreal_0700000b_live 4/4; walk_0700000b_live 4/4; interactables_0700000b_live
   9/9; models_sweep_0700000b_live 2/2; objectives_0b_start_live 3/3; nf-game 98 binaries
   959 passed / 0 failed / 9 ignored. Full suite running (slow: 1013 binaries; partial at push).
+
+## Progress (2026-11-01, ~02:05 UTC)
+
+- THE ARRIVAL CUT-SCENE LEAD (the top next-session item): the arrival cut-scene (SP #246,
+  0x060004F9 [D pack 0780000b]) ENDS with event 6 (the re-place) at t 689/690 (stream 11 [D]).
+  The game's case-6 law [M 0x1d94c0:125-136] copies SCRIPTINFO+0x40 into the player's matrix
+  when the firing stream's kind byte (+0x24) is not 1/2 — an Event stream's isn't. The port's
+  event-6 snapshots only the previous stream's kind-1/2 object and otherwise leaves Bond put
+  (the arrival's stream 10 is a Light → Bond stays on the balcony). If the disc's SCRIPTINFO+0x40
+  at the cut-scene's end is the exec-floor landing, the balcony→exec transit IS the cut-scene —
+  the ride presentation (camera true, 283 camera keys over t 0..690 [D]) plus the re-place — and
+  the whole shaft-walk/ride/teleport section of walkreal_0700000b_live collapses into: wait the
+  cut-scene, then walk from wherever its event 6 lands Bond. Needs the 0x1d94c0 +0xab3 disassembly
+  and the si+0x40 writer (the arrival's last keys parse (0,0,0) at t 690 — inconclusive alone).
+- East-area stairwell hunt: the coarse stacked-ray grid over x 14..34 z 0..28 shows only the
+  exec floor (47) and the balcony (14) levels — no connecting stair geometry outside rooms.
