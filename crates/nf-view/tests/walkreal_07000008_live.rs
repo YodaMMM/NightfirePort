@@ -253,6 +253,18 @@ fn walk_the_whole_mission_on_real_input() {
         ("by the fusebox", [153.0, 43.4, -118.5]),
         ("the lower landing", [150.0, 43.5, -116.0]),
     ] {
+        if name == "at the door west side" {
+            // The way out is the door Bond came in by (#10/122 at (154.5, 42, −121.3)): walk INTO
+            // its gap and press E, as the way in did. The old 1.5 nav arrival counted (155.19,
+            // −119.93) — still on the room side of the wall line x 155.19, beside the kind-2 door
+            // at (154.3, −119.6) — as arrived; the straight leg west to the fusebox then pressed
+            // that wall and slid into the corner at (155.19, −121.78), wedged there for every
+            // later leg while two guards stood in GoToGoalPosition 0x63 just outside at (154.0,
+            // 43.0, −120.1) (measured on the seven-bone sight build; the arrival spot depends on
+            // the run's earlier fights).
+            w.walk_to(Wp { at, act: Act::Use { use_ticks: 240 }, arrive: 0.5 }, name);
+            continue;
+        }
         w.walk_nav_to(at, name, 1.5);
     }
 

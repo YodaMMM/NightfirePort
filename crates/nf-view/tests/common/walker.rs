@@ -128,6 +128,12 @@ pub struct Walker {
     stuck: u32,
     stuck_cycles: u32,
     sidestep: i32,
+    /// The left nudge (`sidestep < 0`) counts back up to 0, OPT-IN. The ladder's `sidestep -= 1`
+    /// only ends a right nudge: a left one (-60 / -40) grows forever, so Bond strafes left through
+    /// every later leg until the next right nudge — on the 01 courtyard it carried him off the
+    /// meet-plate lane into the east door's jamb. Default OFF: the walks tuned with the old
+    /// behaviour keep it.
+    pub sidestep_decays: bool,
     max_y: f32,
     pub lenient: bool,
     /// Inside the stuck ladder's hostile-body-block response (the arm's shoot/resupply run their
@@ -241,7 +247,7 @@ impl Walker {
             scene, top_up_health: true, dmg: DamageLog::new(), keep_alive: Vec::new(), stop_on_exit: true, skip_cutscenes: true,
             report: Report { legs: Vec::new(), stuck_events: Vec::new(), falls: Vec::new() },
             total_ticks: 0, pos, last_sample: pos, sample_tick: 0, stuck: 0, stuck_cycles: 0,
-            sidestep: 0, max_y: pos[1], lenient: false,
+            sidestep: 0, sidestep_decays: false, max_y: pos[1], lenient: false,
             trail: Vec::new(),
             alarm_last: Vec::new(),
             drone_watch, watch_last,
@@ -1208,7 +1214,7 @@ impl Walker {
                 // Pure lateral (no forward): the diagonal walk grinds into the same wall corner.
                 input.strafe = if self.sidestep > 0 { 1.0 } else { -1.0 };
                 input.forward = 0.0;
-                self.sidestep -= 1;
+                self.sidestep -= if self.sidestep_decays { self.sidestep.signum() } else { 1 };
             }
             self.tick(input, false);
 
