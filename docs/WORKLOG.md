@@ -55,3 +55,12 @@ quote the totals. Full suite with the fast runner on the final tree (merged with
   and the si+0x40 writer (the arrival's last keys parse (0,0,0) at t 690 — inconclusive alone).
 - East-area stairwell hunt: the coarse stacked-ray grid over x 14..34 z 0..28 shows only the
   exec floor (47) and the balcony (14) levels — no connecting stair geometry outside rooms.
+
+## Progress (2026-11-01, ~02:00 UTC)
+
+- The arrival event-6 lead REFUTED (kept in the report so it isn't re-chased): Mat_Copy's
+  signature is (const src, dst) — Script_EventHandler 0x1d94c0:125-136 copies the player's
+  matrix INTO SCRIPTINFO+0x40 (a snapshot consumed by Script_Free 0x1da880:46-49's
+  Player_Enable at that matrix) — the port's tested model is exact. The arrival cut-scene
+  leaves Bond on the balcony in the game too. The route up remains unpinned; the three live
+  checks in lifts.md §7 item 5 are the handoff.
