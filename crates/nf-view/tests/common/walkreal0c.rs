@@ -182,6 +182,13 @@ pub fn walk_spawn_to_the_band(iso: &str) -> Walker {
     //     6.27 + 1.04) is entered from the east floor only, and the drop rests on the bay
     //     floor 11.84 ([L 2026-10-26 hatch-2] fresh-boot rest (5.42, 12.8773, −111.38)) — the
     //     port's drop MATCHES the game (the landing assert above).
+    //   - THE GRAPPLE CHECK (this session, the task's placement checklist): the level's five
+    //     grapple points [D #308/#346/#500/#508/#511, the sim dump] are gp0 (61.13, 12.28,
+    //     −143.48), gp1 (77.45, 12.12, −143.95), gp2 (−4.60, 13.16, −189.71), gp3 (39.42,
+    //     23.06, −221.77), gp4 (54.27, 15.35, −237.02) — the nearest to the shaft (5.78,
+    //     11.84, −111.0) is gp2 at ~80 m, out of the Q-Claw 0x50's 50.0 range [L ee_start_05
+    //     weapon_data+0x1c; M Bullet_update 0x12e7b0:158], and no gp hangs at the vent-hole lip
+    //     (15.03..17.42 over the south wall) — no claw route out of the shaft;
     //   - What would settle the real post-drop flow is live check 1 (the report): whether the
     //     real game ever moves the body out of the shaft (a script, a checkpoint nudge, an
     //     exit the static data hides), and whether its capsule stops at −111.813 like the
@@ -393,6 +400,32 @@ pub fn walk_spawn_to_the_band(iso: &str) -> Walker {
     // in the port's statics (reach-1 comp 3). So the ONE stand-in left is the mezzanine REACH
     // (the filed live check: how the game climbs to it — the grapple points gp0/gp1 at y 12.3
     // [D #308/#346/#500/#508/#511] hang over the warehouse); everything after it is real input.
+    // Leg 4 (the DOCUMENTED stand-in — kept, and this session HARDENED the reason): the
+    // mezzanine reach has no walkable route off the display-ground complex ([L 2026-10-31]
+    // fresh-boot runs closed every entrance; the port pins the same stops —
+    // walkreal_probe0c_barrelrow_live, walkreal_probe0c_lip_live; the deck floods as a separate
+    // statics component), and THIS session closed the Q-Claw routes too, on the disc's own
+    // collision:
+    //   - the claw is in the boot loadout (0x50 [D loadout]; the Q-Claw records 0x50/0x51
+    //     [L bank "Grapple"; M Bullet_Delete 0x12e660:33]) and its range is the weapon's own
+    //     weapon_data+0x1c = 50.0 [L ee_start_05; M Bullet_update 0x12e7b0:158]; the fire-time
+    //     pick needs the aim ray through the point's sphere (r 0.64043313 [D #308] + the bolt
+    //     radius 1.0 [M Bullet_init 0x12c5a0:92]);
+    //   - gp0 (61.128613, 12.276524, −143.48145) [D #308 graple_pulley, Grapple_Create 0x198298
+    //     class 0x51] is ~48 m from the display ground's east edge — IN range — but the east
+    //     wall stands in the ray: the disc's collision at x 14.8..15.6 is SOLID from y 6.5 up
+    //     past 15.5 with no z gap in −136..−150 (the segment_hit scan in this session's probe
+    //     run; the y 3.0/5.0 bands are clear only UNDER the floor complex) — the game's bolt
+    //     dies on it [M Bullet_update] exactly like the blocked ray;
+    //   - the hall's upper east lane (13.5, 12.4, −115) is 55.5 m from gp0 — OUT of the 50.0
+    //     range; gp1 (77.45, 12.12, −143.95) farther still;
+    //   - the plates corridor's north end (the claw spot that would see gp0 over the barrel
+    //     row) is circular: the corridor is entered only through the annex vent FROM this
+    //     mezzanine (the filed live check below) or the secret door from the yard (the route's
+    //     later leg).
+    // So the stand-in stays; the game's own way into the warehouse interior — which would put
+    // Bond under gp0/gp1 with the claw — is the live check (level-0c-remaining-teleports-2's
+    // check 1, carried in this report).
     {
         let sim = w.scene.sim.as_mut().unwrap();
         sim.bond.pos = [54.0, 5.8, -158.0];
