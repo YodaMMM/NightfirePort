@@ -54,6 +54,9 @@ override FOG: f32 = 0.0;
 override FAR: f32 = 0.0;
 override NOTEX: f32 = 0.0;  // debug: 1.0 = ignore the texture sample (treat as solid white) to isolate vertex colour
 override NOFOG: f32 = 0.0;   // debug: 1.0 = skip the fog pass entirely
+// 1.0 = the GS additive Cs·As/128 + Cd with As past 0x80: the colour leaves premultiplied by the
+// UNCLAMPED alpha (up to 255/128) and the blend is One + One (blend code 5).
+override PREMUL: f32 = 0.0;
 // fog: rgb + enabled; fogk: N1, (F1 − N1)·n/(f − n), f, gain.
 // lp0/lp1: the frame's two closest lights' positions (psiLight_SetLights 0x10e588's TLight, w = 1);
 // lc0/lc1: their TColor rows (rgb·intensity in the game's byte scale, w = 1/r²), fix-lighting.
@@ -195,6 +198,7 @@ fn morph_pos(p0: vec3<f32>, mtb: i32, mwb: u32, cnt: u32, tend: u32) -> vec3<f32
             a = a * min(floor(zb / 128.0), 255.0) / 255.0;
         }
     }
+    if (PREMUL > 0.5) { return vec4<f32>(min(rgb * fogk.w, vec3<f32>(1.0)) * max(o.a, 0.0), 1.0); }
     return vec4<f32>(min(rgb * fogk.w, vec3<f32>(1.0)), a);
 }
 "#;
@@ -450,6 +454,10 @@ pub struct Renderer {
     /// (the additive groups use `snow_pipeline`), their vertex buffer, and this frame's groups
     /// (tex_frames index, additive, first vertex, count) — `set_particles`.
     particle_alpha_pipeline: wgpu::RenderPipeline,
+    /// The def+0x3c == 0 state (ALPHA_1 0x48, Cs·As/128 + Cd): As = texel·vertex alpha reaches
+    /// 255/128 for a 0x80 texel under a 255 key alpha, so the source is scaled by the unclamped
+    /// alpha (blend code 5) instead of the snow pipeline's clamped SrcAlpha.
+    particle_add_pipeline: wgpu::RenderPipeline,
     particle_vbuf: wgpu::Buffer,
     particle_groups: Vec<(usize, bool, u32, u32)>,
     snow_vbuf: wgpu::Buffer,
@@ -702,12 +710,14 @@ impl Renderer {
                 // (Cs−0)·Ad + Cd (07000041's env-map overlays): add the source only where the base batch
                 // wrote destination alpha; the alpha channel itself comes back unchanged (D = Cd).
                 4 => wgpu::BlendState { color: wgpu::BlendComponent { src_factor: wgpu::BlendFactor::DstAlpha, dst_factor: wgpu::BlendFactor::One, operation: wgpu::BlendOperation::Add }, alpha: alpha_keep },
+                // Cs·As/128 + Cd with the source already scaled by its unclamped As (PREMUL).
+                5 => wgpu::BlendState { color: wgpu::BlendComponent { src_factor: wgpu::BlendFactor::One, dst_factor: wgpu::BlendFactor::One, operation: wgpu::BlendOperation::Add }, alpha: alpha_keep },
                 _ => wgpu::BlendState { color: wgpu::BlendComponent { src_factor: wgpu::BlendFactor::SrcAlpha, dst_factor: wgpu::BlendFactor::OneMinusSrcAlpha, operation: wgpu::BlendOperation::Add }, alpha: alpha_keep },
             };
             // As >= 1 (TEST 0x5001B) -> a >= 1/128; As > 0x7F (0x507FD) -> a > 127/128.
             let (aref, greater) = match d.atest { 1 => (1.0 / 128.0, 0.0), 2 => (127.0 / 128.0, 1.0), _ => (0.0, 0.0) };
             let constants = [("AREF", aref), ("AGREATER", greater), ("FOG", d.fog as f64), ("FAR", if d.pass == 4 { 1.0 } else { 0.0 }), ("VMZ", if d.pass == 7 { 1.0 } else { 0.0 }),
-                ("NOTEX", if notex { 1.0 } else { 0.0 }), ("NOFOG", if nofog { 1.0 } else { 0.0 })];
+                ("NOTEX", if notex { 1.0 } else { 0.0 }), ("NOFOG", if nofog { 1.0 } else { 0.0 }), ("PREMUL", if d.blend == 5 { 1.0 } else { 0.0 })];
             device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
                 label: Some("nf-view"),
                 layout: Some(&layout),
@@ -930,9 +940,10 @@ impl Renderer {
         // GS state is in its microcode packet, unread — the pane's own list-1 state stood in].
         let shard_pipeline = make_pipeline(Draw { pass: 5, blend: 0, zwrite: false, atest: 1, fog: 0 });
         // particle-textures: `psiDrawParticleList` 0x122d50's def+0x3c ≠ 0 state — ALPHA_1 0x44,
-        // depth read on, write off [M 0x122d98-0x122dc4, 0x1214f8]; the additive state (0x48) is the
-        // snow pipeline's.
+        // depth read on, write off [M 0x122d98-0x122dc4, 0x1214f8]; the additive state (0x48) is
+        // `particle_add_pipeline` (blend code 5).
         let particle_alpha_pipeline = make_pipeline(Draw { pass: 5, blend: 0, zwrite: false, atest: 0, fog: 0 });
+        let particle_add_pipeline = make_pipeline(Draw { pass: 5, blend: 5, zwrite: false, atest: 0, fog: 0 });
         let particle_vbuf = device.create_buffer(&wgpu::BufferDescriptor { label: Some("particles"), size: (SNOW_MAX * std::mem::size_of::<crate::scene::Vertex>()) as u64, usage: wgpu::BufferUsages::VERTEX | wgpu::BufferUsages::COPY_DST, mapped_at_creation: false });
         let shard_vbuf = device.create_buffer(&wgpu::BufferDescriptor { label: Some("shards"), size: (SNOW_MAX * std::mem::size_of::<crate::scene::Vertex>()) as u64, usage: wgpu::BufferUsages::VERTEX | wgpu::BufferUsages::COPY_DST, mapped_at_creation: false });
         let snow_vbuf = device.create_buffer(&wgpu::BufferDescriptor { label: None, size: (SNOW_MAX * std::mem::size_of::<crate::scene::Vertex>()) as u64, usage: wgpu::BufferUsages::VERTEX | wgpu::BufferUsages::COPY_DST, mapped_at_creation: false });
@@ -978,7 +989,7 @@ impl Renderer {
             for ch in &cel_graph.chains { for &c in ch { if (c as usize) < n { reached[c as usize] = true; } } }
             reached.iter().map(|r| !r).collect()
         };
-        Renderer { shard_pipeline, shard_vbuf, shard_groups: Vec::new(), particle_alpha_pipeline, particle_vbuf, particle_groups: Vec::new(), woman_tex, snow_pipeline, snow_vbuf, snow_bg, hud_pipeline, hud_add_pipeline, hud_sub_pipeline, hud_vbuf, hud_bgs, pipelines, fog, notex, nofog, uniform, uniform_bg, staged: Vec::new(), orphan_nodes, destroy_dead: Vec::new(), destroy_wreck_draw: Vec::new(), destroy_wreck_all: scene.destroy_wrecks.iter().map(|(c, _)| c.map(f32::to_bits)).collect(), destroy_tint: Vec::new(), batch, vbuf, skin_buf, snow_skin, pal_buf, col_buf, wts_buf, mtg_buf, skin_layout, skin_pos: Default::default(), skin_collapsed: Default::default(), pal_shadow: Default::default(), sub_runs, sub_meta, live_prefix: Vec::new(), split_runs: true, last_indices: 0, char_light_centre: Vec::new(), lights: Default::default(), light_memo: Vec::new(), light_memo_gen: 1, light_memo_lights: Default::default(), los_memo: Vec::new(), los_memo_world: (0, 0), wreck_of: Vec::new(), wreck_of_src: Vec::new(), dead_sorted: Vec::new(), screen_aspect: 0.0, screen_offset: [0.0; 2], ibuf, tex_bgs, tex_frames, draws, order: Vec::with_capacity(order_cap), cel_boxes, cel_graph, viewer_cel: Default::default(), last_vis: None, last_cell_vis: None, movie_tex: None, movie_bg: None, movie_size: None, movie_vbuf, hud_tbgl: tbgl, hud_sampler: sampler, sky_flash_mask: 0, pass_timestamps: None, probe_skip: Vec::new() }
+        Renderer { shard_pipeline, shard_vbuf, shard_groups: Vec::new(), particle_alpha_pipeline, particle_add_pipeline, particle_vbuf, particle_groups: Vec::new(), woman_tex, snow_pipeline, snow_vbuf, snow_bg, hud_pipeline, hud_add_pipeline, hud_sub_pipeline, hud_vbuf, hud_bgs, pipelines, fog, notex, nofog, uniform, uniform_bg, staged: Vec::new(), orphan_nodes, destroy_dead: Vec::new(), destroy_wreck_draw: Vec::new(), destroy_wreck_all: scene.destroy_wrecks.iter().map(|(c, _)| c.map(f32::to_bits)).collect(), destroy_tint: Vec::new(), batch, vbuf, skin_buf, snow_skin, pal_buf, col_buf, wts_buf, mtg_buf, skin_layout, skin_pos: Default::default(), skin_collapsed: Default::default(), pal_shadow: Default::default(), sub_runs, sub_meta, live_prefix: Vec::new(), split_runs: true, last_indices: 0, char_light_centre: Vec::new(), lights: Default::default(), light_memo: Vec::new(), light_memo_gen: 1, light_memo_lights: Default::default(), los_memo: Vec::new(), los_memo_world: (0, 0), wreck_of: Vec::new(), wreck_of_src: Vec::new(), dead_sorted: Vec::new(), screen_aspect: 0.0, screen_offset: [0.0; 2], ibuf, tex_bgs, tex_frames, draws, order: Vec::with_capacity(order_cap), cel_boxes, cel_graph, viewer_cel: Default::default(), last_vis: None, last_cell_vis: None, movie_tex: None, movie_bg: None, movie_size: None, movie_vbuf, hud_tbgl: tbgl, hud_sampler: sampler, sky_flash_mask: 0, pass_timestamps: None, probe_skip: Vec::new() }
     }
 
     /// The game's depth-0 pyramid for the walk [M `Vision_Calculate_View_Fustrum` 0x1e7df8,
@@ -1660,7 +1671,7 @@ impl Renderer {
                 pass.set_vertex_buffer(1, self.snow_skin.slice(..));
                 let base = (self.order.len() + 1 + self.shard_groups.len()) as u32;
                 for (g, &(tf, additive, first, count)) in self.particle_groups.iter().enumerate() {
-                    pass.set_pipeline(if additive { &self.snow_pipeline } else { &self.particle_alpha_pipeline });
+                    pass.set_pipeline(if additive { &self.particle_add_pipeline } else { &self.particle_alpha_pipeline });
                     if self.batch.is_none() { let (fb, nf, rate) = self.tex_frames[tf]; pass.set_bind_group(1, &self.tex_bgs[fb + ((ticks / rate) % nf) as usize], &[]); }
                     pass.draw(first..first + count, base + g as u32..base + g as u32 + 1);
                 }

@@ -55,10 +55,31 @@ count def+0x38, texture def+0x04, colours data+8, flag `def+0x3c == 0` [M disasm
   (ADDITIVE); clear → `psiSetUpColourBlend(1)` = 0x44, (Cs−Cd)·As + Cd (normal) [M 0x122da8-0x122dc4,
   0x1214f8]. Depth read on, write off [M 0x122d98-0x122da4].
 - Size: the VU1 scale word `4·size/(PS2ParticleSize·PS2SnowSizeMult)` [M 0x119910:81]; the port
-  reads def+0x30 as the sprite's FULL world width (half-extent size/2), the reading the flake size
-  measured on the 05 / 06 PS2 captures gives (`nf_game::env::flake_half_extent`).
+  reads def+0x30 as the sprite's FULL world width (half-extent size/2). Measured [L PCSX2,
+  audits/render-1101-particles-ps2]: a lone 05 wall spark (texture 0x030000bb, only its centre 2×2
+  texels lit [D]) shows a lit core ≤ 1/8 of a `size`-wide quad at its dumped depth; the flake size
+  on the 05 / 06 captures reads the same (`nf_game::env::flake_half_extent`).
+- Count: the list masks the count to a multiple of 4 (`param_3 & ~3` [M 0x122d50]) — a 30-slot def
+  draws its first 28 slots. Every slot is handed over; a dead slot hides by its cleared alpha byte
+  (`Emitter_Update`'s dead arm [M 0x17b080]), and a slot draws on the tick its age runs out (the
+  colour is written from the age before the step).
+- Additive alpha: As = texel·vertex alpha >> 7 reaches 255/128 for a 0x80 texel under a 255 key
+  alpha (the live colour bytes carry raw alpha 255 at spawn [L dump]); the port's additive sprite
+  pipeline (gpu.rs `particle_add_pipeline`, blend code 5) scales the source by that unclamped alpha.
 
 Path B (model ≠ 0): one tinted spinning mesh per particle.
+
+Spawn velocity: the cone direction (sin p·cos t, cos p, sin p·sin t)·speed goes through the object
+rows as vel = Norm·x + Up·y + Dir·z (`vmulax`/`vmadday`/`vmaddz` [M 0x17b080]), so local +y leaves
+along the hit normal. Live 05 wall hit, normal +z: all 30 slots of def 0x0c00000f fly out of the
+wall at z 2.0..3.5 [L dump]. The port's old row·dir form sent every non-floor burst into its wall;
+the motion steps the position with the old velocity, then gravity [M 0x17b080].
+
+Live reference, 0700004a charge under the watch (sat4/log.txt) [L]: one def 0x0c00000a emitter per
+contact tick (spawn points trail up the shaft as the lift descends), 16–17 alive, 40–43 lit slots,
+each 0.15–0.18 s — a large pink plume with a white core in the game too. The charge itself draws
+over the sparks behind it in the game (the object list draws the newer emitters first); the port
+draws all sprites in its effects pass after the world [S, not changed].
 
 The port (particle-textures): `WorldFx::particle_sprites()` (pos, size, rgba, additive, texture);
 `Scene::particle_draws` groups the camera-facing quads by (texture, blend) and the renderer draws
@@ -73,9 +94,8 @@ squares around the star — unverified against a capture [S].
 
 **Deviations [S]**: the 4 spawn draws per particle come from the per-object counter hash, not the
 shared stream (the gas.rs/searchlight discipline — the bit-exact stream must not gain draws); the
-screen-space size formula is taken as a world-space width; the GS alpha coefficient As/0x80 can
-reach ~2 (slot alpha 255 × texel alpha 0x80) where the port's blend clamps it to 1 — additive
-sprites with key alpha 255 draw up to half as bright as the GS would. Path B is not rendered (no
-def on this disc resolved a model hash — unverified [S]).
+screen-space size formula is taken as a world-space width; the normal-alpha pipeline (def+0x3c ≠ 0)
+still clamps As to 1. Path B is not rendered (no def on this disc resolved a model hash —
+unverified [S]).
 
 Levels with 0xf2 on this disc: 07000002, 07000014, 07000015 (docs/systems/levels.md §7.1).

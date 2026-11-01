@@ -7188,7 +7188,21 @@ pub fn run() -> Result<()> {
                 let mut laser_fire = false;
                 if let Some((a, b, _)) = range("NF_LASER_AT") {
                     if t == a { eprintln!("[satchel-laser] spark def {:?}", sim.drones.fx.defs().get(&nf_game::drone::Drones::SATCHEL_BURN_SPARKS)); }
-                    if (a..=b).contains(&t) {
+                    // `NF_LASER_FLOAT=dist,dy,yaw` (with NF_LASER_AT): Bond faces `yaw` level and the
+                    // landed charge is held `dist` ahead of his eye, `dy` off it, over the burn ticks —
+                    // the framing of the PS2 reference (whose view cannot pitch down on the ride).
+                    if let Some(f) = std::env::var("NF_LASER_FLOAT").ok().map(|v| v.split(',').filter_map(|s| s.parse::<f32>().ok()).collect::<Vec<_>>()) {
+                        if f.len() == 3 && (a..=b).contains(&t) {
+                            sim.bond.yaw = f[2];
+                            sim.bond.pitch = 0.0;
+                            let h = sim.bond.head();
+                            if let Some(i) = sim.drones.bullets.iter().position(|x| x.landed && x.family(&sim.weapons) == 0x3b) {
+                                sim.drones.bullets[i].pos = [h[0] + f[2].sin() * f[0], h[1] + f[1], h[2] + f[2].cos() * f[0]];
+                                laser_fire = true;
+                            }
+                        }
+                    }
+                    if (a..=b).contains(&t) && std::env::var_os("NF_LASER_FLOAT").is_none() {
                         let charge = sim.drones.bullets.iter().find(|x| x.landed && x.family(&sim.weapons) == 0x3b).map(|x| x.pos);
                         if let Some(c) = charge {
                             let h = sim.bond.head();

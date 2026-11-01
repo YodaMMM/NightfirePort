@@ -103,3 +103,89 @@ fn spark_burst_draws_textured_additive_quads() {
     assert_eq!(level.maps[t.key.0].textures[t.key.1 as usize].hashcode, SPARK_TEX);
     assert!(groups.iter().all(|(t, _, _)| t.is_some()), "no spark group falls back to white");
 }
+
+/// The 05 stone-wall P2K hit, the PS2 reference spot [L PCSX2, audits/render-1101-particles-ps2
+/// imp05: Bond at (46.95, 29.6, 56.83) facing −z, hit (46.949, 30.300, 55.003)]: the impact burst
+/// is def 0x0c00000f (material 10 [D EffectInfo+0x84]), spawns 5 a tick up to its 30 slots, and
+/// every spark leaves OUT of the wall (live: every velocity z 2.0..3.5) — so all of them draw in
+/// front of the face, 28 at a time (`psiDrawParticleList` masks the count to & !3 [M 0x122d50]).
+/// Sister: the def's cone points along local +y, which only the row-weighted basis maps onto the
+/// wall normal (the transposed form sent the whole burst behind the wall).
+#[test]
+fn the_05_wall_burst_flies_out_of_the_wall_like_the_ps2() {
+    let Some(iso) = iso() else { eprintln!("NF_ISO not set — skipping"); return };
+    let mut scene = nf_view::load(&iso, "07000005.bin", false).unwrap();
+    let sim = scene.sim.as_mut().unwrap();
+    nf_view::settle_start_draw(sim);
+    sim.bond = nf_game::player::Bond::new([46.95, 29.6, 56.83], 3.142);
+    for _ in 0..30 { sim.step_bond(Default::default(), false, false, false); }
+    sim.step_bond(nf_game::player::Input { fire: true, ..Default::default() }, true, false, false);
+    let mut seen = Vec::new();
+    for _ in 0..8 {
+        sim.step_bond(Default::default(), false, false, false);
+        let e: Vec<_> = sim.drones.fx.emitters.iter().filter(|e| e.placement == usize::MAX).collect();
+        seen.push(e.first().map(|e| e.parts.iter().filter(|p| p.age < p.life).count()).unwrap_or(0));
+    }
+    let e = sim.drones.fx.emitters.iter().find(|e| e.placement == usize::MAX).expect("the impact burst");
+    assert_eq!(e.def, 0x0c00_000f, "material 10's spark def");
+    eprintln!("live slots per tick {seen:?}, hit {:?}", e.pos);
+    assert_eq!(&seen[..6], &[5, 10, 15, 20, 25, 30], "5 a tick up to the 30 slots [L dump +3..+12]");
+    let wall_z = e.pos[2];
+    let n = e.basis.unwrap()[1];
+    assert!(n[2] > 0.99, "the hit normal faces Bond (+z): {n:?}");
+    for p in e.parts.iter().filter(|p| p.age < p.life) {
+        assert!(p.vel[2] > 1.0, "out of the wall: vel {:?}", p.vel);
+        assert!(p.pos[2] >= wall_z, "in front of the face: {:?} vs z {wall_z}", p.pos);
+    }
+    let sprites: Vec<_> = sim.drones.fx.particle_sprites().into_iter().filter(|s| s.texture == 0x0300_00bb).collect();
+    assert_eq!(sprites.len(), 28, "30 lit slots draw as 28 (count & !3)");
+    assert!(sprites.iter().all(|s| s.additive && s.pos[2] >= wall_z), "additive, all in front of the wall");
+}
+
+/// The 0700004a charge under the watch, framed as the PS2 reference (the charge held 1.2 ahead of
+/// Bond's eye, the view level) [L PCSX2, audits/render-1101-particles-ps2 sat4/log.txt: 16–17 burn
+/// emitters of def 0x0c00000a and 41–43 live slots once the beam has held ~20 ticks, the sparks
+/// leaving toward Bond, each slot 0.15–0.18 s]. One emitter per contact tick, 1 slot a tick up to
+/// its 4 [M Bullet_DoTrails 0x12d890:467-468, Emitter_Update 0x17b080]. Sister: with the trigger
+/// up, no burn emitter exists.
+#[test]
+fn the_charge_burn_keeps_the_ps2_spark_count() {
+    let Some(iso) = iso() else { eprintln!("NF_ISO not set — skipping"); return };
+    let mut scene = nf_view::load(&iso, "0700004a.bin", false).unwrap();
+    let sim = scene.sim.as_mut().unwrap();
+    sim.bond = nf_game::player::Bond::new([3.2, -7.0, -3.8], 0.0);
+    let charge = |s: &nf_view::scene::Sim| s.drones.bullets.iter().position(|x| x.landed && x.family(&s.weapons) == 0x3b);
+    for _ in 0..4000 { sim.step_bond(Default::default(), false, false, false); if charge(sim).is_some() { break; } }
+    sim.step_bond(nf_game::player::Input { switch_to: Some(0x4e), ..Default::default() }, false, false, false);
+    for _ in 0..60 { sim.step_bond(Default::default(), false, false, false); }
+    let yaw = 0.405f32;
+    let mut counts = Vec::new();
+    for t in 0..60 {
+        sim.bond.yaw = yaw;
+        sim.bond.pitch = 0.0;
+        let h = sim.bond.head();
+        let i = charge(sim).expect("the landed charge");
+        sim.drones.bullets[i].pos = [h[0] + yaw.sin() * 1.2, h[1] - 0.05, h[2] + yaw.cos() * 1.2];
+        let fire = t < 50;
+        sim.step_bond(Default::default(), fire, false, false);
+        let em: Vec<_> = sim.drones.fx.emitters.iter().filter(|e| e.def == SPARK_DEF).collect();
+        // The dump's "live" = age < life (a slot past its life still draws that tick).
+        let lit = em.iter().map(|e| e.parts.iter().filter(|p| p.age < p.life).count()).sum::<usize>();
+        if t == 0 { assert!(em.len() <= 1, "the first contact tick"); }
+        if (35..50).contains(&t) {
+            counts.push((em.len(), lit));
+            for e in &em {
+                let n = e.basis.unwrap()[1];
+                for p in e.parts.iter().filter(|p| p.age < p.life) {
+                    assert!(p.vel[0] * n[0] + p.vel[1] * n[1] + p.vel[2] * n[2] > 0.0, "sparks leave the face");
+                    assert!(p.life > 0.149 && p.life < 0.184, "life 1/6 ± 1/60 s [D]");
+                }
+            }
+        }
+    }
+    eprintln!("(emitters, lit) per tick {counts:?}");
+    assert!(counts.iter().all(|&(e, l)| (15..=18).contains(&e) && (37..=47).contains(&l)), "the PS2's 16–17 emitters / 41–43 live slots: {counts:?}");
+    // Sister: 10 ticks after the trigger lets go the last bursts are spent.
+    for _ in 0..12 { sim.step_bond(Default::default(), false, false, false); }
+    assert_eq!(sim.drones.fx.emitters.iter().filter(|e| e.def == SPARK_DEF).count(), 0, "no beam, no burn sparks");
+}

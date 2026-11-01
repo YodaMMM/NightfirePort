@@ -242,12 +242,16 @@ pub fn particle_quad(pos: [f32; 3], size: f32, rgba: [u8; 4], right: [f32; 3], u
     [a, b, cc, a, cc, d]
 }
 
-/// The world half-extent of an emitter sprite of def size `size` (def+0x30): HALF the size. The
-/// VU1 scale words of the flake (`1/(PS2SnowSize·PS2SnowSizeMult)` [M 0x11a160:81]) and of the
-/// emitter sprite (`4·size/(PS2ParticleSize·PS2SnowSizeMult)` [M 0x119910:81]) go through the same
-/// sprite microcode, and the flake size measured on the 05 / 06 PS2 captures puts the
-/// emitter-equivalent size at a FULL width (`nf_game::env::flake_half_extent`) — the old
-/// half-extent `size` read drew every emitter sprite twice as wide (four times the area).
+/// The world half-extent of an emitter sprite of def size `size` (def+0x30): HALF the size (the
+/// sprite is `size` across). The VU1 scale word is `4·size/(PS2ParticleSize·PS2SnowSizeMult)` [M
+/// 0x119910:81]. Measured [L PCSX2, audits/render-1101-particles-ps2]: on the 05 stone-wall hit
+/// (def 0x0c00000f, texture 0x030000bb — 16×16 with only its centre 2×2 texels lit [D]) the lit
+/// core of a lone spark is ≤ 1/8 of a quad `size` across at the dumped spark depth (the CRT filter
+/// only widens it), so a half-extent of `size` would draw it at least twice the game's width; the
+/// flake size measured on the 05 / 06 captures gives the same reading
+/// (`nf_game::env::flake_half_extent`). The 0700004a charge burn (def 0x0c00000a, a soft 64×64
+/// glow, ~43 overlapping sprites) is consistent with it once the additive alpha runs past 1
+/// (`particle_add_pipeline`).
 pub fn particle_half_extent(size: f32) -> f32 { size * 0.5 }
 
 /// The emitter defs' sprite textures (def+0x04 hash → index into `textures`): each hash resolves
