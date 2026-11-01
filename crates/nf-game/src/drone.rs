@@ -14663,15 +14663,22 @@ fn segment_hits_sphere(a: V3, b: V3, c: V3, r: f32) -> bool {
         // No RNG draws (determinism).
         let mut bullets = std::mem::take(&mut self.player_bullets);
         let now = self.frame;
-        for b in bullets.iter_mut().filter(|b| !b.dead && b.born != now) {
+        for b in bullets.iter_mut().filter(|b| !b.dead) {
             let Some(w) = d.weapons.records.get(b.weapon as usize) else { continue };
             // rocket-ramp: `Bullet_DoTrails` 0x12d890:134-138 — a `+0x6C & 0x200` (quarter-speed) round
             // gains 2% of the record's +0x20 speed per tick while below it (BU+0xF8 += +0x20 · 0.02); the
             // Sentinel 0x2d ends at 0.33666 u/tick, the PCSX2-measured cruise [L 2026-10-14].
+            // drake-round-lifetime: the ramp runs on the SPAWN tick too — `Bullet_update` 0x12e7b0's
+            // state-0 path falls into the same move-branch tail as state 1 (disasm 0x12efd8-0x12f000)
+            // whose tail calls `Bullet_DoTrails` (0x12d890) after the move, so the quarter-speed round
+            // leaves the muzzle already ramping (0x12d924-0x12d964: `BU+0xF8 = BU+0xF8 + 0x20·0.02`,
+            // checked `BU+0xF8 < 0x20` first — no clamp on the overshoot). The old `born != now`
+            // filter skipped exactly that tick.
             if u32::from_le_bytes(w[0x6c..0x70].try_into().unwrap()) & 0x200 != 0 {
                 let full = f32::from_le_bytes(w[0x20..0x24].try_into().unwrap());
                 if b.speed < full { b.speed += full * 0.02; }
             }
+            if b.born == now { continue; } // the spawn tick chains no swoosh segment
             let Some(si) = b.swoosh else { continue };
             let period = i16::from_le_bytes([w[0x74], w[0x75]]).max(1) as u32;
             let pos = b.pos;
