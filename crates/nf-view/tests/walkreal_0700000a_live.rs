@@ -1046,7 +1046,7 @@ fn the_pick_ref_accumulator_tracks_the_game_ref() {
     // probe placement write to (−8.0, 1.12, 16.29) is deleted). The route is the game's own:
     // the through-line THROUGH the doorway into the west hall (the glide leg, green on master —
     // the jamb slide around the base pieces at z ≈ 16.278 [D port world tris] is part of the
-    // through-line), then back east along the hall to the spot. The straight lobby approach
+    // through-line), then onto the line west of the jamb (below). The straight lobby approach
     // (lobby south → the spot) was tried this round and WEDGES where the game does not: its
     // diagonal runs z 16.16 at the column's x, south of the base course, and the raw forward
     // hold pins on the column's south-east corner (root −7.75, z slid 16.21 → 16.02, the
@@ -1063,7 +1063,16 @@ fn the_pick_ref_accumulator_tracks_the_game_ref() {
     w.walk_to(Wp::new(-3.9, 0.0, 13.2), "out of the lift");
     w.walk_to(Wp::new(-3.9, 0.0, 15.5).r(1.2), "lobby south");
     w.walk_to(Wp::new(-10.0, 0.4, 16.29).r(0.8), "the through-line into the west hall");
-    w.walk_to(Wp::new(-8.0, 1.12, 16.29).r(0.3), "the game's hall line");
+    // Onto the hall line WEST of the jamb (x −9.4, inside the [L] window's own walked span
+    // x −8.93 → −17.1): the through-line stops ~(−9.28, 16.59), west of the jamb whose x −8.604
+    // side face spans z 15.0..16.279 [D port world tris, the NFX trace this round]. The old
+    // spot (−8.0, 16.29) lies EAST of that jamb: the diagonal back to it cut the jamb's
+    // north-west corner at z ≈ 16.25, behind the jamb's +z front faces (skipped by the Dist2Tri
+    // flags-99 rule [M 0x109770 + 0x10a33c]), and the side face's end edge (0.546 from the
+    // capsule at x −9.15) held the capsule there — on the master tree the behind-plane front
+    // faces' through-push carried it past. The free walk below is the same west walk on the
+    // same line from inside the measured span.
+    w.walk_to(Wp::new(-9.4, 1.12, 16.29).r(0.08), "the game's hall line");
     // Face west (the [L] window's own yaw −1.5708) with real turn input.
     let mut turn_ticks = 0u32;
     loop {
