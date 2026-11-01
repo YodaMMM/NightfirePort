@@ -216,3 +216,41 @@ row (Lock_Update 0x1ae3d8) belongs to locks. No class-0x2C update exists.
 - `Control_CreateObjEx`'s stack-tail args in `Player_InitGrapple` (0x30, 0xFF×3) — ABI partially
   hidden behind undecodable MXU moves; mapping to params 10–13 inferred from its signature.
 - Whether other levels' wires use type 2 / nonzero channels (only 07000005 checked).
+
+## The 07000005 cable extent: the ride is the rope object's span, not the drawn line (level-05-cable-full-length, 2026-11-01)
+
+The castle cable question "Bond stops part-way" resolves at the data level: the game's own ride
+extent is the wire OBJECT's world-sphere span, and the drawn cable is more than twice as long.
+
+- **The rideable extent** [M `Player_Wire` 0x197658: the segment build @0x1976dc-0x197730]:
+  centre ± `Spherical(obj+0x8C − 0.5, obj+0x54 + 1.5707964, 0)`. On Wire_Cable #251 that is
+  z **2.724..9.802** at (x −23.485, hang y = centre.y − 1.0207), span 7.078.
+- **The radius is the rope model's** [L ee_start_05.bin obj base 016dc400: obj+0x8C @016dc48c =
+  4.0390439; obj+0x80..0x88 centre (−23.4849, 34.4674, 6.2629); class +0xFF = 0x2C] and equals the
+  disc model's bounds [D the "Wire_Cable" map object: min (−4.0390, −0.0159, −0.0183), max
+  (+4.0390, +0.0155, +0.0170) — a thin line along the LOCAL X, half-length 4.039; the yaw-only
+  matrix maps it to world Z, and a line's AABB half-diagonal IS its half-length]. So the live
+  sphere bounds exactly the drawn rope mesh of the wire object.
+- **The drawn cable is longer**: OBJECT_CableEnds [D placement #252, kind 0x19 CEL; map object
+  min/max] spans z **−1.070..14.068** (15.14 u) at the rope's own height (y 34.45..34.48, x
+  −23.50..−23.47) — the full castle-to-anchor line, 2.1× the rideable span. **The game itself
+  stops Bond part-way along the visible cable** — 1.29 u inside the drawn line's south end
+  (2.724 vs −1.070) and 4.27 inside its north end (9.802 vs 14.068). "Traverse more of it" would
+  contradict the decompile's own segment build.
+- **The stop rule** [M 0x1977c0-0x197834]: the strafe axis (action 1) is ZEROED when the squared
+  2D distance to the travelled-to end is ≤ 0.5 (≈0.707 u), or when the pre-snap squared distance
+  to the opposite end exceeded the segment's own squared length (Bond came in from beyond that
+  end); the per-tick snap [M 0x1976f0-0x197708] teleports an beyond-end rider back to that end.
+  The effective reachable span per end is therefore **(end − 0.707 … end]**: the in-flight hand
+  cycle (0.7637/0.7106 per cycle [D root tracks]) completes after the kill fires, and the next
+  add's closest-point clamp can drop him back onto the end.
+- **Port measurement** (crates/nf-view/tests/cable_span_live.rs, the real input path — the
+  icon-context jump grab [M 0x1916b0:118-147]): stall at A z 9.558 (0.244 short of 9.802), stall
+  at B z 2.740 (0.016 short of 2.724), never beyond either end, the both-ways round trip without
+  dropping, and the parsed radius/centre/yaw against the snapshot values above.
+- **The sway lanes, an [S] observation**: the decompile's per-add sway uses BOTH outputs of
+  `PS2Sinf2(−yaw + 1.5707964, …)` [M 0x1978e0's idle/move adds] — read as (sin, cos) of the same
+  angle. The port's second lane is `sin(−yaw)` instead of `cos(−yaw + π/2)` (player.rs
+  `wire_anim_add`); the two agree whenever Bond's on-wire yaw is 0 or π (this level's case, both
+  lanes' z term 0) and disagree by SIGN on the z term for off-axis wires (07000002's yaw
+  −1.1167). Magnitude 0.0542 u per add, no test evidence pinning either sign — left as is.
