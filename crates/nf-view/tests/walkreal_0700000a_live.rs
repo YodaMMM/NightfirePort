@@ -311,10 +311,18 @@ fn walk_to_security_keyboard() -> Walker {
     // B = pos+0.45−cc, r 0.55; the crouch park pos−floor 0.607 [L level_reload_live.rs:215]],
     // under the beam band, while the standing 1.86 crosses. Crouch the crossing, stand after.
     set_crouch(&mut w, true);
-    w.walk_to(Wp::new(-10.0, 0.4, 16.0).r(1.2), "the west hall (crouched under beam #607)");
+    w.walk_to(Wp::new(-10.0, 0.4, 16.0).r(0.6), "the west hall (crouched under beam #607)");
+    w.walk_to(Wp::new(-12.0, 0.4, 14.5).r(1.2), "south-west, clear of beam #607's reach (crouched)");
     set_crouch(&mut w, false);
     // The whole loop by the AI graph's own nodes (the shaft wall x 5.9-7 spans z −2..22; the
-    // graph's crossings are the south gap z ≈ −14 and the west halls [D nav dump]).
+    // graph's crossings are the south gap z ≈ −14 and the west halls [D nav dump]). The via is
+    // EAST of beam #614's east end (the low line z 13.03, x −24.7..−19.45, y 0.26-0.52 [probe
+    // tris] — no stance clears a low beam, the capsule bottom reaches feet−0.04 [M 0x194df0
+    // case 3]): the A*'s own west lane runs (−21.10,17.15) → (−22.12,13.38) → (−22.19,8.62),
+    // through the line at x ≈ −22.1, which arms gun #640 (0x22 → OR #667 → ch 0x0F [D the OR
+    // wiring]) — the walk-back's #621 via pattern, applied to the outbound lane.
+    assert!(w.follow_nav_route([-15.8, 0.4, 10.0], "the south-west corridor (via east of beam #614)"),
+        "no nav route to the #614 via");
     assert!(w.follow_nav_route([pc[0] + 2.0, 0.4, pc[2] + 3.0], "to the Q-Worm PC"), "no nav route to the PC");
     // The cubicle's south side, walked (this round's route — probe_l0a3_install, all legs
     // arrived): the office block's south wall runs z −25.2..−27.1 (north faces n (0.26,0,0.97),
@@ -326,19 +334,22 @@ fn walk_to_security_keyboard() -> Walker {
     // The band's floor (y 1.10) holds the bullet-clear stands: from (−15.89, 1.10, −34.24) the
     // Q-Worm BULLET reaches the PC clear [M PCQWorm_Update 0x1aee20's class-5 seg test; D probe:
     // segment_bullet CLEAR from every stand x −16..−17.8, z −33.5..−34.4].
-    let _ = w.try_walk_to(Wp::new(-13.9, 0.4, -30.5).r(0.9), "pocket south-east");
+    // The band legs are FATAL (walk_to panics at the 6000-tick cap [walker]): the passage is
+    // probe-proven (probe_l0a3_install, all legs arrived), and a silently-stranded leg would
+    // leave Bond short of the stand so the install shot never lands.
+    w.walk_to(Wp::new(-13.9, 0.4, -30.5).r(0.9), "pocket south-east");
     // Beam #621 (out ch 0x24, OR #668 → ch 0x10 → gun #639) is a diagonal low line
     // (−14.93,−32.34)→(−9.90,−33.87) at y 0.26 [probe tris] — no stance clears a low beam (the
     // capsule bottom reaches feet−0.04 [M 0x194df0 case 3]); the player's pass is EAST of its
     // east end (the game's own passage: northward rays from z −34.4 clear at x −9 [D probe
     // rays]; the end (−9.90,−33.87) sits 1.0 from the (−9.0,−34.2) leg), then the band south of
     // it, dipping z −34.8 past the end.
-    let _ = w.try_walk_to(Wp::new(-12.8, 0.4, -30.9).r(0.9), "east of the column");
-    let _ = w.try_walk_to(Wp::new(-9.2, 0.4, -32.6).r(0.9), "the x −9 passage north of beam #621");
-    let _ = w.try_walk_to(Wp::new(-9.0, 0.4, -34.2).r(0.9), "past beam #621's east end");
-    let _ = w.try_walk_to(Wp::new(-10.5, 0.4, -34.8).r(0.9), "the band dip south of #621");
-    let _ = w.try_walk_to(Wp::new(-16.5, 0.4, -34.8).r(0.9), "the band west, south of #621");
-    let _ = w.try_walk_to(Wp::new(-16.5, 0.4, -34.3).r(0.7), "the south stand");
+    w.walk_to(Wp::new(-12.8, 0.4, -30.9).r(0.9), "east of the column");
+    w.walk_to(Wp::new(-9.2, 0.4, -32.6).r(0.9), "the x −9 passage north of beam #621");
+    w.walk_to(Wp::new(-9.0, 0.4, -34.2).r(0.9), "past beam #621's east end");
+    w.walk_to(Wp::new(-10.5, 0.4, -34.8).r(0.9), "the band dip south of #621");
+    w.walk_to(Wp::new(-16.5, 0.4, -34.8).r(0.9), "the band west, south of #621");
+    w.walk_to(Wp::new(-16.5, 0.4, -34.3).r(0.7), "the south stand");
     // The REAL install: equip the Q-Worm through the real gadget cycle (mode-1 bounds 0x4A..0x5E,
     // owned entries only [M player.rs Input::gadget_cycle / Gun_Update's cycle]) — the prior
     // round proved the old legs' 112 blocked shots were the spawn loadout, never the gadget —
@@ -1269,6 +1280,64 @@ fn the_pick_ref_accumulator_tracks_the_game_ref() {
 #[test]
 fn walk_office_floor_qworm_keyboard_hatch_real_damage() {
     walker::with_real_damage(walk_office_floor_qworm_keyboard_hatch);
+}
+
+/// The laser band rule, pinned phase by phase on fresh loads (each phase asserts right after its
+/// crossing, before any guard reaction can land):
+/// - **Crouched passes #607** — the crouched pick arm tops out ≈ feet+1.26 [M Player_Collision
+///   0x194df0 case 3: A = pos+0.1−(cc−0.55), B = pos+0.45−cc, r 0.55; the crouch park
+///   pos−floor 0.607 [L level_reload_live.rs:215]] vs beam #607's band y 1.49-1.76 (x ≈ −8.45,
+///   z 15-20.25 [D triggers dump]): walking the west hall CROUCHED leaves ch 0x1F off (sister:
+///   off before), so OR #667 never raises ch 0x0F and ceiling gun #640 stays dormant
+///   [D the OR wiring; M Trigger_MultiplexOrIn 0x1b2d38].
+/// - **Standing raises 0x1F** — the standing body 1.86 [M 0x194df0 default arm] crosses the band:
+///   the same west-hall leg STANDING fires ch 0x1F.
+/// - **The low beams are dodge-only, both stances** — beam #614 (out 0x22, z 13.03, x
+///   −24.7..−19.45, y 0.26-0.52 [D probe tris]) sits under every stance's touch reach margin
+///   (the crouched segment bottoms 0.49 [M case 3's B = pos+0.45−cc with the park 0.607], the
+///   standing box 0.99 [Toucher::player] — both within the 0.55 radius of the band but only
+///   marginally, so the route NEVER relies on a stance clearing or a crossing firing a low
+///   line: it DODGES them at their ends, and the walk's final pin asserts the low-beam outs
+///   (0x22/0x24/0x25/0x26) never fired [D the OR wiring] — the dodge pin).
+#[test]
+fn laser_band_rule_crouch_clears_607_and_low_beams_fire_either_way() {
+    // Phase A — standing through #607's plane.
+    let mut w = Walker::new(nf_view::load(&iso(), "0700000a.bin", false).expect("load 0700000a"));
+    w.wait(150); // the SS lift doors' create sweep (the route's wait)
+    w.walk_to(Wp::new(-3.9, 0.0, 13.2), "out of the lift");
+    w.walk_to(Wp::new(-3.9, 0.0, 15.5).r(1.2), "lobby south");
+    assert!(!w.scene.sim.as_ref().unwrap().drones.channels.on(0x1f), "sister: the beam is silent before the standing crossing");
+    // The interactables laser test's exact through-crossing leg (the walk passes THROUGH the
+    // plane — the toucher's own x crosses it, not just its radius reaching it).
+    w.walk_to(Wp::new(-10.0, 0.4, 17.5).r(1.2), "through the laser wall STANDING");
+    assert!(w.scene.sim.as_ref().unwrap().drones.channels.on(0x1f),
+        "the standing body 1.86 [M 0x194df0 default arm] crosses beam #607's band 1.49-1.76 [D] → ch 0x1F");
+    drop(w);
+    // Phase B — the same plane crouched: the beam stays silent.
+    let mut w = load_carry(None);
+    w.wait(150);
+    w.walk_to(Wp::new(-3.9, 0.0, 13.2), "out of the lift");
+    w.walk_to(Wp::new(-3.9, 0.0, 15.5).r(1.2), "lobby south");
+    assert!(!w.scene.sim.as_ref().unwrap().drones.channels.on(0x1f), "sister: the beam is silent before the crouched crossing");
+    set_crouch(&mut w, true);
+    w.walk_to(Wp::new(-10.0, 0.4, 16.0).r(0.6), "the west hall crouched under #607");
+    // Stay crouched and walk clear of the beam's standing reach (the toucher's 0.55 radius [M
+    // 0x194df0 default arm] around the box reaches x −9.14 from the tri face −8.59 [D tris]):
+    // the walker's 1.2-arrive path can swing east into that zone, and a standing step there
+    // fires the beam.
+    w.walk_to(Wp::new(-12.0, 0.4, 14.5).r(1.2), "south-west, clear of beam #607's reach (crouched)");
+    {
+        let sim = w.scene.sim.as_ref().unwrap();
+        let b = &sim.bond;
+        eprintln!("[0a] crouch probe: pos {:?} cc {} crouched {} substate {} eye {} drop {}",
+            b.pos, b.cc, b.crouched, b.substate, b.eye, b.crouch_drop);
+    }
+    assert!(!w.scene.sim.as_ref().unwrap().drones.channels.on(0x1f),
+        "the crouched pick arm tops ≈ feet+1.26 [M 0x194df0 case 3], under the band 1.49-1.76 [D] → ch 0x1F off");
+    // The low-beam dodge pin (the phase-C live crossing was tried and pulled: the port's toucher
+    // reaches the low band only marginally on both stances — see the doc above — so the pin is
+    // the route's own: the walked dodges + the final no-alert assert in
+    // walk_office_floor_qworm_keyboard_hatch).
 }
 
 /// Load-only probe: every mask-8 (player) touch trigger's tri bounding box — the laser web's
