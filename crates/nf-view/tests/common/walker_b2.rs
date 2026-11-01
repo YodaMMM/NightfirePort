@@ -92,6 +92,12 @@ pub struct Walker {
     /// Lenient walks bail (u32::MAX) at the 6000-tick cap instead of panicking — the caller
     /// decides (walkreal_0700000b_live's deck leg keeps the interactions real on a wedge).
     pub lenient: bool,
+    /// The stuck ladder's player answers, OPT-IN (default off keeps every walk tuned on the old
+    /// ladder): the E goes only to a door on Bond's own floor that is not locked (a set lock
+    /// channel still off; the main walker's filter — a door 7 u up the stairwell, or a locked one, never
+    /// answers the E, and the press reset the ladder forever), and a live hostile standing on
+    /// the lane within a body's reach on Bond's floor is shot before the walk goes on.
+    pub stuck_answers: bool,
     /// ai-sight-drawn-gate-4 (NF_ALARM_TRACE, additive): each drone's last logged state, so the
     /// trace prints only transitions + a 50-tick digest — the fail reads as the presser's walk.
     pub alarm_last: Vec<u8>,
@@ -142,7 +148,7 @@ impl Walker {
             scene, top_up_health: true, dmg: DamageLog::new(), stop_on_exit: true,
             report: Report { legs: Vec::new(), stuck_events: Vec::new(), falls: Vec::new() },
             total_ticks: 0, pos, last_sample: pos, sample_tick: 0, stuck: 0, stuck_cycles: 0, float_ticks: 0,
-            sidestep: 0, max_y: pos[1], lenient: false,
+            sidestep: 0, max_y: pos[1], lenient: false, stuck_answers: false,
             alarm_last: Vec::new(),
             alarm_props_dumped: None,
         }
@@ -548,6 +554,9 @@ impl Walker {
     /// wedged (3 stuck-mitigation cycles without progress).
     pub fn walk_to(&mut self, wp: Wp, label: &str) -> u32 {
         let mut start_ticks = self.total_ticks;
+        // `stuck_answers`: each blocker is fought once per leg (an unkillable one falls through
+        // to the plain ladder, whose cycles still bound the leg).
+        let mut fought: Vec<usize> = Vec::new();
         let mut use_left = 0u32;
         let mut ladder = false;
         let mut riding = false;
@@ -743,8 +752,25 @@ impl Walker {
                     // the door's own plane blocks a straight segment to its centre, so NO LOS filter
                     // here: the nearest door within reach gets the E (a toggle [M Door_Activate],
                     // and opening a neighbouring door never blocks the walk).
-                    let door_i = sim.drones.doors.list.iter().position(|d| dxz(d.pos, self.pos) < 2.8);
-                    if let Some(di) = door_i {
+                    let answers = self.stuck_answers;
+                    let door_i = sim.drones.doors.list.iter().position(|d| dxz(d.pos, self.pos) < 2.8
+                        && (!answers || ((d.pos[1] - self.pos[1]).abs() < 2.5
+                            && !(d.ch_lock != 0 && !sim.drones.channels.on(d.ch_lock as u32)))));
+                    let blocker = if answers && door_i.is_none() {
+                        sim.drones.list.iter().enumerate().position(|(i, g)| g.team == 1 && g.present && !g.corpse && g.health > 0.0
+                            && dxz(g.pos, self.pos) < 1.8 && (g.pos[1] - self.pos[1]).abs() < 2.5
+                            && !fought.contains(&i))
+                    } else { None };
+                    if let Some(bi) = blocker {
+                        drop(sim);
+                        fought.push(bi);
+                        eprintln!("[walk] {label}: hostile body-block (drone {bi}) — shooting the blocker");
+                        let t0 = self.total_ticks;
+                        if !self.shoot_bounded(bi, label, 3000) { self.resupply(label); }
+                        // The fight is the response's own budget, not the leg's.
+                        start_ticks += self.total_ticks - t0;
+                        self.stuck = 0;
+                    } else if let Some(di) = door_i {
                         drop(sim);
                         self.use_door(di, label);
                         self.stuck = 0;
