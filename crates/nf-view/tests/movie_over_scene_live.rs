@@ -15,9 +15,12 @@ fn a_movie_frame_carries_no_scene_fade() {
     let without = nf_view::shot_hud(&scene, 16.0 / 9.0, None, false);
     // Sister: with no movie the fade quad is in the frame.
     assert!(without.v.len() > with_movie.v.len(), "the scene frame carries the fade ({} vs {} vertices)", without.v.len(), with_movie.v.len());
+    // hud-start: the entry fade draws under the HUD (`entry_fade_hud`), the rest of the script
+    // overlay over it — together they are the scene's overlay the movie frame drops.
     let script_only = scene.script_overlay_hud(16.0 / 9.0);
-    assert!(!script_only.v.is_empty(), "the script overlay has the fade quad");
-    assert_eq!(with_movie.v.len() + script_only.v.len(), without.v.len(), "the movie frame drops exactly the scene's script overlay");
+    let entry = scene.entry_fade_hud(16.0 / 9.0);
+    assert!(!entry.v.is_empty(), "the entry fade quad is armed at load");
+    assert_eq!(with_movie.v.len() + script_only.v.len() + entry.v.len(), without.v.len(), "the movie frame drops exactly the scene's overlay (entry fade + script overlay)");
 }
 
 /// The front end: `ResetMap_Load` runs `Player_Start` on 0x07000048 too [M 0x1d6360:154], so the

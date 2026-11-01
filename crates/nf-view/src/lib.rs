@@ -1749,6 +1749,30 @@ fn load_impl(iso_path: &str, archive: &str, all: bool, save: Option<&nf_game::pl
         // The switch request is the game's `M_CONTROL+0x63`; the draw machine holsters and draws it
         // (`Player_WeaponSelect` 0x1a2cc0). 0x47 (none) draws nothing.
         sim.gun.switch_request = req;
+        if sim.mp.is_none() && req != 0 && req != 0x47 {
+            // hud-start: the level starts with NOTHING held — `Player_InitWeapon` writes
+            // `M_CONTROL+0x62 = 0x47` before it picks the level's request into +0x63
+            // [M 0x1a7ef8:137, :159-223]. The Sim's build-time `Gun::new(2, ..)` left the PP7
+            // "held", so a level whose request IS the PP7 (07000005) never switched, and the
+            // others holstered a PP7 that was never drawn. From 0x47 the draw is the no-holster
+            // path (`Player_WeaponSelect` 0x1a2cc0:33-35).
+            sim.gun.weapon = 0x47;
+            sim.gun.clip = 0;
+            sim.gun.spare = 0;
+            // The weapon-name label at the start: `Player_Update` runs `HUD_Update` BEFORE
+            // `Player_Weapon` [M 0x193600:79 vs :412], so the first tick's ammo pane still sees
+            // +0x63 != +0x62 (and their records' +2 ids differ) and sets `BL+0x95E = FRAME_RATE`
+            // [M HUD_UpdateAmmoPane 0x19a7f0:212-217], decremented in the same update (:223) —
+            // the swap happens after it. (`Player_Init` 0x1910f8:145's HUD_Update runs before
+            // `Player_InitWeapon` (:146) and `Player_StandAtNewPosition` (:181) zeroes +0x95E
+            // [M 0x190d88:85], so nothing earlier arms it.) The port's `hud_tick` runs after its
+            // switch machine, so the loadout arms the one pending look the game's order gives.
+            let differs = match (sim.weapons.records.get(0x47), sim.weapons.records.get(req as usize)) {
+                (Some(a), Some(b)) => a[2..4] != b[2..4],
+                _ => false,
+            };
+            if differs { sim.hud.weapon_label_timer = 60; }
+        }
         eprintln!("loadout: level {level_id:08x} switch request {req} ({} owned weapons, health {:.0}, armour {:.0})",
             sim.drones.inventory.owned.iter().filter(|&&o| o).count(), sim.drones.health.health, sim.drones.health.armour);
     }
@@ -2220,10 +2244,50 @@ pub fn scene_overlay_up(scene: &scene::Scene, movie_up: bool) -> bool {
     !movie_up && scene.sim.as_ref().map_or(true, |s| s.level & 0xff00_ffff != menu::FRONTEND_LEVEL)
 }
 
+/// The gameplay HUD with a menu frame drawn over it (the HUD's quads first: frame order = draw
+/// order). The pause page uses it: the game opens the pause from `Player_Update` and runs
+/// `HUD_Update` in the same call right after `GS_PauseGame(1)` [M 0x193600:73-79]; while paused
+/// `Player_Update` is not reached again (`Game_Run` 0x1c9790 skips the object handlers), but
+/// `Game_Draw` 0x1e6f50:186-214 keeps drawing every viewer's sprite list with no pause gate, so
+/// the HUD sprites stay on screen under the menu as that last update left them.
+pub fn hud_under_menu(hud: gpu::HudFrame, menu: &gpu::HudFrame) -> gpu::HudFrame {
+    let mut f = hud;
+    f.append(menu);
+    f
+}
+
+/// The pane state the pause's own `HUD_Update` leaves: `HUD_UpdateHealthPane` writes
+/// `BL+0x8BC = 1.0` while `GS_IsPaused` [M 0x19b9c8:116-123], so the health / armour pane's fade
+/// factor F = min(4·BL+0x8BC, 1) is 1 — the ring shows at full strength in the pause (and after
+/// it, until the pane-fade option decays it again) even when it had faded out in play.
+pub fn pause_hud_refresh(sim: &mut scene::Sim) {
+    sim.drones.pain_alpha = 1.0;
+}
+
+/// Headless / test aid (hud-start): step a freshly loaded level with no input until the start
+/// draw has settled — the start weapon in hand with the switch machine idle. A load holds
+/// nothing (0x47 [M Player_InitWeapon 0x1a7ef8:137]) and the level's request draws on the first
+/// ticks; a script camera's hold is skipped the way the walkers do. Returns the ticks stepped.
+pub fn settle_start_draw(sim: &mut scene::Sim) -> u32 {
+    for t in 0..600 {
+        let req = sim.gun.switch_request;
+        if sim.gun.switch_state == 0 && (req == 0 || (sim.gun.weapon == req && t > 0)) { return t; }
+        if sim.disabled { sim.drones.scripts.skip_request = true; }
+        sim.step_bond(Default::default(), false, false, false);
+    }
+    600
+}
+
 /// `movie_up`: a movie frame is on screen (see `scene_overlay_up`).
 pub fn shot_hud(scene: &scene::Scene, aspect: f32, menu: Option<&gpu::HudFrame>, movie_up: bool) -> gpu::HudFrame {
     let mut f = menu.map_or_else(|| overlay_for(scene, aspect), |m| m.clone());
-    if scene_overlay_up(scene, movie_up) { f.append(&scene.script_overlay_hud(aspect)); }
+    if scene_overlay_up(scene, movie_up) {
+        // The entry fade under the HUD (`Scene::entry_fade_hud`), the script overlay over it.
+        let mut g = scene.entry_fade_hud(aspect);
+        g.append(&f);
+        f = g;
+        f.append(&scene.script_overlay_hud(aspect));
+    }
     f
 }
 
@@ -2473,7 +2537,13 @@ fn front_end_menu(args: &[String], scene: &scene::Scene, front_end: bool, iso_pa
         return (hud, movie);
     }
     fe.backdrop_live = movie.is_some();
-    (Some(menu::menu_overlay_fonts(&fe, &tables.font, &tables.font_header, Some(&tables.font_medium), lang.as_ref(), &scene.hud_textures, 1280.0 / 720.0)), movie)
+    let frame = menu::menu_overlay_fonts(&fe, &tables.font, &tables.font_header, Some(&tables.font_medium), lang.as_ref(), &scene.hud_textures, 1280.0 / 720.0);
+    // hud-start: the pause page draws over the gameplay HUD, as the windowed App composes it
+    // (`hud_under_menu`) — the shot used to show the page alone, with no health ring.
+    if fe.page == menu::Page::Pause && scene.sim.is_some() {
+        return (Some(hud_under_menu(overlay_for(scene, 1280.0 / 720.0), &frame)), movie);
+    }
+    (Some(frame), movie)
 }
 
 /// The ISO path for `read_files_bin` (the NF_ISO env or the default image name).
@@ -5934,16 +6004,7 @@ impl App {
                             // keeps its own runs — the old merge shifted by the MENU's count and dropped the HUD's runs,
                             // so the live pause page drew from the wrong vertices (the plate, the figure and most rows
                             // missing, the cursor a square) and the radar/ammo vanished while paused.
-                            let hud_frame = overlay_for(&self.scene, aspect);
-                            let base = hud_frame.v.len() as u32;
-                            let menu_runs = std::mem::take(&mut f.runs);
-                            let mut v = hud_frame.v;
-                            v.extend(f.v.drain(..));
-                            f.runs = hud_frame.runs;
-                            for (tex, blend, start, count) in menu_runs {
-                                f.runs.push((tex, blend, start + base, count));
-                            }
-                            f.v = v;
+                            f = hud_under_menu(overlay_for(&self.scene, aspect), &f);
                         }
                         f
                     }
@@ -5952,7 +6013,13 @@ impl App {
                 if self.fps_meter.shown > 0.0 { hud.append(&dev::fps_counter_hud(&self.scene, aspect, self.fps_meter.shown)); }
                 // The scene's script overlay belongs to the 3D view — off a movie frame and off the
                 // front-end level (`scene_overlay_up`).
-                if scene_overlay_up(&self.scene, movie_frame.is_some()) { hud.append(&self.scene.script_overlay_hud(aspect)); }
+                if scene_overlay_up(&self.scene, movie_frame.is_some()) {
+                    // The entry fade under the HUD (`Scene::entry_fade_hud`), the script overlay over it.
+                    let mut g = self.scene.entry_fade_hud(aspect);
+                    g.append(&hud);
+                    hud = g;
+                    hud.append(&self.scene.script_overlay_hud(aspect));
+                }
                 g.renderer.lights = self.scene.frame_lights();
                 g.renderer.screen_aspect = g.config.width as f32 / g.config.height.max(1) as f32;
                 // Screen Adjust: the whole frame shifts by the live offset (gpu::screen_adjust_viewport).
@@ -6217,6 +6284,7 @@ impl App {
                                 // (its state gate 0x1d3800:11-17 wants {2,7,8,0xd,0xe}).
                                 fe.flow.stack = vec![menu::ST_RUNNER];
                                 fe.open_pause();
+                                if let Some(sim) = self.scene.sim.as_mut() { pause_hud_refresh(sim); }
                             }
                         } else { return true }
                     }
@@ -7134,6 +7202,10 @@ pub fn run() -> Result<()> {
         if let Some(i) = args.iter().position(|a| a == "--armour") {
             let n: f32 = args.get(i + 1).context("--armour needs a value (0..=50)")?.parse()?;
             if let Some(sim) = scene.sim.as_mut() { sim.drones.health.armour = n; }
+        }
+        // The pause's own HUD_Update refreshes the health pane (`pause_hud_refresh`).
+        if args.windows(2).any(|w| w[0] == "--page" && w[1] == "pause") {
+            if let Some(sim) = scene.sim.as_mut() { pause_hud_refresh(sim); }
         }
         let (mut menu_frame, mut movie_frame) = front_end_menu(&args, &scene, front_end, &iso);
         // `--loading`: the level's loading screen (crate::loading) — the picture on the movie plane, the text and the

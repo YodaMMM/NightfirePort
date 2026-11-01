@@ -312,6 +312,8 @@ fn firing_spawns_a_muzzle_smoke_puff_that_fades_and_dies() {
     use nf_game::player::{Bond, Input};
     let Some(iso) = iso() else { eprintln!("NF_ISO not set — skipping"); return };
     let mut scene = nf_view::load(&iso, "07000001.bin", false).expect("load 07000001");
+    // hud-start: a load holds nothing (0x47 [M 0x1a7ef8:137]) - settle the start draw first.
+    nf_view::settle_start_draw(scene.sim.as_mut().unwrap());
     let sim = scene.sim.as_mut().unwrap();
     sim.bond = Bond::new([100.0, 26.0, 108.0], sim.bond.yaw);
     sim.disabled = false; // the level's opening cut-scene disables input; the test stands Bond outside it

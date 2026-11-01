@@ -161,6 +161,8 @@ fn test_weapon_row_runs_the_sequence() {
     let Some(iso) = iso() else { eprintln!("NF_ISO not set — skipping"); return };
     if let Some(w) = levels() { if !w.iter().any(|l| l.starts_with("07000005")) { return; } }
     let mut scene = nf_view::load(&iso, "07000005.bin", false).expect("load");
+    // hud-start: a load holds nothing (0x47 [M 0x1a7ef8:137]) - settle the start draw first.
+    nf_view::settle_start_draw(scene.sim.as_mut().unwrap());
     let mut dev = nf_view::dev::Dev::default();
     // The weapon in hand on 07000005's start is the P2K (0x02); give it ammo headroom first.
     let (status, _) = nf_view::panel::apply(&mut scene, &[("do".to_string(), "weapon".to_string()), ("id".to_string(), "0x02".to_string()), ("rounds".to_string(), "8".to_string())]);

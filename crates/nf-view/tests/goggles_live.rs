@@ -20,6 +20,8 @@ fn iso() -> Option<String> { std::env::var("NF_ISO").ok() }
 /// state: item stowed, mode 1, latch set.
 fn granted_scene(iso: &str) -> nf_view::scene::Scene {
     let mut scene = nf_view::load(iso, "07000005.bin", false).expect("load 07000005");
+    // hud-start: a load holds nothing (0x47 [M 0x1a7ef8:137]) — settle the start draw first.
+    nf_view::settle_start_draw(scene.sim.as_mut().unwrap());
     {
         let sim = scene.sim.as_mut().unwrap();
         // The cheat grant [M 0x215dc8]: Player_EquipWeapon(0x5d, 999) → owned + full clip. The
@@ -116,6 +118,8 @@ fn the_battery_drains_while_a_mode_is_up_and_drops_the_mode_at_zero() {
 fn a_level_without_the_goggles_never_arms_from_the_request_alone() {
     let Some(iso) = iso() else { eprintln!("NF_ISO not set — skipping"); return };
     let mut scene = nf_view::load(&iso, "07000005.bin", false).expect("load 07000005");
+    // hud-start: a load holds nothing (0x47 [M 0x1a7ef8:137]) — settle the start draw first.
+    nf_view::settle_start_draw(scene.sim.as_mut().unwrap());
     let sim = scene.sim.as_mut().unwrap();
     for _ in 0..3000 { sim.step_bond(Input::default(), false, false, false); if !sim.disabled { break; } }
     // The disc census [D]: no loadout and no pickup grants 0x5d — the level-start inventory
