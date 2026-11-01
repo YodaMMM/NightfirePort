@@ -288,8 +288,8 @@ impl Walker {
         // leg walks on instead of standing in the open re-fighting him.
         if !killed { let until = self.total_ticks + if still_shooting { 120 } else { 240 }; self.dmg.cooldown.retain(|e| e.0 != di); self.dmg.cooldown.push((di, until)); }
         let sim = self.scene.sim.as_ref().unwrap();
-        eprintln!("[real-damage] {label}: returned fire on drone #{di} (killed {killed}) at tick {}, health {h0:.1} -> {:.1}",
-            self.total_ticks, sim.drones.health.health);
+        eprintln!("[real-damage] {label}: returned fire on drone #{di} (killed {killed}) at tick {}, health {h0:.1} -> {:.1} [gun {:#x} clip {} spare {}]",
+            self.total_ticks, sim.drones.health.health, sim.gun.weapon, sim.gun.clip, sim.gun.spare);
         // A fight that emptied the gun: take the nearest ground drop (the guards' own) or cycle
         // to the fullest — a player reloads from the field before walking on. Without this the
         // walk pressed on dry and died to the next volley (03's exit lawn).

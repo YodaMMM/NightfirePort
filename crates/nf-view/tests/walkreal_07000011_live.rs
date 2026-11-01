@@ -156,13 +156,18 @@ fn walk_spawn_to_the_lower_floor_load_point() {
     w.walk_to(Wp::new(15.2, 35.6, 6.0).r(1.0), "the south run down (39.1→35.2)");
     w.walk_to(Wp::new(14.8, 35.4, 5.0).r(0.9), "the south-west landing 35.2");
     band(&w, 34.6, 36.6, "the SW landing");
-    w.walk_to(Wp::new(14.8, 31.4, -2.6).r(1.0), "the west flight C down (35.2→31.1)");
+    // The leg's target sits PAST the flight's bottom (z −2.5), on the north strip: an arrival at
+    // the r(1.0) radius can then stop no higher than z −2.4 (y ≈ 31.2, the flight falls 0.51 y per
+    // z [D the 35.2→31.1 / 8 z scan]) — the real-damage run's return-fire fights shift the
+    // approach heading and the old z −2.6 target arrived at z −1.61, y 32.59, 0.013 over the band.
+    w.walk_to(Wp::new(14.8, 31.2, -3.4).r(1.0), "the west flight C down (35.2→31.1)");
     band(&w, 30.4, 32.5, "flight C's bottom");
     w.walk_to(Wp::new(22.4, 31.3, -3.0).r(1.0), "the north strip 31.1 east");
     w.walk_to(Wp::new(23.0, 27.4, 3.8).r(1.0), "the east connector down (31.1→27.1)");
     band(&w, 26.4, 29.3, "connector 1's bottom");
     w.walk_to(Wp::new(15.0, 27.4, 4.8).r(1.0), "the south strip 27.1 west");
-    w.walk_to(Wp::new(14.8, 23.3, -2.6).r(1.0), "the west flight B down (27.1→23.0)");
+    // Same past-the-bottom target as flight C (the fights shift the arrival along the flight).
+    w.walk_to(Wp::new(14.8, 23.1, -3.4).r(1.0), "the west flight B down (27.1→23.0)");
     band(&w, 22.4, 24.8, "flight B's bottom");
     w.walk_to(Wp::new(22.4, 23.2, -3.0).r(1.0), "the north strip 23.0 east");
     w.walk_to(Wp::new(23.0, 19.3, 3.8).r(1.0), "the east connector down (23.0→18.9)");
