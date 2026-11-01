@@ -191,10 +191,20 @@ fn idle_bond_is_approached_and_shot_at_every_selectable_difficulty() {
                         dr.pos[0], dr.pos[2]);
                     let dx = dr.pos[0] - start[0];
                     let dz = dr.pos[2] - start[1];
-                    // The game's are 5.8-9.0 away at both ticks [L]; the port's d1 #126 first stops
-                    // in AimStand 0x67 ~10.7 away at t200 and closes to 8.0 by t400.
-                    let reach = if t == 200 { 11.0 } else { 10.0 };
-                    assert!((dx * dx + dz * dz).sqrt() < reach, "d{diff} t{t}: #{p} within {reach} of the idle start [L 5.8-9.0]");
+                    // The game's d1 #126 is 8.84 from the idle start at f200 ((3.01,17.67) [L]) and
+                    // holds 5.8-9.0 at both ticks [L]. The port's run-to-point stop now lands at
+                    // the goal accuracy: `FindRunToPoint` passes the picked AIPoint's `+0x14` (1.0
+                    // on this level [D-probe]) into `SetupGoalPosition`'s move-target +0x14
+                    // [M 0x153168 raw `lwc1 f20,0x14(v0)`; 0x15acf8 raw], so `MoveToGoalPosition`'s
+                    // arrived-early check fires within 1.0 of the point [M 0x1517d8 raw
+                    // `lwc1 f1, 0x8c(s0)`; 0x158b10:104] — the d1 #126 hands off 9.93 away at t200
+                    // (was 10.67 under the old fixed 2.0 radius), then closes to 7.99 by t260.
+                    // The 1.1 residual vs the game's 8.84 is the route SHAPE (the game's MoveTest
+                    // fails the direct diagonal and A*s south through n149 (1.57,18.70) [D nav],
+                    // the port's direct line stops 1.0 north of the point) — a move-test fidelity
+                    // gap, not a radius one (the report's live checks).
+                    let reach = if t == 200 { 10.2 } else { 9.0 };
+                    assert!((dx * dx + dz * dz).sqrt() < reach, "d{diff} t{t}: #{p} within {reach} of the idle start [L 5.8-9.0; the t200 handoff at the point's 1.0 accuracy [M 0x153168/0x15acf8/0x1517d8 raw]]");
                 }
             }
             if dead_at.is_none() && sim.drones.health.health <= 0.0 {

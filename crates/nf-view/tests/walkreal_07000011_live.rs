@@ -149,7 +149,12 @@ fn walk_spawn_to_the_lower_floor_load_point() {
     w.walk_to(Wp::new(14.8, 35.4, 5.0).r(0.9), "the south-west landing 35.2");
     band(&w, 34.6, 36.6, "the SW landing");
     w.walk_to(Wp::new(14.8, 31.4, -2.6).r(1.0), "the west flight C down (35.2→31.1)");
-    band(&w, 30.4, 32.5, "flight C's bottom");
+    // The hi bound was 32.5 (the flight's bottom run); the run-to-point accuracy fix [M 0x153168
+    // raw `lwc1 f20,0x14(v0)` → route+0x8c] moves guard #126's first-shot phase ~60 ticks earlier
+    // (the handoff now fires within the point's 1.0 accuracy [M 0x1517d8 raw `lwc1 f1,0x8c(s0)`]),
+    // and the stagger lands mid-descent — the leg's xz arrival now ends 8 mm higher on the flight.
+    // The band still gates the descent (the flight bottom is 31.1; flight A's y < 17.2 below).
+    band(&w, 30.4, 32.75, "flight C's bottom");
     w.walk_to(Wp::new(22.4, 31.3, -3.0).r(1.0), "the north strip 31.1 east");
     w.walk_to(Wp::new(23.0, 27.4, 3.8).r(1.0), "the east connector down (31.1→27.1)");
     band(&w, 26.4, 29.3, "connector 1's bottom");
