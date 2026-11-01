@@ -178,6 +178,15 @@ fn steer_fire_aligned(scene: &mut nf_view::scene::Scene, gi: usize, aim_dy: f32,
 fn the_tased_guard_who_wakes_re_arms_and_his_death_drops_the_sidearm() {
     let iso = iso();
     let mut scene = nf_view::load(&iso, "07000005.bin", false).expect("load 07000005");
+    // hud-start: a load holds nothing (0x47 [M 0x1a7ef8:137]). This AI scenario's tick timeline
+    // was measured with the start weapon already in hand and no ticks spent on a start draw;
+    // hand it over without stepping so the guards' schedule stays the one the pins were built on
+    // (the Stunner equip below runs through the real switch input either way).
+    {
+        let sim = scene.sim.as_mut().unwrap();
+        sim.gun.weapon = sim.gun.switch_request;
+        sim.hud.weapon_label_timer = 0;
+    }
     let gi = pick_start_guard(&scene);
     let held = scene.sim.as_ref().unwrap().drones.list[gi].weapon as u16;
     {
@@ -250,6 +259,8 @@ fn the_tased_guard_who_wakes_re_arms_and_his_death_drops_the_sidearm() {
 fn the_tased_guard_killed_while_down_drops_nothing() {
     let iso = iso();
     let mut scene = nf_view::load(&iso, "07000005.bin", false).expect("load 07000005");
+    // hud-start: a load holds nothing (0x47 [M 0x1a7ef8:137]) - settle the start draw first.
+    nf_view::settle_start_draw(scene.sim.as_mut().unwrap());
     let gi = pick_start_guard(&scene);
     let held = scene.sim.as_ref().unwrap().drones.list[gi].weapon as u16;
     assert!(matches!(held, 0x16 | 0x24), "a census weapon [L census]");

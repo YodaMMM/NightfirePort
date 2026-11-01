@@ -31,7 +31,10 @@ fn iso() -> Option<String> { std::env::var("NF_ISO").ok() }
 /// A loaded scene (Bond at the level start) — the same path the viewer uses.
 fn loaded() -> Option<nf_view::scene::Scene> {
     let iso = iso()?;
-    Some(nf_view::load(&iso, "07000005.bin", false).expect("load 07000005"))
+    let mut scene = nf_view::load(&iso, "07000005.bin", false).expect("load 07000005");
+    // hud-start: a load holds nothing (0x47 [M 0x1a7ef8:137]) - settle the start draw first.
+    nf_view::settle_start_draw(scene.sim.as_mut().unwrap());
+    Some(scene)
 }
 
 /// One tick of the viewer's loop: `step_bond`, then the dev after-tick (god mode / infinite ammo), in that

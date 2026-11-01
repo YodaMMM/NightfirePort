@@ -99,6 +99,8 @@ fn is_combat(s: u8) -> bool { matches!(s, state::ATTACK | state::AIM_STAND_FIRE 
 fn setup_k5_guard() -> (nf_view::scene::Scene, usize) {
     let iso = iso();
     let mut scene = nf_view::load(&iso, "07000009.bin", false).expect("load 07000009");
+    // hud-start: a load holds nothing (0x47 [M 0x1a7ef8:137]) - settle the start draw first.
+    nf_view::settle_start_draw(scene.sim.as_mut().unwrap());
     let mut drawn = false;
     for _ in 0..180 {
         scene.sim.as_mut().unwrap().step_bond(Input::default(), false, false, false);
@@ -117,6 +119,8 @@ fn setup_k5_guard() -> (nf_view::scene::Scene, usize) {
 fn the_k5_dart_puts_a_guard_to_sleep() {
     let iso = iso();
     let mut scene = nf_view::load(&iso, "07000009.bin", false).expect("load 07000009");
+    // hud-start: a load holds nothing (0x47 [M 0x1a7ef8:137]) - settle the start draw first.
+    nf_view::settle_start_draw(scene.sim.as_mut().unwrap());
     let mut drawn = false;
     for _ in 0..180 {
         scene.sim.as_mut().unwrap().step_bond(Input::default(), false, false, false);

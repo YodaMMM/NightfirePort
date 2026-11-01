@@ -115,7 +115,10 @@ fn without_a_skip_the_intro_line_runs_to_its_own_end() {
     }
     let Some(t0) = t0 else { panic!("the intro never started a sound"); };
     // The first ONE-SHOT line (the NIS score, if any, loops and never ends on its own).
-    let Some(line_id) = nis_items(&snd).into_iter().find(|(_, _, looped)| !*looped).map(|(id, ..)| id) else {
+    // hud-start: the level's start weapon draws on tick 0 now (a load holds 0x47 [M 0x1a7ef8:137]),
+    // so its draw sound (0x280..0x283, the switch machine's [M disasm 0x1a3704 / 0x1a385c]) can be
+    // the first one-shot item — it is not the intro's line.
+    let Some(line_id) = nis_items(&snd).into_iter().find(|(id, _, looped)| !*looped && !(0x280..=0x283).contains(id)).map(|(id, ..)| id) else {
         eprintln!("[skip] only looping sounds in the window — nothing to playout"); return;
     };
     for t in 0..1800u32 {
