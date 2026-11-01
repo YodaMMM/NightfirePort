@@ -379,6 +379,149 @@ fn probe_palette_per_tick() {
     }
 }
 
+/// What `CommandEncoder::finish` pays for (wgpu records the pass and encodes it at finish): the
+/// start view's frame as is, with the split-run draw args whole, and with every world/character
+/// draw left out (the HUD alone), finish timed alone, median of 12 after 3 warm frames.
+/// `NF_PROBE_INSTANCE_FLAGS=empty` creates the instance without wgpu's default flags (no indirect
+/// call validation) for the comparison. Measurement only; `NF_PROBE_LEVELS` narrows the levels.
+#[test]
+#[ignore]
+#[cfg(not(debug_assertions))]
+fn probe_finish_split() {
+    let Some(iso_path) = std::env::var("NF_ISO").ok() else { return };
+    let mut idesc = wgpu::InstanceDescriptor::new_without_display_handle();
+    if std::env::var("NF_PROBE_INSTANCE_FLAGS").ok().as_deref() == Some("empty") { idesc.flags = wgpu::InstanceFlags::empty(); }
+    let instance = wgpu::Instance::new(idesc);
+    let adapter = pollster::block_on(instance.request_adapter(&wgpu::RequestAdapterOptions::default())).expect("adapter");
+    let (device, queue) = app_device(&adapter);
+    let mut levels = on_foot_levels(&iso_path);
+    if let Ok(o) = std::env::var("NF_PROBE_LEVELS") { levels.retain(|l| o.split(',').any(|x| l.starts_with(x.trim()))); }
+    let (w, h) = (1280u32, 720u32);
+    let format = wgpu::TextureFormat::Rgba8Unorm;
+    let target = device.create_texture(&wgpu::TextureDescriptor { label: None, size: wgpu::Extent3d { width: w, height: h, depth_or_array_layers: 1 }, mip_level_count: 1, sample_count: 1,
+        dimension: wgpu::TextureDimension::D2, format, usage: wgpu::TextureUsages::RENDER_ATTACHMENT, view_formats: &[] });
+    let view = target.create_view(&Default::default());
+    let depth = nf_view::gpu::depth_view(&device, w, h);
+    for name in &levels {
+        let Ok(mut scene) = nf_view::load(&iso_path, name, false) else { continue };
+        if let Some(sim) = scene.sim.as_mut() { for _ in 0..120 { sim.step_bond(Default::default(), false, false, false); } }
+        let (pos, yaw) = scene.start.clone().unwrap_or(([0.0; 3], 0.0));
+        let eye = [pos[0], pos[1] + 1.6, pos[2]];
+        let mut r = nf_view::gpu::Renderer::new(&device, &queue, format, &scene, false, false);
+        let (layout, _) = scene.skin_layout();
+        let hf = nf_view::hud::overlay(&scene, 16.0 / 9.0);
+        let vp = view_proj(eye, yaw, 0.0, 16.0 / 9.0);
+        let mut opts = ViewOpts::default();
+        let fw = glam::Vec3::new(yaw.sin(), 0.0, yaw.cos()).normalize();
+        let s = fw.cross(glam::Vec3::Y).normalize();
+        opts.right = s.to_array(); opts.up = s.cross(fw).to_array();
+        let (mut p, mut c) = (Vec::new(), Vec::new());
+        scene.skin_palette_into(&layout, None, 152.0, opts, None, &mut p, &mut c);
+        let world = scene.sim.as_ref().map(|s| &s.world);
+        let doors = scene.sim.as_ref().map(|s| s.drones.doors.closed_flags());
+        let _ = r.cel_visibility(eye, vp, world, doors.as_deref());
+        r.char_light_centre = scene.char_light_centres();
+        r.upload_skin(&queue, &p, &c);
+        r.lights = scene.frame_lights();
+        let n_draws = r.order_draws().len();
+        let mut line = Vec::new();
+        for mode in ["as-is", "whole", "hud-only", "odd-skipped"] {
+            r.split_runs = mode != "whole";
+            r.probe_skip = match mode { "hud-only" => vec![true; 1 << 20], "odd-skipped" => (0..1usize << 20).map(|k| k % 2 == 1).collect(), _ => Vec::new() };
+            let mut enc_v = Vec::new();
+            let mut fin_v = Vec::new();
+            let mut drawn = 0;
+            for i in 0..15 {
+                let t0 = std::time::Instant::now();
+                let e = r.render(&device, &queue, &view, &depth, vp, vp, eye, 152, &[], &hf, None, None);
+                let t1 = std::time::Instant::now();
+                let cb = e.finish();
+                let t2 = std::time::Instant::now();
+                queue.submit([cb]);
+                device.poll(wgpu::PollType::wait_indefinitely()).unwrap();
+                drawn = r.order_len();
+                if i >= 3 { enc_v.push((t1 - t0).as_secs_f64() * 1e3); fin_v.push((t2 - t1).as_secs_f64() * 1e3); }
+            }
+            enc_v.sort_by(|a, b| a.partial_cmp(b).unwrap());
+            fin_v.sort_by(|a, b| a.partial_cmp(b).unwrap());
+            line.push(format!("{mode}: draws {drawn} enc {:.3} finish {:.3}", enc_v[enc_v.len() / 2], fin_v[fin_v.len() / 2]));
+        }
+        r.probe_skip.clear(); r.split_runs = true;
+        eprintln!("[finish] {name} (order {n_draws}) {}", line.join(" | "));
+        drop(r); let _ = queue.submit([]); device.poll(wgpu::PollType::wait_indefinitely()).unwrap();
+    }
+}
+
+/// The process's page-fault count (soft + hard), for the first-builds probe.
+fn page_faults() -> u32 {
+    #[cfg(windows)] {
+        #[repr(C)] #[derive(Default)] struct Pmc { cb: u32, faults: u32, peak_ws: usize, ws: usize, a: usize, b: usize, c: usize, d: usize, e: usize, f: usize }
+        #[link(name = "kernel32")] extern "system" { fn K32GetProcessMemoryInfo(p: isize, c: *mut Pmc, cb: u32) -> i32; fn GetCurrentProcess() -> isize; }
+        let mut m = Pmc { cb: std::mem::size_of::<Pmc>() as u32, ..Default::default() };
+        unsafe { K32GetProcessMemoryInfo(GetCurrentProcess(), &mut m, m.cb); }
+        m.faults
+    }
+    #[cfg(not(windows))] { 0 }
+}
+
+/// The first palette builds after a level load, one by one (the probe's start0 view is the first
+/// build of a level): 120 ticks, then 16 builds at that one sim state into recycled buffers, each
+/// timed alone, with the `pal:`/`fs:`/`cm:` scopes of build 0 and of the median build. A cold-start
+/// cost (a first-build cache fill, a lazy table) shows as builds 0..k above the rest.
+/// Measurement only; `NF_PROBE_LEVELS` narrows the levels (default 07000005,07000006).
+#[test]
+#[ignore]
+#[cfg(not(debug_assertions))]
+fn probe_first_builds() {
+    let Some(iso_path) = std::env::var("NF_ISO").ok() else { return };
+    nf_game::prof::force_enable();
+    let levels: Vec<String> = std::env::var("NF_PROBE_LEVELS").unwrap_or("07000005,07000006".into()).split(',').map(|s| format!("{}.bin", s.trim())).collect();
+    for name in &levels {
+        let Ok(mut scene) = nf_view::load(&iso_path, name, false) else { continue };
+        if let Some(sim) = scene.sim.as_mut() { for _ in 0..120 { sim.step_bond(Default::default(), false, false, false); } }
+        let (layout, _) = scene.skin_layout();
+        let (pos, yaw) = scene.start.clone().unwrap_or(([0.0; 3], 0.0));
+        let _ = pos;
+        let mut opts = ViewOpts::default();
+        let fw = glam::Vec3::new(yaw.sin(), 0.0, yaw.cos()).normalize();
+        let s = fw.cross(glam::Vec3::Y).normalize();
+        opts.right = s.to_array(); opts.up = s.cross(fw).to_array();
+        let (mut p, mut c) = (Vec::new(), Vec::new());
+        if let Some(ms) = std::env::var("NF_FB_SPIN").ok().and_then(|v| v.parse::<u64>().ok()) {
+            let t0 = std::time::Instant::now();
+            let mut x = 0u64;
+            while t0.elapsed().as_millis() < ms as u128 { x = std::hint::black_box(x.wrapping_mul(31).wrapping_add(7)); }
+        }
+        for series in 0..2 {
+        if series == 1 { if let Some(sim) = scene.sim.as_mut() { for _ in 0..120 { sim.step_bond(Default::default(), false, false, false); } } }
+        let mut times = Vec::new();
+        let mut scopes = Vec::new();
+        let mut faults = vec![page_faults()];
+        for _ in 0..16 {
+            let _ = nf_game::prof::take_samples();
+            nf_game::prof::capture(true);
+            let t0 = std::time::Instant::now();
+            scene.skin_palette_into(&layout, None, 152.0, opts, None, &mut p, &mut c);
+            times.push(t0.elapsed().as_secs_f64() * 1e3);
+            faults.push(page_faults());
+            nf_game::prof::capture(false);
+            let ps = nf_game::prof::take_samples();
+            let mut agg: Vec<(&str, f64)> = Vec::new();
+            for (nm, ns) in &ps { match agg.iter_mut().find(|e| e.0 == *nm) { Some(e) => e.1 += *ns as f64 / 1e6, None => agg.push((nm, *ns as f64 / 1e6)) } }
+            agg.sort_by(|a, b| a.0.cmp(b.0));
+            scopes.push(agg.iter().map(|(n, v)| format!("{n}={v:.3}")).collect::<Vec<_>>().join(" "));
+        }
+        let mut sorted = times.clone(); sorted.sort_by(|a, b| a.partial_cmp(b).unwrap());
+        let med = sorted[sorted.len() / 2];
+        let mi = times.iter().position(|&t| t == med).unwrap();
+        eprintln!("[first-builds] {name} s{series} {} | median {med:.3}", times.iter().map(|t| format!("{t:.3}")).collect::<Vec<_>>().join(" "));
+        eprintln!("[first-builds-faults] {name} s{series} {}", faults.windows(2).map(|w| format!("{}", w[1] - w[0])).collect::<Vec<_>>().join(" "));
+        for (bi, sc) in scopes.iter().enumerate().take(5) { eprintln!("[first-builds-scopes] {name} s{series} build{bi} {sc}"); }
+        eprintln!("[first-builds-scopes] {name} s{series} median {}", scopes[mi]);
+        }
+    }
+}
+
 /// The world pass's GPU time split by draw class: the full frame, then the same frame with one class
 /// left out (`Renderer::probe_skip`), at 1280x720 and at 128x72 (a vertex-bound pass keeps its time
 /// at the small target). Measurement only; `NF_PROBE_LEVELS` narrows the levels.
