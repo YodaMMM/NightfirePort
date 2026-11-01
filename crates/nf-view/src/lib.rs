@@ -721,7 +721,15 @@ const NET_HASH_EVERY: u32 = 15;
 /// wrote, and `Player_InitWeapon` (0x1a7ef8) runs the per-level loadout switch over `Player_RamLoad`
 /// (0x1957a8). `None` = a cold load (the game's boot path; `Player_RamLoad`'s whole body is skipped).
 pub fn load_with_carry(iso: &str, archive: &str, all: bool, save: Option<&nf_game::player::RamSave>) -> Result<scene::Scene> {
-    load_impl(iso, archive, all, save, false, &[], false, None, 1, 0)
+    // The warm chain's difficulty: the game's difficulty global (`GameState+40` DECIMAL = hex
+    // +0x28, 0x2a3790) survives the level change untouched — its five writers (bootup 0x1c7e78:25
+    // = 2, the difficulty page 0x216ca8:15, the MP confirm 0x20ec00:150 = 1, the mini-mission
+    // 0x1ffb90:22 = 1, the driving-return PTP restore 0x1c8560:36) never run in an on-foot level
+    // change [M whole-decompile grep]. The port re-creates the Scene per load and seeds the
+    // difficulty at build, so the value rides the RamSave (`with_difficulty`); a save without it
+    // (the plain `capture`) keeps 1, the old direct-load replay parity.
+    let difficulty = save.map(|s| s.difficulty).filter(|&d| (1..=4).contains(&d)).unwrap_or(1);
+    load_impl(iso, archive, all, save, false, &[], false, None, difficulty, 0)
 }
 
 /// The carry-over load pre-merged for the given weapon ids (the dev menu's lazy give: the same
@@ -851,6 +859,10 @@ pub fn warm_exit_save(sim: &scene::Sim) -> nf_game::player::RamSave {
         &sim.drones.health, sim.gun.switch_request, &sim.drones.inventory, &sim.drones.channels)
         .with_mission(&sim.drones.mission)
         .with_tally(&sim.drones.progress)
+        // The difficulty global survives the level change in the game (no transition-path writer;
+        // see `RamSave::difficulty`) — attach the sim's mirror so a `load_with_carry` of this save
+        // re-seeds it. The front-end load wrappers take the pick as a parameter and ignore it.
+        .with_difficulty(sim.drones.difficulty)
 }
 
 fn load_impl(iso_path: &str, archive: &str, all: bool, save: Option<&nf_game::player::RamSave>, dev: bool, give: &[u8], mp: bool, mp_settings: Option<nf_game::mp::MpSettings>, difficulty: u32, bonus: u64) -> Result<scene::Scene> {
@@ -8007,6 +8019,27 @@ mod headless_app_harness {
             }
             false
         }
+
+        /// Pump logic ticks until `pred` or `max_ticks` run out — the shape the
+        /// mission_outros_live tests use (their 6000-tick loop). The state-6 hold is the
+        /// game's per-vblank movie poll, not a wall clock: BGFMVPlaying = 1 on the open
+        /// [M 0x1081a8], cleared only at the decode pump's end of file [M 0x108060],
+        /// psiMovieFinished = BGFMVPlaying == 0 [M 0x1082e8], and the game's decode pump
+        /// runs one frame per vblank [M main 0x109080] — so the hold advances one per flow
+        /// tick (the port: `Player::headless_advance` per flow tick, mission-outros-2/4).
+        /// A wall budget cannot express it: the briefing's own PSS is 4 440 064 audio
+        /// samples at 48 kHz = 92.5 s = 5550 ticks [D crates/nf-formats/golden/
+        /// pss_movies.tsv 07100005.PSS] — the briefings run 1815-5550 and the outros
+        /// 1776-4230 [D the same table] — minutes of hold on an image with the real
+        /// movies, ~0 on the stub image (the pop, still covered: the pred returns at
+        /// once).
+        pub fn pump_ticks(&mut self, max_ticks: u32, mut pred: impl FnMut(&App) -> bool) -> bool {
+            for _ in 0..max_ticks {
+                self.frame(1.0 / 60.0);
+                if pred(&self.app) { return true; }
+            }
+            false
+        }
     }
 
     /// Menu sounds were missing entirely: run() built the sound driver and dropped it, so the
@@ -8077,7 +8110,20 @@ mod headless_app_harness {
         }
         #[cfg(not(feature = "movies"))]
         let _ = (state6_frames, saw_player);
-        let loading = h.pump(6.0, |a| a.async_load.is_some() && a.fe.is_none());
+        // The resolve — in TICKS, not wall seconds. State 6 pops when the movie's frames are
+        // consumed (BGFMVPlaying clears at the decode pump's end of file [M 0x108060];
+        // psiMovieFinished = BGFMVPlaying == 0 [M 0x1082e8]) and the poll advances one per
+        // game vblank [M main 0x109080], so the hold runs in flow ticks. On an image with the
+        // real movies and no `movies` feature (the no-decode player), the opened briefing
+        // holds its own 5550 ticks [D pss_movies.tsv 07100005.PSS: 4 440 064 samples @48 kHz
+        // = 92.5 s] — mission-outros-2's correct game fix [M 0x1081a8's BGFMVPlaying = 1 on
+        // the open; the old player reported `ended` before the first frame, which is why this
+        // test's old 6 s wall budget ever passed there]. The 6 s wall pump could never see
+        // the resolve on such an image ("the briefing resolve never started the level load",
+        // every run, idle machine included); the stub image pops at once and the pred still
+        // returns immediately. 7000 ticks > 5550 with margin; a `movies` build's Enter skip
+        // (pressed above, past the 1.0 s Confirm guard) resolves in the first ticks.
+        let loading = h.pump_ticks(7000, |a| a.async_load.is_some() && a.fe.is_none());
         assert!(loading, "the briefing resolve never started the level load");
         let loaded = h.pump(20.0, |a| a.level_code == 0x0700_0005 && a.async_load.is_none() && a.fe.is_none());
         assert!(loaded, "the level never finished loading (the 5 s LOADING_HOLD + the build)");

@@ -2101,6 +2101,17 @@ pub struct RamSave {
     /// `BondMoments` (0x14) copies [M]. `None` = a capture that predates the tally (or the test
     /// helpers' plain `capture`): `restore` leaves the fresh record alone, the cold-load shape.
     pub tally: Option<TallySave>,
+    /// The warm chain's difficulty carry: the game's difficulty global (`GameState+40` DECIMAL =
+    /// hex +0x28, 0x2a3790 — the `Progress::difficulty`/`Drones::difficulty` mirror) lives in
+    /// `.data` and survives `ResetMap_LevelToLoad` untouched: its ONLY five writers are bootup's
+    /// default 2 (0x1c7e78:25), the difficulty page's pick (0x216ca8:15), the MP confirm's force 1
+    /// (0x20ec00:150), the mini-mission force 1 (0x1ffb90:22) and the driving-return PTP restore
+    /// (0x1c8560:36) — none runs in an on-foot level change [M whole-decompile grep: 5 writers,
+    /// every other referencing file reads it only]. The port re-creates the Scene per load and
+    /// seeds the difficulty at build, so the value rides the RamSave like the mission globals do
+    /// (see the `mission` field). 0 = not carried (the plain `capture`): the warm load falls back
+    /// to 1, the old direct-load replay parity.
+    pub difficulty: u32,
 }
 
 /// `ContinueHealthBoostEasy` / `ContinueHealthBoostMedium` / `ContinueHealthBoostHard`
@@ -2132,7 +2143,17 @@ impl RamSave {
             ch_time: ch.time.clone(),
             mission: None,
             tally: None,
+            difficulty: 0,
         }
+    }
+
+    /// Attaches the difficulty the warm load re-seeds (`load_with_carry`): the game's difficulty
+    /// global survives the level change untouched — its five writers never run in an on-foot level
+    /// change (see the field's doc). The port keeps it a builder step like `with_tally`, so the
+    /// plain `capture` call sites (and their difficulty-1 replay parity) stay.
+    pub fn with_difficulty(mut self, d: u32) -> RamSave {
+        self.difficulty = d;
+        self
     }
 
     /// Attaches the mission tally — the game's `Player_RamSave` copies it unconditionally on every
