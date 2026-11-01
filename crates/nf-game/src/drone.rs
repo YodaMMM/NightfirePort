@@ -14340,6 +14340,50 @@ fn segment_hits_sphere(a: V3, b: V3, c: V3, r: f32) -> bool {
             // (the 0x40 test of `Collide_Intersect` 0x1ebaa8's object arm), and the three Tripbomb
             // meshes' surface bytes are 0 and 6 (no 0x40/0x80) [D census_07000015 probe_07000015_mine_objects] —
             // a solid node, the round's state-2 stop [M Bullet_CollisionHandler 0x12ce80].
+            // The stuck gadgets (class-5 bullet objects: the placed tripbomb 0x3a, the satchel 0x3b)
+            // take the round too — `Grenade::round_pick` is the game's sphere pick + object-space
+            // mesh refine against the gadget's glist (`weapon+0x5C`; 0x0200074f for the tripbomb:
+            // centre (0, 0, −0.1), radius 0.24266, 1312 collision tris, glist flags 0x880, every
+            // surface byte 0 [D the 07000013/14/15/16/41 archives]). The nearest solid node takes
+            // the round [M `Collide_Update` 0x1ea398:160-233's sorted walk], so a wall or a nearer
+            // mine shields the gadget. On the take `Bullet_CollisionHandler` 0x12ce80's object arm
+            // (disasm 0x12cff0-0x12d004) kills the round (state 2) and — no pass bit (obj+0xF0 &
+            // 0x60 = 0 from the 0x880 flags; HITDATA+0x50 & 0x40/0x80 = 0) and the round's
+            // `weapon+0x0C` damage > 0 — calls `Bullet_handle_object_destruction` 0x12cd98 on the
+            // gadget: the record gate (`grenade::destruction_gate`), the gadget deletes (obj+0xFE |=
+            // 1, the port's state 2), `Explode_Create` from the GADGET's record (radius +0x08,
+            // damage +0x0C, owner BU+0x30, script 0x0600_0052), and the 0x80000 laser tail deletes
+            // the beam object (BU+0x38) — the port's beam list is rebuilt from the live stuck
+            // tripbombs each tick, so the deleted gadget's beam is gone with it.
+            if !net_world && !b.dead && !self.grenades.is_empty() {
+                let hit = self.grenades.iter().enumerate()
+                    .filter_map(|(gi, g)| {
+                        let model = d.models.get(&g.mesh)?;
+                        let shape = d.world.shape(g.mesh)?;
+                        g.round_pick(model, shape, d.world.shape_materials(g.mesh), b.pos, end).map(|(t, m)| (gi, t, m))
+                    })
+                    .min_by(|x, y| x.1.total_cmp(&y.1));
+                if let Some((gi, t, mat)) = hit {
+                    let tstop = d.world.segment_bullet_scoped(d.world.find_cel(b.pos), b.pos, end);
+                    let mine_t = self.mines.iter().filter_map(|m| m.segment_t(b.pos, end)).min_by(|x, y| x.total_cmp(y));
+                    // A pass surface (HITDATA+0x50 & 0x40) lets the round on without a contact
+                    // [M 0x12ce80:149-151]; no gadget surface carries it [D above].
+                    if tstop.is_none_or(|ts| t <= ts) && mine_t.is_none_or(|mt| t <= mt) && mat & 0x40 == 0 {
+                        b.dead = true;
+                        let round_dmg = d.weapons.records.get(b.weapon as usize)
+                            .map_or(0.0, |r| f32::from_le_bytes([r[0x0c], r[0x0d], r[0x0e], r[0x0f]]));
+                        let g = &self.grenades[gi];
+                        let rec = d.weapons.records.get(g.weapon_type as usize);
+                        if round_dmg > 0.0 && rec.and_then(|r| crate::grenade::destruction_gate(r)).is_some() {
+                            let r = rec.unwrap();
+                            let radius = f32::from_le_bytes([r[0x08], r[0x09], r[0x0a], r[0x0b]]);
+                            let damage = f32::from_le_bytes([r[0x0c], r[0x0d], r[0x0e], r[0x0f]]);
+                            self.pending_blasts.push((g.pos, radius, damage, g.owner, g.weapon_type, 0x0600_0052, radius, 0));
+                            self.grenades[gi].state = 2;
+                        }
+                    }
+                }
+            }
             if !net_world && !b.dead && !self.mines.is_empty() {
                 let hit = self.mines.iter().enumerate()
                     .filter_map(|(i, m)| m.segment_t(b.pos, end).map(|t| (i, t)))

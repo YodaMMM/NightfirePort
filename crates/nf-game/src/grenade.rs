@@ -181,7 +181,86 @@ fn bounce_coefficient(material: u8) -> f32 {
     matches!(material, 13 | 14 | 22).then_some(0.0).unwrap_or(0.5)
 }
 
+/// The weapon-record gate of `Bullet_handle_object_destruction` 0x12cd98 [M]: a class-5 victim is
+/// destroyed by a round only when ITS record carries `+0x68 & 0x4000` and `+0x70 & 0x80204`. The
+/// tripbomb 0x3a (+0x68 0x14080, +0x70 0x80100) and the satchel 0x3b (+0x70 0x300) pass [L/D record
+/// dump]. `None` = the record fails the gate; `Some(laser)` = destroyed, `laser` = the `+0x70 &
+/// 0x80000` tail that deletes the beam object at BU+0x38 with it.
+pub fn destruction_gate(rec: &[u8]) -> Option<bool> {
+    if rec.len() < 0x74 { return None; }
+    let w = |o: usize| u32::from_le_bytes([rec[o], rec[o + 1], rec[o + 2], rec[o + 3]]);
+    (w(0x68) & 0x4000 != 0 && w(0x70) & 0x80204 != 0).then_some(w(0x70) & 0x80000 != 0)
+}
+
 impl Grenade {
+    /// The gadget object's matrix `obj+0x90` as the draw poses it: `Mat_Align2Dir(dir, (0,1,0),
+    /// (1,0,0))` [M 0x12c5a0:185, the stick's re-align 0x12ce80:256-266] at `obj+0x30`. `dir` is the
+    /// gadget box's own alignment (−normal once stuck) or the flight direction for a box-less
+    /// projectile. Rows 0-2 are the local X/Y/Z axes in world space (orthonormal; obj+0xE8 = 1.0 for
+    /// these records — `Bullet_update` state 0 writes the speed scale only for `+0x6C & 0x100`
+    /// [M 0x12e7b0:122-133], and the 0x3a/0x3b records carry +0x6C = 0xc08 [L]).
+    pub fn pose(&self) -> crate::searchlight::Mat4 {
+        let dir = match &self.phase {
+            Some(p) => p.align,
+            None => {
+                let v = self.velocity;
+                let l = (v[0] * v[0] + v[1] * v[1] + v[2] * v[2]).sqrt();
+                if l > 1e-9 { [v[0] / l, v[1] / l, v[2] / l] } else { [0.0, 1.0, 0.0] }
+            }
+        };
+        let mut m = crate::searchlight::align2dir(dir, [0.0, 1.0, 0.0], [1.0, 0.0, 0.0]);
+        m[3] = [self.pos[0], self.pos[1], self.pos[2], 1.0];
+        m
+    }
+
+    /// A player round's flight segment `a → b` against this stuck gadget — the game's pick chain
+    /// for a class-5 object with a glist [M]:
+    /// - `Collide_PickObj` 0x1eae80:57-90 admits it: no class-mask skip (the round's HITTEST+0x98
+    ///   is 0 [M `Bullet_update` 0x12e7b0:389]), `obj+0xF0 & 0x20` clear, and the glist
+    ///   (`weapon+0x5C` set at the first update, `hashtable_set_object_to_entity_gfx` 0x1ca6d8 →
+    ///   `Control_SetGList` 0x134960) carries collision (`glist+8`);
+    /// - the 0x200/0x201 arm (:92-107): the segment's closest point to the world sphere centre
+    ///   `obj+0x80` must lie strictly inside `obj+0x8C` — `Control_BuildWorldSph` 0x133070:40-48:
+    ///   centre = obj+0x90 · glist+0x10, radius = glist+0x1C · |obj+0xE8| (= 1.0, see `pose`);
+    /// - `Collide_Intersect` 0x1ebaa8's 0x201 arm refines in OBJECT space (the inverse of obj+0x90)
+    ///   against the glist's own collision triangles with the one-sided ray (`Intersect_RayGeom`
+    ///   0x10a8c8:168 skips `n·dir >= 0`); a miss leaves the node at 1e8 and `Collide_Update`
+    ///   0x1ea398:122-125 frees it.
+    /// `model` = the glist bounds (centre +0x10, radius +0x1C), `shape`/`mats` = its collision
+    /// triangles and their surface bytes. Returns the nearest front-face hit's segment fraction
+    /// and that triangle's surface byte (HITDATA+0x50).
+    pub fn round_pick(&self, model: &crate::pickup::Model, shape: &[[V3; 3]], mats: Option<&[u8]>, a: V3, b: V3) -> Option<(f32, u8)> {
+        if self.state != 1 || !self.stuck || shape.is_empty() { return None; }
+        let m = self.pose();
+        let sub = |x: V3, y: V3| [x[0] - y[0], x[1] - y[1], x[2] - y[2]];
+        let dot = |x: V3, y: V3| x[0] * y[0] + x[1] * y[1] + x[2] * y[2];
+        let row = |k: usize| [m[k][0], m[k][1], m[k][2]];
+        let (r0, r1, r2, o) = (row(0), row(1), row(2), row(3));
+        let c = model.centre;
+        let centre = [o[0] + c[0] * r0[0] + c[1] * r1[0] + c[2] * r2[0],
+                      o[1] + c[0] * r0[1] + c[1] * r1[1] + c[2] * r2[1],
+                      o[2] + c[0] * r0[2] + c[1] * r1[2] + c[2] * r2[2]];
+        // The sphere broadphase (`vecutil_calculate_closest_point_on_line` clamps to [0, 1]).
+        let d = sub(b, a);
+        let dd = dot(d, d);
+        let t = if dd < 1e-12 { 0.0 } else { (dot(sub(centre, a), d) / dd).clamp(0.0, 1.0) };
+        let q = sub([a[0] + d[0] * t, a[1] + d[1] * t, a[2] + d[2] * t], centre);
+        if dot(q, q) >= model.radius * model.radius { return None; }
+        // The object-space refine (the rows are orthonormal: the inverse is the transpose).
+        let local = |p: V3| { let w = sub(p, o); [dot(w, r0), dot(w, r1), dot(w, r2)] };
+        let (la, lb) = (local(a), local(b));
+        let ld = sub(lb, la);
+        let mut best: Option<(f32, u8)> = None;
+        for (i, tri) in shape.iter().enumerate() {
+            if let Some(tt) = crate::world::ray_tri_t(la, ld, tri) {
+                if best.is_none_or(|(bt, _)| tt < bt) {
+                    best = Some((tt, mats.and_then(|m| m.get(i).copied()).unwrap_or(0)));
+                }
+            }
+        }
+        best
+    }
+
     /// `Bullet_update` (0x12e7b0) for a gravity-affected grenade (`+0x6C & 0x8`): the first tick steps
     /// (0.5 + FRand 0.5) · speed [M the default case 0x12e7c0-0x12e828]; subsequent ticks apply
     /// `velocity += WldGravity · REC_FRAME_RATE²` and **`pos += velocity · FRAME_RATE_MUL`** — the game's
@@ -770,6 +849,94 @@ mod tests {
         // Sister: no fuse explosion — 2000 more ticks stay silent (the record has no +0x200 [L]).
         for _ in 0..2000 { assert!(g.update(&w, &mut rng).is_none(), "the tripbomb never fuse-explodes"); }
         assert!(g.state < 2, "still alive");
+    }
+
+    /// A stuck tripbomb on a wall at z = 0 facing +z (normal +z, so the matrix Z = −normal), with a
+    /// stand-in collision box spanning the disc glist's extent (x ±0.2278, y ±0.1042, local z
+    /// −0.2064..0.0064 [D 0x0200074f's bounds]) wound outward, and the glist sphere (centre (0, 0,
+    /// −0.1), radius 0.24266 [D]).
+    fn stuck_tripbomb() -> (Grenade, crate::pickup::Model, Vec<[V3; 3]>) {
+        let mut ph = StuckGadget::thrown([0.0, 0.0, -1.0]);
+        ph.normal = [0.0, 0.0, 1.0];
+        ph.armed = true;
+        let g = Grenade {
+            pos: [0.0, 1.0, 0.002], velocity: [0.0; 3], speed: 0.0, travelled: 0.0, range: 42857.0,
+            damage: 100.0, radius: 8.0, weapon_type: 0x3a, mesh: 0x0200_074f, owner: usize::MAX, state: 1,
+            bounces: 0, smoke_popped: false, resting: true, stuck: true, seek_target: None, phase: Some(Box::new(ph)),
+        };
+        let (lo, hi) = ([-0.2278f32, -0.1042, -0.2064], [0.2278f32, 0.1042, 0.0064]);
+        let c = |i: usize| [if i & 1 != 0 { hi[0] } else { lo[0] }, if i & 2 != 0 { hi[1] } else { lo[1] }, if i & 4 != 0 { hi[2] } else { lo[2] }];
+        // The six faces as outward-wound quads (corner bits: x=1, y=2, z=4).
+        let quads = [[0, 2, 3, 1], [4, 5, 7, 6], [0, 1, 5, 4], [2, 6, 7, 3], [0, 4, 6, 2], [1, 3, 7, 5]];
+        let mut tris = Vec::new();
+        for q in quads { tris.push([c(q[0]), c(q[1]), c(q[2])]); tris.push([c(q[0]), c(q[2]), c(q[3])]); }
+        (g, crate::pickup::Model { centre: [0.0, 0.0, -0.1], radius: 0.24266 }, tris)
+    }
+
+    /// The round pick [M `Collide_PickObj` 0x1eae80:92-107 + `Collide_Intersect` 0x1ebaa8's 0x201
+    /// arm]: a round from 16 u straight at the body hits its front face (the glist's local z
+    /// −0.2064 face is the one turned OUT of the wall: the stuck matrix's Z is −normal, so local −z
+    /// points along +normal), and the hit fraction lands on that face.
+    #[test]
+    fn a_round_at_the_stuck_tripbomb_body_picks_it() {
+        let (g, model, tris) = stuck_tripbomb();
+        let (a, b) = ([0.05, 1.03, 16.0], [0.05, 1.03, -1.0]);
+        let (t, mat) = g.round_pick(&model, &tris, None, a, b).expect("a round at the body picks the gadget");
+        let z = a[2] + (b[2] - a[2]) * t;
+        assert!((z - (0.002 + 0.2064)).abs() < 1e-3, "the hit is on the outward face, z = {z}");
+        assert_eq!(mat, 0);
+        // The mesh is the gadget's own: a round from BEHIND the wall's plane (inside the body,
+        // moving out) meets only back faces — the one-sided ray [M 0x10a8c8:168] reports nothing.
+        assert!(g.round_pick(&model, &tris, None, [0.0, 1.0, 0.0], [0.0, 1.0, 16.0]).is_none(), "back faces only: no pick");
+    }
+
+    /// Sisters: the game's radius bounds the pick. A round square at the wall through the box's
+    /// corner region, 0.2462 u off the sphere axis (just outside 0.24266), is never a candidate
+    /// although the mesh alone would take it; 0.2236 u off it picks. A round inside the sphere but
+    /// off the mesh refines to nothing; a dead or not-yet-stuck gadget is never picked.
+    #[test]
+    fn a_stray_round_beyond_the_glist_radius_does_not_pick_it() {
+        let (mut g, model, tris) = stuck_tripbomb();
+        // The sphere centre in world space: pos + (−0.1)·Z, Z = −normal = (0, 0, −1) → (0, 1, 0.102).
+        let cz = 0.102;
+        // Square at the wall (along −z) at (x, y) = (0.225, 1.1): inside the box's face
+        // (|x| ≤ 0.2278, |y − 1| ≤ 0.1042), sqrt(0.225² + 0.1²) = 0.2462 off the axis.
+        let (a, b) = ([0.225, 1.1, 16.0], [0.225, 1.1, -1.0]);
+        assert!(g.round_pick(&model, &tris, None, a, b).is_none(), "0.2462 u off the centre: outside the 0.24266 sphere");
+        // Sister: the mesh alone takes that line (the refine with an oversize sphere).
+        let big = crate::pickup::Model { centre: model.centre, radius: 1.0 };
+        assert!(g.round_pick(&big, &tris, None, a, b).is_some(), "the mesh reaches that corner — only the radius rejects it");
+        let (a1, b1) = ([0.2, 1.1, 16.0], [0.2, 1.1, -1.0]);
+        assert!(g.round_pick(&model, &tris, None, a1, b1).is_some(), "0.2236 u off the centre: inside the sphere, on the face");
+        // A line parallel to the wall 0.20 u out from the centre: inside the sphere, but beyond the
+        // box's outward extent (world z ≤ 0.2084 < 0.302) — the mesh refine rejects it.
+        let (a2, b2) = ([-8.0, 1.0, cz + 0.20], [8.0, 1.0, cz + 0.20]);
+        assert!(g.round_pick(&model, &tris, None, a2, b2).is_none(), "inside the sphere, off the mesh: no pick");
+        // Inside both: the line at the centre crosses the box's side face.
+        let (a3, b3) = ([-8.0, 1.0, cz], [8.0, 1.0, cz]);
+        assert!(g.round_pick(&model, &tris, None, a3, b3).is_some(), "the control: the line through the body picks it");
+        g.stuck = false;
+        assert!(g.round_pick(&model, &tris, None, a3, b3).is_none(), "an unstuck gadget is not this pick's candidate");
+        g.stuck = true;
+        g.state = 2;
+        assert!(g.round_pick(&model, &tris, None, a3, b3).is_none(), "a deleted gadget is never picked");
+    }
+
+    /// `Bullet_handle_object_destruction` 0x12cd98's record gate [M]: the tripbomb (+0x68 0x14080,
+    /// +0x70 0x80100 [L]) is destroyed with the laser tail, the satchel (+0x70 0x300) without;
+    /// sisters: a record lacking +0x68 & 0x4000, or with none of +0x70's 0x80204 bits, survives.
+    #[test]
+    fn the_destruction_gate_reads_the_victims_record() {
+        let rec = |r68: u32, r70: u32| {
+            let mut r = vec![0u8; 0x100];
+            r[0x68..0x6c].copy_from_slice(&r68.to_le_bytes());
+            r[0x70..0x74].copy_from_slice(&r70.to_le_bytes());
+            r
+        };
+        assert_eq!(destruction_gate(&rec(0x14080, 0x80100)), Some(true), "tripbomb: destroyed, beam deleted");
+        assert_eq!(destruction_gate(&rec(0x4000, 0x300)), Some(false), "satchel: destroyed, no beam");
+        assert_eq!(destruction_gate(&rec(0x10080, 0x80100)), None, "no +0x68 & 0x4000: survives");
+        assert_eq!(destruction_gate(&rec(0x14080, 0x100)), None, "no +0x70 & 0x80204 bit: survives");
     }
 
     /// fix-satchel-stick-play, the first-tick contact [M `Bullet_CollisionHandler` 0x12ce80 — the
