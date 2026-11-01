@@ -6507,6 +6507,33 @@ pub struct Scene {
     /// Searchlight LOD slots: slot `parts.len() + k` draws the LOD (broken) mesh of part `sl_lod[k]`,
     /// shown iff that part's `lod_next` (Control_NextLOD) is set.
     pub sl_lod: Vec<u16>,
+    /// Level coronas (`Corona_Create` 0x18da00, placement type 0xFC) as camera billboards: slot
+    /// `corona_slot0 + k` (in the searchlight slot region, after the parts and their LOD slots)
+    /// draws at `corona_pos[k]` with the VIEWER's rotation. `Corona_Create` copies the glist flags to
+    /// obj+0xF0 [M 0x18da40-48]; every placed corona glist carries bit 0x8 (07000005 Corona_Glow2 /
+    /// Corona_test1 0x22d, Window_corona 0x229; 07000004 0x29; 07000015/16 0x2d [D]), and `View_DrawObjectGlist` 0x1e6780 replaces
+    /// the drawn rotation for 0x8 objects: `Mat_CopyRot(viewer+0x1a0)` + `Mat_SetTrans(obj+0xC0)`
+    /// [M 0x1e67a4-0x1e6810], scale obj+0xE8 = 1.0 (`control_init_object` 0x134630). Drawn at the
+    /// placement matrix instead, the 07000005 start's bunker and gate-arch glows sat in their authored
+    /// planes and read nearly edge-on (dim slivers).
+    pub corona_pos: Vec<[f32; 3]>,
+    pub corona_slot0: u16,
+}
+
+/// The camera-facing matrix `View_DrawObjectGlist` 0x1e6780 builds for an obj+0xF0 & 0x8 object:
+/// the viewer's rotation (`Mat_CopyRot(viewer+0x1a0)`, here the camera's screen axes) with the
+/// object's translation (`Mat_SetTrans(obj+0xC0)`) and the uniform scale `s` (obj+0xE8)
+/// [M 0x1e67a4-0x1e6848].
+pub fn billboard_matrix(right: [f32; 3], up: [f32; 3], pos: [f32; 3], s: f32) -> Mat4 {
+    let n = |v: [f32; 3]| { let l = (v[0] * v[0] + v[1] * v[1] + v[2] * v[2]).sqrt().max(1e-9); [v[0] / l, v[1] / l, v[2] / l] };
+    let (r, u) = (n(right), n(up));
+    let f = n([r[1] * u[2] - r[2] * u[1], r[2] * u[0] - r[0] * u[2], r[0] * u[1] - r[1] * u[0]]);
+    [
+        [r[0] * s, r[1] * s, r[2] * s, 0.0],
+        [u[0] * s, u[1] * s, u[2] * s, 0.0],
+        [f[0] * s, f[1] * s, f[2] * s, 0.0],
+        [pos[0], pos[1], pos[2], 1.0],
+    ]
 }
 
 /// `psiPreGameRun` (0x11e2e8, read): per level the fog colour and `Ps2Far1`; `FogOn` only on these levels.
@@ -8465,24 +8492,9 @@ pub fn build(level: &Level, cels_only: bool, skeletons: &HashMap<u8, Skeleton>, 
         // function — static glow quads at their placement transforms, in every view mode. The glist's +0x44
         // flags word (bit 0x1: `View_AddObjects` draw list 1, mirrored sort key) is the object's own flags
         // here, so `Layer::World` puts them in the alpha list with the leaves' own blend state [L 13/13].
+        // (Added after the searchlight LOD slots below: a 0x8 corona glist draws camera-facing, so the
+        // coronas ride posed slots — see `Scene::corona_pos`.)
         crate::phase_mark("b5e occluder/scan/digit pools", t); t = std::time::Instant::now();
-        if let Some(m) = level.main_map() {
-            for pl in nf_game::corona::placements(&level.maps[m].placements) {
-                let p = &level.maps[m].placements[pl];
-                let target = if p.by_hash() { level.by_hash.get(&p.hashcode).copied() }
-                    else if (p.index as usize) < level.maps[m].objects.len() { Some((m, p.index as usize)) } else { None };
-                if let Some((map, object)) = target {
-                    // `NF_HIDE` applies here too (the 0xFC skip above leaves these out of the loop's check).
-                    // fix-striped-boxes: `Corona_Create` 0x18da40-48 copies `*(glist+0x44)` to obj+0xF0, so
-                    // `View_AddObjects` 0x1e62d8:33's `(obj+0xF0 & 0x8010) == 0` gate applies — a 0x10-flagged
-                    // corona glist never draws (none on the disc today; the census pins it).
-                    if level.maps[map].objects[object].flags & 0x10 != 0 { continue; }
-                    if let Ok(h) = std::env::var("NF_HIDE") { if h.split(',').any(|n| !n.is_empty() && level.maps[map].objects[object].name.contains(n)) { continue; } }
-                    let inst = Instance { map, object, matrix: nf_formats::placement::object_matrix(p.rotation, p.translation), placement: p.clone() };
-                    add_instance(level, &inst, Layer::World, None, &mut groups, None, None, None, None, [1.0; 3], &room_cels, u32::MAX, u32::MAX);
-                }
-            }
-        }
         // Wire visuals (`Wire_Create` 0x1981d8, placement type 0x3E): the wire's visual mesh is the placement's
         // object (the celglist), like coronas. The wire placement is a dynamic entity (no 0x8000 CREATE_CEL),
         // so it's filtered from the main instance loop; re-add it here [M 0x1981d8].
@@ -8820,6 +8832,8 @@ pub fn build(level: &Level, cels_only: bool, skeletons: &HashMap<u8, Skeleton>, 
         let mut gunimp_placements = 0usize;
         let mut door_scene_hidden = std::collections::HashSet::new();
         let mut sl_lod: Vec<u16> = Vec::new();
+        let mut corona_pos: Vec<[f32; 3]> = Vec::new();
+        let mut corona_slot0 = 0u16;
         if let Some(m) = level.main_map() {
             for (pi, pl) in nf_game::searchlight::part_placements(&level.maps[m].placements).into_iter().enumerate() {
                 let p = &level.maps[m].placements[pl];
@@ -8848,6 +8862,35 @@ pub fn build(level: &Level, cels_only: bool, skeletons: &HashMap<u8, Skeleton>, 
                 add_instance(level, &inst, Layer::Character, None, &mut groups, None, Some(slot), None, None, [1.0; 3], &room_cels, u32::MAX, u32::MAX);
                 put_dim(&mut sl_dims, slot as usize, posed_dim(level, &room_cels, &inst, false));
                 sl_lod.push(pi as u16);
+            }
+            // Level coronas (`Corona_Create` 0x18da00, placement type 0xFC): class-1 objects with NO update
+            // function, drawn by `View_DrawObjectGlist` 0x1e6780 with obj+0xF0 = the glist flags word
+            // [M 0x18da40-48] — bit 0x1 puts them in the alpha list (pass 3 for a slot draw, as before), bit
+            // 0x8 makes them camera-facing (`Scene::corona_pos`). Each 0x8 corona gets a slot after the
+            // searchlight parts and their LOD slots; a corona glist without 0x8 (none on the disc) keeps the
+            // static World draw at its placement matrix.
+            corona_slot0 = (sl_parts.len() + sl_lod.len()) as u16;
+            for pl in nf_game::corona::placements(&level.maps[m].placements) {
+                let p = &level.maps[m].placements[pl];
+                let target = if p.by_hash() { level.by_hash.get(&p.hashcode).copied() }
+                    else if (p.index as usize) < level.maps[m].objects.len() { Some((m, p.index as usize)) } else { None };
+                let Some((map, object)) = target else { continue };
+                let flags = level.maps[map].objects[object].flags;
+                // `NF_HIDE` applies here too (the 0xFC skip in the instance loop leaves these out of its check).
+                // fix-striped-boxes: `View_AddObjects` 0x1e62d8:33's `(obj+0xF0 & 0x8010) == 0` gate — a
+                // 0x10-flagged corona glist never draws (none on the disc today; the census pins it).
+                if flags & 0x10 != 0 { continue; }
+                if let Ok(h) = std::env::var("NF_HIDE") { if h.split(',').any(|n| !n.is_empty() && level.maps[map].objects[object].name.contains(n)) { continue; } }
+                let inst = Instance { map, object, matrix: nf_formats::placement::object_matrix(p.rotation, p.translation), placement: p.clone() };
+                if flags & 0x8 == 0 {
+                    add_instance(level, &inst, Layer::World, None, &mut groups, None, None, None, None, [1.0; 3], &room_cels, u32::MAX, u32::MAX);
+                    continue;
+                }
+                // The slot keeps object-space vertices (`CharVertex.pos`); the palette applies the
+                // billboard each frame.
+                let slot = corona_slot0 + corona_pos.len() as u16;
+                add_instance(level, &inst, Layer::Character, None, &mut groups, None, Some(slot), None, None, [1.0; 3], &room_cels, u32::MAX, u32::MAX);
+                corona_pos.push(p.translation);
             }
             // Doors (`Door_Create`'s creation order = `door_placements`): each door's object as Character-layer
             // vertices posed by the simulation every tick (`Door_Interp`'s matrix at `obj+0x90`); the mesh is
@@ -9530,6 +9573,8 @@ pub fn build(level: &Level, cels_only: bool, skeletons: &HashMap<u8, Skeleton>, 
         Scene { shard_tex, cels: room_cels, cel_graph, streams: None, music_files: None, music_tables: None, sound_bank: None, sound_spares: Vec::new(), snow_texture, vertices, indices, materials, textures, hud_textures, woman: None, hud, script_billboards, view_models, mp_bodies, bond_body, mp_body_weapons, mp_char_bodies, mp_anim_sets, fog, bounds, start, stats, characters, char_vertex_start, char_verts, sequences, attachments, sim, colliders, models_0x800, npc_pool, ladders_drawn, grapple_hooks_drawn, misc_drawn, lock_matrices, door_dims, sl_dims, dynobj_matrices, rotor_placements, rbody_placements, gunimp_placements,
             door_scene_hidden,
             sl_lod,
+            corona_pos,
+            corona_slot0,
             destroy_centres,
             destroy_wrecks,
             tree_chars }
@@ -10715,6 +10760,13 @@ pub fn build(level: &Level, cels_only: bool, skeletons: &HashMap<u8, Skeleton>, 
             // the world like the game's `View_SetDrawInNoViews`.
             if let Some(sl) = v.searchlight {
                 const FAR: Mat4 = [[0.0; 4], [0.0; 4], [0.0; 4], [0.0, -10000.0, 0.0, 1.0]];
+                // A level corona: the camera billboard at its placement (`Scene::corona_pos`).
+                if !self.corona_pos.is_empty() && sl >= self.corona_slot0 {
+                    return match self.corona_pos.get((sl - self.corona_slot0) as usize) {
+                        Some(&pos) => transform(&billboard_matrix(opts.right, opts.up, pos, 1.0), v.pos),
+                        None => transform(&FAR, v.pos),
+                    };
+                }
                 let Some(s) = self.sim.as_ref() else { return [0.0, -10000.0, 0.0] };
                 let n_parts = s.drones.searchlights.parts.len();
                 if sl as usize >= n_parts {
@@ -11092,8 +11144,16 @@ pub fn build(level: &Level, cels_only: bool, skeletons: &HashMap<u8, Skeleton>, 
         for (a, m) in fs.attach.iter().enumerate() { p[l.attach_base as usize + a] = *m; }
         ATTACH_SCRATCH.with(|c| *c.borrow_mut() = std::mem::take(&mut fs.attach));
         if let Some(v) = vis { let e = self.decal_cell_entries(l); self.hide_unseen_decals(p, &e, v); }
+        // The level coronas: camera billboards at their placement (`Scene::corona_pos`), room-culled
+        // like the static draw they replaced; no simulation state needed.
+        for (ci, &pos) in self.corona_pos.iter().enumerate() {
+            let k = l.sl_base as usize + self.corona_slot0 as usize + ci;
+            if k >= l.door_base as usize { break; }
+            p[k] = if vis_room(pos) { billboard_matrix(opts.right, opts.up, pos, 1.0) } else { FAR };
+        }
         if let Some(s) = self.sim.as_ref() {
             for k in 0..(l.door_base - l.sl_base) as usize {
+                if !self.corona_pos.is_empty() && k >= self.corona_slot0 as usize { break; }
                 let keep = match s.drones.searchlights.parts.get(k) {
                     Some(sp) => vis_room(sp.pos),
                     None => true,

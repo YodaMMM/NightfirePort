@@ -54,7 +54,8 @@ alpha-list distance fade, environment mapping, dynamic lights / motion blur / br
   draws each (cel entries through `View_DrawCelGlist`, objects through
   `View_SetupRenderModes_Tweak` + `View_DrawObjectGlist`). So list 0 = **all visible statics in
   placement-parse order, then the dynamic objects front-to-back**; list 1 = the flagged objects
-  back-to-front. Flags 0x8 billboard, 0x4 scale jitter 1.0–1.05 per frame, 0x10 hidden (the
+  back-to-front. Flags 0x8 billboard (`View_DrawObjectGlist` 0x1e6780: `Mat_CopyRot(viewer+0x1a0)` +
+  `Mat_SetTrans(obj+0xC0)` [M 0x1e67a4-0x1e6810]; every placed corona glist carries it — docs/systems/corona.md), 0x4 scale jitter 1.0–1.05 per frame, 0x10 hidden (the
   cel-pass skip — `View_AddCels` never pushes a record with glist flags bit 0x10); `cel+0xA3`
   alpha pulse for placement types 0x8018 / 0x8019.
 - Textures: bilinear, no mipmaps (TEX1 0x60); REGION_REPEAT inside the page; MODULATE, TCC 1;

@@ -41,11 +41,31 @@ in ACTION.ELF (whole-decompile grep). It calls `Corona_Create(pos, quat, level, 
    alpha list);
 3. `build_LinkToRoom(obj, 0, glb_world)`.
 
-So the 13 type-0xFC placement coronas on the disc's levels are class-1 objects with
-`control_funcs[1] = {NULL, NULL, NULL}` — **no update runs, no RNG is consumed**, and the
-viewer's static-glow-quad port (`crates/nf-view/src/scene.rs`, `nf_game::corona::placements`)
-is the complete behavior. (census: 5× `Corona_Glow2`, 7× `Window_corona`, 1× `Corona_test1`
-on 07000005 [L ee_start_05 / WORKLOG 0073].)
+So the type-0xFC placement coronas are class-1 objects with
+`control_funcs[1] = {NULL, NULL, NULL}` — **no update runs**. (census: 07000005 5× `Corona_Glow2`,
+7× `Window_corona`, 1× `Corona_test1` [L ee_start_05 / WORKLOG 0073]; 07000004 2× `corona`;
+07000015 36× `corona1`, 39× `corona_small`, 1× `corona_red`; 07000016 21× `Corona_Glow2` [D
+nf-extract placements … fc, 2026-10-31]; the earlier "13 on the disc" counted 07000005 only.)
+
+## Drawing: camera-facing (2026-10-31, level-05-glow)
+
+The draw is `View_DrawObjList` 0x1e69a0 → `View_SetupRenderModes_Tweak` + `View_DrawObjectGlist`
+0x1e6780 with obj+0xF0 = the glist flags. **Every placed corona glist carries bit 0x8** (0x22d /
+0x229 on 05, 0x29 on 04, 0x2d on 15/16 [D]), and for 0x8 `View_DrawObjectGlist` builds the matrix
+from the VIEWER: `Mat_CopyRot(viewer+0x1a0, m)` 0x1e3370 then `Mat_SetTrans(obj+0xC0, m)` 0x1e3478
+(the obj+0x58 ≠ 0 arm instead concatenates `RotTransMatrix(obj+0x50)` with the viewer rotation),
+then `Mat_Scale3f` by obj+0xE8 when it is not 1.0 [M 0x1e67a4-0x1e6848]. The port drew the coronas
+at their placement matrix, so seen from the side they were thin slivers — the 07000005 start's
+bunker glow (placement 14) and gate-arch glow (placement 15) read far dimmer than the PS2's (the
+long-open "05 glow"). Now each corona rides a posed slot after the searchlight parts
+(`Scene::corona_pos` / `corona_slot0`, `scene::billboard_matrix`), CPU and GPU paths alike
+(`corona_billboard_live.rs`).
+
+Not ported: bit 0x4 (0x22d / 0x2d glists) adds a per-draw scale jitter, `1 + Rand_FRand(0.05)` per
+axis × obj+0xE8 [M 0x1e6860-0x1e68b8] — three draws of the SHARED `SEED_X/SEED_Y` generator
+(`Rand_FRand` 0x1e3780) per drawn jittered object per frame. The port's renderer cannot draw from
+the simulation's RNG, so the coronas draw at scale 1.0 and the sim's RNG stream does not see those
+draws (a determinism gap only where a draw-time RNG consumer is in view).
 
 ## Corona_Update 0x18da78 (the unlaunched runtime fade — documented, not ported)
 
