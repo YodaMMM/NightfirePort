@@ -538,3 +538,239 @@ fn aim_at(w: &Walker, target: [f32; 3]) -> (f32, f32) {
     let want_pitch = (dy / walker::dxz(bp, target).max(0.5)).atan() / std::f32::consts::FRAC_PI_2;
     (err.clamp(-0.08, 0.08), (want_pitch - sim.bond.pitch).clamp(-0.08, 0.08))
 }
+
+/// The re-firing Touch kind (0xEB, type 2): the crane-yard plate #510 "Sound Trigger_Tense"
+/// (out ch 9, mask 8 [D]; its volume from the 0x19 key list spans the dock's east half, lo
+/// 193.68, 9.88, −292.30 — hi 218.69, 17.11, −256.23 [D parse]) raises ch 9 while Bond is inside
+/// its band and `Trigger_Calc` clears it the tick after the crossing ends — every Touch's out is
+/// cleared then re-OR-ed per tick [M 0x1b1900:50-71]. Sister: ch 9 off on the dock stand (west of
+/// the band, x 189 [D #510 lo x 193.68]). The walk-in is the real input.
+#[test]
+fn touch_plate_510_fires_while_inside_and_clears_on_exit() {
+    let mut w = load_warm();
+    {
+        let sim = w.scene.sim.as_mut().unwrap();
+        sim.bond.pos = [189.0, 9.9, -287.6];
+        sim.bond.vel = [0.0; 3];
+    }
+    w.wait(20);
+    assert!(!w.scene.sim.as_ref().unwrap().drones.channels.on(9), "sister: ch 9 off on the dock stand");
+    // East into #510's band along the dock's clear line (z −282; the dock floor's own level) —
+    // the twin ch-9 plate #511's band starts at y 10.67 [D parse], above the walk's y, so this
+    // is #510's arm.
+    w.try_walk_to(Wp::new(197.5, 9.9, -282.0).r(0.8), "into the crane-yard plate #510");
+    assert!(w.scene.sim.as_ref().unwrap().drones.channels.on(9),
+        "the walk-in raises ch 9 [D #510 p0 = 9; M Trigger_Calc 0x1b1900]");
+    // Back west out of the band (x 189 < lo x 193.68 [D parse]).
+    w.try_walk_to(Wp::new(189.5, 9.9, -282.0).r(0.8), "out of the band");
+    w.wait(4);
+    assert!(!w.scene.sim.as_ref().unwrap().drones.channels.on(9),
+        "the exit clears ch 9 the tick after the crossing ends [M 0x1b1900:50-71]");
+}
+
+/// The MusicTrigger kind (0xFB): #512 "Music Trigger" (ch_on 9 → event 13 [D]) is created with
+/// the disc's params [M MusicTrigger_Create 0x1b30e0's gates], and while ch 9 is on the 30-tick
+/// countdown re-arms every tick, then drains to 0 once the channel clears — the re-fire plate
+/// #511's walk-in is the real writer [D #511 p0 = 9; M 0x1b31a0:19-27]. Sister: the countdown
+/// rests 0 before the walk (nothing arms it at load).
+#[test]
+fn music_trigger_512_created_and_armed_by_the_real_ch9() {
+    let mut w = load_warm();
+    {
+        let sim = w.scene.sim.as_ref().unwrap();
+        assert_eq!(sim.drones.worldobjs.music_triggers.len(), 1, "the level's music trigger [D #512]");
+        let t = &sim.drones.worldobjs.music_triggers[0];
+        assert_eq!((t.ch_on, t.event_id), (9, 13), "ch 9 → event 13 [D #512 p0/p2]");
+        assert_eq!(t.countdown, 0, "sister: the countdown rests at load");
+    }
+    // The real writer is the crane-yard plate walk-in (the touch_plate test's pin): east into
+    // #510's dock band [D parse], at the dock floor — below #511's band y 10.67 [D parse].
+    {
+        let sim = w.scene.sim.as_mut().unwrap();
+        sim.bond.pos = [189.0, 9.9, -287.6];
+        sim.bond.vel = [0.0; 3];
+    }
+    w.wait(20);
+    w.try_walk_to(Wp::new(197.5, 9.9, -282.0).r(0.8), "into plate #510");
+    assert!(w.scene.sim.as_ref().unwrap().drones.channels.on(9), "the real walk-in writes ch 9 [D #510]");
+    // Armed: the re-arm (30) then the same tick's drain (−1) holds the countdown at 29 [M
+    // 0x1b31a0:19-27's order]. The Music_Event board slot is consumed inside the frame — the
+    // audible beat is the render/audio layer's (a live check).
+    w.wait(10);
+    assert_eq!(w.scene.sim.as_ref().unwrap().drones.worldobjs.music_triggers[0].countdown, 29,
+        "the countdown holds armed-29 while ch 9 is on [M 0x1b31a0:19-27]");
+    w.try_walk_to(Wp::new(189.5, 9.9, -282.0).r(0.8), "out of the band");
+    w.wait(40);
+    assert_eq!(w.scene.sim.as_ref().unwrap().drones.worldobjs.music_triggers[0].countdown, 0,
+        "the countdown drains to 0 within 30 ticks of the exit [M 0x1b31a0's drain]");
+}
+
+/// The DynamicObject kind (0x3B): the crane-button pair #113/#114 (both at 186.26, 10.51,
+/// −288.73 [D]) swaps on the crane channel: `buttons_blink` (ch A 0x2b) is hidden at create
+/// (p0 != 0 → obj+0xF0 | 0x30 [M 0x18dbf8:27-29]) and ch A on restores its flags [M
+/// 0x18d3b8's ch-A arm]; `buttons` (ch B 0x2b, mode byte p3 = 0) self-deletes when ch B rises
+/// (the blocker arm [M 0x18d3b8:26 + the delete pass]). The driver is the REAL E on the Overhead
+/// Crane touchplate #460 (the crane_e_plate test's pin). Sisters: the pair hidden/alive before.
+#[test]
+fn dynobj_button_pair_swaps_on_the_crane_channel() {
+    let mut w = load_warm();
+    {
+        let sim = w.scene.sim.as_mut().unwrap();
+        sim.bond.pos = [189.0, 9.9, -287.6];
+        sim.bond.vel = [0.0; 3];
+    }
+    w.wait(20);
+    let pair = |w: &Walker| -> Vec<(u16, u16, u32, bool)> {
+        w.scene.sim.as_ref().unwrap().drones.worldobjs.dynobjs.iter()
+            .filter(|o| o.ch_a == 0x2b || o.ch_b == 0x2b)
+            .map(|o| (o.ch_a, o.ch_b, o.flags, o.dead)).collect()
+    };
+    {
+        let b = pair(&w);
+        assert_eq!(b.len(), 2, "the button pair [D #113/#114]");
+        let blink = b.iter().find(|(a, _, _, _)| *a == 0x2b).expect("buttons_blink [D #113]");
+        assert!(blink.2 & 0x30 != 0, "sister: buttons_blink hidden at create [M 0x18dbf8:27-29]");
+        let plain = b.iter().find(|(_, bb, _, _)| *bb == 0x2b).expect("buttons [D #114]");
+        assert!(plain.2 & 0x30 == 0 && !plain.3, "sister: buttons visible and alive before");
+    }
+    w.walk_to(Wp::at(189.0, 9.9, -288.7, Act::Use { use_ticks: 240 }), "E the crane touchplate #460");
+    w.wait(10);
+    assert!(w.scene.sim.as_ref().unwrap().drones.channels.on(0x2b),
+        "the E fires ch 0x2b [D #460 p0; M Trigger_Activate 0x1b2318:23-33]");
+    w.wait(5);
+    let b = pair(&w);
+    let blink = b.iter().find(|(a, _, _, _)| *a == 0x2b).expect("buttons_blink persists");
+    assert!(blink.2 & 0x30 == 0, "ch A on unhides buttons_blink [M 0x18d3b8's flags restore], flags {:#x}", blink.2);
+    assert!(b.iter().find(|(_, bb, _, _)| *bb == 0x2b).is_none(),
+        "ch B on self-deletes buttons (mode byte 0) [M 0x18d3b8:26; the delete pass retains it out]");
+}
+
+/// The Hint kind (0x33): #535 "End of Level Hint" (label 0x2000021, sound 0, enable ch 0x28,
+/// blocker ch 0x1e [D]) fires once through the real route: the C5 door shot open (ch 0x1f), the
+/// corridor plate crossed (ch 0x28) with the photograph NOT taken (ch 0x1e off) — `Hint_Update`
+/// 0x1b3380's gates [M] — and the INFO pane takes the label [M Text_AddMsg's 180-tick type-1].
+/// Sisters: the created struct carries the disc gates [D], and nothing fires while the enable
+/// channel is still off.
+#[test]
+fn hint_535_fires_at_the_c5_corridor_after_the_shot_open() {
+    let mut w = load_warm();
+    w.top_up_health = true;
+    {
+        let sim = w.scene.sim.as_ref().unwrap();
+        let h = sim.hints.iter().find(|h| h.label == 0x200_0021).expect("the End of Level Hint [D #535]");
+        assert_eq!((h.on_channel, h.off_channel, h.sound), (0x28, 0x1e, 0),
+            "the disc gates [D #535 p3/p4/p1; M Hint_Update 0x1b3380's gates]");
+        assert!(!sim.drones.channels.on(0x28), "sister: the enable ch 0x28 off at load");
+    }
+    to_yard(&mut w);
+    w.walk_to(Wp::new(136.5, 4.5, -290.0).r(2.0), "the yard south 1");
+    w.walk_to(Wp::new(136.0, 4.5, -308.5).r(1.2), "the ST-3 plate");
+    // The mounted laser (the c5 test's own pin) kills bigdoor02 #96; ch 0x1f.
+    {
+        let sim = w.scene.sim.as_mut().unwrap();
+        sim.bond.pos = [135.0, 4.5, -281.0];
+        sim.bond.vel = [0.0; 3];
+        let wd = sim.weapons.clone();
+        let rounds = wd.clip_size(0x67).max(1);
+        let _ = sim.drones.inventory.equip_weapon(&wd, 0x67, rounds, true);
+        sim.gun.switch_request = 0x67;
+    }
+    w.wait(30);
+    let killed = shoot_at(&mut w, [134.5, 5.6, -269.4], 25.0, 30000, &|sim| sim.drones.channels.on(0x1f));
+    assert!(killed, "the door dies → ch 0x1f [M 0x12bd48:35]");
+    // The corridor walk: the re-firing plate #433 raises ch 0x28 (the c5 test's pin).
+    w.walk_to(Wp::new(136.0, 4.2, -278.0).r(2.0), "the yard north");
+    w.walk_to(Wp::new(136.0, 5.2, -267.5).r(1.5), "the corridor slope");
+    assert!(w.scene.sim.as_ref().unwrap().drones.channels.on(0x28), "the corridor plate fires ch 0x28 [D #433]");
+    // Onto the hint's marker volume: the created centre + radius (the placement's world sphere
+    // [M Control_BuildWorldSph 0x133070]).
+    let (hc, hr) = {
+        let sim = w.scene.sim.as_ref().unwrap();
+        let h = sim.hints.iter().find(|h| h.label == 0x200_0021).unwrap();
+        (h.centre, h.radius)
+    };
+    {
+        let sim = w.scene.sim.as_mut().unwrap();
+        sim.bond.pos = [hc[0], hc[1] - 1.0, hc[2]];
+        sim.bond.vel = [0.0; 3];
+    }
+    w.wait(30);
+    {
+        let sim = w.scene.sim.as_ref().unwrap();
+        let hi = sim.hints.iter().position(|h| h.label == 0x200_0021).unwrap();
+        assert!(sim.hint_fired.get(hi).copied().unwrap_or(false),
+            "the hint fires at its marker with ch 0x28 on and ch 0x1e off [M 0x1b3380:24-42], centre {hc:?} r {hr}");
+        assert!(sim.hud.info_labels.iter().any(|(l, _)| *l == 0x200_0021)
+            || sim.hud.info_msgs.iter().any(|m| m.label == 0x200_0021),
+            "the INFO pane takes the label 0x2000021 [M Text_AddMsg's type-1]");
+    }
+    // The enable arm: on a fresh load the same marker stays silent while ch 0x28 is off —
+    // nothing in the yard writes it [D scan].
+    let mut bare = load_warm();
+    to_yard(&mut bare);
+    bare.wait(60);
+    let bare_hi = bare.scene.sim.as_ref().unwrap().hints.iter().position(|h| h.label == 0x200_0021).unwrap();
+    assert!(!bare.scene.sim.as_ref().unwrap().hint_fired.get(bare_hi).copied().unwrap_or(true),
+        "sister: the hint stays silent while the enable ch 0x28 is off [M 0x1b3380's enable gate]");
+}
+
+/// The SoundTrigger kind (0xF9): #516 "Sound Trigger" (gate ch 0x67 = 103 → sound 0x14d = 333,
+/// play-once [D]) is created with the disc's params, and stays silent through real play — ch 103
+/// has NO writer anywhere in the level's data [D scan], so `SoundTrigger_Update` 0x1b2790's gate
+/// never opens [M]. The game's own data gates it forever, in the port as in the game.
+#[test]
+fn sound_trigger_516_created_and_gated_silent() {
+    let mut w = load_warm();
+    {
+        let sim = w.scene.sim.as_ref().unwrap();
+        let t = sim.drones.sound_triggers.list.iter().find(|t| t.on == 0x67)
+            .expect("the level's sound trigger [D #516]");
+        assert_eq!(t.id, 0x14d, "sound 333 [D #516 p2]");
+        assert_eq!(t.one_shot, 1, "play-once [D #516 p1]");
+        assert_eq!(t.off, 0, "no stop channel [D #516 p4]");
+        assert!((t.pos[0] - 180.62).abs() < 0.5 && (t.pos[2] + 297.84).abs() < 0.5,
+            "at its placement [D #516], got {:?}", t.pos);
+        assert!(!sim.drones.sound_triggers.playing(0x14d), "sister: silent at load");
+    }
+    to_yard(&mut w);
+    w.wait(240);
+    assert!(!w.scene.sim.as_ref().unwrap().drones.sound_triggers.playing(0x14d),
+        "ch 103 has no writer — the trigger never plays [D scan; M 0x1b2790's gate]");
+}
+
+/// The CreepWall kind (0x3F) + its third icon (0xFA): the wall-hug icon #537 (152.94, 22.47,
+/// −265.80, ctx 6 [D]) arms the context from the walk pick [M ThirdIcon_Update 0x196e80:36-52],
+/// and the use key's creepwall arm — the game's ONLY gate is BLData+0x95f == 6 [M Player_Activate
+/// 0x1a5170:66-97] — starts the hug on the nearest class-0x2B within squared 1000: #375 "Wall
+/// Hug Long" (152.74, 22.07, −256.65, ride ch 0x71 [D]). The creep holds the ride ch [M
+/// Player_CollCreepWall 0x196758]. Sister: on foot, ch 0x71 off, ctx unarmed before the E.
+/// The TR-2 roof stand is the doors test's own (the guards' roof, y ≈ 22.7 [D drones]).
+#[test]
+fn creepwall_375_wall_hug_via_the_context_e() {
+    let mut w = load_warm();
+    {
+        let sim = w.scene.sim.as_mut().unwrap();
+        sim.bond.pos = [152.9, 22.6, -265.8];
+        sim.bond.vel = [0.0; 3];
+    }
+    w.wait(20);
+    {
+        let sim = w.scene.sim.as_ref().unwrap();
+        assert!(sim.icons.iter().any(|i| i.ctx == 6 && (i.centre[0] - 152.94).abs() < 0.5 && (i.centre[2] + 265.80).abs() < 0.5),
+            "the wall-hug icon #537 [D p0 = 6]");
+        assert_eq!(sim.bond.substate, nf_game::player::SS_WALK, "sister: on foot before the E");
+        assert!(!sim.drones.channels.on(0x71), "sister: the ride ch 0x71 off before the E");
+    }
+    let mut crept = false;
+    for _ in 0..60 {
+        w.tick(nf_game::player::Input::default(), w.total_ticks % 6 == 0);
+        if w.scene.sim.as_ref().unwrap().bond.substate == nf_game::player::SS_CREEP { crept = true; break; }
+    }
+    assert!(crept, "the context E starts the wall hug [M Player_Activate 0x1a5170:66-97], ctx {:#x} substate {}",
+        w.scene.sim.as_ref().unwrap().bond.icon_ctx, w.scene.sim.as_ref().unwrap().bond.substate);
+    // The hold is per-tick [M Player_Creep 0x1969d0:85-88] and its write runs earlier in the
+    // tick than the E arm that started the crawl — give it two frames before the read.
+    w.wait(2);
+    assert!(w.scene.sim.as_ref().unwrap().drones.channels.on(0x71),
+        "the creep holds the ride ch 0x71 [D #375 p3; M Player_CollCreepWall 0x196758 / Player_Creep 0x1969d0:85-88]");
+}
