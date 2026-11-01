@@ -953,7 +953,7 @@ fn seg_tri_hit(from: V3, to: V3, t: &[V3; 3]) -> bool {
 /// test [M Intersect_RayGeom 0x10a8c8:168: `n·dir >= 0` skips the triangle]) — the same arithmetic
 /// `segment_in_sets_drop_pass` inlines, as a shared body so the scoped and flat bullet walks agree
 /// term for term.
-fn ray_tri_t(from: V3, d: V3, t: &[V3; 3]) -> Option<f32> {
+pub(crate) fn ray_tri_t(from: V3, d: V3, t: &[V3; 3]) -> Option<f32> {
     let (e1, e2) = (sub(t[1], t[0]), sub(t[2], t[0]));
     if dot(cross(e1, e2), d) >= 0.0 { return None; } // back face [M 0x10a8c8:168]
     let p = cross(d, e2);
@@ -1219,6 +1219,8 @@ impl CollisionWorld {
 
     /// Glist object `hash`'s collision triangles in object space.
     pub fn shape(&self, hash: u32) -> Option<&[[V3; 3]]> { self.shapes.get(&hash).map(Vec::as_slice) }
+    /// The surface bytes of `shape(hash)`'s triangles, in the same order (HITDATA+0x50's source).
+    pub fn shape_materials(&self, hash: u32) -> Option<&[u8]> { self.shape_mats.get(&hash).map(Vec::as_slice) }
 
     /// Whether glist object `hash` has collision geometry.
     pub fn has_shape(&self, hash: u32) -> bool { self.shapes.contains_key(&hash) }
