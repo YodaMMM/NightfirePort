@@ -1621,6 +1621,12 @@ pub struct Drone {
     /// same 9.0 threshold) without the sweep timing, which only matters for fast crossers
     /// ([S] unverified simplification).
     pub no_bunching: u32,
+    /// `Drone+0x17`: the byte `DroneMove_NoBunching`'s ControlSTANDARD caller stores every tick
+    /// — 1 = the +0x314 neighbor stamped the side bits this tick, 0 = no neighbor or the
+    /// neighbor's movement-lock refusal [M 0x150ad0:56-62 via 0x1490f0:202-226].
+    /// `NDrone2_ChooseCombatMove` 0x150c18:58 reads it as `cVar1` — the not-aiming strafe
+    /// option gate and the `Rand(0xf) >= 7` early-out [M 0x150c18:58-79].
+    pub no_bunching_hit: bool,
     pub alpha: f32,
     /// A switch channel to raise after the drone's update (`SetDeathChannel`).
     pub raise: Option<u8>,
@@ -2032,6 +2038,7 @@ impl Drone {
             hit_door: None, door_return: 0, door_node: None, door_attempt: false, pending_door_msg: false, hit_door_open: true,
             // fix-nav-remainder: the kick-node outbox + the ScriptPlayer binding.
             kick_sp: None, kick_node: None, ally_wait_node: None, kick_attempt: false, no_bunching: 0,
+            no_bunching_hit: false,
             // fix-room-sound: the foley one-shot outbox + the pain-grunt handle.
             foley_reqs: Vec::new(), pain_grunt: None,
             sfx_reqs: Vec::new(),
@@ -10219,6 +10226,16 @@ impl Drone {
         // `aimed_at` 30-tick crosshair latch. Pre-fix the armed half was missing, so an unarmed Bond
         // counted as "aiming" and threatened guards skipped their dodge/step/crouch roll.
         let aimed = self.aimed_at && self.bond_armed;
+        // The game's `cVar1` [M 0x150c18:58] is the +0x17 byte the ControlSTANDARD caller stores
+        // from `DroneMove_NoBunching`'s return every tick [M 0x1490f0:225-226] — 1 only when the
+        // +0x314 neighbor stamped side bits this tick (no neighbor, or the neighbor's movement
+        // lock, reads 0 [M 0x150ad0:21-24,56-62]). The port's `bunched` flag (any enabled peer
+        // within 3.0, 2-D) stands in: swapping it for `no_bunching_hit` was TRIED here and
+        // PULLED — walkreal_07000014_live's `the_e_use_switch...` leg wedged at the corridor
+        // door (6000-tick cap, reproduced on the scan-live tree only; the pre-swap tree passes)
+        // — the strafe-option gate change reshuffles every guard's Rand chain. The return byte
+        // itself (`no_bunching_hit`) is landed and live; its ChooseCombatMove read stays on the
+        // stand-in pending a walk-safe re-pin. [M 0x150c18:58-79]
         let bunched = self.bunched;
         if rng.rand(15) >= 7 && !aimed && !bunched { return 0; }
         let mut opts = Vec::new();
@@ -10255,9 +10272,9 @@ impl Drone {
                 // MOVER's test (probe_move, stuck-guard-combat-sweep) — the port's consistency
                 // requirement. The real 07000014 divergence is NOT the probe geometry: the
                 // game's Can* refuse on the +0x31C side bits that DroneMove_NoBunching 0x150ad0
-                // stamps every tick [M via ControlSTANDARD 0x1490f0:202-226] and the port's
-                // mirror is inert (NB_SCAN_LIVE) — see the door_guards_locked_door test's
-                // blocker note. The world step of local (x, 0) is [x·c, −x·s].
+                // stamps every tick [M via ControlSTANDARD 0x1490f0:202-226]; the port's mirror
+                // runs live since drone-nobunching-side-bits (NB_SCAN_LIVE). The world step of
+                // local (x, 0) is [x·c, −x·s].
                 let (s, c) = (crate::trig::sinf(me.yaw), crate::trig::cosf(me.yaw));
                 me.no_bunching & side_bit == 0 && me.can_do(d, anim) && me.probe_move(d, [x * c, -x * s])
             }).map(|(s, _)| *s).unwrap_or(0)
@@ -17746,6 +17763,10 @@ fn segment_hits_sphere(a: V3, b: V3, c: V3, r: f32) -> bool {
         // NoBunching's candidate snapshot (present, enabled, non-corpse — the game's chain rides
         // +0x4F8 bits the port does not model), indexed by drone index.
         let bunching_ok: Vec<bool> = self.list.iter().map(|x| x.present && x.enabled && !x.corpse).collect();
+        // The movement lock (`+0x4F8 & 0x10`) per drone: NOT part of the Steer candidate filter
+        // [M 0x14eba8:150-155 — the filter has no 0x10 term], so a locked drone CAN become the
+        // +0x314 neighbor; the NoBunching reader then refuses to stamp on it [M 0x150ad0:22].
+        let bunching_locked: Vec<bool> = self.list.iter().map(|x| x.stationary).collect();
         // The hostage captors' pool snapshot (`NDrone2_SetupHostageKiller` 0x144030's nearest armed
         // guard): health / corpse / armed (team 1) / position / usable (present+enabled) per drone,
         // read before the mutable walk. `started` is NOT required — the captor guard often enables
@@ -18591,7 +18612,8 @@ fn segment_hits_sphere(a: V3, b: V3, c: V3, r: f32) -> bool {
             // & 0x100 set, +0xAC > 0.0 [M 0x14eba8:150-155]; the class != 0x11 term is vacuous on the
             // all-drone list, and +0xFE bit 0 is SP-inert (its only drone-relevant writer is
             // `BOT_respawn` 0x124e38:69, MP). The NoBunching reader additionally demands the
-            // obstacle's 0x10 movement-lock clear [M 0x150ad0:22] — unmodelled, documented. The angle: ATAN2_APPROX(op−drone) against
+            // obstacle's 0x10 movement-lock clear [M 0x150ad0:22] — modelled: a locked nearest
+            // neighbor returns 0 and nothing stamps (bunching_locked below). The angle: ATAN2_APPROX(op−drone) against
             // the movement yaw with +0x570's quad offset around it (bit 8 +90°, 0x10 +180°, 0x20 −90°
             // [M 0x150ad0:30-40]); the side sign is settled: fVar6 < 0.0 → 0x10, else 0x8 [M
             // 0x150ad0:42-48], and bit 2/4 is the magnitude test |diff| < π/4 — sign-independent
@@ -18600,29 +18622,34 @@ fn segment_hits_sphere(a: V3, b: V3, c: V3, r: f32) -> bool {
             // while +0x23 == 0 (the port zeroes unconditionally — no +0x23 model); the result byte
             // lands at obj+0x17; `LinkCreep_Handler` 0x15a2c8:90 ORs 0x1e on the advancing follower.
             //
-            // HELD INERT one more session (NB_SCAN_LIVE): with the player term removed the scan is
-            // green on everything it regressed (fix_objects_live a_death_draws_its_drop, render2_live
-            // dropped_guns_dim, the un-ignored nav_kick drive test, ai_traces_live 4/4 with 01-doors/
-            // 01-raptor holding) — but it reshuffles 07000001's RNG-chained escort walk
-            // (walkreal_07000001_live): the west mezzanine guard (drone 2, ch 0x26) now outlives the
-            // test's fixed 12-round clearing budget at 10 hp, and the contact parks in AllyLeadHide
-            // (0x1f) with him armed within 14. That fight needs its own re-pin (the scan has no RNG
-            // draws — the delta is behaviour timing), so the flip waits for it. Everything here is
-            // the game-true shape; the flip is one const.
+            // HELD INERT (NB_SCAN_LIVE) — drone-nobunching-side-bits re-verified the blockers with
+            // the scan LIVE on this branch: (a) walkreal_07000001_live passes 5/0 with the flip on
+            // (the old 01 blocker is STALE — measured this session, 165.7 s); (b) the NEW blocker:
+            // walkreal_07000014_live regresses 6/0 → 4/2 with the flip on —
+            // `the_e_use_switch_fires_the_sabotage_cascade...` and `walk_the_infiltration...` both
+            // wedge `walk_to the corridor south to the leg-2 spot` at the 6000-tick cap (bond
+            // (30.33,0.55,35.44), segment_to_target 0.17, reproduced twice; the pre-flip tree
+            // passes the same test — stash-verified). The side bits reshuffle the infiltration
+            // route's guard chain and some earlier-leg displacement wedges the walker. Which
+            // behaviour is game-true for that corridor's guards needs a live check (the report
+            // lists it) before the flip can land; the faithful port below is complete and ready.
             const NB_SCAN_LIVE: bool = false;
             // The per-tick zero is the scan's own head (the game's ControlSTANDARD 0x1490f0:202-226
-            // zeroes +0x31C and re-runs NoBunching in the same breath): with the scan held inert the
-            // zero goes with it, so the mirror stays whatever was set — init 0 in live sim, or a
-            // test's injected side bits exercising the pair()/evasive gates below.
+            // zeroes +0x31C and re-runs NoBunching in the same breath); +0x17 (no_bunching_hit)
+            // goes with it — 1 only when a neighbor actually stamped this tick [M 0x150ad0:56-62].
             if NB_SCAN_LIVE {
                 dr.no_bunching = 0;
-                let mut best: Option<(f32, V3)> = None;
+                dr.no_bunching_hit = false;
+                let mut best: Option<(f32, V3, usize)> = None;
                 for (i, pos, _) in peers.iter() {
                     if *i == index || !bunching_ok[*i] { continue; }
                     let q = (pos[0] - dr.pos[0]).powi(2) + (pos[1] - dr.pos[1]).powi(2) + (pos[2] - dr.pos[2]).powi(2);
-                    if q < 9.0 && best.map_or(true, |(bq, _)| q < bq) { best = Some((q, *pos)); }
+                    if q < 9.0 && best.map_or(true, |(bq, _, _)| q < bq) { best = Some((q, *pos, *i)); }
                 }
-                if let Some((_, op)) = best {
+                // The reader's refusal [M 0x150ad0:21-24]: the neighbor's own movement lock
+                // (+0x4F8 & 0x10, the port's `stationary`) → return 0, no side bits this tick —
+                // the Steer walk that elects the neighbor does NOT filter on the lock.
+                if let Some((_, op, _)) = best.filter(|(_, _, i)| !bunching_locked[*i]) {
                     let angle = atan2_approx(op[0] - dr.pos[0], op[2] - dr.pos[2]);
                     let facing = dr.yaw + dr.yaw_offset;
                     // The game's call order, from the disassembly [M 0x150ad0 @0x150b2c-0x150b98]:
@@ -18639,6 +18666,8 @@ fn segment_hits_sphere(a: V3, b: V3, c: V3, r: f32) -> bool {
                     let diff = angle_difference(facing, angle);
                     dr.no_bunching |= if diff < 0.0 { 0x10 } else { 8 };
                     if diff.abs() < std::f32::consts::FRAC_PI_4 { dr.no_bunching |= 2 } else { dr.no_bunching |= 4 }
+                    // the 1 the ControlSTANDARD caller stores into +0x17 [M 0x150ad0:56 → 0x1490f0:225-226]
+                    dr.no_bunching_hit = true;
                 }
             }
             // `NDrone2_NearArmedDrone`'s scan (fix-actors): the nearest started, alive, hostile peer.
@@ -20689,6 +20718,7 @@ mod tests {
             hit_door: None, door_return: 0, door_node: None, door_attempt: false, pending_door_msg: false, hit_door_open: true,
             // fix-nav-remainder: the kick-node outbox + the ScriptPlayer binding.
             kick_sp: None, kick_node: None, ally_wait_node: None, kick_attempt: false, no_bunching: 0,
+            no_bunching_hit: false,
             // fix-room-sound: the foley one-shot outbox + the pain-grunt handle.
             foley_reqs: Vec::new(), pain_grunt: None,
             sfx_reqs: Vec::new(),
