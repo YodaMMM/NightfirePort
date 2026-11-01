@@ -68,8 +68,25 @@ fn clear_captors(w: &mut Walker, around: [f32; 3], label: &str) {
             sim.drones.list.iter().position(|d| d.team == 1 && d.health > 0.0 && !d.corpse
                 && d.pos.iter().zip(around).map(|(a, b)| (a - b).powi(2)).sum::<f32>() < 64.0)
         };
-        let Some(di) = target else { return };
-        let dest = if round == 0 { around }
+        // The geisha's own bound captor [M 0x144030] first, wherever the AI has walked him: the
+        // save keys on that captor's death [M 0x1441c0], and a hunting captor can leave the
+        // 8-unit room radius (measured on the faithful capsule tree: geisha 1.s drone 5 stood 9.6
+    // away at round 0) while the radius pass
+        // finds nobody and the save never fires. Then the rest of the room.
+        let bound = {
+            let sim = w.scene.sim.as_ref().unwrap();
+            sim.drones.list.iter()
+                .filter(|g| g.captor.is_some() && g.pos.iter().zip(around).map(|(a, b)| (a - b).powi(2)).sum::<f32>() < 1.0)
+                .filter_map(|g| g.captor)
+                .find(|&c| c < sim.drones.list.len() && sim.drones.list[c].health > 0.0 && !sim.drones.list[c].corpse)
+        };
+        if let Some(c) = bound {
+            let p = w.scene.sim.as_ref().unwrap().drones.list[c].pos;
+            eprintln!("[02] {label}: bound captor drone {c} at ({:.1},{:.1},{:.1}), {:.1} from the geisha (round {round})",
+                p[0], p[1], p[2], p.iter().zip(around).map(|(a, b)| (a - b).powi(2)).sum::<f32>().sqrt());
+        }
+        let Some(di) = bound.or(target) else { return };
+        let dest = if round == 0 && (bound.is_none() || bound == target) { around }
             else { w.scene.sim.as_ref().unwrap().drones.list[di].pos };
         w.walk_nav_to(dest, &format!("{label} captor {round} approach"), 3.5);
         if !w.shoot(di, &format!("{label} captor {round}")) {
