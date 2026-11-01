@@ -176,8 +176,9 @@ fn armour_glow_pulses_when_bond_is_close() {
 /// ── Item 3: reload from empty ──────────────────────────────────────────────────────────────────
 /// The P2K (0x06-style path: +0xA8 = 0 [L ee_start_05.bin record 2]) reloads in view state 6: the
 /// +0xA4 loop queued by `Player_WeaponFiring`'s shared tail at 1.35× (`AnimScriptAddSpeed`, disasm
-/// 0x1a62d0), starting at frame 6 for flag-0x1000 weapons (AnimListBuild +0x90 = 6.0, disasm
-/// 0x1a6300-31c) — the tick count is ceil((len − 6)/1.35). When the loop stops, a non-shell weapon
+/// 0x1a62d0), starting at frame 6 for flag-0x1000 weapons when the auto-reload starts it (AnimListBuild
+/// +0x90 = 6.0, disasm 0x1a6300-31c) and at frame 0 from the reload key (disasm 0x1a5fb0-0x1a5fdc)
+/// — the tick count is ceil((len − first frame)/1.35). When the loop stops, a non-shell weapon
 /// (flags68 & 0x100 == 0) goes STRAIGHT to idle: +0xA0, state 0, Input_ClearAction(9) [M
 /// LAB_001a3678 0x1a3678-0x1a369c]; +0xAC is never played (retail scan [L]: only SPAS-12 has +0xAC).
 #[test]
@@ -202,20 +203,30 @@ fn reload_from_empty_plays_the_1_35x_loop_and_lands_on_idle() {
     // now > 0 [M 0x1a5460:442-462]) land on the SAME tick — the extra R press is a no-op then.
     sim.step_bond(Default::default(), false, false, false);
     assert!(sim.drones.inventory.carried[atype] > 0, "the ammo pickup was taken");
-    if sim.gun.reload_state == 0 {
+    // The two starts differ in the loop's first frame: the auto-reload (branch B, trigger idle)
+    // builds the +0xA4 list at frame 6 for flag-0x1000 weapons [M 0x1a5460:471-485, disasm
+    // 0x1a62e4-0x1a631c]; the reload KEY (action 0xe, branch A) queues it from frame 0
+    // [M 0x1a5460:418-421, disasm 0x1a5fb0-0x1a5fdc — no AnimListBuild].
+    let by_key = sim.gun.reload_state == 0;
+    if by_key {
         // (only if the take landed a tick later) press reload (action 14) to start it.
         sim.step_bond(Default::default(), false, true, false);
     }
+    let from = if by_key { 0.0 } else { 6.0 };
     assert_eq!(sim.gun.reload_state, 6, "state 6 with no +0xA8 script [M 0x1a5f80]");
     let w = &sim.weapons.records[2];
     let rd = |o: usize| u32::from_le_bytes(w[o..o + 4].try_into().unwrap());
     let (a4, a0) = (rd(0xa4), rd(0xa0));
     assert_eq!(sim.view_script, a4, "the +0xA4 loop is queued");
     assert!((sim.view_speed - 1.35).abs() < 1e-4, "the loop plays at 1.35× [M disasm 0x1a62d0], got {}", sim.view_speed);
-    assert!((sim.view_time - 5.0).abs() < 1e-4, "flag 0x1000 starts at frame 6 = time 5.0 [M 0x1a6300-31c], got {}", sim.view_time);
+    if by_key {
+        assert!(sim.view_time.abs() < 1e-4, "the key's reload plays +0xA4 from frame 0 [M disasm 0x1a5fb0-0x1a5fdc], got {}", sim.view_time);
+    } else {
+        assert!((sim.view_time - 5.0).abs() < 1e-4, "flag 0x1000 starts at frame 6 = time 5.0 [M 0x1a6300-31c], got {}", sim.view_time);
+    }
     let len = sim.scripts.get(&a4).map(|s| s.length as f32).expect("the reload script exists");
-    let want_ticks = ((len - 6.0) / 1.35).ceil() as u32;
-    assert_eq!(sim.gun.reload_ticks, want_ticks - 1, "the tick count is ceil((len − 6)/1.35) = {want_ticks} (the start tick's reload_tick already ran)");
+    let want_ticks = ((len - from) / 1.35).ceil() as u32;
+    assert_eq!(sim.gun.reload_ticks, want_ticks - 1, "the tick count is ceil((len − {from})/1.35) = {want_ticks} (the start tick's reload_tick already ran)");
     // Ride it out: no state 7, straight to idle with the +0xA0 script re-queued.
     let mut seen = std::collections::HashSet::new();
     for _ in 0..want_ticks + 10 {

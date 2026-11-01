@@ -347,7 +347,8 @@ fn dump_the_stairwell_impacts_vs_render() {
 ///    [M Bullet_CollisionHandler 0x12ce80 0x12cf7c: `HITDATA+0x50 & 0x40 → pass`], and their
 ///    `mat & 0x3f == 0` blocks every `Effect_Create` effect including the decal [M 0x1ce6f8], so no
 ///    player-visible hole spawns there.
-/// 3. Exactly ONE decal lies off the STATIC drawn mesh: (23.219, 28.226, 5.772), 0.402 from the
+/// 3. Exactly ONE decal lies off the STATIC drawn mesh: (23.169, 28.299, 5.772) (re-pinned when the
+///    player's spread took the pull bloom [M Bullet_init 0x12c5a0:139-170]; it was (23.219, 28.226)), ~0.40 from the
 ///    nearest static World triangle, the third stop of the frame2944 spot's yaw +0.79 pitch −0.50
 ///    double-ricochet chain. It is not in mid-air: the face it sits on is door #196's leaf
 ///    (DOOR_Stairwell_1, the slide door locked by ch 200 [D], dynamic collision id door 7 — its
@@ -407,7 +408,7 @@ fn every_stairwell_impact_sits_on_drawn_geometry() {
         "exactly one hole off the static mesh expected (the one on door #196); got {mid_air:?}"
     );
     let (p, pd) = mid_air[0];
-    let want = [23.219, 28.226, 5.772];
+    let want = [23.169, 28.299, 5.772];
     for k in 0..3 {
         assert!(
             (p[k] - want[k]).abs() < 0.02,
