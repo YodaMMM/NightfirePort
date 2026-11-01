@@ -2883,12 +2883,13 @@ mod tests {
         assert!(b.pos[2] < 5.0 - RADIUS + 0.01, "held by the wall: {:?}", b.pos);
         assert!(b.move_local[0] == 0.0 && b.move_local[1] > 0.0,
             "pushing into the wall reads moving: {:?}", b.move_local);
-        // The strafe lane rides x [M 0x191dd0:166].
-        for _ in 0..10 { b.tick(&w, &Input { strafe: 1.0, ..Default::default() }); }
-        assert!(b.move_local[0] != 0.0 && b.move_local[1] == 0.0, "strafe lane: {:?}", b.move_local);
-        // Release: the dead-zone snaps the lanes to exactly 0, so the guards read still.
+        // Release: the dead-zone snaps the lanes to exactly 0 [M 0x191dd0:96-99 —
+        // |target| ≤ 0.0002 and |eased| < 0.01 → 0.0], so the guards read still.
         for _ in 0..20 { b.tick(&w, &Input::default()); }
         assert_eq!(b.move_local, [0.0, 0.0], "the dead-zone parks the quad at zero: {:?}", b.move_local);
+        // The strafe lane rides x [M 0x191dd0:166] while the released forward lane stays 0.
+        for _ in 0..10 { b.tick(&w, &Input { strafe: 1.0, ..Default::default() }); }
+        assert!(b.move_local[0] != 0.0 && b.move_local[1] == 0.0, "strafe lane: {:?}", b.move_local);
         // Crouch walk: the 0.75 multiplier scales the z store [M 0x1924c0:58].
         let mut b = Bond::stand_at(&w, [0.0, 0.0, 0.0], 0.0);
         b.tick(&w, &Input { crouch: true, ..Default::default() });
