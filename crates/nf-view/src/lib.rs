@@ -321,6 +321,9 @@ fn view_model_entries(scene: &scene::Scene, l: &scene::SkinLayout) -> Option<Vec
     // The security-camera view: `Player_Disable(player, 0)` hides the view-model object
     // (obj+0xF0 |= 0x10 [M 0x195f70:17-20]).
     if s.sec_cam().is_some() { return None; }
+    // The Ronin's remote view hides the view model: `View_SetDrawInNoViews(BLData+0x7e8)`
+    // [M Player_PositionCamera 0x18f5d8 case 0xf:282].
+    if s.drones.ronin_mounted().is_some() { return None; }
     // fix-wallhug-prompt: the creep's third-person camera hides the view model too [M
     // `Player_PositionCamera` 0x18f5d8 case 0xb: `View_SetDrawInNoViews(BLData+0x7e8)`; the entry
     // holsters the weapon, `Player_WeaponNone` 0x196758:114].

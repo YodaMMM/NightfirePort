@@ -5,7 +5,8 @@
 //!   `Car_Create` 0x1305b0 [M parsemap 0x1d04f0 case 0xda]);
 //! - pane 16 = the monitor view, `Monitor_Activate` 0x1b0058:47 (placement class 0x30);
 //! - pane 18 = cam mode 0xf, set only by `GT_TakeControl` 0x181740 (a gun turret whose owner is
-//!   the player, i.e. a turret that player deployed with weapon 0x53 [M 0x1a4bf0:120-133]);
+//!   the player, i.e. a Ronin that player deployed with weapon 0x52 and took over with 0x53
+//!   [M 0x1a4bf0:113-133, 265-282]);
 //!   placed turrets are class 0x27 → `GT_Create` 0x17ffa0 with owner 0;
 //! - class 0x35 → `PCQWorm_Create` 0x1b07a8 (param 0 = the KeyCodes index the install reveals).
 //!
