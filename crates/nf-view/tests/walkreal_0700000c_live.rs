@@ -333,7 +333,14 @@ fn walk_the_whole_mission_from_the_start_to_the_0d_handoff() {
     // slot between; the band strip gaps 10.4 m over the chasm; the mezzanine strips break; the
     // crates4 gap is 3.1 m + 2.06), no mover serves it (no lift kind on 0c [D kind census]; the
     // 8 SSs, 2 doors, 2 ScriptPlayers are west-side [D audit §6]; ladders #164/#495 west [D];
-    // the five graple_pulley points elsewhere [D #308/346/500/508/511]), and the game's own nav
+    // the five graple_pulley points elsewhere [D #308/346/500/508/511] — THIS session's range
+    // check: gp3 (39.42, 23.06, −221.77) is ~44 m from the crate-field claw spots (76, 1.2,
+    // −210), inside the Q-Claw 0x50's 50.0 range [L ee_start_05 weapon_data+0x1c; M Bullet_update
+    // 0x12e7b0:158], but the hang (the reel pulls Bond to the point [M 0x192860]) would need a
+    // ~49 m horizontal drift east to the deck with the rope block pinning y [M 0x192860 tail] —
+    // the drift is the walk-speed stick wish [M Player_Move 0x191dd0:111-141], no game mechanism
+    // carries 49 m of it; gp4 (54.27, 15.35, −237.02) hangs the same ~49 m short — no grapple
+    // route serves the east deck), and the game's own nav
     // patrols the east band (G3, 10.34) and the east ground (G4, 6.17) as SEPARATE paths with
     // no links [D the 0c nav dump]. Live checks in the report settle whether the REAL game has
     // a dynamic the parse cannot see.
