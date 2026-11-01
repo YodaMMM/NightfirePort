@@ -625,3 +625,109 @@ fn every_placement_resolves_its_model() {
     }
     assert_eq!(unresolved, 0, "every placement's model resolves [D the 07000012 parse]");
 }
+
+/// The TouchOnce plates (0xea ×28 — the one-shot touch triggers, `Trigger_TouchOnce` 0x1b2b88 →
+/// `Trigger_Create`): walking into #30 ("New Trigger4 (Once)" at (13.41, 1.22, 28.59) [D]) fires
+/// the kind's one write — out = param 0 = ch 0x5, the player mask = param 1 = 0x8 [D #30's params;
+/// the wrapper keeps slot 1 = OUT = the placement's param 0 [M 0x1b2b88:12-30; the port's
+/// `from_params` TOUCH_ONCE row out = q(0)]], `Trigger_Update` 0x1b1a78 case 1 latches
+/// `switch_channels[5] = 1`. The once: the channel HOLDS after the toucher leaves (a TOUCH would
+/// be cleared every frame by `Trigger_Calc` 0x1b1900's clear-then-OR [M]). Sister: a fresh load
+/// nobody walks — ch 0x5 stays off (no other writer on this level [D the channel census]).
+#[test]
+fn the_touchonce_plate_latches_its_channel_on_the_walk_in() {
+    let mut w = load();
+    w.top_up_health = true;
+    w.lenient = true;
+    let centre = {
+        let sim = w.scene.sim.as_ref().unwrap();
+        let t = sim.drones.triggers.iter()
+            .find(|t| t.kind == nf_game::triggers::kind::TOUCH_ONCE && t.out == 0x5 && t.mask == 0x8)
+            .expect("the ch-0x5 player TouchOnce plate [D #30 params (0x5, 0x8)]");
+        assert!(!t.tris.is_empty(), "the plate's volume resolves [D the object's bounds]");
+        [(t.lo[0] + t.hi[0]) * 0.5, (t.lo[1] + t.hi[1]) * 0.5, (t.lo[2] + t.hi[2]) * 0.5]
+    };
+    assert!(!w.scene.sim.as_ref().unwrap().drones.channels.on(0x5), "sister half: ch 0x5 off before the walk [D]");
+    // Teleport to reach the plate (the operation stays the real walk-in), then walk the last step.
+    {
+        let sim = w.scene.sim.as_mut().unwrap();
+        sim.bond.pos = [centre[0] + 1.2, centre[1], centre[2] + 1.2];
+        sim.bond.vel = [0.0; 3];
+    }
+    w.wait(10);
+    let mut fired = false;
+    for _ in 0..150 {
+        let (input, _) = aim_input(&w, centre);
+        w.scene.sim.as_mut().unwrap().step_bond(
+            nf_game::player::Input { forward: 1.0, ..input }, false, false, false);
+        w.total_ticks += 1;
+        if w.scene.sim.as_ref().unwrap().drones.channels.on(0x5) { fired = true; break; }
+    }
+    assert!(fired, "walking into the TouchOnce plate latches ch 0x5 [M Trigger_Update 0x1b1a78 case 1]");
+    // The once-latch: the toucher leaves — the channel HOLDS (the kind's distinction from TOUCH).
+    {
+        let sim = w.scene.sim.as_mut().unwrap();
+        sim.bond.pos = [centre[0] + 6.0, centre[1], centre[2] + 6.0];
+        sim.bond.vel = [0.0; 3];
+    }
+    for _ in 0..120 {
+        let (input, _) = aim_input(&w, centre);
+        w.scene.sim.as_mut().unwrap().step_bond(input, false, false, false);
+        w.total_ticks += 1;
+    }
+    assert!(w.scene.sim.as_ref().unwrap().drones.channels.on(0x5),
+        "the TouchOnce channel holds after the toucher leaves [M case 1's latch vs Trigger_Calc's TOUCH clear]");
+    // Sister: a fresh load, nobody walks — ch 0x5 stays off.
+    let mut w2 = load();
+    for _ in 0..60 { w2.tick(nf_game::player::Input::default(), false); }
+    assert!(!w2.scene.sim.as_ref().unwrap().drones.channels.on(0x5),
+        "sister: the untouched load never fires the plate [D]");
+}
+
+/// The laser TOUCH triggers (0xeb ×20 "laser"): every row's only param is 7:0x0 [D] — out = param
+/// 0 = 0 — so `Trigger_Calc` 0x1b1900's clear-then-OR lands the kind's writes in the unused
+/// channel 0 and the beams write nothing real (inert by data [D the audit's kind row]). Walking
+/// the #496-#503 stack (the west-wing plane at (−20.87..−21.19, 0.35..2.21, 32.77..33.20) [D])
+/// leaves every channel 1..=255 at its pre-walk value. Sister: the shaft-entrance touch #683 (out
+/// = param 0 = 0x1f [D]) is the same KIND with a real out — its hold drives walkreal's exit leg
+/// ([M Trigger_Update case 2's hold; D the walkreal route]).
+#[test]
+fn the_laser_beams_write_no_channel_while_crossed() {
+    let mut w = load();
+    w.top_up_health = true;
+    w.lenient = true;
+    let (beam, beam_hi, shaft_touch) = {
+        let sim = w.scene.sim.as_ref().unwrap();
+        let beams: Vec<&nf_game::triggers::Trigger> = sim.drones.triggers.iter()
+            .filter(|t| t.kind == nf_game::triggers::kind::TOUCH && t.out == 0).collect();
+        let beam = beams.iter().find(|t| !t.tris.is_empty()).or_else(|| beams.first())
+            .expect(format!("the laser TOUCH rows (out = param 0 = 0) [D #496..]: {} rows, first tris {:?} lo {:?} hi {:?}",
+                beams.len(), beams.first().map(|t| t.tris.len()), beams.first().map(|t| t.lo), beams.first().map(|t| t.hi)).as_str());
+        let beam = (&beam.lo, &beam.hi);
+        let shaft = sim.drones.triggers.iter()
+            .find(|t| t.kind == nf_game::triggers::kind::TOUCH && t.out == 0x1f)
+            .expect("the shaft-entrance touch #683 (out 0x1f) [D]");
+        (beam.0.clone(), beam.1.clone(), shaft.out)
+    };
+    let centre = [(beam[0] + beam_hi[0]) * 0.5, (beam[1] + beam_hi[1]) * 0.5 + 0.6, (beam[2] + beam_hi[2]) * 0.5];
+    let before = w.scene.sim.as_ref().unwrap().drones.channels.v.clone();
+    // Teleport to reach the west wing (the walker's westward legs are walled by the core [D the
+    // walkreal leg notes]); the crossing itself is the real walk path.
+    {
+        let sim = w.scene.sim.as_mut().unwrap();
+        sim.bond.pos = [centre[0] + 1.0, centre[1], centre[2] + 1.0];
+        sim.bond.vel = [0.0; 3];
+    }
+    w.wait(10);
+    for _ in 0..150 {
+        let (input, _) = aim_input(&w, centre);
+        w.scene.sim.as_mut().unwrap().step_bond(
+            nf_game::player::Input { forward: 1.0, ..input }, false, false, false);
+    }
+    let after = w.scene.sim.as_ref().unwrap().drones.channels.v.clone();
+    for k in 1..after.len().min(before.len()) {
+        assert_eq!(after[k], before[k],
+            "channel {k:#x} moved while crossing the out-0 laser — the beams must write nothing [D #496's params]");
+    }
+    assert_eq!(shaft_touch, 0x1f, "sister half: the kind DOES carry a real out on #683 [D]");
+}
