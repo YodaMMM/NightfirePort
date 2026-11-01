@@ -4831,7 +4831,15 @@ impl Sim {
                 // pellets returns too [L weapon_data 0x53: pellets 0]). `GT_TakeControl` runs
                 // `Player_WeaponNone` (hands) [M 00181740].
                 if self.gun.weapon == nf_game::gt::RONIN_CONTROL {
-                    if self.drones.ronin_take_control() == Some(true) { self.gun.go_to_hands(); }
+                    if self.drones.ronin_take_control() == Some(true) {
+                        self.gun.go_to_hands();
+                        // The turret updates after the player in the same frame and its case 7
+                        // reads the pad directly [M 00180498 case 7]: the press that mounted is
+                        // already a held trigger there (the spin arms on this tick — live ext+0xD4
+                        // after an 8-frame press, ronin_live `ronin_barrel_spin_on_the_press`).
+                        // The aim deltas of this one tick are left at zero.
+                        self.drones.gt_mount = Some((0.0, 0.0, true, false));
+                    }
                     break 'shot;
                 }
                 // 0x52 (:265-282): the pellet loop calls `GT_DeployMiniGun(player obj+0x30 +
@@ -12299,6 +12307,21 @@ pub fn build(level: &Level, cels_only: bool, skeletons: &HashMap<u8, Skeleton>, 
         // per ticked frame. `colour_attach_map_covers_every_slot_on_the_lag_levels` pins the
         // invariant (every slot present), so a change that would make the fallback reachable
         // fails a test instead of silently changing the palette's colours.
+        gt_barrel_spin(self, p, ab);
+        ronin_view_wrap_marks(self, p, ab);
+    }
+
+    /// The attachment indices of the mounted Ronin's script parts whose triangles drop by the 24-bit
+    /// depth wrap in the remote view, and the wrap distance; empty when the view is not up or the
+    /// level's wrap sits inside the near plane (`ronin_view_wrap_marks`).
+    pub fn ronin_view_wrap_parts(&self) -> (Vec<usize>, f32) {
+        let Some(s) = self.sim.as_ref() else { return (Vec::new(), 0.0) };
+        let dw = nf_game::env::zbuf_wrap_distance(s.level);
+        if dw <= GAME_NEAR || s.drones.ronin_mounted().is_none() { return (Vec::new(), dw); }
+        let parts = self.attachments.iter().enumerate()
+            .filter(|(_, a)| a.script.is_some_and(|(h, ..)| h == nf_game::gt::RONIN_SCRIPT_A || h == nf_game::gt::RONIN_SCRIPT_B))
+            .map(|(i, _)| i).collect();
+        (parts, dw)
     }
 
     /// The per-object colour multipliers of one frame (`View_SetupRenderModes_Tweak`'s TAmbient): per character,
@@ -14801,4 +14824,56 @@ pub fn camera_swing_step(phase: &mut f32, amount: f32, zoom: f32) -> (f32, f32, 
         k * nf_game::trig::sinf(phi),            // yaw: sin(φ) [M 0x1bbf40:16-19]
         k * nf_game::trig::sinf(phi * 3.0),      // roll: sin(3φ) [M 0x1bbf40:20-24]
     )
+}
+
+/// The world pass's near plane, the game's `Ps2Near2` (lib.rs `Camera::view_proj`).
+const GAME_NEAR: f32 = 0.1;
+
+/// The Ronin's remote view puts the eye 0.104 ahead of the barrel's origin and 0.15 above its axis
+/// [M Player_PositionCamera 0x18f5d8 case 0xf; L PCSX2 audits/render-1101-roninview], so the barrel's
+/// tube strips (glist z 0.031..0.369) start behind the eye. The VU1 clip program cuts them at the 0.1
+/// near plane [M micro `_$ROTATECLIPED`/`_$ZMINUS` 0x241e30/0x242340], where zbuf = `Ps2Far1`; on 0C
+/// that is past the 24-bit Z range (`zbuf_wrap_distance`), so the clip vertices wrap to a far depth and
+/// the strips lose the depth test to the muzzle ring right behind them. The PS2 frame shows the ring's
+/// face and no tubes; moving the eye 0.1 back (all tube vertices in front of the eye) brings tubes in,
+/// hidden only where the ring is behind them [L PCSX2 audits/render-1101-roninview2 eye A/B].
+/// The port reproduces it for the mounted Ronin's script parts: their palette entries carry
+/// 1 + the wrap distance in m[3][3] (otherwise 1.0, unused by the transform), and the world shader
+/// drops a triangle with a vertex nearer than that (gpu.rs `nw`). The general wrap — a garbage depth
+/// over any near-clipped triangle — is not modelled.
+fn ronin_view_wrap_marks(scene: &Scene, p: &mut [Mat4], attach_base: usize) {
+    let (parts, dw) = scene.ronin_view_wrap_parts();
+    for a in parts {
+        if let Some(m) = p.get_mut(attach_base + a) {
+            if m[3][1] > -9000.0 { m[3][3] = 1.0 + dw; }
+        }
+    }
+}
+
+/// `GT_Update`'s spin block on the drawn barrel [M 0x180498:365-382, 538-556]: obj+0x90 of
+/// registered[1] = `RotMatrixZ(angle)` · its script pose (rows [c, s, 0] / [−s, c, 0] onto the pose's
+/// x / y rows) on the ticks the block runs (`GTurret::spin_draw`). Measured [L PCSX2
+/// audits/render-1101-roninview]: the barrel's row0 (−0.921, −0.388, 0.017) = cos/sin(−2.741) of the
+/// script-A pose with ext+0xD4 = −2.741. The palette entry is the attachment that drew the entity's
+/// matrix (same script, stream and hash, same matrix).
+fn gt_barrel_spin(scene: &Scene, p: &mut [Mat4], attach_base: usize) {
+    let Some(s) = scene.sim.as_ref() else { return };
+    for t in s.drones.gt_turrets.iter().filter(|t| !t.delete_flag && t.registered[1] != 0) {
+        let Some(a) = t.spin_draw else { continue };
+        let Some(Some(nf_game::nis::Obj::Entity { hash, src, matrix, .. })) = s.drones.scripts.objects.list.get(t.registered[1] as usize - 1) else { continue };
+        let (sn, c) = a.sin_cos();
+        let m = *matrix;
+        let mut r = m;
+        for k in 0..4 {
+            r[0][k] = c * m[0][k] + sn * m[1][k];
+            r[1][k] = -sn * m[0][k] + c * m[1][k];
+        }
+        let same = |x: &Mat4| (0..4).all(|i| (0..4).all(|j| (x[i][j] - m[i][j]).abs() < 1e-4));
+        for (i, att) in scene.attachments.iter().enumerate() {
+            if !att.script.is_some_and(|(sh, st, h, _)| (sh, st) == *src && h == *hash) { continue; }
+            if let Some(e) = p.get_mut(attach_base + i) {
+                if same(e) { let w = e[3][3]; *e = r; e[3][3] = w; }
+            }
+        }
+    }
 }

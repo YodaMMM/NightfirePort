@@ -19,6 +19,11 @@ alpha-list distance fade, environment mapping, dynamic lights / motion blur / br
 - Snapshot [L]: `FogOn` 0x30c765 = 1, colour 0x30c981.. = 58, 77, 104, `Ps2Near1` 8.0, `Ps2Far1` 19118528,
   `Ps2Near2` 0.1, `Ps2Far2` 16777216.
 - Depth (`PS2WorldViewVU1Kick2` 0x10b2b0): zbuf(d) = N1 + (F1 − N1) · n · (f/d − 1) / (f − n) (≈ 8 + 1911852 / d).
+  The leaves write ZBUF_1 PSM 1 (Z24). Where F1 > 2^24 (05 19118528, 0C 20475840, 0D 19707840), zbuf passes
+  2^24 at d = 0.114 / 0.122 / 0.117 (`nf_game::env::zbuf_wrap_distance`). Near-plane clip vertices
+  (d = 0.1, zbuf = F1) and vertices nearer than that distance wrap to a far depth: shown by the Ronin
+  remote view on 0C, where the barrel's near-clipped tubes vanish behind the muzzle ring
+  [L PCSX2 audits/render-1101-roninview2]. The port models it only there (gun-turrets.md).
 - `psiPostSolid` → `psiDrawFogPass` (0x10b960): Z bits 8–15 into frame alpha (`CreateMoveRG2BA` 0x118718), then a
   full-screen fog-colour sprite (`CreateFogSprite` 0x119228, Z 0x7FFF, ZTST GREATER, ALPHA 0x11: (Cd − Cs)·Ad + Cs).
   Port: for list 0 and sky pass 1 only, `if zb < 32767 { a = floor(zb/256)/128; rgb = fog + (rgb − fog)·a }` —

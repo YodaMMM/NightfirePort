@@ -399,3 +399,79 @@ fn ronin_remote_view_shot_gauge() {
     assert!(b.iter().any(|r| (r[3] - r[1] - want).abs() < 0.5 && (r[3] - 394.0).abs() < 0.5), "the fill is {want} tall after the burst: {b:?}");
     assert!(tall(&b), "the empty column stays 100 tall");
 }
+
+/// The barrel's spin on the real input path, against the live capture [L PCSX2
+/// audits/render-1101-roninview2/live_ab.txt]: the 0x53 press held 8 frames takes control (and the
+/// held trigger arms the spin), 45 frames later ext+0xD4 = −2.7410; the drawn barrel is the script
+/// pose turned by RotZ(that angle) about its own axis [M GT_Update 0x180498:536-556].
+#[test]
+fn ronin_barrel_spin_on_the_press() {
+    let Some(mut scene) = load() else { eprintln!("NF_ISO not set — skipping"); return };
+    let sim = scene.sim.as_mut().unwrap();
+    let ti = deployed(sim);
+    clear_guards(sim);
+    for _ in 0..600 {
+        sim.step_bond(Input::default(), false, false, false);
+        if sim.drones.gt_turrets[ti].state == gt_state::COMBAT && sim.gun.weapon == RONIN_CONTROL && sim.gun.switch_state == 0 { break; }
+    }
+    assert_eq!(sim.drones.gt_turrets[ti].spin_draw, None, "an idle armed Ronin's barrel sits at its script pose");
+    for _ in 0..8 { sim.step_bond(Input::default(), true, false, false); }
+    assert!(sim.drones.ronin_mounted().is_some(), "mounted");
+    idle(sim, 45);
+    let t = &sim.drones.gt_turrets[ti];
+    eprintln!("spin {} vel {} draw {:?} hp {}", t.spin, t.spin_vel, t.spin_draw, t.hp);
+    assert!((t.spin - (-2.741)).abs() < 0.02, "ext+0xD4 {} vs the live −2.741", t.spin);
+    assert_eq!(t.hp, 199, "the held press fired one shot (live ext+0xF0 199)");
+    // Sister: one held frame fewer lands 0.21 rad short of the capture.
+    assert!((t.spin - 0.209 - (-2.741)).abs() > 0.1);
+}
+
+/// The remote view on 0C drops the barrel's near-clipped tubes the way the 24-bit depth wrap does
+/// [L PCSX2 audits/render-1101-roninview2: the stock view shows the muzzle ring's face and no tubes;
+/// the eye moved 0.1 back shows them]. 0C's `Ps2Far1` 20475840 puts the wrap at 0.122 > the 0.1 near
+/// plane (`nf_game::env::zbuf_wrap_distance`); the Ronin's script parts carry it in their palette
+/// entries' m[3][3] (the world shader drops a triangle with a vertex nearer than that), and the
+/// barrel's palette entry is the spun pose.
+#[test]
+fn ronin_remote_view_marks_the_wrapped_parts() {
+    let Some(mut scene) = load() else { eprintln!("NF_ISO not set — skipping"); return };
+    let ti = {
+        let sim = scene.sim.as_mut().unwrap();
+        let ti = deployed(sim);
+        clear_guards(sim);
+        for _ in 0..600 {
+            sim.step_bond(Input::default(), false, false, false);
+            if sim.drones.gt_turrets[ti].state == gt_state::COMBAT && sim.gun.weapon == RONIN_CONTROL && sim.gun.switch_state == 0 { break; }
+        }
+        ti
+    };
+    // Sister: not mounted → nothing marked.
+    assert!(scene.ronin_view_wrap_parts().0.is_empty(), "no marks outside the remote view");
+    {
+        let sim = scene.sim.as_mut().unwrap();
+        for _ in 0..8 { sim.step_bond(Input::default(), true, false, false); }
+        idle(sim, 10);
+        assert!(sim.drones.ronin_mounted().is_some());
+    }
+    let (parts, dw) = scene.ronin_view_wrap_parts();
+    assert!((dw - 0.122).abs() < 0.001, "0C's wrap distance {dw}");
+    let sim = scene.sim.as_ref().unwrap();
+    let t = &sim.drones.gt_turrets[ti];
+    let barrel = match sim.drones.scripts.objects.list.get(t.registered[1] as usize - 1) {
+        Some(Some(nf_game::nis::Obj::Entity { hash, src, matrix, .. })) => (*hash, *src, *matrix),
+        _ => panic!("registered[1] is a script entity"),
+    };
+    assert_eq!(barrel.0, 0x0200_0362, "registered[1] is the barrel");
+    let att = parts.iter().copied().find(|&a| scene.attachments[a].script.is_some_and(|(sh, st, h, _)| (sh, st) == barrel.1 && h == barrel.0));
+    let att = att.expect("the barrel's attachment is among the marked parts");
+    let (l, _) = scene.skin_layout();
+    let (pal, _) = scene.skin_palette(&l, None, 0.0, Default::default(), None);
+    let e = pal[l.attach_base as usize + att];
+    assert!((e[3][3] - (1.0 + dw)).abs() < 1e-6, "the barrel's entry carries the wrap distance: {}", e[3][3]);
+    // The entry is RotZ(spin_draw) · the script pose: its x row = cos·pose.x + sin·pose.y.
+    let a = t.spin_draw.expect("the press armed the spin");
+    let (s, c) = a.sin_cos();
+    let m = barrel.2;
+    for k in 0..3 { assert!((e[0][k] - (c * m[0][k] + s * m[1][k])).abs() < 1e-4, "spun x row {:?} vs pose {:?} at {a}", e[0], m[0]); }
+    assert!(a.abs() > 0.5, "the drawn barrel is visibly turned ({a})");
+}
