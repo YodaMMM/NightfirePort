@@ -3413,9 +3413,22 @@ impl Sim {
         }
         let (head, look) = (self.bond.head(), self.bond.look());
         // The shot's direction through the crosshair: forward + 0.76966 cx · right + 0.57724 cy · up.
-        let (yaw, p) = (self.bond.yaw, self.bond.pitch * std::f32::consts::FRAC_PI_2);
-        let right = [-yaw.cos(), 0.0, yaw.sin()];
-        let up = [-p.sin() * yaw.sin(), p.cos(), -p.sin() * yaw.cos()];
+        // The offset basis [M Player_GetAimingPoint 0x1a4a98:63-83]: the offset lanes (ox, oy, −1)
+        // transform through Concat(obj+0x90, RotX(BL+0x8a8·π/2)) — the combined matrix's rows. On
+        // foot those rows are the scalar-built right/up here (right = −row0, up = row1 of
+        // RotX(−p)·obj_yaw — the construction the walk shots already land on). In zero-g BL+0x8a8
+        // is zeroed EVERY tick [M Player_ZeroG 0x192ab0:74], so the combined matrix IS obj+0x90 and
+        // the basis is the zero-g matrix's own right/up rows — the same matrix the view rides
+        // [M Camera_SetToPlayer 0x1bc048:24-26]. The scalar yaw/pitch are the walk's state in
+        // zero-g (pitch stays 0 [M :74]), so their basis would lean every offset shot off a
+        // pitched view — the reverted body-frame look's "aim did not follow the camera".
+        let (right, up) = if self.bond.zero_g_active {
+            ([-self.bond.zero_g_rot[0][0], -self.bond.zero_g_rot[0][1], -self.bond.zero_g_rot[0][2]],
+             self.bond.zero_g_rot[1])
+        } else {
+            let (yaw, p) = (self.bond.yaw, self.bond.pitch * std::f32::consts::FRAC_PI_2);
+            ([-yaw.cos(), 0.0, yaw.sin()], [-p.sin() * yaw.sin(), p.cos(), -p.sin() * yaw.cos()])
+        };
         let (tx, ty) = (0.76966 * self.cross[0], 0.57724 * self.cross[1]);
         let d = [0, 1, 2].map(|k| look[k] + tx * right[k] + ty * up[k]);
         let l = (d[0] * d[0] + d[1] * d[1] + d[2] * d[2]).sqrt();

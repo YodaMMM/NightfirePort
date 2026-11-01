@@ -5574,7 +5574,22 @@ impl App {
                         }
                         if !self.noclip {
                             let h = sim.bond.head();
-                            self.cam = Camera { pos: Vec3::new(h[0], h[1], h[2]), yaw: sim.bond.yaw, pitch: sim.bond.pitch * std::f32::consts::FRAC_PI_2, fov: GAME_FOV / sim.zoom };
+                            // The zero-g view IS the object matrix [M Camera_SetToPlayer 0x1bc048:24-26 —
+                            // MulMatrix0(obj+0x90, RotX(BL+0x8a8·π/2)) with BL+0x8a8 zeroed every tick
+                            // [M Player_ZeroG 0x192ab0:74] = obj+0x90 itself]: yaw/pitch come off its
+                            // forward row (the walk's scalar yaw/pitch are dead there — pitch reads 0
+                            // [M :74] — so the scalar arm would freeze the view at the entry pitch).
+                            // Roll gap [S]: the port's Camera carries no roll lane, so the drifted-up
+                            // body renders with a level horizon where the game's matrix view would
+                            // tilt — a listed divergence (the aim/crosshair correspondence is not
+                            // affected: the shot basis reads the same rows, scene.rs).
+                            let (cyaw, cpitch) = if sim.bond.zero_g_active {
+                                let f = sim.bond.zero_g_rot[2];
+                                (f[0].atan2(f[2]), f[1].clamp(-1.0, 1.0).asin())
+                            } else {
+                                (sim.bond.yaw, sim.bond.pitch * std::f32::consts::FRAC_PI_2)
+                            };
+                            self.cam = Camera { pos: Vec3::new(h[0], h[1], h[2]), yaw: cyaw, pitch: cpitch, fov: GAME_FOV / sim.zoom };
                             // mp-local-look (online aim lagged the mouse): the lockstep
                             // runs this player's turn/look `input_delay` ticks late (3 at least, up to
                             // 15 with the adaptive delay over the internet). The camera adds the turn/
