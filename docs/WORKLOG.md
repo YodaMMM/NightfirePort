@@ -29,3 +29,18 @@ Session 2 (2026-11-01, continued): sandbox reset, setup redone. Progress:
   per-cel object activation (control_handle_cel_change 0x133288 / the DynamicObjList membership)
   holds these guards' control until their cel activates — needs live evidence. Live checks listed
   in the report.
+
+## level-11-start-corridor-guard-2 — 2026-11-01
+
+Task (continuing s/level-11-start-corridor-guard, merged origin/master): the owner-read fix
+(Drone+0x144 = placement param 4 [M DefaultInit 0x14b300:472]) is in but the pin is not met — on a
+fresh 07000011 load with Bond idle at spawn #146, #127 (d>=2) / #126 still walk into the corridor,
+resume ATTACK at alertness 1.0 (the Tower clause [M 0x168910:23-31]) and kill Bond by ~tick 700,
+while the PS2 corridor stays empty over f200-f3172 [L]. Find the remaining divergence (the run-to
+point's own state/latch, the 0x4000000 latch, LOS from those points, the difficulty the capture ran
+at / GameState+0x40 assumptions), fix it with the address cited, replace the branch's "EXPERIMENT"
+comments with plain cited comments, and pin: idle Bond at the start is not approached in 3200 ticks
+(sister: both guards present). Run every *07000011* binary and nf-game; quote the totals.
+
+Session 1 (2026-11-01): sandbox reset — full setup redone; branch created from
+origin/s/level-11-start-corridor-guard + merge of origin/master (2249e9f5). WORKLOG started.
