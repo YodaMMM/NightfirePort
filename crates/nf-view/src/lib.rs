@@ -721,7 +721,15 @@ const NET_HASH_EVERY: u32 = 15;
 /// wrote, and `Player_InitWeapon` (0x1a7ef8) runs the per-level loadout switch over `Player_RamLoad`
 /// (0x1957a8). `None` = a cold load (the game's boot path; `Player_RamLoad`'s whole body is skipped).
 pub fn load_with_carry(iso: &str, archive: &str, all: bool, save: Option<&nf_game::player::RamSave>) -> Result<scene::Scene> {
-    load_impl(iso, archive, all, save, false, &[], false, None, 1, 0)
+    // The warm chain's difficulty: the game's difficulty global (`GameState+40` DECIMAL = hex
+    // +0x28, 0x2a3790) survives the level change untouched — its five writers (bootup 0x1c7e78:25
+    // = 2, the difficulty page 0x216ca8:15, the MP confirm 0x20ec00:150 = 1, the mini-mission
+    // 0x1ffb90:22 = 1, the driving-return PTP restore 0x1c8560:36) never run in an on-foot level
+    // change [M whole-decompile grep]. The port re-creates the Scene per load and seeds the
+    // difficulty at build, so the value rides the RamSave (`with_difficulty`); a save without it
+    // (the plain `capture`) keeps 1, the old direct-load replay parity.
+    let difficulty = save.map(|s| s.difficulty).filter(|&d| (1..=4).contains(&d)).unwrap_or(1);
+    load_impl(iso, archive, all, save, false, &[], false, None, difficulty, 0)
 }
 
 /// The carry-over load pre-merged for the given weapon ids (the dev menu's lazy give: the same
@@ -851,6 +859,10 @@ pub fn warm_exit_save(sim: &scene::Sim) -> nf_game::player::RamSave {
         &sim.drones.health, sim.gun.switch_request, &sim.drones.inventory, &sim.drones.channels)
         .with_mission(&sim.drones.mission)
         .with_tally(&sim.drones.progress)
+        // The difficulty global survives the level change in the game (no transition-path writer;
+        // see `RamSave::difficulty`) — attach the sim's mirror so a `load_with_carry` of this save
+        // re-seeds it. The front-end load wrappers take the pick as a parameter and ignore it.
+        .with_difficulty(sim.drones.difficulty)
 }
 
 fn load_impl(iso_path: &str, archive: &str, all: bool, save: Option<&nf_game::player::RamSave>, dev: bool, give: &[u8], mp: bool, mp_settings: Option<nf_game::mp::MpSettings>, difficulty: u32, bonus: u64) -> Result<scene::Scene> {
