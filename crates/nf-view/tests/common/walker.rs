@@ -138,6 +138,15 @@ pub struct Walker {
     /// enclosing leg's 6000-tick give-up cap then charged as a wedge (walker.rs:853 panic) —
     /// 6 suite tests red across 4 binaries (level-02-every-objective-5 2026-10-31).
     pub body_block_response: bool,
+    /// The player's head shot, OPT-IN: `exposed_aim` takes the head box (part 5) whenever its
+    /// round is clear. `NDrone2_HitDamage` 0x145558 multiplies a part-5 hit by
+    /// `DroneDamage_Head` (the P2K's 3.5 lands 35 on the head, 5.25 on the torso at Easy [M;
+    /// damage.rs's own pin]), so one
+    /// hit drops the 12-health type-2 guards and the 24-health captains that the placement
+    /// stats give 01-04 [L ee_02b.bin]; the torso-first aim spends 3-5 rounds a guard and ran
+    /// the scripted walks dry. Within 6 u only (see `exposed_aim`). Default off so the other
+    /// walks keep their fight timelines.
+    pub prefer_head: bool,
     /// The walked path: a coarse breadcrumb of ground Bond actually covered (pushed in
     /// tick_inner, ~2 u resolution, 512 points). The resupply rule draws its corridor from it —
     /// see `resupply` for why the harness must not take off-path ammo detours.
@@ -214,6 +223,7 @@ impl Walker {
             shield: None,
             fighting_blocker: false,
             body_block_response: false,
+            prefer_head: false,
         }
     }
 
@@ -584,6 +594,9 @@ impl Walker {
             let Some(t_box) = nf_game::damage::ray_box(eye, ray, &b) else { continue };
             let tw = sim.world.segment_bullet_scoped(sim.world.find_cel(eye), eye, c);
             if tw.is_some_and(|w| w < t_box) { continue; }
+            // Close in only: the head box is ~0.2 u, and past ~6 u Bond's own spread covers more
+            // than that (the 02 geisha-2 captor at 11.2 u took 23 head-aimed rounds unhurt).
+            if self.prefer_head && b.part == 5 && dxz(c, eye) <= 6.0 { return Some(c); }
             let dev = dxz(c, torso);
             if best.map_or(true, |(bd, _)| dev < bd) { best = Some((dev, c)); }
         }

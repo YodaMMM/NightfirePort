@@ -734,6 +734,8 @@ fn every_stats_row_matches_the_game_formulas_from_the_real_finish() {
 fn the_platinum_finish_shows_platinum_on_records() {
     let iso = iso();
     let mut w = load_ready_at(&iso, 3);
+    // The platinum line is a score race (time, rounds fired, hits): a player aims for the head.
+    w.prefer_head = true;
     {
         let sim = w.scene.sim.as_ref().unwrap();
         assert_eq!(sim.drones.progress.difficulty, 3, "the 007 difficulty rode the launch path");

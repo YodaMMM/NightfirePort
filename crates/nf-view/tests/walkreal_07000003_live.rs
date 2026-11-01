@@ -118,6 +118,9 @@ fn walk_the_alpine_route_to_the_exit() {
 fn walk_the_full_route_and_complete_every_objective() {
     let iso = iso();
     let mut w = Walker::new(nf_view::load(&iso, "07000003.bin", false).expect("load 07000003"));
+    // The type-2 guards carry 12 health, captains 24 [L ee_02b.bin]: Bond aims for the head
+    // (`Walker::prefer_head`), as a player does, or the scripted fights run the walk dry.
+    w.prefer_head = true;
     let (li, o0, o1, o2) = mission_row();
     {
         let sim = w.scene.sim.as_ref().unwrap();
@@ -184,7 +187,21 @@ fn walk_the_full_route_and_complete_every_objective() {
         assert!(sim.drones.channels.on(0x21),
             "the west-lane approach stands inside the west 0x21 plate's footprint [D lo/hi x 7.3..10.7 z −35.0..−33.7]");
     }
-    w.walk_nav_to([13.0, 5.9, -18.0], "back across the courtyard", 1.6);
+    // Back to the servants' ground by the east lane the "mid courtyard" leg itself walked
+    // (x 10.0-10.6 from the moat to the door at (11.8, 6.5, -20.2): the nav stops Bond reached
+    // on that leg). The nav's own way "back across the courtyard" to (13, -18) runs through the
+    // obstacle at (6.35, -15.7..-17.7) (Bond climbs to y 7.3, airborne) and wedges at every cap, the
+    // servant approach and the captor flanks with it — the captor (mode 4, dodging at
+    // x 10-15, z -21..-25) stays out of sight across the wall.
+    w.lenient = true;
+    for (name, at) in [
+        ("the east lane south", [10.05f32, 6.56, -31.87]),
+        ("the east lane", [10.27, 6.65, -30.01]),
+        ("the east lane north", [10.59, 6.47, -22.91]),
+    ] {
+        w.walk_to(Wp { at, act: Act::None, arrive: 1.0 }, name);
+    }
+    w.lenient = false;
     for (plate, want_ch) in [(None, 0x4fu8), (Some(plate0x25), 0x50u8)] {
         let (si, at, rescue_ch) = *servants.iter().find(|(_, _, ch)| *ch == want_ch)
             .unwrap_or_else(|| panic!("the servant carrying {want_ch:#x} [D p6]"));
