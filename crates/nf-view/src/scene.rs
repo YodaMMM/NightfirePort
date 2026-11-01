@@ -6194,6 +6194,9 @@ pub(crate) struct AttachPlan {
     any_script: bool,
     /// `colour_mults_dense`'s per-attachment arm (0 = untinted, 1 = dropped, 2 = script, 3 = owner).
     col: Vec<u8>,
+    /// Each attachment's owner character (`Attachment::character`), so the owner arm reads a
+    /// dense list instead of the whole attachment record.
+    col_char: Vec<u32>,
 }
 
 /// perf-240g: the identity tests' switch — true walks every attachment through `att_one` and every
@@ -10227,11 +10230,24 @@ pub fn build(level: &Level, cels_only: bool, skeletons: &HashMap<u8, Skeleton>, 
             }
             for (kind, slot, members) in &plan.eff {
                 // kind 0: `decals.get(slot)` — Some with this mesh draws, anything else is far.
-                // kind 2: `debris.get(slot)` Some with another mesh is far; None falls to the
-                // breakable / blast debris chain, so it takes `att_one`.
-                let live = match kind { 0 => s.drones.effects.decals.get(*slot).map(|d| d.mesh), _ => s.drones.effects.debris.get(*slot).map(|d| d.mesh) };
+                // kind 2: the first of `effects.debris`, the breakable pieces, the blast debris
+                // that holds this slot (`att_one`'s chain, same offsets) names the one mesh that
+                // can draw; every other mesh, or a slot none of them holds, is far.
+                let live = match kind {
+                    0 => s.drones.effects.decals.get(*slot).map(|d| d.mesh),
+                    _ => {
+                        let (n1, n2) = (s.drones.effects.debris.len(), s.drones.breaks.shatter.debris.len());
+                        match s.drones.effects.debris.get(*slot) {
+                            Some(d) => Some(d.mesh),
+                            None => match s.drones.breaks.shatter.debris.get(*slot - n1) {
+                                Some(d) => Some(d.model),
+                                None => s.drones.blast_debris.get(*slot - n1 - n2).map(|d| d.model),
+                            },
+                        }
+                    }
+                };
                 for &(k, mesh) in members {
-                    let call = match live { Some(m) => m == mesh, None => *kind == 2 };
+                    let call = live == Some(mesh);
                     if call { out[k as usize] = att_one(k as usize, &atts[k as usize]); } else if !prefilled { out[k as usize] = FAR_M; }
                 }
             }
@@ -10368,6 +10384,7 @@ pub fn build(level: &Level, cels_only: bool, skeletons: &HashMap<u8, Skeleton>, 
             if a.projectile.is_some_and(|(slot, _)| slot >= SWOOSH_SLOT_BASE) { plan.swoosh.push(k32); }
             if a.flash.is_some() { plan.flash.push(k32); }
             plan.any_script |= a.script.is_some();
+            plan.col_char.push(a.character);
             // `colour_mults_dense`'s arms, in its order.
             plan.col.push(if a.flash.is_some() || a.tracer.is_some() { 0 }
                 else if a.projectile.is_some_and(|(slot, _)| slot >= SWOOSH_SLOT_BASE) { 0 }
@@ -11113,7 +11130,17 @@ pub fn build(level: &Level, cels_only: bool, skeletons: &HashMap<u8, Skeleton>, 
             for ai in 0..self.attachments.len() as u32 {
                 if let Some(out) = attach_sink.as_deref_mut() {
                     if mults.is_empty() || ai as usize >= out.len() { break; }
-                    if !reference && plan.col[ai as usize] == 0 { continue; }
+                    if !reference {
+                        match plan.col[ai as usize] {
+                            0 => continue,
+                            3 => {
+                                let v = mults.get(plan.col_char[ai as usize] as usize).copied().unwrap_or_else(one);
+                                out[ai as usize] = [v[0], v[1], v[2], 1.0];
+                                continue;
+                            }
+                            _ => {}
+                        }
+                    }
                 }
                 {
                     let v = (|| {

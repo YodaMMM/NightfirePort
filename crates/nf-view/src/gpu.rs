@@ -1331,9 +1331,7 @@ impl Renderer {
             drop(parked_pos);
             drop(prof_cull);
             let prof_sort = nf_game::prof::scope("enc: sort");
-            // perf-240g: unstable — the key ends in the draw index k, unique per entry, so no two
-            // entries compare equal and every sort gives the one same order.
-            self.order.sort_unstable_by(|a, b| a.0.cmp(&b.0).then(a.1.total_cmp(&b.1)).then(a.2.cmp(&b.2)));
+            self.order.sort_by(|a, b| a.0.cmp(&b.0).then(a.1.total_cmp(&b.1)).then(a.2.cmp(&b.2)));
             // Per-draw uniform slots (fix-lighting): the game uploads the ≤2 closest lights per object
             // (`View_DrawObjList` 0x1e69a0 / `View_DrawCelGlist` 0x1e6538 → `Lights_CalcClosestLights`
             // 0x1cb2e0 + `psiLight_SetLights` 0x10e588). Slot 0 = the eye's own sphere (the snow pass — the
