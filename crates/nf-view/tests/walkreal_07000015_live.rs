@@ -150,17 +150,30 @@ fn walk_spawn_to_the_omega_sector_exit() {
     // 21's completing channel. The walk carries ITS OWN live channels — the exact state this
     // walk earned — and finishes on the plate, where the game's own arrival spawn (5.17, 0.90,
     // −65.30 [D start #1]) already stands inside the plate's box.
-    let carried = {
+    // The hand-off is the game's own: `warm_exit_save` (Trigger_Activate's `Player_RamSave`
+    // 0x195670 — the player state, the held weapon byte and the channels [M 0x1b2318:97-116]).
+    let (save, owned15, held15) = {
         let sim = w.scene.sim.as_ref().unwrap();
-        sim.drones.channels.clone()
+        let inv = &sim.drones.inventory;
+        (nf_view::warm_exit_save(sim), (0..inv.owned.len()).filter(|&i| inv.owned[i]).collect::<Vec<_>>(), sim.gun.switch_request)
     };
-    let save = nf_game::player::RamSave::capture(
-        &Default::default(), 0, &nf_game::pickup::Inventory::level_start(0x73, 34), &carried);
+    assert_eq!(save.weapon, held15, "the exit saves the held weapon byte [M 0x195670:18-19]");
     let mut w16 = Walker::new(nf_view::load_with_carry(&iso, "07000016.bin", false, Some(&save)).unwrap());
     w16.wait_enabled(3000, "the launch-centre arrival");
     w16.wait(200);
     {
         let sim = w16.scene.sim.as_ref().unwrap();
+        // Bond's weapons on 16: case 0x7000016 keeps the carry (the P2K is owned) and re-selects the
+        // saved weapon [M 0x1a7ef8:302-307], then `Player_CheckWeaponsLoaded` drops what 16's
+        // archive has no skin for [M 0x1a97c8] — of 15's set only the decryptor 0x56.
+        let inv = &sim.drones.inventory;
+        let owned16: Vec<usize> = (0..inv.owned.len()).filter(|&i| inv.owned[i]).collect();
+        let expect16: Vec<usize> = owned15.iter().copied().filter(|&i| i != 0x56).collect();
+        eprintln!("[015] 15 exit: held {held15:#x} owned {owned15:x?}; 16 arrival: held {:#x} owned {owned16:x?}", sim.gun.weapon);
+        assert_eq!(owned16, expect16, "16 keeps 15's weapons except the decryptor (no skin on 16) [M 0x1a7ef8 case 0x7000016; 0x1a97c8]");
+        assert_eq!(owned16, vec![1, 2, 0x11, 0x34, 0x37, 0x4e, 0x54], "the walked chain lands the 14 kit minus the Grapple (swept on 15) and the decryptor [M 0x1a7ef8 case 0x7000014]");
+        assert_eq!(sim.gun.weapon, held15, "16 draws the weapon Bond held at 15's exit [M 0x1a7ef8:306]");
+        assert_ne!(sim.gun.weapon, 1, "Bond does not arrive on 16 with only his fists");
         assert!(sim.drones.channels.on(0x8e), "the spawn plate #252 fires ch 0x8e [D 07000016]");
         assert!(sim.drones.mission.states[21].iter().all(|&s| s == 4),
             "the carried record 21 completes — 'Find the exit to Omega Sector' is done");

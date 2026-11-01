@@ -49,8 +49,10 @@ pub const SMOKE_QUAD: u32 = 0x0200_0039;
 ///   disasm 0x140470 `ori $t0, $t0, 0x8bc` — sizes 3.0/6.0, kind 5, rgba 0xffffffff → 0xffffff00,
 ///   life 0x3c, and the gas obj's `+0xf0 |= 8` draw flag];
 /// - `0x0200_026e` — the Phoenix Samurai bolt's flesh puff [M the 0x32/0x33 arm, disasm
-///   0x140408 `ori $t0, $t0, 0x26e` — sizes 1.0/16.0].
-pub const POOL_MESHES: &[u32] = &[SMOKE_QUAD, 0x0200_001f, 0x0200_08bc, 0x0200_026e];
+///   0x140408 `ori $t0, $t0, 0x26e` — sizes 1.0/16.0];
+/// - `0x0200_021d` — the breath puff [M `Env_Breath` 0x17be00, `lui $t0, 0x200` + `ori $t0, $t0,
+///   0x21d` at 0x17bf14/0x17bfb8; env.rs `BREATH_MESH`].
+pub const POOL_MESHES: &[u32] = &[SMOKE_QUAD, 0x0200_001f, 0x0200_08bc, 0x0200_026e, crate::env::BREATH_MESH];
 
 /// REC_FRAME_RATE (0x30d0dc — GS_SetRefreshRate 0x17d2b8 sets it = 1/FRAME_RATE; 0x30d0cc is
 /// FRAME_RATE_INT) = 1/60 [M symtab; grenade.rs:52].
@@ -81,6 +83,39 @@ pub struct Gas {
     /// bolt case :251-255 does not]: `View_DrawObjectGlist` 0x1e6780:43-66 rotates a bit-3 object
     /// from the VIEWER matrix (billboard) instead of its own +0x90. The draw side reads it.
     pub billboard: bool,
+    /// The gas obj's +0xF0 bit 0x400 — set only by `Env_Breath`'s mode-2 puff [M 0x17c024-0x17c02c]:
+    /// a 0x400 object is submitted to a view only while that viewer's goggle mode (+0x236) is 2
+    /// [M View_AddObjects 0x1e62d8:38-47]. The draw side reads it.
+    pub xray_only: bool,
+}
+
+/// The obj+0xF0 bits `Gas_Init` ORs into every puff after `hashtable_set_object_to_entity_gfx` has
+/// copied the glist flags in [M 0x1aacc8:83 `*(obj+0xf0) |= 0x20020120`]. It is the only writer of
+/// bit 0x20000 in ACTION.ELF [M grep of every obj+0xF0 store], and no glist on the disc carries it in
+/// its +0x44 flags [D nf-formats tests/night_quarter_alpha_census.rs].
+pub const GAS_OBJ_FLAGS: u32 = 0x2002_0120;
+
+/// The obj+0xF0 bit `View_SetupRenderModes_Tweak` 0x1e5888:12-17 tests: with it set and the viewer
+/// in night sight (viewer+0x236 == 1), the alpha byte handed to `psiSetTweakARGB` is obj+0x106 >> 2.
+pub const NIGHT_QUARTER_ALPHA: u32 = 0x2_0000;
+
+impl Gas {
+    /// obj+0x106 as `gases_smoke` 0x1ab2d0's tail writes it: `(int)a` clamped to 0..255.
+    pub fn alpha_byte(&self) -> u8 {
+        let a = self.rgba[3];
+        if a >= 255.0 { 255 } else if a > 0.0 { a as u8 } else { 0 }
+    }
+
+    /// The draw's alpha factor (byte/255) for a viewer in goggle mode `mode`: the night-sight
+    /// quarter [M View_SetupRenderModes_Tweak 0x1e5888:12-17, `bVar3 = obj+0x106 >> 2`], and the
+    /// pool's live alpha otherwise (the unchanged mode-0/2 path).
+    pub fn tweak_alpha(&self, mode: u16) -> f32 {
+        if mode == 1 && GAS_OBJ_FLAGS & NIGHT_QUARTER_ALPHA != 0 {
+            (self.alpha_byte() >> 2) as f32 / 255.0
+        } else {
+            self.rgba[3] / 255.0
+        }
+    }
 }
 
 #[derive(Default)]
@@ -147,6 +182,7 @@ impl GasPool {
             life: 128.0,
             kind: 7,
             billboard: false,
+            xray_only: false,
         });
         let _ = yaw; // the rot-z euler: stored to obj+0x50/0x60 in the game; the port's billboard draw reads only the spin
     }
@@ -195,6 +231,7 @@ impl GasPool {
             life: 120.0,
             kind: 7,
             billboard: false,
+            xray_only: false,
         });
         let _ = yaw; // the rotation draw: stored to obj+0x50/0x60; the port's billboard reads only the spin
     }
@@ -230,6 +267,7 @@ impl GasPool {
             life: 64.0,
             kind: 0,
             billboard: false,
+            xray_only: false,
         });
     }
 
@@ -262,6 +300,7 @@ impl GasPool {
             life: 64.0, // [S] unverified — the decompile drops the life arg
             kind: 3, // [M :349]
             billboard: false,
+            xray_only: false,
         });
         let _ = yaw; // the rot-z euler (the searchlight's shape); the port's billboard reads only the spin
     }
@@ -308,6 +347,7 @@ impl GasPool {
             life,
             kind,
             billboard: false,
+            xray_only: false,
         });
         // The mesh rides alongside for the draw (the game passes it to the gfx hashtable); the port's
         // billboard draw reads it from the puff via the pool index.
@@ -355,6 +395,26 @@ fn mul_ee(a: f32, b: f32) -> f32 { nf_formats::ps2float::mul(a, b) }
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn night_sight_quarters_the_alpha_byte() {
+        // [M Gas_Init 0x1aacc8:83 |= 0x20020120; View_SetupRenderModes_Tweak 0x1e5888:12-17 >> 2 in mode 1;
+        // gases_smoke 0x1ab2d0 tail: (int) clamp 0..255]
+        assert_ne!(GAS_OBJ_FLAGS & NIGHT_QUARTER_ALPHA, 0);
+        let mut pool = GasPool::default();
+        pool.init([0.0; 3], 0.0, [0.0; 3], 0.5, 0.5, 0, [0xff, 0xff, 0xff, 0xc8], 60.0);
+        let g = &mut pool.puffs[0];
+        g.rgba[3] = 199.9;
+        assert_eq!(g.alpha_byte(), 199);
+        assert_eq!(g.tweak_alpha(1), (199u8 >> 2) as f32 / 255.0);
+        // Sister (can fail): off and x-ray keep the live alpha.
+        assert_eq!(g.tweak_alpha(0), 199.9 / 255.0);
+        assert_eq!(g.tweak_alpha(2), 199.9 / 255.0);
+        g.rgba[3] = 300.0;
+        assert_eq!(g.alpha_byte(), 255);
+        g.rgba[3] = -4.0;
+        assert_eq!(g.alpha_byte(), 0);
+    }
 
     #[test]
     fn searchlight_smoke_consumes_six_shared_draws_in_order() {

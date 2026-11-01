@@ -116,3 +116,33 @@ death cap" claim above (see docs/systems/bullet-flight-range.md for the full cha
   first_segment` pins the 4.0/8.0 boundary death [M 0x12e95c-0x12e984 + 0x12f014-0x12f02c]. The
   remaining live check below (gdbwatch a held watch's `BU+0xF4`) still settles the model on
   hardware: predicted ~4.0/segment with `BU+0xFC` untouched at 210.
+
+## The satchel charge under the beam (satchel-laser)
+
+`Bullet_DoTrails` 0x12d890's 0x3b-family tail (every satchel charge — the 4a lift shooters'
+drops included) walks the charge's own `obj+0xD0` contact list:
+
+- `BU+0x102` starts at **100** for the 0x3b family [M Bullet_init 0x12c5a0:206].
+- Per contact whose picker is class 5 with weapon id 0x4E: `BU+0x102 −= FRAME_RATE_MUL` (1);
+  0x4F: `−= FRAME_RATE_MUL·10` [M 0x12d890:452-466] — one contact per held tick, so **100 ticks**
+  (≈1.67 s) for the watch, 10 for its upgrade. No heal arm (unlike the locks).
+- Every contact spawns **`Emitter_Create(0xc00000a, entry+0x40, entry+0x10, 0, …)`** — the burn
+  sparks at the contact's hit point/normal [M :467-468; the arg order from the
+  `Emitter_Create__FUiP7_VECTORT1fUiUiUif` signature 0x17ae00]. Def 0xc00000a on 0700004a [D]:
+  4 slots, 1 spawn/tick, life 0.167+0.033 s, speed 3.0, a ±90° hemisphere, size 0.346, colour key
+  (255, 38, 132) halved-as-stored, texture 0x3000082.
+- The walk that takes the counter to ≤ 0 plays **0x5dd** at the charge [M :472-474] (its only
+  caller; the port used to play it on lock burn-throughs — removed).
+- From the next tick `BU+0x102 < 1` redraws the fuse to `Rand_Rand(0x1518) + 0x3c` every tick and
+  jumps past the beep and the contact walk [M :424-433]: the digits scramble (they are taken from
+  the fuse before the redraw, :422), the sparks stop, and the charge never explodes.
+
+Port: `Drones::update_player_bullets`' watch arm (crates/nf-game/src/drone.rs) — burn, sparks via
+`WorldFx::spawn_impact`, 0x5dd; `tick_charge_fuse` the redraw. The contact point is the closest
+point of the round's segment to the charge and the normal faces back along the beam [S — the port
+has no per-triangle test on the charge; the game's are `Collide_Intersect` 0x1ebaa8's hit point and
+world normal]. The contact sphere is 0.5 [S]. The particles draw untextured (the port's particle
+pass has no per-def texture), so the burst reads as a magenta glow, not textured sparks.
+Tests: nf-view `satchel_laser_4a_live` (sparks every beam tick, 100-tick burn-out with the
+99-tick sister, 0x5dd, no sparks after, the scramble, no blast; the no-beam sister blows).
+Render aid: `NF_LASER_AT=a-b` (nf-view headless) aims at the landed charge and holds the trigger.
