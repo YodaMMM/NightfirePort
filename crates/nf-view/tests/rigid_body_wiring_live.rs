@@ -144,7 +144,10 @@ fn blast_next_to_a_barrel_changes_its_matrix_the_games_way() {
     // [M disasm 0x1d753c-0x1d757c]).
     assert_eq!(expect.rb.ty, 1, "the 07000006 barrel's type halfword is param 2 = 1");
     let rec = nf_game::rigid_body::RbHit { scale: falloff, normal: [-vel[0], -vel[1], -vel[2]], vel, point, other_class: 5, other_pos: blast_pos };
-    nf_game::rigid_body::rb_resting_contact_rot(&expect.rb, &mut expect.st, &[rec], expect.s158, &mut Vec::new());
+    // The replay rides the same world/cel the sim's handler swept (the cylinder pass runs in
+    // every handler call now [M 0x1d73a0's setup runs before the hit walk]).
+    let cell = scene.sim.as_ref().unwrap().world.find_cel(expect.st.trans);
+    nf_game::rigid_body::rb_resting_contact_rot(&expect.rb, &mut expect.st, &scene.sim.as_ref().unwrap().world, cell, &[rec], expect.s158, &mut Vec::new());
     let obj_y = expect.st.trans[1];
     // The replay now carries the cel wind the sim's tick used: the barrel's wind cell read at
     // the post point (one gust tick apart — the gust's per-tick drift is ~0.3%, absorbed by
