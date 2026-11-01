@@ -44,3 +44,28 @@ comments with plain cited comments, and pin: idle Bond at the start is not appro
 
 Session 1 (2026-11-01): sandbox reset — full setup redone; branch created from
 origin/s/level-11-start-corridor-guard + merge of origin/master (2249e9f5). WORKLOG started.
+
+Session 3 (2026-11-01, the -2 task, branch s/level-11-start-corridor-guard-2 from the -1 branch +
+merge of origin/master): the four suggested leads resolved with [M]/[D] — no port fix was needed,
+the divergence question narrows to two [L]-only facts:
+- Prop 0x56 is CLEAR on both guards: the guards' p20 = 0x40280000 (bit 26 = 0x04000000 clear) and
+  p25 = 0x40291660 (clear) [D 07000011 map 43 params]; prop 0x56 = behaviour word 2 bit 26
+  [M 0x1c7d98 + bitDescs 0x2c7250[172/173] = (2|26<<3, mask 26) / bitMasks[26] = 0x4000000 [D
+  ACTION.ELF]]. So EnemyRunToPoint's RunToAlarm redirect [M 0x168910:17-27] cannot fire — the
+  prior session's mode-7 analysis stands; a probe run confirmed the port's prop read and words.
+- AIPoint+4, the ClosestAIPoint eligibility byte [M 0x151b18:128], is written 1 for EVERY point
+  at creation [M 0x137550 Drone_AIPoint] — the points never block the selection at boot.
+- The difficulty gate is `placement p2 <= GameState+0x40` [M 0x136be0:49] and +0x40 is the
+  difficulty (the 0..5 bands in HitDamage 0x145558:135-144, DefaultInit :505/:514/:526). At d0
+  NEITHER guard is created (p2 = 1, 2 > 0) — the game's own empty corridor.
+- The 0x4000000 latch is clear at boot (only the HandleImpact sighting paths set it [M 0x1469b8]);
+  the Tower clause at alertness 1.0 leaves the resume at ATTACK [M 0x168910:23-31] — the port
+  matches.
+- The port probe (scratch, removed): at d3 both guards walk mode 7 → 0x85 → 0x63 to (0.43, 17.65)
+  / (−2.14, 18.86) by t240 and hold attack states there — the data-faithful walk.
+- Pin reworked in start_corridor_guard_07000011_live.rs (5 tests): the d0 empty corridor (no guard
+  satisfies the gate; idle Bond unapproached over 3200 ticks), the d3 owner-point walk + ATTACK
+  resume, prop-0x56 clear + no kind-8 AIPoint [D the 12 0xE9 placements], and the -1 task's two.
+  The f200-f3172 capture's difficulty and the per-cel enable gate (+0x100/+0x101/+0x102 from the
+  cel's +0x9a/+0x9c/+0x9e [M 0x1336f8:292-296, 0x1346b8]; the AI reader still unlocated) remain
+  the live checks.
