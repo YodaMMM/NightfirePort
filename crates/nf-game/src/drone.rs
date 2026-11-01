@@ -814,6 +814,13 @@ pub struct Animator {
     pub follow_on: u16,
     /// Scripts still fading out after being replaced (`AnimScriptAppendBlend`), oldest first (docs/systems/anim-engine.md).
     pub outgoing: Vec<crate::anim::Outgoing>,
+    /// `Drone+0x538`, the ONE blend-out word `DroneWeap_Ready2Fire` reads [M 0x178c48:102-104].
+    /// `DroneAnim_SetHTAnim` stores the replaced script there and points that script's back-pointer
+    /// (+0x64) at the word [M 0x13b1c8:76-77]; `AnimScriptDelete` zeroes whatever a dying script's
+    /// back-pointer names [M 0x1c14f0:26-29]. Every script a blend replaced keeps a back-pointer to
+    /// the same word, so the FIRST of them to die clears it, even while a later one still fades:
+    /// the word is set on each blend start and cleared on any outgoing script's deletion.
+    pub blend_out: bool,
     /// The playing script's start-frame commands ran (`+0x78 & 0x20000000` cleared).
     pub started: bool,
     /// Event 7 cleared `+0x579`: `DroneAnim_CheckForAnimComplete` ends the one-shot before its last frame.
@@ -1917,7 +1924,7 @@ impl Drone {
             alarm_yaw: 0.0, alarm_run: false, timer_c_payload: 0, alarm_patrol: param(23) as u8, alarm_point: None,
             ai_points: Vec::new(), alarm_switches: Vec::new(),
             explosive_pos: pos, explosive_run_dist: 0.0,
-            anim: Animator { danim: 0, script: None, time: 0, state: 0, class: 0, call: None, reached: false, call_from: 0, blend_wait: 0, ftime: 0.0, speed: 1.0, variant: 0, once: false, held: false, follow_on: 0, outgoing: Vec::new(), started: false, early_end: false, len_cap: None },
+            anim: Animator { danim: 0, script: None, time: 0, state: 0, class: 0, call: None, reached: false, call_from: 0, blend_wait: 0, ftime: 0.0, speed: 1.0, variant: 0, once: false, held: false, follow_on: 0, outgoing: Vec::new(), blend_out: false, started: false, early_end: false, len_cap: None },
             firing: false, burst_done: false, burst: 0, next_shot: 0, last_shot: 0, clip, clip_max: clip,
             grenade_weapon, grenade_count, pending_grenade: false,
             shots: Vec::new(), log: Vec::new(), knocked_out: false, disabled_logged: false, dispatched_logged: false, start_script, root_prev: None, aimed_at: false, aimed_until: 0, bunched: false, wobble: rng.rand(10000), lost_sight: true, damage_mul: 1.0, alert_bits: 0, light: 1.0, attack_frame: 0, alerted_by_drone: false, watching: false,
@@ -2655,7 +2662,8 @@ impl Drone {
     /// no bitfield, no +0xa0 time-scale field. The param-0 clear arm has no port path: nothing re-enables
     /// rotation-carrying on a live script.)
     fn begin_blend(&mut self, d: &Data, blend: u16, old_turn: bool) {
-        if blend == 0 || !self.drawn { self.anim.outgoing.clear(); return; }
+        // `AnimScriptAdd` deletes every script: each fading one zeroes +0x538 [M 0x1c14f0:26-29].
+        if blend == 0 || !self.drawn { if !self.anim.outgoing.is_empty() { self.anim.blend_out = false; } self.anim.outgoing.clear(); return; }
         for o in &mut self.anim.outgoing { o.clock = 8.0; o.length = 8.0; }
         if let Some(s) = self.anim.script {
             let looping = !(self.anim.once || self.anim.held);
@@ -2677,7 +2685,9 @@ impl Drone {
                 self.yaw = self.desired_yaw;
             }
             self.anim.outgoing.push(o);
-            if self.anim.outgoing.len() > 31 { self.anim.outgoing.remove(0); }
+            // +0x538 = the replaced script, its back-pointer at the word [M 0x13b1c8:76-77].
+            self.anim.blend_out = true;
+            if self.anim.outgoing.len() > 31 { self.anim.outgoing.remove(0); self.anim.blend_out = false; }
         }
     }
 
@@ -2866,7 +2876,10 @@ impl Drone {
             return self.call_handler(d);
         }
         // The fading scripts keep playing (`AnimScriptTick`) while their blend clocks run down (`AnimFrameResolve`).
+        let n_out = self.anim.outgoing.len();
         self.anim.outgoing.retain_mut(|o| { let len = d.scripts.get(&o.script).map_or(1.0, |s| s.length as f32); o.tick(len) });
+        // A faded script's `AnimScriptDelete` zeroes +0x538 through its back-pointer [M 0x1c14f0:26-29].
+        if self.anim.outgoing.len() < n_out { self.anim.blend_out = false; }
         if self.anim.held { self.root_prev = None; return self.call_handler(d); }
         let before = (self.anim.script, self.anim.danim);
         let ftime_in = self.anim.ftime;
@@ -5738,7 +5751,22 @@ impl Drone {
         let hip = self.hip();
         let from = [self.pos[0], self.pos[1], self.pos[2]];
         let to = [self.pos[0], self.pos[1] - (hip + 0.6), self.pos[2]];
-        let hit = world.segment(from, to)?;
+        // The seam bridge: the game's drone also carries the 0.4 collision sphere `NDrone2_Collision`
+        // sets up for the object pass: centres obj + up·0.4 (`+0x3F0`) and obj + up·(0.4 − hip)
+        // (`+0x400`), `+0x45C` = 0.4 (0.3 sitting), `obj+0xFD = 1` [M 0x140e90:91-117, 168]; read
+        // as a 0.4 sphere at the feet [S: the radius role of +0x45C is inferred from its use],
+        // which rests on the floor triangles either side of a sub-centimetre seam between two
+        // objects' quantized meshes, so a guard never drops through one. The port has only the
+        // feet ray, which threads such a seam: 07000001's west hall has a 0.37 mm gap at
+        // z −6.1047..−6.1044 and a 2 mm gap at z −5.9675..−5.9692 [D collision tris], and a guard
+        // whose dodge ended on the seam fell out of the level. When the centre ray misses, four
+        // rays 2 cm out stand in for the sphere's contact (a 0.4 sphere over a 4 cm gap sinks
+        // 0.5 mm) [S]; a real ledge still drops the drone once it is 2 cm past the edge.
+        let hit = world.segment(from, to).or_else(|| {
+            [[0.02f32, 0.0], [-0.02, 0.0], [0.0, 0.02], [0.0, -0.02]].iter().filter_map(|o| {
+                world.segment([from[0] + o[0], from[1], from[2] + o[1]], [to[0] + o[0], to[1], to[2] + o[1]])
+            }).min_by(|a, b| a.total_cmp(b))
+        })?;
         let floor = from[1] + (to[1] - from[1]) * hit;
         let feet_y = self.pos[1] - hip;
         if floor >= feet_y - 0.2 { Some(floor) } else { None }
@@ -10709,7 +10737,7 @@ impl Drone {
     fn ready_to_fire(&self) -> bool {
         if self.anim.class == 4 { return true; }
         if self.anim.class != 2 { return false; }
-        if !self.anim.outgoing.is_empty() { return false; }
+        if self.anim.blend_out { return false; }
         if self.dist < 2.0 { return true; }
         let tol = if self.mode == 0xd { 0.523_598_8 } else { 0.349_065_87 };
         angle_difference(self.yaw + self.aim_yaw, self.yaw_to_opp).abs() < tol
@@ -10732,7 +10760,7 @@ impl Drone {
             // 0x5C recoil danim, zeroes the pending call's completion action (+0x596 / +0x598), sets +0x57B
             // and clears +0x40. Non-recoil weapons fire as before (the game's `+0x3E == 0` early-out).
             let fire_now = !self.recoil_weapon
-                || (self.event_21 && self.anim.call.is_none() && self.anim.outgoing.is_empty());
+                || (self.event_21 && self.anim.call.is_none() && !self.anim.blend_out);
             if self.next_shot <= frame && self.ready_to_fire() && fire_now {
                 if self.recoil_weapon {
                     self.anim.call.as_mut().into_iter().for_each(|c| { c.1 = 0; c.2 = 0; });
@@ -20204,7 +20232,7 @@ mod tests {
             alarm_yaw: 0.0, alarm_run: false, timer_c_payload: 0, alarm_patrol: 0, alarm_point: None,
             ai_points: Vec::new(), alarm_switches: Vec::new(),
             explosive_pos: pos, explosive_run_dist: 0.0,
-            anim: Animator { danim: 0, script: None, time: 0, state: 0, class: 0, call: None, reached: false, call_from: 0, blend_wait: 0, ftime: 0.0, speed: 1.0, variant: 0, once: false, held: false, follow_on: 0, outgoing: Vec::new(), started: false, early_end: false, len_cap: None },
+            anim: Animator { danim: 0, script: None, time: 0, state: 0, class: 0, call: None, reached: false, call_from: 0, blend_wait: 0, ftime: 0.0, speed: 1.0, variant: 0, once: false, held: false, follow_on: 0, outgoing: Vec::new(), blend_out: false, started: false, early_end: false, len_cap: None },
             firing: false, burst_done: false, burst: 0, next_shot: 0, last_shot: 0, clip: 0, clip_max: 0,
             grenade_weapon: 0x35, grenade_count: 0, pending_grenade: false, shots: Vec::new(),
             // 952: the raw accuracy roll per shot, parallel to `shots`.

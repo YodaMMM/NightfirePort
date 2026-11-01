@@ -68,7 +68,7 @@ From 0x68 the game's chain [M]:
   fresh LOS — else → 0x5c (CombatNoSight) [M 0x166328 case 1].
 - `DoFiring` 0x17a080: the sight gate `+0x274 < 0x10 || prop 0x17` [M 0x17a080:24-25]; the fire
   request is `+0x3b` (armed here and by CombatState's flag-4 arms [M 0x148338:108-113]).
-- `DroneWeap_Ready2Fire` 0x178c48 (SP): the anim class must be 2 (or 4), no blend-out (+0x538);
+- `DroneWeap_Ready2Fire` 0x178c48 (SP): the anim class must be 2 (or 4), no blend-out (+0x538, the single word the first dying replaced script clears — docs/systems/drone-animation.md);
   **`if (dist < 2.0) return 1`** — a touching target is always "ready" (no muzzle test) [M
   0x178c48 SP arm]; otherwise the muzzle-vs-aim direction test: the muzzle bone's direction vs
   the aim vector within 0.349 rad (0.5236 for dtype 13) [M 0x178c48:171-190].

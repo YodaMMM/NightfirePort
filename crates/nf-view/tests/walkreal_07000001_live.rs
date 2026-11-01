@@ -22,6 +22,9 @@ fn iso() -> String { std::env::var("NF_ISO").expect("NF_ISO") }
 /// `Camera_UpdateGlbVars` advances it on the frames after [M 0x1bada0:16-20]).
 fn walk_to_the_exit(iso: &str, stop_at_fire: bool) -> Walker {
     let mut w = Walker::new(nf_view::load(iso, "07000001.bin", false).expect("load 07000001"));
+    // The type-2 guards carry 12 health, captains 24 [L ee_02b.bin]: Bond aims for the head
+    // (`Walker::prefer_head`), as a player does, or the scripted fights run the walk dry.
+    w.prefer_head = true;
     {
         let sim = w.scene.sim.as_ref().unwrap();
         let p = sim.bond.pos;
@@ -707,6 +710,9 @@ fn following_mayhew_down_completes_the_level() {
     // DroneVision LOS picks cel-linked objects): the run can leave Bond pressed into the
     // south-wall/east-door-jamb corner, so wedged nav legs bridge through a visible node.
     w.bridge_wedged_nav = true;
+    // The type-2 guards carry 12 health, captains 24 [L ee_02b.bin]: Bond aims for the head
+    // (`Walker::prefer_head`), as a player does, or the scripted fights run the walk dry.
+    w.prefer_head = true;
     // ---- the route to the stairwell head (the main test's play, condensed) ------------------
     for t in 0..4000u32 {
         w.tick(Default::default(), false);
@@ -879,6 +885,22 @@ fn following_mayhew_down_completes_the_level() {
                 parked_at = cp;
                 break;
             }
+            // PlayerInWay is the opposite of the wait: Bond stands IN the lead's route inside 3.0
+            // and the lead resumes only once Bond is out of that band [M 0x15ea28 case 3] —
+            // closing in keeps him parked (the hall run: Bond trailed 2.8 u WEST of him, on his
+            // westward route, three closes, 30 s). A player steps behind him instead.
+            if cstate == nf_game::drone::state::PLAYER_IN_WAY {
+                let tgt = w.scene.sim.as_ref().unwrap().drones.list[ci].route.as_ref().map(|r| r.target);
+                if let Some(tgt) = tgt {
+                    let (hx, hz) = (tgt[0] - cp[0], tgt[2] - cp[2]);
+                    let hl = (hx * hx + hz * hz).sqrt().max(1e-3);
+                    let behind = [cp[0] - hx / hl * 4.5, cp[1], cp[2] - hz / hl * 4.5];
+                    eprintln!("[01f] the contact holds in PlayerInWay at ({:.2},{:.2},{:.2}) — stepping behind him to ({:.2},{:.2})",
+                        cp[0], cp[1], cp[2], behind[0], behind[2]);
+                    w.walk_nav_to(behind, "behind the waiting contact", 1.0);
+                    continue;
+                }
+            }
             eprintln!("[01f] the contact stood still 10 s at ({:.2},{:.2},{:.2}) state {cstate:#x} — closing in (the release bands [M 0x15eda8])",
                 cp[0], cp[1], cp[2]);
             // The hall's south-west inner corner: when the straight line to the contact crosses
@@ -918,7 +940,13 @@ fn following_mayhew_down_completes_the_level() {
         };
         if armed_near { clear_around(&mut w, &mut cleared, "follow"); continue; }
         let bp = w.scene.sim.as_ref().unwrap().bond.pos;
-        let (dx, dz) = (cp[0] - bp[0], cp[2] - bp[2]);
+        let (mut dx, mut dz) = (cp[0] - bp[0], cp[2] - bp[2]);
+        // Behind him means behind along HIS heading (the route's move target): with Bond ahead
+        // on the route, the Bond-to-contact line put the trail point in front of the lead.
+        if let Some(tgt) = w.scene.sim.as_ref().unwrap().drones.list[ci].route.as_ref().map(|r| r.target) {
+            let (hx, hz) = (tgt[0] - cp[0], tgt[2] - cp[2]);
+            if hx * -dx + hz * -dz > 0.0 && hx * hx + hz * hz > 1e-4 { dx = hx; dz = hz; }
+        }
         let l = (dx * dx + dz * dz).sqrt().max(1e-3);
         let mut trail = [cp[0] - dx / l * 4.0, cp[1], cp[2] - dz / l * 4.0];
         if let Some(back) = behind_the_in_way_contact(&w, ci, head) {
