@@ -138,11 +138,6 @@ pub struct MpBodyInput {
     /// The aim target as body-relative (twist, pitch) radians — twist positive toward the body's
     /// left (a larger yaw), pitch positive UP — or None (no target: ease back to 0).
     pub aim: Option<[f32; 2]>,
-    /// Single player (`MPSettings+0x180 == 0`): the set selector is 999 (the caller's `class`),
-    /// the stance transitions take class 3 (`PlayerAnimStand2Crouch` 0x190198 /
-    /// `PlayerAnimCrouch2Stand` 0x190068: `uVar2 = 3` unless MP [M]) and `AnimSetUpdate` returns
-    /// before the strafe overlay (0x1c0938:222-224 [M]).
-    pub sp: bool,
 }
 
 /// One body's script list and clocks.
@@ -275,13 +270,12 @@ impl MpBodyAnim {
                 self.rebuild();
             }
         }
-        if self.hold == 0 { self.set_update(sets, lens, inp.fwd, inp.strafe, inp.sp); }
+        if self.hold == 0 { self.set_update(sets, lens, inp.fwd, inp.strafe); }
         // Player_HandleJump at the end of SSWalk/SSCrouch → Player_ChangeSubState(0 / 4).
         if inp.crouch != self.crouch {
             self.crouch = inp.crouch;
             self.rebuild();
-            let tc = if inp.sp { 3 } else { self.class };
-            let s = if self.crouch { stand2crouch_script(tc) } else { crouch2stand_script(tc) };
+            let s = if self.crouch { stand2crouch_script(self.class) } else { crouch2stand_script(self.class) };
             self.append(LayerKind::OneShot(s), TRANSITION_SPEED, lens, false, false);
             self.hold = STANCE_HOLD;
         }
@@ -290,7 +284,7 @@ impl MpBodyAnim {
     }
 
     /// `AnimSetUpdate` 0x1c0938 for this stance's set.
-    fn set_update(&mut self, sets: &MpAnimSets, lens: &dyn Fn(u32) -> Option<(u16, bool)>, fwd: f32, strafe: f32, sp: bool) {
+    fn set_update(&mut self, sets: &MpAnimSets, lens: &dyn Fn(u32) -> Option<(u16, bool)>, fwd: f32, strafe: f32) {
         let set = sets.set(self.class, self.crouch);
         let p2 = if fwd.abs() <= 0.0002 { 0.0 } else { fwd };
         self.rate = p2 * SET_STRIDE;
@@ -328,8 +322,6 @@ impl MpBodyAnim {
         // `GlbAnimList` over the set's tag: the walk layer is two scripts (walk + its synced run).
         let tagged: usize = self.layers.iter().filter(|l| l.tagged).map(|l| if matches!(l.kind, LayerKind::Walk { .. }) { 2 } else { 1 }).sum();
         if tagged == 1 { self.phase = SET_PHASE_INIT; }
-        // Single player returns here, before the overlay [M 0x1c0938:222-224].
-        if sp { return; }
         // The MP strafe overlay (LAB_001c0dc8).
         let ratio = strafe / STRAFE_MAX;
         let angle = ratio.atan2((p2 / FWD_MAX).abs());
@@ -429,7 +421,7 @@ mod tests {
         Some(match id & 0xf { 1 => (150, false), 2 => (86, false), 3 => (50, false), 4 | 5 => (43, false), _ => (50, false) })
     }
     fn inp(fwd: f32, strafe: f32) -> MpBodyInput {
-        MpBodyInput { alive: true, weapon: 2, class: 1, crouch: false, fwd, strafe, aim: None, sp: false }
+        MpBodyInput { alive: true, weapon: 2, class: 1, crouch: false, fwd, strafe, aim: None }
     }
 
     #[test]

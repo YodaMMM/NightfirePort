@@ -184,41 +184,13 @@ fn walk_the_full_route_and_complete_every_objective() {
         assert!(sim.drones.channels.on(0x21),
             "the west-lane approach stands inside the west 0x21 plate's footprint [D lo/hi x 7.3..10.7 z −35.0..−33.7]");
     }
-    // Back to the courtyard the way the route came: the direct leg from the gate-plate lawn parks
-    // Bond west of the wall at (6.4, −17.7) (segment to the target blocked at 8 % [L the STUCK
-    // dump]); the opening legs' (0, −20) → (13, −18) crossing is clear.
-    for (name, at) in [
-        ("back along the moat", [8.0f32, 5.9, -36.0]),
-        ("back up the west lane", [1.0, 5.9, -33.0]),
-        ("back to the west lawn", [0.0, 5.9, -30.0]),
-        ("back to the courtyard east", [0.0, 5.9, -20.0]),
-        ("back across the courtyard", [13.0, 5.9, -18.0]),
-    ] {
-        w.walk_nav_to(at, name, 1.6);
-    }
+    w.walk_nav_to([13.0, 5.9, -18.0], "back across the courtyard", 1.6);
     for (plate, want_ch) in [(None, 0x4fu8), (Some(plate0x25), 0x50u8)] {
         let (si, at, rescue_ch) = *servants.iter().find(|(_, _, ch)| *ch == want_ch)
             .unwrap_or_else(|| panic!("the servant carrying {want_ch:#x} [D p6]"));
         // #389's 0x21 plate already fired on the lane approach; #388's 0x25 plate is walked here.
         if let Some(plate) = plate {
             w.walk_nav_to(plate, &format!("onto the {want_ch:#x}-servant's enable plate"), 1.8);
-            if !w.scene.sim.as_ref().unwrap().drones.channels.on(0x25) {
-                // An awake guard standing in the double doors' sweep on this leg (doors 4/5 at
-                // (19.9/21.8, −20.25)) turns the leaves back each tick — they shuttle between
-                // pos01 0.71 and 0.79 and the doorway never clears [L NF_DOORTRACE]. A player
-                // shoots him: drop every live armed guard within 3 of the doorway, then re-walk.
-                let blockers: Vec<usize> = {
-                    let sim = w.scene.sim.as_ref().unwrap();
-                    sim.drones.list.iter().enumerate()
-                        .filter(|(_, d)| d.present && !d.corpse && d.health > 0.0 && d.team != 3
-                            && ((d.pos[0] - 20.9).powi(2) + (d.pos[2] + 20.25).powi(2)).sqrt() < 3.0)
-                        .map(|(i, _)| i).collect()
-                };
-                for gi in blockers {
-                    w.shoot(gi, "the guard in the 0x25 doorway");
-                }
-                w.walk_nav_to(plate, &format!("onto the {want_ch:#x}-servant's enable plate (again)"), 1.8);
-            }
         }
         w.wait(10);
         w.walk_nav_to([at[0], at[1] - 0.3, at[2]], &format!("servant {si}"), 1.7);
