@@ -12,6 +12,8 @@ PCSX2 with the trace tools (`tools/trace/pcsx2_shot.py`, `gdbwatch.py`, `gdbcall
 - `2026-10-14-weapon-measurements-pcsx2.md` — live measurements: rocket speed, grenade release timing, the
   stunner, the laser watch, the remote mine, the AIMS-20, SG5 casings, guard sighting→first shot, per-level
   loadouts and gadget cycles.
+- `2026-11-01-07000011-start-corridor-guards.md` — the 07000011 office guards at an idle start per
+  difficulty (the fresh-boot difficulty 2, positions/states at f1-f1500, per-hit damage, the death frame).
 
 ## The backlog rule
 

@@ -1,43 +1,38 @@
-//! start-corridor-guard-11: the 07000011 start-corridor guards (level-11-start-corridor-guard
-//! + its -2 continuation).
+//! start-corridor-guard-11: the 07000011 start-corridor guards.
 //!
-//! Symptom: on a fresh 07000011 load with Bond idle at the start, the port walks a red-suited
-//! guard into the corridor south of the spawn from ~tick 200 and he kills Bond; the PS2 capture
-//! shows the same corridor empty over f200-f3172 [L].
+//! Behaviour: on a fresh 07000011 load with Bond idle at the start, office guards #126 (and #127
+//! from Agent up) walk into the corridor south of the spawn and kill him. The real game does the
+//! same [L docs/live/2026-11-01-07000011-start-corridor-guards.md: fresh boot, goto_level, PINE
+//! every 50 frames]: the fresh-boot difficulty is 2 (0x2A3790), both guards are in GoToGoal 0x63
+//! on frame 1, stand 6-9 units from Bond by f200 and fire; idle Bond dies at f1113 (d2) / f878
+//! (d3); 10/12/20 damage a hit at d1/d2/d3. An empty corridor is not a fresh idle start at any
+//! selectable difficulty (the menu stores 1/2/3 [M C_SBNFDFCTY 0x216ca8:15]).
 //!
 //! What this test pins (every assertion cites its evidence):
 //!  - The two switch-less office guards exist at load — placements #126 (skin 0x05000038, disc
 //!    p2 = 1) and #127 (skin 0x0500003A, p2 = 2) [D 07000011.bin map 43]; Drone_Create's
-//!    difficulty gate creates a drone iff `placement param2 <= GameState+0x40` [M 0x136be0:49],
-//!    so both exist at difficulty 3 and NEITHER exists at difficulty 0 — the game's own empty
-//!    corridor at d0, which is what the f200-f3172 capture shows.
-//!  - Their wake chain is NOT the divergence: param 3 = 0 (no switch channel) [D] and param 1 =
-//!    0x06000000, which NDrone2_DefaultInit zeroes at Drone+0x554 [M 0x14b300:611-613], so
-//!    DSTATE_Global's ENTER sends them to +0x5A2 — mode 7's start state 0x85 EnemyRunToPoint
-//!    [M 0x15b830:22-43; DroneTypeSettings row 7 start = 0x85 [D ACTION.ELF 0x29aee8+7*12]]
-//!    — the game activates them at load exactly as the port does.
-//!  - The owner rule (the -1 task's fix): ClosestAIPoint prefers the point whose +0x0c owner
-//!    equals the drone's +0x144, and DefaultInit writes +0x144 = placement PARAM 4 (piVar19[0x11]
-//!    = params[4]) [M 0x14b300:472; M 0x151b18:151-181]. The disc pairs the guards to their
-//!    run-to points: #126's p4 = 31 ↔ the group-0 AIPoint with owner 31 at (1.40, 46.8, 16.70);
-//!    #127's p4 = 30 ↔ the owner-30 AIPoint at (−1.51, 46.8, 18.21) [D].
-//!  - The alarm path is NOT what empties the corridor: EnemyRunToPoint's ENTER redirects to
-//!    RunToAlarm 0x89 only when property 0x56 is set [M 0x168910:17-27], and property 0x56 =
-//!    behaviour word 2 bit 26 [M 0x1c7d98 + the bitDescs/bitMasks tables [D ACTION.ELF
-//!    0x2c7250/0x2c7308]] — the guards' word 2 (p20) is 0x40280000, bit 26 CLEAR [D] — so the
-//!    game takes the run-to-point path; and no kind-8 AIPoint exists on the level anyway
-//!    [D the 12 map-43 0xE9 placements, p0 ∈ {0,1,2}], so RunToAlarm would park them Idle.
-//!  - At d3 the guards walk to their owner points and hold ATTACK there (return state +0x5A2
-//!    stays 0x56 at alertness 1.0, the Tower clause [M 0x168910:23-31]; the 0x4000000 latch is
-//!    clear at boot — only HandleImpact's sighting paths set it [M 0x1469b8]). AIPoint+4, the
-//!    ClosestAIPoint eligibility byte, is 1 on every point at creation [M 0x137550], so the
-//!    disc data gives the game the same walk the port runs.
+//!    difficulty gate creates a drone iff `placement param2 <= difficulty` [M 0x136be0:49], so
+//!    #126 alone at d1, both at d2/d3 [L the live rosters].
+//!  - Their wake chain: param 3 = 0 (no switch channel) [D] and param 1 = 0x06000000, which
+//!    NDrone2_DefaultInit zeroes at Drone+0x554 [M 0x14b300:611-613], so DSTATE_Global's ENTER
+//!    sends them to +0x5A2 — mode 7's start state 0x85 EnemyRunToPoint [M 0x15b830:22-43;
+//!    DroneTypeSettings row 7 start = 0x85 [D ACTION.ELF 0x29aee8+7*12]] → GoToGoal 0x63 [L f1].
+//!  - The owner rule: ClosestAIPoint prefers the point whose +0x0c owner equals the drone's
+//!    +0x144, and DefaultInit writes +0x144 = placement PARAM 4 (piVar19[0x11] = params[4])
+//!    [M 0x14b300:472; M 0x151b18:151-181]. The disc pairs the guards to their run-to points:
+//!    #126's p4 = 31 ↔ the group-0 AIPoint with owner 31 at (1.40, 46.8, 16.70); #127's p4 = 30
+//!    ↔ the owner-30 AIPoint at (−1.51, 46.8, 18.21) [D].
+//!  - No alarm detour: EnemyRunToPoint's ENTER redirects to RunToAlarm 0x89 only when property
+//!    0x56 is set [M 0x168910:17-27] = behaviour word 2 bit 26 [M 0x1c7d98 + the bitDescs/bitMasks
+//!    tables [D ACTION.ELF 0x2c7250/0x2c7308]]; the guards' word 2 (p20) is 0x40280000, bit 26
+//!    CLEAR [D], and no kind-8 AIPoint exists on the level [D the 12 map-43 0xE9 placements].
+//!  - At d3 the guards walk to their owner points and hold ATTACK as the resume state (the Tower
+//!    clause [M 0x168910:23-31]).
+//!  - Per difficulty: the guards are in the corridor box (x −4..5, z 15.5..22, where the game's
+//!    sit [L]) at t200/t700, Bond takes the game's per-hit damage, and dies at d2/d3.
 //!
-//! What is NOT pinned here (needs live checks):
-//! the f200-f3172 capture's difficulty (GameState+0x40 at capture time), and whether the game's
-//! per-cel enable bytes (+0x100/+0x101/+0x102, inherited from the cel's +0x9a/+0x9c/+0x9e at
-//! every link [M 0x1336f8:292-296, 0x1346b8]) hold the guards' control pass frozen at their
-//! spawns. Both are [L]-only questions.
+//! Not matched yet: the game's guards alternate StepAimLeft/Right 0x73/0x74 with AimStandFire
+//! 0x68/0x69 in position [L]; the port's hold 0x68.
 
 use nf_view::scene::Scene;
 
@@ -157,30 +152,62 @@ fn at_difficulty_3_the_guards_walk_their_disc_owner_points() {
     }
 }
 
-/// THE EMPTY CORRIDOR AT DIFFICULTY 0 — what the f200-f3172 capture shows: Drone_Create's gate
-/// `placement param2 <= GameState+0x40` [M 0x136be0:49] admits NEITHER guard at d0 (p2 = 1, 2),
-/// so no drone exists to approach an idle Bond in the first 3200 ticks.
+/// Live per-difficulty behaviour [L docs/live/2026-11-01-07000011-start-corridor-guards.md]:
+/// the guards are in the corridor south of the spawn at t200 and t700 (the game's: x −2.4..3.1,
+/// z 17.0..20.1), and an idle Bond takes the game's per-hit damage — 10/12/20 at d1/d2/d3 [L] —
+/// and dies at d2/d3 within 1500 ticks [L f1113 / f878].
 #[test]
-fn the_corridor_stays_empty_at_difficulty_0() {
-    let mut scene = nf_view::load_with_carry_difficulty(&iso(), "07000011.bin", false, None, 0).expect("load 07000011 d0");
+fn idle_bond_is_approached_and_shot_at_every_selectable_difficulty() {
     let start = [-0.40f32, 25.83];
-    let mut min_dist = f32::MAX;
-    for _ in 0..3200u32 {
-        scene.sim.as_mut().unwrap().step_bond(Default::default(), false, false, false);
-        let sim = scene.sim.as_ref().unwrap();
-        for p in [126usize, 127] {
-            assert!(sim.drones.list.iter().find(|d| d.placement == p).map_or(true, |d| !d.present),
-                "p{p} must not exist at d0: param2 {} > GameState+0x40 = 0 [M 0x136be0:49]",
-                if p == 126 { 1 } else { 2 });
+    let in_box = |p: [f32; 3]| (-4.0..=5.0).contains(&p[0]) && (15.5..=22.0).contains(&p[2]);
+    for (diff, guards, per_hit, dies) in [
+        (1u32, &[126usize][..], 10.0f32, false),
+        (2, &[126, 127][..], 12.0, true),
+        (3, &[126, 127][..], 20.0, true),
+    ] {
+        let mut scene = nf_view::load_with_carry_difficulty(&iso(), "07000011.bin", false, None, diff)
+            .expect("load 07000011");
+        if diff == 1 {
+            let sim = scene.sim.as_ref().unwrap();
+            assert!(sim.drones.list.iter().find(|d| d.placement == 127).map_or(true, |d| !d.present),
+                "d1: #127 (p2 = 2) is not created [M 0x136be0:49; L the d1 roster]");
         }
-        for d in &sim.drones.list {
-            if d.present {
-                let dx = d.pos[0] - start[0];
-                let dz = d.pos[2] - start[1];
-                min_dist = min_dist.min((dx * dx + dz * dz).sqrt());
+        let mut dead_at = None;
+        for t in 1..=1500u32 {
+            scene.sim.as_mut().unwrap().step_bond(Default::default(), false, false, false);
+            let sim = scene.sim.as_ref().unwrap();
+            if t == 1 {
+                for &p in guards {
+                    let dr = sim.drones.list.iter().find(|d| d.placement == p && d.present)
+                        .unwrap_or_else(|| panic!("d{diff}: #{p} exists [L]"));
+                    assert_eq!(dr.state as u32, nf_game::drone::state::GO_TO_GOAL as u32,
+                        "d{diff}: #{p} is in GoToGoal 0x63 on tick 1 [L f1]");
+                }
+            }
+            if t == 200 || t == 700 {
+                for &p in guards {
+                    let dr = sim.drones.list.iter().find(|d| d.placement == p && d.present).unwrap();
+                    assert!(in_box(dr.pos), "d{diff} t{t}: #{p} stands in the corridor (x −4..5, z 15.5..22) as the game's does [L], at ({:.2},{:.2})",
+                        dr.pos[0], dr.pos[2]);
+                    let dx = dr.pos[0] - start[0];
+                    let dz = dr.pos[2] - start[1];
+                    // The game's are 5.8-9.0 away at both ticks [L]; the port's d1 #126 first stops
+                    // in AimStand 0x67 ~10.7 away at t200 and closes to 8.0 by t400.
+                    let reach = if t == 200 { 11.0 } else { 10.0 };
+                    assert!((dx * dx + dz * dz).sqrt() < reach, "d{diff} t{t}: #{p} within {reach} of the idle start [L 5.8-9.0]");
+                }
+            }
+            if dead_at.is_none() && sim.drones.health.health <= 0.0 {
+                dead_at = Some(t);
             }
         }
+        let sim = scene.sim.as_ref().unwrap();
+        assert!(!sim.drones.player_hits.is_empty(), "d{diff}: the guards hit the idle Bond [L]");
+        assert_eq!(sim.drones.player_hits[0].2, per_hit, "d{diff}: a hit takes {per_hit} [L]");
+        assert!(sim.drones.player_hits.iter().all(|h| h.2 <= per_hit),
+            "d{diff}: no hit exceeds the game's per-hit damage [L]");
+        if dies {
+            assert!(dead_at.is_some(), "d{diff}: the idle Bond dies within 1500 ticks [L f1113 d2 / f878 d3]");
+        }
     }
-    assert!(min_dist > 8.0,
-        "no drone came within 8 units of the idle start over 3200 ticks (closest {min_dist:.2}) — the corridor stays empty as the capture shows [L; M 0x136be0:49]");
 }
