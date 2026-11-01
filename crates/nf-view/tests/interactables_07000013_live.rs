@@ -195,6 +195,269 @@ fn the_shutter_ss_sweeps_up_on_ch_0x23() {
         "the posed matrix rose to the key-1 +4.824 y open pose [D keys; got {:.3}]", ss.pos()[1]);
 }
 
+/// The gold-medal `bonus[0]` word for the level's BaseMap [M PlrStats_HasGoldMedal 0x199a40;
+/// Menu_SetLevelBonus 0x1ffa10 is the award arm]. 07000013 plays under BaseMap 0x07000011 — the
+/// mission/base pair sits at ee_start_05.bin @0x2a45a8 as the two equal words 0x07000011
+/// 0x07000011, the same record shape as 0700000b's 0x07000009 0x07000009 @0x2a4490 [L], and the
+/// mission's level list follows (07000012, 0700004a, 07000013 [L @0x2a45c8..]). pickup-medal-gate.
+fn gold_bits(base_map: u32) -> u64 {
+    let mut p = nf_game::progress::Progress::default();
+    p.set_level_bonus(base_map, 3, 0);
+    p.bonus[0]
+}
+
+/// KIND Door (0xdb ×2): the security-room door #355 (−26.65, −368.36, 37.44, no lock channel —
+/// param 3 = 0 [D census]) opens on the player's E [M Door_Activate 0x135be0's toggle] and the
+/// stairwell door #274 (18.82, −368.35, 38.95; lock channel param 3 = 0xc8 [D census] with NO
+/// writer in the level's data [D §7]) refuses the same E — while ch 0xc8 is off the activation
+/// only plays the hit sound [M Door_Activate's locked arm; door.rs ch_lock].
+///
+/// The approach alone opens NEITHER door: `Door_Update` 0x1363c8's sphere scan (an actor within
+/// √2·(r_door + r_actor) of the door's live world sphere [M 0x136678-0x136684]) runs only to hold
+/// or close an OPEN door — both its arms sit behind a state & 6 != 0 test, and `Door_Activate`'s
+/// caller census (the channel arms, the open-timer arm, the player's E) leaves NO closed-door
+/// proximity route in the game [M 0x1363c8; door.rs's `straddle_walkin` shim narrows to the same
+/// shape]. The level doc §7's "proximity arm opens it as Bond walks up" misread that scan — this
+/// test is the correction (the straddle param 4 bit is Door_Link2Portal 0x136788's cel-link flag,
+/// not an opener).
+#[test]
+fn the_security_door_walks_open_and_the_stairwell_door_refuses() {
+    let mut w = Walker::new(nf_view::load(&iso(), "07000013.bin", false).unwrap());
+    w.wait_enabled(3000, "the 13 intro");
+    w.wait(120);
+    let (di355, di274) = {
+        let sim = w.scene.sim.as_ref().unwrap();
+        let find = |x: f32, z: f32| sim.drones.doors.list.iter()
+            .position(|d| walker::dxz(d.pos, [x, -368.36, z]) < 2.0);
+        (find(-26.65, 37.44).expect("door #355 by its placement spot [D census]"),
+         find(18.82, 38.95).expect("door #274 by its placement spot [D census]"))
+    };
+    {
+        // Sister first: the stairwell door is closed and locked (ch 0xc8 has no writer [D §7]).
+        let sim = w.scene.sim.as_ref().unwrap();
+        assert_eq!(sim.drones.doors.list[di274].state & 0xc, 0,
+            "the stairwell door rests closed [D]");
+        assert!(!sim.drones.channels.on(0xc8), "the lock channel 0xc8 is off — no writer on the disc [D census]");
+    }
+    // The same walk-up that opens #355 walks to #274's doorway first: the locked door must not
+    // move under the approach and must refuse the E (only the hit sound plays [M]). The route is
+    // the lobby's proven north strip (the pickups route's z-40 lane) east to the stairwell
+    // corner — the diagonal from the east lane wedges on the desk block's north-east cover row
+    // (probe: stuck at (6.9, −368.1, 25.9) heading for (14, 30)).
+    w.walk_to(Wp::new(5.0, -368.4, 26.5).r(1.5), "13: the lobby east lane");
+    w.walk_to(Wp::new(5.0, -368.4, 38.0).r(1.5), "13: the north strip east end");
+    w.walk_to(Wp::new(11.0, -368.4, 38.5).r(1.5), "13: the north strip past the desks");
+    w.walk_to(Wp::new(16.5, -368.4, 38.5).r(1.2), "13: at the stairwell door");
+    {
+        let sim = w.scene.sim.as_ref().unwrap();
+        let d = &sim.drones.doors.list[di274];
+        assert_eq!(d.state & 0xc, 0,
+            "sister: the locked stairwell door does not proximity-open on the same walk-up [D param 3 = 0xc8; M Door_Activate's locked arm]");
+    }
+    w.use_door(di274, "13: E the locked stairwell door");
+    w.wait(30);
+    {
+        let sim = w.scene.sim.as_ref().unwrap();
+        assert_eq!(sim.drones.doors.list[di274].state & 0xc, 0,
+            "sister: the stairwell door refuses the E while ch 0xc8 is off [M Door_Activate's locked arm]");
+    }
+    // The security-room door: the proven walk up to its doorway with NO use key — the door must
+    // stay closed (the game's scan never opens a closed door [M 0x1363c8]) — then the E opens it.
+    w.walk_to(Wp::new(5.0, -368.4, 26.5).r(1.5), "13: the lobby east lane");
+    w.walk_to(Wp::new(-6.0, -368.4, 40.0).r(1.5), "13: the lobby west mid");
+    w.walk_to(Wp::new(-14.0, -368.4, 40.0).r(1.5), "13: the lobby north-west");
+    w.walk_to(Wp::new(-22.0, -368.4, 39.5).r(1.5), "13: past the glass band");
+    w.walk_to(Wp::new(-24.5, -368.4, 38.8).r(1.2), "13: at the security-room door");
+    {
+        let sim = w.scene.sim.as_ref().unwrap();
+        assert_eq!(sim.drones.doors.list[di355].state & 0xc, 0,
+            "the approach alone does not open the door — no closed-door proximity route in the game [M 0x1363c8's caller census]");
+    }
+    w.walk_to(Wp::at(-26.65, -368.36, 37.44, walker::Act::Use { use_ticks: 90 }).r(1.4), "13: E the security-room door");
+    let sim = w.scene.sim.as_ref().unwrap();
+    assert!(sim.drones.doors.list[di355].state & 0xc != 0,
+        "the E opens the security-room door [M Door_Activate 0x135be0's toggle]");
+}
+
+/// KIND Pickup, the remaining two takes: the kind-0 weapon pickups (the three Tripbombs #432-434,
+/// weapon 0x3a, 1 round each [D census], clustered just north of the spawn) arm the weapon on the
+/// walk-over [M Pickup_Handler 0x18e650 case 0], and the kind-6 BOND_BONUS pair (#420/#421, label
+/// 0x200004a [D census]) exists ONLY with the level's gold medal recorded — `Pickup_Create`
+/// 0x18dda0:93-95 reads the medal gate — spins [M 0x18dda0:138-144] and is consumed by the take
+/// path [M 0x18e650:234-236]. Sister: the same load with the fresh-boot zero medal word creates NO
+/// kind-6 pickup at all (0b's exec-floor pattern, BaseMap 0x07000011 [L ee_start_05 @0x2a45a8]).
+#[test]
+fn the_tripbombs_arm_and_the_bond_bonus_takes_with_the_medal() {
+    let mut w = Walker::new(nf_view::load_with_carry_medals(&iso(), "07000013.bin", false, None, 1, gold_bits(0x0700_0011)).unwrap());
+    w.wait_enabled(3000, "the 13 intro");
+    w.wait(120);
+    {
+        let sim = w.scene.sim.as_ref().unwrap();
+        assert!(!sim.drones.inventory.owned[0x3a], "sister: the Tripbomb is not owned before the walk-over");
+        // The kind-6 pair exists with the medal: one spinning pickup at each placement spot [D].
+        for (x, z) in [(7.29f32, 57.56f32), (-16.88, 29.30)] {
+            let at = sim.drones.pickups.iter()
+                .any(|p| p.kind == nf_game::pickup::kind::BOND_BONUS && !p.gone
+                    && (p.m[3][0] - x).abs() < 0.5 && (p.m[3][2] - z).abs() < 0.5);
+            assert!(at, "the BOND_BONUS pickup sits at ({x}, {z}) with the gold medal [M 0x18dda0:93-95; D #420/#421]");
+        }
+    }
+    // The tripbomb cluster just north of the spawn [D #432 (−0.97, 13.94), #433 (−0.84, 14.46),
+    // #434 (−0.39, 14.04)]: a few real steps north take all three.
+    w.walk_to(Wp::new(-0.9, -368.4, 13.2).r(1.0), "13: into the tripbomb cluster");
+    w.wait(20);
+    {
+        let sim = w.scene.sim.as_ref().unwrap();
+        assert!(sim.drones.inventory.owned[0x3a],
+            "the Tripbomb (0x3a) arms on the walk-over [M 0x18e650 case 0; D #432-434 weapon 0x3a]");
+        let taken = sim.drones.pickups.iter()
+            .filter(|p| p.weapon == 0x3a && (p.m[3][2] - 14.2).abs() < 1.2)
+            .all(|p| p.gone || p.hidden);
+        assert!(taken, "the tripbomb pickups are consumed by the takes [M 0x18e650:338-348]");
+    }
+    // The lobby BOND_BONUS #421 (−16.88, −369.03, 29.30 [D]) sits at the security-room glass
+    // band's west end — the proven room route reaches it; the take is the real walk-over.
+    w.walk_to(Wp::new(5.0, -368.4, 26.5).r(1.5), "13: the lobby east lane");
+    w.walk_to(Wp::new(-6.0, -368.4, 40.0).r(1.5), "13: the lobby west mid");
+    w.walk_to(Wp::new(-14.0, -368.4, 40.0).r(1.5), "13: the lobby north-west");
+    w.walk_to(Wp::new(-22.0, -368.4, 39.5).r(1.5), "13: past the glass band");
+    w.walk_to(Wp::new(-24.5, -368.4, 38.8).r(1.2), "13: at the security-room door");
+    w.walk_to(Wp::at(-26.65, -368.36, 37.44, walker::Act::Use { use_ticks: 90 }).r(1.4), "13: E the security-room door");
+    w.wait(120);
+    w.walk_to(Wp::new(-27.0, -368.4, 37.0).r(1.0), "13: through the doorway");
+    w.walk_to(Wp::new(-27.0, -368.4, 35.0).r(1.2), "13: inside the security room");
+    w.walk_to(Wp::new(-25.5, -368.4, 32.5).r(1.2), "13: the room south-east");
+    w.walk_to(Wp::new(-22.0, -368.4, 29.0).r(1.2), "13: the room south");
+    w.walk_to(Wp::new(-16.88, -368.4, 29.30).r(1.2), "13: onto the lobby bonus #421");
+    w.wait(20);
+    {
+        let sim = w.scene.sim.as_ref().unwrap();
+        let taken = sim.drones.pickups.iter()
+            .filter(|p| p.kind == nf_game::pickup::kind::BOND_BONUS && (p.m[3][0] + 16.88).abs() < 0.6)
+            .all(|p| p.gone || p.hidden);
+        assert!(taken, "the BOND_BONUS #421 is consumed on the walk-over [M 0x18e650:234-236]");
+    }
+    // Sister: the fresh-boot medal word creates no kind-6 at all [M 0x18dda0:93-95].
+    let mut bare = Walker::new(nf_view::load_with_carry_medals(&iso(), "07000013.bin", false, None, 1, 0).unwrap());
+    bare.wait_enabled(3000, "the 13 intro");
+    bare.wait(60);
+    assert!(bare.scene.sim.as_ref().unwrap().drones.pickups.iter()
+        .all(|p| p.kind != nf_game::pickup::kind::BOND_BONUS),
+        "no gold medal → the kind-6 bonuses are not created [M 0x18dda0:93-95]");
+}
+
+/// KIND Break, the filtered pane: the securityroom_glass #286 (kind 0x20, params [0:0x2, 1:0xa,
+/// 2:0x30] [D census]) carries param 2 = 0x30 → `Break_Create` stores ~0x30 = 0xffcf [M
+/// 0x12c230:31-39] and `Break_Update`'s mask 0xffcf | 0x106 [M 0x12bfd8:15] — the P2K's round word
+/// 0x0008 [L ee_start_05.bin weapon_data @0x2bf150 + 0x10·0x10C + 0x10] ANDs it non-zero, so
+/// `Collide_FilterBullets` pulls the contact [M 0x1ece30:24-33] and the round never damages the
+/// pane, though its health 10.0 would die to the first passing round [D param 1 = 0xa; M
+/// 0x12bfd8:44-48]. The SAME fire path shatters the unfiltered pillarglass (the test above). The
+/// 0x30-filter family pin on 07000009 is `interact_07000009_live::
+/// the_security_room_glass_refuses_the_same_gun`; this is the level's own pane.
+#[test]
+fn the_securityroom_glass_refuses_the_p2k_word() {
+    let mut w = Walker::new(nf_view::load(&iso(), "07000013.bin", false).unwrap());
+    w.wait_enabled(3000, "the 13 intro");
+    w.wait(120);
+    // The pane: the level's one 0x30-filter break (health 10.0 [D param 1 = 0xa]).
+    let pane = {
+        let sim = w.scene.sim.as_ref().unwrap();
+        let (i, b) = sim.drones.breaks.list.iter().enumerate()
+            .find(|(_, b)| b.filter == 0xffcf && (b.health - 10.0).abs() < 0.01)
+            .expect("the securityroom_glass with filter ~0x30 [D census]");
+        assert!(!b.dead, "the pane is alive at load");
+        (i, [b.lo, b.hi])
+    };
+    // The proven walk into the security room; stand south-east of the pane band (its bounds' own
+    // x span, a couple of units into the room) and fire the held P2K straight at its face.
+    w.walk_to(Wp::new(5.0, -368.4, 26.5).r(1.5), "13: the lobby east lane");
+    w.walk_to(Wp::new(-6.0, -368.4, 40.0).r(1.5), "13: the lobby west mid");
+    w.walk_to(Wp::new(-14.0, -368.4, 40.0).r(1.5), "13: the lobby north-west");
+    w.walk_to(Wp::new(-22.0, -368.4, 39.5).r(1.5), "13: past the glass band");
+    w.walk_to(Wp::new(-24.5, -368.4, 38.8).r(1.2), "13: at the security-room door");
+    w.walk_to(Wp::at(-26.65, -368.36, 37.44, walker::Act::Use { use_ticks: 90 }).r(1.4), "13: E the security-room door");
+    w.wait(120);
+    w.walk_to(Wp::new(-27.0, -368.4, 37.0).r(1.0), "13: through the doorway");
+    w.walk_to(Wp::new(-27.0, -368.4, 35.0).r(1.2), "13: inside the security room");
+    let mut shots = 0u32;
+    // Approach the pane along the line from the room side (the walk left Bond inside the room)
+    // and hold 2.5 m off its centre, then fire the held P2K at the centre.
+    let stand = {
+        let sim = w.scene.sim.as_ref().unwrap();
+        let (lo, hi) = (pane.1[0], pane.1[1]);
+        let centre = [(lo[0] + hi[0]) / 2.0, (lo[1] + hi[1]) / 2.0, (lo[2] + hi[2]) / 2.0];
+        let from = sim.bond.pos;
+        let d = [centre[0] - from[0], 0.0, centre[2] - from[2]];
+        let l = (d[0] * d[0] + d[2] * d[2]).sqrt().max(1e-4);
+        [centre[0] - 2.5 * d[0] / l, from[1], centre[2] - 2.5 * d[2] / l]
+    };
+    for t in 0..900u32 {
+        let sim = w.scene.sim.as_ref().unwrap();
+        assert!(!sim.drones.breaks.list[pane.0].dead,
+            "the filtered pane must survive the P2K — the filter arm died [M 0x1ece30]");
+        if t == 899 { break; }
+        let (lo, hi) = (pane.1[0], pane.1[1]);
+        let target = [(lo[0] + hi[0]) / 2.0, (lo[1] + hi[1]) / 2.0, (lo[2] + hi[2]) / 2.0];
+        let p = sim.bond.pos;
+        let input = if walker::dxz(p, stand) > 0.6 {
+            let dx = stand[0] - p[0];
+            let dz = stand[2] - p[2];
+            let desired = dx.atan2(dz);
+            let err = walker::wrap_pi(desired - sim.bond.yaw);
+            nf_game::player::Input { turn: err.clamp(-0.05, 0.05), forward: 1.0, ..Default::default() }
+        } else {
+            let eye = p[1] + sim.bond.eye - sim.bond.crouch_drop;
+            let dx = target[0] - p[0];
+            let dz = target[2] - p[2];
+            let dy = target[1] - eye;
+            let desired = dx.atan2(dz);
+            let err = walker::wrap_pi(desired - sim.bond.yaw);
+            let want_pitch = (dy / walker::dxz(p, target).max(0.5)).atan() / std::f32::consts::FRAC_PI_2;
+            nf_game::player::Input {
+                turn: err.clamp(-0.05, 0.05),
+                look: (want_pitch - sim.bond.pitch).clamp(-0.05, 0.05),
+                ..Default::default()
+            }
+        };
+        let fired = t % 6 == 0;
+        if fired { shots += 1; }
+        if fired { w.tick_fire(input); } else { w.tick(input, false); }
+    }
+    let sim = w.scene.sim.as_ref().unwrap();
+    assert!(shots > 100, "the fire loop pulled the trigger ({shots} pulls)");
+    assert!(!sim.drones.breaks.list[pane.0].dead,
+        "the gun word 0x0008 is filtered out of the 0x30-filter pane [M 0x1ece30:24-33]");
+    assert!(!sim.drones.break_kills.iter().any(|&(pl, _, _)| pl == sim.drones.breaks.list[pane.0].placement),
+        "no kill effect for the filtered pane [M Break_Kill 0x12b970]");
+}
+
+/// KIND Hint plates (0x33 ×2) — the parse-model pin (the port's hints are `fix-context-hints`'
+/// parse-time model, `nf_game::player::hints`; the live firing path — `Hint_Update` 0x1b3380's
+/// one-shot TXTMSG type 1 + sound + the delete bit — is not in the sim and is the report's port
+/// gap). The disc's pair [D census]: #423 (−19.17, −368.60, 26.00) label 0x10001f6, no gate; and
+/// #424 (−19.85, −368.63, 26.04) label 0x2000003 whose on-channel is param 3 = 0x23 — the same
+/// channel the gate panel's E writes, confirming ch 0x23 reads as "the security system released"
+/// [M 0x1b3248:33-37 puts param 3 in inst+0x08, the on-channel; 0x1b3380:17-22 gates on it].
+#[test]
+fn the_hint_plates_carry_the_disc_params() {
+    let img = nf_formats::iso9660::IsoImage::open(&iso()).expect("open iso");
+    let (entries, bin) = nf_formats::disc::files_bin_entries(&img).expect("FILES.BIN");
+    let fe = entries.iter().find(|e| e.name.eq_ignore_ascii_case("07000013.bin")).expect("07000013.bin");
+    let data = img.read_bytes(bin.lba as u64 * 2048 + fe.offset as u64, fe.size as u64).expect("read");
+    let lv = nf_formats::level::Level::parse(&data).expect("parse");
+    let hints = nf_game::player::hints(&lv, 1);
+    let by_label = |label: u32| hints.iter().find(|h| h.label == label);
+    let h1 = by_label(0x10001f6).expect("hint #423 (label 0x10001f6) [D census]");
+    assert_eq!(h1.on_channel, 0, "hint #423 has no arm channel — always armed [D census]");
+    let h2 = by_label(0x2000003).expect("hint #424 (label 0x2000003) [D census]");
+    assert_eq!(h2.on_channel, 0x23,
+        "hint #424's arm channel is the gate panel's ch 0x23 [D census param 3; M 0x1b3248:33-37]");
+    assert!((walker::dxz(h2.pos, [-19.85, -368.63, 26.04])) < 0.2,
+        "hint #424 sits at its placement spot [D census]");
+    assert_eq!(hints.len(), 2, "the level's two hint plates, nothing else [D census]");
+}
+
 /// Every placement's model resolves on this level — zero missing hashes/indices of the 439
 /// placements across all 42 maps [D parse].
 #[test]
