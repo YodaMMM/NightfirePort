@@ -116,3 +116,18 @@ No assertion was weakened anywhere; no port (nf-game/nf-view src) file was touch
 ## Usage
 
 not visible to me — this session exposes no token, cost or context-window figures to the agent.
+
+## ntfy failed
+
+All three fallbacks failed from this sandbox (2026-11-01 ~17:58 UTC — the same egress wall the
+exchange-briefing-load report recorded):
+
+1. `curl -sS -m 20 -H "Title: NightfirePort" -d "…" https://ntfy.sh/nightfire-yoda-8k3x` →
+   `curl: (28) Connection timed out after 20002 milliseconds`
+2. `python3 urllib.request` → hung past the 90 s tool cap (no connection established)
+3. `wget -q -O- --post-data "…" https://ntfy.sh/nightfire-yoda-8k3x` → same hang (killed with the
+   python attempt at the 90 s tool cap)
+
+The queue finish step itself succeeded (`OK blocked 10-guard-push-every-tick-2`, then the report
+body attached in a follow-up queue commit after the first attach hit a relative-path miss and a
+fast-forward race with another worker — rebased and pushed clean).
