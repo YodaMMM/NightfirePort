@@ -6438,6 +6438,39 @@ pub struct Scene {
     /// planes and read nearly edge-on (dim slivers).
     pub corona_pos: Vec<[f32; 3]>,
     pub corona_slot0: u16,
+    /// Per corona slot: the glist flags carry bit 0x4, so `View_DrawObjectGlist` 0x1e6780 adds the
+    /// per-draw size wobble (`corona_wobble`) [M 0x1e6860-0x1e68b8]. 07000005 Corona_Glow2 /
+    /// Corona_test1 (0x22d) and every 07000015/16 corona (0x2d) wobble; Window_corona (0x229) and
+    /// 07000004's `corona` (0x29) do not [D].
+    pub corona_wobbles: Vec<bool>,
+}
+
+/// The per-axis scale `View_DrawObjectGlist` 0x1e6780 applies to an obj+0xF0 & 0x4 object:
+/// `Mat_Scale3f(obj+0xE8 + Rand_FRand(0.05), obj+0xE8 + Rand_FRand(0.05), obj+0xE8 + Rand_FRand(0.05))`
+/// on the matrix rows (x, y, z axes in that call order) [M 0x1e6860-0x1e68b8; Mat_Scale3f 0x1e35f0
+/// scales rows 0/1/2]. A placed corona's obj+0xE8 is 1.0 (`control_init_object` 0x134630), so each axis
+/// draws at 1 + [0, 0.05), fresh every draw.
+///
+/// The game's three draws come from the SHARED `SEED_X`/`SEED_Y` generator (`Rand_FRand` 0x1e3780) — the
+/// one the AI and bullets use. The port does NOT draw from the simulation's stream here: this is a
+/// renderer-side generator, a stateless hash of (the 60 Hz tick, the corona slot, the axis) scaled
+/// like `Rand_FRand`'s output (`max` × a uniform value in [0, 1)). Draw-side randomness never feeds back into the sim,
+/// so the sim state (and its RNG stream) is the same with or without coronas in view; the only
+/// difference from the game is which random values the wobble shows (and that the game's own stream
+/// advances 3 draws per drawn wobbling object per frame, which the port's stream does not mirror —
+/// see docs/systems/corona.md). One value per 60 Hz tick (the PS2 draws once per 60 Hz frame), the
+/// same for the CPU and GPU paths.
+pub fn corona_wobble(tick: u32, slot: u32) -> [f32; 3] {
+    let draw = |axis: u32| -> f32 {
+        // splitmix32-style avalanche of (tick, slot, axis).
+        let mut z = tick.wrapping_mul(0x9e37_79b9) ^ slot.wrapping_mul(0x85eb_ca6b) ^ axis.wrapping_mul(0xc2b2_ae35);
+        z = (z ^ (z >> 16)).wrapping_mul(0x7feb_352d);
+        z = (z ^ (z >> 15)).wrapping_mul(0x846c_a68b);
+        z ^= z >> 16;
+        // Top 24 bits, so the value is exact and stays below `max` (the game's cvt truncates too).
+        0.05f32 * ((z >> 8) as f32) * (1.0 / 16_777_216.0)
+    };
+    [1.0 + draw(0), 1.0 + draw(1), 1.0 + draw(2)]
 }
 
 /// The camera-facing matrix `View_DrawObjectGlist` 0x1e6780 builds for an obj+0xF0 & 0x8 object:
@@ -6445,15 +6478,33 @@ pub struct Scene {
 /// object's translation (`Mat_SetTrans(obj+0xC0)`) and the uniform scale `s` (obj+0xE8)
 /// [M 0x1e67a4-0x1e6848].
 pub fn billboard_matrix(right: [f32; 3], up: [f32; 3], pos: [f32; 3], s: f32) -> Mat4 {
+    billboard_matrix3(right, up, pos, [s; 3])
+}
+
+/// `billboard_matrix` with a per-axis scale (the 0x4 wobble, `corona_wobble`): row k scaled by `s[k]`
+/// like `Mat_Scale3f` 0x1e35f0.
+pub fn billboard_matrix3(right: [f32; 3], up: [f32; 3], pos: [f32; 3], s: [f32; 3]) -> Mat4 {
     let n = |v: [f32; 3]| { let l = (v[0] * v[0] + v[1] * v[1] + v[2] * v[2]).sqrt().max(1e-9); [v[0] / l, v[1] / l, v[2] / l] };
     let (r, u) = (n(right), n(up));
     let f = n([r[1] * u[2] - r[2] * u[1], r[2] * u[0] - r[0] * u[2], r[0] * u[1] - r[1] * u[0]]);
     [
-        [r[0] * s, r[1] * s, r[2] * s, 0.0],
-        [u[0] * s, u[1] * s, u[2] * s, 0.0],
-        [f[0] * s, f[1] * s, f[2] * s, 0.0],
+        [r[0] * s[0], r[1] * s[0], r[2] * s[0], 0.0],
+        [u[0] * s[1], u[1] * s[1], u[2] * s[1], 0.0],
+        [f[0] * s[2], f[1] * s[2], f[2] * s[2], 0.0],
         [pos[0], pos[1], pos[2], 1.0],
     ]
+}
+
+impl Scene {
+    /// Level corona `ci`'s drawn matrix at 60 Hz tick time `ticks`: the camera billboard, with the
+    /// renderer-side 0x4 wobble when its glist carries the bit (`corona_wobble`).
+    pub fn corona_matrix(&self, ci: usize, ticks: f32, opts: ViewOpts) -> Option<Mat4> {
+        let pos = *self.corona_pos.get(ci)?;
+        let s = if self.corona_wobbles.get(ci).copied().unwrap_or(false) {
+            corona_wobble(ticks.max(0.0) as u32, ci as u32)
+        } else { [1.0; 3] };
+        Some(billboard_matrix3(opts.right, opts.up, pos, s))
+    }
 }
 
 /// `psiPreGameRun` (0x11e2e8, read): per level the fog colour and `Ps2Far1`; `FogOn` only on these levels.
@@ -8668,6 +8719,7 @@ pub fn build(level: &Level, cels_only: bool, skeletons: &HashMap<u8, Skeleton>, 
         let mut sl_lod: Vec<u16> = Vec::new();
         let mut corona_pos: Vec<[f32; 3]> = Vec::new();
         let mut corona_slot0 = 0u16;
+        let mut corona_wobbles: Vec<bool> = Vec::new();
         if let Some(m) = level.main_map() {
             for (pi, pl) in nf_game::searchlight::part_placements(&level.maps[m].placements).into_iter().enumerate() {
                 let p = &level.maps[m].placements[pl];
@@ -8725,6 +8777,7 @@ pub fn build(level: &Level, cels_only: bool, skeletons: &HashMap<u8, Skeleton>, 
                 let slot = corona_slot0 + corona_pos.len() as u16;
                 add_instance(level, &inst, Layer::Character, None, &mut groups, None, Some(slot), None, None, [1.0; 3], &room_cels, u32::MAX, u32::MAX);
                 corona_pos.push(p.translation);
+                corona_wobbles.push(flags & 0x4 != 0);
             }
             // Doors (`Door_Create`'s creation order = `door_placements`): each door's object as Character-layer
             // vertices posed by the simulation every tick (`Door_Interp`'s matrix at `obj+0x90`); the mesh is
@@ -9408,6 +9461,7 @@ pub fn build(level: &Level, cels_only: bool, skeletons: &HashMap<u8, Skeleton>, 
             sl_lod,
             corona_pos,
             corona_slot0,
+            corona_wobbles,
             destroy_centres,
             destroy_wrecks }
     }
@@ -10575,8 +10629,8 @@ pub fn build(level: &Level, cels_only: bool, skeletons: &HashMap<u8, Skeleton>, 
                 const FAR: Mat4 = [[0.0; 4], [0.0; 4], [0.0; 4], [0.0, -10000.0, 0.0, 1.0]];
                 // A level corona: the camera billboard at its placement (`Scene::corona_pos`).
                 if !self.corona_pos.is_empty() && sl >= self.corona_slot0 {
-                    return match self.corona_pos.get((sl - self.corona_slot0) as usize) {
-                        Some(&pos) => transform(&billboard_matrix(opts.right, opts.up, pos, 1.0), v.pos),
+                    return match self.corona_matrix((sl - self.corona_slot0) as usize, ticks, opts) {
+                        Some(m) => transform(&m, v.pos),
                         None => transform(&FAR, v.pos),
                     };
                 }
@@ -10962,7 +11016,7 @@ pub fn build(level: &Level, cels_only: bool, skeletons: &HashMap<u8, Skeleton>, 
         for (ci, &pos) in self.corona_pos.iter().enumerate() {
             let k = l.sl_base as usize + self.corona_slot0 as usize + ci;
             if k >= l.door_base as usize { break; }
-            p[k] = if vis_room(pos) { billboard_matrix(opts.right, opts.up, pos, 1.0) } else { FAR };
+            p[k] = match self.corona_matrix(ci, time, opts) { Some(m) if vis_room(pos) => m, _ => FAR };
         }
         if let Some(s) = self.sim.as_ref() {
             for k in 0..(l.door_base - l.sl_base) as usize {
