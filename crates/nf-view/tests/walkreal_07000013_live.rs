@@ -1,8 +1,8 @@
 //! walkreal-b (716c): 07000013 (HT Tower2 C, the tower lobby → the front entrance) walked with
 //! the player's own movement, START TO FINISH: spawn → the security-room door (portal 1) → the
 //! panel E (ch 0x23, the gate rises) → back out → the entrance → Mission Complete. The warm chain (mission 0x07000011's parts): 07000012 WALKED (the
-//! keypad burn, the console E, the shaft entrance — the shared `tower2` route, with its one
-//! documented doorway stand-in) → its exit loads 0700004A, whose start #43 (4.26, −7.71, −4.76
+//! keypad burn, the console E, the loop round to the north lobby and the shaft entrance — the
+//! shared `tower2` route, no position writes) → its exit loads 0700004A, whose start #43 (4.26, −7.71, −4.76
 //! [D]) sits INSIDE TouchOnce #277 (out 0x4D, y −9.87…−7.65 [D]) — Bond drops onto the touch at
 //! the spawn (the game's own placement; no input writes) and "Escape through the elevator shaft"
 //! completes — the carried RamSave arrives at 07000013 ([M 0x182270 keeps previous parts]) → the

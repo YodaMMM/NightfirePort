@@ -548,13 +548,28 @@ impl Level {
                     // port's bind-pose draw at the placement transform is a port reconstruction,
                     // kept on the RotMatrix reading (the class's disc rows are all yaw-only [D
                     // placement_rot_census]).
-                    let matrix = placement::object_matrix_for_class(
-                        p.flags & 0xff,
-                        p.creates_cel(),
-                        p.rotation,
-                        p.translation,
-                        p.quaternion(),
-                    );
+                    // The ROOM cels (flags word 0xc023 / 0xc047) sit at the identity: the cel
+                    // fixup zeroes the cel's translation (`cel+0x60/+0x64/+0x68 = 0`) and sets
+                    // `cel+0x3c = 0x804c0xx`, whose bit 0x8000000 is the identity flag
+                    // [M parseentity_fixup_entity 0x1d00c0, the 0xc023 / 0xc047 arms, after
+                    // parsemap_block_map_data_static 0x1d1998 copied the placement words into
+                    // +0x60/+0x70]; `Collide_Intersect` 0x1ebaa8 reads that bit (`Ident =
+                    // cel+0x3c >> 0x1b & 1`) and tests the room's collision untransformed. The
+                    // placement's translation words never place a room. [D room_cel census: of
+                    // every room cel on the disc only 07000012 #69 (z 0.2955), 07000015 #149
+                    // (5 mm) and the 07000043/49 MP rooms carry one; unshifted, 07000012's
+                    // security-room door frame lines up with the corridor's to 4 mm.]
+                    let matrix = if p.creates_cel() && matches!(p.flags & 0xffff, 0xc023 | 0xc047) {
+                        placement::object_matrix([0.0; 3], [0.0; 3])
+                    } else {
+                        placement::object_matrix_for_class(
+                            p.flags & 0xff,
+                            p.creates_cel(),
+                            p.rotation,
+                            p.translation,
+                            p.quaternion(),
+                        )
+                    };
                     out.push(Instance { map, object, matrix, placement: p.clone() })
                 }
                 None => missing += 1,
