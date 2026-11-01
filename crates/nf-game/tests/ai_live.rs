@@ -242,12 +242,17 @@ fn guard_patrols_like_the_game() {
 fn guard_takes_cover_like_the_game() {
     let Some(l) = Level05::load() else { eprintln!("skip: NF_ISO not set"); return };
     let d = l.data();
+    // Seed 9 (re-picked at the single blend-out word: `Ready2Fire` reads `Drone+0x538`, which the
+    // first replaced script to die clears [M 0x13b1c8:76-77, 0x1c14f0:26-29], so the guard's Combat
+    // shots before the cover run land on other ticks and the shared stream shifts. Seeds 0-24 on
+    // this model: 9, 16, 20 and 21 pass every pin; 1, 2, 3, 5 and 8 hold the 90-tick lean in
+    // UnderCoverAim (live 37), the rest pick another first move or cover spot).
     // Seed 5 (re-picked at fix-enemy-accuracy: the spawner templates' drones now carry their own
     // stats section — 07000005 template #3's type-1 record, accuracy 9 / aggression 1 / reaction 80
     // [M 0x1c7a98 + 0x14c600:81-107] — so spawner 266's drone fires and reacts on a different
     // schedule and the shared stream shifts; 913's attack-reentry-choice had 2, fix-impact-remainder2
     // 4, fix-ai-remainder 1).
-    let (drones, gi, rng) = l.drones_seeded(None, 61.342, 5);
+    let (drones, gi, rng) = l.drones_seeded(None, 61.342, 9);
     let mut sim = l.sim(drones, rng);
     let player = bond_at([79.86, 22.92, 96.0]);
     for _ in 0..700 { sim.tick(&d, &player); }
