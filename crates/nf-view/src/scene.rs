@@ -493,6 +493,9 @@ pub struct Sim {
     /// held E can never re-trigger the world use. SP path only — the MP row's per-slot use pass
     /// is untouched.
     use_key_prev: bool,
+    /// The Ronin was mounted (cam mode 0xf) at the end of the previous tick — the dismount edge
+    /// (`GT_LoseControl` 0x181408) hands weapon 0x53 back.
+    pub ronin_was_mounted: bool,
     /// mp-combat-weapons: the online match's shared rounds / grenades / blasts / guided rides
     /// (`nf_game::mp::combat`) — every machine runs every agent's rounds from the shot
     /// descriptions in the session inputs. Shared, hashed.
@@ -2409,6 +2412,9 @@ impl Sim {
             let s = &self.drones.sensors.list[self.sec_cam()?];
             Some((s.pos, [s.matrix[2][0], s.matrix[2][1], s.matrix[2][2]]))
         })
+        // The Ronin's remote view (cam mode 0xf): the viewer matrix is the turret's registered[0]
+        // object, eye at (0, 0.15, −0.4) in its frame [M Player_PositionCamera 0x18f5d8:277-299].
+        .or_else(|| self.drones.ronin_view())
     }
 
     /// The security camera being watched through a monitor console (pane 16), as an index into
@@ -2705,6 +2711,26 @@ impl Sim {
             }
             (Default::default(), false, false, false)
         } else { (input, trigger, reload, use_key) };
+        // The Ronin's remote control (cam mode 0xf, HUD pane 18): `GT_TakeControl` 0x181740 put
+        // Bond in substate 0x10 with `Player_WeaponNone`; the turret's case 7 reads the pad —
+        // actions 3/4 (the stick) aim, action 9 fires, the action-0xE fresh press (mask 4)
+        // dismounts [M 00180498 case 7]. The port's look deltas are already radians/tick (the
+        // gunimp mapping): case 7's `ext+0x94 += −a3·k` takes `turn` as `−a3·k`, and
+        // `ext+0x90 += −a4·k` the look's up-positive delta as `a4·k` (k = 0.024543693).
+        let ronin_mounted = self.drones.ronin_mounted().is_some();
+        let (mut input, trigger, reload, use_key) = if ronin_mounted {
+            let k = nf_game::gt::AIM_INPUT_SCALE;
+            let exit = use_key && !self.use_key_prev;
+            self.use_key_prev = use_key;
+            self.drones.gt_mount = Some((-input.turn / k, input.look / k, trigger || input.fire, exit));
+            (Default::default(), false, false, false)
+        } else { (input, trigger, reload, use_key) };
+        // `GT_LoseControl` 0x181408 (the dismount, the death gate, the fold): `Player_Enable`, the
+        // saved substate back, and the held weapon set to 0x53 (+0x62 = +0x63 = 0x53) [M :50-58].
+        if self.ronin_was_mounted && !ronin_mounted {
+            self.gun.switch_request = nf_game::gt::RONIN_CONTROL;
+        }
+        self.ronin_was_mounted = ronin_mounted;
         // The security-camera view (pane 16): the disabled player runs no input arm — only
         // `Monitor_Update` 0x1afcc8 reads the pad, its action-0xE fresh press (mask 4) cycling to
         // the next camera or ending the view [M :105-147]. The edge is taken here and the use
@@ -4298,6 +4324,16 @@ impl Sim {
             // ends [D 07000005 first-person scripts; L weapon_data +0x40/+0x68].
             self.gun.refire_blocked = self.gun.fire_state && rd0(0x68) & 0x8000 != 0;
             let fired = if under_block { false } else { self.gun.update_with(trigger, reload, busy, params) };
+            // `Player_HandleHasNoAmmo` 0x1a2ba8's 'R' arm, reached from `Player_WeaponFiring`
+            // 0x1a5460:442-455 (fire released, no round, view idle, `Player_ReloadAmmoType` fails):
+            // the deployed Ronin's clip (`BLData+0x590`) under 1 → owned[0x52] = 0 (+0x592),
+            // `Player_EquipWeapon(0x53, 999)` and the request 0x53 — the case becomes its remote.
+            if self.gun.weapon == nf_game::gt::RONIN_DEPLOY && !trigger && !fired && self.gun.clip < 1
+                && !self.gun.fire_state && self.gun.switch_state == 0 && self.gun.reload_state == 0 {
+                if let Some(o) = self.drones.inventory.owned.get_mut(nf_game::gt::RONIN_DEPLOY as usize) { *o = false; }
+                self.drones.inventory.equip_weapon(&self.weapons, nf_game::gt::RONIN_CONTROL as usize, 999, true);
+                self.gun.switch_request = nf_game::gt::RONIN_CONTROL;
+            }
             // fix-gadgets-live: the AIMS-20's idle timer (`BLData+0x93a`): the game increments it while
             // the view anim is idle and resets on any fire/reload/switch anim [M Player_SetWeaponAnimObj
             // 0x1a2e38:41-57]; it gates the view model's side lights (0x1a5460:264/348).
@@ -4736,6 +4772,29 @@ impl Sim {
                         if let Some(id) = self.gun.get_best_weapon(&BEST_WEAPON, base_of, &owned, has_ammo_fn) {
                             self.gun.switch_request = id; // Player_GetBestWeapon writes BL+0x63 [M 0x1a9680 tail]
                         }
+                    }
+                    break 'shot;
+                }
+                // The Phoenix Ronin [M Player_WeaponInitBullet 0x1a4bf0]. 0x53 (:113-133): the first
+                // class-'6' object whose owner is the firing player gets `GT_TakeControl` and the
+                // function returns — no shot (and with no such turret the record's +0x18 = 0
+                // pellets returns too [L weapon_data 0x53: pellets 0]). `GT_TakeControl` runs
+                // `Player_WeaponNone` (hands) [M 00181740].
+                if self.gun.weapon == nf_game::gt::RONIN_CONTROL {
+                    if self.drones.ronin_take_control() == Some(true) { self.gun.go_to_hands(); }
+                    break 'shot;
+                }
+                // 0x52 (:265-282): the pellet loop calls `GT_DeployMiniGun(player obj+0x30 +
+                // Mat_GetDir(obj+0x90), obj+0x90, player)` instead of `Bullet_init`; a 0 return
+                // refunds the round (`BLData+0x590 += 1` = clip[0x52]). No casing (+0x68 = 0x20a0
+                // lacks 0x40 [L]).
+                if self.gun.weapon == nf_game::gt::RONIN_DEPLOY {
+                    let l = self.bond.look();
+                    let h = (l[0] * l[0] + l[2] * l[2]).sqrt().max(1e-6);
+                    let fwd = [l[0] / h, 0.0, l[2] / h];
+                    if self.drones.deploy_ronin(&d, self.bond.pos, fwd).is_none() {
+                        self.gun.clip += 1;
+                        eprintln!("[ronin] no room to deploy — the round is refunded (BLData+0x590 += 1)");
                     }
                     break 'shot;
                 }
@@ -5192,6 +5251,9 @@ impl Sim {
                 if self.gun.weapon != 0x47 { self.gun.go_to_hands(); }
                 eprintln!("[gunimp] #{i} (placement {placement}) mounted — GunImp_Activate 0x132f00");
             }
+            // The class-'6' arm of the same walk: `GT_Activate` 0x1816f0 [M 0x1a5170:146-148] —
+            // E on a deployed Ronin folds it (state 2 → 3 → the 0x52 case drops [M 0x180498]).
+            self.drones.gt_activate_pick(&d, pick_c);
             }
         }
         // `Check_Target` (0x1a7810, every 6th frame — `GameState+0x52 % 6`): Bond's 50-unit view ray (mask
@@ -8178,6 +8240,14 @@ pub fn build(level: &Level, cels_only: bool, skeletons: &HashMap<u8, Skeleton>, 
                 .chain(copter_scripts)
                 .chain(fusebox_scripts.iter().copied())
                 .chain([0x0600_0052u32, 0x0600_0027, 0x0600_004f, 0x0600_07c4]).collect();
+            // The deployed Ronin's script pair (`GT_DeployMiniGun` 0x181560 → `GT_Create`'s two
+            // `Script_Load`s [M disasm 0x1815e0-0x181614]): the case halves, the body and the gun
+            // are those scripts' entities, spawned at run time by the deploy — they need draw
+            // slots like a placed player's (skipped where the level lacks them). Put at the FRONT:
+            // the walk pops from the back, so every other script keeps its slot indices.
+            for h in [nf_game::gt::RONIN_SCRIPT_B, nf_game::gt::RONIN_SCRIPT_A] {
+                if !hashes.contains(&h) { hashes.insert(0, h); }
+            }
             let mut queued: std::collections::HashSet<u32> = hashes.iter().copied().collect();
             // lift-indicators-09: a SUB-script's entities need one draw slot per LIVE copy — every placed
             // SP running a parent script starts the sub once per `Script_SubScriptStart` op [M 0x1db050],
@@ -9624,6 +9694,7 @@ pub fn build(level: &Level, cels_only: bool, skeletons: &HashMap<u8, Skeleton>, 
             net_remotes_done: false,
             net_last_takes: Vec::new(),
             use_key_prev: false,
+            ronin_was_mounted: false,
             mp_combat: Default::default(),
             net_shot: None,
             mp_held: [2; nf_net::MAX_AGENTS],

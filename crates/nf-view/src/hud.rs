@@ -37,9 +37,11 @@ const SH: f32 = 448.0;
 /// `HUD_UpdateSpacePane` 0x19d3b8; D 0700001b.bin entry 61 sub 0..4]).
 /// fix-hud-parity added the Q-Claw marker 0x0300004C [D AmmoSprInfo[7]]; the security-camera
 /// pane's four (0x030000AA..AD) follow [L SecCamSprInfo 0x2bdeb0].
-pub const TEXTURES: [u32; 38] = [0x0300_005b, 0x0300_005a, 0x0300_0026, 0x0300_007a, 0x0300_0128, 0x0300_018d, 0x0300_018e, 0x0300_0003, 0x0300_0034, 0x0300_0002, 0x0300_0173, 0x0300_0174, 0x0300_017f, 0x0300_017d, 0x0300_0055, 0x0300_0056, 0x0300_0057, 0x0300_0090, 0x0300_0141, 0x0300_0066, 0x0300_0067, 0x0300_006a, 0x0300_005e, 0x0300_004a, 0x0300_005f, 0x0300_005c, 0x0300_005d, 0x0300_0059,
+pub const TEXTURES: [u32; 41] = [0x0300_005b, 0x0300_005a, 0x0300_0026, 0x0300_007a, 0x0300_0128, 0x0300_018d, 0x0300_018e, 0x0300_0003, 0x0300_0034, 0x0300_0002, 0x0300_0173, 0x0300_0174, 0x0300_017f, 0x0300_017d, 0x0300_0055, 0x0300_0056, 0x0300_0057, 0x0300_0090, 0x0300_0141, 0x0300_0066, 0x0300_0067, 0x0300_006a, 0x0300_005e, 0x0300_004a, 0x0300_005f, 0x0300_005c, 0x0300_005d, 0x0300_0059,
     0x0300_0177, 0x0300_0178, 0x0300_0179, 0x0300_017a, 0x0300_017b, 0x0300_004c,
-    0x0300_00aa, 0x0300_00ab, 0x0300_00ac, 0x0300_00ad];
+    0x0300_00aa, 0x0300_00ab, 0x0300_00ac, 0x0300_00ad,
+    // The Ronin pane's own (pane 18, `RoninSprInfo` 0x2be160 sprites 2/3/5 [L]).
+    0x0300_00dc, 0x0300_00de, 0x0300_0146];
 
 /// The 0700001b missile-status pane (pane 20: `SpacePane` 0x2be598 = {x 0, y 0, flags 0, create
 /// `HUD_CreateDefault`, update `HUD_UpdateSpacePane` 0x19d3b8, `SpaceSprInfo` 0x2be3b0, 11 sprites}
@@ -585,6 +587,26 @@ pub fn overlay(scene: &crate::scene::Scene, aspect: f32) -> HudFrame {
             h.sprite(anchor, (0.0, 0.0), sp, gs(c >> 8, c & 0xff));
         }
     }
+    // The Ronin pane (pane 18, `RoninPane` 0x2be268, `RoninSprInfo` 0x2be160 × 6 [L]) while the
+    // remote view is up: `Player_SetCamMode(BL, 0xf)` → `HUD_Reset` + `HUD_Enable(18, 1)`
+    // [M 0x195928 case 0xf, 0x1a0d38]; its update 0x1a12d0 is a bare `jr ra` [M], so the six
+    // sprites draw as the table holds them.
+    let ronin = s.drones.ronin_mounted().is_some();
+    if ronin {
+        for sp in t.ronin.iter() {
+            let anchor = if sp.w as i32 >= 0x200 { Anchor::Stretch } else { Anchor::Centre };
+            // Flag 0x800 centres the sprite on (x, y): `x −= w >> 1`, `y −= h >> 1` in integers
+            // [M View_DrawSprites 0x1e5290:69-74] — sprite 5 (the reticle, flags 0xd00, w/h 0 =
+            // the texture's size) sits on the screen centre (256, 224).
+            let at = if sp.flags & 0x800 != 0 {
+                let (tw, th) = h.tex_dims(sp.texture);
+                let w = if sp.w == 0 { tw as i32 } else { sp.w as i32 };
+                let hh = if sp.h == 0 { th as i32 } else { sp.h as i32 };
+                (-((w >> 1) as f32), -((hh >> 1) as f32))
+            } else { (0.0, 0.0) };
+            h.sprite(anchor, at, sp, gs(sp.colour >> 8, sp.colour & 0xff));
+        }
+    }
     let riding = s.missile_cam.is_some();
     if let Some(mc) = s.missile_cam.as_ref() {
         let hash = |k: u32| { let mut x = frame.wrapping_mul(0x9e37_79b9) ^ k.wrapping_mul(0x85eb_ca6b); x ^= x >> 15; x = x.wrapping_mul(0x2c1b_3c6d); x ^ (x >> 12) };
@@ -625,7 +647,8 @@ pub fn overlay(scene: &crate::scene::Scene, aspect: f32) -> HudFrame {
     let paned = s.zoom_target > 1.0 && matches!(zoom_overlay(s.gun.weapon), ZoomOverlay::Camera | ZoomOverlay::Oicw);
     // Pane 16 (the security-camera view) is in the hide set too [M 0x19b9c8:127-138, +0x224];
     // `Monitor_Activate` also disables the health pane outright (`HUD_Enable(1, 0)` [M 0x1b0058:49]).
-    let riding = riding || paned || sec_cam;
+    // Pane 18 (the Ronin's remote view) is in the same hide set [M 0x19b9c8:127-138].
+    let riding = riding || paned || sec_cam || ronin;
     // mp-hud-real: an MP match draws the MP health pane instead (`MPPaneList[1]` = MPHealthPane,
     // `HUD_UpdateMPHealthPane` 0x19b630 — a horizontal bar, not the SP swirl [M; L PCSX2]) —
     // drawn by `mp_panes`; the damage glow below is the same in both panes.

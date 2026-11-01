@@ -12068,6 +12068,13 @@ pub struct Drones {
     /// script-census.md:141]); the creator's param map in `crate::gt`. The turret behaviours
     /// (GT_Update 0x180498, GT_Track 0x17f9c8, GT_ApplyDamage 0x1816d8) are a known gap.
     pub gt_turrets: Vec<crate::gt::GTurret>,
+    /// The mounted turret's inputs for this tick — `GT_Update` case 7's `Input_Actionf(3/4)`
+    /// stick pair in the game's units, action 9 (fire held) and the action-0xE fresh press
+    /// (mask 4) [M 00180498 case 7] — set by the viewer while a Ronin is mounted, taken by the
+    /// turret pass.
+    pub gt_mount: Option<(f32, f32, bool, bool)>,
+    /// The runtime script-player keys handed to deployed turrets (`gt::GTurret::sp_key`).
+    pub gt_next_key: usize,
     /// The 0700001b space laser — the kind-0x38 placement (`Create_SpaceLaser` 0x1aa8b8, one
     /// disc-wide [D script-census.md:144]); the creator's param map in `crate::space_laser`.
     /// `SpaceLaser_Update` 0x1aa3f8 (the arm/fire/damage flow) is the remaining gap.
@@ -12336,6 +12343,8 @@ impl Drones {
             space_missiles: Vec::new(),
             missile_deploy: [0; 8],
             gt_turrets: Vec::new(),
+            gt_mount: None,
+            gt_next_key: 0,
             space_lasers: Vec::new(),
             death: Default::default(), bond_fire: false, aims_idle: 0, auto_restart: true, level_exit_cold: false,
             // fix-aims20-modes-lights: BL+0x93e starts at the refill value [L ee_start_05].
@@ -15031,6 +15040,116 @@ fn segment_hits_sphere(a: V3, b: V3, c: V3, r: f32) -> bool {
         }
     }
 
+    /// The Phoenix Ronin's deploy — `Player_WeaponInitBullet` 0x1a4bf0:265-282's id-0x52 arm of
+    /// the pellet loop: `pos = player obj+0x30 + Mat_GetDir(obj+0x90)·1.0`, then
+    /// `GT_DeployMiniGun(pos, obj+0x90, player)` 0x181560 → `Collide_PlaceObject(0.5, 0.6)` (no
+    /// room → 0; the caller refunds the round — `BLData+0x590 += 1`, clip[0x52]) → `GT_Create`
+    /// with the 0x06000045/44 script pair, the 0x2000359 glist and the player as the owner
+    /// [M 00181560, 0017ffa0]. `fwd` is Bond's horizontal facing. Returns the turret index.
+    pub fn deploy_ronin(&mut self, d: &Data, bond_pos: V3, fwd: V3) -> Option<usize> {
+        let pos = [bond_pos[0] + fwd[0], bond_pos[1] + fwd[1], bond_pos[2] + fwd[2]];
+        let seat = crate::gt::place_object(d.world, pos, fwd)?;
+        // GT_Create's Script_Load pair: either load failing deletes the object and returns 0
+        // [M 0017ffa0:100-109] — the port's lib miss.
+        if !self.scripts.lib.contains_key(&crate::gt::RONIN_SCRIPT_A) || !self.scripts.lib.contains_key(&crate::gt::RONIN_SCRIPT_B) {
+            return None;
+        }
+        let mut t = crate::gt::from_deploy(seat, fwd);
+        // `Vec_DirToRot(Mat_GetDir(seated copy))` → the created object's rot; obj+0x90 =
+        // View_RotTransMatrix(rot, pos) [M 00181560 0x1815c4-0x1815dc, 0x17ffa0:69-71].
+        let base = nf_formats::placement::view_rot_trans_matrix([0.0, t.base_yaw(), 0.0], seat);
+        t.fire_dir = [base[2][0], base[2][1], base[2][2]];
+        // ext+0xD0 = script A's object bbox max.z × 1.5 [M 0017ffa0:121-158]; the port reads the
+        // glist spheres of script A's entities (0x200035a / 0x2000361 / 0x2000362 [D nis]) for the
+        // box [S — the sphere stands in for the glist bbox].
+        let maxz = [0x0200_035au32, 0x0200_0361, 0x0200_0362].iter()
+            .filter_map(|h| d.models.get(h)).map(|m| m.centre[2] + m.radius).fold(f32::NEG_INFINITY, f32::max);
+        t.muzzle_offset = if maxz.is_finite() { maxz * 1.5 } else { 0.0 };
+        // Unique, newest-first key: the control walk runs run-time objects ahead of the placed ones.
+        self.gt_next_key += 1;
+        t.sp_key = usize::MAX / 2 + self.gt_next_key;
+        let frame = self.frame;
+        let mount = |hash: u32| crate::nis::Player {
+            placement: t.sp_key, scripts: [hash, 0], modes: [8, 0], stay: false, mask: 1, out: 0, gate: 0,
+            scale: 1.0, matrix: base, cur: 0, state: 0, activated: false, countdown: 0, info: [None, None],
+            deleted: false, live_matrix: base, subs: Vec::new(), hit_points: 0.0, damage: 0.0,
+            tick_damage: 0.0, hidden: false, bullet_filter: 0, bullet_hits: Vec::new(), tick_bullet_hits: Vec::new(),
+        };
+        let (pa, pb) = (mount(t.script_a), mount(t.script_b));
+        t.script_player_a = self.scripts.spawn_primed(pa, &mut self.channels, d, frame);
+        t.script_player_b = self.scripts.spawn_primed(pb, &mut self.channels, d, frame);
+        eprintln!("[ronin] deployed at ({:.2}, {:.2}, {:.2}) yaw {:.3} — GT_DeployMiniGun 0x181560", seat[0], seat[1], seat[2], t.base_yaw());
+        self.gt_turrets.push(t);
+        Some(self.gt_turrets.len() - 1)
+    }
+
+    /// The first live turret the player owns (`Player_WeaponInitBullet`'s class-'6' walk with
+    /// `ext+0xB8 == player` [M 0x1a4bf0:113-133]).
+    pub fn ronin_turret(&self) -> Option<usize> {
+        self.gt_turrets.iter().position(|t| t.owner == crate::gt::PLAYER_OWNER && !t.delete_flag)
+    }
+
+    /// The weapon-0x53 press: the player's own turret → `GT_TakeControl` (state 4 only) [M
+    /// 0x1a4bf0:113-133, 00181740]. None = no owned turret (the press then falls to the 0x53
+    /// record's zero pellet count and does nothing); Some(mounted).
+    pub fn ronin_take_control(&mut self) -> Option<bool> {
+        let i = self.ronin_turret()?;
+        let t = &mut self.gt_turrets[i];
+        let ok = t.take_control();
+        if ok {
+            // `Vec_Zero(ext+0x90)` — the aim starts at the create facing [M 00181740].
+            t.aim = [0.0; 3];
+            eprintln!("[ronin] remote control taken — GT_TakeControl 0x181740 (cam mode 0xf, pane 18)");
+        }
+        Some(ok)
+    }
+
+    /// The mounted Ronin (state 7, the player's) — cam mode 0xf / HUD pane 18 while Some.
+    pub fn ronin_mounted(&self) -> Option<usize> {
+        self.gt_turrets.iter().position(|t| t.owner == crate::gt::PLAYER_OWNER && t.state == crate::gt::gt_state::MOUNTED && !t.delete_flag)
+    }
+
+    /// `Player_PositionCamera` 0x18f5d8 case 0xf: the view is the registered[0] object's matrix,
+    /// its translation moved by (0, 0.15, −0.4) in that frame [M 0x18f5d8:277-299]. The port's
+    /// registered[0] is the script entity `GT_Register` slot 0 took (event 0xF param 0 — 0x2000361
+    /// [D nis]); before the hand-off, the gun pose matrix stands in.
+    pub fn ronin_view(&self) -> Option<(V3, V3)> {
+        let t = &self.gt_turrets[self.ronin_mounted()?];
+        let reg = t.registered[0].checked_sub(1).and_then(|o| match self.scripts.objects.list.get(o as usize) {
+            Some(Some(crate::nis::Obj::Entity { matrix, .. })) => Some(*matrix),
+            _ => None,
+        });
+        let m = reg.unwrap_or_else(|| t.pose_matrix());
+        let e = crate::gt::RONIN_EYE;
+        let pos = [m[3][0] + e[0] * m[0][0] + e[1] * m[1][0] + e[2] * m[2][0],
+            m[3][1] + e[0] * m[0][1] + e[1] * m[1][1] + e[2] * m[2][1],
+            m[3][2] + e[0] * m[0][2] + e[1] * m[1][2] + e[2] * m[2][2]];
+        Some((pos, [m[2][0], m[2][1], m[2][2]]))
+    }
+
+    /// `Player_Activate` 0x1a5170:146-148's class-'6' arm: the one use pick (the radius-1.0 sphere
+    /// at head + view dir) against a turret's world sphere (obj+0x80, 1.0 + obj+0x8C — the turret
+    /// object's 0x2000359 glist sphere for the Ronin) → `GT_Activate` 0x1816f0 (facing 0, states
+    /// 4/5/7 → the fold, state 2). Returns whether a turret took the use.
+    pub fn gt_activate_pick(&mut self, d: &Data, pick_c: V3) -> bool {
+        let mut hit = false;
+        for t in self.gt_turrets.iter_mut() {
+            if t.delete_flag { continue; }
+            let m = d.models.get(&crate::gt::MINIGUN_GLIST).copied().unwrap_or(crate::pickup::Model { centre: [0.0; 3], radius: 0.5 });
+            let c = [t.pos[0] + m.centre[0], t.pos[1] + m.centre[1], t.pos[2] + m.centre[2]];
+            let r = 1.0 + m.radius;
+            let d2 = (c[0] - pick_c[0]).powi(2) + (c[1] - pick_c[1]).powi(2) + (c[2] - pick_c[2]).powi(2);
+            if d2 > r * r { continue; }
+            let before = t.state;
+            t.activate();
+            if t.state != before {
+                hit = true;
+                eprintln!("[ronin] GT_Activate 0x1816f0: state {before} → {} (the fold)", t.state);
+            }
+        }
+        hit
+    }
+
     /// `GunImp_Update` 0x1320d8 while state 1: the mounted aim + fire, and — gunimp-mounted-pose
     /// — the player carry. `look`/`turn` are the raw stick axes (the game's `Input_Actionf(slot,
     /// 4/3, 1)`), `fire` action 9, `use_key` action 0xe (the dismount). Every mounted tick the
@@ -15636,6 +15755,12 @@ fn segment_hits_sphere(a: V3, b: V3, c: V3, r: f32) -> bool {
                     if let Some(fb) = self.fuseboxes.iter_mut().find(|f| f.placement == player) {
                         fb.register_wire(obj, group);
                     }
+                    // The turrets' create callback is `GT_Register` 0x181538 (the `Script_Load`
+                    // callback arg 0x181538 [M 0017ffa0:100-104]): slot = param 0 (< 3). The port
+                    // stores the script object index + 1 (0 = empty, the game's NULL test).
+                    if let Some(t) = self.gt_turrets.iter_mut().find(|t| t.sp_key == player) {
+                        t.register(group, obj as u32 + 1);
+                    }
                 }
                 // `Script_FFwd`'s `Music_Event(5, hash)` [M 0x1dac78:55] — the NIS-skipped pulse
                 // (the only `Request::Event` the script player pushes; other kinds ride this arm
@@ -16233,6 +16358,12 @@ fn segment_hits_sphere(a: V3, b: V3, c: V3, r: f32) -> bool {
             }
             let chans = &self.channels;
             let mut gt_events: Vec<(usize, crate::gt::GTEvent)> = Vec::new();
+            // `GT_PlayerHasDied` 0x181808 ← `Player_CheckForDeath` 0x190810:38: the dead player's
+            // mounted turret loses control.
+            if self.health.health <= 0.0 {
+                crate::gt::GTurret::player_has_died(&mut self.gt_turrets, crate::gt::PLAYER_OWNER);
+            }
+            let mount_in = self.gt_mount.take();
             for (ti, t) in self.gt_turrets.iter_mut().enumerate() {
                 if t.delete_flag { continue; }
                 // The per-candidate LOS walk [M 0x17f9c8:271-278 — one
@@ -16259,10 +16390,25 @@ fn segment_hits_sphere(a: V3, b: V3, c: V3, r: f32) -> bool {
                     frame,
                     cands: &cands,
                     registered0_state: None, // the script VM is the tracked gap (gt.rs)
-                    mount: None,             // the mount use path (Player_WeaponInitBullet) is the tracked gap
+                    // case 7 reads the owner's pad [M 00180498 case 7 — `Input_Actionf(BL+0x94e, …)`]:
+                    // only the player's own mounted turret sees the viewer's inputs.
+                    mount: if t.owner == crate::gt::PLAYER_OWNER && t.state == crate::gt::gt_state::MOUNTED { mount_in } else { None },
                 };
                 let mut out = Vec::new();
+                let was_mounted = t.state == crate::gt::gt_state::MOUNTED;
                 t.update(&ctx, &mut self.rng, &mut out);
+                // case 7's `PlrStat_LogShotFired` per mounted shot [M 00180498 case 7].
+                if was_mounted {
+                    for _ in out.iter().filter(|e| matches!(e, crate::gt::GTEvent::Fire { .. })) {
+                        self.progress.log_shot_fired(self.mission.status());
+                    }
+                }
+                // `Script_SetPosRot(ext+0xB0, …)` [M 00180498 cases 2/4/7]: the floor turrets' gun
+                // (script A) turns to the pose the tick eased (the wall guns keep their placed pose
+                // — their aim visual is unverified against the real machine).
+                if t.facing == 0 && t.pose.is_some() {
+                    self.scripts.pose_player(t.script_player_a, t.pose_matrix());
+                }
                 // The wreck smoke runs INSIDE the case-6 tick [M GT_Update 0x180498:440-451]:
                 // emitting it here (before the next turret's update) keeps the six shared draws
                 // at the game's position in the stream — the deferred event loop would run them
@@ -16284,9 +16430,49 @@ fn segment_hits_sphere(a: V3, b: V3, c: V3, r: f32) -> bool {
                 }
                 for e in out { gt_events.push((ti, e)); }
             }
+            // `GT_Delete` 0x181678: both scripts freed with the object.
+            for t in self.gt_turrets.iter().filter(|t| t.delete_flag) {
+                if t.placement == usize::MAX {
+                    self.scripts.delete_player(t.script_player_a);
+                    self.scripts.delete_player(t.script_player_b);
+                }
+            }
+            let owners: Vec<u32> = self.gt_turrets.iter().map(|t| t.owner).collect();
+            let poses: Vec<(V3, f32)> = self.gt_turrets.iter().map(|t| (t.pos, t.base_yaw())).collect();
             self.gt_turrets.retain(|t| !t.delete_flag);
             for (ti, e) in gt_events {
                 match e {
+                    // A player-owned turret's round is the PLAYER's: `Bullet_init(−1, ext+0xB8, …)`
+                    // [M 00180498 case 4:345-348 / case 7] — owner = the player object, so it flies
+                    // the player-bullet path (it hits the guards, never Bond).
+                    crate::gt::GTEvent::Fire { muzzle, dir, sound } if owners.get(ti) == Some(&crate::gt::PLAYER_OWNER) => {
+                        self.audio.play3d(sound, muzzle, None);
+                        if let Some(w) = d.weapons.records.get(crate::gt::TURRET_WEAPON_RECORD) {
+                            let f32_at = |o: usize| f32::from_le_bytes(w[o..o + 4].try_into().unwrap());
+                            let f6c = u32::from_le_bytes(w[0x6c..0x70].try_into().unwrap());
+                            self.player_bullets.push(PlayerBullet {
+                                pos: muzzle, dir, speed: f32_at(0x20), travelled: 0.0, range: f32_at(0x1c), damage: f32_at(0x0c),
+                                weapon: crate::gt::TURRET_WEAPON_RECORD as u16, first: true, dead: false, bounces: 0,
+                                homing: f6c & 0x2_0000 != 0, target: None, gravity: f6c & 0x8 != 0, guided_cam: false,
+                                snd: 0, swoosh: None, born: frame,
+                            });
+                        }
+                    }
+                    // case 3's `Pickup_Create(obj+0xC0, 0, obj+0x90, 0x2000366, kind 0, id 0x52,
+                    // rounds 1, switch 0, sound 0xF5, at-rest 1, respawn 0, lifetime 0)` [M disasm
+                    // 0x180934-0x180978]: at rest (param 10 ≠ 0 → +0x20 = 1, no fall) on
+                    // `build_PointOnFloor(1.0, …)` of the turret position [M 0x18dda0:150-160].
+                    crate::gt::GTEvent::DropPickup { pos } => {
+                        let yaw = poses.get(ti).map_or(0.0, |p| p.1);
+                        let floor = d.world.floor_below(pos, 1.0).map_or(pos, |y| [pos[0], y, pos[2]]);
+                        let glist = crate::gt::PICKUP_GLIST;
+                        let bounds = d.models.get(&glist).copied().unwrap_or(crate::pickup::Model { centre: [0.0; 3], radius: 0.3 });
+                        if let Some(p) = crate::pickup::Pickup::create_placed(floor, [0.0, yaw, 0.0], crate::pickup::kind::WEAPON,
+                            crate::gt::RONIN_DEPLOY as u16, 1, 0, 0xf5, 0, 0, glist, bounds, d.weapons, d.models, false) {
+                            eprintln!("[ronin] folded — the case is back on the floor at ({:.2}, {:.2}, {:.2})", floor[0], floor[1], floor[2]);
+                            self.pickups.push(p);
+                        }
+                    }
                     // One `Bullet_init` shot [M 0x180498 case 4:347-348]: the turret weapon
                     // record 96 (0x2c55d0 = the table + 96·0x10c), owner −1 — every hit-time
                     // damage modifier that reads the shooter drone skips (`Bullet_init`'s

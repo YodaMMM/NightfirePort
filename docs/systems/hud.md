@@ -177,9 +177,11 @@ the mission banner's fail label has no blink.
   0xd, set only by `Car_Activate` 0x131c48 — placement 0xda RC cars, MP maps only [D census]), 16 =
   `SecCamPane` (`Monitor_Activate` 0x1b0058:47 — the monitor consoles of 01/02/0a/12/14), 18 =
   `RoninPane` (cam mode 0xf, set only by `GT_TakeControl` 0x181740 for a turret whose owner is the
-  player, i.e. one deployed with weapon 0x53 [M Player_WeaponInitBullet 0x1a4bf0:120-133]; no SP kit
-  equips 0x53 [M Player_InitWeapon 0x1a7ef8] and `Pickup_CreateSimple` refuses it). The port covers
-  9, 11, 16, 17; 10 and 18 are MP-only views.
+  player, i.e. one deployed with weapon 0x52 and taken over with 0x53 [M Player_WeaponInitBullet
+  0x1a4bf0:113-133, 265-282]). No SP kit equips 0x52/0x53 [M Player_InitWeapon 0x1a7ef8], but the
+  campaign places the case as a pickup on 0700000c #561 and 07000012 #753 [D] (correction
+  2026-11-01: "MP-only" was wrong). The port covers 9, 11, 16, 17 and 18 (docs/systems/gun-turrets.md,
+  the Ronin section); 10 is MP-only.
 
 ## Security-camera view (pane 16) [M; hud-2]
 

@@ -40,8 +40,12 @@ unreached status.
   done flag (obj+0x9C), timer, → 1. Facing 0 turrets skip straight to the reset [M case 0].
 - **1 arming** — waits for both scripts' done flags, then → 4 [M case 1].
 - **2 restoring** — slerps back to the script-A pose; after 1.2 s resets the scripts → 3 [M case 2].
-- **3 finished** — when both scripts are done: mounted → `GT_LoseControl`; facing 1 →
-  `Pickup_Create(0x2000366)` + self-delete; else → 0 [M case 3].
+- **3 finished** — when both scripts are done: mounted → `GT_LoseControl`; then **facing 0** →
+  `Pickup_Create(obj+0xC0, 0, obj+0x90, 0x2000366, kind 0, id 0x52, 1 round, switch 0, sound 0xF5,
+  at rest, respawn 0, lifetime 0)` + self-delete (the Ronin case back on the floor); **facing ≠ 0** → 0
+  [M case 3, disasm 0x180914-0x18098c: `lhu v0,236(s2)` / `bnel v0,zero` with the state-0 store in
+  the delay slot]. (Corrected 2026-11-01: the earlier reading had the arms swapped, so the port's
+  facing-1 wall guns deleted themselves after their first re-holster.)
 - **4 combat** — `GT_Track` every tick; a target plays `Music_Event(2,1)`, aims (slerp) and
   fires every 0.1 s while ext+0xF0 > 0 (`Bullet_init` weapon record 0x2c55d0, muzzle =
   barrel pos + dir·ext+0xD0, `Sound_Play3D(…, 0x4e7 facing-1 / 0x10a facing-0)`, barrel spin,
@@ -99,3 +103,39 @@ docs/systems/ai-spawned-objects.md "Proven never called"], so no Sub object ever
 `Sub_DeployTorpedoes` 0x1acf68 have only `Sub_Update` as caller [M 0x1ad200:111,127], and
 `Sub_ApplyDammage` 0x1ad570's only other call site, `Explode_Propagate` case 0x3D ('J' check)
 0x17c518:207, needs an existing Sub [M]. See docs/port-map/unreached.md.
+
+## The Phoenix Ronin (weapon 0x52 / 0x53) — the player-deployed turret
+
+- **Where the campaign gives it** [D placements dump]: 0700000c (Chain Reaction) #561
+  `oPickUp_Briefcase_3rd_LOD0` (53.98, 1.26, −173.46) and 07000012 (Phoenix Fire, part 2) #753
+  `oPickUp_Briefcase_LOD0` (13.07, 0.39, 15.71) — type 0xF0, kind 0, id 0x52, 1 round. No SP loadout
+  equips it [M Player_InitWeapon 0x1a7ef8]; the default (non-campaign) kit does.
+- **Deploy** [M Player_WeaponInitBullet 0x1a4bf0:265-282]: the pellet loop calls
+  `GT_DeployMiniGun(obj+0x30 + Mat_GetDir(obj+0x90)·1.0, obj+0x90, player)` instead of `Bullet_init`;
+  a 0 return refunds the round (`BLData+0x590 += 1` = clip[0x52]). `GT_DeployMiniGun` 0x181560:
+  `Collide_PlaceObject(0.5, 0.6)` 0x1ecfb8 (the 3.0 down ray, seat = hit + n·0.5, the −0.13 / 0.2 /
+  0.96 plane gates, the 0.6 support reach), then `GT_Create` with the stack record facing 0, param 1 = 2,
+  scripts 0x06000045 (gun: 0x200035a + 0x2000361/0x2000362, `GT_Register` f(2)/f(0)/f(1)) and
+  0x06000044 (case halves 0x2000358 ×2, body 0x2000359), enable 0, the disable word unwritten (stack
+  residue) [M disasm 0x1815e0-0x181614; D nis dump], glist 0x2000359, owner = the player.
+- **0x52 → 0x53** [M Player_HandleHasNoAmmo 0x1a2ba8 'R' arm, from Player_WeaponFiring
+  0x1a5460:442-455]: clip[0x52] < 1 → owned[0x52] = 0, `Player_EquipWeapon(0x53, 999)`, request 0x53.
+- **Targets** [M GT_Track 0x17f9c8:62-64]: SP, owner == `glb_players` → the player block is skipped;
+  the guards (facing 0) within range² 2500 in the front cone with LOS. The rounds are the player's:
+  `Bullet_init(−1, ext+0xB8, …, 0x2c55d0)` [M 0x180498 case 4 / case 7].
+- **Remote control** [M 0x1a4bf0:113-133, GT_TakeControl 0x181740]: firing 0x53 finds the first
+  class-'6' object the player owns → state 7, substate 0x10, `Player_WeaponNone`, cam mode 0xf →
+  `HUD_Reset` + pane 18 (`Player_SetCamMode` 0x195928). The view: registered[0]'s matrix, eye
+  (0, 0.15, −0.4) in its frame [M Player_PositionCamera 0x18f5d8:277-299]. Case 7 aims with actions
+  3/4 (±π/2 yaw, ±0.5 pitch), fires on action 9 every 0.1 s, and action 0xE (mask 4) →
+  `GT_LoseControl` 0x181408 (weapon +0x62 = +0x63 = 0x53).
+- **Pick-up** [M Player_Activate 0x1a5170:146-148, GT_Activate 0x1816f0, 0x180498 cases 2/3]: E on
+  it → state 2 → 1.2 s → 3 → both scripts done → the 0x52 case (1 round) on the floor, the turret
+  deleted; walking over the case takes it.
+- Port: `nf_game::gt` (`from_deploy`, `place_object`, the owner skip, the case-3 drop),
+  `Drones::deploy_ronin` / `ronin_take_control` / `ronin_view` / `gt_activate_pick`, the viewer's
+  0x52/0x53 arms and the pane-18 draw; pinned by `crates/nf-view/tests/ronin_live.rs`. Open: the
+  `Collide_Pick` volume is approximated (triangles within 0.6 of the sweep) [S]; the gun's
+  look-at/aim pose is an angle ease standing in for `Quat_Slerp_Acc` [S]; the remote view's eye
+  renders inside the 0x2000361 housing in the port — the game hides only the turret object
+  (`View_SetDrawInOtherViewsOnly(BL+0x878)`), so a live look is needed (UNKNOWNS).

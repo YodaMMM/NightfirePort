@@ -49,6 +49,146 @@
 
 /// The minigun glist hash `GT_DeployMiniGun` fetches [M 00181560].
 pub const MINIGUN_GLIST: u32 = 0x2000_359;
+/// `GT_DeployMiniGun`'s stack record for `GT_Create` [M 00181560; the record base is sp+0x70 —
+/// `auStack_120` — so +0x2c = uStack_f4 = 0 (facing), +0x30 = uStack_f0 = 2 (param 1),
+/// +0x34 = uStack_ec = 0x06000045 (script A), +0x38 = uStack_e8 = 0x06000044 (script B),
+/// +0x3c = uStack_e4 = 0 (enable channel); disasm 0x1815e0-0x181614 writes sp+156..172 and never
+/// +0x40 (sp+176, the disable channel — stack residue, read only by the facing-1 gates)]. Script A carries the gun (0x200035a base, 0x2000361 /
+/// 0x2000362 parented to it, the three `GT_Register` events f(2)/f(0)/f(1)); script B the
+/// suitcase halves 0x2000358 ×2 and the 0x2000359 body [D 0700000c.bin nis dump].
+pub const RONIN_SCRIPT_A: u32 = 0x0600_0045;
+pub const RONIN_SCRIPT_B: u32 = 0x0600_0044;
+/// The weapon records: 0x52 deploys (`Player_WeaponInitBullet` 0x1a4bf0:265-282 — the pellet loop
+/// calls `GT_DeployMiniGun` instead of `Bullet_init` for id 0x52), 0x53 takes control of the
+/// deployed turret (`Player_WeaponInitBullet` :113-133 — the first class-'6' object whose owner
+/// is the firing player → `GT_TakeControl`) [M].
+pub const RONIN_DEPLOY: u8 = 0x52;
+pub const RONIN_CONTROL: u8 = 0x53;
+/// The port's owner id for "the player" (`glb_players`) — the same id the turret candidate list
+/// gives Bond (`TrackCand::obj == u32::MAX`).
+pub const PLAYER_OWNER: u32 = u32::MAX;
+/// `Player_PositionCamera` 0x18f5d8 case 0xf's eye offset in the registered[0] object's frame:
+/// `ApplyMatrixLVI(reg0+0x90, (0.0, 0.15, -0.4))` then + reg0+0xC0 [M 0x18f5d8:277-299].
+pub const RONIN_EYE: [f32; 3] = [0.0, 0.15, -0.4];
+
+/// `GT_DeployMiniGun` 0x181560 + `GT_Create` 0x17ffa0 for the Ronin: the record the creator
+/// writes for `GT_DeployMiniGun`'s stack args (facing 0 → HP 200), owned by the player
+/// (`param_6` = the firing player → ext+0xB8 [M 0017ffa0:79-81]). `pos` is the
+/// `Collide_PlaceObject`-seated position, `fire_dir` the create-time `Mat_GetDir(obj+0x90)`
+/// (facing 0) [M 0017ffa0:141-143].
+pub fn from_deploy(pos: [f32; 3], fire_dir: [f32; 3]) -> GTurret {
+    GTurret {
+        placement: usize::MAX,
+        facing: 0,
+        param1: 2,
+        script_a: RONIN_SCRIPT_A,
+        script_b: RONIN_SCRIPT_B,
+        param4: 0,
+        param5: 0,
+        hp: 200,
+        owner: PLAYER_OWNER,
+        pos,
+        fire_dir,
+        scripts_done: false,
+        ..GTurret::default()
+    }
+}
+
+/// `Collide_PlaceObject(0.5, 0.6, pos, mat, parent)` 0x1ecfb8 — `GT_DeployMiniGun`'s seat test
+/// [M 0x1ecfb8]: `pos.y += 0.05`; a 3.0-long ray down the matrix's up axis (flags 0x1d) must hit;
+/// the position moves to the hit + normal·0.5; then the pick around it (radius 0.6, the sweep
+/// down to `pos − normal·0.1`) rejects any plane nearer than 0.5 − 0.13 (`|d| − 0.5 < −0.13` →
+/// return 0), grows the support box from the floor-like triangles (`|d| − 0.5 ≤ 0.2` and
+/// `|n_tri·n| ≥ 0.96`), and the box must reach ≥ 0.6 (|Δ·side| + |Δ·dir|) at BOTH corners.
+/// Returns the seated position (the object's obj+0x30) or None (no room — `GT_DeployMiniGun`
+/// returns 0 and the caller refunds the round).
+///
+/// The pick volume (`Collide_Pick` with HITTEST type 0xd, radius 0.6) is approximated by the
+/// triangles whose closest point lies within 0.6 of the sweep segment [S — the game's pick
+/// shape is not separately measured]; the triangle cap is the game's 0xa6 [M].
+pub fn place_object(world: &crate::world::CollisionWorld, pos: [f32; 3], dir: [f32; 3]) -> Option<[f32; 3]> {
+    const R: f32 = 0.5; // param_1 0x3f000000
+    const EXT: f32 = 0.6; // param_2 0x3f19999a
+    let up = [0.0f32, 1.0, 0.0]; // Mat_GetUp of the player's (upright) matrix
+    let p0 = [pos[0], pos[1] + 0.05, pos[2]];
+    let down = [p0[0] - up[0] * 3.0, p0[1] - up[1] * 3.0, p0[2] - up[2] * 3.0];
+    let (t, n) = world.segment_hit(p0, down)?;
+    let nl = (n[0] * n[0] + n[1] * n[1] + n[2] * n[2]).sqrt().max(1e-9);
+    let n = [n[0] / nl, n[1] / nl, n[2] / nl];
+    let hit = [p0[0] + (down[0] - p0[0]) * t, p0[1] + (down[1] - p0[1]) * t, p0[2] + (down[2] - p0[2]) * t];
+    let low = [p0[0] - n[0] * 0.1, p0[1] - n[1] * 0.1, p0[2] - n[2] * 0.1];
+    let seat = [hit[0] + n[0] * R, hit[1] + n[1] * R, hit[2] + n[2] * R];
+    let lo = [seat[0].min(low[0]) - EXT, seat[1].min(low[1]) - EXT, seat[2].min(low[2]) - EXT];
+    let hi = [seat[0].max(low[0]) + EXT, seat[1].max(low[1]) + EXT, seat[2].max(low[2]) + EXT];
+    let mut bmin = seat;
+    let mut bmax = seat;
+    let sub = |a: [f32; 3], b: [f32; 3]| [a[0] - b[0], a[1] - b[1], a[2] - b[2]];
+    let dot = |a: [f32; 3], b: [f32; 3]| a[0] * b[0] + a[1] * b[1] + a[2] * b[2];
+    let cross = |a: [f32; 3], b: [f32; 3]| [a[1] * b[2] - a[2] * b[1], a[2] * b[0] - a[0] * b[2], a[0] * b[1] - a[1] * b[0]];
+    let mut count = 0usize;
+    for tri in world.tris_near(lo, hi) {
+        if count >= 0xa6 { break; }
+        // in the pick: the triangle comes within EXT of the sweep segment (three samples)
+        let near = [seat, [(seat[0] + low[0]) * 0.5, (seat[1] + low[1]) * 0.5, (seat[2] + low[2]) * 0.5], low]
+            .iter().any(|&q| point_tri_dist2(q, tri) <= EXT * EXT);
+        if !near { continue; }
+        count += 1;
+        let tn = cross(sub(tri[1], tri[0]), sub(tri[2], tri[0]));
+        let l = dot(tn, tn).sqrt();
+        if l < 1e-9 { continue; }
+        let tn = [tn[0] / l, tn[1] / l, tn[2] / l];
+        let d = dot(tn, sub(seat, tri[0])).abs();
+        if d - R < -0.13 { return None; }
+        if d - R <= 0.2 && dot(tn, n).abs() >= 0.96 {
+            for v in tri {
+                for k in 0..3 { bmin[k] = bmin[k].min(v[k]); bmax[k] = bmax[k].max(v[k]); }
+            }
+        }
+    }
+    // Mat_Align2Up(mat, n, dir) → the seated frame's dir / side axes.
+    let dn = dot(dir, n);
+    let mut f = [dir[0] - n[0] * dn, dir[1] - n[1] * dn, dir[2] - n[2] * dn];
+    let fl = dot(f, f).sqrt();
+    if fl < 1e-6 { f = [0.0, 0.0, 1.0]; } else { f = [f[0] / fl, f[1] / fl, f[2] / fl]; }
+    let side = cross(n, f);
+    let reach = |c: [f32; 3]| { let v = sub(c, seat); dot(v, side).abs() + dot(v, f).abs() };
+    if reach(bmin) >= EXT && reach(bmax) >= EXT { Some(seat) } else { None }
+}
+
+/// The squared distance from `p` to the triangle `t` (the closest-point region test).
+fn point_tri_dist2(p: [f32; 3], t: [[f32; 3]; 3]) -> f32 {
+    let sub = |a: [f32; 3], b: [f32; 3]| [a[0] - b[0], a[1] - b[1], a[2] - b[2]];
+    let dot = |a: [f32; 3], b: [f32; 3]| a[0] * b[0] + a[1] * b[1] + a[2] * b[2];
+    let (a, b, c) = (t[0], t[1], t[2]);
+    let (ab, ac, ap) = (sub(b, a), sub(c, a), sub(p, a));
+    let (d1, d2) = (dot(ab, ap), dot(ac, ap));
+    let at = |q: [f32; 3]| { let v = sub(p, q); dot(v, v) };
+    if d1 <= 0.0 && d2 <= 0.0 { return at(a); }
+    let bp = sub(p, b);
+    let (d3, d4) = (dot(ab, bp), dot(ac, bp));
+    if d3 >= 0.0 && d4 <= d3 { return at(b); }
+    let vc = d1 * d4 - d3 * d2;
+    if vc <= 0.0 && d1 >= 0.0 && d3 <= 0.0 {
+        let v = d1 / (d1 - d3);
+        return at([a[0] + ab[0] * v, a[1] + ab[1] * v, a[2] + ab[2] * v]);
+    }
+    let cp = sub(p, c);
+    let (d5, d6) = (dot(ab, cp), dot(ac, cp));
+    if d6 >= 0.0 && d5 <= d6 { return at(c); }
+    let vb = d5 * d2 - d1 * d6;
+    if vb <= 0.0 && d2 >= 0.0 && d6 <= 0.0 {
+        let w = d2 / (d2 - d6);
+        return at([a[0] + ac[0] * w, a[1] + ac[1] * w, a[2] + ac[2] * w]);
+    }
+    let va = d3 * d6 - d5 * d4;
+    if va <= 0.0 && (d4 - d3) >= 0.0 && (d5 - d6) >= 0.0 {
+        let w = (d4 - d3) / ((d4 - d3) + (d5 - d6));
+        return at([b[0] + (c[0] - b[0]) * w, b[1] + (c[1] - b[1]) * w, b[2] + (c[2] - b[2]) * w]);
+    }
+    let denom = 1.0 / (va + vb + vc);
+    let (v, w) = (vb * denom, vc * denom);
+    at([a[0] + ab[0] * v + ac[0] * w, a[1] + ab[1] * v + ac[1] * w, a[2] + ab[2] * v + ac[2] * w])
+}
 /// The `Collide_PlaceObject` radii [M 00181560].
 pub const DEPLOY_RADIUS: (f32, f32) = (0.5, 0.6);
 /// The deploy yaw offset: sin(yaw + π/2) for the z term [M 00178f68:137].
@@ -133,6 +273,11 @@ pub struct GTurret {
     /// `Mat_GetUp` negated) — `GT_Track`'s front-cone dot test reads it [M 0017ffa0:141-147,
     /// 0x17f9c8:252-257]. The port keys it from the placement rotation.
     pub fire_dir: [f32; 3],
+    /// The drawn gun pose (yaw, pitch) script A is posed at — `ease_pose`; None = the create pose.
+    pub pose: Option<(f32, f32)>,
+    /// The two script players' `placement` key (the WireRegister/event-0xF hand-off matches it):
+    /// the placement index for the placed turrets, a unique runtime key for a deployed Ronin.
+    pub sp_key: usize,
 }
 
 fn param(params: &[(u32, u32)], k: u32) -> u32 {
@@ -176,6 +321,8 @@ pub fn from_placement(placement: usize, params: &[(u32, u32)]) -> Option<GTurret
         script_player_a: usize::MAX,
         script_player_b: usize::MAX,
         fire_dir: [0.0, 0.0, 1.0],
+        pose: None,
+        sp_key: placement,
     })
 }
 
@@ -386,6 +533,13 @@ impl GTurret {
             if mp && c.obj == self.owner {
                 continue; // the MP branch skips the owner [M 0x17f9c8:186]
             }
+            // SP: a turret whose owner (ext+0xB8) IS `glb_players` — the Ronin Bond deployed —
+            // never adds the player candidate (`if (*(int *)(param_1 + 0xb8) == glb_players)`
+            // skips the whole player block) [M 0x17f9c8:62-64]. The port's player candidate is
+            // obj u32::MAX and a player-deployed turret's owner is PLAYER_OWNER (= u32::MAX).
+            if !mp && self.owner == PLAYER_OWNER && c.obj == PLAYER_OWNER {
+                continue;
+            }
             if !mp && self.facing != 0 && (c.obj != u32::MAX || c.copter) {
                 continue; // SP: drones/copters only for facing-0 turrets [M 0x17f9c8:101,119]
             }
@@ -449,6 +603,53 @@ impl GTurret {
         if self.aim[1] > half_pi { self.aim[1] = half_pi; }
     }
 
+    /// The create-time yaw of the turret (`Vec_DirToRot` of the fire direction, the rot the
+    /// creator built obj+0x90 from [M 00181560 → 0017ffa0:69-71]).
+    pub fn base_yaw(&self) -> f32 {
+        crate::trig::atan2f_libm(self.fire_dir[0], self.fire_dir[2])
+    }
+
+    /// The mounted aim frame [M 00180498 case 7]: obj+0x90 · RotY(ext+0x94) · RotX(ext+0x90)
+    /// (`Concat(src, dst)` = dst = src·dst), at the turret position. Rows: side, up, forward —
+    /// RotX(p) maps +Z to (0, −sin p, cos p), the gunimp barrel's convention.
+    pub fn aim_matrix(&self) -> nf_formats::anim::Mat4 {
+        let yaw = self.base_yaw() + self.aim[1];
+        let (sy, cy) = yaw.sin_cos();
+        let (sp, cp) = self.aim[0].sin_cos();
+        [
+            [cy, 0.0, -sy, 0.0],
+            [sy * sp, cp, cy * sp, 0.0],
+            [sy * cp, -sp, cy * cp, 0.0],
+            [self.pos[0], self.pos[1], self.pos[2], 1.0],
+        ]
+    }
+
+    /// The gun's drawn pose (`Script_SetPosRot(ext+0xB0, …)` — case 2's slerp back to ext+0x40,
+    /// case 4's slerp onto the look-at of the target, case 7's onto `aim_matrix`), as (yaw, pitch)
+    /// eased by REC_FRAME_RATE·4 per tick toward `want` (`Quat_Slerp_Acc(REC_FRAME_RATE·4.0, …)`
+    /// [M 00180498 cases 2/4/7]; the angle ease stands in for the quaternion slerp [S]).
+    pub fn ease_pose(&mut self, want: (f32, f32)) {
+        let k = crate::grenade::REC_FRAME_RATE * 4.0;
+        let (py, pp) = self.pose.unwrap_or((self.base_yaw(), 0.0));
+        let mut dy = want.0 - py;
+        while dy > core::f32::consts::PI { dy -= 2.0 * core::f32::consts::PI; }
+        while dy < -core::f32::consts::PI { dy += 2.0 * core::f32::consts::PI; }
+        self.pose = Some((py + dy * k, pp + (want.1 - pp) * k));
+    }
+
+    /// The pose matrix script A is posed at (`ease_pose`'s angles, the turret position).
+    pub fn pose_matrix(&self) -> nf_formats::anim::Mat4 {
+        let (yaw, pitch) = self.pose.unwrap_or((self.base_yaw(), 0.0));
+        let (sy, cy) = yaw.sin_cos();
+        let (sp, cp) = pitch.sin_cos();
+        [
+            [cy, 0.0, -sy, 0.0],
+            [sy * sp, cp, cy * sp, 0.0],
+            [sy * cp, -sp, cy * cp, 0.0],
+            [self.pos[0], self.pos[1], self.pos[2], 1.0],
+        ]
+    }
+
     /// `GT_Update` 0x180498 — one tick (`dt` = `REC_FRAME_RATE`, 1/60 [M every timer step]).
     pub fn update(&mut self, ctx: &GTCtx, rng: &mut crate::drone::Rng, out: &mut Vec<GTEvent>) {
         // The registered[0] hide gate [M 00180498:110-122].
@@ -503,9 +704,20 @@ impl GTurret {
             }
             gt_state::FINISHED => {
                 if self.scripts_done {
+                    // [M 0x180498 case 3, disasm 0x180914-0x18098c]: a mounted turret loses
+                    // control first (`lbu v0,242(s2)` / `jal 0x181408`), then the FACING test
+                    // `lhu v0,236(s2)` + `bnel v0,zero` (delay slot `sh zero,244(s3)` = state 0,
+                    // annulled when the branch is not taken): facing ≠ 0 → back to DORMANT;
+                    // facing == 0 (the deployed Ronin, the MP floor turrets) → `Pickup_Create(
+                    // obj+0xC0, 0, obj+0x90, celglist 0x2000366, kind 0, id 0x52 (t1 = 82),
+                    // rounds 1 (t2), …, sound 0xF5 (sp+0 = 245))` + obj+0xFE |= 1 — the case
+                    // goes back into the player's hands. (The branch had the two arms swapped:
+                    // the facing-1 wall guns of 0a/0b deleted themselves after their first
+                    // re-holster, and a folded Ronin re-armed in place.)
                     if self.controlled != 0 {
                         self.lose_control();
-                    } else if self.facing == 1 {
+                    }
+                    if self.facing == 0 {
                         out.push(GTEvent::DropPickup { pos: self.pos });
                         self.delete_flag = true;
                     } else {
@@ -545,6 +757,12 @@ impl GTurret {
                             out.push(GTEvent::Fire { muzzle, dir, sound });
                             self.spin_vel = crate::grenade::REC_FRAME_RATE * 6.2831855 * 2.0;
                         }
+                    }
+                    // case 4's `Mat_LookAt(obj+0x30 → target+0x30)` slerp [M 0x180498 case 4].
+                    if let Some(c) = ctx.cands.iter().find(|c| c.obj == self.target) {
+                        let (dx, dy, dz) = (c.pos[0] - self.pos[0], c.pos[1] - self.pos[1], c.pos[2] - self.pos[2]);
+                        let h = (dx * dx + dz * dz).sqrt();
+                        self.ease_pose((crate::trig::atan2f_libm(dx, dz), -(dy.atan2(h))));
                     }
                 } else if self.facing == 1 {
                     // re-holster path [M case 4 tail: the channel gate, 0.5 s → state 2].
@@ -596,20 +814,28 @@ impl GTurret {
                 // spin_vel refreshed on fire, exit action 14 → `GT_LoseControl`.
                 if let Some((yaw_in, pitch_in, fire, exit)) = ctx.mount {
                     self.mount_aim(yaw_in, pitch_in);
+                    let m = self.aim_matrix();
+                    let h = (m[2][0] * m[2][0] + m[2][2] * m[2][2]).sqrt();
+                    self.ease_pose((crate::trig::atan2f_libm(m[2][0], m[2][2]), -(m[2][1].atan2(h))));
                     self.fire_timer += crate::grenade::REC_FRAME_RATE;
                     if fire && self.fire_timer > 0.1 {
                         self.fire_timer = 0.0;
                         if self.hp > 0 {
                             self.hp -= 1;
-                            // the mount aims down ext+0x90's y/pitch (the game's RotMatrixY/X
-                            // chain); the port's dir from the aim angles [S] — see report.
-                            let cy = self.aim[1].cos();
-                            out.push(GTEvent::Fire {
-                                muzzle: self.pos,
-                                dir: [cy * self.aim[0].sin(), self.aim[0].cos(), cy * self.aim[1].cos()],
-                                sound: SOUND_FIRE,
-                            });
                         }
+                        // The shot runs whatever the counter reads (the decrement is the only
+                        // `0 < ext+0xF0` gate) [M case 7]: `Mat_GetDir` of the barrel, muzzle =
+                        // barrel + dir·ext+0xD0, `Sound_Play3D(0x10a)`, `Bullet_init(−1,
+                        // ext+0xB8 (the owner), …, 0x2c55d0)`. The barrel follows script A, which
+                        // case 7 poses at obj+0x90·RotY(ext+0x94)·RotX(ext+0x90) — the port's
+                        // `aim_matrix` (the slerp onto it is the draw side's).
+                        let m = self.aim_matrix();
+                        let dir = [m[2][0], m[2][1], m[2][2]];
+                        out.push(GTEvent::Fire {
+                            muzzle: [self.pos[0] + dir[0] * self.muzzle_offset, self.pos[1] + dir[1] * self.muzzle_offset, self.pos[2] + dir[2] * self.muzzle_offset],
+                            dir,
+                            sound: SOUND_FIRE,
+                        });
                         self.spin_vel = crate::grenade::REC_FRAME_RATE * 6.2831855 * 2.0;
                     }
                     if exit {
@@ -654,6 +880,8 @@ impl Default for GTurret {
             script_player_a: usize::MAX,
             script_player_b: usize::MAX,
             fire_dir: [0.0, 0.0, 1.0],
+            pose: None,
+            sp_key: usize::MAX,
         }
     }
 }
@@ -968,8 +1196,16 @@ mod tests {
         assert_eq!(t.state, 3);
         assert!(!t.scripts_done, "case 2's expiry reset the scripts for the return anim [M case 2]");
         t.scripts_done = true; // the script VM replays them (the port's stand-in)
-        step(&mut t, &ch, &[], &mut rng); // scripts done → facing 0 → 0 [M case 3]
-        assert_eq!(t.state, 0);
+        let ev = step(&mut t, &ch, &[], &mut rng); // scripts done → facing 0 → the case drops [M case 3]
+        assert!(ev.iter().any(|e| matches!(e, GTEvent::DropPickup { .. })),
+            "a folded facing-0 turret drops the 0x52 case [M 0x180498 case 3, disasm 0x18092c-0x18098c]");
+        assert!(t.delete_flag, "and deletes itself (obj+0xFE |= 1) [M 0x180980-0x18098c]");
+        // Sister: a facing-1 turret folding through state 3 goes back to DORMANT and stays [M bnel].
+        let mut w = GTurret { state: 3, facing: 1, scripts_done: true, ..GTurret::default() };
+        let ev = step(&mut w, &ch, &[], &mut rng);
+        assert_eq!(w.state, 0, "facing 1 → state 0 (the bnel delay-slot store)");
+        assert!(!w.delete_flag && !ev.iter().any(|e| matches!(e, GTEvent::DropPickup { .. })),
+            "the wall gun neither drops a case nor deletes itself");
         // Sister: 72 ticks = 1.2 s exactly → still restoring.
         let mut t2 = GTurret::default();
         t2.state = 2;
@@ -1070,5 +1306,60 @@ mod tests {
         let mut t3 = GTurret::default();
         t3.mount_aim(1.0, 0.0);
         assert!((t3.aim[1] - (-AIM_INPUT_SCALE)).abs() < 1e-9, "yaw step = 0.024543693");
+    }
+
+    /// [M 0x17f9c8:62-64] SP: a player-owned turret (the deployed Ronin) never takes Bond as a
+    /// candidate; a guard in front of it is the target.
+    #[test]
+    fn player_owned_turret_skips_bond() {
+        let mut t = from_deploy([0.0, 0.5, 0.0], [0.0, 0.0, 1.0]);
+        let bond = TrackCand { obj: PLAYER_OWNER, pos: [0.0, 0.0, 3.0], copter: false, los_ok: true };
+        let guard = TrackCand { obj: 4, pos: [0.0, 0.0, 6.0], copter: false, los_ok: true };
+        assert_eq!(t.track(&[bond], false), None, "Bond in front of his own Ronin is not a target");
+        assert_eq!(t.track(&[bond, guard], false), Some(4), "the guard behind him is");
+        // Sister (can fail): a placed facing-0 turret (owner 0) DOES take Bond.
+        let mut placed = GTurret { fire_dir: [0.0, 0.0, 1.0], ..GTurret::default() };
+        assert_eq!(placed.track(&[bond], false), Some(PLAYER_OWNER));
+    }
+
+    /// [M 00181560 + 0017ffa0] the Ronin record: facing 0, HP 200, scripts 0x06000045/44,
+    /// owner the player.
+    #[test]
+    fn the_deploy_record() {
+        let t = from_deploy([1.0, 2.0, 3.0], [1.0, 0.0, 0.0]);
+        assert_eq!((t.facing, t.param1, t.hp), (0, 2, 200));
+        assert_eq!((t.script_a, t.script_b), (RONIN_SCRIPT_A, RONIN_SCRIPT_B));
+        assert_eq!(t.owner, PLAYER_OWNER);
+        assert_eq!(t.state, gt_state::DORMANT);
+        assert!((t.base_yaw() - HALF_PI).abs() < 1e-5, "fire dir +x → yaw π/2");
+        // Sister: a +z fire dir is yaw 0 — the base yaw follows the direction.
+        assert!(from_deploy([0.0; 3], [0.0, 0.0, 1.0]).base_yaw().abs() < 1e-6);
+    }
+
+    /// [M 0x1ecfb8] `Collide_PlaceObject(0.5, 0.6)`: a wide floor seats the case 0.5 above it;
+    /// no floor within 3.0, a wall within 0.37 or a ledge narrower than 0.6 refuses.
+    #[test]
+    fn place_object_rules() {
+        let floor = |h: f32| vec![[[-5.0, 0.0, -5.0], [-5.0, 0.0, 5.0], [5.0, 0.0, 5.0]], [[-5.0, 0.0, -5.0], [5.0, 0.0, 5.0], [5.0, 0.0, -5.0]]]
+            .into_iter().map(|t: [[f32; 3]; 3]| t.map(|v| [v[0] * h, v[1], v[2] * h])).collect::<Vec<_>>();
+        let w = crate::world::CollisionWorld::from_triangles(floor(1.0));
+        let p = place_object(&w, [0.0, 0.4, 0.0], [0.0, 0.0, 1.0]).expect("a wide floor seats");
+        assert!((p[1] - 0.5).abs() < 1e-3, "seat = floor + normal·0.5 (got {p:?})");
+        assert!(place_object(&w, [0.0, 4.0, 0.0], [0.0, 0.0, 1.0]).is_none(), "the floor 4.05 below is past the 3.0 ray");
+        // a wall 0.2 from the seat (plane distance 0.2 − 0.5 < −0.13) refuses
+        let mut tris = floor(1.0);
+        tris.push([[0.2, -1.0, -2.0], [0.2, 3.0, -2.0], [0.2, -1.0, 2.0]]);
+        tris.push([[0.2, 3.0, -2.0], [0.2, 3.0, 2.0], [0.2, -1.0, 2.0]]);
+        let ww = crate::world::CollisionWorld::from_triangles(tris);
+        assert!(place_object(&ww, [0.0, 0.4, 0.0], [0.0, 0.0, 1.0]).is_none(), "a wall within 0.37 refuses");
+        // a 0.4-wide pillar top cannot support the 0.6 reach
+        let narrow = crate::world::CollisionWorld::from_triangles(floor(0.04));
+        assert!(place_object(&narrow, [0.0, 0.4, 0.0], [0.0, 0.0, 1.0]).is_none(), "a narrow ledge refuses");
+        // Sister: the same wall 0.45 away (0.45 − 0.5 = −0.05 > −0.13) allows the seat.
+        let mut tris = floor(1.0);
+        tris.push([[0.45, -1.0, -2.0], [0.45, 3.0, -2.0], [0.45, -1.0, 2.0]]);
+        tris.push([[0.45, 3.0, -2.0], [0.45, 3.0, 2.0], [0.45, -1.0, 2.0]]);
+        let ok = crate::world::CollisionWorld::from_triangles(tris);
+        assert!(place_object(&ok, [0.0, 0.4, 0.0], [0.0, 0.0, 1.0]).is_some(), "a wall 0.45 away still seats");
     }
 }
