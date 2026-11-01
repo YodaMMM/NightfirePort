@@ -10,7 +10,7 @@ sign. Port the draws in the game's order with the addresses, check determinism
 moves (say which, and why the new value is the game's). Run the gas/breath/smoke binaries,
 ai_live and nf-game; quote the totals.
 
-## gas-rng-draws — done (2026-11-01 23:15 UTC)
+## gas-rng-draws — done (2026-11-01 22:33 UTC)
 
 The port's `Gas_Init` sites consumed no shared-RNG draws; the game's do. Ported, in the game's
 order: the spin `Rand_FRand(π/2·REC_FRAME_RATE)` [M 0x1ab060], quartered for kind 0xb
