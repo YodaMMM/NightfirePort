@@ -12,9 +12,12 @@
 //!    chopped baselines, the OK row centred in its 403-wide column in 0x645a4cff, no shadow.
 //! 4. The flow: ✕ opens the box (select blip, the box page's sound gates), ~V ticks without
 //!    moving anything, △ closes it silently, ✕ closes it with the blip; the pause gates return.
-//! 5. The sizing bookkeeping: the first box of a pause is sized for 0 lines, each later one for
-//!    the previous box's text; a new pause starts over.
-//! 6. The overlay: the box hides the objectives list and draws the fill over the button rect.
+//! 5. The sizing: every box, the first of a pause included, is sized for its own wrapped text
+//!    (the 0x44 push's Page_Update counts the memo before msg 0x65 reads it).
+//! 6. The overlay: the box hides the objectives list and draws the fill over the button rect,
+//!    at half alpha (`psiDrawSprites` halves the sprite alpha byte).
+//! 7. The wrap: `Font_WordWrapString`'s measure (spaces free, +1 per glyph, the stop checked
+//!    before each character, none after the last); (NF_ISO) the 05 hint breaks after "front".
 
 use nf_formats::menudef::{ControlDef, MenuDef};
 use nf_view::fe_pages::*;
@@ -170,31 +173,71 @@ fn the_box_takes_the_lists_input_and_sounds() {
 }
 
 #[test]
-fn each_box_is_sized_by_the_previous_box_of_the_pause() {
+fn every_box_is_sized_by_its_own_text() {
+    let font = test_font();
+    // test_font's game measure: 8 + 0 + 8 + 1 = 17 per glyph, spaces free; 368 wide → 21 glyphs.
+    let long = "aaaa bbbb cccc dddd eeee ffff gggg hhhh iiii jjjj kkkk";
+    let v = menu::hint_box_view(long, "OK", &font);
+    assert_eq!(v.lines.len(), 3, "{:?}", v.lines);
+    assert_eq!(v.size_lines, 3, "the box counts its own lines");
+    let (b, _, l) = hintbox_rects(v.size_lines, v.memo_stride);
+    assert_eq!((b[1], b[3], l[1]), (161, 126, 161 + 51 + 30), "3 · 17 + 75 = 126 tall, y = (448 − 126)/2");
+    // The first box of a pause and the reopened box are the same box (the flow keeps no count).
     let mut fe = fe_with_rows(3);
     fe.action(Action::Confirm);
-    assert_eq!((fe.pause_hint, fe.pause_hint_sized), (Some(0x0400_0021), None), "the first box: 0 lines");
-    fe.action(Action::Confirm);
-    fe.action(Action::Down);
-    fe.action(Action::Confirm);
-    assert_eq!((fe.pause_hint, fe.pause_hint_sized), (Some(0x0400_0022), Some(0x0400_0021)), "sized by row 0's text");
-    fe.action(Action::Back);
-    fe.action(Action::Confirm);
-    assert_eq!(fe.pause_hint_sized, Some(0x0400_0022), "re-opening the same row sizes it right");
-    // A new pause is a new manager: the count starts over.
-    fe.action(Action::Back);
-    fe.page = Page::Main;
-    assert!(fe.open_pause());
-    assert_eq!((fe.pause_hint_sized, fe.pause_hint_last), (None, None));
-    // Sister: the hint-less row's box carries 0x31d and is what the next box is sized by.
-    fe.pause_objectives = vec![PauseObjective { text: 1, hint: 0xffff_ffff, done: false }, PauseObjective { text: 2, hint: 5, done: false }];
-    fe.pause_tab = 1;
-    fe.pause_objectives_sel = 0;
+    let first = menu::pause_hint_view(&fe, &font, None);
     fe.action(Action::Confirm);
     fe.action(Action::Confirm);
-    fe.pause_objectives_sel = 1;
-    fe.action(Action::Confirm);
-    assert_eq!((fe.pause_hint, fe.pause_hint_sized), (Some(5), Some(0x31d)));
+    assert_eq!(menu::pause_hint_view(&fe, &font, None), first, "reopened = first");
+    // Sister: a shorter text sizes a shorter box — nothing carries over from the previous box.
+    let short = menu::hint_box_view("aaaa", "OK", &font);
+    assert_eq!(short.size_lines, 1);
+    assert_ne!(hintbox_rects(short.size_lines, short.memo_stride), hintbox_rects(v.size_lines, v.memo_stride));
+    // No text: no lines, the 75-unit box.
+    assert_eq!(menu::hint_box_view("", "OK", &font).size_lines, 0);
+}
+
+#[test]
+fn the_wrap_is_font_word_wrap_strings() {
+    let font = test_font();
+    // The width is checked before each character and not after the last: "aa bb" (68) keeps one
+    // line at 60, while "aa bb c" stops on the space after "bb" and cuts back to "aa".
+    assert_eq!(menu::font_word_wrap("aa bb", &font, 60.0), vec!["aa bb"]);
+    assert_eq!(menu::font_word_wrap("aa bb c", &font, 60.0), vec!["aa", "bb c"]);
+    // Spaces are free: "a a a" is 3 · 17 = 51 < 52.
+    assert_eq!(menu::font_word_wrap("a a a x", &font, 52.0), vec!["a a a x"]);
+    assert_eq!(menu::font_word_wrap("a a a xx", &font, 52.0), vec!["a a a", "xx"]);
+    // A newline ends the line; "\n\n" gives an empty line.
+    assert_eq!(menu::font_word_wrap("HINT\n\nab", &font, 368.0), vec!["HINT", "", "ab"]);
+    // No break point: the line is cut one character before the stop.
+    assert_eq!(menu::font_word_wrap("aaaaa", &font, 40.0), vec!["aa", "aaa"]);
+    assert!(menu::font_word_wrap("", &font, 368.0).is_empty());
+    // Sister: the port's layout measure (spaces 1.25 × 3, no +1) breaks "aa bb" at 60.
+    assert_eq!(menu::wrap_px_for_test("aa bb", &font, 60.0), vec!["aa", "bb"]);
+}
+
+/// (NF_ISO) 07000005's front-door hint wraps where the PS2 wraps it: after "front", "you" and
+/// "other", six memo lines with the HINT title and the blank line.
+#[test]
+fn the_05_hint_breaks_after_front() {
+    let Some(iso) = std::env::var("NF_ISO").ok() else { eprintln!("NF_ISO not set — skipping"); return };
+    let image = nf_formats::iso9660::IsoImage::open(&iso).expect("the ISO opens");
+    let (entries, bin) = nf_formats::disc::files_bin_entries(&image).expect("FILES.BIN");
+    let fe_ = entries.iter().find(|e| e.name.eq_ignore_ascii_case("USATxt.dat")).expect("USATxt.dat");
+    let bytes = image.read_bytes(bin.lba as u64 * 2048 + fe_.offset as u64, fe_.size as u64).expect("read");
+    let lang = nf_formats::hud::Lang::parse(&bytes).expect("the lang parses");
+    let elf = image.read_file(image.find("/ACTION.ELF").expect("ACTION.ELF")).expect("read ACTION.ELF");
+    let font = nf_formats::hud::HudTables::from_action_elf(&elf).expect("HUD tables").font;
+    let text = lang.bind(0x0400_005b).expect("label 0x0400005b");
+    let v = menu::hint_box_view(text, "", &font);
+    let last_words: Vec<&str> = v.lines.iter().map(|(l, _)| l.rsplit(' ').next().unwrap_or("")).collect();
+    assert_eq!(v.lines.len(), 6, "{:?}", v.lines);
+    assert_eq!((v.lines[0].0.as_str(), v.lines[1].0.as_str()), ("HINT", ""));
+    assert_eq!(&last_words[2..5], &["front", "you", "other"], "{:?}", v.lines);
+    assert_eq!(v.size_lines, 6);
+    // Sister: the port's layout measure fits "door," on the first line.
+    let port = menu::wrap_px_for_test(text.split("\n\n").nth(1).unwrap(), &font, 368.0);
+    assert_eq!(port[0].rsplit(' ').next(), Some("door,"));
 }
 
 fn test_font() -> nf_formats::hud::Font {
@@ -232,11 +275,19 @@ fn the_overlay_hides_the_list_and_draws_the_box() {
     let before = menu::menu_overlay(&fe, &font, &font, None, &tex, 4.0 / 3.0);
     fe.action(Action::Confirm);
     let after = menu::menu_overlay(&fe, &font, &font, None, &tex, 4.0 / 3.0);
-    // The fill: one quad of 0x03000042 exactly over the 0-line box (60,186,392×75).
+    // The fill: one quad of 0x03000042 exactly over the box — no lang, so no text: 0 lines,
+    // (60,186,392×75).
     let fill = |f: &nf_view::gpu::HudFrame| quads(f, slot(ATLAS_BUTTONS)).into_iter()
         .filter(|q| (q.0 - 60.0).abs() < 0.01 && (q.1 - 186.0).abs() < 0.01 && (q.2 - 452.0).abs() < 0.01 && (q.3 - 261.0).abs() < 0.01).count();
     assert_eq!(fill(&after), 1, "the box's fill");
     assert_eq!(fill(&before), 0, "sister: no box before the ✕");
+    // The fill is black at half alpha: 0x0000007f's alpha byte halved to 0x3f (psiDrawSprites).
+    let fill_c: Vec<[f32; 4]> = after.runs.iter().filter(|r| r.0 == slot(ATLAS_BUTTONS))
+        .flat_map(|&(_, _, first, count)| after.v[first as usize..(first + count) as usize].iter().map(|v| v.c).collect::<Vec<_>>())
+        .filter(|c| c[0] == 0.0 && c[1] == 0.0 && c[2] == 0.0).collect();
+    assert!(!fill_c.is_empty() && fill_c.iter().all(|c| (c[3] - 63.0 / 128.0).abs() < 1e-6), "{fill_c:?}");
+    // Sister: the word itself reads 0x7f/128 without the halving.
+    assert!((menu::sprite_colour(0x0000_00ff)[3] - 127.0 / 128.0).abs() < 1e-6);
     // The objectives list (the rows' "(objective)" fallback text and markers) is hidden.
     let text = |f: &nf_view::gpu::HudFrame| quads(f, slot(0x0300_0003)).len();
     assert!(text(&after) < text(&before), "the list's glyphs are gone under the box: {} → {}", text(&before), text(&after));

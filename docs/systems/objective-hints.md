@@ -102,13 +102,28 @@ selection mode 1. SET 0xb COMPONENT 0 is one instance — texel (32,19) of 0x030
   button h = text + rows·0x15 + 0x36 (rows = 1), y = (448 − h)/2; memo y = y + 10; list y = y + text + 0x1e. The
   memo pitch is the face's extent × 0.01f × 100 (msg 0x75 100) and the EE `mul.s` chops: 18 → 17.999998, so the
   integer pitch is 17 [M 0x21e108 case 0x75, disasm 0x21e34c-0x21e364].
-- **Which line count**: msg 0x65 is read BEFORE the box's own Memo_Update. The text's msg 0x18 runs Memo_Update only
-  when the box page has a focused control and is not hidden: the first box of a pause finds +0xac = 0 (Page_Init
-  [M 0x21f1c0]), every later one finds the page's +0x7a = 1 left by the previous close (the 0x44 back to the pause
-  page [M 0x21c858 case 0x44]); the 0x44 that pushes the box plays the window's 0x4c script (slot 0 = 0x2000000f)
-  instead of a Page_Update [M Script_PlayDefault 0x220350]. So the box is sized for the PREVIOUS box's lines in
-  this pause, and the first box of each pause (a fresh manager, Memo_Init's count 0) for 0 lines: 75 tall, with the
-  hint's lines running past its bottom and the OK row at y + 30 among them. A PCSX2 look should confirm this.
+- **Which line count**: the box's own text, the first box of a pause included. `Menu_CreateOptionBox` sends the memo
+  its text first (msg 0x18 stores +0x1dc even when it does not re-lay the memo [M Memo_SendMessage 0x21e108 case
+  0x18]). It then pushes the box page with msg 0x44 (jal 0x21c858 at 0x1f9770). The 0x44 clears the new page's +0x7a,
+  plays the window's 0x4c script (slot 0 = 0x2000000f, so no Page_Update there [M Script_PlayDefault 0x220350]),
+  and after its page loop runs `Page_Update(manager, +0x1bc, 0)` on the box page unconditionally [M jal 0x21edc8 at
+  0x21cf30, a1 = +0x1bc in the delay slot 0x21cf34, after the loop exit at 0x21cf20]. Page_Update's control walk
+  (jal Menu_Update 0x1f1dc0 at 0x21f028; the manager is live, +0x1d1 = 1) runs Memo_Update with the page visible,
+  which wraps the text and counts +0x281. msg 0x65 (jal 0x1f1c18 at 0x1f980c) reads that count. [L the 07000005
+  pause: the first box, the reopened box and a second pause's first box are identical and fit their text.] An
+  earlier reading (each box sized by the previous one, the first 75 tall) missed that trailing Page_Update.
+- **Fill**: SET 0xb's 0x0000007f is black at half alpha on screen: `psiDrawSprites` 0x120e68 halves the sprite
+  alpha byte for the GS (`srl` at 0x120fe0, stored to SpriteColourA 0x30d70f at 0x121004) [M], so 0x7f draws as
+  0x3f/128. [L the backdrop behind the box is at 0.49-0.50 of its brightness.] The port: `menu::sprite_colour`.
+- **Wrap** [M Font_WordWrapString 0x1ef178:116-146]:
+  - the width is w − 16 (368);
+  - a space or tab sets the break point and costs nothing;
+  - every other glyph costs w + pre + post + kern + 1;
+  - the width is checked before each character and never after the last;
+  - the kern is `Font_GetKernAdjust` 0x1ee298's walk, which stops with 0 at the first pair below the character
+    (disasm 0x1ee3ac), so on the ascending pair lists only the first pair can match.
+  - On 05's front-door hint, "...the front door," measures 370 and so breaks after "front", as on the PS2. The
+    port's `Font::layout` measures it at 357. The port: `menu::font_word_wrap`.
 - **Memo lines** [M Memo_Update 0x21e490:121-152]: wrapped at w − 16 in FONTSerpLight, x = memo.x + trunc((w −
   extent)/2) + 2, baseline trunc(k·pitch + memo.y + trunc(pitch)) (chopped adds), no vertical centring (msg 0x66 0),
   the −1,−1 shadow pass, colour 0x645a49ff.
@@ -125,8 +140,8 @@ selection mode 1. SET 0xb COMPONENT 0 is one instance — texel (32,19) of 0x030
   MENU_SOUND 3 (0x1d8) / 4 (0x1d9). The close returns the gates to the pause page's 0xb.
 
 The port: `fe_pages::{SETB_BUTTON, HINTBOX_*, hintbox_rects, hintbox_memo_stride, hintbox_list_stride, HintBoxView,
-hintbox_elems}`, `FrontEnd::{open_objective_hint, close_objective_hint, pause_hint_sized, pause_hint_last}`,
-`menu::pause_hint_view` + `draw_hint_box` (pause_page's tail).
+hintbox_elems}`, `FrontEnd::{open_objective_hint, close_objective_hint}`, `menu::{pause_hint_view, hint_box_view,
+font_word_wrap, sprite_colour}` + `draw_hint_box` (pause_page's tail).
 
 ### Selection state
 
@@ -161,7 +176,7 @@ The draw puts the yellow cursor at it (the port's old code pinned the cursor to 
   entering the tab re-selects the last row.
 - The host's render path pre-opens the box for screenshots: `--page pause --pause-tab 1 --pause-hint` opens it
   through `open_objective_hint` after the objectives fill (the first box of a pause); `--pause-hint-again` opens,
-  closes and re-opens it (a box sized by the previous one) (crates/nf-view/src/lib.rs).
+  closes and re-opens it (the reopened box, the same as the first) (crates/nf-view/src/lib.rs).
 
 ## 5. Tests
 
@@ -170,8 +185,8 @@ parts included, the part stop, text/hint passthrough, the −1 sentinel untouche
 objective_hints_flow.rs` — the flow (the last-row initial selection, ✕ on row N opens row N's hint, the 0x31d
 fallback, the modal, Back closing, the re-selection on tab entry; one NF_ISO-gated check binds 0x202/0x31d/0x266
 from the disc's USATxt.dat). `crates/nf-view/tests/pause_hint_box.rs` — the box (§2b): the disc's page controls
-and SETs, the chopped geometry, the element list, the input / sound flow, the sizing bookkeeping, the overlay, and
-the Controls page's cream Y-Axis row. Each has a sister assertion that can fail.
+and SETs, the chopped geometry, the element list, the input / sound flow, the own-text sizing, the overlay and its
+half-alpha fill, the wrap (synthetic, and 05's hint on the disc), and the Controls page's cream Y-Axis row. Each has a sister assertion that can fail.
 
 ## 6. Live checks (open)
 

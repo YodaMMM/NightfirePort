@@ -334,7 +334,8 @@ pub const SETC_BUTTON: [CompInst; 6] = [
 
 /// SET 0xb COMPONENT 0 — the mission menu defs' option-box frame (the objective-hint box's
 /// button 0x1000011e): one instance, the white texel (32,19) of [`ATLAS_BUTTONS`] stretched over
-/// the whole rect (fractions 1, 1) in 0x0000007f, every state mask [D the 08000001 menu defs of
+/// the whole rect (fractions 1, 1) in 0x0000007f — black at half alpha once `psiDrawSprites`
+/// halves the alpha byte (`menu::sprite_colour`), every state mask [D the 08000001 menu defs of
 /// 0700000A / 07000005 / 07000009 â€” identical].
 pub const SETB_BUTTON: [CompInst; 1] = [ci([0, 0, 8, 8, 32, 19, 1, 1], 0x0000_007f, 0xfc, 1.0, 1.0)];
 
@@ -658,7 +659,7 @@ pub fn hintbox_list_stride(face_h: f32) -> f32 {
 }
 
 /// `Menu_CreateOptionBox` 0x1f9608:51-63's geometry, in the 512×448 space: `text` = the memo's
-/// line count (msg 0x65, read BEFORE the box's own Memo_Update — see [`HintBoxView::size_lines`])
+/// line count (msg 0x65, counted by the 0x44 push's Page_Update — see [`HintBoxView::size_lines`])
 /// × the pitch's integer byte; `rows` = 1. The button gets h = text + rows·0x15 + 0x36 and
 /// y = (448 − h)·0.5; the memo y = button y + 10; the list y = button y + text + 0x1e. The x / w
 /// (and the memo / list heights) stay the controls' fixed-up rects ([`control_rect`]).
@@ -684,15 +685,10 @@ pub struct HintBoxView {
     /// The hint wrapped at memo w − 16 with FONTSerpLight, with each line's extent width
     /// [M Memo_Update 0x21e490:110-114 — the SET 2 insets are 0]. Empty text → no lines.
     pub lines: Vec<(String, f32)>,
-    /// The memo's line count when the box opened — the box height reads msg 0x65 before the
-    /// box's own Memo_Update [M 0x1f9608:51-58 then :62]. The text's msg 0x18 updates the memo
-    /// only when the memo's page has a focused control (page+0xac) and is not hidden (page
-    /// +0x7a & 5) [M Memo_SendMessage 0x21e108 case 0x18; Memo_Update :67]: the first box of a
-    /// pause has no focus yet (Page_Init zeroes +0xac [M 0x21f1c0]) and every later one finds
-    /// the page hidden from the previous close (the 0x44 back to the pause page sets the box
-    /// page's +0x7a = 1 [M Manager_SendMessage 0x21c858 case 0x44]). So the count is the
-    /// PREVIOUS box's lines in this pause, 0 for the first (a fresh `MenuManager_Create` per
-    /// pause, Memo_Init's +0x281 = 0 [M 0x21df38]).
+    /// The memo's line count (msg 0x65) the box is sized by — the box's own text: the push's
+    /// msg 0x44 ends with a `Page_Update` of the box page (jal 0x21edc8 at 0x21cf30), whose
+    /// Memo_Update counts the text msg 0x18 stored, before `Menu_CreateOptionBox` reads 0x65
+    /// [M; `menu::hint_box_view` has the chain]. The first box of a pause is no exception.
     pub size_lines: u32,
     pub memo_stride: f32,
     pub list_stride: f32,

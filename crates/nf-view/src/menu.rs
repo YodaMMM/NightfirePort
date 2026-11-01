@@ -2465,13 +2465,6 @@ pub struct FrontEnd {
     /// `option_return`, set by C_LBMSGOPTIONS's 0x4b/0x6d arms) — the port's modal state IS the
     /// option_return [docs/systems/menu-alpha-text-messages.md].
     pub pause_hint: Option<u32>,
-    /// pause-hint: the label whose wrapped line count sized the open box — the memo's line count
-    /// as the PREVIOUS box of this pause left it (None = 0 lines, the first box of a pause)
-    /// [M Menu_CreateOptionBox 0x1f9608:51-58 reads msg 0x65 before its own Memo_Update; see
-    /// `fe_pages::HintBoxView::size_lines`].
-    pub pause_hint_sized: Option<u32>,
-    /// pause-hint: the last hint label a box showed in this pause (the memo's text).
-    pub pause_hint_last: Option<u32>,
     /// fix-save-profile: the port's memory card — the profiles dir next to the port's config,
     /// one file per codename [M Menu_UpdateMessageBox 0x1f7de8:19/28 passes the codename buffer
     /// 0x2e1ae8 to LS_Load/LS_Save as the file name]. The host points it at the dir; None keeps
@@ -3146,8 +3139,6 @@ impl FrontEnd {
             pause_objectives_sel: 0,
             pause_hint: None,
             // pause-hint (each new field on its own line [WORKLOG lesson 4]).
-            pause_hint_sized: None,
-            pause_hint_last: None,
             // fix-save-profile (each new field on its own line [WORKLOG lesson 4]).
             profile_dir: None,
             profiles: Vec::new(),
@@ -4527,10 +4518,6 @@ impl FrontEnd {
             // objective-hints: a fresh pause has no hint box up and the objectives list's
             // selection comes from the tab's populate (per-entry reset [M 0x204840-0x204850]).
             self.pause_hint = None;
-            // pause-hint: the manager is new, so the box page's memo is too (Memo_Init's line
-            // count 0 [M 0x21df38]) — the first box of this pause is sized for 0 lines.
-            self.pause_hint_sized = None;
-            self.pause_hint_last = None;
             self.pause_objectives_sel = 0;
             true
         } else { false }
@@ -4542,7 +4529,7 @@ impl FrontEnd {
     /// (msg 0x44 arg 2 keeps the pause page drawn beneath [M Manager_SendMessage 0x21c858 case
     /// 0x44: bit 2 parks it in +0x1c0, still updated each frame [M MenuManager_Update
     /// 0x21c3d8]]) and re-keys the sound gates to the box page's (`Menu_EnableSounds` → 9
-    /// [M 0x1f31f0 default arm]). The box is sized for the memo's previous line count
+    /// [M 0x1f31f0 default arm]). The box is sized for this hint's own lines
     /// (`fe_pages::HintBoxView::size_lines`). Returns false with no rows.
     pub fn open_objective_hint(&mut self) -> bool {
         let n = self.pause_objectives.len();
@@ -4551,8 +4538,6 @@ impl FrontEnd {
         // No-hint records (−1 = 0xffffffff) show label 0x31d [M 0x204408 `if (iStack_304 == -1)
         // iStack_304 = 0x31d`].
         let hint = if hint == 0xffff_ffff { 0x31d } else { hint };
-        self.pause_hint_sized = self.pause_hint_last;
-        self.pause_hint_last = Some(hint);
         self.pause_hint = Some(hint);
         self.enabled_sound_flags = menu_enable_sounds(crate::fe_pages::HINTBOX_PAGE);
         true
@@ -9857,6 +9842,15 @@ pub fn menu_overlay_fonts(fe: &FrontEnd, font: &nf_formats::hud::Font, hfont: &n
 
 /// A game colour word 0xRRGGBBAA as the overlay's colour: the channels over 0x80 = 1.0 and the
 /// alpha byte clamped to 0x80 [M Label_Update 0x218cb8:116-121].
+/// A menu sprite's colour word as the GS gets it: `psiDrawSprites` 0x120e68 hands the sprite's
+/// alpha byte over halved (`srl v1,v1,1` at 0x120fe0, stored to SpriteColourA 0x30d70f at
+/// 0x121004) [M], so 0xff draws at 0x7f/128 and the option box's 0x0000007f at 0x3f/128.
+/// [L the 07000005 hint box halves the pause backdrop behind it: 0.49-0.50 on six samples.]
+pub fn sprite_colour(c: u32) -> [f32; 4] {
+    let [r, g, b, _] = word_colour(c);
+    [r, g, b, ((c & 0xff) >> 1) as f32 / 128.0]
+}
+
 fn word_colour(c: u32) -> [f32; 4] {
     [(c >> 24) as f32 / 128.0, ((c >> 16) & 0xff) as f32 / 128.0, ((c >> 8) & 0xff) as f32 / 128.0, ((c & 0xff).min(0x80)) as f32 / 128.0]
 }
@@ -10202,26 +10196,124 @@ fn pause_page(h: &mut Hud, fe: &FrontEnd, font: &nf_formats::hud::Font, lang: Op
     }
 }
 
-/// pause-hint: the hint box's view this frame — the open hint's text wrapped at memo w − 16 in
-/// FONTSerpLight (the pause page's `font`), the size count from the previous box of this pause
-/// (`FrontEnd::pause_hint_sized`, wrapped the same way; 0 lines for none), the two pitches from
-/// the face's extent height and the OK row (Txt 0x266). None while no box is up.
+/// pause-hint: the hint box's view this frame — [`hint_box_view`] over the open hint's text and
+/// the OK row (Txt 0x266). None while no box is up.
 pub fn pause_hint_view(fe: &FrontEnd, font: &nf_formats::hud::Font, lang: Option<&Lang>) -> Option<crate::fe_pages::HintBoxView> {
-    use crate::fe_pages::{hintbox_list_stride, hintbox_memo_stride, HintBoxView, HINTBOX_MEMO, HINTBOX_OK_LABEL};
     let hint = fe.pause_hint?;
     let bind = |id: u32| -> String { lang.and_then(|l| l.bind(id)).unwrap_or("").to_string() };
+    Some(hint_box_view(&bind(hint), &bind(crate::fe_pages::HINTBOX_OK_LABEL), font))
+}
+
+/// pause-hint: the option box's view for `text` — wrapped at memo w − 16 in FONTSerpLight (the
+/// pause page's `font`) by [`font_word_wrap`], the box sized for those same lines, the two
+/// pitches from the face's extent height and the OK row `ok`.
+///
+/// The size count is the box's OWN text, the first box of a pause included [M]:
+/// `Menu_CreateOptionBox` 0x1f9608 sends the memo its text (msg 0x18 stores +0x1dc whether or not
+/// it re-lays the memo [M Memo_SendMessage 0x21e108 case 0x18]), then pushes the box page with
+/// msg 0x44 (jal 0x21c858 at 0x1f9770). The 0x44 clears the new page's +0x7a and, after its
+/// page loop, runs `Page_Update(manager, manager+0x1bc, 0)` on it unconditionally [M
+/// Manager_SendMessage 0x21c858: jal 0x21edc8 at 0x21cf30, a1 = +0x1bc in the delay slot
+/// 0x21cf34, reached when the loop exits at 0x21cf20]. Page_Update's control walk (the manager is
+/// live, +0x1d1 = 1 [M MenuManager_Create 0x21b908:132]) calls `Menu_Update` (jal 0x1f1dc0 at
+/// 0x21f028) → `Memo_Update` 0x21e490 with the page visible, which wraps +0x1dc and counts
+/// +0x281 [M :154-220]. The msg 0x65 that sizes the box (jal 0x1f1c18 at 0x1f980c) comes after.
+/// [L the 07000005 pause: the first box, the reopened box and the second pause's first box
+/// are identical and fit their text.]
+pub fn hint_box_view(text: &str, ok: &str, font: &nf_formats::hud::Font) -> crate::fe_pages::HintBoxView {
+    use crate::fe_pages::{hintbox_list_stride, hintbox_memo_stride, HintBoxView, HINTBOX_MEMO};
     let m = crate::fe_pages::control_rect(HINTBOX_MEMO.0, 200, HINTBOX_MEMO.1, HINTBOX_MEMO.2, HINTBOX_MEMO.3, HINTBOX_MEMO.4);
-    let wrap = |s: &str| -> Vec<(String, f32)> {
-        // Font_WordWrapString hands back nothing for an empty string [M Memo_Update 0x21e490:108-116].
-        if s.is_empty() { return Vec::new(); }
-        wrap_px(s, font, (m[2] - 16) as f32).into_iter().map(|l| { let w = font.layout(&l, 0.0, 0.0).1; (l, w) }).collect()
-    };
-    let lines = wrap(&bind(hint));
-    let size_lines = fe.pause_hint_sized.map_or(0, |id| wrap(&bind(id)).len() as u32);
-    let ok = bind(HINTBOX_OK_LABEL);
-    let okw = font.layout(&ok, 0.0, 0.0).1;
+    // The memo's wrap width: w − (the SET 2 insets 0 + 0x10) − 0 [M Memo_Update 0x21e490:174-177].
+    let lines: Vec<(String, f32)> = font_word_wrap(text, font, (m[2] - 16) as f32)
+        .into_iter().map(|l| { let w = font.layout(&l, 0.0, 0.0).1; (l, w) }).collect();
+    let size_lines = lines.len() as u32;
+    let okw = font.layout(ok, 0.0, 0.0).1;
     let fh = font.line_height();
-    Some(HintBoxView { lines, size_lines, memo_stride: hintbox_memo_stride(fh), list_stride: hintbox_list_stride(fh), ok: (ok, okw) })
+    HintBoxView { lines, size_lines, memo_stride: hintbox_memo_stride(fh), list_stride: hintbox_list_stride(fh), ok: (ok.to_string(), okw) }
+}
+
+/// `Font_WordWrapString` 0x1ef178 at scale 1, called until the text runs out (Memo_Update's loop
+/// [M 0x21e490:166-224]). Each call takes one line:
+/// - Before each character it stops once the running measure has reached `max_w`
+///   (`if (width <= acc) break`), so the character that crosses the width is still counted and
+///   the stop lands on the next one.
+/// - A space or tab sets the break point (just after it) and adds nothing to the measure.
+/// - Every other character adds w + pre + post + kern(prev, c) + 1 for its glyph (+4, +0xa, +0xc
+///   of the 0x18-byte record) [M :129-146]. 0x92 measures as 0x27.
+/// - A newline ends the line there.
+/// - Stopping cuts the line back to the last break point. With none, it cuts one character
+///   short of the stop.
+/// - Running off the end of the text keeps it all: the width is not checked after the last
+///   character.
+///
+/// The returned lines drop the break's trailing space (the drawn extent is the port's
+/// `Font::layout`; the PS2 frames show the broken lines centred like the last one).
+///
+/// The game's measure differs from `Font::layout`, which charges spaces 1.25 × the space advance
+/// and has no +1 per glyph. On 07000005's first hint, "...through the front door," is 370 by
+/// this measure, over the memo's 368, and 357 by `layout`. [L the PS2 breaks after "front".]
+pub fn font_word_wrap(s: &str, font: &nf_formats::hud::Font, max_w: f32) -> Vec<String> {
+    let chars: Vec<char> = s.chars().collect();
+    let mut out = Vec::new();
+    let mut start = 0usize;
+    // Font_WordWrapString returns no line for an empty string [M :101-103].
+    while start < chars.len() {
+        let rest = &chars[start..];
+        let (mut acc, mut brk, mut prev, mut i) = (0.0f32, 0usize, 0u32, 0usize);
+        let mut stopped = false;
+        let mut newline = false;
+        while i < rest.len() {
+            if max_w <= acc { stopped = true; break; }
+            let c = rest[i];
+            i += 1;
+            let code = match c as u32 { 0x92 | 0x2019 => 0x27, v => v };
+            match c {
+                '\t' | ' ' => brk = i,
+                '\n' => { brk = i; newline = true; break; }
+                _ => if let Some(g) = game_glyph(font, code) {
+                    acc += game_kern(font, code, prev) + g.pre as f32 + g.post as f32 + g.w as f32 + 1.0;
+                },
+            }
+            prev = code;
+        }
+        let end = if newline || stopped {
+            if brk == 0 { if stopped { i.saturating_sub(1) } else { brk } } else { brk }
+        } else { rest.len() };
+        if end == 0 { break; } // the game returns no line and Memo_Update stops [M :167]
+        let line: String = rest[..end].iter().collect();
+        out.push(line.trim_end_matches(['\n', ' ', '\t']).to_string());
+        start += end;
+    }
+    out
+}
+
+/// The glyph `Font_WordWrapString` / `Font_GetKernAdjust` look up for `code`: none outside the
+/// font's first..last, else the binary search over the code-sorted table — an exact hit, or the
+/// record the search ends on [M 0x1ef178:116-139].
+fn game_glyph(font: &nf_formats::hud::Font, code: u32) -> Option<&nf_formats::hud::Glyph> {
+    if code < font.first as u32 || code > font.last as u32 { return None; }
+    let (mut lo, mut hi) = (0i32, font.glyphs.len() as i32);
+    let mut mid = hi;
+    while lo <= hi {
+        mid >>= 1;
+        let g = font.glyphs.get(mid as usize)?;
+        if code < g.code as u32 { hi = mid - 1; } else if code == g.code as u32 { return Some(g); } else { lo = mid + 1; }
+        mid = lo + hi;
+    }
+    if hi < 0 { None } else { font.glyphs.get(hi as usize) }
+}
+
+/// `Font_GetKernAdjust` 0x1ee298(c, prev): prev's glyph's kern pairs, walked in order — the
+/// first pair whose character is below `c` ends the walk with 0, a match returns its signed
+/// adjustment. `c` is a signed char: 0x80 and above get 0.
+fn game_kern(font: &nf_formats::hud::Font, c: u32, prev: u32) -> f32 {
+    if c >= 0x80 || (c as u16) < font.first || (c as u16) > font.last { return 0.0; }
+    let Some(g) = game_glyph(font, prev & 0xff) else { return 0.0 };
+    for &(k, adj) in &g.kerns {
+        if (k as u32) < c { return 0.0; }
+        if k as u32 == c { return adj as f32; }
+    }
+    0.0
 }
 
 /// pause-hint: draws the box's elements above the pause page — the game pushes the box page at
@@ -10236,6 +10328,7 @@ fn draw_hint_box(h: &mut Hud, elems: &[crate::fe_pages::PageElem], font: &nf_for
         if c[3] <= 0.0 { continue; }
         match &e.what {
             ElemWhat::Tex { tex, uv } => {
+                let c = sprite_colour(e.colour);
                 if textures.iter().any(|(t, _)| t == tex) {
                     h.quad(Anchor::Centre, -6, *tex, 0, x, y, w, hh, *uv, (false, false), c);
                 } else {

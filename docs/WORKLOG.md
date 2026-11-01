@@ -37,6 +37,31 @@ test binary and the full suite (tools/test/suite.py); quote every total.
 - Pushed checkpoints after every step: 431f721a (branch+WORKLOG), 63709075 (stats merge),
   23cdee53 (fe-pages-2 merge), ade69a7f (the compile fixes).
 
+## pause-hint-2 (2026-10-31) — the hint box against PS2 captures: size, fill, wrap
+
+- **Sizing (failed reading corrected).** The pause-hint entry below says each box is sized for the previous box's
+  text, so the first box of a pause is 75 tall. PS2 captures of 07000005 refute it: the first box, the reopened box
+  and a second pause's first box are identical and fit their own text. Re-reading the decompile, msg 0x44 (jal at
+  0x1f9770) ends with an unconditional `Page_Update(manager, +0x1bc, 0)` on the box page (jal 0x21edc8 at 0x21cf30,
+  after the page loop) [M]. That update runs Memo_Update with the page visible, so the text msg 0x18 stored is
+  counted before msg 0x65 (0x1f980c). The earlier pass read the 0x4c script arm and missed the post-loop call.
+  `pause_hint_sized` / `pause_hint_last` are gone. `menu::hint_box_view` sizes the box for its own lines.
+- **Fill.** `psiDrawSprites` 0x120e68 halves the sprite alpha byte (srl at 0x120fe0, SpriteColourA at 0x121004)
+  [M], so 0x0000007f draws at 0x3f/128. The PS2 frame halves the backdrop (0.49-0.50) and so does the port now
+  (0.50-0.51). `menu::sprite_colour`, used by the hint box only. `word_colour` elsewhere still reads the alpha
+  byte unhalved; other menu sprites were not re-checked.
+- **Wrap.** `menu::font_word_wrap` ports `Font_WordWrapString` 0x1ef178's measure:
+  - spaces and tabs are free;
+  - each glyph costs w + pre + post + kern + 1;
+  - the width is checked before each character and not after the last.
+  05's front-door hint now breaks after "front", "you" and "other", as on the PS2. `Font::layout`'s measure fitted
+  "door," on line 1.
+- **Kern finding (not changed).** `Font_GetKernAdjust`'s walk stops at the first pair below the character
+  (disasm 0x1ee3ac), and the pair lists are ascending. So only a glyph's first pair can ever apply. The port's
+  `Font::layout` applies any matching pair. The wrap port follows the game; the drawn layout is unchanged.
+- tests/pause_hint_box.rs: 9 tests. The sizing test now pins own-text sizing, the overlay test the half-alpha fill.
+  Two new tests cover the wrap: a synthetic one, and 05's hint on the disc.
+
 ## pause-hint (2026-10-31) — the objective-hint box drawn and driven
 
 - The pause OBJECTIVES tab's ✕ box (option-box page 0x4000002f) is now drawn: SET 0xb's one fill
