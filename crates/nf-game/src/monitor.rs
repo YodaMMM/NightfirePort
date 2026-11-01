@@ -123,9 +123,10 @@ impl Monitors {
     }
 
     /// The bullet arm (`Monitor_ApplyDamage`): health − damage < 0 → state 3 + the explode event.
-    /// Returns true when this shot destroyed it. Immune monitors (param 1 != 0, health 0) never
-    /// die [M 0x1b08b0:16-21].
-    pub fn bullet_hit(&mut self, a: V3, b: V3, damage: f32) -> bool {
+    /// Returns the destroyed monitor's position when this shot destroyed one — the blast sits at
+    /// THAT monitor's obj+0x80 [M Monitor_Update 0x1afcc8:44-46], not at whichever monitor died
+    /// first. Immune monitors (param 1 != 0, health 0) never die [M 0x1b08b0:16-21].
+    pub fn bullet_hit(&mut self, a: V3, b: V3, damage: f32) -> Option<V3> {
         for m in &mut self.list {
             if m.state == 3 || m.health <= 0.0 { continue; }
             // The use-sphere stand-in (crate::props::seg_box's rule): the segment's AABB against
@@ -137,11 +138,11 @@ impl Monitors {
                 if m.health < 0.0 {
                     m.state = 3;
                     m.watched = None;
-                    return true;
+                    return Some(m.pos);
                 }
             }
         }
-        false
+        None
     }
 }
 
@@ -184,11 +185,11 @@ mod tests {
         assert!(mons.activate(0, &sensors) == false, "no same-group sensor → the activate refuses");
         // A 1.0-health console dies to one 25-damage bullet [M Monitor_ApplyDamage].
         let mut mons = Monitors { list: vec![monitor()] };
-        assert!(mons.bullet_hit([-1.0, 6.0, 0.0], [1.0, 6.0, 0.0], 25.0));
+        assert_eq!(mons.bullet_hit([-1.0, 6.0, 0.0], [1.0, 6.0, 0.0], 25.0), Some([0.0, 6.0, 0.0]));
         assert_eq!(mons.list[0].state, 3, "state 3 [M Monitor_ApplyDamage]");
         // The sister miss.
         let mut mons = Monitors { list: vec![monitor()] };
-        assert!(!mons.bullet_hit([-1.0, 60.0, 0.0], [1.0, 60.0, 0.0], 25.0));
+        assert_eq!(mons.bullet_hit([-1.0, 60.0, 0.0], [1.0, 60.0, 0.0], 25.0), None);
         assert_eq!(mons.list[0].state, 0);
     }
 }

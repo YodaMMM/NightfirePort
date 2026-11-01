@@ -13968,12 +13968,18 @@ fn segment_hits_sphere(a: V3, b: V3, c: V3, r: f32) -> bool {
             // bounding-sphere radius obj+0x8C [M; M-dis 0x1afdb8-0x1afdf8] — f12 r·6 = the script
             // presentation scale (SCRIPTINFO+0x94), f13 r = the shake radius (+ fuse r/15), f14 0.5
             // = the damage (EXPLODEINFO+0x28; zeroed when r < 0.5), the 200s are u8 args, not damage
-            // [M-dis 0x17cc1c-0x17cd60]. The port's queue keeps the historical (3.0, 200.0, 3.0)
-            // stand-in — `Monitors` stores no per-monitor r yet [D monitor.rs], so the exact triple
-            // (r, 0.5, r·6) awaits the radius plumbing at creation.
-            if !net_world && self.monitors.bullet_hit(b.pos, end, b.damage) {
-                let m = self.monitors.list.iter().find(|m| m.state == 3).map(|m| m.pos);
-                if let Some(p) = m { self.pending_blasts.push((p, 3.0, 200.0, usize::MAX, 0, 0x0600_0027, 3.0, 0)); }
+            // [M-dis 0x17cc1c-0x17cd60]. The damage is the game's 0.5 (Explode_Create stores its
+            // third float, f14, at EXPLODEINFO+0x28 [M 0x17cbd0:79 `+0x28 = param_3`] — the same
+            // slot the mine's param 0 and the grenade's weapon_data+0x0C fill). The port used
+            // 200.0 here, 400 times the game's: a console blast took up to 80 of Bond's health on
+            // Agent. The blast sits at the destroyed monitor's own position (obj+0x80), not the
+            // first state-3 monitor in the list. The radius and scale keep the 3.0 stand-in —
+            // `Monitors` stores no per-monitor r (obj+0x8C) yet [D monitor.rs], so the exact
+            // (r, 0.5, r·6) triple still awaits the radius plumbing at creation.
+            if !net_world {
+                if let Some(p) = self.monitors.bullet_hit(b.pos, end, b.damage) {
+                    self.pending_blasts.push((p, 3.0, 0.5, usize::MAX, 0, 0x0600_0027, 3.0, 0));
+                }
             }
             // The 0x54 camera-subject detector rides the same pass (a shot marker, not a solid
             // contact — it does not consume the round [M props.rs camera_shot_hit]).
