@@ -5019,6 +5019,9 @@ impl Sim {
         // param is the ungated input the view chain's queue arm reads its edges from) — run must
         // not clobber it with the raw button.
         self.drones.bond_aiming = self.aiming;
+        // The crouch substate (player obj+0xF6 == 4 — the port folds it into the walk substate +
+        // `crouched`): `Drone_ProcessOpponents` 0x1390c0:40-42 scales Bond's visibility by 0.75.
+        self.drones.bond_crouched = self.bond.crouched && self.bond.substate == nf_game::player::SS_WALK;
         // The class byte the AI's `ObjectIsArmed` 0x178768 reads: Bond obj+0xdc+0x62. `Player_WeaponSelect`
         // 0x1a2cc0 copies the request (+0x63) into it at the switch's START (the `weapon_data[+0x64].+0xc4
         // == 0` arm — +0x64 is 0x47 from InitWeapon 0x1a7ef8:137-139), so mid-holster the AI already reads
