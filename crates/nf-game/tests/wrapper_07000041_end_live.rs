@@ -62,6 +62,8 @@ fn the_wrapper_interactive_records_params() {
     assert_eq!(movies[0].movie_code, 0, "the disc's movie code is 0 [D] — the E-arm loads nothing [M 0x1b2518-55]");
     assert!(trigs.iter().all(|t| t.next_level == 0), "no built trigger carries a next level [D]");
     // The 0xEA pair's outs: ch 1 (the approach chain, E-armed) and ch 0x6e (auto-touch).
+    let ea: Vec<_> = ps.iter().filter(|p| p.flags & 0xff == 0xea).collect();
+    assert_eq!(ea.len(), 2, "the two 0xEA touch-once triggers [D]");
     let mut outs: Vec<(u32, u32)> = Vec::new();
     for p in &ea {
         outs.push((param(p, 0), param(p, 1)));
@@ -90,8 +92,8 @@ fn the_seven_scripts_carry_no_0x12_event() {
         }
     }
     kinds.sort();
-    assert_eq!(kinds, vec![0x3, 0x3, 0x3, 0x3, 0xf, 0xf, 0xf],
-        "the wrapper's event census: delay ×4 + callback ×3, NO 0x12, NO 0xd [D]");
+    assert_eq!(kinds, vec![0x3, 0x3, 0x3, 0x3, 0x3, 0x3, 0xf, 0xf, 0xf],
+        "the wrapper's event census (the full stream decode): delay ×6 + callback ×3, NO 0x12, NO 0xd [D]");
     // Sister: the truck script fires 0xC and 0xD — the same reader sees real events.
     let l05 = level_of("07000005.bin").unwrap();
     let truck = l05.nis.get(&0x0600_0a22).expect("the truck script parses");
