@@ -149,6 +149,11 @@ pub struct LeafFx {
     /// so a game-spawned leaf's cost is 0 and the 256-frame limit always kills first (the
     /// budget guard stays for the mechanism — [M 0x1abee0:22-27]).
     pub tick_cost: u8,
+    /// The spawning generator's index into `WorldFx::leafgens` — the leaf's link cel is the
+    /// generator's (`Leaf_Create` 0x1abc88 → `control_link_object_to_cel(leaf, gen+0x20)` once
+    /// the forced-object `build_LinkToRoom` 0x1c9680 returns 0 [M]), which fixes its draw tint
+    /// (the draw side's per-generator pool).
+    pub gen: u16,
     /// The counter-hash state for the wiring's per-tick draws (the G-033 discipline).
     counter: u32,
 }
@@ -717,7 +722,7 @@ impl WorldFx {
         self.leaves = alive;
         // LeafGens [M 0x1acc48]: the gate (counter-hash for Rand_Rand(30)), one `Leaf_Create`
         // spawn — the draw order and bands are the game's [M 0x1abc88:31-79], counter-hashed.
-        for l in &mut self.leafgens {
+        for (gi, l) in self.leafgens.iter_mut().enumerate() {
             l.counter = l.counter.wrapping_add(0x9e37_79b9);
             if jitter(l.counter, 11) * 30.0 < 1.0 {
                 l.spawned += 1;
@@ -755,6 +760,7 @@ impl WorldFx {
                     frames_left: 256,
                     budget: 0xff,
                     tick_cost: 0,
+                    gen: gi as u16,
                     counter: l.counter ^ (l.spawned << 8),
                 });
             }
@@ -1249,7 +1255,7 @@ mod leaf_tests {
         let mut rng = Rng::new(3);
         let mut leaf = LeafFx {
             pos: [0.0, 10.0, 0.0], rot: [0.0; 3], vel: [0.0, 0.0, 0.0], spin: [0.01, 0.0, 0.0],
-            frames_left: 300, budget: 200, tick_cost: 1, counter: 0,
+            frames_left: 300, budget: 200, tick_cost: 1, gen: 0, counter: 0,
         };
         let y0 = leaf.pos[1];
         for _ in 0..50 {
@@ -1277,7 +1283,7 @@ mod leaf_tests {
             let mut rng = Rng::new(seed as u32);
             let mut leaf = LeafFx {
                 pos: [1.0, 5.0, 2.0], rot: [0.0; 3], vel: [0.0; 3], spin: [0.0; 3],
-                frames_left: 30, budget: 255, tick_cost: 1, counter: 0,
+                frames_left: 30, budget: 255, tick_cost: 1, gen: 0, counter: 0,
             };
             for _ in 0..30 { leaf.tick(&mut rng); }
             leaf

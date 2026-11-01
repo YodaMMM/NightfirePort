@@ -58,11 +58,11 @@ pub struct Bullet {
     /// walk (0x12e2f0-0x12e390): each class-5 hitter whose weapon is the Laser watch 0x4E takes
     /// FRAME_RATE_MUL (1) off, its upgrade 0x4F takes 10 (the `FRAME_RATE_MUL * 10.0` arm).
     pub burn: i16,
-    /// The burned-out charge. The game's burn-out arm re-randomizes the fuse EVERY tick to
-    /// `60 + Rand_Rand(0x1518)` while the counter stays ≤ 0 [M 0x12e3cc-0x12e40c — the fuse never
-    /// decrements again, the charge never explodes]. The port LATCHES instead of redrawing the
-    /// shared bit-exact RNG per tick [*deviation*: the observable — no blast ever — is identical;
-    /// the game's per-tick `Rand_Rand(5400)` would shift every later draw for every witness].
+    /// The burned-out charge (`BU+0x102 < 1`). The game's burn-out arm redraws the fuse EVERY tick
+    /// to `60 + Rand_Rand(0x1518)` while the counter stays ≤ 0 [M 0x12d890:424-433,
+    /// 0x12e3cc-0x12e40c] — one shared-stream draw per tick, the fuse never reaches < 0 (the charge
+    /// never explodes), the countdown beep is skipped and the digits show the previous tick's
+    /// redrawn fuse (`tick_charge_fuse`).
     pub defused: bool,
     /// `obj+0xF4 = 3`: the landed state [M Bullet_CollisionHandler 0x12ce80 @0x12d1fc — a world
     /// hit for a `+0x70 & 0x100` record with no struck object → state 3, the rest clank

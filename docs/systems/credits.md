@@ -139,12 +139,23 @@ else **0x404040ff** [M 0x2152b0:83-88]. `GameState[0x52]` is the level-bonus/med
   `Str::Lit(&'static str)` / `Str::Space` / `Str::Null` + `kl/kr/w`) and `KIND_FORMAT`.
 - `crates/nf-view/src/credits.rs` — the timing model `CreditsRoll` (the handler's statics as
   fields; `tick()` returns the exit), getters `visible()` / `slot_y()` / `music_volume()` /
-  `lines_entered()`; consts for every number above. State + getters only — no drawing.
+  `lines_entered()`; consts for every number above. State + getters only (the draw is fe_pages.rs).
 - `crates/nf-view/src/menu.rs` — `Page::Credits` (id 0x40000030), `FrontEnd::credits` +
   `credits_from`, `open_credits(from_page, music_vol, bonus_flag)`; the tick integrates the roll
   and routes the delayed exit (ToMain → Page::Main, PopBack → the opener); the AV Options Credits
   row (0x10000138) confirms into `open_credits`. The draw reads
   `fe.credits.visible()`.
+- `crates/nf-view/src/fe_pages.rs` — `credits_elems(roll, bind)`, the page's element list
+  [D page 0x40000030]: the background 0x1000023c (512×448 after the full-screen arm, TEX
+  0x03000129 uv (0,0,511,511), colour 0x000000ff, or 0x404040ff with GameState[0x52]); per
+  visible line the left slot 0x10000213 (x 0x10, w 0x100, or 0x1e0 when wide) and on two-column
+  lines the right slot 0x10000214 (x 0xf0, w 0x100), h 14 (the authored 16 through
+  FixupResolution), cream, the kind's face (1 → FONTNFont2, 2 → FONTMedium, 0 → FONTSerpLight),
+  centred, no -1,-1 pass (msg 0x62/0 to both lists at enter); the fade 0x10000215 (one texel of
+  0x03000042) from alpha 0 to 0xff over 15 frames once `fading` stands [M Process_Create /
+  Process_RunFrame]. `menu::draw_page_elems` places each label like Label_Update 0x218cb8 (pen
+  y = trunc(y + (h>>1) + lh/2 − 1)). Pinned by `tests/fe_pages_draw.rs`;
+  `nf-view <iso> 07000048 --shot x.png --page credits --roll N` renders it.
 
 ## Live checks (open)
 

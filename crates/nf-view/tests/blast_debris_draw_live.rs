@@ -19,7 +19,7 @@ fn a_blast_debris_piece_rides_a_debris_slot() {
         let d = &mut scene.sim.as_mut().unwrap().drones;
         d.blast_debris.push(nf_game::shatter::Debris {
             model: nf_game::explode::METAL_HASH_132[0], pos, rot: [0.0; 3], vel: [0.0; 3], spin: [0.0; 3],
-            life: 50, fade: 0xff, e8: 1.0,
+            life: 50, fade: 0xff, e8: 1.0, draw: Default::default(),
         });
     }
     let (layout, _attrs) = scene.skin_layout();
