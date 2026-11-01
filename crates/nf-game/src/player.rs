@@ -1828,15 +1828,15 @@ self.local = [vs / k, vf / k];
             pick = world.capsule_pick_contact(a, b, RADIUS, self.pick_ref[1], self.pick_ref);
             floor = world.segment_hit(self.pos, to);
         }
+        let _ = pick;
         // The game's pick-contact bit block [M Intersect_CylGeom 0x109da0 disasm 0x10a5e0-0x10a734]:
         // dot1 = dot(face normal, axis) > 0.7 (0x10a650-0x10a674, up-facing faces only), dot2 =
         // dot(HITTEST+0x50 − (B + push), axis) < 0 (0x10a66c-0x10a6a0), dot3 = dot(normalize(R),
         // axis) < 0.7 (0x10a6a8-0x10a734). The port's dot2 MODEL — HITTEST+0x50 as a lifetime push
         // accumulator, so the arm reduces to `pick_ref_y < b_pre_y` — that reading (the 0c3
-        // attempt) rests on the bit word's unpinned per-tick clear; the pick result is MEASURED
-        // here and, since level-03-fall-through-floor, gates `grounded` (the game's ground flag is
-        // `+0x9c != 0 || ray in band` [M 0x194188:176-185] — see the grounded line below; the 0c
-        // hatch set, the real walked route and the 0700004a descent re-ran green on it). Feeding
+        // attempt) rests on the bit word's unpinned per-tick clear; the pick result is MEASURED here but
+        // does NOT gate `grounded` (hatch-crouch-0c4): the 0c hatch set, the real walked route and
+        // the 0700004a descent are all green on master's `walkable || band` rule alone. Feeding
         // the accumulator stays [M Collide_Intersect 0x1ebaa8:353-373] for when the arm returns.
         // The contact-distance band [M Player_FeetOnPoint 0x194188:106 `*(float *)(hit + 0xc) - 0.1
         // <= cc`] reads HITDATA+0xC, which Intersect_RayGeom 0x10a8c8 fills with the ABSOLUTE
@@ -1857,16 +1857,9 @@ self.local = [vs / k, vf / k];
             let dy = self.pos[1] - hit_y;
             (dy * dy).sqrt() - 0.1 <= self.cc
         });
-        // The ground flag [M Player_FeetOnPoint 0x194188:176-185]: `obj_data+0x60 |= 8` when
-        // EITHER `HITTEST+0x9c != 0` (the capsule pick bit, set by the pick-bit block above) OR
-        // the ray found a floor in band — so the pick arm gates `grounded` beside `walkable`
-        // (walkable is the port's model of the capsule's up-facing floor contact, world.rs:814).
-        // The 0c3/0c4 readings had left pick measured-only; the 07000003 courtyard wall lip is
-        // the case that settles it: pressed against the lip at (12.61, −19.69) the band misses by
-        // 0.025 u (floor 1.16 below the root, cc+0.1 = 1.1347) and no walkable contact qualifies,
-        // so `walkable || band` alone left Bond hanging ungrounded over a floor the game's pick
-        // bit grounds (the flank walk's fall state, level-03-fall-through-floor).
-        self.grounded = walkable || band || pick;
+        // The pick arm is NOT gated into grounded — the pick result is measured only (see the pick
+        // bit block above).
+        self.grounded = walkable || band;
         // `BLData+0x110` — the port's floor_ny — is the band's OTHER output, and it is band-GATED:
         // FeetOnPoint writes `*param_3 = 1.0f` first [M 0x194188:85] and overwrites it with the
         // band-passed hit's +0x14 only inside the band [M :106-109]; the gravity gate reads that
