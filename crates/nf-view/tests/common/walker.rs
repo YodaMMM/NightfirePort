@@ -134,6 +134,11 @@ pub struct Walker {
     /// meet-plate lane into the east door's jamb. Default OFF: the walks tuned with the old
     /// behaviour keep it.
     pub sidestep_decays: bool,
+    /// Clear pushing guards before each nav leg (`clear_pushing_guards`), OPT-IN: the every-tick
+    /// bot push [M Collide_Jointy 0x1ec180] makes an enabled guard standing on the lane a real
+    /// blocker, and the player's response is to clear him (the 01 hall guards the disc's meet
+    /// chain starts). Default OFF — the shared walker stays master's everywhere else.
+    pub clear_pushers: bool,
     max_y: f32,
     pub lenient: bool,
     /// Inside the stuck ladder's hostile-body-block response (the arm's shoot/resupply run their
@@ -247,7 +252,7 @@ impl Walker {
             scene, top_up_health: true, dmg: DamageLog::new(), keep_alive: Vec::new(), stop_on_exit: true, skip_cutscenes: true,
             report: Report { legs: Vec::new(), stuck_events: Vec::new(), falls: Vec::new() },
             total_ticks: 0, pos, last_sample: pos, sample_tick: 0, stuck: 0, stuck_cycles: 0,
-            sidestep: 0, sidestep_decays: false, max_y: pos[1], lenient: false,
+            sidestep: 0, sidestep_decays: false, clear_pushers: false, max_y: pos[1], lenient: false,
             trail: Vec::new(),
             alarm_last: Vec::new(),
             drone_watch, watch_last,
@@ -957,9 +962,11 @@ impl Walker {
         };
         for (k, p) in pts.iter().enumerate().skip(1) {
             // A wedged nav node is SKIPPED (the next node re-aims); the route continues.
+            if self.clear_pushers { clear_pushing_guards_lane(self, 1.15, Some(*p), &format!("{label} nav {k}")); }
             let r = self.walk_to(Wp::new(p[0], p[1], p[2]).r(1.3), &format!("{label} nav {k}"));
             if r == u32::MAX { self.bridge_and_retry(*p, 1.3, &format!("{label} nav {k}")); }
         }
+        if self.clear_pushers { clear_pushing_guards_lane(self, 1.15, Some(target), label); }
         let r = self.walk_to(Wp { at: target, act: Act::None, arrive: final_arrive }, label);
         if r == u32::MAX { self.bridge_and_retry(target, final_arrive, label); }
         self.lenient = false;
@@ -1518,6 +1525,61 @@ pub fn leg(sim: &nf_view::scene::Sim, from: V3, to: V3) -> Vec<V3> {
     pts.push(to);
     pts
 }
+
+/// The player's response to a body that pushes ([M Collide_Jointy 0x1ec180 — the push lands
+/// every tick; per-bot gate `NDrone2_DoCollision` 0x149ec8 — live bots near the player are ON):
+/// shoot every enabled, alive, started team-1 guard whose capsule (spine (pos+0.4, pos−0.6),
+/// r 0.4 [M NDrone2_Collision 0x140e90:91-121]) stands within `r` of Bond or of the straight
+/// lane Bond must press (from → to, when `to` is given) — nearest first — before pressing a
+/// nav leg through him. The disc's own meet chain (SP #276 → ch 0xE) starts four hall guards
+/// on Bond's route; a player clears them, the walker now does the same. Returns the count shot.
+pub fn clear_pushing_guards(w: &mut Walker, r: f32, label: &str) -> usize {
+    clear_pushing_guards_lane(w, r, None, label)
+}
+
+pub fn clear_pushing_guards_lane(w: &mut Walker, r: f32, lane_to: Option<V3>, label: &str) -> usize {
+    let mut shot = 0usize;
+    for _ in 0..8 {
+        let near = {
+            let sim = w.scene.sim.as_ref().unwrap();
+            let b = sim.bond.pos;
+            sim.drones.list.iter().enumerate()
+                .filter(|(_, d)| d.team == 1 && d.enabled && d.present && !d.corpse && d.health > 0.0
+                    && d.state != nf_game::drone::state::HOSTAGE
+                    && (d.pos[1] - b[1]).abs() < 2.0
+                    // The spine band: the guard's vertical capsule within (0.55 + 0.4) of
+                    // Bond's spine or of the lane he must press.
+                    && (seg_dist_xz(d.pos, b) < r
+                        || lane_to.is_some_and(|t| seg_dist_xz(d.pos, b)
+                            < lane_gap(d.pos, b, t) + r)))
+                .min_by(|a, c| seg_dist_xz(a.1.pos, b).total_cmp(&seg_dist_xz(c.1.pos, b)))
+                .map(|(i, _)| i)
+        };
+        let Some(di) = near else { return shot };
+        let _ = w.switch_to_armed(label);
+        if w.shoot(di, &format!("{label} pushing guard {di}")) { shot += 1; }
+        else if w.resupply(label) { let _ = w.shoot(di, &format!("{label} pushing guard {di}")); }
+    }
+    shot
+}
+
+/// Horizontal distance from a guard's vertical spine (his `pos`) to Bond's root `b` — the
+/// segment-segment distance of two vertical spines whose y ranges overlap (both ~1 u tall on
+/// the same floor) reduces to the planar separation.
+fn seg_dist_xz(guard: V3, b: V3) -> f32 {
+    dxz(guard, b)
+}
+
+/// The guard's planar distance to the Bond→to lane (the press line the push blocks).
+fn lane_gap(guard: V3, b: V3, to: V3) -> f32 {
+    let (vx, vz) = (to[0] - b[0], to[2] - b[2]);
+    let len2 = vx * vx + vz * vz;
+    if len2 < 1e-6 { return dxz(guard, b); }
+    let t = (((guard[0] - b[0]) * vx + (guard[2] - b[2]) * vz) / len2).clamp(0.0, 1.0);
+    let (cx, cz) = (b[0] + vx * t, b[2] + vz * t);
+    ((guard[0] - cx).powi(2) + (guard[2] - cz).powi(2)).sqrt()
+}
+
 
 /// Cross-path roadmap: Dijkstra over EVERY path's nodes (within-path links + cross-path hops where
 /// two nodes stand within 3 units). The game's per-path A* cannot span rooms the AI paths split

@@ -1909,14 +1909,21 @@ self.local = [vs / k, vf / k];
         // it walks (the delta tilts); beside its spine the push is lateral. The Jointy push does
         // NOT ride the DeltaP accumulator (Jointy writes +0x10 only [M :253-266]), so this sits
         // after the add-back and `pick_ref` keeps the static pass's value.
-        // [S] unverified — the PORT CHOICE gate: the push rides only while Bond is AIRBORNE
-        // (the drop-onto case the task pins). The game's own per-bot ON/OFF gates (+0x4f8 bit
-        // 0x20/0x200, +0x570 bit 2 — NDrone2_DoCollision 0x149ec8) are not modelled per bot
-        // yet, and master's green walks path Bond THROUGH ally tangent zones (the 01 armour
-        // walk, the 0a west doorway): the grounded-side push against allies is a live-check
-        // item, not shipped here. The sleeper drop (grounded false through the whole contact)
-        // keeps its [M] push either way.
-        if !ctx.bot_capsules.is_empty() && !self.grounded {
+        // [M] the GATE, resolved (guard-push-every-tick): the push lands EVERY tick —
+        // Collide_Jointy 0x1ec180's kind-0x800 arm has no ground gate, and the game's per-bot
+        // ON/OFF gates (NDrone2_DoCollision 0x149ec8: +0x4f8 0x200 dead → OFF; +0x4f8 0x20
+        // special-physics, set by DefaultInit's 0x801e2 bundle [M 0x14b300:60] and cleared by
+        // Enable(0) [M 0x149dd0:14]; then state 0xc/0x13, +0x538, NEAR PLAYER < 2.0
+        // [M DroneFunc_NearPlayerCollision 0x14b190], obj+0xFC, +0x570&2) keep the capsule ON
+        // for every bot the push can touch: any bot within push range (r-sum 0.95) is within
+        // the 2.0 near arm. The Sim's capsule list already carries exactly that set
+        // (`LadderCtx::bot_capsules`: enabled, not dead, within 2.0 — scene.rs), so the port's
+        // old airborne-only gate (`&& !self.grounded`, level-14-sleeper-push's [S] port choice)
+        // is lifted here. The 03/01 walks that pressed through ally tangent zones now play the
+        // player's own response (the walkers clear or route around the disc's activated
+        // guards — the tests carry it). The sleeper drop (grounded false through the whole
+        // contact) keeps its [M] push either way.
+        if !ctx.bot_capsules.is_empty() {
             let (ja, jb) = self.capsule();
             if std::env::var("NF_PUSH_DEBUG").is_ok() {
                 eprintln!("[pushdbg] n={} ja={:?} jb={:?} bots={:?}", ctx.bot_capsules.len(), ja, jb, ctx.bot_capsules);

@@ -22,6 +22,10 @@ fn iso() -> String { std::env::var("NF_ISO").expect("NF_ISO") }
 /// `Camera_UpdateGlbVars` advances it on the frames after [M 0x1bada0:16-20]).
 fn walk_to_the_exit(iso: &str, stop_at_fire: bool) -> Walker {
     let mut w = Walker::new(nf_view::load(iso, "07000001.bin", false).expect("load 07000001"));
+    // The every-tick bot push [M Collide_Jointy 0x1ec180] makes an activated guard on the lane a
+    // real blocker (the meet chain's four hall guards start on the route); the walker plays the
+    // player's response and clears them before each leg.
+    w.clear_pushers = true;
     // On real damage a guard inside 4 u is backed away from, in the walker's fights and its
     // return fire: under 3.0 u every drone round hits [M DroneWeap_DoBulletAccuracy
     // 0x179740:113-115], and the hall guards' 8-pellet shotgun volleys (weapon 0x1C [M
@@ -643,7 +647,14 @@ fn the_plate_refuses_bond_alone() {
     let start = sim.bond.pos;
     let pts = walker::leg(sim, start, plate);
     drop(sim);
-    for k in 1..pts.len() { w.walk_to(Wp::new(pts[k][0], pts[k][1], pts[k][2]), &format!("sister {k}")); }
+    // The disc's meet chain starts four hall guards on this route [D SP #276 stream 9 → ch 0xE];
+    // with the every-tick push [M Collide_Jointy 0x1ec180] a player clears them rather than press
+    // through their capsules.
+    w.clear_pushers = true;
+    for k in 1..pts.len() {
+        walker::clear_pushing_guards(&mut w, 1.15, &format!("sister {k}"));
+        w.walk_to(Wp::new(pts[k][0], pts[k][1], pts[k][2]), &format!("sister {k}"));
+    }
     w.walk_to(Wp { at: plate, act: Act::None, arrive: 1.2 }, "the plate");
     // Keep Bond ON the plate while the contact (left at his spawn) is far away.
     for _ in 0..60 { w.tick(Default::default(), false); }

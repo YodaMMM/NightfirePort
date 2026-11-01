@@ -54,6 +54,10 @@ fn the_exit_resolves_to_the_gate_plate_and_e_is_refused_there() {
     };
     // Walk there through the real input path (the proven descent anchors from walkreal_07000001 —
     // the direct nav from the balcony side climbs over the top floor and never enters the stairwell).
+    // The every-tick bot push [M Collide_Jointy 0x1ec180] makes the meet chain's activated hall
+    // guards real blockers on the hall lanes; the walker plays the player's response and clears
+    // them before each leg (the disc's own chain starts them [D SP #276 stream 9 → ch 0xE]).
+    w.clear_pushers = true;
     w.walk_nav_to([-30.8, 6.4, 13.1], "the stairwell head", 1.2);
     w.walk_nav_to(plate, "the LoadPointActivator plate", 1.0);
     {
