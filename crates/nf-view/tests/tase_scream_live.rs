@@ -133,6 +133,24 @@ fn the_tase_enter_screams_and_only_once() {
     }
     scene.sim.as_mut().unwrap().drones.list[gi].tase_fall_anim =
         if rolled_b { anim_state::TASER_FALL_A } else { anim_state::TASER_FALL_B };
+    // The second hold needs a charged stunner and a fresh press. The 0x32 branch above held the
+    // beam 90 ticks without a release: the clip (the stunner's charge, `weapon_data+0x92`) ran
+    // dry, and a held trigger whose refire countdown ran out without a shot never refires until
+    // the trigger is pressed again [M Player_WeaponFiring 0x1a5460:601-629 — the countdown runs
+    // only on the press edge `Input_Action(slot, 9, 4)` or while it is still positive]. Release
+    // (the guard stays down: the re-arm put +0xCC4 1200 ticks out [M 0x162eb0 case 0x19]) until
+    // the clip is full again, then press.
+    let full = {
+        let sim = scene.sim.as_ref().unwrap();
+        sim.weapons.records.get(0x4a).map_or(1, |w| u16::from_le_bytes([w[0x92], w[0x93]]) as u32)
+    };
+    for _ in 0..1200u32 {
+        let sim = scene.sim.as_ref().unwrap();
+        if sim.gun.clip >= full || sim.drones.list[gi].state != nf_game::drone::state::STUNNED { break; }
+        steer_and_fire(&mut scene, gi, false);
+    }
+    assert_eq!(scene.sim.as_ref().unwrap().drones.list[gi].state, nf_game::drone::state::STUNNED,
+        "the guard is still down for the forced-roll hold");
     let mut re_fell2 = false;
     for _ in 0..90u32 {
         steer_and_fire(&mut scene, gi, true);
