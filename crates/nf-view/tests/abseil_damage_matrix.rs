@@ -145,7 +145,7 @@ fn the_roping_guard_descends_to_his_opponent_without_needing_sight() {
     assert!(slid, "the guard runs the Slide (the opponent exists without sight [M 0x1424e0:100-120])");
     assert!(
         g.pos[1] < sim.bond.pos[1] + 4.0 && g.pos[1] > sim.bond.pos[1],
-        "the guard hangs just above his opponent (3.0 gate [M 0x169730:57-58]), got y {:.2} vs {:.2} (state {:#x})",
+        "the guard hangs just above his opponent (3.0 gate [M 0x169730:57-58]), got y {:.2} vs Bond {:.2} (state {:#x})",
         g.pos[1], sim.bond.pos[1], g.state
     );
     assert!(
