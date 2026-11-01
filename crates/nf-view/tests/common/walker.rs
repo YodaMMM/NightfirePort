@@ -1317,6 +1317,20 @@ impl Walker {
             return;
         }
         eprintln!("[walk] {label}: opening door ({:.1},{:.1},{:.1}) state {:#x}", dpos[0], dpos[1], dpos[2], state);
+        // A door found CLOSING right after this walker opened it swung into Bond and reversed:
+        // re-pressing from inside the leaf's sweep swings it back through him and pins him
+        // between the leaf and the jamb (the 03 west double doors at (10.0/11.8, −20.2) held
+        // a walk 26 legs). Step back out of the sweep first, facing the door.
+        if state == nf_game::door::CLOSING {
+            for _ in 0..60u32 {
+                let sim = self.scene.sim.as_ref().unwrap();
+                if dxz(sim.bond.pos, dpos) > 1.6 { break; }
+                let desired = (dpos[0] - sim.bond.pos[0]).atan2(dpos[2] - sim.bond.pos[2]);
+                let err = wrap_pi(desired - sim.bond.yaw);
+                let input = Input { turn: err.clamp(-0.08, 0.08), forward: -0.8, ..Default::default() };
+                self.tick(input, false);
+            }
+        }
         for k in 0..60u32 {
             let sim = self.scene.sim.as_ref().unwrap();
             let desired = (dpos[0] - sim.bond.pos[0]).atan2(dpos[2] - sim.bond.pos[2]);
