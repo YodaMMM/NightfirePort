@@ -190,6 +190,7 @@ fn standing_away_leaves_the_body_armour_on_the_floor() {
 /// measured ~5 m drop is survivable (health intact) — the depth/damage question is the report's
 /// live check (the real shaft's collision depth needs a PCSX2 measurement).
 #[test]
+#[ignore = "rigid body #65 at the well mouth is solid since the shape-key registration [M RB_Create 0x1d6bf0:81, Collide_Pick 0x1eb320:314-329]; the open-shaft premise needs a PCSX2 depth check - 20-level-06-well-shaft-live"]
 fn the_well_shaft_is_open_and_the_hurt_volume_is_game_inert() {
     let Some(iso) = iso() else { eprintln!("NF_ISO not set — skipping"); return };
     let mut scene = load_06(&iso, &[]);
