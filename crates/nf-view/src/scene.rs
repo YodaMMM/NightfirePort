@@ -837,6 +837,15 @@ impl Msg {
     }
 }
 
+/// The night pane's sprite-0 height word the scanline jitter rolls under (`Rand(h − 1)`
+/// [M HUD_UpdateNightSightPane 0x19d218:43-47]): the runtime sprite's +0x2a, which is the
+/// texture's height — `hashtable_set_sprite` 0x1ca3d8 copies the texture record's width/height
+/// to +0x28/+0x2a, and `Sprite_Create2` 0x1de3d8 puts the template's h at +0x2e and dv at +0x36
+/// [M]. Sprite 0's texture 0x0300004A is 64×64 [D every SP archive; nf-view
+/// tests/goggles_render_live.rs pins it], so the v jitter is `Rand(63)`, not the template's v
+/// extent (255).
+pub const GOGGLE_NIGHT_SPRITE0_H: u16 = 64;
+
 /// The HUD state the port keeps in Sim (the game keeps it in BLData / the TXTMSG list / pane structs).
 #[derive(Clone, Debug, Default)]
 pub struct HudState {
@@ -927,6 +936,10 @@ pub struct HudState {
     /// posts (cleared by `Player_InitWeapon` 0x1a7ef8:124-125 on every level load).
     pub cam_hint: bool,
     pub sticky_hint: bool,
+    /// The goggles' two HUD panes' runtime sprite fields (`HUD_UpdateNightSightPane` 0x19d218 /
+    /// `HUD_UpdateXRayPane` 0x1a1410), updated in `hud_tick` after the flow controller — the
+    /// game's pane walk order [M HUD_Update 0x19a088:20-69]. hud.rs draws them.
+    pub goggle_panes: nf_game::hud_pane::GogglePanes,
 }
 
 impl HudState {
@@ -2212,6 +2225,14 @@ impl Sim {
     /// 0x19ec68, op 0x29 per ps2tek; FRAME_RATE_MUL = 1 at the fixed 60 Hz) [M 0x19e9d8:154-162].
     /// At ≤ 0 with a mode up the game zeroes it and drops the mode to 0 [M :163-193].
     pub fn goggle_battery(&self) -> f32 { self.hud.goggles.fade }
+
+    /// The goggles' pane state this tick: (night pane up, x-ray pane up, the runtime fields).
+    /// A pane draws only while its enable byte is set — `HUD_Update` 0x19a088:22-38 parks a
+    /// disabled pane's sprites on layer 0xff — and the pane updates clear the byte as soon as
+    /// the mode no longer matches [M 0x19d218:66-68 / 0x1a1410:36-38].
+    pub fn goggle_panes(&self) -> (bool, bool, &nf_game::hud_pane::GogglePanes) {
+        (self.hud.goggles.night_pane_on, self.hud.goggles.xray_pane_on, &self.hud.goggle_panes)
+    }
     /// The ambient triple a 0x800 object at `p` ramps toward: `base = cel + switch_channels[cel+0xa2]`,
     /// read at `base+0x9a/0x9c/0x9e` (`Lights_CalcAmbientLight` 0x1cb178). The port's live switch-channel
     /// table stands in for the game's; values above 1 clamp to 1 (only the 0/1 shift has defined bytes).
@@ -5477,6 +5498,18 @@ impl Sim {
         // The HUD's per-frame state: the weapon-name timer, the crouch-icon timer, the pickup messages
         // (`Text_UpdateMsg` 0x1b11d8 runs from the HUD/status-pane update at frame rate).
         self.hud_tick();
+        // goggles: the guards' body-glow records count down while their owner is dead and are
+        // deleted below 1 (`BodyGlow_Update` 0x1ac2c8:96-136, the class-0x46 object's per-frame
+        // update) — the draw side reads the count into the glow's alpha (`glow_targets`).
+        // Only spawned guards: the game creates the record in the spawn's `NDrone2_DefaultInit`
+        // tail, while the port's record exists from the list build (held-back reinforcements
+        // included) — `present` stands for "the glow object exists".
+        for dr in self.drones.list.iter_mut().filter(|d| d.present) {
+            if let Some(g) = dr.body_glow.as_mut() {
+                if !g.tick(dr.health, false) { dr.body_glow = None; }
+            }
+        }
+        self.guard_breath();
         // The held weapon's laser sight [M Player_LaserPointer 0x1a65d8 — per frame from
         // Player_CollisionHandler 0x1949a8:188, after PositionGun/AnimObjectUpdate so the bone pose is
         // current]. Gate: the latch BLData+0x964 (Gun::laser_on, set per draw [M 0x1a9338:21-26] from
@@ -5510,6 +5543,52 @@ impl Sim {
         // Online the remotes move after this (`step_net_remotes`, `step_net_combat`): their body
         // clocks tick at the end of `step_net_combat`, on this tick's movement.
         if self.net_rng.is_none() && self.net_rng_shared.is_none() { self.advance_mp_anim(); }
+    }
+
+    /// The guards' breath puffs — `NDrone2_ControlSTANDARD` 0x1490f0:168-198 [M]: while the
+    /// object was drawn recently (obj+0xFC != 0, `drawn_grace`) and the drone's health
+    /// (+0xAC) is above 0, `Env_Breath(head + dir·0.12, dir, obj+0x20, obj+0xEC + (obj &
+    /// 0xfff)·0x80)` with the head bone 5's world matrix (`env::guard_breath_origin`).
+    /// `Env_Breath` 0x17be00 then gates on the cel's +0xa0 byte — the `Vision_*` walk's
+    /// visited flag for the last view capture (`View_CaptureScene` 0x1e6df0 clears it,
+    /// `Vision_Portal_Recurse` 0x1e86e8 / `Vision_Recurse` 0x1e82e0 set it [M]) — the frame
+    /// window and the env gate (`env::breath_env_gate`: false only under a snow `Env_Create`,
+    /// so the snow levels breathe in every mode and the rest only in x-ray). The cel's
+    /// underwater bit (cel+0x3c & 0x10000000, `Cel::underwater`) forces the x-ray variant.
+    ///
+    /// Stand-ins [S]: the cel-visited byte reads as `drawn_grace != 0` (a guard object drawn
+    /// last frame sat in a visited cel — `View_AddCels` 0x1e6ba0 submits only the VisCelList
+    /// cels' object lists; a ForcedList straddler can differ); `obj & 0xfff` is the object's
+    /// heap address, which the port has not got — the list index stands in, so the guards
+    /// still breathe out of step. Bond's own call (`Player_Update` 0x193600:370-377) needs
+    /// BLData+0x950 != 0, a non-first-person camera mode, which the port's on-foot play does
+    /// not enter outside the cut-scenes BLData+0x94b already excludes; it is not wired.
+    fn guard_breath(&mut self) {
+        let mode = self.hud.goggles.mode as i16;
+        let drop_type = self.drones.env.as_ref().map(|e| e.kind).or(self.drones.pending_env_drop_type());
+        let gate = nf_game::env::breath_env_gate(drop_type);
+        let frame = self.drones.frame;
+        let mut spawns: Vec<(u32, [f32; 3], [f32; 3], bool)> = Vec::new();
+        {
+            let d = self.data();
+            for dr in self.drones.list.iter().filter(|x| x.present && x.enabled) {
+                if dr.drawn_grace == 0 || dr.health <= 0.0 { continue; }
+                let phase = dr.spawn_frame.wrapping_add((dr.index as u32 & 0xfff).wrapping_mul(0x80));
+                // `Env_Breath`'s frame window, tested here first so the pose is built only on a
+                // spawning tick (the same two remainders env_breath tests again).
+                let delta = frame.wrapping_sub(phase);
+                if delta % 6 != 0 || (delta % 120) as f32 > 40.0 { continue; }
+                let Some((world, hip)) = dr.object_pose(&d) else { continue };
+                let Some(w) = world.get(5) else { continue };
+                let m = nf_formats::placement::object_matrix([0.0, dr.yaw, 0.0], [dr.pos[0], dr.draw_y(hip), dr.pos[2]]);
+                let (pos, dir) = nf_game::env::guard_breath_origin(&anim::mul(w, &m));
+                let underwater = find_cel(&self.cels, dr.pos).and_then(|c| self.cels.get(c)).is_some_and(|c| c.underwater);
+                spawns.push((phase, pos, dir, underwater));
+            }
+        }
+        for (phase, pos, dir, underwater) in spawns {
+            nf_game::env::env_breath(&mut self.drones.gas, frame, phase, pos, dir, 1, underwater, mode, Some(gate));
+        }
     }
 
     /// mp-body-anim: each drawn MP body's script list, once per tick (`nf_game::mp::body_anim`), fed
@@ -5636,6 +5715,27 @@ impl Sim {
                 self.gun.switch_request =
                     nf_game::hud_pane::MonitorNightSight::clamp_item_class(self.gun.saved_weapon);
             }
+        }
+        // The goggles' panes in the pane walk after the controller [M HUD_Update 0x19a088:20-69:
+        // pane 7 `HUD_UpdateNightSightPane` 0x19d218, then pane 15 `HUD_UpdateXRayPane`
+        // 0x1a1410]. Their `Rand_Rand` draws and the night light's `Light_Create` draw come off
+        // the shared stream inside the tick, as in the game; with no mode up both return before
+        // any draw. HUD_Update runs only on the running-player path (`Player_Update` 0x193600:76),
+        // which the port's `disabled` stands for (as for the controller above).
+        if !self.disabled {
+            let (mode, battery, mp) = (self.hud.goggles.mode, self.hud.goggles.fade, self.mp.is_some());
+            let mut on = self.hud.goggles.night_pane_on;
+            let night = self.hud.goggle_panes.night_update(&mut on, mode, battery, GOGGLE_NIGHT_SPRITE0_H, mp, &mut self.drones.rng);
+            self.hud.goggles.night_pane_on = on;
+            if night.light {
+                // `Light_Create(32.0, 2.5, glb_viewer+0xc0, 0xff, 0xff, 0xff, 0, 0, 1, 0)` — the
+                // night-sight lamp at the viewer, one tick (life 0 → 1) [M 0x19d218:48-51].
+                let eye = self.bond.head();
+                self.drones.lights.create(32.0, 2.5, eye, [0xff; 3], 0, 0, 1, 0, &mut self.drones.rng);
+            }
+            let mut on = self.hud.goggles.xray_pane_on;
+            self.hud.goggle_panes.xray_update(&mut on, mode, battery, &mut self.drones.rng);
+            self.hud.goggles.xray_pane_on = on;
         }
         // `HUD_UpdateSecCamPane` 0x1a1538:9-10: while pane 16 is enabled (the security-camera
         // view) it writes viewer+0x236 = 0 every frame, after `HUD_MonitorNightSight` — the
@@ -6902,7 +7002,10 @@ fn add_instance_tagged(level: &Level, inst: &Instance, layer: Layer, character: 
         // `View_AddObjects` 0x1e62d8:57-59 routes an object with glist flag 0x2000 to sort list 2, which
         // `Game_Draw` 0x1e6f50:162-175 draws after `psiClearZ` — over the whole world. Only the Micro-Camera's
         // DroneScan (0x02000832, flags 0x2128 [D]) takes it here; the other 0x2000 effect meshes are unverified.
-        Layer::Effect => if obj.hashcode == DRONE_SCAN && obj.flags & 0x2000 != 0 { (6, 0) } else { (5, 0) },
+        // goggles: the body glow's parts take the same list through their OBJECT flags (obj+0xF0 |=
+        // 0x2408 / 0x2400 [M BodyGlow_Create 0x1ac158]) — their builder passes LIST2_NODE: the
+        // glow paints over the world, the x-ray look through walls.
+        Layer::Effect => if (obj.hashcode == DRONE_SCAN && obj.flags & 0x2000 != 0) || node == LIST2_NODE { (6, 0) } else { (5, 0) },
     };
     // view-model-last: the first-person gun and its flash are `Game_Draw` 0x1e6f50:162-175's list 2, drawn
     // after `psiClearZ` — over everything the world and its effects drew [M]. Pass 7 draws after every
@@ -7146,6 +7249,10 @@ pub const ENV_SKINNED: i8 = 127;
 /// `Vertex::nrm[3]` of an environment-mapped vertex whose stored (object-space) normal feeds the
 /// env rows as-is (rigid and static draws) — snorm 64 ≈ 0.5 in the shader.
 pub const ENV_OBJECT: i8 = 64;
+/// An Effect-layer draw whose object sits in `Game_Draw`'s list 2 by its object flags
+/// (obj+0xF0 & 0x2000), not its glist's: drawn after `psiClearZ`, over the world (pass 6)
+/// [M Game_Draw 0x1e6f50:157-176; View_AddObjects 0x1e62d8:57-59]. The body glow's builder.
+pub const LIST2_NODE: u32 = u32::MAX - 2;
 /// Posed slots per gun emplacement: the base object, then one per `gunimp::TURRET_ARTS` gun child.
 const GUNIMP_SLOTS: usize = 1 + nf_game::gunimp::TURRET_ARTS.len();
 
@@ -7153,6 +7260,49 @@ const GUNIMP_SLOTS: usize = 1 + nf_game::gunimp::TURRET_ARTS.len();
 const TRACER_SLOTS: usize = 32;
 /// mp-remote-fx: the MP trail slots start here (after the gadget/laser beam slots TRACER_SLOTS..+6).
 const MP_TRACER_BASE: usize = TRACER_SLOTS + 16;
+/// goggles: the night-sight laser-sight beam slot — `Player_LaserPointer` 0x1a65d8:151-155 sets
+/// the beam object's gfx to 0x2000131 "lazer" while viewer+0x236 == 1, 0x2000133 "watch_lazer"
+/// otherwise (slot TRACER_SLOTS + 5) [M].
+pub const NIGHT_BEAM_SLOT: usize = TRACER_SLOTS + 9;
+/// The weapon laser sight's ordinary beam slot (0x2000133 "watch_lazer", sg5-laser-draw).
+pub const SIGHT_BEAM_SLOT: usize = TRACER_SLOTS + 5;
+/// goggles: the body-glow draw slots (`BodyGlow_Create` 0x1ac158's main object 0x200025f
+/// "lazer_muzzle" + 15 children 0x200055a "BoneGlow" per guard [M; D every SP archive]):
+/// GLOW_GUARDS pooled guards × 16 parts, assigned per frame to the nearest glowing guards
+/// (`Scene::glow_targets`). Only guards within 10.0 of the viewer glow [M 0x1ac2c8:197-208], so
+/// the pool is the view's handful, not the level's list.
+pub const GLOW_SLOT_BASE: usize = 0x1000;
+pub const GLOW_GUARDS: usize = 8;
+/// goggles: the x-ray-only placed objects — a glist whose flags (+0x44, copied to obj+0xF0 by
+/// the creators) carry 0x400 is submitted to a view only while that viewer's +0x236 == 2
+/// [M View_AddObjects 0x1e62d8:38-47, View_AddForcedObjects 0x1e5fb8:79-84]. One slot per
+/// such main-map placement: slot = XRAY_SLOT_BASE + placement index, the placement matrix in
+/// `Attachment::local`.
+pub const XRAY_SLOT_BASE: usize = 0x2000;
+/// The guards' weapon-0x18 laser ray (`AnimObjectDraw` 0x1c4490:259-311 [M]): GUARD_BEAMS pooled
+/// rays × the two sprites — slot GUARD_BEAM_BASE + 2·g is 0x2000133 "watch_lazer", + 1 the
+/// night-sight 0x2000131 "lazer" (the gfx pick on the drawing viewer's +0x236 == 1 [M :296-301]).
+/// The disc's 0x19 carriers are 0700000b/11/12/13 (10/10/10/4 guards); the 0x19 → 0x18 aim swap
+/// is the captains' (`Drone::captain`, 2 on 0b and 3 on 12) [D tests/goggles_draws_live.rs].
+pub const GUARD_BEAM_BASE: usize = 0x1800;
+pub const GUARD_BEAMS: usize = 4;
+/// The ray's datum: `AnimGetBoneWorldTrans(obj, 8, 3, …)` looks up datum id 8 + 3 [M 0x1c3120:
+/// `param_3 = (param_2 & 0x7fffffff) + param_3` for a non-negative id] — on every 0x19 skin
+/// (0x5000004/6/8) datum 11 rides bone 23 beside the weapon datum 8 [D].
+pub const GUARD_BEAM_DATUM: u32 = 11;
+
+/// One glowing guard this frame (`Scene::glow_targets`).
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct GlowTarget {
+    /// The scene character drawn for the guard.
+    pub ci: usize,
+    /// The glow's alpha byte (obj+0x106 on the main object and every child).
+    pub alpha: u8,
+    /// x-ray mode: the main object draws too (the children alone draw under the OICW pane).
+    pub xray: bool,
+    /// The viewer distance the alpha used (0.0 under the OICW pane).
+    pub dist: f32,
+}
 
 /// A unit-axis matrix (rows = axes) whose z row points along `dir` at `pos`, x kept horizontal
 /// (up × z; world x when `dir` is vertical). sg5-laser-draw: the yaw/pitch euler the tripbomb beam
@@ -8415,13 +8565,66 @@ pub fn build(level: &Level, cels_only: bool, skeletons: &HashMap<u8, Skeleton>, 
                 // [M GunImp_Update 0x1320d8:394-407 `PositionBeam(muzzle, ray hit)`; D 0700000d
                 // resolves both, the quad extending along -z like the watch laser's sprite].
                 (TRACER_SLOTS + 5, 0x0200_0133), (TRACER_SLOTS + 6, 0x0200_0132),
-                (TRACER_SLOTS + 7, 0x0200_05cd), (TRACER_SLOTS + 8, 0x0200_026e)] {
+                (TRACER_SLOTS + 7, 0x0200_05cd), (TRACER_SLOTS + 8, 0x0200_026e),
+                // goggles: the night-sight beam sprite 0x2000131 [M 0x1a65d8:151-155].
+                (NIGHT_BEAM_SLOT, 0x0200_0131)] {
                 if drones.is_some() {
                     if let Some(&(bmap, bobj)) = level.by_hash.get(&hash) {
                         let binst = Instance { map: bmap, object: bobj, matrix: anim::quat_trans_to_mat([0.0, 0.0, 0.0, 1.0], [0.0; 3]), placement: level.maps[level.main_map().unwrap_or(0)].placements.first().cloned().unwrap_or_default() };
                         add_instance(level, &binst, Layer::Effect, Some((0, Some(attachments.len() as u32))), &mut groups, None, None, None, None, [1.0; 3], &room_cels, u32::MAX, u32::MAX);
                         attachments.push(Attachment { character: 0, bone: 0, local: binst.matrix, flash: None, tracer: Some(slot), dropped: false, aims_light: None, projectile: None, script: None, gas: None, effect: None, silencer: false, quiver_bolt: None, swap_piece: false, watch_hand: None, pda_digit: None });
                     }
+                }
+            }
+        }
+        // goggles: the body-glow pool (GLOW_GUARDS × the main object + 15 children) and the
+        // x-ray-only placed objects. Both draw only while the sim says so (`frame_state`).
+        if drones.is_some() {
+            let ident = anim::quat_trans_to_mat([0.0, 0.0, 0.0, 1.0], [0.0; 3]);
+            let pl0 = level.maps[level.main_map().unwrap_or(0)].placements.first().cloned().unwrap_or_default();
+            if let (Some(&(mm, mo)), Some(&(cm, co))) = (level.by_hash.get(&nf_game::body_glow::MAIN_GFX), level.by_hash.get(&nf_game::body_glow::CHILD_GFX)) {
+                for g in 0..GLOW_GUARDS {
+                    for part in 0..16usize {
+                        let (map, object) = if part == 0 { (mm, mo) } else { (cm, co) };
+                        let inst = Instance { map, object, matrix: ident, placement: pl0.clone() };
+                        add_instance(level, &inst, Layer::Effect, Some((0, Some(attachments.len() as u32))), &mut groups, None, None, None, None, [1.0; 3], &room_cels, u32::MAX, LIST2_NODE);
+                        attachments.push(Attachment { character: 0, bone: 0, local: ident, flash: None, tracer: Some(GLOW_SLOT_BASE + g * 16 + part), dropped: false, aims_light: None, projectile: None, script: None, gas: None, effect: None, silencer: false, quiver_bolt: None, swap_piece: false, watch_hand: None, pda_digit: None });
+                    }
+                }
+            }
+            // The guards' laser-ray pool: both sprites per pooled ray (GUARD_BEAM_BASE).
+            for g in 0..GUARD_BEAMS {
+                for (k, hash) in [0x0200_0133u32, 0x0200_0131].into_iter().enumerate() {
+                    let Some(&(map, object)) = level.by_hash.get(&hash) else { continue };
+                    let inst = Instance { map, object, matrix: ident, placement: pl0.clone() };
+                    add_instance(level, &inst, Layer::Effect, Some((0, Some(attachments.len() as u32))), &mut groups, None, None, None, None, [1.0; 3], &room_cels, u32::MAX, u32::MAX);
+                    attachments.push(Attachment { character: 0, bone: 0, local: ident, flash: None, tracer: Some(GUARD_BEAM_BASE + g * 2 + k), dropped: false, aims_light: None, projectile: None, script: None, gas: None, effect: None, silencer: false, quiver_bolt: None, swap_piece: false, watch_hand: None, pda_digit: None });
+                }
+            }
+            // The x-ray-only placements: the parsemap-created kinds whose creator copies the glist
+            // flags to obj+0xF0 — `Break_Create` 0x12c230 (0x20, `Control_SetGList`) and
+            // `Trigger_Create` 0x1b1720 (`obj+0xF0 = *(glist+0x44)` [M :86]) for the trigger family
+            // (0xdc, 0xe8, 0xea..=0xef, 0xf4) — with 0x400 set, meshes, and no 0x10 no-draw bit
+            // [D: 07000003 "HOTOBJECT" (0x20), 0700000a "laserbeam" ×10 / 0700000b
+            // "laserbeam-large" ×8 (0xeb), 07000014 "laserbeam" ×8 (0xea)]. The static passes skip
+            // these (the old "mirror-only" reading of 0x400).
+            if let Some(m) = level.main_map() {
+                for (pi, p) in level.maps[m].placements.iter().enumerate() {
+                    let kind = (p.flags & 0xff) as u8;
+                    if !(kind == 0x20 || kind == 0xdc || kind == 0xe8 || (0xea..=0xef).contains(&kind) || kind == 0xf4) { continue; }
+                    if p.flags & 0xa000 != 0 { continue; }
+                    let target = if p.by_hash() { level.by_hash.get(&p.hashcode).copied() }
+                        else if (p.index as usize) < level.maps[m].objects.len() { Some((m, p.index as usize)) } else { None };
+                    let Some((map, object)) = target else { continue };
+                    let obj = &level.maps[map].objects[object];
+                    if obj.flags & 0x400 == 0 || obj.flags & 0x10 != 0 || !obj.gfx.leaves.iter().any(|l| !l.batches.is_empty()) { continue; }
+                    let inst = Instance { map, object, matrix: ident, placement: p.clone() };
+                    add_instance(level, &inst, Layer::Effect, Some((0, Some(attachments.len() as u32))), &mut groups, None, None, None, None, [1.0; 3], &room_cels, u32::MAX, u32::MAX);
+                    // obj+0x90 as the creators build it: `View_RotTransMatrix` for the 0x20 breakable
+                    // and the trigger family [M Trigger_Create 0x1b1720:52 via control_create_object;
+                    // placement.rs `object_matrix_for_class`].
+                    let pm = nf_formats::placement::object_matrix_for_class(kind as u32, p.creates_cel(), p.rotation, p.translation, p.quaternion());
+                    attachments.push(Attachment { character: 0, bone: 0, local: pm, flash: None, tracer: Some(XRAY_SLOT_BASE + pi), dropped: false, aims_light: None, projectile: None, script: None, gas: None, effect: None, silencer: false, quiver_bolt: None, swap_piece: false, watch_hand: None, pda_digit: None });
                 }
             }
         }
@@ -8800,8 +9003,9 @@ pub fn build(level: &Level, cels_only: bool, skeletons: &HashMap<u8, Skeleton>, 
         // resolved object (the `graple_pulley` entity, handed over as the glist argument — the chain
         // documented at the fix-gadgets2 correction above), drawn once at the placement transform.
         // Gate: `psiDrawObjectMatrix` 0x124708 no-ops when the glist's box chain is empty, so objects
-        // with no batches stay undrawn (the creep walls' case); a 0x400 mirror-only object has no
-        // mirror viewer here. The 0x3A placements never carry 0x8000 CREATE_CEL [D placements], so
+        // with no batches stay undrawn (the creep walls' case); a 0x400 object is x-ray-only (drawn
+        // while viewer+0x236 == 2 [M View_AddObjects 0x1e62d8:38-47]) — no grapple glist carries it
+        // [D xray_only_census]. The 0x3A placements never carry 0x8000 CREATE_CEL [D placements], so
         // the static instance loop skips them and this sweep is the only draw — in --all the generic
         // instance loop covers them (debug view), hence the cels_only gate.
         // fix-striped-boxes: also the game's no-draw bit — `View_AddObjects`
@@ -8873,8 +9077,9 @@ pub fn build(level: &Level, cels_only: bool, skeletons: &HashMap<u8, Skeleton>, 
                     else if (p.index as usize) < level.maps[m].objects.len() { Some((m, p.index as usize)) } else { None };
                 let Some((map, object)) = target else { continue };
                 let obj = &level.maps[map].objects[object];
-                // Empty glists draw nothing (`View_DrawObjectGlist`'s psiDrawObjectMatrix no-ops), and a
-                // mirror-only object (glist flags 0x400, View_AddObjects 0x1e62d8:38-47) has no mirror viewer here.
+                // Empty glists draw nothing (`View_DrawObjectGlist`'s psiDrawObjectMatrix no-ops), and an
+                // x-ray-only object (glist flags 0x400, View_AddObjects 0x1e62d8:38-47 — drawn only while
+                // viewer+0x236 == 2) is not a static draw; no MISC kind carries one [D xray_only_census].
                 // fix-striped-boxes: the game's no-draw bit 0x10 — `View_AddObjects` 0x1e62d8:33 submits a
                 // dynamic object to the viewer draw lists only when `(obj+0xF0 & 0x8010) == 0` (obj+0xF0 is
                 // the creators' copy of `celglist+0x44`, i.e. MapObject.flags) — but only where a creator
@@ -9254,7 +9459,7 @@ pub fn build(level: &Level, cels_only: bool, skeletons: &HashMap<u8, Skeleton>, 
                 let Some((map, object)) = target else { continue };
                 let obj = &level.maps[map].objects[object];
                 // The static loop's gates: the glist's own no-draw bit 0x10 (a FLAGS_COPYING kind), the
-                // mirror-only 0x400, and an empty glist [M View_AddObjects 0x1e62d8:33,38-47].
+                // x-ray-only 0x400, and an empty glist [M View_AddObjects 0x1e62d8:33,38-47].
                 if obj.flags & 0x410 != 0 || !obj.gfx.leaves.iter().any(|l| !l.batches.is_empty()) { continue; }
                 if let Ok(h) = std::env::var("NF_HIDE") { if h.split(',').any(|n| !n.is_empty() && level.maps[map].objects[object].name.contains(n)) { continue; } }
                 let inst = Instance { map, object, matrix: mx, placement: p.clone() };
@@ -9817,6 +10022,67 @@ pub fn build(level: &Level, cels_only: bool, skeletons: &HashMap<u8, Skeleton>, 
     /// The per-frame matrices shared by the CPU pose (`animate`) and the GPU palette (`skin_palette`): each
     /// character's skin matrices, bone world matrices and object matrix (None = unposed), every attachment's
     /// matrix, and which characters are hidden (collapsed to their object origin).
+    /// goggles: the guards whose body glow draws this frame, nearest first, at most GLOW_GUARDS —
+    /// `BodyGlow_Update` 0x1ac2c8 per guard over the SP viewer [M]: the viewer mask is set when
+    /// the goggles are in x-ray (viewer+0x236 == 2) or the OICW zoom pane (HUD+0x244, pane 17)
+    /// is up; the distance is owner obj+0x30 → glb_viewer+0xC0, forced to 0.0 by the OICW pane;
+    /// > 10.0 hides; alpha = (1 − d·0.1)·count·128/256 [`body_glow::update`]. The owner's
+    /// state-1 hide (`owner+0xF4 == 1`) is read as "not present / not enabled" [S]. `posed`
+    /// says which characters can be drawn (a pose exists and the character is not hidden).
+    pub fn glow_targets(&self, posed: impl Fn(usize) -> bool) -> Vec<GlowTarget> {
+        let Some(s) = self.sim.as_ref() else { return Vec::new() };
+        let xray = s.goggle_mode() == 2;
+        let oicw = s.zoom_target > 1.0 && crate::hud::zoom_overlay(s.gun.weapon) == crate::hud::ZoomOverlay::Oicw;
+        if !xray && !oicw { return Vec::new(); }
+        let eye = s.script_camera().map_or(s.bond.head(), |c| c.0);
+        let mut seen = std::collections::HashSet::new();
+        let mut out: Vec<GlowTarget> = Vec::new();
+        for (ci, di) in s.char_drone.iter().enumerate().filter_map(|(ci, d)| d.map(|d| (ci, d))) {
+            if !posed(ci) || !seen.insert(di) { continue; }
+            let dr = &s.drones.list[di];
+            let Some(g) = dr.body_glow.as_ref() else { continue };
+            let d = [dr.pos[0] - eye[0], dr.pos[1] - eye[1], dr.pos[2] - eye[2]];
+            let dist = (d[0] * d[0] + d[1] * d[1] + d[2] * d[2]).sqrt();
+            // The count step already ran in the tick (`BodyGlow::tick`), so the gate passes here.
+            let (u, _) = nf_game::body_glow::update(2, true, !dr.present || !dr.enabled, g.count, dist, 1, oicw, [0.0; 15]);
+            let Some(u) = u.filter(|u| !u.hidden) else { continue };
+            out.push(GlowTarget { ci, alpha: u.alpha, xray, dist: if oicw { 0.0 } else { dist } });
+        }
+        out.sort_by(|a, b| a.dist.total_cmp(&b.dist));
+        out.truncate(GLOW_GUARDS);
+        out
+    }
+
+    /// The guards' weapon-0x18 laser rays this frame, nearest first, at most GUARD_BEAMS —
+    /// `AnimObjectDraw` 0x1c4490:259-311 per drawn guard whose held byte (obj+0xDC → +0x62) is
+    /// 0x18 [M]: start = datum 8+3's world matrix origin (`AnimGetBoneWorldTrans(obj, 8, 3)`),
+    /// far end = start + (−100, 0, 0) through the datum rows (the COP2 multiply-add with vf0's
+    /// w = 1), then `Collide_RayIntersect(start, far, obj+0x20, obj, …, 8)` clamps it to the first
+    /// hit (the bit-0x8 query `segment_surface_bullet` stands for, as for Bond's sight). The draw
+    /// is `View_DrawGlist(gfx, start, angles of start − end, scale (1, 1, |start − end|))`.
+    /// `posed`: the character's (bone world, object matrix) when it is drawn this frame.
+    pub fn guard_beams<'a>(&self, posed: impl Fn(usize) -> Option<(&'a [Mat4], &'a Mat4)>) -> Vec<([f32; 3], [f32; 3])> {
+        let Some(s) = self.sim.as_ref() else { return Vec::new() };
+        let eye = s.script_camera().map_or(s.bond.head(), |c| c.0);
+        let mut out: Vec<(f32, [f32; 3], [f32; 3])> = Vec::new();
+        for (ci, di) in s.char_drone.iter().enumerate().filter_map(|(ci, d)| d.map(|d| (ci, d))) {
+            if s.drones.list.get(di).map_or(true, |dr| dr.weapon != 0x18) { continue; }
+            let Some((world, m)) = posed(ci) else { continue };
+            let Some(dt) = self.characters[ci].skin.datums.iter().find(|d| d.id == GUARD_BEAM_DATUM && d.bone >= 0) else { continue };
+            let Some(bw) = world.get(dt.bone as usize) else { continue };
+            let dm = anim::mul(&anim::mul(&anim::quat_trans_to_mat(dt.q, dt.t), bw), m);
+            let a = [dm[3][0], dm[3][1], dm[3][2]];
+            let far = [a[0] - dm[0][0] * 100.0, a[1] - dm[0][1] * 100.0, a[2] - dm[0][2] * 100.0];
+            let b = s.world.segment_surface_bullet(a, far).map_or(far, |(t, _, _)| [a[0] + (far[0] - a[0]) * t, a[1] + (far[1] - a[1]) * t, a[2] + (far[2] - a[2]) * t]);
+            let d = (0..3).map(|k| (a[k] - eye[k]).powi(2)).sum::<f32>();
+            if out.iter().any(|o| o.1 == a) { continue; }
+            out.push((d, a, b));
+        }
+        out.sort_by(|x, y| x.0.total_cmp(&y.0));
+        out.truncate(GUARD_BEAMS);
+        out.into_iter().map(|(_, a, b)| (a, b)).collect()
+    }
+
     pub fn frame_state(&self, choice: Option<usize>, ticks: f32, opts: ViewOpts) -> FrameState {
         self.frame_state_for(choice, ticks, opts, false)
     }
@@ -10025,6 +10291,10 @@ pub fn build(level: &Level, cels_only: bool, skeletons: &HashMap<u8, Skeleton>, 
         // character visible; script actors keep their liveness gate either way.
         // A matrix that collapses a mesh to one point: its triangles become degenerate and draw nothing.
         let collapse = |at: &Mat4| -> Mat4 { [[0.0; 4], [0.0; 4], [0.0; 4], [at[3][0], at[3][1], at[3][2], 1.0]] };
+        // goggles: this frame's glowing guards (the pooled glow slots read them) and the viewer.
+        let glow = self.glow_targets(|ci| posed.get(ci).is_some_and(|p| p.is_some()) && !hidden(&self.characters[ci], ci));
+        let glow_eye = self.sim.as_ref().map_or([0.0; 3], |s| s.script_camera().map_or(s.bond.head(), |c| c.0));
+        let beams = self.guard_beams(|ci| posed.get(ci).and_then(|p| p.as_ref()).filter(|_| !hidden(&self.characters[ci], ci)).map(|(_, w, m)| (w.as_slice(), m)));
         // Attached meshes: datum local · bone world · object (bind world when the character has no animation).
         // The debris draw slots: each live piece sits in the slot it was handed at birth
         // (`Effects::assign_debris_slots`), never in its list index.
@@ -10036,7 +10306,9 @@ pub fn build(level: &Level, cels_only: bool, skeletons: &HashMap<u8, Skeleton>, 
             if let Some((gi, gmesh)) = a.gas {
                 let far = [[0.0; 4], [0.0; 4], [0.0; 4], [0.0, -10000.0, 0.0, 1.0]];
                 let Some(s) = self.sim.as_ref() else { return far };
-                let Some(g) = s.drones.gas.puffs.get(gi as usize).filter(|g| g.mesh == gmesh) else { return far };
+                // The breath's mode-2 puff carries the 0x400 bit: drawn only in x-ray [M Env_Breath
+                // 0x17c024-0x17c02c; View_AddObjects 0x1e62d8:38-47].
+                let Some(g) = s.drones.gas.puffs.get(gi as usize).filter(|g| g.mesh == gmesh && (!g.xray_only || s.goggle_mode() == 2)) else { return far };
                 let (c, sn) = g.spin.sin_cos();
                 let (rx, ry) = (opts.right, opts.up);
                 let (r2, u2) = ([rx[0] * c - ry[0] * sn, rx[1] * c - ry[1] * sn, rx[2] * c - ry[2] * sn],
@@ -10050,6 +10322,68 @@ pub fn build(level: &Level, cels_only: bool, skeletons: &HashMap<u8, Skeleton>, 
                 ];
             }
             if let Some(slot) = a.tracer {
+                if slot >= XRAY_SLOT_BASE {
+                    // goggles: an x-ray-only placed object — drawn only in mode 2 [M View_AddObjects
+                    // 0x1e62d8:38-47], while its object lives: a breakable until `Break_Kill`
+                    // (obj+0xFE bit 0 → deleted [M 0x12b970]), a trigger until deleted and unless its
+                    // lock channel fired with the hide byte set (`Trigger_Update` 0x1b1a78:47-55
+                    // ORs 0x30 — no-draw — into obj+0xF0; sticky in the game, re-derived from the
+                    // channel here [S]). A keyed trigger follows its spline (`triggers::Motion`).
+                    let far = [[0.0; 4], [0.0; 4], [0.0; 4], [0.0, -10000.0, 0.0, 1.0]];
+                    let Some(s) = self.sim.as_ref() else { return far };
+                    if s.goggle_mode() != 2 { return far; }
+                    let pi = slot - XRAY_SLOT_BASE;
+                    if let Some(t) = s.drones.triggers.iter().find(|t| t.placement == pi) {
+                        if t.gone || (t.lock != 0 && t.hide && s.drones.channels.on(u32::from(t.lock))) { return far; }
+                        // A keyed trigger draws at its spline pose (`Trigger_Update` 0x1b1a78:60-70
+                        // writes obj+0x90 every update) — the moving tripwire beams.
+                        if let Some(m) = t.motion.as_ref() { return m.matrix; }
+                    }
+                    if let Some(b) = s.drones.breaks.list.iter().find(|b| b.placement == pi) {
+                        return if b.dead { far } else { b.matrix };
+                    }
+                    return a.local;
+                }
+                if (GLOW_SLOT_BASE..GLOW_SLOT_BASE + GLOW_GUARDS * 16).contains(&slot) {
+                    // goggles: a body-glow part [M BodyGlow_Update 0x1ac2c8:209-262]. Part 0 the main
+                    // object 0x200025f at the owner's bone 5, a camera billboard scaled by obj+0xE8
+                    // = 6.0 (`View_DrawObjectGlist` 0x1e6780's obj+0xF0 & 8 arm); x-ray only (its
+                    // 0x400 bit stays set). Parts 1..=15 the 0x200055a sprites, each aligned from
+                    // GlowBones[k]'s skin parent to the bone, turned to the viewer, scaled (1.5, 1,
+                    // length) [`body_glow::child_matrix`].
+                    let far = [[0.0; 4], [0.0; 4], [0.0; 4], [0.0, -10000.0, 0.0, 1.0]];
+                    let (g, part) = ((slot - GLOW_SLOT_BASE) / 16, (slot - GLOW_SLOT_BASE) % 16);
+                    let Some(t) = glow.get(g) else { return far };
+                    if part == 0 && !t.xray { return far; }
+                    let Some((_, world, m)) = &posed[t.ci] else { return far };
+                    let wp = |b: usize| world.get(b).map(|w| { let x = anim::mul(w, m); [x[3][0], x[3][1], x[3][2]] });
+                    if part == 0 {
+                        let Some(p) = wp(nf_game::body_glow::MAIN_BONE) else { return far };
+                        let sc = nf_game::body_glow::RADIUS;
+                        let (r, u) = (opts.right, opts.up);
+                        return [[r[0] * sc, r[1] * sc, r[2] * sc, 0.0], [u[0] * sc, u[1] * sc, u[2] * sc, 0.0], [0.0, 0.0, sc, 0.0], [p[0], p[1], p[2], 1.0]];
+                    }
+                    let k = part - 1;
+                    let skin = &self.characters[t.ci].skin;
+                    let parent = nf_game::body_glow::glow_parent(k, |b| skin.bones.get(b).copied().unwrap_or(0x7f) as usize);
+                    let (Some(bp), Some(pp)) = (wp(nf_game::body_glow::GLOW_BONES[k] as usize), wp(parent)) else { return far };
+                    return nf_game::body_glow::child_matrix(bp, pp, glow_eye).0;
+                }
+                if (GUARD_BEAM_BASE..GUARD_BEAM_BASE + GUARD_BEAMS * 2).contains(&slot) {
+                    // goggles-draws: a guard's laser ray (`Scene::guard_beams`) — the night sprite
+                    // in mode 1, the plain one otherwise [M AnimObjectDraw 0x1c4490:296-301]; the
+                    // mesh's −z runs start → end (the sight beam's convention).
+                    let far = [[0.0; 4], [0.0; 4], [0.0; 4], [0.0, -10000.0, 0.0, 1.0]];
+                    let Some(s) = self.sim.as_ref() else { return far };
+                    let (g, night) = ((slot - GUARD_BEAM_BASE) / 2, (slot - GUARD_BEAM_BASE) % 2 == 1);
+                    if night != (s.goggle_mode() == 1) { return far; }
+                    let Some(&(a, b)) = beams.get(g) else { return far };
+                    let len = ((a[0] - b[0]).powi(2) + (a[1] - b[1]).powi(2) + (a[2] - b[2]).powi(2)).sqrt();
+                    if len < 1e-4 { return far; }
+                    let mut m = z_basis([a[0] - b[0], a[1] - b[1], a[2] - b[2]], a);
+                    for k in 0..3 { m[2][k] *= len; }
+                    return m;
+                }
                 if slot >= MP_TRACER_BASE {
                     // mp-remote-fx: a remote shot's trail — `tracer_matrix`'s convention (+Z along the
                     // flight, scaled by one tick of travel, cut at the contact).
@@ -10098,13 +10432,16 @@ pub fn build(level: &Level, cels_only: bool, skeletons: &HashMap<u8, Skeleton>, 
                     // view-only in first person [M: `BLData+0x950 == 0`]. Slot +6 the dot at
                     // hit + normal·0.01, its z on the normal, scale 1 + d²/MAX_VIEW_CONE (2000) capped
                     // at 4 with d = datum → end [M ll. 189-205; L 0x30d0fc]. The flicker (Rand_FRand
-                    // on the size byte) and the night-sight sprite 0x2000131 are not drawn yet.
+                    // on the size byte) is not drawn yet. goggles: night sight swaps the beam's gfx
+                    // to 0x2000131 "lazer" (NIGHT_BEAM_SLOT) [M 0x1a65d8:151-155] — same matrix.
                     let far = [[0.0; 4], [0.0; 4], [0.0; 4], [0.0, -10000.0, 0.0, 1.0]];
                     let Some(s) = self.sim.as_ref() else { return far };
                     let Some((a, b, dot)) = s.laser_sight else { return far };
                     let d = [b[0] - a[0], b[1] - a[1], b[2] - a[2]];
                     let len = (d[0] * d[0] + d[1] * d[1] + d[2] * d[2]).sqrt();
-                    if slot as usize == TRACER_SLOTS + 5 {
+                    let night = s.goggle_mode() == 1;
+                    if slot as usize == TRACER_SLOTS + 5 || slot as usize == NIGHT_BEAM_SLOT {
+                        if (slot as usize == NIGHT_BEAM_SLOT) != night { return far; }
                         if !s.first_person || len < 1e-4 { return far; }
                         // The mesh's −z runs start→end (the +z-backward convention below), so z = a − b.
                         let mut m = z_basis([a[0] - b[0], a[1] - b[1], a[2] - b[2]], a);
@@ -11483,12 +11820,16 @@ pub fn build(level: &Level, cels_only: bool, skeletons: &HashMap<u8, Skeleton>, 
         // render — the one that draws — never faded the puff (the CPU `posed_vertices`' gas_rgba
         // did). The shader multiplies c0.rgb/α by cols.rgb/α, which is exactly the game's tweak.
         // Free slots keep the ambient value: their matrix is FAR, nothing draws.
+        // night-alpha: every puff carries obj+0xF0 0x20000 (`Gas_Init` 0x1aacc8:83 ORs 0x20020120),
+        // and the Tweak quarters the alpha byte while the viewer is in night sight
+        // [M View_SetupRenderModes_Tweak 0x1e5888:12-17, viewer+0x236 == 1] (`Gas::tweak_alpha`).
         if let Some(s) = self.sim.as_ref() {
+            let mode = s.goggle_mode();
             for (a, att) in self.attachments.iter().enumerate() {
                 let Some((gi, gm)) = att.gas else { continue };
                 let Some(c) = cols.get_mut((l.col_att + a as u32) as usize) else { continue };
                 if let Some(g) = s.drones.gas.puffs.get(gi as usize).filter(|g| g.mesh == gm) {
-                    *c = [g.rgba[0] / 255.0, g.rgba[1] / 255.0, g.rgba[2] / 255.0, g.rgba[3] / 255.0];
+                    *c = [g.rgba[0] / 255.0, g.rgba[1] / 255.0, g.rgba[2] / 255.0, g.tweak_alpha(mode)];
                 }
             }
         }
@@ -11513,6 +11854,17 @@ pub fn build(level: &Level, cels_only: bool, skeletons: &HashMap<u8, Skeleton>, 
                 if !self.script_tweak_alpha.contains(&hash) { continue; }
                 let Some(b) = s.script_entity_alpha_k((h, si), hash, k as usize) else { continue };
                 if let Some(c) = cols.get_mut((l.col_att + a as u32) as usize) { c[3] = b as f32 / 255.0; }
+            }
+        }
+        // goggles: the body glow's alpha byte obj+0x106 = (1 − d·0.1)·count·128/256 on the main
+        // object and every child [M BodyGlow_Update 0x1ac2c8:224-260] — the Tweak's alpha factor
+        // (byte/255) [M View_SetupRenderModes_Tweak 0x1e5888:47-49], like the swoosh's.
+        {
+            let glow = self.glow_targets(|ci| fs.posed.get(ci).is_some_and(|p| p.is_some()) && !fs.hidden.get(ci).copied().unwrap_or(true));
+            for (a, att) in self.attachments.iter().enumerate() {
+                let Some(slot) = att.tracer.filter(|s| (GLOW_SLOT_BASE..GLOW_SLOT_BASE + GLOW_GUARDS * 16).contains(s)) else { continue };
+                let Some(t) = glow.get((slot - GLOW_SLOT_BASE) / 16) else { continue };
+                if let Some(c) = cols.get_mut((l.col_att + a as u32) as usize) { c[3] = t.alpha as f32 / 255.0; }
             }
         }
         // Bond's muzzle flash alpha: `Draw_MuzzleFlash` writes the object's alpha byte (`obj+0x106`) on
@@ -11703,8 +12055,13 @@ pub fn build(level: &Level, cels_only: bool, skeletons: &HashMap<u8, Skeleton>, 
         // The gas puffs' live rgba (the object's obj+0x103..0x106 bytes the draw reads [M 0x1ab2d0 tail]):
         // read straight from the pool — the alpha byte fades the quad out.
         let gas_rgba: Vec<Option<[u8; 4]>> = self.attachments.iter().map(|a| {
-            a.gas.and_then(|(gi, gm)| self.sim.as_ref().and_then(|s| s.drones.gas.puffs.get(gi as usize).filter(|g| g.mesh == gm))
-                .map(|g| g.rgba.map(|c| c.round().clamp(0.0, 255.0) as u8)))
+            a.gas.and_then(|(gi, gm)| self.sim.as_ref().and_then(|s| s.drones.gas.puffs.get(gi as usize).filter(|g| g.mesh == gm)
+                .map(|g| {
+                    // night-alpha: the night-sight quarter on the alpha byte (`Gas::tweak_alpha`).
+                    let mut c = g.rgba.map(|c| c.round().clamp(0.0, 255.0) as u8);
+                    if s.goggle_mode() == 1 { c[3] = (g.tweak_alpha(1) * 255.0).round() as u8; }
+                    c
+                })))
         }).collect();
         // The corpse fade (fix-ai-remainder; G-026): the game's `NDrone2_FadeOut` 0x172dd8 decays the
         // drone object's alpha byte obj+0x106 (0.6 per tick in Fade 0x48, 8.0 in FadeFast 0x49) and the

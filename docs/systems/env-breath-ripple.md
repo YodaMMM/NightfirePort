@@ -21,18 +21,31 @@ Gates [M disasm 0x17be1c-0x17bec8]:
 - `(float)((GameState+0x52 − phase) % 120) <= (FRAME_RATE+FRAME_RATE)·0.33333334` = 40.0
   [M 0x17be60-0x17bec8].
 
-Spawn at `pos + dir·0.05` (0x3dcccccd, the shared COP2 prologue), mesh **0x0200_021d**,
+Spawn at `pos + dir·0.1` (0x3dcccccd = 0.1, the broadcast scalar at sp+0x20 / sp+0x30 of the
+COP2 `_vmulbc/_vadd` [M 0x17bf00-0x17bf18, 0x17bfa4-0x17bfbc]), mesh **0x0200_021d**,
 kind 0, life **40** (`sw $v0(0x28), ($sp)` at 0x17c010/0x17bf48 — the decompiler drops
 this arg), velocity = the `dir` argument · REC_FRAME_RATE (`Gas_Init`'s non-kind-4
 `param_6 != 0` arm [M 0x1aacc8 tail]) [M]:
 
 - **Variant A** — env gate true AND cam mode 2 (`glb_viewer+0x236 == 2` [M 0x17bf7c]):
   p1 0.05 → p2 0.2, quaternion z = `Rand_FRand(6.2831855)` [M 0x17bf8c-0x17bfa0], rgba
-  0xffffffc8 = (255,255,255,α 200) → 0x0000ff01 = (0,0,255,α 1) [M 0x17c018/0x17c020],
+  0xffffffc8 = (255,255,255,α 200) → 0xffffff01 = (255,255,255,α 1) [M 0x17bfc0/0x17c018 and
+  0x17bfc8/0x17c020: `lui 0xffff` + `ori 0xffc8` / `ori 0xff01`],
   and the gas object's `+0xf0 |= 0x400` draw flag [M 0x17c024-0x17c02c].
-- **Variant B** — env gate false (any cam mode): p1 = p2 = 0.05 (static size [M
-  0x17bf00-0x17bf08: f13 = f12 = 0x3dcccccd]), null quaternion (no yaw), rgba 0xffffff80
-  (α 128) → the same 0xff01 end [M 0x17bf60].
+- **Variant B** — env gate false (any cam mode): p1 0.05 → p2 0.1 [M f12 = 0x3d4ccccd at
+  0x17bf24-0x17bf2c, f13 = 0x3dcccccd at 0x17bf00-0x17bf08], null quaternion (no yaw), rgba
+  0xffffff80 (α 128) → the same 0xffffff01 end [M 0x17bf1c/0x17bf60, 0x17bf20/0x17bf68].
+  The puff stays white; only its alpha runs out.
+
+PCSX2 check (07000005, guard by the 99.7/16.9/101.6 doorway, EE breakpoint after the variant-B
+`Gas_Init` at 0x17bf6c, the returned gas object followed every frame) [M]: class 0xE, kind 0,
+scale 0.0525 → 0.0987 at +0.00125/tick (= (0.1 − 0.05)/40), rgba (255,255,255) throughout with
+α 121 → 0 over the 40 ticks, obj+0xF0 = 0x30028329. The live breakpoint counts: Env_Breath runs
+every frame for the guard, 0x17bed0 (past the window) and 0x17bf00 (variant B) 13-14 times and
+`Gas_Init` 13 times in 15 s. On screen the puff is only a faint haze at the chin (a frame-vs-median
+diff shows it; plain frames at 1.6 and 2.4 units do not) — it is not a clearly visible cloud on
+the PS2 either. An earlier reading here took f13 for 0x3d4ccccd (a static 0.05 puff) and the end
+for 0xff01 (a fade to blue); both made the port's puff smaller and darker than the game's.
 
 The env gate is `GlobalEnv == 0 || GlobalEnv+0x4b != 0 || cel+0x3c & 0x10000000` [M
 0x17bed0-0x17bef8]. The port models no `GlobalEnv`: `env_breath`'s `env_gate: Option<bool>`
@@ -41,10 +54,29 @@ cam-mode read and the `+0xf0 |= 0x400` flag are wiring points for the draw side 
 flag is the same class of draw-flag the port's `Gas` does not model — the blood puff's
 `+0xf0 |= 8` deviation, gas.rs).
 
-Wiring points: `Player_Update`'s call needs the port's bond tick (nf-view `step_bond`
-owns Bond) with the cel's `+0xa0` zone byte and `BLData+0x254`; the guard call needs the
-AI pass's cel + `obj+0xEC + (obj & 0xfff)·0x80` phase. Neither tick currently carries the
-breath inputs — recorded as the follow-up with this function ready.
+Corrections (goggles-draws):
+- `cel+0xa0` is not a "breath zone": it is the portal walk's visited flag for the last view
+  capture — `View_CaptureScene` 0x1e6df0 clears it over the cel chain, `Vision_Portal_Recurse`
+  0x1e86e8 / `Vision_Recurse` 0x1e82e0 / `Vision_AddCelToDraw` 0x1e8908 set it [M]. A breather
+  only puffs while its cel was in view.
+- The player gate is `BLData+0x950 != 0` (disasm 0x193e6c `lbu v0, 0x950(s2)`), the camera
+  mode — the decompile's `puVar2 + 0x254` is a word-pointer offset (0x254·4). Bond breathes
+  only in a non-first-person camera mode.
+- `GlobalEnv+0x4b` is the Env_Create record's drop type (`pauVar8[4][0xb] = level_tag+0x2c`,
+  the `InitDrops` argument [M 0x17b968:66-68,112-114]); drop type 0 is snow. The env gate is
+  therefore false only under a snow env, and variant B (the plain puff, any mode) is the snow
+  levels' breath; everywhere else breath is the x-ray-only variant A. `cel+0x3c & 0x10000000`
+  is the cel's underwater bit (`Cel::underwater`).
+- The 0xffffff01 end colour and the life are as above; the x-ray puff's +0xF0 |= 0x400 is now
+  carried (`Gas::xray_only`) and the draw honours it.
+
+Wiring (goggles-draws): the guard call runs in `Sim::guard_breath` after the tick's AI pass —
+gate `drawn_grace != 0` (obj+0xFC) and health > 0 [M 0x1490f0:168], the head from
+`Drone::object_pose` bone 5 (`env::guard_breath_origin`: dir = its z row, pos + dir·0.12),
+the env gate from `env::breath_env_gate(drop type)`, the cel's underwater bit, the goggle
+mode. Stand-ins [S]: the cel-visited byte reads as `drawn_grace != 0`; `obj & 0xfff` (a heap
+address) as the drone's list index. Bond's call is not wired: the port's on-foot play has no
+non-first-person camera mode outside the cut-scenes `BLData+0x94b` already excludes.
 
 ## Env_WaterRipple 0x17c118 (148 B) — ported `env::env_water_ripple`
 

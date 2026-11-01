@@ -41,7 +41,7 @@ fn parse_level(iso: &str, name: &str) -> nf_formats::level::Level {
 
 /// The kind's expected drawn count for a level, recomputed independently of the scene sweep: main-map
 /// placements of the kind whose object resolves with gfx batches, minus the kinds' own skip rules
-/// (0x3B hidden-until-channel: param 0 ≠ 0 [M DynamicObject_Create 0x18dbf8:31]; mirror-only glists,
+/// (0x3B hidden-until-channel: param 0 ≠ 0 [M DynamicObject_Create 0x18dbf8:31]; x-ray-only glists,
 /// flags 0x400 [M View_AddObjects 0x1e62d8:38-47]).
 fn expected_misc(level: &nf_formats::level::Level, kinds: &[u8]) -> BTreeMap<u8, usize> {
     let mut out: BTreeMap<u8, usize> = BTreeMap::new();
