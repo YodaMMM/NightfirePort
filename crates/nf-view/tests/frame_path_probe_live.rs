@@ -57,7 +57,8 @@ fn on_foot_levels(iso_path: &str) -> Vec<String> {
 #[cfg(not(debug_assertions))]
 fn probe_the_frame_path_per_level() {
     let Some(iso_path) = std::env::var("NF_ISO").ok() else { eprintln!("NF_ISO not set"); return };
-    let instance = wgpu::Instance::new(wgpu::InstanceDescriptor::new_without_display_handle());
+    // perf-240g: the window's instance (Vulkan without indirect-call validation; NF_INDIRECT_VALIDATION=1 = the default).
+    let instance = nf_view::gpu_instance(None).0;
     let Ok(adapter) = pollster::block_on(instance.request_adapter(&wgpu::RequestAdapterOptions::default())) else { eprintln!("no adapter"); return };
     let (device, queue) = app_device(&adapter);
     nf_game::prof::force_enable();
@@ -263,7 +264,8 @@ fn probe_the_gpu_half() {
 #[cfg(not(debug_assertions))]
 fn probe_gpu_timestamps() {
     let Some(iso_path) = std::env::var("NF_ISO").ok() else { return };
-    let instance = wgpu::Instance::new(wgpu::InstanceDescriptor::new_without_display_handle());
+    // perf-240g: the window's instance (Vulkan without indirect-call validation; NF_INDIRECT_VALIDATION=1 = the default).
+    let instance = nf_view::gpu_instance(None).0;
     let adapter = pollster::block_on(instance.request_adapter(&wgpu::RequestAdapterOptions::default())).expect("adapter");
     if !adapter.features().contains(wgpu::Features::TIMESTAMP_QUERY) { eprintln!("[gts] no TIMESTAMP_QUERY on {:?}", adapter.get_info().name); return; }
     let want = wgpu::Features::TEXTURE_BINDING_ARRAY | wgpu::Features::SAMPLED_TEXTURE_AND_STORAGE_BUFFER_ARRAY_NON_UNIFORM_INDEXING | wgpu::Features::INDIRECT_FIRST_INSTANCE;
@@ -530,7 +532,8 @@ fn probe_first_builds() {
 #[cfg(not(debug_assertions))]
 fn probe_gpu_bisect() {
     let Some(iso_path) = std::env::var("NF_ISO").ok() else { return };
-    let instance = wgpu::Instance::new(wgpu::InstanceDescriptor::new_without_display_handle());
+    // perf-240g: the window's instance (Vulkan without indirect-call validation; NF_INDIRECT_VALIDATION=1 = the default).
+    let instance = nf_view::gpu_instance(None).0;
     let adapter = pollster::block_on(instance.request_adapter(&wgpu::RequestAdapterOptions::default())).expect("adapter");
     if !adapter.features().contains(wgpu::Features::TIMESTAMP_QUERY) { eprintln!("[gbis] no TIMESTAMP_QUERY"); return; }
     let want = wgpu::Features::TEXTURE_BINDING_ARRAY | wgpu::Features::SAMPLED_TEXTURE_AND_STORAGE_BUFFER_ARRAY_NON_UNIFORM_INDEXING | wgpu::Features::INDIRECT_FIRST_INSTANCE;
@@ -663,7 +666,8 @@ fn probe_gpu_bisect() {
 #[cfg(not(debug_assertions))]
 fn probe_output_hashes() {
     let Some(iso_path) = std::env::var("NF_ISO").ok() else { return };
-    let instance = wgpu::Instance::new(wgpu::InstanceDescriptor::new_without_display_handle());
+    // perf-240g: the window's instance (Vulkan without indirect-call validation; NF_INDIRECT_VALIDATION=1 = the default).
+    let instance = nf_view::gpu_instance(None).0;
     let adapter = pollster::block_on(instance.request_adapter(&wgpu::RequestAdapterOptions::default())).expect("adapter");
     let (device, queue) = app_device(&adapter);
     let mut levels = on_foot_levels(&iso_path);
