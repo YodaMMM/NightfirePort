@@ -750,6 +750,10 @@ pub struct Sim {
     /// (`nf_game::anim::PoseSampleCache`) and the walk scripts' distance tables (built once per
     /// walk sequence instead of per body per ticked frame). Draw-only, never read by the sim.
     pub mp_draw_cache: std::cell::RefCell<(nf_game::anim::PoseSampleCache, HashMap<u32, Option<nf_game::anim::DistanceTable>>)>,
+    /// perf-240f: the drone characters' draw memo (the palette's `Drone::object_pose_cached`):
+    /// whole-frame bone samples, draw-only, never read by the sim. perf-240g: one memo per pose
+    /// pool slot (`pose_pool::MAX_SLOTS`; slot 0 = the calling thread).
+    pub drone_draw_cache: Vec<std::sync::Mutex<nf_game::anim::PoseSampleCache>>,
     /// light-sun: BLData+0x962 — Bond's head sees the sun this tick (`ramp_char_ambient`).
     pub sun_seen: bool,
     /// The language string table (`USATxt.dat`, the NTSC-U default `FNames[SelLang]`) — the source of the
@@ -2058,7 +2062,7 @@ pub fn portal_cel_chain_from_cell_doors(graph: &CelGraph, start: usize, eye: [f3
         *budget += 1;
         if *budget > 100 || depth > 45 { return; }
         let n0 = planes[depth].len();
-        let dbg = std::env::var_os("NF_PORTAL_DEBUG").is_some();
+        let dbg = { static F: std::sync::OnceLock<bool> = std::sync::OnceLock::new(); *F.get_or_init(|| std::env::var_os("NF_PORTAL_DEBUG").is_some()) };
         for (pi, p) in graph.portals.iter().enumerate() {
             let (side_open, dest, fwd) = if cell == p.cel_a {
                 ((p.flags & 1) == 0, p.cel_b, false)
@@ -3878,7 +3882,7 @@ impl Sim {
         // done, swap the weapon byte and start the draw. State 3 (drawing): the draw script plays; when done, back to idle.
         // State 8 (variant swap): the variant-swap script plays; when done, back to idle.
         // While switching, the trigger and reload are blocked (the game's state 1/3 checks `AnimScriptIsStopped`).
-        let log_switch = std::env::var_os("NF_SOUNDLOG").is_some();
+        let log_switch = { static F: std::sync::OnceLock<bool> = std::sync::OnceLock::new(); *F.get_or_init(|| std::env::var_os("NF_SOUNDLOG").is_some()) };
         let mut switching = self.gun.switch_state != 0;
         // fix-weapon-anims2: the script-frame watermark the op-1 sound dispatch below measures its
         // [prev_frame+1, new_frame] window against — captured BEFORE the switch machine advances the
@@ -6071,6 +6075,23 @@ impl Sim {
             }
         }).nth(k)
     }
+
+    /// perf-240f: every live script entity's matrix by (src, hash) in `script_entity_k`'s order
+    /// (newest first, the hidden SPs' stream objects left out), so `script_entity_k(src, hash, k)`
+    /// is `index.get(&(src, hash)).and_then(|v| v.get(k)).map(|e| e.0)` — one walk of the object
+    /// list for a whole palette build instead of one per script attachment. Each entry also carries
+    /// the entity's alpha byte, `script_entity_alpha_k`'s value for the same k (pc-screen).
+    pub fn script_entity_index(&self) -> EntIndex {
+        let hidden = self.drones.scripts.hidden_stream_objects();
+        let mut out: EntIndex = Default::default();
+        for (i, o) in self.drones.scripts.objects.list.iter().enumerate().rev() {
+            if hidden.contains(&i) { continue; }
+            if let Some(nf_game::nis::Obj::Entity { hash, matrix, src, alpha, .. }) = o {
+                out.entry((*src, *hash)).or_default().push((*matrix, ((alpha * 255.0 + 0.5).max(0.0) as u32 & 0xff) as u8));
+            }
+        }
+        out
+    }
     /// The game data the simulation consults, borrowed from this Sim.
     pub fn data(&self) -> nf_game::drone::Data<'_> {
         nf_game::drone::Data { tables: &self.tables, props: &self.props, scripts: &self.scripts, weapons: &self.weapons, world: &self.world, level: self.level, sequences: &self.seqs, skins: &self.skins, skeletons: &self.skeletons, nav: &self.nav, covers: &self.covers, tuning: &self.tuning, hitboxes: &self.hitboxes, volumes: &self.volumes, sfx: self.sfx.as_ref(), models: &self.models , surfaces: self.surfaces.as_ref(), voices: self.voices.as_deref(), difficulty: self.drones.difficulty,
@@ -6363,12 +6384,46 @@ pub struct SkinLayout { pub char_base: Vec<u32>, pub attach_base: u32, pub sl_ba
     /// buffer's size; equals `morph_target_blob().len() / 4`).
     pub n_tgt: u32 }
 
-/// One frame's pose state (`Scene::frame_state`).
-thread_local! {
-    /// perf-240: the recycled attachment-matrix buffer of `frame_state_for` (see there).
-    static ATTACH_SCRATCH: std::cell::RefCell<Vec<Mat4>> = const { std::cell::RefCell::new(Vec::new()) };
+/// The live script entities' (matrix, alpha byte) by ((stream hash, script index), model hash),
+/// in object order (`Sim::script_entity_index`); perf-240g: an Fx-hashed map (lookups only).
+pub type EntIndex = nf_game::fxhash::FxHashMap<((u32, u8), u32), Vec<(Mat4, u8)>>;
+
+/// perf-240g: the palette build's attachment walk, grouped once per scene. Every class below is
+/// a pure function of the `Attachment` fields, which never change after the build, so the plan
+/// is fixed. The grouped slots are the effect pools: thousands of (slot, mesh) attachments whose
+/// slot is empty most of the time, and an empty slot draws FAR for every mesh. The palette walks
+/// a group's slot once instead of once per mesh; any slot it cannot prove empty goes through the
+/// same `att_one` call as before.
+#[derive(Default)]
+pub(crate) struct AttachPlan {
+    key: (usize, usize),
+    /// Attachments not in a group: `att_one` one by one.
+    general: Vec<u32>,
+    /// Projectile slots below `SWOOSH_SLOT_BASE`: the slot and its attachments. Members have no
+    /// gas / tracer / silencer / swap-piece arm, so `att_one` reaches the projectile arm.
+    proj: Vec<(u16, Vec<u32>)>,
+    /// Effect slots of kind 0 (decals) and 2 (debris): kind, slot, (attachment, mesh). Members
+    /// reach the effect arm (no gas / tracer / silencer / swap piece / projectile).
+    eff: Vec<(u8, usize, Vec<(u32, u32)>)>,
+    /// The palette's colour-tail walks: the gas, swoosh and flash attachments, in index order.
+    gas: Vec<u32>,
+    swoosh: Vec<u32>,
+    flash: Vec<u32>,
+    /// perf-all: the script attachments, in index order (the pc-screen alpha walk).
+    script: Vec<u32>,
+    any_script: bool,
+    /// `colour_mults_dense`'s per-attachment arm (0 = untinted, 1 = the full arm chain, 3 = owner).
+    col: Vec<u8>,
+    /// Each attachment's owner character (`Attachment::character`), so the owner arm reads a
+    /// dense list instead of the whole attachment record.
+    col_char: Vec<u32>,
 }
 
+/// perf-240g: the identity tests' switch — true walks every attachment through `att_one` and every
+/// colour slot through the full arm chain (the code before the `AttachPlan` fast paths).
+pub static PALETTE_REFERENCE: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+
+/// One frame's pose state (`Scene::frame_state`).
 pub struct FrameState {
     pub posed: Vec<Option<(Vec<Mat4>, Vec<Mat4>, Mat4)>>,
     pub attach: Vec<Mat4>,
@@ -6414,6 +6469,9 @@ pub struct MpBody {
 }
 
 pub struct Scene {
+    /// perf-240g: the attachment walk's plan (`Scene::attach_plan`), built on first use from
+    /// `attachments` and rebuilt if that list changes length or address.
+    attach_plan: std::cell::RefCell<Option<std::sync::Arc<AttachPlan>>>,
     /// Hidden NPC copies the dev panel can bring to life (`dev::spawn_npc`).
     pub npc_pool: Vec<NpcSlot>,
     /// The MP bodies (mp-character-data), one per human slot and per bot — parked hidden until the
@@ -9609,7 +9667,7 @@ pub fn build(level: &Level, cels_only: bool, skeletons: &HashMap<u8, Skeleton>, 
             // The difficulty was set before the creates above (the game's GameState+0x28 pick);
             // the old direct-load hardcode `= 1` moved into the build parameter so replay loads
             // pass 1 and the front-end path passes the menu's pick.
-            Some(Sim { drones, tables: d.tables.clone(), props, scripts: d.scripts.clone(), weapons, world, level: d.level_id, char_drone, char_script, char_script_skin, seq_index, seqs, skins: level.skins.clone(), skeletons: skeletons.clone(), nav, covers, ai_points, tuning: d.tuning.clone(), hitboxes, sfx: d.sfx.clone(), volumes, glist_bounds, models, gun: nf_game::gun::Gun::new(2, 7, 41), bond, cursor: [0.0; 2], cross: [0.0; 2], view_script: 0, first_person: false, last_shot: None, shot_tick: false, view_time: 0.0, view_speed: 1.0, bob: [0.0; 2], aiming: false, free_aim: false, auto_aim: false, rapid_fire: false, zoom: 1.0, zoom_target: 1.0, zoom_saved: Vec::new(), zoom_aim_prev: false, disabled: false, surfaces: d.surfaces.clone(), voices: d.voices.clone(), step_dist: 0.0, wires, creepwalls, creeping: false, wire_anims, wire_channel: 0, ladders, icons, view_model_ids: std::collections::HashSet::new(), cross_state: 2, cels: sim_cels, char_ambient, view_model_chars: Vec::new(), mp_body_chars: Vec::new(), bond_body_char: None, mp_last_held: [2; nf_net::MAX_AGENTS], mp_weapon_loaded: Vec::new(), ambient_lookups: std::cell::Cell::new(0), mp_draw_cache: Default::default(), mp_anim: (0..nf_net::MAX_AGENTS).map(|_| nf_game::mp::body_anim::MpBodyAnim::new()).collect(), mp_anim_sets: d.mp_anims.as_ref().map(|a| nf_formats::mpanim::MpAnimSets { sets: a.sets }), sun_seen: false, lang: None, hud: Default::default(), smoke: Vec::new(), room_cell: cel_graph.room_to_cell.clone(), prev_trigger: false,
+            Some(Sim { drones, tables: d.tables.clone(), props, scripts: d.scripts.clone(), weapons, world, level: d.level_id, char_drone, char_script, char_script_skin, seq_index, seqs, skins: level.skins.clone(), skeletons: skeletons.clone(), nav, covers, ai_points, tuning: d.tuning.clone(), hitboxes, sfx: d.sfx.clone(), volumes, glist_bounds, models, gun: nf_game::gun::Gun::new(2, 7, 41), bond, cursor: [0.0; 2], cross: [0.0; 2], view_script: 0, first_person: false, last_shot: None, shot_tick: false, view_time: 0.0, view_speed: 1.0, bob: [0.0; 2], aiming: false, free_aim: false, auto_aim: false, rapid_fire: false, zoom: 1.0, zoom_target: 1.0, zoom_saved: Vec::new(), zoom_aim_prev: false, disabled: false, surfaces: d.surfaces.clone(), voices: d.voices.clone(), step_dist: 0.0, wires, creepwalls, creeping: false, wire_anims, wire_channel: 0, ladders, icons, view_model_ids: std::collections::HashSet::new(), cross_state: 2, cels: sim_cels, char_ambient, view_model_chars: Vec::new(), mp_body_chars: Vec::new(), bond_body_char: None, mp_last_held: [2; nf_net::MAX_AGENTS], mp_weapon_loaded: Vec::new(), ambient_lookups: std::cell::Cell::new(0), mp_draw_cache: Default::default(), drone_draw_cache: (0..crate::pose_pool::MAX_SLOTS).map(|_| Default::default()).collect(), mp_anim: (0..nf_net::MAX_AGENTS).map(|_| nf_game::mp::body_anim::MpBodyAnim::new()).collect(), mp_anim_sets: d.mp_anims.as_ref().map(|a| nf_formats::mpanim::MpAnimSets { sets: a.sets }), sun_seen: false, lang: None, hud: Default::default(), smoke: Vec::new(), room_cell: cel_graph.room_to_cell.clone(), prev_trigger: false,
             mp_bonds: [const { None }; nf_net::MAX_AGENTS],
             mp_local_slot: 0,
             mp_body_speed: [0.0; nf_net::MAX_AGENTS],
@@ -9709,7 +9767,8 @@ pub fn build(level: &Level, cels_only: bool, skeletons: &HashMap<u8, Skeleton>, 
             corona_wobbles,
             destroy_centres,
             destroy_wrecks,
-            tree_chars }
+            tree_chars,
+            attach_plan: Default::default() }
     }
 
     /// Sequence index and frame a character shows after `ticks` 60 Hz updates: its start script (`choice = None`) or the
@@ -9756,6 +9815,14 @@ pub fn build(level: &Level, cels_only: bool, skeletons: &HashMap<u8, Skeleton>, 
     /// (`collapse`) — drawn nothing either way — so the pose was pure cost: on the pool-heavy levels
     /// most of the ~150 characters are parked reinforcements.
     pub fn frame_state_for(&self, choice: Option<usize>, ticks: f32, opts: ViewOpts, skip_hidden: bool) -> FrameState {
+        self.frame_state_impl(choice, ticks, opts, skip_hidden, None, None).0
+    }
+
+    /// `frame_state_for` with the attachment matrices written straight into `attach_out` (the
+    /// palette's attachment region, prefilled with FAR — `FrameState::attach` is then empty) and
+    /// the script-entity index handed back for the colour pass (perf-240g: one walk per build).
+    fn frame_state_impl(&self, choice: Option<usize>, ticks: f32, opts: ViewOpts, skip_hidden: bool, attach_out: Option<&mut [Mat4]>, mut pal_rows_out: Option<&mut Vec<Option<Vec<Mat4>>>>)
+        -> (FrameState, Option<EntIndex>) {
         let hidden = |c: &Character, ci: usize| {
             if choice.is_some() {
                 match c.script {
@@ -9768,7 +9835,7 @@ pub fn build(level: &Level, cels_only: bool, skeletons: &HashMap<u8, Skeleton>, 
         };
         // With the AI running (and no sequence browsing), each guard shows its drone's animation, yaw and position.
         let drone_of = |ci: usize| choice.is_none().then(|| self.sim.as_ref().and_then(|s| s.char_drone[ci].map(|di| (s, di)))).flatten();
-        let pose_one = |ci: usize, c: &Character, cache: &mut HashMap<(u32, usize, u32), (Vec<Mat4>, Vec<Mat4>, f32)>| -> Option<(Vec<Mat4>, Vec<Mat4>, Mat4)> {
+        let pose_one = |ci: usize, c: &Character, cache: &mut nf_game::fxhash::FxHashMap<(u32, usize, u32), (Vec<Mat4>, Vec<Mat4>, f32)>| -> Option<(Vec<Mat4>, Vec<Mat4>, Mat4)> {
             if skip_hidden && hidden(c, ci) { return None; }
             // Drones: the simulation's pose — blended scripts, fractional frames, upper-body aim — the same one the hit
             // boxes use (`Drone::object_pose`).
@@ -9945,9 +10012,57 @@ pub fn build(level: &Level, cels_only: bool, skeletons: &HashMap<u8, Skeleton>, 
             Some((mats, world, m))
         };
         // One memo across the characters: the crowds share (mesh, sequence, frame) poses.
-        let mut cache = HashMap::new();
+        let mut cache = nf_game::fxhash::FxHashMap::default();
         let prof_pose = nf_game::prof::scope("fs: pose characters");
-        let posed: Vec<Option<(Vec<Mat4>, Vec<Mat4>, Mat4)>> = self.characters.iter().enumerate().map(|(ci, c)| pose_one(ci, c, &mut cache)).collect();
+        // perf-240f: the drone-backed characters' poses (`pose_one`'s drone arm) go through the
+        // Sim's draw-only sample memo (`Drone::object_pose_cached`): the drones re-sample the same
+        // integer frames tick after tick, and a sample is a pure function of its key, so each
+        // pose is the identical pose. Every other character keeps `pose_one`, and the hidden gate
+        // runs first here as it does there.
+        // perf-240g: the drone poses run on the pose pool (`pose_pool::run`, the caller working
+        // the list too): the hidden gate first, here, then one independent item per character —
+        // the same `object_pose(_cached)` call with the slot's own sample memo (a pure function of
+        // its key, so any memo gives the same pose), its skinning matrices, and with
+        // `pal_rows_out` the palette rows `mats[b] · m` the palette fill would compute.
+        let mut pre: Vec<Option<Option<(Vec<Mat4>, Vec<Mat4>, Mat4)>>> = Vec::new();
+        if let (None, Some(s)) = (choice, self.sim.as_ref()) {
+            let _pd = nf_game::prof::scope("fs: drone pose");
+            let data = s.data();
+            let jobs: Vec<(usize, usize)> = self.characters.iter().enumerate()
+                .filter_map(|(ci, c)| { let di = s.char_drone[ci]?; (!(skip_hidden && hidden(c, ci))).then_some((ci, di)) }).collect();
+            // `NF_NO_DRONE_MEMO=1`: the direct path (A/B timing; the same pose either way).
+            static NO_MEMO: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
+            let no_memo = *NO_MEMO.get_or_init(|| std::env::var_os("NF_NO_DRONE_MEMO").is_some());
+            let want_rows = pal_rows_out.is_some();
+            type Posed = (Option<(Vec<Mat4>, Vec<Mat4>, Mat4)>, Option<Vec<Mat4>>);
+            let out: Vec<std::sync::OnceLock<Posed>> = (0..jobs.len()).map(|_| std::sync::OnceLock::new()).collect();
+            let caches = &s.drone_draw_cache;
+            let chars = &self.characters;
+            let list = &s.drones.list;
+            let one = |i: usize, slot: usize| {
+                let (ci, di) = jobs[i];
+                let (c, dr) = (&chars[ci], &list[di]);
+                let op = if no_memo { dr.object_pose(&data) } else { dr.object_pose_cached(&data, &mut caches[slot].lock().unwrap()) };
+                let r = op.map(|(world, hip)| {
+                    let m = nf_formats::placement::object_matrix([0.0, dr.yaw, 0.0], [dr.pos[0], dr.draw_y(hip), dr.pos[2]]);
+                    (anim::skin_matrices(&world, &c.skin), world, m)
+                });
+                let rows = r.as_ref().filter(|_| want_rows).map(|(mats, _, m)| mats.iter().map(|sm| anim::mul(sm, m)).collect());
+                let _ = out[i].set((r, rows));
+            };
+            crate::pose_pool::run(jobs.len(), &one);
+            if !jobs.is_empty() { pre.resize_with(self.characters.len(), || None); }
+            for ((ci, _), o) in jobs.iter().zip(out) {
+                let (r, rows) = o.into_inner().expect("every pose item ran");
+                if let (Some(pr), Some(rows)) = (pal_rows_out.as_deref_mut(), rows) {
+                    if pr.len() < self.characters.len() { pr.resize_with(self.characters.len(), || None); }
+                    pr[*ci] = Some(rows);
+                }
+                pre[*ci] = Some(r);
+            }
+        }
+        let posed: Vec<Option<(Vec<Mat4>, Vec<Mat4>, Mat4)>> = self.characters.iter().enumerate()
+            .map(|(ci, c)| match pre.get_mut(ci).and_then(Option::take) { Some(r) => r, None => pose_one(ci, c, &mut cache) }).collect();
         drop(prof_pose);
         // Held back: spawner reinforcements and drones disabled while they wait for a switch channel (object flags
         // 0x30, `NDrone2_Enable(0)`); R shows them. The inspect path (`choice`) pins a drone-backed
@@ -9958,6 +10073,9 @@ pub fn build(level: &Level, cels_only: bool, skeletons: &HashMap<u8, Skeleton>, 
         // The debris draw slots: each live piece sits in the slot it was handed at birth
         // (`Effects::assign_debris_slots`), never in its list index.
         let debris_map = self.sim.as_ref().map(|s| nf_game::effect::debris_slot_map(&s.drones.effects.debris, &s.drones.breaks.shatter.debris, &s.drones.blast_debris));
+        // perf-240f: the script entities looked up once per build (`Sim::script_entity_index`).
+        let plan = self.attach_plan();
+        let ent_index = self.sim.as_ref().filter(|_| plan.any_script).map(|s| s.script_entity_index());
         let att_one = |k: usize, a: &Attachment| -> Mat4 {
             // The gas puffs: a camera billboard with the puff's scale and spin (the game's draw path is
             // `View_DrawObjectGlist`'s obj+0xF0 & 8 billboard: viewer rotation · the object's angles, scaled
@@ -10404,7 +10522,7 @@ pub fn build(level: &Level, cels_only: bool, skeletons: &HashMap<u8, Skeleton>, 
                         if p.model == hash && (p.gone || p.hidden) { return far; }
                     }
                 }
-                return self.sim.as_ref().and_then(|s| s.script_entity_k((h, si), hash, k as usize)).map(|m| {
+                return ent_index.as_ref().and_then(|ix| ix.get(&((h, si), hash))).and_then(|v| v.get(k as usize).map(|e| e.0)).map(|m| {
                     // The billboard entities (`View_DrawObjectGlist` 0x1e6780:43-65): the glist flags
                     // bit 0x8 (reached via `Control_SetGList` 0x134960's `obj+0xF0 = glist+0x44`)
                     // replaces the drawn ROTATION with the viewer's — `Mat_CopyRot(viewer+0x1a0)` —
@@ -10607,11 +10725,64 @@ pub fn build(level: &Level, cels_only: bool, skeletons: &HashMap<u8, Skeleton>, 
             muzzle_flash_matrix(&datum, (tick / 8) ^ (k as u32).wrapping_mul(0x9e37_79b9))
         };
         let prof_att = nf_game::prof::scope("fs: attachments");
-        // perf-240: the attachment matrices fill a recycled buffer (`skin_palette` hands it back)
-        // — a fresh ~0.8 MB Vec per palette build cost its page faults every tick.
-        let mut attach: Vec<Mat4> = ATTACH_SCRATCH.with(|c| std::mem::take(&mut *c.borrow_mut()));
-        attach.clear();
-        attach.extend(self.attachments.iter().enumerate().map(|(k, a)| att_one(k, a)));
+        // perf-240g: the effect-pool slots are walked once per slot (`AttachPlan`): a slot the
+        // sim holds nothing in draws FAR for every mesh — exactly what `att_one` returns for each
+        // of them (its projectile arm's `_ => return far`, the decal/debris arms' `_ => far`) — and
+        // every other attachment, or any slot that may be live, is `att_one` as before.
+        // `PALETTE_REFERENCE` walks every attachment through `att_one` (the identity test's A side).
+        const FAR_M: Mat4 = [[0.0; 4], [0.0; 4], [0.0; 4], [0.0, -10000.0, 0.0, 1.0]];
+        let fill = |out: &mut [Mat4], prefilled: bool| {
+            let atts = &self.attachments;
+            let reference = PALETTE_REFERENCE.load(std::sync::atomic::Ordering::Relaxed);
+            let Some(s) = self.sim.as_ref().filter(|_| !reference) else {
+                for (k, a) in atts.iter().enumerate() { out[k] = att_one(k, a); }
+                return;
+            };
+            for &k in &plan.general { out[k as usize] = att_one(k as usize, &atts[k as usize]); }
+            for (slot, members) in &plan.proj {
+                let slot = *slot as usize;
+                let empty = if slot < GRENADE_SLOTS {
+                    // The newest-first remap only applies past GRENADE_SLOTS live grenades; then
+                    // every slot takes `att_one`.
+                    s.drones.grenades.len() <= GRENADE_SLOTS && s.drones.grenades.get(slot).is_none_or(|g| g.state != 1)
+                } else if slot < GRENADE_SLOTS + TRACER_SLOTS {
+                    s.drones.bullets.get(slot - GRENADE_SLOTS).is_none_or(|b| b.state != 1)
+                } else {
+                    s.drones.player_bullets.get(slot - GRENADE_SLOTS - TRACER_SLOTS).is_none_or(|b| b.dead)
+                };
+                for &k in members {
+                    if !empty { out[k as usize] = att_one(k as usize, &atts[k as usize]); } else if !prefilled { out[k as usize] = FAR_M; }
+                }
+            }
+            for (kind, slot, members) in &plan.eff {
+                // kind 0: the hole in pool node `slot` (`decal_in_node`, `att_one`'s arm) — Some
+                // with this mesh draws, anything else is far.
+                // kind 2: the piece the debris slot map hands this slot (`debris_slot_map`, the
+                // same lookup `att_one` makes) names the one mesh that can draw; every other mesh,
+                // or a slot no piece holds, is far.
+                let live = match kind {
+                    0 => s.drones.effects.decal_in_node(*slot).map(|d| d.mesh),
+                    _ => match debris_map.as_ref().and_then(|m| m.get(*slot).copied().flatten()) {
+                        Some((0, i)) => s.drones.effects.debris.get(i).map(|d| d.mesh),
+                        Some((1, i)) => s.drones.breaks.shatter.debris.get(i).map(|d| d.model),
+                        Some((_, i)) => s.drones.blast_debris.get(i).map(|d| d.model),
+                        None => None,
+                    },
+                };
+                for &(k, mesh) in members {
+                    let call = live == Some(mesh);
+                    if call { out[k as usize] = att_one(k as usize, &atts[k as usize]); } else if !prefilled { out[k as usize] = FAR_M; }
+                }
+            }
+        };
+        let attach: Vec<Mat4> = match attach_out {
+            Some(out) => { fill(out, true); Vec::new() }
+            None => {
+                let mut attach = vec![FAR_M; self.attachments.len()];
+                fill(&mut attach, true);
+                attach
+            }
+        };
         drop(prof_att);
         let mut hidden: Vec<bool> = self.characters.iter().enumerate().map(|(ci, c)| hidden(c, ci)).collect();
         // fix-sentinel-camera-play: the guided ride draws no view model — the game's player
@@ -10628,7 +10799,7 @@ pub fn build(level: &Level, cels_only: bool, skeletons: &HashMap<u8, Skeleton>, 
                 }
             }
         }
-        FrameState { posed, attach, hidden }
+        (FrameState { posed, attach, hidden }, ent_index)
     }
 
     /// fix-facial2: the morph weights of a morph-bearing script character right now — the face-track
@@ -10746,6 +10917,51 @@ pub fn build(level: &Level, cels_only: bool, skeletons: &HashMap<u8, Skeleton>, 
             };
         };
         (l.lod_next == (j % 2 == 1)).then(|| self.lock_matrices.get(j / 2).copied()).flatten()
+    }
+
+    /// perf-240g: the scene's `AttachPlan` (see there), built on first use.
+    pub(crate) fn attach_plan(&self) -> std::sync::Arc<AttachPlan> {
+        let key = (self.attachments.len(), self.attachments.as_ptr() as usize);
+        if let Some(p) = self.attach_plan.borrow().as_ref().filter(|p| p.key == key) { return p.clone(); }
+        let mut plan = AttachPlan { key, ..Default::default() };
+        let mut proj: HashMap<u16, usize> = HashMap::new();
+        let mut eff: HashMap<(u8, usize), usize> = HashMap::new();
+        for (k, a) in self.attachments.iter().enumerate() {
+            let k32 = k as u32;
+            let plain = a.gas.is_none() && a.tracer.is_none() && !a.silencer && !a.swap_piece;
+            match (a.projectile, a.effect) {
+                (Some((slot, _)), _) if plain && slot < SWOOSH_SLOT_BASE => {
+                    let gi = *proj.entry(slot).or_insert_with(|| { plan.proj.push((slot, Vec::new())); plan.proj.len() - 1 });
+                    plan.proj[gi].1.push(k32);
+                }
+                (None, Some((kind @ (0 | 2), slot, mesh))) if plain => {
+                    let gi = *eff.entry((kind, slot)).or_insert_with(|| { plan.eff.push((kind, slot, Vec::new())); plan.eff.len() - 1 });
+                    plan.eff[gi].2.push((k32, mesh));
+                }
+                _ => plan.general.push(k32),
+            }
+            if a.gas.is_some() { plan.gas.push(k32); }
+            if a.projectile.is_some_and(|(slot, _)| slot >= SWOOSH_SLOT_BASE) { plan.swoosh.push(k32); }
+            if a.flash.is_some() { plan.flash.push(k32); }
+            if a.script.is_some() { plan.script.push(k32); }
+            plan.any_script |= a.script.is_some();
+            plan.col_char.push(a.character);
+            // `colour_mults_dense`'s arms, in its order: 0 = always [1, 1, 1] (flash, tracer,
+            // swoosh, a projectile whose mesh has no 0x800 glist bit, the satchel digits, the rain
+            // streaks), 1 = the full chain (a 0x800 projectile's cel ambient, the rain haze, a
+            // leaf, a dropped gun, a script entity — state- or position-dependent), 3 = the owner
+            // character's multiplier. `models_0x800` is fixed at the scene build like the fields.
+            plan.col.push(if a.flash.is_some() || a.tracer.is_some() { 0 }
+                else if a.projectile.is_some_and(|(slot, _)| slot >= SWOOSH_SLOT_BASE) { 0 }
+                else if let Some((_, mesh)) = a.projectile { if self.models_0x800.get(&mesh).copied().unwrap_or(false) { 1 } else { 0 } }
+                else if matches!(a.effect, Some((4 | 5 | 7, _, _))) { 0 }
+                else if matches!(a.effect, Some((8 | 9, _, _))) { 1 }
+                else if a.dropped || a.script.is_some() { 1 }
+                else { 3 });
+        }
+        let plan = std::sync::Arc::new(plan);
+        *self.attach_plan.borrow_mut() = Some(plan.clone());
+        plan
     }
 
     pub fn char_hidden(&self, ci: usize, opts: ViewOpts) -> bool {
@@ -11224,8 +11440,16 @@ pub fn build(level: &Level, cels_only: bool, skeletons: &HashMap<u8, Skeleton>, 
     /// Both are overwritten whole; the result is identical to `skin_palette`'s.
     pub fn skin_palette_into(&self, l: &SkinLayout, choice: Option<usize>, time: f32, opts: ViewOpts, vis: Option<&[bool]>, p: &mut Vec<Mat4>, cols: &mut Vec<[f32; 4]>) {
         const FAR: Mat4 = [[0.0; 4], [0.0; 4], [0.0; 4], [0.0, -10000.0, 0.0, 1.0]];
+        // perf-240g: the palette is laid out FAR first, and the attachment matrices are written
+        // straight into their region by the pose pass (no intermediate copy).
+        let palloc = nf_game::prof::scope("pal: alloc");
+        p.clear();
+        p.resize(l.n_mats as usize, FAR);
+        drop(palloc);
         let prof_fs = nf_game::prof::scope("pal: frame_state_for");
-        let mut fs = self.frame_state_for(choice, time, opts, true);
+        let ab = l.attach_base as usize;
+        let mut pal_rows: Vec<Option<Vec<Mat4>>> = Vec::new();
+        let (fs, ent_index) = self.frame_state_impl(choice, time, opts, true, Some(&mut p[ab..ab + self.attachments.len()]), Some(&mut pal_rows));
         drop(prof_fs);
         let _prof_rest = nf_game::prof::scope("pal: palette fill");
         let collapse = |at: &Mat4| -> Mat4 { [[0.0; 4], [0.0; 4], [0.0; 4], [at[3][0], at[3][1], at[3][2], 1.0]] };
@@ -11252,10 +11476,6 @@ pub fn build(level: &Level, cels_only: bool, skeletons: &HashMap<u8, Skeleton>, 
         let vis_room = |pos: [f32; 3]| -> bool {
             vis.map_or(true, |v| self.cel_index_at(pos).map_or(true, |r| v.get(r).copied().unwrap_or(true)))
         };
-        let palloc = nf_game::prof::scope("pal: alloc");
-        p.clear();
-        p.resize(l.n_mats as usize, FAR);
-        drop(palloc);
         let pch = nf_game::prof::scope("pal: chars+attach+objects");
         for (ci, c) in self.characters.iter().enumerate() {
             // A character added after the layout was built (the dev spawn) has no palette slots
@@ -11276,13 +11496,15 @@ pub fn build(level: &Level, cels_only: bool, skeletons: &HashMap<u8, Skeleton>, 
             match &fs.posed[ci] {
                 Some((mats, _, m)) => {
                     p[base] = *m;
-                    for b in 0..nb { p[base + 1 + b] = mats.get(b).map_or(*m, |s| anim::mul(s, m)); }
+                    // perf-240g: the pose pool's rows when it made them (`mats[b] · m`, the same product).
+                    match pal_rows.get(ci).and_then(Option::as_ref) {
+                        Some(rows) => for b in 0..nb { p[base + 1 + b] = rows.get(b).copied().unwrap_or(*m); },
+                        None => for b in 0..nb { p[base + 1 + b] = mats.get(b).map_or(*m, |s| anim::mul(s, m)); },
+                    }
                 }
                 None => for k in 0..=nb { p[base + k] = c.matrix; },
             }
         }
-        for (a, m) in fs.attach.iter().enumerate() { p[l.attach_base as usize + a] = *m; }
-        ATTACH_SCRATCH.with(|c| *c.borrow_mut() = std::mem::take(&mut fs.attach));
         if let Some(v) = vis { let e = self.decal_cell_entries(l); self.hide_unseen_decals(p, &e, v); }
         // The level coronas: camera billboards at their placement (`Scene::corona_pos`), room-culled
         // like the static draw they replaced; no simulation state needed.
@@ -11357,11 +11579,14 @@ pub fn build(level: &Level, cels_only: bool, skeletons: &HashMap<u8, Skeleton>, 
         }
         drop(pch);
         let pcm = nf_game::prof::scope("pal: colour_mults");
-        let (mults, pickup_mult, attach_mult) = self.colour_mults_dense();
-        drop(pcm);
-        let _prof_tail = nf_game::prof::scope("pal: cols tail");
         cols.clear();
         cols.resize(l.col_one as usize + 1, [1.0f32; 4]);
+        // perf-240g: the attachment colours land in their slots inside the colour pass (the
+        // returned `attach_mult` is then empty and its copy below writes nothing).
+        let (ca, cp) = (l.col_att as usize, (l.col_pick as usize).max(l.col_att as usize));
+        let (mults, pickup_mult, attach_mult) = self.colour_mults_dense_with(Some(ent_index.as_ref()), cols.get_mut(ca..cp));
+        drop(pcm);
+        let _prof_tail = nf_game::prof::scope("pal: cols tail");
         let has = !mults.is_empty();
         let rgb = |m: [f32; 3]| [m[0], m[1], m[2], 1.0];
         // fix-searchlight-remainder: the per-part alpha slot — kind-4 coronas carry obj+0x106/255 in
@@ -11412,8 +11637,15 @@ pub fn build(level: &Level, cels_only: bool, skeletons: &HashMap<u8, Skeleton>, 
         // render — the one that draws — never faded the puff (the CPU `posed_vertices`' gas_rgba
         // did). The shader multiplies c0.rgb/α by cols.rgb/α, which is exactly the game's tweak.
         // Free slots keep the ambient value: their matrix is FAR, nothing draws.
+        let plan = self.attach_plan();
+        let reference = PALETTE_REFERENCE.load(std::sync::atomic::Ordering::Relaxed);
+        let all: Vec<u32> = if reference { (0..self.attachments.len() as u32).collect() } else { Vec::new() };
+        let (gas_list, swoosh_list, flash_list): (&[u32], &[u32], &[u32]) = if reference {
+            (&all, &all, &all)
+        } else { (&plan.gas, &plan.swoosh, &plan.flash) };
         if let Some(s) = self.sim.as_ref() {
-            for (a, att) in self.attachments.iter().enumerate() {
+            for &a in gas_list {
+                let (a, att) = (a as usize, &self.attachments[a as usize]);
                 let Some((gi, gm)) = att.gas else { continue };
                 let Some(c) = cols.get_mut((l.col_att + a as u32) as usize) else { continue };
                 if let Some(g) = s.drones.gas.puffs.get(gi as usize).filter(|g| g.mesh == gm) {
@@ -11424,7 +11656,8 @@ pub fn build(level: &Level, cels_only: bool, skeletons: &HashMap<u8, Skeleton>, 
         // rocket-swoosh: the segment's alpha byte `obj+0x106 = life·128/max` [M Swoosh_Update 0x18d200:49-51],
         // the Tweak's alpha factor (byte/255) [M View_SetupRenderModes_Tweak 0x1e5888:47-49].
         if let Some(s) = self.sim.as_ref() {
-            for (a, att) in self.attachments.iter().enumerate() {
+            for &a in swoosh_list {
+                let (a, att) = (a as usize, &self.attachments[a as usize]);
                 let Some((slot, mesh)) = att.projectile else { continue };
                 if slot < SWOOSH_SLOT_BASE { continue; }
                 let k = (slot - SWOOSH_SLOT_BASE) as usize;
@@ -11436,11 +11669,19 @@ pub fn build(level: &Level, cels_only: bool, skeletons: &HashMap<u8, Skeleton>, 
         // [M Script_Interp 0x1d9a08:104], the factor `View_SetupRenderModes_Tweak` 0x1e5888:12,47-49
         // passes to `psiSetTweakARGB` — on the glists that blend (`script_tweak_alpha`). The Q-Worm
         // screen overlays key 0 until the install's channel unpauses their player.
+        // perf-all: the script attachments only (`AttachPlan::script`), the alpha read from this
+        // build's entity index (`script_entity_alpha_k`'s value, the same walk); `PALETTE_REFERENCE`
+        // keeps the per-attachment lookup.
         if let Some(s) = self.sim.as_ref() {
-            for (a, att) in self.attachments.iter().enumerate() {
+            let script_list: &[u32] = if reference { &all } else { &plan.script };
+            for &a in script_list {
+                let (a, att) = (a as usize, &self.attachments[a as usize]);
                 let Some((h, si, hash, k)) = att.script else { continue };
                 if !self.script_tweak_alpha.contains(&hash) { continue; }
-                let Some(b) = s.script_entity_alpha_k((h, si), hash, k as usize) else { continue };
+                let b = if reference { s.script_entity_alpha_k((h, si), hash, k as usize) } else {
+                    ent_index.as_ref().and_then(|ix| ix.get(&((h, si), hash))).and_then(|v| v.get(k as usize)).map(|e| e.1)
+                };
+                let Some(b) = b else { continue };
                 if let Some(c) = cols.get_mut((l.col_att + a as u32) as usize) { c[3] = b as f32 / 255.0; }
             }
         }
@@ -11457,7 +11698,8 @@ pub fn build(level: &Level, cels_only: bool, skeletons: &HashMap<u8, Skeleton>, 
                     let mut z = (s.drones.frame ^ f.wrapping_mul(0x9e37_79b9)).wrapping_mul(2_654_435_761).wrapping_add(0x6d2b_79f5);
                     z ^= z >> 15; z = z.wrapping_mul(0x2c1b_3c6d); z ^= z >> 12;
                     let alpha = (lo + (z >> 8) as f32 / (1u32 << 24) as f32 * (hi - lo).max(0.0)) / 255.0;
-                    for (a, att) in self.attachments.iter().enumerate() {
+                    for &a in flash_list {
+                        let (a, att) = (a as usize, &self.attachments[a as usize]);
                         if att.flash.is_none() || att.character as usize != vm { continue; }
                         if let Some(c) = cols.get_mut((l.col_att + a as u32) as usize) { c[3] = alpha; }
                     }
@@ -11489,6 +11731,16 @@ pub fn build(level: &Level, cels_only: bool, skeletons: &HashMap<u8, Skeleton>, 
     /// palette reads them by index; hashing every one of the 16-body arena's attachment slots into
     /// a map each ticked frame was a millisecond of the 240 Hz budget.
     pub fn colour_mults_dense(&self) -> (Vec<[f32; 3]>, Vec<[f32; 3]>, Vec<[f32; 3]>) {
+        self.colour_mults_dense_with(None, None)
+    }
+
+    /// `colour_mults_dense` with the script-entity index already built (`Some(index)`, perf-240g:
+    /// the palette's pose pass built the same one this build), or `None` to build it here.
+    /// `attach_sink`: the palette's attachment colour slots (`cols[col_att..col_pick]`, already
+    /// [1, 1, 1, 1]) — the attachment multipliers are written there (rgb, alpha 1) instead of
+    /// returned, untinted ones skipped (their slot already holds that value), and only while
+    /// the character multipliers are non-empty, as `skin_palette_into`'s copy did.
+    fn colour_mults_dense_with(&self, ent_built: Option<Option<&EntIndex>>, mut attach_sink: Option<&mut [[f32; 4]]>) -> (Vec<[f32; 3]>, Vec<[f32; 3]>, Vec<[f32; 3]>) {
         let pm = nf_game::prof::scope("cm: char mults");
         let mults: Vec<[f32; 3]> = self.sim.as_ref()
             .map(|s| (0..self.characters.len()).map(|ci| s.char_multiplier(ci)).collect())
@@ -11507,7 +11759,7 @@ pub fn build(level: &Level, cels_only: bool, skeletons: &HashMap<u8, Skeleton>, 
         // attachment slot is inserted unconditionally below, so the maps can be sized up front
         // instead of rehash-growing to 12k+ entries every ticked frame.
         let mut pickup_mult: Vec<[f32; 3]> = Vec::with_capacity(self.sim.as_ref().map_or(0, |s| s.drones.pickups.len()));
-        let mut attach_mult: Vec<[f32; 3]> = Vec::with_capacity(self.attachments.len());
+        let mut attach_mult: Vec<[f32; 3]> = Vec::with_capacity(if attach_sink.is_some() { 0 } else { self.attachments.len() });
         // The lag fix: the keys were collected by walking EVERY character
         // vertex — the effect pools (decal/casing/debris/gas/projectile slots, 8561 attachments on 07000005)
         // made that 34 ms of a 52 ms frame. The multiplier depends only on the key, so it is computed once per
@@ -11543,10 +11795,40 @@ pub fn build(level: &Level, cels_only: bool, skeletons: &HashMap<u8, Skeleton>, 
             }
             drop(pp);
             let _pa = nf_game::prof::scope("cm: attachments");
+            let plan = self.attach_plan();
+            let built;
+            let ent_index: Option<&EntIndex> = match ent_built {
+                Some(ix) => ix,
+                None => { built = plan.any_script.then(|| s.script_entity_index()); built.as_ref() }
+            };
+            let reference = PALETTE_REFERENCE.load(std::sync::atomic::Ordering::Relaxed);
             for ai in 0..self.attachments.len() as u32 {
+                if let Some(out) = attach_sink.as_deref_mut() {
+                    if mults.is_empty() || ai as usize >= out.len() { break; }
+                    if !reference {
+                        match plan.col[ai as usize] {
+                            0 => continue,
+                            3 => {
+                                let v = mults.get(plan.col_char[ai as usize] as usize).copied().unwrap_or_else(one);
+                                out[ai as usize] = [v[0], v[1], v[2], 1.0];
+                                continue;
+                            }
+                            _ => {}
+                        }
+                    }
+                }
                 {
-                    attach_mult.push((|| {
+                    let v = (|| {
                         let Some(a) = self.attachments.get(ai as usize) else { return one() };
+                        // perf-240g: the arm this attachment always takes (`AttachPlan::col`, the
+                        // same tests in the same order, decided once per scene).
+                        if !reference {
+                            match plan.col[ai as usize] {
+                                0 => return one(),
+                                3 => return mults.get(a.character as usize).copied().unwrap_or_else(one),
+                                _ => {}
+                            }
+                        }
                         if a.flash.is_some() || a.tracer.is_some() { return one(); }
                         // rocket-swoosh: a swoosh's tint bytes stay at control_init_object's 0xFF
                         // [M 0x134630:18-21; Swoosh_Create/Update never write obj+0x103..0x105], so its
@@ -11614,13 +11896,17 @@ pub fn build(level: &Level, cels_only: bool, skeletons: &HashMap<u8, Skeleton>, 
                             // A script entity is its own object (the truck: nine 0x8880 objects [L]):
                             // 0x800-glist entities dim by the ambient at their live matrix; the others
                             // (coronas, triggers) draw untinted — not character 0's ambient.
-                            return match s.script_entity_k((h, si), hash, k as usize).map(|m4| amb_at(s, &m4)) {
+                            return match ent_index.and_then(|ix| ix.get(&((h, si), hash))).and_then(|v| v.get(k as usize)).map(|e| amb_at(s, &e.0)) {
                                 Some(m) if self.models_0x800.get(&hash).copied().unwrap_or(false) => m,
                                 _ => one(),
                             };
                         }
                         mults.get(a.character as usize).copied().unwrap_or_else(one)
-                    })());
+                    })();
+                    match attach_sink.as_deref_mut() {
+                        Some(out) => out[ai as usize] = [v[0], v[1], v[2], 1.0],
+                        None => attach_mult.push(v),
+                    }
                 }
             }
         }

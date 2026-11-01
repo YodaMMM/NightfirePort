@@ -37,6 +37,7 @@ pub mod mpfx;
 pub mod desync;
 pub mod clipboard;
 pub mod scene;
+pub mod pose_pool;
 pub mod replay;
 pub mod bugreport;
 pub mod panel;
@@ -2129,6 +2130,40 @@ pub fn sound_tick(s: &mut nf_audio::sfx::Sound, sim: &mut scene::Sim) {
     });
 }
 
+/// perf-240g: the instance the window and the shots draw with (and the window's surface). wgpu
+/// checks every indirect draw's arguments at `CommandEncoder::finish` and injects a compute pass
+/// that rewrites them, unless the instance leaves out `VALIDATION_INDIRECT_CALL`; the batched
+/// world pass's thousands of multi-draw args made that 0.1-0.25 ms of every frame. The port fills
+/// the args itself from in-range index runs, so the check only guards against a port bug.
+/// Vulkan only: perf-240f saw the D3D12 backend misreport first_instance without it, so every
+/// other backend keeps the default instance. The Vulkan-only instance must offer the very adapter
+/// the default instance picks (backend, name, vendor, device), else the default stands.
+/// `NF_INDIRECT_VALIDATION=1` keeps the check everywhere.
+pub fn gpu_instance(window: Option<&Arc<Window>>) -> (wgpu::Instance, Option<wgpu::Surface<'static>>) {
+    let default = || {
+        let inst = wgpu::Instance::new(wgpu::InstanceDescriptor::new_without_display_handle());
+        let surf = window.map(|w| inst.create_surface(w.clone()).expect("create surface"));
+        (inst, surf)
+    };
+    let (inst, surf) = default();
+    if std::env::var_os("NF_INDIRECT_VALIDATION").is_some() { return (inst, surf); }
+    let info = |i: &wgpu::Instance, s: Option<&wgpu::Surface<'_>>| pollster::block_on(i.request_adapter(&wgpu::RequestAdapterOptions { compatible_surface: s, ..Default::default() }))
+        .ok().map(|a| { let i = a.get_info(); (i.backend, i.name, i.vendor, i.device) });
+    let Some(want) = info(&inst, surf.as_ref()) else { return (inst, surf) };
+    if want.0 != wgpu::Backend::Vulkan { return (inst, surf); }
+    drop(surf);
+    let mut d = wgpu::InstanceDescriptor::new_without_display_handle();
+    d.backends = wgpu::Backends::VULKAN;
+    d.flags.remove(wgpu::InstanceFlags::VALIDATION_INDIRECT_CALL);
+    let inst2 = wgpu::Instance::new(d);
+    let surf2 = match window {
+        Some(w) => match inst2.create_surface(w.clone()) { Ok(s) => Some(s), Err(_) => { drop(inst2); return default(); } },
+        None => None,
+    };
+    if info(&inst2, surf2.as_ref()).as_ref() != Some(&want) { drop(surf2); drop(inst2); return default(); }
+    (inst2, surf2)
+}
+
 async fn device(instance: &wgpu::Instance, surface: Option<&wgpu::Surface<'_>>) -> Result<(wgpu::Adapter, wgpu::Device, wgpu::Queue)> {
     let adapter = instance.request_adapter(&wgpu::RequestAdapterOptions { compatible_surface: surface, ..Default::default() }).await?;
     // Player bug reports carry the GPU and its driver (bugreport.rs).
@@ -2603,7 +2638,7 @@ fn shot_screen_pos() -> (i32, i32) {
 
 fn shot(scene: &scene::Scene, cam: &Camera, out: &str, choice: Option<usize>, time: f32, mut opts: scene::ViewOpts, notex: bool, nofog: bool, menu: Option<&gpu::HudFrame>, movie: Option<&(u32, u32, Vec<u8>)>) -> Result<()> {
     let (w, h) = (1280u32, 720u32);
-    let instance = wgpu::Instance::new(wgpu::InstanceDescriptor::new_without_display_handle());
+    let (instance, _) = gpu_instance(None);
     let (_adapter, device, queue) = pollster::block_on(device(&instance, None))?;
     let format = wgpu::TextureFormat::Rgba8Unorm;
     // fix-sentinel-camera-play: the headless renders show the ride too — a `--frame N` shot taken
@@ -2822,6 +2857,10 @@ struct App {
     cam_cur: Option<Camera>,
     pal_prev: Option<(Vec<nf_formats::anim::Mat4>, Vec<[f32; 4]>)>,
     pal_cur: Option<(Vec<nf_formats::anim::Mat4>, Vec<[f32; 4]>)>,
+    /// perf-240g: buffer pairs touched at the level swap (`swap_in_scene`), taken by the first
+    /// palette rebuilds while `pal_prev` has none to recycle — the first two builds of a level
+    /// otherwise fault in ~1-2 MB of fresh pages (the measured first-view spike).
+    pal_spare: Vec<(Vec<nf_formats::anim::Mat4>, Vec<[f32; 4]>)>,
     /// perf-240: the presented-frame palette (seeded per tick) and the entries that move between the two ticks.
     pal_blend: Vec<nf_formats::anim::Mat4>,
     pal_moving: Vec<u32>,
@@ -3882,6 +3921,15 @@ impl App {
         // loop with the audio still playing.
         if let Some(g) = &mut self.gfx {
             g.renderer = gpu::Renderer::new(&g.device, &g.queue, g.config.format, &self.scene, self.notex, self.nofog);
+            // perf-240g: one palette build here, on the thread that draws, during the swap: it
+            // faults in the buffers the first two rebuilds take (`pal_spare`) and
+            // the drones' draw-only sample memo, so the level's first frames pay
+            // none of it. The result is never drawn (each rebuild overwrites its buffers whole),
+            // and the build reads the scene only (the memo is a pure function of its key).
+            let (mut p, mut c) = (Vec::new(), Vec::new());
+            self.scene.skin_palette_into(&g.renderer.skin_layout, self.choice, self.anim_time, self.opts, None, &mut p, &mut c);
+            let second = (p.clone(), c.clone());
+            self.pal_spare = vec![(p, c), second];
         }
         // fix-restart-health: the loaded level's checkpoint is what a later
         // fail-Restart restores — the game re-saves the buffer with the POST-load
@@ -5729,7 +5777,7 @@ impl App {
                     let fp_pal = std::time::Instant::now();
                     // perf-240: the tick before last's buffers are refilled (skin_palette_into overwrites
                     // them whole) instead of a fresh ~1 MB allocation every tick.
-                    let (mut np, mut nc) = self.pal_prev.take().unwrap_or_default();
+                    let (mut np, mut nc) = self.pal_prev.take().or_else(|| self.pal_spare.pop()).unwrap_or_default();
                     self.scene.skin_palette_into(&g.renderer.skin_layout, self.choice, self.anim_time, self.opts, None, &mut np, &mut nc);
                     let new = (np, nc);
                     frame_part(3, fp_pal.elapsed());
@@ -6336,6 +6384,7 @@ impl App {
             cam_prev: None,
             cam_cur: None,
             pal_prev: None,
+            pal_spare: Vec::new(),
             pal_cur: None,
             pal_blend: Vec::new(),
             pal_moving: Vec::new(),
@@ -6404,8 +6453,8 @@ impl ApplicationHandler for App {
     fn resumed(&mut self, el: &ActiveEventLoop) {
         if self.gfx.is_some() { return; }
         let window = Arc::new(el.create_window(Window::default_attributes().with_title("nf-view")).expect("create window"));
-        let instance = wgpu::Instance::new(wgpu::InstanceDescriptor::new_without_display_handle());
-        let surface = instance.create_surface(window.clone()).expect("create surface");
+        let (instance, surface) = gpu_instance(Some(&window));
+        let surface = surface.expect("create surface");
         let (adapter, device, queue) = pollster::block_on(device(&instance, Some(&surface))).expect("GPU device");
         // A GPU validation error is reported, not fatal (wgpu's default handler panics).
         device.on_uncaptured_error(Arc::new(|e| eprintln!("GPU error: {e}")));
