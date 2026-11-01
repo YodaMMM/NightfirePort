@@ -28,7 +28,13 @@ use walker::Walker;
 fn iso() -> String { std::env::var("NF_ISO").expect("NF_ISO") }
 
 /// 07000009's stationary lobby guard: placement g2, state Civilian 0x11, yaw 0, range 12, half
-/// FOV π/2, reaction stat 0, alertness 0, props 0x3c/0x1f set [D roster probe of the level].
+/// FOV π/2, alertness 0, props 0x3c/0x1f set [D roster probe of the level]. Reaction stat 80: the
+/// guard is drone type 0xD (param 15), whose `drone_stats` record only the level's first type-0xD
+/// placement carries (params 26-32, tag 0x80010006: kind 1 = words 0x1a800950 / 0x15050 →
+/// acc 80, aggression 1, reaction 80, recover 80 [D, `behaviour_util_get` 0x1c7a98 at the
+/// 0x303330 widths]); `NDrone2_DoModeSettingsNEW` 0x14c600:81-106 copies `+0x14` of
+/// `getStats(type, 1)` into `+0xB8` [M]. The same layout reads type 2's 8/1/12/…/80 live
+/// [L ee_start_07000001.bin, ee_02b.bin: drone_stats 0x31aa30].
 const G09: usize = 2;
 
 /// Load, settle 30 ticks (past the 15-frame vision wait), keep only guard `gi` in play: the other
@@ -135,8 +141,8 @@ fn crossing(range: f32, f: f32) -> f32 {
 }
 
 /// Standing still 10 units in front of the 09 guard: v ≈ 0.80 ≥ 0.7, the LOS ray lands on the
-/// first tick and the sighting is acked on the 59th LOS tick (ReactionTime 59 at alert 0, stat
-/// 0 [M 0x14ac60]) — 58 ticks after the first. On 09 the security guard's `NearArmedPerson`
+/// first tick and the sighting is acked on the 35th LOS tick (ReactionTime at alert 0, stat 80:
+/// ((1 − 0)·30)·0.01·(200 − 80), EE-chopped 35.999996 → 35 [M 0x14ac60]) — 34 ticks after the first. On 09 the security guard's `NearArmedPerson`
 /// is prop 0x3c + the ack alone [M 0x1787c8:14-21], so the ack tick itself leaves Civilian
 /// (CivilianScared → CivilianHiding 0x13 [M 0x15d118:46-72, 0x15d3a0]).
 /// Sister: the same spot crouched — ×0.75 puts v at ≈ 0.60 < 0.7 [M 0x1390c0:40-42]: no ray, no
@@ -145,14 +151,14 @@ fn crossing(range: f32, f: f32) -> f32 {
 fn vision_09_standing_vs_crouched_at_10() {
     let mut w = setup("07000009.bin", G09);
     let g = &w.scene.sim.as_ref().unwrap().drones.list[G09];
-    assert_eq!((g.sight_range, g.half_fov, g.reaction, g.alert), (12.0, std::f32::consts::FRAC_PI_2, 0, 0.0), "the 09 lobby guard's sight row [D]");
+    assert_eq!((g.sight_range, g.half_fov, g.reaction, g.alert), (12.0, std::f32::consts::FRAC_PI_2, 80, 0.0), "the 09 lobby guard's sight row [D]");
     place(&mut w, G09, 10.0, 0.0, true);
     let tr = run(&mut w, G09, 200, Input::default(), 1.0);
     eprintln!("standing: {tr:?}");
     assert!(tr.max_err < 3e-3, "the port's visibility follows 0x175af0 (worst error {})", tr.max_err);
     assert!((tr.max_vis - 0.8).abs() < 0.01, "v at 10u head-on ≈ 0.80, got {}", tr.max_vis);
     assert_eq!(tr.first_los, Some(0), "the LOS ray lands on the first tick");
-    assert_eq!(tr.first_seen.map(|s| s - tr.first_los.unwrap()), Some(58), "acked on the 59th LOS tick (ReactionTime 59)");
+    assert_eq!(tr.first_seen.map(|s| s - tr.first_los.unwrap()), Some(34), "acked on the 35th LOS tick (ReactionTime 35 at stat 80)");
     assert_eq!(tr.states.first(), Some(&(tr.first_seen.unwrap(), nf_game::drone::state::CIVILIAN_HIDING)),
         "the ack tick leaves Civilian through CivilianScared to CivilianHiding");
 
