@@ -16896,7 +16896,11 @@ fn segment_hits_sphere(a: V3, b: V3, c: V3, r: f32) -> bool {
         // `DroneFunc_HandleSoundAlerts` (every drone, every frame) over the sounds made since the last frame, then
         // `Sound_ZeroAlertness`: each sound alerts once.
         if !sounds.is_empty() {
-            for dr in self.list.iter_mut().filter(|x| x.present && x.enabled && !x.corpse) {
+            // `Drone_InitComms` 0x139520:207-218 calls it for EVERY drone of the list — a disabled
+            // (WaitSwitch / event-5 hidden) guard still gains alertness from what it hears, and
+            // HandleSoundAlerts has no enabled or alive gate of its own [M 0x148a30:43-50]. Corpses
+            // are kept out: their states drop msg 0x14 and their alertness has no reader.
+            for dr in self.list.iter_mut().filter(|x| x.present && !x.corpse) {
                 if !dr.prop(d, 0x1f) || dr.deaf { continue; } // [M 0x148a30:43-44]
                 // 07000007 only: an unarmed drone hears nothing (`NDrone2_ObjectIsArmed` 0x178768 —
                 // weapon 2..0x46 or 0x6a..0x71 [M 0x148a30:46-50]).
