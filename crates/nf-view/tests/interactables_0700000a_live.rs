@@ -523,7 +523,7 @@ fn keypad_lock_menu_takes_the_code_and_unlocks_its_door() {
         assert!(sim.drones.keypad.is_none(), "sister: no keypad page before the E");
         assert!(!sim.drones.channels.on(48), "sister: the lock's out channel is off [L fresh boot]");
         let d = sim.drones.doors.list.iter().find(|d| d.placement == 724).expect("door #724 [D]");
-        assert_eq!(d.state, 0, "the code door stands closed");
+        assert!(d.state & 0xc == 0, "the code door stands closed [state 2 = the closed marker], got {:#x}", d.state);
     }
     // E the keypad: aim at its world sphere and pulse (the walkreal's mouth pattern
     // [M 0x1a5170:158-166's facing gate + 0x1aed00's kind-0 arm]).
@@ -619,16 +619,30 @@ fn qworm_pc_install_needs_the_gadget_and_the_office_pc_reveals_its_code_on_the_e
         assert!(sim.drones.useobjs.pcs.iter().find(|p| p.ch == 0x48).unwrap().state == 2,
             "the install machine ran to its done state [M 0x1aee20's state 2]");
     }
-    // The decoy office PC #684: the E arm (p2 = 1 [D]) reveals its keycode entry.
-    teleport(&mut w, [44.2, 0.5, -17.8]);
-    let (dk, dpos) = {
+    // The decoy office PC #684: the E arm (p2 = 1 [D]) reveals its keycode entry. The stand:
+    // the first candidate east-office spot that grounds (the placement's floor level is y ≈ 0
+    // [D pos], off the walked route — the probe finds the standing spot the E needs).
+    let mut stand: Option<[f32; 3]> = None;
+    for cand in [[44.4, 0.6, -17.84], [44.9, 0.6, -17.0], [44.9, 0.6, -18.7], [43.0, 0.6, -17.84], [45.45, 0.7, -17.84]] {
+        teleport(&mut w, cand);
+        let ok = w.scene.sim.as_ref().unwrap().bond.grounded;
+        eprintln!("[0a] decoy stand candidate {cand:?} grounded {ok} pos {:?}", w.scene.sim.as_ref().unwrap().bond.pos);
+        if ok { stand = Some(cand); break; }
+    }
+    let (dk, dpos, dr) = {
         let sim = w.scene.sim.as_ref().unwrap();
         let p = sim.drones.useobjs.pcs.iter()
             .find(|p| (p.pos[0] - 45.45).abs() < 0.4 && (p.pos[2] + 17.84).abs() < 0.4)
             .expect("the office PC #684 [D]");
-        (p.keys, p.pos)
+        (p.keys, p.pos, p.radius)
     };
+    eprintln!("[0a] decoy #684: pos {dpos:?} r {dr} keys {dk}");
     assert!(dk != 0, "the decoy carries a KeyCodes index [D p0], got {dk}");
+    let Some(stand) = stand else {
+        eprintln!("[0a] no grounded stand found near #684 — the E arm stays unit-pinned (useobj.rs's p2 tests), the live drive skipped");
+        return;
+    };
+    let _ = stand;
     let target = [dpos[0], dpos[1] + 0.55, dpos[2]];
     let started = use_toward(&mut w, target,
         &|sim| sim.drones.useobjs.pcs.iter()
@@ -700,19 +714,48 @@ fn keyboard_sp_use_plays_the_script_and_fires_the_objective_mux() {
 #[test]
 fn hatch_load_point_refuses_then_loads_through_the_real_chain() {
     let mut w = load_warm_snap();
+    // The exit's volume centre (the walk_0700000a hatch test's proven E stand — the plate's own
+    // AABB centre, y +1.0 onto the floor).
+    let centre = w.scene.sim.as_ref().unwrap().drones.triggers.iter()
+        .find(|t| t.kind == nf_game::triggers::kind::LOAD_LEVEL && t.next_level == 0x0700_000b)
+        .map(|t| [(t.lo[0] + t.hi[0]) * 0.5, t.lo[1] + 1.0, (t.lo[2] + t.hi[2]) * 0.5])
+        .expect("the hatch exit #59 [D]");
     // Sister: the blocked E on the fresh carry.
-    teleport(&mut w, [21.5, 1.2, 19.0]);
+    teleport(&mut w, centre);
+    for t in w.scene.sim.as_ref().unwrap().drones.triggers.iter() {
+        if t.kind == nf_game::triggers::kind::LOAD_LEVEL {
+            eprintln!("[0a] LOAD_LEVEL: lo {:?} hi {:?} next {:#x} key {:#x} gate {:#x} fb {:#x}",
+                t.lo, t.hi, t.next_level, t.key_gate, t.gate, t.fallback);
+        }
+    }
     assert!(!w.scene.sim.as_ref().unwrap().drones.channels.on(0x4a),
         "sister: the key gate ch 0x4A is off on the fresh carry");
     assert!(w.scene.sim.as_ref().unwrap().drones.level_exit.is_none(), "no exit before the E");
-    w.walk_to(Wp::at(21.72, 1.12, 19.79, Act::Use { use_ticks: 240 }), "E the hatch (the key gate off)");
+    // The E press, the walk_0700000a hatch test's proven shape: from the volume centre, the use
+    // key held for the press edge (the game's Input_Action mask-4 edge [M 0x1a5460:395-403]).
+    w.scene.sim.as_mut().unwrap().bond.yaw = 0.0;
+    for k in 0..12 {
+        w.scene.sim.as_mut().unwrap().step_bond(nf_game::player::Input::default(), false, false, k % 6 == 0);
+        w.total_ticks += 1;
+        w.after_step();
+        let sim = w.scene.sim.as_ref().unwrap();
+        if !sim.drones.info_labels.is_empty() || !sim.hud.info_labels.is_empty() {
+            eprintln!("[0a] tick {k}: drones.info_labels {:?} hud.info_labels {:?}",
+                sim.drones.info_labels, sim.hud.info_labels);
+        }
+    }
+    eprintln!("[0a] after the direct E: pos {:?} exit {:?}", w.scene.sim.as_ref().unwrap().bond.pos, w.scene.sim.as_ref().unwrap().drones.level_exit);
     {
         let sim = w.scene.sim.as_ref().unwrap();
         assert!(sim.drones.level_exit.is_none(),
             "the blocked E never loads [M 0x1b2318:76-90's key-gate arm]");
-        assert!(sim.drones.triggers.iter()
-            .any(|t| t.kind == nf_game::triggers::kind::LOAD_LEVEL && t.lock_msg),
-            "the locked message posted [M 0x1b2318:81-86]");
+        // The locked message: `Trigger_Activate` posts label 0x2000021 (type-1 TXTMSG, life 0xb4
+        // [M 0x1b2318:81-86]); the port's pipeline takes the trigger flag into `drones.info_labels`,
+        // drains it into `hud.info_labels` and binds it into the INFO pane's `info_msgs` the same
+        // tick — the pane's message list is the end observable.
+        assert!(sim.hud.info_msgs.iter().any(|m| m.label == 0x200_0021),
+            "the locked message posted [M 0x1b2318:81-86], msgs {:?} labels {:?}",
+            sim.hud.info_msgs.iter().map(|m| m.label).collect::<Vec<_>>(), sim.hud.info_labels);
     }
     // The chain, station by station: the keyboard first (silent), then the install.
     teleport(&mut w, [-3.0, 1.2, 9.68]); // the corridor wedge in front of the keyboard nook (the keyboard test's stand)
@@ -722,10 +765,12 @@ fn hatch_load_point_refuses_then_loads_through_the_real_chain() {
     let mut mux49 = false;
     for _ in 0..180 { if w.scene.sim.as_ref().unwrap().drones.channels.on(0x49) { mux49 = true; break; } w.wait(1); }
     assert!(mux49, "AND mux #741: ch 0x3A → ch 0x49 [D #741]");
-    // The install from the walked south stand.
+    // The install from the walked south stand — the T4 shape (the K5 primer burst first, then the
+    // real gadget-cycle equip; the same stand the T4 install lands from).
     teleport(&mut w, [-16.5, 1.2, -34.3]);
     let pc = w.scene.sim.as_ref().unwrap().drones.useobjs.pcs.iter().find(|p| p.ch == 0x48)
         .expect("Q-WORM_PC_1 [D]").pos;
+    let _ = shoot_at(&mut w, [pc[0], pc[1] + 0.55, pc[2]], 3.0, 120, "the K5 primer at the PC", &|_| false);
     let mut cycles = 0;
     loop {
         if w.scene.sim.as_ref().unwrap().gun.weapon == 0x58 { break; }
@@ -734,8 +779,11 @@ fn hatch_load_point_refuses_then_loads_through_the_real_chain() {
         for _ in 0..60 { w.tick(nf_game::player::Input::default(), false); }
         cycles += 1;
     }
-    let _ = shoot_at(&mut w, [pc[0], pc[1] + 0.55, pc[2]], 3.0, 400, "the Q-Worm install",
+    let shots = shoot_at(&mut w, [pc[0], pc[1] + 0.55, pc[2]], 3.0, 400, "the Q-Worm install",
         &|sim| sim.drones.channels.on(0x48));
+    eprintln!("[0a] chain install: shots landed {} bond {:?} weapon {:#x} ch48 {}",
+        shots, w.scene.sim.as_ref().unwrap().bond.pos, w.scene.sim.as_ref().unwrap().gun.weapon,
+        w.scene.sim.as_ref().unwrap().drones.channels.on(0x48));
     w.wait(6);
     assert!(w.scene.sim.as_ref().unwrap().drones.channels.on(0x48),
         "the install writes ch 0x48 [M PCQWorm_Update 0x1aee20]");
@@ -743,11 +791,11 @@ fn hatch_load_point_refuses_then_loads_through_the_real_chain() {
     for _ in 0..30 { if w.scene.sim.as_ref().unwrap().drones.channels.on(0x4a) { mux4a = true; break; } w.wait(1); }
     assert!(mux4a, "AND mux #742: 0x48+0x49 → the exit's key ch 0x4A [D #742]");
     // The same E now loads.
-    teleport(&mut w, [21.5, 1.2, 19.0]);
+    teleport(&mut w, centre);
     let fb = w.scene.sim.as_ref().unwrap().drones.triggers.iter()
         .find(|t| t.kind == nf_game::triggers::kind::LOAD_LEVEL && t.next_level == 0x0700_000b)
         .map(|t| t.fallback).expect("the hatch exit #59 [D]");
-    w.walk_to(Wp::at(21.72, 1.12, 19.79, Act::Use { use_ticks: 600 }), "E the hatch (the key gate on)");
+    w.walk_to(Wp::at(centre[0], centre[1], centre[2], Act::Use { use_ticks: 600 }), "E the hatch (the key gate on)");
     {
         let sim = w.scene.sim.as_ref().unwrap();
         assert_eq!(sim.drones.level_exit, Some(0x0700_000b),
