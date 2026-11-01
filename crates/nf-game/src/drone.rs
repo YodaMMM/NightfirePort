@@ -1090,6 +1090,14 @@ pub struct Drone {
     /// offset (`+0x4C4`), CombatNoRoute's alternation (`+0xCD8`).
     pub croute: Option<crate::nav::Route>,
     pub nav_path: Option<Option<usize>>,
+    /// The move-target accuracy (`Drone+0x704` = move-target struct `+0x6f0` + 0x14): the float
+    /// `AINetwork_SetupGoalPosition` writes from the goal AIPoint's `+0x14` (0 there means 2.0)
+    /// [M 0x15acf8 raw: `c.eq.s f20,0 → lui 0x4000; swc1 f20, 0x14(s1)`] and every
+    /// `MoveToGoalPosition` ask re-passes as its float arg [M 0x153168 raw: `lwc1 f12, 0x704(a1)`]
+    /// — `SetupRouteToPosition` lands it at `route+0x8c` (0 → 2.0 again) [M 0x158b10:104], which
+    /// `MoveToGoalPosition`'s arrived-early check reads [M 0x1517d8 raw: `lwc1 f1, 0x8c(s0)`]
+    /// and `DefaultInit` presets to 2.0 [M 0x14b300:579]. 0 = never set (the game's calloc).
+    pub move_accuracy: f32,
     pub move_quad: u8,
     pub yaw_offset: f32,
     pub no_route_odd: bool,
@@ -1977,6 +1985,7 @@ impl Drone {
             hip_anim: 1.0,
             route: None, last_wait: None, idle_timeout: None, delayed: None, sm_id: 0, stand_until: 0,
             croute: None, nav_path: None, move_quad: 0, yaw_offset: 0.0, no_route_odd: false, target: PlayerTarget::default(), links_used: Vec::new(),
+            move_accuracy: 0.0,
             link_flags: Vec::new(), locked_door_nodes: Default::default(),
             switch_channel: param(3) as u8, channel_on: false, placement: 0, spawn_seq: 0, spawn_frame: 0, group: param(4), present: true, started: false, drawn: true, enabled: true, index: 0, exiting_to: 0, self_msg: None,
             cover: None, cover_side: 0, cover_type: 0, cover_leave: 0, cover_point: pos, goal: None, cover_claimed: false, has_cover: false, cover_tries: 0,
@@ -5572,6 +5581,9 @@ impl Drone {
         let path = self.nav_path.flatten();
         let Some(pi) = crate::aipoint::closest(d.ai_points, d.nav, d.world, path, self.pos, 8, owner) else { return false };
         self.goal = Some(d.ai_points[pi].pos);
+        // The goal accuracy rides the point's `+0x14` the same way `find_run_to_point`'s does
+        // [M 0x153008 raw: `lwc1 f20, 0x14(v1)` → `mov.s f12, f20` → SetupGoalPosition].
+        self.move_accuracy = d.ai_points[pi].accuracy;
         // The game's fresh path returns the `MoveToGoalPosition` code band 0..3 [M-dis 0x2f63d0].
         if !matches!(self.move_to_goal(d), 0..=3) { return false; }
         self.alarm_yaw = f32::from_bits(d.ai_points[pi].yaw_bits); // `Drone+0x734` [M 0x153008:24; M-dis 0x1530c8-30]
@@ -5601,6 +5613,10 @@ impl Drone {
             .or_else(|| if group == 2 { crate::aipoint::closest(d.ai_points, d.nav, d.world, path, self.pos, 1, owner) } else { None });
         let Some(pi) = hit else { return false };
         self.goal = Some(d.ai_points[pi].pos);
+        // The goal accuracy rides the picked point's `+0x14` into `SetupGoalPosition`'s
+        // move-target `+0x14` (= Drone+0x704) [M 0x153168 raw: `lwc1 f20, 0x14(v0)` → `mov.s
+        // f12, f20`; 0x15acf8 raw: 0 → 2.0, `swc1 f20, 0x14(s1)`] — the port's `move_accuracy`.
+        self.move_accuracy = d.ai_points[pi].accuracy;
         // `AINetwork_InvalidateRoute(drone+0x860)` before SetupGoalPosition/MoveToGoalPosition —
         // every ask rebuilds the route even when a stale valid one exists [M 0x153168:41, 76].
         self.croute = None;
@@ -5671,6 +5687,7 @@ impl Drone {
         let Some((k, _)) = anchor else {
             self.croute = None; // ResetRoute + InvalidateRoute(+0x860) [M :166-167]
             self.goal = Some(self.player_pos); // SetupGoalPosition(2.0, the player) [M :168-169]
+            self.move_accuracy = 2.0; // its accuracy float [M :168-169]
             return false;
         };
         {
@@ -5682,6 +5699,7 @@ impl Drone {
         self.croute = None; // InvalidateRoute(+0x860) [M :139-140, 203-204]
         let np = node_pos(self.route.as_ref().unwrap(), k);
         self.goal = Some(np); // SetupGoalPosition(2.0 / 1.0, the node) [M :141-142, 205-206]
+        self.move_accuracy = if best_reach.is_some() { 2.0 } else { 1.0 }; // the accuracy float [M :141-142, 205-206]
         let code = self.move_to_goal(d); // [M :143-144, 207-208]
         if best_reach.is_some() { return true; }
         if matches!(code, 0..=3) {
@@ -5690,6 +5708,7 @@ impl Drone {
         }
         self.croute = None;
         self.goal = Some(self.player_pos); // the waypoint route failed → the player [M :160-169]
+        self.move_accuracy = 2.0; // SetupGoalPosition(2.0, the player) [M :160-169]
         false
     }
 
@@ -5722,14 +5741,23 @@ impl Drone {
             let used: &[u16] = path.and_then(|p| self.links_used.get(p)).map_or(&[], |v| v.as_slice());
             let locked = |p: usize, n: u16| self.locked_door_nodes.contains(&(p, n));
             match crate::nav::Route::to_position(d.nav, d.world, path, feet, goal, &nodes, used, &locked) {
-                Ok((_, mut r)) => { r.stamp = u32::MAX; self.croute = Some(r) }
+                Ok((_, mut r)) => {
+                    r.stamp = u32::MAX;
+                    // `SetupRouteToPosition` lands the goal accuracy at `route+0x8c` (0 → 2.0)
+                    // [M 0x158b10:104] — the same float `MoveToGoalPosition` re-passes each ask
+                    // [M 0x153168 raw: `lwc1 f12, 0x704(a1)`] and its arrived-early check reads
+                    // [M 0x1517d8 raw: `lwc1 f1, 0x8c(s0)`]. The run-to/alarm point's `+0x14`
+                    // sets it (see `move_accuracy`); every other caller keeps the game's 2.0.
+                    r.radius = if self.move_accuracy == 0.0 { 2.0 } else { self.move_accuracy };
+                    self.croute = Some(r);
+                }
                 Err(code) => { self.croute = None; return code }
             }
         }
         let (code, reached) = {
             let route = self.croute.as_mut().unwrap();
             route.remaining = route.distance(d.nav, feet);
-            if route.remaining < 2.0 { return 3; }
+            if route.remaining < route.radius { return 3; }
             let ppos = self.player_pos;
             let r = route.follow(d.nav, feet, &|p| Drone::ppos_near(ppos, p));
             // `LinkCreep_Handler` (0x15a2c8) runs `ReachedDestNode` for EVERY followed route — the
@@ -20943,6 +20971,7 @@ mod tests {
             damage_mul: 1.0, alert_bits: 0, light: 1.0, attack_frame: 0, alerted_by_drone: false, watching: false,
             route: None, last_wait: None, idle_timeout: None, delayed: None, sm_id: 0, stand_until: 0,
             croute: None, nav_path: None, move_quad: 0, yaw_offset: 0.0, no_route_odd: false, target: PlayerTarget::default(), links_used: Vec::new(),
+            move_accuracy: 0.0,
             link_flags: Vec::new(), locked_door_nodes: Default::default(),
             switch_channel: 0, channel_on: false, placement: 0, spawn_seq: 0, spawn_frame: 0, group: 0, present: true, started: false, drawn: true, enabled: true, index: 0, exiting_to: 0, self_msg: None,
             cover: None, cover_side: 0, cover_type: 0, cover_leave: 0, cover_point: pos, goal: None, cover_claimed: false, has_cover: false, cover_tries: 0,
