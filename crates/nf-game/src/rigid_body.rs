@@ -1049,7 +1049,7 @@ impl Rbodies {
                 shape_key: if o.hashcode == u32::MAX { 0x8000_0000 | ((map as u32) << 16) | object as u32 } else { o.hashcode },
                 flags: 0x44,
                 s_aa,
-                s154: (pv(5) & 0xff) as u8,
+                s154: (pv(3) & 0xff) as u8,
                 // rb+0x158 = level_tag+0x3c (0 → 0xFFFF) [M 0x1d6bf0:108-112] — placement param 4
                 // in the +0x2c+4k layout the sensors/locks/searchlights pin [D]; 65535 (none) on
                 // every disc 0xD8 placement (07000001/02/03/04/06/0d/41 swept [D]).
