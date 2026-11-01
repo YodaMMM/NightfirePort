@@ -178,15 +178,9 @@ fn steer_fire_aligned(scene: &mut nf_view::scene::Scene, gi: usize, aim_dy: f32,
 fn the_tased_guard_who_wakes_re_arms_and_his_death_drops_the_sidearm() {
     let iso = iso();
     let mut scene = nf_view::load(&iso, "07000005.bin", false).expect("load 07000005");
-    // hud-start: a load holds nothing (0x47 [M 0x1a7ef8:137]). This AI scenario's tick timeline
-    // was measured with the start weapon already in hand and no ticks spent on a start draw;
-    // hand it over without stepping so the guards' schedule stays the one the pins were built on
-    // (the Stunner equip below runs through the real switch input either way).
-    {
-        let sim = scene.sim.as_mut().unwrap();
-        sim.gun.weapon = sim.gun.switch_request;
-        sim.hud.weapon_label_timer = 0;
-    }
+    // hud-start: a load holds nothing (0x47 [M Player_InitWeapon 0x1a7ef8:137]) - settle the start draw first.
+    nf_view::settle_start_draw(scene.sim.as_mut().unwrap());
+    let start_pos = scene.sim.as_ref().unwrap().bond.pos;
     let gi = pick_start_guard(&scene);
     let held = scene.sim.as_ref().unwrap().drones.list[gi].weapon as u16;
     {
@@ -220,7 +214,11 @@ fn the_tased_guard_who_wakes_re_arms_and_his_death_drops_the_sidearm() {
     // Step Bond 8 u out before the RecoverTime (1200) expires — outside AnyoneNear's 4.0 band —
     // so the wake lands [M 0x162eb0 case 0xc → 0x4c].
     while scene.sim.as_ref().unwrap().drones.frame < stun_frame + 1150 { steer(&mut scene, gi, false); }
-    place_bond(&mut scene, gi, 8.0, false);
+    // Bond goes back to his level start (≈9.7 u from this guard, on solid ground): the spots 8 u
+    // along ±x arm the PlungeTriggers (#284 primed, ch 0xBE) and the plunge death NIS 0x06000952
+    // (unskippable [M Script_IsDeathNIS 0x1dae60]) freezes the drones at frame ~1390. With the start draw's ticks spent first (hud-start), that freeze lands before the
+    // RecoverTime expires; the old timeline only raced it.
+    { let mut dev = nf_view::dev::Dev { scenario: None, ..Default::default() }; dev.teleport(&mut scene, start_pos, 0.0); }
     let mut recovered_at = None;
     for t in 0..1700u32 {
         steer(&mut scene, gi, false);

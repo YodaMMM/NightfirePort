@@ -46,7 +46,17 @@ fn mounted_heat_strip_is_kind_1f_of_100() {
 #[test]
 fn frame_ammo_text_shadow_offset() {
     let Some(iso) = iso() else { eprintln!("NF_ISO unset — skipping"); return };
-    let sc = nf_view::load(&iso, "07000005.bin", false).expect("load");
+    let mut sc = nf_view::load(&iso, "07000005.bin", false).expect("load");
+    // hud-start: a load holds nothing (0x47 [M Player_InitWeapon 0x1a7ef8:137]) and the first HUD
+    // update shows the weapon-name label for 60 ticks in place of the count
+    // [M HUD_UpdateAmmoPane 0x19a7f0:212-223]: settle the start draw, then let the label run out.
+    {
+        let s = sc.sim.as_mut().unwrap();
+        nf_view::settle_start_draw(s);
+        let mut n = 0;
+        while s.hud.weapon_label_timer > 0 && n < 120 { s.step_bond(Default::default(), false, false, false); n += 1; }
+        assert_eq!(s.hud.weapon_label_timer, 0, "the start label runs out");
+    }
     let f = hud::overlay(&sc, 4.0 / 3.0);
     // The ammo count's glyphs (font 2, right-aligned at (496, 412)): each glyph is drawn twice, the
     // shadow first; pair every shadow quad with the text quad 1 px up-left of it.

@@ -22,16 +22,8 @@ fn iso() -> String { std::env::var("NF_ISO").expect("NF_ISO") }
 /// `Camera_UpdateGlbVars` advances it on the frames after [M 0x1bada0:16-20]).
 fn walk_to_the_exit(iso: &str, stop_at_fire: bool) -> Walker {
     let mut w = Walker::new(nf_view::load(iso, "07000001.bin", false).expect("load 07000001"));
-    // hud-start: a load now holds nothing and draws the start weapon on tick 0 (0x47
-    // [M Player_InitWeapon 0x1a7ef8:137]). With that draw the hall's guard 6 ends somewhere the
-    // walker's point-blank shots never land (no damage in 2700 ticks) — a walker-scenario
-    // divergence, not a broken system. Until the walker handles it, hand the start weapon over
-    // without a draw so this walk keeps the tick timeline its route was built on.
-    {
-        let sim = w.scene.sim.as_mut().unwrap();
-        sim.gun.weapon = sim.gun.switch_request;
-        sim.hud.weapon_label_timer = 0;
-    }
+    // hud-start: a load holds nothing (0x47 [M Player_InitWeapon 0x1a7ef8:137]) - settle the start draw first.
+    nf_view::settle_start_draw(w.scene.sim.as_mut().unwrap());
     {
         let sim = w.scene.sim.as_ref().unwrap();
         let p = sim.bond.pos;
