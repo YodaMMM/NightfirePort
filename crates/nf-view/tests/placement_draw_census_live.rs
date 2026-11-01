@@ -87,7 +87,7 @@ fn game_draw(kind: u8) -> Option<&'static str> {
 /// are clear (0x8000 statics go to the cel pass instead) and the placement's glist resolved
 /// [M 0x1d1b68:77-97]; the created thing draws only when the resolved object actually has meshes
 /// (an empty glist draws nothing — `View_DrawObjectGlist`'s no-op) and the object's own no-draw
-/// bits are clear (0x400 mirror-only [M View_AddObjects 0x1e62d8:38-47], 0x10 no-draw where the
+/// bits are clear (0x400 x-ray-only — the goggles' slots draw those [M View_AddObjects 0x1e62d8:38-47], 0x10 no-draw where the
 /// creator copies glist+0x44 [M scene.rs's fix-striped-boxes2 census]).
 fn game_draws(level: &Level, m: usize, p: &Placement) -> Option<(&'static str, usize, usize)> {
     let kind = (p.flags & 0xff) as u8;

@@ -121,13 +121,103 @@ drawing an unowned 0x5D) is **open** — see the live checks below.
 
 Not net-encoded (the `stabilise` precedent — the wire has no lane; MP is gated anyway [M :28]).
 
-## Consumers (for the renderer)
+Port behaviour today: the switch machine applies the 0x5D request like any other (no owned
+check, matching the decompile), so the pad's action-13 key arms night sight on every on-foot
+SP level. The keyboard has no bind (unchanged decision, lib.rs).
 
-The panes' data getters exist in `hud_pane.rs` (`NightSightFx`: the tint/jitter/step per
-`HUD_UpdateNightSightPane` 0x19d218 / `HUD_UpdateXRayPane` 0x1a1410). Mode readers elsewhere:
-the crosshair 0x19e6d0:80, `Player_LaserPointer` 0x1a65d8:151, `Env_Breath` 0x17be00:52,
-`AnimObjectDraw` 0x1c4490:296 (the night-mode character lighting), `BodyGlow_Update` 0x1ac2c8
-(mode 2 shows the guards' glow) — none ported yet; they read `Sim::goggle_mode()`.
+## Sounds
+
+None. `HUD_MonitorNightSight`, both pane updates and `BodyGlow_Update` call no `Sound_*`
+function [M 0x19e9d8, 0x19d218, 0x1a1410, 0x1ac2c8 — no Sound_ call in any]. The 0x5D item
+has no models and a 0 holster script [D weapon_data 0x5d; goggles_live.rs]; whatever its
+draw script's events sound is the switch machine's ordinary path, nothing goggles-specific.
+
+## What each mode draws (goggles-render)
+
+All gated on viewer+0x236 (`Sim::goggle_mode()`); the panes additionally on their enable byte.
+
+**Night sight (1)**
+- Pane 7 (`NightSightSprInfo` 0x2bd7b0, 6 sprites [D; nf-formats tests/goggles_panes.rs]):
+  sprite 0 = the 64×64 noise 0x0300004A over 512×448, additive, colour word
+  `(Rand(0x18)+7) | 0xff0000` (green, alpha 7..30) and v = `Rand(h−1)` on every other frame
+  (`Scrl_247` parity); sprite 1 = 0x03000002 white 0xffffff7f additive; sprite 2 = 0x03000002
+  magenta 0xff00ffff SUBTRACTIVE (flags 0x200) — red and blue out: the green image; sprites
+  3/4/5 = the battery bar back (0x0300017F row 0), the bar (row 16) at width/uv-width
+  `max(1, (int)(battery/1800·200 + 28))`, the icon 0x0300017E at (108, 48)
+  [M HUD_UpdateNightSightPane 0x19d218]. The pane's `Rand_Rand` draws come off the shared
+  stream inside the tick (`GogglePanes::night_update`, hud_tick) — the game's order.
+- The lamp: SP only, every frame, `Light_Create(32.0, 2.5, glb_viewer+0xC0, 0xff,0xff,0xff,
+  ch 0, life 0, kind 1, flicker 0)` — a one-tick white light at the eye [M 0x19d218:48-51].
+- The crosshair turns 0x208020ff (green) [M HUD_UpdateCrossHair 0x19e6d0:80-85].
+- The weapon laser sight's beam object takes gfx 0x2000131 "lazer" instead of 0x2000133
+  "watch_lazer" [M Player_LaserPointer 0x1a65d8:151-155] (scene.rs `NIGHT_BEAM_SLOT`). The
+  beam's alpha flicker (`(a + 0x3f + FRand(128))/2` here, `a + Rand(9) − 4` in [0x10, 0x30]
+  otherwise) is not modelled in either mode (pre-existing, sg5-laser-draw).
+- `View_SetupRenderModes_Tweak` 0x1e5888:13-20 quarters the alpha of objects with obj+0xF0 &
+  0x20000 in mode 1 (`alpha = obj+0x106 >> 2`; disasm 0x1e588c `lui v1, 2`, 0x1e58b8 `lhu
+  +0x236`, 0x1e58d8 `srl s1, 2`) [M]. The bit's only source is the glist flags word
+  (`celglist+0x44` → obj+0xF0 by `Control_SetGList` 0x134960 and the creators); no ACTION.ELF
+  store ORs it in [M grep of every `+ 0xf0) =` store] and no glist in the 99 FILES.BIN
+  archives carries it [D nf-formats tests/night_quarter_census.rs] — on this disc no object
+  draws differently. Port: `nf_game::view::tweak_alpha` (unit-tested); no draw site needs it.
+
+**X-ray (2)**
+- Pane 15 (`XraySprInfo` 0x2bddb0, 5 sprites): sprite 0 = the 32×32 noise 0x03000098,
+  additive, `(Rand(0x18)+7) | 0xffffff00` (white, alpha 7..30), v = `v+1 & 0x1f` per frame;
+  sprite 1 = blue 0x0000ffff additive; sprites 2/3/4 = the battery bar (sprite 3 the width)
+  [M HUD_UpdateXRayPane 0x1a1410].
+- The guards' body glow (`BodyGlow_Update` 0x1ac2c8, per guard, the record every spawn makes
+  [M BodyGlow_Create 0x1ac158]): visible while a viewer is in x-ray OR has the OICW zoom pane
+  (pane 17's enable byte HUD+0x244 — the AIMS-20 thermal scope; the old "dead/spectator"
+  reading was wrong) up; distance owner obj+0x30 → glb_viewer+0xC0, > 10.0 hides (the OICW
+  pane forces 0.0); alpha byte `(1 − d·0.1)·count·128/256` on every part; count 0x100, −1 per
+  tick while the owner's health ≤ 0, deleted below 1. Parts: the main object 0x200025f
+  "lazer_muzzle" (billboard ×6.0 at bone 5; keeps its 0x400 bit → x-ray only) and 15 children
+  0x200055a "BoneGlow" on `GlowBones` (each `Mat_Align2Dir(bone − parent, viewer − bone)`,
+  scale (1.5, 1, length); bone 0 measures against bone 4). The parts carry obj+0xF0 & 0x2000 →
+  `Game_Draw`'s list 2, drawn after `psiClearZ` [M 0x1e6f50:157-176]: over the world — the
+  through-walls look. Port: `Scene::glow_targets` (nearest GLOW_GUARDS = 8), the pooled slots
+  `GLOW_SLOT_BASE`, pass 6 via `LIST2_NODE`, the alpha in the palette colour slot; the count in
+  `BodyGlow::count`, ticked in `run` after `hud_tick`.
+- The x-ray-only glists: glist flags 0x400 are submitted to a view only while its +0x236 == 2
+  [M View_AddObjects 0x1e62d8:38-47, View_AddForcedObjects 0x1e5fb8:79-84, the cel/object
+  sub-entry tests in View_DrawCelGlist 0x1e6538 / View_DrawObjectGlist 0x1e6780] — the port
+  had read the bit as "mirror-only". Created ones on the disc [D nf-formats
+  tests/xray_only_census.rs]: 07000003 "HOTOBJECT" (kind 0x20 breakable), 0700000a "laserbeam"
+  ×10 and 0700000b "laserbeam-large" ×8 (kind 0xeb triggers), 07000014 "laserbeam" ×8 (0xea) —
+  tripwire beams only the goggles show. Port: one slot each (`XRAY_SLOT_BASE` + placement
+  index) at obj+0x90 — `View_RotTransMatrix` for the 0x20 breakable and the trigger family
+  (`object_matrix_for_class`); a breakable hides when dead, a trigger when deleted or its
+  lock channel fired with the hide byte set (`Trigger_Update` 0x1b1a78:47-55's |= 0x30).
+  The keyed triggers move: `Trigger_Create` 0x1b1720:56-87 stores the 0x19 key list
+  (`m_paths[extra[8]]`), last = count − 1 and the step last/rate (`extra[7]` = count | rate<<16),
+  and every `Trigger_Update` after the lock return poses obj+0x90 with `Spline_Interp(t, keys,
+  0, last, obj+0x90, 0, 2)`, then `t += step`, `t = 0` once `(float)last < t` [M 0x1b1a78:60-70]
+  — one pass every `rate` ticks; a Touch updates inside `Trigger_Calc`'s ProcessTouch window
+  [M 0x1b1900:50-71], so it moves too. On the disc [D night_quarter_census]: 0700000a 3 of the
+  10 beams (#606/#614/#625, rate 240), 0700000b all 8 (rates 150-420), 07000014 all 8 (rate
+  480), each a 3-key list whose key 0 is the placement pose. Port: `triggers::Motion` — the
+  volume (`set_tris`) and the x-ray draw follow the pose. The "IR FootPrint Left/Right" pair
+  (0x2000567/0x2000568, flags 0x721) sits on 0x2000-skipped placements in every archive and
+  has no creator in ACTION.ELF (neither hash nor name in the decompile) — unspawned.
+- Breath: `Env_Breath` 0x17be00 spawns its x-ray puff variant (gas +0xF0 |= 0x400 → drawn
+  only in mode 2) whenever its env gate holds — `GlobalEnv == 0 || GlobalEnv+0x4b != 0 ||
+  cel+0x3c & 0x10000000`, where +0x4b is the Env_Create drop type (0 = snow). So off the
+  snow levels the guards breathe ONLY in x-ray; on 07000005-08 (drop type 0) the plain puff
+  shows in every mode, the x-ray one only in underwater cels. Wired from the guard pass
+  (`Sim::guard_breath`, docs/systems/env-breath-ripple.md); `Gas::xray_only` gates the draw.
+- The guards' laser ray (`AnimObjectDraw` 0x1c4490:259-311 [M]): a drawn anim object whose
+  held byte (obj+0xDC → +0x62) is 0x18 gets `AnimGetBoneWorldTrans(obj, 8, 3)` — datum 8+3 —
+  as the start, start + (−100, 0, 0)·datum rows as the far end, `Collide_RayIntersect(…, 8)`
+  clamps it to the first hit, and `View_DrawGlist(gfx, start, spherical(start − end), (1, 1,
+  |start − end|))` draws gfx 0x2000131 when the DRAWING viewer's +0x236 == 1, else 0x2000133.
+  Carriers [D goggles_draws_live]: weapon 0x19 on 0700000b/11/12/13 (10/10/10/4 guards, skins
+  0x5000004/6/8, datum 11 on bone 23); the 0x19 → 0x18 swap is the captains' (Attack 0x164210 /
+  AimStand 0x166178 / AimStandFire 0x166328) — 2 on 0b, 3 on 12. Port: `Scene::guard_beams`,
+  pooled `GUARD_BEAM_BASE` slots (GUARD_BEAMS = 4 rays × the two sprites).
+
+Render aid: `nf-view <iso> <level> --frame N --goggles 1|2 --shot out.png` presses the real
+goggles key in the shot's second half until the mode reads 1/2.
 
 ## Tests
 
@@ -138,6 +228,19 @@ the crosshair 0x19e6d0:80, `Player_LaserPointer` 0x1a65d8:151, `Env_Breath` 0x17
 3. sister: the level start owns no goggles [D census] and the latch-clear request writes
    `switch_request = 0x5d` but never touches the mode or the latch [M :56-58];
 4. the arm path auto-stows the item to the pre-goggles weapon and the mode + latch persist.
+
+`crates/nf-view/tests/goggles_render_live.rs` (NF_ISO opt-in, the key pressed through
+`step_bond`): pane 7's fields + the viewer lamp + the HUD quads, parked again at mode 0
+(sister); the x-ray glow pool at 3.0 from a guard (the alpha formula, every part posed on the
+guard), empty at 12.0 and in night sight (sisters); a dead guard's count-down; 0700000a's ten
+beams drawn only in mode 2 (mode 0/1 sisters); the per-level x-ray slot census (03 = 1,
+14 = 8, 05 = 0); the laser sight's 0x2000131/0x2000133 swap. Unit tests: `hud_pane`
+goggle_pane_tests (the pane updates' shared-stream draws, the crosshair colour, the battery cap
+on the grown value, the arm's pane enable), `body_glow` (the count-down, the child matrix, the
+parent pick). nf-formats: `goggles_panes` (both SprInfo tables, numbers) and
+`xray_only_census` (the 0x400 placements + the assets in all 21 SP archives).
+
+`crates/nf-view/tests/goggles_draws_live.rs` (NF_ISO opt-in): the snow-level plain breath in mode 0 (spawn alpha 128 staying white, size 0.05 → 0.1, at the head; dead guards make none), the x-ray-only breath off the snow levels (none in mode 0; alpha 200, growing, drawn only in mode 2), the 0x19 carrier/captain census, a captain's real 0x19 → 0x18 swap and its ray (datum 11 start, −X row, ≤ 100, sprite swap in mode 1; a 0x19 holder draws none), the keyed tripwires (step last/rate, key 0 = the placement, the volume and the x-ray draw follow, the wrap; 0a 3 / 0b 8 / 14 8). nf-formats `night_quarter_census` (no glist carries 0x20000; the 0xDF drop types; the keyed trigger placements). Unit tests: env breath variants/origin, `view::tweak_alpha`, `triggers` motion + lock hold.
 
 ## Live checks (open)
 

@@ -63,7 +63,8 @@ Kinds whose creators attach NO mesh — the port must not draw them (the sweep a
 per kind; the census test recomputes every level's expectation from the placements independently):
 0x2E, 0x30, 0x34 (parent), 0x35, 0x3A, 0x3B (visible ones), 0x3F, 0x71, 0xD5, 0xD8, 0xE1, 0xE3, 0xDA
 (+ the two fixed parts), 0xFA/0xFD/0x4A (mesh-ful only). Drawn as World-layer instances at the placement
-transform with the 0x800 ambient dim and the mirror-only (glist 0x400) skip [M 0x1e62d8:38-47].
+transform with the 0x800 ambient dim and the x-ray-only (glist 0x400 — drawn only while viewer+0x236
+== 2, docs/systems/goggles.md) skip [M 0x1e62d8:38-47].
 
 **Explosion visual — ported.** `Explode_Create` 0x17cbd0 Script_Loads **0x6000052** on every
 disc caller (0x12cd98, 0x12ce80, 0x17ffa0, 0x180498, the copter's 0x17dbb8 case 6), aligns the script

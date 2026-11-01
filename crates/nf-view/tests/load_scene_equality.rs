@@ -32,6 +32,12 @@ fn iso() -> Option<String> { std::env::var("NF_ISO").ok() }
 // camera-beam-satchel-draw: the cameras' third posed slot (the lens beam, Sensor_SetBeam 0x1af398) — 14's beams add vertices; 02's slot layout shifts.
 // batch-1024a: the security cameras' body + mount posed slots (`Sensor_Create` 0x1af010 / `Sensor_SetBeam`
 // 0x1af398 — 01 ×1, 02, 14 ×14), 14's b1 drones on skin 0x0500008c (`NDrone2_DefaultInit` 0x14b300:82-95).
+// goggles re-pin (10-31): the body-glow pool (8 guards x 16 parts, BodyGlow_Create 0x1ac158's meshes
+// 0x200025f/0x200055a) + the night-sight beam slot (0x2000131, Player_LaserPointer 0x1a65d8) on every level
+// (+129 attachments, +2 materials, +1584 verts); 07000014 adds its 8 x-ray-only laserbeam triggers (+8).
+// goggles-draws re-pin (10-31): the breath puff mesh 0x200021d joins the gas pool's draw slots (64, Env_Breath
+// 0x17be00) and the guards' laser-ray pool (4 rays x 0x2000133/0x2000131, AnimObjectDraw 0x1c4490) on every level
+// (+72 attachments, +1 material, +1344 verts, +2688 indices, the same on all five).
 const BASELINE: &[(&str, &str)] = &[
     // pickup-medal-gate re-pin: the fresh-boot loads now run `Pickup_Create`'s kind-6 gate
     // [M 0x18dda0:93-95] — the 007 rows (kind 6) create only with the level's gold medal

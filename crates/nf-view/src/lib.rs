@@ -6877,6 +6877,13 @@ pub fn run() -> Result<()> {
                 Some(i) => args.get(i + 1).context("--mode needs ticks")?.split(',').map(|t| t.parse()).collect::<Result<_, _>>()?,
                 None => Vec::new(),
             };
+            // Render aid (goggles): `--goggles N` (1 night sight, 2 x-ray) presses the goggles key —
+            // the real input path, `Input::goggles_action` = the game's `Input_Action(p, 0xd, 4)`
+            // [M HUD_MonitorNightSight 0x19e9d8:74] — on every other tick of the shot's second half
+            // until the mode reads N: the first press requests the item 0x5d (the latch is clear),
+            // its draw arms night sight, the next press cycles to x-ray. The second half leaves
+            // the battery (BL+0x920, +3 per tick from 0) charged when the mode comes up.
+            let goggles_want: Option<u16> = args.iter().position(|a| a == "--goggles").and_then(|i| args.get(i + 1)).and_then(|v| v.parse().ok());
             if let Some(w) = draw { sim.step_bond(nf_game::player::Input { switch_to: Some(w), ..shot_input }, false, false, false); }
             // fix-aims20-lights-render: the headless `--shot` path honours `--give` too — the same equip +
             // switch_request the window path applies below (the shot path returned before that block, so
@@ -7023,6 +7030,9 @@ pub fn run() -> Result<()> {
                         for c in sim.drones.inventory.clip.iter_mut() { if *c == 0 { *c = 30; } }
                         for c in sim.drones.inventory.carried.iter_mut() { *c = (*c).max(90); }
                     }
+                }
+                if let Some(want) = goggles_want {
+                    if t * 2 >= time as u32 && t % 2 == 0 && sim.goggle_mode() != want { inp.goggles_action = true; }
                 }
                 if walk { sim.step_bond(inp, pulls.contains(&t), false, use_at == Some(t)); } else { sim.step([cam.pos.x, cam.pos.y, cam.pos.z], cam.dir().to_array(), pulls.contains(&t), false); }
             }
