@@ -15391,33 +15391,15 @@ fn segment_hits_sphere(a: V3, b: V3, c: V3, r: f32) -> bool {
     fn player_use_triggers(&mut self, head: V3, look: V3, frame: u32) {
         let use_point = [head[0] + look[0], head[1] + look[1], head[2] + look[2]];
         let r = 1.0;
-        // The game's test is `Collide_SphereIntersect(1.0, head + look, *(player+0x20), …)`, mask
-        // 0x101 [M 0x1a5170:100-108 → 0x1ec940:94-111], three stages (level-12-exit-pick):
-        // 1. The cel scope: `Collide_Pick` 0x1eb320 walks only the objects linked to the cels
-        //    `Collide_StraddleCels` 0x1eac98 reaches from the PLAYER's cel through the portals the
-        //    use sphere meets (`Intersect_Portal` 0x1ea7b8 v0x101) [M 0x1eb320:125, :313-328];
-        //    `Trigger_Create` 0x1b1720:96 links each trigger once (`build_LinkToRoom` 0x1c9680 at
-        //    its world-sphere centre). NOT modelled: the port carries no trigger obj+0x80 and its
-        //    cel links are approximations (the player relinks at POS, `player_cel_relink`), and a
-        //    trial gate refused real presses — 0700000d's E panel #450 resolved to cel 6 at its box
-        //    centre while Bond, standing at it, sat in cel 93 (use_key_census_live). The class-0x1D
-        //    arm has no facing or line-of-sight test [M 0x1a5170:134-137].
-        // 2. The bounds-sphere gate: `|use point − obj+0x80|² < (1.0 + obj+0x8C)²` [M 0x1eae80:
-        //    219-228] — implied by stage 3 for the port's world-space tris (the bounds sphere
-        //    encloses the glist), so not repeated.
-        // 3. The mesh refine: `Collide_Intersect` 0x1ebaa8:186-190 → `Intersect_PointGeom`
-        //    0x1e92d8 — the sphere against the glist TRIS, front side only; a miss frees the node
-        //    [M 0x1ec940:120-125] (`CollisionWorld::sphere_meets_tris`). The old AABB stand-in was
-        //    a superset: 07000012's exit #669 is two crossed planes (y 0.676, z 9.962 [D]) inside
-        //    its 1.20..3.32 × 9.47..10.45 box, so a press from the security room at (1.12, 7.49)
-        //    facing north met the inflated box through the room's north wall, while the use point
-        //    sits 1.49 from the vertical plane and 1.11 above the horizontal one — no hit, as in
-        //    the game [L PCSX2 2026-10-31, docs/levels/07000012.md §3].
-        // Triggers without tris (synthetic test volumes) keep the AABB test.
+        // Collect trigger indices whose bounding box meets the use sphere — the game's test is
+        // `Collide_SphereIntersect(pos, 1.0, …, mode 0x101)`: a bounding-sphere gate (centre
+        // obj+0x80, radius obj+0x8C [M 0x1eae80:219-228]) then the point transformed by the inverse
+        // object matrix and `Intersect_PointGeom` — point-vs-glist-TRIS [M 0x1ebaa8:186-190; caller
+        // 0x1a5170:100-137]; hit type 0x1d → Trigger_Activate. The port's AABB is the documented
+        // stand-in (a superset of the mesh test — exact only where the mesh fills its box).
         let hits: Vec<usize> = (0..self.triggers.len()).filter(|&i| {
             let t = &self.triggers[i];
-            if (0..3).any(|k| use_point[k] + r < t.lo[k] || use_point[k] - r > t.hi[k]) { return false; }
-            t.tris.is_empty() || CollisionWorld::sphere_meets_tris(use_point, r, &t.tris)
+            !(0..3).any(|k| use_point[k] + r < t.lo[k] || use_point[k] - r > t.hi[k])
         }).collect();
         for i in hits {
             let (sets, next) = self.triggers[i].activate_request(&self.channels);

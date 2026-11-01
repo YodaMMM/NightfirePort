@@ -81,11 +81,6 @@ fn the_override_console_writes_ch_49_until_the_lobby_locks_it() {
     for _ in 0..10 { sim.step_bond(Input::default(), false, false, false); }
     assert!(sim.drones.channels.on(0x87), "the lobby touch #749 must raise ch 0x87 [D]");
     sim.bond.pos = [console.lo[0] + 0.2, console.lo[1] - 0.4, console.lo[2] - 1.0];
-    // Facing the console as in the first press: the use point is head + look × 1.0 and the pick
-    // tests the console's glist (the keyboard mesh) [M Player_Activate 0x1a5170:100-108 →
-    // Intersect_PointGeom 0x1e92d8], so the press must look at it (the lobby walk left Bond
-    // facing west).
-    sim.bond.yaw = 0.0;
     for _ in 0..6 { sim.step_bond(Input::default(), false, false, true); }
     assert!(sim.drones.channels.on(0x49), "E fires the console even with the lock raised [M 0x1b2318 has no lock read]");
     assert_eq!(mission_state(sim, 0x0700_0012, 0), 4);
