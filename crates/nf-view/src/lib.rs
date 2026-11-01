@@ -7082,6 +7082,12 @@ pub fn run() -> Result<()> {
             if walk { if let Some((p, yaw, pitch, fov)) = sim.script_camera() { cam = Camera { pos: Vec3::new(p[0], p[1], p[2]), yaw, pitch, fov }; } }
             if walk { if let Some((p, yaw, pitch, fov)) = sim.wire_camera() { cam = Camera { pos: Vec3::new(p[0], p[1], p[2]), yaw, pitch, fov: GAME_FOV / fov }; } }
             eprintln!("Bond at {:?}{}, health {}", sim.bond.pos, if sim.disabled { " (disabled by a script)" } else { "" }, sim.drones.health.health);
+            // Render aid (light-glow): `NF_SL_LOG=1` lists the searchlight parts the shot draws.
+            if std::env::var_os("NF_SL_LOG").is_some() {
+                for (k, p) in sim.drones.searchlights.parts.iter().enumerate() {
+                    eprintln!("searchlight part {k}: kind {} state {} drawn {} pos {:?} alpha {} scale {} pitch {} yaw {} on {} ({}) off {} ({}) alarm {}", p.kind, p.state, p.drawn, p.pos, p.alpha, p.scale, p.pitch, p.yaw, p.on, sim.drones.channels.on(p.on as u32), p.off, sim.drones.channels.on(p.off as u32), p.alarm);
+                }
+            }
             for u in sim.unposed(&scene.characters) { eprintln!("unposed: {u}"); }
             for p in &sim.drones.pickups { eprintln!("pickup: weapon {:#x}, {} rounds at {:?}", p.weapon, p.rounds, &p.m[3][..3]); }
             if let Some(dr) = sim.drones.list.iter().find(|d| !d.shots.is_empty() || d.state != 4) {

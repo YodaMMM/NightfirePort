@@ -51,6 +51,10 @@ fn the_searchlight_alarm_silences_at_the_wall_panel() {
         assert_eq!(inv.ch_out, 55);
     }
     // 1. Raise the alarm the real way: Bond under a sweeping gate searchlight until it tracks.
+    // light-glow: the lights reveal once SP #808's ch 0x34 rises — the courtyard entry plates the
+    // walk-in crosses [D trigger census #524-#526; M SP_Hit 0x1dc470:16-18, SP_Update 0x1dbda8 case 0].
+    // The teleport skips them; raise the channel the way a plate does.
+    scene.sim.as_mut().unwrap().drones.channels.set(0x34, 1, 0);
     let mut raised = false;
     'spots: for spot in SPOTS {
         let sim = scene.sim.as_mut().unwrap();
