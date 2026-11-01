@@ -5484,9 +5484,9 @@ impl Drone {
         // The fresh path is `NDrone2_ClosestAIPoint` 0x151b18: the point's emitter cost byte at the
         // drone's nearest node, the nav-path match, least cost / first on ties, the +0x144 owner
         // preference [M 0x151b18:128-181] — `aipoint::closest`, the same selection `find_run_to_point`
-        // runs; the old 2-D scan stand-in is gone with the decoded cost arrays.
-        // EXPERIMENT (level-11-start-corridor-guard): +0x144 = placement parameter 4 [M DefaultInit
-        // 0x14b300:472 — piVar19[0x11] = params[4]; params start at piVar19[13] = the flat array].
+        // runs; the old 2-D scan stand-in is gone with the decoded cost arrays. The game's owner is
+        // Drone+0x144 = placement parameter 4 [M DefaultInit 0x14b300:472 — piVar19[0x11] =
+        // params[4]; params start at piVar19[13] = the flat level_tag param array].
         let owner = self.group as i32;
         let path = self.nav_path.flatten();
         let Some(pi) = crate::aipoint::closest(d.ai_points, d.nav, d.world, path, self.pos, 8, owner) else { return false };
@@ -5510,8 +5510,8 @@ impl Drone {
     /// artifact) [M-dis]. This selection replaced an earlier route-probe stand-in.
     fn find_run_to_point(&mut self, d: &Data) -> bool {
         let Some(group) = crate::aipoint::run_to_point_group(self.prop(d, 0x56), self.prop(d, 0x4e), self.team) else { return false };
-        // EXPERIMENT (level-11-start-corridor-guard): the game's owner is Drone+0x144 = placement
-        // parameter 4 [M DefaultInit 0x14b300:472 — piVar19[0x11] = params[4], params start at
+        // The game's owner is Drone+0x144 = placement parameter 4 [M DefaultInit 0x14b300:472 —
+        // piVar19[0x11] = params[4], params start at
         // piVar19[13] = DIVars+0x34 = the level_tag's flat param array]; the old read took property
         // BIT 0x11 of the props words (the alert block sets bit 17 on many guards).
         let owner = self.group as i32;
