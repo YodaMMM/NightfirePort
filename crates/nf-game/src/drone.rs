@@ -11737,6 +11737,11 @@ pub struct Drones {
     /// Type-1 INFO messages posted by the object updates this tick (label, life) — the locked exit
     /// (`Trigger_Activate` 0x1b2318:84-85); the Sim drains them into its INFO pane.
     pub info_labels: Vec<(u32, f32)>,
+    /// The keycode INFO messages posted this tick (the four code chars, life): `PCQWorm_Update`
+    /// 0x1aee20:24-29 and `Lock_Update` 0x1ae3d8:246-257 both sprintf label 0x2000014
+    /// ("Obtained Lock Keycode %c%c%c%c") over `KeyCodes[i]` and post it as type 1 for 0xb4
+    /// ticks; the Sim binds and formats them into its INFO pane.
+    pub info_codes: Vec<([u8; 4], f32)>,
     /// The mission's own end (`Mission_Update` 0x182c60 case 4's `ResetMap_LevelToLoad(LevelToEndTo)`
     /// to the front end or an outro/interlude code, not the next 0x0700 level): the host runs the
     /// game's end sequence (the outro movie when the level has one, then the results page).
@@ -12291,6 +12296,7 @@ impl Drones {
             los_probes: 0,
             movie_request: None,
             info_labels: Vec::new(),
+            info_codes: Vec::new(),
             pickups: Vec::new(), inventory: crate::pickup::Inventory::level_start(0x73, 34), taken: Vec::new(), scripts: Default::default(), player_events: Vec::new(), npc_enabled: true, hold_npcs: false, hold_active: false,
             npc_system_disabled: false,
             spawn_counter: 0, audio: Default::default(), script_sounds: Vec::new(), map_sounds: Default::default(), music: Default::default(), attack_gate: Default::default(), alarm_music: [0; 3], voice_last: Vec::new(), patrol_cooldown: 0, saw_opp_this_frame: false, saw_opp_last_frame: false, searchlights: Default::default(), doors: Default::default(), fuseboxes: Vec::new(), wire_geo: Default::default(), sss: Default::default(), bullet_paths: Vec::new(), sl_shots: Vec::new(), props: Default::default(), break_kills: Vec::new(), breaks: Default::default(), monitors: Default::default(), mission: crate::mission::Mission::new(), mission_carry: None, mission_inited: false, mission_events: Vec::new(), useobjs: Default::default(), ai_points: Vec::new(), bullet_path_weapons: Vec::new(), copters: Vec::new(), copter_paths: Vec::new(), locks: Vec::new(), grapple_points: Vec::new(), prev_event2: 0,
@@ -15358,6 +15364,9 @@ fn segment_hits_sphere(a: V3, b: V3, c: V3, r: f32) -> bool {
                 // (the port's Keypad::arm takes the table's entry directly — the same bytes).
                 let code = self.key_codes.code(l.code);
                 let shown = self.key_codes.shown(l.code);
+                // `Lock_Update` case 3 [M 0x1ae3d8:246-257]: a code the Q-Worm already revealed
+                // is posted again as the same INFO message (label 0x2000014, 0xb4 ticks).
+                if shown { self.info_codes.push((code, 180.0)); }
                 self.keypad = Some((li, crate::lock::Keypad::arm(code, shown)));
                 break;
             }
@@ -16632,6 +16641,14 @@ fn segment_hits_sphere(a: V3, b: V3, c: V3, r: f32) -> bool {
         let (paths, weapons) = self.bullet_paths();
         let shots: Vec<(V3, V3, u16)> = paths.iter().zip(weapons).map(|(&(a, b), &w)| (a, b, w)).collect();
         self.useobjs.tick(&shots, &mut self.channels, frame, &mut self.scripts);
+        // `PCQWorm_Update` 0x1aee20 state 1 with param 0 != 0 [M :24-31]: the revealed entry's
+        // message — "Obtained Lock Keycode %c%c%c%c" (label 0x2000014) with the four code chars,
+        // a type-1 INFO message for 0xb4 ticks — then `KeyCodes[p0*5+4] = 1`.
+        for k in std::mem::take(&mut self.useobjs.revealed) {
+            self.info_codes.push((self.key_codes.code(k), 180.0));
+            let n = self.key_codes.0.len();
+            self.key_codes.0[k as usize % n][4] = 1;
+        }
         // The world objects' update pass (`control_movement_object_handler` 0x1336f8 pass 4:
         // `control_funcs[+0xFF].update` — InverterTrigger 0x1b30a8, Shooter 0x17d0c0 (fires one
         // `Bullet_init` bullet into this tick's list), DynamicObject 0x18d3b8; the camera splines

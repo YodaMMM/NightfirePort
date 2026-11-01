@@ -318,6 +318,9 @@ fn view_model_entries(scene: &scene::Scene, l: &scene::SkinLayout) -> Option<Vec
     // anim set [M `Player_ChangeSubState(10)`; L PCSX2 "no view model"]) — frame_state hides the
     // arms' palette; the reattach skips too.
     if s.missile_cam.is_some() { return None; }
+    // The security-camera view: `Player_Disable(player, 0)` hides the view-model object
+    // (obj+0xF0 |= 0x10 [M 0x195f70:17-20]).
+    if s.sec_cam().is_some() { return None; }
     // fix-wallhug-prompt: the creep's third-person camera hides the view model too [M
     // `Player_PositionCamera` 0x18f5d8 case 0xb: `View_SetDrawInNoViews(BLData+0x7e8)`; the entry
     // holsters the weapon, `Player_WeaponNone` 0x196758:114].
@@ -7056,6 +7059,9 @@ pub fn run() -> Result<()> {
                                 if k == "info" { sim.hud.info_msgs.push_back(m); } else { sim.hud.msgs.push_back(m); }
                             }
                         }
+                        // `seccam=<monitor index>`: that monitor console's camera view
+                        // (`Monitor_Activate` 0x1b0058's state 2 — pane 16).
+                        "seccam" => { let i = f(v) as usize; let sensors = sim.drones.sensors.clone(); sim.drones.monitors.activate(i, &sensors); }
                         _ => eprintln!("NF_HUD_PROBE: unknown key {k:?}"),
                     }
                 }

@@ -362,7 +362,9 @@ impl Lang {
 
     /// `sprintf`-style substitution for the `%s` / `%d` forms the game builds with
     /// `sprintf(heap, Txt_BindLabel(id), args)` (`Pickup_Handler` 0x18e650). Only the pickup messages'
-    /// forms are handled: `%s` (weapon name), `%d` (a count), `%%`.
+    /// forms are handled: `%s` (weapon name), `%d` (a count), `%%` — plus `%c`, the keycode
+    /// message's per-char form (label 0x2000014, `PCQWorm_Update` 0x1aee20:26-27); the caller
+    /// passes the rendered argument either way.
     pub fn format(&self, id: u32, args: &[String]) -> String {
         let Some(tpl) = self.bind(id) else { return String::new() };
         let mut out = String::new();
@@ -372,7 +374,7 @@ impl Lang {
             if c != '%' { out.push(c); continue; }
             match chars.next() {
                 Some('%') => out.push('%'),
-                Some('s') | Some('d') | Some('x') => {
+                Some('s') | Some('d') | Some('x') | Some('c') => {
                     if let Some(a) = args.get(next) { out.push_str(a); }
                     next += 1;
                 }

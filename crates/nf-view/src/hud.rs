@@ -35,9 +35,11 @@ const SH: f32 = 448.0;
 /// the table's other four ids never resolve in `hashtable_set_sprite` and the icon stays hidden].
 /// fix-space-pane added the 0700001b missile-status pane's five (0x03000177..7B [M SpaceSprInfo 0x2be3b0 +
 /// `HUD_UpdateSpacePane` 0x19d3b8; D 0700001b.bin entry 61 sub 0..4]).
-/// fix-hud-parity added the Q-Claw marker 0x0300004C [D AmmoSprInfo[7]].
-pub const TEXTURES: [u32; 34] = [0x0300_005b, 0x0300_005a, 0x0300_0026, 0x0300_007a, 0x0300_0128, 0x0300_018d, 0x0300_018e, 0x0300_0003, 0x0300_0034, 0x0300_0002, 0x0300_0173, 0x0300_0174, 0x0300_017f, 0x0300_017d, 0x0300_0055, 0x0300_0056, 0x0300_0057, 0x0300_0090, 0x0300_0141, 0x0300_0066, 0x0300_0067, 0x0300_006a, 0x0300_005e, 0x0300_004a, 0x0300_005f, 0x0300_005c, 0x0300_005d, 0x0300_0059,
-    0x0300_0177, 0x0300_0178, 0x0300_0179, 0x0300_017a, 0x0300_017b, 0x0300_004c];
+/// fix-hud-parity added the Q-Claw marker 0x0300004C [D AmmoSprInfo[7]]; the security-camera
+/// pane's four (0x030000AA..AD) follow [L SecCamSprInfo 0x2bdeb0].
+pub const TEXTURES: [u32; 38] = [0x0300_005b, 0x0300_005a, 0x0300_0026, 0x0300_007a, 0x0300_0128, 0x0300_018d, 0x0300_018e, 0x0300_0003, 0x0300_0034, 0x0300_0002, 0x0300_0173, 0x0300_0174, 0x0300_017f, 0x0300_017d, 0x0300_0055, 0x0300_0056, 0x0300_0057, 0x0300_0090, 0x0300_0141, 0x0300_0066, 0x0300_0067, 0x0300_006a, 0x0300_005e, 0x0300_004a, 0x0300_005f, 0x0300_005c, 0x0300_005d, 0x0300_0059,
+    0x0300_0177, 0x0300_0178, 0x0300_0179, 0x0300_017a, 0x0300_017b, 0x0300_004c,
+    0x0300_00aa, 0x0300_00ab, 0x0300_00ac, 0x0300_00ad];
 
 /// The 0700001b missile-status pane (pane 20: `SpacePane` 0x2be598 = {x 0, y 0, flags 0, create
 /// `HUD_CreateDefault`, update `HUD_UpdateSpacePane` 0x19d3b8, `SpaceSprInfo` 0x2be3b0, 11 sprites}
@@ -298,7 +300,28 @@ impl Hud<'_> {
     /// 0x1ee3e0 case 5 loads the selected font's texture per `\xff` code) [M].
     #[allow(clippy::too_many_arguments)]
     pub(crate) fn text_scaled_tex(&mut self, anchor: Anchor, font: &nf_formats::hud::Font, layer: i32, tex: u32, s: &str, x: f32, y: f32, right: bool, c: [f32; 4], shadow: bool, scale: f32) {
-        if scale <= 0.0 || c[3] <= 0.0 { return; }
+        if c[3] <= 0.0 { return; }
+        // A dim label's shadow is capped at its text's alpha (the menu/dev callers' own model);
+        // the HUD status messages' fade keeps the shadow opaque instead (`text_fading`).
+        let shade = shadow.then(|| { let mut s = gs(0, 0xff); s[3] = s[3].min(c[3]); s });
+        self.glyphs(anchor, font, layer, tex, s, x, y, right, c, shade, scale);
+    }
+
+    /// The status-pane message text (`HUD_UpdateStatusPane` 0x19c310 / `HUD_MPUpdateStatusPane`
+    /// 0x19ca88): the fade writes only the text sprite's colour +0x10 (`& 0xffffff00 | time·17`
+    /// [M 0x19c310:262-270; 0x19ca88:77-79]) and never its shadow colour +0x14, which stays the
+    /// steady 0xff; `View_DrawSprites` 0x1e5290:166-182 hands a text sprite to `Font_DrawText`
+    /// with no alpha test, and `Font_DrawText` 0x1eee48:96-98 draws the (+1, +1) copy in that
+    /// shadow colour — so the black shadow stays fully dark while the letters fade, down to and
+    /// including an alpha-0 tick.
+    #[allow(clippy::too_many_arguments)]
+    pub(crate) fn text_fading(&mut self, anchor: Anchor, font: &nf_formats::hud::Font, layer: i32, s: &str, x: f32, y: f32, right: bool, c: [f32; 4]) {
+        self.glyphs(anchor, font, layer, FONT_TEX, s, x, y, right, c, Some(gs(0, 0xff)), 1.0);
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    fn glyphs(&mut self, anchor: Anchor, font: &nf_formats::hud::Font, layer: i32, tex: u32, s: &str, x: f32, y: f32, right: bool, c: [f32; 4], shade: Option<[f32; 4]>, scale: f32) {
+        if scale <= 0.0 { return; }
         let (placed, native_w) = font.layout(s, 0.0, y);
         let width = native_w * scale;
         let x0 = if right { x - width } else { x };
@@ -306,10 +329,8 @@ impl Hud<'_> {
         // shadow colour [M View_DrawSprites 0x1e5290:171-172; Font_DrawText 0x1eee48:96-98
         // `__Font_DrawText(x + 1.0, y + 1.0, …, shadow colour, …)`]. It had drifted to 1.5 px.
         let sh = text_shadow_offset(scale);
-        // The shadow fades with its text (a dim label, the pickup text's fade-out); an opaque shadow under a
-        // faint label left a dark smudge [S: not yet checked against a PCSX2 frame].
-        let shade = { let mut s = gs(0, 0xff); s[3] = s[3].min(c[3]); s };
-        for (dx, col) in shadow.then_some((sh, shade)).into_iter().chain(std::iter::once((0.0, c))) {
+        let main = (c[3] > 0.0).then_some((0.0, c));
+        for (dx, col) in shade.map(|s| (sh, s)).into_iter().chain(main) {
             for p in &placed {
                 let g = &font.glyphs[p.glyph];
                 // p.x is the native absolute x (from a layout at 0); scale the offset from x0.
@@ -388,6 +409,10 @@ pub fn gadget_hint(weapon: u8, vm_idle: bool, cam: &mut bool, sticky: &mut bool)
         _ => None,
     }
 }
+
+/// `HUD_UpdateSecCamPane` 0x1a1538:11-19: the security-camera pane's sprite-6 lamp colour
+/// (0xRRGGBBAA) — 0x7f7f7f78 while `(frame & 0x1f) < 0x10`, else 0x7f7f7f00 (alpha 0, unseen).
+pub fn sec_cam_lamp(frame: u32) -> u32 { if frame & 0x1f < 0x10 { 0x7f7f_7f78 } else { 0x7f7f_7f00 } }
 
 /// The HUD text drop-shadow offset (both axes) at a text scale: `Font_DrawText` 0x1eee48:96-98
 /// draws the flag-0x1000 shadow once at (x + 1.0, y + 1.0) [M]; scaled text keeps the proportion.
@@ -526,7 +551,8 @@ pub fn overlay(scene: &crate::scene::Scene, aspect: f32) -> HudFrame {
     // [M View_DrawSprites 0x1e5290:69-74] (the template flags 0x0800 [D CrossHair 0x2bcdf8+0xA]).
     let crosshair_on = sim.map_or(true, |s| s.drones.crosshair) || (aiming && !scoped);
     let blood_up = death.is_some();
-    if !zoomed && crosshair_on && !blood_up {
+    let sec_cam = sim.is_some_and(|s| s.sec_cam().is_some());
+    if !zoomed && crosshair_on && !blood_up && !sec_cam {
         let (px, py) = crosshair_pos(cx, cy, w as i32, hh as i32);
         let col = if sim.is_some_and(|s| s.goggle_mode() == 1) { 0x208020 } else { 0xff0000 };
         h.quad(Anchor::Centre, 49, CROSS_TEX, 0, px, py, w, hh, [u, v, w, hh], (false, false), gs(col, 0xff));
@@ -543,6 +569,22 @@ pub fn overlay(scene: &crate::scene::Scene, aspect: f32) -> HudFrame {
     // 15-tick freeze after impact, `BL+0x944`) the ratio is 1.0 (full red static) and sprite 2 (the full-screen
     // 0x3000002 layer) is shown (layer 0x27). Sprite 10 is the copter lock bracket (no copters here: hidden).
     // The pane's own RNG is not the sim's (a HUD draw must not move the game's draws): a per-frame hash.
+    // The security-camera pane (pane 16, `SecCamPane` 0x2bdfe8 = {0, 0, flags 0}, update
+    // `HUD_UpdateSecCamPane` 0x1a1538, `SecCamSprInfo` 0x2bdeb0 × 7 [L ee_start_05.bin]) while a
+    // monitor console shows a camera (`Monitor_Activate` 0x1b0058:47): sprite 0 the full-screen
+    // 0x030000AD wash (512×448, uv 0,0,16,320, colour 0xffffffff, layer 0x21), sprites 1..4 the
+    // 0x030000AA corner brackets at (100,64)/(100,320)/(348,320)/(348,64) (additive, flips
+    // 0x80/0xC0/0x40), sprite 5 the 0x030000AB tag at (412,378) and sprite 6 the 0x030000AC lamp at
+    // (352,378), all 0x7f7f7f78 on layer 0x22 [L]. The update blinks sprite 6 only: colour
+    // 0x7f7f7f78 while `(frame & 0x1f) < 0x10`, else 0x7f7f7f00 [M 0x1a1538:11-19].
+    let sec_cam = s.sec_cam().is_some();
+    if sec_cam {
+        for (i, sp) in t.secam.iter().enumerate() {
+            let c = if i == 6 { sec_cam_lamp(frame) } else { sp.colour };
+            let anchor = if sp.w as i32 >= 0x200 { Anchor::Stretch } else { Anchor::Centre };
+            h.sprite(anchor, (0.0, 0.0), sp, gs(c >> 8, c & 0xff));
+        }
+    }
     let riding = s.missile_cam.is_some();
     if let Some(mc) = s.missile_cam.as_ref() {
         let hash = |k: u32| { let mut x = frame.wrapping_mul(0x9e37_79b9) ^ k.wrapping_mul(0x85eb_ca6b); x ^= x >> 15; x = x.wrapping_mul(0x2c1b_3c6d); x ^ (x >> 12) };
@@ -581,7 +623,9 @@ pub fn overlay(scene: &crate::scene::Scene, aspect: f32) -> HudFrame {
     // while pane 9, 10, 11 (the Micro-Camera), 17 (the AIMS-20 zoom) or 18 is enabled (the pane enable bytes at
     // HUDINFO+0x144 + 0x20·(n − 9)); PCSX2 shows no health swirl in the Micro-Camera view (2026-10-15).
     let paned = s.zoom_target > 1.0 && matches!(zoom_overlay(s.gun.weapon), ZoomOverlay::Camera | ZoomOverlay::Oicw);
-    let riding = riding || paned;
+    // Pane 16 (the security-camera view) is in the hide set too [M 0x19b9c8:127-138, +0x224];
+    // `Monitor_Activate` also disables the health pane outright (`HUD_Enable(1, 0)` [M 0x1b0058:49]).
+    let riding = riding || paned || sec_cam;
     // mp-hud-real: an MP match draws the MP health pane instead (`MPPaneList[1]` = MPHealthPane,
     // `HUD_UpdateMPHealthPane` 0x19b630 — a horizontal bar, not the SP swirl [M; L PCSX2]) —
     // drawn by `mp_panes`; the damage glow below is the same in both panes.
@@ -648,7 +692,9 @@ pub fn overlay(scene: &crate::scene::Scene, aspect: f32) -> HudFrame {
     // rect: CREATE (512,448) w 100 h 42 through `HUD_ValidateXY`'s right/bottom clamps (flags
     // 0x18) [L PCSX2 EE snapshot 2026-10-18 pane 0 xy (396,390); sprites (496,408)/(496,428)].
     let (ammo_at, ammo_tbl) = if mp && t.mp_ammo.len() >= 3 { ((396.0f32, 390.0f32), &t.mp_ammo) } else { (AMMO_AT, &t.ammo) };
-    if flags68 & 0x20 == 0 && !switching {
+    // The ammo pane (pane 0) is disabled for the security-camera view (`HUD_Enable(0, 0)`
+    // [M 0x1b0058:48]; `HUD_Update` 0x19a088 then puts every sprite on layer 0xff).
+    if flags68 & 0x20 == 0 && !switching && !sec_cam {
         let sp = &ammo_tbl[0];
         // The count text (0x19aad4 percent / 0x19ab18 "%d-%d"): kinds 0x14/0x1a → clip·100/max; kind 0x1f →
         // first transformed to the DEPLETED count clip' = min(max−clip, max−12) of max' = max−12
@@ -669,7 +715,7 @@ pub fn overlay(scene: &crate::scene::Scene, aspect: f32) -> HudFrame {
     // text stays blank: the held weapon is WeaponNone 0x47, whose +0x68 carries 0x20 [D weapon_data].
     let mount_heat = s.drones.props.gunimps.iter().find(|g| g.active).map(|g| g.heat);
     let strip_kind = if mount_heat.is_some() { 0x1f } else { ammo_type };
-    if let (false, false, Some(&[bu, bv, bw, hpr])) = (mp, switching, t.bullets.get(strip_kind)) {
+    if let (false, false, Some(&[bu, bv, bw, hpr])) = (mp || sec_cam, switching, t.bullets.get(strip_kind)) {
         // The strips draw the same transformed clip'/max' for kind 0x1f [M 0x19a7f0:129-136 flows into
         // :254-269]: the filled height = clip'·px/round of the full max'·px/round column, and the filled
         // strip's v starts (max'−clip')·px/round down the bullet texture.
@@ -706,7 +752,7 @@ pub fn overlay(scene: &crate::scene::Scene, aspect: f32) -> HudFrame {
     // [M HUD_UpdateAmmoPane 0x19a7f0:218-226]. The fire-mode label = `Txt_BindLabel(weapon+0x30 + mode*4)` (the
     // port always fires mode 0: no switching path yet), the name = `Txt_BindLabel(weapon+0x38)`. Both right-
     // aligned at x = 496 (PCSX2: "Semi" under "7-6" at the right edge).
-    if let Some(lang) = s.lang.as_ref() {
+    if let (Some(lang), false) = (s.lang.as_ref(), sec_cam) {
         // The fire-mode label reads the mode byte the fire path writes (`HUD_UpdateAmmoPane` 0x19a7f0
         // reads `BL + w*0xC + 0x1BB` and picks `weapon_data[w]+0x30 + mode*4`) (fix-weapon-modes).
         let mode = s.drones.inventory.fire_mode.get(wi).copied().unwrap_or(0) as usize;
@@ -725,7 +771,7 @@ pub fn overlay(scene: &crate::scene::Scene, aspect: f32) -> HudFrame {
     // own math (`project_hud`); obj+0xFC (drawn this frame) is the port's on-screen test [S].
     // The marker ignores the weapon-name window (BL+0x95E): its layer is written every frame
     // [M :301-303]. SP only — the MP ammo pane has 3 sprites (the `> 7` count gate).
-    if nf_game::gadget::is_grapple(s.gun.weapon) && t.ammo.len() >= 8 && !mp {
+    if nf_game::gadget::is_grapple(s.gun.weapon) && t.ammo.len() >= 8 && !mp && !sec_cam {
         let eye = s.bond.head();
         let root = s.bond.pos;
         let cands: Vec<(f32, f32, f32)> = s.drones.grapple_points.iter().filter_map(|gp| {
@@ -772,7 +818,7 @@ pub fn overlay(scene: &crate::scene::Scene, aspect: f32) -> HudFrame {
             // Centred on (256, 380): the pen starts half the text's width left of the centre (it started AT the
             // centre, so the text ran off to the right of the bar).
             let (_, tw) = t.font.layout(&msg.text, 0.0, 0.0);
-            h.text(Anchor::Centre, &t.font, 29, &msg.text, SW / 2.0 - tw / 2.0, 380.0, false, gs(0x7d6d59, a), true);
+            h.text_fading(Anchor::Centre, &t.font, 29, &msg.text, SW / 2.0 - tw / 2.0, 380.0, false, gs(0x7d6d59, a));
         } else if s.hud.bar_close > 0.0 {
             bar(&mut h, s.hud.bar_close);
         }
@@ -818,7 +864,7 @@ pub fn overlay(scene: &crate::scene::Scene, aspect: f32) -> HudFrame {
             // [M 0x19ca88:83-97].
             let a = (msg.time * 17.0).min(255.0) as u32;
             for (k, l) in t.font.word_wrap(&msg.text, 480.0).split('\n').enumerate() {
-                h.text(Anchor::Left, &t.font, 30, l, 16.0, 88.0 + k as f32 * t.font.line_height(), false, gs(0xffffff, a), true);
+                h.text_fading(Anchor::Left, &t.font, 30, l, 16.0, 88.0 + k as f32 * t.font.line_height(), false, gs(0xffffff, a));
             }
         } else if let Some(msg) = s.hud.info_msgs.front() {
             let a = (msg.time * 17.0).min(255.0) as u32;
@@ -830,7 +876,7 @@ pub fn overlay(scene: &crate::scene::Scene, aspect: f32) -> HudFrame {
             let x0 = SW / 2.0 - maxw / 2.0;
             let lh = t.font.line_height();
             for (k, l) in lines.iter().enumerate() {
-                h.text(Anchor::Centre, &t.font, 29, l, x0, 129.0 + k as f32 * lh, false, gs(0x7d6d59, a), true);
+                h.text_fading(Anchor::Centre, &t.font, 29, l, x0, 129.0 + k as f32 * lh, false, gs(0x7d6d59, a));
             }
         } else if s.hud.info_close > 0.0 && !mp {
             bar(&mut h, s.hud.info_close);
@@ -905,7 +951,7 @@ pub fn overlay(scene: &crate::scene::Scene, aspect: f32) -> HudFrame {
                 let x0 = SW / 2.0 - maxw / 2.0;
                 let lh = t.font.line_height();
                 for (k, l) in lines.iter().enumerate() {
-                    h.text(Anchor::Centre, &t.font, 29, l, x0, 40.0 + k as f32 * lh, false, gs(0x7d6d59, a), true);
+                    h.text_fading(Anchor::Centre, &t.font, 29, l, x0, 40.0 + k as f32 * lh, false, gs(0x7d6d59, a));
                 }
             }
         } else if s.hud.objective_close > 0.0 {
@@ -937,7 +983,7 @@ pub fn overlay(scene: &crate::scene::Scene, aspect: f32) -> HudFrame {
             // their width (the "Mission Fail / Cover Lost" text sat left of the box's
             // centre).
             let (_, tw) = t.font.layout(&msg.text, 0.0, 0.0);
-            h.text(Anchor::Centre, &t.font, 29, &msg.text, SW / 2.0 - tw / 2.0, 42.0 + by, false, gs(0x7d6d59, a), true);
+            h.text_fading(Anchor::Centre, &t.font, 29, &msg.text, SW / 2.0 - tw / 2.0, 42.0 + by, false, gs(0x7d6d59, a));
             if let (Some(lang), true) = (s.lang.as_ref(), s.hud.fail_label != 0) {
                 if let Some(fl) = lang.bind(s.hud.fail_label) {
                     // fix-hud-parity: steady 0x7d6d59 (case 2 stores it, case 3 ORs alpha 0xff),
@@ -947,7 +993,7 @@ pub fn overlay(scene: &crate::scene::Scene, aspect: f32) -> HudFrame {
                     // type-2 block — the mission pane's type-3 messages never reach them, so the
                     // old blink while an objective notice was up had no source.
                     let (_, fw) = t.font.layout(fl, 0.0, 0.0);
-                    h.text(Anchor::Centre, &t.font, 29, fl, SW / 2.0 - fw / 2.0, 64.0 + by, false, gs(0x7d6d59, a), true);
+                    h.text_fading(Anchor::Centre, &t.font, 29, fl, SW / 2.0 - fw / 2.0, 64.0 + by, false, gs(0x7d6d59, a));
                 }
             }
         } else if s.hud.mission_close > 0.0 {
