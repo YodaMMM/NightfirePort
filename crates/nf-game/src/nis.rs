@@ -2061,43 +2061,41 @@ impl Scripts {
     }
 
     /// The copter's 9 part slots (`Copter_Register` 0x17e530:6 — the SP callback writes each
-    /// created script entity into `rec+0x30 + index·4`, 9 slots, and flags every one but slot 2
-    /// with obj+0xF0 bit 0x20). The port resolves slot i from the SP player's current script's
-    /// stream i — the same stream the game's entity-creation callback fires for — with the
+    /// registered script entity into `rec+0x30 + slot·4`, 9 slots, and flags every one but slot 2
+    /// with obj+0xF0 bit 0x20). `parts` is the copter's registration table (`Copter::parts`, filled
+    /// by the script's event-0xF lines — the slot is the event's param 0 [M Script_EventHandler
+    /// 0x1d94c0:172-175], not the stream index). Each registered object resolves to the
     /// `held_hit_targets` volume shape (the glist sphere through the object matrix, the
     /// `Control_BuildWorldSph` test volume [M 0x133070:36-48]; an anim object carries its skin's
     /// glist; no glist → the translation + 0.1). Returns the per-slot spheres and a presence
-    /// mask (bit i = slot i registered, the game's non-zero `rec+0x30+4i`). A hidden SP resolves
-    /// to nothing (the `Script_HideObj` cascade, the view's own read) — the game's collide pass
-    /// tests the hidden parts too [S unverified], but Bond cannot reach them before the gate.
-    pub fn copter_part_targets(&self, placement: usize, w: &dyn World) -> ([Option<([f32; 3], f32)>; 9], u16) {
+    /// mask (bit i = slot i registered and its object still live with the registered hash). A
+    /// hidden SP resolves to nothing (the `Script_HideObj` cascade, the view's own read) — the
+    /// game's collide pass tests the hidden parts too [S unverified], but Bond cannot reach them
+    /// before the gate. Callers that model a pick mask the result with `copter::PICKABLE_SLOTS`.
+    pub fn copter_part_targets(&self, placement: usize, parts: &[Option<(usize, u32)>; 9], w: &dyn World) -> ([Option<([f32; 3], f32)>; 9], u16) {
         let mut out: [Option<([f32; 3], f32)>; 9] = [None; 9];
         let mut present = 0u16;
         let Some(p) = self.players.iter().find(|p| p.placement == placement && !p.deleted) else { return (out, present) };
         if p.hidden { return (out, present); }
-        let Some(s) = p.info[p.cur].as_ref() else { return (out, present) };
-        for i in 0..s.streams.len().min(9) {
-            if !matches!(s.streams[i].kind, 1 | 2) { continue; }
-            let vol = match (s.streams[i].obj, self.objects.list.get(s.streams[i].obj.unwrap_or(usize::MAX)).and_then(|o| o.as_ref())) {
-                (Some(o), Some(Obj::Entity { hash, matrix, .. })) => {
+        let s = p.info[p.cur].as_ref();
+        for (slot, reg) in parts.iter().enumerate() {
+            let Some((o, h)) = *reg else { continue };
+            let xf = |m: &Mat4, c: [f32; 3]| [m[0][0] * c[0] + m[1][0] * c[1] + m[2][0] * c[2] + m[3][0],
+                m[0][1] * c[0] + m[1][1] * c[1] + m[2][1] * c[2] + m[3][1],
+                m[0][2] * c[0] + m[1][2] * c[1] + m[2][2] * c[2] + m[3][2]];
+            let vol = match self.objects.list.get(o).and_then(|x| x.as_ref()) {
+                Some(Obj::Entity { hash, matrix, .. }) if *hash == h => {
                     let (c, r) = w.glist_sphere(*hash).unwrap_or(([0.0; 3], 0.1));
-                    Some(([matrix[0][0] * c[0] + matrix[1][0] * c[1] + matrix[2][0] * c[2] + matrix[3][0],
-                          matrix[0][1] * c[0] + matrix[1][1] * c[1] + matrix[2][1] * c[2] + matrix[3][1],
-                          matrix[0][2] * c[0] + matrix[1][2] * c[1] + matrix[2][2] * c[2] + matrix[3][2]], r))
+                    Some((xf(matrix, c), r))
                 }
-                (Some(_), Some(Obj::Anim { skin, .. })) => {
-                    let Some(m) = s.stream_matrix(i, &self.objects, w) else { continue };
-                    let (c, r) = w.glist_sphere(*skin).unwrap_or(([0.0; 3], 0.1));
-                    Some(([m[0][0] * c[0] + m[1][0] * c[1] + m[2][0] * c[2] + m[3][0],
-                          m[0][1] * c[0] + m[1][1] * c[1] + m[2][1] * c[2] + m[3][1],
-                          m[0][2] * c[0] + m[1][2] * c[1] + m[2][2] * c[2] + m[3][2]], r))
+                Some(Obj::Anim { skin, .. }) if *skin == h => {
+                    // The anim's live matrix comes from the stream that owns it.
+                    let m = s.and_then(|s| (0..s.streams.len()).find(|&i| s.streams[i].obj == Some(o)).and_then(|i| s.stream_matrix(i, &self.objects, w)));
+                    m.map(|m| { let (c, r) = w.glist_sphere(*skin).unwrap_or(([0.0; 3], 0.1)); (xf(&m, c), r) })
                 }
-                _ => {
-                    let Some(m) = s.stream_matrix(i, &self.objects, w) else { continue };
-                    Some(([m[3][0], m[3][1], m[3][2]], 0.1))
-                }
+                _ => None,
             };
-            if let Some(v) = vol { out[i] = Some(v); present |= 1 << i; }
+            if let Some(v) = vol { out[slot] = Some(v); present |= 1 << slot; }
         }
         (out, present)
     }

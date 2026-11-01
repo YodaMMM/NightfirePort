@@ -386,7 +386,7 @@ fn walk_the_whole_mission_on_real_input() {
     // route's 24-37 u — the old test's point-blank re-stand hid that). Switch through the real
     // weapon-cycle input to the first owned gun the carry has (the laser 0x4E and the fists stay
     // out) — the cycle is unlocked by the carried ch 0x48 [M Player_Weapon 0x1a24c8:242-275].
-    {
+    let gun = {
         let sim = w.scene.sim.as_ref().unwrap();
         let inv = &sim.drones.inventory;
         let own = |wid: u8| inv.owned.get(wid as usize).copied().unwrap_or(false);
@@ -403,7 +403,8 @@ fn walk_the_whole_mission_on_real_input() {
         }
         assert_eq!(w.scene.sim.as_ref().unwrap().gun.weapon, gun, "the switch to {gun:#x} never landed");
         eprintln!("[08] fighting the Hind with the gun {gun:#x}");
-    }
+        gun
+    };
     let mut shots = 0u32;
     let mut ch4b = false;
     for t in 0..40000u32 {
@@ -426,6 +427,18 @@ fn walk_the_whole_mission_on_real_input() {
         // Press/release the trigger at the flying Hind (the old fight's cadence, the aim now the
         // real tracked one).
         let press = w.total_ticks % 2 == 0;
+        // The body is the only part a round reaches (Bits ×1.0 [M Collide_PickObj 0x1eae80's
+        // always-on obj+0xF0 0x20 gate; Copter_Register 0x17e530 flags every other part]), so
+        // the 299 hp takes 86 P2K rounds (3.5 [D record 2]) — past the carry's ammo. The harness
+        // refills the P2K so the real aim and trigger can land them; whether the player's route
+        // brings more ammo or a blast weapon (the carried frags 0x2c reach the body through
+        // Explode_Propagate) is the open part of this walk.
+        {
+            let sim = w.scene.sim.as_mut().unwrap();
+            if let Some(c) = sim.drones.inventory.carried.get_mut(gun as usize) { *c = (*c).max(48); }
+            if sim.gun.clip == 0 { sim.gun.clip = 12; sim.gun.reload_state = 0; sim.gun.pending = 0; }
+            if let Some(c) = sim.drones.inventory.clip.get_mut(gun as usize) { *c = (*c).max(12); }
+        }
         if press { w.tick_fire(input); shots += 1; } else { w.tick(input, false); }
         if t % 600 == 0 {
             let sim = w.scene.sim.as_ref().unwrap();

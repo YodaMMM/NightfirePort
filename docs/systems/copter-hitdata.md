@@ -7,6 +7,30 @@ Reached by states 0-4 (cases 5/6 return before it — the exempt tail). Nine par
 slot `param_2 < 9` with each SP-created script entity and flags every one but slot 2 with
 obj+0xF0 bit 0x20 — slot 2 is the body, `Copter_GetBody` 0x17e4b8 reads `*(rec+0x38)`).
 
+**Which entity lands in which slot** [M Script_EventHandler 0x1d94c0:172-175; D the script
+dumps]: the callback runs from the script's event-0xF line with the PREVIOUS stream's entity and
+the event's param 0 as the slot — not the stream index. 07000012 (0x060005BD): stream 0
+Helicopter-Bodya 0x0200062A → slot 2, streams 11/13/16/18 → slots 5/6/7/8; slots 0/1/3/4 stay
+empty and the main rotor (stream 4, 0x0200062B) is no part. 07000005 (0x06000046): stream 0 →
+2, stream 2 → 3. 07000008 (0x06000051): 0→2, 2→3, 4→0, 6→1, 8→5, 10→6, 20→7, 22→8 (slot 4
+unused). 0700000B (0x060008BE): one event (stream 4, slot 3) after an EMPTY stream 3 — a NULL
+entity; no part is registered there. The port's `Copter::parts` holds the table (`Copter::register`,
+fed by the `WireRegister` request); it used to take the stream index, which put the 07000012 rotor
+(a 7.1-unit sphere) in slot 4 at ×100 — one P2K round (3.5) did 350 > 299.
+
+**Only slot 2 is ever hit** [M Collide_PickObj 0x1eae80:58-82]: the pick mask always carries 0x20
+(`uVar2 = 0x20`, widened by the HITTEST flags), and `(obj+0xF0 & mask) != 0` skips the object.
+Every object pick goes through it (`Collide_Pick` 0x1eb320:320/373), the explosion sweep included
+(`Collide_SphereIntersect` 0x1ec940:111 → `Collide_Pick`). `Copter_Register` sets 0x20 on every
+part but slot 2, so bullets and blasts reach the body only (Bits scale 1.0). The port masks the
+part targets with `copter::PICKABLE_SLOTS` in the bullet pass and the blast sweep. A round that
+hits the body dies on it [M Bullet_CollisionHandler 0x12ce80 disasm 0x12cff0-0x12cff4], and a
+world stop nearer than the body's sphere takes the round first [M Collide_Update 0x1ea398:216-229].
+
+**Rounds to kill** (`copter::rounds_to_kill`; hp = DiffMod·299, death on `hp < rec+0x64`): the P2K's
+contact damage 3.5 [D weapon record 2] → 86 rounds on d1 (85·3.5 = 297.5), the SG5's 2.75 [D
+record 0x16] → 109 (108·2.75 = 297). Pinned by `crates/nf-view/tests/copter_hits_12_live.rs`.
+
 Per slot i:
 1. `Collide_FilterBullets(part+0xD0, Bits[i].filter)` [M 0x1ece30, jal 0x17e1bc]: for every chain
    entry whose +0x58 owner is a class-5 BULLET object, the bullet's weapon record's class word
@@ -37,13 +61,14 @@ Per slot i:
 
 The weapon classes [L the same snapshot's weapon_data 0x2bf150 census of the +0x10 words]:
 0x10 = records {51, 96, 97, 103, 106-113} (the heavy/explosive family, the copter turret's own
-record 96 included); the handguns/rifles Bond carries on 07000008 are 0x8/0x1 — so slot 4 (×100)
-counts their hits and drops only the 0x10 family. Slots 6-8 never add damage (scale 0).
+record 96 included); the handguns/rifles Bond carries on 07000008 are 0x8/0x1. Slot 4's ×100 and
+filter would apply to its chain, but no slot except 2 is ever picked (above), and no shipped copter
+script registers slot 4. Slots 6-8 never add damage (scale 0).
 
 ## Explosions bypass the walk [M Explode_Propagate 0x17c518 case 0, :86-105]
 
 The blast's sphere sweep hits the parts (class-0 script entities; the copter itself is 0x3b and
-never matches), and per matching part the falloff amount
+never matches; the pick gate above leaves the body as the only reachable part), and per matching part the falloff amount
 `damage · (1 − (int)(dist − obj_radius)/radius)` goes STRAIGHT into `rec+0x64` and `rec+0x6c` —
 no Bits scaling, no filter, no HITDATA chain. Rockets/grenades therefore land through here.
 
