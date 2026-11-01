@@ -8,15 +8,23 @@
 //! |---|---|---|---|
 //! | 0xDB doors | 13 | E opens; #4 locks on ch 0x31 [D p3=49] | doors / e_plate |
 //! | 0xEA/0xEB plates | 19+2 | walk-over (mask 8) and E (mask 4) write the out channel | walk_plates / e_plate |
+//! | 0xEB Touch (repeating) | 2 | `Trigger_Touch` 0x1b2aa8 makes type 2: the touch ORs the out channel every tick while the lock channel is off [M 0x1b1a78 case 2 + the lock gate]; #471's lock is ch 0x90 [D p6] | touch_triggers |
 //! | 0xF0 pickups | 5 | walk-over takes (armour; the medal-gated kind-6) | pickups |
 //! | 0x20 breakables | 97 | bullets shatter | breakables |
 //! | 0xE1 destroyables | 5 | bullets smash (out ch 0 — no channel [D p0]); their 0x31 fusebox twins are scriptless and NEVER created [M 0x1b0448] | destroyables |
+//! | 0xF9 sound triggers | 4 | `SoundTrigger_Create` 0x1b2628: the IN channel (p0) turning on plays sound p2 once [M 0x1b2790] — #507's in ch 0x4D is the spawn plate #476's out [D], #500's in ch 0xAC is walk plate #499's out [D] | sound_triggers |
+//! | 0xFB music triggers | 3 | `MusicTrigger_Update` 0x1b31a0 re-arms its 30-tick countdown while ch_on (p0) is on and fires `Music_Event(p2, 2)` [M worldobj.rs] — #459's ch 0x21 is the walk plates' out [D], #492's ch 0x4E is the dragon key take (the dragon test's writer) | music_triggers |
 //! | 0x22 ladder | 1 | the climb (this level's only ride kind — lifts are absent [D census]) | ladder |
 //! | 0xD9 script players | 3 | the mask-4 E-use plays the script (#110's dragon → the safe key) | dragon |
 //!
-//! ZERO on main map 50 [D census vs the full dispatcher 0x1d04f0]: switches 0x29, monitors 0x30,
-//! sensors 0x28, safes/locks 0x2E, copters 0x2F, turrets 0x27, grapple points 0x3A, lifts — the
-//! level's E-usable "console" role is the dragon script entity and its vertical role is the ladder.
+//! Present but NOT player-touchable on main map 50 [D census]: 0x33 hints ×2 (display-only — the
+//! label the draw layer shows; #510 marks the dragon's E side), 0x3B endleveldoor ×1 (a gated
+//! dynamic object — `DynamicObject_Create` 0x18dbf8, no interaction arm; p2=0 = no distance fade,
+//! the ch-1 delete is script-driven [M worldobj.rs]), 0xF9/#490-491 (their in channels 0x68/0x69
+//! have no writer in the level's placements [D outs]). Zero on main map 50 [D census vs the full
+//! dispatcher 0x1d04f0]: switches 0x29, monitors 0x30, sensors 0x28, safes/locks 0x2E, copters
+//! 0x2F, turrets 0x27, grapple points 0x3A, lifts — the level's E-usable "console" role is the
+//! dragon script entity and its vertical role is the ladder.
 //!
 //! Evidence tags: [M] the decompile address, [D] the disc bytes, [L] the EE snapshot. A teleport
 //! to reach a spot is used only where the walk there is a separately documented blocker (marked
@@ -409,4 +417,168 @@ fn locked_door_refuses_the_e() {
     w.use_door(di4, "the locked bedroom door (sister)");
     assert_eq!(w.scene.sim.as_ref().unwrap().drones.doors.list[di4].state, before4,
         "sister: the ch-0x31-locked door must not move on the E [D p3=49; M door.rs lock arm]");
+}
+
+/// The Touch triggers (0xEB `Trigger_Touch` 0x1b2aa8, type 2 — the repeating-touch kind, 2 [D
+/// census]): `Trigger_Update` 0x1b1a78 case 2 ORs `Trigger_Hit`'s result into the out channel
+/// every tick while the lock channel is off (the lock gate at :51-57 returns while the lock is
+/// on). #473 `oDroneTrigger3` (out 0x85, no lock [D p0=133 p6=0]) at (27.40, 10.31, −5.40) [D]:
+/// the walk in turns ch 0x85 on and it latches (`|=` never clears [M case 2]). Sister: ch 0x85
+/// off at load (no writer in the level's outs [D]). #471's record pins the lock channel: out
+/// 0x83, lock ch 0x90=144 [D p0=131 p6=144].
+#[test]
+fn touch_triggers_fire_on_the_walk_and_the_lock_record_matches() {
+    let mut w = load();
+    assert!(!w.scene.sim.as_ref().unwrap().drones.channels.on(0x85),
+        "sister: ch 0x85 silent at load — no writer in the level's placements [D]");
+    {
+        let sim = w.scene.sim.as_ref().unwrap();
+        let t = sim.drones.triggers.iter().find(|t| t.kind == walker::trigger_kind::TOUCH && t.out == 0x83)
+            .expect("the 0xEB #471 record exists [D]");
+        assert_eq!(t.lock, 144, "#471's lock channel is ch 0x90=144 [D p6; M 0x1b1a78:51-57]");
+    }
+    // The live walk into #473's volume. Its centre from the live trigger record; the upper-hall
+    // transit is a documented stand-in (the nav graph has no route to y 10.3 from the spawn — the
+    // same blocker walkreal pins for the library floor); the walk-over is the real input.
+    let c = walker::trigger_centre(w.scene.sim.as_ref().unwrap(), walker::trigger_kind::TOUCH, 0x85)
+        .expect("the 0x85 Touch trigger exists");
+    assert!((c[0] - 27.40).abs() < 0.8 && (c[2] + 5.40).abs() < 0.8, "#473 at its disc spot [D], got {:?}", c);
+    {
+        let sim = w.scene.sim.as_mut().unwrap();
+        sim.bond.pos = [c[0], c[1] + 0.4, c[2] + 2.5];
+        sim.bond.vel = [0.0; 3];
+    }
+    w.wait(10);
+    w.walk_to(Wp::new(c[0], c[1], c[2]).r(0.8), "into the oDroneTrigger3 #473 volume");
+    assert!(w.scene.sim.as_ref().unwrap().drones.channels.on(0x85),
+        "the walk-in ORs ch 0x85 on [D #473 p0=133; M 0x1b1a78 case 2]");
+    // The latch: the channel holds after leaving the volume (the `|=` write never clears [M case 2]).
+    w.scene.sim.as_mut().unwrap().bond.pos = [c[0], c[1], c[2] + 6.0];
+    w.wait(10);
+    assert!(w.scene.sim.as_ref().unwrap().drones.channels.on(0x85),
+        "the type-2 write latches [M 0x1b1a78 case 2: channels[ch] |= hit]");
+}
+
+/// The sound triggers (0xF9 `SoundTrigger_Create` 0x1b2628, 4 [D census]): the IN channel (p0)
+/// turning on plays sound p2 (`SoundTrigger_Update` 0x1b2790's play arm); one_shot p1, is2d p3,
+/// global p5, keep_on p7 [M 0x1b2628:44-53]. The disc params [D]: #490 (in 0x68 → 333), #491
+/// (in 0x69 → 333), #500 (in 0xAC → 1515), #507 (in 0x4D → 1520). The player's chains: the spawn
+/// plate #476 (out 0x4D) fires on the first ticks → #507 plays; walk plate #499 (out 172=0xAC) →
+/// #500 plays. Sisters: #507 silent before its channel rises, and the 0x68/0x69 pair never plays
+/// (their in channels have no writer in the level's placements [D outs]).
+#[test]
+fn sound_triggers_play_through_the_plate_chains() {
+    let mut w = load();
+    {
+        let sim = w.scene.sim.as_ref().unwrap();
+        let st = &sim.drones.sound_triggers;
+        let rec = |on: u16| st.list.iter().find(|t| t.on == on).unwrap_or_else(|| panic!("the in-{on:#x} record exists [D]"));
+        assert_eq!((rec(0x68).id, rec(0x68).one_shot, rec(0x68).is2d, rec(0x68).keep_on), (333, 1, 1, 1), "#490 [D]");
+        assert_eq!((rec(0x69).id, rec(0x69).one_shot, rec(0x69).is2d, rec(0x69).keep_on), (333, 1, 1, 1), "#491 [D]");
+        assert_eq!((rec(0xac).id, rec(0xac).one_shot, rec(0xac).global, rec(0xac).keep_on), (1515, 1, true, 0), "#500 [D]");
+        assert_eq!((rec(0x4d).id, rec(0x4d).one_shot, rec(0x4d).global, rec(0x4d).keep_on), (1520, 1, true, 0), "#507 [D]");
+    }
+    // Chain 1: the spawn plate #476's out 0x4D rises on the level's first ticks (the plates test
+    // pins it) — sound trigger #507 plays snd 1520 [M 0x1b2790's play arm]. The audio ages through
+    // the same per-frame `Sound_UpdateSounds` the game's main loop runs [M]; in the harness the
+    // driver stub reports every non-looped voice ended (the no-driver stand-in), so 1520 finishes
+    // after the 5-tick start grace and frees the global voice slot [M 0x1b2790:71-84].
+    let age = |sim: &mut nf_view::scene::Sim| {
+        sim.drones.audio.update(sim.sfx.as_ref(), ([0.0; 3], [0.0, 1.0, 0.0], [0.0, 1.0, 0.0], [0.0, 0.0, 1.0]), &|_| false);
+    };
+    let mut played = false;
+    for _ in 0..40 {
+        {
+            let sim = w.scene.sim.as_mut().unwrap();
+            age(sim);
+            sim.step_bond(Default::default(), false, false, false);
+        }
+        if w.scene.sim.as_ref().unwrap().drones.sound_triggers.playing(1520) { played = true; break; }
+    }
+    assert!(played, "the spawn plate's ch 0x4D plays sound 1520 [D #476 p0=77 → #507; M 0x1b2790]");
+    assert!(!w.scene.sim.as_ref().unwrap().drones.sound_triggers.playing(333),
+        "sister: the 0x68/0x69 pair stays silent — their in channels have no writer [D]");
+    // Chain 2: the real walk onto plate #499 (out 172=0xAC, (8.00, 6.04, −33.42) [D]) — the
+    // secret-bedroom area, the same documented furniture blocker as the plates test (the stand-in
+    // transit reaches the room); the walk-over is the real input.
+    let c = walker::trigger_centre(w.scene.sim.as_ref().unwrap(), walker::trigger_kind::TOUCH_ONCE, 0xac)
+        .expect("the 0xAC plate exists");
+    assert!(!w.scene.sim.as_ref().unwrap().drones.channels.on(0xac), "sister: ch 0xAC off before the walk");
+    // The north approach wedges on the bedroom's furniture row (the probe: stuck at
+    // (8.38, −30.89), d 2.56 — the same blocker the plates test documents) — the stand-in
+    // transit lands west-inside the bedroom (the plates test's proven side); the walk-over is
+    // the real input.
+    {
+        let sim = w.scene.sim.as_mut().unwrap();
+        sim.bond.pos = [c[0] - 3.0, c[1], c[2] + 0.4];
+        sim.bond.vel = [0.0; 3];
+    }
+    w.wait(10);
+    // Pre-age the audio before the approach: the game's `Sound_UpdateSounds` runs every main-loop
+    // frame [M], so 1520 (a finite sample) frees #507's global voice slot long before the player
+    // reaches the far plate; the harness replays that aging here (12 ticks > the 5-tick start
+    // grace [M sound.rs START_GRACE]). Without it the driverless harness holds the slot forever
+    // and #500 dies at its channel rise exactly as the game's busy-slot arm kills it
+    // [M 0x1b2790:19-28 → obj+0xFE |= 1].
+    for _ in 0..12 {
+        let sim = w.scene.sim.as_mut().unwrap();
+        age(sim);
+        sim.step_bond(Default::default(), false, false, false);
+    }
+    assert!(!w.scene.sim.as_ref().unwrap().drones.sound_triggers.playing(1520),
+        "1520 finished and freed the global voice slot [M 0x1b2790:71-84]");
+    w.walk_to(Wp::new(c[0], c[1], c[2]).r(0.8), "onto the 0xAC plate #499");
+    assert!(w.scene.sim.as_ref().unwrap().drones.channels.on(0xac),
+        "the walk-over fires ch 0xAC [D #499 p0=172; M Trigger_Hit 0x1b1fc8]");
+    let mut played2 = false;
+    for _ in 0..30 {
+        {
+            let sim = w.scene.sim.as_mut().unwrap();
+            age(sim);
+            sim.step_bond(Default::default(), false, false, false);
+        }
+        if w.scene.sim.as_ref().unwrap().drones.sound_triggers.playing(1515) { played2 = true; break; }
+    }
+    assert!(played2, "the plate's ch 0xAC plays sound 1515 [D #500; M 0x1b2790]");
+}
+
+/// The music triggers (0xFB `MusicTrigger_Create` 0x1b30e0, 3 [D census]):
+/// `MusicTrigger_Update` 0x1b31a0 re-arms a 30-tick countdown while ch_on (p0) is on and fires
+/// `Music_Event(p2, 2)` per tick [M worldobj.rs's port]. The disc params [D]: #459 (ch 0x21 →
+/// event 33), #461 (ch 0x25 → event 34), #492 (ch 0x4E → event 2, p3=1). The player's chain: the
+/// walk plates write ch 0x21 (#414/#415 — the plates test's walk) → #459's countdown arms; the
+/// dragon key take writes ch 0x4E (the dragon test's pin) → #492 arms. Sister: the countdown
+/// rests at 0 before the walk.
+#[test]
+fn music_triggers_arm_through_the_plate_chain() {
+    let mut w = load();
+    {
+        let sim = w.scene.sim.as_ref().unwrap();
+        let mt = |ch: u16| sim.drones.worldobjs.music_triggers.iter().find(|t| t.ch_on == ch)
+            .unwrap_or_else(|| panic!("the ch-{ch:#x} music trigger exists [D]"));
+        assert_eq!((mt(0x21).event_id, mt(0x21).flag_byte), (33, 0), "#459 [D p0=33 p2=33 p3=0]");
+        assert_eq!((mt(0x25).event_id, mt(0x25).flag_byte), (34, 0), "#461 [D p0=37 p2=34 p3=0]");
+        assert_eq!((mt(0x4e).event_id, mt(0x4e).flag_byte), (2, 1), "#492 [D p0=78 p2=2 p3=1]");
+        assert_eq!(mt(0x21).countdown, 0, "sister: #459's countdown rests before the walk");
+    }
+    // The real walk onto plate #415 (out 0x21) — the plates test's route (the same documented
+    // furniture blocker: the stand-in transit + the real walk-over).
+    let c = walker::trigger_centre(w.scene.sim.as_ref().unwrap(), walker::trigger_kind::TOUCH_ONCE, 0x21)
+        .expect("the 0x21 plate exists");
+    {
+        let sim = w.scene.sim.as_mut().unwrap();
+        sim.bond.pos = [c[0] - 3.0, c[1], c[2] + 0.4];
+        sim.bond.vel = [0.0; 3];
+    }
+    w.wait(10);
+    w.walk_to(Wp::new(c[0], c[1], c[2]).r(0.8), "onto the 0x21 plate");
+    assert!(w.scene.sim.as_ref().unwrap().drones.channels.on(0x21), "the walk-over fires ch 0x21 [D #415]");
+    let mut armed = false;
+    for _ in 0..40 {
+        let cd = w.scene.sim.as_ref().unwrap().drones.worldobjs.music_triggers.iter()
+            .find(|t| t.ch_on == 0x21).expect("#459").countdown;
+        if cd > 0 { armed = true; break; }
+        w.wait(1);
+    }
+    assert!(armed, "the plate's ch 0x21 arms #459's 30-tick countdown [M 0x1b31a0; D #459 ch_on=33]");
 }
