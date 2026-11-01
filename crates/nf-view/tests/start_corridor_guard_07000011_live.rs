@@ -33,7 +33,7 @@
 //!    ClosestAIPoint eligibility byte, is 1 on every point at creation [M 0x137550], so the
 //!    disc data gives the game the same walk the port runs.
 //!
-//! What is NOT pinned here (needs the main agent's live checks, see the report):
+//! What is NOT pinned here (needs live checks):
 //! the f200-f3172 capture's difficulty (GameState+0x40 at capture time), and whether the game's
 //! per-cel enable bytes (+0x100/+0x101/+0x102, inherited from the cel's +0x9a/+0x9c/+0x9e at
 //! every link [M 0x1336f8:292-296, 0x1346b8]) hold the guards' control pass frozen at their
