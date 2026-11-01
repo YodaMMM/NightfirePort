@@ -242,12 +242,10 @@ fn guard_patrols_like_the_game() {
 fn guard_takes_cover_like_the_game() {
     let Some(l) = Level05::load() else { eprintln!("skip: NF_ISO not set"); return };
     let d = l.data();
-    // Seed 5 (re-picked at fix-enemy-accuracy: the spawner templates' drones now carry their own
-    // stats section — 07000005 template #3's type-1 record, accuracy 9 / aggression 1 / reaction 80
-    // [M 0x1c7a98 + 0x14c600:81-107] — so spawner 266's drone fires and reacts on a different
-    // schedule and the shared stream shifts; 913's attack-reentry-choice had 2, fix-impact-remainder2
-    // 4, fix-ai-remainder 1).
-    let (drones, gi, rng) = l.drones_seeded(None, 61.342, 5);
+    // Seed 2 (re-picked at the attack-reentry-choice merge, 913: Attack's own fallback sends the level's
+    // mode-2 guard to SniperAim 0x2a [M 0x164210:85-88] instead of Combat, shifting the shared stream;
+    // fix-impact-remainder2 had 4, fix-ai-remainder 1).
+    let (drones, gi, rng) = l.drones_seeded(None, 61.342, 2);
     let mut sim = l.sim(drones, rng);
     let player = bond_at([79.86, 22.92, 96.0]);
     for _ in 0..700 { sim.tick(&d, &player); }

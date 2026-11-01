@@ -193,6 +193,7 @@ fn the_uzi_respawn_rearms_after_the_state2_wait() {
     };
     let _ = (respawn, rounds);
     eprintln!("[04] walking to the StormUzi at {at:?}");
+    let home = w.scene.sim.as_ref().unwrap().bond.pos;
     w.walk_nav_to(at, "the StormUzi pickup", 0.4);
     let taken_at = w.total_ticks;
     {
@@ -206,6 +207,10 @@ fn the_uzi_respawn_rearms_after_the_state2_wait() {
             "the take parks the pickup hidden in the state-2 wait [M 0x18e650:341-347], got hidden {} state {}",
             p.hidden, p.state);
     }
+    // Step off the pickup: a re-armed pickup under Bond is taken again at once whenever the carried
+    // rounds are below the cap [M Pickup_Handler 0x18e650], which would park it back in state 2.
+    w.walk_nav_to(home, "back off the StormUzi", 1.0);
+    assert!(w.total_ticks - taken_at < 600, "the walk off the pickup ends inside the first half of the wait");
     // Mid-wait: 600 ticks in (half the 1200), still hidden — the re-arm is gated by the elapsed
     // wait, not immediate [M 0x18e148:182-189's `<=` return].
     while w.total_ticks - taken_at < 600 { w.tick(Default::default(), false); }
