@@ -484,7 +484,7 @@ fn seg_box(from: V3, d: V3, lo: V3, hi: V3) -> bool {
 }
 
 /// The objects the segment `from → to` passes through the bounds of (through `groups` when present).
-fn along<'a>(g: &'a Geo, from: V3, to: V3) -> Box<dyn Iterator<Item = &'a Object> + 'a> {
+fn along<'a>(g: &'a Geo, from: V3, to: V3) -> Along<'a> {
     let d = sub(to, from);
     // perf-240e: the grid's candidates through the same two box tests, in the scan's order (see
     // `ObjGrid`); `NF_GRID_VERIFY` compares every query's object sequence with the scan's.
@@ -503,19 +503,45 @@ fn along<'a>(g: &'a Geo, from: V3, to: V3) -> Box<dyn Iterator<Item = &'a Object
                 let scan: Vec<u32> = along_scan(g, from, to).map(|o| ((o as *const Object as usize - base as usize) / std::mem::size_of::<Object>()) as u32).collect();
                 assert_eq!(picked, scan, "grid candidates differ from the scan for {from:?} -> {to:?}");
             }
-            return Box::new(picked.into_iter().map(move |i| &g.objects[i as usize]));
+            return Along::Picked(g, picked.into_iter());
         }
     }
-    Box::new(along_scan(g, from, to))
+    along_scan(g, from, to)
+}
+
+/// perf-240g: `along`'s iterator without the two boxed iterators it allocated per query: the
+/// grid's picked objects, or the scan — the groups' boxes, then each passing group's objects'
+/// boxes (`flat_map` then `filter`, the same order), or every object's box when there are no
+/// groups.
+enum Along<'a> {
+    Picked(&'a Geo, std::vec::IntoIter<u32>),
+    Flat { objects: std::slice::Iter<'a, Object>, from: V3, d: V3 },
+    Grouped { g: &'a Geo, groups: std::slice::Iter<'a, Object>, cur: std::slice::Iter<'a, Object>, from: V3, d: V3 },
+}
+
+impl<'a> Iterator for Along<'a> {
+    type Item = &'a Object;
+    fn next(&mut self) -> Option<&'a Object> {
+        match self {
+            Along::Picked(g, it) => it.next().map(|i| &g.objects[i as usize]),
+            Along::Flat { objects, from, d } => { let (f, d) = (*from, *d); objects.find(|o| seg_box(f, d, o.lo, o.hi)) }
+            Along::Grouped { g, groups, cur, from, d } => {
+                let (f, d) = (*from, *d);
+                loop {
+                    if let Some(o) = cur.find(|o| seg_box(f, d, o.lo, o.hi)) { return Some(o); }
+                    let gr = groups.find(|gr| seg_box(f, d, gr.lo, gr.hi))?;
+                    *cur = g.objects[gr.tris.clone()].iter();
+                }
+            }
+        }
+    }
 }
 
 /// `along`'s linear scan (the groups' boxes, then the objects').
-fn along_scan<'a>(g: &'a Geo, from: V3, to: V3) -> impl Iterator<Item = &'a Object> + 'a {
+fn along_scan<'a>(g: &'a Geo, from: V3, to: V3) -> Along<'a> {
     let d = sub(to, from);
-    let all: Box<dyn Iterator<Item = &'a Object>> = if g.groups.is_empty() { Box::new(g.objects.iter()) } else {
-        Box::new(g.groups.iter().filter(move |gr| seg_box(from, d, gr.lo, gr.hi)).flat_map(move |gr| g.objects[gr.tris.clone()].iter()))
-    };
-    all.filter(move |o| seg_box(from, d, o.lo, o.hi))
+    if g.groups.is_empty() { Along::Flat { objects: g.objects.iter(), from, d } }
+    else { Along::Grouped { g, groups: g.groups.iter(), cur: [].iter(), from, d } }
 }
 
 /// The objects whose bounds overlap `lo..hi` (through `groups` when present).
@@ -1618,8 +1644,18 @@ impl CollisionWorld {
         let d = sub(to, from);
         let mut best = None::<(f32, V3)>;
         let stat = &self.stat;
+        // perf-240g: an object whose bounds (its triangles' exact vertex box, `push_kept` /
+        // `chunk`) miss the segment's box cannot hold a hit — a hit point lies on the segment and
+        // in the triangle. The boxes are padded far past the test's rounding (absolute 1e-3 plus
+        // 1e-4 of the largest coordinate involved, against an error of a few float ulps of it), so
+        // only objects with no possible hit are skipped and the result is the same.
+        let (slo, shi) = ([0, 1, 2].map(|k| from[k].min(to[k])), [0, 1, 2].map(|k| from[k].max(to[k])));
+        let big = (0..3).fold(0.0f32, |m, k| m.max(from[k].abs()).max(to[k].abs()));
         for r in runs {
             let o = &stat.objects[*r as usize];
+            let scale = (0..3).fold(big, |m, k| m.max(o.lo[k].abs()).max(o.hi[k].abs()));
+            let pad = 1e-3 + 1e-4 * scale;
+            if (0..3).any(|k| o.hi[k] + pad < slo[k] || o.lo[k] - pad > shi[k]) { continue; }
             for k in o.tris.clone() {
                 let t = &stat.tris[k];
                 let (e1, e2) = (sub(t[1], t[0]), sub(t[2], t[0]));
@@ -1892,8 +1928,7 @@ impl CollisionWorld {
         let d = sub(to, from);
         let mut best = None::<f32>;
         let dynamic = self.dynamic.read().unwrap();
-        let sets: Vec<&Geo> = vec![&self.stat, &dynamic.geo];
-        for g in sets {
+        for g in [&self.stat, &dynamic.geo] {
             for o in along(g, from, to) {
                 for k in o.tris.clone() {
                     let m = g.mats[k];
@@ -1930,8 +1965,9 @@ impl CollisionWorld {
         for k in 0..3 { lo[k] = from[k].min(to[k]); hi[k] = from[k].max(to[k]); }
         let _ = (lo, hi);
         let dynamic = self.dynamic.read().unwrap();
-        let sets: Vec<&Geo> = if with_missile { vec![&self.stat, &self.missile, &dynamic.geo] } else { vec![&self.stat, &dynamic.geo] };
-        for g in sets {
+        // perf-240g: the same sets in the same order, without a Vec per ray.
+        let sets: [Option<&Geo>; 3] = [Some(&self.stat), with_missile.then_some(&self.missile), Some(&dynamic.geo)];
+        for g in sets.into_iter().flatten() {
             for o in along(g, from, to) {
                 for k in o.tris.clone() {
                     if drop_pass && g.bullet_pass(k) { continue; } // the pass-flagged hits the bit-0x8 queries drop [M 0x1ebff0]

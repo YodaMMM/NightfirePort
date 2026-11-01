@@ -57,7 +57,8 @@ fn on_foot_levels(iso_path: &str) -> Vec<String> {
 #[cfg(not(debug_assertions))]
 fn probe_the_frame_path_per_level() {
     let Some(iso_path) = std::env::var("NF_ISO").ok() else { eprintln!("NF_ISO not set"); return };
-    let instance = wgpu::Instance::new(wgpu::InstanceDescriptor::new_without_display_handle());
+    // perf-240g: the window's instance (Vulkan without indirect-call validation; NF_INDIRECT_VALIDATION=1 = the default).
+    let instance = nf_view::gpu_instance(None).0;
     let Ok(adapter) = pollster::block_on(instance.request_adapter(&wgpu::RequestAdapterOptions::default())) else { eprintln!("no adapter"); return };
     let (device, queue) = app_device(&adapter);
     nf_game::prof::force_enable();
@@ -255,6 +256,408 @@ fn probe_the_gpu_half() {
     }
 }
 
+/// The world pass's own GPU time (timestamp queries at the pass's start and end, where the adapter
+/// has TIMESTAMP_QUERY) per level at the probe's six views, plus the CPU-side finish/submit/wait —
+/// measurement only. `NF_PROBE_LEVELS` narrows the levels.
+#[test]
+#[ignore]
+#[cfg(not(debug_assertions))]
+fn probe_gpu_timestamps() {
+    let Some(iso_path) = std::env::var("NF_ISO").ok() else { return };
+    // perf-240g: the window's instance (Vulkan without indirect-call validation; NF_INDIRECT_VALIDATION=1 = the default).
+    let instance = nf_view::gpu_instance(None).0;
+    let adapter = pollster::block_on(instance.request_adapter(&wgpu::RequestAdapterOptions::default())).expect("adapter");
+    if !adapter.features().contains(wgpu::Features::TIMESTAMP_QUERY) { eprintln!("[gts] no TIMESTAMP_QUERY on {:?}", adapter.get_info().name); return; }
+    let want = wgpu::Features::TEXTURE_BINDING_ARRAY | wgpu::Features::SAMPLED_TEXTURE_AND_STORAGE_BUFFER_ARRAY_NON_UNIFORM_INDEXING | wgpu::Features::INDIRECT_FIRST_INSTANCE;
+    let desc = wgpu::DeviceDescriptor { required_features: (adapter.features() & want) | wgpu::Features::TIMESTAMP_QUERY, required_limits: adapter.limits(), ..Default::default() };
+    let (device, queue) = pollster::block_on(adapter.request_device(&desc)).expect("device");
+    let period = queue.get_timestamp_period() as f64;
+    let mut levels = on_foot_levels(&iso_path);
+    if let Ok(o) = std::env::var("NF_PROBE_LEVELS") { levels.retain(|l| o.split(',').any(|x| l.starts_with(x.trim()))); }
+    let (w, h) = (1280u32, 720u32);
+    let format = wgpu::TextureFormat::Rgba8Unorm;
+    let target = device.create_texture(&wgpu::TextureDescriptor { label: None, size: wgpu::Extent3d { width: w, height: h, depth_or_array_layers: 1 }, mip_level_count: 1, sample_count: 1,
+        dimension: wgpu::TextureDimension::D2, format, usage: wgpu::TextureUsages::RENDER_ATTACHMENT, view_formats: &[] });
+    let view = target.create_view(&Default::default());
+    let depth = nf_view::gpu::depth_view(&device, w, h);
+    let qs = device.create_query_set(&wgpu::QuerySetDescriptor { label: None, ty: wgpu::QueryType::Timestamp, count: 2 });
+    let resolve = device.create_buffer(&wgpu::BufferDescriptor { label: None, size: 16, usage: wgpu::BufferUsages::QUERY_RESOLVE | wgpu::BufferUsages::COPY_SRC, mapped_at_creation: false });
+    let read = device.create_buffer(&wgpu::BufferDescriptor { label: None, size: 16, usage: wgpu::BufferUsages::COPY_DST | wgpu::BufferUsages::MAP_READ, mapped_at_creation: false });
+    for name in &levels {
+        let Ok(mut scene) = nf_view::load(&iso_path, name, false) else { continue };
+        if let Some(sim) = scene.sim.as_mut() { for _ in 0..120 { sim.step_bond(Default::default(), false, false, false); } }
+        let (pos, yaw0) = scene.start.clone().unwrap_or(([0.0; 3], 0.0));
+        let mut spots: Vec<(String, [f32; 3], f32)> = (0..4).map(|q| (format!("start{}", q * 90), [pos[0], pos[1] + 1.6, pos[2]], yaw0 + q as f32 * std::f32::consts::FRAC_PI_2)).collect();
+        if let Some(sim) = scene.sim.as_ref() {
+            let mut picked = 0;
+            for (di, d) in sim.drones.list.iter().enumerate() {
+                if picked >= 2 { break; }
+                if !d.present { continue; }
+                let p = [d.pos[0], d.pos[1] + 1.6, d.pos[2]];
+                if (p[0] - pos[0]).hypot(p[2] - pos[2]) < 10.0 { continue; }
+                spots.push((format!("drone{di}"), p, (pos[0] - p[0]).atan2(pos[2] - p[2])));
+                picked += 1;
+            }
+        }
+        let mut r = nf_view::gpu::Renderer::new(&device, &queue, format, &scene, false, false);
+        r.pass_timestamps = Some(qs.clone());
+        // NF_PROBE_NOSPLIT=1: the effect-pool draws submitted whole (the pre-split GPU load).
+        r.split_runs = std::env::var_os("NF_PROBE_NOSPLIT").is_none();
+        let (layout, _) = scene.skin_layout();
+        let hf = nf_view::hud::overlay(&scene, 16.0 / 9.0);
+        let mut worst = 0.0f64;
+        for (label, eye, yaw) in &spots {
+            let vp = view_proj(*eye, *yaw, 0.0, 16.0 / 9.0);
+            let mut opts = ViewOpts::default();
+            let fw = glam::Vec3::new(yaw.sin(), 0.0, yaw.cos()).normalize();
+            let s = fw.cross(glam::Vec3::Y).normalize();
+            opts.right = s.to_array(); opts.up = s.cross(fw).to_array();
+            let (mut p, mut c) = (Vec::new(), Vec::new());
+            scene.skin_palette_into(&layout, None, 152.0, opts, None, &mut p, &mut c);
+            let world = scene.sim.as_ref().map(|s| &s.world);
+            let doors = scene.sim.as_ref().map(|s| s.drones.doors.closed_flags());
+            let _ = r.cel_visibility(*eye, vp, world, doors.as_deref());
+            r.char_light_centre = scene.char_light_centres();
+            r.upload_skin(&queue, &p, &c);
+            r.lights = scene.frame_lights();
+            let mut gpu = Vec::new();
+            let mut cpu = Vec::new();
+            for i in 0..12 {
+                let t0 = std::time::Instant::now();
+                let mut e = r.render(&device, &queue, &view, &depth, vp, vp, *eye, 152, &[], &hf, None, None);
+                e.resolve_query_set(&qs, 0..2, &resolve, 0);
+                e.copy_buffer_to_buffer(&resolve, 0, &read, 0, 16);
+                let t1 = std::time::Instant::now();
+                let cb = e.finish();
+                let t2 = std::time::Instant::now();
+                queue.submit([cb]);
+                let t3 = std::time::Instant::now();
+                read.map_async(wgpu::MapMode::Read, .., |r| r.expect("map"));
+                device.poll(wgpu::PollType::wait_indefinitely()).unwrap();
+                let t4 = std::time::Instant::now();
+                let ts: [u64; 2] = { let d = read.get_mapped_range(..).expect("range"); [u64::from_le_bytes(d[0..8].try_into().unwrap()), u64::from_le_bytes(d[8..16].try_into().unwrap())] };
+                read.unmap();
+                if i >= 2 {
+                    gpu.push(ts[1].wrapping_sub(ts[0]) as f64 * period / 1e6);
+                    cpu.push([(t1 - t0).as_secs_f64() * 1e3, (t2 - t1).as_secs_f64() * 1e3, (t3 - t2).as_secs_f64() * 1e3, (t4 - t3).as_secs_f64() * 1e3]);
+                }
+            }
+            gpu.sort_by(|a, b| a.partial_cmp(b).unwrap());
+            let med = |k: usize| { let mut v: Vec<f64> = cpu.iter().map(|r| r[k]).collect(); v.sort_by(|a, b| a.partial_cmp(b).unwrap()); v[v.len() / 2] };
+            let g = gpu[gpu.len() / 2];
+            if g > worst { worst = g; }
+            eprintln!("[gts] {name} {label:>9} draws={:5} pass_gpu {g:.3} (min {:.3}) | enc {:.3} finish {:.3} submit {:.3} wait {:.3}", r.order_len(), gpu[0], med(0), med(1), med(2), med(3));
+        }
+        eprintln!("[gts-worst] {name} {worst:.3}");
+        drop(r); let _ = queue.submit([]); device.poll(wgpu::PollType::wait_indefinitely()).unwrap();
+    }
+}
+
+/// The palette build the way the window runs it: once per sim tick, 240 ticks of a scripted walk
+/// (so the drones' sample memo sees each tick's new frames), median and worst per level.
+/// Measurement only; `NF_PROBE_LEVELS` narrows the levels.
+#[test]
+#[ignore]
+#[cfg(not(debug_assertions))]
+fn probe_palette_per_tick() {
+    let Some(iso_path) = std::env::var("NF_ISO").ok() else { return };
+    let mut levels = on_foot_levels(&iso_path);
+    if let Ok(o) = std::env::var("NF_PROBE_LEVELS") { levels.retain(|l| o.split(',').any(|x| l.starts_with(x.trim()))); }
+    for name in &levels {
+        let Ok(mut scene) = nf_view::load(&iso_path, name, false) else { continue };
+        let (layout, _) = scene.skin_layout();
+        let (mut p, mut c) = (Vec::new(), Vec::new());
+        let mut v = Vec::new();
+        for t in 0..300u32 {
+            let mut i = nf_game::player::Input::default();
+            match (t / 60) % 3 { 0 => i.forward = 1.0, 1 => i.turn = 0.5, _ => i.strafe = 1.0 }
+            if let Some(sim) = scene.sim.as_mut() { sim.step_bond(i, false, false, false); }
+            let t0 = std::time::Instant::now();
+            scene.skin_palette_into(&layout, None, t as f32, ViewOpts::default(), None, &mut p, &mut c);
+            if t >= 60 { v.push(t0.elapsed().as_secs_f64() * 1e3); }
+        }
+        v.sort_by(|a, b| a.partial_cmp(b).unwrap());
+        eprintln!("[pal-tick] {name} median {:.3} p90 {:.3} max {:.3}", v[v.len() / 2], v[v.len() * 9 / 10], v[v.len() - 1]);
+    }
+}
+
+/// What `CommandEncoder::finish` pays for (wgpu records the pass and encodes it at finish): the
+/// start view's frame as is, with the split-run draw args whole, and with every world/character
+/// draw left out (the HUD alone), finish timed alone, median of 12 after 3 warm frames.
+/// `NF_PROBE_INSTANCE_FLAGS=empty` creates the instance without wgpu's default flags (no indirect
+/// call validation) for the comparison. Measurement only; `NF_PROBE_LEVELS` narrows the levels.
+#[test]
+#[ignore]
+#[cfg(not(debug_assertions))]
+fn probe_finish_split() {
+    let Some(iso_path) = std::env::var("NF_ISO").ok() else { return };
+    let mut idesc = wgpu::InstanceDescriptor::new_without_display_handle();
+    if std::env::var("NF_PROBE_INSTANCE_FLAGS").ok().as_deref() == Some("empty") { idesc.flags = wgpu::InstanceFlags::empty(); }
+    let instance = wgpu::Instance::new(idesc);
+    let adapter = pollster::block_on(instance.request_adapter(&wgpu::RequestAdapterOptions::default())).expect("adapter");
+    let (device, queue) = app_device(&adapter);
+    let mut levels = on_foot_levels(&iso_path);
+    if let Ok(o) = std::env::var("NF_PROBE_LEVELS") { levels.retain(|l| o.split(',').any(|x| l.starts_with(x.trim()))); }
+    let (w, h) = (1280u32, 720u32);
+    let format = wgpu::TextureFormat::Rgba8Unorm;
+    let target = device.create_texture(&wgpu::TextureDescriptor { label: None, size: wgpu::Extent3d { width: w, height: h, depth_or_array_layers: 1 }, mip_level_count: 1, sample_count: 1,
+        dimension: wgpu::TextureDimension::D2, format, usage: wgpu::TextureUsages::RENDER_ATTACHMENT, view_formats: &[] });
+    let view = target.create_view(&Default::default());
+    let depth = nf_view::gpu::depth_view(&device, w, h);
+    for name in &levels {
+        let Ok(mut scene) = nf_view::load(&iso_path, name, false) else { continue };
+        if let Some(sim) = scene.sim.as_mut() { for _ in 0..120 { sim.step_bond(Default::default(), false, false, false); } }
+        let (pos, yaw) = scene.start.clone().unwrap_or(([0.0; 3], 0.0));
+        let eye = [pos[0], pos[1] + 1.6, pos[2]];
+        let mut r = nf_view::gpu::Renderer::new(&device, &queue, format, &scene, false, false);
+        let (layout, _) = scene.skin_layout();
+        let hf = nf_view::hud::overlay(&scene, 16.0 / 9.0);
+        let vp = view_proj(eye, yaw, 0.0, 16.0 / 9.0);
+        let mut opts = ViewOpts::default();
+        let fw = glam::Vec3::new(yaw.sin(), 0.0, yaw.cos()).normalize();
+        let s = fw.cross(glam::Vec3::Y).normalize();
+        opts.right = s.to_array(); opts.up = s.cross(fw).to_array();
+        let (mut p, mut c) = (Vec::new(), Vec::new());
+        scene.skin_palette_into(&layout, None, 152.0, opts, None, &mut p, &mut c);
+        let world = scene.sim.as_ref().map(|s| &s.world);
+        let doors = scene.sim.as_ref().map(|s| s.drones.doors.closed_flags());
+        let _ = r.cel_visibility(eye, vp, world, doors.as_deref());
+        r.char_light_centre = scene.char_light_centres();
+        r.upload_skin(&queue, &p, &c);
+        r.lights = scene.frame_lights();
+        let n_draws = r.order_draws().len();
+        let mut line = Vec::new();
+        for mode in ["as-is", "whole", "hud-only", "odd-skipped"] {
+            r.split_runs = mode != "whole";
+            r.probe_skip = match mode { "hud-only" => vec![true; 1 << 20], "odd-skipped" => (0..1usize << 20).map(|k| k % 2 == 1).collect(), _ => Vec::new() };
+            let mut enc_v = Vec::new();
+            let mut fin_v = Vec::new();
+            let mut drawn = 0;
+            for i in 0..15 {
+                let t0 = std::time::Instant::now();
+                let e = r.render(&device, &queue, &view, &depth, vp, vp, eye, 152, &[], &hf, None, None);
+                let t1 = std::time::Instant::now();
+                let cb = e.finish();
+                let t2 = std::time::Instant::now();
+                queue.submit([cb]);
+                device.poll(wgpu::PollType::wait_indefinitely()).unwrap();
+                drawn = r.order_len();
+                if i >= 3 { enc_v.push((t1 - t0).as_secs_f64() * 1e3); fin_v.push((t2 - t1).as_secs_f64() * 1e3); }
+            }
+            enc_v.sort_by(|a, b| a.partial_cmp(b).unwrap());
+            fin_v.sort_by(|a, b| a.partial_cmp(b).unwrap());
+            line.push(format!("{mode}: draws {drawn} enc {:.3} finish {:.3}", enc_v[enc_v.len() / 2], fin_v[fin_v.len() / 2]));
+        }
+        r.probe_skip.clear(); r.split_runs = true;
+        eprintln!("[finish] {name} (order {n_draws}) {}", line.join(" | "));
+        drop(r); let _ = queue.submit([]); device.poll(wgpu::PollType::wait_indefinitely()).unwrap();
+    }
+}
+
+/// The process's page-fault count (soft + hard), for the first-builds probe.
+fn page_faults() -> u32 {
+    #[cfg(windows)] {
+        #[repr(C)] #[derive(Default)] struct Pmc { cb: u32, faults: u32, peak_ws: usize, ws: usize, a: usize, b: usize, c: usize, d: usize, e: usize, f: usize }
+        #[link(name = "kernel32")] extern "system" { fn K32GetProcessMemoryInfo(p: isize, c: *mut Pmc, cb: u32) -> i32; fn GetCurrentProcess() -> isize; }
+        let mut m = Pmc { cb: std::mem::size_of::<Pmc>() as u32, ..Default::default() };
+        unsafe { K32GetProcessMemoryInfo(GetCurrentProcess(), &mut m, m.cb); }
+        m.faults
+    }
+    #[cfg(not(windows))] { 0 }
+}
+
+/// The first palette builds after a level load, one by one (the probe's start0 view is the first
+/// build of a level): 120 ticks, then 16 builds at that one sim state into recycled buffers, each
+/// timed alone, with the `pal:`/`fs:`/`cm:` scopes of build 0 and of the median build. A cold-start
+/// cost (a first-build cache fill, a lazy table) shows as builds 0..k above the rest.
+/// Measurement only; `NF_PROBE_LEVELS` narrows the levels (default 07000005,07000006).
+#[test]
+#[ignore]
+#[cfg(not(debug_assertions))]
+fn probe_first_builds() {
+    let Some(iso_path) = std::env::var("NF_ISO").ok() else { return };
+    nf_game::prof::force_enable();
+    let levels: Vec<String> = std::env::var("NF_PROBE_LEVELS").unwrap_or("07000005,07000006".into()).split(',').map(|s| format!("{}.bin", s.trim())).collect();
+    for name in &levels {
+        let Ok(mut scene) = nf_view::load(&iso_path, name, false) else { continue };
+        if let Some(sim) = scene.sim.as_mut() { for _ in 0..120 { sim.step_bond(Default::default(), false, false, false); } }
+        let (layout, _) = scene.skin_layout();
+        let (pos, yaw) = scene.start.clone().unwrap_or(([0.0; 3], 0.0));
+        let _ = pos;
+        let mut opts = ViewOpts::default();
+        let fw = glam::Vec3::new(yaw.sin(), 0.0, yaw.cos()).normalize();
+        let s = fw.cross(glam::Vec3::Y).normalize();
+        opts.right = s.to_array(); opts.up = s.cross(fw).to_array();
+        let (mut p, mut c) = (Vec::new(), Vec::new());
+        if let Some(ms) = std::env::var("NF_FB_SPIN").ok().and_then(|v| v.parse::<u64>().ok()) {
+            let t0 = std::time::Instant::now();
+            let mut x = 0u64;
+            while t0.elapsed().as_millis() < ms as u128 { x = std::hint::black_box(x.wrapping_mul(31).wrapping_add(7)); }
+        }
+        for series in 0..2 {
+        if series == 1 { if let Some(sim) = scene.sim.as_mut() { for _ in 0..120 { sim.step_bond(Default::default(), false, false, false); } } }
+        let mut times = Vec::new();
+        let mut scopes = Vec::new();
+        let mut faults = vec![page_faults()];
+        for _ in 0..16 {
+            let _ = nf_game::prof::take_samples();
+            nf_game::prof::capture(true);
+            let t0 = std::time::Instant::now();
+            scene.skin_palette_into(&layout, None, 152.0, opts, None, &mut p, &mut c);
+            times.push(t0.elapsed().as_secs_f64() * 1e3);
+            faults.push(page_faults());
+            nf_game::prof::capture(false);
+            let ps = nf_game::prof::take_samples();
+            let mut agg: Vec<(&str, f64)> = Vec::new();
+            for (nm, ns) in &ps { match agg.iter_mut().find(|e| e.0 == *nm) { Some(e) => e.1 += *ns as f64 / 1e6, None => agg.push((nm, *ns as f64 / 1e6)) } }
+            agg.sort_by(|a, b| a.0.cmp(b.0));
+            scopes.push(agg.iter().map(|(n, v)| format!("{n}={v:.3}")).collect::<Vec<_>>().join(" "));
+        }
+        let mut sorted = times.clone(); sorted.sort_by(|a, b| a.partial_cmp(b).unwrap());
+        let med = sorted[sorted.len() / 2];
+        let mi = times.iter().position(|&t| t == med).unwrap();
+        eprintln!("[first-builds] {name} s{series} {} | median {med:.3}", times.iter().map(|t| format!("{t:.3}")).collect::<Vec<_>>().join(" "));
+        eprintln!("[first-builds-faults] {name} s{series} {}", faults.windows(2).map(|w| format!("{}", w[1] - w[0])).collect::<Vec<_>>().join(" "));
+        for (bi, sc) in scopes.iter().enumerate().take(5) { eprintln!("[first-builds-scopes] {name} s{series} build{bi} {sc}"); }
+        eprintln!("[first-builds-scopes] {name} s{series} median {}", scopes[mi]);
+        }
+    }
+}
+
+/// The world pass's GPU time split by draw class: the full frame, then the same frame with one class
+/// left out (`Renderer::probe_skip`), at 1280x720 and at 128x72 (a vertex-bound pass keeps its time
+/// at the small target). Measurement only; `NF_PROBE_LEVELS` narrows the levels.
+#[test]
+#[ignore]
+#[cfg(not(debug_assertions))]
+fn probe_gpu_bisect() {
+    let Some(iso_path) = std::env::var("NF_ISO").ok() else { return };
+    // perf-240g: the window's instance (Vulkan without indirect-call validation; NF_INDIRECT_VALIDATION=1 = the default).
+    let instance = nf_view::gpu_instance(None).0;
+    let adapter = pollster::block_on(instance.request_adapter(&wgpu::RequestAdapterOptions::default())).expect("adapter");
+    if !adapter.features().contains(wgpu::Features::TIMESTAMP_QUERY) { eprintln!("[gbis] no TIMESTAMP_QUERY"); return; }
+    let want = wgpu::Features::TEXTURE_BINDING_ARRAY | wgpu::Features::SAMPLED_TEXTURE_AND_STORAGE_BUFFER_ARRAY_NON_UNIFORM_INDEXING | wgpu::Features::INDIRECT_FIRST_INSTANCE;
+    let desc = wgpu::DeviceDescriptor { required_features: (adapter.features() & want) | wgpu::Features::TIMESTAMP_QUERY, required_limits: adapter.limits(), ..Default::default() };
+    let (device, queue) = pollster::block_on(adapter.request_device(&desc)).expect("device");
+    let period = queue.get_timestamp_period() as f64;
+    let levels: Vec<String> = std::env::var("NF_PROBE_LEVELS").unwrap_or("0700001b,07000016,07000007".into()).split(',').map(|s| format!("{}.bin", s.trim())).collect();
+    let format = wgpu::TextureFormat::Rgba8Unorm;
+    let mk = |w: u32, h: u32| {
+        let t = device.create_texture(&wgpu::TextureDescriptor { label: None, size: wgpu::Extent3d { width: w, height: h, depth_or_array_layers: 1 }, mip_level_count: 1, sample_count: 1,
+            dimension: wgpu::TextureDimension::D2, format, usage: wgpu::TextureUsages::RENDER_ATTACHMENT, view_formats: &[] });
+        (t.create_view(&Default::default()), nf_view::gpu::depth_view(&device, w, h))
+    };
+    let big = mk(1280, 720);
+    let small = mk(128, 72);
+    let qs = device.create_query_set(&wgpu::QuerySetDescriptor { label: None, ty: wgpu::QueryType::Timestamp, count: 2 });
+    let resolve = device.create_buffer(&wgpu::BufferDescriptor { label: None, size: 16, usage: wgpu::BufferUsages::QUERY_RESOLVE | wgpu::BufferUsages::COPY_SRC, mapped_at_creation: false });
+    let read = device.create_buffer(&wgpu::BufferDescriptor { label: None, size: 16, usage: wgpu::BufferUsages::COPY_DST | wgpu::BufferUsages::MAP_READ, mapped_at_creation: false });
+    for name in &levels {
+        let Ok(mut scene) = nf_view::load(&iso_path, name, false) else { continue };
+        if let Some(sim) = scene.sim.as_mut() { for _ in 0..120 { sim.step_bond(Default::default(), false, false, false); } }
+        let (pos, yaw0) = scene.start.clone().unwrap_or(([0.0; 3], 0.0));
+        let mut r = nf_view::gpu::Renderer::new(&device, &queue, format, &scene, false, false);
+        r.pass_timestamps = Some(qs.clone());
+        let (layout, _) = scene.skin_layout();
+        let hf = nf_view::gpu::HudFrame::default();
+        {
+            let a = &scene.attachments;
+            let cnt = |f: &dyn Fn(&nf_view::scene::Attachment) -> bool| a.iter().filter(|x| f(x)).count();
+            eprintln!("[gbis-att] {name} attachments {} effect {} gas {} tracer {} projectile {} flash {} script {} dropped {} chars {} drones {}", a.len(),
+                cnt(&|x| x.effect.is_some()), cnt(&|x| x.gas.is_some()), cnt(&|x| x.tracer.is_some()), cnt(&|x| x.projectile.is_some()),
+                cnt(&|x| x.flash.is_some()), cnt(&|x| x.script.is_some()), cnt(&|x| x.dropped), scene.characters.len(), scene.sim.as_ref().map_or(0, |s| s.drones.list.len()));
+        }
+        let n = scene.materials.len();
+        let class = |k: usize| -> &'static str {
+            let m = &scene.materials[k];
+            match (m.skin.is_some(), m.draw.pass) {
+                (true, _) => "skinned",
+                (false, 0) | (false, 4) => "sky",
+                (false, 1) => "list0",
+                (false, 3) => "list1",
+                _ => "other",
+            }
+        };
+        let classes = ["skinned", "sky", "list0", "list1", "other"];
+        for q in [0u32, 2] {
+            let yaw = yaw0 + q as f32 * std::f32::consts::FRAC_PI_2;
+            let eye = [pos[0], pos[1] + 1.6, pos[2]];
+            let vp = view_proj(eye, yaw, 0.0, 16.0 / 9.0);
+            let mut opts = ViewOpts::default();
+            let fw = glam::Vec3::new(yaw.sin(), 0.0, yaw.cos()).normalize();
+            let s = fw.cross(glam::Vec3::Y).normalize();
+            opts.right = s.to_array(); opts.up = s.cross(fw).to_array();
+            let (mut p, mut c) = (Vec::new(), Vec::new());
+            scene.skin_palette_into(&layout, None, 152.0, opts, None, &mut p, &mut c);
+            let world = scene.sim.as_ref().map(|s| &s.world);
+            let doors = scene.sim.as_ref().map(|s| s.drones.doors.closed_flags());
+            let _ = r.cel_visibility(eye, vp, world, doors.as_deref());
+            r.char_light_centre = scene.char_light_centres();
+            r.upload_skin(&queue, &p, &c);
+            r.lights = scene.frame_lights();
+            let mut time = |r: &mut nf_view::gpu::Renderer, tgt: &(wgpu::TextureView, wgpu::TextureView)| -> f64 {
+                let mut v = Vec::new();
+                for i in 0..9 {
+                    let mut e = r.render(&device, &queue, &tgt.0, &tgt.1, vp, vp, eye, 152, &[], &hf, None, None);
+                    e.resolve_query_set(&qs, 0..2, &resolve, 0);
+                    e.copy_buffer_to_buffer(&resolve, 0, &read, 0, 16);
+                    queue.submit([e.finish()]);
+                    read.map_async(wgpu::MapMode::Read, .., |r| r.expect("map"));
+                    device.poll(wgpu::PollType::wait_indefinitely()).unwrap();
+                    let ts: [u64; 2] = { let d = read.get_mapped_range(..).expect("range"); [u64::from_le_bytes(d[0..8].try_into().unwrap()), u64::from_le_bytes(d[8..16].try_into().unwrap())] };
+                    read.unmap();
+                    if i >= 2 { v.push(ts[1].wrapping_sub(ts[0]) as f64 * period / 1e6); }
+                }
+                v.sort_by(|a, b| a.partial_cmp(b).unwrap());
+                v[0]
+            };
+            r.probe_skip.clear();
+            let full = time(&mut r, &big);
+            let full_s = time(&mut r, &small);
+            let drawn = r.order_len();
+            let mut line = format!("[gbis] {name} q{q} draws={drawn} full {full:.3} small {full_s:.3} |");
+            for cl in classes {
+                r.probe_skip = (0..n).map(|k| class(k) == cl).collect();
+                let t = time(&mut r, &big);
+                let ts = time(&mut r, &small);
+                line += &format!(" -{cl} {t:.3}/{ts:.3}({})", r.order_len());
+            }
+            // Only one class kept.
+            for cl in classes {
+                r.probe_skip = (0..n).map(|k| class(k) != cl).collect();
+                let t = time(&mut r, &big);
+                line += &format!(" only-{cl} {t:.3}");
+            }
+            r.probe_skip.clear();
+            eprintln!("{line}");
+            if std::env::var_os("NF_PROBE_EACH").is_some() {
+                // Each submitted draw alone (the classes' heavy hitters).
+                let mut each: Vec<(f64, usize)> = Vec::new();
+                r.probe_skip.clear();
+                let _ = time(&mut r, &small);
+                let all: Vec<usize> = r.order_draws();
+                for &k in &all {
+                    r.probe_skip = (0..n).map(|j| j != k).collect();
+                    let _ = r.cel_visibility(eye, vp, world, doors.as_deref());
+                    let t = time(&mut r, &small);
+                    if r.order_len() == 0 { continue; }
+                    each.push((t, k));
+                }
+                each.sort_by(|a, b| b.0.partial_cmp(&a.0).unwrap());
+                for &(t, k) in each.iter().take(12) {
+                    let m = &scene.materials[k];
+                    eprintln!("[gbis-each] {name} q{q} mat {k} {t:.3} ms layer {:?} pass {} blend {} skin {:?} indices {} first {}", m.layer, m.draw.pass, m.draw.blend, m.skin, m.index_count, m.first_index);
+                }
+                r.probe_skip.clear();
+            }
+            // The skinned draws' vertex load: index counts of the submitted skinned draws.
+            let tris: usize = (0..n).filter(|&k| class(k) == "skinned").map(|k| scene.materials[k].index_count as usize).sum();
+            eprintln!("[gbis] {name} q{q} skinned materials {} indices {tris} char verts {}", (0..n).filter(|&k| class(k) == "skinned").count(), scene.char_verts.len());
+        }
+        drop(r); let _ = queue.submit([]); device.poll(wgpu::PollType::wait_indefinitely()).unwrap();
+    }
+}
+
 /// Output identity across a change: per level at the four start views, the palette/colour hash
 /// (FNV over the f32 bits) and the rendered frame's RGBA hash — the first render and a repeat
 /// (a frame without a tick: the per-frame memos' hit path). Run before and after, diff the lines.
@@ -263,7 +666,8 @@ fn probe_the_gpu_half() {
 #[cfg(not(debug_assertions))]
 fn probe_output_hashes() {
     let Some(iso_path) = std::env::var("NF_ISO").ok() else { return };
-    let instance = wgpu::Instance::new(wgpu::InstanceDescriptor::new_without_display_handle());
+    // perf-240g: the window's instance (Vulkan without indirect-call validation; NF_INDIRECT_VALIDATION=1 = the default).
+    let instance = nf_view::gpu_instance(None).0;
     let adapter = pollster::block_on(instance.request_adapter(&wgpu::RequestAdapterOptions::default())).expect("adapter");
     let (device, queue) = app_device(&adapter);
     let mut levels = on_foot_levels(&iso_path);

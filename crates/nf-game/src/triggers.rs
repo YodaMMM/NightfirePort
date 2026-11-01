@@ -306,7 +306,7 @@ impl Channels {
         if let Some(w) = &mut self.writes { w.push((c as u8, value, frame, 0)); }
         // NF_LEVELLOG=1: every switch-channel write that turns a channel on (rising edge), with the frame
         // and the new value. Traces e.g. ch 0x1D being set by the EndLevel script's event 0x11.
-        if std::env::var("NF_LEVELLOG").is_ok_and(|v| v == "1") && value != 0 && self.v[c as usize] == 0 {
+        if { static F: std::sync::OnceLock<bool> = std::sync::OnceLock::new(); *F.get_or_init(|| std::env::var("NF_LEVELLOG").is_ok_and(|v| v == "1")) } && value != 0 && self.v[c as usize] == 0 {
             eprintln!("[levellog] frame {} channel 0x{:02x} = {}", frame, c, value);
         }
         self.v[c as usize] = value;
