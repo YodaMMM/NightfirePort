@@ -717,6 +717,16 @@ pub struct Player {
     /// `Player_Collision` 0x194df0 builds the capsule per substate off obj+0x30 with the up vector.
     /// Built at the construction site off Bond's stance (`cc`).
     pub capsule: (V3, V3),
+    /// The body HITTEST `Player_Collision` 0x194df0 stamps into BLData+0x740 for the collide pass
+    /// (A arm BL+0x760, B arm BL+0x770, radius BL+0x7CC; mode 0x800, mask BL+0x7D8 = 0 on these
+    /// arms): the default arm (the walk) A = pos + 0.275, B = pos + (0.55 − cc), r 0.55
+    /// [M 0x194df0:315-333]; the crouch arm (case 3) A = pos + (0.1 − (cc − 0.55)), B = pos +
+    /// (0.45 − cc), r 0.55 [M :228-248]; the climb/creep arm (case 0/6) A = pos + 0.55, B = pos +
+    /// (0.275 − cc), r 0.275 [M :202-222]. The object contacts (`Collide_PickObj` 0x1eae80 →
+    /// `Collide_Intersect` 0x1ebaa8 → the mirror onto the hit object, `Collide_Update` 0x1ea398:
+    /// 160-233) are built from this shape — the mines read it. Radius 0 = not built (callers
+    /// without a body model).
+    pub body: (V3, V3, f32),
     /// The runtime cel the queries start from (obj+0x20 — fix-safe08b): the `pCelList` cell index in
     /// the world's `ScopeGraph`; `None` = the flat (unscoped) world.
     pub cel: Option<usize>,
@@ -12199,6 +12209,13 @@ pub struct Drones {
     /// script-census.md:141]); the creator's param map in `crate::gt`. The turret behaviours
     /// (GT_Update 0x180498, GT_Track 0x17f9c8, GT_ApplyDamage 0x1816d8) are a known gap.
     pub gt_turrets: Vec<crate::gt::GTurret>,
+    /// The mounted turret's inputs for this tick — `GT_Update` case 7's `Input_Actionf(3/4)`
+    /// stick pair in the game's units, action 9 (fire held) and the action-0xE fresh press
+    /// (mask 4) [M 00180498 case 7] — set by the viewer while a Ronin is mounted, taken by the
+    /// turret pass.
+    pub gt_mount: Option<(f32, f32, bool, bool)>,
+    /// The runtime script-player keys handed to deployed turrets (`gt::GTurret::sp_key`).
+    pub gt_next_key: usize,
     /// The 0700001b space laser — the kind-0x38 placement (`Create_SpaceLaser` 0x1aa8b8, one
     /// disc-wide [D script-census.md:144]); the creator's param map in `crate::space_laser`.
     /// `SpaceLaser_Update` 0x1aa3f8 (the arm/fire/damage flow) is the remaining gap.
@@ -12467,6 +12484,8 @@ impl Drones {
             space_missiles: Vec::new(),
             missile_deploy: [0; 8],
             gt_turrets: Vec::new(),
+            gt_mount: None,
+            gt_next_key: 0,
             space_lasers: Vec::new(),
             death: Default::default(), bond_fire: false, aims_idle: 0, auto_restart: true, level_exit_cold: false,
             // fix-aims20-modes-lights: BL+0x93e starts at the refill value [L ee_start_05].
@@ -12886,11 +12905,14 @@ impl Drones {
         self.mines = crate::worldobj::Mine::create(&level.maps[m].placements, |p| {
             let obj = if p.by_hash() { level.by_hash.get(&p.hashcode).map(|&(map, object)| &level.maps[map].objects[object]) }
                 else { level.maps[m].objects.get(p.index as usize) };
-            let Some(o) = obj else { return Vec::new() };
-            let Some(c) = o.collision.as_ref() else { return Vec::new() };
             // Mine_Create's obj+0x90: CCO(0) → View_RotTransMatrix [M 0x17ce28:16].
             let mx = nf_formats::placement::view_rot_trans_matrix(p.rotation, p.translation);
-            c.triangles().into_iter().map(|t| t.map(|v| nf_formats::placement::transform(&mx, v))).collect()
+            let Some(o) = obj else { return (Vec::new(), p.translation, 0.0) };
+            // The world sphere: the matrix · the glist centre, the glist radius · |obj+0xE8| (1.0)
+            // [M Control_BuildWorldSph 0x133070; control_init_object 0x134630:17].
+            let centre = nf_formats::placement::transform(&mx, o.centre);
+            let Some(c) = o.collision.as_ref() else { return (Vec::new(), centre, o.radius) };
+            (c.triangles().into_iter().map(|t| t.map(|v| nf_formats::placement::transform(&mx, v))).collect(), centre, o.radius)
         });
         let ps = &level.maps[m].placements;
         let lib = level.nis.iter().map(|(&h, n)| (h, std::sync::Arc::new(n.clone()))).collect();
@@ -13223,6 +13245,19 @@ fn segment_hits_aabb(a: V3, b: V3, lo: V3, hi: V3) -> bool {
     true
 }
 
+/// The satchel burn sparks' emitter def — `Bullet_DoTrails`' contact walk passes the immediate
+/// 0xc00000a [M 0x12d890:467-468].
+pub const SATCHEL_BURN_SPARKS: u32 = 0x0c00_000a;
+
+/// The point of segment a→b closest to `c`.
+fn closest_on_segment(a: V3, b: V3, c: V3) -> V3 {
+    let ab = [b[0] - a[0], b[1] - a[1], b[2] - a[2]];
+    let ac = [c[0] - a[0], c[1] - a[1], c[2] - a[2]];
+    let len2 = ab[0] * ab[0] + ab[1] * ab[1] + ab[2] * ab[2];
+    let t = if len2 <= 0.0 { 0.0 } else { (ac[0] * ab[0] + ac[1] * ab[1] + ac[2] * ab[2]) / len2 }.clamp(0.0, 1.0);
+    [a[0] + ab[0] * t, a[1] + ab[1] * t, a[2] + ab[2] * t]
+}
+
 fn segment_hits_sphere(a: V3, b: V3, c: V3, r: f32) -> bool {
     let ab = [b[0] - a[0], b[1] - a[1], b[2] - a[2]];
     let ac = [c[0] - a[0], c[1] - a[1], c[2] - a[2]];
@@ -13466,6 +13501,19 @@ fn segment_hits_sphere(a: V3, b: V3, c: V3, r: f32) -> bool {
         self.casings.eject(&d.surfaces.map(|s| &s.ammo).unwrap_or(&Default::default()), w, from, yaw, pitch, from[1], rng);
     }
 
+    /// `Explode_Propagate` 0x17c518's case 0x4B over the live mines: every mine the falloff reaches
+    /// gets a referenced HITDATA (+0x58 = the blast's attacker), which its next `Mine_Update`
+    /// 0x17c930 explodes on [M]. The port's blasts all carry an attacker (the mine itself for a
+    /// mine's blast [M 0x17c930 EXPLODEINFO+0x24 = the mine, 0x17cde0 param_5]; the player or a
+    /// drone otherwise) — a null-attacker blast would leave the entry unreferenced [S: no port
+    /// blast is attacker-less]. The candidate set is the distance sweep the other cases use; the
+    /// game's `Collide_SphereIntersect` cel scoping is not modelled [S].
+    fn blast_mines(&mut self, pos: V3, radius: f32, damage: f32) {
+        for m in &mut self.mines {
+            if m.pending == 0 && m.blast_reaches(pos, radius, damage) { m.pending = crate::worldobj::MINE_BLAST; }
+        }
+    }
+
     /// `Explode_Create` 0x17cbd0's blast, shared by the fuse death (`Bullet_handle_object_destruction`
     /// 0x12e1c0), the impact explode (`Bullet_CollisionHandler` 0x12d068-0x12d0bc [M, disassembled])
     /// and the grenade contact. `Explode_Propagate` 0x17c518 through `explode::propagate`: the full
@@ -13535,6 +13583,9 @@ fn segment_hits_sphere(a: V3, b: V3, c: V3, r: f32) -> bool {
                 // no filter [M 0x17c518:86-105]. The parts are the class-0 script entities, so
                 // the sweep is over the SP part targets' spheres.
                 copters: &copter_parts });
+        // case 0x4B → the mines' referenced hit entry (the chain: a mine's blast sets off the
+        // mines in its reach on their next update) [M 0x17c518 case 0x4b; Mine::blast_reaches].
+        self.blast_mines(pos, radius, damage);
         // case 0x21 → `Destroy_Smash` [M 0x17c518:141-177 → 0x12bb60]: the channel write is the
         // smash's, the twin's blast queued like the beam path's (script by the type byte, owner
         // the blast's owner).
@@ -14164,6 +14215,27 @@ fn segment_hits_sphere(a: V3, b: V3, c: V3, r: f32) -> bool {
                     }
                 }
             }
+            // The mines (class 0x4B) take the round: the flight segment picks the mine's mesh (the
+            // 0x201 pick + mesh refine, `Mine::segment_t`), `Collide_Update` 0x1ea398:160-233 mirrors
+            // the hit onto the mine's list with +0x58 = the bullet, and `Mine_Update` 0x17c930
+            // explodes on any referenced entry — no class, damage or filter gate [M]. The world
+            // stop in front of the mine (the sorted list's first solid node [M 0x1ea398:216-229])
+            // shields it. The round dies on the beam: the hit carries no pass bit — obj+0xF0 is 0
+            // (the 0x40 test of `Collide_Intersect` 0x1ebaa8's object arm), and the three Tripbomb
+            // meshes' surface bytes are 0 and 6 (no 0x40/0x80) [D census_07000015 probe_07000015_mine_objects] —
+            // a solid node, the round's state-2 stop [M Bullet_CollisionHandler 0x12ce80].
+            if !net_world && !b.dead && !self.mines.is_empty() {
+                let hit = self.mines.iter().enumerate()
+                    .filter_map(|(i, m)| m.segment_t(b.pos, end).map(|t| (i, t)))
+                    .min_by(|x, y| x.1.total_cmp(&y.1));
+                if let Some((i, t)) = hit {
+                    let tstop = d.world.segment_bullet_scoped(d.world.find_cel(b.pos), b.pos, end);
+                    if tstop.is_none_or(|ts| t <= ts) {
+                        if self.mines[i].pending == 0 { self.mines[i].pending = crate::worldobj::MINE_BULLET; }
+                        b.dead = true;
+                    }
+                }
+            }
             // The monitor consoles take the bullet too: `Monitor_Update` 0x1afcc8:34-45 (state 3;
             // `Monitor_ApplyDamage` 0x1b0968 is an empty 8-byte stub) fires `Explode_Create(r·6.0, r,
             // 0.5, …, obj+0x80, …, 0x6000027, 200, 200, 0, 0)` with r = the placed glist
@@ -14370,12 +14442,10 @@ fn segment_hits_sphere(a: V3, b: V3, c: V3, r: f32) -> bool {
                 for k in hits {
                     if self.locks[k].burn(amount, &mut self.channels, frame) {
                         // The burn-through sound: `Lock_Update` 0x1ae3d8:90-99 plays 0x249 (the
-                        // mechanism's release clunk) and calls `Lock_Unlock`. The trail side
-                        // `Bullet_DoTrails` 0x12d890:473-478 plays 0x5dd when the burn life runs
-                        // out on the watch's beam — the port fires it with the unlock here (the
-                        // two sounds' tick alignment is not separated in the decompile walk).
+                        // mechanism's release clunk) and calls `Lock_Unlock`. (0x5dd is NOT a lock
+                        // sound: its only caller is `Bullet_DoTrails`' 0x3b satchel tail [M
+                        // 0x12d890:473-478, the 0x12e390 jal] — the charge burn-out below.)
                         self.audio.play3d(0x249, self.locks[k].pos, None);
-                        self.audio.play3d(0x5dd, self.locks[k].pos, None);
                     }
                 }
             }
@@ -14386,9 +14456,20 @@ fn segment_hits_sphere(a: V3, b: V3, c: V3, r: f32) -> bool {
             // At ≤ 0 the game re-randomizes the charge's fuse every tick [M 0x12e3cc-0x12e40c]
             // — it never explodes; `defused` marks it and `tick_charge_fuse` redraws (see
             // `Bullet::defused`). One
-            // contact per laser round per tick, the same shape as the lock walk above. The
-            // burn sparks are `Emitter_Create(0xc00000a, hit point, …)` [M 0x12e37c] —
-            // draw-side; the port's emitter set has no charge-spark shape (not ported).
+            // contact per laser round per tick, the same shape as the lock walk above.
+            // satchel-laser: every contact of the walk spawns the burn sparks —
+            // `Emitter_Create(0xc00000a, entry+0x40, entry+0x10, 0, 0, 0, 0, 0)` [M 0x12d890:
+            // 466-468; the f12/f13 rate args 0, a0 = the def hash, a1 = the contact's hit point,
+            // a2 = its normal — the `Emitter_Create__FUiP7_VECTORT1fUiUiUif` signature 0x17ae00]:
+            // a one-shot burst (rate 0) — the same object shape `WorldFx::spawn_impact` builds for
+            // the `Effect_Create` impact arm. When the walk drives `BU+0x102` to ≤ 0 it plays
+            // `Sound_Play3D(100.0, −1.0, −1.0, 0x5dd, obj+0x30)` at the charge [M :472-474]; the
+            // burned-out charge skips the walk from the next tick on (`goto LAB_0012e41c` [M
+            // :424-433]) — no more sparks, no more burn. The contact entry's +0x40/+0x10 are the
+            // narrow phase's triangle hit point and world normal (`Collide_Intersect` 0x1ebaa8's
+            // tail, copied onto the charge's list by `Collide_Update` 0x1ea398:194-207); the port
+            // has no per-triangle test on the charge, so the point is the closest point of the
+            // round's segment to the charge and the normal faces back along the beam [S].
             // The contact sphere: the game's picker runs the charge's world sphere
             // (Control_BuildWorldSph 0x133070 over its glist) against the round's segment;
             // the port stands the round's own world-radius floor on top (the bullet obj's
@@ -14396,14 +14477,19 @@ fn segment_hits_sphere(a: V3, b: V3, c: V3, r: f32) -> bool {
             // sphere [S the charge's exact glist bounds are not pinned].
             if matches!(b.weapon, 0x4e | 0x4f) {
                 let amount: i16 = if b.weapon == 0x4e { 1 } else { 10 }; // [M 0x12e2f0-0x12e348]
+                let mut sparks: Vec<(V3, V3)> = Vec::new();
+                let mut fizzles: Vec<V3> = Vec::new();
                 for s in self.bullets.iter_mut() {
                     if !s.landed || s.defused { continue; }
                     if s.family(&d.weapons) != 0x3b { continue; }
                     if Self::segment_hits_sphere(b.pos, end, s.pos, 0.5) {
                         s.burn -= amount;
-                        if s.burn <= 0 { s.defused = true; }
+                        sparks.push((Self::closest_on_segment(b.pos, end, s.pos), [-b.dir[0], -b.dir[1], -b.dir[2]]));
+                        if s.burn <= 0 { s.defused = true; fizzles.push(s.pos); }
                     }
                 }
+                for (p, n) in sparks { self.fx.spawn_impact(Self::SATCHEL_BURN_SPARKS, p, n); }
+                for p in fizzles { self.audio.play3d(0x5dd, p, None); }
             }
             // rigid-body-bullet: the game's collision pass appends the round's contact to the
             // kind-0xD8 body's `obj+0xD0` chain (the bullet is class 5) and `RB_CollisionHandler`
@@ -15141,6 +15227,116 @@ fn segment_hits_sphere(a: V3, b: V3, c: V3, r: f32) -> bool {
         }
     }
 
+    /// The Phoenix Ronin's deploy — `Player_WeaponInitBullet` 0x1a4bf0:265-282's id-0x52 arm of
+    /// the pellet loop: `pos = player obj+0x30 + Mat_GetDir(obj+0x90)·1.0`, then
+    /// `GT_DeployMiniGun(pos, obj+0x90, player)` 0x181560 → `Collide_PlaceObject(0.5, 0.6)` (no
+    /// room → 0; the caller refunds the round — `BLData+0x590 += 1`, clip[0x52]) → `GT_Create`
+    /// with the 0x06000045/44 script pair, the 0x2000359 glist and the player as the owner
+    /// [M 00181560, 0017ffa0]. `fwd` is Bond's horizontal facing. Returns the turret index.
+    pub fn deploy_ronin(&mut self, d: &Data, bond_pos: V3, fwd: V3) -> Option<usize> {
+        let pos = [bond_pos[0] + fwd[0], bond_pos[1] + fwd[1], bond_pos[2] + fwd[2]];
+        let seat = crate::gt::place_object(d.world, pos, fwd)?;
+        // GT_Create's Script_Load pair: either load failing deletes the object and returns 0
+        // [M 0017ffa0:100-109] — the port's lib miss.
+        if !self.scripts.lib.contains_key(&crate::gt::RONIN_SCRIPT_A) || !self.scripts.lib.contains_key(&crate::gt::RONIN_SCRIPT_B) {
+            return None;
+        }
+        let mut t = crate::gt::from_deploy(seat, fwd);
+        // `Vec_DirToRot(Mat_GetDir(seated copy))` → the created object's rot; obj+0x90 =
+        // View_RotTransMatrix(rot, pos) [M 00181560 0x1815c4-0x1815dc, 0x17ffa0:69-71].
+        let base = nf_formats::placement::view_rot_trans_matrix([0.0, t.base_yaw(), 0.0], seat);
+        t.fire_dir = [base[2][0], base[2][1], base[2][2]];
+        // ext+0xD0 = script A's object bbox max.z × 1.5 [M 0017ffa0:121-158]; the port reads the
+        // glist spheres of script A's entities (0x200035a / 0x2000361 / 0x2000362 [D nis]) for the
+        // box [S — the sphere stands in for the glist bbox].
+        let maxz = [0x0200_035au32, 0x0200_0361, 0x0200_0362].iter()
+            .filter_map(|h| d.models.get(h)).map(|m| m.centre[2] + m.radius).fold(f32::NEG_INFINITY, f32::max);
+        t.muzzle_offset = if maxz.is_finite() { maxz * 1.5 } else { 0.0 };
+        // Unique, newest-first key: the control walk runs run-time objects ahead of the placed ones.
+        self.gt_next_key += 1;
+        t.sp_key = usize::MAX / 2 + self.gt_next_key;
+        let frame = self.frame;
+        let mount = |hash: u32| crate::nis::Player {
+            placement: t.sp_key, scripts: [hash, 0], modes: [8, 0], stay: false, mask: 1, out: 0, gate: 0,
+            scale: 1.0, matrix: base, cur: 0, state: 0, activated: false, countdown: 0, info: [None, None],
+            deleted: false, live_matrix: base, subs: Vec::new(), hit_points: 0.0, damage: 0.0,
+            tick_damage: 0.0, hidden: false, bullet_filter: 0, bullet_hits: Vec::new(), tick_bullet_hits: Vec::new(),
+        };
+        let (pa, pb) = (mount(t.script_a), mount(t.script_b));
+        t.script_player_a = self.scripts.spawn_primed(pa, &mut self.channels, d, frame);
+        t.script_player_b = self.scripts.spawn_primed(pb, &mut self.channels, d, frame);
+        eprintln!("[ronin] deployed at ({:.2}, {:.2}, {:.2}) yaw {:.3} — GT_DeployMiniGun 0x181560", seat[0], seat[1], seat[2], t.base_yaw());
+        self.gt_turrets.push(t);
+        Some(self.gt_turrets.len() - 1)
+    }
+
+    /// The first live turret the player owns (`Player_WeaponInitBullet`'s class-'6' walk with
+    /// `ext+0xB8 == player` [M 0x1a4bf0:113-133]).
+    pub fn ronin_turret(&self) -> Option<usize> {
+        self.gt_turrets.iter().position(|t| t.owner == crate::gt::PLAYER_OWNER && !t.delete_flag)
+    }
+
+    /// The weapon-0x53 press: the player's own turret → `GT_TakeControl` (state 4 only) [M
+    /// 0x1a4bf0:113-133, 00181740]. None = no owned turret (the press then falls to the 0x53
+    /// record's zero pellet count and does nothing); Some(mounted).
+    pub fn ronin_take_control(&mut self) -> Option<bool> {
+        let i = self.ronin_turret()?;
+        let t = &mut self.gt_turrets[i];
+        let ok = t.take_control();
+        if ok {
+            // `Vec_Zero(ext+0x90)` — the aim starts at the create facing [M 00181740].
+            t.aim = [0.0; 3];
+            eprintln!("[ronin] remote control taken — GT_TakeControl 0x181740 (cam mode 0xf, pane 18)");
+        }
+        Some(ok)
+    }
+
+    /// The mounted Ronin (state 7, the player's) — cam mode 0xf / HUD pane 18 while Some.
+    pub fn ronin_mounted(&self) -> Option<usize> {
+        self.gt_turrets.iter().position(|t| t.owner == crate::gt::PLAYER_OWNER && t.state == crate::gt::gt_state::MOUNTED && !t.delete_flag)
+    }
+
+    /// `Player_PositionCamera` 0x18f5d8 case 0xf: the view is the registered[0] object's matrix,
+    /// its translation moved by (0, 0.15, −0.4) in that frame [M 0x18f5d8:277-299]. The port's
+    /// registered[0] is the script entity `GT_Register` slot 0 took (event 0xF param 0 — 0x2000361
+    /// [D nis]); before the hand-off, the gun pose matrix stands in.
+    pub fn ronin_view(&self) -> Option<(V3, V3)> {
+        let t = &self.gt_turrets[self.ronin_mounted()?];
+        let reg = t.registered[0].checked_sub(1).and_then(|o| match self.scripts.objects.list.get(o as usize) {
+            Some(Some(crate::nis::Obj::Entity { matrix, .. })) => Some(*matrix),
+            _ => None,
+        });
+        let m = reg.unwrap_or_else(|| t.pose_matrix());
+        let e = crate::gt::RONIN_EYE;
+        let pos = [m[3][0] + e[0] * m[0][0] + e[1] * m[1][0] + e[2] * m[2][0],
+            m[3][1] + e[0] * m[0][1] + e[1] * m[1][1] + e[2] * m[2][1],
+            m[3][2] + e[0] * m[0][2] + e[1] * m[1][2] + e[2] * m[2][2]];
+        Some((pos, [m[2][0], m[2][1], m[2][2]]))
+    }
+
+    /// `Player_Activate` 0x1a5170:146-148's class-'6' arm: the one use pick (the radius-1.0 sphere
+    /// at head + view dir) against a turret's world sphere (obj+0x80, 1.0 + obj+0x8C — the turret
+    /// object's 0x2000359 glist sphere for the Ronin) → `GT_Activate` 0x1816f0 (facing 0, states
+    /// 4/5/7 → the fold, state 2). Returns whether a turret took the use.
+    pub fn gt_activate_pick(&mut self, d: &Data, pick_c: V3) -> bool {
+        let mut hit = false;
+        for t in self.gt_turrets.iter_mut() {
+            if t.delete_flag { continue; }
+            let m = d.models.get(&crate::gt::MINIGUN_GLIST).copied().unwrap_or(crate::pickup::Model { centre: [0.0; 3], radius: 0.5 });
+            let c = [t.pos[0] + m.centre[0], t.pos[1] + m.centre[1], t.pos[2] + m.centre[2]];
+            let r = 1.0 + m.radius;
+            let d2 = (c[0] - pick_c[0]).powi(2) + (c[1] - pick_c[1]).powi(2) + (c[2] - pick_c[2]).powi(2);
+            if d2 > r * r { continue; }
+            let before = t.state;
+            t.activate();
+            if t.state != before {
+                hit = true;
+                eprintln!("[ronin] GT_Activate 0x1816f0: state {before} → {} (the fold)", t.state);
+            }
+        }
+        hit
+    }
+
     /// `GunImp_Update` 0x1320d8 while state 1: the mounted aim + fire, and — gunimp-mounted-pose
     /// — the player carry. `look`/`turn` are the raw stick axes (the game's `Input_Actionf(slot,
     /// 4/3, 1)`), `fire` action 9, `use_key` action 0xe (the dismount). Every mounted tick the
@@ -15385,6 +15581,7 @@ fn segment_hits_sphere(a: V3, b: V3, c: V3, r: f32) -> bool {
             let hits = crate::explode::propagate(pos, radius, damage, owner,
                 &crate::explode::Targets { drones: &drones_t, player: player_pos, breaks: &breaks_t,
                     destroys: &destroys, copters: &[] });
+            self.blast_mines(pos, radius, damage); // case 0x4B [M 0x17c518]
             // case 0x21 → `Destroy_Smash` [M 0x17c518:141-177 → 0x12bb60]: the channel write is
             // the smash's, the blast queued like the bullet-kill path's (script by the type
             // byte, owner the imp — not the player).
@@ -15745,6 +15942,12 @@ fn segment_hits_sphere(a: V3, b: V3, c: V3, r: f32) -> bool {
                 crate::nis::Request::WireRegister { player, obj, group } => {
                     if let Some(fb) = self.fuseboxes.iter_mut().find(|f| f.placement == player) {
                         fb.register_wire(obj, group);
+                    }
+                    // The turrets' create callback is `GT_Register` 0x181538 (the `Script_Load`
+                    // callback arg 0x181538 [M 0017ffa0:100-104]): slot = param 0 (< 3). The port
+                    // stores the script object index + 1 (0 = empty, the game's NULL test).
+                    if let Some(t) = self.gt_turrets.iter_mut().find(|t| t.sp_key == player) {
+                        t.register(group, obj as u32 + 1);
                     }
                 }
                 // `Script_FFwd`'s `Music_Event(5, hash)` [M 0x1dac78:55] — the NIS-skipped pulse
@@ -16343,6 +16546,12 @@ fn segment_hits_sphere(a: V3, b: V3, c: V3, r: f32) -> bool {
             }
             let chans = &self.channels;
             let mut gt_events: Vec<(usize, crate::gt::GTEvent)> = Vec::new();
+            // `GT_PlayerHasDied` 0x181808 ← `Player_CheckForDeath` 0x190810:38: the dead player's
+            // mounted turret loses control.
+            if self.health.health <= 0.0 {
+                crate::gt::GTurret::player_has_died(&mut self.gt_turrets, crate::gt::PLAYER_OWNER);
+            }
+            let mount_in = self.gt_mount.take();
             for (ti, t) in self.gt_turrets.iter_mut().enumerate() {
                 if t.delete_flag { continue; }
                 // The per-candidate LOS walk [M 0x17f9c8:271-278 — one
@@ -16369,10 +16578,25 @@ fn segment_hits_sphere(a: V3, b: V3, c: V3, r: f32) -> bool {
                     frame,
                     cands: &cands,
                     registered0_state: None, // the script VM is the tracked gap (gt.rs)
-                    mount: None,             // the mount use path (Player_WeaponInitBullet) is the tracked gap
+                    // case 7 reads the owner's pad [M 00180498 case 7 — `Input_Actionf(BL+0x94e, …)`]:
+                    // only the player's own mounted turret sees the viewer's inputs.
+                    mount: if t.owner == crate::gt::PLAYER_OWNER && t.state == crate::gt::gt_state::MOUNTED { mount_in } else { None },
                 };
                 let mut out = Vec::new();
+                let was_mounted = t.state == crate::gt::gt_state::MOUNTED;
                 t.update(&ctx, &mut self.rng, &mut out);
+                // case 7's `PlrStat_LogShotFired` per mounted shot [M 00180498 case 7].
+                if was_mounted {
+                    for _ in out.iter().filter(|e| matches!(e, crate::gt::GTEvent::Fire { .. })) {
+                        self.progress.log_shot_fired(self.mission.status());
+                    }
+                }
+                // `Script_SetPosRot(ext+0xB0, …)` [M 00180498 cases 2/4/7]: the floor turrets' gun
+                // (script A) turns to the pose the tick eased (the wall guns keep their placed pose
+                // — their aim visual is unverified against the real machine).
+                if t.facing == 0 && t.pose.is_some() {
+                    self.scripts.pose_player(t.script_player_a, t.pose_matrix());
+                }
                 // The wreck smoke runs INSIDE the case-6 tick [M GT_Update 0x180498:440-451]:
                 // emitting it here (before the next turret's update) keeps the six shared draws
                 // at the game's position in the stream — the deferred event loop would run them
@@ -16394,9 +16618,49 @@ fn segment_hits_sphere(a: V3, b: V3, c: V3, r: f32) -> bool {
                 }
                 for e in out { gt_events.push((ti, e)); }
             }
+            // `GT_Delete` 0x181678: both scripts freed with the object.
+            for t in self.gt_turrets.iter().filter(|t| t.delete_flag) {
+                if t.placement == usize::MAX {
+                    self.scripts.delete_player(t.script_player_a);
+                    self.scripts.delete_player(t.script_player_b);
+                }
+            }
+            let owners: Vec<u32> = self.gt_turrets.iter().map(|t| t.owner).collect();
+            let poses: Vec<(V3, f32)> = self.gt_turrets.iter().map(|t| (t.pos, t.base_yaw())).collect();
             self.gt_turrets.retain(|t| !t.delete_flag);
             for (ti, e) in gt_events {
                 match e {
+                    // A player-owned turret's round is the PLAYER's: `Bullet_init(−1, ext+0xB8, …)`
+                    // [M 00180498 case 4:345-348 / case 7] — owner = the player object, so it flies
+                    // the player-bullet path (it hits the guards, never Bond).
+                    crate::gt::GTEvent::Fire { muzzle, dir, sound } if owners.get(ti) == Some(&crate::gt::PLAYER_OWNER) => {
+                        self.audio.play3d(sound, muzzle, None);
+                        if let Some(w) = d.weapons.records.get(crate::gt::TURRET_WEAPON_RECORD) {
+                            let f32_at = |o: usize| f32::from_le_bytes(w[o..o + 4].try_into().unwrap());
+                            let f6c = u32::from_le_bytes(w[0x6c..0x70].try_into().unwrap());
+                            self.player_bullets.push(PlayerBullet {
+                                pos: muzzle, dir, speed: f32_at(0x20), travelled: 0.0, range: f32_at(0x1c), damage: f32_at(0x0c),
+                                weapon: crate::gt::TURRET_WEAPON_RECORD as u16, first: true, dead: false, bounces: 0,
+                                homing: f6c & 0x2_0000 != 0, target: None, gravity: f6c & 0x8 != 0, guided_cam: false,
+                                snd: 0, swoosh: None, born: frame,
+                            });
+                        }
+                    }
+                    // case 3's `Pickup_Create(obj+0xC0, 0, obj+0x90, 0x2000366, kind 0, id 0x52,
+                    // rounds 1, switch 0, sound 0xF5, at-rest 1, respawn 0, lifetime 0)` [M disasm
+                    // 0x180934-0x180978]: at rest (param 10 ≠ 0 → +0x20 = 1, no fall) on
+                    // `build_PointOnFloor(1.0, …)` of the turret position [M 0x18dda0:150-160].
+                    crate::gt::GTEvent::DropPickup { pos } => {
+                        let yaw = poses.get(ti).map_or(0.0, |p| p.1);
+                        let floor = d.world.floor_below(pos, 1.0).map_or(pos, |y| [pos[0], y, pos[2]]);
+                        let glist = crate::gt::PICKUP_GLIST;
+                        let bounds = d.models.get(&glist).copied().unwrap_or(crate::pickup::Model { centre: [0.0; 3], radius: 0.3 });
+                        if let Some(p) = crate::pickup::Pickup::create_placed(floor, [0.0, yaw, 0.0], crate::pickup::kind::WEAPON,
+                            crate::gt::RONIN_DEPLOY as u16, 1, 0, 0xf5, 0, 0, glist, bounds, d.weapons, d.models, false) {
+                            eprintln!("[ronin] folded — the case is back on the floor at ({:.2}, {:.2}, {:.2})", floor[0], floor[1], floor[2]);
+                            self.pickups.push(p);
+                        }
+                    }
                     // One `Bullet_init` shot [M 0x180498 case 4:347-348]: the turret weapon
                     // record 96 (0x2c55d0 = the table + 96·0x10c), owner −1 — every hit-time
                     // damage modifier that reads the shooter drone skips (`Bullet_init`'s
@@ -16465,7 +16729,7 @@ fn segment_hits_sphere(a: V3, b: V3, c: V3, r: f32) -> bool {
             // when `Mission_Init` runs on a warm transition: init resets the current + future parts in
             // place and the carried snapshot puts the previous parts' states back [M 0x182270:68-129;
             // the payload shape is LS_MakeMission/LS_LoadMission 0x1cd720/0x1cd880; map-tower2].
-            if let Some(s) = self.mission_carry.take() { self.mission.restore(&s); }
+            if let Some(s) = self.mission_carry.take() { self.mission.restore(&s); } else { self.mission.seed_campaign_arrival(); }
             // `Player_RamLoad` 0x1957a8:15-16's tally restore (987-mission-stats-carry): the warm
             // load puts the exit snapshot back AFTER the part-0 wipe above — the game's order
             // (ResetMap_GameInit's `Mission_Init` zeroes on the base map, `Player_InitWeapon`'s
@@ -16806,17 +17070,29 @@ fn segment_hits_sphere(a: V3, b: V3, c: V3, r: f32) -> bool {
             .filter(|dr| dr.present && !dr.corpse)
             .map(|dr| ([dr.pos[0], dr.pos[1] - 1.0, dr.pos[2]], [dr.pos[0], dr.pos[1] + 0.8, dr.pos[2]]))
             .collect();
+        // The player's body is the collide-pass HITTEST `Player_Collision` 0x194df0 builds (`Player::body`
+        // — the walk's default arm reaches from the floor to 0.825 over the root, the crouch arm
+        // 1.3 over the floor); the old stand-in (pos .. pos + 1.8, r 0.55) rode a metre too high —
+        // it never met a floor-level beam and caught a crouched Bond under a raised one.
+        let (body_a, body_b, body_r) = if player.body.2 > 0.0 { player.body }
+            else { ([player.pos[0], player.pos[1], player.pos[2]], [player.pos[0], player.pos[1] + 1.8, player.pos[2]], 0.55) };
+        // The referenced entries the LAST pass's collide work left (the blasts' case-0x4B hits) are
+        // read now; a blast spawned inside this loop hangs its entry for the next pass [M
+        // Explode_CollisionHandler 0x17cde0 runs in the collide pass after the update that made
+        // the blast]. This tick's bullet contacts (the bullet pass ran above) are read too.
+        let pending: Vec<u8> = self.mines.iter_mut().map(|m| std::mem::take(&mut m.pending)).collect();
         for mi in 0..self.mines.len() {
             let mine = &mut self.mines[mi];
             if mine.exploded { continue; }
             mine.bob(frame);
-            let feet = [player.pos[0], player.pos[1], player.pos[2]];
-            let head = [player.pos[0], player.pos[1] + 1.8, player.pos[2]];
-            let hit = mine.touching(feet, head, 0.55)
-                || drone_bodies.iter().any(|&(a, b)| mine.touching(a, b, 0.4));
-            if hit {
+            let cause = if pending[mi] != 0 { pending[mi] }
+                else if mine.touching(body_a, body_b, body_r) { crate::worldobj::MINE_BODY }
+                else if drone_bodies.iter().any(|&(a, b)| mine.touching(a, b, 0.4)) { crate::worldobj::MINE_DRONE }
+                else { 0 };
+            if cause != 0 {
                 let (pos, radius, damage, script) = (mine.pos, mine.radius, mine.damage, mine.script);
                 self.mines[mi].exploded = true;
+                self.mines[mi].cause = cause;
                 self.spawn_blast(d, pos, radius, damage, usize::MAX, 0, player.pos, frame, script, radius,
                     0); // explode-debris-spawn: Mine_Update's inline Explode_Create stores kind 0 [M 0x17c930:128]
             }

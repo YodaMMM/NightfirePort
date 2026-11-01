@@ -13,7 +13,11 @@ research pass (2026-10-09); "checked" = read here (the tables are read from ACTI
   16 security camera, 17 OICW, 20 space, 21 pickup); enabled at level start: 0, 1, 2, 3, 4, 8, 21 [L].
 - `SpriteInfo` (0x2C bytes, `Sprite_Create2` 0x1de3d8) [checked]: colour 0xRRGGBBAA, shadow colour, layer, flags,
   x / y (pane-relative), w / h, u / v / du / dv, label, texture hash. Drawing (`View_DrawSprites` 0x1e5290): GS
-  modulate (0x80 = 1.0), alpha drawn as A >> 1; flags 0x100 additive, 0x200 subtractive, 0x800 centred, 0x40 / 0x80
+  modulate (0x80 = 1.0; Cs clamps at 0xff before the blend), alpha drawn as A >> 1 (`psiDrawSprites` 0x120e68:
+  SpriteColourA = A >> 1; ALPHA_1 0x44 / 0x48 / 0x42; TEST_1 0xd, ZBUF ZMSK — no Z test or write); the display gain
+  (`SqueezeColourIn`/0x80, `CreateSqueezeFrame` 0x11b140 from the next frame's `psiPreDraw`) scales the finished frame
+  after the HUD — the port's `gpu.rs` `fs_ps2` emits gain·Cs·As premultiplied for that; also: a sprite's runtime
+  +0x28/+0x2a are its TEXTURE's width/height (`hashtable_set_sprite` 0x1ca3d8), not the template's w/h; flags 0x100 additive, 0x200 subtractive, 0x800 centred, 0x40 / 0x80
   flip U / V, 0x20 drop shadow (text: colour 2 at (+1, +1)). Sorted by layer, higher drawn first (`CompSpr` 0x1d3320).
 
 ## Crosshair [checked]
@@ -177,9 +181,11 @@ the mission banner's fail label has no blink.
   0xd, set only by `Car_Activate` 0x131c48 — placement 0xda RC cars, MP maps only [D census]), 16 =
   `SecCamPane` (`Monitor_Activate` 0x1b0058:47 — the monitor consoles of 01/02/0a/12/14), 18 =
   `RoninPane` (cam mode 0xf, set only by `GT_TakeControl` 0x181740 for a turret whose owner is the
-  player, i.e. one deployed with weapon 0x53 [M Player_WeaponInitBullet 0x1a4bf0:120-133]; no SP kit
-  equips 0x53 [M Player_InitWeapon 0x1a7ef8] and `Pickup_CreateSimple` refuses it). The port covers
-  9, 11, 16, 17; 10 and 18 are MP-only views.
+  player, i.e. one deployed with weapon 0x52 and taken over with 0x53 [M Player_WeaponInitBullet
+  0x1a4bf0:113-133, 265-282]). No SP kit equips 0x52/0x53 [M Player_InitWeapon 0x1a7ef8], but the
+  campaign places the case as a pickup on 0700000c #561 and 07000012 #753 [D] (correction
+  2026-11-01: "MP-only" was wrong). The port covers 9, 11, 16, 17 and 18 (docs/systems/gun-turrets.md,
+  the Ronin section); 10 is MP-only.
 
 ## Security-camera view (pane 16) [M; hud-2]
 

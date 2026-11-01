@@ -288,7 +288,28 @@ pub struct Mine {
     pub exploded: bool,
     /// The live posed y (obj+0x34) — the draw-side getter for the bob.
     pub posed_y: f32,
+    /// The world sphere (`obj+0x80` centre = the matrix · the glist centre, `obj+0x8C` = the glist
+    /// radius · |obj+0xE8| = 1.0 [M Control_BuildWorldSph 0x133070]) — the pick sphere of
+    /// `Collide_PickObj` 0x1eae80 and the blast sweep of `Explode_Propagate` 0x17c518 read it.
+    pub centre: V3,
+    pub sph_r: f32,
+    /// A referenced HITDATA entry waiting on the mine's list for the next `Mine_Update` pass —
+    /// set by a blast's case 0x4B (`Coll_AddHitToList(…, obj+0xD0, 0, attacker)` [M 0x17c518
+    /// case 0x4b]) and by a bullet's mirrored contact (`Collide_Update` 0x1ea398:160-233).
+    /// 0 = none, else the `MINE_*` cause.
+    pub pending: u8,
+    /// What set the mine off (0 = not exploded, else a `MINE_*` cause) — the port's observability
+    /// for the tests; the game keeps no such field.
+    pub cause: u8,
 }
+
+/// `Mine::cause` / `Mine::pending` values: a body contact (the player's / a drone's collide-pass
+/// capsule; drones are `MINE_DRONE`), a bullet's mirrored contact, a blast's case-0x4B entry.
+pub const MINE_BODY: u8 = 1;
+pub const MINE_BULLET: u8 = 2;
+pub const MINE_BLAST: u8 = 3;
+/// A drone's body contact (the 0.4 body cylinder stand-in).
+pub const MINE_DRONE: u8 = 4;
 
 impl Mine {
     /// `Mine_Create` 0x17ce28 over the main map's placements (placement order). No RNG [M].
@@ -296,13 +317,13 @@ impl Mine {
     /// creators take).
     pub fn create(
         placements: &[nf_formats::placement::Placement],
-        tris_of: impl Fn(&nf_formats::placement::Placement) -> Vec<[V3; 3]>,
+        tris_of: impl Fn(&nf_formats::placement::Placement) -> (Vec<[V3; 3]>, V3, f32),
     ) -> Vec<Mine> {
         let mut out = Vec::new();
         for (i, p) in placements.iter().enumerate() {
             if p.flags & 0xff != 0xfe { continue; }
             let param = |k: u32| p.params.iter().find(|(j, _)| *j == k).map_or(0, |&(_, v)| v);
-            let tris = tris_of(p);
+            let (tris, centre, sph_r) = tris_of(p);
             let (mut lo, mut hi) = ([f32::MAX; 3], [-f32::MAX; 3]);
             for t in &tris { for v in t { for k in 0..3 { lo[k] = lo[k].min(v[k]); hi[k] = hi[k].max(v[k]); } } }
             out.push(Mine {
@@ -317,6 +338,9 @@ impl Mine {
                 tris,
                 exploded: false,
                 posed_y: p.translation[1],
+                centre, sph_r,
+                pending: 0,
+                cause: 0,
             });
         }
         out
@@ -338,6 +362,64 @@ impl Mine {
         if self.tris.is_empty() { return false; }
         if (0..3).any(|k| (a[k] < self.lo[k] - r && b[k] < self.lo[k] - r) || (a[k] > self.hi[k] + r && b[k] > self.hi[k] + r)) { return false; }
         crate::triggers::capsule_hits_tris(a, b, r + 0.03, &self.tris)
+    }
+
+    /// A bullet's contact with the mine. The round's per-tick HITTEST is mode 0x201 (the flight
+    /// segment) with mask `+0x98 = 0` [M Bullet_update 0x12e7b0 disasm 0x12f040, 0x12f134;
+    /// docs/systems/searchlight-bullet.md §1], so `Collide_Pick` 0x1eb320 walks the straddled cels'
+    /// object lists (only mask bit 0x10 skips them [M 0x1eb320 LAB_001eb8e8]) and `Collide_PickObj`
+    /// 0x1eae80 admits the mine: `obj+0xF0` is 0 (`Mine_Create` 0x17ce28 never writes it), no class
+    /// mask bit is set, and the glist carries collision (`obj+0xD8` and `glist+8` non-zero); the
+    /// 0x201 arm keeps it when the segment's closest point to the world sphere centre lies inside
+    /// `obj+0x8C`. `Collide_Intersect` 0x1ebaa8's 0x201 arm then refines against the glist mesh (the
+    /// front-face ray test, `Intersect_RayGeom` 0x10a8c8:168). Returns the nearest hit's segment
+    /// fraction; `Collide_Update` 0x1ea398:160-233 mirrors the hit onto the mine's own list with
+    /// +0x58 = the bullet — the referenced entry `Mine_Update` 0x17c930 explodes on.
+    pub fn segment_t(&self, a: V3, b: V3) -> Option<f32> {
+        if self.exploded || self.tris.is_empty() { return None; }
+        let sub = |x: V3, y: V3| [x[0] - y[0], x[1] - y[1], x[2] - y[2]];
+        let cross = |x: V3, y: V3| [x[1] * y[2] - x[2] * y[1], x[2] * y[0] - x[0] * y[2], x[0] * y[1] - x[1] * y[0]];
+        let dot = |x: V3, y: V3| x[0] * y[0] + x[1] * y[1] + x[2] * y[2];
+        let d = sub(b, a);
+        let dd = dot(d, d);
+        let ac = sub(self.centre, a);
+        let t = if dd < 1e-12 { 0.0 } else { (dot(ac, d) / dd).clamp(0.0, 1.0) };
+        let q = sub([a[0] + d[0] * t, a[1] + d[1] * t, a[2] + d[2] * t], self.centre);
+        if dot(q, q) >= self.sph_r * self.sph_r { return None; }
+        let mut best: Option<f32> = None;
+        for tri in &self.tris {
+            let (e1, e2) = (sub(tri[1], tri[0]), sub(tri[2], tri[0]));
+            if dot(cross(e1, e2), d) >= 0.0 { continue; } // back face [M 0x10a8c8:168]
+            let p = cross(d, e2);
+            let det = dot(e1, p);
+            if det.abs() < 1e-12 { continue; }
+            let inv = 1.0 / det;
+            let s = sub(a, tri[0]);
+            let u = dot(s, p) * inv;
+            if !(0.0..=1.0).contains(&u) { continue; }
+            let qv = cross(s, e1);
+            let v = dot(d, qv) * inv;
+            if v < 0.0 || u + v > 1.0 { continue; }
+            let tt = dot(e2, qv) * inv;
+            if (0.0..=1.0).contains(&tt) && best.is_none_or(|bt| tt < bt) { best = Some(tt); }
+        }
+        best
+    }
+
+    /// `Explode_Propagate` 0x17c518's reach for one mine: the falloff `damage · (1 − (int)(dist −
+    /// obj+0x8C) / radius)` (dist from the blast to the world sphere centre, the truncation toward
+    /// zero, clamped at ≥ 0) must reach 0.0002 [M 0x17c518, the gate before the class switch]; the
+    /// case-0x4B arm then hangs a
+    /// HITDATA on the mine whose +0x58 is the blast's attacker (`Coll_AddHitToList(…, obj+0xD0, 0,
+    /// param_5)` [M 0x17c518 case 0x4b]). A mine's own blast passes `EXPLODEINFO+0x24` = the mine
+    /// (`Mine_Update` 0x17c930 stores it, `Explode_CollisionHandler` 0x17cde0 passes it as param_5),
+    /// so the entry is referenced and the next `Mine_Update` explodes the neighbour too.
+    pub fn blast_reaches(&self, pos: V3, radius: f32, damage: f32) -> bool {
+        if self.exploded || !(damage >= 0.0002) || !(radius >= 0.0002) { return false; }
+        let d = [self.centre[0] - pos[0], self.centre[1] - pos[1], self.centre[2] - pos[2]];
+        let dist = (d[0] * d[0] + d[1] * d[1] + d[2] * d[2]).sqrt() - self.sph_r;
+        let truncated = if dist > 0.0 { (dist as i32) as f32 } else { 0.0 };
+        damage * (1.0 - truncated / radius) >= 0.0002
     }
 }
 
@@ -569,5 +651,50 @@ mod rotor_tests {
         let mut always = Rotor { spin: [0.0, 0.1, 0.0], gate: 0, angle: [0.0; 3] };
         always.tick(&ch);
         assert!((always.angle[1] - 0.1).abs() < 1e-6, "gate-0 rotor ignores the channels");
+    }
+}
+
+#[cfg(test)]
+mod mine_tests {
+    use super::*;
+
+    /// A closed axis box (outward-wound) as the mine's mesh: the beam x 0..4, y −0.1..0.1, z ±0.2.
+    fn beam_mine() -> Mine {
+        let (lo, hi) = ([0.0f32, -0.1, -0.2], [4.0f32, 0.1, 0.2]);
+        let c = |i: usize| [if i & 1 != 0 { hi[0] } else { lo[0] }, if i & 2 != 0 { hi[1] } else { lo[1] }, if i & 4 != 0 { hi[2] } else { lo[2] }];
+        // Six faces, two tris each, wound so the normal points out.
+        let quads = [[0, 2, 3, 1], [4, 5, 7, 6], [0, 1, 5, 4], [2, 6, 7, 3], [0, 4, 6, 2], [1, 3, 7, 5]];
+        let mut tris = Vec::new();
+        for q in quads { tris.push([c(q[0]), c(q[1]), c(q[2])]); tris.push([c(q[0]), c(q[2]), c(q[3])]); }
+        Mine { placement: 0, pos: [0.0; 3], damage: 80.0, radius: 15.0, bob_rate: 0.0, bob_amp: 0.0, script: 0,
+            tris, lo, hi, exploded: false, posed_y: 0.0, centre: [2.0, 0.0, 0.0], sph_r: 2.02, pending: 0, cause: 0 }
+    }
+
+    #[test]
+    fn a_round_through_the_beam_hits_it_and_a_miss_does_not() {
+        let m = beam_mine();
+        // Down onto the beam's middle from above: the top face (front-facing) at y 0.1.
+        let t = m.segment_t([2.0, 5.0, 0.0], [2.0, -5.0, 0.0]).expect("the round crosses the beam");
+        assert!((t - 0.49).abs() < 1e-4, "the top face at y 0.1 is t 0.49, got {t}");
+        // Sister: 0.3 beside the beam — inside the pick sphere, but the mesh refine misses.
+        assert!(m.segment_t([2.0, 5.0, 0.5], [2.0, -5.0, 0.5]).is_none(), "a miss beside the beam");
+        // Sister: a segment that stops short of the beam.
+        assert!(m.segment_t([2.0, 5.0, 0.0], [2.0, 1.0, 0.0]).is_none(), "the flight ends short");
+        // An exploded mine takes nothing.
+        let mut gone = beam_mine();
+        gone.exploded = true;
+        assert!(gone.segment_t([2.0, 5.0, 0.0], [2.0, -5.0, 0.0]).is_none());
+    }
+
+    #[test]
+    fn the_blast_reach_truncates_the_distance_like_explode_propagate() {
+        let m = beam_mine();
+        // dist − sph_r: 16.02 − 2.02 = 14.0 → int 14 → 80·(1 − 14/15) > 0: reached [M 0x17c518].
+        assert!(m.blast_reaches([2.0, 16.02, 0.0], 15.0, 80.0));
+        // 17.03 − 2.02 = 15.01 → int 15 → 80·(1 − 15/15) = 0 < 0.0002: not reached (sister).
+        assert!(!m.blast_reaches([2.0, 17.03, 0.0], 15.0, 80.0));
+        // Inside the sphere: full reach; a zero radius reaches nothing.
+        assert!(m.blast_reaches([2.0, 0.0, 0.0], 10.0, 80.0));
+        assert!(!m.blast_reaches([2.0, 0.0, 0.0], 0.0, 80.0));
     }
 }

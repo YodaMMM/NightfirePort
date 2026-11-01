@@ -51,6 +51,8 @@ fn steer_until(scene: &mut nf_view::scene::Scene, xz: [f32; 2], max: u32, mut un
 fn the_auto_switch_option_gate_gates_the_switch() {
     let Some(iso) = iso() else { eprintln!("NF_ISO not set — skipping"); return };
     let mut scene = nf_view::load(&iso, "07000005.bin", false).expect("load 07000005");
+    // hud-start: a load holds nothing (0x47 [M 0x1a7ef8:137]) — settle the start draw first.
+    nf_view::settle_start_draw(scene.sim.as_mut().unwrap());
     let held = scene.sim.as_ref().unwrap().gun.weapon;
     let drop_at = {
         let p = scene.sim.as_ref().unwrap().bond.pos;

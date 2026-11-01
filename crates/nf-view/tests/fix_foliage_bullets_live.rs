@@ -47,6 +47,8 @@ fn in_tree_span_x(x: f32) -> bool { x >= TREE_LO[0] - 0.2 && x <= TREE_HI[0] + 0
 fn the_flight_and_the_aim_trace_both_stop_on_the_core_behind_the_flagged_shell() {
     let Some(iso) = iso() else { eprintln!("NF_ISO not set — skipping"); return };
     let mut scene = nf_view::load(&iso, "07000005.bin", false).expect("load 07000005");
+    // hud-start: a load holds nothing (0x47 [M 0x1a7ef8:137]) - settle the start draw first.
+    nf_view::settle_start_draw(scene.sim.as_mut().unwrap());
     {
         let sim = scene.sim.as_mut().unwrap();
         sim.step_bond(Default::default(), false, false, false);
@@ -116,6 +118,8 @@ fn the_flight_and_the_aim_trace_both_stop_on_the_core_behind_the_flagged_shell()
 fn guard_style_bullets_stop_on_the_core_and_sight_on_the_shell() {
     let Some(iso) = iso() else { eprintln!("NF_ISO not set — skipping"); return };
     let mut scene = nf_view::load(&iso, "07000005.bin", false).expect("load 07000005");
+    // hud-start: a load holds nothing (0x47 [M 0x1a7ef8:137]) - settle the start draw first.
+    nf_view::settle_start_draw(scene.sim.as_mut().unwrap());
     let (eye, dir) = {
         let sim = scene.sim.as_mut().unwrap();
         sim.step_bond(Default::default(), false, false, false);
@@ -160,6 +164,8 @@ fn guard_style_bullets_stop_on_the_core_and_sight_on_the_shell() {
 fn the_0x40_leaf_cards_leave_the_aim_trace_only() {
     let Some(iso) = iso() else { eprintln!("NF_ISO not set — skipping"); return };
     let mut scene = nf_view::load(&iso, "07000005.bin", false).expect("load 07000005");
+    // hud-start: a load holds nothing (0x47 [M 0x1a7ef8:137]) - settle the start draw first.
+    nf_view::settle_start_draw(scene.sim.as_mut().unwrap());
     let sim = scene.sim.as_mut().unwrap();
     sim.step_bond(Default::default(), false, false, false);
     // The card plane spans (101.4-114.5, 24.75-25.75, 93.4-114.9) [D inst 125 obj 117]; the ray

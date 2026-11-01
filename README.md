@@ -160,6 +160,7 @@ Controls:
 | wheel or Q | cycle weapons |
 | 1, 2, 3 | pick a weapon |
 | G | cycle gadgets |
+| V | goggles: night sight, x-ray, off |
 | Esc | pause |
 | F10 | bug report |
 | F12 | screenshot |

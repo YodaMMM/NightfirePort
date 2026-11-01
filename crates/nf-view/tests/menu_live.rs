@@ -221,7 +221,11 @@ fn menu_special_death_does_not_panic() {
 fn menu_toggle_god_and_ammo_do_not_panic() {
     let Some((mut scene, mut dev)) = loaded() else { eprintln!("NF_ISO not set — skipping"); return };
     // B-11: assert the VISIBLE effect - god mode locks health at 100 + clears the hit flash; infinite ammo refills.
+    // hud-start: a fresh load holds nothing (0x47, `Player_InitWeapon` 0x1a7ef8:137); the start
+    // weapon is in hand after the first tick's no-holster draw — step once so `wi` is a real gun.
+    tick(&mut scene, 1);
     let sim = scene.sim.as_mut().unwrap();
+    assert_ne!(sim.gun.weapon, 0x47, "the start draw landed");
     sim.drones.health.health = 50.0;   // simulate Bond took damage
     sim.drones.health.flash = 0.5;    // hit flash active
     let wi = sim.gun.weapon as usize;
