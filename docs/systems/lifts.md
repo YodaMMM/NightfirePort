@@ -178,7 +178,7 @@ No lift SP/buttons on 0a; the ride here is the 09→0a level load.
 | the hold | — | stream 3: `Event{kind 3, params [0x1f4]}` at t0 and t630 | the script holds itself 499 ticks at each end of the cycle (event 3 → the delay = p0 − 1 [M 0x1da998]) — the bottom hold is pinned by the test while ch 0x75 is off | ported; pinned by `lifts_ride_live` |
 | the retirement | #245 TRIG Touch (roof deck, y 56.8..63.8) | out 0x75 | Bond on the roof deck → ch 0x75 → **SP_Update case 6**: the cycle script is freed, script B (0x06000A09, mode 1, 10 ticks) loads → its end deletes the SP (stay 1) — the paternoster stops once Bond reached the roof | ported (case 6); pinned by `lifts_ride_live` |
 | mid-shaft plate | #171 TRIG TouchOnce | out 0x53 | the exec-floor boarding marker | ported |
-| the ride gap (STALE) | — | — | docs/levels/0700000b.md:164 "the port does not carry a Bond standing on it" **predates the Control_InheritVelocity port**; the carry is proven (§3, `lifts_ride_live`). The walkreal's teleport stand-in for the balcony→exec leg remains (route shape, not the lift mechanism) | `lifts_ride_live` |
+| the ride gap (RESOLVED as not-a-route, 2026-11-01, level-0b-lift-exit) | — | — | docs/levels/0700000b.md:164 "the port does not carry a Bond standing on it" **predates the Control_InheritVelocity port**; the carry is proven (§3, `lifts_ride_live`). But the ride itself is NOT the game's balcony→exec transit: the cab (obj 'lift' 0x02000367, 1435 tris [D the 0x2E block]) is a **sealed cage** — the parented glass 0x2000421 ('lift_glass', flags 0x00040081 vs the car's 0x00040080) closes every face at body heights, the collide node's kind-exclusion word cel+0x98 is written only for room cels (parseentity_fixup 0x1d00c0:115/142, kinds 0xc023/0xc047) and the static parser writes only cel+0x94 (0x1d1998:101-103), so `Collide_Intersect` 0x1ebaa8:301-317's kind filters never open it; the interior floor tier (local −0.15) has no walkable opening (face rays at floor+0.5/+0.9/+1.5 hit on all 36 probed lines), and every exit from the ride surface (the roof slab, keyed +3.76 — where the feet ray [M 0x194188] lands) is walled or a floor hole (east: x 2..6 z 24.5..27.5 no floor to y 39; south: the shaft's south wall, top 55.5). The AI nav has no balcony→exec route (`nf-extract route` spawn→n41: code 5). Pinned by `walkreal_0700000b_live::the_paternoster_cab_is_a_sealed_cage` | the sealed-cage pin; the route up stays [S] unpinned (0700000b.md:65) |
 
 The exec→roof leg itself is the roof cut-scene (SP #177 0x060004FA: event 6 re-places Bond at
 [−14.71, 58.00, −2.06] — inside #245's volume [D pack 0790000b]) — the lift is the way DOWN
@@ -289,3 +289,15 @@ The only "ride" is the tether-wire crossing (five Wire placements); no lift mach
    Player_GetHeadPos [M 0x1a5170:101-106] — the 1.0 sphere never spans the exit box at the
    camera's hang-back (interact_07000009_live's ignore). A pick-origin fix is shared with every
    tuned reach and needs its own session.
+5. **0700000b, THE ROUTE UP (level-0b-lift-exit's open item)**: the cab is a sealed cage
+   (the sealed-cage pin), so the game's own balcony→exec transit is still unidentified. In
+   PCSX2 (FRESH boot, no save-state): (a) walk Bond from the spawn (28.9, 13.3, 28.7) west
+   along the balcony to the shaft lip and screenshot what the game shows at the shaft mouth —
+   whether the cab's cage has an open side the port's parse misses (gdbwatch the player's
+   ground object while standing at the lip during the bottom hold — Player_FeetOnPoint
+   0x194188's returned obj at 0x1943a8, expect either the balcony floor or a cab node);
+   (b) gdbwatch `switch_channels[0x53]` (0x26fc90 + 83) across a full ride attempt — the
+   mid-shaft plate #171 (box x −2.67..1.60, y 37.49..39.68 [D]) fires when the player is
+   INSIDE the shaft at mid height, which discriminates a real ride from the balcony walk;
+   (c) fieldprobe the shaft's south wall at (0.5..1.5, 46.8..48.5, 22.4..23.2) during the exec
+   pass — whether any frame shows an opening (the sill the port's ray grid reads as solid).
