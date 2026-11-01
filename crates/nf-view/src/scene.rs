@@ -8295,7 +8295,12 @@ pub fn build(level: &Level, cels_only: bool, skeletons: &HashMap<u8, Skeleton>, 
                         for id in 4u8..=6 {
                             let Some(dt) = skin.datums.iter().find(|d| d.id == id as u32 && d.bone >= 0) else { continue };
                             let binst = Instance { map: bmap, object: bobject, matrix: ident, placement: placement.clone() };
-                            add_instance(level, &binst, Layer::Character, Some((ci, Some(attachments.len() as u32))), &mut groups, None, None, None, None, [1.0; 3], &room_cels, u32::MAX, u32::MAX);
+                            // The whole view model draws in list 2 after psiClearZ [M View_AddObjects
+                            // 0x1e62d8:57-60 — the gun's 0x2000 flags word picks list 2; Game_Draw
+                            // 0x1e6f50:157-163 psiClearZ 0x10b9a0] — the bolts ride the same pass as
+                            // every other fp attachment (they are the gun's own loaded meshes, the
+                            // default node left them world-occludable).
+                            add_instance(level, &binst, Layer::Character, Some((ci, Some(attachments.len() as u32))), &mut groups, None, None, None, None, [1.0; 3], &room_cels, u32::MAX, VIEW_MODEL_NODE);
                             attachments.push(Attachment { character: ci, bone: dt.bone as usize, local: anim::quat_trans_to_mat(dt.q, dt.t), flash: None, tracer: None, dropped: false, aims_light: None, projectile: None, script: None, gas: None, effect: None, silencer: false, quiver_bolt: Some(id), swap_piece: false, watch_hand: None, pda_digit: None });
                         }
                     }
