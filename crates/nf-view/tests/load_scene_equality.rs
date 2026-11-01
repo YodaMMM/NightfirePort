@@ -64,7 +64,7 @@ const BASELINE: &[(&str, &str)] = &[
     // glass-guards-14 re-pin (01, 02): posed objects with glist flag 0x1 move to the alpha list
     // [M View_AddObjects 0x1e62d8:44-52]; the Draw key re-orders their material groups (same counts).
     ("07000002.bin", "1e24cd943df8ab7a 4523624 9461472 5281 4390315 82 11050 205 28 25 5"), // re-pinned 10-30: the rigid bodies (0xD8) on posed slots [M RB_EulerEvolve 0x1d7810]
-    ("07000005.bin", "c18ce5ee4f22d3cf 4426865 9260541 3624 4342524 74 10984 106 19 16 4"), // the two copter SPs + their script draw slots; re-pinned 10-26: the 0x3b dynamic objects ride posed slots [M View_AddObjects 0x1e62d8:33, DynamicObject_Update 0x18d3b8]; re-pinned 10-28: the searchlight heads' block-0x27 LOD meshes (OBJECT_SearchLightBroken) on their own slots [M Control_NextLOD 0x1349b0] (+1134 verts, +1 material)
+    ("07000005.bin", "74f4244785871cdc 4426865 9260541 3614 4342576 74 10984 106 19 16 4"), // re-pinned 10-31: the 13 coronas draw camera-facing on posed slots [M View_DrawObjectGlist 0x1e67a4-0x1e6810] (+52 char_verts, -10 materials: the static per-corona World groups merge into slot groups); the two copter SPs + their script draw slots; re-pinned 10-26: the 0x3b dynamic objects ride posed slots [M View_AddObjects 0x1e62d8:33, DynamicObject_Update 0x18d3b8]; re-pinned 10-28: the searchlight heads' block-0x27 LOD meshes (OBJECT_SearchLightBroken) on their own slots [M Control_NextLOD 0x1349b0] (+1134 verts, +1 material)
     // lift-indicators-09 re-pin: one draw slot per `Script_SubScriptStart` op per running SP
     // [M 0x1db050] — 0700000c's multi-SP sub chains add 6 slots (+248 vertices, +576 indices,
     // +1 attachment); 07000014's vent-lid SPs are placed SPs (unchanged), the rest have no
