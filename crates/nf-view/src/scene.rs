@@ -736,6 +736,13 @@ pub struct Sim {
     pub mp_anim: Vec<nf_game::mp::body_anim::MpBodyAnim>,
     /// The 16 player anim-set descriptors (ACTION.ELF 0x2b91b0) the body clocks pick from [D].
     pub mp_anim_sets: Option<nf_formats::mpanim::MpAnimSets>,
+    /// Bond's own third-person anim object in single player (`Player_Init` 0x1910f8 builds it on
+    /// every level; `anim+0xC8 = 0x407`, posed, at the 07000005 start [L ee_start_05.bin]): the SP
+    /// set (selector 999) the walk/crouch substates tick through `AnimSetUpdate` 0x1c0938, and the
+    /// stance transitions — the same script-list machine as the MP bodies (`sp: true`). Ticked by
+    /// `advance_bond_anim`; the drones' `Drone_View_Bones` sight points read its pose
+    /// (`bond_view_bones`).
+    pub bond_anim: nf_game::mp::body_anim::MpBodyAnim,
     /// mp-body-look: per slot, the last nonzero `mp_held` — a timed-out remote is fed `NEUTRAL`
     /// (held 0) every tick, which would blink its body's gun away. Draw-only state.
     pub mp_last_held: [u8; nf_net::MAX_AGENTS],
@@ -3490,6 +3497,7 @@ impl Sim {
             }
             None => use_key,
         };
+        self.advance_bond_anim();
         self.run(self.bond.pos, self.bond.sphere_centre(), head, look, aim, trigger, input.aiming || input.scope, reload, use_key, stick);
         self.drones.net_bodies = None;
         // `Player_Zoom` (0x1a1a70) — weapon-handling: the game's own zoom, every weapon (no scope-flag
@@ -5151,6 +5159,9 @@ impl Sim {
         // The zero-g "moving" read: the thruster pair, not a position change (`Drones::player_move_local`).
         self.drones.player_move_local = (self.bond.zero_g_active && matches!(self.bond.substate, nf_game::player::SS_ZEROG_8 | nf_game::player::SS_ZEROG_9))
             .then_some(self.bond.local);
+        // The drones' sight points: Bond's seven `Drone_View_Bones` on his posed body
+        // (`DroneVision_SeekOpponentLOS` 0x175cb8 → `DroneFunc_GetBonePos` 0x149bd0).
+        self.drones.bond_view_bones = self.bond_view_bones();
         // The class byte the AI's `ObjectIsArmed` 0x178768 reads: Bond obj+0xdc+0x62. `Player_WeaponSelect`
         // 0x1a2cc0 copies the request (+0x63) into it at the switch's START (the `weapon_data[+0x64].+0xc4
         // == 0` arm — +0x64 is 0x47 from InitWeapon 0x1a7ef8:137-139), so mid-holster the AI already reads
@@ -5644,7 +5655,7 @@ impl Sim {
             // pitch (the body faces the view yaw — no twist).
             Some(nf_game::mp::body_anim::MpBodyInput {
                 alive: self.mp_dead_ticks[slot] == 0, weapon, class, crouch: b.crouched,
-                fwd: b.local[1], strafe: b.local[0], aim: Some([0.0, b.pitch * std::f32::consts::FRAC_PI_2]),
+                fwd: b.local[1], strafe: b.local[0], aim: Some([0.0, b.pitch * std::f32::consts::FRAC_PI_2]), sp: false,
             })
         } else {
             let bot = m.bots.iter().find(|b| b.slot == slot)?;
@@ -5661,7 +5672,7 @@ impl Sim {
             });
             Some(nf_game::mp::body_anim::MpBodyInput {
                 alive: !bot.dead, weapon, class, crouch: body.crouched,
-                fwd: body.local[1], strafe: body.local[0], aim,
+                fwd: body.local[1], strafe: body.local[0], aim, sp: false,
             })
         }
     }
@@ -10019,7 +10030,7 @@ pub fn build(level: &Level, cels_only: bool, skeletons: &HashMap<u8, Skeleton>, 
             // The difficulty was set before the creates above (the game's GameState+0x28 pick);
             // the old direct-load hardcode `= 1` moved into the build parameter so replay loads
             // pass 1 and the front-end path passes the menu's pick.
-            Some(Sim { drones, tables: d.tables.clone(), props, scripts: d.scripts.clone(), weapons, world, level: d.level_id, char_drone, char_script, char_script_skin, seq_index, seqs, skins: level.skins.clone(), skeletons: skeletons.clone(), nav, covers, ai_points, tuning: d.tuning.clone(), hitboxes, sfx: d.sfx.clone(), volumes, glist_bounds, models, gun: nf_game::gun::Gun::new(2, 7, 41), bond, cursor: [0.0; 2], cross: [0.0; 2], view_script: 0, first_person: false, last_shot: None, shot_tick: false, view_time: 0.0, view_speed: 1.0, bob: [0.0; 2], aiming: false, free_aim: false, auto_aim: false, rapid_fire: false, zoom: 1.0, zoom_target: 1.0, zoom_saved: Vec::new(), zoom_aim_prev: false, disabled: false, surfaces: d.surfaces.clone(), voices: d.voices.clone(), step_dist: 0.0, wires, creepwalls, creeping: false, wire_anims, wire_channel: 0, ladders, icons, view_model_ids: std::collections::HashSet::new(), cross_state: 2, cels: sim_cels, char_ambient, view_model_chars: Vec::new(), mp_body_chars: Vec::new(), bond_body_char: None, mp_last_held: [2; nf_net::MAX_AGENTS], mp_weapon_loaded: Vec::new(), ambient_lookups: std::cell::Cell::new(0), mp_draw_cache: Default::default(), drone_draw_cache: (0..crate::pose_pool::MAX_SLOTS).map(|_| Default::default()).collect(), mp_anim: (0..nf_net::MAX_AGENTS).map(|_| nf_game::mp::body_anim::MpBodyAnim::new()).collect(), mp_anim_sets: d.mp_anims.as_ref().map(|a| nf_formats::mpanim::MpAnimSets { sets: a.sets }), sun_seen: false, lang: None, hud: Default::default(), smoke: Vec::new(), room_cell: cel_graph.room_to_cell.clone(), prev_trigger: false,
+            Some(Sim { drones, tables: d.tables.clone(), props, scripts: d.scripts.clone(), weapons, world, level: d.level_id, char_drone, char_script, char_script_skin, seq_index, seqs, skins: level.skins.clone(), skeletons: skeletons.clone(), nav, covers, ai_points, tuning: d.tuning.clone(), hitboxes, sfx: d.sfx.clone(), volumes, glist_bounds, models, gun: nf_game::gun::Gun::new(2, 7, 41), bond, cursor: [0.0; 2], cross: [0.0; 2], view_script: 0, first_person: false, last_shot: None, shot_tick: false, view_time: 0.0, view_speed: 1.0, bob: [0.0; 2], aiming: false, free_aim: false, auto_aim: false, rapid_fire: false, zoom: 1.0, zoom_target: 1.0, zoom_saved: Vec::new(), zoom_aim_prev: false, disabled: false, surfaces: d.surfaces.clone(), voices: d.voices.clone(), step_dist: 0.0, wires, creepwalls, creeping: false, wire_anims, wire_channel: 0, ladders, icons, view_model_ids: std::collections::HashSet::new(), cross_state: 2, cels: sim_cels, char_ambient, view_model_chars: Vec::new(), mp_body_chars: Vec::new(), bond_body_char: None, mp_last_held: [2; nf_net::MAX_AGENTS], mp_weapon_loaded: Vec::new(), ambient_lookups: std::cell::Cell::new(0), mp_draw_cache: Default::default(), drone_draw_cache: (0..crate::pose_pool::MAX_SLOTS).map(|_| Default::default()).collect(), mp_anim: (0..nf_net::MAX_AGENTS).map(|_| nf_game::mp::body_anim::MpBodyAnim::new()).collect(), bond_anim: nf_game::mp::body_anim::MpBodyAnim::new(), mp_anim_sets: d.mp_anims.as_ref().map(|a| nf_formats::mpanim::MpAnimSets { sets: a.sets }), sun_seen: false, lang: None, hud: Default::default(), smoke: Vec::new(), room_cell: cel_graph.room_to_cell.clone(), prev_trigger: false,
             mp_bonds: [const { None }; nf_net::MAX_AGENTS],
             mp_local_slot: 0,
             mp_body_speed: [0.0; nf_net::MAX_AGENTS],
@@ -13878,8 +13889,53 @@ impl Sim {
     /// 0x1c4270; a negative step plays it backwards) and its run is synced to it (mode 2) at the run
     /// weight. None when the list is empty or a script is missing (the caller's fallback).
     pub fn mp_body_local_pose(&self, slot: usize, skel: &nf_formats::character::Skeleton, skin: &nf_formats::character::Skin) -> Option<nf_game::anim::Pose> {
+        self.body_local_pose(self.mp_anim.get(slot)?, skel, skin)
+    }
+
+    /// Bond's single-player anim object, once per tick after his movement (`Player_SSWalk` 0x192310 /
+    /// `Player_SSCrouch` 0x1924c0 call `AnimSetUpdate` with `BLData+0x18` forward; the stance
+    /// change at the end of the tick plays the transition [M 0x190630]). Only the walk substate
+    /// (crouch included — the port's `crouched`) runs the set; MP bodies have their own clocks.
+    pub fn advance_bond_anim(&mut self) {
+        if self.mp.is_some() || self.bond.substate != nf_game::player::SS_WALK { return; }
+        let Some(sets) = self.mp_anim_sets.as_ref() else { return };
+        let inp = nf_game::mp::body_anim::MpBodyInput {
+            alive: self.drones.health.health > 0.0, weapon: self.gun.weapon, class: 999, crouch: self.bond.crouched,
+            fwd: self.bond.local[1], strafe: self.bond.local[0], aim: None, sp: true,
+        };
+        let scripts = &self.scripts;
+        let lens = |id: u32| scripts.get(&id).map(|s| (s.length, s.looping));
+        self.bond_anim.tick(sets, &lens, &inp);
+    }
+
+    /// Bond's seven `Drone_View_Bones` world points (`nf_game::drone::DRONE_VIEW_BONES`): his posed
+    /// body's palette translations. The game's palette places the root bone AT the object
+    /// (`psiBuildMatrixPalette` 0x111498 `RotTransMat` with the root translation zeroed by
+    /// `AnimSeqTick` 0x1c28d0 — docs/formats/animation.md), measured on the player: bone 0 =
+    /// obj+0x30 exactly at the 07000005 / 0700000a starts [L ee_start_05.bin / ee_start_0700000a.bin
+    /// anim+0xB8 row 0 +0x30 − obj+0x30 = 0]. So: the local pose (root translation zeroed) through
+    /// the object matrix at `obj+0x30` (`Bond::pos`) and the object yaw. None outside the walk
+    /// substate, in MP, or without the skin / an empty script list.
+    pub fn bond_view_bones(&self) -> Option<[[f32; 3]; 7]> {
+        if self.mp.is_some() || self.bond.substate != nf_game::player::SS_WALK { return None; }
+        let skin = self.skins.get(&nf_game::player::player_skin_hash(self.level))?;
+        let skel = self.skeletons.get(&skin.skeleton)?;
+        let mut local = self.body_local_pose(&self.bond_anim, skel, skin)?;
+        if let Some(r) = local.first_mut() { r.0 = [0.0; 3]; }
+        let world = anim::world_pose(&local, skin);
+        let m = nf_formats::placement::object_matrix([0.0, self.bond.yaw, 0.0], self.bond.pos);
+        let mut out = [[0.0f32; 3]; 7];
+        for (o, &b) in out.iter_mut().zip(nf_game::drone::DRONE_VIEW_BONES.iter()) {
+            let w = anim::mul(world.get(b as usize)?, &m);
+            *o = [w[3][0], w[3][1], w[3][2]];
+        }
+        Some(out)
+    }
+
+    /// One body's local pose from its script list (an MP slot's `mp_anim`, or SP Bond's
+    /// `bond_anim`) — see `mp_body_local_pose`.
+    fn body_local_pose(&self, a: &nf_game::mp::body_anim::MpBodyAnim, skel: &nf_formats::character::Skeleton, skin: &nf_formats::character::Skin) -> Option<nf_game::anim::Pose> {
         use nf_game::mp::body_anim::LayerKind;
-        let a = self.mp_anim.get(slot)?;
         if a.layers.is_empty() { return None; }
         let factors = a.blend_factors();
         let mut out: Option<nf_game::anim::Pose> = None;
