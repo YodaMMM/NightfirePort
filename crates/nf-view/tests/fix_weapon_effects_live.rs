@@ -46,6 +46,8 @@ fn alive_casings(scene: &nf_view::scene::Scene) -> usize {
 fn walking_backwards_spawns_nothing() {
     let Some(iso) = iso() else { eprintln!("NF_ISO not set — skipping"); return };
     let mut scene = nf_view::load(&iso, "07000005.bin", false).expect("load");
+    // hud-start: a load holds nothing (0x47 [M 0x1a7ef8:137]) — settle the start draw first.
+    nf_view::settle_start_draw(scene.sim.as_mut().unwrap());
     {
         let sim = scene.sim.as_mut().unwrap();
         for _ in 0..4 { sim.step_bond(Input::default(), false, false, false); }
@@ -70,6 +72,8 @@ fn walking_backwards_spawns_nothing() {
 fn the_sentinel_missile_explodes_on_impact() {
     let Some(iso) = iso() else { eprintln!("NF_ISO not set — skipping"); return };
     let mut scene = nf_view::load(&iso, "07000005.bin", false).expect("load");
+    // hud-start: a load holds nothing (0x47 [M 0x1a7ef8:137]) — settle the start draw first.
+    nf_view::settle_start_draw(scene.sim.as_mut().unwrap());
     give_and_switch(&mut scene, 0x2c);
     {
         let sim = scene.sim.as_mut().unwrap();
@@ -99,6 +103,8 @@ fn the_sentinel_missile_explodes_on_impact() {
 fn a_plain_gun_bullet_never_explodes() {
     let Some(iso) = iso() else { eprintln!("NF_ISO not set — skipping"); return };
     let mut scene = nf_view::load(&iso, "07000005.bin", false).expect("load");
+    // hud-start: a load holds nothing (0x47 [M 0x1a7ef8:137]) — settle the start draw first.
+    nf_view::settle_start_draw(scene.sim.as_mut().unwrap());
     {
         let sim = scene.sim.as_mut().unwrap();
         for _ in 0..4 { sim.step_bond(Input::default(), false, false, false); }
@@ -119,6 +125,8 @@ fn a_plain_gun_bullet_never_explodes() {
 fn the_mgl_grenade_mode_detonates_on_contact() {
     let Some(iso) = iso() else { eprintln!("NF_ISO not set — skipping"); return };
     let mut scene = nf_view::load(&iso, "07000005.bin", false).expect("load");
+    // hud-start: a load holds nothing (0x47 [M 0x1a7ef8:137]) — settle the start draw first.
+    nf_view::settle_start_draw(scene.sim.as_mut().unwrap());
     give_and_switch(&mut scene, 0x2a);
     {
         let sim = scene.sim.as_mut().unwrap();
@@ -141,6 +149,8 @@ fn the_mgl_grenade_mode_detonates_on_contact() {
 fn the_mgl_delay_mode_bounces_and_waits_for_the_fuse() {
     let Some(iso) = iso() else { eprintln!("NF_ISO not set — skipping"); return };
     let mut scene = nf_view::load(&iso, "07000005.bin", false).expect("load");
+    // hud-start: a load holds nothing (0x47 [M 0x1a7ef8:137]) — settle the start draw first.
+    nf_view::settle_start_draw(scene.sim.as_mut().unwrap());
     give_and_switch(&mut scene, 0x2a);
     // The 'Delay' record is the MODE twin (the ○ button, action 12 [M 0x1a24c8:246-260] — the
     // direct number-key select lands on the base; the live session switched with ○ too).
@@ -178,6 +188,8 @@ fn the_mgl_delay_mode_bounces_and_waits_for_the_fuse() {
 fn one_p2k_shot_spawns_exactly_the_game_effect_set() {
     let Some(iso) = iso() else { eprintln!("NF_ISO not set — skipping"); return };
     let mut scene = nf_view::load(&iso, "07000005.bin", false).expect("load");
+    // hud-start: a load holds nothing (0x47 [M 0x1a7ef8:137]) — settle the start draw first.
+    nf_view::settle_start_draw(scene.sim.as_mut().unwrap());
     {
         let sim = scene.sim.as_mut().unwrap();
         for _ in 0..4 { sim.step_bond(Input::default(), false, false, false); }

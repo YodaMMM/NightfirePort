@@ -22,6 +22,8 @@ fn iso() -> String { std::env::var("NF_ISO").expect("NF_ISO") }
 /// `Camera_UpdateGlbVars` advances it on the frames after [M 0x1bada0:16-20]).
 fn walk_to_the_exit(iso: &str, stop_at_fire: bool) -> Walker {
     let mut w = Walker::new(nf_view::load(iso, "07000001.bin", false).expect("load 07000001"));
+    // hud-start: a load holds nothing (0x47 [M Player_InitWeapon 0x1a7ef8:137]) - settle the start draw first.
+    nf_view::settle_start_draw(w.scene.sim.as_mut().unwrap());
     {
         let sim = w.scene.sim.as_ref().unwrap();
         let p = sim.bond.pos;
@@ -1021,11 +1023,17 @@ fn the_exit_fade_starts_on_the_exit_tick_runs_the_games_300_frames_then_the_leve
         let a = sim.drones.exit_fade_view().unwrap().alpha;
         assert!((a - 100.0 / 300.0).abs() < 1e-6,
             "the fade alpha is the burned fraction of the push (got {a}) [M 0x1bada0:16-20]");
-        // The visible pane: the game draws psiFadeView(0,0,0, level·255) — black at the faded
-        // alpha [M 0x1bbdd8 colour bytes, 0x1e6f50:203-209]. The port's overlay quad matches.
+        // The visible pane: the game draws psiFadeView(0,0,0, level·255) — black, its alpha byte
+        // straight into the GS where 0x80 = 1.0 [M 0x1bbdd8 colour bytes, 0x1e6f50:203-209,
+        // CreateTotalScreenSprite 0x1181b0 ALPHA_1 0x44] — so the cover is byte/128
+        // (`hud::fade_cover`, hud-start): 85/128 here, not the raw 1/3.
         let hud = w.scene.script_overlay_hud(4.0 / 3.0);
+        let want = nf_view::hud::fade_cover(a);
+        assert!((want - 85.0 / 128.0).abs() < 1.5 / 128.0, "byte (int)(255·a) ≈ 85 → ≈85/128, got {want}");
+        let got: Vec<f32> = hud.v.iter().filter(|v| v.c[0] == 0.0 && v.c[1] == 0.0 && v.c[2] == 0.0).map(|v| v.c[3]).collect();
+        assert!(got.iter().any(|c| (c - want).abs() < 1e-3), "fade quad alphas {got:?}, want {want}");
         assert!(hud.v.iter().any(|v| v.c[0] == 0.0 && v.c[1] == 0.0 && v.c[2] == 0.0
-                && (v.c[3] - 100.0 / 300.0).abs() < 1e-3),
+                && (v.c[3] - want).abs() < 1e-3),
             "the fade pane draws black at the faded alpha [M 0x1bbdd8 + 0x1e6f50 psiFadeView]");
     }
     // The rest of the count: the hold clears at exactly 300 with the request intact

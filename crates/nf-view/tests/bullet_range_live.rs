@@ -22,6 +22,8 @@ const TREE_HI_X: f32 = 93.52;
 /// round's whole flight (the fire input on tick 0 only, mirroring fix_foliage_bullets_live).
 fn fire_one_p2k(iso: &str, x: f32) -> Vec<[f32; 3]> {
     let mut scene = nf_view::load(iso, "07000005.bin", false).expect("load 07000005");
+    // hud-start: a load holds nothing (0x47 [M 0x1a7ef8:137]) - settle the start draw first.
+    nf_view::settle_start_draw(scene.sim.as_mut().unwrap());
     {
         let sim = scene.sim.as_mut().unwrap();
         sim.step_bond(Default::default(), false, false, false);
@@ -91,6 +93,8 @@ fn the_p2k_round_dies_midair_before_the_wall_80_units_out() {
 fn the_sniper_record_rounds_fly_far_past_the_p2k_boundary() {
     let Some(iso) = iso() else { eprintln!("NF_ISO not set — skipping"); return };
     let mut scene = nf_view::load(&iso, "07000005.bin", false).expect("load 07000005");
+    // hud-start: a load holds nothing (0x47 [M 0x1a7ef8:137]) - settle the start draw first.
+    nf_view::settle_start_draw(scene.sim.as_mut().unwrap());
     let sim = scene.sim.as_ref().unwrap();
     let vol = nf_game::bullet::PlayerVolume { feet: [1e4, 0.0, 1e4], height: 0.1, radius: 0.1 };
     let x0 = 211.8f32;

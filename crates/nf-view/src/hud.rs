@@ -144,7 +144,7 @@ pub fn script_overlay(fade: Option<nf_game::drone::ViewFade>, letterbox: bool, s
             // fullscreen SPRITE packet (Q=1.0, z-test off) per viewer. This quad is black; the game
             // fades to the viewer's own r,g,b — open render-parity check
             // (docs/systems/psi-render-plumbing.md).
-            h.quad(Anchor::Stretch, 0, SCOPE_STRIP_TEX, 0, 0.0, 0.0, SW, SH, [0.0; 4], (false, false), [0.0, 0.0, 0.0, f.alpha.min(1.0)]);
+            h.quad(Anchor::Stretch, 0, SCOPE_STRIP_TEX, 0, 0.0, 0.0, SW, SH, [0.0; 4], (false, false), [0.0, 0.0, 0.0, fade_cover(f.alpha)]);
         }
     }
     // fix-grenade-types: the flashbang whiteout — `Player_Update` feeds `GlobalBlur` and the white
@@ -154,6 +154,20 @@ pub fn script_overlay(fade: Option<nf_game::drone::ViewFade>, letterbox: bool, s
         h.quad(Anchor::Stretch, 0, SCOPE_STRIP_TEX, 0, 0.0, 0.0, SW, SH, [0.0; 4], (false, false), [1.0, 1.0, 1.0, flashbang.min(1.0)]);
     }
     h.finish()
+}
+
+/// The screen cover of a viewer fade at state alpha `a` (0..1, `viewer+0x228`). The fade byte is
+/// `(int)(a·255)` [M Camera_UpdateGlbVars 0x1bada0:18-31] and `CreateTotalScreenSprite` 0x1181b0
+/// writes it UNSCALED into the sprite's RGBAQ alpha (`r | g<<8 | b<<16 | a<<24`) under
+/// ALPHA_1 = 0x44 — (Cs − Cd)·As/128 + Cd [M 0x1181b0: the A+D pair 0x44 → reg 0x42]. The GS
+/// takes As = 0x80 as 1.0, so every byte ≥ 128 covers the screen completely (the colour clamps)
+/// and only the lower half of the byte range fades: the 45-tick entry fade (−1/45 per tick from
+/// 1.0 [M Player_Init 0x1910f8:45, Camera_SetFade 0x1bbdd8]) holds BLACK for ~22 ticks, then
+/// lightens over the next ~23. The port used to read the state alpha as the cover directly, so
+/// the level was half lit after 22 ticks and almost fully lit at ~36.
+pub fn fade_cover(a: f32) -> f32 {
+    let byte = (a.clamp(0.0, 1.0) * 255.0) as u32;
+    (byte as f32 / 128.0).min(1.0)
 }
 
 /// How a sprite keeps its place in a window wider (or narrower) than the game's 4:3 screen: pixels keep the 4:3

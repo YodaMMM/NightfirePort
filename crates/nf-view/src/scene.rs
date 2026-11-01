@@ -7494,8 +7494,23 @@ impl Scene {
         // [M 0x1bbdd8 disasm 0x1bbe08-0x1bbe18: the refuse gate is mode(+0x234) != 0 AND
         // active(+0x235) != 0] — viewer 6's object is idle unless a previous exit fade runs, so
         // the exit fade can never be refused or covered by a script fade.
-        let fade = sim.drones.exit_fade_view().or_else(|| sim.drones.view_fade).or_else(|| sim.drones.spawn_fade_view());
+        // hud-start: the ENTRY fade is not in this chain any more — it draws UNDER the gameplay
+        // HUD (`entry_fade_hud`).
+        let fade = sim.drones.exit_fade_view().or_else(|| sim.drones.view_fade);
         crate::hud::script_overlay(fade, sim.drones.letterbox, &sprites, &self.hud_textures, aspect, flash)
+    }
+
+    /// hud-start: `Player_Init`'s entry fade (`Camera_SetFade(-45, 0xff, 1)` on the player's
+    /// viewer [M 0x1910f8:45]) as its own frame, which the callers draw BEFORE the gameplay HUD.
+    /// The PS2 level starts show the health iris, the weapon name and the objective label at
+    /// full strength over a still-black screen (07000007 rel f20, 0700000c rel f27, 07000005 rel
+    /// f41 [L PCSX2 captures, audits/agents/visual-sweep-1031]) — the fade covers the 3D view
+    /// only. Only while it is the fade that would show (no exit hold, no script fade — those
+    /// keep their place over the HUD in `script_overlay_hud`).
+    pub fn entry_fade_hud(&self, aspect: f32) -> crate::gpu::HudFrame {
+        let Some(sim) = self.sim.as_ref() else { return Default::default() };
+        if sim.drones.exit_fade_view().is_some() || sim.drones.view_fade.is_some() { return Default::default(); }
+        crate::hud::script_overlay(sim.drones.spawn_fade_view(), false, &[], &self.hud_textures, aspect, 0.0)
     }
 
     /// One level-placed pickup (type 0xF0) — the ONE builder both `Scene::build` sides call (the draw
