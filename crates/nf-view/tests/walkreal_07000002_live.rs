@@ -156,7 +156,15 @@ fn leg_to(w: &mut Walker, at: [f32; 3], name: &str, arrive: f32) {
     w.lenient = true;
     w.walk_to(Wp { at, act: Act::None, arrive }, name);
     w.lenient = false;
-    engage_in_view(w, 14.0, name);
+    if engage_in_view(w, 14.0, name) {
+        // The same return as the nodes' above: the leg-end fight strafed Bond off the leg's end
+        // (the south-hall fight left him at (−31.2, 5.1, 29.2)) and the next leg's nav, planned
+        // from there, took the upper-floor detour and gave up at the 3000-tick cap one floor
+        // above "south hall west" (y 6.4 at z 12.7).
+        w.lenient = true;
+        w.walk_to(Wp { at, act: Act::None, arrive }, &format!("{name} again"));
+        w.lenient = false;
+    }
 }
 
 /// Fight every enabled hostile within `radius` that Bond can see a part of right now (the walker's
@@ -404,6 +412,12 @@ fn walk_the_castle_all_objectives_real_health() {
     // level-02-every-objective-5 2026-10-31). This walk keeps it for the g3 nav-10 body-block
     // (Bond took his fire for ~1400 ticks there until the fail chain restarted — the arm's reason).
     w.body_block_response = true;
+    // The type-2 guards carry 12 health, captains 24 [L ee_02b.bin]: Bond aims for the head
+    // (`Walker::prefer_head`), as a player does, or the scripted fights run the walk dry.
+    w.prefer_head = true;
+    // And closes to 6 u before firing (`Walker::close_in`): the long-range fights at 11-14 u
+    // spent the clips the geisha-2 room needed.
+    w.close_in = Some(6.0);
     {
         let sim = w.scene.sim.as_ref().unwrap();
         let p = sim.bond.pos;
