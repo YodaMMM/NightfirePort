@@ -180,7 +180,7 @@ fn idle_bond_is_approached_and_shot_at_every_selectable_difficulty() {
                 for &p in guards {
                     let dr = sim.drones.list.iter().find(|d| d.placement == p && d.present)
                         .unwrap_or_else(|| panic!("d{diff}: #{p} exists [L]"));
-                    assert_eq!(dr.state, nf_game::drone::state::GO_TO_GOAL as _,
+                    assert_eq!(dr.state as u32, nf_game::drone::state::GO_TO_GOAL as u32,
                         "d{diff}: #{p} is in GoToGoal 0x63 on tick 1 [L f1]");
                 }
             }
