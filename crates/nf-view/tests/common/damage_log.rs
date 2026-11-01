@@ -95,6 +95,13 @@ pub struct DamageLog {
     /// Inside a return-fire resupply pass (`resupply`'s nav walks run the leg walks, whose
     /// return-fire gate would call `resupply` again — the recursion overflowed the stack).
     pub resupplying: bool,
+    /// OPT-IN lane tactics for a long open-floor crossing (the 07000013 lobby probe): the wide
+    /// shooters window (48 u / 7.5 u instead of 20 u / 6.0 u), the damage-weighted target pick,
+    /// and the floor-drop resupply passes around a fight. Off = the plain return fire every
+    /// other walk is pinned against: with the three on for every walk, the 07000001 contact,
+    /// 07000002 castle and 07000007 party real-damage walks went red (a death at the 01 stairwell,
+    /// 6000-tick stalls on the 02 geisha and 07 east-stair legs) and they pass with them off.
+    pub lane_fights: bool,
     last_health: f32,
     last_hits: Vec<(u32, usize, f32)>,
 }
@@ -173,10 +180,11 @@ impl DamageLog {
     /// in the last 90 with his aim point on Bond (`opp_target` within 1.5 u). A player answers
     /// whoever shoots him; a guard that has not opened fire (a party guest's guard, an unalerted
     /// patrol) is left alone, so stealth and no-kill legs are unchanged. The caller keeps the
-    /// ones it can see a part of (`exposed_aim`). The vertical window is 7.5: the 07000013 tower
+    /// ones it can see a part of (`exposed_aim`). The window is 20 u / 6.0 u; with `lane_fights`
+    /// it widens. The wide vertical window is 7.5: the 07000013 tower
     /// lobby's mezzanine deck sits 6.05 above the floor (the sniper at y −362.36 vs −368.43 [D
     /// the drone dump]) and the level-13-chain-difficulty real-damage run died under his fire
-    /// with the old 6.0 window. The horizontal window is 48, not 20: the same sniper works the
+    /// with the old 6.0 window. The wide horizontal window is 48, not 20: the same sniper works the
     /// lobby's north lane from d ≈ 43 [L the level-13 real-damage death log] — the fight is a
     /// STAND, no chase, and `exposed_part`'s world trace still decides reachability, so a far
     /// guard the stand cannot hit just times the fight out.
@@ -187,7 +195,8 @@ impl DamageLog {
         let mut c: Vec<(f32, usize)> = sim.drones.list.iter().enumerate()
             .filter(|(i, d)| {
                 if !(d.present && d.enabled && !d.corpse && d.health > 0.0 && d.team == 1) { return false; }
-                if dxz(d.pos) > 48.0 || (d.pos[1] - b[1]).abs() > 7.5 { return false; }
+                let (wxz, wy) = if self.lane_fights { (48.0, 7.5) } else { (20.0, 6.0) };
+                if dxz(d.pos) > wxz || (d.pos[1] - b[1]).abs() > wy { return false; }
                 let hit = sim.drones.player_hits.iter().rev()
                     .take_while(|h| now.saturating_sub(h.0) <= 240)
                     .any(|h| h.1 == *i);
@@ -263,7 +272,8 @@ impl Walker {
             let sim = self.scene.sim.as_ref().unwrap();
             if sim.disabled || !sim.bond.grounded { return false; }
             let cands = self.dmg.shooters(sim);
-            // Fight the shooter who is actually HURTING Bond first: the 07000013 crossing mixed
+            // The plain pick: the nearest shooter Bond can see (`shooters` is nearest first).
+            // With `lane_fights`, fight the shooter who is actually HURTING Bond first: the 07000013 crossing mixed
             // 0-damage desk guards with two rifle guards (weapon 0x18, 7.0 a hit) at 25-45 u, and
             // nearest-first spent the whole crossing on the desks while the rifles chewed 78
             // health [L the level-13 real-damage death logs]. Damage over the same 240-frame
@@ -279,12 +289,16 @@ impl Walker {
                 let d = &sim.drones.list[i];
                 ((d.pos[0] - sim.bond.pos[0]).powi(2) + (d.pos[2] - sim.bond.pos[2]).powi(2)).sqrt()
             };
-            let pick = cands.iter().copied()
-                .filter(|&i| DamageLog::visible(sim, i))
-                .min_by(|&a, &b| {
-                    dmg_of(b).total_cmp(&dmg_of(a))
-                        .then(dist_of(a).total_cmp(&dist_of(b)))
-                });
+            let pick = if !self.dmg.lane_fights {
+                cands.iter().copied().find(|&i| DamageLog::visible(sim, i))
+            } else {
+                cands.iter().copied()
+                    .filter(|&i| DamageLog::visible(sim, i))
+                    .min_by(|&a, &b| {
+                        dmg_of(b).total_cmp(&dmg_of(a))
+                            .then(dist_of(a).total_cmp(&dist_of(b)))
+                    })
+            };
             if trace && pick.is_none() && !cands.is_empty() {
                 eprintln!("[rf-trace] {label} tick {}: shooters {:?} none visible (bond {:?}, health {:.1}, clip {} spare {})",
                     self.total_ticks, cands, sim.bond.pos, sim.drones.health.health, sim.gun.clip, sim.gun.spare);
@@ -295,7 +309,7 @@ impl Walker {
         if self.dmg.cooldown.iter().any(|&(i, until)| i == di && self.total_ticks < until) { return false; }
         // Only with a gun in hand: a player without rounds walks on (the 16 arrival carries
         // the fists alone — the weapon cycle stood Bond 730 ticks at the ramp foot under fire).
-        // But dry NEAR a fight is not the old walk's dry: the guards Bond dropped litter the
+        // With `lane_fights`, dry NEAR a fight is not the old walk's dry: the guards Bond dropped litter the
         // floor with their guns, and a player picks one up. One resupply pass before giving up
         // (level-13-chain-difficulty: the fight at the security-room door ran on clip 2 spare 0
         // and the mezzanine sniper outlived it).
@@ -310,14 +324,15 @@ impl Walker {
                     || inv.carried.get(sim.weapons.ammo_type(w)).copied().unwrap_or(0) > 0
             })
         };
+        let lane = self.dmg.lane_fights;
         if !armed(self) {
-            if !self.dmg.resupplying {
+            if lane && !self.dmg.resupplying {
                 self.dmg.resupplying = true;
                 self.resupply(label);
                 self.dmg.resupplying = false;
             }
             if !armed(self) { return false; }
-        } else if !self.dmg.resupplying {
+        } else if lane && !self.dmg.resupplying {
             // A nearly-dry gun starts a fight it cannot finish (the door fight ran on clip 2
             // spare 0 and the 24 hp sniper outlived it): restock first when the floor has drops.
             let low = { let sim = self.scene.sim.as_ref().unwrap(); sim.gun.clip + sim.gun.spare < 10 };
@@ -333,7 +348,7 @@ impl Walker {
         let killed = self.switch_to_gun(label) && self.stand_and_fire(di, 900);
         // The stand may have emptied the gun (stand_and_fire gives up when clip+spare hit 0):
         // restock from the floor drops so the NEXT fight does not run dry (same run, the sniper).
-        if !armed(self) && !self.dmg.resupplying {
+        if lane && !armed(self) && !self.dmg.resupplying {
             self.dmg.resupplying = true;
             self.resupply(label);
             self.dmg.resupplying = false;

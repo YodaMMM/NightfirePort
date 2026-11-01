@@ -61,6 +61,9 @@ fn walk_the_warm_chain(iso: &str, real_damage: bool) {
             // arrived at 13 with 18.5 health and died in the lobby. A player backs off and trades
             // at range: the stand's opt-in step-back (aim held) while a guard is inside 3.0.
             w.dmg.back_off = Some(3.0);
+            // The open-lobby lane tactics (wide shooters window, damage-weighted pick, floor-drop
+            // resupply around fights; common/damage_log.rs `lane_fights`).
+            w.dmg.lane_fights = true;
         }
         tower2::walk_12(&mut w);
         tower2::walk_12_exit(&mut w);
@@ -80,7 +83,7 @@ fn walk_the_warm_chain(iso: &str, real_damage: bool) {
     // ---- 0700004A: the spawn drop onto the 0x4D touch (the game's own placement) ----
     let save = {
         let mut w = Walker::new(nf_view::load_with_carry(&iso, "0700004a.bin", false, Some(&save)).unwrap());
-        if real_damage { w.dmg.back_off = Some(3.0); }
+        if real_damage { w.dmg.back_off = Some(3.0); w.dmg.lane_fights = true; }
         w.wait_enabled(3000, "the 4A intro");
         let mut landed = false;
         for _ in 0..600 {
@@ -102,7 +105,7 @@ fn walk_the_warm_chain(iso: &str, real_damage: bool) {
 
     // ---- 07000013 walked ----
     let mut w = Walker::new(nf_view::load_with_carry(&iso, "07000013.bin", false, Some(&save)).unwrap());
-    if real_damage { w.dmg.back_off = Some(3.0); }
+    if real_damage { w.dmg.back_off = Some(3.0); w.dmg.lane_fights = true; }
     {
         let sim = w.scene.sim.as_ref().unwrap();
         assert!(sim.drones.channels.on(0x48) && sim.drones.channels.on(0x49) && sim.drones.channels.on(0x4d),
