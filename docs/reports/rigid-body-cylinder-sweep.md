@@ -143,3 +143,15 @@ Each: fresh boot (save-state resume skips the boot path), then read the noted ad
 not visible to me (no token, cost or context-window figures are shown in this environment; the
 audit subagent reported prompt 133924 / completion 9462 tokens for its single run, read from its
 return message).
+
+## ntfy failed
+
+All three fallbacks failed (2026-11-01 ~17:15Z):
+1. `curl -sS -m 20 -H "Title: NightfirePort" -d "rigid-body-cylinder-sweep: done" https://ntfy.sh/nightfire-yoda-8k3x`
+   → `curl: (28) Connection timed out after 20002 milliseconds`
+2. `python3 urllib.request` → `urllib.error.URLError: <urlopen error [Errno 101] Network is unreachable>`
+3. `wget -q -O- --post-data "rigid-body-cylinder-sweep: done" https://ntfy.sh/nightfire-yoda-8k3x`
+   → timed out after 30 s, killed.
+A short retry (`curl -m 8`) also timed out (`curl: (28)`, http_code 000). The queue's
+`done/20-rigid-body-cylinder-sweep.md` carries the report body ("OK already closed in done/,
+report attached").
