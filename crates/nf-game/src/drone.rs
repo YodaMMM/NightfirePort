@@ -1757,6 +1757,10 @@ pub struct Drone {
     /// it on every sight tick while aiming (`DroneVision_GunThroughWall` 0x178520), and the combat
     /// fire requests are gated on `+0x3b = !+0x1e` (see `gun_through_wall`).
     pub gun_through_wall: bool,
+    /// `Drone+0x1da` — the index into `DRONE_VIEW_BONES` the next sight ray aims at
+    /// (`DroneVision_SeekOpponentLOS` 0x175cb8:50-66: stepped 0..6 on every unseen call, kept while
+    /// the ray holds, reset to 0 when the bone-0 retry lands).
+    pub view_bone: u16,
     /// `obj+0xFC` — the drawn-grace counter (docs/systems/corpse-persistence.md): 2 at spawn
     /// [`M 0x134630:16`], set to 2 by the draw pass when drawn [`M 0x1e62d8:71`], decremented once
     /// per control pass otherwise [`M 0x1336f8:242-246`]. The dead states' `obj+0xFC == 0` tests
@@ -2030,6 +2034,8 @@ impl Drone {
             body_glow: crate::body_glow::create(0, false),
             // Drone+0x1e — the gun-through-wall flag (SeekOpponentLOS refreshes it on sight ticks).
             gun_through_wall: false,
+            // Drone+0x1da — the view-bone cursor (SeekOpponentLOS 0x175cb8:50-66).
+            view_bone: 0,
         };
         dr.init_properties(d, &param);
         // `DroneInit_Collision` 0x14b1e8 (DefaultInit 0x14b300:775): not MP, `+0xBD4`/`+0x23` clear,
@@ -10943,6 +10949,68 @@ impl Drone {
     /// anim classes live yet (the class table is not extracted), so the fixed +0.6 is the
     /// standing case; the +0.2 and the no-head arms land with the class table].
     pub fn head(&self) -> V3 { [self.pos[0], self.pos[1] + 0.6, self.pos[2]] }
+
+    /// `DroneVision_SeekOpponentLOS` 0x175cb8's ray for a drone the round robin reached with
+    /// visibility ≥ 0.7 — which of Bond's seven `Drone_View_Bones` it tests this tick [M]:
+    /// - `+0x228` bit 2 (the last call's result, the port's `los`) moves to bit 0x40 and clears
+    ///   (:20-26).
+    /// - Team 3 (`Drone+0x44 == 3`) and MP test bone 5 alone, every call (:49, :88).
+    /// - Otherwise, last call unseen (0x40 clear): the cursor `+0x1da` steps first, wrapping
+    ///   past 6 to 0 (:50-55), then `NDrone2_CanSeeObject(Drone_View_Bones[+0x1da])` (:63-66).
+    /// - Last call seen (0x40 set) with the cursor off 0: bone `Drone_View_Bones[0]` is retried
+    ///   first; when it lands the cursor resets to 0 and that is the result (:57-62); else the
+    ///   cursor's own bone is tested again (the cursor holds). Cursor on 0: bone 0 alone.
+    /// The ray (`DroneVision_CanSeeObjectFrom` 0x176f18:56-77, target class 3 = the player): from
+    /// the bone's world point (`DroneFunc_GetBonePos` 0x149bd0), clamped into the 0.4 cylinder
+    /// about Bond's `obj+0x30` (`DroneFunc_ClampPosToCollisionCylinder` 0x1499d0: x/z pulled to
+    /// 0.4 from the centre, y kept), TO the drone's eye (`NDrone2_CanSeeObject` 0x1785e0:36-46:
+    /// `NDrone2_GetHeadPos`, clamped the same way — the port's `head()`), through
+    /// `Collide_LineOfSight` 0x1edf50 (`!Collide_RayIntersect`) with mask `0xa27`. The
+    /// `AINetwork_TestRayCels` pre-pass (:65-67) is the port's world ray, as before [S].
+    /// (`+0x3a0 & 0x30000000` adds a second `CanSeeObjectFrom` from `+0x3b0` whose result is
+    /// dropped, :95-98 — no effect.)
+    /// Without posed bones (`bones == None`) the port's single chest point stands in.
+    pub fn seek_opponent_los(&mut self, d: &Data, player: &Player, bones: Option<&[V3; 7]>) -> bool {
+        let Some(b) = bones else {
+            return d.world.line_of_sight(self.head(), player.target, crate::world::LOS_GUARD_VISION);
+        };
+        let eye = self.head();
+        let ray = |i: usize| d.world.line_of_sight(clamp_to_cylinder(player.pos, b[i]), eye, crate::world::LOS_GUARD_VISION);
+        view_bone_pick(self.los, self.team, &mut self.view_bone, ray)
+    }
+}
+
+/// The cursor walk of `DroneVision_SeekOpponentLOS` 0x175cb8:49-72 (SP) over `ray(index into
+/// DRONE_VIEW_BONES)`: `had` = the last call's result (`+0x228` bit 2 → 0x40), `cursor` = `+0x1da`.
+/// See `Drone::seek_opponent_los`.
+pub fn view_bone_pick(had: bool, team: u8, cursor: &mut u16, ray: impl Fn(usize) -> bool) -> bool {
+    if team == 3 { return ray(VIEW_BONE_HEAD); }
+    if !had {
+        *cursor += 1;
+        if *cursor > 6 { *cursor = 0; }
+    } else if *cursor != 0 && ray(0) {
+        *cursor = 0;
+        return true;
+    }
+    ray(*cursor as usize)
+}
+
+/// `Drone_View_Bones` @0x2a36f8 (ELF symbol, 8 words: the seven bone ids and a −1 end) [D ACTION.ELF
+/// e7ffdcb3…]: `{2, 3, 5, 0x31, 0x37, 0x13, 0x23}` — palette indexes into the target's skeleton.
+/// On Bond's skeleton, measured at the 07000005 / 0700000a starts (palette translation − obj+0x30,
+/// standing idle) [L ee_start_05.bin / ee_start_0700000a.bin anim+0xB8]: 2 +0.18 (spine), 3 +0.30
+/// (chest), 5 +0.53 (head), 0x31 −0.10 (hip side), 0x37 −0.91 (foot), 0x13 +0.37 and 0x23 +0.35
+/// (the shoulders).
+pub const DRONE_VIEW_BONES: [u8; 7] = [2, 3, 5, 0x31, 0x37, 0x13, 0x23];
+/// The index of bone 5 (the head) — the team-3 / MP ray's bone [M 0x175cb8:88].
+pub const VIEW_BONE_HEAD: usize = 2;
+
+/// `DroneFunc_ClampPosToCollisionCylinder` 0x1499d0: a point more than 0.4 (`0x3ecccccd`) from the
+/// object's x/z centre (`obj+0x30`, y ignored) is pulled in to 0.4 along the same bearing; y kept [M].
+pub fn clamp_to_cylinder(centre: V3, p: V3) -> V3 {
+    let (dx, dz) = (p[0] - centre[0], p[2] - centre[2]);
+    let m = (dx * dx + dz * dz).sqrt();
+    if m > 0.4 { [centre[0] + dx / m * 0.4, p[1], centre[2] + dz / m * 0.4] } else { p }
 }
 
 fn seg_point_dist2(a: V3, b: V3, p: V3) -> f32 {
@@ -11712,6 +11780,13 @@ pub struct Drones {
     /// caller before `tick`. `Drone_ProcessOpponents` 0x1390c0:40-42 multiplies Bond's visibility
     /// factor `+0x22C` by 0.75 while it holds.
     pub bond_crouched: bool,
+    /// Bond's `Drone_View_Bones` world points: his third-person anim object's palette translations
+    /// for `DRONE_VIEW_BONES` (`AnimGetBoneWorldTrans(obj, bone | 0x80000000, …)` = palette row
+    /// `bone`'s +0x30 [M 0x1c3120:76-84], reached from `DroneFunc_GetBonePos` 0x149bd0:28-31 for the
+    /// class-3 player while his anim object is posed, `anim+0xC8 & 1`), set by the caller before
+    /// `tick`. `None` (no posed body: the dev paths, the hanging/climbing/swimming substates the
+    /// port does not pose) keeps the port's single `Player::target` point.
+    pub bond_view_bones: Option<[V3; 7]>,
     /// `DAT_00298FBC`: the frame `Drone_EnableAll(1)` re-enabled the drones (0x1383e8:28). The
     /// whole `DroneVision_ProcessDroneSight` pass waits 15 frames after it and after the post-load
     /// frame `DAT_00298FB8` [M 0x176a28:56-57]; the port's drone frame starts at 0 on the load.
@@ -12290,7 +12365,7 @@ impl Drones {
             if let Some(g) = &mut dr.body_glow { g.owner = i; }
         }
         let llist = (0..list.len()).collect();
-        let mut drones = Drones { list, frame: 0, los_cursor: 0, llist, rng, lights: Default::default(), player_pos: [0.0; 3], bullets: Vec::new(), grenades: Vec::new(), explosions: Vec::new(), shake: 0.0, bond_crouched: false, vision_enable_frame: 0, player_spread: None, health: Default::default(), player_hits: Vec::new(), impacts: Vec::new(), prev_player: None, moved_since: None, target: PlayerTarget::default(), used: Vec::new(), link_flags: Vec::new(), locked_door_nodes: Default::default(), channels: Default::default(), triggers: Vec::new(), spawners: Vec::new(), cover_rt: Vec::new(), sounds: Vec::new(), cover_cursor: 0, cover_counter: 0, player_bullets: Vec::new(), net_no_self_hurt: false, player_impacts: Vec::new(), last_flinch: None, bond_aiming: false, level_exit: None, mission_end: None, bond_weapon: 2, env: None, sun_vector: [0.0; 3], env_pending: None, mp_master: 0, fill_rng: Rng::new(0x5eed), last_alarm: None, alarm_sent: false, party_loud: false, iop_section: 0, hud_frozen: false, aim_target: None, aim_offset: [0.0; 2],
+        let mut drones = Drones { list, frame: 0, los_cursor: 0, llist, rng, lights: Default::default(), player_pos: [0.0; 3], bullets: Vec::new(), grenades: Vec::new(), explosions: Vec::new(), shake: 0.0, bond_crouched: false, bond_view_bones: None, vision_enable_frame: 0, player_spread: None, health: Default::default(), player_hits: Vec::new(), impacts: Vec::new(), prev_player: None, moved_since: None, target: PlayerTarget::default(), used: Vec::new(), link_flags: Vec::new(), locked_door_nodes: Default::default(), channels: Default::default(), triggers: Vec::new(), spawners: Vec::new(), cover_rt: Vec::new(), sounds: Vec::new(), cover_cursor: 0, cover_counter: 0, player_bullets: Vec::new(), net_no_self_hurt: false, player_impacts: Vec::new(), last_flinch: None, bond_aiming: false, level_exit: None, mission_end: None, bond_weapon: 2, env: None, sun_vector: [0.0; 3], env_pending: None, mp_master: 0, fill_rng: Rng::new(0x5eed), last_alarm: None, alarm_sent: false, party_loud: false, iop_section: 0, hud_frozen: false, aim_target: None, aim_offset: [0.0; 2],
             // The game's `DAT_00299092` (the shared LOS-probe counter; see the field) — zeroed
             // here as `Drone_LevelReset`'s memset zeroes it at level reset [M 0x13a5bc-cc].
             los_probes: 0,
@@ -16741,6 +16816,7 @@ fn segment_hits_sphere(a: V3, b: V3, c: V3, r: f32) -> bool {
             for dr in &mut self.list { dr.visibility = if dr.present && !dr.corpse && dr.vision_on { dr.visibility() } else { 0.0 }; if dr.visibility < 0.7 { dr.los = false; } }
         }
         let ln = if vision_open { self.llist.len() } else { 0 };
+        let view_bones = self.bond_view_bones;
         for k in 0..ln {
             let slot = (self.los_cursor + 1 + k) % ln.max(1);
             let dr = &mut self.list[self.llist[slot]];
@@ -16751,7 +16827,7 @@ fn segment_hits_sphere(a: V3, b: V3, c: V3, r: f32) -> bool {
                 // crossed AI cels, walls first [M 0x15ab78]); the port swaps that for the static
                 // collision world's line of sight — the same deviation the nav `move_test`
                 // documents [S].
-                dr.los = d.world.line_of_sight(dr.head(), player.target, crate::world::LOS_GUARD_VISION);
+                dr.los = dr.seek_opponent_los(d, player, view_bones.as_ref());
                 // `SeekOpponentLOS` 0x175cb8:68-82 — on a successful sight tick the through-wall
                 // flag refreshes: aiming (`+0x22`, the port's `aims_torso()` = the DoTracking
                 // 0x1479d8:49 fold) → the `GunThroughWall` 0x178520 ray, else cleared. Ticks without
@@ -19778,6 +19854,49 @@ mod tests {
     use super::*;
     use crate::world::CollisionWorld;
 
+    /// `DroneVision_SeekOpponentLOS` 0x175cb8:49-72's cursor over the seven view bones [M]. Only
+    /// the head (index 2) clear: from an unseen start the cursor steps 1, 2 — the ray lands on the
+    /// second call — then holds (the bone-0 retry fails, index 2 again) while the head stays
+    /// clear; once lost it steps on 3, 4, 5, 6 and wraps to 0. A bone-0 hit while seen resets the
+    /// cursor. Team 3 tests the head alone and never moves the cursor. Sister: with every ray
+    /// blocked nothing is ever seen and the cursor cycles 1..6, 0.
+    #[test]
+    fn view_bone_cursor_steps_holds_and_resets() {
+        let head_only = |i: usize| i == VIEW_BONE_HEAD;
+        let (mut cur, mut had) = (0u16, false);
+        let mut log = Vec::new();
+        for _ in 0..4 { had = view_bone_pick(had, 1, &mut cur, head_only); log.push((had, cur)); }
+        assert_eq!(log, vec![(false, 1), (true, 2), (true, 2), (true, 2)]);
+        let mut log = Vec::new();
+        for _ in 0..6 { had = view_bone_pick(had, 1, &mut cur, |_| false); log.push((had, cur)); }
+        assert_eq!(log, vec![(false, 2), (false, 3), (false, 4), (false, 5), (false, 6), (false, 0)]);
+        // Seen on index 5 (a shoulder), then bone 0 clears too: the retry lands and resets.
+        let (mut cur, mut had) = (4u16, false);
+        had = view_bone_pick(had, 1, &mut cur, |i| i == 5);
+        assert_eq!((had, cur), (true, 5));
+        had = view_bone_pick(had, 1, &mut cur, |i| i == 5 || i == 0);
+        assert_eq!((had, cur), (true, 0));
+        // Team 3: the head ray every call, the cursor untouched.
+        let mut cur = 3u16;
+        assert!(view_bone_pick(false, 3, &mut cur, head_only));
+        assert!(!view_bone_pick(true, 3, &mut cur, |i| i != VIEW_BONE_HEAD));
+        assert_eq!(cur, 3);
+        let mut cur = 0u16;
+        let mut seen = false;
+        for k in 0..14 { seen |= view_bone_pick(false, 1, &mut cur, |_| false); assert_eq!(cur as usize, (k + 1) % 7); }
+        assert!(!seen);
+    }
+
+    /// `DroneFunc_ClampPosToCollisionCylinder` 0x1499d0: pulled to 0.4 from the x/z centre, y kept;
+    /// sister: a point inside 0.4 is untouched.
+    #[test]
+    fn view_point_clamps_into_the_cylinder() {
+        let c = [1.0, 5.0, 2.0];
+        let p = clamp_to_cylinder(c, [1.0 + 0.6, 7.0, 2.0 + 0.8]);
+        assert!((p[0] - 1.24).abs() < 1e-6 && (p[2] - 2.32).abs() < 1e-6 && p[1] == 7.0, "{p:?}");
+        assert_eq!(clamp_to_cylinder(c, [1.2, 3.0, 2.1]), [1.2, 3.0, 2.1]);
+    }
+
     /// `NDrone2_HandleTalking` 0x13f688's AFO approach dialogue [M 0x13f688:29-96]: the first call
     /// plays 0x9b (force 1), advances the script to 1 and sets `+0xCF4 = now + 5·60`.
     /// Sister: beyond 3 units (`SqDist2D ≥ 9`) nothing plays [M :37-40].
@@ -20077,6 +20196,7 @@ mod tests {
             skin: 0, anim_set: 0, weapon: 0, pos, yaw: 0.0, desired_yaw: 0.0, aim_yaw: 0.0, alert: 0.0, alert_floor: 0.0,
             body_glow: None,
             gun_through_wall: false,
+            view_bone: 0,
             dist_to_player: [100000.0; 4],
             props: [0; 3], alert_props: None, sight_range: 0.0, half_fov: 0.0, engage_range: 0.0, combat_range: 0.0,
             accuracy: 0, aggression: 0, reaction: 0, los: false, seen: false, ever_seen: false, ever_seen_3c: false, bond_alive: true, visibility: 0.0,
