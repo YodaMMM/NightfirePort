@@ -157,6 +157,21 @@ the mission banner's fail label has no blink.
   lock's code is known [:246-257]. On disc the param-0 PCs are the E-usable office computers (0a #683
   p0 1 / #684 p0 2, 11 #216 p0 1, 12 #684 p0 5); the Q-Worm gadget targets (0a #688, 0b #297) carry
   p0 = 0 and post nothing [D nf-formats/tests/view_object_census.rs].
+- The PC screen after the install (pc-screen): state 1's `Control_NextLOD` 0x1349b0 writes
+  obj+0xD8 ← `*(glist+0x40)` only when the link is non-null and returns 0 otherwise [M :8-12]; the
+  PC's obj+0xD8 is its placement glist (`PCQWorm_Create` 0x1b07a8:12 → `Control_CreateObjEx`
+  0x1343c8:29) and glist+0x40's only writer is `parsemap_block_LOD` 0x1d1f10 (block 0x27). All six
+  PCQWorm glists (0a #683/#684/#688, 0b #297, 11 #216, 12 #684) carry −1 [D pc_screen_live] — no
+  model swap exists on this disc. What changes on screen is the Q-Worm overlay: the PC's channel
+  (param 1) unpauses a mode-8 ScriptPlayer (0a #780 0x06000951, 0b #298 0x060008BD, 11 #263
+  0x060008C0, 12 #765 0x06000958) whose entity (SCREEN_Q 0x02000A22, SCREEN_QWORM_C_OBJ2 0x020008C3,
+  SCREEN_QWORM_2A_OBJ2 0x020008D1, qworm2b 0x02000A28) keys alpha 0 while held, then pulses
+  0 → 1 → 0. `Script_Interp` 0x1d9a08:104 stores the key's `fptoui(+0x24·255+0.5)` [M
+  Script_GetInterp 0x1da158:186-189] in obj+0x106 and `View_SetupRenderModes_Tweak` 0x1e5888:12,47-49
+  draws with it as the tweak alpha. The port now carries that byte into the palette alpha of every
+  script entity whose batches all blend (PRIM ABE) — `Scene::script_tweak_alpha`. The 0a office PCs
+  (#683/#684, param 1 = 0) unpause nothing: their screens do not change in the game either.
+  Render aid: `NF_QWORM_AT=t:ch` starts the install of the PCs on channel `ch` (`all`) on tick t.
 - Health pane hide set: panes 9, 10, 11, 16, 17, 18 enabled → sprites 0..15 hidden [0x19b9c8:127-138].
   Pane 9 = cam mode 0xc (the guided missile, `Bullet_init` 0x12c5a0:252), 10 = `RCCarPane` (cam mode
   0xd, set only by `Car_Activate` 0x131c48 — placement 0xda RC cars, MP maps only [D census]), 16 =

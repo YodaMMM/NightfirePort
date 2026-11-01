@@ -6741,6 +6741,16 @@ pub fn run() -> Result<()> {
                 if let Some((ct, cc)) = std::env::var("NF_CH_AT").ok().and_then(|v| v.split_once(':').and_then(|(a, b)| Some((a.parse::<u32>().ok()?, b.parse::<u32>().ok()?)))) {
                     if ct == t { let f = sim.drones.frame; sim.drones.channels.set(cc, 1, f); }
                 }
+                // Render aid (pc-screen): `NF_QWORM_AT=t:ch` starts the install of the PCQWorm PCs whose
+                // param 1 is `ch` on tick t (`all` = every PC) — the state `PCQWorm_Activate` 0x1b0840 /
+                // the Q-Worm bullet leave (obj+0xF4 = 1), so `PCQWorm_Update` 0x1aee20 state 1 runs next.
+                if let Some((qt, qc)) = std::env::var("NF_QWORM_AT").ok().and_then(|v| v.split_once(':').and_then(|(a, b)| Some((a.parse::<u32>().ok()?, b.to_string())))) {
+                    if qt == t {
+                        for pc in sim.drones.useobjs.pcs.iter_mut().filter(|p| qc == "all" || qc.parse::<u8>().ok() == Some(p.ch)) {
+                            if pc.state == 0 { pc.state = 1; eprintln!("[qworm] install started on tick {t}: PC ch {:#x}", pc.ch); }
+                        }
+                    }
+                }
                 // Render aid (keypad LOD swap): `NF_UNLOCK_AT=t:out` unlocks the locks with that out
                 // channel on tick t (the state `Lock_Unlock` 0x1b0650 leaves), to render the swapped model.
                 if let Some((ut, uo)) = std::env::var("NF_UNLOCK_AT").ok().and_then(|v| v.split_once(':').and_then(|(a, b)| Some((a.parse::<u32>().ok()?, b.parse::<u16>().ok()?)))) {
