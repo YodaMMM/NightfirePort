@@ -1,5 +1,33 @@
 # WORKLOG
 
+## level-0a-ceiling-gun-route-3 (branch s/level-0a-ceiling-gun-route-3)
+
+- Live checks, PCSX2 fresh boots (goto_level; pad through the GDB build's input_set; health
+  held every poll), 2026-11-01:
+  - beam #607: crouched (substate 4, pos y 0.608) through the plane (−7.61, 16.22) →
+    (−11.43, 16.71): ch 0x1F and 0x0F stayed 0. Standing back east the same line: 0x1F + 0x0F
+    fired at x −8.95 (0.36 off the west face). The crouched straight line (−3.9, 15.4) →
+    (−10, 16) wedges at (−7.75, 16.0) — the doorway is crossed on z ≈ 16.6.
+  - beam #621 at x −12.6: standing fired 0x24 + 0x10 at z −32.77, crouched at z −32.60 (the
+    line z ≈ −33.05) — no stance passes a low line.
+  - beam #614 in the west corridor: walked standing fired 0x22 + 0x0F; a jump pressed 0.9 or
+    1.3 before the line passed silent (airborne +0.43 at the line); a press 0.5 before (+0.23)
+    fired. The outs are pulses (read 0 again ~30 frames later).
+- Geometry: #614 spans the west corridor wall to wall (walls x −25.0 / −19.75 [D probe
+  rays]) and the office block east of it is closed to the north — the old "east of #614's
+  east end" via (−18.3, 13.0) and (−15.8, 10.0) both stall inside walls. #621 closes the band
+  south of the pocket; the old "x −9 passage" leg stalls. The 0x25 fence (#651-654, four rows
+  y 0.22-2.34) is the graph's only lane to the hatch; its rows carry lock ch 0x19 (OR #634 ←
+  [0x18 guard plate, 0x37]) — the old z −9.8 east run stalls on the diagonal wall.
+- The route (walk_office_floor_qworm_keyboard_hatch, real-damage variant un-ignored and green):
+  #607 crouched on the doorway line, the low beams #614/#621/#625 jumped
+  (`jump_over_low_beam`, press 1.0 before), the fence crossed from (20.1, −13.2) while 0x19
+  holds. The laser pin reads the write stamps (`Channels::time`) — the beam outs are pulses.
+  0x10 is out of the pin: its other input 0x1D is a security sensor the walk-back passes.
+- Port gap left open: the standing trigger toucher (measured box, reach pos−0.6) misses #621's
+  band y 0.13-0.39 — the game fires it standing. `low_beam_621_fires_standing` is ignored with
+  the reason; the game-capsule reach was reverted twice before (toucher site notes).
+
 ## level-0a-ceiling-gun-route (branch s/level-0a-ceiling-gun-route)
 
 - start (master 721b88ac, 2026-11-01 ~10:12 UTC). Task: on 0700000a laser #607 feeds OR #667 -> ch 0x0F ->
