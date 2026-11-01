@@ -16189,7 +16189,7 @@ fn segment_hits_sphere(a: V3, b: V3, c: V3, r: f32) -> bool {
             // when `Mission_Init` runs on a warm transition: init resets the current + future parts in
             // place and the carried snapshot puts the previous parts' states back [M 0x182270:68-129;
             // the payload shape is LS_MakeMission/LS_LoadMission 0x1cd720/0x1cd880; map-tower2].
-            if let Some(s) = self.mission_carry.take() { self.mission.restore(&s); }
+            if let Some(s) = self.mission_carry.take() { self.mission.restore(&s); } else { self.mission.seed_campaign_arrival(); }
             // `Player_RamLoad` 0x1957a8:15-16's tally restore (987-mission-stats-carry): the warm
             // load puts the exit snapshot back AFTER the part-0 wipe above — the game's order
             // (ResetMap_GameInit's `Mission_Init` zeroes on the base map, `Player_InitWeapon`'s
