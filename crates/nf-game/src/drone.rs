@@ -14255,6 +14255,7 @@ fn segment_hits_sphere(a: V3, b: V3, c: V3, r: f32) -> bool {
                 // at the first solid node [M Collide_Update 0x1ea398:216-229], so a wall between
                 // Bond and the body takes the round.
                 let mut tw_copter: Option<Option<f32>> = None;
+                let mut copter_t = f32::INFINITY;
                 for (ci, (targets, present)) in copter_targets.iter().enumerate() {
                     if *present == 0 { continue; }
                     for slot in 0..9usize {
@@ -14265,6 +14266,35 @@ fn segment_hits_sphere(a: V3, b: V3, c: V3, r: f32) -> bool {
                         if tw.is_some_and(|w| w < t) { continue; }
                         self.copters[ci].part_hits.push(crate::copter::PartHit { slot: slot as u8, damage: bcontact, class: bclass });
                         copter_stop = true;
+                        copter_t = copter_t.min(t);
+                    }
+                }
+                // The body contact runs `Bullet_CollisionHandler`'s explode arms like any other
+                // contact [M 0x12ce80 — the 0x4 arm `Explode_Create(+0x08, +0x08, +0x0C, …,
+                // HITDATA+0x40, …, 0x6000052)` and the 0x100000/0x200000 bolt arms (script
+                // 0x60007c4, f12 1.0) are gated only on the pierce flag bVar7, which the body's
+                // HITDATA leaves clear: `Collide_PickObj` 0x1eae80 memsets the node (0x60 bytes,
+                // material +0x50 = 0, +0x51 = 0) and the body has no obj+0xF0 0x20 bit
+                // (`Copter_Register` 0x17e530:7 skips slot 2)]. So a rocket on the body blasts at
+                // the contact, and `Explode_Propagate` 0x17c518 case 0 [:86-105] adds the falloff
+                // (≈ +0x0C at the surface) into rec+0x64 — 0x2C/0x2D carry radius 8, damage 100
+                // [L ee_start_05.bin @0x2bf150]. The port dropped the blast here (the round died
+                // on the body with only its 1.0 contact [M Bullet_update's id override]). The
+                // contact point is the segment's sphere entry [S: the game's HITDATA+0x40 for an
+                // object pick — the sweep's (int) truncation makes any point within a unit of the
+                // surface the same full amount].
+                if copter_stop && b.bounces == 0 {
+                    let rec = d.weapons.records.get(b.weapon as usize);
+                    let flags70c = rec.map_or(0u32, |r| u32::from_le_bytes(r[0x70..0x74].try_into().unwrap()));
+                    if flags70c & (0x4 | 0x10_0000 | 0x20_0000) != 0 {
+                        let radius = rec.map_or(0.0, |r| f32::from_le_bytes(r[0x08..0x0c].try_into().unwrap()));
+                        let damage = rec.map_or(0.0, |r| f32::from_le_bytes(r[0x0c..0x10].try_into().unwrap()));
+                        let script = if flags70c & 4 != 0 { 0x0600_0052 } else { 0x0600_07c4 };
+                        let scale = if flags70c & 4 != 0 { radius } else { 1.0 };
+                        let t = copter_t.clamp(0.0, 1.0);
+                        let hit = [b.pos[0] + (end[0] - b.pos[0]) * t, b.pos[1] + (end[1] - b.pos[1]) * t,
+                            b.pos[2] + (end[2] - b.pos[2]) * t];
+                        self.pending_blasts.push((hit, radius, damage, usize::MAX, b.weapon, script, scale, 0));
                     }
                 }
                 // The body is a solid object: the round dies on it [M Bullet_CollisionHandler

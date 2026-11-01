@@ -31,6 +31,26 @@ world stop nearer than the body's sphere takes the round first [M Collide_Update
 contact damage 3.5 [D weapon record 2] → 86 rounds on d1 (85·3.5 = 297.5), the SG5's 2.75 [D
 record 0x16] → 109 (108·2.75 = 297). Pinned by `crates/nf-view/tests/copter_hits_12_live.rs`.
 
+**Rockets on the body** [M Bullet_CollisionHandler 0x12ce80]: the body contact runs the same explode
+arms as any contact — the 0x4 arm `Explode_Create(+0x08, +0x08, +0x0C, …, HITDATA+0x40, …, 0x6000052)`
+is gated only on the pierce flag, which the body's HITDATA leaves clear (`Collide_PickObj` memsets the
+0x60-byte node, material 0; slot 2 has no obj+0xF0 0x20). `Explode_Propagate` case 0 then adds the
+falloff ≈ +0x0C into rec+0x64. The AT-420 records 0x2C/0x2D: radius 8, damage 100, contact 1.0 (the
+`Bullet_update` id override) [L ee_start_05.bin @0x2bf150] → 101 per body hit, **3 rockets** on d1
+(303 > 299; d2 448.5 → 5, d3 598 → 6, d4 1196 → 12). The port used to kill the round on the body with
+the 1.0 contact only; the bullet pass now queues the blast at the sphere entry point.
+
+**07000008's shoot-down supply** [D/M]: script 0x06000051 registers 0→2, 2→3, 4→0, 6→1, 8→5, 10→6,
+20→7, 22→8 — the body is stream 0 in slot 2, the only pickable part, as on 12; no slot 4. hp =
+DiffMod·299 (DiffMod 1.0/1.5/2.0/4.0 by `GameState+0x40` [M Copter_Create 0x17d340]); no countdown
+(p8/p9 = 0) and no channel kills it — only the damage test writes out ch 0x4B. Bond's kit is the 07
+carry (`Player_InitWeapon` 0x1a7ef8 case 0x7000008 → RamLoad; P2K 48), the 9 mm boxes #292/#293 (20
+each), and the AT-420 twice: the safe's #291 (4 rounds, forced [M Pickup_Create 0x18dda0:116-118]) and
+the cable car's launcher + two rocket-ammo boxes (4 each, parented to the carriage [D 0x0600004C
+streams 37-39], re-spawned at t1261). Rocket carry cap 4 [L ammo_data type 0xE +0x02] + clip 4 = 8 on
+hand. The P2K alone cannot do it (86 rounds vs ≤ 48 + 40 + the guards' drops); the rockets are the
+route. Pinned by `walkreal_07000008_live` (the guided rockets flown into the body, no refill).
+
 Per slot i:
 1. `Collide_FilterBullets(part+0xD0, Bits[i].filter)` [M 0x1ece30, jal 0x17e1bc]: for every chain
    entry whose +0x58 owner is a class-5 BULLET object, the bullet's weapon record's class word

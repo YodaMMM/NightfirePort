@@ -340,6 +340,9 @@ fn walk_the_whole_mission_on_real_input() {
     }
     assert!(ride_started, "mux #235 (0x4a AND 4) fired ch 1 [D]");
     let start_y = w.scene.sim.as_ref().unwrap().bond.pos[1];
+    let rockets_at = |w: &Walker| { let inv = &w.scene.sim.as_ref().unwrap().drones.inventory;
+        (inv.owned.get(0x2c).copied().unwrap_or(false), inv.clip.get(0x2c).copied().unwrap_or(0), inv.carried.get(0xe).copied().unwrap_or(0)) };
+    eprintln!("[08] rockets boarding (owned, clip, carry): {:?}", rockets_at(&w));
     let mut ch83 = false;
     for t in 0..3600u32 {
         if w.scene.sim.as_ref().unwrap().drones.channels.on(0x53) { ch83 = true; break; }
@@ -353,7 +356,7 @@ fn walk_the_whole_mission_on_real_input() {
     assert!(ch83, "the ride script wrote ch 83 (0x53) at its tick 1410 [D stream 46]");
     {
         let sim = w.scene.sim.as_ref().unwrap();
-        eprintln!("[08] ride done: bond {:?} (started y {start_y:.1})", sim.bond.pos);
+        eprintln!("[08] ride done: bond {:?} (started y {start_y:.1}); rockets (owned, clip, carry) {:?}", sim.bond.pos, rockets_at(&w));
         assert!(!sim.drones.channels.on(0x7c), "Bond rode the carriage — the plunge (out 0x7C) never fired [D §6]");
     }
     w.wait_enabled(1500, "the bottom-of-mountain cinematic");
@@ -381,74 +384,93 @@ fn walk_the_whole_mission_on_real_input() {
     assert!(!w.scene.sim.as_ref().unwrap().drones.channels.on(0x4b), "no arrival while the route flies");
     let ci = w.scene.sim.as_ref().unwrap().drones.copters.iter().position(|c| c.out == 0x4b).unwrap();
     let hp = w.scene.sim.as_ref().unwrap().drones.copters[ci].hp;
-    // A real player fights the machine with a GUN, not the targeting laser (the walk arrives with
-    // the 0x4E laser equipped from the safe burn; its beam carries no bullet contact at the
-    // route's 24-37 u — the old test's point-blank re-stand hid that). Switch through the real
-    // weapon-cycle input to the first owned gun the carry has (the laser 0x4E and the fists stay
-    // out) — the cycle is unlocked by the carried ch 0x48 [M Player_Weapon 0x1a24c8:242-275].
-    let gun = {
+    // The game's way down: the AT-420 Sentinel. The level hands it out twice — the safe's launcher
+    // #291 (kind 0, id 0x2C) beside the briefcase, its rounds forced to 4 on this level only
+    // [M Pickup_Create 0x18dda0:116-118 `GameState+0xc == 0x7000008 && id == 0x2c`], and the cable
+    // car's three pickups (a launcher and two rocket-ammo boxes, 4 each, parented to the carriage
+    // [D 0x0600004C streams 37-39]) that Bond collects standing in the car on the ride. The copter's
+    // hp is DiffMod·299 [M Copter_Create 0x17d340: 1.0 below difficulty 2]; the body (slot 2) is
+    // the only part a pick reaches [M Copter_Register 0x17e530:7; Collide_PickObj 0x1eae80's
+    // always-on 0x20 gate], so the P2K needs 86 rounds (3.5 [L weapon record 2]) — far past the
+    // 48 the carry starts 07 with. A rocket on the body blasts at the contact [M
+    // Bullet_CollisionHandler 0x12ce80's 0x4 arm] and `Explode_Propagate` 0x17c518 case 0 adds
+    // ≈100 (radius 8, damage 100 [L ee_start_05.bin @0x2bf150 + 0x2C·0x10C]) plus the round's
+    // 1.0 contact: three rockets (303 > 299), one spare. The walk fires the 'Guided' mode the
+    // launcher is picked up in and flies each rocket into the body with the real look input
+    // (`Bullet_update` 0x12e7b0:177-244's steering) — no ammo or damage pokes.
+    const ROCKET: u8 = 0x2c;
+    {
         let sim = w.scene.sim.as_ref().unwrap();
         let inv = &sim.drones.inventory;
-        let own = |wid: u8| inv.owned.get(wid as usize).copied().unwrap_or(false);
-        let ammo = |wid: u8| inv.clip.get(wid as usize).copied().unwrap_or(0) > 0
-            || inv.carried.get(wid as usize).copied().unwrap_or(0) > 0;
-        let owned: Vec<u8> = (0x02u8..0x4e).filter(|&wid| own(wid)).collect();
-        eprintln!("[08] owned weapons at the fight: {owned:02x?} (current {:#x})", sim.gun.weapon);
-        let gun = owned.into_iter()
-            .find(|&wid| wid != 0x4e && wid != 0x01 && ammo(wid))
-            .expect("the carry owns at least one loaded gun for the Hind fight");
-        for _ in 0..240 {
-            if w.scene.sim.as_ref().unwrap().gun.weapon == gun { break; }
-            w.tick(Input { switch_to: Some(gun), ..Default::default() }, false);
-        }
-        assert_eq!(w.scene.sim.as_ref().unwrap().gun.weapon, gun, "the switch to {gun:#x} never landed");
-        eprintln!("[08] fighting the Hind with the gun {gun:#x}");
-        gun
-    };
-    let mut shots = 0u32;
+        let owned: Vec<u8> = (0x02u8..0x4e).filter(|&wid| inv.owned.get(wid as usize).copied().unwrap_or(false)).collect();
+        eprintln!("[08] owned weapons at the fight: {owned:02x?} (current {:#x}); rocket clip {} carried {}", sim.gun.weapon,
+            inv.clip.get(ROCKET as usize).copied().unwrap_or(0), inv.carried.get(ROCKET as usize).copied().unwrap_or(0));
+        assert!(inv.owned.get(ROCKET as usize).copied().unwrap_or(false), "the walk took the safe's rocket launcher #291");
+        let at = sim.weapons.ammo_type(ROCKET as usize);
+        eprintln!("[08] rocket ammo type {at:#x}: carried {} gun.spare {}; rocket pickups {:?}", inv.carried.get(at).copied().unwrap_or(0), sim.gun.spare,
+            sim.drones.pickups.iter().filter(|p| p.weapon == ROCKET as u16).map(|p| (p.kind, p.rounds, p.gone, p.from, p.m[3])).collect::<Vec<_>>());
+    }
+    for _ in 0..240 {
+        if w.scene.sim.as_ref().unwrap().gun.weapon == ROCKET { break; }
+        w.tick(Input { switch_to: Some(ROCKET), ..Default::default() }, false);
+    }
+    assert_eq!(w.scene.sim.as_ref().unwrap().gun.weapon, ROCKET, "the switch to the rocket launcher never landed");
+    let mut rockets = 0u32;
     let mut ch4b = false;
-    for t in 0..40000u32 {
+    let mut riding = false;
+    let mut launch_damage = 0.0f32;
+    let mut best_rocket = 0.0f32;
+    for t in 0..20000u32 {
         if w.scene.sim.as_ref().unwrap().drones.channels.on(0x4b) { ch4b = true; break; }
         let sim = w.scene.sim.as_ref().unwrap();
         let cp = sim.drones.copters[ci].pos();
-        let head = sim.bond.head();
-        let to = [cp[0] - head[0], cp[1] - head[1], cp[2] - head[2]];
+        let rocket = sim.drones.player_bullets.iter().find(|b| b.guided_cam && !b.dead).map(|b| (b.pos, b.dir));
+        let (from, yaw, pitch) = match rocket {
+            // Riding the rocket: the look input steers it [M 0x12e7b0:177-244; scene.rs's ride].
+            Some((p, d)) => (p, d[0].atan2(d[2]), d[1].clamp(-1.0, 1.0).asin() / std::f32::consts::FRAC_PI_2),
+            None => (sim.bond.head(), sim.bond.yaw, sim.bond.pitch),
+        };
+        let to = [cp[0] - from[0], cp[1] - from[1], cp[2] - from[2]];
         let l = (to[0] * to[0] + to[1] * to[1] + to[2] * to[2]).sqrt();
         let desired_yaw = to[0].atan2(to[2]);
         let desired_pitch = (to[1] / l).asin() / std::f32::consts::FRAC_PI_2;
-        let yaw_err = walker::wrap_pi(desired_yaw - sim.bond.yaw);
-        let pitch_err = desired_pitch - sim.bond.pitch;
+        let yaw_err = walker::wrap_pi(desired_yaw - yaw);
+        let pitch_err = desired_pitch - pitch;
         let input = Input {
             turn: yaw_err.clamp(-0.08, 0.08),
             look: pitch_err.clamp(-0.05, 0.05),
-            aiming: true,
+            aiming: rocket.is_none(),
             ..Default::default()
         };
-        // Press/release the trigger at the flying Hind (the old fight's cadence, the aim now the
-        // real tracked one).
-        let press = w.total_ticks % 2 == 0;
-        // The body is the only part a round reaches (Bits ×1.0 [M Collide_PickObj 0x1eae80's
-        // always-on obj+0xF0 0x20 gate; Copter_Register 0x17e530 flags every other part]), so
-        // the 299 hp takes 86 P2K rounds (3.5 [D record 2]) — past the carry's ammo. The harness
-        // refills the P2K so the real aim and trigger can land them; whether the player's route
-        // brings more ammo or a blast weapon (the carried frags 0x2c reach the body through
-        // Explode_Propagate) is the open part of this walk.
-        {
-            let sim = w.scene.sim.as_mut().unwrap();
-            if let Some(c) = sim.drones.inventory.carried.get_mut(gun as usize) { *c = (*c).max(48); }
-            if sim.gun.clip == 0 { sim.gun.clip = 12; sim.gun.reload_state = 0; sim.gun.pending = 0; }
-            if let Some(c) = sim.drones.inventory.clip.get_mut(gun as usize) { *c = (*c).max(12); }
+        if rocket.is_some() != riding {
+            riding = rocket.is_some();
+            let now = sim.drones.copters[ci].damage;
+            if riding { rockets += 1; launch_damage = now; } else { best_rocket = best_rocket.max(now - launch_damage); }
+            eprintln!("[08 rocket] t{t} {} — damage {:.1} hp {hp} dist {l:.1} from {from:?} copter {cp:?} clip {} bullets {}",
+                if riding { "launched" } else { "gone" }, sim.drones.copters[ci].damage,
+                sim.drones.inventory.clip.get(ROCKET as usize).copied().unwrap_or(0),
+                sim.drones.player_bullets.iter().filter(|b| !b.dead).count());
         }
-        if press { w.tick_fire(input); shots += 1; } else { w.tick(input, false); }
+        // Fire when the view sits on the machine, the camera is home and no rocket flies.
+        let ready = rocket.is_none() && sim.missile_cam.is_none() && yaw_err.abs() < 0.03 && pitch_err.abs() < 0.03;
+        if ready && w.total_ticks % 2 == 0 { w.tick_fire(input); } else { w.tick(input, false); }
         if t % 600 == 0 {
             let sim = w.scene.sim.as_ref().unwrap();
-            eprintln!("[08 hind t{t}] dist {l:.1} damage {:.1} hp {hp} weapon {:#x} bond {:?} copter {:?} st {}",
-                sim.drones.copters[ci].damage, sim.gun.weapon, sim.bond.pos, cp, sim.drones.copters[ci].state);
+            eprintln!("[08 hind t{t}] dist {l:.1} damage {:.1} hp {hp} weapon {:#x} clip {} bond {:?} copter {:?} st {}",
+                sim.drones.copters[ci].damage, sim.gun.weapon, sim.gun.clip, sim.bond.pos, cp, sim.drones.copters[ci].state);
         }
     }
     let damage = w.scene.sim.as_ref().unwrap().drones.copters[ci].damage;
-    eprintln!("[08] the shoot-down: {shots} trigger pulls; damage {damage} vs hp {hp}");
-    assert!(ch4b, "the shots pushed damage {damage} past hp {hp} → state 4 → rec+0x72 [M :358-370]");
+    eprintln!("[08] the shoot-down: {rockets} rockets; damage {damage} vs hp {hp}; best single rocket {best_rocket}");
+    assert!(ch4b, "the rockets pushed damage {damage} past hp {hp} → state 4 → rec+0x72 [M :358-370]");
+    // The supply: a full clip (4 [L record 0x2C +0x92]) and the type-0xE carry cap (4 [L ammo_data
+    // 0x2C69B8 + 0xE·12, +0x02]) — 8 on hand, the ride's three rocket pickups [D 0x0600004C streams
+    // 37-39: two type-1 rocket ammo + one launcher, 4 rounds each, parented to the carriage] topping
+    // the carry up. Aimed rockets miss now and then (the moving machine, the station's geometry).
+    assert!(rockets <= 8, "the rockets on hand (clip 4 + carry cap 4) are all the walk had: {rockets} launched");
+    // A rocket that lands on the body blasts there [M 0x12ce80's 0x4 arm → Explode_Propagate case 0]:
+    // ≈100 from the blast + 1.0 contact. Sister: without the blast a body hit adds only 1.0.
+    assert!(best_rocket >= 100.0, "a body hit carries the blast's ≈100, not just the 1.0 contact: best {best_rocket}");
     assert!(damage > hp, "the walk's accumulation, not a poke, crossed hp");
     for _ in 0..120 {
         if obj08(&w).1 == 4 { break; }
