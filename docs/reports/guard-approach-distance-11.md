@@ -113,3 +113,12 @@ band sees on that diagonal that the port's does not) is a separate task's scope.
 
 Token/credit/context figures: not visible to me. (No token, cost or context-window readout is
 exposed in this sandbox; the session budget was the wall clock, ~17:50–19:25 UTC.)
+
+## ntfy failed
+
+All three fallbacks, in order, at ~19:27 UTC:
+1. `curl -sS -m 20 -H "Title: NightfirePort" -d "…" https://ntfy.sh/nightfire-yoda-8k3x` →
+   `curl: (28) Connection timed out after 20001 milliseconds`
+2. python3 urllib → `urllib.error.URLError: <urlopen error [Errno 101] Network is unreachable>`
+3. `wget -q -O- --post-data "…" https://ntfy.sh/nightfire-yoda-8k3x` → no output, killed at the
+   30 s tool timeout (hanging connection, same as the curl attempt).
