@@ -239,6 +239,14 @@ pub struct GTurret {
     /// ext+0xc0/c4/c8: the ≤3 `GT_Register` 0x181538 script-object slots (0xc4 = the barrel
     /// whose matrix spins) [M 00181538, 00180498 case 4 fire].
     pub registered: [u32; 3],
+    /// registered[0]'s obj+0xF4 (u16): the muzzle-flash countdown — every shot writes 2, the
+    /// update head counts it down [M 00180498:110-122, case 4 / case 7 fire].
+    pub flash: u16,
+    /// registered[0]'s obj+0xF0 bit 0x10 (hidden): set by the update head when the countdown is
+    /// (or reaches) 0, cleared by every shot [M 00180498:117-120, case 4 / case 7 fire]. Live
+    /// [L 0700000c deployed Ronin under remote control, no fire: reg[0] (0x2000361) obj+0xF0 =
+    /// 0x231, the other script-A/B parts 0x1080/0x10c0].
+    pub flash_hidden: bool,
     /// ext+0xf2 (u8): mounted — set by `GT_TakeControl` 0x181740, cleared by
     /// `GT_LoseControl` 0x181408 [M both].
     pub controlled: u8,
@@ -310,6 +318,8 @@ pub fn from_placement(placement: usize, params: &[(u32, u32)]) -> Option<GTurret
         target: 0,
         owner: 0,
         registered: [0; 3],
+        flash: 0,
+        flash_hidden: false,
         controlled: 0,
         delete_flag: false,
         aim: [0.0; 3],
@@ -391,9 +401,6 @@ pub struct GTCtx<'a> {
     pub frame: u32,
     /// The callers' filtered target candidates (see `TrackCand`).
     pub cands: &'a [TrackCand],
-    /// registered[0]'s script state — the top-of-update hide gate reads it; the port's
-    /// script VM is the tracked gap so the tick passes None (no gate fires).
-    pub registered0_state: Option<u16>,
     /// The mounted inputs (case 7): (yaw axis, pitch axis, fire held, exit pressed).
     pub mount: Option<(f32, f32, bool, bool)>,
 }
@@ -402,7 +409,7 @@ pub struct GTCtx<'a> {
 /// side draws and plays; these are the exact game calls [M 00180498]).
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub enum GTEvent {
-    /// The top-of-update hide gate: registered[0]'s script state 0/1 → that object's
+    /// The top-of-update hide gate: registered[0]'s countdown (obj+0xF4) at or reaching 0 → that object's
     /// obj+0xf0 gets bit 0x10 (hidden) [M 00180498:110-122].
     Registered0Hidden,
     /// The death-gate burst: `Emitter_Create(10.0, 0, -2.0, base, up)` [M 00180498:249-257].
@@ -650,11 +657,28 @@ impl GTurret {
         ]
     }
 
+    /// Each shot's flash write [M 00180498 case 4 / case 7, after `Bullet_init`]: when
+    /// registered[0] is set, `reg0+0xF4 = 2` and `reg0+0xF0 &= ~0x10` (the obj+0xF6 toggle and
+    /// its smoke puff are not modelled).
+    fn show_flash(&mut self) {
+        if self.registered[0] != 0 {
+            self.flash = 2;
+            self.flash_hidden = false;
+        }
+    }
+
     /// `GT_Update` 0x180498 — one tick (`dt` = `REC_FRAME_RATE`, 1/60 [M every timer step]).
     pub fn update(&mut self, ctx: &GTCtx, rng: &mut crate::drone::Rng, out: &mut Vec<GTEvent>) {
-        // The registered[0] hide gate [M 00180498:110-122].
-        if self.registered[0] != 0 && matches!(ctx.registered0_state, Some(0) | Some(1)) {
-            out.push(GTEvent::Registered0Hidden);
+        // The registered[0] hide gate [M 00180498:110-122]: `s = reg0+0xF4; if s == 0 ||
+        // (reg0+0xF4 = s − 1, s == 1) { reg0+0xF0 |= 0x10 }` — the muzzle flash shows on a
+        // shot's tick and the next one, then hides.
+        if self.registered[0] != 0 {
+            let s = self.flash;
+            if s != 0 { self.flash = s - 1; }
+            if s == 0 || s == 1 {
+                self.flash_hidden = true;
+                out.push(GTEvent::Registered0Hidden);
+            }
         }
         // The death gate [M 00180498:236-258]: health < 0 or the shot counter at 0 → 6.
         if (self.health < 0.0 || self.hp == 0) && self.state != gt_state::DESTROYED {
@@ -756,6 +780,7 @@ impl GTurret {
                             let sound = if self.facing == 1 { SOUND_FIRE_WALL } else { SOUND_FIRE };
                             out.push(GTEvent::Fire { muzzle, dir, sound });
                             self.spin_vel = crate::grenade::REC_FRAME_RATE * 6.2831855 * 2.0;
+                            self.show_flash();
                         }
                     }
                     // case 4's `Mat_LookAt(obj+0x30 → target+0x30)` slerp [M 0x180498 case 4].
@@ -837,6 +862,7 @@ impl GTurret {
                             sound: SOUND_FIRE,
                         });
                         self.spin_vel = crate::grenade::REC_FRAME_RATE * 6.2831855 * 2.0;
+                        self.show_flash();
                     }
                     if exit {
                         self.lose_control();
@@ -869,6 +895,8 @@ impl Default for GTurret {
             target: 0,
             owner: 0,
             registered: [0; 3],
+            flash: 0,
+            flash_hidden: false,
             controlled: 0,
             delete_flag: false,
             aim: [0.0; 3],
@@ -933,7 +961,7 @@ mod tests {
     // --- GT_Update 0x180498 / the state machine ---
 
     fn ctx<'a>(ch: &'a crate::triggers::Channels, cands: &'a [TrackCand]) -> GTCtx<'a> {
-        GTCtx { channels: ch, mp: false, frame: 1, cands, registered0_state: None, mount: None }
+        GTCtx { channels: ch, mp: false, frame: 1, cands, mount: None }
     }
 
     fn step(t: &mut GTurret, ch: &crate::triggers::Channels, cands: &[TrackCand], rng: &mut crate::drone::Rng) -> Vec<GTEvent> {
@@ -983,7 +1011,7 @@ mod tests {
         let mut rng = crate::drone::Rng::new(1);
         let mut t = GTurret { state: gt_state::COMBAT, facing: 1, param4: 18, param5: 0, ..GTurret::default() };
         for f in 0..120u32 {
-            let ctx = GTCtx { channels: &ch, mp: false, frame: f, cands: &none, registered0_state: None, mount: None };
+            let ctx = GTCtx { channels: &ch, mp: false, frame: f, cands: &none, mount: None };
             t.update(&ctx, &mut rng, &mut Vec::new());
         }
         assert_eq!(t.state, gt_state::COMBAT, "e8 ON with ea == 0 returns before the timer [M :406-409]");
@@ -992,7 +1020,7 @@ mod tests {
         let mut t2 = GTurret { state: gt_state::COMBAT, facing: 1, param4: 18, param5: 0, ..GTurret::default() };
         let mut moved = None;
         for f in 0..120u32 {
-            let ctx = GTCtx { channels: &ch_off, mp: false, frame: f, cands: &none, registered0_state: None, mount: None };
+            let ctx = GTCtx { channels: &ch_off, mp: false, frame: f, cands: &none, mount: None };
             t2.update(&ctx, &mut rng, &mut Vec::new());
             if t2.state == gt_state::RESTORING { moved = Some(f); break; }
         }
@@ -1002,14 +1030,14 @@ mod tests {
         let mut t3 = GTurret { state: gt_state::COMBAT, facing: 1, param4: 18, param5: 0, ..GTurret::default() };
         for f in 0..41u32 {
             let c: &[TrackCand] = if f == 20 { &bond } else { &none };
-            let ctx = GTCtx { channels: &ch_off, mp: false, frame: f, cands: c, registered0_state: None, mount: None };
+            let ctx = GTCtx { channels: &ch_off, mp: false, frame: f, cands: c, mount: None };
             t3.update(&ctx, &mut rng, &mut Vec::new());
         }
         assert_eq!(t3.state, gt_state::COMBAT, "the tracked frame reset +0xDC — 20 + 20 idle frames stay under 0.5 s [M :293]");
         // Sister: 41 idle frames with no tracked frame DO cross 0.5 s.
         let mut t4 = GTurret { state: gt_state::COMBAT, facing: 1, param4: 18, param5: 0, ..GTurret::default() };
         for f in 0..41u32 {
-            let ctx = GTCtx { channels: &ch_off, mp: false, frame: f, cands: &none, registered0_state: None, mount: None };
+            let ctx = GTCtx { channels: &ch_off, mp: false, frame: f, cands: &none, mount: None };
             t4.update(&ctx, &mut rng, &mut Vec::new());
         }
         assert_ne!(t4.state, gt_state::COMBAT, "41 continuous idle frames re-holster");
