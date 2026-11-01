@@ -70,9 +70,9 @@ fn clear_captors(w: &mut Walker, around: [f32; 3], label: &str) {
         };
         // The geisha's own bound captor [M 0x144030] first, wherever the AI has walked him: the
         // save keys on that captor's death [M 0x1441c0], and a hunting captor can leave the
-        // 8-unit room radius (measured on the faithful capsule tree: geisha 1.s drone 5 stood 9.6
-    // away at round 0) while the radius pass
-        // finds nobody and the save never fires. Then the rest of the room.
+        // 8-unit room radius (measured on the faithful capsule tree: geisha 1's drone 5 stood
+        // 9.6 away at round 0) while the radius pass finds nobody and the save never fires.
+        // Then the rest of the room.
         let bound = {
             let sim = w.scene.sim.as_ref().unwrap();
             sim.drones.list.iter()
