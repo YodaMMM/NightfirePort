@@ -2422,10 +2422,12 @@ fn front_end_menu(args: &[String], scene: &scene::Scene, front_end: bool, iso_pa
         // the same state `FrontEnd::action`'s Confirm sets on the OBJECTIVES tab [M 0x204408
         // 0x205b98-0x205c34: control 1's activation reads control 8's row and opens the ok-only
         // box; 0xffffffff → 0x31d]. After the fill above (the rows must exist).
-        if args.iter().any(|a| a == "--pause-hint") && fe.pause_tab == 1 && !fe.pause_objectives.is_empty() {
-            let sel = fe.pause_objectives_sel.min(fe.pause_objectives.len() - 1);
-            let hint = fe.pause_objectives[sel].hint;
-            fe.pause_hint = Some(if hint == 0xffff_ffff { 0x31d } else { hint });
+        // `--pause-hint-again` opens, closes and re-opens the same row's box (the reopened box;
+        // every box is sized for its own lines, fe_pages::HintBoxView::size_lines).
+        let again = args.iter().any(|a| a == "--pause-hint-again");
+        if (again || args.iter().any(|a| a == "--pause-hint")) && fe.pause_tab == 1 && !fe.pause_objectives.is_empty() {
+            fe.open_objective_hint();
+            if again { fe.close_objective_hint(); fe.open_objective_hint(); }
         }
     }
     // Tick through the boot load and let the page's timers run (the flash cycle etc.).
