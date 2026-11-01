@@ -62,9 +62,11 @@ fn walk_to_the_gatehouse_and_ride_the_truck() {
     // hand-off takes Bond from where he stands (the enable's `at` is the truck's matrix).
     w.walk_nav_to([98.6, 26.0, 106.5], "to the gatehouse", 1.6);
     {
-        // The spawn's reveal plate (ch 0x45 at feet+0.47) sits below the toucher stand-in's reach —
-        // a documented stand-in miss (see drone.rs's toucher comment); the truck chain does not
-        // need it (fix_truck_live drives the whole ride without it).
+        // The spawn's reveal plate (TouchOnce #36 at (105.94, 24.41, 108.14), out 0x45 [D]) fires
+        // on the boot tick under the −0.6 stand-in reach (the plate sits 0.557 below the boot
+        // reference, inside the [0.557, 0.575] window the stand-in straddles — drone.rs's toucher
+        // comment); the assert below pins the fire. (The pre-−0.6 "documented miss" note here is
+        // obsolete.)
         let sim = w.scene.sim.as_ref().unwrap();
         eprintln!("[05] at the gatehouse tick {} bond {:?}; ch 0x45 {} ch 0x5c {}", w.total_ticks, sim.bond.pos,
             sim.drones.channels.on(0x45) as u8, sim.drones.channels.on(0x5c) as u8);
