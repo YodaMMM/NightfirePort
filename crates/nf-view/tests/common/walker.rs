@@ -229,6 +229,9 @@ impl Walker {
         self.dmg.active = !self.tops_up();
         let tick = self.total_ticks;
         self.dmg.note(self.scene.sim.as_ref().unwrap(), tick);
+        if self.dmg.active && (tick % 60 == 0 || self.dmg.died.is_some()) {
+            note_summary(self.total_ticks, self.dmg.summary(self.scene.sim.as_ref().unwrap()));
+        }
         if self.dmg.active && self.dmg.die_panics {
             if let Some(d) = &self.dmg.died { panic!("[real-damage] {d}"); }
         }
@@ -1486,14 +1489,4 @@ pub fn hall_ammo_ladder(w: &mut Walker, label: &str) {
     w.walk_nav_to([7.9, 5.3, 11.1], &format!("{label}: out the hall's east door"), 1.6);
     w.resupply(label);
     hall_restage(w, label);
-}
-
-impl Drop for Walker {
-    fn drop(&mut self) {
-        if self.dmg.active {
-            if let Some(sim) = self.scene.sim.as_ref() {
-                eprintln!("[real-damage] at tick {}: {}", self.total_ticks, self.dmg.summary(sim));
-            }
-        }
-    }
 }

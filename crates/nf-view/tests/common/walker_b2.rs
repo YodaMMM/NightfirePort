@@ -157,6 +157,9 @@ impl Walker {
         self.dmg.active = !self.tops_up();
         let tick = self.total_ticks;
         self.dmg.note(self.scene.sim.as_ref().unwrap(), tick);
+        if self.dmg.active && (tick % 60 == 0 || self.dmg.died.is_some()) {
+            note_summary(self.total_ticks, self.dmg.summary(self.scene.sim.as_ref().unwrap()));
+        }
         if self.dmg.active && self.dmg.die_panics {
             if let Some(d) = &self.dmg.died { panic!("[real-damage] {d}"); }
         }
@@ -884,14 +887,4 @@ pub fn leg(sim: &nf_view::scene::Sim, from: V3, to: V3) -> Vec<V3> {
     pts.extend(nav_route(sim, from, to).unwrap_or_default());
     pts.push(to);
     pts
-}
-
-impl Drop for Walker {
-    fn drop(&mut self) {
-        if self.dmg.active {
-            if let Some(sim) = self.scene.sim.as_ref() {
-                eprintln!("[real-damage] at tick {}: {}", self.total_ticks, self.dmg.summary(sim));
-            }
-        }
-    }
 }

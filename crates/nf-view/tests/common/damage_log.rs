@@ -6,13 +6,29 @@
 // own hit record (`Drones::player_hits` — (frame, owner drone, health lost), pushed by every
 // Bond-damage site in nf-game/drone.rs) each tick, keeps the lowest health, and on the first
 // tick at 0 health prints the death spot and the last hits (owner skin, weapon, distance).
-// The walker's Drop prints the end summary. No game state is written.
+// `with_real_damage` prints the end summary (the env run prints one every 3000 ticks). No game
+// state is written.
 
 thread_local! {
     /// `with_real_damage`'s switch: the top-up is off for every walker on this test's thread.
     static REAL_DAMAGE: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
     /// `with_real_damage_no_return_fire`: the walkers made on this thread do not return fire.
     static NO_RETURN_FIRE: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
+    /// The latest real-damage summary on this thread (refreshed every 60 ticks and at a death).
+    static LAST_SUMMARY: std::cell::RefCell<Option<(u32, String)>> = const { std::cell::RefCell::new(None) };
+}
+
+/// Keep the walker's latest summary; under `NF_WALK_NO_TOPUP` print one every 3000 ticks.
+pub fn note_summary(tick: u32, s: String) {
+    if tick % 3000 == 0 && std::env::var_os("NF_WALK_NO_TOPUP").is_some() { eprintln!("[real-damage] at tick {tick}: {s}"); }
+    LAST_SUMMARY.with(|c| *c.borrow_mut() = Some((tick, s)));
+}
+
+/// Print and clear this thread's latest summary (the end of a real-damage walk).
+pub fn print_summary() {
+    if let Some((tick, s)) = LAST_SUMMARY.with(|c| c.borrow_mut().take()) {
+        eprintln!("[real-damage] at tick {tick}: {s}");
+    }
 }
 
 /// The top-up is off: `NF_WALK_NO_TOPUP` for the whole binary, or `with_real_damage` for this
@@ -27,7 +43,7 @@ pub fn no_topup_env() -> bool {
 pub fn with_real_damage<R>(f: impl FnOnce() -> R) -> R {
     // Reset on the way out, a panic included (libtest may run the next test on this thread).
     struct Reset;
-    impl Drop for Reset { fn drop(&mut self) { REAL_DAMAGE.with(|c| c.set(false)); } }
+    impl Drop for Reset { fn drop(&mut self) { REAL_DAMAGE.with(|c| c.set(false)); print_summary(); } }
     REAL_DAMAGE.with(|c| c.set(true));
     let _reset = Reset;
     f()
