@@ -73,6 +73,7 @@ const BASELINE: &[(&str, &str)] = &[
     // the skin's six rigid parts attached (+6 characters, +36 attachments, +2166 verts, +12
     // materials) [M AnimObjectNew 0x1be910:143-170, AnimObjectUpdate 0x1befd8:300-317]. The other
     // four pinned levels place no 0xF3 tree and are bit-identical.
+    // batch-1101b re-pin: goggles-all (+201 attachments: breath, the guards' ray, glow) + the Ronin turret's draw slots.
     // batch-1031o re-pin: the merged scene (missing-scenery trees, viewmodel-light env-map vertex
     // flags, 05 corona billboard slots, satchel/weather/pc-screen slots) — counts as each branch pinned.
     // goggles-all re-pin (11-01): the goggles chain on the merged master — the body-glow, x-ray,
@@ -83,7 +84,7 @@ const BASELINE: &[(&str, &str)] = &[
     // [M 0x1db050] — 0700000c's multi-SP sub chains add 6 slots (+248 vertices, +576 indices,
     // +1 attachment); 07000014's vent-lid SPs are placed SPs (unchanged), the rest have no
     // multi-SP sub chains.
-    ("0700000c.bin", "dd0775c2331b220f 4924464 10351560 8403 4724544 97 12438 170 22 40 11"), // re-pinned 10-26: 0x3b on posed slots
+    ("0700000c.bin", "50d2d7a69ec6b50f 4926782 10356138 8425 4726862 97 12444 170 22 40 11"), // re-pinned 10-26: 0x3b on posed slots
     // script-entity-copies: one draw slot per ScriptPlayer running a script — 14's nine
     // SPs on the vent-lid script 0x06000A3B (+ its other shared scripts) add 20 attachments, +1600 vertices.
     // The keypads' LOD pair in the posed slots (Lock_Unlock 0x1b0650 / case 1 `Control_NextLOD`: three
