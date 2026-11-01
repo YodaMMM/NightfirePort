@@ -5052,6 +5052,9 @@ impl Sim {
         // The crouch substate (player obj+0xF6 == 4 — the port folds it into the walk substate +
         // `crouched`): `Drone_ProcessOpponents` 0x1390c0:40-42 scales Bond's visibility by 0.75.
         self.drones.bond_crouched = self.bond.crouched && self.bond.substate == nf_game::player::SS_WALK;
+        // The zero-g "moving" read: the thruster pair, not a position change (`Drones::player_move_local`).
+        self.drones.player_move_local = (self.bond.zero_g_active && matches!(self.bond.substate, nf_game::player::SS_ZEROG_8 | nf_game::player::SS_ZEROG_9))
+            .then_some(self.bond.local);
         // The class byte the AI's `ObjectIsArmed` 0x178768 reads: Bond obj+0xdc+0x62. `Player_WeaponSelect`
         // 0x1a2cc0 copies the request (+0x63) into it at the switch's START (the `weapon_data[+0x64].+0xc4
         // == 0` arm — +0x64 is 0x47 from InitWeapon 0x1a7ef8:137-139), so mid-holster the AI already reads

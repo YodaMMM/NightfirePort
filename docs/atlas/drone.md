@@ -77,7 +77,8 @@ snapshot `work/ee_start_05.bin` [L]. Port: `crates/nf-game/src/drone.rs`. Compan
 | +0xA4 | f32 | | 1.0 at init | DefaultInit | | [M] |
 | +0xAC | f32 | health | 10.0 default; per-type/per-model overrides (voice set 0x10 ×3 on 0x7000014; dtypenew 0xD → 100.0; `DroneInit_TakeXHits` for 0x18; `DroneCaptain_Mod_Health` for captains) | DefaultInit | damage | [M,L] |
 | +0xB0 | f32 | max health | copied from +0xAC at the end of init | DefaultInit | damage | [M] |
-| +0xB4/+0xB5 | u8 | accuracy / aggression | stats; captain accuracy × 1/`DroneCaptain_Mod_BulletAccuracy` (DefaultInit); 07000005 drones [L]: acc 5, agr 0 | DefaultInit, `drone_stats` | firing/AI | [M,L] |
+| +0xB4/+0xB5 | u8 | accuracy / aggression | `drone_stats[+0xC7][1]` words 0/1 (`DoModeSettingsNEW` 0x14c600:81-107; 5/0 when the record's health word is 0); captain accuracy × 1/`DroneCaptain_Mod_BulletAccuracy` (DefaultInit). [L] 07000005 level-start guards (type 1, empty record): 5/0; 07000001/02 type-2 guards: 8/1 (captains 4) | DoModeSettingsNEW, DefaultInit | firing/AI | [M,L] |
+| +0xB6..+0xBA | u8 | stats words 3..7 | `+0xB8` reaction (`DroneFunc_ReactionTime` 0x14ac60), `+0xB9` recover (`DroneFunc_RecoverTime` 0x147188); [L] type 2: 80/3/80/80/1 | DoModeSettingsNEW | reaction / recover | [M,L] |
 | +0xB8 | u8 | reaction | stat byte (reaction time math, docs/systems/drone-ai.md); [L] 0 | stat table | AI | [M,L] |
 | +0xBB | u8 | | 0 at init | DefaultInit | | [M] |
 | +0xC0 | f32 | | 1.0 at init (SP) | DefaultInit | | [M] |
@@ -98,7 +99,7 @@ snapshot `work/ee_start_05.bin` [L]. Port: `crates/nf-game/src/drone.rs`. Compan
 | +0xF4 | f32 | | +0xEC + Rand_FRand(0) | DefaultInit | | [M] |
 | +0xF8 | f32 | | 2.0 at init | DefaultInit | | [M] |
 | +0xFC | f32 | combat sight range | fc: default f0+1+FRand(4), 1→f0+1+FRand(3), 2→same, 3→100+FRand(6), 4→1000, 5→f0+1+FRand(4) | DefaultInit | AI | [M] |
-| +0x100 | f32 | damage multiplier | 1.0 default; 2.0 for voice sets {2,6,10,0xB,0xE,0x10,0x3B..0x40}; `DroneCaptain_Mod_BulletDamage` for captains | DefaultInit | `NDrone2_HitDamage` 0x145558 | [M] |
+| +0x100 | f32 | damage multiplier | 1.0 default; 2.0 for the held weapons {2,6,10,0xB,0xE,0x10,0x3B..0x40} (the DefaultInit weapon switch 0x14b300:267-293; [L] every non-captain 0xE guard on 01/02); `DroneCaptain_Mod_BulletDamage` for captains | DefaultInit | `NDrone2_HitDamage` 0x145558 | [M] |
 | +0x108 | u32 | state-machine id | creation counter [L: 1..13, newest = 1] | state machine init | msgs | [M,L] |
 | +0x10C | u32 | current state | state id; mirrored to `obj+0xF4` [L: 0x29↔0x29, 4↔4] | `Drone_SM_SetState` | dispatch | [M,L] |
 | +0x110/+0x114 | u32 | prev/next state | state-machine info (+8/+0xC per docs/systems/drone-ai.md) | SM | SM | [M] |

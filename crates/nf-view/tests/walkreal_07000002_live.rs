@@ -830,7 +830,13 @@ fn walk_the_castle_all_objectives_to_the_exit() {
         if ch_on(&w, 0x49) { break; }
         w.tick(Default::default(), false);
     }
-    assert!(ch_on(&w, 0x49), "geisha 1 saved: ch 0x49 [M 0x1441c0]");
+    {
+        let sim = w.scene.sim.as_ref().unwrap();
+        let g = &sim.drones.list[g1];
+        let near: Vec<String> = sim.drones.list.iter().enumerate().filter(|(_, d)| d.team == 1 && d.health > 0.0 && !d.corpse
+            && d.pos.iter().zip(at).map(|(a, b)| (a - b).powi(2)).sum::<f32>() < 400.0).map(|(i, d)| format!("{i}:st{:#x} hp{:.0} ({:.1},{:.1},{:.1})", d.state, d.health, d.pos[0], d.pos[1], d.pos[2])).collect();
+        assert!(ch_on(&w, 0x49), "geisha 1 saved: ch 0x49 [M 0x1441c0] — geisha state {:#x} health {:.1} captor {:?}; live hostiles within 20 u: {near:?}", g.state, g.health, g.captor);
+    }
     assert!(ch_on(&w, 0x29) && ch_on(&w, 0x2a) && ch_on(&w, 0x88), "the three captor deaths [D param 12]");
     assert!(ch_on(&w, 0x3b), "AND #397 (0x29,0x2A,0x88,0x49) → 0x3B [D tr[017]]");
 
