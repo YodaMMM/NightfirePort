@@ -31,3 +31,17 @@ Session 1 progress (~11:30 UTC):
   Task: finish the crouch-under-#607 real-damage route — the outbound nav via east of #614's east
   end, the fatal band legs, un-ignore walk_office_floor_qworm_keyboard_hatch_real_damage, pin the
   laser band rule, run every *0700000a* binary + nf-game.
+- The laser band rule pinned live both #607 ways (standing raises 0x1F via the interactables'
+  exact through-crossing leg; crouched passes silent with the crouch held clear of the beam's
+  0.55 standing reach — the walker's 1.2-arrive swing east into the reach fired the beam, the
+  new (−12, 14.5) crouched leg fixes it). The outbound #614 via (the A* west lane crossed the
+  low line at x −22.1 — now via (−15.8, 10)) + the fatal band legs (walk_to). The low-beam live
+  crossing pin pulled: the port's toucher reaches the low band only marginally on both stances
+  (standing 0.47 off, crouched 0.03 inside — neither fired) — the dodge + the route's no-alert
+  pin is the low-beam pin; live check filed. The branch's drone::Player::crouched compile break
+  fixed (25 nf-game test files' initializers). The route's last bug diagnosed: the crouched
+  outbound's slow pace lets the panel-side challenge civilian run and press (level_exit before
+  the install; health 76, 10 hits — the turrets never armed, the beam pin held). Totals:
+  interactables 7/0, walk 3/0, fix_0a_rain 2/0, walkreal 6/4/2i (the 3 route walks share the
+  runner fail + the mouth-edge repro), nf-game 636/0/5i. Report:
+  docs/reports/level-0a-ceiling-gun-route-2.md.
