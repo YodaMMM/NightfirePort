@@ -22,6 +22,15 @@ fn iso() -> String { std::env::var("NF_ISO").expect("NF_ISO") }
 /// `Camera_UpdateGlbVars` advances it on the frames after [M 0x1bada0:16-20]).
 fn walk_to_the_exit(iso: &str, stop_at_fire: bool) -> Walker {
     let mut w = Walker::new(nf_view::load(iso, "07000001.bin", false).expect("load 07000001"));
+    // On real damage a guard inside 4 u is backed away from, in the walker's fights and its
+    // return fire: under 3.0 u every drone round hits [M DroneWeap_DoBulletAccuracy
+    // 0x179740:113-115], and the hall guards' 8-pellet shotgun volleys (weapon 0x1C [M
+    // DroneWeap_FireWeapon 0x178f68, weapon_data+0x18]) took 24 health each from 0.8-1.2 u at the
+    // east door. The top-up walks keep their fight timelines.
+    if !w.tops_up() {
+        w.keep_off = Some(4.0);
+        w.dmg.back_off = Some(4.0);
+    }
     // The type-2 guards carry 12 health, captains 24 [L ee_02b.bin]: Bond aims for the head
     // (`Walker::prefer_head`), as a player does, or the scripted fights run the walk dry.
     w.prefer_head = true;

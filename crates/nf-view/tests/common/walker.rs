@@ -158,11 +158,11 @@ pub struct Walker {
     /// the scripted walks dry. Within 6 u only (see `exposed_aim`). Default off so the other
     /// walks keep their fight timelines.
     pub prefer_head: bool,
-    /// OPT-IN: in `shoot`, an exposed target beyond this range is walked at (aim held, trigger
-    /// up) until inside it, then fought — a player closes the gap instead of emptying a clip at
-    /// 11-14 u (the 02 real-health geisha-2 captor at 11.2 u took 23 rounds unhurt). A 120-tick
-    /// stall in the approach fires from where Bond stands.
-    pub close_in: Option<f32>,
+    /// OPT-IN: in `shoot`, Bond backs away (aim held, trigger live) while the target or any
+    /// other live guard stands inside this range — a player keeps a shotgun guard off arm's
+    /// length. `DroneWeap_DoBulletAccuracy` 0x179740 forces every round to hit under 3.0 u
+    /// (`if (dist < 3.0) bVar2 = true` [M :113-115]), so a fight at 1-2 u takes the whole volley.
+    pub keep_off: Option<f32>,
     /// The walked path: a coarse breadcrumb of ground Bond actually covered (pushed in
     /// tick_inner, ~2 u resolution, 512 points). The resupply rule draws its corridor from it —
     /// see `resupply` for why the harness must not take off-path ammo detours.
@@ -240,7 +240,7 @@ impl Walker {
             body_block_response: false,
             bridge_wedged_nav: false,
             prefer_head: false,
-            close_in: None,
+            keep_off: None,
         }
     }
 
@@ -693,8 +693,6 @@ impl Walker {
         let kill_trace = std::env::var_os("NF_KILL_TRACE").is_some();
         let mut kt_health = f32::MAX;
         let mut kt_state = 0xffu8;
-        // `close_in`: the approach's best distance and the tick it last improved.
-        let (mut close_best, mut close_at) = (f32::MAX, 0u32);
         for t in 0..10800u32 {
             {
                 let sim = self.scene.sim.as_ref().unwrap();
@@ -764,9 +762,9 @@ impl Walker {
                 // taps sprayed ammo at a drifting aim) and SOMETHING is exposed.
                 let on_target = err.abs() < 0.02 && perr.abs() < 0.028 && t.saturating_sub(last_tap) > 15;
                 let dist_now = dxz(bp, dp);
-                if dist_now < close_best - 0.05 { close_best = dist_now; close_at = t; }
-                let closing = !blocked && self.close_in.is_some_and(|r| dist_now > r) && t - close_at < 120;
-                let trigger = !clip_empty && !blocked && on_target && !closing;
+                let backing = self.keep_off.is_some_and(|r| (!blocked && dist_now < r)
+                    || sim.drones.list.iter().any(|o| o.team == 1 && o.enabled && o.present && !o.corpse && o.health > 0.0 && dxz(o.pos, bp) < r));
+                let trigger = !clip_empty && !blocked && on_target;
                 if trigger { last_tap = t; }
                 // The flank: while blocked, sidestep (alternating every 90 ticks) and push forward
                 // in the first half of each window when the guard is far.
@@ -775,8 +773,8 @@ impl Walker {
                 let input = Input {
                     turn: err.clamp(-0.08, 0.08),
                     look: perr.clamp(-0.08, 0.08),
-                    forward: if (blocked && far && window) || (closing && err.abs() < 0.3) { 1.0 } else { 0.0 },
-                    strafe: if closing { 0.0 } else if blocked { if window { 1.0 } else { -1.0 } } else if repositions % 2 != 0 && t - last_progress < 60 { -1.0 } else if repositions % 2 != 0 { 0.0 } else if t - last_progress < 60 { 1.0 } else { 0.0 },
+                    forward: if backing { -1.0 } else if blocked && far && window { 1.0 } else { 0.0 },
+                    strafe: if backing { 0.0 } else if blocked { if window { 1.0 } else { -1.0 } } else if repositions % 2 != 0 && t - last_progress < 60 { -1.0 } else if repositions % 2 != 0 { 0.0 } else if t - last_progress < 60 { 1.0 } else { 0.0 },
                     ..Default::default()
                 };
                 self.scene.sim.as_mut().unwrap().step_bond(input, trigger, reload, false);
@@ -887,6 +885,10 @@ impl Walker {
                 eprintln!("[walk] {label}: the drone stopped short of the goal at ({:.1},{:.1},{:.1}) after +{} ticks (10 s still)", target[0], target[1], target[2], self.total_ticks - start_ticks);
                 return target;
             }
+            // Real damage: answer a guard shooting Bond before following on (the 01 escort stood
+            // still under a pistol guard's 1.7-u fire after the hall AND, 39 → 0 health; the
+            // follow loop never looked at him). A no-op while the top-up is on.
+            if self.return_fire(label) { continue; }
             // Steer toward the drone, keeping OUT of the lead's "Bond in the way" band: the escort
             // parks in PlayerInWay while Bond is within 3.0 [M 0x15ea28 case 3], and waits when Bond
             // is beyond 12 [M 0x15e698 case 3]. The escort band is 4.5..10.

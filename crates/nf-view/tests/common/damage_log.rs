@@ -84,6 +84,14 @@ pub struct DamageLog {
     pub fights: u32,
     /// (drone, tick) — a guard a fight did not drop is not re-fought before the tick.
     pub cooldown: Vec<(usize, u32)>,
+    /// OPT-IN for `stand_and_fire`: give the target up after this many taps without a round
+    /// landing (a player switches to the next guard instead of emptying the clip into cover the
+    /// world trace does not see). None keeps the 300-tick rule alone.
+    pub dry_taps: Option<u32>,
+    /// OPT-IN for `stand_and_fire`: Bond steps back (aim held) while any live guard stands
+    /// inside this range. Under 3.0 u every drone round hits [M DroneWeap_DoBulletAccuracy
+    /// 0x179740:113-115] and a shotgun guard's 8 pellets all land; None keeps Bond still.
+    pub back_off: Option<f32>,
     last_health: f32,
     last_hits: Vec<(u32, usize, f32)>,
 }
@@ -289,6 +297,7 @@ impl Walker {
         let mut aim: Option<[f32; 3]> = None;
         let mut hp0 = self.scene.sim.as_ref().unwrap().drones.list[di].health;
         let mut last_hit = 0u32;
+        let mut dry = 0u32;
         for t in 0..cap {
             let (input, fire, reload) = {
                 let sim = self.scene.sim.as_ref().unwrap();
@@ -304,8 +313,9 @@ impl Walker {
                 if aim.is_none() { unseen += 1; if unseen > 60 { return false; } } else { unseen = 0; }
                 // No round landed for 300 ticks: walk on (a guard in cover the stand cannot reach;
                 // the 13 lobby stand took 40 health that way).
-                if d.health < hp0 { hp0 = d.health; last_hit = t; }
+                if d.health < hp0 { hp0 = d.health; last_hit = t; dry = 0; }
                 if t - last_hit > 300 { return false; }
+                if self.dmg.dry_taps.is_some_and(|n| dry >= n) && t - last_tap > 20 { return false; }
                 let at = aim.unwrap_or(torso);
                 let (dx, dy, dz) = (at[0] - eye[0], at[1] - eye[1], at[2] - eye[2]);
                 let h = (dx * dx + dz * dz).sqrt().max(0.5);
@@ -327,7 +337,9 @@ impl Walker {
                 let reload = sim.gun.clip == 0;
                 let fire = !reload && unseen == 0 && !blocked && err.abs() < 0.03 && perr.abs() < 0.04
                     && t.saturating_sub(last_tap) >= 8;
-                (Input { turn: err.clamp(-0.08, 0.08), look: perr.clamp(-0.08, 0.08), ..Default::default() }, fire, reload)
+                let crowd = self.dmg.back_off.is_some_and(|r| sim.drones.list.iter().any(|o| o.team == 1 && o.enabled && o.present
+                    && !o.corpse && o.health > 0.0 && ((o.pos[0] - b[0]).powi(2) + (o.pos[2] - b[2]).powi(2)).sqrt() < r));
+                (Input { turn: err.clamp(-0.08, 0.08), look: perr.clamp(-0.08, 0.08), forward: if crowd { -1.0 } else { 0.0 }, ..Default::default() }, fire, reload)
             };
             if reload {
                 self.scene.sim.as_mut().unwrap().step_bond(Input::default(), false, true, false);
@@ -336,6 +348,7 @@ impl Walker {
                 for _ in 0..60 { self.tick(Input::default(), false); }
             } else if fire {
                 last_tap = t;
+                dry += 1;
                 self.tick_fire(input);
             } else {
                 self.tick(input, false);
