@@ -508,6 +508,39 @@ mod tests {
         assert!((w2.pos[2] - 8.0).abs() < 1e-3, "the 0x4F boundary is 8.0 [L +0x1C], got {}", w2.pos[2]);
     }
 
+    /// laser-watch-reach: the burn walk's input segment NEVER covers a point past the record
+    /// range — the not-beyond sister of the reach law. The game's satchel burn consumes the
+    /// collision pass's contacts of the round's per-tick segment [M Bullet_DoTrails 0x12d890
+    /// tail 0x12e2f0-0x12e390 — the charge's obj+0xD0 walk with class-5 hitters whose record
+    /// id is 0x4E/0x4F]; the segment itself is the clamped flight law above (the state-0 step
+    /// lands ON the +0x1C boundary [M 0x12f014-0x12f02c], the head check kills the round before
+    /// any second segment [M 0x12e95c-0x12e984]). So a landed satchel at 4.5 along the aim of a
+    /// 0x4E round is never contacted — the round's whole life is ONE segment of ≤ 4.0 — while
+    /// a 0x4F round's single ≤ 8.0 segment covers it [L weapon_data 0x2bf150 + id·0x10C +0x1C:
+    /// 4.0 / 8.0; M Bullet_init 0x12c5a0:187 the +0x20 speed].
+    #[test]
+    fn the_burn_segment_never_passes_the_record_range() {
+        let world = CollisionWorld::empty();
+        let vol = PlayerVolume { feet: [1e4, 0.0, 1e4], height: 0.1, radius: 0.1 };
+        // The 0x4E round: one segment [muzzle, muzzle+4.0], dead after. A satchel centre at
+        // 4.5 on the ray lies outside every segment the round ever produces.
+        let mut w = Bullet { pos: [0.0, 1.0, 0.0], dir: [0.0, 0.0, 1.0], speed: 33.33, travelled: 0.0, range: 4.0,
+            damage: 0.0, owner: 0, state: 0, weapon: 0x4e, flyby: false, bounces: 0, ..Bullet::TAIL };
+        let mut rng = crate::drone::Rng::new(7);
+        w.update(&world, &vol, [1e4, 0.0, 1e4], &mut rng);
+        let end0 = w.pos[2];
+        w.update(&world, &vol, [1e4, 0.0, 1e4], &mut rng);
+        assert_eq!(w.state, 2, "the round is dead after the boundary tick [M 0x12e95c-0x12e984]");
+        assert!(end0 <= 4.0 + 1e-3 && w.pos[2] <= 4.0 + 1e-3,
+            "no segment end ever passes 4.0 [L +0x1C], first {end0} last {}", w.pos[2]);
+        // The 0x4F round covers the same point: its one segment reaches 8.0 [L].
+        let mut w2 = Bullet { pos: [0.0, 1.0, 0.0], dir: [0.0, 0.0, 1.0], speed: 33.33, travelled: 0.0, range: 8.0,
+            damage: 0.0, owner: 0, state: 0, weapon: 0x4f, flyby: false, bounces: 0, ..Bullet::TAIL };
+        let mut rng2 = crate::drone::Rng::new(7);
+        w2.update(&world, &vol, [1e4, 0.0, 1e4], &mut rng2);
+        assert!(w2.pos[2] >= 8.0 - 1e-3, "the 0x4F segment covers 4.5-8.0 [L +0x1C], got {}", w2.pos[2]);
+    }
+
     /// fields-player: the armour gate of `Player_HandlePain`'s pain-type switch
     /// [M 0x1902c8:84-104]: ONLY type 0 (the default/bullet arm) lets armour absorb;
     /// types 1..7 (falls 6, drowning 7, hurt volumes) set armourFraction 0.0.

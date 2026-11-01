@@ -17050,12 +17050,15 @@ fn segment_hits_sphere(a: V3, b: V3, c: V3, r: f32) -> bool {
                         }
                         crate::space_laser::LaserOut::ImpactEmitter => {
                             // [M :189] Emitter_Create(0, 0, 0xc000010, target, 0x2d6210, 0, 0,
-                            // 0) — the impact arm's shape (world_fx::spawn_impact; a
-                            // def-hash miss = no object, the placement path's own rule). The
-                            // normal is [S] unverified: the game's arg mapping is
-                            // decompile-opaque (the aim slot rides the call); the port passes
-                            // world-up.
-                            self.fx.spawn_impact(0x2d6210, l.target, [0.0, 1.0, 0.0]);
+                            // 0) [M Emitter_Create 0x17ae00:86 — arg 3 keys the def hashtable,
+                            // arg 4 is the position VECTOR*, arg 5 the up/normal VECTOR*] —
+                            // the def id is 0xc000010 and 0x2d6210 is the boot-written
+                            // (0,1,0) constant's ADDRESS (.data, written at boot 0x1c7e78 —
+                            // the same constant Player_LaserPointer 0x1a65d8:190 passes to
+                            // Mat_Align2Dir), so the normal is world-up. The port used to
+                            // pass 0x2d6210 in the def slot (world_fx::spawn_impact; a
+                            // def-hash miss = no object, the placement path's own rule).
+                            self.fx.spawn_impact(0xc000010, l.target, [0.0, 1.0, 0.0]);
                         }
                     }
                 }
