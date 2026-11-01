@@ -222,34 +222,37 @@ fn the_gondola_ride_runs_and_the_helicopter_completes_the_mission() {
     assert!(!sim.drones.channels.on(0x4b), "no arrival while the route flies");
     // copter-hitdata-damage: the death now runs on REAL shots. The game's damage walks the 9
     // part slots' hit chains every tick (Copter_Update 0x17dbb8:277-320 — the collide pass fills
-    // each part's obj+0xD0; the Bits scales 2/3/1/2/100/1 sum into rec+0x64) and the death fires
-    // when hp < damage (disasm 0x17e390-0x17e3c8) — Bond just has to land the rounds. The
-    // harness stands him beside the flying Hind and press/release-fires the semi-auto at it,
-    // re-tracking every press while the route flies (step 0.253/tick [D the route dump]).
+    // each part's obj+0xD0; the body's ×1.0 sums into rec+0x64 — the other parts are never picked) and the death fires
+    // when hp < damage (disasm 0x17e390-0x17e3c8) — the rounds just have to land
+    // while the route flies (step 0.253/tick [D the route dump]).
     let ci = sim.drones.copters.iter().position(|c| c.out == 0x4b).unwrap();
     let hp = sim.drones.copters[ci].hp;
+    // The body takes the rounds at ×1.0 (the other parts are never picked [M Collide_PickObj
+    // 0x1eae80 + Copter_Register 0x17e530]): 86 P2K rounds (3.5 [D record 2]). A stand-in Bond
+    // posed beside the flying Hind dies within ~4 s, so the harness hands the bullet pass the
+    // rounds directly — the shot block's `PlayerBullet`, one every other tick through the body.
     let mut shots = 0u32;
     let deadline = sim.drones.frame + 60000;
     while sim.drones.frame < deadline && !sim.drones.channels.on(0x4b) {
-        let press = sim.drones.frame % 2 == 0;
-        if press {
-            // Stand 2.5 units from the copter and aim the view at its centre — the bullets
-            // cross the part spheres on the way (the copter's own SP pose, one tick stale, the
-            // same lag the game's collide pass reads [M 0x1336f8:238]).
-            let p = sim.drones.copters[ci].pos();
-            sim.bond.pos = [p[0] + 2.5, p[1], p[2] + 1.0];
-            let d = [p[0] - sim.bond.pos[0], p[1] - (sim.bond.pos[1] + 1.0), p[2] - sim.bond.pos[2]];
-            let len = (d[0] * d[0] + d[1] * d[1] + d[2] * d[2]).sqrt();
-            if len > 1e-4 {
-                sim.bond.pitch = (d[1] / len).asin() / std::f32::consts::FRAC_PI_2;
-                sim.bond.yaw = d[0].atan2(d[2]);
+        if sim.drones.frame % 2 == 0 {
+            let c = &sim.drones.copters[ci];
+            if let Some((b, _)) = sim.drones.scripts.copter_part_targets(c.placement, &c.parts, &sim.data()).0[2] {
+                let (from, at) = ([b[0], b[1] + 1.0, b[2]], b);
+                let dv = [at[0] - from[0], at[1] - from[1], at[2] - from[2]];
+                let l = (dv[0] * dv[0] + dv[1] * dv[1] + dv[2] * dv[2]).sqrt().max(1e-6);
+                sim.drones.player_bullets.push(nf_game::drone::PlayerBullet {
+                    pos: from, dir: [dv[0] / l, dv[1] / l, dv[2] / l],
+                    speed: 13.2, travelled: 0.0, range: 50.0, damage: 3.5, weapon: 2,
+                    first: true, dead: false, bounces: 0, homing: false, target: None,
+                    gravity: false, guided_cam: false, snd: 0, swoosh: None, born: 0,
+                });
+                shots += 1;
             }
         }
-        sim.step_bond(Input::default(), press, false, false);
-        if !press { shots += 1; }
+        sim.step_bond(Input::default(), false, false, false);
     }
     let (damage, took) = (sim.drones.copters[ci].damage, shots);
-    eprintln!("copter-hitdata-damage: hp {hp} at the gate; {took} trigger pulls; damage {damage}");
+    eprintln!("copter-hitdata-damage: hp {hp} at the gate; {took} P2K rounds; damage {damage}");
     assert!(sim.drones.channels.on(0x4b), "the shots pushed damage {damage} past hp {hp} → state 4 → rec+0x72 [M :358-370]");
     assert!(damage > hp, "the walk's accumulation, not a poke, crossed hp");
     assert!(wait(sim, 200, |s| s.drones.mission.status() == 6), "mux #276 → ch 100 → the mission completes");

@@ -13114,6 +13114,22 @@ fn segment_hits_aabb(a: V3, b: V3, lo: V3, hi: V3) -> bool {
     true
 }
 
+/// The segment parameter (0..1) where `a → b` first enters the sphere `(c, r)`; 0 when `a` is
+/// already inside; None on a miss.
+fn segment_sphere_entry(a: V3, b: V3, c: V3, r: f32) -> Option<f32> {
+    let ab = [b[0] - a[0], b[1] - a[1], b[2] - a[2]];
+    let ca = [a[0] - c[0], a[1] - c[1], a[2] - c[2]];
+    let qa = ab[0] * ab[0] + ab[1] * ab[1] + ab[2] * ab[2];
+    let qb = 2.0 * (ab[0] * ca[0] + ab[1] * ca[1] + ab[2] * ca[2]);
+    let qc = ca[0] * ca[0] + ca[1] * ca[1] + ca[2] * ca[2] - r * r;
+    if qc <= 0.0 { return Some(0.0); }
+    if qa <= 0.0 { return None; }
+    let disc = qb * qb - 4.0 * qa * qc;
+    if disc < 0.0 { return None; }
+    let t = (-qb - disc.sqrt()) / (2.0 * qa);
+    (0.0..=1.0).contains(&t).then_some(t)
+}
+
 /// The satchel burn sparks' emitter def — `Bullet_DoTrails`' contact walk passes the immediate
 /// 0xc00000a [M 0x12d890:467-468].
 pub const SATCHEL_BURN_SPARKS: u32 = 0x0c00_000a;
@@ -13407,7 +13423,10 @@ fn segment_hits_sphere(a: V3, b: V3, c: V3, r: f32) -> bool {
         // targets, the same volumes the bullet pass tests).
         let copter_parts: Vec<(usize, Vec<(V3, f32)>)> = self.copters.iter().enumerate()
             .map(|(ci, c)| {
-                let (targets, present) = self.scripts.copter_part_targets(c.placement, d);
+                let (targets, present) = self.scripts.copter_part_targets(c.placement, &c.parts, d);
+                // The sweep is a `Collide_SphereIntersect` pick [M 0x17c518 → 0x1ec940:111 →
+                // Collide_Pick → Collide_PickObj's always-on 0x20 gate]: the body only.
+                let present = present & crate::copter::PICKABLE_SLOTS;
                 (ci, targets.iter().enumerate()
                     .filter(|(i, _)| present & (1u16 << i) != 0)
                     .filter_map(|(_, v)| *v).collect())
@@ -13859,7 +13878,14 @@ fn segment_hits_sphere(a: V3, b: V3, c: V3, r: f32) -> bool {
         // tick (the parts pose with the SP player — the documented one-tick script-entity lag;
         // the game's collide pass reads the same last-walk poses [M 0x1336f8:238]).
         let copter_targets: Vec<([Option<([f32; 3], f32)>; 9], u16)> = self.copters.iter()
-            .map(|c| self.scripts.copter_part_targets(c.placement, d)).collect();
+            .map(|c| {
+                // Only the pickable part slots take a bullet [M Collide_PickObj 0x1eae80:58-82 —
+                // the always-on obj+0xF0 0x20 gate; Copter_Register 0x17e530:7 sets it on every
+                // part but slot 2]. Before this gate the rotor (stream 4) sat in Bits slot 4
+                // (×100) and one P2K round (3.5) took the 299-hp copter down.
+                let (t, present) = self.scripts.copter_part_targets(c.placement, &c.parts, d);
+                (t, present & crate::copter::PICKABLE_SLOTS)
+            }).collect();
         let frame = self.frame;
         let mut bullets = std::mem::take(&mut self.player_bullets);
         // fix-0c-hatch-latches2: this tick's bullet-vs-SS-part Operate contacts (bit 1), recorded
@@ -14262,6 +14288,7 @@ fn segment_hits_sphere(a: V3, b: V3, c: V3, r: f32) -> bool {
                     self.site_bullet_damage += b.damage;
                 }
             }
+            let mut copter_stop = false;
             // copter-hitdata-damage [M Copter_Update 0x17dbb8:277-320]: the game's collide pass
             // appends the contact to the hit PART's obj+0xD0 chain (the parts are the SP's
             // class-0 script entities) and the walk consumes the chains with the per-slot Bits
@@ -14274,16 +14301,59 @@ fn segment_hits_sphere(a: V3, b: V3, c: V3, r: f32) -> bool {
                 let bclass = d.weapons.records.get(b.weapon as usize)
                     .map_or(0u16, |r| u16::from_le_bytes([r[0x10], r[0x11]]));
                 let bcontact = d.weapons.bullet_contact_damage(b.weapon);
+                // The world stop gates the contact: the collide list is nearest-first and stops
+                // at the first solid node [M Collide_Update 0x1ea398:216-229], so a wall between
+                // Bond and the body takes the round.
+                let mut tw_copter: Option<Option<f32>> = None;
+                let mut copter_t = f32::INFINITY;
                 for (ci, (targets, present)) in copter_targets.iter().enumerate() {
                     if *present == 0 { continue; }
-                    let c = &mut self.copters[ci];
                     for slot in 0..9usize {
+                        if *present & (1u16 << slot) == 0 { continue; }
                         let Some((centre, r)) = targets[slot] else { continue };
-                        if Self::segment_hits_sphere(b.pos, end, centre, r) {
-                            c.part_hits.push(crate::copter::PartHit { slot: slot as u8, damage: bcontact, class: bclass });
-                        }
+                        let Some(t) = Self::segment_sphere_entry(b.pos, end, centre, r) else { continue };
+                        let tw = *tw_copter.get_or_insert_with(|| d.world.segment_bullet_scoped(d.world.find_cel(b.pos), b.pos, end));
+                        if tw.is_some_and(|w| w < t) { continue; }
+                        self.copters[ci].part_hits.push(crate::copter::PartHit { slot: slot as u8, damage: bcontact, class: bclass });
+                        copter_stop = true;
+                        copter_t = copter_t.min(t);
                     }
                 }
+                // The body contact runs `Bullet_CollisionHandler`'s explode arms like any other
+                // contact [M 0x12ce80 — the 0x4 arm `Explode_Create(+0x08, +0x08, +0x0C, …,
+                // HITDATA+0x40, …, 0x6000052)` and the 0x100000/0x200000 bolt arms (script
+                // 0x60007c4, f12 1.0) are gated only on the pierce flag bVar7, which the body's
+                // HITDATA leaves clear: `Collide_PickObj` 0x1eae80 memsets the node (0x60 bytes,
+                // material +0x50 = 0, +0x51 = 0) and the body has no obj+0xF0 0x20 bit
+                // (`Copter_Register` 0x17e530:7 skips slot 2)]. So a rocket on the body blasts at
+                // the contact, and `Explode_Propagate` 0x17c518 case 0 [:86-105] adds the falloff
+                // (≈ +0x0C at the surface) into rec+0x64 — 0x2C/0x2D carry radius 8, damage 100
+                // [L ee_start_05.bin @0x2bf150]. The port dropped the blast here (the round died
+                // on the body with only its 1.0 contact [M Bullet_update's id override]). The
+                // contact point is the segment's sphere entry [S: the game's HITDATA+0x40 for an
+                // object pick — the sweep's (int) truncation makes any point within a unit of the
+                // surface the same full amount].
+                if copter_stop && b.bounces == 0 {
+                    let rec = d.weapons.records.get(b.weapon as usize);
+                    let flags70c = rec.map_or(0u32, |r| u32::from_le_bytes(r[0x70..0x74].try_into().unwrap()));
+                    if flags70c & (0x4 | 0x10_0000 | 0x20_0000) != 0 {
+                        let radius = rec.map_or(0.0, |r| f32::from_le_bytes(r[0x08..0x0c].try_into().unwrap()));
+                        let damage = rec.map_or(0.0, |r| f32::from_le_bytes(r[0x0c..0x10].try_into().unwrap()));
+                        let script = if flags70c & 4 != 0 { 0x0600_0052 } else { 0x0600_07c4 };
+                        let scale = if flags70c & 4 != 0 { radius } else { 1.0 };
+                        let t = copter_t.clamp(0.0, 1.0);
+                        let hit = [b.pos[0] + (end[0] - b.pos[0]) * t, b.pos[1] + (end[1] - b.pos[1]) * t,
+                            b.pos[2] + (end[2] - b.pos[2]) * t];
+                        self.pending_blasts.push((hit, radius, damage, usize::MAX, b.weapon, script, scale, 0));
+                    }
+                }
+                // The body is a solid object: the round dies on it [M Bullet_CollisionHandler
+                // 0x12ce80 disasm 0x12cff0-0x12cff4 — state 2 on the same hit, the rule the
+                // breakables/destroys above follow], so one round lands once and nothing behind
+                // it (the ground, a guard) takes it. Without the stop a round fired down through
+                // the 7.4-unit body sphere hit the ground behind it, ricocheted back up and
+                // scored a second time.
+                if copter_stop { b.dead = true; }
             }
             // The lazer watch's beam burns the locks (`Lock_Update` 0x1ae3d8 case 0, record word 1):
             // the lock's contact list takes THIS bullet's per-tick segment as a contact (the game's
@@ -14472,6 +14542,8 @@ fn segment_hits_sphere(a: V3, b: V3, c: V3, r: f32) -> bool {
             let at = |t: f32| [b.pos[0] + ray[0] * t, b.pos[1] + ray[1] * t, b.pos[2] + ray[2] * t];
             // The first solid node wins the round [M 0x1ea398:216-229 + 0x12cff0-4]: a scenery
             // contact taken above (contact.is_some) kills the walk — nothing farther applies.
+            // A round that died on the copter body reaches neither a guard nor the world behind it.
+            let (best, tw) = if copter_stop { (None, None) } else { (best, tw) };
             match (best, tw) {
                 (Some((i, part, t)), w) if w.is_none_or(|w| t < w) && contact.is_none_or(|(ct, _)| t < ct) => {
                     b.dead = true;
@@ -15805,6 +15877,17 @@ fn segment_hits_sphere(a: V3, b: V3, c: V3, r: f32) -> bool {
                 crate::nis::Request::WireRegister { player, obj, group } => {
                     if let Some(fb) = self.fuseboxes.iter_mut().find(|f| f.placement == player) {
                         fb.register_wire(obj, group);
+                    }
+                    // The copter's SP shares the callback slot: `Copter_Create` 0x17d340 passes
+                    // `Copter_Register` 0x17e530 to `SP_Create` [M 0x17d340: the 0x17e530 arg],
+                    // the slot is the event's param 0. The hash rides along as the object-reuse guard.
+                    if let Some(c) = self.copters.iter_mut().find(|c| c.placement == player) {
+                        let hash = match self.scripts.objects.list.get(obj).and_then(|o| o.as_ref()) {
+                            Some(crate::nis::Obj::Entity { hash, .. }) => Some(*hash),
+                            Some(crate::nis::Obj::Anim { skin, .. }) => Some(*skin),
+                            _ => None,
+                        };
+                        if let Some(h) = hash { c.register(obj, h, group); }
                     }
                     // The turrets' create callback is `GT_Register` 0x181538 (the `Script_Load`
                     // callback arg 0x181538 [M 0017ffa0:100-104]): slot = param 0 (< 3). The port
@@ -17631,7 +17714,7 @@ fn segment_hits_sphere(a: V3, b: V3, c: V3, r: f32) -> bool {
         for c in &mut self.copters {
             // copter-hitdata-damage: the slot-3 emitter's position (the gas branch's gate
             // `rec+0x3c != 0` + its obj+0x80) refreshes from the SP part targets each tick.
-            let (targets, _) = self.scripts.copter_part_targets(c.placement, d);
+            let (targets, _) = self.scripts.copter_part_targets(c.placement, &c.parts, d);
             c.slot3_pos = targets[3].map(|(p, _)| p);
             let (unhide, posed, death_blast) = c.update(&paths, &mut self.channels, &mut self.gas, frame, explode_level, &mut self.rng);
             if unhide { self.scripts.unhide_sp(c.placement); }

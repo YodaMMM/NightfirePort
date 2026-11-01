@@ -11,16 +11,18 @@
 //!   `GameState_time % (Rand(5)+10) == 0`, kind 6 picks `MetalHash_132` and calls
 //!   `Debris_CreateEx(2·radius, …, 180, 3, …)` — 3 particles per passing tick.
 //!
-//! The test drives the real sim: the real level (0700000b — the roof helicopter #328, gate
-//! 0x2A [D the level census]), plain 60 Hz steps, and the damage delivered through the game's
+//! The test drives the real sim: the real level (07000012 — the office helicopter #707, gate
+//! 0x25 [D the placements dump]; the other explode level, 0700000b, registers no pickable part:
+//! its flight script 0x060008BE's only event-0xF line (stream 4, slot 3) follows an empty
+//! stream, so `Copter_Register` gets a NULL entity [D the script dump; M Script_EventHandler
+//! 0x1d94c0:172-175] and the sweep has nothing to reach), plain 60 Hz steps, and the damage delivered through the game's
 //! own blast-propagate entry (`Explode_Propagate` case 0 adds the falloff straight into
 //! rec+0x64 [M 0x17c518:86-105]) the way the port's frag grenade delivers it — the grenade
 //! path's detonation lands in the same `pending_blasts` slot with the frag's record values
 //! radius 8 / damage 100 [L weapon record 0x34 'Fragmentation Grenade', the port's weapon
 //! census] and debris kind 0 (a grenade blast spawns no debris of its own [M the grenade
 //! drain's `sw` of 0 — drone.rs:18702's 8th tuple slot]). The gate poke stands in for the
-//! level's own ch-0x2A writer (the roof arrival script at 0x990 [D the census]; the poke is the
-//! only non-plain input here).
+//! level's own ch-0x25 writer (the poke is the only non-plain input here).
 //!
 //! Opt-in: set `NF_ISO` to the disc image.
 
@@ -36,22 +38,23 @@ fn frag_at(sim: &mut nf_view::scene::Sim, pos: [f32; 3]) {
 }
 
 #[test]
-fn destroying_the_0b_roof_copter_creates_the_kind6_death_blast_and_the_metal_debris() {
+fn destroying_the_12_copter_creates_the_kind6_death_blast_and_the_metal_debris() {
     let Some(iso) = iso() else { eprintln!("skip: NF_ISO not set"); return };
-    let mut scene = nf_view::load(&iso, "0700000b.bin", false).expect("load 0700000b");
+    let mut scene = nf_view::load(&iso, "07000012.bin", false).expect("load 07000012");
     let sim = scene.sim.as_mut().unwrap();
-    assert_eq!(sim.level, 0x0700_000b, "the explode level [M Copter_Update 0x17dbb8:360-363]");
-    // The roof helicopter: gate 0x2A, out 0x66, flight script 060008BE [D the 0700000b census].
-    let ci = sim.drones.copters.iter().position(|c| c.gate == 0x2a).expect("the gate-0x2A copter parses");
+    assert_eq!(sim.level, 0x0700_0012, "the explode level [M Copter_Update 0x17dbb8:360-363]");
+    // The office helicopter #707: gate 0x25, out 0x65, flight script 0x060005BD [D placements].
+    let ci = sim.drones.copters.iter().position(|c| c.gate == 0x25).expect("the gate-0x25 copter parses");
     let placement = sim.drones.copters[ci].placement;
     let hp = sim.drones.copters[ci].hp;
-    eprintln!("[0b-death] copter {ci} placement {placement} hp {hp} gate 0x2a");
+    eprintln!("[12-death] copter {ci} placement {placement} hp {hp} gate 0x25");
     // The level's own gate write (the poke stands in for the 0x990 roof-arrival writer [D]).
-    sim.drones.channels.set(0x2a, 1, sim.drones.frame);
+    sim.drones.channels.set(0x25, 1, sim.drones.frame);
     for _ in 0..20 { sim.step_bond(Default::default(), false, false, false); }
     assert!(!sim.drones.copters.is_empty(), "the gate-on copter updates");
-    let (targets, present) = sim.drones.scripts.copter_part_targets(placement, &sim.data());
-    eprintln!("[0b-death] parts present {present:04x}: {:?}", targets.iter().flatten().collect::<Vec<_>>());
+    let parts = sim.drones.copters[ci].parts;
+    let (targets, present) = sim.drones.scripts.copter_part_targets(placement, &parts, &sim.data());
+    eprintln!("[12-death] parts present {present:04x}: {:?}", targets.iter().flatten().collect::<Vec<_>>());
     assert!(present != 0, "the copter's script entities pose — the damage sweep's targets [M Explode_Propagate case 0 walks the SP part spheres]");
 
     // Destroy it: frag detonations at the body until the death tail takes over. The falloff
@@ -66,7 +69,7 @@ fn destroying_the_0b_roof_copter_creates_the_kind6_death_blast_and_the_metal_deb
             // update, then Collide/propagate]. One more step takes the state to 6.
             sim.step_bond(Default::default(), false, false, false);
             let c = &sim.drones.copters[ci];
-            assert_eq!(c.state, 6, "the death on 0x0700000b goes to 6 [M 0x17e3b0-0x17e3b8]");
+            assert_eq!(c.state, 6, "the death on 0x07000012 goes to 6 [M 0x17e3b0-0x17e3b8]");
             death_pos = Some(c.pos());
             break;
         }
@@ -90,7 +93,7 @@ fn destroying_the_0b_roof_copter_creates_the_kind6_death_blast_and_the_metal_deb
     assert_eq!(b.attacker, usize::MAX - 1, "attacker NULL at the call site, the port's not-Bond mark [M 0x17e168 move $t3, $zero]");
     assert_eq!(b.pos, death_pos, "the blast sits at obj+0x30 [M 0x17e14c; the walk's sync 0x1336f8:386-387]");
     assert_eq!(b.lifetime, 165, "the blast script's +0xAB0 [L/M 0x17cd18]");
-    eprintln!("[0b-death] blast at {:?} radius {} damage {}", b.pos, b.radius, b.damage);
+    eprintln!("[12-death] blast at {:?} radius {} damage {}", b.pos, b.radius, b.damage);
 
     // The debris cadence [M 0x17c350:34-67]: inside the first lifetime quarter only
     // (165 >> 2 = 41), one `Rand_Rand(5)` draw per tick with the `time % (r + 10)` gate, and
@@ -107,7 +110,7 @@ fn destroying_the_0b_roof_copter_creates_the_kind6_death_blast_and_the_metal_deb
             spawned += grew;
         }
     }
-    eprintln!("[0b-death] {passing} passing ticks, {spawned} debris in the 41-tick window");
+    eprintln!("[12-death] {passing} passing ticks, {spawned} debris in the 41-tick window");
     assert!(passing >= 1, "the cadence spawns inside the window (deterministic seed)");
     for d in &sim.drones.blast_debris {
         assert!(METAL_HASH_132.contains(&d.model), "kind 6 throws MetalHash_132 [M 0x17c350:41-43], got {:08x}", d.model);
@@ -126,7 +129,7 @@ fn destroying_the_0b_roof_copter_creates_the_kind6_death_blast_and_the_metal_deb
         }
     }
     assert!(blast_gone_tick.is_some(), "the death blast's script ended → the object dies [M 0x17c394-0x17c3a0]");
-    eprintln!("[0b-death] the blast died at +{:?} ticks past the window", blast_gone_tick);
+    eprintln!("[12-death] the blast died at +{:?} ticks past the window", blast_gone_tick);
 }
 
 // The sister: off the explode levels the death departs (state 4) and creates no blast [M
