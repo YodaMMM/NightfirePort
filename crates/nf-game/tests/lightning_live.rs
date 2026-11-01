@@ -51,7 +51,7 @@ fn lightning_07000001_chained_ladders() {
 
 /// 07000041's four 0x2c records (#82-85): keys 1,1,2,2 → two strikes; the `Lightning_Update`
 /// visibility flips only with the storm's `SuperHappyLightningFlag` (the port's
-/// `WorldFx::lightning` copy — the sim does not drive `View_DrawSky` yet, so a bare tick
+/// `WorldFx::lightning` copy — `Drones::sky_frame` writes it after the sky calls, so a bare `fx` tick
 /// keeps every bolt hidden).
 #[test]
 fn lightning_07000041_two_strikes_and_visibility() {

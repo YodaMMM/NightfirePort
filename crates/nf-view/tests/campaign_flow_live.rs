@@ -28,6 +28,19 @@ mod tower2;
 
 use walker::{Act, Walker, Wp};
 
+/// A P2K round as the shot block hands it to the bullet pass (the urn test's `PlayerBullet`
+/// shape; the copter walk reads the record's contact damage, 3.5 [D record 2]).
+fn p2k_round(from: [f32; 3], at: [f32; 3]) -> nf_game::drone::PlayerBullet {
+    let d = [at[0] - from[0], at[1] - from[1], at[2] - from[2]];
+    let l = (d[0] * d[0] + d[1] * d[1] + d[2] * d[2]).sqrt().max(1e-6);
+    nf_game::drone::PlayerBullet {
+        pos: from, dir: [d[0] / l, d[1] / l, d[2] / l],
+        speed: 13.2, travelled: 0.0, range: 50.0, damage: 3.5, weapon: 2,
+        first: true, dead: false, bounces: 0, homing: false, target: None,
+        gravity: false, guided_cam: false, snd: 0, swoosh: None, born: 0,
+    }
+}
+
 fn iso() -> Option<String> { std::env::var("NF_ISO").ok() }
 
 /// The four gameplay-driven legs (campaign-flow blocker 6): the runner drives each objective's
@@ -99,7 +112,7 @@ fn shoot_gadget_at(w: &mut Walker, target: [f32; 3], range: f32, max_ticks: u32,
             w.scene.sim.as_mut().unwrap().step_bond(input, trigger, false, false);
         }
         w.total_ticks += 1;
-        if w.top_up_health { w.scene.sim.as_mut().unwrap().drones.health.health = 100.0; }
+        w.after_step();
     }
 }
 
@@ -377,9 +390,8 @@ fn drive_08(w: &mut Walker) -> String {
             "Bond rode the carriage down the mountain (z {:.1} from {:.1})", sim.bond.pos[2], floor[2]);
     }
     note.push_str("the real carriage ride → the copter flies; ");
-    // Bond shoots the Hind down with real trigger pulls — the position stand-in is the harness's
-    // (the copter is mid-route, 0.253/tick [D the route dump]); the DAMAGE is the game's own
-    // 9-part walk. No damage pokes. Wait for the cinematic's disable window to end first.
+    // The Hind is shot down (the copter is mid-route, 0.253/tick [D the route dump]); the
+    // DAMAGE is the game's own part walk. No damage pokes. Wait for the cinematic's disable window to end first.
     for _ in 0..3000 {
         if !w.scene.sim.as_ref().unwrap().disabled { break; }
         w.scene.sim.as_mut().unwrap().step_bond(Input::default(), false, false, false);
@@ -387,31 +399,31 @@ fn drive_08(w: &mut Walker) -> String {
     }
     let ci = w.scene.sim.as_ref().unwrap().drones.copters.iter().position(|c| c.out == 0x4b).unwrap();
     let hp = w.scene.sim.as_ref().unwrap().drones.copters[ci].hp;
+    // The rounds land on the body only (Bits ×1.0 [M copter::PICKABLE_SLOTS — Copter_Register
+    // 0x17e530 flags every other part 0x20, Collide_PickObj 0x1eae80 skips it]), so the 299 hp
+    // takes 86 P2K rounds (contact 3.5 [D record 2]). A stand-in beside the flying Hind does not
+    // survive that long (Bond, posed mid-air on the route, dies within ~4 s), so the harness hands
+    // the bullet pass the P2K rounds directly — the same `PlayerBullet` the shot block builds, one
+    // every other tick through the body sphere; the DAMAGE is still the game's own walk.
     let deadline = w.scene.sim.as_ref().unwrap().drones.frame + 60000;
     let mut shots = 0u32;
     while w.scene.sim.as_ref().unwrap().drones.frame < deadline
         && !w.scene.sim.as_ref().unwrap().drones.channels.on(0x4b) {
-        let press = w.scene.sim.as_ref().unwrap().drones.frame % 2 == 0;
-        if press {
-            let sim = w.scene.sim.as_mut().unwrap();
-            let p = sim.drones.copters[ci].pos();
-            sim.bond.pos = [p[0] + 2.5, p[1], p[2] + 1.0];
-            sim.bond.vel = [0.0; 3];
-            let d = [p[0] - sim.bond.pos[0], p[1] - (sim.bond.pos[1] + 1.0), p[2] - sim.bond.pos[2]];
-            let len = (d[0] * d[0] + d[1] * d[1] + d[2] * d[2]).sqrt();
-            if len > 1e-4 {
-                sim.bond.pitch = (d[1] / len).asin() / std::f32::consts::FRAC_PI_2;
-                sim.bond.yaw = d[0].atan2(d[2]);
+        let sim = w.scene.sim.as_mut().unwrap();
+        if sim.drones.frame % 2 == 0 {
+            let c = &sim.drones.copters[ci];
+            if let Some((b, _)) = sim.drones.scripts.copter_part_targets(c.placement, &c.parts, &sim.data()).0[2] {
+                sim.drones.player_bullets.push(p2k_round([b[0], b[1] + 1.0, b[2]], b));
+                shots += 1;
             }
         }
-        w.scene.sim.as_mut().unwrap().step_bond(Input::default(), press, false, false);
+        sim.step_bond(Input::default(), false, false, false);
         w.total_ticks += 1;
-        if !press { shots += 1; }
     }
     {
         let sim = w.scene.sim.as_ref().unwrap();
         let damage = sim.drones.copters[ci].damage;
-        eprintln!("[flow 08] the shoot-down: {shots} trigger pulls; damage {damage} vs hp {hp}");
+        eprintln!("[flow 08] the shoot-down: {shots} P2K rounds; damage {damage} vs hp {hp}");
         assert!(sim.drones.channels.on(0x4b),
             "the shots pushed damage {damage} past hp {hp} → state 4 → rec+0x72 [M :358-370]");
         assert!(damage > hp, "the walk's accumulation, not a poke, crossed hp");

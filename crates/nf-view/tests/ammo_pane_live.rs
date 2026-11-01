@@ -134,25 +134,30 @@ fn the_level_start_switch_pins_the_timer_then_it_decays_to_the_rest_pane() {
         let sim = scene.sim.as_ref().unwrap();
         assert_eq!(sim.gun.switch_request, 0x1e, "the level's start switch request is the sniper");
     }
-    // While the request is pending (weapon != request) the game re-sets the timer to 60 and then
-    // decrements it in the SAME update (0x19abf4 arm → 0x19ac04 decay), so pending frames read 59.
-    let mut pending = 0;
-    for i in 0..120 {
+    // hud-start: the level starts with NOTHING held (+0x62 = 0x47 [M Player_InitWeapon
+    // 0x1a7ef8:137]) and the first Player_Update's HUD_Update — which runs BEFORE Player_Weapon
+    // [M 0x193600:79 vs :412] — sees the request pending once: 60, decremented in the same update
+    // to 59 [M 0x19a7f0:213-223]. The loadout carries that arm (timer 60 before the first step).
+    // From 0x47 there is no holster (`Player_WeaponSelect` 0x1a2cc0:33-35): the swap lands on
+    // the first tick, so no later frame re-arms. (The old pin's pending window was the port
+    // holstering a build-time PP7 the game never draws.)
+    {
+        let sim = scene.sim.as_ref().unwrap();
+        assert_eq!(sim.gun.weapon, 0x47, "nothing held before the first tick");
+        assert_eq!(i32::from(sim.hud.weapon_label_timer), 60, "the first HUD update's arm");
+    }
+    {
         let sim = scene.sim.as_mut().unwrap();
         sim.step_bond(Default::default(), false, false, false);
-        if sim.gun.weapon == 0x1e {
-            assert_eq!(i32::from(sim.hud.weapon_label_timer), 58, "tick {i}: completion decays the last pending 59 to 58 (the game: no re-arm when +0x63 == +0x62, the 0x19ac04 decay still runs)");
-            break;
-        }
-        pending += 1;
-        assert_eq!(i32::from(sim.hud.weapon_label_timer), 59, "tick {i}: a pending differing request re-arms every frame (pre-fix it decays during the draw)");
+        assert_eq!(sim.gun.weapon, 0x1e, "the no-holster swap lands on tick 0");
+        assert_eq!(i32::from(sim.hud.weapon_label_timer), 59, "the arm decays to 59 in the same update");
     }
-    assert!(pending > 0, "the start switch had a pending window at all");
-    // Then it decays 1/frame from 58 and the pane rests (fire mode back, name hidden).
+    // Then it decays 1/frame from 59 and the pane rests (fire mode back, name hidden). Sister:
+    // nothing re-arms it — the request equals the held weapon from tick 0 on.
     for i in 1..=60u32 {
         let sim = scene.sim.as_mut().unwrap();
         sim.step_bond(Default::default(), false, false, false);
-        assert_eq!(i32::from(sim.hud.weapon_label_timer), (58 - i as i32).max(0), "decay tick {i}");
+        assert_eq!(i32::from(sim.hud.weapon_label_timer), (59 - i as i32).max(0), "decay tick {i}");
     }
     // Sister: at rest the pane's inputs are the sniper's — the level's own "5-30" [D the task's
     // PCSX2 compare: clip 5 of cap 5, spare 30].

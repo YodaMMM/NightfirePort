@@ -84,7 +84,9 @@ fn the_silenced_twin_survives_a_weapon_swap_round_trip() {
 
 /// With the dev panel's infinite ammo the CURRENT weapon's clip stays at its `weapon_data+0x92`
 /// size every tick: the sniper (0x24, clip 5, refire 120 [L weapon_data]) never trips the
-/// auto-reload, and its held-trigger cadence is the table's ~121 ticks.
+/// auto-reload, and its tapped cadence is the longer of the table's +0x40 and its fire script (a
+/// `+0x68 & 0x8000` record takes no shot while view state 9 plays [M Player_WeaponFiring
+/// 0x1a5460:631-636]).
 #[test]
 fn dev_infinite_ammo_keeps_the_snipers_magazine_full() {
     let Some(iso) = iso() else { eprintln!("NF_ISO not set — skipping"); return };
@@ -101,12 +103,23 @@ fn dev_infinite_ammo_keeps_the_snipers_magazine_full() {
         let c = sim.drones.inventory.clip[0x24];
         sim.gun.clip = c.max(0) as u32;
     }
+    // The refire: +0x40, held off by the fire script for a 0x8000 record (state 9 refuses the shot).
+    let (refire, fire_len) = {
+        let sim = scene.sim.as_ref().unwrap();
+        let w = &sim.weapons.records[0x24];
+        let rd = |o: usize| u32::from_le_bytes(w[o..o + 4].try_into().unwrap());
+        assert_ne!(rd(0x68) & 0x8000, 0, "the sniper carries +0x68 & 0x8000 [L weapon_data]");
+        let fl = sim.scripts.get(&rd(0xb0)).map_or(0, |s| s.length as u32);
+        (rd(0x40).max(fl), fl)
+    };
+    let tap = refire + 1;
+    eprintln!("[sniper] +0x40 vs fire script {fire_len} -> tap every {tap}");
     let mut min_clip = u32::MAX;
     let mut shots = Vec::new();
     let mut reload_ticks_seen = 0usize;
-    for t in 0..900u32 {
-        // Semi-auto: one shot per press — tap every 121 ticks (the table's refire 120).
-        scene.sim.as_mut().unwrap().step_bond(Input::default(), t % 121 == 0, false, false);
+    for t in 0..(tap * 7 + 30) {
+        // Semi-auto: one shot per press — tap just past the refire.
+        scene.sim.as_mut().unwrap().step_bond(Input::default(), t % tap == 0, false, false);
         dev.after_tick(&mut scene);
         let sim = scene.sim.as_ref().unwrap();
         min_clip = min_clip.min(sim.gun.clip);
@@ -118,7 +131,7 @@ fn dev_infinite_ammo_keeps_the_snipers_magazine_full() {
     assert_eq!(min_clip, 5, "the magazine stays full every tick (it used not to)");
     assert_eq!(reload_ticks_seen, 0, "no auto-reload ever starts with the clip pinned");
     let gaps: Vec<i64> = shots.windows(2).map(|a| a[1] as i64 - a[0] as i64).collect();
-    assert!(gaps.iter().all(|&g| (118..=135).contains(&g)),
-        "the tapped refire is the table's +0x40 = 120 frames + the tap quantization [M 0x1a5460:661-663] (gaps {gaps:?}, shots {})", shots.len());
+    assert!(gaps.iter().all(|&g| g == tap as i64),
+        "every tap past the refire fires: the +0x40 = 120 frames [M 0x1a5460:661-663] held off by the fire script's state 9 [M :631-636] (tap {tap}, gaps {gaps:?}, shots {})", shots.len());
     assert!(shots.len() >= 6, "the sniper actually fires through the run (shots {:?})", shots);
 }

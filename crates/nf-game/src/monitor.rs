@@ -12,13 +12,13 @@
 //! - `Monitor_Update` 0x1afcc8 while viewing: writes
 //!   `switch_channels[watched_sensor+0x5C] = 1` (the sensor's param-8 monitor-view channel) every
 //!   tick, mirrors the sensor pose into the viewer (draw side) and sets the sensor's +0x60
-//!   unhide; action 0xE cycles to the next same-group camera, and with none left (or the watched
-//!   camera destroyed) restores and cools down (state 9 → 4 → 0).
+//!   unhide; action 0xE cycles forward to the next same-group camera, and with none left (or the
+//!   watched camera disabled with no other) restores and cools down (state 9 → … → 4 → 0).
 //! - Shot (`Monitor_ApplyDamage`): health − damage < 0 → `Control_NextLOD`, state 3 and
 //!   `Explode_Create(r·6, r, 0.5, …, script 0x6000027, 200, 200)`.
 //!
-//! The camera-view rendering (the sensor's picture on screen) is the draw side's work; the sim
-//! delivers the state, the watched-sensor selection and the channel writes.
+//! The view itself (the camera's picture, the frozen player, the pane-16 HUD) is the Sim's: it
+//! reads [`Monitors::viewing`] (nf-view `Sim::sec_cam`).
 
 use crate::triggers::Channels;
 use crate::world::V3;
@@ -33,7 +33,7 @@ pub struct Monitor {
     pub group: u8,
     /// param 1 == 0 → 1.0 (shootable), else 0.0 (immune) [M 0x1b08b0:16-21].
     pub health: f32,
-    /// obj+0xF4: 0 idle, 2 viewing, 3 destroyed, 9/4 the exit cooldown [M 0x1b0058/0x1afcc8].
+    /// obj+0xF4: 0 idle, 2 viewing, 3 destroyed, 9..4 the exit cooldown [M 0x1b0058/0x1afcc8].
     pub state: u8,
     /// The watched sensor's index into `Sensors::list` while state 2.
     pub watched: Option<usize>,
@@ -71,43 +71,71 @@ impl Monitors {
     }
 
     /// `Monitor_Activate` 0x1b0058: state 0 → pick the group's first `CameraList` sensor
-    /// (`Sensor.listed`, not destroyed) → state 2. Called with the use key; while state 2 the
+    /// (`Sensor.listed`, not disabled) → state 2. Called with the use key; while state 2 the
     /// same edge is action 0xE (cycle or exit) [M 0x1afcc8's update arm].
     pub fn activate(&mut self, i: usize, sensors: &crate::sensor::Sensors) -> bool {
         let Some(m) = self.list.get_mut(i) else { return false };
         if m.state == 3 { return false; }
-        if m.state == 2 {
-            // The 0xE arm: the next same-group camera after the watched one, else the exit.
-            let group = m.group;
-            let cur = m.watched;
-            let next = sensors.list.iter().enumerate()
-                .filter(|(si, s)| s.listed && s.monitor_id == group && Some(*si) != cur && s.state != 3)
-                .map(|(si, _)| si)
-                .find(|_| true);
-            match next {
-                Some(si) => { m.watched = Some(si); return true; }
-                None => { m.state = 9; m.watched = None; return true; }
-            }
-        }
+        if m.state == 2 { return self.cycle(i, sensors); }
         if m.state != 0 { return false; }
         let group = m.group;
-        let first = sensors.list.iter().enumerate()
-            .filter(|(_, s)| s.listed && s.monitor_id == group && s.state != 3)
-            .map(|(si, _)| si)
-            .find(|_| true);
+        // `CameraList` is `LList_Add`'s append order = `Sensor_Create` order (placement order)
+        // [M 0x1cca28; 0x1af010:135-137]; the walk skips state-3 cameras [M 0x1b0058:19-31].
+        let first = Self::next_in_group(sensors, group, 0);
         match first {
             Some(si) => { m.state = 2; m.watched = Some(si); true }
             None => false,
         }
     }
 
-    /// `Monitor_Update` 0x1afcc8's per-tick body for the viewing monitors: the watched sensor's
-    /// monitor-view channel latches 1 every tick, the sensor's +0x60 unhide sets; the cooldown
-    /// states drain 9 → 4 → 0.
+    /// The first listed, not-disabled camera of `group` at list position `from` or later.
+    fn next_in_group(sensors: &crate::sensor::Sensors, group: u8, from: usize) -> Option<usize> {
+        sensors.list.iter().enumerate().skip(from)
+            .find(|(_, s)| s.listed && s.monitor_id == group && s.state != 3)
+            .map(|(si, _)| si)
+    }
+
+    /// `Monitor_Update` 0x1afcc8's action-0xE arm (`Input_Action(viewer, 0xe, 4)`, the fresh
+    /// press [M :105-137]): the walk starts at the watched camera's NEXT list node and runs
+    /// forward to the list's end — no wrap — for the next same-group camera not in state 3;
+    /// none left → `piVar3[1] = 0` → the restore (`Camera_SetUpdator(…, 0x18f5d8)`,
+    /// `Player_Enable`, panes 16 off / 0 and 1 on) and state 9 [M :138-147]. Returns true
+    /// (the press is consumed either way).
+    pub fn cycle(&mut self, i: usize, sensors: &crate::sensor::Sensors) -> bool {
+        let Some(m) = self.list.get_mut(i) else { return false };
+        if m.state != 2 { return false; }
+        let from = m.watched.map_or(sensors.list.len(), |w| w + 1);
+        match Self::next_in_group(sensors, m.group, from) {
+            Some(si) => m.watched = Some(si),
+            None => { m.state = 9; m.watched = None; }
+        }
+        true
+    }
+
+    /// The monitor being viewed and its camera — state 2 with a watched sensor: the player is
+    /// disabled (`Player_Disable(player, 0)` [M 0x1b0058:45]), the viewer shows the camera's
+    /// matrix (`Mat_Copy(camera+0x90, viewer+0x120)` every tick [M 0x1afcc8:155]) and the HUD
+    /// runs pane 16 with panes 0/1 off [M 0x1b0058:47-49].
+    pub fn viewing(&self) -> Option<(usize, usize)> {
+        self.list.iter().enumerate().find_map(|(i, m)| (m.state == 2).then_some(m.watched.map(|w| (i, w))).flatten())
+    }
+
+    /// `Monitor_Update` 0x1afcc8's per-tick body: while viewing, a watched camera gone to state 3
+    /// hands over to the next same-group camera after it, then from the list's head, else the
+    /// view ends [M :63-104]; the viewed camera's monitor-view channel latches 1 every tick and
+    /// its +0x60 hide latch sets [M :150-156]. The exit cooldown counts 9 → 4 one per tick, then 4 → 0
+    /// (states 5..9 decrement, 4 resets [M :68-83]) — six ticks before E can re-enter.
     pub fn tick(&mut self, sensors: &mut crate::sensor::Sensors, channels: &mut Channels, frame: u32) {
         for m in &mut self.list {
             match m.state {
                 2 => {
+                    if let Some(w) = m.watched {
+                        if sensors.list.get(w).is_none_or(|s| s.state == 3) {
+                            m.watched = Self::next_in_group(sensors, m.group, w + 1)
+                                .or_else(|| Self::next_in_group(sensors, m.group, 0));
+                            if m.watched.is_none() { m.state = 9; }
+                        }
+                    }
                     if let Some(si) = m.watched {
                         if let Some(s) = sensors.list.get_mut(si) {
                             channels.set(s.monitor_ch as u32, 1, frame);
@@ -115,17 +143,18 @@ impl Monitors {
                         }
                     }
                 }
-                9 => m.state = 4,
                 4 => m.state = 0,
+                1 | 5..=9 => m.state -= 1,
                 _ => {}
             }
         }
     }
 
     /// The bullet arm (`Monitor_ApplyDamage`): health − damage < 0 → state 3 + the explode event.
-    /// Returns true when this shot destroyed it. Immune monitors (param 1 != 0, health 0) never
-    /// die [M 0x1b08b0:16-21].
-    pub fn bullet_hit(&mut self, a: V3, b: V3, damage: f32) -> bool {
+    /// Returns the destroyed monitor's position when this shot destroyed one — the blast sits at
+    /// THAT monitor's obj+0x80 [M Monitor_Update 0x1afcc8:44-46], not at whichever monitor died
+    /// first. Immune monitors (param 1 != 0, health 0) never die [M 0x1b08b0:16-21].
+    pub fn bullet_hit(&mut self, a: V3, b: V3, damage: f32) -> Option<V3> {
         for m in &mut self.list {
             if m.state == 3 || m.health <= 0.0 { continue; }
             // The use-sphere stand-in (crate::props::seg_box's rule): the segment's AABB against
@@ -137,11 +166,11 @@ impl Monitors {
                 if m.health < 0.0 {
                     m.state = 3;
                     m.watched = None;
-                    return true;
+                    return Some(m.pos);
                 }
             }
         }
-        false
+        None
     }
 }
 
@@ -163,8 +192,8 @@ mod tests {
             placement: 1, pos: [1.0; 3], matrix: Default::default(), quat: Default::default(),
             keys: Vec::new(), limit: 0, step: 0.0, t: 0.0, cos_half: 0.0, sin_half: 0.0,
             range: 6.0, out: 0, disable: 0, monitor_id: 1, listed: true, lens: 0, mount: 0,
-            monitor_ch: 0, state: 0, detect: 0.0, beep: 0.0, seen: 0, last_hit: false, unhidden: false, beam_len: 0.0,
-        }] };
+            monitor_ch: 0, state: 0, detect: 0.0, beep: 0.0, seen: 0, last_hit: false, unhidden: false, beam_len: 0.0, hum: 0,
+        }], heard: Vec::new() };
         assert!(mons.activate(0, &sensors), "state 0 + a group-1 listed sensor → state 2 [M 0x1b0058]");
         assert_eq!(mons.list[0].state, 2);
         let mut ch = Channels::default();
@@ -177,18 +206,18 @@ mod tests {
     fn the_sister_idle_monitor_never_writes_and_a_shot_destroys_the_console() {
         // Sister: no activation → no channel, ever.
         let mut mons = Monitors { list: vec![monitor()] };
-        let mut sensors = crate::sensor::Sensors { list: Vec::new() };
+        let mut sensors = crate::sensor::Sensors { list: Vec::new(), heard: Vec::new() };
         let mut ch = Channels::default();
         mons.tick(&mut sensors, &mut ch, 10);
         assert!(!ch.on(0), "an idle monitor writes nothing");
         assert!(mons.activate(0, &sensors) == false, "no same-group sensor → the activate refuses");
         // A 1.0-health console dies to one 25-damage bullet [M Monitor_ApplyDamage].
         let mut mons = Monitors { list: vec![monitor()] };
-        assert!(mons.bullet_hit([-1.0, 6.0, 0.0], [1.0, 6.0, 0.0], 25.0));
+        assert_eq!(mons.bullet_hit([-1.0, 6.0, 0.0], [1.0, 6.0, 0.0], 25.0), Some([0.0, 6.0, 0.0]));
         assert_eq!(mons.list[0].state, 3, "state 3 [M Monitor_ApplyDamage]");
         // The sister miss.
         let mut mons = Monitors { list: vec![monitor()] };
-        assert!(!mons.bullet_hit([-1.0, 60.0, 0.0], [1.0, 60.0, 0.0], 25.0));
+        assert_eq!(mons.bullet_hit([-1.0, 60.0, 0.0], [1.0, 60.0, 0.0], 25.0), None);
         assert_eq!(mons.list[0].state, 0);
     }
 }

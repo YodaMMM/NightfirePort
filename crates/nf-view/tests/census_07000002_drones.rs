@@ -16,7 +16,7 @@ fn read_archive(iso: &str, archive: &str) -> Vec<u8> {
 #[ignore = "assertion-free census dump; run with --ignored"]
 fn dump_07000002_drone_placements() {
     let Some(iso) = iso() else { eprintln!("NF_ISO not set"); return };
-    let data = read_archive(&iso, "07000002.bin");
+    let data = read_archive(&iso, &std::env::var("NF_CENSUS_LEVEL").unwrap_or_else(|_| "07000002.bin".into()));
     let lv = Level::parse(&data).expect("parse");
     let mm = lv.main_map().unwrap();
     let placements = &lv.maps[mm].placements;

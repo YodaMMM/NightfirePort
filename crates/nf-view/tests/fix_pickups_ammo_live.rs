@@ -145,6 +145,7 @@ fn drops_and_boxes_take_through_the_real_path_with_the_game_numbers() {
     let mut kills = 0u32;
     let mut first_take = None;
     let mut second_take = None;
+    let mut unreached: Vec<usize> = Vec::new();
     {
         // Bring the waiting 0xE raptors in the way the level's script does: fire each one's
         // placement switch channel once, then let the enable land.
@@ -161,10 +162,17 @@ fn drops_and_boxes_take_through_the_real_path_with_the_game_numbers() {
         kills += 1;
         // The drop: the newest non-gone kind-0 pickup of 0xE.
         let drop = scene.sim.as_ref().unwrap().drones.pickups.iter().enumerate()
-            .find(|(_, p)| !p.gone && p.kind == nf_game::pickup::kind::WEAPON && p.weapon == 0xe)
+            .find(|(k, p)| !p.gone && p.kind == nf_game::pickup::kind::WEAPON && p.weapon == 0xe && !unreached.contains(k))
             .map(|(k, _)| k);
         let Some(drop) = drop else { continue };
         let t = take_pickup(&mut scene, drop, Some(&mut dev));
+        // A drop no stand spot reaches is skipped, not counted as a refused take: `DroneWeap_DropWeapon`
+        // creates the gun at the held weapon's world matrix and lets it fall [M 0x17a2a0], so a guard
+        // that dies on 07000001's stairwell can drop it into the low gap under the next flight (the
+        // stand spots snap onto the flight above, out of the radius + 1.1 reach, and the step sides
+        // block the take ray from the floor). Where a guard dies moves with its health and the shots
+        // it takes, so the census takes the next Raptor rather than a fixed one.
+        if t.is_none() && !scene.sim.as_ref().unwrap().drones.pickups[drop].gone { unreached.push(drop); continue; }
         if first_take.is_none() {
             first_take = t;
             // Asserted BEFORE any further firing: the take auto-switches Bond to the Raptor
@@ -199,7 +207,7 @@ fn drops_and_boxes_take_through_the_real_path_with_the_game_numbers() {
     if let Some(gi) = raptor_now {
         if kill_raptor(&mut scene, gi, Some(&mut dev)) {
             let drop = scene.sim.as_ref().unwrap().drones.pickups.iter().enumerate()
-                .find(|(_, p)| !p.gone && p.kind == nf_game::pickup::kind::WEAPON && p.weapon == 0xe)
+                .find(|(k, p)| !p.gone && p.kind == nf_game::pickup::kind::WEAPON && p.weapon == 0xe && !unreached.contains(k))
                 .map(|(k, _)| k);
             if let Some(drop) = drop {
                 let t = take_pickup(&mut scene, drop, Some(&mut dev));

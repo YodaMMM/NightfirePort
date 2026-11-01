@@ -215,6 +215,20 @@ clear the links and both channel bytes, `Control_NextLOD`.
 - **Corona (kind 4)**: pos = head + `spherical(0.4, yaw, −pitch)`; `dot = (0.4·dir)·(Player_GetHeadPos − head.pos) /
   |Player_GetHeadPos − head.pos|`; ≤ 0.2 → hide; else draw, `+0xFA |= 0x20`, `alpha byte +0x106 = (dot−0.2)·4·255`,
   `scale +0xE8 = (dot−0.2)·16`; `Collide_LineOfSight(viewer, corona)` clear → `+0xF0 |= 0x2000`, scale × 1.5.
+  Draw (light-glow, [M]): the SL_Corona glist flags are 0x229 [D 05 and 06], so bit 0x8 takes
+  `View_DrawObjectGlist` 0x1e6780's billboard arm — the viewer's rotation (`viewer+0x1a0`), translation obj+0xC0,
+  uniform `Mat_Scale3f(obj+0xE8)`. Bit 0x2000 sends the object to sort list 2 (`View_AddObjects` 0x1e62d8:57-59),
+  which `Game_Draw` 0x1e6f50 draws last; with the bit clear the corona sorts in the alpha list (flag 0x1). The mesh
+  differs per level: 07000005's SL_Corona is ±0.49 × ±0.53, 07000006's ±1.5 × ±1.6 [D] — so at the maximum scale
+  (0.8·4·1.5 = 4.8) a lit 06 corona is ~14 units across. 06's heads only light after the ch-0x34 plates
+  (SP #808, docs/levels/07000006-audit.md). The bit is only re-evaluated while the alpha byte is nonzero (alpha 0
+  keeps the last value) [M 0x1cb900:337-347]. List 2 draws after `psiClearZ` 0x10b9a0, which chains the Z clear
+  while `WipeZBuffer` 0x30c759 = 1 (ACTION.ELF initialised data [D]; ee_start_05.bin [L]) and `DAT_0034b3a8` (the
+  frame's list-2 count, `View_CaptureScene` 0x1e6df0:40) is nonzero [M Game_Draw 0x1e6f50:157-176] — so an in-sight
+  corona is drawn over the world with nothing occluding it, unfogged (no `psiStartAlpha` for list 2 [M
+  View_DrawObjList 0x1e69a0:55-57]). Port (corona-list2): `Part::sight` carries the bit; each corona has a second
+  mesh copy in pass 6 (no depth test) and the palette shows the pass-6 copy while `sight`, the alpha-list copy
+  otherwise (scene.rs `sl_l2`).
 - **State 2 (broken)**: pitch += 0.05 per tick up to 0.8 (droop); while drawn, `(GameState+52 + obj+0xEC) % 7 == 0`
   → `Gas_Init` smoke (hash `0x2000039`, size 0.05/0.25, `Rand_FRand(2π)` per puff — consumes the shared stream).
   Entered from the bullet check; no part updates after.

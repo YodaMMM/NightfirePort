@@ -41,7 +41,7 @@ fn parse_level(iso: &str, name: &str) -> nf_formats::level::Level {
 
 /// The kind's expected drawn count for a level, recomputed independently of the scene sweep: main-map
 /// placements of the kind whose object resolves with gfx batches, minus the kinds' own skip rules
-/// (0x3B hidden-until-channel: param 0 ≠ 0 [M DynamicObject_Create 0x18dbf8:31]; mirror-only glists,
+/// (0x3B hidden-until-channel: param 0 ≠ 0 [M DynamicObject_Create 0x18dbf8:31]; x-ray-only glists,
 /// flags 0x400 [M View_AddObjects 0x1e62d8:38-47]).
 fn expected_misc(level: &nf_formats::level::Level, kinds: &[u8]) -> BTreeMap<u8, usize> {
     let mut out: BTreeMap<u8, usize> = BTreeMap::new();
@@ -312,6 +312,8 @@ fn firing_spawns_a_muzzle_smoke_puff_that_fades_and_dies() {
     use nf_game::player::{Bond, Input};
     let Some(iso) = iso() else { eprintln!("NF_ISO not set — skipping"); return };
     let mut scene = nf_view::load(&iso, "07000001.bin", false).expect("load 07000001");
+    // hud-start: a load holds nothing (0x47 [M 0x1a7ef8:137]) - settle the start draw first.
+    nf_view::settle_start_draw(scene.sim.as_mut().unwrap());
     let sim = scene.sim.as_mut().unwrap();
     sim.bond = Bond::new([100.0, 26.0, 108.0], sim.bond.yaw);
     sim.disabled = false; // the level's opening cut-scene disables input; the test stands Bond outside it
@@ -366,7 +368,9 @@ fn a_broken_searchlight_smokes_every_seventh_tick() {
     let mut spawns = 0;
     for t in 0..70u32 {
         sim.step_bond(Input::default(), false, false, false);
-        if let Some(g) = sim.drones.gas.puffs.last() {
+        // The guards' breath (`Env_Breath` 0x17be00, mesh 0x200021d) also starts at 0.05 in the
+        // shared pool; only the searchlight's own puffs count.
+        if let Some(g) = sim.drones.gas.puffs.iter().rev().find(|g| g.mesh != nf_game::env::BREATH_MESH) {
             if (g.scale - 0.05).abs() < 1e-6 { spawns += 1; }
         }
         let _ = t;

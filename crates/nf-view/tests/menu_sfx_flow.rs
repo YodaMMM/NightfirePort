@@ -140,17 +140,24 @@ fn value_steps_play_direction_ids_and_stuck_rows_stay_silent() {
     assert!(drain(&mut fe).is_empty(), "a value-less row is silent");
 }
 
-/// The Screen Adjust bars select nothing [L page 0x40000047's controls — two slider bars, the
-/// picture and the hint; no label rows to blip].
+/// The Screen Adjust bars are focused scrolls: ✕ plays MENU_SOUND 0 and sends 0x4b to the page
+/// [M Scroll_Update 0x221b20:400-405]; ▲▼◀▶ step the bars with MENU_SOUND 3 / 4 (the value
+/// always moves 0 → ∓1 [M :186-208, C_SBSCREEN 0x217b08:22-24]). Sister: ○ stays silent (sound
+/// 2's flag bit is clear on the disc's boot flags).
 #[test]
-fn screen_adjust_selects_nothing() {
+fn screen_adjust_bars_blip_and_step() {
     let mut fe = FrontEnd::new();
     drain(&mut fe);
     fe.page = menu::Page::ScreenAdjust;
     assert!(!fe.action(Action::Side), "the bars take no side action");
-    // The Confirm arm opens the page's own flow; the sound stays empty either way.
+    assert!(drain(&mut fe).is_empty(), "○ is silent");
+    assert!(fe.action(Action::Up));
+    assert!(fe.action(Action::Right));
+    let ids: Vec<u32> = drain(&mut fe).iter().map(|e| e.id).collect();
+    assert_eq!(ids, vec![menu::SFX_MENU_VAL_DEC, menu::SFX_MENU_VAL_INC], "▲ = sound 3, ▶ = sound 4");
     let _ = fe.action(Action::Confirm);
-    assert!(drain(&mut fe).is_empty(), "no select blip on the adjust bars");
+    let ids: Vec<u32> = drain(&mut fe).iter().map(|e| e.id).collect();
+    assert_eq!(ids.first(), Some(&menu::SFX_MENU_TICK), "✕ blips (MENU_SOUND 0)");
 }
 
 /// The letter grid's focus tick fires on every focus change [M Page_Update sounds on a focus

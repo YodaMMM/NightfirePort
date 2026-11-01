@@ -3,6 +3,7 @@
 //! PCSX2 snapshots (docs/formats/animation.md "Arithmetic").
 
 /// f64 value plus an exact error term `e` (true value = v + e) → f32 rounded toward zero.
+#[inline]
 fn chop(v: f64, e: f64) -> f32 {
     let n = v as f32;
     let mut r = n;
@@ -14,8 +15,10 @@ fn chop(v: f64, e: f64) -> f32 {
     r
 }
 
+#[inline]
 pub fn mul(a: f32, b: f32) -> f32 { chop(a as f64 * b as f64, 0.0) }
 
+#[inline]
 pub fn add(a: f32, b: f32) -> f32 {
     let (a, b) = (a as f64, b as f64);
     let s = a + b;
@@ -24,12 +27,14 @@ pub fn add(a: f32, b: f32) -> f32 {
     chop(s, e)
 }
 
+#[inline]
 pub fn sub(a: f32, b: f32) -> f32 { add(a, -b) }
 
 /// Candidate model of the EE FPU's add without guard bits (as PCSX2's `FPU_ADD_SUB` emulates it, *sourced*: PCSX2
 /// iFPU, GPL — the rule only): before adding, the operand with the smaller exponent loses the mantissa bits that would
 /// be shifted out beyond one position (exponent difference d ≥ 25: it becomes ±0; d > 0: its low d − 1 bits are
 /// cleared). `chop` selects the final rounding.
+#[inline]
 pub fn add_noguard(a: f32, b: f32, chop_result: bool) -> f32 {
     let (ea, eb) = ((a.to_bits() >> 23) & 0xff, (b.to_bits() >> 23) & 0xff);
     let trim = |small: f32, d: u32| -> f32 {
@@ -41,6 +46,7 @@ pub fn add_noguard(a: f32, b: f32, chop_result: bool) -> f32 {
     if chop_result { add(a, b) } else { a + b }
 }
 
+#[inline]
 pub fn sqrt(a: f32) -> f32 {
     let r = (a as f64).sqrt();
     // r² vs a decides whether the f64 root rounded up.
@@ -50,6 +56,7 @@ pub fn sqrt(a: f32) -> f32 {
 /// EE FPU divide (`div.s`): rounded to nearest — the model the shared interpreter pins with 739 of
 /// 750 live `ATAN2_APPROX` results (ee.rs `div.s` note) and which the atanf/atan2f goldens
 /// (exact-sine-sites-2) re-confirm on the libm's reduction divisions.
+#[inline]
 pub fn div(a: f32, b: f32) -> f32 { a / b }
 
 #[cfg(test)]

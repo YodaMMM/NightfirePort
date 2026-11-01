@@ -59,9 +59,10 @@ pub const CHILD_CLASS: u8 = 1;
 
 /// The glow record one spawn creates (the main object + its 15 children, ext[0] = owner).
 ///
-/// Update-side (`BodyGlow_Update` 0x1ac2c8, the port does not run the update loop): every
-/// tick it recomputes the per-viewer display mask (a viewer whose view mode is 2 or whose
-/// HUD block +0x244 is set contributes its bit) and writes it with `View_SetViewMask`
+/// Update-side (`BodyGlow_Update` 0x1ac2c8; the port evaluates it per frame on the draw side
+/// over [`update`] + [`child_matrix`], nf-view scene.rs's glow slots): every tick it
+/// recomputes the per-viewer display mask (a viewer in x-ray mode, or with the OICW zoom
+/// pane's enable byte HUD+0x244 set, contributes its bit) and writes it with `View_SetViewMask`
 /// 0x1e7ac8 — the main object `mask | 0x10`, then each child the same (0x1ac2c8:223/257)
 /// — ported as `crate::view::set_view_mask` [M disasm 0x1e7ac8; docs/systems/view-display.md].
 #[derive(Clone, Debug, PartialEq)]
@@ -70,6 +71,23 @@ pub struct BodyGlow {
     pub owner: usize,
     /// The child-sprite count the do-while creates [M 001ac158: 0..0xe].
     pub children: u16,
+    /// ext+0x40 (`piVar2[0x10]`), the fade count: 0x100 at create, −1 per tick while the owner's
+    /// health gate fails (a dead guard), the glow deleted below 1 [M 0x1ac158 / 0x1ac2c8:96-136].
+    /// The alpha byte scales with it. Ticked by [`BodyGlow::tick`].
+    pub count: u16,
+}
+
+impl BodyGlow {
+    /// The per-tick count step of `BodyGlow_Update` 0x1ac2c8:96-128 for a guard owner (class 2):
+    /// `owner health <= 0` decrements the count once (unless the owner object is being deleted —
+    /// `obj+0xFE & 1`, the port's `deleting`). Returns false when the count ran out: the game then
+    /// calls `BodyGlow_Delete` and clears the owner's glow pointer (DIVars+0x10) [M :129-136].
+    pub fn tick(&mut self, health: f32, deleting: bool) -> bool {
+        if !deleting && health <= 0.0 {
+            self.count = self.count.wrapping_sub(1);
+        }
+        (self.count as i16) >= 1
+    }
 }
 
 /// `BodyGlow_Create` 0x1ac158 on the shipped path: `no_drones` is the global
@@ -79,7 +97,7 @@ pub fn create(owner: usize, no_drones: bool) -> Option<BodyGlow> {
     if no_drones {
         return None;
     }
-    Some(BodyGlow { owner, children: 15 })
+    Some(BodyGlow { owner, children: 15, count: EXT_LINK_U16 })
 }
 
 /// `GlowBones` 0x2beed0 — the 15 bone indices the update hangs its child sprites on
@@ -116,17 +134,21 @@ pub struct GlowUpdate {
 ///   `piVar2[0x10]`, the glow's own reference count) [M 0x1ac2c8:96-125];
 /// - `count`: that reference count;
 /// - `viewer_dist`: `Vec_Dist3D(owner pos, glb_viewer+0xC0)` [M 0x1ac2c8:175];
-/// - `hidden_mask`: the u32 the per-player loop builds — bit v set when viewer v's +0x236 == 2
-///   (MP spectator/split view) or the viewer's AnimObject+0x244 != 0 (dead) [M 0x1ac2c8:144-161];
-///   `mask == 0` (nobody watches) forces the hidden branch, as does the kind-2-owner + state-1 arm
-///   (passed in `owner_state1_hides`);
-/// - `viewer_244`: some watching viewer's AnimObject+0x244 is set (`bVar4`) — the game then
-///   forces the distance to 0.0 (full alpha, never the > 10.0 hide) [M 0x1ac2c8:135-147];
+/// - `hidden_mask`: the u32 the per-player loop builds — bit v set when viewer v's goggle mode
+///   (+0x236) is 2 (x-ray) or player v's HUD byte `*(glb_blokes[v]+0x7e0)+0x244` is set; the
+///   owner's own player is skipped (`iVar15 != glb_blokes[v]`) [M 0x1ac2c8:144-161]. HUD+0x244 =
+///   8 + 17·0x20 + 0x1c is pane 17's enable byte (the HUDPANE `+0x1c` at `HUD+8+k·0x20`,
+///   docs/fields/hud-panes.md) — the OICW zoom pane (the AIMS-20's thermal scope). The earlier
+///   "dead / spectator" reading of it was wrong. `mask == 0` (no x-ray viewer, no OICW zoom)
+///   forces the hidden branch, as does the kind-2-owner + state-1 arm (`owner_state1_hides`);
+/// - `viewer_244`: some viewer's OICW pane is up (`bVar4`) — the game then forces the distance
+///   to 0.0 (full alpha, never the > 10.0 hide) and clears the children's 0x2400 bits (drawn in
+///   every view mode, not x-ray-only) [M 0x1ac2c8:135-147];
 /// - `bone_gap`: per child k, `Vec_Dist3D(bone GlowBones[k], its skin parent bone)` (child+0xE8;
 ///   GlowBones[k] == 0 measures against bone 4) — 15 entries, one per child [M 0x1ac2c8:186-201];
 ///   the port takes them from the animation side.
 ///
-/// The children's obj+0xF0 bits: `|=` 0x2400 normally, `&= 0xffffdbff` when a viewer is dead/spectating
+/// The children's obj+0xF0 bits: `|=` 0x2400 normally, `&= 0xffffdbff` while an OICW pane is up
 /// (`bVar4`) [M 0x1ac2c8:176-196]; the far branch (> 10.0) hides main + children instead.
 /// Returns `None` when the count ran out — the game calls `BodyGlow_Delete` and clears the owner's
 /// glow refs (+0x10 / +0x88c) [M 0x1ac2c8:128-136].
@@ -179,6 +201,35 @@ pub fn update(
         Some(GlowUpdate { alpha: a as i32 as u8, view_mask: hidden_mask | 0x10, hidden: false, bones }),
         count,
     )
+}
+
+/// The main glow object's anchor bone: `BodyGlow_Update` copies the owner's matrix-palette
+/// entry `+0x170` = bone 5's translation row (5·0x40 + 0x30) into obj+0x30 [M 0x1ac2c8:212-219].
+pub const MAIN_BONE: usize = 5;
+
+/// The skin bone child `k`'s sprite measures against: the skin's parent byte of
+/// `GLOW_BONES[k]` (`*(skin+0x24)[bone] & 0x7f`), except bone 0, which uses bone 4
+/// [M 0x1ac2c8:233-237].
+pub fn glow_parent(k: usize, skin_parent: impl Fn(usize) -> usize) -> usize {
+    let b = GLOW_BONES[k] as usize;
+    if b == 0 { 4 } else { skin_parent(b) & 0x7f }
+}
+
+/// One child sprite's matrix [M 0x1ac2c8:238-254]: `Mat_Align2Dir(m, dir = bone − parent,
+/// up = viewer − bone, fallback = the same)`, `Mat_SetTrans(bone)`, then
+/// `Mat_Scale3f(1.5, 1.0, |bone − parent|)` (rows x/y/z — the swoosh convention). Returns the
+/// matrix and the length (the child's obj+0xE8). `align` is `searchlight::align2dir`.
+pub fn child_matrix(bone: [f32; 3], parent: [f32; 3], viewer: [f32; 3]) -> ([[f32; 4]; 4], f32) {
+    let d = [bone[0] - parent[0], bone[1] - parent[1], bone[2] - parent[2]];
+    let up = [viewer[0] - bone[0], viewer[1] - bone[1], viewer[2] - bone[2]];
+    let mut m = crate::searchlight::align2dir(d, up, up);
+    let len = (d[0] * d[0] + d[1] * d[1] + d[2] * d[2]).sqrt();
+    for c in 0..3 {
+        m[0][c] *= 1.5;
+        m[2][c] *= len;
+    }
+    m[3] = [bone[0], bone[1], bone[2], 1.0];
+    (m, len)
 }
 
 #[cfg(test)]
@@ -319,5 +370,47 @@ mod review_tests {
         let g = g.unwrap();
         assert_eq!(g.bones[14].1, 14.0);
         assert_eq!(g.bones[13].1, 13.0);
+    }
+
+    // [M 0x1ac2c8:96-136] a dead guard's glow counts down from 0x100 and deletes below 1.
+    #[test]
+    fn a_dead_owner_fades_the_glow_out_over_256_ticks() {
+        let mut g = create(0, false).unwrap();
+        assert_eq!(g.count, 0x100);
+        for _ in 0..10 { assert!(g.tick(50.0, false)); }
+        assert_eq!(g.count, 0x100, "a live owner holds the count");
+        for k in 1..0x100u16 { assert!(g.tick(0.0, false), "tick {k}"); }
+        assert_eq!(g.count, 1);
+        assert!(!g.tick(-3.0, false), "the 256th dead tick deletes");
+        // Sister (can fail): an owner being deleted skips the decrement.
+        let mut g = create(0, false).unwrap();
+        assert!(g.tick(0.0, true));
+        assert_eq!(g.count, 0x100);
+    }
+
+    // [M 0x1ac2c8:233-237] bone 0 measures against bone 4; the rest against the skin parent.
+    #[test]
+    fn glow_parent_maps_bone_zero_to_four() {
+        assert_eq!(glow_parent(0, |_| 99), 4);
+        assert_eq!(glow_parent(1, |b| b - 1), 18, "GlowBones[1] = 19 → parent 18");
+        // Sister (can fail): the parent byte is masked to 7 bits.
+        assert_eq!(glow_parent(2, |_| 0x83), 3);
+    }
+
+    // [M 0x1ac2c8:238-254] the child's z runs along bone − parent scaled by the length, x is 1.5
+    // wide, the translation is the bone, and the face turns toward the viewer.
+    #[test]
+    fn child_matrix_aligns_scales_and_faces_the_viewer() {
+        let (m, len) = child_matrix([0.0, 2.0, 0.0], [0.0, 1.0, 0.0], [0.0, 2.0, 5.0]);
+        assert!((len - 1.0).abs() < 1e-6);
+        assert_eq!(m[3], [0.0, 2.0, 0.0, 1.0]);
+        let n = |r: [f32; 4]| (r[0] * r[0] + r[1] * r[1] + r[2] * r[2]).sqrt();
+        assert!((n(m[0]) - 1.5).abs() < 1e-5 && (n(m[1]) - 1.0).abs() < 1e-5 && (n(m[2]) - 1.0).abs() < 1e-5);
+        assert!(m[2][1] > 0.99, "z along +y (bone − parent)");
+        // The y row lies in the dir/up plane: here up (0,0,5) ⟂ dir, so y = ±z-world.
+        assert!(m[1][2].abs() > 0.99);
+        // Sister (can fail): a longer segment stretches z only.
+        let (m2, len2) = child_matrix([0.0, 3.0, 0.0], [0.0, 1.0, 0.0], [0.0, 3.0, 5.0]);
+        assert!((len2 - 2.0).abs() < 1e-6 && (n(m2[2]) - 2.0).abs() < 1e-5 && (n(m2[0]) - 1.5).abs() < 1e-5);
     }
 }

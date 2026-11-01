@@ -22,6 +22,22 @@ fn iso() -> String { std::env::var("NF_ISO").expect("NF_ISO") }
 /// `Camera_UpdateGlbVars` advances it on the frames after [M 0x1bada0:16-20]).
 fn walk_to_the_exit(iso: &str, stop_at_fire: bool) -> Walker {
     let mut w = Walker::new(nf_view::load(iso, "07000001.bin", false).expect("load 07000001"));
+    // On real damage a guard inside 4 u is backed away from, in the walker's fights and its
+    // return fire: under 3.0 u every drone round hits [M DroneWeap_DoBulletAccuracy
+    // 0x179740:113-115], and the hall guards' 8-pellet shotgun volleys (weapon 0x1C [M
+    // DroneWeap_FireWeapon 0x178f68, weapon_data+0x18]) took 24 health each from 0.8-1.2 u at the
+    // east door. The top-up walks keep their fight timelines.
+    if !w.tops_up() {
+        w.keep_off = Some(4.0);
+        w.dmg.back_off = Some(4.0);
+    }
+    // The type-2 guards carry 12 health, captains 24 [L ee_02b.bin]: Bond aims for the head
+    // (`Walker::prefer_head`), as a player does, or the scripted fights run the walk dry.
+    w.prefer_head = true;
+    // A left nudge ends like a right one (`Walker::sidestep_decays`).
+    w.sidestep_decays = true;
+    // hud-start: a load holds nothing (0x47 [M Player_InitWeapon 0x1a7ef8:137]) - settle the start draw first.
+    nf_view::settle_start_draw(w.scene.sim.as_mut().unwrap());
     {
         let sim = w.scene.sim.as_ref().unwrap();
         let p = sim.bond.pos;
@@ -153,7 +169,16 @@ fn walk_to_the_exit(iso: &str, stop_at_fire: bool) -> Walker {
         let sim = w.scene.sim.as_ref().unwrap();
         let dry = (sim.gun.clip as i32) + (sim.gun.spare as i32) < 48;
         drop(sim);
-        if dry { w.resupply("pre-hall ammo"); }
+        if dry {
+            w.resupply("pre-hall ammo");
+            // Back to the meet room before the hall: the stage below is the route proven FROM
+            // the meet plate. From a corridor box south-west of it the stage leg's nav wedged at
+            // (1.5, 7.1, 8.6) — Bond 0.6 above the room's walk height (6.47), the segment to the
+            // stage hitting at t 0.31 — for its 3000-tick cap and every guard approach after.
+            if walker::dxz(w.scene.sim.as_ref().unwrap().bond.pos, [6.8, 6.0, 8.9]) > 3.0 {
+                w.walk_nav_to([6.8, 6.0, 8.9], "back to the meet room", 1.5);
+            }
+        }
     }
 
     // The hall detour: the disc's AND mux (kind 3, out 0x99 = 153, list [0x11,0x12,0x13] [D the
@@ -460,6 +485,10 @@ fn walk_to_the_exit(iso: &str, stop_at_fire: bool) -> Walker {
             if walker::dxz(gpos, bpos) > 9.0 || !los_clear {
                 w.walk_nav_to(gpos, &format!("approach stairwell guard {g}"), 3.0);
             }
+            // The contact reached the plate while Bond stood on it: the AND fired on this leg
+            // (the walk stops on the exit tick) — the fight below would walk Bond off the plate
+            // and drop ch 0x10 before the check reads it.
+            if w.scene.sim.as_ref().unwrap().drones.channels.on(0x10) { break 'recovery; }
             {
                 let sim = w.scene.sim.as_ref().unwrap();
                 if sim.gun.clip + sim.gun.spare < 8 { drop(sim); w.resupply("ammo"); }
@@ -683,10 +712,33 @@ fn the_hall_guards_wait_for_the_meet_scenes_channel() {
 /// the game's AllyLeadDone parks him there [M NDrone2_DSTATE_AllyLeadDone 0x15f2e8 case 3
 /// falls to the default — no movement]. Bond then steps onto the plate: the AND (mask 0x18,
 /// filter skin 0x4F [M Trigger_Hit 0x1b1fc8]) fires ch 0x10 → the exit loads 07000002.
+/// The contact parked in PlayerInWay [M 0x15ea28] with Bond AHEAD of him on his lead (nearer
+/// his steering target — the route's current `target`, else the stairwell head): a player steps
+/// back 4.0 behind him (the far side from the target) so the lead resumes. Bond trailing or
+/// level with him: None (the follow's own trail/close rules apply).
+fn behind_the_in_way_contact(w: &Walker, ci: usize, head: V3) -> Option<V3> {
+    let sim = w.scene.sim.as_ref().unwrap();
+    let d = &sim.drones.list[ci];
+    if d.state != nf_game::drone::state::PLAYER_IN_WAY { return None; }
+    let (cp, bp) = (d.pos, sim.bond.pos);
+    let ahead = d.route.as_ref().map(|r| r.target).filter(|t| walker::dxz(*t, cp) > 0.5).unwrap_or(head);
+    if walker::dxz(bp, ahead) >= walker::dxz(cp, ahead) { return None; }
+    let (hx, hz) = (cp[0] - ahead[0], cp[2] - ahead[2]);
+    let hl = (hx * hx + hz * hz).sqrt().max(1e-3);
+    Some([cp[0] + hx / hl * 4.0, cp[1], cp[2] + hz / hl * 4.0])
+}
+
 #[test]
 fn following_mayhew_down_completes_the_level() {
     let iso = iso();
     let mut w = Walker::new(nf_view::load(&iso, "07000001.bin", false).expect("load 07000001"));
+    // The hall's hanging lamps are solid (and block the guards' sight, as the game's
+    // DroneVision LOS picks cel-linked objects): the run can leave Bond pressed into the
+    // south-wall/east-door-jamb corner, so wedged nav legs bridge through a visible node.
+    w.bridge_wedged_nav = true;
+    // The type-2 guards carry 12 health, captains 24 [L ee_02b.bin]: Bond aims for the head
+    // (`Walker::prefer_head`), as a player does, or the scripted fights run the walk dry.
+    w.prefer_head = true;
     // ---- the route to the stairwell head (the main test's play, condensed) ------------------
     for t in 0..4000u32 {
         w.tick(Default::default(), false);
@@ -859,6 +911,22 @@ fn following_mayhew_down_completes_the_level() {
                 parked_at = cp;
                 break;
             }
+            // PlayerInWay is the opposite of the wait: Bond stands IN the lead's route inside 3.0
+            // and the lead resumes only once Bond is out of that band [M 0x15ea28 case 3] —
+            // closing in keeps him parked (the hall run: Bond trailed 2.8 u WEST of him, on his
+            // westward route, three closes, 30 s). A player steps behind him instead.
+            if cstate == nf_game::drone::state::PLAYER_IN_WAY {
+                let tgt = w.scene.sim.as_ref().unwrap().drones.list[ci].route.as_ref().map(|r| r.target);
+                if let Some(tgt) = tgt {
+                    let (hx, hz) = (tgt[0] - cp[0], tgt[2] - cp[2]);
+                    let hl = (hx * hx + hz * hz).sqrt().max(1e-3);
+                    let behind = [cp[0] - hx / hl * 4.5, cp[1], cp[2] - hz / hl * 4.5];
+                    eprintln!("[01f] the contact holds in PlayerInWay at ({:.2},{:.2},{:.2}) — stepping behind him to ({:.2},{:.2})",
+                        cp[0], cp[1], cp[2], behind[0], behind[2]);
+                    w.walk_nav_to(behind, "behind the waiting contact", 1.0);
+                    continue;
+                }
+            }
             eprintln!("[01f] the contact stood still 10 s at ({:.2},{:.2},{:.2}) state {cstate:#x} — closing in (the release bands [M 0x15eda8])",
                 cp[0], cp[1], cp[2]);
             // The hall's south-west inner corner: when the straight line to the contact crosses
@@ -875,6 +943,11 @@ fn following_mayhew_down_completes_the_level() {
                 w.walk_nav_to([5.45, 6.6, 14.3], "round the hall's south structure (north)", 1.4);
                 w.walk_nav_to([6.88, 6.4, 14.62], "the hall's north opening (nav node 7)", 1.4);
                 w.walk_nav_to([7.4, 6.0, 11.0], "back through the east door band", 1.4);
+            }
+            if let Some(back) = behind_the_in_way_contact(&w, ci, head) {
+                eprintln!("[01f] he waits in PlayerInWay with Bond ahead — stepping back behind him to ({:.2},{:.2})", back[0], back[2]);
+                w.walk_nav_to(back, "step back behind the waiting contact", 2.0);
+                continue;
             }
             w.walk_nav_to(cp, "close on the waiting contact", 3.0);
             continue;
@@ -893,9 +966,19 @@ fn following_mayhew_down_completes_the_level() {
         };
         if armed_near { clear_around(&mut w, &mut cleared, "follow"); continue; }
         let bp = w.scene.sim.as_ref().unwrap().bond.pos;
-        let (dx, dz) = (cp[0] - bp[0], cp[2] - bp[2]);
+        let (mut dx, mut dz) = (cp[0] - bp[0], cp[2] - bp[2]);
+        // Behind him means behind along HIS heading (the route's move target): with Bond ahead
+        // on the route, the Bond-to-contact line put the trail point in front of the lead.
+        if let Some(tgt) = w.scene.sim.as_ref().unwrap().drones.list[ci].route.as_ref().map(|r| r.target) {
+            let (hx, hz) = (tgt[0] - cp[0], tgt[2] - cp[2]);
+            if hx * -dx + hz * -dz > 0.0 && hx * hx + hz * hz > 1e-4 { dx = hx; dz = hz; }
+        }
         let l = (dx * dx + dz * dz).sqrt().max(1e-3);
-        let trail = [cp[0] - dx / l * 4.0, cp[1], cp[2] - dz / l * 4.0];
+        let mut trail = [cp[0] - dx / l * 4.0, cp[1], cp[2] - dz / l * 4.0];
+        if let Some(back) = behind_the_in_way_contact(&w, ci, head) {
+            eprintln!("[01f] Bond is ahead of the contact (PlayerInWay) — stepping back behind him to ({:.2},{:.2})", back[0], back[2]);
+            trail = back;
+        }
         w.walk_nav_to(trail, &format!("trail the contact {rounds}"), 2.0);
     }
     // The endgame state: the contact where the follow left him, Bond behind.
@@ -992,11 +1075,17 @@ fn the_exit_fade_starts_on_the_exit_tick_runs_the_games_300_frames_then_the_leve
         let a = sim.drones.exit_fade_view().unwrap().alpha;
         assert!((a - 100.0 / 300.0).abs() < 1e-6,
             "the fade alpha is the burned fraction of the push (got {a}) [M 0x1bada0:16-20]");
-        // The visible pane: the game draws psiFadeView(0,0,0, level·255) — black at the faded
-        // alpha [M 0x1bbdd8 colour bytes, 0x1e6f50:203-209]. The port's overlay quad matches.
+        // The visible pane: the game draws psiFadeView(0,0,0, level·255) — black, its alpha byte
+        // straight into the GS where 0x80 = 1.0 [M 0x1bbdd8 colour bytes, 0x1e6f50:203-209,
+        // CreateTotalScreenSprite 0x1181b0 ALPHA_1 0x44] — so the cover is byte/128
+        // (`hud::fade_cover`, hud-start): 85/128 here, not the raw 1/3.
         let hud = w.scene.script_overlay_hud(4.0 / 3.0);
+        let want = nf_view::hud::fade_cover(a);
+        assert!((want - 85.0 / 128.0).abs() < 1.5 / 128.0, "byte (int)(255·a) ≈ 85 → ≈85/128, got {want}");
+        let got: Vec<f32> = hud.v.iter().filter(|v| v.c[0] == 0.0 && v.c[1] == 0.0 && v.c[2] == 0.0).map(|v| v.c[3]).collect();
+        assert!(got.iter().any(|c| (c - want).abs() < 1e-3), "fade quad alphas {got:?}, want {want}");
         assert!(hud.v.iter().any(|v| v.c[0] == 0.0 && v.c[1] == 0.0 && v.c[2] == 0.0
-                && (v.c[3] - 100.0 / 300.0).abs() < 1e-3),
+                && (v.c[3] - want).abs() < 1e-3),
             "the fade pane draws black at the faded alpha [M 0x1bbdd8 + 0x1e6f50 psiFadeView]");
     }
     // The rest of the count: the hold clears at exactly 300 with the request intact
@@ -1026,4 +1115,13 @@ fn the_exit_fade_starts_on_the_exit_tick_runs_the_games_300_frames_then_the_leve
         assert!((p[0] - -27.17).abs() < 2.0 && (p[2] - 29.80).abs() < 2.0,
             "start #0 (gate 0) — entry from 07000001's single exit route [D docs/levels/07000002.md], got {p:?}");
     }
+}
+
+/// Real damage: the same walk with the health top-up off for every walker it makes (the
+/// tests' own `top_up_health = true` included) and the walker's return fire on — Bond's death
+/// panics with the death spot and the last hits (common/damage_log.rs), so a pass pins that the
+/// walk completes on the port's own damage.
+#[test]
+fn walk_from_the_spawn_to_the_exit_with_the_contact_real_damage() {
+    walker::with_real_damage(walk_from_the_spawn_to_the_exit_with_the_contact);
 }

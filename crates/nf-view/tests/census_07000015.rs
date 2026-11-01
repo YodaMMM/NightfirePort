@@ -79,7 +79,12 @@ fn probe_07000015_mine_objects() {
                     let tris = c.triangles();
                     let n = tris.len();
                     for t in &tris { for v in t { for k in 0..3 { lo[k] = lo[k].min(v[k]); hi[k] = hi[k].max(v[k]); } } }
-                    println!("mine m{mm}#{o} \"{}\" tris {n} lo {lo:.2?} hi {hi:.2?} centre {:.2?} r {:.2}", obj.name.trim(), obj.centre, obj.radius);
+                    // The surface bytes (the pass bits 0x40/0x80 a bullet hit would read) and the
+                    // glist flags word.
+                    let mut mats = std::collections::BTreeMap::new();
+                    for (_, m) in c.triangles_with_material() { *mats.entry(m).or_insert(0usize) += 1; }
+                    println!("mine m{mm}#{o} \"{}\" tris {n} lo {lo:.2?} hi {hi:.2?} centre {:.2?} r {:.2} glist flags {:#x} surfaces {mats:?}",
+                        obj.name.trim(), obj.centre, obj.radius, obj.flags);
                 }
                 None => println!("mine m{mm}#{o} \"{}\" NO collision, centre {:.2?} r {:.2}", obj.name.trim(), obj.centre, obj.radius),
             }

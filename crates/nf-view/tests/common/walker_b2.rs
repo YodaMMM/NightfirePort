@@ -10,6 +10,8 @@ use nf_game::triggers::kind;
 use nf_game::world::V3;
 use nf_view::scene::Scene;
 
+include!("damage_log.rs");
+
 pub const TICKS_PER_SEC: u32 = 60;
 
 /// Wrap an angle into −π..π.
@@ -73,6 +75,8 @@ pub struct Walker {
     /// Top Bond's health up every tick (the "enemies disabled for the walk" allowance; the pain
     /// pipeline still runs — flash, dir bits — so the walk is not a no-op).
     pub top_up_health: bool,
+    /// Real-damage bookkeeping (damage_log.rs): live whenever the top-up is off.
+    pub dmg: DamageLog,
     /// Stop the walk the moment `level_exit` is requested.
     pub stop_on_exit: bool,
     pub report: Report,
@@ -88,6 +92,12 @@ pub struct Walker {
     /// Lenient walks bail (u32::MAX) at the 6000-tick cap instead of panicking — the caller
     /// decides (walkreal_0700000b_live's deck leg keeps the interactions real on a wedge).
     pub lenient: bool,
+    /// The stuck ladder's player answers, OPT-IN (default off keeps every walk tuned on the old
+    /// ladder): the E goes only to a door on Bond's own floor that is not locked (a set lock
+    /// channel still off; the main walker's filter — a door 7 u up the stairwell, or a locked one, never
+    /// answers the E, and the press reset the ladder forever), and a live hostile standing on
+    /// the lane within a body's reach on Bond's floor is shot before the walk goes on.
+    pub stuck_answers: bool,
     /// ai-sight-drawn-gate-4 (NF_ALARM_TRACE, additive): each drone's last logged state, so the
     /// trace prints only transitions + a 50-tick digest — the fail reads as the presser's walk.
     pub alarm_last: Vec<u8>,
@@ -116,6 +126,11 @@ fn fail_dump(scene: &Scene, target: V3, label: &str) -> String {
             d.ch_lock != 0 && sim.drones.channels.on(d.ch_lock as u32)))
         .collect();
     s.push_str(&format!("doors nearby: {}\n", if doors.is_empty() { "none".into() } else { doors.join("; ") }));
+    let drones: Vec<String> = sim.drones.list.iter().enumerate()
+        .filter(|(_, d)| d.health > 0.0 && dxz(d.pos, p) < 4.0)
+        .map(|(i, d)| format!("#{i} state={:#x} ({:.2},{:.2},{:.2}) d={:.2}", d.state, d.pos[0], d.pos[1], d.pos[2], dxz(d.pos, p)))
+        .collect();
+    s.push_str(&format!("drones nearby: {}\n", if drones.is_empty() { "none".into() } else { drones.join("; ") }));
     let trigs: Vec<String> = sim.drones.triggers.iter()
         .filter(|t| !t.tris.is_empty() && dxz(t.centre(), p) < 4.0 && !t.gone)
         .map(|t| format!("trig kind={} out={:#x} mask={:#x} at({:.1},{:.1},{:.1})", t.kind, t.out, t.mask, t.centre()[0], t.centre()[1], t.centre()[2]))
@@ -130,13 +145,31 @@ impl Walker {
     pub fn new(scene: Scene) -> Walker {
         let pos = scene.sim.as_ref().unwrap().bond.pos;
         Walker {
-            scene, top_up_health: true, stop_on_exit: true,
+            scene, top_up_health: true, dmg: DamageLog::new(), stop_on_exit: true,
             report: Report { legs: Vec::new(), stuck_events: Vec::new(), falls: Vec::new() },
             total_ticks: 0, pos, last_sample: pos, sample_tick: 0, stuck: 0, stuck_cycles: 0, float_ticks: 0,
-            sidestep: 0, max_y: pos[1], lenient: false,
+            sidestep: 0, max_y: pos[1], lenient: false, stuck_answers: false,
             alarm_last: Vec::new(),
             alarm_props_dumped: None,
         }
+    }
+
+    /// The top-up is on: the walker's flag, unless `NF_WALK_NO_TOPUP` turns it off binary-wide.
+    pub fn tops_up(&self) -> bool { self.top_up_health && !no_topup_env() }
+
+    /// After every stepped tick: read the damage (damage_log.rs), then top health up when on. A
+    /// death on a real-damage walk panics with the death line (the walk cannot go on).
+    pub fn after_step(&mut self) {
+        self.dmg.active = !self.tops_up();
+        let tick = self.total_ticks;
+        self.dmg.note(self.scene.sim.as_ref().unwrap(), tick);
+        if self.dmg.active && (tick % 60 == 0 || self.dmg.died.is_some()) {
+            note_summary(self.total_ticks, self.dmg.summary(self.scene.sim.as_ref().unwrap()));
+        }
+        if self.dmg.active && self.dmg.die_panics {
+            if let Some(d) = &self.dmg.died { panic!("[real-damage] {d}"); }
+        }
+        if self.tops_up() { self.scene.sim.as_mut().unwrap().drones.health.health = 100.0; }
     }
 
     fn sim(&mut self) -> &mut nf_view::scene::Sim { self.scene.sim.as_mut().unwrap() }
@@ -239,10 +272,7 @@ impl Walker {
                 self.report.falls.push(format!("recovery hop at tick {} y {:.2}", self.total_ticks, self.scene.sim.as_ref().unwrap().bond.pos[1]));
             }
         }
-        if self.top_up_health {
-            let h = &mut self.scene.sim.as_mut().unwrap().drones.health;
-            h.health = 100.0;
-        }
+        self.after_step();
     }
 
     /// Step with no input until Bond is not `disabled` (cut-scene wait), capped.
@@ -311,6 +341,27 @@ impl Walker {
         c + s > 0
     }
 
+    /// The return-fire switch (damage_log.rs): cycle until a GUN in hand has ammo (or give up
+    /// after 12 switches). The armed test is return_fire's in-hand gate — `(2..=0x47)` [M the
+    /// gadget ids sit above it]: the Q-Decryptor's beam charge (clip 500) reads as ammo to the
+    /// plain `switch_to_armed`, and a fight "fired" the gadget at the guard until its burst killed
+    /// Bond (07000012, real damage). Kept apart from `switch_to_armed`, whose any-ammo test the
+    /// 07000009 patrol-beat clears rely on (their dry-P2K resupply ends on the first armed slot;
+    /// a gun-only cycle there stands Bond 732 ticks while the lobby guards close in).
+    pub fn switch_to_gun(&mut self, label: &str) -> bool {
+        let armed = |w: &Walker| {
+            let sim = w.scene.sim.as_ref().unwrap();
+            (2..=0x47).contains(&sim.gun.weapon) && sim.gun.clip + sim.gun.spare > 0
+        };
+        for k in 0..12 {
+            if armed(self) { return true; }
+            eprintln!("[walk] {label}: cycling to a gun ({k})");
+            self.tick(Input { weapon_cycle: 1, ..Default::default() }, false);
+            for _ in 0..60 { self.tick(Input::default(), false); } // the holster/draw cycle
+        }
+        armed(self)
+    }
+
     /// Aim at a drone's torso (root + 0.3 — the port's drone pos is the ROOT, the torso box centre
     /// sits +0.27 above it [L hit-box dump]) with the view (turn + look through the input) and tap
     /// the trigger until it dies or the cap. The real fire path (the gun, the bullets, the hit
@@ -372,7 +423,7 @@ impl Walker {
                 self.scene.sim.as_mut().unwrap().step_bond(input, trigger, reload, false);
             }
             self.total_ticks += 1;
-            if self.top_up_health { self.scene.sim.as_mut().unwrap().drones.health.health = 100.0; }
+            self.after_step();
             // Out of ammo: give up (the caller resupplies and retries).
             if self.scene.sim.as_ref().unwrap().gun.clip == 0
                 && self.scene.sim.as_ref().unwrap().gun.spare == 0 && t > 60 {
@@ -523,7 +574,10 @@ impl Walker {
     /// Steer Bond to one waypoint; returns the ticks it took. Panics with a dump when genuinely
     /// wedged (3 stuck-mitigation cycles without progress).
     pub fn walk_to(&mut self, wp: Wp, label: &str) -> u32 {
-        let start_ticks = self.total_ticks;
+        let mut start_ticks = self.total_ticks;
+        // `stuck_answers`: each blocker is fought once per leg (an unkillable one falls through
+        // to the plain ladder, whose cycles still bound the leg).
+        let mut fought: Vec<usize> = Vec::new();
         let mut use_left = 0u32;
         let mut ladder = false;
         let mut riding = false;
@@ -547,6 +601,12 @@ impl Walker {
             if self.scene.sim.as_ref().unwrap().disabled {
                 self.tick(Input::default(), false);
                 continue;
+            }
+            // Real damage: answer whoever is shooting Bond before walking on (the fight's
+            // ticks are the response's cost, not the leg's).
+            if !riding && !ladder && self.total_ticks % 10 == 0 {
+                let t0 = self.total_ticks;
+                if self.return_fire(label) { start_ticks += self.total_ticks - t0; continue; }
             }
             let p = self.scene.sim.as_ref().unwrap().bond.pos;
             self.pos = p;
@@ -713,8 +773,25 @@ impl Walker {
                     // the door's own plane blocks a straight segment to its centre, so NO LOS filter
                     // here: the nearest door within reach gets the E (a toggle [M Door_Activate],
                     // and opening a neighbouring door never blocks the walk).
-                    let door_i = sim.drones.doors.list.iter().position(|d| dxz(d.pos, self.pos) < 2.8);
-                    if let Some(di) = door_i {
+                    let answers = self.stuck_answers;
+                    let door_i = sim.drones.doors.list.iter().position(|d| dxz(d.pos, self.pos) < 2.8
+                        && (!answers || ((d.pos[1] - self.pos[1]).abs() < 2.5
+                            && !(d.ch_lock != 0 && !sim.drones.channels.on(d.ch_lock as u32)))));
+                    let blocker = if answers && door_i.is_none() {
+                        sim.drones.list.iter().enumerate().position(|(i, g)| g.team == 1 && g.present && !g.corpse && g.health > 0.0
+                            && dxz(g.pos, self.pos) < 1.8 && (g.pos[1] - self.pos[1]).abs() < 2.5
+                            && !fought.contains(&i))
+                    } else { None };
+                    if let Some(bi) = blocker {
+                        drop(sim);
+                        fought.push(bi);
+                        eprintln!("[walk] {label}: hostile body-block (drone {bi}) — shooting the blocker");
+                        let t0 = self.total_ticks;
+                        if !self.shoot_bounded(bi, label, 3000) { self.resupply(label); }
+                        // The fight is the response's own budget, not the leg's.
+                        start_ticks += self.total_ticks - t0;
+                        self.stuck = 0;
+                    } else if let Some(di) = door_i {
                         drop(sim);
                         self.use_door(di, label);
                         self.stuck = 0;
@@ -843,7 +920,7 @@ pub fn nav_route(sim: &nf_view::scene::Sim, start: V3, dest: V3) -> Option<Vec<V
         if sim.nav.paths[pi].nodes.is_empty() { continue; }
         let goal = sim.nav.target_nodes(&sim.world, pi, dest, 0.0);
         let used = vec![0u16; sim.nav.paths[pi].links.len()];
-        if let Ok((_, route)) = nf_game::nav::Route::to_position(&sim.nav, &sim.world, Some(pi), start, dest, &goal, &used) {
+        if let Ok((_, route)) = nf_game::nav::Route::to_position(&sim.nav, &sim.world, Some(pi), start, dest, &goal, &used, &|_, _| false) {
             let pts: Vec<V3> = route.nodes.iter().map(|&n| sim.nav.paths[pi].nodes[n as usize].pos).collect();
             if pts.len() > 2 { return Some(pts[1..pts.len() - 1].to_vec()); }
         }

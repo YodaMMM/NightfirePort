@@ -24,6 +24,7 @@ pub mod dev;
 pub mod devwin;
 pub mod hud;
 pub mod credits;
+pub mod fe_pages;
 pub mod menu;
 pub mod menu_engine;
 pub mod mp_lobby;
@@ -36,6 +37,7 @@ pub mod mpfx;
 pub mod desync;
 pub mod clipboard;
 pub mod scene;
+pub mod pose_pool;
 pub mod replay;
 pub mod bugreport;
 pub mod panel;
@@ -77,7 +79,20 @@ use winit::keyboard::{KeyCode, PhysicalKey};
 use winit::window::{CursorGrabMode, Window, WindowId};
 
 /// Radians per mouse count. Mouse deltas go straight into yaw/pitch (docs/systems/input.md §8).
-const MOUSE_SENSITIVITY: f32 = 0.0025;
+/// Pub for the headless look-rate tests (mouse_look_rate_live.rs).
+pub const MOUSE_SENSITIVITY: f32 = 0.0025;
+
+/// One raw mouse motion event into the pending look (the `DeviceEvent::MouseMotion` arm of
+/// `device_event`): `turn` in radians, `look` in the sim's pitch units (π/2 per 1.0). The deltas
+/// ACCUMULATE between ticks and each sim tick takes the whole sum once (`std::mem::take` in the
+/// tick loop), so the look rate is a function of mouse counts only — never of the render rate.
+/// When scoped, the sensitivity is divided by the zoom factor (the scope zooms the view, so the
+/// same mouse delta turns less) [M Player_Zoom: the zoom affects the view]. Pub for the headless
+/// look-rate tests, which drive this exact arithmetic at several frame rates.
+pub fn mouse_look_add(turn: &mut f32, look: &mut f32, dx: f64, dy: f64, zoom: f32) {
+    *turn -= dx as f32 * MOUSE_SENSITIVITY / zoom;
+    *look -= dy as f32 * MOUSE_SENSITIVITY / zoom / std::f32::consts::FRAC_PI_2;
+}
 
 /// The game's vertical field of view in play (60°, docs/systems/player.md).
 const GAME_FOV: f32 = std::f32::consts::FRAC_PI_3;
@@ -165,6 +180,21 @@ fn lerp_entry(x: &nf_formats::anim::Mat4, y: &nf_formats::anim::Mat4, t: f32) ->
     let d = (0..3).map(|k| (x[3][k] - y[3][k]).powi(2)).sum::<f32>().sqrt();
     if d > SNAP { return *y; }
     blend_pose(x, y, t)
+}
+
+/// `NF_INTERP_SHOT`'s blended palette, consumed by the next headless `shot` in place of its own.
+static SHOT_PALETTE: std::sync::Mutex<Option<Vec<nf_formats::anim::Mat4>>> = std::sync::Mutex::new(None);
+
+/// The palette entries the presented frames blend between two ticks: every entry that differs,
+/// minus `snap` — entries whose draw changed hands between the ticks (a decal pool node reused
+/// for a new hole, `Scene::decal_reused_entries`), which show the newer tick at once instead of
+/// sliding from the old thing to the new one. Pub for the headless interpolation tests.
+pub fn moving_entries(prev: &[nf_formats::anim::Mat4], cur: &[nf_formats::anim::Mat4], snap: &[u32]) -> Vec<u32> {
+    if prev.len() != cur.len() { return Vec::new(); }
+    prev.iter().zip(cur).enumerate()
+        .filter(|(i, (x, y))| x != y && !snap.contains(&(*i as u32)))
+        .map(|(i, _)| i as u32)
+        .collect()
 }
 
 /// perf-240: the per-frame blend touches only the entries that differ between the two ticks.
@@ -289,6 +319,12 @@ fn view_model_entries(scene: &scene::Scene, l: &scene::SkinLayout) -> Option<Vec
     // anim set [M `Player_ChangeSubState(10)`; L PCSX2 "no view model"]) — frame_state hides the
     // arms' palette; the reattach skips too.
     if s.missile_cam.is_some() { return None; }
+    // The security-camera view: `Player_Disable(player, 0)` hides the view-model object
+    // (obj+0xF0 |= 0x10 [M 0x195f70:17-20]).
+    if s.sec_cam().is_some() { return None; }
+    // The Ronin's remote view hides the view model: `View_SetDrawInNoViews(BLData+0x7e8)`
+    // [M Player_PositionCamera 0x18f5d8 case 0xf:282].
+    if s.drones.ronin_mounted().is_some() { return None; }
     // fix-wallhug-prompt: the creep's third-person camera hides the view model too [M
     // `Player_PositionCamera` 0x18f5d8 case 0xb: `View_SetDrawInNoViews(BLData+0x7e8)`; the entry
     // holsters the weapon, `Player_WeaponNone` 0x196758:114].
@@ -369,8 +405,11 @@ impl Camera {
     fn dir(&self) -> Vec3 { Vec3::new(self.pitch.cos() * self.yaw.sin(), self.pitch.sin(), self.pitch.cos() * self.yaw.cos()) }
     /// Right-handed view, wgpu clip depth 0..1, 60° vertical field of view (column-major for the shader).
     /// (full view-projection, the same with the eye at the origin for sky objects that follow the viewer).
+    /// The near plane is the game's Ps2Near2 = 0.1 [L ee_start_05.bin; docs/systems/render.md — the
+    /// PS2WorldViewVU1Kick2 0x10b2b0 depth mapping's n, f = 2^24 far; the ZBUF range N1/F1 saturates
+    /// ≈ 0.114]; the port's older 0.05 showed 5 cm more near content than the game.
     fn view_proj(&self, aspect: f32) -> ([[f32; 4]; 4], [[f32; 4]; 4]) {
-        let (near, far, f) = (0.05f32, 4000.0f32, 1.0 / (self.fov * 0.5).tan());
+        let (near, far, f) = (0.1f32, 4000.0f32, 1.0 / (self.fov * 0.5).tan());
         let proj = Mat4::from_cols_array_2d(&[[f / aspect, 0.0, 0.0, 0.0], [0.0, f, 0.0, 0.0], [0.0, 0.0, far / (near - far), -1.0], [0.0, 0.0, near * far / (near - far), 0.0]]);
         let fw = self.dir().normalize();
         // The right axis from the yaw alone (the game builds its view from yaw/pitch angles, not a
@@ -682,7 +721,15 @@ const NET_HASH_EVERY: u32 = 15;
 /// wrote, and `Player_InitWeapon` (0x1a7ef8) runs the per-level loadout switch over `Player_RamLoad`
 /// (0x1957a8). `None` = a cold load (the game's boot path; `Player_RamLoad`'s whole body is skipped).
 pub fn load_with_carry(iso: &str, archive: &str, all: bool, save: Option<&nf_game::player::RamSave>) -> Result<scene::Scene> {
-    load_impl(iso, archive, all, save, false, &[], false, None, 1, 0)
+    // The warm chain's difficulty: the game's difficulty global (`GameState+40` DECIMAL = hex
+    // +0x28, 0x2a3790) survives the level change untouched — its five writers (bootup 0x1c7e78:25
+    // = 2, the difficulty page 0x216ca8:15, the MP confirm 0x20ec00:150 = 1, the mini-mission
+    // 0x1ffb90:22 = 1, the driving-return PTP restore 0x1c8560:36) never run in an on-foot level
+    // change [M whole-decompile grep]. The port re-creates the Scene per load and seeds the
+    // difficulty at build, so the value rides the RamSave (`with_difficulty`); a save without it
+    // (the plain `capture`) keeps 1, the old direct-load replay parity.
+    let difficulty = save.map(|s| s.difficulty).filter(|&d| (1..=4).contains(&d)).unwrap_or(1);
+    load_impl(iso, archive, all, save, false, &[], false, None, difficulty, 0)
 }
 
 /// The carry-over load pre-merged for the given weapon ids (the dev menu's lazy give: the same
@@ -812,6 +859,10 @@ pub fn warm_exit_save(sim: &scene::Sim) -> nf_game::player::RamSave {
         &sim.drones.health, sim.gun.switch_request, &sim.drones.inventory, &sim.drones.channels)
         .with_mission(&sim.drones.mission)
         .with_tally(&sim.drones.progress)
+        // The difficulty global survives the level change in the game (no transition-path writer;
+        // see `RamSave::difficulty`) — attach the sim's mirror so a `load_with_carry` of this save
+        // re-seeds it. The front-end load wrappers take the pick as a parameter and ignore it.
+        .with_difficulty(sim.drones.difficulty)
 }
 
 fn load_impl(iso_path: &str, archive: &str, all: bool, save: Option<&nf_game::player::RamSave>, dev: bool, give: &[u8], mp: bool, mp_settings: Option<nf_game::mp::MpSettings>, difficulty: u32, bonus: u64) -> Result<scene::Scene> {
@@ -1302,6 +1353,10 @@ fn load_impl(iso_path: &str, archive: &str, all: bool, save: Option<&nf_game::pl
         },
         hitboxes: nf_formats::hitbox::CollisionBones::from_action_elf(&elf).ok(),
         sfx: nf_formats::sfx::SfxTable::from_action_elf(&elf).ok(),
+        // subtitles-do-spoken: `Sound_DoSubtitle` 0x1dde58's two static tables (Snd2Lbl 0x2d25d8,
+        // SFXOutputData+0x10 durations) — `Drones::attach_snd2lbl` consumes them.
+        snd2lbl: nf_formats::sfx::snd2lbl(&elf).map_err(|e| eprintln!("Snd2Lbl: {e}")).unwrap_or_default(),
+        sfx_durations: nf_formats::sfx::sfx_durations(&elf).map_err(|e| eprintln!("SFX durations: {e}")).unwrap_or_default(),
         surfaces: nf_formats::sfx::SurfaceSounds::from_action_elf(&elf).map_err(|e| eprintln!("EffectInfo: {e}")).ok(),
         voices: nf_formats::sfx::voice_lines(&elf).map_err(|e| eprintln!("Drone_SfxInfo: {e}")).ok(),
         hud: nf_formats::hud::HudTables::from_action_elf(&elf).map_err(|e| eprintln!("HUD tables: {e}")).ok(),
@@ -1717,6 +1772,30 @@ fn load_impl(iso_path: &str, archive: &str, all: bool, save: Option<&nf_game::pl
         // The switch request is the game's `M_CONTROL+0x63`; the draw machine holsters and draws it
         // (`Player_WeaponSelect` 0x1a2cc0). 0x47 (none) draws nothing.
         sim.gun.switch_request = req;
+        if sim.mp.is_none() && req != 0 && req != 0x47 {
+            // hud-start: the level starts with NOTHING held — `Player_InitWeapon` writes
+            // `M_CONTROL+0x62 = 0x47` before it picks the level's request into +0x63
+            // [M 0x1a7ef8:137, :159-223]. The Sim's build-time `Gun::new(2, ..)` left the PP7
+            // "held", so a level whose request IS the PP7 (07000005) never switched, and the
+            // others holstered a PP7 that was never drawn. From 0x47 the draw is the no-holster
+            // path (`Player_WeaponSelect` 0x1a2cc0:33-35).
+            sim.gun.weapon = 0x47;
+            sim.gun.clip = 0;
+            sim.gun.spare = 0;
+            // The weapon-name label at the start: `Player_Update` runs `HUD_Update` BEFORE
+            // `Player_Weapon` [M 0x193600:79 vs :412], so the first tick's ammo pane still sees
+            // +0x63 != +0x62 (and their records' +2 ids differ) and sets `BL+0x95E = FRAME_RATE`
+            // [M HUD_UpdateAmmoPane 0x19a7f0:212-217], decremented in the same update (:223) —
+            // the swap happens after it. (`Player_Init` 0x1910f8:145's HUD_Update runs before
+            // `Player_InitWeapon` (:146) and `Player_StandAtNewPosition` (:181) zeroes +0x95E
+            // [M 0x190d88:85], so nothing earlier arms it.) The port's `hud_tick` runs after its
+            // switch machine, so the loadout arms the one pending look the game's order gives.
+            let differs = match (sim.weapons.records.get(0x47), sim.weapons.records.get(req as usize)) {
+                (Some(a), Some(b)) => a[2..4] != b[2..4],
+                _ => false,
+            };
+            if differs { sim.hud.weapon_label_timer = 60; }
+        }
         eprintln!("loadout: level {level_id:08x} switch request {req} ({} owned weapons, health {:.0}, armour {:.0})",
             sim.drones.inventory.owned.iter().filter(|&&o| o).count(), sim.drones.health.health, sim.drones.health.armour);
     }
@@ -2097,6 +2176,40 @@ pub fn sound_tick(s: &mut nf_audio::sfx::Sound, sim: &mut scene::Sim) {
     });
 }
 
+/// perf-240g: the instance the window and the shots draw with (and the window's surface). wgpu
+/// checks every indirect draw's arguments at `CommandEncoder::finish` and injects a compute pass
+/// that rewrites them, unless the instance leaves out `VALIDATION_INDIRECT_CALL`; the batched
+/// world pass's thousands of multi-draw args made that 0.1-0.25 ms of every frame. The port fills
+/// the args itself from in-range index runs, so the check only guards against a port bug.
+/// Vulkan only: perf-240f saw the D3D12 backend misreport first_instance without it, so every
+/// other backend keeps the default instance. The Vulkan-only instance must offer the very adapter
+/// the default instance picks (backend, name, vendor, device), else the default stands.
+/// `NF_INDIRECT_VALIDATION=1` keeps the check everywhere.
+pub fn gpu_instance(window: Option<&Arc<Window>>) -> (wgpu::Instance, Option<wgpu::Surface<'static>>) {
+    let default = || {
+        let inst = wgpu::Instance::new(wgpu::InstanceDescriptor::new_without_display_handle());
+        let surf = window.map(|w| inst.create_surface(w.clone()).expect("create surface"));
+        (inst, surf)
+    };
+    let (inst, surf) = default();
+    if std::env::var_os("NF_INDIRECT_VALIDATION").is_some() { return (inst, surf); }
+    let info = |i: &wgpu::Instance, s: Option<&wgpu::Surface<'_>>| pollster::block_on(i.request_adapter(&wgpu::RequestAdapterOptions { compatible_surface: s, ..Default::default() }))
+        .ok().map(|a| { let i = a.get_info(); (i.backend, i.name, i.vendor, i.device) });
+    let Some(want) = info(&inst, surf.as_ref()) else { return (inst, surf) };
+    if want.0 != wgpu::Backend::Vulkan { return (inst, surf); }
+    drop(surf);
+    let mut d = wgpu::InstanceDescriptor::new_without_display_handle();
+    d.backends = wgpu::Backends::VULKAN;
+    d.flags.remove(wgpu::InstanceFlags::VALIDATION_INDIRECT_CALL);
+    let inst2 = wgpu::Instance::new(d);
+    let surf2 = match window {
+        Some(w) => match inst2.create_surface(w.clone()) { Ok(s) => Some(s), Err(_) => { drop(inst2); return default(); } },
+        None => None,
+    };
+    if info(&inst2, surf2.as_ref()).as_ref() != Some(&want) { drop(surf2); drop(inst2); return default(); }
+    (inst2, surf2)
+}
+
 async fn device(instance: &wgpu::Instance, surface: Option<&wgpu::Surface<'_>>) -> Result<(wgpu::Adapter, wgpu::Device, wgpu::Queue)> {
     let adapter = instance.request_adapter(&wgpu::RequestAdapterOptions { compatible_surface: surface, ..Default::default() }).await?;
     // Player bug reports carry the GPU and its driver (bugreport.rs).
@@ -2188,10 +2301,50 @@ pub fn scene_overlay_up(scene: &scene::Scene, movie_up: bool) -> bool {
     !movie_up && scene.sim.as_ref().map_or(true, |s| s.level & 0xff00_ffff != menu::FRONTEND_LEVEL)
 }
 
+/// The gameplay HUD with a menu frame drawn over it (the HUD's quads first: frame order = draw
+/// order). The pause page uses it: the game opens the pause from `Player_Update` and runs
+/// `HUD_Update` in the same call right after `GS_PauseGame(1)` [M 0x193600:73-79]; while paused
+/// `Player_Update` is not reached again (`Game_Run` 0x1c9790 skips the object handlers), but
+/// `Game_Draw` 0x1e6f50:186-214 keeps drawing every viewer's sprite list with no pause gate, so
+/// the HUD sprites stay on screen under the menu as that last update left them.
+pub fn hud_under_menu(hud: gpu::HudFrame, menu: &gpu::HudFrame) -> gpu::HudFrame {
+    let mut f = hud;
+    f.append(menu);
+    f
+}
+
+/// The pane state the pause's own `HUD_Update` leaves: `HUD_UpdateHealthPane` writes
+/// `BL+0x8BC = 1.0` while `GS_IsPaused` [M 0x19b9c8:116-123], so the health / armour pane's fade
+/// factor F = min(4·BL+0x8BC, 1) is 1 — the ring shows at full strength in the pause (and after
+/// it, until the pane-fade option decays it again) even when it had faded out in play.
+pub fn pause_hud_refresh(sim: &mut scene::Sim) {
+    sim.drones.pain_alpha = 1.0;
+}
+
+/// Headless / test aid (hud-start): step a freshly loaded level with no input until the start
+/// draw has settled — the start weapon in hand with the switch machine idle. A load holds
+/// nothing (0x47 [M Player_InitWeapon 0x1a7ef8:137]) and the level's request draws on the first
+/// ticks; a script camera's hold is skipped the way the walkers do. Returns the ticks stepped.
+pub fn settle_start_draw(sim: &mut scene::Sim) -> u32 {
+    for t in 0..600 {
+        let req = sim.gun.switch_request;
+        if sim.gun.switch_state == 0 && (req == 0 || (sim.gun.weapon == req && t > 0)) { return t; }
+        if sim.disabled { sim.drones.scripts.skip_request = true; }
+        sim.step_bond(Default::default(), false, false, false);
+    }
+    600
+}
+
 /// `movie_up`: a movie frame is on screen (see `scene_overlay_up`).
 pub fn shot_hud(scene: &scene::Scene, aspect: f32, menu: Option<&gpu::HudFrame>, movie_up: bool) -> gpu::HudFrame {
     let mut f = menu.map_or_else(|| overlay_for(scene, aspect), |m| m.clone());
-    if scene_overlay_up(scene, movie_up) { f.append(&scene.script_overlay_hud(aspect)); }
+    if scene_overlay_up(scene, movie_up) {
+        // The entry fade under the HUD (`Scene::entry_fade_hud`), the script overlay over it.
+        let mut g = scene.entry_fade_hud(aspect);
+        g.append(&f);
+        f = g;
+        f.append(&scene.script_overlay_hud(aspect));
+    }
     f
 }
 
@@ -2251,6 +2404,45 @@ fn front_end_menu(args: &[String], scene: &scene::Scene, front_end: bool, iso_pa
                 fe.bonus = Some(menu::BonusFields { level: 0x0700_0005, lines, texture: Some(lines[0].texture), text_labels, has_text: true });
                 menu::Page::NfBonus
             }
+            // Render aid: the credits roll opened from AV Options, `--roll N` frames in (default
+            // 1200); NF_CREDITS_BONUS=1 raises the GameState[0x52] flag (the dimmed backdrop).
+            "credits" => {
+                fe.open_credits(crate::credits::PAGE_CN_AV, 100, std::env::var_os("NF_CREDITS_BONUS").is_some());
+                let n: u32 = args.iter().position(|a| a == "--roll").and_then(|i| args.get(i + 1)).and_then(|v| v.parse().ok()).unwrap_or(1200);
+                for _ in 0..n { fe.credits.tick(); }
+                menu::Page::Credits
+            }
+            // Render aid: the end-of-campaign win page (P_WINGAME's 0x4c raised the movie).
+            "wingame" => { fe.just_completed = true; fe.win_enter(); menu::Page::WinGame }
+            // Render aid: AV Options → Screen Adjust. NF_SA_HELD=h-|h+|v-|v+ lights that bar's
+            // held arrow (the scroll's +0x142 0x40 / 0x80).
+            "screenadjust" => {
+                fe.screen_adjust_open();
+                match std::env::var("NF_SA_HELD").as_deref() {
+                    Ok("h-") => fe.screen_adjust_held[0] = 0x40,
+                    Ok("h+") => fe.screen_adjust_held[0] = 0x80,
+                    Ok("v-") => fe.screen_adjust_held[1] = 0x40,
+                    Ok("v+") => fe.screen_adjust_held[1] = 0x80,
+                    _ => {}
+                }
+                menu::Page::ScreenAdjust
+            }
+            // Render aid: P_PARISENUM with the card box up — the boot card walk run until its
+            // 0xb message stands ("Checking memory card…"), the box past its first frame
+            // (NF_PARIS_FIRST=1 shows the first frame's height lag instead).
+            "parisenum" => {
+                for _ in 0..16 {
+                    fe.paris_card.tick();
+                    fe.paris_card.enum_step();
+                    if fe.paris_card.flow_msg == 0xb { break; }
+                }
+                fe.paris_dialog = true;
+                fe.paris_msg_ticks = if std::env::var_os("NF_PARIS_FIRST").is_some() { 1 } else { 2 };
+                menu::Page::ParisEnum
+            }
+            // Render aid: the in-game cheat-medal page (mission defs' 0x4000004c), its list emptied
+            // by the page's 0x4c.
+            "cheatmedal" => { fe.cheat_medal_rows.clear(); menu::Page::CheatMedal }
             "cnmenu" => { fe.cn_name = "Default".into(); menu::Page::CnMenu }
             "advanced" => menu::Page::CnAdvanced,
             "mpoptions" => menu::Page::CnMp,
@@ -2351,10 +2543,12 @@ fn front_end_menu(args: &[String], scene: &scene::Scene, front_end: bool, iso_pa
         // the same state `FrontEnd::action`'s Confirm sets on the OBJECTIVES tab [M 0x204408
         // 0x205b98-0x205c34: control 1's activation reads control 8's row and opens the ok-only
         // box; 0xffffffff → 0x31d]. After the fill above (the rows must exist).
-        if args.iter().any(|a| a == "--pause-hint") && fe.pause_tab == 1 && !fe.pause_objectives.is_empty() {
-            let sel = fe.pause_objectives_sel.min(fe.pause_objectives.len() - 1);
-            let hint = fe.pause_objectives[sel].hint;
-            fe.pause_hint = Some(if hint == 0xffff_ffff { 0x31d } else { hint });
+        // `--pause-hint-again` opens, closes and re-opens the same row's box (the reopened box;
+        // every box is sized for its own lines, fe_pages::HintBoxView::size_lines).
+        let again = args.iter().any(|a| a == "--pause-hint-again");
+        if (again || args.iter().any(|a| a == "--pause-hint")) && fe.pause_tab == 1 && !fe.pause_objectives.is_empty() {
+            fe.open_objective_hint();
+            if again { fe.close_objective_hint(); fe.open_objective_hint(); }
         }
     }
     // Tick through the boot load and let the page's timers run (the flash cycle etc.).
@@ -2373,6 +2567,9 @@ fn front_end_menu(args: &[String], scene: &scene::Scene, front_end: bool, iso_pa
         let frame_n: usize = args.iter().position(|a| a == "--movie-frame").and_then(|i| args.get(i + 1)).and_then(|v| v.parse().ok()).unwrap_or(12);
         let want = if intro {
             Some(menu::INTRO_MOVIES[args.iter().position(|a| a == "--intro").and_then(|i| args.get(i + 1)).and_then(|v| v.parse::<usize>().ok()).unwrap_or(0).min(menu::INTRO_MOVIES.len() - 1)])
+        } else if fe.page == menu::Page::WinGame {
+            // The win page's own movie [M P_WINGAME 0x215100:20].
+            Some(crate::credits::WINGAME_MOVIE)
         } else {
             let aux = menu::aux_movie_for(fe.page_id());
             (aux != 0).then_some(aux)
@@ -2393,11 +2590,17 @@ fn front_end_menu(args: &[String], scene: &scene::Scene, front_end: bool, iso_pa
         // The intro FMV owns the screen — no controls, no plate [M 0x209e88]; the movie plane is
         // the whole picture. Without movie data the headless plate stands in.
         let hud = if movie.is_some() { None }
-            else { Some(menu::menu_overlay(&fe, &tables.font, &tables.font_header, lang.as_ref(), &scene.hud_textures, 1280.0 / 720.0)) };
+            else { Some(menu::menu_overlay_fonts(&fe, &tables.font, &tables.font_header, Some(&tables.font_medium), lang.as_ref(), &scene.hud_textures, 1280.0 / 720.0)) };
         return (hud, movie);
     }
     fe.backdrop_live = movie.is_some();
-    (Some(menu::menu_overlay(&fe, &tables.font, &tables.font_header, lang.as_ref(), &scene.hud_textures, 1280.0 / 720.0)), movie)
+    let frame = menu::menu_overlay_fonts(&fe, &tables.font, &tables.font_header, Some(&tables.font_medium), lang.as_ref(), &scene.hud_textures, 1280.0 / 720.0);
+    // hud-start: the pause page draws over the gameplay HUD, as the windowed App composes it
+    // (`hud_under_menu`) — the shot used to show the page alone, with no health ring.
+    if fe.page == menu::Page::Pause && scene.sim.is_some() {
+        return (Some(hud_under_menu(overlay_for(scene, 1280.0 / 720.0), &frame)), movie);
+    }
+    (Some(frame), movie)
 }
 
 /// The ISO path for `read_files_bin` (the NF_ISO env or the default image name).
@@ -2512,9 +2715,22 @@ fn mp_drive_shots(scene: &mut scene::Scene, args: &[String], spec: &str, out: &s
     Ok(())
 }
 
+/// The Screen Adjust offset (game units) → the renderer's picture fractions: X/2560, Y/448 [M
+/// docs/systems/screen-adjust.md §3; `FrontEnd::screen_offset_frac` is the same conversion].
+pub fn screen_frac(pos: (i32, i32)) -> [f32; 2] {
+    [pos.0 as f32 / 2560.0, pos.1 as f32 / 448.0]
+}
+
+/// The headless shot's offset: `NF_SCREEN_POS=x,y` (the game's units), clamped to the game's limits.
+fn shot_screen_pos() -> (i32, i32) {
+    let Ok(v) = std::env::var("NF_SCREEN_POS") else { return (0, 0) };
+    let mut it = v.split(',').map(|t| t.trim().parse::<i32>().unwrap_or(0));
+    (it.next().unwrap_or(0).clamp(-0x1b0, 0x1b0), it.next().unwrap_or(0).clamp(-0x30, 0x30))
+}
+
 fn shot(scene: &scene::Scene, cam: &Camera, out: &str, choice: Option<usize>, time: f32, mut opts: scene::ViewOpts, notex: bool, nofog: bool, menu: Option<&gpu::HudFrame>, movie: Option<&(u32, u32, Vec<u8>)>) -> Result<()> {
     let (w, h) = (1280u32, 720u32);
-    let instance = wgpu::Instance::new(wgpu::InstanceDescriptor::new_without_display_handle());
+    let (instance, _) = gpu_instance(None);
     let (_adapter, device, queue) = pollster::block_on(device(&instance, None))?;
     let format = wgpu::TextureFormat::Rgba8Unorm;
     // fix-sentinel-camera-play: the headless renders show the ride too — a `--frame N` shot taken
@@ -2543,13 +2759,26 @@ fn shot(scene: &scene::Scene, cam: &Camera, out: &str, choice: Option<usize>, ti
     let vis_shot = r.cel_visibility(cam.pos.to_array(), vp_shot, world, door_closed.as_deref());
     // The destroyed-glist swap's draw side: the dead Destroy leaves' centres (see Scene::destroy_centres).
     r.destroy_dead = dead_destroy_centres(scene);
+    r.sky_flash_mask = scene.sim.as_ref().map_or(0, |s| s.drones.sky.flash_mask);
     r.destroy_wreck_draw = wreck_draw_centres(scene);
     r.destroy_tint = destroy_tints(scene);
     // Objects are never room-culled (see the live path).
     r.update_skin(&queue, scene, choice, time, opts, None);
+    // The holes of the cels this shot does not draw are hidden (`View_DrawCelGlist` 0x1e6538 draws a
+    // cel's hole nodes with the cel only) — the window does the same per frame.
+    let shot_pal = SHOT_PALETTE.lock().unwrap().take();
+    let decal_cells = scene.decal_cell_entries(&r.skin_layout);
+    if shot_pal.is_some() || (vis_shot.is_some() && !decal_cells.is_empty()) {
+        let mut p = shot_pal.unwrap_or_else(|| scene.skin_palette(&r.skin_layout, choice, time, opts, None).0);
+        if let Some(v) = vis_shot.as_deref() { scene.hide_unseen_decals(&mut p, &decal_cells, v); }
+        r.upload_palette(&queue, &p);
+    }
     r.set_char_light_centres(scene);
     r.lights = scene.frame_lights();
     r.screen_aspect = w as f32 / h as f32;
+    // Render aid: `NF_SCREEN_POS=x,y` — the Screen Adjust offset in the game's units (PS2ScreenXPos /
+    // PS2ScreenYPos, clamped to psiAdjustScreenPos' ±0x1b0 / ±0x30 [M 0x10b890]).
+    r.screen_offset = screen_frac(shot_screen_pos());
     // `NF_BENCH=N`: time the per-frame CPU side N times (posing + vertex build, and the upload) for profiling.
     if let Some(n) = std::env::var("NF_BENCH").ok().and_then(|v| v.parse::<u32>().ok()) {
         let t0 = std::time::Instant::now();
@@ -2720,9 +2949,22 @@ struct App {
     cam_cur: Option<Camera>,
     pal_prev: Option<(Vec<nf_formats::anim::Mat4>, Vec<[f32; 4]>)>,
     pal_cur: Option<(Vec<nf_formats::anim::Mat4>, Vec<[f32; 4]>)>,
+    /// perf-240g: buffer pairs touched at the level swap (`swap_in_scene`), taken by the first
+    /// palette rebuilds while `pal_prev` has none to recycle — the first two builds of a level
+    /// otherwise fault in ~1-2 MB of fresh pages (the measured first-view spike).
+    pal_spare: Vec<(Vec<nf_formats::anim::Mat4>, Vec<[f32; 4]>)>,
     /// perf-240: the presented-frame palette (seeded per tick) and the entries that move between the two ticks.
     pal_blend: Vec<nf_formats::anim::Mat4>,
     pal_moving: Vec<u32>,
+    /// The decal pool's made count and the debris slots' handed-out count at the last palette
+    /// rebuild — the nodes/slots taken since then snap instead of blending
+    /// (`Scene::decal_reused_entries` / `Scene::debris_reused_entries`).
+    fx_made: Option<(u32, u32)>,
+    /// The cel-hosted holes' palette entries and cels (`Scene::decal_cell_entries`), refreshed
+    /// with the palette; each frame hides those whose cel the frame does not draw.
+    decal_cells: Vec<(u32, u32)>,
+    /// The entries the last frame hid (restored from the tick palette before the next blend).
+    pal_hidden: Vec<u32>,
     /// The gadget-beam palette entries (`Scene::beam_entries`), refreshed when the palette is
     /// rebuilt.
     beam_entries: Vec<usize>,
@@ -2735,6 +2977,9 @@ struct App {
     /// The front end (fix-menus): Some while a menu page is up (title / main / mission select /
     /// difficulty / options / pause / results). None = playing a mission directly.
     fe: Option<menu::FrontEnd>,
+    /// Screen Adjust's live offset (`PS2ScreenXPos`/`PS2ScreenYPos` [M 0x30c75c/0x30c760]) — mirrored
+    /// from the front end each frame it stands, so gameplay frames (no front end) keep the shift.
+    screen_pos: (i32, i32),
     /// The Advanced options' Auto Aim (control 0x1000011b; the profile's +0x01 — default ON [M
     /// Player_AutoAim 0x1a7c98:41 reads it]). Mirrored from the front end while it is up and kept
     /// across missions (the front end closes during play); applied to the sim every frame. The
@@ -3170,7 +3415,7 @@ impl App {
         if fe.settings_save_pending {
             fe.settings_save_pending = false;
             if let Some(p) = settings::default_path() {
-                if let Err(e) = settings::save_opts(&p, &fe.opts) { eprintln!("[settings] {e}"); }
+                if let Err(e) = settings::save_opts(&p, &fe.opts_with_screen()) { eprintln!("[settings] {e}"); }
             }
         }
         // menu-sfx: the front end's sound events play straight through the driver's 2-D start —
@@ -3447,7 +3692,10 @@ impl App {
         // settings-persist: the option file's values, not the bare defaults.
         let (opts, warn) = settings::load_default();
         if let Some(w) = warn { eprintln!("[settings] {w}"); }
-        fe.opts = opts;
+        fe.set_opts(opts);
+        // Screen Adjust: the offset is a global the menu managers don't own [M PS2ScreenXPos/YPos
+        // 0x30c75c/0x30c760] — a fresh manager keeps the live value.
+        (fe.screen_x, fe.screen_y) = self.screen_pos;
         // profile-session: keep the standing codename session (the other re-creates' rule).
         self.inherit_profile_session(&mut fe);
         // net-desync-detail: the fail box carries the diagnosis + the report zip's path (the
@@ -3512,6 +3760,7 @@ impl App {
         };
         let view = frame.texture.create_view(&Default::default());
         g.renderer.screen_aspect = aspect;
+        g.renderer.screen_offset = screen_frac(self.fe.as_ref().map_or(self.screen_pos, |f| (f.screen_x, f.screen_y)));
         // A zero view-projection collapses every world vertex (w = 0), so only the picture and the overlay draw.
         let id = [[0.0f32; 4]; 4];
         let movie = picture.map(|(w, h, rgba)| (*w, *h, rgba.as_slice()));
@@ -3764,6 +4013,15 @@ impl App {
         // loop with the audio still playing.
         if let Some(g) = &mut self.gfx {
             g.renderer = gpu::Renderer::new(&g.device, &g.queue, g.config.format, &self.scene, self.notex, self.nofog);
+            // perf-240g: one palette build here, on the thread that draws, during the swap: it
+            // faults in the buffers the first two rebuilds take (`pal_spare`) and
+            // the drones' draw-only sample memo, so the level's first frames pay
+            // none of it. The result is never drawn (each rebuild overwrites its buffers whole),
+            // and the build reads the scene only (the memo is a pure function of its key).
+            let (mut p, mut c) = (Vec::new(), Vec::new());
+            self.scene.skin_palette_into(&g.renderer.skin_layout, self.choice, self.anim_time, self.opts, None, &mut p, &mut c);
+            let second = (p.clone(), c.clone());
+            self.pal_spare = vec![(p, c), second];
         }
         // fix-restart-health: the loaded level's checkpoint is what a later
         // fail-Restart restores — the game re-saves the buffer with the POST-load
@@ -3888,7 +4146,10 @@ impl App {
         // defaults would otherwise ride the results page's quit back into the front end.
         let (opts, warn) = settings::load_default();
         if let Some(w) = warn { eprintln!("[settings] {w}"); }
-        fe.opts = opts;
+        fe.set_opts(opts);
+        // Screen Adjust: the offset is a global the menu managers don't own [M PS2ScreenXPos/YPos
+        // 0x30c75c/0x30c760] — a fresh manager keeps the live value.
+        (fe.screen_x, fe.screen_y) = self.screen_pos;
         // The demo hook stands in for Mission_Update 0x182c60, which fires in state 2 — the flow
         // must be in a state reset_map_level_to_load accepts (its gate [M 0x1d3800]) for the outro
         // request to wrap into the movie state. The results PAGE opens only at the front-end
@@ -4107,6 +4368,35 @@ impl App {
                 fe.music.movie_finished();
                 fe.attract_movie_finished();
             }
+        } else if fe.page == menu::Page::WinGame && fe.win_movie {
+            // P_WINGAME: the 0x4c started 0x073f0048 on the ONE BGFMV slot after removing the
+            // menu-music pair (menu_movie = 0) [M 0x215100:16-21]; each 0x50 polls
+            // psiMovieFinished and the first finish restarts the pair and opens the credits
+            // [M :23-48]. A declined start is BGFMVPlaying == 0: finished at once [M 0x1082e8].
+            let code = crate::credits::WINGAME_MOVIE;
+            let wrong = match &self.movie { Some(p) => p.code() != code || p.is_looping(), None => true };
+            let mut ended = false;
+            if wrong {
+                if let Some(p) = self.movie.take() { p.stop(); }
+                fe.win_movie_polled = fe.flow.ticks;
+                match movie::Player::start(&movie_iso, code, movie_sfx_volume(fe)) {
+                    Ok(p) => { self.movie = Some(p); eprintln!("movie: playing {code:08x} (win page)"); fe.music.movie_started(); }
+                    Err(e) => { eprintln!("movie: {code:08x} not started: {e:?} — the win page goes straight to the credits"); ended = true; }
+                }
+            }
+            if let Some(p) = self.movie.as_mut().filter(|p| p.code() == code) {
+                // One psiMovieFinished poll per page tick (60 Hz), not per redraw.
+                while fe.win_movie_polled != fe.flow.ticks {
+                    p.headless_advance();
+                    fe.win_movie_polled = fe.win_movie_polled.wrapping_add(1);
+                }
+                ended |= p.finished();
+            }
+            if ended {
+                if let Some(p) = self.movie.take().filter(|p| p.code() == code) { p.stop(); }
+                fe.music.movie_finished();
+                fe.win_movie_finished();
+            }
         } else if mission_movie_glue(fe, &mut self.movie, &movie_iso) {
         } else {
             // The page's aux loop [M 0x21c858:338]: stop when the page has no aux, (re)start when
@@ -4228,7 +4518,7 @@ impl App {
         } else {
             self.fe.as_ref().and_then(|fe| self.scene.hud.as_ref().map(|t| {
                 let lang = self.lang.as_ref().or_else(|| self.scene.sim.as_ref().and_then(|s| s.lang.as_ref()));
-                menu::menu_overlay(fe, &t.font, &t.font_header, lang, &self.scene.hud_textures, 1280.0 / 720.0)
+                menu::menu_overlay_fonts(fe, &t.font, &t.font_header, Some(&t.font_medium), lang, &self.scene.hud_textures, 1280.0 / 720.0)
             }))
         };
         shot(&self.scene, &self.cam, &png.to_string_lossy(), self.choice, self.anim_time, self.opts, self.notex, self.nofog, fe_menu.as_ref(), movie_owned.as_ref())
@@ -5006,19 +5296,22 @@ impl App {
                                     weapon_cycle: std::mem::take(&mut self.weapon_cycle),
                                     gadget_cycle: std::mem::take(&mut self.gadget_cycle),
                                     zoom_cycle: std::mem::take(&mut self.zoom_cycle),
+                                    // weapon-handling: the mouse's held right button is the zoom-in axis
+                                    // (the scene maps a held `zoom` to −1); the pad merge writes its own.
+                                    zoom_axis: 0.0,
                                     switch_to: self.weapon_switch_to.take(),
                                     fire: self.trigger,
                                     zoom: self.zoom,
                                     scope: self.zoom,
                                     // The fire-mode button (pad ○; keyboard M) [M Player_Weapon 0x1a24c8].
                                     mode_switch: self.just.remove(&KeyCode::KeyB),
-                                    // The goggles key: pad action 13 only (the styles). No keyboard
-                                    // bind — the disc grants the goggles nowhere, and the game's
-                                    // latch-clear press requests item 0x5d with no ownership check
-                                    // [M HUD_MonitorNightSight 0x19e9d8:82-84; Player_WeaponSelect
-                                    // 0x1a2cc0 has none either], so a port-only key would draw an
-                                    // item Bond does not carry.
-                                    goggles_action: false,
+                                    // The goggles key (V, a port choice): the press edge of the pad's
+                                    // action 13 [M HUD_MonitorNightSight 0x19e9d8:74 `Input_Action(p,
+                                    // 0xd, 4)`]. The latch-clear press requests item 0x5d with no
+                                    // ownership check [M 0x19e9d8:82-84], exactly as the pad's does, so
+                                    // the key arms night sight on every on-foot level and then cycles
+                                    // 1 → 2 → 0. The catch-all key arm lands V in `just`.
+                                    goggles_action: self.just.remove(&KeyCode::KeyV),
                                 };
                                 (input, self.trigger, self.just.remove(&KeyCode::KeyR), self.just.remove(&KeyCode::KeyE))
                             };
@@ -5344,7 +5637,10 @@ impl App {
                                     Self::inherit_music_statics(&mut fe, self.music_bank_flip, self.music_loaded_bank, self.music_master);
                                     let (opts, warn) = settings::load_default();
                                     if let Some(w) = warn { eprintln!("[settings] {w}"); }
-                                    fe.opts = opts;
+                                    fe.set_opts(opts);
+        // Screen Adjust: the offset is a global the menu managers don't own [M PS2ScreenXPos/YPos
+        // 0x30c75c/0x30c760] — a fresh manager keeps the live value.
+        (fe.screen_x, fe.screen_y) = self.screen_pos;
                                     fe
                                 });
                                 // profile-session: a fresh debriefing manager inherits the standing
@@ -5531,10 +5827,11 @@ impl App {
         let state6 = self.fe.as_ref().is_some_and(|fe| fe.flow.get_state() == menu::ST_MOVIE);
         let intro_up = self.fe.as_ref().is_some_and(|fe| fe.intro_playing);
         let attract_up = self.fe.as_ref().is_some_and(|fe| fe.attract_playing);
+        let win_up = self.fe.as_ref().is_some_and(|fe| fe.page == menu::Page::WinGame && fe.win_movie);
         let flow_up = state6 && !intro_up && self.movie.is_some();
         let aux_up = self.movie.as_ref().is_some_and(|p| p.is_looping())
             && !self.fe.as_ref().is_some_and(|fe| fe.flow.movie_pending);
-        intro_up || flow_up || aux_up || attract_up
+        intro_up || flow_up || aux_up || attract_up || win_up
     }
 
     /// The RedrawRequested draw half (everything after `frame` that needs the GPU):
@@ -5570,17 +5867,29 @@ impl App {
                     // Culling applies to map geometry only — characters, doors, pickups and props are never room-culled; only the
                     // World draws take the room/portal cull (render()).
                     let fp_pal = std::time::Instant::now();
-                    let new = self.scene.skin_palette(&g.renderer.skin_layout, self.choice, self.anim_time, self.opts, None);
+                    // perf-240: the tick before last's buffers are refilled (skin_palette_into overwrites
+                    // them whole) instead of a fresh ~1 MB allocation every tick.
+                    let (mut np, mut nc) = self.pal_prev.take().or_else(|| self.pal_spare.pop()).unwrap_or_default();
+                    self.scene.skin_palette_into(&g.renderer.skin_layout, self.choice, self.anim_time, self.opts, None, &mut np, &mut nc);
+                    let new = (np, nc);
                     frame_part(3, fp_pal.elapsed());
                     g.renderer.char_light_centre = self.scene.char_light_centres();
                     self.pal_prev = self.pal_cur.take();
                     // perf-240: the entries that move between the two ticks, and the blend buffer seeded
                     // with the newer tick (every other entry blends to it).
                     self.pal_moving.clear();
+                    // A decal pool node reused for a new hole this tick shows the new hole at once
+                    // (the game rewrites the node whole [M Effect_Bullet 0x1ce9f0..0x1cea9c]); blending
+                    // it would slide the hole through mid-air from the evicted one.
+                    // The same for a debris slot handed to a new piece.
+                    let made = self.scene.sim.as_ref().map_or((0, 0), |s| (s.drones.effects.made, s.drones.effects.debris_made));
+                    let prev = self.fx_made.unwrap_or(made);
+                    let mut snap = self.scene.decal_reused_entries(&g.renderer.skin_layout, prev.0);
+                    snap.extend(self.scene.debris_reused_entries(&g.renderer.skin_layout, prev.1));
+                    self.fx_made = Some(made);
+                    self.decal_cells = self.scene.decal_cell_entries(&g.renderer.skin_layout);
                     if let Some((pp, _)) = &self.pal_prev {
-                        if pp.len() == new.0.len() {
-                            self.pal_moving.extend(pp.iter().zip(&new.0).enumerate().filter(|(_, (x, y))| x != y).map(|(i, _)| i as u32));
-                        }
+                        self.pal_moving.extend(moving_entries(pp, &new.0, &snap));
                     }
                     self.pal_blend.clear();
                     self.pal_blend.extend_from_slice(&new.0);
@@ -5614,6 +5923,14 @@ impl App {
                 let alpha = alpha0;
                 let fp_blend = std::time::Instant::now();
                 if let Some((pal, cols)) = &self.pal_cur {
+                    // The holes in cels this frame does not draw (`View_DrawCelGlist` 0x1e6538
+                    // draws a cel's hole nodes with the cel only): the entries hidden last frame
+                    // come back from the tick palette first, then this frame's are collapsed.
+                    if self.pal_blend.len() == pal.len() {
+                        for &e in &self.pal_hidden { if let Some(m) = pal.get(e as usize) { self.pal_blend[e as usize] = *m; } }
+                    }
+                    self.pal_hidden.clear();
+                    let hide_any = vis.is_some() && !self.decal_cells.is_empty();
                     match &self.pal_prev {
                         Some((pp, _)) if interp => {
                             let vm_entries = view_model_entries(&self.scene, &g.renderer.skin_layout);
@@ -5636,7 +5953,16 @@ impl App {
                                     reattach_beams(blended, pp, pal, alpha, &cp, &cc, &draw_cam, &self.beam_entries);
                                 }
                             }
+                            if let (true, Some(v)) = (hide_any, vis.as_deref()) {
+                                self.pal_hidden = self.scene.hide_unseen_decals(blended, &self.decal_cells, v);
+                            }
                             g.renderer.upload_skin(&g.queue, blended, cols);
+                        }
+                        _ if hide_any && self.pal_blend.len() == pal.len() => {
+                            // Not blending: the tick palette with the unseen holes collapsed.
+                            self.pal_blend.copy_from_slice(pal);
+                            if let Some(v) = vis.as_deref() { self.scene.hide_unseen_decals(&mut self.pal_blend, &self.decal_cells, v); }
+                            g.renderer.upload_skin(&g.queue, &self.pal_blend, cols);
                         }
                         _ => g.renderer.upload_skin(&g.queue, pal, cols),
                     }
@@ -5683,12 +6009,14 @@ impl App {
                 // attract page has no controls [L the menu-def's 0x40000035 record], the movie
                 // plane IS the page [M P_ATTRACT_Handler 0x20a1f0's psiStartBackgroundMovie].
                 let attract_up = self.fe.as_ref().is_some_and(|fe| fe.attract_playing);
+                // The win page's movie owns the screen the same way (its PAGE record is bare [D]).
+                let win_up = self.fe.as_ref().is_some_and(|fe| fe.page == menu::Page::WinGame && fe.win_movie);
                 let flow_up = state6 && !intro_up && self.movie.is_some();
                 // The looping page player is the backdrop under the overlay; the early-started
                 // briefing player (non-looping, held through ST_MAPLOAD) is not.
                 let aux_up = self.movie.as_ref().is_some_and(|p| p.is_looping())
                     && !self.fe.as_ref().is_some_and(|fe| fe.flow.movie_pending);
-                let movie_up = intro_up || flow_up || aux_up || attract_up;
+                let movie_up = intro_up || flow_up || aux_up || attract_up || win_up;
                 let movie_frame = if movie_up { self.movie.as_mut().and_then(|p| p.present()) } else { None };
                 // The MP standings keep a constant on-screen text size (the lobby's view_h rule).
                 hud::set_view_h(g.config.height as f32);
@@ -5697,7 +6025,7 @@ impl App {
                         // fe-60hz: the front end's 60 Hz tick moved into `frame` (the draw half
                         // consumed the same post-tick state — headless-app-harness).
                     fe.backdrop_live = aux_up && movie_frame.is_some();
-                    if flow_up || (intro_up && movie_frame.is_some()) || (attract_up && movie_frame.is_some()) || fe.results_queued {
+                    if flow_up || (intro_up && movie_frame.is_some()) || (attract_up && movie_frame.is_some()) || (win_up && movie_frame.is_some()) || fe.results_queued {
                         // The movie plane replaces the overlay: the state-6 briefing blits over the
                         // empty backdrop and the fog pass is suppressed while a movie plays [M
                         // DecodeBGFMVFrame 0x108550 + PS2UploadBGMImage 0x108740, psiDrawFogPass
@@ -5733,7 +6061,7 @@ impl App {
                         }
                         fe.view_h = g.config.height as f32;
                         let mut f = match &self.scene.hud {
-                            Some(tables) => menu::menu_overlay(fe, &tables.font, &tables.font_header, lang, &self.scene.hud_textures, aspect),
+                            Some(tables) => menu::menu_overlay_fonts(fe, &tables.font, &tables.font_header, Some(&tables.font_medium), lang, &self.scene.hud_textures, aspect),
                             None => overlay_for(&self.scene, aspect),
                         };
                         // fix-pause-menu2: the in-game HUD stays visible under the pause page —
@@ -5746,16 +6074,7 @@ impl App {
                             // keeps its own runs — the old merge shifted by the MENU's count and dropped the HUD's runs,
                             // so the live pause page drew from the wrong vertices (the plate, the figure and most rows
                             // missing, the cursor a square) and the radar/ammo vanished while paused.
-                            let hud_frame = overlay_for(&self.scene, aspect);
-                            let base = hud_frame.v.len() as u32;
-                            let menu_runs = std::mem::take(&mut f.runs);
-                            let mut v = hud_frame.v;
-                            v.extend(f.v.drain(..));
-                            f.runs = hud_frame.runs;
-                            for (tex, blend, start, count) in menu_runs {
-                                f.runs.push((tex, blend, start + base, count));
-                            }
-                            f.v = v;
+                            f = hud_under_menu(overlay_for(&self.scene, aspect), &f);
                         }
                         f
                     }
@@ -5764,12 +6083,22 @@ impl App {
                 if self.fps_meter.shown > 0.0 { hud.append(&dev::fps_counter_hud(&self.scene, aspect, self.fps_meter.shown)); }
                 // The scene's script overlay belongs to the 3D view — off a movie frame and off the
                 // front-end level (`scene_overlay_up`).
-                if scene_overlay_up(&self.scene, movie_frame.is_some()) { hud.append(&self.scene.script_overlay_hud(aspect)); }
+                if scene_overlay_up(&self.scene, movie_frame.is_some()) {
+                    // The entry fade under the HUD (`Scene::entry_fade_hud`), the script overlay over it.
+                    let mut g = self.scene.entry_fade_hud(aspect);
+                    g.append(&hud);
+                    hud = g;
+                    hud.append(&self.scene.script_overlay_hud(aspect));
+                }
                 g.renderer.lights = self.scene.frame_lights();
                 g.renderer.screen_aspect = g.config.width as f32 / g.config.height.max(1) as f32;
+                // Screen Adjust: the whole frame shifts by the live offset (gpu::screen_adjust_viewport).
+                if let Some(fe) = self.fe.as_ref() { self.screen_pos = (fe.screen_x, fe.screen_y); }
+                g.renderer.screen_offset = screen_frac(self.screen_pos);
                 // The destroyed-glist swap's draw side: the dead Destroy leaves' centres
                 // (see Scene::destroy_centres) — the doorway ends open [L] once the leaf is dead.
                 g.renderer.destroy_dead = dead_destroy_centres(&self.scene);
+                g.renderer.sky_flash_mask = self.scene.sim.as_ref().map_or(0, |s| s.drones.sky.flash_mask);
                 g.renderer.destroy_wreck_draw = wreck_draw_centres(&self.scene);
                 g.renderer.destroy_tint = destroy_tints(&self.scene);
                 let fp_enc = std::time::Instant::now();
@@ -5999,7 +6328,10 @@ impl App {
                                     // settings-persist: same boot as the title's front end.
                                     let (opts, warn) = settings::load_default();
                                     if let Some(w) = warn { eprintln!("[settings] {w}"); }
-                                    fe.opts = opts;
+                                    fe.set_opts(opts);
+        // Screen Adjust: the offset is a global the menu managers don't own [M PS2ScreenXPos/YPos
+        // 0x30c75c/0x30c760] — a fresh manager keeps the live value.
+        (fe.screen_x, fe.screen_y) = self.screen_pos;
                                     fe
                                 });
                                 // profile-session: a FRESH pause manager inherits the standing codename
@@ -6022,6 +6354,7 @@ impl App {
                                 // (its state gate 0x1d3800:11-17 wants {2,7,8,0xd,0xe}).
                                 fe.flow.stack = vec![menu::ST_RUNNER];
                                 fe.open_pause();
+                                if let Some(sim) = self.scene.sim.as_mut() { pause_hud_refresh(sim); }
                             }
                         } else { return true }
                     }
@@ -6141,9 +6474,13 @@ impl App {
             cam_prev: None,
             cam_cur: None,
             pal_prev: None,
+            pal_spare: Vec::new(),
             pal_cur: None,
             pal_blend: Vec::new(),
             pal_moving: Vec::new(),
+            fx_made: None,
+            decal_cells: Vec::new(),
+            pal_hidden: Vec::new(),
             beam_entries: Vec::new(),
             fps_cap: None,
             fps_meter: FpsMeter::default(),
@@ -6152,6 +6489,7 @@ impl App {
             panel_level: 0,
             panel_frames: 0,
             fe: None,
+            screen_pos: (0, 0),
             auto_aim_opt: true,
             look_inverted: false,
             crouch_toggle_opt: true,
@@ -6205,8 +6543,8 @@ impl ApplicationHandler for App {
     fn resumed(&mut self, el: &ActiveEventLoop) {
         if self.gfx.is_some() { return; }
         let window = Arc::new(el.create_window(Window::default_attributes().with_title("nf-view")).expect("create window"));
-        let instance = wgpu::Instance::new(wgpu::InstanceDescriptor::new_without_display_handle());
-        let surface = instance.create_surface(window.clone()).expect("create surface");
+        let (instance, surface) = gpu_instance(Some(&window));
+        let surface = surface.expect("create surface");
         let (adapter, device, queue) = pollster::block_on(device(&instance, Some(&surface))).expect("GPU device");
         // A GPU validation error is reported, not fatal (wgpu's default handler panics).
         device.on_uncaptured_error(Arc::new(|e| eprintln!("GPU error: {e}")));
@@ -6240,12 +6578,10 @@ impl ApplicationHandler for App {
                     self.cam.yaw -= dx as f32 * MOUSE_SENSITIVITY;
                     self.cam.pitch = (self.cam.pitch - dy as f32 * MOUSE_SENSITIVITY).clamp(-1.55, 1.55);
                 } else {
-                    // Mouse look (PLAN.md): raw deltas straight into Bond's yaw / pitch at the next tick.
-                    // When scoped, the sensitivity is divided by the zoom factor (the scope zooms the view,
-                    // so the same mouse delta should turn less) [M Player_Zoom: the zoom affects the view].
+                    // Mouse look (PLAN.md): raw deltas straight into Bond's yaw / pitch at the next tick
+                    // (`mouse_look_add`: accumulated here, taken once per tick).
                     let zoom = self.scene.sim.as_ref().map_or(1.0, |s| s.zoom);
-                    self.turn -= dx as f32 * MOUSE_SENSITIVITY / zoom;
-                    self.look -= dy as f32 * MOUSE_SENSITIVITY / zoom / std::f32::consts::FRAC_PI_2;
+                    mouse_look_add(&mut self.turn, &mut self.look, dx, dy, zoom);
                 }
             }
         }
@@ -6645,7 +6981,7 @@ pub fn run() -> Result<()> {
                 if c.len() == 3 {
                     for (k, &h) in nf_game::explode::METAL_HASH_132.iter().enumerate() {
                         sim.drones.blast_debris.push(nf_game::shatter::Debris { model: h, pos: [c[0] + 0.3 * k as f32 - 0.45, c[1], c[2]],
-                            rot: [0.3 * k as f32, 0.5, 0.0], vel: [0.0, 0.0803, 0.0], spin: [0.0; 3], life: 100_000, fade: 0xff, e8: 1.0 });
+                            rot: [0.3 * k as f32, 0.5, 0.0], vel: [0.0, 0.0803, 0.0], spin: [0.0; 3], life: 100_000, fade: 0xff, e8: 1.0, draw: Default::default() });
                     }
                 }
             }
@@ -6680,6 +7016,13 @@ pub fn run() -> Result<()> {
                 Some(i) => args.get(i + 1).context("--mode needs ticks")?.split(',').map(|t| t.parse()).collect::<Result<_, _>>()?,
                 None => Vec::new(),
             };
+            // Render aid (goggles): `--goggles N` (1 night sight, 2 x-ray) presses the goggles key —
+            // the real input path, `Input::goggles_action` = the game's `Input_Action(p, 0xd, 4)`
+            // [M HUD_MonitorNightSight 0x19e9d8:74] — on every other tick of the shot's second half
+            // until the mode reads N: the first press requests the item 0x5d (the latch is clear),
+            // its draw arms night sight, the next press cycles to x-ray. The second half leaves
+            // the battery (BL+0x920, +3 per tick from 0) charged when the mode comes up.
+            let goggles_want: Option<u16> = args.iter().position(|a| a == "--goggles").and_then(|i| args.get(i + 1)).and_then(|v| v.parse().ok());
             if let Some(w) = draw { sim.step_bond(nf_game::player::Input { switch_to: Some(w), ..shot_input }, false, false, false); }
             // fix-aims20-lights-render: the headless `--shot` path honours `--give` too — the same equip +
             // switch_request the window path applies below (the shot path returned before that block, so
@@ -6731,12 +7074,42 @@ pub fn run() -> Result<()> {
                 }
             }
             let (fwd, turn) = (range("NF_FWD"), range("NF_TURN"));
+            let aim_sweep: Option<(f32, f32)> = std::env::var("NF_AIM_SWEEP").ok()
+                .and_then(|v| v.split_once(':').and_then(|(a, b)| Some((a.parse().ok()?, b.parse().ok()?))));
+            let aim0 = (sim.bond.yaw, sim.bond.pitch);
             for t in 1..=time as u32 {
                 if kill_at == Some(t) { let (h, r) = (&mut sim.drones.health, &mut sim.drones.rng); h.pain_generic(r, 500.0, 1, 0x0700_0005, 0); }
+                // Render aid (door colours after a kill): `NF_GUARD_DOWN_AT=t` knocks the nearest live
+                // guard out on tick t through the knockout state's ENTER (0x172a30), which drops his
+                // gun as a new pickup (`DroneWeap_DropWeapon` 0x17a2a0 [M 0x172ac0]) — the state a
+                // kill leaves for the palette, without aiming a headless shot.
+                if std::env::var("NF_GUARD_DOWN_AT").ok().and_then(|v| v.parse::<u32>().ok()) == Some(t) {
+                    let bp = sim.bond.pos;
+                    let near = sim.drones.list.iter().enumerate()
+                        .filter(|(_, d)| d.present && d.enabled && !d.corpse && d.health > 0.0 && d.weapon > 0)
+                        .min_by(|(_, a), (_, b)| {
+                            let f = |p: [f32; 3]| (p[0] - bp[0]).powi(2) + (p[1] - bp[1]).powi(2) + (p[2] - bp[2]).powi(2);
+                            f(a.pos).total_cmp(&f(b.pos))
+                        }).map(|(i, _)| i);
+                    if let Some(i) = near {
+                        eprintln!("[guard-down] drone {i} at {:?}", sim.drones.list[i].pos);
+                        sim.drones.list[i].set_state(nf_game::drone::state::KNOCKED_OUT_ANIM);
+                    }
+                }
                 // Render aid (copter-script-draw): `NF_CH_AT=t:ch` sets switch channel `ch` on tick t
                 // (the headless counterpart of the dev `--set-channel`).
                 if let Some((ct, cc)) = std::env::var("NF_CH_AT").ok().and_then(|v| v.split_once(':').and_then(|(a, b)| Some((a.parse::<u32>().ok()?, b.parse::<u32>().ok()?)))) {
                     if ct == t { let f = sim.drones.frame; sim.drones.channels.set(cc, 1, f); }
+                }
+                // Render aid (pc-screen): `NF_QWORM_AT=t:ch` starts the install of the PCQWorm PCs whose
+                // param 1 is `ch` on tick t (`all` = every PC) — the state `PCQWorm_Activate` 0x1b0840 /
+                // the Q-Worm bullet leave (obj+0xF4 = 1), so `PCQWorm_Update` 0x1aee20 state 1 runs next.
+                if let Some((qt, qc)) = std::env::var("NF_QWORM_AT").ok().and_then(|v| v.split_once(':').and_then(|(a, b)| Some((a.parse::<u32>().ok()?, b.to_string())))) {
+                    if qt == t {
+                        for pc in sim.drones.useobjs.pcs.iter_mut().filter(|p| qc == "all" || qc.parse::<u8>().ok() == Some(p.ch)) {
+                            if pc.state == 0 { pc.state = 1; eprintln!("[qworm] install started on tick {t}: PC ch {:#x}", pc.ch); }
+                        }
+                    }
                 }
                 // Render aid (keypad LOD swap): `NF_UNLOCK_AT=t:out` unlocks the locks with that out
                 // channel on tick t (the state `Lock_Unlock` 0x1b0650 leaves), to render the swapped model.
@@ -6783,25 +7156,150 @@ pub fn run() -> Result<()> {
                 if let Some((a, b, v)) = fwd { if (a..=b).contains(&t) { inp.forward = v; } }
                 if jump_at == Some(t) { inp.jump = true; }
                 if let Some((a, b, v)) = turn { if (a..=b).contains(&t) { inp.turn = v; } }
-                if walk { sim.step_bond(inp, pulls.contains(&t), false, use_at == Some(t)); } else { sim.step([cam.pos.x, cam.pos.y, cam.pos.z], cam.dir().to_array(), pulls.contains(&t), false); }
+                // Render aid (satchel-laser): `NF_LASER_AT=a-b` points Bond's eye at the first landed
+                // satchel charge (the 0x3b-family bullet the 4a lift shooters drop) and holds the
+                // trigger over those ticks — pair with `--draw 0x4e` to burn it with the laser watch.
+                let mut laser_fire = false;
+                if let Some((a, b, _)) = range("NF_LASER_AT") {
+                    if t == a { eprintln!("[satchel-laser] spark def {:?}", sim.drones.fx.defs().get(&nf_game::drone::Drones::SATCHEL_BURN_SPARKS)); }
+                    if (a..=b).contains(&t) {
+                        let charge = sim.drones.bullets.iter().find(|x| x.landed && x.family(&sim.weapons) == 0x3b).map(|x| x.pos);
+                        if let Some(c) = charge {
+                            let h = sim.bond.head();
+                            let d = [c[0] - h[0], c[1] - h[1], c[2] - h[2]];
+                            let len = (d[0] * d[0] + d[1] * d[1] + d[2] * d[2]).sqrt().max(1e-6);
+                            sim.bond.yaw = d[0].atan2(d[2]);
+                            sim.bond.pitch = (d[1] / len).asin() / std::f32::consts::FRAC_PI_2;
+                            laser_fire = true;
+                        }
+                    }
+                    if let Some(x) = sim.drones.bullets.iter().find(|x| x.landed && x.family(&sim.weapons) == 0x3b) {
+                        if t % 10 == 0 || (a..=b).contains(&t) && (t - a) % 10 == 0 {
+                            eprintln!("[satchel-laser] t{t} burn {} defused {} fuse {:.0} digits {:?} weapon {:#x} emitters {}",
+                                x.burn, x.defused, x.fuse, x.digits, sim.gun.weapon, sim.drones.fx.emitters.iter().filter(|e| e.def == 0x0c00_000a).count());
+                        }
+                    }
+                }
+                // Render aid (stairwell decals): `NF_AIM_SWEEP=yaw_span:pitch_span` spreads the `--pull`
+                // shots over a 9x5 yaw/pitch grid centred on the starting aim (each pull takes the
+                // next grid cell), then restores the starting aim before the render — the frame shows
+                // where a sprayed burst leaves its holes from one fixed view.
+                if let Some((ys, ps)) = aim_sweep {
+                    if let Some(k) = pulls.iter().position(|&p| p == t) {
+                        let (gx, gy) = ((k % 9) as f32 / 8.0 - 0.5, ((k / 9) % 5) as f32 / 4.0 - 0.5);
+                        sim.bond.yaw = aim0.0 + gx * ys;
+                        sim.bond.pitch = aim0.1 + gy * ps;
+                        // Bottomless ammo for the sweep (a long spray fills the 200-hole pool).
+                        for c in sim.drones.inventory.clip.iter_mut() { if *c == 0 { *c = 30; } }
+                        for c in sim.drones.inventory.carried.iter_mut() { *c = (*c).max(90); }
+                    }
+                }
+                if let Some(want) = goggles_want {
+                    if t * 2 >= time as u32 && t % 2 == 0 && sim.goggle_mode() != want { inp.goggles_action = true; }
+                }
+                if walk { sim.step_bond(inp, pulls.contains(&t) || laser_fire, false, use_at == Some(t)); } else { sim.step([cam.pos.x, cam.pos.y, cam.pos.z], cam.dir().to_array(), pulls.contains(&t), false); }
             }
+            if aim_sweep.is_some() { sim.bond.yaw = aim0.0; sim.bond.pitch = aim0.1; }
             // With `--skip-cutscenes`, a skipped cut-scene's hand-back moves Bond: put him back on the `--bond` spot (and
             // let one tick settle) so the image pair matches the real game's placement.
             if skip_cuts {
                 if let Some(i) = args.iter().position(|a| a == "--bond") {
                     let v: Vec<f32> = args.get(i + 1).map(|s| s.split(',').filter_map(|t| t.parse().ok()).collect()).unwrap_or_default();
                     if v.len() >= 3 { sim.bond = nf_game::player::Bond::new([v[0], v[1], v[2]], v.get(3).copied().unwrap_or(sim.bond.yaw)); if let Some(&pt) = v.get(4) { sim.bond.pitch = pt; } sim.step_bond(shot_input, false, false, false); }
+                    // Render aid (viewmodel-light): `--settle N` lets N ticks pass on the spot instead of
+                    // one, so the per-object state that ramps after a move — the 0x800 objects' ambient
+                    // bytes, which `Lights_CalcAmbientLight` 0x1cb178 steps toward the new cel by
+                    // `ClrStep(…, 0.1)` per tick — reaches what a PS2 capture taken a while after its
+                    // teleport shows. Default 1 (the old behaviour).
+                    let settle: u32 = args.iter().position(|a| a == "--settle").and_then(|k| args.get(k + 1)).and_then(|s| s.parse().ok()).unwrap_or(1);
+                    if v.len() >= 3 { for _ in 1..settle { sim.step_bond(shot_input, false, false, false); } }
+                }
+            }
+            // Render aid (fix-hud-parity): `NF_HUD_PROBE=k=v,…` sets HUD-facing state after the ticks so
+            // one --shot shows a HUD situation: `dmg=<bits>:<alpha>` (BL+0x967 / +0x968), `hp=<n>`,
+            // `armour=<n>`, `clip=<n>`, `swim=<air>` (substate 3, head under), `shutter=<n>` (the
+            // camera pane's slot), `ctx=<n>` (BL+0x95F), `objtime=<t>` (the head objective's remaining life).
+            if let Ok(spec) = std::env::var("NF_HUD_PROBE") {
+                for kv in spec.split(',') {
+                    let (k, v) = kv.split_once('=').unwrap_or((kv, ""));
+                    let f = |s: &str| s.parse::<f32>().unwrap_or(0.0);
+                    match k {
+                        "dmg" => { let (b, a) = v.split_once(':').unwrap_or((v, "200")); sim.drones.health.dir_bits = f(b) as u8; sim.drones.health.flash = f(a); }
+                        "hp" => sim.drones.health.health = f(v),
+                        "armour" => sim.drones.health.armour = f(v),
+                        "clip" => sim.gun.clip = f(v) as u32,
+                        "swim" => { sim.bond.substate = nf_game::player::SS_SWIM; sim.bond.underwater = true; sim.bond.air = f(v); }
+                        "shutter" => sim.hud.camera_shutter = f(v) as u8,
+                        "ctx" => sim.bond.icon_ctx = f(v) as u8,
+                        "objtime" => { if let Some(m) = sim.hud.objective_msgs.front_mut() { m.time = f(v); } }
+                        // `mount=<heat>`: the first mounted gun active with that heat, WeaponNone held.
+                        "mount" => { if let Some(g) = sim.drones.props.gunimps.first_mut() { g.active = true; g.heat = f(v); sim.gun.weapon = 0x47; sim.hud.weapon_label_timer = 0; } }
+                        // `info=<label hex>[:<time>]` / `pickup=<label hex>[:<time>]`: a bound message
+                        // straight into the INFO / pickup pane.
+                        "info" | "pickup" => {
+                            let (l, t) = v.split_once(':').unwrap_or((v, "120"));
+                            let id = u32::from_str_radix(l.trim_start_matches("0x"), 16).unwrap_or(0);
+                            if let Some(txt) = sim.lang.as_ref().and_then(|g| g.bind(id)).map(|s| s.trim().to_string()) {
+                                let m = crate::scene::Msg::new(txt, f(t));
+                                if k == "info" { sim.hud.info_msgs.push_back(m); } else { sim.hud.msgs.push_back(m); }
+                            }
+                        }
+                        // `seccam=<monitor index>`: that monitor console's camera view
+                        // (`Monitor_Activate` 0x1b0058's state 2 — pane 16).
+                        "seccam" => { let i = f(v) as usize; let sensors = sim.drones.sensors.clone(); sim.drones.monitors.activate(i, &sensors); }
+                        _ => eprintln!("NF_HUD_PROBE: unknown key {k:?}"),
+                    }
                 }
             }
             if walk { let h = sim.bond.head(); cam = Camera { pos: Vec3::new(h[0], h[1], h[2]), yaw: sim.bond.yaw, pitch: sim.bond.pitch * std::f32::consts::FRAC_PI_2, fov: GAME_FOV / sim.zoom }; }
             if walk { if let Some((p, yaw, pitch, fov)) = sim.script_camera() { cam = Camera { pos: Vec3::new(p[0], p[1], p[2]), yaw, pitch, fov }; } }
             if walk { if let Some((p, yaw, pitch, fov)) = sim.wire_camera() { cam = Camera { pos: Vec3::new(p[0], p[1], p[2]), yaw, pitch, fov: GAME_FOV / fov }; } }
             eprintln!("Bond at {:?}{}, health {}", sim.bond.pos, if sim.disabled { " (disabled by a script)" } else { "" }, sim.drones.health.health);
+            // Render aid (light-glow): `NF_SL_LOG=1` lists the searchlight parts the shot draws.
+            if std::env::var_os("NF_SL_LOG").is_some() {
+                for (k, p) in sim.drones.searchlights.parts.iter().enumerate() {
+                    eprintln!("searchlight part {k}: kind {} state {} drawn {} pos {:?} alpha {} scale {} pitch {} yaw {} on {} ({}) off {} ({}) alarm {}", p.kind, p.state, p.drawn, p.pos, p.alpha, p.scale, p.pitch, p.yaw, p.on, sim.drones.channels.on(p.on as u32), p.off, sim.drones.channels.on(p.off as u32), p.alarm);
+                }
+            }
             for u in sim.unposed(&scene.characters) { eprintln!("unposed: {u}"); }
             for p in &sim.drones.pickups { eprintln!("pickup: weapon {:#x}, {} rounds at {:?}", p.weapon, p.rounds, &p.m[3][..3]); }
             if let Some(dr) = sim.drones.list.iter().find(|d| !d.shots.is_empty() || d.state != 4) {
                 eprintln!("AI: a drone in state {:#x}, {} shots, clip {}", dr.state, dr.shots.len(), dr.clip);
             }
+        }
+        // Render aid (stairwell decals): `NF_INTERP_SHOT=frac` renders a presented frame BETWEEN two
+        // ticks the way the window does (G-043): the palette of the last tick and of one more
+        // held-trigger tick, blended at `frac` through `moving_entries` + `lerp_palette_moving`
+        // (the reused decal nodes snap). Headless shots are otherwise whole-tick frames, which never
+        // show what the tick blend draws while a full decal pool keeps taking new holes.
+        if let Some(frac) = std::env::var("NF_INTERP_SHOT").ok().and_then(|v| v.parse::<f32>().ok()) {
+            let (l, _) = scene.skin_layout();
+            // The pair: the tick that hands a pool node to a new hole (the shot's flight can take a
+            // few ticks), up to 12 ticks after one more trigger press.
+            // `NF_INTERP_PLAIN=1`: the pair is the current tick and ONE more plain tick (no trigger
+            // press) — a between-ticks frame of whatever moves (flying debris, a swinging door).
+            let plain = std::env::var_os("NF_INTERP_PLAIN").is_some();
+            let made = |scene: &scene::Scene| scene.sim.as_ref().map_or((0, 0, 0), |s| (s.drones.effects.evicted, s.drones.effects.made, s.drones.effects.debris_made));
+            let mut ev0 = made(&scene);
+            let mut p0 = scene.skin_palette(&l, choice, time, opts, None).0;
+            let mut p1 = p0.clone();
+            for k in 0..if plain { 1 } else { 12 } {
+                ev0 = made(&scene);
+                p0 = if k == 0 { p0 } else { p1.clone() };
+                if let Some(sim) = scene.sim.as_mut() {
+                    sim.step_bond(nf_game::player::Input { fire: k == 0 && !plain, ..Default::default() }, k == 0 && !plain, false, false);
+                }
+                p1 = scene.skin_palette(&l, choice, time, opts, None).0;
+                if made(&scene).0 != ev0.0 { break; }
+            }
+            let mut snap = scene.decal_reused_entries(&l, ev0.1);
+            snap.extend(scene.debris_reused_entries(&l, ev0.2));
+            let moving = moving_entries(&p0, &p1, &snap);
+            let mut blended = p1.clone();
+            lerp_palette_moving(&mut blended, &p0, &p1, &moving, &[], frac);
+            eprintln!("NF_INTERP_SHOT {frac}: {} holes, evicted {} -> {}, {} moving entries, {} snapped", scene.sim.as_ref().map_or(0, |s| s.drones.effects.decals.len()), ev0.0,
+                scene.sim.as_ref().map_or(0, |s| s.drones.effects.evicted), moving.len(), snap.len());
+            *SHOT_PALETTE.lock().unwrap() = Some(blended);
         }
         // fix-armour-ring: `--armour <n>` writes BLData+0x8b0 after the ticks (the pane's armour — the
         // same write the dev panel's armour row and cheats.py's god make every frame), so the health
@@ -6809,6 +7307,10 @@ pub fn run() -> Result<()> {
         if let Some(i) = args.iter().position(|a| a == "--armour") {
             let n: f32 = args.get(i + 1).context("--armour needs a value (0..=50)")?.parse()?;
             if let Some(sim) = scene.sim.as_mut() { sim.drones.health.armour = n; }
+        }
+        // The pause's own HUD_Update refreshes the health pane (`pause_hud_refresh`).
+        if args.windows(2).any(|w| w[0] == "--page" && w[1] == "pause") {
+            if let Some(sim) = scene.sim.as_mut() { pause_hud_refresh(sim); }
         }
         let (mut menu_frame, mut movie_frame) = front_end_menu(&args, &scene, front_end, &iso);
         // `--loading`: the level's loading screen (crate::loading) — the picture on the movie plane, the text and the
@@ -6854,6 +7356,18 @@ pub fn run() -> Result<()> {
             let cam = Camera { pos: Vec3::new(eye[0], eye[1], eye[2]), yaw: d[0].atan2(d[2]), pitch: (d[1] / (d[0] * d[0] + d[2] * d[2]).sqrt()).atan(), fov: GAME_FOV };
             if let Some(s) = scene.sim.as_mut() { s.first_person = false; }
             eprintln!("--mp-look: slot {slot} body at {p:?} yaw {:.2} held {}", st.1, scene.sim.as_ref().map_or(0, |s| s.mp_held[slot]));
+            return shot(&scene, &cam, args.get(i + 1).context("--shot needs a file name")?, choice, time, opts, notex, nofog, menu_frame.as_ref(), movie_frame.as_ref());
+        }
+        // Render aid (`--shot-cam x,y,z,yaw,pitch`): the ticks run Bond's own eye as usual (so a
+        // lift ride or a cut-scene plays exactly as without the flag); only the rendered frame's
+        // camera is replaced — close-ups of something the eye's view leaves out of frame.
+        if let Some(ci) = args.iter().position(|a| a == "--shot-cam") {
+            let v: Vec<f32> = args.get(ci + 1).context("--shot-cam needs x,y,z,yaw,pitch")?.split(',').map(|t| t.trim().parse()).collect::<Result<_, _>>()?;
+            anyhow::ensure!(v.len() == 5, "--shot-cam needs x,y,z,yaw,pitch");
+            let cam = Camera { pos: Vec3::new(v[0], v[1], v[2]), yaw: v[3], pitch: v[4], fov: GAME_FOV };
+            // The first-person gun is posed at Bond's eye; away from it, it would float in the frame.
+            let mut scene = scene;
+            if let Some(s) = scene.sim.as_mut() { s.first_person = false; }
             return shot(&scene, &cam, args.get(i + 1).context("--shot needs a file name")?, choice, time, opts, notex, nofog, menu_frame.as_ref(), movie_frame.as_ref());
         }
         // Render aid (NF_SHOT_AT_PICKUP=k): frame pickup k from its DRAWN matrix (`Pickup::m`, what the renderer
@@ -6944,7 +7458,9 @@ pub fn run() -> Result<()> {
         // resumed).
         let (opts, warn) = settings::load_default();
         if let Some(w) = warn { eprintln!("[settings] {w}"); }
-        app.fe.as_mut().unwrap().opts = opts;
+        app.fe.as_mut().unwrap().set_opts(opts);
+        // The boot's psiSetScreenPos from the loaded settings [M LS_LoadGlobalSettings 0x1cdbc8].
+        app.screen_pos = app.fe.as_ref().map_or((0, 0), |f| (f.screen_x, f.screen_y));
         // options-persist-roundtrip: the AV volume rows reach the sound layer at boot [M
         // LS_LoadGlobalSettings 0x1cdbc8:69-70 — the loaded settings call
         // SFXMusicSetVolume/SFXSetVolume].
@@ -7503,6 +8019,27 @@ mod headless_app_harness {
             }
             false
         }
+
+        /// Pump logic ticks until `pred` or `max_ticks` run out — the shape the
+        /// mission_outros_live tests use (their 6000-tick loop). The state-6 hold is the
+        /// game's per-vblank movie poll, not a wall clock: BGFMVPlaying = 1 on the open
+        /// [M 0x1081a8], cleared only at the decode pump's end of file [M 0x108060],
+        /// psiMovieFinished = BGFMVPlaying == 0 [M 0x1082e8], and the game's decode pump
+        /// runs one frame per vblank [M main 0x109080] — so the hold advances one per flow
+        /// tick (the port: `Player::headless_advance` per flow tick, mission-outros-2/4).
+        /// A wall budget cannot express it: the briefing's own PSS is 4 440 064 audio
+        /// samples at 48 kHz = 92.5 s = 5550 ticks [D crates/nf-formats/golden/
+        /// pss_movies.tsv 07100005.PSS] — the briefings run 1815-5550 and the outros
+        /// 1776-4230 [D the same table] — minutes of hold on an image with the real
+        /// movies, ~0 on the stub image (the pop, still covered: the pred returns at
+        /// once).
+        pub fn pump_ticks(&mut self, max_ticks: u32, mut pred: impl FnMut(&App) -> bool) -> bool {
+            for _ in 0..max_ticks {
+                self.frame(1.0 / 60.0);
+                if pred(&self.app) { return true; }
+            }
+            false
+        }
     }
 
     /// Menu sounds were missing entirely: run() built the sound driver and dropped it, so the
@@ -7573,7 +8110,20 @@ mod headless_app_harness {
         }
         #[cfg(not(feature = "movies"))]
         let _ = (state6_frames, saw_player);
-        let loading = h.pump(6.0, |a| a.async_load.is_some() && a.fe.is_none());
+        // The resolve — in TICKS, not wall seconds. State 6 pops when the movie's frames are
+        // consumed (BGFMVPlaying clears at the decode pump's end of file [M 0x108060];
+        // psiMovieFinished = BGFMVPlaying == 0 [M 0x1082e8]) and the poll advances one per
+        // game vblank [M main 0x109080], so the hold runs in flow ticks. On an image with the
+        // real movies and no `movies` feature (the no-decode player), the opened briefing
+        // holds its own 5550 ticks [D pss_movies.tsv 07100005.PSS: 4 440 064 samples @48 kHz
+        // = 92.5 s] — mission-outros-2's correct game fix [M 0x1081a8's BGFMVPlaying = 1 on
+        // the open; the old player reported `ended` before the first frame, which is why this
+        // test's old 6 s wall budget ever passed there]. The 6 s wall pump could never see
+        // the resolve on such an image ("the briefing resolve never started the level load",
+        // every run, idle machine included); the stub image pops at once and the pred still
+        // returns immediately. 7000 ticks > 5550 with margin; a `movies` build's Enter skip
+        // (pressed above, past the 1.0 s Confirm guard) resolves in the first ticks.
+        let loading = h.pump_ticks(7000, |a| a.async_load.is_some() && a.fe.is_none());
         assert!(loading, "the briefing resolve never started the level load");
         let loaded = h.pump(20.0, |a| a.level_code == 0x0700_0005 && a.async_load.is_none() && a.fe.is_none());
         assert!(loaded, "the level never finished loading (the 5 s LOADING_HOLD + the build)");
@@ -7974,6 +8524,44 @@ mod headless_app_harness {
         assert!(sim.bond.crouched, "hold: still held, still crouched");
         sim.step_bond(inp(false, false), false, false, false);
         assert!(!sim.bond.crouched, "hold: released stands [M 0x1924c0:84-88]");
+    }
+
+    // The goggles key: V is the keyboard's action-13 press [M HUD_MonitorNightSight 0x19e9d8:74
+    // `Input_Action(p, 0xd, 4)`], through the App's own key handling and Input build. The first
+    // press arms night sight (the latch-clear request of item 0x5d [M 0x19e9d8:82-84]); later
+    // presses cycle 1 → 2 → 0.
+    #[test]
+    fn the_v_key_switches_the_goggle_modes() {
+        let Ok(iso) = std::env::var("NF_ISO") else { return };
+        let mut h = HeadlessApp::mission(&iso, "07000005.bin");
+        h.app.grabbed = true;
+        // The level's opening cut-scene first (a key press there is the game's skip, not the
+        // goggles), then the player is live.
+        for _ in 0..3000 {
+            if !h.app.scene.sim.as_ref().unwrap().disabled { break; }
+            h.frames(1);
+        }
+        assert!(!h.app.scene.sim.as_ref().unwrap().disabled, "the player is live");
+        h.frames(60);
+        let mode = |h: &HeadlessApp| h.app.scene.sim.as_ref().unwrap().goggle_mode();
+        assert_eq!(mode(&h), 0, "the level starts with the goggles off");
+        // Sister: a key that is not the goggles' (B, the fire-mode press) leaves the mode alone.
+        h.key(KeyCode::KeyB);
+        h.frames(30);
+        assert_eq!(mode(&h), 0, "B is not the goggles key");
+        let mut seen = vec![];
+        for want in [1u16, 2, 0] {
+            h.key(KeyCode::KeyV);
+            // The first press requests the goggles item: the holster, the item's draw and its
+            // stow run before the mode lands; the cycle presses land at once.
+            for _ in 0..600 {
+                h.frames(1);
+                if mode(&h) == want { break; }
+            }
+            h.frames(20);
+            seen.push(mode(&h));
+        }
+        assert_eq!(seen, vec![1, 2, 0], "V arms night sight, then x-ray, then off");
     }
 
     // profile-options-2 (the re-land of 610's volume test on master's drain path): the AV page's

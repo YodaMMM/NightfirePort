@@ -13,13 +13,21 @@ research pass (2026-10-09); "checked" = read here (the tables are read from ACTI
   16 security camera, 17 OICW, 20 space, 21 pickup); enabled at level start: 0, 1, 2, 3, 4, 8, 21 [L].
 - `SpriteInfo` (0x2C bytes, `Sprite_Create2` 0x1de3d8) [checked]: colour 0xRRGGBBAA, shadow colour, layer, flags,
   x / y (pane-relative), w / h, u / v / du / dv, label, texture hash. Drawing (`View_DrawSprites` 0x1e5290): GS
-  modulate (0x80 = 1.0), alpha drawn as A >> 1; flags 0x100 additive, 0x200 subtractive, 0x800 centred, 0x40 / 0x80
+  modulate (0x80 = 1.0; Cs clamps at 0xff before the blend), alpha drawn as A >> 1 (`psiDrawSprites` 0x120e68:
+  SpriteColourA = A >> 1; ALPHA_1 0x44 / 0x48 / 0x42; TEST_1 0xd, ZBUF ZMSK — no Z test or write); the display gain
+  (`SqueezeColourIn`/0x80, `CreateSqueezeFrame` 0x11b140 from the next frame's `psiPreDraw`) scales the finished frame
+  after the HUD — the port's `gpu.rs` `fs_ps2` emits gain·Cs·As premultiplied for that; also: a sprite's runtime
+  +0x28/+0x2a are its TEXTURE's width/height (`hashtable_set_sprite` 0x1ca3d8), not the template's w/h; flags 0x100 additive, 0x200 subtractive, 0x800 centred, 0x40 / 0x80
   flip U / V, 0x20 drop shadow (text: colour 2 at (+1, +1)). Sorted by layer, higher drawn first (`CompSpr` 0x1d3320).
 
 ## Crosshair [checked]
 
 `HUD_UpdateCrossHair` 0x19e6d0: sheet 0x03000026, `HUDCrossCoords` 0x2bec48 (1 aim 29 × 29, 2 normal 11 × 11,
-3 friendly), centred at (256 (1 + cx), 224 (1 − cy)), 0xFF0000FF, layer 49.
+3 friendly; 9 entries of 18 bytes, only 1-3 reachable), centred at (256 (1 + cx), 224 (1 − cy)), 0xFF0000FF, layer 49.
+fix-hud-parity [M]: the position is `(short)(int)` truncated and the 0x800 centring subtracts `w >> 1` / `h >> 1`
+(View_DrawSprites 0x1e5290:69-74); the Crosshairs option (`DAT_002a38d0`) gates the NOT-aiming arm only — the
+aim-mode cell 1 shows with the option off; panes 12 (blood) and 16 (sec-cam) hide it; colour 0x208020FF while the
+viewer's goggle mode is 1 (night sight).
 
 ## Health / armour pane 1 (`HUD_UpdateHealthPane` 0x19b9c8) [M; tables checked]
 
@@ -33,7 +41,8 @@ research pass (2026-10-09); "checked" = read here (the tables are read from ACTI
 - fix-hud: ported — the damage-direction bits (`pain_from`), the air pane (AirSprInfo), and the crouch icon (sprite 19: 0x03000173 crouched, 0x03000174 held 60 ticks after standing, fade over the last 30 [M 0x19b9c8:305-328]).
 - Damage glow sprites 20–23: full screen, additive, textures 0x0300018D (20, 21 flipped V) / 0x0300018E (22, 23
   flipped U), red at alpha `BL+0x968`, per bit of `BL+0x967` (direction from `Player_DealWithObjHit`; 0xC both
-  sides from `Player_HandlePain`).
+  sides from `Player_HandlePain`). Each bit lights its own sprite — four independent tests, no special 0xC case
+  (fix-hud-parity; the port had collapsed 0xF to the 0xC pair).
 - Also: Bond-moment icon (16) — ported since: the 007 flash, tex 0x0300005B at (256, 80), grows and tumbles for
   100 ticks, holds 100, hides [M HUD_UpdateHealthPane 0x19b9c8:231-260; PlrStat_DoneBondMoment 0x199448:23-25
   writes 200] (hud.rs); context icon (18) and crouch icon (19, 0x03000173 / 0x03000174) — see the sections below.
@@ -57,8 +66,11 @@ the Sim writes it per tick from the level's third icons — fix-wire2/fix-08-wal
 - The template: `HealthSprInfo[18]` tex 0x0300006A, layer 255 (hidden), (320, −300), w/h 0 [L 0x2BD368].
 - **Position caveat**: an earlier PCSX2 observation described the indicator "at the bottom-left ring"; the code
   draws sprite 18 at (400, 48). The live check (below) settles the screen position from the real machine.
-- The Q-Claw marker (ammo-pane sprite 7, flags 0x900, 3D-positioned) turns magenta (0xff00ff) while the context
-  is 2 [M HUD_UpdateAmmoPane 0x19a7f0:330-336] — not ported (the marker itself is not drawn).
+- The Q-Claw marker (ammo-pane sprite 7, tex 0x0300004C, flags 0x900, 3D-positioned): with 0x50/0x51 held, the
+  nearest drawn class-'Q' object in LOS of the viewer and in front of it; colour 0x00FF00FF (GREEN — the u32
+  0xff00ff in RRGGBBAA order; this doc used to say magenta) while its distance is inside weapon 0x50's range
+  (`weapon_data+0x53dc`) AND the context is 2, else 0xFFFFFFFF; layer 0x1c [M HUD_UpdateAmmoPane 0x19a7f0:301-350].
+  Ported by fix-hud-parity (`hud::grapple_marker`).
 
 ## Hint / info bar (pane 4, TXTMSG type 1) [M/L] (ported by fix-context-hints)
 
@@ -96,6 +108,106 @@ The TOP status bar (`MsgInfoStatusPane` **0x319810** [L]: x 128, w 480, create 0
   for 60 ticks after a weapon change (`BL+0x95E`) — need the text labels (not ported).
 - Sprites 5 / 6: the rounds strip / the empty strip (0x4040407F) from texture 0x03000128 by `BulletImg.189`
   (0x2bea38: per ammo type u, v, w, pixels per round; ×16 width for clips > 87): bottom at y 394, x = 496 − w.
+
+## Air / grip pane 5 (`HUD_UpdateAirPane` 0x1a11c8) [M] (corrected by fix-hud-parity)
+
+Enabled only in substate 3 (swim) or 6 (wire) [Player_MonitorAir 0x191a70:16-23]; shown only while `BL+0x8C8 & 0x10`
+(head bone under the water surface; forced in substate 6) [0x191a70:37-61]. Shown: track layer 0x1f, fill 0x1e
+(0x68B1D6 swimming, 0x68D6B1 on the wire), the icon (0x0300017D, additive) layer 0x1f on the wire only; width
+`(int)(v·2 + 28)` ≥ 1, v = air (`BL+0x8C0`) or `100 − BL+0x8CC` on the wire. The 0x1e/0x1f stores are LAYERS —
+an earlier port read them as alphas and drew a dim pane at the surface and on dry land.
+
+## Objective banner flash (pane 3, `HUD_UpdateStatusPane` 0x19c310 case 3) [M]
+
+A type-2 notice opens on the status label alone: while `time + 60 > 300` (NEW) / `> 180` (COMPLETE) — literal
+constants — the body colour is 0, the label 0x785A14FF on `fmodf(time, 40) < 20` else 0, both shadows 0. Then
+steady: label 0x785A14FF with shadow, body 0x7D6D59FF (0 for COMPLETE). The `time < 15` fade rewrites the body's
+alpha only; the label holds until the close. The 0x785A14FF stores write the objective pane's label (iVar20) only —
+the mission banner's fail label has no blink.
+
+## Zoom-pane extras [M] (fix-hud-parity)
+
+- AIMS-20 (pane 17): the five boot lines "COMMAND.COM" … "OK" (OICWSprInfo[2..6], colour 0x7F7F7FC8, no shadow) at
+  x 50 rising 17 px a line from y 408, layer 0x1c — `HUD_UpdateOICWPane` 0x19cef8 (`nf_game::hud_pane::OicwBoot`).
+- Micro-Camera (pane 11): sprite 0, the full-screen subtractive white 0x03000002 at layer 0x28, for 10 frames from
+  the muzzle latch `BL+0x95B` — a black shutter frame per photo (`HUD_UpdateCameraPane` 0x1a12d8:16-36).
+
+## Audit pass (fix-hud) [M]
+
+- Text drop shadow: sprite flag 0x20 → font flag 0x1000 → ONE copy at (x + 1, y + 1) in the sprite's
+  shadow colour (+0x14) [View_DrawSprites 0x1e5290:171-172; Font_DrawText 0x1eee48:96-98]; sprite flag
+  0x2000 keeps the 4-way outline (0x4000), 0x4000 → a (−1, −1) highlight (0x2000). The port had drifted to
+  1.5 px (`hud::text_shadow_offset`). The shadow's alpha is its own: the status panes' fades rewrite only
+  +0x10, and the flash branch zeroes +0x14 explicitly [0x19c310 case 3] — so during a fade the game's
+  shadow stays at 0xff while the text fades, and the text path of `View_DrawSprites` (0x1e5290:166-182)
+  has no alpha test, so the shadow copy draws even at text alpha 0. The port's status messages
+  (pickup, INFO, MP INFO, objective body, mission rows) draw through `Hud::text_fading` with the
+  opaque shadow (hud-2).
+- Damage glow alpha `BL+0x968` is a byte: `(char)(int)(old + min(d·21.333334, 128))`, cap 255
+  [Player_HandlePain 0x1902c8:126-130] (`PlayerHealth::pain_glow`).
+- Mounted gun (substate 0xc): the ammo pane swaps in the imp's heat — kind 0x1f, max 100, value
+  `min((int)(ext+0x90·0.5), 100)`, strip row BulletImg[0x1f] = (58, 121, w 1, 1 px) ×16 (max > 87) →
+  a 16×100 gauge at x 480..496, bottom 394 [HUD_UpdateAmmoPane 0x19a7f0:137-145, :254, :282]. The count
+  text is blank (WeaponNone 0x47's +0x68 has 0x20). Substate 0xb (car) and 0x10 are the driving/other
+  vehicle arms (not ported).
+- INFO pane sources added: the locked exit 0x2000021 "Warning: Not all objectives completed" with the
+  180-tick ext+0x3C cooldown [Trigger_Activate 0x1b2318:79-87, Trigger_Update 0x1b1a78:26-28]; the
+  once-per-level hints 0x1000216 (Micro-Camera 0x54) / 0x10002dc (Remote Mine 0x37) with the view model
+  idle [Player_WeaponFiring 0x1a5460:223-232, :385-390; latches cleared by Player_InitWeapon
+  0x1a7ef8:124-125].
+- INFO pane keycode message (hud-2): `PCQWorm_Update` 0x1aee20 state 1 with param 0 != 0 posts
+  `sprintf(Txt_BindLabel(0x2000014), KeyCodes[p0][0..4])` = "Obtained Lock Keycode %c%c%c%c" for 0xb4
+  ticks and sets `KeyCodes[p0*5+4] = 1` [:24-31]; `Lock_Update` 0x1ae3d8 case 3 posts it again when the
+  lock's code is known [:246-257]. On disc the param-0 PCs are the E-usable office computers (0a #683
+  p0 1 / #684 p0 2, 11 #216 p0 1, 12 #684 p0 5); the Q-Worm gadget targets (0a #688, 0b #297) carry
+  p0 = 0 and post nothing [D nf-formats/tests/view_object_census.rs].
+- The PC screen after the install (pc-screen): state 1's `Control_NextLOD` 0x1349b0 writes
+  obj+0xD8 ← `*(glist+0x40)` only when the link is non-null and returns 0 otherwise [M :8-12]; the
+  PC's obj+0xD8 is its placement glist (`PCQWorm_Create` 0x1b07a8:12 → `Control_CreateObjEx`
+  0x1343c8:29) and glist+0x40's only writer is `parsemap_block_LOD` 0x1d1f10 (block 0x27). All six
+  PCQWorm glists (0a #683/#684/#688, 0b #297, 11 #216, 12 #684) carry −1 [D pc_screen_live] — no
+  model swap exists on this disc. What changes on screen is the Q-Worm overlay: the PC's channel
+  (param 1) unpauses a mode-8 ScriptPlayer (0a #780 0x06000951, 0b #298 0x060008BD, 11 #263
+  0x060008C0, 12 #765 0x06000958) whose entity (SCREEN_Q 0x02000A22, SCREEN_QWORM_C_OBJ2 0x020008C3,
+  SCREEN_QWORM_2A_OBJ2 0x020008D1, qworm2b 0x02000A28) keys alpha 0 while held, then pulses
+  0 → 1 → 0. `Script_Interp` 0x1d9a08:104 stores the key's `fptoui(+0x24·255+0.5)` [M
+  Script_GetInterp 0x1da158:186-189] in obj+0x106 and `View_SetupRenderModes_Tweak` 0x1e5888:12,47-49
+  draws with it as the tweak alpha. The port now carries that byte into the palette alpha of every
+  script entity whose batches all blend (PRIM ABE) — `Scene::script_tweak_alpha`. The 0a office PCs
+  (#683/#684, param 1 = 0) unpause nothing: their screens do not change in the game either.
+  Render aid: `NF_QWORM_AT=t:ch` starts the install of the PCs on channel `ch` (`all`) on tick t.
+- Health pane hide set: panes 9, 10, 11, 16, 17, 18 enabled → sprites 0..15 hidden [0x19b9c8:127-138].
+  Pane 9 = cam mode 0xc (the guided missile, `Bullet_init` 0x12c5a0:252), 10 = `RCCarPane` (cam mode
+  0xd, set only by `Car_Activate` 0x131c48 — placement 0xda RC cars, MP maps only [D census]), 16 =
+  `SecCamPane` (`Monitor_Activate` 0x1b0058:47 — the monitor consoles of 01/02/0a/12/14), 18 =
+  `RoninPane` (cam mode 0xf, set only by `GT_TakeControl` 0x181740 for a turret whose owner is the
+  player, i.e. one deployed with weapon 0x52 and taken over with 0x53 [M Player_WeaponInitBullet
+  0x1a4bf0:113-133, 265-282]). No SP kit equips 0x52/0x53 [M Player_InitWeapon 0x1a7ef8], but the
+  campaign places the case as a pickup on 0700000c #561 and 07000012 #753 [D] (correction
+  2026-11-01: "MP-only" was wrong). The port covers 9, 11, 16, 17 and 18 (docs/systems/gun-turrets.md,
+  the Ronin section); 10 is MP-only.
+
+## Security-camera view (pane 16) [M; hud-2]
+
+- Enter: E on a monitor console in state 0 with a listed same-group camera → state 2, the first such
+  camera in `CameraList` order (`LList_Add` 0x1cca28 appends: placement order)
+  [Monitor_Activate 0x1b0058:12-49].
+- The picture: the viewer's updator is cleared and `Monitor_Update` copies the camera's obj+0x90 into
+  viewer+0x120 every tick (0x1afcc8:155) — the port's `Sim::view_override` returns the camera's
+  position and `Mat_GetDir`. The watched camera's body, lens and mount are not drawn (SENSOR+0x60 = 1
+  → `Sensor_Update` 0x1af618:57-70 sets obj+0xF0 bit 0x10).
+- The player is disabled (`Player_Disable(player, 0)`: no input arm, the view model hidden); goggles
+  view mode forced 0 every frame (`HUD_UpdateSecCamPane` 0x1a1538:10).
+- HUD: panes 0 (ammo) and 1 (health) off, pane 16 on; the crosshair hides (0x19e6d0:24). `SecCamSprInfo`
+  0x2bdeb0 [L]: 0 the 0x030000AD wash 512×448, 1..4 the 0x030000AA corner brackets, 5 the 0x030000AB
+  tag at (412, 378), 6 the 0x030000AC lamp at (352, 378) blinking 0x7f7f7f78 / alpha 0 on
+  `frame & 0x1f < 0x10`.
+- E (fresh press) walks forward from the watched camera's next list node to the list's end; none
+  left → restore and state 9; a watched camera gone to state 3 hands over forward, then from the head
+  [0x1afcc8:63-147]. The cooldown: states 9..5 decrement, 4 → 0 (six ticks before E re-enters).
+- Status pane templates re-read from `ee_start_05.bin`: pickup CREATE (128, 364) w 256 flags 0x18, text
+  template (128, 16) → (256, 380); objective CREATE (128, 0); mission (0, 156) 512 × 103 — the port's
+  geometry matches.
 
 ## Fonts [M; font 2 checked]
 

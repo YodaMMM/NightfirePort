@@ -41,8 +41,11 @@
 //!   - case 6 (explode): write `+0x72`, `Explode_Create` at obj+0x30, obj+0xFE bit 1 [M
 //!     :265-275] — the explosion itself is not ported (no Explode objects in the sim).
 //!   - the damage tail (reached by cases 0-4): the 9 part slots' hit chains accumulate
-//!     `rec+0x64` (damage) and `rec+0x6c` [M :277-320] — the port keeps no part hit chains, so
-//!     `damage` only moves if a caller pokes it (documented gap; live checks requested). The
+//!     `rec+0x64` (damage) and `rec+0x6c` [M :277-320]. The slots are the script's event-0xF
+//!     registrations (`Copter::parts`), and only slot 2 (the body) is pickable — every other
+//!     part carries obj+0xF0 bit 0x20, which `Collide_PickObj` always skips (`PICKABLE_SLOTS`).
+//!     So a round adds its contact damage × 1.0, and the copter dies after
+//!     `rounds_to_kill(hp, damage)` body hits (07000012, d1: P2K 3.5 → 86, SG5 2.75 → 109). The
 //!     death: `sltiu(state-4, 2); bnez → skip` [M disasm 0x17e390-0x17e39c] — states 4 and 5 are
 //!     exempt, every other state with `hp < damage` goes to state 4 — or straight to state 6 on
 //!     0x0700000b/0x07000012 — and writes the arrival channel [M disasm 0x17e3a4-0x17e3c8].
@@ -191,6 +194,34 @@ pub struct Copter {
     /// `*(int*)(rec+0x3c)` and its +0x80]. None = the slot unregistered (`rec+0x3c == 0`,
     /// the branch's own gate). The caller refreshes it from the SP part targets each tick.
     pub slot3_pos: Option<V3>,
+    /// `rec+0x30 + 4·slot`: the 9 part slots as `Copter_Register` 0x17e530 fills them — the
+    /// slot is the script's event-0xF parameter, NOT the stream index (`Script_EventHandler`
+    /// 0x1d94c0:172-175 calls `SPINFO+0x84(prev-stream entity, (u16)param 0, SPINFO+0x88)`).
+    /// Each entry is `(script object index, its glist hash)`; the hash guards a reused object
+    /// slot. [D 07000012 script 0x060005BD: stream 1's event [2] registers stream 0's
+    /// Helicopter-Bodya 0x0200062A as slot 2, streams 12/14/17/19 register 11/13/16/18 as
+    /// 5/6/7/8; slots 0/1/3/4 stay empty — the rotor (stream 4, 0x0200062B) is never a part.]
+    pub parts: [Option<(usize, u32)>; 9],
+}
+
+/// The part slots a pick can reach: `Copter_Register` 0x17e530:6-8 ORs obj+0xF0 bit 0x20 into
+/// every registered part but slot 2, and `Collide_PickObj` 0x1eae80:58-82 skips any object
+/// with `obj+0xF0 & mask` set where the mask ALWAYS carries 0x20 (`uVar2 = 0x20`, widened by
+/// the HITTEST flags only). Every object pick goes through it (`Collide_Pick` 0x1eb320:320/373;
+/// `Collide_SphereIntersect` 0x1ec940:111 → `Collide_Pick`), so bullets and the
+/// `Explode_Propagate` 0x17c518 sphere sweep both reach the body (slot 2, Bits scale 1.0)
+/// only — the ×2/×3/×100 Bits scales of the flagged slots never see a hit.
+pub const PICKABLE_SLOTS: u16 = 1 << 2;
+
+/// Rounds of `damage` each to take a copter of `hp` past the death test `hp < rec+0x64`
+/// [M Copter_Update 0x17dbb8:358, disasm 0x17e3a4 `c.lt.s`], all landing on the body (slot 2,
+/// Bits scale 1.0 [D 0x2a37e8]).
+pub fn rounds_to_kill(hp: f32, damage: f32) -> u32 {
+    if damage <= 0.0 { return u32::MAX; }
+    let mut n = 0u32;
+    let mut acc = 0.0f32;
+    while acc <= hp { acc += damage * PART_BITS[2].1; n += 1; }
+    n
 }
 
 /// One bullet contact on a part object, the port's HITDATA entry (`Coll_AddHitToList` node: +4
@@ -304,9 +335,17 @@ impl Copter {
                 attack_acc: 0.0, // [M 0x17d340:93 — +0x6c zeroed at create (memset + the +0x64 store)
                 part_hits: Vec::new(),
                 slot3_pos: None,
+                parts: [None; 9], // [M 0x17d340: memset(rec+0x30, 0, 0x24)]
             });
         }
         out
+    }
+
+    /// `Copter_Register` 0x17e530 — the SP create-callback: `slot < 9` stores the entity at
+    /// `rec+0x30 + 4·slot` [M :6]. `obj` is the script object index, `hash` its glist hash
+    /// (the reuse guard the port's object list needs; the game's slot holds the pointer).
+    pub fn register(&mut self, obj: usize, hash: u32, slot: u16) {
+        if (slot as usize) < self.parts.len() { self.parts[slot as usize] = Some((obj, hash)); }
     }
 
     /// `Copter_Move` 0x17d628 — one flight tick. Advances the spline t along the current path,
@@ -787,7 +826,36 @@ mod tests {
             part_hits: Vec::new(),
             slot3_pos: None,
             shot_hit_enemy: false,
+            parts: [None; 9],
         }
+    }
+
+    // [M Copter_Register 0x17e530; Script_EventHandler 0x1d94c0:172-175] the slot is the event's
+    // param 0; a slot >= 9 is ignored; a later register overwrites the slot.
+    #[test]
+    fn register_fills_the_event_slot_and_ignores_slot_9() {
+        let mut c = copter();
+        c.register(7, 0x0200_062a, 2);
+        c.register(9, 0x0200_062e, 5);
+        c.register(11, 0x0200_0001, 9);
+        assert_eq!(c.parts[2], Some((7, 0x0200_062a)), "event [2] → slot 2 (the body)");
+        assert_eq!(c.parts[5], Some((9, 0x0200_062e)));
+        assert!(c.parts.iter().filter(|p| p.is_some()).count() == 2, "slot 9 is out of range [M :6 `param_2 < 9`]");
+        // Sister: a re-register (the looped script re-fires its event) replaces the slot.
+        c.register(12, 0x0200_062a, 2);
+        assert_eq!(c.parts[2], Some((12, 0x0200_062a)));
+        assert_eq!(PICKABLE_SLOTS, 0b100, "only slot 2 lacks the obj+0xF0 0x20 bit [M 0x17e530:7]");
+    }
+
+    // [M 0x17dbb8:358 `hp < damage`] rounds-to-kill on the body: the strict compare means
+    // exactly-hp is still alive.
+    #[test]
+    fn rounds_to_kill_is_strictly_past_hp() {
+        assert_eq!(rounds_to_kill(299.0, 3.5), 86, "85·3.5 = 297.5 ≤ 299; 86·3.5 = 301 > 299");
+        assert_eq!(rounds_to_kill(299.0, 2.75), 109, "108·2.75 = 297 ≤ 299; 109·2.75 = 299.75");
+        // Sister: an exact multiple needs one more round (13·23 = 299 is not past 299).
+        assert_eq!(rounds_to_kill(299.0, 23.0), 14);
+        assert_eq!(rounds_to_kill(299.0, 0.0), u32::MAX);
     }
 
     /// A four-node straight-line framelist: x = 0, 600, 1200, 1800, identity quats (28-byte

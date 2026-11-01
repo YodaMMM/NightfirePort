@@ -41,6 +41,30 @@ Parsed 2026-10-13: 56 pages, 1003 controls, clean END with 19 spare bytes. Coord
 space** (each page's root control is (0,0,640,480)); `FixupResolution` scales per output resolution — the
 port maps ×512/640, ×448/480 onto the game's 512 × 448 screen.
 
+**The CONTROL record's two bytes.** The first byte is the widget TYPE (0x21b908 copies it to
+NEW_CONTROL+0x21 and tests it for 5 / 0xa / 0xd in the placement arms); the second is the create
+KIND (0 or 3 → `Manager_SendMessage 0x42`) [M 0x21b908:240-300]. `ControlDef::b` / `ctype` hold
+them in that order. The record's `f1` word lands in NEW_CONTROL+0x16 (the layer), `f2` in +0x14
+(the component SET id), `d1` in +0xc, `d2` in +0x4, `d3` in +0x8 [M :262-266].
+
+**Type-1 buttons draw their SET.** `Button_Init` 0x1efc90:38 sets the handle to (+0x14 << 16) | 0;
+`Button_Update` 0x1ef948 lays COMPONENT 0 of that SET over the button's rect under the state mask
+(0x10 idle; focused 0x20 / 0x80, 0x40 while ✕ is held) and frees the sprites while `+0x7a & 1`
+(msg 0x2b bit 0, the button or its page) [M :31-38, :56-87]; `Component_SetupInstance` returns
+before creating any sprite when the record's count is 0 [M 0x1f0950]. On the disc [D 08000002]:
+
+| SET | COMPONENT 0 | buttons |
+|---|---|---|
+| 2 | no instances — draws nothing | the 007 Bonus / Results / MP-summary ✕ targets 0x10000165, the main-menu rows, the codename grid cells, the language flags, the AV rows |
+| 7 | 9-slice on 0x03000075, 4-texel corners (uv 123..131, 51..59) | the Records / Rewards / Controls / Debriefing / MP-summary boxes, the codename grid box |
+| 8 | 23×23 right cap + stretched fill on 0x03000075 | the codename entry's typed-name field |
+| 0xc | end caps, a 32×32 right badge and two runs on 0x0300014b; instance 0 focus-only (0x20) | the Records title band, the Controls style band |
+| 0xe | 9-slice on 0x0300019d | the card box 0x100000fd, the confirm box on 0x40000015 |
+
+The mission defs' buttons name SET 2 (the pause tabs, the 0x40000007 rows) and SET 0xb (the
+objective-hint box 0x1000011e: one 0x0000007f fill instance). Port: `fe_pages::button_component`,
+`button_elems`, `FRAME_BUTTONS`; pinned in `crates/nf-view/tests/fe_frame_buttons.rs`.
+
 ## The pages the port draws (all cited at the use site in `crates/nf-view/src/menu.rs`)
 
 | page | identity [M] | key controls (640×480) |
@@ -107,6 +131,11 @@ was and what fixed it:
    (167,262/294/326,306×28) — the port's text rows are the page data's own.
 4. **Headers** — the page data says LBL text (0x1f2/0x1f8/0x14c at (50,40,376×17)), not images; the
    stylised look in the captures is the game's menu font, which the port has not parsed (reported).
+   Placement: every header control is (50,40,376×17) (0x40000012: y 39; 0x4000001d/0x40000020: 540
+   wide) [D]. `FixupResolution` makes it (40,37,300×15) in the 512×448 screen, and `Label_Update` puts
+   the left-aligned pen at x = ctrl.x, y = (short)(ctrl.y + h/2 + extent_h/2 − 1) with extent_h the
+   FONTNFont2 line advance 20 → (40,53) [M 0x21b610; 0x218cb8:178-205]. `menu::page_header_pen`;
+   the PCSX2 stats/results title ink rows 43.1–56.8 of 480 match.
 5. **Hint icons** — the game draws the ~A/~B/~X/~Y/... tokens through the `specialchar` table
    (0x2dd8d8, 17 × 0x18 bytes: texture 0x03000075, u0, v0, w, h, advance) [M symtab + table bytes].
    The port's 64×64-atlas 0x03000042 tiles and the letter-X fallback for ✕ are gone; the table's own
@@ -180,3 +209,21 @@ completes to state 7 [M 0x1f7b78:27] and `PS2_DoCardFlow`'s state>3 arm sets
 P_ESTHERO lparam 1 [M 0x20a648:39-47]. The port's `ParisCardCheck` walks the same states with one
 bounded loop per tick; the only unpinned number is the sceMc completion latency (`mc_ticks = 1`
 [S unverified] — see the report's live checks).
+
+**What P_PARISENUM draws** [D page 0x4000004a + the box page 0x4000002a; M PS2_DoCardFlow
+0x217bd8, Memo_Update 0x21e490, Button_Update 0x1ef948]: its full-screen black plate (TEX
+0x03000042 uv (8,23,2,2) colour 0x000000ff; its two 0x1000022c labels are authored hidden and
+only the mini-mission arm shows them [M 0x20a648:31-32]). The first frame a card-flow message
+stands, PS2_DoCardFlow opens the box page 0x4000002a (`dialog_open_124`) [M :150-158]; while the
+message stands it shows the memo 0x100000fb (the text, `sprintf(Txt 0x277, "1")` — slot_type[0]
+[D 0x30d588]) and the button frame 0x100000fd (SET 0xe COMPONENT 0, a 9-slice on 0x0300019d, mask
+0x10); with no buttons the choice list and the hint stay hidden [M :155-156, :178-181]. Geometry
+[M :186-200]: h = lines·0x1f + 0x1e, y = (448 − h)/2, the button (40, y, 432, h), the memo y + 10;
+the line count is the memo's previous update's (msg 0x65 read before this frame's Memo_Update),
+so the first frame is 30 high. The memo's lines are FONTSerpLight ("ff 02" [D 0x30d628]),
+centred in its width, baseline memo.y + (k + 1)·stride, stride = the face's extent ×1.5
+[M Memo_Init 0x21df38:70], with the 0x2000 shadow flag. The box page's bottom bar (black)
+stands from the open until the flow's end closes the page. Port: `fe_pages::parisenum_elems`,
+`FrontEnd::paris_dialog` / `paris_msg_ticks`; `--page parisenum` (NF_PARIS_FIRST=1 for the
+first frame) renders it. Open: the word wrap is the port's greedy wrap, not a port of
+`Font_WordWrapString` [S].

@@ -192,10 +192,9 @@ fn walking_the_party_breaks_nothing() {
 /// KIND 0xF0 (Pickup_Create 0x18dda0): the heavy armour takes on contact for +50 armour [D #507:
 /// kind 3, rounds 50; M Pickup_Handler 0x18e650's armour arm]. The P2K bonus pickups (kind 6)
 /// take and vanish too [M case 6, BOND_BONUS].
-/// [ignore] OPEN (level-07-interactables): standing on the armour (dist 0.75 < r+1.1 [M 0x18e148])
-/// does not take it in 40 ticks — the take needs its blocker found (suspect: the cel-scoped take
-/// ray after a teleport, or the fall/rest state). The sister pins the no-reach side; the take code
-/// itself is proven on other levels (level_carry/pickup tests).
+/// (The old "[ignore] OPEN: standing on the armour does not take it" note is stale — the take is
+/// green now: standing on the armour (dist 0.75 < r+1.1 [M 0x18e148]) takes it within the 40-tick
+/// walk window, including after the teleport; the sister still pins the no-reach side.)
 #[test]
 fn the_armour_pickup_takes_for_fifty() {
     let Some(mut scene) = load() else { eprintln!("NF_ISO not set — skipping"); return };
@@ -249,9 +248,10 @@ fn the_armour_sits_until_bond_reaches_it() {
 
 /// KIND 0xDB free door (p2 = p3 = 0 [D #245]): the use key opens it [M Door_Activate]. The locked
 /// boundary doors (ch_lock 200, no writer on this level [D]) refuse it.
-/// [ignore] OPEN (level-07-interactables): the use key at 1.6m (use point within the 2.5 reach
-/// [M 0x1a5170]) does not swing the free door — the pick needs its blocker found. The locked half
-/// (the ch-200 boundary refuses) is pinned by the passing sister test below.
+/// (The old "[ignore] OPEN: the use key does not swing the free door" note is stale — the E at
+/// 1.6 m opens it green now (the use sphere at head + 1·look [M 0x1a5170:100-108] touches the
+/// door's live world sphere [M Collide_PickObj 0x1eae80's 0x100/0x101 arm]). The locked half
+/// (the ch-200 boundary refuses) is pinned by the passing sister in the same test.)
 #[test]
 fn the_free_door_opens_on_the_use_key_and_the_locked_one_refuses() {
     let Some(mut scene) = load() else { eprintln!("NF_ISO not set — skipping"); return };

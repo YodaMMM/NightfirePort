@@ -220,7 +220,26 @@ fn the_escort_opens_the_interior_doors_on_his_route() {
             }).collect()
         };
         if guards.is_empty() {
-            // No threat: close on him and try again (the lead wait bands, PlayerInWay).
+            // Bond ahead of him in his lane: the lead parks in PlayerInWay until Bond leaves the
+            // π/3 cone or opens 3.5 [M 0x15ea28 case 3] — and the follow input above stands still
+            // inside 4.0. Step back 4.0 behind him (the far side from his route target), as the
+            // walkreal 01 follow does, so the lead resumes.
+            {
+                let sim = w.scene.sim.as_ref().unwrap();
+                let c = &sim.drones.list[ci];
+                if c.state == nf_game::drone::state::PLAYER_IN_WAY {
+                    let cp = c.pos;
+                    let ahead = c.route.as_ref().map(|r| r.target).filter(|t| walker::dxz(*t, cp) > 0.5).unwrap_or(plate);
+                    let (hx, hz) = (cp[0] - ahead[0], cp[2] - ahead[2]);
+                    let hl = (hx * hx + hz * hz).sqrt().max(1e-3);
+                    let back = [cp[0] + hx / hl * 4.0, cp[1], cp[2] + hz / hl * 4.0];
+                    drop(sim);
+                    eprintln!("[01] round: the contact is in PlayerInWay — Bond steps back off his lane");
+                    w.walk_nav_to(back, "step out of the lead's way", 1.2);
+                    continue;
+                }
+            }
+            // No threat: close on him and try again (the lead wait bands).
             // The ally-wait hold (0x153358:85-94 → 0x21 until ch 0x99) needs the corridor plate
             // (6.79, 6.04, 8.91) crossed to arm the ambush (ch 0x32 → mux → 0x33 → SP #276 →
             // 0x0e → the guards; their deaths → AND mux → 0x99 releases the hold) [D the
@@ -242,6 +261,15 @@ fn the_escort_opens_the_interior_doors_on_his_route() {
         {
             let sim = w.scene.sim.as_ref().unwrap();
             if sim.gun.clip + sim.gun.spare < 16 { drop(sim); w.resupply("round top-up"); }
+        }
+        // Nearest first, as a player fights them: the ambush guards whose deaths release the
+        // escort's hold (ch 0x99) close in on Bond, while a guard further on behind the shut
+        // door #2 sits out of reach and only wedges the approach walk.
+        let mut guards = guards;
+        {
+            let sim = w.scene.sim.as_ref().unwrap();
+            let bp = sim.bond.pos;
+            guards.sort_by(|&a, &b| walker::dxz(sim.drones.list[a].pos, bp).total_cmp(&walker::dxz(sim.drones.list[b].pos, bp)));
         }
         for g in guards {
             cleared.insert(g);

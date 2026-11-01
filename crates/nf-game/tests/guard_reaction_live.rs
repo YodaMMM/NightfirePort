@@ -100,13 +100,15 @@ impl Level05 {
     }
 }
 
-fn bond_at(p: [f32; 3]) -> Player { Player { yaw: 0.0, pos: p, target: [p[0], p[1] + 0.5, p[2]], eye: [p[0], p[1] + 1.0, p[2]], aim: [-1.0, 0.0, 0.0], sph: p, capsule: ([p[0], p[1] + 1.086, p[2]], p), hanging: false, cel: None } }
+fn bond_at(p: [f32; 3]) -> Player { Player { yaw: 0.0, pos: p, target: [p[0], p[1] + 0.5, p[2]], eye: [p[0], p[1] + 1.0, p[2]], aim: [-1.0, 0.0, 0.0], sph: p, capsule: ([p[0], p[1] + 1.086, p[2]], p), hanging: false, body: Default::default(), cel: None, move_local: [0.0; 2] } }
 
 /// Where the guard is standing (the ai_live notice-test spot) and where Bond appears.
 const GUARD_X: f32 = 61.342;
 const BOND: [f32; 3] = [67.31, 26.5, 99.47];
 const FAR: [f32; 3] = [0.0, -500.0, 0.0];
-const WARM: u32 = 10;
+/// 15+: the sight pass waits 15 frames after the load (`DronePostLoadFrame`, `DroneVision_ProcessDroneSight`
+/// 0x176a28:56-57); the live sessions teleported Bond in long after it, so the warm must outlast it.
+const WARM: u32 = 15;
 /// The window must cover a step-first combat move: the step danim plays ~100 frames with the fire request
 /// held off ([M 0x1676a0:16-18] `CallAnim(0x5b→0x68)` + `+0x3b = 0`), the release rides its follow-on.
 const RUN: u32 = 220;

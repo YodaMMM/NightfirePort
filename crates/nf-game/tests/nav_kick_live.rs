@@ -88,11 +88,11 @@ fn full_data(l: &LevelX, code: u32) -> Data<'_> { l.data(code) }
 
 fn bond_far() -> Bond {
     let p = [0.0, -500.0, 0.0];
-    Bond { yaw: 0.0, pos: p, target: [p[0], p[1] + 0.5, p[2]], eye: [p[0], p[1] + 1.0, p[2]], aim: [-1.0, 0.0, 0.0], sph: p, capsule: ([p[0], p[1] + 1.086, p[2]], p), hanging: false, cel: None }
+    Bond { yaw: 0.0, pos: p, target: [p[0], p[1] + 0.5, p[2]], eye: [p[0], p[1] + 1.0, p[2]], aim: [-1.0, 0.0, 0.0], sph: p, capsule: ([p[0], p[1] + 1.086, p[2]], p), hanging: false, body: Default::default(), cel: None, move_local: [0.0; 2] }
 }
 
 fn bond_at(p: [f32; 3]) -> Bond {
-    Bond { yaw: 0.0, pos: p, target: [p[0], p[1] + 0.5, p[2]], eye: [p[0], p[1] + 1.0, p[2]], aim: [-1.0, 0.0, 0.0], sph: p, capsule: ([p[0], p[1] + 1.086, p[2]], p), hanging: false, cel: None }
+    Bond { yaw: 0.0, pos: p, target: [p[0], p[1] + 0.5, p[2]], eye: [p[0], p[1] + 1.0, p[2]], aim: [-1.0, 0.0, 0.0], sph: p, capsule: ([p[0], p[1] + 1.086, p[2]], p), hanging: false, body: Default::default(), cel: None, move_local: [0.0; 2] }
 }
 
 const L12: u32 = 0x0700_0012;
@@ -120,7 +120,7 @@ fn kick_node_pair_enters_kick_object_and_unpauses_the_scripted_prop() {
     let pi = d.nav.nav_path_for(start).expect("the level has a nav path");
     let goal_probe = [-1.0f32, 0.4, 17.4];
     let nodes = d.nav.target_nodes(&l.world, pi, goal_probe, 0.0);
-    let (_, route) = nf_game::nav::Route::to_position(&d.nav, &l.world, Some(pi), start, goal_probe, &nodes, &[]).expect("a route through the kick corridor exists");
+    let (_, route) = nf_game::nav::Route::to_position(&d.nav, &l.world, Some(pi), start, goal_probe, &nodes, &[], &|_, _| false).expect("a route through the kick corridor exists");
     let (a, b) = (144u16, 248u16);
     eprintln!("route nodes {:?} (kick nodes are {a} and {b})", route.nodes.iter().collect::<Vec<_>>());
     let ai = route.nodes.iter().position(|&n| n == a).expect("route passes the first kick node");
@@ -231,7 +231,7 @@ fn dbg_probe_pairs() {
                 let goal = [gx, 0.4, gz];
                 if ((dr.pos[0] - gx).powi(2) + (dr.pos[2] - gz).powi(2)) < 9.0 { continue; }
                 let nodes = d.nav.target_nodes(&l.world, pi, goal, 0.0);
-                let Ok((st, r)) = nf_game::nav::Route::to_position(&d.nav, &l.world, Some(pi), dr.pos, goal, &nodes, &[]) else { continue };
+                let Ok((st, r)) = nf_game::nav::Route::to_position(&d.nav, &l.world, Some(pi), dr.pos, goal, &nodes, &[], &|_, _| false) else { continue };
                 if st == 2 { continue; }
                 let has_pair = r.nodes.windows(2).any(|w| (w[0] == 144 && w[1] == 248) || (w[0] == 248 && w[1] == 144));
                 if has_pair { eprintln!("guard {gi} at {:?} goal {:?} -> {:?} PAIR", dr.pos, goal, &r.nodes); }

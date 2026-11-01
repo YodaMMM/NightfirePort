@@ -58,11 +58,11 @@ pub struct Bullet {
     /// walk (0x12e2f0-0x12e390): each class-5 hitter whose weapon is the Laser watch 0x4E takes
     /// FRAME_RATE_MUL (1) off, its upgrade 0x4F takes 10 (the `FRAME_RATE_MUL * 10.0` arm).
     pub burn: i16,
-    /// The burned-out charge. The game's burn-out arm re-randomizes the fuse EVERY tick to
-    /// `60 + Rand_Rand(0x1518)` while the counter stays ≤ 0 [M 0x12e3cc-0x12e40c — the fuse never
-    /// decrements again, the charge never explodes]. The port LATCHES instead of redrawing the
-    /// shared bit-exact RNG per tick [*deviation*: the observable — no blast ever — is identical;
-    /// the game's per-tick `Rand_Rand(5400)` would shift every later draw for every witness].
+    /// The burned-out charge (`BU+0x102 < 1`). The game's burn-out arm redraws the fuse EVERY tick
+    /// to `60 + Rand_Rand(0x1518)` while the counter stays ≤ 0 [M 0x12d890:424-433,
+    /// 0x12e3cc-0x12e40c] — one shared-stream draw per tick, the fuse never reaches < 0 (the charge
+    /// never explodes), the countdown beep is skipped and the digits show the previous tick's
+    /// redrawn fuse (`tick_charge_fuse`).
     pub defused: bool,
     /// `obj+0xF4 = 3`: the landed state [M Bullet_CollisionHandler 0x12ce80 @0x12d1fc — a world
     /// hit for a `+0x70 & 0x100` record with no struck object → state 3, the rest clank
@@ -84,6 +84,13 @@ pub struct Bullet {
     /// sec = fuse/60 [M 0x12d890:421-422, 485-553 — the digit objects spawn EVERY tick in every
     /// state < 2]). None until the first 0x3b DoTrails tick.
     pub digits: Option<(u8, u8)>,
+    /// The satchel charge's matrix alignment in flight (draw-side): `Bullet_init` aligns obj+0x90
+    /// ONCE to the spawn direction (`Mat_Align2Dir(obj+0x90, BU+0x00, …)` [M 0x12c5a0:185]) and
+    /// `Bullet_update` case 1's gravity arm rewrites only BU+0x00 (the flight direction), never
+    /// obj+0x90 — the satchel record's +0x6C (0xc08) has neither the 0x8000 spin nor the 0x4 guided
+    /// rewrite [M 0x12e7b0:163-217, 246-265; L ee_start_05.bin weapon_data 0x3b]. `dir` follows the
+    /// arc; the mesh and the countdown digits keep this. Set for the 0x3b family by `init_fuse`.
+    pub spawn_dir: Option<V3>,
 }
 
 impl Bullet {
@@ -94,7 +101,7 @@ impl Bullet {
         pos: [0.0; 3], dir: [0.0; 3], speed: 0.0, travelled: 0.0, range: 0.0, damage: 0.0,
         owner: 0, state: 0, weapon: 0, flyby: false, bounces: 0,
         fuse: 210.0, fuse_ticks: false, burn: 0, defused: false, landed: false,
-        stick_normal: None, last_qs: 0, digits: None,
+        stick_normal: None, last_qs: 0, digits: None, spawn_dir: None,
     };
 
     /// `Bullet_init` 0x12c5a0's fuse block (the tail of the initializer, after the velocity
@@ -115,6 +122,8 @@ impl Bullet {
             // kind 0x3b → 300, 0x3c → 600, 0x3d → 900 … 0x40 → 1800; kind 0x6c → 900.0.
             self.fuse = if kind == 0x6c { 900.0 } else { (((kind - 0x3b) as u32 * 5 + 5) * 0x3c) as f32 };
             self.burn = 100; // [M 0x12c5a0:211]
+            // The spawn alignment the charge's pose keeps through the arc [M 0x12c5a0:185].
+            self.spawn_dir = Some(self.dir);
         }
         self.fuse_ticks = flags70 & 0x200 != 0; // [M Bullet_DoTrails 0x12dcc4]
     }
@@ -149,6 +158,25 @@ fn norm(v: V3) -> V3 { let l = (v[0] * v[0] + v[1] * v[1] + v[2] * v[2]).sqrt();
 /// the offset's components are added to x, z, y in that order.
 pub fn spread(dir: V3, spread: f32, flags68: u32, rng: &mut crate::drone::Rng) -> V3 {
     let s = if flags68 & 0x40_0000 != 0 { 0.0 } else { spread };
+    cone(dir, s, rng)
+}
+
+/// The spread scale `Bullet_init` 0x12c5a0:139-170 uses when the OWNER is the player (class 3):
+/// `(+0x24 + bloom) × mul`, where the bloom is the shot's place in the pull —
+/// `n = min(spp[mode] − BL+0x936, +0x92 clip size)` (`BL+0x936` = the shots left after this one's
+/// decrement [M Player_WeaponFiring 0x1a5460:651-653]) — scaled by `+0x98` and truncated to an
+/// integer (`(short)(int)((float)n · +0x98)`), and `mul` = 0 only when `+0x68 & 0x400000` AND the aim
+/// bit is set (the snipers' hip-fire keeps their 100-unit cone; aimed they are exact), else 1.
+/// The drones' rule (`spread`) gates 0x400000 unconditionally — theirs is the `cVar1 == 2` arm.
+pub fn player_spread(base: f32, bloom: f32, shots_in_pull: i32, clip_size: i32, flags68: u32, aiming: bool) -> f32 {
+    let n = shots_in_pull.min(clip_size);
+    let bloom = (n as f32 * bloom) as i32 as i16 as f32;
+    let mul = if flags68 & 0x40_0000 != 0 && aiming { 0.0 } else { 1.0 };
+    (base + bloom) * mul
+}
+
+/// The cone draw of `Bullet_init` for an already-scaled spread `s` (see `spread`).
+pub fn cone(dir: V3, s: f32, rng: &mut crate::drone::Rng) -> V3 {
     let r = nf_formats::ps2float::mul(rng.frand(2.0 * s) - s, 0.0014);
     let (th, ph) = (rng.frand(crate::trig::TAU), rng.frand(crate::trig::PI));
     // G-046 ps2sinf-remaining: the game's cone is Vec_Spherical_2_Cartesian 0x1e3948 [M]: PS2Sinf2
@@ -283,6 +311,15 @@ impl Default for PlayerHealth {
 }
 
 impl PlayerHealth {
+    /// The damage-glow alpha `BL+0x968` after a hit of `d`: the byte + min(d · 21.333334, 128),
+    /// capped at 255 and stored through `(char)(int)` — an integer, the fraction dropped
+    /// [M Player_HandlePain 0x1902c8:126-130]. The HUD draws the glow at this alpha and takes 1
+    /// off per tick [M HUD_UpdateHealthPane 0x19b9c8:108-110].
+    pub fn pain_glow(flash: f32, d: f32) -> f32 {
+        let add = (d * 21.333_334).min(128.0);
+        ((flash as u8 as f32 + add).min(255.0) as i32) as f32
+    }
+
     /// `Player_HandlePain` (single player, damage type 0): × the level's damage factor for the difficulty
     /// (`Plr_DMod_*`, `ReadTuningVars`; 4 → ×2), armour absorbs first, health floors at 0 (below 1 → 0);
     /// flash += min(d · 21.333, 128), capped at 255. [L] 07000005 at difficulty 1: SG5 hits cost 1.65 = 2.75 × 0.6.
@@ -304,8 +341,11 @@ impl PlayerHealth {
         let absorbed = (d * armour_frac).min(self.armour);
         self.armour -= absorbed;
         self.health = (self.health - (d - absorbed)).max(0.0);
+        // `if (fVar6 < 1.0) fVar6 = 0.0` before `Player_SetHealth` [M 0x1902c8:131-134]: a hit that
+        // leaves less than one point kills.
+        if self.health < 1.0 { self.health = 0.0; }
         let grunt = rng.rand(4) == 0; // Rand_Rand(4) [M 0x1902c8:111]
-        self.flash = (self.flash + (d * 21.333).min(128.0)).min(255.0);
+        self.flash = Self::pain_glow(self.flash, d);
         grunt
     }
 
@@ -380,6 +420,25 @@ pub fn damage_factor(level: u32, difficulty: u32) -> f32 {
 
 #[cfg(test)]
 mod tests {
+    /// `Bullet_init` 0x12c5a0:139-170, the player arm, on the disc's records [L weapon_data
+    /// 0x2bf150]: the Storm M32 0x12 (spread 16, bloom 5, clip 32) blooms by 5 per shot of the pull
+    /// up to the clip; the sniper 0x24 (spread 100, flags 0x4080d0) is exact only while aimed.
+    #[test]
+    fn player_spread_blooms_and_the_aim_gate() {
+        assert_eq!(player_spread(16.0, 5.0, 1, 32, 0, false), 21.0);
+        assert_eq!(player_spread(16.0, 5.0, 10, 32, 0, false), 66.0);
+        assert_eq!(player_spread(16.0, 5.0, 998, 32, 0, false), 176.0, "capped at the clip size");
+        assert_eq!(player_spread(100.0, 0.0, 1, 5, 0x4080d0, true), 0.0);
+        assert_eq!(player_spread(100.0, 0.0, 1, 5, 0x4080d0, false), 100.0, "hip-fired sniper keeps its cone");
+        // The bloom truncates: 0.5 per shot gives 0 then 1.
+        assert_eq!(player_spread(2.0, 0.5, 1, 7, 0, false), 2.0);
+        assert_eq!(player_spread(2.0, 0.5, 3, 7, 0, false), 3.0);
+        // Sister: the drones' rule drops the sniper cone whatever the aim.
+        let mut rng = crate::drone::Rng::new(1);
+        let d = spread([0.0, 0.0, 1.0], 100.0, 0x4080d0, &mut rng);
+        assert_eq!(d, [0.0, 0.0, 1.0]);
+    }
+
     use super::*;
 
     /// bullet-range-210: the flight death range is `weapon_data+0x1C` [M `Bullet_update` case 1,
@@ -449,6 +508,39 @@ mod tests {
         assert!((w2.pos[2] - 8.0).abs() < 1e-3, "the 0x4F boundary is 8.0 [L +0x1C], got {}", w2.pos[2]);
     }
 
+    /// laser-watch-reach: the burn walk's input segment NEVER covers a point past the record
+    /// range — the not-beyond sister of the reach law. The game's satchel burn consumes the
+    /// collision pass's contacts of the round's per-tick segment [M Bullet_DoTrails 0x12d890
+    /// tail 0x12e2f0-0x12e390 — the charge's obj+0xD0 walk with class-5 hitters whose record
+    /// id is 0x4E/0x4F]; the segment itself is the clamped flight law above (the state-0 step
+    /// lands ON the +0x1C boundary [M 0x12f014-0x12f02c], the head check kills the round before
+    /// any second segment [M 0x12e95c-0x12e984]). So a landed satchel at 4.5 along the aim of a
+    /// 0x4E round is never contacted — the round's whole life is ONE segment of ≤ 4.0 — while
+    /// a 0x4F round's single ≤ 8.0 segment covers it [L weapon_data 0x2bf150 + id·0x10C +0x1C:
+    /// 4.0 / 8.0; M Bullet_init 0x12c5a0:187 the +0x20 speed].
+    #[test]
+    fn the_burn_segment_never_passes_the_record_range() {
+        let world = CollisionWorld::empty();
+        let vol = PlayerVolume { feet: [1e4, 0.0, 1e4], height: 0.1, radius: 0.1 };
+        // The 0x4E round: one segment [muzzle, muzzle+4.0], dead after. A satchel centre at
+        // 4.5 on the ray lies outside every segment the round ever produces.
+        let mut w = Bullet { pos: [0.0, 1.0, 0.0], dir: [0.0, 0.0, 1.0], speed: 33.33, travelled: 0.0, range: 4.0,
+            damage: 0.0, owner: 0, state: 0, weapon: 0x4e, flyby: false, bounces: 0, ..Bullet::TAIL };
+        let mut rng = crate::drone::Rng::new(7);
+        w.update(&world, &vol, [1e4, 0.0, 1e4], &mut rng);
+        let end0 = w.pos[2];
+        w.update(&world, &vol, [1e4, 0.0, 1e4], &mut rng);
+        assert_eq!(w.state, 2, "the round is dead after the boundary tick [M 0x12e95c-0x12e984]");
+        assert!(end0 <= 4.0 + 1e-3 && w.pos[2] <= 4.0 + 1e-3,
+            "no segment end ever passes 4.0 [L +0x1C], first {end0} last {}", w.pos[2]);
+        // The 0x4F round covers the same point: its one segment reaches 8.0 [L].
+        let mut w2 = Bullet { pos: [0.0, 1.0, 0.0], dir: [0.0, 0.0, 1.0], speed: 33.33, travelled: 0.0, range: 8.0,
+            damage: 0.0, owner: 0, state: 0, weapon: 0x4f, flyby: false, bounces: 0, ..Bullet::TAIL };
+        let mut rng2 = crate::drone::Rng::new(7);
+        w2.update(&world, &vol, [1e4, 0.0, 1e4], &mut rng2);
+        assert!(w2.pos[2] >= 8.0 - 1e-3, "the 0x4F segment covers 4.5-8.0 [L +0x1C], got {}", w2.pos[2]);
+    }
+
     /// fields-player: the armour gate of `Player_HandlePain`'s pain-type switch
     /// [M 0x1902c8:84-104]: ONLY type 0 (the default/bullet arm) lets armour absorb;
     /// types 1..7 (falls 6, drowning 7, hurt volumes) set armourFraction 0.0.
@@ -483,7 +575,21 @@ mod tests {
         let mut rng = crate::drone::Rng::new(0);
         h.pain(&mut rng, 2.75, 1, 0x0700_0005);
         assert!((h.health - (100.0 - 1.65)).abs() < 1e-4, "live: 1.65 per SG5 hit");
-        assert!((h.flash - 1.65 * 21.333).abs() < 1e-3);
+        // The +0x968 byte: (int)(0 + 1.65 · 21.333334) = 35 — the fraction (35.2) is dropped
+        // [M 0x1902c8:126-130 `(char)(int)`].
+        assert_eq!(h.flash, 35.0);
+    }
+
+    /// `pain_glow` = the game's byte store: truncated sum, the 128 per-hit cap, the 255 total cap.
+    /// Sister: the old float sum (35.2 + 35.2 = 70.4) differs from the byte path (35 + 35 = 70).
+    #[test]
+    fn pain_glow_is_a_byte() {
+        assert_eq!(PlayerHealth::pain_glow(0.0, 1.65), 35.0);
+        assert_eq!(PlayerHealth::pain_glow(35.0, 1.65), 70.0);
+        assert_ne!(PlayerHealth::pain_glow(35.0, 1.65), 2.0 * 1.65 * 21.333_334);
+        assert_eq!(PlayerHealth::pain_glow(0.0, 100.0), 128.0, "one hit adds at most 128");
+        assert_eq!(PlayerHealth::pain_glow(200.0, 100.0), 255.0, "the byte caps at 255");
+        assert_eq!(PlayerHealth::pain_glow(10.5, 0.0), 10.0, "a stored byte has no fraction");
     }
 
     /// `Bullet_DoTrails` fly-by (0x12d890): a bullet passing within 3 units of the viewer on a 1-in-5 roll plays

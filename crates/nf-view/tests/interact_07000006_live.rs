@@ -182,28 +182,51 @@ fn standing_away_leaves_the_body_armour_on_the_floor() {
     assert!(!sim.drones.taken.iter().any(|(h, _)| *h == 0x0200047f || format!("{h}").contains("755")), "no #755 take");
 }
 
-/// KIND walk-in hazard: the courtyard well. The well's own Hurt volume #373 is GAME-INERT — its
-/// who-mask is param 4 = 1 and `Hurt_Update`'s state-0 scan collects only the class bits 0x10 (the
-/// player, class 2), 8 (class 3) and 2 (class 5) [M Hurt_Update 0x17e5d0: the `param4 & collected`
-/// AND; D #373 params [6, 1000, 0, 0xffff, 1, 0]] — 1 & {8, 0x10, 2} = 0, so the volume can never
-/// start. The port's shaft is OPEN: Bond over the mouth drops below the lip into the shaft and the
-/// measured ~5 m drop is survivable (health intact) — the depth/damage question is the report's
-/// live check (the real shaft's collision depth needs a PCSX2 measurement).
+/// KIND walk-in hazard: the courtyard well. The mouth is open AROUND barrel #65: the kind-0xD8
+/// body at the mouth centre (31.82, 39.79, 17.26 [D #65]) is a solid ~0.46×0.92 prop the player's
+/// capsule DOES hit — its glist carries a 94-tri collision block [D the 0x2E block before #65's
+/// gfx, extents ±0.23 x / −0.92..0 y / ±0.20 z], and the game's pick chain admits a cel-linked
+/// body for the player's walk query: `Player_Collision` 0x194df0:88/:205 builds the kind-0x800
+/// query with HITTEST+0x98 = 0, `Collide_Pick` 0x1eb320:314-329 walks the cel's linked objects
+/// (skip only on HITTEST+0x98 & 0x10 — absent — or obj+0xF0 & 0x30000000 — RB_Create writes
+/// neither [M 0x1d6bf0:49-56: class 0x1a at obj+0xff, obj+0xfa |= 0x44]), `Collide_PickObj`
+/// 0x1eae80:88-90 admits when the glist's registered shape list is non-empty (glist+8 != 0 — the
+/// 0x2E block; obj+0xfa & 8 is clear, so the Jointy arm is out), and `Collide_Intersect`
+/// 0x1ebaa8:89-105 runs the narrow phase over that geometry. Bond over the mouth centre stands ON
+/// the barrel (~39.9); 0.7 off, the mouth is open and he drops ~6.2 to the shaft floor (the probe
+/// finds it at 33.59) and stands there — no fall-through (the drops at ±0.35/0.7/1.0 in x/z all
+/// land grounded; the old −356 fall-through is gone on the current tree). The well's own Hurt
+/// volume #373 is GAME-INERT — its who-mask is param 4 = 1 and `Hurt_Update`'s state-0 scan
+/// collects only the class bits 0x10 (the player, class 2), 8 (class 3) and 2 (class 5)
+/// [M Hurt_Update 0x17e5d0's `param4 & collected` AND; D #373 params [6, 1000, 0, 0xffff, 1, 0]]
+/// — 1 & {8, 0x10, 2} = 0, so the volume can never start. The ~6.2 m drop is survivable.
 #[test]
 fn the_well_shaft_is_open_and_the_hurt_volume_is_game_inert() {
     let Some(iso) = iso() else { eprintln!("NF_ISO not set — skipping"); return };
     let mut scene = load_06(&iso, &[]);
-    // Over the well mouth (the well at (31.82, 39.79, 17.26) [D #65]).
+    // Over the well mouth (the well at (31.82, 39.79, 17.26) [D #65]): Bond rests on the barrel.
     settle_near(&mut scene, [31.82, 40.5, 17.26]);
     for _ in 0..600 { scene.sim.as_mut().unwrap().step_bond(Input::default(), false, false, false); }
     let sim = scene.sim.as_ref().unwrap();
-    eprintln!("[well] health {:.1} ch62 {} y {:.2}", sim.drones.health.health,
-        sim.drones.channels.on(0x62), sim.bond.pos[1]);
-    assert!(sim.bond.pos[1] < 38.0, "Bond over the mouth drops into the shaft (the mouth is open)");
+    eprintln!("[well] centre y {:.2} health {:.1} ch62 {}", sim.bond.pos[1],
+        sim.drones.health.health, sim.drones.channels.on(0x62));
+    assert!((39.4..40.4).contains(&sim.bond.pos[1]),
+        "Bond over the mouth centre stands ON body #65, the mouth's own barrel [D the 94-tri block; M 0x1eae80:88-90] (y {:.2})",
+        sim.bond.pos[1]);
+    // 0.7 off centre the mouth is open: the drop lands ON the shaft floor (probe 33.59), not through it.
+    let mut open = load_06(&iso, &[]);
+    settle_near(&mut open, [31.12, 40.5, 17.26]);
+    for _ in 0..600 { open.sim.as_mut().unwrap().step_bond(Input::default(), false, false, false); }
+    let sim = open.sim.as_ref().unwrap();
+    eprintln!("[well] off-centre y {:.2} health {:.1} ch62 {}", sim.bond.pos[1],
+        sim.drones.health.health, sim.drones.channels.on(0x62));
+    assert!((33.0..36.0).contains(&sim.bond.pos[1]) && sim.bond.grounded,
+        "0.7 off the mouth Bond stands on the shaft floor ~6.2 down [D the shaft floor tris at 33.59] (y {:.2} grounded {})",
+        sim.bond.pos[1], sim.bond.grounded);
     // The inert-volume law: the hurt record never starts (its who-mask cannot match) — no damage
-    // rides #373 in the game either [M 0x17e5d0's AND]. The measured drop is survivable.
+    // rides #373 in the game either [M 0x17e5d0's AND]. The ~6.2 m drop is survivable.
     assert!(sim.drones.health.health > 0.0 && !sim.drones.channels.on(0x62),
-        "the ~5 m shaft drop costs nothing (fall threshold not reached)");
+        "the ~6.2 m shaft drop costs nothing (fall threshold not reached) and #373 never fires [M 0x17e5d0]");
 }
 
 /// Sister: Bond 3 m east of the well mouth for the same duration — alive, no death channel.

@@ -52,7 +52,7 @@ fn pane_text(scene: &nf_view::scene::Scene, f: &nf_view::gpu::HudFrame) -> Strin
             cells.push((x0, ch));
         }
     }
-    // Shadow + text share a cell (the shadow draws 1.5 px right [M hud.rs `text_scaled_tex`]) and
+    // Shadow + text share a cell (the shadow draws 1 px right [M hud.rs `text_shadow_offset`]) and
     // repeated digits repeat a cell — merge by PROXIMITY (≤ 2 px), keeping the left copy.
     cells.sort_by(|a, b| a.0.partial_cmp(&b.0).unwrap().then(a.1.cmp(&b.1)));
     let mut out = String::new();

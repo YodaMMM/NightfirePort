@@ -82,54 +82,51 @@ impl Rows {
     }
 }
 
-/// ── Item 2 (as originally written): a level start announcing other levels' objectives ──────────
-/// The 2026-10-17 re-pin (objectives-0b-start): the disc ships every objective record STATE 0
-/// ([D] ACTION.ELF `.data`, all 24 rows' 55 records), `Mission_Init` leaves prior parts
-/// untouched ([M 0x182270:92-95, 120-121] — the mode-1/4 arms never write a record) and the
-/// monitor's case 0 announces every state-0 record whose `record.level <= GameState._12_4_`
-/// ([M 0x1827d8:41-54]). So at a COLD boot the game DOES announce the prior parts' objectives —
-/// [L] a PCSX2 fresh load of 0700000b shows part-0/1 records announcing over the
-/// first ~520 frames, and fix_objective_banner_live's harness already called it "the game's own
-/// cold-load behaviour". The old test asserted the opposite from the warm-arrival snapshot
-/// ([L ee_start_0700000a.bin @ 0x2a3f78: states 2/3/4]) — that state belongs to a WARM arrival,
-/// which the port carries via the mission snapshot + `restore` (map-tower2). The test now pins
-/// the cold boot's true sequence: the priors first, in the monitor's table order.
+/// ── Item 2: a level start announcing other levels' objectives ─────────────────────────────────
+/// 2026-10-31 re-pin (level-objective-carryover). The [M]/[D] legs stand: every record ships
+/// STATE 0 ([D] ACTION.ELF `.data`), `Mission_Init` leaves prior parts untouched ([M
+/// 0x182270:92-95, 120-121]) and case 0 announces state-0 records with `record.level <=
+/// GameState._12_4_` ([M 0x1827d8:41-54]) — so a load whose mission was never touched in the boot
+/// announces the priors. But a player never reaches part N that way: the records survive every
+/// in-boot load and part N is only reached through part N-1, so the earlier records are already
+/// announced on arrival ([L ee_start_0700000a.bin @ 0x2a3f78: 07000009's records 2/3/4 at
+/// 0700000a's start]; [L] the 10-17 PCSX2 start sweep's in-boot loads 05 → 08 and 06 → 07 opened
+/// without 05's text). The port's no-carry load now seeds that arrival shape
+/// (`Mission::seed_campaign_arrival`): 07000007 opens with its own objective, never 05's/06's.
 #[test]
-fn cold_07000007_announces_the_prior_parts_then_its_own() {
+fn direct_07000007_opens_with_its_own_objective() {
     let Some(iso) = iso() else { eprintln!("NF_ISO not set — skipping"); return };
     let mut scene = nf_view::load(&iso, "07000007.bin", false).expect("load");
     let lang = scene.sim.as_ref().unwrap().lang.as_ref().expect("USATxt.dat loaded").clone();
     let text = |id: u32| lang.bind(id).expect("the objective text binds").to_string();
     let (breach, inside, rendezvous) = (text(0x0400_0000), text(0x0400_0001), text(0x0400_0002));
+    let complete = text(0x0200_0053);
     let mut seen: Vec<String> = Vec::new();
     for _ in 0..700 {
         let sim = scene.sim.as_mut().unwrap();
         sim.step_bond(Input::default(), false, false, false);
         for m in &sim.hud.objective_msgs {
-            if !seen.contains(&m.text) { seen.push(m.text.clone()); }
+            if m.text != complete && !seen.contains(&m.text) { seen.push(m.text.clone()); }
         }
     }
-    eprintln!("[obj-msg] cold 07000007 banners: {seen:?}");
-    // The monitor's table order [M 0x1827d8:22-97]: 07000005's record (row 0) first, 07000006's
-    // (row 1) second, then 07000007's own (its enable 0x47 fires from the level's start scripts).
-    assert_eq!(seen.first(), Some(&breach), "07000005's objective announces first at the cold boot (disc state 0 + case 0 [D][M 0x1827d8:41-54])");
-    assert_eq!(seen.get(1), Some(&inside), "07000006's objective announces second (table order)");
-    assert!(seen.iter().any(|t| *t == rendezvous), "07000007's own objective {rendezvous:?} announces (its enable 0x47 fires from the level's start scripts)");
-    // Sister: no fail prefix — mission 07000005 has no flags-2 record ([D] rows 0-3: flags 0),
-    // and the case-0 announce is the plain format anyway [M 0x1827d8:43-45].
+    eprintln!("[obj-msg] direct 07000007 banners: {seen:?}");
+    assert_eq!(seen.first(), Some(&rendezvous), "07000007 opens with its own objective (enable 0x47 from the start scripts)");
+    // Sister: the earlier parts' texts never show.
+    assert!(!seen.contains(&breach) && !seen.contains(&inside), "05's/06's objectives must not re-announce, got {seen:?}");
     assert!(seen.iter().all(|t| !t.contains("Fail:")), "no Fail-prefixed banner in the announce set");
 }
 
-/// Sister: 07000008 (the mission's part 3) — the same cold-boot shape: the prior parts' four
-/// records announce first (table order), then its own (the touch-#15 enable).
+/// Sister: 07000008 (part 3) — none of the four earlier records announce; its own first record
+/// announces once touch #15 (out 0x49, by the spawn) fires.
 #[test]
-fn cold_07000008_announces_the_prior_parts_then_its_own() {
+fn direct_07000008_opens_with_its_own_objective() {
     let Some(iso) = iso() else { eprintln!("NF_ISO not set — skipping"); return };
     let mut scene = nf_view::load(&iso, "07000008.bin", false).expect("load");
     let lang = scene.sim.as_ref().unwrap().lang.as_ref().expect("USATxt.dat loaded").clone();
     let text = |id: u32| lang.bind(id).expect("the objective text binds").to_string();
     let earlier: Vec<String> = [0x0400_0000, 0x0400_0001, 0x0400_0002, 0x0400_0003].iter().map(|id| text(*id)).collect();
     let own: Vec<String> = [0x0400_0004, 0x0400_0005].iter().map(|id| text(*id)).collect();
+    let complete = text(0x0200_0053);
     // 07000008's own objectives are enable-gated (en 0x49/0x4a [L c07000008]); the level's TouchOnce
     // #15 (out 0x49, volume at [137.1, 48.5, -82.3] [L sim.drones.triggers]) sits by the spawn and
     // fires the first announce — walk into it through the real touch path.
@@ -142,18 +139,15 @@ fn cold_07000008_announces_the_prior_parts_then_its_own() {
         let sim = scene.sim.as_mut().unwrap();
         sim.step_bond(Input::default(), false, false, false);
         for m in &sim.hud.objective_msgs {
-            if !seen.contains(&m.text) { seen.push(m.text.clone()); }
+            if m.text != complete && !seen.contains(&m.text) { seen.push(m.text.clone()); }
         }
     }
-    eprintln!("[obj-msg] cold 07000008 banners: {seen:?}");
-    // The priors lead, in the monitor's table order [M 0x1827d8:22-97] — rows 0..2's four records
-    // announce at the first tick (case 0, disc states 0 [D]); the touch's own announce follows.
-    for (k, t) in earlier.iter().enumerate() {
-        assert_eq!(seen.get(k), Some(t), "the prior objective {t:?} announces at position {k} (table order [M 0x1827d8], disc states 0 [D])");
+    eprintln!("[obj-msg] direct 07000008 banners: {seen:?}");
+    assert_eq!(seen.first(), Some(&own[0]), "07000008 opens with its own {:?} once touch #15 raises ch 0x49", own[0]);
+    for t in &earlier {
+        assert!(!seen.contains(t), "the earlier part's {t:?} must not re-announce, got {seen:?}");
     }
-    assert!(seen.contains(&own[0]), "07000008's own objective {:?} announces once its enable 0x49 fires (touch #15)", own[0]);
 }
-
 /// ── Item 1: an OBJECTIVE COMPLETE banner draws ONE row, not two ────────────────────────────────
 /// The real path: 07000007's TouchOnce #412 (out ch 0x48) completes "Rendezvous…" (its condition
 /// channel is 0x48) and enables "Spy on secret meeting" (its enable is 0x48) in one tick. The
@@ -237,7 +231,9 @@ fn every_objective_text_wraps_inside_the_banner_box() {
                     let line = lang.bind(o.text).unwrap_or_else(|| panic!("objective {:#x} of {:08x} binds", o.text, level.level)).to_string();
                     sim.hud.objective_msgs.clear();
                     sim.hud.objective_msgs.push_back(nf_view::scene::Msg {
-                        text: line, time: 300.0, status: 0x0200_0051, failed: false, life: 300.0, opened: true, second: true,
+                        // time 200: past the NEW notice's 60-tick label-only flash (`time + 60 > 300`
+                        // hides the body [M HUD_UpdateStatusPane 0x19c310 case 3]) — the steady body row.
+                        text: line, time: 200.0, status: 0x0200_0051, failed: false, life: 300.0, opened: true, second: true,
                         label: 0, // fix-context-hints added the provenance id (0 = pre-bound text)
                         script: false, // fix-ladder-water added the script-subtitle flag (this is an objective line, not a subtitle)
                         sfx1: true, // objective-banner-timing: the case-3 chime already fired (second: true pairs with it)

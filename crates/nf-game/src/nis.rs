@@ -1905,9 +1905,23 @@ pub struct Scripts {
     /// The game's `Input_Action(-1, 0x19, 1)` for the next tick — any player pressing the skip action. The
     /// viewer's key handler sets this while a cut-scene is playing (fix-dev T1); consumed every tick.
     pub skip_request: bool,
+    /// Single objects hidden by their owner's own obj+0xF0 bit 0x10 (not a whole SP's
+    /// `Script_HideObj` cascade) — the turret's registered[0] muzzle flash
+    /// (`GT_Update` 0x180498:110-122). Indices into `objects.list`.
+    pub hidden_objs: Vec<usize>,
 }
 
 impl Scripts {
+    /// Sets or clears one object's own hidden bit (see `hidden_objs`).
+    pub fn set_obj_hidden(&mut self, obj: usize, hidden: bool) {
+        let at = self.hidden_objs.iter().position(|&o| o == obj);
+        match (hidden, at) {
+            (true, None) => self.hidden_objs.push(obj),
+            (false, Some(i)) => { self.hidden_objs.swap_remove(i); }
+            _ => {}
+        }
+    }
+
     /// fix-script-objects: the live entity matrix of `src` (script hash, stream) — the
     /// script-created AI volumes' per-tick refresh reads it (the game keys obj+0x90 from the
     /// stream every `Script_Interp` 0x1d9a08:106-133). Read-only.
@@ -1922,43 +1936,19 @@ impl Scripts {
     /// used to key the 0700004a lift stand-in; the lift now holds on its channel — nothing reads it.)
     pub fn new(lib: HashMap<u32, Arc<Nis>>, placements: &[Placement]) -> Scripts {
         let mut players = placements.iter().enumerate().filter(|(_, p)| p.flags & 0xff == 0xd9).filter_map(|(i, p)| Player::from_placement(i, p)).collect::<Vec<_>>();
-        // fix-searchlight-alarm: 07000006's courtyard searchlights. The disc's NIS 0x06000066 stream 0
-        // raises the heads' on-channels in a staged reveal — ch 64 (0x40) = 1 at wait 1, ch 63 (0x3F) at
-        // 59, ch 61 (0x3D) at 116, ch 62 (0x3E) at 167 [D 07000006 kind-7 NIS 0x06000066; the heads'
-        // on-channels are 64/63/61/62 on the four 0xDE kind-1 placements] — all four courtyard lights
-        // sweep within ~2.8 s of the script's start. The script's owner on the disc is SP placement
-        // #808 (kind 0xD9, p0 = 0x06000066, mask p5 = 1, out ch 0x34) [D census, level-06-audit]:
-        // mask != 0 parks it in state 0 [M 0x1db9a8:74-86] where only its SP_Hit/activate path can
-        // start it — a beat not derivable headlessly. The port therefore ALSO boots the script once
-        // at level start, mode 1 (play once), the way a hidden `SP_CreateScriptPlayer` one-shot runs
-        // (`spawn_once`'s precedent, the copter script [M 0x1dbc08's mode dispatch]); the placement
-        // player is created alongside and stays idle. Without the boot the port's courtyard heads
-        // stay state 3 (dark) forever, the alarm channel 55 can never rise and the guards never
-        // react. The real activation moment (which beat moves #808 in the game) is an open
-        // live check. Pinned to the level by its own data: a class-0x22 head
-        // placement whose alarm channel is 55 AND the script in the lib.
-        let light_boot = placements.iter().any(|p| p.flags & 0xff == 0xde
-            && p.params.iter().any(|&(k, v)| k == 3 && v == 55))
-            && lib.contains_key(&0x0600_0066);
-        if light_boot {
-            players.push(Player {
-                placement: placements.len(), scripts: [0x0600_0066, 0], modes: [1, 0], stay: false, mask: 0, out: 0, gate: 0,
-                scale: 1.0, matrix: [[1.0, 0.0, 0.0, 0.0], [0.0, 1.0, 0.0, 0.0], [0.0, 0.0, 1.0, 0.0], [0.0, 0.0, 0.0, 1.0]],
-                cur: 0, state: 7, activated: false, countdown: 0, info: [None, None], deleted: false,
-                // Merge drift (fix-searchlight-alarm × walkreal-b2's field): the identity, like the matrix.
-                live_matrix: [[1.0, 0.0, 0.0, 0.0], [0.0, 1.0, 0.0, 0.0], [0.0, 0.0, 1.0, 0.0], [0.0, 0.0, 0.0, 1.0]],
-                subs: Vec::new(),
-                hit_points: 0.0,
-                damage: 0.0,
-                tick_damage: 0.0,
-                // +0x36: nothing hides a placed/fusebox/useobj SP at create [M 0x1db9a8].
-                hidden: false,
-                bullet_filter: 0,
-                bullet_hits: Vec::new(),
-                tick_bullet_hits: Vec::new(),
-            });
-        }
-        Scripts { lib, players, objects: Objects::default(), requests: Vec::new(), primed: false, skip_request: false }
+        // light-glow: 07000006's courtyard searchlights start DARK and stay dark until Bond steps on a
+        // ch-52 plate. The reveal NIS 0x06000066 (stream 0 raises the heads' on-channels 64/63/61/62 at
+        // waits 1/59/116/167 [D 07000006 kind-7 NIS]) belongs to SP placement #808 (kind 0xD9,
+        // p0 = 0x06000066, p5 mask = 1, p6 = ch 0x34) [D]. `SP_Hit` 0x1dc470:16-18 sets bit 1 while
+        // `switch_channels[tag+0x30]` (p6, ch 0x34) is on, and `SP_Update` 0x1dbda8 case 0 loads +
+        // plays the script once `bits & tag+0x2E` (p5) is nonzero [M 0x1dbda8:64-106]. Ch 0x34 (52)
+        // is written only by the courtyard TouchOnce plates #524/#525/#526/#661-#664 [D trigger
+        // census], so the lights reveal when Bond walks in — `Player::update`'s state-0 arm already
+        // does exactly that for #808. The synthetic level-start boot the port used to add here lit
+        // all four heads within 2.8 s of the load wherever Bond was: a PS2 capture teleported into
+        // the courtyard without crossing a plate shows the four heads dark (no beams, no coronas,
+        // lenses at pitch 0), while the port drew two full-size coronas over the wall.
+        Scripts { lib, players, objects: Objects::default(), requests: Vec::new(), primed: false, skip_request: false, hidden_objs: Vec::new() }
     }
 
     /// `SP_GetHitDamage` 0x1dc5f8's read set: the current script's stream objects of every player
@@ -2085,43 +2075,41 @@ impl Scripts {
     }
 
     /// The copter's 9 part slots (`Copter_Register` 0x17e530:6 — the SP callback writes each
-    /// created script entity into `rec+0x30 + index·4`, 9 slots, and flags every one but slot 2
-    /// with obj+0xF0 bit 0x20). The port resolves slot i from the SP player's current script's
-    /// stream i — the same stream the game's entity-creation callback fires for — with the
+    /// registered script entity into `rec+0x30 + slot·4`, 9 slots, and flags every one but slot 2
+    /// with obj+0xF0 bit 0x20). `parts` is the copter's registration table (`Copter::parts`, filled
+    /// by the script's event-0xF lines — the slot is the event's param 0 [M Script_EventHandler
+    /// 0x1d94c0:172-175], not the stream index). Each registered object resolves to the
     /// `held_hit_targets` volume shape (the glist sphere through the object matrix, the
     /// `Control_BuildWorldSph` test volume [M 0x133070:36-48]; an anim object carries its skin's
     /// glist; no glist → the translation + 0.1). Returns the per-slot spheres and a presence
-    /// mask (bit i = slot i registered, the game's non-zero `rec+0x30+4i`). A hidden SP resolves
-    /// to nothing (the `Script_HideObj` cascade, the view's own read) — the game's collide pass
-    /// tests the hidden parts too [S unverified], but Bond cannot reach them before the gate.
-    pub fn copter_part_targets(&self, placement: usize, w: &dyn World) -> ([Option<([f32; 3], f32)>; 9], u16) {
+    /// mask (bit i = slot i registered and its object still live with the registered hash). A
+    /// hidden SP resolves to nothing (the `Script_HideObj` cascade, the view's own read) — the
+    /// game's collide pass tests the hidden parts too [S unverified], but Bond cannot reach them
+    /// before the gate. Callers that model a pick mask the result with `copter::PICKABLE_SLOTS`.
+    pub fn copter_part_targets(&self, placement: usize, parts: &[Option<(usize, u32)>; 9], w: &dyn World) -> ([Option<([f32; 3], f32)>; 9], u16) {
         let mut out: [Option<([f32; 3], f32)>; 9] = [None; 9];
         let mut present = 0u16;
         let Some(p) = self.players.iter().find(|p| p.placement == placement && !p.deleted) else { return (out, present) };
         if p.hidden { return (out, present); }
-        let Some(s) = p.info[p.cur].as_ref() else { return (out, present) };
-        for i in 0..s.streams.len().min(9) {
-            if !matches!(s.streams[i].kind, 1 | 2) { continue; }
-            let vol = match (s.streams[i].obj, self.objects.list.get(s.streams[i].obj.unwrap_or(usize::MAX)).and_then(|o| o.as_ref())) {
-                (Some(o), Some(Obj::Entity { hash, matrix, .. })) => {
+        let s = p.info[p.cur].as_ref();
+        for (slot, reg) in parts.iter().enumerate() {
+            let Some((o, h)) = *reg else { continue };
+            let xf = |m: &Mat4, c: [f32; 3]| [m[0][0] * c[0] + m[1][0] * c[1] + m[2][0] * c[2] + m[3][0],
+                m[0][1] * c[0] + m[1][1] * c[1] + m[2][1] * c[2] + m[3][1],
+                m[0][2] * c[0] + m[1][2] * c[1] + m[2][2] * c[2] + m[3][2]];
+            let vol = match self.objects.list.get(o).and_then(|x| x.as_ref()) {
+                Some(Obj::Entity { hash, matrix, .. }) if *hash == h => {
                     let (c, r) = w.glist_sphere(*hash).unwrap_or(([0.0; 3], 0.1));
-                    Some(([matrix[0][0] * c[0] + matrix[1][0] * c[1] + matrix[2][0] * c[2] + matrix[3][0],
-                          matrix[0][1] * c[0] + matrix[1][1] * c[1] + matrix[2][1] * c[2] + matrix[3][1],
-                          matrix[0][2] * c[0] + matrix[1][2] * c[1] + matrix[2][2] * c[2] + matrix[3][2]], r))
+                    Some((xf(matrix, c), r))
                 }
-                (Some(_), Some(Obj::Anim { skin, .. })) => {
-                    let Some(m) = s.stream_matrix(i, &self.objects, w) else { continue };
-                    let (c, r) = w.glist_sphere(*skin).unwrap_or(([0.0; 3], 0.1));
-                    Some(([m[0][0] * c[0] + m[1][0] * c[1] + m[2][0] * c[2] + m[3][0],
-                          m[0][1] * c[0] + m[1][1] * c[1] + m[2][1] * c[2] + m[3][1],
-                          m[0][2] * c[0] + m[1][2] * c[1] + m[2][2] * c[2] + m[3][2]], r))
+                Some(Obj::Anim { skin, .. }) if *skin == h => {
+                    // The anim's live matrix comes from the stream that owns it.
+                    let m = s.and_then(|s| (0..s.streams.len()).find(|&i| s.streams[i].obj == Some(o)).and_then(|i| s.stream_matrix(i, &self.objects, w)));
+                    m.map(|m| { let (c, r) = w.glist_sphere(*skin).unwrap_or(([0.0; 3], 0.1)); (xf(&m, c), r) })
                 }
-                _ => {
-                    let Some(m) = s.stream_matrix(i, &self.objects, w) else { continue };
-                    Some(([m[3][0], m[3][1], m[3][2]], 0.1))
-                }
+                _ => None,
             };
-            if let Some(v) = vol { out[i] = Some(v); present |= 1 << i; }
+            if let Some(v) = vol { out[slot] = Some(v); present |= 1 << slot; }
         }
         (out, present)
     }
@@ -2207,6 +2195,31 @@ impl Scripts {
         });
     }
 
+    /// A run-time `Script_Load` + `Script_Play(_, 1)` + `Script_Update` (the creator-owned script
+    /// pair of `GT_Create` 0x17ffa0:100-116, for a turret created after the level load — the
+    /// deployed Ronin): the player is pushed and its create-time load beat (`prime`) runs at once,
+    /// as the placed turrets' did at the first tick. Returns the player index.
+    pub fn spawn_primed(&mut self, mut p: Player, ch: &mut Channels, w: &dyn World, frame: u32) -> usize {
+        let mut out = std::mem::take(&mut self.requests);
+        p.prime(&self.lib, &mut self.objects, ch, w, frame, &mut out);
+        self.requests = out;
+        self.players.push(p);
+        self.players.len() - 1
+    }
+
+    /// `Script_SetPosRot(info, m)` [M 0x180498 cases 2/4/7]: player `i`'s base matrix and its
+    /// playing script's — the stream entities pose relative to it (the copter precedent).
+    pub fn pose_player(&mut self, i: usize, matrix: Mat4) {
+        let Some(p) = self.players.get_mut(i) else { return };
+        p.matrix = matrix;
+        if let Some(s) = p.info[p.cur].as_mut() { s.matrix = matrix; }
+    }
+
+    /// `GT_Delete` 0x181678's `Script_Free` pair: player `i` goes to the delete state.
+    pub fn delete_player(&mut self, i: usize) {
+        if let Some(p) = self.players.get_mut(i) { p.state = 5; }
+    }
+
     /// `Copter_Update`'s head unhide [M 0x17dbb8: `SP_HideObj(*(copter+0x2c), 0)` on the gate's
     /// first ON tick, then `copter+0x70 = 0`]: the copter `placement`'s SP plays from its primed
     /// pose (the prime ran at create — docs/systems/copter-sp-hide.md).
@@ -2245,7 +2258,7 @@ impl Scripts {
     /// skip these, so a frozen SP's primed model resolves to nothing (the draw code needs no
     /// change).
     pub fn hidden_stream_objects(&self) -> Vec<usize> {
-        let mut out = Vec::new();
+        let mut out = self.hidden_objs.clone();
         for p in &self.players {
             if !p.hidden { continue; }
             if let Some(s) = p.info[p.cur].as_ref() {

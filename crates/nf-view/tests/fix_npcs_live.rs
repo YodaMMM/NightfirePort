@@ -125,7 +125,7 @@ fn the_spot_ray_picks_bond_and_arms_the_light_from_his_sphere() {
             phase: 0.0, drawn: kind != 2, matrix: [[0.0; 4]; 4], state: 0, pitch, yaw, links: [None; 5],
             killed: false, light: None, alpha: 255, scale: 1.0, box_min: [0.0; 3], box_max: [0.0; 3],
             sph_centre: [0.0; 3], sph_radius: 0.0,
-            spawn_pos: pos, created: 0, lod_next: false,
+            spawn_pos: pos, created: 0, lod_next: false, sight: false,
         };
         let mut head = part(1, head_pos);
         head.links = [None, None, Some(1), None, None];
@@ -137,7 +137,7 @@ fn the_spot_ray_picks_bond_and_arms_the_light_from_his_sphere() {
         let player = nf_game::drone::Player { yaw: 0.0,
             pos: bond_pos, target: bond_pos, eye: bond_pos, aim: [0.0, 0.0, 1.0], sph: centre, hanging: false,
             capsule: ([bond_pos[0], bond_pos[1] + 0.55, bond_pos[2]], [bond_pos[0], bond_pos[1] - 0.76, bond_pos[2]]),
-            cel: None };
+            body: Default::default(), cel: None, move_local: [0.0; 2] };
         let mut rng = nf_game::drone::Rng::new(0x5eed);
         let mut channels = sim.drones.channels.clone();
         eprintln!("[ray] head {head_pos:?} pitch {pitch:.3} bond {bond_pos:?} sph {centre:?}");

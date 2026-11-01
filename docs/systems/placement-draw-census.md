@@ -16,7 +16,7 @@ object:
 
 - **glist attach**: `Control_SetGList` / `Control_CreateObjEx` (obj+0xd8 = glist, obj+0xF0 =
   *(glist+0x44) | mask) or a direct `obj+0xd8 = glist` store — the created obj renders its
-  glist's meshes (an empty glist draws nothing; the glist's own 0x10 no-draw / 0x400 mirror-only
+  glist's meshes (an empty glist draws nothing; the glist's own 0x10 no-draw / 0x400 x-ray-only
   bits gate it where the creator copies glist+0x44 [M scene.rs's fix-striped-boxes2 census]);
 - **skin drone** (0xf, `Drone_Create` 0x136be0): the character pass;
 - **script entity** (SP): `SP_Create` / `SP_CreateScriptPlayer` instantiate objects by hashcode

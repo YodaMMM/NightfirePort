@@ -46,16 +46,27 @@ fn the_q_claw_reels_bond_to_the_grapple_point_and_releases() {
         let (turn, look) = aim_inputs(&scene, target);
         scene.sim.as_mut().unwrap().step_bond(Input { turn, look, ..Default::default() }, false, false, false);
     }
+    // Sister: aiming alone never plays the claw's latch sound.
+    assert!(!scene.sim.as_ref().unwrap().drones.audio.live_ids().contains(&nf_view::scene::GRAPPLE_LATCH_SFX),
+        "no latch sound before the fire");
     let mut hung = false;
+    let mut latch_sounds = 0;
     for _ in 0..1200 {
         let (turn, look) = aim_inputs(&scene, target);
+        let was_walk = scene.sim.as_ref().unwrap().bond.grapple.is_none();
         scene.sim.as_mut().unwrap().step_bond(Input { turn, look, ..Default::default() }, true, false, false);
+        let sim = scene.sim.as_mut().unwrap();
+        // The latch tick plays 0x28d once [M Bullet_Delete 0x12e660:53].
+        if was_walk && sim.bond.grapple.is_some() {
+            latch_sounds = sim.drones.audio.live_ids().iter().filter(|&&id| id == nf_view::scene::GRAPPLE_LATCH_SFX).count();
+        }
         let sim = scene.sim.as_ref().unwrap();
         let d = ((sim.bond.pos[0] - target[0]).powi(2) + (sim.bond.pos[1] - target[1]).powi(2) + (sim.bond.pos[2] - target[2]).powi(2)).sqrt();
         if sim.bond.grapple.as_ref().map(|g| g.phase) == Some(2) && d < 2.5 { hung = true; break; }
         assert!(!(sim.bond.substate == nf_game::player::SS_WALK && sim.bond.grapple.is_none()),
             "the grapple must not detach while the fire is held (the game holds the hang [M 0x192860:57-62])");
     }
+    assert_eq!(latch_sounds, 1, "the latch plays the claw's 0x28d once [M Bullet_Delete 0x12e660:53]");
     let sim = scene.sim.as_ref().unwrap();
     assert!(hung, "the reel must hang Bond at the point (pos {:?}, phase {:?})",
         sim.bond.pos, sim.bond.grapple.as_ref().map(|g| g.phase));

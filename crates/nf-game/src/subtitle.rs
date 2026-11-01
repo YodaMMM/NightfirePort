@@ -85,6 +85,19 @@ impl SubtitleTrack {
         self.lines.iter().find(|l| l.start <= t && t < l.end).map(|l| l.label)
     }
 
+    /// `Text_AddMsg(-1, 0xff, 4, Txt_BindLabel(label), 0, time)` — `Sound_DoSubtitle` 0x1dde58's add
+    /// [M]: the id-0xff type-4 add passes `Text_AddMsg`'s flag gate through its
+    /// `(type == 4 && id == 0xff)` disjunct [M 0x1b0c30] whatever the option says, so the queue takes
+    /// it unconditionally (the OPTION gate for spoken lines is `Sound_DoSubtitle`'s own, which the
+    /// caller models). FIFO chaining and the verbatim duration behave like `push`.
+    /// * `always_show` false → the caller already dropped the line (the DoSubtitle gate).
+    pub fn push_always(&mut self, now: u32, label: u32, time: u16) -> bool {
+        let start = self.lines.last().map_or(now, |l: &SubtitleLine| l.end.max(now));
+        let dur = time as u32;
+        self.lines.push(SubtitleLine { label, start, end: start + dur });
+        true
+    }
+
     /// `Text_FlushAllSubtitles()` (0x1b15c8, `Script_FFwd`'s skip arm 0x1dac78:28-29) at tick
     /// `now`: the displayed head stops at `now` and every queued line dies — each drop is
     /// `Text_DelMsg` 0x1b1640 (unlock the string, free the `TXT_MSG` node; the port has no

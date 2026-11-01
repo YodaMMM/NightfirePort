@@ -197,6 +197,7 @@ pub fn sinf(mut x: f32) -> f32 {
 /// the EE FPU's (doubling adds exact, products chopped, no-guard sums — G-024 closed: diff_calls proves the
 /// model bit-exact on the 40 recorded `Quat_QuatToMat` calls, and the 07000001 escort divergence it used to flip
 /// has another root cause — the game's own math is this path).
+#[inline]
 pub fn quat_trans_to_mat(q: [f32; 4], t: [f32; 3]) -> Mat4 {
     use crate::ps2float as pf;
     let [x, y, z, w] = q;
@@ -218,6 +219,7 @@ pub fn quat_trans_to_mat(q: [f32; 4], t: [f32; 3]) -> Mat4 {
 /// truncate, the running sum keeps its guard bit (`ACC = a₀·b₀; ACC += a₁·b₁; …`). Measured against the EE
 /// snapshots by `nf-extract pose-check` (docs/formats/animation.md "Arithmetic"); the escort divergence is
 /// not caused by this path.
+#[inline]
 pub fn mul(a: &Mat4, b: &Mat4) -> Mat4 {
     use crate::ps2float::{add, mul};
     let mut r = [[0f32; 4]; 4];
@@ -229,6 +231,7 @@ pub fn mul(a: &Mat4, b: &Mat4) -> Mat4 {
     r
 }
 
+#[inline]
 pub fn transform(m: &Mat4, v: [f32; 3]) -> [f32; 3] {
     [0, 1, 2].map(|c| v[0] * m[0][c] + v[1] * m[1][c] + v[2] * m[2][c] + m[3][c])
 }
@@ -283,14 +286,32 @@ fn local_pose_bones_with(seq: &Sequence, skel: &Skeleton, skin: &Skin, frame: u3
         Arith::Ps2 => (pf::mul, |a, b| pf::add_noguard(a, b, true), |a, b| pf::add_noguard(a, -b, true), f32::sqrt),
         Arith::Nearest => (|a, b| a * b, |a, b| a + b, |a, b| a - b, f32::sqrt),
     };
+    // rook-cutscene-14: the skin scale multiplies every bone's LOCAL translation — but NOT the
+    // root's. `AnimFrameCopy` 0x1c5668 writes the translation channels scaled (cases 3/4/5 ×
+    // Glb_SkinScale/DAT_00319d84/DAT_00319d88 [M :170-177]) and then UNSCALES the buffer's FIRST
+    // translation record with the inverse-scale vector (`Vec_Mul(param_2, 0x319d90)` [M :536] —
+    // Glb_InvSkinScale/DAT_00319d94/DAT_00319d98, set per skin in `AnimObjectUpdate` 0x1befd8:119-124).
+    // That record is the root's: it is the VECTOR `AnimGetFirstTrans` 0x1c7348 copies into
+    // obj+0x30 and the record `AnimFrameResolve` 0x1c35f8:429-432 delta-adds — the root track is
+    // a WORLD position (the cut-scene actors) or a world-frame motion (the gameplay root track,
+    // read raw by `root_translation_at`), never a skeleton-local offset, and scaling it threw
+    // 07000014's escape-scene Rook (skin 0x05000066, scale 1.1 [D the skin record]) to
+    // 1.1 × his body track's world root — behind the Delta Sector door, out of the shot.
+    let mut root_record = true;
     let mut ch = 0;
     let mut out = Vec::with_capacity(skel.bones as usize);
     for bone in 0..bones.min(skel.bones as usize) {
         let t = if skel.has_translation(bone) {
-            let t = [0, 1, 2].map(|k| mul(seq.value_with(ch + k, frame, arith), skin.scale[k]));
+            let is_root = root_record;
+            root_record = false;
+            let t = [0, 1, 2].map(|k| {
+                let v = seq.value_with(ch + k, frame, arith);
+                if is_root { v } else { mul(v, skin.scale[k]) }
+            });
             ch += 3;
             t
         } else {
+            root_record = false;
             [0, 1, 2].map(|k| mul(skel.offsets[bone][k], skin.scale[k]))
         };
         let v = |k: usize| seq.value_with(ch + k, frame, arith);
@@ -329,7 +350,9 @@ pub fn skin_matrices(world: &[Mat4], skin: &Skin) -> Vec<Mat4> {
     world.iter().enumerate().map(|(bone, m)| {
         let ib = skin.inverse_bind.get(bone).map(|b| b.0).unwrap_or([0.0; 3]);
         let mut s = *m;
-        s[3] = [0, 1, 2].map(|c| ib[0] * m[0][c] + ib[1] * m[1][c] + ib[2] * m[2][c] + m[3][c]).into_iter().chain([1.0]).collect::<Vec<_>>().try_into().unwrap();
+        // perf-240f: the same sums, without a Vec per bone.
+        let r = [0, 1, 2].map(|c| ib[0] * m[0][c] + ib[1] * m[1][c] + ib[2] * m[2][c] + m[3][c]);
+        s[3] = [r[0], r[1], r[2], 1.0];
         s
     }).collect()
 }

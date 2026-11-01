@@ -159,8 +159,11 @@ fn every_06_head_placement_chains_to_the_searchlight_broken_variant() {
 fn the_laser_cut_leaves_every_06_searchlight_in_the_same_game_off_state() {
     let Some(iso) = iso() else { eprintln!("NF_ISO not set — skipping"); return };
     let mut scene = load_06(&iso);
-    // Wait for the boot NIS's staged reveal (the port raises 64/63/61/62 across ~167 ticks [D
-    // 0x06000066 stream 0]) so the cut lands on LIT lights like the player's run.
+    // Wait for the staged reveal (NIS 0x06000066 raises 64/63/61/62 across ~167 ticks [D stream 0])
+    // so the cut lands on LIT lights like the player's run. light-glow: the reveal starts when SP #808's
+    // ch 0x34 rises — the courtyard entry plates the player's run crosses [D trigger census #524-#526;
+    // M SP_Hit 0x1dc470:16-18, SP_Update 0x1dbda8 case 0]; raise it the way a plate does.
+    scene.sim.as_mut().unwrap().drones.channels.set(0x34, 1, 0);
     let mut lit_all = false;
     'outer: for _ in 0..900u32 {
         scene.sim.as_mut().unwrap().step_bond(Input::default(), false, false, false);

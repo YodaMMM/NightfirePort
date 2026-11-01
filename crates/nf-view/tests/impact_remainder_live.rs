@@ -51,6 +51,8 @@ fn the_roll_follows_the_decompile_rule_for_a_fixed_seed() {
 fn a_wall_shot_draws_the_games_count_and_a_sky_shot_draws_nothing() {
     let Some(iso) = std::env::var("NF_ISO").ok() else { eprintln!("NF_ISO not set — skipping"); return };
     let mut scene = nf_view::load(&iso, "07000005.bin", false).unwrap();
+    // hud-start: a load holds nothing (0x47 [M 0x1a7ef8:137]) - settle the start draw first.
+    nf_view::settle_start_draw(scene.sim.as_mut().unwrap());
     let (wall_delta, sky_delta, wall_mat, debris_n, emitters_after, _emitters) = {
         let sim = scene.sim.as_mut().unwrap();
         let eye0 = [sim.bond.pos[0], sim.bond.pos[1] + 1.2, sim.bond.pos[2]];
@@ -103,6 +105,8 @@ fn a_wall_shot_draws_the_games_count_and_a_sky_shot_draws_nothing() {
         // none of the impact ones. The RNG restarts from the same seed only via a fresh scene;
         // the deltas are comparable because the idle/AI draws cancel between identical windows.
         let mut scene2 = nf_view::load(&iso, "07000005.bin", false).unwrap();
+        // hud-start: a load holds nothing (0x47 [M 0x1a7ef8:137]) - settle the start draw first.
+        nf_view::settle_start_draw(scene2.sim.as_mut().unwrap());
         let (sky_delta,) = {
             let sim = scene2.sim.as_mut().unwrap();
             let eye0 = [sim.bond.pos[0], sim.bond.pos[1] + 1.2, sim.bond.pos[2]];
@@ -243,6 +247,8 @@ fn a_wall_shot_draws_the_games_count_and_a_sky_shot_draws_nothing() {
 fn the_burst_lands_on_the_first_update_after_the_hit_like_the_games_walk() {
     let Some(iso) = std::env::var("NF_ISO").ok() else { eprintln!("NF_ISO not set — skipping"); return };
     let mut scene = nf_view::load(&iso, "07000005.bin", false).unwrap();
+    // hud-start: a load holds nothing (0x47 [M 0x1a7ef8:137]) - settle the start draw first.
+    nf_view::settle_start_draw(scene.sim.as_mut().unwrap());
     let (hit_tick, next_delta, spawned, burst) = {
         let sim = scene.sim.as_mut().unwrap();
         let eye0 = [sim.bond.pos[0], sim.bond.pos[1] + 1.2, sim.bond.pos[2]];
@@ -294,6 +300,8 @@ fn the_burst_lands_on_the_first_update_after_the_hit_like_the_games_walk() {
     // Sister: the same shot into the sky — no impact emitter ever exists, so no burst-shaped tick
     // follows the flight (the game draws nothing for a sky shot [D records; the count test]).
     let mut scene2 = nf_view::load(&iso, "07000005.bin", false).unwrap();
+    // hud-start: a load holds nothing (0x47 [M 0x1a7ef8:137]) - settle the start draw first.
+    nf_view::settle_start_draw(scene2.sim.as_mut().unwrap());
     {
         let sim = scene2.sim.as_mut().unwrap();
         let eye0 = [sim.bond.pos[0], sim.bond.pos[1] + 1.2, sim.bond.pos[2]];

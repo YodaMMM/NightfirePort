@@ -14,6 +14,8 @@ use nf_view::scene::ViewOpts;
 fn a_shot_at_a_wall_leaves_a_decal_a_sky_shot_leaves_none() {
     let Some(iso) = std::env::var("NF_ISO").ok() else { return };
     let mut scene = nf_view::load(&iso, "07000005.bin", false).unwrap();
+    // hud-start: a load holds nothing (0x47 [M 0x1a7ef8:137]) - settle the start draw first.
+    nf_view::settle_start_draw(scene.sim.as_mut().unwrap());
     // One mutable phase, one read phase (the Sim borrows the scene).
     let (hit, dec, mat, new_decals, sky_new) = {
         let sim = scene.sim.as_mut().unwrap();
@@ -92,11 +94,13 @@ fn a_shot_at_a_wall_leaves_a_decal_a_sky_shot_leaves_none() {
     // fix-impacts-render: the draw is the game's own mesh. The scene's Effect-instance pool for the
     // decal's `EffectInfo+4` mesh hash exists (`hashtable_set_sub_object_to_entity_gfx(node,
     // EffectInfo[type]+4)` 0x1ce9c8), and the frame matrix of the new decal's slot (the last FIFO
-    // index) sits at the stored pose — `Mat_Align2Dir` 0x1df2a8 rotation, translation `hit +
+    // node) sits at the stored pose — `Mat_Align2Dir` 0x1df2a8 rotation, translation `hit +
     // normal·0.01` (`View_DrawObjectGlist` 0x1e6780 draws node+0x10's glist at node+0x20).
     let (decal_att, debris_att, debris) = {
         let sim = scene.sim.as_ref().unwrap();
-        let slot = sim.drones.effects.decals.len() - 1;
+        // The new decal's draw slot is its pool node (the 200-slot ring keeps each hole in its node for
+        // life [M Effect_InitLists 0x1cf268]), not the list index.
+        let slot = sim.drones.effects.decal_node(sim.drones.effects.decals.len() - 1);
         let att = scene.effect_attachment(0, slot, dec.mesh)
             .expect("the decal mesh's draw slots are in the scene");
         // The debris pool: `Scene::build` instances every `EffectInfo+0x74` hash the level archive
@@ -135,6 +139,8 @@ fn a_shot_at_a_wall_leaves_a_decal_a_sky_shot_leaves_none() {
 fn each_shot_ejects_one_casing_that_lands_within_its_lifetime() {
     let Some(iso) = std::env::var("NF_ISO").ok() else { return };
     let mut scene = nf_view::load(&iso, "07000005.bin", false).unwrap();
+    // hud-start: a load holds nothing (0x47 [M 0x1a7ef8:137]) - settle the start draw first.
+    nf_view::settle_start_draw(scene.sim.as_mut().unwrap());
     let landed = {
         let sim = scene.sim.as_mut().unwrap();
         sim.bond.yaw = 0.0;
@@ -165,6 +171,8 @@ fn each_shot_ejects_one_casing_that_lands_within_its_lifetime() {
 fn the_casing_draw_slot_carries_the_p2k_mesh_and_tracks_the_pose() {
     let Some(iso) = std::env::var("NF_ISO").ok() else { return };
     let mut scene = nf_view::load(&iso, "07000005.bin", false).unwrap();
+    // hud-start: a load holds nothing (0x47 [M 0x1a7ef8:137]) - settle the start draw first.
+    nf_view::settle_start_draw(scene.sim.as_mut().unwrap());
     let (casing, att) = {
         let sim = scene.sim.as_mut().unwrap();
         // The P2K's expected casing mesh straight from the tables the sim consults.
@@ -199,6 +207,8 @@ fn the_seeded_run_reproduces_bit_for_bit() {
     let Some(iso) = std::env::var("NF_ISO").ok() else { return };
     let run = || -> (Vec<[f32; 3]>, (u32, u32)) {
         let mut scene = nf_view::load(&iso, "07000005.bin", false).unwrap();
+        // hud-start: a load holds nothing (0x47 [M 0x1a7ef8:137]) - settle the start draw first.
+        nf_view::settle_start_draw(scene.sim.as_mut().unwrap());
         let (decals, rng) = {
             let sim = scene.sim.as_mut().unwrap();
             sim.bond.yaw = 0.4;
@@ -223,6 +233,8 @@ fn the_seeded_run_reproduces_bit_for_bit() {
 fn forty_rounds_default_caps_at_32_and_keeps_64_holds_the_rest() {
     let Some(iso) = std::env::var("NF_ISO").ok() else { return };
     let mut scene = nf_view::load(&iso, "07000005.bin", false).unwrap();
+    // hud-start: a load holds nothing (0x47 [M 0x1a7ef8:137]) - settle the start draw first.
+    nf_view::settle_start_draw(scene.sim.as_mut().unwrap());
     // Phase 1 — the game's default: 40 ejects (press for a tick, then 19 settled ticks — the
     // semi-auto's cycle gates the shot, not the press). The casings land (the plane is at the
     // shooter's feet) and sink through the floor exactly as the game's do [M: class 0x0d has no

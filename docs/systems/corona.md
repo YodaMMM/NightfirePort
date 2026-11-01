@@ -41,11 +41,67 @@ in ACTION.ELF (whole-decompile grep). It calls `Corona_Create(pos, quat, level, 
    alpha list);
 3. `build_LinkToRoom(obj, 0, glb_world)`.
 
-So the 13 type-0xFC placement coronas on the disc's levels are class-1 objects with
-`control_funcs[1] = {NULL, NULL, NULL}` — **no update runs, no RNG is consumed**, and the
-viewer's static-glow-quad port (`crates/nf-view/src/scene.rs`, `nf_game::corona::placements`)
-is the complete behavior. (census: 5× `Corona_Glow2`, 7× `Window_corona`, 1× `Corona_test1`
-on 07000005 [L ee_start_05 / WORKLOG 0073].)
+So the type-0xFC placement coronas are class-1 objects with
+`control_funcs[1] = {NULL, NULL, NULL}` — **no update runs**. (census: 07000005 5× `Corona_Glow2`,
+7× `Window_corona`, 1× `Corona_test1` [L ee_start_05 / WORKLOG 0073]; 07000004 2× `corona`;
+07000015 36× `corona1`, 39× `corona_small`, 1× `corona_red`; 07000016 21× `Corona_Glow2` [D
+nf-extract placements … fc, 2026-10-31]; the earlier "13 on the disc" counted 07000005 only.)
+
+## Drawing: camera-facing (2026-10-31, level-05-glow)
+
+The draw is `View_DrawObjList` 0x1e69a0 → `View_SetupRenderModes_Tweak` + `View_DrawObjectGlist`
+0x1e6780 with obj+0xF0 = the glist flags. **Every placed corona glist carries bit 0x8** (0x22d /
+0x229 on 05, 0x29 on 04, 0x2d on 15/16 [D]), and for 0x8 `View_DrawObjectGlist` builds the matrix
+from the VIEWER: `Mat_CopyRot(viewer+0x1a0, m)` 0x1e3370 then `Mat_SetTrans(obj+0xC0, m)` 0x1e3478
+(the obj+0x58 ≠ 0 arm instead concatenates `RotTransMatrix(obj+0x50)` with the viewer rotation),
+then `Mat_Scale3f` by obj+0xE8 when it is not 1.0 [M 0x1e67a4-0x1e6848]. The port drew the coronas
+at their placement matrix, so seen from the side they were thin slivers — the 07000005 start's
+bunker glow (placement 14) and gate-arch glow (placement 15) read far dimmer than the PS2's (the
+long-open "05 glow"). Now each corona rides a posed slot after the searchlight parts
+(`Scene::corona_pos` / `corona_slot0`, `scene::billboard_matrix`), CPU and GPU paths alike
+(`corona_billboard_live.rs`).
+
+### Size wobble (glist bit 0x4) — ported with a renderer-side RNG (2026-10-31)
+
+The game [M 0x1e6860-0x1e68b8]: after the matrix is built (and after the 0x8 branch's own
+`Mat_Scale3f` by obj+0xE8 when obj+0xE8 ≠ 1.0), an obj+0xF0 & 0x4 object gets
+`Mat_Scale3f(m, m, obj+0xE8 + Rand_FRand(0.05), obj+0xE8 + Rand_FRand(0.05), obj+0xE8 + Rand_FRand(0.05))`
+— three `Rand_FRand(0x3d4ccccd = 0.05)` draws, in x, y, z order. `Mat_Scale3f` 0x1e35f0 scales matrix
+rows 0/1/2 (the drawn x/y/z axes) by those three values and keeps the translation. A placed
+corona's obj+0xE8 is 1.0 (`control_init_object` 0x134630; `Corona_Create` never changes it), so each
+axis draws at **1 + [0, 0.05)** independently — up to 5% bigger, never smaller, re-rolled every draw
+(`View_DrawObjectGlist` runs per drawn object per frame). The bit is a draw rule in
+`View_DrawObjectGlist`, not a corona rule: any object with 0x4 in obj+0xF0 gets it. Which coronas carry
+it [D glist flags]: 07000005 `Corona_Glow2` ×5 and `Corona_test1` ×1 (0x22d) yes, `Window_corona` ×7
+(0x229) no; 07000004 `corona` ×2 (0x29) no; every 07000015 (76) and 07000016 (21) corona (0x2d) yes.
+
+`Rand_FRand` 0x1e3780 steps the **shared** `SEED_X/SEED_Y` multiply-with-carry pair (×18000 / ×30903),
+the same stream the AI, bullets and effects draw from, and returns `max · (SEED_X·0x10000 + (SEED_Y &
+0xFFFF)) · 2⁻³²` [M].
+
+**The port does not use the sim's RNG for this.** `scene::corona_wobble(tick, slot)` is a
+**renderer-side** generator: a stateless hash of (the 60 Hz tick `floor(anim_time)`, the corona slot,
+the axis) mapped to `0.05 × [0, 1)`, applied by `Scene::corona_matrix` on both the CPU path
+(`animate`) and the GPU palette (`skin_palette_into`). This is safe because draw-side randomness never
+feeds back into the simulation: nothing in the sim reads the drawn scale, the renderer never steps
+`Drones::rng`, and the sim state hashes are the same as before the wobble was added
+(`corona_billboard_live::the_0x4_coronas_wobble_without_touching_the_sim_rng` checks the sim RNG's
+x/y/draw count across 120 rendered ticks; `cross_process_determinism` / `fps_determinism_live` are
+unchanged). One value per 60 Hz tick, so the wobble changes at the PS2's per-frame rate at any display
+rate (240 Hz included), and the CPU and GPU paths agree.
+
+What stays different from the game (deliberate): the exact random values differ, and the game's
+shared stream advances 3 draws per drawn wobbling object per frame — a draw-order dependence on
+what is in view — which the port's sim stream does not mirror (a sim that copied it would make
+AI/bullet randomness depend on the camera and the display rate). Recorded in GAPS G-034.
+
+### PS2 check status (2026-10-31)
+
+07000005's start coronas were compared against PCSX2 frames. **07000015 (76) and 07000016 (21) have
+no PS2 capture yet**: no local PCSX2 frame of either level shows them. Port views exist (15: the
+`corona1` ring on the tower top at (0, 54.6, 0) seen from (20, 48, 0), the ring at (71, 54.6, 0),
+the `corona_small` wall lamps at x ≈ 0, y 35.2; 16: the `Corona_Glow2` field at y 28.9 around
+(3, −160)). A PS2 frame of each spot is still owed before the 15/16 corona look counts as checked.
 
 ## Corona_Update 0x18da78 (the unlaunched runtime fade — documented, not ported)
 

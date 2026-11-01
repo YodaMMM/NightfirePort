@@ -91,7 +91,7 @@ fn shoot_at(w: &mut Walker, target: [f32; 3], range: f32, max_ticks: u32, label:
             w.scene.sim.as_mut().unwrap().step_bond(input, trigger, false, false);
         }
         w.total_ticks += 1;
-        if w.top_up_health { w.scene.sim.as_mut().unwrap().drones.health.health = 100.0; }
+        w.after_step();
     }
 }
 
@@ -743,8 +743,21 @@ fn the_spawn_height_matches_the_game_snapshot() {
 /// does not reproduce the edge-climb settle, and a dead-on r-0.4 approach WEDGES (the walker's
 /// stuck panic) — the climb needs the game's per-tick push/step shape through the doorway (the
 /// live check in the report).
+/// 2026-10-31 session (level-0a-ignored-checks) — the decompile side of the press-y hunt: the
+/// walk path has NO step-up and NO wall-stop — the move integrates unclipped [M Player_Update
+/// 0x193600:284-295] and the cyl push tail is dead on 0a fresh boot: the ref HITTEST+0x50 is the
+/// lifetime DeltaP accumulator, boots (0,0,0) [L ee_start_0700000a 0x1b78ee0 = 00×16] and every
+/// walked contact sits |closest| ≈ 10-25 from the origin ≫ r 0.55, so the tail never fires and
+/// pos += BL+0x750 adds zero [M 0x1949a8:131-140; _DeltaP zeroed per call 0x109da0:136, the
+/// add-back the only +0x50 writer 0x1ebaa8:353-373]; the head-on cull is inert on the raw walk
+/// spine denom (0.7597 < 0.999 [M 0x109da0:321-322]). On a fresh boot the press-y therefore
+/// cannot come from CylGeom at all; the remaining y writers on a walked line are the FeetOnPoint
+/// band [M 0x194188:106] and the walk-anim root ride (cc read fresh per tick [M 0x194df0:86] —
+/// the port's SP anim set is the 2-frame stub [D 0x2b91b0]). Named live checks: (1) dump
+/// BL+0x790 per frame through the doorway brush — pins the dead tail on 0a; (2) trace the
+/// walk-anim root motion → AnimObject+0xcc during the walked glide — the +0.0256 candidate.
 #[test]
-#[ignore = "the through-line crosses the doorway on every measured tree, but the settled y never reaches the game's 1.1285 [L 2026-10-26]: 1.1201 on the settle-5 radial-tail tree, 1.0905 on master (the press-y is 0.0000 there — every doorway contact pushes horizontally, NF_CAPS_LOG trace this round). The walked-dy growth is NOT any statically-pinned writer: the walk move is yaw-only (Player_Move 0x191dd0 writes +0x10/+0x18, the walk matrix RotMatrix(BL+0x30) reads the pitch lane ZEROED at Player_Update 0x193600:134 — the look writes +0x40/+0x8a8 [M]); the SP body anim set is the static 2-frame stub (set 0x2b91b0 = all 0x06000a00 → seq 0x84f, 2 frames [D ACTION.ELF @0x2b91b0 + the script dump]) so no anim bob rides the walk; gravity is band-gated off [M 0x194df0:104]. The remaining writer is the radial tail's ref (HITTEST+0x50 = the lifetime DeltaP accumulator [M 0x1ebaa8:353-373], _DeltaP zeroed per Intersect_CylGeom call 0x109da0:136): its live walked value — which decides the press's y — is the open live check (the 2026-10-26 frames: climb +0.004/tick to 1.1402 @f5, peak 1.1465, band-catch descent to the settled 1.1285). Level-0a-hall-glide-settle round: the mechanism stays unported, the note re-pinned"]
+#[ignore = "the through-line crosses the doorway on every measured tree, but the settled y never reaches the game's 1.1285 [L 2026-10-26]: 1.1201 on the settle-5 radial-tail tree, 1.0905 on master (the press-y is 0.0000 there — every doorway contact pushes horizontally, NF_CAPS_LOG trace this round). The walked-dy growth is NOT any statically-pinned writer: the walk move is yaw-only (Player_Move 0x191dd0 writes +0x10/+0x18, the walk matrix RotMatrix(BL+0x30) reads the pitch lane ZEROED at Player_Update 0x193600:134 — the look writes +0x40/+0x8a8 [M]); the SP body anim set is the static 2-frame stub (set 0x2b91b0 = all 0x06000a00 → seq 0x84f, 2 frames [D ACTION.ELF @0x2b91b0 + the script dump]) so no anim bob rides the walk; gravity is band-gated off [M 0x194df0:104]. Decompile side (2026-10-31): no step-up and no wall-stop exist — the push tail is dead on 0a fresh boot (ref HITTEST+0x50 boots (0,0,0) [L ee_start_0700000a 0x1b78ee0 = 00×16], every walked contact |closest| ≈ 10-25 ≫ r 0.55, _DeltaP zeroed per call [M 0x109da0:136], add-back only [M 0x1ebaa8:353-373]), so the press-y cannot come from CylGeom on a fresh boot; the remaining y writers are the FeetOnPoint band [M 0x194188:106] and the walk-anim root ride (cc fresh per tick [M 0x194df0:86]). Named live checks: (1) dump BL+0x790 per frame through the doorway brush; (2) trace the walk-anim root motion → AnimObject+0xcc during the walked glide — the +0.0256 candidate"]
 fn the_west_hall_glide_height_matches_the_game() {
     let mut w = load_carry(None);
     // Wait out the SS door sweep (the same guard the main walk runs).
@@ -775,7 +788,10 @@ fn the_west_hall_glide_height_matches_the_game() {
     // passed x -9.0106 at frame 36. The slide itself crosses on master too (230 ticks to
     // (-9.93, 17.08), the [L] rate); the settled y stays short (the ignore note carries the
     // ruled-out writers and the open ref live check, level-0a-hall-glide-settle) — the test
-    // stays ignored.
+    // stays ignored. 2026-10-31: the decompile side is now read (no step-up/wall-stop, the
+    // push tail dead on 0a fresh boot — the doc's session paragraph); the press-y's remaining
+    // writers are the band and the walk-anim root ride, both named live checks. The note is
+    // re-pinned with them.
     assert!((p[1] - 1.1285).abs() <= 0.003,
         "the west hall glide must read the game's settled 1.1285 [L 2026-10-26], got {:.4} at ({:.3},{:.3})",
         p[1], p[0], p[2]);
@@ -802,8 +818,24 @@ fn the_west_hall_glide_height_matches_the_game() {
 /// ~0.011-inside-the-plane glide rest [L fresh boot]. The flip is not landed: under the flag
 /// the_pick_ref_accumulator_tracks_the_game_ref, walk_office_floor_qworm_keyboard_hatch and
 /// walk_office_floor_to_the_security_keyboard go red (master: 7 passed / 0 failed / 2 ignored).
+///
+/// 2026-10-31 session CORRECTION (level-0a-ignored-checks): the 2026-10-30 crossing reading ran on
+/// a DEAD flag path — pre_move_pos was captured after the walk add (the fix hoists it before every
+/// position move; contacts read the post-move root [M Player_Update 0x193600:284-295]), so
+/// move_v = (0, gravity, 0) and the clip never engaged: the "crossing" was wall-response-less
+/// ghosting. Re-measured with the capture fixed: NF_WALK_CLIP=1 now WEDGES the west-hall
+/// through-line at the doorway (STUCK (−8.28, 1.03, 15.83), y decaying 1.03→0.71) — the clip model
+/// does not reproduce the doorway slide even under its own flag. Decompile side the walk path has
+/// NO clip and NO wall-stop at all: the move integrates unclipped [M 0x193600:284-295], the cyl
+/// push tail is dead on 0a fresh boot (ref = HITTEST+0x50, the lifetime DeltaP accumulator, boots
+/// (0,0,0) and every walked contact sits |closest| ≈ 10-25 away ≫ r 0.55 [L ee_start_0700000a
+/// 0x1b78ee0 = 00×16; _DeltaP zeroed per call 0x109da0:136, add-back only 0x1ebaa8:353-373]), the
+/// head-on cull is inert on the raw walk spine denom (0.7597 < 0.999 [M 0x109da0:321-322]) and the
+/// only vertical mechanism is the FeetOnPoint band [M 0x194188:106]. The game slides the corner
+/// (xz bends) and settles 1.1159 [L 2026-10-26]; what produces the game's walked wall response is
+/// the open live check (BL+0x790 watch through the corner + doorway brush).
 #[test]
-#[ignore = "the crossing mechanism is found: the game's move-CLIP — with NF_WALK_CLIP=1 the corner CROSSES at +76 ticks vs the game's ~60 frames [L measured 2026-10-30], no kill switch; but the walk-model flip is not landed (under the flag the_pick_ref_accumulator_tracks_the_game_ref, walk_office_floor_qworm_keyboard_hatch and walk_office_floor_to_the_security_keyboard go red) and the exit-y reads 1.0891 vs the settled 1.1159 [L 2026-10-26] — the 0.0268 gap is the west-hall leg's unported +0.0256 climb settle (the glide sister's mechanism); un-ignore once the clip is the walk default and the settle lands"]
+#[ignore = "the crossing mechanism is NOT the port's move-clip: the 2026-10-30 'crosses at +76 ticks with NF_WALK_CLIP=1' ran on a DEAD flag path (pre_move_pos captured after the walk add → move_v = (0, gravity, 0) → the clip never engaged — the crossing was wall-response-less ghosting); re-measured 2026-10-31 with the capture fixed and the flag WEDGES the west-hall through-line at the doorway (STUCK (−8.28, 1.03, 15.83), y decaying). Decompile side the walk path has no clip and no wall-stop: the move integrates unclipped [M 0x193600:284-295], the cyl push tail is dead on 0a (ref = HITTEST+0x50, the lifetime DeltaP accumulator [M 0x1ebaa8:353-373], boots (0,0,0) [L ee_start_0700000a 0x1b78ee0 = 00×16], every walked contact |closest| ≈ 10-25 ≫ r 0.55), the head-on cull is inert on the raw walk spine denom (0.7597 < 0.999 [M 0x109da0:321-322]) and the only vertical mechanism is the FeetOnPoint band [M 0x194188:106]. The game slides the corner and settles 1.1159 [L 2026-10-26]; the port wedges on master. The open live check is the game's walked wall response: watch BL+0x790 through the corner + doorway brush (pins the dead tail) and find the mechanism; the climb settle is the glide sister's live check"]
 fn the_corner_crosses_like_the_game() {
     let mut w = load_carry(None);
     for _ in 0..150 {
@@ -872,24 +904,69 @@ fn west_doorway_repro() {
     }
 }
 
-/// The band-edge sister: Bond walks onto the south-corridor mouth's floor bridge (the map37
+/// The band-edge sister: Bond WALKS onto the south-corridor mouth's floor bridge (the map37
 /// mesh strip the instances fix folded in — x −11.43..−10.39, z −19.36..−18.03 [D the disc tri
 /// dump]) and stands AT its west edge. The floor band [M Player_FeetOnPoint 0x194188:106] holds
 /// him grounded at the edge — the honest edge case the floating wedge was not: no box grazes, the
 /// band passes, and he stays put. CAN FAIL if the band constants drift or the bridge drops out
 /// again (the instances fix's regression pin).
+///
+/// The reach, all real input (this round — the old REACH teleport onto (−11.35, 1.12, −18.6) is
+/// deleted): the game's route to the bridge is the player's own ring through the west offices to
+/// the pocket — the SAME walked timeline as walk_office_floor_qworm_keyboard_hatch (the Q-Worm
+/// PC detour included, green end-to-end), verbatim to the keypad's wall stand (−11.9, −17.5)
+/// [D keypad #648 at (−10.69, 1.52, −17.46)], then south-east onto the bridge's west end. The
+/// timeline must be bit-identical to the main walk's up to the divergence: civilian g8 patrols
+/// the desk lane itself (his loop (−14.8, 8.3) ↔ (−18.7, 5.4), rng 16 fov 1.57 [L the
+/// NF_ALARM_TRACE roster dump]) and a fresh-state crossing meets him head-on (d 0.5, seen →
+/// challenge 0x3e → the alarm press → fail 0x4000032 [L this round's trace runs]) — the main
+/// walk's phase (the PC detour delays the lane crossing) keeps him out of sight the whole way,
+/// so the shared timeline is the honest walk. The strip's west edge x −11.43 [D] and the wall's
+/// west face x −10.70 [D] stay east of the final leg; the closed door #724's leaf sits in the
+/// gap (x −10.70..−10.45, z −18.04..−19.36 [D]) and is never crossed — the bridge's west half
+/// is pocket-side floor, walled off from the corridor-mouth civilian g15 [D the coll-scan wall,
+/// the line to (−11.35, −18.6) crosses x −10.70 inside the wall's z −15.38..−17.96 span].
 #[test]
 fn bond_stands_at_the_mouth_bridge_edge() {
-    let mut w = load_carry(None);
-    // Reach: a REACH teleport onto the bridge's west end (the walk there crosses the wedging
-    // mouth legs — see the walk test's ignore note); the standing itself is the real input.
-    {
-        let sim = w.scene.sim.as_mut().unwrap();
-        sim.bond.pos = [-11.35, 1.12, -18.6];
-        sim.bond.vel = [0.0; 3];
-        sim.bond.yaw = std::f32::consts::FRAC_PI_2;
-        sim.bond.grounded = true;
+    // The main walk's own prologue + ring, bit-identical (the objectives 3-5 chain included —
+    // the timeline is the phase-setter for the desk lane's patroller).
+    let mut w = walk_to_security_keyboard();
+    let ring: [([f32; 3], &str); 23] = [
+        ([-7.5, 1.3, 14.5], "ring: the security centre's west door"),
+        ([-7.5, 1.3, 16.5], "ring: the west hall north"),
+        ([-20.5, 1.3, 16.5], "ring: the west offices' north corridor"),
+        ([-20.5, 1.3, 5.5], "ring: down the west office block"),
+        ([-17.6, 1.3, 5.5], "ring: the ai node 17 east of the door"),
+        ([-16.2, 1.3, 5.8], "ring: the ai node 27 east"),
+        ([-15.0, 1.3, 5.7], "ring: the ai node 26 east"),
+        ([-14.8, 1.3, 4.0], "ring: the ai node 32 south"),
+        ([-14.8, 1.3, 2.9], "ring: the ai node 33 south"),
+        ([-14.5, 1.3, 2.4], "ring: the ai node 34 south"),
+        ([-17.5, 1.3, 2.5], "ring: down past the west door"),
+        ([-18.5, 1.3, 2.5], "ring: the door jink west"),
+        ([-18.5, 1.3, 0.5], "ring: down"),
+        ([-19.5, 1.3, 0.5], "ring: the west corridor jink 2"),
+        ([-19.5, 1.3, -1.5], "ring: down 2"),
+        ([-21.5, 1.3, -1.5], "ring: the west corridor jink 3"),
+        ([-21.5, 1.3, -6.5], "ring: down the south-west offices"),
+        ([-18.5, 1.3, -6.5], "ring: jink 4"),
+        ([-18.5, 1.3, -9.5], "ring: down 3"),
+        ([-17.5, 1.3, -9.5], "ring: jink 5"),
+        ([-17.5, 1.3, -13.5], "ring: the south-west corner approach"),
+        ([-14.5, 1.3, -15.0], "ring: south of the pillar, into the pocket"),
+        ([-11.9, 1.3, -17.5], "ring: the keypad's wall"),
+    ];
+    for (wp, label) in ring {
+        watch_and_clear(&mut w, 16.0);
+        w.walk_to(Wp::new(wp[0], wp[1], wp[2]).r(0.8), label);
+        assert!(w.scene.sim.as_ref().unwrap().drones.level_exit.is_none(), "the mission failed at '{label}'");
     }
+    // The bridge's west end, walked: south-east from the keypad's wall across the pocket's
+    // floor onto the strip (the target is the old teleport's own spot; the arrive r 0.3 keeps
+    // the root east of the strip's west edge x −11.43 [D] without touching the wall's west
+    // face x −10.70 [D] — the capsule's east edge at the root x −11.35 still clears it).
+    watch_and_clear(&mut w, 16.0);
+    w.walk_to(Wp::new(-11.35, 1.12, -18.6).r(0.3), "the bridge's west end");
     w.wait(10);
     {
         let sim = w.scene.sim.as_ref().unwrap();
@@ -997,15 +1074,37 @@ fn the_pick_ref_accumulator_tracks_the_game_ref() {
     assert_eq!(w.scene.sim.as_ref().unwrap().bond.pick_ref, [0.0f32; 3],
         "the accumulator boots (0,0,0) [L ee_start_0700000a BL+0x790]");
 
-    // The free walk: probe-placed at the game's own hall line (−8.0, 1.12, 16.29), yaw −1.5708 =
-    // west, stick forward [L 2026-10-26]. The first ticks ride the south wall's skin out to the
-    // equilibrium (the game's settled z 16.8288 [L]); after that the walk is push-free.
-    {
-        let sim = w.scene.sim.as_mut().unwrap();
-        sim.bond.pos = [-8.0, 1.12, 16.29];
-        sim.bond.vel = [0.0; 3];
-        sim.bond.yaw = -1.5708;
-        sim.bond.grounded = true;
+    // The free walk: the game's own hall line, reached ON REAL INPUT (this round — the old
+    // probe placement write to (−8.0, 1.12, 16.29) is deleted). The route is the game's own:
+    // the through-line THROUGH the doorway into the west hall (the glide leg, green on master —
+    // the jamb slide around the base pieces at z ≈ 16.278 [D port world tris] is part of the
+    // through-line), then back east along the hall to the spot. The straight lobby approach
+    // (lobby south → the spot) was tried this round and WEDGES where the game does not: its
+    // diagonal runs z 16.16 at the column's x, south of the base course, and the raw forward
+    // hold pins on the column's south-east corner (root −7.75, z slid 16.21 → 16.02, the
+    // accumulator +0.1/tick — the capsule pressed on the column's east face x −8.304). The
+    // game's route enters the hall through the doorway, not the south pocket.
+    w.wait(30);
+    for _ in 0..150 {
+        let done = w.scene.sim.as_ref().unwrap().drones.sss.list.iter()
+            .filter(|s| s.placement == 524 || s.placement == 525)
+            .all(|s| s.state == 0 || s.state == 0x40);
+        if done { break; }
+        w.wait(5);
+    }
+    w.walk_to(Wp::new(-3.9, 0.0, 13.2), "out of the lift");
+    w.walk_to(Wp::new(-3.9, 0.0, 15.5).r(1.2), "lobby south");
+    w.walk_to(Wp::new(-10.0, 0.4, 16.29).r(0.8), "the through-line into the west hall");
+    w.walk_to(Wp::new(-8.0, 1.12, 16.29).r(0.3), "the game's hall line");
+    // Face west (the [L] window's own yaw −1.5708) with real turn input.
+    let mut turn_ticks = 0u32;
+    loop {
+        let err = walker::wrap_pi(-1.5708 - w.scene.sim.as_ref().unwrap().bond.yaw);
+        if err.abs() < 0.02 { break; }
+        assert!(turn_ticks < 600, "the west turn never settled (yaw {})",
+            w.scene.sim.as_ref().unwrap().bond.yaw);
+        w.tick(nf_game::player::Input { turn: err.clamp(-0.08, 0.08), ..Default::default() }, false);
+        turn_ticks += 1;
     }
     w.wait(10);
     for _ in 0..25 { w.tick(nf_game::player::Input { forward: 1.0, ..Default::default() }, false); }
@@ -1052,4 +1151,25 @@ fn the_pick_ref_accumulator_tracks_the_game_ref() {
     assert!(ref_press[1].abs() < 1e-3 && (ref_press[2]).abs() < 1e-3,
         "the press's pushes are x-only [L 2026-10-26: y 0.08088 and z −22.77985 unchanged], got {ref_press:?}");
     assert!(pos_press[0] <= -45.0, "Bond reached the wall skin (x {:.3})", pos_press[0]);
+}
+
+/// Real damage: the same walk with the health top-up off for every walker it makes (the
+/// tests' own `top_up_health = true` included) and the walker's return fire on — Bond's death
+/// panics with the death spot and the last hits (common/damage_log.rs), so a pass pins that the
+/// walk completes on the port's own damage.
+///
+/// Ignored: this route cannot survive the west ceiling gun on real damage. The west hall's laser
+/// #607 (out ch 0x1F → OR #667 → ch 0x0F [D]) is gun #640's enable channel (param 4 = 0x0F, at
+/// (−22.1, 2.3, 17.2) aimed straight down [D]); the walk crosses #607 twice (the Q-Worm leg, then
+/// the ring's west leg) and each crossing arms the gun again — after the re-holster the case-3
+/// fold returns a facing-1 gun to state 0 [M GT_Update 0x180498 case 3, the bnel delay-slot
+/// store]. Only explosions damage a turret (`GT_ApplyDamage` 0x1816d8's one caller is
+/// `Explode_Propagate` 0x17c518 case 0x36 [M]) and 0a's start loadout carries none; the heavy
+/// armour (−13.46, 0.90, 7.61) [D] sits behind the 0x13/0x22 laser rows. The two bursts land
+/// 27 + 15 rounds of 2.4 (≈ 101): Bond dies under the gun at (−20.5, 1.1, 6.9). It passed while
+/// the port's wall gun stuck in state 3 after its first burst.
+#[test]
+#[ignore = "probe: two ceiling-gun bursts on this route exceed 100 health (see the doc)"]
+fn walk_office_floor_qworm_keyboard_hatch_real_damage() {
+    walker::with_real_damage(walk_office_floor_qworm_keyboard_hatch);
 }

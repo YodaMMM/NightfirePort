@@ -253,17 +253,42 @@ fn the_alarm_switch_fails_objective_1() {
     w.top_up_health = true;
     w.wait(10);
     // An alarm switch: the 0x29 Switch objects on ch 124 (0x7C) [D placements #78/251/252/253/
-    // 262/263/264]. Take the first, stand Bond beside it (a teleport to reach the spot — the press
-    // itself is the real input path), aim, and pulse E.
+    // 262/263/264]. Take the first, WALK to it (level-09-alarm-switch-walk: the spawn -> the
+    // stair base -> across the lobby, the walked legs of walk_tower_a_start_to_finish), aim,
+    // and pulse E. No teleport.
     let spot = {
         let sim = w.scene.sim.as_ref().unwrap();
+        for (i, s) in sim.drones.useobjs.switches.iter().enumerate() {
+            if s.ch == 124 { eprintln!("[09-alarm] switch[{i}] gate {} at {:?}", s.gate, s.pos); }
+        }
         let s = sim.drones.useobjs.switches.iter().find(|s| s.ch == 124 && s.gate == 0)
             .expect("an alarmswitchplayer on ch 124 with no gate [D]");
         s.pos
     };
+    assert!(cycle_to_lethal(&mut w), "the P2K (0x2, 7+41) is in Bond's 09 owned set — the K5 darts the load opens on damage nothing [M 0x13fff0:269-306]");
+    walk_nav_clearing(&mut w, [19.79, -376.68, 30.37], "the stair base", 1.4);
+    walk_nav_clearing(&mut w, [-18.4, -368.8, 27.5], "up the stairs and across the lobby", 1.2);
     {
-        let sim = w.scene.sim.as_mut().unwrap();
-        sim.bond.pos = [spot[0] + 0.9, spot[1], spot[2]];
+        let sim = w.scene.sim.as_ref().unwrap();
+        assert!(!sim.drones.channels.on(0x61) && !sim.drones.channels.on(0x7c) && !sim.drones.channels.on(0x7d),
+            "the walk to the switch must not raise the alarm (obj 1) before the press");
+    }
+    // The final leg walks the nav graph to the switch with NO clears: clear_live_guards chases
+    // ever_seen guards across floors (the first walked runs dragged Bond down to the car park
+    // mid-leg and the dxz-only arrival then "reached" the switch from 8 units below it), and the
+    // lobby leg above already left the beat cleared.
+    w.walk_nav_to(spot, "the alarm switch", 0.95);
+    assert!(w.try_walk_to(Wp::new(spot[0], spot[1], spot[2]).r(0.95), "the alarm switch final approach"),
+        "the walk must reach the ch-124 switch at {spot:?} — Walker movement only, no sim.bond.pos writes");
+    {
+        let sim = w.scene.sim.as_ref().unwrap();
+        let p = sim.bond.pos;
+        let d = dxz(p, spot);
+        eprintln!("[09-alarm] walked to ({:.2},{:.2},{:.2}); switch at {:?}; final dxz {d:.2}", p[0], p[1], p[2], spot);
+        assert!((p[1] - spot[1]).abs() < 2.0, "the walked position must be on the switch's floor (dy {:.2} — a dxz-only arrive lands underneath, 8 units down)", p[1] - spot[1]);
+        assert!(d < 1.4, "the walked position must be within the press reach of the switch (dxz {d:.2})");
+        assert!(!sim.drones.channels.on(0x61) && !sim.drones.channels.on(0x7c) && !sim.drones.channels.on(0x7d),
+            "the alarm is still off when Bond arrives — the E press below is the ch 0x7C writer");
     }
     let mut fired = false;
     for k in 0..120 {
@@ -520,4 +545,52 @@ fn the_challenge_state_guard_sleeps_to_a_dart_and_loses_no_health() {
         || d.corpse, "the challenge-state guard sleeps to the darts (the 0x50-0x52 family [M 0x1469b8 case 0x19]), got {:#x}", d.state);
     assert_eq!(d.health, hp0, "the darts lose NO health (msg 0x19 never reaches HitDamage [M 0x13fff0:269-306])");
     assert!(!sim.drones.channels.on(0x61), "no alarm while the challenger sleeps (the press never ran)");
+}
+
+/// Real damage: the same walk with the health top-up off for every walker it makes (the
+/// tests' own `top_up_health = true` included) and the walker's return fire on — Bond's death
+/// panics with the death spot and the last hits (common/damage_log.rs), so a pass pins that the
+/// walk completes on the port's own damage.
+#[test]
+fn walk_tower_a_start_to_finish_real_damage() {
+    walker::with_real_damage(walk_tower_a_start_to_finish);
+}
+
+/// The lobby guards' effective health is 1.0, pinned through the real load path. 07000009's only
+/// stats section sits on drone placement #319 (hash 02000637; in-map #62, the census's global #319)
+/// [D]: tag 0x80010006 → three 2-word records decoded by the disassembly-verified
+/// `behaviour_util_get` (widths 0x303330 = 8,3,8,8,5,8,8,1 [D ACTION.ELF]; field f → word f via the
+/// 0x303350 jump table [D]; LSB-first; kind advance `(tag&0xffff)/3` words [M 0x1c7cac+0x1c7d74];
+/// each field `& 0xff` [M 0x1c7d00]) → type 0xD k0 60/0/1/60/2/60/60/0, k1 80/1/1/80/3/80/80/1,
+/// k2 100/2/1/100/3/100/100/0. That decoder is the one the shared snapshots prove live: its decode
+/// of 07000001's #158 (type 2) equals ee_start_07000001.bin's `drone_stats` 0x31aa30 type-2 record
+/// byte-for-byte [L], and ee_02b.bin pins the same [L, enemy_accuracy.rs #442]. No live snapshot
+/// holds a type-0xD record (all three ee_start_*.bin hold only the boot level's types 2 and 12 [L]),
+/// so kind 1's consumer is pinned from code: `DoModeSettingsNEW` reads kind 1 only [M 0x14c704
+/// `addiu a1,zero,1`] and writes record word 2 to +0xAC as `(float)(int)w` [M 0x14c70c-0x14c730] —
+/// raw HP, not an index or multiplier: `NDrone2_HitDamage` 0x145558:154 subtracts the damage from
+/// +0xAC and :156's `> 0` is the survival gate, with no rescale off the stats path (DefaultInit's
+/// 0x14b300:556-561 multiply is the captain branch; 0xD is not a captain kind 1/2/3/6/7). Every 09
+/// type-0xD placement runs DoModeSettingsNEW (param 5 = 0x64 ≥ 0x24 [D census]; [M 0x14b300 disasm
+/// 0x14bccc-d4: `sltiu v0,a1,36` on `*(setup+0x48)` = param 5]) and #319 precedes #321/#322/#323/
+/// #507/#518, so all six load health 1.0 / accuracy 80 / reaction 80 / recover 80: one landed round
+/// of ≥ 1.0 damage kills a lobby guard (the P2K round is 1.5 × difficulty [D weapon_data]).
+/// Sister: accuracy 80 puts `DoBulletAccuracy`'s p at 100 − 400 < 0 — the guards never take the
+/// aimed zero-offset arm, they always wobble (legal; the live hit counts in enemy_accuracy_live's
+/// model absorb it through the wobble ray).
+#[test]
+fn the_lobby_guards_load_with_the_type_0xd_stats_health_1() {
+    let iso = iso();
+    let mut w = Walker::new(nf_view::load(&iso, "07000009.bin", false).expect("load 07000009"));
+    w.wait(10);
+    let sim = w.scene.sim.as_ref().unwrap();
+    let lobby: Vec<&nf_game::drone::Drone> = sim.drones.list.iter().filter(|d| d.dtype == 0xd).collect();
+    assert!(lobby.len() >= 6, "the six type-0xD lobby guards load (param 2 = 1 ≤ every difficulty) [D census], got {}", lobby.len());
+    for d in &lobby {
+        assert_eq!((d.health, d.max_health), (1.0, 1.0),
+            "a type-0xD guard loads +0xAC = (float)1 from #319's kind-1 word 2 [M 0x14c70c-30; D census], got {}/{}", d.health, d.max_health);
+        assert_eq!(d.accuracy, 80, "kind-1 word 0 → +0xB4 [M 0x14c750-54], got {}", d.accuracy);
+        assert_eq!(d.aggression, 1, "kind-1 word 1 → +0xB5 [M 0x14c758-5c], got {}", d.aggression);
+        assert_eq!((d.reaction, d.recover), (80, 80), "kind-1 words 5/6 → +0xB8/+0xB9 [M 0x14c600:105-106], got {}/{}", d.reaction, d.recover);
+    }
 }

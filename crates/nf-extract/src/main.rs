@@ -603,7 +603,7 @@ fn ai_sim(iso: &IsoImage, level_name: &str, bond: [f32; 3], frames: u32) -> Resu
     // trigger contact classification reads it [M Player_Collision 0x194df0]). Standing cc [M
     // player.rs ROOT_HEIGHT] — this tracer's sim carries no stance state.
     let capsule = ([bond[0], bond[1] + 0.55, bond[2]], [bond[0], bond[1] + 0.275 - nf_game::player::ROOT_HEIGHT, bond[2]]);
-    let player = Player { yaw: 0.0, pos: bond, target: [bond[0], bond[1] + 0.5, bond[2]], eye: [bond[0], bond[1] + 1.0, bond[2]], aim, sph: bond, hanging: false, capsule, cel: None };
+    let player = Player { yaw: 0.0, pos: bond, target: [bond[0], bond[1] + 0.5, bond[2]], eye: [bond[0], bond[1] + 1.0, bond[2]], aim, sph: bond, hanging: false, capsule, body: Default::default(), cel: None, move_local: [0.0; 2] };
     let near = (0..sim.list.len()).min_by(|&a, &b| {
         let da = |i: usize| { let p = sim.list[i].pos; (p[0] - bond[0]).powi(2) + (p[2] - bond[2]).powi(2) };
         da(a).total_cmp(&da(b))
@@ -1344,7 +1344,7 @@ fn route(iso: &IsoImage, level_name: &str, from: [f32; 3], to: [f32; 3]) -> Resu
     }
     println!("  post test r 0.2: {}, r 0.4: {}", nav.bounds_node_test(0.2, from, to), nav.bounds_node_test(0.4, from, to));
     let goal = nav.target_nodes(&world, pi, to, 36.0);
-    match nf_game::nav::Route::to_position(&nav, &world, Some(pi), from, to, &goal, &[]) {
+    match nf_game::nav::Route::to_position(&nav, &world, Some(pi), from, to, &goal, &[], &|_, _| false) {
         Ok((res, r)) => {
             println!("route result {res}: {} nodes {:?}", r.nodes.len(), r.nodes);
             for &n in &r.nodes { let q = nav.paths[pi].nodes[n as usize].pos; println!("    node {n}: ({:.2}, {:.2}, {:.2})", q[0], q[1], q[2]); }

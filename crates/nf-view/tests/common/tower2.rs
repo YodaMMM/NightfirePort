@@ -1,6 +1,5 @@
 //! The walkreal-07000012 route, shared by the 07000012 and 07000013 tests (the warm chain walks
-//! the same legs). Each step drives the REAL input path; the single documented stand-in is the
-//! door[19] doorway crossing (see the note at `cross_door19`).
+//! the same legs). Every step drives the REAL input path — no position writes on the route.
 
 use crate::walker::Wp;
 
@@ -90,29 +89,36 @@ pub fn walk_12(w: &mut crate::walker::Walker) {
         eprintln!("[012] door[19] plc {} unlocked: ch_lock 0, state {:#x} flags {:#x}", d19.placement, d19.state, d19.flags);
     }
 
-    // Leg 3: through the opened door[19] and north-west to the console. THE DOCUMENTED STAND-IN:
-    // the doorway crossing itself. The tunnel (the closed leaf's volume x 6.74..7.07, z −1.46..−0.26
-    // [D probe]) leaves a 1.2 opening; the OPEN leaf's slab (x 5.65..6.85, z −1.59..−1.26 [D probe])
-    // pokes its east edge 0.2 into the tunnel mouth, and the capsule (r 0.55 [M Player_Collision
-    // 0x194df0]) has no convergent push path between that edge and the north jamb — the port pins
-    // at x ≈ 7.14 (the drives from z −0.9/−0.76/−0.72/−0.5 all stop; capsule_push at the pin sums
-    // to an east push (0.057, 0.029) that cancels the move). The game passes this doorway on the
-    // same key data — the funnel difference is unresolved; see the report's live checks. Everything
-    // else on the level is walked.
-    {
-        let sim = w.scene.sim.as_mut().unwrap();
-        sim.bond.pos = [6.4, 1.03, -1.5];
-        sim.bond.vel = [0.0; 3];
-    }
-    w.wait(10);
-    eprintln!("[012] the door[19] doorway stand-in (the corner pincer; see the report) — the west side");
+    // Leg 3: through the opened door[19] and north-west to the console — walked. The doorway is
+    // the corridor's jamb opening z −1.462..−0.262 at x 6.87..6.92 [D the corridors_a_5 collision]
+    // and the security room's own frame, which lines up with it to 4 mm once the room cel sits at
+    // the identity [M parseentity_fixup_entity 0x1d00c0 zeroes a 0xc047 room cel's translation;
+    // the placement's z 0.2955 had put a 0.904 pinch here]. The r 0.55 capsule [M Player_Collision
+    // 0x194df0] crosses on z −0.81..−0.91; the game crosses on z −0.812..−0.794 [L PCSX2
+    // 2026-10-31, the walk west along z −0.55 from x 8.4, frames 15-30].
+    w.walk_to(Wp::new(6.2, 1.1, -0.86).r(0.6), "through the door[19] doorway");
     w.walk_to(Wp::new(1.0, 1.1, 4.0).r(1.5), "the office floor north");
-    w.walk_to(Wp::new(-1.55, 0.5, 7.2).r(1.0), "the console");
+    // Up to the desk: the keyboard lies 0.9 below the head, so the use sphere reaches it only from
+    // within ~1.3 in z (from z 6.22 the use point misses it by 0.02).
+    w.walk_to(Wp::new(-1.55, 0.5, 7.2).r(0.4), "the console");
 
-    // The E press on the console (#731 override + #702 lift call, the same volume [D]).
+    // The E press on the console (#731 override + #702 lift call, the same volume [D]). The pick
+    // tests the console's glist — the keyboard mesh on the desk at y ≈ 0.86..0.91 — against the
+    // sphere r 1.0 at head + look [M Player_Activate 0x1a5170:100-108 → Intersect_PointGeom
+    // 0x1e92d8], so the player turns to the keyboard (−1.55, 0.88, 8.2) first, as a player does;
+    // E pulses one tick in six (the edge) while the view settles on it.
+    let kb = [-1.55f32, 0.88, 8.2];
     let mut pressed = false;
-    for _ in 0..60 {
-        w.tick(nf_game::player::Input::default(), true);
+    for k in 0..120 {
+        let input = {
+            let sim = w.scene.sim.as_ref().unwrap();
+            let p = sim.bond.pos;
+            let eye = p[1] + sim.bond.eye - sim.bond.crouch_drop;
+            let err = crate::walker::wrap_pi((kb[0] - p[0]).atan2(kb[2] - p[2]) - sim.bond.yaw);
+            let want_pitch = ((kb[1] - eye) / crate::walker::dxz(p, kb).max(0.5)).atan() / std::f32::consts::FRAC_PI_2;
+            nf_game::player::Input { turn: err.clamp(-0.08, 0.08), look: (want_pitch - sim.bond.pitch).clamp(-0.08, 0.08), ..Default::default() }
+        };
+        w.tick(input, k % 6 == 5);
         let sim = w.scene.sim.as_ref().unwrap();
         if sim.drones.channels.on(0x49) && sim.drones.channels.on(0x59) { pressed = true; break; }
     }
@@ -168,26 +174,51 @@ pub fn walk_12_exit(w: &mut crate::walker::Walker) {
             "ch 0x58 swaps the screen-shutter pair #697/#698 [D census §5] (down {scr_down_0:?}→{scr_down_1:?}, up {scr_up_0:?}→{scr_up_1:?})");
     }
 
-    // THE DOCUMENTED STAND-IN (walkreal-b's, kept; the funnel now MEASURED — probe 12/12b/12d):
-    // the north wall's opening at x ≈ 4.6..6.2 (its north face z 9.17..9.33 is open there) narrows
-    // to a 0.88 pinch at z ≈ 8.7 between the round pilaster (class 0x05: south face z 9.00 @x 5.3
-    // → 8.60 @x 6.0, west face x 5.25 @z 9.0) and the core's west wall (class 0x15, x 7.00) — the
-    // r 0.55 capsule [M Player_Collision 0x194df0] needs x ∈ [6.67, 6.45] = ∅ there, while the gap
-    // opens to 1.75 at z 9.0 and 2.65 at z 9.3. Behind it the lobby floor is a RAMP (class 0x0a,
-    // y 1.14 @z 9.4 → 0.32 @z 13.4) with a floor trench at x 5.0..5.5 (no floor to −2 [D probe
-    // 12d]). The game passes the pinch on the same key data — its cylinder move (Intersect_CylGeom
-    // 0x109da0) resolves the penetration along the move rather than as a full two-sided
-    // depenetration (the same funnel class as the door[19] pincer below; an open live-check
-    // item). The stand-in crosses the wall onto the ramp; the touch and the exit stay REAL.
-    // The screen-shutter/screen-lift SS pairs (#697/#698, #700/#701) sit at the world ORIGIN
-    // (baked art [D probe 12c]: matrices (0,0,0)/(0,−1.10,0)) and do not bound this funnel.
+    // The lift is entered from the NORTH lobby: the leaves #677/#678 shut at (2.21, 1.30, 13.18)
+    // [D census §5] face north, the shaft touch #683 (z 12.10..13.08) and the gated exit #669
+    // (z 9.47..10.45) lie south of them. The security room has no way north — its north wall
+    // (south face z 8.80, x 2.19..5.53) and the round pilaster close it once the room cel sits at
+    // the identity [M parseentity_fixup_entity 0x1d00c0]; the game agrees [L PCSX2 2026-10-31:
+    // walked north from (5.0, 6.9) Bond stops at z 7.49, from (6.0, 6.8) at z 8.16]. (The old
+    // "0.88 pinch into a lobby ramp" was the room's 0.2955 z shift opening a false gap against
+    // the lift-lobby wall.) So the route goes back out through door[19] and round the floor's
+    // south and west wings to the north lobby: the free-space path the capsule fits [D the static
+    // collision, a 0.25 m grid flood], every door on it opened with E.
+    w.walk_to(Wp::new(4.0, 1.1, 5.0).r(0.6), "back across the security room");
+    w.walk_to(Wp::new(6.0, 1.1, -0.86).r(0.6), "door[19], the west side");
+    w.walk_to(Wp::new(8.4, 1.1, -0.6).r(0.6), "back through door[19]");
+    let legs: &[(f32, f32, &str)] = &[
+        (10.75, -0.50, "the corridor"), (11.25, 1.25, "the corridor north"), (13.25, 3.25, "the east lobby"),
+        (21.00, 3.50, "the east lobby east"), (24.25, 2.75, "the east wing corner"), (24.00, -1.00, "the east wing"),
+        (23.50, -4.50, "the east wing south"), (22.25, -7.25, "the south-east bend"), (20.75, -9.75, "the south-east bend 2"),
+        (19.00, -12.00, "the south corridor east"), (15.00, -12.00, "the south corridor"), (11.00, -12.00, "the south corridor west"),
+        (8.50, -13.50, "through door plc 543"), (6.50, -15.50, "the south passage"), (6.50, -19.50, "the south passage 2"),
+        (5.75, -22.75, "the south hall"), (-9.75, -22.25, "the south hall west"),
+    ];
+    for &(x, z, label) in legs { w.walk_to(Wp::new(x, 1.1, z).r(1.0), label); }
+    // Door plc 545 (−10.58, −19.29) opens on E only (the game's too: it stays shut on approach and
+    // opens on Square [L PCSX2 2026-10-31]); Bond then crosses on the game's own line, z −18.70..−18.81
+    // from x −10.0 to −12.4 [L same run].
+    w.walk_to(Wp::new(-9.90, 1.1, -20.60).r(0.4), "door plc 545, the approach");
     {
-        let sim = w.scene.sim.as_mut().unwrap();
-        sim.bond.pos = [2.3, 0.7, 10.4];
-        sim.bond.vel = [0.0; 3];
+        let di = w.scene.sim.as_ref().unwrap().drones.doors.list.iter().position(|d| d.placement == 545)
+            .expect("door plc 545 [D]");
+        w.use_door(di, "door plc 545");
+        for _ in 0..30 { w.tick(nf_game::player::Input { forward: -0.6, ..Default::default() }, false); } // clear the swing
+        for _ in 0..90 { w.tick(nf_game::player::Input::default(), false); }
+        assert_eq!(w.scene.sim.as_ref().unwrap().drones.doors.list[di].state, nf_game::door::OPEN,
+            "E opens door plc 545 [M Door_Activate 0x135be0]");
     }
-    w.wait(10);
-    eprintln!("[012] the north-wall funnel stand-in (the 0.88 pinch; see the comment) — the lobby ramp");
+    let legs: &[(f32, f32, &str)] = &[
+        (-10.00, -18.80, "through door plc 545"), (-12.40, -18.70, "door plc 545, the west side"),
+        (-18.75, -19.25, "the west hall"), (-21.75, -18.25, "the west hall 2"), (-23.75, -16.25, "the south-west bend"),
+        (-25.25, -13.75, "the west wing south"), (-25.25, -1.75, "the west wing"), (-22.50, -0.50, "the west wing bend"),
+        (-20.75, 1.75, "the west wing bend 2"), (-20.50, 5.50, "the west corridor"), (-20.50, 13.50, "the west corridor north"),
+        (-18.75, 15.75, "the north lobby west end"), (-10.75, 15.75, "the north lobby"), (-8.00, 17.00, "the north lobby 2"),
+        (-4.00, 17.00, "the north lobby 3"), (-1.00, 16.00, "the north lobby east"),
+    ];
+    for &(x, z, label) in legs { w.walk_to(Wp::new(x, 1.1, z).r(1.0), label); }
+    w.walk_to(Wp::new(2.25, 1.1, 15.25).r(0.6), "the lift doors");
     w.walk_to(Wp::new(2.2, 0.7, 12.55).r(0.4), "into the shaft entrance");
     {
         let sim = w.scene.sim.as_ref().unwrap();

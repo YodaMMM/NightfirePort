@@ -206,11 +206,13 @@ fn the_searchlight_beam_arms_raises_the_alarm_channel_and_wakes_its_guards() {
     let Some(iso) = iso() else { eprintln!("NF_ISO not set — skipping"); return };
     let mut scene = nf_view::load(&iso, "07000006.bin", false).expect("load");
     let sim = scene.sim.as_mut().unwrap();
+    // light-glow: the reveal NIS 0x06000066 (its stream 0 raises the heads' on-channels 64/63/61/62 at
+    // waits 1/59/116/167 [D 07000006 NIS 0x06000066]) runs when SP #808's ch 0x34 rises — the courtyard
+    // plates' output [M SP_Hit 0x1dc470:16-18, SP_Update 0x1dbda8 case 0]. Raise ch 0x34 the way a plate
+    // does; head part 0 (on-channel 64) lights on the script's first wait. The spot stays parked at the
+    // −10000 offset until the first update [M Searchlight_Create].
+    sim.drones.channels.set(0x34, 1, 0);
     for _ in 0..2 { sim.step_bond(Default::default(), false, false, false); }
-    // fix-searchlight-alarm: the level boots NIS 0x06000066 (its stream 0 raises the heads' on-channels
-    // 64/63/61/62 at waits 1/59/116/167 [D 07000006 NIS 0x06000066]), so head part 0 (on-channel 64) is
-    // already lit here — the manual raise below only re-writes the same channel. The spot stays parked
-    // at the −10000 offset until the first update [M Searchlight_Create].
     let waiters: Vec<usize> = sim.drones.list.iter().enumerate()
         .filter(|(_, dr)| dr.present && dr.switch_channel == 55).map(|(i, _)| i).collect();
     assert!(!waiters.is_empty(), "07000006 places guards waiting on the searchlight alarm channel 55");

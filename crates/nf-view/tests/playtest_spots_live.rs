@@ -404,6 +404,12 @@ fn spots_07000006_searchlight_beam_arms() {
     let mut scene = nf_view::load(&iso, "07000006.bin", false).expect("load 07000006");
     let sim = scene.sim.as_mut().unwrap();
     free(sim);
+    // light-glow: the walk-in to the beam spot crosses the courtyard entry plate #525 (box
+    // 7.13..9.64 × 41.71 × −12.18..−10.67, out ch 0x34 [D trigger census]), which starts SP #808's
+    // light reveal [M SP_Hit 0x1dc470:16-18, SP_Update 0x1dbda8 case 0]. Step on it first.
+    place_and_ground(sim, [8.38, 42.0, -11.42], -2.21, 0.0, "06 entry plate #525");
+    for _ in 0..10 { sim.step_bond(Input::default(), false, false, false); }
+    assert!(sim.drones.channels.on(0x34), "06 entry plate #525 raises ch 0x34");
     place_and_ground(sim, [4.8, 42.09, -16.0], -2.21, 0.0, "06 beam spot");
     let head = [-1.125, 47.568, -17.329];
     let d = d3(sim.bond.pos, head);

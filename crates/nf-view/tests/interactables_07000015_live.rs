@@ -35,9 +35,30 @@ fn the_spawn_touch_reveals_the_objective() {
 /// The room-alert TouchOnce chain, through the REAL walk east along the gantry: the plate #717
 /// (80.81, 41.79, 0.08) writes 0xf6, which wakes the room's drones (params 3 = 0xf6 [D]), arms the
 /// Apocalypse #710 (ch 0xf6, 2 s whiteout [D params]) and starts the spawner #718 (start ch 0xf6).
+fn templates(sim: &nf_view::scene::Sim) -> impl Iterator<Item = &nf_game::drone::Drone> {
+    sim.drones.list.iter().filter(|d|
+        walker::dxz(d.pos, [50.10, 41.46, -0.08]) < 1.0 || walker::dxz(d.pos, [56.73, 41.45, 0.06]) < 1.0)
+}
+
 #[test]
 fn the_east_room_touch_wakes_its_squad() {
     let mut w = load15();
+    {
+        let sim = w.scene.sim.as_ref().unwrap();
+        // Sister: the level's one spawner (group 1, start ch 0xf6, mode 3, max 2 [D census params])
+        // holds before the touch, and its group's templates — the two 0xf6-wake drones by their
+        // spots (50.10, 41.46, −0.08)/(56.73, 41.45, 0.06) [D] — are absent from the world: the
+        // spawner's drones are templates until `DroneSpawner_Control` brings them in
+        // [M DroneSpawner_Init — the port's parse notes "their group's drones become templates,
+        // absent until spawned"].
+        assert_eq!(sim.drones.spawners.len(), 1, "the one AI_DroneSpawner placement [D census]");
+        let s = &sim.drones.spawners[0];
+        assert_eq!(s.start, 0xf6, "the spawner waits on ch 0xf6 [D param 4]");
+        assert!(s.spawned.is_empty() && !s.active, "sister: the spawner holds before the touch [M 0x137e68]");
+        assert!(templates(&sim).count() >= 2, "the group-1 templates load as records [M Drone_Create 0x136be0]");
+        assert!(templates(&sim).all(|d| !d.present),
+            "sister: the templates are absent from the world before the touch [M DroneSpawner_Init]");
+    }
     w.walk_to(Wp::new(88.0, 41.4, -0.5).r(1.2), "the gantry west");
     let sim = w.scene.sim.as_ref().unwrap();
     assert!(!sim.drones.channels.on(0xf6), "sister: 0xf6 off before the east walk [D]");
@@ -47,6 +68,26 @@ fn the_east_room_touch_wakes_its_squad() {
     let apoc = sim.drones.fx.apocalypses.iter().find(|a| a.channel == 0xf6).expect("the 0xf6 apocalypse");
     assert!(apoc.armed, "the Apocalypse #710 latches armed on ch 0xf6 [M Apocalypse_Update 0x18d4f0]");
     assert!(apoc.fade > 0.0, "the whiteout mirror runs (remaining·5/total [M 0x18d4f0])");
+    // The spawner's start channel fires: the group-1 templates come in (mode 3, max 2 [D params];
+    // DroneSpawner_Control 0x137e68's trigger path) and stand in the world. The spawn runs the
+    // tick after the touch's tick, so wait bounded ticks for it.
+    let mut came = false;
+    for _ in 0..120 {
+        let sim = w.scene.sim.as_ref().unwrap();
+        if sim.drones.spawners[0].spawned.iter().any(|&i| sim.drones.list[i].present) { came = true; break; }
+        w.tick(nf_game::player::Input::default(), false);
+    }
+    let sim = w.scene.sim.as_ref().unwrap();
+    assert!(came, "the ch-0xf6 start brings the group-1 templates in [M DroneSpawner_Control 0x137e68's trigger path]");
+    // Mode 3 spawns only when none of its own are alive [M 0x137e68's mode arm `living == 0`], so
+    // the first tick brings ONE drone in; the second follows once the first dies (max alive 2 [D
+    // param 2]). The initial-fill flag is clear (start 0xf6 was off at create [M 0x137aa0:33-45]),
+    // so no immediate fill.
+    assert_eq!(sim.drones.spawners[0].spawned.len(), 1, "the first template spawns (mode 3 holds the second until none is alive [M 0x137e68])");
+    assert!(sim.drones.spawners[0].spawned.iter().all(|&i| sim.drones.list[i].present),
+        "the spawned drone stands in the world [M 0x137aa0's live-slot array]");
+    assert!(sim.drones.spawners[0].spawned.iter().all(|&i| sim.drones.list[i].switch_channel == 0xf6 && sim.drones.list[i].channel_on),
+        "the spawned squad wakes on the same ch 0xf6 [D drone param 3; M the +0x134 wake read]");
 }
 
 /// The pickups take on the walk-over: the Pickup 007 #813 (53.40, 40.57, 71.14) sits on the
@@ -373,6 +414,51 @@ fn the_mine_explodes_when_bond_walks_into_its_beam() {
         "the blast carries the disc's radius 10 / damage 80 [D p1/p0]");
 }
 
+/// The exploded mine stops drawing: `Mine_Update` 0x17c930 sets obj+0xFE bit 0 on the explode
+/// tick and the delete pass removes the object [M 0x17cb7c-0x17cb88], so its mesh is gone from
+/// the frame. The draw side poses each mine on its own slot at the placement matrix and collapses
+/// the slot once the sim's `Mine.exploded` is set. Sister: the slot draws at the placement matrix
+/// before the walk, and the mines that did not go keep drawing.
+#[test]
+fn the_exploded_mine_stops_drawing() {
+    let mut w = load15();
+    let far = |m: [[f32; 4]; 4]| m[3][1] <= -9999.0;
+    let slot_of = |w: &Walker, pl: usize| -> usize {
+        let &(_, mx) = w.scene.mine_placements.iter().find(|(p, _)| *p == pl).expect("the mine has a draw slot");
+        let sim = w.scene.sim.as_ref().unwrap();
+        (0..4096).find(|&k| w.scene.door_slot_matrix(sim, k) == mx).expect("a posed slot carries the mine's placement matrix")
+    };
+    let placements: Vec<usize> = w.scene.sim.as_ref().unwrap().drones.mines.iter().map(|m| m.placement).collect();
+    assert_eq!(w.scene.mine_placements.len(), placements.len(), "one draw slot per created mine [M Mine_Create 0x17ce28]");
+    let slots: Vec<usize> = placements.iter().map(|&pl| slot_of(&w, pl)).collect();
+    for &k in &slots {
+        assert!(w.scene.char_verts.iter().any(|v| v.door == Some(k as u16)), "slot {k}: the mine's mesh rides its slot");
+    }
+    w.scene.sim.as_mut().unwrap().bond.pos = [35.5, 41.5, 15.0];
+    w.scene.sim.as_mut().unwrap().bond.yaw = 0.0; // face +z, into the z-18 doorway fence
+    w.scene.sim.as_mut().unwrap().bond.vel = [0.0; 3];
+    w.wait(10);
+    {
+        let sim = w.scene.sim.as_ref().unwrap();
+        assert!(sim.drones.mines.iter().all(|m| !m.exploded), "sister: no mine has exploded standing here");
+        for &k in &slots { assert!(!far(w.scene.door_slot_matrix(sim, k)), "sister: slot {k} draws before the walk"); }
+    }
+    let mut boom = None;
+    for _ in 0..400 {
+        if let Some(m) = w.scene.sim.as_ref().unwrap().drones.mines.iter().position(|m| m.exploded) { boom = Some(m); break; }
+        w.tick(nf_game::player::Input { forward: 1.0, ..Default::default() }, false);
+    }
+    let boom = boom.expect("walking the z-18 doorway fence explodes a mine [M 0x17c930's hit-list arm]");
+    let sim = w.scene.sim.as_ref().unwrap();
+    for (i, &k) in slots.iter().enumerate() {
+        let gone = far(w.scene.door_slot_matrix(sim, k));
+        assert_eq!(gone, sim.drones.mines[i].exploded,
+            "mine {i} (slot {k}): drawn exactly while it has not exploded [M 0x17cb7c-0x17cb88]");
+    }
+    assert!(far(w.scene.door_slot_matrix(sim, slots[boom])), "the exploded mine's slot is collapsed");
+    assert!(sim.drones.mines.iter().any(|m| !m.exploded), "sister: some mines are still standing, still drawn");
+}
+
 /// explode-debris-spawn: the mine's blast is a persistent object now, and it spawns NO debris.
 /// The game chain: `Mine_Update` 0x17c930 inlines `Explode_Create` and stores the u16 debris
 /// kind 0 [M 0x17c930:128], so `Explode_Update`'s debris arm returns BEFORE its Rand_Rand(5)
@@ -531,6 +617,87 @@ fn sister_the_dead_ladder_mesh_reaches_the_point_blank_stander() {
         "sister: ladder #382 is the east ladder at the probed spot [D placement]");
     assert!(lad.capsule_hits_default(sim.bond.pre_collide, nf_game::player::RADIUS, sim.bond.cc),
         "the walk arm's pick DOES reach the point-blank stander [D the 2-tri plane; M 0x1eae80/0x109da0] — the blocker is the admission chain, not the geometry");
+}
+
+/// KIND: destroyables 0xE1, the external-kill arm — `Destroy_Create` 0x12c318 stores placement
+/// param 1 into tag+0x10 (disasm 0x12c3b8-0x12c3bc: `lhu 0x30($s0)` → `sh 0x10($a0)`) and
+/// `Destroy_Update` 0x12c4f8's second arm smashes the tag while that channel is ON (the word then
+/// clears, :32; the port's `Props::channel_kills`). The east room's BoxSatellite by its spot
+/// (69.52, 43.41, 10.26) [D census] carries param 1 = 0xf6 — the SAME channel the room touch #717
+/// writes — so the real walk into #717 (the proven east-room leg) smashes it, no shot fired.
+/// Sisters: the tag sits alive with the parsed kill channel before the walk, and the OTHER two
+/// satellites (params 1 = 0xed/0xec — channels nothing fires on this leg) stay alive.
+#[test]
+fn the_room_touch_smashes_its_satellite_through_the_kill_channel() {
+    let mut w = load15();
+    let sat = |sim: &nf_view::scene::Sim| sim.drones.props.destroy.iter()
+        .find(|d| walker::dxz(d.pos, [69.52, 43.41, 10.26]) < 1.0).cloned().expect("the east-room BoxSatellite [D census]");
+    {
+        let sim = w.scene.sim.as_ref().unwrap();
+        let s = sat(&sim);
+        assert!(!s.dead, "sister: the satellite stands before the walk");
+        assert_eq!(s.kill_channel, 0xf6, "its tag+0x10 kill channel is the room-alert ch 0xf6 [D param 1; M 0x12c318:36]");
+        assert!(sim.drones.props.destroy.iter()
+            .filter(|d| walker::dxz(d.pos, [33.91, 39.98, 72.95]) < 1.0 || walker::dxz(d.pos, [-8.04, 48.34, 1.81]) < 1.0)
+            .all(|d| !d.dead), "sister: the 0xed/0xec satellites stand too [D census]");
+    }
+    // The real walk east into touch #717 (the same two legs the_silo_fall and the_east_room use).
+    w.walk_to(Wp::new(88.0, 41.4, -0.5).r(1.2), "the gantry west");
+    w.walk_to(Wp::new(80.5, 41.4, 0.08).r(1.2), "into touch #717");
+    // The channel arm runs in the drones' tick; wait bounded ticks for the smash.
+    let mut smashed = false;
+    for _ in 0..120 {
+        if sat(&w.scene.sim.as_ref().unwrap()).dead { smashed = true; break; }
+        w.tick(nf_game::player::Input::default(), false);
+    }
+    let sim = w.scene.sim.as_ref().unwrap();
+    assert!(smashed, "the room touch's ch 0xf6 smashes the satellite through tag+0x10 [M Destroy_Update 0x12c4f8:30-35]");
+    assert!(sim.drones.props.destroy.iter()
+        .filter(|d| walker::dxz(d.pos, [33.91, 39.98, 72.95]) < 1.0 || walker::dxz(d.pos, [-8.04, 48.34, 1.81]) < 1.0)
+        .all(|d| !d.dead), "sister: the 0xed/0xec satellites survive — their channels never fired [D params]");
+}
+
+/// KIND: destroyables 0xE1, the bullet arm + the death channel — `Destroy_CollisionHandler`
+/// 0x12bd48 subtracts every admitted class-5 contact's damage from tag+0x04 (placement param 3)
+/// and the death writes `switch_channels[tag+0x12] = 1` (placement param 0 [M 0x12c318:35, disasm
+/// 0x12c3c0-0x12c3c4]) and smashes. The great-hall barrel by its spot (0.65, 40.30, 28.99) [D
+/// census] carries health 10 (param 3), death channel 0xfd (param 0 — no other writer or reader
+/// of 0xfd on the level [D census]) and the bullet mask param 4 = 0xf8 → tag+0x14 = ~0xf8 = 0xff07
+/// [M 0x12c40c-0x12c420]: the handhelds' weapon word 0x0008 ANDs the mask to 0 so the shot is
+/// ADMITTED ([L ee_start_05 weapon_data+0x10]; the same filter the 07000014 windows pin runs,
+/// opposite data), while the laser 0x0002 / the watch 0x0100 would drop. Reach: the hall-south
+/// lane the walked route proves ((2.0, 41.4, 30.0) — the pickups/walkreal leg); the teleport only
+/// REACHES it, the shot itself is the real trigger path. Sister: the barrel stands at health 10
+/// with ch 0xfd off before the shot.
+#[test]
+fn the_oil_barrel_dies_to_the_gunshot_and_writes_its_death_channel() {
+    let mut w = load15();
+    w.top_up_health = true; // the death blast (damage 5.0 = param 5 500 ×0.01 [M 0x12c318:48]) may splash
+    let barrel = |sim: &nf_view::scene::Sim| sim.drones.props.destroy.iter()
+        .find(|d| d.channel == 0xfd).cloned().expect("the ch-0xfd barrel [D census — the level's only p0 = 0xfd tag]");
+    {
+        let sim = w.scene.sim.as_ref().unwrap();
+        let b = barrel(&sim);
+        assert!(!b.dead && (b.health - 10.0).abs() < 0.5, "sister: the barrel stands at health 10 [D param 3]");
+        assert!(walker::dxz(b.pos, [0.65, 40.30, 28.99]) < 1.0, "sister: it is the great-hall tag [D census translation]");
+        assert!(!sim.drones.channels.on(0xfd), "sister: ch 0xfd is off before the shot (the initial state)");
+    }
+    // Reach: the proven hall-south lane spot (the walkreal/pickups route's hall south leg).
+    w.scene.sim.as_mut().unwrap().bond.pos = [2.0, 41.5, 30.0];
+    w.scene.sim.as_mut().unwrap().bond.vel = [0.0; 3];
+    w.wait(10);
+    let target = {
+        let b = barrel(&w.scene.sim.as_ref().unwrap());
+        [(b.lo[0] + b.hi[0]) / 2.0, (b.lo[1] + b.hi[1]) / 2.0, (b.lo[2] + b.hi[2]) / 2.0]
+    };
+    let killed = w.shoot_point(target, "15: the great-hall barrel", &|sim: &nf_view::scene::Sim| {
+        sim.drones.props.destroy.iter().find(|d| d.channel == 0xfd)
+            .map(|d| d.dead).unwrap_or(false) || sim.drones.channels.on(0xfd)
+    });
+    assert!(killed, "the shot kills the 10-health barrel [M 0x12bd48:44-48 every admitted contact]");
+    let sim = w.scene.sim.as_ref().unwrap();
+    assert!(barrel(&sim).dead, "the leaf is dead");
+    assert!(sim.drones.channels.on(0xfd), "the death writes switch_channels[0xfd] [M 0x12bd48:35; D param 0]");
 }
 
 /// Every placement's model resolves on this level — zero missing hashes/indices of the 968

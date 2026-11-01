@@ -27,6 +27,7 @@ pub mod aivolume;
 pub mod prof;
 pub mod ally;
 pub mod anim;
+pub mod fxhash;
 pub mod bullet;
 pub mod breakable;
 pub mod car;

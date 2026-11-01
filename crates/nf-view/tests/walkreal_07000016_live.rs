@@ -14,7 +14,9 @@
 //!
 //! Enemies are DISABLED for the walk only in the walkreal sense: damage is suppressed
 //! (top_up_health, the walker's allowance). Kiko herself is not the objective's writer (see the
-//! header) — the walk stops at her spawn; the button press is the finale tail's business. Opt-in
+//! header) — `walk_arrival_to_the_chasers_spawn` stops at her spawn; `walk_the_chasers_defeat_completes_the_mission`
+//! walks the rest (the blast-room shelter through both launch pulses, the pit squad, the lift-out
+//! cinema 0x06000632, the button) to MissionState 6. Opt-in
 //! via NF_ISO.
 
 #[path = "common/walker.rs"]
@@ -25,11 +27,59 @@ use walker::Walker;
 
 fn iso() -> String { std::env::var("NF_ISO").expect("NF_ISO") }
 
+/// The save the game hands 16 at the end of the chain: 07000014's start kit [M 0x1a7ef8 case
+/// 0x7000014] carried warm into 07000015 [M case 0x7000015: `Player_RamLoad`, the saved weapon
+/// re-selected, `Player_CheckWeaponsLoaded` 0x1a97c8 sweeping the skins 15 lacks] and captured by
+/// 15's exit (`warm_exit_save` = Trigger_Activate's `Player_RamSave` 0x195670 [M 0x1b2318:97-116]).
+/// Built once per test process.
+fn chain_save(iso: &str) -> RamSave {
+    static SAVE: std::sync::OnceLock<RamSave> = std::sync::OnceLock::new();
+    SAVE.get_or_init(|| {
+        let s14 = nf_view::warm_exit_save(nf_view::load(iso, "07000014.bin", false).unwrap().sim.as_ref().unwrap());
+        let s15 = nf_view::warm_exit_save(nf_view::load_with_carry(iso, "07000015.bin", false, Some(&s14)).unwrap().sim.as_ref().unwrap());
+        s15
+    }).clone()
+}
+
 fn carry(on: &[u32]) -> RamSave {
     let mut ch = nf_game::triggers::Channels::default();
     for &c in on { ch.set(c, 1, 0); }
-    // A fresh Bond with only the carried gates: the save Trigger_Activate would make [M 0x1b2318:97-116].
-    RamSave::capture(&Default::default(), 0, &nf_game::pickup::Inventory::level_start(0x73, 34), &ch)
+    // Bond's player state from the real chain (health, armour, weapons, held weapon), with only the
+    // carried gates as channels: the save Trigger_Activate would make [M 0x1b2318:97-116]. This used
+    // to be the 07000005 start inventory with a saved weapon byte of 0 — `Player_InitWeapon`'s tail
+    // turns an unowned request into the fists [M 0x1a7ef8:321-324], so every walk reached the
+    // chaser holding the fists, which no chain into 16 produces.
+    let mut s = chain_save(&iso());
+    s.channels = ch.v.clone();
+    s.ch_time = ch.time.clone();
+    s.mission = None;
+    s.tally = None;
+    s
+}
+
+/// The weapons the 15 → 16 chain lands on 16 [M 0x1a7ef8 case 0x7000016 → RamLoad keeps the
+/// carry; 0x1a97c8 drops the skins 16 lacks]: the fists, the P2K, the Delta Repeater 0x11, the
+/// frag 0x34, the mine 0x37, the laser 0x4e and the camera 0x54. The Grapple 0x50 was already
+/// swept on 15 (its skin is not in 15's archive), the decryptor 0x56 is swept here.
+const CHAIN_OWNED: [usize; 7] = [1, 2, 0x11, 0x34, 0x37, 0x4e, 0x54];
+/// A cold load of 16 runs the fresh 14 kit [M 0x1a7ef8 case 0x7000016: the P2K is unowned on a cold
+/// load (`Player_RamLoad` is skipped, 0x1957a8:9) → `switchD_001a8284_caseD_7000014`]. 16's archive
+/// holds the Grapple's skin, so its equip lands; the Stunner 0x4a and the decryptor 0x56 refuse
+/// [M 0x1a8a58:20]. The only difference from the chain is the Grapple, and the game has it too.
+const COLD_OWNED: [usize; 8] = [1, 2, 0x11, 0x34, 0x37, 0x4e, 0x50, 0x54];
+
+fn owned(sim: &nf_view::scene::Sim) -> Vec<usize> {
+    let inv = &sim.drones.inventory;
+    (0..inv.owned.len()).filter(|&w| inv.owned[w]).collect()
+}
+
+/// Bond's weapons where the chaser fight starts: what he owns and what is in his hand.
+fn assert_armed_for_the_chaser(sim: &nf_view::scene::Sim, want: &[usize], ctx: &str) {
+    assert_eq!(owned(sim), want, "{ctx}: Bond's weapons at the chaser fight");
+    assert_eq!(sim.gun.weapon, 0x11, "{ctx}: the Delta Repeater is in Bond's hand at the chaser fight (the request 0x11 drawn) [M 0x1a7ef8]");
+    assert!(sim.gun.clip + sim.gun.spare > 0, "{ctx}: the weapon in hand has bolts (clip {} spare {})", sim.gun.clip, sim.gun.spare);
+    let inv = &sim.drones.inventory;
+    assert!(inv.clip[2] + inv.carried[1] > 0, "{ctx}: the P2K has rounds (clip {} spare {})", inv.clip[2], inv.carried[1]);
 }
 
 /// The landed door[7] fix, focused: the door opens on Bond's pitched E from the corridor and he
@@ -264,18 +314,14 @@ fn walk_arrival_to_the_chasers_spawn() {
 fn the_pit_pulse_kills_an_idle_bond_about_450_ticks_later_like_the_game() {
     let iso = iso();
     let mut w = Walker::new(nf_view::load_with_carry(&iso, "07000016.bin", false, Some(&carry(&[0x47, 0x48, 0x4a, 0x54, 0xce, 0x4b]))).unwrap());
-    // The sister pins the death/fail TIMING, so the walkreal allowances are off: the hurt contact
-    // must land (no top-up) and the pack cinema must play out (no skip) — the live session's own
-    // shape [L no input].
-    w.top_up_health = false;
-    w.skip_cutscenes = false;
-    {
-        let sim = w.scene.sim.as_mut().unwrap();
-        for _ in 0..600 { sim.step_bond(Input::default(), false, false, false); }
-        // The live session's own setup [L]: Bond placed on the bridge trigger #255, no input —
-        // the touch fires the chain head (ch 0x81), the pack cinema drops him at the pit floor.
-        sim.bond.pos = [2.4, 1.2, -175.5];
-    }
+    // The port walks the game's own route onto #255 (APPROACH: the corridor, the station E for
+    // door[0]'s 0x24, the panels #684/#685/#617 for 0x27/0x28/0xb4 — tower_door1 #392's lock is
+    // 0xb4, the south room's only way in [D placements]) and steps onto the slab in real time.
+    // The live session placed Bond on #255 instead [L]; the_real_order_launch_chain_matches_the_teleported_one
+    // pins that the two orders run the chain on the same clock.
+    w.wait_enabled(3000, "the launch-centre arrival");
+    w.wait(200);
+    walk_onto_the_slab(&mut w);
     let (mut t_reenable, mut t243, mut t_dead, mut t_fail) = (None, None, None, None);
     for t in 0..4200u32 {
         w.tick(Input::default(), false);
@@ -309,79 +355,322 @@ fn the_pit_pulse_kills_an_idle_bond_about_450_ticks_later_like_the_game() {
     }
 }
 
-/// The finale tail: the mission completes ONLY through the KikoDeathButton #693 [D hash
-/// 020008c1]: the chaser's defeat raises nothing (param 12 = 0 [D]; the init-forced 0x90
-/// stand-in was removed in kiko-16-defeat), so this walk's kill-then-watch shape pins the REAL
-/// rule — ch 0x90 and ch 100 stay cold and the mission does not complete. PARKED (re-derived in
-/// the pit work) on the pulse-1 survival window, with the round-2 timeline CORRECTED:
-/// - **The corrected timeline.** The doc's round-2 expectation "ch 243 rises ~863 ticks after the
-///   re-enable" was an arithmetic error (1611−748 double-counts the cinema): the launch script
-///   0x0600090a starts at the pack cinema 0x06000631's ch-185 write (cinema t748 [D stream 7]),
-///   one tick AFTER the re-enable key (stream 8's single t747 pit-floor pose [D]), so the model is
-///   re-enable → ch 243 = 1611 − 1 ≈ 1610 ticks [M nis.rs:446-451 absolute Waits + D dumps].
-///   The live fresh boot measured 1591 [L] — the model CONFIRMED within 20; the port's probe
-///   (chain+2355 = 748 + 1611 + the SP-start latency) confirms it in-port. The remaining open
-///   number is the live ch-0x81 → re-enable delta (measured 553 [L] vs the modeled 747 [D t747])
-///   — see the report's live checks.
-/// - **The kill is not instant on either side.** The pulse's contact applies the 1000 damage the
-///   same tick family (Player_DealWithObjHit 0x194458:95-101 → Player_HandlePain type 2 → health
-///   0 [M 0x1902c8:84-134]), but the MISSION fail rides the death sequence: the blood pane covers
-///   in 448 ticks, Player_HandleDeath raises ch 0x62 at the cover [M 0x190bb0:29-33,
-///   0x19a6a8:23-30] and Mission_Update → MissionState 3 [M 0x182c60:21,35-42]. Port +449, game
-///   +454 [L] — pinned by the un-ignored sister above.
-/// - **No disc-visible real-input escape during pulse 1 (559 ticks, 1611..2170 [D])**, re-checked
-///   against the data this round: the six-band hurt stack (world y −24.08..−21.32) covers the
-///   whole pit footprint with OVERLAPPING quads — no gaps to stand in [D tri dump]; the blast
-///   rooms on the pit floor (the obvious shelters, base −23.0, roofs −19.53) are SEALED by static
-///   BlockingPolys (2-tri walls x 19.60..23.22 / z −174.84..−169.00, y −22.08..−19.53 [D obj
-///   117/118]) and their roofs are 4.4 above the grate — no jump, no ladder (the pit's only
-///   kind-0x2d ladder is a 0.5×2×0.8 "PlayerStart" box at the rim [D place[256]/obj[167]]); the
-///   shuttle-bay lift's LOW point (−21.22 [D keys]) sits 0.10 above the top band — the one safe
-///   floor in the pit — but ch 80's ONLY writers are the scripts (0600090a stream 21 @2240,
-///   06000632 stream 19 @1606 [D]; the full-placement census found NO trigger/AND/blocker naming
-///   80), so the platform does not exist until 630 ticks into the pulse; the pit squad
-///   (spawners #294-296, ch 187 @1512 [D]) is dropped into the pit 99 ticks before the pulse to
-///   die in it — the game's own demonstration that the floor is lethal; and no pickup/substate/
-///   Bond-actor stream exists [D+M, the round-2 census]. ch 240's writer is the stream-7 event
-///   @2180 — post-pulse; no door placement carries it [D census].
-/// The un-ignore requires the live check that could still hide a mechanism: the game's
-/// ch-0x81 → re-enable delta of 553 [L] vs the modeled 747 [D]. If the pack cinema really started
-/// ~194 ticks before the touch trigger's ch 0x81, something else starts it — that starter is the
-/// missing escape. gdbwatch on switch_channels[0x81] (0x26fc90+129·4) and Bond's obj+0x30 from
-/// the south-room approach through the cinema, FRESH boot.
+/// The proven approach (walk_arrival_to_the_chasers_spawn's legs: the corridor, the station
+/// detour for door[0]'s 0x24, the panels for 0x27/0x28/0xb4, the silo plate) on to the bridge
+/// slab #255 — the ch-0x81 touch.
+const APPROACH: &[(&str, walker::Wp)] = &[
+    ("the corridor south", walker::Wp { at: [4.3, 0.6, -72.5], act: walker::Act::None, arrive: 1.2 }),
+    ("door[7] through", walker::Wp { at: [4.9, -0.1, -78.0], act: walker::Act::None, arrive: 1.2 }),
+    ("the lane east", walker::Wp { at: [10.0, 0.0, -82.0], act: walker::Act::None, arrive: 1.3 }),
+    ("the lane south", walker::Wp { at: [12.0, 0.0, -88.0], act: walker::Act::None, arrive: 1.3 }),
+    ("the ramp foot", walker::Wp { at: [13.8, 0.0, -90.8], act: walker::Act::None, arrive: 1.1 }),
+    ("the ramp 1", walker::Wp { at: [14.5, 0.6, -87.5], act: walker::Act::None, arrive: 1.2 }),
+    ("the ramp 2", walker::Wp { at: [14.5, 2.4, -84.5], act: walker::Act::None, arrive: 1.2 }),
+    ("the ramp 3", walker::Wp { at: [14.5, 4.6, -81.5], act: walker::Act::None, arrive: 1.2 }),
+    ("the ring east", walker::Wp { at: [14.5, 5.9, -79.0], act: walker::Act::None, arrive: 1.2 }),
+    ("the ring 1", walker::Wp { at: [6.0, 5.9, -78.5], act: walker::Act::None, arrive: 1.4 }),
+    ("the ring 2", walker::Wp { at: [-4.0, 5.9, -79.0], act: walker::Act::None, arrive: 1.4 }),
+    ("the ring 3", walker::Wp { at: [-11.0, 5.9, -81.0], act: walker::Act::None, arrive: 1.4 }),
+    ("the ring 4", walker::Wp { at: [-13.0, 5.9, -86.0], act: walker::Act::None, arrive: 1.4 }),
+    ("the station west", walker::Wp { at: [-16.5, 5.9, -88.0], act: walker::Act::None, arrive: 1.3 }),
+    ("the station south", walker::Wp { at: [-16.3, 5.9, -93.5], act: walker::Act::None, arrive: 1.2 }),
+    ("the station E", walker::Wp { at: [-15.2, 5.9, -94.6], act: walker::Act::Use { use_ticks: 120 }, arrive: 1.2 }),
+    ("the return 1", walker::Wp { at: [-16.3, 5.9, -89.0], act: walker::Act::None, arrive: 1.3 }),
+    ("the return 2", walker::Wp { at: [-13.0, 5.9, -85.0], act: walker::Act::None, arrive: 1.4 }),
+    ("the return 3", walker::Wp { at: [-10.0, 5.9, -81.0], act: walker::Act::None, arrive: 1.4 }),
+    ("the return 4", walker::Wp { at: [-4.0, 5.9, -79.0], act: walker::Act::None, arrive: 1.4 }),
+    ("the return 5", walker::Wp { at: [6.0, 5.9, -78.5], act: walker::Act::None, arrive: 1.4 }),
+    ("the return 6", walker::Wp { at: [14.5, 5.9, -79.0], act: walker::Act::None, arrive: 1.2 }),
+    ("the descent 1", walker::Wp { at: [14.5, 4.6, -82.0], act: walker::Act::None, arrive: 1.2 }),
+    ("the descent 2", walker::Wp { at: [14.5, 2.4, -85.0], act: walker::Act::None, arrive: 1.2 }),
+    ("the descent 3", walker::Wp { at: [14.5, 0.6, -88.0], act: walker::Act::None, arrive: 1.2 }),
+    ("the east lane south", walker::Wp { at: [9.5, 0.0, -100.0], act: walker::Act::None, arrive: 1.6 }),
+    ("the trench's west end", walker::Wp { at: [4.0, 0.0, -108.0], act: walker::Act::None, arrive: 1.6 }),
+    ("door[0]'s west approach", walker::Wp { at: [2.3, 0.0, -110.0], act: walker::Act::None, arrive: 0.7 }),
+    ("door[0]'s threshold", walker::Wp { at: [2.3, 0.0, -113.2], act: walker::Act::None, arrive: 0.7 }),
+    ("door[0] through", walker::Wp { at: [2.0, -0.1, -119.0], act: walker::Act::None, arrive: 1.2 }),
+    ("door[1] through", walker::Wp { at: [2.0, -0.1, -132.0], act: walker::Act::None, arrive: 1.2 }),
+    ("door[3]'s panel", walker::Wp { at: [3.4, 0.8, -141.5], act: walker::Act::Use { use_ticks: 90 }, arrive: 0.8 }),
+    ("door[3] off panel", walker::Wp { at: [2.0, 0.0, -140.0], act: walker::Act::None, arrive: 1.0 }),
+    ("door[3] through", walker::Wp { at: [2.0, -0.1, -147.0], act: walker::Act::None, arrive: 1.2 }),
+    ("door[2]'s panel", walker::Wp { at: [3.4, 0.8, -151.9], act: walker::Act::Use { use_ticks: 90 }, arrive: 0.8 }),
+    ("door[2] off panel", walker::Wp { at: [2.2, 0.0, -150.4], act: walker::Act::None, arrive: 1.0 }),
+    ("door[2] through", walker::Wp { at: [2.2, -0.1, -151.5], act: walker::Act::None, arrive: 1.2 }),
+    ("the silo plate", walker::Wp { at: [2.5, 0.3, -153.9], act: walker::Act::None, arrive: 1.0 }),
+    ("door[4]'s panel", walker::Wp { at: [3.5, 1.0, -165.7], act: walker::Act::Use { use_ticks: 90 }, arrive: 0.8 }),
+    ("door[4] through", walker::Wp { at: [2.5, 1.0, -169.0], act: walker::Act::None, arrive: 1.3 }),
+    ("the bridge slab #255", walker::Wp { at: [2.4, 1.0, -176.8], act: walker::Act::None, arrive: 1.2 }),
+];
+
+/// APPROACH up to the staging point north of the ch-0x81 slab (its z span −178.50..−174.32 [D
+/// trigger bbox]), then a real-time step south onto it with the walkreal allowances OFF: the pack
+/// cinema plays out (no skip) and the hurt contact lands (no top-up) — the sisters pin the chain's
+/// TIMING from the touch on. Returns with ch 0x81 just raised and Bond's input otherwise idle.
+fn walk_onto_the_slab(w: &mut Walker) {
+    w.walk_route(&APPROACH[..APPROACH.len() - 1]);
+    w.walk_route(&[("the slab's north edge", walker::Wp::new(2.4, 1.0, -172.0).r(0.8))]);
+    w.top_up_health = false;
+    w.skip_cutscenes = false;
+    for _ in 0..900u32 {
+        if w.scene.sim.as_ref().unwrap().drones.channels.on(0x81) { return; }
+        w.scene.sim.as_mut().unwrap().bond.yaw = std::f32::consts::PI;
+        w.tick(Input { forward: 1.0, ..Default::default() }, false);
+    }
+    panic!("the walked step south never touched #255 (ch 0x81) at {:?}", w.scene.sim.as_ref().unwrap().bond.pos);
+}
+
+/// SISTER for the placed order: with ch 0xb4 cold, tower_door1 #392 (2.46, 1.04, −166.38; lock
+/// 0xb4 [D params]) stays shut under a walked Bond's forward press (no E) — the locked leaf is
+/// solid [M Door lock 0x136810:10-16] — so #255 (ch 0x81) cannot be reached without the panel
+/// #617's E. Bond must actually reach the leaf (z < −164.6) for the hold to count.
+fn tower_door1_holds_without_its_panel(w: &mut Walker) {
+    let di = {
+        let sim = w.scene.sim.as_ref().unwrap();
+        assert!(!sim.drones.channels.on(0xb4), "0xb4 is cold before the panel");
+        let di = sim.drones.doors.list.iter().position(|d| (d.pos[2] + 166.38).abs() < 0.5 && (d.pos[0] - 2.46).abs() < 0.5)
+            .expect("tower_door1 #392");
+        assert_eq!(sim.drones.doors.list[di].ch_lock, 0xb4, "tower_door1's lock is 0xb4 [D]");
+        di
+    };
+    let mut min_z = f32::MAX;
+    for _ in 0..360u32 {
+        w.scene.sim.as_mut().unwrap().bond.yaw = std::f32::consts::PI;
+        w.tick(Input { forward: 1.0, ..Default::default() }, false);
+        min_z = min_z.min(w.scene.sim.as_ref().unwrap().bond.pos[2]);
+    }
+    let sim = w.scene.sim.as_ref().unwrap();
+    let d = &sim.drones.doors.list[di];
+    eprintln!("[sister] tower_door1 state {:#x} pos01 {:.3}, Bond min z {min_z:.2}", d.state, d.pos01);
+    assert!(min_z < -164.6, "the walk reached the leaf (min z {min_z:.2})");
+    assert!(min_z > -167.0, "the locked leaf held Bond north of it (min z {min_z:.2})");
+    assert!(d.pos01 < 0.05 && !sim.drones.channels.on(0xb4) && !sim.drones.channels.on(0x81),
+        "no E → no 0xb4 → the leaf stays shut and #255 untouched (state {:#x}, pos01 {:.3})", d.state, d.pos01);
+}
+
+/// From the pit floor into the west blast room (blast_room_shelter_16_live: the room is outside
+/// HurtPoly-ShuttleLaunch's polygon [D], its door leaves shut over both pulses [D 0600090a
+/// streams 17/18]).
+const INTO_THE_SHELTER: &[(&str, walker::Wp)] = &[
+    ("the pit floor west", walker::Wp { at: [-8.5, -22.2, -173.5], act: walker::Act::None, arrive: 1.0 }),
+    ("the west blast door", walker::Wp { at: [-11.0, -22.0, -170.0], act: walker::Act::None, arrive: 0.9 }),
+    ("the west blast room", walker::Wp { at: [-15.2, -22.0, -170.4], act: walker::Act::None, arrive: 0.8 }),
+];
+
+/// Ticks until `done`, or panics with `what` after `max`.
+fn tick_until(w: &mut Walker, max: u32, what: &str, done: impl Fn(&nf_view::scene::Sim) -> bool) -> u32 {
+    for t in 0..max {
+        if done(w.scene.sim.as_ref().unwrap()) { return t; }
+        w.tick(Input::default(), false);
+    }
+    panic!("{what}: not within {max} ticks");
+}
+
+/// Sits one ch-243 pulse out where Bond stands, with the walker's damage allowance OFF (no
+/// top-up can hide a contact): every tick of the pulse Bond's own hurt capsule (the port's
+/// `Hurt::update` body) must miss HurtPoly-ShuttleLaunch, and he ends it alive with the
+/// mission not failed. Returns the pulse length.
+fn sit_out_pulse(w: &mut Walker, label: &str) -> u32 {
+    let allowance = w.top_up_health;
+    // The allowance holds until the pulse rises (the guards' fire before it is not the volume's
+    // contact), then is OFF for every tick of the pulse. Through both, a player in the room
+    // answers a guard shooting him (a guard who followed him in stood 1.7 u away and shot him
+    // dead 448 ticks into pulse 2) — he aims and fires; nothing moves his feet.
+    let mut last_tap = 0u32;
+    let mut waited = 0u32;
+    while !w.scene.sim.as_ref().unwrap().drones.channels.on(243) {
+        shelter_tick(w, &mut last_tap);
+        waited += 1;
+        assert!(waited < 8000, "{label}: not within 8000 ticks");
+    }
+    w.top_up_health = false;
+    let mut n = 0u32;
+    while w.scene.sim.as_ref().unwrap().drones.channels.on(243) {
+        {
+            let sim = w.scene.sim.as_ref().unwrap();
+            let p = sim.bond.pos;
+            let h = sim.hurts.iter().find(|h| h.gate == 0xf3).expect("HurtPoly-ShuttleLaunch");
+            assert!(!h.contains(p, [p[0], p[1] + 1.8, p[2]], 0.55), "{label}: the volume touches Bond at {p:?} (+{n})");
+            assert!(sim.drones.health.health > 0.0, "{label}: Bond died at {p:?} (+{n})");
+        }
+        shelter_tick(w, &mut last_tap);
+        n += 1;
+        assert!(n < 1000, "{label}: the pulse never fell");
+    }
+    let sim = w.scene.sim.as_ref().unwrap();
+    assert!(sim.drones.health.health > 0.0 && sim.drones.mission.status() != 3, "{label}: Bond lives, no fail");
+    w.top_up_health = allowance;
+    n
+}
+
+/// One tick in the shelter: with a visible guard shooting Bond (`DamageLog::shooters`), turn the
+/// view onto his exposed part and fire (a tap every 8 ticks once on target, a reload on an empty
+/// clip); otherwise an idle tick. Turn/look only — Bond's feet never move, so the pulse's
+/// per-tick volume check reads the same standing spot.
+fn shelter_tick(w: &mut Walker, last_tap: &mut u32) {
+    let pick = {
+        let sim = w.scene.sim.as_ref().unwrap();
+        let armed = sim.gun.clip + sim.gun.spare > 0 && (2..=0x47).contains(&sim.gun.weapon);
+        if !armed || sim.disabled { None } else {
+            w.dmg.shooters(sim).into_iter()
+                .find_map(|i| walker::DamageLog::exposed_part(sim, i).map(|at| (i, at)))
+        }
+    };
+    let Some((_, at)) = pick else { w.tick(Input::default(), false); return };
+    let (input, fire, reload) = {
+        let sim = w.scene.sim.as_ref().unwrap();
+        let b = sim.bond.pos;
+        let eye = [b[0], b[1] + sim.bond.eye - sim.bond.crouch_drop, b[2]];
+        let (dx, dy, dz) = (at[0] - eye[0], at[1] - eye[1], at[2] - eye[2]);
+        let h = (dx * dx + dz * dz).sqrt().max(0.5);
+        let err = walker::wrap_pi(dx.atan2(dz) - sim.bond.yaw);
+        let perr = (dy / h).atan() / std::f32::consts::FRAC_PI_2 - sim.bond.pitch;
+        let reload = sim.gun.clip == 0;
+        let fire = !reload && err.abs() < 0.03 && perr.abs() < 0.04 && w.total_ticks.saturating_sub(*last_tap) >= 8;
+        (Input { turn: err.clamp(-0.08, 0.08), look: perr.clamp(-0.08, 0.08), ..Default::default() }, fire, reload)
+    };
+    if reload {
+        w.scene.sim.as_mut().unwrap().step_bond(Input::default(), false, true, false);
+        w.total_ticks += 1;
+        w.after_step();
+    } else if fire {
+        *last_tap = w.total_ticks;
+        w.tick_fire(input);
+    } else {
+        w.tick(input, false);
+    }
+}
+
+/// E beats aimed at `at` until `done` (the interactables press shape: the game's Player_Activate
+/// dispatch, one edge per 6 ticks).
+fn press_use_until(w: &mut Walker, at: [f32; 3], max: u32, done: impl Fn(&nf_view::scene::Sim) -> bool) -> bool {
+    for k in 0..max {
+        if done(w.scene.sim.as_ref().unwrap()) { return true; }
+        let sim = w.scene.sim.as_ref().unwrap();
+        let desired = (at[0] - sim.bond.pos[0]).atan2(at[2] - sim.bond.pos[2]);
+        let err = walker::wrap_pi(desired - sim.bond.yaw);
+        let eye = [sim.bond.pos[0], sim.bond.pos[1] + sim.bond.eye - sim.bond.crouch_drop, sim.bond.pos[2]];
+        let to = [at[0] - eye[0], at[1] - eye[1], at[2] - eye[2]];
+        let want_pitch = (to[1] / to[0].hypot(to[2]).max(0.5)).atan() / std::f32::consts::FRAC_PI_2;
+        let input = Input { turn: err.clamp(-0.08, 0.08), look: (want_pitch - sim.bond.pitch).clamp(-0.06, 0.06), ..Default::default() };
+        w.tick(input, k % 6 == 0);
+    }
+    false
+}
+
+/// THE FINALE, walked on real input to the mission's completion. The chain, every link from the
+/// disc [D] or the decompile [M]; the times are the launch script 0x0600090a's absolute clock,
+/// which starts one tick after the pack cinema 0x06000631 hands Bond back on the pit floor
+/// (stream 8's single key — the bridge slab #255's touch fires ch 0x81 → the cinema):
+/// - **pulse 1 (1611..2170) in the shelter.** Bond runs into the west blast room while its door
+///   is open (0..1000) — HurtPoly-ShuttleLaunch's polygon leaves the room out and the leaves shut
+///   over 1350..2230 [D; blast_room_shelter_16_live pins both, with the lethal-floor sisters].
+/// - **the chaser.** ch 240 @2180 wakes spawner #604 (group 6: Kiko #608 + three); her death
+///   raises nothing (param 12 = 0 [D]) — ch 0x90's writer is the KikoDeathButton #693.
+/// - **pulse 2 (6810..7320) in the shelter again** (the leaves shut over 6660..7360 [D]).
+/// - **the pit squad.** ch 242 @7332 wakes spawner #640 (group 7: #641..#644, death channels
+///   0x1a/0x19/0x18/0x17 [D]); their deaths → mux #611 → ch 0xbf, with ch 0xc0 @7808 (stream 20)
+///   → mux #633 → ch 0x82 → Script Player #610 → pack cinema 0x06000632 [D].
+/// - **the lift-out.** 0x06000632 (07900016.bin): event 4 disables Bond at t0, stream 16 clears
+///   ch 141 = 0x8d (the button's inhibit gate, armed by the corridor touch #616 on the way in) at
+///   t1056, and stream 13's event 6 at t1057 hands Bond back to stream 12's dummy at key 1868 =
+///   (5.39, 1.34, −158.31) — the shuttle-bay floor beside the button [D keys; M
+///   Script_EventHandler 0x1d94c0 event 6 → Script_Free → Player_Enable 0x195498].
+/// - **the button.** Bond's E on #693 (gate 0x8d now off [M Switch_Activate 0x1b02a8:22]) →
+///   ch 0x90 → mux #618 → ch 100 → MissionState 6 → the driving hand-off 0x7300017
+///   [M 0x182c60:111-112].
+/// Input only after the spawn (steer/fire/use; the walker's damage allowance tops up Bond's
+/// health against the guards — the volume's own contact count is asserted 0 instead, so the
+/// allowance cannot hide a pulse death).
 #[test]
-#[ignore = "pulse-1 survival has no disc-visible real-input escape (re-derived): the six-band hurt stack tiles the whole pit with overlapping quads [D], the blast rooms are sealed by static BlockingPolys with unreachable roofs [D], the lift (the only spot above the stack, low point −21.22 vs band top −21.32) is script-summoned at 2240 — 630 ticks into the 559-tick pulse [D + the ch-80 writer census] — and no pickup/substate/Bond stream exists [D+M]; the round-2 '~863 ticks after re-enable' line was an arithmetic error, the model (1611−1 ≈ 1610) matches the live 1591 [L]; the kill/fail timing is pinned by the un-ignored sister. The one open lead is the live ch-0x81→re-enable 553-vs-747 gap (the report's live checks)"]
 fn walk_the_chasers_defeat_completes_the_mission() {
     let iso = iso();
     let mut w = Walker::new(nf_view::load_with_carry(&iso, "07000016.bin", false, Some(&carry(&[0x47, 0x48, 0x4a, 0x54, 0xce, 0x4b]))).unwrap());
+    let (chaser, t0) = walk_to_the_chaser_fight(&mut w);
+    assert_armed_for_the_chaser(w.scene.sim.as_ref().unwrap(), &CHAIN_OWNED, "the 15 → 16 chain");
+    // Dry mid-fight (the 15 carry's Delta Repeater holds 12 rounds here): the player switches to
+    // another carried gun with ammo (or, with none, picks up a fallen guard's), then fights on.
+    let killed = w.shoot(chaser, "the chaser")
+        || ((w.switch_to_armed("the chaser ammo") || w.resupply("the chaser ammo")) && w.shoot(chaser, "the chaser"));
+    assert!(killed, "the chaser dies to Bond's fire");
+    finish_after_the_chaser(&mut w, t0);
+}
+
+/// Bond's weapons at the chaser fight after the real 15 → 16 hand-off: 16 loads with 15's exit
+/// save and `Player_InitWeapon` case 0x7000016 keeps the carry and re-selects the saved weapon
+/// [M 0x1a7ef8:302-307; 0x1957a8]. Before the harness carried the chain's save, the walks reached
+/// her with the fists in hand. Sister: the arrival holds the same set, so nothing on the way (the
+/// pack cinema's Player_Disable 0x195f70 / Player_Enable 0x195498 touch no weapon state [M]) takes
+/// a weapon away.
+#[test]
+fn bond_is_armed_at_the_chaser_fight_after_the_15_handoff() {
+    let iso = iso();
+    let save = carry(&[0x47, 0x48, 0x4a, 0x54, 0xce, 0x4b]);
+    assert_eq!(save.weapon, 0x11, "15's exit saves the Delta Repeater as the held weapon [M 0x195670:18-19]");
+    let mut w = Walker::new(nf_view::load_with_carry(&iso, "07000016.bin", false, Some(&save)).unwrap());
+    w.wait_enabled(3000, "the launch-centre arrival");
+    w.wait(60);
+    assert_armed_for_the_chaser(w.scene.sim.as_ref().unwrap(), &CHAIN_OWNED, "the 15 → 16 arrival");
+    walk_to_the_chaser_fight(&mut w);
+    assert_armed_for_the_chaser(w.scene.sim.as_ref().unwrap(), &CHAIN_OWNED, "the 15 → 16 chain");
+}
+
+/// The same pin on a direct (cold) load of 16: the fresh 14 kit [M 0x1a7ef8 case 0x7000016 →
+/// caseD_7000014], the Delta Repeater in hand. Sister of the hand-off test: the two sets differ
+/// only by the Grapple 0x50, which 15's skin sweep removes on the chain [M 0x1a97c8] and 16's
+/// own archive keeps on a cold load.
+#[test]
+fn bond_is_armed_at_the_chaser_fight_on_a_direct_load() {
+    let iso = iso();
+    let mut w = Walker::new(nf_view::load(&iso, "07000016.bin", false).unwrap());
+    w.wait_enabled(3000, "the launch-centre arrival");
+    w.wait(60);
+    assert_armed_for_the_chaser(w.scene.sim.as_ref().unwrap(), &COLD_OWNED, "the cold 16 arrival");
+    walk_to_the_chaser_fight(&mut w);
+    assert_armed_for_the_chaser(w.scene.sim.as_ref().unwrap(), &COLD_OWNED, "the cold 16 load");
+    let diff: Vec<usize> = COLD_OWNED.iter().copied().filter(|w| !CHAIN_OWNED.contains(w)).collect();
+    assert_eq!(diff, vec![0x50], "the two paths differ only by the Grapple, as in the game [M 0x1a97c8]");
+}
+
+/// From the arrival to the chaser fight: the approach, the pack cinema (played out), pulse 1 in
+/// the shelter, the chaser's spawn and the door reopening. Returns the chaser's index and the
+/// hand-back tick.
+fn walk_to_the_chaser_fight(w: &mut Walker) -> (usize, u32) {
     w.wait_enabled(3000, "the launch-centre arrival");
     w.wait(100);
-    // Straight to the launch (the walkreal-c positions: the objectives' route is covered by
-    // walk_arrival_to_the_chasers_spawn; this tail needs the chain + the fight only).
-    w.walk_to(walker::Wp::new(2.5, 1.0, -169.0).r(1.3), "door[4] through");
-    w.walk_to(walker::Wp::new(2.4, 1.0, -175.0).r(1.2), "the south room");
+    w.walk_route(APPROACH);
+    assert!(w.scene.sim.as_ref().unwrap().drones.channels.on(0x8d), "the route crossed the corridor touch #616 — the button's gate is armed [D]");
+    // The launch chain plays out (no skip): ch 0x81 → the pack cinema → the hand-back on the pit
+    // floor [D stream-8 key].
     w.skip_cutscenes = false;
+    tick_until(w, 3000, "the pack cinema's hand-back on the pit floor", |s| s.drones.channels.on(0x81) && !s.disabled && s.bond.pos[1] < -20.0);
+    let t0 = w.total_ticks;
+    eprintln!("[finale] hand-back at {:?}", w.scene.sim.as_ref().unwrap().bond.pos);
+    w.skip_cutscenes = true;
+    w.walk_route(INTO_THE_SHELTER);
+    let inside_at = w.total_ticks - t0;
+    eprintln!("[finale] in the shelter +{inside_at}");
+    assert!(inside_at < 1000, "Bond is in the room before its door starts to shut (+{inside_at}, the leaves move 1000..1350 [D])");
+    // Pulse 1.
+    let n1 = sit_out_pulse(w, "pulse 1 in the shelter");
+    assert!((555..=562).contains(&n1), "pulse 1 is 1611..2170 = 559 ticks [D stream 6], got {n1}");
+    assert!(w.scene.sim.as_ref().unwrap().drones.mission.status() != 3, "no fail");
+    // The chaser: ch 240 @2180 spawns her; the door reopens 2230..2580.
     let chaser = {
-        let mut found = None;
-        for _ in 0..6000u32 {
-            w.tick(Input::default(), false);
-            let sim = w.scene.sim.as_ref().unwrap();
-            // The chaser is the skin-0x1e dtype-0xf drone NOT in the death-ch 23..26 pit squad
-            // (#294–297 [D]) — her param 12 is 0 [D #261] (the old 0x90 init stand-in is gone).
-            if let Some(i) = sim.drones.list.iter().position(|d| d.present && !d.corpse && d.skin & 0xffff == 0x1e && d.dtype == 0xf && !matches!(d.death_channel, 23..=26)) {
-                found = Some(i);
-                break;
-            }
-        }
-        w.skip_cutscenes = true;
-        found.expect("the launch chain spawns the chaser (spawner #257, group 6 [D])")
+        tick_until(w, 2000, "the chaser spawns", |s| s.drones.list.iter().any(|d| d.present && !d.corpse && d.skin & 0xffff == 0x1e && d.dtype == 0xf && !matches!(d.death_channel, 23..=26)));
+        let sim = w.scene.sim.as_ref().unwrap();
+        sim.drones.list.iter().position(|d| d.present && !d.corpse && d.skin & 0xffff == 0x1e && d.dtype == 0xf && !matches!(d.death_channel, 23..=26)).unwrap()
     };
-    let cpos = w.scene.sim.as_ref().unwrap().drones.list[chaser].pos;
-    let _ = w.try_walk_to(walker::Wp::new(cpos[0], cpos[1] + 6.0, cpos[2] + 4.0).r(2.0), "the chaser's rim");
-    assert!(w.shoot(chaser, "the chaser"), "the chaser dies to Bond's fire");
+    while w.total_ticks - t0 < 2600 { w.tick(Input::default(), false); }
+    {
+        let sim = w.scene.sim.as_ref().unwrap();
+        eprintln!("[finale] the chaser #{chaser} at {:?}, +{}; Bond holds {:#x} (clip {} spare {}), owns {:x?}",
+            sim.drones.list[chaser].pos, w.total_ticks - t0, sim.gun.weapon, sim.gun.clip, sim.gun.spare, owned(sim));
+    }
+    (chaser, t0)
+}
 
-    // The REAL rule (kiko-16-defeat): her death raises nothing — ch 0x90's writer is the
-    // KikoDeathButton #693 [D], and the mission does not complete on the kill [D AND #271].
+/// After the chaser's death: pulse 2, the pit squad, the lift-out cinema, the button.
+fn finish_after_the_chaser(w: &mut Walker, t0: u32) {
     for _ in 0..100 { w.tick(Input::default(), false); }
     {
         let sim = w.scene.sim.as_ref().unwrap();
@@ -389,6 +678,63 @@ fn walk_the_chasers_defeat_completes_the_mission() {
         assert!(!sim.drones.channels.on(100), "mux #618 stays cold on the kill [D]");
         assert!(sim.drones.mission.status() != 6, "the mission does not complete on the kill [D AND #271 waits for the button]");
     }
+    eprintln!("[finale] the chaser down +{}", w.total_ticks - t0);
+    // Back into the shelter before the leaves shut again (6310..6660 [D]) — from where the fight
+    // left Bond: a player who fought her from inside the room (west of the blast door at x
+    // −11.0) stays in; the full route out to the pit floor and back in wedged on its first leg
+    // for 1523 ticks and pulse 2 caught him outside.
+    if w.scene.sim.as_ref().unwrap().bond.pos[0] < -12.0 {
+        w.walk_route(&INTO_THE_SHELTER[INTO_THE_SHELTER.len() - 1..]);
+    } else {
+        w.walk_route(INTO_THE_SHELTER);
+    }
+    let back_at = w.total_ticks - t0;
+    eprintln!("[finale] back in the shelter +{back_at}");
+    assert!(back_at < 6310, "back in the room before its door shuts for pulse 2 (+{back_at})");
+    let n2 = sit_out_pulse(w, "pulse 2 in the shelter");
+    assert!((506..=513).contains(&n2), "pulse 2 is 6810..7320 = 510 ticks [D stream 9], got {n2}");
+    eprintln!("[finale] pulse 2 over +{}", w.total_ticks - t0);
+    // The pit squad (group 7, ch 242 @7332): all four must fall for ch 0xbf.
+    tick_until(w, 600, "the pit squad spawns", |s| s.drones.list.iter().any(|d| d.present && !d.corpse && matches!(d.death_channel, 23..=26)));
+    for _ in 0..4 {
+        let next = {
+            let sim = w.scene.sim.as_ref().unwrap();
+            let bp = sim.bond.pos;
+            sim.drones.list.iter().enumerate()
+                .filter(|(_, d)| d.present && !d.corpse && d.health > 0.0 && matches!(d.death_channel, 23..=26))
+                .min_by(|a, b| walker::dxz(a.1.pos, bp).total_cmp(&walker::dxz(b.1.pos, bp)))
+                .map(|(i, _)| i)
+        };
+        let Some(i) = next else { break };
+        eprintln!("[finale] squad #{i} (death ch {:#x}) at {:?}", w.scene.sim.as_ref().unwrap().drones.list[i].death_channel, w.scene.sim.as_ref().unwrap().drones.list[i].pos);
+        // Dry mid-fight: another carried gun with ammo or the fallen squad's guns, then fight on.
+        let killed = w.shoot(i, "the pit squad")
+            || ((w.switch_to_armed("the pit squad ammo") || w.resupply("the pit squad ammo")) && w.shoot(i, "the pit squad"));
+        assert!(killed, "the pit squad member #{i} dies to Bond's fire");
+    }
+    tick_until(w, 600, "the pit squad's deaths raise ch 0xbf [D mux #611]", |s| s.drones.channels.on(0xbf));
+    eprintln!("[finale] ch 0xbf +{}", w.total_ticks - t0);
+    // ch 0xc0 @7808 → ch 0x82 → 0x06000632 plays out (no skip) and hands Bond back at the bay.
+    w.skip_cutscenes = false;
+    tick_until(w, 3000, "ch 0x82 starts the lift-out cinema [D mux #633]", |s| s.drones.channels.on(0x82) && s.disabled);
+    tick_until(w, 1500, "the lift-out cinema hands Bond back", |s| !s.disabled);
+    w.skip_cutscenes = true;
+    {
+        let sim = w.scene.sim.as_ref().unwrap();
+        let p = sim.bond.pos;
+        eprintln!("[finale] lift-out hand-back at {p:?} +{}", w.total_ticks - t0);
+        assert!((p[0] - 5.39).abs() < 0.5 && (p[1] - 1.34).abs() < 1.0 && (p[2] + 158.31).abs() < 0.5,
+            "0x06000632 hands Bond back at its key 1868 (5.39, 1.34, −158.31) [D], got {p:?}");
+        assert!(!sim.drones.channels.on(0x8d), "0x06000632 stream 16 cleared the button's gate ch 0x8d [D t1056]");
+    }
+    // The button (the kiko_button_real_walk lane from the bay to the button's side).
+    w.walk_to(walker::Wp::new(6.3, 1.0, -155.45).r(0.6), "the button's side");
+    assert!(press_use_until(w, [7.02, 1.46, -155.61], 240, |s| s.drones.channels.on(0x90)),
+        "Bond's E on the KikoDeathButton fires ch 0x90 [D #693 p0; M Switch_Activate 0x1b02a8]");
+    tick_until(w, 900, "the mission completes", |s| s.drones.mission.status() == 6);
+    let sim = w.scene.sim.as_ref().unwrap();
+    assert!(sim.drones.channels.on(100), "mux #618 (out 0x64 ← 0x90) fires ch 100 [D #618]");
+    assert_eq!(sim.drones.mission.to_end, 0x0730_0017, "the driving hand-off [M 0x182c60:111-112]");
 }
 
 /// The door[0] unlock chain, focused: the SecurityStation trigger #250 (kind 0xEA, out 0x24,
@@ -630,7 +976,10 @@ fn the_real_order_launch_chain_matches_the_teleported_one() {
         // the cinema mid-leg.
         ("the slab's north edge", walker::Wp::new(2.4, 1.0, -172.0).r(0.8)),
     ];
-    w.walk_route(route);
+    let panel = route.iter().position(|(n, _)| *n == "door[4]'s panel").expect("the route presses #617");
+    w.walk_route(&route[..panel]);
+    tower_door1_holds_without_its_panel(&mut w);
+    w.walk_route(&route[panel..]);
     // Manual real-time approach: face south (yaw π = atan2(0, −1)) and walk into the slab, so the
     // touch tick, the cinema's player-disable, the hand-back and ch 243 are all observed from this
     // loop (walk_to is opaque and its legs tick through the disable).
@@ -687,7 +1036,14 @@ fn the_real_order_launch_chain_matches_the_teleported_one() {
         assert!(!sim.drones.channels.on(0xb4), "the cinema's stream-13 t747 write cleared ch 0xb4 [D 06000631 s13 EV0x0d[180,0]]");
     }
 
-    // ---- phase B: the teleported run (the sister's own setup: placed on trigger #255, no input) ----
+    // ---- phase B: the teleported run (the live session's own setup: placed on trigger #255, no input) ----
+    // KEPT WRITE: this phase IS the placed order — #255 touched with 0x24/0x27/0x28/0xb4 all
+    // cold — and no real input reaches it: tower_door1 #392 (lock 0xb4, writer only the panel
+    // #617 [D census]) is the south room's only way in, and phase A's sister
+    // `tower_door1_holds_without_its_panel` pins that the leaf holds a walked Bond until the E.
+    // The PCSX2 check that would retire it: a fresh-boot walked run of the same route, watching
+    // switch_channels[243] (0x26fc90+243) against the hand-back's re-enable — if that delta
+    // matches the placed run's 1591 [L], the placed live measurement needs no placed port twin.
     let mut w = Walker::new(nf_view::load_with_carry(&iso, "07000016.bin", false, Some(&carry(&[0x47, 0x48, 0x4a, 0x54, 0xce, 0x4b]))).unwrap());
     w.top_up_health = false;
     w.skip_cutscenes = false;
@@ -724,23 +1080,19 @@ fn the_real_order_launch_chain_matches_the_teleported_one() {
 }
 
 
-/// level-16-every-objective: the WHOLE walked mission on real input, no god mode — where it ends
-/// and why. Fresh load, the carried 07000014/15 chain [D], the full route (the objectives' walk),
-/// the launch chain, the launch blast. Pins the player-order coverage the port CAN prove and the
-/// exact wall the rest sits behind:
+/// level-16-every-objective: the WHOLE walked mission on real input, no god mode, with a player
+/// who stays where the pack cinema hands him back — the SISTER of
+/// `walk_the_chasers_defeat_completes_the_mission` (same approach, no run to the blast room):
 ///   * obj0 "Reach Drake's launch silo" completes on the walked route (the monitor folds it);
-///   * the launch chain re-enables Bond INSIDE HurtPoly-ShuttleLaunch #309's box at the pit floor
-///     [M Player_Enable 0x195498 teleports to the stream-8 key; D the pack cinema's single t747
-///     key (3.57,−22.76,−179.55); the volume x −30.7..35.3, y −24.1..−21.3, z −197.3..−133.8 [D]];
+///   * the launch chain re-enables Bond INSIDE HurtPoly-ShuttleLaunch #309's polygon at the pit
+///     floor [M Player_Enable 0x195498 teleports to the stream-8 key; D the pack cinema's single
+///     t747 key (3.57,−22.76,−179.55)];
 ///   * ch 243 rises at the launch script's tick 1611 and the death sequence fails the mission at
-///     pulse+~450 [D stream-6; M 0x19a6a8 RED_FADE_TICKS 448; L 454] — the pit holds no walking
-///     escape before the pulse (the pit door locks on ch 240/241, no ladder/wire placement, the
-///     lift summons after the pulse) [D; hurt-volumes.md U-051], and the game's escape is the
-///     pack (jetpack) flight the port has no substate for [M the substate list] — so the walked
-///     mission takes the FAIL exit here, with obj1 ("Prevent Kiko from launching into space",
-///     the KikoDeathButton #693 past the escape) unreachable.
+///     pulse+~450 [D stream-6; M 0x19a6a8 RED_FADE_TICKS 448; L 454] — the open pit floor is
+///     lethal; the shelter is the blast rooms (blast_room_shelter_16_live), which this player
+///     never enters, so obj1 (the KikoDeathButton #693) is never reached.
 #[test]
-fn the_walked_mission_ends_at_the_launch_blast_until_the_pack_flight_is_ported() {
+fn the_walked_mission_fails_at_the_launch_blast_when_bond_stays_on_the_pit_floor() {
     let iso = iso();
     let mut w = Walker::new(nf_view::load_with_carry(&iso, "07000016.bin", false, Some(&carry(&[0x47, 0x48, 0x4a, 0x54, 0xce, 0x4b]))).unwrap());
     w.wait_enabled(3000, "the launch-centre arrival");
@@ -814,7 +1166,7 @@ fn the_walked_mission_ends_at_the_launch_blast_until_the_pack_flight_is_ported()
     }
     let t_reenable = t_reenable.expect("the walked chain re-enables Bond at the pit floor [M Player_Enable 0x195498]");
     let t243 = t243.expect("ch 243 rises on the walked run [D stream-6 tick 1611]");
-    let t_fail = t_fail.expect("the walked mission fails at the launch blast — the port has no pack flight to escape it [D; U-051]");
+    let t_fail = t_fail.expect("the walked mission fails at the launch blast for a Bond left on the open pit floor [D; U-051]");
     eprintln!("[16-walk] re-enable f{t_reenable}, ch243 f{t243} (+{}), fail f{t_fail} (+{} after ch243)", t243 - t_reenable, t_fail - t243);
     assert!((1540..=1700).contains(&(t243 - t_reenable)),
         "the pulse lands ~1611 after the re-enable on the walked run (got {}) [D stream-6; the model 1610, port 1603, live 1591]", t243 - t_reenable);
@@ -823,6 +1175,87 @@ fn the_walked_mission_ends_at_the_launch_blast_until_the_pack_flight_is_ported()
     {
         let sim = w.scene.sim.as_ref().unwrap();
         assert_eq!(sim.drones.mission.states[22][0], 4, "obj0 stays complete through the fail");
-        assert_eq!(sim.drones.mission.states[22][1], 3, "obj1 never had its writer reached: the button is past the escape the pack buys [D #693; U-051]");
+        assert_eq!(sim.drones.mission.states[22][1], 3, "obj1 never had its writer reached: the button is past the pulses [D #693; U-051]");
+    }
+}
+
+/// level-16-stuck-overlook: the interactive run parked at the SW dead end of the west walkway
+/// (−17.86, 6.81, −97.16, yaw 6.98, beside the control-room glass, ~tick 3700) and could not
+/// continue. What the game expects there [D docs/levels/07000016.md §7]: the way on is BACK
+/// north-east along the walkway — the SecurityStation trigger #597 (kind 0xEA TOUCH_ONCE, out
+/// 0x24, mask 0x04) at (−15.20, 6.52, −94.56) [D]; its E fires ch 0x24 [M Trigger_Activate
+/// 0x1b2318:38-49 gates the E dispatch on mask&4] and door[0]'s rising-edge lock arm opens it
+/// [M Door_Update 0x1363c8, the lock arm ~0x13660c]. This walk pins the whole arc on real input
+/// from the level start: up the east ramp, west along the ring, SOUTH to the reported dead-end
+/// spot at the walkway's raised end, back NE to the station, the E, then down and through
+/// door[0] — the route on from the overlook.
+#[test]
+fn the_overlook_dead_end_returns_to_the_station_and_door0_opens() {
+    let iso = iso();
+    let mut w = Walker::new(nf_view::load_with_carry(&iso, "07000016.bin", false, Some(&carry(&[0x47, 0x48, 0x4a, 0x54, 0xce, 0x4b]))).unwrap());
+    w.wait_enabled(3000, "the launch-centre arrival");
+    w.wait(200);
+    // The proven ascent (the main route's legs): corridor, east ramp, upper ring west to the
+    // station area.
+    let route: &[(&str, walker::Wp)] = &[
+        ("the corridor south", walker::Wp::new(4.3, 0.6, -72.5).r(1.2)),
+        ("door[7] through", walker::Wp::new(4.9, -0.1, -78.0).r(1.2)),
+        ("the lane east", walker::Wp::new(10.0, 0.0, -82.0).r(1.3)),
+        ("the lane south", walker::Wp::new(12.0, 0.0, -88.0).r(1.3)),
+        ("the ramp foot", walker::Wp::new(13.8, 0.0, -90.8).r(1.1)),
+        ("the ramp 1", walker::Wp::new(14.5, 0.6, -87.5).r(1.2)),
+        ("the ramp 2", walker::Wp::new(14.5, 2.4, -84.5).r(1.2)),
+        ("the ramp 3", walker::Wp::new(14.5, 4.6, -81.5).r(1.2)),
+        ("the ring east", walker::Wp::new(14.5, 5.9, -79.0).r(1.2)),
+        ("the ring 1", walker::Wp::new(6.0, 5.9, -78.5).r(1.4)),
+        ("the ring 2", walker::Wp::new(-4.0, 5.9, -79.0).r(1.4)),
+        ("the ring 3", walker::Wp::new(-11.0, 5.9, -81.0).r(1.4)),
+        ("the ring 4", walker::Wp::new(-13.0, 5.9, -86.0).r(1.4)),
+        ("the station west", walker::Wp::new(-16.5, 5.9, -88.0).r(1.3)),
+        ("the station south", walker::Wp::new(-16.3, 5.9, -93.5).r(1.2)),
+    ];
+    w.walk_route(route);
+    // The extension the interactive run made: SOUTH past the station along the walkway's raised
+    // end (deck y 5.7..6.8 [D §7]) to the reported spot — the SW dead end by the control-room
+    // glass.
+    w.walk_to(walker::Wp::new(-17.0, 6.5, -95.5).r(1.0), "the walkway south of the station");
+    w.walk_to(walker::Wp::new(-17.8, 6.8, -97.1).r(0.8), "the overlook dead end");
+    {
+        let sim = w.scene.sim.as_ref().unwrap();
+        let p = sim.bond.pos;
+        assert!((p[0] + 17.86).abs() < 1.2 && (p[2] + 97.16).abs() < 1.2,
+            "Bond reaches the reported dead-end spot (−17.86, 6.81, −97.16), got {p:?}");
+        assert!(sim.bond.grounded, "the walkway's raised end holds him");
+    }
+    // The way on is BACK north-east: the station trigger, its E, door[0]'s unlock.
+    w.walk_to(walker::Wp::new(-16.3, 5.9, -93.5).r(1.2), "back from the dead end");
+    w.walk_to(walker::Wp::at(-15.2, 5.9, -94.6, walker::Act::Use { use_ticks: 120 }).r(1.2), "the station E");
+    {
+        let sim = w.scene.sim.as_ref().unwrap();
+        assert!(sim.drones.channels.on(0x24), "the SecurityStation E fires ch 0x24 [D #597 mask 0x04]");
+        assert_eq!(sim.drones.doors.list[0].ch_lock, 0, "door[0]'s lock cleared by the rising edge [M 0x13660c arm]");
+    }
+    // Downstairs and through door[0] — the route on from the overlook.
+    let back: &[(&str, walker::Wp)] = &[
+        ("the return 1", walker::Wp::new(-16.3, 5.9, -89.0).r(1.3)),
+        ("the return 2", walker::Wp::new(-13.0, 5.9, -85.0).r(1.4)),
+        ("the return 3", walker::Wp::new(-10.0, 5.9, -81.0).r(1.4)),
+        ("the return 4", walker::Wp::new(-4.0, 5.9, -79.0).r(1.4)),
+        ("the return 5", walker::Wp::new(6.0, 5.9, -78.5).r(1.4)),
+        ("the return 6", walker::Wp::new(14.5, 5.9, -79.0).r(1.2)),
+        ("the descent 1", walker::Wp::new(14.5, 4.6, -82.0).r(1.2)),
+        ("the descent 2", walker::Wp::new(14.5, 2.4, -85.0).r(1.2)),
+        ("the descent 3", walker::Wp::new(14.5, 0.6, -88.0).r(1.2)),
+        ("the east lane south", walker::Wp::new(9.5, 0.0, -100.0).r(1.6)),
+        ("the trench's west end", walker::Wp::new(4.0, 0.0, -108.0).r(1.6)),
+        ("door[0]'s west approach", walker::Wp::new(2.3, 0.0, -110.0).r(0.7)),
+        ("door[0]'s threshold", walker::Wp::new(2.3, 0.0, -113.2).r(0.7)),
+        ("door[0] through", walker::Wp::new(2.0, -0.1, -119.0).r(1.2)),
+    ];
+    w.walk_route(back);
+    {
+        let sim = w.scene.sim.as_ref().unwrap();
+        let p = sim.bond.pos;
+        assert!(p[2] < -116.0, "Bond is through door[0] — the route on from the overlook, got {p:?}");
     }
 }

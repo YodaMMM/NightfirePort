@@ -42,6 +42,8 @@ fn full_layout(scene: &Scene) -> nf_view::scene::SkinLayout {
         col_att: 0,
         col_pick: attaches as u32,
         col_sl: (attaches + picks) as u32,
+        // ambient-sweep: the door-region colour section — empty here (the writers stop at col_one).
+        col_door: col_one,
         col_one,
         // fix-gpu-facial-morphs' fields: no morph upload in this CPU-side layout check.
         wt_stride: 0,
@@ -233,6 +235,10 @@ fn spawn_npc_skin_binds_a_pool_guard_in_front_of_bond_and_fighting() {
         sim.bond.pitch = 0.0;
     }
     let mut fired = false;
+    // A discharge counts as the fight too: the guard's rounds can resolve on Bond inside their spawn
+    // tick at this range (Bond's hit volume spans feet to eye [M Bullet_CollisionHandler 0x12ce80]),
+    // so a live bullet is never seen in the list.
+    let shots0 = scene.sim.as_ref().unwrap().drones.list[gi].shots.len();
     for t in 0..2400 {
         let (gp, bp) = (scene.sim.as_ref().unwrap().drones.list[gi].pos, scene.sim.as_ref().unwrap().bond.pos);
         let dx = gp[0] - bp[0];
@@ -242,6 +248,7 @@ fn spawn_npc_skin_binds_a_pool_guard_in_front_of_bond_and_fighting() {
         scene.sim.as_mut().unwrap().step_bond(input, false, false, false);
         let live = scene.sim.as_ref().unwrap().drones.bullets.iter().any(|b| b.state == 1);
         if live { fired = true; eprintln!("[fight] a pool-guard bullet is live at tick {t}"); break; }
+        if scene.sim.as_ref().unwrap().drones.list[gi].shots.len() > shots0 { fired = true; eprintln!("[fight] the pool guard fired at tick {t}"); break; }
     }
     {
         let sim = scene.sim.as_ref().unwrap();

@@ -61,6 +61,21 @@ MSCNT                                      run the microprogram on this batch
 B cycles through 0x2E1, 0x1D8, 0xCF (triple buffering). Texture changes (REF) apply to the batches after them; the
 first CNT also sends GS state (`FLUSHE; DIRECT` A+D writes: ALPHA_1, TEST_1, …).
 
+**Batch handler selector** (viewmodel-light, 2026-10-31) [M]: the GIF tag's fourth word (REGS fields 8-11, unused
+under NREG 3) carries a VU1 handler index in its low half. The dispatch reads it (`ILW.w vi04, 0(vi01)` at micro
+0x023, vi01 = the batch base B) and jumps to it plus the per-object mode at data 0x16.x (0 / +2 tweak / +4 lights,
+written by `FillMatrixChainRot` 0x122310 and `FillMatrixChainSkin` 0x122788). The table at micro 0x08-0x16:
+**8** = the normal transform (micro 0x260 / 0x2a5 tweak / 0x343 lights), **0x10** = micro 0x2e2 for every mode —
+the **environment-map handler**: ST = 0.5 + (row · n)/256 per vertex from the packed int normal, with the rows at
+data 0x10-0x13 (the viewer's camera rows +0x120 → U and +0x130 → V, × 1/256, + 0.5), and the colour
+`TAmbient ⊙ rgba` — no point lights. The skinned builder always uploads the rows; the rigid/static one only when box
+0's +0x34 flag bit 0 is set (the 31 env objects), and it does not rotate them into the object, so a rigid draw reads
+its object-space normal while a skinned draw reads the normal `SkinIt` moved to world space. Census on 0700000c
+[D]: 7,692 batches selector 8, 135 selector 0x10 (100 additive sheen batches, 35 normal-blend), nothing else; the
+sniper body `Case` 0x0200072c carries its two additive stripe batches as 0x10. `Batch::handler` /
+`HANDLER_LIT` / `HANDLER_ENV` in ps2gfx.rs; the port's shader applies it (gpu.rs, scene.rs `ENV_SKINNED` /
+`ENV_OBJECT`). The sign of U against the port's camera right is unverified (the textures seen so far vary in V only).
+
 GS state: *measured over every DIRECT A+D write of all 27 on-foot levels* — only ALPHA_1 (0x42), TEST_1 (0x47) and
 ZBUF_1 (0x4e) ever occur (no CLAMP/TEX1/TEX0: filtering and wrapping are global texture-upload state). The ALPHA_1
 values and their port mapping (fields A,B,C,D per the ps2tek GS tables; equation ((A−B)·C >> 7) + D): 0x44 (0,1,0,1)

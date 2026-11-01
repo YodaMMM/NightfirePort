@@ -38,12 +38,30 @@ disc, [L] EE snapshot, [S] suggested. All handler line numbers are the decompile
 
 ## 2. The Screen Adjust page (0x40000047)
 
-Page data [L menu-def walk 2026-10-15]: root 0x40000047 (0,0,640,480); two slider controls both
-named `0x100001eb`, distinguished by their d1 field — **d1 0 = the vertical bar** (304,176,32,128),
-**d1 1 = the horizontal bar** (256,224,128,32), both d3 0xa with initial value msg 0x2e (0xa
-horizontal, 0x0 vertical); a fullscreen picture control with texture **0x3000074** (the reference
-frame the bars move); the hint label **0x67b "~A Confirm  ~B Cancel"**; decorative corner brackets
-(texture 0x3000042) around an outer (51,41)-(590,440) and an inner (115,105)-(526,376) rectangle.
+Page data [L menu-def walk 2026-10-15; D re-walked 2026-10-31]: root 0x40000047 (0,0,640,480)
+whose script's one keyframe focuses `0x100001eb`; two scroll controls (type 10, SET 3, layer
+0x19) both named `0x100001eb`, distinguished by their d1 field — **d1 0 = the vertical bar**
+(304,176,32,128), **d1 1 = the horizontal bar** (256,224,128,32), both d3 0xa with initial value
+msg 0x2e (0xa horizontal, 0x0 vertical); a fullscreen picture control with texture **0x3000074**
+(uv 0,0,511,511, grey, layer 0x1e); the hint label **0x67b "~A Confirm  ~B Cancel"**; 24 corner
+brackets (one-texel TEX 0x3000042 uv (38,19,1,1), cream, layer 0x1a) around an outer
+(51,41)-(590,440) and an inner (115,105)-(526,376) rectangle.
+
+**Both bars are focused at once.** Scroll_Update's focus test compares the focused control's ID
+with its own (`page+0xac → +0x18 == self+0x18` [M 0x221b20:42-43]) and the two scrolls share one
+id, so each takes its own axis whenever the page is up: the vertical one ▲ / ▼ (actions 0x1a /
+0x1b), the horizontal one ◀ / ▶ (0x1c / 0x1d) [M :50-140]. A press sets the scroll's +0x142 word
+(0x40 dec / 0x80 inc, cleared on release), moves the value 0 → ∓1, plays MENU_SOUND 3 / 4 and
+sends 0x49 [M :186-210]. The manager's own direction walk (`Menu_FindControl` 0x1f16d8, page
+nav mode 1 from `Page_Init` 0x21f1c0) only moves its cursor sprite [M 0x1f16d8:170-181] — there
+is no bar to pick. ✕ on a focused scroll plays MENU_SOUND 0 and sends 0x4b [M :400-405].
+
+What the bars draw [M Scroll_Update :243-330 + Component_SetupInstance 0x1f0950; D SET 3]: the
+horizontal track is COMPONENT 6 (◀ at dx 0, ▶ right-anchored, both centred in y; dim 0x6f6f6fdf
+under mask 0x20, the held side 0x7f7f7fff under 0x40 / 0x80; nothing under 0x10), the vertical
+COMPONENT 7 (▲ / ▼ centred in x; 0x606060c0 unfocused, 0x6f6f6fdf focused, the held end bright).
+COMPONENT 8 (the thumb) has no instances. The focused fraction-free arrows pulse with
+`Menu_AlphaGet` (R, G, B + alpha [M 0x1f0dc4-0x1f0e08]).
 
 Handler [M `P_SCREENADJUST_Handler` 0x217a58, size 176]:
 
@@ -90,8 +108,9 @@ Slider behaviour [M `C_SBSCREEN_Handler` 0x217b08, size 204]:
   (then the flag clears — the write happens once per change, in vblank). The constant decodes
   against the game's own `sceGsSetDefDispEnv` 0x226370 [M] for NTSC 512×448 interlaced
   (`sceGsSetDefDBuff(…,0,0x200,0x1c0,…)`, `CreateDB` 0x10b000:21): MAGH = 5 (`(512+0x9ff)/512 = 5`,
-  written as `(5-1)<<23`), DW = 5·512−1 = 2559 (bits 32+), DH = 448·2−1 = 895 (bits 44+), DX base
-  0x27c = 636, DY base 0x32 = 50 — exactly the constant `0x1bf9ff02000000 | 50<<12` [M].
+  written as `(5-1)<<23`), DW = 5·512−1 = 2559 (bits 32-43 = 0x9ff), DH = 0x1bf = 447 (bits 44+:
+  448 lines — `sceGsSetDefDispEnv`'s `h − 1` arm, the `2h − 1` arm is not taken), DX base 0x27c =
+  636, DY base 0x32 = 50 — exactly the constant `0x1bf9ff02000000 | 50<<12` [M].
 
 - Units: the visible line is 5·512 = 2560 DX units wide (MAGH 5), so **X is in 1/5 framebuffer
   pixel units**: one X step (12) = 2.4/512 of the picture width; the full X range (±432) =
@@ -102,10 +121,13 @@ Slider behaviour [M `C_SBSCREEN_Handler` 0x217b08, size 204]:
   - 640×480 menu space (what the menu overlay authors in, mapped 640→512 / 480→448): **(X/4,
     Y·15/14)** — exact inverses of the overlay's 0.8 / 14·15 scaling.
   - fractions of the visible picture: **(X/2560, Y/448)**.
-  - The SIGN convention (whether a positive X shifts the drawn picture left or right on the TV —
-    DISPLAY's DX selects where the read starts) is not decidable from the decompile alone; the
-    renderer applies the fraction and the direction is confirmed by the live check in
-    the port's model. [S]
+  - Direction: DISPLAY's DX/DY are the display area's position on the monitor (the read start in
+    the framebuffer is DISPFB's DBX/DBY, untouched here) [S GS manual, DISPLAY1/2], so a larger X
+    moves the picture **right** and a larger Y moves it **down**. The page agrees: ◀ (action 0x1c)
+    and ▲ (0x1a) take Scroll_Update's 0x40 arm, value − 1 [M 0x221b20; the action numbers from
+    `psiInput_MapInputs` 0x10cd80's menu arm: +0x7c Up 0x1000 = 0x1a, +0x80 Down = 0x1b, +0x84 Left
+    = 0x1c, +0x88 Right = 0x1d], and C_SBSCREEN passes it to psiAdjustScreenPos — ◀ lowers DX (left),
+    ▲ lowers DY (up): each arrow moves the picture its own way.
 
 - PAL note: `sceGsSetDefDispEnv`'s PAL bases are DX 0x290 / DY 0x48 [M 0x226370:83-96], but
   `VBlankInt` writes the NTSC bases unconditionally; on this NTSC-U disc `PS2Region` is 0 and
@@ -185,8 +207,21 @@ also `psiSetScreenPos(DAT_0031cac0, DAT_0031cac4)` [M].
 
 ## 7. The port's mapping (crates/nf-view/src/menu.rs)
 
-- `Page::ScreenAdjust` = 0x40000047; two "rows" (the sliders): row 0 vertical, row 1 horizontal —
-  Up/Down move the cursor, Left/Right nudge the focused axis one step.
+- `Page::ScreenAdjust` = 0x40000047; no cursor (`rows()` = 0 — the bars share the focused id):
+  Up/Down nudge Y (the vertical bar), Left/Right nudge X (the horizontal bar), each with MENU_SOUND
+  3 / 4; `screen_adjust_held` holds the bars' +0x142 words for the draw (a press lights its arrow
+  for `SCREEN_ADJUST_HELD_TICKS` ticks — the port's input is press edges [S]).
+- Draw: `fe_pages::screenadjust_elems` (the picture, the 24 brackets, the hint through the shared
+  hint bar, the SET 3 arrows); `--page screenadjust` (NF_SA_HELD=h-|h+|v-|v+) renders it.
+- The frame shift: `gpu::screen_adjust_viewport` moves the whole frame (one render pass — world,
+  fog, sky, snow, HUD/menus, movie plane — through `set_viewport`) by `X/2560 · H·4/3`, `Y/448 · H`
+  target pixels (the port's picture is the 4:3 frame at the target's height, the HUD's own pixel
+  shape); a cut-scene band rides the same shift; what the shift uncovers is the black clear (the GS
+  shows nothing outside its display area). The App mirrors the live offset (`App::screen_pos`) so
+  gameplay frames, which have no front end, keep it; fresh menu managers adopt it (the game's
+  globals outlive the manager). Render aid: `NF_SCREEN_POS=x,y` (game units, clamped) on `--shot`.
+- Persistence: the option file's [av] section carries `screen_x` / `screen_y` (the global settings
+  blob's X/Y, §5), clamped to ±0x1b0 / ±0x30 on load (`FrontEnd::opts_with_screen` / `set_opts`).
 - `FrontEnd`: `screen_x` / `screen_y` (PS2ScreenXPos/YPos), `screen_saved_x/y` (the Screen Adjust
   page's enter snapshot, PS2OldX/Y), `screen_av_saved_x/y` (the AV page's snapshot,
   screen_adjust_x/y) — each field on its own line [WORKLOG lesson 4].

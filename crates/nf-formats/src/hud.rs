@@ -161,6 +161,13 @@ pub struct HudTables {
     /// "\xff\x01" (font select 1) [L the page dump 2026-10-14; M MenuManager_Create 0x21b908:255-274
     /// sends the NAME tag as msg 0x23, Label_SendMessage 0x218890:100-104 applies it].
     pub font_header: Font,
+    /// Font 3 (`FONTMedium`, texture 0x030000d8) [L FontTable 0x2dd8b0[2] = {tex 0x030000d8, ptr
+    /// 0x305a78}, read live 2026-10-31]: the format code "ÿ" selects it [M Font_ParseFormat
+    /// 0x1ee3e0 case 5: FontTable[n − 1]]. The results page's score labels/numbers carry it in
+    /// their NAME tags [D page 0x40000036] and P_NFRESULTS 0x208e78:159 sends it to the medal text
+    /// box; the 007 Bonus page's text list (msg 0x23 with 0x30d348 [M P_NFBONUS 0x209670:15]) and
+    /// the credits' kind-2 lines (0x30d568 [M P_CREDITS 0x2152b0:122-147]) carry it too.
+    pub font_medium: Font,
     /// `PdaDigits` (0x2bedb8, 10 words): the entity hashcodes of the decryptor screen's digit meshes
     /// '0'..'9'; `Player_WeaponFiring` 0x1a5460:155-194 sets them on the view model's anim datums
     /// 3−i (`AnimDatumSetEntity`), entity 0 for '*' and when idle [M].
@@ -214,6 +221,7 @@ impl HudTables {
         };
         let font = parse_font("FONTSerpLight")?;
         let font_header = parse_font("FONTNFont2")?;
+        let font_medium = parse_font("FONTMedium")?;
         let air = sprites("AirSprInfo")?;
         let redeemer = sprites("RedeemerSprInfo")?;
         let space = sprites("SpaceSprInfo")?;
@@ -262,6 +270,7 @@ impl HudTables {
             bullets,
             font,
             font_header,
+            font_medium,
         })
     }
 }
@@ -353,7 +362,9 @@ impl Lang {
 
     /// `sprintf`-style substitution for the `%s` / `%d` forms the game builds with
     /// `sprintf(heap, Txt_BindLabel(id), args)` (`Pickup_Handler` 0x18e650). Only the pickup messages'
-    /// forms are handled: `%s` (weapon name), `%d` (a count), `%%`.
+    /// forms are handled: `%s` (weapon name), `%d` (a count), `%%` — plus `%c`, the keycode
+    /// message's per-char form (label 0x2000014, `PCQWorm_Update` 0x1aee20:26-27); the caller
+    /// passes the rendered argument either way.
     pub fn format(&self, id: u32, args: &[String]) -> String {
         let Some(tpl) = self.bind(id) else { return String::new() };
         let mut out = String::new();
@@ -363,7 +374,7 @@ impl Lang {
             if c != '%' { out.push(c); continue; }
             match chars.next() {
                 Some('%') => out.push('%'),
-                Some('s') | Some('d') | Some('x') => {
+                Some('s') | Some('d') | Some('x') | Some('c') => {
                     if let Some(a) = args.get(next) { out.push_str(a); }
                     next += 1;
                 }

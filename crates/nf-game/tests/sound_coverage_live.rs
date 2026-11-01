@@ -7,8 +7,9 @@
 //! - the grenade-ammo launch whoosh 0x10E [M Bullet_init 0x12c5a0:285-291] via `Drones::fire_player`;
 //! - the jump launch 0xA3 [M Player_HandleJump 0x1916b0:184] through `Bond::tick_ctx` (the
 //!   Sim's `step_bond` drain lives in nf-view scene.rs; here the outbox itself is asserted);
-//! - the laser burn-through 0x249 + 0x5DD [M Lock_Update 0x1ae3d8:90-93, Bullet_DoTrails
-//!   0x12d890:473-478] through the watch-bullet pass;
+//! - the laser burn-through 0x249 [M Lock_Update 0x1ae3d8:90-93] through the watch-bullet pass
+//!   (0x5DD is the satchel burn-out's, not the lock's: `Bullet_DoTrails` 0x12d890:472-474 is its
+//!   only caller — pinned by nf-view's satchel_laser_4a_live);
 //! - the special-death cry 0x148 [M NDrone2_DSTATE_SpecialDeath_Anim 0x163c68 case 5].
 
 use nf_formats::anim::Script;
@@ -152,11 +153,12 @@ fn jump_launch_plays_0xa3() {
     assert!(bond2.sfx_out.is_empty(), "an idle tick queues no jump sound");
 }
 
-/// [M Lock_Update 0x1ae3d8:90-93 + Bullet_DoTrails 0x12d890:473-478]: a laser-watch bullet
-/// (0x4F) completing the burn plays 0x249 (the release clunk) and 0x5DD (the burn finish) at
-/// the lock — through the port's watch-bullet pass in `Drones::tick`.
+/// [M Lock_Update 0x1ae3d8:90-93]: a laser-watch bullet (0x4F) completing the burn plays 0x249
+/// (the release clunk) at the lock — through the port's watch-bullet pass in `Drones::tick`.
+/// 0x5DD is NOT a lock sound: its only caller is `Bullet_DoTrails`' 0x3b satchel tail [M
+/// 0x12d890:472-474], which a lock never runs.
 #[test]
-fn lock_burn_through_plays_0x249_and_0x5dd() {
+fn lock_burn_through_plays_0x249_not_0x5dd() {
     let Some(l) = Level02::load() else { eprintln!("skip: NF_ISO not set"); return };
     let d = l.data();
     let mut sim = l.sim();
@@ -175,7 +177,7 @@ fn lock_burn_through_plays_0x249_and_0x5dd() {
     }
     assert!(sim.locks[0].burned, "the watch bullet stream burns the lock (26 contact ticks [M 0x1ae3d8:82-101])");
     assert!(sim.audio.active_ids().contains(&0x249), "the burn-through clunk 0x249 plays");
-    assert!(sim.audio.active_ids().contains(&0x5dd), "the burn finish 0x5dd plays");
+    assert!(!sim.audio.active_ids().contains(&0x5dd), "0x5dd is the satchel burn-out's sound, not the lock's [M 0x12d890:472-474]");
     // Sister: a fresh bullet into the already-burned lock plays neither again.
     sim.fire_player(&d, [14.0, 1.5, 10.0], [-1.0, 0.0, 0.0], 0x4f, hearing);
     sim.tick(&d, &bond);
@@ -226,4 +228,32 @@ fn special_death_0x0600021f_plays_0x148() {
         dr.send(&d, &mut rng, 100, nf_game::drone::msg::ENTER);
     }
     assert!(sim2.list[gj].sfx_reqs.is_empty(), "no cry for other special-death scripts");
+}
+
+/// [M Player_WeaponInitBullet 0x1a4bf0:261-263]: a weapon record whose base id (+2 u16) is 0x54
+/// — the Micro-Camera pair 0x54/0x55 [L weapon_data] — plays the 2-D shutter 0xEC per bullet.
+/// Sister: the P2K 0x02 (base 0x02) fires without it.
+#[test]
+fn micro_camera_shot_plays_the_0xec_shutter() {
+    let Some(l) = Level02::load() else { eprintln!("skip: NF_ISO not set"); return };
+    let d = l.data();
+    let base = |w: usize| u16::from_le_bytes([d.weapons.records[w][2], d.weapons.records[w][3]]);
+    assert_eq!((base(0x54), base(0x55)), (0x54, 0x54), "both Micro-Camera records carry base 0x54 [L weapon_data +2]");
+    let hearing = nf_formats::sfx::SfxHearing { id: 0xffff, inner: 0.0, outer: 0.0, weight: 0.0, looped: false, cull: false };
+    for w in [0x54u8, 0x55] {
+        let mut sim = l.sim();
+        sim.fire_player(&d, [10.0, 2.0, 10.0], [-1.0, 0.0, 0.0], w, hearing);
+        let shutters = sim.audio.active_ids().iter().filter(|&&id| id == 0xec).count();
+        let pellets = u32::from_le_bytes(d.weapons.records[w as usize][0x18..0x1c].try_into().unwrap()).clamp(1, 16) as usize;
+        assert_eq!(shutters, pellets, "{w:#x}: one 0xEC per bullet");
+        sim.audio.update(None, ([0.0; 3], [1.0, 0.0, 0.0], [0.0, 1.0, 0.0], [0.0, 0.0, 1.0]), &|_| true);
+        let starts: Vec<_> = sim.audio.take_commands().into_iter().filter_map(|c| match c {
+            nf_game::sound::Cmd::Start { id: 0xec, pos, .. } => Some(pos),
+            _ => None,
+        }).collect();
+        assert!(!starts.is_empty() && starts.iter().all(|p| p.is_none()), "{w:#x}: the shutter is 2-D (`Sound_Play`)");
+    }
+    let mut sim = l.sim();
+    sim.fire_player(&d, [10.0, 2.0, 10.0], [-1.0, 0.0, 0.0], 0x02, hearing);
+    assert!(!sim.audio.active_ids().contains(&0xec), "sister: the P2K plays no shutter");
 }

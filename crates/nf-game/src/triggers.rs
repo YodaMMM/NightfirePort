@@ -161,6 +161,54 @@ pub struct Trigger {
     /// Movie trigger: case 0xd fired this tick (its input channel was armed and on — the channel clear
     /// already applied). The control-list walk drains it into `Drones::movie_request` [M 0x1b1f24-0x1b1f78].
     pub movie_fired: bool,
+    /// ext+0x3C: the locked-exit message cooldown — `Trigger_Activate` 0x1b2318:81-86 posts label
+    /// 0x2000021 only while it is 0 and re-arms it to 3·FRAME_RATE_INT (180); `Trigger_Update`
+    /// 0x1b1a78:26-28 takes 1 off per tick [M].
+    pub lock_msg_timer: u16,
+    /// The locked message posted this tick (the caller drains it into the INFO pane, TXTMSG type 1,
+    /// life 0xb4 [M 0x1b2318:84-85]).
+    pub lock_msg: bool,
+    /// The spline motion (`Trigger_Create` 0x1b1720 ext+0x00/+0x04/+0x08/+0x0C), `None` for a
+    /// trigger without keys. `Trigger_Update` 0x1b1a78:60-70 poses obj+0x90 from it every update.
+    pub motion: Option<Box<Motion>>,
+}
+
+/// A trigger's key-list motion [M `Trigger_Create` 0x1b1720:56-87, `Trigger_Update` 0x1b1a78:60-70]:
+/// - ext+0x00 = `level_tag+8`, the 0x19 key list (`m_paths[record+0x44]` = `extra[8] & 0xffff`);
+/// - ext+0x0C = `(short)level_tag+2 − 1` (0 when +2 is 0) — the last key, `extra[7] & 0xffff` − 1;
+/// - ext+0x08 = `last · REC_FRAME_RATE · (FRAME_RATE / (u16)level_tag+4)` = last / rate per tick
+///   (`level_tag+4` = `extra[7] >> 16`) — one pass takes `rate` ticks;
+/// - ext+0x04 = the playhead, 0 at create.
+///
+/// Per update with ext+0x0C ≠ 0: `Spline_Interp(ext+4, keys, 0, last, obj+0x90, 0, 2)`, then
+/// `ext+4 += ext+8 · FRAME_RATE_MUL` (1.0 at 60 Hz) and `ext+4 = 0` once `(float)last < ext+4`.
+/// A locked trigger returns before this (0x1b1a78:46-59), so it holds its pose; a deleted one
+/// stops with its object. The collision volume moves with obj+0x90 (the contact pass tests the
+/// glist collision at the object's matrix), so `local` keeps the object-space triangles.
+#[derive(Clone, Debug)]
+pub struct Motion {
+    pub keys: Vec<crate::door::Key>,
+    /// ext+0x0C: the last key index.
+    pub last: u16,
+    /// ext+0x08: the playhead step per tick.
+    pub step: f32,
+    /// ext+0x04: the playhead in key units.
+    pub t: f32,
+    /// obj+0x90 after the last pose (key 0 at create).
+    pub matrix: [[f32; 4]; 4],
+    /// The glist collision in object space.
+    pub local: Vec<[V3; 3]>,
+}
+
+impl Motion {
+    /// One `Trigger_Update` spline step: pose at the playhead, advance, wrap. Returns the new
+    /// world triangles.
+    pub fn advance(&mut self) -> Vec<[V3; 3]> {
+        if let Some(m) = crate::door::interp(&self.keys, 0, self.last, self.t, true) { self.matrix = m; }
+        self.t += self.step;
+        if (self.last as f32) < self.t { self.t = 0.0; }
+        self.local.iter().map(|t| t.map(|v| transform(&self.matrix, v))).collect()
+    }
 }
 
 /// A body that can touch triggers: capsule axis from `a` to `b`, radius, drone (true) or Bond, drone skin hash.
@@ -258,7 +306,7 @@ impl Channels {
         if let Some(w) = &mut self.writes { w.push((c as u8, value, frame, 0)); }
         // NF_LEVELLOG=1: every switch-channel write that turns a channel on (rising edge), with the frame
         // and the new value. Traces e.g. ch 0x1D being set by the EndLevel script's event 0x11.
-        if std::env::var("NF_LEVELLOG").is_ok_and(|v| v == "1") && value != 0 && self.v[c as usize] == 0 {
+        if { static F: std::sync::OnceLock<bool> = std::sync::OnceLock::new(); *F.get_or_init(|| std::env::var("NF_LEVELLOG").is_ok_and(|v| v == "1")) } && value != 0 && self.v[c as usize] == 0 {
             eprintln!("[levellog] frame {} channel 0x{:02x} = {}", frame, c, value);
         }
         self.v[c as usize] = value;
@@ -456,10 +504,19 @@ impl Trigger {
         let mask = if mask == 0 { 2 } else { mask };
         if matches!(kind, kind::TOUCH | kind::TOUCH_ONCE) && out_ch == 0x7d { return None; }
         let filter_gate = if matches!(kind, kind::TOUCH | kind::TOUCH_ONCE) { list.get(4).copied().unwrap_or(0) as u8 } else { 0 };
-        let mut t = Trigger { placement, kind, out: out_ch as u8, mask, list, lock: lock as u8, hide, glist_0x10: true, filter_gate, tris: Vec::new(), lo: [0.0; 3], hi: [0.0; 3], gone: false, script: None, next_level, gate, key_gate, success, fallback, movie_code: 0, movie_fired: false };
+        let mut t = Trigger { placement, kind, out: out_ch as u8, mask, list, lock: lock as u8, hide, glist_0x10: true, filter_gate, tris: Vec::new(), lo: [0.0; 3], hi: [0.0; 3], gone: false, script: None, next_level, gate, key_gate, success, fallback, movie_code: 0, movie_fired: false, lock_msg_timer: 0, lock_msg: false, motion: None };
         if kind == kind::MOVIE { t.movie_code = out_ch; }
         t.set_tris(tris);
         Some(t)
+    }
+
+    /// The spline step of `Trigger_Update` 0x1b1a78:60-70 (after the lock return, before
+    /// `Trigger_Hit`): the volume follows the posed matrix.
+    pub fn step_motion(&mut self) {
+        if let Some(m) = self.motion.as_mut() {
+            let tris = m.advance();
+            self.set_tris(tris);
+        }
     }
 
     /// New world triangles (a moving trigger).
@@ -599,6 +656,24 @@ impl Trigger {
         }
     }
 
+    /// `Trigger_Activate` 0x1b2318:79-87's locked arm for a LOAD_LEVEL trigger whose key gate is off:
+    /// with the cooldown at 0 it posts label 0x2000021 (`lock_msg`) and re-arms the cooldown to
+    /// `(FRAME_RATE_INT << 1) + FRAME_RATE_INT` = 180; otherwise nothing [M].
+    pub fn locked_message(&mut self) {
+        if self.lock_msg_timer != 0 { return; }
+        self.lock_msg = true;
+        self.lock_msg_timer = 180;
+    }
+
+    /// The use-key path's locked check (`Player_Activate` → `Trigger_Activate`): the type-10 arm
+    /// returns on any cancel channel 0x60..0x63 BEFORE the key gate [M 0x1b2318:64-75], then the
+    /// locked message (`locked_message`). No-op for the other families.
+    pub fn activate_locked_message(&mut self, ch: &Channels) {
+        if self.kind != kind::LOAD_LEVEL || self.gone { return; }
+        if (0x60..=0x63).any(|c| ch.on(c)) { return; }
+        if self.locked(ch) { self.locked_message(); }
+    }
+
     /// `Trigger_Activate` (0x1b2318): fires the trigger immediately from `Player_Activate`'s E-key path (routes
     /// b and c on 07000005 — the on-foot gate door and the zip-wire exit). Returns the channel writes to apply
     /// and `Some(next_level)` if a level load is requested. Does NOT mutate — the caller applies the writes
@@ -614,7 +689,7 @@ impl Trigger {
                 if (0x60..=0x63).any(|c| ch.on(c)) { return (Vec::new(), None); }
                 // Key gate [M 0x1b2318:76-90 — `Trigger_Locked` 0x1b2fc8's type-10 arm]: if non-zero and off,
                 // the trigger is locked — locked message (label
-                // 0x2000021) + ext+0x3C cooldown (no text system in the port), NO channel write, NO load.
+                // 0x2000021) + ext+0x3C cooldown (`activate_locked_message`), NO channel write, NO load.
                 if self.locked(ch) { return (Vec::new(), None); }
                 // Auto channel [M 0x1b2318:96-108]: gate (+0x28) on → the success write (+0x2C); gate off →
                 // the fallback write (+0x2A) — and BOTH branches fall through to the level load @0x1b24b8.
@@ -650,7 +725,10 @@ impl Trigger {
     /// as a PREFIX — a zero slot ends the list (a mid-list 0 hides everything after it) [M 0x1b1a78 case 3/4/0xC
     /// loops: `while input[k] != 0`].
     pub fn update(&mut self, ch: &mut Channels, touchers: &[Toucher], bullets: &[BulletContact], frame: u32) {
+        // The locked-message cooldown runs first, before every other test [M 0x1b1a78:26-28].
+        self.lock_msg_timer = self.lock_msg_timer.saturating_sub(1);
         if self.gone || (self.lock != 0 && ch.on(self.lock as u32)) { return; }
+        self.step_motion();
         match self.kind {
             kind::TOUCH_ONCE => {
                 // Case 1: channel already on → delete only when the glist carries 0x10 [M 0x1b1d78-0x1b1d90];
@@ -702,7 +780,7 @@ impl Trigger {
                 if self.gone || self.gate == 0 { return; }
                 if !ch.on(self.gate as u32) { return; }
                 if (0x60..=0x63).any(|c| ch.on(c)) { return; }
-                if self.locked(ch) { return; } // the key gate [M 0x1b2318:76-90, `Trigger_Locked` 0x1b2fc8 type-10 arm]
+                if self.locked(ch) { self.locked_message(); return; } // the key gate [M 0x1b2318:76-90, `Trigger_Locked` 0x1b2fc8 type-10 arm]
                 if self.success != 0 { ch.set(self.success as u32, 1, frame); }
                 self.gone = true;
             }
@@ -736,6 +814,7 @@ impl Trigger {
 pub fn build(level: &Level) -> Vec<Trigger> {
     let Some(m) = level.main_map() else { return Vec::new() };
     let map = &level.maps[m];
+    let paths = level.path_blocks();
     let mut out = Vec::new();
     for (i, p) in map.placements.iter().enumerate() {
         let param = |k: u32| p.params.iter().find(|(j, _)| *j == k).map(|&(_, v)| v).unwrap_or(0);
@@ -763,8 +842,22 @@ pub fn build(level: &Level) -> Vec<Trigger> {
         let mx = view_rot_trans_matrix(p.rotation, p.translation);
         let tris: Vec<[V3; 3]> = target.and_then(|(om, oi)| level.maps[om].objects[oi].collision.as_ref())
             .map(|c| c.triangles().into_iter().map(|t| t.map(|v| transform(&mx, v))).collect()).unwrap_or_default();
+        // The key-list motion (`Trigger_Create` 0x1b1720:61-87): keys from `m_paths[extra[8]]`,
+        // last = count − 1, step = last / rate [M]; a zero count or no keys leaves it static.
+        let count = (p.extra[7] & 0xffff) as usize;
+        let rate = (p.extra[7] >> 16) as f32;
+        let keys = if count >= 2 { paths.get((p.extra[8] & 0xffff) as usize).map(|b| crate::door::parse_keys(b)).unwrap_or_default() } else { Vec::new() };
+        let motion = (keys.len() >= 2).then(|| {
+            let last = (count.min(keys.len()) - 1) as u16;
+            // `FRAME_RATE / rate` with rate 0 is +inf in the game: the playhead wraps every tick
+            // and the pose holds key 0 — the same as a step of 0.
+            let step = if rate > 0.0 { last as f32 / rate } else { 0.0 };
+            let local: Vec<[V3; 3]> = target.and_then(|(om, oi)| level.maps[om].objects[oi].collision.as_ref())
+                .map(|c| c.triangles()).unwrap_or_default();
+            Box::new(Motion { keys: keys.clone(), last, step, t: 0.0, matrix: mx, local })
+        });
         // Touch triggers on channel 0x7D only work on level 0x07001500.
-        match Trigger::from_params(i, kind, q, tris) {
+        match Trigger::from_params(i, kind, q, tris).map(|mut t| { t.motion = motion; t }) {
             Some(mut t) if raw_dc => {
                 apply_raw_dc_map(&mut t, &param);
                 if !matches!(t.kind, kind::TOUCH | kind::TOUCH_ONCE) || t.out != 0x7d { out.push(t); }
@@ -826,6 +919,9 @@ pub fn calc(level: u32, triggers: &mut [Trigger], ch: &mut Channels, touchers: &
     if level == 0x0700_0005 && ch.on(0xa4) { ch.set(0x6f, 1, frame); }
     if level == 0x0700_000b && ch.on(0x34) { ch.set(0x2d, 1, frame); }
     for t in triggers.iter().filter(|t| t.kind == kind::TOUCH) { ch.set(t.out as u32, 0, frame); }
+    // Type 2 runs `Trigger_Update` only here (the ProcessTouch window [M 0x1b1900:50-71]), and
+    // that update's spline step comes after the lock return [M 0x1b1a78:46-70].
+    for t in triggers.iter_mut().filter(|t| t.kind == kind::TOUCH && !t.gone && !(t.lock != 0 && ch.on(t.lock as u32))) { t.step_motion(); }
     let hits: Vec<u8> = triggers.iter().filter(|t| t.kind == kind::TOUCH && !(t.lock != 0 && ch.on(t.lock as u32)) && t.hit(ch, touchers, bullets)).map(|t| t.out).collect();
     for out in hits { ch.set(out as u32, 1, frame); }
 }
@@ -837,7 +933,43 @@ mod tests {
     fn plate(kind: u8, out: u8, mask: u32, list: Vec<u32>) -> Trigger {
         // A 2 × 2 horizontal quad at y = 0 around the origin.
         let (a, b, c, d) = ([-1.0, 0.0, -1.0], [1.0, 0.0, -1.0], [1.0, 0.0, 1.0], [-1.0, 0.0, 1.0]);
-        Trigger { placement: 0, kind, out, mask, list, lock: 0, hide: false, glist_0x10: true, filter_gate: 0, tris: vec![[a, b, c], [a, c, d]], lo: [-1.0, 0.0, -1.0], hi: [1.0, 0.0, 1.0], gone: false, script: None, next_level: 0, gate: 0, key_gate: 0, success: 0, fallback: 0, movie_code: 0, movie_fired: false }
+        Trigger { placement: 0, kind, out, mask, list, lock: 0, hide: false, glist_0x10: true, filter_gate: 0, tris: vec![[a, b, c], [a, c, d]], lo: [-1.0, 0.0, -1.0], hi: [1.0, 0.0, 1.0], gone: false, script: None, next_level: 0, gate: 0, key_gate: 0, success: 0, fallback: 0, movie_code: 0, movie_fired: false, lock_msg_timer: 0, lock_msg: false, motion: None }
+    }
+
+    /// A keyed trigger's volume rides its keys [M Trigger_Update 0x1b1a78:60-70]: pose at the
+    /// playhead, step last/rate, wrap past the last key; a Touch steps inside `calc` only; a
+    /// locked trigger holds (sister).
+    #[test]
+    fn keyed_triggers_move_their_volume_and_lock_holds_them() {
+        let key = |x: f32| crate::door::Key { pos: [x, 0.0, 0.0], quat: [0.0, 0.0, 0.0, 1.0] };
+        let motion = |t: &mut Trigger| {
+            let local = t.tris.clone();
+            t.motion = Some(Box::new(Motion { keys: vec![key(0.0), key(10.0), key(20.0)], last: 2, step: 2.0 / 4.0, t: 0.0, matrix: crate::door::interp(&[key(0.0), key(10.0)], 0, 1, 0.0, true).unwrap(), local }));
+        };
+        let mut ch = Channels::default();
+        let mut once = plate(kind::TOUCH_ONCE, 0x23, 8, vec![]);
+        motion(&mut once);
+        let lo0 = once.lo[0];
+        once.update(&mut ch, &[], &[], 1); // pose t = 0 (key 0), t → 0.5
+        assert!((once.lo[0] - lo0).abs() < 1e-5);
+        once.update(&mut ch, &[], &[], 2); // pose t = 0.5
+        assert!(once.lo[0] > lo0 + 1.0, "moved along +x: {}", once.lo[0]);
+        for f in 3..6 { once.update(&mut ch, &[], &[], f); }
+        assert_eq!(once.motion.as_ref().unwrap().t, 0.0, "wrapped once (float)last < t");
+        // Touch: the step runs inside calc.
+        let mut touch = vec![plate(kind::TOUCH, 0x24, 8, vec![])];
+        motion(&mut touch[0]);
+        calc(0, &mut touch, &mut ch, &[], &[], 1);
+        calc(0, &mut touch, &mut ch, &[], &[], 2);
+        assert!(touch[0].motion.as_ref().unwrap().t > 0.9);
+        // Sister (can fail): a locked trigger returns before the step.
+        let mut locked = plate(kind::TOUCH_ONCE, 0x25, 8, vec![]);
+        locked.lock = 0x30;
+        motion(&mut locked);
+        ch.set(0x30, 1, 3);
+        for f in 3..6 { locked.update(&mut ch, &[], &[], f); }
+        assert_eq!(locked.motion.as_ref().unwrap().t, 0.0);
+        assert_eq!(locked.lo[0], lo0);
     }
 
     #[test]
@@ -1040,6 +1172,38 @@ mod tests {
     /// returns before any write [M 0x1b2318:23-25] — holding E on the plate can never raise the
     /// exit's gate channel. Sister: the same plate with bit 4 set fires the out write (the gate is
     /// the deciding bit, not the plate's presence).
+    /// The locked exit's message [M Trigger_Activate 0x1b2318:79-87 + Trigger_Update 0x1b1a78:26-28]:
+    /// a key-gated LOAD_LEVEL with the key off posts 0x2000021 once, then not again until the
+    /// 180-tick cooldown has run out under `update`. Sisters: an open key gate and a cancel channel
+    /// post nothing.
+    #[test]
+    fn locked_exit_posts_its_message_on_a_cooldown() {
+        let ch = Channels::default();
+        let mut exit = Trigger { kind: kind::LOAD_LEVEL, next_level: 0x0700_0066, key_gate: 0x30, ..plate(kind::LOAD_LEVEL, 0, 8, vec![]) };
+        exit.activate_locked_message(&ch);
+        assert!(std::mem::take(&mut exit.lock_msg), "the first press posts the locked message");
+        assert_eq!(exit.lock_msg_timer, 180);
+        exit.activate_locked_message(&ch);
+        assert!(!exit.lock_msg, "inside the cooldown: no second message");
+        let mut chm = Channels::default();
+        for f in 0..180 { exit.update(&mut chm, &[], &[], f); }
+        assert_eq!(exit.lock_msg_timer, 0, "Trigger_Update takes 1 per tick");
+        exit.activate_locked_message(&ch);
+        assert!(exit.lock_msg, "after the cooldown the message posts again");
+        // Sister: key on → not locked, no message.
+        let mut key = Channels::default();
+        key.set(0x30, 1, 1);
+        let mut open = Trigger { lock_msg_timer: 0, lock_msg: false, ..exit.clone() };
+        open.activate_locked_message(&key);
+        assert!(!open.lock_msg, "an open key gate posts nothing");
+        // Sister: a cancel channel returns before the key gate [M 0x1b2318:64-75].
+        let mut cancel = Channels::default();
+        cancel.set(0x61, 1, 1);
+        let mut c = Trigger { lock_msg_timer: 0, lock_msg: false, ..exit.clone() };
+        c.activate_locked_message(&cancel);
+        assert!(!c.lock_msg, "an alarm channel blocks the arm entirely");
+    }
+
     #[test]
     fn e_on_the_loadpointactivator_shape_is_refused() {
         let ch = Channels::default();

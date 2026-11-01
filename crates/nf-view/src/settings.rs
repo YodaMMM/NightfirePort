@@ -32,7 +32,12 @@
 use std::collections::HashMap;
 use std::path::PathBuf;
 
-use crate::menu::{default_opts, AV_ROWS, CN_CONTROLS_ROWS, MP_ROWS, ADV_ROWS, OptKind, OptRow};
+use crate::menu::{default_opts, AV_ROWS, CN_CONTROLS_ROWS, MP_ROWS, ADV_ROWS, OptKind, OptRow, OPT_SCREEN_X, OPT_SCREEN_Y};
+
+/// The [av] keys of the Screen Adjust offset (PS2ScreenXPos / PS2ScreenYPos — the global settings
+/// blob carries them after the AV values [M LS_MakeGlobalSettings 0x1cd9d0]), with the game's
+/// limits [M psiAdjustScreenPos 0x10b890: X ±0x1b0, Y ±0x30].
+const SCREEN_KEYS: [(&str, u32, i32); 2] = [("screen_x", OPT_SCREEN_X, 0x1b0), ("screen_y", OPT_SCREEN_Y, 0x30)];
 
 /// The file's name inside the config dir.
 const FILE_NAME: &str = "settings.toml";
@@ -118,7 +123,11 @@ pub fn collect(opts: &HashMap<u32, i32>) -> Settings {
             Some((label_key(r.label), v))
         }).collect(),
     );
-    Settings([page(ADV_ROWS), page(MP_ROWS), page(AV_ROWS), page(CN_CONTROLS_ROWS)])
+    let mut av = page(AV_ROWS);
+    for (key, ctrl, _) in SCREEN_KEYS {
+        if let Some(&v) = opts.get(&ctrl) { av.0.push((key.to_string(), v)); }
+    }
+    Settings([page(ADV_ROWS), page(MP_ROWS), av, page(CN_CONTROLS_ROWS)])
 }
 
 /// Writes the file's rows back onto the model's map — by label through the CURRENT row
@@ -129,6 +138,12 @@ pub fn apply(settings: &Settings, opts: &mut HashMap<u32, i32>) {
     for (i, page) in settings.0.iter().enumerate() {
         let rows = pages[i];
         for (key, v) in &page.0 {
+            if i == 2 {
+                if let Some(&(_, ctrl, lim)) = SCREEN_KEYS.iter().find(|(k, _, _)| *k == key.trim()) {
+                    opts.insert(ctrl, (*v).clamp(-lim, lim));
+                    continue;
+                }
+            }
             let Some(label) = parse_key(key) else { continue }; // unknown key text: ignored
             let Some(row) = rows.iter().find(|r| r.label == label) else { continue };
             let Some(cv) = clamp_to_row(row, *v) else { continue };
