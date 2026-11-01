@@ -92,7 +92,9 @@ fn snap(w: &Walker) -> Vec<(u16, [u8; 132])> {
 
 /// KIND: the rigid bodies 0xD8, created at rest. `RB_Create` 0x1d6bf0 (the dispatcher's case
 /// 0xD8 [M 0x1d04f0]) runs RB_Init/RB_Build/RB_SetState on each placement's record: #39/#40
-/// "rb_whitelamp" carry mass param 2 = 1 and the type halfword 0xFFFF (param 4 [D]) — the
+/// "rb_whitelamp" carry params (0,1) (1,0) (2,1) (3,1) (4,0xFFFF) [D]; `level_tag` holds param k at
+/// +0x2C+4k [M 0x1d1b68:64-75], so the mass word (+0x2c) is 1 and the type halfword (+0x34) is 1
+/// [L RB_Create's level_tag and rb+0xa8 = 1 read live] — the
 /// sphere-collider table [M 0x1d6bf0:77 — SPHERE_VERTS for every non-zero type] and the
 /// rotation-only body (the linear integrate arm is type-0 only [M RB_EulerEvolve 0x1d796c]).
 /// Sister: the SECOND lamp untouched — both rest bit-identical over 600 ticks.
@@ -105,8 +107,9 @@ fn lamps_are_created_and_rest_bit_identical() {
         let lamps: Vec<_> = sim.drones.rbodies.list.iter().filter(|o| o.placement == 39 || o.placement == 40).collect();
         assert_eq!(lamps.len(), 2, "both rb_whitelamp placements create bodies [D #39/#40; M 0x1d6bf0 via 0x1d04f0 case 0xD8]");
         for l in &lamps {
-            assert_eq!(l.rb.ty, -1, "the type halfword 0xFFFF [D param 4; M RB_Init stores it at +0xa8]");
-            assert!((l.rb.mass - 1.0).abs() < 1e-4, "mass param 2 = 1 [D; M RB_Create's mass read]");
+            assert_eq!(l.rb.ty, 1, "the type halfword = param 2 = 1 [D; M RB_Init stores it at +0xa8; L rb+0xa8 = 1]");
+            assert!((l.rb.mass - 1.0).abs() < 1e-4, "mass = param 0 = 1 [D; M RB_Create's level_tag+0x2c read; L rb+0x78 = 1.0]");
+            assert_eq!((l.s154, l.s158), (1, 0xffff), "+0x154 = param 3, +0x158 = param 4 [M 0x1d6bf0:100-104; L]");
             assert_eq!(l.rb.vert_table, nf_game::rigid_body::SPHERE_VERTS, "the sphere collider table [M 0x1d6bf0:77]");
             assert!((l.st.s13c - 0.0).abs() < 10.0 && l.st.s13c > 0.0, "the body's world-sphere radius is sane, got {}", l.st.s13c);
         }
@@ -115,10 +118,25 @@ fn lamps_are_created_and_rest_bit_identical() {
     for _ in 0..600 { w.tick(Default::default(), false); }
     let after = snap(&w);
     assert_eq!(before.len(), after.len());
+    // The old "bit-identical rest" premise predates the wind port and contradicted the
+    // decompile: 07000004's 0xDF #5 (rain, param3 = 6 [D params]) writes the cel wind on the
+    // lamps' own room cel [M Env_Create 0x17b968 → build_FindCel 0x1c8cb0; the game's lamps
+    // drift 2-4° [L the task brief] — RB_ApplyWind 0x1d7c78's at-point torque is the only
+    // per-frame torque they get]. The pin is now the BOUNDED drift: the lamps swing (the
+    // rotation state moves) but stay hung near rest (tilt < 15°) and never translate (the
+    // Rot arm has no linear integrate [M 0x1d7810]; the buoyancy gate never opens — the cel's
+    // water surface is −500 [M build_alloc_cel 0x1c93f8] — so lin_impulse keeps its create
+    // bits and no RNG draw fires [M 0x1d6e88]). (The tilt-vs-live-band pin lives in
+    // lamp_wind_live, which reads the matrix rows directly.)
+    let mut any_moved = false;
     for (b, a) in before.iter().zip(after.iter()) {
         assert_eq!(b.0, a.0, "the placement list is stable");
-        assert_eq!(b.1, a.1, "the lamp at placement {} moved while resting — a resting body is bit-identical [M 0x1d6e38 type!=0: no linear arm; 0x1d79ac: zero omega skips apply_omega]", b.0);
+        if b.1 != a.1 { any_moved = true; }
+        // No translation (trans at bytes 72..84), no buoyancy impulse (lin_impulse 48..60):
+        assert_eq!(&b.1[72..84], &a.1[72..84], "lamp {} must not translate while resting [M 0x1d7810 type-0-only]", b.0);
+        assert_eq!(&b.1[48..60], &a.1[48..60], "no buoyancy draw opens on 07000004's dry cels [M 0x1d6e88 gate]",);
     }
+    assert!(any_moved, "the lamps never moved — the cel wind did not reach the bodies (the 0xDF/cel chain broke)");
 }
 
 /// KIND: the lamp reacts to the player's shot — the round's contact lands in the body's hit
@@ -140,11 +158,18 @@ fn shot_lamp_leaves_rest_and_the_sister_stays() {
             .expect("lamp #40 exists")
     };
     let at = [lamp.0[0], lamp.0[1], lamp.0[2]];
+    // The hit detector is the PER-TICK omega jump: the cel wind drifts the lamp at ≲0.15°/tick
+    // (the gust rate), a bullet's class-5 impulse kicks >0.5 rad/s in the landing tick [M
+    // RB_RestingContactRot 0x1d73a0's impulse = hit_vel·(scale·0.5)].
+    let mut prev_om = std::cell::Cell::new(lamp.3);
     let mut hit = false;
     for _ in 0..2 {
         let fired = w.shoot_point(at, "the whitelamp", |sim| {
             let o = sim.drones.rbodies.list.iter().find(|o| o.placement == 40).unwrap();
-            o.st.omega != lamp.3 || o.st.matrix != lamp.2 || o.st.pos != lamp.1
+            let prev = prev_om.get();
+            let jump = (o.st.omega[0] - prev[0]).abs() + (o.st.omega[2] - prev[2]).abs();
+            prev_om.set(o.st.omega);
+            jump > 0.5
         });
         hit |= fired;
         if hit { break; }
@@ -157,10 +182,15 @@ fn shot_lamp_leaves_rest_and_the_sister_stays() {
     let moved = o40.st.omega != lamp.3 || o40.st.matrix != lamp.2 || o40.st.pos != lamp.1;
     assert!(moved, "the shot must move lamp #40 — the bullet's contact reaches the body's hit chain [M RB_CollisionHandler 0x1d7a80 → RB_RestingContactRot 0x1d73a0's arm]");
     let _ = hit;
-    // Sister: #39 never shot — its state is untouched by #40's rounds.
+    // Sister: #39 never shot — the SHOT cannot reach it. Under the cel wind its omega rides
+    // the gust (≲0.1 rad/s, the drift band) and its accumulators stay empty: no buoyancy draw
+    // (the dry cel [M 0x1d6e88]) and no hit list ever arms on #39 [M the class-5 arm needs the
+    // bullet's contact]. The zero-wind bit-still sister lives in lamp_wind_live.
     let o39 = sim.drones.rbodies.list.iter().find(|o| o.placement == 39).unwrap();
-    assert!(o39.st.omega == [0.0; 3] && o39.st.lin_impulse == [0.0; 3] && o39.st.tor_impulse == [0.0; 3],
-        "sister: the unshot lamp keeps zero omega and empty accumulators [M 0x1d6e38's rest gate]");
+    assert!(o39.st.lin_impulse == [0.0; 3] && o39.st.tor_impulse.iter().all(|v| v.abs() < 0.05),
+        "sister: the unshot lamp's accumulators carry only the wind's per-tick residue [M 0x1d7c78 scale]", );
+    assert!(o39.st.omega.iter().all(|v| v.abs() < 0.2),
+        "sister: the unshot lamp still hangs near rest, omega {:?} [M 0x1d79f4's spring]", o39.st.omega);
     // The body stays finite after the kick (the evolution's NaN discipline).
     assert!(o40.st.trans.iter().chain(o40.st.omega.iter()).all(|v| v.is_finite()),
         "the kicked lamp's state stays finite [M 0x1d7810 EulerEvolve]");
