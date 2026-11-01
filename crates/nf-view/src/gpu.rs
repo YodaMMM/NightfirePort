@@ -457,6 +457,12 @@ pub struct Renderer {
     /// of parked decal/casing/debris slots in one draw, ~1M indices each) were ~90% of the world
     /// pass's GPU time on 0700001b / 07000016 / 07000007.
     sub_runs: Vec<Vec<[u32; 3]>>,
+    /// perf-240g: per split draw, (lowest keyed slot, highest keyed slot, has an unkeyed run).
+    sub_meta: Vec<(u32, u32, bool)>,
+    /// perf-240g: this frame's running count of live (not collapsed) palette entries:
+    /// `live_prefix[i]` = live entries below i. A split draw with no unkeyed run and no live
+    /// entry in its slot span submits nothing — what its run walk returns — without the walk.
+    live_prefix: Vec<u32>,
     /// perf-240f: false submits every split draw whole (the identity test's reference frame).
     pub split_runs: bool,
     /// perf-240f: the last `render`'s submitted world-pass index count (measurement / test aid).
@@ -815,6 +821,8 @@ impl Renderer {
         let snow_skin = device.create_buffer_init(&wgpu::util::BufferInitDescriptor { label: Some("snow attrs"), contents: bytemuck::cast_slice(&vec![stat; SNOW_MAX]), usage: wgpu::BufferUsages::VERTEX });
         let ibuf = device.create_buffer_init(&wgpu::util::BufferInitDescriptor { label: None, contents: bytemuck::cast_slice(&scene.indices), usage: wgpu::BufferUsages::INDEX });
         let sub_runs = sub_runs_for(scene, &attrs, &verts);
+        let sub_meta = sub_runs.iter().map(|runs| runs.iter().fold((u32::MAX, 0u32, false), |(lo, hi, un), r|
+            if r[2] == u32::MAX { (lo, hi, true) } else { (lo.min(r[2]), hi.max(r[2]), un) })).collect();
         // Draw order (docs/systems/render.md): sky before the world, list 0, characters, list 1 (alpha), sky after the fog
         // pass, effects; the vertex buffer keeps its layout (the character tail stays contiguous).
         // List 0 order per `View_DrawObjList` (0x1e69a0) + `View_AddCels` (0x1e6ba0): the viewer's per-list array holds
@@ -877,7 +885,7 @@ impl Renderer {
             for ch in &cel_graph.chains { for &c in ch { if (c as usize) < n { reached[c as usize] = true; } } }
             reached.iter().map(|r| !r).collect()
         };
-        Renderer { shard_pipeline, shard_vbuf, shard_groups: Vec::new(), woman_tex, snow_pipeline, snow_vbuf, snow_bg, hud_pipeline, hud_add_pipeline, hud_sub_pipeline, hud_vbuf, hud_bgs, pipelines, fog, notex, nofog, uniform, uniform_bg, staged: Vec::new(), orphan_nodes, destroy_dead: Vec::new(), destroy_wreck_draw: Vec::new(), destroy_wreck_all: scene.destroy_wrecks.iter().map(|(c, _)| c.map(f32::to_bits)).collect(), destroy_tint: Vec::new(), batch, vbuf, skin_buf, snow_skin, pal_buf, col_buf, wts_buf, mtg_buf, skin_layout, skin_pos: Default::default(), skin_collapsed: Default::default(), pal_shadow: Default::default(), sub_runs, split_runs: true, last_indices: 0, char_light_centre: Vec::new(), lights: Default::default(), light_memo: Vec::new(), light_memo_gen: 1, light_memo_lights: Default::default(), los_memo: Vec::new(), los_memo_world: (0, 0), wreck_of: Vec::new(), wreck_of_src: Vec::new(), dead_sorted: Vec::new(), screen_aspect: 0.0, ibuf, tex_bgs, tex_frames, draws, order: Vec::with_capacity(order_cap), cel_boxes, cel_graph, viewer_cel: Default::default(), last_vis: None, last_cell_vis: None, movie_tex: None, movie_bg: None, movie_size: None, movie_vbuf, hud_tbgl: tbgl, hud_sampler: sampler, pass_timestamps: None, probe_skip: Vec::new() }
+        Renderer { shard_pipeline, shard_vbuf, shard_groups: Vec::new(), woman_tex, snow_pipeline, snow_vbuf, snow_bg, hud_pipeline, hud_add_pipeline, hud_sub_pipeline, hud_vbuf, hud_bgs, pipelines, fog, notex, nofog, uniform, uniform_bg, staged: Vec::new(), orphan_nodes, destroy_dead: Vec::new(), destroy_wreck_draw: Vec::new(), destroy_wreck_all: scene.destroy_wrecks.iter().map(|(c, _)| c.map(f32::to_bits)).collect(), destroy_tint: Vec::new(), batch, vbuf, skin_buf, snow_skin, pal_buf, col_buf, wts_buf, mtg_buf, skin_layout, skin_pos: Default::default(), skin_collapsed: Default::default(), pal_shadow: Default::default(), sub_runs, sub_meta, live_prefix: Vec::new(), split_runs: true, last_indices: 0, char_light_centre: Vec::new(), lights: Default::default(), light_memo: Vec::new(), light_memo_gen: 1, light_memo_lights: Default::default(), los_memo: Vec::new(), los_memo_world: (0, 0), wreck_of: Vec::new(), wreck_of_src: Vec::new(), dead_sorted: Vec::new(), screen_aspect: 0.0, ibuf, tex_bgs, tex_frames, draws, order: Vec::with_capacity(order_cap), cel_boxes, cel_graph, viewer_cel: Default::default(), last_vis: None, last_cell_vis: None, movie_tex: None, movie_bg: None, movie_size: None, movie_vbuf, hud_tbgl: tbgl, hud_sampler: sampler, pass_timestamps: None, probe_skip: Vec::new() }
     }
 
     /// The game's depth-0 pyramid for the walk [M `Vision_Calculate_View_Fustrum` 0x1e7df8,
@@ -912,7 +920,7 @@ impl Renderer {
 
     pub fn cel_visibility(&mut self, eye: [f32; 3], view_proj: [[f32; 4]; 4], world: Option<&nf_game::world::CollisionWorld>, doors: Option<&[bool]>) -> Option<Vec<bool>> {
         let planes = extract_frustum(view_proj);
-        let portal_enabled = room_cull_enabled() && std::env::var_os("NF_NOPORTAL").is_none();
+        let portal_enabled = room_cull_enabled() && { static F: std::sync::OnceLock<bool> = std::sync::OnceLock::new(); *F.get_or_init(|| std::env::var_os("NF_NOPORTAL").is_none()) };
         // The cell-level game mask (`View_AddCels` 0x1e6ba0: the VisCelList plus the +0x18 chain
         // pass under `Vision_InView`) gates the World draws; the strict VisCelList mask gates the
         // rooms/objects (`View_DrawObjList` 0x1e69a0 walks the VisCelList cels' object lists —
@@ -939,7 +947,7 @@ impl Renderer {
                         let wkey = (w as *const nf_game::world::CollisionWorld as usize, w.triangle_count());
                         if self.los_memo_world != wkey { self.los_memo.clear(); self.los_memo_world = wkey; }
                         let rescued = crate::scene::near_los_rescue_memo(&self.cel_graph, m, eye, &sides, w, 30.0, &mut self.los_memo);
-                        if rescued > 0 && std::env::var_os("NF_PORTAL_DEBUG").is_some() {
+                        if rescued > 0 && { static F: std::sync::OnceLock<bool> = std::sync::OnceLock::new(); *F.get_or_init(|| std::env::var_os("NF_PORTAL_DEBUG").is_some()) } {
                             eprintln!("[rescue] eye cell {cell}: {rescued} near cels restored");
                         }
                     }
@@ -983,7 +991,7 @@ impl Renderer {
     /// `vis`: the frame's room visibility mask (see `Scene::skin_palette`).
     pub fn update_skin(&self, queue: &wgpu::Queue, scene: &Scene, choice: Option<usize>, time: f32, opts: crate::scene::ViewOpts, vis: Option<&[bool]>) {
         let (pal, cols) = scene.skin_palette(&self.skin_layout, choice, time, opts, vis);
-        self.write_pal(queue, &pal);
+        self.write_pal(queue, &pal, |_, _| {});
         *self.skin_pos.borrow_mut() = pal.iter().map(|m| [m[3][0], m[3][1], m[3][2]]).collect();
         self.note_collapsed(&pal);
         queue.write_buffer(&self.col_buf, 0, bytemuck::cast_slice(&cols));
@@ -1005,20 +1013,23 @@ impl Renderer {
     /// adjacent dirty blocks in one write. The buffer ends up holding exactly pal either way; most
     /// of a level's palette is parked pool slots that never change, so a tick rewrote ~1 MB to
     /// change a few hundred entries.
-    fn write_pal(&self, queue: &wgpu::Queue, pal: &[nf_formats::anim::Mat4]) {
-        if pal.is_empty() { return; }
+    /// Returns false when the whole buffer was rewritten (a size change); otherwise `dirty` saw
+    /// every written range (perf-240g: `upload_skin` refreshes its per-entry tables there only).
+    fn write_pal(&self, queue: &wgpu::Queue, pal: &[nf_formats::anim::Mat4], mut dirty: impl FnMut(usize, usize)) -> bool {
+        if pal.is_empty() { return false; }
         let mut sh = self.pal_shadow.borrow_mut();
         if sh.len() != pal.len() {
             queue.write_buffer(&self.pal_buf, 0, bytemuck::cast_slice(pal));
             sh.clear();
             sh.extend_from_slice(pal);
-            return;
+            return false;
         }
         const BLOCK: usize = 256;
         let mut run: Option<(usize, usize)> = None;
         let mut flush = |r: Option<(usize, usize)>, sh: &mut Vec<nf_formats::anim::Mat4>| if let Some((s, e)) = r {
             queue.write_buffer(&self.pal_buf, (s * 64) as u64, bytemuck::cast_slice(&pal[s..e]));
             sh[s..e].copy_from_slice(&pal[s..e]);
+            dirty(s, e);
         };
         for s in (0..pal.len()).step_by(BLOCK) {
             let e = (s + BLOCK).min(pal.len());
@@ -1030,6 +1041,7 @@ impl Renderer {
             };
         }
         flush(run, &mut sh);
+        true
     }
 
     /// perf-240f: skin_collapsed for the palette just uploaded (3×3 exactly zero).
@@ -1040,10 +1052,24 @@ impl Renderer {
     }
 
     /// Upload an already-built (possibly interpolated) palette and colour table.
+    /// perf-240g: `skin_pos` / `skin_collapsed` are per-entry functions of the uploaded bytes, so
+    /// only the ranges `write_pal` rewrote are recomputed; every other entry's bytes equal the
+    /// previous upload's, whose values the tables already hold (both are always refreshed from the
+    /// same palette that went to the buffer). A size change or a table out of step recomputes all.
     pub fn upload_skin(&self, queue: &wgpu::Queue, pal: &[nf_formats::anim::Mat4], cols: &[[f32; 4]]) {
-        self.write_pal(queue, pal);
-        { let mut sp = self.skin_pos.borrow_mut(); sp.clear(); sp.extend(pal.iter().map(|m| [m[3][0], m[3][1], m[3][2]])); }
-        self.note_collapsed(pal);
+        let pos = |m: &nf_formats::anim::Mat4| [m[3][0], m[3][1], m[3][2]];
+        let zero3 = |m: &nf_formats::anim::Mat4| m[..3].iter().all(|col| col[0] == 0.0 && col[1] == 0.0 && col[2] == 0.0);
+        let mut sp = self.skin_pos.borrow_mut();
+        let mut sc = self.skin_collapsed.borrow_mut();
+        let in_step = sp.len() == pal.len() && sc.len() == pal.len() && self.pal_shadow.borrow().len() == pal.len();
+        let partial = self.write_pal(queue, pal, |s, e| if in_step {
+            for i in s..e { sp[i] = pos(&pal[i]); sc[i] = zero3(&pal[i]); }
+        });
+        if !(partial && in_step) {
+            sp.clear(); sp.extend(pal.iter().map(pos));
+            sc.clear(); sc.extend(pal.iter().map(zero3));
+        }
+        drop((sp, sc));
         if !cols.is_empty() { queue.write_buffer(&self.col_buf, 0, bytemuck::cast_slice(cols)); }
     }
 
@@ -1154,19 +1180,19 @@ impl Renderer {
             // the truck and the HUD disappear by view direction; scoping the cull to
             // the static World layer keeps every moving thing drawn while still skipping the bulk —
             // 07000006's start view submits ~4k draws unculled (render2_live counts them).
-            let test_cull = std::env::var_os("NF_CULL").is_some();
+            let test_cull = { static F: std::sync::OnceLock<bool> = std::sync::OnceLock::new(); *F.get_or_init(|| std::env::var_os("NF_CULL").is_some()) };
             // blood-puff-render: the rule moved to `Layer::frustum_cullable` (the Effect pools'
             // build-time sphere is the identity-matrix origin — culling it dropped every puff the
             // moment the origin left the frustum, wherever they were posed).
             let cull = |dc: &DrawCall| dc.layer.frustum_cullable(test_cull);
             // Counters for the worklog (env-gated; no per-frame cost otherwise).
-            let trace = std::env::var_os("NF_DRAWS").is_some();
+            let trace = { static F: std::sync::OnceLock<bool> = std::sync::OnceLock::new(); *F.get_or_init(|| std::env::var_os("NF_DRAWS").is_some()) };
             let (mut submitted, mut culled) = (0usize, 0usize);
             // fix-render3: the room-cel visibility test (`View_AddCels` 0x1e6ba0's `Vision_InView`
             // per cel bbox). Computed once per frame — ~200 sphere tests; a World draw whose cel is
             // out is skipped before the pipeline/bind work. The eye's own cel always passes (its
             // bbox contains the eye, so its sphere can never be outside the frustum).
-            let cel_cull = room_cull_enabled() && std::env::var_os("NF_NOCELCULL").is_none();
+            let cel_cull = room_cull_enabled() && { static F: std::sync::OnceLock<bool> = std::sync::OnceLock::new(); *F.get_or_init(|| std::env::var_os("NF_NOCELCULL").is_none()) };
             // fix-perf-level: the visibility set is the game's own portal walk
             // (`Vision_Portal_Recurse` 0x1e86e8 → `Vision_Recurse` 0x1e82e0, the GfxList set) from the
             // eye's room cel, with the depth-0 pyramid = the frustum's four side planes + near (the
@@ -1305,7 +1331,9 @@ impl Renderer {
             drop(parked_pos);
             drop(prof_cull);
             let prof_sort = nf_game::prof::scope("enc: sort");
-            self.order.sort_by(|a, b| a.0.cmp(&b.0).then(a.1.total_cmp(&b.1)).then(a.2.cmp(&b.2)));
+            // perf-240g: unstable — the key ends in the draw index k, unique per entry, so no two
+            // entries compare equal and every sort gives the one same order.
+            self.order.sort_unstable_by(|a, b| a.0.cmp(&b.0).then(a.1.total_cmp(&b.1)).then(a.2.cmp(&b.2)));
             // Per-draw uniform slots (fix-lighting): the game uploads the ≤2 closest lights per object
             // (`View_DrawObjList` 0x1e69a0 / `View_DrawCelGlist` 0x1e6538 → `Lights_CalcClosestLights`
             // 0x1cb2e0 + `psiLight_SetLights` 0x10e588). Slot 0 = the eye's own sphere (the snow pass — the
@@ -1426,6 +1454,14 @@ impl Renderer {
                 // perf-240f: a split draw (`sub_runs`) contributes only its live runs — the same
                 // uniform slot (first_instance) for each, so the drawn triangles keep their order.
                 let collapsed = self.skin_collapsed.borrow();
+                if self.split_runs {
+                    self.live_prefix.clear();
+                    self.live_prefix.reserve(collapsed.len() + 1);
+                    let mut n = 0u32;
+                    self.live_prefix.push(0);
+                    for &c in collapsed.iter() { n += (!c) as u32; self.live_prefix.push(n); }
+                }
+                let (meta, prefix) = (&self.sub_meta, &self.live_prefix);
                 for (j, &(_, _, k)) in self.order.iter().enumerate() {
                     let dc = &self.draws[k];
                     let at = (b.args.len() / 5) as u32;
@@ -1436,6 +1472,10 @@ impl Renderer {
                     let args = &mut b.args;
                     let runs = if self.split_runs { self.sub_runs.get(k).map_or(&[][..], |r| &r[..]) } else { &[][..] };
                     let total = &mut self.last_indices;
+                    if !runs.is_empty() && meta.get(k).is_some_and(|&(lo, hi, unkeyed)| !unkeyed && (hi as usize) < collapsed.len() && prefix[hi as usize + 1] == prefix[lo as usize]) {
+                        if let Some(s) = b.segs.last_mut() { s.2 = (b.args.len() / 5) as u32; }
+                        continue;
+                    }
                     live_ranges(runs, &collapsed, dc.first, dc.count, |first, count| {
                         args.extend_from_slice(&[count, 1, first, 0, j as u32 + 1]);
                         *total += count as u64;
@@ -1480,10 +1520,15 @@ impl Renderer {
                     submitted + culled + cel_culled, 100.0 * (culled + cel_culled) as f32 / (submitted + culled + cel_culled).max(1) as f32);
             }
             // `DrawDrops` runs after the fog pass, the alpha list and the shards.
+            // perf-240g: with the batch, groups 0 (uniform_bg) and 1 (the bindless array) are still
+            // bound from the world draws, and the snow / shard pipelines share their layout, so the
+            // bindings carry over (re-setting the array re-tracked every texture in it at finish).
             if ns > 0 {
                 pass.set_pipeline(&self.snow_pipeline);
-                pass.set_bind_group(0, &self.uniform_bg, &[]);
-                match self.batch.as_ref() { Some(b) => pass.set_bind_group(1, &b.bg, &[]), None => pass.set_bind_group(1, &self.snow_bg, &[]) }
+                if self.batch.is_none() {
+                    pass.set_bind_group(0, &self.uniform_bg, &[]);
+                    pass.set_bind_group(1, &self.snow_bg, &[]);
+                }
                 pass.set_vertex_buffer(0, self.snow_vbuf.slice(..));
                 pass.set_vertex_buffer(1, self.snow_skin.slice(..));
                 pass.draw(0..ns as u32, 0..1);
@@ -1492,15 +1537,12 @@ impl Renderer {
             // shards after the alpha list, each texture group in its own uniform slot.
             if !self.shard_groups.is_empty() {
                 pass.set_pipeline(&self.shard_pipeline);
-                pass.set_bind_group(0, &self.uniform_bg, &[]);
+                if self.batch.is_none() { pass.set_bind_group(0, &self.uniform_bg, &[]); }
                 pass.set_vertex_buffer(0, self.shard_vbuf.slice(..));
                 pass.set_vertex_buffer(1, self.snow_skin.slice(..));
                 let base = self.order.len() as u32 + 1;
                 for (g, &(tf, first, count)) in self.shard_groups.iter().enumerate() {
-                    match self.batch.as_ref() {
-                        Some(b) => pass.set_bind_group(1, &b.bg, &[]),
-                        None => { let (fb, nf, rate) = self.tex_frames[tf]; pass.set_bind_group(1, &self.tex_bgs[fb + ((ticks / rate) % nf) as usize], &[]); }
-                    }
+                    if self.batch.is_none() { let (fb, nf, rate) = self.tex_frames[tf]; pass.set_bind_group(1, &self.tex_bgs[fb + ((ticks / rate) % nf) as usize], &[]); }
                     pass.draw(first..first + count, base + g as u32..base + g as u32 + 1);
                 }
             }
@@ -1665,4 +1707,5 @@ mod shader_tests {
 /// what keeps them apart — with it off, 07000011's stairwell drew a neighbouring room's
 /// brown wall slab straight across the corridor (the map cutting into itself). The walk is widened one portal (cull-relax) so a room being stepped into is never
 /// cut at the threshold. `NF_NOROOMCULL=1` turns it off (debug only).
-pub fn room_cull_enabled() -> bool { std::env::var_os("NF_NOROOMCULL").is_none() }
+/// perf-240g: read once per process (it was a locked environment lookup on every call, several per frame).
+pub fn room_cull_enabled() -> bool { { static F: std::sync::OnceLock<bool> = std::sync::OnceLock::new(); *F.get_or_init(|| std::env::var_os("NF_NOROOMCULL").is_none()) } }

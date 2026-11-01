@@ -9984,7 +9984,7 @@ impl Drone {
             return None;
         }
         let go = self.seen && self.prop(d, 0x3c) && (self.alert >= 0.66 || self.prop(d, 0x51));
-        if std::env::var_os("NF_AILOG").is_some() {
+        if { static F: std::sync::OnceLock<bool> = std::sync::OnceLock::new(); *F.get_or_init(|| std::env::var_os("NF_AILOG").is_some()) } {
             eprintln!("[ailog] guard {} look_for_opponent: seen={} prop_3c={} alert={:.2} prop_51={} -> {}",
                 self.index, self.seen, self.prop(d, 0x3c), self.alert, self.prop(d, 0x51), if go { "ATTACK" } else { "none" });
         }
@@ -16658,7 +16658,7 @@ fn segment_hits_sphere(a: V3, b: V3, c: V3, r: f32) -> bool {
                     // 222-231 on every opponent-visible tick, NO team gate; HasOpponent
                     // 0x14ad58:11-14 honours it for every team).
                     dr.opp_have_frame = frame;
-                    if !dr.seen && std::env::var_os("NF_AILOG").is_some() {
+                    if !dr.seen && { static F: std::sync::OnceLock<bool> = std::sync::OnceLock::new(); *F.get_or_init(|| std::env::var_os("NF_AILOG").is_some()) } {
                         eprintln!("[ailog] guard {} SEEN! (seen_ticks={} >= reaction_time={}, dist={:.1}, state={:#x})",
                             dr.index, dr.seen_ticks, dr.reaction_time(d.level), dr.dist, dr.state);
                     }
@@ -17617,7 +17617,7 @@ fn segment_hits_sphere(a: V3, b: V3, c: V3, r: f32) -> bool {
                 // NF_LEVELLOG=1: once per second, log each LOAD_LEVEL trigger's gate channel, whether the gate
                 // is on, and whether the trigger has fired. Shows why the level doesn't end —
                 // e.g. ch 0x1D is off because the EndLevel script never ran.
-                if std::env::var("NF_LEVELLOG").is_ok_and(|v| v == "1")
+                if { static F: std::sync::OnceLock<bool> = std::sync::OnceLock::new(); *F.get_or_init(|| std::env::var("NF_LEVELLOG").is_ok_and(|v| v == "1")) }
                     && self.triggers[index].kind == crate::triggers::kind::LOAD_LEVEL
                     && frame % 60 == 0
                 {

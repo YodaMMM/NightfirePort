@@ -1980,7 +1980,7 @@ pub fn portal_cel_chain_from_cell_doors(graph: &CelGraph, start: usize, eye: [f3
         *budget += 1;
         if *budget > 100 || depth > 45 { return; }
         let n0 = planes[depth].len();
-        let dbg = std::env::var_os("NF_PORTAL_DEBUG").is_some();
+        let dbg = { static F: std::sync::OnceLock<bool> = std::sync::OnceLock::new(); *F.get_or_init(|| std::env::var_os("NF_PORTAL_DEBUG").is_some()) };
         for (pi, p) in graph.portals.iter().enumerate() {
             let (side_open, dest, fwd) = if cell == p.cel_a {
                 ((p.flags & 1) == 0, p.cel_b, false)
@@ -3792,7 +3792,7 @@ impl Sim {
         // done, swap the weapon byte and start the draw. State 3 (drawing): the draw script plays; when done, back to idle.
         // State 8 (variant swap): the variant-swap script plays; when done, back to idle.
         // While switching, the trigger and reload are blocked (the game's state 1/3 checks `AnimScriptIsStopped`).
-        let log_switch = std::env::var_os("NF_SOUNDLOG").is_some();
+        let log_switch = { static F: std::sync::OnceLock<bool> = std::sync::OnceLock::new(); *F.get_or_init(|| std::env::var_os("NF_SOUNDLOG").is_some()) };
         let mut switching = self.gun.switch_state != 0;
         // fix-weapon-anims2: the script-frame watermark the op-1 sound dispatch below measures its
         // [prev_frame+1, new_frame] window against — captured BEFORE the switch machine advances the
@@ -10893,11 +10893,14 @@ pub fn build(level: &Level, cels_only: bool, skeletons: &HashMap<u8, Skeleton>, 
         }
         drop(pch);
         let pcm = nf_game::prof::scope("pal: colour_mults");
-        let (mults, pickup_mult, attach_mult) = self.colour_mults_dense_with(Some(ent_index.as_ref()));
-        drop(pcm);
-        let _prof_tail = nf_game::prof::scope("pal: cols tail");
         cols.clear();
         cols.resize(l.col_one as usize + 1, [1.0f32; 4]);
+        // perf-240g: the attachment colours land in their slots inside the colour pass (the
+        // returned `attach_mult` is then empty and its copy below writes nothing).
+        let (ca, cp) = (l.col_att as usize, (l.col_pick as usize).max(l.col_att as usize));
+        let (mults, pickup_mult, attach_mult) = self.colour_mults_dense_with(Some(ent_index.as_ref()), cols.get_mut(ca..cp));
+        drop(pcm);
+        let _prof_tail = nf_game::prof::scope("pal: cols tail");
         let has = !mults.is_empty();
         let rgb = |m: [f32; 3]| [m[0], m[1], m[2], 1.0];
         // fix-searchlight-remainder: the per-part alpha slot — kind-4 coronas carry obj+0x106/255 in
@@ -11004,12 +11007,16 @@ pub fn build(level: &Level, cels_only: bool, skeletons: &HashMap<u8, Skeleton>, 
     /// palette reads them by index; hashing every one of the 16-body arena's attachment slots into
     /// a map each ticked frame was a millisecond of the 240 Hz budget.
     pub fn colour_mults_dense(&self) -> (Vec<[f32; 3]>, Vec<[f32; 3]>, Vec<[f32; 3]>) {
-        self.colour_mults_dense_with(None)
+        self.colour_mults_dense_with(None, None)
     }
 
     /// `colour_mults_dense` with the script-entity index already built (`Some(index)`, perf-240g:
     /// the palette's pose pass built the same one this build), or `None` to build it here.
-    fn colour_mults_dense_with(&self, ent_built: Option<Option<&HashMap<((u32, u8), u32), Vec<Mat4>>>>) -> (Vec<[f32; 3]>, Vec<[f32; 3]>, Vec<[f32; 3]>) {
+    /// `attach_sink`: the palette's attachment colour slots (`cols[col_att..col_pick]`, already
+    /// [1, 1, 1, 1]) — the attachment multipliers are written there (rgb, alpha 1) instead of
+    /// returned, untinted ones skipped (their slot already holds that value), and only while
+    /// the character multipliers are non-empty, as `skin_palette_into`'s copy did.
+    fn colour_mults_dense_with(&self, ent_built: Option<Option<&HashMap<((u32, u8), u32), Vec<Mat4>>>>, mut attach_sink: Option<&mut [[f32; 4]]>) -> (Vec<[f32; 3]>, Vec<[f32; 3]>, Vec<[f32; 3]>) {
         let pm = nf_game::prof::scope("cm: char mults");
         let mults: Vec<[f32; 3]> = self.sim.as_ref()
             .map(|s| (0..self.characters.len()).map(|ci| s.char_multiplier(ci)).collect())
@@ -11028,7 +11035,7 @@ pub fn build(level: &Level, cels_only: bool, skeletons: &HashMap<u8, Skeleton>, 
         // attachment slot is inserted unconditionally below, so the maps can be sized up front
         // instead of rehash-growing to 12k+ entries every ticked frame.
         let mut pickup_mult: Vec<[f32; 3]> = Vec::with_capacity(self.sim.as_ref().map_or(0, |s| s.drones.pickups.len()));
-        let mut attach_mult: Vec<[f32; 3]> = Vec::with_capacity(self.attachments.len());
+        let mut attach_mult: Vec<[f32; 3]> = Vec::with_capacity(if attach_sink.is_some() { 0 } else { self.attachments.len() });
         // The lag fix: the keys were collected by walking EVERY character
         // vertex — the effect pools (decal/casing/debris/gas/projectile slots, 8561 attachments on 07000005)
         // made that 34 ms of a 52 ms frame. The multiplier depends only on the key, so it is computed once per
@@ -11072,8 +11079,12 @@ pub fn build(level: &Level, cels_only: bool, skeletons: &HashMap<u8, Skeleton>, 
             };
             let reference = PALETTE_REFERENCE.load(std::sync::atomic::Ordering::Relaxed);
             for ai in 0..self.attachments.len() as u32 {
+                if let Some(out) = attach_sink.as_deref_mut() {
+                    if mults.is_empty() || ai as usize >= out.len() { break; }
+                    if !reference && plan.col[ai as usize] == 0 { continue; }
+                }
                 {
-                    attach_mult.push((|| {
+                    let v = (|| {
                         let Some(a) = self.attachments.get(ai as usize) else { return one() };
                         // perf-240g: the arm this attachment always takes (`AttachPlan::col`, the
                         // same tests in the same order, decided once per scene).
@@ -11114,7 +11125,11 @@ pub fn build(level: &Level, cels_only: bool, skeletons: &HashMap<u8, Skeleton>, 
                             };
                         }
                         mults.get(a.character as usize).copied().unwrap_or_else(one)
-                    })());
+                    })();
+                    match attach_sink.as_deref_mut() {
+                        Some(out) => out[ai as usize] = [v[0], v[1], v[2], 1.0],
+                        None => attach_mult.push(v),
+                    }
                 }
             }
         }

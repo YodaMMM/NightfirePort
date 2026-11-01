@@ -2720,6 +2720,10 @@ struct App {
     cam_cur: Option<Camera>,
     pal_prev: Option<(Vec<nf_formats::anim::Mat4>, Vec<[f32; 4]>)>,
     pal_cur: Option<(Vec<nf_formats::anim::Mat4>, Vec<[f32; 4]>)>,
+    /// perf-240g: buffer pairs touched at the level swap (`swap_in_scene`), taken by the first
+    /// palette rebuilds while `pal_prev` has none to recycle — the first two builds of a level
+    /// otherwise fault in ~1-2 MB of fresh pages (the measured first-view spike).
+    pal_spare: Vec<(Vec<nf_formats::anim::Mat4>, Vec<[f32; 4]>)>,
     /// perf-240: the presented-frame palette (seeded per tick) and the entries that move between the two ticks.
     pal_blend: Vec<nf_formats::anim::Mat4>,
     pal_moving: Vec<u32>,
@@ -3764,6 +3768,15 @@ impl App {
         // loop with the audio still playing.
         if let Some(g) = &mut self.gfx {
             g.renderer = gpu::Renderer::new(&g.device, &g.queue, g.config.format, &self.scene, self.notex, self.nofog);
+            // perf-240g: one palette build here, on the thread that draws, during the swap: it
+            // faults in the buffers the first two rebuilds take (`pal_spare`) and
+            // the drones' draw-only sample memo, so the level's first frames pay
+            // none of it. The result is never drawn (each rebuild overwrites its buffers whole),
+            // and the build reads the scene only (the memo is a pure function of its key).
+            let (mut p, mut c) = (Vec::new(), Vec::new());
+            self.scene.skin_palette_into(&g.renderer.skin_layout, self.choice, self.anim_time, self.opts, None, &mut p, &mut c);
+            let second = (p.clone(), c.clone());
+            self.pal_spare = vec![(p, c), second];
         }
         // fix-restart-health: the loaded level's checkpoint is what a later
         // fail-Restart restores — the game re-saves the buffer with the POST-load
@@ -5572,7 +5585,7 @@ impl App {
                     let fp_pal = std::time::Instant::now();
                     // perf-240: the tick before last's buffers are refilled (skin_palette_into overwrites
                     // them whole) instead of a fresh ~1 MB allocation every tick.
-                    let (mut np, mut nc) = self.pal_prev.take().unwrap_or_default();
+                    let (mut np, mut nc) = self.pal_prev.take().or_else(|| self.pal_spare.pop()).unwrap_or_default();
                     self.scene.skin_palette_into(&g.renderer.skin_layout, self.choice, self.anim_time, self.opts, None, &mut np, &mut nc);
                     let new = (np, nc);
                     frame_part(3, fp_pal.elapsed());
@@ -6145,6 +6158,7 @@ impl App {
             cam_prev: None,
             cam_cur: None,
             pal_prev: None,
+            pal_spare: Vec::new(),
             pal_cur: None,
             pal_blend: Vec::new(),
             pal_moving: Vec::new(),

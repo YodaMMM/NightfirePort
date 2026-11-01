@@ -155,6 +155,17 @@ fn report(level: &str, samples: &[(u32, [u64; DEPTH])], names: &[&str]) {
         let mut lines: std::collections::HashMap<String, u32> = Default::default();
         for st in &s { if st[0] != 0 { *lines.entry(line_of(st[0])).or_default() += 1; } }
         for l in top(&lines, 30) { eprintln!("[sample]   line {l}"); }
+        // `NF_SAMPLE_LEAF=<substring>`: the call chains (source lines) under the leaf functions
+        // whose name contains it.
+        if let Ok(leaf) = std::env::var("NF_SAMPLE_LEAF") {
+            let mut chains: std::collections::HashMap<String, u32> = Default::default();
+            for st in &s {
+                if st[0] == 0 || !sym(&mut cache, st[0]).contains(leaf.as_str()) { continue; }
+                let c: Vec<String> = st[1..].iter().take_while(|&&a| a != 0).map(|&a| line_of(a)).filter(|l| !l.starts_with('?')).take(5).collect();
+                *chains.entry(c.join(" < ")).or_default() += 1;
+            }
+            for l in top(&chains, 15) { eprintln!("[sample]   leaf {l}"); }
+        }
     }
 }
 
