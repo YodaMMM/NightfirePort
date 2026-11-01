@@ -6756,7 +6756,7 @@ pub struct Scene {
     /// shown iff that part's `lod_next` (Control_NextLOD) is set.
     pub sl_lod: Vec<u16>,
     /// Level coronas (`Corona_Create` 0x18da00, placement type 0xFC) as camera billboards: slot
-    /// `corona_slot0 + k` (in the searchlight slot region, after the parts and their LOD slots)
+    /// `corona_slot0 + k` (in the searchlight slot region, after the parts, their LOD slots and `sl_l2`)
     /// draws at `corona_pos[k]` with the VIEWER's rotation. `Corona_Create` copies the glist flags to
     /// obj+0xF0 [M 0x18da40-48]; every placed corona glist carries bit 0x8 (07000005 Corona_Glow2 /
     /// Corona_test1 0x22d, Window_corona 0x229; 07000004 0x29; 07000015/16 0x2d [D]), and `View_DrawObjectGlist` 0x1e6780 replaces
@@ -6771,6 +6771,10 @@ pub struct Scene {
     /// Corona_test1 (0x22d) and every 07000015/16 corona (0x2d) wobble; Window_corona (0x229) and
     /// 07000004's `corona` (0x29) do not [D].
     pub corona_wobbles: Vec<bool>,
+    /// corona-list2: slot `parts.len() + sl_lod.len() + k` is corona `sl_l2[k]`'s sort-list-2 copy
+    /// (pass 6, no depth test), shown iff that corona is drawn with its `sight` (0x2000) bit set;
+    /// the part's own slot (the alpha list) shows it otherwise.
+    pub sl_l2: Vec<u16>,
 }
 
 /// The per-axis scale `View_DrawObjectGlist` 0x1e6780 applies to an obj+0xF0 & 0x4 object:
@@ -7026,6 +7030,9 @@ fn add_instance_tagged(level: &Level, inst: &Instance, layer: Layer, character: 
     // 2026-10-17: the gun still sorts its own parts, and a rocket spawned between the eye and the tube no longer
     // paints over it.
     let pass = if node == VIEW_MODEL_NODE && matches!(layer, Layer::Character | Layer::Effect) { 7 } else { pass };
+    // corona-list2: list 2 is not an alpha list — `View_DrawObjList` 0x1e69a0:55-57 runs psiStartAlpha
+    // (the AlphaFogObjects fade) for list 1 only — so the copy carries no fog/fade.
+    let (pass, fog) = if node == CORONA_L2_NODE { (6, 0) } else { (pass, fog) };
     // The object's world centre (glist sphere centre through the instance matrix) for the draw-order sort; world layers
     // keep each object apart. The world-space bounding-sphere radius (glist radius × the instance matrix's max axis
     // scale) feeds the CPU-side frustum cull (A-11e) — `transform` uses row-vector convention, so the columns of the
@@ -7265,6 +7272,21 @@ pub const ENV_OBJECT: i8 = 64;
 /// (obj+0xF0 & 0x2000), not its glist's: drawn after `psiClearZ`, over the world (pass 6)
 /// [M Game_Draw 0x1e6f50:157-176; View_AddObjects 0x1e62d8:57-59]. The body glow's builder.
 pub const LIST2_NODE: u32 = u32::MAX - 2;
+/// corona-list2: the `node` tag of a searchlight corona's sort-list-2 copy — `add_instance` puts it in
+/// pass 6 (no depth test, after every world pass) [M View_AddObjects 0x1e62d8:57-59; Game_Draw 0x1e6f50:157-176].
+/// The same list as `LIST2_NODE` (one tag); on the Character layer `add_instance` also drops the fog/fade.
+pub const CORONA_L2_NODE: u32 = LIST2_NODE;
+
+/// A corona's billboard matrix: the camera's right/up axes scaled by `obj+0xE8` at the corona's
+/// position (`View_DrawObjectGlist` 0x1e6780's flag-0x8 arm — the viewer's rotation, uniform scale).
+fn corona_billboard(p: &nf_game::searchlight::Part, right: [f32; 3], up: [f32; 3]) -> Mat4 {
+    [
+        [right[0] * p.scale, right[1] * p.scale, right[2] * p.scale, 0.0],
+        [up[0] * p.scale, up[1] * p.scale, up[2] * p.scale, 0.0],
+        [0.0, 0.0, 1.0, 0.0],
+        [p.pos[0], p.pos[1], p.pos[2], 1.0],
+    ]
+}
 /// Posed slots per gun emplacement: the base object, then one per `gunimp::TURRET_ARTS` gun child.
 const GUNIMP_SLOTS: usize = 1 + nf_game::gunimp::TURRET_ARTS.len();
 
@@ -9266,6 +9288,7 @@ pub fn build(level: &Level, cels_only: bool, skeletons: &HashMap<u8, Skeleton>, 
         let mut corona_pos: Vec<[f32; 3]> = Vec::new();
         let mut corona_slot0 = 0u16;
         let mut corona_wobbles: Vec<bool> = Vec::new();
+        let mut sl_l2: Vec<u16> = Vec::new();
         if let Some(m) = level.main_map() {
             for (pi, pl) in nf_game::searchlight::part_placements(&level.maps[m].placements).into_iter().enumerate() {
                 let p = &level.maps[m].placements[pl];
@@ -9295,13 +9318,32 @@ pub fn build(level: &Level, cels_only: bool, skeletons: &HashMap<u8, Skeleton>, 
                 put_dim(&mut sl_dims, slot as usize, posed_dim(level, &room_cels, &inst, false));
                 sl_lod.push(pi as u16);
             }
+            // corona-list2: each corona (kind 4, placement p0 [M Searchlight_Create 0x1cb4f8]) gets a
+            // second copy of its mesh on its own slot after the LOD slots, in pass 6 — sort list 2,
+            // drawn after `psiClearZ` with no depth test [M View_AddObjects 0x1e62d8:57-59 → list 2
+            // while obj+0xF0 & 0x2000; Game_Draw 0x1e6f50:157-176; psiClearZ 0x10b9a0 runs while
+            // WipeZBuffer 0x30c759 = 1, D/L]. The palette shows exactly one of the two copies per
+            // frame from the part's `sight` bit (the game's 0x2000): the alpha-list copy while the
+            // corona is occluded, this one while the viewer sees it.
+            for (pi, &pl) in sl_parts.iter().enumerate() {
+                let p = &level.maps[m].placements[pl];
+                if p.params.iter().find(|(j, _)| *j == 0).map_or(0, |&(_, v)| v) != 4 { continue; }
+                let target = if p.by_hash() { level.by_hash.get(&p.hashcode).copied() }
+                    else if (p.index as usize) < level.maps[m].objects.len() { Some((m, p.index as usize)) } else { None };
+                let Some((map, object)) = target else { continue };
+                let slot = (sl_parts.len() + sl_lod.len() + sl_l2.len()) as u16;
+                let inst = Instance { map, object, matrix: nf_formats::placement::object_matrix(p.rotation, p.translation), placement: p.clone() };
+                add_instance(level, &inst, Layer::Character, None, &mut groups, None, Some(slot), None, None, [1.0; 3], &room_cels, u32::MAX, CORONA_L2_NODE);
+                put_dim(&mut sl_dims, slot as usize, posed_dim(level, &room_cels, &inst, false));
+                sl_l2.push(pi as u16);
+            }
             // Level coronas (`Corona_Create` 0x18da00, placement type 0xFC): class-1 objects with NO update
             // function, drawn by `View_DrawObjectGlist` 0x1e6780 with obj+0xF0 = the glist flags word
             // [M 0x18da40-48] — bit 0x1 puts them in the alpha list (pass 3 for a slot draw, as before), bit
             // 0x8 makes them camera-facing (`Scene::corona_pos`). Each 0x8 corona gets a slot after the
-            // searchlight parts and their LOD slots; a corona glist without 0x8 (none on the disc) keeps the
-            // static World draw at its placement matrix.
-            corona_slot0 = (sl_parts.len() + sl_lod.len()) as u16;
+            // searchlight parts, their LOD slots and the searchlight coronas' list-2 copies (`sl_l2`); a
+            // corona glist without 0x8 (none on the disc) keeps the static World draw at its placement matrix.
+            corona_slot0 = (sl_parts.len() + sl_lod.len() + sl_l2.len()) as u16;
             for pl in nf_game::corona::placements(&level.maps[m].placements) {
                 let p = &level.maps[m].placements[pl];
                 let target = if p.by_hash() { level.by_hash.get(&p.hashcode).copied() }
@@ -10010,6 +10052,7 @@ pub fn build(level: &Level, cels_only: bool, skeletons: &HashMap<u8, Skeleton>, 
             corona_pos,
             corona_slot0,
             corona_wobbles,
+            sl_l2,
             destroy_centres,
             destroy_wrecks,
             tree_chars }
@@ -11344,12 +11387,23 @@ pub fn build(level: &Level, cels_only: bool, skeletons: &HashMap<u8, Skeleton>, 
                 }
                 let Some(s) = self.sim.as_ref() else { return [0.0, -10000.0, 0.0] };
                 let n_parts = s.drones.searchlights.parts.len();
+                let n_lod = self.sl_lod.len();
+                if sl as usize >= n_parts + n_lod {
+                    // corona-list2: the sort-list-2 copy, shown while the corona's 0x2000 bit is set.
+                    let sp = self.sl_l2.get(sl as usize - n_parts - n_lod).and_then(|&h| s.drones.searchlights.parts.get(h as usize));
+                    return match sp {
+                        Some(p) if p.drawn && p.sight => transform(&corona_billboard(p, opts.right, opts.up), v.pos),
+                        _ => transform(&FAR, v.pos),
+                    };
+                }
                 if sl as usize >= n_parts {
                     let sp = self.sl_lod.get(sl as usize - n_parts).and_then(|&h| s.drones.searchlights.parts.get(h as usize));
                     return match sp { Some(sp) if sp.drawn && sp.lod_next => transform(&sp.matrix, v.pos), _ => transform(&FAR, v.pos) };
                 }
                 let Some(p) = s.drones.searchlights.parts.get(sl as usize) else { return [0.0, -10000.0, 0.0] };
                 if !p.drawn || (p.lod_next && self.sl_lod.contains(&sl)) { return transform(&FAR, v.pos); }
+                // corona-list2: while in sight the corona draws from its list-2 copy instead.
+                if p.kind == 4 && p.sight && self.sl_l2.contains(&sl) { return transform(&FAR, v.pos); }
                 if p.kind == 4 {
                     let m: Mat4 = [
                         [opts.right[0] * p.scale, opts.right[1] * p.scale, opts.right[2] * p.scale, 0.0],
@@ -11735,6 +11789,14 @@ pub fn build(level: &Level, cels_only: bool, skeletons: &HashMap<u8, Skeleton>, 
                 };
                 if !keep { p[l.sl_base as usize + k] = FAR; continue; }
                 let n_parts = s.drones.searchlights.parts.len();
+                let n_lod = self.sl_lod.len();
+                if k >= n_parts + n_lod {
+                    // corona-list2: the corona's sort-list-2 copy, shown while its 0x2000 bit is set.
+                    let sp = self.sl_l2.get(k - n_parts - n_lod).and_then(|&h| s.drones.searchlights.parts.get(h as usize));
+                    let keep = sp.is_some_and(|sp| vis_room(sp.pos));
+                    p[l.sl_base as usize + k] = match sp { Some(sp) if keep && sp.drawn && sp.sight => corona_billboard(sp, opts.right, opts.up), _ => FAR };
+                    continue;
+                }
                 if k >= n_parts {
                     // A LOD slot: the shadowed part's matrix once its head has swapped.
                     let sp = self.sl_lod.get(k - n_parts).and_then(|&h| s.drones.searchlights.parts.get(h as usize));
@@ -11744,6 +11806,7 @@ pub fn build(level: &Level, cels_only: bool, skeletons: &HashMap<u8, Skeleton>, 
                 p[l.sl_base as usize + k] = match s.drones.searchlights.parts.get(k) {
                     Some(sp) if !sp.drawn => FAR,
                     Some(sp) if sp.lod_next && self.sl_lod.contains(&(k as u16)) => FAR,
+                    Some(sp) if sp.kind == 4 && sp.sight && self.sl_l2.contains(&(k as u16)) => FAR,
                     Some(sp) if sp.kind == 4 => [
                         [opts.right[0] * sp.scale, opts.right[1] * sp.scale, opts.right[2] * sp.scale, 0.0],
                         [opts.up[0] * sp.scale, opts.up[1] * sp.scale, opts.up[2] * sp.scale, 0.0],
@@ -11808,6 +11871,13 @@ pub fn build(level: &Level, cels_only: bool, skeletons: &HashMap<u8, Skeleton>, 
             for (k, sp) in s.drones.searchlights.parts.iter().enumerate().take((l.col_door - l.col_sl) as usize) {
                 if let Some(c) = cols.get_mut(l.col_sl as usize + k) {
                     c[3] = if sp.kind == 4 { sp.alpha as f32 / 255.0 } else { 1.0 };
+                }
+            }
+            // corona-list2: the list-2 copies read the same alpha byte as their corona.
+            let l2_base = s.drones.searchlights.parts.len() + self.sl_lod.len();
+            for (j, &h) in self.sl_l2.iter().enumerate() {
+                if let (Some(sp), Some(c)) = (s.drones.searchlights.parts.get(h as usize), cols.get_mut(l.col_sl as usize + l2_base + j)) {
+                    c[3] = sp.alpha as f32 / 255.0;
                 }
             }
         }
