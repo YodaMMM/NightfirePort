@@ -50,16 +50,26 @@ fire it standing [D fix-truck's trace]; `fix_truck_live::standing_ride_never_tou
 pins the port's agreement (re-ran green this session). This is exactly why master's earlier
 game-accurate attempt was REVERTED (drone.rs:18050-18057). So the pick capsule alone is not the
 game's trigger-contact discriminator: a gate somewhere in the collide path keeps the standing
-contact off the trigger's `+0xD0`. Candidates, in the order the continuation should read them:
+contact off the trigger's `+0xD0`. The mirror gate's inputs are now NAMED (this session's second
+pass):
 
-- the contact-mirror gate at Collide_Update 0x1ea398:216-229 [M] — a hit mirrors only if
-  `hit+0x51 bit 1 | hit+0x50 bit 6` (or a `Rand_Rand(0x3f)` bit when `hit+0x50 & 0x80`, or the
-  `obj+0x9a & 0x20` arm). What writes `hit+0x50/+0x51` for a trigger-candidate hit (surface class?
-  the trigger's glist flags?) is unmapped;
-- `Intersect_CylGeom` 0x109da0's triangle handling (one-sided normals — a horizontal quad under the
-  axis may only count when approached from one side);
-- `Collide_Pick` 0x1eb320's candidate filter for trigger objects (glist flags; muxes carry 0x30 =
-  no collision [M triggers.md]).
+- **`hit+0x50` = the touched triangle's surface class byte** — `Intersect_CylGeom` 0x109da0:568 [M]
+  copies it from the glist's surface-property table (`piVar2[2]`, the glist's class base) indexed by
+  the triangle's surface index. Per-triangle data, not per-object.
+- **`hit+0x51` ORs in the caller object's `obj+0x9a` byte** — `Collide_Intersect` 0x1ebaa8:178 [M]
+  `hit+0x51 |= param_3` where param_3 = `*(u16*)(obj+0x9a)` passed by `Collide_Update` 0x1ea398:94;
+  `Collide_Update` also sets bit 1 of it on every mirrored contact (0x1ea398:190).
+- The mirror gate 0x1ea398:216-229 [M] therefore reads: `hit+0x51 bit 1` (the caller's `+0x9a` bit 1)
+  OR `hit+0x50 bit 6` (the surface class's bit 6), with `hit+0x50 bit 7` adding a `Rand_Rand(0x3f)`
+  random arm and the caller's `obj+0x9a & 0x20` arm forcing a mirror unless the surface class is
+  0x10. A contact whose surface class lacks bit 6 and whose caller lacks `+0x9a` bit 1 NEVER mirrors
+  to the other object's `+0xD0` — i.e. **whether a trigger sees a body is decided by the touched
+  triangle's surface class byte (bit 6) plus the mover's `obj+0x9a` bits**, per hit.
+- The remaining unknown (the continuation's first read): what the plate triangles' surface class
+  bytes are on the disc (a dump of the glist surface table for the ch-0x70 park quad and #277), and
+  what the VU microcode inside `Intersect_CylGeom` (the C at 0x109da0:421/536 shows only the
+  `_cfc2` flag checks; the math is VU0) contributes — whether a triangle fully inside the cylinder
+  (a flat quad under the axis) produces a hit at all, and with which surface index.
 
 ## The three known cases
 
@@ -99,8 +109,9 @@ All with `NF_SILENT=1 cargo test --offline --release`:
 
 ## What's left (the continuation)
 
-1. Read `Intersect_CylGeom` 0x109da0 + the mirror-gate bits (0x1ea398:216-229 writers of
-   `hit+0x50/+0x51`) and name the standing-park gate.
+1. Dump the glist surface-class bytes for the ch-0x70 park quad (07000005) and #277 (0700004a) —
+   do they carry bit 6? — and read the VU0 microcode behind `Intersect_CylGeom`'s flag checks
+   (0x109da0:421/536) for the inside-the-cylinder case.
 2. Port the real rule into the toucher path (per-stance `pick_arm` capsules + the gate), keeping
    every pinned behaviour green — fix_truck_live's standing sister is the arbiter.
 3. Dump 07000002's #385-387 extents; add the firing pin if a real route can reach them unlocked.
