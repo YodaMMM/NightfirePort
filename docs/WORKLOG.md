@@ -37,6 +37,29 @@ test binary and the full suite (tools/test/suite.py); quote every total.
 - Pushed checkpoints after every step: 431f721a (branch+WORKLOG), 63709075 (stats merge),
   23cdee53 (fe-pages-2 merge), ade69a7f (the compile fixes).
 
+## hud-start (2026-10-31) — level-start HUD, entry fade, objective flash, pause HUD
+
+- Weapon-name label at the start: `Player_InitWeapon` writes +0x62 = 0x47 [M 0x1a7ef8:137]; the
+  Sim built with `Gun::new(2, ..)` so 07000005 (request = PP7) never switched and the others
+  holstered an undrawn PP7. The loadout now holds 0x47 and arms `BL+0x95E` = 60 once: the first
+  `Player_Update` runs `HUD_Update` before `Player_Weapon` [M 0x193600:79 vs :412; 0x19a7f0:212-223].
+  `Player_Init`'s own HUD_Update precedes InitWeapon and StandAtNewPosition zeroes +0x95E
+  [M 0x1910f8:145-181, 0x190d88:85]. The 0b PS2 frame without the label is not the spawn: its
+  objective box is one objective ahead of the port's at the same rel frame.
+- Fade cover: `CreateTotalScreenSprite` 0x1181b0 writes the fade byte raw into RGBAQ under
+  ALPHA_1 0x44, and the GS takes 0x80 as 1.0 — cover = min(byte/128, 1). The 45-tick entry fade is
+  black for 22 ticks (`hud::fade_cover`). The entry fade now draws under the HUD
+  (`Scene::entry_fade_hud`) [L PCSX2 starts: iris + label bright over black].
+- Objective banner: case 3's opening window (time + 60 > 300 new / 180 complete) hides the body and
+  blinks the label on fmod(time, 40) < 20 [M 0x19c310:201-213]; the label skips the 15-tick fade.
+- Pause: HUD drawn under the page in the headless shot too (`hud_under_menu`, the App already did);
+  `pause_hud_refresh` = `BL+0x8BC = 1.0` while paused [M 0x19b9c8:116-123].
+- Not changed: hiding the gun in the pause. The PS2 session's UNPAUSED frame
+  (ps2-refs-2/h2-unpaused.png) also has no gun and no ammo pane — Bond held nothing there — and no
+  decompile path hides the view model on pause (GS_PauseGame / P_PAUSE / MenuManager_Create /
+  Player_PositionCamera checked).
+- tests/hud_level_start_live.rs (6 tests, sisters included).
+
 ## pause-hint-2 (2026-10-31) — the hint box against PS2 captures: size, fill, wrap
 
 - **Sizing (failed reading corrected).** The pause-hint entry below says each box is sized for the previous box's
