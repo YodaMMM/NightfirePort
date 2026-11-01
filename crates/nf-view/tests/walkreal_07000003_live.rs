@@ -37,6 +37,29 @@ fn iso() -> String { std::env::var("NF_ISO").expect("NF_ISO") }
 /// The mission-table row and objective indices for this level [L ee_start_05 @ 0x2a3f18 via
 /// mission::c07000003]: obj0 0x4e "Retrieve Dragon Safe contents", obj1 0x51 "Rescue Mayhew's
 /// servants", obj2 0x53 "Find door leading to Mayhew" (enable 0x52).
+/// Shoot every enabled, alerted hostile within `r` of Bond on his floor, nearest first, through the
+/// real fire path. With the placement stats (accuracy / aggression / reaction [M DoModeSettingsNEW
+/// 0x14c600:81-107]; bisected: green before that merge, red after) four live guards stood on
+/// Bond's next step at (10.4, 6.5, −31.5) in state 0x5C, and the west-lane and east-lane legs
+/// pressed into them for whole caps until Bond left the floor. A player clears the guards in his
+/// way.
+fn clear_near(w: &mut Walker, r: f32, label: &str) {
+    for k in 0..8 {
+        let near = {
+            let sim = w.scene.sim.as_ref().unwrap();
+            let b = sim.bond.pos;
+            sim.drones.list.iter().enumerate()
+                .filter(|(_, d)| d.team == 1 && d.enabled && d.present && !d.corpse && d.health > 0.0
+                    && d.state != nf_game::drone::state::HOSTAGE && (d.pos[1] - b[1]).abs() < 2.0 && walker::dxz(d.pos, b) < r)
+                .min_by(|a, c| walker::dxz(a.1.pos, b).total_cmp(&walker::dxz(c.1.pos, b)))
+                .map(|(i, _)| i)
+        };
+        let Some(di) = near else { return };
+        let _ = w.switch_to_armed(label);
+        if !w.shoot(di, &format!("{label} guard {k}")) { let _ = w.resupply(label); }
+    }
+}
+
 fn mission_row() -> (usize, usize, usize, usize) {
     let li = nf_game::mission::LEVELS.iter().position(|l| l.level == 0x0700_0003).expect("the 07000003 mission record");
     (li, 0, 1, 2)
@@ -199,6 +222,7 @@ fn walk_the_full_route_and_complete_every_objective() {
         ("the east lane", [10.27, 6.65, -30.01]),
         ("the east lane north", [10.59, 6.47, -22.91]),
     ] {
+        clear_near(&mut w, 8.0, name);
         w.walk_to(Wp { at, act: Act::None, arrive: 1.0 }, name);
     }
     w.lenient = false;

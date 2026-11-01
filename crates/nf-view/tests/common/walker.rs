@@ -212,6 +212,11 @@ fn fail_dump(scene: &Scene, target: V3, label: &str) -> String {
         .map(|t| format!("trig kind={} out={:#x} mask={:#x} at({:.1},{:.1},{:.1})", t.kind, t.out, t.mask, t.centre()[0], t.centre()[1], t.centre()[2]))
         .collect();
     s.push_str(&format!("triggers nearby: {}\n", if trigs.is_empty() { "none".into() } else { trigs.join("; ") }));
+    let drones: Vec<String> = sim.drones.list.iter().enumerate()
+        .filter(|(_, d)| d.present && !d.corpse && dxz(d.pos, p) < 3.0)
+        .map(|(i, d)| format!("drone #{i} team {} state {:#x} at ({:.1},{:.1},{:.1}) hp {:.0}", d.team, d.state, d.pos[0], d.pos[1], d.pos[2], d.health))
+        .collect();
+    s.push_str(&format!("drones within 3 u: {}\n", if drones.is_empty() { "none".into() } else { drones.join("; ") }));
     let ground = sim.world.floor_below(p, 6.0);
     s.push_str(&format!("floor_below: {:?}\n", ground));
     s

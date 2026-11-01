@@ -341,6 +341,8 @@ fn measured_regular(level: &str, diff: u32, dist: f32, weapon: u32) -> Option<Ta
 /// (0x6A: 5.0, interval 180). Per hit = `weapon_data+0x0C × Drone+0x100 × Plr_DMod` exactly [M
 /// 0x139f50 + 0x1902c8; D weapon_data]; the hit counts follow `DoBulletAccuracy`'s p with the type's
 /// stats [M 0x179740; L drone_stats] and are pinned at the measured deterministic value ± max(2, 20%).
+/// The diff-3 5-u cell is 24 since the placement stats met master's sight changes (the shared stream
+/// moved; 26 of 42 shots rolled a hit against p = 60 %, the old 32 was the upper tail of the same p).
 /// Sister: the old chain (accuracy 5, aggression 0, the pistol at ×1) — its 0x12 cells landed
 /// 8/2/7/11/16/16 at 5/20 u (60 in all) and its 0x0E hits cost half — fails the totals and the per-hit.
 #[test]
@@ -350,7 +352,7 @@ fn hits_per_10s_and_damage_per_hit_are_pinned() {
     const PINS: &[(&str, u32, u32, f32, u32, f32, usize)] = &[
         ("07000002.bin", 0x0700_0002, 0x12, 1.5, 1, 5.0, 15), ("07000002.bin", 0x0700_0002, 0x12, 1.5, 1, 10.0, 11), ("07000002.bin", 0x0700_0002, 0x12, 1.5, 1, 20.0, 9),
         ("07000002.bin", 0x0700_0002, 0x12, 1.5, 2, 5.0, 17), ("07000002.bin", 0x0700_0002, 0x12, 1.5, 2, 10.0, 21), ("07000002.bin", 0x0700_0002, 0x12, 1.5, 2, 20.0, 10),
-        ("07000002.bin", 0x0700_0002, 0x12, 1.5, 3, 5.0, 32), ("07000002.bin", 0x0700_0002, 0x12, 1.5, 3, 10.0, 24), ("07000002.bin", 0x0700_0002, 0x12, 1.5, 3, 20.0, 20),
+        ("07000002.bin", 0x0700_0002, 0x12, 1.5, 3, 5.0, 24), ("07000002.bin", 0x0700_0002, 0x12, 1.5, 3, 10.0, 24), ("07000002.bin", 0x0700_0002, 0x12, 1.5, 3, 20.0, 20),
         ("07000002.bin", 0x0700_0002, 0x0e, 10.0, 1, 5.0, 0), ("07000002.bin", 0x0700_0002, 0x0e, 10.0, 2, 5.0, 3), ("07000002.bin", 0x0700_0002, 0x0e, 10.0, 3, 5.0, 3),
         ("0700001b.bin", 0x0700_001b, 0x6a, 5.0, 1, 5.0, 0), ("0700001b.bin", 0x0700_001b, 0x6a, 5.0, 1, 10.0, 1), ("0700001b.bin", 0x0700_001b, 0x6a, 5.0, 1, 20.0, 0),
         ("0700001b.bin", 0x0700_001b, 0x6a, 5.0, 2, 5.0, 0), ("0700001b.bin", 0x0700_001b, 0x6a, 5.0, 2, 10.0, 1), ("0700001b.bin", 0x0700_001b, 0x6a, 5.0, 2, 20.0, 0),

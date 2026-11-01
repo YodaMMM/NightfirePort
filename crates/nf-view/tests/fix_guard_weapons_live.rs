@@ -315,7 +315,10 @@ fn the_3x3_hit_rate_and_damage_matrix_matches_the_game() {
             // guard may close to just above the band (measured 3.46 with the rate and per-hit
             // damage still on the model: 0.685 vs 0.60 ± 0.12, 1.65 exact); the old 3.5 floor
             // was harness margin, not a game rule.
-            assert!(dist > 3.05 && dist < 12.5, "guard {guard} ended inside the TooClose band or far off the engagement (dist {dist})");
+            // The upper bound is harness sanity only (no falloff, above): 07000005's SG-5 guard 2
+            // ended its 200-shot diff-1 run at 12.95 u on the merged placement-stats tree, its
+            // roll rate on the model (119/200 vs 0.60).
+            assert!(dist > 3.05 && dist < 15.0, "guard {guard} ended inside the TooClose band or far off the engagement (dist {dist})");
             // 952: the pin is the ROLL rate — `DroneWeap_DoBulletAccuracy` 0x179740 applies
             // p = (100 − 5·acc) × level accuracy to the shared RNG for every gate-clean shot
             // [M 0x179740:100-110], and the port's fire_weapon applies the same p to the same
