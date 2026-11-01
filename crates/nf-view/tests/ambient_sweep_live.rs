@@ -128,25 +128,40 @@ fn a_dim_flagged_posed_slot_takes_its_multiplier() {
 
 /// 07000015's tripbombs (kind 0xfe, `Mine_Create` 0x17ce28) draw undimmed: the mesh's glist carries
 /// 0x800 [D placement 487 'Tripbomb_3rd_short'], but the creator never copies it into obj+0xF0, so the
-/// red beam keeps its full 0xfe red vertex colour.
+/// red beam keeps its full 0xfe red vertex colour. The mines draw on their own posed door-region
+/// slots (`mine_placements`, past the rigid bodies): the slot carries no `PosedDim`, its palette
+/// colour is white, and its CPU-posed vertices keep the full red.
 #[test]
 fn the_tripbomb_beam_draws_undimmed() {
     let Some(iso) = std::env::var("NF_ISO").ok() else { return };
-    let scene = nf_view::load(&iso, "07000015.bin", false).unwrap();
-    let at = [2.869, 41.986, 59.459]; // placement 487's translation [D]
-    let red: Vec<[u64; 3]> = scene.materials.iter().filter(|m| m.layer == nf_view::scene::Layer::World)
-        .filter(|m| (0..3).map(|k| (m.centre[k] - at[k]).powi(2)).sum::<f32>() < 16.0)
-        .map(|m| {
-            let mut acc = [0u64; 3];
-            let ix = &scene.indices[m.first_index as usize..(m.first_index + m.index_count) as usize];
-            for i in ix { for k in 0..3 { acc[k] += scene.vertices[*i as usize].rgba[k] as u64; } }
-            acc.map(|a| a / (ix.len() as u64).max(1))
-        })
-        .filter(|a| a[0] > 4 * (a[1] + a[2] + 1)).collect();
-    assert!(!red.is_empty(), "the beam's material sits by placement 487");
-    assert!(red.iter().all(|a| a[0] >= 250), "the beam is undimmed: {red:?}");
-    // Sister: the cel ambient there would have dimmed it below half.
+    let mut scene = nf_view::load(&iso, "07000015.bin", false).unwrap();
+    for _ in 0..30 { tick(&mut scene); }
+    let at = [2.869f32, 41.986, 59.459]; // placement 487's translation [D]
+    let &(_, mx) = scene.mine_placements.iter().find(|(pi, _)| *pi == 487).expect("placement 487 is a mine");
+    assert!((0..3).all(|k| (mx[3][k] - at[k]).abs() < 1e-3), "the mine's matrix sits at placement 487: {:?}", mx[3]);
+    // The posed slot(s) drawn at that matrix.
     let s = scene.sim.as_ref().unwrap();
+    let mut slots: Vec<u16> = scene.char_verts.iter().filter_map(|cv| cv.door).collect();
+    slots.sort_unstable();
+    slots.dedup();
+    slots.retain(|&d| scene.door_slot_matrix(s, d as usize) == mx);
+    assert!(!slots.is_empty(), "placement 487's mine has a posed slot");
+    let (l, _) = scene.skin_layout();
+    let (_, cols) = scene.skin_palette(&l, None, 0.0, Default::default(), None);
+    for &d in &slots {
+        assert!(scene.door_dims.get(d as usize).copied().flatten().is_none(), "mine slot {d} carries a 0x800 dim");
+        assert_eq!(&cols[(l.col_door + d as u32) as usize][..3], &[1.0; 3], "mine slot {d}'s palette colour is dimmed");
+    }
+    // The beam: the slot's red-dominant vertices, at full red in the base and the CPU-posed colour.
+    let posed = scene.posed_vertices(None, 0.0, Default::default());
+    let base = &scene.vertices[scene.char_vertex_start..];
+    let red: Vec<(u8, u8)> = scene.char_verts.iter().zip(base).zip(&posed)
+        .filter(|((cv, _), _)| cv.door.map_or(false, |d| slots.contains(&d)))
+        .filter(|((_, b), _)| b.rgba[0] as u32 > 4 * (b.rgba[1] as u32 + b.rgba[2] as u32 + 1))
+        .map(|((_, b), v)| (b.rgba[0], v.rgba[0])).collect();
+    assert!(!red.is_empty(), "the beam's vertices ride placement 487's mine slot");
+    assert!(red.iter().all(|&(b, v)| b >= 250 && v >= 250), "the beam is undimmed: {red:?}");
+    // Sister: the cel ambient there would have dimmed it below half.
     let amb = s.ambient_at(at).expect("the beam is inside a room cel");
     assert!(amb[0] < 128, "a 0x800 dim would cut the red to {}", 254 * amb[0] as u32 >> 8);
 }
