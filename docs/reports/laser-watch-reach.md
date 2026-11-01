@@ -98,11 +98,18 @@ test's [S] note is replaced with the arg-order citation.
   `fix_sg5_laser_live` **2 passed**; `laser_gas_mesh_live` (nf-game) **1 passed**.
 - `cargo test --offline --release -p nf-game -- --test-threads=1`: **988 passed; 0 failed; 9
   ignored** (the +1 over the previous session is the new segment test).
+- `cargo test --offline --release -j4 -p nf-formats -p nf-audio -- --test-threads=1`: **136
+  passed; 3 failed; 0 ignored** — the 3 are exactly the documented slim-ISO allowance
+  (`disc_golden`: `/DRIVING/MIS01.MUS: too small for a BIGF header` — the slim image's driving
+  audio is truncated).
 - The fast runner (`tools/test/suite.py`): started detached twice on this sandbox; both launches
   were reaped between tool calls (suite.out stayed empty — the same reaping the previous session
-  hit), so **no full-runner total this session**; the per-binary totals above are the verified
-  numbers behind the push. The tree is merged with origin/master (branched from 6f341d9e, no
-  newer master commits fetched).
+  hit), and a foreground full run cannot fit the tool call ceiling (nf-view alone carries ~900
+  test binaries at several seconds each). **No full-runner total this session.** What did run to
+  completion: all of nf-game (988/0/9), all of nf-formats + nf-audio (136/3-allowed/0), and every
+  binary the task names (the satchel/laser set, interactables_0700004a_live, space_laser_1b_live)
+  — the totals above are the verified numbers behind the push. The tree is merged with
+  origin/master (branched from 6f341d9e, no newer master commits fetched).
 
 ## Usage
 
