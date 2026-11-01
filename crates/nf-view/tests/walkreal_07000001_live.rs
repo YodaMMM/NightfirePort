@@ -190,9 +190,19 @@ fn walk_to_the_exit(iso: &str, stop_at_fire: bool) -> Walker {
         // player steps out the door he came in by: east door → corridor box → back inside.
         {
             let sim = w.scene.sim.as_ref().unwrap();
-            let dry = sim.gun.clip + sim.gun.spare < 8;
+            // < 16, not < 8: one guard's kill budget. Measured on the faithful capsule tree:
+            // guard 6 died on clip 32 spare 23 (2.2 a hit), the next fight began on clip 8
+            // spare 0 (4.5 a hit — the held weapon had changed at guard 6's drop), ran dry with
+            // guard 7 at hp 11, and the shoot loop's repositioning left Bond in the concave
+            // corner west of the east door (the x 6.03 / z 11.09 walls held him at (5.48, 11.60)
+            // for every resupply hop).
+            let dry = sim.gun.clip + sim.gun.spare < 16;
             drop(sim);
-            if dry { walker::hall_ammo_ladder(&mut w, &format!("hall guard {g} ammo")); }
+            if dry {
+                walker::hall_ammo_ladder(&mut w, &format!("hall guard {g} ammo"));
+                let gpos = w.scene.sim.as_ref().unwrap().drones.list[g].pos;
+                w.walk_nav_to(gpos, &format!("re-approach hall guard {g}"), 3.0);
+            }
         }
         if !w.shoot(g, &format!("hall guard {g}")) {
             if w.resupply("hall ammo") { w.shoot(g, &format!("hall guard {g}")); }
