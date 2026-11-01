@@ -32,3 +32,4 @@ Work log:
 - (20:52) interactables_0700000d_live 17/0 (was 11), walkreal_0700000d_live 1/0, nf-game 1028/0.
   Rigid bodies (0xD8 #89-91): no sim object in the port (rigid_body.rs is init-math only) — the
   at-rest draw is the census's GAP-0d-2, reported, no fake test.
+- (20:40) report drafted (docs/reports/level-0d-interactables-2.md); suite building in the background (started 20:27 UTC after the first background run was reaped between tool calls).
