@@ -675,8 +675,10 @@ fn seg_tri_hit(from: V3, to: V3, t: &[V3; 3]) -> bool {
 /// The ray-triangle fraction for the bullet walks (Möller–Trumbore, ONE-SIDED like every game ray
 /// test [M Intersect_RayGeom 0x10a8c8:168: `n·dir >= 0` skips the triangle]) — the same arithmetic
 /// `segment_in_sets_drop_pass` inlines, as a shared body so the scoped and flat bullet walks agree
-/// term for term.
-fn ray_tri_t(from: V3, d: V3, t: &[V3; 3]) -> Option<f32> {
+/// term for term. Shared with the tripbomb candidate test (the flight segment vs the mine cel's
+/// own tris — the game's object-cel intersect rides the same ray rule [M Collide_Intersect
+/// 0x1ebaa8 → Intersect_RayGeom 0x10a8c8]).
+pub(crate) fn ray_tri_t(from: V3, d: V3, t: &[V3; 3]) -> Option<f32> {
     let (e1, e2) = (sub(t[1], t[0]), sub(t[2], t[0]));
     if dot(cross(e1, e2), d) >= 0.0 { return None; } // back face [M 0x10a8c8:168]
     let p = cross(d, e2);

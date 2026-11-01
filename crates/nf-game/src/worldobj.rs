@@ -288,6 +288,12 @@ pub struct Mine {
     pub exploded: bool,
     /// The live posed y (obj+0x34) — the draw-side getter for the bob.
     pub posed_y: f32,
+    /// This tick's mirrored bullet contact: `Collide_Update` 0x1ea398:160-234 lands a node on the
+    /// mine's `obj+0xD0` with `+0x58` = the bullet obj whenever a round's segment meets the mine
+    /// cel's own geometry — the port's stand-in for that per-tick list entry. `Mine_Update`
+    /// 0x17c930:31-45 explodes on ANY `+0x58 != 0` node, the bullet contact included; the flag is
+    /// cleared at the collide-pass head each tick (the game's per-frame hit-list clear).
+    pub bullet_hit: bool,
 }
 
 impl Mine {
@@ -317,6 +323,7 @@ impl Mine {
                 tris,
                 exploded: false,
                 posed_y: p.translation[1],
+                bullet_hit: false,
             });
         }
         out

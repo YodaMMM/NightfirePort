@@ -13713,6 +13713,10 @@ fn segment_hits_sphere(a: V3, b: V3, c: V3, r: f32) -> bool {
         // `Collide_Update` 0x1ea398's first loop clears every hit list at the head of the frame —
         // the fusebox wires' hit flags are per-tick only.
         for fb in &mut self.fuseboxes { fb.clear_hits(); }
+        // The mines' bullet contacts clear at the same head (the game's per-frame hit-list clear
+        // [M Collide_Update 0x1ea398's first loop]; the tripbomb's `Mine_Update` walk reads the
+        // contacts the collide pass left on its `obj+0xD0`).
+        for m in &mut self.mines { m.bullet_hit = false; }
         // The script objects' hit chains clear with them (the same Collide head): the SP damage
         // accumulation's per-tick gather (`tick_damage`, consumed by `Player::update`'s damage
         // tail [M SP_Update 0x1dc1c0-0x1dc330]) starts empty each frame. The site's per-tick
@@ -14259,6 +14263,31 @@ fn segment_hits_sphere(a: V3, b: V3, c: V3, r: f32) -> bool {
             // segment straddles - the exterior backdrop planes around 07000011's stairwell - is
             // never a candidate [M 0x1eb320:125, 0x1eac98].
             let tw = d.world.segment_bullet_scoped(d.world.find_cel(b.pos), b.pos, end);
+            // The tripbomb candidates: the game's pick adds every object whose world sphere the
+            // flight segment enters [M Collide_PickObj 0x1eae80 — the obj+0x80 centre + obj+0x8C
+            // radius against vecutil_calculate_closest_point_on_line of the HITTEST segment], and
+            // the intersect tests the mine cel's own tris [M Collide_Intersect 0x1ebaa8 →
+            // Intersect_RayGeom 0x10a8c8, the one-sided ray]. The surviving node mirrors onto the
+            // mine's `obj+0xD0` with `+0x58` = the bullet obj [M Collide_Update 0x1ea398:160-234],
+            // and `Mine_Update` 0x17c930:31-45 explodes on ANY `+0x58 != 0` node — a round from
+            // any range detonates the tripbomb through its beam or body. The walk's own stop rule
+            // keeps a nearer solid candidate from registering behind-hits [M 0x1ea398:216-229], so
+            // the port contests the contact in the same nearest-solid set (world stop, breakables,
+            // guards) below.
+            let mut mine_contact: Option<(usize, f32)> = None;
+            if !net_world {
+                for (mi, mine) in self.mines.iter().enumerate() {
+                    if mine.exploded || mine.tris.is_empty() { continue; }
+                    // AABB pre-reject (the tris' own bounds) before the per-tri ray.
+                    if (0..3).any(|k| (b.pos[k] < mine.lo[k] && end[k] < mine.lo[k]) || (b.pos[k] > mine.hi[k] && end[k] > mine.hi[k])) { continue; }
+                    let dseg = [end[0] - b.pos[0], end[1] - b.pos[1], end[2] - b.pos[2]];
+                    for tri in &mine.tris {
+                        if let Some(t) = crate::world::ray_tri_t(b.pos, dseg, tri) {
+                            if mine_contact.is_none_or(|(_, mt)| t < mt) { mine_contact = Some((mi, t)); }
+                        }
+                    }
+                }
+            }
             for (i, dr) in self.list.iter().enumerate() {
                 // `Drone_CollisionHandler` 0x140968:62 returns while `NPCGlobals == 0` (the NIS freeze:
                 // drones take no damage) and `Collide_PickObj` 0x1eae80:26-30 drops `obj+0xF0 & 0x20`
@@ -14294,9 +14323,31 @@ fn segment_hits_sphere(a: V3, b: V3, c: V3, r: f32) -> bool {
                 }
             }
             let at = |t: f32| [b.pos[0] + ray[0] * t, b.pos[1] + ray[1] * t, b.pos[2] + ray[2] * t];
+            // The mine's take in the nearest-solid contest: the tripbomb node only survives the
+            // walk when no nearer candidate (world, breakable, guard) stops the round first [M
+            // 0x1ea398:216-229].
+            let mine_take = mine_contact.filter(|(_, mt)|
+                tw.is_none_or(|w| *mt < w)
+                && contact.as_ref().is_none_or(|(ct, _)| *mt < *ct)
+                && best.as_ref().is_none_or(|(_, _, bt)| *mt < *bt));
             // The first solid node wins the round [M 0x1ea398:216-229 + 0x12cff0-4]: a scenery
             // contact taken above (contact.is_some) kills the walk — nothing farther applies.
             match (best, tw) {
+                _ if mine_take.is_some() => {
+                    // The tripbomb takes the round: the first solid object hit dies it [M
+                    // Bullet_CollisionHandler 0x12ce80 disasm 0x12cff0-0x12cff4] and the mirrored
+                    // node lands on the mine's `obj+0xD0` (`+0x58` = the bullet obj, `+0x51` |= 1
+                    // [M Collide_Update 0x1ea398:160-234]) — `Mine_Update` 0x17c930:31-45 explodes
+                    // on any `+0x58 != 0` node this same port tick (the game's walk reads the list
+                    // the frame after the collide pass; the port's mines loop runs after the bullet
+                    // pass in the same tick — the established one-phase stand-in). The round's own
+                    // contact effect at the hit point is not modelled (no RNG spent; the blast
+                    // presentation covers the moment) [S] unverified.
+                    let (mi, mt) = mine_take.unwrap();
+                    b.dead = true;
+                    self.mines[mi].bullet_hit = true;
+                    let _ = at(mt);
+                }
                 (Some((i, part, t)), w) if w.is_none_or(|w| t < w) && contact.is_none_or(|(ct, _)| t < ct) => {
                     b.dead = true;
                     let hit = Hit { part, ray, point: at(t), damage: b.damage, weapon: b.weapon };
@@ -16504,7 +16555,10 @@ fn segment_hits_sphere(a: V3, b: V3, c: V3, r: f32) -> bool {
         // hit-list walk fires when the collide pass gave the mine a referenced contact. The port
         // tests the player capsule (feet pos, 1.8 tall, r 0.55 [M Player_CollLadder]) and the
         // present drones (the 0.4 body cylinders `Check_Target` uses) against the mine's own
-        // collision tris [M docs/atlas/object.md +0xD0]. The blast is the shared `spawn_blast`
+        // collision tris [M docs/atlas/object.md +0xD0], plus this tick's mirrored bullet contact
+        // (`Collide_Update` 0x1ea398:160-234 lands the node on `obj+0xD0` with `+0x58` = the
+        // bullet; the walk explodes on ANY `+0x58 != 0` [M 0x17c930:31-45] — the round from range
+        // detonates the tripbomb). The blast is the shared `spawn_blast`
         // (the Explode object class 0xF's damage = param 0, radius/shake/scale = param 1, script
         // = param 5 [M 0x17ca74-0x17cb10]; the mine's own delete — obj+0xFE |= 1 — follows).
         let drone_bodies: Vec<(V3, V3)> = self.list.iter()
@@ -16517,7 +16571,8 @@ fn segment_hits_sphere(a: V3, b: V3, c: V3, r: f32) -> bool {
             mine.bob(frame);
             let feet = [player.pos[0], player.pos[1], player.pos[2]];
             let head = [player.pos[0], player.pos[1] + 1.8, player.pos[2]];
-            let hit = mine.touching(feet, head, 0.55)
+            let hit = mine.bullet_hit
+                || mine.touching(feet, head, 0.55)
                 || drone_bodies.iter().any(|&(a, b)| mine.touching(a, b, 0.4));
             if hit {
                 let (pos, radius, damage, script) = (mine.pos, mine.radius, mine.damage, mine.script);
