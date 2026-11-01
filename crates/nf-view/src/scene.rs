@@ -11414,10 +11414,21 @@ pub fn build(level: &Level, cels_only: bool, skeletons: &HashMap<u8, Skeleton>, 
                         // Past the rotors: the rigid bodies at their live obj+0x90 [M RB_EulerEvolve 0x1d7810].
                         let bi = ri - self.rotor_placements.len();
                         if bi >= self.rbody_placements.len() {
-                            // Past the rigid bodies: the mines at their placement matrix until the
-                            // sim explodes one (the game deletes it [M 0x17cb7c-0x17cb88]).
-                            let &(pl, mx) = self.mine_placements.get(bi - self.rbody_placements.len())?;
-                            if s.drones.mines.iter().any(|mn| mn.placement == pl && mn.exploded) { return None; }
+                            // Past the rigid bodies: the mines posed every tick at their placement
+                            // rotation and the bob's live y, collapsed once the sim explodes the
+                            // mine (the game deletes it [M 0x17cb7c-0x17cb88]). The game draws the
+                            // mine glist at obj+0x90 [M View_DrawObjectGlist 0x1e6780:44], which
+                            // Control_BuildWorldSph 0x133070:17 rebuilds every tick from obj+0x50
+                            // (rot) + obj+0x30 (pos) [M Control_GetObjMatrix 0x134210:10-12];
+                            // Mine_Update 0x17c930 bobs obj+0x34 = pos.y +
+                            // sin(GameState+0x52·param3·0.0002)·param4·0.1 [M disasm
+                            // 0x17c9c8-0x17c9f4] and View_RotTransMatrix 0x1e5168:46-48 writes
+                            // obj+0x30..0x38 into the drawn matrix's translation — so the slot
+                            // keeps the placement rotation and takes the live y.
+                            let &(pl, mut mx) = self.mine_placements.get(bi - self.rbody_placements.len())?;
+                            let Some(mn) = s.drones.mines.iter().find(|mn| mn.placement == pl) else { return Some(mx) };
+                            if mn.exploded { return None; }
+                            mx[3][1] = mn.posed_y;
                             return Some(mx);
                         }
                         let pi = self.rbody_placements[bi];
