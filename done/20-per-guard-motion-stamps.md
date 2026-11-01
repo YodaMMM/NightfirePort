@@ -24,3 +24,5 @@ claimed-by: sandbox1 at 2026-11-01T18:45Z
 ---
 ## Report (done, 2026-11-01T20:41Z)
 
+
+Result: done — the per-guard first-moved/first-stamped latches (Drone+0x224, +0x1DD/+0x1DE, +0x1DF/+0x1E0 [M 0x179a48:47-73, per-drone via HandleFiring 0x17a180:29/:59]) replace the port single global stamp; two-guards clear-at-different-ticks pin added; enemy_accuracy_live 5p/0f, ai_live 37p/0f, all 12 walkreal real-damage variants green, nf-game 387p/0f, formats+audio 114p/4 slim-ISO disc-data fails, nf-view chunks 1-2 partial 702p/2 no-GPU env fails. Full report: docs/reports/per-guard-motion-stamps.md on branch s/per-guard-motion-stamps.
