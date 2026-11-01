@@ -124,3 +124,16 @@ All with `NF_SILENT=1 cargo test --offline --release`:
 ## Usage
 
 not visible to me — this sandbox exposes no token, credit or context-window figures for the session.
+
+## ntfy failed
+
+All three fallbacks failed (2026-11-01 ~23:35 UTC); exact output:
+
+1. `curl -sS -m 20 -H "Title: NightfirePort" -d "player-trigger-contact: …" https://ntfy.sh/nightfire-yoda-8k3x`
+   → `curl: (28) Connection timed out after 20001 milliseconds`
+2. `python3 -c "import urllib.request as u; u.urlopen(u.Request('https://ntfy.sh/nightfire-yoda-8k3x', data=b'player-trigger-contact: …', headers={'Title':'NightfirePort'}), timeout=20)"`
+   → `urllib.error.URLError: <urlopen error [Errno 101] Network is unreachable>`
+3. `wget -q -O- --post-data "player-trigger-contact: …" https://ntfy.sh/nightfire-yoda-8k3x`
+   → no output, killed at the 30 s tool timeout (no connection).
+
+github.com pushes from the same sandbox succeed, so the block is specific to ntfy.sh egress.
