@@ -398,8 +398,11 @@ impl Camera {
     fn dir(&self) -> Vec3 { Vec3::new(self.pitch.cos() * self.yaw.sin(), self.pitch.sin(), self.pitch.cos() * self.yaw.cos()) }
     /// Right-handed view, wgpu clip depth 0..1, 60° vertical field of view (column-major for the shader).
     /// (full view-projection, the same with the eye at the origin for sky objects that follow the viewer).
+    /// The near plane is the game's Ps2Near2 = 0.1 [L ee_start_05.bin; docs/systems/render.md — the
+    /// PS2WorldViewVU1Kick2 0x10b2b0 depth mapping's n, f = 2^24 far; the ZBUF range N1/F1 saturates
+    /// ≈ 0.114]; the port's older 0.05 showed 5 cm more near content than the game.
     fn view_proj(&self, aspect: f32) -> ([[f32; 4]; 4], [[f32; 4]; 4]) {
-        let (near, far, f) = (0.05f32, 4000.0f32, 1.0 / (self.fov * 0.5).tan());
+        let (near, far, f) = (0.1f32, 4000.0f32, 1.0 / (self.fov * 0.5).tan());
         let proj = Mat4::from_cols_array_2d(&[[f / aspect, 0.0, 0.0, 0.0], [0.0, f, 0.0, 0.0], [0.0, 0.0, far / (near - far), -1.0], [0.0, 0.0, near * far / (near - far), 0.0]]);
         let fw = self.dir().normalize();
         // The right axis from the yaw alone (the game builds its view from yaw/pitch angles, not a

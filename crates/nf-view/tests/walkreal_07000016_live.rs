@@ -963,3 +963,84 @@ fn the_walked_mission_fails_at_the_launch_blast_when_bond_stays_on_the_pit_floor
         assert_eq!(sim.drones.mission.states[22][1], 3, "obj1 never had its writer reached: the button is past the pulses [D #693; U-051]");
     }
 }
+
+/// level-16-stuck-overlook: the interactive run parked at the SW dead end of the west walkway
+/// (−17.86, 6.81, −97.16, yaw 6.98, beside the control-room glass, ~tick 3700) and could not
+/// continue. What the game expects there [D docs/levels/07000016.md §7]: the way on is BACK
+/// north-east along the walkway — the SecurityStation trigger #597 (kind 0xEA TOUCH_ONCE, out
+/// 0x24, mask 0x04) at (−15.20, 6.52, −94.56) [D]; its E fires ch 0x24 [M Trigger_Activate
+/// 0x1b2318:38-49 gates the E dispatch on mask&4] and door[0]'s rising-edge lock arm opens it
+/// [M Door_Update 0x1363c8, the lock arm ~0x13660c]. This walk pins the whole arc on real input
+/// from the level start: up the east ramp, west along the ring, SOUTH to the reported dead-end
+/// spot at the walkway's raised end, back NE to the station, the E, then down and through
+/// door[0] — the route on from the overlook.
+#[test]
+fn the_overlook_dead_end_returns_to_the_station_and_door0_opens() {
+    let iso = iso();
+    let mut w = Walker::new(nf_view::load_with_carry(&iso, "07000016.bin", false, Some(&carry(&[0x47, 0x48, 0x4a, 0x54, 0xce, 0x4b]))).unwrap());
+    w.wait_enabled(3000, "the launch-centre arrival");
+    w.wait(200);
+    // The proven ascent (the main route's legs): corridor, east ramp, upper ring west to the
+    // station area.
+    let route: &[(&str, walker::Wp)] = &[
+        ("the corridor south", walker::Wp::new(4.3, 0.6, -72.5).r(1.2)),
+        ("door[7] through", walker::Wp::new(4.9, -0.1, -78.0).r(1.2)),
+        ("the lane east", walker::Wp::new(10.0, 0.0, -82.0).r(1.3)),
+        ("the lane south", walker::Wp::new(12.0, 0.0, -88.0).r(1.3)),
+        ("the ramp foot", walker::Wp::new(13.8, 0.0, -90.8).r(1.1)),
+        ("the ramp 1", walker::Wp::new(14.5, 0.6, -87.5).r(1.2)),
+        ("the ramp 2", walker::Wp::new(14.5, 2.4, -84.5).r(1.2)),
+        ("the ramp 3", walker::Wp::new(14.5, 4.6, -81.5).r(1.2)),
+        ("the ring east", walker::Wp::new(14.5, 5.9, -79.0).r(1.2)),
+        ("the ring 1", walker::Wp::new(6.0, 5.9, -78.5).r(1.4)),
+        ("the ring 2", walker::Wp::new(-4.0, 5.9, -79.0).r(1.4)),
+        ("the ring 3", walker::Wp::new(-11.0, 5.9, -81.0).r(1.4)),
+        ("the ring 4", walker::Wp::new(-13.0, 5.9, -86.0).r(1.4)),
+        ("the station west", walker::Wp::new(-16.5, 5.9, -88.0).r(1.3)),
+        ("the station south", walker::Wp::new(-16.3, 5.9, -93.5).r(1.2)),
+    ];
+    w.walk_route(route);
+    // The extension the interactive run made: SOUTH past the station along the walkway's raised
+    // end (deck y 5.7..6.8 [D §7]) to the reported spot — the SW dead end by the control-room
+    // glass.
+    w.walk_to(walker::Wp::new(-17.0, 6.5, -95.5).r(1.0), "the walkway south of the station");
+    w.walk_to(walker::Wp::new(-17.8, 6.8, -97.1).r(0.8), "the overlook dead end");
+    {
+        let sim = w.scene.sim.as_ref().unwrap();
+        let p = sim.bond.pos;
+        assert!((p[0] + 17.86).abs() < 1.2 && (p[2] + 97.16).abs() < 1.2,
+            "Bond reaches the reported dead-end spot (−17.86, 6.81, −97.16), got {p:?}");
+        assert!(sim.bond.grounded, "the walkway's raised end holds him");
+    }
+    // The way on is BACK north-east: the station trigger, its E, door[0]'s unlock.
+    w.walk_to(walker::Wp::new(-16.3, 5.9, -93.5).r(1.2), "back from the dead end");
+    w.walk_to(walker::Wp::at(-15.2, 5.9, -94.6, walker::Act::Use { use_ticks: 120 }).r(1.2), "the station E");
+    {
+        let sim = w.scene.sim.as_ref().unwrap();
+        assert!(sim.drones.channels.on(0x24), "the SecurityStation E fires ch 0x24 [D #597 mask 0x04]");
+        assert_eq!(sim.drones.doors.list[0].ch_lock, 0, "door[0]'s lock cleared by the rising edge [M 0x13660c arm]");
+    }
+    // Downstairs and through door[0] — the route on from the overlook.
+    let back: &[(&str, walker::Wp)] = &[
+        ("the return 1", walker::Wp::new(-16.3, 5.9, -89.0).r(1.3)),
+        ("the return 2", walker::Wp::new(-13.0, 5.9, -85.0).r(1.4)),
+        ("the return 3", walker::Wp::new(-10.0, 5.9, -81.0).r(1.4)),
+        ("the return 4", walker::Wp::new(-4.0, 5.9, -79.0).r(1.4)),
+        ("the return 5", walker::Wp::new(6.0, 5.9, -78.5).r(1.4)),
+        ("the return 6", walker::Wp::new(14.5, 5.9, -79.0).r(1.2)),
+        ("the descent 1", walker::Wp::new(14.5, 4.6, -82.0).r(1.2)),
+        ("the descent 2", walker::Wp::new(14.5, 2.4, -85.0).r(1.2)),
+        ("the descent 3", walker::Wp::new(14.5, 0.6, -88.0).r(1.2)),
+        ("the east lane south", walker::Wp::new(9.5, 0.0, -100.0).r(1.6)),
+        ("the trench's west end", walker::Wp::new(4.0, 0.0, -108.0).r(1.6)),
+        ("door[0]'s west approach", walker::Wp::new(2.3, 0.0, -110.0).r(0.7)),
+        ("door[0]'s threshold", walker::Wp::new(2.3, 0.0, -113.2).r(0.7)),
+        ("door[0] through", walker::Wp::new(2.0, -0.1, -119.0).r(1.2)),
+    ];
+    w.walk_route(back);
+    {
+        let sim = w.scene.sim.as_ref().unwrap();
+        let p = sim.bond.pos;
+        assert!(p[2] < -116.0, "Bond is through door[0] — the route on from the overlook, got {p:?}");
+    }
+}
