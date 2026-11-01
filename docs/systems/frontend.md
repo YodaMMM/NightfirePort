@@ -180,3 +180,21 @@ completes to state 7 [M 0x1f7b78:27] and `PS2_DoCardFlow`'s state>3 arm sets
 P_ESTHERO lparam 1 [M 0x20a648:39-47]. The port's `ParisCardCheck` walks the same states with one
 bounded loop per tick; the only unpinned number is the sceMc completion latency (`mc_ticks = 1`
 [S unverified] — see the report's live checks).
+
+**What P_PARISENUM draws** [D page 0x4000004a + the box page 0x4000002a; M PS2_DoCardFlow
+0x217bd8, Memo_Update 0x21e490, Button_Update 0x1ef948]: its full-screen black plate (TEX
+0x03000042 uv (8,23,2,2) colour 0x000000ff; its two 0x1000022c labels are authored hidden and
+only the mini-mission arm shows them [M 0x20a648:31-32]). The first frame a card-flow message
+stands, PS2_DoCardFlow opens the box page 0x4000002a (`dialog_open_124`) [M :150-158]; while the
+message stands it shows the memo 0x100000fb (the text, `sprintf(Txt 0x277, "1")` — slot_type[0]
+[D 0x30d588]) and the button frame 0x100000fd (SET 0xe COMPONENT 0, a 9-slice on 0x0300019d, mask
+0x10); with no buttons the choice list and the hint stay hidden [M :155-156, :178-181]. Geometry
+[M :186-200]: h = lines·0x1f + 0x1e, y = (448 − h)/2, the button (40, y, 432, h), the memo y + 10;
+the line count is the memo's previous update's (msg 0x65 read before this frame's Memo_Update),
+so the first frame is 30 high. The memo's lines are FONTSerpLight ("ff 02" [D 0x30d628]),
+centred in its width, baseline memo.y + (k + 1)·stride, stride = the face's extent ×1.5
+[M Memo_Init 0x21df38:70], with the 0x2000 shadow flag. The box page's bottom bar (black)
+stands from the open until the flow's end closes the page. Port: `fe_pages::parisenum_elems`,
+`FrontEnd::paris_dialog` / `paris_msg_ticks`; `--page parisenum` (NF_PARIS_FIRST=1 for the
+first frame) renders it. Open: the word wrap is the port's greedy wrap, not a port of
+`Font_WordWrapString` [S].

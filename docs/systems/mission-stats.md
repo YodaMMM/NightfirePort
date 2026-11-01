@@ -108,3 +108,38 @@ the blank spacer (the static string 0x30d2d8, before Subtotal [M :117]).
 100% / 50,000; Health 100% / 100% / 50,000; Subtotal = TOTAL 295,887) as numbers only. The
 gate test asserts the status ≠ 6 zeroing (a removed gate fails the test). `crates/nf-view/
 tests/mission_stats_flow.rs` asserts the page flow (side action opens, △ returns, rows stored).
+
+## The drawn page (and the results page around it)
+
+Compared with a PCSX2 capture of both pages after a 07000004 finish (2026-10-31) and the live list
+control read from EE RAM on the stats page. All coordinates below are the menu's 512×448 screen unless
+marked 640×480 (the page data's authored space; controls are scaled 0.8 / 0.933 on creation).
+
+- **Page data** [D 08000002]: the stats page 0x40000037 holds the list 0x10000022 (640×480 rect
+  60,78,520×324), the header 0x2d1 ("\xff\x01" = the header face), the hint 0x49d, the corner stamp
+  0x10000224 and the logo — `menu::STATS_PAGE_ELEMENTS`. The results page 0x40000036 holds header 0x2c5,
+  hint 0x2d0, the score labels 0x2cb / 0x2cd ("\xff\x03\xfe\x02" = FONTMedium, right-aligned), the
+  focus box 0x10000165, the medal emblem 0x10000166, the numbers 0x10000167/8 ("\xff\x03"), the medal
+  text box 0x100001d1, the stamp and the logo — `menu::RESULTS_PAGE_ELEMENTS`. The NAME tags are wide
+  strings; `ControlDef::name_raw` keeps their bytes and `menu::name_format` decodes the font and
+  alignment codes [M Font_ParseFormat 0x1ee3e0: 0xff n = FontTable[n − 1]].
+- **Backdrop**: both PAGE records carry aux movie 0x07350048, the looping list backdrop. The port's
+  page → movie map now includes the stats page.
+- **List** [M List_Update 0x21a598, List_Init 0x219488; L live control]: rect (48,73,416×302), stride
+  = the list font's extent height × 1.1 = (12 + 5 + 1) × 1.1 = 19.8, 15 visible rows, widths 35/21/21/24,
+  aligns left/right/right/right. Row k: text sprite y = 73 + k·19.8 + 19.8; column x = 48 + 2 +
+  Σ widths·(416 − 16)·0.01, right cells moved by boxW − extent. Even rows: a plate at y = 73 + k·19.8 + 3,
+  416 × 19, colour 0x0f050580 over the white atlas texel (38,19) of 0x03000042 [disasm 0x21a98c-0x21aa30].
+  Text colour 0x645a49 (msg 0x1b); the row after the cursor row (the header) — "Bond Moves" — is drawn in
+  the highlight colour 0x7f7f7f [L capture; the live cursor is row 0].
+- **Corner stamp** 0x10000224 (TEX 0x0300014c, uv (1,1)+(255,255)): drawn 1:1 at (340,198) of the
+  512×448 screen — not scaled like the other controls (UNKNOWNS U-052). The port's edge matches the
+  capture's within 1 unit of 640×480 at x 500–630.
+- **Results text**: the score labels/numbers and the medal text use FONTMedium (texture 0x030000d8,
+  `HudTables::font_medium`); label y = ctrl.y + h/2 + extent height/2 − 1 [M Label_Update 0x218cb8].
+  The medal lines' placement (first line 16 below the box top, 28 apart) is [L] from the capture.
+- **Open**: the page headers draw about 2.5 units of 640×480 higher than the capture (`page_header`,
+  shared by every page; not changed here).
+
+Tests: `crates/nf-view/tests/stats_page_elements.rs` (element lists vs the disc with sisters; the
+stride vs the font; the drawn plates/stamp/highlight; the FONTMedium score lines).

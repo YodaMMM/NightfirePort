@@ -329,17 +329,13 @@ fn the_screen_adjust_bars_hover_and_click_like_the_keyboard() {
     for _ in 0..6 { assert!(act(&mut fe, Action::Down)); }
     assert!(act(&mut fe, Action::Confirm), "Screen Adjust");
     assert_eq!(fe.page, Page::ScreenAdjust);
-    assert_eq!(fe.cursor, 0, "the vertical bar first [L page data's d1 0 arm]");
-    // The bars [L page 0x40000047: vertical (304,176,32×128), horizontal (256,224,128×32)]:
-    // hover picks a bar (the walk starts on the vertical, so it goes horizontal first); the
-    // overlap picks the vertical (the page data's order).
-    assert!(hover(&mut fe, 370.0, 240.0));
-    assert_eq!(fe.cursor, 1, "the horizontal bar");
-    assert!(hover(&mut fe, 320.0, 240.0));
-    assert_eq!(fe.cursor, 0, "the vertical bar wins the overlap");
-    // ◀ steps the horizontal offset (the keyboard's own step, kept as the sister) — the
-    // horizontal bar first.
-    assert!(hover(&mut fe, 370.0, 240.0));
+    // The bars [D page 0x40000047: vertical (304,176,32×128), horizontal (256,224,128×32)] share
+    // the focused id 0x100001eb, so there is no bar to pick [M Scroll_Update 0x221b20:42-43]:
+    // a hover changes nothing and each axis takes its own keys.
+    assert_eq!(fe.rows(), 0);
+    assert!(!hover(&mut fe, 370.0, 240.0), "a hover picks nothing");
+    assert!(!hover(&mut fe, 320.0, 240.0));
+    // ◀ steps the horizontal offset (the keyboard's own step, kept as the sister).
     assert!(act(&mut fe, Action::Left));
     assert_eq!(fe.screen_x, -12, "psiAdjustScreenPos's X step 12 [M 0x10b890]");
     // A click on the bar is ✕: Enter keeps the offset and leaves to the AV page.
@@ -679,7 +675,7 @@ fn assert_invariants(fe: &FrontEnd, ctx: &str) {
     if fe.is_wheel_page() {
         assert!(fe.page_row() < rows, "{ctx}: the wheel row {} out of range ({rows}) on {:?}", fe.page_row(), fe.page);
     }
-    assert!(fe.cheat_medal_sel < 6, "{ctx}: the cheat-medal selection out of range");
+    assert!(fe.cheat_medal_sel == 0 || fe.cheat_medal_sel < fe.cheat_medal_rows.len(), "{ctx}: the cheat-medal selection out of range");
 }
 
 fn back_leaves(fe: &mut FrontEnd, step: usize) {

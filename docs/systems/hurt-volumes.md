@@ -191,25 +191,22 @@ pack buys:
    `build_LinkToRoom(obj, 1, glb_world)` (straddle flag 1) [M 0x195498 param_2 path]. So the game's
    Bond re-enables at (3.57, −22.76, −179.55) — **INSIDE the volume's box**, exactly where the port
    re-enables him. The port's cinema path is faithful; the bug U-051 saw is not a misplaced re-seat.
-3. **The escape is the pack flight.** Between the re-enable (cinema tick 750) and the pulse
-   (script tick 1611) the game's player has ~861 ticks (≈14.4 s) of control at the pit floor with
-   the pack picked up. The pit's door (13.9, −23.1, −166.4) locks on ch 240/241, and ch 0xf0 rises
-   only at tick **2180** — after the pulse drops [D] — so no door escape exists before it; the pit
-   holds no ladder/wire placement (the near-pit census: doors, spawners #257/#293, the pickups at
-   y −9.1 [D]). The survival mechanism is the pack's own flight (the port enumerates no jetpack
-   substate — the substate list is walk/climb/grapple/swim/wire/creep/zipline/zero-g [M
-   player.rs consts + the symtab's Player_SS*]) — **[S] the flight's controls and physics are the
-   one unverified piece; live check below.**
-4. **The port's stand-in.** `fix_finale_live` re-seats Bond on the upper floor once the cinema
-   hands control back — the documented stand-in for the pack flight [S], needed only because the
-   test fires ch 0x81 from the upper floor (the game's Bond is at the pit when the pack trigger
-   fires; the re-enable then leaves him where he already was). `walkreal_07000016_live`'s tail
-   stays `#[ignore]`d for the same reason (its reason text cites this section).
-
-**Live checks (open) (U-051 closure):**
-5. PCSX2, fresh boot of 07000016, play to the pack pickup: watch `switch_channels[243]`
-   (0x26fc90 + 243·4) and the player position (obj+0x30) from the pack cinema's end to the launch.
-   Expected: position == (3.57, −22.76, −179.55) at the re-enable; the player RISES out of the pit
-   (the pack flight) before ch 243 rises at the launch script's tick 1611; the volume never deals
-   damage. If the player instead walks a route (ladder/door not in the port's census), the
-   position trace shows it.
+3. **The escape is the pit's two blast rooms (corrected by finale-16; the old "pack flight"
+   reading was wrong — no flight exists [M the substate list]).** The volume's six bands are each
+   the same pit-floor polygon, and the polygon leaves out the west room (x ≈ −19..−13) and the
+   east room (x ≈ 19..27), z ≈ −166..−175 [D tris; probe16_pitmap]. The rooms' door leaves are the
+   launch script's entities 02000994..02000997 (0600090a streams 15–18): open at 0..1000, shut
+   (the two leaves of a pair meet at (17.33, −169.37) / (−12.71, −168.90)) over 1350..2230 and
+   6660..7360, open from 2580 / 7710 [D keys] — each pulse (1611..2170, 6810..7320) lies inside a
+   shut window. The player runs in during the ~1000 ticks after the hand-back; the door shuts
+   behind him. Pinned by `blast_room_shelter_16_live` (the run survives with no contact; sisters:
+   the open floor outside the door and a late run the shut door keeps out both die).
+4. **The finale after the pulses [D].** Group 7 (spawner #640, ch 242 @7332) dies → mux #611 →
+   ch 0xbf; with ch 0xc0 (stream 20 @7808) → mux #633 → ch 0x82 → pack cinema 0x06000632
+   (07900016.bin), which clears ch 0x8d (the KikoDeathButton's gate) at t1056 and hands Bond back
+   at the bay (5.39, 1.34, −158.31) at t1057 (stream 12's dummy, key 1868). The E on the button
+   completes the mission. `walkreal_07000016_live::walk_the_chasers_defeat_completes_the_mission`
+   walks all of it on real input.
+5. `fix_finale_live` and `kiko_button_real_walk_live` still re-seat Bond on the upper floor after
+   the hand-back — a test shortcut to reach the button, not a game claim; the walked finale above
+   is the real path.

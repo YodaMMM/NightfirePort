@@ -24,6 +24,7 @@ pub mod dev;
 pub mod devwin;
 pub mod hud;
 pub mod credits;
+pub mod fe_pages;
 pub mod menu;
 pub mod menu_engine;
 pub mod mp_lobby;
@@ -77,7 +78,20 @@ use winit::keyboard::{KeyCode, PhysicalKey};
 use winit::window::{CursorGrabMode, Window, WindowId};
 
 /// Radians per mouse count. Mouse deltas go straight into yaw/pitch (docs/systems/input.md §8).
-const MOUSE_SENSITIVITY: f32 = 0.0025;
+/// Pub for the headless look-rate tests (mouse_look_rate_live.rs).
+pub const MOUSE_SENSITIVITY: f32 = 0.0025;
+
+/// One raw mouse motion event into the pending look (the `DeviceEvent::MouseMotion` arm of
+/// `device_event`): `turn` in radians, `look` in the sim's pitch units (π/2 per 1.0). The deltas
+/// ACCUMULATE between ticks and each sim tick takes the whole sum once (`std::mem::take` in the
+/// tick loop), so the look rate is a function of mouse counts only — never of the render rate.
+/// When scoped, the sensitivity is divided by the zoom factor (the scope zooms the view, so the
+/// same mouse delta turns less) [M Player_Zoom: the zoom affects the view]. Pub for the headless
+/// look-rate tests, which drive this exact arithmetic at several frame rates.
+pub fn mouse_look_add(turn: &mut f32, look: &mut f32, dx: f64, dy: f64, zoom: f32) {
+    *turn -= dx as f32 * MOUSE_SENSITIVITY / zoom;
+    *look -= dy as f32 * MOUSE_SENSITIVITY / zoom / std::f32::consts::FRAC_PI_2;
+}
 
 /// The game's vertical field of view in play (60°, docs/systems/player.md).
 const GAME_FOV: f32 = std::f32::consts::FRAC_PI_3;
@@ -165,6 +179,21 @@ fn lerp_entry(x: &nf_formats::anim::Mat4, y: &nf_formats::anim::Mat4, t: f32) ->
     let d = (0..3).map(|k| (x[3][k] - y[3][k]).powi(2)).sum::<f32>().sqrt();
     if d > SNAP { return *y; }
     blend_pose(x, y, t)
+}
+
+/// `NF_INTERP_SHOT`'s blended palette, consumed by the next headless `shot` in place of its own.
+static SHOT_PALETTE: std::sync::Mutex<Option<Vec<nf_formats::anim::Mat4>>> = std::sync::Mutex::new(None);
+
+/// The palette entries the presented frames blend between two ticks: every entry that differs,
+/// minus `snap` — entries whose draw changed hands between the ticks (a decal pool node reused
+/// for a new hole, `Scene::decal_reused_entries`), which show the newer tick at once instead of
+/// sliding from the old thing to the new one. Pub for the headless interpolation tests.
+pub fn moving_entries(prev: &[nf_formats::anim::Mat4], cur: &[nf_formats::anim::Mat4], snap: &[u32]) -> Vec<u32> {
+    if prev.len() != cur.len() { return Vec::new(); }
+    prev.iter().zip(cur).enumerate()
+        .filter(|(i, (x, y))| x != y && !snap.contains(&(*i as u32)))
+        .map(|(i, _)| i as u32)
+        .collect()
 }
 
 /// perf-240: the per-frame blend touches only the entries that differ between the two ticks.
@@ -2251,6 +2280,45 @@ fn front_end_menu(args: &[String], scene: &scene::Scene, front_end: bool, iso_pa
                 fe.bonus = Some(menu::BonusFields { level: 0x0700_0005, lines, texture: Some(lines[0].texture), text_labels, has_text: true });
                 menu::Page::NfBonus
             }
+            // Render aid: the credits roll opened from AV Options, `--roll N` frames in (default
+            // 1200); NF_CREDITS_BONUS=1 raises the GameState[0x52] flag (the dimmed backdrop).
+            "credits" => {
+                fe.open_credits(crate::credits::PAGE_CN_AV, 100, std::env::var_os("NF_CREDITS_BONUS").is_some());
+                let n: u32 = args.iter().position(|a| a == "--roll").and_then(|i| args.get(i + 1)).and_then(|v| v.parse().ok()).unwrap_or(1200);
+                for _ in 0..n { fe.credits.tick(); }
+                menu::Page::Credits
+            }
+            // Render aid: the end-of-campaign win page (P_WINGAME's 0x4c raised the movie).
+            "wingame" => { fe.just_completed = true; fe.win_enter(); menu::Page::WinGame }
+            // Render aid: AV Options → Screen Adjust. NF_SA_HELD=h-|h+|v-|v+ lights that bar's
+            // held arrow (the scroll's +0x142 0x40 / 0x80).
+            "screenadjust" => {
+                fe.screen_adjust_open();
+                match std::env::var("NF_SA_HELD").as_deref() {
+                    Ok("h-") => fe.screen_adjust_held[0] = 0x40,
+                    Ok("h+") => fe.screen_adjust_held[0] = 0x80,
+                    Ok("v-") => fe.screen_adjust_held[1] = 0x40,
+                    Ok("v+") => fe.screen_adjust_held[1] = 0x80,
+                    _ => {}
+                }
+                menu::Page::ScreenAdjust
+            }
+            // Render aid: P_PARISENUM with the card box up — the boot card walk run until its
+            // 0xb message stands ("Checking memory card…"), the box past its first frame
+            // (NF_PARIS_FIRST=1 shows the first frame's height lag instead).
+            "parisenum" => {
+                for _ in 0..16 {
+                    fe.paris_card.tick();
+                    fe.paris_card.enum_step();
+                    if fe.paris_card.flow_msg == 0xb { break; }
+                }
+                fe.paris_dialog = true;
+                fe.paris_msg_ticks = if std::env::var_os("NF_PARIS_FIRST").is_some() { 1 } else { 2 };
+                menu::Page::ParisEnum
+            }
+            // Render aid: the in-game cheat-medal page (mission defs' 0x4000004c), its list emptied
+            // by the page's 0x4c.
+            "cheatmedal" => { fe.cheat_medal_rows.clear(); menu::Page::CheatMedal }
             "cnmenu" => { fe.cn_name = "Default".into(); menu::Page::CnMenu }
             "advanced" => menu::Page::CnAdvanced,
             "mpoptions" => menu::Page::CnMp,
@@ -2373,6 +2441,9 @@ fn front_end_menu(args: &[String], scene: &scene::Scene, front_end: bool, iso_pa
         let frame_n: usize = args.iter().position(|a| a == "--movie-frame").and_then(|i| args.get(i + 1)).and_then(|v| v.parse().ok()).unwrap_or(12);
         let want = if intro {
             Some(menu::INTRO_MOVIES[args.iter().position(|a| a == "--intro").and_then(|i| args.get(i + 1)).and_then(|v| v.parse::<usize>().ok()).unwrap_or(0).min(menu::INTRO_MOVIES.len() - 1)])
+        } else if fe.page == menu::Page::WinGame {
+            // The win page's own movie [M P_WINGAME 0x215100:20].
+            Some(crate::credits::WINGAME_MOVIE)
         } else {
             let aux = menu::aux_movie_for(fe.page_id());
             (aux != 0).then_some(aux)
@@ -2393,11 +2464,11 @@ fn front_end_menu(args: &[String], scene: &scene::Scene, front_end: bool, iso_pa
         // The intro FMV owns the screen — no controls, no plate [M 0x209e88]; the movie plane is
         // the whole picture. Without movie data the headless plate stands in.
         let hud = if movie.is_some() { None }
-            else { Some(menu::menu_overlay(&fe, &tables.font, &tables.font_header, lang.as_ref(), &scene.hud_textures, 1280.0 / 720.0)) };
+            else { Some(menu::menu_overlay_fonts(&fe, &tables.font, &tables.font_header, Some(&tables.font_medium), lang.as_ref(), &scene.hud_textures, 1280.0 / 720.0)) };
         return (hud, movie);
     }
     fe.backdrop_live = movie.is_some();
-    (Some(menu::menu_overlay(&fe, &tables.font, &tables.font_header, lang.as_ref(), &scene.hud_textures, 1280.0 / 720.0)), movie)
+    (Some(menu::menu_overlay_fonts(&fe, &tables.font, &tables.font_header, Some(&tables.font_medium), lang.as_ref(), &scene.hud_textures, 1280.0 / 720.0)), movie)
 }
 
 /// The ISO path for `read_files_bin` (the NF_ISO env or the default image name).
@@ -2547,6 +2618,15 @@ fn shot(scene: &scene::Scene, cam: &Camera, out: &str, choice: Option<usize>, ti
     r.destroy_tint = destroy_tints(scene);
     // Objects are never room-culled (see the live path).
     r.update_skin(&queue, scene, choice, time, opts, None);
+    // The holes of the cels this shot does not draw are hidden (`View_DrawCelGlist` 0x1e6538 draws a
+    // cel's hole nodes with the cel only) — the window does the same per frame.
+    let shot_pal = SHOT_PALETTE.lock().unwrap().take();
+    let decal_cells = scene.decal_cell_entries(&r.skin_layout);
+    if shot_pal.is_some() || (vis_shot.is_some() && !decal_cells.is_empty()) {
+        let mut p = shot_pal.unwrap_or_else(|| scene.skin_palette(&r.skin_layout, choice, time, opts, None).0);
+        if let Some(v) = vis_shot.as_deref() { scene.hide_unseen_decals(&mut p, &decal_cells, v); }
+        r.upload_palette(&queue, &p);
+    }
     r.set_char_light_centres(scene);
     r.lights = scene.frame_lights();
     r.screen_aspect = w as f32 / h as f32;
@@ -2723,6 +2803,15 @@ struct App {
     /// perf-240: the presented-frame palette (seeded per tick) and the entries that move between the two ticks.
     pal_blend: Vec<nf_formats::anim::Mat4>,
     pal_moving: Vec<u32>,
+    /// The decal pool's made count and the debris slots' handed-out count at the last palette
+    /// rebuild — the nodes/slots taken since then snap instead of blending
+    /// (`Scene::decal_reused_entries` / `Scene::debris_reused_entries`).
+    fx_made: Option<(u32, u32)>,
+    /// The cel-hosted holes' palette entries and cels (`Scene::decal_cell_entries`), refreshed
+    /// with the palette; each frame hides those whose cel the frame does not draw.
+    decal_cells: Vec<(u32, u32)>,
+    /// The entries the last frame hid (restored from the tick palette before the next blend).
+    pal_hidden: Vec<u32>,
     /// The gadget-beam palette entries (`Scene::beam_entries`), refreshed when the palette is
     /// rebuilt.
     beam_entries: Vec<usize>,
@@ -4107,6 +4196,35 @@ impl App {
                 fe.music.movie_finished();
                 fe.attract_movie_finished();
             }
+        } else if fe.page == menu::Page::WinGame && fe.win_movie {
+            // P_WINGAME: the 0x4c started 0x073f0048 on the ONE BGFMV slot after removing the
+            // menu-music pair (menu_movie = 0) [M 0x215100:16-21]; each 0x50 polls
+            // psiMovieFinished and the first finish restarts the pair and opens the credits
+            // [M :23-48]. A declined start is BGFMVPlaying == 0: finished at once [M 0x1082e8].
+            let code = crate::credits::WINGAME_MOVIE;
+            let wrong = match &self.movie { Some(p) => p.code() != code || p.is_looping(), None => true };
+            let mut ended = false;
+            if wrong {
+                if let Some(p) = self.movie.take() { p.stop(); }
+                fe.win_movie_polled = fe.flow.ticks;
+                match movie::Player::start(&movie_iso, code, movie_sfx_volume(fe)) {
+                    Ok(p) => { self.movie = Some(p); eprintln!("movie: playing {code:08x} (win page)"); fe.music.movie_started(); }
+                    Err(e) => { eprintln!("movie: {code:08x} not started: {e:?} — the win page goes straight to the credits"); ended = true; }
+                }
+            }
+            if let Some(p) = self.movie.as_mut().filter(|p| p.code() == code) {
+                // One psiMovieFinished poll per page tick (60 Hz), not per redraw.
+                while fe.win_movie_polled != fe.flow.ticks {
+                    p.headless_advance();
+                    fe.win_movie_polled = fe.win_movie_polled.wrapping_add(1);
+                }
+                ended |= p.finished();
+            }
+            if ended {
+                if let Some(p) = self.movie.take().filter(|p| p.code() == code) { p.stop(); }
+                fe.music.movie_finished();
+                fe.win_movie_finished();
+            }
         } else if mission_movie_glue(fe, &mut self.movie, &movie_iso) {
         } else {
             // The page's aux loop [M 0x21c858:338]: stop when the page has no aux, (re)start when
@@ -4228,7 +4346,7 @@ impl App {
         } else {
             self.fe.as_ref().and_then(|fe| self.scene.hud.as_ref().map(|t| {
                 let lang = self.lang.as_ref().or_else(|| self.scene.sim.as_ref().and_then(|s| s.lang.as_ref()));
-                menu::menu_overlay(fe, &t.font, &t.font_header, lang, &self.scene.hud_textures, 1280.0 / 720.0)
+                menu::menu_overlay_fonts(fe, &t.font, &t.font_header, Some(&t.font_medium), lang, &self.scene.hud_textures, 1280.0 / 720.0)
             }))
         };
         shot(&self.scene, &self.cam, &png.to_string_lossy(), self.choice, self.anim_time, self.opts, self.notex, self.nofog, fe_menu.as_ref(), movie_owned.as_ref())
@@ -5531,10 +5649,11 @@ impl App {
         let state6 = self.fe.as_ref().is_some_and(|fe| fe.flow.get_state() == menu::ST_MOVIE);
         let intro_up = self.fe.as_ref().is_some_and(|fe| fe.intro_playing);
         let attract_up = self.fe.as_ref().is_some_and(|fe| fe.attract_playing);
+        let win_up = self.fe.as_ref().is_some_and(|fe| fe.page == menu::Page::WinGame && fe.win_movie);
         let flow_up = state6 && !intro_up && self.movie.is_some();
         let aux_up = self.movie.as_ref().is_some_and(|p| p.is_looping())
             && !self.fe.as_ref().is_some_and(|fe| fe.flow.movie_pending);
-        intro_up || flow_up || aux_up || attract_up
+        intro_up || flow_up || aux_up || attract_up || win_up
     }
 
     /// The RedrawRequested draw half (everything after `frame` that needs the GPU):
@@ -5570,17 +5689,29 @@ impl App {
                     // Culling applies to map geometry only — characters, doors, pickups and props are never room-culled; only the
                     // World draws take the room/portal cull (render()).
                     let fp_pal = std::time::Instant::now();
-                    let new = self.scene.skin_palette(&g.renderer.skin_layout, self.choice, self.anim_time, self.opts, None);
+                    // perf-240: the tick before last's buffers are refilled (skin_palette_into overwrites
+                    // them whole) instead of a fresh ~1 MB allocation every tick.
+                    let (mut np, mut nc) = self.pal_prev.take().unwrap_or_default();
+                    self.scene.skin_palette_into(&g.renderer.skin_layout, self.choice, self.anim_time, self.opts, None, &mut np, &mut nc);
+                    let new = (np, nc);
                     frame_part(3, fp_pal.elapsed());
                     g.renderer.char_light_centre = self.scene.char_light_centres();
                     self.pal_prev = self.pal_cur.take();
                     // perf-240: the entries that move between the two ticks, and the blend buffer seeded
                     // with the newer tick (every other entry blends to it).
                     self.pal_moving.clear();
+                    // A decal pool node reused for a new hole this tick shows the new hole at once
+                    // (the game rewrites the node whole [M Effect_Bullet 0x1ce9f0..0x1cea9c]); blending
+                    // it would slide the hole through mid-air from the evicted one.
+                    // The same for a debris slot handed to a new piece.
+                    let made = self.scene.sim.as_ref().map_or((0, 0), |s| (s.drones.effects.made, s.drones.effects.debris_made));
+                    let prev = self.fx_made.unwrap_or(made);
+                    let mut snap = self.scene.decal_reused_entries(&g.renderer.skin_layout, prev.0);
+                    snap.extend(self.scene.debris_reused_entries(&g.renderer.skin_layout, prev.1));
+                    self.fx_made = Some(made);
+                    self.decal_cells = self.scene.decal_cell_entries(&g.renderer.skin_layout);
                     if let Some((pp, _)) = &self.pal_prev {
-                        if pp.len() == new.0.len() {
-                            self.pal_moving.extend(pp.iter().zip(&new.0).enumerate().filter(|(_, (x, y))| x != y).map(|(i, _)| i as u32));
-                        }
+                        self.pal_moving.extend(moving_entries(pp, &new.0, &snap));
                     }
                     self.pal_blend.clear();
                     self.pal_blend.extend_from_slice(&new.0);
@@ -5614,6 +5745,14 @@ impl App {
                 let alpha = alpha0;
                 let fp_blend = std::time::Instant::now();
                 if let Some((pal, cols)) = &self.pal_cur {
+                    // The holes in cels this frame does not draw (`View_DrawCelGlist` 0x1e6538
+                    // draws a cel's hole nodes with the cel only): the entries hidden last frame
+                    // come back from the tick palette first, then this frame's are collapsed.
+                    if self.pal_blend.len() == pal.len() {
+                        for &e in &self.pal_hidden { if let Some(m) = pal.get(e as usize) { self.pal_blend[e as usize] = *m; } }
+                    }
+                    self.pal_hidden.clear();
+                    let hide_any = vis.is_some() && !self.decal_cells.is_empty();
                     match &self.pal_prev {
                         Some((pp, _)) if interp => {
                             let vm_entries = view_model_entries(&self.scene, &g.renderer.skin_layout);
@@ -5636,7 +5775,16 @@ impl App {
                                     reattach_beams(blended, pp, pal, alpha, &cp, &cc, &draw_cam, &self.beam_entries);
                                 }
                             }
+                            if let (true, Some(v)) = (hide_any, vis.as_deref()) {
+                                self.pal_hidden = self.scene.hide_unseen_decals(blended, &self.decal_cells, v);
+                            }
                             g.renderer.upload_skin(&g.queue, blended, cols);
+                        }
+                        _ if hide_any && self.pal_blend.len() == pal.len() => {
+                            // Not blending: the tick palette with the unseen holes collapsed.
+                            self.pal_blend.copy_from_slice(pal);
+                            if let Some(v) = vis.as_deref() { self.scene.hide_unseen_decals(&mut self.pal_blend, &self.decal_cells, v); }
+                            g.renderer.upload_skin(&g.queue, &self.pal_blend, cols);
                         }
                         _ => g.renderer.upload_skin(&g.queue, pal, cols),
                     }
@@ -5683,12 +5831,14 @@ impl App {
                 // attract page has no controls [L the menu-def's 0x40000035 record], the movie
                 // plane IS the page [M P_ATTRACT_Handler 0x20a1f0's psiStartBackgroundMovie].
                 let attract_up = self.fe.as_ref().is_some_and(|fe| fe.attract_playing);
+                // The win page's movie owns the screen the same way (its PAGE record is bare [D]).
+                let win_up = self.fe.as_ref().is_some_and(|fe| fe.page == menu::Page::WinGame && fe.win_movie);
                 let flow_up = state6 && !intro_up && self.movie.is_some();
                 // The looping page player is the backdrop under the overlay; the early-started
                 // briefing player (non-looping, held through ST_MAPLOAD) is not.
                 let aux_up = self.movie.as_ref().is_some_and(|p| p.is_looping())
                     && !self.fe.as_ref().is_some_and(|fe| fe.flow.movie_pending);
-                let movie_up = intro_up || flow_up || aux_up || attract_up;
+                let movie_up = intro_up || flow_up || aux_up || attract_up || win_up;
                 let movie_frame = if movie_up { self.movie.as_mut().and_then(|p| p.present()) } else { None };
                 // The MP standings keep a constant on-screen text size (the lobby's view_h rule).
                 hud::set_view_h(g.config.height as f32);
@@ -5697,7 +5847,7 @@ impl App {
                         // fe-60hz: the front end's 60 Hz tick moved into `frame` (the draw half
                         // consumed the same post-tick state — headless-app-harness).
                     fe.backdrop_live = aux_up && movie_frame.is_some();
-                    if flow_up || (intro_up && movie_frame.is_some()) || (attract_up && movie_frame.is_some()) || fe.results_queued {
+                    if flow_up || (intro_up && movie_frame.is_some()) || (attract_up && movie_frame.is_some()) || (win_up && movie_frame.is_some()) || fe.results_queued {
                         // The movie plane replaces the overlay: the state-6 briefing blits over the
                         // empty backdrop and the fog pass is suppressed while a movie plays [M
                         // DecodeBGFMVFrame 0x108550 + PS2UploadBGMImage 0x108740, psiDrawFogPass
@@ -5733,7 +5883,7 @@ impl App {
                         }
                         fe.view_h = g.config.height as f32;
                         let mut f = match &self.scene.hud {
-                            Some(tables) => menu::menu_overlay(fe, &tables.font, &tables.font_header, lang, &self.scene.hud_textures, aspect),
+                            Some(tables) => menu::menu_overlay_fonts(fe, &tables.font, &tables.font_header, Some(&tables.font_medium), lang, &self.scene.hud_textures, aspect),
                             None => overlay_for(&self.scene, aspect),
                         };
                         // fix-pause-menu2: the in-game HUD stays visible under the pause page —
@@ -6144,6 +6294,9 @@ impl App {
             pal_cur: None,
             pal_blend: Vec::new(),
             pal_moving: Vec::new(),
+            fx_made: None,
+            decal_cells: Vec::new(),
+            pal_hidden: Vec::new(),
             beam_entries: Vec::new(),
             fps_cap: None,
             fps_meter: FpsMeter::default(),
@@ -6240,12 +6393,10 @@ impl ApplicationHandler for App {
                     self.cam.yaw -= dx as f32 * MOUSE_SENSITIVITY;
                     self.cam.pitch = (self.cam.pitch - dy as f32 * MOUSE_SENSITIVITY).clamp(-1.55, 1.55);
                 } else {
-                    // Mouse look (PLAN.md): raw deltas straight into Bond's yaw / pitch at the next tick.
-                    // When scoped, the sensitivity is divided by the zoom factor (the scope zooms the view,
-                    // so the same mouse delta should turn less) [M Player_Zoom: the zoom affects the view].
+                    // Mouse look (PLAN.md): raw deltas straight into Bond's yaw / pitch at the next tick
+                    // (`mouse_look_add`: accumulated here, taken once per tick).
                     let zoom = self.scene.sim.as_ref().map_or(1.0, |s| s.zoom);
-                    self.turn -= dx as f32 * MOUSE_SENSITIVITY / zoom;
-                    self.look -= dy as f32 * MOUSE_SENSITIVITY / zoom / std::f32::consts::FRAC_PI_2;
+                    mouse_look_add(&mut self.turn, &mut self.look, dx, dy, zoom);
                 }
             }
         }
@@ -6645,7 +6796,7 @@ pub fn run() -> Result<()> {
                 if c.len() == 3 {
                     for (k, &h) in nf_game::explode::METAL_HASH_132.iter().enumerate() {
                         sim.drones.blast_debris.push(nf_game::shatter::Debris { model: h, pos: [c[0] + 0.3 * k as f32 - 0.45, c[1], c[2]],
-                            rot: [0.3 * k as f32, 0.5, 0.0], vel: [0.0, 0.0803, 0.0], spin: [0.0; 3], life: 100_000, fade: 0xff, e8: 1.0 });
+                            rot: [0.3 * k as f32, 0.5, 0.0], vel: [0.0, 0.0803, 0.0], spin: [0.0; 3], life: 100_000, fade: 0xff, e8: 1.0, draw: Default::default() });
                     }
                 }
             }
@@ -6731,6 +6882,9 @@ pub fn run() -> Result<()> {
                 }
             }
             let (fwd, turn) = (range("NF_FWD"), range("NF_TURN"));
+            let aim_sweep: Option<(f32, f32)> = std::env::var("NF_AIM_SWEEP").ok()
+                .and_then(|v| v.split_once(':').and_then(|(a, b)| Some((a.parse().ok()?, b.parse().ok()?))));
+            let aim0 = (sim.bond.yaw, sim.bond.pitch);
             for t in 1..=time as u32 {
                 if kill_at == Some(t) { let (h, r) = (&mut sim.drones.health, &mut sim.drones.rng); h.pain_generic(r, 500.0, 1, 0x0700_0005, 0); }
                 // Render aid (copter-script-draw): `NF_CH_AT=t:ch` sets switch channel `ch` on tick t
@@ -6783,8 +6937,23 @@ pub fn run() -> Result<()> {
                 if let Some((a, b, v)) = fwd { if (a..=b).contains(&t) { inp.forward = v; } }
                 if jump_at == Some(t) { inp.jump = true; }
                 if let Some((a, b, v)) = turn { if (a..=b).contains(&t) { inp.turn = v; } }
+                // Render aid (stairwell decals): `NF_AIM_SWEEP=yaw_span:pitch_span` spreads the `--pull`
+                // shots over a 9x5 yaw/pitch grid centred on the starting aim (each pull takes the
+                // next grid cell), then restores the starting aim before the render — the frame shows
+                // where a sprayed burst leaves its holes from one fixed view.
+                if let Some((ys, ps)) = aim_sweep {
+                    if let Some(k) = pulls.iter().position(|&p| p == t) {
+                        let (gx, gy) = ((k % 9) as f32 / 8.0 - 0.5, ((k / 9) % 5) as f32 / 4.0 - 0.5);
+                        sim.bond.yaw = aim0.0 + gx * ys;
+                        sim.bond.pitch = aim0.1 + gy * ps;
+                        // Bottomless ammo for the sweep (a long spray fills the 200-hole pool).
+                        for c in sim.drones.inventory.clip.iter_mut() { if *c == 0 { *c = 30; } }
+                        for c in sim.drones.inventory.carried.iter_mut() { *c = (*c).max(90); }
+                    }
+                }
                 if walk { sim.step_bond(inp, pulls.contains(&t), false, use_at == Some(t)); } else { sim.step([cam.pos.x, cam.pos.y, cam.pos.z], cam.dir().to_array(), pulls.contains(&t), false); }
             }
+            if aim_sweep.is_some() { sim.bond.yaw = aim0.0; sim.bond.pitch = aim0.1; }
             // With `--skip-cutscenes`, a skipped cut-scene's hand-back moves Bond: put him back on the `--bond` spot (and
             // let one tick settle) so the image pair matches the real game's placement.
             if skip_cuts {
@@ -6802,6 +6971,40 @@ pub fn run() -> Result<()> {
             if let Some(dr) = sim.drones.list.iter().find(|d| !d.shots.is_empty() || d.state != 4) {
                 eprintln!("AI: a drone in state {:#x}, {} shots, clip {}", dr.state, dr.shots.len(), dr.clip);
             }
+        }
+        // Render aid (stairwell decals): `NF_INTERP_SHOT=frac` renders a presented frame BETWEEN two
+        // ticks the way the window does (G-043): the palette of the last tick and of one more
+        // held-trigger tick, blended at `frac` through `moving_entries` + `lerp_palette_moving`
+        // (the reused decal nodes snap). Headless shots are otherwise whole-tick frames, which never
+        // show what the tick blend draws while a full decal pool keeps taking new holes.
+        if let Some(frac) = std::env::var("NF_INTERP_SHOT").ok().and_then(|v| v.parse::<f32>().ok()) {
+            let (l, _) = scene.skin_layout();
+            // The pair: the tick that hands a pool node to a new hole (the shot's flight can take a
+            // few ticks), up to 12 ticks after one more trigger press.
+            // `NF_INTERP_PLAIN=1`: the pair is the current tick and ONE more plain tick (no trigger
+            // press) — a between-ticks frame of whatever moves (flying debris, a swinging door).
+            let plain = std::env::var_os("NF_INTERP_PLAIN").is_some();
+            let made = |scene: &scene::Scene| scene.sim.as_ref().map_or((0, 0, 0), |s| (s.drones.effects.evicted, s.drones.effects.made, s.drones.effects.debris_made));
+            let mut ev0 = made(&scene);
+            let mut p0 = scene.skin_palette(&l, choice, time, opts, None).0;
+            let mut p1 = p0.clone();
+            for k in 0..if plain { 1 } else { 12 } {
+                ev0 = made(&scene);
+                p0 = if k == 0 { p0 } else { p1.clone() };
+                if let Some(sim) = scene.sim.as_mut() {
+                    sim.step_bond(nf_game::player::Input { fire: k == 0 && !plain, ..Default::default() }, k == 0 && !plain, false, false);
+                }
+                p1 = scene.skin_palette(&l, choice, time, opts, None).0;
+                if made(&scene).0 != ev0.0 { break; }
+            }
+            let mut snap = scene.decal_reused_entries(&l, ev0.1);
+            snap.extend(scene.debris_reused_entries(&l, ev0.2));
+            let moving = moving_entries(&p0, &p1, &snap);
+            let mut blended = p1.clone();
+            lerp_palette_moving(&mut blended, &p0, &p1, &moving, &[], frac);
+            eprintln!("NF_INTERP_SHOT {frac}: {} holes, evicted {} -> {}, {} moving entries, {} snapped", scene.sim.as_ref().map_or(0, |s| s.drones.effects.decals.len()), ev0.0,
+                scene.sim.as_ref().map_or(0, |s| s.drones.effects.evicted), moving.len(), snap.len());
+            *SHOT_PALETTE.lock().unwrap() = Some(blended);
         }
         // fix-armour-ring: `--armour <n>` writes BLData+0x8b0 after the ticks (the pane's armour — the
         // same write the dev panel's armour row and cheats.py's god make every frame), so the health
@@ -6854,6 +7057,18 @@ pub fn run() -> Result<()> {
             let cam = Camera { pos: Vec3::new(eye[0], eye[1], eye[2]), yaw: d[0].atan2(d[2]), pitch: (d[1] / (d[0] * d[0] + d[2] * d[2]).sqrt()).atan(), fov: GAME_FOV };
             if let Some(s) = scene.sim.as_mut() { s.first_person = false; }
             eprintln!("--mp-look: slot {slot} body at {p:?} yaw {:.2} held {}", st.1, scene.sim.as_ref().map_or(0, |s| s.mp_held[slot]));
+            return shot(&scene, &cam, args.get(i + 1).context("--shot needs a file name")?, choice, time, opts, notex, nofog, menu_frame.as_ref(), movie_frame.as_ref());
+        }
+        // Render aid (`--shot-cam x,y,z,yaw,pitch`): the ticks run Bond's own eye as usual (so a
+        // lift ride or a cut-scene plays exactly as without the flag); only the rendered frame's
+        // camera is replaced — close-ups of something the eye's view leaves out of frame.
+        if let Some(ci) = args.iter().position(|a| a == "--shot-cam") {
+            let v: Vec<f32> = args.get(ci + 1).context("--shot-cam needs x,y,z,yaw,pitch")?.split(',').map(|t| t.trim().parse()).collect::<Result<_, _>>()?;
+            anyhow::ensure!(v.len() == 5, "--shot-cam needs x,y,z,yaw,pitch");
+            let cam = Camera { pos: Vec3::new(v[0], v[1], v[2]), yaw: v[3], pitch: v[4], fov: GAME_FOV };
+            // The first-person gun is posed at Bond's eye; away from it, it would float in the frame.
+            let mut scene = scene;
+            if let Some(s) = scene.sim.as_mut() { s.first_person = false; }
             return shot(&scene, &cam, args.get(i + 1).context("--shot needs a file name")?, choice, time, opts, notex, nofog, menu_frame.as_ref(), movie_frame.as_ref());
         }
         // Render aid (NF_SHOT_AT_PICKUP=k): frame pickup k from its DRAWN matrix (`Pickup::m`, what the renderer
