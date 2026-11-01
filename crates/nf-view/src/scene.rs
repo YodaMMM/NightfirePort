@@ -3933,6 +3933,9 @@ impl Sim {
             // standins-drone-922: the facing yaw the flash factor reads [M 0x12d890:328-330].
             yaw: self.bond.yaw,
             cel: self.cel_at(self.bond.pos).and_then(|room| self.room_cell.get(room).copied().flatten()),
+            // The crouch substate drives the trigger toucher's pick-arm switch
+            // (level-0a-ceiling-gun-route).
+            crouched: self.bond.crouched,
             move_local: self.bond.move_local };
         let d = nf_game::drone::Data { tables: &self.tables, props: &self.props, scripts: &self.scripts, weapons: &self.weapons, world: &self.world, level: self.level, sequences: &self.seqs, skins: &self.skins, skeletons: &self.skeletons, nav: &self.nav, covers: &self.covers, tuning: &self.tuning, hitboxes: &self.hitboxes, volumes: &self.volumes, sfx: self.sfx.as_ref(), models: &self.models, surfaces: self.surfaces.as_ref(), voices: self.voices.as_deref(), difficulty: self.drones.difficulty,
             ai_points: &self.ai_points };

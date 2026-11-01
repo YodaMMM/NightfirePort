@@ -39,6 +39,53 @@ fn load_carry(save: Option<&nf_game::player::RamSave>) -> Walker {
     w
 }
 
+/// The crouch toggle through the real input edge: the press pulses every 70 ticks (the game's
+/// 60-tick stand/crouch lockout `BL+0x960` [M Player_SSCrouch 0x1924c0:84-105]) until the
+/// substate flips — walkreal_07000015's `set_crouch` shape.
+fn set_crouch(w: &mut Walker, on: bool) {
+    for t in 0..400u32 {
+        if w.scene.sim.as_ref().unwrap().bond.crouched == on { return; }
+        w.tick(nf_game::player::Input { crouch: t % 70 == 0, ..Default::default() }, false);
+    }
+    panic!("the crouch toggle never reached {on}");
+}
+
+/// The low beams are jumped: no stance passes one (live: #621's low line fired ch 0x24 standing
+/// AND crouched [L 2026-11-01]), and the two on the route leave no open end — beam #614 spans
+/// the west corridor wall to wall (tris z 13.03, x −24.71..−19.45, y 0.25-0.52 [D triggers
+/// dump]; the walls x −25.0 / −19.75 [D probe rays]) and beam #621 (tris (−14.95, −32.40) →
+/// (−9.92, −33.95), y 0.13-0.39 [D]) closes the band south of the pocket. The jump is the
+/// walk's own (`Player_HandleJump` 0x1916b0); live, a press 0.9 or 1.3 before #614's line
+/// cleared it and a walk fired it [L 2026-11-01]. Walks straight at `to`, the jump pressed once as
+/// Bond comes within `jump_before` of the beam's line (xz) on the approach side; panics if the
+/// leg never arrives.
+const BEAM_614: ([f32; 2], [f32; 2]) = ([-24.71, 13.03], [-19.45, 13.03]);
+const BEAM_621: ([f32; 2], [f32; 2]) = ([-14.95, -32.40], [-9.92, -33.95]);
+/// Beam #625: x 18.88, z 2.38-7.64, y 0.39-0.65 [D triggers dump].
+const BEAM_625: ([f32; 2], [f32; 2]) = ([18.88, 2.38], [18.88, 7.64]);
+fn jump_over_low_beam(w: &mut Walker, beam: ([f32; 2], [f32; 2]), to: [f32; 3], jump_before: f32, label: &str) {
+    let (a, b) = beam;
+    let (ux, uz) = (b[0] - a[0], b[1] - a[1]);
+    let len = (ux * ux + uz * uz).sqrt();
+    // Signed perpendicular distance from the beam's line.
+    let side = |x: f32, z: f32| ((x - a[0]) * uz - (z - a[1]) * ux) / len;
+    let target_side = side(to[0], to[2]);
+    let mut jumped = false;
+    for _ in 0..900u32 {
+        let (p, yaw) = { let s = w.scene.sim.as_ref().unwrap(); (s.bond.pos, s.bond.yaw) };
+        if walker::dxz(p, to) < 0.6 {
+            eprintln!("[walk] {label}: arrived at {p:?} (jumped {jumped})");
+            return;
+        }
+        let desired = (to[0] - p[0]).atan2(to[2] - p[2]);
+        let d = side(p[0], p[2]);
+        let jump = !jumped && d.abs() <= jump_before && d.signum() != target_side.signum();
+        if jump { jumped = true; }
+        w.tick(nf_game::player::Input { forward: 1.0, turn: walker::wrap_pi(desired - yaw).clamp(-0.05, 0.05), jump, ..Default::default() }, false);
+    }
+    panic!("{label}: the jump leg never arrived (bond {:?})", w.scene.sim.as_ref().unwrap().bond.pos);
+}
+
 /// Fire the held weapon at a static point through the real trigger path: turn+look the view onto
 /// the point (the walker's shoot() aim loop, aimed at a useobj instead of a drone), pulse the
 /// trigger while within `range`. Returns whether the point reacted (the caller's channel check).
@@ -282,9 +329,41 @@ fn walk_to_security_keyboard() -> Walker {
     // The lobby's graph exit: its west wall is solid, the way out is the south band (the proven
     // anchors; the A* can't start inside the lobby — no reachable candidate node).
     w.walk_to(Wp::new(-3.9, 0.0, 15.5).r(1.2), "lobby south");
-    w.walk_to(Wp::new(-10.0, 0.4, 16.0).r(1.2), "the west hall");
-    // The whole loop by the AI graph's own nodes (the shaft wall x 5.9-7 spans z −2..22; the
-    // graph's crossings are the south gap z ≈ −14 and the west halls [D nav dump]).
+    // Beam #607 (out ch 0x1F, mask 8, x ≈ −8.45, y 1.49-1.76, z 15-20.25 [D triggers dump])
+    // spans the west-hall mouth: the player's answer is the CROUCH. Live on a fresh boot
+    // [L 2026-11-01, PCSX2: laser_band live script]: crouched (substate 4, pos y 0.608) Bond
+    // walked (−7.61, 16.22) → (−11.43, 16.71) through the plane with ch 0x1F (and 0x0F) staying
+    // 0; standing (pos y 1.131) back east the same line fired 0x1F + 0x0F at x −8.95 — the
+    // crouched pick arm [M Player_Collision 0x194df0 case 3] passes under the band, the standing
+    // body [M default arm] does not. The same boot showed the crouched straight line
+    // (−3.9, 15.4) → (−10, 16) wedges at x −7.75, z 16.0 (the doorway's south jamb): the walked
+    // crossing rides the doorway line z ≈ 16.6 (the ring's own west-hall line).
+    set_crouch(&mut w, true);
+    watch_and_clear(&mut w, 16.0);
+    w.walk_to(Wp::new(-7.4, 0.4, 16.6).r(0.6), "the west hall's doorway line (crouched)");
+    w.walk_to(Wp::new(-10.0, 0.4, 16.6).r(0.6), "through beam #607's plane (crouched)");
+    w.walk_to(Wp::new(-11.6, 0.4, 16.6).r(0.6), "west, clear of beam #607's reach (crouched)");
+    set_crouch(&mut w, false);
+    // The west corridor south: beam #614 spans it wall to wall at ankle height (the
+    // jump_over_low_beam doc) — the only player lane south from the hall (the office block east of
+    // the corridor is closed at z 15.25 / the x −19.75 wall down to its door at z ≈ 5.5 [D probe
+    // rays]; the A*'s own lane is this corridor). Walk the north corridor to the corridor head,
+    // then JUMP the line. The alarm-runner catch runs between the legs (the slower crouched pace
+    // opens the panel-side civilian's window).
+    for (wp, label) in [([-16.6f32, 0.4, 17.4], "the west offices' north corridor"),
+                        ([-22.2, 0.4, 16.6], "the west corridor's head"),
+                        ([-22.2, 0.4, 15.4], "the west corridor, north of beam #614")] {
+        watch_and_clear(&mut w, 16.0);
+        w.walk_to(Wp::new(wp[0], wp[1], wp[2]).r(0.6), label);
+        assert!(w.scene.sim.as_ref().unwrap().drones.level_exit.is_none(), "the mission ended at the outbound leg '{label}'");
+    }
+    jump_over_low_beam(&mut w, BEAM_614, [-22.2, 0.4, 11.0], 1.0, "jump beam #614 southbound");
+    {
+        let sim = w.scene.sim.as_ref().unwrap();
+        let on: Vec<String> = [0x1f, 0x20, 0x21, 0x22, 0x24, 0x25, 0x26, 0x0f, 0x10, 0x11, 0x12, 0x81]
+            .iter().filter(|c| sim.drones.channels.time[**c as usize] != 0).map(|c| format!("{c:#04x}")).collect();
+        eprintln!("[0a] outbound past #614: pos {:?} fired [{}] exit {:?}", sim.bond.pos, on.join(","), sim.drones.level_exit);
+    }
     assert!(w.follow_nav_route([pc[0] + 2.0, 0.4, pc[2] + 3.0], "to the Q-Worm PC"), "no nav route to the PC");
     // The cubicle's south side, walked (this round's route — probe_l0a3_install, all legs
     // arrived): the office block's south wall runs z −25.2..−27.1 (north faces n (0.26,0,0.97),
@@ -296,11 +375,17 @@ fn walk_to_security_keyboard() -> Walker {
     // The band's floor (y 1.10) holds the bullet-clear stands: from (−15.89, 1.10, −34.24) the
     // Q-Worm BULLET reaches the PC clear [M PCQWorm_Update 0x1aee20's class-5 seg test; D probe:
     // segment_bullet CLEAR from every stand x −16..−17.8, z −33.5..−34.4].
-    let _ = w.try_walk_to(Wp::new(-13.9, 0.4, -30.5).r(0.9), "pocket south-east");
-    let _ = w.try_walk_to(Wp::new(-13.5, 0.4, -32.5).r(0.9), "the x −13.5 column south");
-    let _ = w.try_walk_to(Wp::new(-13.5, 0.4, -34.0).r(0.9), "into the band");
-    let _ = w.try_walk_to(Wp::new(-15.5, 0.4, -34.3).r(0.9), "band west");
-    let _ = w.try_walk_to(Wp::new(-16.5, 0.4, -34.3).r(0.7), "the south stand");
+    // The band legs are FATAL (walk_to panics at the 6000-tick cap [walker]): the passage is
+    // probe-proven (probe_l0a3_install, all legs arrived), and a silently-stranded leg would
+    // leave Bond short of the stand so the install shot never lands.
+    w.walk_to(Wp::new(-13.9, 0.4, -30.5).r(0.9), "pocket south-east");
+    // Beam #621 (out ch 0x24, OR #668 → ch 0x10 → gun #639) closes the band south of the pocket
+    // at ankle height (jump_over_low_beam): down the x −13.5 column (northward rays from z −34.4
+    // clear at x −13 [D probe rays]), jumping the line, then west along the band.
+    w.walk_to(Wp::new(-13.5, 0.4, -30.6).r(0.5), "the column north of beam #621");
+    jump_over_low_beam(&mut w, BEAM_621, [-13.5, 0.4, -34.4], 1.0, "jump beam #621 southbound");
+    w.walk_to(Wp::new(-16.5, 0.4, -34.6).r(0.7), "the band west, south of #621");
+    w.walk_to(Wp::new(-16.8, 0.4, -34.0).r(0.3), "the south stand");
     // The REAL install: equip the Q-Worm through the real gadget cycle (mode-1 bounds 0x4A..0x5E,
     // owned entries only [M player.rs Input::gadget_cycle / Gun_Update's cycle]) — the prior
     // round proved the old legs' 112 blocked shots were the spawn loadout, never the gadget —
@@ -338,18 +423,36 @@ fn walk_to_security_keyboard() -> Walker {
     // — without the per-leg catch his press landed mid-keyboard-leg this round (level_exit at
     // +342 into "round the wall end", ch 0x61 still off at the walk-back's end) [M the runner
     // 0x168ea8's follow].
+    // The walk-back is the outbound in reverse: the band east to the column, the jump north
+    // over beam #621, the nav up to the west corridor south of beam #614, the jump north, the
+    // north corridor, and beam #607's plane crouched on the doorway line.
+    w.walk_to(Wp::new(-13.5, 0.4, -34.4).r(0.5), "the band east to the column (back)");
+    jump_over_low_beam(&mut w, BEAM_621, [-13.5, 0.4, -30.6], 1.0, "jump beam #621 northbound");
     let back = {
         let sim = w.scene.sim.as_ref().unwrap();
-        walker::nav_route(sim, sim.bond.pos, [-3.9, 0.0, 13.2])
+        let mut nodes = walker::nav_route(sim, sim.bond.pos, [-22.2, 0.4, 10.6]).expect("nav: the pocket → the west corridor");
+        nodes.push([-22.2, 0.4, 10.6]);
+        nodes
     };
-    match back {
-        Some(nodes) => for (k, p) in nodes.iter().enumerate() {
-            let ok = walk_leg_watched(&mut w, *p, 1.3, &format!("back to the lobby node {k}"));
-            assert!(ok || w.scene.sim.as_ref().unwrap().drones.level_exit.is_none() || k + 1 == nodes.len(),
-                "the walk-back leg {k} never arrived and the mission did not end");
-        },
-        None => assert!(w.follow_nav_route([-3.9, 0.0, 13.2], "back to the lobby"), "no nav route back to the lobby"),
+    for (k, p) in back.iter().enumerate() {
+        let ok = walk_leg_watched(&mut w, *p, 1.3, &format!("back to the west corridor node {k}"));
+        assert!(ok || k + 1 == back.len(), "the walk-back leg {k} never arrived (exit {:?})", w.scene.sim.as_ref().unwrap().drones.level_exit);
     }
+    w.walk_to(Wp::new(-22.2, 0.4, 10.6).r(0.5), "the west corridor, south of beam #614");
+    jump_over_low_beam(&mut w, BEAM_614, [-22.2, 0.4, 15.6], 1.0, "jump beam #614 northbound");
+    for (wp, label) in [([-22.2f32, 0.4, 16.8], "the west corridor's head (back)"),
+                        ([-16.6, 0.4, 17.4], "the north corridor east (back)"),
+                        ([-11.6, 0.4, 16.6], "the west hall, west of beam #607 (back)")] {
+        watch_and_clear(&mut w, 16.0);
+        w.walk_to(Wp::new(wp[0], wp[1], wp[2]).r(0.6), label);
+    }
+    set_crouch(&mut w, true);
+    w.walk_to(Wp::new(-10.0, 0.4, 16.6).r(0.6), "through beam #607's plane eastbound (crouched)");
+    w.walk_to(Wp::new(-6.6, 0.4, 16.6).r(0.6), "east, clear of beam #607's reach (crouched)");
+    set_crouch(&mut w, false);
+    watch_and_clear(&mut w, 16.0);
+    w.walk_to(Wp::new(-3.9, 0.0, 15.5).r(1.0), "the lobby (back)");
+    w.walk_to(Wp::new(-3.9, 0.0, 13.2).r(1.0), "the lobby's south door (back)");
     {
         // The walk-back's state gate (this round): the corridor legs pass the alarm-panel mouth,
         // and a guard challenged there runs for the panel while Bond finishes the walk — the
@@ -472,11 +575,23 @@ fn walk_office_floor_qworm_keyboard_hatch() {
     // player's legal ring route: south through the west offices, the west corridor, the south
     // corridor, and up the east side to the hatch — the corners below, walked steadily (a real
     // player's stealth timing: no stops inside a civilian's reach).
-    let ring: [([f32; 3], &str); 23] = [
-        ([-7.5, 1.3, 14.5], "ring: the security centre's west door"),
-        ([-7.5, 1.3, 16.5], "ring: the west hall north"),
-        ([-20.5, 1.3, 16.5], "ring: the west offices' north corridor"),
-        ([-20.5, 1.3, 5.5], "ring: down the west office block"),
+    let ring: [([f32; 3], &str, bool); 27] = [
+        ([-7.5, 1.3, 14.5], "ring: the security centre's west door", false),
+        ([-7.5, 1.3, 16.5], "ring: the west hall north", false),
+        // Beam #607's plane (x −8.45, z 15-20.25 [D triggers dump]) spans this corridor: the
+        // ring crosses it CROUCHED — the under-beam pass (the crouched pick arm tops ≈ feet+1.26
+        // [M Player_Collision 0x194df0 case 3] vs the beam band 1.49-1.76 [D]; standing 1.86
+        // [M 0x194df0 default arm] crosses and arms gun #640 through OR #667 → ch 0x0F).
+        // The crouched leg ends 2+ west of the plane (live, the standing body fired 0x1F at
+        // x −8.95 — 0.36 off the west face [L 2026-11-01]): the stand-up happens out of reach.
+        ([-11.4, 1.3, 16.6], "ring: crouched through beam #607's plane", true),
+        ([-16.6, 1.3, 17.4], "ring: the west offices' north corridor", false),
+        ([-22.2, 1.3, 16.6], "ring: the west corridor's head", false),
+        ([-22.2, 1.3, 15.4], "ring: the west corridor, north of beam #614", false),
+        // Beam #614 (out ch 0x22, OR #667 → ch 0x0F → gun #640) spans the corridor wall to
+        // wall at ankle height — jumped (jump_over_low_beam, keyed on this label).
+        ([-22.2, 1.3, 11.0], "ring: jump beam #614", true),
+        ([-20.5, 1.3, 5.5], "ring: down the west office block", false),
         // The crossing rides the game's own ai lane: the patrol nodes 17/28 cross at z 5.54/5.60
         // [D 0700000a ai_network, disc y 0.0]. The swing door opened to the pos01-0 end leaves
         // its leaf across x −19.53..−18.32 at z 4.44..4.70 ([L probe979_floor_sweep — the door's
@@ -485,28 +600,28 @@ fn walk_office_floor_qworm_keyboard_hatch() {
         // the rest dy onto the floor band's f32 edge [M 0x194188:106] and the grounded flag
         // flickered (the 941 floating wedge). The lane entry arrives tight (r 0.7) so the south
         // turn starts clear of the leaf.
-        ([-17.6, 1.3, 5.5], "ring: the ai node 17 east of the door"),
+        ([-17.6, 1.3, 5.5], "ring: the ai node 17 east of the door", false),
         // The game's own path-3 lane round the desk block: the nodes 27/26 run east along
         // z 5.7-5.8, then 32/33/34 run south at x −14.8/−14.5 [D 0700000a ai_network] — the
         // desk block (x −17.53..−16.59, z 3.29..4.79 [L tris dump]) and the swung leaf's box
         // (x −19.53..−18.32, z 4.44..4.70 [L]) leave only a 0.79 gap the capsule (r 0.55, 1.1
         // wide) cannot pass — the game's graph routes around the desks' east side.
-        ([-16.2, 1.3, 5.8], "ring: the ai node 27 east"),
-        ([-15.0, 1.3, 5.7], "ring: the ai node 26 east"),
-        ([-14.8, 1.3, 4.0], "ring: the ai node 32 south"),
-        ([-14.8, 1.3, 2.9], "ring: the ai node 33 south"),
-        ([-14.5, 1.3, 2.4], "ring: the ai node 34 south"),
-        ([-17.5, 1.3, 2.5], "ring: down past the west door"),
-        ([-18.5, 1.3, 2.5], "ring: the door jink west"),
-        ([-18.5, 1.3, 0.5], "ring: down"),
-        ([-19.5, 1.3, 0.5], "ring: the west corridor jink 2"),
-        ([-19.5, 1.3, -1.5], "ring: down 2"),
-        ([-21.5, 1.3, -1.5], "ring: the west corridor jink 3"),
-        ([-21.5, 1.3, -6.5], "ring: down the south-west offices"),
-        ([-18.5, 1.3, -6.5], "ring: jink 4"),
-        ([-18.5, 1.3, -9.5], "ring: down 3"),
-        ([-17.5, 1.3, -9.5], "ring: jink 5"),
-        ([-17.5, 1.3, -13.5], "ring: the south-west corner approach"),
+        ([-16.2, 1.3, 5.8], "ring: the ai node 27 east", false),
+        ([-15.0, 1.3, 5.7], "ring: the ai node 26 east", false),
+        ([-14.8, 1.3, 4.0], "ring: the ai node 32 south", false),
+        ([-14.8, 1.3, 2.9], "ring: the ai node 33 south", false),
+        ([-14.5, 1.3, 2.4], "ring: the ai node 34 south", false),
+        ([-17.5, 1.3, 2.5], "ring: down past the west door", false),
+        ([-18.5, 1.3, 2.5], "ring: the door jink west", false),
+        ([-18.5, 1.3, 0.5], "ring: down", false),
+        ([-19.5, 1.3, 0.5], "ring: the west corridor jink 2", false),
+        ([-19.5, 1.3, -1.5], "ring: down 2", false),
+        ([-21.5, 1.3, -1.5], "ring: the west corridor jink 3", false),
+        ([-21.5, 1.3, -6.5], "ring: down the south-west offices", false),
+        ([-18.5, 1.3, -6.5], "ring: jink 4", false),
+        ([-18.5, 1.3, -9.5], "ring: down 3", false),
+        ([-17.5, 1.3, -9.5], "ring: jink 5", false),
+        ([-17.5, 1.3, -13.5], "ring: the south-west corner approach", false),
         // The pillar crossing (this round's walk): the -2 leg (−11.5, −13.5) hugged the pillar's
         // south face (z −13.10, x −12.98..−10.9 [D probe rays]) — the r-0.55 capsule's north
         // edge (z −12.95) overlaps the face and the leg wedged at the 6000-tick cap. The crossing
@@ -514,19 +629,31 @@ fn walk_office_floor_qworm_keyboard_hatch() {
         // (−14.5, −15.0) — south of every pillar face — then east along the pocket to the game's
         // N-S ai lane at node 130 (every southward ray from the pocket x −12..−8.5,
         // z −13.65 → −18.0 clear [D probe rays]).
-        ([-14.5, 1.3, -15.0], "ring: south of the pillar, into the pocket"),
+        ([-14.5, 1.3, -15.0], "ring: south of the pillar, into the pocket", false),
         // The keypad approach (this round's walk): the mouth is the locked door #724's doorway —
         // see the test doc. The keypad #648 (−10.69, 1.52, −17.46 [D]) faces the pocket
         // (facing (−1,0,0) [D rotation −π/2]); the stand (−11.9,−17.5) is 1.2 west of it (the
         // wall's west face x −10.45 [D]) and inside the E reach (the use sphere 1.0 + the lock's
         // 0.13 world sphere [M 0x1a5170:101-108]).
-        ([-11.9, 1.3, -17.5], "ring: the keypad's wall"),
+        ([-11.9, 1.3, -17.5], "ring: the keypad's wall", false),
     ];
-    for (wp, label) in ring {
+    for (wp, label, crouched) in ring {
         // The alarm guard's cone covers the south corridor mouth (the route note above) — the
         // watch between the legs catches his run the way walk_leg_watched does below.
+        let jump = label == "ring: jump beam #614";
+        if crouched && !jump { set_crouch(&mut w, true); }
         watch_and_clear(&mut w, 16.0);
-        w.walk_to(Wp::new(wp[0], wp[1], wp[2]).r(0.8), label);
+        if jump { jump_over_low_beam(&mut w, BEAM_614, wp, 1.0, label); } else { w.walk_to(Wp::new(wp[0], wp[1], wp[2]).r(0.8), label); }
+        if crouched && !jump { set_crouch(&mut w, false); }
+        {
+            let sim = w.scene.sim.as_ref().unwrap();
+            let chs: Vec<String> = [0x1f, 0x20, 0x21, 0x22, 0x24, 0x25, 0x26, 0x0f, 0x10, 0x11, 0x12, 0x81]
+                .iter().filter(|c| sim.drones.channels.time[**c as usize] != 0).map(|c| format!("{c:#04x}")).collect();
+            let tur: Vec<String> = sim.drones.gt_turrets.iter()
+                .map(|t| format!("{}:s{}", t.placement, t.state)).collect();
+            eprintln!("[ring] after '{label}' pos ({:.2},{:.2},{:.2}) fired [{}] turrets [{}]",
+                sim.bond.pos[0], sim.bond.pos[1], sim.bond.pos[2], chs.join(","), tur.join(","));
+        }
         assert!(w.scene.sim.as_ref().unwrap().drones.level_exit.is_none(), "the mission failed at '{label}'");
     }
     // THE MOUTH, through the game's own writer chain (all real input — see the test doc):
@@ -595,7 +722,8 @@ fn walk_office_floor_qworm_keyboard_hatch() {
         assert!(sim.drones.locks.iter().filter(|l| l.placement == 648).all(|l| l.unlocked), "the used lock's state 1 [M 0x1b0650]");
     }
     // The crossing + the lane south (this round's walked legs):
-    let ring2: [([f32; 3], &str); 21] = [
+    const RING2_LEGS: usize = 9;
+    let ring2: [([f32; 3], &str); RING2_LEGS] = [
         ([-11.0, 1.3, -18.7], "ring: the doorway west"),
         ([-9.6, 1.3, -18.7], "ring: through the doorway, the atrium lane"),
         // The player's route south rides the game's N-S lane at x −8.5 (the ai nodes 132
@@ -607,20 +735,8 @@ fn walk_office_floor_qworm_keyboard_hatch() {
         ([-6.5, 1.3, -22.5], "ring: the south corridor"),
         ([9.5, 1.3, -22.5], "ring: the south corridor's east run"),
         ([9.5, 1.3, -13.5], "ring: up the east side south"),
-        ([22.5, 1.3, -13.5], "ring: the south-east corner"),
-        ([22.5, 1.3, -12.5], "ring: the east corridor jink"),
-        ([23.5, 1.3, -12.5], "ring: the east corridor jink 2"),
-        ([23.5, 1.3, -11.5], "ring: up the east corridor"),
-        ([24.5, 1.3, -11.5], "ring: the east corridor jink 3"),
-        ([24.5, 1.3, 2.5], "ring: up the east offices"),
-        ([23.5, 1.3, 2.5], "ring: the east corridor jink 4"),
-        ([23.5, 1.3, 3.5], "ring: up 2"),
-        ([11.5, 1.3, 3.5], "ring: west along the east corridor"),
-        ([11.5, 1.3, 15.5], "ring: up the east corridor north"),
-        ([17.5, 1.3, 15.5], "ring: east to the hatch anteroom's south"),
-        ([17.5, 1.3, 16.5], "ring: into the anteroom"),
-        ([21.5, 1.3, 16.5], "ring: the anteroom east"),
-        ([21.5, 1.3, 19.4], "ring: the hatch mouth"),
+        ([10.6, 1.3, -13.9], "ring: the south gap east"),
+        ([15.7, 1.3, -13.9], "ring: before the laser fence"),
     ];
     for (wp, label) in ring2 {
         // The alarm guard's cone covers the south corridor mouth (the route note above) — the
@@ -636,6 +752,48 @@ fn walk_office_floor_qworm_keyboard_hatch() {
         } else {
             w.walk_to(Wp::new(wp[0], wp[1], wp[2]).r(0.8), label);
         }
+        assert!(w.scene.sim.as_ref().unwrap().drones.level_exit.is_none(), "the mission failed at '{label}'");
+    }
+    // The 0x25 laser fence (#651-654: four stacked rows y 0.22..2.34 across the north-east lane,
+    // diagonal (18.92, −14.06) → (23.12, −10.47) [D triggers dump]) is the AI graph's only way to
+    // the hatch (the lane (15.74, −13.85) → (20.06, −13.19) → (23.16, −8.87) [D nav]; the office
+    // north of it is a dead end in the graph). Its rows carry lock ch 0x19 [D p6], held while a
+    // guard stands on his drone plate (OR #634: 0x19 ← [0x18, 0x37] [D trig dump]; a locked
+    // trigger does not fire [M Trigger_Locked 0x1b2fc8:24-29, the touch path's gate]) — the player crosses
+    // while the fence is locked. The lock is held only while the guard is on his plate (the port's
+    // trace: 0x18/0x19 on for ~56 ticks as he walks through [S] unverified live), so the wait is AT the fence:
+    // the lane's last node before it (20.1, −13.2) sits 1.29 west of the fence line (posts
+    // (22.93, −13.89) / (19.20, −10.76) [D #655/#656]); the crossing to (23.2, −8.9) runs
+    // near-perpendicular to the line and clears its 0.55 reach in ~20 ticks.
+    w.walk_to(Wp::new(20.1, 1.3, -13.2).r(0.4), "ring: at the laser fence");
+    let mut locked = false;
+    for _ in 0..9000u32 {
+        if w.scene.sim.as_ref().unwrap().drones.channels.on(0x19) { locked = true; break; }
+        w.wait(1);
+        assert!(w.scene.sim.as_ref().unwrap().drones.level_exit.is_none(), "the mission failed waiting at the laser fence");
+    }
+    assert!(locked, "the laser fence's lock ch 0x19 never came on (no guard on the fence plate)");
+    eprintln!("[0a] fence lock 0x19 on at tick {}", w.total_ticks);
+    for (wp, label) in [([23.2f32, 1.3, -8.9], "ring: through the locked laser fence"),
+                        ([25.5, 1.3, -3.2], "ring: the east corridor"),
+                        ([25.9, 1.3, 5.2], "ring: up the east corridor"),
+                        ([21.3, 1.3, 5.3], "ring: the corridor west, east of beam #625")] {
+        w.walk_to(Wp::new(wp[0], wp[1], wp[2]).r(0.6), label);
+        assert!(w.scene.sim.as_ref().unwrap().drones.level_exit.is_none(), "the mission failed at '{label}'");
+    }
+    // Beam #625 (out 0x26, x 18.88, z 2.38-7.64, y 0.39-0.65 [D]) — a low line across the
+    // corridor: jumped.
+    jump_over_low_beam(&mut w, BEAM_625, [16.4, 1.3, 4.9], 1.0, "ring: jump beam #625 westbound");
+    for (wp, label) in [([9.9f32, 1.3, 5.3], "ring: the corridor west end"),
+                        ([9.75, 1.3, 8.8], "ring: up the east corridor north"),
+                        ([9.6, 1.3, 12.3], "ring: up the east corridor north 2"),
+                        ([11.5, 1.3, 15.5], "ring: the east corridor's north turn"),
+                        ([17.5, 1.3, 15.5], "ring: east to the hatch anteroom's south"),
+                        ([17.5, 1.3, 16.5], "ring: into the anteroom"),
+                        ([21.5, 1.3, 16.5], "ring: the anteroom east"),
+                        ([21.5, 1.3, 19.4], "ring: the hatch mouth")] {
+        watch_and_clear(&mut w, 16.0);
+        w.walk_to(Wp::new(wp[0], wp[1], wp[2]).r(0.8), label);
         assert!(w.scene.sim.as_ref().unwrap().drones.level_exit.is_none(), "the mission failed at '{label}'");
     }
     // Diagnostic (this task): the office floor's LOAD_LEVEL triggers — the reload (next == this
@@ -682,6 +840,27 @@ fn walk_office_floor_qworm_keyboard_hatch() {
         }
     }
     eprintln!("[0a] pre-assert report: falls {:?} stuck {:?}", w.report.falls, w.report.stuck_events);
+    {
+        // The route's laser pin: the walk passed every beam without a touch — #607 crouched,
+        // the low lines #614/#621/#625 jumped, the 0x25 fence while its lock 0x19 held — so no
+        // mask-8 laser out (0x1F/0x20/0x21/0x22/0x24/0x25/0x26 [D 0700000a triggers dump])
+        // fired, and through the laser-fed alert ORs (#667 0x0F ← [0x1F,0x20,0x21,0x22]; #669
+        // 0x11 ← [0x24,0x25]; #670 0x12 ← [0x1E,0x25,0x26]; #782 → 0x81 [D trig dump, M
+        // Trigger_MultiplexOrIn 0x1b2d38]) no gun armed by a beam — #640's enable is ch 0x0F
+        // (GT placement param 4 [D 0700000a-audit]). #668's 0x10 ← [0x1D, 0x24] is left out: its
+        // other input 0x1D is a security sensor's out (the walk-back's west corridor passes one
+        // [port trace: Sensor::update writes 0x1D]); its beam input 0x24 is pinned here.
+        // The beam outs are PULSES (live: 0x1F/0x0F and 0x24/0x10 read 0 again ~30 frames after
+        // the crossing [L 2026-11-01]), so the pin reads the write stamp, not the level: the
+        // game stamps switch_channels_time on every nonzero write [M 0x1b1a78:87,107,188-189] —
+        // a never-stamped channel never fired.
+        let sim = w.scene.sim.as_ref().unwrap();
+        for ch in [0x1f, 0x20, 0x21, 0x22, 0x24, 0x25, 0x26, 0x0f, 0x11, 0x12, 0x81] {
+            assert!(sim.drones.channels.time[ch] == 0 && !sim.drones.channels.on(ch as u32),
+                "laser/alert channel {ch:#x} fired on the walked route — a beam was touched");
+        }
+        eprintln!("[0a] laser pin: no mask-8 beam out, no alert OR out — gun #640 never armed");
+    }
     w.walk_to(Wp::at(21.72, 1.12, 19.79, Act::Use { use_ticks: 600 }), "E the hatch");
     {
         let sim = w.scene.sim.as_ref().unwrap();
@@ -1158,18 +1337,159 @@ fn the_pick_ref_accumulator_tracks_the_game_ref() {
 /// panics with the death spot and the last hits (common/damage_log.rs), so a pass pins that the
 /// walk completes on the port's own damage.
 ///
-/// Ignored: this route cannot survive the west ceiling gun on real damage. The west hall's laser
-/// #607 (out ch 0x1F → OR #667 → ch 0x0F [D]) is gun #640's enable channel (param 4 = 0x0F, at
-/// (−22.1, 2.3, 17.2) aimed straight down [D]); the walk crosses #607 twice (the Q-Worm leg, then
-/// the ring's west leg) and each crossing arms the gun again — after the re-holster the case-3
-/// fold returns a facing-1 gun to state 0 [M GT_Update 0x180498 case 3, the bnel delay-slot
-/// store]. Only explosions damage a turret (`GT_ApplyDamage` 0x1816d8's one caller is
-/// `Explode_Propagate` 0x17c518 case 0x36 [M]) and 0a's start loadout carries none; the heavy
-/// armour (−13.46, 0.90, 7.61) [D] sits behind the 0x13/0x22 laser rows. The two bursts land
-/// 27 + 15 rounds of 2.4 (≈ 101): Bond dies under the gun at (−20.5, 1.1, 6.9). It passed while
-/// the port's wall gun stuck in state 3 after its first burst.
+/// The player's route (2026-11-01, level-0a-ceiling-gun-route): the west hall's laser #607
+/// (out ch 0x1F, mask 8, x ≈ −8.45, y 1.49-1.76, z 15-20.25 [D triggers dump]) fed OR #667 →
+/// ch 0x0F, ceiling gun #640's enable (param 4, at (−22.1, 2.3, 17.2) aimed straight down [D
+/// 0700000a-audit]); the old standing route armed it on every #607 crossing and the two bursts
+/// (27 + 15 rounds of 2.4 ≈ 101) outlast Bond's 100 health — the gun re-arms after each crossing
+/// through the case-3 fold [M GT_Update 0x180498 case 3 → state 0], and only explosions damage a
+/// turret (`GT_ApplyDamage` 0x1816d8's one caller is `Explode_Propagate` 0x17c518 case 0x36 [M]),
+/// of which 0a's start loadout has none. The game's answer is the CROUCH: the crouched pick arm
+/// tops out ≈ feet+1.26 [M Player_Collision 0x194df0 case 3: A = pos+0.1−(cc−0.55), B =
+/// pos+0.45−cc, r 0.55; the crouch park pos−floor 0.607 [L level_reload_live.rs:215]] — under
+/// the beam band 1.49-1.76 [D] — while the standing body 1.86 [M 0x194df0 default arm] crosses.
+/// The walk now crouches every #607 crossing (the outbound hall leg, the walk-back's crossing
+/// legs, the ring's west leg), the final laser pin asserts no mask-8 out and no alert-OR out
+/// fired (gun #640 never armed), and the turret rounds themselves carry the game's Bullet_init
+/// cone (spread 4.0 [L ee_start_05.bin @0x2c55d0+0x24], the 3+1 shared-stream draws [M
+/// 0x12c5a0:166-184 + 0x180498:349]) — the dead-on port gap fixed this round.
 #[test]
-#[ignore = "probe: two ceiling-gun bursts on this route exceed 100 health (see the doc)"]
 fn walk_office_floor_qworm_keyboard_hatch_real_damage() {
     walker::with_real_damage(walk_office_floor_qworm_keyboard_hatch);
 }
+
+/// The laser band rule, pinned phase by phase on fresh loads (each phase asserts right after its
+/// crossing, before any guard reaction can land):
+/// - **Crouched passes #607** — the crouched pick arm tops out ≈ feet+1.26 [M Player_Collision
+///   0x194df0 case 3: A = pos+0.1−(cc−0.55), B = pos+0.45−cc, r 0.55; the crouch park
+///   pos−floor 0.607 [L level_reload_live.rs:215]] vs beam #607's band y 1.49-1.76 (x ≈ −8.45,
+///   z 15-20.25 [D triggers dump]): walking the west hall CROUCHED leaves ch 0x1F off (sister:
+///   off before), so OR #667 never raises ch 0x0F and ceiling gun #640 stays dormant
+///   [D the OR wiring; M Trigger_MultiplexOrIn 0x1b2d38].
+/// - **Standing raises 0x1F** — the standing body 1.86 [M 0x194df0 default arm] crosses the band:
+///   the same west-hall leg STANDING fires ch 0x1F.
+/// - **The low beams fire on either stance** — beam #621 (out 0x24, y 0.13-0.39 [D]) walked
+///   through standing and crouched fires ch 0x24 both times, live on fresh boots [L 2026-11-01];
+///   the route jumps the low lines instead (jump_over_low_beam).
+/// - **A jump clears a low line** — beam #614 walked through fires 0x22; jumped from 0.9-1.3
+///   before the line it stays silent [L 2026-11-01].
+#[test]
+fn laser_band_rule_crouch_clears_607_and_low_beams_fire_either_way() {
+    // Phase A — standing through #607's plane.
+    let mut w = Walker::new(nf_view::load(&iso(), "0700000a.bin", false).expect("load 0700000a"));
+    w.wait(150); // the SS lift doors' create sweep (the route's wait)
+    w.walk_to(Wp::new(-3.9, 0.0, 13.2), "out of the lift");
+    w.walk_to(Wp::new(-3.9, 0.0, 15.5).r(1.2), "lobby south");
+    assert!(!w.scene.sim.as_ref().unwrap().drones.channels.on(0x1f), "sister: the beam is silent before the standing crossing");
+    // The interactables laser test's exact through-crossing leg (the walk passes THROUGH the
+    // plane — the toucher's own x crosses it, not just its radius reaching it).
+    w.walk_to(Wp::new(-10.0, 0.4, 17.5).r(1.2), "through the laser wall STANDING");
+    assert!(w.scene.sim.as_ref().unwrap().drones.channels.on(0x1f),
+        "the standing body 1.86 [M 0x194df0 default arm] crosses beam #607's band 1.49-1.76 [D] → ch 0x1F");
+    drop(w);
+    // Phase B — the same plane crouched: the beam stays silent.
+    let mut w = load_carry(None);
+    w.wait(150);
+    w.walk_to(Wp::new(-3.9, 0.0, 13.2), "out of the lift");
+    w.walk_to(Wp::new(-3.9, 0.0, 15.5).r(1.2), "lobby south");
+    assert!(!w.scene.sim.as_ref().unwrap().drones.channels.on(0x1f), "sister: the beam is silent before the crouched crossing");
+    set_crouch(&mut w, true);
+    w.walk_to(Wp::new(-10.0, 0.4, 16.0).r(0.6), "the west hall crouched under #607");
+    // Stay crouched and walk clear of the beam's standing reach (the toucher's 0.55 radius [M
+    // 0x194df0 default arm] around the box reaches x −9.14 from the tri face −8.59 [D tris]):
+    // the walker's 1.2-arrive path can swing east into that zone, and a standing step there
+    // fires the beam.
+    w.walk_to(Wp::new(-12.0, 0.4, 14.5).r(1.2), "south-west, clear of beam #607's reach (crouched)");
+    {
+        let sim = w.scene.sim.as_ref().unwrap();
+        let b = &sim.bond;
+        eprintln!("[0a] crouch probe: pos {:?} cc {} crouched {} substate {} eye {} drop {}",
+            b.pos, b.cc, b.crouched, b.substate, b.eye, b.crouch_drop);
+    }
+    assert!(!w.scene.sim.as_ref().unwrap().drones.channels.on(0x1f),
+        "the crouched pick arm tops ≈ feet+1.26 [M 0x194df0 case 3], under the band 1.49-1.76 [D] → ch 0x1F off");
+    // Phase C — the low beam fires crouched: the live crouched crossing of #621's line at
+    // x −12.6 fired ch 0x24 (and 0x10) [L 2026-11-01, fresh boot: at z −32.60; the line
+    // z ≈ −33.05 there] — a crouch never passes a low line (the standing half is
+    // low_beam_621_fires_standing, a port gap).
+    low_beam_621_crossing(true);
+    // Phase D — a jump clears a low line: live on a fresh boot, jumping down the west corridor
+    // with the press 0.9 (and 1.3) before beam #614's line (z 13.03) passed it silent —
+    // airborne +0.43 over the walk height at the line — while the walk fired ch 0x22 + 0x0F
+    // [L 2026-11-01; a press 0.5 before, still +0.23 at the line, fired]. The route's
+    // jump_over_low_beam presses at 1.0. Sister (the comparison can fail): the same line walked
+    // CROUCHED fires — the crouched pick arm reaches the floor (case 3's B = pos+0.45−cc, r 0.55
+    // [M 0x194df0:228-248]), as the live crouched #621 crossing showed (phase C). The standing
+    // walk's fire is the port gap in low_beam_621_fires_standing.
+    for jump in [true, false] {
+        let mut w = load_carry(None);
+        w.wait(30);
+        {
+            let sim = w.scene.sim.as_mut().unwrap();
+            sim.bond.pos = [-22.2, 1.03, 15.8];
+            sim.bond.yaw = std::f32::consts::PI;
+        }
+        w.wait(30);
+        assert_eq!(w.scene.sim.as_ref().unwrap().drones.channels.time[0x22], 0, "sister: beam #614 silent before the crossing");
+        if jump {
+            jump_over_low_beam(&mut w, BEAM_614, [-22.2, 0.4, 11.0], 1.0, "jump beam #614 (band rule)");
+            assert_eq!(w.scene.sim.as_ref().unwrap().drones.channels.time[0x22], 0,
+                "the jump clears beam #614 [L 2026-11-01: press 0.9 before the line, silent]");
+        } else {
+            set_crouch(&mut w, true);
+            w.walk_to(Wp::new(-22.2, 0.4, 11.0).r(0.6), "walk through beam #614 crouched");
+            assert_ne!(w.scene.sim.as_ref().unwrap().drones.channels.time[0x22], 0,
+                "walking crouched through beam #614 fires ch 0x22");
+        }
+    }
+}
+
+/// Walk south through beam #621's line at x −12.6 from a fresh load, standing or crouched;
+/// asserts ch 0x24 fired (sister: silent before).
+fn low_beam_621_crossing(crouch: bool) {
+    let mut w = Walker::new(nf_view::load(&iso(), "0700000a.bin", false).expect("load 0700000a"));
+    w.wait(30);
+    {
+        let sim = w.scene.sim.as_mut().unwrap();
+        sim.bond.pos = [-12.6, 1.13, -31.2];
+        sim.bond.yaw = std::f32::consts::PI;
+    }
+    w.wait(30);
+    if crouch { set_crouch(&mut w, true); }
+    assert_eq!(w.scene.sim.as_ref().unwrap().drones.channels.time[0x24], 0, "sister: beam #621 silent before the crossing (crouch {crouch})");
+    assert_eq!(w.scene.sim.as_ref().unwrap().bond.crouched, crouch);
+    w.walk_to(Wp::new(-12.6, 0.4, -35.0).r(0.6), "south through beam #621's line");
+    assert_ne!(w.scene.sim.as_ref().unwrap().drones.channels.time[0x24], 0,
+        "the low beam #621 fires ch 0x24 on the crossing, crouch {crouch} [L 2026-11-01]");
+}
+
+/// The standing half of the low-beam rule: live, Bond walking STANDING through #621's line
+/// fired ch 0x24 + 0x10 at z −32.77 (the line z ≈ −33.05 at x −12.6) [L 2026-11-01, fresh
+/// boot] — the game's standing pick capsule reaches the floor (`Player_Collision` 0x194df0's
+/// default arm: r 0.275 round pos+0.55 and pos+0.275−cc [M :204-227]).
+#[test]
+#[ignore = "port gap: the standing trigger toucher is the measured box pos−0.05..pos+1.26 r 0.55 (drone.rs player_touchers; its reach bottoms pos−0.6 = 0.53 on 0a's floor) and misses #621's band y 0.13-0.39 [D]; the game fires it standing [L 2026-11-01]. The game-capsule reach was tried and reverted twice (the 05 truck-chain / park-plate calibrations, documented at the toucher site)"]
+fn low_beam_621_fires_standing() {
+    low_beam_621_crossing(false);
+}
+
+/// Load-only probe: every mask-8 (player) touch trigger's tri bounding box — the laser web's
+/// positions the route must crouch or dodge.
+#[test]
+fn probe_laser_web_positions() {
+    let cold = nf_view::load_with_carry(&iso(), "0700000a.bin", false, None).expect("load");
+    let sim = cold.sim.as_ref().unwrap();
+    for t in &sim.drones.triggers {
+        if t.mask & 8 == 0 || t.tris.is_empty() { continue; }
+        if t.placement == 621 || t.placement == 614 {
+            for (ti, tri) in t.tris.iter().enumerate() {
+                eprintln!("[laser{}] tri{} {:?}", t.placement, ti, tri);
+            }
+        }
+        let (mut lo, mut hi) = (t.tris[0][0], t.tris[0][0]);
+        for tri in &t.tris { for v in tri { for k in 0..3 { lo[k] = lo[k].min(v[k]); hi[k] = hi[k].max(v[k]); } } }
+        eprintln!("[laser] plc {} lock {:#04x} out {:#04x} lo ({:.2},{:.2},{:.2}) hi ({:.2},{:.2},{:.2})",
+            t.placement, t.lock, t.out, lo[0], lo[1], lo[2], hi[0], hi[1], hi[2]);
+    }
+}
+
