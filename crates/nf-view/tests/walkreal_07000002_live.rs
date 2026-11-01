@@ -56,6 +56,18 @@ fn geisha(w: &Walker, ch: u8) -> Option<usize> {
     w.scene.sim.as_ref().unwrap().drones.list.iter().position(|d| d.second_channel == ch)
 }
 
+/// The live captor the geisha at `around` is linked to, wherever it stands now: the save fires on
+/// THAT guard's death (`SetupHostageKiller` picks it once, `NDrone2_DSTATE_Hostage` 0x15cb78:24-36
+/// watches it) [M]. A captor that saw Bond and left the room is outside the 8-u sweep, and the
+/// rescue then never fires however many guards the sweep kills.
+fn hostage_captor(w: &Walker, around: [f32; 3]) -> Option<usize> {
+    let sim = w.scene.sim.as_ref().unwrap();
+    sim.drones.list.iter()
+        .filter(|h| h.pos.iter().zip(around).map(|(a, b)| (a - b).powi(2)).sum::<f32>() < 64.0)
+        .filter_map(|h| h.captor)
+        .find(|&c| sim.drones.list.get(c).is_some_and(|d| d.health > 0.0 && !d.corpse))
+}
+
 /// Kill every armed guard near `around` (the geisha's captor set) through the real fire path.
 /// The approach is real input too — NO bond.pos writes after the spawn: walk the nav web into
 /// the captor room (round 0 aims at the geisha's spot, later rounds at the guard's current pos —
@@ -67,6 +79,7 @@ fn clear_captors(w: &mut Walker, around: [f32; 3], label: &str) {
             let sim = w.scene.sim.as_ref().unwrap();
             sim.drones.list.iter().position(|d| d.team == 1 && d.health > 0.0 && !d.corpse
                 && d.pos.iter().zip(around).map(|(a, b)| (a - b).powi(2)).sum::<f32>() < 64.0)
+                .or_else(|| hostage_captor(w, around))
         };
         let Some(di) = target else { return };
         let dest = if round == 0 { around }
@@ -87,6 +100,7 @@ fn clear_captors_real(w: &mut Walker, around: [f32; 3], label: &str) {
             let sim = w.scene.sim.as_ref().unwrap();
             sim.drones.list.iter().position(|d| d.team == 1 && d.health > 0.0 && !d.corpse && d.enabled
                 && d.pos.iter().zip(around).map(|(a, b)| (a - b).powi(2)).sum::<f32>() < 64.0)
+                .or_else(|| hostage_captor(w, around))
         };
         let Some(di) = target else { return };
         // From range first: a captor Bond can already see a part of is shot from where he
@@ -646,6 +660,11 @@ fn walk_the_castle_all_objectives_real_health() {
     }
     assert!(ch_on(&w, 0x4a), "geisha 2 saved: ch 0x4A [M 0x1441c0]");
     assert!(ch_on(&w, 0x4b), "AND #303 (0x49, 0x4A) → 0x4B [D tr[001]]");
+    // The second AND reads 0x4B on its own trigger update — give the chain its ticks when the
+    // save landed on the loop's last one.
+    let mut and_ticks = 0;
+    while !ch_on(&w, 0x4c) && and_ticks < 30 { w.tick(Default::default(), false); and_ticks += 1; }
+    eprintln!("[02] 0x48 {} 0x4B {} 0x4C {} after {and_ticks} ticks", ch_on(&w, 0x48), ch_on(&w, 0x4b), ch_on(&w, 0x4c));
     assert!(ch_on(&w, 0x4c), "AND (0x48, 0x4B) → 0x4C [D tr[030]] — the disc's own chain");
     {
         let mut f1 = false;
@@ -901,6 +920,11 @@ fn walk_the_castle_all_objectives_to_the_exit() {
     }
     assert!(ch_on(&w, 0x4a), "geisha 2 saved: ch 0x4A [M 0x1441c0]");
     assert!(ch_on(&w, 0x4b), "AND #303 (0x49, 0x4A) → 0x4B [D tr[001]]");
+    // The second AND reads 0x4B on its own trigger update — give the chain its ticks when the
+    // save landed on the loop's last one.
+    let mut and_ticks = 0;
+    while !ch_on(&w, 0x4c) && and_ticks < 30 { w.tick(Default::default(), false); and_ticks += 1; }
+    eprintln!("[02] 0x48 {} 0x4B {} 0x4C {} after {and_ticks} ticks", ch_on(&w, 0x48), ch_on(&w, 0x4b), ch_on(&w, 0x4c));
     assert!(ch_on(&w, 0x4c), "AND (0x48, 0x4B) → 0x4C [D tr[030]] — the disc's own chain");
     {
         let mut f1 = false;
