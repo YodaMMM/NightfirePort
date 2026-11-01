@@ -131,14 +131,28 @@ fn ride_the_lift_burn_both_satchels_with_the_laser_watch_and_reach_the_lobby_ali
 
     // Burn it: hold the beam on the charge until the burn counter runs out [M 0x12e2f0-0x12e390,
     // 1/tick for the 0x4E]. The ride continues under the beam (the cab's key line).
+    // laser-watch-reach: the contact happens INSIDE the 0x4E record range — the eye-to-charge
+    // distance at the first contact tick stays under the 4.0 reach (+ the contact sphere) [L
+    // weapon_data 0x2bf150 + 0x4E·0x10C +0x1C = 4.0; M Bullet_update 0x12e7b0:158 the death
+    // check; M Bullet_DoTrails 0x12d890 tail — the burn consumes the round's own segment].
+    let mut first_dist: Option<f32> = None;
     let mut defused = false;
     for k in 0..900u32 {
         let Some((cpos, cfuse, burn, def)) = any_landed(&w) else { break };
         if def || burn <= 0 { defused = true; break; }
+        if first_dist.is_none() && burn < burn0 {
+            let sim = w.scene.sim.as_ref().unwrap();
+            let b = &sim.bond;
+            let eye = [b.pos[0], b.pos[1] + b.eye, b.pos[2]];
+            let d = [cpos[0] - eye[0], cpos[1] - eye[1], cpos[2] - eye[2]];
+            first_dist = Some((d[0] * d[0] + d[1] * d[1] + d[2] * d[2]).sqrt());
+        }
         if k % 60 == 0 { eprintln!("[burn] k{k} fuse{cfuse:.0} burn{burn} charge_y{:.2} bond{:?} yaw{:.2} pitch{:.2}", cpos[1], w.scene.sim.as_ref().unwrap().bond.pos, w.scene.sim.as_ref().unwrap().bond.yaw, w.scene.sim.as_ref().unwrap().bond.pitch); }
         let input = aim_input(&w, cpos);
         w.tick_fire(input);
     }
+    assert!(first_dist.map_or(true, |d| d < 4.5),
+        "the first contact happened inside the 0x4E reach [L +0x1C = 4.0 + the contact sphere], got {first_dist:?}");
     {
         let sim = w.scene.sim.as_ref().unwrap();
         assert!(defused, "the watch's beam defuses the charge (100 contact ticks [M]) — burn {:?}",
