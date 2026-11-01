@@ -1120,3 +1120,12 @@ fn the_pick_ref_accumulator_tracks_the_game_ref() {
         "the press's pushes are x-only [L 2026-10-26: y 0.08088 and z −22.77985 unchanged], got {ref_press:?}");
     assert!(pos_press[0] <= -45.0, "Bond reached the wall skin (x {:.3})", pos_press[0]);
 }
+
+/// Real damage: the same walk with the health top-up off for every walker it makes (the
+/// tests' own `top_up_health = true` included) and the walker's return fire on — Bond's death
+/// panics with the death spot and the last hits (common/damage_log.rs), so a pass pins that the
+/// walk completes on the port's own damage.
+#[test]
+fn walk_office_floor_qworm_keyboard_hatch_real_damage() {
+    walker::with_real_damage(walk_office_floor_qworm_keyboard_hatch);
+}

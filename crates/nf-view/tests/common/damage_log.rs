@@ -25,20 +25,23 @@ pub fn no_topup_env() -> bool {
 /// tests' own `top_up_health = true` included), and Bond's death panics with the death line.
 #[allow(dead_code)]
 pub fn with_real_damage<R>(f: impl FnOnce() -> R) -> R {
+    // Reset on the way out, a panic included (libtest may run the next test on this thread).
+    struct Reset;
+    impl Drop for Reset { fn drop(&mut self) { REAL_DAMAGE.with(|c| c.set(false)); } }
     REAL_DAMAGE.with(|c| c.set(true));
-    let r = f();
-    REAL_DAMAGE.with(|c| c.set(false));
-    r
+    let _reset = Reset;
+    f()
 }
 
 /// `with_real_damage` for a route whose legs were laid for an unanswered walk (a return-fire
 /// stop on a climb or ahead of a scripted rescue breaks the leg): real damage, no return fire.
 #[allow(dead_code)]
 pub fn with_real_damage_no_return_fire<R>(f: impl FnOnce() -> R) -> R {
+    struct Reset;
+    impl Drop for Reset { fn drop(&mut self) { NO_RETURN_FIRE.with(|c| c.set(false)); } }
     NO_RETURN_FIRE.with(|c| c.set(true));
-    let r = with_real_damage(f);
-    NO_RETURN_FIRE.with(|c| c.set(false));
-    r
+    let _reset = Reset;
+    with_real_damage(f)
 }
 
 #[derive(Default)]

@@ -1027,3 +1027,12 @@ fn the_exit_fade_starts_on_the_exit_tick_runs_the_games_300_frames_then_the_leve
             "start #0 (gate 0) — entry from 07000001's single exit route [D docs/levels/07000002.md], got {p:?}");
     }
 }
+
+/// Real damage: the same walk with the health top-up off for every walker it makes (the
+/// tests' own `top_up_health = true` included) and the walker's return fire on — Bond's death
+/// panics with the death spot and the last hits (common/damage_log.rs), so a pass pins that the
+/// walk completes on the port's own damage.
+#[test]
+fn walk_from_the_spawn_to_the_exit_with_the_contact_real_damage() {
+    walker::with_real_damage(walk_from_the_spawn_to_the_exit_with_the_contact);
+}

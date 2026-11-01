@@ -454,3 +454,12 @@ fn stopping_before_the_tunnel_never_ends_the_castle() {
     assert_eq!(sim.drones.level_exit, None, "the castle does not end away from the LoadPoint");
     let _ = Act::None;
 }
+
+/// Real damage: the same walk with the health top-up off for every walker it makes (the
+/// tests' own `top_up_health = true` included) and the walker's return fire on — Bond's death
+/// panics with the death spot and the last hits (common/damage_log.rs), so a pass pins that the
+/// walk completes on the port's own damage.
+#[test]
+fn walk_the_castle_interior_to_the_party_real_damage() {
+    walker::with_real_damage(walk_the_castle_interior_to_the_party);
+}

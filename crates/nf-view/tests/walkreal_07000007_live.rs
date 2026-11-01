@@ -392,3 +392,12 @@ fn the_group_plate_wakes_the_walkers_and_the_guards_stay_calm() {
     }
     assert!(!moved.is_empty(), "the ch-6 walkers walk their kind-8 routes once the plate fires [M 0x1728c0/0x172730 → 0x154190 → 0x15d860], moved {moved:?}");
 }
+
+/// Real damage: the same walk with the health top-up off for every walker it makes (the
+/// tests' own `top_up_health = true` included) and the walker's return fire on — Bond's death
+/// panics with the death spot and the last hits (common/damage_log.rs), so a pass pins that the
+/// walk completes on the port's own damage.
+#[test]
+fn walk_the_party_start_to_finish_real_damage() {
+    walker::with_real_damage(walk_the_party_start_to_finish);
+}
