@@ -5848,12 +5848,13 @@ impl Sim {
     /// for the render pass: DrawDrops passes colours = NULL, so psiDrawParticleList takes the NON-colour
     /// creator, which never reads the 0.2 [M disasm 0x18cc1c-30 mtc1 0.2/`move $t0, $zero`/jal; 0x122d50 `beqz $s4 →
     /// CreatePointerSpriteList 0x11a160`] — the flake scale there is `1/(PS2SnowSize · PS2SnowSizeMult)` [M 0x11a160:81],
-    /// PS2SnowSize level-set (28988/12378/19746 for 0x07000005/6/8 [M 0x11e2e8:32-46]) and PS2SnowMult = 448/viewport-H
-    /// [M 0x10b2b0:100-112] — a screen-space size, not the 0.2 (VU1 sprite microcode owns the final px factor; backlog
-    /// L-706). The port's 0.1-half-extent (0.2 full width) quads stand in for that screen-space rule (visual only).
+    /// PS2SnowSize level-set (28990/12826/19053 for 0x07000005/6/8 [M 0x11e2e8 cases], 10000 otherwise [D .sdata
+    /// 0x30c974]) and PS2SnowMult = 448/viewport-H [M 0x10b2b0:100-112]. The world half-extent comes from
+    /// `nf_game::env::flake_half_extent` (the emitter-sprite equivalence, full-width reading; ~0.19-0.21 on the snow
+    /// levels, checked against the 05 / 06 PS2 captures — the old fixed 0.1 drew the flakes half size).
     pub fn snow_quads(&self, right: [f32; 3], up: [f32; 3]) -> Vec<Vertex> {
         let Some(env) = self.drones.env.as_ref() else { return Vec::new() };
-        let h = 0.1;
+        let h = nf_game::env::flake_half_extent(self.level);
         let (r, u) = (right.map(|v| v * h), up.map(|v| v * h));
         let mut out = Vec::with_capacity(env.drops.len() * 6);
         for (p, &alive) in env.drops.iter().zip(&env.alive) {
@@ -8231,7 +8232,11 @@ pub fn build(level: &Level, cels_only: bool, skeletons: &HashMap<u8, Skeleton>, 
         let rains = level.maps.iter().flat_map(|m| m.placements.iter())
             .any(|p| p.flags & 0xff == 0xdf && p.params.iter().find(|(i, _)| *i == 0).is_some_and(|&(_, v)| v as u8 == 1));
         if drones.is_some() && rains {
-            for (kind, mesh) in [(7u8, 0x0200_0290u32)] {
+            // The second pass (0x02000039 `smoke_1_dust` per drop, viewer rotation) is level-gated:
+            // GameState+12 − 0x07000009 < 3 [M DrawDrops 0x18cb90] — only 09..0b carry its pool.
+            let second = drones.is_some_and(|d| matches!(d.level_id.wrapping_sub(0x0700_0009), 0..=2));
+            let passes: &[(u8, u32)] = if second { &[(7, 0x0200_0290), (8, RAIN_HAZE_MESH)] } else { &[(7, 0x0200_0290)] };
+            for &(kind, mesh) in passes {
                 let Some(&(m, o)) = level.by_hash.get(&mesh) else { continue };
                 let ident = anim::quat_trans_to_mat([0.0, 0.0, 0.0, 1.0], [0.0; 3]);
                 let rplacement = level.maps[level.main_map().unwrap_or(0)].placements.first().cloned().unwrap_or_default();
@@ -11165,6 +11170,15 @@ pub fn build(level: &Level, cels_only: bool, skeletons: &HashMap<u8, Skeleton>, 
                         // green LEDs (texture 11, solid green). The character-0 ambient ramp drew them
                         // near-black on the red display.
                         if matches!(a.effect, Some((4 | 5, _, _))) { return one(); }
+                        // The rain passes: `DrawDrops` 0x18cb90 draws through `psiDrawObjectMatrix` 0x124708
+                        // directly (no `View_SetupRenderModes_Tweak`), right after Game_Draw's
+                        // `psiSetTweakARGB(0xff, 0xff, 0xff, 0xff)` [M 0x1e6f50:148-151] — the streaks keep
+                        // the white tweak (Bond's ambient dim drew them near-black on the night levels). The
+                        // second pass sets `psiSetTweakARGB(0x24, 0x20, 0x20, 0x20)` [M 0x18cb90]: rgb ×
+                        // 0x20/255, alpha × 0x24/255. Its leaf blends Cs·As + Cd (ALPHA_1 0x48 [D 0x02000039]),
+                        // so the alpha factor folds into the rgb exactly.
+                        if matches!(a.effect, Some((7, _, _))) { return one(); }
+                        if matches!(a.effect, Some((8, _, _))) { return [RAIN_HAZE_TWEAK; 3]; }
                         // A falling leaf's tint: obj+0x100..0x102 snap to its generator's cel ambient
                         // at the link (`control_link_object_to_cel` 0x1346b8, the leaf's glist 0x800
                         // bit → `View_SetupRenderModes_Tweak` 0x1e5888's dim branch, 0xff·amb >> 8).
@@ -13328,6 +13342,11 @@ mod tests {
 
 /// rain-drops: the per-level rain-mesh slots (`InitDrops`' rain cap: 0x80 on 07000009-0b, 0x40 elsewhere).
 pub const RAIN_SLOTS: usize = 128;
+/// The rain's second-pass mesh on 07000009..0b: `smoke_1_dust` [M DrawDrops 0x18cb90 `hashtable_hashcode_to_celglist(0x2000039)`].
+pub const RAIN_HAZE_MESH: u32 = 0x0200_0039;
+/// The second pass's tweak, folded: rgb 0x20/255 × alpha 0x24/255 [M DrawDrops 0x18cb90 `psiSetTweakARGB(0x24,0x20,0x20,0x20)`,
+/// psiSetTweakARGB 0x124770 byte × 0.003921569].
+pub const RAIN_HAZE_TWEAK: f32 = (32.0 / 255.0) * (36.0 / 255.0);
 
 /// net-desync-detail: how many named components the net state hash folds
 /// (see [`Sim::net_component_hashes`]).

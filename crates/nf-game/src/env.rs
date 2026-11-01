@@ -150,6 +150,47 @@ impl Drops {
 }
 
 
+/// `PS2SnowSize` per level: `psiPreGameRun` 0x11e2e8 writes 0x46e27c00 (28990) on 07000005, 0x46486800
+/// (12826) on 07000006 and 0x4694da00 (19053) on 07000008 [M 0x11e2e8 cases]; no other level writes it,
+/// so they keep the `.sdata` boot value 10000.0 [D ACTION.ELF .sdata 0x30c974] (after a 05/06/08 visit the
+/// game would keep that level's value — the port takes the boot value, the first-load case).
+pub fn ps2_snow_size(level: u32) -> f32 {
+    match level {
+        0x0700_0005 => f32::from_bits(0x46e2_7c00),
+        0x0700_0006 => f32::from_bits(0x4648_6800),
+        0x0700_0008 => f32::from_bits(0x4694_da00),
+        _ => 10000.0,
+    }
+}
+
+/// `Ps2Far1` per level (`psiPreGameRun` 0x11e2e8; the `default` arm 4194240 [M]).
+pub fn ps2_far1(level: u32) -> f32 {
+    match level {
+        0x0700_0002 => 9_987_520.0,
+        0x0700_0004 => 9_379_776.0,
+        0x0700_0005 => 19_118_528.0,
+        0x0700_0006 => 8_059_232.0,
+        0x0700_0008 => 13_191_350.0,
+        0x0700_000c => 20_475_840.0,
+        0x0700_000d => 19_707_840.0,
+        _ => 4_194_240.0,
+    }
+}
+
+/// The world-space half-extent of a weather flake (snow / rising drops, `DrawDrops` 0x18cb90 →
+/// `psiDrawParticleList` → `CreatePointerSpriteList` 0x11a160). The sprite's VU1 scale word is
+/// `1/(PS2SnowSize·PS2SnowSizeMult)` [M 0x11a160:81]; an emitter sprite of def size `s` gets
+/// `4·s/(PS2ParticleSize·PS2SnowSizeMult)` with `PS2ParticleSize = Ps2Far1·0.002386635` [M 0x119910:81,
+/// 0x11e2e8:67], so a flake is the emitter sprite of size `Ps2Far1·0.002386635/(4·PS2SnowSize)` — the
+/// ∝ Far1 factor cancels the depth scale the same way for both. The three levels that set a size land on
+/// nearly the same world size (Far1/SnowSize = 659 / 628 / 692 on 05 / 06 / 08), which is what a size
+/// tuned against Far1 looks like. The emitter `s` is a FULL width here (half-extent `s/2`): measured on
+/// the 05 f198 and 06 f206 PS2 captures, where the near flakes are ~2× the old 0.1 stand-in (a half-
+/// extent `s` read draws them ~4×). 05 → 0.197, 06 → 0.187, 08 → 0.207, boot value (07, 14) → 0.125.
+pub fn flake_half_extent(level: u32) -> f32 {
+    ps2_far1(level) * 0.002386635 / (4.0 * ps2_snow_size(level)) * 0.5
+}
+
 /// The breath-vapor puff's mesh (`Gas_Init` arg 7 in `Env_Breath` 0x17be00: `ori $t0, $t0, 0x21d`
 /// with `lui $t0, 0x200` at 0x17bf14/0x17bfb8 [M disasm]).
 pub const BREATH_MESH: u32 = 0x0200_021d;
@@ -420,4 +461,23 @@ fn water_ripple_fires_on_the_water_materials() {
     env_water_ripple(&mut gas2, 0x0f, [0.0; 3]);
     assert!(gas2.puffs.is_empty());
 }
+}
+
+#[test]
+fn snow_size_is_the_game_table_and_the_flake_follows_it() {
+    // [M 0x11e2e8] the three level writes, as the float words the game stores.
+    assert_eq!(ps2_snow_size(0x0700_0005), 28990.0);
+    assert_eq!(ps2_snow_size(0x0700_0006), 12826.0);
+    assert_eq!(ps2_snow_size(0x0700_0008), 19053.0);
+    // [D .sdata 0x30c974] every other level keeps the boot value.
+    assert_eq!(ps2_snow_size(0x0700_0007), 10000.0);
+    assert_eq!(ps2_snow_size(0x0700_0014), 10000.0);
+    let h = |l| flake_half_extent(l);
+    assert!((h(0x0700_0005) - 0.19674).abs() < 1e-4);
+    assert!((h(0x0700_0006) - 0.18746).abs() < 1e-4);
+    assert!((h(0x0700_0008) - 0.20655).abs() < 1e-4);
+    assert!((h(0x0700_0007) - 0.12513).abs() < 1e-4, "07: Far1 4194240 default / boot size");
+    // Sister: the size really depends on the level (05 vs 06 differ; neither is the old fixed 0.1).
+    assert!((h(0x0700_0005) - h(0x0700_0006)).abs() > 0.005);
+    assert!((h(0x0700_0005) - 0.1).abs() > 0.05);
 }
