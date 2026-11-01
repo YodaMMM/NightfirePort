@@ -122,3 +122,17 @@ free; the crossing death moved from the first leg to the glass band.
 ## Usage
 
 not visible to me (no token, credit or context-window figures are shown in this environment).
+
+## ntfy failed
+
+All three fallbacks, in order, with their exact output:
+
+1. `curl -sS -m 20 -H "Title: NightfirePort" -d "level-13-chain-difficulty: …" https://ntfy.sh/nightfire-yoda-8k3x`
+   → `curl: (28) Connection timed out after 20002 milliseconds`
+2. `python3 -c "import urllib.request as u; u.urlopen(u.Request('https://ntfy.sh/nightfire-yoda-8k3x', data=b'…', headers={'Title':'NightfirePort'}), timeout=20)"`
+   → `urllib.error.URLError: <urlopen error [Errno 101] Network is unreachable>`
+3. `wget -q -O- --post-data "level-13-chain-difficulty: …" https://ntfy.sh/nightfire-yoda-8k3x`
+   → timed out after 30 s with no output (killed at the 30 s mark).
+
+The git pushes to github.com succeeded in the same window, so the sandbox had egress — ntfy.sh
+specifically was unreachable from this sandbox.
