@@ -20,3 +20,8 @@ say so in the report. Never weaken a decompile-backed test to make code pass.
 
 ---
 claimed-by: sandbox4 at 2026-11-01T20:41Z
+
+---
+## Report (done, 2026-11-01T21:52Z)
+
+Closed by the driver: the report is on `s/use-pick-two-stage-2` (docs/reports/use-pick-two-stage-2.md); the worker didn't run finish.sh.
