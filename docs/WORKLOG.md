@@ -112,3 +112,10 @@ Session 1 progress (~11:30 UTC):
   nav-level avoidance; left for the next pass with the failing dump in the report. NOT validated
   against the green walks (no suite run — sandbox reaps background jobs; chunked runner queued
   for the next window).
+- Final pass (17:37-17:39 UTC): the dodge re-acquires the nearest live presser every tick (the
+  drones list reshuffles; a pinned body index ended the dodge while the same civilian stood
+  there). The 0a hall-door leg still wedges after 6 dodge cycles — the doorway geometry needs
+  nav-level body avoidance (the next pass's item, with the report's dump). FINISH: branch pushed
+  through 1e5ab960 + this commit; report docs/reports/guard-push-every-tick-2.md written (with
+  the live checks and the ntfy-failed record); finish.sh run `blocked` (the task's red set is
+  not green and the 2-hour window closes at ~18:05 UTC).

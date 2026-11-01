@@ -59,11 +59,13 @@ Bond's intro-end position). No port code change is warranted by the evidence so 
 
 A **push-dodge arm** in `walk_to`'s stuck ladder, safe-by-default (fires only on a leg stalled
 `< 0.3 u / 60 ticks` with a live body — enabled, present, not corpse, health > 0, |dy| < 2.5 —
-within 1.5 u): a DIAGONAL dodge (strafe the away-from-body side, forward 0.45) that runs until
-the body is behind the run or 2.2 clear (1200-tick cap); a same-body re-stall flips the side —
-the away side can be the walled one (the 0a civilian's push carries Bond into the south wall; the
-room is north). strafe +1 = LEFT = (cos yaw, −sin yaw) [M Player_Update 0x193600's move rows:
-`pos[0] += c·vs + s·vf, pos[2] += −s·vs + c·vf`].
+within 1.5 u): a DIAGONAL dodge (strafe the away-from-body side, forward 0.45) that runs while
+ANY live body presses (the nearest is re-acquired every tick — the drones list reshuffles as
+spawners/delete-me fire, so a pinned index ends the dodge while the same civilian still stands
+there) until the nearest body is behind the run or 2.2 clear (1200-tick cap); a same-body
+re-stall flips the side — the away side can be the walled one (the 0a civilian's push carries
+Bond into the south wall; the room is north). strafe +1 = LEFT = (cos yaw, −sin yaw)
+[M Player_Update 0x193600's move rows: `pos[0] += c·vs + s·vf, pos[2] += −s·vs + c·vf`].
 
 **Status: implemented, not yet clearing.** The 0a hall-door civilian still holds the leg after 6
 dodge cycles (d oscillates 0.95 ↔ 1.43 — the dodge clears the pressure, the lane steers back into
@@ -75,8 +77,10 @@ No assertion was weakened anywhere; no port (nf-game/nf-view src) file was touch
 
 - Build: the four crates' test binaries compile clean (`cargo test --offline --release --no-run`,
   release, the warm target).
-- `cutscene_timer_pause_live` **0 passed / 1 failed** (~10 s, three times: baseline wedge, dodge
-  v1, dodge v2) — the failing leg's dump is the 0a hall-door civilian case above.
+- `cutscene_timer_pause_live` **0 passed / 1 failed** (~10 s, four times: baseline wedge, dodge
+  v1 (fixed ticks), v2 (pinned index), v3 (re-acquiring presser)) — the failing leg's dump is the
+  0a hall-door civilian case above; the dodge fires every cycle now (the wedge is the 6-cycle
+  panic, not the 6000-tick cap) but the doorway geometry feeds the lane back into his spot.
 - `guest_faces_live` **0 / 1** and `speech_facial_fallback_live` **1 / 2** — reproduced on the
   merged tree (guest_faces dies at `attached.expect` — the picked guest's line never attaches;
   not yet root-caused past the intro-end-position divergence).

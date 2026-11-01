@@ -1043,12 +1043,13 @@ impl Walker {
         // (the 01 stairwell head's threshold door sat on the lane, opened, auto-closed, and
         // re-hijacked the mitigation forever, so the sidestep/jump ladder never ran).
         let mut last_door: Option<usize> = None;
-        // The push-dodge micro-state: Some((body index, strafe side ±1.0)) — a DIAGONAL walk
+        // The push-dodge micro-state: Some(strafe side ±1.0) — a DIAGONAL walk
         // around a live body (lateral + forward: the body's own push supplies the backward
-        // component, the diagonal carries past it). It runs until the body no longer presses
-        // (d > 1.6 / gone / dead) or the hard cap — a fixed tick count ends BESIDE the body and
-        // the lane steers straight back into it (the 0a civilian: d oscillated 0.95→1.43→0.95).
-        let mut dodge: Option<(usize, f32)> = None;
+        // component, the diagonal carries past it). It runs while ANY live body presses
+        // (re-acquired each tick — the drones list reshuffles as spawners/delete-me fire, so a
+        // pinned index ends the dodge while the same civilian still stands there) until the
+        // body is behind the run or 2.2 clear, capped.
+        let mut dodge: Option<f32> = None;
         let mut dodge_ticks = 0u32;
         // The body the last dodge circled: the away-from-body side can be the walled side (the
         // 0a hall-door civilian: the push carries Bond into the south wall, the room is north) —
@@ -1082,27 +1083,27 @@ impl Walker {
                 let t0 = self.total_ticks;
                 if self.return_fire(label) { start_ticks += self.total_ticks - t0; continue; }
             }
-            // The active push-dodge: strafe around the body with forward held until it no longer
-            // presses (the dodge's own budget is the leg's — it IS the walk). End condition:
-            // well clear (2.2), or clear-ish (1.6) AND the body behind the run — a body still
-            // level with the lane re-traps the leg the moment steering resumes.
-            if let Some((di, side)) = dodge {
+            // The active push-dodge: strafe around the nearest live body with forward held until
+            // it no longer presses (the dodge's own budget is the leg's — it IS the walk). End
+            // condition: nothing within 1.6, or the nearest is well clear (2.2) / behind the run.
+            if let Some(side) = dodge {
                 dodge_ticks += 1;
-                let keep = dodge_ticks < 1200 && {
-                    let sim = self.scene.sim.as_ref().unwrap();
-                    let b = sim.bond.pos;
-                    sim.drones.list.get(di).is_some_and(|d| d.enabled && d.present && !d.corpse
-                        && d.health > 0.0 && (d.pos[1] - b[1]).abs() < 2.5 && {
-                        let dd = dxz(d.pos, b);
-                        if dd >= 2.2 { false }
-                        else if dd < 1.6 { true }
-                        else {
-                            let (vx, vz) = (wp.at[0] - b[0], wp.at[2] - b[2]);
-                            let (bx, bz) = (d.pos[0] - b[0], d.pos[2] - b[2]);
-                            (vx * bx + vz * bz) / ((vx * vx + vz * vz).sqrt() * dd.max(1e-3)) > 0.15
-                        }
-                    })
-                };
+                let sim = self.scene.sim.as_ref().unwrap();
+                let b = sim.bond.pos;
+                let presser = sim.drones.list.iter()
+                    .filter(|d| d.enabled && d.present && !d.corpse && d.health > 0.0
+                        && (d.pos[1] - b[1]).abs() < 2.5)
+                    .map(|d| (d.pos, dxz(d.pos, b)))
+                    .min_by(|a, c| a.1.total_cmp(&c.1));
+                let keep = dodge_ticks < 1200 && presser.is_some_and(|(dpos, dd)| {
+                    if dd >= 2.2 { false }
+                    else if dd < 1.6 { true }
+                    else {
+                        let (vx, vz) = (wp.at[0] - b[0], wp.at[2] - b[2]);
+                        let (bx, bz) = (dpos[0] - b[0], dpos[2] - b[2]);
+                        (vx * bx + vz * bz) / ((vx * vx + vz * vz).sqrt() * dd.max(1e-3)) > 0.15
+                    }
+                });
                 if !keep {
                     dodge = None;
                     dodge_ticks = 0;
@@ -1333,7 +1334,7 @@ impl Walker {
                         // carries him, which is exactly where the equilibrium sits).
                         let want_left = if last_dodge_body == Some(di) { left_dot < 0.0 } else { left_dot >= 0.0 };
                         last_dodge_body = Some(di);
-                        dodge = Some((di, if want_left { 1.0 } else { -1.0 }));
+                        dodge = Some(if want_left { 1.0 } else { -1.0 });
                         dodge_ticks = 0;
                         eprintln!("[walk] {label}: push-dodge around body {di} (d {:.2}, side {})", dxz(dpos, self.pos), if want_left { "left" } else { "right" });
                         self.note_stuck(format!("push-dodge around body {di}"));
