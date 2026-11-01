@@ -252,7 +252,7 @@ fn monitor_console_shows_the_camera_view_and_e_walks_forward_then_exits() {
 fn cooldown_counts_one_state_per_tick() {
     use nf_game::monitor::{Monitor, Monitors};
     let mut m = Monitors { list: vec![Monitor { placement: 0, pos: [0.0; 3], group: 1, health: 0.0, state: 9, watched: None }] };
-    let mut sensors = nf_game::sensor::Sensors { list: Vec::new() };
+    let mut sensors = nf_game::sensor::Sensors { list: Vec::new(), heard: Default::default() };
     let mut ch = nf_game::triggers::Channels::default();
     let mut seen = Vec::new();
     for f in 0..8 { m.tick(&mut sensors, &mut ch, f); seen.push(m.list[0].state); }
