@@ -2181,6 +2181,31 @@ impl Scripts {
         });
     }
 
+    /// A run-time `Script_Load` + `Script_Play(_, 1)` + `Script_Update` (the creator-owned script
+    /// pair of `GT_Create` 0x17ffa0:100-116, for a turret created after the level load — the
+    /// deployed Ronin): the player is pushed and its create-time load beat (`prime`) runs at once,
+    /// as the placed turrets' did at the first tick. Returns the player index.
+    pub fn spawn_primed(&mut self, mut p: Player, ch: &mut Channels, w: &dyn World, frame: u32) -> usize {
+        let mut out = std::mem::take(&mut self.requests);
+        p.prime(&self.lib, &mut self.objects, ch, w, frame, &mut out);
+        self.requests = out;
+        self.players.push(p);
+        self.players.len() - 1
+    }
+
+    /// `Script_SetPosRot(info, m)` [M 0x180498 cases 2/4/7]: player `i`'s base matrix and its
+    /// playing script's — the stream entities pose relative to it (the copter precedent).
+    pub fn pose_player(&mut self, i: usize, matrix: Mat4) {
+        let Some(p) = self.players.get_mut(i) else { return };
+        p.matrix = matrix;
+        if let Some(s) = p.info[p.cur].as_mut() { s.matrix = matrix; }
+    }
+
+    /// `GT_Delete` 0x181678's `Script_Free` pair: player `i` goes to the delete state.
+    pub fn delete_player(&mut self, i: usize) {
+        if let Some(p) = self.players.get_mut(i) { p.state = 5; }
+    }
+
     /// `Copter_Update`'s head unhide [M 0x17dbb8: `SP_HideObj(*(copter+0x2c), 0)` on the gate's
     /// first ON tick, then `copter+0x70 = 0`]: the copter `placement`'s SP plays from its primed
     /// pose (the prime ran at create — docs/systems/copter-sp-hide.md).

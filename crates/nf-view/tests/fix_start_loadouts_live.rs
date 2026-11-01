@@ -126,6 +126,61 @@ fn the_07000015_warm_start_carries_the_14_inventory() {
     assert_eq!(inv.clip[0x11], clip_11, "the crossbow's clip rides the RamSave [M 0x195670:7]");
 }
 
+/// A cold 07000016 is a cold 15: `Player_RamLoad` does nothing, the P2K is unowned, the fresh 14
+/// kit re-runs and the Delta Repeater is drawn [M 0x1a7ef8 case 0x7000016 → caseD_7000014]. 16's
+/// archive holds the Grapple's fp skin (it lands) but not the Stunner's or the decryptor's (both
+/// equips refuse) [M 0x1a8a58:20; D the loaded skins].
+#[test]
+fn the_07000016_cold_start_falls_back_to_the_14_kit() {
+    let Some(iso) = iso() else { eprintln!("NF_ISO not set — skipping"); return };
+    let sc = load(&iso, "07000016.bin");
+    let sim = sc.sim.as_ref().unwrap();
+    let wd = &sim.weapons;
+    let inv = &sim.drones.inventory;
+    assert_eq!(sim.gun.switch_request, 0x11, "the cold 16 draws the Delta Repeater [M caseD_7000014 writes 0x11]");
+    assert_eq!(owned_set(inv), vec![1, 2, 0x11, 0x34, 0x37, 0x4e, 0x50, 0x54], "the cold 16 kit [M case 0x7000014 equips; 0x1a8a58:20]");
+    for (id, have) in [(0x50usize, true), (0x4a, false), (0x56, false)] {
+        assert_eq!(sim.skins.contains_key(&wd.first_person(id)), have, "sister: {id:#x}'s fp skin presence on 16 decides its equip [D]");
+    }
+    assert_eq!(inv.clip[2], wd.clip_size(2) as i16, "P2K clip 7");
+    assert_eq!(inv.carried[1], 48 - wd.clip_size(2) as i16, "P2K spare 41");
+    assert_eq!(inv.clip[0x11], wd.clip_size(0x11) as i16, "crossbow clip 3");
+    assert_eq!(inv.carried[15], 12 - wd.clip_size(0x11) as i16, "crossbow spare 9");
+}
+
+/// The chain into 16: the 14 kit carried warm through 15 and handed to 16 by 15's exit save
+/// (`warm_exit_save` = `Player_RamSave` 0x195670). Case 0x7000016 keeps the carry and re-selects
+/// the saved weapon [M 0x1a7ef8:302-307]; `Player_CheckWeaponsLoaded` drops the decryptor, whose
+/// skin 16 lacks [M 0x1a97c8]. The Grapple was dropped on 15 already. Sister: the old walk
+/// harness's carry (the 07000005 start inventory with a saved weapon byte of 0) keeps the P2K but
+/// the tail turns the unowned request 0 into the fists [M 0x1a7ef8:321-324], which is how the
+/// walks reached the chaser fight with only the fists.
+#[test]
+fn the_07000016_warm_start_carries_the_15_inventory() {
+    let Some(iso) = iso() else { eprintln!("NF_ISO not set — skipping"); return };
+    let save14 = nf_view::warm_exit_save(load(&iso, "07000014.bin").sim.as_ref().unwrap());
+    let save15 = {
+        let sc15 = nf_view::load_with_carry(&iso, "07000015.bin", false, Some(&save14)).unwrap();
+        let sim = sc15.sim.as_ref().unwrap();
+        assert_eq!(owned_set(&sim.drones.inventory), vec![1, 2, 0x11, 0x34, 0x37, 0x4e, 0x54, 0x56], "15's carried set");
+        nf_view::warm_exit_save(sim)
+    };
+    assert_eq!(save15.weapon, 0x11, "15's exit saves the held Delta Repeater [M 0x195670:18-19]");
+    let sc16 = nf_view::load_with_carry(&iso, "07000016.bin", false, Some(&save15)).unwrap();
+    let sim = sc16.sim.as_ref().unwrap();
+    let inv = &sim.drones.inventory;
+    assert_eq!(sim.gun.switch_request, 0x11, "16 re-selects the saved weapon [M 0x1a7ef8:306]");
+    assert_eq!(owned_set(inv), vec![1, 2, 0x11, 0x34, 0x37, 0x4e, 0x54], "16 keeps 15's set minus the decryptor [M 0x1a97c8]");
+    assert_eq!(inv.clip[0x11], save15.clip[0x11], "the crossbow's clip rides the save");
+    assert_eq!(inv.carried[1], save15.carried[1], "the P2K's spare rides the save");
+
+    let old = RamSave::capture(&Default::default(), 0, &nf_game::pickup::Inventory::level_start(0x73, 34), &Default::default());
+    let sc_old = nf_view::load_with_carry(&iso, "07000016.bin", false, Some(&old)).unwrap();
+    let sim = sc_old.sim.as_ref().unwrap();
+    assert!(sim.drones.inventory.owned[2], "sister: the old harness carry still owns the P2K (the RamLoad gate keeps it)");
+    assert_eq!(sim.gun.switch_request, 1, "sister: a saved weapon byte of 0 becomes the fists [M 0x1a7ef8:321-324]");
+}
+
 /// 07000005 pins the measured set (the case the port already had): P2K 48, Stunner 999, Grapple 0,
 /// Micro-Camera 0 + the 0x4e/fists tail; request = 2. [L ee_start_05 owned = {1, 2, 0x4A, 0x4E, 0x50,
 /// 0x54}, clip[2] = 7, carried[1] = 41; M 0x1a7ef8 case 0x7000005.]

@@ -243,6 +243,45 @@ impl Mission {
         }
     }
 
+    /// The campaign-arrival shape of the earlier parts' records for a load that carries no mission
+    /// snapshot into a LATER part (part > 0) — the port's direct level load (`nf-view <iso>
+    /// <level>`, the dev level list, headless `--shot`). Runs right after [`Mission::init`].
+    ///
+    /// Why: the game's records live in ACTION.ELF `.data` and survive every in-boot load
+    /// ([M] `Mission_Init` 0x182270 never writes a prior part's record — its mode-1/4 arms only
+    /// read the count, 0x182270:92-95/120-121). A player reaches part N only through part N-1 in
+    /// the same boot (the mission select starts part 0 — `CAMPAIGN` +0x0c; the fail/pause
+    /// Restart reloads BaseMap [M C_GCPAUSE_Handler 0x204408:139]; the driving return resumes at
+    /// the 0x07000048 hub [M Boot_LoadPTPData 0x1c8560 tail]), so every earlier record the player
+    /// can arrive with has already been announced. [L] The 10-17 PCSX2 start sweep shows exactly
+    /// that: its goto_level loads ran 05 → 08 and later 06 → 07 in one boot, and 06/07/08 opened
+    /// without 05's 0x04000000 (07: only its own 0x04000002 "Rendezvous with undercover
+    /// agents…"; 08 after 05: 06's 0x04000001, whose record 05's init had left at 1 and whose
+    /// enable ch 0x46 is on there) — while a load whose mission had
+    /// not been touched in that boot (0b after 08) announced the earlier parts' records through the
+    /// monitor's case 0 [M 0x1827d8:41-54]. The port's no-carry load used to start every record on
+    /// the disc's pristine state 0 [D], so case 0 re-announced "Breach the castle walls" ahead of
+    /// 06/07/08's own objective — a shape no player can reach.
+    ///
+    /// The shape: the immediately previous part's records sit announced (3; a fail-objective at 2)
+    /// — their condition can land on this level's arrival, as the 06 arrival plate's ch 0x46 folds
+    /// 05's record [D 07000006 OR #498] and the 0b spawn plate's ch 0x4b folds 0a's balcony record
+    /// [D 0700000b #176], so the fold's OBJECTIVE COMPLETE plays as on the real hand-off; parts
+    /// further back sit complete (4; a fail-objective stays armed at 2 — it is watched for the
+    /// whole mission). No notice is queued for any of them. `NF_PRISTINE_MISSION=1` skips this and
+    /// keeps the disc's state-0 records (a fresh-boot goto_level comparison).
+    pub fn seed_campaign_arrival(&mut self) {
+        if self.base_map == u32::MAX || self.order == 0 || self.order == u32::MAX { return; }
+        if std::env::var_os("NF_PRISTINE_MISSION").is_some_and(|v| v == "1") { return; }
+        for (i, l) in LEVELS.iter().enumerate() {
+            if l.mission != self.base_map || l.part >= self.order { continue; }
+            let previous = l.part + 1 == self.order;
+            for (j, o) in l.objectives.iter().enumerate() {
+                self.states[i][j] = if o.flags & 2 != 0 { 2 } else if previous { 3 } else { 4 };
+            }
+        }
+    }
+
     /// `Mission_NumVisObjectives` (0x182540): how many rows the pause OBJECTIVES tab lists — the
     /// mission's ANNOUNCED objectives (state > 1; the game's signed `< 0` arm covers no shipped
     /// state), in LEVELS table order, prior parts included, future parts excluded.

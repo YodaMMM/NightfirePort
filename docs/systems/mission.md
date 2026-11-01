@@ -143,6 +143,15 @@ straight-line stand-ins).
   channels 0x60/0x61 hooks are, and `mission_fail_reason` mirrors 0x13e560's label/channel switch.
 - A cold load of a mid-mission level leaves previous parts' objectives at their `.data` states (the
   game's saves carry them via LS_MakeMission — `MissionSave` is the port's hook for the progress layer, docs/systems/progress.md).
+  On a load that carries NO mission snapshot into a later part (the port's direct level load — the
+  game itself has no such path: mission select starts part 0, Restart reloads BaseMap, the driving
+  return resumes at the 0x07000048 hub), `Mission::seed_campaign_arrival` puts the previous part's
+  records at announced (3; fail-objectives 2) and older parts at complete (4; fail-objectives 2),
+  silently, so case 0 [M 0x1827d8:41-54] does not re-announce them ("Breach the castle walls" on
+  06/07/08). [L] The 10-17 PCSX2 start sweep's in-boot goto_level loads (05 → 08, then 06 → 07)
+  opened 06/07/08 without 05's text; only a mission untouched in that boot (0b) announced its
+  earlier parts. `NF_PRISTINE_MISSION=1` keeps the disc's state-0 records for fresh-boot comparisons.
+  Pinned by `crates/nf-view/tests/objective_opening_live.rs`.
 - Ch-0 conditions read the raw `switch_channels[0]` (the game has no zero guard [M 0x1827d8:33-37]);
   the port's `Channels::set` refuses 0, so an out-0 trigger cannot set it.
 

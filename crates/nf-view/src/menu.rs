@@ -11069,12 +11069,14 @@ fn hint_row(h: &mut Hud, font: &nf_formats::hud::Font, text: &str, x640: f32, y6
 /// The port's keyboard + mouse bindings as the pause CONTROLS tab lists them: (key, the game's action label — 0 for a
 /// port-only action, the fallback text). Keep in step with the key handling in lib.rs (`KeyCode::*` reads and the
 /// mouse buttons) — W/S/A/D move, the mouse looks, left button fires, right button zooms, Space jumps, C/Ctrl
-/// crouch, R reloads, E acts, B toggles the alt-fire mode, Q/the wheel cycle weapons, G cycles gadgets, Esc pauses.
-pub const PC_CONTROLS: [(&str, u32, &str); 13] = [
+/// crouch, R reloads, E acts, B toggles the alt-fire mode, Q/the wheel cycle weapons, G cycles gadgets, V switches the
+/// goggles' vision mode (the pad's action 13), Esc pauses. 14 rows fill the tab's two 7-row columns.
+pub const PC_CONTROLS: [(&str, u32, &str); 14] = [
     ("W A S D", 0x100_01ad, "Move/Strafe"), ("Mouse", 0x100_01b9, "Look/Turn"), ("L Click", 0x100_01a2, "Fire"),
     ("R Click", 0, "Aim / Zoom"), ("Space", 0x100_01a4, "Jump"), ("C", 0x100_019c, "Crouch"), ("R", 0, "Reload"),
     ("E", 0, "Action"), ("B", 0x100_01a3, "Alt. Fire"), ("Wheel / Q", 0, "Cycle Weapon"),
-    ("G", 0x100_019f, "Cycle Gadget"), ("1 2 3", 0, "Select Weapon"), ("Esc", 0x100_01aa, "Pause"),
+    ("G", 0x100_019f, "Cycle Gadget"), ("V", 0x100_01b3, "Vision Mode"), ("1 2 3", 0, "Select Weapon"),
+    ("Esc", 0x100_01aa, "Pause"),
 ];
 
 /// The driving missions' keyboard + mouse bindings, the driving counterpart of `PC_CONTROLS`:

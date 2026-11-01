@@ -27,11 +27,59 @@ use walker::Walker;
 
 fn iso() -> String { std::env::var("NF_ISO").expect("NF_ISO") }
 
+/// The save the game hands 16 at the end of the chain: 07000014's start kit [M 0x1a7ef8 case
+/// 0x7000014] carried warm into 07000015 [M case 0x7000015: `Player_RamLoad`, the saved weapon
+/// re-selected, `Player_CheckWeaponsLoaded` 0x1a97c8 sweeping the skins 15 lacks] and captured by
+/// 15's exit (`warm_exit_save` = Trigger_Activate's `Player_RamSave` 0x195670 [M 0x1b2318:97-116]).
+/// Built once per test process.
+fn chain_save(iso: &str) -> RamSave {
+    static SAVE: std::sync::OnceLock<RamSave> = std::sync::OnceLock::new();
+    SAVE.get_or_init(|| {
+        let s14 = nf_view::warm_exit_save(nf_view::load(iso, "07000014.bin", false).unwrap().sim.as_ref().unwrap());
+        let s15 = nf_view::warm_exit_save(nf_view::load_with_carry(iso, "07000015.bin", false, Some(&s14)).unwrap().sim.as_ref().unwrap());
+        s15
+    }).clone()
+}
+
 fn carry(on: &[u32]) -> RamSave {
     let mut ch = nf_game::triggers::Channels::default();
     for &c in on { ch.set(c, 1, 0); }
-    // A fresh Bond with only the carried gates: the save Trigger_Activate would make [M 0x1b2318:97-116].
-    RamSave::capture(&Default::default(), 0, &nf_game::pickup::Inventory::level_start(0x73, 34), &ch)
+    // Bond's player state from the real chain (health, armour, weapons, held weapon), with only the
+    // carried gates as channels: the save Trigger_Activate would make [M 0x1b2318:97-116]. This used
+    // to be the 07000005 start inventory with a saved weapon byte of 0 — `Player_InitWeapon`'s tail
+    // turns an unowned request into the fists [M 0x1a7ef8:321-324], so every walk reached the
+    // chaser holding the fists, which no chain into 16 produces.
+    let mut s = chain_save(&iso());
+    s.channels = ch.v.clone();
+    s.ch_time = ch.time.clone();
+    s.mission = None;
+    s.tally = None;
+    s
+}
+
+/// The weapons the 15 → 16 chain lands on 16 [M 0x1a7ef8 case 0x7000016 → RamLoad keeps the
+/// carry; 0x1a97c8 drops the skins 16 lacks]: the fists, the P2K, the Delta Repeater 0x11, the
+/// frag 0x34, the mine 0x37, the laser 0x4e and the camera 0x54. The Grapple 0x50 was already
+/// swept on 15 (its skin is not in 15's archive), the decryptor 0x56 is swept here.
+const CHAIN_OWNED: [usize; 7] = [1, 2, 0x11, 0x34, 0x37, 0x4e, 0x54];
+/// A cold load of 16 runs the fresh 14 kit [M 0x1a7ef8 case 0x7000016: the P2K is unowned on a cold
+/// load (`Player_RamLoad` is skipped, 0x1957a8:9) → `switchD_001a8284_caseD_7000014`]. 16's archive
+/// holds the Grapple's skin, so its equip lands; the Stunner 0x4a and the decryptor 0x56 refuse
+/// [M 0x1a8a58:20]. The only difference from the chain is the Grapple, and the game has it too.
+const COLD_OWNED: [usize; 8] = [1, 2, 0x11, 0x34, 0x37, 0x4e, 0x50, 0x54];
+
+fn owned(sim: &nf_view::scene::Sim) -> Vec<usize> {
+    let inv = &sim.drones.inventory;
+    (0..inv.owned.len()).filter(|&w| inv.owned[w]).collect()
+}
+
+/// Bond's weapons where the chaser fight starts: what he owns and what is in his hand.
+fn assert_armed_for_the_chaser(sim: &nf_view::scene::Sim, want: &[usize], ctx: &str) {
+    assert_eq!(owned(sim), want, "{ctx}: Bond's weapons at the chaser fight");
+    assert_eq!(sim.gun.weapon, 0x11, "{ctx}: the Delta Repeater is in Bond's hand at the chaser fight (the request 0x11 drawn) [M 0x1a7ef8]");
+    assert!(sim.gun.clip + sim.gun.spare > 0, "{ctx}: the weapon in hand has bolts (clip {} spare {})", sim.gun.clip, sim.gun.spare);
+    let inv = &sim.drones.inventory;
+    assert!(inv.clip[2] + inv.carried[1] > 0, "{ctx}: the P2K has rounds (clip {} spare {})", inv.clip[2], inv.carried[1]);
 }
 
 /// The landed door[7] fix, focused: the door opens on Bond's pitched E from the corridor and he
@@ -489,6 +537,52 @@ fn press_use_until(w: &mut Walker, at: [f32; 3], max: u32, done: impl Fn(&nf_vie
 fn walk_the_chasers_defeat_completes_the_mission() {
     let iso = iso();
     let mut w = Walker::new(nf_view::load_with_carry(&iso, "07000016.bin", false, Some(&carry(&[0x47, 0x48, 0x4a, 0x54, 0xce, 0x4b]))).unwrap());
+    let (chaser, t0) = walk_to_the_chaser_fight(&mut w);
+    assert_armed_for_the_chaser(w.scene.sim.as_ref().unwrap(), &CHAIN_OWNED, "the 15 → 16 chain");
+    assert!(w.shoot(chaser, "the chaser"), "the chaser dies to Bond's fire");
+    finish_after_the_chaser(&mut w, t0);
+}
+
+/// Bond's weapons at the chaser fight after the real 15 → 16 hand-off: 16 loads with 15's exit
+/// save and `Player_InitWeapon` case 0x7000016 keeps the carry and re-selects the saved weapon
+/// [M 0x1a7ef8:302-307; 0x1957a8]. Before the harness carried the chain's save, the walks reached
+/// her with the fists in hand. Sister: the arrival holds the same set, so nothing on the way (the
+/// pack cinema's Player_Disable 0x195f70 / Player_Enable 0x195498 touch no weapon state [M]) takes
+/// a weapon away.
+#[test]
+fn bond_is_armed_at_the_chaser_fight_after_the_15_handoff() {
+    let iso = iso();
+    let save = carry(&[0x47, 0x48, 0x4a, 0x54, 0xce, 0x4b]);
+    assert_eq!(save.weapon, 0x11, "15's exit saves the Delta Repeater as the held weapon [M 0x195670:18-19]");
+    let mut w = Walker::new(nf_view::load_with_carry(&iso, "07000016.bin", false, Some(&save)).unwrap());
+    w.wait_enabled(3000, "the launch-centre arrival");
+    w.wait(60);
+    assert_armed_for_the_chaser(w.scene.sim.as_ref().unwrap(), &CHAIN_OWNED, "the 15 → 16 arrival");
+    walk_to_the_chaser_fight(&mut w);
+    assert_armed_for_the_chaser(w.scene.sim.as_ref().unwrap(), &CHAIN_OWNED, "the 15 → 16 chain");
+}
+
+/// The same pin on a direct (cold) load of 16: the fresh 14 kit [M 0x1a7ef8 case 0x7000016 →
+/// caseD_7000014], the Delta Repeater in hand. Sister of the hand-off test: the two sets differ
+/// only by the Grapple 0x50, which 15's skin sweep removes on the chain [M 0x1a97c8] and 16's
+/// own archive keeps on a cold load.
+#[test]
+fn bond_is_armed_at_the_chaser_fight_on_a_direct_load() {
+    let iso = iso();
+    let mut w = Walker::new(nf_view::load(&iso, "07000016.bin", false).unwrap());
+    w.wait_enabled(3000, "the launch-centre arrival");
+    w.wait(60);
+    assert_armed_for_the_chaser(w.scene.sim.as_ref().unwrap(), &COLD_OWNED, "the cold 16 arrival");
+    walk_to_the_chaser_fight(&mut w);
+    assert_armed_for_the_chaser(w.scene.sim.as_ref().unwrap(), &COLD_OWNED, "the cold 16 load");
+    let diff: Vec<usize> = COLD_OWNED.iter().copied().filter(|w| !CHAIN_OWNED.contains(w)).collect();
+    assert_eq!(diff, vec![0x50], "the two paths differ only by the Grapple, as in the game [M 0x1a97c8]");
+}
+
+/// From the arrival to the chaser fight: the approach, the pack cinema (played out), pulse 1 in
+/// the shelter, the chaser's spawn and the door reopening. Returns the chaser's index and the
+/// hand-back tick.
+fn walk_to_the_chaser_fight(w: &mut Walker) -> (usize, u32) {
     w.wait_enabled(3000, "the launch-centre arrival");
     w.wait(100);
     w.walk_route(APPROACH);
@@ -496,7 +590,7 @@ fn walk_the_chasers_defeat_completes_the_mission() {
     // The launch chain plays out (no skip): ch 0x81 → the pack cinema → the hand-back on the pit
     // floor [D stream-8 key].
     w.skip_cutscenes = false;
-    tick_until(&mut w, 3000, "the pack cinema's hand-back on the pit floor", |s| s.drones.channels.on(0x81) && !s.disabled && s.bond.pos[1] < -20.0);
+    tick_until(w, 3000, "the pack cinema's hand-back on the pit floor", |s| s.drones.channels.on(0x81) && !s.disabled && s.bond.pos[1] < -20.0);
     let t0 = w.total_ticks;
     eprintln!("[finale] hand-back at {:?}", w.scene.sim.as_ref().unwrap().bond.pos);
     w.skip_cutscenes = true;
@@ -505,18 +599,26 @@ fn walk_the_chasers_defeat_completes_the_mission() {
     eprintln!("[finale] in the shelter +{inside_at}");
     assert!(inside_at < 1000, "Bond is in the room before its door starts to shut (+{inside_at}, the leaves move 1000..1350 [D])");
     // Pulse 1.
-    let n1 = sit_out_pulse(&mut w, "pulse 1 in the shelter");
+    let n1 = sit_out_pulse(w, "pulse 1 in the shelter");
     assert!((555..=562).contains(&n1), "pulse 1 is 1611..2170 = 559 ticks [D stream 6], got {n1}");
     assert!(w.scene.sim.as_ref().unwrap().drones.mission.status() != 3, "no fail");
     // The chaser: ch 240 @2180 spawns her; the door reopens 2230..2580.
     let chaser = {
-        tick_until(&mut w, 2000, "the chaser spawns", |s| s.drones.list.iter().any(|d| d.present && !d.corpse && d.skin & 0xffff == 0x1e && d.dtype == 0xf && !matches!(d.death_channel, 23..=26)));
+        tick_until(w, 2000, "the chaser spawns", |s| s.drones.list.iter().any(|d| d.present && !d.corpse && d.skin & 0xffff == 0x1e && d.dtype == 0xf && !matches!(d.death_channel, 23..=26)));
         let sim = w.scene.sim.as_ref().unwrap();
         sim.drones.list.iter().position(|d| d.present && !d.corpse && d.skin & 0xffff == 0x1e && d.dtype == 0xf && !matches!(d.death_channel, 23..=26)).unwrap()
     };
     while w.total_ticks - t0 < 2600 { w.tick(Input::default(), false); }
-    eprintln!("[finale] the chaser #{chaser} at {:?}, +{}", w.scene.sim.as_ref().unwrap().drones.list[chaser].pos, w.total_ticks - t0);
-    assert!(w.shoot(chaser, "the chaser"), "the chaser dies to Bond's fire");
+    {
+        let sim = w.scene.sim.as_ref().unwrap();
+        eprintln!("[finale] the chaser #{chaser} at {:?}, +{}; Bond holds {:#x} (clip {} spare {}), owns {:x?}",
+            sim.drones.list[chaser].pos, w.total_ticks - t0, sim.gun.weapon, sim.gun.clip, sim.gun.spare, owned(sim));
+    }
+    (chaser, t0)
+}
+
+/// After the chaser's death: pulse 2, the pit squad, the lift-out cinema, the button.
+fn finish_after_the_chaser(w: &mut Walker, t0: u32) {
     for _ in 0..100 { w.tick(Input::default(), false); }
     {
         let sim = w.scene.sim.as_ref().unwrap();
@@ -530,11 +632,11 @@ fn walk_the_chasers_defeat_completes_the_mission() {
     let back_at = w.total_ticks - t0;
     eprintln!("[finale] back in the shelter +{back_at}");
     assert!(back_at < 6310, "back in the room before its door shuts for pulse 2 (+{back_at})");
-    let n2 = sit_out_pulse(&mut w, "pulse 2 in the shelter");
+    let n2 = sit_out_pulse(w, "pulse 2 in the shelter");
     assert!((506..=513).contains(&n2), "pulse 2 is 6810..7320 = 510 ticks [D stream 9], got {n2}");
     eprintln!("[finale] pulse 2 over +{}", w.total_ticks - t0);
     // The pit squad (group 7, ch 242 @7332): all four must fall for ch 0xbf.
-    tick_until(&mut w, 600, "the pit squad spawns", |s| s.drones.list.iter().any(|d| d.present && !d.corpse && matches!(d.death_channel, 23..=26)));
+    tick_until(w, 600, "the pit squad spawns", |s| s.drones.list.iter().any(|d| d.present && !d.corpse && matches!(d.death_channel, 23..=26)));
     for _ in 0..4 {
         let next = {
             let sim = w.scene.sim.as_ref().unwrap();
@@ -548,12 +650,12 @@ fn walk_the_chasers_defeat_completes_the_mission() {
         eprintln!("[finale] squad #{i} (death ch {:#x}) at {:?}", w.scene.sim.as_ref().unwrap().drones.list[i].death_channel, w.scene.sim.as_ref().unwrap().drones.list[i].pos);
         assert!(w.shoot(i, "the pit squad"), "the pit squad member #{i} dies to Bond's fire");
     }
-    tick_until(&mut w, 600, "the pit squad's deaths raise ch 0xbf [D mux #611]", |s| s.drones.channels.on(0xbf));
+    tick_until(w, 600, "the pit squad's deaths raise ch 0xbf [D mux #611]", |s| s.drones.channels.on(0xbf));
     eprintln!("[finale] ch 0xbf +{}", w.total_ticks - t0);
     // ch 0xc0 @7808 → ch 0x82 → 0x06000632 plays out (no skip) and hands Bond back at the bay.
     w.skip_cutscenes = false;
-    tick_until(&mut w, 3000, "ch 0x82 starts the lift-out cinema [D mux #633]", |s| s.drones.channels.on(0x82) && s.disabled);
-    tick_until(&mut w, 1500, "the lift-out cinema hands Bond back", |s| !s.disabled);
+    tick_until(w, 3000, "ch 0x82 starts the lift-out cinema [D mux #633]", |s| s.drones.channels.on(0x82) && s.disabled);
+    tick_until(w, 1500, "the lift-out cinema hands Bond back", |s| !s.disabled);
     w.skip_cutscenes = true;
     {
         let sim = w.scene.sim.as_ref().unwrap();
@@ -565,9 +667,9 @@ fn walk_the_chasers_defeat_completes_the_mission() {
     }
     // The button (the kiko_button_real_walk lane from the bay to the button's side).
     w.walk_to(walker::Wp::new(6.3, 1.0, -155.45).r(0.6), "the button's side");
-    assert!(press_use_until(&mut w, [7.02, 1.46, -155.61], 240, |s| s.drones.channels.on(0x90)),
+    assert!(press_use_until(w, [7.02, 1.46, -155.61], 240, |s| s.drones.channels.on(0x90)),
         "Bond's E on the KikoDeathButton fires ch 0x90 [D #693 p0; M Switch_Activate 0x1b02a8]");
-    tick_until(&mut w, 900, "the mission completes", |s| s.drones.mission.status() == 6);
+    tick_until(w, 900, "the mission completes", |s| s.drones.mission.status() == 6);
     let sim = w.scene.sim.as_ref().unwrap();
     assert!(sim.drones.channels.on(100), "mux #618 (out 0x64 ← 0x90) fires ch 100 [D #618]");
     assert_eq!(sim.drones.mission.to_end, 0x0730_0017, "the driving hand-off [M 0x182c60:111-112]");
