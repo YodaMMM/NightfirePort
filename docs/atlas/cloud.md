@@ -35,9 +35,18 @@ renderer's screen-fade overlay is the listed follow-up. On 07000014/07000015 (le
 `Env_Tree_Create` (0x17c200): class 0x3f, `AnimObjectNew` + `AnimScriptAdd(model = param 1; the
 0x600008c placement 50-50 swaps to 0x600008d via `Rand_Random` [M 0x17c200:20-26])`, a random sway
 phase `Rand_FRand(anim+0xb0)` → anim+0x90 (the shared stream — un-consumed [S]), flags −0x20 +0x80
-(kind-0 lights). `Env_Tree_Update` 0x17c328 = `AnimObjectUpdate` unless ScriptCam. The port draws
-the trees in bind pose already (the character skin path, levels.rs `character_instances` — the
-placement's param 0 skin hash); the sway anim (a per-bone rotation loop) is the follow-up.
+(kind-0 lights). `Env_Tree_Update` 0x17c328 = `AnimObjectUpdate` unless ScriptCam.
+
+**Draw (missing-scenery, 2026-10-31).** The tree skin 0x05000003 has no skinned main mesh, only six
+rigid parts (skin+8 list, bones 0..5: tree_base1, tree_base2, tree_top, tree_branch1..3 [D 07000004 /
+07000002]). `character_instances` builds from main meshes only, so before this fix the trees drew
+nothing on every level. The game: `AnimObjectNew` 0x1be910 creates one `Control_CreateObjEx` object
+per rigid part (class 0x3d, obj+0xF0 `& ~0x20 | 0x8000`) [M :143-170], and `AnimObjectUpdate`
+0x1befd8 copies the bone world matrix (anim+0xb8 + bone·0x40) into each part's obj+0x90 [M :300-317].
+The port (`Scene::tree_chars`): one Character per 0xF3 placement with the parts attached to their
+bones, posed by the sway script at its paused start phase (`TreeFx::phase_unit` × script length —
+the phase draw itself is the shared stream, counter-hashed here [S]); 0x7000043 plays it unpaused.
+Pinned by `missing_scenery_live::the_04_courtyard_tree_draws`.
 
 ## MoviePlayer (0xf4) — a trigger, not a screen
 
