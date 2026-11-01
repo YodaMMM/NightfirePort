@@ -259,6 +259,12 @@ pub struct GTurret {
     /// ext+0xd4/d8: the barrel spin angle and velocity [M 00180498 case 4/7].
     pub spin: f32,
     pub spin_vel: f32,
+    /// The angle this tick's spin block rotated registered[1] (the barrel) by — `RotMatrixZ(wrapped
+    /// ext+0xD4)` concatenated onto the barrel's script pose, obj+0x90 = RotZ · pose [M 00180498:365-382,
+    /// 538-556; L PCSX2 audits/render-1101-roninview: barrel row0 (−0.921, −0.388) = RotZ(−2.741) of the
+    /// script-A pose, ext+0xD4 −2.741]. None on a tick the block did not run: the barrel shows its
+    /// script pose (the angle is absolute, re-applied every tick, not accumulated in the matrix).
+    pub spin_draw: Option<f32>,
     /// ext+0xd0: the muzzle offset along the barrel (GT_Create's script bbox max.z × 1.5 —
     /// the port's script VM is the tracked gap, so it stays a settable 0.0 from placements)
     /// [M 0017ffa0:155-158].
@@ -325,6 +331,7 @@ pub fn from_placement(placement: usize, params: &[(u32, u32)]) -> Option<GTurret
         aim: [0.0; 3],
         spin: 0.0,
         spin_vel: 0.0,
+        spin_draw: None,
         muzzle_offset: 0.0,
         scripts_done: true,
         pos: [0.0; 3],
@@ -660,6 +667,22 @@ impl GTurret {
     /// Each shot's flash write [M 00180498 case 4 / case 7, after `Bullet_init`]: when
     /// registered[0] is set, `reg0+0xF4 = 2` and `reg0+0xF0 &= ~0x10` (the obj+0xF6 toggle and
     /// its smoke puff are not modelled).
+    /// The spin block [M 00180498:365-382, 538-556]: ext+0xD4 wrapped into (−π, π) with
+    /// `fmodf(a, 2π)` (only when |a| ≥ π, and again shifted by 2π if still |a| ≥ π), the barrel drawn
+    /// at that angle, then ext+0xD4 += `inc`.
+    fn spin_advance(&mut self, inc: f32) {
+        const PI: f32 = 3.141_592_7;
+        const TAU: f32 = 6.283_185_5;
+        let a0 = self.spin;
+        let mut a = a0;
+        if PI <= a0.abs() {
+            a = a0 % TAU;
+            if PI <= a.abs() { a = if 0.0 <= a0 { a - TAU } else { a + TAU }; }
+        }
+        self.spin_draw = Some(a);
+        self.spin = a + inc;
+    }
+
     fn show_flash(&mut self) {
         if self.registered[0] != 0 {
             self.flash = 2;
@@ -669,6 +692,7 @@ impl GTurret {
 
     /// `GT_Update` 0x180498 — one tick (`dt` = `REC_FRAME_RATE`, 1/60 [M every timer step]).
     pub fn update(&mut self, ctx: &GTCtx, rng: &mut crate::drone::Rng, out: &mut Vec<GTEvent>) {
+        self.spin_draw = None;
         // The registered[0] hide gate [M 00180498:110-122]: `s = reg0+0xF4; if s == 0 ||
         // (reg0+0xF4 = s − 1, s == 1) { reg0+0xF0 |= 0x10 }` — the muzzle flash shows on a
         // shot's tick and the next one, then hides.
@@ -779,9 +803,13 @@ impl GTurret {
                             ];
                             let sound = if self.facing == 1 { SOUND_FIRE_WALL } else { SOUND_FIRE };
                             out.push(GTEvent::Fire { muzzle, dir, sound });
-                            self.spin_vel = crate::grenade::REC_FRAME_RATE * 6.2831855 * 2.0;
                             self.show_flash();
                         }
+                    }
+                    // The tracked frame spins the barrel at a fixed 2 rev/s — ext+0xD4 += 2·2π·dt,
+                    // ext+0xD8 untouched [M 00180498:360-382] (registered[1] = 0 → the case returns).
+                    if self.registered[1] != 0 {
+                        self.spin_advance(crate::grenade::REC_FRAME_RATE * 6.2831855 + crate::grenade::REC_FRAME_RATE * 6.2831855);
                     }
                     // case 4's `Mat_LookAt(obj+0x30 → target+0x30)` slerp [M 0x180498 case 4].
                     if let Some(c) = ctx.cands.iter().find(|c| c.obj == self.target) {
@@ -843,6 +871,8 @@ impl GTurret {
                     let h = (m[2][0] * m[2][0] + m[2][2] * m[2][2]).sqrt();
                     self.ease_pose((crate::trig::atan2f_libm(m[2][0], m[2][2]), -(m[2][1].atan2(h))));
                     self.fire_timer += crate::grenade::REC_FRAME_RATE;
+                    // ext+0xD8 decays ×0.9 every mounted tick [M 00180498:496].
+                    self.spin_vel *= 0.9;
                     if fire && self.fire_timer > 0.1 {
                         self.fire_timer = 0.0;
                         if self.hp > 0 {
@@ -861,8 +891,15 @@ impl GTurret {
                             dir,
                             sound: SOUND_FIRE,
                         });
-                        self.spin_vel = crate::grenade::REC_FRAME_RATE * 6.2831855 * 2.0;
                         self.show_flash();
+                    }
+                    // A held trigger re-arms the spin every tick, shot or not [M 00180498:536];
+                    // the barrel turns while the velocity is non-zero [M :538-556].
+                    if fire {
+                        self.spin_vel = crate::grenade::REC_FRAME_RATE * 6.2831855 + crate::grenade::REC_FRAME_RATE * 6.2831855;
+                    }
+                    if self.registered[1] != 0 && self.spin_vel != 0.0 {
+                        self.spin_advance(self.spin_vel);
                     }
                     if exit {
                         self.lose_control();
@@ -902,6 +939,7 @@ impl Default for GTurret {
             aim: [0.0; 3],
             spin: 0.0,
             spin_vel: 0.0,
+            spin_draw: None,
             muzzle_offset: 0.0,
             scripts_done: true,
             pos: [0.0; 3],
@@ -1338,6 +1376,61 @@ mod tests {
 
     /// [M 0x17f9c8:62-64] SP: a player-owned turret (the deployed Ronin) never takes Bond as a
     /// candidate; a guard in front of it is the target.
+    /// [M 00180498:496, 536-556] the mounted spin: ×0.9 per tick, re-armed to 2·2π/60 by a held
+    /// trigger, the barrel drawn at the wrapped angle before each increment. Against the live
+    /// capture [L PCSX2 audits/render-1101-roninview2/live_ab.txt]: R1 held 8 frames to take control,
+    /// 45 frames later ext+0xD4 = −2.7410 (and the first capture's barrel row0 = RotZ(−2.741)).
+    #[test]
+    fn mounted_spin_matches_the_live_angle() {
+        let ch = crate::triggers::Channels::default();
+        let mut rng = crate::drone::Rng::default();
+        let mut t = GTurret::default();
+        t.state = gt_state::MOUNTED;
+        t.registered = [1, 2, 3];
+        let run = |t: &mut GTurret, rng: &mut crate::drone::Rng, fire: bool| {
+            let mut out = Vec::new();
+            let c = GTCtx { channels: &ch, mp: false, frame: 1, cands: &[], mount: Some((0.0, 0.0, fire, false)) };
+            t.update(&c, rng, &mut out);
+        };
+        run(&mut t, &mut rng, false);
+        assert_eq!(t.spin_draw, None, "no spin before the trigger (ext+0xD8 = 0)");
+        for _ in 0..8 { run(&mut t, &mut rng, true); }
+        assert!(t.spin_draw.is_some(), "a held trigger turns the barrel");
+        for _ in 0..45 { run(&mut t, &mut rng, false); }
+        assert!((t.spin - (-2.741)).abs() < 0.01, "ext+0xD4 after the 8-frame press + 45 frames: {}", t.spin);
+        assert!(t.spin_draw.is_some_and(|a| a.abs() < 3.1415927), "drawn angle wrapped into (−π, π)");
+        // Sister: without the ×0.9 decay the angle would run on (45 more increments of 0.209).
+        let undecayed = 8.0 * 0.209_44 + 45.0 * 0.209_44;
+        assert!((undecayed % 6.283_185_5 - 3.141_592_7 - t.spin).abs() > 0.05);
+        // Without a registered barrel the block never runs.
+        let mut bare = GTurret::default();
+        bare.state = gt_state::MOUNTED;
+        for _ in 0..4 { run(&mut bare, &mut rng, true); }
+        assert_eq!((bare.spin, bare.spin_draw), (0.0, None), "registered[1] = 0 → no spin");
+    }
+
+    /// [M 00180498:360-382] a tracked combat frame spins the barrel at a fixed 2·2π/60 per tick
+    /// (ext+0xD8 untouched); an untracked frame leaves it at its script pose.
+    #[test]
+    fn combat_spin_is_fixed_while_tracking() {
+        let ch = crate::triggers::Channels::default();
+        let mut rng = crate::drone::Rng::default();
+        let mut t = GTurret::default();
+        t.state = gt_state::COMBAT;
+        t.registered = [1, 2, 3];
+        t.pos = [0.0, 0.0, 0.0];
+        t.fire_dir = [0.0, 0.0, 1.0];
+        step(&mut t, &ch, &[], &mut rng);
+        assert_eq!(t.spin_draw, None, "nothing tracked → no spin block");
+        let cand = [TrackCand { obj: 5, pos: [0.0, 0.0, 5.0], copter: false, los_ok: true }];
+        step(&mut t, &ch, &cand, &mut rng);
+        assert_eq!(t.target, 5, "tracked");
+        assert_eq!(t.spin_draw, Some(0.0), "drawn at the pre-increment angle");
+        step(&mut t, &ch, &cand, &mut rng);
+        let inc = 2.0 * 6.283_185_5 / 60.0;
+        assert!((t.spin - 2.0 * inc).abs() < 1e-5 && t.spin_vel == 0.0, "fixed step, D8 untouched: {} {}", t.spin, t.spin_vel);
+    }
+
     #[test]
     fn player_owned_turret_skips_bond() {
         let mut t = from_deploy([0.0, 0.5, 0.0], [0.0, 0.0, 1.0]);

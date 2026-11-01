@@ -74,7 +74,7 @@ override NOFOG: f32 = 0.0;   // debug: 1.0 = skip the fog pass entirely
 @group(0) @binding(4) var<storage, read> mtg: array<f32>;
 @group(1) @binding(0) var tex: texture_2d<f32>;
 @group(1) @binding(1) var samp: sampler;
-struct VO { @builtin(position) p: vec4<f32>, @location(0) uv: vec2<f32>, @location(1) c: vec4<f32>, @location(2) d: f32 };
+struct VO { @builtin(position) p: vec4<f32>, @location(0) uv: vec2<f32>, @location(1) c: vec4<f32>, @location(2) d: f32, @location(4) nw: f32 };
 // `SkinIt` 0x10bf30's morph term, before the skinning: pos += Σ_m weight[m] × target[morph + m],
 // the 12-byte reads as three f32; the game marshals the weights with an identity Morph_Index
 // (`AnimObjectDraw` 0x1c4490:150), so channel m reads target base + (morph + m)·12. Channels
@@ -167,6 +167,14 @@ fn morph_pos(p0: vec3<f32>, mtb: i32, mwb: u32, cnt: u32, tend: u32) -> vec3<f32
     }
     o.p = vp * vec4<f32>(p, 1.0);
     o.d = o.p.w;
+    // ronin-view-2: the 24-bit depth wrap of near-clipped triangles (scene.rs `ronin_view_wrap_marks`):
+    // a palette entry whose m[3][3] is 1 + d flags its vertices nearer than d; the fragment stage
+    // drops every triangle that has one (the flag interpolates above 0 across it).
+    o.nw = 0.0;
+    if (sa.x != 0xffffffffu) {
+        let wd = pal[sa.x][3][3] - 1.0;
+        if (wd > 0.0 && o.p.w < wd) { o.nw = 1.0; }
+    }
     if (FAR > 0.5) { o.p.z = o.p.w; }
     // view-model-last: the list-2 gun after `psiClearZ` — its depth squashed toward the eye so it covers
     // the world and the effects drawn before it, while its own parts still depth-sort.
@@ -176,6 +184,7 @@ fn morph_pos(p0: vec3<f32>, mtb: i32, mwb: u32, cnt: u32, tend: u32) -> vec3<f32
     return o;
 }
 @fragment fn fs(i: VO) -> @location(0) vec4<f32> {
+    if (i.nw > 0.0) { discard; }
     let fog = us[8];
     let fogk = us[9];
     let s = textureSample(tex, samp, i.uv);
@@ -621,11 +630,11 @@ impl Renderer {
             let s = (String::from("enable wgpu_binding_array;
 ") + SHADER)
                 .replace("@group(1) @binding(0) var tex: texture_2d<f32>;", "@group(1) @binding(0) var texs: binding_array<texture_2d<f32>>;")
-                .replace("struct VO { @builtin(position) p: vec4<f32>, @location(0) uv: vec2<f32>, @location(1) c: vec4<f32>, @location(2) d: f32 };",
-                         "struct VO { @builtin(position) p: vec4<f32>, @location(0) uv: vec2<f32>, @location(1) c: vec4<f32>, @location(2) d: f32, @location(3) @interpolate(flat) ti: u32 };")
+                .replace("struct VO { @builtin(position) p: vec4<f32>, @location(0) uv: vec2<f32>, @location(1) c: vec4<f32>, @location(2) d: f32, @location(4) nw: f32 };",
+                         "struct VO { @builtin(position) p: vec4<f32>, @location(0) uv: vec2<f32>, @location(1) c: vec4<f32>, @location(2) d: f32, @location(3) @interpolate(flat) ti: u32, @location(4) nw: f32 };")
                 .replace("    o.uv = uv;\n    o.c = c * (255.0 / 128.0);", "    o.uv = uv;\n    o.ti = u32(us[b + 4u].y);\n    o.c = c * (255.0 / 128.0);")
                 .replace("let s = textureSample(tex, samp, i.uv);", "let s = textureSample(texs[i.ti], samp, i.uv);");
-            assert!(s.contains("texs[i.ti]") && s.contains("o.ti = ") && s.contains("binding_array"), "the bindless shader edits must all apply");
+            assert!(s.contains("texs[i.ti]") && s.contains("ti: u32, @location(4) nw") && s.contains("o.ti = ") && s.contains("binding_array"), "the bindless shader edits must all apply");
             s
         } else { SHADER.to_string() };
         let shader = device.create_shader_module(wgpu::ShaderModuleDescriptor { label: Some("nf-view"), source: wgpu::ShaderSource::Wgsl(src.into()) });
