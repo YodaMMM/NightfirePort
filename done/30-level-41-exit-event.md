@@ -20,3 +20,8 @@ say so in the report. Never weaken a decompile-backed test to make code pass.
 
 ---
 claimed-by: sandbox4 at 2026-11-01T22:35Z
+
+---
+## Report (done, 2026-11-01T23:32Z)
+
+Closed by the driver: the report is on `s/level-41-exit-event` (docs/reports/level-41-exit-event.md); the worker didn't run finish.sh.
