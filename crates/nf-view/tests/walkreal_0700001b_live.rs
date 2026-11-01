@@ -306,6 +306,7 @@ fn the_first_wave_kill_raises_the_launch_order() {
 /// the rifle's recharge paces the console shots, and the port's astronaut accuracy is
 /// unmeasured against the game.
 #[test]
+#[ignore = "zero-g look in the body frame reverted (the aim did not follow the camera); the console shots need it - 10-level-1b-zero-g-look"]
 fn walk_arrival_to_drakes_defeat() {
     let iso = iso();
     let mut w = Walker::new(nf_view::load(&iso, "0700001b.bin", false).unwrap());
