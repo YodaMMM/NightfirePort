@@ -328,3 +328,12 @@ fn walk_from_the_plate_to_the_tether_crossing_and_the_levels_end() {
     assert_eq!(sim.drones.level_exit, None, "no level-exit trigger on the wrapper [D the placement scan]");
     assert_eq!(sim.drones.mission_end, None, "no mission record → the mission layer never ends the level [M Mission_Init 0x182270:53-56]");
 }
+
+/// Real damage: the same walk with the health top-up off for every walker it makes (the
+/// tests' own `top_up_health = true` included) and the walker's return fire on — Bond's death
+/// panics with the death spot and the last hits (common/damage_log.rs), so a pass pins that the
+/// walk completes on the port's own damage.
+#[test]
+fn walk_from_the_plate_to_the_tether_crossing_and_the_levels_end_real_damage() {
+    walker::with_real_damage(walk_from_the_plate_to_the_tether_crossing_and_the_levels_end);
+}

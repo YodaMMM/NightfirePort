@@ -91,7 +91,7 @@ fn shoot_at(w: &mut Walker, target: [f32; 3], range: f32, max_ticks: u32, label:
             w.scene.sim.as_mut().unwrap().step_bond(input, trigger, false, false);
         }
         w.total_ticks += 1;
-        if w.top_up_health { w.scene.sim.as_mut().unwrap().drones.health.health = 100.0; }
+        w.after_step();
     }
 }
 
@@ -1151,4 +1151,25 @@ fn the_pick_ref_accumulator_tracks_the_game_ref() {
     assert!(ref_press[1].abs() < 1e-3 && (ref_press[2]).abs() < 1e-3,
         "the press's pushes are x-only [L 2026-10-26: y 0.08088 and z −22.77985 unchanged], got {ref_press:?}");
     assert!(pos_press[0] <= -45.0, "Bond reached the wall skin (x {:.3})", pos_press[0]);
+}
+
+/// Real damage: the same walk with the health top-up off for every walker it makes (the
+/// tests' own `top_up_health = true` included) and the walker's return fire on — Bond's death
+/// panics with the death spot and the last hits (common/damage_log.rs), so a pass pins that the
+/// walk completes on the port's own damage.
+///
+/// Ignored: this route cannot survive the west ceiling gun on real damage. The west hall's laser
+/// #607 (out ch 0x1F → OR #667 → ch 0x0F [D]) is gun #640's enable channel (param 4 = 0x0F, at
+/// (−22.1, 2.3, 17.2) aimed straight down [D]); the walk crosses #607 twice (the Q-Worm leg, then
+/// the ring's west leg) and each crossing arms the gun again — after the re-holster the case-3
+/// fold returns a facing-1 gun to state 0 [M GT_Update 0x180498 case 3, the bnel delay-slot
+/// store]. Only explosions damage a turret (`GT_ApplyDamage` 0x1816d8's one caller is
+/// `Explode_Propagate` 0x17c518 case 0x36 [M]) and 0a's start loadout carries none; the heavy
+/// armour (−13.46, 0.90, 7.61) [D] sits behind the 0x13/0x22 laser rows. The two bursts land
+/// 27 + 15 rounds of 2.4 (≈ 101): Bond dies under the gun at (−20.5, 1.1, 6.9). It passed while
+/// the port's wall gun stuck in state 3 after its first burst.
+#[test]
+#[ignore = "probe: two ceiling-gun bursts on this route exceed 100 health (see the doc)"]
+fn walk_office_floor_qworm_keyboard_hatch_real_damage() {
+    walker::with_real_damage(walk_office_floor_qworm_keyboard_hatch);
 }

@@ -1463,3 +1463,12 @@ fn the_door_band_exit_chains_to_07000006_walked() {
             "the door chain must end the level into 07000006 [D placement p0=0x7000006], got {:?}", sim.drones.level_exit);
     }
 }
+
+/// Real damage: the same walk with the health top-up off for every walker it makes (the
+/// tests' own `top_up_health = true` included) and the walker's return fire on — Bond's death
+/// panics with the death spot and the last hits (common/damage_log.rs), so a pass pins that the
+/// walk completes on the port's own damage.
+#[test]
+fn the_door_band_exit_chains_to_07000006_walked_real_damage() {
+    walker::with_real_damage(the_door_band_exit_chains_to_07000006_walked);
+}

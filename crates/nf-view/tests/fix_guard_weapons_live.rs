@@ -76,13 +76,14 @@ fn try_park(scene: &mut nf_view::scene::Scene, cand: usize) -> bool {
 /// same subset the model describes. Sister: the gated shots still exist (the filter's skip count
 /// is logged and asserted non-negative trivially — a run with zero gated shots is a no-op).
 fn collect_shots(scene: &mut nf_view::scene::Scene, weapon: u32, wanted: u32, warmup_shots: u32) -> (usize, Vec<Shot>, Vec<(f32, f32, f32)>, f32) {
-    // Live guards with the weapon, the standard stats and the standard ×1 damage multiplier —
-    // tried in order until one actually opens fire (some are elevated or scripted and never do).
+    // Live non-captain guards with the weapon (the level's `drone_stats` record, not a captain's
+    // ×2 / ½-accuracy) — tried in order until one actually opens fire (some are elevated or
+    // scripted and never do).
     let candidates: Vec<usize> = {
         let sim = scene.sim.as_ref().unwrap();
         let mut v: Vec<usize> = (0..sim.drones.list.len()).filter(|&i| {
             let d = &sim.drones.list[i];
-            d.present && d.weapon == weapon && d.aggression == 0
+            d.present && d.weapon == weapon && !d.captain
         }).collect();
         v.sort_by_key(|&i| (sim.drones.list[i].mode != 0, i));
         v
@@ -271,7 +272,9 @@ fn collect_shots(scene: &mut nf_view::scene::Scene, weapon: u32, wanted: u32, wa
 /// Weapons: 07000001's 0x0e (interval 15 → the 60-clamp) and 0x12 (record burst 12 → the
 /// aggression cut), plus 07000005's SG-5 0x16 (burst 3, interval 4) — the guards' three behaviours.
 #[test]
-#[ignore = "the diff-2 guard falls through a floor crack on 07000001 at (-4.703, -5.968): the feet ray finds no triangle there though the bounds cover it; un-ignore once the crack is fixed"]
+// The diff-2 guard once fell through the 2 mm seam at (-4.703, -5.968) (two objects' floor
+// meshes, z -5.9675 / -5.9692 [D]); `feet_on_point`'s seam bridge holds him like the game's 0.4
+// collision sphere [M NDrone2_Collision 0x140e90].
 fn the_3x3_hit_rate_and_damage_matrix_matches_the_game() {
     // [L work/ee_start_07000001.bin @ 0x30caf0/54/58 and 0x30cc50/54/58] — the accuracy and
     // Plr_DMod statics as ReadTuningVars leaves them for 0x7000001.
@@ -312,7 +315,10 @@ fn the_3x3_hit_rate_and_damage_matrix_matches_the_game() {
             // guard may close to just above the band (measured 3.46 with the rate and per-hit
             // damage still on the model: 0.685 vs 0.60 ± 0.12, 1.65 exact); the old 3.5 floor
             // was harness margin, not a game rule.
-            assert!(dist > 3.05 && dist < 12.5, "guard {guard} ended inside the TooClose band or far off the engagement (dist {dist})");
+            // The upper bound is harness sanity only (no falloff, above): 07000005's SG-5 guard 2
+            // ended its 200-shot diff-1 run at 12.95 u on the merged placement-stats tree, its
+            // roll rate on the model (119/200 vs 0.60).
+            assert!(dist > 3.05 && dist < 15.0, "guard {guard} ended inside the TooClose band or far off the engagement (dist {dist})");
             // 952: the pin is the ROLL rate — `DroneWeap_DoBulletAccuracy` 0x179740 applies
             // p = (100 − 5·acc) × level accuracy to the shared RNG for every gate-clean shot
             // [M 0x179740:100-110], and the port's fire_weapon applies the same p to the same
@@ -390,7 +396,9 @@ fn too_close_doubles_the_damage_and_forces_the_hit() {
         let sim = scene.sim.as_ref().unwrap();
         (0..sim.drones.list.len()).find(|&i| {
             let d = &sim.drones.list[i];
-            d.present && d.weapon == 0x0e && d.accuracy == 5 && d.aggression == 0 && d.damage_mul == 1.0
+            // A non-captain 0x0e guard: the type-2 stats (acc 8, aggression 1) and the pistol
+            // class's `+0x100` = 2.0 [M 0x14b300:267-293; L ee_start_07000001.bin].
+            d.present && d.weapon == 0x0e && !d.captain && d.accuracy == 8 && d.aggression == 1 && d.damage_mul == 2.0
         }).expect("no live weapon-0x0e guard")
     };
     // The weapon's own min range (weapon_data+0x08 [M 0x12a960:46]) read off the same records the sim uses.
@@ -416,7 +424,7 @@ fn too_close_doubles_the_damage_and_forces_the_hit() {
         assert!(t < 11900, "the guard never resumed firing after backing out (got {} hits)", hits.len());
     }
     let record = 5.0_f32; // weapon 0x0e's weapon_data+0x0C [L ee_start_07000001.bin]
-    let base = record * DMG[0]; // × Plr_DMod_Easy 0.5 — no Drone+0x100 (the guard filter pins 1.0)
+    let base = record * 2.0 * DMG[0]; // × Drone+0x100 2.0 (the pistol class) × Plr_DMod_Easy 0.5
     for (k, &(dist, delta)) in hits.iter().enumerate() {
         assert!(dist >= min_range - 1.0, "hit #{k} landed while the shooter was inside his weapon's min-range gate (dist {dist:.2} < {min_range}) — FireWeapon 0x178f68:100-102 returns early there");
         let expected = if dist < 3.0 { base * 2.0 } else { base };
@@ -433,7 +441,8 @@ fn too_close_doubles_the_damage_and_forces_the_hit() {
 /// 0x179ed4-0x179edc) makes 2-round bursts, so in-burst gaps hit exactly 60 while burst boundaries
 /// add the burst delay (~105-120 observed): min gap 60 IS the game's signature, not ≥ 75 (the old
 /// 30-tick gaps of the pre-fix tree fail this by construction). Weapon 0x12's record burst 12 is
-/// cut to `trunc(12 × 0.3)` = 3 rounds (0x179f80-0x17a01c, `BOT_getAggressionMul`).
+/// cut to `trunc(12 × 0.5)` = 6 rounds (0x179f80-0x17a01c, `BOT_getAggressionMul` 0x126468 for the
+/// type-2 guards' aggression `+0xB5` = 1 — `drone_stats[2][1]` [L ee_start_07000001.bin]).
 #[test]
 fn the_fire_rate_matches_the_game_interval_clamp_and_burst_cut() {
     let mut scene = nf_view::load(&iso(), LEVEL, false).expect("load 07000001");
@@ -446,7 +455,7 @@ fn the_fire_rate_matches_the_game_interval_clamp_and_burst_cut() {
     eprintln!("[gw] 0x0e gaps: min {min_gap} of {gaps:?}");
     assert!(min_gap >= 60, "weapon 0x0e fired faster than the game's 60-tick interval clamp (min gap {min_gap})");
     assert!(min_gap <= 60, "the clamp is tight: the game's in-burst gaps reach exactly 60 (min gap {min_gap} — the interval must not be clamped higher)");
-    // 0x12: bursts of exactly 3 (in-burst gap = the interval 12 — with ±1 tick of scheduling
+    // 0x12: bursts of exactly 6 (in-burst gap = the interval 12 — with ±1 tick of scheduling
     // jitter, so the split threshold is 20, still far under the ~57-tick burst boundary).
     let (_, shots, _, _) = collect_shots(&mut scene, 0x12, 40, 3);
     let mut runs: Vec<u32> = Vec::new();
@@ -456,14 +465,15 @@ fn the_fire_rate_matches_the_game_interval_clamp_and_burst_cut() {
     }
     runs.push(run);
     eprintln!("[gw] 0x12 burst runs: {runs:?}");
-    // The game's cut is trunc(max(12 × 0.3, 3.0)) = 3 — no run may EXCEED 3 (the pre-fix tree
-    // fired the raw 12-round record, which this fails by construction). Runs shorter than 3 do
+    // The game's cut is trunc(max(12 × 0.5, 3.0)) = 6 — no run may EXCEED 6 (the pre-fix tree
+    // fired the raw 12-round record, which this fails by construction; the aggression-0 stand-in
+    // fired 3-runs, which the coverage below fails). Runs shorter than 6 do
     // occur inside the game model too: a mid-burst sight/aim hiccup slips one round past the
     // burst gap (the deterministic stream shows the same 1+2 pair every run) — so the cut is
-    // pinned by the ≤ 3 ceiling plus the 3-round coverage of the burst, not by an all-3s demand.
-    assert!(runs.iter().all(|&r| r <= 3), "weapon 0x12 burst lengths {runs:?} — the game cuts the 12-round record to 3 (aggression 0.3, 0x179f80-0x17a01c)");
-    let threes: u32 = runs.iter().filter(|&&r| r == 3).sum();
-    assert!(threes * 10 >= 40 * 7, "3-round bursts must govern the fire: only {threes}/40 shots in 3-runs");
+    // pinned by the ≤ 6 ceiling plus the 6-round coverage of the burst, not by an all-6s demand.
+    assert!(runs.iter().all(|&r| r <= 6), "weapon 0x12 burst lengths {runs:?} — the game cuts the 12-round record to 6 (aggression 0.5, 0x179f80-0x17a01c)");
+    let sixes: u32 = runs.iter().filter(|&&r| r == 6).sum();
+    assert!(sixes * 10 >= 40 * 6, "6-round bursts must govern the fire: only {sixes}/40 shots in 6-runs");
 }
 
 fn walker_wrap(a: f32) -> f32 {

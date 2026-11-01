@@ -121,6 +121,60 @@ fn clear_captors_real(w: &mut Walker, around: [f32; 3], label: &str) {
     }
 }
 
+/// The geisha-2 room taken from range, the way a player holds a doorway against a shotgun
+/// captain: Bond walks in only until a captor shows (`approach_until_seen`), then stands and
+/// answers whoever is shooting him first (`DamageLog::shooters`), else the nearest guard he can
+/// put a round into, and gives a guard up after a few dry taps for the next one. A 6-u walk-in
+/// and the shoot loop's strafe dance carried Bond to 1.1 u and 6.7 u of the
+/// captain (weapon 0x1C, 8 pellets a round [M DroneWeap_FireWeapon 0x178f68 weapon_data+0x18
+/// loop]); under 3.0 u every round hits [M DroneWeap_DoBulletAccuracy 0x179740:113-115], and at
+/// 6.7 u the 0.045-rad spread still puts the whole volley on Bond.
+fn take_room(w: &mut Walker, around: [f32; 3], label: &str) {
+    w.dmg.dry_taps = Some(5);
+    let mut tried: Vec<(usize, u32)> = Vec::new();
+    for round in 0..16 {
+        let (live, pick) = {
+            let sim = w.scene.sim.as_ref().unwrap();
+            let bp = sim.bond.pos;
+            let live = |d: &nf_game::drone::Drone| d.team == 1 && d.health > 0.0 && !d.corpse && d.enabled && d.present;
+            let captors: Vec<usize> = sim.drones.list.iter().enumerate()
+                .filter(|(_, d)| live(d) && d.pos.iter().zip(around).map(|(a, b)| (a - b).powi(2)).sum::<f32>() < 64.0)
+                .map(|(i, _)| i).chain(hostage_captor(w, around)).collect();
+            let fresh = |i: &usize| !tried.iter().any(|&(k, until)| k == *i && w.total_ticks < until);
+            let mut near: Vec<(f32, usize)> = sim.drones.list.iter().enumerate()
+                .filter(|(_, d)| live(d) && dxz(d.pos, bp) < 16.0)
+                .map(|(i, d)| (dxz(d.pos, bp), i)).collect();
+            near.sort_by(|a, b| a.0.total_cmp(&b.0));
+            let pick = w.dmg.shooters(sim).into_iter().filter(fresh).find(|&i| walker::DamageLog::visible(sim, i))
+                .or_else(|| near.iter().map(|e| e.1).filter(fresh).find(|&i| walker::DamageLog::visible(sim, i)));
+            (captors, pick)
+        };
+        if live.is_empty() { break; }
+        match pick {
+            Some(di) => {
+                let _ = w.switch_to_armed(&format!("{label} room {round}"));
+                let killed = w.stand_and_fire(di, 900);
+                if !killed { let until = w.total_ticks + 240; tried.push((di, until)); }
+                let dry = { let g = &w.scene.sim.as_ref().unwrap().gun; g.clip + g.spare == 0 };
+                if dry { arm_fullest(w, &format!("{label} room {round} dry")); }
+                eprintln!("[02] {label} room {round}: drone {di} killed {killed}");
+            }
+            None => {
+                // Nobody in sight: hold for the nearest captor to show, then step in until one does.
+                let di = live[0];
+                if !hold_for_sight(w, di, 240) {
+                    let dest = w.scene.sim.as_ref().unwrap().drones.list[di].pos;
+                    approach_until_seen(w, di, dest, &format!("{label} room {round} approach"), 3.5);
+                }
+            }
+        }
+        status(w, &format!("{label} room {round}"));
+    }
+    w.dmg.dry_taps = None;
+    // Whatever the stand left (a captor out of every line from here): the old sweep.
+    clear_captors_real(w, around, label);
+}
+
 /// Bond's own status line (health, armour, gun) for the fight log.
 fn status(w: &Walker, at: &str) {
     let sim = w.scene.sim.as_ref().unwrap();
@@ -164,7 +218,15 @@ fn leg_to(w: &mut Walker, at: [f32; 3], name: &str, arrive: f32) {
     w.lenient = true;
     w.walk_to(Wp { at, act: Act::None, arrive }, name);
     w.lenient = false;
-    engage_in_view(w, 14.0, name);
+    if engage_in_view(w, 14.0, name) {
+        // The same return as the nodes' above: the leg-end fight strafed Bond off the leg's end
+        // (the south-hall fight left him at (−31.2, 5.1, 29.2)) and the next leg's nav, planned
+        // from there, took the upper-floor detour and gave up at the 3000-tick cap one floor
+        // above "south hall west" (y 6.4 at z 12.7).
+        w.lenient = true;
+        w.walk_to(Wp { at, act: Act::None, arrive }, &format!("{name} again"));
+        w.lenient = false;
+    }
 }
 
 /// Fight every enabled hostile within `radius` that Bond can see a part of right now (the walker's
@@ -212,11 +274,14 @@ fn arm_fullest(w: &mut Walker, label: &str) {
     };
     let first = read(w);
     let mut seen = vec![first];
+    // A press can land while the draw is still running and leave the same gun up: only a return
+    // to the first gun AFTER another came up ends the round (the bunker entry saw only the 4-round
+    // shotgun while the P99 still carried 36, and Bond emptied it at 12 u in the corridor).
     for _ in 0..12 {
         cycle(w);
         let now = read(w);
-        if now.0 == first.0 { break; }
-        seen.push(now);
+        if now.0 == first.0 { if seen.len() > 1 { break; } continue; }
+        if !seen.iter().any(|g| g.0 == now.0) { seen.push(now); }
     }
     let firearm = |id: u8| (2..=0x47).contains(&id);
     let Some(best) = seen.iter().filter(|(id, n)| firearm(*id) && *n > 0).max_by_key(|(_, n)| *n).map(|b| b.0) else { return };
@@ -399,7 +464,7 @@ fn clear_pursuers(w: &mut Walker, radius: f32, label: &str) {
 /// south-hall-west nav-10 body-block (g3) and the west-wing lip fight (drone 4 with no exposed
 /// part) — were both the walker's own route: the AI-path detour over the upper floor and the chase
 /// of an unseen guard. Robustness: green with 0..400 idle ticks inserted after the armour take
-/// (20 offsets, 2026-10-31).
+/// (16 offsets on the placement-stat guards, 2026-11-01).
 #[test]
 fn walk_the_castle_all_objectives_real_health() {
     let iso = iso();
@@ -412,6 +477,16 @@ fn walk_the_castle_all_objectives_real_health() {
     // level-02-every-objective-5 2026-10-31). This walk keeps it for the g3 nav-10 body-block
     // (Bond took his fire for ~1400 ticks there until the fail chain restarted — the arm's reason).
     w.body_block_response = true;
+    // The type-2 guards carry 12 health, captains 24 [L ee_02b.bin]: Bond aims for the head
+    // (`Walker::prefer_head`), as a player does, or the scripted fights run the walk dry.
+    w.prefer_head = true;
+    // And backs off any guard inside 4 u (`Walker::keep_off`): under 3.0 u every drone round
+    // hits [M DroneWeap_DoBulletAccuracy 0x179740:113-115], and the shotgun guards' 8-pellet
+    // volleys (weapon 0x1C [M DroneWeap_FireWeapon 0x178f68, weapon_data+0x18]) killed Bond from
+    // 2.1 u in the bunker corridor and 1.1 u in the geisha-2 room. The 6-u walk-in this walk had
+    // (`close_in`) carried Bond into those ranges and is gone.
+    w.keep_off = Some(4.0);
+    w.dmg.back_off = Some(4.0);
     {
         let sim = w.scene.sim.as_ref().unwrap();
         let p = sim.bond.pos;
@@ -609,6 +684,11 @@ fn walk_the_castle_all_objectives_real_health() {
     }
     assert!(folded, "obj0 \"Destroy Mayhew's computer\" folds to state 4 [M 0x1827d8 case 3; L c07000002]");
     // The plates are locked by the ambush [D #385-387 lock 0x81] — the game's outcome stands.
+    // From the corridor's own walkway point first: the corridor fight can leave Bond on the
+    // raised floor (y 6.7), and the nav leg planned from there started at the node beside the
+    // east door (−46.7, 5.8, −20.2) — the door opened and the steer carried Bond through it
+    // down into the courtyard pocket at (−45.2, 5.1, −18.0), five 3000-tick caps.
+    leg_to(&mut w, [-55.1, 5.9, -23.1], "the bunker corridor walkway", 0.6);
     leg_to(&mut w, [-59.0, 5.4, -26.0], "the bunker room far end", 1.6);
     {
         let sim = w.scene.sim.as_ref().unwrap();
@@ -653,7 +733,7 @@ fn walk_the_castle_all_objectives_real_health() {
     }
     let g2 = geisha(&w, 0x4a).unwrap();
     let at = w.scene.sim.as_ref().unwrap().drones.list[g2].pos;
-    clear_captors_real(&mut w, at, "geisha 2");
+    take_room(&mut w, at, "geisha 2");
     for _ in 0..240 {
         if ch_on(&w, 0x4a) { break; }
         w.tick(Default::default(), false);
@@ -830,7 +910,13 @@ fn walk_the_castle_all_objectives_to_the_exit() {
         if ch_on(&w, 0x49) { break; }
         w.tick(Default::default(), false);
     }
-    assert!(ch_on(&w, 0x49), "geisha 1 saved: ch 0x49 [M 0x1441c0]");
+    {
+        let sim = w.scene.sim.as_ref().unwrap();
+        let g = &sim.drones.list[g1];
+        let near: Vec<String> = sim.drones.list.iter().enumerate().filter(|(_, d)| d.team == 1 && d.health > 0.0 && !d.corpse
+            && d.pos.iter().zip(at).map(|(a, b)| (a - b).powi(2)).sum::<f32>() < 400.0).map(|(i, d)| format!("{i}:st{:#x} hp{:.0} ({:.1},{:.1},{:.1})", d.state, d.health, d.pos[0], d.pos[1], d.pos[2])).collect();
+        assert!(ch_on(&w, 0x49), "geisha 1 saved: ch 0x49 [M 0x1441c0] — geisha state {:#x} health {:.1} captor {:?}; live hostiles within 20 u: {near:?}", g.state, g.health, g.captor);
+    }
     assert!(ch_on(&w, 0x29) && ch_on(&w, 0x2a) && ch_on(&w, 0x88), "the three captor deaths [D param 12]");
     assert!(ch_on(&w, 0x3b), "AND #397 (0x29,0x2A,0x88,0x49) → 0x3B [D tr[017]]");
 

@@ -233,6 +233,72 @@ pub fn behaviour_words(param: impl Fn(u32) -> u32) -> ([u32; 3], [u32; 3]) {
     ([param(18), param(19), param(20)], [param(23), param(24), param(25)])
 }
 
+/// One `drone_stats` record (`behaviour_util_getStats` 0x1c7e58: `drone_stats` 0x31aa30 + type·0x60 + kind·0x20,
+/// eight words) as `NDrone2_DoModeSettingsNEW` 0x14c600:81-107 copies it into the drone: `+0xB4` accuracy,
+/// `+0xB5` aggression, the health `+0xAC` (word 2), then `+0xB6`..`+0xBA` (words 3..7). `+0xB8` is the
+/// reaction stat (`DroneFunc_ReactionTime` 0x14ac60), `+0xB9` the recover stat (`DroneFunc_RecoverTime` 0x147188).
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct DroneStats {
+    pub accuracy: u8,
+    pub aggression: u8,
+    pub health: u32,
+    pub b6: u8,
+    pub b7: u8,
+    pub reaction: u8,
+    pub recover: u8,
+    pub ba: u8,
+}
+
+/// The run-time `drone_stats` table (0x31aa30, BSS [D: past ACTION.ELF's file-backed segment end 0x30d670]):
+/// 0x11 types × 3 kinds. Only `behaviour_util_get` 0x1c7a98 writes it, from a placement's stats section, so a
+/// record a drone wrote serves every later drone of the same type (07000002: only the first guard placement
+/// #442 carries the section [D]; [L] ee_02b.bin: every type-2 guard reads acc 8 / aggression 1 / health 12).
+#[derive(Clone, Debug, Default)]
+pub struct DroneStatsTable(pub [[[u32; 8]; 3]; 0x11]);
+
+/// The stats-field bit widths, the .data table 0x303330 [D ACTION.ELF: 8, 3, 8, 8, 5, 8, 8, 1].
+const STATS_WIDTHS: [u32; 8] = [8, 3, 8, 8, 5, 8, 8, 1];
+
+impl DroneStatsTable {
+    /// `behaviour_util_get` 0x1c7a98 over the placement parameters 15.. (the `DoModeSettingsNEW` words):
+    /// type (< 0x11), mode (< 6), the count word (low 1..3 words, high 1..0x5B), the block, the alert mode
+    /// (< 6), its count word and block, then a tag word: negative with high half 0x8001 → three records
+    /// (kinds 0..2) of `(tag & 0xFFFF) / 3` words each, bit-packed LSB first at the widths above, a field
+    /// read inside one word [M 0x1c7a98:44-121]. Returns the type the drone keeps (`+0xC7`; 0 when the
+    /// checks fail — the zeroing tail [M :127-138]).
+    pub fn behaviour_get(&mut self, param: impl Fn(u32) -> u32) -> u32 {
+        let ty = param(15);
+        if ty >= 0x11 { return 0; }
+        let c1 = param(17);
+        if param(16) >= 6 || !(1..=3).contains(&(c1 & 0xffff)) || (c1 >> 16).wrapping_sub(1) > 0x5a { return 0; }
+        let a = 18 + (c1 & 0xffff);
+        let c2 = param(a + 1);
+        if param(a) >= 6 || !(1..=3).contains(&(c2 & 0xffff)) || (c2 >> 16).wrapping_sub(1) >= 0x5b { return 0; }
+        let t = a + 2 + (c2 & 0xffff);
+        let tag = param(t);
+        if (tag as i32) >= 0 || tag & 0xffff_0000 != 0x8001_0000 { return ty; }
+        let per = (tag & 0xffff) / 3;
+        for k in 0..3 {
+            let base = t + 1 + k as u32 * per;
+            let mut bit = 0u32;
+            for (f, &w) in STATS_WIDTHS.iter().enumerate() {
+                let word = param(base + bit / 32);
+                self.0[ty as usize][k][f] = (word >> (bit & 31)) & ((1 << w) - 1) & 0xff;
+                bit += w;
+            }
+        }
+        ty
+    }
+
+    /// `behaviour_util_getStats(type, 1)` as `DoModeSettingsNEW` 0x14c600:81-107 applies it: a zero health
+    /// word keeps the defaults (accuracy 5, health 10, the rest 0).
+    pub fn stats(&self, ty: u32) -> DroneStats {
+        let Some(r) = self.0.get(ty as usize).map(|t| t[1]) else { return DroneStats { accuracy: 5, health: 10, ..Default::default() } };
+        if r[2] == 0 { return DroneStats { accuracy: 5, health: 10, ..Default::default() }; }
+        DroneStats { accuracy: r[0] as u8, aggression: r[1] as u8, health: r[2], b6: r[3] as u8, b7: r[4] as u8, reaction: r[5] as u8, recover: r[6] as u8, ba: r[7] as u8 }
+    }
+}
+
 /// Alertness from property 0x20 (2 bits): the float table at 0x2f5cc8 = {0, 0, 0.66, 1.0} (agent report, to verify).
 pub const ALERTNESS_LEVELS: [f32; 4] = [0.0, 0.0, 0.66, 1.0];
 

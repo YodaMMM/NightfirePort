@@ -77,10 +77,16 @@ fn real_rounds_kill_the_roping_guard_through_the_repro() {
     assert!(slid, "the guard ran the Slide (the wake → Init → Slide chain [M 0x169610/0x169730])");
     assert!(sim.drones.list[i].health < hp0, "real rounds DAMAGE the roping guard (the abseil DSTATE's case 8 passes HandleImpact(0,0) [M 0x169730:68-70]); fired {fired}");
     // The kill routes to AbseilDeath and the rope releases.
+    // The volleys go on until he dies: his health is the placement's `drone_stats` record
+    // (`DoModeSettingsNEW` 0x14c600:81-95), not always one round's worth.
     let mut died = false;
-    for _ in 0..120 {
-        sim.step_bond(Input::default(), false, false, false);
-        if sim.drones.list[i].state == state::ABSEIL_DEATH { died = true; break; }
+    'volleys: for _ in 0..40 {
+        let p = sim.drones.list[i].pos;
+        aim_at(sim, [p[0], p[1] + 1.0, p[2]]);
+        for k in 0..10 {
+            sim.step_bond(Input::default(), k < 3, false, false);
+            if sim.drones.list[i].state == state::ABSEIL_DEATH { died = true; break 'volleys; }
+        }
     }
     assert!(died, "the killing shot routes to AbseilDeath 0x92 [M 0x1461c8:44-52], state {}", sim.drones.list[i].state);
     assert!(!sim.drones.list[i].air, "the rope released at the ENTER [M 0x169b28:28]");

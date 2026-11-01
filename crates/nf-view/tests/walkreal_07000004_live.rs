@@ -734,6 +734,8 @@ fn every_stats_row_matches_the_game_formulas_from_the_real_finish() {
 fn the_platinum_finish_shows_platinum_on_records() {
     let iso = iso();
     let mut w = load_ready_at(&iso, 3);
+    // The platinum line is a score race (time, rounds fired, hits): a player aims for the head.
+    w.prefer_head = true;
     {
         let sim = w.scene.sim.as_ref().unwrap();
         assert_eq!(sim.drones.progress.difficulty, 3, "the 007 difficulty rode the launch path");
@@ -825,4 +827,13 @@ fn the_platinum_finish_shows_platinum_on_records() {
     // standing [M 0x20bf00:34-44 — the `aiStack_a0[0] == 4` arm] — 1 here (the gold-group bit),
     // not the four earned medals.
     assert_eq!(fe.record_row(4).2, 1, "the Upgrades census is the kind-4 count [M 0x20bf00:34-44]");
+}
+
+/// Real damage: the same walk with the health top-up off for every walker it makes (the
+/// tests' own `top_up_health = true` included) and the walker's return fire on — Bond's death
+/// panics with the death spot and the last hits (common/damage_log.rs), so a pass pins that the
+/// walk completes on the port's own damage.
+#[test]
+fn walk_the_full_mission_start_to_finish_real_damage() {
+    walker::with_real_damage(walk_the_full_mission_start_to_finish);
 }

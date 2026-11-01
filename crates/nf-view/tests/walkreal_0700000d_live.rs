@@ -141,6 +141,22 @@ fn walk_arrival_to_the_c5_door() {
         assert!((p[0] - 199.25).abs() < 2.5 && (p[2] + 260.16).abs() < 2.5 && (p[1] - 14.16).abs() < 1.5,
             "the wire ride must land on the rotate crane's deck (199.25, 14.16, −260.16), got {p:?}");
     }
+    // The deck guard: since the guards fire on the single blend-out word [M DroneWeap_Ready2Fire
+    // 0x178c48:102-104] (bisected: green before that merge, red after), drone 16 (weapon 0x1E)
+    // stands on the crane deck 0.8 u from where the wire drops Bond, between him and the cab: the deck walk
+    // pressed into him for its whole cap and came off the deck's east edge to the ground at
+    // y 1.7. A player shoots the guard in his way first (the real fire path).
+    for _ in 0..3 {
+        let near = {
+            let sim = w.scene.sim.as_ref().unwrap();
+            let b = sim.bond.pos;
+            sim.drones.list.iter().position(|d| d.team == 1 && d.enabled && d.present && !d.corpse && d.health > 0.0
+                && (d.pos[1] - b[1]).abs() < 1.5 && ((d.pos[0] - b[0]).powi(2) + (d.pos[2] - b[2]).powi(2)).sqrt() < 6.0)
+        };
+        let Some(di) = near else { break };
+        let _ = w.switch_to_armed("the deck guard");
+        let _ = w.shoot(di, "the deck guard");
+    }
     assert!(w.try_walk_to(Wp { at: [198.93, 14.16, -264.15], act: Act::None, arrive: 0.8 }, "the deck walk to the cab"),
         "the deck walk to the control plate must arrive");
     assert!(w.try_walk_to(Wp::at(199.6, 13.4, -263.9, Act::Use { use_ticks: 60 }), "E the rotate touchplate #450"),
@@ -625,6 +641,6 @@ fn shoot_at(w: &mut Walker, target: [f32; 3], range: f32, max_ticks: u32, _label
             w.scene.sim.as_mut().unwrap().step_bond(input, trigger, false, false);
         }
         w.total_ticks += 1;
-        if w.top_up_health { w.scene.sim.as_mut().unwrap().drones.health.health = 100.0; }
+        w.after_step();
     }
 }
