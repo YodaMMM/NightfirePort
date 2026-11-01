@@ -109,6 +109,19 @@ arm, :59 the firing arm), so each guard latches the tick IT observes the change.
   render/gpu-heavy tests). No failure outside the two documented environment classes appeared in
   what ran.
 
+## ntfy failed
+
+All three fallbacks failed (2026-11-01 20:41-20:42 UTC):
+
+1. `curl -sS -m 20 -H "Title: NightfirePort" -d "per-guard-motion-stamps: …" https://ntfy.sh/nightfire-yoda-8k3x`
+   → `curl: (28) Connection timed out after 20001 milliseconds`
+2. `python3 -c "import urllib.request as u; u.urlopen(u.Request('https://ntfy.sh/nightfire-yoda-8k3x', data=b'…', headers={'Title':'NightfirePort'}), timeout=20)"`
+   → `urllib.error.URLError: <urlopen error [Errno 101] Network is unreachable>` (the first attempt
+   errored before that with `SyntaxError: bytes can only contain ASCII literal characters` — the
+   em-dash in the message; retried ASCII-only)
+3. `wget -q -O- --post-data "per-guard-motion-stamps: …" https://ntfy.sh/nightfire-yoda-8k3x`
+   → no output; the tool call was killed at its 30 s wall clock (no connection within it).
+
 ## Usage
 
 not visible to me
