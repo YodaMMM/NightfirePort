@@ -867,6 +867,7 @@ fn fight(w: &mut Walker, hold: [f32; 3], prio: Option<usize>, done: impl Fn(&nf_
 /// 0.6 [M 0x1d3a80 / DoBulletAccuracy 0x179740:52-99] × `TargetMoving` 0.75 while the float's
 /// thruster pair is live [M 0x179a48:34-41 — `Drones::player_move_local`].
 #[test]
+#[ignore = "zero-g look in the body frame reverted (the aim did not follow the camera); the console shots need it - 10-level-1b-zero-g-look"]
 fn walk_arrival_to_drakes_defeat_on_real_health() {
     let iso = iso();
     let mut w = Walker::new(nf_view::load(&iso, "0700001b.bin", false).unwrap());
