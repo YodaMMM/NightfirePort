@@ -315,17 +315,16 @@ fn the_shutter_switch_swaps_the_shutter_pair() {
 }
 
 /// The level exit #669 (0xE8 LOAD_LEVEL, mask 0xe — E-usable [D]) is NOT reachable with E from
-/// inside the security room: from (1.12, 7.49) facing north the game's use pick
-/// (`Collide_SphereIntersect(1.0, head + look, player cel)` [M Player_Activate 0x1a5170:100-108])
-/// walks only the cels the use sphere straddles from Bond's cel (`Collide_StraddleCels` 0x1eac98
-/// via `Intersect_Portal` 0x1ea7b8 v0x101 — the room's portals are the ceiling hatch, the south
-/// wall and door[19], none near the north wall), and the exit is linked to the lift-lobby cel
-/// (`Trigger_Create` 0x1b1720:96 → `build_LinkToRoom`); its glist (two crossed planes, y 0.676
-/// and z 9.962 [D]) is also beyond the 1.0 sphere (`Intersect_PointGeom` 0x1e92d8). The game
-/// agrees [L PCSX2 2026-10-31: standing at (1.12, 1.124, 7.474) yaw 0, three R2 (use) presses —
-/// the level word stays 07000012 for 250 frames]. Sister: in the lobby beside the exit, (2.26,
-/// 9.6) facing north, crouched, one E press loads 0700004A [L same session: R2 there, Bond resting
-/// crouched at (2.34, 0.509, 9.905) → GameState+0xC = 0x0700004A within 30 frames].
+/// inside the security room: from (1.12, 7.49) facing north the use point (head + look × 1.0
+/// [M Player_Activate 0x1a5170:100-108]) sits 1.49 from the exit glist's vertical plane (z 9.962)
+/// and 1.11 above its horizontal one (y 0.676) [D], beyond the 1.0 sphere `Intersect_PointGeom`
+/// 0x1e92d8 tests (a miss frees the node [M Collide_SphereIntersect 0x1ec940:120-125]); the game's
+/// cel scope (`Collide_StraddleCels` 0x1eac98 — no portal on the room's north wall) refuses it
+/// too. The game agrees [L PCSX2 2026-10-31: standing at (1.12, 1.124, 7.474) yaw 0, three R2
+/// (use) presses — the level word stays 07000012 for 250 frames]. Sister: in the lobby beside
+/// the exit, (2.26, 9.6) facing north, crouched, one E press loads 0700004A [L same session: R2
+/// there, Bond resting crouched at (2.34, 0.509, 9.905) → GameState+0xC = 0x0700004A within 30
+/// frames].
 #[test]
 fn the_exit_is_not_used_through_the_security_room_wall() {
     let place = |w: &mut Walker, x: f32, z: f32| {
@@ -343,7 +342,7 @@ fn the_exit_is_not_used_through_the_security_room_wall() {
         for _ in 0..20 { w.tick(nf_game::player::Input::default(), false); }
     }
     assert_eq!(w.scene.sim.as_ref().unwrap().drones.level_exit, None,
-        "E from the security room does not reach the exit #669 [M 0x1eb320:125 + 0x1eac98; L PCSX2]");
+        "E from the security room does not reach the exit #669 [M 0x1e92d8; L PCSX2]");
     // The PCSX2 sister press was made CROUCHED (Bond rested at (2.34, 0.509, 9.905) [L]): the
     // crouched head puts the use point 0.53 above the exit's horizontal plane. Crouch held here.
     let mut w = load();

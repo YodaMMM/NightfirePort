@@ -11574,9 +11574,8 @@ pub struct Drones {
     pub ss_bullet_contacts: Vec<u8>,
     /// level-0c-complete: the use key's class-0x1D trigger half, deferred from the scene's use
     /// block to this tick's post-`Trigger_Calc` slot (the game runs it at Bond's turn in the
-    /// object walk — see `player_use_doors`'s note). `(head, look, the pressing body's cel)` — the cel
-    /// is the pick's straddle start (`*(player+0x20)` [M Player_Activate 0x1a5170:107]).
-    pub use_trigger_request: Option<(V3, V3, Option<usize>)>,
+    /// object walk — see `player_use_doors`'s note). `(head, look)`.
+    pub use_trigger_request: Option<(V3, V3)>,
     pub player_impacts: Vec<PlayerImpact>,
     /// fix-gas-rng4 (111d3's deferral onto the G-041 walk): the world-hit draws' ride record — one
     /// entry per player bullet whose flight segment ended on the world this tick, `(bullet index,
@@ -12040,7 +12039,7 @@ pub struct Drones {
     pub net_takes: Vec<(usize, usize, bool)>,
     /// mp-world-sync: online, every slot's use-key trigger half (head, look) in slot order —
     /// the deferred `Player_Activate` trigger arm of `use_trigger_request`, one per pressing body.
-    pub net_use_triggers: Vec<(V3, V3, Option<usize>)>,
+    pub net_use_triggers: Vec<(V3, V3)>,
     /// doublecross-transitions: the entry fade from black — `Player_Init` 0x1910f8:45 arms
     /// `Camera_SetFade(player, -45.0f, 0xff, 1)` on every player spawn [M; the loading screen
     /// ends at `ResetMap_Load` phase 3's tail 0x1d6360:169-170, so the fade covers the first
@@ -15188,7 +15187,7 @@ fn segment_hits_sphere(a: V3, b: V3, c: V3, r: f32) -> bool {
     /// calls `Trigger_Activate` (0x1b2318) — routes b and c on 07000005 (the on-foot gate door and the zip-wire
     /// exit). The port's `player_use_doors` handled only doors; this adds the trigger path so pressing E on a
     /// LOAD_LEVEL or TouchOnce trigger fires it immediately [M 0x1a5170:100-108,128, 0x1b2318:34-111].
-    pub fn player_use_doors(&mut self, d: &Data, head: V3, look: V3, frame: u32, sp_head: V3, body: V3, cel: Option<usize>) {
+    pub fn player_use_doors(&mut self, d: &Data, head: V3, look: V3, frame: u32, sp_head: V3, body: V3) {
         let (evs, _hits) = self.doors.player_use(head, look, &mut self.channels, frame, d.world);
         for (id, pos) in evs {
             match d.sfx {
@@ -15206,7 +15205,7 @@ fn segment_hits_sphere(a: V3, b: V3, c: V3, r: f32) -> bool {
         // wiped the write before the mux walk ever saw it (0700000c's secret-door E plate #558
         // [D: mask 4, out 3] never reached its AND). The doors' half stays here (the events feed
         // the scene's sound path); the request carries (head, look).
-        self.use_trigger_request = Some((head, look, cel));
+        self.use_trigger_request = Some((head, look));
         // `Player_Activate`'s remaining classes the Tower levels need (map-tower): the mask-4
         // ScriptPlayers (`SP_Activate` 0x1dc338 — the elevator, the security keyboard), the
         // switches (0x29, `Switch_Activate` 0x1b02a8) and the Q-Worm PCs (0x35,
@@ -15272,20 +15271,20 @@ fn segment_hits_sphere(a: V3, b: V3, c: V3, r: f32) -> bool {
     /// head + look) activates every trigger whose volume it meets. For LOAD_LEVEL: `Trigger_Activate` checks
     /// cancel channels (0x60–0x63), the key gate, sets the success/fallback channels, and requests the level
     /// load. For TouchOnce: sets the output channel. [M 0x1a5170:100-108, 0x1b2318:34-111].
-    fn player_use_triggers(&mut self, head: V3, look: V3, cel: Option<usize>, frame: u32, world: &CollisionWorld) {
+    fn player_use_triggers(&mut self, head: V3, look: V3, frame: u32) {
         let use_point = [head[0] + look[0], head[1] + look[1], head[2] + look[2]];
         let r = 1.0;
         // The game's test is `Collide_SphereIntersect(1.0, head + look, *(player+0x20), …)`, mask
         // 0x101 [M 0x1a5170:100-108 → 0x1ec940:94-111], three stages (level-12-exit-pick):
-        // 1. The CEL SCOPE: `Collide_Pick` 0x1eb320 walks only the objects linked to the cels
+        // 1. The cel scope: `Collide_Pick` 0x1eb320 walks only the objects linked to the cels
         //    `Collide_StraddleCels` 0x1eac98 reaches from the PLAYER's cel through the portals the
-        //    use sphere meets (`Intersect_Portal` 0x1ea7b8 v0x101) [M 0x1eb320:125, :313-328].
-        //    `Trigger_Create` 0x1b1720:96 links each trigger once with `build_LinkToRoom` 0x1c9680
-        //    → `build_FindCel` 0x1c8cb0 at its world-sphere centre. A wall with no portal keeps a
-        //    trigger behind it out of the pick — no line-of-sight test is needed, and the class-0x1D
-        //    arm has no facing test either [M 0x1a5170:134-137]. Deviation [S]: the port links at
-        //    the volume's AABB centre (the glist's bounds-sphere centre is the box centre for the
-        //    box-built volumes; the game's obj+0x80 is not carried on `Trigger`).
+        //    use sphere meets (`Intersect_Portal` 0x1ea7b8 v0x101) [M 0x1eb320:125, :313-328];
+        //    `Trigger_Create` 0x1b1720:96 links each trigger once (`build_LinkToRoom` 0x1c9680 at
+        //    its world-sphere centre). NOT modelled: the port carries no trigger obj+0x80 and its
+        //    cel links are approximations (the player relinks at POS, `player_cel_relink`), and a
+        //    trial gate refused real presses — 0700000d's E panel #450 resolved to cel 6 at its box
+        //    centre while Bond, standing at it, sat in cel 93 (use_key_census_live). The class-0x1D
+        //    arm has no facing or line-of-sight test [M 0x1a5170:134-137].
         // 2. The bounds-sphere gate: `|use point − obj+0x80|² < (1.0 + obj+0x8C)²` [M 0x1eae80:
         //    219-228] — implied by stage 3 for the port's world-space tris (the bounds sphere
         //    encloses the glist), so not repeated.
@@ -15294,19 +15293,13 @@ fn segment_hits_sphere(a: V3, b: V3, c: V3, r: f32) -> bool {
         //    [M 0x1ec940:120-125] (`CollisionWorld::sphere_meets_tris`). The old AABB stand-in was
         //    a superset: 07000012's exit #669 is two crossed planes (y 0.676, z 9.962 [D]) inside
         //    its 1.20..3.32 × 9.47..10.45 box, so a press from the security room at (1.12, 7.49)
-        //    met the inflated box (and the room's wall stood between) while the game's pick never
-        //    reaches it — the use point sits 1.49 from the vertical plane, 1.11 above the
-        //    horizontal one, and the exit's cel (the lift lobby) is not straddled from the room.
+        //    facing north met the inflated box through the room's north wall, while the use point
+        //    sits 1.49 from the vertical plane and 1.11 above the horizontal one — no hit, as in
+        //    the game [L PCSX2 2026-10-31, docs/levels/07000012.md §3].
         // Triggers without tris (synthetic test volumes) keep the AABB test.
-        let scope = cel.and_then(|c| world.use_sphere_cels(c, use_point, r));
         let hits: Vec<usize> = (0..self.triggers.len()).filter(|&i| {
             let t = &self.triggers[i];
             if (0..3).any(|k| use_point[k] + r < t.lo[k] || use_point[k] - r > t.hi[k]) { return false; }
-            if let Some(cels) = &scope {
-                let c = [(t.lo[0] + t.hi[0]) * 0.5, (t.lo[1] + t.hi[1]) * 0.5, (t.lo[2] + t.hi[2]) * 0.5];
-                // An unlinked trigger (FindCel miss) is in no cel's chain: the pick never sees it.
-                match world.find_cel(c) { Some(tc) if cels.contains(&tc) => {}, _ => return false }
-            }
             t.tris.is_empty() || CollisionWorld::sphere_meets_tris(use_point, r, &t.tris)
         }).collect();
         for i in hits {
@@ -17173,12 +17166,12 @@ fn segment_hits_sphere(a: V3, b: V3, c: V3, r: f32) -> bool {
         // Bond's turn in the object walk, AFTER Trigger_Calc's touch clear and BEFORE the later
         // muxes' updates in the same walk [M 0x1336f8's loop; Player_Activate 0x1a5170]. Consumed
         // here so the written channel survives to the mux walk (0700000c's secret door).
-        if let Some((head, look, cel)) = self.use_trigger_request.take() {
-            self.player_use_triggers(head, look, cel, frame, d.world);
+        if let Some((head, look)) = self.use_trigger_request.take() {
+            self.player_use_triggers(head, look, frame);
         }
         // mp-world-sync: online, every pressing body's trigger half, in slot order.
-        for (head, look, cel) in std::mem::take(&mut self.net_use_triggers) {
-            self.player_use_triggers(head, look, cel, frame, d.world);
+        for (head, look) in std::mem::take(&mut self.net_use_triggers) {
+            self.player_use_triggers(head, look, frame);
         }
         // `switch_channels_prev` is snapshotted right after `Trigger_Calc`, BEFORE the object walk [M 0x1336f8:52-53
         // — `prev ← hold; hold ← channels` at 0x1337cc/0x1337dc] — so `Door_Update`'s lock rising edge

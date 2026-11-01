@@ -11,6 +11,7 @@ fn main() {
     let sim = scene.sim.as_mut().unwrap();
     for _ in 0..600 { sim.step_bond(Input::default(), false, false, false); }
     doors(sim);
+    for t in sim.drones.triggers.iter().filter(|t| t.mask & 4 != 0 && false) { println!("E-trig plc {} out {:#x} lo {:?} hi {:?} tris {:?}", t.placement, t.out, t.lo, t.hi, t.tris); }
     let ti = sim.drones.triggers.iter().position(|t| t.kind == nf_game::triggers::kind::LOAD_LEVEL).expect("exit");
     {
         let t = &sim.drones.triggers[ti];
@@ -48,13 +49,17 @@ fn main() {
             }
         }
     }
+    for t in sim.drones.triggers.iter().filter(|t| t.out == 0x49 && t.mask & 4 != 0) {
+        let flipped: Vec<[[f32; 3]; 3]> = t.tris.iter().map(|q| [q[0], q[2], q[1]]).collect();
+        println!("console mesh hit {} flipped {} (up {:?})", nf_game::world::CollisionWorld::sphere_meets_tris(up, 1.0, &t.tris), nf_game::world::CollisionWorld::sphere_meets_tris(up, 1.0, &flipped), up);
+    }
     // The real E press from here.
     let mut fired = false;
     for _ in 0..10 {
         sim.step_bond(Input::default(), false, false, true);
         if sim.drones.level_exit.is_some() { fired = true; break; }
     }
-    println!("E press fires the exit: {fired} ({:?})", sim.drones.level_exit);
+    println!("E press fires the exit: {fired} ({:?}) ch49 {}", sim.drones.level_exit, sim.drones.channels.on(0x49));
 }
 
 #[allow(dead_code)]
