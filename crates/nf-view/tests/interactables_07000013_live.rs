@@ -47,9 +47,9 @@ fn the_mid_lobby_touches_write_0x56_on_the_walk() {
 /// fake-lift doors' baked mesh x −14.6..−12.9 / z 31.3..32.9 inside the glass band
 /// x −18.4..−10.6 / z 27.5..35.3, plus the room's own east wall [D stuck dumps]), so the walked
 /// approach rounds the desk block's north side to the unlocked north-west door #355
-/// (−26.65, −368.36, 37.44 [D]), whose proximity arm opens it as Bond walks up ([D straddle
-/// param 4 = 1; probe: state 0x2 while the leg closes] — the E toggle is the game's second arm,
-/// [M Door_Activate]) and walks the room south to the shelves.
+/// (−26.65, −368.36, 37.44 [D]), whose E opens it ([M Door_Activate 0x135be0's toggle]; the level
+/// doc §7's old "proximity arm" prose misread `Door_Update` 0x1363c8's open-door-only scan — the
+/// door test in this file is the correction) and walks the room south to the shelves.
 ///
 /// Sister note: the old "the east-lane 0x56 touch stayed off" sister is gone. The disc's two
 /// 0x56 TouchOnces (#140/#141) sit at the desk block's two lanes — volumes x −8.33..−5.61 and
