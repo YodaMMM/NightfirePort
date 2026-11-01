@@ -154,6 +154,10 @@ impl Drops {
 /// with `lui $t0, 0x200` at 0x17bf14/0x17bfb8 [M disasm]).
 pub const BREATH_MESH: u32 = 0x0200_021d;
 
+/// Both breath variants' `Gas_Init` rgba end: `lui $t3, 0xffff` + `ori $t3, $t3, 0xff01` = 0xffffff01
+/// [M disasm 0x17bf20/0x17bf68 and 0x17bfc8/0x17c020] — white, alpha 1.
+pub const BREATH_RGBA_END: u32 = 0xffff_ff01;
+
 /// `Env_WaterRipple` 0x17c118 (148 B): the hit-driven water ring. `material` is the HITDATA+0x50
 /// surface byte, `hit_point` the HITDATA+0x40 contact. The gate [M disasm 0x17c120-0x17c138]:
 /// `hit != 0` (the caller passes nothing on a null HITDATA) and `(material & 0x3f) - 0xd < 2`
@@ -191,23 +195,29 @@ pub fn env_water_ripple(gas: &mut crate::gas::GasPool, material: u8, hit_point: 
 /// 10-divide at 0x17be30-0x17be40); and `(float)((frame - phase) % (FRAME_RATE_INT*2))` <=
 /// `(FRAME_RATE+FRAME_RATE) * 0.33333334` = 40.0 — a 41-of-120 sub-window.
 ///
-/// The spawn, `pos + dir*0.05` (0x3dcccccd, the COP2 `_vmulbc/_vadd` both variants share):
+/// The spawn, `pos + dir*0.1` (0x3dcccccd = 0.1, stored as the broadcast scalar at sp+0x20 / sp+0x30
+/// for the COP2 `_vmulbc/_vadd` [M disasm 0x17bf00-0x17bf18, 0x17bfa4-0x17bfbc]):
 /// - variant A (env gate true AND cam_mode == 2 [M 0x17bed0-0x17bf84]): `Gas_Init(0.05, 0.2,
 ///   cel, pos, quat {0, 0, Rand_FRand(6.2831855), ..}, dir, 0x0200_021d, kind 0, rgba
-///   0xffffffc8, rgba_end 0xff01, life 40)` [M 0x17bf8c-0x17c020; the `sw $v0(0x28), ($sp)` life
-///   at 0x17c010], then the gas object's `+0xf0 |= 0x400` [M 0x17c024-0x17c02c] — the x-ray-only
-///   draw bit (`View_AddObjects` 0x1e62d8:38-47 submits it only while the viewer's +0x236 is 2),
-///   carried as `Gas::xray_only`. The velocity is the `dir` argument times REC_FRAME_RATE (Gas_Init's
-///   non-kind-4 `param_6 != 0` arm [M 0x1aacc8 tail]) — the puff drifts with the breath.
-/// - variant B (env gate false — any cam mode): `Gas_Init(0.05, 0.05, cel, pos, quat NULL, dir,
-///   0x0200_021d, kind 0, rgba 0xffffff80, rgba_end 0xff01, life 40)` [M 0x17bf00-0x17bf70:
-///   f13 = f12 = 0.05, t2 = 0xffffff80, the same `sw 0x28` life; a2 = 0 is the null quaternion
-///   in the decompile] — the plain puff, no random yaw, no +0xf0 flag.
+///   0xffffffc8, rgba_end 0xffffff01, life 40)` [M 0x17bfe4-0x17c020: f12 = 0x3d4ccccd, f13 =
+///   0x3e4ccccd, t2 = `lui 0xffff` + `ori 0xffc8`, t3 = `lui 0xffff` + `ori 0xff01`, the
+///   `sw $v0(0x28), ($sp)` life at 0x17c010], then the gas object's `+0xf0 |= 0x400`
+///   [M 0x17c024-0x17c02c] — the x-ray-only draw bit (`View_AddObjects` 0x1e62d8:38-47 submits it
+///   only while the viewer's +0x236 is 2), carried as `Gas::xray_only`. The velocity is the `dir`
+///   argument times REC_FRAME_RATE (Gas_Init's non-kind-4 `param_6 != 0` arm [M 0x1aacc8 tail]) —
+///   the puff drifts with the breath.
+/// - variant B (env gate false — any cam mode): `Gas_Init(0.05, 0.1, cel, pos, quat NULL, dir,
+///   0x0200_021d, kind 0, rgba 0xffffff80, rgba_end 0xffffff01, life 40)` [M 0x17bf00-0x17bf68:
+///   f12 = 0x3d4ccccd (0.05), f13 = 0x3dcccccd (0.1), t2 = 0xffffff80, t3 = 0xffffff01, the
+///   `sw 0x28` life at 0x17bf48; a2 = 0 is the null quaternion] — the plain puff, no random yaw,
+///   no +0xf0 flag, growing 0.05 -> 0.1 over its 40 ticks.
 ///
-/// The 0xff01 end unpacks (r,g,b,a) = (0, 0, 255, 1): the white puff fades blue as its alpha
-/// runs out (the same big-endian (r,g,b,a) packing `Gas_Init` writes to obj+0x103..0x106 [M
-/// 0x1aacc8]). The yaw draw is the pool's counter-hash stand-in, not the shared stream (the
-/// G-033/fix-world-fx discipline — `Gas_Init`'s own spin draw is the pool's [M 0x1aacc8:72-80]).
+/// Both ends are 0xffffff01: the puff stays white and only its alpha runs out (128 -> 1 or
+/// 200 -> 1), in `Gas_Init`'s big-endian (r,g,b,a) packing at obj+0x103..0x106 [M 0x1aacc8].
+/// (The decompile prints the end as the sign-extended 0xffffffffffffff01; an earlier reading
+/// truncated it to 0xff01, a fade to blue that darkened the puff.) The yaw draw is the pool's
+/// counter-hash stand-in, not the shared stream (the G-033/fix-world-fx discipline — `Gas_Init`'s
+/// own spin draw is the pool's [M 0x1aacc8:72-80]).
 /// The breath origin a guard hands `Env_Breath` [M `NDrone2_ControlSTANDARD` 0x1490f0:172-198]:
 /// `AnimGetBoneWorldTrans(obj, bone 5, …)` gives the head bone's world matrix; the direction is
 /// its z row (the COP2 `_vmulabc/_vmaddabc/_vmaddbc` of the rows with (0, 0, 1)), and the position
@@ -244,8 +254,8 @@ pub fn env_breath(
     if (delta % 120) as f32 > 40.0 {
         return;
     }
-    // pos + dir*0.05 [M the shared COP2 prologue of both variants]
-    let at = [pos[0] + dir[0] * 0.05, pos[1] + dir[1] * 0.05, pos[2] + dir[2] * 0.05];
+    // pos + dir*0.1 [M 0x3dcccccd at 0x17bf00 / 0x17bfa4, both variants]
+    let at = [pos[0] + dir[0] * 0.1, pos[1] + dir[1] * 0.1, pos[2] + dir[2] * 0.1];
     // The env gate: `GlobalEnv == 0 || GlobalEnv+0x4b != 0 || cel+0x3c & 0x10000000`
     // [M 0x17bed0-0x17bef8]. `None` = no GlobalEnv modelled -> the `GlobalEnv == 0` arm.
     let gate = env_gate.unwrap_or(true) || cel_env_bit;
@@ -256,7 +266,7 @@ pub fn env_breath(
         // Variant A: quat z = Rand_FRand(2*pi) [M 0x17bf8c-0x17bfa0], kind 0, dir*REC velocity.
         // The port passes yaw 0 — the draw ignores it (the spin comes from the pool's own
         // counter-hash in `init_ex`), and the game's shared-stream draw is not re-based here [S].
-        gas.init_ex(BREATH_MESH, at, 0.0, dir, 0.05, 0.2, 0, [255, 255, 255, 200], 0x0000_ff01, 40.0);
+        gas.init_ex(BREATH_MESH, at, 0.0, dir, 0.05, 0.2, 0, [255, 255, 255, 200], BREATH_RGBA_END, 40.0);
         if let Some(g) = gas.puffs.last_mut() {
             // Gas_Init's non-kind-4 velocity arm: arg * REC_FRAME_RATE [M 0x1aacc8 tail].
             let rec = 1.0 / 60.0;
@@ -265,8 +275,8 @@ pub fn env_breath(
         // +0xf0 |= 0x400 [M 0x17c024-0x17c02c]: the puff draws only in x-ray (`Gas::xray_only`).
         if let Some(g) = gas.puffs.last_mut() { g.xray_only = true; }
     } else {
-        // Variant B: null quaternion, no yaw, static 0.05 size [M 0x17bf00-0x17bf70].
-        gas.init_ex(BREATH_MESH, at, 0.0, dir, 0.05, 0.05, 0, [255, 255, 255, 128], 0x0000_ff01, 40.0);
+        // Variant B: null quaternion, no yaw, 0.05 -> 0.1 [M 0x17bf00-0x17bf68: f12 0x3d4ccccd, f13 0x3dcccccd].
+        gas.init_ex(BREATH_MESH, at, 0.0, dir, 0.05, 0.1, 0, [255, 255, 255, 128], BREATH_RGBA_END, 40.0);
         if let Some(g) = gas.puffs.last_mut() {
             let rec = 1.0 / 60.0;
             g.vel = [dir[0] * rec, dir[1] * rec, dir[2] * rec];
@@ -397,11 +407,12 @@ fn breath_gate_fires_on_the_6th_frame_window() {
     assert_eq!(gas.puffs.len(), 1);
     let g = &gas.puffs[0];
     assert_eq!(g.mesh, BREATH_MESH);
-    assert_eq!(g.pos, [1.0, 2.0, 3.05]); // pos + dir*0.05 [M 0x17bfcc-0x17c008]
+    assert!((g.pos[2] - 3.1).abs() < 1e-6 && g.pos[0] == 1.0 && g.pos[1] == 2.0); // pos + dir*0.1 [M 0x3dcccccd at 0x17bfa4]
     assert!((g.scale - 0.05).abs() < 1e-6);
     assert!((g.scale_rate - (0.2 - 0.05) / 40.0).abs() < 1e-6); // (p2-p1)/life [M 0x1aacc8]
     assert_eq!(g.rgba[3], 200.0); // 0xffffffc8 alpha [M 0x17c018]
-    assert_eq!(g.rgba_rate[3], (1.0 - 200.0) / 40.0); // end 0xff01 alpha 1 [M 0x17c020]
+    assert_eq!(g.rgba_rate[3], (1.0 - 200.0) / 40.0); // end 0xffffff01 alpha 1 [M 0x17bfc8/0x17c020]
+    assert_eq!(&g.rgba_rate[..3], &[0.0; 3]); // white stays white: end rgb 0xffffff [M lui 0xffff]
     assert!((g.life - 40.0).abs() < 1e-6); // sw 0x28 ($sp) [M 0x17c010]
     assert!((g.vel[2] - 1.0 / 60.0).abs() < 1e-6); // dir*REC [M 0x1aacc8 tail]
 }
@@ -415,11 +426,14 @@ fn breath_gate_sisters_zone_and_window_edges() {
     // Sister: frame 41 (41%6 != 0) -> nothing [M 0x17be58].
     env_breath(&mut gas, 41, 0, [0.0; 3], [0.0; 3], 1, false, 2, None);
     assert!(gas.puffs.is_empty());
-    // Sister: variant B (env gate Some(false)) fires WITHOUT the cam-2 gate, alpha 128, 0.05 static.
+    // Sister: variant B (env gate Some(false)) fires WITHOUT the cam-2 gate, alpha 128, 0.05 -> 0.1.
     env_breath(&mut gas, 36, 0, [0.0; 3], [0.0; 3], 1, false, 0, Some(false));
     assert_eq!(gas.puffs.len(), 1);
     assert_eq!(gas.puffs[0].rgba[3], 128.0); // 0xffffff80 [M 0x17bf60]
-    assert!((gas.puffs[0].scale_rate).abs() < 1e-6); // p1 == p2 == 0.05 [M 0x17bf00-0x17bf08]
+    assert!((gas.puffs[0].scale - 0.05).abs() < 1e-6); // f12 0x3d4ccccd [M 0x17bf24-0x17bf2c]
+    assert!((gas.puffs[0].scale_rate - (0.1 - 0.05) / 40.0).abs() < 1e-7); // f13 0x3dcccccd [M 0x17bf00-0x17bf08]
+    assert_eq!(&gas.puffs[0].rgba_rate[..3], &[0.0; 3]); // end 0xffffff01: no fade to blue [M 0x17bf20/0x17bf68]
+    assert_eq!(gas.puffs[0].rgba_rate[3], (1.0 - 128.0) / 40.0);
 }
 
 /// The two variants' draw bit: the mode-2 puff (env gate true) carries +0xF0 |= 0x400 — x-ray

@@ -66,8 +66,9 @@ fn breath_puffs(scene: &Scene) -> Vec<nf_game::gas::Gas> {
 }
 
 /// A snow level (07000005: `Env_Create` drop type 0 [D]) — the guards breathe the plain puff in
-/// every mode: spawned at the head + dir·0.17 (0.12 by the caller, 0.05 by Env_Breath), alpha
-/// 128, static 0.05 size, no x-ray bit [M 0x17bf00-0x17bf70]; the pool's breath slots draw it in
+/// every mode: spawned at the head + dir·0.22 (0.12 by the caller, 0.1 by Env_Breath), alpha
+/// 128 fading to 1 while staying white (end 0xffffff01), size 0.05 -> 0.1, no x-ray bit
+/// [M 0x17bf00-0x17bf68]; the pool's breath slots draw it in
 /// mode 0. Sister: a dead guard stops breathing.
 #[test]
 fn snow_level_guards_breathe_in_every_mode() {
@@ -87,7 +88,9 @@ fn snow_level_guards_breathe_in_every_mode() {
     for g in &seen {
         assert!(!g.xray_only, "the snow variant carries no 0x400 bit");
         assert!((born(g) - 128.0).abs() < 0.5, "alpha 0x80 at spawn [M 0x17bf60]: {}", born(g));
-        assert_eq!((g.scale, g.scale_rate), (0.05, 0.0), "static 0.05 [M 0x17bf00-0x17bf08]");
+        let born_scale = g.scale - g.scale_rate * (40.0 - g.life);
+        assert!((born_scale - 0.05).abs() < 1e-5 && (g.scale_rate - 0.05 / 40.0).abs() < 1e-7, "0.05 -> 0.1 [M f12/f13 0x17bf00-0x17bf2c]: {born_scale} {}", g.scale_rate);
+        assert!(g.rgba[..3].iter().all(|&c| c == 255.0), "the puff stays white (end 0xffffff01) [M 0x17bf20/0x17bf68]: {:?}", g.rgba);
     }
     let gp = scene.sim.as_ref().unwrap().drones.list[di].pos;
     let near = seen.iter().any(|g| ((g.pos[0] - gp[0]).powi(2) + (g.pos[2] - gp[2]).powi(2)).sqrt() < 1.0 && g.pos[1] > gp[1]);
