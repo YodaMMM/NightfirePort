@@ -24,6 +24,8 @@ fn iso() -> Option<String> { std::env::var("NF_ISO").ok() }
 
 fn load(iso: &str) -> Sim {
     let mut scene = nf_view::load(iso, "07000002.bin", false).expect("load 07000002");
+    // hud-start: a load holds nothing (0x47 [M 0x1a7ef8:137]) — settle the start draw first.
+    nf_view::settle_start_draw(scene.sim.as_mut().unwrap());
     scene.sim.take().expect("sim")
 }
 

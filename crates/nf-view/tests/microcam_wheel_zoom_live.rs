@@ -20,7 +20,10 @@ fn iso() -> Option<String> { std::env::var("NF_ISO").ok() }
 const SNIPER: &[u8] = &[0x24];
 
 fn load_sniper(iso: &str) -> nf_view::scene::Scene {
-    nf_view::load_with_carry_weapons(iso, "07000005.bin", false, None, SNIPER).expect("load 07000005")
+    let mut scene = nf_view::load_with_carry_weapons(iso, "07000005.bin", false, None, SNIPER).expect("load 07000005");
+    // hud-start: a load holds nothing (0x47 [M 0x1a7ef8:137]) — settle the start draw first.
+    nf_view::settle_start_draw(scene.sim.as_mut().unwrap());
+    scene
 }
 
 /// Hold the right button (scope+zoom, the window's mouse-first mapping) until the aim bit is up
@@ -111,6 +114,8 @@ fn the_wheel_steps_the_zoom_between_the_weapon_min_and_max() {
 fn the_micro_camera_steps_through_its_own_range() {
     let Some(iso) = iso() else { eprintln!("NF_ISO not set — skipping"); return };
     let mut w = nf_view::load(&iso, "07000005.bin", false).expect("load 07000005");
+    // hud-start: a load holds nothing (0x47 [M 0x1a7ef8:137]) — settle the start draw first.
+    nf_view::settle_start_draw(w.sim.as_mut().unwrap());
     for _ in 0..10 { w.sim.as_mut().unwrap().step_bond(Input::default(), false, false, false); }
     // Equip the Micro-Camera through the real switch, settle the swap (the brackets test's recipe).
     for _ in 0..4 { w.sim.as_mut().unwrap().step_bond(Input { switch_to: Some(0x54), ..Input::default() }, false, false, false); }
@@ -146,6 +151,8 @@ fn the_micro_camera_steps_through_its_own_range() {
 fn the_wheel_keeps_switching_weapons_when_not_aiming() {
     let Some(iso) = iso() else { eprintln!("NF_ISO not set — skipping"); return };
     let mut w = nf_view::load(&iso, "07000005.bin", false).expect("load 07000005");
+    // hud-start: a load holds nothing (0x47 [M 0x1a7ef8:137]) — settle the start draw first.
+    nf_view::settle_start_draw(w.sim.as_mut().unwrap());
     for _ in 0..10 { w.sim.as_mut().unwrap().step_bond(Input::default(), false, false, false); }
     let start = w.sim.as_ref().unwrap().gun.weapon;
     // The wheel without the aim button: a switch request goes out [M Player_WeaponChange lane].

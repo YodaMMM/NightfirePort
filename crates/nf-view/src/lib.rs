@@ -2233,6 +2233,20 @@ pub fn pause_hud_refresh(sim: &mut scene::Sim) {
     sim.drones.pain_alpha = 1.0;
 }
 
+/// Headless / test aid (hud-start): step a freshly loaded level with no input until the start
+/// draw has settled — the start weapon in hand with the switch machine idle. A load holds
+/// nothing (0x47 [M Player_InitWeapon 0x1a7ef8:137]) and the level's request draws on the first
+/// ticks; a script camera's hold is skipped the way the walkers do. Returns the ticks stepped.
+pub fn settle_start_draw(sim: &mut scene::Sim) -> u32 {
+    for t in 0..600 {
+        let req = sim.gun.switch_request;
+        if sim.gun.switch_state == 0 && (req == 0 || (sim.gun.weapon == req && t > 0)) { return t; }
+        if sim.disabled { sim.drones.scripts.skip_request = true; }
+        sim.step_bond(Default::default(), false, false, false);
+    }
+    600
+}
+
 /// `movie_up`: a movie frame is on screen (see `scene_overlay_up`).
 pub fn shot_hud(scene: &scene::Scene, aspect: f32, menu: Option<&gpu::HudFrame>, movie_up: bool) -> gpu::HudFrame {
     let mut f = menu.map_or_else(|| overlay_for(scene, aspect), |m| m.clone());

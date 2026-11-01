@@ -152,6 +152,8 @@ const GADGET_CONTEXT_IDS: &[u32] = &[1102, 1104, 1106, 1484, 1485, 1108, 1110];
 #[test]
 fn a_native_weapons_sounds_come_from_the_levels_own_bank() {
     let Some(mut scene) = load("07000005.bin") else { eprintln!("NF_ISO not set — skipping"); return };
+    // hud-start: a load holds nothing (0x47 [M 0x1a7ef8:137]) — settle the start draw first.
+    nf_view::settle_start_draw(scene.sim.as_mut().unwrap());
     let (own, banks) = disc_banks(0x0700_0005);
     assert_eq!(own, 4, "07000005 → bank hash 5 → slot 4 [M Sound_Ready]");
     let mut sound = nf_view::build_sound(&mut scene).expect("the level has a bank");
