@@ -1874,10 +1874,18 @@ self.local = [vs / k, vf / k];
         // dot(HITTEST+0x50 − (B + push), axis) < 0 (0x10a66c-0x10a6a0), dot3 = dot(normalize(R),
         // axis) < 0.7 (0x10a6a8-0x10a734). The port's dot2 MODEL — HITTEST+0x50 as a lifetime push
         // accumulator, so the arm reduces to `pick_ref_y < b_pre_y` — that reading (the 0c3
-        // attempt) rests on the bit word's unpinned per-tick clear; the pick result is MEASURED here but
-        // does NOT gate `grounded` (hatch-crouch-0c4): the 0c hatch set, the real walked route and
-        // the 0700004a descent are all green on master's `walkable || band` rule alone. Feeding
-        // the accumulator stays [M Collide_Intersect 0x1ebaa8:353-373] for when the arm returns.
+        // attempt) — the pick result is MEASURED here but does NOT gate `grounded` (hatch-crouch-0c4):
+        // the 0c hatch set, the real walked route and the 0700004a descent are all green on master's
+        // `walkable || band` rule alone. Feeding the accumulator stays [M Collide_Intersect
+        // 0x1ebaa8:353-373] for when the arm returns. Pinned since: the bit word IS cleared per tick
+        // [M Collide_Update 0x1ea398:83 `*(HITTEST+0x9c) = 0` just before Collide_Pick] and ORed
+        // per hit from the stack copy [M Collide_Intersect 0x1ebaa8:390]; and the bit block sits
+        // INSIDE the radial push arm [M Intersect_CylGeom 0x109da0 — `0 < dot(q − copy+0x50,
+        // face normal)` :431 and `|q − copy+0x50| < radius` :447, the bit at :513 only after that push], an
+        // arm `capsule_tri_contact`'s `pick` flag does not require (it sets on every up-facing
+        // contact in range). Gating `grounded` on that flag is therefore broader than the game's
+        // bit and moves every body that brushes an up-facing edge above B: level-03-fall-through-
+        // floor re-tried it and turned the same MP digests / kbd trace / 01 exit walk red as 0c3.
         // The contact-distance band [M Player_FeetOnPoint 0x194188:106 `*(float *)(hit + 0xc) - 0.1
         // <= cc`] reads HITDATA+0xC, which Intersect_RayGeom 0x10a8c8 fills with the ABSOLUTE
         // distance |from − hit| — hit = from + t·dir (:176-179 the dir·t product and the from add;
