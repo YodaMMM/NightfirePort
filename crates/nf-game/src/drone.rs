@@ -13866,7 +13866,7 @@ fn segment_hits_sphere(a: V3, b: V3, c: V3, r: f32) -> bool {
                 });
             }
             let mut rb_sounds = Vec::new();
-            self.rbodies.handle_collisions(&mut rb_sounds);
+            self.rbodies.handle_collisions(&d.world, &mut rb_sounds);
         }
         for (di, ddmg) in hits.drones {
             if let Some(dr) = self.list.get_mut(di) {
@@ -18643,7 +18643,7 @@ fn segment_hits_sphere(a: V3, b: V3, c: V3, r: f32) -> bool {
                 // list here evolved every body once per BODY: 07000004's two lamps swung at
                 // double rate.)
                 let mut rb_sounds = Vec::new();
-                self.rbodies.handle_collisions_one(index, &mut rb_sounds);
+                self.rbodies.handle_collisions_one(&d.world, index, &mut rb_sounds);
                 for (id, pos) in rb_sounds { self.audio.play3d(id, pos, None); }
                 self.rbodies.tick_one(index, self.level_current & 0xf, &mut self.rng);
                 continue;
