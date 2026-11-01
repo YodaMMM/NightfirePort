@@ -411,6 +411,155 @@ fn the_bond_bonus_walk_over_takes_it() {
     assert!(taken(&w), "the walk-over consumes the bonus [M 0x18e650:234-236]");
 }
 
+/// The comms console's shot arm (0x30 #105 "room_communication_tv", p1 = 0 → the tag's health
+/// word starts at 1.0 [D params; M Monitor_Create 0x1b08b0:16-21 — the `param_3+0x30 == 0`
+/// arm stores 0x3f800000]): `Monitor_Update` 0x1afcc8:23-27 drains the frame's class-5
+/// contact chain off the health (`Collide_GetDamageNObjects` 0x1ee220 sums every HITDATA+8
+/// damage float the bullet pass appended [M]); health < 0 → `Control_NextLOD`, obj+0xF4 = 3
+/// and the 0x0600027 explode queued in the same arm (0x1afcc8:32-45). State 3 never leaves
+/// (0x1afcc8:58-59's early return) and the E feed is gone with it (`Monitor_Activate`
+/// 0x1b0058 gates on state 0 — the port's activate returns false). Sister: a fresh load,
+/// nobody shoots — the console sits idle at state 0 with its 1.0 health.
+#[test]
+fn shooting_the_comms_console_kills_the_feed_and_the_console() {
+    let iso = iso();
+    let mut w = Walker::new(nf_view::load(&iso, "07000001.bin", false).expect("load 07000001"));
+    past_intro(&mut w);
+    let centre = {
+        let s = w.scene.sim.as_ref().unwrap();
+        assert_eq!(s.drones.monitors.list.len(), 1, "the one monitor placement [D #105]");
+        let m = &s.drones.monitors.list[0];
+        assert_eq!(m.state, 0, "idle until used [M 0x1b0058]");
+        assert!((m.health - 1.0).abs() < 1.0e-4, "p1 = 0 → the tag's health starts 1.0 [D #105 p1; M 0x1b08b0:16-21], got {}", m.health);
+        [m.pos[0], m.pos[1], m.pos[2]]
+    };
+    // The monitor test's proven stand: the comms room floor, one step in front of the console.
+    w.walk_nav_to([centre[0], centre[1] - 1.0, centre[2] + 0.7], "in front of the console", 1.2);
+    assert!(w.switch_to_armed("armed for the console"), "an armed gun for the shot");
+    let killed = face_and_fire(&mut w, centre.into(), "the comms console", |s| {
+        s.drones.monitors.list[0].state == 3
+    });
+    {
+        let s = w.scene.sim.as_ref().unwrap();
+        assert!(killed, "the bullet kills the console (health 1.0 − damage < 0 → state 3) \
+            [M 0x1afcc8:23-34], state {} health {}", s.drones.monitors.list[0].state,
+            s.drones.monitors.list[0].health);
+        assert_eq!(s.drones.monitors.list[0].state, 3,
+            "state 3 never leaves (the update's early return) [M 0x1afcc8:58-59]");
+        // The dead console's blast script is the smash family's 0x0600027 [M 0x1afcc8:43-45] —
+        // queued and drained inside the bullet tick; the visible fireball is the render layer
+        // (a live check, like the destroyable's).
+    }
+    // Sister: a fresh load, nobody shoots — the console keeps its health and its feed.
+    let mut w2 = Walker::new(nf_view::load(&iso, "07000001.bin", false).expect("reload"));
+    past_intro(&mut w2);
+    let m2 = &w2.scene.sim.as_ref().unwrap().drones.monitors.list[0];
+    assert_eq!(m2.state, 0, "the unshot console sits idle (the sister) [M 0x1b0058's state gate]");
+    assert!((m2.health - 1.0).abs() < 1.0e-4,
+        "the unshot console keeps its 1.0 health (the sister) [M 0x1b08b0:16-21], got {}", m2.health);
+}
+
+/// The security camera's sight (0x28 #280 "camera" at (−29.19, 7.87, 1.59) [D placement]:
+/// p1 = 5 → the 5° cone (`SENSOR+0x38/0x3C` = sin(5·HALF_DEG ± ) [M Sensor_Create 0x1af010:
+/// 63-66]), p2 = 6 → the 6 m range (+0x40 [M :67-73]), p3 = 0 → the OUT channel word stays 0
+/// so the 2-s sight arm's `switch_channels[p3] = 1` never fires (the `+0x58 != 0` gate [M
+/// 0x1af618:154-157]), p6 = 1 → the monitor's group [D; M 0x1b0058:19-31]). Standing in the
+/// sweep's path parks `Sensor_InCone` 0x1af4f0 hits (the cone sphere + `Collide_LineOfSight`
+/// [M 0x1af4f0:75-87]); 31 consecutive seen ticks (the `0x1e <` count [M 0x1af618:211-216])
+/// flip the state-0 sweep into the state-1 track, whose rec clock runs toward the (gated-off)
+/// 2-s write [M 0x1af618:152-157]. Sister: the fresh load's camera sweeps with Bond at the
+/// spawn — ~30 m from the lens, out of the range test — state stays 0, nothing latches.
+#[test]
+fn the_security_camera_sweep_latches_the_player_in_range() {
+    let iso = iso();
+    let mut w = Walker::new(nf_view::load(&iso, "07000001.bin", false).expect("load 07000001"));
+    {
+        let s = w.scene.sim.as_ref().unwrap();
+        assert_eq!(s.drones.sensors.list.len(), 1, "the one 0x28 placement [D #280]");
+        assert_eq!(s.drones.sensors.list[0].out, 0, "p3 = 0 — the out channel word [D #280 p3]");
+        assert_eq!(s.drones.sensors.list[0].state, 0, "sweeping at load [M 0x1af618 state 0]");
+    }
+    // Sister: Bond at the spawn (~30 m east-south-east of the lens [D]) is out of the range
+    // test: the sweep holds, the counter never climbs.
+    w.wait(240);
+    {
+        let s = w.scene.sim.as_ref().unwrap();
+        let sn = &s.drones.sensors.list[0];
+        assert_eq!(sn.state, 0, "sister: out of range the sweep holds [M 0x1af4f0's range test]");
+        assert!(!sn.last_hit, "sister: no cone hit at the spawn [M 0x1af4f0]");
+    }
+    past_intro(&mut w);
+    // Under the camera's watch: the gallery quad the cover nodes ring (x −25.8..−30.5, z
+    // 6.8..9.5 on the 5.34 floor [D cover placements]), inside the 6 m range of the lens at
+    // (−29.19, 7.87, 1.59). The nav decides the last steps; the poll watches the latch.
+    w.walk_nav_to([-28.4, 5.4, 6.9], "the gallery under the camera", 1.6);
+    let mut latched = false;
+    for t in 0..2400u32 {
+        w.tick(Default::default(), false);
+        let s = w.scene.sim.as_ref().unwrap();
+        let sn = &s.drones.sensors.list[0];
+        if t % 120 == 0 {
+            eprintln!("[sensor] t{t} bond {:?} state {} seen {} hit {} detect {:.2}",
+                s.bond.pos, sn.state, sn.seen, sn.last_hit, sn.detect);
+        }
+        if sn.state == 1 { latched = true; break; }
+    }
+    {
+        let s = w.scene.sim.as_ref().unwrap();
+        let sn = &s.drones.sensors.list[0];
+        assert!(latched, "31 consecutive cone ticks latch the track [M 0x1af618:211-216], \
+            state {} seen {} hit {} at {:?}", sn.state, sn.seen, sn.last_hit, s.bond.pos);
+        assert_eq!(sn.out, 0, "the out word stays 0 — the 2-s write is gated off [D #280 p3; M 0x1af618:154-157]");
+        // The monitor-view channel (ch 0) belongs to the monitor's E arm [M 0x1afcc8:171-174]
+        // and the smash's dead tag [D #107 p0 = 0] — being SEEN writes nothing anywhere.
+        assert!(!s.drones.channels.on(0), "the sight alone writes no channel [M 0x1af618's gate]");
+    }
+}
+
+/// The radio-room fax (0xD9 SP #79 "radioroom_FaxMachine" at (17.56, 6.21, −0.96), scripts
+/// 0x06000016/17, modes 64/8, mask 4 = the E, no gate, no out [D params; U-049]): the mode-64
+/// preload runs the script ONCE at load [M SP_CreateScriptPlayer 0x1db9a8:81-86 +
+/// SP_LoadScript 0x1dbc08's mode dispatch — the rooftop-vent pin], so stream 0's t=0 Entity
+/// op has the machine body 0x020001ba standing while the page streams (0x020001bb from key 2,
+/// 0x020001bc/bd alternating from key 26 [D nis dump 0x06000016]) are still ahead of the
+/// held playhead. The E is the class-0 entity pick [M Player_Activate 0x1a5170:121-122] →
+/// `SP_Activate` 0x1dc338:79-89 (mask & 4 → the +0x2C flag, the SCRIPTINFO+0x9C = 0 un-hold)
+/// → `SP_Update`'s state-1 arm restarts the script (`Script_Play`, state 2 [M 0x1dbda8 case 1])
+/// — the page cycle re-runs. Sister: before the E the prime's stop point holds no bd page.
+#[test]
+fn e_use_on_the_radio_fax_prints_its_pages() {
+    let iso = iso();
+    let mut w = Walker::new(nf_view::load(&iso, "07000001.bin", false).expect("load 07000001"));
+    past_intro(&mut w);
+    let has = |w: &Walker, hash: u32| w.scene.sim.as_ref().unwrap().drones.scripts.entities()
+        .iter().any(|e| e.2 == hash);
+    assert!(has(&w, 0x0200_01ba), "the preload's t=0 Entity op stands the machine body [M the \
+        mode-64 prime's one update; D 0x06000016 stream 0]");
+    // The load state the prime chain leaves [M 0x1dbc08's mode-64 arm: Script_Play + Update +
+    // Script_Stop + the trailing Update — the playhead stops mid-stream-6, whose bc/bd pages
+    // alternate every 0xa ticks from its key-26 start [D 0x06000016 stream 6] — so the last
+    // spawned page is a bc and no bd exists]:
+    assert!(!has(&w, 0x0200_01bd), "the pages wait for the E (the prime's stop leaves bc, no bd) \
+        [M 0x1dbc08:41-55; D 0x06000016 stream 6]");
+    // The fax desk: walk to the machine's front (the placement's +z face) and pulse E.
+    w.walk_nav_to([17.56, 6.21, 0.4], "at the fax desk", 1.2);
+    let (fx, fz) = (17.56062f32, -0.9633102f32);
+    let mut printed = false;
+    for t in 0..240u32 {
+        let sim = w.scene.sim.as_ref().unwrap();
+        let bp = sim.bond.pos;
+        let err = wrap_pi_pub((fx - bp[0]).atan2(fz - bp[2]) - sim.bond.yaw);
+        let input = nf_game::player::Input { turn: err.clamp(-0.08, 0.08), ..Default::default() };
+        let use_key = t % 6 == 0;
+        w.scene.sim.as_mut().unwrap().step_bond(input, false, false, use_key);
+        w.total_ticks += 1;
+        if has(&w, 0x0200_01bd) { printed = true; break; }
+    }
+    assert!(printed, "the E restarts the script and the page cycle re-runs to its bd op [M SP_Activate \
+        0x1dc338 → 0x1dbda8 case 1's Script_Play; D 0x06000016 stream 6's bd at +0xa], entities {:?}",
+        w.scene.sim.as_ref().unwrap().drones.scripts.entities().iter().map(|e| e.2).collect::<Vec<_>>());
+}
+
 /// The load-time kinds the census pins but no touch drives on this level: the music trigger
 /// (0xFB #313, ch 13 → board slot 2 [D params (0,13)/(2,2)] — the armour take's channel 13
 /// fans out through mux #293 [D]) registers with the disc's rows; the 12 fusebox placements
