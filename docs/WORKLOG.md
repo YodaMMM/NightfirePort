@@ -24,3 +24,10 @@ Session 1 progress (~11:30 UTC):
   still fails: the outbound A* crosses #614 (arms #640) and the band legs strand Bond short of the
   stand. nf-game 635/0/5i with both fixes. Remaining: the outbound nav via + fatal band legs; the
   other 0a binaries + suite totals (sandbox disk filled twice; background jobs killed).
+
+## level-0a-ceiling-gun-route-2 (branch s/level-0a-ceiling-gun-route-2)
+
+- start (the ceiling-gun-route tip 42227169 + master f3dd2eba merged, 2026-11-01 ~13:23 UTC).
+  Task: finish the crouch-under-#607 real-damage route — the outbound nav via east of #614's east
+  end, the fatal band legs, un-ignore walk_office_floor_qworm_keyboard_hatch_real_damage, pin the
+  laser band rule, run every *0700000a* binary + nf-game.
