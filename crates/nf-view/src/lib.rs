@@ -7010,6 +7010,30 @@ pub fn run() -> Result<()> {
                 if let Some((a, b, v)) = fwd { if (a..=b).contains(&t) { inp.forward = v; } }
                 if jump_at == Some(t) { inp.jump = true; }
                 if let Some((a, b, v)) = turn { if (a..=b).contains(&t) { inp.turn = v; } }
+                // Render aid (satchel-laser): `NF_LASER_AT=a-b` points Bond's eye at the first landed
+                // satchel charge (the 0x3b-family bullet the 4a lift shooters drop) and holds the
+                // trigger over those ticks — pair with `--draw 0x4e` to burn it with the laser watch.
+                let mut laser_fire = false;
+                if let Some((a, b, _)) = range("NF_LASER_AT") {
+                    if t == a { eprintln!("[satchel-laser] spark def {:?}", sim.drones.fx.defs().get(&nf_game::drone::Drones::SATCHEL_BURN_SPARKS)); }
+                    if (a..=b).contains(&t) {
+                        let charge = sim.drones.bullets.iter().find(|x| x.landed && x.family(&sim.weapons) == 0x3b).map(|x| x.pos);
+                        if let Some(c) = charge {
+                            let h = sim.bond.head();
+                            let d = [c[0] - h[0], c[1] - h[1], c[2] - h[2]];
+                            let len = (d[0] * d[0] + d[1] * d[1] + d[2] * d[2]).sqrt().max(1e-6);
+                            sim.bond.yaw = d[0].atan2(d[2]);
+                            sim.bond.pitch = (d[1] / len).asin() / std::f32::consts::FRAC_PI_2;
+                            laser_fire = true;
+                        }
+                    }
+                    if let Some(x) = sim.drones.bullets.iter().find(|x| x.landed && x.family(&sim.weapons) == 0x3b) {
+                        if t % 10 == 0 || (a..=b).contains(&t) && (t - a) % 10 == 0 {
+                            eprintln!("[satchel-laser] t{t} burn {} defused {} fuse {:.0} digits {:?} weapon {:#x} emitters {}",
+                                x.burn, x.defused, x.fuse, x.digits, sim.gun.weapon, sim.drones.fx.emitters.iter().filter(|e| e.def == 0x0c00_000a).count());
+                        }
+                    }
+                }
                 // Render aid (stairwell decals): `NF_AIM_SWEEP=yaw_span:pitch_span` spreads the `--pull`
                 // shots over a 9x5 yaw/pitch grid centred on the starting aim (each pull takes the
                 // next grid cell), then restores the starting aim before the render — the frame shows
@@ -7024,7 +7048,7 @@ pub fn run() -> Result<()> {
                         for c in sim.drones.inventory.carried.iter_mut() { *c = (*c).max(90); }
                     }
                 }
-                if walk { sim.step_bond(inp, pulls.contains(&t), false, use_at == Some(t)); } else { sim.step([cam.pos.x, cam.pos.y, cam.pos.z], cam.dir().to_array(), pulls.contains(&t), false); }
+                if walk { sim.step_bond(inp, pulls.contains(&t) || laser_fire, false, use_at == Some(t)); } else { sim.step([cam.pos.x, cam.pos.y, cam.pos.z], cam.dir().to_array(), pulls.contains(&t), false); }
             }
             if aim_sweep.is_some() { sim.bond.yaw = aim0.0; sim.bond.pitch = aim0.1; }
             // With `--skip-cutscenes`, a skipped cut-scene's hand-back moves Bond: put him back on the `--bond` spot (and
