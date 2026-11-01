@@ -105,6 +105,25 @@ Dispatch targets seen in the jump-table range: 0x25e (return), 0x2a3, 0x2e0,
 0x340 (micro 0x004-0x017 hold the matching constants; the 0x400000xx words
 there double as float constants and branch-shaped data).
 
+### The handler index (viewmodel-light, 2026-10-31) [M]
+
+The dispatch at micro 0x01e-0x025 is `ILW.w vi01, 20(vi02)` (vi01 = the batch
+base B), `ILW.x vi05, 22(vi00)` (the object's mode: 0, +2 tweak, +4 lights —
+`FillMatrixChainRot` 0x122310 / `FillMatrixChainSkin` 0x122788 write it at data
+0x16.x), `ILW.w vi04, 0(vi01)` (the u16 at byte 12 of the batch's GIF tag —
+ILW's lanes are u16 indices 0/2/4/6, i.e. bytes 0/4/8/12 per PCSX2 `_vuILW`),
+`JR vi04 + vi05`. The disc's GIF tags carry 8 or 0x10 there (ps2gfx.md "Batch
+handler selector"). The table: micro 0x08/0x0a/0x0c/0x0e (selector 8 + mode)
+branch to 0x25e/0x2a3/0x340/0x340, micro 0x10-0x16 (selector 0x10, every mode)
+to 0x2e0. Each target sits two instructions before a handler block (0x260,
+0x2a5, 0x343, 0x2e2 in micro numbering); this note does not settle that offset,
+but the block selector 0x10 reaches is unambiguous: micro 0x2e2-0x33e loads the
+env rows data 0x10-0x13 (`LQ.xyw vf05..vf08`, which only the env-matrix code in
+the two builders writes), computes `vf20.xyw = vf05·n.x + vf06·n.y + vf07·n.z +
+vf08` from the ITOF0 normal (B+3), stores it ×Q to the ST slot (B+0xc7+i), and
+colours the vertex `vf18 = vf12 ⊙ rgba` (vf12 = data 15 = TAmbient) — no light
+rows read.
+
 ## Entry point 0 (clipped) vs entry point 2 (unclipped)
 
 Both run the identical setup and dispatch; the only static difference is

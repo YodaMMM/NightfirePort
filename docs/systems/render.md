@@ -77,7 +77,27 @@ vertex colour and clamps the sum to byte 255 (`MINIi`, I = 255.0 at I-mem 919/95
 shader mirrors that at /255 over its Unorm8x4 vertex colour with a min(·,1) clamp (fix-lighting2;
 the earlier /128 over an Unorm8x4 colour was 2× the game's add). Tint (`obj+0x103..0x106`, × room
 ambient with flag 0x800); environment map on 31 objects (box flag +0x34 bit 0, e.g.
-`OBJECT_windows`): UV ≈ 0.5 + rot·n/256 [S].
+`OBJECT_windows`) and on the skinned weapon/hazmat meshes: per BATCH, the GIF tag's handler
+selector 0x10 picks the VU1 env handler — ST = 0.5 + (camera row · n)/256, colour TAmbient ⊙ rgba,
+no point lights [M, ps2gfx.md "Batch handler selector"; viewmodel-light 2026-10-31]. The weapons'
+chrome layers (the sniper silencer, pistol slides, suppressors) are these batches.
+
+### The view model's lighting (viewmodel-light, 2026-10-31) [M, D]
+
+- `AnimObjectDraw` 0x1c4490:117-122 picks `View_SetupRenderModes2` (the viewer's camera, radius
+  2.0, only while viewer+0x224 — the player object, `Player_Init` 0x1910f8:124 — is set) when the
+  skin has main glists (+0x2c) AND rigid extras (+0x2d, `AnimProcessSkinData` 0x1bd500:93-96), else
+  `View_SetupRenderModes` (obj+0x80 sphere). Both feed `View_SetupRenderModes_Tweak` 0x1e5888: the
+  0x800 view model's TAmbient = tint × obj+0x100..0x102 >> 8.
+- A datum entity (`AnimObjectDraw`'s datum loop, before `psiDrawObjectMatrix`) whose glist lacks 0x800 is re-tweaked with the raw tint;
+  a 0x800 glist keeps the object's ambient tweak.
+- The near-white sniper silencer was the env handler drawn as a plain additive batch: its disc UVs
+  sit on the stripe texture's bright band and the lights were added. With the env ST and no lights it
+  is the PS2's banded chrome (0700000c apron) and dark gunmetal in the dim ST-3 building (0700000d:
+  ambient 36 [D]). The 07000006 courtyard P-41 is lit by a kind-2 searchlight light (the spot within
+  4 of Bond, intensity (1 − d/4)·50), i.e. the searchlights' state in the port frame, not the model.
+- Shot harness: `--settle N` lets the ramp run N ticks after the `--bond` re-place (the ambient
+  needs ~30 ticks to cross from a sunlit start into a dark room).
 
 ### Light-pick corrections (2026-10-17, light-fixes) [M, L]
 
