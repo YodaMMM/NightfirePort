@@ -55,3 +55,35 @@
   walker tactics (return fire with the carried Delta Repeater, range keeping, cover, the pinned
   blast-room shelters — never game code without a cited difference) and add the real-damage
   variant of walk_the_chasers_defeat_completes_the_mission. Chaser punch is 50 raw / 20 a hit [M].
+- level-16-chaser-real-damage (s/level-16-chaser-real-damage, 2026-11-01): the chaser fight on
+  real health. The melee chain pinned: skin 0x0500001e → kind 0xb, ANIM SET 7, fists [M
+  0x14b300's switch; the placement's weapon (param 9 = 0x12 [D]) does not replace the set — the
+  0x12/0x14/0x15 arm guards on kind != 0xb] → DroneWeap_CloseCombatImpact 0x1789c0:26-40 takes
+  the kick arm (record 99, the 2.0 band, no facing gate); record 99 damage = 50.0 [D +0x0C,
+  chaser_melee_records.rs pins the bytes], records 100/0x65/0x66 = 15.0 [D]. Player side:
+  Player_HandlePain 0x1902c8 × damage_factor(0x16, diff) — the 14–16 Plr_DMod row 0.4/0.6/1.0
+  [M 0x1d4424] → the punch is 20.0 health a hit at Operative, 30.0 at Agent. The star (weapon
+  0x12, record 1.5 [D]) measured through the real path: 0.6 ranged / 1.2 point-blank (= ×2.0
+  DroneFiring_TooClose [M 0x139fac-0x139fc8]) at Operative — the_chasers_punch_lands_the_
+  record_damage pins every landed hit to the chain. NO game code changed.
+- The real-damage variant (walk_the_chasers_defeat_completes_the_mission_on_real_damage, with_
+  real_damage): the route survived on return fire alone (8 fights, 22 health taken), both
+  shelters held (sit_out_pulse zero-contact), the chaser fell to the range-keeping kill (+3364
+  — hold her outside 3.0 [M 0x1789c0 the 2.0 melee band; 0x179740:113-115 under-3.0 accuracy]),
+  pulse 2 held — Bond died only in the pit-squad phase at ~48 health (the 4-squad + pit shooter
+  #8 alive at the room's door). The test is #[ignore]d with that reason; the squad-phase cover
+  tactics are the next leg. The pit floor's placed soldiers (#6/#7/#8, skins 0x93/0x87/0x90,
+  weapon 0x14) shoot the fight stand — the allowance walks top through them (the header's
+  "damage is suppressed"); clear_the_pit_shooters is the explicit return-fire answer.
+- HER POINT-BLANK BEHAVIOUR (live check): in both runs she parked at d 1.1-1.5 cycling 0xaa/0xb2
+  star bursts every 6 ticks and never reached the sword 0xac, although 0xaa's UPDATE routes ≤2 →
+  0xa7 [M 0x16c650] and the close band rolls 0xac at ~50%/cycle [M 0x16bb50]. Either the port's
+  close-band roll distribution differs or her tracked +0x1A0 dist lags — the main agent's live
+  PCSX2 run should log her state sequence at melee range (0xaa/0xb2/0xac transitions, +0x1A0).
+- Totals on the final tree: walkreal_07000016_live 13 passed / 0 failed / 1 ignored (57s);
+  interactables_07000016_live 8 passed / 0 failed (10s). nf-game was NOT run in-window (the
+  build + the fight iterations consumed it — the sandbox rebuild from scratch took ~90 min):
+  the next continuation runs it before pushing further work. Suite: not run (the nohup start
+  is killed by the sandbox between tool calls — the known issue; the disk also filled twice
+  during the 1013-binary build: stripped executables + staged resumes got nf-game/formats/
+  audio/nf-view ~85% built before the window closed).
