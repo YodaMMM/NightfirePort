@@ -17,9 +17,9 @@
 //! [L, the task brief] shows the game's lamps 2-4° off rest and drifting, shot or not; this
 //! file pins the drift (the port's gust cycle carries the tilt through the live band
 //! repeatedly) and its zero-wind sister (the `Env_GetWindVel` target-0 gate [M 0x17c048]
-//! leaves the lamps bit-identical). The AMPLITUDE question (the port's steady swing runs
-//! wider than the live 2-4° band — see the report's live checks) is NOT pinned here: only
-//! the proven chain is.
+//! leaves the lamps bit-identical). The amplitude is pinned against a fresh-load live trace
+//! (`idle_lamp_drift_matches_the_fresh_load_live_band`): the game's band is 1.9-8.4° in the
+//! first minutes and narrows as the gust phase decays, the same as the port's.
 //!
 //! Opt-in via `NF_ISO` (the slim ISO carries 07000004).
 
@@ -124,4 +124,56 @@ fn zero_wind_keeps_the_lamps_bit_still() {
         assert_eq!(b.0, a.0);
         assert_eq!(b.1, a.1, "lamp at placement {} moved with the wind gated off — a zero-wind body must be bit-still [M 0x17c048, 0x1d79ac]", b.0);
     }
+}
+
+/// Per-window (600-tick) tilt envelope of lamp #40 from the load, `ticks` ticks long.
+fn drift_windows(scene: &mut nf_view::scene::Scene, ticks: usize) -> Vec<(f32, f32)> {
+    let sim = scene.sim.as_mut().unwrap();
+    let mut out = Vec::new();
+    let (mut mn, mut mx) = (f32::MAX, f32::MIN);
+    for t in 0..ticks {
+        sim.step_bond(Input::default(), false, false, false);
+        let o = sim.drones.rbodies.list.iter().find(|o| o.placement == 40).expect("lamp #40");
+        let d = tilt_deg(o);
+        mn = mn.min(d);
+        mx = mx.max(d);
+        if t % 600 == 599 {
+            out.push((mn, mx));
+            mn = f32::MAX;
+            mx = f32::MIN;
+        }
+    }
+    out
+}
+
+/// The drift AMPLITUDE against a fresh-load live trace [L PCSX2-gdb, 07000004 loaded through the
+/// game's own `ResetMap_LevelToLoad` path, lamp #40 obj 0x1b42a60's matrix row 1 read every frame
+/// for 4 minutes: audits/live-04-lamp/wind-fresh-tilt.txt]. The live 600-frame windows from the
+/// load: 1 → 2.106..8.423°, 5 → 1.886..7.401°, 12 → 1.602..5.849°, 23 → 1.059..3.350°. The band
+/// narrows over minutes because the gust phase W+0x38 starts at −1 and creeps toward 0 by
+/// ~0.0026/s (`Env_Update` 0x17bc88: phase += f·REC_FRAME_RATE; live −0.998 → −0.413 over the
+/// trace), and the wind is ∝ |phase| [M 0x17c048]. The earlier "2-4°" figure was one 16-second
+/// window late in that decay, not the band.
+///
+/// The inputs, live at a break on `RB_ApplyWind` 0x1d7c78 [L audits/live-04-lamp/
+/// wind-applywind-break.txt] and identical in the port: cel 0x1b47110 (both lamps), its wind
+/// W 0x1fbd520 dir (0, 0, 1), target 0.6, falloff W+0x44 0.034819 (= 1/record+0x1c 28.7196),
+/// cel+0x80 (−4.891, 10.021, 24.879); rb+0x7c 1.0, +0x9c 1.34632, +0x13c 0.328793, moments
+/// (0.17215, 0.036035, 0.170886); the force into `RB_AddImpulsiveForceAtPoint` 0x1d7d58 at
+/// frame 2412 (0, 0, 0.002205) at (8.0126, 8.878658, 23.031179) = wind·(1/mass)·(1/60).
+#[test]
+fn idle_lamp_drift_matches_the_fresh_load_live_band() {
+    let mut scene = load_04();
+    let w = drift_windows(&mut scene, 14400);
+    // (window, live min, live max) [L wind-fresh-tilt.txt]
+    for (i, lmin, lmax) in [(1usize, 2.106f32, 8.423f32), (5, 1.886, 7.401), (12, 1.602, 5.849), (23, 1.059, 3.350)] {
+        let (pmin, pmax) = w[i];
+        assert!((pmin - lmin).abs() < 0.4 && (pmax - lmax).abs() < 0.6,
+            "window {i}: port {pmin:.3}..{pmax:.3}° vs live {lmin:.3}..{lmax:.3}° (all windows {w:?})");
+    }
+    // Sister (can fail): twice the wind — the reported "twice as much" — leaves the live band.
+    let mut scene2 = load_04();
+    for wd in &mut scene2.sim.as_mut().unwrap().drones.rbodies.winds { wd.target *= 2.0; wd.strength *= 2.0; }
+    let w2 = drift_windows(&mut scene2, 1200);
+    assert!(w2[1].1 > 8.423 + 0.6, "a doubled wind must swing past the live window-1 max: {:?}", w2[1]);
 }
