@@ -12,7 +12,7 @@
 //!     `hp <= damage` [M SP_Update 0x1dbda8:283-287 (`+0x14 <= +0x18`)] — one 20-damage round
 //!     (the start weapon 0x33's damage is 20 [D weapon_data]) breaks a panel BY DESIGN.
 //! Pinned here: an idle/drifting Bond breaks nothing in 900 ticks (the port has no body-contact
-//! break either — the user's "slightest touch" repro needs the live checks in the report).
+//! break either — the reported "slightest touch" repro needs the live checks in the report).
 //!
 //! Part 2 — Drake in the cut-scene. The arrival pack cut-scene 0x0600085c (0780001b.bin, 2000
 //! ticks [D]) binds TWO anim actors: stream 1 = skin 0x0500008f (Drake — the station centrepiece
