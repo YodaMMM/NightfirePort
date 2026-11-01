@@ -90,7 +90,7 @@ pub fn report_id() -> String {
 // ── the entry save (the carried state a level starts with) ─────────────────────────────────────────────────────
 
 const SAV_MAGIC: &[u8; 4] = b"NFES";
-const SAV_VERSION: u16 = 3; // 2: + the mission tally (RamSave.tally); 3: + the warm chain's difficulty carry (RamSave.difficulty); 1 still decodes
+const SAV_VERSION: u16 = 2; // 2: + the mission tally (RamSave.tally); 1 still decodes
 
 fn put_u32(o: &mut Vec<u8>, v: u32) { o.extend_from_slice(&v.to_le_bytes()); }
 
@@ -135,10 +135,6 @@ pub fn encode_ram_save(s: &nf_game::player::RamSave) -> Vec<u8> {
             for v in &t.bond_moments { o.extend_from_slice(&v.to_le_bytes()); }
         }
     }
-    // v3: the warm chain's difficulty carry — the game's GameState+0x28 (0x2a3790) global, which
-    // survives the level change untouched (see `RamSave::difficulty`); a bug replay re-seeds it
-    // through `load_with_carry` instead of falling back to 1.
-    put_u32(&mut o, s.difficulty);
     o
 }
 
@@ -189,7 +185,6 @@ pub fn decode_ram_save(b: &[u8]) -> Result<nf_game::player::RamSave, String> {
         };
         s.tally = Some(nf_game::player::TallySave { stats, bond_moments: bm });
     }
-    if ver >= 3 { s.difficulty = r.u32()?; }
     Ok(s)
 }
 
@@ -565,7 +560,6 @@ mod tests {
                 stats: nf_game::progress::PlrMissionStats { detected: 2, shots_fired: 40, shots_hit_enemy: 17, health: 63.5, elapsed: 98_765, ..Default::default() },
                 bond_moments: [1, 0, 2, 0, 0, 0, 0, 0, 0, 3],
             }),
-            difficulty: 3,
         };
         let b = encode_ram_save(&s);
         let r = decode_ram_save(&b).expect("decodes");

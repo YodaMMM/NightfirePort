@@ -43,10 +43,9 @@ use walker::{Walker, Wp};
 
 fn iso() -> String { std::env::var("NF_ISO").expect("NF_ISO") }
 
-/// The whole warm chain (12 → 4A → 13 → out) on real input. `real_damage` = the armour detour
-/// (see the real-damage test below); the wrapper turns the top-up off for every walker the walk
-/// makes.
-fn walk_the_warm_chain(iso: &str, real_damage: bool) {
+#[test]
+fn walk_the_warm_chain_to_the_front_entrance_and_out() {
+    let iso = iso();
     // ---- 07000012 walked (the shared route) ----
     // Agent difficulty (3): the keypad locks' param-6 tag auto-unlocks them at create on
     // Operative [M 0x1ae1f8 tail], and the route's burn leg pins the Agent+ behaviour
@@ -55,32 +54,16 @@ fn walk_the_warm_chain(iso: &str, real_damage: bool) {
     // test machine OOMs with three resident levels).
     let save = {
         let mut w = Walker::new(nf_view::load_with_carry_difficulty(&iso, "07000012.bin", false, None, 3).unwrap());
-        if real_damage {
-            // The spawn-lobby guards stand ON the first leg and the fights ran point-blank, where
-            // every drone round hits [M DroneWeap_DoBulletAccuracy 0x179740:113-115] — the run
-            // arrived at 13 with 18.5 health and died in the lobby. A player backs off and trades
-            // at range: the stand's opt-in step-back (aim held) while a guard is inside 3.0.
-            w.dmg.back_off = Some(3.0);
-        }
         tower2::walk_12(&mut w);
         tower2::walk_12_exit(&mut w);
         let sim = w.scene.sim.as_ref().unwrap();
         nf_game::player::RamSave::capture(&sim.drones.health, sim.gun.switch_request,
             &sim.drones.inventory, &sim.drones.channels).with_mission(&sim.drones.mission)
-            // ONE difficulty through the mission (level-13-chain-difficulty): the game's
-            // GameState+0x28 (0x2a3790) global survives the level change untouched — its five
-            // writers (bootup 0x1c7e78:25, the difficulty page 0x216ca8:15, MP confirm 0x20ec00:150,
-            // mini-mission 0x1ffb90:22, the PTP return 0x1c8560:36) never run in an on-foot level
-            // change [M whole-decompile grep] — and the next level's creates read the SAME pick
-            // [M 0x136be0:49]. The chain's pick is 00 Agent (3): the 12 route pins the Agent+
-            // roster and the keypad's no-create-unlock burn [M 0x136be0:49, 0x1ae1f8 tail].
-            .with_difficulty(sim.drones.difficulty)
     };
 
     // ---- 0700004A: the spawn drop onto the 0x4D touch (the game's own placement) ----
     let save = {
         let mut w = Walker::new(nf_view::load_with_carry(&iso, "0700004a.bin", false, Some(&save)).unwrap());
-        if real_damage { w.dmg.back_off = Some(3.0); }
         w.wait_enabled(3000, "the 4A intro");
         let mut landed = false;
         for _ in 0..600 {
@@ -96,19 +79,14 @@ fn walk_the_warm_chain(iso: &str, real_damage: bool) {
         let sim = w.scene.sim.as_ref().unwrap();
         nf_game::player::RamSave::capture(&sim.drones.health, sim.gun.switch_request,
             &sim.drones.inventory, &sim.drones.channels).with_mission(&sim.drones.mission)
-            // The difficulty rides on (the chain's one pick; see the 12 capture above).
-            .with_difficulty(sim.drones.difficulty)
     };
 
     // ---- 07000013 walked ----
     let mut w = Walker::new(nf_view::load_with_carry(&iso, "07000013.bin", false, Some(&save)).unwrap());
-    if real_damage { w.dmg.back_off = Some(3.0); }
     {
         let sim = w.scene.sim.as_ref().unwrap();
         assert!(sim.drones.channels.on(0x48) && sim.drones.channels.on(0x49) && sim.drones.channels.on(0x4d),
             "the previous parts' channels carry through the warm load [M 0x182270]");
-        assert_eq!(sim.drones.difficulty, 3,
-            "the chain's one difficulty (00 Agent) rode the warm save into 13 [M GameState+0x28 has no transition-path writer; RamSave::difficulty]");
     }
     w.wait_enabled(3000, "the 13 intro");
     w.wait(120);
@@ -168,18 +146,6 @@ fn walk_the_warm_chain(iso: &str, real_damage: bool) {
     {
         let sim = w.scene.sim.as_ref().unwrap();
         assert_eq!(sim.bond.cel, Some(28), "the portal-1 cross relinks Bond into the security room's cel [M 0x1e0d58]");
-    }
-    if real_damage {
-        // The armour the route passes: the real-damage walk arrives here at single-digit health
-        // (the spawn-lobby trades on 12 + the lobby fights), and the room's south shelf holds the
-        // BodyArmourLight #414 (−27.66, −368.51, 25.57 [D]) — a player takes it. The take is the
-        // game's own walk-over, the armour float to 50 [M Pickup_Handler 0x18e650:220-225].
-        w.walk_to(Wp::new(-27.5, -368.4, 30.0).r(1.2), "13: the room's west lane");
-        w.walk_to(Wp::new(-27.66, -368.4, 25.57).r(1.2), "13: the BodyArmour shelf");
-        let sim = w.scene.sim.as_ref().unwrap();
-        assert!(sim.drones.health.armour >= 50.0,
-            "the BodyArmourLight (#414) took on the walked detour — the armour float to 50 [M 0x18e650:220-225], got {}",
-            sim.drones.health.armour);
     }
     w.walk_to(Wp::new(-25.5, -368.4, 32.5).r(1.2), "13: the room south-east");
     w.walk_to(Wp::new(-22.0, -368.4, 29.0).r(1.2), "13: the room south");
@@ -293,35 +259,4 @@ fn walk_the_warm_chain(iso: &str, real_damage: bool) {
     // [D]) and is DEAD DATA anyway (gate ch 0x4E has no writer on the disc [D §3]) — the walkreal
     // route ends at the level exit; the E-arm itself is covered by walk_07000013_live.
     eprintln!("[013] walked out in {} ticks; stuck {}; falls {}", w.total_ticks, w.report.stuck_events.len(), w.report.falls.len());
-}
-
-#[test]
-fn walk_the_warm_chain_to_the_front_entrance_and_out() {
-    let iso = iso();
-    walk_the_warm_chain(&iso, false);
-}
-
-/// The same chain on REAL damage (level-13-chain-difficulty): no health top-up for any walker
-/// the walk makes, the walker answers whoever shoots (`return_fire`), Bond's death panics with
-/// the death line (common/damage_log.rs). ONE difficulty end to end — the chain's 00 Agent pick
-/// rides the warm saves [M GameState+0x28 has no transition-path writer] — so the 13 lobby fight
-/// runs at the difficulty a player picked on 12. The walk takes the BodyArmour #414 detour the
-/// route passes inside the security room (a player at single-digit health grabs the armour the
-/// level grants him [D the placement; M Pickup_Handler 0x18e650:220-225]).
-///
-/// Ignored: the crossing cannot be survived with the walker's honest tactics yet. The runs die
-/// in the north lane at z ≈ 39 under two rifle guards (0x5000006, weapon 0x18, 7.0 a hit):
-/// mezzanine sniper #4 (15.4, −362.4, 42.3, d 38.6) and spawner #6 (4.1, −368.4, 37.2, d 26.8)
-/// (the real-damage runs' death logs, 4 attempts) — while `exposed_part`'s world trace never
-/// exposes either from the lane (their rounds reach Bond; the ray to their hit boxes does not),
-/// so no stand can answer them, and the walker fixes that DID land (the gadget-armed
-/// switch_to_armed bug, the 7.5/48 shooters windows, the dry resupply, the damage-weighted
-/// target pick, the 3.0 back-off) only moved the death later (85 → 78 health through 12, free
-/// fights to the glass band). Next steps: name the cover the lane needs (the desk block at
-/// x −14.6..−12.9 / z 31.3..32.9?) or the live check below.
-#[test]
-#[ignore = "the 00 Agent lobby rifles (mezzanine #4 + spawner #6) are not answerable from the walked lane yet — see the doc; the chain itself is green at the carried difficulty"]
-fn walk_the_warm_chain_to_the_front_entrance_and_out_real_damage() {
-    let iso = iso();
-    walker::with_real_damage(|| walk_the_warm_chain(&iso, true));
 }

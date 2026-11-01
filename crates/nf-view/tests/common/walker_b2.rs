@@ -316,23 +316,23 @@ impl Walker {
         got
     }
 
-    /// Cycle the weapon wheel until a GUN in hand has ammo (or give up after 12 switches).
-    /// The armed test is return_fire's in-hand gate — `(2..=0x47).contains(&weapon)` [M the
-    /// gadget ids sit above it]: the Q-Decryptor's beam charge (clip 500) read as ammo here and
-    /// the post-burn fights "fired" the gadget at the guard until its burst killed Bond (the
-    /// level-13-chain-difficulty real-damage run, fight#3 on 07000012).
+    /// Cycle the weapon wheel until the gun in hand has ammo (or give up after 12 switches).
     pub fn switch_to_armed(&mut self, label: &str) -> bool {
-        let armed = |w: &Walker| {
-            let sim = w.scene.sim.as_ref().unwrap();
-            (2..=0x47).contains(&sim.gun.weapon) && sim.gun.clip + sim.gun.spare > 0
-        };
         for k in 0..12 {
-            if armed(self) { return true; }
+            let (c, s) = {
+                let sim = self.scene.sim.as_ref().unwrap();
+                (sim.gun.clip, sim.gun.spare)
+            };
+            if c + s > 0 { return true; }
             eprintln!("[walk] {label}: cycling weapons ({k})");
             self.tick(Input { weapon_cycle: 1, ..Default::default() }, false);
             for _ in 0..60 { self.tick(Input::default(), false); } // the holster/draw cycle
         }
-        armed(self)
+        let (c, s) = {
+            let sim = self.scene.sim.as_ref().unwrap();
+            (sim.gun.clip, sim.gun.spare)
+        };
+        c + s > 0
     }
 
     /// Aim at a drone's torso (root + 0.3 — the port's drone pos is the ROOT, the torso box centre
