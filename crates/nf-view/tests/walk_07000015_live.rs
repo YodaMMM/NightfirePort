@@ -60,14 +60,17 @@ fn the_use_exit_loads_07000016_and_the_gated_one_stays_shut() {
     let mut scene = nf_view::load(&iso, "07000015.bin", false).expect("load 07000015");
     let sim = scene.sim.as_mut().unwrap();
     for _ in 0..3000 { sim.step_bond(Input::default(), false, false, false); if !sim.disabled { break; } }
-    sim.bond = nf_game::player::Bond::stand_at(&sim.world, [0.0, 41.6, -23.8], std::f32::consts::PI);
+    sim.bond = nf_game::player::Bond::stand_at(&sim.world, [0.0, 41.6, -23.3], std::f32::consts::PI);
     for _ in 0..60 { sim.step_bond(Input::default(), false, false, false); }
-    // The doorway may stop the walk short of the plane; the use sphere (head + look, radius 1 [M
-    // 0x1a5170]) reaches the plane from the doorway, so press E from the second tick on.
+    // The use pick is the glist sphere test at head + look, radius 1.0, front side only [M
+    // 0x1a5170:100-108 → Intersect_PointGeom 0x1e92d8: plane distance in (0, 1.0]]. #445's four
+    // planes (z −24.60..−24.96 [D tris]) face +Z, the approach side; the doorway stops the walk with
+    // the head at z ≈ −24.15, where the use point is already behind all four. Press while walking in,
+    // from the second tick (head ≈ −23.3: the use point is 0.1..0.5 in front of the planes).
     let mut input = Input::default();
     input.forward = 1.0;
     for t in 1..=200 {
-        sim.step_bond(input, false, false, t > 20);
+        sim.step_bond(input, false, false, t > 1);
         if sim.drones.level_exit.is_some() { break; }
     }
     let sim = scene.sim.as_ref().unwrap();

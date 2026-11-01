@@ -254,7 +254,16 @@ fn the_load_point_refuses_without_the_key_gate_and_loads_on_the_use() {
         assert_eq!(t.key_gate, 0x4c, "the key gate channel [D #206 param 1]");
         [(t.lo[0] + t.hi[0]) * 0.5, (t.lo[1] + t.hi[1]) * 0.5, (t.lo[2] + t.hi[2]) * 0.5]
     };
-    place(&mut w, exit[0], exit[1], exit[2]);
+    // The use pick is the glist sphere test at head + look, radius 1.0 [M Player_Activate
+    // 0x1a5170:100-108 → Intersect_PointGeom 0x1e92d8: front side, plane distance in (0, 1.0]].
+    // #206 is a closed slab 0.05 thick at x −10.07..−10.02 [D tris], so a use point inside it is
+    // behind every face: Bond stands 0.5 out on the open +X side and faces the slab (−X).
+    place(&mut w, exit[0] + 0.5, exit[1], exit[2]);
+    {
+        let sim = w.scene.sim.as_mut().unwrap();
+        sim.bond.yaw = -std::f32::consts::FRAC_PI_2;
+        sim.bond.pitch = 0.0;
+    }
     for _ in 0..6 { w.tick(Input::default(), true); }
     assert_eq!(w.scene.sim.as_ref().unwrap().drones.level_exit, None,
         "the key gate refuses the exit while ch 0x4C is off [M 0x1b2318:76-90]");

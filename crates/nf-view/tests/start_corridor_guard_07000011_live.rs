@@ -1,0 +1,186 @@
+//! start-corridor-guard-11: the 07000011 start-corridor guards (level-11-start-corridor-guard
+//! + its -2 continuation).
+//!
+//! Symptom: on a fresh 07000011 load with Bond idle at the start, the port walks a red-suited
+//! guard into the corridor south of the spawn from ~tick 200 and he kills Bond; the PS2 capture
+//! shows the same corridor empty over f200-f3172 [L].
+//!
+//! What this test pins (every assertion cites its evidence):
+//!  - The two switch-less office guards exist at load — placements #126 (skin 0x05000038, disc
+//!    p2 = 1) and #127 (skin 0x0500003A, p2 = 2) [D 07000011.bin map 43]; Drone_Create's
+//!    difficulty gate creates a drone iff `placement param2 <= GameState+0x40` [M 0x136be0:49],
+//!    so both exist at difficulty 3 and NEITHER exists at difficulty 0 — the game's own empty
+//!    corridor at d0, which is what the f200-f3172 capture shows.
+//!  - Their wake chain is NOT the divergence: param 3 = 0 (no switch channel) [D] and param 1 =
+//!    0x06000000, which NDrone2_DefaultInit zeroes at Drone+0x554 [M 0x14b300:611-613], so
+//!    DSTATE_Global's ENTER sends them to +0x5A2 — mode 7's start state 0x85 EnemyRunToPoint
+//!    [M 0x15b830:22-43; DroneTypeSettings row 7 start = 0x85 [D ACTION.ELF 0x29aee8+7*12]]
+//!    — the game activates them at load exactly as the port does.
+//!  - The owner rule (the -1 task's fix): ClosestAIPoint prefers the point whose +0x0c owner
+//!    equals the drone's +0x144, and DefaultInit writes +0x144 = placement PARAM 4 (piVar19[0x11]
+//!    = params[4]) [M 0x14b300:472; M 0x151b18:151-181]. The disc pairs the guards to their
+//!    run-to points: #126's p4 = 31 ↔ the group-0 AIPoint with owner 31 at (1.40, 46.8, 16.70);
+//!    #127's p4 = 30 ↔ the owner-30 AIPoint at (−1.51, 46.8, 18.21) [D].
+//!  - The alarm path is NOT what empties the corridor: EnemyRunToPoint's ENTER redirects to
+//!    RunToAlarm 0x89 only when property 0x56 is set [M 0x168910:17-27], and property 0x56 =
+//!    behaviour word 2 bit 26 [M 0x1c7d98 + the bitDescs/bitMasks tables [D ACTION.ELF
+//!    0x2c7250/0x2c7308]] — the guards' word 2 (p20) is 0x40280000, bit 26 CLEAR [D] — so the
+//!    game takes the run-to-point path; and no kind-8 AIPoint exists on the level anyway
+//!    [D the 12 map-43 0xE9 placements, p0 ∈ {0,1,2}], so RunToAlarm would park them Idle.
+//!  - At d3 the guards walk to their owner points and hold ATTACK there (return state +0x5A2
+//!    stays 0x56 at alertness 1.0, the Tower clause [M 0x168910:23-31]; the 0x4000000 latch is
+//!    clear at boot — only HandleImpact's sighting paths set it [M 0x1469b8]). AIPoint+4, the
+//!    ClosestAIPoint eligibility byte, is 1 on every point at creation [M 0x137550], so the
+//!    disc data gives the game the same walk the port runs.
+//!
+//! What is NOT pinned here (needs live checks):
+//! the f200-f3172 capture's difficulty (GameState+0x40 at capture time), and whether the game's
+//! per-cel enable bytes (+0x100/+0x101/+0x102, inherited from the cel's +0x9a/+0x9c/+0x9e at
+//! every link [M 0x1336f8:292-296, 0x1346b8]) hold the guards' control pass frozen at their
+//! spawns. Both are [L]-only questions.
+
+use nf_view::scene::Scene;
+
+fn iso() -> String { std::env::var("NF_ISO").expect("NF_ISO") }
+
+fn load_d3() -> Scene {
+    nf_view::load_with_carry_difficulty(&iso(), "07000011.bin", false, None, 3).expect("load 07000011 d3")
+}
+
+/// The group-0 AIPoints of the level, from the disc [D 07000011.bin main map 0xE9 placements]:
+/// owner 31 at (1.40, 16.70), owner 30 at (−1.51, 18.21), owner 3 at (−22.40, 24.59), owner 0 at
+/// (13.5, −6.3) and (18.9, −2.5), owner 1 at (−1.51, 0.40) — placement order.
+#[test]
+fn start_corridor_guards_exist_and_pair_to_their_owner_points() {
+    let mut scene = load_d3();
+    scene.sim.as_mut().unwrap().step_bond(Default::default(), false, false, false);
+    let sim = scene.sim.as_ref().unwrap();
+
+    // THE SISTER: both guards are present in drones.list at load (the difficulty gate passes).
+    for (p, skin, p4) in [(126usize, 0x0500_0038u32, 31i32), (127, 0x0500_003a, 30)] {
+        let di = sim.drones.list.iter().position(|d| d.placement == p && d.present)
+            .unwrap_or_else(|| panic!("guard p{p} present in drones.list [D; M 0x136be0:49]"));
+        let dr = &sim.drones.list[di];
+        assert_eq!(dr.skin, skin, "p{p}'s disc skin [D]");
+        assert_eq!(dr.group, p4 as u32, "p{p}'s placement param 4 — the ClosestAIPoint owner +0x144 [M 0x14b300:472]");
+        assert!(dr.enabled, "a switch-less guard is enabled at load, not held [M 0x15b830:22-43]");
+    }
+
+    // The wake chain: no switch channel (p3 = 0 [D]) → Global does NOT take the WaitSwitch arm
+    // [M 0x15b830:22-35], and p1 = 0x06000000 zeroes +0x554 [M 0x14b300:611-613] — the guards'
+    // start_script must be 0 so Global sends them to the mode-7 start state, not PlayScript.
+    for p in [126usize, 127] {
+        let dr = &sim.drones.list[sim.drones.list.iter().position(|d| d.placement == p).unwrap()];
+        assert_eq!(dr.switch_channel, 0, "p{p} has no wake channel [D p3 = 0]");
+        assert_eq!(dr.start_script, 0, "p{p}'s p1 0x06000000 is zeroed at +0x554 [M 0x14b300:611-613]");
+        assert_ne!(dr.state, nf_game::drone::state::WAIT_SWITCH,
+            "p{p} never enters WaitSwitch [M 0x15b830:22-43 — the channel byte is 0]");
+    }
+
+    // THE OWNER PAIRING: with the game's owner rule the guards' group-0 run-to point is their
+    // owner-matched disc point [D p4 = 31/30 ↔ AIPoint p2 = 31/30; M 0x151b18:151-181], not the
+    // owner-1 point the old property-bit read matched.
+    for (p, owner, want) in [(126usize, 31i32, [1.40f32, 16.70]), (127, 30, [-1.51, 18.21])] {
+        let dr = &sim.drones.list[sim.drones.list.iter().position(|d| d.placement == p).unwrap()];
+        let path = dr.nav_path.flatten();
+        let hit = nf_game::aipoint::closest(&sim.ai_points, &sim.nav, &sim.world, path, dr.pos, 0, owner)
+            .unwrap_or_else(|| panic!("p{p} finds its owner-{owner} run-to point [D; M 0x151b18]"));
+        let pt = &sim.ai_points[hit];
+        assert_eq!(pt.owner, owner, "the picked point's owner matches p{p}'s param 4 [M 0x14b300:472]");
+        assert!((pt.pos[0] - want[0]).abs() < 0.1 && (pt.pos[2] - want[1]).abs() < 0.1,
+            "p{p} pairs to its disc point at ({:.2},{:.2}) [D], got ({:.2},{:.2})",
+            want[0], want[1], pt.pos[0], pt.pos[2]);
+    }
+}
+
+/// The old wrong read, pinned as a negative: the guards' props DO carry property bit 0x11 (the
+/// alert block), so the port's old `props.get(0x11)` owner (1) is not their disc owner (31/30)
+/// [D p17 = 0x5b0003 sets bit 17; M 0x14b300:472 — the game reads param 4, not the props].
+#[test]
+fn the_old_owner_read_disagrees_with_the_game() {
+    let scene = load_d3();
+    let sim = scene.sim.as_ref().unwrap();
+    for (p, owner) in [(126usize, 31i32), (127, 30)] {
+        let dr = &sim.drones.list[sim.drones.list.iter().position(|d| d.placement == p).unwrap()];
+        let prop_bit = sim.props.get(0x11, &dr.props) as i32;
+        assert_ne!(prop_bit, owner,
+            "p{p}: property bit 0x11 ({prop_bit}) != the disc owner {owner} — the old read was wrong [M 0x14b300:472]");
+    }
+}
+
+/// Property 0x56 is CLEAR on both guards — the EnemyRunToPoint ENTER's RunToAlarm redirect
+/// [M 0x168910:17-27] cannot fire: word 2 (p20) = 0x40280000, bit 26 = 0 [D placement params;
+/// M 0x1c7d98 + the bitDescs/bitMasks tables [D ACTION.ELF 0x2c7250/0x2c7308 —
+/// prop 0x56 = word 2, mask 0x4000000, shift 26]]. And the level has no kind-8 AIPoint at all
+/// [D the 12 map-43 0xE9 placements: p0 ∈ {0,1,2}], so `ClosestAIPoint(…, 8, …)` finds nothing —
+/// the alarm route (RunToAlarm → FindAlarmPoint 0x153008 → Idle) is not on this level.
+#[test]
+fn prop_0x56_is_clear_and_no_alarm_point_exists() {
+    let scene = load_d3();
+    let sim = scene.sim.as_ref().unwrap();
+    for p in [126usize, 127] {
+        let dr = &sim.drones.list[sim.drones.list.iter().position(|d| d.placement == p).unwrap()];
+        assert_eq!(sim.props.get(0x56, &dr.props), 0,
+            "p{p}: prop 0x56 (p20 bit 26) is clear on the disc [D p20 = 0x40280000; M 0x1c7d98]");
+        let hit8 = nf_game::aipoint::closest(&sim.ai_points, &sim.nav, &sim.world,
+            dr.nav_path.flatten(), dr.pos, 8, dr.group as i32);
+        assert!(hit8.is_none(), "p{p}: no kind-8 AIPoint exists on 07000011 [D the 12 0xE9 placements]");
+    }
+    assert_eq!(sim.props.descs.get(0x56), Some(&[210u8, 26u8]),
+        "the bitDescs row: word 2 (210 & 7 = 2), shift 26 (210 >> 3), mask id 26 = 0x4000000 [D ACTION.ELF 0x2c7250+172]");
+}
+
+/// At d3 (both guards created [M 0x136be0:49]) the guards walk to their disc owner points and
+/// hold ATTACK there — the game's own data path: mode 7 → start 0x85 [D DroneTypeSettings row 7],
+/// prop 0x56 clear → the run-to-point machinery [M 0x168910:20-56], the owner rule picks the
+/// owner-31/30 points [D; M 0x151b18], and the Tower clause at alertness 1.0 leaves the resume
+/// state at ATTACK 0x56 [M 0x168910:23-31] (the 0x4000000 latch is clear at boot [M 0x1469b8 —
+/// only the sighting paths set it]). AIPoint+4 = 1 on every point at creation [M 0x137550], so
+/// the game's eligibility matches the port's selection.
+#[test]
+fn at_difficulty_3_the_guards_walk_their_disc_owner_points() {
+    let mut scene = load_d3();
+    let owners = [(126usize, [1.40f32, 16.70]), (127, [-1.51, 18.21])];
+    for _ in 0..400u32 {
+        scene.sim.as_mut().unwrap().step_bond(Default::default(), false, false, false);
+    }
+    let sim = scene.sim.as_ref().unwrap();
+    for (p, want) in owners {
+        let dr = &sim.drones.list[sim.drones.list.iter().position(|d| d.placement == p).unwrap()];
+        let dx = dr.pos[0] - want[0];
+        let dz = dr.pos[2] - want[1];
+        assert!((dx * dx + dz * dz).sqrt() < 2.5,
+            "p{p} reached its owner point ({:.2},{:.2}) [D; M 0x151b18] within the 2.0 goal accuracy, at ({:.2},{:.2})",
+            want[0], want[1], dr.pos[0], dr.pos[2]);
+        assert_eq!(dr.return_state, nf_game::drone::state::ATTACK,
+            "p{p}'s resume state stays ATTACK 0x56 at alertness 1.0 (the Tower clause) [M 0x168910:23-31]");
+    }
+}
+
+/// THE EMPTY CORRIDOR AT DIFFICULTY 0 — what the f200-f3172 capture shows: Drone_Create's gate
+/// `placement param2 <= GameState+0x40` [M 0x136be0:49] admits NEITHER guard at d0 (p2 = 1, 2),
+/// so no drone exists to approach an idle Bond in the first 3200 ticks.
+#[test]
+fn the_corridor_stays_empty_at_difficulty_0() {
+    let mut scene = nf_view::load_with_carry_difficulty(&iso(), "07000011.bin", false, None, 0).expect("load 07000011 d0");
+    let start = [-0.40f32, 25.83];
+    let mut min_dist = f32::MAX;
+    for _ in 0..3200u32 {
+        scene.sim.as_mut().unwrap().step_bond(Default::default(), false, false, false);
+        let sim = scene.sim.as_ref().unwrap();
+        for p in [126usize, 127] {
+            assert!(sim.drones.list.iter().find(|d| d.placement == p).map_or(true, |d| !d.present),
+                "p{p} must not exist at d0: param2 {} > GameState+0x40 = 0 [M 0x136be0:49]",
+                if p == 126 { 1 } else { 2 });
+        }
+        for d in &sim.drones.list {
+            if d.present {
+                let dx = d.pos[0] - start[0];
+                let dz = d.pos[2] - start[1];
+                min_dist = min_dist.min((dx * dx + dz * dz).sqrt());
+            }
+        }
+    }
+    assert!(min_dist > 8.0,
+        "no drone came within 8 units of the idle start over 3200 ticks (closest {min_dist:.2}) — the corridor stays empty as the capture shows [L; M 0x136be0:49]");
+}

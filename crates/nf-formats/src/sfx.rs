@@ -18,6 +18,38 @@ pub struct SfxTable { pub entries: Vec<SfxHearing> }
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct VoiceLine { pub sfx: u32, pub facial: u32, pub repeat: u32 }
 
+/// `Snd2Lbl` (ACTION.ELF 0x2d25d8, 484 × 8 bytes): `{ u32 label | 0x80000000 always-show, u32 sound_id }` —
+/// `Sound_DoSubtitle` 0x1dde58's scan table. The always-show bit bypasses the Subtitles option gate
+/// (`Sound_DoSubtitle` returns only when `DAT_002a37c8 == 0 && (label & 0x80000000) == 0` [M 0x1dde58:21-23]).
+pub fn snd2lbl(data: &[u8]) -> Result<Vec<(u32, u32)>> {
+    let elf = Elf::parse(data)?;
+    let syms = elf.symbols(data)?;
+    let (addr, size) = syms.iter().find(|s| s.name == "Snd2Lbl").map(|s| (s.value, s.size as usize))
+        .ok_or_else(|| crate::buf::FormatError::Invalid("ACTION.ELF has no symbol Snd2Lbl".into()))?;
+    if size % 8 != 0 { return invalid(format!("Snd2Lbl size {size:#x}")); }
+    let segs = elf.load_segments(data)?;
+    let bytes = segs.iter().find_map(|(va, b, _)| (addr >= *va && (addr - va) as usize + size <= b.len()).then(|| &b[(addr - va) as usize..][..size]))
+        .ok_or_else(|| crate::buf::FormatError::Invalid("Snd2Lbl outside the loaded data".into()))?;
+    let b = Buf(bytes);
+    (0..size / 8).map(|k| Ok((b.u32(8 * k)?, b.u32(8 * k + 4)?))).collect()
+}
+
+/// `SFXOutputData[id] + 0x10`: the sound's length in seconds — `Sound_DoSubtitle` 0x1dde58's duration
+/// source (`fptoui(g_fSubtitleDurationModification * this * 60.0)` [M 0x1dde58:26-29]; `g_fSubtitleDurationModification`
+/// 0x30d084 = 0.92 [L ee_start_05.bin @0x30d084]). Same table walk as `SfxTable::from_action_elf`.
+pub fn sfx_durations(data: &[u8]) -> Result<Vec<f32>> {
+    let elf = Elf::parse(data)?;
+    let syms = elf.symbols(data)?;
+    let (addr, size) = syms.iter().find(|s| s.name == "SFXOutputData").map(|s| (s.value, s.size as usize))
+        .ok_or_else(|| crate::buf::FormatError::Invalid("ACTION.ELF has no symbol SFXOutputData".into()))?;
+    if size % RECORD != 0 { return invalid(format!("SFXOutputData size {size:#x}")); }
+    let segs = elf.load_segments(data)?;
+    let bytes = segs.iter().find_map(|(va, b, _)| (addr >= *va && (addr - va) as usize + size <= b.len()).then(|| &b[(addr - va) as usize..][..size]))
+        .ok_or_else(|| crate::buf::FormatError::Invalid("SFXOutputData outside the loaded data".into()))?;
+    let b = Buf(bytes);
+    (0..size / RECORD).map(|k| b.f32(k * RECORD + 0x10)).collect()
+}
+
 pub fn voice_lines(data: &[u8]) -> Result<Vec<VoiceLine>> {
     let elf = Elf::parse(data)?;
     let syms = elf.symbols(data)?;

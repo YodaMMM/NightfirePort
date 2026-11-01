@@ -44,7 +44,7 @@ fn poke_gate(w: &mut Walker) {
 /// length read from the level's script lib) → state 1 charges with the 0x5de whine handle
 /// [M :119-121] → the script's End → state 2 FIRES: `Bullet_init` with the weapon def record
 /// 107 @0x2c6154 [M :172-175], the aim lane = the player quad [M :105-112], the beam object
-/// (life 5, alpha 0x7f+Rand(0x80) [M :163-167, 001aac00:20-28]), the 0x2d6210 impact emitter
+/// (life 5, alpha 0x7f+Rand(0x80) [M :163-167, 001aac00:20-28]), the 0xc000010 impact emitter
 /// [M :189], the 0x46a 3D sound [M :156] → the 10 s re-fire [M :190].
 #[test]
 fn the_laser_arms_charges_and_fires_at_bond() {
@@ -117,15 +117,17 @@ fn the_laser_arms_charges_and_fires_at_bond() {
     assert_eq!(beam.to, l.target, "the stretch reaches the aim lane [M :188]");
     assert!(beam.alpha >= 0x7f, "the brightness byte 0x7f+Rand(0x80) [M :166-167]");
     // The impact emitter [M :189]: `Emitter_Create(0, 0, 0xc000010, target, 0x2d6210, 0, 0, 0)`
-    // resolves its def through the game's hashtable — a miss means NO object (the placement
+    // [M Emitter_Create 0x17ae00:86 — arg 3 keys the def hashtable, arg 4 the position, arg 5
+    // the up/normal] — the def id is 0xc000010; 0x2d6210 is the boot-written (0,1,0) constant's
+    // ADDRESS, so the normal is world-up. A def-hash miss means NO object (the placement
     // path's own rule [M 0x17ae00]); the port's fx.defs carry the level's 0xF2 placements, so
     // the assert holds only when the def resolves. Whether the game's global table holds
-    // 0x2d6210 is a live check (the report).
+    // 0xc000010 is a live check (the report).
     // The port's fx.defs carry the level's 0xF2 placement defs; the game's global effect
     // table is not modelled, so the emitter's presence is def-conditional and its global
     // resolution is a live check (the report).
-    eprintln!("[space-laser] emitter 0x2d6210: {} in fx.emitters; the game's global def-table hit needs a live check",
-        sim.drones.fx.emitters.iter().filter(|e| e.def == 0x2d6210).count());
+    eprintln!("[space-laser] emitter 0xc000010: {} in fx.emitters; the game's global def-table hit needs a live check",
+        sim.drones.fx.emitters.iter().filter(|e| e.def == 0xc000010).count());
     // The re-fire: the cooldown spends again → the second beam [M :94-99, :190]. The first
     // beam expires after its 5 ticks, so the detection waits for empty-then-refill.
     let mut seen_empty = sim.drones.space_laser_beams.is_empty();

@@ -98,12 +98,27 @@ pub fn walk_12(w: &mut crate::walker::Walker) {
     // 2026-10-31, the walk west along z −0.55 from x 8.4, frames 15-30].
     w.walk_to(Wp::new(6.2, 1.1, -0.86).r(0.6), "through the door[19] doorway");
     w.walk_to(Wp::new(1.0, 1.1, 4.0).r(1.5), "the office floor north");
-    w.walk_to(Wp::new(-1.55, 0.5, 7.2).r(1.0), "the console");
+    // Up to the desk: the keyboard lies 0.9 below the head, so the use sphere reaches it only from
+    // within ~1.3 in z (from z 6.22 the use point misses it by 0.02).
+    w.walk_to(Wp::new(-1.55, 0.5, 7.2).r(0.4), "the console");
 
-    // The E press on the console (#731 override + #702 lift call, the same volume [D]).
+    // The E press on the console (#731 override + #702 lift call, the same volume [D]). The pick
+    // tests the console's glist — the keyboard mesh on the desk at y ≈ 0.86..0.91 — against the
+    // sphere r 1.0 at head + look [M Player_Activate 0x1a5170:100-108 → Intersect_PointGeom
+    // 0x1e92d8], so the player turns to the keyboard (−1.55, 0.88, 8.2) first, as a player does;
+    // E pulses one tick in six (the edge) while the view settles on it.
+    let kb = [-1.55f32, 0.88, 8.2];
     let mut pressed = false;
-    for _ in 0..60 {
-        w.tick(nf_game::player::Input::default(), true);
+    for k in 0..120 {
+        let input = {
+            let sim = w.scene.sim.as_ref().unwrap();
+            let p = sim.bond.pos;
+            let eye = p[1] + sim.bond.eye - sim.bond.crouch_drop;
+            let err = crate::walker::wrap_pi((kb[0] - p[0]).atan2(kb[2] - p[2]) - sim.bond.yaw);
+            let want_pitch = ((kb[1] - eye) / crate::walker::dxz(p, kb).max(0.5)).atan() / std::f32::consts::FRAC_PI_2;
+            nf_game::player::Input { turn: err.clamp(-0.08, 0.08), look: (want_pitch - sim.bond.pitch).clamp(-0.08, 0.08), ..Default::default() }
+        };
+        w.tick(input, k % 6 == 5);
         let sim = w.scene.sim.as_ref().unwrap();
         if sim.drones.channels.on(0x49) && sim.drones.channels.on(0x59) { pressed = true; break; }
     }

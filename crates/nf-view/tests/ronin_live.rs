@@ -260,3 +260,66 @@ fn ronin_remote_view_and_pick_up() {
     }
     assert!(sim.drones.inventory.owned[RONIN_DEPLOY as usize], "walking over the case gives the Ronin back");
 }
+
+/// The remote view's eye and parts, against a live capture: 0700000c, the case deployed from #561
+/// at yaw 0 (seated at (53.98, 1.402, −172.46) in both), weapon 0x53 fired → state 7. Measured
+/// [L PCSX2 audits/render-1101-roninview/live.txt]: ext+0xC0/C4/C8 = the script-A objects of
+/// streams 2/4/0 (0x2000361 / 0x2000362 / 0x200035a); the viewer at (53.986, 1.552, −172.366) =
+/// registered[0] (53.994, 1.402, −171.966) + (0, 0.15, −0.4) in its frame — (0.006, 0.15, 0.094)
+/// from the turret; registered[0]'s obj+0xF0 = 0x231 (bit 0x10 set) with no shot fired.
+#[test]
+fn ronin_remote_view_eye_and_flash() {
+    let Some(mut scene) = load() else { eprintln!("NF_ISO not set — skipping"); return };
+    let sim = scene.sim.as_mut().unwrap();
+    let ti = deployed(sim);
+    clear_guards(sim);
+    let t = &sim.drones.gt_turrets[ti];
+    let hash = |sim: &Sim, slot: u32| match slot.checked_sub(1).and_then(|o| sim.drones.scripts.objects.list.get(o as usize)) {
+        Some(Some(nf_game::nis::Obj::Entity { hash, src, .. })) => Some((*hash, *src)),
+        _ => None,
+    };
+    // GT_Register runs inside GT_Create's Script_Load: the slots are filled on the deploy tick.
+    assert_eq!(t.registered.map(|r| hash(sim, r)), [
+        Some((0x0200_0361, (0x0600_0045, 2))), Some((0x0200_0362, (0x0600_0045, 4))), Some((0x0200_035a, (0x0600_0045, 0))),
+    ], "the GT_Register slots");
+    for _ in 0..600 {
+        sim.step_bond(Input::default(), false, false, false);
+        if sim.drones.gt_turrets[ti].state == gt_state::COMBAT && sim.gun.weapon == RONIN_CONTROL && sim.gun.switch_state == 0 { break; }
+    }
+    for t in 0..60 {
+        sim.step_bond(Input::default(), t < 4, false, false);
+        if sim.drones.ronin_mounted().is_some() { break; }
+    }
+    assert!(sim.drones.ronin_mounted().is_some(), "mounted");
+    idle(sim, 30);
+    let t = sim.drones.gt_turrets[ti].clone();
+    let (eye, _) = sim.view_override().expect("the remote view");
+    let rel = [eye[0] - t.pos[0], eye[1] - t.pos[1], eye[2] - t.pos[2]];
+    let live = [0.006f32, 0.15, 0.094];
+    let off = |a: [f32; 3], b: [f32; 3]| ((a[0] - b[0]).powi(2) + (a[1] - b[1]).powi(2) + (a[2] - b[2]).powi(2)).sqrt();
+    assert!(off(rel, live) < 0.02, "the eye sits where the game's viewer does: {rel:?} vs {live:?}");
+    // Sister (can fail): the turret's own pose + the same offset (the eye without registered[0])
+    // lands 0.49 behind the game's eye, inside the case.
+    let pm = t.pose_matrix();
+    let e = nf_game::gt::RONIN_EYE;
+    let fallback = [pm[3][0] + e[0] * pm[0][0] + e[1] * pm[1][0] + e[2] * pm[2][0] - t.pos[0],
+        pm[3][1] + e[0] * pm[0][1] + e[1] * pm[1][1] + e[2] * pm[2][1] - t.pos[1],
+        pm[3][2] + e[0] * pm[0][2] + e[1] * pm[1][2] + e[2] * pm[2][2] - t.pos[2]];
+    assert!(off(fallback, live) > 0.4, "the pose-only eye would fail the comparison ({fallback:?})");
+    // The muzzle flash (registered[0]) is hidden while the gun is idle ...
+    let flash_obj = t.registered[0] as usize - 1;
+    assert!(t.flash_hidden && sim.drones.scripts.hidden_stream_objects().contains(&flash_obj), "the idle flash is hidden (obj+0xF0 0x231)");
+    // ... shows on a shot (reg0+0xF4 = 2, bit 0x10 cleared), and hides again two ticks after the last one.
+    let mut shown = false;
+    for _ in 0..12 {
+        sim.step_bond(Input::default(), true, false, false);
+        shown |= !sim.drones.gt_turrets[ti].flash_hidden && !sim.drones.scripts.hidden_stream_objects().contains(&flash_obj);
+    }
+    assert!(shown, "a mounted shot showed the flash");
+    idle(sim, 3);
+    assert!(sim.drones.gt_turrets[ti].flash_hidden && sim.drones.scripts.hidden_stream_objects().contains(&flash_obj), "the flash hides after the burst");
+    // Sister: only registered[0] is hidden — the gun and barrel stay drawn.
+    let t = &sim.drones.gt_turrets[ti];
+    let hidden = sim.drones.scripts.hidden_stream_objects();
+    assert!(!hidden.contains(&(t.registered[1] as usize - 1)) && !hidden.contains(&(t.registered[2] as usize - 1)), "barrel and gun drawn");
+}
