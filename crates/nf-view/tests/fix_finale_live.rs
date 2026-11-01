@@ -17,6 +17,11 @@
 use nf_game::kiko as kiko_states;
 use nf_game::player::{Input, RamSave};
 
+#[path = "common/walker.rs"]
+mod walker;
+
+use walker::Walker;
+
 fn iso() -> String { std::env::var("NF_ISO").expect("NF_ISO") }
 
 fn free(sim: &mut nf_view::scene::Sim, ticks: u32) -> bool {
@@ -49,16 +54,35 @@ fn carry(on: &[u32]) -> RamSave {
 /// gate [D hash 020008c1; docs/levels/07000016.md §7]: Bond's own E on it → `Switch_Activate`
 /// 0x1b02a8 toggles ch 0x90 (the gate ch 0x8d off [M 0x1b02a8:22]) → mux #618 (out 0x64 = ch 100
 /// ← 0x90 [D]) → Mission_Update state 6 → the driving hand-off 0x7300017 [M 0x182c60:111-112].
-/// Sisters: a pit-squad death (channels 23..26 [D]) never raises ch 0x90, and the chaser's OWN
-/// death never does either — FAIL-FIRST: on the stand-in the kill assertion failed (the init
-/// write raised 0x90 on her corpse).
+///
+/// THIS TASK — the upper-floor re-seat shortcut is GONE. The test still telescopes the approach
+/// (fresh load → the silo plate #253, ch 0x8f; the walked route is walkreal_07000016) and fires
+/// the launch chain's head ch 0x81, but from there it plays the disc's own chain with Input and
+/// fire only, ending at the lift-out cinema that replaces the old re-seat:
+/// - the pack cinema 0x06000631 hands Bond back on the pit floor (stream 8's single key
+///   (3.57, −22.76, −179.55) [D pack_cinema_16_live], teleported by Player_Enable 0x195498 [M]);
+/// - the west blast room shelters both ch-0xf3 pulses (1611..2170, 6810..7320 [D stream 6/9];
+///   blast_room_shelter_16_live pins the rooms and the lethal floor) — walked on Input;
+/// - the chaser (ch 240 @2180, group 6) falls to Bond's fire and raises nothing (param 12 = 0
+///   [D #261]; sister: the mission does not complete on the kill);
+/// - the pit squad (ch 242 @7332, group 7, death channels 23..26 [D]) falls; SISTER: a
+///   pit-squad death never raises ch 0x90 (the AND #271 waits for the button);
+/// - their deaths + ch 0xc0 @7808 → mux #633 → ch 0x82 → the lift-out pack cinema
+///   **0x06000632 (07900016.bin)**: stream 16 clears ch 141 = 0x8d at t1056 and stream 13's
+///   event 6 at t1057 hands Bond back at key 1868 = (5.39, 1.34, −158.31), the bay floor beside
+///   the button [D keys; M Script_EventHandler 0x1d94c0 event 6 → Script_Free → Player_Enable]
+///   — the game's own transition, asserted here in place of the old test-only re-seat to
+///   (2.5, 1.2, −153.9);
+/// - Bond walks the last metres (the west lane past the tower-base wall) and his own E on the
+///   button fires the completion chain (no per-press re-seat: the walked press is the
+///   kiko_button_real_walk shape).
 #[test]
 fn the_07000016_kiko_death_button_defeat_completes_the_final_mission() {
     let iso = iso();
-    let mut scene = nf_view::load_with_carry(&iso, "07000016.bin", false, Some(&carry(&[0x47, 0x48, 0x4a, 0x54, 0xce, 0x4b]))).expect("load 07000016");
+    let mut w = Walker::new(nf_view::load_with_carry(&iso, "07000016.bin", false, Some(&carry(&[0x47, 0x48, 0x4a, 0x54, 0xce, 0x4b]))).expect("load 07000016"));
+    w.wait_enabled(3000, "Bond is free after the intro");
     {
-        let sim = scene.sim.as_mut().unwrap();
-        assert!(free(sim, 3000), "Bond is free after the intro");
+        let sim = w.scene.sim.as_mut().unwrap();
         // The silo plate #253 (0.45-4.62, -0.20..1.88, -154.93..-152.85 [D]) reveals the Kiko
         // objective (ch 0x8f [D]) — the walkthrough's descent.
         sim.bond = nf_game::player::Bond::new([2.5, 1.2, -153.9], std::f32::consts::PI);
@@ -69,77 +93,37 @@ fn the_07000016_kiko_death_button_defeat_completes_the_final_mission() {
         // the pack cinema 0x06000631 → ch 185 → SP #272 → 0x0600090a → ch 240/242 → the spawners.
         sim.drones.channels.set(0x81, 1, sim.drones.frame);
     }
-    // Play the chain out: the cinema (750 ticks) + the shuttle script + the spawner waves.
-    // The launch script's own exhaust gate: stream 6's event-0xd writes raise ch 0xf3 (243) at
-    // script tick 1611 and drop it at 2170 [D 0x0600090a scriptlog + params] — the
-    // HurtPoly-ShuttleLaunch #309 (gate 0xf3, 1000 damage [D]) is LIVE for those ~560 ticks, and
-    // the pack cinema's snap leaves Bond on the silo floor INSIDE the volume (3.57, −23.18,
-    // −179.55). The disc's order puts the pulse BEFORE the spawner writes (ch 0xf0 at tick 2180
-    // [D]) — the chaser fight never overlaps it — and the mission can only complete from a live
-    // Bond (Mission_Update 0x182c60 case 1 folds ch 100 → state 6, but its ch-0x62 fail arm —
-    // Player_SetHealth(0), MissionState 3, LevelToEndTo 0x7000048 [M 0x182c60:21-43] — outranks
-    // it). So the game's player leaves the pit during the launch; the test walks the same route:
-    // once the cinema hands control back, Bond is re-seated on the upper floor the descent came
-    // from, outside the volume, for the rest of the chain. U-051 ANSWERED (docs/systems/
-    // hurt-volumes.md §U-051): the game's re-enable is the pit floor — the cinema's stream-8
-    // single key (3.57, −22.76, −179.55) [D pack_cinema_16_live] teleported by Player_Enable
-    // 0x195498 [M] — and the survival is the blast-room shelter (blast_room_shelter_16_live; the
-    // walked finale is walkreal_07000016_live). This re-seat is a test-only shortcut, needed
-    // because the test fires ch 0x81 from the upper floor and skips the shelter and the pit squad;
-    // it is not a game claim.
-    let chaser = {
-        let mut found = None;
-        let mut re_seated = false;
-        for _ in 0..4000u32 {
-            scene.sim.as_mut().unwrap().step_bond(Input::default(), false, false, false);
-            if !re_seated && !scene.sim.as_ref().unwrap().disabled {
-                re_seated = true;
-                scene.sim.as_mut().unwrap().bond.pos = [2.5, 1.2, -153.9];
-            }
-            let sim = scene.sim.as_ref().unwrap();
-            // The chaser is the skin-0x1e dtype-0xf drone NOT in the death-ch 23..26 pit squad
-            // (#294–297 [D]) — her param 12 is 0 [D #261], so this finds her with or without the
-            // (removed) stand-in, which had made it 0x90.
-            if let Some(i) = sim.drones.list.iter().position(|d| d.present && !d.corpse && d.skin & 0xffff == 0x1e && d.dtype == 0xf && !matches!(d.death_channel, 23..=26)) {
-                found = Some(i);
-                break;
-            }
-        }
-        found.expect("the launch chain spawns the chaser (spawner #257, group 6 [D])")
-    };
-    // Sister first: a non-chaser drone's death (the pit squad's ch 23..26 [D]) never raises ch 0x90
-    // on its own. Re-baselined for fix-spawner-p7: the launch chain's ch 0x15 is the group-1
-    // spawner's KILL channel [L-verified 07000005], and 07000016 is a keep level, so the chain's
-    // own cleanup removes its undrawn spawns before this point — the sister throws at the nearest
-    // remaining non-chaser (any present guard that is not the chaser herself, index-excluded),
-    // re-reading his position per attempt like the chaser kill below.
+    assert!(w.scene.sim.as_ref().unwrap().drones.channels.on(0x8f), "the silo plate fired [D #600]");
+    // Play the chain out (no skip, no pos writes): the cinema (750 ticks) hands Bond back on the
+    // pit floor, then the blast-room shelter legs and the fights — the disc's own route.
+    w.skip_cutscenes = false;
+    tick_until(&mut w, 3000, "the pack cinema's hand-back on the pit floor",
+        |s| s.drones.channels.on(0x81) && !s.disabled && s.bond.pos[1] < -20.0);
+    w.skip_cutscenes = true;
+    let t0 = w.total_ticks;
+    w.walk_route(INTO_THE_SHELTER);
+    let inside_at = w.total_ticks - t0;
+    assert!(inside_at < 1000, "Bond is in the room before its door starts to shut (+{inside_at}, the leaves move 1000..1350 [D])");
+    let n1 = sit_out_pulse(&mut w, "pulse 1 in the shelter");
+    assert!((550..=566).contains(&n1), "pulse 1 is 1611..2170 = 559 ticks [D stream 6], got {n1}");
+
+    // The chaser: ch 240 @2180 wakes spawner #604 (group 6) [D]; Bond shoots her from the room —
+    // and it raises NOTHING: her death channel is param 12 = 0 [D #261]; ch 0x90's disc writer is
+    // the KikoDeathButton switch #693 [D], not her health. FAIL-FIRST vs the removed stand-in:
+    // with the init-forced 0x90 this assert failed on her corpse.
+    tick_until(&mut w, 2000, "the chaser spawns",
+        |s| s.drones.list.iter().any(|d| d.present && !d.corpse && d.skin & 0xffff == 0x1e && d.dtype == 0xf && !matches!(d.death_channel, 23..=26)));
+    let chaser = w.scene.sim.as_ref().unwrap().drones.list.iter()
+        .position(|d| d.present && !d.corpse && d.skin & 0xffff == 0x1e && d.dtype == 0xf && !matches!(d.death_channel, 23..=26))
+        .expect("the chaser is present");
+    while w.total_ticks - t0 < 2600 { w.tick(Input::default(), false); }
+    // The chaser's defeat through the game's explosive path (the test's own kill shape since its
+    // creation): a grenade explodes only on its fuse, never on contact [M Bullet_CollisionHandler
+    // 0x12ce80], so the drop goes off where she stands — just after her spawn, in the open pit
+    // and well outside the room. (Bond's fire needs the walkreal's ~1100-tick duel and missed the
+    // 6310 door deadline on this telescope; the throw lands at +~1220 instead.)
     {
-        let sim = scene.sim.as_mut().unwrap();
-        let squad = sim.drones.list.iter().enumerate()
-            .position(|(i, d)| i != chaser && d.present && !d.corpse)
-            .expect("a non-chaser guard exists");
-        let mut died = false;
-        for _ in 0..4 {
-            let p = sim.drones.list[squad].pos;
-            grenade_at(sim, p);
-            for _ in 0..200 {
-                sim.step_bond(Input::default(), false, false, false);
-                if sim.drones.list[squad].corpse { died = true; break; }
-            }
-            if died { break; }
-        }
-        assert!(died, "the grenade reaches the non-chaser guard");
-        let sim = scene.sim.as_ref().unwrap();
-        assert!(sim.drones.list[squad].corpse, "the guard died");
-        assert!(!sim.drones.channels.on(0x90), "a non-chaser death never completes the objective [D AND #271]");
-    }
-    // The chaser's own defeat through the game's explosive path (the ninja chain walks her, so
-    // the throw re-reads her position each attempt) — and it raises NOTHING: her death channel is
-    // param 12 = 0 [D #261]; ch 0x90's disc writer is the KikoDeathButton switch #693 [D], not
-    // her health. FAIL-FIRST vs the removed stand-in: with the init-forced 0x90 this assert
-    // failed on her corpse.
-    {
-        let sim = scene.sim.as_mut().unwrap();
+        let sim = w.scene.sim.as_mut().unwrap();
         let mut died = false;
         for _ in 0..3 {
             let p = sim.drones.list[chaser].pos;
@@ -152,60 +136,140 @@ fn the_07000016_kiko_death_button_defeat_completes_the_final_mission() {
         }
         assert!(died, "the chaser dies at the silo");
     }
-    // Death_Anim raises the death channel on its first UPDATE after the kill [M 0x1637f8 case 2]
-    // — a few ticks after the corpse appears. Settle 120 ticks before reading the channels.
-    for _ in 0..120 { scene.sim.as_mut().unwrap().step_bond(Input::default(), false, false, false); }
+    for _ in 0..120 { w.tick(Input::default(), false); }
     {
-        let sim = scene.sim.as_ref().unwrap();
+        let sim = w.scene.sim.as_ref().unwrap();
         assert!(sim.drones.list[chaser].corpse, "the chaser is down");
         assert!(!sim.drones.channels.on(0x90), "the chaser's death raises ch 0x90 — her death channel is param 12 = 0 [D #261]; the writer is the switch #693 [D]");
         assert!(sim.drones.mission.status() != 6, "sister: the mission does not complete on the kill [D AND #271 waits for the button]");
     }
-    // THE REAL DEFEAT: Bond's own E on the KikoDeathButton #693 — the switch's own position
-    // (7.02, 1.16, −155.61) [D] is the pick target (`Switch_GetNearest`/the use sphere centre on
-    // the placement origin), so the aim points AT it: the game's pick is a 1.0-radius sphere at
-    // head + 1 unit forward [M 0x1a5170:100-108], which swallows any eye within 2.0 of the
-    // origin. Teleport-reach only (the walkreal's full walk is parked on the pit geometry); the
-    // press itself is the game's Player_Activate dispatch like the interactables test. The gate
-    // ch 0x8d (the corridor touch #616) is OFF on this route — the switch is usable [M
-    // Switch_Activate 0x1b02a8:22]. The tower-room slab at this spot leaks (the probe run: Bond
-    // is shoved to (7.41, −153.78) and slides), so each press beat re-seats him 1.2 m north of
-    // the button facing it — the walkreal-lift re-seat pattern for reach, with the E itself the
-    // real input (the interactables test's shape, its aim pinned).
-    let at = [7.02f32, 1.16, -155.61];
-    let mut pressed = false;
-    for k in 0..240u32 {
-        if scene.sim.as_ref().unwrap().drones.channels.on(0x90) { pressed = true; break; }
-        let (desired, want_pitch, input) = {
-            let sim = scene.sim.as_ref().unwrap();
-            let desired = (at[0] - sim.bond.pos[0]).atan2(at[2] - sim.bond.pos[2]);
-            let eye = [sim.bond.pos[0], sim.bond.pos[1] + sim.bond.eye - sim.bond.crouch_drop, sim.bond.pos[2]];
-            let to = [at[0] - eye[0], at[1] - eye[1], at[2] - eye[2]];
-            let want_pitch = (to[1] / to[0].hypot(to[2]).max(0.5)).atan() / std::f32::consts::FRAC_PI_2;
-            let sim = scene.sim.as_mut().unwrap();
-            sim.bond.pos = [7.02, 1.2, -154.4];
-            sim.bond.vel = [0.0; 3];
-            sim.bond.yaw = desired;
-            sim.bond.pitch = want_pitch;
-            (desired, want_pitch, Input::default())
+
+    // Back into the shelter before the leaves shut again (6310..6660 [D]); pulse 2 out.
+    w.walk_route(INTO_THE_SHELTER);
+    assert!(w.total_ticks - t0 < 6310, "back in the room before its door shuts for pulse 2 (+{})", w.total_ticks - t0);
+    let n2 = sit_out_pulse(&mut w, "pulse 2 in the shelter");
+    assert!((500..=520).contains(&n2), "pulse 2 is 6810..7320 = 510 ticks [D stream 9], got {n2}");
+
+    // The pit squad (group 7, ch 242 @7332 [D]): all four must fall for ch 0xbf (mux #611). The
+    // SISTER rides the first kill: a pit-squad death (channels 23..26 [D]) never raises ch 0x90 —
+    // the AND #271 waits for the button.
+    tick_until(&mut w, 600, "the pit squad spawns", |s| s.drones.list.iter().any(|d| d.present && !d.corpse && matches!(d.death_channel, 23..=26)));
+    let mut first_squad_kill = true;
+    for _ in 0..4 {
+        let next = {
+            let sim = w.scene.sim.as_ref().unwrap();
+            let bp = sim.bond.pos;
+            sim.drones.list.iter().enumerate()
+                .filter(|(_, d)| d.present && !d.corpse && d.health > 0.0 && matches!(d.death_channel, 23..=26))
+                .min_by(|a, b| walker::dxz(a.1.pos, bp).total_cmp(&walker::dxz(b.1.pos, bp)))
+                .map(|(i, _)| i)
         };
-        scene.sim.as_mut().unwrap().step_bond(input, false, false, k % 6 == 0);
+        let Some(i) = next else { break };
+        assert!(w.shoot(i, "the pit squad"), "the pit squad member #{i} dies to Bond's fire");
+        if first_squad_kill {
+            first_squad_kill = false;
+            let sim = w.scene.sim.as_ref().unwrap();
+            assert!(sim.drones.list[i].corpse, "the squad guard died");
+            assert!(!sim.drones.channels.on(0x90), "a pit-squad death (ch 23..26 [D]) never completes the objective [D AND #271]");
+            assert!(sim.drones.mission.status() != 6, "sister: the mission does not complete on a squad death");
+        }
     }
+    tick_until(&mut w, 600, "the pit squad's deaths raise ch 0xbf [D mux #611]", |s| s.drones.channels.on(0xbf));
+
+    // THE LIFT-OUT (the game's own transition in place of the old re-seat): ch 0xc0 @7808
+    // (stream 20) → mux #633 → ch 0x82 → Script Player #610 → pack cinema 0x06000632
+    // (07900016.bin) [D]. No skip: it disables Bond at t0, stream 16 clears ch 141 = 0x8d at
+    // t1056, and stream 13's event 6 at t1057 hands Bond back to stream 12's dummy at key 1868 —
+    // the bay floor beside the button [D; M 0x1d94c0 event 6 → Script_Free → Player_Enable].
+    w.skip_cutscenes = false;
+    tick_until(&mut w, 3000, "ch 0x82 starts the lift-out cinema [D mux #633]", |s| s.drones.channels.on(0x82) && s.disabled);
+    tick_until(&mut w, 1500, "the lift-out cinema hands Bond back", |s| !s.disabled);
+    w.skip_cutscenes = true;
+    {
+        let sim = w.scene.sim.as_ref().unwrap();
+        let p = sim.bond.pos;
+        assert!((p[0] - 5.39).abs() < 0.5 && (p[1] - 1.34).abs() < 1.0 && (p[2] + 158.31).abs() < 0.5,
+            "0x06000632 hands Bond back at its key 1868 (5.39, 1.34, −158.31) [D], got {p:?} — the upper-floor re-seat is gone");
+        assert!(!sim.drones.channels.on(0x8d), "the gate is off at the hand-back (0x06000632's t1056 clear; this telescope never armed it) [D]");
+    }
+
+    // THE REAL DEFEAT: Bond walks the last metres on Input (the west lane past the tower-base
+    // wall — the kiko_button_real_walk lane) and his own E on the KikoDeathButton #693 fires the
+    // chain: the switch's own position (7.02, 1.16, −155.61) [D] is the pick target, the game's
+    // pick is a 1.0-radius sphere at head + 1 unit forward [M 0x1a5170:100-108]. No per-press
+    // re-seat — the walked press is the game's Player_Activate dispatch.
+    w.walk_to(walker::Wp::new(6.3, 1.0, -155.45).r(0.6), "the button's side");
+    let pressed = press_use_until(&mut w, [7.02, 1.46, -155.61], 240, |s| s.drones.channels.on(0x90));
     assert!(pressed, "the E on the KikoDeathButton never wrote ch 0x90 — Switch_Activate 0x1b02a8 must toggle param-0 [D #693 p0 = 0x90]");
     // ch 0x90 → mux #618 → ch 100 → Mission_Update state 6 [M 0x1827d8:155-160, 0x182c60:85-122].
-    let mut complete = false;
-    for _ in 0..600u32 {
-        scene.sim.as_mut().unwrap().step_bond(Input::default(), false, false, false);
-        if scene.sim.as_ref().unwrap().drones.mission.status() == 6 { complete = true; break; }
-    }
+    tick_until(&mut w, 900, "the mission completes", |s| s.drones.mission.status() == 6);
     {
-        let sim = scene.sim.as_ref().unwrap();
+        let sim = w.scene.sim.as_ref().unwrap();
         assert!(sim.drones.channels.on(0x90), "the KikoDeathButton raises ch 0x90 [D #693 p0]");
         assert!(sim.drones.channels.on(100), "mux #618 (out 0x64 ← 0x90) fires ch 100 [D #618]");
-        assert!(complete, "the final mission completes (MissionState 6 [M 0x182c60:85-116])");
         assert_eq!(sim.drones.mission.to_end, 0x0730_0017, "the driving hand-off [M 0x182c60:111-112]");
     }
 }
+
+/// Ticks until `done`, or panics with `what` after `max` (the walkreal shape).
+fn tick_until(w: &mut Walker, max: u32, what: &str, done: impl Fn(&nf_view::scene::Sim) -> bool) -> u32 {
+    for t in 0..max {
+        if done(w.scene.sim.as_ref().unwrap()) { return t; }
+        w.tick(Input::default(), false);
+    }
+    panic!("{what}: not within {max} ticks");
+}
+
+/// Sits one ch-243 pulse out where Bond stands, with the walker's damage allowance OFF (no
+/// top-up can hide a contact) — the walkreal shape.
+fn sit_out_pulse(w: &mut Walker, label: &str) -> u32 {
+    let allowance = w.top_up_health;
+    w.top_up_health = false;
+    tick_until(w, 8000, label, |s| s.drones.channels.on(243));
+    let mut n = 0u32;
+    while w.scene.sim.as_ref().unwrap().drones.channels.on(243) {
+        {
+            let sim = w.scene.sim.as_ref().unwrap();
+            let p = sim.bond.pos;
+            let h = sim.hurts.iter().find(|h| h.gate == 0xf3).expect("HurtPoly-ShuttleLaunch");
+            assert!(!h.contains(p, [p[0], p[1] + 1.8, p[2]], 0.55), "{label}: the volume touches Bond at {p:?} (+{n})");
+            assert!(sim.drones.health.health > 0.0, "{label}: Bond died at {p:?} (+{n})");
+        }
+        w.tick(Input::default(), false);
+        n += 1;
+        assert!(n < 1000, "{label}: the pulse never fell");
+    }
+    let sim = w.scene.sim.as_ref().unwrap();
+    assert!(sim.drones.health.health > 0.0 && sim.drones.mission.status() != 3, "{label}: Bond lives, no fail");
+    w.top_up_health = allowance;
+    n
+}
+
+/// E beats aimed at `at` until `done` (the interactables press shape, one edge per 6 ticks).
+fn press_use_until(w: &mut Walker, at: [f32; 3], max: u32, done: impl Fn(&nf_view::scene::Sim) -> bool) -> bool {
+    for k in 0..max {
+        if done(w.scene.sim.as_ref().unwrap()) { return true; }
+        let sim = w.scene.sim.as_ref().unwrap();
+        let desired = (at[0] - sim.bond.pos[0]).atan2(at[2] - sim.bond.pos[2]);
+        let err = walker::wrap_pi(desired - sim.bond.yaw);
+        let eye = [sim.bond.pos[0], sim.bond.pos[1] + sim.bond.eye - sim.bond.crouch_drop, sim.bond.pos[2]];
+        let to = [at[0] - eye[0], at[1] - eye[1], at[2] - eye[2]];
+        let want_pitch = (to[1] / to[0].hypot(to[2]).max(0.5)).atan() / std::f32::consts::FRAC_PI_2;
+        let input = Input { turn: err.clamp(-0.08, 0.08), look: (want_pitch - sim.bond.pitch).clamp(-0.06, 0.06), ..Default::default() };
+        w.tick(input, k % 6 == 0);
+    }
+    false
+}
+
+/// From the pit floor into the west blast room (blast_room_shelter_16_live: the room is outside
+/// HurtPoly-ShuttleLaunch's polygon [D], its door leaves shut over both pulses [D 0600090a
+/// streams 17/18]) — the walkreal route.
+const INTO_THE_SHELTER: &[(&str, walker::Wp)] = &[
+    ("the pit floor west", walker::Wp { at: [-8.5, -22.2, -173.5], act: walker::Act::None, arrive: 1.0 }),
+    ("the west blast door", walker::Wp { at: [-11.0, -22.0, -170.0], act: walker::Act::None, arrive: 0.9 }),
+    ("the west blast room", walker::Wp { at: [-15.2, -22.0, -170.4], act: walker::Act::None, arrive: 0.8 }),
+];
+
 
 /// 0700001b: ch 0x0a (the fight gate: NIS 0x060008f0 t104 [D]) spawns Drake (spawner #187,
 /// trigger 10 [D]) and enables him (his wait-switch 10 [D]); his death (ch 0x0e [D]) fires
