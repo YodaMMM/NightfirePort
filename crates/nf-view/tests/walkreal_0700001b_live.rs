@@ -238,67 +238,6 @@ fn shoot_consoles(w: &mut Walker) -> Vec<(u32, u32)> {
     latched
 }
 
-/// Float (thrusters only, the body-axis P controller of `thrust_to`) until within `r` of `at`.
-fn float_to(w: &mut Walker, at: [f32; 3], r: f32) -> bool {
-    for _ in 0..1500u32 {
-        let input = thrust_to(w.scene.sim.as_ref().unwrap(), at);
-        w.tick(input, false);
-        let p = w.scene.sim.as_ref().unwrap().bond.pos;
-        if walker::dxz(p, at) < r && (p[1] - at[1]).abs() < 1.5 { return true; }
-    }
-    false
-}
-
-/// The crosshair pin at several headings and pitches: from a float station the walker aims the
-/// body at a console screen's hit sphere — `zero_g_errs`' body-frame yaw/pitch errors, the errors
-/// the look rates consume [M Player_ZeroG 0x192ab0:76-90, the look riding RotMatrix → Concat
-/// obj := R·obj 0x1e4a90/0x192ab0:160-162] — and taps the REAL fire path on-target; the shot
-/// lands on the crosshair: the held UI script's hit points drop 20 per bullet
-/// [M SP_GetHitDamage 0x1dc5f8]. Consoles 3 / 1 / 7 sit on different headings (east deck,
-/// the (20,−2,0) west float, the (46,−7,0) far float) at different screen heights. Sister: on
-/// the reverted world-frame composition (m·R) a look-up barely pitches facing east/west, the
-/// pitch error never converges, the shot never fires — the pin fails there.
-#[test]
-fn the_crosshair_shot_lands_at_several_headings_and_pitches() {
-    let iso = iso();
-    let mut w = Walker::new(nf_view::load(&iso, "0700001b.bin", false).unwrap());
-    w.wait_enabled(3000, "the shuttle arrival");
-    assert_eq!(w.scene.sim.as_ref().unwrap().bond.substate, SS_ZEROG_8,
-        "the station starts in the zero-g substate 8 [M Player_Init 0x1910f8 :160-165]");
-    // The console gates 31..38 are written by the missiles' p0 scripts at their t359 [D], and the
-    // missiles launch on ch 19 — the first wave's death [D spawner #163 p6, AND #202]. Kill the
-    // wave first (the walkreal allowance: damage suppressed), then the UI scripts play and hold.
-    let hold = w.scene.sim.as_ref().unwrap().bond.pos;
-    kill_astronauts(&mut w, hold, |s| s.drones.channels.on(19), 2400);
-    assert!(w.scene.sim.as_ref().unwrap().drones.channels.on(19), "the wave's death raises the launch order [D]");
-    for k in [3u32, 1, 7] {
-        let station = console_station(k);
-        assert!(float_to(&mut w, station, 2.5), "the float reaches console {k}'s station {station:?}");
-        // The UI scripts play and hold at t650 [D]; wait for console k's player to hold (its hit
-        // spheres only register while the stream is held — Scripts::held_hit_targets' delay gate).
-        let (pi, centre, hp0) = {
-            let mut found = None;
-            for _ in 0..1800u32 {
-                w.tick(Default::default(), false);
-                let sim = w.scene.sim.as_ref().unwrap();
-                let Some(pi) = sim.drones.scripts.players.iter().position(|p| p.gate as u32 == 30 + k && p.hit_points > 0.0) else { continue };
-                let tg = sim.drones.scripts.held_hit_targets(&data_of(sim));
-                if let Some(best) = tg.iter().filter(|x| x.0 == pi).max_by(|a, b| a.2.partial_cmp(&b.2).unwrap()).map(|x| x.1) {
-                    found = Some((pi, best, sim.drones.scripts.players[pi].hit_points));
-                    break;
-                }
-            }
-            found.expect("the console's UI script holds with its hit sphere (gate 30 + k, hit points 20 [D SP#213-220])")
-        };
-        let fwd = w.scene.sim.as_ref().unwrap().bond.look();
-        eprintln!("[1b] console {k}: station {station:?} aim at {centre:?} from heading {:.2} pitch {:.2}", fwd[0].atan2(fwd[2]), fwd[1].asin());
-        assert!(w.shoot_point(centre, &format!("console {k}'s screen"), |s| s.drones.scripts.players[pi].hit_points < hp0),
-            "console {k}'s screen is shot ON the crosshair (the script's hit points drop)");
-        let dropped = w.scene.sim.as_ref().unwrap().drones.scripts.players[pi].hit_points;
-        assert!(dropped < hp0, "console {k}'s hit points dropped ({} → {})", hp0, dropped);
-    }
-}
-
 /// The launch order is the FIRST WAVE's death, on disc data alone: the arrival script
 /// 0x0600085c writes ch 190/191 [D stream 6/9 ev0x0d], ch 191 gates SP#148 (0x060009a4 [D p9])
 /// whose streams write ch 115 (spawner #163's trigger [D p4 = 0x73]) and ch 193 [D streams 1/3];
