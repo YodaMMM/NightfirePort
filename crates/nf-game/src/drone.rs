@@ -13092,6 +13092,19 @@ fn segment_hits_aabb(a: V3, b: V3, lo: V3, hi: V3) -> bool {
     true
 }
 
+/// The satchel burn sparks' emitter def — `Bullet_DoTrails`' contact walk passes the immediate
+/// 0xc00000a [M 0x12d890:467-468].
+pub const SATCHEL_BURN_SPARKS: u32 = 0x0c00_000a;
+
+/// The point of segment a→b closest to `c`.
+fn closest_on_segment(a: V3, b: V3, c: V3) -> V3 {
+    let ab = [b[0] - a[0], b[1] - a[1], b[2] - a[2]];
+    let ac = [c[0] - a[0], c[1] - a[1], c[2] - a[2]];
+    let len2 = ab[0] * ab[0] + ab[1] * ab[1] + ab[2] * ab[2];
+    let t = if len2 <= 0.0 { 0.0 } else { (ac[0] * ab[0] + ac[1] * ab[1] + ac[2] * ab[2]) / len2 }.clamp(0.0, 1.0);
+    [a[0] + ab[0] * t, a[1] + ab[1] * t, a[2] + ab[2] * t]
+}
+
 fn segment_hits_sphere(a: V3, b: V3, c: V3, r: f32) -> bool {
     let ab = [b[0] - a[0], b[1] - a[1], b[2] - a[2]];
     let ac = [c[0] - a[0], c[1] - a[1], c[2] - a[2]];
@@ -14233,12 +14246,10 @@ fn segment_hits_sphere(a: V3, b: V3, c: V3, r: f32) -> bool {
                 for k in hits {
                     if self.locks[k].burn(amount, &mut self.channels, frame) {
                         // The burn-through sound: `Lock_Update` 0x1ae3d8:90-99 plays 0x249 (the
-                        // mechanism's release clunk) and calls `Lock_Unlock`. The trail side
-                        // `Bullet_DoTrails` 0x12d890:473-478 plays 0x5dd when the burn life runs
-                        // out on the watch's beam — the port fires it with the unlock here (the
-                        // two sounds' tick alignment is not separated in the decompile walk).
+                        // mechanism's release clunk) and calls `Lock_Unlock`. (0x5dd is NOT a lock
+                        // sound: its only caller is `Bullet_DoTrails`' 0x3b satchel tail [M
+                        // 0x12d890:473-478, the 0x12e390 jal] — the charge burn-out below.)
                         self.audio.play3d(0x249, self.locks[k].pos, None);
-                        self.audio.play3d(0x5dd, self.locks[k].pos, None);
                     }
                 }
             }
@@ -14249,9 +14260,20 @@ fn segment_hits_sphere(a: V3, b: V3, c: V3, r: f32) -> bool {
             // At ≤ 0 the game re-randomizes the charge's fuse every tick [M 0x12e3cc-0x12e40c]
             // — it never explodes; `defused` marks it and `tick_charge_fuse` redraws (see
             // `Bullet::defused`). One
-            // contact per laser round per tick, the same shape as the lock walk above. The
-            // burn sparks are `Emitter_Create(0xc00000a, hit point, …)` [M 0x12e37c] —
-            // draw-side; the port's emitter set has no charge-spark shape (not ported).
+            // contact per laser round per tick, the same shape as the lock walk above.
+            // satchel-laser: every contact of the walk spawns the burn sparks —
+            // `Emitter_Create(0xc00000a, entry+0x40, entry+0x10, 0, 0, 0, 0, 0)` [M 0x12d890:
+            // 466-468; the f12/f13 rate args 0, a0 = the def hash, a1 = the contact's hit point,
+            // a2 = its normal — the `Emitter_Create__FUiP7_VECTORT1fUiUiUif` signature 0x17ae00]:
+            // a one-shot burst (rate 0) — the same object shape `WorldFx::spawn_impact` builds for
+            // the `Effect_Create` impact arm. When the walk drives `BU+0x102` to ≤ 0 it plays
+            // `Sound_Play3D(100.0, −1.0, −1.0, 0x5dd, obj+0x30)` at the charge [M :472-474]; the
+            // burned-out charge skips the walk from the next tick on (`goto LAB_0012e41c` [M
+            // :424-433]) — no more sparks, no more burn. The contact entry's +0x40/+0x10 are the
+            // narrow phase's triangle hit point and world normal (`Collide_Intersect` 0x1ebaa8's
+            // tail, copied onto the charge's list by `Collide_Update` 0x1ea398:194-207); the port
+            // has no per-triangle test on the charge, so the point is the closest point of the
+            // round's segment to the charge and the normal faces back along the beam [S].
             // The contact sphere: the game's picker runs the charge's world sphere
             // (Control_BuildWorldSph 0x133070 over its glist) against the round's segment;
             // the port stands the round's own world-radius floor on top (the bullet obj's
@@ -14259,14 +14281,19 @@ fn segment_hits_sphere(a: V3, b: V3, c: V3, r: f32) -> bool {
             // sphere [S the charge's exact glist bounds are not pinned].
             if matches!(b.weapon, 0x4e | 0x4f) {
                 let amount: i16 = if b.weapon == 0x4e { 1 } else { 10 }; // [M 0x12e2f0-0x12e348]
+                let mut sparks: Vec<(V3, V3)> = Vec::new();
+                let mut fizzles: Vec<V3> = Vec::new();
                 for s in self.bullets.iter_mut() {
                     if !s.landed || s.defused { continue; }
                     if s.family(&d.weapons) != 0x3b { continue; }
                     if Self::segment_hits_sphere(b.pos, end, s.pos, 0.5) {
                         s.burn -= amount;
-                        if s.burn <= 0 { s.defused = true; }
+                        sparks.push((Self::closest_on_segment(b.pos, end, s.pos), [-b.dir[0], -b.dir[1], -b.dir[2]]));
+                        if s.burn <= 0 { s.defused = true; fizzles.push(s.pos); }
                     }
                 }
+                for (p, n) in sparks { self.fx.spawn_impact(Self::SATCHEL_BURN_SPARKS, p, n); }
+                for p in fizzles { self.audio.play3d(0x5dd, p, None); }
             }
             // rigid-body-bullet: the game's collision pass appends the round's contact to the
             // kind-0xD8 body's `obj+0xD0` chain (the bullet is class 5) and `RB_CollisionHandler`
