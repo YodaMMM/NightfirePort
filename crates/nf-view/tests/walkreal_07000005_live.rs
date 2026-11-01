@@ -20,6 +20,22 @@ use walker::{Walker};
 
 fn iso() -> String { std::env::var("NF_ISO").expect("NF_ISO") }
 
+/// The stick's turn toward `yaw` this tick (`Input::turn` adds to the yaw [port player.rs]),
+/// clamped to the walker's own per-tick rate.
+fn stick_err(w: &Walker, yaw: f32) -> f32 {
+    walker::wrap_pi(yaw - w.scene.sim.as_ref().unwrap().bond.yaw).clamp(-0.08, 0.08)
+}
+
+/// Turn in place to `yaw` with the stick alone (no facing write), capped at 200 ticks.
+fn stick_turn(w: &mut Walker, yaw: f32) {
+    for _ in 0..200 {
+        if walker::wrap_pi(yaw - w.scene.sim.as_ref().unwrap().bond.yaw).abs() < 0.01 { return; }
+        let turn = stick_err(w, yaw);
+        w.tick(Input { turn, ..Default::default() }, false);
+    }
+    panic!("the stick turn never reached yaw {yaw}");
+}
+
 /// The truck + gate route: the walk to the gatehouse, the scripted ride (the crouch is the player's
 /// own input [D fix-truck's trace]), the park, the chain's automatic exit.
 /// UN-PARKED (mayhew-exit-walk 2026-10-17): the approach now walks the road to the gatehouse
@@ -183,9 +199,9 @@ fn walk_the_tower_top_and_the_walk_off_fall() {
     {
         let mut landed = false;
         for t in 0..300u32 {
-            let input = Input { forward: 1.0, ..Default::default() };
-            // yaw −0.3: the probe's measured fall direction off the north-west edge.
-            w.scene.sim.as_mut().unwrap().bond.yaw = -0.3;
+            // yaw −0.3: the probe's measured fall direction off the north-west edge (steered
+            // with the stick, not written).
+            let input = Input { forward: 1.0, turn: stick_err(&w, -0.3), ..Default::default() };
             w.tick(input, false);
             let sim = w.scene.sim.as_ref().unwrap();
             if t % 30 == 0 { eprintln!("[05 fall t{t}] bond {:?}", sim.bond.pos); }
@@ -668,9 +684,8 @@ fn the_notch_grab_and_ride_parked() {
     }
     // Face the wire's south run and press: the jump press at t == 5 of the loop (an edge).
     {
-        let sim = w.scene.sim.as_mut().unwrap();
-        sim.bond.yaw = (-23.49 - sim.bond.pos[0]).atan2(6.26 - sim.bond.pos[2]);
-        sim.bond.vel = [0.0; 3];
+        let p = w.scene.sim.as_ref().unwrap().bond.pos;
+        stick_turn(&mut w, (-23.49 - p[0]).atan2(6.26 - p[2]));
     }
     // The press pulses one edge per 6 ticks (the harness's edge-trigger rule — the game's
     // jump is edge-triggered [M Input_Action mask 4]): the ledge-18 rest flaps grounded/airborne
@@ -865,9 +880,9 @@ fn walk_the_cable_route_to_the_stairs_top(w: &mut Walker) {
     // see the report's "the seal is off-route".
     let mut best_z = f32::MAX;
     let start_tick = w.total_ticks;
+    stick_turn(w, std::f32::consts::PI);
     for t in 0..420u32 {
-        let input = Input { forward: 1.0, ..Default::default() };
-        w.scene.sim.as_mut().unwrap().bond.yaw = std::f32::consts::PI;
+        let input = Input { forward: 1.0, turn: stick_err(w, std::f32::consts::PI), ..Default::default() };
         w.tick(input, false);
         let sim = w.scene.sim.as_ref().unwrap();
         let p = sim.bond.pos;
@@ -912,7 +927,7 @@ fn walk_the_cable_route_to_the_stairs_top(w: &mut Walker) {
     // armed (sub stayed 0) — the act faces the target point, which turned Bond north, off the
     // wall axis; the crawl entry needs the player's facing on the band's axis [L this file's
     // first two runs vs probe_crawl05's yaw-π press].
-    w.scene.sim.as_mut().unwrap().bond.yaw = std::f32::consts::PI;
+    stick_turn(w, std::f32::consts::PI);
     {
         let mut crawling = false;
         for t in 0..180u32 {
@@ -1368,12 +1383,12 @@ fn the_notch_holds_the_walk_and_the_grab_needs_its_zone() {
     // piece (z ≥ 4) — the dip holds him [D the 1-unit map].
     let mut crossed = false;
     for t in 0..600u32 {
-        let input = Input { forward: 1.0, ..Default::default() };
+        let input = Input { forward: 1.0, turn: stick_err(&w, std::f32::consts::PI), ..Default::default() };
         // SOUTH = −z here (the notch's dip is at z 4-10, south of the walked ledge-18 edge at
         // z 18.5): the port's forward is (sin yaw, cos yaw) [M walk_to's own atan2(dz, dx)
         // steering], so yaw π faces (0, −1). The old FRAC_PI_2 faced +x (east — off the ledge's
         // east void) and predates the kink walk; the test never ran (ignored since birth).
-        w.scene.sim.as_mut().unwrap().bond.yaw = std::f32::consts::PI;
+        // Steered with the stick (the input above), not written.
         w.tick(input, false);
         let sim = w.scene.sim.as_ref().unwrap();
         if t % 100 == 0 { eprintln!("[05s notch t{t}] bond {:?}", sim.bond.pos); }
