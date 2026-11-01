@@ -87,6 +87,10 @@ below.
 | walkreal_0700001b_live | **10 passed; 0 failed; 1 ignored** (the pre-existing ignored walk) |
 | zerog_0700001b_live | **1 passed; 0 failed** |
 | platforms_drake_scene_1b (this task) | **2 passed; 0 failed** |
+| drake_fight_live | **3 passed; 0 failed** |
+| dynobj_glass_live | **2 passed; 0 failed** |
+| fix_finale_live (the 1b defeat chain) | **4 passed; 0 failed** |
+| fix_space_pane_live | **3 passed; 0 failed** |
 | nf-game (lib) | **987 passed; 0 failed** |
 
 The fast runner (`tools/test/suite.py`) was started detached twice (04:51 and 05:19 UTC); the
