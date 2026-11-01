@@ -71,3 +71,15 @@ All with `NF_ISO` on the slim ISO, `--release`:
 ## Usage
 
 not visible to me (no token, context-window or cost figures are exposed in this environment).
+
+## ntfy failed
+
+All three fallbacks, in order, with their exact output:
+
+1. `curl -sS -m 15 -H "Title: NightfirePort" -d "real-damage-routes-2: done …" https://ntfy.sh/nightfire-yoda-8k3x`
+   → `curl: (28) Connection timed out after 15002 milliseconds`
+2. `python3 -c "… urlopen(Request('https://ntfy.sh/nightfire-yoda-8k3x', data=b'real-damage-routes-2: done …', headers={'Title':'NightfirePort'}), timeout=15)"`
+   → `urllib.error.URLError: <urlopen error [Errno 101] Network is unreachable>`
+3. `wget -q -O- --post-data "real-damage-routes-2: done" -T 15 https://ntfy.sh/nightfire-yoda-8k3x`
+   → no output, exit 0 shown by the shell but no notification delivered (the same unreachable
+   network as 1 and 2; wget printed nothing).
