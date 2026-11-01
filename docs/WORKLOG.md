@@ -11,3 +11,14 @@ damage path Drone_ModBulletDamage) — is the stat a multiplier/index rather tha
 a fresh-boot EE snapshot at 09 load if one exists. Fix the decode or the consumer if wrong; pin the
 09 guards' effective health with citations. Branch start: created s/level-09-guard-health-live from
 origin/master.
+
+Finish (2026-11-01, same session): the question is settled — YES, 1 health. The decoder was pinned
+from disassembly (the decompile C misreads the width-table copy: it is four unaligned qword pairs =
+8 words from 0x303330; the kind advance is (tag&0xffff)/3 words); the decode is live-anchored on
+ee_start_07000001.bin's type-2/12 records; DoModeSettingsNEW reads kind 1 only [M 0x14c704] and
+stores word 2 to +0xAC as (float)(int) [M 0x14c70c-30]; HitDamage 0x145558:154-156 is the raw-HP
+gate; every 09 type-0xD placement runs NEW (param 5 = 0x64 >= 0x24 [M 0x14bccc-d4]). Kind 1 =
+80/1/1/80/3/80/80/1: accuracy 80, health 1. Pins added to enemy_accuracy.rs (nf-game) and
+walkreal_07000009_live.rs; report docs/reports/level-09-guard-health-live.md. nf-game 1016/0/9;
+stealth_ai_live 7/0; walkreal_07000009_live 6/0; enemy_accuracy_live 5/0/4; suite cut at the
+deadline with the wgpu-device + disc_golden environmental fails only (details in the report).
