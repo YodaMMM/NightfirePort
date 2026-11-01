@@ -6954,12 +6954,23 @@ pub fn run() -> Result<()> {
                 if walk { sim.step_bond(inp, pulls.contains(&t), false, use_at == Some(t)); } else { sim.step([cam.pos.x, cam.pos.y, cam.pos.z], cam.dir().to_array(), pulls.contains(&t), false); }
             }
             if aim_sweep.is_some() { sim.bond.yaw = aim0.0; sim.bond.pitch = aim0.1; }
-            // With `--skip-cutscenes`, a skipped cut-scene's hand-back moves Bond: put him back on the `--bond` spot (and
-            // let one tick settle) so the image pair matches the real game's placement.
+            // With `--skip-cutscenes`, a skipped cut-scene's hand-back moves Bond: put him back on the `--bond` spot and
+            // let him settle so the image pair matches the real game's placement. A spot in the air falls to the floor
+            // under it, as the game's own placement does (0700000d ST-3: placed at y 10.5 the game lands him on the
+            // 3.985 floor at 5.02, and so does the port's sim). One tick never moved him — a fresh Bond's first
+            // tick applies no fall — so the shot showed him hanging at the placed height. The settle runs until he
+            // is grounded, capped at 240 ticks; a spot already on the floor grounds on the first tick as before.
             if skip_cuts {
                 if let Some(i) = args.iter().position(|a| a == "--bond") {
                     let v: Vec<f32> = args.get(i + 1).map(|s| s.split(',').filter_map(|t| t.parse().ok()).collect()).unwrap_or_default();
-                    if v.len() >= 3 { sim.bond = nf_game::player::Bond::new([v[0], v[1], v[2]], v.get(3).copied().unwrap_or(sim.bond.yaw)); if let Some(&pt) = v.get(4) { sim.bond.pitch = pt; } sim.step_bond(shot_input, false, false, false); }
+                    if v.len() >= 3 {
+                        sim.bond = nf_game::player::Bond::new([v[0], v[1], v[2]], v.get(3).copied().unwrap_or(sim.bond.yaw));
+                        if let Some(&pt) = v.get(4) { sim.bond.pitch = pt; }
+                        for _ in 0..240 {
+                            sim.step_bond(shot_input, false, false, false);
+                            if sim.bond.grounded { break; }
+                        }
+                    }
                 }
             }
             if walk { let h = sim.bond.head(); cam = Camera { pos: Vec3::new(h[0], h[1], h[2]), yaw: sim.bond.yaw, pitch: sim.bond.pitch * std::f32::consts::FRAC_PI_2, fov: GAME_FOV / sim.zoom }; }
