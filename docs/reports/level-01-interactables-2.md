@@ -82,3 +82,12 @@ existing test contradicted the decompile.
 ## Usage
 
 not visible to me
+
+## ntfy failed
+
+All three fallbacks failed from this sandbox (egress blocked):
+- `curl -sS -m 20 -H "Title: NightfirePort" -d "…" https://ntfy.sh/nightfire-yoda-8k3x` →
+  `curl: (28) Connection timed out after 20000 milliseconds`
+- python urllib → `urllib.error.URLError: <urlopen error [Errno 101] Network is unreachable>`
+- `wget -q -O- --post-data "level-01-interactables-2: done" https://ntfy.sh/nightfire-yoda-8k3x` →
+  timed out after 30 s with no output (killed)
