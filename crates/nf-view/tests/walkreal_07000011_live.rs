@@ -47,13 +47,27 @@ fn iso() -> String { std::env::var("NF_ISO").expect("NF_ISO") }
 /// (common/damage_log.rs), so a pass pins the whole chain on the port's own damage.
 #[test]
 fn walk_spawn_to_the_lower_floor_load_point_real_damage() {
-    walker::with_real_damage(walk_spawn_to_the_lower_floor_load_point);
+    walker::with_real_damage(|| run_the_tower_walk(true));
 }
 
 #[test]
 fn walk_spawn_to_the_lower_floor_load_point() {
+    run_the_tower_walk(false);
+}
+
+fn run_the_tower_walk(real_damage: bool) {
     let iso = iso();
     let mut w = Walker::new(nf_view::load_with_carry(&iso, "07000011.bin", false, None).expect("load"));
+    if real_damage {
+        // real-damage-routes-2 (against master's decoded placement stats): the tower + the
+        // 07000012 extension are open-floor lane fights — the guards hit from d 9-15 partly in
+        // cover, and the dry near-dry trades die (the floor fight engaged at clip 2 spare 0,
+        // gave up `killed false`, and the dry resupply walk died to the shooter's twin at
+        // d 11.8). The lane kit (wide shooters window, damage-weighted pick, floor-drop
+        // resupply around fights — common/damage_log.rs `lane_fights`) is the 07000013
+        // precedent for exactly this shape. No `back_off`: the stairwell flights have edges.
+        w.dmg.lane_fights = true;
+    }
     {
         let sim = w.scene.sim.as_ref().unwrap();
         let p = sim.bond.pos;
@@ -229,6 +243,7 @@ fn walk_spawn_to_the_lower_floor_load_point() {
     let scene2 = nf_view::load_with_carry_difficulty(&iso, "07000012.bin", false, None, 3)
         .expect("07000012 loads after the exit");
     let mut w2 = Walker::new(scene2);
+    if real_damage { w2.dmg.lane_fights = true; } // the extension's floor fights (see the spawn walker's note)
     w2.wait_enabled(3000, "07000012's intro");
     w2.wait(90);
     {
@@ -268,6 +283,7 @@ fn walk_spawn_to_the_lower_floor_load_point() {
     };
     let mut w3 = Walker::new(nf_view::load_with_carry(&iso, "0700004a.bin", false, Some(&save))
         .expect("0700004A loads after 07000012's exit"));
+    if real_damage { w3.dmg.lane_fights = true; }
     w3.wait_enabled(3000, "the 4A intro");
     let mut landed = false;
     for _ in 0..600 {
