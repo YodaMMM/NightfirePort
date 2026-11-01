@@ -53,3 +53,14 @@ Session 1 progress (~11:30 UTC):
   push (Collide_Jointy 0x1ec180, no ground gate) behind NDrone2_DoCollision 0x149ec8's gates
   (+0x4f8 bits 0x20/0x200, +0x570 bit 2), un-ignore the flank repro, keep walkreal_07000003 x2 /
   walkreal_07000001 the_plate_refuses_bond_alone / exit_aim_01 as-is.
+- The gate read settled: Collide_Jointy 0x1ec180's 0x800 arm has no ground gate and DoCollision
+  0x149ec8's per-bot arms (0x200 dead OFF; 0x20 special-physics from DefaultInit 0x801e2,
+  cleared by Enable(0); then 0xd8 0xc/0x13, +0x538, near-player < 2.0 [0x14b190], obj+0xFC,
+  +0x570&2) keep the capsule ON for every bot the push can touch (0.95 << 2.0) — the airborne
+  only gate was level-14-sleeper-push's [S] port choice and is lifted. The flank fall is FIXED
+  (the test un-ignored, 2/2 green with the lip sister's pin re-scoped off-push). The 03 walks
+  pass 4/4 unchanged; on 01 the meet chain's activated hall guards (SP #276 → ch 0xE, state
+  0x68) really block — the walkers now clear them (walker.rs clear_pushing_guards[_lane],
+  opt-in): exit_aim_01 1/1, walkreal_07000001 4/6 (the_plate sister 15 + the real-damage escort
+  still wedge mid-leg — the next pass's item). MP digests structurally untouched (empty
+  bot_capsules on both MP paths) but unrun. Report: docs/reports/guard-push-every-tick.md.
