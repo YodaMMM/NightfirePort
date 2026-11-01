@@ -48,13 +48,19 @@ fn the_disc_census_of_0xfe_mines() {
             }
         }
     }
-    // The census [D]: 07000015's nine tripbombs (docs/levels/07000015.md) and 07000041's single
-    // Laser_Mine #582 (docs/levels/07000041-audit.md) are the disc's only 0xFE placements.
-    assert_eq!(mines.len(), 10, "the disc's 0xFE placements: 9 on 07000015 + 1 on 07000041 [D]");
-    let on_15 = mines.iter().filter(|(n, ..)| n == "07000015.bin").count();
-    let on_41 = mines.iter().filter(|(n, ..)| n == "07000041.bin").count();
-    assert_eq!(on_15, 9, "07000015 carries the nine tripbombs [D docs/levels/07000015.md]");
-    assert_eq!(on_41, 1, "07000041 carries the one Laser_Mine [D docs/levels/07000041-audit.md]");
+    // The census [D]: 07000015's nine tripbombs (docs/levels/07000015.md) and 07000041's Laser_Mine
+    // #582 (docs/levels/07000041-audit.md) are the disc's only real 0xFE placements — plus one null
+    // 0xFE record on 07000041's NON-main map 9 (placement #0 at the origin, every param 0): the
+    // port's sim creates mines from the main map only, so that record makes no object and draws
+    // nothing.
+    assert_eq!(mines.len(), 11, "the disc's 0xFE placements: 9 on 07000015 m54 + 1 on 07000041 m99 + 1 null on 07000041 m9 [D]");
+    let on_15 = mines.iter().filter(|(n, m, ..)| n == "07000015.bin" && *m == 54).count();
+    let on_41 = mines.iter().filter(|(n, m, ..)| n == "07000041.bin" && *m == 99).count();
+    let on_41_null = mines.iter().filter(|(n, m, params, _)| n == "07000041.bin" && *m == 9 && *params == [0; 6]).count();
+    assert_eq!(on_15, 9, "07000015 m54 carries the nine tripbombs [D docs/levels/07000015.md]");
+    assert_eq!(on_41, 1, "07000041 m99 carries the one Laser_Mine [D docs/levels/07000041-audit.md]");
+    assert_eq!(on_41_null, 1, "07000041 m9 carries the one null 0xFE record (all params 0) [D]");
+    assert_eq!(on_15 + on_41 + on_41_null, mines.len(), "no other level or map carries a 0xFE placement [D]");
     // 07000015's nine: bob off (p3 = the sin rate, p4 = the amplitude — both 0 [D]).
     for (name, _, params, _) in mines.iter().filter(|(n, ..)| n == "07000015.bin") {
         assert_eq!((params[3], params[4]), (0, 0), "{name}: the bob is off [D]");
@@ -62,7 +68,7 @@ fn the_disc_census_of_0xfe_mines() {
     // 07000041's Laser_Mine #582: p0 = 0x32 (damage), p1 = 0xa (radius/shake/scale), p2 = 0x32
     // (the unmodelled spin rate), p3 = 0x32 (the bob rate), p4 = 0xa (the bob amplitude), p5 =
     // 0x6000052 (the blast script) [D docs/levels/07000041-audit.md line 455].
-    let (_, _, params, at) = mines.iter().find(|(n, ..)| n == "07000041.bin").unwrap();
+    let (_, _, params, at) = mines.iter().find(|(n, m, ..)| n == "07000041.bin" && *m == 99).unwrap();
     assert_eq!(params, &[0x32, 0xa, 0x32, 0x32, 0xa, 0x0600_0052], "07000041 #582's params [D]");
     assert!((at[0] - 52.40).abs() < 0.01 && (at[1] - -8.52).abs() < 0.01 && (at[2] - -41.43).abs() < 0.01,
         "07000041 #582 sits at 52.40,-8.52,-41.43 [D]: {:?}", at);
@@ -75,35 +81,33 @@ fn the_disc_census_of_0xfe_mines() {
 #[test]
 fn the_07000041_laser_mine_bobs_in_its_draw_slot() {
     let Some(iso_path) = std::env::var("NF_ISO").ok() else { eprintln!("skip: NF_ISO not set"); return };
-    let iso = IsoImage::open(&iso_path).unwrap();
-    let mut scene = nf_view::load(&iso, "07000041.bin", false).unwrap();
+    let mut scene = nf_view::load(&iso_path, "07000041.bin", false).unwrap();
     let (mx_static, base) = {
         let s = scene.sim.as_ref().unwrap();
         let mn = s.drones.mines.first().expect("07000041 carries one mine [D]");
         // The [D] parameters through the port's fields: rate = 0x32·0.0002, amp = 0xa·0.1.
         assert!((mn.bob_rate - 0x32 as f32 * 0.0002).abs() < 1e-6, "the bob rate from p3 [D]: {}", mn.bob_rate);
         assert!((mn.bob_amp - 0xa as f32 * 0.1).abs() < 1e-6, "the bob amplitude from p4 [D]: {}", mn.bob_amp);
-        let mx_static = *scene.mine_placements.iter().find(|(pl, _)| *pl == mn.placement)
+        let mx_static = scene.mine_placements.iter().find(|(pl, _)| *pl == mn.placement)
             .expect("the mine has a draw slot").1;
         (mx_static, mn.pos[1])
     };
     // The slot: the door-region slot drawn at the mine's x/z (and, before any tick, its y —
     // `posed_y` starts at pos.y, sin(0) = 0). The static slot matrix must stay at the placement.
-    let (slot, _) = {
+    let (slot, m0) = {
         let s = scene.sim.as_ref().unwrap();
         let mut found = None;
         for k in 0..8192usize {
-            if let Some(m) = scene.door_slot_matrix(s, k) {
-                if (m[3][0] - mx_static[3][0]).abs() < 1e-3 && (m[3][2] - mx_static[3][2]).abs() < 1e-3
-                    && (m[3][1] - base).abs() < 1e-3 {
-                    found = Some((k, m));
-                    break;
-                }
+            let m = scene.door_slot_matrix(s, k);
+            if (m[3][0] - mx_static[3][0]).abs() < 1e-3 && (m[3][2] - mx_static[3][2]).abs() < 1e-3
+                && (m[3][1] - base).abs() < 1e-3 {
+                found = Some((k, m));
+                break;
             }
         }
         found.expect("the 07000041 mine has a posed draw slot at its placement")
     };
-    assert_eq!(slot[3][1], mx_static[3][1], "before any tick the slot sits at the placement y");
+    assert_eq!(m0[3][1], mx_static[3][1], "before any tick the slot sits at the placement y");
     // Tick 1..260: the slot's y tracks the [M] formula over the sin's rise to its peak (the rate
     // 0.01 rad/tick puts the first quarter period at tick 157, so the amplitude 1.0 shows).
     let mut max_y = f32::MIN;
@@ -112,7 +116,8 @@ fn the_07000041_laser_mine_bobs_in_its_draw_slot() {
         let s = scene.sim.as_ref().unwrap();
         let mn = &s.drones.mines[0];
         let want = base + (k as f32 * mn.bob_rate).sin() * mn.bob_amp;
-        let m = scene.door_slot_matrix(s, slot).unwrap();
+        let m = scene.door_slot_matrix(s, slot);
+        assert!(m[3][1] > -9999.0, "tick {k}: the mine's slot collapsed (exploded?) unexpectedly");
         assert!((m[3][1] - want).abs() < 1e-4, "tick {k}: slot y {} != posed_y {want} [M 0x17c930]", m[3][1]);
         assert_eq!(mn.posed_y, want, "tick {k}: the sim's posed_y is the [M] formula");
         max_y = max_y.max(m[3][1]);
@@ -128,32 +133,31 @@ fn the_07000041_laser_mine_bobs_in_its_draw_slot() {
 #[test]
 fn the_07000015_mines_stay_put_in_their_draw_slots() {
     let Some(iso_path) = std::env::var("NF_ISO").ok() else { eprintln!("skip: NF_ISO not set"); return };
-    let iso = IsoImage::open(&iso_path).unwrap();
-    let mut scene = nf_view::load(&iso, "07000015.bin", false).unwrap();
+    let mut scene = nf_view::load(&iso_path, "07000015.bin", false).unwrap();
     let s = scene.sim.as_ref().unwrap();
     assert_eq!(s.drones.mines.len(), 9, "07000015 carries the nine [D]");
-    let mut slots: Vec<(usize, [f32; 3])> = Vec::new();
+    let mut slots: Vec<(usize, f32)> = Vec::new();
     for mn in &s.drones.mines {
         let mx_static = scene.mine_placements.iter().find(|(pl, _)| *pl == mn.placement).expect("draw slot").1;
         let mut found = None;
         for k in 0..8192usize {
-            if let Some(m) = scene.door_slot_matrix(s, k) {
-                if (m[3][0] - mx_static[3][0]).abs() < 1e-3 && (m[3][1] - mx_static[3][1]).abs() < 1e-3
-                    && (m[3][2] - mx_static[3][2]).abs() < 1e-3 {
-                    found = Some(k);
-                    break;
-                }
+            let m = scene.door_slot_matrix(s, k);
+            if (m[3][0] - mx_static[3][0]).abs() < 1e-3 && (m[3][1] - mx_static[3][1]).abs() < 1e-3
+                && (m[3][2] - mx_static[3][2]).abs() < 1e-3 {
+                found = Some(k);
+                break;
             }
         }
         let Some(slot) = found else { panic!("mine placement {} has no posed draw slot", mn.placement) };
-        slots.push((slot, mx_static[3]));
+        slots.push((slot, mx_static[3][1]));
     }
     for k in 1..=120usize {
         scene.sim.as_mut().unwrap().step_bond(nf_game::player::Input::default(), false, false, false);
         let s = scene.sim.as_ref().unwrap();
         for (slot, at) in &slots {
-            let m = scene.door_slot_matrix(s, *slot).expect("the mines stay unexploded at the start");
-            assert!((m[3][1] - at[1]).abs() < 1e-4, "tick {k}: mine slot y {} moved off the placement y {} [D bob off]", m[3][1], at[1]);
+            let m = scene.door_slot_matrix(s, *slot);
+            assert!(m[3][1] > -9999.0, "tick {k}: mine slot collapsed (exploded?) unexpectedly");
+            assert!((m[3][1] - at).abs() < 1e-4, "tick {k}: mine slot y {} moved off the placement y {} [D bob off]", m[3][1], at);
         }
     }
 }
