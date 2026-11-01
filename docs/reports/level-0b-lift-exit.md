@@ -78,30 +78,25 @@ From the ride surface (the roof slab), as the cab passes the exec floor:
   GPU-less environment's and the 2 CRASH lines are sandbox OOM kills, exit −9). The per-binary
   log is `/home/z/suite.log`; the totals line did not exist yet when this report was written.
 
-## The strongest new lead: the arrival cut-scene's own event 6
+## The arrival cut-scene lead: raised and REFUTED (kept so the next session doesn't re-chase it)
 
 The arrival cut-scene (SP #246, script 0x060004F9, [D pack 0780000b]) — the one the walkreal
-waits out before the shaft walk — **ends with an event 6 (the re-place) at t 689 of 690**
-(stream 11: `Event { kind: 6, params: [0] }` at Marker(2b1) [D the pack's NIS dump]). The game's
-event-6 law [M `Script_EventHandler` 0x1d94c0:125-136]: copy `SCRIPTINFO+0x40` (the script's own
-matrix) into `glb_players+0x90` (the player's matrix) when the firing stream record's kind byte
-(+0x24) is not 1/2 — an Event stream's isn't, and the arrival's event-6 stream (stream 11,
-Wait/Marker/Event only) has no entity. So the game re-places Bond at the script's own matrix at
-the cut-scene's end — the same law the roof cut-scene uses to land him on the helipad. The port's
-event-6 (nis.rs, proven by the roof-scene and level-14 tests) snapshots the previous stream's
-object (kinds 1|2) and otherwise leaves Bond where he is — for the arrival, stream 10 is a
-Light, so the port keeps him on the balcony. **Whether the disc's SCRIPTINFO+0x40 at t 689 holds
-the exec-floor landing** (making the whole balcony→exec transit the cut-scene itself — no walk,
-no cab, no teleport) is the next session's first question: it needs the disassembly of
-0x1d94c0's +0xab3 stream-record rule and the writer of SCRIPTINFO+0x40 (the script root keys —
-the arrival's last keys parse as (0,0,0) scale 0.02 at t 690 [D], a world-origin pose, so the
-raw key read alone is not yet conclusive). The script's camera path (camera true, 283 camera
-keys spanning t 0..690 [D]) IS the ride presentation; the cut-scene is 690 ticks ≈ 11.5 s.
+waits out before the shaft walk — ends with an event 6 at t 689 of 690 (stream 11:
+`Event { kind: 6, params: [0] }` [D the pack's NIS dump]). My first reading of
+`Script_EventHandler` 0x1d94c0:125-136 made that a RE-PLACE (the script's matrix into the
+player) — which would have made the cut-scene the whole balcony→exec transit. It is not:
+`Mat_Copy`'s signature is `(const MATRIX* src, MATRIX* dst)`, so case 6 copies the player's (or
+the captured object's) matrix **INTO** `SCRIPTINFO+0x40` — a snapshot — and `Script_Free`
+0x1da880:46-49 then `Player_Enable`s AT that snapshot [M; the port's tested model in nis.rs
+already implements exactly this and the roof-scene/level-14 tests pin it]. For the arrival, no
+kind-1/2 object precedes the event stream, so the snapshot is Bond's own live matrix — **the
+game, like the port, leaves Bond on the balcony after the arrival cut-scene**. The cut-scene's
+camera path (camera true, 283 camera keys over t 0..690 [D]) is presentation only. The route up
+remains unpinned; the live checks below stand.
 
 ## What's left (the next session's work)
 
-1. The arrival event-6 question above (the cheapest decisive step; before the live checks).
-2. The live checks (lifts.md §7 item 5) — only the main agent's PCSX2 can settle the route:
+1. The live checks (lifts.md §7 item 5) — only the main agent's PCSX2 can settle the route:
    (a) the shaft mouth at the balcony during the bottom hold — what the ground object under
    Bond is (`gdbwatch` Player_FeetOnPoint 0x194188's return at 0x1943a8); (b) whether a full
    ride attempt ever raises ch 0x53 (mid-shaft plate #171's out channel — a real ride fires it);
