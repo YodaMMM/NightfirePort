@@ -8,3 +8,6 @@ Do:
 1. Re-run the test on master first: player-trigger-contact may already close it. If it passes, un-ignore it and stop there.
 2. Otherwise derive the player's trigger contact body from the game [M Player_Collision 0x194df0 and the trigger contact pass] and fix drone.rs's toucher to match; cite every number.
 3. Un-ignore the test; run walkreal_0700000a_live, interactables_0700000a_live, every interactables_*_live, then the full suite.
+
+---
+claimed-by: sandbox4 at 2026-11-02T05:18Z
