@@ -5,7 +5,7 @@
 #[path = "common/walker.rs"]
 mod walker;
 
-use walker::{Walker, Wp};
+use walker::{Act, Walker, Wp};
 
 fn iso() -> String { std::env::var("NF_ISO").expect("NF_ISO") }
 
@@ -718,4 +718,91 @@ fn every_placement_resolves_its_model() {
         }
     }
     assert_eq!(unresolved, 0, "every placement's model resolves [D the 07000015 parse]");
+}
+
+/// The load-level exits (0xE8 ×2, both to 0x07000016 [D param 0 = 117440534]): the USE exit
+/// #445 (gate 0 [D param 2]) loads only through the E — `Trigger_Update` case 10 never
+/// self-fires with gate 0 [M 0x1b1a78:162-166], and the E arm rides `Player_Activate` 0x1a5170
+/// case 0x1d → `Trigger_Activate` 0x1b2318 — while the gated #343 (gate ch 0x42 [D param 2])
+/// stays cold: ch 0x42 has no writer on the level [D scans 2026-10-13]. Sister: standing inside
+/// the USE plane's volume raises nothing — the same approach without the E, then the E fires.
+#[test]
+fn the_use_exit_loads_and_the_gated_exit_stays_cold() {
+    let mut w = load15();
+    // The exit hall (the walkreal route's proven lane spot; the interactables teleport is the
+    // documented stand-in for the gauntlet).
+    w.scene.sim.as_mut().unwrap().bond.pos = [0.5, 41.4, -21.0];
+    w.scene.sim.as_mut().unwrap().bond.vel = [0.0; 3];
+    w.wait(10);
+    {
+        let sim = w.scene.sim.as_ref().unwrap();
+        assert_eq!(sim.drones.level_exit, None, "no exit request on arrival [M case 10's gate]");
+        // [S] ch 0x42 has no writer found on the level yet (the writer hunt is open) — logged, not pinned.
+        eprintln!("[S] ch 0x42 on arrival: {}", sim.drones.channels.on(0x42));
+    }
+    // Walk INTO the USE plane's volume WITHOUT the E: #445's box is z −24.96..−24.60 [D]; the
+    // approach stops inside it. Case 10 must not fire on the proximity.
+    w.walk_to(Wp::new(0.0, 41.3, -24.7).r(0.9), "into the USE plane's volume (no E)");
+    {
+        let sim = w.scene.sim.as_ref().unwrap();
+        assert_eq!(sim.drones.level_exit, None,
+            "sister: the gate-0 exit never self-fires on the contact [M 0x1b1a78:162-166]");
+    }
+    // The E at the plane (the walkreal-proven stance): the load request.
+    w.walk_to(Wp::at(0.0, 41.3, -23.6, Act::Use { use_ticks: 300 }).r(1.0), "E the USE exit #445");
+    {
+        let sim = w.scene.sim.as_ref().unwrap();
+        assert_eq!(sim.drones.level_exit, Some(0x0700_0016),
+            "the E at the #445 plane loads 07000016 [D param 0; M 0x1a5170 case 0x1d → 0x1b2318]");
+        assert_eq!(sim.drones.mission.states[21][0], 3,
+            "the objective stays announced (its completing ch 0x8e is 07000016's spawn plate [D 07000016 #252])");
+    }
+}
+
+/// The Apocalypse whiteout's full arc (0x4a #710: latch ch 0xf6, 2 s, whiteout [D params]): the
+/// east-room touch #717's ch 0xf6 latches it armed [M Apocalypse_Update 0x18d4f0 — the same edge
+/// the east-room test pins], the countdown runs `remaining` down from `total` (param 1 · 60
+/// [M Apocalypse_Create 0x18dcc0]) with the viewer mirror `fade = remaining·5/total`
+/// [M 0x18d4f0], and at 0 the mirror floors and stays. Sisters: the record rests unarmed at
+/// total with fade 0 before the touch.
+#[test]
+fn the_apocalypse_countdown_runs_out_and_floors() {
+    let mut w = load15();
+    {
+        let sim = w.scene.sim.as_ref().unwrap();
+        let a = sim.drones.fx.apocalypses.iter().find(|a| a.channel == 0xf6).expect("the ch-0xf6 apocalypse [D #710]");
+        assert!(!a.armed, "sister: unarmed before the room touch [M the latch]");
+        assert!((a.total - 120.0).abs() < 1e-4, "the 2 s countdown = param 1 · 60 ticks [D #710 param 1; M 0x18dcc0]");
+        assert!((a.remaining - a.total).abs() < 1e-4 && a.fade == 0.0,
+            "sister: full countdown, no mirror before the touch [M the create]");
+    }
+    // The east-room walk (the same proven lane the east-room test drives): the touch fires
+    // ch 0xf6, the apocalypse latches.
+    w.walk_to(Wp::new(88.0, 41.4, -0.5).r(1.2), "the gantry west");
+    w.walk_to(Wp::new(80.5, 41.4, 0.08).r(1.2), "into touch #717");
+    {
+        let sim = w.scene.sim.as_ref().unwrap();
+        assert!(sim.drones.channels.on(0xf6), "the room touch fires ch 0xf6 [D #717]");
+        let a = sim.drones.fx.apocalypses.iter().find(|a| a.channel == 0xf6).unwrap();
+        assert!(a.armed && a.fade > 0.0, "the latch + the mirror at the touch [M 0x18d4f0]");
+    }
+    // The countdown: mid-way the mirror still shows, at the floor both read 0 and stay.
+    let mut saw_fall = false;
+    for _ in 0..60 {
+        w.tick(Default::default(), false);
+        let a = w.scene.sim.as_ref().unwrap().drones.fx.apocalypses.iter().find(|a| a.channel == 0xf6).unwrap();
+        if a.remaining < a.total && a.fade > 0.0 { saw_fall = true; break; }
+    }
+    assert!(saw_fall, "the countdown runs (remaining falls, the mirror shows) [M 0x18d4f0]");
+    for _ in 0..200 {
+        w.tick(Default::default(), false);
+        let a = w.scene.sim.as_ref().unwrap().drones.fx.apocalypses.iter().find(|a| a.channel == 0xf6).unwrap();
+        if a.remaining == 0.0 { break; }
+    }
+    {
+        let sim = w.scene.sim.as_ref().unwrap();
+        let a = sim.drones.fx.apocalypses.iter().find(|a| a.channel == 0xf6).unwrap();
+        assert_eq!(a.remaining, 0.0, "the countdown floors at 0 [M 0x18d4f0]");
+        assert_eq!(a.fade, 0.0, "the mirror floors with it and stays [M 0x18d4f0]");
+    }
 }
