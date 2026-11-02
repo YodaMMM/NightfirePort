@@ -25,3 +25,19 @@ load's own 7 P2K rounds spent on the lobby guards). Armour-detour tactic tried a
 (the detour legs reshuffle the spawn-lobby fights, 93->30 health, died short of the pickup).
 Verified: start_corridor_guard_07000011_live 8/8, the topped-up walkreal_07000011 walk green.
 The 07000012 corridor tactic is the next session's first item.
+
+## level-11-start-fight-real-health-2 (2026-11-02)
+
+Branch s/level-11-start-fight-real-health-2 from origin/s/level-11-start-fight-real-health,
+merged origin/master. Goal: the 07000011 real-health walk's last blocker — 07000012's south
+corridor (drone #10's 8-pellet loop at 0.86 u, Bond dry). Tried this session, all measured:
+the corridor swing to z -13.8 (the pre-batch line) — the straight legs cut the corner to
+0.6-2.2 u of the stationary post and the funnel's geometry caps every path at ~2 u [L repro5-8,
+all dead at tick 2789]; the BodyArmour #734 detour (opt-in tower2 legs) — died 1.8 u short of
+the plate: the detour legs cross the east volleyers' field, a dry return-fire fight there cost
+82.5 [L repro3], and with fights suppressed a lobby blast landed -72.0 in one hit with NO
+Grenade in flight all walk [L repro9 — the blast rides the bullet/prop path, not the port's
+grenade list]; a walk-level grenade jink (opt-in) never fired for the same reason. Reverted all
+common/ churn — the branch carries only the prior session's verified shoot_blockers fix and the
+merge. The walkreal_07000011 walk stays ignored with the measured reasons; the next levers are
+the Deagle #777 (1.74, 0.24, 13.99 [D]) detour and a live check on the real crossing.

@@ -300,7 +300,7 @@ fn walk_spawn_to_the_lower_floor_load_point() {
 /// loads are the game's own exit → next-level path ([M ResetMap_LevelToLoad 0x1b24b8;
 /// Player_RamLoad 0x1957a8]), not teleports.
 #[test]
-#[ignore = "real health (2026-11-02, level-11-start-fight-real-health): dies at tick 2789 (19.9, 1.1, -10.9) — drone #10 (skin 0x05000008) weapon 0x1c, 8 pellets x 6.0 TooClose in one tick at 0.6 u; the flight-B blocker stand is fixed (shoot_blockers), the south-corridor tactic is not"]
+#[ignore = "real health (2026-11-02, level-11-start-fight-real-health-2): dies at tick 2789 (19.9, 1.1, -10.9) — 07000012's south corridor: drone #10 (weapon 0x1c, stationary at (19.5, -11.3)) lands 8 pellets x 6.0 TooClose in one tick at 0.86 u; Bond is DRY (the d3 front-end's 7 rounds spent on the lobby fights). The corridor mouth is a ~2 u funnel around the post (the bend 2 (20.75, -9.75) is already 2.0 u out) — no crossing path holds the 2.5 u the spread needs [L repro5-8]. The armour detour to #734 (17.48, 1.51 [D]) dies en route: the detour legs cross the east volleyers' field and a lobby guard's blast lands -72.0 in one hit [L repro9 — no Grenade in flight, the blast rides the bullet/prop path]; a dry return-fire fight there cost 82.5 [L repro3]. Next lever: the Deagle #777 (1.74, 0.24, 13.99 [D], 7 rounds) or a live check on the real crossing"]
 fn walk_spawn_to_the_lower_floor_load_point_real_damage() {
     walker::with_real_damage(walk_spawn_to_the_lower_floor_load_point);
 }
