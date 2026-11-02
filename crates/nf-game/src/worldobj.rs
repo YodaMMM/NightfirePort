@@ -248,9 +248,15 @@ impl Rotor {
 
 /// Mine (placement 0xFE → `Mine_Create` 0x17ce28, class 0x4B): the floating laser tripbomb —
 /// 07000015's nine `Tripbomb_3rd_*` cels. `Mine_Update` 0x17c930:
-/// - the body bobs: `obj+0x34 = pos.y + sin(GameState+0x52·(param2·0.0002))·(param4·0.1)`
-///   [M 0x17c930:9-30 — inst+0x10 = param2·0.0002 the rate, inst+0x18 = param4·0.1 the amplitude,
-///   the clock is the game's global `GameState+0x52` tick — the port's fixed 60 Hz frame, no RNG];
+/// - the body bobs: `obj+0x34 = pos.y + sin(GameState+0x52·(param3·0.0002))·(param4·0.1)`
+///   [M 0x17c930 disasm 0x17c9a8-0x17c9f4 — the sin's rate argument reads inst+0x14, which
+///   `Mine_Create` 0x17ce28:46 fills with param3·0.0002; inst+0x18 = param4·0.1 the amplitude
+///   [M 0x17ce28:47]; the clock is the game's global `GameState+0x52` tick — the port's fixed
+///   60 Hz frame, no RNG]. The game also accumulates `obj+0x54 += param2·0.0002·FRAME_RATE_MUL`
+///   [M 0x17c930 disasm 0x17c978-0x17c988] — the spin angle, wrapped into ±π by
+///   `control_movement_object_handler` 0x1336f8 and drawn through the same pose matrix
+///   (`View_RotTransMatrix` 0x1e5168 reads obj+0x50..0x58) — which the port does not model
+///   [S unverified scope: the bob is this task; the spin stays out].
 /// - the explode arm: when the object's HITDATA list (`obj+0xD0`, the collide pass's contact list
 ///   [M docs/atlas/object.md +0xD0]) holds an entry whose +0x58 references another object, the
 ///   mine explodes [M 0x17c930:31-45's walk]: `Camera_Shake(param1)` when param1 ≥ 0.5, then an
@@ -273,7 +279,9 @@ pub struct Mine {
     pub damage: f32,
     /// inst+0x20 = param 1 (float): the blast radius, the camera shake and the blast-script scale.
     pub radius: f32,
-    /// inst+0x10 = param 2 · 0.0002: the bob clock rate (rad per tick).
+    /// inst+0x14 = param 3 · 0.0002: the bob clock rate (rad per tick) [M 0x17c930 disasm
+    /// 0x17c9a8/0x17c9c4 load inst+0x14 into the sin's argument; 0x17ce28:46 fills inst+0x14 from
+    /// placement param 3]. (param 2 is the separate obj+0x54 spin rate, not modelled.)
     pub bob_rate: f32,
     /// inst+0x18 = param 4 · 0.1: the bob amplitude.
     pub bob_amp: f32,
@@ -331,7 +339,10 @@ impl Mine {
                 pos: p.translation,
                 damage: param(0) as i32 as f32,
                 radius: param(1) as i32 as f32,
-                bob_rate: param(2) as i32 as f32 * 0.0002,
+                // The sin's rate is inst+0x14 = param3·0.0002 [M 0x17c930 disasm 0x17c9c8 +
+                // 0x17ce28:46] — NOT param2 (that accumulates the obj+0x54 spin angle,
+                // [M 0x17c978-0x17c988]).
+                bob_rate: param(3) as i32 as f32 * 0.0002,
                 bob_amp: param(4) as i32 as f32 * 0.1,
                 script: param(5),
                 lo, hi,
