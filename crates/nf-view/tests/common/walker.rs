@@ -930,12 +930,20 @@ impl Walker {
             // Steer toward the drone, keeping OUT of the lead's "Bond in the way" band: the escort
             // parks in PlayerInWay while Bond is within 3.0 [M 0x15ea28 case 3], and waits when Bond
             // is beyond 12 [M 0x15e698 case 3]. The escort band is 4.5..10.
+            // The faithful push added the half the old walk never saw: the escort HIMSELF closes the
+            // gap (his lead walks Bond's line), Bond stands at the 4.0 hold and the drone walks into
+            // the 3.0 band — PlayerInWay engages (route_blocked && dist <= 3.0 [M 0x15e4f0's
+            // PlayerInWay arm]) and the lead parks with Bond standing 2.9 away (the 01 real-damage
+            // walk's node-15 stall, 2026-11-02). The player's own move: step BACK out of the band
+            // and let the lead resume [M 0x15ea28 case 3 — the release reads Bond's distance].
             let sim = self.scene.sim.as_ref().unwrap();
             let desired = (target[0] - sim.bond.pos[0]).atan2(target[2] - sim.bond.pos[2]);
             let err = wrap_pi(desired - sim.bond.yaw);
+            let in_way_park = sim.drones.list[di].state == nf_game::drone::state::PLAYER_IN_WAY;
             let input = Input {
                 turn: err.clamp(-0.07, 0.07),
-                forward: if d > 5.0 { 1.0 } else if d > 4.0 { 0.45 } else { 0.0 },
+                forward: if d < 3.4 || (in_way_park && d < 4.2) { -0.7 }
+                    else if d > 5.0 { 1.0 } else if d > 4.0 { 0.45 } else { 0.0 },
                 ..Default::default()
             };
             self.tick(input, false);
