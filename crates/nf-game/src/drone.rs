@@ -20661,18 +20661,27 @@ fn segment_hits_sphere(a: V3, b: V3, c: V3, r: f32) -> bool {
         // The HandleExplosives broadcast for the bounced explosives [M 0x1435f0 + 0x138b10]: classification by
         // the grenade's weapon record (the game classifies by the thrower's weapon id — the port's events carry
         // the record id): frag 0x34 → radius 12.0, flee 4.0, deadline 2 s,
-        // return Hide 0x87 [M 0x138b10:67-87 + 0x1431c0:101-119]; stun 0x35 → radius 8.0 [M 0x138b10:163-167],
-        // flee 10.0, deadline 10 s, return to the caller state [M 0x1431c0:165-176]; smoke 0x36 → kind 1, no
+        // return Hide 0x87 [M 0x138b10:67-87 + 0x1431c0:101-119]; smoke 0x36 → kind 1, no
         // flee [M 0x138b10:143-159 + 0x1435f0:24-29 — only kind-2 entries trigger]; satchel 0x3B-0x40 → radius
         // 12.0, flee 14.0 [M 0x138b10:113-141 + 0x1431c0:122-152]. Per drone: fear prop 0x3A/0x3B [M 0x1435f0:30-34],
         // within the radius, and the object visible [M 0x1435f0:37-44 — DroneVision_ObjectVisibility
         // 0x1781a8 ≥ 0.7 (the ±e4/≤e8/<2 cone) + CanSeeObject(5,0); the port stands the cone in with the
         // bare segment test here — a noted deviation].
+        //
+        // consider-explosive-gate-2: the STUN grenade 0x35 is NOT in the game's registry switch at all
+        // [M Drone_BuildDynamicAwarePoints 0x138b10:36-160 — the class-5 weapon cases are
+        // 0x2a/0x2c-0x2f/0x34/0x3b-0x40/0x6c (kind 2, r 12), 0x36 (kind 1, r 3) and 0x37 (kind 2, r 8 —
+        // the 8.0/0x41000000 arm the old port comment borrowed); 0x35 falls to the default break]. Msg 0x21's
+        // only sender is HandleExplosives 0x1435f0 [M — its only caller is ControlSTANDARD 0x1490f0, and the
+        // other SendMsgSelf sites send 4/10], which reads only that registry — so a stun grenade scares NO
+        // drone: no flee, no prop call, no link flag (`hazard_link_flag` already returns None for it). The
+        // port's old 0x35 arm (r 8.0, run 10.0) made the 07000011 corridor guards flee #127's own stun lob
+        // the moment the faithful flee gate [M 0x1431c0:40-67] landed — the game's #126 (no grenades, p11=0
+        // [D 07000011 ordinal 126]) never moves off its StepAim cycle.
         let queued = std::mem::take(&mut self.explosive_queue);
         for (p, wt) in queued {
             let cls = match wt {
                 0x34 => Some((12.0f32, 4.0f32, 120u32, 0x87u8)),
-                0x35 => Some((8.0, 10.0, 600, 0)),
                 0x3b..=0x40 => Some((12.0, 14.0, 600, 0x87)),
                 _ => None,
             };
