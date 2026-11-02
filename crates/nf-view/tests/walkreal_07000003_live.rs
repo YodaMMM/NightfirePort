@@ -158,6 +158,29 @@ fn walk_the_full_route_and_complete_every_objective() {
         assert_eq!(sim.drones.mission.states[li][o1], 3, "obj1 announced [M 0x1827d8:55-67]");
     }
 
+    // The servants' identity snapshot, BEFORE any fight: the p6 rescue bytes are the placements'
+    // own words [D p6], static until PreDroneControl consumes one [M 0x148db0:51-90] — and the
+    // real-damage run's courtyard fight CAN consume 0x4f early: the approach crosses the east
+    // 0x21 twin (measured: ch 0x21 at tick 7165), #389 binds a courtyard captor [M 0x144030], and
+    // the fight's kills reach that captor (Hostage case 3's captor-death check [M 0x15cb78:24-36]
+    // → HostageSaved → switch_channels[+0x135] [M 0x1441c0:11-18]) — the game's own designed save,
+    // just earlier than the scripted leg. Sampling after the fights read a consumed byte (0x0)
+    // and the old "the servant carrying 0x4f [D p6]" lookup panicked; the rescue loop's live
+    // `channels.on(rescue_ch)` check already skips the captor shot for an early rescue.
+    let servants: Vec<(usize, [f32; 3], u8)> = {
+        let sim = w.scene.sim.as_ref().unwrap();
+        let s: Vec<(usize, [f32; 3], u8)> = sim.drones.list.iter().enumerate()
+            .filter(|(_, d)| d.skin & 0xffff == 0x2b && d.team == 3)
+            .map(|(i, d)| (i, d.pos, d.second_channel)).collect();
+        for (i, p, ch) in &s {
+            let d = &sim.drones.list[*i];
+            eprintln!("[03] servant #{i} at ({:.1},{:.1},{:.1}) ch {ch:#x} state {:#x} switch {:?} on {}",
+                p[0], p[1], p[2], d.state, d.switch_channel, d.channel_on);
+        }
+        s
+    };
+    assert_eq!(servants.len(), 3, "three protected servants [D the dump]");
+
     // The route legs up to the servants' ground (the guard-enable plates 0x21/0x23/0x24/0x25 fire
     // under Bond's feet as he crosses them [D the TouchOnce census]).
     for (name, at) in [
@@ -187,13 +210,6 @@ fn walk_the_full_route_and_complete_every_objective() {
     let plate0x25 = sim.drones.triggers.iter()
         .find(|t| t.kind == walker::trigger_kind::TOUCH_ONCE && t.out == 0x25).map(|t| t.centre())
         .expect("servant #388's enable plate");
-    let servants: Vec<(usize, [f32; 3], u8)> = {
-        let sim = w.scene.sim.as_ref().unwrap();
-        sim.drones.list.iter().enumerate()
-            .filter(|(_, d)| d.skin & 0xffff == 0x2b && d.team == 3)
-            .map(|(i, d)| (i, d.pos, d.second_channel)).collect()
-    };
-    assert_eq!(servants.len(), 3, "three protected servants [D the dump]");
     drop(sim);
     // The 0x21 enable: the west lane to the gate-plate lawn (each leg [D the plate lo/hi] — the
     // last one's nav node stands inside the west twin's footprint).
@@ -263,7 +279,33 @@ fn walk_the_full_route_and_complete_every_objective() {
             // The captor (nearest armed alive guard at the HOSTAGE entering tick [M 0x144030; the
             // port's Drones tick]) — kill it with real fire; its death is the save's trigger.
             if let Some(ci) = captor {
-                w.shoot(ci, &format!("servant {si}'s captor"));
+                {
+                    let sim = w.scene.sim.as_ref().unwrap();
+                    let c = &sim.drones.list[ci];
+                    eprintln!("[03] servant {si}'s captor #{ci} at ({:.1},{:.1},{:.1}) state {:#x} hp {:.1} corpse {}",
+                        c.pos[0], c.pos[1], c.pos[2], c.state, c.health, c.corpse);
+                }
+                let mut killed = w.shoot(ci, &format!("servant {si}'s captor"));
+                // The mode-4 dodging captor pattern (the east-lane legs' own note: a captor
+                // "stays out of sight across the wall"): a player chases him — walk to his LIVE
+                // position, top the clip back up (clear_near's own resupply-on-fail: the earlier
+                // fights drain it) and reshoot, until the line clears.
+                for round in 0..4 {
+                    if killed { break; }
+                    let _ = w.resupply(&format!("servant {si}'s captor chase {round}"));
+                    let (cpos, gone) = {
+                        let sim = w.scene.sim.as_ref().unwrap();
+                        let c = &sim.drones.list[ci];
+                        (c.pos, c.corpse || c.health <= 0.0)
+                    };
+                    if gone { killed = true; break; }
+                    eprintln!("[03] captor {ci} chase round {round} at ({:.1},{:.1},{:.1})", cpos[0], cpos[1], cpos[2]);
+                    w.walk_nav_to(cpos, &format!("onto servant {si}'s captor (chase {round})"), 3.5);
+                    killed = w.shoot(ci, &format!("servant {si}'s captor (chase {round})"));
+                }
+                assert!(killed, "servant {si}'s captor #{ci} died to the chase");
+            } else {
+                eprintln!("[03] servant {si}: no captor bound (ch {rescue_ch:#x} off) — the save rule reads an empty link as saved [M 0x15cb78:24-36]");
             }
             w.wait(30);
         }
@@ -443,7 +485,6 @@ fn walk_the_full_route_and_complete_every_objective() {
 /// walker's own plain return fire (the same fights every other real-damage walk is pinned
 /// against).
 #[test]
-#[ignore = "real health: the route's servant-carrying-0x4f assertion fails on the real-damage run (not a death; Bond 98.5 hp at tick 22200)"]
 fn walk_the_full_route_and_complete_every_objective_real_damage() {
     walker::with_real_damage(walk_the_full_route_and_complete_every_objective);
 }

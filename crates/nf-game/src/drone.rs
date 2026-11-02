@@ -7102,6 +7102,19 @@ impl Drone {
             if matches!(s, state::TASER | state::STUNNED | state::STUNNED_RECOVER | state::OPEN_DOOR) { return true; }
             let hear = if m == msg::SCREAM { self.prop(d, 0x27) } else { self.prop(d, 0x28) };
             if !hear { return true; }
+            // level-03-real-health-servant: a WAIT_SWITCH drone's own handler has NO 0x11/0x12 case
+            // [M NDrone2_DSTATE_WaitSwitch 0x15b960 — only 0/1/3/0xE], and neither do the hostage
+            // family's [M NDrone2_DSTATE_Hostage 0x15cb78 / HostageSaved 0x15ccf0 / HostageIdle
+            // 0x15ce60 / HostageHide 0x15cfe0 — the case lists carry 0/1/3/5-9/0xb-0xc/0x17-0x1a/0x21,
+            // no 0x11/0x12], nor the unhandled→GLOBAL fallback [M NDrone2_DSTATE_Global 0x15b830 —
+            // cases 0/1/10/0x1d only]: the game DROPS the broadcast for a waiting or bound/saved
+            // hostage. The port ran the reaction for those states — the 07000003 real-damage
+            // courtyard fight's death screams knocked the just-enabled servant #389 out of his
+            // saved hide (HostageHide) through an Attack re-route (DroneFunc_FirstAttack 0x148010
+            // clears the second switch) into CivilianHiding. `false` = the state handler's
+            // unhandled; the GLOBAL re-entry drops too — GLOBAL has no 0x11/0x12 case to alert
+            // from [M 0x15b830].
+            if matches!(s, WAIT_SWITCH | GLOBAL | HOSTAGE | HOSTAGE_SAVED | HOSTAGE_IDLE | HOSTAGE_HIDE) { return false; }
             let civilian = matches!(s, PARTY_GIRL | CIVILIAN | CIVILIAN_MISSION | CIVILIAN_MISSION_WAIT | CIVILIAN_PATROL | CIVILIAN_DOOR_GUARD | TRUCK_DRIVER_IDLE | CIVILIAN_SCARED | CIVILIAN_HIDING);
             if civilian {
                 if !matches!(s, CIVILIAN_SCARED | CIVILIAN_HIDING) { self.set_state(CIVILIAN_SCARED); }
