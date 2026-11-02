@@ -40,3 +40,15 @@ flush [M 0x148db0:58-82], HandleImpact's 09/0A Set1st [M 0x1469b8:114]. Each por
 and pinned with a scenario on a level that uses it (plus the sister: swap does not happen when the
 condition is false). Then ai_live, stealth_ai_live, every walkreal_*, nf-game; fix walks only where
 fragile; quote the totals. Fast suite runner started in background once tools/test/suite.py exists.
+
+Progress (same session, ~22:40 UTC): all three sites wired in crates/nf-game/src/drone.rs —
+(1) FirstAttack's alt tail in the ATTACK-ENTER generic arm (after the zero first-sight pick, first
+pass only): +0x5A2=0x56 + change_to_attack_mode inline (the 0xb4→0x56 remap is FirstAttack's own
+[M 0x148010:128-131]); (2) PreDroneControl's flush now runs change_to_attack_mode when +0x5A4 != 0
+(the verbatim-0 SetState kept); (3) on_tase's fall arm carries the 09/0A stamp block (latch clear,
+0x89 arm, Set1st via set_1st_behaviour, mode 9 / alt 7, ret 0x14 / resume 0x15). nf-game lib 658/658
+(3 new [M]-exact unit tests with sisters: swap happens / condition false → no swap). Discovery probes:
+07000007's wake guards (ch 21/22, enabled, alt 0xb4) are the flush pin; 07000003 #12/p400 (enabled,
+alt 0x56) the FirstAttack pin; 07000009's p5=100 civilians (hp 1, alt 0x89 at init) the 09/0A tase
+pin population. Live tests + suite runs next; background processes die between tool calls in this
+sandbox, so the suite runs in foreground slices.
