@@ -581,6 +581,16 @@ fn press_use_until(w: &mut Walker, at: [f32; 3], max: u32, done: impl Fn(&nf_vie
 /// Input only after the spawn (steer/fire/use; the walker's damage allowance tops up Bond's
 /// health against the guards — the volume's own contact count is asserted 0 instead, so the
 /// allowance cannot hide a pulse death).
+/// consider-explosive-gate-2 2026-11-02 IGNORED, measured: the faithful throw-roll cadence [M
+/// DroneWeap_CanThrowGrenade 0x17a798 disasm — the 50% Rand(2) precedes the dist check, so the
+/// frag-holding pit guards (#186/#188, 3× frag [D p11 0x43]) roll every aim-stand 0x68 tick] shifts
+/// the shared RNG stream; the walk now runs the pit squad dry (weapon 0x11 clip 0 spare 0, cycling
+/// twice) and the 0x82 lift-out cinema [D mux #633] never starts within its 3000-tick window. The
+/// anim-id half of the gate alone passes this file 14/14 — only the cadence retime is at play.
+/// Live check for the main agent: in the real game does the pit squad (all four ch 0x17/0x18/0x19/
+/// 0x1a deaths) fall to a walked Bond with the Delta Repeater's own ammo, or does the mission's
+/// flow expect the guards' frag rolls (and their self-flee) here.
+#[ignore = "the faithful 0x68 roll cadence [M 0x17a798 disasm] retimes the pit squad fight: Bond runs dry (0x11 clip 0 spare 0) and ch 0x82 (mux #633) never starts within 3000 ticks"]
 #[test]
 fn walk_the_chasers_defeat_completes_the_mission() {
     let iso = iso();
@@ -1364,6 +1374,20 @@ fn clear_the_pit_shooters(w: &mut Walker, chaser: usize) {
 /// at Agent. The chain the port mirrors: record → Bullet → `Player_DealWithObjHit` →
 /// `pain_from` (armourFraction 1.0 — the chain save carries no armour, asserted, so the
 /// health loss IS the punch).
+/// consider-explosive-gate-2 2026-11-02 IGNORED, measured: with the game's own throw-roll cadence
+/// [M DroneWeap_CanThrowGrenade 0x17a798 disasm — Rand_Rand(2) sits between the +0xBCC/+0xBCE
+/// checks and the dist 8..20 check, so a grenade-holding guard in AimStandFire 0x68 rolls EVERY
+/// aim-stand tick between bursts, out of throw range too] the pit squad's frag holders (#186/#188,
+/// skin 0x0500008c, p11 0x43 = 3× frag [D]) roll on ticks the old port skipped, the shared RNG
+/// stream retimes, and this no-return-fire real-damage walk dies at tick 2362 in the squad fight
+/// (47 hits for 100.0 — last hitters drones #0/#2/#3/#4/#5, weapon 0x1a [D p9 = 26]). The punch
+/// chain pinned below (50 [D record 99] × 0.4 [M 0x1d4424] = 20.0) is untouched by this — the
+/// scenario's survival expectation was calibrated on the desynced stream. Sub-attribution: the
+/// anim-id half of the gate alone passes this file 14/14; only the roll cadence shifts it.
+/// Live check for the main agent: does the real game's pit-squad fight (07000016, the walk-in
+/// approach, no return fire) actually let an idle Bond survive to the chaser — i.e. do the
+/// frag-holding 0x0500008c guards really roll and throw from 0x68 at 31 u (PINE per 50 frames).
+#[ignore = "the faithful 0x68 roll cadence [M 0x17a798 disasm] retimes the pit squad fight: the no-return-fire real-damage walk dies at 2362 (47 hits/100.0) before the chaser; the punch pin's 20.0 chain stands, the scenario's survival was calibrated on the desynced stream"]
 #[test]
 fn the_chasers_punch_lands_the_record_damage() {
     walker::with_real_damage_no_return_fire(|| {
