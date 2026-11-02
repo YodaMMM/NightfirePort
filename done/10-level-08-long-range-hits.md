@@ -11,3 +11,8 @@ Do:
 
 ---
 claimed-by: sandbox1 at 2026-11-02T16:33Z
+
+---
+## Report (done, 2026-11-02T17:01Z)
+
+Closed by the driver: the report is on `s/level-08-long-range-hits` (docs/reports/level-08-long-range-hits.md); the worker didn't run finish.sh.
