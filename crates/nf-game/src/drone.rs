@@ -19040,6 +19040,25 @@ fn segment_hits_sphere(a: V3, b: V3, c: V3, r: f32) -> bool {
                             dr.recover = st.recover;
                             dr.health = st.health as f32;
                             dr.max_health = st.health as f32;
+                            // The spawn is a fresh Drone_Create: DefaultInit's family blocks run
+                            // AFTER the DoModeSettingsNEW read — the mode-0xd ninja health 100
+                            // [M 0x14b300:744-753; the port's type_setup], `captain_setup`'s
+                            // health/accuracy mods [M 0x14b300:504-535] and the kind-0x18
+                            // astronaut TakeXHits health [M 0x14b300:726-739 + 0x14d928] all
+                            // consume the table values in that order (the same chain
+                            // `Drone::new_with_stats` runs after its stats read). Drake 0x1b's
+                            // spawn pinned the order: his 60.0 health is TakeXHits(2, 0x33)×3,
+                            // not the table record [M above].
+                            if dr.mode == 0x0d { dr.health = 100.0; dr.max_health = 100.0; }
+                            dr.captain_setup(d);
+                            if dr.kind == 0x18 {
+                                let dmg = if d.difficulty == 1 { 1.0 } else { 2.0 };
+                                let per = d.weapons.records.get(0x33)
+                                    .map(|r| f32::from_le_bytes(r[0xc..0x10].try_into().unwrap()))
+                                    .unwrap_or(10.0);
+                                dr.max_health = per * dmg * if (dr.skin & 0xffff) == 0xba { 3.0 } else { 1.0 };
+                                dr.health = dr.max_health;
+                            }
                         }
                         dr.present = true; dr.enabled = true; dr.started = false;
                         // `control_add_object_to_list` prepends [M 0x134698]: a drone spawned this frame updates
