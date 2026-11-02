@@ -8,3 +8,6 @@ Do:
 1. Take Player_Collision's per-substate arms literally [M 0x194df0 cases 0/3/6/default]: the truck ride is not the walking substate. Find which arm the player is in while riding/attached on 07000005 and which on the 0a corridor, and build the trigger toucher from the arm for the player's CURRENT substate.
 2. Both must hold together: #621 fires standing on 0a, the 05 park plate stays silent standing and fires crouched, the truck chain runs.
 3. Un-ignore low_beam_621_fires_standing. Run walkreal_0700000a_live, fix_truck_live, every interactables_*_live and walkreal_*_live, then the full suite.
+
+---
+claimed-by: sandbox5 at 2026-11-02T06:27Z
