@@ -262,8 +262,23 @@ fn walk_the_full_route_and_complete_every_objective() {
         if !ch_on {
             // The captor (nearest armed alive guard at the HOSTAGE entering tick [M 0x144030; the
             // port's Drones tick]) — kill it with real fire; its death is the save's trigger.
+            // The captor dodges (mode 4) and the stand can run the clip dry mid-fight (the
+            // merged master tree: "servant 0's captor: out of ammo" at +1497, the assert below
+            // then fired [L this branch's run, 2026-11-02]) — a player reloads from the floor
+            // drops and re-engages: the 01 named-loop pattern. A nearly-dry gun starts a fight
+            // it cannot finish, so restock first when the floor has drops.
             if let Some(ci) = captor {
-                w.shoot(ci, &format!("servant {si}'s captor"));
+                {
+                    let sim = w.scene.sim.as_ref().unwrap();
+                    let dry = (sim.gun.clip as i32) + (sim.gun.spare as i32) < 8;
+                    drop(sim);
+                    if dry { w.resupply(&format!("servant {si}'s captor ammo")); }
+                }
+                if !w.shoot(ci, &format!("servant {si}'s captor")) {
+                    if w.resupply(&format!("servant {si}'s captor ammo")) {
+                        w.shoot(ci, &format!("servant {si}'s captor (reloaded)"));
+                    }
+                }
             }
             w.wait(30);
         }

@@ -505,12 +505,13 @@ impl Walker {
         };
         let Some(di) = di else { return false };
         // The cooldown leaves a guard the stand did not drop for 240 ticks so the leg walks on —
-        // but an ACTIVE threat (it hit Bond within the last 60 frames) is answered NOW: the 01
+        // but under the unseen-fights opt-in an ACTIVE threat (it hit Bond within the last 60
+        // frames) is answered NOW: the 01
         // hall's #7 captain sat in cooldown from an earlier stand while its next volleys took
         // the last 22.5 health (70.5 → 22.5 in one 10-tick window, dead 11 ticks later; the
         // pick saw cands [7] and the cooldown silenced it [L the walkreal_07000001_real_damage
         // run with the NF_RF_CANDS probe, 2026-11-02]).
-        let active = {
+        let active = UNSEEN_FIGHTS.with(|c| c.get()) && {
             let sim = self.scene.sim.as_ref().unwrap();
             sim.drones.player_hits.iter().rev()
                 .take_while(|h| sim.drones.frame.saturating_sub(h.0) <= 60)
