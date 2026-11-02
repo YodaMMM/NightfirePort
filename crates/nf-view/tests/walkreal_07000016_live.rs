@@ -696,6 +696,7 @@ fn finish_after_the_chaser(w: &mut Walker, t0: u32) {
     eprintln!("[finale] pulse 2 over +{}", w.total_ticks - t0);
     // The pit squad (group 7, ch 242 @7332): all four must fall for ch 0xbf.
     tick_until(w, 600, "the pit squad spawns", |s| s.drones.list.iter().any(|d| d.present && !d.corpse && matches!(d.death_channel, 23..=26)));
+    let t_squad = w.scene.sim.as_ref().unwrap().drones.frame;
     for _ in 0..4 {
         let next = {
             let sim = w.scene.sim.as_ref().unwrap();
@@ -707,12 +708,69 @@ fn finish_after_the_chaser(w: &mut Walker, t0: u32) {
         };
         let Some(i) = next else { break };
         eprintln!("[finale] squad #{i} (death ch {:#x}) at {:?}", w.scene.sim.as_ref().unwrap().drones.list[i].death_channel, w.scene.sim.as_ref().unwrap().drones.list[i].pos);
+        // The melee band hold (input-only, the chaser idiom): the squad's clones are skin
+        // 0x500001e → kind 0xb — the fists [M NDrone2_DefaultInit 0x14b300's switch], and their
+        // punch fires only inside the 2.0 band [M DroneWeap_CloseCombatImpact 0x1789c0:26-40]
+        // for record 99 [D +0x0C = 50.0 → 20.0 at Operative, M 0x1d4424's 0.4 row]. While any
+        // live clone stands inside 3.0 (under it every drone round hits [M DoBulletAccuracy
+        // 0x179740:113-115]), backpedal facing the nearest with taps on the exposed aim until
+        // the band opens (cap 240) — the pit's open floor holds the lane [D collision].
+        let mut held = 0u32;
+        while held < 240 {
+            let close = {
+                let sim = w.scene.sim.as_ref().unwrap();
+                let bp = sim.bond.pos;
+                sim.drones.list.iter().enumerate()
+                    .filter(|(_, d)| d.present && !d.corpse && d.health > 0.0 && matches!(d.death_channel, 23..=26)
+                        && d.skin & 0xffff == 0x1e && walker::dxz(d.pos, bp) < 3.0)
+                    .min_by(|a, b| walker::dxz(a.1.pos, bp).total_cmp(&walker::dxz(b.1.pos, bp)))
+                    .map(|(mi, _)| mi)
+            };
+            let Some(mi) = close else { break };
+            held += 1;
+            let (input, fire) = {
+                let sim = w.scene.sim.as_ref().unwrap();
+                let b = &sim.bond;
+                let dp = sim.drones.list[mi].pos;
+                let dist = walker::dxz(dp, b.pos);
+                let aim = w.exposed_aim(mi);
+                let at = aim.unwrap_or([dp[0], dp[1] + 0.3, dp[2]]);
+                let eye = [b.pos[0], b.pos[1] + b.eye - b.crouch_drop, b.pos[2]];
+                let err = walker::wrap_pi((at[0] - b.pos[0]).atan2(at[2] - b.pos[2]) - b.yaw);
+                let want_pitch = ((at[1] - eye[1]) / dist.max(0.5)).atan() / std::f32::consts::FRAC_PI_2;
+                let perr = want_pitch - b.pitch;
+                let on = err.abs() < 0.03 && perr.abs() < 0.04 && held % 16 == 0;
+                (Input { turn: err.clamp(-0.08, 0.08), look: perr.clamp(-0.08, 0.08), forward: -1.0, ..Default::default() },
+                 aim.is_some() && on)
+            };
+            if fire { w.tick_fire(input); } else { w.tick(input, false); }
+        }
         // Dry mid-fight: another carried gun with ammo or the fallen squad's guns, then fight on.
         let killed = w.shoot(i, "the pit squad")
             || ((w.switch_to_armed("the pit squad ammo") || w.resupply("the pit squad ammo")) && w.shoot(i, "the pit squad"));
         assert!(killed, "the pit squad member #{i} dies to Bond's fire");
     }
     tick_until(w, 600, "the pit squad's deaths raise ch 0xbf [D mux #611]", |s| s.drones.channels.on(0xbf));
+    // The squad phase's per-hit audit (level-16-pit-squad-real-damage): no squad-phase hit may
+    // take more health than the game's strongest single deal in that room — the melee clones'
+    // punch, record 99 [D +0x0C = 50.0, chaser_melee_records pins the bytes] × 0.4 [M
+    // 0x1d4424's Operative row] = 20.0, which fires only inside the 2.0 band [M 0x1789c0:26-40].
+    // Every other dealer's chain lands single digits: the clones' star record [D 0x12's +0x0C]
+    // ×(1|2 TooClose [M 0x139fac-0x139fc8])×0.4 and the guards' weapon records ×(1|2)×0.4 [D
+    // +0x0C]. Armour absorbs before health [M Player_HandlePain 0x1902c8:84-104's type-0 arm],
+    // so a recorded delta never exceeds the raw chain — a port that over-deals (the ignore's
+    // ~48-health death) shows deltas above this cap.
+    {
+        let sim = w.scene.sim.as_ref().unwrap();
+        let mut audited = 0usize;
+        for &(f, owner, delta) in sim.drones.player_hits.iter() {
+            if f <= t_squad || owner == usize::MAX { continue; }
+            audited += 1;
+            assert!(delta <= 20.0 + 0.02,
+                "squad-phase hit from dealer {owner:?} dealt {delta:.2} health — above the game's strongest squad-phase deal (the punch 50.0 [D record 99] × 0.4 [M 0x1d4424] = 20.0)");
+        }
+        eprintln!("[real-damage] the squad-phase audit: {audited} hits, every delta within the game's chain [D record 99; M 0x1d4424/0x139fac]");
+    }
     eprintln!("[finale] ch 0xbf +{}", w.total_ticks - t0);
     // ch 0xc0 @7808 → ch 0x82 → 0x06000632 plays out (no skip) and hands Bond back at the bay.
     w.skip_cutscenes = false;
@@ -1442,8 +1500,21 @@ fn kill_the_chaser_with_range_keeping(w: &mut Walker, chaser: usize, t0: u32) {
 /// the kill loop holds her outside 3.0 — under 3.0 u every drone round hits [M 0x179740:
 /// 113-115]), and the blast-room shelters the sisters pin (`sit_out_pulse` asserts the hurt
 /// volume never touches Bond). No game code changed: the sim is origin/master's.
+/// THE PIT-SQUAD LEG, RESOLVED (level-16-pit-squad-real-damage, 2026-11-02): the ignore's
+/// ~48-health death does not reproduce on master d699b536's sim — the walked finale completes
+/// on real health (measured: end health 9.4, armour 43.2, 75 hits for 90.6; the squad-phase
+/// dealers were the clones' 1.2-value stars and the door guard's 2.0-value rounds, no punch
+/// landed). The damage audit pins WHY that is the game's own math, per hit: the squad's clones
+/// are skin 0x500001e → kind 0xb melee [M NDrone2_DefaultInit 0x14b300's switch] whose only
+/// deals are the punch 50.0 [D record 99 +0x0C, chaser_melee_records] × 0.4 [M 0x1d4424's
+/// Operative row] = 20.0 inside the 2.0 band [M 0x1789c0:26-40] and their placement weapon's
+/// star record damage ×(1|2 TooClose [M 0x139fac-0x139fc8]) × 0.4; the door guard (#8, skin
+/// 0x5000093 [D], weapon 0x14 [D]) deals its record's damage ×(1|2)×0.4 [D +0x0C]. The walker's
+/// tactics are the honest set: the shelters (both pulses), the range-keeping chaser kill, and
+/// for the squad the melee band hold (backpedal-with-fire while a clone is inside 3.0 — under
+/// it every drone round hits [M 0x179740:113-115]; the punch only inside 2.0) with
+/// stand-and-fire from the shelter's cover. No health top-ups, no state pokes.
 #[test]
-#[ignore = "the pit-squad phase still kills Bond at ~48 health (the 4-squad + pit shooter #8 at the room's door) — the route, both shelters, the chaser's range-keeping kill (+3364) and pulse 2 all survive real damage; the next leg is the squad-phase cover tactics (the report's 'what's left')"]
 fn walk_the_chasers_defeat_completes_the_mission_on_real_damage() {
     walker::with_real_damage(|| {
         let iso = iso();
