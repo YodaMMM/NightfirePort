@@ -117,3 +117,11 @@ Nothing for the task's kind list. Open observations for a future task, not this 
 
 Token/credit/context-window figures for this session: not visible to me (the environment shows no
 token, cost or context-usage counters to copy; no input/output token figures are exposed).
+
+## ntfy failed
+
+All three fallbacks failed from this sandbox at 2026-11-02 01:00 UTC: curl exit 28 ("Connection
+timed out after 20001 milliseconds" against https://ntfy.sh/nightfire-yoda-8k3x), the python
+urllib attempt and the wget attempt both hung past the shell's timeout with no response. The
+branch and the report are pushed; the queue task was already closed in done/ by finish.sh
+("OK already closed in done/, report attached").
