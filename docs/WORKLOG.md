@@ -41,3 +41,15 @@ grenade list]; a walk-level grenade jink (opt-in) never fired for the same reaso
 common/ churn — the branch carries only the prior session's verified shoot_blockers fix and the
 merge. The walkreal_07000011 walk stays ignored with the measured reasons; the next levers are
 the Deagle #777 (1.74, 0.24, 13.99 [D]) detour and a live check on the real crossing.
+Progress (same session, 2026-11-02 ~23:35): the suite ran in chunks under the 10-min tool cap —
+walkreal_07000011_live (1 passed, the real-damage walk still ignored with the measured reasons),
+start_corridor_guard_07000011_live 8/8, EVERY walkreal_*_live binary run (all ok; 07000014 and
+07000015 SIGKILLed = the sandbox's known memory kill, not test failures), nf-game+nf-formats+
+nf-audio 136 passed / 3 failed (the 3 allowed disc_golden), the nf-view fix_ set 418 passed /
+2 failed (the no-GPU wgpu adapter pair), the nf-view non-live set 330 passed / 1 failed (the
+same GPU class), 90 nf-view live binaries (212 tests) green. The remaining ~388 nf-view live
+binaries did not fit the window. Tactic findings this session: the corridor swing dies in the
+~2 u funnel (the post owns the mouth; no path holds the spread distance); the #734 armour
+detour dies to the lobby's east volleyers (a dry fight cost 82.5; a -72.0 blast with no
+Grenade in flight — the bullet/prop path, the walk-level jink never fired). Next levers: the
+Deagle #777 detour, a live check on the real crossing.
