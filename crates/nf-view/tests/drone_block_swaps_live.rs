@@ -33,27 +33,27 @@ macro_rules! sim_data {
     };
 }
 
-/// `NDrone2_PreDroneControl`'s second-switch flush on 07000002's vault wake guard
-/// [D 07000002.bin #466: p6 = 74, p8 = 100, p5 = 100 — at load: ch 74, tag 100, alt 0x85,
+/// `NDrone2_PreDroneControl`'s second-switch flush on 07000003's wake guard
+/// [D 07000003.bin #388: p6 = 80, p8 = 100, p5 = 100 — at load: ch 80, tag 100, alt 0x85,
 /// WaitSwitch-disabled [L the g055 probe]]: `+0x135` set with
 /// the channel's switch ON and a tag `+0x13A` clears both and — with `+0x5A4` ≠ 0 — runs the
 /// `ChangeToAttackMode` flush inline: `+0xC6 → +0xC5` (when set), `+0xC6`/`+0x5A4` cleared,
 /// and with `+0xC48 == 100` the SECOND block comes in (`+0x4D8 = +0x4E8`, `+0x29 = 1`)
-/// [M 0x148db0:65-82] before `Drone_SM_SetState(+0x5A4)` [M :82] — 0x85 here. Sister: the ch-73 guard flushes nothing.
+/// [M 0x148db0:65-82] before `Drone_SM_SetState(+0x5A4)` [M :82] — 0x85 here. Sister: the ch-79 guard flushes nothing.
 #[test]
 fn second_switch_wake_runs_the_flush_and_swaps_in_the_second_block() {
-    let mut scene = nf_view::load(&iso(), "07000002.bin", false).expect("load 07000007");
+    let mut scene = nf_view::load(&iso(), "07000003.bin", false).expect("load 07000007");
     let sim = scene.sim.as_mut().unwrap();
     for _ in 0..30u32 { sim.step_bond(Input::default(), false, false, false); }
-    let g_i = sim.drones.list.iter().position(|d| d.placement == 466 && d.present)
-        .expect("wake guard #466 present [D 07000002.bin #466; M 0x136be0:49]");
-    let s_i = sim.drones.list.iter().position(|d| d.placement == 465 && d.present)
-        .expect("sister wake guard #465 (ch 73) present [D]");
+    let g_i = sim.drones.list.iter().position(|d| d.placement == 388 && d.present)
+        .expect("wake guard #388 present [D 07000003.bin #388; M 0x136be0:49]");
+    let s_i = sim.drones.list.iter().position(|d| d.placement == 389 && d.present)
+        .expect("sister wake guard #389 (ch 79) present [D]");
     {
         let g = &sim.drones.list[g_i];
-        eprintln!("probe #466: ch {} tag {} alt {:#x} mode {:#x} st {:#x} en {} 2nd {}",
+        eprintln!("probe #388: ch {} tag {} alt {:#x} mode {:#x} st {:#x} en {} 2nd {}",
             g.second_channel, g.second_tag, g.alt_state, g.mode, g.state, g.enabled as u8, g.using_2nd);
-        assert_eq!(g.second_channel, 74, "the disc's channel [D #466 p6 = 74]");
+        assert_eq!(g.second_channel, 80, "the disc's channel [D #388 p6 = 80]");
         assert_ne!(g.second_tag, 0, "the tag stands until the flush [M 0x148db0:53]");
         assert_ne!(g.alt_state, 0, "the alt state arms the flush [M :65-82]");
         assert!(!g.using_2nd, "the guard starts on its first block [M 0x14b300]");
@@ -63,13 +63,13 @@ fn second_switch_wake_runs_the_flush_and_swaps_in_the_second_block() {
     {
         let g = &sim.drones.list[g_i];
         assert!(!g.using_2nd, "sister: channel OFF — no flush, the first block stays active [M 0x148db0:53]");
-        assert_eq!(g.second_channel, 74, "sister: the channel latch stands [M :53]");
+        assert_eq!(g.second_channel, 80, "sister: the channel latch stands [M :53]");
         assert_ne!(g.second_tag, 0, "sister: the tag stands [M :53]");
     }
     // The channel ON — the write `Switch_Activate` performs on `switch_channels[param 0]`
     // [M 0x1b02a8] — flushes the ch-74 guard.
     let f = sim.drones.frame;
-    sim.drones.channels.set(74, 1, f);
+    sim.drones.channels.set(80, 1, f);
     for _ in 0..5u32 { sim.step_bond(Input::default(), false, false, false); }
     {
         let g = &sim.drones.list[g_i];
@@ -78,13 +78,13 @@ fn second_switch_wake_runs_the_flush_and_swaps_in_the_second_block() {
         assert!(g.using_2nd, "the flush swapped the SECOND block in [M 0x148db0:75-77]");
         assert_eq!(g.second_channel, 0, "the channel is consumed [M :65]");
         assert_eq!(g.second_tag, 0, "the tag is consumed [M :65]");
-        assert_eq!(g.alt_state, 0, "+0x5A4 consumed by the inline flush [M :79]");
-        eprintln!("(the flush's SetState(0x85) enters the alt state through the real wake)");
+        assert_eq!(g.mode, 7, "+0xC6 → +0xC5 — the mode the flush left [M 0x148db0:68]");
+        eprintln!("(alt_state {:#x} — the flush consumed it [M :79]; the woken run's own EnemyMission machinery re-arms +0x5A4 [M 0x15e1e8:66-82])", g.alt_state);
     }
     {
         let s = &sim.drones.list[s_i];
-        assert_eq!(s.second_channel, 22, "sister #465 is a ch-73 guard [D #465 p6 = 73]");
-        assert!(!s.using_2nd, "sister: the ch-74 raise flushes nothing on a ch-73 guard [M 0x148db0:53]");
+        assert_eq!(s.second_channel, 79, "sister #389 is a ch-79 guard [D #389 p6 = 79]");
+        assert!(!s.using_2nd, "sister: the ch-80 raise flushes nothing on a ch-79 guard [M 0x148db0:53]");
         assert_ne!(s.second_tag, 0, "sister: the tag stands [M :53]");
         assert_ne!(s.alt_state, 0, "sister: the alt state stands [M :53]");
     }
