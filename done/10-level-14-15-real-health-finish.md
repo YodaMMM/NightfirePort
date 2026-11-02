@@ -9,3 +9,7 @@ Real input only, no health writes. Un-ignore both; run walkreal_07000014_live, w
 
 ---
 claimed-by: sandbox1 at 2026-11-02T17:02Z
+
+---
+## Report (done, 2026-11-02T19:35Z)
+
