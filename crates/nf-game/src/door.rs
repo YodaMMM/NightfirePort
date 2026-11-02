@@ -304,27 +304,10 @@ fn blocked(door: (V3, f32), a: (V3, f32)) -> bool {
 }
 
 /// A body the door's proximity scans see: position, bounding radius, and whether its `obj+0xF0` flags carry bit
-/// 0x10 — the scan skips such objects entirely [M 0x136678-0x136684; the 07000001 player (obj+0xF0 = 0x890) and
-/// drones (0x8B0) have it set [L], the 07000005 player (0x880) does not [L]]. `Door_Activate` 0x135be0 has no
-/// such filter (its only +0x10 read is the +0x70 busy marker [M 0x135be0:64]), so open/crush paths see every
-/// body; only the auto-close scan filters. door-scan-skip-bit: the flag is now carried — the player's boot
-/// value per level (`player_door_skip`), the drones' per the enable lifecycle (`Drones::tick`'s actor list).
+/// 0x10 — the scan skips such objects entirely [M 0x136678-0x136684; the 07000001 player (0x890) and drones
+/// (0x8B0) have it set [L], the 07000005 player (0x880) does not [L]. The writer of that bit is not ported, so
+/// the port models it as clear (the 07000005 evidence; door-port-check #2).
 pub type DoorActor = (V3, f32, bool);
-
-/// The player's `obj+0xF0` bit 0x10 boot value per level — what the game's glist copy leaves on the object
-/// before any runtime enable/disable touches it. [M] writer chain: `Player_Init` 0x1910f8:115 builds the
-/// object via `AnimObjectNew` (0x1be910:114-115 → `hashtable_set_object_to_entity_gfx` 0x1ca6d8:38-39 →
-/// `Control_SetGList` 0x134960:12-13, which copies `*(glist+0x44)` — the level's celglist draw-flags word —
-/// into `obj+0xF0`, masked against 0x30008000); `Player_Init` 0x1910f8:149 then ORs 0x800. Live: 07000001
-/// player obj+0xF0 = 0x890 (glist 0x90: bit 0x10 SET), 07000005 player = 0x880 (glist 0x80: CLEAR)
-/// [L ee_start_07000001.bin / ee_start_05.bin]. The port does not resolve the player model's celglist word
-/// (the game finds it through the entity-gfx hashtable, `hashtable_celglist_to_hashcode` on entity+4), so
-/// the pinned per-level boot values stand in: SET on 07000001, the 07000005 model (CLEAR) everywhere else —
-/// only 01 and 05 are evidenced. // [S] unverified: every other level's player glist word. Runtime writers
-/// NOT ported (the bit's later life): `Player_Disable(…,0)` 0x195f70:17 sets it (script event 4
-/// [M 0x1d94c0:119], the NIS handler [M 0x205f10:105], Monitor_Activate [M 0x1b0058:46]);
-/// `Player_Enable` 0x195498:53,77 and `Player_ChangeSubState` 0x190630:35-40 clear it.
-pub fn player_door_skip(level: u32) -> bool { level == 0x0700_0001 }
 
 /// The scan's candidates: every actor the `obj+0xF0 & 0x10` filter lets through [M 0x136678-0x136684].
 fn visible_actors(actors: &[DoorActor]) -> impl Iterator<Item = (V3, f32)> + '_ {
