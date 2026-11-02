@@ -17,3 +17,22 @@ The 07000012 corridor guards face away by the disc's own authoring (guard yaw -1
 yaw_to_opp +1.50/+1.29; guard #6 is already ALERT 0.66 at load — the wake is the alarm/hearing
 path). Pin test: crates/nf-view/tests/drone_yaw_convention_live.rs (parses the level's rows from
 the ISO, matches sim drones by position, asserts yaw == rotation[1] and NOT -rotation[1]).
+
+Re-verified by raw-word decode this session (capstone misdecodes the ELF's 16-byte load/store
+family as MSA/DSP; op 0x1F = the quad store, 0x1E = the quad load — prologue/epilogue save/restore
+is symmetric: SQ $ra,0x100($sp) 0x136bfc / LQ $ra,0x100($sp) 0x136ccc). Drone_Create(VECTOR*
+trans a0→$s1, VECTOR* rot a1→$s3, level_tag* a2→$s0): `LQ $v1, 0($s3)` 0x136c40 loads the caller's
+rotation, `SQ $v1, 0x20($sp)` 0x136c50 parks it in the DIVars frame, `LQ $v1, 0x10($sp)` 0x136ca0
+/ `SQ $v0, 0xc10($s0)` 0x136ca4 + `LQ $v1, 0x20($sp)` 0x136ca8 / `SQ $v1, 0xc20($s0)` 0x136cb0
+(delay slot of the amemcpy jal) land trans/rot verbatim at D+0xc10/D+0xc20 — no float op touches
+them (D = obj->0xe0; `sw $s1, 0xc00($s0)` 0x136c94 stores the obj back-pointer). PostLoad_Init
+`lw $s1, 0xe0($s0); addiu $a0, $s1, 0xc00; jal 0x14b300` [M 0x14d8a8-0x14d8b4]; DefaultInit's
+second call: `addiu $a1, $s2, 0x50; addiu $a2, $s2, 0x60; jal Vec_Copy2; addiu $a0, $s3, 0x20`
+[M 0x14b350-0x14b35c]; Vec_Copy2 = three verbatim lwc1/swc1 pairs to BOTH dsts [M 0x1e2cf8].
+Dispatcher prologue copies the placement row verbatim: `lwc1 $f11, 0xc($a0)`→`swc1 $f11, 0x30($sp)`
+… `lwc1 $f8, 0x18($a0)`→`swc1 $f8, 0x40($sp)`, rot[1] = `lwc1 $f0, 0x1c($a0)`→`swc1 $f0, 0x44($sp)`
+[M 0x1d0520-0x1d0564]; case 0xf: `move $a2, $s1; addiu $a0, $sp, 0x30; jal 0x136be0; addiu $a1,
+$sp, 0x40` [M 0x1d0c30-0x1d0c40]. AI facing: DroneMove_NoBunching `lwc1 $f12, 0x54($s1)` then
++π/2 [M 0x150b44-0x150b58]. Port spawn: `Drone::new_with_stats(.., p.rotation[1], ..)` [M
+crates/nf-game/src/drone.rs:11754]. Disk was full (100%) at session start; freed ~5.3G of stale
+target/release deps executables + examples and re-ran the suite.
