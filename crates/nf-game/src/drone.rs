@@ -19032,8 +19032,22 @@ fn segment_hits_sphere(a: V3, b: V3, c: V3, r: f32) -> bool {
                         // and grp-4 carrier (acc 4 / hp 22) reach every later same-type spawn [D both
                         // levels' placements; the port's old spawn kept the load-time defaults].
                         if let Some(params) = dr.spawn_stats_params.clone() {
-                            let ty = self.stats_table.behaviour_get(&|k: u32| params.iter().find(|(j, _)| *j == k).map_or(0, |&(_, v)| v));
-                            let st = self.stats_table.stats(ty);
+                            // The spawn's read runs against the LOAD-TIME table with the
+                            // template's OWN section applied — a fresh clone, NOT the shared
+                            // mutable table: a section-less template reads the load-time record
+                            // (the 14/16/1b real-health walks pin those guards at the defaults
+                            // [L the walked runs]), and a section-carrying template reads its own
+                            // words (0700000c's grp-3 carrier acc 9 / react 80, grp-4 acc 4 /
+                            // hp 22 [D]). The game's global-table write at spawn
+                            // (`behaviour_util_get` 0x1c7a98:85 writes `drone_stats` on the
+                            // 0x8001 tag) would leak an earlier same-type section into later
+                            // spawns — the live table state is the open question below (the
+                            // ee_start_05 snapshot shows the LOAD-time table does NOT hold a
+                            // template's section: type 1 empty at start with template #3's
+                            // section valid [L ee_start_05.bin @0x31aa30 + 0x31ab30]).
+                            let mut table = self.stats_table.clone();
+                            let ty = table.behaviour_get(&|k: u32| params.iter().find(|(j, _)| *j == k).map_or(0, |&(_, v)| v));
+                            let st = table.stats(ty);
                             dr.accuracy = st.accuracy;
                             dr.aggression = st.aggression;
                             dr.reaction = st.reaction;
