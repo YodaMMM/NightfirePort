@@ -93,3 +93,11 @@ Branch `s/consider-explosive-gate-3`, cut from origin/master c3e3135f with origi
 ## Usage
 
 not visible to me
+
+### ntfy failed
+
+1. `curl -sS -m 20 -H "Title: NightfirePort" -d "..." https://ntfy.sh/nightfire-yoda-8k3x` → exit 28,
+   `curl: (28) Connection timed out after 20002 milliseconds`.
+2. python urllib → `urllib.error.URLError: <urlopen error [Errno 101] Network is unreachable>`.
+3. `wget -q -O- --post-data "..." https://ntfy.sh/nightfire-yoda-8k3x` → killed at the 40 s tool
+   timeout with no output (no rc line printed).
