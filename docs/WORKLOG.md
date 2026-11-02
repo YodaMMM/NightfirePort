@@ -1,0 +1,5 @@
+# WORKLOG
+
+Branch: s/level-4a-interactables-2, created from origin/master 8f27b95e
+Progress log (started 2026-11-02 02:24 UTC, fresh session):
+- branch created; sandbox reused from prior tasks (work/ + slim ISO + queue worktree present; disk full — strip+prune of target/release/deps needed before any build). Task: interactables_0700004a_live.rs has 2 tests; using interactables_0700000b_live.rs as the model, run the census of 0700004a [D every placement kind], and for every kind a player can touch add the live test that drives it through the real path (walk/E/shoot) and asserts the game's result [M the class's Update/Activate; D its params], with a sister that fails on the wrong result. Fix any port gap the tests expose, with evidence. Run interactables_0700004a_live, walkreal_0700004a_live and nf-game; quote the totals. Plan: census first, audit the 2 tests' kind coverage vs the census and the prior level-4a-interactables task (platform-0x31 pin + the rider's real-E door legs), add the missing kinds with sisters, fix gaps, run the three groups + the fast suite, report by 04:02 UTC (sandbox expires ~04:22 UTC).
