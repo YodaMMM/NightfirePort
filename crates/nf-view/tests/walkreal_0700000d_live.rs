@@ -106,18 +106,40 @@ fn walk_arrival_to_the_c5_door() {
         let p = bond_pos(&w);
         assert!(p[1] < 6.0, "the drop lands on the warehouse ground (y ~1.04), got {p:?}");
     }
-    // The ground walk east along the dock's south face — the yard's BLIND STRIP. The placed
-    // sniper #31 (placement #465, a standing no-patrol guard [D params 3:0/4:0] on the perch at
-    // (161.11, 6.93, −235.15)) faces yaw ≈ 3.02 south with a half-FOV π/2 + the 0.3927 pad
-    // [M DroneVision_OpponentVisibility 0x175af0 — the port's visibility()]: the strip
-    // z −224..−230 across the whole x 178..218 sits in its blind wedge (probe_0d_los_grid
-    // ::probe_0d_vis_field_east_strip: vis 0.0..0.67 < 0.7 → no LOS probe at all [M
-    // DroneVision_ProcessDroneSight 0x176a28]), while the yard south of z −236 and the
-    // under-dock trench (the route this walk took before) run vis 1.2..1.7 with a clear ray —
-    // no occluder stands in the corridor [D placements: the only collision-bearing objects
-    // between are plants; the port's ray tests stat+missile+dynamic, a superset of the game's
-    // 0xa27 drops]. The trench route also pinned Bond 1814 ticks at (186.3, −3.4, −265.9) with
-    // 6 sniper hits (the real-damage death at tick 6549) — the strip is the game's own cover.
+    // THE STRIP-MOUTH KILLS — the climb's cover work, a player taking the shooters out from
+    // cover before climbing into their crossfire (the driver's third lever). The perch #31 owns
+    // the whole climb: vis 1.68 with a clear ray at every ladder point, its blind wedge covering
+    // only the strip itself [probe_0d_climb_cover part B] — and from the drop point the reverse
+    // ray to it is CLEAR at d 21 while its idle cone still reads the spot blind (vis < 0.7 → no
+    // LOS probe [M DroneVision_ProcessDroneSight 0x176a28]). THE PERCH KILL IS THE MISSION'S
+    // FIRST GUNSHOT and it is FREE: 19 ticks, one tap, zero incoming (measured twice) — fired
+    // before any guard has a reason to face the strip. The dock patroller #33 (state 0x7,
+    // census (191.26, 13.66, −232.22) walking east ~0.003 u/tick) is the NEXT threat (2 hits on
+    // the climber, the death at 2988) but its clear window has CLOSED by the drop: east of
+    // x ~192 the dock's south face eats every steep shot from the west (measured: 8+13 aimed
+    // rounds at d 4-18 from x 180.8-194.3 with dead-centre aim all died on the face) — the
+    // attempt is kept (cap 600, log-only) so the next message inherits the measured state, and
+    // the outcomes are LOGS, not asserts: the walk must stay green in both twins while the
+    // tactic is unfinished. The real fire path end to end (kill_guard_at → shoot_far: the
+    // walker's aim + trigger taps, range-scaled gates — the walker's ±0.02 rad gate is wider
+    // than a guard's ~0.3 u torso box beyond ~15 u). Guards stand at 10 health [probe census];
+    // the held 0x1e carries clip 5 + spare 30 [loadout]. The pool is 100 health — the pain
+    // types 1..7 carry armourFraction 0, so the 50 armour cannot absorb bullets [M
+    // Player_HandlePain 0x1902c8:84-104]; the 180-tick per-guard cadence [D weapon 0x1e data;
+    // M DroneWeap_NextBulletTime 0x179d40] makes every standing fight a race.
+    let health_before_kills = w.scene.sim.as_ref().unwrap().drones.health.health;
+    kill_guard_at(&mut w, [161.1, -235.2], [2.0, 2.0], "the perch sniper #31");
+    kill_guard_at(&mut w, [194.0, -232.2], [5.5, 3.0], "the dock patroller #33");
+    {
+        let sim = w.scene.sim.as_ref().unwrap();
+        let perch_dead = !sim.drones.list.iter().any(|d| d.enabled && d.present && !d.corpse && d.health > 0.0
+            && (d.pos[0] - 161.1).abs() < 2.0 && (d.pos[2] + 235.2).abs() < 2.5);
+        let h = sim.drones.health.health;
+        eprintln!("[0d] the strip kills: perch dead {} pool {:.1} -> {:.1}", perch_dead, health_before_kills, h);
+        assert!(h > health_before_kills - 48.0, "the strip kills must not eat the pool, {health_before_kills} -> {h}");
+    }
+    // The blind strip transit (zero-hit while moving in every run — the wedge + the moving
+    // target): the drop point → the ladder base along z −228..−235.
     for (at, r, label) in [
         ([188.0f32, 0.5, -228.0], 2.0, "the blind strip east 1"),
         ([196.0, 0.5, -228.5], 2.0, "the blind strip east 2"),
@@ -673,6 +695,86 @@ fn walk_arrival_to_the_c5_door() {
 #[ignore = "real health: drone #31 weapon 0x1e hits 14-16 per shot from 41 u; Bond dies at tick 6549"]
 fn walk_arrival_to_the_c5_door_real_damage() {
     walker::with_real_damage(walk_arrival_to_the_c5_door);
+}
+
+/// Shoot a live guard standing near (x, z) through the real fire path (the walker's aim +
+/// trigger taps; the same fights every real-damage walk is pinned against). `tol` is the
+/// (x, z) search box; the y is not tested — the yard's shooters sit on distinct (x, z).
+/// False (and a log line) when no such guard lives — the caller treats that as "already dead".
+fn kill_guard_at(w: &mut Walker, at: [f32; 2], tol: [f32; 2], label: &str) -> bool {
+    let di = w.scene.sim.as_ref().unwrap().drones.list.iter().position(|d| {
+        d.enabled && d.present && !d.corpse && d.health > 0.0
+            && (d.pos[0] - at[0]).abs() < tol[0] && (d.pos[2] - at[1]).abs() < tol[1]
+    });
+    match di {
+        Some(i) => shoot_far(w, i, label, 600),
+        None => { eprintln!("[0d] {label}: no live guard near ({:.1},{:.1}) — already down", at[0], at[1]); false }
+    }
+}
+
+/// The long-range takedown (local, "kept local to keep walker.rs additive" — the file's own
+/// `shoot_at` precedent): the walker's `shoot_gated` aim gates (±0.02 rad yaw) are WIDER than a
+/// guard's ~0.3 u torso box beyond ~15 u (0.02 rad ≈ 0.66 u at 33 u — every tap sprays wide and
+/// a 900-tick fight never lands a round), so this variant scales the gates to the range
+/// (±0.25 u lateral, ±0.6 u vertical — inside the box at any distance) and holds the STAND
+/// (no strafe repositioning: the route's stand is the probe-cleared ray; sliding off it walks
+/// Bond out of his own cover — measured: the first kill attempt slid 5 u north and died).
+/// The real fire path end to end (the gun, the bullets, the hit boxes), reload pulses on empty.
+fn shoot_far(w: &mut Walker, di: usize, label: &str, cap: u32) -> bool {
+    let mut hp0 = w.scene.sim.as_ref().unwrap().drones.list[di].health;
+    let mut last_tap = 0u32;
+    let start = w.total_ticks;
+    loop {
+        {
+            let sim = w.scene.sim.as_ref().unwrap();
+            if sim.drones.list[di].corpse || sim.drones.list[di].health <= 0.0 {
+                eprintln!("[0d] {label}: down at +{} ticks", w.total_ticks - start);
+                return true;
+            }
+            let (bp, dp) = (sim.bond.pos, sim.drones.list[di].pos);
+            let dist = walker::dxz(bp, dp).max(0.5);
+            let dy = (dp[1] + 0.3) - (bp[1] + sim.bond.eye - sim.bond.crouch_drop);
+            let desired = (dp[0] - bp[0]).atan2(dp[2] - bp[2]);
+            let err = walker::wrap_pi(desired - sim.bond.yaw);
+            let want_pitch = (dy / dist).atan() / std::f32::consts::FRAC_PI_2;
+            let perr = want_pitch - sim.bond.pitch;
+            let err_tol = (0.25 / dist).clamp(0.003, 0.02);
+            let perr_tol = (0.6 / dist / std::f32::consts::FRAC_PI_2).clamp(0.004, 0.03);
+            let clip_empty = sim.gun.clip == 0 && sim.gun.spare > 0;
+            let t = w.total_ticks - start;
+            let on_target = err.abs() < err_tol && perr.abs() < perr_tol && t.saturating_sub(last_tap) > 15;
+            let trigger = !clip_empty && on_target;
+            if trigger { last_tap = t; }
+            let input = nf_game::player::Input {
+                turn: err.clamp(-0.08, 0.08),
+                look: perr.clamp(-0.08, 0.08),
+                ..Default::default()
+            };
+            w.scene.sim.as_mut().unwrap().step_bond(input, trigger, clip_empty && t % 20 == 0, false);
+        }
+        w.total_ticks += 1;
+        w.after_step();
+        let sim = w.scene.sim.as_ref().unwrap();
+        if w.total_ticks % 120 == 0 {
+            let (bp, dp) = (sim.bond.pos, sim.drones.list[di].pos);
+            let dist = walker::dxz(bp, dp).max(0.5);
+            let dy = (dp[1] + 0.3) - (bp[1] + sim.bond.eye - sim.bond.crouch_drop);
+            let err = walker::wrap_pi((dp[0] - bp[0]).atan2(dp[2] - bp[2]) - sim.bond.yaw);
+            let perr = (dy / dist).atan() / std::f32::consts::FRAC_PI_2 - sim.bond.pitch;
+            eprintln!("[0d:dbg] {label} +{} bond ({:.1},{:.1},{:.1}) tgt ({:.1},{:.1},{:.1}) d {:.1} err {:.3} perr {:.3} pitch {:.3} clip {} spare {} wpn {:#x}",
+                w.total_ticks - start, bp[0], bp[1], bp[2], dp[0], dp[1], dp[2], dist, err, perr, sim.bond.pitch, sim.gun.clip, sim.gun.spare, sim.gun.weapon);
+        }
+        if sim.gun.clip == 0 && sim.gun.spare == 0 && w.total_ticks - start > 60 {
+            eprintln!("[0d] {label}: out of ammo at +{}", w.total_ticks - start);
+            return false;
+        }
+        if sim.drones.list[di].health < hp0 { hp0 = sim.drones.list[di].health; }
+        if w.total_ticks - start >= cap {
+            eprintln!("[0d] {label}: still alive after {cap} ticks (health {:.0}, dist {:.1})",
+                sim.drones.list[di].health, walker::dxz(sim.bond.pos, sim.drones.list[di].pos));
+            return false;
+        }
+    }
 }
 
 /// Turn Bond to `yaw` with the stick alone (`Input::turn` adds to the yaw each tick [port
