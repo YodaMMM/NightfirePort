@@ -36,3 +36,12 @@ $sp, 0x40` [M 0x1d0c30-0x1d0c40]. AI facing: DroneMove_NoBunching `lwc1 $f12, 0x
 +π/2 [M 0x150b44-0x150b58]. Port spawn: `Drone::new_with_stats(.., p.rotation[1], ..)` [M
 crates/nf-game/src/drone.rs:11754]. Disk was full (100%) at session start; freed ~5.3G of stale
 target/release deps executables + examples and re-ran the suite.
+
+Verification runs (all green): the pin `drone_yaw_convention_live` 1 passed in 1.59 s;
+corridor_guards_07000012_live 1; enemies_07000012_live 3; interactables_07000012_live 12;
+stealth_ai_live 9; and all 22 walkreal level walks 01→4a (115 passed, 4 ignored, 0 failed —
+0700001b 17, 07000016 14, 07000005 12, 0700000a 10+3 ign, 07000001 6 clean). Total 141 passed,
+0 failed, 4 ignored. The ~1000-binary whole-suite build cannot fit the 9.9 GB sandbox disk
+(two attempts died on rustc "No space left on device"; freed ~5.3 GB of stale executables
+twice) — ran the task's named groups as `--test <name>` foreground slices, deleting each
+slice's executables before the next. Report: docs/reports/drone-yaw-convention.md.
