@@ -47,3 +47,13 @@ Not player-touchable (no test owed): the Apocalypse 0x4A FX, the DynObject 0x3B,
 ## Usage
 
 not visible to me (no token/credit/context figures are exposed to this session).
+
+## ntfy failed
+
+All three fallbacks, in order, with their exact output:
+
+1. `curl -sS -m 20 -H "Title: NightfirePort" -d "..." https://ntfy.sh/nightfire-yoda-8k3x` →
+   `curl: (28) Connection timed out after 20001 milliseconds`
+2. `python3 -c "... urlopen(u.Request('https://ntfy.sh/nightfire-yoda-8k3x', data=b'...'))"` →
+   `urllib.error.URLError: <urlopen error [Errno 101] Network is unreachable>`
+3. `wget -q -O- --post-data "..." https://ntfy.sh/nightfire-yoda-8k3x` → timed out after 40 s, killed (no output).
