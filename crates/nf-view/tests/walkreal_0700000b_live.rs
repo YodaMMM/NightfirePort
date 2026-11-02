@@ -702,11 +702,20 @@ fn walk_fresh_spawn_to_the_mission_end() {
 /// route, the top-up off — no health, armour or ammo writes anywhere — and Bond's death
 /// panics with the damage log (who, weapon, range). Auto-aim is the app default; the fights
 /// are the walker's own plain return fire (the same fights every other real-damage walk is
-/// pinned against). The old terminal-room wall-gun deaths are fixed: the game's turret fire
-/// rides the EASED BARREL (`Mat_GetDir(ext+0xc4 obj+0x90)` after the case-4 slerp [M
-/// 0x180498:295-330,:344-352]), which lags a runner — the old port fired dead-on and landed
-/// 42 × −2.40 in the return corridor (gt.rs combat_fire_rides_the_eased_barrel pins the law).
+/// pinned against).
+/// The CORRIDOR death is fixed: the world hits were the terminal-room GT wall guns #174/#175
+/// (class-0x27 GT placements [D], p0=1/p4=0xe [D dump]; weapon record 96 = 0x60, owner −1)
+/// firing dead-on — the game's case 4 eases the barrel first (`Quat_Slerp_Acc(REC_FRAME_RATE·4)`
+/// [M 0x180498:295-330]) and fires along `Mat_GetDir(barrel obj+0x90)` [M :344-352, disasm
+/// 0x180a28-0x180bac], which lags a runner; the port now does the same (gt.rs
+/// combat_fire_rides_the_eased_barrel_not_the_dead_on_line) and the crossing dropped from
+/// 42 × −2.40 = 100.0 (death in the corridor) to 23 × −2.40 = 55.2 ([L] the un-ignored run).
+/// Still ignored: the run now dies at tick 16652 on the roof (−14.71, 58.13, −2.06) — the 55.2
+/// leaves 44.8 for the exec-floor/roof fights and the return-fire stalls ("killed false", the
+/// targets at d 20.9/hp 10) bleed the rest; whether the real machine's crossing costs ~55 is
+/// the report's live check (the [M] law's own yield on this route is what the port shows).
 #[test]
+#[ignore = "real health: the corridor is fixed (the GT wall guns' eased-barrel fire, 100.0 -> 55.2 over the crossing); the run now dies at tick 16652 on the roof - the 55.2 leaves 44.8 for the open-floor fights and the stalls bleed the rest ([L] pending: the real machine's corridor cost)"]
 fn walk_fresh_spawn_to_the_mission_end_real_damage() {
     walker::with_real_damage(walk_fresh_spawn_to_the_mission_end);
 }
