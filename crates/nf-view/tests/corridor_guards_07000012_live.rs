@@ -3,7 +3,7 @@
 //! At load the only enabled watching guards on Bond's corridor are drone 6 (13.09, 1.00, 18.55,
 //! ALERT 0x05) and drone 7 (12.98, 1.00, 16.43, PLAY_SCRIPT 0x03) [L enemies_07000012_live
 //! dump_every_drone_at_load]; Bond starts at (22.49, 1.09, 19.16) facing yaw −1.56 [D the level's
-//! start placement], i.e. straight at them down the corridor. The user symptom: they stay bunched
+//! start placement], i.e. straight at them down the corridor. The symptom: they stay bunched
 //! at the far end and "walk into nothing" instead of coming down the corridor.
 //!
 //! Test 1 (log-only repro): tick from the start spot, then wake through the game's OWN alarm path
@@ -115,7 +115,7 @@ fn repro_logs_the_two_corridor_guards() {
     }
 
     // Phase 1: Bond WALKS from the spawn down the corridor toward the guards (the real input
-    // path — the user's scenario). Log both guards every 20 ticks and Bond's pos.
+    // path — the reported scenario). Log both guards every 20 ticks and Bond's pos.
     for t in 0..360u32 {
         let mut inp = Input::default();
         // The spawn yaw is −1.56 [D the start placement — the task's spot]; forward walks him
