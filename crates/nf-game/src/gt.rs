@@ -780,22 +780,38 @@ impl GTurret {
                     // 2026-10-21: the branch let it accumulate across target gaps).
                     self.timer = 0.0;
                     out.push(GTEvent::CombatSting);
+                    // case 4's per-tick aim ease runs BEFORE the fire block: `Mat_LookAt(obj+0x30 →
+                    // target+0x30)` slerped by `Quat_Slerp_Acc(REC_FRAME_RATE·4.0, …)` into obj+0x90
+                    // and the barrel objects ext+0xc0/c4/c8 [M 0x180498:295-330] — and the fire
+                    // block below reads THIS tick's eased barrel matrix.
+                    if let Some(c) = ctx.cands.iter().find(|c| c.obj == self.target) {
+                        let (dx, dy, dz) = (c.pos[0] - self.pos[0], c.pos[1] - self.pos[1], c.pos[2] - self.pos[2]);
+                        let h = (dx * dx + dz * dz).sqrt();
+                        self.ease_pose((crate::trig::atan2f_libm(dx, dz), -(dy.atan2(h))));
+                    }
                     // fire cadence: ext+0xe0 += dt; > 0.1 → shoot [M case 4].
                     self.fire_timer += crate::grenade::REC_FRAME_RATE;
                     if self.fire_timer > 0.1 {
                         self.fire_timer = 0.0;
                         if self.hp > 0 {
                             self.hp -= 1;
-                            // aim at the target's obj+0x30 (`Mat_LookAt` toward it, [M case 4]).
-                            let dir = ctx.cands.iter().find(|c| c.obj == self.target)
-                                .map(|c| {
-                                    let dx = c.pos[0] - self.pos[0];
-                                    let dy = c.pos[1] - self.pos[1];
-                                    let dz = c.pos[2] - self.pos[2];
-                                    let m = (dx * dx + dy * dy + dz * dz).sqrt();
-                                    if m > 0.0 { [dx / m, dy / m, dz / m] } else { [0.0, 0.0, 0.0] }
-                                })
-                                .unwrap_or([0.0, 0.0, 0.0]);
+                            // THE ROUND FLIES ALONG THE EASED BARREL, not at the target:
+                            // `Mat_GetDir(iVar3 + 0x90)` — ext+0xc4's object matrix, just written
+                            // from the slerp — feeds BOTH the muzzle offset and `Bullet_init`'s
+                            // direction [M 0x180498:344-352]. The port's pose is that slerp (the
+                            // same `Quat_Slerp_Acc(REC_FRAME_RATE·4.0)` ease; the (yaw, pitch)
+                            // pair stands in for the quaternion [S]); its forward is
+                            // `(sin yaw·cos pitch, −sin pitch, cos yaw·cos pitch)` [M pose_matrix
+                            // row 2]. Firing dead-on at the target was the 0700000b corridor
+                            // death: the game's lagging barrel (a 6.67%/tick first-order ease)
+                            // sweeps behind a runner and misses — the wall guns landed 42/42
+                            // rounds dead-on there ([L] the walkreal_0700000b_live real-damage
+                            // log; every hit −2.40 at 3-5-tick gaps = the 2-turret 0.1 s
+                            // cadence with a 100% hit rate).
+                            let (yaw, pitch) = self.pose.unwrap_or((self.base_yaw(), 0.0));
+                            let (sy, cy) = yaw.sin_cos();
+                            let (sp, cp) = pitch.sin_cos();
+                            let dir = [sy * cp, -sp, cy * cp];
                             let muzzle = [
                                 self.pos[0] + dir[0] * self.muzzle_offset,
                                 self.pos[1] + dir[1] * self.muzzle_offset,
@@ -810,12 +826,6 @@ impl GTurret {
                     // ext+0xD8 untouched [M 00180498:360-382] (registered[1] = 0 → the case returns).
                     if self.registered[1] != 0 {
                         self.spin_advance(crate::grenade::REC_FRAME_RATE * 6.2831855 + crate::grenade::REC_FRAME_RATE * 6.2831855);
-                    }
-                    // case 4's `Mat_LookAt(obj+0x30 → target+0x30)` slerp [M 0x180498 case 4].
-                    if let Some(c) = ctx.cands.iter().find(|c| c.obj == self.target) {
-                        let (dx, dy, dz) = (c.pos[0] - self.pos[0], c.pos[1] - self.pos[1], c.pos[2] - self.pos[2]);
-                        let h = (dx * dx + dz * dz).sqrt();
-                        self.ease_pose((crate::trig::atan2f_libm(dx, dz), -(dy.atan2(h))));
                     }
                 } else if self.facing == 1 {
                     // re-holster path [M case 4 tail: the channel gate, 0.5 s → state 2].
@@ -1117,6 +1127,65 @@ mod tests {
         t2.fire_dir = [1.0, 0.0, 0.0]; // the +x candidate must sit in the cone [M 0x17f9c8:252-257]
         for _ in 0..6 { step(&mut t2, &ch, &[cand_near], &mut rng); }
         assert_eq!(t2.hp, 200, "6 ticks = 0.1 s exactly → not > 0.1 → no shot");
+    }
+
+    /// [M 0x180498:295-330 + :344-352] the round flies along the EASED BARREL — case 4 eases the
+    /// pose first (`Mat_LookAt(obj+0x30 → target+0x30)` through `Quat_Slerp_Acc(REC_FRAME_RATE·4.0)`
+    /// = a 6.67%/tick first-order ease) and the fire block reads `Mat_GetDir(ext+0xc4's obj+0x90)`,
+    /// the just-slerped barrel matrix — not the dead-on line to the target. The old port fired
+    /// dead-on: the 0700000b wall guns landed every round on a runner and the exec-floor return
+    /// corridor cost 42 × −2.40 (walkreal_0700000b_live real-damage log) where the game's lagging
+    /// barrel sweeps behind him. Sister: a still target is the ease's fixed point — the barrel
+    /// converges onto the dead-on line, so a stationary Bond IS hit dead-on.
+    #[test]
+    fn combat_fire_rides_the_eased_barrel_not_the_dead_on_line() {
+        let ch = crate::triggers::Channels::default();
+        let mut rng = crate::drone::Rng::new(1);
+        let mut t = GTurret { state: gt_state::COMBAT, pos: [0.0, 5.0, 0.0], fire_dir: [1.0, 0.0, 0.0], ..GTurret::default() };
+        // The runner: +z every tick, 10 units out — the corridor sprint. The create facing
+        // (+x) passes the front-cone gate [M 0x17f9c8:252-257] for the whole run.
+        let mut fired: Option<([f32; 3], u32)> = None;
+        for tick in 0..20u32 {
+            let cand = TrackCand { obj: 7, pos: [10.0, 5.0, 3.0 + tick as f32], copter: false, los_ok: true };
+            let mut out = Vec::new();
+            let ctx = GTCtx { channels: &ch, mp: false, frame: tick, cands: &[cand], mount: None };
+            t.update(&ctx, &mut rng, &mut out);
+            if let Some(GTEvent::Fire { dir, .. }) = out.iter().find(|e| matches!(e, GTEvent::Fire { .. })) {
+                fired = Some((*dir, tick));
+                break;
+            }
+        }
+        let (dir, at) = fired.expect("the 0.1 s cadence fires by the 7th tick [M case 4]");
+        assert!(at >= 6, "first fire at tick {at}");
+        // Dead-on at the fire tick's candidate would be normalise((10, 0, 3+at)); the eased
+        // barrel still carries the create facing's +x bias — its yaw sits ABOVE the target's
+        // (toward 90°), i.e. a smaller z and a larger x component: it points BEHIND the runner.
+        let m = (10.0f32 * 10.0 + (3.0 + at as f32) * (3.0 + at as f32)).sqrt();
+        let dead = [10.0 / m, 0.0, (3.0 + at as f32) / m];
+        assert!(dir[2] < dead[2] - 0.05, "the barrel lags behind the runner: dir z {:.3} vs dead-on z {:.3}", dir[2], dead[2]);
+        assert!(dir[0] > dead[0] + 0.05, "dir x {:.3} vs dead-on x {:.3}", dir[0], dead[0]);
+        // And the fired dir IS this tick's eased pose forward (the ease ran before the fire).
+        let (yaw, pitch) = t.pose.expect("a tracked tick eased the pose");
+        let (sy, cy) = yaw.sin_cos();
+        let (sp, cp) = pitch.sin_cos();
+        let pose_fwd = [sy * cp, -sp, cy * cp];
+        for k in 0..3 { assert!((dir[k] - pose_fwd[k]).abs() < 1e-5, "dir {dir:?} vs pose fwd {pose_fwd:?}"); }
+        // Sister: a STILL target is the fixed point — the barrel converges onto the dead-on
+        // line and the rounds land on him (the same law, no lag left).
+        let mut t2 = GTurret { state: gt_state::COMBAT, pos: [0.0, 5.0, 0.0], fire_dir: [1.0, 0.0, 0.0], ..GTurret::default() };
+        let cand = TrackCand { obj: 7, pos: [10.0, 5.0, 8.0], copter: false, los_ok: true };
+        let mut last: Option<[f32; 3]> = None;
+        for tick in 0..220u32 {
+            let mut out = Vec::new();
+            let ctx = GTCtx { channels: &ch, mp: false, frame: tick, cands: &[cand], mount: None };
+            t2.update(&ctx, &mut rng, &mut out);
+            if let Some(GTEvent::Fire { dir, .. }) = out.iter().find(|e| matches!(e, GTEvent::Fire { .. })) { last = Some(*dir); }
+        }
+        let d = last.expect("the still target keeps the cadence firing");
+        let m = (10.0f32 * 10.0 + 8.0 * 8.0).sqrt();
+        let dead = [10.0 / m, 0.0, 8.0 / m];
+        let dot: f32 = d.iter().zip(dead).map(|(a, b)| a * b).sum();
+        assert!(dot > 0.999, "a still target's barrel converges onto the dead-on line, dot {dot}");
     }
 
     /// [M 0x17f9c8:92,158-166,178] the range rules: 2500 SP / 500 MP, copter ×0.25,
