@@ -6,3 +6,6 @@ Branch from origin/master.
 2. walkreal_07000015_live::walk_spawn_to_the_omega_sector_exit_real_damage is ignored: a -27.73 world hit at frame 5067 (a laser-mine fence blast — the walk crosses a live beam), then drone #5 at 4.2 u kills Bond at (0.0, 41.3, 23.9). Route the walk the way a player does: shoot the fence mines from range first (a_p2k_round_from_10_units_explodes_the_door38_fence shows how), then take the guard.
 
 Real input only, no health writes. Un-ignore both; run walkreal_07000014_live, walkreal_07000015_live, every real-damage walk, then the full suite.
+
+---
+claimed-by: sandbox1 at 2026-11-02T17:02Z
