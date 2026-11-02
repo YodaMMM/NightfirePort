@@ -798,17 +798,28 @@ fn walk_the_west_route_to_the_switch_band(mut w: &mut Walker) {
     // Leg 3b: the two fuseboxes cut through the REAL laser path [M FuseBox_Update 0x1adfe8] —
     // box A in its south alcove (floor −2.2 [D probe]), then the hall's west lane north (nodes
     // 649/644/204) to box B in the north alcove (its south candidate floor −2.2 [D probe]).
+    // REAL-HEALTH FORM (level-14-15-real-health-finish): the wire's own hurt is measured per
+    // cut — health before/after each cut window — not the absolute value, which on real
+    // health carries the earlier fights' losses (65.0 in the measured run, 33.0 in the
+    // driver's — the fight lottery, not the wire). The live wire never hurts with +0x56
+    // configured [M 0x1adfe8:99-101].
+    let h_before = w.scene.sim.as_ref().unwrap().drones.health.health;
     cut_fusebox(&mut w, [-89.31, -2.22, 30.79], 0x87, "fusebox #383");
+    let h_mid = w.scene.sim.as_ref().unwrap().drones.health.health;
+    assert!(h_mid >= h_before - 0.01,
+        "no live-wire hurt across the #383 cut (health {h_before} → {h_mid}) [M 0x1adfe8:99-101]");
     w.walk_to(Wp::new(-89.3, -1.78, 36.99).r(1.2), "the box A north lane (node 649)");
     w.walk_to(Wp::new(-89.3, -1.78, 40.58).r(1.2), "the hall west lane north (node 644)");
     w.walk_to(Wp::new(-89.3, -1.78, 45.7).r(1.2), "the hall north-west (node 204)");
+    let h_before = w.scene.sim.as_ref().unwrap().drones.health.health;
     cut_fusebox(&mut w, [-89.30, -2.22, 49.36], 0x88, "fusebox #385");
+    let h_mid = w.scene.sim.as_ref().unwrap().drones.health.health;
+    assert!(h_mid >= h_before - 0.01,
+        "no live-wire hurt across the #385 cut (health {h_before} → {h_mid}) [M 0x1adfe8:99-101]");
     for _ in 0..10 { w.tick(nf_game::player::Input::default(), false); }
     {
         let sim = w.scene.sim.as_ref().unwrap();
         assert!(sim.drones.channels.on(0x8c), "AND #391 [0x87, 0x88] raises 0x8C [D]");
-        assert_eq!(sim.drones.health.health, 100.0,
-            "no live-wire hurt with +0x56 configured [M 0x1adfe8:99-101]");
     }
 
     // Leg 3c: the E-use switch oDroneTrigger1b (out 0xA0, mask 4 [D placement 399; M
@@ -1554,7 +1565,6 @@ fn the_skipped_vent_cutscene_hands_bond_back_at_his_grab_spot() {
 /// write no health/armour/ammo; the exit load into 07000015 is the game's own Trigger_Activate
 /// path [M 0x1b2318 → warm_exit_save → Player_RamLoad 0x1957a8].
 #[test]
-#[ignore = "real health: the route's live-wire check asserts health 100 (reads 33) - the check assumes the top-up"]
 fn walk_the_infiltration_to_the_delta_exit_real_damage() {
     walker::with_real_damage(walk_the_infiltration_to_the_delta_exit);
 }
