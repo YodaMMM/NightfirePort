@@ -1922,7 +1922,7 @@ fn walk_the_tripbomb_route_pick_up_place_and_shoot_it() {
     // (-37.33, 1.20, 33.61) the eye (~1.85) passes under the slab (open y 0.9..2.2) and through
     // the open doorway straight at the bomb. The walk back in is real input; the shot happens
     // outside the beam trigger but inside the 8-u blast (the walker's top-up is this file's own
-    // walk allowance) — a ≥12 clear line is the live check for the main agent.
+    // walk allowance) — a ≥12 clear line is a live check.
     {
         for (label, wp) in [
             ("back up the 0.40 lane", Wp::new(-42.25, 0.5, 30.73).r(0.8)),
