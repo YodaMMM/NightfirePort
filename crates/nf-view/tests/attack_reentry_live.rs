@@ -20,8 +20,23 @@ fn attack_reentries_take_attacks_own_fallback() {
         let d = &sim.drones.list[i];
         d.present && d.enabled && d.team == 1 && !d.corpse && (d.weapon as u8) > 1
     }).collect();
-    let g = cands.iter().copied().find(|&i| data_props(sim, i, 0x19) || data_props(sim, i, 0x1b))
-        .expect("an enabled armed guard with prop 0x19/0x1B on 07000011");
+    // The drone's ACTIVE property block decides (`Drone+0x4D8`): a guard that reached its goal runs
+    // its second block [M NDrone2_ChangeToAttackMode 0x14a648:29-31], so take a guard whose active
+    // block carries 0x19/0x1B, or else make the block that carries them the active one.
+    let g = match cands.iter().copied().find(|&i| data_props(sim, i, 0x19) || data_props(sim, i, 0x1b)) {
+        Some(g) => g,
+        None => {
+            let d = sim.data();
+            let g = cands.iter().copied().find(|&i| sim.drones.list[i].alert_props.is_some_and(|a| d.props.get(0x19, &a) != 0 || d.props.get(0x1b, &a) != 0))
+                .expect("an enabled armed guard with prop 0x19/0x1B (either block) on 07000011");
+            drop(d);
+            let dr = &mut sim.drones.list[g];
+            let other = dr.alert_props.take().unwrap();
+            dr.alert_props = Some(dr.props);
+            dr.props = other;
+            g
+        }
+    };
     let p18 = data_props(sim, g, 0x18);
     // First sight on the real path: Bond 5 units in front.
     let mut entered = false;

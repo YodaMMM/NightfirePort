@@ -230,6 +230,48 @@ pub struct Material {
     pub index_count: u32,
 }
 
+/// One emitter sprite as two triangles facing the camera (`right`/`up` world axes), half-extent
+/// `size`, uv (0,0) at the top-left corner — the whole sprite texture.
+pub fn particle_quad(pos: [f32; 3], size: f32, rgba: [u8; 4], right: [f32; 3], up: [f32; 3]) -> [Vertex; 6] {
+    let (r, u) = (right.map(|v| v * size), up.map(|v| v * size));
+    let c = |sr: f32, su: f32, uv: [f32; 2]| Vertex {
+        pos: [pos[0] + r[0] * sr + u[0] * su, pos[1] + r[1] * sr + u[1] * su, pos[2] + r[2] * sr + u[2] * su],
+        uv, rgba, nrm: [0; 4],
+    };
+    let (a, b, cc, d) = (c(-1.0, -1.0, [0.0, 1.0]), c(1.0, -1.0, [1.0, 1.0]), c(1.0, 1.0, [1.0, 0.0]), c(-1.0, 1.0, [0.0, 0.0]));
+    [a, b, cc, a, cc, d]
+}
+
+/// The world half-extent of an emitter sprite of def size `size` (def+0x30): HALF the size (the
+/// sprite is `size` across). The VU1 scale word is `4·size/(PS2ParticleSize·PS2SnowSizeMult)` [M
+/// 0x119910:81]. Measured [L PCSX2, audits/render-1101-particles-ps2]: on the 05 stone-wall hit
+/// (def 0x0c00000f, texture 0x030000bb — 16×16 with only its centre 2×2 texels lit [D]) the lit
+/// core of a lone spark is ≤ 1/8 of a quad `size` across at the dumped spark depth (the CRT filter
+/// only widens it), so a half-extent of `size` would draw it at least twice the game's width; the
+/// flake size measured on the 05 / 06 captures gives the same reading
+/// (`nf_game::env::flake_half_extent`). The 0700004a charge burn (def 0x0c00000a, a soft 64×64
+/// glow, ~43 overlapping sprites) is consistent with it once the additive alpha runs past 1
+/// (`particle_add_pipeline`).
+pub fn particle_half_extent(size: f32) -> f32 { size * 0.5 }
+
+/// The emitter defs' sprite textures (def+0x04 hash → index into `textures`): each hash resolves
+/// to the first map texture with that hashcode, reusing a scene texture of the same key or
+/// appending one. A zero hash (the file's −1) and a hash no map holds are left out.
+pub fn particle_textures(level: &nf_formats::level::Level, textures: &mut Vec<TextureImage>) -> HashMap<u32, usize> {
+    let mut out = HashMap::new();
+    for d in level.maps.iter().flat_map(|m| m.emitter_defs.iter()) {
+        if d.texture == 0 || out.contains_key(&d.texture) { continue; }
+        let Some((mi, t)) = level.maps.iter().enumerate().find_map(|(mi, m)| m.textures.iter().find(|t| t.hashcode == d.texture).map(|t| (mi, t))) else { continue };
+        let key = (mi, t.index as u32);
+        let i = match textures.iter().position(|x| x.key == key) {
+            Some(i) => i,
+            None => { textures.push(TextureImage::from_texture(mi, t)); textures.len() - 1 }
+        };
+        out.insert(d.texture, i);
+    }
+    out
+}
+
 /// fix-menu-movies: `Clone` so the front end can keep its own texture list (the scene's entries
 /// plus the background-movie frame slot) without re-parsing the archive.
 #[derive(Clone)]
@@ -3933,6 +3975,9 @@ impl Sim {
             // standins-drone-922: the facing yaw the flash factor reads [M 0x12d890:328-330].
             yaw: self.bond.yaw,
             cel: self.cel_at(self.bond.pos).and_then(|room| self.room_cell.get(room).copied().flatten()),
+            // The crouch substate drives the trigger toucher's pick-arm switch
+            // (level-0a-ceiling-gun-route).
+            crouched: self.bond.crouched,
             move_local: self.bond.move_local };
         let d = nf_game::drone::Data { tables: &self.tables, props: &self.props, scripts: &self.scripts, weapons: &self.weapons, world: &self.world, level: self.level, sequences: &self.seqs, skins: &self.skins, skeletons: &self.skeletons, nav: &self.nav, covers: &self.covers, tuning: &self.tuning, hitboxes: &self.hitboxes, volumes: &self.volumes, sfx: self.sfx.as_ref(), models: &self.models, surfaces: self.surfaces.as_ref(), voices: self.voices.as_deref(), difficulty: self.drones.difficulty,
             ai_points: &self.ai_points };
@@ -4831,7 +4876,15 @@ impl Sim {
                 // pellets returns too [L weapon_data 0x53: pellets 0]). `GT_TakeControl` runs
                 // `Player_WeaponNone` (hands) [M 00181740].
                 if self.gun.weapon == nf_game::gt::RONIN_CONTROL {
-                    if self.drones.ronin_take_control() == Some(true) { self.gun.go_to_hands(); }
+                    if self.drones.ronin_take_control() == Some(true) {
+                        self.gun.go_to_hands();
+                        // The turret updates after the player in the same frame and its case 7
+                        // reads the pad directly [M 00180498 case 7]: the press that mounted is
+                        // already a held trigger there (the spin arms on this tick — live ext+0xD4
+                        // after an 8-frame press, ronin_live `ronin_barrel_spin_on_the_press`).
+                        // The aim deltas of this one tick are left at zero.
+                        self.drones.gt_mount = Some((0.0, 0.0, true, false));
+                    }
                     break 'shot;
                 }
                 // 0x52 (:265-282): the pellet loop calls `GT_DeployMiniGun(player obj+0x30 +
@@ -6185,33 +6238,6 @@ impl Sim {
         out
     }
 
-    /// The emitter particles as camera-facing quads (`Emitter_Draw` 0x17b708 path A →
-    /// `psiDrawParticleList` 0x122d50: a size-`def.size` rgba sprite per alive slot). The game sizes
-    /// the sprite in screen space (`4·size / (PS2ParticleSize · PS2SnowSizeMult)`) — the port
-    /// takes the def size as the world-space half-extent, the way the snow quads do. The GAME'S SCALAR for the
-    /// render pass, EXACT [M 0x119910:81 `pDMA[4] = (uint)((1.0/(PS2ParticleSize·PS2SnowSizeMult))·4.0·size)`
-    /// — a VU1 sprite scale word next to the ST=1.0 constants]: PS2ParticleSize = Ps2Far1·0.002386635 [M 0x11e2e8:67],
-    /// PS2SnowSizeMult = (1/viewer+0x108)·(1/(viewport-H·0.002232143)) = 448/H [M 0x10b2b0:100-112] — ∝ 1/far and
-    /// ∝ viewport height, i.e. a FIXED SCREEN-SPACE size, not a world extent; the ±size/2 world-space reading is the
-    /// port's approximation (the half-vs-full factor lives in the VU1 sprite microcode, backlog L-706). The
-    /// white rgb in the game's sprite comes from the bound def texture (the font-slot hash, def+0x04)
-    /// modulated by the slot rgba [M 0x119910:19]; the port has no per-def texture, so the colour is
-    /// the slot rgba itself — listed in the report's render follow-ups.
-    pub fn particle_quads(&self, right: [f32; 3], up: [f32; 3]) -> Vec<Vertex> {
-        let sprites = self.drones.fx.particle_sprites();
-        let mut out = Vec::with_capacity(sprites.len() * 6);
-        for s in sprites {
-            let (r, u) = (right.map(|v| v * s.size), up.map(|v| v * s.size));
-            let c = |sr: f32, su: f32, uv: [f32; 2]| Vertex {
-                pos: [s.pos[0] + r[0] * sr + u[0] * su, s.pos[1] + r[1] * sr + u[1] * su, s.pos[2] + r[2] * sr + u[2] * su],
-                uv, rgba: s.rgba, nrm: [0; 4],
-            };
-            let (a, b, cc, d) = (c(-1.0, -1.0, [0.0, 1.0]), c(1.0, -1.0, [1.0, 1.0]), c(1.0, 1.0, [1.0, 0.0]), c(-1.0, 1.0, [0.0, 0.0]));
-            out.extend_from_slice(&[a, b, cc, a, cc, d]);
-        }
-        out
-    }
-
     /// The live animated script object from `src` (script hash, stream) on `skin`: its animation script and frame.
     /// A hidden SP's stream objects read as absent — the Script_HideObj cascade [M 0x1db808].
     pub fn script_anim(&self, src: (u32, u8), skin: u32) -> Option<(u32, f32)> {
@@ -6715,6 +6741,9 @@ pub struct Scene {
     /// break-shards draw: a kind-2 breakable's face draw word (its batch texture) → the index into
     /// `textures` of `(the pane object's map, word)`, so a shard binds the pane's own texture.
     pub shard_tex: HashMap<u32, usize>,
+    /// The emitter sprite textures: def+0x04 texture hash → index into `textures`
+    /// (`particle_textures`; a hash no map holds is absent and draws untextured).
+    pub particle_tex: HashMap<u32, usize>,
     /// The pause/fail menus' burning woman (`psiDecompressWoman` 0x1202a8): decoded into 0x030000db's HUD texture
     /// while a paused page shows it. Set by the loader from the level archive's kind-16 "woman" entry.
     pub woman: Option<crate::woman::Woman>,
@@ -7562,6 +7591,30 @@ impl Scene {
     /// word), and the alpha `min(lifetime·FRAME_RATE·10, 255)` through `psiSetTweakA` [M 0x12bef8:50-56].
     /// The tweak scales the face's own vertex alpha (255 → the pane as it was) [S: the tweak's exact
     /// use in the shard microcode is unread]. A shard still in its peel delay draws at its spawn spot.
+    /// The emitter sprites (`Emitter_Draw` 0x17b708 path A → `psiDrawParticleList` 0x122d50) as
+    /// camera-facing quads grouped by draw state: `(texture, additive, vertices)`, the texture an
+    /// index into `textures` (None = the def's hash resolved no map texture — the white fallback).
+    /// Each sprite is the def texture's whole image (`CreatePointerSpriteListColour` 0x119910:
+    /// the CLAMP_1 region-repeat masks are the texture's w−1/h−1, the ST constants 0..1 [M
+    /// 0x119910 pDMA[4..5], pDMA[0xc..0x10]]), MODULATED by the slot rgba (TEX0 TCC 1, TFX 0 [M
+    /// 0x119910 TEX0 word]), depth-tested without writing (`psiSwitchZBufferRead(0)` /
+    /// `psiSwitchZBufferWrite(1)` [M 0x122d98-0x122da4]), blended by def+0x3c
+    /// (`ParticleSprite::additive`). The game draws every emitter object in its own call; one
+    /// group per (texture, blend) draws the same pixels.
+    pub fn particle_draws(&self, right: [f32; 3], up: [f32; 3]) -> Vec<(Option<usize>, bool, Vec<Vertex>)> {
+        let Some(sim) = self.sim.as_ref() else { return Vec::new() };
+        let mut groups: Vec<(Option<usize>, bool, Vec<Vertex>)> = Vec::new();
+        for s in sim.drones.fx.particle_sprites() {
+            let tex = self.particle_tex.get(&s.texture).copied();
+            let g = match groups.iter().position(|(t, a, _)| *t == tex && *a == s.additive) {
+                Some(k) => k,
+                None => { groups.push((tex, s.additive, Vec::new())); groups.len() - 1 }
+            };
+            groups[g].2.extend_from_slice(&particle_quad(s.pos, particle_half_extent(s.size), s.rgba, right, up));
+        }
+        groups
+    }
+
     pub fn shard_draws(&self) -> Vec<(usize, Vec<Vertex>)> {
         let Some(sim) = self.sim.as_ref() else { return Vec::new() };
         let sh = &sim.drones.breaks.shatter;
@@ -9761,9 +9814,16 @@ pub fn build(level: &Level, cels_only: bool, skeletons: &HashMap<u8, Skeleton>, 
         // non-07000005 level would explain "ghostly white": texture × white vertex × GAIN → white.
         let untextured = materials.iter().filter(|m| m.key.is_none()).count();
         if untextured > 0 { eprintln!("render: {untextured} of {} materials have no texture (white fallback)", materials.len()); }
-        let textures: Vec<TextureImage> = keys.into_iter().map(|key| {
+        let mut textures: Vec<TextureImage> = keys.into_iter().map(|key| {
             TextureImage::from_texture(key.0, &level.maps[key.0].textures[key.1 as usize])
         }).collect();
+        // The emitter sprites' textures (def+0x04): `Emitter_LoadDefs` 0x17ab40 resolves the def's
+        // texture hash through the hashtable and keeps the entry's first word, which
+        // `CreatePointerSpriteListColour` 0x119910 binds via `psiFont_SetTexture` 0x120880 [M
+        // 0x17ab40 `hashtable_getitem` → `*item`, 0x119910:19]. The map texture with that hashcode joins the scene textures
+        // (appended, so the material texture indices stay put); the first map holding it wins,
+        // as the snow texture's lookup does.
+        let particle_tex = particle_textures(&level, &mut textures);
         let mut hud_textures: Vec<(u32, TextureImage)> = crate::hud::TEXTURES.iter().chain(crate::menu::MENU_TEXTURES.iter()).chain(crate::menu::mp_textures().iter()).filter_map(|&h| level.maps.iter().enumerate().find_map(|(mi, m)| m.textures.iter().find(|t| t.hashcode == h).map(|t| {
             (h, TextureImage::from_texture(mi, t))
         }))).collect();
@@ -10160,7 +10220,7 @@ pub fn build(level: &Level, cels_only: bool, skeletons: &HashMap<u8, Skeleton>, 
                 }
             }
         }
-        Scene { shard_tex, cels: room_cels, cel_graph, streams: None, music_files: None, music_tables: None, sound_bank: None, sound_spares: Vec::new(), snow_texture, vertices, indices, materials, textures, hud_textures, woman: None, hud, script_billboards, view_models, mp_bodies, bond_body, mp_body_weapons, mp_char_bodies, mp_anim_sets, fog, bounds, start, stats, characters, char_vertex_start, char_verts, sequences, attachments, sim, colliders, models_0x800, npc_pool, ladders_drawn, grapple_hooks_drawn, misc_drawn, lock_matrices, door_dims, sl_dims, dynobj_matrices, rotor_placements, rbody_placements, mine_placements, gunimp_placements, script_tweak_alpha,
+        Scene { shard_tex, particle_tex, cels: room_cels, cel_graph, streams: None, music_files: None, music_tables: None, sound_bank: None, sound_spares: Vec::new(), snow_texture, vertices, indices, materials, textures, hud_textures, woman: None, hud, script_billboards, view_models, mp_bodies, bond_body, mp_body_weapons, mp_char_bodies, mp_anim_sets, fog, bounds, start, stats, characters, char_vertex_start, char_verts, sequences, attachments, sim, colliders, models_0x800, npc_pool, ladders_drawn, grapple_hooks_drawn, misc_drawn, lock_matrices, door_dims, sl_dims, dynobj_matrices, rotor_placements, rbody_placements, mine_placements, gunimp_placements, script_tweak_alpha,
             door_scene_hidden,
             sl_lod,
             corona_pos,
@@ -12299,6 +12359,21 @@ pub fn build(level: &Level, cels_only: bool, skeletons: &HashMap<u8, Skeleton>, 
         // per ticked frame. `colour_attach_map_covers_every_slot_on_the_lag_levels` pins the
         // invariant (every slot present), so a change that would make the fallback reachable
         // fails a test instead of silently changing the palette's colours.
+        gt_barrel_spin(self, p, ab);
+        ronin_view_wrap_marks(self, p, ab);
+    }
+
+    /// The attachment indices of the mounted Ronin's script parts whose triangles drop by the 24-bit
+    /// depth wrap in the remote view, and the wrap distance; empty when the view is not up or the
+    /// level's wrap sits inside the near plane (`ronin_view_wrap_marks`).
+    pub fn ronin_view_wrap_parts(&self) -> (Vec<usize>, f32) {
+        let Some(s) = self.sim.as_ref() else { return (Vec::new(), 0.0) };
+        let dw = nf_game::env::zbuf_wrap_distance(s.level);
+        if dw <= GAME_NEAR || s.drones.ronin_mounted().is_none() { return (Vec::new(), dw); }
+        let parts = self.attachments.iter().enumerate()
+            .filter(|(_, a)| a.script.is_some_and(|(h, ..)| h == nf_game::gt::RONIN_SCRIPT_A || h == nf_game::gt::RONIN_SCRIPT_B))
+            .map(|(i, _)| i).collect();
+        (parts, dw)
     }
 
     /// The per-object colour multipliers of one frame (`View_SetupRenderModes_Tweak`'s TAmbient): per character,
@@ -14801,4 +14876,56 @@ pub fn camera_swing_step(phase: &mut f32, amount: f32, zoom: f32) -> (f32, f32, 
         k * nf_game::trig::sinf(phi),            // yaw: sin(φ) [M 0x1bbf40:16-19]
         k * nf_game::trig::sinf(phi * 3.0),      // roll: sin(3φ) [M 0x1bbf40:20-24]
     )
+}
+
+/// The world pass's near plane, the game's `Ps2Near2` (lib.rs `Camera::view_proj`).
+const GAME_NEAR: f32 = 0.1;
+
+/// The Ronin's remote view puts the eye 0.104 ahead of the barrel's origin and 0.15 above its axis
+/// [M Player_PositionCamera 0x18f5d8 case 0xf; L PCSX2 audits/render-1101-roninview], so the barrel's
+/// tube strips (glist z 0.031..0.369) start behind the eye. The VU1 clip program cuts them at the 0.1
+/// near plane [M micro `_$ROTATECLIPED`/`_$ZMINUS` 0x241e30/0x242340], where zbuf = `Ps2Far1`; on 0C
+/// that is past the 24-bit Z range (`zbuf_wrap_distance`), so the clip vertices wrap to a far depth and
+/// the strips lose the depth test to the muzzle ring right behind them. The PS2 frame shows the ring's
+/// face and no tubes; moving the eye 0.1 back (all tube vertices in front of the eye) brings tubes in,
+/// hidden only where the ring is behind them [L PCSX2 audits/render-1101-roninview2 eye A/B].
+/// The port reproduces it for the mounted Ronin's script parts: their palette entries carry
+/// 1 + the wrap distance in m[3][3] (otherwise 1.0, unused by the transform), and the world shader
+/// drops a triangle with a vertex nearer than that (gpu.rs `nw`). The general wrap — a garbage depth
+/// over any near-clipped triangle — is not modelled.
+fn ronin_view_wrap_marks(scene: &Scene, p: &mut [Mat4], attach_base: usize) {
+    let (parts, dw) = scene.ronin_view_wrap_parts();
+    for a in parts {
+        if let Some(m) = p.get_mut(attach_base + a) {
+            if m[3][1] > -9000.0 { m[3][3] = 1.0 + dw; }
+        }
+    }
+}
+
+/// `GT_Update`'s spin block on the drawn barrel [M 0x180498:365-382, 538-556]: obj+0x90 of
+/// registered[1] = `RotMatrixZ(angle)` · its script pose (rows [c, s, 0] / [−s, c, 0] onto the pose's
+/// x / y rows) on the ticks the block runs (`GTurret::spin_draw`). Measured [L PCSX2
+/// audits/render-1101-roninview]: the barrel's row0 (−0.921, −0.388, 0.017) = cos/sin(−2.741) of the
+/// script-A pose with ext+0xD4 = −2.741. The palette entry is the attachment that drew the entity's
+/// matrix (same script, stream and hash, same matrix).
+fn gt_barrel_spin(scene: &Scene, p: &mut [Mat4], attach_base: usize) {
+    let Some(s) = scene.sim.as_ref() else { return };
+    for t in s.drones.gt_turrets.iter().filter(|t| !t.delete_flag && t.registered[1] != 0) {
+        let Some(a) = t.spin_draw else { continue };
+        let Some(Some(nf_game::nis::Obj::Entity { hash, src, matrix, .. })) = s.drones.scripts.objects.list.get(t.registered[1] as usize - 1) else { continue };
+        let (sn, c) = a.sin_cos();
+        let m = *matrix;
+        let mut r = m;
+        for k in 0..4 {
+            r[0][k] = c * m[0][k] + sn * m[1][k];
+            r[1][k] = -sn * m[0][k] + c * m[1][k];
+        }
+        let same = |x: &Mat4| (0..4).all(|i| (0..4).all(|j| (x[i][j] - m[i][j]).abs() < 1e-4));
+        for (i, att) in scene.attachments.iter().enumerate() {
+            if !att.script.is_some_and(|(sh, st, h, _)| (sh, st) == *src && h == *hash) { continue; }
+            if let Some(e) = p.get_mut(attach_base + i) {
+                if same(e) { let w = e[3][3]; *e = r; e[3][3] = w; }
+            }
+        }
+    }
 }

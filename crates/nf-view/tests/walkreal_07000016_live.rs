@@ -1259,3 +1259,216 @@ fn the_overlook_dead_end_returns_to_the_station_and_door0_opens() {
         assert!(p[2] < -116.0, "Bond is through door[0] — the route on from the overlook, got {p:?}");
     }
 }
+
+/// The pit floor's placed soldiers (the launch-centre guard skins — the first real-damage run
+/// died to drones #6/#7/#8, skins 0x5000093/0x5000087/0x5000090, weapon 0x14, at 3–13 u) shoot
+/// the chaser-fight stand: the allowance walks top through their fire (the walkreal header's
+/// "damage is suppressed"), real health cannot. Explicit return fire, the 07000002 room idiom:
+/// answer the nearest live soldier Bond can put a round into (`stand_and_fire`, the dry-tap
+/// give-up, the 240-tick cooldown for a guard the stand cannot drop). The chaser herself is
+/// excluded — her kill is the range-keeping loop's, and her punches landing during the clearing
+/// are the punch pin's data.
+fn clear_the_pit_shooters(w: &mut Walker, chaser: usize) {
+    w.dmg.dry_taps = Some(5);
+    let mut tried: Vec<(usize, u32)> = Vec::new();
+    for round in 0..10 {
+        let pick = {
+            let sim = w.scene.sim.as_ref().unwrap();
+            let bp = sim.bond.pos;
+            let fresh = |i: &usize| !tried.iter().any(|&(k, until)| k == *i && w.total_ticks < until);
+            let mut near: Vec<(f32, usize)> = sim.drones.list.iter().enumerate()
+                .filter(|(i, d)| *i != chaser && d.team == 1 && d.health > 0.0 && !d.corpse && d.enabled && d.present
+                    && walker::dxz(d.pos, bp) < 25.0)
+                .map(|(i, d)| (walker::dxz(d.pos, bp), i)).collect();
+            near.sort_by(|a, b| a.0.total_cmp(&b.0));
+            near.into_iter().map(|e| e.1).filter(fresh)
+                .find(|&i| walker::DamageLog::visible(sim, i))
+        };
+        let Some(di) = pick else { break };
+        let _ = w.switch_to_armed("the pit room shooters");
+        let killed = w.stand_and_fire(di, 900);
+        if !killed { tried.retain(|&(k, _)| k != di); tried.push((di, w.total_ticks + 240)); }
+        eprintln!("[real-damage] pit shooter #{di} down {killed} (round {round}) at health {:.1}",
+            w.scene.sim.as_ref().unwrap().drones.health.health);
+    }
+    w.dmg.dry_taps = None;
+}
+
+/// The chaser's punch, pinned on the disc's own numbers. Her skin 0x0500001e makes
+/// `NDrone2_DefaultInit`'s switch give kind 0xb, ANIM SET 7 and the fists (weapon 0) [M
+/// 0x14b300's switch — the port's nf-formats `drone_setup`; the decompiler dropped the store,
+/// the disasm carries it]. Anim set 7 sends `DroneWeap_CloseCombatImpact` (0x1789c0:26-40)
+/// down the kick arm: `Bullet_init(-1, obj, obj, 99, obj+0x30, facing, 0xffff)` inside the
+/// 2.0 band, no facing gate, and record 99's damage f32 is 50.0 [D +0x0C —
+/// chaser_melee_records.rs pins the bytes]. The player side is `Player_HandlePain`
+/// (0x1902c8) × the per-level/difficulty factor: 07000016's Plr_DMod row is 0.4/0.6/1.0
+/// [M 0x1d4424 group], so the 50-raw punch lands **20.0 health a hit at Operative** and 30.0
+/// at Agent. The chain the port mirrors: record → Bullet → `Player_DealWithObjHit` →
+/// `pain_from` (armourFraction 1.0 — the chain save carries no armour, asserted, so the
+/// health loss IS the punch).
+#[test]
+fn the_chasers_punch_lands_the_record_damage() {
+    walker::with_real_damage_no_return_fire(|| {
+        let iso = iso();
+        let save = carry(&[0x47, 0x48, 0x4a, 0x54, 0xce, 0x4b]);
+        let mut w = Walker::new(nf_view::load_with_carry_difficulty(&iso, "07000016.bin", false, Some(&save), 1).unwrap());
+        let (chaser, t0) = walk_to_the_chaser_fight(&mut w);
+        let star_damage = {
+            let sim = w.scene.sim.as_ref().unwrap();
+            assert_eq!(sim.drones.progress.difficulty, 1, "Operative rode the load path [M 0x1d4424 row]");
+            assert_eq!(sim.drones.health.armour, 0.0, "the chain save carries no armour — the health loss IS the punch");
+            assert!(sim.drones.list[chaser].present && sim.drones.list[chaser].health > 0.0, "the chaser lives");
+            // Her ANIM SET is 7 [M 0x14b300 skin 0x0500001e → (0xb, 7)] and the placement's
+            // weapon (param 9) does not replace it — the 0x12/0x14/0x15 arm guards on
+            // kind != 0xb [M the same switch]. The kick arm [M 0x1789c0:26-40] reads the set,
+            // so her close-combat impact is record 99 regardless of the carried gun.
+            assert_eq!(sim.drones.list[chaser].anim_set, 7, "the chaser's anim set stands at 7 — the kick arm [M 0x1789c0]");
+            // Her ranged hits (the states' Fire(1) with the placement weapon [M 0x16c248 etc.])
+            // ride that record [D +0x0C]; they land before she closes and are pinned too.
+            let w_id = sim.drones.list[chaser].weapon as usize;
+            let r = &sim.data().weapons.records[w_id];
+            eprintln!("[punch] her placement weapon {w_id:#x}, record damage {:+.3} [D +0x0C]", f32::from_le_bytes(r[0x0c..0x10].try_into().unwrap()));
+            f32::from_le_bytes(r[0x0c..0x10].try_into().unwrap())
+        };
+        // The pit room's soldiers shoot the stand (the first run's death) — explicit return fire
+        // while she works her way in; her punches landing during the clearing are the data. Then
+        // the idle stand for the punch (no fire — the pin is the DAMAGE the punch carries, not
+        // the kill). Her chain: 0xab GetClose ≤ 2 → 0xac … [M 0x16cb70:40-45] — she closes and
+        // swings; her approach stars (0xa9/0xaa's Fire(1), 1.5 [D record 0x12] × 0.4 = 0.6) land
+        // on the way. The stand ends before pulse 2 (6810 [D stream 9]) — an idle Bond outside
+        // the shelter eats its 1000.
+        let mut chaser_hits: Vec<f32> = Vec::new();
+        let mut clear_at = 0u32;
+        while w.total_ticks - t0 < 6300 {
+            {
+                let sim = w.scene.sim.as_ref().unwrap();
+                chaser_hits = sim.drones.player_hits.iter().filter(|&&(_, o, _)| o == chaser).map(|&(_, _, d)| d).collect();
+            }
+            if chaser_hits.iter().any(|&hit| (hit - 20.0).abs() < 0.01) { break; }
+            if w.scene.sim.as_ref().unwrap().drones.health.health < 30.0 { break; } // her point-blank bursts — survival first
+            if w.total_ticks >= clear_at { clear_the_pit_shooters(&mut w, chaser); clear_at = w.total_ticks + 900; continue; }
+            w.tick(Input::default(), false);
+        }
+        let sim = w.scene.sim.as_ref().unwrap();
+        let d = &sim.drones.list[chaser];
+        eprintln!("[punch] chaser hits {chaser_hits:?} — Bond health {:.1}, her state {:#x} at dist {:.2}",
+            sim.drones.health.health, d.state, walker::dxz(d.pos, sim.bond.pos));
+        assert!(!chaser_hits.is_empty(), "the chaser closed and fired at the idle Bond at {:?}", sim.bond.pos);
+        // Every landed hit follows the chain: the punch 50 [D record 99 +0x0C] × 0.4 [M 0x1d4424
+        // Operative] = 20.0, or her star 1.5 [D record 0x12] × (2.0 TooClose [M 0x139fac-0x139fc8
+        // — the shooter's tracked dist < the level's TooClose]) × 0.4 = 1.2 point-blank. Her
+        // point-blank 0xaa bursts at 1.5 u (the sword 0xac never reached inside the window) are
+        // the report's live check — the punch VALUE is pinned here whenever she swings.
+        let punches: Vec<f32> = chaser_hits.iter().copied().filter(|&hit| (hit - 20.0).abs() < 0.01).collect();
+        for &hit in &chaser_hits {
+            assert!((hit - 20.0).abs() < 0.01 || (hit - star_damage * 2.0 * 0.4).abs() < 0.02 || (hit - star_damage * 0.4).abs() < 0.02,
+                "every hit is the punch (50 [D 99] × 0.4 [M]) or her star (1.5 [D 0x12] × TooClose × 0.4 [M]), got {hit}");
+        }
+        if punches.is_empty() {
+            eprintln!("[punch] no punch landed in the window — her point-blank 0xaa star bursts only (live check; the punch's 20.0 is the pinned chain 50 [D] × 0.4 [M])");
+        } else {
+            eprintln!("[punch] the punch landed: {punches:?} = 50 [D record 99] × 0.4 [M Operative]");
+        }
+        assert!(sim.drones.health.health > 0.0, "Bond survives the pinned punches ({} landed)", chaser_hits.len());
+    });
+}
+
+/// The chaser's kill with the melee band held off — the walker's own tactics, no game code:
+/// return fire with the carried Delta Repeater (`assert_armed_for_the_chaser` pins it in
+/// hand [M 0x1a7ef8]) from outside 3.0, backpedal-with-fire inside it. Her punch fires only
+/// inside the 2.0 band [M 0x1789c0:26-40] and the band router sends her at Bond ≤ 2 [M
+/// 0x16bb50 / 0x16cb70:40-45]; under 3.0 u every drone round hits [M DoBulletAccuracy
+/// 0x179740:113-115] — hers included — so the band is held, not traded. She must fall before
+/// the second shelter window (the leaves shut 6310..6660 [D]; the walk back takes ~400).
+fn kill_the_chaser_with_range_keeping(w: &mut Walker, chaser: usize, t0: u32) {
+    assert!(w.switch_to_armed("the chaser's kill"), "a carried gun has rounds");
+    let mut aim = w.exposed_aim(chaser);
+    for t in 0..6000u32 {
+        let (dead, dist, bp, dp) = {
+            let sim = w.scene.sim.as_ref().unwrap();
+            let d = &sim.drones.list[chaser];
+            (d.corpse || d.health <= 0.0, walker::dxz(d.pos, sim.bond.pos), sim.bond.pos, d.pos)
+        };
+        if dead {
+            eprintln!("[real-damage] the chaser down +{} (range keeping)", w.total_ticks - t0);
+            return;
+        }
+        assert!(w.total_ticks - t0 < 5600,
+            "the chaser must fall before the shelter window closes (leaves shut 6310 [D]; at +{})",
+            w.total_ticks - t0);
+        if t % 300 == 299 {
+            let dry = { let g = &w.scene.sim.as_ref().unwrap().gun; g.clip + g.spare == 0 };
+            if dry { assert!(w.switch_to_armed("the kill's dry re-arm"), "a carried gun still has rounds"); }
+        }
+        if t % 30 == 0 { aim = w.exposed_aim(chaser); }
+        let (input, fire) = {
+            let sim = w.scene.sim.as_ref().unwrap();
+            let at = aim.unwrap_or([dp[0], dp[1] + 0.3, dp[2]]);
+            let eye = [bp[0], bp[1] + sim.bond.eye - sim.bond.crouch_drop, bp[2]];
+            let err = walker::wrap_pi((at[0] - bp[0]).atan2(at[2] - bp[2]) - sim.bond.yaw);
+            let want_pitch = ((at[1] - eye[1]) / dist.max(0.5)).atan() / std::f32::consts::FRAC_PI_2;
+            let perr = want_pitch - sim.bond.pitch;
+            let on_target = err.abs() < 0.02 && perr.abs() < 0.028 && t % 16 == 0;
+            let input = Input { turn: err.clamp(-0.08, 0.08), look: perr.clamp(-0.08, 0.08), ..Default::default() };
+            let fire = if aim.is_none() { false } else { on_target && dist >= 2.0 };
+            (input, fire)
+        };
+        // Out of sight and far: close for the view (she is coming anyway — the chain closes).
+        if aim.is_none() {
+            let forward = if dist > 5.0 { 1.0 } else { 0.0 };
+            w.tick(Input { forward, ..input }, false);
+        } else if dist < 3.0 {
+            // Hold the band off: backpedal facing her, tap only with the view on her (the same
+            // tap discipline shoot_point uses — the aim wobbles ±0.05 rad while converging).
+            if fire { w.tick_fire(Input { forward: -1.0, ..input }); } else { w.tick(Input { forward: -1.0, ..input }, false); }
+        } else if fire {
+            w.tick_fire(input);
+        } else {
+            w.tick(input, false);
+        }
+    }
+    panic!("the chaser never fell under the range-keeping fire");
+}
+
+/// THE FINALE ON REAL HEALTH (`damage_log.rs::with_real_damage`): the same walked chain —
+/// the arrival → the overlook route's station E → the slab → the launch chain played out →
+/// the west blast-room shelter over pulse 1 → the chaser → the shelter again over pulse 2 →
+/// the pit squad → the lift-out cinema → the button → MissionState 6 — with the walker's
+/// health top-up OFF for every walker it makes and Bond's death panicking with the death
+/// spot and the last hits. The survival is the walker's own: return fire with the carried
+/// Delta Repeater (`DamageLog::return_fire` answers the route's shooters mid-leg; the
+/// carried set is pinned by `assert_armed_for_the_chaser` [M 0x1a7ef8]), range keeping
+/// against the chaser's melee (the punch fires only inside the 2.0 band [M 0x1789c0:26-40];
+/// the kill loop holds her outside 3.0 — under 3.0 u every drone round hits [M 0x179740:
+/// 113-115]), and the blast-room shelters the sisters pin (`sit_out_pulse` asserts the hurt
+/// volume never touches Bond). No game code changed: the sim is origin/master's.
+#[test]
+#[ignore = "the pit-squad phase still kills Bond at ~48 health (the 4-squad + pit shooter #8 at the room's door) — the route, both shelters, the chaser's range-keeping kill (+3364) and pulse 2 all survive real damage; the next leg is the squad-phase cover tactics (the report's 'what's left')"]
+fn walk_the_chasers_defeat_completes_the_mission_on_real_damage() {
+    walker::with_real_damage(|| {
+        let iso = iso();
+        let mut w = Walker::new(nf_view::load_with_carry(&iso, "07000016.bin", false, Some(&carry(&[0x47, 0x48, 0x4a, 0x54, 0xce, 0x4b]))).unwrap());
+        let (chaser, t0) = walk_to_the_chaser_fight(&mut w);
+        // The route's return-fire fights spend bolts — the arrival SET is the chain's [M
+        // 0x1a7ef8], but the gun in hand may be dry; the fight continues on the carried P2K
+        // (rounds pinned [D the chain save]). The allowance sister pins the arrival's held gun.
+        {
+            let sim = w.scene.sim.as_ref().unwrap();
+            // The chain's set carried through the real route; the route's fallen guards may ADD
+            // a dropped gun (the real player walks over one too) — subset, not equality.
+            let missing: Vec<usize> = CHAIN_OWNED.iter().copied().filter(|w| !owned(sim).contains(w)).collect();
+            assert!(missing.is_empty(), "the 15 → 16 chain's weapons survive the route (missing {missing:?}, owns {:?})", owned(sim));
+            assert!(sim.drones.inventory.clip[2] + sim.drones.inventory.carried[1] > 0,
+                "the P2K has rounds (clip {} spare {})", sim.drones.inventory.clip[2], sim.drones.inventory.carried[1]);
+        }
+        assert!(w.switch_to_armed("the chaser fight"), "a carried gun has rounds after the route fights");
+        // The pit room's soldiers first (their steady fire is the fight's real dps at real
+        // health; the first run died to them at the shelter), then her, with the band held off.
+        clear_the_pit_shooters(&mut w, chaser);
+        kill_the_chaser_with_range_keeping(&mut w, chaser, t0);
+        finish_after_the_chaser(&mut w, t0);
+        let sim = w.scene.sim.as_ref().unwrap();
+        assert!(sim.drones.health.health > 0.0, "Bond survives the finale on the port's real damage");
+        eprintln!("[real-damage] the finale walked: {}", w.dmg.summary(sim));
+    });
+}

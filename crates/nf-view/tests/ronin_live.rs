@@ -323,3 +323,201 @@ fn ronin_remote_view_eye_and_flash() {
     let hidden = sim.drones.scripts.hidden_stream_objects();
     assert!(!hidden.contains(&(t.registered[1] as usize - 1)) && !hidden.contains(&(t.registered[2] as usize - 1)), "barrel and gun drawn");
 }
+
+/// Screen-space boxes (x0, y0, x1, y1) of the HUD quads drawn with texture `hash`, in the 512×448 frame.
+fn hud_boxes(scene: &nf_view::scene::Scene, hash: u32) -> Vec<[f32; 4]> {
+    let f = nf_view::hud::overlay(scene, 4.0 / 3.0);
+    let Some(ti) = scene.hud_textures.iter().position(|(h, _)| *h == hash) else { return Vec::new() };
+    let mut out = Vec::new();
+    for r in f.runs.iter().filter(|r| r.0 == ti + 1) {
+        for q in f.v[r.2 as usize..(r.2 + r.3) as usize].chunks(6) {
+            let (a, b) = (q[0].p, q[2].p);
+            out.push([(a[0] + 1.0) * 256.0, (1.0 - a[1]) * 224.0, (b[0] + 1.0) * 256.0, (1.0 - b[1]) * 224.0]);
+        }
+    }
+    out
+}
+
+/// The red bar on the right of the remote view: the ammo pane's kind-0x1f strip fed the turret's shot
+/// counter. `GT_TakeControl` 0x181740 puts Bond in substate 0x10 and BL+0x878 = the turret, and
+/// `HUD_UpdateAmmoPane` 0x19a7f0:146-151 then sets kind 0x1f, max 100, value (short)ext+0xF0 / 2.
+/// Measured [L PCSX2 audits/render-1101-roninview/ps2_remote_view.png]: the bar spans x ≈ 480..493,
+/// y ≈ 295..392 of the 512×448 frame with a fresh (200-shot) turret.
+#[test]
+fn ronin_remote_view_shot_gauge() {
+    assert_eq!(nf_view::hud::ronin_shots_strip(200), (100.0, 100.0), "a fresh Ronin is full");
+    assert_eq!(nf_view::hud::ronin_shots_strip(57), (28.0, 100.0), "halved toward zero");
+    assert_eq!(nf_view::hud::ronin_shots_strip(0), (0.0, 100.0));
+    // Sister: the raw counter is not the value (200 would draw a column twice the gauge).
+    assert_ne!(nf_view::hud::ronin_shots_strip(200).0, 200.0);
+    let Some(mut scene) = load() else { eprintln!("NF_ISO not set — skipping"); return };
+    const STRIP: u32 = 0x0300_0128;
+    let ti = {
+        let sim = scene.sim.as_mut().unwrap();
+        let ti = deployed(sim);
+        clear_guards(sim);
+        for _ in 0..600 {
+            sim.step_bond(Input::default(), false, false, false);
+            if sim.drones.gt_turrets[ti].state == gt_state::COMBAT && sim.gun.weapon == RONIN_CONTROL && sim.gun.switch_state == 0 { break; }
+        }
+        sim.hud.weapon_label_timer = 0;
+        ti
+    };
+    // Sister: deployed but not mounted (0x53 in hand), the pane draws no 100-unit gauge.
+    let tall = |b: &[[f32; 4]]| b.iter().any(|r| (r[3] - r[1] - 100.0).abs() < 0.5);
+    assert!(!tall(&hud_boxes(&scene, STRIP)), "no shot gauge before the remote view: {:?}", hud_boxes(&scene, STRIP));
+    {
+        let sim = scene.sim.as_mut().unwrap();
+        for t in 0..60 {
+            sim.step_bond(Input::default(), t < 4, false, false);
+            if sim.drones.ronin_mounted().is_some() { break; }
+        }
+        assert!(sim.drones.ronin_mounted().is_some(), "mounted");
+        idle(sim, 30);
+        sim.hud.weapon_label_timer = 0;
+    }
+    let hp0 = scene.sim.as_ref().unwrap().drones.gt_turrets[ti].hp;
+    assert_eq!(hp0, 200, "no shot spent yet");
+    let b = hud_boxes(&scene, STRIP);
+    // BulletImg[0x1f] (1 px/unit, ×16 wide at max 100): the empty column 100 tall from y 294 and the
+    // full fill the same, x 480..496 — the bar the PS2 frame shows.
+    let cols: Vec<_> = b.iter().filter(|r| (r[3] - r[1] - 100.0).abs() < 0.5).collect();
+    assert_eq!(cols.len(), 2, "the gauge's two columns, both full: {b:?}");
+    for c in &cols {
+        assert!((c[0] - 480.0).abs() < 0.5 && (c[2] - 496.0).abs() < 0.5 && (c[1] - 294.0).abs() < 0.5 && (c[3] - 394.0).abs() < 0.5, "{c:?}");
+    }
+    // Firing spends shots and the fill drops by half the spent count.
+    {
+        let sim = scene.sim.as_mut().unwrap();
+        for _ in 0..40 { sim.step_bond(Input::default(), true, false, false); }
+        idle(sim, 2);
+    }
+    let hp = scene.sim.as_ref().unwrap().drones.gt_turrets[ti].hp;
+    assert!(hp < hp0, "the mounted burst spent shots ({hp})");
+    let want = (hp / 2) as f32;
+    let b = hud_boxes(&scene, STRIP);
+    assert!(b.iter().any(|r| (r[3] - r[1] - want).abs() < 0.5 && (r[3] - 394.0).abs() < 0.5), "the fill is {want} tall after the burst: {b:?}");
+    assert!(tall(&b), "the empty column stays 100 tall");
+}
+
+/// The barrel's spin on the real input path, against the live capture [L PCSX2
+/// audits/render-1101-roninview2/live_ab.txt]: the 0x53 press held 8 frames takes control (and the
+/// held trigger arms the spin), 45 frames later ext+0xD4 = −2.7410; the drawn barrel is the script
+/// pose turned by RotZ(that angle) about its own axis [M GT_Update 0x180498:536-556].
+#[test]
+fn ronin_barrel_spin_on_the_press() {
+    let Some(mut scene) = load() else { eprintln!("NF_ISO not set — skipping"); return };
+    let sim = scene.sim.as_mut().unwrap();
+    let ti = deployed(sim);
+    clear_guards(sim);
+    for _ in 0..600 {
+        sim.step_bond(Input::default(), false, false, false);
+        if sim.drones.gt_turrets[ti].state == gt_state::COMBAT && sim.gun.weapon == RONIN_CONTROL && sim.gun.switch_state == 0 { break; }
+    }
+    assert_eq!(sim.drones.gt_turrets[ti].spin_draw, None, "an idle armed Ronin's barrel sits at its script pose");
+    for _ in 0..8 { sim.step_bond(Input::default(), true, false, false); }
+    assert!(sim.drones.ronin_mounted().is_some(), "mounted");
+    idle(sim, 45);
+    let t = &sim.drones.gt_turrets[ti];
+    eprintln!("spin {} vel {} draw {:?} hp {}", t.spin, t.spin_vel, t.spin_draw, t.hp);
+    assert!((t.spin - (-2.741)).abs() < 0.02, "ext+0xD4 {} vs the live −2.741", t.spin);
+    assert_eq!(t.hp, 199, "the held press fired one shot (live ext+0xF0 199)");
+    // Sister: one held frame fewer lands 0.21 rad short of the capture.
+    assert!((t.spin - 0.209 - (-2.741)).abs() > 0.1);
+}
+
+/// The remote view on 0C drops the barrel's near-clipped tubes the way the 24-bit depth wrap does
+/// [L PCSX2 audits/render-1101-roninview2: the stock view shows the muzzle ring's face and no tubes;
+/// the eye moved 0.1 back shows them]. 0C's `Ps2Far1` 20475840 puts the wrap at 0.122 > the 0.1 near
+/// plane (`nf_game::env::zbuf_wrap_distance`); the Ronin's script parts carry it in their palette
+/// entries' m[3][3] (the world shader drops a triangle with a vertex nearer than that), and the
+/// barrel's palette entry is the spun pose.
+#[test]
+fn ronin_remote_view_marks_the_wrapped_parts() {
+    let Some(mut scene) = load() else { eprintln!("NF_ISO not set — skipping"); return };
+    let ti = {
+        let sim = scene.sim.as_mut().unwrap();
+        let ti = deployed(sim);
+        clear_guards(sim);
+        for _ in 0..600 {
+            sim.step_bond(Input::default(), false, false, false);
+            if sim.drones.gt_turrets[ti].state == gt_state::COMBAT && sim.gun.weapon == RONIN_CONTROL && sim.gun.switch_state == 0 { break; }
+        }
+        ti
+    };
+    // Sister: not mounted → nothing marked.
+    assert!(scene.ronin_view_wrap_parts().0.is_empty(), "no marks outside the remote view");
+    {
+        let sim = scene.sim.as_mut().unwrap();
+        for _ in 0..8 { sim.step_bond(Input::default(), true, false, false); }
+        idle(sim, 10);
+        assert!(sim.drones.ronin_mounted().is_some());
+    }
+    let (parts, dw) = scene.ronin_view_wrap_parts();
+    assert!((dw - 0.122).abs() < 0.001, "0C's wrap distance {dw}");
+    let sim = scene.sim.as_ref().unwrap();
+    let t = &sim.drones.gt_turrets[ti];
+    let barrel = match sim.drones.scripts.objects.list.get(t.registered[1] as usize - 1) {
+        Some(Some(nf_game::nis::Obj::Entity { hash, src, matrix, .. })) => (*hash, *src, *matrix),
+        _ => panic!("registered[1] is a script entity"),
+    };
+    assert_eq!(barrel.0, 0x0200_0362, "registered[1] is the barrel");
+    let att = parts.iter().copied().find(|&a| scene.attachments[a].script.is_some_and(|(sh, st, h, _)| (sh, st) == barrel.1 && h == barrel.0));
+    let att = att.expect("the barrel's attachment is among the marked parts");
+    let (l, _) = scene.skin_layout();
+    let (pal, _) = scene.skin_palette(&l, None, 0.0, Default::default(), None);
+    let e = pal[l.attach_base as usize + att];
+    assert!((e[3][3] - (1.0 + dw)).abs() < 1e-6, "the barrel's entry carries the wrap distance: {}", e[3][3]);
+    // The entry is RotZ(spin_draw) · the script pose: its x row = cos·pose.x + sin·pose.y.
+    let a = t.spin_draw.expect("the press armed the spin");
+    let (s, c) = a.sin_cos();
+    let m = barrel.2;
+    for k in 0..3 { assert!((e[0][k] - (c * m[0][k] + s * m[1][k])).abs() < 1e-4, "spun x row {:?} vs pose {:?} at {a}", e[0], m[0]); }
+    assert!(a.abs() > 0.5, "the drawn barrel is visibly turned ({a})");
+}
+
+/// The remote view shows the Ronin pane's reticle and no normal crosshair. `GT_TakeControl` 0x181740
+/// calls `Player_SetCamMode(BL, 0xf)`, which stores BL+0x950 = 0xf and enables pane 18 [M 0x195928
+/// case 0xf]; `HUD_UpdateCrossHair` 0x19e6d0:97-100 then ends at LAB_0019e9c8 (sprite layer 0xff,
+/// not drawn) while BL+0x950 != 0. [L PCSX2 audits/render-1101-roninview2/sbs_remote_view.png: the
+/// PS2 frame has the octagon reticle only.] Sister: on foot with 0x53 in hand the cross draws.
+#[test]
+fn ronin_remote_view_hides_the_crosshair() {
+    let Some(mut scene) = load() else { eprintln!("NF_ISO not set — skipping"); return };
+    const CROSS_TEX: u32 = 0x0300_0026;
+    {
+        let sim = scene.sim.as_mut().unwrap();
+        let ti = deployed(sim);
+        clear_guards(sim);
+        for _ in 0..600 {
+            sim.step_bond(Input::default(), false, false, false);
+            if sim.drones.gt_turrets[ti].state == gt_state::COMBAT && sim.gun.weapon == RONIN_CONTROL && sim.gun.switch_state == 0 { break; }
+        }
+        assert_eq!(sim.gun.weapon, RONIN_CONTROL);
+        assert!(sim.drones.ronin_mounted().is_none());
+    }
+    // The normal cross: cell 2 (11×11) centred on the screen centre (256, 224).
+    let cross = |b: &[[f32; 4]]| b.iter().filter(|r| (r[2] - r[0] - 11.0).abs() < 0.5 && (r[3] - r[1] - 11.0).abs() < 0.5
+        && ((r[0] + r[2]) / 2.0 - 256.0).abs() < 2.0 && ((r[1] + r[3]) / 2.0 - 224.0).abs() < 2.0).count();
+    let before = hud_boxes(&scene, CROSS_TEX);
+    assert_eq!(cross(&before), 1, "sister: on foot the crosshair draws at the centre: {before:?}");
+    let reticle_tex = scene.hud.as_ref().expect("HUD tables").ronin[5].texture;
+    assert!(hud_boxes(&scene, reticle_tex).is_empty(), "no pane-18 reticle before the remote view: {:?}", hud_boxes(&scene, reticle_tex));
+    {
+        let sim = scene.sim.as_mut().unwrap();
+        for t in 0..60 {
+            sim.step_bond(Input::default(), t < 4, false, false);
+            if sim.drones.ronin_mounted().is_some() { break; }
+        }
+        assert!(sim.drones.ronin_mounted().is_some(), "mounted");
+        idle(sim, 30);
+    }
+    let after = hud_boxes(&scene, CROSS_TEX);
+    assert_eq!(cross(&after), 0, "the remote view draws no normal crosshair: {after:?}");
+    // The pane's reticle (sprite 5, flag 0x800 → centred on (256, 224)) still draws: its quads
+    // together cover a box wider than the cross, centred on the screen centre.
+    let ret = hud_boxes(&scene, reticle_tex);
+    let u = ret.iter().fold([f32::MAX, f32::MAX, f32::MIN, f32::MIN], |a, r| [a[0].min(r[0]), a[1].min(r[1]), a[2].max(r[2]), a[3].max(r[3])]);
+    assert!(!ret.is_empty() && ((u[0] + u[2]) / 2.0 - 256.0).abs() < 2.0 && ((u[1] + u[3]) / 2.0 - 224.0).abs() < 2.0 && u[2] - u[0] > 20.0,
+        "the octagon reticle stays: tex {reticle_tex:#x} {ret:?}");
+}

@@ -730,6 +730,9 @@ pub struct Player {
     /// The runtime cel the queries start from (obj+0x20 — fix-safe08b): the `pCelList` cell index in
     /// the world's `ScopeGraph`; `None` = the flat (unscoped) world.
     pub cel: Option<usize>,
+    /// The crouch substate is live (`bond.crouched` at the build site): the trigger toucher
+    /// switches to the game's crouch pick arm with it (level-0a-ceiling-gun-route).
+    pub crouched: bool,
     /// The move quad's x/z lanes the guards' accuracy moving test reads [M
     /// DroneWeap_DoOpponentTargetting 0x179a48:33-41 — the target's class byte obj+0xFF == 3 (the
     /// player object [M Player_Init 0x1910f8:76]) sets `DL+0x1DC = |(BL+0x10, 0, BL+0x18)| != 0`].
@@ -907,9 +910,16 @@ pub struct Drone {
     pub alert: f32,
     pub alert_floor: f32,
     pub props: [u32; 3],
-    /// The second behaviour block (parameters 23–25), active after `FirstAttack` when parameter 5 = 100 (`+0xC48`):
-    /// `DroneFunc_Set2ndBehaviour` points `+0x4D8` at `+0x4E8`.
+    /// The second behaviour block (parameters 23–25, `+0x4E8`), present when parameter 5 = 100 (`+0xC48`).
+    /// `props` is always the ACTIVE block (`+0x4D8`'s target, which every `behaviour_util_getProperty`
+    /// reads and every property write lands in); this field holds the INACTIVE one — the second
+    /// block while `using_2nd` is clear, the first (`+0x4DC`) while it is set. `set_2nd_behaviour` /
+    /// `set_1st_behaviour` swap the two, so writes made to either block survive a later swap back.
     pub alert_props: Option<[u32; 3]>,
+    /// `Drone+0x29` (`DroneFunc_Using2ndBehaviour` 0x14a5e8): `+0x4D8` points at the second block.
+    /// Set by `DroneFunc_Set2ndBehaviour` 0x14a618 and `NDrone2_ChangeToAttackMode` 0x14a648:29-31,
+    /// cleared by `DroneFunc_Set1stBehaviour` 0x14a5f0 — all three gated on `+0xC48 == 100`.
+    pub using_2nd: bool,
     /// `+0xE8` sight range, `+0xE4` half field of view, `+0xF0` engage range, `+0xFC` combat sight range.
     pub sight_range: f32,
     pub half_fov: f32,
@@ -1895,12 +1905,13 @@ impl Drone {
         let (start_danim, anim_set) = nf_formats::drone::start_danim(setup, 0);
         let (normal, alert_words) = nf_formats::drone::behaviour_words(&param);
         // The second behaviour block, parameter 5 == 100 → `+0xC48` [M 0x14b300]. The game points
-        // `+0x4D8` at `+0x4E8` in `DroneFunc_FirstAttack` 0x148010:124-127 (latching `+0x29 = 1`,
-        // read by `DroneFunc_Using2ndBehaviour` 0x14a5e8) and restores the first block with
-        // `DroneFunc_Set1stBehaviour` 0x14a5f0 (clears `+0x29`, `+0x4D8 → +0x4DC`) from the
-        // GoToGoalPosition blocked tail 0x165640. The port parses the block (and its alertness
-        // level below) but never swaps the active props at runtime [S deviation —
-        // docs/systems/dronefunc-rest.md].
+        // `+0x4D8` at `+0x4E8` in `NDrone2_ChangeToAttackMode` 0x14a648:29-31, `DroneFunc_FirstAttack`
+        // 0x148010:124-127 and `DroneFunc_Set2ndBehaviour` 0x14a618 (latching `+0x29 = 1`, read by
+        // `DroneFunc_Using2ndBehaviour` 0x14a5e8) and restores the first block with
+        // `DroneFunc_Set1stBehaviour` 0x14a5f0 (clears `+0x29`, `+0x4D8 → +0x4DC`). The port swaps
+        // `props` with this inactive copy (`set_2nd_behaviour` / `set_1st_behaviour`); the
+        // ChangeToAttackMode and GoToGoal-arrival sites are wired, the FirstAttack / PreDroneControl /
+        // HandleImpact ones not yet (docs/systems/dronefunc-rest.md, GAPS G-055).
         let alert_props = (param(5) == 100).then_some(alert_words);
         let alert = nf_formats::drone::ALERTNESS_LEVELS[d.props.get(0x20, &normal) as usize & 3];
         let weapon = nf_formats::drone::weapon_id(skin, param(9));
@@ -1967,6 +1978,7 @@ impl Drone {
             rope: pos,
             saved_anim_set: 0,
             attack_mode: 0,
+            using_2nd: false,
             hang_rand: 0,
             elevator_scan: false,
             elevator_latch: false,
@@ -7855,7 +7867,22 @@ impl Drone {
                     9 | 0xc => self.face_and_aim(d),
                     10 => {}
                     _ => {
+                        // The arrival tail [M 0x165640:47-82]: prop 0x59 → DeleteMe; else a mode-7
+                        // (EnemyRunToPoint) drone in single player switches to its attack setup
+                        // before leaving — already on the second block → back to the first and
+                        // stay; else `NDrone2_ChangeToAttackMode` 0x14a648, whose non-zero state
+                        // is entered at once; with none, `DroneFunc_Set2ndBehaviour` 0x14a618 and
+                        // the mode byte `+0xC5 = +0xC4`, staying this tick. Every other mode
+                        // enters `+0x5A2`. (`+0x33 = 0` has no port reader.)
                         if self.prop(d, 0x59) { self.present = false; self.enabled = false; }
+                        else if self.mode == 7 {
+                            if self.using_2nd { self.set_1st_behaviour(); }
+                            else {
+                                let n = self.change_to_attack_mode();
+                                if n != 0 { self.set_state(n); }
+                                else { self.set_2nd_behaviour(); self.mode = self.attack_mode; }
+                            }
+                        }
                         else { let r = if self.return_state != 0 { self.return_state } else { self.start_state(d) }; self.set_state(r); }
                     }
                 }
@@ -8783,14 +8810,10 @@ impl Drone {
                 // [M 0x15e1e8:66-82]: +0x5A4 (alt_state) set with the second channel (+0x135) clear
                 // and not level 0x7000006 → `NDrone2_ChangeToAttackMode` 0x14a648:7-36 — the flush
                 // (+0xC6 → +0xC5; the mode-2 → 0x19 + stationary arm returns 0x56; +0xC6/+0x5A4
-                // cleared; the +0xC48 == 100 behaviour-block switch and +0x28/+0x29 have no port
-                // model, like the ATTACK ENTER's fold) — and SetState to its return. Everything else
-                // (no alt state, a channel set, level 0x7000006) → 4 IDLE.
+                // cleared; the +0xC48 == 100 behaviour-block switch) — and SetState to its return.
+                // Everything else (no alt state, a channel set, level 0x7000006) → 4 IDLE.
                 if self.alt_state != 0 && self.second_channel == 0 && d.level != 0x0700_0006 {
-                    if self.alt_mode != 0 { self.mode = self.alt_mode; }
-                    let st = if self.mode == 2 { self.mode = 0x19; self.stationary = true; ATTACK } else { self.alt_state };
-                    self.alt_mode = 0;
-                    self.alt_state = 0;
+                    let st = self.change_to_attack_mode();
                     self.set_state(st);
                     return true;
                 }
@@ -10313,6 +10336,39 @@ impl Drone {
             case += 1;
         };
         if (result == AIM_STAND && self.state == AIM_STAND_FIRE) || (result == AIM_CROUCH && self.state == AIM_CROUCH_FIRE) || result == self.state { 0 } else { result }
+    }
+
+    /// `DroneFunc_Set2ndBehaviour` 0x14a618: with `+0xC48 == 100` (the port's `alert_props` present)
+    /// `+0x29 = 1` and `+0x4D8 = +0x4E8` — the second property block becomes the one every
+    /// property read sees; returns whether the drone has one [M 0x14a618:5-11].
+    fn set_2nd_behaviour(&mut self) -> bool {
+        let Some(other) = self.alert_props.as_mut() else { return false };
+        if !self.using_2nd { std::mem::swap(&mut self.props, other); self.using_2nd = true; }
+        true
+    }
+
+    /// `DroneFunc_Set1stBehaviour` 0x14a5f0: with `+0xC48 == 100`, `+0x29 = 0` and `+0x4D8 = +0x4DC`
+    /// [M 0x14a5f0:5-11].
+    fn set_1st_behaviour(&mut self) -> bool {
+        let Some(other) = self.alert_props.as_mut() else { return false };
+        if self.using_2nd { std::mem::swap(&mut self.props, other); self.using_2nd = false; }
+        true
+    }
+
+    /// `NDrone2_ChangeToAttackMode` 0x14a648 [M :7-36]: with an alternate state (`+0x5A4` ≠ 0) the
+    /// alternate mode `+0xC6` (when set) becomes the mode `+0xC5`; a mode-2 sniper becomes mode 0x19
+    /// (the `DroneTypeSettings` +304 hook — the port's stationary sniper) and returns Attack 0x56;
+    /// `+0xC6` / `+0x5A4` clear; `+0xC48 == 100` swaps in the second property block (`+0x4D8 = +0x4E8`,
+    /// `+0x29 = 1`). Returns the state to enter (the old `+0x5A4`, or 0x56 for the sniper), 0 for
+    /// none. (`+0x28 = 1` has no port reader.)
+    fn change_to_attack_mode(&mut self) -> u8 {
+        if self.alt_state == 0 { return 0; }
+        if self.alt_mode != 0 { self.mode = self.alt_mode; }
+        let st = if self.mode == 2 { self.mode = 0x19; self.stationary = true; state::ATTACK } else { self.alt_state };
+        self.alt_mode = 0;
+        self.alt_state = 0;
+        self.set_2nd_behaviour();
+        st
     }
 
     /// `NDrone2_EvasiveMove` (0x1506d8) — the evasive mover `AimBackoff` 0x68 asks FIRST
@@ -16971,6 +17027,13 @@ fn segment_hits_sphere(a: V3, b: V3, c: V3, r: f32) -> bool {
                         self.audio.play3d(sound, muzzle, None);
                         if let Some(w) = d.weapons.records.get(crate::gt::TURRET_WEAPON_RECORD) {
                             let f32_at = |o: usize| f32::from_le_bytes(w[o..o + 4].try_into().unwrap());
+                            // The mounted case-7 shot runs the same `Bullet_init` cone: owner = the
+                            // player (obj+0xff 2) with weapon 96's +0x68 = 0 keeps the BL+0xC0 = 1
+                            // scale arm [M 0x12c5a0 disasm 0x12c7cc-0x12c7f0], spread 4.0, then
+                            // case 7's own post-shot Rand_FRand(2π) w-pad draw [M 0x180498:522].
+                            let flags68 = u32::from_le_bytes(w[0x68..0x6c].try_into().unwrap());
+                            let dir = crate::bullet::spread(dir, f32_at(0x24), flags68, &mut self.rng);
+                            let _pad = self.rng.frand(crate::trig::TAU); // [M 0x180498:522]
                             let f6c = u32::from_le_bytes(w[0x6c..0x70].try_into().unwrap());
                             self.player_bullets.push(PlayerBullet {
                                 pos: muzzle, dir, speed: f32_at(0x20), travelled: 0.0, range: f32_at(0x1c), damage: f32_at(0x0c),
@@ -17004,6 +17067,20 @@ fn segment_hits_sphere(a: V3, b: V3, c: V3, r: f32) -> bool {
                         self.audio.play3d(sound, muzzle, None);
                         if let Some(w) = d.weapons.records.get(crate::gt::TURRET_WEAPON_RECORD) {
                             let f32_at = |o: usize| f32::from_le_bytes(w[o..o + 4].try_into().unwrap());
+                            // `Bullet_init` 0x12c5a0's cone draw: the turret owner's obj+0xff is not
+                            // the player's 2 and the barrel obj is not a class-3 drone, so the
+                            // scale stays 1.0 and the bloom term never computes [M 0x12c5a0:134-166
+                            // + disasm 0x12c710-0x12c7f4]. Record 96 (0x2c55d0) carries +0x24 = 4.0
+                            // with +0x68 = 0 (no 0x400000) [L ee_start_05.bin @0x2c55d0] — every
+                            // round leaves through the FRand_MVar2(2s)·0.0014 / FRand(2π) / FRand(π)
+                            // spherical offset added to the direction [M 0x12c5a0:166-184, disasm
+                            // 0x12c7f4-0x12c858]. `GT_Update` then draws one more Rand_FRand(2π)
+                            // into the direction vector's w pad [M 0x180498:349] — 4 shared-stream
+                            // draws per shot this consumer skipped (the turret rounds flew dead-on
+                            // and every later draw desynced from the game's stream).
+                            let flags68 = u32::from_le_bytes(w[0x68..0x6c].try_into().unwrap());
+                            let dir = crate::bullet::spread(dir, f32_at(0x24), flags68, &mut self.rng);
+                            let _pad = self.rng.frand(crate::trig::TAU); // [M 0x180498:349]
                             let mut b = crate::bullet::Bullet {
                                 pos: muzzle, dir, speed: f32_at(0x20), travelled: 0.0, range: f32_at(0x1c),
                                 damage: f32_at(0x0c), owner: usize::MAX, state: 0,
@@ -18079,7 +18156,26 @@ fn segment_hits_sphere(a: V3, b: V3, c: V3, r: f32) -> bool {
         // byte's trigger credit is the one residual for a live check). The reach laws are the ones
         // above. [M the walk; the port's per-body design is the MP port design].
         let player_touchers: Vec<crate::triggers::Toucher> = match &self.net_bodies {
-            None => vec![crate::triggers::Toucher { contain: !player.hanging, ..crate::triggers::Toucher::player([player.pos[0], player.pos[1] - 0.6, player.pos[2]]) }],
+            None => vec![{
+                if player.crouched {
+                    // The crouch IS a different pick arm in the game, and `body` already carries
+                    // it case-correct (`Player_Collision` 0x194df0's substate switch: case 3 =
+                    // the crouch A = pos + 0.1 − (cc − 0.55), B = pos + 0.45 − cc, r 0.55 [M
+                    // :228-248], built at the scene's drone::Player site from bond.substate/
+                    // crouched/cc). With the crouch rest cc 0.55 [M player.rs CROUCH_ROOT_HEIGHT]
+                    // and the crouch park pos−floor 0.607 [L level_reload_live.rs:215] the
+                    // crouched body tops ≈ feet+1.26 — under 0a's laser band 1.49..1.76 above the
+                    // floor [D 0700000a triggers dump, #607] — so a crouch passes UNDER the beams
+                    // in the game, while the standing body 1.86 [M 0x194df0 default arm] crosses.
+                    // The port's standing-box toucher fired the beam crouched; that gap is this
+                    // arm. The standing stance keeps the measured box reach below (the
+                    // truck-chain/park-plate calibrations live there).
+                    let (a, b, r) = player.body;
+                    crate::triggers::Toucher { a, b, r, drone: false, skin: 0, contain: !player.hanging }
+                } else {
+                    crate::triggers::Toucher { contain: !player.hanging, ..crate::triggers::Toucher::player([player.pos[0], player.pos[1] - 0.6, player.pos[2]]) }
+                }
+            }],
             Some(bodies) => bodies.iter().filter(|b| b.alive).map(|b| if b.bot {
                 crate::triggers::Toucher { a: [b.pos[0], b.pos[1] - 1.0, b.pos[2]], b: b.head, r: 0.4, drone: true, skin: 0, contain: true }
             } else {
@@ -21018,6 +21114,7 @@ mod tests {
             rope: pos,
             saved_anim_set: 0,
             attack_mode: 0,
+            using_2nd: false,
             hang_rand: 0,
             elevator_scan: false,
             elevator_latch: false,

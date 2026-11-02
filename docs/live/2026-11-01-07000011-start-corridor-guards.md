@@ -46,6 +46,10 @@ corridor over f200-f3172 cannot be a fresh idle start at a selectable difficulty
 the parts that matter (both guards from tick 1 in 0x63, the same corridor spots, the same per-hit damage,
 death at tick 1102 (d2) / 608 (d3)). Pinned by `crates/nf-view/tests/start_corridor_guard_07000011_live.rs`.
 
-Still different: the port's guards hold AimStandFire 0x68 once in position, while the game's alternate
-the StepAim 0x73/0x74 sidesteps with it (the cause is not traced here); at d1 the port's #126 first stops in AimStand 0x67 at
+The StepAim 0x73/0x74 sidesteps come from the guards' second behaviour block: both carry p5 = 100, and
+their GoToGoal arrival runs `ChangeToAttackMode`, which points +0x4D8 at the second block [M 0x165640:47-82,
+0x14a648:29-31], whose step property 0x42 is set (p25 = 0x40291660) where the first block's is clear
+(p20 = 0x40280000) [D]. The port now makes the same switch and its guards step too.
+
+Still different: at d1 the port's #126 first stops in AimStand 0x67 at
 (3.06, 15.74), ~10.7 from Bond, at t200 (the game's is at (3.01, 17.67), 8.8 away) and closes in by t400.

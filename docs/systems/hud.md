@@ -27,7 +27,9 @@ research pass (2026-10-09); "checked" = read here (the tables are read from ACTI
 fix-hud-parity [M]: the position is `(short)(int)` truncated and the 0x800 centring subtracts `w >> 1` / `h >> 1`
 (View_DrawSprites 0x1e5290:69-74); the Crosshairs option (`DAT_002a38d0`) gates the NOT-aiming arm only — the
 aim-mode cell 1 shows with the option off; panes 12 (blood) and 16 (sec-cam) hide it; colour 0x208020FF while the
-viewer's goggle mode is 1 (night sight).
+viewer's goggle mode is 1 (night sight). Any non-zero cam mode (BL+0x950, stored by `Player_SetCamMode` 0x195928)
+hides it [0x19e6d0:97-100]: the wire/creep 0xB, the orbit 1/2, and the Ronin's remote view 0xf (`GT_TakeControl`
+0x181740), where only pane 18's octagon reticle shows (`ronin_live` `ronin_remote_view_hides_the_crosshair`).
 
 ## Health / armour pane 1 (`HUD_UpdateHealthPane` 0x19b9c8) [M; tables checked]
 
@@ -148,8 +150,11 @@ the mission banner's fail label has no blink.
 - Mounted gun (substate 0xc): the ammo pane swaps in the imp's heat — kind 0x1f, max 100, value
   `min((int)(ext+0x90·0.5), 100)`, strip row BulletImg[0x1f] = (58, 121, w 1, 1 px) ×16 (max > 87) →
   a 16×100 gauge at x 480..496, bottom 394 [HUD_UpdateAmmoPane 0x19a7f0:137-145, :254, :282]. The count
-  text is blank (WeaponNone 0x47's +0x68 has 0x20). Substate 0xb (car) and 0x10 are the driving/other
-  vehicle arms (not ported).
+  text is blank (WeaponNone 0x47's +0x68 has 0x20). Substate 0x10 is the Ronin's remote view
+  (`GT_TakeControl` 0x181740 → BL+0x878 = the turret): the same gauge, value `(short)ext+0xF0 / 2` (the
+  turret's shot counter, 200 → full), no clamp [0x19a7f0:146-151] — the red bar on the right of the
+  remote view [L PCSX2 audits/render-1101-roninview] (`hud::ronin_shots_strip`, `ronin_live`
+  `ronin_remote_view_shot_gauge`). Substate 0xb (car) is the driving arm (not ported).
 - INFO pane sources added: the locked exit 0x2000021 "Warning: Not all objectives completed" with the
   180-tick ext+0x3C cooldown [Trigger_Activate 0x1b2318:79-87, Trigger_Update 0x1b1a78:26-28]; the
   once-per-level hints 0x1000216 (Micro-Camera 0x54) / 0x10002dc (Remote Mine 0x37) with the view model
