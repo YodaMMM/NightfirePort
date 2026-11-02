@@ -832,17 +832,31 @@ fn copter_gated_hover() {
     assert!(!sim.drones.channels.on(0x4b), "no arrival write while gated [M Copter_Move 0x17d628]");
 }
 
-// ── hurt (0xe4) — the kill floor, blocked one step short ────────────────────────────────────
+// ── hurt (0xe4) — the fall's end: the death NIS's terminal event, not the kill floor ────────
 
-/// The end-to-end fall kill: the real walk off the boarding platform falls, the plunge
-/// TouchOnce fires (ch 0x7C) and the death NIS (SP #307) takes the body — and HOLDS it at
-/// y 17.56, above the y −24.10 kill floor (the port has no death after the death NIS; the game
-/// fails the mission there [M 0x182c60:21-43]). BLOCKED: the fix is the death NIS's terminal
-/// event → mission fail (docs/levels/07000008.md §"The kill floor, end to end"; the mid-path is
-/// hurt_07000008_live's pin, the volumes' row law is the hurt unit tests').
+/// The end-to-end fall off the boarding platform, the way the game ends it: the real walk off
+/// the lip falls, the plunge TouchOnce fires (ch 0x7C [D #54]), the death NIS (SP #307,
+/// 0x06000991 — `Script_IsDeathNIS` [M nis.rs]) takes the body, and the NIS's OWN terminal
+/// event — stream 6's event 0xD params (0x62, 1) at the script's tick 89 [D 0x06000991, the
+/// script-channel census; decoded on the real walk] — raises the death channel. `Mission_Update`'s
+/// ch-0x62 arm fails the mission (MissionState 3, to_end 0x7000048) [M 0x182c60:21-43] and the
+/// 0x40000042 fail menu's Restart row queues the WARM reload of the CURRENT level
+/// [M 0x216618:19-21] — here auto-answered by the sim's `auto_restart` stand-in for the menu view.
+/// The body HOLDS through it — the game's own law, not a port gap: the NIS's event 4 disables the
+/// player [M Script_EventHandler 0x1d94c0:119; Player_Update 0x193600:80-89 returns on the 0
+/// byte] and the stream carries no event 6, so `Script_Free`'s 0x100-gated enable never runs
+/// [M 0x1da880:44-49]. The y −24.10 kill floor stays SILENT through this path: the held body
+/// never descends past the NIS's fall (the hold at y 17.56, the fall's floor ≈17.5), 41 units
+/// above the quads [D #42/#43/#44 y −24.10] — the kill floor serves falls the plunge NIS does
+/// not catch (hurt_07000008_live pins those mid-paths; the volumes' row law is the hurt unit
+/// tests').
+///
+/// The old body of this test ("the fall reached the kill floor") was WRONG — it contradicted the
+/// decompile-backed law pinned in decomp_audit_07000008_live (`the_f5_fall_death_nis_writes_0x62_
+/// and_opens_the_fail_menu`: the same real walk-off fails the mission with `hurt_hits == 0`);
+/// fixed per the task rule, see docs/reports/level-08-fall-kill-floor.md.
 #[test]
-#[ignore = "the death-NIS hold blocks the end-to-end fall kill (the body is held at y 17.56 above the y −24.10 kill floor) — the fix is the death NIS's terminal event → mission fail; the mid-path is pinned by hurt_07000008_live"]
-fn the_kill_floor_ends_the_fall() {
+fn the_fall_off_the_platform_ends_the_mission_through_the_death_nis() {
     let mut w = load();
     // The boarding platform edge (hurt_07000008_live's proven spot), the real walk off.
     w.scene.sim.as_mut().unwrap().bond.pos = [111.4, 24.5, -127.2];
@@ -850,10 +864,42 @@ fn the_kill_floor_ends_the_fall() {
     w.scene.sim.as_mut().unwrap().bond.vel = [0.0; 3];
     w.wait(10);
     let walked = Input { forward: 1.0, ..Default::default() };
-    let mut touched = false;
-    for _ in 0..1200 {
+    let mut plunged = false;
+    let mut min_y = f32::MAX;
+    for _ in 0..1600 {
         w.scene.sim.as_mut().unwrap().step_bond(walked, false, false, false);
-        if w.scene.sim.as_ref().unwrap().hurts.iter().any(|h| h.hits > 0) { touched = true; break; }
+        min_y = min_y.min(w.scene.sim.as_ref().unwrap().bond.pos[1]);
+        if w.scene.sim.as_ref().unwrap().drones.channels.on(0x7c) { plunged = true; }
+        if plunged && w.scene.sim.as_ref().unwrap().drones.channels.on(0x62) { break; }
     }
-    assert!(touched, "the fall reached the kill floor [D #42/#43/#44 y −24.10; M Hurt_Update 0x17e5d0]");
+    assert!(plunged, "the plunge TouchOnce fired on the walk-off [D #54]");
+    assert!(w.scene.sim.as_ref().unwrap().drones.channels.on(0x62),
+        "ch 0x62 rose — the death NIS's own terminal event 0xD (0x62,1) at its tick 89 [D 0x06000991 s6]");
+    assert!(min_y < 20.0, "the fall ran (min y {min_y:.2})");
+    // MissionState 3 lands the tick after (the mission reads the channels before the scripts
+    // write them in the same tick — decomp_audit_07000008_live's ordering note).
+    for _ in 0..10 {
+        if w.scene.sim.as_ref().unwrap().drones.mission.state == 3 { break; }
+        w.scene.sim.as_mut().unwrap().step_bond(Input::default(), false, false, false);
+    }
+    assert_eq!(w.scene.sim.as_ref().unwrap().drones.mission.state, 3,
+        "MissionState 3 [M 0x182c60:21-43's ch-0x62 arm]");
+    // The fail menu opens 1 tick later (TimeOut 1.0 [M 0x182c60:58-64]) and the sim's
+    // auto_restart answers Restart: the warm reload of the CURRENT level queues.
+    for _ in 0..400 {
+        if w.scene.sim.as_ref().unwrap().drones.level_exit.is_some() { break; }
+        w.scene.sim.as_mut().unwrap().step_bond(Input::default(), false, false, false);
+    }
+    {
+        let sim = w.scene.sim.as_ref().unwrap();
+        assert_eq!(sim.drones.level_exit, Some(0x0700_0008),
+            "the fail restart → the CURRENT level [M 0x216618:20 GameState._12_4_]");
+        assert!(!sim.drones.level_exit_cold, "the restart is the warm arm [M 0x216618:20 IsWarmReset = 1]");
+        assert!(sim.drones.level_exit_restart, "on the entry checkpoint [M 0x216618:21 Player_RamLoad(Bond, 1)]");
+        assert!(sim.bond.pos[1] > -24.1,
+            "the body still holds, above the kill floor quads [D #42/#43/#44 y −24.10] (y {:.2})", sim.bond.pos[1]);
+        let hits: u32 = sim.hurts.iter().map(|h| h.hits).sum();
+        assert_eq!(hits, 0,
+            "the kill floor stays silent through the NIS path — it serves falls the plunge NIS does not catch");
+    }
 }
