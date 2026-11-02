@@ -63,6 +63,19 @@ fn walk_arrival_to_the_c5_door() {
         assert_eq!(sim.drones.mission.states[12][0], 3, "ch 0x23 reveals objective 4 [L record 12]");
     }
 
+    // Leg 0: the level's own armour at the start — the BodyArmourHeavy #525 (180.64, 11.18,
+    // −208.82 [D placement], 3.4 m south of the start) taken on the walk-over [M Pickup_Handler
+    // 0x18e650: type 3 refused while armour ≥ 50, else hard-set 50.0]. The yard ahead is a
+    // five-sniper crossfire (probe_0d_los_grid: #31 the perch, #16/#33 the dock, #27/#29 the
+    // west roof all fire the game's law) and the real-health budget needs the 50 armour the
+    // game itself offers at the door.
+    w.walk_to(Wp::new(180.6, 11.2, -208.8).r(0.9), "the BodyArmourHeavy #525");
+    {
+        let sim = w.scene.sim.as_ref().unwrap();
+        assert!(sim.drones.health.armour >= 49.0,
+            "the armour pickup taken on the walk-over [M 0x18e650 type 3], got {}", sim.drones.health.armour);
+    }
+
     // Leg 1: south to the dock's south edge — walked. The dock's south edge drops to the
     // under-dock trench (the floors 3.0/0.0 [D probes]) whose far side walls 3.9 m up at the
     // yard's north edge (the trench floor 0.0 ends z −266; the yard begins 3.9 at z −272 [D
@@ -93,12 +106,24 @@ fn walk_arrival_to_the_c5_door() {
         let p = bond_pos(&w);
         assert!(p[1] < 6.0, "the drop lands on the warehouse ground (y ~1.04), got {p:?}");
     }
+    // The ground walk east along the dock's south face — the yard's BLIND STRIP. The placed
+    // sniper #31 (placement #465, a standing no-patrol guard [D params 3:0/4:0] on the perch at
+    // (161.11, 6.93, −235.15)) faces yaw ≈ 3.02 south with a half-FOV π/2 + the 0.3927 pad
+    // [M DroneVision_OpponentVisibility 0x175af0 — the port's visibility()]: the strip
+    // z −224..−230 across the whole x 178..218 sits in its blind wedge (probe_0d_los_grid
+    // ::probe_0d_vis_field_east_strip: vis 0.0..0.67 < 0.7 → no LOS probe at all [M
+    // DroneVision_ProcessDroneSight 0x176a28]), while the yard south of z −236 and the
+    // under-dock trench (the route this walk took before) run vis 1.2..1.7 with a clear ray —
+    // no occluder stands in the corridor [D placements: the only collision-bearing objects
+    // between are plants; the port's ray tests stat+missile+dynamic, a superset of the game's
+    // 0xa27 drops]. The trench route also pinned Bond 1814 ticks at (186.3, −3.4, −265.9) with
+    // 6 sniper hits (the real-damage death at tick 6549) — the strip is the game's own cover.
     for (at, r, label) in [
-        ([190.0f32, -3.0, -266.0], 2.0, "the ground east"),
-        ([200.0, -1.0, -256.0], 2.0, "the ground north-east"),
-        ([208.0, 0.0, -246.0], 2.0, "the ground rises"),
-        ([214.0, 0.5, -238.0], 1.5, "east of the ladder"),
-        ([214.5, 1.0, -235.0], 1.2, "the ladder approach"),
+        ([188.0f32, 0.5, -228.0], 2.0, "the blind strip east 1"),
+        ([196.0, 0.5, -228.5], 2.0, "the blind strip east 2"),
+        ([204.0, 0.5, -229.0], 2.0, "the blind strip east 3"),
+        ([212.0, 0.5, -230.0], 1.5, "the blind strip east 4"),
+        ([215.0, 0.8, -233.2], 1.2, "east of the crane leg"),
         ([213.2, 1.5, -234.8], 0.8, "at the ladder base"),
     ] {
         assert!(w.try_walk_to(Wp { at, act: Act::None, arrive: r }, label), "{label} must walk");

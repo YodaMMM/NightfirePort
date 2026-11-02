@@ -1104,6 +1104,15 @@ impl CollisionWorld {
     /// Whether the world carries a cel scope (`build_scoped` with a graph).
     pub fn has_scope(&self) -> bool { self.scope.is_some() }
 
+    /// Diagnostic (level-0d-yard-sniper-los): `AINetwork_TestRayCels` 0x15ab78's cel walk — the
+    /// BFS from `start` across the portals the raw ray `from → to` straddles (`Collide_StraddleCels`
+    /// 0x1eac98 with `Intersect_Portal`'s 0x201 ray path, the same walk `scoped_runs` uses for the
+    /// capsule queries) — returned as the reached cell list, so a probe can compare the game's
+    /// cel-graph sight gate against the raw collision ray.
+    pub fn debug_ray_cels(&self, start: usize, from: V3, to: V3) -> Vec<usize> {
+        self.straddle(start, &mut Self::ray_portal_hit(from, to))
+    }
+
     /// Debug introspection (level-15-ladder-3): the scope graph's cell boxes and room flags, so a
     /// test can ask which cel boxes contain a point without reaching into the private `ScopeData`.
     pub fn debug_scope_cells(&self) -> Vec<([f32; 3], [f32; 3], bool)> {
