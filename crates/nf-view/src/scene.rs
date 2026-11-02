@@ -5129,15 +5129,12 @@ impl Sim {
                             // (the draw keeps the shared RNG's draw count bit-exact).
                             let _angle = self.drones.rng.frand(6.2831854820251465);
                             // The puff itself: models-misc's gas system (`Gas_Init(0.05, 0.1, …, 0x2000039, 7,
-                            // 0x48403080, end 1)` [M 0x1a4298; disasm 0x1a43ec-0x1a443c: the 2π draw is the
-                            // quaternion z, a3 = 0 is a NULL velocity, so kind 7 takes the wind branch]).
-                            // Gas_Init's own draws (spin, sign, wind ×3) now come out of the shared
-                            // stream via init_ex [M 0x1aacc8:72-80, 108-116] — the G-033 gap.
+                            // 0x48403080, end 1)` [M 0x1a4298]); Gas_Init's own draws stay un-consumed (G-033).
                             // rocket-trail-gas: the decomp-dropped 11th arg (the life) is 0x80 = 128 ticks
                             // [M 0x1a43f8 `li $v0, 0x80` → 0x1a442c `sw $v0, 0($sp)`] — the old value 8 was a guess —
                             // and the packed END rgba is 1 = bytes (0,0,0,1), so the alpha rate is
                             // (1−0x80)/128 [M 0x1a4440 delay slot `li $t3, 1`].
-                            self.drones.gas.init_ex(&mut self.drones.rng, nf_game::gas::SMOKE_QUAD, pos, 0.0, [0.0; 3], 0.05, 0.1, 7, [0x48, 0x40, 0x30, 0x80], 1, 128.0);
+                            self.drones.gas.init_ex(nf_game::gas::SMOKE_QUAD, pos, 0.0, [0.0; 3], 0.05, 0.1, 7, [0x48, 0x40, 0x30, 0x80], 1, 128.0);
                         }
                     }
                     if spawn_shot {
@@ -5706,7 +5703,7 @@ impl Sim {
             }
         }
         for (phase, pos, dir, underwater) in spawns {
-            nf_game::env::env_breath(&mut self.drones.gas, &mut self.drones.rng, frame, phase, pos, dir, 1, underwater, mode, Some(gate));
+            nf_game::env::env_breath(&mut self.drones.gas, frame, phase, pos, dir, 1, underwater, mode, Some(gate));
         }
     }
 
