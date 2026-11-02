@@ -478,3 +478,80 @@ fn crouching_under_the_door52_beam_passes_it() {
         }
     }
 }
+
+/// The range shot the merges never pinned: a mine takes a BULLET from a distance, through the
+/// game's own bullet path. The doorway fence #383 (the floor-to-ceiling beam at x 35.6, z 17.47
+/// [D]) stands ~10 u south of the spine's z 7.5 line — door[38] (z 10.5) sits between, so the
+/// shot rides the door's open window (the auto-close fires after `FRAME_RATE_INT·6` = 360 quiet
+/// ticks [M door.rs `update`'s auto-close arm; 0x13660c-0x136700]): open the leaf from its E
+/// reach, step back south, settle the aim, fire. The round's flight segment picks the mine (the
+/// per-tick HITTEST mode 0x201 with mask 0 [M Bullet_update 0x12e7b0 disasm 0x12f040/0x12f134] →
+/// `Collide_Pick` 0x1eb320 walks the straddled cels' object lists → `Collide_PickObj` 0x1eae80
+/// admits the cel-linked mine: obj+0xF0 0, no class mask, a collision glist),
+/// `Collide_Update` 0x1ea398:160-233 mirrors the hit onto the mine's list with +0x58 = the bullet
+/// and `Mine_Update` 0x17c930 explodes on the referenced entry. The neighbours #384/#385 go on the
+/// blast's case-0x4B entries [M Explode_Propagate 0x17c518]. No health writes: the guards hold
+/// (the sister tests' dev freeze), so Bond walks the route on his own feet and the only damage in
+/// the run is the mine's own blast.
+#[test]
+fn a_p2k_round_from_10_units_explodes_the_door38_fence() {
+    let iso = iso();
+    let mut w = Walker::new(nf_view::load(&iso, "07000015.bin", false).unwrap());
+    w.top_up_health = false;
+    w.wait_enabled(3000, "the silo arrival");
+    w.wait(120);
+    w.scene.sim.as_mut().unwrap().drones.hold_npcs = true;
+    draw(&mut w, 0x02); // the P2K: 7 + 41 rounds at the level start [D the 07000015 loadout]
+    // The route west, then the NAV GRAPH's own silo crossing to the spine (the direct z ≈ 0 line
+    // falls into the silo hole at x 67.45 [D floor grid]). #462 stands across the crossing's lane
+    // and the lane walks into it, so it is shot from the lane first — route clearing; the RANGE
+    // shot of this test is #383 below.
+    w.walk_to(Wp::new(88.0, 41.4, -0.5).r(1.2), "the gantry west");
+    let mine462 = [46.8f32, 41.556, 0.6];
+    nav_until_clear(&mut w, [34.6, 41.4, 6.0], mine462, 14.0, "the silo crossing");
+    shoot_mine(&mut w, 462, mine462, "the silo-crossing beam #462 (route clearing)");
+    assert!(w.follow_nav_route([34.6, 41.4, 6.0], "the silo crossing"), "the nav route crosses the gantry");
+    w.walk_to(Wp::new(34.6, 41.4, 6.0).r(1.2), "the north turn");
+    // Door[38]: into the leaf's E reach (head→pos d² < 6.25 [M Player_Activate 0x1a5170]), open,
+    // then back south of it — the shot line crosses the open doorway at x ≈ 34.9 [D leaf].
+    w.walk_to(Wp::new(34.6, 41.4, 9.8).r(0.6), "door[38] E reach");
+    open_door_facing(&mut w, [34.6, 41.4, 10.5], "door[38]");
+    walk_plain(&mut w, [34.6, 41.4, 7.5], 0.35, "south of door[38], the shot line");
+    let at = [35.6f32, 42.3, 17.47];
+    {
+        let sim = w.scene.sim.as_ref().unwrap();
+        let m = &sim.drones.mines[mine_idx(&w, 383)];
+        assert!(!m.exploded, "#383 still hangs before the shot");
+        let bp = sim.bond.pos;
+        let eye_y = bp[1] + sim.bond.eye - sim.bond.crouch_drop;
+        let d = ((at[0] - bp[0]).powi(2) + (at[1] - eye_y).powi(2) + (at[2] - bp[2]).powi(2)).sqrt();
+        eprintln!("[mines] the range shot: bond {bp:?} eye_y {eye_y:.2} → #383 {at:?}, d {d:.2}");
+        assert!(d > 8.0, "the shot is from RANGE ({d:.2} u — the task's > 8)");
+        let di = walker::door_near(sim, [34.6, 41.4, 10.5]).expect("door[38]").1;
+        assert!(sim.drones.doors.list[di].state & 0xc != 0,
+            "door[38] is still open inside the auto-close window [M 0x13660c-0x136700]");
+    }
+    let d = shoot_mine(&mut w, 383, at, "the doorway fence #383 from 10 u");
+    assert!(d > 8.0, "#383 takes the round from RANGE ({d:.2} u)");
+    w.wait(10); // the blast's case-0x4B entries land on the neighbours' NEXT update [M 0x17c518]
+    {
+        let sim = w.scene.sim.as_ref().unwrap();
+        let m = &sim.drones.mines[mine_idx(&w, 383)];
+        assert!(m.exploded, "#383 is gone (obj+0xFE bit 0 [M 0x17cb7c-0x17cb88])");
+        assert_eq!(m.cause, nf_game::worldobj::MINE_BULLET,
+            "the cause is the bullet's mirrored contact [M 0x1ea398:160-233]");
+        // The blast-played proof is the neighbours' chain: #384/#385 can only explode through the
+        // blast's own `Explode_Propagate` case-0x4B entries (a referenced HITDATA per mine in
+        // reach, attacker = the exploding mine [M 0x17c518 case 0x4B; 0x17cde0]) — there is no
+        // other writer of MINE_BLAST. (The `drones.explosions` list is the view's per-tick event
+        // feed — the grenade section clears it every tick [M drone.rs `explosions.clear()`] — so
+        // it is empty by the time the boom is observed and proves nothing here.)
+        for plc in [384usize, 385] {
+            let m = &sim.drones.mines[mine_idx(&w, plc)];
+            assert!(m.exploded && m.cause == nf_game::worldobj::MINE_BLAST,
+                "#{plc} goes on #383's blast (cause {})", m.cause);
+        }
+        eprintln!("[mines] #383's blast chain: causes {:?}, bond health {:.1}",
+            [384usize, 385].map(|p| sim.drones.mines[mine_idx(&w, p)].cause), sim.drones.health.health);
+    }
+}
