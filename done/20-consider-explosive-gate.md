@@ -113,3 +113,10 @@ to ~4-5 u — the corridor-11 d3 lob shape — resting inside the 12 u scan with
 ## Usage
 
 not visible to me
+
+---
+## ntfy failed
+
+1. curl: (28) Connection timed out after 20000 milliseconds
+2. python urllib: URLError <urlopen error [Errno 101] Network is unreachable>
+3. wget: no output, killed after 25 s (connection never established)
