@@ -12,3 +12,6 @@ Do:
 1. Keep the 13 fix, but do not change shared walker behaviour for other levels: make the new rules opt-in for the 07000013 walk (or prove a single rule set that passes every real-damage walk).
 2. No health or ammo writes; real input only.
 3. Run every walkreal_*_live real-damage test (01, 02, 03, 13, 14, 16 at least), walkreal_07000013_live, then the full suite.
+
+---
+claimed-by: sandbox3 at 2026-11-02T07:19Z
