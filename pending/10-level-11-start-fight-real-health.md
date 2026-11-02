@@ -8,6 +8,3 @@ Do:
 1. Read the whole damage log for the run (who hit, how often, from where). Compare the start guards' fire rate, accuracy and damage with the game [M the drone weapon code for 0x1c; start_corridor_guard_07000011_live's [L] pins are the game's own timings].
 2. Fix the port where it differs (cite it); otherwise give the walk a player's tactic (cover, kill order, the level's pickups). No health writes.
 3. Un-ignore the walk; run walkreal_07000011_live, start_corridor_guard_07000011_live, every real-damage walk, then the full suite.
-
----
-claimed-by: sandbox4 at 2026-11-02T16:50Z
