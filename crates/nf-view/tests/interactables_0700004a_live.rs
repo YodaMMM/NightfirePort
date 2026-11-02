@@ -13,6 +13,11 @@
 //!   drone fire leg is parked there: no clear eye→drone ray from the ride line, 0/2400).
 //! - 0x24 start — the spawn (`walkreal_0700004a_live`).
 //! - 0x19/0x47 CELs — static geometry, draws (`census_0700004a.rs`'s mesh pass).
+//! THIS file (level-4a-interactables-2) adds the legs the model file shape wants per KIND:
+//! the top reveal plate under the rider's own WALK, the bare LIFT ride to the landing hold,
+//! the player-triggered SimpleScript leg (the bottom plate's walk-in fires the lobby SP and
+//! the level end), and the census pin that the absent kinds of the model list are truly
+//! absent from m41 [D].
 //! Absent from the playable map (m41) [D census + docs/levels/0700004a.md §7]: pickups (0xf0 —
 //! the m6/m14 rows are resource-map placements, not instantiated in play), switches/consoles
 //! (0x29, m6 only), monitors (0x2d, m13 only), gadget locks (0x2e, m6 only), breakables (0x20),
@@ -227,4 +232,146 @@ fn the_riders_e_opens_unlocked_landing_doors_and_refuses_on_locked() {
         assert_ne!(sim.drones.doors.list[d110].ch_lock, 0x40,
             "the lock edge cleared the door's ch_lock [M Door_Update 0x1363c8]");
     }
+}
+
+/// KIND 0xea, the player's own WALK leg: the first real steps on the platform carry Bond into
+/// the top reveal plate #277's volume (0.90–5.18, −9.87..−7.65, −5.74..−1.01 [D #277]) —
+/// mask 8 (the player walk-in bit of Trigger_Hit's 0x18 player|drone gate [M 0x1b1fc8:56]) —
+/// ch 0x4d rises, the objective reveals, and the TouchOnce deletes itself (the glist-0x10
+/// delete [M Trigger_Update 0x1b1a78:72-74 case 1 + 0x1b1d78-0x1b1d90]). Sisters: ch 0x4d low
+/// and the plate present-and-live at load — the walk, not the load, fires it.
+#[test]
+fn the_riders_first_steps_walk_onto_the_top_reveal_plate() {
+    let mut r = Ride::new();
+    {
+        let sim = r.w.scene.sim.as_ref().unwrap();
+        assert!(!sim.drones.channels.on(0x4d), "sister: ch 0x4d low at load [D #277 out]");
+        let t = sim.drones.triggers.iter().find(|t| t.placement == 277).expect("plate #277");
+        assert_eq!(t.out, 0x4d, "the reveal plate's out channel [D #277]");
+        assert_eq!(t.mask & 0x8, 0x8, "the player walk-in mask bit [D #277; M Trigger_Hit 0x1b1fc8:56]");
+        assert!(!t.gone, "sister: the TouchOnce is live before the walk");
+        assert!(sim.bond.grounded, "Bond stands on the platform before the steps");
+    }
+    // The real steps (the walkreal board window's pattern): walk north to the volume's north
+    // edge and back — turn + forward only, no teleports, no position writes.
+    // Sister first: 90 bare ticks (the script's pre-descent window) — whether the bare stand
+    // inside the spawn volume fires the plate decides the walk's causality; the walkreal-a
+    // stand-in missed it on a pure vertical ride, so bare-stand firing is NOT assumed [S].
+    for _ in 0..90u32 { r.step(Input::default(), false); }
+    let bare_fired = r.w.scene.sim.as_ref().unwrap().drones.channels.on(0x4d);
+    for k in 0..84u32 {
+        let sim = r.w.scene.sim.as_ref().unwrap();
+        let p = sim.bond.pos;
+        let target = if k < 42 { [3.2, 0.0, -2.2] } else { [3.2, 0.0, -3.8] };
+        let desired = (target[0] - p[0]).atan2(target[2] - p[2]);
+        let err = walker::wrap_pi(desired - sim.bond.yaw);
+        let input = Input { turn: err.clamp(-0.08, 0.08), forward: 1.0, ..Default::default() };
+        r.step(input, false);
+        if r.w.scene.sim.as_ref().unwrap().drones.channels.on(0x4d) { break; }
+    }
+    {
+        let sim = r.w.scene.sim.as_ref().unwrap();
+        assert!(sim.drones.channels.on(0x4d),
+            "the walk-in fires the reveal plate's ch 0x4d (bare-stand first: {bare_fired}) [D #277; M Trigger_Update 0x1b1a78:72-74 case 1]");
+        assert_eq!(sim.drones.mission.states[17][0], 3, "ch 0x4d reveals 'Gain access to lobby' [L record 4a]");
+        let t = sim.drones.triggers.iter().find(|t| t.placement == 277).expect("plate #277 after");
+        assert!(t.gone, "the TouchOnce deleted itself after firing [M 0x1b1d78-0x1b1d90's glist-0x10 delete]");
+    }
+}
+
+/// KIND 0x31 + the 0xd9 lift SP #42 — the LIFT ride itself, bare: the player's only act is
+/// standing on the platform. SP #42 "SCRIPTPLAYER_Lift" (mode 1 auto-start, out ch 0x22 [D
+/// #42]) plays 0x06000571 and the platform descends the key line (y0 at key t90, y0 − 150 at
+/// key t5040 [D keys]); at t1610 the script writes ch 0x40 [D keys], the −52 landing cut-scene
+/// SP #289 triggers on it [M SP_Hit 0x1dc470:17-19's out-channel bit] and disables Bond; the
+/// hand-back re-enables him ON the held platform [M Script_Free 0x1da880:46-49] while the
+/// script's pause (event 3 [D 0x06000571]) keeps the car at the landing hold. Sisters: at load
+/// ch 0x40 is low and every door closed — the ride, not the load, lands.
+#[test]
+fn the_bare_ride_carries_the_player_to_the_landing_hold() {
+    let mut r = Ride::new();
+    {
+        let sim = r.w.scene.sim.as_ref().unwrap();
+        assert!(!sim.drones.channels.on(0x40), "sister: ch 0x40 low at load [D keys — the t1610 writer]");
+        assert!(sim.drones.doors.list.iter().all(|d| d.state == nf_game::door::CLOSED),
+            "sister: every door closed at load");
+    }
+    let mut saw_disable = false;
+    let mut enabled_again = false;
+    for _ in 0..4000u32 {
+        r.step(Input::default(), false);
+        let sim = r.w.scene.sim.as_ref().unwrap();
+        if sim.disabled { saw_disable = true; }
+        if saw_disable && !sim.disabled { enabled_again = true; break; }
+    }
+    {
+        let sim = r.w.scene.sim.as_ref().unwrap();
+        let y0 = r.y0;
+        let drop = y0 - sim.bond.pos[1];
+        assert!(saw_disable && enabled_again,
+            "the landing scene disables and the hand-back re-enables [D 0x060006cf s9/s26; M Script_Free 0x1da880]");
+        assert!(sim.drones.channels.on(0x40), "the lift script's t1610 event wrote ch 0x40 [D keys]");
+        assert!(sim.bond.grounded, "the hand-back grounds Bond on the held platform [M 0x194df0's cc rule]");
+        assert!((42.0..50.0).contains(&drop),
+            "the car holds at the landing: the key line put it y0 − 46.06 at t1610 and the script's pause keeps it [D keys] — drop {drop:.2}");
+    }
+}
+
+/// KIND 0xd9, the SimpleScript the player TRIGGERS: the ride's end carries the player into the
+/// bottom plate #62's volume (out ch 0x84 [D #62]); the lobby cut-scene SP #276 (script
+/// 0x060006d3, out 0x84, mask 1 [D #276]) waits on its own out channel [M SP_Hit
+/// 0x1dc470:17-19], runs (state 2 [M SP_Update 0x1dbda8's case 1→2]) under the banner, and the
+/// mission's LevelEnd follows [M 0x182c60:73]. Sisters: at load ch 0x84 is low, the #276 player
+/// waits (present, not deleted, not running), and no exit stands.
+#[test]
+fn the_bottom_plate_walk_in_triggers_the_lobby_script_and_the_level_end() {
+    let mut r = Ride::new();
+    {
+        let sim = r.w.scene.sim.as_ref().unwrap();
+        assert!(!sim.drones.channels.on(0x84), "sister: ch 0x84 low at load [D #62 out]");
+        assert!(sim.drones.level_exit.is_none(), "sister: no level end at load");
+        let p = sim.drones.scripts.players.iter().find(|p| p.scripts[0] == 0x0600_06d3)
+            .expect("the lobby SP #276 exists at load");
+        assert!(!p.deleted, "the lobby SP waits at load");
+        assert_ne!(p.state, 2, "sister: the lobby script is not running at load [M SP_Update 0x1dbda8]");
+    }
+    // The bare ride to the bottom (the descent resumes after the landing hold): the car
+    // carries Bond into plate #62's volume — the player's trigger is the ride's own walk-in.
+    let mut saw_84 = false;
+    let mut ran_276 = false;
+    let mut exited = false;
+    for _ in 0..9000u32 {
+        r.step(Input::default(), false);
+        let sim = r.w.scene.sim.as_ref().unwrap();
+        if sim.drones.channels.on(0x84) { saw_84 = true; }
+        if sim.drones.scripts.players.iter().any(|p| p.scripts[0] == 0x0600_06d3 && p.state == 2) {
+            ran_276 = true;
+        }
+        if sim.drones.level_exit.is_some() { exited = true; break; }
+    }
+    {
+        let sim = r.w.scene.sim.as_ref().unwrap();
+        assert!(saw_84, "the bottom plate #62 fired ch 0x84 under the ride's walk-in [D #62]");
+        assert!(ran_276,
+            "the lobby script #276 ran under the banner [D #276; M SP_Update 0x1dbda8 case 1→2]");
+        assert!(exited,
+            "the mission's LevelEnd follows the bottom plate [M 0x182c60:73; walkreal's run: 0x84 then the exit ~800 ticks later]");
+    }
+}
+
+/// The model list's kinds that m41 does NOT place [D census, docs/levels/0700004a.md §7]:
+/// pickups (0xf0 — the m6/m14 rows are resource-map placements, not instantiated in play),
+/// switches/consoles (0x29, m6 only), monitors (0x2d, m13 only), keypad locks (0x2e, m6 only),
+/// breakables (0x20), rigid bodies (0xd8), SimpleScripts (0xe2) — the absent kinds have no
+/// live leg on this map because the map places none of them. Sister: the kinds the map DOES
+/// place keep the §7 counts (a parse or data regression fails here first).
+#[test]
+fn m41_places_none_of_the_pickup_switch_monitor_lock_breakable_rigid_or_simplescript_kinds() {
+    for k in [0xf0u32, 0x29, 0x2d, 0x2e, 0x20, 0xd8, 0xe2] {
+        assert!(m41_rows_of_kind(k as u8).is_empty(), "kind {k:#04x}: absent from m41 [D census]");
+    }
+    assert_eq!(m41_rows_of_kind(0xea).len(), 13, "13 TouchOnce plates on m41 [D census]");
+    assert_eq!(m41_rows_of_kind(0xdb).len(), 162, "162 doors on m41 [D census]");
+    assert_eq!(m41_rows_of_kind(0xd9).len(), 4, "4 SPs on m41 [D census]");
+    assert_eq!(m41_rows_of_kind(0x31).len(), 1, "1 platform row on m41 [D census]");
 }
