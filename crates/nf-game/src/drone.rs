@@ -10554,15 +10554,23 @@ impl Drone {
                 if self.unseen_ticks > 15 { return COMBAT_NO_SIGHT; }
                 let cover = self.cover_available(d, true);
                 if cover { return RUN_FOR_COVER; }
-                // `DroneWeap_CanThrowGrenade` — the decomp checks `+0x568 & 0xFFFF00FF == 0xA0002`
-                // (anim class 2, type 0xA = AIM_STAND). Our port checks `anim.class == 2`.
-                let can_throw = self.anim.class == 2 && self.grenade_count > 0 && self.dist >= 8.0 && self.dist <= 20.0;
+                // The game's case-0x10 throw+move gate [M DroneFunc_CombatState 0x148338 case 0x10]:
+                // `*(u64*)(drone+0x568) & 0xffff00ff == 0xa0002` — the playing danim's class (+0x568,
+                // low byte) == 2 AND its anim id (+0x56A) == 0xA AIM_STAND. BOTH DroneWeap_CanThrowGrenade
+                // (→ 0x2d) and NDrone2_ChooseCombatMove sit behind this one gate. DroneWeap_CanThrowGrenade
+                // 0x17a798 then draws its 50% Rand(2) BEFORE the dist check (0xBCC≠0 && 0xBCE≠0 → Rand →
+                // opponent → 8.0 ≤ +0x1a0 ≤ 20.0 → CanDoAnimState(0x49)) — so the roll is consumed on every
+                // gated tick with grenades in hand, even out of throw range; the port's old pre-gate
+                // (`dist 8..20` before the roll) skipped those draws and desynced the shared RNG stream,
+                // and its class-only gate let a class-2 danim that is NOT AIM_STAND roll (and throw)
+                // where the game's anim-id half of the gate refuses.
+                let aim_stand = self.anim.class == 2 && self.anim.state == anim_state::AIM_STAND;
                 if std::env::var_os("NF_AILOG").is_some() && self.grenade_count > 0 {
-                    eprintln!("[ai:gate] guard {} AIM_STAND_FIRE gate: anim={}.{} dist {:.1} unseen {} cover {} clip {} grenades {}x{:#x} can_throw={}",
-                        self.index, self.anim.class, self.anim.state, self.dist, self.unseen_ticks, cover, self.clip, self.grenade_count, self.grenade_weapon, can_throw);
+                    eprintln!("[ai:gate] guard {} AIM_STAND_FIRE gate: anim={}.{} aim_stand {} dist {:.1} unseen {} cover {} clip {} grenades {}x{:#x}",
+                        self.index, self.anim.class, self.anim.state, aim_stand, self.dist, self.unseen_ticks, cover, self.clip, self.grenade_count, self.grenade_weapon);
                 }
-                if can_throw && self.can_throw_grenade(d, rng) { return GRENADE_THROW; }
-                if self.anim.class == 2 && self.anim.state == anim_state::AIM_STAND {
+                if aim_stand && self.can_throw_grenade(d, rng) { return GRENADE_THROW; }
+                if aim_stand {
                     let m = self.choose_combat_move(d, rng);
                     if m != 0 { return m; }
                 }
