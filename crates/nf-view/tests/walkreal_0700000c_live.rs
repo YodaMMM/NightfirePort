@@ -406,7 +406,7 @@ fn walk_the_whole_mission_from_the_start_to_the_0d_handoff() {
 /// the app default; the fights are the walker's own plain return fire. The two documented
 /// route stand-ins are links from the master walk (neither writes health, armour or ammo).
 #[test]
-#[ignore = "real health: the drone damage half is fixed (survives to tick 8700 at 19.8 hp, 80.2 taken, 8 fights — the spawn-stats re-roll gives the game's shared type record); still ignored for the yard climb, which never mantles past climb_top 12.139 [M 0x196118/0x196310] (movement, not damage)"]
+#[ignore = "real health: 80 damage by tick 8700 (weapon 0x1e drones hit from ~34 u), then the yard climb never mantles"]
 fn walk_the_whole_mission_from_the_start_to_the_0d_handoff_real_damage() {
     walker::walker::with_real_damage(walk_the_whole_mission_from_the_start_to_the_0d_handoff);
 }
