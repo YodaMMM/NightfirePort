@@ -18,3 +18,5 @@ Plan:
 
 Work log:
 - (23:40) sandbox reused (repo/work/ISO/nf-queue present); new token set, fetched; branch created from origin/master 6042ee53; WORKLOG started; first checkpoint pushed.
+Work log:
+- (00:08) Census re-run [D] (probe): 21 kind-0xD8 bodies — bucketswing #4 (mass 3), 12 lamps (1), 8 pans (2), ALL type 1; no 0xDF wind cel on 07000002. The kind's player-touchable path pinned: class 3 walk touch falls through RB_RestingContactRot 0x1d73a0 (sister: rest-hold 240 ticks + walk-into-bucket moves nothing + the body blocks the 0x800 walk query), gunfire lands the class-5 arm (bucket swings, anchor never translates [M 0x1d7810 type-0-only]). 2 tests added to interactables_07000002_live.rs (now 18, 18/0 green); walkreal_07000002_live 2/0; nf-game 1028/0/9ign. The doc's stale "unported (drawn at rest)" RB row corrected (the evolution landed in rigid-body-cylinder-sweep). No port gap exposed by the new tests.
