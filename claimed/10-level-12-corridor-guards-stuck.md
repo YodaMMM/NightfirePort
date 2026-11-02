@@ -9,3 +9,6 @@ Do:
 2. Name what blocks them: a static/world run (which object or room piece), a door or panel collider, the drone-drone push, or a path/node choice. Compare against the game's code for that piece [M] and the level data [D].
 3. Fix the port where it differs from the game; cite the decompile. Add a live test: both guards leave their start spots and reach Bond's corridor within the game's timing.
 4. Run walkreal_07000012_live, interactables_07000012_live, every stuck-guard test, then the full suite.
+
+---
+claimed-by: sandbox5 at 2026-11-02T07:53Z
