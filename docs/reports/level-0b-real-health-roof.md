@@ -97,3 +97,15 @@ the dart law it already ported.
 
 not visible to me (no token, credit, context-window or cost figures are exposed to this
 session's environment).
+
+## ntfy failed
+
+All three fallbacks, in order, with their exact output:
+
+1. `curl -sS -m 20 -H "Title: NightfirePort" -d "…" https://ntfy.sh/nightfire-yoda-8k3x` →
+   `curl: (28) Connection timed out after 20001 milliseconds`
+2. `python3 -c "… urlopen(u.Request('https://ntfy.sh/nightfire-yoda-8k3x', …), timeout=20)"` →
+   `urllib.error.URLError: <urlopen error [Errno 101] Network is unreachable>`
+3. `wget -q -O- --post-data "…" https://ntfy.sh/nightfire-yoda-8k3x` → no output, hung past the
+   25 s hard timeout (the 60 s combined run was killed by `timeout`).
+
