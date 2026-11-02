@@ -12,6 +12,51 @@ pub use walker::{Act, Walker, Wp, wrap_pi};
 
 /// The spawn asserts + legs 1-9c of the main walk, ending on the slot jump's band landing
 /// (grounded, floor 10.2..11.7, x > 42.6). Deterministic: the caller continues from here.
+
+/// The yard's deck-sniper stands (real damage only): whoever of the alive weapon-0x1e
+/// hostiles within 48 u is actually hitting Bond (a hit in the last 600 frames — the snipers'
+/// observed beat is 170-360 frames [L the real-health run's fight traces]) and whose STRICT
+/// gun rays clear from here (common/damage_log.rs `exposed_part_gun_rays`) gets the aimed-0x1e
+/// stand: the direct number-key switch through the real input path [M Player_WeaponChange
+/// mode 0], then the fight machinery. The AIMED sniper's spread is zero [M player_spread - the
+/// 0x4080d0 record aims exact] so a stationary sentry's box is hit at d ~33 u where the
+/// sidearm's pull bloom (16 x 0.0014 rad ~ 0.75 u at 33 u [M Bullet_init 0x12c5a0:139-170])
+/// missed every round; even a missed stand suppresses (the fired-at sniper's beat went quiet
+/// for the whole climb [L]). Movers (#15 patrols) waste the clip — the stand is capped and the
+/// walk moves on. The switch is left in hand (the climb's `!input.aiming` yaw ease [M
+/// 0x196310:27-33] reads the stick alone).
+fn yard_sniper_stands(w: &mut Walker, label: &str, max: usize) {
+    for _ in 0..max {
+        let di_opt = {
+            let sim = w.scene.sim.as_ref().unwrap();
+            let now = sim.drones.frame;
+            let b = sim.bond.pos;
+            (0..sim.drones.list.len()).find(|&i| {
+                let d = &sim.drones.list[i];
+                if !(d.present && d.enabled && !d.corpse && d.health > 0.0 && d.team == 1) { return false; }
+                if d.weapon != 0x1e { return false; }
+                let dxz = ((d.pos[0] - b[0]).powi(2) + (d.pos[2] - b[2]).powi(2)).sqrt();
+                if dxz > 48.0 { return false; }
+                let hitting = sim.drones.player_hits.iter().rev()
+                    .take_while(|h| now.saturating_sub(h.0) <= 600)
+                    .any(|h| h.1 == i);
+                if !hitting { return false; }
+                walker::DamageLog::exposed_part_gun_rays(&sim, i).is_some()
+            })
+        };
+        let Some(di) = di_opt else { break };
+        for _ in 0..120 {
+            let sim = w.scene.sim.as_mut().unwrap();
+            if sim.gun.weapon == 0x1e { break; }
+            sim.step_bond(nf_game::player::Input { switch_to: Some(0x1e), ..Default::default() }, false, false, false);
+            w.total_ticks += 1;
+        }
+        let cap = if label == "pre-climb" { 300 } else { 700 };
+        let killed = w.stand_and_fire(di, cap);
+        eprintln!("[0c] the yard sniper stand ({label}): drone #{di} killed {killed}");
+    }
+}
+
 pub fn walk_spawn_to_the_band(iso: &str) -> Walker {
     let iso = iso.to_string();
     let mut w = Walker::new(nf_view::load_with_carry(&iso, "0700000c.bin", false, None).unwrap());
@@ -604,7 +649,27 @@ pub fn walk_spawn_to_the_band(iso: &str) -> Walker {
     w.walk_to(Wp::new(40.0, 1.4, -184.5).r(2.0), "the yard west");
     w.walk_to(Wp::new(20.0, 1.4, -184.5).r(1.5), "the yard west 2");
     w.walk_to(Wp::new(11.6, 1.2, -186.6).r(1.2), "the ladder base");
-    // Leg 7 (REAL): the ladder walk-in grab + climb (the walk substate rides the DEFAULT arm
+    // Leg 6b (REAL, the yard's deck snipers): the deck snipers (weapon 0x1e, -16 a hit) sit on
+    // the deck 10.7-11 u ABOVE the yard floor - outside the shared shooters window's 7.5
+    // vertical reach (common/damage_log.rs), the fights never answer them, and #18
+    // ((36.4, 12.1, -208.8), hp 10, a STATIONARY sentry [L the real-health run's fight trace])
+    // killed Bond ON the ladder at y 7.95 (two -16s on the climb [L]). A player switches to the
+    // sniper 0x1e (owned [D the boot loadout]) and looks up: the AIMED sniper's spread is zero
+    // [M player_spread - the 0x4080d0 record aims exact], and the aimed round lands on a
+    // stationary box at d ~33 u where the sidearm's pull bloom (16 x 0.0014 rad ~ 0.75 u at 33
+    // u [M Bullet_init 0x12c5a0:139-170]) and a patrolling target's flight-time displacement
+    // (#15 walked ~3 u per flight [L the fight trace]) miss. The game's climb has no pain gate
+    // to hide behind [M Player_Climb 0x196310 - the stick advances the climb; Player_HandlePain
+    // 0x1902c8 writes no substate] - only death ends it [M Player_CheckForDeath 0x190810] - so
+    // the snipers die before the climb. Real damage only (the top-up walk's choreography is
+    // pinned without these stands).
+    yard_sniper_stands(&mut w, "pre-climb", 1);
+    // The pre-climb stand is SUPPRESSION only: the upward flight from the yard floor never
+    // lands on the deck ([L] the aimed 0x1e, zero spread [M player_spread], a stationary
+    // sentry, perfect aim - three clips dry, tgt hp 10.0 - while the level-geometry deck
+    // fights land), so the cap keeps the base exposure short; the fired-at snipers' beat went
+    // quiet for the whole climb after a stand [L the real-health runs].
+    // Leg 7 (REAL): the ladder walk-in grab + climb    // Leg 7 (REAL): the ladder walk-in grab + climb (the walk substate rides the DEFAULT arm
     // r 0.55 [M 0x1953f4 via the jump table @0x2fc0d0]).
     w.walk_to(Wp::new(10.3, 1.05, -186.8).r(0.7), "the ladder approach");
     let mut climbed = false;
@@ -648,6 +713,14 @@ pub fn walk_spawn_to_the_band(iso: &str) -> Walker {
             sim.bond.pos, sim.bond.grounded);
     }
     eprintln!("[0c] the yard ladder climbed for real to y {:.2}", w.scene.sim.as_ref().unwrap().bond.pos[1]);
+
+    // The ladder-top stands (real damage only): on the walkway Bond is LEVEL with the deck
+    // snipers and #1 ((13.0, 12.1, -196.0), d 7.6 from the top [L the yard census]) — too
+    // steep to shoot from the yard floor (its gun rays were false there) — killed Bond within
+    // 40 ticks of the mantle at 3.8 hp [L the real-health run's death at (9.25, 12.12, -188.53),
+    // tick 9741]. The same aimed-0x1e stands, now at deck level where the deck-leg fights
+    // already land.
+    yard_sniper_stands(&mut w, "ladder-top", 3);
 
     // Leg 8 (REAL): the patrol-ring diagonal from the ladder top to the north-west corner
     // ((6-9,−188) → (9-11,−190) → (11-12,−192) → (12-13,−194) [D probes]) and west along the

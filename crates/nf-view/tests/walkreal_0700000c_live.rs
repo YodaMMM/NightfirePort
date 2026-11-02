@@ -406,7 +406,7 @@ fn walk_the_whole_mission_from_the_start_to_the_0d_handoff() {
 /// the app default; the fights are the walker's own plain return fire. The two documented
 /// route stand-ins are links from the master walk (neither writes health, armour or ammo).
 #[test]
-#[ignore = "real health: 80 damage by tick 8700 (weapon 0x1e drones hit from ~34 u), then the yard climb never mantles"]
+#[ignore = "real health: the yard climb is a sniper knife-fight - the deck snipers (weapon 0x1e, -16 a hit) bleed Bond to ~19.8 by the yard (#18: 51.8 in 4 hits [L the damage log]) and kill him ON the ladder at y 7.95; the port's climb has NO pain gate (Bond climbed at 19.8 -> 3.8 hp [M Player_Climb 0x196310 - the stick advances; Player_HandlePain 0x1902c8 writes no substate]) - only death ends it [M Player_CheckForDeath 0x190810]; the gated real-damage stands suppress #18's beat but the UPWARD player rounds never land on the deck (the aimed 0x1e, zero spread [M player_spread], perfect aim, a stationary box at d 33 - three clips dry [L]; the level-geometry deck fights land) - the scoped-flight vs eye-ray-predictor gap is the follow-up"]
 fn walk_the_whole_mission_from_the_start_to_the_0d_handoff_real_damage() {
     walker::walker::with_real_damage(walk_the_whole_mission_from_the_start_to_the_0d_handoff);
 }
