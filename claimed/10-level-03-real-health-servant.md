@@ -8,3 +8,6 @@ Do:
 1. Find why the real-damage run differs (the return-fire fights kill or move the servant, a different kill order, the damage log's return fire shooting him) and whether the game would let that happen.
 2. Fix the walk (or the port, if the port lets something die that the game protects — cite it). Real input only.
 3. Un-ignore the test; run walkreal_07000003_live, every real-damage walk, then the full suite.
+
+---
+claimed-by: sandbox5 at 2026-11-02T14:53Z
