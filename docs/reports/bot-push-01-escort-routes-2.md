@@ -111,3 +111,11 @@ the next session's first question (a master-branch run of 04/06/07/0a/0c/13/14/1
 
 not visible to me — this environment exposes no token, credit, context-window or cost figures
 for the session.
+
+## ntfy
+
+- `curl -sS -m 20 ... https://ntfy.sh/nightfire-yoda-8k3x` → `curl: (28) Connection timed out
+  after 20001 milliseconds`
+- python urllib → `urllib.error.URLError: <urlopen error [Errno 101] Network is unreachable>`
+- `wget -q -O- --post-data "..." https://ntfy.sh/nightfire-yoda-8k3x` → no output, **exit 0**
+  (likely delivered; the same silent-exit-0 shape the level-14 tripbomb task saw).
