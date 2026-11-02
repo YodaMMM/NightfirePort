@@ -300,7 +300,7 @@ fn walk_spawn_to_the_lower_floor_load_point() {
 /// loads are the game's own exit → next-level path ([M ResetMap_LevelToLoad 0x1b24b8;
 /// Player_RamLoad 0x1957a8]), not teleports.
 #[test]
-#[ignore = "real health: dies at tick 3193 (10.1, 1.1, -13.8) to drone #10 weapon 0x1c at 9.7 u"]
+#[ignore = "real health (2026-11-02, level-11-start-fight-real-health): dies at tick 2789 (19.9, 1.1, -10.9) — drone #10 (skin 0x05000008) weapon 0x1c, 8 pellets x 6.0 TooClose in one tick at 0.6 u; the flight-B blocker stand is fixed (shoot_blockers), the south-corridor tactic is not"]
 fn walk_spawn_to_the_lower_floor_load_point_real_damage() {
     walker::with_real_damage(walk_spawn_to_the_lower_floor_load_point);
 }
