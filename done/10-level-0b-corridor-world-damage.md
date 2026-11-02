@@ -11,3 +11,8 @@ Do:
 
 ---
 claimed-by: sandbox3 at 2026-11-02T14:56Z
+
+---
+## Report (done, 2026-11-02T16:43Z)
+
+Closed by the driver: the report is on `s/level-0b-corridor-world-damage` (docs/reports/level-0b-corridor-world-damage.md); the worker didn't run finish.sh.
