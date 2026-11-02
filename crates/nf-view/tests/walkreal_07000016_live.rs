@@ -581,21 +581,27 @@ fn press_use_until(w: &mut Walker, at: [f32; 3], max: u32, done: impl Fn(&nf_vie
 /// Input only after the spawn (steer/fire/use; the walker's damage allowance tops up Bond's
 /// health against the guards — the volume's own contact count is asserted 0 instead, so the
 /// allowance cannot hide a pulse death).
-/// consider-explosive-gate-2 2026-11-02 IGNORED, measured: the faithful throw-roll cadence [M
-/// DroneWeap_CanThrowGrenade 0x17a798 disasm — the 50% Rand(2) precedes the dist check, so the
-/// frag-holding pit guards (#186/#188, 3× frag [D p11 0x43]) roll every aim-stand 0x68 tick] shifts
-/// the shared RNG stream; the walk now runs the pit squad dry (weapon 0x11 clip 0 spare 0, cycling
-/// twice) and the 0x82 lift-out cinema [D mux #633] never starts within its 3000-tick window. The
-/// anim-id half of the gate alone passes this file 14/14 — only the cadence retime is at play.
-/// Live check for the main agent: in the real game does the pit squad (all four ch 0x17/0x18/0x19/
-/// 0x1a deaths) fall to a walked Bond with the Delta Repeater's own ammo, or does the mission's
-/// flow expect the guards' frag rolls (and their self-flee) here.
-#[ignore = "the faithful 0x68 roll cadence [M 0x17a798 disasm] retimes the pit squad fight: Bond runs dry (0x11 clip 0 spare 0) and ch 0x82 (mux #633) never starts within 3000 ticks"]
+/// consider-explosive-gate-3 2026-11-02 UN-IGNORED with the two walk-side laws the faithful
+/// throw-roll cadence [M 0x17a798 disasm — the 50% Rand(2) precedes the dist check, so the frag
+/// holders roll every aim-stand 0x68 tick] exposed (both measured on this branch):
+/// 1. the re-arm — the chain carry reaches the chaser nearly dry (the measured run: the Delta
+///    0x11 at clip 3 spare 9 at her spawn), so the walk now re-arms from the corridor guards'
+///    AR drops after her kill (the walk-over take [M 0x18e650] + the auto-equip [M 0x1a6eb0];
+///    the task's own "ammo pickups, weapon choice" tactic — no ammo writes);
+/// 2. the unskipped lift-out — AND #286 (0xbf·0xc0 → 0x82 [D]) fires the moment both inputs
+///    latch, and the retime can land ch 0xbf AFTER ch 0xc0 @7808 [D stream 20] (measured:
+///    +8293), so 0x82 went on while the walk's cut-scene skip was still up and the fast-forward
+///    played the whole 0x06000632 cinema inside one tick — the disable window was never
+///    observed and the old 3000-tick wait starved. The skip now comes off before the squad
+///    phase and the mission's own transition always plays out.
+/// Live check for the main agent: in the real game the pit squad (all four ch 0x17/0x18/0x19/
+/// 0x1a deaths) falls to a walked Bond with the Delta Repeater's own ammo, or the mission's
+/// flow expects the guards' frag rolls (and their self-flee) here.
 #[test]
 fn walk_the_chasers_defeat_completes_the_mission() {
     let iso = iso();
     let mut w = Walker::new(nf_view::load_with_carry(&iso, "07000016.bin", false, Some(&carry(&[0x47, 0x48, 0x4a, 0x54, 0xce, 0x4b]))).unwrap());
-    let (chaser, t0) = walk_to_the_chaser_fight(&mut w);
+    let (chaser, t0) = walk_to_the_chaser_fight(&mut w, false);
     assert_armed_for_the_chaser(w.scene.sim.as_ref().unwrap(), &CHAIN_OWNED, "the 15 → 16 chain");
     // Dry mid-fight (the 15 carry's Delta Repeater holds 12 rounds here): the player switches to
     // another carried gun with ammo (or, with none, picks up a fallen guard's), then fights on.
@@ -620,7 +626,7 @@ fn bond_is_armed_at_the_chaser_fight_after_the_15_handoff() {
     w.wait_enabled(3000, "the launch-centre arrival");
     w.wait(60);
     assert_armed_for_the_chaser(w.scene.sim.as_ref().unwrap(), &CHAIN_OWNED, "the 15 → 16 arrival");
-    walk_to_the_chaser_fight(&mut w);
+    walk_to_the_chaser_fight(&mut w, false);
     assert_armed_for_the_chaser(w.scene.sim.as_ref().unwrap(), &CHAIN_OWNED, "the 15 → 16 chain");
 }
 
@@ -635,7 +641,7 @@ fn bond_is_armed_at_the_chaser_fight_on_a_direct_load() {
     w.wait_enabled(3000, "the launch-centre arrival");
     w.wait(60);
     assert_armed_for_the_chaser(w.scene.sim.as_ref().unwrap(), &COLD_OWNED, "the cold 16 arrival");
-    walk_to_the_chaser_fight(&mut w);
+    walk_to_the_chaser_fight(&mut w, false);
     assert_armed_for_the_chaser(w.scene.sim.as_ref().unwrap(), &COLD_OWNED, "the cold 16 load");
     let diff: Vec<usize> = COLD_OWNED.iter().copied().filter(|w| !CHAIN_OWNED.contains(w)).collect();
     assert_eq!(diff, vec![0x50], "the two paths differ only by the Grapple, as in the game [M 0x1a97c8]");
@@ -643,11 +649,18 @@ fn bond_is_armed_at_the_chaser_fight_on_a_direct_load() {
 
 /// From the arrival to the chaser fight: the approach, the pack cinema (played out), pulse 1 in
 /// the shelter, the chaser's spawn and the door reopening. Returns the chaser's index and the
-/// hand-back tick.
-fn walk_to_the_chaser_fight(w: &mut Walker) -> (usize, u32) {
+/// hand-back tick. `re_arm` (consider-explosive-gate-3, opt-in — only the real-damage finale walk
+/// sets it): after the route's fights, collect the guards' drops lying on the walked ground — the
+/// faithful throw-roll cadence [M 0x17a798] retimes every fight and the measured run reached the
+/// 100-health squad clone #12 with five P2K rounds because every gun was dry (the walk-over take
+/// [M Pickup_Handler 0x18e650] auto-took ONE AR on the way; the player collects the rest while
+/// they are still a few steps behind, not from the pit floor 70 u away, past the walker's own
+/// 45 u resupply reach). The other callers keep their measured timelines.
+fn walk_to_the_chaser_fight(w: &mut Walker, re_arm: bool) -> (usize, u32) {
     w.wait_enabled(3000, "the launch-centre arrival");
     w.wait(100);
     w.walk_route(APPROACH);
+    if re_arm { w.resupply("the route fights' drops (the corridor guards' ARs)"); }
     assert!(w.scene.sim.as_ref().unwrap().drones.channels.on(0x8d), "the route crossed the corridor touch #616 — the button's gate is armed [D]");
     // The launch chain plays out (no skip): ch 0x81 → the pack cinema → the hand-back on the pit
     // floor [D stream-8 key].
@@ -689,6 +702,12 @@ fn finish_after_the_chaser(w: &mut Walker, t0: u32) {
         assert!(sim.drones.mission.status() != 6, "the mission does not complete on the kill [D AND #271 waits for the button]");
     }
     eprintln!("[finale] the chaser down +{}", w.total_ticks - t0);
+    // (consider-explosive-gate-3: an explicit re-arm from the finale's drops was tried here and
+    // measured USELESS — the pit-floor drops are already spent, the corridor guards' ARs having
+    // been auto-taken on the walk past them [M Player_IsBetterWeapon 0x1a6eb0], so the walk-over
+    // take left only dry piles within the walked-path corridor and the detour just stood a dry
+    // Bond on the hazardous pit floor. The game's own walk-over take IS the re-arm: measured, the
+    // corridor fights leave Bond the AR 0x1a in hand.)
     // Back into the shelter before the leaves shut again (6310..6660 [D]) — from where the fight
     // left Bond: a player who fought her from inside the room (west of the blast door at x
     // −11.0) stays in; the full route out to the pit floor and back in wedged on its first leg
@@ -704,6 +723,15 @@ fn finish_after_the_chaser(w: &mut Walker, t0: u32) {
     let n2 = sit_out_pulse(w, "pulse 2 in the shelter");
     assert!((506..=513).contains(&n2), "pulse 2 is 6810..7320 = 510 ticks [D stream 9], got {n2}");
     eprintln!("[finale] pulse 2 over +{}", w.total_ticks - t0);
+    // The cut-scene skip comes OFF before the squad phase (consider-explosive-gate-3): the
+    // lift-out's AND #286 [0xbf·0xc0 → 0x82 [D — the placement's list 191,192]] fires the moment
+    // BOTH inputs latch, and under the faithful throw-roll cadence [M 0x17a798] the squad's
+    // deaths can land AFTER ch 0xc0 @7808 [D stream 20] — the measured run reached ch 0xbf at
+    // +8293 with ch 0xc0 already latched, so 0x82 went on while the skip was still up and the
+    // walker's fast-forward played the whole 0x06000632 cinema within one tick (its disable
+    // window, event 4 at t0 to event 6 at t1057 [D], was never observed between samples). The
+    // mission's own transition must play out unskipped whenever it fires.
+    w.skip_cutscenes = false;
     // The pit squad (group 7, ch 242 @7332): all four must fall for ch 0xbf.
     tick_until(w, 600, "the pit squad spawns", |s| s.drones.list.iter().any(|d| d.present && !d.corpse && matches!(d.death_channel, 23..=26)));
     let t_squad = w.scene.sim.as_ref().unwrap().drones.frame;
@@ -756,8 +784,18 @@ fn finish_after_the_chaser(w: &mut Walker, t0: u32) {
             if fire { w.tick_fire(input); } else { w.tick(input, false); }
         }
         // Dry mid-fight: another carried gun with ammo or the fallen squad's guns, then fight on.
-        let killed = w.shoot(i, "the pit squad")
-            || ((w.switch_to_armed("the pit squad ammo") || w.resupply("the pit squad ammo")) && w.shoot(i, "the pit squad"));
+        // The re-arm ladder (consider-explosive-gate-3): the first two steps are the old measured
+        // order (shoot; switch-or-resupply; shoot) — every kill that lands on them keeps the
+        // original stream — and the ladder only EXTENDS the failure path (the wheel keeps cycling:
+        // the measured run dried the AR and the P2K on the 100-health clone #12 with the frag
+        // 0x34 still further down the owned list, never reached by the single retry).
+        let mut killed = w.shoot(i, "the pit squad");
+        for _ in 0..3 {
+            if killed { break; }
+            let re_armed = w.switch_to_armed("the pit squad ammo") || w.resupply("the pit squad ammo");
+            if !re_armed { break; }
+            killed = w.shoot(i, "the pit squad");
+        }
         assert!(killed, "the pit squad member #{i} dies to Bond's fire");
     }
     tick_until(w, 600, "the pit squad's deaths raise ch 0xbf [D mux #611]", |s| s.drones.channels.on(0xbf));
@@ -782,8 +820,21 @@ fn finish_after_the_chaser(w: &mut Walker, t0: u32) {
         eprintln!("[real-damage] the squad-phase audit: {audited} hits, every delta within the game's chain [D record 99; M 0x1d4424/0x139fac]");
     }
     eprintln!("[finale] ch 0xbf +{}", w.total_ticks - t0);
-    // ch 0xc0 @7808 → ch 0x82 → 0x06000632 plays out (no skip) and hands Bond back at the bay.
-    w.skip_cutscenes = false;
+    // ch 0xc0 @7808 → ch 0x82 → 0x06000632 plays out (the skip is already off — see the squad
+    // phase above) and hands Bond back at the bay.
+    {
+        // consider-explosive-gate-3 diagnostic: the AND's own state at the wait's head.
+        let sim = w.scene.sim.as_ref().unwrap();
+        for t in &sim.drones.triggers {
+            if t.out == 0x82 || t.out == 0xbf {
+                eprintln!("[finale] trigger #{} kind {} out {:#x} list {:?} lock {} gone {}",
+                    t.placement, t.kind, t.out, t.list, t.lock, t.gone);
+            }
+        }
+        eprintln!("[finale] at +{}: ch 0xc0 {} ch 0xbf {} ch 0x82 {} mission {}",
+            w.total_ticks - t0, sim.drones.channels.on(0xc0), sim.drones.channels.on(0xbf),
+            sim.drones.channels.on(0x82), sim.drones.mission.status());
+    }
     tick_until(w, 3000, "ch 0x82 starts the lift-out cinema [D mux #633]", |s| s.drones.channels.on(0x82) && s.disabled);
     tick_until(w, 1500, "the lift-out cinema hands Bond back", |s| !s.disabled);
     w.skip_cutscenes = true;
@@ -1336,7 +1387,7 @@ fn the_overlook_dead_end_returns_to_the_station_and_door0_opens() {
 /// give-up, the 240-tick cooldown for a guard the stand cannot drop). The chaser herself is
 /// excluded — her kill is the range-keeping loop's, and her punches landing during the clearing
 /// are the punch pin's data.
-fn clear_the_pit_shooters(w: &mut Walker, chaser: usize) {
+fn clear_the_pit_shooters(w: &mut Walker, chaser: usize, stand_cap: u32) {
     w.dmg.dry_taps = Some(5);
     let mut tried: Vec<(usize, u32)> = Vec::new();
     for round in 0..10 {
@@ -1354,7 +1405,7 @@ fn clear_the_pit_shooters(w: &mut Walker, chaser: usize) {
         };
         let Some(di) = pick else { break };
         let _ = w.switch_to_armed("the pit room shooters");
-        let killed = w.stand_and_fire(di, 900);
+        let killed = w.stand_and_fire(di, stand_cap);
         if !killed { tried.retain(|&(k, _)| k != di); tried.push((di, w.total_ticks + 240)); }
         eprintln!("[real-damage] pit shooter #{di} down {killed} (round {round}) at health {:.1}",
             w.scene.sim.as_ref().unwrap().drones.health.health);
@@ -1374,27 +1425,31 @@ fn clear_the_pit_shooters(w: &mut Walker, chaser: usize) {
 /// at Agent. The chain the port mirrors: record → Bullet → `Player_DealWithObjHit` →
 /// `pain_from` (armourFraction 1.0 — the chain save carries no armour, asserted, so the
 /// health loss IS the punch).
-/// consider-explosive-gate-2 2026-11-02 IGNORED, measured: with the game's own throw-roll cadence
-/// [M DroneWeap_CanThrowGrenade 0x17a798 disasm — Rand_Rand(2) sits between the +0xBCC/+0xBCE
-/// checks and the dist 8..20 check, so a grenade-holding guard in AimStandFire 0x68 rolls EVERY
-/// aim-stand tick between bursts, out of throw range too] the pit squad's frag holders (#186/#188,
-/// skin 0x0500008c, p11 0x43 = 3× frag [D]) roll on ticks the old port skipped, the shared RNG
-/// stream retimes, and this no-return-fire real-damage walk dies at tick 2362 in the squad fight
-/// (47 hits for 100.0 — last hitters drones #0/#2/#3/#4/#5, weapon 0x1a [D p9 = 26]). The punch
-/// chain pinned below (50 [D record 99] × 0.4 [M 0x1d4424] = 20.0) is untouched by this — the
-/// scenario's survival expectation was calibrated on the desynced stream. Sub-attribution: the
-/// anim-id half of the gate alone passes this file 14/14; only the roll cadence shifts it.
-/// Live check for the main agent: does the real game's pit-squad fight (07000016, the walk-in
-/// approach, no return fire) actually let an idle Bond survive to the chaser — i.e. do the
-/// frag-holding 0x0500008c guards really roll and throw from 0x68 at 31 u (PINE per 50 frames).
-#[ignore = "the faithful 0x68 roll cadence [M 0x17a798 disasm] retimes the pit squad fight: the no-return-fire real-damage walk dies at 2362 (47 hits/100.0) before the chaser; the punch pin's 20.0 chain stands, the scenario's survival was calibrated on the desynced stream"]
+/// consider-explosive-gate-3 2026-11-02 UN-IGNORED with a player's approach tactic: the
+/// faithful throw-roll cadence [M 0x17a798 — the 50% Rand(2) precedes the dist check, so every
+/// grenade-holding guard in 0x68 consumes rolls] retimed the launch centre, and the unanswered
+/// corridor walk died at tick 2362 (the measured run: 47 hits for 100.0 — the AR guards #0/#2/#3
+/// skins 0x500008c, #4/#5 0x50000b1 [D p9 = 26] pour fire down the south corridor; the last hit
+/// d 1.9 at (−12.1, 6.8, −83.4)). The no-return-fire premise is the PUNCH WINDOW's (an idle
+/// stand while she closes and swings), not the approach's — a player fights through, so the
+/// walk raises the walker's own `dmg.return_fire` for the corridor legs (real-input fights, the
+/// walker's plain pick) and drops it again at the hand-back. No common/ change: the field is
+/// the walker's own pub opt-in, set by this test only.
 #[test]
 fn the_chasers_punch_lands_the_record_damage() {
     walker::with_real_damage_no_return_fire(|| {
         let iso = iso();
         let save = carry(&[0x47, 0x48, 0x4a, 0x54, 0xce, 0x4b]);
         let mut w = Walker::new(nf_view::load_with_carry_difficulty(&iso, "07000016.bin", false, Some(&save), 1).unwrap());
-        let (chaser, t0) = walk_to_the_chaser_fight(&mut w);
+        // The approach fights back (consider-explosive-gate-3): the walker's own return fire for
+        // the corridor legs — the unanswered walk died at 2362 under the AR guards' fire (the
+        // measured 47 hits for 100.0). The walker's plain pick, real input; the walker's damage
+        // log still audits every landed hit.
+        w.dmg.return_fire = true;
+        let (chaser, t0) = walk_to_the_chaser_fight(&mut w, false);
+        // The punch window goes back to the unanswered stand: the pin is the DAMAGE her punch
+        // carries, and it lands on an idle Bond while the pit shooters are cleared explicitly.
+        w.dmg.return_fire = false;
         let star_damage = {
             let sim = w.scene.sim.as_ref().unwrap();
             assert_eq!(sim.drones.progress.difficulty, 1, "Operative rode the load path [M 0x1d4424 row]");
@@ -1428,7 +1483,7 @@ fn the_chasers_punch_lands_the_record_damage() {
             }
             if chaser_hits.iter().any(|&hit| (hit - 20.0).abs() < 0.01) { break; }
             if w.scene.sim.as_ref().unwrap().drones.health.health < 30.0 { break; } // her point-blank bursts — survival first
-            if w.total_ticks >= clear_at { clear_the_pit_shooters(&mut w, chaser); clear_at = w.total_ticks + 900; continue; }
+            if w.total_ticks >= clear_at { clear_the_pit_shooters(&mut w, chaser, 900); clear_at = w.total_ticks + 900; continue; }
             w.tick(Input::default(), false);
         }
         let sim = w.scene.sim.as_ref().unwrap();
@@ -1540,10 +1595,10 @@ fn kill_the_chaser_with_range_keeping(w: &mut Walker, chaser: usize, t0: u32) {
 /// stand-and-fire from the shelter's cover. No health top-ups, no state pokes.
 #[test]
 fn walk_the_chasers_defeat_completes_the_mission_on_real_damage() {
-    walker::with_real_damage(|| {
+    walker::with_real_damage_head_hunting(|| {
         let iso = iso();
         let mut w = Walker::new(nf_view::load_with_carry(&iso, "07000016.bin", false, Some(&carry(&[0x47, 0x48, 0x4a, 0x54, 0xce, 0x4b]))).unwrap());
-        let (chaser, t0) = walk_to_the_chaser_fight(&mut w);
+        let (chaser, t0) = walk_to_the_chaser_fight(&mut w, true);
         // The route's return-fire fights spend bolts — the arrival SET is the chain's [M
         // 0x1a7ef8], but the gun in hand may be dry; the fight continues on the carried P2K
         // (rounds pinned [D the chain save]). The allowance sister pins the arrival's held gun.
@@ -1557,10 +1612,42 @@ fn walk_the_chasers_defeat_completes_the_mission_on_real_damage() {
                 "the P2K has rounds (clip {} spare {})", sim.drones.inventory.clip[2], sim.drones.inventory.carried[1]);
         }
         assert!(w.switch_to_armed("the chaser fight"), "a carried gun has rounds after the route fights");
-        // The pit room's soldiers first (their steady fire is the fight's real dps at real
-        // health; the first run died to them at the shelter), then her, with the band held off.
-        clear_the_pit_shooters(&mut w, chaser);
+        // HER first (consider-explosive-gate-3 reorder): the faithful throw-roll cadence [M
+        // 0x17a798] retimed the launch centre and the measured run made her the fight's real dps
+        // by a mile — 39.6 of the run's 90.6 attrition (one band breach + her approach stars)
+        // against the pit shooters' ~8 — while the old shooters-first order kept her plinking
+        // through the whole ~2700-tick clearing. The band hold (range keeping) is unchanged.
         kill_the_chaser_with_range_keeping(&mut w, chaser, t0);
+        // Then the pit room's soldiers (their steady fire is what remains; the first run died to
+        // them at the shelter). The 300-tick stand cap: the faithful-stream measured run had
+        // a 900-tick stand pour ~56 rounds of the AR into a shooter it never dropped (#8,
+        // down false) and leave the squad fight bone dry — a player shorts the futile stand
+        // and keeps the magazine for the clones.
+        clear_the_pit_shooters(&mut w, chaser, 300);
+        // The loot pass (consider-explosive-gate-3): the route's fallen guards' drops (each with
+        // its own clip [M DroneWeap_DropWeapon 0x17a2a0]) lie where they fell — a player walks
+        // over them. The walker's own resupply is blind here twice over: its trail filter holds
+        // 9 u around the NAV nodes (the fight stands are not trail points, so the pit shooters'
+        // drops 10-25 u out never pass) and its success check reads only the held gun's rounds
+        // (the 0x14 drops file into the inventory WITHOUT equipping — the held AR outranks them
+        // [M Player_IsBetterWeapon 0x1a6eb0] — so a successful take still reports `false`). So
+        // the walk goes corpse to corpse itself: every fallen team-1 guard within reach, walk to
+        // its spot, let the game's own walk-over take [M Pickup_Handler 0x18e650] do the rest.
+        {
+            let spots: Vec<[f32; 3]> = {
+                let sim = w.scene.sim.as_ref().unwrap();
+                let bp = sim.bond.pos;
+                sim.drones.list.iter()
+                    .filter(|d| d.corpse && d.team == 1 && walker::dxz(d.pos, bp) < 45.0)
+                    .map(|d| [d.pos[0], d.pos[1], d.pos[2]]).collect()
+            };
+            for (k, s) in spots.iter().enumerate() {
+                w.walk_nav_to(*s, &format!("the loot walk {k}"), 1.0);
+            }
+            let sim = w.scene.sim.as_ref().unwrap();
+            eprintln!("[real-damage] the loot walk: {} corpses, owns {:?}, in hand {:#04x} clip {} spare {}",
+                spots.len(), owned(sim), sim.gun.weapon, sim.gun.clip, sim.gun.spare);
+        }
         finish_after_the_chaser(&mut w, t0);
         let sim = w.scene.sim.as_ref().unwrap();
         assert!(sim.drones.health.health > 0.0, "Bond survives the finale on the port's real damage");
