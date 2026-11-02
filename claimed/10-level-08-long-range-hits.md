@@ -8,3 +8,6 @@ Do:
 1. Name drone #20 (placement, class, what weapon 0x0 means for it — Hind/turret/gunner?) [D] and find the game's fire law for it at range [M: range cap, accuracy with distance, burst/fire rate, damage].
 2. Fix the port where it differs; cite it. If the port matches, give the walk the cover the level offers (no health writes).
 3. Un-ignore the walk; run walkreal_07000008_live, the copter tests, every real-damage walk, then the full suite.
+
+---
+claimed-by: sandbox1 at 2026-11-02T16:33Z
