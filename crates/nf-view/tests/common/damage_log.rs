@@ -215,14 +215,26 @@ impl DamageLog {
     /// The exposed part of drone `i` Bond's bullet can reach: the hit box whose centre ray enters
     /// the box before the static world's bullet trace stops it (walker.rs `exposed_aim`'s rule —
     /// `Collide_Jointy` 0x1ec180's first box vs the flight's world stop [M 0x1ea398:216-229]),
-    /// the one nearest the torso. None = nothing of him is reachable from here.
-    ///
-    /// The ray set is the EYE and the gun's stand-in offsets: the round leaves the view model
-    /// low-right of the eye, and at a wall edge the eye ray clears by a hair while the gun ray
-    /// clips the corner — the 07000013 security-room stand held aim Some (eye ray clear) while
+    /// the one nearest the torso. None = nothing of him is reachable from here. The ray set is
+    /// the single EYE ray — the shared rule every walk fights with; the stricter gun-ray set
+    /// below is opt-in (`lane_fights`, the 07000013 walk only), because the master-green
+    /// real-damage walks fight on this rule (level-13-lobby-rifles-2).
+    pub fn exposed_part(sim: &nf_view::scene::Sim, i: usize) -> Option<[f32; 3]> {
+        Self::exposed_impl(sim, i, false)
+    }
+
+    /// The lane-fight ray set: the EYE and the gun's stand-in offsets. The round leaves the view
+    /// model low-right of the eye, and at a wall edge the eye ray clears by a hair while the gun
+    /// ray clips the corner — the 07000013 security-room stand held aim Some (eye ray clear) while
     /// every round died on the door jamb (tgt hp pinned at 6.0, clip draining, [L the fight#9
     /// rf-trace]). Both lateral offsets and the low one must be clear to call the box exposed.
-    pub fn exposed_part(sim: &nf_view::scene::Sim, i: usize) -> Option<[f32; 3]> {
+    /// OPT-IN: set only by the 07000013 walk (`lane_fights`) — on the shared rule the other
+    /// real-damage walks pick fights master-green (level-13-lobby-rifles-2).
+    pub fn exposed_part_gun_rays(sim: &nf_view::scene::Sim, i: usize) -> Option<[f32; 3]> {
+        Self::exposed_impl(sim, i, true)
+    }
+
+    fn exposed_impl(sim: &nf_view::scene::Sim, i: usize, gun_rays: bool) -> Option<[f32; 3]> {
         let d = &sim.drones.list[i];
         let bp = sim.bond.pos;
         let eye = [bp[0], bp[1] + sim.bond.eye - sim.bond.crouch_drop, bp[2]];
@@ -244,13 +256,18 @@ impl DamageLog {
             let c = [b.m[3][0], b.m[3][1], b.m[3][2]];
             let ray = [c[0] - eye[0], c[1] - eye[1], c[2] - eye[2]];
             let Some(t_box) = nf_game::damage::ray_box(eye, ray, &b) else { continue };
-            let mut clear = true;
-            for g in &gun_spots {
-                let gr = [c[0] - g[0], c[1] - g[1], c[2] - g[2]];
-                let tw = sim.world.segment_bullet_scoped(sim.world.find_cel(*g), *g, c);
-                if tw.is_some_and(|w| w < t_box) { clear = false; break; }
+            if gun_rays {
+                let mut clear = true;
+                for g in &gun_spots {
+                    let gr = [c[0] - g[0], c[1] - g[1], c[2] - g[2]];
+                    let tw = sim.world.segment_bullet_scoped(sim.world.find_cel(*g), *g, c);
+                    if tw.is_some_and(|w| w < t_box) { clear = false; break; }
+                }
+                if !clear { continue; }
+            } else {
+                let tw = sim.world.segment_bullet_scoped(sim.world.find_cel(eye), eye, c);
+                if tw.is_some_and(|w| w < t_box) { continue; }
             }
-            if !clear { continue; }
             let dev = ((c[0] - torso[0]).powi(2) + (c[1] - torso[1]).powi(2) + (c[2] - torso[2]).powi(2)).sqrt();
             if best.map_or(true, |(bd, _)| dev < bd) { best = Some((dev, c)); }
         }
@@ -259,6 +276,9 @@ impl DamageLog {
 
     /// Bond can put a round into drone `i` from where he stands (`exposed_part`).
     pub fn visible(sim: &nf_view::scene::Sim, i: usize) -> bool { Self::exposed_part(sim, i).is_some() }
+
+    /// `visible` under the lane-fight ray set (`exposed_part_gun_rays`).
+    pub fn visible_gun_rays(sim: &nf_view::scene::Sim, i: usize) -> bool { Self::exposed_part_gun_rays(sim, i).is_some() }
 
     /// Why `exposed_part` cannot see drone `i`: every hit box's centre ray with its world stop and
     /// the stopping owner's run, plus the guard's own muzzle→Bond path. NF_RF_GEOM diagnostic.
@@ -369,7 +389,7 @@ impl Walker {
                 cands.iter().copied().find(|&i| DamageLog::visible(sim, i))
             } else {
                 let vis = cands.iter().copied()
-                    .filter(|&i| DamageLog::visible(sim, i))
+                    .filter(|&i| DamageLog::visible_gun_rays(sim, i))
                     .min_by(|&a, &b| {
                         dmg_of(b).total_cmp(&dmg_of(a))
                             .then(dist_of(a).total_cmp(&dist_of(b)))
@@ -508,8 +528,10 @@ impl Walker {
                 let eye = [b[0], b[1] + sim.bond.eye - sim.bond.crouch_drop, b[2]];
                 let torso = [d.pos[0], d.pos[1] + 0.3, d.pos[2]];
                 // Re-pick the exposed part every 10 ticks (the guard animates, cover buries a part).
-                if t % 10 == 0 { aim = DamageLog::exposed_part(sim, di); }
-                if aim.is_none() { unseen += 1; if unseen > 120 { return false; } } else { unseen = 0; }
+                // The ray set follows the fight's pick: lane fights use the gun stand-ins, the
+                // shared walks the plain eye ray (master behaviour; level-13-lobby-rifles-2).
+                if t % 10 == 0 { aim = if self.dmg.lane_fights { DamageLog::exposed_part_gun_rays(sim, di) } else { DamageLog::exposed_part(sim, di) }; }
+                if aim.is_none() { unseen += 1; if unseen > if self.dmg.lane_fights { 120 } else { 60 } { return false; } } else { unseen = 0; }
                 // No round landed for 300 ticks: walk on (a guard in cover the stand cannot reach;
                 // the 13 lobby stand took 40 health that way).
                 if d.health < hp0 { hp0 = d.health; last_hit = t; dry = 0; }
@@ -541,8 +563,10 @@ impl Walker {
                 // The unseen-cover creep: a player pushing toward a guard crouched behind a desk
                 // walks up to the lip until his own eye line clears it over the top (the ray to
                 // the boxes steepens as the stand-off shrinks). Creep in bursts along the aim,
-                // never while a guard stands inside the back-off range.
-                let creep = aim.is_none() && !crowd && self.dmg.back_off.is_some() && unseen % 12 < 7;
+                // never while a guard stands inside the back-off range. OPT-IN (`lane_fights`,
+                // the 07000013 walk): the shared walks' stands never move forward (master
+                // behaviour; level-13-lobby-rifles-2).
+                let creep = self.dmg.lane_fights && aim.is_none() && !crowd && self.dmg.back_off.is_some() && unseen % 12 < 7;
                 if trace && t % 60 == 0 {
                     eprintln!("[rf-trace] fight#{di} t{t}: tgt hp {:.1} at ({:.1},{:.1}) bond ({:.1},{:.1}) hp {:.1} aim {:?} blocked {blocked} err {err:.3} perr {perr:.3} clip {} spare {} creep {creep}",
                         sim.drones.list[di].health, sim.drones.list[di].pos[0], sim.drones.list[di].pos[2],
