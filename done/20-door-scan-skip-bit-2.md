@@ -20,3 +20,8 @@ say so in the report. Never weaken a decompile-backed test to make code pass.
 
 ---
 claimed-by: sandbox5 at 2026-11-02T13:44Z
+
+---
+## Report (done, 2026-11-02T14:52Z)
+
+Closed by the driver: the report is on `s/door-scan-skip-bit-2` (docs/reports/door-scan-skip-bit-2.md); the worker didn't run finish.sh.
