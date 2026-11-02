@@ -585,7 +585,7 @@ fn press_use_until(w: &mut Walker, at: [f32; 3], max: u32, done: impl Fn(&nf_vie
 fn walk_the_chasers_defeat_completes_the_mission() {
     let iso = iso();
     let mut w = Walker::new(nf_view::load_with_carry(&iso, "07000016.bin", false, Some(&carry(&[0x47, 0x48, 0x4a, 0x54, 0xce, 0x4b]))).unwrap());
-    let (chaser, t0) = walk_to_the_chaser_fight(&mut w);
+    let (chaser, t0) = walk_to_the_chaser_fight(&mut w, false);
     assert_armed_for_the_chaser(w.scene.sim.as_ref().unwrap(), &CHAIN_OWNED, "the 15 → 16 chain");
     // Dry mid-fight (the 15 carry's Delta Repeater holds 12 rounds here): the player switches to
     // another carried gun with ammo (or, with none, picks up a fallen guard's), then fights on.
@@ -610,7 +610,7 @@ fn bond_is_armed_at_the_chaser_fight_after_the_15_handoff() {
     w.wait_enabled(3000, "the launch-centre arrival");
     w.wait(60);
     assert_armed_for_the_chaser(w.scene.sim.as_ref().unwrap(), &CHAIN_OWNED, "the 15 → 16 arrival");
-    walk_to_the_chaser_fight(&mut w);
+    walk_to_the_chaser_fight(&mut w, false);
     assert_armed_for_the_chaser(w.scene.sim.as_ref().unwrap(), &CHAIN_OWNED, "the 15 → 16 chain");
 }
 
@@ -625,7 +625,7 @@ fn bond_is_armed_at_the_chaser_fight_on_a_direct_load() {
     w.wait_enabled(3000, "the launch-centre arrival");
     w.wait(60);
     assert_armed_for_the_chaser(w.scene.sim.as_ref().unwrap(), &COLD_OWNED, "the cold 16 arrival");
-    walk_to_the_chaser_fight(&mut w);
+    walk_to_the_chaser_fight(&mut w, false);
     assert_armed_for_the_chaser(w.scene.sim.as_ref().unwrap(), &COLD_OWNED, "the cold 16 load");
     let diff: Vec<usize> = COLD_OWNED.iter().copied().filter(|w| !CHAIN_OWNED.contains(w)).collect();
     assert_eq!(diff, vec![0x50], "the two paths differ only by the Grapple, as in the game [M 0x1a97c8]");
@@ -634,10 +634,47 @@ fn bond_is_armed_at_the_chaser_fight_on_a_direct_load() {
 /// From the arrival to the chaser fight: the approach, the pack cinema (played out), pulse 1 in
 /// the shelter, the chaser's spawn and the door reopening. Returns the chaser's index and the
 /// hand-back tick.
-fn walk_to_the_chaser_fight(w: &mut Walker) -> (usize, u32) {
+fn walk_to_the_chaser_fight(w: &mut Walker, fight_the_ring: bool) -> (usize, u32) {
     w.wait_enabled(3000, "the launch-centre arrival");
     w.wait(100);
-    w.walk_route(APPROACH);
+    if fight_the_ring {
+        // The faithful fight's crossing, fought the way a player fights it: the west-ring
+        // riflemen (#536/#537/#538, weapon 0x1a [D]) leave their posts and close to the TooClose
+        // band (the faithful run's 47 hits/100.0 came mostly from two 0x50000b1 guards at d
+        // 1.9-8.6 — under 3.0 every round hits [M 0x179740:113-115], doubled [M 0x139fac]), so
+        // the advancers are answered from the ring-3 corner before the crossing, with the
+        // kill's own drops as the re-arm (the level's only on-route ammo — the placed boxes are
+        // the six frags in the door[1]-[3] corridor [D #701-706], farther along). The east
+        // posts (#533/#535, p11 0x43 = 3× frag [D]) get the same answer where the descent
+        // passes under #535's post. The walker's auto-return-fire stays off (the flag set by
+        // the caller) — this is the player's explicit fire, the chaser phase's own idiom.
+        w.walk_route(&APPROACH[..12]);
+        clear_the_ring_guard(w);
+        // The station leg is the fight: the west walkway's riflemen (#536/#537/#538, weapon 0x1a
+        // [D]) hold posts 3-10 u off the route line and the walkway's bend hides them from the
+        // ring-3 corner — the answer is per leg (advance to contact, fight, advance), the way a
+        // player works a corridor with riflemen in it, not one stand at the corner. The descent
+        // (legs 22..25) is a narrow stair with no posts on it — the fight's backpedal there
+        // walks Bond off the ramp edge (the trench's west-end wedge), so it is walked, not
+        // fought; the lane below gets its own answer at legs 25/26.
+        for leg in 12..22 {
+            w.walk_route(&APPROACH[leg..leg + 1]);
+            clear_the_ring_guard(w);
+            // The fight moves Bond off the leg's waypoint; re-walk it so the next leg starts
+            // from the route line (a displaced start crossed the lane's hole at (5.7, -103)
+            // [L the trench's west-end wedge]).
+            w.walk_route(&APPROACH[leg..leg + 1]);
+        }
+        w.walk_route(&APPROACH[22..25]);
+        for leg in 25..27 {
+            w.walk_route(&APPROACH[leg..leg + 1]);
+            clear_the_ring_guard(w);
+            w.walk_route(&APPROACH[leg..leg + 1]);
+        }
+        w.walk_route(&APPROACH[27..]);
+    } else {
+        w.walk_route(APPROACH);
+    }
     assert!(w.scene.sim.as_ref().unwrap().drones.channels.on(0x8d), "the route crossed the corridor touch #616 — the button's gate is armed [D]");
     // The launch chain plays out (no skip): ch 0x81 → the pack cinema → the hand-back on the pit
     // floor [D stream-8 key].
@@ -773,8 +810,17 @@ fn finish_after_the_chaser(w: &mut Walker, t0: u32) {
     }
     eprintln!("[finale] ch 0xbf +{}", w.total_ticks - t0);
     // ch 0xc0 @7808 → ch 0x82 → 0x06000632 plays out (no skip) and hands Bond back at the bay.
+    // The walk can reach this wait AFTER the cinema has already run: the game's movie player
+    // races a disabled-Bond script through in ~46 frames here (the pack cinema 0x06000631
+    // above shows the same shape — 748 ticks across frames 4938..4984, [L both runs]), so when
+    // the squad fight runs long the last death's 0x82 edge and the hand-back both land before
+    // the first check. The latched channels are the game facts and survive either arrival:
+    // 0x82 [D mux #633], then the movie's own stream writes — ch 0x50 [D 0x06000632 stream 19,
+    // which starts the bay-lift script #694] — and the hand-back asserts below (the key
+    // position [D stream 13 event 6] + the 0x8d gate clear [D stream 16]) fail if the movie
+    // never actually played.
     w.skip_cutscenes = false;
-    tick_until(w, 3000, "ch 0x82 starts the lift-out cinema [D mux #633]", |s| s.drones.channels.on(0x82) && s.disabled);
+    tick_until(w, 3000, "ch 0x82 starts the lift-out cinema [D mux #633]", |s| s.drones.channels.on(0x82));
     tick_until(w, 1500, "the lift-out cinema hands Bond back", |s| !s.disabled);
     w.skip_cutscenes = true;
     {
@@ -1318,6 +1364,131 @@ fn the_overlook_dead_end_returns_to_the_station_and_door0_opens() {
     }
 }
 
+/// The faithful crossing's own answer, the chaser kill's range-keeping idiom moved to the
+/// approach: aim, tap only with the view on the guard, backpedal while a live guard stands
+/// inside 3.0 (under it every drone round hits [M 0x179740:113-115]). The aim takes the clear
+/// head box first (the caller runs the test under `with_real_damage_head_hunting` and this
+/// loop under `prefer_head` — the same 6 u window [M NDrone2_HitDamage 0x145558 ×
+/// DroneDamage_Head]): one head hit drops a rifleman, so the fight is short and the retreat
+/// stays clear of the west ring's BodyArmourHeavy #596 (-19.03, 6.67, −94.48 [D], 17 u down
+/// the walkway) — the punch pin needs the chain save's bare health [M 0x195670:18-19; the
+/// recorded delta is the HEALTH loss, an armour plate eats the punch whole]. Re-arms from the
+/// kill's own drop when the held gun runs dry.
+fn clear_the_ring_guard(w: &mut Walker) {
+    w.prefer_head = true;
+    // BodyArmourHeavy #596's spot [D] — the retreat's hard stop (the pin needs bare health).
+    const BODY_ARMOUR_596: [f32; 3] = [-19.03, 6.67, -94.48];
+    let mut tried: Vec<(usize, u32)> = Vec::new();
+    for round in 0..12 {
+        let pick = {
+            let sim = w.scene.sim.as_ref().unwrap();
+            let bp = sim.bond.pos;
+            let fresh = |i: &usize| !tried.iter().any(|&(k, until)| k == *i && w.total_ticks < until);
+            let mut near: Vec<(u8, f32, usize)> = sim.drones.list.iter().enumerate()
+                .filter(|(_, d)| d.team == 1 && d.health > 0.0 && !d.corpse && d.enabled && d.present
+                    && walker::dxz(d.pos, bp) < 25.0)
+                // The kill order: the frag holders first (#533/#535 carry 3× frag [D p11 0x43];
+                // one lob is -25..-30 through the 12.0 blast [L the run's death log]) — a player
+                // answers the grenade man before the riflemen — then nearest.
+                .map(|(i, d)| (if d.grenade_count > 0 { 0u8 } else { 1u8 }, walker::dxz(d.pos, bp), i))
+                .collect();
+            near.sort_by(|a, b| a.0.cmp(&b.0).then(a.1.total_cmp(&b.1)));
+            near.into_iter().map(|e| e.2).filter(fresh)
+                .find(|&i| walker::DamageLog::visible(sim, i))
+        };
+        let Some(di) = pick else { break };
+        if { let g = &w.scene.sim.as_ref().unwrap().gun; g.clip + g.spare == 0 } {
+            // A player re-arms from the guard's own drop before the next fight (the drops land
+            // at the fight floor [L drops]; the walked-path corridor covers them here).
+            if !(w.switch_to_armed("the ring re-arm") || w.resupply("the ring re-arm")) { break; }
+        }
+        let _ = w.switch_to_armed("the ring guard");
+        let mut aim = w.exposed_aim(di);
+        let mut killed = false;
+        for t in 0..900u32 {
+            let (dead, dist, bp, dp) = {
+                let sim = w.scene.sim.as_ref().unwrap();
+                let d = &sim.drones.list[di];
+                (d.corpse || d.health <= 0.0, walker::dxz(d.pos, sim.bond.pos), sim.bond.pos, d.pos)
+            };
+            if dead { killed = true; break; }
+            if t % 30 == 0 { aim = w.exposed_aim(di); }
+            let (input, fire) = {
+                let sim = w.scene.sim.as_ref().unwrap();
+                let at = aim.unwrap_or([dp[0], dp[1] + 0.3, dp[2]]);
+                let eye = [bp[0], bp[1] + sim.bond.eye - sim.bond.crouch_drop, bp[2]];
+                let err = walker::wrap_pi((at[0] - bp[0]).atan2(at[2] - bp[2]) - sim.bond.yaw);
+                let want_pitch = ((at[1] - eye[1]) / dist.max(0.5)).atan() / std::f32::consts::FRAC_PI_2;
+                let perr = want_pitch - sim.bond.pitch;
+                let on_target = err.abs() < 0.012 && perr.abs() < 0.018 && t % 16 == 0;
+                let input = Input { turn: err.clamp(-0.08, 0.08), look: perr.clamp(-0.08, 0.08), ..Default::default() };
+                let fire = if aim.is_none() { false } else { on_target && dist >= 2.0 };
+                (input, fire)
+            };
+            if aim.is_none() {
+                let forward = if dist > 5.0 { 1.0 } else { 0.0 };
+                w.tick(Input { forward, ..input }, false);
+            } else {
+                // Cover from the throws: a guard grenade in the air jinks Bond off the blast —
+                // the lob aims at his position at throw time (the arc re-aims only on the next
+                // throw), so lateral movement while it flies clears the frag's ~4 u blast plate
+                // [L weapon_data 0x34's +0x08]. The strafe flips every 30 ticks (the jink keeps
+                // him moving whatever the next lob's lead); the aim holds throughout.
+                let air = {
+                    let sim = w.scene.sim.as_ref().unwrap();
+                    sim.drones.grenades.iter()
+                        .filter(|g| g.owner != usize::MAX && g.state == 1 && !g.resting && !g.stuck)
+                        .any(|g| walker::dxz(g.pos, sim.bond.pos) < 25.0)
+                };
+                let back = if dist < 3.0 && walker::dxz(bp, BODY_ARMOUR_596) >= 4.0 { -1.0 } else { 0.0 };
+                let mut input = input;
+                if air {
+                    let side = if (t / 30) % 2 == 0 { 1.0 } else { -1.0 };
+                    input.strafe = side;
+                    input.forward = back;
+                } else if dist > 5.5 {
+                    // No head box past the 6 u window: close to it instead of grinding torso
+                    // taps at 21-27 u (the 900-tick stand fight cost 33.6 health [L round 1];
+                    // the closing target also rides the move-accuracy debuff [M 0x179740's
+                    // TargetMoving arm]).
+                    input.forward = 1.0;
+                } else {
+                    input.forward = back;
+                }
+                if fire { w.tick_fire(input); } else { w.tick(input, false); }
+            }
+        }
+        if killed {
+            // The kill's drop is the route's ammo: a player walks to the body and takes it (the
+            // auto-take on touch — the run's own log shows a 0x1a+0x1b pair joining on a
+            // walk-over). The 0x1a's 30-round mags are what the chaser phase's clearing spends.
+            // A corpse at the armour vest is left looted-or-not rather than walked onto: the
+            // punch pin needs the chain save's bare health (the #5 loot walk crossed the vest
+            // at tick 3188 [L the take log]).
+            let corpse = w.scene.sim.as_ref().unwrap().drones.list[di].pos;
+            if walker::dxz(corpse, BODY_ARMOUR_596) >= 5.0 {
+                for _ in 0..150 {
+                    let (bp, done) = { let sim = w.scene.sim.as_ref().unwrap(); (sim.bond.pos, walker::dxz(sim.bond.pos, corpse) < 1.6) };
+                    if done { break; }
+                    let err = walker::wrap_pi((corpse[0] - bp[0]).atan2(corpse[2] - bp[2]) - w.scene.sim.as_ref().unwrap().bond.yaw);
+                    w.tick(Input { turn: err.clamp(-0.08, 0.08), forward: 1.0, ..Default::default() }, false);
+                }
+            }
+        }
+        if !killed { tried.retain(|&(k, _)| k != di); tried.push((di, w.total_ticks + 240)); }
+        eprintln!("[real-damage] ring guard #{di} down {killed} (round {round}) at health {:.1}",
+            w.scene.sim.as_ref().unwrap().drones.health.health);
+    }
+    w.prefer_head = false;
+    // The fight's drops are the route's ammo (the level's placed boxes are the six frags in the
+    // door[1]-[3] corridor [D #701-706], farther along) — a player gathers them before moving on:
+    // the 0x1a rifle's 30-round mags are what the chaser phase's own clearing spends.
+    if { let g = &w.scene.sim.as_ref().unwrap().gun; g.clip + g.spare < 10 } {
+        let _ = w.resupply("the ring drops");
+        let _ = w.switch_to_armed("the ring drops");
+    }
+}
+
 /// The pit floor's placed soldiers (the launch-centre guard skins — the first real-damage run
 /// died to drones #6/#7/#8, skins 0x5000093/0x5000087/0x5000090, weapon 0x14, at 3–13 u) shoot
 /// the chaser-fight stand: the allowance walks top through their fire (the walkreal header's
@@ -1364,13 +1535,28 @@ fn clear_the_pit_shooters(w: &mut Walker, chaser: usize) {
 /// at Agent. The chain the port mirrors: record → Bullet → `Player_DealWithObjHit` →
 /// `pain_from` (armourFraction 1.0 — the chain save carries no armour, asserted, so the
 /// health loss IS the punch).
+/// The approach is fought (level-16-pit-squad-faithful-roll): the faithful throw-roll cadence
+/// [M 0x17a798] re-timed the trench hall, and a purely passive Bond died on the west ring at
+/// tick 2362 (47 hits/100.0, two 0x50000b1 riflemen at d 1.9-8.6) — no player walks a
+/// five-rifleman camp without answering it. The walker's auto-return-fire stays off; the
+/// player's explicit fire (`clear_the_ring_guard`, the drops as the re-arm) carries the
+/// crossing, and the punch pin below is untouched.
 #[test]
 fn the_chasers_punch_lands_the_record_damage() {
     walker::with_real_damage_no_return_fire(|| {
+        // The fights take the clear head box (the rifleman camp is the attrition fight the
+        // head-hunting opt-in exists for — see damage_log.rs's own comment); the no-return-fire
+        // flag stays on (the walker's auto fights stay off; the player's explicit fire only).
+        walker::with_real_damage_head_hunting(the_chasers_punch_body);
+    });
+}
+
+fn the_chasers_punch_body() {
+    {
         let iso = iso();
         let save = carry(&[0x47, 0x48, 0x4a, 0x54, 0xce, 0x4b]);
         let mut w = Walker::new(nf_view::load_with_carry_difficulty(&iso, "07000016.bin", false, Some(&save), 1).unwrap());
-        let (chaser, t0) = walk_to_the_chaser_fight(&mut w);
+        let (chaser, t0) = walk_to_the_chaser_fight(&mut w, true);
         let star_damage = {
             let sim = w.scene.sim.as_ref().unwrap();
             assert_eq!(sim.drones.progress.difficulty, 1, "Operative rode the load path [M 0x1d4424 row]");
@@ -1405,6 +1591,14 @@ fn the_chasers_punch_lands_the_record_damage() {
             if chaser_hits.iter().any(|&hit| (hit - 20.0).abs() < 0.01) { break; }
             if w.scene.sim.as_ref().unwrap().drones.health.health < 30.0 { break; } // her point-blank bursts — survival first
             if w.total_ticks >= clear_at { clear_the_pit_shooters(&mut w, chaser); clear_at = w.total_ticks + 900; continue; }
+            if { let g = &w.scene.sim.as_ref().unwrap().gun; g.clip + g.spare == 0 } {
+                // Dry mid-window: the cleared shooters' own drops are at the pit floor [L drops]
+                // — a player gathers them instead of standing fireless through her approach.
+                let _ = w.resupply("the punch-phase re-arm");
+                let _ = w.switch_to_armed("the punch-phase re-arm");
+                clear_at = w.total_ticks; // and clear again with the gathered rounds
+                continue;
+            }
             w.tick(Input::default(), false);
         }
         let sim = w.scene.sim.as_ref().unwrap();
@@ -1428,7 +1622,7 @@ fn the_chasers_punch_lands_the_record_damage() {
             eprintln!("[punch] the punch landed: {punches:?} = 50 [D record 99] × 0.4 [M Operative]");
         }
         assert!(sim.drones.health.health > 0.0, "Bond survives the pinned punches ({} landed)", chaser_hits.len());
-    });
+    }
 }
 
 /// The chaser's kill with the melee band held off — the walker's own tactics, no game code:
@@ -1519,7 +1713,7 @@ fn walk_the_chasers_defeat_completes_the_mission_on_real_damage() {
     walker::with_real_damage(|| {
         let iso = iso();
         let mut w = Walker::new(nf_view::load_with_carry(&iso, "07000016.bin", false, Some(&carry(&[0x47, 0x48, 0x4a, 0x54, 0xce, 0x4b]))).unwrap());
-        let (chaser, t0) = walk_to_the_chaser_fight(&mut w);
+        let (chaser, t0) = walk_to_the_chaser_fight(&mut w, false);
         // The route's return-fire fights spend bolts — the arrival SET is the chain's [M
         // 0x1a7ef8], but the gun in hand may be dry; the fight continues on the carried P2K
         // (rounds pinned [D the chain save]). The allowance sister pins the arrival's held gun.
