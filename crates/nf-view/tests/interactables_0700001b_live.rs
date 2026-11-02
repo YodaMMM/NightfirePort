@@ -434,3 +434,274 @@ fn the_spawn_hint_fires_on_the_first_walk() {
     // One-shot: the level's one 0x33 hint [D the census].
     assert_eq!(sim.hint_fired.len(), 1, "the level's one 0x33 hint [D the census]");
 }
+
+/// KIND 0xF9 — the pit-bottom AluWarning klaxons (#151/#157/#158/#159/#160 [D the census:
+/// ON ch 0x4c..0x50, one-shot p1 = 1, ids 0x350/0x34e/0x34c/0x36f/0x34d, 3-D p3 = 0, global
+/// p5 = 1]) fire on the station's own speech chain: `SoundTrigger_Update` 0x1b2790 plays the
+/// param-2 id (`Sound_Play3D(100, −1, −1, id, obj+0x30)` — 3-D at the placement [M]; the port's
+/// create maps p0=on, p1=one-shot, p2=id, p3=is2d, p4=off, p5=global [M 0x1b2628:24-48]), a
+/// global trigger finding the `GlobalVoiceHandle` busy kills itself [M :19-28], and a finished
+/// one-shot frees the voice and deletes itself [M :71-84]. The ON channels' writers [D the
+/// 0700001b script decode — census_0700001b::dump_0700001b_scripts, cross-checked against
+/// space_missile.rs's P2_WRITES] — every one a CONDITIONAL event-11 write ([cond, ch_if_on,
+/// ch_if_off, val] — `Script_EventHandler` 0x1d94c0 case 0x11: the write lands on the param-2
+/// channel only while the param-0 condition channel reads OFF [M; the port's nis.rs 0x11 arm]).
+/// The klaxons warn about the missiles STILL ARMED:
+///  - ch 0x4c ← SP#201's 0x06000a31 stream 6 t1500 (SP#201: mode 1, gate p9 = 19 — the launch
+///    order, played while it holds; its real writer is the AND[193,194] mux, pinned on the real
+///    kill path by walkreal's the_first_wave_kill_raises_the_launch_order — the poke here is the
+///    missile test's documented stand-in), condition ch 5 — fires while missile 5 is ARMED;
+///  - ch 0x4d ← SP#152's 0x060009a5 t900, condition ch 4 — SP#152 starts on its own out ch 0x55
+///    (mask 1 = SP_Hit 0x1dc470:11-13's own-out bit [M]), written by missile 3's p2 @t550 or
+///    missile 5's @t1 [D P2_WRITES] — it needs a DISARMED m3/m5 and an ARMED m4;
+///  - ch 0x4e ← SP#153's 0x060009a6 t1080, condition ch 3 — started by m2's p2 @t490 / m4's @t1;
+///  - ch 0x4f ← SP#154's 0x060009a7 t1560, condition ch 0x5b (91) — the pair mux [6 & 8] writes
+///    it every tick [M triggers.rs's AND case], so the klaxon fires only while m6 or m8 is still
+///    armed — started by m1's p2 @t1030 / m3's @t1 (ch 0x53);
+///  - ch 0x50 ← SP#155's 0x060009a8 t3000, condition ch 0x5c (92) — the triple mux [1 & 2 & 7],
+///    the same law — started by m7's p2 @t930 or the [0x56 & 0x58] mux → ch 0x59 (m4's t930 +
+///    m6's t730 p2 writes) [D P2_WRITES + the census row].
+/// The drive pokes EVERY tick: the launch-order mux's INPUT channels 193/194 (the mux itself
+/// then writes ch 19 = 1 — its own real write, which the walk order delivers to SP#201's gate;
+/// the inputs' real writers are SP#148's stream-3 write and spawner #163's done channel, pinned
+/// by walkreal's the_first_wave_kill_raises_the_launch_order — the pokes are the missile test's
+/// documented stand-in class) and the console channels 3/4/5/6 (the missiles' p4; the real
+/// writer is the shot screen's t682 write — the missile test's real path for consoles 1/7).
+/// The klaxon conditions are the PAIR muxes [D the census's AND rows: 0x5b←[6, 8], 0x5c←[1, 2, 7]
+/// write ch 91/92 every tick [M triggers.rs's AND case] — the klaxon fires only while a missile
+/// of the pair is STILL ARMED. With m3–m6 disarmed and m1/m2/m7/m8 armed: SP#154 starts off
+/// m3's p2 t1 (ch 0x53, ~t1852 — before the m8 launch branch fails the mission on ch 99 at
+/// ~t3450 [M 0x182c60:23-33]) and its t1560 event lands while ch 91 still reads off (m8 armed)
+/// → ch 0x4f; the [0x56 & 0x58] mux (m4's t930 + m6's t730 p2 writes) starts SP#155 at ~t3180
+/// — still before the fail — and its t3000 event lands with ch 92 off (m1/m2/m7 armed) → ch
+/// 0x50. The console-conditioned klaxons 0x4c (cond ch 5), 0x4d (cond ch 4) and 0x4e (cond ch 3)
+/// stay SILENT — every one of their condition channels is ON here — the live sisters, their
+/// triggers un-triggered in the list.
+/// Sisters: the five triggers sit cold at the load; at most one klaxon sounds at any tick
+/// [M :19-28]; the mission's fail (the m8 launch branch) and the objective's AND #139
+/// [ch 21 & 22 & 27] → ch 0x09 (m1/m2/m7 unarmed → the AND out stays off) pin the level logic
+/// around the chain [D PL#109; M 0x1b1a78 type 3, 0x182c60:23-33]. HARNESS LIMIT (not a game
+/// assertion): the one-shot's natural end needs the audio output's ended-report (`Sound::batch`'s
+/// `take_ended` — [M sfx.rs]); the headless driver has no output, so the FIRST klaxon's voice
+/// holds forever and the second klaxon's ON rise exercises the busy-kill arm [M :19-28] — the
+/// same delete outcome, and the live check below asks the main agent to hear both in the game.
+#[test]
+fn the_launch_order_and_the_disarm_speech_fire_the_pit_klaxons() {
+    let mut w = load();
+    // The speech scripts play OUT: a walker skip-request fast-forwards the running script and
+    // drops its stream writes (the drake_defeat test's SP#198 precedent) — the five ON channels
+    // are exactly those stream writes.
+    w.skip_cutscenes = false;
+    {
+        let sim = w.scene.sim.as_ref().unwrap();
+        assert_eq!(sim.drones.sound_triggers.list.len(), 5,
+            "the five 0xF9 AluWarning triggers exist at the load [D the census]");
+        for c in 0x4c..=0x50u32 {
+            assert!(!sim.drones.channels.on(c), "sister: ch {c:#x} cold at the load");
+        }
+        for id in [0x34cu16, 0x34d, 0x34e, 0x350, 0x36f] {
+            assert!(!sim.drones.sound_triggers.playing(id), "sister: id {id} silent at the load");
+        }
+    }
+    // The drive: the launch-order mux's inputs + consoles 3-6 (above).
+    const DRIVE: [u32; 6] = [193, 194, 3, 4, 5, 6];
+    {
+        let sim = w.scene.sim.as_mut().unwrap();
+        let frame = sim.drones.frame;
+        for c in DRIVE { sim.drones.channels.set(c, 1, frame); }
+    }
+    // Poll the whole chain: per-tick bookkeeping of the five ON channels, the five klaxon ids
+    // and the concurrency (the global voice holds ONE handle [M 0x1b2790:19-28]).
+    let ids = [0x350u16, 0x34e, 0x34c, 0x36f, 0x34d]; // #151, #157, #158, #159, #160 [D]
+    let chans = [0x4cu32, 0x4d, 0x4e, 0x4f, 0x50];
+    let mut rose_at = [None::<u32>; 5];
+    let mut played = [false; 5];
+    let mut max_concurrent = 0usize;
+    let mut saw_playing_any = false;
+    for _ in 0..8200u32 {
+        w.tick(nf_game::player::Input::default(), false);
+        let pre_poke = w.scene.sim.as_ref().unwrap().drones.channels.on(19);
+        {
+            let sim = w.scene.sim.as_mut().unwrap();
+            let frame = sim.drones.frame;
+            for c in DRIVE { sim.drones.channels.set(c, 1, frame); } // the poke_gate hold
+        }
+        let sim = w.scene.sim.as_ref().unwrap();
+        if std::env::var("NF_KLAXON_DEBUG").is_ok() && sim.drones.frame % 500 == 0 {
+            let sp = |ix: u32| sim.drones.scripts.players.iter().find(|p| p.placement as u32 == ix)
+                .map(|p| (p.state, p.info[p.cur].as_ref().map(|s| (s.delay, s.clock as u32)))).unwrap_or((9, None));
+            eprintln!("[klaxon-dbg] f{} ch19 pre={} post={} ch76..80={:?} sp201={:?} sp154={:?} audio_live={} playing={:?} list={}",
+                sim.drones.frame, pre_poke, sim.drones.channels.on(19),
+                (0x4c..=0x50u32).map(|c| sim.drones.channels.on(c) as u8).collect::<Vec<_>>(),
+                sp(201), sp(154),
+                sim.drones.audio.live(),
+                [0x350u16, 0x34e, 0x34c, 0x36f, 0x34d].map(|id| sim.drones.sound_triggers.playing(id)),
+                sim.drones.sound_triggers.list.len());
+        }
+        let mut now_playing = 0usize;
+        for (k, &id) in ids.iter().enumerate() {
+            if sim.drones.sound_triggers.playing(id) {
+                now_playing += 1;
+                saw_playing_any = true;
+                played[k] = true;
+            }
+            if rose_at[k].is_none() && sim.drones.channels.on(chans[k]) {
+                rose_at[k] = Some(sim.drones.frame);
+            }
+        }
+        max_concurrent = max_concurrent.max(now_playing);
+    }
+    let unrisen = (0..5).filter(|k| rose_at[*k].is_none()).map(|k| chans[k]).collect::<Vec<_>>();
+    assert_eq!(unrisen, vec![0x4c, 0x4d, 0x4e],
+        "0x4f/0x50 rise off their condition-cold chains [D P2_WRITES + the decode]; 0x4c/0x4d/0x4e \
+         are the armed-missile warnings — every console ON silences them (the live sisters)");
+    let rose = rose_at.map(|r| r);
+    assert!(rose[3].unwrap() < rose[4].unwrap(),
+        "0x4f (SP#154's t1560) lands before 0x50 (SP#155's t3000) [D P2_WRITES], got {rose:?}");
+    assert!(saw_playing_any && played[3],
+        "the 0x4f klaxon (id 0x36f) plays — the global voice was free at its rise [M \
+         SoundTrigger_Update 0x1b2790's play arm] (0x50's play is the harness-frozen-voice \
+         busy-kill, see the doc)");
+    assert!(max_concurrent <= 1,
+        "the GlobalVoiceHandle holds at most one klaxon [M 0x1b2790:19-28], saw {max_concurrent}");
+    let _ = ids; let _ = played; // the per-id end polls are the harness limit (see the doc)
+    {
+        let sim = w.scene.sim.as_ref().unwrap();
+        // The 0x34d trigger left the list — its ON rose while the first klaxon's voice held, the
+        // busy-kill arm [M :19-28] (headless the first voice never frees — the harness limit).
+        // The other four keep their triggers: #151/#157/#158 never triggered, #159's one-shot
+        // holds its (headless-frozen) voice.
+        assert_eq!(sim.drones.sound_triggers.list.len(), 4,
+            "the busy-killed 0x34d trigger left the list [M :19-28]");
+        let kept: Vec<u16> = sim.drones.sound_triggers.list.iter().map(|t| t.id).collect();
+        for id in [0x350u16, 0x34e, 0x34c, 0x36f] {
+            assert!(kept.contains(&id), "id {id} keeps its trigger (the harness limit — see the doc)");
+        }
+        assert!(!kept.contains(&0x34d), "the 0x34d trigger is gone [M :19-28]");
+        for c in [0x4cu32, 0x4d, 0x4e] {
+            assert!(!sim.drones.channels.on(c), "sister: ch {c:#x} never rose");
+        }
+        for c in [0x4fu32, 0x50] {
+            assert!(sim.drones.channels.on(c),
+                "ch {c:#x} latches — no disc script writes it 0 [D the script decode]");
+        }
+        // The m8 launch branch failed the mission mid-run [M 0x182c60:23-33] — the fail and the
+        // klaxon chain co-exist (the SPs that started before the fail keep playing).
+        assert_eq!(sim.drones.mission.status(), 2,
+            "the armed m8's launch branch fails the mission [M 0x182c60]");
+        // The objective's AND #139 [ch 21 & 22 & 27] → ch 0x09: m1/m2/m7 are armed, so the
+        // objective's mux out stays off — the mux kind's live sister [D PL#109; M 0x1b1a78].
+        assert!(!sim.drones.channels.on(0x09),
+            "sister: the objective's AND out stays off with m1/m2/m7 armed [D #139]");
+    }
+}
+
+/// KIND 0xE4 — the ungated OBJECT_MissileFlame volume (#17 at (−33.44, 19.58, 0) [D the census:
+/// p0 = 0x2 the pain type, p1 = 0x32 the damage 50, p2 = 0 the gate — ungated, p4 = 0 the who]) —
+/// `Hurt_Update` 0x17e5d0's state-0 start law: ungated with who 0 it starts at once [M :51-102],
+/// and the damage rides the player's object contact — `Player_DealWithObjHit` 0x194458's
+/// class-0x27 arm calls `Player_HandlePain(impact + Hurt_GetDamage(obj), type)` [M] — pain types
+/// 1..7 take no armour [M 0x1902c8:84-104], so the contact costs `50 × Plr_DMod` health with the
+/// difficulty factor (Easy 0.6 on this level [M damage_factor's 0x1b row]). The approach floats
+/// the load's own zero-g substate 8 (the p3 == 2 spawn [M Player_Init 0x1910f8 :160-165]; the
+/// same float the walkreal legs drive) to the volume's own collision AABB — the volume's tris
+/// are the placement's object collision [M Hurt_Create 0x17e870:44]. Sister: floating BESIDE it
+/// leaves the health and the contact witness untouched.
+#[test]
+fn the_missile_flame_hurts_on_contact() {
+    let mut w = Walker::new(nf_view::load(&iso(), "0700001b.bin", false).unwrap());
+    w.wait_enabled(3000, "the shuttle arrival");
+    w.top_up_health = false; // the damage must reach the health pool
+    let (centre, standoff, axis, volume) = {
+        let sim = w.scene.sim.as_ref().unwrap();
+        let h = sim.hurts.iter().find(|h| h.placement == 17)
+            .expect("the OBJECT_MissileFlame hurt volume [D the census #17]");
+        assert_eq!((h.kind, h.gate, h.who), (2, 0, 0), "the disc params [D audit:444]");
+        assert!((h.damage - 50.0).abs() < f32::EPSILON, "damage 50 [D p1 = 0x32]");
+        assert!(!h.tris.is_empty(),
+            "the volume carries the placement's object collision [M Hurt_Create 0x17e870:44]");
+        let c = [0.5 * (h.lo[0] + h.hi[0]), 0.5 * (h.lo[1] + h.hi[1]), 0.5 * (h.lo[2] + h.hi[2])];
+        assert!((c[0] - -33.44).abs() < 3.0,
+            "the volume hangs at its placement's x [D (−33.44, 19.58, 0) — the object's own \
+             collision mesh offsets the centre down the shaft, y {y}", y = c[1]);
+        // The stand-off: 2 units beyond the AABB face on its thinnest axis (out of the
+        // capsule's quick-reject reach).
+        let extents = [h.hi[0] - h.lo[0], h.hi[1] - h.lo[1], h.hi[2] - h.lo[2]];
+        let axis = (0..3).min_by(|a, b| extents[*a].partial_cmp(&extents[*b]).unwrap()).unwrap();
+        let mut standoff = c;
+        standoff[axis] = h.hi[axis] + 2.0;
+        (c, standoff, axis, sim.hurts.iter().position(|h| h.placement == 17).unwrap())
+    };
+    let mut reached = false;
+    // The west shaft past the hub is the walkreal route's documented boundary (the route never
+    // crosses it — walkreal_0700001b's route note), so the documented stand-in transit places
+    // Bond just OUTSIDE the stand-off (a further 4 units along the approach axis); the approach
+    // and the contact itself float the real thrusters.
+    {
+        let sim = w.scene.sim.as_mut().unwrap();
+        let mut near = standoff;
+        near[axis] += 4.0 * (standoff[axis] - centre[axis]).signum();
+        sim.bond.pos = near;
+        sim.bond.vel = [0.0; 3];
+    }
+    w.wait(30);
+    for _ in 0..2400u32 {
+        let input = thrust_to(w.scene.sim.as_ref().unwrap(), standoff);
+        w.tick(input, false);
+        let p = w.scene.sim.as_ref().unwrap().bond.pos;
+        if walker::dxz(p, standoff) < 0.5 && (p[1] - standoff[1]).abs() < 0.5 { reached = true; break; }
+    }
+    assert!(reached, "the float reaches the stand-off (at {:?})",
+        w.scene.sim.as_ref().unwrap().bond.pos);
+    let h0 = w.scene.sim.as_ref().unwrap().drones.health.health;
+    for _ in 0..60 {
+        let input = thrust_to(w.scene.sim.as_ref().unwrap(), standoff);
+        w.tick(input, false);
+    }
+    {
+        let sim = w.scene.sim.as_ref().unwrap();
+        assert_eq!(sim.drones.health.health, h0, "sister: no contact at the stand-off");
+        assert_eq!(sim.hurts[volume].hits, 0, "sister: the volume's contact witness is zero");
+    }
+    // The real contact: thrust into the volume until the health moves, then back off (the
+    // volume is not one-shot [D p5 = 0] — every contact tick would bill again).
+    let mut hurt_at = None;
+    for _ in 0..900u32 {
+        let input = thrust_to(w.scene.sim.as_ref().unwrap(), centre);
+        let before = w.scene.sim.as_ref().unwrap().drones.health.health;
+        w.tick(input, false);
+        let sim = w.scene.sim.as_ref().unwrap();
+        if sim.drones.health.health < before {
+            hurt_at = Some((before, sim.drones.health.health, sim.hurts[volume].hits));
+            break;
+        }
+    }
+    let (before, after, hits) = hurt_at.expect("the flame volume hurts on contact [M 0x194458's class-0x27 arm]");
+    assert!(hits >= 1, "the volume's contact witness records the hit");
+    let drop = before - after;
+    assert!((drop - 30.0).abs() < 6.0,
+        "the contact costs damage 50 × the Easy 0.6 factor [M 0x1902c8 + damage_factor's 0x1b \
+         row; D p1 = 0x32], got {before} → {after}");
+    // The exit: the test's own retreat (the volume bills every contact tick — the harness does
+    // not owe the game a death).
+    w.top_up_health = true;
+    for _ in 0..120 {
+        let input = thrust_to(w.scene.sim.as_ref().unwrap(), standoff);
+        w.tick(input, false);
+    }
+}
+
+/// The zero-g thruster input toward `at` (the walkreal harness's `thrust_to`, local copy): the
+/// body-frame dot products as the strafe/lift/forward axes — the float's real input path.
+fn thrust_to(sim: &nf_view::scene::Sim, at: [f32; 3]) -> nf_game::player::Input {
+    let p = sim.bond.pos;
+    let d = [at[0] - p[0], at[1] - p[1], at[2] - p[2]];
+    let m = sim.bond.zero_g_rot;
+    let dot = |a: [f32; 3]| a[0] * d[0] + a[1] * d[1] + a[2] * d[2];
+    nf_game::player::Input {
+        strafe: (dot(m[0]) * 0.15).clamp(-1.0, 1.0),
+        lift: (dot(m[1]) * 0.15).clamp(-1.0, 1.0),
+        forward: (dot(m[2]) * 0.15).clamp(-1.0, 1.0),
+        ..Default::default()
+    }
+}
