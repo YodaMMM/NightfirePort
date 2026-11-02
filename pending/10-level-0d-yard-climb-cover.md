@@ -9,6 +9,3 @@ Do:
 2. Real input only, no health writes. Un-ignore the walk; run walkreal_0700000d_live, every walkreal_*_live, then the full suite.
 
 Rules: shared test helper changes (crates/nf-view/tests/common/) must be opt-in per level (and the code must check the flag); re-run every walkreal_*_live before finishing.
-
----
-claimed-by: sandbox1 at 2026-11-02T21:31Z
