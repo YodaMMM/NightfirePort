@@ -107,6 +107,49 @@ fn the_level_start_shows_the_weapon_name_for_60_ticks() {
 }
 
 #[test]
+fn the_first_label_shows_the_rounds_strip_and_it_remains_after() {
+    let Some(iso) = iso() else { eprintln!("NF_ISO not set — skipping"); return };
+    let mut scene = nf_view::load(&iso, "07000011.bin", false).expect("load");
+    let strips = |scene: &nf_view::scene::Scene, f: &nf_view::gpu::HudFrame| -> Vec<[f32; 4]> {
+        let Some(ti) = scene.hud_textures.iter().position(|(h, _)| *h == 0x0300_0128) else { return Vec::new() };
+        let mut out = Vec::new();
+        for r in f.runs.iter().filter(|r| r.0 == ti + 1) {
+            for q in f.v[r.2 as usize..(r.2 + r.3) as usize].chunks(6) {
+                out.push([(q[0].p[0] + 1.0) * 256.0, (1.0 - q[0].p[1]) * 224.0, (q[2].p[0] + 1.0) * 256.0, (1.0 - q[2].p[1]) * 224.0]);
+            }
+        }
+        out
+    };
+    // The 07000011 f42 capture: during the first 60-tick weapon-name label the ammo bar draws with
+    // it — the strip sprites are still in their created state (template layers 0x1c/0x1d, the
+    // template rect pane (496,394) + (−25,−64) = (471,330)..(496,394), 25×64) [D AmmoSprInfo[5]/[6];
+    // M HUD_CreateDefault 0x199b70 copies the template layer and adds the pane origin].
+    for tick in 0..59 {
+        scene.sim.as_mut().unwrap().step_bond(Default::default(), false, false, false);
+        let f = nf_view::hud::overlay(&scene, 4.0 / 3.0);
+        let bar = strips(&scene, &f);
+        assert!(bar.len() >= 2, "tick {tick}: the strips draw during the first label ({bar:?})");
+        for b in &bar {
+            assert!((b[0] - 471.0).abs() < 0.5 && (b[1] - 330.0).abs() < 0.5 && (b[2] - 496.0).abs() < 0.5 && (b[3] - 394.0).abs() < 0.5, "tick {tick}: the created rect {b:?}");
+        }
+    }
+    // Sister: after the timer the label is gone and the bar REMAINS — the pane fn's timer==0 path
+    // has now positioned it [M 0x19a7f0:248-269] (a rest draw, so at least the background column).
+    for tick in 59..63 {
+        scene.sim.as_mut().unwrap().step_bond(Default::default(), false, false, false);
+        let s = scene.sim.as_ref().unwrap();
+        let f = nf_view::hud::overlay(&scene, 4.0 / 3.0);
+        assert_eq!(s.hud.weapon_label_timer, 0, "tick {tick}: the label ran out");
+        assert!(!strips(&scene, &f).is_empty(), "tick {tick}: the bar remains after the label");
+    }
+    // And once the pane has rested, a switch takes the strips off again (layer 0xff [M 0x19ad0c /
+    // 0x19ae48]; the 2026-10-12 live pass: a mid-game switch shows the name alone).
+    scene.sim.as_mut().unwrap().hud.weapon_label_timer = 30;
+    let f = nf_view::hud::overlay(&scene, 4.0 / 3.0);
+    assert!(strips(&scene, &f).is_empty(), "a later switch hides the strips again");
+}
+
+#[test]
 fn the_entry_fade_draws_under_the_hud() {
     let Some(iso) = iso() else { eprintln!("NF_ISO not set — skipping"); return };
     let mut scene = nf_view::load(&iso, "07000005.bin", false).expect("load");
