@@ -254,11 +254,15 @@ fn the_riders_first_steps_walk_onto_the_top_reveal_plate() {
     }
     // The real steps (the walkreal board window's pattern): walk north to the volume's north
     // edge and back — turn + forward only, no teleports, no position writes.
-    // Sister first: 90 bare ticks (the script's pre-descent window) — whether the bare stand
-    // inside the spawn volume fires the plate decides the walk's causality; the walkreal-a
-    // stand-in missed it on a pure vertical ride, so bare-stand firing is NOT assumed [S].
+    // Sister (measured 2026-11-02, this harness): 90 bare ticks of standing in the spawn
+    // region (the script's whole pre-descent window) leave ch 0x4d LOW — the bare stand does
+    // not fire the plate (walkreal-a's "the stand-in toucher misses on a pure vertical ride");
+    // the player's own WALK onto the plate fires it. A port that fires the plate without the
+    // walk fails here.
     for _ in 0..90u32 { r.step(Input::default(), false); }
     let bare_fired = r.w.scene.sim.as_ref().unwrap().drones.channels.on(0x4d);
+    assert!(!bare_fired,
+        "sister: the bare stand does not fire the reveal plate — the walk does [M Trigger_Hit 0x1b1fc8:56-123's arm chain]");
     for k in 0..84u32 {
         let sim = r.w.scene.sim.as_ref().unwrap();
         let p = sim.bond.pos;
@@ -267,7 +271,6 @@ fn the_riders_first_steps_walk_onto_the_top_reveal_plate() {
         let err = walker::wrap_pi(desired - sim.bond.yaw);
         let input = Input { turn: err.clamp(-0.08, 0.08), forward: 1.0, ..Default::default() };
         r.step(input, false);
-        if r.w.scene.sim.as_ref().unwrap().drones.channels.on(0x4d) { break; }
     }
     {
         let sim = r.w.scene.sim.as_ref().unwrap();
