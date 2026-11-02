@@ -507,7 +507,11 @@ impl Walker {
                     || inv.carried.get(sim.weapons.ammo_type(w)).copied().unwrap_or(0) > 0
             })
         };
-        let lane = self.dmg.lane_fights;
+        // The unseen-fights mode shares the lane fights' resupply gates: a player who runs dry
+        // picks up the guards' own drops instead of walking on (the 12 corridor: clip 1 spare 0
+        // at the shotgun guard's door — the fights' silent `!armed` return left Bond standing
+        // in the lane [L the walkreal_07000012_real_damage run, 2026-11-02]).
+        let lane = self.dmg.lane_fights || UNSEEN_FIGHTS.with(|c| c.get());
         if !armed(self) {
             if lane && !self.dmg.resupplying {
                 self.dmg.resupplying = true;
