@@ -8,3 +8,6 @@ Do:
 1. For weapon 0x1e, pin the game's drone fire at range [M]: the accuracy/spread law with distance (DroneWeap_*), the fire rate and burst, the per-hit damage and any range falloff, the drone stats that scale it (skin's accuracy/difficulty), and the max engagement range.
 2. Compare with the port at 34-41 u: hit probability per shot, damage per hit, shots per second. Fix every difference; cite each number.
 3. Un-ignore the 0c and 0d real-health walks if they now finish; if a walk still dies with a faithful port, give it cover the level offers (no health writes). Run walkreal_0700000c/0d_live, enemy_accuracy_live, every real-damage walk, then the full suite.
+
+---
+claimed-by: sandbox5 at 2026-11-02T15:40Z
