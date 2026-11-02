@@ -484,7 +484,7 @@ fn the_spawn_hint_fires_on_the_first_walk() {
 /// assertion): the one-shot's natural end needs the audio output's ended-report (`Sound::batch`'s
 /// `take_ended` — [M sfx.rs]); the headless driver has no output, so the FIRST klaxon's voice
 /// holds forever and the second klaxon's ON rise exercises the busy-kill arm [M :19-28] — the
-/// same delete outcome, and the live check below asks the main agent to hear both in the game.
+/// same delete outcome, and both should be audible in the game (a live check).
 #[test]
 fn the_launch_order_and_the_disarm_speech_fire_the_pit_klaxons() {
     let mut w = load();
