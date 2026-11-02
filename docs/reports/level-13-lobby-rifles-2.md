@@ -79,3 +79,16 @@ pass, and the only failures anywhere are the 3 permitted disc_golden ones.
 ## Usage
 
 not visible to me — this environment shows no token, credit or context-window figures.
+
+## ntfy failed
+
+All three transports failed, in order (2026-11-02 ~09:44 UTC):
+
+1. curl: `curl: (28) Connection timed out after 20001 milliseconds`
+2. python urllib: `urllib.error.URLError: <urlopen error [Errno 101] Network is unreachable>`
+3. wget: no output, still hanging when the 60 s tool timeout killed it
+   (`wget -q -O- --post-data "level-13-lobby-rifles-2: done" https://ntfy.sh/nightfire-yoda-8k3x`)
+
+Outbound traffic to ntfy.sh appears blocked from this sandbox; the finish step and the branch push
+completed normally.
+
