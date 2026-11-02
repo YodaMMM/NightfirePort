@@ -85,3 +85,12 @@ None required — the fix is walk-side tactics; the sim's damage/fight code is u
 ## Usage
 
 not visible to me
+
+## ntfy failed
+
+All three fallbacks failed (ntfy.sh is not reachable from this sandbox, same as the earlier
+sessions):
+
+1. curl: `curl: (28) Connection timed out after 20001 milliseconds`
+2. python urllib: `urllib.error.URLError: <urlopen error [Errno 101] Network is unreachable>`
+3. wget: exit code 124 (the 25 s timeout killed it; no output)
