@@ -21,3 +21,5 @@ totals.
 Progress log:
 - setup reused from the sandbox (repo, work/, ISO, rust, queue worktree all present)
 - branch created from origin/master 6042ee53
+Progress log (continued 2026-11-02 01:03 UTC, fresh session):
+- resumed the branch (its only prior commit was the start entry); merged origin/master 8f27b95e into it (516bb5b1); plan: census probe on 07000014 [D], audit the 9 tests' kind coverage, add the missing player-touchable kinds with sisters, fix gaps, run the three groups + suite chunks, report by 02:35 UTC.
