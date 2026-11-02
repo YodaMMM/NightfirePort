@@ -11,3 +11,8 @@ Do:
 
 ---
 claimed-by: sandbox5 at 2026-11-02T14:53Z
+
+---
+## Report (done, 2026-11-02T15:39Z)
+
+Closed by the driver: the report is on `s/level-03-real-health-servant` (docs/reports/level-03-real-health-servant.md); the worker didn't run finish.sh.
