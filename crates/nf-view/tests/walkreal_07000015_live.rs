@@ -478,3 +478,25 @@ fn crouching_under_the_door52_beam_passes_it() {
         }
     }
 }
+
+/// Real damage: the whole-mission walk (the silo gantry → the Omega Sector exit → the real
+/// 07000016 load) with the health top-up off for every walker it makes — the garrison's fire
+/// (all 20 guards stay live and armed) and the laser-mine blasts are the port's own damage —
+/// and the walker's return fire on; Bond's death panics with the death spot and the last hits
+/// (common/damage_log.rs). No health/armour/ammo writes (the mine shots are the real fire path;
+/// the route's own tactic — every mine shot from down its lane — is the level's offering); the
+/// exit load into 07000016 is the game's own USE-exit path [M Player_Activate 0x1a5170 case
+/// 0x1d → Trigger_Activate 0x1b2318], not a teleport.
+///
+/// The fights HEAD-HUNT (`with_real_damage_head_hunting`): the first real-health run's damage
+/// log shows the attrition law — the route's own #526 doorway blast cost 27.73, the
+/// garrison's long-range chip the rest, and the killing sequence was a 2.8-u guard's spray
+/// down the south corridor igniting the #447/#448/#449 mine fence [M Bullet_update
+/// 0x12e7b0: any bullet's flight segment picks a mine (mode 0x201, mask 0) → Collide_PickObj
+/// — the game's own guard fire sets mines off] — the level's offering is the aim: one head
+/// hit drops a guard before its spray reaches a fence [M NDrone2_HitDamage 0x145558 ×
+/// DroneDamage_Head].
+#[test]
+fn walk_spawn_to_the_omega_sector_exit_real_damage() {
+    walker::with_real_damage_head_hunting(walk_spawn_to_the_omega_sector_exit);
+}

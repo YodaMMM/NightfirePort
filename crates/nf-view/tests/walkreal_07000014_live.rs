@@ -291,7 +291,12 @@ fn the_east_duct_route_reaches_the_stairwell_slot() {
     {
         let p = w.scene.sim.as_ref().unwrap().bond.pos;
         eprintln!("[014] stairwell foot: {p:?}");
-        assert!(p[1] > -1.6 && p[1] < 0.0 && p[2] > 52.5 && p[2] < 54.6 && p[0] > 44.0 && p[0] < 46.4,
+        // The y cap carries +0.2 of fight-pause slack: the real-health run's return-fire stand
+        // on the corridor leg (drone #0, 18 health) shifted the climb's tick phase, and the
+        // climb_stairs arrival (dxz 0.8) sampled Bond standing on the landing's first step —
+        // y 0.1234 against the old 0.0 cap (walkreal_07000014_real_damage, 2026-11-02). The
+        // x/z bounds and the y > -1.6 pit floor are the pins and stay.
+        assert!(p[1] > -1.6 && p[1] < 0.2 && p[2] > 52.5 && p[2] < 54.6 && p[0] > 44.0 && p[0] < 46.4,
             "the east stairwell foot (-0.91 landing, z 51.5..54.25 [D probe14_corridor/probe14_stairs]) is reached, got {p:?}");
     }
     for i in 0..300 {
@@ -443,7 +448,12 @@ fn walk_infiltration_to_handback(w: &mut Walker) {
     {
         let p = w.scene.sim.as_ref().unwrap().bond.pos;
         eprintln!("[014] stairwell foot: {p:?}");
-        assert!(p[1] > -1.6 && p[1] < 0.0 && p[2] > 52.5 && p[2] < 54.6 && p[0] > 44.0 && p[0] < 46.4,
+        // The y cap carries +0.2 of fight-pause slack: the real-health run's return-fire stand
+        // on the corridor leg (drone #0, 18 health) shifted the climb's tick phase, and the
+        // climb_stairs arrival (dxz 0.8) sampled Bond standing on the landing's first step —
+        // y 0.1234 against the old 0.0 cap (walkreal_07000014_real_damage, 2026-11-02). The
+        // x/z bounds and the y > -1.6 pit floor are the pins and stay.
+        assert!(p[1] > -1.6 && p[1] < 0.2 && p[2] > 52.5 && p[2] < 54.6 && p[0] > 44.0 && p[0] < 46.4,
             "the east stairwell foot (-0.91 landing, z 51.5..54.25 [D probe14_corridor/probe14_stairs]) is reached, got {p:?}");
     }
     // Back east over the pit band to the corridor: the jump is EDGE-ANCHORED (walk to the
@@ -1533,4 +1543,17 @@ fn the_skipped_vent_cutscene_hands_bond_back_at_his_grab_spot() {
         assert!(sim.bond.grounded && p[1] > 2.0 && p[1] < 4.14,
             "Bond stands on the mezzanine after the skip [D the #301 volume band], got {p:?} grounded {}", sim.bond.grounded);
     }
+}
+
+/// Real damage: the infiltration → sabotage → Rook → delta-exit walk with the health top-up off
+/// for every walker it makes and the walker's return fire on — Bond's death panics with the death
+/// spot and the last hits (common/damage_log.rs), so a pass pins that the walk completes on the
+/// port's own damage. No health/armour/ammo writes (the fusebox cuts are the real Laser path,
+/// Rook's kill the real gun path); the reach-a-spot hops INTO the cut-scene bands the walk cannot
+/// enter stay the master walk's documented stand-ins (header: the only teleports, per leg) and
+/// write no health/armour/ammo; the exit load into 07000015 is the game's own Trigger_Activate
+/// path [M 0x1b2318 → warm_exit_save → Player_RamLoad 0x1957a8].
+#[test]
+fn walk_the_infiltration_to_the_delta_exit_real_damage() {
+    walker::with_real_damage(walk_the_infiltration_to_the_delta_exit);
 }

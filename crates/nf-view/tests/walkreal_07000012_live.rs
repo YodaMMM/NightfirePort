@@ -103,3 +103,33 @@ fn walk_spawn_to_the_shaft_exit() {
             "12's 'Activate elevator override control' stays complete [M 0x182270 keeps previous parts]");
     }
 }
+
+/// Real damage: the whole-mission walk (the Tower2 B offices route plus the real 0700004A load)
+/// with the health top-up off for every walker it makes and the walker's return fire on — Bond's
+/// death panics with the death spot and the last hits (common/damage_log.rs), so a pass pins that
+/// the route completes on the port's own damage. No health/armour/ammo writes anywhere; the exit
+/// load into 0700004A is the game's own Trigger_Activate path [M 0x1b2318 → Player_RamLoad
+/// 0x1957a8], not a teleport.
+///
+/// The fights HEAD-HUNT (`with_real_damage_head_hunting`): the level's guards are the
+/// 12-health type-2 skins (0x500004/0x500006/0x500008) — the first real-health run's damage
+/// log: the whole 100.0 was 20 hits, the shotgun guard #10 (skin 0x5000008, weapon 0x1c)
+/// dealing 72 in 16 rounds from 4.2 u [D weapon_data 0x2bf150 +0x18 = 8 pellets] while the
+/// return fire's torso taps needed 3-5 rounds a guard — the level's own offering is the aim:
+/// one head hit drops a 12-health guard [M NDrone2_HitDamage 0x145558 × DroneDamage_Head].
+/// The port's fire law is the game's: one accuracy roll per FireWeapon call, the 8-pellet
+/// cone along the SAME aim [M DroneWeap_FireWeapon 0x178f68:233-241], TooClose ×2
+/// accuracy/damage only under 3.0 u [M DroneWeap_DoBulletAccuracy 0x179740:113-115;
+/// Drone_ModBulletDamage 0x139f50:21-23] — the 4.2-u volley that landed 6 pellets on one
+/// frame is the game's own rolled-hit cone, not a port over-damage.
+/// The fights also answer the DESK guards (`with_real_damage_unseen_fights`): the offices'
+/// guards sit behind the desk rows and the first run's fights never started against the worst
+/// of them (the plain pick needs one clear eye ray; the Office-C computer mesh eats every ray
+/// — the same mechanism the 07000013 lobby diagnosed) while the shotgun guard's volleys land.
+/// The unseen fight's creep walks Bond up to the desk lip until the line opens — the level's
+/// own cover law, not a cheat: no health, armour, ammo or position writes.
+#[test]
+fn walk_spawn_to_the_shaft_exit_real_damage() {
+    walker::with_real_damage_head_hunting(||
+        walker::with_real_damage_unseen_fights(walk_spawn_to_the_shaft_exit))
+}

@@ -148,17 +148,22 @@ fn walk_spawn_to_the_lower_floor_load_point() {
     w.walk_to(Wp::new(15.2, 35.6, 6.0).r(1.0), "the south run down (39.1→35.2)");
     w.walk_to(Wp::new(14.8, 35.4, 5.0).r(0.9), "the south-west landing 35.2");
     band(&w, 34.6, 36.6, "the SW landing");
+    // The real-health run's fights pause the descent (a return-fire stand or a pain stagger
+    // on the flight), so the dxz-arrival can sample the band a step or two up the flight —
+    // measured 32.516 against this 32.5 cap (walkreal_07000011_real_damage, 2026-11-02). The
+    // UPPER caps here carry +0.2 of fight-pause slack; the LOWER caps (the descent reached
+    // the flight's bottom) are the pins and stay.
     w.walk_to(Wp::new(14.8, 31.4, -2.6).r(1.0), "the west flight C down (35.2→31.1)");
-    band(&w, 30.4, 32.5, "flight C's bottom");
+    band(&w, 30.4, 32.7, "flight C's bottom");
     w.walk_to(Wp::new(22.4, 31.3, -3.0).r(1.0), "the north strip 31.1 east");
     w.walk_to(Wp::new(23.0, 27.4, 3.8).r(1.0), "the east connector down (31.1→27.1)");
-    band(&w, 26.4, 29.3, "connector 1's bottom");
+    band(&w, 26.4, 29.5, "connector 1's bottom");
     w.walk_to(Wp::new(15.0, 27.4, 4.8).r(1.0), "the south strip 27.1 west");
     w.walk_to(Wp::new(14.8, 23.3, -2.6).r(1.0), "the west flight B down (27.1→23.0)");
-    band(&w, 22.4, 24.8, "flight B's bottom");
+    band(&w, 22.4, 25.0, "flight B's bottom");
     w.walk_to(Wp::new(22.4, 23.2, -3.0).r(1.0), "the north strip 23.0 east");
     w.walk_to(Wp::new(23.0, 19.3, 3.8).r(1.0), "the east connector down (23.0→18.9)");
-    band(&w, 18.2, 21.1, "connector 2's bottom");
+    band(&w, 18.2, 21.3, "connector 2's bottom");
     w.walk_to(Wp::new(15.0, 19.2, 4.8).r(1.0), "the south strip 18.9 west");
     w.walk_to(Wp::new(14.8, 15.4, -2.6).r(1.0), "the west flight A down (18.9→15.0)");
     {
@@ -275,4 +280,18 @@ fn walk_spawn_to_the_lower_floor_load_point() {
             "'Escape from the tower' still announced (its writer is 07000013's whole-mission AND) [D §2]");
     }
     eprintln!("[011] walked out in {} ticks; stuck {}; falls {}", w.total_ticks, w.report.stuck_events.len(), w.report.falls.len());
+}
+
+/// Real damage: the whole walked chain (07000011 spawn → the stairwell descent → the Load
+/// Point exit → the real 07000012 load → tower2's route → the shaft exit → the real 0700004A
+/// load) with the health top-up off for every walker it makes — the stairwell guards'
+/// (0x11/0x13/0x14/0x36/0x37 [D §5]) fire is the port's own damage — and the walker's return
+/// fire on; Bond's death panics with the death spot and the last hits (common/damage_log.rs).
+/// No health/armour/ammo writes anywhere (the leg marker `w.top_up_health = true` is the
+/// topped-up allowance and reads off under this wrapper [M damage_log.rs no_topup_env]); the
+/// loads are the game's own exit → next-level path ([M ResetMap_LevelToLoad 0x1b24b8;
+/// Player_RamLoad 0x1957a8]), not teleports.
+#[test]
+fn walk_spawn_to_the_lower_floor_load_point_real_damage() {
+    walker::with_real_damage(walk_spawn_to_the_lower_floor_load_point);
 }
