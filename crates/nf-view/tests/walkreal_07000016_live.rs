@@ -594,7 +594,7 @@ fn press_use_until(w: &mut Walker, at: [f32; 3], max: u32, done: impl Fn(&nf_vie
 ///    played the whole 0x06000632 cinema inside one tick — the disable window was never
 ///    observed and the old 3000-tick wait starved. The skip now comes off before the squad
 ///    phase and the mission's own transition always plays out.
-/// Live check for the main agent: in the real game the pit squad (all four ch 0x17/0x18/0x19/
+/// Live check: in the real game the pit squad (all four ch 0x17/0x18/0x19/
 /// 0x1a deaths) falls to a walked Bond with the Delta Repeater's own ammo, or the mission's
 /// flow expects the guards' frag rolls (and their self-flee) here.
 #[test]
