@@ -9,3 +9,6 @@ Do:
 1. Prove when the game's drones throw grenades at all [M the drone grenade-throw decision: weapon/prop gates, range, LOS, cooldown, difficulty], and whether the 07000011 start-corridor guards ever throw one in the game. If the port's lob is not the game's, fix or remove it with citations.
 2. With the faithful throw and the faithful flee gate together, both corridor tests must pass without changing their [L] pins (they were taken from the game).
 3. Run nf-game, start_corridor_guard_07000011_live, every grenade/consider test, every real-damage walk, then the full suite.
+
+---
+claimed-by: sandbox6 at 2026-11-02T15:47Z
