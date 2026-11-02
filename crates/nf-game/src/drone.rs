@@ -21172,7 +21172,6 @@ mod tests {
             body_glow: None,
             gun_through_wall: false,
             view_bone: 0,
-            spawn_stats_params: None,
             dist_to_player: [100000.0; 4],
             props: [0; 3], alert_props: None, sight_range: 0.0, half_fov: 0.0, engage_range: 0.0, combat_range: 0.0,
             accuracy: 0, aggression: 0, reaction: 0, recover: 0, los: false, seen: false, ever_seen: false, ever_seen_3c: false, bond_alive: true, visibility: 0.0,
