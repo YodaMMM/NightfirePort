@@ -15,3 +15,8 @@ Rules for this task:
 
 ---
 claimed-by: sandbox5 at 2026-11-02T20:06Z
+
+---
+## Report (done, 2026-11-02T20:53Z)
+
+Closed by the driver: the report is on `s/level-0d-yard-sniper-los` (docs/reports/level-0d-yard-sniper-los.md); the worker didn't run finish.sh.
