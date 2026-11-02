@@ -102,6 +102,9 @@ pub struct DamageLog {
     /// 07000002 castle and 07000007 party real-damage walks went red (a death at the 01 stairwell,
     /// 6000-tick stalls on the 02 geisha and 07 east-stair legs) and they pass with them off.
     pub lane_fights: bool,
+    /// The fight about to run picked a shooter whose boxes are NOT reachable from here (the
+    /// unseen-cover fallback): a short stand cap, the creep has to open the line fast.
+    pub unseen_fight: bool,
     last_health: f32,
     last_hits: Vec<(u32, usize, f32)>,
 }
@@ -213,10 +216,20 @@ impl DamageLog {
     /// the box before the static world's bullet trace stops it (walker.rs `exposed_aim`'s rule —
     /// `Collide_Jointy` 0x1ec180's first box vs the flight's world stop [M 0x1ea398:216-229]),
     /// the one nearest the torso. None = nothing of him is reachable from here.
+    ///
+    /// The ray set is the EYE and the gun's stand-in offsets: the round leaves the view model
+    /// low-right of the eye, and at a wall edge the eye ray clears by a hair while the gun ray
+    /// clips the corner — the 07000013 security-room stand held aim Some (eye ray clear) while
+    /// every round died on the door jamb (tgt hp pinned at 6.0, clip draining, [L the fight#9
+    /// rf-trace]). Both lateral offsets and the low one must be clear to call the box exposed.
     pub fn exposed_part(sim: &nf_view::scene::Sim, i: usize) -> Option<[f32; 3]> {
         let d = &sim.drones.list[i];
         let bp = sim.bond.pos;
         let eye = [bp[0], bp[1] + sim.bond.eye - sim.bond.crouch_drop, bp[2]];
+        let (fy, cy) = (sim.bond.yaw.sin(), sim.bond.yaw.cos());
+        let right = [cy, 0.0, -fy];
+        let gun_spots = [eye, [eye[0] + right[0] * 0.25, eye[1] - 0.15, eye[2] + right[2] * 0.25],
+            [eye[0] - right[0] * 0.25, eye[1] - 0.15, eye[2] - right[2] * 0.25]];
         let data = nf_game::drone::Data {
             tables: &sim.tables, props: &sim.props, scripts: &sim.scripts, weapons: &sim.weapons,
             world: &sim.world, level: sim.level, sequences: &sim.seqs, skins: &sim.skins,
@@ -231,8 +244,13 @@ impl DamageLog {
             let c = [b.m[3][0], b.m[3][1], b.m[3][2]];
             let ray = [c[0] - eye[0], c[1] - eye[1], c[2] - eye[2]];
             let Some(t_box) = nf_game::damage::ray_box(eye, ray, &b) else { continue };
-            let tw = sim.world.segment_bullet_scoped(sim.world.find_cel(eye), eye, c);
-            if tw.is_some_and(|w| w < t_box) { continue; }
+            let mut clear = true;
+            for g in &gun_spots {
+                let gr = [c[0] - g[0], c[1] - g[1], c[2] - g[2]];
+                let tw = sim.world.segment_bullet_scoped(sim.world.find_cel(*g), *g, c);
+                if tw.is_some_and(|w| w < t_box) { clear = false; break; }
+            }
+            if !clear { continue; }
             let dev = ((c[0] - torso[0]).powi(2) + (c[1] - torso[1]).powi(2) + (c[2] - torso[2]).powi(2)).sqrt();
             if best.map_or(true, |(bd, _)| dev < bd) { best = Some((dev, c)); }
         }
@@ -241,6 +259,63 @@ impl DamageLog {
 
     /// Bond can put a round into drone `i` from where he stands (`exposed_part`).
     pub fn visible(sim: &nf_view::scene::Sim, i: usize) -> bool { Self::exposed_part(sim, i).is_some() }
+
+    /// Why `exposed_part` cannot see drone `i`: every hit box's centre ray with its world stop and
+    /// the stopping owner's run, plus the guard's own muzzle→Bond path. NF_RF_GEOM diagnostic.
+    pub fn geom_dump(sim: &nf_view::scene::Sim, i: usize) {
+        let d = &sim.drones.list[i];
+        let bp = sim.bond.pos;
+        let eye = [bp[0], bp[1] + sim.bond.eye - sim.bond.crouch_drop, bp[2]];
+        eprintln!("[geom] guard #{i}: pos ({:.2},{:.2},{:.2}) weapon {:#x} hp {:.1} down {} corpse {} present {} enabled {} team {} los {} seen {} dist {:.2} state {:#x} danim {:#x} anim_class {} anim_state {:#x}",
+            d.pos[0], d.pos[1], d.pos[2], d.weapon, d.health, d.down, d.corpse, d.present, d.enabled, d.team, d.los, d.seen, d.dist,
+            d.state, d.anim.danim, d.anim.class, d.anim.state);
+        let data = nf_game::drone::Data {
+            tables: &sim.tables, props: &sim.props, scripts: &sim.scripts, weapons: &sim.weapons,
+            world: &sim.world, level: sim.level, sequences: &sim.seqs, skins: &sim.skins,
+            skeletons: &sim.skeletons, nav: &sim.nav, covers: &sim.covers, tuning: &sim.tuning,
+            hitboxes: &sim.hitboxes, volumes: &sim.volumes, sfx: sim.sfx.as_ref(), models: &sim.models,
+            surfaces: sim.surfaces.as_ref(), voices: sim.voices.as_deref(), difficulty: sim.drones.difficulty,
+            ai_points: &sim.ai_points,
+        };
+        let boxes = d.hit_boxes(&data);
+        let cell_bond = sim.world.find_cel(eye);
+        eprintln!("[geom] guard #{i}: {} boxes, bond cel {cell_bond:?} eye ({:.2},{:.2},{:.2})",
+            boxes.len(), eye[0], eye[1], eye[2]);
+        let mut stop_named = false;
+        for (k, b) in boxes.iter().enumerate() {
+            let c = [b.m[3][0], b.m[3][1], b.m[3][2]];
+            let ray = [c[0] - eye[0], c[1] - eye[1], c[2] - eye[2]];
+            let t_box = nf_game::damage::ray_box(eye, ray, b);
+            let tw = sim.world.segment_bullet_scoped(cell_bond, eye, c);
+            let twf = sim.world.segment_bullet(eye, c);
+            eprintln!("[geom]   box {k} part {} centre ({:.2},{:.2},{:.2}) half {:?} t_box {t_box:?} tw_scoped {tw:?} tw_flat {twf:?}",
+                b.part, c[0], c[1], c[2], b.half);
+            // Name the blocking runs once: the runs whose bounds hold the first blocked ray's stop point.
+            if !stop_named && t_box.is_some() && tw.is_some_and(|w| w < t_box.unwrap()) {
+                stop_named = true;
+                let s = [eye[0] + ray[0] * tw.unwrap(), eye[1] + ray[1] * tw.unwrap(), eye[2] + ray[2] * tw.unwrap()];
+                if let Some(runs) = cell_bond.and_then(|cel| sim.world.scoped_run_bounds(cel, eye, c)) {
+                    for (r, owner, lo, hi) in &runs {
+                        let inside = (0..3).all(|a| s[a] >= lo[a] - 0.05 && s[a] <= hi[a] + 0.05);
+                        if inside {
+                            eprintln!("[geom]   stop ({:.2},{:.2},{:.2}) inside run {r} owner {owner} bounds lo ({:.2},{:.2},{:.2}) hi ({:.2},{:.2},{:.2})",
+                                s[0], s[1], s[2], lo[0], lo[1], lo[2], hi[0], hi[1], hi[2]);
+                        }
+                    }
+                }
+            }
+        }
+        // The guard's own lane: muzzle → Bond's chest, scoped from the muzzle's cel and flat.
+        let m = d.muzzle(&data);
+        let chest = [bp[0], bp[1] + 0.6, bp[2]];
+        let cell_g = sim.world.find_cel(m);
+        let tw_g = sim.world.segment_bullet_scoped(cell_g, m, chest);
+        let twf_g = sim.world.segment_bullet(m, chest);
+        let owners_g = cell_g.and_then(|cel| sim.world.scoped_run_owners(cel, m, chest));
+        eprintln!("[geom] guard #{i}: muzzle ({:.2},{:.2},{:.2}) cel {cell_g:?} → chest tw_scoped {tw_g:?} tw_flat {twf_g:?} owners {:?} bond cel {cell_bond:?}",
+            m[0], m[1], m[2], owners_g.as_ref().map(|o| &o[..o.len().min(6)]));
+    }
+
 
     pub fn summary(&self, sim: &nf_view::scene::Sim) -> String {
         let mut top = self.by_owner.clone();
@@ -289,19 +364,47 @@ impl Walker {
                 let d = &sim.drones.list[i];
                 ((d.pos[0] - sim.bond.pos[0]).powi(2) + (d.pos[2] - sim.bond.pos[2]).powi(2)).sqrt()
             };
+            let mut unseen_fight = false;
             let pick = if !self.dmg.lane_fights {
                 cands.iter().copied().find(|&i| DamageLog::visible(sim, i))
             } else {
-                cands.iter().copied()
+                let vis = cands.iter().copied()
                     .filter(|&i| DamageLog::visible(sim, i))
                     .min_by(|&a, &b| {
                         dmg_of(b).total_cmp(&dmg_of(a))
                             .then(dist_of(a).total_cmp(&dist_of(b)))
-                    })
+                    });
+                match vis {
+                    Some(i) => Some(i),
+                    // Nobody's boxes are reachable from here (a crouched guard behind the lobby
+                    // desks: the centre rays stop at the desk top [L the NF_RF_GEOM dump — the
+                    // Office-C_Obj9_computer mesh at (15.0,0.9,-2.1)..(15.7,1.6,-1.3) eats every
+                    // ray]). A player under fire from unseen cover pushes TOWARD the muzzle until
+                    // the line opens over the desk lip — the stand's creep does exactly that — so
+                    // fight the nearest shooter who is actually hurting Bond instead of standing
+                    // in the open chewing (the 07000012 bend death: 64 health gone while no fight
+                    // ever started).
+                    None => {
+                        unseen_fight = true;
+                        // Prefer whoever is actually hurting Bond; else the nearest shooter —
+                        // `shooters` already guarantees he hit Bond in the last 240 frames or is
+                        // firing at him this second (the 0.00 grazes still mean the muzzle is
+                        // live and the pellets reach).
+                        cands.iter().copied().find(|&i| dmg_of(i) > 0.0)
+                            .or_else(|| cands.first().copied())
+                    }
+                }
             };
+            self.dmg.unseen_fight = unseen_fight;
             if trace && pick.is_none() && !cands.is_empty() {
                 eprintln!("[rf-trace] {label} tick {}: shooters {:?} none visible (bond {:?}, health {:.1}, clip {} spare {})",
                     self.total_ticks, cands, sim.bond.pos, sim.drones.health.health, sim.gun.clip, sim.gun.spare);
+                // NF_RF_GEOM: full ray analysis of every shooter the world trace cannot see —
+                // each hit box's centre ray (t_box, the world stop, the stopping owner) and the
+                // guard's own muzzle→Bond path. Investigation tool (level-13-lobby-rifles).
+                if std::env::var_os("NF_RF_GEOM").is_some() && self.total_ticks % 60 == 0 {
+                    for &i in &cands { DamageLog::geom_dump(sim, i); }
+                }
             }
             pick
         };
@@ -332,11 +435,14 @@ impl Walker {
                 self.dmg.resupplying = false;
             }
             if !armed(self) { return false; }
-        } else if lane && !self.dmg.resupplying {
+        } else if lane {
             // A nearly-dry gun starts a fight it cannot finish (the door fight ran on clip 2
             // spare 0 and the 24 hp sniper outlived it): restock first when the floor has drops.
+            // INSIDE a resupply pass the fights still run (a pass with no answer leaves Bond
+            // walking the nav legs under crossfire — the spawn-lobby chew on the skipped-fight
+            // run): the dry stand's own resupply-after covers the empty gun.
             let low = { let sim = self.scene.sim.as_ref().unwrap(); sim.gun.clip + sim.gun.spare < 10 };
-            if low {
+            if low && !self.dmg.resupplying {
                 self.dmg.resupplying = true;
                 self.resupply(label);
                 self.dmg.resupplying = false;
@@ -345,7 +451,11 @@ impl Walker {
         self.dmg.fighting = true;
         self.dmg.fights += 1;
         let h0 = self.scene.sim.as_ref().unwrap().drones.health.health;
-        let killed = self.switch_to_gun(label) && self.stand_and_fire(di, 900);
+        // An unseen fight gets a short cap: the creep either opens the line quickly or Bond is
+        // standing in a lane he cannot answer — walk on (the leg's own return-fire gate re-fights
+        // from the next spot).
+        let cap = if self.dmg.unseen_fight { 300 } else { 900 };
+        let killed = self.switch_to_gun(label) && self.stand_and_fire(di, cap);
         // The stand may have emptied the gun (stand_and_fire gives up when clip+spare hit 0):
         // restock from the floor drops so the NEXT fight does not run dry (same run, the sniper).
         if lane && !armed(self) && !self.dmg.resupplying {
@@ -399,7 +509,7 @@ impl Walker {
                 let torso = [d.pos[0], d.pos[1] + 0.3, d.pos[2]];
                 // Re-pick the exposed part every 10 ticks (the guard animates, cover buries a part).
                 if t % 10 == 0 { aim = DamageLog::exposed_part(sim, di); }
-                if aim.is_none() { unseen += 1; if unseen > 60 { return false; } } else { unseen = 0; }
+                if aim.is_none() { unseen += 1; if unseen > 120 { return false; } } else { unseen = 0; }
                 // No round landed for 300 ticks: walk on (a guard in cover the stand cannot reach;
                 // the 13 lobby stand took 40 health that way).
                 if d.health < hp0 { hp0 = d.health; last_hit = t; dry = 0; }
@@ -428,12 +538,17 @@ impl Walker {
                     && t.saturating_sub(last_tap) >= 8;
                 let crowd = self.dmg.back_off.is_some_and(|r| sim.drones.list.iter().any(|o| o.team == 1 && o.enabled && o.present
                     && !o.corpse && o.health > 0.0 && ((o.pos[0] - b[0]).powi(2) + (o.pos[2] - b[2]).powi(2)).sqrt() < r));
+                // The unseen-cover creep: a player pushing toward a guard crouched behind a desk
+                // walks up to the lip until his own eye line clears it over the top (the ray to
+                // the boxes steepens as the stand-off shrinks). Creep in bursts along the aim,
+                // never while a guard stands inside the back-off range.
+                let creep = aim.is_none() && !crowd && self.dmg.back_off.is_some() && unseen % 12 < 7;
                 if trace && t % 60 == 0 {
-                    eprintln!("[rf-trace] fight#{di} t{t}: tgt hp {:.1} at ({:.1},{:.1}) bond ({:.1},{:.1}) hp {:.1} aim {:?} blocked {blocked} err {err:.3} perr {perr:.3} clip {} spare {}",
+                    eprintln!("[rf-trace] fight#{di} t{t}: tgt hp {:.1} at ({:.1},{:.1}) bond ({:.1},{:.1}) hp {:.1} aim {:?} blocked {blocked} err {err:.3} perr {perr:.3} clip {} spare {} creep {creep}",
                         sim.drones.list[di].health, sim.drones.list[di].pos[0], sim.drones.list[di].pos[2],
                         b[0], b[2], sim.drones.health.health, aim.map(|a| [a[0], a[2]]), sim.gun.clip, sim.gun.spare);
                 }
-                (Input { turn: err.clamp(-0.08, 0.08), look: perr.clamp(-0.08, 0.08), forward: if crowd { -1.0 } else { 0.0 }, ..Default::default() }, fire, reload)
+                (Input { turn: err.clamp(-0.08, 0.08), look: perr.clamp(-0.08, 0.08), forward: if crowd { -1.0 } else if creep { 0.5 } else { 0.0 }, ..Default::default() }, fire, reload)
             };
             if reload {
                 self.scene.sim.as_mut().unwrap().step_bond(Input::default(), false, true, false);
