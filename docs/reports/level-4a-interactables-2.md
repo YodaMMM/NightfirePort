@@ -77,3 +77,14 @@ for the whole descent, 0/2400).
 
 not visible to me — this environment exposes no token, credit, cost or context-window figures
 for the session (no usage header, no billing panel, no context meter is shown to me anywhere).
+
+## ntfy failed (appendendum, 2026-11-02 05:36 UTC)
+
+The finish-time notification could not be sent: the sandbox died mid-finish (the session was
+cut during the fallback chain), and the retries from the next session's sandbox all failed:
+1. curl → `curl: (28) Connection timed out after 20001 milliseconds`
+2. python urllib → `urllib.error.URLError: <urlopen error [Errno 101] Network is unreachable>`
+3. wget → timed out after 30 s, killed.
+
+The queue entry was registered before the cut (`finish.sh 10-level-4a-interactables-2 done`
+printed `OK done 10-level-4a-interactables-2`).
