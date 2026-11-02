@@ -234,6 +234,45 @@ fn walk_spawn_to_the_omega_sector_exit() {
     w.walk_to(Wp::new(34.6, 41.4, 9.8).r(0.6), "door[38] E reach");
     open_door_facing(&mut w, [34.6, 41.4, 10.5], "door[38]");
     walk_plain(&mut w, [34.6, 41.4, 7.5], 0.35, "south of door[38], the shot line");
+    {
+        // consider-explosive-gate-3 diagnostic: the shot line's clearance against each fence
+        // mine's pick sphere (the segment_t gate [M worldobj.rs segment_t: sphere then tris]) —
+        // the real-damage run's Bond arrives with the guards' dropped AR auto-equipped (the
+        // walk-over take [M Player_IsBetterWeapon 0x1a6eb0]), whose muzzle shifts the line.
+        let sim = w.scene.sim.as_ref().unwrap();
+        let bp = sim.bond.pos;
+        let eye = [bp[0], bp[1] + sim.bond.eye - sim.bond.crouch_drop, bp[2]];
+        let at = [35.6f32, 42.3, 17.47];
+        let dir = [at[0] - eye[0], at[1] - eye[1], at[2] - eye[2]];
+        let dd: f32 = dir.iter().map(|v| v * v).sum();
+        for plc in [383usize, 384, 385] {
+            let m = &sim.drones.mines[mine_idx(&w, plc)];
+            let ac = [m.centre[0] - eye[0], m.centre[1] - eye[1], m.centre[2] - eye[2]];
+            let t = (ac.iter().zip(&dir).map(|(a, b)| a * b).sum::<f32>() / dd).clamp(0.0, 1.0);
+            let q = [eye[0] + dir[0] * t - m.centre[0], eye[1] + dir[1] * t - m.centre[1], eye[2] + dir[2] * t - m.centre[2]];
+            let d2: f32 = q.iter().map(|v| v * v).sum();
+            eprintln!("[mines] graze #{plc}: gun {:#04x} centre {:?} sph_r {:.3} closest {:.3} {}",
+                sim.gun.weapon, m.centre, m.sph_r, d2.sqrt(), if d2.sqrt() < m.sph_r { "INSIDE the gate" } else { "outside" });
+        }
+    }
+    // The pinned dance re-draws the P2K. The real-health fights upstream drop the guards' ARs and
+    // the walk-over take auto-equips one [M Player_IsBetterWeapon 0x1a6eb0 — the AR 0x1a is rank 3
+    // of BEST_WEAPON, the P2K 0x02 rank 16] — the measured run reaches this mark with the AR in
+    // hand (clip 30 spare 0). The bullet spawns from the camera–gun-bone midpoint for an fp-model
+    // weapon [M Player_WeaponInitBullet 0x1a4bf0:226-245; the port's scene.rs shot_from], so the
+    // AR's muzzle rides the aim line onto a different fence tri: the line eye→#383's centre passes
+    // inside ALL THREE fence pick spheres (the measured graze table — #383 closest 0.25, #384
+    // 0.61, #385 0.65, sph_r 2.18 each), and which mine's tris take the round first is the game's
+    // own first-solid-node rule [M Collide_Update 0x1ea398:216-229]. From the AR the round takes
+    // #385 first (the tick-2640 failure: #385 cause 2 BULLET, its case-0x4B blast then takes
+    // #383/#384 [M Explode_Propagate 0x17c518] — the game does the same), from the P2K — the gun
+    // this walk's own doc pins ("the shots ride the P2K") and the sister test fires — it takes
+    // #383 first. The real switch restores the walk's stated tactic; no health/ammo writes.
+    draw(&mut w, 0x02);
+    {
+        let sim = w.scene.sim.as_ref().unwrap();
+        assert!(sim.gun.clip + sim.gun.spare > 0, "the P2K is dry at the fence mark (clip {} spare {})", sim.gun.clip, sim.gun.spare);
+    }
     let d = shoot_mine(&mut w, 383, [35.6, 42.3, 17.47], "the doorway fence #383 from 10 u");
     assert!(d > 8.0, "#383 is shot from RANGE, past its own blast ({d:.2} u)");
     w.wait(10);

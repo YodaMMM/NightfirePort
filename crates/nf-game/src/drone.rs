@@ -5464,6 +5464,10 @@ impl Drone {
         // guard in AimStandFire 0x68 never fled a grenade. (0x2d is the throw itself — GRENADE_THROW.)
         if matches!(self.state, 0x28 | 0x2d | 0x4a | 0x4b | 0x53..=0x55 | 0x63 | 0x86..=0x88) { return; }
         if self.scared { return; }
+        if std::env::var_os("NF_AILOG").is_some() {
+            eprintln!("[ailog] drone {} (placement {}) skin {:#x} state {:#x} flees explosive at {:?} run {run_dist:.1} ret {ret:#x} deadline {deadline}",
+                self.index, self.placement, self.skin, self.state, pos);
+        }
         self.explosive_pos = pos;
         self.explosive_run_dist = run_dist;
         self.flee_return = if ret != 0 { ret } else { resume }; // +0x354 == 0 → the caller state [M 0x1431c0:191-193]
@@ -14700,6 +14704,10 @@ fn segment_hits_sphere(a: V3, b: V3, c: V3, r: f32) -> bool {
                     // the mine: the guard arm demands the strict t.
                     if tw.is_none_or(|ts| t <= ts) && gadget_t.is_none_or(|gt| t < gt)
                         && best.is_none_or(|(_, _, dt)| t <= dt) {
+                        if std::env::var_os("NF_AILOG").is_some() {
+                            eprintln!("[ailog] player bullet → mine {} (placement {}) at frame {frame}, from {:?} dir {:?}, t {t:.3}, weapon {:#x}",
+                                i, self.mines[i].placement, b.pos, b.dir, b.weapon);
+                        }
                         if self.mines[i].pending == 0 { self.mines[i].pending = crate::worldobj::MINE_BULLET; }
                         b.dead = true;
                     }
