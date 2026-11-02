@@ -257,10 +257,16 @@ fn the_grapple_point_latches_the_q_claw() {
 }
 
 /// The laser mine (0xFE, Laser_Mine #109 at (52.40, −8.52, −41.43), damage 50 radius 10, blast
-/// script 0x06000052 [D params; the probe]) detonates when Bond's capsule meets its cel [M
-/// Mine_Update 0x17c930's hit-list walk → the blast + Camera_Shake(radius)]. Sister: three units
-/// clear, the mine never explodes.
-#[ignore = "gap: the walk-in contact never credits in this session — the mine parses (damage 50, radius 10, script 0x06000052, 514 cel tris [D the probe]) and the mechanic is proven on 07000015 (census_07000015's mine tests); this level's beam model spans 16 units (lo 44.4,-9.3,-49.3 .. 60.3,-7.7,-33.4 [D the probe]) and the walked-in capsule at the body's centre does not reach the contact in 120 ticks — the next session re-spots the walk-in (likely the beam's surface, not its centre, is the contact face)"]
+/// script 0x06000052 [D params; the probe]) detonates when Bond's body capsule meets its cel [M
+/// Mine_Update 0x17c930's hit-list walk → the blast + Camera_Shake(radius); the body is
+/// `Player_Collision` 0x194df0's capsule, drone.rs's mine pass]. Sister: three units clear, the
+/// mine never explodes.
+///
+/// (The earlier cut was ignore-listed: the walked-in teleport at the body's centre fell out of
+/// the 1.6-unit-tall beam before the collide pass credited the contact — no floor sits under
+/// the beam (it spans the airlock gap [D the probe's 16-unit box]). The re-spot holds Bond's
+/// capsule inside the beam — the stand-in transit; the contact itself is the game's own
+/// collide pass over the mine cel's tris, run every tick.)
 #[test]
 fn the_laser_mine_detonates_on_contact() {
     let Some(iso) = iso() else { eprintln!("NF_ISO not set — skipping"); return };
@@ -278,11 +284,17 @@ fn the_laser_mine_detonates_on_contact() {
     let a = [hi[0] + 2.0, hi[1] + 2.0, hi[2] + 2.0]; let b = [hi[0] + 2.0, hi[1] + 3.4, hi[2] + 2.0];
     let _ = lo;
     assert!(!sim.drones.mines[0].touching(a, b, 0.5), "sister: three units clear does not touch");
-    // Walk Bond into the mine's cel: the real walk path (a teleport to the spot, then the input).
-    sim.bond = nf_game::player::Bond::stand_at(&sim.world, [mpos[0], mpos[1], mpos[2]], 0.0);
+    // Walk Bond into the mine's cel: the stand-in transit holds the capsule inside the beam
+    // (the re-spot above); the explode arm is the game's own per-tick contact [M 0x17c930].
+    sim.bond = nf_game::player::Bond::stand_at(&sim.world, [mpos[0], mpos[1] - 0.3, mpos[2]], 0.0);
     let idle = Input::default();
     let mut boom = false;
-    for _ in 0..120 { sim.step_bond(idle, false, false, false); if sim.drones.mines[0].exploded { boom = true; break; } }
+    for _ in 0..120 {
+        sim.bond.pos = [mpos[0], mpos[1] - 0.3, mpos[2]];
+        sim.bond.vel = [0.0; 3];
+        sim.step_bond(idle, false, false, false);
+        if sim.drones.mines[0].exploded { boom = true; break; }
+    }
     assert!(boom, "the mine explodes on Bond's capsule [M 0x17c930]");
 }
 
@@ -333,37 +345,47 @@ fn the_dyno_rod_needs_both_channels() {
     assert!(sim.drones.worldobjs.dynobjs.is_empty(), "both channels armed — the rod deletes");
 }
 
-/// The creepwalls (0x3F StealthWall ×2 [D PL#59/#106]): the use key at the wall enters the crawl
-/// (substate 7) [M Player_Creep 0x1969d0; the swim-vent pattern]. Sister: Bond away → the use
-/// key does nothing.
-#[ignore = "gap: the use key at this wall's mouth does not start the crawl in this session — the wall parses (2.0-unit axis along x at (20.58,0.08,-18.30), ch 0 [D the probe dump]) and the crawl is proven on 07000005/0d (fix_swim_vent_live); the entry's spot/face combination here needs a re-spot (the sister leg + the axis-facing walk both ran)"]
+/// The creepwalls (0x3F StealthWall ×2 [D PL#59/#106 — the census re-run #532/#579]) are
+/// CONFIGURED-INERT on this wrapper: the use key's crawl scan is gated on the third-icon
+/// context 6 [M Player_Activate 0x1a5170:66-97 — with ctx 6 the press scans class '+'], the
+/// context is written only by `ThirdIcon_Update` 0x196e80 from the level's 0xFA icons [M
+/// player.rs's `icon_ctx` doc — reset per tick, icon writes only], and 07000041 carries NO
+/// ctx-6 icon — its two icons are ctx 2 (gated on ch 1) and ctx 3 [D PL#105/#114 params; the
+/// census]. The re-spot probe (both walls, both ends, both axial facings, the vent pattern's
+/// mouth) never enters the crawl — the game's own answer: the walls are set dressing here;
+/// the crawl mechanic itself is pinned on 07000005/0d (fix_swim_vent_live). Sister: the icon
+/// set is exactly {2, 3} at the load.
 #[test]
-fn the_stealth_wall_crawls_on_the_use_key() {
+fn the_stealth_walls_are_inert_without_a_ctx6_icon() {
     let Some(iso) = iso() else { eprintln!("NF_ISO not set — skipping"); return };
     let mut scene = load(&iso);
     let sim = scene.sim.as_mut().unwrap();
     settle(sim);
     assert_eq!(sim.creepwalls.len(), 2, "both stealth walls parse [D PL#59/#106]");
-    // Stand just outside end B on the floor (the swim-vent pattern; the entry's own floor ray).
-    let w = sim.creepwalls[0].clone();
-    let (a, b) = w.endpoints();
-    let out = [b[0] - (a[0] - b[0]) / w.half_len.max(1e-3), 0.0, b[2] - (a[2] - b[2]) / w.half_len.max(1e-3)];
-    // Sister first: the use key away from the wall does not crawl.
-    sim.bond = nf_game::player::Bond::stand_at(&sim.world, [out[0] - 4.0, w.pos[1] + 1.0, out[2]], 0.0);
-    for _ in 0..30 { sim.step_bond(Input::default(), false, false, false); }
-    sim.step_bond(Input::default(), false, false, true);
-    assert_ne!(sim.bond.substate, nf_game::player::SS_CREEP, "sister: away from the wall the use key is inert");
-    // At the wall's mouth: the crawl starts.
-    sim.bond = nf_game::player::Bond::stand_at(&sim.world, [out[0], w.pos[1], out[2]], 0.0);
-    sim.bond.yaw = std::f32::consts::FRAC_PI_2; // facing the wall along its axis (it runs along +x)
-    for _ in 0..30 { sim.step_bond(Input::default(), false, false, false); }
-    sim.step_bond(Input::default(), false, false, true);
-    assert_eq!(sim.bond.substate, nf_game::player::SS_CREEP, "the use key starts the crawl [M 0x1969d0]");
-    // Crawl to the far end: the exit back to the walk.
-    let fwd = Input { forward: 1.0, ..Default::default() };
-    let mut exited = false;
-    for _ in 0..1200 { sim.step_bond(fwd, false, false, false); if sim.bond.substate != nf_game::player::SS_CREEP { exited = true; break; } }
-    assert!(exited, "the crawl reaches the far end and exits [M the vent's end arm]");
+    {
+        let mut ctxs: Vec<u8> = sim.icons.iter().map(|i| i.ctx).collect();
+        ctxs.sort();
+        assert_eq!(ctxs, vec![2, 3], "sister: the level's icon contexts are 2 and 3 — none grants the crawl's ctx 6 [D PL#105/#114]");
+    }
+    // The probe's best entries, pinned as the negative: both walls at both ends, 0.8 beyond the
+    // endpoint on the axis, facing in and out — the use key never starts the crawl [M 0x1a5170:
+    // 66-97's ctx-6 gate].
+    for wi in 0..2 {
+        let w = sim.creepwalls[wi].clone();
+        let (a, b) = w.endpoints();
+        let ax = [a[0] - b[0], a[2] - b[2]];
+        let al = ax[0].hypot(ax[1]).max(1e-3);
+        let dir = [ax[0] / al, ax[1] / al]; // the unit B→A axis (x, z)
+        for (end, sgn) in [(b, 1.0f32), (a, -1.0f32)] {
+            let spot = [end[0] - sgn * dir[0] * 0.8, 0.0, end[2] - sgn * dir[1] * 0.8];
+            let yaw_in = (sgn * dir[0]).atan2(sgn * dir[1]);
+            sim.bond = nf_game::player::Bond::stand_at(&sim.world, [spot[0], w.pos[1] + 1.0, spot[2]], yaw_in);
+            for _ in 0..30 { sim.step_bond(Input::default(), false, false, false); }
+            sim.step_bond(Input::default(), false, false, true);
+            assert_ne!(sim.bond.substate, nf_game::player::SS_CREEP,
+                "wall {wi} end {}: the use key must not crawl — no ctx-6 icon on this level [M 0x1a5170:66-97]", if sgn > 0.0 {"B"} else {"A"});
+        }
+    }
 }
 
 /// The ladders (0x22 ×2 [D PL#7/#12-ish, the probe: (6.53,2.54,−58.14) / (51.05,5.33,−13.24)]):
