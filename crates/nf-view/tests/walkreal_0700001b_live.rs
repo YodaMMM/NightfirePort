@@ -391,6 +391,16 @@ fn live_astronauts(sim: &nf_view::scene::Sim) -> Vec<usize> {
         .map(|(i, _)| i).collect()
 }
 
+/// The first present, enabled, live guard — the per-guard motion read [M DroneWeap_DoOpponentTargetting
+/// 0x179a48:47-73: the latches live on every Drone]. The station's opening wave is present from the
+/// arrival (the spawner walk built the list before the first tick).
+fn first_tracker(sim: &nf_view::scene::Sim) -> usize {
+    sim.drones.list.iter().enumerate()
+        .find(|(_, d)| d.present && !d.corpse && d.enabled && d.health > 0.0)
+        .map(|(i, _)| i)
+        .expect("a present guard in the station sim")
+}
+
 /// The round would land on drone `di`: the view ray (the laser flies straight — weapon 0x33's
 /// spread +0x24 is 0 [D weapon_data]) enters one of its hit boxes before the world's first bullet
 /// contact — the comparison the bullet pass itself runs (`exposed_aim`'s rule, along the view).
