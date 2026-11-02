@@ -645,7 +645,7 @@ fn walk_arrival_to_the_c5_door() {
 /// are the walker's own plain return fire (the same fights every other real-damage walk is
 /// pinned against).
 #[test]
-#[ignore = "real health: drone #31 weapon 0x1e hits 14-16 per shot from 41 u; Bond dies at tick 6549"]
+#[ignore = "real health: drone #31 (placed, acc 5 = the game's own record) fires the faithful law (180-tick cadence, TimeToHit gate, 16/hit = 40 x Plr_DMod_Easy 0.4) but the port's world gives it unbroken LOS across the whole yard (probe grid: every cell 180-216 x -224..-268 seen), so the walk still dies at tick 6549; needs the live LOS check or a covered route"]
 fn walk_arrival_to_the_c5_door_real_damage() {
     walker::with_real_damage(walk_arrival_to_the_c5_door);
 }
