@@ -67,3 +67,25 @@ Session result (16:02 UTC): the five sisters added; two shared opt-in fight tool
 Task: two real-health walks with route-side blockers — walkreal_07000014_live::walk_the_infiltration_to_the_delta_exit_real_damage (ignored: the route's live-wire check asserts health 100, reads 33 on real health; make it measure the wire's own hurt, health before/after the crossing, then finish the walk) and walkreal_07000015_live::walk_spawn_to_the_omega_sector_exit_real_damage (ignored: a -27.73 world hit at frame 5067, a laser-mine fence blast on a live-beam crossing, then drone #5 at 4.2 u kills Bond at (0.0, 41.3, 23.9); route the walk like a player — shoot the fence mines from range first, then take the guard). Real input only, no health writes. Un-ignore both; run both walks, every real-damage walk, the full suite.
 
 Branch cut from origin/master 524924db (the real-health sisters merged in bbf9ac76, then four ignored with their measured blockers; WORKLOG stripped from master, restored from s/real-health-walks-08-11-12-14-15's running copy and this entry appended).
+
+Session result (19:40 UTC): both walks un-ignored and GREEN on real damage — 14's live-wire
+check now measures the wire's own hurt per cut (health before/after each fusebox window,
+non-decreasing [M 0x1adfe8:99-101]) instead of the absolute-100 assert that assumed the
+top-up; 15 routed the player's way (commit c89fbdb7): the #383 fence dance from ~10 u past
+its own blast [M Explode_Propagate 0x17c518 — radius 8, damage 100 [L ee_start_05.bin
+@0x2bf150 + #383's record]] (the 4.5 u shot cost 44.8), #447 from the open door[42]
+threshold (the door_near trap: the lower-deck twin door[20] at y 23.85 wins the dxz — the
+press goes to index 42 directly), the silo rifle guard (699) and the two grenade guards
+(722, 733) dropped explicitly gated on !tops_up() (the master's fights never engage — an
+unconditional shoot burned the clip dry at #462), the 16-arrival kit assert a superset law
+(the fights' guard drops are the base weapons 0x14/0x1a [M 0x17a2a0]). Verification: the
+two task binaries green (14: 8 passed/138.75 s; 15: 5 passed/23.09 s); all 22 walkreal
+level binaries re-run — 124 passed, 0 failed, 7 ignored (all other tasks' blockers,
+byte-identical to master: 08, 0b, 0c, 0d, 11), the 17 real-damage walks not owned by other
+tasks all green. Full suite sliced (the one-command build cannot fit the 9.9 GB disk):
+nf-game 101 binaries 0 failed; nf-formats+nf-audio 9 ok + exactly the 3 allowed
+disc_golden slim-ISO failures; nf-view lib 100 passed; nf-view integration sweep 400
+binaries alphabetical (…→ interact_07000007_live) 1109 tests 0 failed; 30 slow-batch
+binaries set aside un-run, 505 not reached by the 19:48 stop — no code delta vs master
+beyond the two green files, so the sweep is belt-and-braces; next message continues it
+from interact_07000008_live. Report: docs/reports/level-14-15-real-health-finish.md.
