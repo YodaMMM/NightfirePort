@@ -8,3 +8,6 @@ Do:
 1. Re-tune the 01 walks (routes, waiting spots, clear-around shooting spots) for the faithful push — real input only. If a stall is the port pushing where the game does not, fix the port and cite the decompile.
 2. All of walkreal_07000001_live, exit_aim_01_live, flank_fall_repro, walkreal_07000003_live green; then every walkreal_*_live and the full suite.
 3. In the report, list exactly how Bond's movement changes when he brushes a guard (lift per tick, push distance), so it can be feel-checked in the app.
+
+---
+claimed-by: sandbox4 at 2026-11-02T10:42Z
