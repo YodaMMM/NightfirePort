@@ -8,3 +8,6 @@ Do, per level:
 1. Add a real-health variant of the level's whole-mission walk (no health/armour/ammo writes, no teleports after load, auto-aim as the app default). The walk must reach the level's end.
 2. Where Bond dies, read the damage log (who, weapon, range) and decide: if the port's guards deal more than the game [M the drone weapon/accuracy code], fix the port and cite it; otherwise give the walker a tactic the level really offers (cover, pickups on the route, kill order).
 3. Run each walkreal_<level>_live and every real-damage walk elsewhere (shared walker changes must not break them), then the full suite.
+
+---
+claimed-by: sandbox4 at 2026-11-02T13:20Z
