@@ -702,9 +702,11 @@ fn walk_fresh_spawn_to_the_mission_end() {
 /// route, the top-up off — no health, armour or ammo writes anywhere — and Bond's death
 /// panics with the damage log (who, weapon, range). Auto-aim is the app default; the fights
 /// are the walker's own plain return fire (the same fights every other real-damage walk is
-/// pinned against).
+/// pinned against). The old terminal-room wall-gun deaths are fixed: the game's turret fire
+/// rides the EASED BARREL (`Mat_GetDir(ext+0xc4 obj+0x90)` after the case-4 slerp [M
+/// 0x180498:295-330,:344-352]), which lags a runner — the old port fired dead-on and landed
+/// 42 × −2.40 in the return corridor (gt.rs combat_fire_rides_the_eased_barrel pins the law).
 #[test]
-#[ignore = "real health: Bond dies at (-1.36, 47.81, 5.30) to world damage -2.40 every 3-5 ticks in the exec-floor corridor (game: one drop per contact event [M 0x194458:94-103])"]
 fn walk_fresh_spawn_to_the_mission_end_real_damage() {
     walker::with_real_damage(walk_fresh_spawn_to_the_mission_end);
 }
