@@ -13,3 +13,6 @@ Do:
 3. Un-ignore both 16 walks. Run every walkreal_*_live, start_corridor_guard_07000011_live, every grenade test, then the full suite.
 
 Rules: shared test helper changes (crates/nf-view/tests/common/) must be opt-in per level and re-run every walkreal_*_live.
+
+---
+claimed-by: sandbox5 at 2026-11-02T20:55Z
