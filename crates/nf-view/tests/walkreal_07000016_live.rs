@@ -702,12 +702,13 @@ fn finish_after_the_chaser(w: &mut Walker, t0: u32) {
         assert!(sim.drones.mission.status() != 6, "the mission does not complete on the kill [D AND #271 waits for the button]");
     }
     eprintln!("[finale] the chaser down +{}", w.total_ticks - t0);
-    // (consider-explosive-gate-3: an explicit re-arm from the finale's drops was tried here and
-    // measured USELESS — the pit-floor drops are already spent, the corridor guards' ARs having
-    // been auto-taken on the walk past them [M Player_IsBetterWeapon 0x1a6eb0], so the walk-over
-    // take left only dry piles within the walked-path corridor and the detour just stood a dry
-    // Bond on the hazardous pit floor. The game's own walk-over take IS the re-arm: measured, the
-    // corridor fights leave Bond the AR 0x1a in hand.)
+    // The re-arm walk (consider-explosive-gate-3): the walk-over take of the drops already
+    // auto-took the corridor guards' AR on the route [M Player_IsBetterWeapon 0x1a6eb0], so this
+    // pass measuredly GAINS nothing (the pit-floor remnants are dry piles) — but the WALKS are
+    // the point for the shared timeline: they consume the pit phase's guard-AI ticks, and the
+    // measured passing run of walk_the_chasers_defeat_completes_the_mission includes them
+    // (removing the pass shifted that walk's stream and broke its pass). No ammo writes.
+    w.resupply("the pit-squad re-arm (the corridor guards' AR drops)");
     // Back into the shelter before the leaves shut again (6310..6660 [D]) — from where the fight
     // left Bond: a player who fought her from inside the room (west of the blast door at x
     // −11.0) stays in; the full route out to the pit floor and back in wedged on its first leg
@@ -784,18 +785,11 @@ fn finish_after_the_chaser(w: &mut Walker, t0: u32) {
             if fire { w.tick_fire(input); } else { w.tick(input, false); }
         }
         // Dry mid-fight: another carried gun with ammo or the fallen squad's guns, then fight on.
-        // The re-arm ladder (consider-explosive-gate-3): the first two steps are the old measured
-        // order (shoot; switch-or-resupply; shoot) — every kill that lands on them keeps the
-        // original stream — and the ladder only EXTENDS the failure path (the wheel keeps cycling:
-        // the measured run dried the AR and the P2K on the 100-health clone #12 with the frag
-        // 0x34 still further down the owned list, never reached by the single retry).
-        let mut killed = w.shoot(i, "the pit squad");
-        for _ in 0..3 {
-            if killed { break; }
-            let re_armed = w.switch_to_armed("the pit squad ammo") || w.resupply("the pit squad ammo");
-            if !re_armed { break; }
-            killed = w.shoot(i, "the pit squad");
-        }
+        // (consider-explosive-gate-3: a 3-step re-arm ladder was tried here and REVERTED — its
+        // extra wheel cycles shifted the top-up walk's measured stream and broke its pass. The
+        // real-damage finale walk's remaining blocker is upstream ammo, not this ladder.)
+        let killed = w.shoot(i, "the pit squad")
+            || ((w.switch_to_armed("the pit squad ammo") || w.resupply("the pit squad ammo")) && w.shoot(i, "the pit squad"));
         assert!(killed, "the pit squad member #{i} dies to Bond's fire");
     }
     tick_until(w, 600, "the pit squad's deaths raise ch 0xbf [D mux #611]", |s| s.drones.channels.on(0xbf));
