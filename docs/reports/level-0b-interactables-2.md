@@ -118,3 +118,13 @@ report is the `level-0b-interactables-2` entry.
 
 not visible to me — this environment shows no token, credit or context-window meter
 (checked the session UI and the tool output; no figures are exposed to copy).
+
+## ntfy failed
+
+All three fallbacks failed at the finish step:
+
+1. `curl -sS -m 20 -H "Title: NightfirePort" -d "level-0b-interactables-2: …" https://ntfy.sh/nightfire-yoda-8k3x`
+   → `curl: (28) Connection timed out after 20001 milliseconds`
+2. python urllib → `urllib.error.URLError: <urlopen error [Errno 101] Network is unreachable>`
+3. `wget -q -O- --post-data "…" https://ntfy.sh/nightfire-yoda-8k3x` → no output, killed at the
+   120 s tool timeout (no connection established)
