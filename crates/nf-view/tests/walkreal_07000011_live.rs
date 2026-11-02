@@ -68,6 +68,14 @@ fn walk_spawn_to_the_lower_floor_load_point() {
     // The stairwell's guards (0x11/0x13/0x14/0x36/0x37 wake on the flight plates [D §5]) shoot
     // during the descent; the walk pins the route, not the firefight — the AI runs for real.
     w.top_up_health = true;
+    // The real-health tactic (level-11-start-fight-real-health): on the flights the guards step
+    // INTO the gun line while the fight holds on the farther target — the 2026-11-02 real-damage
+    // run stood ~143 ticks on west flight B while the blocker (drone #18, 1.6 u, weapon 0x19)
+    // landed 15 rounds for 51 health and the stand never tapped [L the run's rf-trace: fight#17
+    // t60/t120 "blocked true", clip 18 throughout]. A player shoots the hostile who walks into
+    // his line: under real damage the fights retarget a live hostile blocker
+    // (DamageLog::shoot_blockers). Inert under the top-up (the fights never run there).
+    if !w.tops_up() { w.dmg.shoot_blockers = true; }
 
     // Leg 1: east across the top floor to the stairwell door (the nav web [D paths 0/1] has no
     // cross-floor route — the direct chain), then through the doorway's south band — walked.
