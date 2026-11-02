@@ -470,6 +470,13 @@ fn walk_to_the_exit(iso: &str, stop_at_fire: bool) -> Walker {
     // The player route descends the stairwell from the west hall's corner (the AI's own path
     // climbs over the top floor — the sister proved the descent through this anchor).
     w.walk_nav_to([-30.8, 6.4, 13.1], "the stairwell head", 1.2);
+    // The contact parks on the plate's south half (his route's node 36 sits INSIDE the volume
+    // [D the nav dump]) and the faithful push holds Bond ~1.4 off his spine — the straight
+    // SE→centre line stops just short of the plate's east edge (the exit-fade walk's
+    // (-31.47,12.45) stall, 2026-11-02). The player walks around him: the plate is 6.5 deep
+    // (z 12.2-18.7), so come in at its north half, clear of his capsule, then step to the
+    // centre. Lenient: a wedged approach gives the centre walk a fresh re-aim.
+    w.walk_nav_to([-31.4, 6.4, 16.8], "the plate's north-east approach", 1.4);
     w.walk_nav_to(plate, "the plate", 1.2);
     let sim = w.scene.sim.as_ref().unwrap();
     let on_plate = sim.bond.pos[0] < -32.0 && sim.bond.pos[2] > 12.0;

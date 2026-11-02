@@ -940,9 +940,18 @@ impl Walker {
             let desired = (target[0] - sim.bond.pos[0]).atan2(target[2] - sim.bond.pos[2]);
             let err = wrap_pi(desired - sim.bond.yaw);
             let in_way_park = sim.drones.list[di].state == nf_game::drone::state::PLAYER_IN_WAY;
+            // Kite the melee huggers: a chasing guard inside 2.6 trades punches at 0.75 a hit
+            // [M Player_WeaponInitBullet's 1.8 fists range] and the follow's 4.0 hold stands
+            // still for it (the 01 real-damage walk's stairwell-head death: 91 hits, 100 health,
+            // 2026-11-02). The player backs off while the fight machinery works — return_fire
+            // runs every follow tick, and at 3-6 u the aim converges on the head instead of
+            // opening inside the hugger's own boxes.
+            let hugged = sim.drones.list.iter().any(|o| o.team == 1 && o.enabled && o.present
+                && !o.corpse && o.health > 0.0 && dxz(o.pos, sim.bond.pos) < 2.6);
             let input = Input {
                 turn: err.clamp(-0.07, 0.07),
-                forward: if d < 3.4 || (in_way_park && d < 4.2) { -0.7 }
+                forward: if hugged { -1.0 }
+                    else if d < 3.4 || (in_way_park && d < 4.2) { -0.7 }
                     else if d > 5.0 { 1.0 } else if d > 4.0 { 0.45 } else { 0.0 },
                 ..Default::default()
             };
