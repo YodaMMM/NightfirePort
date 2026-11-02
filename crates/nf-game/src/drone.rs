@@ -11175,10 +11175,12 @@ impl Drone {
             }
         } else {
             // 0x14ac60:119-122 (the default arm, every level outside {2,3,5,9,a}): `FRAME_RATE_DIV * 10.0`
-            // = 10/60 = 0.1667 → `fptoui` = 0 ticks — the sight ack is IMMEDIATE on 0700000c/0d and
-            // every other level the special arm does not cover [M 0x14ac60 disasm: the default arm has
-            // no +0xB8 read; the port's old 10 delayed `seen` and the +0x238 stamp 10 ticks].
-            0
+            // = 10 ticks. FRAME_RATE_DIV is the 1.0 constant (the game's frame→tick identity —
+            // BurstDelay's `fptoui(delay * FRAME_RATE_DIV)` keeps 45 frames = 45 ticks [M 0x179ba8],
+            // NextBulletTime's interval 120 keeps 120 [M 0x179d40] and CombatState's
+            // `+0x11c + FRAME_RATE_DIV·120 < now` is 120 ticks [M 0x148338] — the stream-calibrated
+            // reading), so the default reaction is the port's 10, not 0.
+            10
         }
     }
 
@@ -11719,6 +11721,23 @@ pub fn captain_skin(skin: u32, param: &impl Fn(u32) -> u32, props: &nf_formats::
 /// - The per-class update/delete dispatch (.data 0x26f890 base, stride 12 {update, _, delete}
 ///   [D]; Creature class 0x23 rows at 0x26fa34/0x26fa3c, Copter 0x3B at 0x26fb54/0x26fb5c) never
 ///   fires for 0x23 for the same census reason — see docs/port-map/unreached.md.
+/// The level's load-time `drone_stats` table (0x31aa30): `behaviour_util_get` 0x1c7a98 over every
+/// PLACED kind-0x0f placement that passes `Drone_Create`'s difficulty gate, in placement order.
+/// Template placements never write at load (07000005's only section sits on a template and the
+/// level-start record is empty [L ee_start_05.bin]) — their sections write at spawn instead.
+/// sniper-range-accuracy-0c-0d: shared by `level_drones` (the load-time reads) and the Sim
+/// (`Drones::stats_table` — the table a spawn's `DoModeSettingsNEW` read runs against).
+pub fn load_stats_table(d: &Data, level: &nf_formats::level::Level, roles: &[nf_formats::drone::SpawnRole]) -> nf_formats::drone::DroneStatsTable {
+    let Some(m) = level.main_map() else { return Default::default() };
+    let mut stats = nf_formats::drone::DroneStatsTable::default();
+    for (k, p) in level.maps[m].placements.iter().filter(|p| p.flags & 0xff == 0x0f).enumerate() {
+        let param = |j: u32| p.params.iter().find(|(i, _)| *i == j).map(|&(_, v)| v).unwrap_or(0);
+        if param(2) > d.difficulty || roles.get(k) != Some(&nf_formats::drone::SpawnRole::Placed) { continue; }
+        stats.behaviour_get(param);
+    }
+    stats
+}
+
 pub fn level_drones(d: &Data, level: &nf_formats::level::Level, rng: &mut Rng, lights: &mut crate::light::LightList) -> Vec<Drone> {
     // The map parse's ambient radiators precede every dynamic-object create [M parsemap_handle_block_id 0x1d1020].
     crate::light::level_lights(level, rng, lights);
@@ -11735,13 +11754,7 @@ pub fn level_drones(d: &Data, level: &nf_formats::level::Level, rng: &mut Rng, l
         let list: Vec<(u32, Vec<(u32, u32)>)> = level.maps[m].placements.iter().map(|p| (p.flags & 0xff, p.params.clone())).collect();
         nf_formats::drone::spawn_roles(&list)
     };
-    let mut stats = nf_formats::drone::DroneStatsTable::default();
-    for (k, p) in level.maps[m].placements.iter().filter(|p| p.flags & 0xff == 0x0f).enumerate() {
-        let param = |j: u32| p.params.iter().find(|(i, _)| *i == j).map(|&(_, v)| v).unwrap_or(0);
-        if param(2) > d.difficulty || roles.get(k) != Some(&nf_formats::drone::SpawnRole::Placed) { continue; }
-        stats.behaviour_get(param);
-    }
-    let load_stats = stats.clone();
+    let load_stats = load_stats_table(d, level, &roles);
     let mut stats = nf_formats::drone::DroneStatsTable::default();
     let mut drone_k = 0usize;
     level.maps[m].placements.iter().enumerate().filter_map(|(i, p)| {
