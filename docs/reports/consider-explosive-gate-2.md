@@ -112,3 +112,8 @@ f4d40f39 already an ancestor — the flee gate [M 0x1431c0:40-67] came in with i
 ## Usage
 
 not visible to me
+
+### ntfy delivery note
+
+curl timed out after 20 s (exit 28); python urllib got `[Errno 101] Network is unreachable`;
+the third fallback (wget --post-data) returned rc=0 — delivered.
