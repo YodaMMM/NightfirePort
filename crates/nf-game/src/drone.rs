@@ -5458,9 +5458,16 @@ impl Drone {
     /// `RunAwayFromObject` (0x86) [M 0x1431c0:194-195] — whose flee update this port now runs (G-026).
     fn consider_explosive(&mut self, d: &Data, frame: u32, pos: V3, resume: u8, run_dist: f32, ret: u8, deadline: u32) {
         if !self.prop(d, 0x34) && !self.prop(d, 0x3a) && !self.prop(d, 0x3b) { return; }
-        // The game skips the flee when the drone is already in an explosive-aware state (0x28/0x2D/0x2E–0x4C, etc.).
-        if matches!(self.state, 0x28 | 0x2d | 0x2e..=0x4c | 0x52..=0x56 | 0x62..=0x88) && self.state != 0x86 { return; }
+        // The game's state gate [M 0x1431c0:40-67]: the < 0x56 arm refuses 0x28, 0x2d, 0x4a-0x4b and
+        // 0x53-0x55; the >= 0x56 arm refuses 0x63 and 0x86-0x88. Every other state considers the flee —
+        // GAPS G-055: the old port gate also refused 0x2e-0x49, 0x4c, 0x52, 0x56 and 0x62-0x85, so a
+        // guard in AimStandFire 0x68 never fled a grenade. (0x2d is the throw itself — GRENADE_THROW.)
+        if matches!(self.state, 0x28 | 0x2d | 0x4a | 0x4b | 0x53..=0x55 | 0x63 | 0x86..=0x88) { return; }
         if self.scared { return; }
+        if std::env::var_os("NF_AILOG").is_some() {
+            eprintln!("[ailog] drone {} (placement {}) skin {:#x} state {:#x} flees explosive at {:?} run {run_dist:.1} ret {ret:#x} deadline {deadline}",
+                self.index, self.placement, self.skin, self.state, pos);
+        }
         self.explosive_pos = pos;
         self.explosive_run_dist = run_dist;
         self.flee_return = if ret != 0 { ret } else { resume }; // +0x354 == 0 → the caller state [M 0x1431c0:191-193]
@@ -10574,15 +10581,23 @@ impl Drone {
                 if self.unseen_ticks > 15 { return COMBAT_NO_SIGHT; }
                 let cover = self.cover_available(d, true);
                 if cover { return RUN_FOR_COVER; }
-                // `DroneWeap_CanThrowGrenade` — the decomp checks `+0x568 & 0xFFFF00FF == 0xA0002`
-                // (anim class 2, type 0xA = AIM_STAND). Our port checks `anim.class == 2`.
-                let can_throw = self.anim.class == 2 && self.grenade_count > 0 && self.dist >= 8.0 && self.dist <= 20.0;
+                // The game's case-0x10 throw+move gate [M DroneFunc_CombatState 0x148338 case 0x10]:
+                // `*(u64*)(drone+0x568) & 0xffff00ff == 0xa0002` — the playing danim's class (+0x568,
+                // low byte) == 2 AND its anim id (+0x56A) == 0xA AIM_STAND. BOTH DroneWeap_CanThrowGrenade
+                // (→ 0x2d) and NDrone2_ChooseCombatMove sit behind this one gate. DroneWeap_CanThrowGrenade
+                // 0x17a798 then draws its 50% Rand(2) BEFORE the dist check (0xBCC≠0 && 0xBCE≠0 → Rand →
+                // opponent → 8.0 ≤ +0x1a0 ≤ 20.0 → CanDoAnimState(0x49)) — so the roll is consumed on every
+                // gated tick with grenades in hand, even out of throw range; the port's old pre-gate
+                // (`dist 8..20` before the roll) skipped those draws and desynced the shared RNG stream,
+                // and its class-only gate let a class-2 danim that is NOT AIM_STAND roll (and throw)
+                // where the game's anim-id half of the gate refuses.
+                let aim_stand = self.anim.class == 2 && self.anim.state == anim_state::AIM_STAND;
                 if std::env::var_os("NF_AILOG").is_some() && self.grenade_count > 0 {
-                    eprintln!("[ai:gate] guard {} AIM_STAND_FIRE gate: anim={}.{} dist {:.1} unseen {} cover {} clip {} grenades {}x{:#x} can_throw={}",
-                        self.index, self.anim.class, self.anim.state, self.dist, self.unseen_ticks, cover, self.clip, self.grenade_count, self.grenade_weapon, can_throw);
+                    eprintln!("[ai:gate] guard {} AIM_STAND_FIRE gate: anim={}.{} aim_stand {} dist {:.1} unseen {} cover {} clip {} grenades {}x{:#x}",
+                        self.index, self.anim.class, self.anim.state, aim_stand, self.dist, self.unseen_ticks, cover, self.clip, self.grenade_count, self.grenade_weapon);
                 }
-                if can_throw && self.can_throw_grenade(d, rng) { return GRENADE_THROW; }
-                if self.anim.class == 2 && self.anim.state == anim_state::AIM_STAND {
+                if aim_stand && self.can_throw_grenade(d, rng) { return GRENADE_THROW; }
+                if aim_stand {
                     let m = self.choose_combat_move(d, rng);
                     if m != 0 { return m; }
                 }
@@ -14712,6 +14727,10 @@ fn segment_hits_sphere(a: V3, b: V3, c: V3, r: f32) -> bool {
                     // the mine: the guard arm demands the strict t.
                     if tw.is_none_or(|ts| t <= ts) && gadget_t.is_none_or(|gt| t < gt)
                         && best.is_none_or(|(_, _, dt)| t <= dt) {
+                        if std::env::var_os("NF_AILOG").is_some() {
+                            eprintln!("[ailog] player bullet → mine {} (placement {}) at frame {frame}, from {:?} dir {:?}, t {t:.3}, weapon {:#x}",
+                                i, self.mines[i].placement, b.pos, b.dir, b.weapon);
+                        }
                         if self.mines[i].pending == 0 { self.mines[i].pending = crate::worldobj::MINE_BULLET; }
                         b.dead = true;
                     }
@@ -20681,18 +20700,27 @@ fn segment_hits_sphere(a: V3, b: V3, c: V3, r: f32) -> bool {
         // The HandleExplosives broadcast for the bounced explosives [M 0x1435f0 + 0x138b10]: classification by
         // the grenade's weapon record (the game classifies by the thrower's weapon id — the port's events carry
         // the record id): frag 0x34 → radius 12.0, flee 4.0, deadline 2 s,
-        // return Hide 0x87 [M 0x138b10:67-87 + 0x1431c0:101-119]; stun 0x35 → radius 8.0 [M 0x138b10:163-167],
-        // flee 10.0, deadline 10 s, return to the caller state [M 0x1431c0:165-176]; smoke 0x36 → kind 1, no
+        // return Hide 0x87 [M 0x138b10:67-87 + 0x1431c0:101-119]; smoke 0x36 → kind 1, no
         // flee [M 0x138b10:143-159 + 0x1435f0:24-29 — only kind-2 entries trigger]; satchel 0x3B-0x40 → radius
         // 12.0, flee 14.0 [M 0x138b10:113-141 + 0x1431c0:122-152]. Per drone: fear prop 0x3A/0x3B [M 0x1435f0:30-34],
         // within the radius, and the object visible [M 0x1435f0:37-44 — DroneVision_ObjectVisibility
         // 0x1781a8 ≥ 0.7 (the ±e4/≤e8/<2 cone) + CanSeeObject(5,0); the port stands the cone in with the
         // bare segment test here — a noted deviation].
+        //
+        // consider-explosive-gate-2: the STUN grenade 0x35 is NOT in the game's registry switch at all
+        // [M Drone_BuildDynamicAwarePoints 0x138b10:36-160 — the class-5 weapon cases are
+        // 0x2a/0x2c-0x2f/0x34/0x3b-0x40/0x6c (kind 2, r 12), 0x36 (kind 1, r 3) and 0x37 (kind 2, r 8 —
+        // the 8.0/0x41000000 arm the old port comment borrowed); 0x35 falls to the default break]. Msg 0x21's
+        // only sender is HandleExplosives 0x1435f0 [M — its only caller is ControlSTANDARD 0x1490f0, and the
+        // other SendMsgSelf sites send 4/10], which reads only that registry — so a stun grenade scares NO
+        // drone: no flee, no prop call, no link flag (`hazard_link_flag` already returns None for it). The
+        // port's old 0x35 arm (r 8.0, run 10.0) made the 07000011 corridor guards flee #127's own stun lob
+        // the moment the faithful flee gate [M 0x1431c0:40-67] landed — the game's #126 (no grenades, p11=0
+        // [D 07000011 ordinal 126]) never moves off its StepAim cycle.
         let queued = std::mem::take(&mut self.explosive_queue);
         for (p, wt) in queued {
             let cls = match wt {
                 0x34 => Some((12.0f32, 4.0f32, 120u32, 0x87u8)),
-                0x35 => Some((8.0, 10.0, 600, 0)),
                 0x3b..=0x40 => Some((12.0, 14.0, 600, 0x87)),
                 _ => None,
             };

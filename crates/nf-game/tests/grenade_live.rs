@@ -283,3 +283,201 @@ fn guard_decides_to_throw_grenade_unforced() {
     assert!(sim2.list[gi2].grenade_count == gc_before2,
         "guard out of range (30 m) did not throw — grenades {} == {}", sim2.list[gi2].grenade_count, gc_before2);
 }
+
+/// The ConsiderExplosive STATE GATE (GAPS G-055): the game refuses the flee only from 0x28, 0x2d,
+/// 0x4a-0x4b, 0x53-0x55 (the < 0x56 arm) and 0x63, 0x86-0x88 (the >= 0x56 arm) [M 0x1431c0:40-67] —
+/// every other state considers the flee. The old port gate also refused 0x2e-0x49, 0x52, 0x56 and
+/// 0x62-0x85, so a guard in AimStandFire 0x68 never fled a live grenade. These two tests pin the
+/// gate's both sides with the suite's pin-then-run convention (the state write is the premise, the
+/// msg-0x21 delivery — the bounce broadcast [M 0x1435f0 + 0x138b10] — the gate and the flee are the
+/// sim's own path; nothing is written after the bounce).
+///
+/// The frag setup: 07000002's placements carry no grenades (param 11 = 0), so the fields are set the
+/// way `NDrone2_DefaultInit` decodes a 0x43 word (the frag 0x34 × 3), and the fear property 0x3A the
+/// broadcast requires [M 0x1435f0:30-34]. Bond stands 8.5 u out — inside the 8–20 throw window and
+/// inside the frag's 12.0 scan radius [M 0x138b10:67-87] — so the thrower's own grenade lands within
+/// reach of his own flee scan (the corridor-11 d3 lob that "rolls back to the guards", G-055).
+fn force_frag_throw(
+    d: &Data, sim: &mut Drones, gi: usize, bond: &Player,
+) {
+    use nf_game::drone::state;
+    {
+        let dr = &mut sim.list[gi];
+        dr.enabled = true; // a fighting guard is AI-active (the game's obj+0x4F8 & 0x100); the
+                           // WAIT_SWITCH wake leaves the port's `enabled` cleared and the broadcast
+                           // (like the game's HandleExplosives) scans active guards only
+        dr.grenade_weapon = 0x34; // (0x43 >> 4) & 0xffff == 4 → the frag 0x34
+        dr.grenade_count = 3;     // 0x43 & 0xf == 3
+        d.props.set(0x3a, &mut dr.props, 1); // the fear prop the broadcast scans [M 0x1435f0:30-34]
+        if let Some(ref mut ap) = dr.alert_props { d.props.set(0x3a, ap, 1); }
+        d.props.set(0x34, &mut dr.props, 1); // ConsiderExplosive's own prop gate [M 0x1431c0:22-30]
+        if let Some(ref mut ap) = dr.alert_props { d.props.set(0x34, ap, 1); }
+        dr.state = state::AIM_STAND_FIRE;
+        dr.next_state = None;
+        dr.anim.class = 2;
+        dr.anim.state = nf_game::drone::anim_state::AIM_STAND;
+        dr.dist = 10.0;
+        dr.engage_range = 25.0;
+        dr.opp_target = bond.pos;
+        dr.seen = true; dr.ever_seen = true; dr.vision_on = true; dr.unseen_ticks = 0;
+        dr.clip = 5; dr.burst_done = true;
+        dr.cover_claimed = false; dr.has_cover = false; dr.cover = None;
+        d.props.set(0x30, &mut dr.props, 0);
+        if let Some(ref mut ap) = dr.alert_props { d.props.set(0x30, ap, 0); }
+        dr.state = state::GRENADE_THROW;
+        dr.pending_grenade = true;
+    }
+}
+
+
+#[test]
+fn a_guard_in_aim_stand_fire_0x68_flees_his_own_landed_frag() {
+    use nf_game::drone::state;
+    let Some(l) = Level02::load() else { eprintln!("skip: NF_ISO not set"); return };
+    let d = l.data();
+    let (drones, rng) = l.drones();
+    let mut sim = l.sim(drones, rng);
+    let gi = sim.list.iter().position(|x| x.present && x.mode == 0 && x.team == 1 && !x.corpse)
+        .expect("level 07000002 should have a normal combat guard");
+    let g = sim.list[gi].pos;
+    eprintln!("gate: test guard list[{gi}] = index {} at {g:?}", sim.list[gi].index);
+    // Bond 10 u out on +x (inside the 8-20 throw window): the frag flies at him, bounces and rolls
+    // BACK to ~5 u from the thrower — the corridor-11 d3 lob shape (G-055: "hits and rolls back to
+    // the guards") — resting inside the 12 u scan radius with a clear look at the guard.
+    let bpy = l.world.floor_below([g[0] + 10.0, g[1], g[2]], 4.0).unwrap_or(g[1] - 1.0) + 1.0;
+    let bond = bond_at([g[0] + 10.0, bpy, g[2]]);
+    for _ in 0..300 { sim.tick(&d, &bond); }
+    force_frag_throw(&d, &mut sim, gi, &bond);
+    sim.tick(&d, &bond);
+    assert!(sim.grenades.len() == 1, "the frag spawned (grenades {})", sim.grenades.len());
+    // Disarm the thrower so the pinned premise is not punctuated by a second throw decision
+    // (the frag is already in flight — its entity is independent).
+    {
+        let dr = &mut sim.list[gi];
+        dr.grenade_weapon = 0;
+        dr.grenade_count = 0;
+        dr.pending_grenade = false;
+    }
+
+    // Pin the premise: the thrower stands in AimStandFire 0x68 (the state the game's AimStandFire
+    // case 0x21 passes as ConsiderExplosive's resume [M 0x166328:184-187 — the current state]) while
+    // the frag flies. The pin is a premise write each tick BEFORE it: the tick's own msg-0x21
+    // delivery, gate and flee run inside the tick and are never overwritten. The pin stops once the
+    // frag bounces — the broadcast [M 0x1435f0 + 0x138b10] fires on that event.
+    let mut bounced_at = None;
+    for t in 0..240u32 {
+        {
+            let dr = &mut sim.list[gi];
+            dr.state = state::AIM_STAND_FIRE;
+            dr.next_state = None;
+            // Lock the premise through the tick: the guard's own update runs BEFORE the bounce's
+            // broadcast inside a tick, and AimStandFire's mid-burst arm is the state's own stay —
+            // a guard firing a burst does not leave 0x68 [M 0x166328:104-112 the mid-burst return].
+            dr.firing = true;
+            dr.burst_done = false;
+            dr.unseen_ticks = 0;
+        }
+        sim.tick(&d, &bond);
+        if sim.grenades.iter().any(|gr| gr.state < 2 && gr.bounces >= 1) { bounced_at = Some(t); break; }
+        if sim.grenades.is_empty() { break; }
+    }
+    let bounced_at = bounced_at.expect("the frag bounced within 240 ticks");
+    {
+        let dr = &sim.list[gi];
+        let gr = &sim.grenades[0];
+        let dist = ((dr.pos[0] - gr.pos[0]).powi(2) + (dr.pos[2] - gr.pos[2]).powi(2)).sqrt();
+        eprintln!("gate: frag bounced at t+{bounced_at}, thrower state {:#x}, frag {:.2} u away (scan radius 12), guard {:?}, frag {:?}",
+            dr.state, dist, dr.pos, gr.pos);
+        assert!(dist < 12.0, "the frag rests inside the thrower's 12 u scan radius ({dist:.2})");
+    }
+
+    // Unpinned from the bounce on: the game's gate lets 0x68 consider the flee [M 0x1431c0:40-67 —
+    // only 0x28/0x2d/0x4a-0x4b/0x53-0x55/0x63/0x86-0x88 refuse], so the thrower must leave 0x68 for
+    // the flee family (RunAwayFromObject 0x86 [M 0x1431c0:194-195], whose arrival parks in the
+    // +0x354 return 0x87). The old port gate refused 0x62-0x85, so a 0x68 guard never fled.
+    let mut fled_at = None;
+    for t in 0..10u32 {
+        let dr = &sim.list[gi];
+        if matches!(dr.state, state::RUN_AWAY_FROM_OBJECT | state::HIDE_FROM_SCARY_OBJECT) {
+            fled_at = Some(t);
+            break;
+        }
+        sim.tick(&d, &bond);
+    }
+    let fled_at = fled_at.unwrap_or_else(|| panic!(
+        "a guard in AimStandFire 0x68 flees his own landed frag [M 0x1431c0:40-67 — the gate refuses \
+         only 0x28/0x2d/0x4a-0x4b/0x53-0x55/0x63/0x86-0x88; the old port gate also refused 0x62-0x85] — \
+         state after the bounce {:#x}", sim.list[gi].state));
+    eprintln!("gate: the 0x68 guard fled at bounce+{fled_at} (state {:#x})", sim.list[gi].state);
+    // The flee aims away from the explosive: +0x330 holds the grenade's position [M 0x1431c0:172-175].
+    let dr = &sim.list[gi];
+    let ep = dr.explosive_pos;
+    let dpos = ((ep[0] - sim.grenades[0].pos[0]).powi(2) + (ep[2] - sim.grenades[0].pos[2]).powi(2)).sqrt();
+    assert!(dpos < 3.0, "the flee's explosive position is the grenade's spot ({dpos:.2} u off)");
+}
+
+/// Sister: the same landed frag, but the guard is pinned in GoToGoalPosition 0x63 — which the game's
+/// gate REFUSES [M 0x1431c0:63] — so he does not flee it. The pin is the same premise write each
+/// tick BEFORE it: a broken gate would still set the flee state inside the tick and be caught.
+#[test]
+fn a_guard_in_go_to_goal_0x63_does_not_flee_the_landed_frag() {
+    use nf_game::drone::state;
+    let Some(l) = Level02::load() else { eprintln!("skip: NF_ISO not set"); return };
+    let d = l.data();
+    let (drones, rng) = l.drones();
+    let mut sim = l.sim(drones, rng);
+    let gi = sim.list.iter().position(|x| x.present && x.mode == 0 && x.team == 1 && !x.corpse)
+        .expect("level 07000002 should have a normal combat guard");
+    let g = sim.list[gi].pos;
+    let bpy = l.world.floor_below([g[0] + 10.0, g[1], g[2]], 4.0).unwrap_or(g[1] - 1.0) + 1.0;
+    let bond = bond_at([g[0] + 10.0, bpy, g[2]]);
+    for _ in 0..300 { sim.tick(&d, &bond); }
+    force_frag_throw(&d, &mut sim, gi, &bond);
+    sim.tick(&d, &bond);
+    assert!(sim.grenades.len() == 1, "the frag spawned (grenades {})", sim.grenades.len());
+    {
+        let dr = &mut sim.list[gi];
+        dr.grenade_weapon = 0;
+        dr.grenade_count = 0;
+        dr.pending_grenade = false;
+    }
+
+    // Pin 0x63 through the whole live window (the game rescans every frame while the object exists
+    // [M 0x1435f0 — the port's once-at-the-bounce is the documented deviation], so the refusal must
+    // hold at every delivery, not just the first). Bond is pulled out of sight so the 0x63 walk is
+    // the natural premise.
+    let bond_gone = bond_at([g[0] + 60.0, g[1], g[2]]);
+    let mut bounced = false;
+    for t in 0..260u32 {
+        {
+            let dr = &mut sim.list[gi];
+            dr.state = state::GO_TO_GOAL;
+            dr.next_state = None;
+            // Lock the premise through the tick: the guard's own update runs BEFORE the bounce's
+            // broadcast inside a tick, and a long in-progress route is the walk's own stay —
+            // GoToGoal keeps pathing to a far goal [M 0x165640 the GoToGoalPosition UPDATE].
+            dr.goal = Some([g[0] - 80.0, g[1], g[2]]);
+            dr.croute = None;
+        }
+        sim.tick(&d, &bond_gone);
+        let dr = &sim.list[gi];
+        assert!(!matches!(dr.state, state::RUN_AWAY_FROM_OBJECT | state::HIDE_FROM_SCARY_OBJECT | state::RECOVER_FROM_SCARY_OBJECT),
+            "a guard in GoToGoal 0x63 does not flee the landed frag [M 0x1431c0:63] — fled at t+{t} (state {:#x})", dr.state);
+        if sim.grenades.iter().any(|gr| gr.state < 2 && gr.bounces >= 1) { bounced = true; break; }
+        if sim.grenades.is_empty() { bounced = true; break; }
+    }
+    assert!(bounced, "the frag bounced within 260 ticks");
+    eprintln!("gate: the 0x63 guard held through the bounce (state {:#x})", sim.list[gi].state);
+    // Keep the window open past the bounce: no flee-family state may appear while the pin holds.
+    for t in 0..130u32 {
+        {
+            let dr = &mut sim.list[gi];
+            dr.state = state::GO_TO_GOAL;
+            dr.next_state = None;
+        }
+        sim.tick(&d, &bond_gone);
+        let dr = &sim.list[gi];
+        assert!(!matches!(dr.state, state::RUN_AWAY_FROM_OBJECT | state::HIDE_FROM_SCARY_OBJECT | state::RECOVER_FROM_SCARY_OBJECT),
+            "a guard in GoToGoal 0x63 does not flee the landed frag [M 0x1431c0:63] — fled at bounce+{t} (state {:#x})", dr.state);
+    }
+}
