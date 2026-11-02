@@ -115,3 +115,14 @@ pickup. Reverted to keep the branch at its best verified state.
 
 not visible to me (no token/credit/context figures are exposed to this session; nothing in the
 sandbox reports them).
+
+## ntfy failed
+
+All three fallbacks failed (2026-11-02 ~21:25 UTC):
+
+1. `curl -sS -m 20 -H "Title: NightfirePort" -d "…" https://ntfy.sh/nightfire-yoda-8k3x` →
+   `curl: (28) Connection timed out after 20001 milliseconds`
+2. `python3 -c "… urlopen(Request('https://ntfy.sh/nightfire-yoda-8k3x', …), timeout=20)"` →
+   `urllib.error.URLError: <urlopen error [Errno 101] Network is unreachable>`
+3. `wget -q -O- --post-data "…" https://ntfy.sh/nightfire-yoda-8k3x` → killed at the 30 s tool
+   timeout with no output (no bytes received).
