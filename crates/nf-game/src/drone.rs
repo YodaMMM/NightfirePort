@@ -12174,6 +12174,21 @@ pub struct Drones {
     /// 0x1d5080:14); the port has no options menu, so it stays false — the gate keeps Control's
     /// early-out order faithful for whoever wires the setting (fix-spawner-p7).
     pub npc_system_disabled: bool,
+    /// door-scan-skip-bit-2: the player object's `obj+0xF0` bit 0x10 — the door auto-close scan's
+    /// skip bit — through its RUNTIME life. Boot value per level (`Player_Init` 0x1910f8:115 →
+    /// `AnimObjectNew` → `hashtable_set_object_to_entity_gfx` → `Control_SetGList` 0x134960:12-13
+    /// copies the level celglist word; 0x890 = SET on 07000001, 0x880 = CLEAR on 07000005 [L
+    /// ee_start_07000001.bin / ee_start_05.bin]), latched where `Mission_Init` runs (the game's
+    /// boot write is `Player_Init`, the load path). The runtime writers, ported here:
+    /// `Player_Disable(…,0)` 0x195f70:17 SETS it (script event 4 [M 0x1d94c0:119], the NIS
+    /// handler [M 0x205f10:105]) and `Player_Enable` 0x195498:53,77 CLEARS it (script event 6's
+    /// re-place + `Script_Free` [M 0x1da880:44-48]); `Player_ChangeSubState` 0x190630:35-40
+    /// clears it too — the port's one modelled call site is the `Cam2Mode(else)` hand-back
+    /// [M 0x195fc8:11-16], which the view side applies next to its `SS_WALK` reset. From the
+    /// intro's hand-back to level end the game's Bond therefore reads bit-CLEAR — the
+    /// `Door_Update` scan sees him — the boot value alone (the old model) kept him invisible for
+    /// the whole level and stalled the 07000001 escort at the interior doors.
+    pub bond_door_skip: bool,
     pub player_events: Vec<crate::nis::Request>,
     /// The EE sound pool (`DynamicSoundList`, docs/systems/sound.md): what is heard, as opposed to `sounds`, the AI
     /// hearing list.
@@ -12687,6 +12702,7 @@ impl Drones {
             info_codes: Vec::new(),
             pickups: Vec::new(), inventory: crate::pickup::Inventory::level_start(0x73, 34), taken: Vec::new(), scripts: Default::default(), player_events: Vec::new(), npc_enabled: true, hold_npcs: false, hold_active: false,
             npc_system_disabled: false,
+            bond_door_skip: false, // the boot value latches at the Mission_Init site (Player_Init 0x1910f8's write)
             spawn_counter: 0, audio: Default::default(), script_sounds: Vec::new(), map_sounds: Default::default(), music: Default::default(), attack_gate: Default::default(), alarm_music: [0; 3], voice_last: Vec::new(), patrol_cooldown: 0, saw_opp_this_frame: false, saw_opp_last_frame: false, searchlights: Default::default(), doors: Default::default(), fuseboxes: Vec::new(), wire_geo: Default::default(), sss: Default::default(), bullet_paths: Vec::new(), sl_shots: Vec::new(), props: Default::default(), break_kills: Vec::new(), breaks: Default::default(), monitors: Default::default(), mission: crate::mission::Mission::new(), mission_carry: None, mission_inited: false, mission_events: Vec::new(), useobjs: Default::default(), ai_points: Vec::new(), bullet_path_weapons: Vec::new(), copters: Vec::new(), copter_paths: Vec::new(), locks: Vec::new(), grapple_points: Vec::new(), prev_event2: 0,
             bullet_contacts_now: Vec::new(),
             bullet_contacts_prev: Vec::new(),
@@ -16253,7 +16269,19 @@ fn segment_hits_sphere(a: V3, b: V3, c: V3, r: f32) -> bool {
                 crate::nis::Request::PlayerDisable | crate::nis::Request::PlayerEnable { .. }
                 // Event 9 rides with them: `Player_Cam2Mode` 0x195fc8 needs the viewer's Bond
                 // (nis-event9-cnis).
-                | crate::nis::Request::Cam2Mode { .. } => self.player_events.push(r.clone()),
+                | crate::nis::Request::Cam2Mode { .. } => {
+                    // door-scan-skip-bit-2: the hand-off IS the bit's runtime writer —
+                    // `Player_Disable(…,0)` 0x195f70:17 sets `obj+0xF0 |= 0x10`, `Player_Enable`
+                    // 0x195498:53,77 clears it (the game's calls are synchronous inside
+                    // `Script_EventHandler` 0x1d94c0, before the control walk — so the door
+                    // scan built later this tick already reads the new value).
+                    match r {
+                        crate::nis::Request::PlayerDisable => self.bond_door_skip = true,
+                        crate::nis::Request::PlayerEnable { .. } => self.bond_door_skip = false,
+                        _ => {}
+                    }
+                    self.player_events.push(r.clone());
+                }
                 // Events 5 / 7: the game's own drone gate (`Drone_EnableAll` → `NPCGlobals`) [M 0x1383e8].
                 // `Drone_EnableAll(0)` walks the whole llist calling `NDrone2_Enable(0)` per drone —
                 // `obj+0xF0 |= 0x10|0x20` (not drawn, not picked) and `+0x4F8 &= ~0x1801A0` (no anim/AI)
@@ -17227,6 +17255,12 @@ fn segment_hits_sphere(a: V3, b: V3, c: V3, r: f32) -> bool {
         // their `.data` states, as the game's cold path).
         if !self.mission_inited {
             self.level_current = d.level; // GameState._12_4_ [M 0x1d5080:6] — the fail-menu Restart's target
+            // door-scan-skip-bit-2: the player obj's boot skip bit — `Player_Init` 0x1910f8:115 →
+            // `AnimObjectNew` 0x1be910:114-115 → `hashtable_set_object_to_entity_gfx` 0x1ca6d8:38-39 →
+            // `Control_SetGList` 0x134960:12-13 copies the level celglist word into `obj+0xF0`
+            // (0x890 = bit 0x10 SET on 07000001, 0x880 = CLEAR on 07000005 [L ee_start_*]); the
+            // runtime writers above carry it from here.
+            self.bond_door_skip = crate::door::player_door_skip(d.level);
             self.mission.init(d.level, self.mission_carry.is_some(), &mut self.channels, frame);
 
             // `PlrStat_ResetForMission` 0x1993a0 — Mission_Init 0x182270:65 wipes PlrMissionStats
@@ -18638,19 +18672,33 @@ fn segment_hits_sphere(a: V3, b: V3, c: V3, r: f32) -> bool {
         // The actor list `Door_Update`'s proximity test (`dist² < (r1+r2)²·2` over classes
         // 2/3/0x12, skipping `obj+0xF0 & 0x10` candidates [M 0x136678-0x136684]) sees: the player
         // first (`glb_players`, the activator of every auto-activation) with radius 0.4, then every
-        // live non-corpse drone with radius 0.4. The third field is the `obj+0xF0 & 0x10` skip bit:
-        // modelled CLEAR for both — the 07000005 player reads 0x880 [L ee_start_05.bin]; the drones'
-        // 07000005 value is not in the snapshots and the bit's writer is unported (door-port-check #2:
-        // on 07000001 both are SET [L], which the port cannot reproduce yet).
+        // live non-corpse drone with radius 0.4. The third field is the `obj+0xF0 & 0x10` skip bit,
+        // now CARRIED (door-scan-skip-bit; door-port-check #2):
+        // • player — the RUNTIME lifecycle (door-scan-skip-bit-2): the boot value per level
+        //   (`Player_Init` 0x1910f8:115's glist copy — 0x890 SET on 07000001, 0x880 CLEAR on
+        //   07000005 [L ee_start_*]) latched at `Mission_Init`; `Player_Disable(…,0)` 0x195f70:17
+        //   sets it (script event 4 [M 0x1d94c0:119], the NIS handler [M 0x205f10:105]) and
+        //   `Player_Enable` 0x195498:53,77 clears it (event 6 + `Script_Free` [M 0x1da880:44-48]) —
+        //   from the intro hand-back on, the game's Bond is bit-CLEAR and the scan SEES him (the
+        //   port's `bond_door_skip`; the boot-only model stalled the 07000001 escort). // [S]
+        //   unverified: the MP bodies' own per-slot lifecycle — the port keeps the shared value.
+        // • drones — the enable lifecycle: `NDrone2_DefaultInit` 0x14b300:606 clears obj+0xF0 bits
+        //   0x10|0x20 when the drone spawns, and `NDrone2_Enable(0,…)` 0x149dd0:12-13 sets them for
+        //   every disabled/waiting drone (death states disable the same way [M 0x1637f8:89]). The
+        //   port's `started` latch is that spawn event, so an unstarted drone carries the bit — the
+        //   07000001 boot drones read 0x8B0 (0x10|0x20 set) [L ee_start_07000001.bin]. Corpses sit
+        //   out via the `!corpse` filter (the game skips them through the same bit). The lifecycle
+        //   is level-independent [M]; 07000005's drone boards are not in the snapshots.
         // mp-world-sync: online the actor list is every live body (humans in slot order, then
         // the bots — `Door_Update`'s scan covers classes 2/3/0x12, every player object [M
-        // 0x136678]) instead of the one local player.
+        // 0x136678]) instead of the one local player; each body's own obj carries the same
+        // level-boot glist word.
         let player_actors: Vec<crate::door::DoorActor> = match &self.net_bodies {
-            None => vec![(player.pos, 0.4, false)],
-            Some(bodies) => bodies.iter().filter(|b| b.alive).map(|b| (b.pos, 0.4, false)).collect(),
+            None => vec![(player.pos, 0.4, self.bond_door_skip)],
+            Some(bodies) => bodies.iter().filter(|b| b.alive).map(|b| (b.pos, 0.4, self.bond_door_skip)).collect(),
         };
         let actors: Vec<crate::door::DoorActor> = player_actors.into_iter()
-            .chain(self.list.iter().filter(|x| x.present && !x.corpse).map(|x| (x.pos, 0.4, false)))
+            .chain(self.list.iter().filter(|x| x.present && !x.corpse).map(|x| (x.pos, 0.4, !x.started)))
             .collect();
         // fix-casings-16: the straddle walk-in runs EVERY tick, once, on this actor list (the game's
         // straddle doors open on contact with no E — the collide path the port has not rebuilt,

@@ -3635,6 +3635,11 @@ impl Sim {
                     } else {
                         self.bond.cam_mode = 0;
                         self.bond.substate = nf_game::player::SS_WALK;
+                        // door-scan-skip-bit-2: this arm's game chain ends in
+                        // `Player_ChangeSubState(player, 0)` [M 0x195fc8:11-16], whose body clears
+                        // `obj+0xF0` bit 0x10 [M 0x190630:35-40] — the hand-back re-shows Bond to
+                        // the door auto-close scan.
+                        self.drones.bond_door_skip = false;
                     }
                 }
                 nf_game::nis::Request::PlayerEnable { at, .. } => {
