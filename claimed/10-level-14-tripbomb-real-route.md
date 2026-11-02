@@ -8,3 +8,6 @@ Do:
 1. From the level start, walk a real route (real input only; no teleport after the load, no health/ammo/weapon writes) to a tripbomb pickup and take it through the game's pickup path.
 2. Switch to it with the real switch request, place it on a wall with the real fire, walk out of its beam to ≥ 12 units, switch back to a gun and shoot it: it must explode through the game's bullet-vs-tripbomb rule (the one tripwire_shot_live pins).
 3. Log Bond's final position and the shot line so the run can be replayed in the app. Add the live test; run tripwire_shot_live, interactables_07000014_live, walkreal_07000014_live, then the full suite.
+
+---
+claimed-by: sandbox5 at 2026-11-02T09:38Z
