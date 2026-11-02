@@ -20,3 +20,8 @@ say so in the report. Never weaken a decompile-backed test to make code pass.
 
 ---
 claimed-by: sandbox1 at 2026-11-02T03:46Z
+
+---
+## Report (done, 2026-11-02T05:21Z)
+
+Closed by the driver: the report is on `s/level-13-lobby-rifles` (docs/reports/level-13-lobby-rifles.md); the worker didn't run finish.sh.
