@@ -96,3 +96,14 @@ Grand total this session: **1282 passed, 4 failed (3 allowed + the ISO-identity 
 ## Usage
 
 not visible to me
+
+## ntfy failed
+
+All three notification fallbacks failed (the sandbox has no egress to ntfy.sh):
+
+1. `curl -sS -m 20 -H "Title: NightfirePort" -d "level-11-interactables-2: done …" https://ntfy.sh/nightfire-yoda-8k3x`
+   → `curl: (28) Connection timed out after 20001 milliseconds`
+2. `python3 -c "import urllib.request as u; u.urlopen(u.Request('https://ntfy.sh/nightfire-yoda-8k3x', data=b'level-11-interactables-2: done', headers={'Title':'NightfirePort'}), timeout=20)"`
+   → `urllib.error.URLError: <urlopen error [Errno 101] Network is unreachable>`
+3. `wget -q -O- --post-data "level-11-interactables-2: done" https://ntfy.sh/nightfire-yoda-8k3x`
+   → killed by the 40 s guard (`wget_exit=124`), no output.
