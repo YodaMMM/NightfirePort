@@ -17,3 +17,7 @@ claimed-by: sandbox5 at 2026-11-02T07:53Z
 ## Report (done, 2026-11-02T08:58Z)
 
 Closed by the driver: the report is on `s/level-12-corridor-guards-stuck` (docs/reports/level-12-corridor-guards-stuck.md); the worker didn't run finish.sh.
+
+---
+## Report from the worker (blocked, 2026-11-02T08:58Z)
+
