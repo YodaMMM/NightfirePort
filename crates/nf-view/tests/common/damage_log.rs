@@ -242,6 +242,63 @@ impl DamageLog {
     /// Bond can put a round into drone `i` from where he stands (`exposed_part`).
     pub fn visible(sim: &nf_view::scene::Sim, i: usize) -> bool { Self::exposed_part(sim, i).is_some() }
 
+    /// Why `exposed_part` cannot see drone `i`: every hit box's centre ray with its world stop and
+    /// the stopping owner's run, plus the guard's own muzzle→Bond path. NF_RF_GEOM diagnostic.
+    pub fn geom_dump(sim: &nf_view::scene::Sim, i: usize) {
+        let d = &sim.drones.list[i];
+        let bp = sim.bond.pos;
+        let eye = [bp[0], bp[1] + sim.bond.eye - sim.bond.crouch_drop, bp[2]];
+        eprintln!("[geom] guard #{i}: pos ({:.2},{:.2},{:.2}) weapon {:#x} hp {:.1} down {} corpse {} present {} enabled {} team {} los {} seen {} dist {:.2} state {:#x} danim {:#x} anim_class {} anim_state {:#x}",
+            d.pos[0], d.pos[1], d.pos[2], d.weapon, d.health, d.down, d.corpse, d.present, d.enabled, d.team, d.los, d.seen, d.dist,
+            d.state, d.anim.danim, d.anim.class, d.anim.state);
+        let data = nf_game::drone::Data {
+            tables: &sim.tables, props: &sim.props, scripts: &sim.scripts, weapons: &sim.weapons,
+            world: &sim.world, level: sim.level, sequences: &sim.seqs, skins: &sim.skins,
+            skeletons: &sim.skeletons, nav: &sim.nav, covers: &sim.covers, tuning: &sim.tuning,
+            hitboxes: &sim.hitboxes, volumes: &sim.volumes, sfx: sim.sfx.as_ref(), models: &sim.models,
+            surfaces: sim.surfaces.as_ref(), voices: sim.voices.as_deref(), difficulty: sim.drones.difficulty,
+            ai_points: &sim.ai_points,
+        };
+        let boxes = d.hit_boxes(&data);
+        let cell_bond = sim.world.find_cel(eye);
+        eprintln!("[geom] guard #{i}: {} boxes, bond cel {cell_bond:?} eye ({:.2},{:.2},{:.2})",
+            boxes.len(), eye[0], eye[1], eye[2]);
+        let mut stop_named = false;
+        for (k, b) in boxes.iter().enumerate() {
+            let c = [b.m[3][0], b.m[3][1], b.m[3][2]];
+            let ray = [c[0] - eye[0], c[1] - eye[1], c[2] - eye[2]];
+            let t_box = nf_game::damage::ray_box(eye, ray, b);
+            let tw = sim.world.segment_bullet_scoped(cell_bond, eye, c);
+            let twf = sim.world.segment_bullet(eye, c);
+            eprintln!("[geom]   box {k} part {} centre ({:.2},{:.2},{:.2}) half {:?} t_box {t_box:?} tw_scoped {tw:?} tw_flat {twf:?}",
+                b.part, c[0], c[1], c[2], b.half);
+            // Name the blocking runs once: the runs whose bounds hold the first blocked ray's stop point.
+            if !stop_named && t_box.is_some() && tw.is_some_and(|w| w < t_box.unwrap()) {
+                stop_named = true;
+                let s = [eye[0] + ray[0] * tw.unwrap(), eye[1] + ray[1] * tw.unwrap(), eye[2] + ray[2] * tw.unwrap()];
+                if let Some(runs) = cell_bond.and_then(|cel| sim.world.scoped_run_bounds(cel, eye, c)) {
+                    for (r, owner, lo, hi) in &runs {
+                        let inside = (0..3).all(|a| s[a] >= lo[a] - 0.05 && s[a] <= hi[a] + 0.05);
+                        if inside {
+                            eprintln!("[geom]   stop ({:.2},{:.2},{:.2}) inside run {r} owner {owner} bounds lo ({:.2},{:.2},{:.2}) hi ({:.2},{:.2},{:.2})",
+                                s[0], s[1], s[2], lo[0], lo[1], lo[2], hi[0], hi[1], hi[2]);
+                        }
+                    }
+                }
+            }
+        }
+        // The guard's own lane: muzzle → Bond's chest, scoped from the muzzle's cel and flat.
+        let m = d.muzzle(&data);
+        let chest = [bp[0], bp[1] + 0.6, bp[2]];
+        let cell_g = sim.world.find_cel(m);
+        let tw_g = sim.world.segment_bullet_scoped(cell_g, m, chest);
+        let twf_g = sim.world.segment_bullet(m, chest);
+        let owners_g = cell_g.and_then(|cel| sim.world.scoped_run_owners(cel, m, chest));
+        eprintln!("[geom] guard #{i}: muzzle ({:.2},{:.2},{:.2}) cel {cell_g:?} → chest tw_scoped {tw_g:?} tw_flat {twf_g:?} owners {:?} bond cel {cell_bond:?}",
+            m[0], m[1], m[2], owners_g.as_ref().map(|o| &o[..o.len().min(6)]));
+    }
+
+
     pub fn summary(&self, sim: &nf_view::scene::Sim) -> String {
         let mut top = self.by_owner.clone();
         top.sort_by(|a, b| b.1.partial_cmp(&a.1).unwrap());
@@ -302,6 +359,12 @@ impl Walker {
             if trace && pick.is_none() && !cands.is_empty() {
                 eprintln!("[rf-trace] {label} tick {}: shooters {:?} none visible (bond {:?}, health {:.1}, clip {} spare {})",
                     self.total_ticks, cands, sim.bond.pos, sim.drones.health.health, sim.gun.clip, sim.gun.spare);
+                // NF_RF_GEOM: full ray analysis of every shooter the world trace cannot see —
+                // each hit box's centre ray (t_box, the world stop, the stopping owner) and the
+                // guard's own muzzle→Bond path. Investigation tool (level-13-lobby-rifles).
+                if std::env::var_os("NF_RF_GEOM").is_some() && self.total_ticks % 60 == 0 {
+                    for &i in &cands { DamageLog::geom_dump(sim, i); }
+                }
             }
             pick
         };
