@@ -93,3 +93,13 @@ Targeted runs (release, `--test-threads=1`, slim ISO `NF_ISO`):
 ## Usage
 
 not visible to me
+
+## ntfy failed
+
+All three transports timed out from this sandbox (2026-11-02T09:32Z):
+1. `curl -sS -m 20 -H "Title: NightfirePort" -d "..." https://ntfy.sh/nightfire-yoda-8k3x`
+   → `curl: (28) Connection timed out after 20001 milliseconds`
+2. `python3 -c "...urlopen(u.Request('https://ntfy.sh/nightfire-yoda-8k3x', ...), timeout=20)"`
+   → no output, the call failed — the same 20 s timeout, ntfy.sh unreachable from this network.
+3. `wget -q -O- --post-data "..." https://ntfy.sh/nightfire-yoda-8k3x` → failed the same way
+   (connection timeout, no output).
