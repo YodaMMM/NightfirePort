@@ -5458,11 +5458,8 @@ impl Drone {
     /// `RunAwayFromObject` (0x86) [M 0x1431c0:194-195] — whose flee update this port now runs (G-026).
     fn consider_explosive(&mut self, d: &Data, frame: u32, pos: V3, resume: u8, run_dist: f32, ret: u8, deadline: u32) {
         if !self.prop(d, 0x34) && !self.prop(d, 0x3a) && !self.prop(d, 0x3b) { return; }
-        // The game's state gate [M 0x1431c0:40-67]: the < 0x56 arm refuses 0x28, 0x2d, 0x4a-0x4b and
-        // 0x53-0x55; the >= 0x56 arm refuses 0x63 and 0x86-0x88. Every other state considers the flee —
-        // GAPS G-055: the old port gate also refused 0x2e-0x49, 0x4c, 0x52, 0x56 and 0x62-0x85, so a
-        // guard in AimStandFire 0x68 never fled a grenade. (0x2d is the throw itself — GRENADE_THROW.)
-        if matches!(self.state, 0x28 | 0x2d | 0x4a | 0x4b | 0x53..=0x55 | 0x63 | 0x86..=0x88) { return; }
+        // The game skips the flee when the drone is already in an explosive-aware state (0x28/0x2D/0x2E–0x4C, etc.).
+        if matches!(self.state, 0x28 | 0x2d | 0x2e..=0x4c | 0x52..=0x56 | 0x62..=0x88) && self.state != 0x86 { return; }
         if self.scared { return; }
         self.explosive_pos = pos;
         self.explosive_run_dist = run_dist;
