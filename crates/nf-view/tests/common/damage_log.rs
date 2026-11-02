@@ -314,7 +314,7 @@ impl DamageLog {
             // HEAD-HUNT (opt-in, `with_real_damage_head_hunting`): the clear head box (part 5)
             // within 6 u of the eye — the same window walker.rs `exposed_aim`'s `prefer_head`
             // uses — wins over the torso-nearest pick.
-            if head.is_none() && b.part == 5 && ((c[0] - eye[0]).powi(2) + (c[2] - eye[2]).powi(2)).sqrt() <= 6.0 {
+            if head.is_none() && HEAD_HUNT.with(|c| c.get()) && b.part == 5 && ((c[0] - eye[0]).powi(2) + (c[2] - eye[2]).powi(2)).sqrt() <= 6.0 {
                 head = Some(c);
             }
         }
