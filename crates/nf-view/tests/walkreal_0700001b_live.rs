@@ -1193,10 +1193,15 @@ fn the_zero_g_float_reads_moving_while_its_thrusters_decay() {
         assert_eq!(sim.bond.substate, SS_ZEROG_8, "the float substate [M 0x1910f8 :160-165]");
         assert_eq!(sim.bond.local, [0.0, 0.0], "no thrust yet");
         assert_eq!(sim.drones.player_move_local, Some([0.0, 0.0]), "the viewer hands the drones the pair in zero-g");
-        assert!(!sim.drones.target_motion.0, "sister: a float that never thrusted reads still");
+        let g = first_tracker(sim);
+        assert!(!sim.drones.list[g].target_motion.moving, "sister: a float that never thrusted reads still [M 0x179a48:34-41]");
     }
     for _ in 0..20u32 { w.tick(Input { forward: 1.0, ..Default::default() }, false); }
-    assert!(w.scene.sim.as_ref().unwrap().drones.target_motion.0, "thrusting reads moving");
+    {
+        let sim = w.scene.sim.as_ref().unwrap();
+        let g = first_tracker(sim);
+        assert!(sim.drones.list[g].target_motion.moving, "thrusting reads moving [M 0x179a48:34-41]");
+    }
     for _ in 0..300u32 { w.tick(Input::default(), false); }
     let p0 = w.scene.sim.as_ref().unwrap().bond.pos;
     w.tick(Input::default(), false);
@@ -1205,8 +1210,9 @@ fn the_zero_g_float_reads_moving_while_its_thrusters_decay() {
     let step = (p1[0] - p0[0]).abs() + (p1[2] - p0[2]).abs();
     assert!(step < 1e-4, "the decayed drift moves under the on-foot 1e-4 test ({step:e})");
     assert!(sim.bond.local[1] != 0.0, "the eased forward smoother never reaches 0 [M 0x192ab0:116-135]");
-    assert!(sim.drones.target_motion.0, "the float still reads MOVING for the hit roll [M 0x179a48:34-41]");
-    assert!(!sim.drones.target_motion.1, "the first-moved window (2 s) is long over [M 0x179a48:70-73]");
+    let g = first_tracker(sim);
+    assert!(sim.drones.list[g].target_motion.moving, "the float still reads MOVING for the hit roll [M 0x179a48:34-41]");
+    assert!(!sim.drones.list[g].target_motion.first_moved, "the first-moved window (2 s) is long over [M 0x179a48:70-73]");
 }
 
 /// The float against the shaft's south end-wall (z −20.40 [D the_end_walls_seal_the_shaft_box])
