@@ -1220,7 +1220,23 @@ fn the_exit_fade_starts_on_the_exit_tick_runs_the_games_300_frames_then_the_leve
 /// tests' own `top_up_health = true` included) and the walker's return fire on — Bond's death
 /// panics with the death spot and the last hits (common/damage_log.rs), so a pass pins that the
 /// walk completes on the port's own damage.
+///
+/// The fights answer what actually hurts Bond, wherever it is (`with_real_damage_unseen_fights`)
+/// and take the clear head first (`with_real_damage_head_hunting`): the previous run's shape —
+/// death at tick 7805 at (−29.25, 6.43, 13.62), 91 hits for 100.0, the fight vs #17 entered at
+/// 2.2 hp — was an attrition economy, not a route stall: two cross-map snipers (#9 at 20.8 u,
+/// #11 at 35.6 u) sat outside the plain 20-u shooters window and took ~20 hp for free, the
+/// disarmed rushers hugged for 0.75/punch, and the corridor fights ran torso taps. The level's
+/// own offerings: the aim (a head hit drops the 12-hp guards) and the dropped guns on the floor
+/// (the resupply corridor rule). The wide shooters window (48 u / 7.5 u, the `lane_fights`
+/// proven pair) rides the unseen mode so the far snipers are candidates at all.
+/// The stage leg's hall crowd is shot open from the wedge (`with_real_damage_body_block` — the
+/// plate sister's mechanism on this same level): the two shotgun guards hug the east door's
+/// gap at 1.7-3.2 u and the door leaf eats the eye rays (the aim reads None from the door
+/// line) — a player clears the crowd from the chokepoint instead of stepping between them.
 #[test]
 fn walk_from_the_spawn_to_the_exit_with_the_contact_real_damage() {
-    walker::with_real_damage(walk_from_the_spawn_to_the_exit_with_the_contact);
+    walker::with_real_damage_head_hunting(||
+        walker::with_real_damage_body_block(||
+            walker::with_real_damage_unseen_fights(walk_from_the_spawn_to_the_exit_with_the_contact)))
 }

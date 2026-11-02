@@ -856,7 +856,7 @@ impl Walker {
                 // stepped-back fights diverged into resupply wedges and a walk off the map
                 // (fix_npc_doors_live red on this branch only, level-02-every-objective-5
                 // 2026-10-31). Master's fights keep the flank; the 02 walk keeps the step-back.
-                let close_buried = self.body_block_response && aim.is_none() && len < 3.0;
+                let close_buried = (self.body_block_response || crate::walker::BODY_BLOCK.with(|c| c.get())) && aim.is_none() && len < 3.0;
                 let fp = if close_buried {
                     [bp[0] - vx / len * dist, bp[1], bp[2] - vz / len * dist]
                 } else {
@@ -1318,7 +1318,7 @@ impl Walker {
                     // so the ungated arm shot a cover guard at the 07 party (level_exit mid-walk,
                     // the guest walk's !scared assert) and burned the 16 chasers walk's give-up
                     // cap on an unkillable blocker. Only the 02 real-health walk sets the flag.
-                    if self.body_block_response {
+                    if self.body_block_response || BODY_BLOCK.with(|c| c.get()) {
                     let blocker = (!self.fighting_blocker).then(|| {
                         let sim = self.scene.sim.as_ref().unwrap();
                         sim.drones.list.iter().enumerate().position(|(i, d)| d.team == 1 && d.health > 0.0
