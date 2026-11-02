@@ -5,3 +5,6 @@ Continue from origin/master (it carries level-0d-yard-climb-cover: the perch kil
 Do: apply those levers with real input (no health writes), un-ignore walkreal_0700000d_live::walk_arrival_to_the_c5_door_real_damage, run walkreal_0700000d_live, every walkreal_*_live, then the full suite.
 
 Rules: shared test helper changes (crates/nf-view/tests/common/) must be opt-in per level (the code must check the flag); re-run every walkreal_*_live before finishing. A visible fix ships with a real-input test that reaches the spot from the level start.
+
+---
+claimed-by: sandbox7 at 2026-11-02T23:38Z
