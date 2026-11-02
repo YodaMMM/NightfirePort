@@ -88,3 +88,10 @@ game's armoury offers a ≥12 clear shot the port's collision cannot see.
 ## Usage
 
 not visible to me (no token, credit or context-window figures are shown in this environment).
+
+## ntfy failed
+
+All three fallbacks, in order, at 15:04 UTC (github pushes worked throughout — the sandbox network selectively cannot reach ntfy.sh, same as the previous session):
+1. curl: (28) Connection timed out after 15001 milliseconds
+2. python urllib: URLError Errno 101 Network is unreachable
+3. wget: no output within 20 s (timed out).
