@@ -7,3 +7,14 @@ Progress log (started 2026-11-02 05:24 UTC; sandbox expires ~07:22 UTC, stop new
 - (06:30-06:50) reconciliation proof: the 05 park plate (flat quad y 37.7418, standing park pos ≈ 38.37) needs the standing reach bottom ABOVE 37.74 (miss 0.23, the test's pos+0.15−0.55 model = reach ≈ pos−0.4) while 0a's #621 band y 0.13-0.39 [D] needs reach ≥ pos−1.0 standing [L 2026-11-01] — one body cannot do both (the standing/crouch capsule bottoms differ by only 0.025 at the park, yet the game separates them). ⇒ the laser beams ride a DIFFERENT contact pass than the floor plates (the pick/sensor capsule — the test doc's "the game's standing pick capsule reaches the floor", case 0/6 arm) and the port folds both into one trigger toucher. The un-ignore needs that pass split with [D] class evidence (is #621 class 0x1D or a sensor family?), not a toucher swap.
 - (06:52) REVERTED the toucher + veto wiring (drone.rs back to the measured box; touched_by back to capsule_hits_tris with a NOTE); kept `cylgeom_hits_tris` + the full derivation as the next session's base. fix_truck_live 2/2 green again; walkreal_0700000a_live 10 passed / 3 ignored (master parity). Report: docs/reports/level-0a-low-beam-standing.md.
 
+
+## level-0a-low-beam-ride-body — 2026-11-02 (s/level-0a-low-beam-ride-body)
+
+Continued from level-0a-low-beam-standing (merged in). The arms table off 0x194df0 is complete now
+(climb/creep 0.275, crouch case 3, wire case 5 / zipline case 0xe tall attach, mount case 0xb,
+bone case 0xd, GT 0x10 → default); the wire/zipline arm joined the body build (859c3c8f). The
+per-substate trigger-toucher swap went 0/2 on fix_truck and was REVERTED the same session: the
+gatehouse touch #305 sits pos+1.05 over Bond — above every capsule arm — so the game's trigger
+contact gate must be the world sphere [M Collide_PickObj 0x1eae80:93-107], which the port models
+as triangle tests + the calibrated box. Next session: sphere-contact gate in touched_by, then the
+swap + un-ignore. Parity on the revert: fix_truck 2/2, walkreal_0a 10/3, walkreal_0d 1/0.
