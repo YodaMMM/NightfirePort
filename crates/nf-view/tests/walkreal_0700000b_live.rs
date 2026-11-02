@@ -73,13 +73,30 @@ fn load_fresh() -> Walker {
     Walker::new(nf_view::load_with_carry(&iso(), "0700000b.bin", false, None).expect("load"))
 }
 
+/// The fresh boot's own pins (the head of `walk_fresh_spawn_to_the_mission_end`), shared by the
+/// real-damage walk so its loader can add the fight flags before the route runs.
+fn fresh_boot_asserts(w: &Walker) {
+    {
+        let sim = w.scene.sim.as_ref().unwrap();
+        let p = sim.bond.pos;
+        assert!((p[0] - 28.92).abs() < 1.5 && (13.0..17.0).contains(&p[1]), "the balcony start [D], got {p:?}");
+        // The fresh boot leaves the carried channels OFF — the no-poke proof.
+        for c in [0x46u32, 0x47, 0x48, 0x49] {
+            assert!(!sim.drones.channels.on(c), "the fresh boot leaves carried ch {c:#x} off [M 0x182270 previous parts untouched; L ee_snapshot 0x2a3f78+: record init values 0]");
+        }
+        assert!(!sim.drones.channels.on(0x61), "no alarm at the fresh boot [L ee_snapshot: the inverted obj-1 record reads complete with ch 0x61 clear]");
+        eprintln!("[0b-fresh] boot owned[0x58] = {}", sim.drones.inventory.owned[0x58]);
+    }
+}
+
 /// The shared walkthrough — both walks reuse the same legs: the spawn plates → the arrival
 /// cut-scene → the cab ride → the exec floor → the waiting-room exit transit (the one kept
 /// stand-in) → the ring → the terminal → the lock's walked E → the Q-Worm install → the files
 /// (objective 9, the REAL writer on both walks) → the roof gate → the roof cut-scene → the
 /// parachute → the jump → the mission latch. `fresh` selects only the mission-latch wording
-/// (a fresh boot's AND cannot fold — the end rides OUT #304's own ch 100 write).
-fn walk_to_the_mission_end(mut w: &mut Walker, fresh: bool) {
+/// (a fresh boot's AND cannot fold — the end rides OUT #304's own ch 100 write). `real` selects
+/// the real-health deck crossing (the sprint — see the deck leg).
+fn walk_to_the_mission_end(mut w: &mut Walker, fresh: bool, real: bool) {
     // The spawn plates fire under Bond (objective 6 + the arrival cut-scene arming); the
     // cut-scene's tail re-places Bond (event 6) — wait it out before any route work.
     w.wait(30);
@@ -525,8 +542,12 @@ fn walk_to_the_mission_end(mut w: &mut Walker, fresh: bool) {
     // wrong and ch 0x75 does not fire at the re-place; the trigger is the shaft-top stop the
     // player crosses on a LIFT ride, not at the cut-scene's deck placement. Its tail writes
     // ch 0x2A (the helicopter's gate) at 0x990 and ch 0x57 + ch 0x59 (objective 10) at 0x991
-    // [D streams 6/13/14]. Everything after the gate is the real disc script.
-    w.wait(2900);
+    // [D streams 6/13/14]. Everything after the gate is the real disc script. The wait runs
+    // until the GAME re-enables Bond (the cut-scene's PlayerDisable tail; the arrival
+    // cut-scene's wait_enabled pattern) — the fixed 2900 stood Bond 450 extra ticks at the deck
+    // key under the roof guards' fire with no control ([L the death run: 11 hits, 23.8 → 0.0,
+    // ticks 16473-16652, at the re-place point, no fight ever started]).
+    w.wait_enabled(3400, "the roof cut-scene tail (control returns)");
     {
         let sim = w.scene.sim.as_ref().unwrap();
         assert!(sim.drones.channels.on(0x59), "060004FA stream 13 @0x991 → ch 0x59 (objective 10) [D]");
@@ -561,17 +582,46 @@ fn walk_to_the_mission_end(mut w: &mut Walker, fresh: bool) {
             "the event-6 re-place parks Bond at the deck key [−14.71, 58.00, −2.06], got {p:?}");
     }
 
-    // The parachute + the jump are the REAL object paths. Bond walks the deck east from the
-    // re-place point toward the pickup (the guards' fire is suppressed by the walker's
-    // top_up_health); the take is the walked slot below.
+    // The parachute + the jump are the REAL object paths. The deck crossing to the pickup is
+    // the walked leg (the warm walks) or the real-health sprint (see the deck leg below); the
+    // take is the walked slot below.
     let parachute = w.scene.sim.as_ref().unwrap().drones.pickups.iter()
         .find(|p| p.switch_channel == 0x3f).expect("OBJECT_Parachute (0xF0, ch 0x3F)").clone();
     let pp = [parachute.m[3][0], parachute.m[3][1], parachute.m[3][2]];
-    // The deck east from the re-place point IS the game's route and it WALKS: the walkthrough
-    // arrives at the deck below the pickup in both walks (deterministic 60 Hz — once green,
-    // always green), so no stand-in: the arrival is a hard assert. (The prior session's wedge
-    // transit is gone; the deck's full extent was never a blocker on this tree.)
-    w.walk_to(Wp::new(pp[0], pp[1] - 1.4, pp[2] - 5.0).r(1.6), "the deck below the parachute");
+    if real {
+        // THE DECK SPRINT — the player's crossing on real health. The deck key stands 30-42 u
+        // from four roof guards [D placements; L the death runs' damage logs]; the K5's dart
+        // cannot touch a guard in full combat [M 0x164210 — Attack carries no case 0x19] and the
+        // sleep it does land buys `RecoverTime(0x43) = 36·(200−+0xB9)` ≈ 144 ticks on these
+        // guards before a team-1 wake [M 0x147188 k=60; L the ring sleeps #1/#3 — both back
+        // shooting inside ~150 ticks] — standing to dart them is the stall that bled the first
+        // un-ignoring runs. A moving target cuts the guards' roll instead [M 0x179740 —
+        // `DroneFiring_TargetMoving_Accuracy`], so Bond RUNS the diagonal (the same real-input
+        // pattern the jump leg drives; no fight stops) straight through the reduced fire.
+        let target = [pp[0], pp[1] - 1.4, pp[2] - 5.0];
+        let start = w.total_ticks;
+        while w.total_ticks - start < 2400 {
+            let sim = w.scene.sim.as_ref().unwrap();
+            let p = sim.bond.pos;
+            if walker::dxz(p, target) < 1.6 { break; }
+            let desired = (target[0] - p[0]).atan2(target[2] - p[2]);
+            let err = walker::wrap_pi(desired - sim.bond.yaw);
+            let input = nf_game::player::Input {
+                turn: err.clamp(-0.08, 0.08),
+                forward: if err.abs() > 0.6 { 0.0 } else { 1.0 },
+                ..Default::default()
+            };
+            w.tick(input, false);
+        }
+        let p = w.scene.sim.as_ref().unwrap().bond.pos;
+        assert!(walker::dxz(p, target) < 1.6, "the deck sprint must reach the parachute's deck slot on real input, got {p:?}");
+    } else {
+        // The deck east from the re-place point IS the game's route and it WALKS: the walkthrough
+        // arrives at the deck below the pickup in both walks (deterministic 60 Hz — once green,
+        // always green), so no stand-in: the arrival is a hard assert. (The prior session's wedge
+        // transit is gone; the deck's full extent was never a blocker on this tree.)
+        w.walk_to(Wp::new(pp[0], pp[1] - 1.4, pp[2] - 5.0).r(1.6), "the deck below the parachute");
+    }
     w.wait(10);
     // Take the parachute: the WALKED slot. The game's reach is NOT the north side (the old
     // target z +1.2 ground Bond EAST along the pickup's low box — the run dump's wedge at
@@ -669,7 +719,7 @@ fn walk_balcony_to_the_roof_jump() {
         // walks owned records only] — printed, and the shot leg re-checks before it fires.
         eprintln!("[0b] boot owned[0x58] = {}", sim.drones.inventory.owned[0x58]);
     }
-    walk_to_the_mission_end(&mut w, false);
+    walk_to_the_mission_end(&mut w, false, false);
 }
 
 /// THE FRESH-SPAWN WALK: a FRESH load of 0b (the level's own boot, no channel pokes) walked to
@@ -684,40 +734,70 @@ fn walk_balcony_to_the_roof_jump() {
 #[test]
 fn walk_fresh_spawn_to_the_mission_end() {
     let mut w = load_fresh();
-    {
-        let sim = w.scene.sim.as_ref().unwrap();
-        let p = sim.bond.pos;
-        assert!((p[0] - 28.92).abs() < 1.5 && (13.0..17.0).contains(&p[1]), "the balcony start [D], got {p:?}");
-        // The fresh boot leaves the carried channels OFF — the no-poke proof.
-        for c in [0x46u32, 0x47, 0x48, 0x49] {
-            assert!(!sim.drones.channels.on(c), "the fresh boot leaves carried ch {c:#x} off [M 0x182270 previous parts untouched; L ee_snapshot 0x2a3f78+: record init values 0]");
-        }
-        assert!(!sim.drones.channels.on(0x61), "no alarm at the fresh boot [L ee_snapshot: the inverted obj-1 record reads complete with ch 0x61 clear]");
-        eprintln!("[0b-fresh] boot owned[0x58] = {}", sim.drones.inventory.owned[0x58]);
-    }
-    walk_to_the_mission_end(&mut w, true);
+    fresh_boot_asserts(&w);
+    walk_to_the_mission_end(&mut w, true, false);
 }
 
 /// THE FRESH-SPAWN WALK ON REAL HEALTH (`damage_log.rs::with_real_damage`): the same walked
 /// route, the top-up off — no health, armour or ammo writes anywhere — and Bond's death
 /// panics with the damage log (who, weapon, range). Auto-aim is the app default; the fights
-/// are the walker's own plain return fire (the same fights every other real-damage walk is
-/// pinned against).
-/// The CORRIDOR death is fixed: the world hits were the terminal-room GT wall guns #174/#175
-/// (class-0x27 GT placements [D], p0=1/p4=0xe [D dump]; weapon record 96 = 0x60, owner −1)
-/// firing dead-on — the game's case 4 eases the barrel first (`Quat_Slerp_Acc(REC_FRAME_RATE·4)`
-/// [M 0x180498:295-330]) and fires along `Mat_GetDir(barrel obj+0x90)` [M :344-352, disasm
-/// 0x180a28-0x180bac], which lags a runner; the port now does the same (gt.rs
-/// combat_fire_rides_the_eased_barrel_not_the_dead_on_line) and the crossing dropped from
-/// 42 × −2.40 = 100.0 (death in the corridor) to 23 × −2.40 = 55.2 ([L] the un-ignored run).
-/// Still ignored: the run now dies at tick 16652 on the roof (−14.71, 58.13, −2.06) — the 55.2
-/// leaves 44.8 for the exec-floor/roof fights and the return-fire stalls ("killed false", the
-/// targets at d 20.9/hp 10) bleed the rest; whether the real machine's crossing costs ~55 is
-/// the report's live check (the [M] law's own yield on this route is what the port shows).
+/// are the walker's own return fire under this walk's opt-in flags.
+/// The CORRIDOR death was fixed first: the world hits were the terminal-room GT wall guns
+/// #174/#175 (class-0x27 GT placements [D], p0=1/p4=0xe [D dump]; weapon record 96 = 0x60,
+/// owner −1) firing dead-on — the game's case 4 eases the barrel first
+/// (`Quat_Slerp_Acc(REC_FRAME_RATE·4)` [M 0x180498:295-330]) and fires along
+/// `Mat_GetDir(barrel obj+0x90)` [M :344-352, disasm 0x180a28-0x180bac], which lags a runner;
+/// the port does the same (gt.rs combat_fire_rides_the_eased_barrel_not_the_dead_on_line) and
+/// the crossing costs 23 × −2.40 = 55.2 ([L] the runs here). Whether the real machine's
+/// crossing costs ~55 is the report's live check (the [M] law's own yield on this route is
+/// what the port shows).
+/// THE ROOF DEATH (tick 16652 at the deck key, −14.71, 58.13, −2.06) was the player-side
+/// stalls, and the weapon told the story: Bond's ONLY conventional weapon on 0b is the
+/// Korsakov K5 sleep dart (0x43, dmg 0.10, range 45 — the 09 kit [M 0x1a7ef8 case
+/// 0x7000009/0a/0b; L the bullet probe]) and the game's dart law DROPS msg 0x19 for a guard
+/// in full combat (`DSTATE_Attack` 0x164210 carries no case 0x19; the state gate is
+/// `DroneFunc_HandleImpact` 0x1469b8:315-361 — the port's `Drone::dart_impact_state_ok`) —
+/// the ring fights stood 833 ticks in the open tapping dead-on darts into ATTACK-state
+/// guards (tgt hp 10.0 pinned — [L] the fight traces), and on the roof the plain 20 u
+/// shooters window never even picked the d 36-42 deck guards. The player's answers, now
+/// opt-ins this walk sets: `lane_fights` (the 48 u window — the deck guards become
+/// fightable), `tranq_fights` (answer only guards whose state carries case 0x19; the WIN is
+/// the sleep — the dart's HitDamage is never called [M 0x13fff0:269-306] so hp never moves —
+/// reading the dart family, `Drone::dart_asleep_state`), and the deck crossing is the
+/// player's SPRINT: the sleep these guards take is `RecoverTime(0x43) = 36·(200−+0xB9)` ≈
+/// 144 ticks before the wake [M 0x147188 k=60; L the ring sleeps #1/#3, both back shooting
+/// inside ~150 ticks], so standing to dart four ATTACK guards is the stall that bled the
+/// earlier runs — a moving target cuts the guards' roll instead [M 0x179740
+/// `DroneFiring_TargetMoving_Accuracy`]. The cut-scene tail waits until the GAME re-enables
+/// Bond (the arrival cut-scene's `wait_enabled` pattern) — the fixed 2900 stood him 450
+/// extra ticks at the deck key under fire with no control ([L] 11 hits, 23.8 → 0.0, no fight
+/// ever started). Green run: the ring sleeps cost 2.1 (44.8 → 42.7), the deck sprint + the
+/// take-slot sleeps (#5/#4, dartable mid-chase) land the mission complete with 15.4 left;
+/// stuck 0, the one fall is the parachute jump itself.
 #[test]
-#[ignore = "real health: the corridor is fixed (the GT wall guns' eased-barrel fire, 100.0 -> 55.2 over the crossing); the run now dies at tick 16652 on the roof - the 55.2 leaves 44.8 for the open-floor fights and the stalls bleed the rest ([L] pending: the real machine's corridor cost)"]
 fn walk_fresh_spawn_to_the_mission_end_real_damage() {
-    walker::with_real_damage(walk_fresh_spawn_to_the_mission_end);
+    walker::with_real_damage(|| {
+        let mut w = load_fresh();
+        // The player's fight package for the open-floor crossings (the 07000013 walk's opt-in,
+        // common/damage_log.rs `lane_fights`): the 48 u shooters window (the roof deck's guards
+        // work Bond from d 36-42 [L the death run's damage log] — the plain 20 u window never
+        // even picked a fight), the damage-weighted pick, the gun-ray exposure (the ring
+        // corridor's fights tapped dead-on rounds that all died on the door jamb the eye ray
+        // clears by a hair — [L fight#1/fight#3, tgt hp 10.0 pinned across ~9 rounds]), the
+        // floor-drop resupply and the unseen-cover creep. `back_off` 3.0: under 3.0 u every
+        // drone round hits [M DroneWeap_DoBulletAccuracy 0x179740:113-115].
+        w.dmg.lane_fights = true;
+        w.dmg.back_off = Some(3.0);
+        // The K5 kit's own fight rules (`tranq_fights`, opt-in): Bond's only conventional weapon
+        // on 0b is the Korsakov K5 sleep dart (the 09 kit [M 0x1a7ef8; L the bullet probe — wpn
+        // 0x43, dmg 0.10, range 45]), and the game's dart law drops msg 0x19 for a guard in full
+        // combat [M 0x164210; 0x1469b8:315-361] — the death run's fight#1/#3 stood 833 ticks in
+        // the ring open for 21 health against ATTACK-state guards the darts could never touch.
+        // The fights answer only dartable guards and the win is the sleep, not a wound.
+        w.dmg.tranq_fights = true;
+        fresh_boot_asserts(&w);
+        walk_to_the_mission_end(&mut w, true, true);
+    });
 }
 
 /// The roof cut-scene's channel tail, alone: the disc's writer of objective 10's ch 0x59, the

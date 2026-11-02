@@ -145,6 +145,18 @@ pub struct DamageLog {
     /// The fight about to run picked a shooter whose boxes are NOT reachable from here (the
     /// unseen-cover fallback): a short stand cap, the creep has to open the line fast.
     pub unseen_fight: bool,
+    /// OPT-IN (`tranq_fights`, the 0700000b walk): Bond's only conventional weapon on 0700000b is
+    /// the Korsakov K5 sleep dart (0x43 — the silent-infiltration kit [M 0x1a7ef8 case
+    /// 0x7000009/0a/0b the boot loadout; L the death run's bullet probe — wpn 0x43, dmg 0.10,
+    /// range 45]), and the game's own dart law drops msg 0x19 for a guard in full combat (`DSTATE_Attack`
+    /// 0x164210 has no case 0x19; the state gate is `DroneFunc_HandleImpact` 0x1469b8:315-361 →
+    /// `Drone::dart_impact_state_ok`). So a fight against an attacking guard is UNWINNABLE — a
+    /// player walks on instead of standing in the open eating volleys — and a fight's WIN is the
+    /// guard's sleep, not a health drop (the dart's HitDamage is never called [M 0x13fff0:269-306];
+    /// hp never moves). The pick answers only guards whose state carries case 0x19, and
+    /// `stand_and_fire` reads a dart landing (the target entering the dart family) as progress and
+    /// the under states as the win.
+    pub tranq_fights: bool,
     last_health: f32,
     last_hits: Vec<(u32, usize, f32)>,
 }
@@ -434,6 +446,16 @@ impl Walker {
                 ((d.pos[0] - sim.bond.pos[0]).powi(2) + (d.pos[2] - sim.bond.pos[2]).powi(2)).sqrt()
             };
             let mut unseen_fight = false;
+            // tranq_fights (the 0700000b walk): the K5's dart lands only on a guard whose state
+            // carries `DroneFunc_HandleImpact` case 0x19 [M 0x164210 — Attack has no case 0x19;
+            // 0x1469b8:315-361] — fighting an attacking guard cannot win, so the player walks on
+            // (the death run's fight#1/#3 stood 833 ticks in the ring open for 21 health against
+            // two ATTACK-state guards the darts could never touch [L]).
+            let cands = if self.dmg.tranq_fights {
+                cands.into_iter()
+                    .filter(|&i| nf_game::drone::Drone::dart_impact_state_ok(sim.drones.list[i].state))
+                    .collect::<Vec<usize>>()
+            } else { cands };
             let pick = if !self.dmg.lane_fights {
                 match cands.iter().copied().find(|&i| DamageLog::visible(sim, i)) {
                     Some(i) => Some(i),
@@ -490,6 +512,9 @@ impl Walker {
         };
         let Some(di) = di else { return false };
         if self.dmg.cooldown.iter().any(|&(i, until)| i == di && self.total_ticks < until) { return false; }
+        // tranq_fights: the dart is slow and the win is a sleep, not a wound — the caller's
+        // "killed" bookkeeping below keys on stand_and_fire's return, which reads the dart
+        // family, so no extra cooldown plumbing is needed here.
         // Only with a gun in hand: a player without rounds walks on (the 16 arrival carries
         // the fists alone — the weapon cycle stood Bond 730 ticks at the ramp foot under fire).
         // With `lane_fights`, dry NEAR a fight is not the old walk's dry: the guards Bond dropped litter the
@@ -586,6 +611,10 @@ impl Walker {
                 let sim = self.scene.sim.as_ref().unwrap();
                 let d = &sim.drones.list[di];
                 if d.corpse || d.health <= 0.0 { return true; }
+                // tranq_fights: the K5's win is the sleep itself — the fall 0x50 and the asleep
+                // loop 0x51 [M 0x163430/0x163570]; the Recover state 0x52 is the wake, and the
+                // fight stays on him (the next dart re-enters the impact [M 0x163700 case 0x19]).
+                if self.dmg.tranq_fights && nf_game::drone::Drone::dart_asleep_state(d.state) { return true; }
                 if sim.disabled { return false; }
                 if sim.gun.clip == 0 && sim.gun.spare == 0 { return false; }
                 let b = sim.bond.pos;
@@ -597,8 +626,11 @@ impl Walker {
                 if t % 10 == 0 { aim = if self.dmg.lane_fights { DamageLog::exposed_part_gun_rays(sim, di) } else { DamageLog::exposed_part(sim, di) }; }
                 if aim.is_none() { unseen += 1; if unseen > if self.dmg.lane_fights { 120 } else { 60 } { return false; } } else { unseen = 0; }
                 // No round landed for 300 ticks: walk on (a guard in cover the stand cannot reach;
-                // the 13 lobby stand took 40 health that way).
+                // the 13 lobby stand took 40 health that way). tranq_fights: the dart's HitDamage
+                // is never called [M 0x13fff0:269-306] — progress is a dart LANDING (the target
+                // entering the dart family), not a health drop.
                 if d.health < hp0 { hp0 = d.health; last_hit = t; dry = 0; }
+                if self.dmg.tranq_fights && nf_game::drone::Drone::dart_family_state(d.state) { last_hit = t; dry = 0; }
                 if t - last_hit > 300 { return false; }
                 if self.dmg.dry_taps.is_some_and(|n| dry >= n) && t - last_tap > 20 { return false; }
                 let at = aim.unwrap_or(torso);
