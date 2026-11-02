@@ -344,3 +344,96 @@ fn probe_0d_vis_field_east_strip() {
         }
     }
 }
+
+/// The trench pit floor map around the pin spot (186.3, −3.4, −265.9) — the floor heights and
+/// what blocks the eastward walk to the old waypoint (190, −3, −266). Assertion-free.
+#[test]
+#[ignore = "assertion-free probe; run with --ignored --nocapture"]
+fn probe_0d_trench_pit_map() {
+    let iso = std::env::var("NF_ISO").expect("NF_ISO");
+    let mut w = walker::Walker::new(nf_view::load_with_carry(&iso, "0700000d.bin", false, None).unwrap());
+    w.wait_enabled(3000, "the 0d intro");
+    w.wait(60);
+    let sim = w.scene.sim.as_ref().unwrap();
+    eprintln!("== pit floors (floor_below from y 2) x 180..200, z -270..-258 ==");
+    for x in [180.0f32, 183.0, 186.0, 189.0, 192.0, 195.0, 198.0] {
+        let mut row = String::new();
+        for z in [-270.0f32, -268.0, -266.0, -264.0, -262.0, -260.0, -258.0] {
+            let f = sim.world.floor_below([x, 2.0, z], 8.0);
+            row.push_str(&format!("({x:.0},{z:.0})={:.2} ", f.unwrap_or(f32::NAN)));
+        }
+        eprintln!("[pit] {row}");
+    }
+    eprintln!("== rays east at Bond's heights from (186.3, y, -265.9) ==");
+    for y in [-3.4f32, -2.9, -2.4, -1.9, -1.4, -0.9] {
+        let hit = sim.world.segment_hit([186.3, y, -265.9], [190.5, y, -266.0]);
+        let hit2 = sim.world.segment_hit([186.3, y, -265.9], [191.5, y, -263.0]);
+        eprintln!("[pit] y{y} east {hit:?} ne {hit2:?}");
+    }
+    eprintln!("== up-columns at the pin (186.3,-265.9) and east (190,-266) ==");
+    for (x, z) in [(184.0f32, -265.9), (186.3, -265.9), (188.0, -265.9), (190.0, -266.0), (192.0, -266.0)] {
+        let mut hits = Vec::new();
+        let mut bot = -5.0f32;
+        for _ in 0..8 {
+            match sim.world.segment_hit([x, bot, z], [x, 4.0, z]) {
+                Some((f, p)) => { let y = bot + (4.0 - bot) * f; hits.push(y); bot = y + 0.05; }
+                None => break,
+            }
+        }
+        eprintln!("[pit] col ({x},{z}) surfaces {hits:?}");
+    }
+}
+
+/// The 0xF0 pickup placements of 0700000d (kind/param/position) — where the BodyArmourHeavy
+/// and the sniper ammo stand. Assertion-free.
+#[test]
+#[ignore = "assertion-free probe; run with --ignored --nocapture"]
+fn probe_0d_pickups() {
+    let iso = std::env::var("NF_ISO").expect("NF_ISO");
+    let img = IsoImage::open(&iso).expect("open iso");
+    let (entries, bin) = nf_formats::disc::files_bin_entries(&img).expect("FILES.BIN");
+    let fe = entries.iter().find(|e| e.name.eq_ignore_ascii_case("0700000d.bin")).expect("the level bin");
+    let data = img.read_bytes(bin.lba as u64 * 2048 + fe.offset as u64, fe.size as u64).expect("read");
+    let lv = Level::parse(&data).expect("parse");
+    let mm = lv.main_map().expect("main map");
+    for (i, p) in lv.maps[mm].placements.iter().enumerate() {
+        if p.flags & 0xff != 0xf0 { continue; }
+        let t = p.translation;
+        let target = if p.by_hash() { lv.by_hash.get(&p.hashcode).copied() }
+            else if (p.index as usize) < lv.maps[mm].objects.len() { Some((mm, p.index as usize)) } else { None };
+        let name = match target {
+            Some((m, o)) => lv.maps[m].objects[o].name.trim().to_string(),
+            None => format!("UNRESOLVED {:08x}", p.hashcode),
+        };
+        let params: Vec<String> = p.params.iter().map(|(a, b)| format!("{a}:{b:#x}")).collect();
+        eprintln!("[pk] #{i} \"{}\" @({:.2},{:.2},{:.2}) params [{}]", name, t[0], t[1], t[2], params.join(" "));
+    }
+}
+
+/// The armour pickup's life: walk to #525, print armour; take the platform drop, print armour;
+/// stand at the ladder base, print armour. Assertion-free.
+#[test]
+#[ignore = "assertion-free probe; run with --ignored --nocapture"]
+fn probe_0d_armour_timeline() {
+    let iso = std::env::var("NF_ISO").expect("NF_ISO");
+    let mut w = walker::Walker::new(nf_view::load_with_carry(&iso, "0700000d.bin", false, None).unwrap());
+    for c in [0x1bu8, 0x1c] { w.scene.sim.as_mut().unwrap().drones.set_channel(c); }
+    w.wait_enabled(3000, "the intro");
+    w.wait(120);
+    let a = |w: &walker::Walker, what: &str| {
+        let sim = w.scene.sim.as_ref().unwrap();
+        eprintln!("[arm] {what}: health {:.1} armour {:.1} pos ({:.2},{:.2},{:.2})",
+            sim.drones.health.health, sim.drones.health.armour, sim.bond.pos[0], sim.bond.pos[1], sim.bond.pos[2]);
+    };
+    a(&w, "after intro");
+    w.walk_to(walker::Wp::new(180.6, 11.2, -208.8).r(0.9), "the BodyArmourHeavy #525");
+    a(&w, "after pickup leg");
+    w.wait(30);
+    a(&w, "after 30 wait");
+    assert!(w.try_walk_to(walker::Wp { at: [181.0, 7.5, -227.5], act: walker::Act::None, arrive: 1.5 }, "the platform drop"), "drop");
+    a(&w, "after drop");
+    for (at, label) in [([188.0f32, 0.5, -228.0], "strip 1"), ([196.0, 0.5, -228.5], "strip 2"), ([204.0, 0.5, -229.0], "strip 3")] {
+        assert!(w.try_walk_to(walker::Wp { at, act: walker::Act::None, arrive: 2.0 }, label), "{}", label);
+        a(&w, label);
+    }
+}
