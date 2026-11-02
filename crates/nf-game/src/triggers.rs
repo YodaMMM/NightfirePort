@@ -376,6 +376,51 @@ pub fn capsule_hits_tris_strict(a: V3, b: V3, r: f32, tris: &[[V3; 3]]) -> bool 
     })
 }
 
+/// `Intersect_CylGeom` 0x109da0 — the trigger contact pass. ONE test point per triangle, not a
+/// capsule sweep [M decomp]: with n = cross(e1, e2) (unnormalized) and den = dot(n, b−a):
+/// - |den| > 0.0002 (:302): the plane crossing t = clamp(−dot(n, a−v0)/den, 0, 1) (:310-320), the
+///   tested point = a + t·(b−a) (:324-330) — with the near-perpendicular HALF-SPAN VETO (:321-322)
+///   `den > 0.999 && t > 0.5` / `den < −0.999 && t < 0.5` skipping the tri. A body segment nearly
+///   perpendicular to a plane only counts the crossing in one half (the half the winding picks):
+///   the standing capsule (a = pos+0.55 top, b = pos+0.275−cc bottom [M Player_Collision 0x194df0
+///   :204-227]) crosses a floor plate's plane in the vetoed half, so the game's standing body does
+///   NOT fire the plate it vertically overlaps — 07000005's ch-0x70 park plate fires only crouched
+///   [D fix-truck's trace] — while the low laser ribbons are vertical tris (den ≈ 0) and ride the
+///   parallel branch, firing on the standing crossing [L 2026-11-01, 0700000a #621].
+/// - |den| ≤ 0.0002 (:344 the parallel branch, :371-415): the tested point = the projection of the
+///   tri centroid onto the segment, clamped to it.
+/// Contact = the point-triangle distance < r, strict (ASH_vecutil_Dist2Tri :331/:416; the best
+/// distance is seeded AT the radius :209 and tracked only while `fVar30 < fVar19` :524).
+/// `r == 0.0` (the bullet contact's zero-radius stand-in) keeps the older capsule test — with the
+/// strict `<` a zero-radius point contact is impossible and the shipped bullet arm is a
+/// segment-crossing test (see `BulletContact`).
+pub fn cylgeom_hits_tris(a: V3, b: V3, r: f32, tris: &[[V3; 3]]) -> bool {
+    if r <= 0.0 { return capsule_hits_tris(a, b, r, tris); }
+    let d = sub(b, a);
+    tris.iter().any(|t| {
+        // n = the tri's plane normal, normalized — the game reads the PACKED per-tri normal from
+        // the level data (index × 1/16384, 0x109da0:283-296), not a cross of the edges, so the
+        // 0.999/0.0002 thresholds compare against a unit normal and the winding comes from the data.
+        let n = cross(sub(t[1], t[0]), sub(t[2], t[0]));
+        let nn = dot(n, n);
+        if nn <= 1e-12 { return false; }
+        let inv = 1.0 / nn.sqrt();
+        let n = [n[0] * inv, n[1] * inv, n[2] * inv];
+        let den = dot(n, d);
+        let p = if den.abs() > 0.0002 {
+            let t = (-dot(n, sub(a, t[0])) / den).clamp(0.0, 1.0);
+            if (den > 0.999 && t > 0.5) || (den < -0.999 && t < 0.5) { return false; }
+            lerp(a, b, t)
+        } else {
+            let centroid = [(t[0][0] + t[1][0] + t[2][0]) / 3.0, (t[0][1] + t[1][1] + t[2][1]) / 3.0, (t[0][2] + t[1][2] + t[2][2]) / 3.0];
+            let dd = dot(d, d);
+            let t = if dd > 1e-20 { (dot(sub(centroid, a), d) / dd).clamp(0.0, 1.0) } else { 0.0 };
+            lerp(a, b, t)
+        };
+        point_triangle(p, t) < r
+    })
+}
+
 fn segment_hits_triangle(a: V3, b: V3, t: &[V3; 3]) -> bool {
     let d = sub(b, a);
     let (e1, e2) = (sub(t[1], t[0]), sub(t[2], t[0]));
@@ -492,6 +537,12 @@ impl Trigger {
             && (0..3).all(|k| c.b[k] >= self.lo[k] && c.b[k] <= self.hi[k]) {
             return true;
         }
+        // NOTE (level-0a-low-beam-standing): the game's own refine is `cylgeom_hits_tris` below
+        // (`Intersect_CylGeom` 0x109da0, incl. the :321-322 half-span veto) — it was wired here and
+        // REVERTED within the same task: with the game capsule standing toucher it vetoed
+        // 07000005's opening plates and stalled the truck chain (fix_truck_live both tests), and
+        // with the master toucher it changes every trigger's fire set with no suite evidence yet.
+        // The plate vs beam reconciliation lives in docs/reports/level-0a-low-beam-standing.md.
         capsule_hits_tris(c.a, c.b, c.r, &self.tris)
     }
 
