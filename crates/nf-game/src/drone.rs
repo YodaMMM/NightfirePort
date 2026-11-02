@@ -6732,31 +6732,54 @@ impl Drone {
     /// COMBAT 0x58/COMBAT_NEW_SIGHTING 0x5b, BulletImpact 0x55, the death/stun-terminal families,
     /// the bots/ninjas/astronauts, WaitSwitch, GLOBAL — return unhandled → GLOBAL → dropped (the
     /// set is the state-table 0x29b300 × decompile cross-check, docs/systems/tranq-dart.md).
+    pub fn dart_impact_state_ok(s: u8) -> bool {
+        use state::*;
+        matches!(s, PLAY_SCRIPT | IDLE | ALERT | PATROL | HOSTAGE_IDLE | CIVILIAN | CIVILIAN_SCARED | CIVILIAN_HIDING
+            | CIVILIAN_PATROL | CIVILIAN_MISSION | ALLY_LEAD_INIT | ALLY_LEAD | PLAYER_IN_WAY | LEAD_HIDE
+            | ALLY_LEAD_WAIT | LEAD_MISSION_WAIT | LEAD_BOND_COMBAT | ALLY_LEAD_DONE | FOLLOW_INIT | FOLLOW
+            | FOLLOW_WAIT | FOLLOW_DONE | GO_TO_GOAL_ALLY | SNIPER_IDLE | SNIPER_AIM | SNIPER_FIRE | SNIPER_RELOAD
+            | PARTY_GIRL | CIVILIAN_GUARD | CIVILIAN_DOOR_GUARD | TRUCK_DRIVER_INIT | TRUCK_DRIVER_INIT_ALERT
+            | TRUCK_DRIVER_IDLE | TRUCK_DRIVER_MISSION | AMBUSH_WAIT | SURRENDER_ANIM | SURRENDERED
+            | UNSURRENDER_ANIM | STUNNED_RECOVER | STUN_GRENADE_RECOVER | PUNCH_IMPACT | COMBAT_NO_MOVE
+            | COMBAT_OUT_OF_RANGE | COMBAT_NO_SIGHT | COMBAT_WAIT | COMBAT_NO_ROUTE | ALERT_TO_POSITION
+            | GO_TO_GOAL | SEARCH_AREA | DRAW_WEAPON | AIM_STAND | AIM_STAND_FIRE | AIM_STAND_RELOAD | AIM_BACKOFF
+            | AIM_CROUCH | AIM_CROUCH_FIRE | AIM_CROUCH_RELOAD | STEP_AIM_LEFT | STEP_AIM_RIGHT | STRAFE_AIM_LEFT
+            | STRAFE_AIM_RIGHT | STRAFE_DODGE_LEFT | STRAFE_DODGE_RIGHT | ROLL_LEFT_CROUCH | ROLL_RIGHT_CROUCH
+            | DRONE_STUCK | OPEN_DOOR | KICK_OBJECT | ACTION_ANIM | STAND_FIDDLE | RUN_AWAY_FROM_OBJECT
+            | HIDE_FROM_SCARY_OBJECT | RUN_FOR_COVER | UNDER_COVER_INIT | UNDER_COVER_IDLE | UNDER_COVER_AIM
+            | UNDER_COVER_FIRE | UNDER_COVER_SNIPER_FIRE | UNDER_COVER_SNIPER_RELOAD | UNDER_COVER_RETURN
+            | UNDER_COVER_LEAVE_NOW | HEARD_NOISE_AWARE | HEARD_NOISE_SUSPECT | HEARD_NOISE_ALERT | ALT_ATTACK
+            // level-09-live-guards-walk: CivilianChallenge 0x162558's group {7, 9, 0x17, 0x18,
+            // 0x19} forwards to `DroneFunc_HandleImpact(…, 0x89, 1)` [M 0x162558:40-46] — case
+            // 0x19 runs the dart sleep (the challenging guard FALLS ASLEEP to a K5 dart, no
+            // damage — the dart route never reaches HitDamage [M 0x13fff0:269-306]). The old
+            // whitelist dropped the dart here (unhandled → GLOBAL → nothing): the 09
+            // challenge-state pinch guard shrugged 15 darts with no flinch and no sleep.
+            | CIVILIAN_CHALLENGE
+            | state::ENEMY_MISSION)
+    }
+
+    /// The dart-sleep family's states (`DSTATE_StunDartImpact` 0x163430 / `DSTATE_StunDartLoop`
+    /// 0x163570 / `DSTATE_StunDartRecover` 0x163700) — a guard in one of them has taken the K5's
+    /// dart route (asleep or going under); exposed for the real-damage fight machinery's win rule
+    /// (level-0b-real-health-roof: the fight's exit must read the sleep, not a health drop — the
+    /// dart's HitDamage is never called [M 0x13fff0:269-306]).
+    pub fn dart_family_state(s: u8) -> bool {
+        use state::*;
+        matches!(s, STUN_DART_IMPACT | STUN_DART_LOOP | STUN_DART_RECOVER)
+    }
+
+    /// The UNDER states of the dart family — the fall (0x50) and the asleep loop (0x51). The
+    /// Recover state 0x52 is the wake, not the sleep [M 0x163700 — the get-up anim → a team-1
+    /// guard wakes into Attack]. The fight's win rule reads this (level-0b-real-health-roof).
+    pub fn dart_asleep_state(s: u8) -> bool {
+        use state::*;
+        matches!(s, STUN_DART_IMPACT | STUN_DART_LOOP)
+    }
+
     fn on_dart_impact(&mut self, d: &Data, _rng: &mut Rng, _frame: u32, s: u8) -> bool {
         use state::*;
-        if !matches!(s, PLAY_SCRIPT | IDLE | ALERT | PATROL | HOSTAGE_IDLE | CIVILIAN | CIVILIAN_SCARED | CIVILIAN_HIDING
-                | CIVILIAN_PATROL | CIVILIAN_MISSION | ALLY_LEAD_INIT | ALLY_LEAD | PLAYER_IN_WAY | LEAD_HIDE
-                | ALLY_LEAD_WAIT | LEAD_MISSION_WAIT | LEAD_BOND_COMBAT | ALLY_LEAD_DONE | FOLLOW_INIT | FOLLOW
-                | FOLLOW_WAIT | FOLLOW_DONE | GO_TO_GOAL_ALLY | SNIPER_IDLE | SNIPER_AIM | SNIPER_FIRE | SNIPER_RELOAD
-                | PARTY_GIRL | CIVILIAN_GUARD | CIVILIAN_DOOR_GUARD | TRUCK_DRIVER_INIT | TRUCK_DRIVER_INIT_ALERT
-                | TRUCK_DRIVER_IDLE | TRUCK_DRIVER_MISSION | AMBUSH_WAIT | SURRENDER_ANIM | SURRENDERED
-                | UNSURRENDER_ANIM | STUNNED_RECOVER | STUN_GRENADE_RECOVER | PUNCH_IMPACT | COMBAT_NO_MOVE
-                | COMBAT_OUT_OF_RANGE | COMBAT_NO_SIGHT | COMBAT_WAIT | COMBAT_NO_ROUTE | ALERT_TO_POSITION
-                | GO_TO_GOAL | SEARCH_AREA | DRAW_WEAPON | AIM_STAND | AIM_STAND_FIRE | AIM_STAND_RELOAD | AIM_BACKOFF
-                | AIM_CROUCH | AIM_CROUCH_FIRE | AIM_CROUCH_RELOAD | STEP_AIM_LEFT | STEP_AIM_RIGHT | STRAFE_AIM_LEFT
-                | STRAFE_AIM_RIGHT | STRAFE_DODGE_LEFT | STRAFE_DODGE_RIGHT | ROLL_LEFT_CROUCH | ROLL_RIGHT_CROUCH
-                | DRONE_STUCK | OPEN_DOOR | KICK_OBJECT | ACTION_ANIM | STAND_FIDDLE | RUN_AWAY_FROM_OBJECT
-                | HIDE_FROM_SCARY_OBJECT | RUN_FOR_COVER | UNDER_COVER_INIT | UNDER_COVER_IDLE | UNDER_COVER_AIM
-                | UNDER_COVER_FIRE | UNDER_COVER_SNIPER_FIRE | UNDER_COVER_SNIPER_RELOAD | UNDER_COVER_RETURN
-                | UNDER_COVER_LEAVE_NOW | HEARD_NOISE_AWARE | HEARD_NOISE_SUSPECT | HEARD_NOISE_ALERT | ALT_ATTACK
-                // level-09-live-guards-walk: CivilianChallenge 0x162558's group {7, 9, 0x17, 0x18,
-                // 0x19} forwards to `DroneFunc_HandleImpact(…, 0x89, 1)` [M 0x162558:40-46] — case
-                // 0x19 runs the dart sleep (the challenging guard FALLS ASLEEP to a K5 dart, no
-                // damage — the dart route never reaches HitDamage [M 0x13fff0:269-306]). The old
-                // whitelist dropped the dart here (unhandled → GLOBAL → nothing): the 09
-                // challenge-state pinch guard shrugged 15 darts with no flinch and no sleep.
-                | CIVILIAN_CHALLENGE
-                | state::ENEMY_MISSION) {
+        if !Self::dart_impact_state_ok(s) {
             return false;
         }
         // `PlrStat_LogShotHitEnemy(0)` — UNCONDITIONAL here (no team gate; the msg-8 route's gate
