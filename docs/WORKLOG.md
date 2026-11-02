@@ -35,3 +35,25 @@ grenade roll: DroneWeap_CanThrowGrenade 0x17a798 + the 0x68 flee gate). Goal: th
 (no-return-fire real-damage walk dies) — get a player's tactic (route pickups, weapon choice,
 cover from the throws, real input only, no health/ammo writes) and are un-ignored. Then
 walkreal_07000016_live, fix_finale_live, every grenade test, the full suite.
+Progress (same session, 2026-11-02 ~22:05): the port's fight laws fixed against the decompile —
+ConsiderExplosive's state gate refuses only {0x28,0x2d,0x4a,0x4b,0x53-55,0x63,0x86-88} [M
+0x1431c0:40-67, decomp re-verified]; the case-0x10 throw+move gate is the anim class-2 AND
+anim-id-0xA pair with DroneWeap_CanThrowGrenade's Rand(2) consumed on every gated tick with
+grenades even out of the 8..20 band [M 0x148338 case 0x10 + 0x17a798, decomp re-verified]; the
+stun 0x35 is not in Drone_BuildDynamicAwarePoints' registry at all [M 0x138b10 — no 0x35 case].
+Master carried none of the three (the gate-2 branch is unmerged); the two 07000016 walks passed
+on master only because the unfaithful port skipped the out-of-range rolls and refused the 0x68
+flees. With the faithful laws: the plain walk needed one harness fix (the lift-out wait read
+`0x82 && disabled` — the game's movie player races a disabled-Bond script through in ~46 frames
+[L 748 ticks across frames 4938..4984 for the pack cinema], so a long squad fight's 0x82 edge
+lands and the hand-back completes before the first check; the wait now reads the latched 0x82
+[D mux #633] and the movie's own hand-back proofs below it) — green 14/14 with it. The punch
+walk's fighting approach: the kill order (frag holders first [D #533/#535 p11 0x43]), the
+head-box kills (prefer_head, the 6 u window), the airborne-grenade jink, the drop loot (Bond
+holds the looted 0x1a 25+43), the vest #596 guard on the loot walk, the per-leg advance-fight
+rhythm (the descent walked not fought — the ramp-edge wedge), the leg re-walks after the fights.
+State: the whole camp clears; Bond reaches the chaser with 10.4 health and armour 12.4 (a vest
+take the loot guard does not cover — the next item, NF_PICKUPLOG points it); the pin needs >30.
+grenade_live 4/4 (the flee-gate pins ride along), grenade_rattle 4/4, stun 1/1, ai_live 37/37
+(the flee family), nf-game lib 655, fix_finale 4/4, walkreal_07000016 13/14. The full suite is
+the next session's first item; the punch walk's vest take + health budget the second.

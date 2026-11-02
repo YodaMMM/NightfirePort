@@ -1446,12 +1446,6 @@ fn clear_the_ring_guard(w: &mut Walker) {
                     let side = if (t / 30) % 2 == 0 { 1.0 } else { -1.0 };
                     input.strafe = side;
                     input.forward = back;
-                } else if dist > 5.5 {
-                    // No head box past the 6 u window: close to it instead of grinding torso
-                    // taps at 21-27 u (the 900-tick stand fight cost 33.6 health [L round 1];
-                    // the closing target also rides the move-accuracy debuff [M 0x179740's
-                    // TargetMoving arm]).
-                    input.forward = 1.0;
                 } else {
                     input.forward = back;
                 }
