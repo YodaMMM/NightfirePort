@@ -512,7 +512,7 @@ fn paramless_fusebox_and_ff_music_trigger_are_inert() {
             "the 0xff music event is no trigger [D #232 p2 = 0xff; M 0x1b30e0's gate]");
         for _ in 0..20 { sim.step_bond(Default::default(), false, false, false); }
     }
-    drop(scene); // one full scene at a time — the sandbox's RAM is the budget
+    drop(scene); // one full scene at a time keeps memory bounded
     {
         // Sister: on the Agent load the lock's create-unlock tag is Operative-only [D #177 p6 = 1;
         // M 0x1ae1f8:67-69], so 20 idle ticks leave its out 0x12 cold — and neither the paramless
