@@ -71,3 +71,13 @@ with the first aimed bullet.
 ## Usage
 
 not visible to me (no token, credit or context-window figures are exposed in this environment).
+
+## ntfy failed
+
+All three notification attempts failed:
+1. `curl -sS -m 20 -H "Title: NightfirePort" -d "level-08-controlroom-route: …" https://ntfy.sh/nightfire-yoda-8k3x`
+   → `curl: (28) Connection timed out after 20001 milliseconds`
+2. `python3 urllib.request.urlopen(...)` → `OSError: [Errno 101] Network is unreachable`
+   (socket.connect to ntfy.sh), wrapped in `urllib.error.URLError`.
+3. `wget -q -O- --post-data "…" https://ntfy.sh/nightfire-yoda-8k3x` → timed out after 60 s
+   (killed; no output).
