@@ -67,6 +67,32 @@ fn repro_logs_the_two_corridor_guards() {
                 if hit.is_some() { eprintln!("LOS-SEG y={:.2} x {}..{}: HIT frac {:?}", y, x, x + 1, hit); }
             }
         }
+        // The visibility factors: every kind-0 AI volume containing Bond's start and the guards'
+        // positions — visibility_factor multiplies them into every guard's sight [M
+        // DroneVision_OpponentVisibility 0x175af0 x +0x22C; the port's aivolume::visibility_factor].
+        {
+            let pts: [(&str, [f32; 3]); 3] = [
+                ("bond-start", [22.49, 1.09, 19.16]),
+                ("guard6", sim.drones.list[6].pos),
+                ("guard7", sim.drones.list[7].pos),
+            ];
+            for (name, pt) in pts {
+                for (vi, v) in sim.volumes.iter().enumerate() {
+                    if v.kind == 0 && v.contains(pt) {
+                        eprintln!("VIS volume#{vi} placement {} factor {:.3} half {:?} centre ({:.2},{:.2},{:.2}) contains {}",
+                            v.placement, v.factor, v.half, v.m[3][0], v.m[3][1], v.m[3][2], name);
+                    }
+                }
+            }
+            eprintln!("VIS total at bond-start = {}", nf_game::aivolume::visibility_factor(&sim.volumes, [22.49f32, 1.09, 19.16], false));
+            // The sight gates per guard: the stats the visibility score reads.
+            for i in [6usize, 7] {
+                let dr = &sim.drones.list[i];
+                eprintln!("SIGHT drone#{i} sight_range {:.2} half_fov {:.3} alert {:.2} alert_bits {:x} engage {:.2} los {} seen {} dist {:.2} yaw {:.2} yaw_to_opp {:.2} prop46 {}",
+                    dr.sight_range, dr.half_fov, dr.alert, dr.alert_bits, dr.engage_range, dr.los, dr.seen, dr.dist_to_player[0], dr.yaw, dr.yaw_to_opp, dr.props.get(0x46).is_some());
+                eprintln!("SCRIPT drone#{i} start_script {:?} placement {} goal {:?}", dr.start_script, dr.placement, dr.goal);
+            }
+        }
         // Nav: which AI path holds each guard and Bond's start, and can the guards' path reach
         // Bond's start? (The port's route machinery is per NavPath; a missing cross-path hop is an
         // invisible wall to a route walker.)
@@ -88,12 +114,18 @@ fn repro_logs_the_two_corridor_guards() {
         }
     }
 
-    // Phase 1: Bond stands at the spawn (real path, no input) — do the guards' sight/ever-state
-    // move them toward him?
-    for t in 0..300u32 {
-        w.tick(Input::default(), false);
-        if t % 30 == 29 {
+    // Phase 1: Bond WALKS from the spawn down the corridor toward the guards (the real input
+    // path — the user's scenario). Log both guards every 20 ticks and Bond's pos.
+    for t in 0..360u32 {
+        let mut inp = Input::default();
+        // The spawn yaw is −1.56 [D the start placement — the task's spot]; forward walks him
+        // straight down the corridor toward the guards.
+        inp.forward = 1.0;
+        w.tick(inp, false);
+        if t % 20 == 19 {
             let sim = w.scene.sim.as_ref().unwrap();
+            let bp = sim.bond.pos;
+            eprintln!("P1 t={:3} bond ({:.2},{:.2},{:.2})", t, bp[0], bp[1], bp[2]);
             for i in [6usize, 7] {
                 eprintln!("P1 t={:3} {}", t, drone_report(sim, i));
             }
