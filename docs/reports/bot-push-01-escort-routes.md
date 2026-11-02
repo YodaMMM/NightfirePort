@@ -104,3 +104,13 @@ Branch `s/bot-push-01-escort-routes` cut from origin/master b62a8907; origin/s/b
 ## Usage
 
 not visible to me
+
+## ntfy failed
+
+All three transports failed from this sandbox (2026-11-02T14:16Z):
+1. `curl -sS -m 20 -H "Title: NightfirePort" -d "..." https://ntfy.sh/nightfire-yoda-8k3x`
+   → `curl: (28) Connection timed out after 20001 milliseconds`
+2. `python3 -c "...urlopen(u.Request('https://ntfy.sh/nightfire-yoda-8k3x', ...))"`
+   → `urllib.error.URLError: <urlopen error [Errno 101] Network is unreachable>`
+3. `wget -q -O- --post-data "..." https://ntfy.sh/nightfire-yoda-8k3x` → no output, failed
+   (silent, the same unreachable network).
