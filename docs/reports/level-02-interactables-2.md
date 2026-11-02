@@ -93,9 +93,10 @@ single full-suite pass does not fit the tool window either. What ran, completely
 - The fast runner (`tools/test/suite.py`, this tree = master + the task commits, nothing left to
   merge): its 1070-binary run phase was capped twice by the tool window and once by the background
   killer; the completed prefix before the cap: **73 binaries, 309 passed, 0 failed, 22 ignored**,
-  zero FAILED/TIMEOUT/CRASH lines (`suite.log`). A background continuation is running as this report
-  is pushed; its further progress is in `suite.log` (the totals-so-far are summable from its
-  per-binary `test result:` lines).
+  zero FAILED/TIMEOUT/CRASH lines (`suite.log`). A background continuation was attempted after the
+  push and died between tool calls like its predecessors (four kills this session), so the quoted
+  prefix is this session's suite record; its totals are summable from the per-binary
+  `test result:` lines in `suite.log`.
 
 ## What's left
 
