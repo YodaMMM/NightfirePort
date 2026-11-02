@@ -206,10 +206,15 @@ pub struct LadderCtx<'a> {
     /// The live bots' collision capsules as `(top, bottom, radius)` — the game's bot hittest arms
     /// (`NDrone2_Collision` 0x140e90:91-121: top = pos + up·r, bottom = pos + up·(r − h), r 0.4
     /// default / 0.55 kind 0xc, h = the anim height word +0xa0, default 1.0 [M DefaultInit
-    /// 0x14b300:48]) for the actor-actor push of `Collide_Jointy` 0x1ec180:229-281. The Sim fills
-    /// the NEAR bots only (`DroneFunc_NearPlayerCollision` 0x14b190: the bot's collision capsule
-    /// is ON within 2.0 of the player [M NDrone2_DoCollision 0x149ec8]); EMPTY = no bots (unit
-    /// tests, MP remotes) — no actor push runs.
+    /// 0x14b300:48]) for the actor-actor push of `Collide_Jointy` 0x1ec180:229-281. A bot takes
+    /// part only when its hittest kind word +0x464 is armed 0x800 [M NDrone2_Collision 0x140e90:
+    /// alive bots arm where `NDrone2_DoCollision` 0x149ec8 returns nonzero — the kind 0xc/0x13,
+    /// +0x538, near-2.0, obj+0xFC and +0x570&2 chain; dead bots (+0x4f8 & 0x200, SetAsDead
+    /// 0x14a2f0) arm a BONE capsule unconditionally (bones 5/0x33 via AnimGetBoneWorldTrans
+    /// 0x1c3120, 0x140f0c/0x140f50, r 0.4)]. The Sim applies that gate per bot (see
+    /// `scene.rs::step_bond`); every overlapping capsule is within 2.0 of the player
+    /// (`DroneFunc_NearPlayerCollision` 0x14b190), so no overlap is missed by the near fill.
+    /// EMPTY = no bots (unit tests, MP remotes) — no actor push runs.
     pub bot_capsules: &'a [(V3, V3, f32)],
 }
 
@@ -1947,21 +1952,24 @@ self.local = [vs / k, vf / k];
         // the query's owner) and returns 0 for a class-3 other (:231-233) — the PLAYER (class 3
         // [M Player_Init 0x1910f8:76]) is pushed off the BOT (class 2 [M NDrone2_CreateObj
         // 0x14d7c8:14]) and the bot never pushes itself. The class-3-vs-3 and class-2-vs-2 gates
-        // (:213-227) don't fire on a mixed pair. The bot's capsule is ON only NEAR the player
+        // (:213-227) don't fire on a mixed pair. The push runs EVERY tick — the disassembly has
+        // no ground gate [M 0x1ec180:229-281: the block reads only the two spines, the radii
+        // (+0x8c sums, squared, vs the dist² at :251-252) and fVar12; the port's old
+        // airborne-only gate was a port choice, and the un-discharged grounded overlap was
+        // carrying Bond through the 03 gatehouse wall on the first airborne tick
+        // (flank_fall_repro)]. Which bots take part is the bot hittest's own arming [M
+        // NDrone2_Collision 0x140e90: the alive path writes the kind-0x800 word +0x464 only
+        // where NDrone2_DoCollision 0x149ec8 returned nonzero (0x14106c-0x141084), the dead
+        // (+0x4f8 & 0x200, SetAsDead 0x14a2f0) path arms unconditionally (0x140f8c) — the Sim
+        // applies the same per-bot gate when filling `LadderCtx::bot_capsules`]. The near fill
         // [M DroneFunc_NearPlayerCollision 0x14b190 — `2.0 <= dist` fails the DoCollision gate
-        // 0x149ec8]: the Sim passes only those (see `LadderCtx::bot_capsules`). Dead-centre the
+        // 0x149ec8] covers every capsule that could overlap (r 0.4/0.55 + 0.55 < 2.0).
+        // Dead-centre the
         // between-spines delta is vertical — Bond rides tangent ON the carrier and slides off as
         // it walks (the delta tilts); beside its spine the push is lateral. The Jointy push does
         // NOT ride the DeltaP accumulator (Jointy writes +0x10 only [M :253-266]), so this sits
         // after the add-back and `pick_ref` keeps the static pass's value.
-        // [S] unverified — the PORT CHOICE gate: the push rides only while Bond is AIRBORNE
-        // (the drop-onto case the task pins). The game's own per-bot ON/OFF gates (+0x4f8 bit
-        // 0x20/0x200, +0x570 bit 2 — NDrone2_DoCollision 0x149ec8) are not modelled per bot
-        // yet, and master's green walks path Bond THROUGH ally tangent zones (the 01 armour
-        // walk, the 0a west doorway): the grounded-side push against allies is a live-check
-        // item, not shipped here. The sleeper drop (grounded false through the whole contact)
-        // keeps its [M] push either way.
-        if !ctx.bot_capsules.is_empty() && !self.grounded {
+        if !ctx.bot_capsules.is_empty() {
             let (ja, jb) = self.capsule();
             if std::env::var("NF_PUSH_DEBUG").is_ok() {
                 eprintln!("[pushdbg] n={} ja={:?} jb={:?} bots={:?}", ctx.bot_capsules.len(), ja, jb, ctx.bot_capsules);

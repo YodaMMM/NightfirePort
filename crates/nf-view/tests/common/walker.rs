@@ -1258,6 +1258,34 @@ impl Walker {
                         }
                     }
                     if !used_door {
+                    // A bot CAPSULE blocking the lane: the game's Jointy push now discharges every
+                    // tick [M Collide_Jointy 0x1ec180:229-281 — no ground gate], so walking into
+                    // an alive bot (kind != 0x13, armed [M NDrone2_DoCollision 0x149ec8]) cancels
+                    // the walk's progress every tick and the old ±60 sidestep alternation just
+                    // oscillated against the push (the 01 hall crowd wedged the plate walk,
+                    // 2026-11-02). The player's own move: step AROUND the bot, on the side away
+                    // from it relative to the waypoint line, long enough to clear the two radii
+                    // (0.4 + 0.55) before re-aiming. Corpses don't block (their bone capsule lies
+                    // on the floor — Bond steps over). Left = cross(up, forward) [M right-handed
+                    // y-up]; strafe +1 is the game's left [M player.rs Input doc, action 1].
+                    let (bot_left_dot, bot_block) = {
+                        let sim = self.scene.sim.as_ref().unwrap();
+                        let (fx, fz) = ((wp.at[0] - self.pos[0]), (wp.at[2] - self.pos[2]));
+                        let mut dot = 0.0f32;
+                        let mut any = false;
+                        for d in sim.drones.list.iter().filter(|d| d.enabled && !d.corpse
+                            && dxz(d.pos, self.pos) < 1.4 && (d.pos[1] - self.pos[1]).abs() < 2.0) {
+                            any = true;
+                            let (bx, bz) = (d.pos[0] - self.pos[0], d.pos[2] - self.pos[2]);
+                            dot += bx * fz - bz * fx; // to_bot · left(fz, −fx)
+                        }
+                        (dot, any)
+                    };
+                    if bot_block {
+                        self.sidestep = if bot_left_dot > 0.0 { -130 } else { 130 };
+                        eprintln!("[walk] {label}: bot block (left-dot {bot_left_dot:.2}) — detour sidestep {}", self.sidestep);
+                        self.stuck = 0;
+                    } else
                     // A hostile BODY-BLOCK: a guard standing on the lane itself. The 02
                     // south-hall-west nav-10 wedge was exactly this — g3 closed to 0.8 u and Bond
                     // (real health) took his fire for ~1400 ticks until the fail chain
