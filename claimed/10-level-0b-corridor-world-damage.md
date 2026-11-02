@@ -8,3 +8,6 @@ Do:
 1. Name the objects that hurt there (placement, class, the hurt volume/fire/glass) [D] and the port's damage site that applies them.
 2. Port the game's contact-event law (when a contact starts/repeats, any cooldown or state that stops a held contact re-hurting) [M with addresses]. Fix the port where it differs.
 3. Un-ignore the 0b real-health walk; it must reach the mission end. Run walkreal_0700000b_live, every hurt_*/fire/blast test, every real-damage walk, then the full suite.
+
+---
+claimed-by: sandbox3 at 2026-11-02T14:56Z
