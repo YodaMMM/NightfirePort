@@ -1402,27 +1402,13 @@ impl CollisionWorld {
 
     /// Diagnostic (level-11-stairwell-bullet-wall-4): the scoped bucket for `cell` as the ray
     /// `from → to` straddles it — the same run list `segment_hit_scoped` tests, as (run, owner
-    /// pushed-instance ordinal) pairs so a probe can name every owner. Read-only. The owner is
-    /// indexed by the RUN's own ordinal (`chunk` pushes one owner per run; the per-cell buckets
-    /// iterate `owners` by run ordinal too) — the old read `owners[run.tris.start]` (the tri
-    /// offset) read past the table for every run past the first few and misnamed owners as
-    /// u32::MAX (level-13-lobby-rifles geom dump).
+    /// pushed-instance ordinal) pairs so a probe can name every owner. Read-only.
     pub fn scoped_run_owners(&self, cell: usize, from: V3, to: V3) -> Option<Vec<(u32, u32)>> {
         let runs = self.scoped_runs(cell, &mut Self::ray_portal_hit(from, to))?;
         Some(runs.into_iter().map(|r| {
-            let owner = self.stat.owners.get(r as usize).copied().unwrap_or(u32::MAX);
-            (r, owner)
-        }).collect())
-    }
-
-    /// Diagnostic (level-13-lobby-rifles): the scoped run list with each run's pushed-instance
-    /// owner and world-space bounds, so a blocking run can be named against the level's objects.
-    pub fn scoped_run_bounds(&self, cell: usize, from: V3, to: V3) -> Option<Vec<(u32, u32, V3, V3)>> {
-        let runs = self.scoped_runs(cell, &mut Self::ray_portal_hit(from, to))?;
-        Some(runs.into_iter().map(|r| {
             let o = &self.stat.objects[r as usize];
-            let owner = self.stat.owners.get(r as usize).copied().unwrap_or(u32::MAX);
-            (r, owner, o.lo, o.hi)
+            let owner = if o.tris.start < self.stat.owners.len() { self.stat.owners[o.tris.start] } else { u32::MAX };
+            (r, owner)
         }).collect())
     }
 

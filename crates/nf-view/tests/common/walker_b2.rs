@@ -292,56 +292,24 @@ impl Walker {
     /// Walk to the nearest live pickups (ammo/guns on the floor — placed or guard drops) until the
     /// ammo pool grows. Returns whether any ammo arrived.
     pub fn resupply(&mut self, label: &str) -> bool {
-        // Ammo in hand: the current gun's clip+spare AND the inventory's (a taken gun lands in
-        // the inventory — the current clip does not move [M Pickup_Handler 0x18e650's equip
-        // path], so a successful gun pick would read as a dry pass without this).
         let ammo = |w: &Walker| {
             let sim = w.scene.sim.as_ref().unwrap();
-            let mut total = sim.gun.clip as i32 + sim.gun.spare as i32;
-            let inv = &sim.drones.inventory;
-            for wid in 2..=0x47usize {
-                if !inv.owned.get(wid).copied().unwrap_or(false) { continue; }
-                let slot = nf_game::pickup::Inventory::clip_slot(&sim.weapons, wid);
-                total += inv.clip.get(slot).copied().unwrap_or(0) as i32;
-                total += inv.carried.get(sim.weapons.ammo_type(wid)).copied().unwrap_or(0) as i32;
-            }
-            total
+            sim.gun.clip as i32 + sim.gun.spare as i32
         };
         let before = ammo(self);
-        // Targets a previous attempt already walked to without arming Bond: the take radius is
-        // `bounds.radius + 1.1` [M 0x18e148:203-214] and a small-model drop the 1.8 arrive
-        // radius never touched (the 07000012 spawn-lobby runs stood 4 × 6000 ticks one drop short
-        // of arming, then re-walked the SAME target every pass) — and a target the nav wedge
-        // refused twice is not a third walk.
-        let mut tried: Vec<[f32; 3]> = Vec::new();
         for attempt in 0..4 {
             let Some(target) = self.scene.sim.as_ref().unwrap().drones.pickups.iter()
                 .filter(|p| !p.gone)
-                // Ground-level pickups only, ON Bond's floor: the drops rest with their centre on
-                // the floor ray [L drop-stand-height probe 2026-10-22] — a pickup half a unit
-                // below it is a placed box buried under this floor, its take ray blocked forever
-                // (the 07000012 spawn lobby's y 0.4-0.5 ghosts ate every pass while the real
-                // guard drops waited farther out).
-                .filter(|p| (p.m[3][1] - self.pos[1]).abs() < 0.5)
-                .filter(|p| tried.iter().all(|t| dxz(*t, [p.m[3][0], p.m[3][1], p.m[3][2]]) > 2.0))
+                // Ground-level pickups only: the upstairs placed boxes are a detour the walker
+                // cannot always climb; the drops land at the guards' feet [L drop positions].
+                .filter(|p| (p.m[3][1] - self.pos[1]).abs() < 1.5)
                 .map(|p| [p.m[3][0], p.m[3][1], p.m[3][2]])
                 .min_by(|a, b| dxz(*a, self.pos).total_cmp(&dxz(*b, self.pos)))
             else { break };
             let d = dxz(target, self.pos);
-            // A SHORT fetch only: a pass across open ground under rifle and grenade fire is the
-            // death the plain walk avoids by keeping to the legs (the 07000012 run died at
-            // tick 1102 walking 14 u of open lobby floor to a drop, and ate a frag blast for the
-            // remaining 75.5 on the way [L the NF_DMG_TRACE death log]). The route legs walk
-            // over drops on the path at the leg arrive radii, and the next fight's low-ammo
-            // resupply re-runs this when a near drop exists.
-            if d > 12.0 { break; }
-            tried.push(target);
+            if d > 45.0 { break; }
             eprintln!("[walk] {label}: resupply attempt {attempt} at ({:.1},{:.1},{:.1}) (d {:.1})", target[0], target[1], target[2], d);
-            // The final arrive walks BOND ONTO the drop: the take test is the pickup's sphere
-            // centre within `radius + 1.1` of the player position [M 0x18e148:203-214] — a
-            // small-model gun drop (radius ≈ 0.3) stops taking at ≈ 1.4, inside the old 1.8
-            // arrive radius, so the pass stood next to live ammo and came back dry.
-            self.walk_nav_to(target, &format!("{label} resupply {attempt}"), 0.6);
+            self.walk_nav_to(target, &format!("{label} resupply {attempt}"), 1.8);
             if ammo(self) > before { break; }
         }
         let got = ammo(self) > before;
