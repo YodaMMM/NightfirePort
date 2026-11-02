@@ -18,3 +18,12 @@ types 1..7 armourFraction 0 [M 0x1902c8]); the west roof wakes at the platform d
 clear ground ray (the canopy); #33's clear window closes by the drop (the dock face eats the
 steep shots east of x ~192). Next levers: kill #33 from the PLATFORM before the drop (the flat
 shot), then climb immediately (the roof's ~2 hits are the honest cost), un-ignore, run all walks.
+
+## level-0d-yard-climb-cover-2 (2026-11-02)
+
+Branch s/level-0d-yard-climb-cover-2 from origin/master (0ea03862) + merge of
+origin/s/level-0d-yard-climb-cover (its code was not on master yet: the perch kill, shoot_far,
+probe_0d_climb_cover). Goal: apply the report's levers — kill #33 from the PLATFORM before the
+drop (the flat shot), then climb immediately, eat the honest roof/wire cost, win the deck fight,
+take the bay drop — and un-ignore
+walkreal_0700000d_live::walk_arrival_to_the_c5_door_real_damage on real input only.
