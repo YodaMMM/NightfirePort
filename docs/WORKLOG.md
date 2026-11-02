@@ -22,3 +22,12 @@ grenade/consider/explosive tests green; every walkreal_*_live run — all green 
 faithful cadence retimes its pit-squad fight: two scenario tests re-ignored with measured reasons and
 live checks, fdbbb1dd; sub-attribution: anim-gate alone passes 14/14). Full suite NOT run (deadline);
 report docs/reports/consider-explosive-gate-2.md.
+
+## consider-explosive-gate-3 (started 2026-11-02 21:06 UTC)
+
+Branch cut from origin/master c3e3135f with origin/s/consider-explosive-gate-2 6e5eef87 merged in
+(clean). Task: land the gate-2 faithful throw/flee rules with every walk green — (1) 07000015: why
+the #383 → #385 fence blast chain changes at tick 2640 ("#385 goes on #383's blast (cause 2)",
+health 86.1) and whether the game would do the same; (2) 07000016: a real-input pit-squad tactic
+under the faithful roll cadence (ammo pickups, weapon choice, cover), un-ignore both walks;
+(3) run every walkreal_*_live, start_corridor_guard_07000011_live, every grenade test, full suite.
