@@ -249,7 +249,7 @@ fn crane_rotate_e_plate_starts_sp492() {
     // reaches the cab, the E is the real input.
     {
         let sim = w.scene.sim.as_mut().unwrap();
-        sim.bond.pos = [199.5, 13.5, -263.6];
+        sim.bond.pos = [199.5, 13.5, -264.3];
         sim.bond.vel = [0.0; 3];
     }
     w.wait(20);
@@ -260,8 +260,13 @@ fn crane_rotate_e_plate_starts_sp492() {
         assert_eq!(sp.state, 1, "sister: SP #492 primed-waiting in state 1 [M 0x1dbda8 mode 64 load beat]");
     }
     // The cab walk is furniture-wedged — the E holds from the stand (the rooftop-vent pattern):
-    // face the plate (its box z −264.9..−262.7, y 12.1..14.5 [D]) and hold the use key.
-    w.scene.sim.as_mut().unwrap().bond.yaw = 0.0; // face +z
+    // face the plate (its box z −264.9..−262.7, y 12.1..14.5 [D]) and hold the use key. The stand
+    // is on the touchplate [D crane_touchplate's own sliver sheets z −263.94..−262.73, x
+    // 198.33..200.72].
+    // The plate's sliver sheets slant (the B vertex at (199.00, −262.73) is the northmost
+    // point); from the settled stand the +z look's use point lands north of the B→C edge — the
+    // west look puts it across the sliver's west sheet [D crane_touchplate tris].
+    w.scene.sim.as_mut().unwrap().bond.yaw = -std::f32::consts::FRAC_PI_2;
     for _ in 0..60 {
         w.tick(nf_game::player::Input::default(), w.total_ticks % 6 == 0);
         if w.scene.sim.as_ref().unwrap().drones.channels.on(0xa) { break; }

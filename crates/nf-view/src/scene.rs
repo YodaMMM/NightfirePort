@@ -709,6 +709,11 @@ pub struct Sim {
     /// Per hint marker, the straddled `cells` indices (the game's obj+0xD0 chain occupancy — the
     /// same resolution as `icon_cels`, over the marker's world sphere).
     pub hint_cels: Vec<Vec<usize>>,
+    /// Per trigger: the ONE cel the game links it to at create — `Trigger_Create` 0x1b1720:96
+    /// runs `build_LinkToRoom` 0x1c9680 at the object's world-sphere centre [M] — resolved here
+    /// with the same world-sphere + `find_cell_raycast` construction the hints/icons use. None =
+    /// the cel did not resolve (the trigger stays pickable from anywhere: fail-open).
+    pub trigger_link_cels: Vec<Option<usize>>,
     /// Per hint marker: fired once per level load (obj+0xFE bit 0 deletes the game's object
     /// [M Hint_Update 0x1b3380:41-42]).
     pub hint_fired: Vec<bool>,
@@ -5291,7 +5296,22 @@ impl Sim {
             // `head`; the SP/switch/PCQWORM arm takes `sp_head` (garage-lift-calls); the SS/gunimp
             // pick below re-derives the same head. The last argument is Bond's body position
             // (obj+0xC0) — `SP_Activate` 0x1dc338:51-53's facing-dot input (use-pick-sp-standins).
-            self.drones.player_use_doors(&d, self.bond.head(), look, self.drones.frame, self.bond.head(), self.bond.pos);
+            // The game's stage-2 pick scope [M Collide_Pick 0x1eb320:125, :313-328]: the pick
+            // walks the objects linked to the cels `Collide_StraddleCels` 0x1eac98 reaches from
+            // the player's cel through the portals the use sphere meets (`Intersect_Portal`
+            // 0x1ea7b8 v0x101). The port: the player's straddle set over the pick segment
+            // (head → use point, r 1.0); a trigger whose one link cel sits outside it is not
+            // considered (the 07000003 locked-door audit: the bedroom plate never fires from the
+            // library doorway). No player cel, no gate (fail-open).
+            let trigger_scope = {
+                let head0 = self.bond.head();
+                find_cell_raycast(&self.cel_graph, self.bond.pos, Some(&self.world)).map(|cell| {
+                    let up = [head0[0] + look[0], head0[1] + look[1], head0[2] + look[2]];
+                    let cels = self.world.debug_straddle(cell, head0, up, 1.0);
+                    self.trigger_link_cels.iter().map(|tc| tc.map_or(true, |c| cels.contains(&c))).collect::<Vec<bool>>()
+                })
+            };
+            self.drones.player_use_doors(&d, self.bond.head(), look, self.drones.frame, self.bond.head(), self.bond.pos, trigger_scope);
             // `Player_Activate` 0x1a5170's ONE pick for every class [M :100-108]: a sphere of radius
             // exactly 1.0 (asm 0x1a5278 `lui $at, 0x3f80`) centred at head + view dir (`Mat_GetDir`
             // of the slot viewer's matrix, asm 0x1a5250), through Collide_SphereIntersect 0x1ec940
@@ -10097,6 +10117,24 @@ pub fn build(level: &Level, cels_only: bool, skeletons: &HashMap<u8, Skeleton>, 
             }).collect::<Vec<_>>();
             let hint_fired = vec![false; hints.len()];
             let icon_msg_timers = vec![0u8; icons.len()];
+            // The triggers' one link cel each (the game's stage-2 pick scope): the placement's
+            // world-sphere centre through the yaw matrix (the same construction as the hints'
+            // [M Control_BuildWorldSph 0x133070]), then `find_cell_raycast` (build_FindCel
+            // 0x1c8cb0). `Trigger_Create` 0x1b1720:96 links the trigger ONCE, at that centre.
+            let trigger_link_cels = drones.triggers.iter().map(|t| {
+                let (mi, p) = level.maps.get(0).and_then(|m| m.placements.get(t.placement)).map(|p| (0usize, p))?;
+                let obj = if p.by_hash() { level.by_hash.get(&p.hashcode).copied() }
+                    else if (p.index as usize) < level.maps[mi].objects.len() { Some((mi, p.index as usize)) } else { None };
+                let o = obj.and_then(|(om, oi)| level.maps.get(om).and_then(|map| map.objects.get(oi)))?;
+                let yaw = p.rotation[1];
+                let (sy, cy) = yaw.sin_cos();
+                let centre = [
+                    p.translation[0] + o.centre[0] * cy + o.centre[2] * sy,
+                    p.translation[1] + o.centre[1],
+                    p.translation[2] - o.centre[0] * sy + o.centre[2] * cy,
+                ];
+                find_cell_raycast(&cel_graph, centre, Some(&world))
+            }).collect::<Vec<_>>();
             // The wire anims' root tracks: the level archive's kind-5 scripts (the player body anims)
             // resolved to their sequences [D 07000005: 0x060005e5 101 frames → 0x04000536, the move pair
             // 0x060000b4/b5 → 0x04000034/35 travelling 0.7637/0.7106 per cycle].
@@ -10167,7 +10205,7 @@ pub fn build(level: &Level, cels_only: bool, skeletons: &HashMap<u8, Skeleton>, 
                 pda_display: [0; 4],
                 pda_hold: 0,
                 pda_lock: None,
-                hints, hint_cels, hint_fired, icon_msg_timers,
+                hints, hint_cels, hint_fired, icon_msg_timers, trigger_link_cels,
                 view_alert: false,
                 prev_aiming: false,
                 view_aim_anim: None,
@@ -11488,10 +11526,21 @@ pub fn build(level: &Level, cels_only: bool, skeletons: &HashMap<u8, Skeleton>, 
                         // Past the rotors: the rigid bodies at their live obj+0x90 [M RB_EulerEvolve 0x1d7810].
                         let bi = ri - self.rotor_placements.len();
                         if bi >= self.rbody_placements.len() {
-                            // Past the rigid bodies: the mines at their placement matrix until the
-                            // sim explodes one (the game deletes it [M 0x17cb7c-0x17cb88]).
-                            let &(pl, mx) = self.mine_placements.get(bi - self.rbody_placements.len())?;
-                            if s.drones.mines.iter().any(|mn| mn.placement == pl && mn.exploded) { return None; }
+                            // Past the rigid bodies: the mines posed every tick at their placement
+                            // rotation and the bob's live y, collapsed once the sim explodes the
+                            // mine (the game deletes it [M 0x17cb7c-0x17cb88]). The game draws the
+                            // mine glist at obj+0x90 [M View_DrawObjectGlist 0x1e6780:44], which
+                            // Control_BuildWorldSph 0x133070:17 rebuilds every tick from obj+0x50
+                            // (rot) + obj+0x30 (pos) [M Control_GetObjMatrix 0x134210:10-12];
+                            // Mine_Update 0x17c930 bobs obj+0x34 = pos.y +
+                            // sin(GameState+0x52·param3·0.0002)·param4·0.1 [M disasm
+                            // 0x17c9c8-0x17c9f4] and View_RotTransMatrix 0x1e5168:46-48 writes
+                            // obj+0x30..0x38 into the drawn matrix's translation — so the slot
+                            // keeps the placement rotation and takes the live y.
+                            let &(pl, mut mx) = self.mine_placements.get(bi - self.rbody_placements.len())?;
+                            let Some(mn) = s.drones.mines.iter().find(|mn| mn.placement == pl) else { return Some(mx) };
+                            if mn.exploded { return None; }
+                            mx[3][1] = mn.posed_y;
                             return Some(mx);
                         }
                         let pi = self.rbody_placements[bi];

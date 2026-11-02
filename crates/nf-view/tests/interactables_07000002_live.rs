@@ -822,3 +822,153 @@ fn the_kitchen_camera_sees_bond_in_its_cone() {
     assert!(w.scene.sim.as_ref().unwrap().drones.sensors.list[si].seen <= s0,
         "sister: behind the camera the cone sees nothing [M 0x1af618's cone test]");
 }
+
+// ---------------------------------------------------------------------------
+// Rigid bodies (0xD8) — 21 placements: bucketswing #4 (mass 3), 12 hanging
+// lamps (rb_greenlamp/rb_redlamp, mass 1), 8 kitchen pans (mass 2); every one
+// type 1, param 2 [D the census probe]. Type 1 = the Rot class: the hit walk
+// is `RB_RestingContactRot` 0x1d73a0, whose ONLY hit arm is class 5 — a
+// player touch is class 3 (obj+0xFF = 3 [M Player_Init 0x1910f8:76]) and
+// falls through with no correction arm [M 0x1d73a0's walk], so the trigger
+// pull is the kind's player path. No 0xDF wind cel stands on this level
+// [D the census] and the buoyancy gate stays shut (water = −500 default
+// [M 0x1d6e88]), so a resting body is bit-still.
+// ---------------------------------------------------------------------------
+
+/// The census rests exactly where it is placed and a real walk into the
+/// bucket moves nothing: the player's contact is class 3 and `RB_RestingContactRot`
+/// 0x1d73a0 has no arm for it, while the body itself blocks the walk query
+/// (`Collide_Pick` 0x1eb320:314-329 walks the cel-linked bodies into
+/// `Collide_PickObj`; the player's kind-0x800 capsule query carries no 0x10
+/// skip [M Player_Collision 0x194df0:88,205]). Sister: 240 settled ticks leave
+/// every body's matrix at the RB_SetState identity and its translation at the
+/// placement (no wind, no buoyancy draw), and the far west lamp is untouched
+/// by the walk at the east bucket.
+#[test]
+fn the_rigid_bodies_rest_at_their_placements_and_a_walk_touch_moves_nothing() {
+    let mut w = load();
+    {
+        let sim = w.scene.sim.as_ref().unwrap();
+        let rbs = &sim.drones.rbodies.list;
+        assert_eq!(rbs.len(), 21, "the census: 21 kind-0xD8 placements [D]");
+        assert!(rbs.iter().all(|o| o.rb.ty == 1), "every body is type 1 [D param 2]");
+        let bucket = rbs.iter().find(|o| o.placement == 4).expect("bucketswing #4 [D]");
+        assert_eq!(bucket.rb.mass, 3.0, "the bucket's mass = param 0 = 3 [D]");
+        let lamp = rbs.iter().find(|o| o.placement == 5).expect("rb_greenlamp #5 [D]");
+        assert_eq!(lamp.rb.mass, 1.0, "the lamps' mass = param 0 = 1 [D]");
+        let pan = rbs.iter().find(|o| o.placement == 145).expect("kitchen-panswing1 #145 [D]");
+        assert_eq!(pan.rb.mass, 2.0, "the pans' mass = param 0 = 2 [D]");
+        // The rest state: identity rows over the placement translation
+        // [M RB_SetState 0x1d7da0; RB_Create stores the placement into obj+0xC0].
+        assert!(bucket.st.trans.iter().zip([-35.85f32, 6.83, -31.02].iter()).all(|(a, b)| (a - b).abs() < 0.01),
+            "the bucket rests at its placement [D the census], got {:?}", bucket.st.trans);
+        assert!(bucket.st.matrix.iter().flatten().zip([1.0f32, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 1.0].iter())
+            .all(|(a, b)| (a - b).abs() < 1e-6), "the bucket's rows are the identity [M 0x1d7da0]");
+    }
+    // The 240-tick rest hold: no wind cel exists [D no 0xDF], the buoyancy gate
+    // is shut [M 0x1d6e88], so the Rot bodies' cylinder sweep must leave the
+    // rest bits alone.
+    w.wait(240);
+    {
+        let sim = w.scene.sim.as_ref().unwrap();
+        for o in &sim.drones.rbodies.list {
+            assert!(o.st.matrix.iter().flatten().zip([1.0f32, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 1.0].iter())
+                .all(|(a, b)| (a - b).abs() < 1e-6), "body #{} drifted at rest — a wind/buoyancy/sweep path wrote the rest state", o.placement);
+            assert_eq!(o.st.pos, o.st.trans, "body #{} never translates at rest [M 0x1d7810's type-0-only position arm]", o.placement);
+        }
+    }
+    // The walk: Bond walks forward into the bucket at (-35.85, 6.83, -31.02) [D]
+    // with the real move input.
+    place(&mut w, -35.85, 6.33, -28.52);
+    let dist0 = {
+        let sim = w.scene.sim.as_ref().unwrap();
+        let b = sim.bond.pos;
+        ((b[0] + 35.85).powi(2) + (b[2] + 31.02).powi(2)).sqrt()
+    };
+    assert!(dist0 < 3.5, "Bond settles beside the bucket, d {dist0}");
+    w.scene.sim.as_mut().unwrap().bond.yaw = (-35.85 - w.scene.sim.as_ref().unwrap().bond.pos[0])
+        .atan2(-31.02 - w.scene.sim.as_ref().unwrap().bond.pos[2]);
+    for _ in 0..120 { w.tick(Input { forward: 1.0, ..Default::default() }, false); }
+    {
+        let sim = w.scene.sim.as_ref().unwrap();
+        let bucket = sim.drones.rbodies.list.iter().find(|o| o.placement == 4).expect("the bucket");
+        assert!(bucket.st.matrix.iter().flatten().zip([1.0f32, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 1.0].iter())
+            .all(|(a, b)| (a - b).abs() < 1e-6),
+            "the walk into the bucket leaves its rows at rest [M 0x1d73a0: the class-3 hit falls through]");
+        assert!(bucket.st.trans.iter().zip(bucket.st.pos.iter()).all(|(a, b)| (a - b).abs() < 1e-6),
+            "the bucket never translates — the create-time placement bits stand [M 0x1d7810], trans {:?} vs pos {:?}", bucket.st.trans, bucket.st.pos);
+        let d = ((sim.bond.pos[0] + 35.85).powi(2) + (sim.bond.pos[2] + 31.02).powi(2)).sqrt();
+        assert!(d > 0.35, "the bucket blocks the walk query — Bond cannot stand in it [M Collide_Pick 0x1eb320:314-329], d {d}");
+        // The far lamp: the walk at the east bucket touches nothing 20 m west.
+        let lamp = sim.drones.rbodies.list.iter().find(|o| o.placement == 5).expect("lamp #5");
+        assert!(lamp.st.matrix.iter().flatten().zip([1.0f32, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 1.0].iter())
+            .all(|(a, b)| (a - b).abs() < 1e-6), "sister: the far lamp is untouched by the walk");
+    }
+}
+
+/// A real P99 round swings a rigid body: the bullet's contact lands a class-5
+/// record in the body's obj+0xD0 chain (`Bullet_CollisionHandler` 0x12ce80's
+/// sorted contact; the record's hit+0x8 = the round's damage, hit+0x30 = the
+/// flight direction [L 07000004 lamp #40, a break at the class-5 arm 0x1d74dc]),
+/// the arm writes impulse = (hit+0x8)·0.5·vel into the accumulators with the
+/// type-1 cross's y lane zeroed [M 0x1d73a0:0x1d753c-0x1d757c], and the next
+/// `RB_Update` 0x1d6e38 → `RB_EulerEvolve` 0x1d7810 steps the quaternion —
+/// the body swings about its anchor and NEVER translates (the type-0-only
+/// position arm [M 0x1d7810]). Sister: the bucket rests at the identity before
+/// the shots and the far kitchen pan's bits never change during the garden
+/// gunfire.
+#[test]
+fn gunfire_swings_a_rigid_body_without_moving_its_anchor() {
+    let mut w = load();
+    let (bi, centre) = {
+        let sim = w.scene.sim.as_ref().unwrap();
+        let bi = sim.drones.rbodies.list.iter().position(|o| o.placement == 4)
+            .expect("bucketswing #4 [D]");
+        (bi, sim.drones.rbodies.list[bi].world_sphere().0)
+    };
+    {
+        let sim = w.scene.sim.as_ref().unwrap();
+        let bucket = &sim.drones.rbodies.list[bi];
+        // The live sphere hangs near its placement (the glist centre may sit off
+        // the pivot in object space — only the order of magnitude is pinned here).
+        assert!((centre[0] + 35.85).abs() < 1.5 && (centre[2] + 31.02).abs() < 1.5,
+            "the bucket's live sphere sits at its placement [D #4], got {centre:?}");
+        assert!(bucket.st.matrix.iter().flatten().zip([1.0f32, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 1.0].iter())
+            .all(|(a, b)| (a - b).abs() < 1e-6), "sister: the bucket rests at the identity before the shots");
+    }
+    // The garden firing line: 1.2 below, 2.4 south of the bucket (open air — the
+    // kitchen pans' line crosses the counter breakables, the garden's does not).
+    place(&mut w, centre[0], centre[1] - 1.2, centre[2] + 2.4);
+    // The aim point: the eye→centre line carried 1.2 m PAST the body. The pan is a
+    // hollow shell and the game's ray rule is single-sided (a triangle whose plane
+    // faces along the ray is skipped [M Intersect_RayGeom 0x10a8c8:168]) — a segment
+    // that STOPS at the sphere centre ends inside the cavity without a front-face
+    // crossing, so the shot aims through the body: the crossing lands on the shell's
+    // exit wall, the same way the game's own rounds land on the 07000004 lamp
+    // [L 07000004 lamp #40 at the class-5 arm 0x1d74dc].
+    let through = {
+        let sim = w.scene.sim.as_ref().unwrap();
+        let eye = sim.bond.head();
+        let d = [centre[0] - eye[0], centre[1] - eye[1], centre[2] - eye[2]];
+        let m = (d[0] * d[0] + d[1] * d[1] + d[2] * d[2]).sqrt();
+        [centre[0] + d[0] / m * 1.2, centre[1] + d[1] / m * 1.2, centre[2] + d[2] / m * 1.2]
+    };
+    let ident = [1.0f32, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 1.0];
+    let swung = shoot_at(&mut w, through, 900, &|sim| {
+        sim.drones.rbodies.list[bi].st.matrix.iter().flatten().zip(ident.iter())
+            .any(|(a, b)| (a - b).abs() > 1e-4)
+    });
+    assert!(swung, "the gunfire swings the bucket [M 0x1d73a0's class-5 arm; 0x1d7810]");
+    {
+        let sim = w.scene.sim.as_ref().unwrap();
+        let bucket = &sim.drones.rbodies.list[bi];
+        assert!(bucket.st.trans.iter().zip(bucket.st.pos.iter()).all(|(a, b)| (a - b).abs() < 1e-6),
+            "the swing never moves the anchor — the placement bits stand [M 0x1d7810], trans {:?} vs pos {:?}", bucket.st.trans, bucket.st.pos);
+        assert!(bucket.st.trans.iter().all(|v| v.is_finite()) && bucket.st.matrix.iter().flatten().all(|v| v.is_finite()),
+            "the swing state stays finite");
+        // The far kitchen pan: the garden rounds never reach it.
+        let pan = sim.drones.rbodies.list.iter().find(|o| o.placement == 145).expect("the pan");
+        assert!(pan.st.matrix.iter().flatten().zip(ident.iter()).all(|(a, b)| (a - b).abs() < 1e-6),
+            "sister: the far pan is untouched by the garden gunfire");
+    }
+}

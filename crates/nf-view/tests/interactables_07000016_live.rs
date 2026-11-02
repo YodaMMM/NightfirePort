@@ -283,3 +283,151 @@ fn every_placement_resolves_its_model() {
     }
     assert_eq!(unresolved, 0, "every placement's model resolves [D the 07000016 parse]");
 }
+
+/// The player-triggered SimpleScript kind: the four Door_corridor_graphic ScriptPlayers
+/// (#431/#432/#501/#502 — kind 0xd9, script 0x06000999, mode 0x40, mask 1, out = the door's
+/// lock channel 0x27/0x28 [D census #431-432]) START on the player's panel E. The writer is the
+/// mask-0x04 activate panel #684 (3.36, 0.84, −141.50, out 0x27 [D]) beside door[3] #364
+/// (1.83, −0.10, −141.88, lock p3 = 0x27 [D]): the E raises ch 0x27, and `SP_Update` 0x1dbda8's
+/// state-0 arm (mask 1 = the out-channel bit, `SP_Hit` 0x1dc470:16-18 feeds `switch_channels[p6]`)
+/// loads + starts each graphic SP's script [M 0x1dbda8:64-106 → load]. The same edge unlocks
+/// door[3], which the E then opens. Sister: ch 0x27 off and the 0x27 graphic SPs rest at create
+/// state 0, script unloaded, before the E.
+#[test]
+fn the_door_panel_e_starts_the_corridor_graphic_script_players() {
+    let mut w = load16();
+    let graphic27 = |sim: &nf_view::scene::Sim| sim.drones.scripts.players.iter()
+        .filter(|p| p.scripts[0] == 0x0600_0999 && p.out == 0x27)
+        .map(|p| (p.placement, p.state, p.info[0].is_some(), p.live_matrix[3])).collect::<Vec<_>>();
+    {
+        let sim = w.scene.sim.as_ref().unwrap();
+        assert_eq!(graphic27(sim).len(), 2, "the two ch-0x27 graphic SPs exist [D #432/#501 — the port indexes SP placements by the main map: #85/#154 = the census's #432/#501]");
+        assert!(!sim.drones.channels.on(0x27), "sister: ch 0x27 off before the panel E [D]");
+        for (pl, st, loaded, _) in graphic27(sim) {
+            assert_eq!(st, 1, "sister: SP #{pl} rests at the create load beat's state 1 — mode 0x40 ∉ {{0,1}} loads + stops at create [M 0x1db9a8:81-86]");
+            assert!(loaded, "sister: the create beat loaded the script, stopped [M 0x1db9a8:81-86]");
+        }
+    }
+    // Reach door[3]'s north-east approach (the real route's own side: walkreal presses the panel
+    // from z −140) and press E on the panel #684 until its ch 0x27 lands.
+    w.scene.sim.as_mut().unwrap().bond.pos = [3.4, 0.0, -140.2];
+    w.scene.sim.as_mut().unwrap().bond.vel = [0.0; 3];
+    w.wait(10);
+    let pressed = press_use_until(&mut w, [3.36, 0.84, -141.50], "door[3]'s panel #684", 180,
+        |sim| sim.drones.channels.on(0x27));
+    assert!(pressed, "the E on the panel never wrote ch 0x27 — the mask-0x04 activate trigger [D #684; M Trigger_Activate 0x1b2318]");
+    {
+        let sim = w.scene.sim.as_ref().unwrap();
+        for (pl, st, loaded, live) in graphic27(sim) {
+            assert!(loaded, "the panel E keeps graphic SP #{pl}'s script 0x0600999 loaded [M SP_Update 0x1dbda8 case 1 → start]");
+            assert_eq!(st, 2, "the panel E started graphic SP #{pl} (create state 1 → playing state 2 while ch 0x27 holds — the arm-1 start) [M 0x1dbda8:64-106 case 1]");
+            eprintln!("[16] graphic SP #{pl} state {st} live ({:.2},{:.2},{:.2})", live[0], live[1], live[2]);
+        }
+    }
+    // The same channel unlocks door[3]: the E now opens it (the door kind's lock consumer,
+    // walkreal-12's two-latch fix).
+    let (_, di) = {
+        let sim = w.scene.sim.as_ref().unwrap();
+        walker::door_near(sim, [1.83, -0.1, -141.88]).expect("door[3] #364 in reach [D]")
+    };
+    w.use_door(di, "door[3] unlocked by the panel");
+    for _ in 0..90 { w.tick(nf_game::player::Input::default(), false); }
+    let sim = w.scene.sim.as_ref().unwrap();
+    let d = &sim.drones.doors.list[di];
+    assert!(d.state == nf_game::door::OPEN || d.state == nf_game::door::OPENING,
+        "door[3] opens after its panel E (state {:#x}, pos01 {:.3})", d.state, d.pos01);
+    assert!(d.pos01 > 0.5, "the leaf travelled (pos01 {:.3})", d.pos01);
+}
+
+/// The lift kind: the shuttle-bay lift (ScriptPlayer_ShuttleBayLift #694, kind 0xd9 mode 1,
+/// script 0x060009e9, out ch 0x50 [D #694 (2.48, 0.00, −159.93)]) RIDES on the launch chain. The
+/// mode-1 load beat starts the script at create, held [M 0x1db9a8/0x1dbda8 mode 1 → load]; the
+/// launch cinema's stream-21 event writes [ch 80, 1] [D 0600090a s21 — the dump]; the state-2
+/// `SP_UnPause` (mask 1, ch 0x50 on) releases the hold [M 0x1dbda8 case 2]; the cab entities
+/// (stream 1 hash 0x02000a79 / stream 2 hash 0x02000a7a [D the dump]) follow the descend keys —
+/// stream 1 carries y +1.60 at t0 down to −21.22 at t549, the 22.8-unit ride to the bay floor
+/// [D 060009e9 s1 keys — the dump]; `Script_Interp` keys the stream objects every frame [M
+/// 0x1d9a08:106-133]; and the lift script's own stream 7 event writes [80, 0] [D 060009e9 s7 —
+/// the dump], landing +181 after the summon in the port. Driven through the real path: the
+/// walked touch of the launch-room plate #602 (2.37, 1.04, −176.41, out 0x81, mask 8 [D]) starts
+/// the chain (SP #609 → 0xb9 → SP #619). Sisters: ch 0x50 cold, the cab at its top key, and the
+/// bay drone #634 (skin 0x500005e, wake p3 = 0x50 [D #634]) dormant at its perch.
+#[test]
+fn the_launch_chain_rides_the_shuttle_bay_lift() {
+    let mut w = load16();
+    let lift_i = |sim: &nf_view::scene::Sim| sim.drones.scripts.players.iter()
+        .position(|p| p.scripts[0] == 0x0600_09e9).expect("the bay-lift SP #694 [D]");
+    let cab_y = |sim: &nf_view::scene::Sim| sim.drones.scripts.entity_matrix((0x0600_09e9, 1))
+        .map(|m| m[3][1]).expect("the lift cab entity (stream 1) [D 060009e9 s1]");
+    let bay_drone = |sim: &nf_view::scene::Sim| sim.drones.list.iter()
+        .find(|d| d.skin & 0xffff == 0x5e && walker::dxz(d.pos, [2.45, 1.08, -160.0]) < 2.0)
+        .map(|d| (d.state, d.pos));
+    let (mut rest_y, mut drone0) = (0.0f32, None);
+    {
+        let sim = w.scene.sim.as_ref().unwrap();
+        assert!(sim.drones.scripts.players[lift_i(sim)].info[0].is_some(),
+            "the lift's script loaded at create [M 0x1db9a8 mode-1 load beat]");
+        assert!(!sim.drones.channels.on(0x50), "sister: ch 0x50 cold before the chain [D — the only writers are 0600090a s21 [80,1] and 060009e9 s7 [80,0]]");
+        rest_y = cab_y(sim);
+        assert!((rest_y - 1.60).abs() < 0.5,
+            "sister: the cab rests at its top key (y {rest_y:.2}) [D 060009e9 s1 t0 = 1.60]");
+        drone0 = bay_drone(sim);
+        let (st, pos) = drone0.expect("the bay drone #634 exists [D]");
+        assert!(st == 1, "sister: the bay drone #634 dormant at its perch (state {st}) [D #634 p3 = 0x50, unfired]");
+        eprintln!("[16] bay drone before: state {st} y {:.2}", pos[1]);
+    }
+    // The real walk into the launch-room plate (skip off — the real-time order the launch cinema
+    // needs; the walkreal real-order leg is the proven pattern).
+    w.skip_cutscenes = false;
+    {
+        let sim = w.scene.sim.as_mut().unwrap();
+        sim.bond.pos = [2.4, 1.0, -172.0];
+        sim.bond.vel = [0.0; 3];
+        sim.bond.yaw = std::f32::consts::PI;
+    }
+    let mut t81 = None;
+    for _ in 0..900u32 {
+        if t81.is_none() && w.scene.sim.as_ref().unwrap().drones.channels.on(0x81) { t81 = Some(w.total_ticks); }
+        w.scene.sim.as_mut().unwrap().bond.yaw = std::f32::consts::PI;
+        w.tick(nf_game::player::Input { forward: 1.0, ..Default::default() }, false);
+        let sim = w.scene.sim.as_ref().unwrap();
+        if sim.disabled || sim.bond.pos[1] < -5.0 { break; }
+    }
+    assert!(t81.is_some(), "the walked touch of the launch-room plate never fired ch 0x81 [D #602 mask 8; M Trigger_TouchOnce 0x1b2b88]");
+    // The chain plays out: watch ch 0x50 rise, the cab descend, then the lift script's own
+    // [80, 0] clear.
+    let (mut t50_on, mut t50_off, mut y_min) = (None, None, rest_y);
+    for _ in 0..9000u32 {
+        w.tick(nf_game::player::Input::default(), false);
+        let sim = w.scene.sim.as_ref().unwrap();
+        y_min = y_min.min(cab_y(sim));
+        if t50_on.is_none() && sim.drones.channels.on(0x50) { t50_on = Some(w.total_ticks); }
+        if let Some(on) = t50_on {
+            if t50_off.is_none() && w.total_ticks > on + 10 && !sim.drones.channels.on(0x50) {
+                t50_off = Some(w.total_ticks);
+                break;
+            }
+        }
+    }
+    let drop = rest_y - y_min;
+    eprintln!("[16] lift: ch0x50 on at {t50_on:?}, off at {t50_off:?}, cab drop {drop:.2} (rest {rest_y:.2} → min {y_min:.2})");
+    assert!(t50_on.is_some(), "the launch chain never wrote ch 0x50 — the lift summon [D 0600090a s21 event [80,1]; M Script_Update's event writer]");
+    assert!(drop > 3.0, "the lift cab never descended (drop {drop:.2}) — the un-held script must key the cab down its 22.8-unit travel [M Script_Interp 0x1d9a08:106-133; D 060009e9 s1 keys 1.60→−21.22]");
+    assert!(t50_off.is_some(), "the lift script never wrote its [80, 0] [D 060009e9 s7]");
+    // The ride's far end: the descend keys run to the bay floor (t540-549 y −21.22 [D s1]); the
+    // port's cab bottoms at −20.46 (the keys' asymptote / the script's loop return at t548) —
+    // the ride's observed minimum pins the bay-floor arrival.
+    let mut y_bot = 0.0f32;
+    for k in 0..1200u32 {
+        w.tick(nf_game::player::Input::default(), false);
+        let y = cab_y(w.scene.sim.as_ref().unwrap());
+        y_bot = y_bot.min(y);
+        if k == 0 || k % 100 == 0 { eprintln!("[16] cab y at clear+{k}: {y:.2}"); }
+    }
+    assert!(y_bot < -20.0,
+        "the cab's ride must reach the bay floor (the descend keys' −21.22 approach [D 060009e9 s1 t540-549]), min {y_bot:.2}");
+    let (st, pos) = bay_drone(w.scene.sim.as_ref().unwrap()).expect("the bay drone #634 after the chain [D]");
+    assert!(st != 1 && pos[1] < drone0.map(|(_, p)| p[1]).unwrap_or(0.74) - 1.0,
+        "the bay drone #634 never woke/rode the cab down (state {st}, y {:.2}) [D #634 p3 = 0x50; M the drone wake + the cab keys]", pos[1]);
+    eprintln!("[16] bay drone after: state {st} y {:.2}", pos[1]);
+}

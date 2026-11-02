@@ -951,6 +951,24 @@ pub struct Drone {
     /// the pointer to this flag, stamped per tick in the vision pass from Bond's health.
     /// standins-drone-922 (the old `ever_seen` fold sent never-seen guards to NoOpponent).
     pub bond_alive: bool,
+    /// The per-drone first-moved stamp [M DroneWeap_DoOpponentTargetting 0x179a48:65-68 —
+    /// `+0x224 = GameState+0x52` beside the `+0x1DD` latch and the `+0x1DE` flag, EVERY guard
+    /// carrying its own copy: `DroneWeap_HandleFiring` 0x17a180 runs the targetting per drone in
+    /// BOTH arms [M :29 the not-firing arm, :59 the firing arm], so a guard latches the tick IT
+    /// observes the move start and clears its latch at its own stamp +
+    /// `fptoui(TargetFirstMoved_TimeToHit·FRAME_RATE)` [M :70-73] — two guards that start
+    /// tracking at different ticks clear at different ticks. The port folds each latch+flag pair
+    /// into one Option: `Some(stamp)` while the phase runs (the flag keeps standing, so no
+    /// re-latch while it lasts [M :65]), `None` on the opposite transition [M :48-49, :62-63].
+    pub moved_since: Option<u32>,
+    /// The per-drone first-stopped stamp — the same for the stop: `+0x224` beside the `+0x1DF`
+    /// latch and the `+0x1E0` flag [M 0x179a48:51-55], cleared after
+    /// `fptoui(TargetFirstStopped_TimeToHit·FRAME_RATE)` [M :56-59].
+    pub stopped_since: Option<u32>,
+    /// This drone's own read of the target's motion (`+0x1DC` moving, `+0x1DD` first-moved,
+    /// `+0x1DF` first-stopped) [M 0x179a48:31-74], recomputed in its own weapon pass — the hit
+    /// roll reads the drone's bytes [M DroneWeap_DoBulletAccuracy 0x179740:52-73], not a global.
+    pub target_motion: Motion,
     pub visibility: f32,
     pub seen_ticks: u32,
     pub unseen_ticks: u32,
@@ -2095,6 +2113,10 @@ impl Drone {
             gun_through_wall: false,
             // Drone+0x1da — the view-bone cursor (SeekOpponentLOS 0x175cb8:50-66).
             view_bone: 0,
+            // The per-drone motion stamps (DroneWeap_DoOpponentTargetting 0x179a48:47-73) — see the fields.
+            moved_since: None,
+            stopped_since: None,
+            target_motion: Motion::default(),
         };
         // `NDrone2_DefaultInit`'s held-weapon switch: the pistol class {2, 6, 0xA, 0xB, 0xE, 0x10,
         // 0x3B..0x40} writes `+0x100 = 2.0` beside its anim set 4 and clip 12 [M 0x14b300:267-293];
@@ -10861,8 +10883,41 @@ impl Drone {
         angle_difference(self.yaw + self.aim_yaw, self.yaw_to_opp).abs() < tol
     }
 
+    /// `DroneWeap_DoOpponentTargetting` 0x179a48, the per-drone latching (called from the weapon
+    /// pass — `DroneWeap_HandleFiring` 0x17a180:29/:59 runs it per drone in BOTH arms): the target
+    /// pointer `+0x170 != 0` gates the whole body [M 0x179a48:31-33 — nil freezes the latches];
+    /// the target's class byte `+0xFF == 3` (the player object) recomputes `+0x1DC` from the move
+    /// quad [M :34-41] and a non-class-3 target RETAINS the byte [M :45]; then the branch on the
+    /// retained/recomputed byte — moving: the stopped latch and its flag clear [M :62-63] and the
+    /// moved latch arms with THIS drone's stamp when neither its latch nor its flag stands (the
+    /// `+0x1DD`/`+0x1DE` halfword test [M :65]) until `stamp + fptoui(TargetFirstMoved_TimeToHit·
+    /// FRAME_RATE) < now` clears the latch [M :70-73]; still: the mirror with `+0x1DF`/`+0x1E0`
+    /// and the stopped time [M :47-59]. The port folds each latch+flag pair into one Option: the
+    /// stamp stays `Some` past the window (the flag keeps standing, so no re-latch while the phase
+    /// lasts [M :65]) and the opposite transition clears it.
+    fn observe_target_motion(&mut self, d: &Data, frame: u32, quad: [f32; 2]) {
+        if !self.opp_ptr() { return; } // the nil `+0x170` skips the whole body [M 0x179a48:31-33]
+        // The quad recompute only for the player-class target [M :34-41]; a team-2 pick (a drone
+        // object, class != 3) retains [M :45] — the port's `opp_bond` is the class-3 fold.
+        if self.opp_bond { self.target_motion.moving = quad[0] != 0.0 || quad[1] != 0.0; }
+        if self.target_motion.moving {
+            self.stopped_since = None; // [M :62-63]
+            if self.moved_since.is_none() { self.moved_since = Some(frame); } // [M :65-68]
+        } else {
+            self.moved_since = None; // [M :48-49]
+            if self.stopped_since.is_none() { self.stopped_since = Some(frame); } // [M :51-55]
+        }
+        let t_moved = (d.tuning.DroneFiring_TargetFirstMoved_TimeToHit * 60.0) as u32;
+        let t_stopped = (d.tuning.DroneFiring_TargetFirstStopped_TimeToHit * 60.0) as u32;
+        self.target_motion.first_moved = self.moved_since.is_some_and(|f| frame <= f + t_moved);
+        self.target_motion.first_stopped = self.stopped_since.is_some_and(|f| frame <= f + t_stopped);
+    }
+
     /// `DroneWeap_HandleFiring` → `DoFiring` → `FireWeapon`.
-    fn handle_firing(&mut self, d: &Data, rng: &mut Rng, frame: u32, p: &Player, motion: Motion, owner: usize, lights: &mut crate::light::LightList) -> Vec<crate::bullet::Bullet> {
+    fn handle_firing(&mut self, d: &Data, rng: &mut Rng, frame: u32, p: &Player, quad: [f32; 2], owner: usize, lights: &mut crate::light::LightList) -> Vec<crate::bullet::Bullet> {
+        // The targetting runs in BOTH arms of the game's HandleFiring — the not-firing arm too
+        // [M 0x17a180:29] — so the per-drone latches update every weapon pass, firing or not.
+        self.observe_target_motion(d, frame, quad);
         if !self.firing { return Vec::new(); }
         self.burst_done = false;
         let mut more = false;
@@ -10885,7 +10940,7 @@ impl Drone {
                     self.set_danim(d, 0x5c, 0);
                     self.anim.reached = true;
                 }
-                bullet = self.fire_weapon(d, rng, frame, p, motion, owner, lights);
+                bullet = self.fire_weapon(d, rng, frame, p, self.target_motion, owner, lights);
                 // `DroneWeap_FireWeapon`: `Sound_Play3D(weapon_data[w] +0x60, drone)`, skipped for 0x5EF.
                 if let Some(r) = d.weapons.records.get(self.weapon as usize) {
                     let id = u16::from_le_bytes([r[0x60], r[0x61]]) as u32;
@@ -11706,11 +11761,14 @@ pub fn level_drones(d: &Data, level: &nf_formats::level::Level, rng: &mut Rng, l
     }).collect()
 }
 
-/// Bond's motion as the firing drones read it (`DroneWeap_DoOpponentTargetting` 0x179a48): `moving` =
-/// `+0x1DC` (the player's move quad `|(BL+0x10, 0, BL+0x18)|` is non-zero [M :34-41]); `first_moved` = `+0x1DD`, set when
-/// he starts moving and cleared once `stamp + fptoui(TargetFirstMoved_TimeToHit · FRAME_RATE) < now`
-/// [M :54-63]; `first_stopped` = `+0x1DF`, the same for the stop with `TargetFirstStopped_TimeToHit`
-/// [M :41-52]. Both share the `+0x224` stamp.
+/// ONE guard's read of Bond's motion as its weapon pass computes it
+/// (`DroneWeap_DoOpponentTargetting` 0x179a48, per drone): `moving` = `+0x1DC` (the player's move
+/// quad `|(BL+0x10, 0, BL+0x18)|` is non-zero [M :34-41]); `first_moved` = `+0x1DD`, latched with
+/// THAT drone's `+0x224` stamp when IT observes the start of the move and cleared once
+/// `stamp + fptoui(TargetFirstMoved_TimeToHit · FRAME_RATE) < now` [M :65-73]; `first_stopped` =
+/// `+0x1DF`, the same for the stop with `TargetFirstStopped_TimeToHit` [M :47-59]. Two guards that
+/// start tracking at different ticks hold different stamps and clear at different ticks — the
+/// game keeps the latches on every `Drone`, nowhere global [M 0x179a48:47-73].
 #[derive(Clone, Copy, Debug, Default, PartialEq)]
 pub struct Motion { pub moving: bool, pub first_moved: bool, pub first_stopped: bool }
 
@@ -11849,7 +11907,6 @@ pub struct Drones {
     /// The view model's eject datum (1, or 5 for the alternating guns' other side) as posed this tick and the
     /// player's y — set by the viewer before each tick while a player shell waits (`Casings::reserve`).
     pub eject_bone_now: Option<([[f32; 4]; 4], f32)>,
-    moved_since: Option<u32>,
     /// Bond's local thruster pair `BL+0x20`/`+0x28` (strafe, forward) while he floats in the
     /// zero-g substates (8/9), set by the viewer before each tick; `None` on foot (the read then
     /// takes the walk lanes, `Player::move_local`). In zero-g the
@@ -11861,11 +11918,6 @@ pub struct Drones {
     /// a float that has thrusted keeps a non-zero pair (×`TargetMoving` 0.75 on the hit chance
     /// [M DoBulletAccuracy 0x179740:78-80]) while it hovers on the spot.
     pub player_move_local: Option<[f32; 2]>,
-    /// This tick's targetting bytes as the hit roll reads them: (`+0x1DC` moving, `+0x1DD`
-    /// first moved) [M 0x179a48]. Observability for the tests; the sim reads its locals.
-    pub target_motion: (bool, bool),
-    /// The tick Bond stopped (`+0x1DF`'s stamp, `DoOpponentTargetting` 0x179a48:41-52).
-    stopped_since: Option<u32>,
     /// The player as an AI target and this frame's link used-counts per path.
     pub target: PlayerTarget,
     used: Vec<Vec<u16>>,
@@ -11912,8 +11964,10 @@ pub struct Drones {
     pub ss_bullet_contacts: Vec<u8>,
     /// level-0c-complete: the use key's class-0x1D trigger half, deferred from the scene's use
     /// block to this tick's post-`Trigger_Calc` slot (the game runs it at Bond's turn in the
-    /// object walk — see `player_use_doors`'s note). `(head, look)`.
-    pub use_trigger_request: Option<(V3, V3)>,
+    /// object walk — see `player_use_doors`'s note). `(head, look, trigger_scope)` — the scope
+    /// is the game's stage-2 cel gate [M Collide_Pick 0x1eb320:125, :313-328] as the caller
+    /// resolved it (None = ungated: the caller had no cel graph, the MP net path).
+    pub use_trigger_request: Option<(V3, V3, Option<Vec<bool>>)>,
     pub player_impacts: Vec<PlayerImpact>,
     /// fix-gas-rng4 (111d3's deferral onto the G-041 walk): the world-hit draws' ride record — one
     /// entry per player bullet whose flight segment ended on the world this tick, `(bullet index,
@@ -12621,7 +12675,7 @@ impl Drones {
             if let Some(g) = &mut dr.body_glow { g.owner = i; }
         }
         let llist = (0..list.len()).collect();
-        let mut drones = Drones { list, frame: 0, los_cursor: 0, llist, rng, lights: Default::default(), player_pos: [0.0; 3], bullets: Vec::new(), grenades: Vec::new(), explosions: Vec::new(), shake: 0.0, bond_crouched: false, bond_view_bones: None, stopped_since: None, player_move_local: None, target_motion: (false, false), vision_enable_frame: 0, player_spread: None, health: Default::default(), player_hits: Vec::new(), impacts: Vec::new(), moved_since: None, target: PlayerTarget::default(), used: Vec::new(), link_flags: Vec::new(), locked_door_nodes: Default::default(), channels: Default::default(), triggers: Vec::new(), spawners: Vec::new(), cover_rt: Vec::new(), sounds: Vec::new(), cover_cursor: 0, cover_counter: 0, player_bullets: Vec::new(), net_no_self_hurt: false, player_impacts: Vec::new(), last_flinch: None, bond_aiming: false, level_exit: None, mission_end: None, bond_weapon: 2, env: None, sun_vector: [0.0; 3], env_pending: None, mp_master: 0, fill_rng: Rng::new(0x5eed), last_alarm: None, alarm_sent: false, party_loud: false, iop_section: 0, hud_frozen: false, aim_target: None, aim_offset: [0.0; 2],
+        let mut drones = Drones { list, frame: 0, los_cursor: 0, llist, rng, lights: Default::default(), player_pos: [0.0; 3], bullets: Vec::new(), grenades: Vec::new(), explosions: Vec::new(), shake: 0.0, bond_crouched: false, bond_view_bones: None, player_move_local: None, vision_enable_frame: 0, player_spread: None, health: Default::default(), player_hits: Vec::new(), impacts: Vec::new(), target: PlayerTarget::default(), used: Vec::new(), link_flags: Vec::new(), locked_door_nodes: Default::default(), channels: Default::default(), triggers: Vec::new(), spawners: Vec::new(), cover_rt: Vec::new(), sounds: Vec::new(), cover_cursor: 0, cover_counter: 0, player_bullets: Vec::new(), net_no_self_hurt: false, player_impacts: Vec::new(), last_flinch: None, bond_aiming: false, level_exit: None, mission_end: None, bond_weapon: 2, env: None, sun_vector: [0.0; 3], env_pending: None, mp_master: 0, fill_rng: Rng::new(0x5eed), last_alarm: None, alarm_sent: false, party_loud: false, iop_section: 0, hud_frozen: false, aim_target: None, aim_offset: [0.0; 2],
             // The game's `DAT_00299092` (the shared LOS-probe counter; see the field) — zeroed
             // here as `Drone_LevelReset`'s memset zeroes it at level reset [M 0x13a5bc-cc].
             los_probes: 0,
@@ -16017,7 +16071,7 @@ fn segment_hits_sphere(a: V3, b: V3, c: V3, r: f32) -> bool {
     /// calls `Trigger_Activate` (0x1b2318) — routes b and c on 07000005 (the on-foot gate door and the zip-wire
     /// exit). The port's `player_use_doors` handled only doors; this adds the trigger path so pressing E on a
     /// LOAD_LEVEL or TouchOnce trigger fires it immediately [M 0x1a5170:100-108,128, 0x1b2318:34-111].
-    pub fn player_use_doors(&mut self, d: &Data, head: V3, look: V3, frame: u32, sp_head: V3, body: V3) {
+    pub fn player_use_doors(&mut self, d: &Data, head: V3, look: V3, frame: u32, sp_head: V3, body: V3, trigger_scope: Option<Vec<bool>>) {
         let (evs, _hits) = self.doors.player_use(head, look, &mut self.channels, frame, d.world);
         for (id, pos) in evs {
             match d.sfx {
@@ -16035,7 +16089,7 @@ fn segment_hits_sphere(a: V3, b: V3, c: V3, r: f32) -> bool {
         // wiped the write before the mux walk ever saw it (0700000c's secret-door E plate #558
         // [D: mask 4, out 3] never reached its AND). The doors' half stays here (the events feed
         // the scene's sound path); the request carries (head, look).
-        self.use_trigger_request = Some((head, look));
+        self.use_trigger_request = Some((head, look, trigger_scope));
         // `Player_Activate`'s remaining classes the Tower levels need (map-tower): the mask-4
         // ScriptPlayers (`SP_Activate` 0x1dc338 — the elevator, the security keyboard), the
         // switches (0x29, `Switch_Activate` 0x1b02a8) and the Q-Worm PCs (0x35,
@@ -16104,36 +16158,54 @@ fn segment_hits_sphere(a: V3, b: V3, c: V3, r: f32) -> bool {
     /// head + look) activates every trigger whose volume it meets. For LOAD_LEVEL: `Trigger_Activate` checks
     /// cancel channels (0x60–0x63), the key gate, sets the success/fallback channels, and requests the level
     /// load. For TouchOnce: sets the output channel. [M 0x1a5170:100-108, 0x1b2318:34-111].
-    fn player_use_triggers(&mut self, head: V3, look: V3, frame: u32) {
+    fn player_use_triggers(&mut self, head: V3, look: V3, frame: u32, scope: Option<&[bool]>) {
         let use_point = [head[0] + look[0], head[1] + look[1], head[2] + look[2]];
         let r = 1.0;
-        // The game's test is `Collide_SphereIntersect(1.0, head + look, *(player+0x20), …)`, mask
-        // 0x101 [M 0x1a5170:100-108 → 0x1ec940:94-111], three stages (level-12-exit-pick):
-        // 1. The cel scope: `Collide_Pick` 0x1eb320 walks only the objects linked to the cels
-        //    `Collide_StraddleCels` 0x1eac98 reaches from the PLAYER's cel through the portals the
-        //    use sphere meets (`Intersect_Portal` 0x1ea7b8 v0x101) [M 0x1eb320:125, :313-328];
-        //    `Trigger_Create` 0x1b1720:96 links each trigger once (`build_LinkToRoom` 0x1c9680 at
-        //    its world-sphere centre). NOT modelled: the port carries no trigger obj+0x80 and its
-        //    cel links are approximations (the player relinks at POS, `player_cel_relink`), and a
-        //    trial gate refused real presses — 0700000d's E panel #450 resolved to cel 6 at its box
-        //    centre while Bond, standing at it, sat in cel 93 (use_key_census_live). The class-0x1D
-        //    arm has no facing or line-of-sight test [M 0x1a5170:134-137].
-        // 2. The bounds-sphere gate: `|use point − obj+0x80|² < (1.0 + obj+0x8C)²` [M 0x1eae80:
-        //    219-228] — implied by stage 3 for the port's world-space tris (the bounds sphere
-        //    encloses the glist), so not repeated.
-        // 3. The mesh refine: `Collide_Intersect` 0x1ebaa8:186-190 → `Intersect_PointGeom`
-        //    0x1e92d8 — the sphere against the glist TRIS, front side only; a miss frees the node
-        //    [M 0x1ec940:120-125] (`CollisionWorld::sphere_meets_tris`). The old AABB stand-in was
-        //    a superset: 07000012's exit #669 is two crossed planes (y 0.676, z 9.962 [D]) inside
-        //    its 1.20..3.32 × 9.47..10.45 box, so a press from the security room at (1.12, 7.49)
-        //    facing north met the inflated box through the room's north wall, while the use point
-        //    sits 1.49 from the vertical plane and 1.11 above the horizontal one — no hit, as in
-        //    the game [L PCSX2 2026-10-31, docs/levels/07000012.md §3].
-        // Triggers without tris (synthetic test volumes) keep the AABB test.
+        // The game's pick is `Collide_SphereIntersect(1.0, head + viewer dir, player cel, player,
+        // BL+0x7e8, hits, 0, 0, 0)` [M 0x1a5170:100-108], whose per-object law is THREE stages:
+        // 1. The bounds-sphere pre-gate [M Collide_PickObj 0x1eae80:219-228]:
+        //    `dist²(use point, obj+0x80) < (1.0 + obj+0x8C)²` — obj+0x80/+0x8C are the MODEL's
+        //    world sphere (`Control_BuildWorldSph` 0x133070 poses the glist's local sphere), not
+        //    the collision AABB's. The port derives an ENCLOSING sphere from the trigger's
+        //    collision AABB (centre + half diagonal): it cannot refuse a point the exact stage
+        //    accepts, so the pre-gate only culls — the refine below decides, as in the game (the
+        //    node's distance is preset 1e8 and a refine miss leaves it [M 0x1ebaa8's mode-0x101
+        //    arm `+0xc = 0x4cbebc20`; 0x1ec940's finalize drops the 1e8 nodes]).
+        // 2. The cel scope (`Collide_Pick` 0x1eb320 walks the objects linked to the cels the use
+        //    sphere straddles [M :125, :313-328]) is NOT modelled: the port carries no trigger
+        //    obj+0x80/cel links, and a trial gate refused real presses (0700000d's E panel #450
+        //    resolved to cel 6 at its box centre while Bond, standing at it, sat in cel 93 —
+        //    use_key_census_live). The class-0x1D arm has no facing or line-of-sight test [M
+        //    0x1a5170:134-137].
+        // 3. The refine [M Collide_Intersect 0x1ebaa8:186-190 → Intersect_PointGeom 0x1e92d8]:
+        //    the use point vs the object's glist tris. The signed plane distance X must sit in
+        //    (fVar25, radius] [M 0x1e92d8:200 skips X > radius; :227 skips X < fVar25] with
+        //    fVar25 = 0 for the use pick — the flags word hittest+0x9a is the call's param_9, 0
+        //    here [M 0x1ec940's `uStack_1d8 = param_9`; 0x1e92d8:110-113 fVar25 = −radius only
+        //    when +0x9a & 8] — and the triangle registers when `vecutil_Dist2Tri_PointGeom`'s
+        //    CLAMPED closest distance is ≤ the radius [M 0x1e92d8:229-231], edge/vertex clamps
+        //    included (`CollisionWorld::sphere_meets_tris`). Triggers without tris keep the AABB
+        //    test: the game refuses a glist-less object [M 0x1ebaa8:89-92 `obj+0xD8 == 0`
+        //    returns no hit], so this arm is cover for a trigger whose glist the port has not
+        //    parsed yet — a port-gap stand-in, not game behaviour (a live check asks gdbwatch to
+        //    confirm the disc gives those triggers a glist).
         let hits: Vec<usize> = (0..self.triggers.len()).filter(|&i| {
+            if scope.is_some_and(|s| !s.get(i).copied().unwrap_or(true)) { return false; }
             let t = &self.triggers[i];
-            if (0..3).any(|k| use_point[k] + r < t.lo[k] || use_point[k] - r > t.hi[k]) { return false; }
-            t.tris.is_empty() || CollisionWorld::sphere_meets_tris(use_point, r, &t.tris)
+            if t.tris.is_empty() {
+                // The stand-in arm decides alone, so it keeps the TIGHT per-axis sphere-vs-box
+                // test (a pre-gate looser than the box — e.g. the bounds sphere of a long thin
+                // exit plane — would fire exits the game refuses; use_key_census_live's
+                // 07000001 door row is the regression pin).
+                return !(0..3).any(|k| use_point[k] + r < t.lo[k] || use_point[k] - r > t.hi[k]);
+            }
+            let centre = [(t.lo[0] + t.hi[0]) * 0.5, (t.lo[1] + t.hi[1]) * 0.5, (t.lo[2] + t.hi[2]) * 0.5];
+            let half = [t.hi[0] - centre[0], t.hi[1] - centre[1], t.hi[2] - centre[2]];
+            let bound_r = (half[0] * half[0] + half[1] * half[1] + half[2] * half[2]).sqrt();
+            let d = [use_point[0] - centre[0], use_point[1] - centre[1], use_point[2] - centre[2]];
+            let d2 = d[0] * d[0] + d[1] * d[1] + d[2] * d[2];
+            if d2 >= (r + bound_r) * (r + bound_r) { return false; }
+            CollisionWorld::sphere_meets_tris(use_point, r, &t.tris)
         }).collect();
         for i in hits {
             let (sets, next) = self.triggers[i].activate_request(&self.channels);
@@ -17954,32 +18026,21 @@ fn segment_hits_sphere(a: V3, b: V3, c: V3, r: f32) -> bool {
             }
         }
         } // end `NPCGlobals` shared-pass block
-        // Bond's motion (`DroneWeap_DoOpponentTargetting` 0x179a48): the target object's class byte
-        // `obj+0xFF == 3` is the player object [M :34, Player_Init 0x1910f8:76], so the moving byte
-        // `DL+0x1DC` is ALWAYS the move-quad test `|(BL+0x10, 0, BL+0x18)| != 0` [M :35-41] - on foot
-        // exactly as in zero-g, never a position change (the game's position-delta targetting is the
-        // multiplayer bots' `BOT_opponentTargetting` 0x125b30). On foot the quad is the walk/strafe
-        // lanes `Player_Update` zeroes every active tick [M 0x193600:131-133] and `Player_Move`
-        // stores [M 0x191dd0:166-170] (`Player::move_local`): held input against a wall keeps it
-        // non-zero where Bond's position pins, and the climb/creep bodies store nothing. In zero-g it
-        // is the thruster pair [M 0x192ab0:113,135] the viewer hands over as `player_move_local`.
-        // Moving arms "first moved" (+0x1DD) from the start of a move, stillness arms "first
-        // stopped" (+0x1DF) from the start of a stop, each until `stamp + fptoui(T * 60) < now` (the
-        // strict compare keeps the flag on the boundary tick) [M :47-73]; T = the level's
-        // TargetFirstMoved / TargetFirstStopped_TimeToHit (2.0 s; 1.0 s for the stop on 0C/0D).
-        // The hit roll multiplies all three in [M DroneWeap_DoBulletAccuracy 0x179740:52-73].
+        // Bond's motion quad — the read EVERY drone's targetting makes each tick
+        // (`DroneWeap_DoOpponentTargetting` 0x179a48): the target object's class byte `obj+0xFF == 3`
+        // is the player object [M :34, Player_Init 0x1910f8:76], so the moving byte `DL+0x1DC` is
+        // ALWAYS the move-quad test `|(BL+0x10, 0, BL+0x18)| != 0` - on foot exactly as in zero-g,
+        // never a position change (the game's position-delta targetting is the multiplayer bots'
+        // `BOT_opponentTargetting` 0x125b30). On foot the quad is the walk/strafe lanes
+        // `Player_Update` zeroes every active tick [M 0x193600:131-133] and `Player_Move` stores
+        // [M 0x191dd0:166-170] (`Player::move_local`): held input against a wall keeps it non-zero
+        // where Bond's position pins, and the climb/creep bodies store nothing. In zero-g it is the
+        // thruster pair [M 0x192ab0:113,135] the viewer hands over as `player_move_local`. The
+        // LATCHES are per drone (Drone+0x224, +0x1DD/+0x1DE, +0x1DF/+0x1E0 [M :47-73]) and update in
+        // each drone's own weapon pass (`DroneWeap_HandleFiring` 0x17a180:29/59 runs the targetting
+        // per drone in BOTH arms): the tick hands every guard this same quad read and
+        // `Drone::observe_target_motion` does the latching per guard.
         let quad = self.player_move_local.unwrap_or(player.move_local);
-        let moving = quad[0] != 0.0 || quad[1] != 0.0;
-        if moving { self.stopped_since = None; if self.moved_since.is_none() { self.moved_since = Some(frame) } }
-        else { self.moved_since = None; if self.stopped_since.is_none() { self.stopped_since = Some(frame) } }
-        let t_moved = (d.tuning.DroneFiring_TargetFirstMoved_TimeToHit * 60.0) as u32;
-        let t_stopped = (d.tuning.DroneFiring_TargetFirstStopped_TimeToHit * 60.0) as u32;
-        let motion = Motion {
-            moving,
-            first_moved: self.moved_since.is_some_and(|f| frame <= f + t_moved),
-            first_stopped: self.stopped_since.is_some_and(|f| frame <= f + t_stopped),
-        };
-        self.target_motion = (motion.moving, motion.first_moved);
         // `NDrone2_NavNodeCache` / `BuildAITarget`: the player's goal nodes per navigation path, rebuilt when he has
         // moved 2.0 or more (search radius 6 = min(engage range, 6) for these guards); `AINetwork_ClearLinkFlags`.
         // A `Drone_InitComms` shared pass after the vision pass [M 0x139520:202] — gated on `NPCGlobals`.
@@ -18219,12 +18280,14 @@ fn segment_hits_sphere(a: V3, b: V3, c: V3, r: f32) -> bool {
         // Bond's turn in the object walk, AFTER Trigger_Calc's touch clear and BEFORE the later
         // muxes' updates in the same walk [M 0x1336f8's loop; Player_Activate 0x1a5170]. Consumed
         // here so the written channel survives to the mux walk (0700000c's secret door).
-        if let Some((head, look)) = self.use_trigger_request.take() {
-            self.player_use_triggers(head, look, frame);
+        if let Some((head, look, scope)) = self.use_trigger_request.take() {
+            self.player_use_triggers(head, look, frame, scope.as_deref());
         }
         // mp-world-sync: online, every pressing body's trigger half, in slot order.
         for (head, look) in std::mem::take(&mut self.net_use_triggers) {
-            self.player_use_triggers(head, look, frame);
+            // The MP bodies carry no cel scope: the net path's per-slot semantics are the port's
+            // own (net_use_pass), and a body without a resolved cel is ungated (fail-open).
+            self.player_use_triggers(head, look, frame, None);
         }
         // `switch_channels_prev` is snapshotted right after `Trigger_Calc`, BEFORE the object walk [M 0x1336f8:52-53
         // — `prev ← hold; hold ← channels` at 0x1337cc/0x1337dc] — so `Door_Update`'s lock rising edge
@@ -19457,7 +19520,7 @@ fn segment_hits_sphere(a: V3, b: V3, c: V3, r: f32) -> bool {
                 dr.head_yaw = rotate_to_bearing(dr.head_yaw, 0.0, 0.07, crate::trig::PI);
                 dr.head_pitch = rotate_to_bearing(dr.head_pitch, 0.0, 0.07, crate::trig::PI);
             }
-            if !dr.corpse { let _pf = crate::prof::scope("drone: handle_firing"); let bs = { let lights = &mut self.lights; dr.handle_firing(d, rng, frame, player, motion, index, lights) }; if let Some(b) = bs.first().cloned() {
+            if !dr.corpse { let _pf = crate::prof::scope("drone: handle_firing"); let bs = { let lights = &mut self.lights; dr.handle_firing(d, rng, frame, player, quad, index, lights) }; if let Some(b) = bs.first().cloned() {
                 // `DroneWeap_FireWeapon` 0x178f68:264 → `Bullet_init_casing`: the guard's shell eject.
                 // The basis is the game's guard arm of `Bullet_init_casing_ex` 0x12f678:102-114: the
                 // weapon datum's bone world matrix (datum base+2 when the skin carries the eject port,
@@ -21154,6 +21217,10 @@ mod tests {
             target_id: 0xff,
             // 0700004a dead-body-keeps-gravity (AbseilDeath's ENTER arm) — see the field.
             keeps_gravity: false,
+            // The per-drone motion stamps (DroneWeap_DoOpponentTargetting 0x179a48:47-73) — see the fields.
+            moved_since: None,
+            stopped_since: None,
+            target_motion: Motion::default(),
         };
         dr
     }
@@ -21428,11 +21495,12 @@ mod abseil_tests {
     /// (the player object [M Player_Init 0x1910f8:76]) sets `DL+0x1DC = |(BL+0x10, 0, BL+0x18)| != 0`
     /// from the move quad `Player_Update` zeroes every active tick [M 0x193600:131-133] and
     /// `Player_Move` fills from the eased walk lanes [M 0x191dd0:166-170]. Moving arms the +0x1DD
-    /// "first moved" byte [M :69-79]; stillness clears it and +0x1DE the same tick [M :44-46].
+    /// "first moved" byte [M :65-73]; stillness clears it and +0x1DE the same tick [M :47-49].
     /// Sisters: the first-moved window is the level's `TargetFirstMoved_TimeToHit` (2.0 s → 120
     /// ticks [M ReadTuningVars 0x1d3a80]) with the strict `stamp + T < now` clear [M :70-73], and
     /// the zero-g thruster pair (`player_move_local`) is the quad when the viewer hands it over —
-    /// a still float reads still whatever the on-foot lanes hold.
+    /// a still float reads still whatever the on-foot lanes hold. The bytes live PER GUARD: the
+    /// read here is the single guard's own `Drone::target_motion`.
     #[test]
     fn target_moving_reads_the_move_quad_not_a_position_delta() {
         let world = CollisionWorld::empty();
@@ -21456,7 +21524,9 @@ mod abseil_tests {
             sequences: &seqs, skins: &skins, skeletons: &skeletons, nav: &nav, covers: &covers, tuning: &tuning,
             hitboxes: &hitboxes, volumes: &volumes, sfx: None, models: &models, surfaces: None, voices: None,
             difficulty: 2, ai_points: &ai_points };
-        let mut drones = Drones::new(Vec::new(), Rng::new(0x5eed));
+        // The latches live on the guard ([M 0x179a48:47-73] the per-drone +0x1DD/+0x1DF/+0x224):
+        // one guard in the walk, read through its own weapon pass.
+        let mut drones = Drones::new(vec![drone_at([10.0, 0.0, 10.0])], Rng::new(0x5eed));
         let mut player = Player::default();
         // A walking Bond (the quad non-zero) reads moving + first moved on the first tick EVEN with
         // the position identical to every other tick — the old port read keyed on the position delta
@@ -21464,28 +21534,94 @@ mod abseil_tests {
         player.pos = [10.0, 0.0, 10.0];
         player.move_local = [0.0, 0.05];
         drones.tick_inner(&d, &player);
-        assert!(drones.target_motion.0, "a non-zero quad reads moving [M 0x179a48:39-41]");
-        assert!(drones.target_motion.1, "the first-moved byte arms [M 0x179a48:69-79]");
+        assert!(drones.list[0].target_motion.moving, "a non-zero quad reads moving [M 0x179a48:39-41]");
+        assert!(drones.list[0].target_motion.first_moved, "the first-moved byte arms [M 0x179a48:65-68]");
+        assert_eq!(drones.list[0].moved_since, Some(1), "the guard's own stamp latched on its first pass [M 0x179a48:67]");
         // The held quad keeps moving; the first-moved byte holds through stamp + 120 (the strict
         // `<` clear) and drops on the next tick [M 0x179a48:70-73].
         for _ in 0..120 { drones.tick_inner(&d, &player); }
-        assert!(drones.target_motion.0 && drones.target_motion.1, "first moved still on at stamp + 120");
+        assert!(drones.list[0].target_motion.moving && drones.list[0].target_motion.first_moved, "first moved still on at stamp + 120");
         drones.tick_inner(&d, &player);
-        assert!(drones.target_motion.0, "still moving");
-        assert!(!drones.target_motion.1, "first moved clears at stamp + 121");
-        // A still Bond (the quad zeroed each tick, no Player_Move store) clears both bytes.
+        assert!(drones.list[0].target_motion.moving, "still moving");
+        assert!(!drones.list[0].target_motion.first_moved, "first moved clears at stamp + 121 [M 0x179a48:70-73]");
+        assert_eq!(drones.list[0].moved_since, Some(1), "the stamp stays past the window (the +0x1DE flag keeps standing, no re-latch [M :65])");
+        // A still Bond (the quad zeroed each tick, no Player_Move store) clears both bytes and
+        // arms the first-stopped latch with its own stamp.
         player.move_local = [0.0, 0.0];
         drones.tick_inner(&d, &player);
-        assert!(!drones.target_motion.0 && !drones.target_motion.1, "a zeroed quad reads still [M 0x179a48:47-49]");
+        let m = drones.list[0].target_motion;
+        assert!(!m.moving && !m.first_moved, "a zeroed quad reads still [M 0x179a48:47-49]");
+        assert!(m.first_stopped, "the stop arms the first-stopped latch [M 0x179a48:51-55]");
+        assert!(drones.list[0].stopped_since.is_some(), "the stopped stamp latched [M 0x179a48:53]");
         // Zero-g: the handed-over thruster pair is the quad. A still pair reads still even with
         // non-zero on-foot lanes; a live pair reads moving with zeroed lanes.
         player.move_local = [0.0, 0.05];
         drones.player_move_local = Some([0.0, 0.0]);
         drones.tick_inner(&d, &player);
-        assert!(!drones.target_motion.0, "the still thruster pair reads still");
+        assert!(!drones.list[0].target_motion.moving, "the still thruster pair reads still");
         player.move_local = [0.0, 0.0];
         drones.player_move_local = Some([0.01, 0.0]);
         drones.tick_inner(&d, &player);
-        assert!(drones.target_motion.0, "a live thruster pair reads moving [M 0x192ab0:113,135]");
+        assert!(drones.list[0].target_motion.moving, "a live thruster pair reads moving [M 0x192ab0:113,135]");
+    }
+
+    /// The stamps are PER GUARD [M DroneWeap_DoOpponentTargetting 0x179a48:47-73 — the +0x1DD/
+    /// +0x1DF latches and the +0x224 stamp live on every Drone, and `DroneWeap_HandleFiring`
+    /// 0x17a180:29/:59 runs the targetting per drone in both arms]: a guard that starts tracking
+    /// later latches the move start at ITS first weapon pass and clears its first-moved term 121
+    /// ticks after THAT. Two guards that start tracking at different ticks clear at different
+    /// ticks — the port's old single global stamp cleared every guard together.
+    #[test]
+    fn two_guards_that_start_tracking_at_different_ticks_clear_at_different_ticks() {
+        let world = CollisionWorld::empty();
+        let tables = nf_formats::drone::DroneAnimData { states: Vec::new(), info: Vec::new(), tables: Vec::new() };
+        let props = nf_formats::drone::PropertyTables { descs: Vec::new(), masks: Vec::new(), types: Vec::new() };
+        let scripts = std::collections::HashMap::new();
+        let weapons = nf_formats::weapon::WeaponData { records: Vec::new(), ammo_cap: Vec::new(), ammo_raw: Vec::new() };
+        let seqs = std::collections::HashMap::new();
+        let skins = std::collections::HashMap::new();
+        let skeletons = std::collections::HashMap::new();
+        let nav = crate::nav::Network::default();
+        let covers = Vec::new();
+        let mut tuning = nf_formats::tuning::Tuning::default();
+        crate::tuning::read_tuning_vars(&mut tuning, 0x0700_0001);
+        let hitboxes = nf_formats::hitbox::CollisionBones { human: Vec::new(), astronaut: Vec::new() };
+        let volumes = Vec::new();
+        let models = std::collections::HashMap::new();
+        let ai_points = Vec::new();
+        let d = Data { tables: &tables, props: &props, scripts: &scripts, weapons: &weapons, world: &world, level: 0x0700_0001,
+            sequences: &seqs, skins: &skins, skeletons: &skeletons, nav: &nav, covers: &covers, tuning: &tuning,
+            hitboxes: &hitboxes, volumes: &volumes, sfx: None, models: &models, surfaces: None, voices: None,
+            difficulty: 2, ai_points: &ai_points };
+        let mut drones = Drones::new(vec![drone_at([10.0, 0.0, 10.0])], Rng::new(0x5eed));
+        let mut player = Player::default();
+        player.pos = [10.0, 0.0, 10.0];
+        // Bond walks from the first tick; guard A tracks from ITS first pass — the stamp is the
+        // observing tick [M 0x179a48:65-68].
+        player.move_local = [0.0, 0.05];
+        drones.tick_inner(&d, &player); // frame 1
+        assert_eq!(drones.list[0].moved_since, Some(1), "guard A latched at its first pass [M 0x179a48:67]");
+        // Guard B only starts tracking at frame 50 — it enters the object walk there (a later
+        // spawn/enabled guard's first weapon pass). Before it the latches are nil — nothing
+        // global ever held them.
+        for _ in 1..49 { drones.tick_inner(&d, &player); } // frames 2..49
+        assert!(drones.list.len() == 1 && drones.list[0].moved_since == Some(1));
+        drones.list.push(drone_at([20.0, 0.0, 20.0]));
+        drones.tick_inner(&d, &player); // frame 50: B's first pass
+        assert_eq!(drones.list[1].moved_since, Some(50), "guard B latched at ITS first pass, 49 ticks after A [M 0x179a48:65-68]");
+        assert!(drones.list[1].target_motion.first_moved, "B's first-moved stands");
+        // A holds through its stamp + 120 (frame 121, the strict clear [M :70-73]); B — whose
+        // stamp is 49 ticks later — still holds.
+        for _ in 0..71 { drones.tick_inner(&d, &player); } // frame 121
+        assert!(drones.list[0].target_motion.first_moved, "A holds through stamp + 120 [M :70-73]");
+        assert!(drones.list[1].target_motion.first_moved, "B holds (its stamp is 49 ticks later)");
+        drones.tick_inner(&d, &player); // frame 122
+        assert!(!drones.list[0].target_motion.first_moved, "A cleared at stamp + 121 [M :70-73]");
+        assert!(drones.list[1].target_motion.first_moved, "B STILL holds — the clears are per guard, not one global stamp");
+        // B clears at its own stamp + 121 = frame 171.
+        for _ in 0..48 { drones.tick_inner(&d, &player); } // frame 170
+        assert!(drones.list[1].target_motion.first_moved, "B holds through its stamp + 120");
+        drones.tick_inner(&d, &player); // frame 171
+        assert!(!drones.list[1].target_motion.first_moved, "B cleared at ITS stamp + 121 [M :70-73]");
     }
 }

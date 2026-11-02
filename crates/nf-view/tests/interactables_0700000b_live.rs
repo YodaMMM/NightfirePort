@@ -2,7 +2,10 @@
 //! the executive floor and the roof), driven the way a player drives it (the walk, the use key,
 //! the trigger pull, the walk-over), each asserting the game's effect with its sister. The census
 //! with the type table lives in docs/levels/0700000b.md; the end-to-end route is
-//! walkreal_0700000b_live.rs.
+//! walkreal_0700000b_live.rs. The kinds the census adds beyond the first nine: the Q-Worm
+//! console (0x35), the sound triggers (0xF9), the security cameras (0x28 Sensor), the lift's
+//! shaft plates (0xEB #245 / 0xEA #171) and the hint marker (0x33 — parse-model pin, the live
+//! firing path is the 0x13-documented port gap).
 //!
 //! Evidence tags: [M] the decompile address, [D] the disc bytes, [L] the EE snapshot. A teleport
 //! to reach a spot is used only where the walk there is a separately documented blocker
@@ -378,4 +381,304 @@ fn music_triggers_created_with_the_disc_params() {
     // The countdown behaviour itself is `WorldObjects`' unit pin (music_trigger_tests::
     // countdown_rearms_fires_and_expires); the sim's board slot is consumed inside the frame, so
     // the audible beat's visibility is the render/audio layer's (a live check).
+}
+
+/// The Q-Worm console (0x35 PCQWorm #297 SCOMP_QWORM_C at (−19.32, 48.13, 29.46), param 1 = 76 =
+/// ch 0x4C [D]): `PCQWorm_Update` 0x1aee20 state 0 waits for a class-5 object — a BULLET — and
+/// the Q-Worm gadget's install writes `switch_channels[76]` [M 0x1aee20; the disc's boot
+/// loadout owns weapon 0x58, M 0x1a7ef8 case 0x7000009/0a/0b equip 001a8494]. Driven by the
+/// real trigger pull (the same shot walkreal_0700000b_live's objective-7 leg fires). Sisters:
+/// ch 0x4C off and the PC in state 0 before the shot.
+#[test]
+fn qworm_console_installs_on_the_gadget_shot() {
+    let mut w = load_warm();
+    to_exec_floor(&mut w);
+    let pc = w.scene.sim.as_ref().unwrap().drones.useobjs.pcs.iter().find(|p| p.ch == 0x4c)
+        .expect("SCOMP_QWORM_C (0x35, ch 0x4C) [D #297]").pos;
+    {
+        let sim = w.scene.sim.as_ref().unwrap();
+        assert!(!sim.drones.channels.on(0x4c), "sister: ch 0x4C off before the shot [D #297 param 1]");
+        assert!(sim.drones.useobjs.pcs.iter().find(|p| p.ch == 0x4c).map(|p| p.state) == Some(0),
+            "sister: the PC rests in state 0 before the shot [M 0x1aee20]");
+        assert!(sim.drones.inventory.owned[0x58],
+            "the boot loadout owns the Q-Worm gadget 0x58 [M 0x1a7ef8 case 0x7000009/0a/0b]");
+    }
+    // The real trigger pull: stand at the proven desk approach (n26, the walked route's last
+    // nav point [D nis]; the interactables file's teleport stand-in) and walk the last leg to
+    // the desk, then the equip walkreal_0700000b_live's shot uses, and fire at the screen.
+    w.scene.sim.as_mut().unwrap().bond.pos = [-19.64, 47.2, 31.8];
+    w.scene.sim.as_mut().unwrap().bond.vel = [0.0; 3];
+    w.wait(10);
+    w.try_walk_to(Wp::new(pc[0] + 0.6, pc[1] - 0.5, pc[2] + 0.9).r(1.0), "the Q-Worm C desk (the walked leg)");
+    // The equip: the game's own gadget cycle (the d-pad's `Player_WeaponChange` mode 1,
+    // bounds 0x4A..0x5E [M 0x1a6f80]) steps to the disc-owned Q-Worm 0x58 through the real
+    // switch state machine (holster/draw waits between steps).
+    let mut got = false;
+    for _ in 0..12 {
+        if w.scene.sim.as_ref().unwrap().gun.weapon == 0x58 { got = true; break; }
+        w.tick(nf_game::player::Input { gadget_cycle: 1, ..Default::default() }, false);
+        for _ in 0..60 { w.tick(Default::default(), false); }
+    }
+    assert!(got, "the gadget cycle draws the Q-Worm 0x58 [M Player_WeaponChange 0x1a6f80 mode 1]");
+    w.wait(30);
+    // The shot: walkreal's proven aim point (the screen band pc+0.55); if the desk's screen
+    // collision truncates the dart high, the fallback band pc+0.1 (the box face at centre
+    // height) is the second stance.
+    let mut installed = shoot_at(&mut w, [pc[0], pc[1] + 0.55, pc[2]], 2.6, 900,
+        "the Q-Worm C shot", &|sim| sim.drones.channels.on(0x4c));
+    if !installed {
+        w.scene.sim.as_mut().unwrap().bond.pos = [pc[0] + 0.6, pc[1] - 0.5, pc[2] + 0.9];
+        w.scene.sim.as_mut().unwrap().bond.vel = [0.0; 3];
+        w.wait(10);
+        installed = shoot_at(&mut w, [pc[0], pc[1] + 0.1, pc[2]], 2.6, 900,
+            "the Q-Worm C shot (low band)", &|sim| sim.drones.channels.on(0x4c));
+    }
+    if !installed {
+        let sim = w.scene.sim.as_ref().unwrap();
+        eprintln!("[0b-qworm] shot missed: weapon {:#x} req {:#x} owned58 {} pos {:?} pc_state {:?} disabled {} sub {} carried {:?}",
+            sim.gun.weapon, sim.gun.switch_request, sim.drones.inventory.owned[0x58], sim.bond.pos,
+            sim.drones.useobjs.pcs.iter().find(|p| p.ch == 0x4c).map(|p| p.state),
+            sim.disabled, sim.bond.substate, sim.drones.inventory.carried);
+    }
+    assert!(installed, "the gadget shot lands and installs [M PCQWorm_Update 0x1aee20]");
+    assert!(w.scene.sim.as_ref().unwrap().drones.channels.on(0x4c),
+        "the install writes switch_channels[76] [M 0x1aee20; D #297 param 1]");
+}
+
+/// The sound triggers (0xF9 ×12 "Sound Trigger" [D census]): `SoundTrigger_Update` 0x1b2790
+/// starts a trigger's sound while its ON channel (param 0) is up [M sound.rs]. #330's on-channel
+/// is the terminal-room plate's ch 0x4D (id 1158, param 3 = 1 = 2D [D #330 params]) and #331's
+/// is the dome fence's ch 0x0D (id 1159, 2D [D #331]) — both driven by the SAME real walks the
+/// plate kinds pin: the walked-over plate #163 (0xEA, out ch 0x4D, mask 8 [D]) and the walked
+/// beam #272 crossing (0xEB, out ch 0x0D [D]). Sisters: neither id plays on a fresh load.
+#[test]
+fn sound_triggers_play_on_their_channels_real_writes() {
+    let mut w = load_warm();
+    to_exec_floor(&mut w);
+    {
+        let sim = w.scene.sim.as_ref().unwrap();
+        assert!(sim.drones.sound_triggers.list.iter().any(|t| t.on == 0x4d && t.id == 1158),
+            "the ch-0x4D sound trigger #330 exists [D #330 params]");
+        assert!(sim.drones.sound_triggers.list.iter().any(|t| t.on == 0x0d && t.id == 1159),
+            "the ch-0x0D sound trigger #331 exists [D #331 params]");
+        assert!(!sim.drones.sound_triggers.playing(1158) && !sim.drones.sound_triggers.playing(1159),
+            "sister: neither trigger plays on a fresh load [M 0x1b2790's channel-edge start]");
+        assert!(!sim.drones.channels.on(0x4d), "sister: the terminal-room plate silent [D #163]");
+    }
+    // The dome-side stand the laserbeam test proves (−1.0, 47.5, −5.5) sits inside plate
+    // #163's box [−3.04, 46.73, −6.67]-[1.23, 48.92, −4.48] [D] — the walk-over fires ch 0x4D.
+    w.scene.sim.as_mut().unwrap().bond.pos = [-1.0, 47.5, -5.5];
+    w.scene.sim.as_mut().unwrap().bond.vel = [0.0; 3];
+    let mut plate = false;
+    for _ in 0..60 {
+        w.tick(Default::default(), false);
+        if w.scene.sim.as_ref().unwrap().drones.channels.on(0x4d) { plate = true; break; }
+    }
+    assert!(plate, "the walked-over plate #163 writes ch 0x4D [D #163; M triggers.rs]");
+    let mut s1158 = false;
+    for _ in 0..30 {
+        w.tick(Default::default(), false);
+        if w.scene.sim.as_ref().unwrap().drones.sound_triggers.playing(1158) { s1158 = true; break; }
+    }
+    assert!(s1158, "the ch-0x4D edge starts sound 1158 [M SoundTrigger_Update 0x1b2790; D #330]");
+    // The kind's remaining law is the single global voice [M 0x1b2790:19-28]: #331 (also global,
+    // param 5 = 1 [D]) may only start while the slot is free. Whether the DISC's 1159 sounds at
+    // the fence crossing after the terminal visit depends on 1158's sample length — the PS2
+    // driver's `Sound_IsFinnished` answer, which the headless port does not model (its voices
+    // end only on a stop) — so the slot law on this level's pair is a live check, not an
+    // assertion here.
+}
+
+/// The security cameras (0x28 Sensor ×2 [D census]): `Sensor_Update` 0x1af618 counts
+/// consecutive in-cone ticks (`Sensor_InCone` 0x1af4f0: the placement apex, the param-1 cone
+/// angle, the param-2 range, the LOS beam), alerts at 0x1e into the track state, and after 2 s
+/// of continuous sight writes 1 to its OUT channel (param 3) [M 0x1af618:154-157]. Camera
+/// #172's out is ch 39 and #164's is ch 40 [D params]. Driven by the real sight path: Bond
+/// stands where the sweep aims (the stance enumerates the cone the sweep presents — the subject
+/// is the detection law, not movement, like the files-plate stances). Sisters: both channels
+/// off at load, and #164's ch 40 stays silent while #172 fires (the per-sensor law).
+#[test]
+fn exec_camera_sight_fires_its_out_channel() {
+    let mut w = load_warm();
+    to_exec_floor(&mut w);
+    {
+        let sim = w.scene.sim.as_ref().unwrap();
+        assert!(sim.drones.sensors.list.iter().any(|s| s.out == 39), "camera #172 exists (out ch 39) [D]");
+        assert!(sim.drones.sensors.list.iter().any(|s| s.out == 40), "camera #164 exists (out ch 40) [D]");
+        assert!(!sim.drones.channels.on(39) && !sim.drones.channels.on(40),
+            "sister: both camera channels off at load [M 0x1af618 state 0 clears its out]");
+    }
+    let si = w.scene.sim.as_ref().unwrap().drones.sensors.list.iter()
+        .position(|s| s.out == 39).expect("camera #172");
+    // The chase: each tick place Bond at the sweep's current aim (2.5 m out, shortened inside
+    // the beam's first hit so the stance stays in clear air) — he is then IN the cone by
+    // construction every tick, the seen counter runs consecutively [M 0x1af618:211-216], and
+    // the track state holds him once it alerts.
+    let mut seen = false;
+    for _ in 0..900 {
+        {
+            let sim = w.scene.sim.as_mut().unwrap();
+            let s = &sim.drones.sensors.list[si];
+            let d = [s.matrix[2][0], s.matrix[2][1], s.matrix[2][2]];
+            let dist = if s.beam_len > 0.0 && s.beam_len < 2.5 { (s.beam_len * 0.7).max(1.0) } else { 2.5 };
+            sim.bond.pos = [s.pos[0] + d[0] * dist, s.pos[1] + d[1] * dist, s.pos[2] + d[2] * dist];
+            sim.bond.vel = [0.0; 3];
+        }
+        w.tick(Default::default(), false);
+        if w.scene.sim.as_ref().unwrap().drones.sensors.list[si].last_hit { seen = true; break; }
+    }
+    assert!(seen, "the sweep's cone takes the stance [M Sensor_InCone 0x1af4f0]");
+    // Hold: the tracker keeps the cone on him; the 2 s detect clock trips the out write.
+    let mut fired = false;
+    for _ in 0..400 {
+        w.tick(Default::default(), false);
+        if w.scene.sim.as_ref().unwrap().drones.channels.on(39) { fired = true; break; }
+    }
+    {
+        let sim = w.scene.sim.as_ref().unwrap();
+        assert!(fired, "2 s of sight writes ch 39 [M 0x1af618:154-157; D #172 param 3]");
+        assert!(!sim.drones.channels.on(40),
+            "sister: camera #164's ch 40 stays silent while #172 fires [D #164 param 3; M the per-sensor law]");
+    }
+}
+
+/// The lift's shaft plates (0xEB #245 "lift_stop_trigger" out ch 117 = 0x75; 0xEA #171
+/// "oDroneTrigger2" mid-shaft out ch 83 = 0x53, both mask 8 [D params]): the Touch/TouchOnce
+/// laws fire on the crossing [M triggers.rs] — the plates the cab ride crosses (the ride is
+/// walkreal_0700000b_live's pin; whether a DECK-walking player alone touches #245 is the level
+/// doc's open live check, so the stance here is the box interior — the subject is the plate's
+/// channel law, not movement). Sisters: both channels off before each touch.
+#[test]
+fn lift_shaft_plates_fire_on_the_touch() {
+    let mut w = load_warm();
+    to_exec_floor(&mut w);
+    let (i245, i171) = {
+        let sim = w.scene.sim.as_ref().unwrap();
+        assert!(!sim.drones.channels.on(0x75) && !sim.drones.channels.on(0x53),
+            "sister: both shaft-plate channels off before [D #245/#171 out params]");
+        (sim.drones.triggers.iter().position(|t| t.out == 0x75).expect("lift_stop_trigger #245 [D]"),
+         sim.drones.triggers.iter().position(|t| t.out == 0x53).expect("the mid-shaft plate #171 [D]"))
+    };
+    // Touch #245: hold Bond inside the box (two y stances cover the toucher's −0.6 law).
+    let (c245, lo245, hi245) = box_of(&w, i245);
+    let mut stop = false;
+    for y in [hi245[1] - 0.5, lo245[1] + 0.7] {
+        for _ in 0..30 {
+            {
+                let sim = w.scene.sim.as_mut().unwrap();
+                sim.bond.pos = [c245[0], y, c245[2]];
+                sim.bond.vel = [0.0; 3];
+            }
+            w.tick(Default::default(), false);
+            if w.scene.sim.as_ref().unwrap().drones.channels.on(0x75) { stop = true; break; }
+        }
+        if stop { break; }
+    }
+    assert!(stop, "the shaft-top stop plate writes ch 0x75 on the crossing [D #245 out 117; M triggers.rs]");
+    // Touch #171 (mid-shaft, y 37.5-39.7 [D doc]): same law, its own sister.
+    assert!(!w.scene.sim.as_ref().unwrap().drones.channels.on(0x53),
+        "sister: the mid-shaft plate silent before its touch [D #171]");
+    let (c171, lo171, hi171) = box_of(&w, i171);
+    let mut mid = false;
+    for y in [hi171[1] - 0.5, lo171[1] + 0.7] {
+        for _ in 0..30 {
+            {
+                let sim = w.scene.sim.as_mut().unwrap();
+                sim.bond.pos = [c171[0], y, c171[2]];
+                sim.bond.vel = [0.0; 3];
+            }
+            w.tick(Default::default(), false);
+            if w.scene.sim.as_ref().unwrap().drones.channels.on(0x53) { mid = true; break; }
+        }
+        if mid { break; }
+    }
+    assert!(mid, "the mid-shaft plate writes ch 0x53 on the crossing [D #171 out 83; M triggers.rs]");
+}
+
+/// The hint marker (0x33 "Message" #354, the level's only one [D census]): the parse-model pin
+/// (the port's hints are the parse-time model `nf_game::player::hints`; the live firing path —
+/// `Hint_Update` 0x1b3380's one-shot TXTMSG type 1 + sound + the delete bit — is not in the
+/// sim, the same port gap interactables_07000013_live documents). The disc's params [D #354]:
+/// label 0x02000021, sound 0, stage 3, no on-channel, off-channel 79 = ch 0x4F (the AND of
+/// objectives 7+9 — the hint goes silent once the mission's mid-gate lands [D #299]). Sister:
+/// the stage gate refuses it on the hardest difficulty [M 0x1b3248:12-25].
+#[test]
+fn the_message_hint_carries_the_disc_params() {
+    let img = nf_formats::iso9660::IsoImage::open(&iso()).expect("open iso");
+    let (entries, bin) = nf_formats::disc::files_bin_entries(&img).expect("FILES.BIN");
+    let fe = entries.iter().find(|e| e.name.eq_ignore_ascii_case("0700000b.bin")).expect("0700000b.bin");
+    let data = img.read_bytes(bin.lba as u64 * 2048 + fe.offset as u64, fe.size as u64).expect("read");
+    let lv = nf_formats::level::Level::parse(&data).expect("parse");
+    let hints = nf_game::player::hints(&lv, 1);
+    assert_eq!(hints.len(), 1, "the level's one hint marker, nothing else [D census]");
+    let h = &hints[0];
+    assert_eq!(h.label, 0x0200_0021, "the hint's text label [D #354 param 0]");
+    assert_eq!(h.sound, 0, "the hint is silent (param 1 = 0) [D #354]");
+    assert_eq!(h.stage, 3, "the stage word [D #354 param 2]");
+    assert_eq!(h.on_channel, 0, "no arm channel — always armed [D #354 param 3]");
+    assert_eq!(h.off_channel, 79, "the off-channel is ch 0x4F, the objectives' AND [D #354 param 4; D #299]");
+    assert!((walker::dxz(h.pos, [-13.764, 47.872, 6.450])) < 0.2,
+        "the hint sits at its placement spot [D #354]");
+    // Sister: the stage gate [M 0x1b3248:12-25] — stage 3 fires on difficulties ≤ 3 and is
+    // refused on 4 (the hint_stage_gates port of the same compare).
+    assert!(nf_game::player::hint_stage_gates(3, 1), "stage 3 shows on Operative [M 0x1b3248:12-25]");
+    assert!(!nf_game::player::hint_stage_gates(3, 4), "sister: stage 3 is refused on 00 Agent [M 0x1b3248:12-25]");
+}
+
+/// The trigger box's (centre, lo, hi) — the stance helper for the placed-touch laws.
+fn box_of(w: &Walker, ti: usize) -> ([f32; 3], [f32; 3], [f32; 3]) {
+    let t = &w.scene.sim.as_ref().unwrap().drones.triggers[ti];
+    (t.centre(), t.lo, t.hi)
+}
+
+/// A y stance just above the box's floor (the toucher lands inside for any box ≥ 0.7 tall).
+/// (the stance helpers were inlined at the call sites)
+
+/// The real trigger pull at a target (walkreal_0700000b_live's helper): aim the head at the
+/// target from Bond's eye, pull the trigger when on-target, until `done` or the tick cap.
+fn shoot_at(w: &mut Walker, target: [f32; 3], range: f32, max_ticks: u32, label: &str, done: &dyn Fn(&nf_view::scene::Sim) -> bool) -> bool {
+    let _ = label;
+    let start = w.total_ticks;
+    let mut last_tap = 0u32;
+    let mut tapped_once = false;
+    loop {
+        if done(&w.scene.sim.as_ref().unwrap()) { return true; }
+        if w.total_ticks - start >= max_ticks { return false; }
+        {
+            let sim = w.scene.sim.as_ref().unwrap();
+            let bp = sim.bond.pos;
+            let eye = bp[1] + sim.bond.eye - sim.bond.crouch_drop;
+            let dx = target[0] - bp[0];
+            let dz = target[2] - bp[2];
+            let dy = target[1] - eye;
+            if (dx * dx + dy * dy + dz * dz).sqrt() > range { return false; }
+            let desired = dx.atan2(dz);
+            let err = walker::wrap_pi(desired - sim.bond.yaw);
+            let want_pitch = (dy / walker::dxz(bp, target).max(0.5)).atan() / std::f32::consts::FRAC_PI_2;
+            let perr = want_pitch - sim.bond.pitch;
+            let on_target = err.abs() < 0.008 && perr.abs() < 0.012 && w.total_ticks - last_tap > 15;
+            let trigger = on_target;
+            if trigger { last_tap = w.total_ticks; }
+            let input = if trigger {
+                nf_game::player::Input { aiming: true, ..Default::default() }
+            } else {
+                nf_game::player::Input {
+                    turn: err.clamp(-0.08, 0.08),
+                    look: perr.clamp(-0.08, 0.08),
+                    aiming: true,
+                    ..Default::default()
+                }
+            };
+            w.scene.sim.as_mut().unwrap().step_bond(input, trigger, false, false);
+            if trigger && !tapped_once {
+                tapped_once = true;
+                let sim = w.scene.sim.as_ref().unwrap();
+                let (paths, wp) = sim.drones.bullet_paths();
+                eprintln!("[0b-qworm] first tap @{}: clip {} spare {} paths {} wp {:?} err {err:.4} perr {perr:.4}",
+                    w.total_ticks, sim.gun.clip, sim.gun.spare, paths.len(), wp);
+            }
+        }
+        w.total_ticks += 1;
+        w.after_step();
+    }
 }

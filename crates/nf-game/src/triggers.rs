@@ -376,7 +376,6 @@ pub fn capsule_hits_tris_strict(a: V3, b: V3, r: f32, tris: &[[V3; 3]]) -> bool 
     })
 }
 
-/// Whether the segment a–b crosses triangle t.
 fn segment_hits_triangle(a: V3, b: V3, t: &[V3; 3]) -> bool {
     let d = sub(b, a);
     let (e1, e2) = (sub(t[1], t[0]), sub(t[2], t[0]));
