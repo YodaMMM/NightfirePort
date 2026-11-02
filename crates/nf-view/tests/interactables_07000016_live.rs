@@ -414,6 +414,18 @@ fn the_launch_chain_rides_the_shuttle_bay_lift() {
     assert!(t50_on.is_some(), "the launch chain never wrote ch 0x50 — the lift summon [D 0600090a s21 event [80,1]; M Script_Update's event writer]");
     assert!(drop > 3.0, "the lift cab never descended (drop {drop:.2}) — the un-held script must key the cab down its 22.8-unit travel [M Script_Interp 0x1d9a08:106-133; D 060009e9 s1 keys 1.60→−21.22]");
     assert!(t50_off.is_some(), "the lift script never wrote its [80, 0] [D 060009e9 s7]");
+    // The ride's far end: the descend keys run to the bay floor (t540-549 y −21.22 [D s1]); the
+    // port's cab bottoms at −20.46 (the keys' asymptote / the script's loop return at t548) —
+    // the ride's observed minimum pins the bay-floor arrival.
+    let mut y_bot = 0.0f32;
+    for k in 0..1200u32 {
+        w.tick(nf_game::player::Input::default(), false);
+        let y = cab_y(w.scene.sim.as_ref().unwrap());
+        y_bot = y_bot.min(y);
+        if k == 0 || k % 100 == 0 { eprintln!("[16] cab y at clear+{k}: {y:.2}"); }
+    }
+    assert!(y_bot < -20.0,
+        "the cab's ride must reach the bay floor (the descend keys' −21.22 approach [D 060009e9 s1 t540-549]), min {y_bot:.2}");
     let (st, pos) = bay_drone(w.scene.sim.as_ref().unwrap()).expect("the bay drone #634 after the chain [D]");
     assert!(st != 1 && pos[1] < drone0.map(|(_, p)| p[1]).unwrap_or(0.74) - 1.0,
         "the bay drone #634 never woke/rode the cab down (state {st}, y {:.2}) [D #634 p3 = 0x50; M the drone wake + the cab keys]", pos[1]);
