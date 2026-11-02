@@ -512,7 +512,16 @@ fn paramless_fusebox_and_ff_music_trigger_are_inert() {
             "the 0xff music event is no trigger [D #232 p2 = 0xff; M 0x1b30e0's gate]");
         for _ in 0..20 { sim.step_bond(Default::default(), false, false, false); }
     }
-    assert!(scene.sim.as_ref().unwrap().drones.channels.on(0x12) || true, "no channel moves from either");
+    drop(scene); // one full scene at a time — the sandbox's RAM is the budget
+    {
+        // Sister: on the Agent load the lock's create-unlock tag is Operative-only [D #177 p6 = 1;
+        // M 0x1ae1f8:67-69], so 20 idle ticks leave its out 0x12 cold — and neither the paramless
+        // fusebox nor the 0xff music trigger writes anything on either load.
+        let mut agent = nf_view::load_with_carry_difficulty(&iso(), "07000011.bin", false, None, 3).expect("agent load");
+        for _ in 0..20 { agent.sim.as_mut().unwrap().step_bond(Default::default(), false, false, false); }
+        assert!(!agent.sim.as_ref().unwrap().drones.channels.on(0x12),
+            "the lock's out 0x12 stays cold through 20 idle ticks on the Agent load [D #177 p6 = 1; M 0x1ae1f8:67-69]");
+    }
 }
 
 /// The hurt volumes (0xE4 ×3, "Hurt_A", param 0 = 6 damage [D]) sting on the crossing [M
@@ -534,4 +543,154 @@ fn hurt_volumes_sting_on_crossing() {
         if scene.sim.as_ref().unwrap().drones.health.health < h0 - 3.0 { stung = true; break; }
     }
     assert!(stung, "the hurt volume stings for its param-0 damage [D #271 p0 = 6; M hurt.rs]");
+}
+
+/// SP #263 (0xd9, the Q-Worm NIS player: script 0x060008c0, modes [8,1], mask 1, out 0x38 [D]) is
+/// the level's SimpleScript the player's E drives. `SP_CreateScriptPlayer` 0x1db9a8:84-86 loads the
+/// script at create for mode A ∉ {0,1}, and `SP_LoadScript` 0x1dbc08's mode-8 arm `Script_Play`s it
+/// LOOPING into state 6 — the NIS runs from level load. The out channel is written only on a mask
+/// match [M 0x1dbda8:221-229], and `SP_Hit` 0x1dc470:15-17 builds flag bit 0 out of the SP's OWN
+/// out channel — with mask 1 the SP can never raise ch 0x38 by itself; it holds it only once the
+/// worm E has written it [M 0x1b0840; 0x1aee20 state 1]. Sister: ch 0x38 stays off (and the loop
+/// keeps running) until the E.
+#[test]
+fn scriptplayer_0263_plays_its_nis_from_load_and_holds_ch38_after_the_worm() {
+    let mut scene = load();
+    fn sp(sim: &nf_view::scene::Sim) -> &nf_game::nis::Player {
+        sim.drones.scripts.players.iter().find(|p| p.out == 0x38).expect("SP #263 (out 0x38) [D]")
+    }
+    {
+        let sim = scene.sim.as_ref().unwrap();
+        let p = sp(sim);
+        assert_eq!(p.scripts[0], 0x0600_08c0, "SP #263's script hash [D]");
+    }
+    for _ in 0..20 { scene.sim.as_mut().unwrap().step_bond(Default::default(), false, false, false); }
+    {
+        let sim = scene.sim.as_ref().unwrap();
+        let p = sp(sim);
+        assert!(p.info[0].is_some(), "the script is loaded at create [M 0x1db9a8:84-86; the port primes at the first tick]");
+        assert!(p.info[0].as_ref().expect("loaded").play & 1 != 0,
+            "the mode-8 NIS plays (looping) from level load [M 0x1dbc08's mode-8 arm]");
+        assert!(!sim.drones.channels.on(0x38),
+            "sister: the SP never raises its own out before the mask match [M 0x1dbda8:221-229 + 0x1dc470:15-17]");
+    }
+    // The real input: stand at the Q-Worm PC and hold E (the worm writes ch 0x38 in state 1
+    // [M 0x1aee20]).
+    let u = {
+        let sim = scene.sim.as_ref().unwrap();
+        sim.drones.useobjs.pcs.iter().find(|q| q.ch == 0x38).expect("the Q-Worm PC #216 [D]").pos
+    };
+    {
+        let sim = scene.sim.as_mut().unwrap();
+        sim.bond.pos = [u[0] + 0.2, u[1] - 1.3, u[2] + 0.9];
+        sim.bond.vel = [0.0; 3];
+    }
+    for _ in 0..40 {
+        let sim = scene.sim.as_mut().unwrap();
+        let (h, t) = (sim.bond.head(), u);
+        let d = [t[0] - h[0], t[1] - h[1], t[2] - h[2]];
+        sim.bond.yaw = d[0].atan2(d[2]);
+        sim.bond.pitch = 0.0;
+        sim.step_bond(Default::default(), false, false, true);
+        if scene.sim.as_ref().unwrap().drones.channels.on(0x38) { break; }
+    }
+    for _ in 0..30 { scene.sim.as_mut().unwrap().step_bond(Default::default(), false, false, false); }
+    {
+        let sim = scene.sim.as_ref().unwrap();
+        assert!(sim.drones.channels.on(0x38),
+            "ch 0x38 holds after the E [M 0x1aee20 state 1 writes it; 0x1dbda8:221-229 the SP holds it]");
+        let p = sp(sim);
+        assert!(p.info[0].as_ref().expect("loaded").play & 1 != 0,
+            "the NIS still loops after the fire [M 0x1dbda8 case 6's loop reset]");
+        assert!(sim.drones.scripts.entities().iter().any(|(sh, _, _, _, _)| *sh == 0x0600_08c0),
+            "the script's own entities are live while it plays [D the 060008c0 decode's entity op]");
+    }
+}
+
+/// The two ambush spawners ignite through the real chain. Spawner #240 (group 3) starts on the
+/// worm-hack channel 0x38 [D #240 p1=3 p4=0x38], and spawner #220 (group 2) on the multiplexor's
+/// out 0x35 [D #220 p1=2 p4=0x35] — the SEQ_AND of ch 0x38 (the worm [M 0x1aee20 state 1]) and
+/// ch 0x39 (touch #257 at (−22.06, 47.45, 16.61) [D], whose out |= hit each frame [M
+/// Trigger_Touch 0x1b2aa8 via Trigger_Update 0x1b1a78]). A spawner sits dormant until its trigger
+/// channel fires and latches started [M 0x137e68:53-62]. Sisters: both idle before their
+/// triggers; the touch's out falls when Bond walks out (and the mux out follows, [M 0x1b2e08]),
+/// while the started spawner stays latched [M 0x137e68:62].
+#[test]
+fn spawners_220_and_240_ignite_through_the_worm_and_the_touch_plate() {
+    let Some(iso) = std::env::var("NF_ISO").ok() else { eprintln!("skip: NF_ISO not set"); return };
+    // The 00-Agent load: the group templates are difficulty-gated characters [M 0x136be0:49], and
+    // the scenario needs the full roster (the same calibration spawner_kill_live uses).
+    let mut scene = nf_view::load_with_carry_difficulty(&iso, "07000011.bin", false, None, 3).expect("load 07000011");
+    // The level-start cut-scene holds the NPCs; wait it out.
+    for _ in 0..400 { scene.sim.as_mut().unwrap().step_bond(Default::default(), false, false, false); if !scene.sim.as_ref().unwrap().disabled { break; } }
+    {
+        let sim = scene.sim.as_ref().unwrap();
+        for (g, trig) in [(2, 0x35), (3, 0x38)] {
+            let s = sim.drones.spawners.iter().find(|s| s.group == g)
+                .unwrap_or_else(|| panic!("spawner group {g} exists [D]"));
+            assert_eq!(s.start, trig, "group {g}'s trigger is the disc's [D]");
+            assert!(!s.active && s.spawned.is_empty(), "sister: group {g} idle before its trigger [M 0x137e68:53-62]");
+        }
+    }
+    // Step 1: the worm E (the real 0x38 writer) — group 3 starts, group 2 does not.
+    let u = {
+        let sim = scene.sim.as_ref().unwrap();
+        sim.drones.useobjs.pcs.iter().find(|q| q.ch == 0x38).expect("the Q-Worm PC #216 [D]").pos
+    };
+    {
+        let sim = scene.sim.as_mut().unwrap();
+        sim.bond.pos = [u[0] + 0.2, u[1] - 1.3, u[2] + 0.9];
+        sim.bond.vel = [0.0; 3];
+    }
+    for _ in 0..40 {
+        let sim = scene.sim.as_mut().unwrap();
+        let (h, t) = (sim.bond.head(), u);
+        let d = [t[0] - h[0], t[1] - h[1], t[2] - h[2]];
+        sim.bond.yaw = d[0].atan2(d[2]);
+        sim.bond.pitch = 0.0;
+        sim.step_bond(Default::default(), false, false, true);
+        if scene.sim.as_ref().unwrap().drones.channels.on(0x38) { break; }
+    }
+    for _ in 0..20 { scene.sim.as_mut().unwrap().step_bond(Default::default(), false, false, false); }
+    {
+        let sim = scene.sim.as_ref().unwrap();
+        assert!(sim.drones.channels.on(0x38), "the worm fires [M 0x1aee20 state 1]");
+        let g3 = sim.drones.spawners.iter().find(|s| s.group == 3).expect("group 3 [D]");
+        assert!(g3.active, "group 3 starts on ch 0x38 [D #240 p4; M 0x137e68:53-62]");
+        let g2 = sim.drones.spawners.iter().find(|s| s.group == 2).expect("group 2 [D]");
+        assert!(!g2.active, "sister: group 2 waits for the mux out 0x35, not the worm alone [D #220 p4]");
+    }
+    // Step 2: walk the touch #257 [D] — with 0x38 held the mux raises 0x35 and group 2 starts.
+    {
+        let sim = scene.sim.as_mut().unwrap();
+        sim.bond.pos = [-22.06, 47.0, 16.61];
+        sim.bond.vel = [0.0; 3];
+    }
+    let mut muxed = false;
+    for _ in 0..40 {
+        scene.sim.as_mut().unwrap().step_bond(Default::default(), false, false, false);
+        if scene.sim.as_ref().unwrap().drones.channels.on(0x35) { muxed = true; break; }
+    }
+    assert!(muxed, "0x38 + the touch's 0x39 raise the mux out 0x35 [M 0x1b2e08]");
+    {
+        let sim = scene.sim.as_ref().unwrap();
+        assert!(sim.drones.channels.on(0x39), "the touch #257's out is up while Bond stands in it [M 0x1b2aa8]");
+        let g2 = sim.drones.spawners.iter().find(|s| s.group == 2).expect("group 2 [D]");
+        assert!(g2.active, "group 2 starts on the mux out [D #220 p4 = 0x35; M 0x137e68:53-62]");
+    }
+    // Step 3 (the law sisters): walk out — the touch's out falls, the mux out follows, the
+    // started spawner stays latched.
+    {
+        let sim = scene.sim.as_mut().unwrap();
+        sim.bond.pos = [-30.0, 48.0, 40.0];
+        sim.bond.vel = [0.0; 3];
+    }
+    for _ in 0..20 { scene.sim.as_mut().unwrap().step_bond(Default::default(), false, false, false); }
+    {
+        let sim = scene.sim.as_ref().unwrap();
+        assert!(!sim.drones.channels.on(0x39), "the touch's out |= hit each frame — Bond left [M 0x1b1a78]");
+        assert!(!sim.drones.channels.on(0x35), "the mux out follows its inputs [M 0x1b2e08]");
+        let g2 = sim.drones.spawners.iter().find(|s| s.group == 2).expect("group 2 [D]");
+        assert!(g2.active, "the started spawner stays latched [M 0x137e68:62]");
+    }
 }
