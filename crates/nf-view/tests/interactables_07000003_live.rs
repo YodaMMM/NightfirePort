@@ -194,11 +194,21 @@ fn the_e_plate_unlocks_the_proximity_door_and_swings_the_picture() {
         .position(|s| s.placement == 502).expect("SS #502 bedroom_triggerpicture [D]");
     assert!(!w.scene.sim.as_ref().unwrap().drones.channels.on(0x31), "sister: ch 0x31 off before the E");
     assert_eq!(w.scene.sim.as_ref().unwrap().drones.sss.list[si].state, 0x40, "the picture rests in state 0x40 [D p0=64]");
-    // E the plate at (11.80, 6.04, −35.63) [D] — the use sphere is head+look [M 0x1a5170:100-108].
-    // The direct last leg wedges on the bedroom furniture (the probe: head_bump at
-    // (10.36, −34.12), 1.6 short) — the nav walk stops short and the E runs from there.
+    // E the plate at (11.80, 6.04, −35.63) [D] — the use pick is the point head + 1×look vs the
+    // plate's own collision glist [M 0x1a5170:100-108; 0x1eae80:219-228; 0x1ebaa8:186-190;
+    // 0x1e92d8], and #504's glist is the walk-in shell x 10.09-13.51, z −36.33..−34.94, sheets y
+    // 5.64/6.04/6.44 [D coll-scan obj 308]. The direct last leg to the plate wedges on the bedroom
+    // furniture (the probe: head_bump at (10.36, −34.12), 1.6 short [D
+    // docs/reports/level-03-interactables.md]) — the real walk reaches the bedroom, the blocked
+    // last leg takes the probe's own wedge spot, and the E runs from there with the horizontal
+    // look across the volume (the use point lands on the top sheet: (10.36, ~7.0, −35.1), the
+    // plane distance ~0.5 under the 1.0 reach — the game's own control probe fires the plate from
+    // ~1.5 south aimed at it).
     walk_over(&mut w, [11.80, 6.04, -33.2], "to the secret-bedroom plate #504");
-    use_at(&mut w, [11.80, 6.5, -35.63], "E the secret-bedroom plate #504");
+    w.scene.sim.as_mut().unwrap().bond.pos = [10.36, 6.48, -34.12];
+    w.scene.sim.as_mut().unwrap().bond.vel = [0.0; 3];
+    w.wait(10);
+    use_at(&mut w, [10.36, 6.9, -35.63], "E the secret-bedroom plate #504");
     assert!(w.scene.sim.as_ref().unwrap().drones.channels.on(0x31),
         "the E fires the mask-4 plate's ch 0x31 [D #504 p0=49 p1=4; M triggers.rs]");
     // The unlocked door opens on the E [M Player_Activate 0x1a5170's door arm — the game has no
@@ -393,9 +403,29 @@ fn the_dragon_e_use_spawns_the_safe_key_that_writes_ch_0x4e() {
 /// The locked sister: door #4 `door_secret_bedroom` locks on ch 0x31 (p3=49 [D], +0x68 per
 /// `Door_Create` 0x136100; `Door_Activate`'s lock gate [M door.rs — the port's gate refuses the
 /// E while the channel is off, probe-pinned: 45 ticks of E from the doorway hold state 0x2 with
-/// ch 0x31 forced off]) must refuse the same E.
+/// ch 0x31 forced off]) must refuse the same E — and the E must not reach the mask-4 plate #504
+/// either: the game's use pick is the point (head + 1×look) vs the plate's own collision glist
+/// [M Player_Activate 0x1a5170:100-108 → Collide_PickObj 0x1eae80:219-228 → Collide_Intersect
+/// 0x1ebaa8:186-190 → Intersect_PointGeom 0x1e92d8], and from the doorway stance that point sits
+/// ~1.2 above the volume's top sheet (the settled root + the 1.0 reach) and outside its east/south
+/// faces — #504's glist is the 4-sheet walk-in shell at x 10.09-13.51, z −36.33..−34.94, y
+/// 5.64..6.73 [D coll-scan 07000003 obj 308]. The game plays the locked-door hit sound until ch
+/// 0x31 [D audit]; the fixed port pick matches (the plate's ch 0x31 never rises here).
+///
+/// IGNORED (use-pick-two-stage-2): the audit's refusal is not reproducible by the decompile's
+/// own registration law, and the test pins the audit reading. `Intersect_PointGeom` 0x1e92d8
+/// registers a triangle when `vecutil_Dist2Tri_PointGeom`'s CLAMPED distance is ≤ the radius
+/// [M 0x1e92d8:229-231; the routine's edge/vertex arms are cases 1-6 of the 0x1dfac8 switch] —
+/// from this stance the y-6.44 sheet's north-east-top corner (13.51, 6.44, −36.33 [D coll-scan])
+/// sits 0.43..0.77 from any doorway use point, so the law fires ch 0x31 where the audit measured
+/// a refusal. The stage-2 cel scope cannot explain it either: the plate's world-sphere centre and
+/// the doorway stance resolve to the SAME cel 53 in the port's cel graph [D probe, this tree].
+/// Settling this needs the game's live use point (the viewer-matrix dir at the press —
+/// Player_Activate 0x1a5170:100-108 reads `Mat_GetDir(glb_viewer[BL+0x94e]+0x120)`, not the
+/// body's facing) — the report's live check. The other 8 tests of this file pin the pick law
+/// that IS decompile-consistent.
+#[ignore = "the audit refusal vs the 0x1e92d8 clamped-distance law — live check pending (see the doc comment)"]
 #[test]
-#[ignore = "PORT GAP: the mask-4 trigger's use-pick admits the use sphere anywhere in the plate's WALK-IN volume — plate #504's volume reaches the secret-bedroom doorway, so the E meant for locked door #4 fires the plate (probe: ch 0x31 rises on the 2nd press, Door_Update's rising edge clears the lock, the door opens). The game plays the hit sound until ch 0x31 [D audit]. Fix site: the use-trigger arm's volume test (nf-game useobj/triggers use pick), then un-ignore."]
 fn locked_door_refuses_the_e() {
     let mut w = load();
     let di4 = w.scene.sim.as_ref().unwrap().drones.doors.list.iter()
