@@ -14,6 +14,3 @@ Do:
 1. Find which spawn reads differ: for each red, the record the game reads for that spawn [M the spawner → behaviour_util_get → DoModeSettingsNEW path, including any per-spawner section that overrides the load-time record] versus what the branch reads.
 2. Make the spawn read exactly the game's record in every case (load-time table where the game uses it, the spawner's own section where it has one). Cite each.
 3. All 8 tests green with their pins unchanged (unless a pin is proven wrong — then cite the fix), plus the 0c/0d walks' damage half. Add the new field to every Drone literal (cargo test -p nf-game --lib --no-run). Run every walkreal_*_live, then the full suite.
-
----
-claimed-by: sandbox4 at 2026-11-02T20:50Z
