@@ -52,3 +52,12 @@ pass only): +0x5A2=0x56 + change_to_attack_mode inline (the 0xb4→0x56 remap is
 alt 0x56) the FirstAttack pin; 07000009's p5=100 civilians (hp 1, alt 0x89 at init) the 09/0A tase
 pin population. Live tests + suite runs next; background processes die between tool calls in this
 sandbox, so the suite runs in foreground slices.
+
+drone-block-swaps-g055 (continued, ~22:52 UTC): all three swaps wired + pinned. nf-game lib 658/658
+(3 new unit tests with sisters); nf-game integration green (ai_live 37, stealth_ai_live 9, rest ok);
+nf-formats 24 ok + disc_golden 11 ok / 3 failed (the 3 the slim ISO allows); nf-audio green; nf-view
+drone_block_swaps_live 3/3 + walkreal 01/02/03/06/07 green (6/2/5/5/3, 0 failed). The full suite and
+~73 walkreal binaries did not fit the window (sandbox killed background jobs between tool calls and
+filled its disk mid-run; 1.9 GB freed, then the three-crate run completed). Report
+docs/reports/drone-block-swaps-g055.md. Next session: the unrun walkreals (05/09/0a/11/12/13 first),
+the HandleImpact twins (0x1469b8:220-246/285-310/331-356), the suite.py full run.
