@@ -86,6 +86,16 @@ fn walk_to_the_exit(iso: &str, stop_at_fire: bool) -> Walker {
         if walker::dxz(gpos, bpos) > 9.0 {
             w.walk_nav_to(gpos, &format!("approach guard {g}"), 3.5);
         }
+        // The guards hunt — chase the live position in (the stale-spot fights burned clips,
+        // 2026-11-02).
+        for chase in 0..4 {
+            let (gp, bp) = {
+                let sim = w.scene.sim.as_ref().unwrap();
+                (sim.drones.list[g].pos, sim.bond.pos)
+            };
+            if walker::dxz(gp, bp) <= 7.0 { break; }
+            w.walk_nav_to(gp, &format!("chase guard {g} ({chase})"), 3.5);
+        }
         if !w.shoot(g, &format!("guard {g}")) {
             if w.resupply("ammo retry") { w.shoot(g, &format!("guard {g}")); }
         }
@@ -210,6 +220,18 @@ fn walk_to_the_exit(iso: &str, stop_at_fire: bool) -> Walker {
             walker::hall_restage(&mut w, &format!("guard {g} approach"));
         }
         w.walk_nav_to(gpos, &format!("approach hall guard {g}"), 3.0);
+        // The named guards HUNT: guard 7 fled 14.8 u while the approach walked to his stale
+        // spot, and the fight opened at 14.8 with the captain unexposed — two clips later he
+        // was still alive and ch 0x99 never rose (the following_mayhew stall, 2026-11-02). A
+        // player chases: re-aim at the guard's live position until the fight opens inside 7.
+        for chase in 0..4 {
+            let (gp, bp) = {
+                let sim = w.scene.sim.as_ref().unwrap();
+                (sim.drones.list[g].pos, sim.bond.pos)
+            };
+            if walker::dxz(gp, bp) <= 7.0 { break; }
+            w.walk_nav_to(gp, &format!("chase hall guard {g} ({chase})"), 3.0);
+        }
         // Dry mid-hall is the walk's own trap: the hall's south wall walls the resupply nav
         // off from the corridor boxes (every southward hop wedged at segment t≈0.095). A
         // player steps out the door he came in by: east door → corridor box → back inside.
@@ -292,9 +314,20 @@ fn walk_to_the_exit(iso: &str, stop_at_fire: bool) -> Walker {
             if cstate == nf_game::drone::state::PLAYER_IN_WAY {
                 let sim = w.scene.sim.as_ref().unwrap();
                 let cp = sim.drones.list[ci].pos;
-                let back = [cp[0] + (cp[0] - plate[0]) * 0.5, cp[1], cp[2] + (cp[2] - plate[2]) * 0.5];
+                // Behind him, not away from the plate: the way-band release [M 0x15ea28 case 3]
+                // reads only Bond's distance, but the lead resumes INTO his route — stepping back
+                // along the plate bearing put Bond 20 u east through the hall crowd (the
+                // real-damage walk's node-15 stall, 2026-11-02) and he closed it again before the
+                // follow could trail. The player steps 4.5 off his nose, opposite his steering
+                // target (the same behind-the-route point the descent follow uses); with no route
+                // target the plate bearing stands in, shortened to 6.
+                let back = sim.drones.list[ci].route.as_ref().map(|r| r.target).map(|tgt| {
+                    let (hx, hz) = (tgt[0] - cp[0], tgt[2] - cp[2]);
+                    let hl = (hx * hx + hz * hz).sqrt().max(1e-3);
+                    [cp[0] - hx / hl * 4.5, cp[1], cp[2] - hz / hl * 4.5]
+                }).unwrap_or([cp[0] + (cp[0] - plate[0]) * 0.2, cp[1], cp[2] + (cp[2] - plate[2]) * 0.2]);
                 drop(sim);
-                eprintln!("[01] round {round}: contact in PlayerInWay — Bond steps back off his lane");
+                eprintln!("[01] round {round}: contact in PlayerInWay — Bond steps back off his lane to ({:.2},{:.2})", back[0], back[2]);
                 w.walk_nav_to(back, "step out of the lead's way", 3.0);
             } else if round >= 24 {
                 let sim = w.scene.sim.as_ref().unwrap();
@@ -437,6 +470,13 @@ fn walk_to_the_exit(iso: &str, stop_at_fire: bool) -> Walker {
     // The player route descends the stairwell from the west hall's corner (the AI's own path
     // climbs over the top floor — the sister proved the descent through this anchor).
     w.walk_nav_to([-30.8, 6.4, 13.1], "the stairwell head", 1.2);
+    // The contact parks on the plate's south half (his route's node 36 sits INSIDE the volume
+    // [D the nav dump]) and the faithful push holds Bond ~1.4 off his spine — the straight
+    // SE→centre line stops just short of the plate's east edge (the exit-fade walk's
+    // (-31.47,12.45) stall, 2026-11-02). The player walks around him: the plate is 6.5 deep
+    // (z 12.2-18.7), so come in at its north half, clear of his capsule, then step to the
+    // centre. Lenient: a wedged approach gives the centre walk a fresh re-aim.
+    w.walk_nav_to([-31.4, 6.4, 16.8], "the plate's north-east approach", 1.4);
     w.walk_nav_to(plate, "the plate", 1.2);
     let sim = w.scene.sim.as_ref().unwrap();
     let on_plate = sim.bond.pos[0] < -32.0 && sim.bond.pos[2] > 12.0;
@@ -637,6 +677,14 @@ fn walk_from_the_spawn_to_the_exit_with_the_contact() {
 fn the_plate_refuses_bond_alone() {
     let iso = iso();
     let mut w = Walker::new(nf_view::load(&iso, "07000001.bin", false).expect("load"));
+    // The faithful push: the hall crowd (five team-1 guards around the door-2 gap, armed per
+    // NDrone2_DoCollision 0x149ec8 — kind != 0x13) plugs the walk's lane and the old no-push
+    // trajectory's plain walk wedges in bot-orbit cycles (28 × 900 ticks, the 2026-11-02
+    // sister stall). The real player's move through a hostile crowd: shoot the blocker
+    // through the fire path — the walker's opt-in body-block response, the same arm the 02
+    // real-health walk uses. Head aim: the type-2 guards carry 12 health [L ee_02b.bin].
+    w.body_block_response = true;
+    w.prefer_head = true;
     for _ in 0..4000u32 {
         w.tick(Default::default(), false);
         if w.scene.sim.as_ref().unwrap().drones.channels.on(0xb) { break; }
@@ -652,8 +700,35 @@ fn the_plate_refuses_bond_alone() {
     let start = sim.bond.pos;
     let pts = walker::leg(sim, start, plate);
     drop(sim);
-    for k in 1..pts.len() { w.walk_to(Wp::new(pts[k][0], pts[k][1], pts[k][2]), &format!("sister {k}")); }
-    w.walk_to(Wp { at: plate, act: Act::None, arrive: 1.2 }, "the plate");
+    // Lenient legs: the fight phases move the guards run to run (a blocker flank can pull Bond
+    // back east), so a wedged leg must hand the next leg a fresh nav re-aim instead of dying at
+    // the 6000-tick cap — the route self-heals from wherever the fights left Bond. Re-armed per
+    // leg: resupply's own close walk flips lenient back off.
+    for k in 1..pts.len() {
+        // The sister kills lane blockers with the level-start pistol (clip 8 spare 0 [D
+        // loadout]); a dry fight wedges the walk — top up at the on-path boxes while passing
+        // (resupply's walked-path corridor keeps the detour off the route [M the corridor note]).
+        {
+            let sim = w.scene.sim.as_ref().unwrap();
+            let dry = sim.gun.clip + sim.gun.spare < 10;
+            drop(sim);
+            if dry { w.resupply("sister ammo"); }
+        }
+        w.lenient = true;
+        let r = w.walk_to(Wp::new(pts[k][0], pts[k][1], pts[k][2]).r(1.3), &format!("sister {k}"));
+        w.lenient = false;
+        if r == u32::MAX { eprintln!("[01 sister] leg {k} wedged — the next leg re-aims"); }
+    }
+    { let sim = w.scene.sim.as_ref().unwrap(); let dry = sim.gun.clip + sim.gun.spare < 10; drop(sim);
+      if dry { w.resupply("sister ammo final"); } }
+    w.walk_nav_to(plate, "the plate", 1.2);
+    // The sister's point is the plate STAND, not just the channel: Bond must be on it (a vacuous
+    // pass from a never-arrived walk would prove nothing).
+    {
+        let sim = w.scene.sim.as_ref().unwrap();
+        let d = walker::dxz(sim.bond.pos, plate);
+        assert!(d < 2.0, "Bond must reach the plate for the refuse-assert to mean anything (d {d:.2})");
+    }
     // Keep Bond ON the plate while the contact (left at his spawn) is far away.
     for _ in 0..60 { w.tick(Default::default(), false); }
     let sim = w.scene.sim.as_ref().unwrap();
@@ -778,6 +853,19 @@ fn following_mayhew_down_completes_the_level() {
             if walker::dxz(gpos, w.scene.sim.as_ref().unwrap().bond.pos) > 9.0 || !los_clear {
                 w.walk_nav_to(gpos, &format!("{label}: approach guard {g}"), 3.0);
             }
+            // The guards hunt — the approach's target is stale the moment it lands (guard 7's
+            // 14.8-u fight opening burned two clips, 2026-11-02). Chase the live position in.
+            for chase in 0..4 {
+                let (gp, los_now) = {
+                    let sim = w.scene.sim.as_ref().unwrap();
+                    let d = &sim.drones.list[g];
+                    let bp = sim.bond.pos;
+                    let eye = [bp[0], bp[1] + sim.bond.eye - sim.bond.crouch_drop, bp[2]];
+                    (d.pos, sim.world.segment(eye, [d.pos[0], d.pos[1] + 0.3, d.pos[2]]).is_none())
+                };
+                if walker::dxz(gp, w.scene.sim.as_ref().unwrap().bond.pos) <= 7.0 && los_now { break; }
+                w.walk_nav_to(gp, &format!("{label}: chase guard {g} ({chase})"), 3.0);
+            }
             if w.scene.sim.as_ref().unwrap().gun.clip + w.scene.sim.as_ref().unwrap().gun.spare < 8 { w.resupply("ammo"); }
             if w.scene.sim.as_ref().unwrap().gun.clip + w.scene.sim.as_ref().unwrap().gun.spare == 0 { continue; }
             let killed = w.shoot(g, &format!("{label}: guard {g}"))
@@ -831,6 +919,17 @@ fn following_mayhew_down_completes_the_level() {
             walker::hall_restage(&mut w, "hall restage");
         }
         w.walk_nav_to(gpos, &format!("approach hall guard {g}"), 3.0);
+        // The named guards HUNT: guard 7 fled 14.8 u during the approach and the fight opened
+        // with the captain unexposed — the follow-up burned two clips and the AND never rose
+        // (the 2026-11-02 stall). A player chases the live position until the fight opens close.
+        for chase in 0..4 {
+            let (gp, bp) = {
+                let sim = w.scene.sim.as_ref().unwrap();
+                (sim.drones.list[g].pos, sim.bond.pos)
+            };
+            if walker::dxz(gp, bp) <= 7.0 { break; }
+            w.walk_nav_to(gp, &format!("chase hall guard {g} ({chase})"), 3.0);
+        }
         if w.scene.sim.as_ref().unwrap().gun.clip + w.scene.sim.as_ref().unwrap().gun.spare < 8 {
             walker::hall_ammo_ladder(&mut w, "hall ammo");
         }

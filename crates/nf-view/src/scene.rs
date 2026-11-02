@@ -3143,31 +3143,49 @@ impl Sim {
             let straddle_cells = bond_cel
                 .map(|c| self.world.debug_straddle(c, [pc[0], pc[1] + ao, pc[2]], [pc[0], pc[1] + bo, pc[2]], ar))
                 .unwrap_or_default();
-            // The near bots' collision capsules for the actor-actor push (`Collide_Jointy`
-            // 0x1ec180:229-281 via `LadderCtx::bot_capsules`): the game's bot hittest arms
-            // [M NDrone2_Collision 0x140e90:91-121 — top = pos + up·r, bottom = pos + up·(r − h),
-            // r 0.4 default / 0.55 kind 0xc, h the anim height word +0xa0 with default 1.0
-            // [M NDrone2_DefaultInit 0x14b300:48]] — upright bots (up = (0,1,0)), so the arms are
-            // pos + (0, ±0.4, 0) at h 1.0. Only the NEAR bots carry an ON capsule [M
-            // DroneFunc_NearPlayerCollision 0x14b190 + NDrone2_DoCollision 0x149ec8 — the kind
-            // word +0x464 goes 0x800 only within 2.0 of the player]; the 0.4 default stands for
-            // every bot here [S unverified: the sleeper's own kind word (the 0xc → 0.55 arm) is
-            // not read by the port — a live check item].
+            // The bots' collision capsules for the actor-actor push (`Collide_Jointy`
+            // 0x1ec180:229-281 via `LadderCtx::bot_capsules`): a bot takes part exactly when its
+            // hittest kind word +0x464 is armed 0x800 [M NDrone2_Collision 0x140e90]. ALIVE bots
+            // (+0x4f8 & 0x200 clear — DefaultInit 0x14b300:60 leaves it clear; SetAsDead 0x14a2f0
+            // sets it) arm only where `NDrone2_DoCollision` 0x149ec8 returns nonzero (the call at
+            // 0x14106c feeding the 0x464 store at 0x14107c/0x141084): bit 0x20 must be set (the
+            // DefaultInit 0xe2 fold sets it for every alive drone; SetAsDead 0x14a314-0x1348 clears
+            // it at death — the corpse arm below), kind +0xd8 0x13 returns 0 (0x149f24-28) and kind
+            // 0xc returns 1 (0x149f1c-20); then ANY of +0x538 != 0 (0x149f30-34 — the port's
+            // `anim.blend_out` word), DroneFunc_NearPlayerCollision (0x149f3c-44 → 0x14b190: some
+            // player slot's +0x154 distance < 2.0 — the port's `dist_to_player`, filled per tick
+            // [M NDrone2_PreDroneControl 0x148db0:35-48]), obj+0xFC != 0 (0x149f4c-54 — the draw
+            // counter, the port's `drawn_grace`), or +0x570 & 2 (0x149f5c-68 — unmodelled: the port
+            // has no +0x570 writer, so the arm never fires [S unverified]). The arms: top = pos +
+            // up·r, bottom = pos + up·(r − h) [M 0x14101c `r − h` with f22 = +0xa0], r 0.55 for kind
+            // 0xc else 0.4 [M 0x14104c-68], upright (Mat_GetUp of the obj's yaw matrix — up = (0,1,0)).
+            // DEAD bots arm UNCONDITIONALLY (0x140f8c writes 0x464 = 0x800 on the +0x200 fall-through)
+            // with the BONE capsule: AnimGetBoneWorldTrans 0x1c3120 bones 5 / 0x33
+            // (0x80000005/0x80000033 at 0x140f0c/0x140f50), r 0.4 [M f20 = 0x3ecccccd at 0x140ee0,
+            // 0x45c store at 0x141008] — a lying-down segment near the floor, so Bond steps over
+            // bodies instead of standing on a pillar. Every capsule that could overlap Bond's
+            // (0.55 + 0.4/0.55 < 2.0) is inside the near band, so the near fill loses no overlap.
             let bot_capsules: Vec<([f32; 3], [f32; 3], f32)> = {
-                let bp = self.bond.pos;
-                // CORPSES NEVER COLLIDE: `SetAsDead` 0x14a2f0:9 sets +0x4F8&0x200 at death, and
-                // `NDrone2_DoCollision` 0x149ec8:11 returns 0 (collision OFF) whenever that bit is
-                // set — on every level but the special 0x700004a — and `NDrone2_Collision` 0x140e90:64
-                // gates the same bit (docs/fields/drone.md, the 0x4F8&0x200 row, census-verified).
-                // The game's dead bot presents no capsule for the player's Jointy query: Bond walks
-                // over bodies. Without this gate the walkreal_07000001 escort wedge reproduces —
-                // Bond lands on a fresh corpse's capsule top (pos+0.4), the push holds him airborne
-                // (grounded never settles), every nav leg dies at the cap, and the escort waits for
-                // a Bond who can no longer reach the [M 0x15eda8] release band.
-                self.drones.list.iter()
-                    .filter(|x| x.enabled && !x.corpse && ((x.pos[0] - bp[0]).powi(2) + (x.pos[1] - bp[1]).powi(2) + (x.pos[2] - bp[2]).powi(2)) < 2.0 * 2.0)
-                    .map(|x| ([x.pos[0], x.pos[1] + 0.4, x.pos[2]], [x.pos[0], x.pos[1] - 0.6, x.pos[2]], 0.4f32))
-                    .collect()
+                let data = self.data();
+                self.drones.list.iter().filter_map(|x| {
+                    if !x.enabled { return None; }
+                    if x.corpse {
+                        let pal = x.palette(&data)?;
+                        let (a, b) = (pal.get(5)?, pal.get(0x33)?);
+                        return Some(([a[3][0], a[3][1], a[3][2]], [b[3][0], b[3][1], b[3][2]], 0.4f32));
+                    }
+                    // Alive: the DoCollision chain. Bit 0x20 rides alive (DefaultInit's fold) — the
+                    // port clears nothing on a living bot; kind 0x13 is out, kind 0xc is always in.
+                    if x.kind == 0x13 { return None; }
+                    let on = x.kind == 0xc
+                        || x.anim.blend_out
+                        || x.drawn_grace != 0
+                        || x.near_player_collision();
+                    if !on { return None; }
+                    let r: f32 = if x.kind == 0xc { 0.55 } else { 0.4 };
+                    let h = x.hip_anim;
+                    Some(([x.pos[0], x.pos[1] + r, x.pos[2]], [x.pos[0], x.pos[1] + (r - h), x.pos[2]], r))
+                }).collect()
             };
             let ctx = nf_game::player::LadderCtx { ladders: &self.ladders, wires: &self.wires, wire_anims: Some(&self.wire_anims), water, sink, creepwalls: &self.creepwalls, level_bump_5fb: false, straddle: &straddle_cells, bot_capsules: &bot_capsules };
             // The third-icon context [M ThirdIcon_Update 0x196e80 + Player_CollisionHandler 0x1949a8:22]:

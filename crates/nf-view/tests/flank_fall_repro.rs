@@ -22,21 +22,19 @@ use walker::{Walker, Wp};
 
 fn iso() -> String { std::env::var("NF_ISO").expect("NF_ISO") }
 
-/// OPEN (GAPS): on master this walk still falls, and NOT at the courtyard lip. Measured per tick
-/// (NF_WALK_TRACE): heading for flank nav 1 Bond rides the gatehouse wall's south end-edge (the
-/// edge contact lifts him ~0.04 u/tick, t27140-27142) until the feet band misses; on that first
-/// airborne tick the bot-capsule push [M Collide_Jointy 0x1ec180:229-281] discharges the whole
-/// overlap he walked into while grounded (two guards, ~0.74 u in one tick, t27142→27143) and
-/// carries the spine across the wall plane x 10.915 (z −33.3..−30.3). From the back side the
-/// port's contact pushes him further out (x 11.46 = plane + r) into a box with no static floor
-/// (x 10.91..12.8: no tri), where he hangs on the floor strip's edge until he drops (t30895).
-/// The game pushes off bots every tick [M Collide_Jointy — no ground gate; per-bot gate
-/// NDrone2_DoCollision 0x149ec8], so the overlap never builds; the port's airborne-only gate is
-/// a port choice, and lifting it alone breaks the 03/01 walks and exit_aim_01 (measured), so the
-/// fix needs the per-bot +0x4f8 0x20/0x200 gates modelled first. The pick-bit grounding the
-/// first attempt landed does not fix this walk either (it falls earlier, at the west lane).
+/// FIXED: the airborne discharge no longer happens, because the push no longer waits for
+/// airborne. The port's Jointy push now runs EVERY tick [M Collide_Jointy 0x1ec180:229-281 — no
+/// ground gate], per bot gated by the game's own hittest arming [M NDrone2_Collision 0x140e90 +
+/// NDrone2_DoCollision 0x149ec8: kind 0x13 out, kind 0xc always in, else +0x538 / near-2.0 /
+/// obj+0xFC / +0x570&2; the dead (+0x4f8 & 0x200) arm a bone capsule unconditionally], so the
+/// overlap discharges the tick it opens (a fraction of a unit per tick, like the game) and Bond
+/// walks the wall's end-edge past the two guards without being carried across the plane. The
+/// older notes: on master the walk rode the gatehouse wall's south end-edge (the edge contact
+/// lifts him ~0.04 u/tick, t27140-27142) until the feet band missed; on that first airborne tick
+/// the old airborne-only push discharged the whole overlap he walked into while grounded (two
+/// guards, ~0.74 u in one tick, t27142→27143) and carried the spine across the wall plane
+/// x 10.915 (z −33.3..−30.3).
 #[test]
-#[ignore = "open: airborne bot-push discharge carries Bond through the gatehouse wall (see doc)"]
 fn the_old_courtyard_flank_stays_on_the_floor() {
     let iso = iso();
     let mut w = Walker::new(nf_view::load(&iso, "07000003.bin", false).expect("load 07000003"));
@@ -87,11 +85,18 @@ fn the_old_courtyard_flank_stays_on_the_floor() {
 }
 
 /// Sister seam probe: pressed against the courtyard's west lip (walk west from mid courtyard on
-/// real input), Bond must stay GROUNDED. The game's ground flag is the capsule pick bit OR the
-/// ray band [M Player_FeetOnPoint 0x194188:176-185]. An earlier tree hung ungrounded at
-/// (12.61, 6.50, −19.69) — held by the lip push while the band missed by 0.025 u (floor 1.16
-/// below the root; cc+0.1 = 1.1347); on master's `walkable || band` rule the press now stays
-/// grounded every tick, so this pins that no hang returns.
+/// real input), Bond must not HANG. The game's ground flag is the capsule pick bit OR the ray band
+/// [M Player_FeetOnPoint 0x194188:176-185]. An earlier tree hung ungrounded at (12.61, 6.50,
+/// −19.69) — held by the lip push while the band missed by 0.025 u (floor 1.16 below the root;
+/// cc+0.1 = 1.1347); on master's `walkable || band` rule the press stays grounded at the lip every
+/// tick. The pin bounds the UNGROUNDED RUNS instead of every tick: the courtyard guard idles at
+/// (12.74, −19.23) [D 07000003 placement, the walker's own log], the press line passes inside the
+/// Jointy reach (r 0.4 + 0.55 < 2.0 band, closest-segment distance 0.65), and the game's
+/// actor-actor push has no ground preservation [M Collide_Jointy 0x1ec180:229-281 — geometry
+/// only] — brushing him lifts Bond for a few ticks (measured: 5, t13090-13095, apex y 6.49), so
+/// `ungrounded == 0` contradicted the decompile and was relaxed to the hang signature: no
+/// ungrounded run over 20 ticks (the old hang was unbounded), the press still reaches the lip,
+/// and Bond lands back on the floor.
 #[test]
 fn pressed_against_the_west_lip_bond_stays_grounded() {
     let iso = iso();
@@ -101,6 +106,7 @@ fn pressed_against_the_west_lip_bond_stays_grounded() {
     // Press west into the lip: real input, forward held, sampling grounded every tick.
     let start = w.total_ticks;
     let mut ungrounded = 0u32;
+    let (mut run, mut longest) = (0u32, 0u32);
     loop {
         let sim = w.scene.sim.as_ref().unwrap();
         let p = sim.bond.pos;
@@ -113,12 +119,18 @@ fn pressed_against_the_west_lip_bond_stays_grounded() {
         let sim = w.scene.sim.as_ref().unwrap();
         if !sim.bond.grounded {
             ungrounded += 1;
+            run += 1;
+            longest = longest.max(run);
             eprintln!("  ungrounded t{} bond ({:.2},{:.2},{:.2}) ny {:.2}",
                 w.total_ticks, sim.bond.pos[0], sim.bond.pos[1], sim.bond.pos[2], sim.bond.floor_ny);
+        } else {
+            run = 0;
         }
     }
-    let p = w.scene.sim.as_ref().unwrap().bond.pos;
-    eprintln!("lip press ended at ({:.2},{:.2},{:.2}) ungrounded ticks {ungrounded}", p[0], p[1], p[2]);
+    let sim = w.scene.sim.as_ref().unwrap();
+    let p = sim.bond.pos;
+    eprintln!("lip press ended at ({:.2},{:.2},{:.2}) ungrounded ticks {ungrounded} longest run {longest}", p[0], p[1], p[2]);
     assert!(p[0] < 12.8, "the press must reach the lip (west of x 12.8), got {p:?}");
-    assert_eq!(ungrounded, 0, "pressed against the lip Bond stays grounded [M 0x194188:176-185]");
+    assert!(longest <= 20, "pressed against the lip Bond must not hang ungrounded (the old band hang was unbounded [M 0x194188:176-185]), longest run {longest}");
+    assert!(sim.bond.grounded || p[1] < 6.2, "the press must not end held airborne at the lip height (the old hang sat at y 6.50), got {p:?}");
 }

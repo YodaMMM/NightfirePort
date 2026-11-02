@@ -930,12 +930,29 @@ impl Walker {
             // Steer toward the drone, keeping OUT of the lead's "Bond in the way" band: the escort
             // parks in PlayerInWay while Bond is within 3.0 [M 0x15ea28 case 3], and waits when Bond
             // is beyond 12 [M 0x15e698 case 3]. The escort band is 4.5..10.
+            // The faithful push added the half the old walk never saw: the escort HIMSELF closes the
+            // gap (his lead walks Bond's line), Bond stands at the 4.0 hold and the drone walks into
+            // the 3.0 band — PlayerInWay engages (route_blocked && dist <= 3.0 [M 0x15e4f0's
+            // PlayerInWay arm]) and the lead parks with Bond standing 2.9 away (the 01 real-damage
+            // walk's node-15 stall, 2026-11-02). The player's own move: step BACK out of the band
+            // and let the lead resume [M 0x15ea28 case 3 — the release reads Bond's distance].
             let sim = self.scene.sim.as_ref().unwrap();
             let desired = (target[0] - sim.bond.pos[0]).atan2(target[2] - sim.bond.pos[2]);
             let err = wrap_pi(desired - sim.bond.yaw);
+            let in_way_park = sim.drones.list[di].state == nf_game::drone::state::PLAYER_IN_WAY;
+            // Kite the melee huggers: a chasing guard inside 2.6 trades punches at 0.75 a hit
+            // [M Player_WeaponInitBullet's 1.8 fists range] and the follow's 4.0 hold stands
+            // still for it (the 01 real-damage walk's stairwell-head death: 91 hits, 100 health,
+            // 2026-11-02). The player backs off while the fight machinery works — return_fire
+            // runs every follow tick, and at 3-6 u the aim converges on the head instead of
+            // opening inside the hugger's own boxes.
+            let hugged = sim.drones.list.iter().any(|o| o.team == 1 && o.enabled && o.present
+                && !o.corpse && o.health > 0.0 && dxz(o.pos, sim.bond.pos) < 2.6);
             let input = Input {
                 turn: err.clamp(-0.07, 0.07),
-                forward: if d > 5.0 { 1.0 } else if d > 4.0 { 0.45 } else { 0.0 },
+                forward: if hugged { -1.0 }
+                    else if d < 3.4 || (in_way_park && d < 4.2) { -0.7 }
+                    else if d > 5.0 { 1.0 } else if d > 4.0 { 0.45 } else { 0.0 },
                 ..Default::default()
             };
             self.tick(input, false);
@@ -1258,6 +1275,36 @@ impl Walker {
                         }
                     }
                     if !used_door {
+                    // A bot CAPSULE blocking the lane: the game's Jointy push now discharges every
+                    // tick [M Collide_Jointy 0x1ec180:229-281 — no ground gate], so walking into
+                    // an alive bot (kind != 0x13, armed [M NDrone2_DoCollision 0x149ec8]) cancels
+                    // the walk's progress every tick and the old ±60 sidestep alternation just
+                    // oscillated against the push (the 01 hall crowd wedged the plate walk,
+                    // 2026-11-02). The player's own move: ORBIT the nearest bot — strafe on the
+                    // side away from it with a slight forward bias, until the line to the waypoint
+                    // clears the two radii (0.4 + 0.55) plus a step margin, or the 600-tick cap.
+                    // Corpses don't block (their bone capsule lies on the floor — Bond steps over).
+                    // Left = cross(up, forward) [M right-handed y-up]; strafe +1 is the game's left
+                    // [M player.rs Input doc, action 1].
+                    let bot_block = {
+                        let sim = self.scene.sim.as_ref().unwrap();
+                        let (px, pz) = (self.pos[0], self.pos[2]);
+                        let (wx, wz) = (wp.at[0] - px, wp.at[2] - pz);
+                        let wl2 = wx * wx + wz * wz;
+                        wl2 > 1e-6 && sim.drones.list.iter().any(|d| d.enabled && !d.corpse
+                            && (d.pos[1] - self.pos[1]).abs() < 2.0
+                            && ({
+                                // the bot's perpendicular distance OFF the bond→waypoint segment:
+                                // blocking only when it sits ON the lane (within 1.0 of the line)
+                                let t = ((d.pos[0] - px) * wx + (d.pos[2] - pz) * wz) / wl2;
+                                (0.0..=1.0).contains(&t) && {
+                                    let (cx, cz) = (px + t * wx, pz + t * wz);
+                                    let ddx = d.pos[0] - cx;
+                                    let ddz = d.pos[2] - cz;
+                                    ddx * ddx + ddz * ddz < 1.0 * 1.0
+                                }
+                            }))
+                    };
                     // A hostile BODY-BLOCK: a guard standing on the lane itself. The 02
                     // south-hall-west nav-10 wedge was exactly this — g3 closed to 0.8 u and Bond
                     // (real health) took his fire for ~1400 ticks until the fail chain
@@ -1324,6 +1371,56 @@ impl Walker {
                         continue;
                     }
                     } // body_block_response
+                    else if bot_block {
+                        let t0 = self.total_ticks;
+                        let mut orbit = 0u32;
+                        while orbit < 900 {
+                            let sim = self.scene.sim.as_ref().unwrap();
+                            let p = sim.bond.pos;
+                            let (wx, wz) = (wp.at[0] - p[0], wp.at[2] - p[2]);
+                            let wl2 = wx * wx + wz * wz;
+                            if wl2 <= 1e-6 { break; }
+                            // The nearest bot ON the lane (the same predicate as the trigger, the
+                            // smallest along-line t first) — orbit THAT one; none → the lane is clear.
+                            let mut pick: Option<(f32, f32, f32)> = None; // (t, x, z)
+                            for d in sim.drones.list.iter().filter(|d| d.enabled && !d.corpse
+                                && (d.pos[1] - p[1]).abs() < 2.0) {
+                                let t = ((d.pos[0] - p[0]) * wx + (d.pos[2] - p[2]) * wz) / wl2;
+                                if !(0.0..=1.0).contains(&t) { continue; }
+                                let (cx, cz) = (p[0] + t * wx, p[2] + t * wz);
+                                let ddx = d.pos[0] - cx;
+                                let ddz = d.pos[2] - cz;
+                                if ddx * ddx + ddz * ddz >= 1.0 * 1.0 { continue; }
+                                if pick.map_or(true, |(pt, _, _)| t < pt) {
+                                    pick = Some((t, d.pos[0], d.pos[2]));
+                                }
+                            }
+                            let (bx, bz) = match pick {
+                                Some((_, bx, bz)) => (bx, bz),
+                                None => break,
+                            };
+                            if self.total_ticks - start_ticks >= 40_000 { break; }
+                            // Away side: the bot's offset from the waypoint line, dotted with left.
+                            let left_dot = (bx - p[0]) * wz - (bz - p[2]) * wx;
+                            let desired = wx.atan2(wz);
+                            let err = wrap_pi(desired - sim.bond.yaw);
+                            let input = Input {
+                                turn: err.clamp(-0.07, 0.07),
+                                forward: 0.25,
+                                strafe: if left_dot > 0.0 { -1.0 } else { 1.0 },
+                                ..Default::default()
+                            };
+                            self.tick(input, false);
+                            orbit += 1;
+                        }
+                        self.pos = self.scene.sim.as_ref().unwrap().bond.pos;
+                        eprintln!("[walk] {label}: bot orbit ran {orbit} ticks, now at {:?}", self.pos);
+                        self.stuck = 0;
+                        self.sample_tick = 0;
+                        self.last_sample = self.pos;
+                        start_ticks += self.total_ticks - t0;
+                        continue;
+                    }
                     if self.stuck == 1 {
                         // No world wall on the hip line: a knee-high rail — hop first.
                         let rail = self.scene.sim.as_ref().unwrap().world.segment([self.pos[0], self.pos[1] - 0.7, self.pos[2]], [wp.at[0], wp.at[1] - 0.7, wp.at[2]]).is_some();
