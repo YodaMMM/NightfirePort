@@ -14,6 +14,13 @@ thread_local! {
     static REAL_DAMAGE: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
     /// `with_real_damage_no_return_fire`: the walkers made on this thread do not return fire.
     static NO_RETURN_FIRE: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
+    /// `with_real_damage_head_hunting`: the fights on this thread take the clear head box first
+    /// (see `exposed_impl`).
+    static HEAD_HUNT: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
+    /// `with_real_damage_unseen_fights`: the fights on this thread answer guards whose boxes no
+    /// eye ray reaches (desk cover) — the hurting-first fallback pick plus the stand's creep,
+    /// the `lane_fights` machinery without the lane windows.
+    static UNSEEN_FIGHTS: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
     /// The latest real-damage summary on this thread (refreshed every 60 ticks and at a death).
     static LAST_SUMMARY: std::cell::RefCell<Option<(u32, String)>> = const { std::cell::RefCell::new(None) };
 }
@@ -47,6 +54,39 @@ pub fn with_real_damage<R>(f: impl FnOnce() -> R) -> R {
     REAL_DAMAGE.with(|c| c.set(true));
     let _reset = Reset;
     f()
+}
+
+/// `with_real_damage` plus the fights' head-hunting pick: the real-health runs whose fights
+/// burn Bond down by attrition (the return fire's torso-nearest taps take 3-5 rounds a
+/// 12-health guard while the guard's own volley lands) take the clear head box first — one
+/// head hit drops a 12-health guard [M NDrone2_HitDamage 0x145558 × DroneDamage_Head; the
+/// P2K's 3.5 → 35]. Opt-in per test: the master-green real-damage walks keep the
+/// torso-nearest pick (their fight timelines are pinned; level-13-lobby-rifles-2).
+#[allow(dead_code)]
+pub fn with_real_damage_head_hunting<R>(f: impl FnOnce() -> R) -> R {
+    struct Reset;
+    impl Drop for Reset { fn drop(&mut self) { HEAD_HUNT.with(|c| c.set(false)); } }
+    HEAD_HUNT.with(|c| c.set(true));
+    let _reset = Reset;
+    with_real_damage(f)
+}
+
+/// `with_real_damage` plus the unseen-cover fights: the plain pick only answers a shooter
+/// whose boxes one eye ray reaches, and a guard behind desk cover empties volley after
+/// volley while no fight ever starts (the 07000012 bend death: 64 health gone while no fight
+/// ever started [L the level-13 NF_RF_GEOM dump — the Office-C_Obj9_computer mesh eats every
+/// ray]). With this opt-in the fight takes the shooter who is actually HURTING Bond and the
+/// stand creeps toward the muzzle until the line opens over the desk lip — the
+/// `lane_fights` machinery's pick fallback and creep WITHOUT the lane windows (the
+/// 20 u / 6.0 u shooters window, the plain eye-ray visibility and the torso-nearest pick
+/// stay). Opt-in per test: the master-green real-damage walks keep the plain pick.
+#[allow(dead_code)]
+pub fn with_real_damage_unseen_fights<R>(f: impl FnOnce() -> R) -> R {
+    struct Reset;
+    impl Drop for Reset { fn drop(&mut self) { UNSEEN_FIGHTS.with(|c| c.set(false)); } }
+    UNSEEN_FIGHTS.with(|c| c.set(true));
+    let _reset = Reset;
+    with_real_damage(f)
 }
 
 /// `with_real_damage` for a route whose legs were laid for an unanswered walk (a return-fire
@@ -252,6 +292,7 @@ impl DamageLog {
         };
         let torso = [d.pos[0], d.pos[1] + 0.3, d.pos[2]];
         let mut best: Option<(f32, [f32; 3])> = None;
+        let mut head: Option<[f32; 3]> = None;
         for b in d.hit_boxes(&data) {
             let c = [b.m[3][0], b.m[3][1], b.m[3][2]];
             let ray = [c[0] - eye[0], c[1] - eye[1], c[2] - eye[2]];
@@ -270,7 +311,14 @@ impl DamageLog {
             }
             let dev = ((c[0] - torso[0]).powi(2) + (c[1] - torso[1]).powi(2) + (c[2] - torso[2]).powi(2)).sqrt();
             if best.map_or(true, |(bd, _)| dev < bd) { best = Some((dev, c)); }
+            // HEAD-HUNT (opt-in, `with_real_damage_head_hunting`): the clear head box (part 5)
+            // within 6 u of the eye — the same window walker.rs `exposed_aim`'s `prefer_head`
+            // uses — wins over the torso-nearest pick.
+            if head.is_none() && b.part == 5 && ((c[0] - eye[0]).powi(2) + (c[2] - eye[2]).powi(2)).sqrt() <= 6.0 {
+                head = Some(c);
+            }
         }
+        if let Some(h) = head { return Some(h); }
         best.map(|(_, c)| c)
     }
 
@@ -367,6 +415,7 @@ impl Walker {
             let sim = self.scene.sim.as_ref().unwrap();
             if sim.disabled || !sim.bond.grounded { return false; }
             let cands = self.dmg.shooters(sim);
+
             // The plain pick: the nearest shooter Bond can see (`shooters` is nearest first).
             // With `lane_fights`, fight the shooter who is actually HURTING Bond first: the 07000013 crossing mixed
             // 0-damage desk guards with two rifle guards (weapon 0x18, 7.0 a hit) at 25-45 u, and
@@ -386,7 +435,18 @@ impl Walker {
             };
             let mut unseen_fight = false;
             let pick = if !self.dmg.lane_fights {
-                cands.iter().copied().find(|&i| DamageLog::visible(sim, i))
+                match cands.iter().copied().find(|&i| DamageLog::visible(sim, i)) {
+                    Some(i) => Some(i),
+                    // The unseen-cover fallback, opt-in (`with_real_damage_unseen_fights`): the
+                    // same hurting-first pick the lane fights run, so a desk guard the eye rays
+                    // cannot reach is still answered (the creep opens the line).
+                    None if UNSEEN_FIGHTS.with(|c| c.get()) => {
+                        unseen_fight = true;
+                        cands.iter().copied().find(|&i| dmg_of(i) > 0.0)
+                            .or_else(|| cands.first().copied())
+                    }
+                    None => None,
+                }
             } else {
                 let vis = cands.iter().copied()
                     .filter(|&i| DamageLog::visible_gun_rays(sim, i))
@@ -447,7 +507,11 @@ impl Walker {
                     || inv.carried.get(sim.weapons.ammo_type(w)).copied().unwrap_or(0) > 0
             })
         };
-        let lane = self.dmg.lane_fights;
+        // The unseen-fights mode shares the lane fights' resupply gates: a player who runs dry
+        // picks up the guards' own drops instead of walking on (the 12 corridor: clip 1 spare 0
+        // at the shotgun guard's door — the fights' silent `!armed` return left Bond standing
+        // in the lane [L the walkreal_07000012_real_damage run, 2026-11-02]).
+        let lane = self.dmg.lane_fights || UNSEEN_FIGHTS.with(|c| c.get());
         if !armed(self) {
             if lane && !self.dmg.resupplying {
                 self.dmg.resupplying = true;
@@ -566,7 +630,8 @@ impl Walker {
                 // never while a guard stands inside the back-off range. OPT-IN (`lane_fights`,
                 // the 07000013 walk): the shared walks' stands never move forward (master
                 // behaviour; level-13-lobby-rifles-2).
-                let creep = self.dmg.lane_fights && aim.is_none() && !crowd && self.dmg.back_off.is_some() && unseen % 12 < 7;
+                let creep = (self.dmg.lane_fights || self.dmg.unseen_fight) && aim.is_none() && !crowd
+                    && (self.dmg.back_off.is_some() || self.dmg.unseen_fight) && unseen % 12 < 7;
                 if trace && t % 60 == 0 {
                     eprintln!("[rf-trace] fight#{di} t{t}: tgt hp {:.1} at ({:.1},{:.1}) bond ({:.1},{:.1}) hp {:.1} aim {:?} blocked {blocked} err {err:.3} perr {perr:.3} clip {} spare {} creep {creep}",
                         sim.drones.list[di].health, sim.drones.list[di].pos[0], sim.drones.list[di].pos[2],

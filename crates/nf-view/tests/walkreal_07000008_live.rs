@@ -457,9 +457,18 @@ fn walk_the_whole_mission_on_real_input() {
         let desired_pitch = (to[1] / l).asin() / std::f32::consts::FRAC_PI_2;
         let yaw_err = walker::wrap_pi(desired_yaw - yaw);
         let pitch_err = desired_pitch - pitch;
+        // REAL-HEALTH TACTIC (the level's own offering — fire discipline): the Hind's circuit
+        // closes on the bottom station, and a rocket that lands while the machine is inside
+        // its own blast's reach (radius 8, ≈100 [L ee_start_05.bin @0x2bf150 + 0x2C·0x10C;
+        // M Explode_Propagate 0x17c518 case 0]) takes Bond with it — measured −52.5 then
+        // −23.5 (death) on the real-health run at frames 26540/26693 with the machine closing
+        // past ~5 u. A player holds the trigger and backs off the platform until the machine
+        // wheels out: step back (forward −1, aim held) while it is inside 10 u, fire only
+        // beyond. The topped-up walk never sees the difference (the blasts heal over).
         let input = Input {
             turn: yaw_err.clamp(-0.08, 0.08),
             look: pitch_err.clamp(-0.05, 0.05),
+            forward: if rocket.is_none() && l < 10.0 { -1.0 } else { 0.0 },
             aiming: rocket.is_none(),
             ..Default::default()
         };
@@ -473,7 +482,7 @@ fn walk_the_whole_mission_on_real_input() {
                 sim.drones.player_bullets.iter().filter(|b| !b.dead).count());
         }
         // Fire when the view sits on the machine, the camera is home and no rocket flies.
-        let ready = rocket.is_none() && sim.missile_cam.is_none() && yaw_err.abs() < 0.03 && pitch_err.abs() < 0.03;
+        let ready = rocket.is_none() && sim.missile_cam.is_none() && yaw_err.abs() < 0.03 && pitch_err.abs() < 0.03 && l >= 10.0;
         if ready && w.total_ticks % 2 == 0 { w.tick_fire(input); } else { w.tick(input, false); }
         if t % 600 == 0 {
             let sim = w.scene.sim.as_ref().unwrap();
@@ -704,4 +713,16 @@ fn the_ally_fights_only_the_guards_through_the_noise_path() {
         &zoe.shot_aims[..zoe.shot_aims.len().min(8)]);
     eprintln!("[08 noise] zoe states {:?} shots {} aims {}", &zoe.log[..zoe.log.len().min(20)], zoe.shots.len(), zoe.shot_aims.len());
     let _ = zpos;
+}
+
+/// Real damage: the whole-mission walk with the health top-up off for every walker it makes and
+/// the walker's return fire on — Bond's death panics with the death spot and the last hits
+/// (common/damage_log.rs), so a pass pins that the walk completes on the port's own damage.
+/// No health/armour/ammo writes anywhere: the carried latches are the mission's ENTRY state
+/// (set once at the cold spawn, header §The carried latches — in play they ride the RamSave
+/// [M Player_RamSave 0x195670]), the fusebox wires, the safe bolts and the briefcase take are
+/// the level's real interaction paths, and the gondola ride is the game's own script.
+#[test]
+fn walk_the_whole_mission_on_real_input_real_damage() {
+    walker::with_real_damage(walk_the_whole_mission_on_real_input);
 }
