@@ -9,3 +9,6 @@ Do:
 2. If the port differs (sign or component), fix it at the one place drones take their spawn yaw, and check every level's guard-facing tests and walks (the change touches every placed guard). If the port matches, say so with the disassembly lines and leave the code.
 3. Either way, add a test pinning the facing law with the cited instruction addresses and a sister that fails on the opposite sign. Turn corridor_guards_07000012_live into a real pin if the fix makes the corridor guards wake on the player's approach.
 4. Run every enemies_*/walkreal_*/interactables_* live test, stealth tests, then the full suite.
+
+---
+claimed-by: sandbox1 at 2026-11-02T09:30Z
