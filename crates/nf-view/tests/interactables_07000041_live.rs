@@ -493,3 +493,112 @@ fn every_model_resolves_on_the_load() {
     let _ = sim;
     assert!(scene.cels.len() > 0, "the level's rooms loaded [D survey: 8 cels on the wrapper]");
 }
+
+/// The chain trigger answers the player's E — until the plate locks it. SL_Trigger #99
+/// (20.59, 0.00, −33.44) carries out ch 1, mask 0x4 = the E/activate dispatch, lock ch 0x6e
+/// [D PL#99 params 0:0x1 1:0x4 7:0x6e — the census re-run #572]: `Trigger_Activate` 0x1b2318
+/// case 1 fires it on the use while its lock is clear, and `Trigger_Locked` 0x1b2fc8:24-29
+/// locks it whenever ch 0x6e is on — the state the walk-through plate #100 (out 0x6e, mask 8
+/// [D PL#100]) leaves behind. So the level's chain channel has a REAL player path (the tests
+/// above drive ch 1 with the set_script stand-in): the E on #99 before the plate fires the
+/// whole approach chain; after the plate the same E is refused. Sisters: ch 1 cold at the
+/// load; and on a fresh load walked through the plate, the E on #99 leaves ch 1 cold.
+#[test]
+fn the_chain_trigger_answers_the_e_until_the_plate_locks_it() {
+    let Some(iso) = iso() else { eprintln!("NF_ISO not set — skipping"); return };
+    // Leg 1: the unlocked E fires the chain, and the wrapper ends (the real-path version of the
+    // stand-in drive).
+    let mut scene = load(&iso);
+    {
+        let sim = scene.sim.as_ref().unwrap();
+        assert!(!sim.drones.channels.on(1), "sister: ch 1 cold at the load [D]");
+        assert!(!sim.drones.channels.on(0x6e), "sister: the plate is uncrossed [D]");
+    }
+    {
+        let sim = scene.sim.as_mut().unwrap();
+        settle(sim);
+        // At #99's own spot, aiming the use point INTO its volume (the use sphere is head + look
+        // [M 0x1a5170:100-108]; the pitch is the game's ±1 value [M RotMatrixX 0x1e46a0]).
+        sim.bond = nf_game::player::Bond::stand_at(&sim.world, [20.59, 1.4, -32.0], std::f32::consts::PI);
+        for _ in 0..30 { sim.step_bond(Input::default(), false, false, false); }
+        {
+            let target = [20.59f32, 0.5, -33.44];
+            let head = sim.bond.head();
+            let dx = target[0] - head[0]; let dy = target[1] - head[1]; let dz = target[2] - head[2];
+            let dist = (dx * dx + dz * dz).sqrt().max(0.5);
+            sim.bond.yaw = dx.atan2(dz);
+            sim.bond.pitch = (dy / dist).atan() / std::f32::consts::FRAC_PI_2;
+        }
+        let mut fired = false;
+        for _ in 0..120 {
+            sim.step_bond(Input::default(), false, false, true);
+            if sim.drones.channels.on(1) { fired = true; break; }
+        }
+        assert!(fired, "the E on SL_Trigger #99 fires ch 1 while its lock 0x6e is clear [D PL#99 p0 = 1, p1 = 0x4, p7 = 0x6e; M 0x1b2318 case 1]");
+    }
+    {
+        let sim = scene.sim.as_ref().unwrap();
+        assert!(sim.drones.channels.on(1), "the chain channel latched [D]");
+    }
+    let sim = scene.sim.as_mut().unwrap();
+    let idle = Input::default();
+    let mut exited = false;
+    for _ in 0..2000 { sim.step_bond(idle, false, false, false); if sim.drones.level_exit == Some(0x0700_001b) { exited = true; break; } }
+    assert!(exited, "the E-fired chain ends the wrapper into 0x0700001b [M 0x1d6360:99-102's hand-off; S the port's flow — the existing stand-in test's pin]");
+    // Leg 2 (the sister on a fresh load): the plate's ch 0x6e locks #99 — the same E is refused.
+    let mut scene2 = load(&iso);
+    {
+        let sim = scene2.sim.as_mut().unwrap();
+        settle(sim);
+        // The real walk through the plate #100 (the plate test's own route).
+        sim.bond = nf_game::player::Bond::stand_at(&sim.world, [15.5, 1.4, -30.0], std::f32::consts::PI);
+        let mut input = Input::default();
+        input.forward = 1.0;
+        let mut crossed = false;
+        for _ in 0..200 { sim.step_bond(input, false, false, false); if sim.drones.channels.on(0x6e) { crossed = true; break; } }
+        assert!(crossed, "the plate walk armed the lock channel [D PL#100; M 0x1b2b88]");
+        // The E on #99 now: locked — ch 1 must stay cold [M Trigger_Locked 0x1b2fc8:24-29].
+        sim.bond = nf_game::player::Bond::stand_at(&sim.world, [20.59, 1.4, -32.0], std::f32::consts::PI);
+        for _ in 0..30 { sim.step_bond(Input::default(), false, false, false); }
+        for _ in 0..120 { sim.step_bond(Input::default(), false, false, true); }
+        assert!(!sim.drones.channels.on(1),
+            "sister: with the plate's ch 0x6e on, the E on #99 is locked out — ch 1 must stay cold [M 0x1b2fc8:24-29; D PL#99 p7 = 0x6e]");
+    }
+}
+
+/// The movie trigger (0xF4 MovieTrigger #81 at (16.13, −0.00, −0.41), mask 0x4, movie code 0
+/// [D PL#81 params 0:0x0 1:0x4 — the census re-run #554]) answers the E with the game's own
+/// no-op chain: `Trigger_Activate` 0x1b2318:51-62 case 0xd gates on mask&4, writes
+/// `GameState+0x10 = 0` and pushes GameFlow states 6+7; state 6 pops immediately
+/// (`psiMovieFinished` 0x1082e8 — no movie was started) and NOTHING on the arm calls
+/// `ResetMap_LevelToLoad` — no movie, no level load [M the audit's consumer chain]. The port:
+/// the armed E raises `movie_request = Some(0)` and the wrapper stays put. Sister: no movie
+/// request and no exit before the E.
+#[test]
+fn the_movie_trigger_e_requests_no_movie_and_no_exit() {
+    let Some(iso) = iso() else { eprintln!("NF_ISO not set — skipping"); return };
+    let mut scene = load(&iso);
+    {
+        let sim = scene.sim.as_ref().unwrap();
+        assert_eq!(sim.drones.movie_request, None, "sister: no movie request at the load [D]");
+        assert_eq!(sim.drones.level_exit, None, "sister: no exit at the load [D]");
+    }
+    {
+        let sim = scene.sim.as_mut().unwrap();
+        settle(sim);
+        // At the trigger's spot, facing its volume (the use sphere is head + look [M 0x1a5170]).
+        sim.bond = nf_game::player::Bond::stand_at(&sim.world, [16.13, 1.4, 0.9], std::f32::consts::PI);
+        for _ in 0..30 { sim.step_bond(Input::default(), false, false, false); }
+        let mut fired = false;
+        for _ in 0..120 {
+            sim.step_bond(Input::default(), false, false, true);
+            if sim.drones.movie_request.is_some() { fired = true; break; }
+        }
+        assert!(fired, "the E on the movie trigger raises the movie request [D PL#81 mask 0x4; M 0x1b2318:51-62 case 0xd]");
+    }
+    let sim = scene.sim.as_ref().unwrap();
+    assert_eq!(sim.drones.movie_request, Some(0),
+        "the request carries the OUT slot's movie code 0 [D PL#81 p0 = 0; M the port's movie_request = the OUT slot]");
+    assert_eq!(sim.drones.level_exit, None,
+        "no level load rides the movie trigger [M 0x1b2318 case 0xd calls no ResetMap_LevelToLoad; the audit's consumer chain]");
+}
