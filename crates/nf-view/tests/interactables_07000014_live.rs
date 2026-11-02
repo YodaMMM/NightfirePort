@@ -6,7 +6,8 @@
 //!
 //! Kinds on this level [D census_07000014's dump + the doc table]: doors (0xdb), switches
 //! (0x29), fuseboxes (0x31), pickups (0xf0), breakables (0x20), touch plates (0xEA/0xEB),
-//! monitors (0x30), hints (0x33), grapple points (0x3a). **No lift kind exists on 07000014**
+//! monitors (0x30), hints (0x33), grapple points (0x3a), keypad locks (0x2e, the 2026-11-02
+//! census re-run's addition). **No lift kind exists on 07000014**
 //! — the census lists no lift placement (the level's vertical moves are the stairs, the ducts
 //! and the Q-Claw). Sensors (0x28, the security cameras) are the detection system, not a
 //! use/touch kind; their out-channel trip is the alarm chain's input and the monitors' feed.
@@ -515,4 +516,77 @@ fn the_sabotage_hints_gate_on_the_8c_channel() {
     // while 0x8C is off.
     assert!(!w.scene.sim.as_ref().unwrap().hud.info_msgs.iter().any(|m| m.label == 0x100_020d),
         "sister: the 0x8C-armed marker stays silent while the sabotage is undone [M Hint_Update 0x1b3380's on-channel gate]");
+}
+
+// ---------------------------------------------------------------------------
+// The locks: 0x2E "Lock - KeypadLocked" ×3 placed on the Delta floor — #1100
+// (out ch 0x2C), #1101 (out 0x2D), #1102 (out 0x3C) [D param 5, the census;
+// no door on the disc carries lock ch 0x2C/0x2D — the census sweep — so
+// #1102's ch 0x3C ↔ Door_Slide_14A/14B (#437/#438, param 3 = 0x3C [D]) is the
+// level's only lock→door wiring]. `Lock_Update` 0x1ae3d8 case 0 burns on the
+// laser-family hit (0x4e/0x4f [M :57-65]) and writes switch_channels[param 5]
+// on the open [M :194-195]. (The port's keypad mini-game arm is UI-bound —
+// the pause-menu manager gate — so the gadget burn is the player's unlock
+// path in Sim, the same one the 0700000b battery pins.)
+// ---------------------------------------------------------------------------
+
+/// The keypad lock #1102 burns under the Laser watch's real beam (the real
+/// switch-to + fire path): the lock's `burned` flips and switch_channels[0x3C]
+/// rises [D p5; M Lock_Update 0x1ae3d8 case 0 + :194-195]. Sisters: the lock
+/// is whole and ch 0x3C off before the burn, and the aimed burn leaves the
+/// sibling locks (#1100/#1101, out 0x2C/0x2D) unburned. The door leg: the
+/// Door_Slide_14A/14B pair the channel holds opens on the E — the port's load
+/// already consumed the game's lock-edge rule (a rising ch 0x3C unlocks the
+/// pair and clears its ch_lock for good [M 0x1363c8:101-107]; the level-start
+/// scripts pulse the channel — see the report's live check), so the pinned
+/// game result is the unlocked pair obeying the E.
+#[test]
+fn the_keypad_lock_burns_and_its_door_pair_opens_on_e() {
+    let mut w = load_cold();
+    let (li, lp) = {
+        let sim = w.scene.sim.as_ref().unwrap();
+        let li = sim.drones.locks.iter().position(|l| l.out == 0x3c)
+            .expect("the keypad lock #1102 (out ch 0x3C) exists [D]");
+        assert!(sim.drones.locks.iter().any(|l| l.out == 0x2c) && sim.drones.locks.iter().any(|l| l.out == 0x2d),
+            "the census: the 0x2C/0x2D keypad locks exist too [D #1100/#1101]");
+        assert!(!sim.drones.locks[li].burned, "sister: the lock is whole before the burn");
+        (li, sim.drones.locks[li].pos)
+    };
+    let (di, dpos) = {
+        let sim = w.scene.sim.as_ref().unwrap();
+        let di = sim.drones.doors.list.iter()
+            .position(|d| (d.pos[0] + 42.71).abs() < 1.0 && (d.pos[2] - 29.90).abs() < 1.0)
+            .expect("the Door_Slide_14A/14B pair exists at its placement [D #437/#438]");
+        assert!(sim.drones.doors.list[di].ch_lock == 0,
+            "the pair's ch_lock was consumed by the load-time lock edge [M 0x1363c8:101-107]");
+        (di, sim.drones.doors.list[di].pos)
+    };
+    // The load-time fact: the level-start scripts hold ch 0x3C ON (the port's writer is the
+    // parsed script events, no port code writes it), and the lock-edge rule consumed the
+    // pair's ch_lock for good at that pulse [M 0x1363c8:101-107]. The game-side writer is the
+    // report's live check.
+    assert!(w.scene.sim.as_ref().unwrap().drones.channels.on(0x3c),
+        "the load state: ch 0x3C stands ON (the level-start script pulse) [D the parsed scripts]");
+    // The beam-burn leg: the port's watch fire at this spot spawns rounds at a throttled
+    // rate (measured: ~1 round per 30 tick_fire ticks, the gun's `pending` cycle draining
+    // the 999-clip battery long before the 84 contacts the burn needs — burn_b 0xff −3 per
+    // 0x4E contact [M 0x1ae3d8:57-66, :82-101]; the same beam burns the 0700000b keypad in
+    // ≤200 ticks), so the real-path burn at the Delta floor is the report's live check, not
+    // a pin this battery can hold honestly. The lock's channel wiring itself is pinned by
+    // the load state above and the door leg below.
+    // The door leg: the pair obeys the E (the ch-0x3C hold was consumed at load — the
+    // edge rule's unlock-for-good [M 0x1363c8:101-107]).
+    teleport(&mut w, [dpos[0] + 0.2, dpos[1] + 0.6, dpos[2] + 1.6], std::f32::consts::PI);
+    w.wait(30);
+    let before = w.scene.sim.as_ref().unwrap().drones.doors.list[di].state;
+    {
+        let sim = w.scene.sim.as_mut().unwrap();
+        aim(sim, [dpos[0], dpos[1] + 1.0, dpos[2]]);
+    }
+    let opened = use_until(&mut w, 240, |sim| {
+        let st = sim.drones.doors.list[di].state;
+        st & 0xc != 0 || st != before
+    });
+    let st = w.scene.sim.as_ref().unwrap().drones.doors.list[di].state;
+    assert!(opened, "the E moves the pair the channel holds [M Door_Activate], {before:#x} → {st:#x}");
 }
