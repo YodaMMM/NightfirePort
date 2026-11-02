@@ -3981,6 +3981,11 @@ impl Sim {
         let at = |dy: f32| [pos[0], pos[1] + dy, pos[2]];
         let body = match self.bond.substate {
             nf_game::player::SS_CLIMB | nf_game::player::SS_CREEP => (at(0.55), at(0.275 - cc), 0.275),
+            // `Player_Collision` 0x194df0's case 5 (substate 6, the wire) and case 0xe (substate
+            // 0xf, the zipline): the tall attach arm — A = pos+up·0.275, B = pos+up·(2.1 − cc),
+            // r 0.55, with the attach object at +0x7b8 [M :249-267 / :383-410]. Its reach bottom
+            // is pos−0.275: an attached rider's touch stays off floor plates.
+            nf_game::player::SS_WIRE | nf_game::player::SS_ZIPLINE => (at(0.275), at(2.1 - cc), 0.55),
             _ if self.bond.crouched => (at(0.1 - (cc - 0.55)), at(0.45 - cc), 0.55),
             _ => (at(0.275), at(0.55 - cc), 0.55),
         };
