@@ -187,7 +187,8 @@ pub struct EmitterDef {
     pub texture: u32,
     /// def+0x08: the per-particle model (celglist) hash (-1 → 0); 0 = the sprite path.
     pub model: u32,
-    /// def+0x3c (tag >> 8): 0 = normal alpha blend, else additive [M 0x17b708:15 psiSetUpColourBlend].
+    /// def+0x3c (tag >> 8): 0 = ADDITIVE (ALPHA_1 0x48), else normal alpha (0x44) — `Emitter_Draw`
+    /// passes `def+0x3c == 0` to `psiDrawParticleList` [M disasm 0x17b81c `sltiu t1,t1,1`; 0x122da8].
     pub blend: u16,
     /// def+0x38: the particle slot count [M 0x17ae00 alloc count·0x2c + 0x150].
     pub max: u16,

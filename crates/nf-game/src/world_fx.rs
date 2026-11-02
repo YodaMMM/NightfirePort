@@ -456,8 +456,16 @@ pub struct ParticleSprite {
     pub pos: V3,
     pub size: f32,
     pub rgba: [u8; 4],
-    /// def+0x3c: 0 = normal alpha, else additive [M 0x17b708:15].
+    /// The GS blend `psiDrawParticleList` 0x122d50 sets: def+0x3c == 0 → ADDITIVE. `Emitter_Draw`
+    /// passes `def+0x3c == 0` as the t1 flag [M disasm 0x17b80c-0x17b830: `lhu t1,60(v1)` /
+    /// `sltiu t1,t1,1`]; a set flag takes `psiSetUpColourBlend(0)` [M 0x122da8-0x122db4] = ALPHA_1
+    /// 0x48 (Cs·As + Cd), a clear one `psiSetUpColourBlend(1)` = 0x44 ((Cs−Cd)·As + Cd)
+    /// [M 0x1214f8].
     pub additive: bool,
+    /// def+0x04: the sprite texture hash (0 = none) — `Emitter_LoadDefs` 0x17ab40 stores the
+    /// texture hashtable entry's first word and `CreatePointerSpriteListColour` 0x119910 binds it
+    /// through `psiFont_SetTexture` 0x120880 [M 0x119910:19].
+    pub texture: u32,
 }
 
 /// The whole FX set for one level (`WorldFx::attach_level`).
@@ -821,9 +829,16 @@ impl WorldFx {
                     alive += 1;
                     let c = def.colour_at(p.age * (1.0 / p.life));
                     p.rgba = [c[0].clamp(0.0, 255.0) as u8, c[1].clamp(0.0, 255.0) as u8, c[2].clamp(0.0, 255.0) as u8, c[3].clamp(0.0, 255.0) as u8];
-                    p.vel[1] += REC_FRAME_RATE * def.gravity * -9.8;
+                    // The game's order: the position steps with the OLD velocity, then gravity
+                    // pulls the velocity [M 0x17b080:150-160: `_vmulbc`/`_vadd` into data+4, then
+                    // `data[0]+4 += REC_FRAME_RATE·g·−9.8`].
                     for k in 0..3 { p.pos[k] += p.vel[k] * REC_FRAME_RATE; }
+                    p.vel[1] += REC_FRAME_RATE * def.gravity * -9.8;
                     p.age += REC_FRAME_RATE;
+                } else {
+                    // A dead slot's alpha byte is cleared [M 0x17b080:171 `colour[3] = 0`] — the
+                    // draw keeps every slot and the zero alpha is what hides it.
+                    p.rgba[3] = 0;
                 }
             }
             if alive > 0 && e.ch_out != 0 { ch.set(e.ch_out as u32, 1, frame); }
@@ -887,7 +902,14 @@ impl WorldFx {
                             [0.0, 0.0, 0.0, 1.0],
                         ]
                     });
-                    p.vel = [0, 1, 2].map(|k| m[k][0] * dir[0] + m[k][1] * dir[1] + m[k][2] * dir[2]);
+                    // The VU sum weights the ROWS by the direction's components — `vmulax` row
+                    // +0x90 · dir.x, `vmadday` row +0xa0 · dir.y, `vmaddz` row +0xb0 · dir.z [M
+                    // 0x17b080 `_vmulabc`/`_vmaddabc`/`_vmaddbc`]: vel = Norm·x + Up·y + Dir·z, so
+                    // the cone's local +y leaves along the hit normal. (Row·dir dot products — the
+                    // transpose — sent wall sparks INTO the wall; a +y normal's basis is the
+                    // identity, where both forms agree.) Live 05 wall hit, normal +z: every slot's
+                    // velocity has z 2.0..3.5 out of the wall [L PCSX2 dump].
+                    p.vel = [0, 1, 2].map(|k| m[0][k] * dir[0] + m[1][k] * dir[1] + m[2][k] * dir[2]);
                     p.pos = e.pos;
                     p.life = life;
                     let c0 = def.keys.first().copied().unwrap_or([0.0; 5]);
@@ -907,9 +929,15 @@ impl WorldFx {
         let mut out = Vec::new();
         for e in &self.emitters {
             let Some(def) = self.defs.get(&e.def) else { continue };
-            for p in &e.parts {
-                if p.age >= p.life || p.rgba[3] == 0 { continue; }
-                out.push(ParticleSprite { pos: p.pos, size: def.size, rgba: p.rgba, additive: def.blend != 0 });
+            // `Emitter_Draw` hands `psiDrawParticleList` every slot (count def+0x38) and the list
+            // masks the count down to a multiple of 4 [M 0x122d50 `param_3 & ~3`]: slots past it
+            // never draw. A slot shows while its colour alpha byte is set — the update writes the
+            // colour from the age BEFORE stepping it, so a slot draws on the tick it runs out and
+            // the next update's dead arm clears the byte [M 0x17b080].
+            let drawn = (def.max & !3) as usize; // [M 0x122d50 `param_3 & 0xfffffffffffffffc`]
+            for p in e.parts.iter().take(drawn) {
+                if p.rgba[3] == 0 { continue; }
+                out.push(ParticleSprite { pos: p.pos, size: def.size, rgba: p.rgba, additive: def.blend == 0, texture: def.texture });
             }
         }
         out
@@ -1067,6 +1095,88 @@ mod tests {
     /// `Emitter_Update` 0x17b080: a continuous emitter (rate −1, no channels) fills its slots at the
     /// batch rate, integrates them (pos += vel·dt, gravity), colours them over life, drives the out
     /// channel while anything lives, and a one-shot (rate 0 → expired) dies 3 all-dead ticks later.
+    /// The 05 stone-wall spark def 0x0c00000f [D 07000005.bin block 0x30] as a one-shot impact burst
+    /// on a wall facing +z — the live dump's case [L PCSX2, audits/render-1101-particles-ps2
+    /// imp05/stone-log.txt: hit (46.949, 30.300, 55.003), every slot's velocity z 2.0..3.5].
+    fn wall_burst() -> WorldFx {
+        let def = EmitterDef {
+            hash: 0x0c00_000f, texture: 0x0300_00bb, model: 0, blend: 0, max: 30, batch: 5, size: 0.051_961_523,
+            life_base: 0.4, life_var: 0.033_333_33, gravity: 0.091_836_73, speed_base: 3.0, speed_var: 1.0,
+            pitch_base: 0.0, pitch_var: 1.658_062_7, yaw_base: 3.333_578_8, yaw_var: 0.872_664_6,
+            keys: vec![[127.5, 80.0, 0.0, 255.0, 0.0], [0.0, 0.0, 0.0, 0.0, 0.999_999_94]],
+        };
+        let mut fx = WorldFx { defs: std::iter::once((def.hash, def)).collect(), ..Default::default() };
+        fx.spawn_impact(0x0c00_000f, [46.949, 30.3, 55.003], [0.0, 0.0, 1.0]);
+        fx
+    }
+
+    fn tick_n(fx: &mut WorldFx, n: u32, rng: &mut crate::drone::Rng) {
+        let mut ch = Channels::default();
+        for f in 0..n { fx.tick(&mut ch, [0.0; 3], f, &mut crate::gas::GasPool::default(), rng); }
+    }
+
+    /// The spawn velocity is the object rows weighted by the cone direction (vel = Norm·x + Up·y +
+    /// Dir·z [M 0x17b080 `_vmulabc`/`_vmaddabc`/`_vmaddbc`]): on a +z wall every spark leaves out
+    /// of the wall, as live. Sister: the transposed form (row·dir) sends the same draws into it.
+    #[test]
+    fn wall_sparks_leave_along_the_hit_normal() {
+        let mut rng = crate::drone::Rng::new(7);
+        let mut fx = wall_burst();
+        tick_n(&mut fx, 6, &mut rng);
+        let e = &fx.emitters[0];
+        let live: Vec<_> = e.parts.iter().filter(|p| p.age < p.life).collect();
+        assert_eq!(live.len(), 30, "5 a tick up to the 30 slots, as the live dump at +12 [L]");
+        for p in &live {
+            assert!(p.vel[2] > 1.0 && p.vel[2] < 4.1, "out of the +z wall: vel {:?}", p.vel);
+            assert!(p.pos[2] >= 55.003, "never behind the wall face: pos {:?}", p.pos);
+        }
+        // Sister: the same basis applied as row·dir dot products points the cone into the wall.
+        let m = e.basis.unwrap();
+        let d = [0.3f32, 0.9, -0.2];
+        let rows = [0, 1, 2].map(|k| m[0][k] * d[0] + m[1][k] * d[1] + m[2][k] * d[2]);
+        let dots = [0, 1, 2].map(|k| m[k][0] * d[0] + m[k][1] * d[1] + m[k][2] * d[2]);
+        assert!(rows[2] > 0.8 && dots[2] < -0.1, "the two forms differ on a +z normal: {rows:?} vs {dots:?}");
+    }
+
+    /// The live slot life and colour fade [L dump]: a slot keeps the key colour (127, 80, 0, 255) on
+    /// its spawn tick, then lerps toward the zero key; it draws on the tick its age runs past its
+    /// life (the colour comes from the age before the step) and its alpha byte is cleared on the
+    /// next update; the draw list stops at max & !3 = 28 slots [M 0x122d50]. The position steps
+    /// with the old velocity before gravity [M 0x17b080] (live: y 30.300 → 30.3004 with vel.y
+    /// 0.022 on the first step).
+    #[test]
+    fn slots_draw_through_their_last_tick_and_the_list_masks_to_four() {
+        let mut rng = crate::drone::Rng::new(3);
+        let mut fx = wall_burst();
+        tick_n(&mut fx, 1, &mut rng);
+        let p0 = fx.emitters[0].parts[0].clone();
+        assert_eq!(p0.rgba, [127, 80, 0, 255], "the spawn tick holds key 0 (halved rgb, raw alpha) [L]");
+        tick_n(&mut fx, 1, &mut rng);
+        let p1 = &fx.emitters[0].parts[0];
+        let want = p0.pos[1] + p0.vel[1] / 60.0;
+        assert!((p1.pos[1] - want).abs() < 1e-6, "position steps with the old velocity: {} vs {want}", p1.pos[1]);
+        assert!(p1.vel[1] < p0.vel[1], "then gravity pulls");
+        // Run slot 0 to its end: find the tick its age passes its life.
+        let life = p0.life;
+        let mut drawn_after_end = false;
+        for _ in 0..40 {
+            tick_n(&mut fx, 1, &mut rng);
+            let Some(e) = fx.emitters.first() else { break };
+            let p = &e.parts[0];
+            if p.age >= life && p.rgba[3] != 0 { drawn_after_end = true; }
+            if p.age >= life + 1.0 / 60.0 { assert_eq!(p.rgba[3], 0, "the next update clears the alpha byte"); break; }
+        }
+        assert!(drawn_after_end, "the slot still draws on the tick its age runs out");
+        // The 4-mask: with all 30 slots lit only 28 sprites draw.
+        let mut fx = wall_burst();
+        tick_n(&mut fx, 7, &mut rng);
+        assert_eq!(fx.emitters[0].parts.iter().filter(|p| p.rgba[3] != 0).count(), 30);
+        assert_eq!(fx.particle_sprites().len(), 28, "psiDrawParticleList draws count & !3 [M 0x122d50]");
+        // Sister: a max-4 def (the charge burn sparks) loses nothing to the mask.
+        fx.defs.get_mut(&0x0c00_000f).unwrap().max = 32;
+        assert_eq!(fx.particle_sprites().len(), 30, "the mask follows def+0x38");
+    }
+
     #[test]
     fn emitter_spawns_integrates_and_a_one_shot_dies() {
         let def = EmitterDef {
@@ -1094,6 +1204,13 @@ mod tests {
         let p0 = &fx.emitters[0].parts[0];
         assert!(p0.pos[1] < 2.0 && p0.vel[1] < 0.0, "gravity pulls the velocity down (speed 1 up, g 1)");
         assert!(p0.rgba != [0; 4], "the colour keys feed the slot rgba");
+        // The draw handoff carries the def's sprite texture (def+0x04) and the blend sense
+        // `Emitter_Draw` passes (`def+0x3c == 0` → additive) [M disasm 0x17b81c, 0x122da8].
+        assert!(fx.particle_sprites().iter().all(|s| s.texture == 0 && !s.additive), "def+0x3c = 1 draws normal alpha, no texture");
+        fx.defs.get_mut(&0x1234).unwrap().blend = 0;
+        fx.defs.get_mut(&0x1234).unwrap().texture = 0x0300_0082;
+        // Sister: the same slots flip with the def — the flag is read from the def, not fixed.
+        assert!(fx.particle_sprites().iter().all(|s| s.texture == 0x0300_0082 && s.additive), "def+0x3c = 0 draws additive with the def texture");
         // The one-shot: rate 0 → expired at create; the never-spawned slots fire once more
         // [M 0x17b080 the `age < 99999` skip], live their life, and 3 all-dead ticks later the
         // object self-destructs (obj+0xFE bit 0).

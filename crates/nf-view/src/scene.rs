@@ -230,6 +230,48 @@ pub struct Material {
     pub index_count: u32,
 }
 
+/// One emitter sprite as two triangles facing the camera (`right`/`up` world axes), half-extent
+/// `size`, uv (0,0) at the top-left corner — the whole sprite texture.
+pub fn particle_quad(pos: [f32; 3], size: f32, rgba: [u8; 4], right: [f32; 3], up: [f32; 3]) -> [Vertex; 6] {
+    let (r, u) = (right.map(|v| v * size), up.map(|v| v * size));
+    let c = |sr: f32, su: f32, uv: [f32; 2]| Vertex {
+        pos: [pos[0] + r[0] * sr + u[0] * su, pos[1] + r[1] * sr + u[1] * su, pos[2] + r[2] * sr + u[2] * su],
+        uv, rgba, nrm: [0; 4],
+    };
+    let (a, b, cc, d) = (c(-1.0, -1.0, [0.0, 1.0]), c(1.0, -1.0, [1.0, 1.0]), c(1.0, 1.0, [1.0, 0.0]), c(-1.0, 1.0, [0.0, 0.0]));
+    [a, b, cc, a, cc, d]
+}
+
+/// The world half-extent of an emitter sprite of def size `size` (def+0x30): HALF the size (the
+/// sprite is `size` across). The VU1 scale word is `4·size/(PS2ParticleSize·PS2SnowSizeMult)` [M
+/// 0x119910:81]. Measured [L PCSX2, audits/render-1101-particles-ps2]: on the 05 stone-wall hit
+/// (def 0x0c00000f, texture 0x030000bb — 16×16 with only its centre 2×2 texels lit [D]) the lit
+/// core of a lone spark is ≤ 1/8 of a quad `size` across at the dumped spark depth (the CRT filter
+/// only widens it), so a half-extent of `size` would draw it at least twice the game's width; the
+/// flake size measured on the 05 / 06 captures gives the same reading
+/// (`nf_game::env::flake_half_extent`). The 0700004a charge burn (def 0x0c00000a, a soft 64×64
+/// glow, ~43 overlapping sprites) is consistent with it once the additive alpha runs past 1
+/// (`particle_add_pipeline`).
+pub fn particle_half_extent(size: f32) -> f32 { size * 0.5 }
+
+/// The emitter defs' sprite textures (def+0x04 hash → index into `textures`): each hash resolves
+/// to the first map texture with that hashcode, reusing a scene texture of the same key or
+/// appending one. A zero hash (the file's −1) and a hash no map holds are left out.
+pub fn particle_textures(level: &nf_formats::level::Level, textures: &mut Vec<TextureImage>) -> HashMap<u32, usize> {
+    let mut out = HashMap::new();
+    for d in level.maps.iter().flat_map(|m| m.emitter_defs.iter()) {
+        if d.texture == 0 || out.contains_key(&d.texture) { continue; }
+        let Some((mi, t)) = level.maps.iter().enumerate().find_map(|(mi, m)| m.textures.iter().find(|t| t.hashcode == d.texture).map(|t| (mi, t))) else { continue };
+        let key = (mi, t.index as u32);
+        let i = match textures.iter().position(|x| x.key == key) {
+            Some(i) => i,
+            None => { textures.push(TextureImage::from_texture(mi, t)); textures.len() - 1 }
+        };
+        out.insert(d.texture, i);
+    }
+    out
+}
+
 /// fix-menu-movies: `Clone` so the front end can keep its own texture list (the scene's entries
 /// plus the background-movie frame slot) without re-parsing the archive.
 #[derive(Clone)]
@@ -6196,33 +6238,6 @@ impl Sim {
         out
     }
 
-    /// The emitter particles as camera-facing quads (`Emitter_Draw` 0x17b708 path A →
-    /// `psiDrawParticleList` 0x122d50: a size-`def.size` rgba sprite per alive slot). The game sizes
-    /// the sprite in screen space (`4·size / (PS2ParticleSize · PS2SnowSizeMult)`) — the port
-    /// takes the def size as the world-space half-extent, the way the snow quads do. The GAME'S SCALAR for the
-    /// render pass, EXACT [M 0x119910:81 `pDMA[4] = (uint)((1.0/(PS2ParticleSize·PS2SnowSizeMult))·4.0·size)`
-    /// — a VU1 sprite scale word next to the ST=1.0 constants]: PS2ParticleSize = Ps2Far1·0.002386635 [M 0x11e2e8:67],
-    /// PS2SnowSizeMult = (1/viewer+0x108)·(1/(viewport-H·0.002232143)) = 448/H [M 0x10b2b0:100-112] — ∝ 1/far and
-    /// ∝ viewport height, i.e. a FIXED SCREEN-SPACE size, not a world extent; the ±size/2 world-space reading is the
-    /// port's approximation (the half-vs-full factor lives in the VU1 sprite microcode, backlog L-706). The
-    /// white rgb in the game's sprite comes from the bound def texture (the font-slot hash, def+0x04)
-    /// modulated by the slot rgba [M 0x119910:19]; the port has no per-def texture, so the colour is
-    /// the slot rgba itself — listed in the report's render follow-ups.
-    pub fn particle_quads(&self, right: [f32; 3], up: [f32; 3]) -> Vec<Vertex> {
-        let sprites = self.drones.fx.particle_sprites();
-        let mut out = Vec::with_capacity(sprites.len() * 6);
-        for s in sprites {
-            let (r, u) = (right.map(|v| v * s.size), up.map(|v| v * s.size));
-            let c = |sr: f32, su: f32, uv: [f32; 2]| Vertex {
-                pos: [s.pos[0] + r[0] * sr + u[0] * su, s.pos[1] + r[1] * sr + u[1] * su, s.pos[2] + r[2] * sr + u[2] * su],
-                uv, rgba: s.rgba, nrm: [0; 4],
-            };
-            let (a, b, cc, d) = (c(-1.0, -1.0, [0.0, 1.0]), c(1.0, -1.0, [1.0, 1.0]), c(1.0, 1.0, [1.0, 0.0]), c(-1.0, 1.0, [0.0, 0.0]));
-            out.extend_from_slice(&[a, b, cc, a, cc, d]);
-        }
-        out
-    }
-
     /// The live animated script object from `src` (script hash, stream) on `skin`: its animation script and frame.
     /// A hidden SP's stream objects read as absent — the Script_HideObj cascade [M 0x1db808].
     pub fn script_anim(&self, src: (u32, u8), skin: u32) -> Option<(u32, f32)> {
@@ -6726,6 +6741,9 @@ pub struct Scene {
     /// break-shards draw: a kind-2 breakable's face draw word (its batch texture) → the index into
     /// `textures` of `(the pane object's map, word)`, so a shard binds the pane's own texture.
     pub shard_tex: HashMap<u32, usize>,
+    /// The emitter sprite textures: def+0x04 texture hash → index into `textures`
+    /// (`particle_textures`; a hash no map holds is absent and draws untextured).
+    pub particle_tex: HashMap<u32, usize>,
     /// The pause/fail menus' burning woman (`psiDecompressWoman` 0x1202a8): decoded into 0x030000db's HUD texture
     /// while a paused page shows it. Set by the loader from the level archive's kind-16 "woman" entry.
     pub woman: Option<crate::woman::Woman>,
@@ -7573,6 +7591,30 @@ impl Scene {
     /// word), and the alpha `min(lifetime·FRAME_RATE·10, 255)` through `psiSetTweakA` [M 0x12bef8:50-56].
     /// The tweak scales the face's own vertex alpha (255 → the pane as it was) [S: the tweak's exact
     /// use in the shard microcode is unread]. A shard still in its peel delay draws at its spawn spot.
+    /// The emitter sprites (`Emitter_Draw` 0x17b708 path A → `psiDrawParticleList` 0x122d50) as
+    /// camera-facing quads grouped by draw state: `(texture, additive, vertices)`, the texture an
+    /// index into `textures` (None = the def's hash resolved no map texture — the white fallback).
+    /// Each sprite is the def texture's whole image (`CreatePointerSpriteListColour` 0x119910:
+    /// the CLAMP_1 region-repeat masks are the texture's w−1/h−1, the ST constants 0..1 [M
+    /// 0x119910 pDMA[4..5], pDMA[0xc..0x10]]), MODULATED by the slot rgba (TEX0 TCC 1, TFX 0 [M
+    /// 0x119910 TEX0 word]), depth-tested without writing (`psiSwitchZBufferRead(0)` /
+    /// `psiSwitchZBufferWrite(1)` [M 0x122d98-0x122da4]), blended by def+0x3c
+    /// (`ParticleSprite::additive`). The game draws every emitter object in its own call; one
+    /// group per (texture, blend) draws the same pixels.
+    pub fn particle_draws(&self, right: [f32; 3], up: [f32; 3]) -> Vec<(Option<usize>, bool, Vec<Vertex>)> {
+        let Some(sim) = self.sim.as_ref() else { return Vec::new() };
+        let mut groups: Vec<(Option<usize>, bool, Vec<Vertex>)> = Vec::new();
+        for s in sim.drones.fx.particle_sprites() {
+            let tex = self.particle_tex.get(&s.texture).copied();
+            let g = match groups.iter().position(|(t, a, _)| *t == tex && *a == s.additive) {
+                Some(k) => k,
+                None => { groups.push((tex, s.additive, Vec::new())); groups.len() - 1 }
+            };
+            groups[g].2.extend_from_slice(&particle_quad(s.pos, particle_half_extent(s.size), s.rgba, right, up));
+        }
+        groups
+    }
+
     pub fn shard_draws(&self) -> Vec<(usize, Vec<Vertex>)> {
         let Some(sim) = self.sim.as_ref() else { return Vec::new() };
         let sh = &sim.drones.breaks.shatter;
@@ -9772,9 +9814,16 @@ pub fn build(level: &Level, cels_only: bool, skeletons: &HashMap<u8, Skeleton>, 
         // non-07000005 level would explain "ghostly white": texture × white vertex × GAIN → white.
         let untextured = materials.iter().filter(|m| m.key.is_none()).count();
         if untextured > 0 { eprintln!("render: {untextured} of {} materials have no texture (white fallback)", materials.len()); }
-        let textures: Vec<TextureImage> = keys.into_iter().map(|key| {
+        let mut textures: Vec<TextureImage> = keys.into_iter().map(|key| {
             TextureImage::from_texture(key.0, &level.maps[key.0].textures[key.1 as usize])
         }).collect();
+        // The emitter sprites' textures (def+0x04): `Emitter_LoadDefs` 0x17ab40 resolves the def's
+        // texture hash through the hashtable and keeps the entry's first word, which
+        // `CreatePointerSpriteListColour` 0x119910 binds via `psiFont_SetTexture` 0x120880 [M
+        // 0x17ab40 `hashtable_getitem` → `*item`, 0x119910:19]. The map texture with that hashcode joins the scene textures
+        // (appended, so the material texture indices stay put); the first map holding it wins,
+        // as the snow texture's lookup does.
+        let particle_tex = particle_textures(&level, &mut textures);
         let mut hud_textures: Vec<(u32, TextureImage)> = crate::hud::TEXTURES.iter().chain(crate::menu::MENU_TEXTURES.iter()).chain(crate::menu::mp_textures().iter()).filter_map(|&h| level.maps.iter().enumerate().find_map(|(mi, m)| m.textures.iter().find(|t| t.hashcode == h).map(|t| {
             (h, TextureImage::from_texture(mi, t))
         }))).collect();
@@ -10171,7 +10220,7 @@ pub fn build(level: &Level, cels_only: bool, skeletons: &HashMap<u8, Skeleton>, 
                 }
             }
         }
-        Scene { shard_tex, cels: room_cels, cel_graph, streams: None, music_files: None, music_tables: None, sound_bank: None, sound_spares: Vec::new(), snow_texture, vertices, indices, materials, textures, hud_textures, woman: None, hud, script_billboards, view_models, mp_bodies, bond_body, mp_body_weapons, mp_char_bodies, mp_anim_sets, fog, bounds, start, stats, characters, char_vertex_start, char_verts, sequences, attachments, sim, colliders, models_0x800, npc_pool, ladders_drawn, grapple_hooks_drawn, misc_drawn, lock_matrices, door_dims, sl_dims, dynobj_matrices, rotor_placements, rbody_placements, mine_placements, gunimp_placements, script_tweak_alpha,
+        Scene { shard_tex, particle_tex, cels: room_cels, cel_graph, streams: None, music_files: None, music_tables: None, sound_bank: None, sound_spares: Vec::new(), snow_texture, vertices, indices, materials, textures, hud_textures, woman: None, hud, script_billboards, view_models, mp_bodies, bond_body, mp_body_weapons, mp_char_bodies, mp_anim_sets, fog, bounds, start, stats, characters, char_vertex_start, char_verts, sequences, attachments, sim, colliders, models_0x800, npc_pool, ladders_drawn, grapple_hooks_drawn, misc_drawn, lock_matrices, door_dims, sl_dims, dynobj_matrices, rotor_placements, rbody_placements, mine_placements, gunimp_placements, script_tweak_alpha,
             door_scene_hidden,
             sl_lod,
             corona_pos,
