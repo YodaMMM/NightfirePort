@@ -12,6 +12,3 @@ Do:
 Rules for this task:
 - If you change anything under crates/nf-view/tests/common/ (walker, damage_log, walker_b2, ...), the change must be opt-in for your level (a flag your test sets) and you must run EVERY walkreal_*_live binary before finishing — shared-helper edits broke other levels three times on 11-02.
 - A player-visible fix ships with a real-input test that reaches the spot from the level start (no teleport after load), so the passing test is the proof.
-
----
-claimed-by: sandbox1 at 2026-11-02T20:01Z
