@@ -400,6 +400,16 @@ fn walk_the_whole_mission_from_the_start_to_the_0d_handoff() {
         w.total_ticks, w2.total_ticks);
 }
 
+/// THE WHOLE MISSION ON REAL HEALTH (`walker::walker::with_real_damage` — the b2 walker's
+/// damage_log): the same walked route, the top-up off — no health, armour or ammo writes
+/// anywhere — and Bond's death panics with the damage log (who, weapon, range). Auto-aim is
+/// the app default; the fights are the walker's own plain return fire. The two documented
+/// route stand-ins are links from the master walk (neither writes health, armour or ammo).
+#[test]
+fn walk_the_whole_mission_from_the_start_to_the_0d_handoff_real_damage() {
+    walker::walker::with_real_damage(walk_the_whole_mission_from_the_start_to_the_0d_handoff);
+}
+
 
 /// Sister (ladder-0c): the 0c's OTHER ladder, #495 `Ladder` (−6.42, 1.0, −177.39, yaw −0.2618,
 /// mesh bounds x ±0.204 / y 0..2.0 / z degenerate [D placement #495 + its map object]) — the same

@@ -639,6 +639,16 @@ fn walk_arrival_to_the_c5_door() {
     eprintln!("[0d] the full mission walked + completed in {} ticks; stuck {}; falls {}", w.total_ticks, w.report.stuck_events.len(), w.report.falls.len());
 }
 
+/// THE ARRIVAL WALK ON REAL HEALTH (`damage_log.rs::with_real_damage`): the same walked
+/// route, the top-up off — no health, armour or ammo writes anywhere — and Bond's death
+/// panics with the damage log (who, weapon, range). Auto-aim is the app default; the fights
+/// are the walker's own plain return fire (the same fights every other real-damage walk is
+/// pinned against).
+#[test]
+fn walk_arrival_to_the_c5_door_real_damage() {
+    walker::with_real_damage(walk_arrival_to_the_c5_door);
+}
+
 /// Turn Bond to `yaw` with the stick alone (`Input::turn` adds to the yaw each tick [port
 /// player.rs; the walker's own clamp]), capped at 200 ticks.
 fn turn_to(w: &mut Walker, yaw: f32) {
