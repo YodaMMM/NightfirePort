@@ -88,3 +88,10 @@ existing suites). One optional confirmation on the real game, if convenient:
 ## Usage
 
 not visible to me
+
+---
+## ntfy failed
+
+1. curl: (28) Connection timed out after 20001 milliseconds
+2. python urllib: URLError <urlopen error [Errno 101] Network is unreachable>
+3. wget: no output, killed after 30 s (connection never established)
