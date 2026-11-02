@@ -437,6 +437,16 @@ fn walk_the_full_route_and_complete_every_objective() {
     for s in &w.report.stuck_events { eprintln!("[03] stuck: {s}"); }
 }
 
+/// THE FULL ROUTE ON REAL HEALTH (`damage_log.rs::with_real_damage`): the same walked route,
+/// the top-up off — no health, armour or ammo writes anywhere — and Bond's death panics with
+/// the damage log (who, weapon, range). Auto-aim is the app default; the fights are the
+/// walker's own plain return fire (the same fights every other real-damage walk is pinned
+/// against).
+#[test]
+fn walk_the_full_route_and_complete_every_objective_real_damage() {
+    walker::with_real_damage(walk_the_full_route_and_complete_every_objective);
+}
+
 /// Sister of the full walk's key gate: one objective's channel alone never opens the gate —
 /// the AND needs both inputs [D the kind-3 out-0x52 list 4e,51].
 #[test]

@@ -698,6 +698,16 @@ fn walk_fresh_spawn_to_the_mission_end() {
     walk_to_the_mission_end(&mut w, true);
 }
 
+/// THE FRESH-SPAWN WALK ON REAL HEALTH (`damage_log.rs::with_real_damage`): the same walked
+/// route, the top-up off — no health, armour or ammo writes anywhere — and Bond's death
+/// panics with the damage log (who, weapon, range). Auto-aim is the app default; the fights
+/// are the walker's own plain return fire (the same fights every other real-damage walk is
+/// pinned against).
+#[test]
+fn walk_fresh_spawn_to_the_mission_end_real_damage() {
+    walker::with_real_damage(walk_fresh_spawn_to_the_mission_end);
+}
+
 /// The roof cut-scene's channel tail, alone: the disc's writer of objective 10's ch 0x59, the
 /// fall-web's ch 0x57 and the helicopter's gate ch 0x2A [D pack 0790000b, 060004FA streams
 /// 6/13/14/15], played end-to-end through the port's real SP machinery (PlayerDisable at the
