@@ -23,3 +23,9 @@ docs/reports/bot-push-per-bot-gates.md.
 
 - Branch `s/bot-push-01-escort-routes` cut from origin/master b62a8907; merged origin/s/bot-push-per-bot-gates 5392f79d. Next: re-tune the four failing 07000001 walks (following_mayhew_down, the_exit_fade_starts, the_plate_refuses_bond_alone, walk_from_the_spawn_to_the_exit_with_the_contact) for the faithful push, real input only.
 - Merged origin/s/bot-push-per-bot-gates 5392f79d. The 01 walks re-tuned for the faithful push: the follow steps out of the PlayerInWay band (and kites melee huggers), the plate sister shoots lane blockers with lenient self-healing legs + proactive resupply + a reach-the-plate assert, the hall fights chase the hunter's live position, the final plate approach walks around the parked contact. walkreal_07000001 5/6 (real_damage dies at 2.2 hp — the west-corridor attrition + unseen snipers, NF_RF_TRACE-pinned), exit_aim_01 1/1, flank_fall 2/2, walkreal_07000003 3/4 (the captor-fight ammo regression pre-exists on the merged master tree). Report: docs/reports/bot-push-01-escort-routes.md.
+
+## bot-push-01-escort-routes-2 (2026-11-02)
+
+Task: the last red 01 walk under the faithful push — fix following_mayhew_down with real input (the step-back follow already in the branch; the escort's PlayerInWay release reads Bond's distance [M 0x15ea28 case 3]); if the push carries Bond somewhere the game does not, fix the port and cite it; then all of walkreal_07000001_live, exit_aim_01_live, flank_fall_repro, walkreal_07000003_live green, then every walkreal_*_live and the full suite; keep the report's section on how Bond's movement changes when he brushes a guard, with numbers.
+
+Branch cut from origin/master 84e64088; origin/s/bot-push-01-escort-routes 0c2f5964 merged clean (per-bot push gates in player.rs/scene.rs, the follow re-tunes in walker.rs, the 01 walk re-tunes). Next: run walkreal_07000001_live and pin following_mayhew_down's stall.
