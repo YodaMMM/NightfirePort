@@ -46,3 +46,24 @@ escort's interior shoji doors no longer open for him. Find what the game's door 
 it still lets an ally open [M Door_Update 0x1363c8 / the ally door-open path], fix the port so both
 the skip bit and the escort's doors behave as the game does, keep both tests green without
 weakening an assertion.
+
+## door-scan-skip-bit-2 — the fix (2026-11-02 15:16 UTC)
+
+Reproduced both driver-named reds on the reapplied skip-bit tree (revert-of-revert 2d30c128, clean):
+the escort parked in ALLY_LEAD_WAIT 0x20 at (3.6,6.3,6.6) for 42k ticks, never targeting door #2;
+green/red differential trace showed the green run's contact reaching ALLY_LEAD 0x1d with
+hit_door Some(2) and leading past at +24725. Root cause [M]: the first cut fed the player's BOOT
+bit value (0x890, SET [L ee_start_07000001.bin]) into the Door_Update 0x1363c8 auto-close scan for
+the whole level, but the game's runtime writers flip it before the escort ever walks —
+Player_Disable(…,0) 0x195f70:17 sets it (the intro NIS), Player_Enable 0x195498:53,77 clears it at
+the hand-back, Player_ChangeSubState 0x190630:35-40 clears it — so in play the game's Bond is
+bit-CLEAR and the scan sees him. The scan filter itself [M 0x136678-84], Door_Activate's lack of
+one [M 0x135be0:64] and the ally's own open chain (ReachedDestNode 0x153358 → DSTATE_OpenDoor
+0x1681f8 → NDrone2_OpenDoor 0x14aa38, no bit read) were re-verified from the decompile and stand.
+Fix: Drones::bond_door_skip carries the runtime life — boot value latched at the Mission_Init
+site, set by the PlayerDisable request, cleared by PlayerEnable (drain_script_requests) and by the
+Cam2Mode(else) hand-back in scene.rs (the modelled ChangeSubState site [M 0x195fc8:11-16]); the
+door actor list feeds it. No assertion weakened — door_skip_flag_live's three pins pass unchanged.
+New pin door_skip_lifecycle_live (real 07000001 boot → SET, intro hand-back → CLEAR, stays clear).
+Runs: escort_* + every *07000001* binary 38/0; all 26 interactables_* 233/0; nf-game 1037/0
+(door_skip_flag_live 3/0 unchanged). Full suite on the final tree: see the report.
