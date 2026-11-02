@@ -122,3 +122,12 @@ run in seconds and are reported above.
 Session token/credit/context figures: not visible to me (the sandbox exposes no token counter, cost
 or context-window meter this session; the driver message's ntfy and queue tooling are the only
 external signals).
+
+## ntfy failed
+
+All three transports, in order, at 2026-11-02 ~17:05 UTC:
+1. `curl -sS -m 20 -H "Title: NightfirePort" -d "…" https://ntfy.sh/nightfire-yoda-8k3x` →
+   `curl: (28) Connection timed out after 20002 milliseconds`
+2. the python urllib fallback → `urllib.error.URLError: <urlopen error [Errno 101] Network is unreachable>`
+3. `wget -q -O- --post-data "…" https://ntfy.sh/nightfire-yoda-8k3x` → killed at the 30 s tool
+   timeout with no output (connection never established).
