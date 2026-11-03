@@ -69,10 +69,13 @@ timing out an earlier 120 s cap — noted so nobody reads the first line as a fa
 
 - The full-suite single total line: this sandbox kills background jobs between tool calls, so the
   one-shot `nohup` sweep is impossible here; the sweep above covers every required group plus the
-  lesson-10 targets for the touched code. Not run this session: the ~53 `walkreal_probe*` 0c-local
+  lesson-10 targets for the touched code. This task's code delta vs its base is exactly three files
+  (`scene.rs`, `walkreal0c.rs`, `walkreal_0700000c_live.rs`); the branch's full delta vs
+  `origin/master` additionally carries the predecessor -1/-2/-3 changes (the difficulty3_01 and
+  walkreal_01/02/03/04/08/09/0a/0b test files, WORKLOG, reports 2/3) — every level those files touch
+  was re-run green in the table above. Not run this session: the ~53 `walkreal_probe*` 0c-local
   probe binaries, the remaining non-aim `fix_*`/probe binaries, and the `nf-formats`/`nf-audio`
-  binaries (no code in those crates changed on this branch: `git diff origin/master --stat` touches
-  only `scene.rs`, `walkreal0c.rs`, `walkreal_0700000c_live.rs`, `WORKLOG.md`, and this report).
+  binaries (no code in those crates changed on this branch).
 - No live PCSX2 render is needed: nothing visible changed (input-path logic only).
 
 ## Live checks for the main agent
