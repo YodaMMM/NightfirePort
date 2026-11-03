@@ -81,3 +81,13 @@ stage), then on real input only:
 
 not visible to me — this environment shows no token, credit, or context-window figures for the
 session (nothing to copy).
+
+## ntfy failed
+
+1. `curl -sS -m 20 …` → `curl: (28) Connection timed out after 20002 milliseconds` (exit 28)
+2. python urllib → `urllib.error.URLError: <urlopen error [Errno 101] Network is unreachable>`
+3. `timeout 25 wget -q -O- --post-data "…" https://ntfy.sh/nightfire-yoda-8k3x` → exit 124
+   (hang, killed by the timeout)
+
+The notification did not leave the sandbox; the exact errors are recorded here per the task
+rules. finish.sh itself ran OK (`OK done 05-smg-close-range-hits`, queue commit 65877d9b).
