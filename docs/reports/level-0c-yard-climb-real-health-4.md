@@ -89,3 +89,17 @@ the [L]-trace inference to a direct measurement.
 ## Usage
 
 Not visible to me: this environment exposes no token, cost or context-window figures for the session.
+
+## ntfy failed
+
+All three prescribed fallbacks failed; exact outputs:
+
+1. `curl -sS -m 20 -H "Title: NightfirePort" -d "..." https://ntfy.sh/nightfire-yoda-8k3x` →
+   `curl: (28) Connection timed out after 20002 milliseconds` (exit 28).
+2. `python3 -c "import urllib.request as u; u.urlopen(u.Request('https://ntfy.sh/nightfire-yoda-8k3x', data=b'level-0c-yard-climb-real-health-4: done', headers={'Title':'NightfirePort'}), timeout=20)"` →
+   `urllib.error.URLError: <urlopen error [Errno 101] Network is unreachable>`.
+3. `wget -q -O- --post-data "level-0c-yard-climb-real-health-4: done" https://ntfy.sh/nightfire-yoda-8k3x` →
+   no output, killed at the 60 s tool timeout (connection never established).
+
+ntfy.sh is not reachable from this sandbox's network; everything else (GitHub push, finish.sh) succeeded.
+
