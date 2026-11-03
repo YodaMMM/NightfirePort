@@ -293,6 +293,14 @@ fn arm_fullest(w: &mut Walker, label: &str) {
         if read(w).0 == best { break; }
         cycle(w);
     }
+    // The draw can eat a press and leave the wheel one short of `best` (the bunker run armed the
+    // dry 0x47 cuffs with a 32-round 0x12 on the wheel [L the 00agent ledger] — Bond then took
+    // the corridor's rifle chips on an empty hand). Verify and re-cycle: a no-op whenever the
+    // first pass landed (every d1/d2 run — the RNG is unchanged there).
+    for _ in 0..12 {
+        if read(w).0 == best { break; }
+        cycle(w);
+    }
     let (id, n) = read(w);
     eprintln!("[02] {label}: armed the fullest gun {id:#x} ({n} rounds; carried {:?})", seen);
     reload_full(w);
@@ -325,6 +333,10 @@ fn scoop_drops(w: &mut Walker, label: &str, n: usize) {
         let Some(target) = target else { break };
         eprintln!("[02] {label}: scooping the drop ({:.1},{:.1},{:.1}) (d {:.1})", target[0], target[1], target[2], dxz(target, bp));
         w.walk_nav_to(target, &format!("{label} scoop {k}"), 0.4);
+        // Arm the take at once: the captors close DURING the scoop walk, and the fights that
+        // answer them fire the gun in hand (the first scoop run fought drones 7/5/6 on the P99
+        // for 61.2 health because the switch came only after the loop [L the 00agent ledger]).
+        let _ = w.switch_to_armed(&format!("{label} scoop {k} arm"));
     }
     let _ = w.switch_to_armed(label);
 }
@@ -649,12 +661,11 @@ fn walk_the_castle_all_objectives_real_health_at(difficulty: u32) {
         }
     }
     arm_fullest(&mut w, "before the geisha-1 room");
-    if difficulty >= 3 {
-        // The 00 Agent scoop + arm: the south hall guards' dropped shotguns are the geisha
-        // rooms' answer (the tactic doc above the spawn assert).
-        scoop_drops(&mut w, "the south hall drops", 3);
-        arm_weapon(&mut w, 0x1c, "the geisha-1 shotgun");
-    }
+    // NOTE (real-health-00agent-02-03-04): no pre-room drop scoop here — the walk to the drops
+    // passes the captors' posts and the return-fire fights answer them in the open corridor on
+    // the P99 (61.2 health before the room, the first tactic run [L the 00agent ledger]). The
+    // room's own round-0 kill drops the captor's shotgun and the per-round scoop arms it (the
+    // `d3` arm in `clear_captors_real`) — the later rounds fight on it.
     w.lenient = true;
     w.walk_to(Wp { at: [-35.2, 6.5, 4.6], act: Act::Wait(10), arrive: 0.9 }, "the ch-0x17 plate");
     w.lenient = false;
@@ -774,7 +785,8 @@ fn walk_the_castle_all_objectives_real_health_at(difficulty: u32) {
     leg_to(&mut w, [-30.0, 5.9, -21.5], "the east courtyard again", 1.6);
     arm_fullest(&mut w, "before the geisha-2 room");
     if difficulty >= 3 {
-        // The same 00 Agent arm for the second room (its captain carries 24 [L ee_02b.bin]).
+        // The same 00 Agent arm for the second room (its captain carries 24 [L ee_02b.bin]) —
+        // by here the captors' dropped shotguns ride the wheel.
         arm_weapon(&mut w, 0x1c, "the geisha-2 shotgun");
     }
     // The ch-0x19 plate tr[009] sits in the doorway (quad x −27.58..−26.19, z −22.08..−18.49 at
