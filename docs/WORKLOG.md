@@ -63,3 +63,7 @@ the next message resumes with the chunked runner on a fresh state file.
 ## bond-hitbox-pose-3
 
 - (07:15 UTC, 11-03) Branch created from origin/master (6f16146e) + merged origin/s/bond-hitbox-pose-2 (the reds: walkreal_07000014 ×3, walkreal_07000004 results tallies). Merge resolution: master's cel-scoped bullet pick (segment_bullet_scoped) + pose-2's posed-box player walk (damage::first_box_hit); drone.rs keeps the bond_boxes build with master's Drones fields; the small test helpers keep master's body/move_local/crouched literals; anim_events keeps pose-2's melee tick-wait with master's helper. Next: reproduce the 14 reds on this tree, find which pose-2 change moves each, check the game [M/L].
+
+## bond-hitbox-pose-3 (11-03, second window)
+
+- (10:42 UTC) Sandbox reset twice; setup redone. Merge-correctness restorations committed+pushed (5359e087): master's move_local retain + base_of owned read + the -2 camera pin (656 lib green). The three named duct tests GREEN on the scoped pick + posed boxes. The four remaining reds rooted (report): cylinder-era choreography vs the game's box model; the 04 row's missing +0x70 ratio write. Full suite didn't fit the windows.
