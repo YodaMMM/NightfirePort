@@ -13,3 +13,8 @@ claimed-by: sandbox1 at 2026-11-03T14:11Z
 ---
 ## Report (blocked, 2026-11-03T14:53Z)
 
+
+---
+## Report from the worker (done, 2026-11-03T14:54Z)
+
+Closed by the driver: the report is on `s/level-0c-yard-climb-real-health-3` (docs/reports/level-0c-yard-climb-real-health-3.md); the worker didn't run finish.sh.
