@@ -6,3 +6,7 @@ Find what the -41.6 world hit is (which blast or volume, and why the door change
 
 ---
 claimed-by: sandbox3 at 2026-11-03T22:28Z
+
+---
+## Report (blocked, 2026-11-03T22:59Z)
+
