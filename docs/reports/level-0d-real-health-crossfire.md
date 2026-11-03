@@ -117,3 +117,16 @@ The touched crates were run directly instead: nf-game 1040 passed / 0 failed; th
 
 not visible to me — this environment exposes no token, credit, context-window or cost figures
 for the session (no usage panel or API counters are reachable from the sandbox shell).
+
+## ntfy failed
+
+All three fallbacks failed (the sandbox's outbound network to ntfy.sh is cut):
+1. `curl -sS -m 20 -H "Title: NightfirePort" -d "level-0d-real-health-crossfire: …" https://ntfy.sh/nightfire-yoda-8k3x`
+   → `curl: (28) Connection timed out after 20002 milliseconds`
+2. `python3 -c "… urlopen(Request('https://ntfy.sh/nightfire-yoda-8k3x', …), timeout=20)"`
+   → `urllib.error.URLError: <urlopen error [Errno 101] Network is unreachable>`
+3. `wget -q -O- --post-data "level-0d-real-health-crossfire: …" https://ntfy.sh/nightfire-yoda-8k3x`
+   → exit code 124 (timed out; no output).
+
+The queue step itself succeeded: `finish.sh` reported `OK blocked 10-level-0d-real-health-crossfire`
+with this report attached.

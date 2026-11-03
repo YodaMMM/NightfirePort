@@ -27,3 +27,6 @@ Work log:
   the twin re-ignored with the measured reason. Batteries: walkreal_0700000d_live 1 passed/1
   ignored; enemy_accuracy_live 5 passed; nf-game 1040 passed/0 failed. Report:
   docs/reports/level-0d-real-health-crossfire.md.
+- (04:40) finish: the report committed (with the ntfy-failed section — all three fallbacks died:
+  curl (28) timeout, urllib Errno 101 unreachable, wget exit 124); finish.sh marked the task
+  blocked with the report attached; the suite runner (third start, 04:37) was still buffering.
