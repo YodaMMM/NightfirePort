@@ -161,9 +161,12 @@ fn fight_through(w: &mut Walker) {
 /// (group 0 → ch 57 + 103); without it the searchlights stay live and the courtyard raises the
 /// ch-55 alarm — neither blocks the walk (no fail channel on this level [L record 1; M
 /// 0x1827d8:98-107]).
-fn walk_to_the_courtyard(w: &mut Walker, cut: bool) {
+fn walk_to_the_courtyard(w: &mut Walker, cut: bool) { walk_to_the_courtyard_at(w, cut, 1) }
+
+/// `difficulty` threads the sister's Agent tactics (the door #59 mouth step); 1 = the old body.
+fn walk_to_the_courtyard_at(w: &mut Walker, cut: bool, difficulty: u32) {
     walk_to_the_guardhouse_court(w);
-    walk_from_the_guardhouse_court(w, cut);
+    walk_from_the_guardhouse_court_at(w, cut, difficulty);
 }
 
 /// The spawn → the guardhouse court east of the searchlight courtyard, with its idle guard down.
@@ -207,7 +210,9 @@ fn walk_to_the_guardhouse_court(w: &mut Walker) {
 /// west ramp up to head #2's balcony (floor 46.0 at x 7..10.8, z −26..−22 [D floor probe]) and
 /// off its west edge onto the 41.0 courtyard floor — the drop passes through the Spotlight
 /// Trigger poly #664 (y 45.93, x −0.8..6.8, z −25.7..−21.0 [D trigger dump]).
-fn walk_from_the_guardhouse_court(w: &mut Walker, cut: bool) {
+fn walk_from_the_guardhouse_court(w: &mut Walker, cut: bool) { walk_from_the_guardhouse_court_at(w, cut, 1) }
+
+fn walk_from_the_guardhouse_court_at(w: &mut Walker, cut: bool, difficulty: u32) {
     w.walk_to(Wp::new(36.0, 39.1, -13.4), "before door #47");
     {
         let sim = w.scene.sim.as_ref().unwrap();
@@ -240,7 +245,27 @@ fn walk_from_the_guardhouse_court(w: &mut Walker, cut: bool) {
         assert!(sim.drones.channels.on(103), "the bundle's second word ch 103 fires [D #747 p3]");
     }
     // West out of the guardroom through the auto-closing door #59 Door_Top_I2 (27.88, 40.00, −23.00).
-    w.walk_nav_to([27.9, 40.0, -21.0], "before door #59", 1.4);
+    if difficulty >= 2 {
+        // [D coll-scan of the guardroom's west wall, this branch] the wall carries a pilaster
+        // whose east face is the plane x 28.61 over z −19.71..−21.36 (vertical face strips at
+        // x 28.61, ledge bands y 40.00..40.22) with its solid top ≈42.2 (the floor grid's 42.2
+        // hits at x 28.5, z −20..−21); the guardroom floor is 40.0 throughout — there is NO
+        // upper level here. The direct southwest steer to (27.9, −21.0) grazes the pilaster's
+        // north-east corner and corner-catches Bond exactly at it + the body radius:
+        // (28.55, −19.16), d 1.95, through the whole 6000-tick cap. The stuck samples'
+        // "floating" y (41.56/41.83 ungrounded) are the ladder's own jump pulses [M
+        // walker.rs stuck 3/4/5 jump] — the grounded sample reads 41.13 = the 40.0 floor +
+        // 1.1, and nothing standable exists at that xz (the open hatch #748's leaf parks at
+        // z −18.53..−18.42, 0.6 north; the pilaster top is 0.5 east). At Agent the extra
+        // spawn drone #3 fights from (29.9, 41.0, −19.5) — 1.4 from the catch point — and
+        // the fight delivers Bond into it. The player rounds the pilaster through the east
+        // lane (clearance > 0.55 off the x 28.61 face), south of its −21.36 end, then to the
+        // door #59 mouth.
+        w.walk_to(Wp::new(29.7, 40.6, -20.9), "the pilaster's east lane");
+        w.walk_to(Wp::new(29.4, 40.6, -22.3), "south of the pilaster");
+    } else {
+        w.walk_nav_to([27.9, 40.0, -21.0], "before door #59", 1.4);
+    }
     {
         let (pos, di) = walker::door_near(w.scene.sim.as_ref().unwrap(), [27.88, 40.0, -23.0])
             .expect("door #59 Door_Top_I2 in the doors list [D census]");
@@ -249,6 +274,13 @@ fn walk_from_the_guardhouse_court(w: &mut Walker, cut: bool) {
     }
     // THROUGH the doorway (level-06-castle-fire): without this waypoint the mouth leg aims
     // through the guardroom's west wall (the auto-closing doorway is a nav blind spot).
+    // Agent tactics, opt-in for the difficulty-2 sister: the Agent run's fights stretch the
+    // guardroom legs, and by the time the through-leg walks the auto-closing door #59 may
+    // have begun its close cycle. The player closes the distance to the mouth before the
+    // leaf shuts: step into the doorway first, then through.
+    if difficulty >= 2 {
+        w.walk_to(Wp::new(27.9, 40.2, -22.4), "to the doorway mouth");
+    }
     w.walk_to(Wp::new(26.6, 40.6, -23.6), "through door #59");
     // West up the ramp to head #2's balcony and down into the courtyard (the nav leg drops off the
     // balcony's west edge through plate #664 → ch 0x34 → SP #808's reveal NIS 0x06000066).
@@ -402,10 +434,18 @@ fn walk_the_ledge_to_the_party(w: &mut Walker) {
 /// balustrade and door #46 is locked [D], so the game routes the room around it: see the header's
 /// OPEN LEG note and walk_the_ledge_to_the_party.
 #[test]
-fn walk_the_castle_interior_to_the_party() {
+fn walk_the_castle_interior_to_the_party() { walk_the_castle_interior_to_the_party_at(1) }
+
+/// The walk body at `difficulty` (1 Operative = the old `load_with_carry` path's replay parity —
+/// its save resolves to 1; 2 Agent rides the front-end's launch path [M C_SBNFDFCTY 0x216ca8:15 →
+/// load_with_carry_difficulty]; the difficulty global survives the level change untouched, so a
+/// warm load re-seeds the same value [M player.rs RamSave::difficulty doc]).
+fn walk_the_castle_interior_to_the_party_at(difficulty: u32) {
     let iso = iso();
-    let mut w = Walker::new(nf_view::load_with_carry(&iso, "07000006.bin", false,
-        Some(&carry(&[0x1d, 0x45, 0x70]))).expect("load 07000006"));
+    let mut w = Walker::new(nf_view::load_with_carry_difficulty(&iso, "07000006.bin", false,
+        Some(&carry(&[0x1d, 0x45, 0x70])), difficulty).expect("load 07000006"));
+    assert_eq!(w.scene.sim.as_ref().unwrap().drones.difficulty, difficulty,
+        "the sim runs the picked difficulty [M GameState+0x28 0x2a3790 → Drones::difficulty]");
     {
         let sim = w.scene.sim.as_ref().unwrap();
         let p = sim.bond.pos;
@@ -430,7 +470,7 @@ fn walk_the_castle_interior_to_the_party() {
         assert!(sim.drones.searchlights.parts.iter().filter(|p| p.kind == 4).all(|p| !p.drawn), "no corona at the start");
     }
 
-    walk_to_the_courtyard(&mut w, false);
+    walk_to_the_courtyard_at(&mut w, false, difficulty);
     eprintln!("[06] reached the courtyard at tick {}", w.total_ticks);
     for r in &w.rises { eprintln!("[06] rise: ch {} at tick {} bond {:?} touching {:?}", r.0, r.1, r.2, r.3); }
     // THE WALKED BOND TURNS THEM ON AT THE ENTRANCE: the first ch-0x34 rise is the walk's own
@@ -444,10 +484,24 @@ fn walk_the_castle_interior_to_the_party() {
         assert_eq!(first.3, vec![664], "the guardroom route's first plate is the balcony-drop poly #664");
         let h = heads06(&w);
         assert!(h.iter().all(|&(st, on)| st != 3 && on), "all four heads lit after the entrance plate: {h:?}");
-        // The lit heads still spot Bond: the alarm channel 55 (written only while a head tracks
-        // [M Searchlight_Update 0x1cb900:142-144]) rises in the courtyard, after the plate.
-        let alarm = w.rises.iter().find(|r| r.0 == 55).expect("a lit head spots the walked Bond (ch 55)");
-        assert!(alarm.1 > first.1, "the alarm follows the reveal (plate t{}, alarm t{})", first.1, alarm.1);
+        // The lit heads still spot Bond at Operative: the alarm channel 55 (written only while a
+        // head tracks [M Searchlight_Update 0x1cb900:142-144]) rises in the courtyard, after the
+        // plate. Operative-only pin [D coll-scan of the head cones, this branch]: the catch is a
+        // narrow window, not a law — head6 (5.50, 55.67, −50.15, yaw cone ±0.218, pitch cone
+        // 1.004±0.218) reaches Bond's sphere only where its pitch edge meets body height,
+        // z ≈ −38..−35 × x ≈ 2.4..8.6 (the Operative alarm measured exactly there, (4.55,
+        // 42.18, −36.30), t 15528); the other three heads' cones (east/west pies at z −19.8..−14.9
+        // and z −21.7..−25.5) missed BOTH walks' crossings on the sweep phase. The Agent descent
+        // runs a fight-displaced west lane — x ≈ 0.75 at z −36, 0.6 u outside head6's yaw band —
+        // and the game's own sweep misses it too (the same deterministic cones, verified against
+        // the Operative catch). The alarm is NOT a fail channel on this level [L record 1; M
+        // 0x1827d8:98-107] and dodging the beams is the player's own best line at Agent real
+        // health (no ch-55 reinforcement spawn #735) — the sister pins the lit heads and the
+        // route, not the spot.
+        if difficulty == 1 {
+            let alarm = w.rises.iter().find(|r| r.0 == 55).expect("a lit head spots the walked Bond (ch 55)");
+            assert!(alarm.1 > first.1, "the alarm follows the reveal (plate t{}, alarm t{})", first.1, alarm.1);
+        }
     }
     {
         let sim = w.scene.sim.as_ref().unwrap();
@@ -550,4 +604,19 @@ fn stopping_before_the_tunnel_never_ends_the_castle() {
 #[test]
 fn walk_the_castle_interior_to_the_party_real_damage() {
     walker::with_real_damage(walk_the_castle_interior_to_the_party);
+}
+
+/// Agent-difficulty sister of `..._real_damage` (real-health-agent-difficulty): the same walked
+/// truck-spawn → castle-interior → party route at the menu's Agent pick — GameState+0x28 = 2
+/// through the front-end's launch path [M C_SBNFDFCTY 0x216ca8:15; the `difficulty[]` table
+/// 0x2df4c0 row 1 carries 2; Txt 0x14e = "Agent"]. On this level group the pick scales Bond's
+/// pain by Plr_DMod_Normal 0.7 instead of Easy 0.6 and the guards' hit chance by
+/// DroneFiring_Accuracy_Normal 1.1 instead of Easy 0.8 [M Player_HandlePain 0x1902c8;
+/// DroneWeap_DoBulletAccuracy 0x179740:74-88; tuning.rs 05-08 group]; the min-difficulty
+/// placements pass Drone_Create's gate [M 0x136be0:49] and the Lock_Create auto-unlock keeps
+/// tagged locks shut [M 0x1ae1f8:67-69 — Operative-only]. Real input only — the load path is the
+/// only difference.
+#[test]
+fn walk_the_castle_interior_to_the_party_real_damage_agent() {
+    walker::with_real_damage(|| walk_the_castle_interior_to_the_party_at(2));
 }
