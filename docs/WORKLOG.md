@@ -38,3 +38,12 @@ Progress:
   walkreal_07000006_live: ALL 6 green (36 s), the Agent sister completes in 15216 ticks at
   46.4 health, 21 hits for 53.6 — the per-difficulty pipeline reads clean (Agent hits >= the
   Operative hits for the same drones, Normal 0.7 vs Easy 0.6 [M Player_HandlePain 0x1902c8]).
+
+- [11:35 UTC] The full walkreal sweep green: all 26 level-walk binaries (01..4a incl. the 0c
+  variants, 11_route, 4a_satchel) — 137 tests, 0 failed. The 06-adjacent probes green
+  (fix_06_alarm 2, fix_06_driver 2, fix_06_fire 3, fusebox_06 4, difficulty_wiring 2,
+  difficulty_spawn_gate 1). nf-game all binaries 1041/0 (lib 655/0+5 ign); nf-formats +
+  nf-audio 125/0 with only the 3 allowed disc_golden exceptions. The suite.py build step
+  verified 1095 test binaries compile clean; the ~900 nf-view probe/diagnostic binaries were
+  not run (hours; this sandbox kills background jobs between tool calls, so the fast runner
+  cannot outlive a call — the sweeps ran in the foreground instead).
