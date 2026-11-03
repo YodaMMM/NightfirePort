@@ -74,9 +74,11 @@ The next message can continue from this branch; everything below is committed an
 The mouth phase needs its own 00 tier before the descent clears matter:
 1. An aimed-stand mechanic vs the high-y guards (#12 at y 47.0 on the tunnel deck, #11 at y 55.5 on
    the roof): `clear_the_spot`'s `pos[1] < 46.0` filter excludes them by design, and the reactive fire
-   cannot out-trade a 45.0-damage weapon at 00. The 0c sister's aimed-stand work (settle, hold aim to
-   the bit, cursor-aware convergence) is the model; the stands need the deck/roof spots whose gun rays
-   clear.
+   cannot out-trade a 45.0-damage weapon at 00. Measured negative result to build on: raising the
+   clear's y filter to 60 pulled in the unreachable perch guard #23 (y 51.0 at (38.2, 51.0, −32.3)),
+   stalled the walk ~40k ticks in futile stands and died worse (run 00m) — the filter is correct and
+   was restored; the high posts need stands from spots whose gun rays clear them (the 0c sister's
+   aimed-stand model: settle, hold aim to the bit, cursor-aware convergence), not ground sweeps.
 2. The reinforcement pair: with the searchlights cut they still spawn from the courtyard ch-55 volume —
    either fight them at range from the mouth plaza before they close (they spawn at the strip posts
    (11.6, 42.0, −35.1)/(13.2, 41.7, −34.8)), or re-time the mouth crossing ahead of the alarm.
@@ -90,7 +92,7 @@ The mouth phase needs its own 00 tier before the descent clears matter:
 | `walkreal_07000006_live` (whole, 7 tests) | 6 passed, 1 failed — the failure IS the new 00 sister (dies at the mouth, above); Operative + Agent real-damage sisters and all pins stay green |
 | `rook06_realpath_live` | 1 passed, 0 failed |
 | `nf_game` | 656 passed, 0 failed |
-| 00 sister iterations | 12 measured runs (00a–00l), each rebuilt first; the ledgers quoted above are in the session logs (not committed) |
+| 00 sister iterations | 13 measured runs (00a–00m), each rebuilt first; the ledgers quoted above are in the session logs (not committed) |
 
 The full suite did not fit: the sandbox kills background jobs between tool calls, so only foreground
 chunks ran; the 06/rook/nf-game groups above are the lesson-10 set for the touched file (test-only —

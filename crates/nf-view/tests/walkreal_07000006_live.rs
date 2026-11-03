@@ -376,6 +376,16 @@ fn walk_from_the_guardhouse_court_at(w: &mut Walker, cut: bool, difficulty: u32)
         eprintln!("[06] at the mouth: ch52 {} ch55 {}", sim.drones.channels.on(52) as u8, sim.drones.channels.on(55) as u8);
     }
     fight_through(w);
+    // 00-Agent tactics: a ground clear at the mouth before the descent. The phase's real
+    // killers are HIGH (#12, the 00-roster deck guard at y 47.0, weapon 0x25, ONE 45.0 hit at
+    // d 26.9; #11, the tunnel-roof guard at y 55.5) and stay outside any y-bounded ground
+    // clear by design — raising the filter to y 60 pulled in the unreachable perch guard #23
+    // (y 51.0) and stalled the walk 40k ticks (the 00m run), so the high posts need the
+    // aimed-stand tier (see the report's what's-left), not this sweep. This clear handles the
+    // ground band only.
+    if difficulty >= 3 {
+        clear_the_spot(w, 13.0);
+    }
     // South across the courtyard to the tunnel door's approach (3.75, 42.00, −51.13) [D leg
     // probe: the nav graph covers this courtyard, 7 nodes]. The courtyard floor here is the
     // web's 41.0 band [D Boundary Prime nodes 303-306: (3.4..5.3, 41.0, −48..−50)].
