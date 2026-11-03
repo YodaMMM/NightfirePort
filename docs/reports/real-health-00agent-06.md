@@ -108,3 +108,19 @@ this report, and the merge).
 ## Usage
 
 Not visible to me: this environment exposes no token, cost or context-window figures for the session.
+
+## ntfy failed
+
+All three prescribed fallbacks failed; exact outputs:
+
+1. `curl -sS -m 20 -H "Title: NightfirePort" -d "..." https://ntfy.sh/nightfire-yoda-8k3x` →
+   `curl: (28) Connection timed out after 20002 milliseconds`.
+2. `python3 -c "import urllib.request as u; u.urlopen(u.Request('https://ntfy.sh/nightfire-yoda-8k3x', data=b'real-health-00agent-06: blocked', headers={'Title':'NightfirePort'}), timeout=20)"` →
+   no output within the window (the previous task's identical call failed with
+   `urllib.error.URLError: <urlopen error [Errno 101] Network is unreachable>` — ntfy.sh is not
+   reachable from this sandbox's network).
+3. `wget -q -O- --post-data "real-health-00agent-06: blocked" https://ntfy.sh/nightfire-yoda-8k3x` →
+   connection hang, killed at the 60 s tool timeout.
+
+Everything else (GitHub push, finish.sh) succeeded.
+
