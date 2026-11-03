@@ -163,6 +163,12 @@ fn walk_arrival_to_the_c5_door() {
     let health_before_kills = w.scene.sim.as_ref().unwrap().drones.health.health;
     kill_guard_at(&mut w, [161.1, -235.2], [2.0, 2.0], "the perch sniper #31");
     kill_guard_at(&mut w, [194.0, -232.2], [5.5, 3.0], "the dock patroller #33");
+    // The wire crossfire's kill order (level-0d-real-health-crossfire): the ray scan
+    // (probe_0d_crossfire_rays) clears the strip -> south-roof #10/#18 rays for the VISION mask,
+    // but the BULLET path dies on the canopy the vision sees through (measured: 600-tick
+    // attempts, health 10, dist 72.8, pool untouched — the shots never land) — a player CANNOT
+    // take the south roof from the strip; the attempts stayed out of the route. The roof work
+    // happens from the LADDER TOP below (above the canopy line).
     {
         let sim = w.scene.sim.as_ref().unwrap();
         let perch_dead = !sim.drones.list.iter().any(|d| d.enabled && d.present && !d.corpse && d.health > 0.0
@@ -189,6 +195,35 @@ fn walk_arrival_to_the_c5_door() {
         let p = bond_pos(&w);
         assert!(p[1] > 16.0, "the ladder tops at y ~17.37, got {p:?}");
     }
+    // THE LADDER-TOP KILLS (level-0d-real-health-crossfire): a player on the ladder top (y
+    // 17.4, ABOVE the canopy line that blocks every ground ray to the west roof
+    // [probe_0d_climb_cover]) takes out the two shooters the ray scan exposed before riding
+    // into their crossfire: the west roof #28 ((151.4, 22.7, −238.3) — the scan's wire-mid rays
+    // CLEAR at d 52, and #28 ate 54 across the route in the death runs) and the deck guard #16
+    // ((198.9, 14.0, −260.4), d ~28 — it fired 4 × 4 at the climber and met the rider at the
+    // deck). #29's ray clears too (d 64.5) and it eats 14 late — taken as well. Log-tolerant
+    // (the kill_guard_at contract); the pool assert below stays the gate.
+    kill_guard_at(&mut w, [198.9, -260.4], [6.0, 4.0], "the deck guard #16 (from the ladder top)");
+    // The roof sweep: the guards REPOSITION when engaged (the first box pick landed on #27 and
+    // the moved #28/#29 ate 32-48 on the ride) — sweep the roof region clear (the closest live
+    // pick per pass, 4 passes cap; the 260 cap keeps a failed pass short).
+    for k in 0..4 {
+        let live = w.scene.sim.as_ref().unwrap().drones.list.iter().any(|d| {
+            d.enabled && d.present && !d.corpse && d.health > 0.0 && d.pos[1] > 18.0
+                && (d.pos[0] - 151.5).abs() < 12.0 && (d.pos[2] + 248.0).abs() < 14.0
+        });
+        if !live { break; }
+        kill_guard_at_cap(&mut w, [151.4, -246.0], [12.0, 14.0], "the west roof sweep (from the ladder top)", 260);
+    }
+    // NO #29 attempts: the guard REPOSITIONS when engaged (every box/sweep pass missed the
+    // moved survivor — 1380 ticks of standing that bought nothing), and the DWELL is what
+    // ACQUIRES #10 onto the ladder top (it ate 62-84 at the 180-tick cadence during the stand
+    // in the death runs). The #29 rides survive on one moving-penalised shooter: [L tuning]
+    // TargetMoving 0.75 × Easy 0.6 on the 75 base = 33.75% a shot.
+    // The south heavy #10: NO attempt — the bullet path to it dies from the strip AND from the
+    // ladder top (260-tick attempts, health 10, dist 55: the vision mask clears the ray but the
+    // bullets never land), and the attempt's noise + dwell is what ACQUIRES #10 onto the ladder
+    // top.
     // Face along the wire toward its A end, settle grounded, then jump — the grab replaces the
     // jump with the icon in context [M 0x1916b0:118-147].
     {
@@ -204,9 +239,19 @@ fn walk_arrival_to_the_c5_door() {
     let mut grabbed = false;
     for k in 0..80u32 {
         let sim = w.scene.sim.as_mut().unwrap();
-        sim.step_bond(nf_game::player::Input { jump: (60..=63).contains(&k), ..Default::default() }, false, false, false);
+        // The stick HELD through the jump — a player runs onto the grab with the stick forward
+        // and keeps holding; the walk quad's eased lanes then read non-zero at the grab and the
+        // RETAINED quad (walk-ticks-only zeroing [M 0x193600:129-134]) reads MOVING through the
+        // ride — the guards' TargetMoving_Accuracy applies [M 0x179a48:34-41 + 0x179740:71-73].
+        // The released-stick jump dead-zone-snapped the quad to [0,0] at the grab and the rider
+        // read still (the wire crossfire hit at stationary accuracy).
+        sim.step_bond(nf_game::player::Input { jump: (60..=63).contains(&k), forward: 0.3, ..Default::default() }, false, false, false);
         w.total_ticks += 1;
-        if sim.bond.substate == nf_game::player::SS_WIRE { grabbed = true; break; }
+        if sim.bond.substate == nf_game::player::SS_WIRE {
+            grabbed = true;
+            eprintln!("[0d:grab] tick {k} quad {:?} vel {:?}", sim.bond.move_local, sim.bond.vel);
+            break;
+        }
     }
     assert!(grabbed, "the wire #271 jump-grab must fire from the ladder top (icon #297 in context)");
     // Hand-over-hand toward A: strafe +1 (mode 7) until the wire drops Bond at the deck.
@@ -240,6 +285,14 @@ fn walk_arrival_to_the_c5_door() {
         let _ = w.switch_to_armed("the deck guard");
         let _ = w.shoot(di, "the deck guard");
     }
+    // The LAST roof guard from the deck arrival: the sweeps from the ladder top can't reach the
+    // repositioned spot (the ray dies), but the deck arrival's reverse ray carries BOTH ways —
+    // the surviving guard ate 54 on the deck stand in the death runs through the same geometry
+    // (the hits land, so the bullets can too). 260 cap: a failed ray stops early.
+    kill_guard_at_cap(&mut w, [151.4, -248.5], [10.0, 10.0], "the last roof guard (from the deck)", 260);
+    // The south roof #18 from the deck: NO attempt — the bullet path dies here too (260-tick
+    // attempts, health 10, dist 29.7-31.5, the vision ray clear but no landing); its one ride
+    // hit (16) is the cheaper cost.
     assert!(w.try_walk_to(Wp { at: [198.93, 14.16, -264.15], act: Act::None, arrive: 0.8 }, "the deck walk to the cab"),
         "the deck walk to the control plate must arrive");
     assert!(w.try_walk_to(Wp::at(199.6, 13.4, -263.9, Act::Use { use_ticks: 60 }), "E the rotate touchplate #450"),
@@ -725,7 +778,7 @@ fn walk_arrival_to_the_c5_door() {
 /// are the walker's own plain return fire (the same fights every other real-damage walk is
 /// pinned against).
 #[test]
-#[ignore = "real health: drone #31 weapon 0x1e hits 14-16 per shot from 41 u; Bond dies at tick 6549"]
+#[ignore = "real health, level-0d-real-health-crossfire: the platform kills (pool 100->100) + the ladder-top kills (#16/#27/#28 + one sweep pass) land and the ride reads MOVING (the port fix [M 0x193600:129-134]); Bond still dies — the repositioned roof guard's deck-arrival fire (54, its inbound rounds carry where Bond's bullet path cannot reach) + #10's climb shots (46) — 100 total by tick 5964-9412; the next levers + live checks in docs/reports/level-0d-real-health-crossfire.md"]
 fn walk_arrival_to_the_c5_door_real_damage() {
     walker::with_real_damage(walk_arrival_to_the_c5_door);
 }
@@ -735,12 +788,24 @@ fn walk_arrival_to_the_c5_door_real_damage() {
 /// (x, z) search box; the y is not tested — the yard's shooters sit on distinct (x, z).
 /// False (and a log line) when no such guard lives — the caller treats that as "already dead".
 fn kill_guard_at(w: &mut Walker, at: [f32; 2], tol: [f32; 2], label: &str) -> bool {
-    let di = w.scene.sim.as_ref().unwrap().drones.list.iter().position(|d| {
-        d.enabled && d.present && !d.corpse && d.health > 0.0
-            && (d.pos[0] - at[0]).abs() < tol[0] && (d.pos[2] - at[1]).abs() < tol[1]
-    });
+    kill_guard_at_cap(w, at, tol, label, 600)
+}
+
+/// The cap variant: a landed kill costs ~200 ticks (the aimed first shot); a FAILED ray burns
+/// the whole cap while Bond STANDS in the crossfire — the optional kills ride 260 so a failed
+/// ray stops early (level-0d-real-health-crossfire: the 600-tick failures at the ladder top
+/// were themselves the exposure that killed the twin).
+fn kill_guard_at_cap(w: &mut Walker, at: [f32; 2], tol: [f32; 2], label: &str, cap: u32) -> bool {
+    // The CLOSEST live guard to the box centre — the list-order pick kept killing the same
+    // lower-index box-mate (#27) while the aimed-at guard (#28/#29) lived and ate the ride
+    // (level-0d-real-health-crossfire).
+    let di = w.scene.sim.as_ref().unwrap().drones.list.iter().enumerate()
+        .filter(|(_, d)| d.enabled && d.present && !d.corpse && d.health > 0.0
+            && (d.pos[0] - at[0]).abs() < tol[0] && (d.pos[2] - at[1]).abs() < tol[1])
+        .min_by_key(|(_, d)| ((d.pos[0] - at[0]).powi(2) + (d.pos[2] - at[1]).powi(2)) as u32)
+        .map(|(i, _)| i);
     match di {
-        Some(i) => shoot_far(w, i, label, 600),
+        Some(i) => shoot_far(w, i, label, cap),
         None => { eprintln!("[0d] {label}: no live guard near ({:.1},{:.1}) — already down", at[0], at[1]); false }
     }
 }
@@ -762,6 +827,21 @@ fn shoot_far(w: &mut Walker, di: usize, label: &str, cap: u32) -> bool {
     let mut hp0 = w.scene.sim.as_ref().unwrap().drones.list[di].health;
     let mut last_tap = 0u32;
     let start = w.total_ticks;
+    // The aim-on EDGE: a button held across the intro/legs consumed the edge (prev_aiming stuck
+    // true with the gated bit never set — measured in probe_0d_bullet's gate trace), and the
+    // raise queue REFUSES while a fire script plays (state 9 [M 0x1a24c8:66-99] — the previous
+    // fight's 130-tick script), so release long enough to drain it, then hold until the bit
+    // actually sets (the raise completes ~20 ticks [M Player_SetWeaponAnimObj 0x1a2e38 case 0xf]).
+    for _ in 0..160 {
+        w.scene.sim.as_mut().unwrap().step_bond(nf_game::player::Input::default(), false, false, false);
+        w.total_ticks += 1;
+    }
+    for _ in 0..90 {
+        let sim = w.scene.sim.as_mut().unwrap();
+        if sim.aiming { break; }
+        sim.step_bond(nf_game::player::Input { aiming: true, ..Default::default() }, false, false, false);
+        w.total_ticks += 1;
+    }
     loop {
         {
             let sim = w.scene.sim.as_ref().unwrap();
@@ -771,21 +851,40 @@ fn shoot_far(w: &mut Walker, di: usize, label: &str, cap: u32) -> bool {
             }
             let (bp, dp) = (sim.bond.pos, sim.drones.list[di].pos);
             let dist = walker::dxz(bp, dp).max(0.5);
-            let dy = (dp[1] + 0.3) - (bp[1] + sim.bond.eye - sim.bond.crouch_drop);
-            let desired = (dp[0] - bp[0]).atan2(dp[2] - bp[2]);
-            let err = walker::wrap_pi(desired - sim.bond.yaw);
-            let want_pitch = (dy / dist).atan() / std::f32::consts::FRAC_PI_2;
-            let perr = want_pitch - sim.bond.pitch;
+            // THE RAY, exactly the shot's own construction (scene.rs's crosshair law [M
+            // Player_GetAimingPoint 0x1a4a98 — the (x, y) cursor offsets ride the view ray]):
+            // with the aim bit set, free_aim is true and the stick drives the CURSOR window —
+            // the tap gate must measure the RAY (look + 0.76966·cross[0]·right +
+            // 0.57724·cross[1]·up), not bond.pitch: the calibration (probe_0d_bullet) measured
+            // a ±0.2309 rad ray offset at the cursor's ±0.4 clamp while bond.pitch read
+            // converged.
+            let yaw = sim.bond.yaw;
+            let p = sim.bond.pitch * std::f32::consts::FRAC_PI_2;
+            let look = sim.bond.look();
+            let right = [-yaw.cos(), 0.0, yaw.sin()];
+            let up = [-p.sin() * yaw.sin(), p.cos(), -p.sin() * yaw.cos()];
+            let (tx, ty) = (0.76966 * sim.cross[0], 0.57724 * sim.cross[1]);
+            let d = [look[0] + tx * right[0] + ty * up[0], look[1] + tx * right[1] + ty * up[1], look[2] + tx * right[2] + ty * up[2]];
+            let dl = (d[0] * d[0] + d[1] * d[1] + d[2] * d[2]).sqrt();
+            let ray = [d[0] / dl, d[1] / dl, d[2] / dl];
+            let eye = [bp[0], bp[1] + sim.bond.eye - sim.bond.crouch_drop, bp[2]];
+            let (dx, dy, dz) = (dp[0] - eye[0], (dp[1] + 0.3) - eye[1], dp[2] - eye[2]);
+            let err = walker::wrap_pi(dx.atan2(dz) - ray[0].atan2(ray[2]));
+            let perr = dy.atan2((dx * dx + dz * dz).sqrt().max(0.5)) - ray[1].asin();
             let err_tol = (0.25 / dist).clamp(0.003, 0.02);
-            let perr_tol = (0.6 / dist / std::f32::consts::FRAC_PI_2).clamp(0.004, 0.03);
+            let perr_tol = (0.6 / dist).clamp(0.006, 0.05);
             let clip_empty = sim.gun.clip == 0 && sim.gun.spare > 0;
             let t = w.total_ticks - start;
             let on_target = err.abs() < err_tol && perr.abs() < perr_tol && t.saturating_sub(last_tap) > 15;
             let trigger = !clip_empty && on_target;
             if trigger { last_tap = t; }
+            // The stick drives the RAY ~1:1 (turn: the cursor's angular response is
+            // 0.76966·(T/0.76966) = T; look: 0.57724·(L·π/2/0.57724) = L·π/2 — the overflow
+            // beyond the ±0.4 window carries the view the same direction), so the same
+            // convergence as the plain walker works on the ray.
             let input = nf_game::player::Input {
-                turn: err.clamp(-0.08, 0.08),
-                look: perr.clamp(-0.08, 0.08),
+                turn: (err * 1.0).clamp(-0.08, 0.08),
+                look: (perr * 2.0 / std::f32::consts::PI).clamp(-0.08, 0.08),
                 aiming: true,
                 ..Default::default()
             };
@@ -797,11 +896,8 @@ fn shoot_far(w: &mut Walker, di: usize, label: &str, cap: u32) -> bool {
         if w.total_ticks % 120 == 0 {
             let (bp, dp) = (sim.bond.pos, sim.drones.list[di].pos);
             let dist = walker::dxz(bp, dp).max(0.5);
-            let dy = (dp[1] + 0.3) - (bp[1] + sim.bond.eye - sim.bond.crouch_drop);
-            let err = walker::wrap_pi((dp[0] - bp[0]).atan2(dp[2] - bp[2]) - sim.bond.yaw);
-            let perr = (dy / dist).atan() / std::f32::consts::FRAC_PI_2 - sim.bond.pitch;
-            eprintln!("[0d:dbg] {label} +{} bond ({:.1},{:.1},{:.1}) tgt ({:.1},{:.1},{:.1}) d {:.1} err {:.3} perr {:.3} pitch {:.3} clip {} spare {} wpn {:#x}",
-                w.total_ticks - start, bp[0], bp[1], bp[2], dp[0], dp[1], dp[2], dist, err, perr, sim.bond.pitch, sim.gun.clip, sim.gun.spare, sim.gun.weapon);
+            eprintln!("[0d:dbg] {label} +{} bond ({:.1},{:.1},{:.1}) tgt ({:.1},{:.1},{:.1}) d {:.1} pitch {:.3} cross {:?} clip {} spare {} aiming {}",
+                w.total_ticks - start, bp[0], bp[1], bp[2], dp[0], dp[1], dp[2], dist, sim.bond.pitch, sim.cross, sim.gun.clip, sim.gun.spare, sim.aiming);
         }
         if sim.gun.clip == 0 && sim.gun.spare == 0 && w.total_ticks - start > 60 {
             eprintln!("[0d] {label}: out of ammo at +{}", w.total_ticks - start);
