@@ -91,9 +91,13 @@ against the game.
   (the slim-ISO disc-golden set + the no-GPU pylon probe): pre-existing, not this task's.
   `mp_online_failures` CRASHed (exit −9, SIGKILL) while my own cargo builds ran concurrently —
   an OOM artifact of that contention, not a code change (this task touches two test files and
-  docs only). The runner was restarted on the final tree after the merge (master had not moved
-  — the merge was a no-op); its build phase result is in `suite.out` on the branch if it got
-  that far before the sandbox expired.
+  docs only). Re-run alone on the final tree it HANGS in
+  `join_in_progress_from_the_menus_then_leave_and_reconnect` past 560 s — an
+  environment-sensitive MP socket test (untouched by this task; the previous session's own
+  suite.log never reached it either — its run phase died after 4 binaries). The runner was
+  restarted on the final tree after the merge (master had not moved — the merge was a no-op;
+  its build phase printed `build ok: 1089 test binaries in 3 s`, everything cached); the run
+  phase is the same ~3 h shape and its partial results live in `suite.out`/`suite.log`.
 - Every binary this task's changes touch was re-run directly on the final tree and is green
   (the two listed above); no shared code changed — `crates/nf-game`, `nf-formats`, `nf-audio`
   are untouched, and no `crates/nf-view/tests/common/` file was modified.
