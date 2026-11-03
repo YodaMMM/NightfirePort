@@ -115,3 +115,24 @@ walkreal_*_live, the full suite total line. Real input only; no top-ups.
 
 Progress:
 - [19:09 UTC] Branch start; WORKLOG entry. Next: the -3 report re-read and the C5 walk repro.
+- [19:10-20:10 UTC] The repro: the C5 walk dies at 4482 at the ladder top (10 hits for 100 —
+  #16 38, #18 32, #28/#27 the roofs) EXACTLY as the driver measured, on the -3 tree (9f9f9631)
+  — and TWICE identically (the within-sandbox determinism holds; the -3 report's 16287 run does
+  not reproduce on this sandbox — the same test code, a different sandbox, a different death;
+  the driver's 4482 matches mine). Fix set, all route-side, no src changes: (1) THE WORLD-RAY
+  GATE in shoot_far — fire only when the shot's own scoped bullet pick sees the chest line
+  clear [M Bullet_update 0x12e7b0 disasm 0x12f030-0x12f058's query]: the -3's #32 leg burned 2
+  rounds into a ray its own probe printed 0.960-blocked, and the dry sweep (clip 1 spare 25 at
+  pass 3) fed the death. (2) The strip-mouth #32 kill LANDED for the first time ever (+528,
+  the box widened to the band's east end (163.3,−214) where the ~1.7-high obstacle at
+  (160,−217) is BEHIND the target and the ray clears) — then MOVED to the bay phase: the
+  measured trade is that the 528-tick dwell lets the wake's reposition walkers settle into
+  x ~151.4 and shoot the CLIMB (runs 2/3: 86 on the ladder face, death 4032; the -2's
+  no-dwell climb was silent). The climb-timing law: a short strip dwell = a silent climb.
+  (3) The sweep caps 900 (the patrol-crossing catches: +194 landed in run 5/7) with #16 first
+  (+209 every run). Result: the death 4032 → 6159 — past the ladder-top phase onto the wire —
+  the remaining ledger is the two SETTLED walkers #27/#29 (their patrol spots −245.6/−252.8
+  never enter the clear-ray sub-band −238..−241 that took #28; the slab edge blocks the
+  ladder-top eye 4.9 below their roof surface) eating the sweep+ride for ~70-96. The twin is
+  GREEN on the new route (24926 ticks, 0 stuck, 0 falls). The 0d binary: 1 passed (twin),
+  1 failed (real damage at 6159). The walkreal_*_live sweep and the full suite did not fit.
