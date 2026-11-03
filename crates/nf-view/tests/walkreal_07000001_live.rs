@@ -38,6 +38,18 @@ fn agent_order(w: &Walker, guards: &[usize]) -> Vec<usize> {
     g
 }
 
+/// The route clears' own order (level-01-agent-hall-fight-2): the driver's 3 → 14 → 5 first
+/// (the corridor's 24-health guard 3, the SMG sprayer 14, the named hall guard 5 — the
+/// stairwell bleed's shooters), then the pellet-carriers-first Agent order for the rest.
+/// The indices are the difficulty-2 roster's (deterministic across the runs [L the d2 logs]);
+/// guards already dead or absent just drop out of the priority pass.
+fn route_order(w: &Walker, guards: &[usize]) -> Vec<usize> {
+    let mut g: Vec<usize> = [3usize, 14, 5].iter().copied().filter(|i| guards.contains(i)).collect();
+    let rest: Vec<usize> = guards.iter().copied().filter(|i| !g.contains(i)).collect();
+    g.extend(agent_order(w, &rest));
+    g
+}
+
 fn walk_to_the_exit(iso: &str, stop_at_fire: bool) -> Walker { walk_to_the_exit_at(iso, stop_at_fire, 1) }
 
 /// The walk at `difficulty` — the difficulty select's GameState+0x28 value (1 Operative, 2 Agent,
@@ -328,19 +340,19 @@ fn walk_to_the_exit_at(iso: &str, stop_at_fire: bool, difficulty: u32) -> Walker
         // comes), after the hold.
         if difficulty >= 2 {
             // The lure first: a burst INTO the hall at the guard's own spot — the guards hunt
-            // the gunshot hearing, and the hunter paths south through the open aperture. The
-            // burst self-terminates the moment HIS part shows in the doorway (the scoped LOS
-            // probe at the hold line), so the lure never outlives its target's arrival.
+            // the gunshot hearing, and the hunter paths south through the open aperture.
+            // level-01-agent-hall-fight-2: the aim TRACKS HIS LIVE POSITION, not the placement
+            // snapshot — the old burst aimed at a point captured once, so the crossing guard's
+            // rounds landed only after the show-then-shoot settle gap (76.5 -> 42.9 across the
+            // door phase in the worst run); with the stream riding him through the aperture the
+            // taps land DURING the crossing and he dies inside his own volley budget (the
+            // report's "the live-tracking stream" move). The burst still ends when HIS part
+            // shows in the doorway (the scoped LOS probe at the hold line) or at the 300-tick
+            // cap; the hold below then breaks at once and the fight takes over.
             {
                 // The lure is bounded at 300 ticks (5 s, ~18 taps): the sound is the draw — a
-                // sustained burst only burns the pool, and the crossing guard's own volley
-                // lands in the show-then-shoot settle gap (76.5 -> 42.9 across the door phase
-                // in the first bounded run). The burst ends when HIS part shows in the
-                // doorway or at the cap; the hold below gives him the crossing window.
-                let sim = w.scene.sim.as_ref().unwrap();
-                let d = &sim.drones.list[g];
-                let at = [d.pos[0], d.pos[1] + 0.3, d.pos[2]];
-                drop(sim);
+                // sustained burst only burns the pool. The burst ends when HIS part shows in
+                // the doorway or at the cap; the hold below gives him the crossing window.
                 for t in 0..300u32 {
                     let (input, trigger, done) = {
                         let sim = w.scene.sim.as_ref().unwrap();
@@ -348,6 +360,10 @@ fn walk_to_the_exit_at(iso: &str, stop_at_fire: bool, difficulty: u32) -> Walker
                         if d.corpse || d.health <= 0.0 { (Input::default(), false, true) }
                         else {
                             let bp = sim.bond.pos;
+                            // The live aim point: his current position each tick (+0.3 the
+                            // torso lift the scoped probe uses; the fight's prefer_head
+                            // refines from here).
+                            let at = [d.pos[0], d.pos[1] + 0.3, d.pos[2]];
                             let dx = at[0] - bp[0]; let dz = at[2] - bp[2];
                             let dy = at[1] - (bp[1] + sim.bond.eye - sim.bond.crouch_drop);
                             let desired = dx.atan2(dz);
@@ -438,7 +454,7 @@ fn walk_to_the_exit_at(iso: &str, stop_at_fire: bool, difficulty: u32) -> Walker
                         && walker::dxz(d.pos, [wp[0], 6.4, wp[1]]) < 9.0
                 }).collect()
             };
-            for g2 in near {
+            for g2 in route_order(&w, &near) {
                 let gpos = w.scene.sim.as_ref().unwrap().drones.list[g2].pos;
                 let bpos = w.scene.sim.as_ref().unwrap().bond.pos;
                 if walker::dxz(gpos, bpos) > 9.0 {
@@ -450,6 +466,28 @@ fn walk_to_the_exit_at(iso: &str, stop_at_fire: bool, difficulty: u32) -> Walker
                 if w.scene.sim.as_ref().unwrap().drones.health.health <= 0.0 { break; }
             }
             if w.scene.sim.as_ref().unwrap().drones.health.health <= 0.0 { break; }
+        }
+        // level-01-agent-hall-fight-2: fetch the pickups on the way before the stairwell — the
+        // west-hall placed pair (−14.4, 6.5, 16.1) / (−13.2, 5.6, 10.4) sits 3-5 u off the route
+        // line and the fights' drops (every killed guard drops his weapon [L the 01 drops]) land
+        // at the fight floors. A player sweeping the corridor walks the line and tops up before
+        // the stairwell descent instead of waiting for the dry gate; resupply() stays the dry
+        // fallback. Real input only — the walk-over take [M Pickup_Handler 0x18e650].
+        {
+            let route: &[[f32; 2]] = &[[-14.1, 13.1], [-19.4, 15.25], [-23.3, 14.4], [-29.1, 11.5]];
+            let stops: Vec<[f32; 3]> = {
+                let sim = w.scene.sim.as_ref().unwrap();
+                let by = sim.bond.pos[1];
+                sim.drones.pickups.iter()
+                    .filter(|p| !p.gone && (p.m[3][1] - by).abs() < 1.5)
+                    .filter(|p| route.iter().any(|r| walker::dxz([p.m[3][0], p.m[3][1], p.m[3][2]], [r[0], by, r[1]]) < 9.0))
+                    .map(|p| [p.m[3][0], p.m[3][1], p.m[3][2]])
+                    .collect()
+            };
+            for (k, at) in stops.iter().enumerate() {
+                if w.scene.sim.as_ref().unwrap().drones.health.health <= 0.0 { break; }
+                w.walk_nav_to(*at, &format!("the pickup line {k}"), 1.0);
+            }
         }
     }
 
@@ -479,7 +517,7 @@ fn walk_to_the_exit_at(iso: &str, stop_at_fire: bool, difficulty: u32) -> Walker
                         && walker::dxz(d.pos, bp) < 10.0
                 }).collect()
             };
-            for g2 in near {
+            for g2 in route_order(&w, &near) {
                 let gpos = w.scene.sim.as_ref().unwrap().drones.list[g2].pos;
                 let bpos = w.scene.sim.as_ref().unwrap().bond.pos;
                 if walker::dxz(gpos, bpos) > 9.0 {
@@ -737,7 +775,7 @@ fn walk_to_the_exit_at(iso: &str, stop_at_fire: bool, difficulty: u32) -> Walker
                 }).collect()
             };
             if near.is_empty() { break; }
-            for g2 in near {
+            for g2 in route_order(&w, &near) {
                 let gpos = w.scene.sim.as_ref().unwrap().drones.list[g2].pos;
                 let bpos = w.scene.sim.as_ref().unwrap().bond.pos;
                 if walker::dxz(gpos, bpos) > 9.0 {
