@@ -79,3 +79,13 @@ Task: apply the report's levers with real input, then un-ignore
 ## Usage
 
 not visible to me
+
+## ntfy failed
+
+All three fallbacks failed from this sandbox:
+1. `curl -sS -m 20 -H "Title: NightfirePort" -d "level-0d-yard-climb-cover-2: …" https://ntfy.sh/nightfire-yoda-8k3x`
+   → `curl: (28) Connection timed out after 20000 milliseconds`
+2. `python3 -c "…urlopen(Request('https://ntfy.sh/nightfire-yoda-8k3x', …), timeout=20)"`
+   → `urllib.error.URLError: <urlopen error [Errno 101] Network is unreachable>`
+3. `wget -q -O- --post-data "level-0d-yard-climb-cover-2: done" https://ntfy.sh/nightfire-yoda-8k3x`
+   → exit code 124 (timed out; no output)
