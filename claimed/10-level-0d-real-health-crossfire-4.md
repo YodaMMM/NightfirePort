@@ -5,3 +5,6 @@ Branch from origin/s/level-0d-real-health-crossfire-3 (merge origin/master first
 But it breaks a test that is green on master: walkreal_0700000d_live::walk_arrival_to_the_c5_door_real_damage now dies at tick 4482 at the ladder top (213.07, 17.37, -234.51): five -16 sniper hits from #18 (207.6, 12.1, -288.6), #16 (198.9, 14.0, -260.4) and #28. The route changes are shared with that walk. Keep the C5 walk's old route (or make the new one survive there) and finish the crossfire: deal with #32 at the annex descent.
 
 Run every test in walkreal_0700000d_live and list each result; then every walkreal_*_live; then the full suite total line. Real input only; no top-ups.
+
+---
+claimed-by: sandbox1 at 2026-11-03T19:03Z
