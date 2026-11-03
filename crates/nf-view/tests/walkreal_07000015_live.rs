@@ -48,7 +48,9 @@ fn iso() -> String { std::env::var("NF_ISO").expect("NF_ISO") }
 // The player's body (`Player_Collision` 0x194df0's HITTEST: the walk reaches 1.86 over the floor,
 // the crouch 1.3) meets every one of them standing on its lane. Crouched, #487 clears (and on
 // the walk #526's blast takes it first); #526 lies along its doorway behind a rim and is shot
-// from the rim. The rest are shot from down their lanes:
+// down the lane from west of door[32] — past the worst of its own blast (level-15-agent-doors:
+// the rim shot's own blast cost −41.6 on Agent, the run's largest hit). The rest are shot from
+// down their lanes:
 // a bullet's flight segment picks the mine (mode 0x201, mask 0 [M Bullet_update 0x12e7b0] →
 // `Collide_PickObj` 0x1eae80 admits a cel-linked object with obj+0xF0 0 and a collision glist) and
 // `Collide_Update` 0x1ea398:160-233 mirrors the hit onto the mine with +0x58 = the bullet — the
@@ -375,7 +377,10 @@ fn walk_spawn_to_the_omega_sector_exit_at(difficulty: u32) {
             }
         }
     }
-    w.walk_route(route_b);
+    let (route_b1, route_b2) = route_b.split_at(route_b.iter().position(|(l, _)| *l == "door[32] threshold").unwrap());
+    w.walk_route(route_b1);
+    // The door[32] doorway guard clears BEFORE the lane is walked (a player clears the doorway
+    // before stepping past it); at the d2 roster the placement-spot resolution is kept.
     if difficulty >= 2 {
         if let Some(di) = agent_drone_near(&w, [26.22, 41.45, 71.15], 4.0) {
             w.shoot(di, "the door[32] doorway grenade guard (placement 722) at the Agent roster");
@@ -387,13 +392,41 @@ fn walk_spawn_to_the_omega_sector_exit_at(difficulty: u32) {
     // [D]), lies ALONG the lane in door[29]'s doorway, in the trough between the 0.76 rim at
     // x ≈ 12 and the leaf: the doorway (the leaf's z 70.06..72.32) leaves under the body's 1.1
     // width on either side of it, and the walk's body reaches the floor [M 0x194df0], so a step
-    // off the rim meets it. The rim also hides it from a shot down the lane; from just east of
-    // the rim the line drops over the rim's top onto the beam. (On this walk a guard's grenade
-    // near door[32] — radius 8, 7.7 u from #526's sphere — can set it off first through the
-    // same case-0x4B entry [M 0x17c518]; `shoot_mine` then returns at once.)
+    // off the rim meets it — no lane walks past it and its pick sphere (sph_r 2.18) spans the
+    // whole doorway, so the beam must be shot. The rim also hides it from a shot down the lane:
+    // the bullet trace from west of the rim dies on the rim's face (the probe15e dump — every
+    // stand x ≥ 14 stops the round), so from just east of the rim the line drops over the rim's
+    // top onto the beam. (A guard's grenade near door[32] — radius 8, 7.7 u from #526's sphere —
+    // can set it off first through the same case-0x4B entry [M 0x17c518]; `shoot_mine` then
+    // returns at once.)
+    // REAL-HEALTH TACTIC (level-15-agent-doors): the rim shot stands IN the beam's own blast —
+    // the hurt is pure distance [M Explode_Propagate 0x17c518's sweep: `damage * (1 −
+    // (int)dist / radius)`, the (int) truncation 0x17c61c-0x17c628, no LOS and no wall check],
+    // radius 15, damage 80, so on Agent (×0.6 [M Player_HandlePain 0x1902c8 Plr_DMod_Normal])
+    // the measured cost was −41.6 at 2.44 u (80·(1−2/15)·0.6) — the level's own toll, paid
+    // already on the Operative walk (−27.7 at ×0.4). The blast budget is made back on the west
+    // room: the grenadiers are answered from THIS mark, before the doorway is walked (below).
+    w.walk_route(route_b2);
     walk_plain(&mut w, [12.8, 41.4, 71.2], 0.35, "east of door[29]'s rim");
     let d = shoot_mine(&mut w, 526, [11.3, 40.70, 71.18], "the door[29] ankle beam #526");
     assert!(d > 1.5, "#526 is shot from east of the rim, not stepped on ({d:.2} u)");
+    // REAL-HEALTH TACTIC (level-15-agent-doors): the west-room grenadiers are answered NOW, from
+    // east of the rim — the measured v1 run fought them from INSIDE the west room (after
+    // route_c's threshold/through legs) and #11's grenade was already in flight when it died:
+    // −22.5 at 6191, the run's second-largest hit. A player hears the launchers from the
+    // doorway and answers through it; #526 is already gone, so the fight's own wandering is
+    // body-safe. The doorway's z band (70.06..72.32 at x 10.56) covers both boxes' rays from
+    // here (#10's at z ≈ 70.3-70.6, #11's at z ≈ 71.6-72.2).
+    if difficulty >= 2 {
+        for (at, label) in [
+            ([-1.87f32, 41.34, 77.42], "the northwest grenadier (port #11, skin 0x50000b2) through the door[29] window"),
+            ([-5.14f32, 41.34, 67.25], "the west-room grenadier (port #10, skin 0x50000b2) through the door[29] window"),
+        ] {
+            if let Some(di) = agent_drone_near(&w, at, 8.0) {
+                w.shoot(di, label);
+            }
+        }
+    }
     let route: &[(&str, Wp)] = &[
         ("door[29] threshold", Wp::new(11.5, 41.4, 71.2).r(0.9)),
         ("door[29] through", Wp::new(8.0, 41.4, 71.2).r(1.0)),
@@ -431,24 +464,27 @@ fn walk_spawn_to_the_omega_sector_exit_at(difficulty: u32) {
     ];
     let (route_c, route_d) = route.split_at(route.iter().position(|(l, _)| *l == "the southwest jog").unwrap());
     w.walk_route(route_c);
-    if difficulty >= 2 {
-        for (at, label) in [
-            ([-5.14f32, 41.34, 67.25], "the west-room grenadier (port #10, skin 0x50000b2)"),
-            ([-1.87f32, 41.34, 77.42], "the northwest grenadier (port #11, skin 0x50000b2)"),
-        ] {
-            if let Some(di) = agent_drone_near(&w, at, 8.0) {
-                w.shoot(di, label);
-            }
-        }
-    }
-    w.walk_route(route_d);
+    // (The west-room grenadiers are answered from the rim mark above, before this doorway is
+    // walked — level-15-agent-doors. The fights' leftovers resolve on the legs' return fire.)
+    let (route_d1, route_d2) = route_d.split_at(route_d.iter().position(|(l, _)| *l == "door[50] through").unwrap());
+    w.walk_route(route_d1);
+    // REAL-HEALTH TACTIC (level-15-agent-doors): the great-hall grenade guard is answered from
+    // the door[50] threshold, BEFORE the corridor's last legs — the measured v1 run's return
+    // fire met the great-hall pair at "door[50] through" (mid-corridor, health already
+    // 17.8) and #5's grenade was in flight when it died: −17.8 at 7885, the killing hit. A
+    // player holds the doorway (the door opened for the line) and answers down the corridor:
+    // #5 (port index 5 at the d1 roster; placement 733's spot (6.25, 41.45, 35.69) at d2) sits
+    // 9.8-13.6 u south through the open leaf.
+    w.use_door(50, "door[50] for the 733 line");
+    for _ in 0..40 { w.tick(nf_game::player::Input::default(), false); }
     if difficulty >= 2 {
         if let Some(di) = agent_drone_near(&w, [6.25, 41.45, 35.69], 6.0) {
-            w.shoot(di, "the great-hall grenade guard (placement 733) at the Agent roster");
+            w.shoot(di, "the great-hall grenade guard (placement 733) from the door[50] threshold");
         }
     } else if !w.tops_up() {
         w.shoot(5, "the great-hall grenade guard (placement 733)");
     }
+    w.walk_route(route_d2);
     // REAL-HEALTH TACTIC (level-14-15-real-health-finish): door[42] from the NORTH side, not
     // through it — the #447/#448/#449 fence at z ≈ 17.6 (the floor-to-ceiling beam at x 0 and
     // the two diagonals [D]) has no lane the body clears, and the old through-the-door shot

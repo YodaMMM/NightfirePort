@@ -74,3 +74,21 @@ master after the door-routes merge: a -41.6 world hit at tick 5400, -22.5 from #
 player would — identify the world hit (blast / hurt volume / live wire) and why the door
 change moved Bond or a guard into it, then cover + approach on real input. Real input only,
 no top-ups. The Operative walk stays green. Branch cut from origin/master 38052bf6.
+
+- (00:10 UTC, 11-03) The -41.6 world hit IDENTIFIED [M Explode_Propagate 0x17c518's sweep:
+  `damage * (1 − (int)dist / radius)`, the (int) truncation 0x17c61c-0x17c628, no LOS, no wall
+  check]: it is mine #526's OWN blast — the walk's rim shot from 2.44 u, radius 15 damage 80,
+  ×0.6 Agent pain (80·(1−2/15)·0.6 = 41.6; the Operative walk pays the same blast at ×0.4 =
+  −27.7 and stays green) — NOT door-related. The door routes' actual delta is the chips (#15
+  the gantry grenadier −2.1, #17 the plank burst rifle −5.4, #2 the desk grenadier −4.2). The
+  measured death ledger (v1): 2.1+6.4(#462's own blast at 13.57 u)+5.4+4.2+41.6+22.5(#11's
+  grenade in flight)+17.8(#5's grenade in flight) = 100.0 exactly. Route work so far: the 733
+  pre-shoot moved to the door[50] threshold (VERIFIED: #5 died before its throw — 17.8 saved),
+  the #10/#11 pre-shoots moved to the rim mark (partly effective: #11 4.2 vs 22.5; #10's fight
+  still dragged 21.0), the #462 east mark and the #526 west-lane shot tried and REVERTED (the
+  probe15e dump: the bullet trace to #526 is rim-blocked from every stand x ≥ 14, so −41.6 is
+  the geometric floor; the east #462 mark saved 6.4 but reshuffled the fights to −21.0). v7
+  ledger: died at 7502 at door[42] with 100.0 — the fence chain (#447 at 9.5 u) pops −4.8/−4.3
+  and #10's drag 21.0 are the remaining 30. Agent test still RED; the Operative real-damage
+  sister re-run GREEN on the branch; the rest of the binary unverified. Next: kill #10 in the
+  first rim-mark fight (hp 20, one head hit), find the fence-pop law (radius ≠ 8?), re-check.
