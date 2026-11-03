@@ -601,6 +601,23 @@ fn play_the_mission(w: &mut Walker, alive: impl Fn(&nf_view::scene::Sim) -> bool
         assert!(sim.drones.channels.on(46), "missile 1's disarm script writes SP#211's start ch 46 [D 0600091c @t1000]");
         assert!(sim.drones.channels.on(10), "the fly-by chain writes the fight gate ch 10 [D 0x060008f0 t400]");
         assert!(sim.drones.mission.status() <= 1, "no fail on the way (status {}) [M 0x182c60]", sim.drones.mission.status());
+        // The game's order, pinned mid-walk on the state the objective monitor reads [M
+        // Mission_MonitorObjectives 0x1827d8]. The fight gate does NOT wait for objective 1: the
+        // done channels that feed AND #139 (ch 21/22/27) are written only when each missile's p2
+        // script ENDS [M 0x1aa33c-3d0 — Script_Update; Script_IsPlaying; bne v0 → the writes sit
+        // behind it: sb 1 → switch_channels[16(s0)] = p6 at 0x1aa3a0-3bc (disarm) /
+        // switch_channels[14(s0)] = p5 at 0x1aa380-388 (launch); obj+0xf4 = 4 at 0x1aa3d4-3d8],
+        // and missile 1's p2 writes the Drake-chain ch 46 @t1000 but ends at t1710 [D 0600091c],
+        // so ch 10 → Drake lands ~710 ticks BEFORE ch 21. So while Drake lives: obj 1 is merely
+        // announced (3) and obj 2 still hidden (1 — its enable ch 0x09 has not fired [L record 1b
+        // obj 2; M 0x1827d8:55-67]). The monitor completes obj 1 (record 4 [M 0x1827d8:78-85])
+        // later, when the three p2 ends raise ch 0x09.
+        assert!(!sim.drones.channels.on(0x09) && !sim.drones.channels.on(0x0b),
+            "at the fight gate neither objective channel has fired: ch 0x09 waits on the p2 ends [M 0x1aa33c-3d0], ch 0x0b on Drake's death [D]");
+        assert_eq!(sim.drones.mission.states[23][0], 3,
+            "objective 1 is announced but NOT complete while Drake spawns [M 0x1827d8:41-54/78-85]");
+        assert_eq!(sim.drones.mission.states[23][1], 1,
+            "objective 2 is still hidden (its enable ch 0x09 has not fired) [L record 1b obj 2; M 0x1827d8:55-67]");
         drake_of(sim).expect("the fight gate spawns Drake (spawner #187, trigger 10 [D])")
     };
     assert!(w.scene.sim.as_ref().unwrap().drones.list[drake].enabled, "the gate enables Drake (wait-switch 10 [D])");
@@ -614,6 +631,20 @@ fn play_the_mission(w: &mut Walker, alive: impl Fn(&nf_view::scene::Sim) -> bool
         assert!(alive(sim), "Bond survives Drake's fight (health {:.1})", sim.drones.health.health);
         assert!(sim.drones.list[drake].health <= 0.0, "Drake dies to Bond's fire in the float");
         assert!(sim.drones.channels.on(0x0e), "Drake's death channel ch 0x0e rises with the kill [D #186 p12 = 14; M 0x1747b8/0x13e660]");
+        // The order's middle hinge, in the window between Drake's death (ch 0x0e) and the defeat
+        // NIS's ch 0x0b write (its t600 [D 0x06000a20] — the NIS only starts on 0x0e, so 0x0b is
+        // still 600 ticks out): the missiles' p2 scripts ended during the fight, so AND #139 has
+        // raised ch 0x09 and the monitor completed objective 1 [M 0x1827d8:78-85], while
+        // objective 2 is announced (its enable ch 0x09 fired [M 0x1827d8:55-67]) and not yet
+        // complete — the game's order: obj 1 completes BEFORE obj 2.
+        assert!(!sim.drones.channels.on(0x0b),
+            "the defeat NIS's ch 0x0b write sits at its t600, after the death tick [D 0x06000a20]");
+        assert!(sim.drones.channels.on(0x09),
+            "the p2 ends raised ch 0x09 during the fight [M 0x1aa33c-3d0 + D the p2 lengths]");
+        assert_eq!(sim.drones.mission.states[23][0], 4,
+            "objective 1 is COMPLETE by Drake's death [M 0x1827d8:78-85]");
+        assert_eq!(sim.drones.mission.states[23][1], 3,
+            "objective 2 is announced and not complete at Drake's death [M 0x1827d8:55-67]");
     }
     hide_and_snipe(w, 12.0, |s| s.drones.mission.status() == 6 || !alive(s), 2400);
     w.skip_cutscenes = true;
@@ -740,6 +771,21 @@ fn walk_arrival_to_drakes_defeat() {
     assert!(sim.drones.channels.on(100), "ch 100, the mission end [M 0x1827d8:120 / D 0x06000a20]");
     assert_eq!(sim.drones.mission.status(), 6, "the mission ends (MissionState 6) [M 0x182c60]");
     assert_eq!(sim.drones.mission.to_end, 0x0730_001b, "the station's own end code [M 0x182c60:114-116]");
+    // Both objectives COMPLETE on the records the monitor reads, in the game's order (the
+    // mid-walk hinges pinned obj 1 = 3 / obj 2 = 1 at Drake's spawn and obj 1 = 4 / obj 2 = 3 at
+    // his death):
+    // the monitor's state-3 arm turns each record 4 when its channel reads ON [M 0x1827d8:78-85].
+    assert_eq!(sim.drones.mission.states[23][0], 4,
+        "objective 1 'Disable the missiles' is COMPLETE on the record [M 0x1827d8:78-85; L record 1b obj 1]");
+    assert_eq!(sim.drones.mission.states[23][1], 4,
+        "objective 2 'Defeat Drake' is COMPLETE on the record [M 0x1827d8:78-85; L record 1b obj 2]");
+    // The channels of record, stamped on every nonzero write [M 0x1b1a78:87,107,188-189]: the
+    // defeat NIS writes 0x0b at t600 and the end ch 100 at t720 [D 0x06000a20], so obj 2's
+    // completion lands strictly before the mission-end channel's last stamp.
+    let t = |c: u32| sim.drones.channels.time.get(c as usize).copied()
+        .unwrap_or_else(|| panic!("ch {c} was written on the walk"));
+    assert!(t(0x0b) < t(100),
+        "obj 2's completion channel 0x0b lands before the mission-end ch 100 [D 0x06000a20 t600/t720] ({} vs {})", t(0x0b), t(100));
 }
 
 #[test]
@@ -1117,6 +1163,14 @@ fn walk_arrival_to_drakes_defeat_on_real_health() {
         sim.drones.frame, sim.drones.health.health, sim.drones.health.armour, sim.drones.player_hits.len());
     assert_eq!(sim.drones.mission.status(), 6, "the mission ends (MissionState 6) with Bond alive [M 0x182c60] (health {:.1})", sim.drones.health.health);
     assert_eq!(sim.drones.mission.to_end, 0x0730_001b, "the station's own end code [M 0x182c60:114-116]");
+    // Both objectives COMPLETE on the records the monitor reads, in the game's order (the
+    // mid-walk hinges in play_the_mission pin obj 1 = 3 / obj 2 = 1 at Drake's spawn and
+    // obj 1 = 4 / obj 2 = 3 at his death) [M 0x1827d8:78-85; L record 1b].
+    assert_eq!(sim.drones.mission.states[23][0], 4, "objective 1 COMPLETE on the record");
+    assert_eq!(sim.drones.mission.states[23][1], 4, "objective 2 COMPLETE on the record");
+    let t = |c: u32| sim.drones.channels.time.get(c as usize).copied()
+        .unwrap_or_else(|| panic!("ch {c} was written on the walk"));
+    assert!(t(0x0b) < t(100), "obj 2's 0x0b lands before the mission-end ch 100 [D 0x06000a20 t600/t720]");
     // Sister: the damage path ran for real — the rounds cost the armour and then health (no top-up).
     assert!(sim.drones.player_hits.len() >= 15 && sim.drones.health.armour == 0.0 && lost > 0.0,
         "the waves really hurt Bond on the way ({} hits, armour {:.1}, {lost:.1} health) — no allowance", sim.drones.player_hits.len(), sim.drones.health.armour);
