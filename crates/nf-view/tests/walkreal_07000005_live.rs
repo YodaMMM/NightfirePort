@@ -1498,3 +1498,17 @@ fn the_door_band_exit_chains_to_07000006_walked_real_damage() {
 fn the_door_band_exit_chains_to_07000006_walked_real_damage_agent() {
     walker::with_real_damage(|| the_door_band_exit_chains_to_07000006_walked_at(2));
 }
+
+/// 00 Agent-difficulty sister of `..._real_damage` (real-health-00agent-05-07): the same walked
+/// cable-car → terrace → door-#112 route at the menu's 00 Agent pick — GameState+0x28 = 3 through
+/// the front-end's launch path [M C_SBNFDFCTY 0x216ca8:15; the `difficulty[]` table 0x2df4c0 row
+/// 2 carries 3; Txt 0x14f = "00 Agent"]. On this level group the pick scales Bond's pain by
+/// Plr_DMod_Hard 1.0 (the Operative run rides Easy 0.6, Agent 0.7) and the guards' hit chance by
+/// DroneFiring_Accuracy_Hard 1.3 (Easy 0.8, Normal 1.1) [M Player_HandlePain 0x1902c8;
+/// DroneWeap_DoBulletAccuracy 0x179740:74-88; tuning.rs 05-08 group ← ReadTuningVars 0x1d3a80];
+/// the min-difficulty placements pass Drone_Create's gate [M 0x136be0:49]. Real input only — the
+/// load path is the only difference.
+#[test]
+fn the_door_band_exit_chains_to_07000006_walked_real_damage_00agent() {
+    walker::with_real_damage(|| the_door_band_exit_chains_to_07000006_walked_at(3));
+}
