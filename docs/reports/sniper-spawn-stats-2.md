@@ -84,3 +84,11 @@ sections never reach the table. Please check live (fresh boot, 07000005):
 
 not visible to me — this environment exposes no token, credit or context-window figures for the
 session (no numbers were visible in any interface output to copy).
+
+## ntfy failed
+
+All three notification paths failed (the sandbox cannot reach ntfy.sh, same as previous sessions):
+
+1. curl: `curl: (28) Connection timed out after 20001 milliseconds`
+2. python urllib: `urllib.error.URLError: <urlopen error [Errno 101] Network is unreachable>`
+3. wget: no output, killed by the 25 s timeout (exit 124) while hanging on the connect
