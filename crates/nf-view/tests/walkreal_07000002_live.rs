@@ -94,7 +94,7 @@ fn clear_captors(w: &mut Walker, around: [f32; 3], label: &str) {
 /// The real-health walk's captor fight: the same kill set as `clear_captors`, played the way a
 /// player does under real fire — enabled guards only, shot from range when a part is exposed,
 /// approached node by node until one is, the gun cycled/looted when it runs dry.
-fn clear_captors_real(w: &mut Walker, around: [f32; 3], label: &str) {
+fn clear_captors_real(w: &mut Walker, around: [f32; 3], label: &str, d3: bool) {
     for round in 0..8 {
         let target = {
             let sim = w.scene.sim.as_ref().unwrap();
@@ -117,6 +117,9 @@ fn clear_captors_real(w: &mut Walker, around: [f32; 3], label: &str) {
             eprintln!("[02] {label}: captor {round} (drone {di}) survived the clip");
             loot(w, &format!("{label} captor {round}"), 1);
         }
+        // The 00 Agent scoop: the dead guard's drop is the resupply (one 8-pellet tap per captor
+        // keeps the next fight ahead of its first volley).
+        if d3 { scoop_drops(w, &format!("{label} captor {round} drop"), 1); }
         status(w, &format!("{label} captor {round}"));
     }
 }
@@ -129,7 +132,7 @@ fn clear_captors_real(w: &mut Walker, around: [f32; 3], label: &str) {
 /// captain (weapon 0x1C, 8 pellets a round [M DroneWeap_FireWeapon 0x178f68 weapon_data+0x18
 /// loop]); under 3.0 u every round hits [M DroneWeap_DoBulletAccuracy 0x179740:113-115], and at
 /// 6.7 u the 0.045-rad spread still puts the whole volley on Bond.
-fn take_room(w: &mut Walker, around: [f32; 3], label: &str) {
+fn take_room(w: &mut Walker, around: [f32; 3], label: &str, d3: bool) {
     w.dmg.dry_taps = Some(5);
     let mut tried: Vec<(usize, u32)> = Vec::new();
     for round in 0..16 {
@@ -157,6 +160,7 @@ fn take_room(w: &mut Walker, around: [f32; 3], label: &str) {
                 if !killed { let until = w.total_ticks + 240; tried.push((di, until)); }
                 let dry = { let g = &w.scene.sim.as_ref().unwrap().gun; g.clip + g.spare == 0 };
                 if dry { arm_fullest(w, &format!("{label} room {round} dry")); }
+                if d3 { arm_weapon(w, 0x1c, &format!("{label} room {round} shotgun")); }
                 eprintln!("[02] {label} room {round}: drone {di} killed {killed}");
             }
             None => {
@@ -172,7 +176,7 @@ fn take_room(w: &mut Walker, around: [f32; 3], label: &str) {
     }
     w.dmg.dry_taps = None;
     // Whatever the stand left (a captor out of every line from here): the old sweep.
-    clear_captors_real(w, around, label);
+    clear_captors_real(w, around, label, d3);
 }
 
 /// Bond's own status line (health, armour, gun) for the fight log.
@@ -303,6 +307,43 @@ fn reload_full(w: &mut Walker) {
     if spare == 0 { return; }
     w.scene.sim.as_mut().unwrap().step_bond(Default::default(), false, true, false);
     for _ in 0..90 { w.tick(Default::default(), false); }
+}
+
+/// Walk to the nearest live pickup at the feet (the guards' drops land at the fight floor [L
+/// drops]) and take it — no `have` gate, `n` pickups — then cycle to a firearm with ammo. The
+/// 00 Agent economy: the guards' dropped guns ARE the resupply (the bunker entry saw a 4-round
+/// 0x1c shotgun drop [L the arm_fullest carry log]), and at DroneFiring_Accuracy_Hard 1.0 the
+/// fights must end in one tap, not one per reload cycle.
+fn scoop_drops(w: &mut Walker, label: &str, n: usize) {
+    for k in 0..n {
+        let bp = w.scene.sim.as_ref().unwrap().bond.pos;
+        let target = w.scene.sim.as_ref().unwrap().drones.pickups.iter()
+            .filter(|p| !p.gone)
+            .map(|p| [p.m[3][0], p.m[3][1], p.m[3][2]])
+            .filter(|q| dxz(*q, bp) < 6.0 && (q[1] - bp[1]).abs() < 1.5)
+            .min_by(|a, b| dxz(*a, bp).total_cmp(&dxz(*b, bp)));
+        let Some(target) = target else { break };
+        eprintln!("[02] {label}: scooping the drop ({:.1},{:.1},{:.1}) (d {:.1})", target[0], target[1], target[2], dxz(target, bp));
+        w.walk_nav_to(target, &format!("{label} scoop {k}"), 0.4);
+    }
+    let _ = w.switch_to_armed(label);
+}
+
+/// Cycle the wheel to the gun `id` (the game's own weapon cycle, the arm_fullest walk) and top
+/// the clip up. False if the wheel never showed it (not carried or dry).
+fn arm_weapon(w: &mut Walker, id: u8, label: &str) -> bool {
+    let read = |w: &Walker| w.scene.sim.as_ref().unwrap().gun.weapon;
+    for _ in 0..12 {
+        if read(w) == id {
+            reload_full(w);
+            eprintln!("[02] {label}: armed {id:#x}");
+            return true;
+        }
+        w.tick(nf_game::player::Input { weapon_cycle: 1, ..Default::default() }, false);
+        for _ in 0..60 { w.tick(Default::default(), false); }
+    }
+    eprintln!("[02] {label}: {id:#x} not carried");
+    false
 }
 
 /// Close on guard `di` the way a player rounds a corner: node by node along the nav web toward
@@ -498,6 +539,15 @@ fn walk_the_castle_all_objectives_real_health_at(difficulty: u32) {
     // (`close_in`) carried Bond into those ranges and is gone.
     w.keep_off = Some(4.0);
     w.dmg.back_off = Some(4.0);
+    // 00 Agent tactics (real-health-00agent-02-03-04), the difficulty-3 sister only: at
+    // DroneFiring_Accuracy_Hard 1.0 (vs Agent's 0.7) and Plr_DMod_Hard 1.2 (vs 0.7) the
+    // geisha-room shotgun captors land 8-pellet volleys worth 57.6 at 2.7 u and 21.6 at 4.0 u
+    // [L the 00agent ledger — the first run died at tick 6398, 100.0 in 56 hits], and the
+    // doorway angle never exposed a head part (the fight's two part-4 taps did 5.6 of the
+    // captor's 12.0 [L the NF_KILL_TRACE run]). A player at 00 Agent takes the guards' dropped
+    // shotguns and answers the room with the same gun — one 8-pellet tap kills a 12-hp captor
+    // before its first volley [L drops: the guards drop 0x1c with shells]. The d1/d2 runs keep
+    // the exact restored RNG: every arm below is behind `difficulty >= 3`.
     {
         let sim = w.scene.sim.as_ref().unwrap();
         let p = sim.bond.pos;
@@ -599,6 +649,12 @@ fn walk_the_castle_all_objectives_real_health_at(difficulty: u32) {
         }
     }
     arm_fullest(&mut w, "before the geisha-1 room");
+    if difficulty >= 3 {
+        // The 00 Agent scoop + arm: the south hall guards' dropped shotguns are the geisha
+        // rooms' answer (the tactic doc above the spawn assert).
+        scoop_drops(&mut w, "the south hall drops", 3);
+        arm_weapon(&mut w, 0x1c, "the geisha-1 shotgun");
+    }
     w.lenient = true;
     w.walk_to(Wp { at: [-35.2, 6.5, 4.6], act: Act::Wait(10), arrive: 0.9 }, "the ch-0x17 plate");
     w.lenient = false;
@@ -632,7 +688,7 @@ fn walk_the_castle_all_objectives_real_health_at(difficulty: u32) {
     //    fires through the real fire path, AND #397 closes 0x3B [D tr[017]].
     let g1 = geisha(&w, 0x49).unwrap();
     let at = w.scene.sim.as_ref().unwrap().drones.list[g1].pos;
-    clear_captors_real(&mut w, at, "geisha 1");
+    clear_captors_real(&mut w, at, "geisha 1", difficulty >= 3);
     for _ in 0..240 {
         if ch_on(&w, 0x49) { break; }
         w.tick(Default::default(), false);
@@ -717,6 +773,10 @@ fn walk_the_castle_all_objectives_real_health_at(difficulty: u32) {
     // at (−28.7, 7.19, −18.3), run11 2026-10-31).
     leg_to(&mut w, [-30.0, 5.9, -21.5], "the east courtyard again", 1.6);
     arm_fullest(&mut w, "before the geisha-2 room");
+    if difficulty >= 3 {
+        // The same 00 Agent arm for the second room (its captain carries 24 [L ee_02b.bin]).
+        arm_weapon(&mut w, 0x1c, "the geisha-2 shotgun");
+    }
     // The ch-0x19 plate tr[009] sits in the doorway (quad x −27.58..−26.19, z −22.08..−18.49 at
     // y 6.04 [L probe02quads tris]; the door at (−27.8, 6.6, −20.3) is its west edge [L base log]).
     // The real leg walks THROUGH the doorway into the quad — the old arrive-1.2 stop at x −28.09
@@ -744,7 +804,7 @@ fn walk_the_castle_all_objectives_real_health_at(difficulty: u32) {
     }
     let g2 = geisha(&w, 0x4a).unwrap();
     let at = w.scene.sim.as_ref().unwrap().drones.list[g2].pos;
-    take_room(&mut w, at, "geisha 2");
+    take_room(&mut w, at, "geisha 2", difficulty >= 3);
     for _ in 0..240 {
         if ch_on(&w, 0x4a) { break; }
         w.tick(Default::default(), false);
