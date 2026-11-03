@@ -1041,9 +1041,9 @@ pub fn walk_spawn_to_the_band(iso: &str) -> Walker {
                 // PAST B [L blockers-2's hang]) with #13 alive on the west side [L the
                 // ring-west-edge fight, killed false]. Per-tick inside d 3 (the freeze zone).
                 let bb = &sim.bond;
-                eprintln!("[0c] the #284 ride t{t}: pos {:?} d_B {d:.2} mode {:#x} anim {:#x} at {:.1} rate {:.2} yaw {:.3} auto {:.1} disabled {} sub {} regrab {} death {} ndead {} gimp {}",
+                eprintln!("[0c] the #284 ride t{t}: pos {:?} d_B {d:.2} mode {:#x} anim {:#x} at {:.1} rate {:.2} yaw {:.3} auto {:.1} disabled {} sub {} regrab {} death {} dtick {} hp {:.1} ndead {} gimp {}",
                     bb.pos, bb.mode, bb.wire_anim, bb.wire_anim_time, bb.wire_anim_rate, bb.yaw, bb.auto_drop, sim.disabled, bb.substate, bb.regrab,
-                    sim.drones.death.active, sim.net_dead(),
+                    sim.drones.death.active, sim.drones.death.ticks, sim.drones.health.health, sim.net_dead(),
                     sim.drones.props.gunimps.iter().filter(|g| g.active).count());
             }
             // The drop is the jump press inside 0.9 of B (blockers-2's green drop). The

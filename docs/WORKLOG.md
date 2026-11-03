@@ -38,3 +38,27 @@ Left: the offline dump of the 0700000c class-0xE4 hurt volumes (which placement 
 (−7.45, 12.8..14.6, −215.3), its gate/who/kind/damage), the game's rule for the rider
 (whether the collide query builds the obj+0xd0 hit list on substate 6 [Player_CollisionHandler
 0x1949a8's source + disasm]), then the fix + the proof test + the walkreal sweep + the suite.
+
+### the freeze RESOLVED: the premise is refuted — it is the death sequence, not a wire_tick stall (20:45 UTC)
+
+The hp trace (the ride probe now prints health + the death tick): the rider entered the freeze
+zone at hp 1.6 (NOT the ledger's 17.6 — the ledger samples at bullet hits; 16 hp of unhooked
+damage landed during the late ride), t473 hp 0.0 (the last pain ≥ 1.6 killed him mid-ride),
+t474 death.active true dtick 0, t475+ dtick 1,2,3… — the death machinery RUNS (death_tick
+alive from Drones::tick [M drone.rs 0x17641's site — Player_CheckForDeath 0x190810 is
+"player-side, runs during cut-scenes, not gated"]), the bond tick is skipped by the faithful
+dead branch [M Player_Update 0x193600:316-319 — the dead arm runs ONLY AnimObjectUpdate +
+Player_HandleDeath, no substate arm: the body freezes where it died]. The port matches the
+game: a rider who dies mid-wire hangs dead until the restart prompt — never a wire_tick stall.
+
+The kill at t473 is NOT a bullet (the ledger), not a hurt volume (0700000c has ZERO class-0xE4
+placements [L the scratch dump: "0700000c hurt volumes: 0 total"]), not drowning, not fall
+damage (fall_damage is None on the wire), not a gunimp — by elimination it is the BLAST pain
+[M spawn_blast → explode::propagate → health.pain_generic(…, pain_type 0), drone.rs ~14039]:
+a destructible popped near the gap (the guards shoot the rider the whole ride — the -3's
+"the settled walkers eating the sweep+ride for ~70-96") and the blast's area pain took the
+1.6 hp. The Done criterion "reproduces the old freeze phase and now finishes the ride" cannot
+be met by a wire fix: the rider legitimately dies. The next session: trace WHICH prop popped
+at t473 (the destroy/breaks list near the gap) and whether the game's blast reaches the ride's
+hang path (the PCSX2 live check), then either the walk keeps Bond alive past the ride (the -3's
+remaining ledger) or the freeze-phase test asserts the death explicitly.
