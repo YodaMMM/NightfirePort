@@ -3006,7 +3006,12 @@ impl Sim {
             // step (0x1a6f80:179-198) — `cycle` takes &mut self for the marker clear.
             let base_of = |w: u8| weapons.base(w as usize) as u8;
             let target = if let Some(id) = input.switch_to {
-                if id != self.gun.weapon && owned.get(id as usize).copied().unwrap_or(false)
+                // The owned read is the BASE's slot: the twins share it (`BL+0x1BA + base·0xC`,
+                // `Player_EquipWeapon` 0x1a8a58:39-41 — a variant owns nothing of its own; the
+                // port's Inventory::equip_weapon writes the same base slot [M]) — a direct request
+                // for the Samurai overcharge 0x32 (base 0x33) after its give was refused on
+                // owned[0x32] and the draw never started (fire_modes3's samurai leg).
+                if id != self.gun.weapon && owned.get(base_of(id) as usize).copied().unwrap_or(false)
                     && weapons.first_person(id as usize) != 0 { Some(id) } else { None }
             } else if idle && input.weapon_cycle != 0 {
                 let t = self.gun.toggle_back(nf_game::gun::CycleMode::Weapons, &owned, has_ammo, selectable, base_of);
