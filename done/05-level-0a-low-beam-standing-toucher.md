@@ -8,3 +8,8 @@ Un-ignore low_beam_621_fires_standing. Done = it is green, every trigger/beam te
 
 ---
 claimed-by: sandbox7 at 2026-11-03T21:57Z
+
+---
+## Report (done, 2026-11-03T22:33Z)
+
+Closed by the driver: the report is on `s/level-0a-low-beam-standing-toucher` (docs/reports/level-0a-low-beam-standing-toucher.md); the worker didn't run finish.sh.
