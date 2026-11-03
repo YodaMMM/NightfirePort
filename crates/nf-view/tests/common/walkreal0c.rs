@@ -1045,6 +1045,13 @@ pub fn walk_spawn_to_the_band(iso: &str) -> Walker {
                     bb.pos, bb.mode, bb.wire_anim, bb.wire_anim_time, bb.wire_anim_rate, bb.yaw, bb.auto_drop, sim.disabled, bb.substate, bb.regrab,
                     sim.drones.death.active, sim.drones.death.ticks, sim.drones.health.health, sim.net_dead(),
                     sim.drones.props.gunimps.iter().filter(|g| g.active).count());
+                // THE GRENADE WATCH (wire-ride-freeze-0c): any live grenade near the gap during
+                // the ride — the t473 kill's leading suspect (the transient frag blast).
+                for (gi, g) in sim.drones.grenades.iter().enumerate() {
+                    if (-20.0..=8.0).contains(&g.pos[0]) && (-230.0..=-200.0).contains(&g.pos[2]) {
+                        eprintln!("[kill] grenade #{gi} pos {:?} dmg {} state {:?} owner {:?} wt {:#x}", g.pos, g.damage, g.state, g.owner, g.weapon_type);
+                    }
+                }
             }
             // The drop is the jump press inside 0.9 of B (blockers-2's green drop). The
             // FIRE-action variant (real-crossings 29b43fa9, never run on that branch) rode the

@@ -62,3 +62,10 @@ be met by a wire fix: the rider legitimately dies. The next session: trace WHICH
 at t473 (the destroy/breaks list near the gap) and whether the game's blast reaches the ride's
 hang path (the PCSX2 live check), then either the walk keeps Bond alive past the ride (the -3's
 remaining ledger) or the freeze-phase test asserts the death explicitly.
+
+### the grenade watch (probe 4): the gap box saw NO grenade all ride — the blast paths are OUT
+
+The ride trace now prints any live grenade inside x −20..8, z −230..−200: nothing all ride.
+With the props/breaks also clean near the gap, the surviving kill path is the guard
+contact/melee pain (not a bullet — the ledger never sees it; the settled walkers patrol the
+B-end ledge the rider glides into). Next session: log the pain call sites at the t473 tick.

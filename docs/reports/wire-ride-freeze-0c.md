@@ -40,13 +40,15 @@ The kill path, by elimination ([L] this session's probes, [M] the cited code):
 - NOT drowning (not underwater), NOT fall damage (`fall_damage` is None on the wire — physics
   does not run; it is cleared per tick [M player.rs tick_ctx]).
 - NOT a mounted gun (0 active), not the MP paths (SP), not net.
-- The only surviving SP path is the BLAST pain [M spawn_blast → explode::propagate →
-  `health.pain_generic(…, pain_type 0)`, drone.rs ~14039]. The prop dump after the ride shows
-  ONE dead destroy (#3, z −132, an early-walk prop) and NO break below 0 anywhere — **no prop
-  popped near the gap**, so the blast, if it is one, came from a TRANSIENT: the guards' own
-  grenades (the frag arm drone.rs:14771 — radius 12, transient, not in any prop dump) [S].
-  The guards shoot/throw at the rider the whole ride (the -3's "the settled walkers eating the
-  sweep+ride for ~70-96"), which also explains the 16 unhooked hp earlier in the ride.
+- The BLAST paths are excluded too: the prop dump after the ride shows ONE dead destroy (#3,
+  z −132, an early-walk prop) and NO break below 0 anywhere — no prop popped near the gap —
+  and the live grenade watch during the ride (any grenade inside the gap box x −20..8,
+  z −230..−200) printed NOTHING [L probe 4]. No blast killed the rider.
+- What survives: the guard CONTACT/MELEE pain — the melee is not a bullet hit, so the walk's
+  ledger never sees it, and the settled walkers (#27/#29, patrol spots −245.6/−252.8) sit at
+  the west ledge the rider glides into [S — the next session's first trace: the melee
+  dispatch NDrone2's contact arm + a pain-type log at the t473 tick]. The 16 unhooked hp in
+  the first ~80 ride ticks is the same question.
 
 So the port's behaviour matches the game's: a rider killed mid-wire hangs dead until the
 restart prompt. The freeze is the death sequence wearing the wire's state. "A player must never
@@ -74,9 +76,10 @@ helper/audit sweep is not triggered by this session; the NEXT session's fix will
 
 ## What is left
 
-1. **Name the t473 killer.** Trace the grenade/blast arm: print the pending_blasts pushes
-   (owner, weapon_type, pos) around the ride (drone.rs:14771's frag arm or a new env trace),
-   or watch health's drop sites. The 16-hp earlier drop (ride t~73) is the same question.
+1. **Name the t473 killer.** The blast/grenade paths are EXCLUDED (the probe: no prop died
+   near the gap, no grenade entered the gap box all ride). Log the pain call sites at the
+   t473 tick (a one-line env trace in pain_generic's callers) — the melee/contact arm is the
+   leading suspect. The 16-hp earlier drop (ride t~80) is the same question.
 2. **Decide faithfulness at the game level.** If the guards' grenade genuinely lands at the
    ride's hang path in the game, the port is faithful and the "fix" is walk-side: the
    freeze-phase test asserts the death explicitly (the Done criterion "finishes the ride"
