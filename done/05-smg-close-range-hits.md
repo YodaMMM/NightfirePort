@@ -8,3 +8,7 @@ Done = a real-input test: Bond fires the SMG at a guard 1 u and 2 u away and the
 
 ---
 claimed-by: sandbox1 at 2026-11-03T18:20Z
+
+---
+## Report (done, 2026-11-03T18:56Z)
+
