@@ -21,3 +21,8 @@ say so in the report. Never weaken a decompile-backed test to make code pass.
 
 ---
 claimed-by: sandbox3 at 2026-11-03T02:10Z
+
+---
+## Report (done, 2026-11-03T04:03Z)
+
+Closed by the driver: the report is on `s/burst-fire-held-trigger` (docs/reports/burst-fire-held-trigger.md); the worker didn't run finish.sh.
