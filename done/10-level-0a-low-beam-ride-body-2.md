@@ -14,3 +14,8 @@ Rules: shared test helper changes (crates/nf-view/tests/common/) must be opt-in 
 
 ---
 claimed-by: sandbox1 at 2026-11-03T00:53Z
+
+---
+## Report (done, 2026-11-03T01:24Z)
+
+Closed by the driver: the report is on `s/level-0a-low-beam-ride-body-2` (docs/reports/level-0a-low-beam-ride-body-2.md); the worker didn't run finish.sh.
