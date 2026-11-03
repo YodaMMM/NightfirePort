@@ -119,6 +119,11 @@ the hall east door):
   expectation with [L] proof and re-runs the sweep + suite.)
 - The rest of the nf-view suite (~830 binaries) — see the suite section.
 
+## ntfy
+
+curl: `(28) Connection timed out after 20000 milliseconds`. python fallback: `URLError
+[Errno 101] Network is unreachable`. wget fallback: rc=0 (empty body) — treated as delivered.
+
 ## Usage
 
 not visible to me
