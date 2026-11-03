@@ -173,6 +173,17 @@ pub struct DamageLog {
     /// hp untouched (the game's own hip behaviour; [L] the blocked real-health run's three dry
     /// clips). Off = the plain stand every other walk is pinned against.
     pub aimed_fights: bool,
+    /// OPT-IN (`precise_fights`, the 07000011 real-health walk): the aimed TAP GATE (0.01 rad)
+    /// WITHOUT the aim button. The 2026-11-03 level-11 experiment measured the split: with the
+    /// button held the port's free-aim path reinterprets the fight's `turn`/`look` as CURSOR moves
+    /// (scene.rs free-aim: `want = cursor − turn/0.76966`, clamped ±0.296) and the fired round's
+    /// direction is the view PLUS the cursor offset — the 07000011 top-floor fight tapped 7 rounds
+    /// at err 0.0000 into a 4-u stationary guard for zero boxes (repro11c) — the fight machinery
+    /// drives the VIEW and cannot drive the cursor window. Gate only, every fight dropped its
+    /// target (repro11d: the stairwell fights all killed, 100.0 → 56.2 through the descent). The
+    /// 0c snipers keep the button (`aimed_fights`) — their zero spread needs the bit
+    /// [M Bullet_init 0x12c5a0:139-170].
+    pub precise_fights: bool,
     last_health: f32,
     last_hits: Vec<(u32, usize, f32)>,
 }
@@ -708,9 +719,16 @@ impl Walker {
                 // an exact view and the loose stand dried clips on the same box. 0.01 / 0.01 =
                 // ±0.35 u / ±0.55 u at 35 u — inside the box, still reachable by the ±0.08/tick
                 // converge.
-                let (err_gate, perr_gate) = if self.dmg.aimed_fights { (0.01, 0.01) } else { (0.03, 0.04) };
+                let (err_gate, perr_gate) = if self.dmg.aimed_fights || self.dmg.precise_fights { (0.01, 0.01) } else { (0.03, 0.04) };
                 let fire = !reload && unseen == 0 && !blocked && err.abs() < err_gate && perr.abs() < perr_gate
                     && t.saturating_sub(last_tap) >= 8;
+                // NF_RF_TAPS: every tap's aim state (the 2026-11-03 level-11 investigation needed
+                // the per-tap error against the recorded hits — the t%60 lines only sample).
+                if fire && std::env::var_os("NF_RF_TAPS").is_some() {
+                    eprintln!("[rf-tap] fight#{di} t{t}: err {err:.4} perr {perr:.4} aim {} clip {} spare {}",
+                        aim.map(|a| (a[0], a[2])).map_or("none".into(), |a| format!("({:.2},{:.2})", a.0, a.1)),
+                        sim.gun.clip, sim.gun.spare);
+                }
                 let crowd = self.dmg.back_off.is_some_and(|r| sim.drones.list.iter().any(|o| o.team == 1 && o.enabled && o.present
                     && !o.corpse && o.health > 0.0 && ((o.pos[0] - b[0]).powi(2) + (o.pos[2] - b[2]).powi(2)).sqrt() < r));
                 // The unseen-cover creep: a player pushing toward a guard crouched behind a desk
