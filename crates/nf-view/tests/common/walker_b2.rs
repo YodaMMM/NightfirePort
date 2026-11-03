@@ -299,6 +299,11 @@ impl Walker {
     /// real-damage walks resupply master-green on the old rules (level-13-lobby-rifles-2).
     pub fn resupply(&mut self, label: &str) -> bool {
         let lane = self.dmg.lane_fights;
+        // `lane_floor_drops` (the 07000011 00 Agent opt-in): the on-floor band relaxes to the
+        // master 1.5 — the floor-resting fight drops sit 1.09 under Bond's pos y [L
+        // drop-stand-height probe], outside the lane 0.5 band. Everything else lane-shaped (the
+        // 12-u fetch, the tried list, the 0.6 arrive, the inventory ammo count) stays lane's.
+        let floor_band = if self.dmg.lane_floor_drops { 1.5 } else { 0.5 };
         // Ammo in hand (lane): the current gun's clip+spare AND the inventory's (a taken gun lands
         // in the inventory — the current clip does not move [M Pickup_Handler 0x18e650's equip
         // path], so a successful gun pick would read as a dry pass without this). The shared rule
@@ -332,7 +337,7 @@ impl Walker {
                 // a unit below it is a placed box buried under this floor, its take ray blocked
                 // forever (the 07000012 spawn lobby's y 0.4-0.5 ghosts ate every pass while the
                 // real guard drops waited farther out). The shared filter keeps the master 1.5.
-                .filter(|p| (p.m[3][1] - self.pos[1]).abs() < if lane { 0.5 } else { 1.5 })
+                .filter(|p| (p.m[3][1] - self.pos[1]).abs() < if lane { floor_band } else { 1.5 })
                 .filter(|p| !lane || tried.iter().all(|t| dxz(*t, [p.m[3][0], p.m[3][1], p.m[3][2]]) > 2.0))
                 .map(|p| [p.m[3][0], p.m[3][1], p.m[3][2]])
                 .min_by(|a, b| dxz(*a, self.pos).total_cmp(&dxz(*b, self.pos)))
