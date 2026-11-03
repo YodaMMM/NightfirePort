@@ -11,6 +11,3 @@ Do:
 2. Both green together: low_beam_621_fires_standing (un-ignored) and both fix_truck_live tests; every interactables_*_live and walkreal_*_live.
 3. Then the full suite.
 Rules: shared test helper changes (crates/nf-view/tests/common/) must be opt-in per level and re-run every walkreal_*_live.
-
----
-claimed-by: sandbox4 at 2026-11-03T00:24Z
