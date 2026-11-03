@@ -113,3 +113,12 @@ opt-in per the rules).
 ## Usage
 
 not visible to me
+
+## ntfy failed
+
+All three notification fallbacks were unreachable from this sandbox:
+- `curl -sS -m 15 ... https://ntfy.sh/nightfire-yoda-8k3x` → `curl: (28) Connection timed out after 15002 milliseconds`
+- `python3 urllib.request` → `SyntaxError: bytes can only contain ASCII literal characters` (the em dash in the
+  one-line result broke the bytes literal — retried with the plain `done` payload, no output inside the shell's
+  25 s window, killed)
+- `wget -q -O- --post-data "level-01-agent-escort-fight: done" ...` → no output, timed out at the 20 s cap
