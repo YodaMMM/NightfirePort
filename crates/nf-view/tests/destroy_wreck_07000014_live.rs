@@ -252,6 +252,7 @@ fn no_guard_spams_the_opendoor_after_the_cascade() {
     let mut pair_ticks = 0u32;
     let mut open_door_ticks = 0u32;
     let mut crossed = 0usize;
+    let mut worked: std::collections::HashMap<usize, u32> = std::collections::HashMap::new();
     for _ in 0..1500u32 {
         scene.sim.as_mut().unwrap().drones.health.health = 100.0;
         scene.sim.as_mut().unwrap().step_bond(nf_game::player::Input::default(), false, false, false);
@@ -263,6 +264,7 @@ fn no_guard_spams_the_opendoor_after_the_cascade() {
                 if let Some(i) = g.hit_door {
                     if sim.drones.doors.list[i].state == 4 { open_door_ticks += 1; }
                     if doors.contains(&i) { pair_ticks += 1; }
+                    *worked.entry(i).or_insert(0u32) += 1;
                 }
             }
             if g.present && g.pos[0] < -52.4 { crossed += 1; }
@@ -277,23 +279,40 @@ fn no_guard_spams_the_opendoor_after_the_cascade() {
     }
     assert!(crossed >= 1, "at least one guard combat-moves west past x −52.4 [L probe14_guards' crossings 60/1055/1468]");
     // The game's OpenDoor never WORKS an open door: the ENTER checks DoorIsOpen first and
-    // returns to +0x5A6 at once [M 0x1681f8 case 1 → LAB_00168400], and the UPDATE exits on it
-    // [M 0x1681f8 case 3] — a guard standing in 0x81 at an open door is the port's spam
-    // signature (108 ticks of it before the fix [L this session's runs]).
-    // The residual at-open ticks are the exit boundary of a legit open: the door flips to
-    // OPEN (state 4) one tick before the case-3 UPDATE's DoorIsOpen read fires the exit
-    // [M 0x1681f8 case 3] — a couple of boundary ticks per legit open, never a cycle (the
-    // unfixed tree logged 108 [L this session's reproduce]).
+    // returns to +0x5A6 at once [M 0x1681f8 case 1 → LAB_168400; DoorIsOpen = bound+0xf4 == 4,
+    // 0x14aaa0], and the UPDATE exits on it [M 0x1681f8 case 3] — a guard standing in 0x81 at
+    // an OPEN (state 4) door is the port's spam signature (108 ticks of it before the fix [L
+    // this session's runs]). The residual at-open ticks are the exit boundary of a legit open:
+    // the door flips to OPEN (state 4) one tick before the case-3 UPDATE's DoorIsOpen read
+    // fires the exit [M 0x1681f8 case 3] — a couple of boundary ticks per legit open, never a
+    // cycle (the unfixed tree logged 108 [L this session's reproduce]).
+    // (2026-11-03 level-14-cascade-servers-4 re-read: the -3 tree's ENTER ran before the port's
+    // door-node resolution could land, so its DoorIsOpen read was the stale pre-bind latch —
+    // true — and EVERY fresh binding exited instantly, legit re-opens of re-closed doors
+    // included. The fix defers the ENTER to the resolution (the game's order: ReachedDestNode
+    // binds +0xBA8, THEN the ENTER reads it [M 0x153358:149-163 → 0x1681f8 case 1]), so a fresh
+    // bind of a not-yet-open door WORKS it once [M 0x1681f8 case 1's DoorIsOpen-false branch]:
+    // one ~31-tick working cycle per re-closed route door (doors 3/23/39, one each [L this
+    // run]), the pair's 45 worked once during its own opening phase (12 ticks, the door hit
+    // state 4 mid-cycle [L this run]).)
+    let mut wv: Vec<_> = worked.iter().collect(); wv.sort(); eprintln!("[014] OpenDoor ticks {opendoor_ticks} (pair {pair_ticks}, at-open-door {open_door_ticks}) in 1500, west {crossed}, per-door {:?}", wv);
     assert!(open_door_ticks <= 4,
         "OpenDoor at an open door must be the exit boundary of a legit open only [M 0x1681f8 case 1 + case 3]: {open_door_ticks} ticks");
-    // The pair gets at most one enter+exit per door [M 0x153358:151-155 — the re-arrival at a
-    // door node whose door stands in +0xBA8 returns immediately; the case-1 instant exit makes
-    // the later passes tickless]: a couple of ticks per door of the pair, not a cycle.
-    assert!(pair_ticks <= 8,
-        "the cascade door pair (45/46) must not be re-worked [M 0x153358:151-155]: {pair_ticks} OpenDoor ticks at the pair in the 1500-tick window");
-    // The route's OTHER doors keep their legit one-open-each budget (the observed shape: one
-    // closed-door open ≈ 9 ticks of the working state).
-    assert!(opendoor_ticks <= 16,
+    // No door is CYCLED: one fresh bind of a not-yet-open door costs at most one working cycle
+    // (the anim + the door reaching 4, ~31 ticks [L this run's 31/31/31]) + the boundary — a
+    // second cycle at the same door is the spam the no-op key kills [M 0x153358:151-155].
+    for (&di, &ticks) in &worked {
+        assert!(ticks <= 40,
+            "door #{di} was worked {ticks} ticks in the 1500-tick window — more than one working cycle [M 0x153358:151-155 + 0x1681f8 case 1]");
+    }
+    // The cascade pair (45/46) likewise: re-binds after the >2.0u heal [M 0x1490f0:233-244]
+    // re-enter 0x81, but a still-opening door costs only the one partial cycle (12 [L this
+    // run]), never a loop.
+    assert!(pair_ticks <= 16,
+        "the cascade door pair (45/46) must not be re-worked in a cycle [M 0x153358:151-155]: {pair_ticks} OpenDoor ticks at the pair in the 1500-tick window");
+    // The total stays at the one-open-per-door scale: the window's fresh re-binds (the heal's
+    // clears) plus the legit opens — the observed shape is one cycle per worked door (105 [L
+    // this run]); the unfixed tree's 108-tick single-door spam stands far above it [L].
+    assert!(opendoor_ticks <= 128,
         "the guards' total OpenDoor occupancy must stay at the one-open-per-door scale: {opendoor_ticks} ticks in the 1500-tick window");
-    eprintln!("[014] OpenDoor ticks {opendoor_ticks} (pair {pair_ticks}, at-open-door {open_door_ticks}) in 1500, guards west of −52.4: {crossed}");
 }

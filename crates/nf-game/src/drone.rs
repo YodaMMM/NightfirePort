@@ -9443,6 +9443,19 @@ impl Drone {
                 // `NDrone2_OpenDoor`, no timer-C re-arm. A later route pass over the open pair
                 // re-binds [M 0x153358:149-163] and lands here — the game's enter+exit on an
                 // open door costs nothing (the door is never re-worked).
+                //
+                // PORT ORDER: the game binds +0xBA8 inside `ReachedDestNode` (0x153358) BEFORE
+                // `Drone_SM_SetState` delivers this ENTER, so DoorIsOpen reads the just-bound
+                // door. The port binds inside the caller's UPDATE (the route walk) and resolves
+                // the node → door outbox only after the state machine drains (`Drones::tick`
+                // follows the send) — at this ENTER `hit_door` still holds the pre-bind latch
+                // (`None` → the per-tick refresh keeps `hit_door_open` true), so deciding now
+                // would bounce EVERY fresh binding back to the return state: the guard strands
+                // before a closed door (the driven door-pair crossing). A fresh binding
+                // (`door_node` still pending) defers: `Drones::tick` re-delivers this ENTER
+                // right after the resolution, and the decision below then reads the door the
+                // game would have read.
+                if self.door_node.is_some() { return true; }
                 if self.hit_door_open { self.set_state(self.door_return); return true; }
                 if self.prop(d, 0x14) || self.prop(d, 0x15) || self.prop(d, 0x16) {
                     self.call_anim(d, 0x4e, 0, 0);
@@ -19475,6 +19488,14 @@ fn segment_hits_sphere(a: V3, b: V3, c: V3, r: f32) -> bool {
                     dr.hit_door = self.node_doors.as_ref().and_then(|m| m.get(&(path, node))).copied();
                     if let Some(i) = dr.hit_door { dr.hit_door_open = self.doors.list[i].state == crate::door::OPEN; }
                 }
+                // The game delivers `DSTATE_OpenDoor`'s ENTER with the binding ALREADY live
+                // [M 0x153358:149-163 binds +0xBA8, then Drone_SM_SetState runs the ENTER whose
+                // DoorIsOpen reads it — 0x1681f8 case 1]. The port's bind happens inside the
+                // send above, so the ENTER ran before this resolution existed; the arm deferred
+                // (the fresh-binding gate) — re-deliver it now, with the door the game would
+                // have read. Only a drone still standing in 0x81 (an impact queued elsewhere in
+                // the same send can have moved it) takes the re-delivery.
+                if dr.state == state::OPEN_DOOR { dr.send(d, rng, frame, msg::ENTER); }
             }
             // The route's KICK node (fix-nav-remainder): resolve the node → ScriptPlayer binding
             // (`NDrone_InitKickNodes` 0x139ce0, built lazily below) and — on the node's first
