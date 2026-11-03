@@ -97,3 +97,10 @@ The decode of the room (probe01_hall_research.rs, a scratch file, not committed)
 
 not visible to me — this environment shows no token, credit, or context-window figures for the
 session (nothing to copy).
+
+## ntfy
+
+1. `curl -sS -m 15 …` → `curl: (28) Connection timed out after 15000 milliseconds`
+2. python urllib → `urllib.error.URLError: <urlopen error [Errno 101] Network is unreachable>`
+3. `timeout 12 wget -q -O- --post-data "level-01-agent-hall-fight: blocked" https://ntfy.sh/nightfire-yoda-8k3x`
+   → exit 0, no output (quiet) — delivered as far as the exit code shows.
