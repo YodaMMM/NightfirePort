@@ -8,6 +8,3 @@ The port still uses a measured box, so Bond walks through 0a's low beam #621 sta
 3. walkreal_0700000a_live::walk_office_floor_qworm_keyboard_hatch (+ real-damage sisters): if the walker's path brushes a low band, move the walk's waypoints off it like a player would; never weaken the trigger.
 
 Done = low_beam_621_fires_standing un-ignored and green, those three binaries green, every trigger/beam/laser test and every walkreal_*_live green, then the full suite total line. List each binary you ran.
-
----
-claimed-by: sandbox1 at 2026-11-03T23:15Z
