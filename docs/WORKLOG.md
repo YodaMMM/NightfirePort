@@ -39,3 +39,23 @@ Work log:
   walk_arrival_to_the_c5_door_real_damage — the two remaining drains are the repositioned roof
   guard's deck-arrival fire (54) and #10's climb shots (46); real input only, no health/damage
   lowering.
+- (09:35-11:25) the -2 audit: the [0d:ray] line in shoot_far (the eye->chest ray through
+  segment_hit/segment_hit_static/segment_bullet_scoped every 120 ticks) measured the death
+  anatomy — #10 (skin 0x5000093, the BAY guard (214.7,12.1,-289.5)) eats 46 in 3 hits during
+  the ladder-top stand (hearing impossible [M 0x1ddc48 outer 40 < d 55.3; 0x1437a0:77-79 the
+  50-from-Bond receiver gate; the port carries both], sight legal [D the canopy corner clears],
+  45% rolls are the game's own law); #29 eats 54 on the ride+landing at the exact 180 cadence
+  (5423/5603/5783/5964). The slab-edge law: the ladder-top eye is 4.9 BELOW the west-roof
+  surface — the eye->chest ray dies at 0.972-0.974 (all three probes agree; the deck eye is
+  worse), so #29 is unshootable from every route stand while its own descending rounds clear
+  its roof edge — the player-vs-drone path difference the prior report suspected does not
+  exist in the port (both paths run the same segment_bullet_scoped [M 0x1ea398:216-229]).
+  The sanctioned tactics tried and retired with measurements: the ray-gated sweep (an inverted
+  gate predicate found and fixed — Some=blocked, None=clear — then the gate still loses: the
+  engaged guard steps into the slab shadow, a 3-shooter burst wall at 3709, death on the wire
+  4313/5270; the blind sweep is measured-best, RESTORED — death 5964 reproduced exactly); the
+  deck-arrival kill attempt removed (never landed, pure exposure); the fixed 500 settle wait
+  is a grounded poll now. Batteries: walkreal_0700000d_live 1 passed/1 ignored;
+  enemy_accuracy_live 5 passed; nf-game 1041 passed. The suite has no total line — this
+  sandbox kills background jobs between tool calls (measured 3x); report:
+  docs/reports/level-0d-real-health-crossfire-2.md.
