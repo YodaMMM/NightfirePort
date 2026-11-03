@@ -1058,6 +1058,24 @@ pub fn walk_spawn_to_the_band(iso: &str) -> Walker {
         }
         dropped
     };
+    // THE KILL-SOURCE DUMP (wire-ride-freeze-0c): after the ride window, print the destructibles
+    // and breakables near the gap — the t473 kill (hp 1.6 -> 0.0, the blast pain type 0 by
+    // elimination) came from a prop popped near the wire B end.
+    {
+        let sim = w.scene.sim.as_ref().unwrap();
+        for (i, de) in sim.drones.props.destroy.iter().enumerate() {
+            let near = (-16.0..=4.0).contains(&de.lo[0]) && (-226.0..=-204.0).contains(&de.lo[2]);
+            if near || de.dead {
+                eprintln!("[kill] destroy #{i} dead {} hp {:.1} chan {} kind {} lo {:?} hi {:?}{}", de.dead, de.health, de.channel, de.kind, de.lo, de.hi, if near { " <== NEAR THE GAP" } else { "" });
+            }
+        }
+        for (i, br) in sim.drones.breaks.list.iter().enumerate() {
+            let near = (-16.0..=4.0).contains(&br.lo[0]) && (-226.0..=-204.0).contains(&br.lo[2]);
+            if near || br.health < 0.0 {
+                eprintln!("[kill] break #{i} hp {:.1} lo {:?} hi {:?}{}", br.health, br.lo, br.hi, if near { " <== NEAR THE GAP" } else { "" });
+            }
+        }
+    }
     for _ in 0..200 {
         if w.scene.sim.as_ref().unwrap().bond.grounded { break; }
         w.scene.sim.as_mut().unwrap().step_bond(nf_game::player::Input::default(), false, false, false);
