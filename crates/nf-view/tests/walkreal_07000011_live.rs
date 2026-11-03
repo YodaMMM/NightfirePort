@@ -68,6 +68,30 @@ fn walk_spawn_to_the_lower_floor_load_point() {
     // The stairwell's guards (0x11/0x13/0x14/0x36/0x37 wake on the flight plates [D §5]) shoot
     // during the descent; the walk pins the route, not the firefight — the AI runs for real.
     w.top_up_health = true;
+    // The real-health tactic (level-11-start-fight-real-health): on the flights the guards step
+    // INTO the gun line while the fight holds on the farther target — the 2026-11-02 real-damage
+    // run stood ~143 ticks on west flight B while the blocker (drone #18, 1.6 u, weapon 0x19)
+    // landed 15 rounds for 51 health and the stand never tapped [L the run's rf-trace: fight#17
+    // t60/t120 "blocked true", clip 18 throughout]. A player shoots the hostile who walks into
+    // his line: under real damage the fights retarget a live hostile blocker
+    // (DamageLog::shoot_blockers). Inert under the top-up (the fights never run there).
+    if !w.tops_up() { w.dmg.shoot_blockers = true; }
+    // The precise act (level-11-start-fight-real-health-3, opt-in, real damage only): the fights
+    // tap only with the crosshair inside 0.01 rad of the exposed part and the line clear — the
+    // stands fire from the hip by default (`Input { aiming: self.dmg.aimed_fights }`, default
+    // false) and the loose 0.03/0.04 gate spent rounds the 7-round budget did not have [M
+    // Player_InitWeapon 0x1a7ef8:275-281 — the 0x7000011 fresh equip is weapon 0x10 with SEVEN
+    // rounds; case 0x7000012 RamLoads and, with BL+0x27a clear, re-runs the same equip — so both
+    // legs' ammo is the 7]. The 2026-11-03 repro (repro10.out) fired all 7 by tick ~1020 — two of
+    // them from a stand whose aim error printed −2.3/−2.5 rad at t0 — and went DRY at the keypad
+    // with 24.5 health still to lose to #5 and 54.5 to #10. The mission-11 pistol carries no
+    // 0x400000 record flag [L ee_start_05.bin 0x2bf150 + 0x10·0x10C + 0x68 = 0x1000], so the aim
+    // bit does not change its cone (the spread stays the record's 7.0 + the pull bloom [M
+    // Bullet_init 0x12c5a0:139-170]); and the AIM BUTTON ITSELF is excluded on purpose — with it
+    // the port's free-aim path reinterprets the fight's turn/look as cursor moves and the rounds
+    // fly off the aligned view (DamageLog::precise_fights' doc, repro11c). Inert under the top-up
+    // (the fights never run there).
+    if !w.tops_up() { w.dmg.precise_fights = true; }
 
     // Leg 1: east across the top floor to the stairwell door (the nav web [D paths 0/1] has no
     // cross-floor route — the direct chain), then through the doorway's south band — walked.
@@ -221,6 +245,11 @@ fn walk_spawn_to_the_lower_floor_load_point() {
     let scene2 = nf_view::load_with_carry_difficulty(&iso, "07000012.bin", false, None, 3)
         .expect("07000012 loads after the exit");
     let mut w2 = Walker::new(scene2);
+    // The precise act on the carried leg too (real damage only): the 07000012 fights are the ones
+    // the 7-round budget has to survive (the front-end load re-equips weapon 0x10 with 7 [M
+    // 0x1a7ef8:282-288 — case 0x7000012 RamLoads and, BL+0x27a clear, falls into the 0x7000011
+    // equip]). Inert under the top-up (the fights never run there).
+    if !w2.tops_up() { w2.dmg.precise_fights = true; }
     w2.wait_enabled(3000, "07000012's intro");
     w2.wait(90);
     {
@@ -292,7 +321,18 @@ fn walk_spawn_to_the_lower_floor_load_point() {
 /// loads are the game's own exit → next-level path ([M ResetMap_LevelToLoad 0x1b24b8;
 /// Player_RamLoad 0x1957a8]), not teleports.
 #[test]
-#[ignore = "real health: dies at tick 3193 (10.1, 1.1, -13.8) to drone #10 weapon 0x1c at 9.7 u"]
 fn walk_spawn_to_the_lower_floor_load_point_real_damage() {
-    walker::with_real_damage(walk_spawn_to_the_lower_floor_load_point);
+    // The fights HEAD-HUNT and answer the desk guards (`with_real_damage_head_hunting` +
+    // `with_real_damage_unseen_fights`) — the same law the 07000012 walk's own real-damage sister
+    // runs on the same route (walkreal_07000012_live.rs): the level's guards are the 12-health
+    // type-2 skins and the mission-11 pistol deals 10.0 a torso round [L ee_start_05.bin
+    // 0x2bf150 + 0x10·0x10C + 0x0c = 10.0], so a torso fight needs 2-3 rounds a guard — the
+    // 2026-11-03 aimed run spent 6 of the 7 on the lobby (fight#9's hp-30 guard ate 2 torso
+    // rounds for 30→10 and MELEED 14 later) and Bond crossed the south corridor with 1 round —
+    // not enough for the shotgun #10 (hp 12 needs 2 torso rounds, 1 head hit [M
+    // NDrone2_HitDamage 0x145558 × DroneDamage_Head]). One head hit drops a 12-health guard.
+    walker::with_real_damage_head_hunting(||
+        walker::with_real_damage_unseen_fights(||
+            walker::with_real_damage(
+                walk_spawn_to_the_lower_floor_load_point)))
 }

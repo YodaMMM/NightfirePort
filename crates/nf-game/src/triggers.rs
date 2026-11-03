@@ -60,11 +60,18 @@ pub fn movie_code_next_level(code: u32, fallback: u32) -> u32 {
 /// A 0x0730xxxx driving code resolves straight to its front-end landing (the table has every driving
 /// code → 0x07000048; the port cannot run DRIVING.ELF, so the interlude is skipped — the game's own
 /// X-skip shortens it to nothing observable too [M docs/systems/movies.md §Skipping]). A 0x0710xxxx
-/// briefing wrapper masks directly.
+/// briefing wrapper masks directly — through the loader's 0x07000018 → 0x0700001b special case (see
+/// the match arm).
 pub fn resolve_exit_code(code: u32) -> u32 {
     let masked = code & 0xff00_ffff;
     match (code >> 20) & 0xf {
-        1 => masked, // 0x0710xxxx briefing wrapper → its level
+        // 0x0710xxxx briefing wrapper → its level — with the load's own special case: phase 0
+        // masks the briefing code back and the 0x07000018 slot cannot load (no such archive
+        // [D FILES.BIN: 07000016.bin → 0700001b.bin, no 07000018.bin]) — the loader maps it to
+        // the level the briefing belongs to [M 0x1d6360:99-102: `uVar7 = GameState+8 &
+        // 0xff00ffff; ... if (uVar7 == 0x7000018) { GameState._8_4_ = 0x700001b; }` — the
+        // Equinox briefing 0x7100018 loads 0x0700001b after the movie].
+        1 => if masked == 0x0700_0018 { 0x0700_001b } else { masked },
         2 => movie_code_next_level(code, masked) & 0xff00_ffff, // 0x0720xxxx cut-scene movie
         3 => movie_code_next_level(code, masked),               // 0x0730xxxx driving interlude
         _ => code,   // a plain 0x0700xxxx hashcode loads as-is
@@ -1320,6 +1327,25 @@ mod tests {
         assert_eq!(resolve_exit_code(0x0700_0007), 0x0700_0007, "a plain exit hashcode passes through");
         // Sister: the 0x720004a request the 4a SP actually fires is resolvable end to end.
         assert_eq!(resolve_exit_code(0x0720_004a), 0x0700_0013);
+    }
+
+    /// The Equinox hop's full resolve (level-41-exit-event): a 0x0700001b-targeting exit (the
+    /// story's way into the space station) wraps to the 0x7100018 briefing [M 0x1d3800:95-97]
+    /// and the loader's phase-0 special case sends the masked 0x07000018 slot to 0x0700001b
+    /// [M 0x1d6360:99-102 — `if (uVar7 == 0x7000018) GameState+8 = 0x700001b`; there is no
+    /// 07000018.bin archive to load [D FILES.BIN]]. The old resolve landed the hop on the
+    /// nonexistent 0x07000018 archive — this chain is the sister that fails on it.
+    #[test]
+    fn the_equinox_hop_wraps_to_the_briefing_and_resolves_to_1b() {
+        let wrapped = wrap_intro(0x0700_001b);
+        assert_eq!(wrapped, 0x0710_0018, "the Equinox briefing is movie 18 [M 0x1d3800:95-97]");
+        assert_eq!(resolve_exit_code(wrapped), 0x0700_001b, "phase 0: the masked 0x07000018 slot loads 0x0700001b [M 0x1d6360:99-102]");
+        // The raw slot code (a caller that skipped the wrap) resolves the same way.
+        assert_eq!(resolve_exit_code(0x0710_0018), 0x0700_001b);
+        // Sister: every OTHER briefing wrapper still masks by identity — only 0x18 remaps.
+        assert_eq!(resolve_exit_code(0x0710_0001), 0x0700_0001);
+        assert_eq!(resolve_exit_code(0x0710_0016), 0x0700_0016);
+        assert_eq!(resolve_exit_code(0x0710_004a), 0x0700_004a);
     }
 
     /// `ResetMap_LevelToLoad`'s wrap switch (no_intro == 0) [M 0x1d3800:27-101]: the Double Cross

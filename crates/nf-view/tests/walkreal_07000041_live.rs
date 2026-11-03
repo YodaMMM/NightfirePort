@@ -26,7 +26,10 @@
 //!   whose briefing code is 0x07100018 [M 0x1d3800's `case 0x700001b: param_1 = 0x7100018`] and
 //!   whose phase-0 remap lands on 0x0700001b [M 0x1d6360 phase 0's `uVar7 == 0x7000018 →
 //!   0x700001b`]. The port's host already models that hand-off (the mission-end → results/front-end
-//!   drain, nf-view lib.rs); the wrapper itself contributes no exit.
+//!   drain, nf-view lib.rs); the wrapper's own DATA contributes no exit — the sim latches the story
+//!   hop only through the documented hand-off flow (drone.rs's `wrapper_end_timer`: ch 1 on for the
+//!   chain window [S unverified], level-41-exit-event-2), and no walkreal route here raises ch 1,
+//!   so the walk's `level_exit == None` pin stays true for the whole route.
 //! Opt-in via NF_ISO.
 
 #[path = "common/walker.rs"]
