@@ -46,3 +46,10 @@ spawn's own floor is 0.36 under the eye [L ee_start_05 rest 24.9633 vs eye 25.32
 down-tilt detonates the 256-damage bolt / 100-damage rockets at Bond's feet — level aim crosses
 the courtyard. The burst leg's arm() helper now writes the SHARED base clip slot [M
 Player_ReloadAmmoType 0x1a1988:18-22]. Kill switches: none; no health writes; all real input.
+
+Final 04:03 UTC: the report is docs/reports/burst-fire-held-trigger.md. The full-suite re-run
+did not fit the window (the OOM-killed nf_view lib-test link forced a full nf-view relink at
+-j4); the next window runs `NF_ISO=... nohup python3 tools/test/suite.py > suite.out 2>&1 &`
+on this branch — the build cache makes the rerun the only cost. Scratch probes deleted;
+env is the untracked /home/z/env.sh (PATH, PKG_CONFIG_PATH, RUSTFLAGS -L native for the user
+ALSA prefix, NF_ISO).
