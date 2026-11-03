@@ -175,11 +175,29 @@ fn pistol_silencer_mode_press_lands_the_twin_and_drops_the_flash_mesh() {
     assert_eq!(dmg03, 3.0, "the silenced twin's damage [L +0x0C]");
 }
 
+/// Holds the trigger for `hold` ticks (the game's held-trigger path: `Player_WeaponFiring`
+/// 0x1a5460 keeps the pull alive while the button is down — the mask-1 level read), then releases
+/// and keeps watching. Returns the tick indices of the shot pulses, so the interval between the
+/// burst's rounds is pinned too.
+fn fire_held(scene: &mut nf_view::scene::Scene, hold: u32, watch: u32) -> Vec<u32> {
+    let mut shot_ticks = Vec::new();
+    for t in 0..watch {
+        scene.sim.as_mut().unwrap().step_bond(Default::default(), t < hold, false, false);
+        if scene.sim.as_ref().unwrap().shot_tick { shot_ticks.push(t); }
+    }
+    shot_ticks
+}
+
 /// The burst rifle family (Kowloon Type 40 0x0A ↔ 0x0B): the mode press lands the burst twin and
 /// ONE pull fires the record's shots-per-pull — 3 rounds [L 0x0B +0x28 = 3] at the twin's 4-tick
-/// interval [L +0x40 = 4], against the semi base's 1 [L 0x0A +0x28 = 1].
+/// interval [L +0x40 = 4], against the semi base's 1 [L 0x0A +0x28 = 1]. The pull runs through the
+/// game's held-trigger path [M Player_WeaponFiring 0x1a5460:601-655]: the fresh press arms
+/// `pending = +0x28` (3) with the refire timer at 1.0 [:617-624], the same tick's countdown fires
+/// round 1 (fire_anim_len +0x44 = 0 → the press-tick spawn [:688-690]), each shot re-arms the
+/// timer at max(+0x40, 1) = 4 [:657-660], and the held ticks keep the countdown running. Releasing
+/// mid-burst CANCELS the pull: the mask-1 release read clears `+0x936` (pending) to 0 before any
+/// further fire [:442-446], so the remaining rounds never spawn [M].
 #[test]
-#[ignore = "harness: the burst twin's pull measures 1 shot pulse, not 3 — the refire window needs the game's held-trigger path (Player_WeaponFiring 0x1a5460:601-655); next window"]
 fn burst_rifle_one_pull_fires_three() {
     let Some(iso) = iso() else { eprintln!("NF_ISO not set — skipping"); return };
     let mut scene = load(&iso);
@@ -193,17 +211,26 @@ fn burst_rifle_one_pull_fires_three() {
     let interval = { let sim = scene.sim.as_ref().unwrap();
         u32::from_le_bytes(sim.weapons.records[0x0b][0x40..0x44].try_into().unwrap()) };
     assert_eq!(interval, 4, "the burst twin's interval [L 0x0B +0x40]");
-    // The REAL mode press, then ONE pull: 3 shot pulses (the game arms shots-per-pull = 3 [L +0x28]).
+    // The REAL mode press, then ONE held pull: 3 shot pulses, the 2nd and 3rd one interval apart
+    // (the game arms shots-per-pull = 3 [L +0x28] and re-arms the timer at +0x40 = 4 per shot
+    // [M 0x1a5460:657-660]; the release 12 ticks in leaves nothing in the pull).
     arm_record(&mut scene, 0x0b, 30);
     let w = mode_press(&mut scene);
     assert_eq!(w, 0x0b, "the mode press landed the burst twin 0x0B");
     aim_down(&mut scene, 10, -0.9);
     arm(&mut scene, 30);
-    let (shots, _, _, _, _) = fire_once(&mut scene, 40);
-    assert_eq!(shots, 3, "one pull of the burst twin fired exactly 3 rounds [L 0x0B +0x28 = 3]");
+    let shot_ticks = fire_held(&mut scene, 12, 40);
+    assert_eq!(shot_ticks, [0, 4, 8], "one held pull fired exactly 3 rounds at the 4-tick interval [L 0x0B +0x28 = 3, +0x40 = 4; M 0x1a5460:601-655]");
     // Sister: the clip spent matches the burst (3 rounds).
     let clip = { let sim = scene.sim.as_ref().unwrap(); sim.gun.clip };
     assert_eq!(clip, 27, "the burst spent 3 rounds from the 30-round clip");
+    // Sister: releasing mid-burst cancels the remaining rounds [M 0x1a5460:442-446 — the mask-1
+    // release read zeroes +0x936 before the fire block]: a 1-tick pull fires round 1 only.
+    arm(&mut scene, 30);
+    let shot_ticks = fire_held(&mut scene, 1, 20);
+    assert_eq!(shot_ticks, [0], "the release cancelled the burst: 1 of 3 rounds [M 0x1a5460:442-446]");
+    let clip = { let sim = scene.sim.as_ref().unwrap(); sim.gun.clip };
+    assert_eq!(clip, 29, "the released pull spent only round 1");
 }
 
 /// The grenade-attachment family (AIMS-20 0x1A ↔ 0x1B): the mode press swaps to the underbarrel
