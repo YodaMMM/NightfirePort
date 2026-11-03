@@ -16,3 +16,6 @@ Do:
 3. All six green plus drone_block_swaps_live; run every walkreal_*_live, every rook/abseil/elevator test, then the full suite.
 
 Rules: shared test helper changes (crates/nf-view/tests/common/) must be opt-in per level and re-run every walkreal_*_live.
+
+---
+claimed-by: sandbox5 at 2026-11-03T01:18Z
