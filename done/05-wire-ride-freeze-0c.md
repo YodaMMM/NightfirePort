@@ -8,3 +8,8 @@ Done = a real-input test that reproduces the old freeze phase and now finishes t
 
 ---
 claimed-by: sandbox1 at 2026-11-03T19:31Z
+
+---
+## Report (done, 2026-11-03T20:43Z)
+
+Closed by the driver: the report is on `s/wire-ride-freeze-0c` (docs/reports/wire-ride-freeze-0c.md); the worker didn't run finish.sh.
