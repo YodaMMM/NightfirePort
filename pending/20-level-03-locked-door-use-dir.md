@@ -1,5 +1,0 @@
-# level-03-locked-door-use-dir — the use pick's direction on 07000003's locked bedroom door
-
-interactables_07000003_live::locked_door_refuses_the_e is ignored (read its doc comment). From the doorway, the port's use point fires the mask-4 plate #504 (ch 0x31) where the level audit says the game refuses. The doc names the open question: `Player_Activate` 0x1a5170:100-108 takes the use direction from `Mat_GetDir(glb_viewer[BL+0x94e]+0x120)` (the VIEWER matrix), not the body's facing.
-
-Check how the port builds the use point (head + 1 x dir): which direction it uses, and whether the viewer matrix differs from the body facing at that moment (eye height, pitch, the view bob, the doorway stance). Port the game's direction with the address. If the law then refuses from the doorway, un-ignore the test; if it still fires, say exactly which number differs and mark the test with that measured reason. Every other interactables_07000003 test must stay green; run every interactables_*_live and walkreal_*_live; then the full suite total line.
