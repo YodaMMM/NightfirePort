@@ -10036,6 +10036,18 @@ pub fn build(level: &Level, cels_only: bool, skeletons: &HashMap<u8, Skeleton>, 
             let spoken = drones.map(|c| (c.snd2lbl.clone(), c.sfx_durations.clone()));
             let mut drones = nf_game::drone::Drones::new(list, rng);
             drones.lights = lights;
+            // sniper-spawn-stats-2: the Sim's `drone_stats` table starts as the level's
+            // LOAD-time table (the same one `level_drones` read the placed drones' stats from) — a
+            // spawner spawn's `behaviour_util_get`+`DoModeSettingsNEW` read/write THIS table
+            // [M 0x137cb0 → 0x1c7a98/0x14c600], so a section-less template reads the load-time
+            // record, not an empty one.
+            drones.stats_table = {
+                let roles: Vec<nf_formats::drone::SpawnRole> = {
+                    let ps: Vec<(u32, Vec<(u32, u32)>)> = level.maps[level.main_map().unwrap()].placements.iter().map(|p| (p.flags & 0xff, p.params.clone())).collect();
+                    nf_formats::drone::spawn_roles(&ps)
+                };
+                nf_game::drone::load_stats_table(&data, level, &roles)
+            };
             if let Some((rows, durs)) = spoken { drones.attach_snd2lbl(rows, durs); }
             // The selected difficulty BEFORE the creates: every create-time gate reads it
             // (captain_setup 0x14b300:504-535, Drone_Create's min-difficulty tag 0x136be0:49,
