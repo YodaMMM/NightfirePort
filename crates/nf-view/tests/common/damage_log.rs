@@ -164,6 +164,14 @@ pub struct DamageLog {
     /// `stand_and_fire` reads a dart landing (the target entering the dart family) as progress and
     /// the under states as the win.
     pub tranq_fights: bool,
+    /// OPT-IN (`shooters_window`, the 07000005 00 Agent walk): the shooters list's (horizontal,
+    /// vertical) reach in u, replacing the plain (20.0, 6.0) / lane (48.0, 7.5) windows. The 05
+    /// castle-approach spine is fired on from 16.6 u BELOW (the gallery riflemen #8/#9 stand at y
+    /// 22.0 while the spine runs y 38.6 [L the 2026-11-03 00agent repro a05c.out: 18 rounds for
+    /// 48.0 on the spine, no fight — the dy filter dropped them before the pick]); their rounds
+    /// reach Bond, so the eye ray reaches them — a player pinned on a ledge shoots DOWN at the
+    /// riflemen. None keeps the master windows (default).
+    pub shooters_window: Option<(f32, f32)>,
     /// OPT-IN (`aimed_fights`, the 0700000c yard-deck-sentry stand, player-upward-shot): the stand
     /// holds the AIM button through the whole stand — `Input { aiming: true }` every tick — so a
     /// 0x400000 record (the snipers) fires its ZERO spread [M `Bullet_init` 0x12c5a0:139-170 —
@@ -277,7 +285,7 @@ impl DamageLog {
         let mut c: Vec<(f32, usize)> = sim.drones.list.iter().enumerate()
             .filter(|(i, d)| {
                 if !(d.present && d.enabled && !d.corpse && d.health > 0.0 && d.team == 1) { return false; }
-                let (wxz, wy) = if self.lane_fights { (48.0, 7.5) } else { (20.0, 6.0) };
+                let (wxz, wy) = self.shooters_window.unwrap_or(if self.lane_fights { (48.0, 7.5) } else { (20.0, 6.0) });
                 if dxz(d.pos) > wxz || (d.pos[1] - b[1]).abs() > wy { return false; }
                 let hit = sim.drones.player_hits.iter().rev()
                     .take_while(|h| now.saturating_sub(h.0) <= 240)
