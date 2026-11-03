@@ -111,12 +111,12 @@ fn the_copter_engine_fades_and_pans_by_the_game_law() {
         let dv = [0, 1, 2].map(|k| (copter[k] * 1000.0) as i32 - (lp[k] * 1000.0) as i32);
         let u: Vec<i32> = dv.iter().map(|&x| x / 100).collect();
         let s: i64 = u.iter().map(|&x| x as i64 * x as i64).sum();
-        let d = (s as f64).sqrt().round() as i32;
+        let d = nf_audio::sfx::ps2_sqrt(s as u32) as i32;
         let d = (d - fx.inner * 10).max(0);
         let rng = ((fx.outer - fx.inner) * 10).max(10);
         let a = ((1000 - (d * 1000) / rng).max(0) / 10).min(100);
         let a2 = (a * a) / 100;
-        let m = (s as f64).sqrt().round() as i32;
+        let m = nf_audio::sfx::ps2_sqrt(s as u32) as i32;
         let un: Vec<i32> = if m != 0 { u.iter().map(|&x| x * 1000 / m).collect() } else { u.clone() };
         let dot = |a: [i32; 3], b: &[i32]| (a[0] * b[0] + a[1] * b[1] + a[2] * b[2]) / 1000;
         let n = [-1000i32, 0, 0]; // the left axis of the test's listener (facing +z)
@@ -160,9 +160,9 @@ fn the_copter_engine_fades_and_pans_by_the_game_law() {
         let (ml, mr, mb) = measure(&mut drv, lp);
         let (el, er, eb) = law(lp);
         eprintln!("[12snd] {name}: measured ({ml:.3},{mr:.3},{mb:.3}) law ({el:.3},{er:.3},{eb:.3})");
-        assert!((ml - el).abs() < 0.025 && (mr - er).abs() < 0.025,
+        assert!((ml - el).abs() < 1e-6 && (mr - er).abs() < 1e-6,
             "{name}: the front pair follows the game's law [M 0x1060c/0x10eb8] — measured ({ml:.3},{mr:.3}) law ({el:.3},{er:.3})");
-        assert!((mb - eb).abs() < 0.025,
+        assert!((mb - eb).abs() < 1e-6,
             "{name}: the rear channel follows the game's law [M 0x1060c] — measured {mb:.3} law {eb:.3}");
     }
     // The law's shape, as behaviours (the same numbers, asserted as relations):
