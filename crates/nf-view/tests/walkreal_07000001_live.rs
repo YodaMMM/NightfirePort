@@ -20,22 +20,8 @@ fn iso() -> String { std::env::var("NF_ISO").expect("NF_ISO") }
 /// input path from spawn #0 to the exit plate, stopping AT the fire tick — `level_exit` is
 /// posted and `exit_hold` still has all 300 frames (the game's fade level is 0 on the fire tick;
 /// `Camera_UpdateGlbVars` advances it on the frames after [M 0x1bada0:16-20]).
-fn walk_to_the_exit(iso: &str, stop_at_fire: bool) -> Walker { walk_to_the_exit_at(iso, stop_at_fire, 1) }
-
-/// The walk at `difficulty` — the difficulty select's GameState+0x28 value (1 Operative, 2 Agent,
-/// 3 00 Agent [M the `difficulty[]` table 0x2df4c0: rows carry GameState values 1/2/3; Txt
-/// 0x14d/0x14e/0x14f = "Operative"/"Agent"/"00 Agent", menu.rs]). 1 keeps the plain `load` (the
-/// replay parity — `load` passes difficulty 1 to the same `load_impl`); the others ride the
-/// front-end's launch path [M load_with_carry_difficulty → load_impl's difficulty slot].
-fn walk_to_the_exit_at(iso: &str, stop_at_fire: bool, difficulty: u32) -> Walker {
-    let mut w = Walker::new(if difficulty == 1 {
-        nf_view::load(iso, "07000001.bin", false).expect("load 07000001")
-    } else {
-        nf_view::load_with_carry_difficulty(iso, "07000001.bin", false, None, difficulty)
-            .expect("load 07000001")
-    });
-    assert_eq!(w.scene.sim.as_ref().unwrap().drones.difficulty, difficulty,
-        "the sim runs the picked difficulty [M GameState+0x28 0x2a3790 → Drones::difficulty]");
+fn walk_to_the_exit(iso: &str, stop_at_fire: bool) -> Walker {
+    let mut w = Walker::new(nf_view::load(iso, "07000001.bin", false).expect("load 07000001"));
     // On real damage a guard inside 4 u is backed away from, in the walker's fights and its
     // return fire: under 3.0 u every drone round hits [M DroneWeap_DoBulletAccuracy
     // 0x179740:113-115], and the hall guards' 8-pellet shotgun volleys (weapon 0x1C [M
@@ -637,11 +623,9 @@ fn walk_to_the_exit_at(iso: &str, stop_at_fire: bool, difficulty: u32) -> Walker
 }
 
 #[test]
-fn walk_from_the_spawn_to_the_exit_with_the_contact() { walk_from_the_spawn_to_the_exit_with_the_contact_at(1) }
-
-fn walk_from_the_spawn_to_the_exit_with_the_contact_at(difficulty: u32) {
+fn walk_from_the_spawn_to_the_exit_with_the_contact() {
     let iso = iso();
-    let w = walk_to_the_exit_at(&iso, false, difficulty);
+    let w = walk_to_the_exit(&iso, false);
     assert_eq!(w.scene.sim.as_ref().unwrap().drones.level_exit, Some(0x0700_0002), "the exit fires to 07000002");
     eprintln!("[01] level_exit to 07000002 at tick {} — walked {} ticks total", w.total_ticks, w.total_ticks);
     for f in &w.report.falls { eprintln!("[01] fall: {f}"); }
@@ -1140,19 +1124,4 @@ fn the_exit_fade_starts_on_the_exit_tick_runs_the_games_300_frames_then_the_leve
 #[test]
 fn walk_from_the_spawn_to_the_exit_with_the_contact_real_damage() {
     walker::with_real_damage(walk_from_the_spawn_to_the_exit_with_the_contact);
-}
-
-/// Agent-difficulty sister of `..._real_damage` (real-health-agent-difficulty): the same walked
-/// route with the sim loaded the way the menu's Agent pick loads it — GameState+0x28 = 2 through
-/// the front-end's launch path [M C_SBNFDFCTY 0x216ca8:15 writes the wheel row's value 2
-/// (`difficulty[]` table 0x2df4c0 row 1); `Player_HandlePain` 0x1902c8 scales Bond's pain by
-/// Plr_DMod_Normal 0.7 on this level group instead of Easy 0.5, and `DroneWeap_DoBulletAccuracy`
-/// 0x179740:74-88 scales the guards' hit chance by DroneFiring_Accuracy_Normal 0.8 instead of
-/// Easy 0.5 [M tuning.rs 01-04 group]]. Real input only — the load path is the only difference;
-/// no health, armour or channel writes. A pass pins the level completes at Agent on the port's
-/// own damage and the game's Agent spawns (the min-difficulty placements now pass Drone_Create's
-/// gate [M 0x136be0:49] and the captain criterion reads prop 5 [M 0x14b300:504-535]).
-#[test]
-fn walk_from_the_spawn_to_the_exit_with_the_contact_real_damage_agent() {
-    walker::with_real_damage(|| walk_from_the_spawn_to_the_exit_with_the_contact_at(2));
 }

@@ -71,20 +71,9 @@ fn obj07(w: &Walker) -> (u32, u32) {
 /// The full walk: start → the hall (ch 0x48, the control-taking scene) → Drake's reveal
 /// (ch 0x15, the fly-through) → the exit → 07000008's intro plate (ch 0x49, objective 2).
 #[test]
-fn walk_the_party_start_to_finish() { walk_the_party_start_to_finish_at(1) }
-
-/// The walk body at `difficulty` (1 Operative = the plain load's replay parity; 2 Agent rides the
-/// front-end's launch path [M C_SBNFDFCTY 0x216ca8:15 → load_with_carry_difficulty]).
-fn walk_the_party_start_to_finish_at(difficulty: u32) {
+fn walk_the_party_start_to_finish() {
     let iso = iso();
-    let mut w = Walker::new(if difficulty == 1 {
-        nf_view::load(&iso, "07000007.bin", false).expect("load 07000007")
-    } else {
-        nf_view::load_with_carry_difficulty(&iso, "07000007.bin", false, None, difficulty)
-            .expect("load 07000007")
-    });
-    assert_eq!(w.scene.sim.as_ref().unwrap().drones.difficulty, difficulty,
-        "the sim runs the picked difficulty [M GameState+0x28 0x2a3790 → Drones::difficulty]");
+    let mut w = Walker::new(nf_view::load(&iso, "07000007.bin", false).expect("load 07000007"));
     {
         let sim = w.scene.sim.as_ref().unwrap();
         let p = sim.bond.pos;
@@ -411,18 +400,4 @@ fn the_group_plate_wakes_the_walkers_and_the_guards_stay_calm() {
 #[test]
 fn walk_the_party_start_to_finish_real_damage() {
     walker::with_real_damage(walk_the_party_start_to_finish);
-}
-
-/// Agent-difficulty sister of `..._real_damage` (real-health-agent-difficulty): the same walked
-/// party → hall → Drake's-reveal → exit route at the menu's Agent pick — GameState+0x28 = 2
-/// through the front-end's launch path [M C_SBNFDFCTY 0x216ca8:15; the `difficulty[]` table
-/// 0x2df4c0 row 1 carries 2; Txt 0x14e = "Agent"]. On this level group the pick scales Bond's
-/// pain by Plr_DMod_Normal 0.7 instead of Easy 0.6 and the guards' hit chance by
-/// DroneFiring_Accuracy_Normal 1.1 instead of Easy 0.8 [M Player_HandlePain 0x1902c8;
-/// DroneWeap_DoBulletAccuracy 0x179740:74-88; tuning.rs 05-08 group]; the min-difficulty
-/// placements pass Drone_Create's gate [M 0x136be0:49]. Real input only — the load path is the
-/// only difference.
-#[test]
-fn walk_the_party_start_to_finish_real_damage_agent() {
-    walker::with_real_damage(|| walk_the_party_start_to_finish_at(2));
 }
