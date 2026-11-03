@@ -351,19 +351,29 @@ fn walk_spawn_to_the_omega_sector_exit_at(difficulty: u32) {
     ];
     // The Agent path: the d2 roster shifts the port indices (Drone_Create's min-difficulty
     // gate [M 0x136be0:49]) — the route's targeted pre-shoots resolve by the guards' [D]
-    // placement spots, and the BodyArmourHeavy #802 detour arms Bond for the #526 rim-shot
-    // blast (the walk-over take [M Pickup_Handler 0x18e650:220-225]; the armour takes the
-    // blast first [M Player_HandlePain's armour arm] — the d1 run's 27.73 health becomes
-    // 41.6 at the Agent pain scale, the measured run's frame-5653 hit).
-    let route_owned: Vec<(&str, Wp)> = if difficulty >= 2 {
-        let mut r = route.to_vec();
-        if let Some(i) = r.iter().position(|(l, _)| *l == "the plank north 2") {
-            r.insert(i + 1, ("the Agent armour #802", Wp::new(22.53, 41.4, 35.53).r(1.0)));
-            r.insert(i + 2, ("the plank north 2 again", Wp::new(28.5, 41.4, 39.0).r(1.2)));
+    // placement spots. REAL-HEALTH TACTIC: the plank grenadiers (port #7 at (28.63, 41.34,
+    // 35.51) and #8 at (42.71, 41.34, 35.49) [L the d2 load probe]) plinked the measured run
+    // for −16.8 in 8 hits and −28.8 (a grenade) across the west-plank leg; a player clears
+    // them from door[39]'s north lane before stepping onto the plank grid — both stand in the
+    // open at 10.6 / 11.9 u. The BodyArmourHeavy #802 (22.53, 40.35, 35.53 [L the d2 load
+    // probe]) is NOT taken: it sits in the x ≈ 25 pit behind the ch_lock 0xc8 door at
+    // (25.1, 41.6, 36.6) — the detour walk wedged airborne against that door at (25.76,
+    // 41.47, 36.18) with floor_below 40.28 — so the #526 rim-shot blast stays on health
+    // (the d1 run's 27.73 becomes 41.6 at the Agent pain scale [M Player_HandlePain's
+    // Plr_DMod row]) and the budget comes from the fights.
+    let (route_a, route_b) = route.split_at(route.iter().position(|(l, _)| *l == "the west plank").unwrap());
+    w.walk_route(route_a);
+    if difficulty >= 2 {
+        for (at, label) in [
+            ([28.63f32, 41.34, 35.51], "the west-plank grenadier (port #7, skin 0x500008c)"),
+            ([42.71f32, 41.34, 35.49], "the east-plank grenadier (port #8, skin 0x50000b2)"),
+        ] {
+            if let Some(di) = agent_drone_near(&w, at, 8.0) {
+                w.shoot(di, label);
+            }
         }
-        r
-    } else { route.to_vec() };
-    w.walk_route(&route_owned);
+    }
+    w.walk_route(route_b);
     if difficulty >= 2 {
         if let Some(di) = agent_drone_near(&w, [26.22, 41.45, 71.15], 4.0) {
             w.shoot(di, "the door[32] doorway grenade guard (placement 722) at the Agent roster");
@@ -385,6 +395,10 @@ fn walk_spawn_to_the_omega_sector_exit_at(difficulty: u32) {
     let route: &[(&str, Wp)] = &[
         ("door[29] threshold", Wp::new(11.5, 41.4, 71.2).r(0.9)),
         ("door[29] through", Wp::new(8.0, 41.4, 71.2).r(1.0)),
+        // REAL-HEALTH TACTIC: the west-room grenadiers (port #10 at (−5.14, 41.34, 67.25) and
+        // #11 at (−1.87, 41.34, 77.42) [L the d2 load probe]) shot through the door[29]
+        // doorway at the measured run's tail (−4.2 at frame 6020, the killing −2.5 at 6106)
+        // — from just inside the doorway a player answers both before the southwest jog.
         ("the southwest jog", Wp::new(6.0, 41.4, 68.5).r(1.0)),
         ("the west room", Wp::new(6.0, 41.4, 66.0).r(1.2)),
         ("the west room south", Wp::new(1.0, 41.4, 63.0).r(1.2)),
@@ -413,7 +427,19 @@ fn walk_spawn_to_the_omega_sector_exit_at(difficulty: u32) {
         // killing blast at door[42]). A player takes it from the bridge before pushing south;
         // shoot() is a no-op once a fight has finished it.
     ];
-    w.walk_route(route);
+    let (route_c, route_d) = route.split_at(route.iter().position(|(l, _)| *l == "the southwest jog").unwrap());
+    w.walk_route(route_c);
+    if difficulty >= 2 {
+        for (at, label) in [
+            ([-5.14f32, 41.34, 67.25], "the west-room grenadier (port #10, skin 0x50000b2)"),
+            ([-1.87f32, 41.34, 77.42], "the northwest grenadier (port #11, skin 0x50000b2)"),
+        ] {
+            if let Some(di) = agent_drone_near(&w, at, 8.0) {
+                w.shoot(di, label);
+            }
+        }
+    }
+    w.walk_route(route_d);
     if difficulty >= 2 {
         if let Some(di) = agent_drone_near(&w, [6.25, 41.45, 35.69], 6.0) {
             w.shoot(di, "the great-hall grenade guard (placement 733) at the Agent roster");
