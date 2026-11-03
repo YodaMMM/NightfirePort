@@ -215,7 +215,7 @@ fn yard_sniper_stands(w: &mut Walker, label: &str, max: usize) {
     // guard from eating the clip — the #15 measurement).
     let sweep = match label {
         "at-the-door" => Some((64.0f32, 900u32, 3usize)),
-        "pre-climb" | "ladder-top" | "west-edge" => Some((48.0, 700, 3)),
+        "pre-climb" | "ladder-top" | "west-edge" | "west-ledge" => Some((48.0, 700, 3)),
         _ => None,
     };
     if let Some((range, cap, count)) = sweep {
@@ -974,14 +974,6 @@ pub fn walk_spawn_to_the_band(iso: &str) -> Walker {
     // top-up walk and the eastroute replay.
     yard_sniper_stands(&mut w, "ladder-top", 3);
 
-    // Leg 7b (OPT-IN, `with_yard_aimed_stands`): the west-side sweep before the wire legs —
-    // the west sniper #13 ((-14.59, 12.24, -216.35) [L this session's dump]) survived the
-    // ring-west-edge fight (killed false [L the real-health run]) and its beat/patrol is the
-    // suspect in the #284 ride's stall (d 1.6, the natural stop 1.05 PAST B [L blockers-2]);
-    // a player clears the far side before stepping off the edge. Same still-gate stands; a
-    // no-op when the flag is off.
-    yard_sniper_stands(&mut w, "west-edge", 3);
-
     // Leg 8 (REAL): the patrol-ring diagonal from the ladder top to the north-west corner
     // ((6-9,−188) → (9-11,−190) → (11-12,−192) → (12-13,−194) [D probes]) and west along the
     // north-west walkway to its west edge (0..8, −208 [D probes]).
@@ -989,6 +981,14 @@ pub fn walk_spawn_to_the_band(iso: &str) -> Walker {
     w.walk_to(Wp::new(12.0, 11.1, -196.0).r(1.2), "the ring diagonal 2");
     w.walk_to(Wp::new(12.0, 11.1, -203.0).r(1.2), "the ring north-west corner");
     w.walk_to(Wp::new(4.0, 11.1, -207.5).r(1.2), "the ring west edge");
+    // Leg 8a (OPT-IN, `with_yard_aimed_stands`): the west-side sweep AT THE WEST EDGE, before
+    // the wire legs — the west sniper #13 ((-14.59, 12.24, -216.35) [L this session's dump])
+    // survived the ring-west-edge fight (killed false [L the real-health run]); from the
+    // ladder top it is not gun-ray exposed (the sweep found no candidate [L this session's
+    // run]), from the edge it is LEVEL (y 12.15 vs 12.24) and the fights' own stand fought it
+    // here — a player clears the far side before stepping off the edge. Same still-gate
+    // stands; a no-op when the flag is off.
+    yard_sniper_stands(&mut w, "west-edge", 3);
     // Leg 8b (REAL, blocker 4 replaced): the west-gap wire crossing. The disc's own mechanism
     // [D probe blk/blk2]: the type-3 grab icon #4 (−3.30, 12.36, −207.51) sits at the west
     // edge's south end; `wire_firstsilo2mainsilos` #284's grab segment A (−4.63, 13.67, −209.88)
@@ -1033,7 +1033,9 @@ pub fn walk_spawn_to_the_band(iso: &str) -> Walker {
                 // this session's real-health run stalled at d 1.6 (the natural stop is 1.05
                 // PAST B [L blockers-2's hang]) with #13 alive on the west side [L the
                 // ring-west-edge fight, killed false].
-                eprintln!("[0c] the #284 ride t{t}: pos {:?} d_B {d:.2}", sim.bond.pos);
+                let bb = &sim.bond;
+                eprintln!("[0c] the #284 ride t{t}: pos {:?} d_B {d:.2} mode {:#x} anim {:#x} at {:.1} rate {:.2} yaw {:.3} auto {:.1} disabled {} sub {}",
+                    bb.pos, bb.mode, bb.wire_anim, bb.wire_anim_time, bb.wire_anim_rate, bb.yaw, bb.auto_drop, sim.disabled, bb.substate);
             }
             // The drop is the jump press inside 0.9 of B (blockers-2's green drop). The
             // FIRE-action variant (real-crossings 29b43fa9, never run on that branch) rode the
@@ -1060,6 +1062,14 @@ pub fn walk_spawn_to_the_band(iso: &str) -> Walker {
             "the #284 ride must drop onto the west ledge (11.24-11.38 [D probe blk2 west map]), got {p:?} dropped {dropped}");
     }
     eprintln!("[0c] the west gap crossed on wire #284 — landed {:?}", w.scene.sim.as_ref().unwrap().bond.pos);
+    // Leg 8c (OPT-IN, `with_yard_aimed_stands`): the west-ledge sweep, before the ledge
+    // diagonals — the west sniper #13 patrols to (-3.0, 12.2, -221.1), d ~6 LEVEL across the
+    // gap [L this session's death log: 2 × -16 + the fatal -1.6 graze at 14308], and the
+    // walk's own fights land killed false against him (the plain eye-ray aim reads Some while
+    // the rounds die on the ledge lip — the same predictor-vs-muzzle-flight gap the #15 case
+    // measured). The still-gate stand aims with the strict gun rays; a no-op when the flag is
+    // off.
+    yard_sniper_stands(&mut w, "west-ledge", 3);
     // The diagonal ledges south-east to icon #6 [D probe blk2 west map].
     w.walk_to(Wp::new(-6.0, 12.4, -219.6).r(1.5), "the west ledge diagonal");
     w.walk_to(Wp::new(-4.5, 12.4, -221.5).r(1.5), "the west ledge diagonal 2");

@@ -82,3 +82,34 @@ mantles, and dies/fails later (the wire-ride leg — a master regression, below)
   the decomp (0x193600's wire case vs 6d1ef8e9's climb-only citation) or the ride leg adapted.
 - The sister is un-ignored on this branch (it must not ship red — re-ignore if the ride is not
   fixed this session).
+
+## level-0c-yard-climb-real-health-3 (continued 2026-11-03, correction + the wire crossing)
+
+CORRECTION to the 15:35 entry: the "6d1ef8e9 master regression" claim was WRONG — my "top-up
+control" run's name filter matched BOTH the top-up walk and the sister; the failure was the
+SISTER's. The top-up walk passes the ride leg on this tree (verified with the -2's own files and
+with mine); there is no master regression. Apologies for the noise.
+- The ride freeze IS real: with the west-edge sweep at the LADDER TOP the ride glided d_B 8.12 ->
+  1.61 and froze byte-exact (wire_anim_time stuck 22.6, anim 0x60000b5, auto_drop frozen 20.8,
+  substate 6, sim.disabled false — wire_tick stops executing mid-ride; an NIS/anim-script gate
+  keyed to a volume the ride's sway phase enters). Moving the west-edge sweep to the WEST EDGE
+  shifted the ride's phase and the crossing PASSES: "[0c] the west gap crossed on wire #284 —
+  landed (-8.21, 12.82, -215.66)" — the ride + drop + landing green on real input. The freeze is
+  path-phase dependent, not deterministic — flagged for the main agent (a live check below).
+- The NEW measured blocker: the west sniper #13 patrols to (-3.0, 12.2, -221.1), d ~6 LEVEL from
+  the ledge; 2 x -16 + the fatal -1.6 graze kill the 51.4-hp Bond at tick 14308. The walk's own
+  fights land killed false, and the still-gate sweeps find NO gun-ray-exposed candidate from the
+  west edge or the ledge landing (the plain eye ray reads Some while the rounds die on the ledge
+  lip — the same predictor-vs-muzzle-flight gap the #15 case measured). The sister stays ignored
+  with the full measured state (the yard + the crossing green; the ledge fight remains).
+- Runs on the final tree: walkreal_0700000c_live (see the report), upward_shot_0700000c_live,
+  nf-game — the fast runner did not fit the window.
+
+Live checks for the main agent:
+1. In PCSX2, ride wire #284 (the west gap) on a fresh boot: does the game's ride ever freeze
+   mid-wire (the anim stuck, the auto-drop timer paused)? The port shows a path-phase-dependent
+   freeze at d_B ~1.5-1.6 with wire_tick not executing — is there an NIS/script trigger at the
+   west ledge that can catch a rider mid-wire?
+2. From the west ledge landing (-8.2, 12.8, -215.7), can a player shoot the west sniper #13 at
+   (-3.0, 12.2, -221.1) — or does the ledge lip eat the rounds the way the port's predictor
+   mismatch shows? A screenshot of the sight line would settle the cover.
