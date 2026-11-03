@@ -36,6 +36,20 @@ door is bound.
   walkreal_07000014_live 9/9 (all four, incl. the delta-exit wedge and the tripbomb route) —
   AND the pin kept: no_guard_spams_the_opendoor_after_the_cascade green (destroy_wreck
   3/3). Next: the full walkreal sweep, the full suite total line, the report.
+- 19:20-20:10 UTC: the full walkreal sweep — every level binary green EXCEPT two, both
+  diagnosed: (1) walkreal_07000001 walk_from_the_spawn_to_the_exit_with_the_contact_real_damage
+  — GREEN at the merge base 7b25daa8 and at fix-1 941808fa, RED only with the ENTER deferral:
+  the TASE_DBG trace shows drone 15 (RUN_FOR_COVER 0x8C) binding the hall east-door node 21 at
+  ~3458 and OPENING door 2 guard-side ~100 ticks before Bond arrives (drone 14 re-binds at
+  3469) — per [M 0x153358:149-163 → 0x1681f8 case 1] the game's croute door dispatch
+  (LinkCreep_Handler 0x15a2c8:63 → ReachedDestNode, served for RunForCover's
+  MoveToGoalPosition 0x1517d8 → FollowRoute) + the ENTER's DoorIsOpen-false branch WOULD open
+  it; base/master stay green only through the stale pre-bind latch read (the very accident the
+  11 reds prove wrong per the game). Bond dies at the exit (t7884, 6×1.5 from drone #5 through
+  the early-opened door) vs 2.5 hp left at base. NEEDS THE MAIN AGENT's live check before the
+  test's premise is touched. (2) walkreal_07000015 walk_spawn_to_the_omega_sector_exit_
+  real_damage_agent — RED at the base 7b25daa8 too: pre-existing on the -3 line (the agent
+  difficulty is other tasks' active work), not this branch's delta. Suite + report next.
 
 ## level-14-cascade-servers-2
 
