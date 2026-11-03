@@ -73,12 +73,12 @@ fn dump_the_wedge_region() {
 
     println!("==== STATIC COLLISION scan around the wedge ====");
     let world = &sim.world;
-    // Vertical: what floor is below/above each grid point?
-    for z in [30.0f32, 33.0, 34.5, 36.0, 36.21, 37.5, 39.0, 42.0] {
-        for x in [16.0f32, 19.0, 21.0, 22.97, 24.5, 27.0, 30.0] {
+    // Vertical: what floor is below/above each grid point? (The west wing row answers whether
+    // the north wing is continuous from the west-room guards (x -33, z 33-35) to the cafeteria.)
+    for z in [33.0f32, 34.5, 35.5, 36.2] {
+        for x in [-40.0f32, -34.0, -28.0, -22.0, -16.0, -10.0, -4.0, 2.0, 8.0, 13.0, 16.0, 19.0, 22.97, 27.0] {
             let floor = world.floor_below([x, 4.0, z], 12.0);
-            let ceil = world.segment([x, 1.0, z], [x, 12.0, z]);
-            println!("VERT x {x:6.2} z {z:6.2}: floor_below(4.0,12) {:?} ray-up-hit {:?}", floor.map(|f| (f * 1000.0).round() / 1000.0), ceil);
+            println!("VERT x {x:6.2} z {z:6.2}: floor_below(4.0,12) {:?}", floor.map(|f| (f * 1000.0).round() / 1000.0));
         }
     }
     // Horizontal rays THROUGH the wedge from eight directions at three heights.
