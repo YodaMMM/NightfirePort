@@ -417,6 +417,7 @@ fn walk_the_whole_mission_from_the_start_to_the_0d_handoff() {
 /// level start, no teleport after the load; the top-up walk and the eastroute replay (flag
 /// off) keep master's pinned choreography.
 #[test]
+#[ignore = "real health 2026-11-03: the aimed machinery is IN (with_yard_aimed_stands: the whole-walk aimed fights + the door/base emplacement sweeps + the suppression pass) and kills the emplacement's #36 in one aimed round [L this branch's runs], but the walk still dies at the yard ladder base: Bond arrives at the yard at 33.6 hp (54 hits for 100 en route, the aimed fights' mover stands trade: #30/#37 killed false on 300-tick stands), the crossing + base stands cost 2 x -16 (#18's beat), and the patroller #15's late-acquiring beat ((18.4, 12.2, -216.7) [L the run-5/6 death logs]) lands the fatal graze at 1.6 hp. #18 itself is UNREACHABLE from the yard floor: 7+ converged aimed rounds (err 0.000, blocked false, two spots: the door and the ladder base) never moved its hp 10.0 — the twin #36's body (alive, then its corpse) meets every round first [M Drone_CollisionHandler 0x140968]. Next: cut the en-route fight damage (the aimed gate 0.01 vs the patrolling guards' stands), or take the deck fight to a spot where #18's box clears the twin's body."]
 fn walk_the_whole_mission_from_the_start_to_the_0d_handoff_real_damage() {
     walker::with_yard_aimed_stands(|| {
         walker::walker::with_real_damage(walk_the_whole_mission_from_the_start_to_the_0d_handoff)

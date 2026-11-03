@@ -88,6 +88,58 @@ fn yard_stand_aimed(w: &mut Walker, di: usize, label: &str, cap: u32) -> bool {
 /// base spot through the same machinery.
 fn yard_sniper_stands(w: &mut Walker, label: &str, max: usize) {
     if !YARD_AIMED_STANDS.with(|c| c.get()) { return; }
+    // The deck emplacement FIRST for the yard-floor labels: the PAIR #18/#36 occupy one spot
+    // ([L] the census) and a round into it hits whichever twin the ray meets first [M
+    // Drone_CollisionHandler 0x140968] — measured (the first run on this branch): the stand on
+    // the hitter #18 fired 4 converged aimed rounds (err 0.000, blocked false) and #18's hp
+    // never moved — the twin ate them (the proof's single fresh twin died in ONE round). The
+    // stand re-runs on the survivor until BOTH drop. Measured order matters: the sweep runs
+    // BEFORE #18's beat starts (the door) and again at the ladder base (the proof-proven spot).
+    if label == "pre-climb" || label == "at-the-door" {
+        for _ in 0..4 {
+            let di_opt = {
+                let sim = w.scene.sim.as_ref().unwrap();
+                (0..sim.drones.list.len()).find(|&i| {
+                    let d = &sim.drones.list[i];
+                    d.weapon == 0x1e && d.health > 0.0 && d.present && !d.corpse
+                        && (d.pos[0] - 36.4).abs() < 2.5 && (d.pos[2] + 208.8).abs() < 3.5 && d.pos[1] > 8.0
+                })
+            };
+            let Some(di) = di_opt else { break };
+            yard_stand_aimed(w, di, label, 1500);
+        }
+        let sim = w.scene.sim.as_ref().unwrap();
+        let left: Vec<usize> = (0..sim.drones.list.len()).filter(|&i| {
+            let d = &sim.drones.list[i];
+            d.weapon == 0x1e && d.health > 0.0 && d.present && !d.corpse
+                && (d.pos[0] - 36.4).abs() < 2.5 && (d.pos[2] + 208.8).abs() < 3.5 && d.pos[1] > 8.0
+        }).collect();
+        eprintln!("[0c] the deck emplacement after the aimed stands ({label}): {left:?} still alive");
+        // The suppression pass (pre-climb only): EVERY other alive weapon-0x1e within 48 u gets
+        // one capped aimed stand — the patroller #15 ((18.4, 12.2, -216.7) [L the run-5 death
+        // log]) and the walkway-deck #1 ((13.0, 12.1, -196.0) [L the census]) acquire Bond late
+        // and never pass the recent-hit pick, but the fired-at sniper's beat goes quiet for the
+        // climb [L the predecessor runs] and #1's close beat at the mantle is what killed the
+        // 3.8 hp Bond [L the predecessor's death at (9.25, 12.12, -188.53)]. Short caps: the
+        // stands are suppression, the deck-level twins are the kills.
+        if label == "pre-climb" {
+            for _ in 0..3 {
+                let di_opt = {
+                    let sim = w.scene.sim.as_ref().unwrap();
+                    let b = sim.bond.pos;
+                    (0..sim.drones.list.len()).find(|&i| {
+                        let d = &sim.drones.list[i];
+                        if !(d.weapon == 0x1e && d.health > 0.0 && d.present && !d.corpse && d.team == 1) { return false; }
+                        let dxz = ((d.pos[0] - b[0]).powi(2) + (d.pos[2] - b[2]).powi(2)).sqrt();
+                        if dxz > 48.0 { return false; }
+                        (d.pos[0] - 36.4).abs() >= 2.5 || (d.pos[2] + 208.8).abs() >= 3.5
+                    })
+                };
+                let Some(di) = di_opt else { break };
+                yard_stand_aimed(w, di, label, 400);
+            }
+        }
+    }
     for _ in 0..max {
         let di_opt = {
             let sim = w.scene.sim.as_ref().unwrap();
@@ -109,27 +161,6 @@ fn yard_sniper_stands(w: &mut Walker, label: &str, max: usize) {
         let Some(di) = di_opt else { break };
         if yard_stand_aimed(w, di, label, 1500) { continue; }
     }
-    if label == "pre-climb" {
-        for _ in 0..4 {
-            let di_opt = {
-                let sim = w.scene.sim.as_ref().unwrap();
-                (0..sim.drones.list.len()).find(|&i| {
-                    let d = &sim.drones.list[i];
-                    d.weapon == 0x1e && d.health > 0.0 && d.present && !d.corpse
-                        && (d.pos[0] - 36.4).abs() < 2.5 && (d.pos[2] + 208.8).abs() < 3.5 && d.pos[1] > 8.0
-                })
-            };
-            let Some(di) = di_opt else { break };
-            yard_stand_aimed(w, di, label, 1500);
-        }
-        let sim = w.scene.sim.as_ref().unwrap();
-        let left: Vec<usize> = (0..sim.drones.list.len()).filter(|&i| {
-            let d = &sim.drones.list[i];
-            d.weapon == 0x1e && d.health > 0.0 && d.present && !d.corpse
-                && (d.pos[0] - 36.4).abs() < 2.5 && (d.pos[2] + 208.8).abs() < 3.5 && d.pos[1] > 8.0
-        }).collect();
-        eprintln!("[0c] the deck emplacement after the aimed stands: {left:?} still alive");
-    }
 }
 
 /// The spawn asserts + legs 1-9c of the main walk, ending on the slot jump's band landing
@@ -142,6 +173,16 @@ fn yard_sniper_stands(w: &mut Walker, label: &str, max: usize) {
 pub fn walk_spawn_to_the_yard_ladder_base(iso: &str) -> Walker {
     let iso = iso.to_string();
     let mut w = Walker::new(nf_view::load_with_carry(&iso, "0700000c.bin", false, None).unwrap());
+    // OPT-IN (`with_yard_aimed_stands`): the whole walk's fights hold the aim button —
+    // `DamageLog::aimed_fights`, the zero-spread aimed act [M Bullet_init 0x12c5a0:139-170].
+    // Measured reason (the first real-health run on this branch): the plain HIP fights pick the
+    // deck sentry #18 themselves from the ladder base (d 34.4) and pull 5 hip rounds into the
+    // 4.9 u cone — all miss (the pinned player-upward-shot symptom), the clip burns to 0, and
+    // the aimed stand after it starts mid-reload standing in the lane at 3.8 hp — death. With
+    // the fights aimed the same engagement lands (the upward-shot proof). The flag is OFF for
+    // every other caller: the upward-shot hip pin (the dry-clip symptom test) walks this same
+    // function and must keep its hip pulls.
+    if YARD_AIMED_STANDS.with(|c| c.get()) { w.dmg.aimed_fights = true; }
     {
         let sim = w.scene.sim.as_ref().unwrap();
         let p = sim.bond.pos;
@@ -725,6 +766,13 @@ pub fn walk_spawn_to_the_yard_ladder_base(iso: &str) -> Walker {
     }
     eprintln!("[0c] the yard reached for real through the open secret door — on the yard floor at {:?}",
         w.scene.sim.as_ref().unwrap().bond.pos);
+
+    // Leg 6a (OPT-IN, `with_yard_aimed_stands`): the deck-emplacement sweep FROM THE DOOR,
+    // before the yard crossing — #18's beat starts as Bond crosses the open yard and the
+    // crossing legs took 3 × -16 on the first run; a real player kills the deck snipers from
+    // the door before walking the open ground. Same emplacement, same aimed act; a no-op when
+    // the flag is off (the top-up walk and the upward proofs keep their choreography).
+    yard_sniper_stands(&mut w, "at-the-door", 4);
 
     // Leg 6 (REAL): south-west across the yard to the ladder base.
     w.walk_to(Wp::new(48.0, 1.4, -179.0).r(1.5), "the yard south of the door");
