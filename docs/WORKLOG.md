@@ -53,3 +53,32 @@ find a yard-floor stand whose azimuth to #18 clears #36's body/corpse (sweep spo
 real positions), or handle the twin by kill order/a different approach; (3) wall 2 — cut the en-route
 damage (the #30/#37 300-tick stands) and suppress #15/#1 before the crossing; (4) un-ignore the sister on
 real input only, then the full walkreal_*_live sweep + the fast runner.
+
+## level-0c-yard-climb-real-health-3 (progress 2026-11-03 14:14-15:35 UTC)
+
+Both measured walls of the -2 report are SOLVED on this branch; the sister now survives the yard,
+mantles, and dies/fails later (the wire-ride leg — a master regression, below).
+- Wall 1 retired with measurements: the -2 "twin #36 corpse shield" does not hold on this tree —
+  #36 is present false, enabled false (probe dump, both variants); the PAIR census does not hold.
+  The real mechanism: the deck sentry #18 wiggle-steps ±0.1 u, and the zero-spread aimed act
+  [M Bullet_init 0x12c5a0:139-170] has NO LEAD — converged rounds (err 0.000) die in flight while
+  it steps, land the run it pauses (probe A: hp 10.0 -> -50.0). Fix: the STILL GATE — the 0c-local
+  yard stand taps only after the target holds still 18 ticks, and aims with the STRICT gun-ray
+  set (the plain eye ray read Some on #15 while every round died on the deck structure — the
+  predictor-vs-muzzle-flight gap, measured 5 rounds no land).
+- Wall 2: the emplacement dies MID-CROSSING (from the door it is not exposed at all — aim None
+  [L]; the old at-the-door sweep never fired a round), the east-ledge snipers #20/#37 (2 x -16
+  from d ~59) get an at-the-door sweep, the pre-climb sweep suppresses #15/#1, the ladder-top
+  sweep does not wait for a recent hit (#1's first beat lands ~110 ticks after the mantle —
+  before any hit window), and the west-edge sweep clears #13 before the wire legs. Measured run:
+  #18 killed mid-crossing, #1 killed at the top, #15 silent, the climb mantled, health 17.6 at
+  tick 12300 (the -2 runs died at the base at 1.6).
+- REMAINING (next session): the #284 wire ride stalls at (-7.447, 12.794, -215.275) d_B 1.6 —
+  byte-identical in the TOP-UP walk too, i.e. a master regression, not this branch's change:
+  master 6d1ef8e9 (level-0d-real-health-crossfire) made the wire rider retain the last walk's
+  move-quad lanes; the rider now hangs 0.6 u OFF the A-B line and is pressed against the
+  x=-8.0 plane (+ the 0.55 body radius), 0.14 u above the documented hang y 12.65. The -2 base
+  (9cf3d8ca) had the top-up walk green. Needs: the wire substate's move-quad law re-checked in
+  the decomp (0x193600's wire case vs 6d1ef8e9's climb-only citation) or the ride leg adapted.
+- The sister is un-ignored on this branch (it must not ship red — re-ignore if the ride is not
+  fixed this session).

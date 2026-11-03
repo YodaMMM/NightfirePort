@@ -416,8 +416,22 @@ fn walk_the_whole_mission_from_the_start_to_the_0d_handoff() {
 /// then the walk climbs and mantles. Real input only: the whole route is walked from the
 /// level start, no teleport after the load; the top-up walk and the eastroute replay (flag
 /// off) keep master's pinned choreography.
+/// The yard's deck-sniper stands are OPT-IN (`walker::with_yard_aimed_stands`): the deck
+/// snipers (weapon 0x1e, -16 a hit, 10.7-11 u above the yard floor) sit outside the plain
+/// fights' 7.5 u vertical reach and were the real-health run's killer chain (#18 dealt 51.8
+/// of 100 in 4 hits from d ~34 u [L the predecessor run's census]; Bond died ON the ladder at
+/// y 7.95). level-0c-yard-climb-real-health-3's answer: the STILL-GATE aimed stand — the
+/// zero-spread aimed act [M Bullet_init 0x12c5a0:139-170] has no lead, and the sentry's
+/// wiggle-step during the round's flight is the measured miss (converged rounds never landed
+/// while it stepped; the same spot landed the run it paused [L the probe on this branch]) —
+/// so the stand taps only after the target holds still 18 ticks. The emplacement dies
+/// MID-CROSSING (from the door it is not exposed at all — aim None [L the same probe]; the
+/// -2 census's twin #36 is present false on this tree — the round-vs-twin theory is retired),
+/// the pre-climb suppression pass stands on #15/#1, the ladder-top stands on the hitters.
+/// Real input only: the whole route is walked from the level start, no teleport after the
+/// load; the top-up walk and the eastroute replay (flag off) keep master's pinned
+/// choreography.
 #[test]
-#[ignore = "real health 2026-11-03: the aimed machinery is IN (with_yard_aimed_stands: the whole-walk aimed fights + the door/base emplacement sweeps + the suppression pass) and kills the emplacement's #36 in one aimed round [L this branch's runs], but the walk still dies at the yard ladder base: Bond arrives at the yard at 33.6 hp (54 hits for 100 en route, the aimed fights' mover stands trade: #30/#37 killed false on 300-tick stands), the crossing + base stands cost 2 x -16 (#18's beat), and the patroller #15's late-acquiring beat ((18.4, 12.2, -216.7) [L the run-5/6 death logs]) lands the fatal graze at 1.6 hp. #18 itself is UNREACHABLE from the yard floor: 7+ converged aimed rounds (err 0.000, blocked false, two spots: the door and the ladder base) never moved its hp 10.0 — the twin #36's body (alive, then its corpse) meets every round first [M Drone_CollisionHandler 0x140968]. Next: cut the en-route fight damage (the aimed gate 0.01 vs the patrolling guards' stands), or take the deck fight to a spot where #18's box clears the twin's body."]
 fn walk_the_whole_mission_from_the_start_to_the_0d_handoff_real_damage() {
     walker::with_yard_aimed_stands(|| {
         walker::walker::with_real_damage(walk_the_whole_mission_from_the_start_to_the_0d_handoff)
