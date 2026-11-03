@@ -44,3 +44,12 @@ already pushed, continued on it. Merged nothing (player-upward-shot is master al
   ladder_02_live 3; ladder_underwater_02_live 6; nf-game 655 passed 0 failed 5 ignored. The fast runner
   did not fit the window (the sandbox reset ate the setup time); the touched crates ran explicitly.
 - Report: docs/reports/level-0c-yard-climb-real-health-2.md.
+
+## level-0c-yard-climb-real-health-3 (started 2026-11-03 14:14 UTC)
+
+Branch s/level-0c-yard-climb-real-health-3 cut from origin/s/level-0c-yard-climb-real-health-2 (9cf3d8ca),
+merged origin/master (35dca502) clean. Plan: (1) reproduce the sister's state on this tree; (2) wall 1 —
+find a yard-floor stand whose azimuth to #18 clears #36's body/corpse (sweep spots, trace the drone pair's
+real positions), or handle the twin by kill order/a different approach; (3) wall 2 — cut the en-route
+damage (the #30/#37 300-tick stands) and suppress #15/#1 before the crossing; (4) un-ignore the sister on
+real input only, then the full walkreal_*_live sweep + the fast runner.
