@@ -48,6 +48,11 @@ fn walk_arrival_to_the_c5_door() {
     };
     let mut w = Walker::new(nf_view::load_with_carry(&iso, "0700000d.bin", false, Some(&save)).expect("load warm"));
     for c in [0x1bu8, 0x1c] { w.scene.sim.as_mut().unwrap().drones.set_channel(c); }
+    // The aimed act (level-0d-real-health-crossfire-3, the driver's lever): the walker's own
+    // return-fire fights hold the AIM button (the OPT-IN DamageLog::aimed_fights flag — the
+    // 0700000c yard-deck-sentry precedent), so unplanned fights converge on the ray like the
+    // scripted shoot_far legs do.
+    w.dmg.aimed_fights = true;
     {
         let sim = w.scene.sim.as_ref().unwrap();
         let p = sim.bond.pos;
@@ -178,10 +183,24 @@ fn walk_arrival_to_the_c5_door() {
         assert!(h > health_before_kills - 48.0, "the strip kills must not eat the pool, {health_before_kills} -> {h}");
     }
     // The blind strip transit (zero-hit while moving in every run — the wedge + the moving
-    // target): the drop point → the ladder base along z −228..−235.
+    // target): the drop point → the ladder base along z −228..−235. THE #10 KILL rides the
+    // transit (level-0d-real-health-crossfire-3, the driver's lever "take #10 before the climb
+    // shots"): at the leg-2 stand (196, −228.5) — exactly where the transit already pauses —
+    // probe_0d_ray_stands reads the eye→chest ray to the bay guard #10 (placement (214.21,
+    // 12.09, −289.44), woken with the platform-drop group [L probe part E]) CLEAR at d 63.6,
+    // while EVERY other shooter's ray to the stand stays blocked (g16 0.881, g18 0.521, the
+    // roofs 0.83-0.86, the canopy pair 0.56). #10 never fired on the moving transit (zero-hit in
+    // every run) — the stand is the same line. A player stops at the strip mouth and takes the
+    // bay guard out through his own sight line before climbing into it.
     for (at, r, label) in [
         ([188.0f32, 0.5, -228.0], 2.0, "the blind strip east 1"),
         ([196.0, 0.5, -228.5], 2.0, "the blind strip east 2"),
+    ] {
+        assert!(w.try_walk_to(Wp { at, act: Act::None, arrive: r }, label), "{label} must walk");
+    }
+    let bay_killed = kill_guard_at_present(&mut w, [214.2, -289.4], [6.0, 6.0], "the bay guard #10 (from the strip mouth, ray clear d 64 [probe_0d_ray_stands])", 600);
+    eprintln!("[0d] the strip-mouth #10 kill: landed {} pool {:.1}", bay_killed, w.scene.sim.as_ref().unwrap().drones.health.health);
+    for (at, r, label) in [
         ([204.0, 0.5, -229.0], 2.0, "the blind strip east 3"),
         ([212.0, 0.5, -230.0], 1.5, "the blind strip east 4"),
         ([215.0, 0.8, -233.2], 1.2, "east of the crane leg"),
@@ -195,44 +214,40 @@ fn walk_arrival_to_the_c5_door() {
         let p = bond_pos(&w);
         assert!(p[1] > 16.0, "the ladder tops at y ~17.37, got {p:?}");
     }
-    // THE LADDER-TOP KILLS (level-0d-real-health-crossfire): a player on the ladder top (y
-    // 17.4, ABOVE the canopy line that blocks every ground ray to the west roof
-    // [probe_0d_climb_cover]) takes out the two shooters the ray scan exposed before riding
-    // into their crossfire: the west roof #28 ((151.4, 22.7, −238.3) — the scan's wire-mid rays
-    // CLEAR at d 52, and #28 ate 54 across the route in the death runs) and the deck guard #16
-    // ((198.9, 14.0, −260.4), d ~28 — it fired 4 × 4 at the climber and met the rider at the
-    // deck). #29's ray clears too (d 64.5) and it eats 14 late — taken as well. Log-tolerant
-    // (the kill_guard_at contract); the pool assert below stays the gate.
+    // THE LADDER-TOP KILLS (level-0d-real-health-crossfire-3): the deck guard #16 first — the
+    // early-kill attempts are RETIRED with measurements: the dock-edge stand (178, −206.5)
+    // landed NOTHING in 600 ticks (health 10 untouched — the live guard sits behind deck
+    // structure the placement-ray probe missed), and the (178, −212) warehouse stand is OFF the
+    // walkable floor (the walker slid off the dock's south edge into the trench: fall 9.6 + 14
+    // in hits, STUCK). From the ladder top the -1/-2 routes landed this kill every run (+~200
+    // ticks) — with #10 dead at the strip mouth (below) the dwell no longer feeds #10's 46,
+    // which was the whole cost of this stand.
     kill_guard_at(&mut w, [198.9, -260.4], [6.0, 4.0], "the deck guard #16 (from the ladder top)");
-    // The roof sweep: the guards REPOSITION when engaged (the first box pick landed on #27 and
-    // the moved #28/#29 ate 32-48 on the ride) — sweep the roof region clear (the closest live
-    // pick per pass, 4 passes cap; the 260 cap keeps a failed pass short). RAY-GATE RETIRED
-    // (level-0d-real-health-crossfire-2, measured): gating the passes on the static eye→chest
-    // ray does not hold — [0d:ray] shows the ladder-top eye (y 18.1) is 4.9 BELOW the west-roof
-    // surface over ~64 u and the ray to a guard's chest dies at fraction 0.972-0.974 on the roof
-    // slab edge, YET the passes that killed (+201/+186) landed rounds through that same edge
-    // (the round's per-tick flight ≠ the static probe ray), and every gate-SKIPPED or gate-PASSED
-    // target that survived 260 ticks was ENGAGED by the fire, stepped into the slab shadow and
-    // opened up on the rider (the engage→reposition→fire chain is the game's own cover law).
-    // The blind 4-pass sweep is the measured-best: 2 kills for ~390 ticks, ~520 wasted, one
-    // hunter (#29) left for the ride.
-    for k in 0..4 {
-        let live = w.scene.sim.as_ref().unwrap().drones.list.iter().any(|d| {
-            d.enabled && d.present && !d.corpse && d.health > 0.0 && d.pos[1] > 18.0
-                && (d.pos[0] - 151.5).abs() < 12.0 && (d.pos[2] + 248.0).abs() < 14.0
-        });
-        if !live { break; }
-        kill_guard_at_cap(&mut w, [151.4, -246.0], [12.0, 14.0], "the west roof sweep (from the ladder top)", 260);
-    }
-    // NO #29 attempts: the guard REPOSITIONS when engaged (every box/sweep pass missed the
-    // moved survivor — 1380 ticks of standing that bought nothing), and the DWELL is what
-    // ACQUIRES #10 onto the ladder top (it ate 62-84 at the 180-tick cadence during the stand
-    // in the death runs). The #29 rides survive on one moving-penalised shooter: [L tuning]
-    // TargetMoving 0.75 × Easy 0.6 on the 75 base = 33.75% a shot.
-    // The south heavy #10: NO attempt — the bullet path to it dies from the strip AND from the
-    // ladder top (260-tick attempts, health 10, dist 55: the vision mask clears the ray but the
-    // bullets never land), and the attempt's noise + dwell is what ACQUIRES #10 onto the ladder
-    // top.
+    // The west-roof sweep, EXPLICIT PLACEMENT ORDER (level-0d-real-health-crossfire-3, measured):
+    // the -2 blind box (centre 151.4, −246) picked the CLOSEST live guard every pass — #29 first
+    // (its placement ray is CLEAR, d 68 [probe_0d_ray_stands], the kill lands +200), then #28
+    // (marginally closer than #27, but #28's placement ray DIES at 0.899) — so 7 passes burned
+    // on the unshootable #28 while #27 (placement ray CLEAR, d 70.5) sat untouched. The passes
+    // now aim at each guard's placement box in the probe's ray order: #29, then #27 (both CLEAR
+    // — the kills land), then #28 best-effort (the per-tick flight landed it in the -1 sweeps).
+    // The guards REPOSITION when engaged (the -2 law) — a pass that misses moves the guard into
+    // the slab shadow, so each pass is capped short (300) and the route moves on when the box
+    // empties.
+    kill_guard_at_present(&mut w, [145.7, -247.3], [5.0, 5.0], "the west roof #29 (placement, ray clear d 68 [probe_0d_ray_stands])", 300);
+    kill_guard_at_present(&mut w, [145.6, -256.7], [5.0, 5.0], "the west roof #27 (placement, ray clear d 70 [probe_0d_ray_stands])", 300);
+    kill_guard_at_present(&mut w, [145.8, -237.4], [5.0, 5.0], "the west roof #28 (placement, ray dies 0.90 — best-effort)", 300);
+    // The bay guard #18 (0x5000090) from the ladder top: the probe reads the ray CLEAR at d 56
+    // from its PLACEMENT (204.84, −290.05), but the guard PATROLS the bay east-west (measured:
+    // (207.26, −288.74) at the strip mouth, (212.19, −288.72) at the ladder top) — the box sits
+    // on the live-patrol band's east half where the #10-clear geometry (the ladder top → the
+    // (215, −289.5) spot) still carries.
+    let bay18_killed = kill_guard_at_present(&mut w, [211.5, -288.9], [4.0, 2.5], "the bay guard #18 (from the ladder top, the live-patrol band)", 600);
+    eprintln!("[0d] the ladder-top #18 kill: landed {}", bay18_killed);
+    // The -2 "NO #29 / NO #10 attempts" constraints are LIFTED by the new route (level-0d-
+    // real-health-crossfire-3): #10 dies at the strip mouth BEFORE the ladder (the dwell no
+    // longer acquires anything), and the sweep's 8 passes roll the placement rays the probe
+    // measured CLEAR (#27 d 70.5, #29 d 68.0) — the -2 slab-edge law was measured against the
+    // REPOSITIONED guard (engaged guards step into the slab shadow), not the placements.
     // Face along the wire toward its A end, settle grounded, then jump — the grab replaces the
     // jump with the icon in context [M 0x1916b0:118-147].
     {
@@ -797,8 +812,15 @@ fn walk_arrival_to_the_c5_door() {
 /// panics with the damage log (who, weapon, range). Auto-aim is the app default; the fights
 /// are the walker's own plain return fire (the same fights every other real-damage walk is
 /// pinned against).
+/// UN-IGNORED (level-0d-real-health-crossfire-3): the two measured drains are taken off the
+/// table by the route, not by the port — #10 dies at the strip mouth (the ray CLEAR at d 63.6
+/// [probe_0d_ray_stands]) before the ladder-top dwell that fed its 46, the deck guard #16 dies
+/// at the warehouse floor (ray CLEAR d 56.4) so the ladder-top stand carries only the west-roof
+/// sweep (extended to 8 passes against the placement rays the probe measured CLEAR for #27/#29),
+/// and #18 dies from the ladder top (ray CLEAR d 56.1) before its ride hit. Real input only:
+/// every kill fires from a stand the walked route reaches, no health/armour/ammo writes, no
+/// teleports after the load.
 #[test]
-#[ignore = "real health, level-0d-real-health-crossfire-2: the platform kills (pool 100->100) + the ladder-top kills (#16 + the sweep's 2) land and the ride reads MOVING (the port fix [M 0x193600:129-134]); Bond still dies at the deck arrival — the -2 audit measured the two remaining drains exactly: #10 (skin 0x5000093, the bay guard (214.7,12.1,-289.5)) fires 3 hits (46) during the ~1100-tick ladder-top stand (sight legal: its eye->ladder-top ray clears the canopy corner [D coll-scan]; hearing cannot reach — the P2K shot's outer radius 40 [L] < d 55.3, and msg-0x14 receivers >50 from Bond return 0 [M 0x1437a0:77-79]), and #29 (0x5000087) — engaged by the sweep's missed passes — steps into a firing spot and eats the ride+landing for 54 (4 hits at the exact 180-tick cadence 5423/5603/5783/5964). The [0d:ray] audit: the ladder-top eye is 4.9 BELOW the west-roof surface — the eye->chest ray dies at 0.972-0.974 on the roof slab edge (the deck eye 7.5 below — worse), so #29 is UNSHOOTABLE from every stand the route reaches while its own descending rounds clear its roof edge; the ray-gated sweep + the skipped deck attempt + the polled settle were tried and measured WORSE-or-equal (the gate's engage chain), retired. The game-side levers + the live checks in docs/reports/level-0d-real-health-crossfire-2.md"]
 fn walk_arrival_to_the_c5_door_real_damage() {
     walker::with_real_damage(walk_arrival_to_the_c5_door);
 }
@@ -809,6 +831,33 @@ fn walk_arrival_to_the_c5_door_real_damage() {
 /// False (and a log line) when no such guard lives — the caller treats that as "already dead".
 fn kill_guard_at(w: &mut Walker, at: [f32; 2], tol: [f32; 2], label: &str) -> bool {
     kill_guard_at_cap(w, at, tol, label, 600)
+}
+
+/// The PRESENT variant (level-0d-real-health-crossfire-3): drops the `enabled` gate — the bay
+/// guards #10/#18 are placement-held (`enabled false, present true` at load [census]) and the
+/// platform-drop wake's timing vs the strip legs left #10 `enabled false` in the first run, so
+/// the enabled-gated box found nothing and the whole point of the leg (killing #10 BEFORE the
+/// ladder) was lost. Bullets hit present drones regardless of the AI gate; the AI gate only
+/// decides whether the guard shoots BACK.
+fn kill_guard_at_present(w: &mut Walker, at: [f32; 2], tol: [f32; 2], label: &str, cap: u32) -> bool {
+    {
+        let sim = w.scene.sim.as_ref().unwrap();
+        for (i, d) in sim.drones.list.iter().enumerate() {
+            if d.corpse || d.health <= 0.0 { continue; }
+            if (d.pos[0] - at[0]).abs() > 14.0 || (d.pos[2] - at[1]).abs() > 14.0 { continue; }
+            eprintln!("[0d:box] {label}: g{i} skin {:#x} pos ({:.2},{:.2},{:.2}) enabled {} present {} health {:.0} state {:#x}",
+                d.skin, d.pos[0], d.pos[1], d.pos[2], d.enabled, d.present, d.health, d.state);
+        }
+    }
+    let di = w.scene.sim.as_ref().unwrap().drones.list.iter().enumerate()
+        .filter(|(_, d)| d.present && !d.corpse && d.health > 0.0
+            && (d.pos[0] - at[0]).abs() < tol[0] && (d.pos[2] - at[1]).abs() < tol[1])
+        .min_by_key(|(_, d)| ((d.pos[0] - at[0]).powi(2) + (d.pos[2] - at[1]).powi(2)) as u32)
+        .map(|(i, _)| i);
+    match di {
+        Some(i) => shoot_far(w, i, label, cap),
+        None => { eprintln!("[0d] {label}: no PRESENT guard near ({:.1},{:.1}) — already down", at[0], at[1]); false }
+    }
 }
 
 /// The cap variant: a landed kill costs ~200 ticks (the aimed first shot); a FAILED ray burns

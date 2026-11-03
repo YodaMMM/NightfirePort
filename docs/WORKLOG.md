@@ -69,3 +69,19 @@ Work log:
   between the climb shots with the canopy corner as cover; plan the route through any armour/health
   pickups [D the placements]; use the aimed act (DamageLog::aimed_fights) at range. Real input only,
   no health/damage lowering, shared helpers behind per-level opt-in only.
+- (18:15-18:45) the -3 stand scan (probe_0d_ray_stands, assertion-free): 22 stands × 18 guards,
+  the matrix rewrote the route — the deck guard #16's ray is CLEAR from the warehouse/dock-edge
+  stands (d 56-61) and #10's ray is CLEAR from the strip-mouth stand (196,−228.5) d 63.6 — the
+  -2 slab-edge law was measured against REPOSITIONED guards; the PLACEMENT rays from the ladder
+  top are CLEAR for #27 (d 70.5) and #29 (d 68.0). The pickups dump [D]: kind-3 armour at the
+  start #525, on the west roof (147,21.76,−252.77), and in the annex (192.82,10.79,−272.03) —
+  armour cannot absorb this level's bullet pain types [M 0x1902c8:84-104 armourFraction 0], so
+  no detour. Route v1: the (178,−212) stand is OFF the walkable floor (fall 9.6 + 14 in hits,
+  STUCK — retired); the dock-edge #16 attempt landed nothing (600 ticks — retired); the #10
+  strip-mouth kill needed a present-not-enabled finder (the wake leaves #10 enabled false —
+  first run's enabled-gated box found nothing, #10 alive, death 4072 at the ladder top). Route
+  v2: #10 killed at the strip mouth (+201, pool 100→100 — zero incoming), death 5964 → 7270;
+  the -2 blind sweep picked #29 first (kill +200) then burned 7 passes on the blocked-ray #28
+  while #27 (CLEAR ray) sat untouched — the sweep is now explicit placement order (#29, #27,
+  #28 best-effort) and #18's box rides its live-patrol band (it walks the bay east-west:
+  207.26 → 212.19 measured).
