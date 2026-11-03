@@ -405,10 +405,22 @@ fn walk_the_whole_mission_from_the_start_to_the_0d_handoff() {
 /// anywhere — and Bond's death panics with the damage log (who, weapon, range). Auto-aim is
 /// the app default; the fights are the walker's own plain return fire. The two documented
 /// route stand-ins are links from the master walk (neither writes health, armour or ammo).
+///
+/// The yard's deck-sniper stands are OPT-IN (`walker::with_yard_aimed_stands`): the deck
+/// snipers (weapon 0x1e, -16 a hit, 10.7-11 u above the yard floor) sit outside the plain
+/// fights' 7.5 u vertical reach and were the real-health run's killer chain (#18 dealt 51.8
+/// of 100 in 4 hits from d ~34 u [L the predecessor run's census]; Bond died ON the ladder at
+/// y 7.95). The stands kill them AIMED from the strip — the zero-spread aimed act
+/// [M Bullet_init 0x12c5a0:139-170; the HIP cone 100.0 → 4.9 u of scatter at 35 u
+/// [L ee_start_05.bin @ 0x2c10b8 +0x24] is the miss the player-upward-shot branch pinned] —
+/// then the walk climbs and mantles. Real input only: the whole route is walked from the
+/// level start, no teleport after the load; the top-up walk and the eastroute replay (flag
+/// off) keep master's pinned choreography.
 #[test]
-#[ignore = "real health: 80 damage by tick 8700 (weapon 0x1e drones hit from ~34 u), then the yard climb never mantles"]
 fn walk_the_whole_mission_from_the_start_to_the_0d_handoff_real_damage() {
-    walker::walker::with_real_damage(walk_the_whole_mission_from_the_start_to_the_0d_handoff);
+    walker::with_yard_aimed_stands(|| {
+        walker::walker::with_real_damage(walk_the_whole_mission_from_the_start_to_the_0d_handoff)
+    });
 }
 
 
