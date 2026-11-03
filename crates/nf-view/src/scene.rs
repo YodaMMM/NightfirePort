@@ -5098,6 +5098,10 @@ impl Sim {
                         phase: matches!(self.gun.weapon as u16, 0x3a | 0x3b).then(|| {
                             Box::new(nf_game::grenade::StuckGadget::thrown(sdir))
                         }),
+                        // satchel-laser-scramble: BU+0x102 — Bullet_init 0x12c5a0:211 writes 100 for
+                        // the 0x3b family (the record's +0x02 base, in scope as `base`).
+                        burn: if base == 0x3b { 100 } else { 0 },
+                        defused: false,
                     });
                 } else {
                     // The muzzle light runs on every shot tick for the light-gated records — the

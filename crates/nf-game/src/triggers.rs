@@ -1391,6 +1391,8 @@ mod tests {
             damage: 0.0, radius: 0.0, mesh: 0, owner: usize::MAX, state: 0, bounces: 0,
             smoke_popped: false, resting: false, stuck: false, seek_target: None, phase: None,
             weapon_type: id,
+            burn: if id == 0x3b { 100 } else { 0 }, // [M Bullet_init 0x12c5a0:211]
+            defused: false,
         }
     }
 

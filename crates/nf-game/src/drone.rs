@@ -10857,6 +10857,10 @@ impl Drone {
             // The box carries the spawn alignment (`Bullet_init`'s `Mat_Align2Dir(obj+0x90, BU+0x00)`
             // [M 0x12c5a0:185]) the flight pose keeps.
             phase: matches!(weapon_type, 0x3a | 0x3b).then(|| Box::new(crate::grenade::StuckGadget::thrown(dir))),
+            // satchel-laser-scramble: BU+0x102 — Bullet_init 0x12c5a0:211 writes 100 for the 0x3b
+            // family (this site's weapon_type IS the record's +0x02 base).
+            burn: if weapon_type == 0x3b { 100 } else { 0 },
+            defused: false,
         })
     }
 
@@ -15011,6 +15015,23 @@ fn segment_hits_sphere(a: V3, b: V3, c: V3, r: f32) -> bool {
                         s.burn -= amount;
                         sparks.push((Self::closest_on_segment(b.pos, end, s.pos), [-b.dir[0], -b.dir[1], -b.dir[2]]));
                         if s.burn <= 0 { s.defused = true; fizzles.push(s.pos); }
+                    }
+                }
+                // satchel-laser-scramble: the PLAYER's placed satchel rides the thrown-grenade pool
+                // in this port (`Sim`'s shot block spawns the fired 0x3b as a `Grenade`) — the game
+                // holds it in the SAME bullet object, so the same contact walk burns it [M
+                // 0x12d890:445-466 — the tail gate is the record's +0x02 family 0x3b, in every state
+                // < 2, landed or still flying]. The port's grenade pool only serves the 0x3b tail
+                // (grenade.rs), and only 0x3b is selectable on the disc [L record sweep], so the
+                // gate is the id. The contact sphere keeps the walk's 0.5 stand-in [S — the charge's
+                // exact glist bounds are not pinned; see the bullet arm above].
+                for g in self.grenades.iter_mut() {
+                    if g.state >= 2 || g.defused { continue; }
+                    if g.weapon_type != 0x3b { continue; }
+                    if Self::segment_hits_sphere(b.pos, end, g.pos, 0.5) {
+                        g.burn -= amount;
+                        sparks.push((Self::closest_on_segment(b.pos, end, g.pos), [-b.dir[0], -b.dir[1], -b.dir[2]]));
+                        if g.burn <= 0 { g.defused = true; fizzles.push(g.pos); }
                     }
                 }
                 for (p, n) in sparks { self.fx.spawn_impact(Self::SATCHEL_BURN_SPARKS, p, n); }
