@@ -12,6 +12,7 @@
 mod walker;
 
 use walker::{Act, Walker, Wp};
+use nf_game::player::Input;
 use nf_game::world::V3;
 
 fn iso() -> String { std::env::var("NF_ISO").expect("NF_ISO") }
@@ -181,7 +182,7 @@ fn walk_to_the_exit_at(iso: &str, stop_at_fire: bool, difficulty: u32) -> Walker
         assert!(sim.drones.channels.on(0x32), "walking the meet plate must fire its ch 0x32 [D placement]");
     }
     let mut e_at = None;
-    for t in 0..2400u32 {
+    for t in 0..300u32 {
         w.tick(Default::default(), false);
         if w.scene.sim.as_ref().unwrap().drones.channels.on(0xe) { e_at = Some(t); break; }
     }
@@ -269,13 +270,44 @@ fn walk_to_the_exit_at(iso: &str, stop_at_fire: bool, difficulty: u32) -> Walker
     // fights from there; the named loop's approaches cover the rest. Operative keeps the proven hop.
     if difficulty >= 2 {
         // The hall's south door (7.9, 11.1) is the only nav entry from the meet room, and the
-        // alerted crowd hunts it in full cover (the door-funnel runs died to full volleys at
-        // 0.7-2.8 u; from the south their parts never expose — plain AND scoped probes — while
-        // their rounds come THROUGH the plane; the live check is filed in the report). The
-        // Agent stage stays the proven east hop; the named loop's hold gives the door its
-        // swing and the hunters their chance to show before any approach.
+        // alerted crowd hunts it in full cover: from the south their parts never expose — plain
+        // AND scoped probes, with the door open or shut — while their rounds come THROUGH the
+        // plane, and every crossing of the aperture under fire cost the probe runs 30-70 health
+        // (the funnel concentrates both shotguns' whole volley where Bond walks). The hall
+        // cannot be entered, fought or staged through at Agent. The player's answer — the one
+        // that won the probe run at FULL health with the AND firing — is the sound lure: Bond
+        // holds SOUTH of the pre-opened door and fires into the hall; the guards hunt the
+        // gunshot hearing, come through the aperture ONE AT A TIME, and die in the doorway —
+        // outside the 3.0 forced band, his parts behind the south structure between volleys.
+        // (The hunters do cross: guard 11 was killed mid-crossing by the walk's own return fire
+        // in an earlier run, and the lure run walked 5/6/7/11 AND the west-corridor pair 14/15
+        // into the door line, all corpses at z 10.2-12.7.)
+        // 1. The gun: the level-start pistol 0x2 — the deepest pool Bond owns here (the meet
+        //    hand-off's SMG rides the wheel at clip 32 spare 0 [L the probe dump; 0x2 at clip 7
+        //    + the type-1 pool 47]), the head box drops a 12-health guard in one hit [M
+        //    NDrone2_HitDamage 0x145558 head ×100], and the pistol's record carries the 3.5 the
+        //    walk's own clear fights registered [L the health trace: weapon 2 damage 3.5].
+        // 2. The door pre-opens from the approach leg (the nav opens it at ~1.1 u [L the
+        //    stage-walk trace "opening door ... state 0x2"]) and Bond falls back to the hold
+        //    line while it swings.
+        // 3. The doorway fight runs at the band's edge: keep_off 3.2, not the escort's 6.5 —
+        //    the wide space backs Bond out through the door where the south structure
+        //    re-occludes every part (the probe: exposed false at 6.7 u with the door open);
+        //    inside 3.0 every drone round hits forced [M 0x179740:100-110], so the hold line
+        //    sits just outside it and the shoot loop's backing never crosses back in.
+        // The stage walk afterwards runs from the hold line once the AND has fired (the crowd
+        // thinned); the loop below leaves a never-showing guard to the escort rounds, as before.
+        w.tick(Input { switch_to: Some(0x2), ..Default::default() }, false);
+        for _ in 0..60 { w.tick(Default::default(), false); }
+        w.walk_nav_to([7.5, 6.4, 10.1], "the hall door approach (pre-opens it)", 0.8);
+        w.walk_nav_to([7.2, 6.4, 8.8], "the door-hold line", 1.0);
+        w.wait(60);
+        w.keep_off = Some(3.2);
+        w.dmg.back_off = Some(3.2);
     }
-    w.walk_nav_to([2.9, 6.3, 16.3], "stage into the hall (east door)", 3.0);
+    if difficulty < 2 {
+        w.walk_nav_to([2.9, 6.3, 16.3], "stage into the hall (east door)", 3.0);
+    }
     // Agent kill order in the hall too: the shotgun captain (0x1c, 24 hp) before the pistols —
     // the close-order run walked to 3.0 of guard #11 first and ate the captain's full 8-pellet
     // volley at 1.9 u while the pistol round landed at 1.0 (the ×2 TooClose band). A player
@@ -295,10 +327,49 @@ fn walk_to_the_exit_at(iso: &str, stop_at_fire: bool, difficulty: u32) -> Walker
         // through the open door. The approach stays the last resort (a guard that never
         // comes), after the hold.
         if difficulty >= 2 {
-            // Give the door its swing and the hunters their chance to show before any approach:
-            // the door funnel's hops cannot stop short (the 8.0 arrive overshot to 0.7-0.9 and
-            // the volleys ended three runs). A guard that never shows is left for the escort
-            // rounds (the contact stalls on him and the clear loop re-visits).
+            // The lure first: a burst INTO the hall at the guard's own spot — the guards hunt
+            // the gunshot hearing, and the hunter paths south through the open aperture. The
+            // burst self-terminates the moment HIS part shows in the doorway (the scoped LOS
+            // probe at the hold line), so the lure never outlives its target's arrival.
+            {
+                // The lure is bounded at 300 ticks (5 s, ~18 taps): the sound is the draw — a
+                // sustained burst only burns the pool, and the crossing guard's own volley
+                // lands in the show-then-shoot settle gap (76.5 -> 42.9 across the door phase
+                // in the first bounded run). The burst ends when HIS part shows in the
+                // doorway or at the cap; the hold below gives him the crossing window.
+                let sim = w.scene.sim.as_ref().unwrap();
+                let d = &sim.drones.list[g];
+                let at = [d.pos[0], d.pos[1] + 0.3, d.pos[2]];
+                drop(sim);
+                for t in 0..300u32 {
+                    let (input, trigger, done) = {
+                        let sim = w.scene.sim.as_ref().unwrap();
+                        let d = &sim.drones.list[g];
+                        if d.corpse || d.health <= 0.0 { (Input::default(), false, true) }
+                        else {
+                            let bp = sim.bond.pos;
+                            let dx = at[0] - bp[0]; let dz = at[2] - bp[2];
+                            let dy = at[1] - (bp[1] + sim.bond.eye - sim.bond.crouch_drop);
+                            let desired = dx.atan2(dz);
+                            let err = walker::wrap_pi(desired - sim.bond.yaw);
+                            let want_pitch = (dy / walker::dxz(bp, at).max(0.5)).atan() / std::f32::consts::FRAC_PI_2;
+                            let perr = want_pitch - sim.bond.pitch;
+                            let seen = walker::dxz(d.pos, bp) < 9.0
+                                && sim.world.segment_bullet_scoped(sim.world.find_cel([bp[0], bp[1] + sim.bond.eye - sim.bond.crouch_drop, bp[2]]), [bp[0], bp[1] + sim.bond.eye - sim.bond.crouch_drop, bp[2]], [d.pos[0], d.pos[1] + 0.3, d.pos[2]]).is_none();
+                            (Input { turn: err.clamp(-0.08, 0.08), look: perr.clamp(-0.08, 0.08), ..Default::default() },
+                                err.abs() < 0.02 && perr.abs() < 0.028 && t % 16 == 0, seen)
+                        }
+                    };
+                    if done { break; }
+                    w.scene.sim.as_mut().unwrap().step_bond(input, trigger, false, false);
+                    w.total_ticks += 1;
+                    w.after_step();
+                    if w.scene.sim.as_ref().unwrap().drones.health.health <= 0.0 { break; }
+                }
+            }
+            // Then the hold: give the door its swing and the hunter his crossing window. A
+            // guard that never shows is left for the escort rounds (the contact stalls on him
+            // and the clear loop re-visits).
             for _ in 0..40 {
                 let seen = {
                     let sim = w.scene.sim.as_ref().unwrap();
@@ -306,7 +377,7 @@ fn walk_to_the_exit_at(iso: &str, stop_at_fire: bool, difficulty: u32) -> Walker
                     if d.corpse || d.health <= 0.0 { break; }
                     let bp = sim.bond.pos;
                     let eye = [bp[0], bp[1] + sim.bond.eye - sim.bond.crouch_drop, bp[2]];
-                    walker::dxz(d.pos, bp) < 10.0
+                    walker::dxz(d.pos, bp) < 11.0
                         && sim.world.segment_bullet_scoped(sim.world.find_cel(eye), eye, [d.pos[0], d.pos[1] + 0.3, d.pos[2]]).is_none()
                 };
                 if seen { break; }
@@ -325,7 +396,16 @@ fn walk_to_the_exit_at(iso: &str, stop_at_fire: bool, difficulty: u32) -> Walker
             let sim = w.scene.sim.as_ref().unwrap();
             let dry = sim.gun.clip + sim.gun.spare < 8;
             drop(sim);
-            if dry { walker::hall_ammo_ladder(&mut w, &format!("hall guard {g} ammo")); }
+            if dry && difficulty >= 2 {
+                // The door phase: the ladder's stage leg crosses the funnel under fire (the
+                // first run died there). Resupply from the hold line and walk back.
+                w.resupply(&format!("hall guard {g} ammo"));
+                if walker::dxz(w.scene.sim.as_ref().unwrap().bond.pos, [7.2, 6.4, 8.8]) > 2.0 {
+                    w.walk_nav_to([7.2, 6.4, 8.8], &format!("hall guard {g} back to the hold line"), 1.2);
+                }
+            } else if dry {
+                walker::hall_ammo_ladder(&mut w, &format!("hall guard {g} ammo"));
+            }
         }
         if !w.shoot(g, &format!("hall guard {g}")) {
             if w.resupply("hall ammo") { w.shoot(g, &format!("hall guard {g}")); }
@@ -335,6 +415,43 @@ fn walk_to_the_exit_at(iso: &str, stop_at_fire: bool, difficulty: u32) -> Walker
     assert!(w.scene.sim.as_ref().unwrap().drones.channels.on(0x99),
         "AND(0x11,0x12,0x13) must raise ch 153 once the three named guards are dead [D mux placement]");
     eprintln!("[01] the hall AND fired: ch 153 on at tick {}", w.total_ticks);
+    // The door-lure fight leaves Bond on the hold line south of the door; the contact's route
+    // to the LoadPointActivator plate runs back through the hall (his stall sat at (5.9,14.1),
+    // route 18/37), so Bond steps just INSIDE the doorway — 2.6 u from the route, inside the
+    // lead's 5.0 release band [M NDrone2_DSTATE_AllyLeadWait 0x15eda8 case 3]. The direct
+    // steer crosses the already-open aperture; the nav's own funnel hop wedges here (the
+    // closes capped at 3000 ticks four runs running).
+    if difficulty >= 2 {
+        w.walk_to(Wp { at: [7.9, 6.4, 12.3], act: Act::None, arrive: 0.6 }, "into the hall doorway (the release band)");
+        // The player walked this corridor five minutes ago and knows the guards: the contact's
+        // route to the plate runs west through the west corridor, where the SMG pair (12/17)
+        // and the 24-health guard 3 sit on the ch-0x26/0xf waits — the follow legs bled
+        // 76.5 -> 42.9 crossing their volleys in the first full-route run. He clears the route
+        // BEFORE following (the corridor's own resupply boxes sit on the way; the walk's dry
+        // ladder tops up mid-sweep).
+        for wp in [[-14.1f32, 13.1f32], [-19.4f32, 15.25f32], [-23.3f32, 14.4f32], [-29.1f32, 11.5f32]] {
+            let near: Vec<usize> = {
+                let sim = w.scene.sim.as_ref().unwrap();
+                (0..sim.drones.list.len()).filter(|&i| {
+                    let d = &sim.drones.list[i];
+                    i != ci && d.team == 1 && d.started && !d.corpse && d.enabled && d.health > 0.0
+                        && walker::dxz(d.pos, [wp[0], 6.4, wp[1]]) < 9.0
+                }).collect()
+            };
+            for g2 in near {
+                let gpos = w.scene.sim.as_ref().unwrap().drones.list[g2].pos;
+                let bpos = w.scene.sim.as_ref().unwrap().bond.pos;
+                if walker::dxz(gpos, bpos) > 9.0 {
+                    w.walk_nav_to(gpos, &format!("route pre-clear approach guard {g2}"), 8.0);
+                }
+                if !w.shoot(g2, &format!("route pre-clear guard {g2}")) {
+                    if w.resupply("route pre-clear ammo") { w.shoot(g2, &format!("route pre-clear guard {g2} retry")); }
+                }
+                if w.scene.sim.as_ref().unwrap().drones.health.health <= 0.0 { break; }
+            }
+            if w.scene.sim.as_ref().unwrap().drones.health.health <= 0.0 { break; }
+        }
+    }
 
     let mut settled = cpos;
     // The contact's park from the previous round: two rounds inside ~1 unit with no guard to
@@ -348,6 +465,32 @@ fn walk_to_the_exit_at(iso: &str, stop_at_fire: bool, difficulty: u32) -> Walker
     for round in 0..12 {
         settled = w.follow(ci, &format!("the contact r{round}"), 12000, plate);
         if walker::dxz(settled, plate) < 5.0 { break; }
+        // The player also clears his own radius as he walks: the route guards the contact woke
+        // (the west-corridor SMG pair) shoot Bond DURING the follow legs, and the return-fire
+        // exchanges bleed the Agent run dry before the stairwell (76.5 -> 31.7 across one
+        // route). Same clear the stall branch runs, keyed to Bond's position.
+        {
+            let near: Vec<usize> = {
+                let sim = w.scene.sim.as_ref().unwrap();
+                let bp = sim.bond.pos;
+                (0..sim.drones.list.len()).filter(|&i| {
+                    let d = &sim.drones.list[i];
+                    i != ci && d.team == 1 && d.started && !d.corpse && d.enabled && d.health > 0.0
+                        && walker::dxz(d.pos, bp) < 10.0
+                }).collect()
+            };
+            for g2 in near {
+                let gpos = w.scene.sim.as_ref().unwrap().drones.list[g2].pos;
+                let bpos = w.scene.sim.as_ref().unwrap().bond.pos;
+                if walker::dxz(gpos, bpos) > 9.0 {
+                    w.walk_nav_to(gpos, &format!("the contact r{round} own-radius approach guard {g2}"), 8.0);
+                }
+                if !w.shoot(g2, &format!("the contact r{round} own-radius guard {g2}")) {
+                    if w.resupply("own-radius ammo") { w.shoot(g2, &format!("the contact r{round} own-radius guard {g2} retry")); }
+                }
+                if w.scene.sim.as_ref().unwrap().drones.health.health <= 0.0 { break; }
+            }
+        }
         // Stalled: who is armed and started within 14 of the contact?
         let guards: Vec<usize> = {
             let sim = w.scene.sim.as_ref().unwrap();
@@ -578,6 +721,37 @@ fn walk_to_the_exit_at(iso: &str, stop_at_fire: bool, difficulty: u32) -> Walker
     // Bond walks the last leg onto the plate (the contact stalled at the stairwell head;
     // the AND cannot fire with him outside the volume).
     drop(sim);
+    if difficulty >= 2 {
+        // The player clears his OWN radius before the stairwell descent: the route guards the
+        // contact woke (the west-corridor SMG pair 12/17 among them) sit 2-6 u off the final
+        // legs, and the return-fire exchanges bled the run dry there (31.7 -> 0 across two
+        // volleys in the first full-route run). Same loop shape as the escort rounds' clears.
+        for sweep in 0..3 {
+            let near: Vec<usize> = {
+                let sim = w.scene.sim.as_ref().unwrap();
+                let bp = sim.bond.pos;
+                (0..sim.drones.list.len()).filter(|&i| {
+                    let d = &sim.drones.list[i];
+                    i != ci && d.team == 1 && d.started && !d.corpse && d.enabled && d.health > 0.0
+                        && walker::dxz(d.pos, bp) < 12.0
+                }).collect()
+            };
+            if near.is_empty() { break; }
+            for g2 in near {
+                let gpos = w.scene.sim.as_ref().unwrap().drones.list[g2].pos;
+                let bpos = w.scene.sim.as_ref().unwrap().bond.pos;
+                if walker::dxz(gpos, bpos) > 9.0 {
+                    w.walk_nav_to(gpos, &format!("pre-stairwell approach guard {g2}"), 8.0);
+                }
+                if !w.shoot(g2, &format!("pre-stairwell guard {g2}")) {
+                    if w.resupply("pre-stairwell ammo") { w.shoot(g2, &format!("pre-stairwell guard {g2} retry")); }
+                }
+                if w.scene.sim.as_ref().unwrap().drones.health.health <= 0.0 { break; }
+            }
+            if w.scene.sim.as_ref().unwrap().drones.health.health <= 0.0 { break; }
+            let _ = sweep;
+        }
+    }
     // The player route descends the stairwell from the west hall's corner (the AI's own path
     // climbs over the top floor — the sister proved the descent through this anchor).
     w.walk_nav_to([-30.8, 6.4, 13.1], "the stairwell head", 1.2);
@@ -953,7 +1127,7 @@ fn following_mayhew_down_completes_the_level() {
     }
     assert!(w.scene.sim.as_ref().unwrap().drones.channels.on(0x32), "the meet plate must fire ch 0x32");
     let mut e_at = None;
-    for t in 0..2400u32 {
+    for t in 0..300u32 {
         w.tick(Default::default(), false);
         if w.scene.sim.as_ref().unwrap().drones.channels.on(0xe) { e_at = Some(t); break; }
     }

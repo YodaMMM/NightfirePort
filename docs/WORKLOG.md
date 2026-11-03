@@ -52,3 +52,27 @@ walkreal_07000001_live test green, every walkreal_*_live green, then the full su
 Work log:
 - (13:33) branch start, WORKLOG entry. Sandbox survived (no reset): ISO + work/ + toolchain + the
   ALSA prefix all in place. Next: fast runner in the background, then the escort report.
+- (14:20-15:00) the hall fight, the probe campaign (probe01_hall_research.rs, scratch): the meet
+  hand-off gives the SMG 0x12 at clip 32 spare 0 [L the probe dump]; the two dormant ch-0x5 SMG
+  guards (10 at the plate, 16 south) never fire on this route (ch 0x5 never rises [L the runs]);
+  the SMG's bullets do NOT register on guards at 0.5-2.1 u (32 rounds, aim settled, zero health
+  change, last_shot advances — spread 16+5 bloom is tiny, damage 1.5 [L the record dump]) — a
+  port bug, filed for the next session. The door trade/funnel/entry are unwinnable: from the
+  south the hunters' parts never expose (plain AND scoped probes, door open or shut) while their
+  volleys cross, and every aperture crossing cost 30-70 (the funnel concentrates both shotguns).
+  THE WIN: the sound lure — Bond holds south of the pre-opened door and fires into the hall; the
+  guards hunt the gunshot hearing and cross the aperture ONE AT A TIME (V8 probe: all four named
+  + the west pair died in the doorway line, the AND fired at 76.5 health — zero door-phase
+  damage). Landed in the level's own file, difficulty >= 2 gated: the 0x2 switch (the deepest
+  pool: clip 7 + the type-1 pool 47), the door pre-open + the hold line (7.2,8.8), keep_off 3.2
+  (the 6.5 backing re-occludes the aim through the door), the bounded lure + the hold + the kill
+  per named guard, the dry ladder gated to resupply-only in the door phase (the ladder's stage
+  leg crosses the funnel under fire), the doorway reposition after the AND (the lead's 5.0
+  release band [M 0x15eda8 case 3] — the contact's route runs back through the hall, stall
+  (5.9,14.1) route 18/37), the route pre-clear (the west corridor's 12/17/3) and the own-radius
+  sweeps (the follow legs bled 76.5 -> 42.9 crossing their volleys). Best run: the AND fires at
+  4950, the escort runs the FULL route to (−28.2,14.3) (5 u from the plate), the pre-clear kills
+  3/14/5, Bond dies at 1.6 health to the last route guards (12/17). The walk is still red at the
+  stairwell — the remaining bleed is the door-phase settle gap + the route attrition; the next
+  session continues from this branch.
+- Next: the report, the full walkreal_07000001 binary, the walkreal_*_live sweep, the suite.
