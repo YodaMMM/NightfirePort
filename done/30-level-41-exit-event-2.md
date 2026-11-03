@@ -24,3 +24,8 @@ claimed-by: sandbox3 at 2026-11-03T06:13Z
 ---
 ## Report (done, 2026-11-03T13:28Z)
 
+
+---
+## Report from the worker (done, 2026-11-03T13:28Z)
+
+Closed by the driver: the report is on `s/level-41-exit-event-2` (docs/reports/level-41-exit-event-2.md); the worker didn't run finish.sh.
