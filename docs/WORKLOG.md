@@ -76,3 +76,14 @@ Work log:
   stairwell — the remaining bleed is the door-phase settle gap + the route attrition; the next
   session continues from this branch.
 - Next: the report, the full walkreal_07000001 binary, the walkreal_*_live sweep, the suite.
+
+## level-01-agent-hall-fight-2 (started 2026-11-03 16:15 UTC)
+
+Continue origin/s/level-01-agent-hall-fight (19cc9be3) + master merge (845e7973). Task: make
+walkreal_07000001_live walk_from_the_spawn_to_the_exit_with_the_contact_real_damage_agent pass —
+Bond dies at 1.6 health to the last route guards at the stairwell. The prior report's two drains:
+the door-phase settle gap (the crossing guard's volley lands 76.5 → 42.9 in the worst run) and the
+route guards' attrition (12/17). The next move: keep the aim on the crossing guard's live position
+through the gap, fetch the pickups before the stairwell, set the kill order guards 3, 14, 5. Real
+input only; never lower damage/health; helpers opt-in only. Run walkreal_07000001_live,
+escort_follow_07000001, nf-game. Suite started on the tree.
