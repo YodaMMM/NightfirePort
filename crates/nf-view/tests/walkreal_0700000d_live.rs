@@ -206,7 +206,16 @@ fn walk_arrival_to_the_c5_door() {
     kill_guard_at(&mut w, [198.9, -260.4], [6.0, 4.0], "the deck guard #16 (from the ladder top)");
     // The roof sweep: the guards REPOSITION when engaged (the first box pick landed on #27 and
     // the moved #28/#29 ate 32-48 on the ride) — sweep the roof region clear (the closest live
-    // pick per pass, 4 passes cap; the 260 cap keeps a failed pass short).
+    // pick per pass, 4 passes cap; the 260 cap keeps a failed pass short). RAY-GATE RETIRED
+    // (level-0d-real-health-crossfire-2, measured): gating the passes on the static eye→chest
+    // ray does not hold — [0d:ray] shows the ladder-top eye (y 18.1) is 4.9 BELOW the west-roof
+    // surface over ~64 u and the ray to a guard's chest dies at fraction 0.972-0.974 on the roof
+    // slab edge, YET the passes that killed (+201/+186) landed rounds through that same edge
+    // (the round's per-tick flight ≠ the static probe ray), and every gate-SKIPPED or gate-PASSED
+    // target that survived 260 ticks was ENGAGED by the fire, stepped into the slab shadow and
+    // opened up on the rider (the engage→reposition→fire chain is the game's own cover law).
+    // The blind 4-pass sweep is the measured-best: 2 kills for ~390 ticks, ~520 wasted, one
+    // hunter (#29) left for the ride.
     for k in 0..4 {
         let live = w.scene.sim.as_ref().unwrap().drones.list.iter().any(|d| {
             d.enabled && d.present && !d.corpse && d.health > 0.0 && d.pos[1] > 18.0
@@ -263,7 +272,18 @@ fn walk_arrival_to_the_c5_door() {
             w.tick(nf_game::player::Input { strafe: 1.0, ..Default::default() }, false);
         }
     }
-    w.wait(500); // the auto-drop's fall settles onto the deck (probe8's landing)
+    // The auto-drop's fall settles onto the deck (probe8's landing) — polled, not a fixed 500:
+    // every settled tick here is a burst window for the surviving roof guard (level-0d-real-
+    // health-crossfire-2); a player moves the moment he lands.
+    {
+        let start = w.total_ticks;
+        while w.total_ticks - start < 500 {
+            let sim = w.scene.sim.as_ref().unwrap();
+            if w.total_ticks - start > 30 && sim.bond.grounded { break; }
+            w.tick(nf_game::player::Input::default(), false);
+        }
+        eprintln!("[0d] the deck settle took +{} ticks", w.total_ticks - start);
+    }
     {
         let p = bond_pos(&w);
         assert!((p[0] - 199.25).abs() < 2.5 && (p[2] + 260.16).abs() < 2.5 && (p[1] - 14.16).abs() < 1.5,
@@ -285,11 +305,11 @@ fn walk_arrival_to_the_c5_door() {
         let _ = w.switch_to_armed("the deck guard");
         let _ = w.shoot(di, "the deck guard");
     }
-    // The LAST roof guard from the deck arrival: the sweeps from the ladder top can't reach the
-    // repositioned spot (the ray dies), but the deck arrival's reverse ray carries BOTH ways —
-    // the surviving guard ate 54 on the deck stand in the death runs through the same geometry
-    // (the hits land, so the bullets can too). 260 cap: a failed ray stops early.
-    kill_guard_at_cap(&mut w, [151.4, -248.5], [10.0, 10.0], "the last roof guard (from the deck)", 260);
+    // The LAST roof guard from the deck: NO attempt (level-0d-real-health-crossfire-2 measured):
+    // the deck eye (y ~15.5) is 7.5 BELOW the west-roof surface over ~50 u — the eye→chest ray
+    // dies on the roof slab even earlier than the ladder top's 0.974 (the [0d:ray] audit; the
+    // 260-tick attempt never landed in any run) — and every standing tick here is one more
+    // 180-tick burst window for the surviving roof guard. The deck legs stay MOVING.
     // The south roof #18 from the deck: NO attempt — the bullet path dies here too (260-tick
     // attempts, health 10, dist 29.7-31.5, the vision ray clear but no landing); its one ride
     // hit (16) is the cheaper cost.
@@ -778,7 +798,7 @@ fn walk_arrival_to_the_c5_door() {
 /// are the walker's own plain return fire (the same fights every other real-damage walk is
 /// pinned against).
 #[test]
-#[ignore = "real health, level-0d-real-health-crossfire: the platform kills (pool 100->100) + the ladder-top kills (#16/#27/#28 + one sweep pass) land and the ride reads MOVING (the port fix [M 0x193600:129-134]); Bond still dies — the repositioned roof guard's deck-arrival fire (54, its inbound rounds carry where Bond's bullet path cannot reach) + #10's climb shots (46) — 100 total by tick 5964-9412; the next levers + live checks in docs/reports/level-0d-real-health-crossfire.md"]
+#[ignore = "real health, level-0d-real-health-crossfire-2: the platform kills (pool 100->100) + the ladder-top kills (#16 + the sweep's 2) land and the ride reads MOVING (the port fix [M 0x193600:129-134]); Bond still dies at the deck arrival — the -2 audit measured the two remaining drains exactly: #10 (skin 0x5000093, the bay guard (214.7,12.1,-289.5)) fires 3 hits (46) during the ~1100-tick ladder-top stand (sight legal: its eye->ladder-top ray clears the canopy corner [D coll-scan]; hearing cannot reach — the P2K shot's outer radius 40 [L] < d 55.3, and msg-0x14 receivers >50 from Bond return 0 [M 0x1437a0:77-79]), and #29 (0x5000087) — engaged by the sweep's missed passes — steps into a firing spot and eats the ride+landing for 54 (4 hits at the exact 180-tick cadence 5423/5603/5783/5964). The [0d:ray] audit: the ladder-top eye is 4.9 BELOW the west-roof surface — the eye->chest ray dies at 0.972-0.974 on the roof slab edge (the deck eye 7.5 below — worse), so #29 is UNSHOOTABLE from every stand the route reaches while its own descending rounds clear its roof edge; the ray-gated sweep + the skipped deck attempt + the polled settle were tried and measured WORSE-or-equal (the gate's engage chain), retired. The game-side levers + the live checks in docs/reports/level-0d-real-health-crossfire-2.md"]
 fn walk_arrival_to_the_c5_door_real_damage() {
     walker::with_real_damage(walk_arrival_to_the_c5_door);
 }
@@ -898,6 +918,18 @@ fn shoot_far(w: &mut Walker, di: usize, label: &str, cap: u32) -> bool {
             let dist = walker::dxz(bp, dp).max(0.5);
             eprintln!("[0d:dbg] {label} +{} bond ({:.1},{:.1},{:.1}) tgt ({:.1},{:.1},{:.1}) d {:.1} pitch {:.3} cross {:?} clip {} spare {} aiming {}",
                 w.total_ticks - start, bp[0], bp[1], bp[2], dp[0], dp[1], dp[2], dist, sim.bond.pitch, sim.cross, sim.gun.clip, sim.gun.spare, sim.aiming);
+            // level-0d-real-health-crossfire-2 audit: the same eye→chest ray the round flies,
+            // through the world probe AND the bullet-law scoped pick — WHERE does a failed ray die?
+            let eye = [bp[0], bp[1] + sim.bond.eye - sim.bond.crouch_drop, bp[2]];
+            let aim = [dp[0], dp[1] + 0.3, dp[2]];
+            let full = sim.world.segment_hit(eye, aim);
+            let stat = sim.world.segment_hit_static(eye, aim);
+            let bullet = sim.world.segment_bullet_scoped(sim.world.find_cel(eye), eye, aim);
+            eprintln!("[0d:ray] {label} eye ({:.1},{:.1},{:.1}) chest ({:.1},{:.1},{:.1}) full {} static {} bullet_scoped {}",
+                eye[0], eye[1], eye[2], aim[0], aim[1], aim[2],
+                full.map(|(f, p)| format!("{f:.3}@({:.1},{:.1},{:.1})", p[0], p[1], p[2])).unwrap_or_else(|| "CLEAR".into()),
+                stat.map(|(f, p)| format!("{f:.3}@y{:.1}", p[1])).unwrap_or_else(|| "clear".into()).as_str(),
+                bullet.map(|f| format!("{f:.3}")).unwrap_or_else(|| "CLEAR".into()));
         }
         if sim.gun.clip == 0 && sim.gun.spare == 0 && w.total_ticks - start > 60 {
             eprintln!("[0d] {label}: out of ammo at +{}", w.total_ticks - start);

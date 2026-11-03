@@ -128,6 +128,13 @@ pub struct DamageLog {
     /// landing (a player switches to the next guard instead of emptying the clip into cover the
     /// world trace does not see). None keeps the 300-tick rule alone.
     pub dry_taps: Option<u32>,
+    /// OPT-IN (`shoot_blockers`, set by the 07000011 real-health walk): when the gun line to the
+    /// fight's target is blocked by a LIVE HOSTILE drone, retarget the blocker. A player whose
+    /// line another guard walks into shoots that guard — the hold-fire rule alone stood Bond on
+    /// west flight B while the blocker (1.6 u, weapon 0x19) landed 15 rounds for 51 health
+    /// [L the 2026-11-02 level-11 real-damage run]. Off = master behaviour (hold fire; the
+    /// 03 servants stand among the guards and must not be shot through).
+    pub shoot_blockers: bool,
     /// OPT-IN for `stand_and_fire`: Bond steps back (aim held) while any live guard stands
     /// inside this range. Under 3.0 u every drone round hits [M DroneWeap_DoBulletAccuracy
     /// 0x179740:113-115] and a shotgun guard's 8 pellets all land; None keeps Bond still.
@@ -166,6 +173,17 @@ pub struct DamageLog {
     /// hp untouched (the game's own hip behaviour; [L] the blocked real-health run's three dry
     /// clips). Off = the plain stand every other walk is pinned against.
     pub aimed_fights: bool,
+    /// OPT-IN (`precise_fights`, the 07000011 real-health walk): the aimed TAP GATE (0.01 rad)
+    /// WITHOUT the aim button. The 2026-11-03 level-11 experiment measured the split: with the
+    /// button held the port's free-aim path reinterprets the fight's `turn`/`look` as CURSOR moves
+    /// (scene.rs free-aim: `want = cursor − turn/0.76966`, clamped ±0.296) and the fired round's
+    /// direction is the view PLUS the cursor offset — the 07000011 top-floor fight tapped 7 rounds
+    /// at err 0.0000 into a 4-u stationary guard for zero boxes (repro11c) — the fight machinery
+    /// drives the VIEW and cannot drive the cursor window. Gate only, every fight dropped its
+    /// target (repro11d: the stairwell fights all killed, 100.0 → 56.2 through the descent). The
+    /// 0c snipers keep the button (`aimed_fights`) — their zero spread needs the bit
+    /// [M Bullet_init 0x12c5a0:139-170].
+    pub precise_fights: bool,
     last_health: f32,
     last_hits: Vec<(u32, usize, f32)>,
 }
@@ -432,6 +450,7 @@ impl Walker {
     pub fn return_fire(&mut self, label: &str) -> bool {
         let trace = std::env::var_os("NF_RF_TRACE").is_some();
         if self.tops_up() || !self.dmg.return_fire || self.dmg.fighting { return false; }
+        let mut picked: Option<usize> = None;
         let di = {
             let sim = self.scene.sim.as_ref().unwrap();
             if sim.disabled || !sim.bond.grounded { return false; }
@@ -517,8 +536,16 @@ impl Walker {
                     for &i in &cands { DamageLog::geom_dump(sim, i); }
                 }
             }
+            picked = pick;
             pick
         };
+        // NF_RF_GEOM at a fight START too: the pick's own rays plus every other candidate's —
+        // the 2026-11-02 level-11 investigation needed the 1.6 u shooter's boxes while a farther
+        // shooter won the pick. Diagnostic only (no behaviour change).
+        if trace && picked.is_some() && std::env::var_os("NF_RF_GEOM").is_some() {
+            let sim = self.scene.sim.as_ref().unwrap();
+            for &i in self.dmg.shooters(sim).iter() { DamageLog::geom_dump(sim, i); }
+        }
         let Some(di) = di else { return false };
         if self.dmg.cooldown.iter().any(|&(i, until)| i == di && self.total_ticks < until) { return false; }
         // tranq_fights: the dart is slow and the win is a sleep, not a wound — the caller's
@@ -608,6 +635,7 @@ impl Walker {
     /// (the game's bullets hit any drone — the 03 servants stand among the guards).
     pub fn stand_and_fire(&mut self, di: usize, cap: u32) -> bool {
         let trace = std::env::var_os("NF_RF_TRACE").is_some();
+        let mut di = di;
         let mut unseen = 0u32;
         let mut last_tap = 0u32;
         let mut aim: Option<[f32; 3]> = None;
@@ -649,17 +677,40 @@ impl Walker {
                     while a > std::f32::consts::PI { a -= std::f32::consts::TAU; }
                     while a < -std::f32::consts::PI { a += std::f32::consts::TAU; } a };
                 let perr = (dy / h).atan() / std::f32::consts::FRAC_PI_2 - sim.bond.pitch;
-                // Another drone on the line, short of the target: hold the tap.
+                // Another drone on the line, short of the target: hold the tap. With the opt-in
+                // `shoot_blockers`, a blocker that is itself a LIVE HOSTILE (team 1, enabled,
+                // alive) becomes the new target — a player whose line a guard walks into shoots
+                // that guard (the 07000011 flight-B stand held fire ~143 ticks while the blocker
+                // at 1.6 u landed 15 rounds for 51 health [L the 2026-11-02 run]; see
+                // DamageLog::shoot_blockers). Servant/ally walks and the master behaviour keep
+                // the hold (the flag is off).
                 let len = (dx * dx + dy * dy + dz * dz).sqrt().max(0.01);
                 let u = [dx / len, dy / len, dz / len];
+                let mut blocker: Option<usize> = None;
                 let blocked = sim.drones.list.iter().enumerate().any(|(k, o)| {
                     if k == di || !o.present || o.corpse || o.health <= 0.0 { return false; }
                     let c = [o.pos[0] - eye[0], o.pos[1] + 0.6 - eye[1], o.pos[2] - eye[2]];
                     let s = c[0] * u[0] + c[1] * u[1] + c[2] * u[2];
                     if s <= 0.0 || s >= len - 0.3 { return false; }
                     let q = [c[0] - u[0] * s, c[1] - u[1] * s, c[2] - u[2] * s];
-                    (q[0] * q[0] + q[2] * q[2]).sqrt() < 0.6 && q[1].abs() < 1.2
+                    let on_line = (q[0] * q[0] + q[2] * q[2]).sqrt() < 0.6 && q[1].abs() < 1.2;
+                    if on_line && blocker.is_none() { blocker = Some(k); }
+                    on_line
                 });
+                if blocked && self.dmg.shoot_blockers {
+                    if let Some(k) = blocker {
+                        let o = &sim.drones.list[k];
+                        if o.team == 1 && o.enabled && o.present && !o.corpse && o.health > 0.0 && k != di {
+                            if trace { eprintln!("[rf-trace] fight#{di} t{t}: line blocked by live hostile #{k} (hp {:.1}, {:.1} u) — retarget",
+                                o.health, ((o.pos[0] - b[0]).powi(2) + (o.pos[2] - b[2]).powi(2)).sqrt()); }
+                            di = k;
+                            hp0 = o.health;
+                            last_hit = t;
+                            aim = None;
+                            unseen = 0;
+                        }
+                    }
+                }
                 let reload = sim.gun.clip == 0;
                 // aimed_fights (OPT-IN): the tap gate TIGHTENS with the aim held — the stand's
                 // plain tolerances (0.03 rad yaw / 0.04 norm pitch = ±1.05 u / ±2.2 u at the deck
@@ -668,9 +719,16 @@ impl Walker {
                 // an exact view and the loose stand dried clips on the same box. 0.01 / 0.01 =
                 // ±0.35 u / ±0.55 u at 35 u — inside the box, still reachable by the ±0.08/tick
                 // converge.
-                let (err_gate, perr_gate) = if self.dmg.aimed_fights { (0.01, 0.01) } else { (0.03, 0.04) };
+                let (err_gate, perr_gate) = if self.dmg.aimed_fights || self.dmg.precise_fights { (0.01, 0.01) } else { (0.03, 0.04) };
                 let fire = !reload && unseen == 0 && !blocked && err.abs() < err_gate && perr.abs() < perr_gate
                     && t.saturating_sub(last_tap) >= 8;
+                // NF_RF_TAPS: every tap's aim state (the 2026-11-03 level-11 investigation needed
+                // the per-tap error against the recorded hits — the t%60 lines only sample).
+                if fire && std::env::var_os("NF_RF_TAPS").is_some() {
+                    eprintln!("[rf-tap] fight#{di} t{t}: err {err:.4} perr {perr:.4} aim {} clip {} spare {}",
+                        aim.map(|a| (a[0], a[2])).map_or("none".into(), |a| format!("({:.2},{:.2})", a.0, a.1)),
+                        sim.gun.clip, sim.gun.spare);
+                }
                 let crowd = self.dmg.back_off.is_some_and(|r| sim.drones.list.iter().any(|o| o.team == 1 && o.enabled && o.present
                     && !o.corpse && o.health > 0.0 && ((o.pos[0] - b[0]).powi(2) + (o.pos[2] - b[2]).powi(2)).sqrt() < r));
                 // The unseen-cover creep: a player pushing toward a guard crouched behind a desk
