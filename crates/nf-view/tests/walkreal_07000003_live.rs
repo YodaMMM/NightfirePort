@@ -138,9 +138,20 @@ fn walk_the_alpine_route_to_the_exit() {
 /// (walking, turning, E, real fire) — the servants rescued through their enable plates + captor
 /// kills, the Dragon Safe opened and its key taken, the exit fired. No channel or state pokes.
 #[test]
-fn walk_the_full_route_and_complete_every_objective() {
+fn walk_the_full_route_and_complete_every_objective() { walk_the_full_route_and_complete_every_objective_at(1) }
+
+/// The walk body at `difficulty` (1 Operative = the plain load's replay parity; 2 Agent rides the
+/// front-end's launch path [M C_SBNFDFCTY 0x216ca8:15 → load_with_carry_difficulty]).
+fn walk_the_full_route_and_complete_every_objective_at(difficulty: u32) {
     let iso = iso();
-    let mut w = Walker::new(nf_view::load(&iso, "07000003.bin", false).expect("load 07000003"));
+    let mut w = Walker::new(if difficulty == 1 {
+        nf_view::load(&iso, "07000003.bin", false).expect("load 07000003")
+    } else {
+        nf_view::load_with_carry_difficulty(&iso, "07000003.bin", false, None, difficulty)
+            .expect("load 07000003")
+    });
+    assert_eq!(w.scene.sim.as_ref().unwrap().drones.difficulty, difficulty,
+        "the sim runs the picked difficulty [M GameState+0x28 0x2a3790 → Drones::difficulty]");
     // The type-2 guards carry 12 health, captains 24 [L ee_02b.bin]: Bond aims for the head
     // (`Walker::prefer_head`), as a player does, or the scripted fights run the walk dry.
     w.prefer_head = true;
@@ -534,4 +545,17 @@ fn killing_a_servant_fails_the_mission() {
     assert_eq!(sim.drones.mission.fail_label, 0x0400_0034, "the Killed Civilians fail label [M 0x1827d8:98-104]");
     assert_eq!(sim.drones.mission.state, 2, "MissionState 2 (the fail arm) [M 0x182c60:45-57]");
     assert!(sim.drones.channels.on(99), "the mission-fail channel rose [M mission.rs ch.set(99)]");
+}
+
+/// Agent-difficulty sister of `..._real_damage` (real-health-agent-difficulty): the same walked
+/// route at the menu's Agent pick — GameState+0x28 = 2 through the front-end's launch path [M
+/// C_SBNFDFCTY 0x216ca8:15; the `difficulty[]` table 0x2df4c0 row 1 carries 2; Txt 0x14e =
+/// "Agent"]. On this level group the pick scales Bond's pain by Plr_DMod_Normal 0.7 instead of
+/// Easy 0.5 and the guards' hit chance by DroneFiring_Accuracy_Normal 0.8 instead of Easy 0.5
+/// [M Player_HandlePain 0x1902c8; DroneWeap_DoBulletAccuracy 0x179740:74-88; tuning.rs 01-04
+/// group]; the min-difficulty placements pass Drone_Create's gate [M 0x136be0:49]. Real input
+/// only — the load path is the only difference.
+#[test]
+fn walk_the_full_route_and_complete_every_objective_real_damage_agent() {
+    walker::with_real_damage(|| walk_the_full_route_and_complete_every_objective_at(2));
 }

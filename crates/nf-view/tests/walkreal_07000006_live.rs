@@ -402,10 +402,18 @@ fn walk_the_ledge_to_the_party(w: &mut Walker) {
 /// balustrade and door #46 is locked [D], so the game routes the room around it: see the header's
 /// OPEN LEG note and walk_the_ledge_to_the_party.
 #[test]
-fn walk_the_castle_interior_to_the_party() {
+fn walk_the_castle_interior_to_the_party() { walk_the_castle_interior_to_the_party_at(1) }
+
+/// The walk body at `difficulty` (1 Operative = the old `load_with_carry` path's replay parity —
+/// its save resolves to 1; 2 Agent rides the front-end's launch path [M C_SBNFDFCTY 0x216ca8:15 →
+/// load_with_carry_difficulty]; the difficulty global survives the level change untouched, so a
+/// warm load re-seeds the same value [M player.rs RamSave::difficulty doc]).
+fn walk_the_castle_interior_to_the_party_at(difficulty: u32) {
     let iso = iso();
-    let mut w = Walker::new(nf_view::load_with_carry(&iso, "07000006.bin", false,
-        Some(&carry(&[0x1d, 0x45, 0x70]))).expect("load 07000006"));
+    let mut w = Walker::new(nf_view::load_with_carry_difficulty(&iso, "07000006.bin", false,
+        Some(&carry(&[0x1d, 0x45, 0x70])), difficulty).expect("load 07000006"));
+    assert_eq!(w.scene.sim.as_ref().unwrap().drones.difficulty, difficulty,
+        "the sim runs the picked difficulty [M GameState+0x28 0x2a3790 → Drones::difficulty]");
     {
         let sim = w.scene.sim.as_ref().unwrap();
         let p = sim.bond.pos;
@@ -550,4 +558,19 @@ fn stopping_before_the_tunnel_never_ends_the_castle() {
 #[test]
 fn walk_the_castle_interior_to_the_party_real_damage() {
     walker::with_real_damage(walk_the_castle_interior_to_the_party);
+}
+
+/// Agent-difficulty sister of `..._real_damage` (real-health-agent-difficulty): the same walked
+/// truck-spawn → castle-interior → party route at the menu's Agent pick — GameState+0x28 = 2
+/// through the front-end's launch path [M C_SBNFDFCTY 0x216ca8:15; the `difficulty[]` table
+/// 0x2df4c0 row 1 carries 2; Txt 0x14e = "Agent"]. On this level group the pick scales Bond's
+/// pain by Plr_DMod_Normal 0.7 instead of Easy 0.6 and the guards' hit chance by
+/// DroneFiring_Accuracy_Normal 1.1 instead of Easy 0.8 [M Player_HandlePain 0x1902c8;
+/// DroneWeap_DoBulletAccuracy 0x179740:74-88; tuning.rs 05-08 group]; the min-difficulty
+/// placements pass Drone_Create's gate [M 0x136be0:49] and the Lock_Create auto-unlock keeps
+/// tagged locks shut [M 0x1ae1f8:67-69 — Operative-only]. Real input only — the load path is the
+/// only difference.
+#[test]
+fn walk_the_castle_interior_to_the_party_real_damage_agent() {
+    walker::with_real_damage(|| walk_the_castle_interior_to_the_party_at(2));
 }

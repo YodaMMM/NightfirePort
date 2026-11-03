@@ -35,9 +35,10 @@ fn mission_row(level: u32) -> usize {
 
 /// Load and skip the intro + story cut-scenes the way the player does (the game's own skip action)
 /// until the AI re-enables and ch 0x53 (the castle-C hand-off [D script 0x06000082 stream 9]) is
-/// written. Returns the settled walker. `difficulty` = the difficulty select's value (1 agent
-/// default; 3 = 007), riding the front end's launch path [M load_with_carry_difficulty →
-/// load_impl's difficulty slot].
+/// written. Returns the settled walker. `difficulty` = the difficulty select's GameState+0x28
+/// value (1 Operative, 2 Agent, 3 00 Agent [M the `difficulty[]` table 0x2df4c0 rows carry 1/2/3;
+/// Txt 0x14d/0x14e/0x14f = "Operative"/"Agent"/"00 Agent"]), riding the front end's launch path
+/// [M load_with_carry_difficulty → load_impl's difficulty slot].
 fn load_ready_at(iso: &str, difficulty: u32) -> Walker {
     let mut w = Walker::new(nf_view::load_with_carry_difficulty(iso, "07000004.bin", false, None, difficulty)
         .expect("load 07000004"));
@@ -82,10 +83,9 @@ fn out_zone(w: &Walker) -> [f32; 3] {
     c
 }
 
-#[test]
-fn walk_the_full_mission_start_to_finish() {
+fn walk_the_full_mission_start_to_finish_at(difficulty: u32) {
     let iso = iso();
-    let mut w = load_ready(&iso);
+    let mut w = load_ready_at(&iso, difficulty);
     let row = mission_row(0x0700_0004);
     // The WHOLE objective list the mission data lists [L ee_snapshot.bin 0x2a4350 row 7 → table
     // 0x2a3f60 count 1]: one record, obj0. Completing it completes every objective of the level.
@@ -829,11 +829,21 @@ fn the_platinum_finish_shows_platinum_on_records() {
     assert_eq!(fe.record_row(4).2, 1, "the Upgrades census is the kind-4 count [M 0x20bf00:34-44]");
 }
 
-/// Real damage: the same walk with the health top-up off for every walker it makes (the
-/// tests' own `top_up_health = true` included) and the walker's return fire on — Bond's death
-/// panics with the death spot and the last hits (common/damage_log.rs), so a pass pins that the
-/// walk completes on the port's own damage.
+/// The Operative run (the difficulty-1 replay parity; the real-damage sisters wrap this).
 #[test]
-fn walk_the_full_mission_start_to_finish_real_damage() {
-    walker::with_real_damage(walk_the_full_mission_start_to_finish);
+fn walk_the_full_mission_start_to_finish() {
+    walk_the_full_mission_start_to_finish_at(1)
+}
+
+/// Agent-difficulty sister of `..._real_damage` (real-health-agent-difficulty): the same walk at
+/// the menu's Agent pick — GameState+0x28 = 2 through the front-end's launch path [M C_SBNFDFCTY
+/// 0x216ca8:15; the `difficulty[]` table 0x2df4c0 row 1 carries 2; Txt 0x14e = "Agent"]. On this
+/// level group the pick scales Bond's pain by Plr_DMod_Normal 0.7 instead of Easy 0.5 and the
+/// guards' hit chance by DroneFiring_Accuracy_Normal 0.8 instead of Easy 0.5 [M Player_HandlePain
+/// 0x1902c8; DroneWeap_DoBulletAccuracy 0x179740:74-88; tuning.rs 01-04 group]. Real input only —
+/// the load path is the only difference. (The older comment on `load_ready_at` misnamed the
+/// values: 1 = Operative, 2 = Agent, 3 = 00 Agent [M the table + Txt], not "1 agent; 3 = 007".)
+#[test]
+fn walk_the_full_mission_start_to_finish_real_damage_agent() {
+    walker::with_real_damage(|| walk_the_full_mission_start_to_finish_at(2));
 }
