@@ -10,3 +10,6 @@ Do:
 3. Add real-input tests on 07000014 (the cascade from the switch E, then: destroyed models present, no door spam); run interactables_07000014_live, walkreal_07000014_live, then the full suite.
 
 Rules: shared test helper changes (crates/nf-view/tests/common/) must be opt-in per level (the code must check the flag); re-run every walkreal_*_live before finishing. A visible fix ships with a real-input test that reaches the spot from the level start.
+
+---
+claimed-by: sandbox3 at 2026-11-03T00:14Z
