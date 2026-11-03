@@ -486,8 +486,10 @@ fn the_rotors_spin() {
 /// hand-off the game itself models as the 0x7100018 → 0x7000018 → 0x700001b briefing special
 /// case [M 0x1d6360:99-102]; 07000041.bin carries no exit placement of its own [D the placement
 /// scan: no 0xE8 LOAD_LEVEL, no ch-100 writer in the 7 scripts [D the nis decode]]. The port's
-/// chain: ch 1 → the longest chain script (0x06000027, 241 ticks [D nis dump]) → the exit.
-/// Sister: without ch 1 the wrapper never ends.
+/// chain: ch 1 → the story hand-off window — the chain's longest script's length, 241 ticks
+/// [D 06000027's length; the script itself never runs on this disc [D the SP pins: both 0xD9
+/// placements carry the 0x06000000 sentinel with mask 0]] — then the exit latch. Sister: without
+/// ch 1 the wrapper never ends.
 #[test]
 fn the_wrapper_ends_into_the_space_station_after_the_chain() {
     let Some(iso) = iso() else { eprintln!("NF_ISO not set — skipping"); return };

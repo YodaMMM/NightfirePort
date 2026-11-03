@@ -12560,6 +12560,10 @@ pub struct Drones {
     /// pop deep — each new pop overwrites it; cleared nowhere (the probe is read-after-pop by
     /// tests; the flash state itself decays independently).
     pub flash_probe: Option<FlashProbe>,
+    /// The 07000041 wrapper-end countdown (ticks since the approach chain's ch 1 rose): the port's
+    /// [S] story-hand-off window for the wrapper's end into 0x0700001b — see the tick_inner arm
+    /// for the evidence and the refuted premises.
+    pub wrapper_end_timer: Option<u32>,
     /// mp-world-sync (agent 9): online, every body the shared world sees this tick (the human
     /// slots in slot order, then the bots), set by the Sim before `tick`. `Some` switches the
     /// world's player-contact passes (the pickup take, `Trigger_Calc`'s player touchers, the
@@ -12886,6 +12890,7 @@ impl Drones {
             driving_return: None,
             // frag-throw-timing2: the stun flash's recorded geometry.
             flash_probe: None,
+            wrapper_end_timer: None,
             // mayhew-end-transition: no hold at build.
             exit_hold: None,
             // mp-world-sync: offline until the Sim sets the bodies.
@@ -17028,26 +17033,45 @@ fn segment_hits_sphere(a: V3, b: V3, c: V3, r: f32) -> bool {
         // the per-frame sight counter becomes "saw last frame"; this tick's sight accumulates below.
         self.saw_opp_last_frame = self.saw_opp_this_frame;
         self.saw_opp_this_frame = false;
-        // The 07000041 wrapper end — the timer stand-in is GONE (level-41-exit-event): its premise
-        // is refuted on the disc. The 7 type-7 scripts decode with NO 0x12 event (the events are
-        // 0x3 delay ×4 and 0xF callback ×3, no 0xD channel write either [D the nis decode,
-        // wrapper_07000041_end_live]); and nothing ever RUNS them: the level's only two 0xD9
-        // ScriptPlayer placements (map 01000081 idx 0/42) both carry script hash 0x06000000 — a
-        // hash no archive on the disc carries [D the 99-archive type-7 scan] — with trigger mask
-        // p5 = 0, so `SP_Update`'s trigger = flags & 0 [M script-player.md] and both idle forever.
-        // No 0xE8 LOAD_LEVEL exists [D the placement scan], the mission system is inert (07000041
-        // has no MissionData row [D ACTION.ELF 0x2a4350's 24 records], so nothing writes ch
-        // 99/100 [M Mission_MonitorObjectives 0x1827d8 + Mission_Update 0x182c60]), and the one
-        // 0xF4 movie trigger's E-arm loads nothing: its movie code is 0 [D params (0, 4, 0)] and
-        // `Trigger_Activate` 0x1b2518-55 only writes GameState+0x10 and pushes states 6/7 — with
-        // no movie started, state 6 pops the same tick (`psiMovieFinished` 0x1082e8 =
-        // `BGFMVPlaying == 0`) and state 7's fade counts out and pops [M 0x1c9ca8-0x1c9cfc]. The
-        // game's own E-arm on this disc data never sets a load. The 0x0700001b advance is the
-        // story layer's (the front end / save chain, outside ACTION.ELF); when the port's exit
-        // latch DOES carry 0x0700001b (a story-level hop), it rides the load path's wrap —
-        // 0x0700001b → the 0x7100018 briefing → back to 0x0700001b [M 0x1d3800:95-97 +
-        // 0x1d6360:99-102], pinned in triggers::wrap_intro/resolve_exit_code + the level-exit
-        // consumer (nf-view). The approach chain (ch 1, 0xEA #A's out) stays as modelled.
+        // The 07000041 wrapper end — the port's story hand-off (a documented [S] stand-in flow).
+        // What the disc PROVES (every pin carried from level-41-exit-event's decode): the 7 type-7
+        // scripts decode with NO 0x12 event (0x3 delay ×6 + 0xF callback ×3, no 0xD channel write
+        // [D the nis decode, wrapper_07000041_end_live]); nothing ever RUNS them — the level's only
+        // two 0xD9 ScriptPlayer placements (map 01000081 idx 0/42) both carry script hash
+        // 0x06000000, a hash no archive on the disc carries [D the 99-archive type-7 scan], with
+        // trigger mask p5 = 0, so `SP_Update`'s trigger = flags & 0 [M script-player.md] and both
+        // idle forever; no 0xE8 LOAD_LEVEL exists [D the placement scan]; the mission system is
+        // inert (07000041 has no MissionData row [D ACTION.ELF 0x2a4350's 24 records], so nothing
+        // writes ch 99/100 [M Mission_MonitorObjectives 0x1827d8 + Mission_Update 0x182c60]); and
+        // the one 0xF4 movie trigger's E-arm loads nothing — its movie code is 0 [D params (0, 4,
+        // 0)] and `Trigger_Activate` 0x1b2518-55 only writes GameState+0x10 and pushes states 6/7,
+        // with no movie started state 6 pops the same tick (`psiMovieFinished` 0x1082e8 =
+        // `BGFMVPlaying == 0`) and state 7's fade counts out and pops [M 0x1c9ca8-0x1c9cfc].
+        // DRIVING.ELF holds no 0x07000041/0x0700001b literal either [D grep] — the game's hop to
+        // the station is the story layer's, data-driven outside ACTION.ELF. So the hop has no
+        // in-level carrier on this disc, and the port models it as its own documented flow: once
+        // the approach chain's channel (ch 1, the plate #99 out [D PL#99]) has been on for the
+        // chain window, the hand-off latches the story's next base map 0x0700001b [L the front
+        // end's sp_level 0x2df2e0 — 0x0700001b is the 7th base map; M the game's own Equinox hop
+        // 0x1d3800:95-97 → 0x1d6360:99-102 wraps the load through the 0x7100018 briefing]. The
+        // WINDOW is a port choice [S unverified]: the chain's longest script's length, 241 ticks
+        // [D 06000027's length] — the script itself never runs [D, the pins above]; the length only
+        // bounds the chain's presentation (the turret shot, the voices, the rod delete). The latch
+        // rides the load path's wrap at the consumer — 0x0700001b → 0x07100018 → 0x0700001b
+        // [M 0x1d3800:95-97 + 0x1d6360:99-102, triggers::wrap_intro/resolve_exit_code + the
+        // nf-view drain]. The game's real exit tail [M Trigger_Activate 0x1b2318:105-116:
+        // Music_Event(3,1), GS_PauseGame(1), ResetMap_LevelToLoad, PushState(300,7), RamSave] is
+        // the kind-10 trigger shape; this stand-in latches the same field the 0xE8/0x12 paths
+        // latch and leaves the tail to the consumer's drain.
+        if d.level == 0x0700_0041 && self.level_exit.is_none() {
+            if self.channels.on(1) {
+                let t = self.wrapper_end_timer.unwrap_or(0) + 1;
+                if t >= 241 { self.level_exit = Some(0x0700_001b); }
+                self.wrapper_end_timer = Some(t);
+            } else {
+                self.wrapper_end_timer = None;
+            }
+        }
         // The route-node → door binding (`NDrone_InitDoorNodes` 0x139a70), on the first tick: every
         // door-flagged node binds the nearest door (the scan takes its first candidate
         // unconditionally, so effectively the nearest overall); a node with no door never binds.
