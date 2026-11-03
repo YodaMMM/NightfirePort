@@ -43,3 +43,15 @@ Drones::difficulty == d at load; check the difficulty rows the game reads — th
 min-difficulty spawns (Drone_Create 0x136be0:49) [M]; where Bond dies read the damage log against
 that pipeline, fix the port where it differs (with the address) else the tactics; Operative walk
 stays green; real input only.
+
+## real-health-agent-00agent-11 (round 1 outcome, 2026-11-03 23:18 UTC)
+
+The Agent (d2) sister walk_spawn_to_the_lower_floor_load_point_real_damage_agent is GREEN
+(load_with_carry_difficulty + the Drones::difficulty assert; the keypad #177 solved on real input —
+created LOCKED at d2/3, Lock_Create 0x1ae1f8:67-69 auto-unlocks only at d1). The 00 Agent (d3)
+sister is RED at the east connector (tick 14455): the d3 min-difficulty spawns
+([M Drone_Create 0x136be0:49]; 37 drones at load) outpace the 7-round pistol — the 0x0500004-skin
+guards' 7.0/round volleys (accuracy Hard 1.0) drained 84 health before the first kill-drop
+resupply. Built the opt-in lane_floor_drops band (the fight drops rest ON the floor ray, 1.09
+under Bond's pos y — the lane 0.5 band could not see them); with it the NE-landing pass walked
+onto a fresh kill drop and armed clip 30. The remaining levers listed in the report.
