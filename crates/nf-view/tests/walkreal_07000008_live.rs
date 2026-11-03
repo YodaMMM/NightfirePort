@@ -186,6 +186,14 @@ fn walk_the_whole_mission_on_real_input_at(difficulty: u32) {
     });
     assert_eq!(w.scene.sim.as_ref().unwrap().drones.difficulty, difficulty,
         "the sim runs the picked difficulty [M GameState+0x28 0x2a3790 → Drones::difficulty]");
+    // 00 Agent (difficulty 3): the fights keep the 05/07 sisters' 4.0 back-off — the boarding
+    // platform's burst-rifle pair closes under 2 u during the exchange and its interval-4
+    // bursts land point-blank (the measured d3 ledger: #20's fight alone cost 54.0 from
+    // 1.2-2 u). A player steps back while firing. D3-GATED: the Operative/Agent sisters'
+    // timelines stay byte-exact (the flag reads only inside the shared stands).
+    if difficulty >= 3 {
+        w.dmg.back_off = Some(4.0);
+    }
     {
         let sim = w.scene.sim.as_ref().unwrap();
         let p = sim.bond.pos;
@@ -382,6 +390,16 @@ fn walk_the_whole_mission_on_real_input_at(difficulty: u32) {
         ("the stairwell top", [108.2, 31.5, -106.3]),
     ] {
         w.walk_nav_to(at, name, 1.5);
+        // 00 Agent (difficulty 3): the rifle pair (#15/#16, weapon 0x0, at (122.2/122.6,
+        // 34.6/35.3, -112.8/-114.7), ~10 u east of the mid west stop [L the d3 ledger]) owns the
+        // open long link from its east end — on the d3 run both answered fights ("the long link
+        // nav 2" #16, "the hall y33 nav 1" #15) cost 40.0 of pool while Bond stood on the open
+        // link. A player fights them from the mid-doors doorway (cover at the link's west end)
+        // BEFORE stepping out: the pair is 10.2 u east, dy −1..−2 — inside the close window.
+        // D3-GATED: the Operative/Agent sisters' timelines stay byte-exact.
+        if difficulty >= 3 && name == "the mid west" {
+            fight_close_guards(&mut w, "the mid west", 4200);
+        }
     }
     // Sister: the descent was WALKED — the walkway's zone plates (TouchOnces out 42/43/44, the
     // ambush spawners' start channels [D placements; M Trigger_Hit 0x1b1fc8 walk-in mask 8])
@@ -404,6 +422,16 @@ fn walk_the_whole_mission_on_real_input_at(difficulty: u32) {
         ("the west ledge at the cabin", [110.0, 27.0, -126.3]),
     ] {
         w.walk_nav_to(at, name, 1.4);
+        // 00 Agent (difficulty 3): the burst-rifle pair (#19/#20, weapon 0x15, skin 0x500002f,
+        // at (101.9-104.5, 28.2, -122.3/-122.6), 7-10 u west [L the d3 ledgers]) fires into
+        // the boarding legs from the platform's west — the d3 runs died in the legs (ticks
+        // 25164/25382/25426) before the `before the boarding` stand below ran. A player fights
+        // the pair the moment the platform mouth opens (the "platform west" stand of the same
+        // runs killed #19 from there) instead of walking the burst lane first. D3-GATED: the
+        // Operative/Agent sisters' timelines stay byte-exact.
+        if difficulty >= 3 && name == "the lower level east" {
+            fight_close_guards(&mut w, "the platform mouth", 4200);
+        }
     }
     // THE CLOSE-GUARD FIGHT (level-08-real-health-rockets): the descent wave's burst-rifle
     // pair (#263/#264, weapon 0x15, skin 0x0500002f [D the audit's param dump]) closes to
@@ -932,4 +960,20 @@ fn walk_the_whole_mission_on_real_input_real_damage_agent() {
     // guard [M NDrone2_HitDamage 0x145558 × DroneDamage_Head]) instead of grinding bodies —
     // the plain pick's nearest-body order let the walkway shotgun guard #20 land 10 × −4.2.
     walker::with_real_damage_head_hunting(|| walk_the_whole_mission_on_real_input_at(2))
+}
+
+/// 00 Agent-difficulty sister of `..._real_damage` (real-health-00agent-08-09-0a-0b): the same
+/// walked station → fusebox → safe → briefcase → gondola → Hind route at the menu's 00 Agent
+/// pick — GameState+0x28 = 3 through the front-end's launch path [M C_SBNFDFCTY 0x216ca8:15; the
+/// `difficulty[]` table 0x2df4c0 row 2 carries 3 [D]; Txt 0x14f = "00 Agent"]. On this level
+/// group (05-08) the pick scales Bond's pain by Plr_DMod_Hard 1.0 (Easy 0.6, Agent 0.7) and the
+/// guards' hit chance by DroneFiring_Accuracy_Hard 1.3 (Easy 0.8, Agent 1.1); the guards' base
+/// bullet damage rides DroneDamage_Hard 0.8 (Agent 1.0) [M Player_HandlePain 0x1902c8;
+/// DroneWeap_DoBulletAccuracy 0x179740:74-88; ReadTuningVars 0x1d3a80 cases 0x7000005-8;
+/// tuning.rs 05-08 group]; the min-difficulty placements pass Drone_Create's gate at d2 AND d3
+/// [M 0x136be0:49]. Real input only — the load path is the only difference (plus the d3-gated
+/// tactics the deaths force, inside this file).
+#[test]
+fn walk_the_whole_mission_on_real_input_real_damage_00agent() {
+    walker::with_real_damage_head_hunting(|| walk_the_whole_mission_on_real_input_at(3))
 }

@@ -881,6 +881,31 @@ fn walk_fresh_spawn_to_the_mission_end_real_damage_agent() {
     });
 }
 
+/// 00 Agent-difficulty sister of `..._real_damage` (real-health-00agent-08-09-0a-0b): the same
+/// walked balcony → exec floor → terminal → roof → parachute route at the menu's 00 Agent pick —
+/// GameState+0x28 = 3 through the front-end's launch path [M C_SBNFDFCTY 0x216ca8:15; the
+/// `difficulty[]` table 0x2df4c0 row 2 carries 3 [D]; Txt 0x14f = "00 Agent"]. On this level
+/// group (09-0b) the pick scales Bond's pain by Plr_DMod_Hard 1.0 (Easy 0.6, Agent 0.8); the
+/// guards' hit chance stays DroneFiring_Accuracy_Hard 1.0 — the SAME row Agent runs (Easy 0.8)
+/// — and the guards' base bullet damage rides DroneDamage_Hard 0.8 (Agent 1.0) [M Player_HandlePain
+/// 0x1902c8; DroneWeap_DoBulletAccuracy 0x179740:74-88; ReadTuningVars 0x1d3a80 cases
+/// 0x7000009-a-b; tuning.rs 09-0b group]; the min-difficulty placements pass Drone_Create's gate
+/// at d2 AND d3 [M 0x136be0:49]. The same fresh boot with NO channel pokes
+/// (`fresh_boot_asserts` pins the channels off) and the same fight package (`lane_fights` +
+/// `tranq_fights` + back_off 3.0). Real input only — the load path is the only difference (plus
+/// the d3-gated tactics the deaths force, inside this file).
+#[test]
+fn walk_fresh_spawn_to_the_mission_end_real_damage_00agent() {
+    walker::with_real_damage(|| {
+        let mut w = load_fresh_at(3);
+        w.dmg.lane_fights = true;
+        w.dmg.back_off = Some(3.0);
+        w.dmg.tranq_fights = true;
+        fresh_boot_asserts(&w);
+        walk_to_the_mission_end(&mut w, true, true);
+    });
+}
+
 /// The roof cut-scene's channel tail, alone: the disc's writer of objective 10's ch 0x59, the
 /// fall-web's ch 0x57 and the helicopter's gate ch 0x2A [D pack 0790000b, 060004FA streams
 /// 6/13/14/15], played end-to-end through the port's real SP machinery (PlayerDisable at the
