@@ -24,8 +24,18 @@ walkreal_*_live sweep 25 binaries 0 failed. Shared helpers: the opt-in DamageLog
 (48/18, read in shooters()) and the additive Walker::reload_full/shoot_bounded (no existing caller
 changes) — the sweep is the rule-7 proof.
 
-## real-health-00agent-08-09-0a-0b (started 2026-11-03 20:52 UTC)
+## real-health-00agent-08-09-0a-0b (done 2026-11-03 21:58 UTC)
 
-00 Agent (difficulty 3) sisters of the real-damage walks for 07000008, 07000009, 0700000a and
-0700000b: same routes and ends on real input, `Drones::difficulty == 3` asserted at each load,
-difficulty-3 rows (Plr_DMod, accuracy, Drone_Create's gate) checked against the port [M].
+All four 00 Agent (d3) sisters GREEN on real input: 09 `walk_tower_a_start_to_finish_real_damage_00agent`
+(100.0, 0 hits) and 0a `walk_office_floor_qworm_keyboard_hatch_real_damage_00agent` (100.0, 0 hits)
+pass as-loaded — the 09-0b group's d3 accuracy row is the SAME 1.0 Agent runs [M ReadTuningVars
+0x1d3a80 cases 0x7000009-a-b]; 0b `walk_fresh_spawn_to_the_mission_end_real_damage_00agent` (65.5)
+passes on the route's own fight package. 08 `walk_the_whole_mission_on_real_input_real_damage_00agent`
+(end 31.5) needed the player's d3 tactics, gated `difficulty >= 3` in the level's own test file: the
+mid-west doorway stand (kills #15 for 0 off the open long link), the link walk-out stand, the
+platform-mouth stand (the pair died in the boarding legs before the old stand ran), back_off 4.0 and
+reload_full. The d3 Hind has hp 598 = DiffMod 2.0 [M Copter_Create 0x17d340:76-90] and takes SIX
+rockets (the part walk adds raw hitdata damage, no difficulty multiplier [M Copter_Update
+0x17dbb8:277-320]) — all six landed (606 >= 598). The d1/d2 sisters byte-exact (their timelines
+unchanged). Sweep: 25 walkreal binaries 0 failed; nf-game+nf-formats+nf-audio 136 passed 3 failed
+(the allowed slim-ISO disc_golden).
