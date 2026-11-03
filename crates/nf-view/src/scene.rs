@@ -9438,11 +9438,10 @@ pub fn build(level: &Level, cels_only: bool, skeletons: &HashMap<u8, Skeleton>, 
                     // swap — the intact glist stays attached and the leaf keeps drawing exactly
                     // what it drew before the smash. 07000014's server racks are that case
                     // [D obj#273 DESTROY_BoxSatellite flags 0x30, bit 0x10 set]: the cascade's
-                    // blast leaves every rack's intact model on show (the game's playtest: the
-                    // racks must not disappear). The port's old read hid them (the racks went into
-                    // the per-frame dead gate — destroy_centres below — with no wreck baked). A
-                    // leaf in the zeroing case therefore joins NEITHER the dead gate NOR the wreck
-                    // bakes; its draws stand unfiltered forever.
+                    // blast swaps nothing in for them. A leaf in the zeroing case joins NEITHER the
+                    // dead gate NOR the wreck bakes. (The no-draw gate above already skips every
+                    // 0x10 leaf before this point, so this guard keeps the two rules consistent
+                    // rather than changing any draw.)
                     if obj.flags & 0x10 == 0 {
                         destroy_centres.push((transform(&inst.matrix, obj.centre), pi));
                         // The destroyed-glist swap's WRECK side. `Destroy_Create` 0x12c318:25-30 stores
