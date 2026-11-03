@@ -1573,6 +1573,17 @@ pub struct Drone {
     /// resolves it to the nearest door (`NDrone_InitDoorNodes` 0x139a70 binding) and stands it in
     /// `hit_door`.
     pub door_node: Option<u16>,
+    /// The route's door binding (the game's `+0xBA8` door side — the game's one slot is shared
+    /// with the kick, which the port keeps in `kick_sp`): `ReachedDestNode` stands the reached
+    /// node's door in it and a RE-ARRIVAL at a node whose door already stands there returns
+    /// immediately — no re-bind, no 0x81 re-entry, no +0x5A6 clobber [M 0x153358:151-155]. It
+    /// stands until the door-open arrival's tail clears it [M 0x153358:170-176] or the flag-4
+    /// node arms clear it [M 0x153358:119-121 + the :175 fall-through]; `ControlSTANDARD`
+    /// 0x1490f0:232 additionally drops the game's slot beyond 2.0 u (the port's `hit_door`
+    /// distance clear at Drones::tick covers the working door the same way). Port value = the
+    /// NODE whose door was bound (the node⇔door mapping is 1:1 per `NDrone_InitDoorNodes`
+    /// 0x139a70:24-70, so the node comparison is the game's door-object comparison).
+    pub door_bound: Option<u16>,
     /// Outbox: `NDrone2_OpenDoor` requested this tick (DSTATE_OpenDoor ENTER / timer C / msg 0x20,
     /// or `ControlSTANDARD`'s 60-tick bump check). Serviced by `Drones::tick` where the doors live.
     pub door_attempt: bool,
@@ -2094,6 +2105,7 @@ impl Drone {
             melee_min_dist: 4.0, attack_hold: 0,
             door_open_at: 0,
             hit_door: None, door_return: 0, door_node: None, door_attempt: false, pending_door_msg: false, hit_door_open: true,
+            door_bound: None,
             // fix-nav-remainder: the kick-node outbox + the ScriptPlayer binding.
             kick_sp: None, kick_node: None, ally_wait_node: None, kick_attempt: false, no_bunching: 0,
             no_bunching_hit: false,
@@ -2683,6 +2695,12 @@ impl Drone {
         if flags & 0x80000 != 0 { self.talks.push((0x47, false)); }
         if flags & 2 != 0 {
             if next_door {
+                // [M 0x153358:151-155]: the re-arrival at a door node whose door already stands
+                // in +0xBA8 returns immediately — no re-bind, no 0x81 re-entry, no +0x5A6
+                // clobber. The binding stands until the door-open tail (below) or a flag-4 arm
+                // clears it.
+                if self.door_bound == Some(node) { return true; }
+                self.door_bound = Some(node);
                 self.door_node = Some(node);
                 // +0x5A6 (the return state) is saved only when the current state is not already
                 // 0x81 — re-entering through the pair's second node must not clobber the saved
@@ -2691,15 +2709,21 @@ impl Drone {
                 self.set_state(state::OPEN_DOOR);
                 return true;
             }
-            if self.hit_door_open { self.hit_door = None; } // [M 0x153358:175]
+            if self.hit_door_open {
+                // [M 0x153358:170-176]: the door-open arrival's tail clears +0xBA8 next to the
+                // working door.
+                self.hit_door = None;
+                if self.door_bound.is_some() { self.door_bound = None; }
+            }
             return false;
         }
         if flags & 4 != 0 {
             // [M 0x153358:135-153]: no successor → the tail clears +0xBA8; a kick successor binds
-            // this node's object (the first crossing enters 0x82); otherwise the tail clears too.
+            // this node's object (the first crossing enters 0x82); otherwise the tail clears too
+            // [M :119-121 and the :175 fall-through].
             match next {
                 Some(_) if next_kick => { self.kick_node = Some(node); }
-                _ => self.kick_sp = None,
+                _ => { self.kick_sp = None; self.door_bound = None; }
             }
             return false;
         }
@@ -9414,6 +9438,12 @@ impl Drone {
             // to the node, so the ENTER plays the anim directly [S fold].
             (state::OPEN_DOOR, msg::ENTER) => {
                 self.vision_on = true; // `+0x4F8 |= 0x10000` [M 0x1681f8:19]
+                // [M 0x1681f8 case 1 → LAB_00168400]: the ENTER checks `NDrone2_DoorIsOpen`
+                // FIRST — an already-open door returns to +0x5A6 at once: no anim, no
+                // `NDrone2_OpenDoor`, no timer-C re-arm. A later route pass over the open pair
+                // re-binds [M 0x153358:149-163] and lands here — the game's enter+exit on an
+                // open door costs nothing (the door is never re-worked).
+                if self.hit_door_open { self.set_state(self.door_return); return true; }
                 if self.prop(d, 0x14) || self.prop(d, 0x15) || self.prop(d, 0x16) {
                     self.call_anim(d, 0x4e, 0, 0);
                 } else if self.alert < 1.0 {
@@ -21407,6 +21437,7 @@ mod tests {
             free_root: false, bounded: true, dtype: 0, mode_normal: 0, mode_alert: 0, mode: 0, alt_mode: 0, team: 1, alt_state: 0, scared_radius: 20.0, screamed: false, scare_shouted: false, pending_shout: None, alert_block: 0.0,
             door_open_at: 0,
             hit_door: None, door_return: 0, door_node: None, door_attempt: false, pending_door_msg: false, hit_door_open: true,
+            door_bound: None,
             // fix-nav-remainder: the kick-node outbox + the ScriptPlayer binding.
             kick_sp: None, kick_node: None, ally_wait_node: None, kick_attempt: false, no_bunching: 0,
             no_bunching_hit: false,

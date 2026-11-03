@@ -246,8 +246,11 @@ fn no_guard_spams_the_opendoor_after_the_cascade() {
     assert!(ch85, "the cascade reaches 0x85 [D the kill→death pairs]");
     // The unlock opens the pair; the guards walk the route. 1500 ticks (the probe's measured
     // crossings land at 60/1055/1468 after E [L probe14_guards]): count every tick a guard
-    // stands in OpenDoor (0x81) and every guard that combat-moves west of the hall's mid.
+    // stands in OpenDoor (0x81) — split by the door being worked — and every guard that
+    // combat-moves west of the hall's mid.
     let mut opendoor_ticks = 0u32;
+    let mut pair_ticks = 0u32;
+    let mut open_door_ticks = 0u32;
     let mut crossed = 0usize;
     for _ in 0..1500u32 {
         scene.sim.as_mut().unwrap().drones.health.health = 100.0;
@@ -255,7 +258,13 @@ fn no_guard_spams_the_opendoor_after_the_cascade() {
         let sim = scene.sim.as_ref().unwrap();
         for &c in &clones {
             let g = &sim.drones.list[c];
-            if g.present && g.state == 0x81 { opendoor_ticks += 1; }
+            if g.present && g.state == 0x81 {
+                opendoor_ticks += 1;
+                if let Some(i) = g.hit_door {
+                    if sim.drones.doors.list[i].state == 4 { open_door_ticks += 1; }
+                    if doors.contains(&i) { pair_ticks += 1; }
+                }
+            }
             if g.present && g.pos[0] < -52.4 { crossed += 1; }
         }
     }
@@ -267,7 +276,24 @@ fn no_guard_spams_the_opendoor_after_the_cascade() {
         }
     }
     assert!(crossed >= 1, "at least one guard combat-moves west past x −52.4 [L probe14_guards' crossings 60/1055/1468]");
-    assert!(opendoor_ticks <= 8,
-        "the guards must not spam OpenDoor at the open door [M 0x153358:151-155 — one enter+exit per door of the pair]: {opendoor_ticks} OpenDoor ticks in the 1500-tick window");
-    eprintln!("[014] OpenDoor ticks {opendoor_ticks} in 1500, guards west of −52.4: {crossed}");
+    // The game's OpenDoor never WORKS an open door: the ENTER checks DoorIsOpen first and
+    // returns to +0x5A6 at once [M 0x1681f8 case 1 → LAB_00168400], and the UPDATE exits on it
+    // [M 0x1681f8 case 3] — a guard standing in 0x81 at an open door is the port's spam
+    // signature (108 ticks of it before the fix [L this session's runs]).
+    // The residual at-open ticks are the exit boundary of a legit open: the door flips to
+    // OPEN (state 4) one tick before the case-3 UPDATE's DoorIsOpen read fires the exit
+    // [M 0x1681f8 case 3] — a couple of boundary ticks per legit open, never a cycle (the
+    // unfixed tree logged 108 [L this session's reproduce]).
+    assert!(open_door_ticks <= 4,
+        "OpenDoor at an open door must be the exit boundary of a legit open only [M 0x1681f8 case 1 + case 3]: {open_door_ticks} ticks");
+    // The pair gets at most one enter+exit per door [M 0x153358:151-155 — the re-arrival at a
+    // door node whose door stands in +0xBA8 returns immediately; the case-1 instant exit makes
+    // the later passes tickless]: a couple of ticks per door of the pair, not a cycle.
+    assert!(pair_ticks <= 8,
+        "the cascade door pair (45/46) must not be re-worked [M 0x153358:151-155]: {pair_ticks} OpenDoor ticks at the pair in the 1500-tick window");
+    // The route's OTHER doors keep their legit one-open-each budget (the observed shape: one
+    // closed-door open ≈ 9 ticks of the working state).
+    assert!(opendoor_ticks <= 16,
+        "the guards' total OpenDoor occupancy must stay at the one-open-per-door scale: {opendoor_ticks} ticks in the 1500-tick window");
+    eprintln!("[014] OpenDoor ticks {opendoor_ticks} (pair {pair_ticks}, at-open-door {open_door_ticks}) in 1500, guards west of −52.4: {crossed}");
 }
