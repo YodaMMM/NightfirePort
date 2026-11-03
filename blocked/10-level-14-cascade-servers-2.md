@@ -13,3 +13,7 @@ Rules: shared test helper changes (crates/nf-view/tests/common/) must be opt-in 
 
 ---
 claimed-by: sandbox3 at 2026-11-03T00:14Z
+
+---
+## Report (blocked, 2026-11-03T01:10Z)
+
