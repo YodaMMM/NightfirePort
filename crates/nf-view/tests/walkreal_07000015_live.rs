@@ -359,8 +359,10 @@ fn walk_spawn_to_the_omega_sector_exit_at(difficulty: u32) {
     // probe]) is NOT taken: it sits in the x ≈ 25 pit behind the ch_lock 0xc8 door at
     // (25.1, 41.6, 36.6) — the detour walk wedged airborne against that door at (25.76,
     // 41.47, 36.18) with floor_below 40.28 — so the #526 rim-shot blast stays on health
-    // (the d1 run's 27.73 becomes 41.6 at the Agent pain scale [M Player_HandlePain's
-    // Plr_DMod row]) and the budget comes from the fights.
+    // (the pain rows for 07000015: [M Player_HandlePain 0x1902c8 × ReadTuningVars 0x1d3a80's
+    // per-level jump table — the 0x14..=0x16 group (Easy 0.4, Normal 0.6, Hard 1.0), the
+    // same shape [L ee_start_05.bin @0x30cc50/54/58 = 0.6/0.7/1.0 pins for the 0x05..=0x08
+    // group]) and the budget comes from the fights.
     let (route_a, route_b) = route.split_at(route.iter().position(|(l, _)| *l == "the west plank").unwrap());
     w.walk_route(route_a);
     if difficulty >= 2 {

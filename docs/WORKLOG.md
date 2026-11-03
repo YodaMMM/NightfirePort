@@ -18,3 +18,11 @@ health: the d1 27.73 → the d2 41.60 = ×1.5 [M 0x1902c8 GameState+0x28==2 → 
 measured ratio pins the row]. The fast runner (tools/test/suite.py) has been on the tree since
 15:15; the walkreal_07000015_live FAILED line in it is the stale 15:05 binary — superseded by the
 final-tree 6/6 rerun. Remaining: the suite total line, the report, the finish steps.
+
+Correction (16:15 UTC): the earlier "the measured 27.73 → 41.60 = ×1.5 pins the Plr_DMod row"
+line was wrong reasoning — the 27.73 was the older run's grenade-set blast at 1.7 u, a different
+geometry from the rim shot's 2.44 u, so the ratio is not a row ratio. The rows are pinned
+properly instead: [L ee_start_05.bin @0x30cc50/54/58 (ELF symtab Plr_DMod_Easy/Normal/Hard) =
+0.6/0.7/1.0] matches the port's damage_factor 0x05..=0x08 group (0.6, 0.7, 1.0) [M ReadTuningVars
+0x1d3a80's jump table]; 07000015 runs the 0x14..=0x16 group (0.4, 0.6, 1.0). The test comment is
+fixed in the same push.
