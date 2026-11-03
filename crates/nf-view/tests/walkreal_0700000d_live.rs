@@ -200,6 +200,11 @@ fn walk_arrival_to_the_c5_door() {
     }
     let bay_killed = kill_guard_at_present(&mut w, [214.2, -289.4], [6.0, 6.0], "the bay guard #10 (from the strip mouth, ray clear d 64 [probe_0d_ray_stands])", 600);
     eprintln!("[0d] the strip-mouth #10 kill: landed {} pool {:.1}", bay_killed, w.scene.sim.as_ref().unwrap().drones.health.health);
+    // The spawner #32 (skin 0x5000090, measured patrolling the ground band (157.6..158.9,
+    // −213..−229) — the strip-mouth box at (158.3, −225.3) tol 5 missed it at (157.59, −213.01)
+    // and it then fired 124 hits for 86.4 across the whole late route (the bay, the beam, the
+    // yard, the C5 stand — d 92 from its post!) — the box is the whole patrol band.
+    let _ = kill_guard_at_present(&mut w, [158.0, -220.0], [5.0, 11.0], "the ground spawner #32 (the patrol band)", 400);
     for (at, r, label) in [
         ([204.0, 0.5, -229.0], 2.0, "the blind strip east 3"),
         ([212.0, 0.5, -230.0], 1.5, "the blind strip east 4"),
@@ -222,27 +227,27 @@ fn walk_arrival_to_the_c5_door() {
     // in hits, STUCK). From the ladder top the -1/-2 routes landed this kill every run (+~200
     // ticks) — with #10 dead at the strip mouth (below) the dwell no longer feeds #10's 46,
     // which was the whole cost of this stand.
+    // The west-roof sweep, WALKER-CATCHING (level-0d-real-health-crossfire-3, measured): the
+    // guards reposition off their placements (145.6-145.8 — CLEAR rays from the ladder top,
+    // d 68-70.5 [probe_0d_ray_stands]) to stable combat spots x ~151.4 (the slab shadow, the
+    // -2's 0.972-0.974 ray deaths) — the reposition walk is FAST (all three settled ~1400
+    // ticks after the wake: the measured ladder-top boxes 1400 ticks in were all at x ~151),
+    // so the sweep runs THE MOMENT Bond tops out, BEFORE the #16 fight's ~500-tick aim+fight
+    // overhead. Every pass-1 across this session's runs landed (+199/+200/+201) on a guard
+    // still mid-walk; every pass facing a SETTLED guard landed nothing. 3 passes cap 900, one
+    // per guard; settled survivors stay unshootable and are the ride's hunters (the -2's
+    // measured 54 for one). The rolling box (151.2, −246.8) ±(6, 11) covers the whole
+    // wake/reposition band (the measured wake spots 151.05-151.43, −241..−251 and the stable
+    // ends −238.3/−255.8).
+    for k in 0..3 {
+        let live = w.scene.sim.as_ref().unwrap().drones.list.iter().any(|d| {
+            d.present && !d.corpse && d.health > 0.0 && d.pos[1] > 18.0
+                && (d.pos[0] - 151.5).abs() < 12.0 && (d.pos[2] + 248.0).abs() < 14.0
+        });
+        if !live { break; }
+        kill_guard_at_present(&mut w, [151.2, -246.8], [6.0, 11.0], "the west roof sweep (the walkers)", 900);
+    }
     kill_guard_at(&mut w, [198.9, -260.4], [6.0, 4.0], "the deck guard #16 (from the ladder top)");
-    // The west-roof sweep, EXPLICIT PLACEMENT ORDER (level-0d-real-health-crossfire-3, measured):
-    // the -2 blind box (centre 151.4, −246) picked the CLOSEST live guard every pass — #29 first
-    // (its placement ray is CLEAR, d 68 [probe_0d_ray_stands], the kill lands +200), then #28
-    // (marginally closer than #27, but #28's placement ray DIES at 0.899) — so 7 passes burned
-    // on the unshootable #28 while #27 (placement ray CLEAR, d 70.5) sat untouched. The passes
-    // now aim at each guard's placement box in the probe's ray order: #29, then #27 (both CLEAR
-    // — the kills land), then #28 best-effort (the per-tick flight landed it in the -1 sweeps).
-    // The guards REPOSITION when engaged (the -2 law) — a pass that misses moves the guard into
-    // the slab shadow, so each pass is capped short (300) and the route moves on when the box
-    // empties.
-    kill_guard_at_present(&mut w, [145.7, -247.3], [5.0, 5.0], "the west roof #29 (placement, ray clear d 68 [probe_0d_ray_stands])", 300);
-    kill_guard_at_present(&mut w, [145.6, -256.7], [5.0, 5.0], "the west roof #27 (placement, ray clear d 70 [probe_0d_ray_stands])", 300);
-    kill_guard_at_present(&mut w, [145.8, -237.4], [5.0, 5.0], "the west roof #28 (placement, ray dies 0.90 — best-effort)", 300);
-    // The bay guard #18 (0x5000090) from the ladder top: the probe reads the ray CLEAR at d 56
-    // from its PLACEMENT (204.84, −290.05), but the guard PATROLS the bay east-west (measured:
-    // (207.26, −288.74) at the strip mouth, (212.19, −288.72) at the ladder top) — the box sits
-    // on the live-patrol band's east half where the #10-clear geometry (the ladder top → the
-    // (215, −289.5) spot) still carries.
-    let bay18_killed = kill_guard_at_present(&mut w, [211.5, -288.9], [4.0, 2.5], "the bay guard #18 (from the ladder top, the live-patrol band)", 600);
-    eprintln!("[0d] the ladder-top #18 kill: landed {}", bay18_killed);
     // The -2 "NO #29 / NO #10 attempts" constraints are LIFTED by the new route (level-0d-
     // real-health-crossfire-3): #10 dies at the strip mouth BEFORE the ladder (the dwell no
     // longer acquires anything), and the sweep's 8 passes roll the placement rays the probe
@@ -504,7 +509,15 @@ fn walk_arrival_to_the_c5_door() {
         assert!(sim.bond.grounded && p[1] > 9.8 && p[1] < 11.2,
             "the drop must land on the annex (9.42-9.45 + the pos offset), got {p:?}");
     }
-    let _ = w.walk_to(Wp::new(194.0, 10.6, -282.0).r(1.4), "bay enter");
+    // The bay guard #18 from INSIDE the bay (level-0d-real-health-crossfire-3): the guard
+    // patrols the bay east-west ((207.26, −288.74) → (211.96, −288.73) measured) and every
+    // ray from OUTSIDE (the ladder top, the trench) dies on the bay's north wall above its
+    // low opening (the 300-600-tick fights landed nothing) — but from the bay-enter stand
+    // (194, 10.6, −282) Bond is in the ROOM with it: a horizontal in-room ray at d ~17-21,
+    // no wall between. Its ride hit (16) and its bay-phase fire both come off the table.
+    let _ = w.try_walk_to(Wp::new(194.0, 10.6, -282.0).r(1.4), "bay enter");
+    let bay18_killed = kill_guard_at_present(&mut w, [210.0, -288.8], [8.0, 5.0], "the bay guard #18 (from inside the bay)", 400);
+    eprintln!("[0d] the in-bay #18 kill: landed {} pool {:.1}", bay18_killed, w.scene.sim.as_ref().unwrap().drones.health.health);
     w.lenient = false;
     {
         let sim = w.scene.sim.as_ref().unwrap();

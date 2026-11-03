@@ -85,3 +85,18 @@ Work log:
   while #27 (CLEAR ray) sat untouched — the sweep is now explicit placement order (#29, #27,
   #28 best-effort) and #18's box rides its live-patrol band (it walks the bay east-west:
   207.26 → 212.19 measured).
+- (18:50-19:25) the route end-to-end iterations (real-damage twin, ~5 s each): v3 sweep boxes
+  found nobody (the guards had REPOSITIONED off the placements to x ~151 — the wake moves them);
+  v4 (live-spot boxes) 1 kill + the two settled survivors (#28 north −238.3, #29 south −255.8)
+  ate the ride for 94, death 6778; the trench #18 detour FAILED (the live-spot ray dies — the
+  in-room geometry only clears from inside the bay) and cost 1200 settle ticks — REMOVED; v5
+  (3×900 walker-catching passes, sweep BEFORE #16) — **ALL THREE roof guards killed**
+  (+222/+754/+193) and the ride went SILENT; the new killer was #32 (the ground spawner, weapon
+  0x1e, patrolling (157.6..158.9, −213..−229)): 124 hits for 86.4 across the bay/beam/yard/C5
+  (d 92!), death 16287 at (197.95,10.56,−278.88) — the deepest yet (the annex descent); v6: the
+  #32 patrol-band box (158,−220)±(5,11) found it (157.59,−213.01) but the strip-mouth ray DIES
+  at 0.960-0.965 on a ~1.7-high ground obstacle at (160,−217) (Bond's eye 1.7 clips it; #32's
+  own rounds clear from its higher eye — 0-damage return hits measured) — the #32 kill stand
+  needs a higher eye or an east approach, NOT DONE. The in-bay #18 fight also failed (400
+  ticks — the patrol spot vs the box). The non-damage twin + the batteries: NOT RERUN this
+  iteration (the stop line); the route code is additive kill legs, the shared helpers untouched.
