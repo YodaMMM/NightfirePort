@@ -6,3 +6,7 @@ Re-route each the way a player would (kill order, cover, approach), real input o
 
 ---
 claimed-by: sandbox3 at 2026-11-03T20:51Z
+
+---
+## Report (blocked, 2026-11-03T22:26Z)
+
