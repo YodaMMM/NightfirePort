@@ -111,3 +111,9 @@ None required to merge. One optional pin, since no `ee_start_07000015.bin` snaps
 ## Usage
 
 not visible to me
+
+## ntfy failed
+
+- `curl -sS -m 20 https://ntfy.sh/nightfire-yoda-8k3x`: curl (28) Connection timed out after 20002 milliseconds
+- python3 urllib: URLError <urlopen error [Errno 101] Network is unreachable>
+- wget --post-data: timed out after 30 s, killed
