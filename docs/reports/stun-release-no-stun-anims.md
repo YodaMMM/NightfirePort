@@ -130,3 +130,10 @@ Measured on this tree: held 4077 ticks, exit 0x66.
 ## Usage
 
 not visible to me
+
+## ntfy failed
+
+All three notification fallbacks were unreachable from this sandbox:
+- `curl -sS -m 20 ... https://ntfy.sh/nightfire-yoda-8k3x` → `curl: (28) Connection timed out after 20002 milliseconds`
+- `python3 urllib.request` (the same URL, timeout=20) → no output, killed at the shell's 60 s limit
+- `wget -q -O- --post-data ...` → no output, killed at the shell's 60 s limit
