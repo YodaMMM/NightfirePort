@@ -6,3 +6,6 @@ Branch from origin/s/level-0c-yard-climb-real-health-2 (merge origin/master into
 2. The health budget is negative: Bond reaches the yard at ~33.6 hp after the en-route fights (#30/#37 300-tick stands), then #18/#15/#1 finish him. Cut the en-route damage (shorter stands against moving guards, better positions) and suppress #15/#1 before the crossing.
 
 Real input only; no health top-ups or forced state; shared helpers opt-in. Done = the sister un-ignored and green, every walkreal_*_live green, then the full suite total line.
+
+---
+claimed-by: sandbox4 at 2026-11-03T13:40Z
