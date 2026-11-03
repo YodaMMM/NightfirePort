@@ -21,3 +21,8 @@ say so in the report. Never weaken a decompile-backed test to make code pass.
 
 ---
 claimed-by: sandbox3 at 2026-11-03T04:05Z
+
+---
+## Report (done, 2026-11-03T05:04Z)
+
+Closed by the driver: the report is on `s/level-41-every-objective` (docs/reports/level-41-every-objective.md); the worker didn't run finish.sh.
