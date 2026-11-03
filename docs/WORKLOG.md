@@ -14,3 +14,15 @@ session's racks no-swap case rides along). Task: land + verify the drafted door-
 `no_guard_spams_the_opendoor_after_the_cascade` green, the racks pin kept, every walkreal_*_live
 green, the full suite total line. Sandbox survived the previous task: repo/work/ISO intact, only
 the branch setup was needed.
+- 12:30-14:00 UTC: the door-spam fix LANDED. The -2 draft (door_bound + the no-op + the clears) alone
+  did not drop the count (108 = the -2's 96 shape); the bisect found the missing [M] piece —
+  DSTATE_OpenDoor's ENTER checks DoorIsOpen FIRST [M 0x1681f8 case 1 -> LAB_00168400] and an open-door
+  re-bind must cost nothing (no anim/attempt/timer C). With it: 108 -> 9 OpenDoor ticks (the pair 0,
+  the exit boundary 1); the pin no_guard_spams_the_opendoor_after_the_cascade green with the [M]-shaped
+  bounds (the at-open ticks <= 4, the pair <= 8, the total one-open-per-door scale, the west crossing).
+  The racks pins stay green; door_wait 1/1; interactables 10/10; nf-game 655; the door-heavy walkreal
+  sample 0d/16/11 green. FOUND: walkreal_07000014 is 4/8 on MASTER itself (the corridor wedge at leg 2;
+  bisected — the -2 drone.rs in the merged tree still wedges; the -2-only tree was 8/8 [L the -2
+  report]) — the delta c0450ef6..01917076 (the stun-release/burst-fire/sniper-spawn-stats/1103e merges)
+  carries it; the per-commit bisect is the next session's first item. The full walkreal sweep + the
+  suite total did not fit the window. Report: docs/reports/level-14-cascade-servers-3.md.
