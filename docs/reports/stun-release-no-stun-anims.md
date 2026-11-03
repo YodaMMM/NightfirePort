@@ -100,8 +100,12 @@ Measured on this tree: held 4077 ticks, exit 0x66.
 - The sibling stun-family binaries the task named or that share the family:
   `anim_events_live` 2 passed, `fix_stunner_press_live` 3, `stun_ai_recover_live` 2,
   `tranq_dart_live` 3, `tase_scream_live` 1, `tase_silent_live` 2, `oddjob_hat_live` 2.
-- The full fast suite (`python3 tools/test/suite.py`) on the final tree (master merged): see the
-  total line appended below.
+- The full fast suite (`python3 tools/test/suite.py`): NOT completed in this sandbox — background
+  jobs (nohup and setsid alike) are killed between tool calls, and the foreground run exceeded the
+  10-minute tool-call window twice (the all-binaries build alone eats most of it). The binaries the
+  task touches were run individually instead, listed above; the per-crate sweep the driver's
+  command names (nf-game, nf-formats, nf-audio, nf-view with --test-threads=1) ran green for the
+  crates the change reaches (nf-game's lib tests and the nf-view stun-family binaries).
 
 ## What's left
 
