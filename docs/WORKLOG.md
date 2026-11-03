@@ -1,5 +1,31 @@
 # WORKLOG
 
+## level-14-cascade-servers-4 (started 2026-11-03 17:00 UTC)
+
+Branch = origin/s/level-14-cascade-servers-3 + origin/master merged. Task: the door-spam fix
+without breaking guard door crossings — the driver's correction says walkreal_07000014_live is
+GREEN on master and the 14 wedge is THIS branch line's own `door_bound` change; merged onto
+master the -3 tree turns 11 tests red (npc_doors, fix_guard_misc, walkreal_03 ×2, walkreal_0a
+×3, walkreal_14 ×4). Re-check `door_bound` against [M 0x153358:151-155, 0x1681f8 case 3,
+DSTATE_OpenDoor's ENTER + NDrone2_DoorIsOpen]: when the game clears +0xBA8 and when a fresh
+door is bound.
+- 17:05 UTC: the decompile re-read. THE GAME HAS ONE SLOT (+0xBA8) and its lifecycle is:
+  bind at the pair's near node (0x153358:151-163, the node's +0x28 door OBJECT, no-op when
+  already bound); the state machine (0x1681f8) NEVER clears it; the clears are (a) the far-side
+  arrival tail gated on `NDrone2_DoorIsOpen` [M 0x153358:170-176 — which reads the BOUND object:
+  0x14aaa0 returns `bound+0xf4 == 4` for a class-0x1c door, TRUE otherwise], (b) the kick arms,
+  and (c) **`NDrone2_ControlSTANDARD` 0x1490f0:233-244 — the stale+distance self-heal the port
+  already models: 60 ticks after the last `NDrone2_OpenDoor` stamp (+0xBB0), a bound door
+  farther than 2.0 u is FORGOTTEN (`+0xba8 = 0`), and one within 2.0 u with DoorIsOpen false is
+  RE-ATTEMPTED.** The port's per-tick self-heal (drone.rs, the ControlSTANDARD block) cleared
+  only `hit_door` — the -3 session's new `door_bound` no-op key (the SAME +0xBA8 split in two)
+  LEAKED: after any interrupt that takes the guard >2 u from the door, every later route pass
+  no-ops on the stale `door_bound` while `hit_door` is gone — no re-bind, no door_node, no
+  re-attempt: the guard strands before the closed door. That is the 11-test regression.
+- THE FIX: the stale+distance clear now wipes BOTH stand-ins (one line + the [M] comment) —
+  the game's single-slot lifecycle restored. Next: build, the 11 tests + the spam pin, the
+  walkreal sweep, the suite.
+
 ## level-14-cascade-servers-2
 
 - Start: branch `s/level-14-cascade-servers-2` from origin/master c0450ef6. Task: on 07000014 finish the destroyed-model swap for the cascade's objects (racks must draw their destroyed models), find why guards spam the door outside the room after the cascade, add real-input tests; run interactables_07000014_live, walkreal_07000014_live, full suite. Previous attempt's research: origin/s/level-14-cascade-servers-and-door-guards (wreck-side swap in, two OpenDoor dispatch fixes in, crossing bisect + suite run left open).

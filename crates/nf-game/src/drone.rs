@@ -19817,7 +19817,16 @@ fn segment_hits_sphere(a: V3, b: V3, c: V3, r: f32) -> bool {
                 if let Some(i) = dr.hit_door {
                     let dp = self.doors.list[i].pos;
                     if (dr.pos[0] - dp[0]).powi(2) + (dr.pos[1] - dp[1]).powi(2) + (dr.pos[2] - dp[2]).powi(2) > 4.0 {
+                        // The game clears the ONE slot here [M 0x1490f0:237 —
+                        // `*(undefined4 *)(uVar2 + 0xba8) = 0` after the Vec_Dist3D > 2.0]. The
+                        // port's split stand-ins — `hit_door` (the DoorIsOpen/OpenDoor side) and
+                        // `door_bound` (the ReachedDestNode 0x153358:151-155 no-op key) — ARE that
+                        // one +0xBA8, so BOTH clear: a binding left only in `door_bound` no-ops
+                        // every later route pass at the node, and with `hit_door` already gone the
+                        // guard can neither re-bind nor re-attempt — stranded before a closed door
+                        // (the chase/interrupt flows the 11 red door tests exercise).
                         dr.hit_door = None;
+                        dr.door_bound = None;
                     } else if !dr.hit_door_open {
                         dr.door_attempt = true;
                     }
