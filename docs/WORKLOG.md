@@ -50,6 +50,13 @@ door is bound.
   test's premise is touched. (2) walkreal_07000015 walk_spawn_to_the_omega_sector_exit_
   real_damage_agent — RED at the base 7b25daa8 too: pre-existing on the -3 line (the agent
   difficulty is other tasks' active work), not this branch's delta. Suite + report next.
+- 20:10-20:50 UTC: the suite in batches (the sandbox kills anything outliving one tool call;
+  the disk hit 100% mid-run — 5 GB of stale bisect artifacts cleaned, resumed). nf-game 1047/0
+  (102 binaries); nf-formats+nf-audio 136 passed, the 3 fails = the disc_golden allowance; the
+  guard/door family partial (6 of 16 — 12 passed, the 1 fail = wgpu no_adapter, no GPU in the
+  sandbox, not logic); the remaining ~830 nf-view binaries did not fit the window. Report:
+  docs/reports/level-14-cascade-servers-4.md — the 07000001 live checks for the main agent are
+  the next session's first item.
 
 ## level-14-cascade-servers-2
 
