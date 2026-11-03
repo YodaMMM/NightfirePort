@@ -20,3 +20,27 @@ sentries (#18/#15-class, weapon 0x1e, hp 10) aimed from the strip, then climb an
 un-ignore `walkreal_0700000c_live`'s real-health sister (~line 409) on real input only, never
 lowering damage or health. Then run walkreal_0700000c_live, upward_shot_trace_live, the
 climb/mantle group (fix_ladder*_live, ladder_02*_live) and nf-game, and the full suite.
+
+## level-0c-yard-climb-real-health-2 (continued 2026-11-03 11:35-13:25 UTC)
+
+Sandbox had reset: re-cloned, rebuilt work/ + ISO + rustup from scratch; the branch (a679176f) was
+already pushed, continued on it. Merged nothing (player-upward-shot is master already).
+- The opt-in machinery: `with_yard_aimed_stands` (thread-local, 0c-local module) sets
+  `dmg.aimed_fights` for the WHOLE real-health walk's fights + the yard stands
+  (`yard_stand_aimed`/`yard_sniper_stands`): the emplacement-pair sweep at the door (before the
+  crossing) and at the ladder base, the recent-hitter stands, the pre-climb suppression pass over every
+  alive 0x1e within 48 u (#15 the patroller + #1 the walkway deck acquire late), and the ladder-top
+  stands after the mantle. No health/armour/ammo writes anywhere; flag off = master behaviour (proven:
+  the top-up walk + ladder495 green).
+- Measured (6 real-input runs, NF_RF_TRACE): the aimed fights cut the en-route damage 71 -> 54 hits and
+  the door sweep kills #36 in ONE aimed round; but #18's hp 10.0 never moves under 7+ CONVERGED aimed
+  rounds (err 0.000, blocked false) from BOTH the door and the ladder base — the twin #36's body/ corpse
+  meets every round first [M Drone_CollisionHandler 0x140968]; and the health budget is negative (yard
+  arrival 33.6 hp, the crossing/base cost 2 x -16, the fatal graze from #15 (18.4, 12.2, -216.7) at
+  1.6 hp). The sister was un-ignored mid-session and re-ignored with the full measured reason + the next
+  levers (the report carries the details + 3 live checks).
+- Runs on the final tree: walkreal_0700000c_live 2 passed 1 ignored; upward_shot_0700000c_live 2;
+  upward_shot_trace_live 1; fix_ladder_live 4+1i; fix_ladder2_live 4; fix_ladder_water_live 4;
+  ladder_02_live 3; ladder_underwater_02_live 6; nf-game 655 passed 0 failed 5 ignored. The fast runner
+  did not fit the window (the sandbox reset ate the setup time); the touched crates ran explicitly.
+- Report: docs/reports/level-0c-yard-climb-real-health-2.md.
