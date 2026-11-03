@@ -223,58 +223,163 @@ fn fire_flag_gates_the_recoil_weapon_and_plays_the_recoil() {
     assert!(sim.list[gi].event_21 && sim.list[gi].event_20, "event 0x12 sets both flags");
 }
 
-/// `DroneAnim_PlayFiringAnim` (0x13da48): the recoil weapon (`+0x3E`) with a due shot fires only on
-/// `+0x21` and plays the 0x5C recoil. IGNORED: the harness's neutral-state isolation does not reach
-/// the fire block yet (the shot never becomes due in the harness — the state machine or an
-/// unmodelled gate resets it); needs a state whose UPDATE leaves `firing`/`anim.class` alone with
-/// Bond in range. The gate itself is implemented in `handle_firing` (drone.rs, `fire_now`).
-#[test]
-#[ignore]
-fn play_firing_anim_gates_the_recoil_weapon_shot() {
-    let Some(l) = Fixture::load("07000005.bin", 0x0700_0005) else { eprintln!("skip: NF_ISO not set"); return };
-    let d = l.data();
-    // PlayFiringAnim: a recoil weapon with a due shot waits for +0x21, then fires + recoils.
-    for (recoil, flag, want_shot) in [(true, false, false), (true, true, true), (false, false, true)] {
-        let mut sim = l.sim(l.level_drones());
-        sim.tick(&d, &bond_away());
-        let gi = sim.list.iter().position(|dr| dr.health > 0.0 && !dr.corpse).unwrap();
-        let (anim_before, clip_before) = {
-            let g = &mut sim.list[gi];
-            g.state = state::SURRENDER_ANIM; // its UPDATE only aims — nothing else runs
-            g.health = 100.0;
-            g.weapon = if recoil { 0x1c } else { 0x16 };
-            g.recoil_weapon = recoil;
-            g.firing = true;
-            g.burst = 3;
-            g.next_shot = 0;
-            g.last_shot = 0;
-            g.clip = 30;
-            g.unseen_ticks = 0;
-            g.anim.class = 2; // Ready2Fire's aiming class
-            g.event_21 = flag;
-            g.anim.call = None;
-            g.anim.outgoing.clear();
-            (g.anim.danim, g.clip)
-        };
-        // Bond 1.5 north of the guard: Ready2Fire's dist < 2.0 arm.
-        let gpos = sim.list[gi].pos;
-        let mut player = bond_away();
-        player.pos = [gpos[0], gpos[1], gpos[2] + 1.5];
-        player.target = [player.pos[0], player.pos[1] + 0.5, player.pos[2]];
-        player.eye = [player.pos[0], player.pos[1] + 1.0, player.pos[2]];
-        player.sph = player.pos;
-        player.capsule = ([player.pos[0], player.pos[1] + 1.086, player.pos[2]], player.pos);
-        sim.tick(&d, &player);
-        // The shot spent one round (the bullet itself flies and may hit within the tick).
-        let shot = sim.list[gi].clip == clip_before - 1;
-        assert_eq!(shot, want_shot, "recoil {recoil} flag {flag}: the shot");
-        if recoil && want_shot {
-            assert_eq!(sim.list[gi].anim.danim, 0x5c, "the shot plays the 0x5C recoil danim");
-            assert!(sim.list[gi].anim.reached, "+0x57B set by PlayFiringAnim");
-        } else if !recoil {
-            assert_eq!(sim.list[gi].anim.danim, anim_before, "non-recoil weapons fire without a recoil switch");
-        }
+/// A spot 5 u from the guard in the open — the accuracy harness's placement conditions
+/// (`enemy_accuracy_live::measure`) condensed to the fixture's world: the same floor as the
+/// guard, inside the guard's view cone (the visibility cone gates the LOS round robin
+/// [M DroneVision_OpponentVisibility]), a clear corridor to him at three side offsets and
+/// three heights, and no wall within 1.5 u of the spot at waist height in 8 directions.
+fn open_spot_5u(world: &nf_game::world::CollisionWorld, gpos: [f32; 3], yaw: f32) -> Option<[f32; 3]> {
+    let cone_ok = |p: [f32; 3]| {
+        let a = (p[0] - gpos[0]).atan2(p[2] - gpos[2]);
+        let mut d = a - yaw;
+        while d > std::f32::consts::PI { d -= std::f32::consts::TAU; }
+        while d < -std::f32::consts::PI { d += std::f32::consts::TAU; }
+        d.abs() < 1.0
+    };
+    for k in 0..64 {
+        let a = k as f32 * std::f32::consts::TAU / 64.0;
+        let (s, c) = (a.sin(), a.cos());
+        let p = [gpos[0] + 5.0 * s, gpos[1], gpos[2] + 5.0 * c];
+        let Some(f) = world.floor_below([p[0], p[1] + 0.5, p[2]], 3.0) else { continue };
+        if (f - (gpos[1] - 1.0)).abs() > 0.3 { continue; }
+        let spot = [p[0], f + 1.0, p[2]];
+        if !cone_ok(spot) { continue; }
+        let side = [c, 0.0, -s];
+        let clear = [-0.5f32, 0.0, 0.5].iter().all(|&o| [0.4f32, 0.8].iter().all(|&h| [0.3f32, 1.0, 1.8].iter().all(|&bh| {
+            world.segment([gpos[0] + side[0] * o, gpos[1] + h, gpos[2] + side[2] * o],
+                          [p[0] + side[0] * o * 0.5, f + bh, p[2] + side[2] * o * 0.5]).is_none()
+        })));
+        if !clear { continue; }
+        let open = (0..8).all(|j| { let b = j as f32 * std::f32::consts::FRAC_PI_4;
+            world.segment([p[0], f + 1.0, p[2]], [p[0] + 1.5 * b.sin(), f + 1.0, p[2] + 1.5 * b.cos()]).is_none() });
+        if !open { continue; }
+        return Some(spot);
     }
+    None
+}
+
+/// Bond standing at `spot`, facing the guard (the fixture's Player shape, as the melee test builds it).
+fn player_at(spot: [f32; 3], gpos: [f32; 3]) -> Player {
+    let (dx, dz) = (gpos[0] - spot[0], gpos[2] - spot[2]);
+    let yaw = dx.atan2(dz);
+    let mut player = bond_away();
+    player.yaw = yaw;
+    player.pos = spot;
+    player.target = [spot[0], spot[1] + 0.55, spot[2]]; // the aim point: 0.45 under the eye [M Drone_View_Bones]
+    player.eye = [spot[0], spot[1] + 1.0, spot[2]];
+    player.aim = [dx / 5.0, 0.0, dz / 5.0];
+    player.sph = spot;
+    player.capsule = ([spot[0], spot[1] + 1.086, spot[2]], spot);
+    player
+}
+
+/// Drives one placement guard (by the `+0x3E` recoil class) through the real chain — perception,
+/// the combat state machine, the anim scripts, the weapon pass — with nothing forced: Bond parked
+/// 5 u away in the open, the other drones disabled (the accuracy harness's one-subject isolation),
+/// ticks until the guard's first shot (the clip drops). Returns (weapon, a due-no-event tick was
+/// seen, Some((danim, reached)) at the first shot).
+///
+/// The due shot is armed by the states themselves: the combat chain
+/// (`CombatNewSighting` 0x173280 → `AimStandFire` 0x68) ENTER requests the fire
+/// (`DroneWeap_Fire` 0x17a8c0:12-19: `+0x3B = 1`, `NextBulletTime` when not already firing), and
+/// `DroneWeap_DoFiring` 0x17a080:24-29 sets the due latch `+0x3F` whenever `+0xBC4 <= now` and
+/// `Ready2Fire` — for a recoil weapon (`+0x3E`) it then HOLDS (no `FireWeapon`, no
+/// `NextBulletTime`) until `PlayFiringAnim` 0x13da48 sees the anim's fire event `+0x21`
+/// (EventFunc 0x12 [M 0x13b750:93]) and fires with the 0x5C recoil danim [M 0x13da48:20-29].
+fn drive_first_shot(l: &Fixture, d: &Data, recoil: bool) -> (u32, bool, Option<(u16, bool, bool)>) {
+    let matches = |dr: &Drone| dr.recoil_weapon == recoil && dr.team == 1
+        && dr.health > 0.0 && !dr.corpse && (2..=0x46).contains(&dr.weapon);
+    let cands: Vec<usize> = l.level_drones().iter().enumerate().filter(|(_, dr)| matches(dr)).map(|(i, _)| i).collect();
+    assert!(!cands.is_empty(), "no {} guard armed from the 07000001 placements", if recoil { "recoil (0x1C/0x1D)" } else { "non-recoil" });
+    let trace = std::env::var_os("NF_REC_TRACE").is_some();
+    // The accuracy harness's candidate walk: the first placements are often cinematic-held
+    // (scripted to stand down until the intro releases), so drive each candidate in turn until
+    // one reaches a fire state and shoots.
+    for &gi in &cands {
+        let mut sim = l.sim(l.level_drones());
+        sim.tick(&d, &bond_away()); // the placements' ENTER
+        for (i, dr) in sim.list.iter_mut().enumerate() { if i != gi { dr.present = false; dr.enabled = false; } }
+        // The subject itself: the accuracy harness's activation (`d.enabled = true; d.present =
+        // true`) — placements that the mission layer spawns later carry present/enabled off, and
+        // the sight pass computes nothing for them.
+        sim.list[gi].present = true;
+        sim.list[gi].enabled = true;
+        // The placements' guards start WAIT_SWITCHed — the state's ENTER is `NDrone2_Enable(0)`
+        // [M 0x15b960:14-16] — until the level's mission script enables them, and the fixture has
+        // no mission layer. The game's enable hands the guard a sight-capable state; the fixture
+        // starts the subject in Idle (0x4): its ENTER opens vision (`+0x4F8 |= 0x10000` [M
+        // 0x15bf18:30], the port's `(IDLE|ALERT|PATROL, msg::ENTER)`) and its UPDATE runs the
+        // sight scan [M 0x15bf18 case 3]. `set_state` queues the real EXIT→ENTER transition
+        // (a raw `.state =` write would skip the ENTER and the vision bit with it). Every tick
+        // after this is the real chain.
+        if sim.list[gi].state == state::WAIT_SWITCH { sim.list[gi].set_state(state::IDLE); }
+        let gpos = sim.list[gi].pos;
+        let weapon = sim.list[gi].weapon;
+        let yaw = sim.list[gi].yaw;
+        let Some(spot) = open_spot_5u(&l.world, gpos, yaw) else { continue };
+        let player = player_at(spot, gpos);
+        let clip0 = sim.list[gi].clip;
+        let mut held = false;
+        let mut shot = None;
+        let mut prev_clip = clip0;
+        let trace = std::env::var_os("NF_REC_TRACE").is_some();
+        for step in 0..2400 {
+            sim.tick(&d, &player);
+            let (frame, dr) = (sim.frame, &sim.list[gi]);
+            if trace && (step % 120 == 0 || dr.clip != prev_clip) {
+                eprintln!("[rec] g{gi} s{step} f{frame} st {:#x} fire {} burst {} next {} clip {} ev21 {} danim {:#x} reached {}",
+                    dr.state, dr.firing, dr.burst, dr.next_shot, dr.clip, dr.event_21, dr.anim.danim, dr.anim.reached);
+            }
+            // A due shot (`+0xBC4 <= now`, the port's `next_shot <= frame`) with the burst armed
+            // and no shot this tick, while `+0x21` is clear: `PlayFiringAnim`'s gate is what
+            // holds it (before the first shot and between the burst's rounds — the recoil anim's
+            // 0x10 event clears `+0x21` [M 0x13b750:94-95] and its 0x12 re-opens it).
+            if dr.firing && dr.burst > 0 && dr.next_shot <= frame && !dr.event_21 && dr.clip == prev_clip {
+                held = true;
+            }
+            if dr.clip < prev_clip && shot.is_none() {
+                shot = Some((dr.anim.danim, dr.anim.reached, dr.event_21));
+            }
+            prev_clip = dr.clip;
+            if shot.is_some() && held { break; }
+        }
+        if shot.is_some() {
+            return (weapon, held, shot);
+        }
+        if trace { eprintln!("[rec] g{gi} (weapon {weapon:#x}) never fired — next candidate"); }
+    }
+    panic!("no {} guard fired within the window (candidates {cands:?})", if recoil { "recoil" } else { "non-recoil" });
+}
+
+/// `DroneAnim_PlayFiringAnim` (0x13da48) through the real chain, all three rows from the level
+/// data (the only setup choice is the subject and its start state — every shot field comes from
+/// the machine; the old harness's `SURRENDER_ANIM` isolation never reached the fire block at
+/// all, because a raw `.state =` write bypasses the ENTER and the weapon pass saw nothing due):
+/// - recoil (`+0x3E`, 07000001's weapon-0x1C shotgun guards [D weapon_data; M DefaultInit
+///   0x14b300:800-811]) with a due shot and no event: held (`DoFiring` 0x17a080:29 sets `+0x3F`,
+///   skips `FireWeapon` for `+0x3E != 0`) — before the first shot and between the burst's
+///   rounds (the recoil anim's 0x10 clears `+0x21` [M 0x13b750:94-95], its 0x12 re-opens);
+/// - the event (`+0x21`, the fire anim's 0x12 [M 0x13b750:93]): the shot fires and plays the
+///   0x5C recoil danim with `+0x57B` [M 0x13da48:20-29];
+/// - non-recoil (the weapon-0x0E pistol guard): the `+0x3E == 0` early-out fires without any
+///   event and without the recoil switch [M 0x13da48:10-12].
+#[test]
+fn play_firing_anim_gates_the_recoil_weapon_shot() {
+    let Some(l) = Fixture::load("07000001.bin", 0x0700_0001) else { eprintln!("skip: NF_ISO not set"); return };
+    let d = l.data();
+
+    let (weapon, held, shot) = drive_first_shot(&l, &d, true);
+    assert!(shot.is_some(), "the recoil (weapon {weapon:#x}) guard never fired within the window");
+    let (danim, reached, ev21) = shot.unwrap();
+    assert!(held, "the recoil shot never stood due without the event (+0x21) — the gate is not holding it");
+    assert!(ev21, "the recoil shot fired without the anim event (+0x21) [M 0x13da48:17-20]");
+    assert_eq!(danim, 0x5c, "the recoil shot plays the 0x5C recoil danim [M 0x13da48:23]");
+    assert!(reached, "+0x57B set by PlayFiringAnim [M 0x13da48:24-26]");
+
+    let (weapon, _, shot) = drive_first_shot(&l, &d, false);
+    assert!(shot.is_some(), "the non-recoil (weapon {weapon:#x}) guard never fired within the window");
+    let (danim, _, _) = shot.unwrap();
+    assert_ne!(danim, 0x5c, "the non-recoil shot keeps the playing danim — no recoil switch [M 0x13da48:10-12]");
 }
 
 /// The tertiary-placement event (datum 9): script 060007ac in 07000012 (the census's kind-2 arg-9
